@@ -87,6 +87,23 @@ fn readline_commands_apply_to_prompt() {
 }
 
 #[test]
+fn editor_commands_apply_undo_redo_indent_and_list_newline() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    apply_editor(&mut state, EditorCommand::InsertText("- a".into()));
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "- a\n- ");
+    apply_editor(&mut state, EditorCommand::Indent);
+    assert_eq!(state.prompt.text(), "- a\n  - ");
+    apply_editor(&mut state, EditorCommand::Undo);
+    assert_eq!(state.prompt.text(), "- a\n- ");
+    apply_editor(&mut state, EditorCommand::Redo);
+    assert_eq!(state.prompt.text(), "- a\n  - ");
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert_eq!(state.prompt.text(), "- a\n- ");
+}
+
+#[test]
 fn scroll_prompt_moves_viewport_only() {
     let mut state = AppState::demo();
     state.prompt.resize(10, 2);

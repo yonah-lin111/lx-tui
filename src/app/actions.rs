@@ -31,4 +31,8 @@ pub enum EditorCommand {
     DeleteToLineEnd,
     DeleteWordBackward,
     DeleteWordForward,
+    Indent,
+    Outdent,
+    Undo,
+    Redo,
 }

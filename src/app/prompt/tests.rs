@@ -67,18 +67,18 @@ fn newline_backspace_and_delete_edit_text() {
 fn insert_char_expands_tab_and_ignores_control() {
     let mut prompt = prompt(20, 3);
     prompt.insert_char('\t');
-    assert_eq!(prompt.text(), "    ");
+    assert_eq!(prompt.text(), "  ");
     prompt.insert_char('\x07');
-    assert_eq!(prompt.text(), "    ");
+    assert_eq!(prompt.text(), "  ");
     prompt.insert_char('\n');
-    assert_eq!(prompt.text(), "    \n");
+    assert_eq!(prompt.text(), "  \n");
 }
 
 #[test]
 fn insert_str_normalizes_line_endings_and_controls() {
     let mut prompt = prompt(20, 3);
     prompt.insert_str("a\r\nb\tc\x07d");
-    assert_eq!(prompt.text(), "a\nb    cd");
+    assert_eq!(prompt.text(), "a\nb  cd");
 }
 
 #[test]
@@ -347,6 +347,190 @@ fn line_deletion_stops_at_newline() {
     prompt.move_line_start();
     prompt.delete_to_line_start();
     assert_eq!(prompt.text(), "\ncd");
+}
+
+#[test]
+fn typing_runs_merge_into_single_undo_step() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("abc");
+    prompt.undo();
+    assert_eq!(prompt.text(), "");
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+    prompt.redo();
+    assert_eq!(prompt.text(), "abc");
+}
+
+#[test]
+fn cursor_movement_breaks_merge_group() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("ab");
+    prompt.move_left();
+    prompt.insert_char('c');
+    assert_eq!(prompt.text(), "acb");
+    prompt.undo();
+    assert_eq!(prompt.text(), "ab");
+    prompt.undo();
+    assert_eq!(prompt.text(), "");
+}
+
+#[test]
+fn backspace_runs_merge_and_new_edit_clears_redo() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("abcd");
+    prompt.backspace();
+    prompt.backspace();
+    assert_eq!(prompt.text(), "ab");
+    prompt.undo();
+    assert_eq!(prompt.text(), "abcd");
+    prompt.redo();
+    assert_eq!(prompt.text(), "ab");
+    prompt.insert_char('x');
+    assert_eq!(prompt.text(), "abx");
+    prompt.redo();
+    assert_eq!(prompt.text(), "abx");
+}
+
+#[test]
+fn plain_newline_merges_with_typing() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("a");
+    prompt.newline();
+    prompt.insert_str("b");
+    prompt.undo();
+    assert_eq!(prompt.text(), "");
+    prompt.redo();
+    assert_eq!(prompt.text(), "a\nb");
+}
+
+#[test]
+fn newline_continues_bullet_and_ordered_lists() {
+    let mut bullet = prompt(20, 3);
+    bullet.insert_str("- a");
+    bullet.newline();
+    assert_eq!(bullet.text(), "- a\n- ");
+    bullet.insert_str("b");
+    bullet.newline();
+    assert_eq!(bullet.text(), "- a\n- b\n- ");
+
+    let mut ordered = prompt(20, 3);
+    ordered.insert_str("3) item");
+    ordered.newline();
+    assert_eq!(ordered.text(), "3) item\n4) ");
+
+    let mut dotted = prompt(20, 3);
+    dotted.insert_str("9. item");
+    dotted.newline();
+    assert_eq!(dotted.text(), "9. item\n10. ");
+}
+
+#[test]
+fn newline_continues_nested_and_task_items() {
+    let mut nested = prompt(20, 4);
+    nested.insert_str("  * a");
+    nested.newline();
+    assert_eq!(nested.text(), "  * a\n  * ");
+
+    let mut task = prompt(20, 3);
+    task.insert_str("- [x] done");
+    task.newline();
+    assert_eq!(task.text(), "- [x] done\n- [ ] ");
+}
+
+#[test]
+fn newline_splits_content_and_keeps_marker() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("- abcd");
+    prompt.move_left();
+    prompt.move_left();
+    prompt.newline();
+    assert_eq!(prompt.text(), "- ab\n- cd");
+}
+
+#[test]
+fn empty_item_exits_list_level() {
+    let mut top = prompt(20, 3);
+    top.insert_str("- ");
+    top.newline();
+    assert_eq!(top.text(), "");
+    assert_eq!(top.cursor_cell(), Some((0, 0)));
+
+    let mut nested = prompt(20, 4);
+    nested.insert_str("- a\n  - ");
+    nested.newline();
+    assert_eq!(nested.text(), "- a\n- ");
+}
+
+#[test]
+fn list_continuation_is_its_own_undo_step() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("- a");
+    prompt.newline();
+    assert_eq!(prompt.text(), "- a\n- ");
+    prompt.undo();
+    assert_eq!(prompt.text(), "- a");
+    prompt.undo();
+    assert_eq!(prompt.text(), "");
+}
+
+#[test]
+fn indent_and_outdent_move_whole_logical_line() {
+    let mut editor = prompt(20, 3);
+    editor.insert_str("- a");
+    editor.indent();
+    assert_eq!(editor.text(), "  - a");
+    assert_eq!(editor.cursor_cell(), Some((0, 5)));
+    editor.outdent();
+    assert_eq!(editor.text(), "- a");
+    editor.outdent();
+    assert_eq!(editor.text(), "- a");
+
+    let mut empty = prompt(20, 3);
+    empty.indent();
+    assert_eq!(empty.text(), "  ");
+    assert_eq!(empty.cursor_cell(), Some((0, 2)));
+}
+
+#[test]
+fn indent_affects_current_logical_line_only() {
+    let mut prompt = prompt(20, 4);
+    prompt.insert_str("a\nb");
+    prompt.move_up();
+    prompt.indent();
+    assert_eq!(prompt.text(), "  a\nb");
+}
+
+#[test]
+fn backspace_replaces_list_marker_with_blanks() {
+    let mut editor = prompt(20, 3);
+    editor.insert_str("- ab");
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), "  ab");
+    assert_eq!(editor.cursor_cell(), Some((0, 2)));
+    editor.backspace();
+    assert_eq!(editor.text(), " ab");
+
+    let mut ordered = prompt(20, 3);
+    ordered.insert_str("1. ");
+    ordered.backspace();
+    assert_eq!(ordered.text(), "   ");
+}
+
+#[test]
+fn fence_disables_list_and_markup_behavior() {
+    let mut editor = prompt(20, 4);
+    editor.insert_str("```\n- a");
+    editor.newline();
+    assert_eq!(editor.text(), "```\n- a\n");
+    editor.insert_str("x");
+    editor.move_home();
+    editor.indent();
+    assert_eq!(editor.text(), "```\n- a\n  x");
+    let mut markup = prompt(20, 3);
+    markup.insert_str("```\n- ");
+    markup.backspace();
+    assert_eq!(markup.text(), "```\n-");
 }
 
 #[test]

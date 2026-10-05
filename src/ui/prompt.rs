@@ -23,6 +23,12 @@ pub fn render(
     }
     let rows = prompt.visual_rows();
     let tokens = markdown::scan(prompt.text());
+    let mut line_starts = Vec::new();
+    let mut offset = 0;
+    for line in prompt.text().split('\n') {
+        line_starts.push(offset);
+        offset += line.len() + 1;
+    }
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
     for (index, row) in rows
         .iter()
@@ -32,7 +38,8 @@ pub fn render(
     {
         let y = area.y + (index - scroll) as u16;
         let line_tokens = tokens.get(row.line).map(Vec::as_slice).unwrap_or_default();
-        paint_row(buf, area, y, prompt.text(), row, line_tokens);
+        let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
+        paint_row(buf, area, y, prompt.text(), row, line_tokens, base);
         if let Some(selection) = selection {
             paint_selection(buf, area, y, (index - scroll) as u16, selection);
         }
@@ -47,7 +54,17 @@ pub fn render(
 }
 
 /// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。
-fn paint_row(buf: &mut Buffer, area: Rect, y: u16, text: &str, row: &VisualRow, tokens: &[Token]) {
+///
+/// `base` 为视觉行起点在逻辑行内的字节偏移；token 区间按逻辑行计。
+fn paint_row(
+    buf: &mut Buffer,
+    area: Rect,
+    y: u16,
+    text: &str,
+    row: &VisualRow,
+    tokens: &[Token],
+    base: usize,
+) {
     let mut x = area.x;
     let mut token_index = 0;
     for (offset, ch) in text[row.start..row.end].char_indices() {
@@ -55,15 +72,16 @@ fn paint_row(buf: &mut Buffer, area: Rect, y: u16, text: &str, row: &VisualRow, 
         if width == 0 {
             continue;
         }
+        let absolute = base + offset;
         while tokens
             .get(token_index)
-            .is_some_and(|token| token.range.end <= offset)
+            .is_some_and(|token| token.range.end <= absolute)
         {
             token_index += 1;
         }
         let style = tokens
             .get(token_index)
-            .filter(|token| token.range.contains(&offset))
+            .filter(|token| token.range.contains(&absolute))
             .map_or_else(style::text, |token| token_style(token.kind));
         if x.saturating_add(width as u16) > area.right() {
             break;

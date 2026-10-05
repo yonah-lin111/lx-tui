@@ -48,6 +48,10 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteToLineEnd => state.prompt.delete_to_line_end(),
         EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
+        EditorCommand::Indent => state.prompt.indent(),
+        EditorCommand::Outdent => state.prompt.outdent(),
+        EditorCommand::Undo => state.prompt.undo(),
+        EditorCommand::Redo => state.prompt.redo(),
     }
 }
 

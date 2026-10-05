@@ -192,13 +192,62 @@ fn prompt_focus_maps_readline_shortcuts() {
 }
 
 #[test]
+fn prompt_focus_maps_history_and_indent_keys() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for (code, modifiers, command) in [
+        (
+            KeyCode::Char('z'),
+            KeyModifiers::CONTROL,
+            EditorCommand::Undo,
+        ),
+        (
+            KeyCode::Char('-'),
+            KeyModifiers::CONTROL,
+            EditorCommand::Undo,
+        ),
+        (
+            KeyCode::Char('Z'),
+            KeyModifiers::CONTROL,
+            EditorCommand::Redo,
+        ),
+        (
+            KeyCode::Char('y'),
+            KeyModifiers::CONTROL,
+            EditorCommand::Redo,
+        ),
+        (
+            KeyCode::Char('.'),
+            KeyModifiers::CONTROL,
+            EditorCommand::Redo,
+        ),
+        (KeyCode::Char('z'), KeyModifiers::SUPER, EditorCommand::Undo),
+        (
+            KeyCode::Char('z'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
+            EditorCommand::Redo,
+        ),
+        (KeyCode::Char('y'), KeyModifiers::SUPER, EditorCommand::Redo),
+        (KeyCode::Tab, KeyModifiers::NONE, EditorCommand::Indent),
+        (KeyCode::BackTab, KeyModifiers::NONE, EditorCommand::Outdent),
+        (KeyCode::Tab, KeyModifiers::SHIFT, EditorCommand::Outdent),
+    ] {
+        assert_eq!(
+            route_prompt(code, modifiers),
+            Some(Routed::Editor(command)),
+            "{code:?}+{modifiers:?}"
+        );
+    }
+}
+
+#[test]
 fn prompt_focus_swallows_unmapped_keys() {
     let cases = [
-        KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),
         KeyEvent::new(KeyCode::Char('B'), KeyModifiers::ALT | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
-        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::ALT),
         KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
         KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
     ];

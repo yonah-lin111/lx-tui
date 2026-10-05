@@ -94,6 +94,25 @@ fn renders_scrolled_viewport_and_cursor_cell() {
 }
 
 #[test]
+fn wrapped_continuation_row_keeps_line_token_offsets() {
+    let area = Rect::new(0, 0, 80, 3);
+    let prompt = prompt(
+        80,
+        3,
+        "- Reference: @[refer-folder](/Users/yonah/projects/agent/herdr-master) \
+         @[refer-folder](/Users/yonah/projects/agent/lx-agent)",
+    );
+    assert_eq!(prompt.visual_rows().len(), 2);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, false, None);
+    assert_eq!(buf[(0, 1)].symbol(), "o");
+    assert_eq!(buf[(0, 1)].fg, Color::LightBlue);
+    assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(buf[(7, 1)].symbol(), "/");
+    assert_eq!(buf[(7, 1)].fg, Color::Cyan);
+}
+
+#[test]
 fn scrolled_viewport_hides_cursor_when_caret_leaves_view() {
     let area = Rect::new(0, 0, 4, 2);
     let mut prompt = prompt(4, 2, "abcdefghijklm");
