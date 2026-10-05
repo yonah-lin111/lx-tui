@@ -228,6 +228,16 @@ fn prompt_focus_maps_history_and_indent_keys() {
             EditorCommand::Redo,
         ),
         (KeyCode::Char('y'), KeyModifiers::SUPER, EditorCommand::Redo),
+        (
+            KeyCode::Enter,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+            EditorCommand::NewlineBelow,
+        ),
+        (
+            KeyCode::Enter,
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
+            EditorCommand::NewlineBelow,
+        ),
         (KeyCode::Tab, KeyModifiers::NONE, EditorCommand::Indent),
         (KeyCode::BackTab, KeyModifiers::NONE, EditorCommand::Outdent),
         (KeyCode::Tab, KeyModifiers::SHIFT, EditorCommand::Outdent),
@@ -244,6 +254,7 @@ fn prompt_focus_maps_history_and_indent_keys() {
 fn prompt_focus_swallows_unmapped_keys() {
     let cases = [
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),
         KeyEvent::new(KeyCode::Char('B'), KeyModifiers::ALT | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
@@ -254,6 +265,12 @@ fn prompt_focus_swallows_unmapped_keys() {
     for key in cases {
         assert_eq!(route(key, TermMode::empty(), true), None, "{key:?}");
     }
+}
+
+#[test]
+fn super_combos_never_reach_pane() {
+    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER);
+    assert_eq!(route(key, TermMode::empty(), false), None);
 }
 
 #[test]

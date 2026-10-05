@@ -152,6 +152,22 @@ impl Prompt {
         self.insert_at("\n");
     }
 
+    /// 在当前逻辑行尾另起一行并保留行首缩进；不续写列表标记（lx-agent 的 Ctrl/Cmd+Shift+Enter）。
+    pub fn newline_below(&mut self) {
+        self.break_group();
+        let start = line_start(&self.text, self.cursor);
+        let end = line_end(&self.text, self.cursor);
+        let indent = self.text[start..end]
+            .bytes()
+            .take_while(|byte| *byte == b' ')
+            .count();
+        let insert = format!("\n{}", " ".repeat(indent));
+        self.record(EditKind::Other);
+        self.text.insert_str(end, &insert);
+        self.cursor = end + insert.len();
+        self.keep_cursor_visible();
+    }
+
     /// 删除光标前一个字符；紧跟列表标记时先把标记替换为等宽空格。
     pub fn backspace(&mut self) {
         if self.cursor == 0 {

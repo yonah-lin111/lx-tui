@@ -32,6 +32,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::InsertChar(ch) => state.prompt.insert_char(ch),
         EditorCommand::InsertText(text) => state.prompt.insert_str(&text),
         EditorCommand::Newline => state.prompt.newline(),
+        EditorCommand::NewlineBelow => state.prompt.newline_below(),
         EditorCommand::Backspace => state.prompt.backspace(),
         EditorCommand::Delete => state.prompt.delete(),
         EditorCommand::Left => state.prompt.move_left(),

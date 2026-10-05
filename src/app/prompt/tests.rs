@@ -447,6 +447,17 @@ fn newline_splits_content_and_keeps_marker() {
 }
 
 #[test]
+fn newline_below_inserts_at_line_end_keeping_indent() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("  - abcd");
+    prompt.move_left();
+    prompt.move_left();
+    prompt.newline_below();
+    assert_eq!(prompt.text(), "  - abcd\n  ");
+    assert_eq!(prompt.cursor_cell(), Some((1, 2)));
+}
+
+#[test]
 fn empty_item_exits_list_level() {
     let mut top = prompt(20, 3);
     top.insert_str("- ");

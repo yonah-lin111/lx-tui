@@ -71,6 +71,24 @@ fn encodes_function_keys() {
 }
 
 #[test]
+fn super_combos_are_not_encoded() {
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
+            TermMode::empty()
+        ),
+        None
+    );
+    assert_eq!(
+        encode_key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::SUPER | KeyModifiers::SHIFT),
+            TermMode::empty()
+        ),
+        None
+    );
+}
+
+#[test]
 fn encodes_special_keys() {
     assert_eq!(
         encode_key(key(KeyCode::Enter), TermMode::empty()),

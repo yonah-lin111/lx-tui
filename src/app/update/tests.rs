@@ -91,6 +91,9 @@ fn editor_commands_apply_undo_redo_indent_and_list_newline() {
     let mut state = AppState::demo();
     state.prompt.resize(20, 5);
     apply_editor(&mut state, EditorCommand::InsertText("- a".into()));
+    apply_editor(&mut state, EditorCommand::NewlineBelow);
+    assert_eq!(state.prompt.text(), "- a\n");
+    apply_editor(&mut state, EditorCommand::Undo);
     apply_editor(&mut state, EditorCommand::Newline);
     assert_eq!(state.prompt.text(), "- a\n- ");
     apply_editor(&mut state, EditorCommand::Indent);

@@ -30,6 +30,7 @@ impl Tui {
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         crate::platform::enable_mouse_capture(&mut stdout)?;
+        crate::platform::enable_keyboard_enhancement(&mut stdout)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok(Self {
             terminal,
@@ -58,7 +59,8 @@ impl Tui {
     }
 }
 
-/// 退出恢复顺序：先关鼠标上报，仍在原始模式下丢弃在途上报，再离开备用屏，最后恢复 cooked 模式。
+/// 退出恢复顺序：先关鼠标上报，仍在原始模式下丢弃在途上报，再弹出键盘增强并离开备用屏，
+/// 最后恢复 cooked 模式。
 ///
 /// 顺序不可交换：cooked 模式下未成行的残留上报会被终端回显并留在行缓冲，泄漏进后续 shell。
 fn restore_terminal(
@@ -68,6 +70,7 @@ fn restore_terminal(
 ) -> io::Result<()> {
     crate::platform::disable_mouse_capture(writer)?;
     drain();
+    crate::platform::disable_keyboard_enhancement(writer)?;
     execute!(writer, LeaveAlternateScreen, DisableBracketedPaste, Show)?;
     restore_cooked()
 }

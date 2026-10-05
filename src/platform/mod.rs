@@ -112,6 +112,34 @@ pub fn disable_mouse_capture(writer: &mut impl Write) -> io::Result<()> {
     }
 }
 
+/// 启用 kitty 键盘协议（DISAMBIGUATE_ESCAPE_CODES），让 Super/Cmd 组合可被收到；
+/// 不支持的终端忽略该私有序列；Windows legacy 控制台无此协议，直接 no-op。
+pub fn enable_keyboard_enhancement(writer: &mut impl Write) -> io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        crossterm::execute!(
+            writer,
+            crossterm::event::PushKeyboardEnhancementFlags(
+                crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            )
+        )?;
+    }
+    #[cfg(windows)]
+    let _ = writer;
+    Ok(())
+}
+
+/// 关闭 kitty 键盘协议；与开启路径一一对应。
+pub fn disable_keyboard_enhancement(writer: &mut impl Write) -> io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        crossterm::execute!(writer, crossterm::event::PopKeyboardEnhancementFlags)?;
+    }
+    #[cfg(windows)]
+    let _ = writer;
+    Ok(())
+}
+
 /// OSC 52 输出：tmux/screen 下按需加 passthrough 包装（opencode 同款）。
 fn osc52_output(text: &str, tmux: bool, screen: bool) -> String {
     let sequence = format!("\x1b]52;c;{}\x07", BASE64.encode(text.as_bytes()));

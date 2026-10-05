@@ -15,6 +15,7 @@ pub enum EditorCommand {
     InsertChar(char),
     InsertText(String),
     Newline,
+    NewlineBelow,
     Backspace,
     Delete,
     Left,

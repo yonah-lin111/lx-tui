@@ -4,7 +4,13 @@ use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// 把按键编码为写入 PTY 的字节；不支持的按键返回 None。
+///
+/// Super（Cmd）组合只属于应用级快捷键，绝不写入 PTY；kitty 键盘协议下尤其重要，
+/// 否则 Cmd+C 会被当作普通 `c` 打进 shell。
 pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
+    if key.modifiers.contains(KeyModifiers::SUPER) {
+        return None;
+    }
     let modifiers = key.modifiers;
     match key.code {
         KeyCode::Char(c) => Some(encode_char(c, modifiers)),

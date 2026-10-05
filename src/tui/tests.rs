@@ -48,6 +48,9 @@ fn restore_disables_mouse_before_draining_and_restores_cooked_last() {
     let mouse_off = output
         .find("\x1b[?1003l")
         .expect("mouse reporting disabled");
+    let keyboard_off = output
+        .find("\x1b[<1u")
+        .expect("keyboard enhancement popped");
     let leave_screen = output.find("\x1b[?1049l").expect("alternate screen left");
     let steps = steps.borrow();
     let step_at = |name: &str| {
@@ -63,6 +66,14 @@ fn restore_disables_mouse_before_draining_and_restores_cooked_last() {
     assert!(
         mouse_off < drain_at,
         "drain must run after mouse reporting is disabled"
+    );
+    assert!(
+        drain_at <= keyboard_off,
+        "keyboard enhancement must be popped after draining"
+    );
+    assert!(
+        keyboard_off < leave_screen,
+        "keyboard enhancement must be popped before leaving the alternate screen"
     );
     assert!(
         drain_at <= leave_screen,
