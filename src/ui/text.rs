@@ -4,7 +4,7 @@ use crate::layout::PaneId;
 
 pub const SIDEBAR_TITLE: &str = "Workspaces";
 /// 侧栏下半分区标题。
-pub const SIDEBAR_AGENTS_TITLE: &str = "agents";
+pub const SIDEBAR_AGENTS_TITLE: &str = "Agents";
 pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// prompt 占位窗格。
@@ -15,10 +15,10 @@ pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";
 pub const PROMPT_COLLAPSE_LABEL: &str = "[▶]";
 pub const PROMPT_EXPAND_LABEL: &str = "[◀]";
 pub const STRIP_LINE: &str = "│";
-/// 侧栏分区线字形。
-pub const DIVIDER_LEFT: &str = "├";
+/// 侧栏 agents 分区表头：横向分割线与竖直折叠按钮。
 pub const DIVIDER_MID: &str = "─";
-pub const DIVIDER_RIGHT: &str = "┤";
+pub const AGENTS_COLLAPSE_LABEL: &str = "[▼]";
+pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";

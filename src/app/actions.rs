@@ -6,4 +6,5 @@ pub enum Action {
     Quit,
     ToggleSidebar,
     TogglePrompt,
+    ToggleAgents,
 }

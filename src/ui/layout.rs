@@ -62,6 +62,55 @@ pub fn compute(
     }
 }
 
+/// 侧栏分区矩形：上半工作区列表、表头行（分割线 + Agents 标题与折叠按钮）、下半 agents。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SidebarSections {
+    pub workspaces: Rect,
+    pub divider: Rect,
+    pub agents: Rect,
+}
+
+/// 侧栏分区几何：展开态表头在竖直中线；agents 折叠时内容收为 0 行、表头贴底。
+/// 内容区不足两行时返回 None，由调用方退回单列表渲染。
+pub fn sidebar_sections(sidebar: Rect, agents_collapsed: bool) -> Option<SidebarSections> {
+    if sidebar.width <= 2 || sidebar.height <= 2 {
+        return None;
+    }
+    let inner = Rect::new(
+        sidebar.x + 1,
+        sidebar.y + 1,
+        sidebar.width - 2,
+        sidebar.height - 2,
+    );
+    if inner.height < 2 {
+        return None;
+    }
+    let divider_row = if agents_collapsed {
+        inner.height - 1
+    } else {
+        inner.height / 2
+    };
+    let workspaces = Rect {
+        height: divider_row,
+        ..inner
+    };
+    let divider = Rect {
+        y: inner.y + divider_row,
+        height: 1,
+        ..inner
+    };
+    let agents = Rect {
+        y: inner.y + divider_row + 1,
+        height: inner.height - divider_row - 1,
+        ..inner
+    };
+    Some(SidebarSections {
+        workspaces,
+        divider,
+        agents,
+    })
+}
+
 /// 启动默认右栏宽度：主区可用宽度的一半，复刻旧 50% 分割的版面。
 pub fn default_prompt_width(area: Rect, config: &Config, sidebar_collapsed: bool) -> u16 {
     let available = area
@@ -191,6 +240,31 @@ mod tests {
         let view = compute(Rect::new(0, 0, 10, 2), &config, false, false, 30);
         assert_eq!(view.panes.height, 1);
         assert_eq!(view.panes.bottom(), 2);
+    }
+
+    #[test]
+    fn sidebar_sections_split_at_vertical_middle_when_expanded() {
+        let sidebar = Rect::new(0, 0, 24, 24);
+        let sections = sidebar_sections(sidebar, false).expect("sections are visible");
+        assert_eq!(sections.workspaces, Rect::new(1, 1, 22, 11));
+        assert_eq!(sections.divider, Rect::new(1, 12, 22, 1));
+        assert_eq!(sections.agents, Rect::new(1, 13, 22, 10));
+    }
+
+    #[test]
+    fn sidebar_sections_dock_divider_to_bottom_when_agents_collapsed() {
+        let sidebar = Rect::new(0, 0, 24, 24);
+        let sections = sidebar_sections(sidebar, true).expect("sections are visible");
+        assert_eq!(sections.workspaces.height, 21);
+        assert_eq!(sections.divider.y, 22);
+        assert_eq!(sections.agents.height, 0);
+        assert_eq!(sections.divider.bottom(), sidebar.bottom() - 1);
+    }
+
+    #[test]
+    fn sidebar_sections_need_room_for_content() {
+        assert_eq!(sidebar_sections(Rect::new(0, 0, 2, 24), false), None);
+        assert_eq!(sidebar_sections(Rect::new(0, 0, 24, 3), false), None);
     }
 
     #[test]

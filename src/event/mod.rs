@@ -250,10 +250,13 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if let Some(target) = ui::collapse_button_at(view, mouse.column, mouse.row) {
+                if let Some(target) =
+                    ui::collapse_button_at(view, state.agents_collapsed, mouse.column, mouse.row)
+                {
                     let action = match target {
                         ui::CollapseTarget::Sidebar => Action::ToggleSidebar,
                         ui::CollapseTarget::Prompt => Action::TogglePrompt,
+                        ui::CollapseTarget::Agents => Action::ToggleAgents,
                     };
                     update::apply(action, state);
                     if update::set_prompt_hover(state, false) {

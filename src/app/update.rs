@@ -17,6 +17,7 @@ pub fn apply(action: Action, state: &mut AppState) {
         Action::Quit => state.should_quit = true,
         Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
         Action::TogglePrompt => state.prompt_collapsed = !state.prompt_collapsed,
+        Action::ToggleAgents => state.agents_collapsed = !state.agents_collapsed,
     }
 }
 
@@ -174,6 +175,15 @@ mod tests {
         assert!(state.prompt_collapsed);
         apply(Action::TogglePrompt, &mut state);
         assert!(!state.prompt_collapsed);
+    }
+
+    #[test]
+    fn toggle_agents_flips_flag() {
+        let mut state = AppState::demo();
+        apply(Action::ToggleAgents, &mut state);
+        assert!(state.agents_collapsed);
+        apply(Action::ToggleAgents, &mut state);
+        assert!(!state.agents_collapsed);
     }
 
     #[test]

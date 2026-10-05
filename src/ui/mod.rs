@@ -50,7 +50,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_tab_bar(frame, view.tab_bar, state);
     render_panes(frame, &pane_rects, state);
     render_prompt(frame, view.prompt, state);
-    render_collapse_buttons(frame, &view);
+    render_collapse_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     toast::render(frame, area, state, &view, &pane_rects, config);
 }
@@ -60,6 +60,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
 pub enum CollapseTarget {
     Sidebar,
     Prompt,
+    Agents,
 }
 
 /// 折叠按钮：目标、命中矩形与当前折叠态。
@@ -70,13 +71,16 @@ pub struct CollapseButton {
     pub collapsed: bool,
 }
 
-/// 左栏与右栏顶边内的折叠按钮；渲染与鼠标命中共用同一几何。
-pub fn collapse_buttons(view: &layout::ViewLayout) -> Vec<CollapseButton> {
+/// 左栏、右栏顶边与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
+pub fn collapse_buttons(view: &layout::ViewLayout, agents_collapsed: bool) -> Vec<CollapseButton> {
     let mut buttons = Vec::new();
     if let Some(button) = panel_button(CollapseTarget::Sidebar, view.sidebar) {
         buttons.push(button);
     }
     if let Some(button) = panel_button(CollapseTarget::Prompt, view.prompt) {
+        buttons.push(button);
+    }
+    if let Some(button) = agents_button(view, agents_collapsed) {
         buttons.push(button);
     }
     buttons
@@ -85,10 +89,11 @@ pub fn collapse_buttons(view: &layout::ViewLayout) -> Vec<CollapseButton> {
 /// 命中测试：返回坐标所在折叠按钮的目标。
 pub fn collapse_button_at(
     view: &layout::ViewLayout,
+    agents_collapsed: bool,
     column: u16,
     row: u16,
 ) -> Option<CollapseTarget> {
-    collapse_buttons(view)
+    collapse_buttons(view, agents_collapsed)
         .into_iter()
         .find(|button| button.area.contains((column, row).into()))
         .map(|button| button.target)
@@ -121,21 +126,48 @@ fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
     }
 }
 
-/// 在面板顶边绘制折叠按钮，必须晚于面板内容渲染。
+/// agents 分区折叠按钮：位于分区表头行，右端与面板顶部折叠按钮同列。
+fn agents_button(view: &layout::ViewLayout, agents_collapsed: bool) -> Option<CollapseButton> {
+    if view.sidebar.width <= COLLAPSED_STRIP {
+        return None;
+    }
+    let sections = layout::sidebar_sections(view.sidebar, agents_collapsed)?;
+    Some(CollapseButton {
+        target: CollapseTarget::Agents,
+        area: agents_button_area(view.sidebar, sections.divider),
+        collapsed: agents_collapsed,
+    })
+}
+
+/// agents 折叠按钮矩形：右端与面板顶部折叠按钮对齐，纵向落在表头行。
+fn agents_button_area(sidebar: Rect, divider: Rect) -> Rect {
+    Rect::new(
+        sidebar
+            .right()
+            .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN),
+        divider.y,
+        PANEL_BUTTON_WIDTH,
+        1,
+    )
+}
+
+/// 在面板顶边与 agents 表头绘制折叠按钮，必须晚于面板内容渲染。
 ///
-/// 折叠态标签恰好占满 3 个内容列（水平居中），展开态贴面板右端。
-fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
-    for button in collapse_buttons(view) {
+/// 折叠态面板标签恰好占满 3 个内容列（水平居中），其余按钮贴所在行右端。
+fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+    for button in collapse_buttons(view, state.agents_collapsed) {
         let label = match (button.target, button.collapsed) {
             (CollapseTarget::Sidebar, false) => text::SIDEBAR_COLLAPSE_LABEL,
             (CollapseTarget::Sidebar, true) => text::SIDEBAR_EXPAND_LABEL,
             (CollapseTarget::Prompt, false) => text::PROMPT_COLLAPSE_LABEL,
             (CollapseTarget::Prompt, true) => text::PROMPT_EXPAND_LABEL,
+            (CollapseTarget::Agents, false) => text::AGENTS_COLLAPSE_LABEL,
+            (CollapseTarget::Agents, true) => text::AGENTS_EXPAND_LABEL,
         };
-        let start = if button.collapsed {
-            collapsed_content_x(button.area, button.target == CollapseTarget::Sidebar)
-        } else {
-            button.area.x
+        let start = match button.target {
+            CollapseTarget::Sidebar if button.collapsed => collapsed_content_x(button.area, true),
+            CollapseTarget::Prompt if button.collapsed => collapsed_content_x(button.area, false),
+            _ => button.area.x,
         };
         for (offset, symbol) in label.chars().enumerate() {
             let x = start + offset as u16;
@@ -227,51 +259,43 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    if inner.height == 1 {
+    let Some(sections) = layout::sidebar_sections(area, state.agents_collapsed) else {
         frame.render_widget(List::new(items), inner);
         return;
-    }
-    let workspace_area = Rect {
-        height: inner.height / 2,
-        ..inner
     };
-    frame.render_widget(List::new(items), workspace_area);
-    let divider = Rect {
-        y: inner.y + workspace_area.height,
-        height: 1,
-        ..inner
-    };
-    render_sidebar_divider(frame, divider);
+    frame.render_widget(List::new(items), sections.workspaces);
+    render_agents_header(
+        frame,
+        sections.divider,
+        agents_button_area(area, sections.divider),
+    );
+    // agents 分区暂无内容，保持空占位。
 }
 
-/// 侧栏分区线：贯穿内容宽度，` agents ` 标题嵌入线内；过窄时只画线。
-fn render_sidebar_divider(frame: &mut Frame<'_>, row: Rect) {
-    if row.width < 2 {
+/// agents 表头：贯穿的横线与居中的 ` Agents ` 标题；与折叠按钮重叠时省略标题。
+fn render_agents_header(frame: &mut Frame<'_>, row: Rect, button: Rect) {
+    if row.width == 0 {
         return;
     }
-    let label = format!(" {} ", text::SIDEBAR_AGENTS_TITLE);
-    let label_start = row.x + 2;
-    let label_end = label_start.saturating_add(label.chars().count() as u16);
-    let label_fits = label_end < row.right();
     let buf = frame.buffer_mut();
     for x in row.x..row.right() {
         if let Some(cell) = buf.cell_mut((x, row.y)) {
             cell.reset();
-            cell.set_symbol(if x == row.x {
-                text::DIVIDER_LEFT
-            } else if x == row.right() - 1 {
-                text::DIVIDER_RIGHT
-            } else {
-                text::DIVIDER_MID
-            });
+            cell.set_symbol(text::DIVIDER_MID);
             cell.set_style(style::border(false));
         }
     }
-    if !label_fits {
+    let label = format!(" {} ", text::SIDEBAR_AGENTS_TITLE);
+    let label_width = label.chars().count() as u16;
+    if label_width >= row.width {
+        return;
+    }
+    let label_area = Rect::new(row.x + (row.width - label_width) / 2, row.y, label_width, 1);
+    if label_area.intersects(button) {
         return;
     }
     for (offset, symbol) in label.chars().enumerate() {
-        if let Some(cell) = buf.cell_mut((label_start + offset as u16, row.y)) {
+        if let Some(cell) = buf.cell_mut((label_area.x + offset as u16, row.y)) {
             cell.reset();
             cell.set_char(symbol);
             cell.set_style(style::muted());
@@ -440,7 +464,15 @@ mod tests {
     }
 
     fn button_for(view: &layout::ViewLayout, target: CollapseTarget) -> CollapseButton {
-        collapse_buttons(view)
+        button_for_state(view, false, target)
+    }
+
+    fn button_for_state(
+        view: &layout::ViewLayout,
+        agents_collapsed: bool,
+        target: CollapseTarget,
+    ) -> CollapseButton {
+        collapse_buttons(view, agents_collapsed)
             .into_iter()
             .find(|button| button.target == target)
             .expect("panel button is visible")
@@ -582,46 +614,42 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_divider_sits_at_vertical_middle_with_agents_title() {
+    fn agents_header_is_centered_without_junctions() {
         let state = AppState::demo();
         let view = view_for(&state);
         let lines = render_lines(&state);
-        let sidebar = view.sidebar;
-        let inner_y = (sidebar.y + 1) as usize;
-        let inner_height = sidebar.height - 2;
-        let divider_y = inner_y + (inner_height / 2) as usize;
+        let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+        let row: Vec<char> = lines[sections.divider.y as usize].chars().collect();
+        let divider: String = (sections.divider.x..sections.divider.right())
+            .map(|x| row[x as usize])
+            .collect();
+        assert_eq!(text::SIDEBAR_AGENTS_TITLE, "Agents");
+        assert!(!divider.contains('├') && !divider.contains('┤'));
 
-        let row: Vec<char> = lines[divider_y].chars().collect();
-        assert_eq!(
-            row[(sidebar.x + 1) as usize].to_string(),
-            text::DIVIDER_LEFT
-        );
-        assert_eq!(
-            row[(sidebar.right() - 2) as usize].to_string(),
-            text::DIVIDER_RIGHT
-        );
         let label = format!(" {} ", text::SIDEBAR_AGENTS_TITLE);
-        let start = (sidebar.x + 3) as usize;
-        let rendered: String = row[start..start + label.chars().count()].iter().collect();
+        let label_width = label.chars().count() as u16;
+        let start = sections.divider.x + (sections.divider.width - label_width) / 2;
+        let rendered: String = row[start as usize..(start + label_width) as usize]
+            .iter()
+            .collect();
         assert_eq!(rendered, label);
-
-        let above = divider_y - inner_y;
-        let below = (sidebar.bottom() as usize - 1 - divider_y).saturating_sub(1);
-        assert!(above.abs_diff(below) <= 1);
+        assert_eq!(
+            sections.divider.y,
+            view.sidebar.y + 1 + (view.sidebar.height - 2) / 2
+        );
     }
 
     #[test]
-    fn agents_section_below_divider_stays_empty() {
+    fn agents_section_below_header_stays_empty() {
         let state = AppState::demo();
         let view = view_for(&state);
+        let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
         let lines = render_lines(&state);
-        let sidebar = view.sidebar;
-        let divider_y = (sidebar.y + 1) as usize + ((sidebar.height - 2) / 2) as usize;
-        for line in &lines[divider_y + 1..(sidebar.bottom() - 1) as usize] {
+        for line in &lines[sections.agents.y as usize..sections.agents.bottom() as usize] {
             let row: String = line
                 .chars()
-                .skip(sidebar.x as usize)
-                .take(sidebar.width as usize)
+                .skip(view.sidebar.x as usize)
+                .take(view.sidebar.width as usize)
                 .collect();
             let content = row.trim_matches(|symbol| symbol == '│' || symbol == ' ');
             assert!(
@@ -629,6 +657,53 @@ mod tests {
                 "agents section should stay empty: {row:?}"
             );
         }
+    }
+
+    #[test]
+    fn agents_button_aligns_with_top_button_and_toggles_header() {
+        let mut state = AppState::demo();
+        let view = view_for(&state);
+        let sidebar_button = button_for(&view, CollapseTarget::Sidebar);
+        let agents_button = button_for(&view, CollapseTarget::Agents);
+        assert_eq!(agents_button.area.x, sidebar_button.area.x);
+        assert_eq!(agents_button.area.width, sidebar_button.area.width);
+        assert!(!agents_button.collapsed);
+        assert_eq!(
+            collapse_button_at(&view, false, agents_button.area.x, agents_button.area.y),
+            Some(CollapseTarget::Agents)
+        );
+
+        update::apply(Action::ToggleAgents, &mut state);
+        let view = view_for(&state);
+        let agents_button = button_for_state(&view, true, CollapseTarget::Agents);
+        assert!(agents_button.collapsed);
+        assert_eq!(agents_button.area.x, sidebar_button.area.x);
+        assert_eq!(agents_button.area.y, view.sidebar.bottom() - 2);
+        let lines = render_lines(&state);
+        assert!(lines[agents_button.area.y as usize].contains(text::AGENTS_EXPAND_LABEL));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains(text::AGENTS_COLLAPSE_LABEL))
+        );
+
+        update::apply(Action::ToggleAgents, &mut state);
+        let view = view_for(&state);
+        let agents_button = button_for_state(&view, false, CollapseTarget::Agents);
+        let lines = render_lines(&state);
+        assert!(lines[agents_button.area.y as usize].contains(text::AGENTS_COLLAPSE_LABEL));
+    }
+
+    #[test]
+    fn collapsed_agents_header_docks_above_bottom_border() {
+        let mut state = AppState::demo();
+        update::apply(Action::ToggleAgents, &mut state);
+        let view = view_for(&state);
+        let sections = layout::sidebar_sections(view.sidebar, true).expect("sections are visible");
+        assert_eq!(sections.agents.height, 0);
+        assert_eq!(sections.divider.y, view.sidebar.bottom() - 2);
+        let lines = render_lines(&state);
+        assert!(lines[sections.divider.y as usize].contains(text::SIDEBAR_AGENTS_TITLE));
     }
 
     #[test]
@@ -697,29 +772,29 @@ mod tests {
     fn collapse_buttons_hit_their_targets() {
         let mut state = AppState::demo();
         let view = view_for(&state);
-        let sidebar = collapse_buttons(&view)
+        let sidebar = collapse_buttons(&view, false)
             .into_iter()
             .find(|button| button.target == CollapseTarget::Sidebar);
         assert!(sidebar.is_some());
         let Some(sidebar) = sidebar else { return };
         assert!(!sidebar.collapsed);
         assert_eq!(
-            collapse_button_at(&view, sidebar.area.x, sidebar.area.y),
+            collapse_button_at(&view, false, sidebar.area.x, sidebar.area.y),
             Some(CollapseTarget::Sidebar)
         );
-        let prompt = collapse_buttons(&view)
+        let prompt = collapse_buttons(&view, false)
             .into_iter()
             .find(|button| button.target == CollapseTarget::Prompt);
         assert!(prompt.is_some());
         let Some(prompt) = prompt else { return };
         assert_eq!(
-            collapse_button_at(&view, prompt.area.x, prompt.area.y),
+            collapse_button_at(&view, false, prompt.area.x, prompt.area.y),
             Some(CollapseTarget::Prompt)
         );
 
         update::apply(Action::TogglePrompt, &mut state);
         let view = view_for(&state);
-        let collapsed = collapse_buttons(&view)
+        let collapsed = collapse_buttons(&view, false)
             .into_iter()
             .find(|button| button.target == CollapseTarget::Prompt);
         assert!(collapsed.is_some_and(|button| button.collapsed));
@@ -735,7 +810,7 @@ mod tests {
             panic!("draw failed: {error}");
         }
         let buffer = terminal.backend().buffer().clone();
-        for button in collapse_buttons(&view) {
+        for button in collapse_buttons(&view, false) {
             for x in button.area.x..button.area.right() {
                 let cell = &buffer[(x, button.area.y)];
                 assert_eq!(cell.fg, ratatui::style::Color::Cyan);

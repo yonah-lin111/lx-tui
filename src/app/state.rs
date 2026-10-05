@@ -28,6 +28,7 @@ const DEMO_PROMPT: &str = concat!(
 pub struct AppState {
     pub should_quit: bool,
     pub sidebar_collapsed: bool,
+    pub agents_collapsed: bool,
     pub toast: Option<Toast>,
     pub selection: Option<Selection>,
     pub resizing_prompt: bool,
@@ -170,6 +171,7 @@ impl AppState {
         Self {
             should_quit: false,
             sidebar_collapsed: false,
+            agents_collapsed: false,
             toast: None,
             selection: None,
             resizing_prompt: false,
