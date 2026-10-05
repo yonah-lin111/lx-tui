@@ -123,10 +123,11 @@ fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
     let buttons = collapse_buttons(view);
     let buf = frame.buffer_mut();
     for button in buttons {
-        let label = if button.collapsed {
-            text::EXPAND_LABEL
-        } else {
-            text::COLLAPSE_LABEL
+        let label = match (button.target, button.collapsed) {
+            (CollapseTarget::Sidebar, false) => text::SIDEBAR_COLLAPSE_LABEL,
+            (CollapseTarget::Sidebar, true) => text::SIDEBAR_EXPAND_LABEL,
+            (CollapseTarget::Prompt, false) => text::PROMPT_COLLAPSE_LABEL,
+            (CollapseTarget::Prompt, true) => text::PROMPT_EXPAND_LABEL,
         };
         for (offset, symbol) in label.chars().enumerate() {
             let x = button.area.x + offset as u16;
@@ -362,14 +363,75 @@ mod tests {
         )
     }
 
+    fn button_for(view: &layout::ViewLayout, target: CollapseTarget) -> CollapseButton {
+        collapse_buttons(view)
+            .into_iter()
+            .find(|button| button.target == target)
+            .expect("panel button is visible")
+    }
+
+    fn rendered_label(lines: &[String], button: &CollapseButton) -> String {
+        let row: Vec<char> = lines[button.area.y as usize].chars().collect();
+        (button.area.x..button.area.right())
+            .map(|x| row[x as usize])
+            .collect()
+    }
+
+    #[test]
+    fn collapse_buttons_render_directional_arrow_labels() {
+        let mut state = AppState::demo();
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+        assert_eq!(
+            rendered_label(&lines, &button_for(&view, CollapseTarget::Sidebar)),
+            text::SIDEBAR_COLLAPSE_LABEL
+        );
+        assert_eq!(
+            rendered_label(&lines, &button_for(&view, CollapseTarget::Prompt)),
+            text::PROMPT_COLLAPSE_LABEL
+        );
+
+        update::apply(Action::ToggleSidebar, &mut state);
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+        assert_eq!(
+            rendered_label(&lines, &button_for(&view, CollapseTarget::Sidebar)),
+            text::SIDEBAR_EXPAND_LABEL
+        );
+        assert_eq!(
+            rendered_label(&lines, &button_for(&view, CollapseTarget::Prompt)),
+            text::PROMPT_COLLAPSE_LABEL
+        );
+
+        update::apply(Action::TogglePrompt, &mut state);
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+        assert_eq!(
+            rendered_label(&lines, &button_for(&view, CollapseTarget::Sidebar)),
+            text::SIDEBAR_EXPAND_LABEL
+        );
+        assert_eq!(
+            rendered_label(&lines, &button_for(&view, CollapseTarget::Prompt)),
+            text::PROMPT_EXPAND_LABEL
+        );
+    }
+
     #[test]
     fn prompt_sidebar_renders_content_and_collapse_button() {
         let state = AppState::demo();
         let lines = render_lines(&state);
         assert!(lines.iter().any(|line| line.contains("Drag to select")));
         assert!(lines.iter().any(|line| line.contains(text::PROMPT_TITLE)));
-        assert!(lines.iter().any(|line| line.contains(text::COLLAPSE_LABEL)));
-        assert!(!lines.iter().any(|line| line.contains(text::EXPAND_LABEL)));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(text::SIDEBAR_COLLAPSE_LABEL))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(text::PROMPT_COLLAPSE_LABEL))
+        );
     }
 
     #[test]
@@ -377,7 +439,16 @@ mod tests {
         let mut state = AppState::demo();
         update::apply(Action::TogglePrompt, &mut state);
         let lines = render_lines(&state);
-        assert!(lines.iter().any(|line| line.contains(text::EXPAND_LABEL)));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(text::PROMPT_EXPAND_LABEL))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains(text::PROMPT_COLLAPSE_LABEL))
+        );
         assert!(!lines.iter().any(|line| line.contains("Drag to select")));
     }
 
@@ -385,10 +456,23 @@ mod tests {
     fn sidebar_collapse_button_renders_icons() {
         let mut state = AppState::demo();
         let lines = render_lines(&state);
-        assert!(lines.iter().any(|line| line.contains(text::COLLAPSE_LABEL)));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(text::SIDEBAR_COLLAPSE_LABEL))
+        );
         update::apply(Action::ToggleSidebar, &mut state);
         let lines = render_lines(&state);
-        assert!(lines.iter().any(|line| line.contains(text::EXPAND_LABEL)));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(text::SIDEBAR_EXPAND_LABEL))
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains(text::SIDEBAR_COLLAPSE_LABEL))
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use ratatui::layout::{Direction, Rect};
 
-/// 折叠窗格在父分割中占用的窄条宽度（列或行），需容纳折叠按钮 `[+]`。
+/// 折叠窗格在父分割中占用的窄条宽度（列或行），需容纳折叠按钮 `[◀]`/`[▶]`。
 pub const COLLAPSED_STRIP: u16 = 3;
 
 /// 窗格唯一标识。

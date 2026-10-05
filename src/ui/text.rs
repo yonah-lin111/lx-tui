@@ -7,9 +7,11 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// prompt 占位窗格。
 pub const PROMPT_TITLE: &str = "prompt";
-/// 折叠按钮与折叠窄条。
-pub const COLLAPSE_LABEL: &str = "[-]";
-pub const EXPAND_LABEL: &str = "[+]";
+/// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
+pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
+pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";
+pub const PROMPT_COLLAPSE_LABEL: &str = "[▶]";
+pub const PROMPT_EXPAND_LABEL: &str = "[◀]";
 pub const STRIP_LINE: &str = "│";
 
 /// 复制反馈 toast。
