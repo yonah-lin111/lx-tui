@@ -213,6 +213,21 @@ fn selection_spans_wrapped_rows_and_wide_chars() {
 }
 
 #[test]
+fn select_all_resets_scroll_and_returns_full_range() {
+    let mut prompt = prompt(10, 2);
+    prompt.insert_str("1\n2\n3\n4\n5");
+    assert_eq!(prompt.scroll(), 3);
+    let (start, end) = prompt.select_all();
+    assert_eq!((start, end), ((0, 0), (4, 1)));
+    assert_eq!(prompt.scroll(), 0);
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+    assert_eq!(
+        prompt.selection_text(start, end).as_deref(),
+        Some("1\n2\n3\n4\n5")
+    );
+}
+
+#[test]
 fn replace_range_swaps_selection_and_undo_restores_it() {
     let mut prompt = prompt(20, 3);
     prompt.insert_str("hello world");

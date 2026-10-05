@@ -58,6 +58,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::NewlineBelow => state.prompt.newline_below(),
         EditorCommand::Backspace => state.prompt.backspace(),
         EditorCommand::Delete => state.prompt.delete(),
+        EditorCommand::SelectAll => select_all(state),
         EditorCommand::Left => state.prompt.move_left(),
         EditorCommand::Right => state.prompt.move_right(),
         EditorCommand::Up => state.prompt.move_up(),
@@ -168,6 +169,12 @@ pub fn end_selection_drag(state: &mut AppState) {
     } else {
         state.selection = None;
     }
+}
+
+/// prompt 全选：视口回到顶部，选区覆盖全部文本。
+pub fn select_all(state: &mut AppState) {
+    let (anchor, cursor) = state.prompt.select_all();
+    state.selection = Some(Selection::span(state.prompt.id(), anchor, cursor));
 }
 
 /// prompt 选区文本（保留选区，供 Ctrl/Cmd+C 复制）；空选区返回 None。

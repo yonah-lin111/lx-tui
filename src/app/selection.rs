@@ -27,6 +27,16 @@ impl Selection {
         self.pane
     }
 
+    /// 以既定端点构造已完成拖动的选区（用于全选等程序化选择）。
+    pub fn span(pane: PaneId, anchor: (u16, u16), cursor: (u16, u16)) -> Self {
+        Self {
+            pane,
+            anchor,
+            cursor,
+            dragging: false,
+        }
+    }
+
     /// 扩展到新的拖动点。
     pub fn drag(&mut self, row: u16, col: u16) {
         self.cursor = (row, col);
