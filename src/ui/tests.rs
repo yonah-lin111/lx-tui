@@ -470,8 +470,12 @@ fn placeholder_pane_renders_title_without_content() {
 fn status_bar_is_removed() {
     let state = AppState::demo();
     let lines = render_lines(&state);
-    assert!(!lines.iter().any(|line| line.contains("lx-tui")));
     let last = lines.last().map(String::as_str).unwrap_or_default();
+    // 工作区名可能合法等于应用名，这里只校验末行不再是状态栏。
+    assert!(
+        !last.contains("lx-tui"),
+        "last row should not be a status bar"
+    );
     assert!(last.contains('╰'), "last row should be pane border");
 }
 
