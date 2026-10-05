@@ -272,7 +272,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     // agents 分区暂无内容，保持空占位。
 }
 
-/// agents 表头：贯穿的横线与居中的 ` Agents ` 标题；与折叠按钮重叠时省略标题。
+/// agents 表头：贯穿的横线与左对齐的 ` Agents ` 标题；与折叠按钮重叠时省略标题。
 fn render_agents_header(frame: &mut Frame<'_>, row: Rect, button: Rect) {
     if row.width == 0 {
         return;
@@ -290,7 +290,8 @@ fn render_agents_header(frame: &mut Frame<'_>, row: Rect, button: Rect) {
     if label_width >= row.width {
         return;
     }
-    let label_area = Rect::new(row.x + (row.width - label_width) / 2, row.y, label_width, 1);
+    // 与顶部 Workspaces 标题同列左对齐。
+    let label_area = Rect::new(row.x, row.y, label_width, 1);
     if label_area.intersects(button) {
         return;
     }
@@ -614,7 +615,7 @@ mod tests {
     }
 
     #[test]
-    fn agents_header_is_centered_without_junctions() {
+    fn agents_header_is_left_aligned_without_junctions() {
         let state = AppState::demo();
         let view = view_for(&state);
         let lines = render_lines(&state);
@@ -627,16 +628,20 @@ mod tests {
         assert!(!divider.contains('├') && !divider.contains('┤'));
 
         let label = format!(" {} ", text::SIDEBAR_AGENTS_TITLE);
-        let label_width = label.chars().count() as u16;
-        let start = sections.divider.x + (sections.divider.width - label_width) / 2;
-        let rendered: String = row[start as usize..(start + label_width) as usize]
-            .iter()
-            .collect();
+        let start = sections.divider.x as usize;
+        let rendered: String = row[start..start + label.chars().count()].iter().collect();
         assert_eq!(rendered, label);
-        assert_eq!(
-            sections.divider.y,
-            view.sidebar.y + 1 + (view.sidebar.height - 2) / 2
-        );
+
+        let top: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
+        let workspaces_start = top
+            .iter()
+            .position(|symbol| *symbol == 'W')
+            .expect("workspaces title is rendered");
+        let agents_start = row
+            .iter()
+            .position(|symbol| *symbol == 'A')
+            .expect("agents title is rendered");
+        assert_eq!(agents_start, workspaces_start);
     }
 
     #[test]
