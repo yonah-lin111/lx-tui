@@ -230,16 +230,6 @@ fn prompt_focus_maps_history_and_indent_keys() {
         (KeyCode::Char('y'), KeyModifiers::SUPER, EditorCommand::Redo),
         (
             KeyCode::Enter,
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-            EditorCommand::NewlineBelow,
-        ),
-        (
-            KeyCode::Enter,
-            KeyModifiers::SUPER | KeyModifiers::SHIFT,
-            EditorCommand::NewlineBelow,
-        ),
-        (
-            KeyCode::Enter,
             KeyModifiers::SUPER,
             EditorCommand::NewlineBelow,
         ),
@@ -270,6 +260,8 @@ fn prompt_focus_swallows_unmapped_keys() {
     let cases = [
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::SUPER | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),
         KeyEvent::new(KeyCode::Char('B'), KeyModifiers::ALT | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
