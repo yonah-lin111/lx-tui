@@ -435,24 +435,6 @@ impl Prompt {
         self.keep_cursor_visible();
     }
 
-    /// 全选：视口滚回顶部、光标移到开头，返回覆盖全部文本的视口单元格范围。
-    pub fn select_all(&mut self) -> ((u16, u16), (u16, u16)) {
-        self.scroll = 0;
-        self.cursor = 0;
-        self.break_group();
-        let rows = self.visual_rows();
-        let index = rows.len().saturating_sub(1);
-        let last = rows[index];
-        let col = display_width(&self.text[last.start..last.end]);
-        (
-            (0, 0),
-            (
-                index.min(usize::from(u16::MAX)) as u16,
-                col.min(usize::from(u16::MAX)) as u16,
-            ),
-        )
-    }
-
     /// 选区（视口坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
     pub fn selection_bounds(&self, start: (u16, u16), end: (u16, u16)) -> Option<(usize, usize)> {
         if start == end {

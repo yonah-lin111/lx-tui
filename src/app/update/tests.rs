@@ -247,38 +247,6 @@ fn delete_keys_remove_prompt_selection() {
 }
 
 #[test]
-fn select_all_covers_prompt_and_backspace_clears_it() {
-    let mut state = AppState::demo();
-    state.prompt.resize(20, 5);
-    apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
-    apply_editor(&mut state, EditorCommand::SelectAll);
-    assert_eq!(
-        prompt_selection_text(&state).as_deref(),
-        Some("hello world")
-    );
-    apply_editor(&mut state, EditorCommand::Backspace);
-    assert_eq!(state.prompt.text(), "");
-    assert!(state.selection.is_none());
-}
-
-#[test]
-fn select_all_from_scrolled_view_covers_whole_text() {
-    let mut state = AppState::demo();
-    state.prompt.resize(10, 2);
-    apply_editor(
-        &mut state,
-        EditorCommand::InsertText("1\n2\n3\n4\n5".into()),
-    );
-    assert_ne!(state.prompt.scroll(), 0);
-    apply_editor(&mut state, EditorCommand::SelectAll);
-    assert_eq!(state.prompt.scroll(), 0);
-    assert_eq!(
-        prompt_selection_text(&state).as_deref(),
-        Some("1\n2\n3\n4\n5")
-    );
-}
-
-#[test]
 fn navigation_clears_prompt_selection_without_editing() {
     let mut state = AppState::demo();
     state.prompt.resize(20, 5);

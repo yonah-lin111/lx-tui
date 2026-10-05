@@ -18,7 +18,6 @@ pub enum EditorCommand {
     NewlineBelow,
     Backspace,
     Delete,
-    SelectAll,
     Left,
     Right,
     Up,

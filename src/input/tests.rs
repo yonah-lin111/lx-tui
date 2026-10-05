@@ -276,31 +276,6 @@ fn prompt_focus_maps_copy_keys() {
 }
 
 #[test]
-fn prompt_focus_select_all_matches_platform_convention() {
-    let route_prompt =
-        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
-    let select_all = Some(Routed::Editor(EditorCommand::SelectAll));
-    #[cfg(target_os = "macos")]
-    {
-        assert_eq!(
-            route_prompt(KeyCode::Char('a'), KeyModifiers::SUPER),
-            select_all
-        );
-        assert_eq!(
-            route_prompt(KeyCode::Char('a'), KeyModifiers::CONTROL),
-            Some(Routed::Editor(EditorCommand::LineStart))
-        );
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        assert_eq!(
-            route_prompt(KeyCode::Char('a'), KeyModifiers::CONTROL),
-            select_all
-        );
-    }
-}
-
-#[test]
 fn prompt_focus_swallows_unmapped_keys() {
     let cases = [
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),

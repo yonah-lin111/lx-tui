@@ -6,7 +6,6 @@ use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::actions::{Action, EditorCommand};
-use crate::platform;
 
 /// 路由结果。
 #[derive(Debug, PartialEq, Eq)]
@@ -33,9 +32,6 @@ pub fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Rout
         return Some(Routed::Action(Action::Quit));
     }
     if prompt_focused {
-        if key.code == KeyCode::Char('a') && key.modifiers == platform::SELECT_ALL_MODIFIER {
-            return Some(Routed::Editor(EditorCommand::SelectAll));
-        }
         if matches!(key.code, KeyCode::Char('c' | 'C'))
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))

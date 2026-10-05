@@ -9,15 +9,6 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 /// 原生复制命令的等待上限；超时终止，避免剪贴板被占用时无限阻塞。
 const NATIVE_COPY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// 全选修饰键：macOS 用 Cmd（Super），其余平台用 Ctrl（各自系统惯例）。
-#[cfg(target_os = "macos")]
-pub const SELECT_ALL_MODIFIER: crossterm::event::KeyModifiers =
-    crossterm::event::KeyModifiers::SUPER;
-/// 全选修饰键：macOS 用 Cmd（Super），其余平台用 Ctrl（各自系统惯例）。
-#[cfg(not(target_os = "macos"))]
-pub const SELECT_ALL_MODIFIER: crossterm::event::KeyModifiers =
-    crossterm::event::KeyModifiers::CONTROL;
-
 /// Unix 下关闭全部已知鼠标上报模式（含旧式模式，herdr `terminal_modes` 同款清理）。
 #[cfg(not(windows))]
 const DISABLE_MOUSE_REPORTING: &[u8] =
