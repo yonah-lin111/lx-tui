@@ -52,7 +52,9 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_tab_bar(frame, view.tab_bar, state);
     render_exit_button(frame, &view);
     render_panes(frame, &pane_rects, state);
-    render_prompt(frame, view.prompt, state);
+    if let Some(position) = render_prompt(frame, view.prompt, state) {
+        frame.set_cursor_position(position);
+    }
     render_collapse_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     toast::render(frame, area, state, &view, &pane_rects, config);
@@ -404,13 +406,15 @@ fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &Ap
 }
 
 /// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。
-fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+///
+/// 返回聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
+fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
-        return;
+        return None;
     }
     if state.prompt_collapsed {
         render_collapsed_strip(frame, area, false);
-        return;
+        return None;
     }
     let focused = state.prompt_focused;
     let block = Block::bordered()
@@ -423,7 +427,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return None;
     }
     prompt::render(
         inner,
@@ -432,6 +436,8 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         focused,
         state.selection_for(state.prompt.id()),
     );
+    let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
+    Some((inner.x + col.min(inner.width - 1), inner.y + row))
 }
 
 /// 窗格标题：空占位与终端走通用标题规则。

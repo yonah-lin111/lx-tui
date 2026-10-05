@@ -238,6 +238,21 @@ fn prompt_focus_maps_history_and_indent_keys() {
             KeyModifiers::SUPER | KeyModifiers::SHIFT,
             EditorCommand::NewlineBelow,
         ),
+        (
+            KeyCode::Enter,
+            KeyModifiers::SUPER,
+            EditorCommand::NewlineBelow,
+        ),
+        (
+            KeyCode::Enter,
+            KeyModifiers::CONTROL,
+            EditorCommand::NewlineBelow,
+        ),
+        (
+            KeyCode::Enter,
+            KeyModifiers::SHIFT,
+            EditorCommand::NewlineBelow,
+        ),
         (KeyCode::Tab, KeyModifiers::NONE, EditorCommand::Indent),
         (KeyCode::BackTab, KeyModifiers::NONE, EditorCommand::Outdent),
         (KeyCode::Tab, KeyModifiers::SHIFT, EditorCommand::Outdent),

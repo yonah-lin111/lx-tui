@@ -48,7 +48,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     let shift = modifiers.contains(KeyModifiers::SHIFT);
     if modifiers.contains(KeyModifiers::SUPER) {
         return match key.code {
-            KeyCode::Enter if shift => Some(EditorCommand::NewlineBelow),
+            KeyCode::Enter => Some(EditorCommand::NewlineBelow),
             KeyCode::Char('z' | 'Z') if shift => Some(EditorCommand::Redo),
             KeyCode::Char('z' | 'Z') => Some(EditorCommand::Undo),
             KeyCode::Char('y' | 'Y') => Some(EditorCommand::Redo),
@@ -56,7 +56,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         };
     }
     let command = match (ctrl, alt, key.code) {
-        (true, false, KeyCode::Enter) if shift => Some(EditorCommand::NewlineBelow),
+        (true, false, KeyCode::Enter) => Some(EditorCommand::NewlineBelow),
         (true, false, KeyCode::Char(ch)) => match ch {
             'u' | 'U' => Some(EditorCommand::DeleteToLineStart),
             'k' | 'K' => Some(EditorCommand::DeleteToLineEnd),
@@ -88,6 +88,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     }
     match key.code {
         KeyCode::Char(ch) => Some(EditorCommand::InsertChar(ch)),
+        KeyCode::Enter if shift => Some(EditorCommand::NewlineBelow),
         KeyCode::Enter => Some(EditorCommand::Newline),
         KeyCode::Backspace => Some(EditorCommand::Backspace),
         KeyCode::Delete => Some(EditorCommand::Delete),

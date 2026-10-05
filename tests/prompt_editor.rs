@@ -8,8 +8,7 @@ use lx_tui::layout;
 use lx_tui::ui;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier};
 
 /// 构造已同步几何的 prompt 场景（100x24，右栏展开）。
@@ -34,13 +33,13 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
     (state, config, view)
 }
 
-fn draw(state: &AppState, config: &Config) -> Buffer {
+fn draw(state: &AppState, config: &Config) -> Terminal<TestBackend> {
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     terminal
         .draw(|frame| ui::render(frame, state, config))
         .expect("draw succeeds");
-    terminal.backend().buffer().clone()
+    terminal
 }
 
 #[test]
@@ -51,7 +50,8 @@ fn typed_markdown_renders_highlight_and_cursor() {
         update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
     }
 
-    let buffer = draw(&state, &config);
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
     let inner = layout::pane_inner_rect(view.prompt);
     let marker = &buffer[(inner.x, inner.y)];
     assert_eq!(marker.symbol(), "#");
@@ -82,7 +82,8 @@ fn click_places_cursor_and_wheel_scrolls_viewport() {
     state.prompt.scroll_by(-100);
     update::place_prompt_cursor(&mut state, 0, 0);
     assert_eq!(state.prompt.scroll(), 0);
-    let buffer = draw(&state, &config);
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
     let inner = layout::pane_inner_rect(view.prompt);
     assert_eq!(buffer[(inner.x, inner.y)].symbol(), "0");
     assert!(
@@ -93,13 +94,34 @@ fn click_places_cursor_and_wheel_scrolls_viewport() {
 
     update::scroll_prompt(&mut state, 1);
     assert_eq!(state.prompt.scroll(), 3);
-    let buffer = draw(&state, &config);
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(inner.x, inner.y)].symbol(), "3");
     assert!(
         !buffer[(inner.x, inner.y)]
             .modifier
             .contains(Modifier::REVERSED)
     );
+}
+
+#[test]
+fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertText("你好".into()));
+
+    let terminal = draw(&state, &config);
+    let inner = layout::pane_inner_rect(view.prompt);
+    assert!(terminal.backend().cursor_visible());
+    assert_eq!(
+        terminal.backend().cursor_position(),
+        Position::new(inner.x + 4, inner.y)
+    );
+
+    let pane = state.active_tab().layout.focus();
+    update::focus_pane(&mut state, pane);
+    let terminal = draw(&state, &config);
+    assert!(!terminal.backend().cursor_visible());
 }
 
 #[test]
