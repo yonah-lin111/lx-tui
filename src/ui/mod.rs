@@ -7,7 +7,6 @@ pub mod text;
 pub mod toast;
 
 use ratatui::Frame;
-use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph, Wrap};
@@ -15,6 +14,10 @@ use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph, Wrap};
 use crate::app::state::{AppState, Pane, PaneKind};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
+
+/// 展开态折叠按钮：标签宽度与距面板右缘的留白。
+const PANEL_BUTTON_WIDTH: u16 = 3;
+const PANEL_BUTTON_MARGIN: u16 = 1;
 
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
@@ -39,7 +42,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
 
     if view.sidebar.width > 0 {
         if state.sidebar_collapsed {
-            render_collapsed_strip(frame.buffer_mut(), view.sidebar);
+            render_collapsed_strip(frame, view.sidebar, true);
         } else {
             render_sidebar(frame, view.sidebar, state);
         }
@@ -106,9 +109,9 @@ fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
         Some(CollapseButton {
             target,
             area: Rect::new(
-                panel.right() - COLLAPSED_STRIP - 1,
+                panel.right() - PANEL_BUTTON_WIDTH - PANEL_BUTTON_MARGIN,
                 panel.y,
-                COLLAPSED_STRIP,
+                PANEL_BUTTON_WIDTH,
                 1,
             ),
             collapsed: false,
@@ -119,24 +122,57 @@ fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
 }
 
 /// 在面板顶边绘制折叠按钮，必须晚于面板内容渲染。
+///
+/// 折叠态标签恰好占满 3 个内容列（水平居中），展开态贴面板右端。
 fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
-    let buttons = collapse_buttons(view);
-    let buf = frame.buffer_mut();
-    for button in buttons {
+    for button in collapse_buttons(view) {
         let label = match (button.target, button.collapsed) {
             (CollapseTarget::Sidebar, false) => text::SIDEBAR_COLLAPSE_LABEL,
             (CollapseTarget::Sidebar, true) => text::SIDEBAR_EXPAND_LABEL,
             (CollapseTarget::Prompt, false) => text::PROMPT_COLLAPSE_LABEL,
             (CollapseTarget::Prompt, true) => text::PROMPT_EXPAND_LABEL,
         };
+        let start = if button.collapsed {
+            collapsed_content_x(button.area, button.target == CollapseTarget::Sidebar)
+        } else {
+            button.area.x
+        };
         for (offset, symbol) in label.chars().enumerate() {
-            let x = button.area.x + offset as u16;
-            if let Some(cell) = buf.cell_mut((x, button.area.y)) {
+            let x = start + offset as u16;
+            if let Some(cell) = frame.buffer_mut().cell_mut((x, button.area.y)) {
                 cell.reset();
                 cell.set_char(symbol);
                 cell.set_style(style::accent());
             }
         }
+    }
+}
+
+/// 折叠窄条：分隔线贴主区一侧，内容区为空，仅由折叠按钮绘制居中图标。
+fn render_collapsed_strip(frame: &mut Frame<'_>, area: Rect, separator_right: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let x = if separator_right {
+        area.right() - 1
+    } else {
+        area.x
+    };
+    let buf = frame.buffer_mut();
+    for y in area.y..area.bottom() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_symbol(text::STRIP_LINE);
+            cell.set_style(style::muted());
+        }
+    }
+}
+
+/// 折叠条内容区起始列：扣除贴主区的分隔线，标签恰好占满内容区（水平居中）。
+fn collapsed_content_x(area: Rect, separator_right: bool) -> u16 {
+    if separator_right {
+        area.x
+    } else {
+        area.x.saturating_add(1)
     }
 }
 
@@ -259,7 +295,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         return;
     }
     if state.prompt_collapsed {
-        render_collapsed_strip(frame.buffer_mut(), area);
+        render_collapsed_strip(frame, area, false);
         return;
     }
     let block = Block::bordered()
@@ -288,20 +324,6 @@ fn pane_display_title(id: PaneId, pane: &Pane) -> String {
     match pane.kind {
         PaneKind::Prompt => text::PROMPT_TITLE.to_string(),
         PaneKind::Terminal | PaneKind::Placeholder => text::pane_title(id, pane.terminal.title()),
-    }
-}
-
-/// 折叠窄条：中间列竖线；顶部按钮由折叠按钮统一绘制。
-fn render_collapsed_strip(buf: &mut Buffer, area: Rect) {
-    if area.width == 0 {
-        return;
-    }
-    let x = area.x + area.width / 2;
-    for y in area.y..area.bottom() {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_symbol(text::STRIP_LINE);
-            cell.set_style(style::muted());
-        }
     }
 }
 
@@ -377,6 +399,24 @@ mod tests {
             .collect()
     }
 
+    fn rendered_collapsed_label(
+        lines: &[String],
+        view: &layout::ViewLayout,
+        target: CollapseTarget,
+    ) -> String {
+        let button = button_for(view, target);
+        assert!(button.collapsed);
+        let separator_right = target == CollapseTarget::Sidebar;
+        let start = collapsed_content_x(button.area, separator_right);
+        let end = if separator_right {
+            button.area.right() - 1
+        } else {
+            button.area.right()
+        };
+        let row: Vec<char> = lines[button.area.y as usize].chars().collect();
+        (start..end).map(|x| row[x as usize]).collect()
+    }
+
     #[test]
     fn collapse_buttons_render_directional_arrow_labels() {
         let mut state = AppState::demo();
@@ -395,7 +435,7 @@ mod tests {
         let view = view_for(&state);
         let lines = render_lines(&state);
         assert_eq!(
-            rendered_label(&lines, &button_for(&view, CollapseTarget::Sidebar)),
+            rendered_collapsed_label(&lines, &view, CollapseTarget::Sidebar),
             text::SIDEBAR_EXPAND_LABEL
         );
         assert_eq!(
@@ -407,11 +447,11 @@ mod tests {
         let view = view_for(&state);
         let lines = render_lines(&state);
         assert_eq!(
-            rendered_label(&lines, &button_for(&view, CollapseTarget::Sidebar)),
+            rendered_collapsed_label(&lines, &view, CollapseTarget::Sidebar),
             text::SIDEBAR_EXPAND_LABEL
         );
         assert_eq!(
-            rendered_label(&lines, &button_for(&view, CollapseTarget::Prompt)),
+            rendered_collapsed_label(&lines, &view, CollapseTarget::Prompt),
             text::PROMPT_EXPAND_LABEL
         );
     }
@@ -438,11 +478,11 @@ mod tests {
     fn collapsed_prompt_renders_strip_and_expand_icon() {
         let mut state = AppState::demo();
         update::apply(Action::TogglePrompt, &mut state);
+        let view = view_for(&state);
         let lines = render_lines(&state);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains(text::PROMPT_EXPAND_LABEL))
+        assert_eq!(
+            rendered_collapsed_label(&lines, &view, CollapseTarget::Prompt),
+            text::PROMPT_EXPAND_LABEL
         );
         assert!(
             !lines
@@ -462,17 +502,79 @@ mod tests {
                 .any(|line| line.contains(text::SIDEBAR_COLLAPSE_LABEL))
         );
         update::apply(Action::ToggleSidebar, &mut state);
+        let view = view_for(&state);
         let lines = render_lines(&state);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains(text::SIDEBAR_EXPAND_LABEL))
+        assert_eq!(
+            rendered_collapsed_label(&lines, &view, CollapseTarget::Sidebar),
+            text::SIDEBAR_EXPAND_LABEL
         );
         assert!(
             !lines
                 .iter()
                 .any(|line| line.contains(text::SIDEBAR_COLLAPSE_LABEL))
         );
+    }
+
+    #[test]
+    fn collapsed_labels_fill_content_area_with_continuous_separator() {
+        let mut state = AppState::demo();
+        update::apply(Action::ToggleSidebar, &mut state);
+        update::apply(Action::TogglePrompt, &mut state);
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+
+        let sidebar_row: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
+        let sidebar_start = collapsed_content_x(view.sidebar, true);
+        assert_eq!(sidebar_start, view.sidebar.x);
+        let sidebar_label: String = (sidebar_start..view.sidebar.right() - 1)
+            .map(|x| sidebar_row[x as usize])
+            .collect();
+        assert_eq!(sidebar_label, text::SIDEBAR_EXPAND_LABEL);
+        assert_eq!(
+            sidebar_row[(view.sidebar.right() - 1) as usize].to_string(),
+            text::STRIP_LINE
+        );
+
+        let prompt_row: Vec<char> = lines[view.prompt.y as usize].chars().collect();
+        let prompt_start = collapsed_content_x(view.prompt, false);
+        assert_eq!(prompt_start, view.prompt.x + 1);
+        let prompt_label: String = (prompt_start..view.prompt.right())
+            .map(|x| prompt_row[x as usize])
+            .collect();
+        assert_eq!(prompt_label, text::PROMPT_EXPAND_LABEL);
+        assert_eq!(
+            prompt_row[view.prompt.x as usize].to_string(),
+            text::STRIP_LINE
+        );
+    }
+
+    #[test]
+    fn collapsed_strips_hide_panel_content() {
+        let mut state = AppState::demo();
+        update::apply(Action::ToggleSidebar, &mut state);
+        update::apply(Action::TogglePrompt, &mut state);
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+
+        let strip = |y: usize| -> String {
+            lines[y]
+                .chars()
+                .skip(view.sidebar.x as usize)
+                .take(view.sidebar.width as usize)
+                .collect()
+        };
+        assert_eq!(strip(1), "   │");
+        assert_eq!(strip(10), "   │");
+
+        let prompt = |y: usize| -> String {
+            lines[y]
+                .chars()
+                .skip(view.prompt.x as usize)
+                .take(view.prompt.width as usize)
+                .collect()
+        };
+        assert_eq!(prompt(1), "│   ");
+        assert_eq!(prompt(10), "│   ");
     }
 
     #[test]

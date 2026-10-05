@@ -16,6 +16,7 @@
 - 生产代码禁止 `unwrap()` / `expect()`；错误使用 `Result` 与 `?` 传播。
 - 日志统一使用 `tracing`；禁止用 `println!` / `eprintln!` 输出调试信息，禁止绕过 ratatui 直接写 stdout。
 - OS 专属代码只允许出现在 `src/platform/`，并按 `#[cfg(...)]` 门控。
+- 终端退出/panic 恢复顺序不可交换：关闭鼠标上报 → 仍在原始模式下 drain 在途输入 → 离开备用屏并关闭括号粘贴 → 最后 `disable_raw_mode()`。先恢复 cooked 模式会让残留鼠标上报（`CSI <…M`）被终端回显、留在行缓冲并泄漏进 shell；改动 `src/tui/` 恢复路径必须保留并运行 `tui::tests` 的顺序回归测试。
 - 完成修改后按影响范围执行验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 - Agent 无法交互式验证 TUI 界面；涉及交互与外观的改动由用户运行 `cargo run` 自行确认。
 - 以上文档是项目规范的唯一来源；若与上级指令冲突，以上级指令为准。

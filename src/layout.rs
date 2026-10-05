@@ -4,8 +4,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use ratatui::layout::{Direction, Rect};
 
-/// 折叠窗格在父分割中占用的窄条宽度（列或行），需容纳折叠按钮 `[◀]`/`[▶]`。
-pub const COLLAPSED_STRIP: u16 = 3;
+/// 折叠窄条宽度：3 个内容列 + 1 列贴主区的分隔线。
+pub const COLLAPSED_STRIP: u16 = 4;
 
 /// 窗格唯一标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -595,8 +595,8 @@ mod tests {
         let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
         assert!(layout.set_collapsed(right, true));
         let rects = pane_rects(&layout, area(80, 20), 10);
-        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 77, 20)));
-        assert_eq!(rect_of(&rects, right), Some(Rect::new(77, 0, 3, 20)));
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 76, 20)));
+        assert_eq!(rect_of(&rects, right), Some(Rect::new(76, 0, 4, 20)));
     }
 
     #[test]
@@ -604,8 +604,8 @@ mod tests {
         let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
         assert!(layout.set_collapsed(left, true));
         let rects = pane_rects(&layout, area(80, 20), 10);
-        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 3, 20)));
-        assert_eq!(rect_of(&rects, right), Some(Rect::new(3, 0, 77, 20)));
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 4, 20)));
+        assert_eq!(rect_of(&rects, right), Some(Rect::new(4, 0, 76, 20)));
     }
 
     #[test]
@@ -613,8 +613,8 @@ mod tests {
         let (mut layout, top, bottom) = two_pane_layout(Direction::Vertical);
         assert!(layout.set_collapsed(bottom, true));
         let rects = pane_rects(&layout, area(80, 20), 10);
-        assert_eq!(rect_of(&rects, top), Some(Rect::new(0, 0, 80, 17)));
-        assert_eq!(rect_of(&rects, bottom), Some(Rect::new(0, 17, 80, 3)));
+        assert_eq!(rect_of(&rects, top), Some(Rect::new(0, 0, 80, 16)));
+        assert_eq!(rect_of(&rects, bottom), Some(Rect::new(0, 16, 80, 4)));
     }
 
     #[test]

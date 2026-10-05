@@ -149,7 +149,7 @@ mod tests {
     fn collapsed_prompt_becomes_right_strip() {
         let config = Config::default();
         let view = compute(Rect::new(0, 0, 100, 30), &config, false, true, 30);
-        assert_eq!(view.prompt, Rect::new(97, 0, COLLAPSED_STRIP, 30));
+        assert_eq!(view.prompt, Rect::new(96, 0, COLLAPSED_STRIP, 30));
         assert_eq!(
             view.panes.width,
             100 - config.sidebar_width - COLLAPSED_STRIP
