@@ -117,6 +117,7 @@ fn collapse_buttons_render_directional_arrow_labels() {
 #[test]
 fn prompt_sidebar_renders_content_and_collapse_button() {
     let mut state = AppState::demo();
+    state.prompt.resize(28, 20);
     state.prompt.insert_str("## markdown");
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("markdown")));
