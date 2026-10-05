@@ -69,6 +69,49 @@ fn editor_commands_edit_prompt_text() {
 }
 
 #[test]
+fn readline_commands_apply_to_prompt() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    apply_editor(&mut state, EditorCommand::InsertText("foo bar baz".into()));
+    apply_editor(&mut state, EditorCommand::DeleteWordBackward);
+    assert_eq!(state.prompt.text(), "foo bar ");
+    apply_editor(&mut state, EditorCommand::DeleteToLineStart);
+    assert_eq!(state.prompt.text(), "");
+    apply_editor(&mut state, EditorCommand::InsertText("foo bar".into()));
+    apply_editor(&mut state, EditorCommand::WordLeft);
+    assert_eq!(state.prompt.cursor_cell(), Some((0, 4)));
+    apply_editor(&mut state, EditorCommand::WordRight);
+    assert_eq!(state.prompt.cursor_cell(), Some((0, 7)));
+    apply_editor(&mut state, EditorCommand::DeleteToLineEnd);
+    assert_eq!(state.prompt.text(), "foo bar");
+}
+
+#[test]
+fn scroll_prompt_moves_viewport_only() {
+    let mut state = AppState::demo();
+    state.prompt.resize(10, 2);
+    apply_editor(&mut state, EditorCommand::InsertText("1\n2\n3\n4".into()));
+    assert_eq!(state.prompt.scroll(), 2);
+    scroll_prompt(&mut state, -1);
+    assert_eq!(state.prompt.scroll(), 0);
+    assert_eq!(state.prompt.cursor_cell(), None);
+    scroll_prompt(&mut state, 1);
+    assert_eq!(state.prompt.scroll(), 2);
+    assert!(state.prompt.cursor_cell().is_some());
+}
+
+#[test]
+fn place_prompt_cursor_maps_viewport_cell() {
+    let mut state = AppState::demo();
+    state.prompt.resize(10, 3);
+    apply_editor(&mut state, EditorCommand::InsertText("ab\ncd".into()));
+    place_prompt_cursor(&mut state, 0, 1);
+    assert_eq!(state.prompt.cursor_cell(), Some((0, 1)));
+    place_prompt_cursor(&mut state, 1, 1);
+    assert_eq!(state.prompt.cursor_cell(), Some((1, 1)));
+}
+
+#[test]
 fn toggle_agents_flips_flag() {
     let mut state = AppState::demo();
     apply(Action::ToggleAgents, &mut state);

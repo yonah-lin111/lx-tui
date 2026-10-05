@@ -287,6 +287,7 @@ fn handle_terminal_event(
                     let col = mouse.column - inner.x;
                     if pane == state.prompt.id() {
                         update::focus_prompt(state);
+                        update::place_prompt_cursor(state, row, col);
                         update::begin_selection(state, pane, row, col);
                         *dirty = true;
                     } else if matches!(
@@ -325,6 +326,9 @@ fn handle_terminal_event(
                 let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
                 let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
                 update::drag_selection(state, pane, row, col);
+                if pane == state.prompt.id() {
+                    update::place_prompt_cursor(state, row, col);
+                }
                 *dirty = true;
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -351,6 +355,22 @@ fn handle_terminal_event(
                 }
                 update::clear_selection(state);
                 *dirty = true;
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if state.selection.is_some() || state.resizing_prompt {
+                    return;
+                }
+                if let Some((pane, _)) = pane_at(rects, mouse.column, mouse.row)
+                    && pane == state.prompt.id()
+                {
+                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    };
+                    update::scroll_prompt(state, direction);
+                    *dirty = true;
+                }
             }
             MouseEventKind::Moved => {
                 let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)

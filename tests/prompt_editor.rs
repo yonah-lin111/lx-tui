@@ -1,4 +1,4 @@
-//! 集成测试：prompt markdown 输入与高亮贯穿几何同步、状态更新与渲染。
+//! 集成测试：prompt markdown 输入、点击定位、滚轮滚动贯穿几何同步、状态更新与渲染。
 
 use lx_tui::app::actions::EditorCommand;
 use lx_tui::app::state::AppState;
@@ -8,11 +8,12 @@ use lx_tui::layout;
 use lx_tui::ui;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
-#[test]
-fn typed_markdown_renders_highlight_and_cursor() {
+/// 构造已同步几何的 prompt 场景（100x24，右栏展开）。
+fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
     let config = Config::default();
     let mut state = AppState::demo();
     let screen = Rect::new(0, 0, 100, 24);
@@ -30,19 +31,27 @@ fn typed_markdown_renders_highlight_and_cursor() {
     );
     rects.push((state.prompt.id(), view.prompt));
     update::resize_panes(&mut state, &rects);
+    (state, config, view)
+}
 
+fn draw(state: &AppState, config: &Config) -> Buffer {
+    let mut terminal =
+        Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| ui::render(frame, state, config))
+        .expect("draw succeeds");
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn typed_markdown_renders_highlight_and_cursor() {
+    let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);
     for ch in "# 标题".chars() {
         update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
     }
 
-    let mut terminal =
-        Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
-    terminal
-        .draw(|frame| ui::render(frame, &state, &config))
-        .expect("draw succeeds");
-    let buffer = terminal.backend().buffer();
-
+    let buffer = draw(&state, &config);
     let inner = layout::pane_inner_rect(view.prompt);
     let marker = &buffer[(inner.x, inner.y)];
     assert_eq!(marker.symbol(), "#");
@@ -55,6 +64,39 @@ fn typed_markdown_renders_highlight_and_cursor() {
 
     assert!(
         buffer[(inner.x + 6, inner.y)]
+            .modifier
+            .contains(Modifier::REVERSED)
+    );
+}
+
+#[test]
+fn click_places_cursor_and_wheel_scrolls_viewport() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    let text = (0..30)
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    update::apply_editor(&mut state, EditorCommand::InsertText(text));
+
+    state.prompt.scroll_by(-100);
+    update::place_prompt_cursor(&mut state, 0, 0);
+    assert_eq!(state.prompt.scroll(), 0);
+    let buffer = draw(&state, &config);
+    let inner = layout::pane_inner_rect(view.prompt);
+    assert_eq!(buffer[(inner.x, inner.y)].symbol(), "0");
+    assert!(
+        buffer[(inner.x, inner.y)]
+            .modifier
+            .contains(Modifier::REVERSED)
+    );
+
+    update::scroll_prompt(&mut state, 1);
+    assert_eq!(state.prompt.scroll(), 3);
+    let buffer = draw(&state, &config);
+    assert_eq!(buffer[(inner.x, inner.y)].symbol(), "3");
+    assert!(
+        !buffer[(inner.x, inner.y)]
             .modifier
             .contains(Modifier::REVERSED)
     );

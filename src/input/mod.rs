@@ -35,9 +35,40 @@ pub fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Rout
 }
 
 /// 编辑键映射；Shift 只用于字符输入，导航键要求无修饰符。
+///
+/// Ctrl/Alt 组合同 opencode/readline：Ctrl+U/K 删除到行首/行尾、Ctrl+W 向前删词、
+/// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl+←/→ 按词移动；Alt+B/F、Alt+D 作为
+/// 别名（macOS 默认可能收不到），其余 Ctrl/Alt 组合吞掉。
 fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     let modifiers = key.modifiers;
-    if modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    let command = match (ctrl, alt, key.code) {
+        (true, false, KeyCode::Char(ch)) => match ch.to_ascii_lowercase() {
+            'u' => Some(EditorCommand::DeleteToLineStart),
+            'k' => Some(EditorCommand::DeleteToLineEnd),
+            'w' => Some(EditorCommand::DeleteWordBackward),
+            'a' => Some(EditorCommand::LineStart),
+            'e' => Some(EditorCommand::LineEnd),
+            'd' => Some(EditorCommand::Delete),
+            _ => None,
+        },
+        (true, false, KeyCode::Backspace) => Some(EditorCommand::DeleteWordBackward),
+        (true, false, KeyCode::Delete) => Some(EditorCommand::DeleteWordForward),
+        (true, false, KeyCode::Left) => Some(EditorCommand::WordLeft),
+        (true, false, KeyCode::Right) => Some(EditorCommand::WordRight),
+        (false, true, KeyCode::Char('b')) => Some(EditorCommand::WordLeft),
+        (false, true, KeyCode::Char('f')) => Some(EditorCommand::WordRight),
+        (false, true, KeyCode::Char('d')) => Some(EditorCommand::DeleteWordForward),
+        (false, true, KeyCode::Backspace) => Some(EditorCommand::DeleteWordBackward),
+        (false, true, KeyCode::Left) => Some(EditorCommand::WordLeft),
+        (false, true, KeyCode::Right) => Some(EditorCommand::WordRight),
+        _ => None,
+    };
+    if command.is_some() {
+        return command;
+    }
+    if ctrl || alt {
         return None;
     }
     match key.code {

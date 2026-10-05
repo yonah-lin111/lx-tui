@@ -94,6 +94,24 @@ fn renders_scrolled_viewport_and_cursor_cell() {
 }
 
 #[test]
+fn scrolled_viewport_hides_cursor_when_caret_leaves_view() {
+    let area = Rect::new(0, 0, 4, 2);
+    let mut prompt = prompt(4, 2, "abcdefghijklm");
+    assert_eq!(prompt.scroll(), 2);
+    prompt.scroll_by(-1);
+    assert_eq!(prompt.scroll(), 1);
+    assert_eq!(prompt.cursor_cell(), None);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, true, None);
+    assert_eq!(buf[(0, 0)].symbol(), "e");
+    for y in 0..2 {
+        for x in 0..4 {
+            assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED));
+        }
+    }
+}
+
+#[test]
 fn selection_reverses_cells_including_empty_trailing() {
     let area = Rect::new(0, 0, 10, 3);
     let prompt = prompt(10, 3, "abc");

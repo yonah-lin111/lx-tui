@@ -224,6 +224,132 @@ fn selection_maps_through_scroll() {
 }
 
 #[test]
+fn click_maps_viewport_cells_to_cursor() {
+    let mut editor = prompt(4, 3);
+    editor.insert_str("abcd\nef");
+    editor.set_cursor_from_cell(0, 2);
+    assert_eq!(editor.cursor_cell(), Some((0, 2)));
+    editor.set_cursor_from_cell(1, 1);
+    assert_eq!(editor.cursor_cell(), Some((1, 1)));
+    // 点击文本以下空白钳到最近行行尾
+    editor.set_cursor_from_cell(2, 3);
+    assert_eq!(editor.cursor_cell(), Some((1, 2)));
+    // 宽字符任一格都落在字符前
+    let mut wide = prompt(10, 3);
+    wide.insert_str("你好");
+    wide.set_cursor_from_cell(0, 1);
+    assert_eq!(wide.cursor_cell(), Some((0, 0)));
+}
+
+#[test]
+fn scroll_by_moves_viewport_without_cursor_and_reattaches_on_edit() {
+    let mut prompt = prompt(10, 2);
+    prompt.insert_str("1\n2\n3\n4");
+    assert_eq!(prompt.scroll(), 2);
+    prompt.scroll_by(-1);
+    assert_eq!(prompt.scroll(), 1);
+    assert_eq!(prompt.cursor_cell(), None);
+    prompt.scroll_by(-5);
+    assert_eq!(prompt.scroll(), 0);
+    prompt.scroll_by(1);
+    assert_eq!(prompt.scroll(), 1);
+    prompt.scroll_by(5);
+    assert_eq!(prompt.scroll(), 2);
+    prompt.insert_char('x');
+    assert_eq!(prompt.scroll(), 2);
+    assert!(prompt.cursor_cell().is_some());
+}
+
+#[test]
+fn scroll_by_keeps_viewport_fixed_within_short_text() {
+    let mut prompt = prompt(10, 5);
+    prompt.insert_str("1\n2");
+    assert_eq!(prompt.scroll(), 0);
+    prompt.scroll_by(3);
+    assert_eq!(prompt.scroll(), 0);
+}
+
+#[test]
+fn word_movement_skips_separators_and_cjk_counts_as_word() {
+    let mut prompt = prompt(40, 3);
+    prompt.insert_str("foo bar_2 中文 baz");
+    prompt.move_word_backward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 15)));
+    prompt.move_word_backward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 10)));
+    prompt.move_word_backward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 4)));
+    prompt.move_word_backward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+    prompt.move_word_backward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+    prompt.move_word_forward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 3)));
+    prompt.move_word_forward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 9)));
+    prompt.move_word_forward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 14)));
+    prompt.move_word_forward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 18)));
+    prompt.move_word_forward();
+    assert_eq!(prompt.cursor_cell(), Some((0, 18)));
+}
+
+#[test]
+fn word_deletion_removes_adjacent_separators() {
+    let mut prompt = prompt(40, 3);
+    prompt.insert_str("foo bar_2");
+    prompt.delete_word_backward();
+    assert_eq!(prompt.text(), "foo ");
+    prompt.delete_word_backward();
+    assert_eq!(prompt.text(), "");
+    prompt.insert_str("foo   ");
+    prompt.delete_word_backward();
+    assert_eq!(prompt.text(), "");
+    prompt.insert_str("a b");
+    prompt.move_left();
+    prompt.delete_word_forward();
+    assert_eq!(prompt.text(), "a ");
+    prompt.delete_word_forward();
+    assert_eq!(prompt.text(), "a ");
+}
+
+#[test]
+fn line_commands_use_logical_lines_not_visual_rows() {
+    let mut prompt = prompt(4, 4);
+    prompt.insert_str("abcdef");
+    prompt.set_cursor_from_cell(1, 1);
+    prompt.move_line_start();
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+    prompt.move_line_end();
+    assert_eq!(prompt.cursor_cell(), Some((1, 2)));
+    prompt.set_cursor_from_cell(0, 2);
+    prompt.delete_to_line_end();
+    assert_eq!(prompt.text(), "ab");
+    prompt.insert_str("cde");
+    prompt.set_cursor_from_cell(0, 2);
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), "cde");
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), "cde");
+}
+
+#[test]
+fn line_deletion_stops_at_newline() {
+    let mut prompt = prompt(10, 3);
+    prompt.insert_str("ab\ncd");
+    prompt.move_up();
+    prompt.move_line_start();
+    prompt.delete_to_line_end();
+    assert_eq!(prompt.text(), "\ncd");
+    prompt.move_down();
+    assert_eq!(prompt.cursor_cell(), Some((1, 0)));
+    prompt.move_line_start();
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), "\ncd");
+}
+
+#[test]
 fn resize_keeps_cursor_visible_and_guards_zero_size() {
     let mut prompt = prompt(20, 2);
     prompt.insert_str("0123456789");

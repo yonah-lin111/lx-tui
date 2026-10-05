@@ -23,4 +23,12 @@ pub enum EditorCommand {
     Down,
     Home,
     End,
+    LineStart,
+    LineEnd,
+    WordLeft,
+    WordRight,
+    DeleteToLineStart,
+    DeleteToLineEnd,
+    DeleteWordBackward,
+    DeleteWordForward,
 }

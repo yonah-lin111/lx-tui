@@ -106,10 +106,97 @@ fn prompt_focus_accepts_shifted_characters() {
 }
 
 #[test]
+fn prompt_focus_maps_readline_shortcuts() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for (code, modifiers, command) in [
+        (
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+            EditorCommand::DeleteToLineStart,
+        ),
+        (
+            KeyCode::Char('k'),
+            KeyModifiers::CONTROL,
+            EditorCommand::DeleteToLineEnd,
+        ),
+        (
+            KeyCode::Char('w'),
+            KeyModifiers::CONTROL,
+            EditorCommand::DeleteWordBackward,
+        ),
+        (
+            KeyCode::Char('a'),
+            KeyModifiers::CONTROL,
+            EditorCommand::LineStart,
+        ),
+        (
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+            EditorCommand::LineEnd,
+        ),
+        (
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+            EditorCommand::Delete,
+        ),
+        (
+            KeyCode::Backspace,
+            KeyModifiers::CONTROL,
+            EditorCommand::DeleteWordBackward,
+        ),
+        (
+            KeyCode::Delete,
+            KeyModifiers::CONTROL,
+            EditorCommand::DeleteWordForward,
+        ),
+        (
+            KeyCode::Left,
+            KeyModifiers::CONTROL,
+            EditorCommand::WordLeft,
+        ),
+        (
+            KeyCode::Right,
+            KeyModifiers::CONTROL,
+            EditorCommand::WordRight,
+        ),
+        (
+            KeyCode::Char('b'),
+            KeyModifiers::ALT,
+            EditorCommand::WordLeft,
+        ),
+        (
+            KeyCode::Char('f'),
+            KeyModifiers::ALT,
+            EditorCommand::WordRight,
+        ),
+        (
+            KeyCode::Char('d'),
+            KeyModifiers::ALT,
+            EditorCommand::DeleteWordForward,
+        ),
+        (
+            KeyCode::Backspace,
+            KeyModifiers::ALT,
+            EditorCommand::DeleteWordBackward,
+        ),
+        (KeyCode::Left, KeyModifiers::ALT, EditorCommand::WordLeft),
+        (KeyCode::Right, KeyModifiers::ALT, EditorCommand::WordRight),
+    ] {
+        assert_eq!(
+            route_prompt(code, modifiers),
+            Some(Routed::Editor(command)),
+            "{code:?}+{modifiers:?}"
+        );
+    }
+}
+
+#[test]
 fn prompt_focus_swallows_unmapped_keys() {
     let cases = [
         KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),
+        KeyEvent::new(KeyCode::Char('B'), KeyModifiers::ALT | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
         KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),

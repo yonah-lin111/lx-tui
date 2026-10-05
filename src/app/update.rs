@@ -40,7 +40,28 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::Down => state.prompt.move_down(),
         EditorCommand::Home => state.prompt.move_home(),
         EditorCommand::End => state.prompt.move_end(),
+        EditorCommand::LineStart => state.prompt.move_line_start(),
+        EditorCommand::LineEnd => state.prompt.move_line_end(),
+        EditorCommand::WordLeft => state.prompt.move_word_backward(),
+        EditorCommand::WordRight => state.prompt.move_word_forward(),
+        EditorCommand::DeleteToLineStart => state.prompt.delete_to_line_start(),
+        EditorCommand::DeleteToLineEnd => state.prompt.delete_to_line_end(),
+        EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
+        EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
     }
+}
+
+/// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
+const WHEEL_LINES: isize = 3;
+
+/// 按方向滚动 prompt 视口（负数向上、正数向下）；光标不动，编辑后自动吸回。
+pub fn scroll_prompt(state: &mut AppState, direction: isize) {
+    state.prompt.scroll_by(direction.signum() * WHEEL_LINES);
+}
+
+/// 鼠标点击 prompt：把视口单元格映射为光标位置。
+pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
+    state.prompt.set_cursor_from_cell(row, col);
 }
 
 /// 点击 prompt：键盘焦点交给编辑器。

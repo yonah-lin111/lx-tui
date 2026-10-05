@@ -166,6 +166,68 @@ impl Prompt {
         self.keep_cursor_visible();
     }
 
+    /// 光标移到逻辑行行首。
+    pub fn move_line_start(&mut self) {
+        self.cursor = line_start(&self.text, self.cursor);
+        self.keep_cursor_visible();
+    }
+
+    /// 光标移到逻辑行行尾（换行前）。
+    pub fn move_line_end(&mut self) {
+        self.cursor = line_end(&self.text, self.cursor);
+        self.keep_cursor_visible();
+    }
+
+    /// 光标左移到前一个词的词首。
+    pub fn move_word_backward(&mut self) {
+        self.cursor = self.word_start_before(self.cursor);
+        self.keep_cursor_visible();
+    }
+
+    /// 光标右移到下一个词的词尾（readline M-f 语义）。
+    pub fn move_word_forward(&mut self) {
+        self.cursor = self.word_end_after(self.cursor);
+        self.keep_cursor_visible();
+    }
+
+    /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。
+    pub fn delete_word_backward(&mut self) {
+        let start = self.word_start_before(self.cursor);
+        if start < self.cursor {
+            self.text.replace_range(start..self.cursor, "");
+            self.cursor = start;
+            self.keep_cursor_visible();
+        }
+    }
+
+    /// 删除光标到下一个词尾（readline M-d 语义）。
+    pub fn delete_word_forward(&mut self) {
+        let end = self.word_end_after(self.cursor);
+        if end > self.cursor {
+            self.text.replace_range(self.cursor..end, "");
+            self.keep_cursor_visible();
+        }
+    }
+
+    /// 删除光标到逻辑行首。
+    pub fn delete_to_line_start(&mut self) {
+        let start = line_start(&self.text, self.cursor);
+        if start < self.cursor {
+            self.text.replace_range(start..self.cursor, "");
+            self.cursor = start;
+            self.keep_cursor_visible();
+        }
+    }
+
+    /// 删除光标到逻辑行尾（不删除换行）。
+    pub fn delete_to_line_end(&mut self) {
+        let end = line_end(&self.text, self.cursor);
+        if end > self.cursor {
+            self.text.replace_range(self.cursor..end, "");
+            self.keep_cursor_visible();
+        }
+    }
+
     /// 按内容宽度软换行得到的视觉行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
@@ -214,6 +276,22 @@ impl Prompt {
         Some((visible as u16, col as u16))
     }
 
+    /// 按视觉行滚动视口；光标不动，超界时钳到可滚动范围。
+    pub fn scroll_by(&mut self, lines: isize) {
+        let max = self
+            .visual_rows()
+            .len()
+            .saturating_sub(usize::from(self.height.max(1)));
+        let target = (self.scroll.min(max) as isize).saturating_add(lines);
+        self.scroll = target.clamp(0, max as isize) as usize;
+    }
+
+    /// 将视口单元格坐标映射为光标位置；超出文本时钳到最近行行尾。
+    pub fn set_cursor_from_cell(&mut self, row: u16, col: u16) {
+        self.cursor = self.viewport_offset((row, col), false);
+        self.keep_cursor_visible();
+    }
+
     /// 取选区文本（视口坐标，端点包含）；空选区或选中内容为空时返回 None。
     pub fn selection_text(&self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
         if start == end {
@@ -237,6 +315,40 @@ impl Prompt {
         self.text.insert_str(self.cursor, insert);
         self.cursor += insert.len();
         self.keep_cursor_visible();
+    }
+
+    /// 光标前一个词（含尾随分隔符）的起点。
+    fn word_start_before(&self, index: usize) -> usize {
+        let mut boundary = 0;
+        let mut in_word = false;
+        let mut seen = false;
+        for (offset, ch) in self.text[..index].char_indices().rev() {
+            seen = true;
+            if is_word_char(ch) {
+                in_word = true;
+                boundary = offset;
+            } else if in_word {
+                break;
+            } else {
+                boundary = offset;
+            }
+        }
+        if seen { boundary } else { 0 }
+    }
+
+    /// 光标所在或下一个词的词尾（跳过前导分隔符）。
+    fn word_end_after(&self, index: usize) -> usize {
+        let mut end = index;
+        let mut in_word = false;
+        for (offset, ch) in self.text[index..].char_indices() {
+            if is_word_char(ch) {
+                in_word = true;
+                end = index + offset + ch.len_utf8();
+            } else if in_word {
+                break;
+            }
+        }
+        end
     }
 
     /// 光标在视觉行中的索引与显示列（跨折行边界时归入下一视觉行）。
@@ -293,6 +405,23 @@ impl Prompt {
         }
         self.scroll = self.scroll.min(rows.len().saturating_sub(height));
     }
+}
+
+/// 词字符：Unicode 字母数字与下划线；CJK 视作词字符。
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// 所在逻辑行的起始字节偏移（上一个换行之后）。
+fn line_start(text: &str, index: usize) -> usize {
+    text[..index].rfind('\n').map_or(0, |offset| offset + 1)
+}
+
+/// 所在逻辑行的结束字节偏移（下一个换行之前或文末）。
+fn line_end(text: &str, index: usize) -> usize {
+    text[index..]
+        .find('\n')
+        .map_or(text.len(), |offset| index + offset)
 }
 
 /// 字符显示宽度；零宽与不可打印字符按 0 处理。
