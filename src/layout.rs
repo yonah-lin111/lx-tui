@@ -14,8 +14,8 @@ pub struct PaneId(u32);
 static NEXT_PANE_ID: AtomicU32 = AtomicU32::new(1);
 
 impl PaneId {
-    /// 分配全局唯一的窗格标识。
-    fn alloc() -> Self {
+    /// 分配全局唯一的窗格标识；全局 prompt 面板也使用窗格标识参与选择。
+    pub(crate) fn alloc() -> Self {
         Self(NEXT_PANE_ID.fetch_add(1, Ordering::Relaxed))
     }
 
@@ -155,6 +155,29 @@ impl TileLayout {
         let next = (current as isize + step).rem_euclid(ids.len() as isize) as usize;
         self.focus = ids[next];
     }
+
+    /// 把 `left` 与 `right` 相邻窗格之间的水平分割线拖到 `boundary_x`。
+    ///
+    /// `area` 为窗格区矩形；两侧窗格各保持至少 `min_width` 列（含边框），
+    /// 可用宽度不足 `2 * min_width` 时不做调整并返回 false。
+    pub fn resize_boundary(
+        &mut self,
+        left: PaneId,
+        right: PaneId,
+        area: Rect,
+        boundary_x: u16,
+        min_width: u16,
+    ) -> bool {
+        resize_boundary_node(
+            &mut self.root,
+            left,
+            right,
+            area,
+            boundary_x,
+            min_width,
+            self.collapsed,
+        )
+    }
 }
 
 impl Default for TileLayout {
@@ -203,9 +226,11 @@ fn collect_ids(node: &Node, ids: &mut Vec<PaneId>) {
 }
 
 /// 计算每个窗格在给定区域内的矩形；折叠窗格压缩为父分割边缘的窄条。
-pub fn pane_rects(layout: &TileLayout, area: Rect) -> Vec<(PaneId, Rect)> {
+///
+/// 水平分割的两侧宽度不小于 `min_width`（含边框）；可用宽度不足时退回按比例。
+pub fn pane_rects(layout: &TileLayout, area: Rect, min_width: u16) -> Vec<(PaneId, Rect)> {
     let mut rects = Vec::new();
-    collect_rects(&layout.root, area, layout.collapsed, &mut rects);
+    collect_rects(&layout.root, area, layout.collapsed, min_width, &mut rects);
     rects
 }
 
@@ -213,6 +238,7 @@ fn collect_rects(
     node: &Node,
     area: Rect,
     collapsed: Option<PaneId>,
+    min_width: u16,
     rects: &mut Vec<(PaneId, Rect)>,
 ) {
     match node {
@@ -223,19 +249,118 @@ fn collect_rects(
             first,
             second,
         } => {
-            let (first_area, second_area) = match collapsed {
-                Some(id) if is_pane(first, id) => {
-                    split_rect_edge(area, *direction, COLLAPSED_STRIP, false)
-                }
-                Some(id) if is_pane(second, id) => {
-                    split_rect_edge(area, *direction, COLLAPSED_STRIP, true)
-                }
-                _ => split_rect(area, *direction, *ratio),
-            };
-            collect_rects(first, first_area, collapsed, rects);
-            collect_rects(second, second_area, collapsed, rects);
+            let (first_area, second_area) = child_areas(
+                *direction, *ratio, area, collapsed, first, second, min_width,
+            );
+            collect_rects(first, first_area, collapsed, min_width, rects);
+            collect_rects(second, second_area, collapsed, min_width, rects);
         }
     }
+}
+
+/// 分割节点的两个子区域；折叠子节点退化为固定窄条。
+fn child_areas(
+    direction: Direction,
+    ratio: f32,
+    area: Rect,
+    collapsed: Option<PaneId>,
+    first: &Node,
+    second: &Node,
+    min_width: u16,
+) -> (Rect, Rect) {
+    match collapsed {
+        Some(id) if is_pane(first, id) => split_rect_edge(area, direction, COLLAPSED_STRIP, false),
+        Some(id) if is_pane(second, id) => split_rect_edge(area, direction, COLLAPSED_STRIP, true),
+        _ => split_rect(area, direction, ratio, min_width),
+    }
+}
+
+/// 在树中定位包含 `left`/`right` 的水平分割节点并更新 ratio。
+fn resize_boundary_node(
+    node: &mut Node,
+    left: PaneId,
+    right: PaneId,
+    area: Rect,
+    boundary_x: u16,
+    min_width: u16,
+    collapsed: Option<PaneId>,
+) -> bool {
+    let Node::Split {
+        direction,
+        ratio,
+        first,
+        second,
+    } = node
+    else {
+        return false;
+    };
+    if contains(first, left) && contains(second, right) {
+        if *direction != Direction::Horizontal || area.width < min_width.saturating_mul(2) {
+            return false;
+        }
+        let first_width = boundary_x
+            .saturating_sub(area.x)
+            .clamp(min_width, area.width - min_width);
+        *ratio = f32::from(first_width) / f32::from(area.width);
+        return true;
+    }
+    if contains(first, left) && contains(first, right) {
+        let (first_area, _) = child_areas(
+            *direction, *ratio, area, collapsed, first, second, min_width,
+        );
+        return resize_boundary_node(
+            first, left, right, first_area, boundary_x, min_width, collapsed,
+        );
+    }
+    if contains(second, left) && contains(second, right) {
+        let (_, second_area) = child_areas(
+            *direction, *ratio, area, collapsed, first, second, min_width,
+        );
+        return resize_boundary_node(
+            second,
+            left,
+            right,
+            second_area,
+            boundary_x,
+            min_width,
+            collapsed,
+        );
+    }
+    false
+}
+
+/// 命中相邻两列区域边框：返回边界两侧的 (左区域, 右区域)。
+///
+/// 只命中边框列本身（左区域 `right()-1` 或右区域 `x`），不侵入内容区；
+/// 零尺寸区域不参与。窗格与全局 prompt 右栏共用同一命中规则。
+pub fn resize_boundary_at(
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, PaneId)> {
+    let hovered =
+        |rect: &Rect| rect.width > 0 && rect.height > 0 && rect.contains((column, row).into());
+    let row_hit =
+        |rect: &Rect| rect.width > 0 && rect.height > 0 && row >= rect.y && row < rect.bottom();
+
+    // 命中列若是右区域的左边框，边界即该列；若是左区域的右边框，边界在下一列。
+    let boundary = rects
+        .iter()
+        .find_map(|(_, rect)| (hovered(rect) && rect.x == column).then_some(column))
+        .or_else(|| {
+            rects.iter().find_map(|(_, rect)| {
+                (hovered(rect) && rect.right().saturating_sub(1) == column)
+                    .then_some(column.saturating_add(1))
+            })
+        })?;
+
+    let left = rects
+        .iter()
+        .find_map(|(id, rect)| (row_hit(rect) && rect.right() == boundary).then_some(*id))?;
+    let right = rects
+        .iter()
+        .find_map(|(id, rect)| (row_hit(rect) && rect.x == boundary).then_some(*id))?;
+    Some((left, right))
 }
 
 /// 节点是否为指定窗格叶子。
@@ -279,10 +404,16 @@ fn split_rect_edge(area: Rect, direction: Direction, len: u16, second: bool) -> 
     }
 }
 
-fn split_rect(area: Rect, direction: Direction, ratio: f32) -> (Rect, Rect) {
+/// 按比例分割；水平分割时首侧宽度钳制在 `[min_width, width - min_width]`。
+///
+/// 可用宽度不足 `2 * min_width` 时退回纯比例分割。
+fn split_rect(area: Rect, direction: Direction, ratio: f32, min_width: u16) -> (Rect, Rect) {
     match direction {
         Direction::Horizontal => {
-            let first_width = ((f32::from(area.width) * ratio).round() as u16).min(area.width);
+            let mut first_width = ((f32::from(area.width) * ratio).round() as u16).min(area.width);
+            if area.width >= min_width.saturating_mul(2) {
+                first_width = first_width.clamp(min_width, area.width - min_width);
+            }
             (
                 Rect {
                     width: first_width,
@@ -392,7 +523,7 @@ mod tests {
     #[test]
     fn single_pane_fills_area() {
         let layout = TileLayout::new();
-        let rects = pane_rects(&layout, area(80, 24));
+        let rects = pane_rects(&layout, area(80, 24), 10);
         assert_eq!(rects.len(), 1);
         assert_eq!(rects[0].0, layout.focus());
         assert_eq!(rects[0].1, area(80, 24));
@@ -401,7 +532,7 @@ mod tests {
     #[test]
     fn nested_splits_produce_expected_rects() {
         let (layout, left, right, bottom) = demo_layout();
-        let rects = pane_rects(&layout, area(80, 20));
+        let rects = pane_rects(&layout, area(80, 20), 10);
         let rect_of = |id: PaneId| rects.iter().find(|(pane, _)| *pane == id).map(|(_, r)| *r);
         assert_eq!(rect_of(left), Some(Rect::new(0, 0, 40, 20)));
         assert_eq!(rect_of(right), Some(Rect::new(40, 0, 40, 12)));
@@ -431,7 +562,7 @@ mod tests {
     #[test]
     fn pane_in_direction_finds_neighbors() {
         let (layout, left, right, bottom) = demo_layout();
-        let rects = pane_rects(&layout, area(80, 20));
+        let rects = pane_rects(&layout, area(80, 20), 10);
         assert_eq!(
             pane_in_direction(&rects, left, NavDirection::Right),
             Some(right)
@@ -463,7 +594,7 @@ mod tests {
     fn collapsed_right_pane_becomes_edge_strip() {
         let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
         assert!(layout.set_collapsed(right, true));
-        let rects = pane_rects(&layout, area(80, 20));
+        let rects = pane_rects(&layout, area(80, 20), 10);
         assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 77, 20)));
         assert_eq!(rect_of(&rects, right), Some(Rect::new(77, 0, 3, 20)));
     }
@@ -472,7 +603,7 @@ mod tests {
     fn collapsed_left_pane_becomes_left_strip() {
         let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
         assert!(layout.set_collapsed(left, true));
-        let rects = pane_rects(&layout, area(80, 20));
+        let rects = pane_rects(&layout, area(80, 20), 10);
         assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 3, 20)));
         assert_eq!(rect_of(&rects, right), Some(Rect::new(3, 0, 77, 20)));
     }
@@ -481,7 +612,7 @@ mod tests {
     fn collapsed_bottom_pane_becomes_bottom_strip() {
         let (mut layout, top, bottom) = two_pane_layout(Direction::Vertical);
         assert!(layout.set_collapsed(bottom, true));
-        let rects = pane_rects(&layout, area(80, 20));
+        let rects = pane_rects(&layout, area(80, 20), 10);
         assert_eq!(rect_of(&rects, top), Some(Rect::new(0, 0, 80, 17)));
         assert_eq!(rect_of(&rects, bottom), Some(Rect::new(0, 17, 80, 3)));
     }
@@ -491,7 +622,7 @@ mod tests {
         let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
         assert!(layout.set_collapsed(right, true));
         assert!(layout.set_collapsed(right, false));
-        let rects = pane_rects(&layout, area(80, 20));
+        let rects = pane_rects(&layout, area(80, 20), 10);
         assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 40, 20)));
         assert_eq!(rect_of(&rects, right), Some(Rect::new(40, 0, 40, 20)));
     }
@@ -521,5 +652,78 @@ mod tests {
         assert_eq!(layout.focus(), left);
         layout.focus_next();
         assert_eq!(layout.focus(), left);
+    }
+
+    #[test]
+    fn pane_rects_clamps_split_to_min_width() {
+        let (layout, left, right) = two_pane_layout(Direction::Horizontal);
+        let mut narrow = layout.clone();
+        assert!(narrow.resize_boundary(left, right, area(80, 20), 0, 10));
+        let rects = pane_rects(&narrow, area(80, 20), 10);
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 10, 20)));
+        assert_eq!(rect_of(&rects, right), Some(Rect::new(10, 0, 70, 20)));
+    }
+
+    #[test]
+    fn pane_rects_falls_back_when_area_below_twice_min() {
+        let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
+        assert!(!layout.resize_boundary(left, right, area(15, 20), 7, 10));
+        let rects = pane_rects(&layout, area(15, 20), 10);
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 8, 20)));
+        assert_eq!(rect_of(&rects, right), Some(Rect::new(8, 0, 7, 20)));
+    }
+
+    #[test]
+    fn resize_boundary_clamps_to_both_minimums() {
+        let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
+        assert!(layout.resize_boundary(left, right, area(80, 20), 200, 10));
+        let rects = pane_rects(&layout, area(80, 20), 10);
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 70, 20)));
+        assert_eq!(rect_of(&rects, right), Some(Rect::new(70, 0, 10, 20)));
+    }
+
+    #[test]
+    fn resize_boundary_rejects_unknown_or_non_horizontal_pair() {
+        let mut layout = TileLayout::new();
+        let only = layout.focus();
+        assert!(!layout.resize_boundary(only, only, area(80, 20), 40, 10));
+        let (mut vertical, top, bottom) = two_pane_layout(Direction::Vertical);
+        assert!(!vertical.resize_boundary(top, bottom, area(80, 20), 40, 10));
+    }
+
+    #[test]
+    fn resize_boundary_adjusts_nested_split() {
+        let (mut layout, left, right, bottom) = demo_layout();
+        let rects = pane_rects(&layout, area(80, 20), 10);
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 40, 20)),);
+        assert!(layout.resize_boundary(left, bottom, area(80, 20), 60, 10));
+        let rects = pane_rects(&layout, area(80, 20), 10);
+        assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 60, 20)));
+        assert_eq!(rect_of(&rects, right), Some(Rect::new(60, 0, 20, 12)));
+        assert_eq!(rect_of(&rects, bottom), Some(Rect::new(60, 12, 20, 8)));
+    }
+
+    #[test]
+    fn resize_boundary_at_hits_border_columns_only() {
+        let (_, left, right) = two_pane_layout(Direction::Horizontal);
+        let rects = vec![
+            (left, Rect::new(0, 0, 40, 20)),
+            (right, Rect::new(40, 0, 40, 20)),
+        ];
+        assert_eq!(resize_boundary_at(&rects, 39, 5), Some((left, right)));
+        assert_eq!(resize_boundary_at(&rects, 40, 5), Some((left, right)));
+        assert_eq!(resize_boundary_at(&rects, 38, 5), None);
+        assert_eq!(resize_boundary_at(&rects, 41, 5), None);
+    }
+
+    #[test]
+    fn resize_boundary_at_requires_shared_row() {
+        let (_, left, right) = two_pane_layout(Direction::Horizontal);
+        let rects = vec![
+            (left, Rect::new(0, 0, 40, 20)),
+            (right, Rect::new(40, 0, 40, 10)),
+        ];
+        assert_eq!(resize_boundary_at(&rects, 39, 5), Some((left, right)));
+        assert_eq!(resize_boundary_at(&rects, 39, 15), None);
     }
 }

@@ -2,7 +2,6 @@
 
 use crate::layout::PaneId;
 
-pub const APP_NAME: &str = "lx-tui";
 pub const SIDEBAR_TITLE: &str = "Workspaces";
 pub const MIN_SIZE_HINT: &str = "terminal too small";
 

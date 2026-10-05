@@ -49,6 +49,7 @@ impl Tui {
         }
         self.restored = true;
         disable_raw_mode()?;
+        crate::platform::set_pointer_shape(crate::platform::PointerShape::Default)?;
         let backend = self.terminal.backend_mut();
         crate::platform::disable_mouse_capture(backend)?;
         execute!(backend, LeaveAlternateScreen, DisableBracketedPaste, Show)?;
@@ -75,6 +76,7 @@ fn install_panic_hook() {
 
 fn restore_raw() -> io::Result<()> {
     disable_raw_mode()?;
+    let _ = crate::platform::set_pointer_shape(crate::platform::PointerShape::Default);
     let mut stdout = io::stdout();
     crate::platform::disable_mouse_capture(&mut stdout)?;
     execute!(stdout, LeaveAlternateScreen, DisableBracketedPaste, Show)?;

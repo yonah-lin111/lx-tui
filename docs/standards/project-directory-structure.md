@@ -28,20 +28,20 @@ lx-tui/
       update.rs                 行为到状态的转换、窗格尺寸同步与输出喂入
     ui/                         渲染层，只读状态
       mod.rs
-      layout.rs                 屏幕区域划分（侧栏/标签栏/主区/状态栏）
+      layout.rs                 屏幕区域划分（侧栏/标签栏/主区/右栏）
       style.rs                  语义化样式 Token（codex 风格 ANSI 配色）
       text.rs                   全部用户可见文案
       terminal.rs               终端网格到 Buffer 的渲染
       widgets/                  无业务语义的可复用组件，按需创建
     input/                      键盘路由与编码
-      mod.rs                    prefix 状态机与应用键位
+      mod.rs                    键盘路由（仅 Ctrl+C 退出，其余进焦点窗格）
       encode.rs                 按键到终端字节序列
     event/                      唯一事件循环：tokio select、PTY 消息与渲染调度
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-    platform/                   OS 专属实现（剪贴板、鼠标捕获、默认 shell）
+    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       静态资源，按需创建

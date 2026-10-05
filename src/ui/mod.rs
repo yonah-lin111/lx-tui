@@ -23,7 +23,13 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         return;
     }
 
-    let view = layout::compute(area, config, state.sidebar_collapsed);
+    let view = layout::compute(
+        area,
+        config,
+        state.sidebar_collapsed,
+        state.prompt_collapsed,
+        state.prompt_width,
+    );
 
     if view.sidebar.width > 0 {
         if state.sidebar_collapsed {
@@ -33,9 +39,10 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         }
     }
     render_tab_bar(frame, view.tab_bar, state);
-    render_panes(frame, view.panes, state);
-    render_status(frame, view.status, state);
-    render_collapse_buttons(frame, state, config);
+    render_panes(frame, view.panes, state, config);
+    render_prompt(frame, view.prompt, state);
+    render_collapse_buttons(frame, &view);
+    render_resize_hint(frame, &view, state);
 }
 
 /// 折叠面板的按钮目标。
@@ -45,7 +52,7 @@ pub enum CollapseTarget {
     Prompt,
 }
 
-/// 顶边内的折叠按钮：命中矩形、目标与当前折叠态。
+/// 折叠按钮：目标、命中矩形与当前折叠态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CollapseButton {
     pub target: CollapseTarget,
@@ -53,74 +60,60 @@ pub struct CollapseButton {
     pub collapsed: bool,
 }
 
-/// 各面板顶边内的折叠按钮；渲染与鼠标命中共用同一几何。
-pub fn collapse_buttons(state: &AppState, config: &Config, area: Rect) -> Vec<CollapseButton> {
-    let view = layout::compute(area, config, state.sidebar_collapsed);
+/// 左栏与右栏顶边内的折叠按钮；渲染与鼠标命中共用同一几何。
+pub fn collapse_buttons(view: &layout::ViewLayout) -> Vec<CollapseButton> {
     let mut buttons = Vec::new();
-    if view.sidebar.width == COLLAPSED_STRIP {
-        buttons.push(CollapseButton {
-            target: CollapseTarget::Sidebar,
-            area: Rect::new(view.sidebar.x, view.sidebar.y, COLLAPSED_STRIP, 1),
-            collapsed: true,
-        });
-    } else if view.sidebar.width > COLLAPSED_STRIP {
-        buttons.push(CollapseButton {
-            target: CollapseTarget::Sidebar,
-            area: Rect::new(
-                view.sidebar.right() - COLLAPSED_STRIP - 1,
-                view.sidebar.y,
-                COLLAPSED_STRIP,
-                1,
-            ),
-            collapsed: false,
-        });
+    if let Some(button) = panel_button(CollapseTarget::Sidebar, view.sidebar) {
+        buttons.push(button);
     }
-
-    let tab = state.active_tab();
-    for (id, rect) in crate::layout::pane_rects(&tab.layout, view.panes) {
-        let Some(pane) = tab.pane(id) else {
-            continue;
-        };
-        if pane.kind != PaneKind::Prompt || rect.width == 0 || rect.height == 0 {
-            continue;
-        }
-        let collapsed = tab.layout.collapsed() == Some(id);
-        let button = if collapsed {
-            Rect::new(rect.x, rect.y, COLLAPSED_STRIP, 1)
-        } else {
-            Rect::new(
-                rect.right().saturating_sub(COLLAPSED_STRIP + 1),
-                rect.y,
-                COLLAPSED_STRIP,
-                1,
-            )
-        };
-        buttons.push(CollapseButton {
-            target: CollapseTarget::Prompt,
-            area: button,
-            collapsed,
-        });
+    if let Some(button) = panel_button(CollapseTarget::Prompt, view.prompt) {
+        buttons.push(button);
     }
     buttons
 }
 
 /// 命中测试：返回坐标所在折叠按钮的目标。
 pub fn collapse_button_at(
-    state: &AppState,
-    config: &Config,
-    area: Rect,
+    view: &layout::ViewLayout,
     column: u16,
     row: u16,
 ) -> Option<CollapseTarget> {
-    collapse_buttons(state, config, area)
+    collapse_buttons(view)
         .into_iter()
         .find(|button| button.area.contains((column, row).into()))
         .map(|button| button.target)
 }
 
+/// 单个面板的折叠按钮：折叠态取整条窄条，展开态在顶边右端。
+fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
+    if panel.width == 0 || panel.height == 0 {
+        return None;
+    }
+    if panel.width == COLLAPSED_STRIP {
+        Some(CollapseButton {
+            target,
+            area: Rect::new(panel.x, panel.y, COLLAPSED_STRIP, 1),
+            collapsed: true,
+        })
+    } else if panel.width > COLLAPSED_STRIP {
+        Some(CollapseButton {
+            target,
+            area: Rect::new(
+                panel.right() - COLLAPSED_STRIP - 1,
+                panel.y,
+                COLLAPSED_STRIP,
+                1,
+            ),
+            collapsed: false,
+        })
+    } else {
+        None
+    }
+}
+
 /// 在面板顶边绘制折叠按钮，必须晚于面板内容渲染。
-fn render_collapse_buttons(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
-    let buttons = collapse_buttons(state, config, frame.area());
+fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
+    let buttons = collapse_buttons(view);
     let buf = frame.buffer_mut();
     for button in buttons {
         let label = if button.collapsed {
@@ -133,6 +126,27 @@ fn render_collapse_buttons(frame: &mut Frame<'_>, state: &AppState, config: &Con
             if let Some(cell) = buf.cell_mut((x, button.area.y)) {
                 cell.reset();
                 cell.set_char(symbol);
+                cell.set_style(style::accent());
+            }
+        }
+    }
+}
+
+/// 右栏分割线提示：悬停或拖拽时把两列边框改为强调色。
+fn render_resize_hint(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+    if state.prompt_collapsed
+        || !(state.resizing_prompt || state.prompt_hover)
+        || view.prompt.x == 0
+    {
+        return;
+    }
+    let area = frame.area();
+    let buf = frame.buffer_mut();
+    for column in [view.prompt.x.saturating_sub(1), view.prompt.x] {
+        for row in area.y..area.bottom() {
+            if let Some(cell) = buf.cell_mut((column, row))
+                && cell.symbol() == text::STRIP_LINE
+            {
                 cell.set_style(style::accent());
             }
         }
@@ -186,25 +200,20 @@ fn render_tab_bar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// 主区域：BSP 平铺窗格；折叠窗格渲染为边缘窄条。
-fn render_panes(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+/// 主区域：BSP 平铺窗格。
+fn render_panes(frame: &mut Frame<'_>, area: Rect, state: &AppState, config: &Config) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let tab = state.active_tab();
     let focus = tab.layout.focus();
-    let collapsed = tab.layout.collapsed();
-    for (id, rect) in crate::layout::pane_rects(&tab.layout, area) {
+    for (id, rect) in crate::layout::pane_rects(&tab.layout, area, config.min_pane_width) {
         if rect.width == 0 || rect.height == 0 {
             continue;
         }
         let Some(pane) = tab.pane(id) else {
             continue;
         };
-        if collapsed == Some(id) {
-            render_collapsed_strip(frame.buffer_mut(), rect);
-            continue;
-        }
         let focused = id == focus;
         let title_style = if focused {
             style::accent()
@@ -239,6 +248,36 @@ fn render_panes(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
+/// 右栏 prompt 面板：全局固定区域，内容可选择复制；折叠时渲染为窄条。
+fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if state.prompt_collapsed {
+        render_collapsed_strip(frame.buffer_mut(), area);
+        return;
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(style::border(false))
+        .title(Span::styled(
+            format!(" {} ", text::PROMPT_TITLE),
+            style::muted(),
+        ));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    terminal::render(
+        inner,
+        frame.buffer_mut(),
+        &state.prompt.pane().terminal,
+        false,
+        state.selection_for(state.prompt.id()),
+    );
+}
+
 /// 窗格标题：prompt 固定标题，空占位与终端走通用标题规则。
 fn pane_display_title(id: PaneId, pane: &Pane) -> String {
     match pane.kind {
@@ -259,26 +298,6 @@ fn render_collapsed_strip(buf: &mut Buffer, area: Rect) {
             cell.set_style(style::muted());
         }
     }
-}
-
-/// 状态栏：左侧上下文。
-fn render_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let tab = state.active_tab();
-    let focus = tab.layout.focus();
-    let pane_title = tab
-        .pane(focus)
-        .map(|pane| pane_display_title(focus, pane))
-        .unwrap_or_default();
-    let left = format!(
-        " {} · {} · {} ",
-        text::APP_NAME,
-        state.active_workspace().name,
-        pane_title
-    );
-    frame.render_widget(Paragraph::new(Span::styled(left, style::muted())), area);
 }
 
 /// 终端尺寸不足时的提示。
@@ -327,66 +346,121 @@ mod tests {
             .collect()
     }
 
+    fn view_for(state: &AppState) -> layout::ViewLayout {
+        layout::compute(
+            Rect::new(0, 0, 100, 24),
+            &Config::default(),
+            state.sidebar_collapsed,
+            state.prompt_collapsed,
+            state.prompt_width,
+        )
+    }
+
     #[test]
-    fn prompt_pane_renders_content_and_collapse_icon() {
+    fn prompt_sidebar_renders_content_and_collapse_button() {
         let state = AppState::demo();
         let lines = render_lines(&state);
         assert!(lines.iter().any(|line| line.contains("Drag to select")));
+        assert!(lines.iter().any(|line| line.contains(text::PROMPT_TITLE)));
         assert!(lines.iter().any(|line| line.contains(text::COLLAPSE_LABEL)));
+        assert!(!lines.iter().any(|line| line.contains(text::EXPAND_LABEL)));
     }
 
     #[test]
     fn collapsed_prompt_renders_strip_and_expand_icon() {
         let mut state = AppState::demo();
-        update::apply(Action::TogglePrompt, &mut state, &[]);
+        update::apply(Action::TogglePrompt, &mut state);
         let lines = render_lines(&state);
         assert!(lines.iter().any(|line| line.contains(text::EXPAND_LABEL)));
         assert!(!lines.iter().any(|line| line.contains("Drag to select")));
     }
 
     #[test]
-    fn collapse_buttons_hit_follow_geometry() {
+    fn sidebar_collapse_button_renders_icons() {
         let mut state = AppState::demo();
-        let config = Config::default();
-        let area = Rect::new(0, 0, 100, 24);
-        let sidebar = collapse_buttons(&state, &config, area)
+        let lines = render_lines(&state);
+        assert!(lines.iter().any(|line| line.contains(text::COLLAPSE_LABEL)));
+        update::apply(Action::ToggleSidebar, &mut state);
+        let lines = render_lines(&state);
+        assert!(lines.iter().any(|line| line.contains(text::EXPAND_LABEL)));
+    }
+
+    #[test]
+    fn collapse_buttons_hit_their_targets() {
+        let mut state = AppState::demo();
+        let view = view_for(&state);
+        let sidebar = collapse_buttons(&view)
             .into_iter()
             .find(|button| button.target == CollapseTarget::Sidebar);
         assert!(sidebar.is_some());
         let Some(sidebar) = sidebar else { return };
         assert!(!sidebar.collapsed);
         assert_eq!(
-            collapse_button_at(&state, &config, area, sidebar.area.x, sidebar.area.y),
+            collapse_button_at(&view, sidebar.area.x, sidebar.area.y),
             Some(CollapseTarget::Sidebar)
         );
-        update::apply(Action::ToggleSidebar, &mut state, &[]);
-        let collapsed = collapse_buttons(&state, &config, area)
+        let prompt = collapse_buttons(&view)
             .into_iter()
-            .find(|button| button.target == CollapseTarget::Sidebar);
+            .find(|button| button.target == CollapseTarget::Prompt);
+        assert!(prompt.is_some());
+        let Some(prompt) = prompt else { return };
+        assert_eq!(
+            collapse_button_at(&view, prompt.area.x, prompt.area.y),
+            Some(CollapseTarget::Prompt)
+        );
+
+        update::apply(Action::TogglePrompt, &mut state);
+        let view = view_for(&state);
+        let collapsed = collapse_buttons(&view)
+            .into_iter()
+            .find(|button| button.target == CollapseTarget::Prompt);
         assert!(collapsed.is_some_and(|button| button.collapsed));
     }
 
     #[test]
     fn collapse_button_cells_use_pure_accent_style() {
-        let mut state = AppState::demo();
-        let config = Config::default();
-        let area = Rect::new(0, 0, 100, 24);
+        let state = AppState::demo();
+        let view = view_for(&state);
         let mut terminal =
             RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
-        for collapsed in [false, true] {
-            state.sidebar_collapsed = collapsed;
-            if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
-                panic!("draw failed: {error}");
+        if let Err(error) = terminal.draw(|frame| render(frame, &state, &Config::default())) {
+            panic!("draw failed: {error}");
+        }
+        let buffer = terminal.backend().buffer().clone();
+        for button in collapse_buttons(&view) {
+            for x in button.area.x..button.area.right() {
+                let cell = &buffer[(x, button.area.y)];
+                assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+                assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+                assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
             }
-            let buffer = terminal.backend().buffer().clone();
-            for button in collapse_buttons(&state, &config, area) {
-                for x in button.area.x..button.area.right() {
-                    let cell = &buffer[(x, button.area.y)];
-                    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
-                    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
-                    assert!(!cell.modifier.contains(ratatui::style::Modifier::DIM));
-                }
-            }
+        }
+    }
+
+    #[test]
+    fn resize_hint_highlights_divider_on_hover() {
+        let mut state = AppState::demo();
+        let config = Config::default();
+        let view = view_for(&state);
+        let mut terminal =
+            RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+
+        if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+            panic!("draw failed: {error}");
+        }
+        let plain = terminal.backend().buffer().clone();
+        let left = &plain[(view.prompt.x, 10)];
+        assert_ne!(left.fg, ratatui::style::Color::Cyan);
+
+        state.prompt_hover = true;
+        if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+            panic!("draw failed: {error}");
+        }
+        let hovered = terminal.backend().buffer().clone();
+        for column in [view.prompt.x - 1, view.prompt.x] {
+            let cell = &hovered[(column, 10)];
+            assert_eq!(cell.symbol(), text::STRIP_LINE);
+            assert_eq!(cell.fg, ratatui::style::Color::Cyan);
         }
     }
 
@@ -398,5 +472,14 @@ mod tests {
         let lines = render_lines(&state);
         assert!(lines.iter().any(|line| line.contains(&expected)));
         assert!(!lines.iter().any(|line| line.contains("exited")));
+    }
+
+    #[test]
+    fn status_bar_is_removed() {
+        let state = AppState::demo();
+        let lines = render_lines(&state);
+        assert!(!lines.iter().any(|line| line.contains("lx-tui")));
+        let last = lines.last().map(String::as_str).unwrap_or_default();
+        assert!(last.contains('╰'), "last row should be pane border");
     }
 }

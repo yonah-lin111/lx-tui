@@ -13,10 +13,10 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::app::actions::Action;
-use crate::app::state::PaneKind;
-use crate::app::{state::AppState, update};
+use crate::app::state::{AppState, PaneKind};
+use crate::app::update;
 use crate::config::Config;
-use crate::input::{self, InputState, Routed};
+use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
 use crate::pty::{PtyEvent, PtySession};
 use crate::tui::Tui;
@@ -43,19 +43,19 @@ pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<(
 }
 
 async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+    initialize_prompt_width(tui, state, config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions = spawn_sessions(state, &sender);
     let mut events = EventStream::new();
-    let mut keyboard = InputState::default();
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
 
     while !state.should_quit {
-        let (rects, area) = current_geometry(tui, state, config)?;
+        let (rects, view) = current_geometry(tui, state, config)?;
         if rects != last_rects {
             update::resize_panes(state, &rects);
-            resize_sessions(&mut sessions, &rects, state.active_tab().layout.collapsed());
+            resize_sessions(&mut sessions, &rects);
             last_rects.clone_from(&rects);
             dirty = true;
         }
@@ -76,7 +76,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         tokio::select! {
             event = events.next() => match event {
                 Some(Ok(event)) => {
-                    handle_terminal_event(event, state, &mut keyboard, &mut sessions, &rects, area, config, &mut dirty);
+                    handle_terminal_event(event, state, &mut sessions, &rects, &view, config, &mut dirty);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -132,31 +132,45 @@ fn spawn_sessions(
     sessions
 }
 
-/// 当前终端尺寸下活动标签的窗格几何与全屏区域。
+/// 启动时右栏宽度取主区可用宽度的一半，复刻旧 50% 分割的版面。
+fn initialize_prompt_width(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+    let size = tui.terminal().size()?;
+    let area = Rect::new(0, 0, size.width, size.height);
+    state.prompt_width = ui::layout::default_prompt_width(area, config, state.sidebar_collapsed);
+    Ok(())
+}
+
+/// 当前终端尺寸下活动标签的窗格几何（含 prompt 右栏）与屏幕区域划分。
+///
+/// 右栏折叠时不参与命中、选择与尺寸同步，展开时按当前几何恢复。
 fn current_geometry(
     tui: &mut Tui,
     state: &AppState,
     config: &Config,
-) -> io::Result<(Vec<(PaneId, Rect)>, Rect)> {
+) -> io::Result<(Vec<(PaneId, Rect)>, ui::layout::ViewLayout)> {
     let size = tui.terminal().size()?;
     let area = Rect::new(0, 0, size.width, size.height);
-    let view = ui::layout::compute(area, config, state.sidebar_collapsed);
-    Ok((
-        layout::pane_rects(&state.active_tab().layout, view.panes),
+    let view = ui::layout::compute(
         area,
-    ))
+        config,
+        state.sidebar_collapsed,
+        state.prompt_collapsed,
+        state.prompt_width,
+    );
+    let mut rects = layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+    );
+    if !state.prompt_collapsed {
+        rects.push((state.prompt.id(), view.prompt));
+    }
+    Ok((rects, view))
 }
 
-/// 随几何变化同步 PTY 窗口尺寸；折叠窗格保持原尺寸。
-fn resize_sessions(
-    sessions: &mut HashMap<PaneId, PtySession>,
-    rects: &[(PaneId, Rect)],
-    collapsed: Option<PaneId>,
-) {
+/// 随几何变化同步 PTY 窗口尺寸。
+fn resize_sessions(sessions: &mut HashMap<PaneId, PtySession>, rects: &[(PaneId, Rect)]) {
     for (id, rect) in rects {
-        if Some(*id) == collapsed {
-            continue;
-        }
         let (cols, rows) = layout::pane_inner_size(*rect);
         if let Some(session) = sessions.get_mut(id)
             && let Err(error) = session.resize(cols, rows)
@@ -169,10 +183,9 @@ fn resize_sessions(
 fn handle_terminal_event(
     event: TerminalEvent,
     state: &mut AppState,
-    keyboard: &mut InputState,
     sessions: &mut HashMap<PaneId, PtySession>,
     rects: &[(PaneId, Rect)],
-    area: Rect,
+    view: &ui::layout::ViewLayout,
     config: &Config,
     dirty: &mut bool,
 ) {
@@ -182,12 +195,12 @@ fn handle_terminal_event(
                 .active_pane()
                 .map(|pane| pane.terminal.mode())
                 .unwrap_or_else(TermMode::empty);
-            let Some(routed) = input::route(key, keyboard, mode) else {
+            let Some(routed) = input::route(key, mode) else {
                 return;
             };
             match routed {
                 Routed::Action(action) => {
-                    update::apply(action, state, rects);
+                    update::apply(action, state);
                     *dirty = true;
                 }
                 Routed::Pane(bytes) => {
@@ -195,7 +208,6 @@ fn handle_terminal_event(
                     write_to_pane(sessions, id, &bytes);
                     *dirty = true;
                 }
-                Routed::Consumed => {}
             }
         }
         TerminalEvent::Paste(text) => {
@@ -213,14 +225,20 @@ fn handle_terminal_event(
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if let Some(target) =
-                    ui::collapse_button_at(state, config, area, mouse.column, mouse.row)
-                {
+                if let Some(target) = ui::collapse_button_at(view, mouse.column, mouse.row) {
                     let action = match target {
                         ui::CollapseTarget::Sidebar => Action::ToggleSidebar,
                         ui::CollapseTarget::Prompt => Action::TogglePrompt,
                     };
-                    update::apply(action, state, rects);
+                    update::apply(action, state);
+                    if update::set_prompt_hover(state, false) {
+                        reset_pointer_shape();
+                    }
+                    *dirty = true;
+                } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
+                    .is_some_and(|(_, right)| right == state.prompt.id())
+                {
+                    update::begin_prompt_resize(state);
                     *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
                     let selectable = matches!(
@@ -243,6 +261,13 @@ fn handle_terminal_event(
                 }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if state.resizing_prompt {
+                    let width =
+                        ui::layout::prompt_width_at(view, mouse.column, config.min_pane_width);
+                    update::drag_prompt(state, width);
+                    *dirty = true;
+                    return;
+                }
                 let Some(selection) = state.selection else {
                     return;
                 };
@@ -260,6 +285,11 @@ fn handle_terminal_event(
                 *dirty = true;
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if state.resizing_prompt {
+                    update::end_prompt_resize(state);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(text) = update::finish_selection(state)
                     && !crate::platform::write_clipboard(&text)
                 {
@@ -267,6 +297,19 @@ fn handle_terminal_event(
                 }
                 update::clear_selection(state);
                 *dirty = true;
+            }
+            MouseEventKind::Moved => {
+                let hover = layout::resize_boundary_at(rects, mouse.column, mouse.row)
+                    .is_some_and(|(_, right)| right == state.prompt.id());
+                if update::set_prompt_hover(state, hover) {
+                    let shape = if hover {
+                        crate::platform::PointerShape::EwResize
+                    } else {
+                        crate::platform::PointerShape::Default
+                    };
+                    set_pointer_shape(shape);
+                    *dirty = true;
+                }
             }
             _ => {}
         },
@@ -289,6 +332,18 @@ fn handle_app_event(
         }
         AppEvent::PaneExit(id) => update::mark_pane_exited(state, id),
     }
+}
+
+/// 写入鼠标指针形状；不支持的终端静默忽略，失败只影响悬停提示。
+fn set_pointer_shape(shape: crate::platform::PointerShape) {
+    if let Err(error) = crate::platform::set_pointer_shape(shape) {
+        tracing::debug!(%error, "pointer shape write failed");
+    }
+}
+
+/// 指针形状恢复终端默认。
+fn reset_pointer_shape() {
+    set_pointer_shape(crate::platform::PointerShape::Default);
 }
 
 fn write_to_pane(sessions: &mut HashMap<PaneId, PtySession>, id: PaneId, bytes: &[u8]) {

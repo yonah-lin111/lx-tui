@@ -13,9 +13,54 @@ const NATIVE_COPY_TIMEOUT: Duration = Duration::from_secs(2);
 #[cfg(not(windows))]
 const DISABLE_MOUSE_REPORTING: &[u8] =
     b"\x1b[?1006l\x1b[?1016l\x1b[?1015l\x1b[?1005l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
-/// Unix 下只上报按键、释放与拖动（SGR 1000/1002/1006）；不启用无按键移动上报。
+/// Unix 下上报按键、释放、拖动与无按键移动（SGR 1000/1002/1003/1006）；
+/// 移动上报用于右栏分割线的悬停指针形状与高亮。
 #[cfg(not(windows))]
-const ENABLE_MOUSE_BUTTON_REPORTING: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const ENABLE_MOUSE_BUTTON_REPORTING: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h";
+
+/// 鼠标指针形状（OSC 22）；不支持的终端静默忽略。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointerShape {
+    Default,
+    EwResize,
+}
+
+impl PointerShape {
+    /// OSC 22 形状名；恢复默认必须显式发 `default`，空 payload 部分终端不认。
+    fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::EwResize => "ew-resize",
+        }
+    }
+}
+
+/// 设置鼠标指针形状；输出到 stdout，失败只影响形状提示。
+pub fn set_pointer_shape(shape: PointerShape) -> io::Result<()> {
+    let mut stdout = io::stdout();
+    stdout.write_all(
+        pointer_shape_sequence(
+            shape,
+            std::env::var_os("TMUX").is_some(),
+            std::env::var_os("STY").is_some(),
+        )
+        .as_bytes(),
+    )?;
+    stdout.flush()
+}
+
+/// OSC 22 输出；tmux/screen 下按需加 passthrough 包装（与 OSC 52 同款）。
+fn pointer_shape_sequence(shape: PointerShape, tmux: bool, screen: bool) -> String {
+    let sequence = format!("\x1b]22;{}\x1b\\", shape.name());
+    let passthrough = format!("\x1bPtmux;\x1b{sequence}\x1b\\");
+    if tmux {
+        format!("{sequence}{passthrough}")
+    } else if screen {
+        passthrough
+    } else {
+        sequence
+    }
+}
 
 /// 写入系统剪贴板：OSC 52 立即写；原生工具放到后台线程并限时执行，绝不阻塞事件循环。
 pub fn write_clipboard(text: &str) -> bool {
@@ -217,18 +262,44 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
-    fn enable_sequence_requests_button_and_drag_events() {
+    fn enable_sequence_requests_button_drag_and_move_events() {
         let Ok(text) = std::str::from_utf8(ENABLE_MOUSE_BUTTON_REPORTING) else {
             panic!("sequence is ascii");
         };
-        assert!(text.contains("\x1b[?1000h"));
-        assert!(text.contains("\x1b[?1002h"));
-        assert!(text.contains("\x1b[?1006h"));
-        for mode in ["1003", "1015", "1016"] {
+        for mode in ["1000", "1002", "1003", "1006"] {
+            assert!(text.contains(&format!("\x1b[?{mode}h")), "missing {mode}");
+        }
+        for mode in ["1005", "1015", "1016"] {
             assert!(
                 !text.contains(&format!("\x1b[?{mode}h")),
                 "unexpected {mode}"
             );
         }
+    }
+
+    #[test]
+    fn pointer_shape_sequence_sets_and_resets() {
+        assert_eq!(
+            pointer_shape_sequence(PointerShape::EwResize, false, false),
+            "\x1b]22;ew-resize\x1b\\"
+        );
+        assert_eq!(
+            pointer_shape_sequence(PointerShape::Default, false, false),
+            "\x1b]22;default\x1b\\"
+        );
+    }
+
+    #[test]
+    fn pointer_shape_sequence_wraps_for_tmux_and_screen() {
+        let plain = "\x1b]22;ew-resize\x1b\\";
+        let passthrough = format!("\x1bPtmux;\x1b{plain}\x1b\\");
+        assert_eq!(
+            pointer_shape_sequence(PointerShape::EwResize, true, false),
+            format!("{plain}{passthrough}")
+        );
+        assert_eq!(
+            pointer_shape_sequence(PointerShape::EwResize, false, true),
+            passthrough
+        );
     }
 }

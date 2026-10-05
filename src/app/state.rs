@@ -2,8 +2,6 @@
 
 use std::collections::BTreeMap;
 
-use ratatui::layout::Direction;
-
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
@@ -13,6 +11,10 @@ use super::selection::Selection;
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
+/// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
+/// 生产启动时按主区可用宽度的一半覆盖，之后可拖拽。
+const DEFAULT_PROMPT_WIDTH: u16 = 30;
+
 /// prompt 占位窗格的演示文本（承载可选择的静态内容，行宽适配窄窗格）。
 const DEMO_PROMPT: &str = concat!(
     "Drag to select, release to copy.\r\n",
@@ -20,14 +22,50 @@ const DEMO_PROMPT: &str = concat!(
     "Line 3: mixed ASCII 与宽字符。"
 );
 
-/// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端。
+/// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端；prompt 为全局右栏。
 #[derive(Debug)]
 pub struct AppState {
     pub should_quit: bool,
     pub sidebar_collapsed: bool,
     pub selection: Option<Selection>,
+    pub resizing_prompt: bool,
+    pub prompt_hover: bool,
+    pub prompt_collapsed: bool,
+    pub prompt: Prompt,
+    pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
+}
+
+/// 全局 prompt 面板：右侧固定区域，所有标签与工作区共享。
+#[derive(Debug)]
+pub struct Prompt {
+    id: PaneId,
+    pane: Pane,
+}
+
+impl Prompt {
+    fn new(id: PaneId) -> Self {
+        let mut pane = Pane::new();
+        pane.kind = PaneKind::Prompt;
+        let _ = pane.terminal.feed(DEMO_PROMPT.as_bytes());
+        Self { id, pane }
+    }
+
+    /// 面板标识；文本选择按此标识归属。
+    pub fn id(&self) -> PaneId {
+        self.id
+    }
+
+    /// 面板载荷。
+    pub fn pane(&self) -> &Pane {
+        &self.pane
+    }
+
+    /// 面板载荷（可变）。
+    pub fn pane_mut(&mut self) -> &mut Pane {
+        &mut self.pane
+    }
 }
 
 /// 工作区。
@@ -76,24 +114,17 @@ impl Tab {
         }
     }
 
-    /// 演示用：左侧空占位，右侧 prompt 占位；焦点默认在空占位。
-    fn demo_split(title: &str) -> Self {
-        let mut layout = TileLayout::new();
-        let placeholder = layout.focus();
-        let prompt = layout.split_focused(Direction::Horizontal, 0.5);
-        layout.focus_pane(placeholder);
-        let mut tab = Self::with_layout(title, layout);
+    /// 演示用：单窗格空占位标签。
+    fn demo_placeholder(title: &str) -> Self {
+        let mut tab = Self::with_layout(title, TileLayout::new());
+        let placeholder = tab.layout.focus();
         if let Some(pane) = tab.pane_mut(placeholder) {
             pane.kind = PaneKind::Placeholder;
-        }
-        if let Some(pane) = tab.pane_mut(prompt) {
-            pane.kind = PaneKind::Prompt;
-            let _ = pane.terminal.feed(DEMO_PROMPT.as_bytes());
         }
         tab
     }
 
-    /// 演示用：单窗格标签。
+    /// 演示用：单窗格终端标签。
     fn demo_single(title: &str) -> Self {
         Self::with_layout(title, TileLayout::new())
     }
@@ -106,14 +137,6 @@ impl Tab {
     /// 按标识取窗格（可变）。
     pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
         self.panes.get_mut(&id)
-    }
-
-    /// 当前标签中的 prompt 占位窗格。
-    pub fn prompt_pane(&self) -> Option<PaneId> {
-        self.panes
-            .iter()
-            .find(|(_, pane)| pane.kind == PaneKind::Prompt)
-            .map(|(id, _)| *id)
     }
 }
 
@@ -128,16 +151,21 @@ impl Pane {
 }
 
 impl AppState {
-    /// 构造演示状态：两个工作区，含多窗格标签；窗格终端为空。
+    /// 构造演示状态：两个工作区，单窗格标签，加全局 prompt 右栏。
     pub fn demo() -> Self {
         Self {
             should_quit: false,
             sidebar_collapsed: false,
             selection: None,
+            resizing_prompt: false,
+            prompt_hover: false,
+            prompt_collapsed: false,
+            prompt: Prompt::new(PaneId::alloc()),
+            prompt_width: DEFAULT_PROMPT_WIDTH,
             workspaces: vec![
                 Workspace {
                     name: "main".to_string(),
-                    tabs: vec![Tab::demo_split("shell"), Tab::demo_single("logs")],
+                    tabs: vec![Tab::demo_placeholder("shell"), Tab::demo_single("logs")],
                     active_tab: 0,
                 },
                 Workspace {
@@ -178,12 +206,13 @@ impl AppState {
         tab.pane(tab.layout.focus())
     }
 
-    /// 任意工作区/标签中的窗格；PTY 装配与只读查询使用。
+    /// 任意工作区/标签或全局 prompt 右栏中的窗格；PTY 装配与只读查询使用。
     pub fn pane_anywhere(&self, id: PaneId) -> Option<&Pane> {
         self.workspaces
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
             .find_map(|tab| tab.pane(id))
+            .or_else(|| (id == self.prompt.id()).then(|| self.prompt.pane()))
     }
 
     /// 指定窗格上的选区范围（左上 -> 右下），供渲染高亮使用。
@@ -198,7 +227,7 @@ impl AppState {
             .filter(|selection| selection.pane() == pane)
     }
 
-    /// 任意工作区/标签中的窗格（可变）；PTY 输出按窗格标识投递。
+    /// 任意工作区/标签或全局 prompt 右栏中的窗格（可变）；PTY 输出按窗格标识投递。
     pub fn pane_mut_anywhere(&mut self, id: PaneId) -> Option<&mut Pane> {
         for workspace in &mut self.workspaces {
             for tab in &mut workspace.tabs {
@@ -207,16 +236,20 @@ impl AppState {
                 }
             }
         }
+        if id == self.prompt.id() {
+            return Some(self.prompt.pane_mut());
+        }
         None
     }
 
-    /// 全部窗格标识，用于启动时装配 PTY。
+    /// 全部窗格标识（含全局 prompt），用于启动时装配 PTY。
     pub fn all_pane_ids(&self) -> Vec<PaneId> {
-        self.workspaces
+        let ids = self
+            .workspaces
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
-            .flat_map(|tab| tab.layout.pane_ids())
-            .collect()
+            .flat_map(|tab| tab.layout.pane_ids());
+        ids.chain(std::iter::once(self.prompt.id())).collect()
     }
 }
 
@@ -230,11 +263,11 @@ mod tests {
         assert_eq!(state.workspaces.len(), 2);
         assert_eq!(state.active_workspace().name, "main");
         assert_eq!(state.active_tab().title, "shell");
-        assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+        assert_eq!(state.active_tab().layout.pane_ids().len(), 1);
     }
 
     #[test]
-    fn demo_split_has_placeholder_prompt_and_focus() {
+    fn demo_tabs_are_single_placeholder_panes() {
         let state = AppState::demo();
         let tab = state.active_tab();
         let focus = tab.layout.focus();
@@ -242,18 +275,15 @@ mod tests {
             tab.pane(focus)
                 .is_some_and(|pane| pane.kind == PaneKind::Placeholder)
         );
-        let prompt = tab.prompt_pane();
-        assert!(prompt.is_some());
-        assert_ne!(Some(focus), prompt);
     }
 
     #[test]
-    fn demo_prompt_pane_has_selectable_content() {
+    fn prompt_is_global_and_has_selectable_content() {
         let mut state = AppState::demo();
-        let prompt = state.active_tab().prompt_pane();
-        assert!(prompt.is_some());
-        let Some(prompt) = prompt else { return };
-        let Some(pane) = state.active_tab_mut().pane_mut(prompt) else {
+        let id = state.prompt.id();
+        let pane = state.pane_anywhere(id);
+        assert!(pane.is_some_and(|pane| pane.kind == PaneKind::Prompt));
+        let Some(pane) = state.pane_mut_anywhere(id) else {
             return;
         };
         let text = pane
@@ -264,22 +294,23 @@ mod tests {
     }
 
     #[test]
-    fn single_pane_tab_has_one_pane() {
+    fn all_pane_ids_include_global_prompt() {
         let state = AppState::demo();
-        assert_eq!(state.workspaces[0].tabs[1].layout.pane_ids().len(), 1);
-        assert_eq!(state.workspaces[1].tabs[0].layout.pane_ids().len(), 1);
-    }
-
-    #[test]
-    fn every_layout_pane_has_payload() {
-        let state = AppState::demo();
-        assert!(state.active_pane().is_some());
         let layout_ids: usize = state
             .workspaces
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
             .map(|tab| tab.layout.pane_ids().len())
             .sum();
-        assert_eq!(state.all_pane_ids().len(), layout_ids);
+        assert_eq!(state.all_pane_ids().len(), layout_ids + 1);
+        assert!(state.all_pane_ids().contains(&state.prompt.id()));
+    }
+
+    #[test]
+    fn pane_mut_anywhere_reaches_prompt() {
+        let mut state = AppState::demo();
+        let id = state.prompt.id();
+        let pane = state.pane_mut_anywhere(id);
+        assert!(pane.is_some());
     }
 }
