@@ -209,9 +209,8 @@ fn exit_button_aligns_with_collapsed_prompt_button() {
     let exit = exit_button(&view).expect("exit button is visible");
     let prompt_button = button_for_state(&view, false, CollapseTarget::Prompt);
     assert!(prompt_button.collapsed);
-    let label_start = collapsed_content_x(prompt_button.area, false);
-    assert_eq!(exit.x, label_start);
-    assert_eq!(exit.width, text::PROMPT_EXPAND_LABEL.chars().count() as u16);
+    assert_eq!(exit.right(), prompt_button.area.right());
+    assert_eq!(exit.width, text::EXIT_LABEL.chars().count() as u16);
 }
 
 #[test]
