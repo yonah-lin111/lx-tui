@@ -9,10 +9,21 @@ fn normal_width_shows_all_regions() {
     assert_eq!(view.sidebar.width, config.sidebar_width);
     assert_eq!(view.sidebar.height, 30);
     assert_eq!(view.tab_bar.height, 1);
-    assert_eq!(view.prompt, Rect::new(70, 0, 30, 30));
+    assert_eq!(view.tab_bar, Rect::new(24, 0, 76, 1));
+    assert_eq!(view.prompt, Rect::new(70, 1, 30, 29));
     assert_eq!(view.panes.width, 100 - config.sidebar_width - 30);
     assert_eq!(view.panes.height, 29);
     assert_eq!(view.panes.bottom(), 30);
+}
+
+#[test]
+fn tab_bar_spans_main_area_and_prompt() {
+    let config = Config::default();
+    let view = compute(Rect::new(0, 0, 100, 30), &config, false, false, 30);
+    assert_eq!(view.tab_bar.right(), view.prompt.right());
+    assert_eq!(view.prompt.y, view.panes.y);
+    assert_eq!(view.prompt.height, view.panes.height);
+    assert_eq!(view.prompt.bottom(), view.panes.bottom());
 }
 
 #[test]
@@ -45,7 +56,7 @@ fn collapsed_narrow_sidebar_is_hidden() {
 fn collapsed_prompt_becomes_right_strip() {
     let config = Config::default();
     let view = compute(Rect::new(0, 0, 100, 30), &config, false, true, 30);
-    assert_eq!(view.prompt, Rect::new(96, 0, COLLAPSED_STRIP, 30));
+    assert_eq!(view.prompt, Rect::new(96, 1, COLLAPSED_STRIP, 29));
     assert_eq!(
         view.panes.width,
         100 - config.sidebar_width - COLLAPSED_STRIP
@@ -87,6 +98,7 @@ fn tiny_area_does_not_overflow() {
     let view = compute(Rect::new(0, 0, 10, 2), &config, false, false, 30);
     assert_eq!(view.panes.height, 1);
     assert_eq!(view.panes.bottom(), 2);
+    assert_eq!(view.prompt.bottom(), 2);
 }
 
 #[test]

@@ -186,6 +186,22 @@ fn sidebar_lists_single_workspace_named_after_current_directory() {
 }
 
 #[test]
+fn exit_button_sits_at_tab_bar_right_end() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let area = exit_button(&view).expect("exit button is visible");
+    assert_eq!(area.y, view.tab_bar.y);
+    assert_eq!(area.right(), view.tab_bar.right() - 1);
+    assert!(exit_button_at(&view, area.x, area.y));
+    assert!(!exit_button_at(&view, area.x.saturating_sub(1), area.y));
+
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[area.y as usize].chars().collect();
+    let rendered: String = row[area.x as usize..area.right() as usize].iter().collect();
+    assert_eq!(rendered, text::EXIT_LABEL);
+}
+
+#[test]
 fn agents_header_is_left_aligned_without_junctions() {
     let state = AppState::demo();
     let view = view_for(&state);
@@ -340,7 +356,8 @@ fn collapsed_strips_hide_panel_content() {
             .take(view.prompt.width as usize)
             .collect()
     };
-    assert_eq!(prompt(1), "│   ");
+    // 折叠按钮占据右栏首行，第二行起才是纯窄条。
+    assert_eq!(prompt(view.prompt.y as usize + 1), "│   ");
     assert_eq!(prompt(10), "│   ");
 }
 

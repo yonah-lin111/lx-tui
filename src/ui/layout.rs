@@ -14,7 +14,8 @@ pub struct ViewLayout {
     pub prompt: Rect,
 }
 
-/// 划分主界面；侧栏折叠且宽度充足时保留窄条，右栏 prompt 始终可见。
+/// 划分主界面；标签栏横跨主区与右栏，右栏与窗格同顶同底；
+/// 侧栏折叠且宽度充足时保留窄条，右栏 prompt 始终可见。
 pub fn compute(
     area: Rect,
     config: &Config,
@@ -33,25 +34,30 @@ pub fn compute(
     } else {
         clamp_prompt_width(available, prompt_width, config.min_pane_width)
     };
-    let prompt = Rect {
-        x: area.x + area.width - prompt_width,
-        width: prompt_width,
-        ..area
-    };
     let main = Rect {
         x: area.x + sidebar_width,
         width: available.saturating_sub(prompt_width),
         ..area
     };
     let tab_bar = Rect {
-        height: 1.min(main.height),
-        ..main
+        x: main.x,
+        y: area.y,
+        width: available,
+        height: 1.min(area.height),
+    };
+    let body_y = area.y + tab_bar.height;
+    let body_height = area.height.saturating_sub(tab_bar.height);
+    let prompt = Rect {
+        x: area.x + area.width - prompt_width,
+        y: body_y,
+        width: prompt_width,
+        height: body_height,
     };
     let panes = Rect {
         x: main.x,
-        y: main.y + tab_bar.height,
+        y: body_y,
         width: main.width,
-        height: main.height.saturating_sub(tab_bar.height),
+        height: body_height,
     };
 
     ViewLayout {
