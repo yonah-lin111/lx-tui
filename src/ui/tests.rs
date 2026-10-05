@@ -116,9 +116,10 @@ fn collapse_buttons_render_directional_arrow_labels() {
 
 #[test]
 fn prompt_sidebar_renders_content_and_collapse_button() {
-    let state = AppState::demo();
+    let mut state = AppState::demo();
+    state.prompt.insert_str("## markdown");
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("Drag to select")));
+    assert!(lines.iter().any(|line| line.contains("markdown")));
     assert!(lines.iter().any(|line| line.contains(text::PROMPT_TITLE)));
     assert!(
         lines
@@ -135,6 +136,7 @@ fn prompt_sidebar_renders_content_and_collapse_button() {
 #[test]
 fn collapsed_prompt_renders_strip_and_expand_icon() {
     let mut state = AppState::demo();
+    state.prompt.insert_str("hidden content");
     update::apply(Action::TogglePrompt, &mut state);
     let view = view_for(&state);
     let lines = render_lines(&state);
@@ -147,7 +149,7 @@ fn collapsed_prompt_renders_strip_and_expand_icon() {
             .iter()
             .any(|line| line.contains(text::PROMPT_COLLAPSE_LABEL))
     );
-    assert!(!lines.iter().any(|line| line.contains("Drag to select")));
+    assert!(!lines.iter().any(|line| line.contains("hidden content")));
 }
 
 #[test]

@@ -9,11 +9,11 @@ fn key(code: KeyCode) -> KeyEvent {
 #[test]
 fn bare_keys_go_to_pane() {
     assert_eq!(
-        route(key(KeyCode::Char('q')), TermMode::empty()),
+        route(key(KeyCode::Char('q')), TermMode::empty(), false),
         Some(Routed::Pane(b"q".to_vec()))
     );
     assert_eq!(
-        route(key(KeyCode::Char('h')), TermMode::empty()),
+        route(key(KeyCode::Char('h')), TermMode::empty(), false),
         Some(Routed::Pane(b"h".to_vec()))
     );
 }
@@ -22,7 +22,7 @@ fn bare_keys_go_to_pane() {
 fn ctrl_q_quits() {
     let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
-        route(key, TermMode::empty()),
+        route(key, TermMode::empty(), false),
         Some(Routed::Action(Action::Quit))
     );
 }
@@ -31,7 +31,7 @@ fn ctrl_q_quits() {
 fn ctrl_c_is_passed_to_pane() {
     let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
     assert_eq!(
-        route(key, TermMode::empty()),
+        route(key, TermMode::empty(), false),
         Some(Routed::Pane(vec![0x03]))
     );
 }
@@ -40,7 +40,7 @@ fn ctrl_c_is_passed_to_pane() {
 fn ctrl_b_is_passed_to_pane() {
     let key = KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
     assert_eq!(
-        route(key, TermMode::empty()),
+        route(key, TermMode::empty(), false),
         Some(Routed::Pane(vec![0x02]))
     );
 }
@@ -49,17 +49,82 @@ fn ctrl_b_is_passed_to_pane() {
 fn release_events_are_ignored() {
     let mut key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
     key.kind = KeyEventKind::Release;
-    assert_eq!(route(key, TermMode::empty()), None);
+    assert_eq!(route(key, TermMode::empty(), false), None);
+    assert_eq!(route(key, TermMode::empty(), true), None);
 }
 
 #[test]
 fn navigation_keys_encode_to_pane() {
     assert_eq!(
-        route(key(KeyCode::Tab), TermMode::empty()),
+        route(key(KeyCode::Tab), TermMode::empty(), false),
         Some(Routed::Pane(b"\t".to_vec()))
     );
     assert_eq!(
-        route(key(KeyCode::Up), TermMode::APP_CURSOR),
+        route(key(KeyCode::Up), TermMode::APP_CURSOR, false),
         Some(Routed::Pane(b"\x1bOA".to_vec()))
+    );
+}
+
+#[test]
+fn prompt_focus_maps_editing_keys() {
+    let route_prompt = |code| route(key(code), TermMode::empty(), true);
+    assert_eq!(
+        route_prompt(KeyCode::Char('a')),
+        Some(Routed::Editor(EditorCommand::InsertChar('a')))
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Enter),
+        Some(Routed::Editor(EditorCommand::Newline))
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Backspace),
+        Some(Routed::Editor(EditorCommand::Backspace))
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Delete),
+        Some(Routed::Editor(EditorCommand::Delete))
+    );
+    for (code, command) in [
+        (KeyCode::Left, EditorCommand::Left),
+        (KeyCode::Right, EditorCommand::Right),
+        (KeyCode::Up, EditorCommand::Up),
+        (KeyCode::Down, EditorCommand::Down),
+        (KeyCode::Home, EditorCommand::Home),
+        (KeyCode::End, EditorCommand::End),
+    ] {
+        assert_eq!(route_prompt(code), Some(Routed::Editor(command)));
+    }
+}
+
+#[test]
+fn prompt_focus_accepts_shifted_characters() {
+    let key = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
+    assert_eq!(
+        route(key, TermMode::empty(), true),
+        Some(Routed::Editor(EditorCommand::InsertChar('A')))
+    );
+}
+
+#[test]
+fn prompt_focus_swallows_unmapped_keys() {
+    let cases = [
+        KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        KeyEvent::new(KeyCode::Left, KeyModifiers::ALT),
+        KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT),
+        KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE),
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    ];
+    for key in cases {
+        assert_eq!(route(key, TermMode::empty(), true), None, "{key:?}");
+    }
+}
+
+#[test]
+fn ctrl_q_quits_even_when_prompt_focused() {
+    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    assert_eq!(
+        route(key, TermMode::empty(), true),
+        Some(Routed::Action(Action::Quit))
     );
 }

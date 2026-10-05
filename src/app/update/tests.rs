@@ -31,6 +31,44 @@ fn toggle_prompt_flips_flag() {
 }
 
 #[test]
+fn collapsing_prompt_clears_focus() {
+    let mut state = AppState::demo();
+    focus_prompt(&mut state);
+    assert!(state.prompt_focused);
+    apply(Action::TogglePrompt, &mut state);
+    assert!(!state.prompt_focused);
+    apply(Action::TogglePrompt, &mut state);
+    assert!(!state.prompt_focused);
+}
+
+#[test]
+fn focus_switches_between_prompt_and_pane() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    focus_prompt(&mut state);
+    assert!(state.prompt_focused);
+    focus_pane(&mut state, pane);
+    assert!(!state.prompt_focused);
+    assert_eq!(state.active_tab().layout.focus(), pane);
+}
+
+#[test]
+fn editor_commands_edit_prompt_text() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    apply_editor(&mut state, EditorCommand::InsertText("ab".into()));
+    apply_editor(&mut state, EditorCommand::InsertChar('你'));
+    apply_editor(&mut state, EditorCommand::Newline);
+    apply_editor(&mut state, EditorCommand::InsertChar('c'));
+    assert_eq!(state.prompt.text(), "ab你\nc");
+    apply_editor(&mut state, EditorCommand::Backspace);
+    apply_editor(&mut state, EditorCommand::Up);
+    apply_editor(&mut state, EditorCommand::Home);
+    apply_editor(&mut state, EditorCommand::Delete);
+    assert_eq!(state.prompt.text(), "b你\n");
+}
+
+#[test]
 fn toggle_agents_flips_flag() {
     let mut state = AppState::demo();
     apply(Action::ToggleAgents, &mut state);
@@ -52,12 +90,11 @@ fn resize_syncs_terminal_size() {
 }
 
 #[test]
-fn resize_syncs_prompt_terminal_size() {
+fn resize_syncs_prompt_editor_size() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
     resize_panes(&mut state, &[(id, Rect::new(70, 0, 30, 20))]);
-    let size = state.prompt.pane().terminal.size();
-    assert_eq!(size, GridSize { cols: 28, rows: 18 });
+    assert_eq!(state.prompt.size(), (28, 18));
 }
 
 #[test]
@@ -100,10 +137,21 @@ fn selection_ignores_non_terminal_pane() {
 #[test]
 fn selection_extracts_prompt_text() {
     let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
     let prompt = state.prompt.id();
+    apply_editor(&mut state, EditorCommand::InsertText("Drag".into()));
     begin_selection(&mut state, prompt, 0, 0);
     drag_selection(&mut state, prompt, 0, 3);
     assert_eq!(finish_selection(&mut state).as_deref(), Some("Drag"));
+}
+
+#[test]
+fn empty_prompt_selection_yields_nothing() {
+    let mut state = AppState::demo();
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 3);
+    assert_eq!(finish_selection(&mut state), None);
 }
 
 #[test]

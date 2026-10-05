@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
+use super::prompt::Prompt;
 use super::selection::Selection;
 use super::toast::Toast;
 
@@ -15,13 +16,6 @@ const DEFAULT_ROWS: u16 = 24;
 /// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
 /// 生产启动时按主区可用宽度的一半覆盖，之后可拖拽。
 const DEFAULT_PROMPT_WIDTH: u16 = 30;
-
-/// prompt 占位窗格的演示文本（承载可选择的静态内容，行宽适配窄窗格）。
-const DEMO_PROMPT: &str = concat!(
-    "Drag to select, release to copy.\r\n",
-    "拖拽选中这段文字，松开即复制。\r\n",
-    "Line 3: mixed ASCII 与宽字符。"
-);
 
 /// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端；prompt 为全局右栏。
 #[derive(Debug)]
@@ -34,41 +28,12 @@ pub struct AppState {
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
+    /// prompt 是否持有键盘焦点；为真时按键进入编辑器而非焦点窗格。
+    pub prompt_focused: bool,
     pub prompt: Prompt,
     pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
-}
-
-/// 全局 prompt 面板：右侧固定区域，所有标签与工作区共享。
-#[derive(Debug)]
-pub struct Prompt {
-    id: PaneId,
-    pane: Pane,
-}
-
-impl Prompt {
-    fn new(id: PaneId) -> Self {
-        let mut pane = Pane::new();
-        pane.kind = PaneKind::Prompt;
-        let _ = pane.terminal.feed(DEMO_PROMPT.as_bytes());
-        Self { id, pane }
-    }
-
-    /// 面板标识；文本选择按此标识归属。
-    pub fn id(&self) -> PaneId {
-        self.id
-    }
-
-    /// 面板载荷。
-    pub fn pane(&self) -> &Pane {
-        &self.pane
-    }
-
-    /// 面板载荷（可变）。
-    pub fn pane_mut(&mut self) -> &mut Pane {
-        &mut self.pane
-    }
 }
 
 /// 工作区。
@@ -87,12 +52,11 @@ pub struct Tab {
     panes: BTreeMap<PaneId, Pane>,
 }
 
-/// 窗格种类：终端运行 PTY，placeholder 为空占位，prompt 为占位面板。
+/// 窗格种类：终端运行 PTY，placeholder 为空占位。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaneKind {
     Terminal,
     Placeholder,
-    Prompt,
 }
 
 /// 窗格载荷：种类、终端仿真状态与退出标记。
@@ -177,6 +141,7 @@ impl AppState {
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,
+            prompt_focused: false,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_width: DEFAULT_PROMPT_WIDTH,
             workspaces: vec![Workspace {
@@ -216,13 +181,12 @@ impl AppState {
         tab.pane(tab.layout.focus())
     }
 
-    /// 任意工作区/标签或全局 prompt 右栏中的窗格；PTY 装配与只读查询使用。
+    /// 任意工作区/标签中的窗格；PTY 装配与只读查询使用。
     pub fn pane_anywhere(&self, id: PaneId) -> Option<&Pane> {
         self.workspaces
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
             .find_map(|tab| tab.pane(id))
-            .or_else(|| (id == self.prompt.id()).then(|| self.prompt.pane()))
     }
 
     /// 指定窗格上的选区范围（左上 -> 右下），供渲染高亮使用。
@@ -237,7 +201,7 @@ impl AppState {
             .filter(|selection| selection.pane() == pane)
     }
 
-    /// 任意工作区/标签或全局 prompt 右栏中的窗格（可变）；PTY 输出按窗格标识投递。
+    /// 任意工作区/标签中的窗格（可变）；PTY 输出按窗格标识投递。
     pub fn pane_mut_anywhere(&mut self, id: PaneId) -> Option<&mut Pane> {
         for workspace in &mut self.workspaces {
             for tab in &mut workspace.tabs {
@@ -246,20 +210,16 @@ impl AppState {
                 }
             }
         }
-        if id == self.prompt.id() {
-            return Some(self.prompt.pane_mut());
-        }
         None
     }
 
-    /// 全部窗格标识（含全局 prompt），用于启动时装配 PTY。
+    /// 全部可运行 PTY 的窗格标识；prompt 编辑器不启动进程，不在其中。
     pub fn all_pane_ids(&self) -> Vec<PaneId> {
-        let ids = self
-            .workspaces
+        self.workspaces
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
-            .flat_map(|tab| tab.layout.pane_ids());
-        ids.chain(std::iter::once(self.prompt.id())).collect()
+            .flat_map(|tab| tab.layout.pane_ids())
+            .collect()
     }
 }
 

@@ -1,6 +1,8 @@
 //! 渲染层：只读取状态，禁止修改状态或执行 IO。
 
 pub mod layout;
+pub mod markdown;
+pub mod prompt;
 pub mod style;
 pub mod terminal;
 pub mod text;
@@ -366,7 +368,8 @@ fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &Ap
         let Some(pane) = tab.pane(*id) else {
             continue;
         };
-        let focused = *id == focus;
+        // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
+        let focused = *id == focus && !state.prompt_focused;
         let title_style = if focused {
             style::accent()
         } else {
@@ -386,7 +389,7 @@ fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &Ap
             continue;
         }
         match pane.kind {
-            PaneKind::Terminal | PaneKind::Prompt => {
+            PaneKind::Terminal => {
                 terminal::render(
                     inner,
                     frame.buffer_mut(),
@@ -400,7 +403,7 @@ fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &Ap
     }
 }
 
-/// 右栏 prompt 面板：全局固定区域，内容可选择复制；折叠时渲染为窄条。
+/// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。
 fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -409,9 +412,10 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         render_collapsed_strip(frame, area, false);
         return;
     }
+    let focused = state.prompt_focused;
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::border(false))
+        .border_style(style::border(focused))
         .title(Span::styled(
             format!(" {} ", text::PROMPT_TITLE),
             style::muted(),
@@ -421,21 +425,18 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    terminal::render(
+    prompt::render(
         inner,
         frame.buffer_mut(),
-        &state.prompt.pane().terminal,
-        false,
+        &state.prompt,
+        focused,
         state.selection_for(state.prompt.id()),
     );
 }
 
-/// 窗格标题：prompt 固定标题，空占位与终端走通用标题规则。
+/// 窗格标题：空占位与终端走通用标题规则。
 fn pane_display_title(id: PaneId, pane: &Pane) -> String {
-    match pane.kind {
-        PaneKind::Prompt => text::PROMPT_TITLE.to_string(),
-        PaneKind::Terminal | PaneKind::Placeholder => text::pane_title(id, pane.terminal.title()),
-    }
+    text::pane_title(id, pane.terminal.title())
 }
 
 /// 终端尺寸不足时的提示。

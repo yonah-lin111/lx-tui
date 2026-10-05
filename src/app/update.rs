@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 
 use crate::layout::{self, PaneId};
 
-use super::actions::Action;
+use super::actions::{Action, EditorCommand};
 use super::selection::Selection;
 use super::state::{AppState, PaneKind};
 use super::toast::Toast;
@@ -16,16 +16,51 @@ pub fn apply(action: Action, state: &mut AppState) {
     match action {
         Action::Quit => state.should_quit = true,
         Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
-        Action::TogglePrompt => state.prompt_collapsed = !state.prompt_collapsed,
+        Action::TogglePrompt => {
+            state.prompt_collapsed = !state.prompt_collapsed;
+            if state.prompt_collapsed {
+                state.prompt_focused = false;
+            }
+        }
         Action::ToggleAgents => state.agents_collapsed = !state.agents_collapsed,
     }
 }
 
-/// 按几何同步各窗格与 prompt 右栏的仿真尺寸。
+/// 按键产生的编辑命令；仅当 prompt 聚焦时由事件循环调用。
+pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    match command {
+        EditorCommand::InsertChar(ch) => state.prompt.insert_char(ch),
+        EditorCommand::InsertText(text) => state.prompt.insert_str(&text),
+        EditorCommand::Newline => state.prompt.newline(),
+        EditorCommand::Backspace => state.prompt.backspace(),
+        EditorCommand::Delete => state.prompt.delete(),
+        EditorCommand::Left => state.prompt.move_left(),
+        EditorCommand::Right => state.prompt.move_right(),
+        EditorCommand::Up => state.prompt.move_up(),
+        EditorCommand::Down => state.prompt.move_down(),
+        EditorCommand::Home => state.prompt.move_home(),
+        EditorCommand::End => state.prompt.move_end(),
+    }
+}
+
+/// 点击 prompt：键盘焦点交给编辑器。
+pub fn focus_prompt(state: &mut AppState) {
+    state.prompt_focused = true;
+}
+
+/// 点击终端窗格：焦点回到窗格，prompt 失焦。
+pub fn focus_pane(state: &mut AppState, id: PaneId) {
+    state.prompt_focused = false;
+    state.active_tab_mut().layout.focus_pane(id);
+}
+
+/// 按几何同步各窗格终端与 prompt 编辑器的尺寸。
 pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
         let (cols, rows) = layout::pane_inner_size(*rect);
-        if let Some(pane) = state.pane_mut_anywhere(*id) {
+        if *id == state.prompt.id() {
+            state.prompt.resize(cols, rows);
+        } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             pane.terminal.resize(cols, rows);
         }
     }
@@ -66,12 +101,15 @@ pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
 }
 
-/// 结束选区并提取文本（选区保留高亮）；未拖动或空占位窗格返回 None。
+/// 结束选区并提取文本（选区保留高亮）；未拖动、prompt 空选区或空占位窗格返回 None。
 pub fn finish_selection(state: &mut AppState) -> Option<String> {
     let selection = state.selection?;
     let (start, end) = selection.range()?;
+    if selection.pane() == state.prompt.id() {
+        return state.prompt.selection_text(start, end);
+    }
     let pane = state.pane_mut_anywhere(selection.pane())?;
-    if !matches!(pane.kind, PaneKind::Terminal | PaneKind::Prompt) {
+    if pane.kind != PaneKind::Terminal {
         return None;
     }
     pane.terminal

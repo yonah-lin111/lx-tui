@@ -12,7 +12,7 @@ use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::app::actions::Action;
+use crate::app::actions::{Action, EditorCommand};
 use crate::app::state::{AppState, PaneKind};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
@@ -213,12 +213,16 @@ fn handle_terminal_event(
                 .active_pane()
                 .map(|pane| pane.terminal.mode())
                 .unwrap_or_else(TermMode::empty);
-            let Some(routed) = input::route(key, mode) else {
+            let Some(routed) = input::route(key, mode, state.prompt_focused) else {
                 return;
             };
             match routed {
                 Routed::Action(action) => {
                     update::apply(action, state);
+                    *dirty = true;
+                }
+                Routed::Editor(command) => {
+                    update::apply_editor(state, command);
                     *dirty = true;
                 }
                 Routed::Pane(bytes) => {
@@ -229,6 +233,11 @@ fn handle_terminal_event(
             }
         }
         TerminalEvent::Paste(text) => {
+            if state.prompt_focused {
+                update::apply_editor(state, EditorCommand::InsertText(text));
+                *dirty = true;
+                return;
+            }
             let id = state.active_tab().layout.focus();
             let bracketed = state
                 .active_pane()
@@ -274,17 +283,18 @@ fn handle_terminal_event(
                     update::begin_prompt_resize(state);
                     *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
-                    let selectable = matches!(
+                    let row = mouse.row - inner.y;
+                    let col = mouse.column - inner.x;
+                    if pane == state.prompt.id() {
+                        update::focus_prompt(state);
+                        update::begin_selection(state, pane, row, col);
+                        *dirty = true;
+                    } else if matches!(
                         state.pane_anywhere(pane).map(|pane| pane.kind),
-                        Some(PaneKind::Terminal | PaneKind::Prompt)
-                    );
-                    if selectable {
-                        update::begin_selection(
-                            state,
-                            pane,
-                            mouse.row - inner.y,
-                            mouse.column - inner.x,
-                        );
+                        Some(PaneKind::Terminal)
+                    ) {
+                        update::focus_pane(state, pane);
+                        update::begin_selection(state, pane, row, col);
                         *dirty = true;
                     } else {
                         update::clear_selection(state);

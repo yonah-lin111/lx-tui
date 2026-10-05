@@ -30,23 +30,17 @@ fn demo_active_tab_is_terminal() {
 }
 
 #[test]
-fn prompt_is_global_and_has_selectable_content() {
+fn prompt_starts_empty_and_is_editable() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
-    let pane = state.pane_anywhere(id);
-    assert!(pane.is_some_and(|pane| pane.kind == PaneKind::Prompt));
-    let Some(pane) = state.pane_mut_anywhere(id) else {
-        return;
-    };
-    let text = pane
-        .terminal
-        .text_in_range((0, 0), (0, 3))
-        .unwrap_or_default();
-    assert_eq!(text, "Drag");
+    assert!(state.pane_anywhere(id).is_none());
+    assert_eq!(state.prompt.text(), "");
+    state.prompt.insert_str("hello");
+    assert_eq!(state.prompt.text(), "hello");
 }
 
 #[test]
-fn all_pane_ids_include_global_prompt() {
+fn all_pane_ids_exclude_global_prompt() {
     let state = AppState::demo();
     let layout_ids: usize = state
         .workspaces
@@ -54,14 +48,13 @@ fn all_pane_ids_include_global_prompt() {
         .flat_map(|workspace| workspace.tabs.iter())
         .map(|tab| tab.layout.pane_ids().len())
         .sum();
-    assert_eq!(state.all_pane_ids().len(), layout_ids + 1);
-    assert!(state.all_pane_ids().contains(&state.prompt.id()));
+    assert_eq!(state.all_pane_ids().len(), layout_ids);
+    assert!(!state.all_pane_ids().contains(&state.prompt.id()));
 }
 
 #[test]
-fn pane_mut_anywhere_reaches_prompt() {
+fn pane_lookup_does_not_reach_prompt() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
-    let pane = state.pane_mut_anywhere(id);
-    assert!(pane.is_some());
+    assert!(state.pane_mut_anywhere(id).is_none());
 }
