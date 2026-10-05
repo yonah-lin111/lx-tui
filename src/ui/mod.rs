@@ -100,19 +100,14 @@ pub fn collapse_button_at(
         .map(|button| button.target)
 }
 
-/// 退出按钮矩形：标签栏最右端，右缘留 1 列；空间不足时不显示。
+/// 退出按钮矩形：标签栏最右端贴右缘，与右栏折叠态按钮同列；空间不足时不显示。
 pub fn exit_button(view: &layout::ViewLayout) -> Option<Rect> {
     let width = text::EXIT_LABEL.chars().count() as u16;
     let bar = view.tab_bar;
-    if bar.height == 0 || bar.width <= width + PANEL_BUTTON_MARGIN {
+    if bar.height == 0 || bar.width < width {
         return None;
     }
-    Some(Rect::new(
-        bar.right() - width - PANEL_BUTTON_MARGIN,
-        bar.y,
-        width,
-        1,
-    ))
+    Some(Rect::new(bar.right() - width, bar.y, width, 1))
 }
 
 /// 命中测试：坐标是否落在退出按钮内。

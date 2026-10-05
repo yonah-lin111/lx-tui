@@ -20,8 +20,8 @@ pub const DIVIDER_MID: &str = "─";
 pub const AGENTS_COLLAPSE_LABEL: &str = "[▼]";
 pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 
-/// 标签栏右端退出按钮。
-pub const EXIT_LABEL: &str = "[⏻ exit]";
+/// 标签栏右端退出按钮；贴右缘，与右栏折叠态按钮同列。
+pub const EXIT_LABEL: &str = "[⏻]";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
