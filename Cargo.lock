@@ -707,6 +707,7 @@ name = "lx-tui"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "base64",
  "crossterm",
  "portable-pty",
  "ratatui",

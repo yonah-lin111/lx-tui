@@ -36,7 +36,7 @@ impl PtySession {
             .openpty(to_pty_size(cols, rows))
             .map_err(io::Error::other)?;
 
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let shell = crate::platform::default_shell();
         let mut command = CommandBuilder::new(shell);
         command.env("TERM", "xterm-256color");
         if let Ok(cwd) = std::env::current_dir() {

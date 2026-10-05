@@ -5,12 +5,15 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
-use crossterm::event::{Event as TerminalEvent, EventStream, KeyEventKind};
+use crossterm::event::{
+    Event as TerminalEvent, EventStream, KeyEventKind, MouseButton, MouseEventKind,
+};
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::app::state::Mode;
+use crate::app::actions::Action;
+use crate::app::state::PaneKind;
 use crate::app::{state::AppState, update};
 use crate::config::Config;
 use crate::input::{self, InputState, Routed};
@@ -49,10 +52,10 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
 
     while !state.should_quit {
-        let rects = current_rects(tui, state, config)?;
+        let (rects, area) = current_geometry(tui, state, config)?;
         if rects != last_rects {
             update::resize_panes(state, &rects);
-            resize_sessions(&mut sessions, &rects);
+            resize_sessions(&mut sessions, &rects, state.active_tab().layout.collapsed());
             last_rects.clone_from(&rects);
             dirty = true;
         }
@@ -73,7 +76,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         tokio::select! {
             event = events.next() => match event {
                 Some(Ok(event)) => {
-                    handle_terminal_event(event, state, &mut keyboard, &mut sessions, &rects, &mut dirty);
+                    handle_terminal_event(event, state, &mut keyboard, &mut sessions, &rects, area, config, &mut dirty);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -104,10 +107,13 @@ fn spawn_sessions(
 ) -> HashMap<PaneId, PtySession> {
     let mut sessions = HashMap::new();
     for id in state.all_pane_ids() {
-        let size = state
-            .pane_anywhere(id)
-            .map(|pane| pane.terminal.size())
-            .unwrap_or(crate::terminal::GridSize { cols: 80, rows: 24 });
+        let Some(pane) = state.pane_anywhere(id) else {
+            continue;
+        };
+        if pane.kind != PaneKind::Terminal {
+            continue;
+        }
+        let size = pane.terminal.size();
         let sink = sender.clone();
         let result = PtySession::spawn(id, size.cols, size.rows, move |event| {
             let message = match event {
@@ -126,21 +132,31 @@ fn spawn_sessions(
     sessions
 }
 
-/// 当前终端尺寸下活动标签的窗格几何。
-fn current_rects(
+/// 当前终端尺寸下活动标签的窗格几何与全屏区域。
+fn current_geometry(
     tui: &mut Tui,
     state: &AppState,
     config: &Config,
-) -> io::Result<Vec<(PaneId, Rect)>> {
+) -> io::Result<(Vec<(PaneId, Rect)>, Rect)> {
     let size = tui.terminal().size()?;
     let area = Rect::new(0, 0, size.width, size.height);
     let view = ui::layout::compute(area, config, state.sidebar_collapsed);
-    Ok(layout::pane_rects(&state.active_tab().layout, view.panes))
+    Ok((
+        layout::pane_rects(&state.active_tab().layout, view.panes),
+        area,
+    ))
 }
 
-/// 随几何变化同步 PTY 窗口尺寸。
-fn resize_sessions(sessions: &mut HashMap<PaneId, PtySession>, rects: &[(PaneId, Rect)]) {
+/// 随几何变化同步 PTY 窗口尺寸；折叠窗格保持原尺寸。
+fn resize_sessions(
+    sessions: &mut HashMap<PaneId, PtySession>,
+    rects: &[(PaneId, Rect)],
+    collapsed: Option<PaneId>,
+) {
     for (id, rect) in rects {
+        if Some(*id) == collapsed {
+            continue;
+        }
         let (cols, rows) = layout::pane_inner_size(*rect);
         if let Some(session) = sessions.get_mut(id)
             && let Err(error) = session.resize(cols, rows)
@@ -156,16 +172,17 @@ fn handle_terminal_event(
     keyboard: &mut InputState,
     sessions: &mut HashMap<PaneId, PtySession>,
     rects: &[(PaneId, Rect)],
+    area: Rect,
+    config: &Config,
     dirty: &mut bool,
 ) {
     match event {
         TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
-            let overlay = state.mode == Mode::Help;
             let mode = state
                 .active_pane()
                 .map(|pane| pane.terminal.mode())
                 .unwrap_or_else(TermMode::empty);
-            let Some(routed) = input::route(key, keyboard, mode, overlay) else {
+            let Some(routed) = input::route(key, keyboard, mode) else {
                 return;
             };
             match routed {
@@ -194,6 +211,65 @@ fn handle_terminal_event(
             write_to_pane(sessions, id, &payload);
             *dirty = true;
         }
+        TerminalEvent::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(target) =
+                    ui::collapse_button_at(state, config, area, mouse.column, mouse.row)
+                {
+                    let action = match target {
+                        ui::CollapseTarget::Sidebar => Action::ToggleSidebar,
+                        ui::CollapseTarget::Prompt => Action::TogglePrompt,
+                    };
+                    update::apply(action, state, rects);
+                    *dirty = true;
+                } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+                    let selectable = matches!(
+                        state.pane_anywhere(pane).map(|pane| pane.kind),
+                        Some(PaneKind::Terminal | PaneKind::Prompt)
+                    );
+                    if selectable {
+                        update::begin_selection(
+                            state,
+                            pane,
+                            mouse.row - inner.y,
+                            mouse.column - inner.x,
+                        );
+                        *dirty = true;
+                    } else {
+                        update::clear_selection(state);
+                    }
+                } else {
+                    update::clear_selection(state);
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                let Some(selection) = state.selection else {
+                    return;
+                };
+                let pane = selection.pane();
+                let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+                    return;
+                };
+                let inner = layout::pane_inner_rect(*rect);
+                if inner.width == 0 || inner.height == 0 {
+                    return;
+                }
+                let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                update::drag_selection(state, pane, row, col);
+                *dirty = true;
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                if let Some(text) = update::finish_selection(state)
+                    && !crate::platform::write_clipboard(&text)
+                {
+                    tracing::warn!("clipboard write failed");
+                }
+                update::clear_selection(state);
+                *dirty = true;
+            }
+            _ => {}
+        },
         TerminalEvent::Resize(_, _) => *dirty = true,
         _ => {}
     }
@@ -221,4 +297,16 @@ fn write_to_pane(sessions: &mut HashMap<PaneId, PtySession>, id: PaneId, bytes: 
     {
         tracing::warn!(pane = id.raw(), %error, "pty write failed");
     }
+}
+
+/// 命中窗格内容区：返回窗格标识与其内容区矩形。
+fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, Rect)> {
+    rects.iter().find_map(|(id, rect)| {
+        let inner = layout::pane_inner_rect(*rect);
+        if inner.width > 0 && inner.height > 0 && inner.contains((column, row).into()) {
+            Some((*id, inner))
+        } else {
+            None
+        }
+    })
 }

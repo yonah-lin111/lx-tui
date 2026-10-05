@@ -1,6 +1,7 @@
-//! 终端生命周期：原始模式、备用屏幕、括号粘贴与恢复。
+//! 终端生命周期：原始模式、备用屏幕、鼠标上报与恢复。
 
 use std::io::{self, Stdout};
+use std::time::{Duration, Instant};
 
 use crossterm::cursor::Show;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
@@ -10,6 +11,10 @@ use crossterm::terminal::{
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+
+/// 退出清空输入时的静默窗口与等待上限（覆盖禁用序列到达终端前的在途上报）。
+const DRAIN_QUIET: Duration = Duration::from_millis(10);
+const DRAIN_LIMIT: Duration = Duration::from_millis(100);
 
 /// 持有终端句柄；Drop 时兜底恢复终端状态。
 pub struct Tui {
@@ -24,6 +29,7 @@ impl Tui {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        crate::platform::enable_mouse_capture(&mut stdout)?;
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok(Self {
             terminal,
@@ -43,12 +49,10 @@ impl Tui {
         }
         self.restored = true;
         disable_raw_mode()?;
-        execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableBracketedPaste,
-            Show
-        )?;
+        let backend = self.terminal.backend_mut();
+        crate::platform::disable_mouse_capture(backend)?;
+        execute!(backend, LeaveAlternateScreen, DisableBracketedPaste, Show)?;
+        drain_pending_input();
         self.terminal.show_cursor()
     }
 }
@@ -71,10 +75,28 @@ fn install_panic_hook() {
 
 fn restore_raw() -> io::Result<()> {
     disable_raw_mode()?;
-    execute!(
-        io::stdout(),
-        LeaveAlternateScreen,
-        DisableBracketedPaste,
-        Show
-    )
+    let mut stdout = io::stdout();
+    crate::platform::disable_mouse_capture(&mut stdout)?;
+    execute!(stdout, LeaveAlternateScreen, DisableBracketedPaste, Show)?;
+    drain_pending_input();
+    Ok(())
+}
+
+/// 丢弃已排队的终端输入：先给在途鼠标上报留出到达窗口，静默一段后结束。
+fn drain_pending_input() {
+    let deadline = Instant::now() + DRAIN_LIMIT;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match crossterm::event::poll(DRAIN_QUIET.min(remaining)) {
+            Ok(true) => {
+                if crossterm::event::read().is_err() {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
 }

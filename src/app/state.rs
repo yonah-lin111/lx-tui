@@ -7,23 +7,25 @@ use ratatui::layout::Direction;
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
+use super::selection::Selection;
+
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 
-/// 应用界面模式；同一时刻只处于一个模式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Help,
-}
+/// prompt 占位窗格的演示文本（承载可选择的静态内容，行宽适配窄窗格）。
+const DEMO_PROMPT: &str = concat!(
+    "Drag to select, release to copy.\r\n",
+    "拖拽选中这段文字，松开即复制。\r\n",
+    "Line 3: mixed ASCII 与宽字符。"
+);
 
 /// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端。
 #[derive(Debug)]
 pub struct AppState {
     pub should_quit: bool,
-    pub mode: Mode,
     pub sidebar_collapsed: bool,
+    pub selection: Option<Selection>,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
 }
@@ -44,9 +46,18 @@ pub struct Tab {
     panes: BTreeMap<PaneId, Pane>,
 }
 
-/// 窗格载荷：终端仿真状态与退出标记。
+/// 窗格种类：终端运行 PTY，placeholder 为空占位，prompt 为占位面板。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneKind {
+    Terminal,
+    Placeholder,
+    Prompt,
+}
+
+/// 窗格载荷：种类、终端仿真状态与退出标记。
 #[derive(Debug)]
 pub struct Pane {
+    pub kind: PaneKind,
     pub terminal: Terminal,
     pub exited: bool,
 }
@@ -65,12 +76,21 @@ impl Tab {
         }
     }
 
-    /// 演示用：左侧一窗格，右侧上下两窗格。
+    /// 演示用：左侧空占位，右侧 prompt 占位；焦点默认在空占位。
     fn demo_split(title: &str) -> Self {
         let mut layout = TileLayout::new();
-        layout.split_focused(Direction::Horizontal, 0.5);
-        layout.split_focused(Direction::Vertical, 0.6);
-        Self::with_layout(title, layout)
+        let placeholder = layout.focus();
+        let prompt = layout.split_focused(Direction::Horizontal, 0.5);
+        layout.focus_pane(placeholder);
+        let mut tab = Self::with_layout(title, layout);
+        if let Some(pane) = tab.pane_mut(placeholder) {
+            pane.kind = PaneKind::Placeholder;
+        }
+        if let Some(pane) = tab.pane_mut(prompt) {
+            pane.kind = PaneKind::Prompt;
+            let _ = pane.terminal.feed(DEMO_PROMPT.as_bytes());
+        }
+        tab
     }
 
     /// 演示用：单窗格标签。
@@ -87,11 +107,20 @@ impl Tab {
     pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut Pane> {
         self.panes.get_mut(&id)
     }
+
+    /// 当前标签中的 prompt 占位窗格。
+    pub fn prompt_pane(&self) -> Option<PaneId> {
+        self.panes
+            .iter()
+            .find(|(_, pane)| pane.kind == PaneKind::Prompt)
+            .map(|(id, _)| *id)
+    }
 }
 
 impl Pane {
     fn new() -> Self {
         Self {
+            kind: PaneKind::Terminal,
             terminal: Terminal::new(DEFAULT_COLS, DEFAULT_ROWS),
             exited: false,
         }
@@ -103,8 +132,8 @@ impl AppState {
     pub fn demo() -> Self {
         Self {
             should_quit: false,
-            mode: Mode::Normal,
             sidebar_collapsed: false,
+            selection: None,
             workspaces: vec![
                 Workspace {
                     name: "main".to_string(),
@@ -157,6 +186,18 @@ impl AppState {
             .find_map(|tab| tab.pane(id))
     }
 
+    /// 指定窗格上的选区范围（左上 -> 右下），供渲染高亮使用。
+    pub fn selection_range(&self, pane: PaneId) -> Option<((u16, u16), (u16, u16))> {
+        self.selection_for(pane).and_then(Selection::range)
+    }
+
+    /// 指定窗格上的选区。
+    pub fn selection_for(&self, pane: PaneId) -> Option<&Selection> {
+        self.selection
+            .as_ref()
+            .filter(|selection| selection.pane() == pane)
+    }
+
     /// 任意工作区/标签中的窗格（可变）；PTY 输出按窗格标识投递。
     pub fn pane_mut_anywhere(&mut self, id: PaneId) -> Option<&mut Pane> {
         for workspace in &mut self.workspaces {
@@ -189,7 +230,37 @@ mod tests {
         assert_eq!(state.workspaces.len(), 2);
         assert_eq!(state.active_workspace().name, "main");
         assert_eq!(state.active_tab().title, "shell");
-        assert_eq!(state.active_tab().layout.pane_ids().len(), 3);
+        assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+    }
+
+    #[test]
+    fn demo_split_has_placeholder_prompt_and_focus() {
+        let state = AppState::demo();
+        let tab = state.active_tab();
+        let focus = tab.layout.focus();
+        assert!(
+            tab.pane(focus)
+                .is_some_and(|pane| pane.kind == PaneKind::Placeholder)
+        );
+        let prompt = tab.prompt_pane();
+        assert!(prompt.is_some());
+        assert_ne!(Some(focus), prompt);
+    }
+
+    #[test]
+    fn demo_prompt_pane_has_selectable_content() {
+        let mut state = AppState::demo();
+        let prompt = state.active_tab().prompt_pane();
+        assert!(prompt.is_some());
+        let Some(prompt) = prompt else { return };
+        let Some(pane) = state.active_tab_mut().pane_mut(prompt) else {
+            return;
+        };
+        let text = pane
+            .terminal
+            .text_in_range((0, 0), (0, 3))
+            .unwrap_or_default();
+        assert_eq!(text, "Drag");
     }
 
     #[test]

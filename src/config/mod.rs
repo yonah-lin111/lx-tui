@@ -7,8 +7,6 @@ pub struct Config {
     pub sidebar_width: u16,
     /// 低于该宽度隐藏侧栏。
     pub narrow_width: u16,
-    /// 低于该高度精简状态栏。
-    pub short_height: u16,
     /// 最小可用宽度。
     pub min_width: u16,
     /// 最小可用高度。
@@ -20,7 +18,6 @@ impl Default for Config {
         Self {
             sidebar_width: 24,
             narrow_width: 80,
-            short_height: 20,
             min_width: 40,
             min_height: 10,
         }

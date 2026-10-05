@@ -13,6 +13,5 @@ pub enum Action {
     PrevTab,
     SelectWorkspace(usize),
     ToggleSidebar,
-    ToggleHelp,
-    CloseOverlay,
+    TogglePrompt,
 }

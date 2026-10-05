@@ -37,23 +37,13 @@ impl InputState {
 }
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
-///
-/// `overlay` 为真时按键只服务当前浮层，不进入窗格。
-pub fn route(
-    key: KeyEvent,
-    state: &mut InputState,
-    mode: TermMode,
-    overlay: bool,
-) -> Option<Routed> {
+pub fn route(key: KeyEvent, state: &mut InputState, mode: TermMode) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
-    if overlay {
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         state.pending = false;
-        return Some(match key.code {
-            KeyCode::Esc | KeyCode::Char('?') => Routed::Action(Action::CloseOverlay),
-            _ => Routed::Consumed,
-        });
+        return Some(Routed::Action(Action::Quit));
     }
     if state.pending {
         state.pending = false;
@@ -75,7 +65,7 @@ fn prefix_command(key: KeyEvent) -> Routed {
     let action = match (key.code, key.modifiers) {
         (KeyCode::Char('q'), _) => Action::Quit,
         (KeyCode::Char('b'), _) => Action::ToggleSidebar,
-        (KeyCode::Char('?'), _) => Action::ToggleHelp,
+        (KeyCode::Char('p'), _) => Action::TogglePrompt,
         (KeyCode::Tab, _) => Action::FocusNextPane,
         (KeyCode::BackTab, _) => Action::FocusPrevPane,
         (KeyCode::Char('h'), _) | (KeyCode::Left, _) => Action::MoveFocus(NavDirection::Left),
@@ -109,21 +99,11 @@ mod tests {
     fn bare_keys_go_to_pane() {
         let mut state = InputState::default();
         assert_eq!(
-            route(
-                key(KeyCode::Char('q')),
-                &mut state,
-                TermMode::empty(),
-                false
-            ),
+            route(key(KeyCode::Char('q')), &mut state, TermMode::empty()),
             Some(Routed::Pane(b"q".to_vec()))
         );
         assert_eq!(
-            route(
-                key(KeyCode::Char('h')),
-                &mut state,
-                TermMode::empty(),
-                false
-            ),
+            route(key(KeyCode::Char('h')), &mut state, TermMode::empty()),
             Some(Routed::Pane(b"h".to_vec()))
         );
     }
@@ -132,17 +112,12 @@ mod tests {
     fn prefix_key_arms_then_executes() {
         let mut state = InputState::default();
         assert_eq!(
-            route(prefix_key(), &mut state, TermMode::empty(), false),
+            route(prefix_key(), &mut state, TermMode::empty()),
             Some(Routed::Consumed)
         );
         assert!(state.prefix_pending());
         assert_eq!(
-            route(
-                key(KeyCode::Char('q')),
-                &mut state,
-                TermMode::empty(),
-                false
-            ),
+            route(key(KeyCode::Char('q')), &mut state, TermMode::empty()),
             Some(Routed::Action(Action::Quit))
         );
         assert!(!state.prefix_pending());
@@ -151,34 +126,29 @@ mod tests {
     #[test]
     fn prefix_navigation_maps_to_actions() {
         let mut state = InputState::default();
-        route(prefix_key(), &mut state, TermMode::empty(), false);
+        route(prefix_key(), &mut state, TermMode::empty());
         assert_eq!(
-            route(
-                key(KeyCode::Char('l')),
-                &mut state,
-                TermMode::empty(),
-                false
-            ),
+            route(key(KeyCode::Char('l')), &mut state, TermMode::empty()),
             Some(Routed::Action(Action::MoveFocus(NavDirection::Right)))
         );
-        route(prefix_key(), &mut state, TermMode::empty(), false);
+        route(prefix_key(), &mut state, TermMode::empty());
         assert_eq!(
-            route(
-                key(KeyCode::Char('2')),
-                &mut state,
-                TermMode::empty(),
-                false
-            ),
+            route(key(KeyCode::Char('2')), &mut state, TermMode::empty()),
             Some(Routed::Action(Action::SelectWorkspace(1)))
+        );
+        route(prefix_key(), &mut state, TermMode::empty());
+        assert_eq!(
+            route(key(KeyCode::Char('p')), &mut state, TermMode::empty()),
+            Some(Routed::Action(Action::TogglePrompt))
         );
     }
 
     #[test]
     fn double_prefix_passes_literal_control_key() {
         let mut state = InputState::default();
-        route(prefix_key(), &mut state, TermMode::empty(), false);
+        route(prefix_key(), &mut state, TermMode::empty());
         assert_eq!(
-            route(prefix_key(), &mut state, TermMode::empty(), false),
+            route(prefix_key(), &mut state, TermMode::empty()),
             Some(Routed::Pane(vec![0x02]))
         );
     }
@@ -186,40 +156,39 @@ mod tests {
     #[test]
     fn unbound_prefix_command_is_consumed() {
         let mut state = InputState::default();
-        route(prefix_key(), &mut state, TermMode::empty(), false);
+        route(prefix_key(), &mut state, TermMode::empty());
         assert_eq!(
-            route(
-                key(KeyCode::Char('z')),
-                &mut state,
-                TermMode::empty(),
-                false
-            ),
+            route(key(KeyCode::Char('z')), &mut state, TermMode::empty()),
             Some(Routed::Consumed)
         );
     }
 
     #[test]
-    fn overlay_takes_keys_and_escape_closes() {
+    fn ctrl_c_quits_immediately() {
         let mut state = InputState::default();
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(
-            route(key(KeyCode::Char('q')), &mut state, TermMode::empty(), true),
-            Some(Routed::Consumed)
+            route(key, &mut state, TermMode::empty()),
+            Some(Routed::Action(Action::Quit))
         );
+        route(prefix_key(), &mut state, TermMode::empty());
+        assert!(state.prefix_pending());
         assert_eq!(
-            route(key(KeyCode::Esc), &mut state, TermMode::empty(), true),
-            Some(Routed::Action(Action::CloseOverlay))
+            route(key, &mut state, TermMode::empty()),
+            Some(Routed::Action(Action::Quit))
         );
+        assert!(!state.prefix_pending());
     }
 
     #[test]
     fn navigation_keys_encode_to_pane_when_bare() {
         let mut state = InputState::default();
         assert_eq!(
-            route(key(KeyCode::Tab), &mut state, TermMode::empty(), false),
+            route(key(KeyCode::Tab), &mut state, TermMode::empty()),
             Some(Routed::Pane(b"\t".to_vec()))
         );
         assert_eq!(
-            route(key(KeyCode::Up), &mut state, TermMode::APP_CURSOR, false),
+            route(key(KeyCode::Up), &mut state, TermMode::APP_CURSOR),
             Some(Routed::Pane(b"\x1bOA".to_vec()))
         );
     }

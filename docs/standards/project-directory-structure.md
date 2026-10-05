@@ -19,10 +19,11 @@ lx-tui/
   src/
     main.rs                     启动编排：日志、终端初始化与恢复
     lib.rs                      crate 根；main.rs 保持薄入口，逻辑放模块
-    layout.rs                   BSP 平铺模型与几何计算，纯函数、不渲染
+    layout.rs                   BSP 平铺模型（含折叠窄条）与几何计算，纯函数、不渲染
     app/                        应用状态与更新逻辑，纯数据、无 IO、可测试
       mod.rs
-      state.rs                  唯一应用状态定义（含各窗格终端仿真状态）
+      state.rs                  唯一应用状态定义（含窗格种类与终端仿真状态）
+      selection.rs              选区模型（终端窗格内文本选择）
       actions.rs                行为枚举
       update.rs                 行为到状态的转换、窗格尺寸同步与输出喂入
     ui/                         渲染层，只读状态
@@ -40,7 +41,7 @@ lx-tui/
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-    platform/                   OS 专属实现，仅此处出现 OS API
+    platform/                   OS 专属实现（剪贴板、鼠标捕获、默认 shell）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       静态资源，按需创建

@@ -5,6 +5,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::event::{Event as EmulatorEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Grid};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection as TermSelection, SelectionType};
 use alacritty_terminal::term::cell::Cell;
 use alacritty_terminal::term::{Config as EmulatorConfig, RenderableContent, Term, TermMode};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
@@ -152,6 +154,23 @@ impl Terminal {
         }
         Some((row as usize, content.cursor.point.column.0))
     }
+
+    /// 提取视口范围内（含端点）的文本；宽字符与换行交给仿真器处理。
+    pub fn text_in_range(&mut self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
+        let (first, last) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let point =
+            |(row, col): (u16, u16)| Point::new(Line(i32::from(row)), Column(usize::from(col)));
+        let mut selection = TermSelection::new(SelectionType::Simple, point(first), Side::Left);
+        selection.update(point(last), Side::Right);
+        self.term.selection = Some(selection);
+        let text = self.term.selection_to_string();
+        self.term.selection = None;
+        text
+    }
 }
 
 impl fmt::Debug for Terminal {
@@ -211,5 +230,31 @@ mod tests {
         assert_eq!(term.size(), GridSize { cols: 40, rows: 12 });
         term.feed(b"x");
         assert_eq!(term.grid()[Line(0)][Column(0)].c, 'x');
+    }
+
+    #[test]
+    fn extracts_text_from_range() {
+        let mut term = Terminal::new(20, 3);
+        term.feed(b"hello world");
+        assert_eq!(term.text_in_range((0, 0), (0, 4)).as_deref(), Some("hello"));
+        assert_eq!(term.text_in_range((0, 4), (0, 0)).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn extracts_multi_line_range() {
+        let mut term = Terminal::new(20, 3);
+        term.feed(b"abc\r\ndef");
+        assert_eq!(
+            term.text_in_range((0, 0), (1, 2)).as_deref(),
+            Some("abc\ndef")
+        );
+    }
+
+    #[test]
+    fn extracts_wide_chars_fully() {
+        let mut term = Terminal::new(10, 2);
+        term.feed("你好".as_bytes());
+        assert_eq!(term.text_in_range((0, 0), (0, 3)).as_deref(), Some("你好"));
+        assert_eq!(term.text_in_range((0, 0), (0, 1)).as_deref(), Some("你"));
     }
 }

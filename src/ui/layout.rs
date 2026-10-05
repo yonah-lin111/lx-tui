@@ -3,6 +3,7 @@
 use ratatui::layout::Rect;
 
 use crate::config::Config;
+use crate::layout::COLLAPSED_STRIP;
 
 /// 主界面四个区域的矩形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,11 +14,14 @@ pub struct ViewLayout {
     pub status: Rect,
 }
 
-/// 划分主界面；宽度不足或折叠时侧栏为零宽。
+/// 划分主界面；侧栏折叠且宽度充足时保留窄条，否则为零宽。
 pub fn compute(area: Rect, config: &Config, sidebar_collapsed: bool) -> ViewLayout {
-    let show_sidebar = !sidebar_collapsed && area.width >= config.narrow_width;
+    let wide_enough = area.width >= config.narrow_width;
+    let show_sidebar = !sidebar_collapsed && wide_enough;
     let sidebar_width = if show_sidebar {
         config.sidebar_width.min(area.width)
+    } else if sidebar_collapsed && wide_enough {
+        COLLAPSED_STRIP
     } else {
         0
     };
@@ -81,10 +85,19 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_hides_sidebar() {
+    fn collapsed_sidebar_keeps_strip() {
         let config = Config::default();
         let view = compute(Rect::new(0, 0, 120, 30), &config, true);
+        assert_eq!(view.sidebar.width, COLLAPSED_STRIP);
+        assert_eq!(view.panes.width, 120 - COLLAPSED_STRIP);
+    }
+
+    #[test]
+    fn collapsed_narrow_sidebar_is_hidden() {
+        let config = Config::default();
+        let view = compute(Rect::new(0, 0, 60, 30), &config, true);
         assert_eq!(view.sidebar.width, 0);
+        assert_eq!(view.panes.width, 60);
     }
 
     #[test]

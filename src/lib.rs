@@ -7,6 +7,7 @@ pub mod config;
 pub mod event;
 pub mod input;
 pub mod layout;
+pub mod platform;
 pub mod pty;
 pub mod terminal;
 pub mod tui;

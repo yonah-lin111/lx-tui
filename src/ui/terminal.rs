@@ -7,10 +7,17 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::app::selection::Selection;
 use crate::terminal::Terminal;
 
-/// 渲染终端内容；`focused` 为真时叠加光标反显。
-pub fn render(area: Rect, buf: &mut Buffer, terminal: &Terminal, focused: bool) {
+/// 渲染终端内容；`focused` 为真时叠加光标反显，`selection` 命中的单元格反显高亮。
+pub fn render(
+    area: Rect,
+    buf: &mut Buffer,
+    terminal: &Terminal,
+    focused: bool,
+    selection: Option<&Selection>,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -46,7 +53,11 @@ pub fn render(area: Rect, buf: &mut Buffer, terminal: &Terminal, focused: bool) 
             } else {
                 target.set_char(cell.c);
             }
-            target.set_style(cell_style(cell));
+            let mut style = cell_style(cell);
+            if selection.is_some_and(|selection| selection.contains(row as u16, col)) {
+                style = style.add_modifier(Modifier::REVERSED);
+            }
+            target.set_style(style);
             target.set_diff_option(CellDiffOption::None);
         }
     }
@@ -126,7 +137,7 @@ mod tests {
         let mut terminal = Terminal::new(10, 2);
         terminal.feed("hi 你好".as_bytes());
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-        render(Rect::new(0, 0, 10, 2), &mut buf, &terminal, false);
+        render(Rect::new(0, 0, 10, 2), &mut buf, &terminal, false, None);
         assert_eq!(buf[(0, 0)].symbol(), "h");
         assert_eq!(buf[(1, 0)].symbol(), "i");
         assert_eq!(buf[(3, 0)].symbol(), "你");
@@ -140,7 +151,27 @@ mod tests {
         let mut terminal = Terminal::new(10, 2);
         terminal.feed(b"ab");
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-        render(Rect::new(0, 0, 10, 2), &mut buf, &terminal, true);
+        render(Rect::new(0, 0, 10, 2), &mut buf, &terminal, true, None);
         assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn selection_marks_cells_reversed() {
+        let mut terminal = Terminal::new(10, 2);
+        terminal.feed(b"hello");
+        let mut selection = Selection::begin(crate::layout::PaneId::from_raw_for_test(1), 0, 1);
+        selection.drag(0, 3);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+        render(
+            Rect::new(0, 0, 10, 2),
+            &mut buf,
+            &terminal,
+            false,
+            Some(&selection),
+        );
+        assert!(buf[(1, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(buf[(3, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
+        assert!(!buf[(4, 0)].modifier.contains(Modifier::REVERSED));
     }
 }
