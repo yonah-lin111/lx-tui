@@ -1,4 +1,4 @@
-//! 键盘路由：仅 Ctrl+C 退出应用，其余按键原样编码进焦点窗格。
+//! 键盘路由：仅 Ctrl+Q 退出应用，其余按键（含 Ctrl+C）原样编码进焦点窗格。
 
 pub mod encode;
 
@@ -21,7 +21,7 @@ pub fn route(key: KeyEvent, mode: TermMode) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return Some(Routed::Action(Action::Quit));
     }
     encode::encode_key(key, mode).map(Routed::Pane)

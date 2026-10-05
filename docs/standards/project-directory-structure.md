@@ -34,7 +34,7 @@ lx-tui/
       terminal.rs               终端网格到 Buffer 的渲染
       widgets/                  无业务语义的可复用组件，按需创建
     input/                      键盘路由与编码
-      mod.rs                    键盘路由（仅 Ctrl+C 退出，其余进焦点窗格）
+      mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）
       encode.rs                 按键到终端字节序列
     event/                      唯一事件循环：tokio select、PTY 消息与渲染调度
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO

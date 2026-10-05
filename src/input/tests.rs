@@ -19,11 +19,20 @@ fn bare_keys_go_to_pane() {
 }
 
 #[test]
-fn ctrl_c_quits() {
-    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+fn ctrl_q_quits() {
+    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
         route(key, TermMode::empty()),
         Some(Routed::Action(Action::Quit))
+    );
+}
+
+#[test]
+fn ctrl_c_is_passed_to_pane() {
+    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    assert_eq!(
+        route(key, TermMode::empty()),
+        Some(Routed::Pane(vec![0x03]))
     );
 }
 
