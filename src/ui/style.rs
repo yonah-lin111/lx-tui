@@ -25,14 +25,35 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
+/// 状态：失败（Red）。
+pub fn error() -> Style {
+    Style::default().fg(Color::Red)
+}
+
+/// 浮层标题：正文加粗。
+pub fn strong() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn styles_stay_palette_native() {
-        for style in [text(), muted(), accent(), border(true), border(false)] {
-            assert!(matches!(style.fg, None | Some(Color::Cyan)));
+        for style in [
+            text(),
+            muted(),
+            accent(),
+            border(true),
+            border(false),
+            error(),
+            strong(),
+        ] {
+            assert!(matches!(
+                style.fg,
+                None | Some(Color::Cyan) | Some(Color::Red)
+            ));
         }
     }
 }

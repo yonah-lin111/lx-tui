@@ -1,5 +1,7 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
+use std::time::Instant;
+
 use ratatui::layout::Rect;
 
 use crate::layout::{self, PaneId};
@@ -7,6 +9,7 @@ use crate::layout::{self, PaneId};
 use super::actions::Action;
 use super::selection::Selection;
 use super::state::{AppState, PaneKind};
+use super::toast::Toast;
 
 /// 应用行为。
 pub fn apply(action: Action, state: &mut AppState) {
@@ -102,10 +105,51 @@ pub fn set_prompt_hover(state: &mut AppState, hover: bool) -> bool {
     true
 }
 
+/// 展示 toast；单条替换并重置倒计时。
+pub fn show_toast(state: &mut AppState, toast: Toast) {
+    state.toast = Some(toast);
+}
+
+/// 关闭当前 toast。
+pub fn dismiss_toast(state: &mut AppState) {
+    state.toast = None;
+}
+
+/// 更新 toast 悬停状态；返回是否发生变化。
+pub fn set_toast_hover(state: &mut AppState, hovered: bool) -> bool {
+    let Some(toast) = state.toast.as_mut() else {
+        return false;
+    };
+    if toast.hovered() == hovered {
+        return false;
+    }
+    toast.set_hovered(hovered);
+    true
+}
+
+/// 清除已过期的 toast；返回是否发生变化（用于置脏重绘）。
+pub fn tick(state: &mut AppState, now: Instant) -> bool {
+    let expired = state
+        .toast
+        .as_ref()
+        .is_some_and(|toast| toast.is_expired(now));
+    if expired {
+        state.toast = None;
+    }
+    expired
+}
+
+/// 最近一次 toast 到期时间；事件循环据此安排唤醒。
+pub fn next_deadline(state: &AppState) -> Option<Instant> {
+    state.toast.as_ref().and_then(Toast::next_deadline)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::toast::{TOAST_DURATION, ToastKind};
     use crate::terminal::GridSize;
+    use std::time::Duration;
 
     #[test]
     fn quit_sets_flag() {
@@ -246,5 +290,55 @@ mod tests {
         assert!(!set_prompt_hover(&mut state, true));
         assert!(set_prompt_hover(&mut state, false));
         assert!(!state.prompt_hover);
+    }
+
+    #[test]
+    fn show_toast_replaces_previous_and_resets_deadline() {
+        let mut state = AppState::demo();
+        let now = Instant::now();
+        show_toast(&mut state, Toast::new(ToastKind::Info, "first", None, now));
+        show_toast(&mut state, Toast::new(ToastKind::Info, "second", None, now));
+        let toast = state.toast.as_ref().expect("toast is shown");
+        assert_eq!(toast.message, "second");
+        assert_eq!(toast.next_deadline(), Some(now + TOAST_DURATION));
+    }
+
+    #[test]
+    fn tick_clears_expired_toast_only() {
+        let mut state = AppState::demo();
+        let now = Instant::now();
+        show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
+        assert!(!tick(
+            &mut state,
+            now + TOAST_DURATION - Duration::from_millis(1)
+        ));
+        assert!(state.toast.is_some());
+        assert!(tick(&mut state, now + TOAST_DURATION));
+        assert!(state.toast.is_none());
+        assert!(!tick(&mut state, now + TOAST_DURATION));
+    }
+
+    #[test]
+    fn toast_hover_suspends_expiry_until_pointer_leaves() {
+        let mut state = AppState::demo();
+        let now = Instant::now();
+        show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
+        assert!(set_toast_hover(&mut state, true));
+        assert!(!set_toast_hover(&mut state, true));
+        assert!(!tick(&mut state, now + Duration::from_secs(60)));
+        assert!(state.toast.is_some());
+        assert_eq!(next_deadline(&state), None);
+        assert!(set_toast_hover(&mut state, false));
+        assert!(tick(&mut state, now + Duration::from_secs(60)));
+        assert!(state.toast.is_none());
+    }
+
+    #[test]
+    fn hover_without_toast_is_noop() {
+        let mut state = AppState::demo();
+        assert!(!set_toast_hover(&mut state, true));
+        assert_eq!(next_deadline(&state), None);
+        dismiss_toast(&mut state);
+        assert!(state.toast.is_none());
     }
 }

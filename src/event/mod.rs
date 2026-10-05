@@ -14,6 +14,7 @@ use tokio_stream::StreamExt;
 
 use crate::app::actions::Action;
 use crate::app::state::{AppState, PaneKind};
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
 use crate::input::{self, Routed};
@@ -52,11 +53,14 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
 
     while !state.should_quit {
-        let (rects, view) = current_geometry(tui, state, config)?;
-        if rects != last_rects {
-            update::resize_panes(state, &rects);
-            resize_sessions(&mut sessions, &rects);
-            last_rects.clone_from(&rects);
+        let geometry = current_geometry(tui, state, config)?;
+        if geometry.rects != last_rects {
+            update::resize_panes(state, &geometry.rects);
+            resize_sessions(&mut sessions, &geometry.rects);
+            last_rects.clone_from(&geometry.rects);
+            dirty = true;
+        }
+        if update::tick(state, Instant::now()) {
             dirty = true;
         }
 
@@ -67,16 +71,19 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
             last_draw = Instant::now();
         }
 
-        let wait = if dirty {
+        let mut wait = if dirty {
             FRAME_INTERVAL.saturating_sub(last_draw.elapsed())
         } else {
             IDLE_WAIT
         };
+        if let Some(deadline) = update::next_deadline(state) {
+            wait = wait.min(deadline.saturating_duration_since(Instant::now()));
+        }
 
         tokio::select! {
             event = events.next() => match event {
                 Some(Ok(event)) => {
-                    handle_terminal_event(event, state, &mut sessions, &rects, &view, config, &mut dirty);
+                    handle_terminal_event(event, state, &mut sessions, &geometry, config, &mut dirty);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -140,18 +147,21 @@ fn initialize_prompt_width(tui: &mut Tui, state: &mut AppState, config: &Config)
     Ok(())
 }
 
+/// 当前帧几何：整屏区域、窗格矩形与区域划分；渲染、命中测试与 PTY 尺寸同步共用。
+struct Geometry {
+    screen: Rect,
+    rects: Vec<(PaneId, Rect)>,
+    view: ui::layout::ViewLayout,
+}
+
 /// 当前终端尺寸下活动标签的窗格几何（含 prompt 右栏）与屏幕区域划分。
 ///
 /// 右栏折叠时不参与命中、选择与尺寸同步，展开时按当前几何恢复。
-fn current_geometry(
-    tui: &mut Tui,
-    state: &AppState,
-    config: &Config,
-) -> io::Result<(Vec<(PaneId, Rect)>, ui::layout::ViewLayout)> {
+fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Result<Geometry> {
     let size = tui.terminal().size()?;
-    let area = Rect::new(0, 0, size.width, size.height);
+    let screen = Rect::new(0, 0, size.width, size.height);
     let view = ui::layout::compute(
-        area,
+        screen,
         config,
         state.sidebar_collapsed,
         state.prompt_collapsed,
@@ -165,7 +175,11 @@ fn current_geometry(
     if !state.prompt_collapsed {
         rects.push((state.prompt.id(), view.prompt));
     }
-    Ok((rects, view))
+    Ok(Geometry {
+        screen,
+        rects,
+        view,
+    })
 }
 
 /// 随几何变化同步 PTY 窗口尺寸。
@@ -184,11 +198,15 @@ fn handle_terminal_event(
     event: TerminalEvent,
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
-    rects: &[(PaneId, Rect)],
-    view: &ui::layout::ViewLayout,
+    geometry: &Geometry,
     config: &Config,
     dirty: &mut bool,
 ) {
+    let Geometry {
+        screen,
+        rects,
+        view,
+    } = geometry;
     match event {
         TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
             let mode = state
@@ -225,6 +243,13 @@ fn handle_terminal_event(
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config)
+                    && toast.contains((mouse.column, mouse.row).into())
+                {
+                    update::dismiss_toast(state);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(target) = ui::collapse_button_at(view, mouse.column, mouse.row) {
                     let action = match target {
                         ui::CollapseTarget::Sidebar => Action::ToggleSidebar,
@@ -290,17 +315,34 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if let Some(text) = update::finish_selection(state)
-                    && !crate::platform::write_clipboard(&text)
-                {
-                    tracing::warn!("clipboard write failed");
+                if let Some(text) = update::finish_selection(state) {
+                    let anchor = state.selection.map(|selection| selection.pane());
+                    let now = Instant::now();
+                    if crate::platform::write_clipboard(&text) {
+                        update::show_toast(
+                            state,
+                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now),
+                        );
+                    } else {
+                        tracing::warn!("clipboard write failed");
+                        update::show_toast(
+                            state,
+                            Toast::new(ToastKind::Error, ui::text::TOAST_COPY_FAILED, anchor, now),
+                        );
+                    }
                 }
                 update::clear_selection(state);
                 *dirty = true;
             }
             MouseEventKind::Moved => {
-                let hover = layout::resize_boundary_at(rects, mouse.column, mouse.row)
-                    .is_some_and(|(_, right)| right == state.prompt.id());
+                let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)
+                    .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
+                if update::set_toast_hover(state, hovering_toast) {
+                    *dirty = true;
+                }
+                let hover = !hovering_toast
+                    && layout::resize_boundary_at(rects, mouse.column, mouse.row)
+                        .is_some_and(|(_, right)| right == state.prompt.id());
                 if update::set_prompt_hover(state, hover) {
                     let shape = if hover {
                         crate::platform::PointerShape::EwResize

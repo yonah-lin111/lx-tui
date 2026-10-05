@@ -3,4 +3,5 @@
 pub mod actions;
 pub mod selection;
 pub mod state;
+pub mod toast;
 pub mod update;

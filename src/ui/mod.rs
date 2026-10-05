@@ -4,6 +4,7 @@ pub mod layout;
 pub mod style;
 pub mod terminal;
 pub mod text;
+pub mod toast;
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -30,6 +31,11 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         state.prompt_collapsed,
         state.prompt_width,
     );
+    let pane_rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+    );
 
     if view.sidebar.width > 0 {
         if state.sidebar_collapsed {
@@ -39,10 +45,11 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         }
     }
     render_tab_bar(frame, view.tab_bar, state);
-    render_panes(frame, view.panes, state, config);
+    render_panes(frame, &pane_rects, state);
     render_prompt(frame, view.prompt, state);
     render_collapse_buttons(frame, &view);
     render_resize_hint(frame, &view, state);
+    toast::render(frame, area, state, &view, &pane_rects, config);
 }
 
 /// 折叠面板的按钮目标。
@@ -200,27 +207,24 @@ fn render_tab_bar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// 主区域：BSP 平铺窗格。
-fn render_panes(frame: &mut Frame<'_>, area: Rect, state: &AppState, config: &Config) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
+/// 主区域：BSP 平铺窗格；矩形由调用方按当前几何计算，与命中测试共用。
+fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &AppState) {
     let tab = state.active_tab();
     let focus = tab.layout.focus();
-    for (id, rect) in crate::layout::pane_rects(&tab.layout, area, config.min_pane_width) {
+    for (id, rect) in pane_rects {
         if rect.width == 0 || rect.height == 0 {
             continue;
         }
-        let Some(pane) = tab.pane(id) else {
+        let Some(pane) = tab.pane(*id) else {
             continue;
         };
-        let focused = id == focus;
+        let focused = *id == focus;
         let title_style = if focused {
             style::accent()
         } else {
             style::muted()
         };
-        let mut title = pane_display_title(id, pane);
+        let mut title = pane_display_title(*id, pane);
         if pane.exited {
             title.push_str(" (exited)");
         }
@@ -228,8 +232,8 @@ fn render_panes(frame: &mut Frame<'_>, area: Rect, state: &AppState, config: &Co
             .border_type(BorderType::Rounded)
             .border_style(style::border(focused))
             .title(Span::styled(format!(" {title} "), title_style));
-        let inner = block.inner(rect);
-        frame.render_widget(block, rect);
+        let inner = block.inner(*rect);
+        frame.render_widget(block, *rect);
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -240,7 +244,7 @@ fn render_panes(frame: &mut Frame<'_>, area: Rect, state: &AppState, config: &Co
                     frame.buffer_mut(),
                     &pane.terminal,
                     focused,
-                    state.selection_for(id),
+                    state.selection_for(*id),
                 );
             }
             PaneKind::Placeholder => {}
@@ -325,9 +329,11 @@ fn render_min_size_notice(frame: &mut Frame<'_>, area: Rect, config: &Config) {
 mod tests {
     use super::*;
     use crate::app::actions::Action;
+    use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
     use crate::app::update;
     use ratatui::Terminal as RatatuiTerminal;
     use ratatui::backend::TestBackend;
+    use std::time::Instant;
 
     fn render_lines(state: &AppState) -> Vec<String> {
         let config = Config::default();
@@ -481,5 +487,73 @@ mod tests {
         assert!(!lines.iter().any(|line| line.contains("lx-tui")));
         let last = lines.last().map(String::as_str).unwrap_or_default();
         assert!(last.contains('╰'), "last row should be pane border");
+    }
+
+    #[test]
+    fn toast_renders_title_and_message() {
+        let mut state = AppState::demo();
+        let anchor = state.prompt.id();
+        update::show_toast(
+            &mut state,
+            Toast::new(
+                ToastKind::Info,
+                text::TOAST_COPIED,
+                Some(anchor),
+                Instant::now(),
+            )
+            .with_title("Clipboard"),
+        );
+        let lines = render_lines(&state);
+        assert!(lines.iter().any(|line| line.contains("Clipboard")));
+        assert!(lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
+    }
+
+    #[test]
+    fn expired_toast_is_not_rendered() {
+        let mut state = AppState::demo();
+        update::show_toast(
+            &mut state,
+            Toast::new(ToastKind::Info, text::TOAST_COPIED, None, Instant::now()),
+        );
+        update::tick(&mut state, Instant::now() + TOAST_DURATION);
+        let lines = render_lines(&state);
+        assert!(!lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
+    }
+
+    #[test]
+    fn error_toast_uses_red_border() {
+        let mut state = AppState::demo();
+        let anchor = state.prompt.id();
+        update::show_toast(
+            &mut state,
+            Toast::new(
+                ToastKind::Error,
+                text::TOAST_COPY_FAILED,
+                Some(anchor),
+                Instant::now(),
+            ),
+        );
+        let config = Config::default();
+        let view = view_for(&state);
+        let pane_rects = crate::layout::pane_rects(
+            &state.active_tab().layout,
+            view.panes,
+            config.min_pane_width,
+        );
+        let area = toast::rect(
+            &state,
+            &view,
+            &pane_rects,
+            Rect::new(0, 0, 100, 24),
+            &config,
+        )
+        .expect("toast area is resolvable");
+        let mut terminal =
+            RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+        if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+            panic!("draw failed: {error}");
+        }
+        let buffer = terminal.backend().buffer().clone();
+        assert_eq!(buffer[(area.x, area.y)].fg, ratatui::style::Color::Red);
     }
 }

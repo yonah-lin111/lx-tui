@@ -6,6 +6,7 @@ use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
 use super::selection::Selection;
+use super::toast::Toast;
 
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
 const DEFAULT_COLS: u16 = 80;
@@ -27,6 +28,7 @@ const DEMO_PROMPT: &str = concat!(
 pub struct AppState {
     pub should_quit: bool,
     pub sidebar_collapsed: bool,
+    pub toast: Option<Toast>,
     pub selection: Option<Selection>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
@@ -156,6 +158,7 @@ impl AppState {
         Self {
             should_quit: false,
             sidebar_collapsed: false,
+            toast: None,
             selection: None,
             resizing_prompt: false,
             prompt_hover: false,
