@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2024"
 description = "LX 终端工作区 TUI"
 
-[[bin]]
-name = "lx"
-path = "src/main.rs"
-
 [dependencies]
 alacritty_terminal = "0.26.0"
 base64 = "0.22"
