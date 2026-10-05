@@ -225,6 +225,9 @@ mod tests {
     fn selection_ignores_non_terminal_pane() {
         let mut state = AppState::demo();
         let focus = state.active_tab().layout.focus();
+        if let Some(pane) = state.active_tab_mut().pane_mut(focus) {
+            pane.kind = PaneKind::Placeholder;
+        }
         begin_selection(&mut state, focus, 0, 0);
         drag_selection(&mut state, focus, 0, 3);
         assert_eq!(finish_selection(&mut state), None);

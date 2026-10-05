@@ -116,18 +116,8 @@ impl Tab {
         }
     }
 
-    /// 演示用：单窗格空占位标签。
-    fn demo_placeholder(title: &str) -> Self {
-        let mut tab = Self::with_layout(title, TileLayout::new());
-        let placeholder = tab.layout.focus();
-        if let Some(pane) = tab.pane_mut(placeholder) {
-            pane.kind = PaneKind::Placeholder;
-        }
-        tab
-    }
-
-    /// 演示用：单窗格终端标签。
-    fn demo_single(title: &str) -> Self {
+    /// 单窗格终端标签。
+    fn single_terminal(title: &str) -> Self {
         Self::with_layout(title, TileLayout::new())
     }
 
@@ -152,8 +142,30 @@ impl Pane {
     }
 }
 
+/// 当前路径无最后一段（根路径）或不可用时的兜底工作区名。
+const FALLBACK_WORKSPACE_NAME: &str = "workspace";
+
+/// 工作区名：当前进程工作路径的最后一段；解析失败回退常量。
+fn workspace_name() -> String {
+    match std::env::current_dir() {
+        Ok(path) => workspace_name_from(&path),
+        // 读不到 cwd 属于极端环境问题，工作区名兜底即可，不阻断启动。
+        Err(_) => FALLBACK_WORKSPACE_NAME.to_string(),
+    }
+}
+
+/// 路径的最后一段；根路径、空段或非 UTF-8 名称回退常量。
+fn workspace_name_from(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(FALLBACK_WORKSPACE_NAME)
+        .to_string()
+}
+
 impl AppState {
-    /// 构造演示状态：两个工作区，单窗格标签，加全局 prompt 右栏。
+    /// 构造初始状态：单个工作区（以当前路径末段命名），shell 与 logs 两个终端标签，
+    /// 加全局 prompt 右栏。
     pub fn demo() -> Self {
         Self {
             should_quit: false,
@@ -165,18 +177,11 @@ impl AppState {
             prompt_collapsed: false,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_width: DEFAULT_PROMPT_WIDTH,
-            workspaces: vec![
-                Workspace {
-                    name: "main".to_string(),
-                    tabs: vec![Tab::demo_placeholder("shell"), Tab::demo_single("logs")],
-                    active_tab: 0,
-                },
-                Workspace {
-                    name: "notes".to_string(),
-                    tabs: vec![Tab::demo_single("notes")],
-                    active_tab: 0,
-                },
-            ],
+            workspaces: vec![Workspace {
+                name: workspace_name(),
+                tabs: vec![Tab::single_terminal("shell"), Tab::single_terminal("logs")],
+                active_tab: 0,
+            }],
             active_workspace: 0,
         }
     }
@@ -259,24 +264,31 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn demo_state_has_expected_shape() {
         let state = AppState::demo();
-        assert_eq!(state.workspaces.len(), 2);
-        assert_eq!(state.active_workspace().name, "main");
+        assert_eq!(state.workspaces.len(), 1);
+        assert_eq!(state.active_workspace().name, workspace_name());
         assert_eq!(state.active_tab().title, "shell");
         assert_eq!(state.active_tab().layout.pane_ids().len(), 1);
     }
 
     #[test]
-    fn demo_tabs_are_single_placeholder_panes() {
+    fn workspace_name_uses_current_path_last_segment() {
+        assert_eq!(workspace_name_from(Path::new("/a/b/lx-tui")), "lx-tui");
+        assert_eq!(workspace_name_from(Path::new("/")), FALLBACK_WORKSPACE_NAME);
+    }
+
+    #[test]
+    fn demo_active_tab_is_terminal() {
         let state = AppState::demo();
         let tab = state.active_tab();
         let focus = tab.layout.focus();
         assert!(
             tab.pane(focus)
-                .is_some_and(|pane| pane.kind == PaneKind::Placeholder)
+                .is_some_and(|pane| pane.kind == PaneKind::Terminal)
         );
     }
 

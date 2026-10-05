@@ -197,7 +197,7 @@ fn render_resize_hint(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &
     }
 }
 
-/// 侧栏：工作区一级导航。
+/// 侧栏：上半工作区列表，竖直中线的分割线标题为 agents，下半为 agents 占位区。
 fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -222,7 +222,61 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
             format!(" {} ", text::SIDEBAR_TITLE),
             style::muted(),
         ));
-    frame.render_widget(List::new(items).block(block), area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if inner.height == 1 {
+        frame.render_widget(List::new(items), inner);
+        return;
+    }
+    let workspace_area = Rect {
+        height: inner.height / 2,
+        ..inner
+    };
+    frame.render_widget(List::new(items), workspace_area);
+    let divider = Rect {
+        y: inner.y + workspace_area.height,
+        height: 1,
+        ..inner
+    };
+    render_sidebar_divider(frame, divider);
+}
+
+/// 侧栏分区线：贯穿内容宽度，` agents ` 标题嵌入线内；过窄时只画线。
+fn render_sidebar_divider(frame: &mut Frame<'_>, row: Rect) {
+    if row.width < 2 {
+        return;
+    }
+    let label = format!(" {} ", text::SIDEBAR_AGENTS_TITLE);
+    let label_start = row.x + 2;
+    let label_end = label_start.saturating_add(label.chars().count() as u16);
+    let label_fits = label_end < row.right();
+    let buf = frame.buffer_mut();
+    for x in row.x..row.right() {
+        if let Some(cell) = buf.cell_mut((x, row.y)) {
+            cell.reset();
+            cell.set_symbol(if x == row.x {
+                text::DIVIDER_LEFT
+            } else if x == row.right() - 1 {
+                text::DIVIDER_RIGHT
+            } else {
+                text::DIVIDER_MID
+            });
+            cell.set_style(style::border(false));
+        }
+    }
+    if !label_fits {
+        return;
+    }
+    for (offset, symbol) in label.chars().enumerate() {
+        if let Some(cell) = buf.cell_mut((label_start + offset as u16, row.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::muted());
+        }
+    }
 }
 
 /// 标签栏：当前工作区的标签切换。
@@ -516,6 +570,68 @@ mod tests {
     }
 
     #[test]
+    fn sidebar_lists_single_workspace_named_after_current_directory() {
+        let state = AppState::demo();
+        let lines = render_lines(&state);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains(&state.active_workspace().name))
+        );
+        assert!(!lines.iter().any(|line| line.contains("notes")));
+    }
+
+    #[test]
+    fn sidebar_divider_sits_at_vertical_middle_with_agents_title() {
+        let state = AppState::demo();
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+        let sidebar = view.sidebar;
+        let inner_y = (sidebar.y + 1) as usize;
+        let inner_height = sidebar.height - 2;
+        let divider_y = inner_y + (inner_height / 2) as usize;
+
+        let row: Vec<char> = lines[divider_y].chars().collect();
+        assert_eq!(
+            row[(sidebar.x + 1) as usize].to_string(),
+            text::DIVIDER_LEFT
+        );
+        assert_eq!(
+            row[(sidebar.right() - 2) as usize].to_string(),
+            text::DIVIDER_RIGHT
+        );
+        let label = format!(" {} ", text::SIDEBAR_AGENTS_TITLE);
+        let start = (sidebar.x + 3) as usize;
+        let rendered: String = row[start..start + label.chars().count()].iter().collect();
+        assert_eq!(rendered, label);
+
+        let above = divider_y - inner_y;
+        let below = (sidebar.bottom() as usize - 1 - divider_y).saturating_sub(1);
+        assert!(above.abs_diff(below) <= 1);
+    }
+
+    #[test]
+    fn agents_section_below_divider_stays_empty() {
+        let state = AppState::demo();
+        let view = view_for(&state);
+        let lines = render_lines(&state);
+        let sidebar = view.sidebar;
+        let divider_y = (sidebar.y + 1) as usize + ((sidebar.height - 2) / 2) as usize;
+        for line in &lines[divider_y + 1..(sidebar.bottom() - 1) as usize] {
+            let row: String = line
+                .chars()
+                .skip(sidebar.x as usize)
+                .take(sidebar.width as usize)
+                .collect();
+            let content = row.trim_matches(|symbol| symbol == '│' || symbol == ' ');
+            assert!(
+                content.is_empty(),
+                "agents section should stay empty: {row:?}"
+            );
+        }
+    }
+
+    #[test]
     fn collapsed_labels_fill_content_area_with_continuous_separator() {
         let mut state = AppState::demo();
         update::apply(Action::ToggleSidebar, &mut state);
@@ -658,8 +774,11 @@ mod tests {
 
     #[test]
     fn placeholder_pane_renders_title_without_content() {
-        let state = AppState::demo();
+        let mut state = AppState::demo();
         let focus = state.active_tab().layout.focus();
+        if let Some(pane) = state.active_tab_mut().pane_mut(focus) {
+            pane.kind = PaneKind::Placeholder;
+        }
         let expected = format!("pane {}", focus.raw());
         let lines = render_lines(&state);
         assert!(lines.iter().any(|line| line.contains(&expected)));
