@@ -186,6 +186,35 @@ fn sidebar_lists_single_workspace_named_after_current_directory() {
 }
 
 #[test]
+fn exit_button_sits_at_tab_bar_right_end() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let area = exit_button(&view).expect("exit button is visible");
+    assert_eq!(area.y, view.tab_bar.y);
+    assert_eq!(area.right(), view.tab_bar.right());
+    assert!(exit_button_at(&view, area.x, area.y));
+    assert!(!exit_button_at(&view, area.x.saturating_sub(1), area.y));
+
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[area.y as usize].chars().collect();
+    let rendered: String = row[area.x as usize..area.right() as usize].iter().collect();
+    assert_eq!(rendered, text::EXIT_LABEL);
+}
+
+#[test]
+fn exit_button_aligns_with_collapsed_prompt_button() {
+    let mut state = AppState::demo();
+    update::apply(Action::TogglePrompt, &mut state);
+    let view = view_for(&state);
+    let exit = exit_button(&view).expect("exit button is visible");
+    let prompt_button = button_for_state(&view, false, CollapseTarget::Prompt);
+    assert!(prompt_button.collapsed);
+    let label_start = collapsed_content_x(prompt_button.area, false);
+    assert_eq!(exit.x, label_start);
+    assert_eq!(exit.width, text::PROMPT_EXPAND_LABEL.chars().count() as u16);
+}
+
+#[test]
 fn agents_header_is_left_aligned_without_junctions() {
     let state = AppState::demo();
     let view = view_for(&state);

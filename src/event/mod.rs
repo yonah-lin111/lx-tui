@@ -250,6 +250,11 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
+                if ui::exit_button_at(view, mouse.column, mouse.row) {
+                    update::apply(Action::Quit, state);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(target) =
                     ui::collapse_button_at(view, state.agents_collapsed, mouse.column, mouse.row)
                 {
