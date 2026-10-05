@@ -14,13 +14,16 @@ pub enum Routed {
     Action(Action),
     /// prompt 编辑器命令。
     Editor(EditorCommand),
+    /// 复制 prompt 选区到系统剪贴板。
+    Copy,
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
 }
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
-/// `prompt_focused` 为真时按键只进入编辑器：未映射的按键被吞掉，绝不写入 PTY。
+/// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区，
+/// 未映射的按键被吞掉，绝不写入 PTY。
 pub fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -29,6 +32,15 @@ pub fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Rout
         return Some(Routed::Action(Action::Quit));
     }
     if prompt_focused {
+        if matches!(key.code, KeyCode::Char('c' | 'C'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
+        {
+            return Some(Routed::Copy);
+        }
         return editor_command(key).map(Routed::Editor);
     }
     encode::encode_key(key, mode).map(Routed::Pane)

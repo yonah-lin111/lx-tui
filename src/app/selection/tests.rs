@@ -9,6 +9,15 @@ fn selection() -> Selection {
 }
 
 #[test]
+fn finish_ends_dragging_and_keeps_range() {
+    let mut selection = selection();
+    assert!(selection.is_dragging());
+    selection.finish();
+    assert!(!selection.is_dragging());
+    assert_eq!(selection.range(), Some(((1, 2), (3, 4))));
+}
+
+#[test]
 fn range_normalizes_drag_direction() {
     let forward = selection();
     assert_eq!(forward.range(), Some(((1, 2), (3, 4))));

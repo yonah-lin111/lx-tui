@@ -218,6 +218,85 @@ fn empty_prompt_selection_yields_nothing() {
 }
 
 #[test]
+fn typing_replaces_prompt_selection() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    assert_eq!(prompt_selection_text(&state).as_deref(), Some("hello"));
+    apply_editor(&mut state, EditorCommand::InsertChar('X'));
+    assert_eq!(state.prompt.text(), "X world");
+    assert!(state.selection.is_none());
+}
+
+#[test]
+fn delete_keys_remove_prompt_selection() {
+    for command in [EditorCommand::Backspace, EditorCommand::Delete] {
+        let mut state = AppState::demo();
+        state.prompt.resize(20, 5);
+        apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
+        let prompt = state.prompt.id();
+        begin_selection(&mut state, prompt, 0, 0);
+        drag_selection(&mut state, prompt, 0, 4);
+        apply_editor(&mut state, command.clone());
+        assert_eq!(state.prompt.text(), " world", "{command:?}");
+        assert!(state.selection.is_none(), "{command:?}");
+    }
+}
+
+#[test]
+fn navigation_clears_prompt_selection_without_editing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    apply_editor(&mut state, EditorCommand::InsertText("hello".into()));
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    apply_editor(&mut state, EditorCommand::Left);
+    assert_eq!(state.prompt.text(), "hello");
+    assert!(state.selection.is_none());
+}
+
+#[test]
+fn end_selection_drag_keeps_only_nonempty_selection() {
+    let mut state = AppState::demo();
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    end_selection_drag(&mut state);
+    assert!(state.selection.is_none());
+
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    end_selection_drag(&mut state);
+    let selection = state.selection.expect("selection kept");
+    assert!(!selection.is_dragging());
+    assert_eq!(selection.range(), Some(((0, 0), (0, 4))));
+}
+
+#[test]
+fn collapsing_prompt_clears_selection() {
+    let mut state = AppState::demo();
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    apply(Action::TogglePrompt, &mut state);
+    assert!(state.selection.is_none());
+}
+
+#[test]
+fn prompt_resize_clears_selection() {
+    let mut state = AppState::demo();
+    let prompt = state.prompt.id();
+    state.prompt.resize(20, 5);
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    resize_panes(&mut state, &[(prompt, Rect::new(0, 0, 30, 8))]);
+    assert!(state.selection.is_none());
+}
+
+#[test]
 fn selection_drag_ignores_other_pane() {
     let mut state = AppState::demo();
     let focus = state.active_tab().layout.focus();

@@ -213,6 +213,22 @@ fn selection_spans_wrapped_rows_and_wide_chars() {
 }
 
 #[test]
+fn replace_range_swaps_selection_and_undo_restores_it() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("hello world");
+    let bounds = prompt.selection_bounds((0, 6), (0, 10));
+    assert_eq!(bounds, Some((6, 11)));
+    assert!(prompt.replace_range(6, 11, "rust"));
+    assert_eq!(prompt.text(), "hello rust");
+    assert_eq!(prompt.cursor_cell(), Some((0, 10)));
+    prompt.undo();
+    assert_eq!(prompt.text(), "hello world");
+
+    assert!(!prompt.replace_range(3, 3, "x"));
+    assert!(!prompt.replace_range(0, 100, "x"));
+}
+
+#[test]
 fn selection_maps_through_scroll() {
     let mut prompt = prompt(10, 2);
     prompt.insert_str("1\n2\n3\n4");

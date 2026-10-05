@@ -20,6 +20,7 @@ pub fn apply(action: Action, state: &mut AppState) {
             state.prompt_collapsed = !state.prompt_collapsed;
             if state.prompt_collapsed {
                 state.prompt_focused = false;
+                state.selection = None;
             }
         }
         Action::ToggleAgents => state.agents_collapsed = !state.agents_collapsed,
@@ -27,7 +28,29 @@ pub fn apply(action: Action, state: &mut AppState) {
 }
 
 /// 按键产生的编辑命令；仅当 prompt 聚焦时由事件循环调用。
+///
+/// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
+/// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    if let Some((start, end)) = prompt_selection_bounds(state) {
+        let replaced = match &command {
+            EditorCommand::InsertChar(ch) => {
+                state.prompt.replace_range(start, end, &ch.to_string())
+            }
+            EditorCommand::InsertText(text) => state.prompt.replace_range(start, end, text),
+            EditorCommand::Newline | EditorCommand::NewlineBelow => {
+                state.prompt.replace_range(start, end, "\n")
+            }
+            EditorCommand::Backspace | EditorCommand::Delete => {
+                state.prompt.replace_range(start, end, "")
+            }
+            _ => false,
+        };
+        state.selection = None;
+        if replaced {
+            return;
+        }
+    }
     match command {
         EditorCommand::InsertChar(ch) => state.prompt.insert_char(ch),
         EditorCommand::InsertText(text) => state.prompt.insert_str(&text),
@@ -81,10 +104,15 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 }
 
 /// 按几何同步各窗格终端与 prompt 编辑器的尺寸。
+///
+/// prompt 尺寸变化会让视口选区坐标失效，此时清除选区。
 pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
         let (cols, rows) = layout::pane_inner_size(*rect);
         if *id == state.prompt.id() {
+            if state.prompt.size() != (cols, rows) {
+                state.selection = None;
+            }
             state.prompt.resize(cols, rows);
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             pane.terminal.resize(cols, rows);
@@ -125,6 +153,41 @@ pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
 /// 清除选区。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
+}
+
+/// 松开鼠标：结束拖动；空选区（未拖动）直接清除，非空选区保留供复制或删除。
+pub fn end_selection_drag(state: &mut AppState) {
+    let keep = state
+        .selection
+        .as_ref()
+        .is_some_and(|selection| selection.range().is_some());
+    if keep {
+        if let Some(selection) = state.selection.as_mut() {
+            selection.finish();
+        }
+    } else {
+        state.selection = None;
+    }
+}
+
+/// prompt 选区文本（保留选区，供 Ctrl/Cmd+C 复制）；空选区返回 None。
+pub fn prompt_selection_text(state: &AppState) -> Option<String> {
+    let selection = state.selection?;
+    if selection.pane() != state.prompt.id() {
+        return None;
+    }
+    let (start, end) = selection.range()?;
+    state.prompt.selection_text(start, end)
+}
+
+/// prompt 选区对应的字节范围；选区不在 prompt 或为空时返回 None。
+fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)> {
+    let selection = state.selection?;
+    if selection.pane() != state.prompt.id() {
+        return None;
+    }
+    let (start, end) = selection.range()?;
+    state.prompt.selection_bounds(start, end)
 }
 
 /// 结束选区并提取文本（选区保留高亮）；未拖动、prompt 空选区或空占位窗格返回 None。

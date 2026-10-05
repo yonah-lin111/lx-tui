@@ -256,10 +256,29 @@ fn prompt_focus_maps_history_and_indent_keys() {
 }
 
 #[test]
+fn prompt_focus_maps_copy_keys() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        assert_eq!(
+            route_prompt(KeyCode::Char('c'), modifiers),
+            Some(Routed::Copy),
+            "{modifiers:?}"
+        );
+    }
+    assert_eq!(
+        route_prompt(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
+        None
+    );
+}
+
+#[test]
 fn prompt_focus_swallows_unmapped_keys() {
     let cases = [
         KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
-        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER),
         KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Enter, KeyModifiers::SUPER | KeyModifiers::SHIFT),
         KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT),

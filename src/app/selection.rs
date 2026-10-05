@@ -8,6 +8,7 @@ pub struct Selection {
     pane: PaneId,
     anchor: (u16, u16),
     cursor: (u16, u16),
+    dragging: bool,
 }
 
 impl Selection {
@@ -17,6 +18,7 @@ impl Selection {
             pane,
             anchor: (row, col),
             cursor: (row, col),
+            dragging: true,
         }
     }
 
@@ -28,6 +30,16 @@ impl Selection {
     /// 扩展到新的拖动点。
     pub fn drag(&mut self, row: u16, col: u16) {
         self.cursor = (row, col);
+    }
+
+    /// 鼠标松开：结束拖动，选区保留。
+    pub fn finish(&mut self) {
+        self.dragging = false;
+    }
+
+    /// 是否仍处于按住拖动状态。
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
     }
 
     /// 规范化后的包含范围（左上 -> 右下）；未发生拖动时为 None。

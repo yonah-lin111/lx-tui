@@ -435,8 +435,8 @@ impl Prompt {
         self.keep_cursor_visible();
     }
 
-    /// 取选区文本（视口坐标，端点包含）；空选区或选中内容为空时返回 None。
-    pub fn selection_text(&self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
+    /// 选区（视口坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
+    pub fn selection_bounds(&self, start: (u16, u16), end: (u16, u16)) -> Option<(usize, usize)> {
         if start == end {
             return None;
         }
@@ -447,10 +447,27 @@ impl Prompt {
         };
         let from = self.viewport_offset(first, false);
         let to = self.viewport_offset(last, true);
-        if from >= to {
-            return None;
-        }
+        (from < to).then_some((from, to))
+    }
+
+    /// 取选区文本（视口坐标，端点包含）；空选区或选中内容为空时返回 None。
+    pub fn selection_text(&self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
+        let (from, to) = self.selection_bounds(start, end)?;
         Some(self.text[from..to].to_string())
+    }
+
+    /// 用插入文本替换字节范围（选区删除/替换）；文本会先净化，作为独立撤销步。
+    pub fn replace_range(&mut self, start: usize, end: usize, insert: &str) -> bool {
+        if start >= end || end > self.text.len() {
+            return false;
+        }
+        let sanitized = sanitize(insert);
+        self.break_group();
+        self.record(EditKind::Insert);
+        self.text.replace_range(start..end, &sanitized);
+        self.cursor = start + sanitized.len();
+        self.keep_cursor_visible();
+        true
     }
 
     /// 在光标处插入已净化的文本并推进光标。

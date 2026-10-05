@@ -225,6 +225,30 @@ fn handle_terminal_event(
                     update::apply_editor(state, command);
                     *dirty = true;
                 }
+                Routed::Copy => {
+                    if let Some(text) = update::prompt_selection_text(state) {
+                        let anchor = Some(state.prompt.id());
+                        let now = Instant::now();
+                        if crate::platform::write_clipboard(&text) {
+                            update::show_toast(
+                                state,
+                                Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now),
+                            );
+                        } else {
+                            tracing::warn!("clipboard write failed");
+                            update::show_toast(
+                                state,
+                                Toast::new(
+                                    ToastKind::Error,
+                                    ui::text::TOAST_COPY_FAILED,
+                                    anchor,
+                                    now,
+                                ),
+                            );
+                        }
+                        *dirty = true;
+                    }
+                }
                 Routed::Pane(bytes) => {
                     let id = state.active_tab().layout.focus();
                     write_to_pane(sessions, id, &bytes);
@@ -337,6 +361,14 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
+                if state
+                    .selection
+                    .is_some_and(|selection| selection.pane() == state.prompt.id())
+                {
+                    update::end_selection_drag(state);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(text) = update::finish_selection(state) {
                     let anchor = state.selection.map(|selection| selection.pane());
                     let now = Instant::now();
@@ -357,12 +389,17 @@ fn handle_terminal_event(
                 *dirty = true;
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-                if state.selection.is_some() || state.resizing_prompt {
+                if state.resizing_prompt
+                    || state
+                        .selection
+                        .is_some_and(|selection| selection.is_dragging())
+                {
                     return;
                 }
                 if let Some((pane, _)) = pane_at(rects, mouse.column, mouse.row)
                     && pane == state.prompt.id()
                 {
+                    update::clear_selection(state);
                     let direction = if mouse.kind == MouseEventKind::ScrollUp {
                         -1
                     } else {
