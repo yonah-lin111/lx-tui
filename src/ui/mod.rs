@@ -48,7 +48,6 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         }
     }
     render_tab_bar(frame, view.tab_bar, state);
-    render_exit_button(frame, &view);
     render_panes(frame, &pane_rects, state);
     render_prompt(frame, view.prompt, state);
     render_collapse_buttons(frame, &view, state);
@@ -98,21 +97,6 @@ pub fn collapse_button_at(
         .into_iter()
         .find(|button| button.area.contains((column, row).into()))
         .map(|button| button.target)
-}
-
-/// 退出按钮矩形：标签栏最右端贴右缘，与右栏折叠态按钮同列；空间不足时不显示。
-pub fn exit_button(view: &layout::ViewLayout) -> Option<Rect> {
-    let width = text::EXIT_LABEL.chars().count() as u16;
-    let bar = view.tab_bar;
-    if bar.height == 0 || bar.width < width {
-        return None;
-    }
-    Some(Rect::new(bar.right() - width, bar.y, width, 1))
-}
-
-/// 命中测试：坐标是否落在退出按钮内。
-pub fn exit_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool {
-    exit_button(view).is_some_and(|area| area.contains((column, row).into()))
 }
 
 /// 单个面板的折叠按钮：折叠态取整条窄条，展开态在顶边右端。
@@ -315,23 +299,6 @@ fn render_agents_header(frame: &mut Frame<'_>, row: Rect, button: Rect) {
             cell.reset();
             cell.set_char(symbol);
             cell.set_style(style::muted());
-        }
-    }
-}
-
-/// 退出按钮：标签栏右端强调色标签，点击退出应用。
-fn render_exit_button(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
-    let Some(area) = exit_button(view) else {
-        return;
-    };
-    for (offset, symbol) in text::EXIT_LABEL.chars().enumerate() {
-        if let Some(cell) = frame
-            .buffer_mut()
-            .cell_mut((area.x + offset as u16, area.y))
-        {
-            cell.reset();
-            cell.set_char(symbol);
-            cell.set_style(style::accent());
         }
     }
 }
