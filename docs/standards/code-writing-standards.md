@@ -39,7 +39,7 @@
 
 ## 测试与验证
 
-- 单元测试与代码同文件（`#[cfg(test)] mod tests`）；集成测试放 `tests/`。
+- 单元测试体与实现分离：主文件只保留 `#[cfg(test)] mod tests;` 声明，测试放同层 `tests.rs`（`mod.rs` 模块）或同名子目录 `tests.rs`（普通模块，如 `src/app/state.rs` → `src/app/state/tests.rs`）；集成测试放 `tests/`。
 - `app/` 状态必须能在无终端、无 PTY 环境下构造并测试；`layout.rs` 与 `ui/layout.rs` 等纯函数直接覆盖边界尺寸。
 - 修复 bug 必须先补复现测试，再改代码。
 - 修改完成后按影响范围执行：
