@@ -97,7 +97,8 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
 
 /// 编辑键映射；Shift 只用于字符输入，导航键要求无修饰符。
 ///
-/// Ctrl/Alt 组合同 opencode/readline：Ctrl+U/K 删除到行首/行尾、Ctrl+W 向前删词、
+/// Ctrl/Alt 组合同 opencode/readline：Ctrl+U 删除到逻辑行首（已在行首时删除前一个换行）、
+/// Ctrl+K 删除到行尾、Ctrl+W 向前删词、
 /// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl+←/→ 按词移动；撤销/重做用
 /// Ctrl+Z / Ctrl+Y（legacy 终端可靠），并对齐 opencode 接受 Ctrl+Shift+Z、Ctrl+-、
 /// Ctrl+. 与 Super 组合（终端支持才收得到）；Alt+B/F、Alt+D 作为别名；

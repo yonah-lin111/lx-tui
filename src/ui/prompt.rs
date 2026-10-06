@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::UnicodeWidthChar;
 
+use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{Prompt, VisualRow};
 use crate::app::selection::Selection;
 use crate::ui::markdown::{self, Token, TokenKind};
@@ -40,15 +41,32 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
             paint_selection(buf, area, y, (index - scroll) as u16, selection);
         }
     }
-    render_command_panel(buf, area, prompt);
+    render_panels(buf, area, prompt);
 }
 
-/// 绘制块命令面板；状态与文案由 app 层维护，这里只做只读映射。
-fn render_command_panel(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
-    let Some(panel) = prompt.panel() else {
+/// 绘制浮层面板：文件提及优先，其次块命令；状态由 app 层维护，这里只做只读映射。
+fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
+    let Some((anchor_row, _)) = prompt.cursor_cell() else {
         return;
     };
-    let Some((anchor_row, _)) = prompt.cursor_cell() else {
+    if let Some(panel) = prompt.mention() {
+        let copy: Vec<(String, String)> = panel.items().iter().map(mention_item_text).collect();
+        let items: Vec<CommandItem<'_>> = copy
+            .iter()
+            .map(|(label, preview)| CommandItem { label, preview })
+            .collect();
+        command_panel::render(
+            area,
+            buf,
+            &CommandPanelView {
+                items: &items,
+                active: panel.active(),
+                anchor_row,
+            },
+        );
+        return;
+    }
+    let Some(panel) = prompt.panel() else {
         return;
     };
     let copy: Vec<(String, String)> = panel
@@ -69,6 +87,20 @@ fn render_command_panel(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
             anchor_row,
         },
     );
+}
+
+/// 提及条目展示：左列文件名（目录带 `/`），右列父目录。
+fn mention_item_text(entry: &MentionEntry) -> (String, String) {
+    let (directory, name) = entry
+        .path
+        .rsplit_once('/')
+        .unwrap_or(("", entry.path.as_str()));
+    let label = if entry.is_directory {
+        format!("{name}/")
+    } else {
+        name.to_string()
+    };
+    (label, directory.to_string())
 }
 
 /// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。

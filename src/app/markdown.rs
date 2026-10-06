@@ -1,4 +1,4 @@
-//! markdown 块命令领域：触发识别、候选命令与插入计算，纯函数、无 UI 依赖。
+//! markdown 编辑领域：块命令与文件提及的触发识别、候选过滤与插入计算，纯函数、无 UI 依赖。
 
 /// 块命令触发类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +149,215 @@ pub fn block_insertion(id: BlockCommandId) -> BlockInsertion {
             text: "|  |  |\n| --- | --- |\n|  |  |".into(),
             cursor: 2,
         },
+    }
+}
+
+/// 文件提及触发区间：`from` 为 `@` 起始、`to` 为光标，`query` 为 `@` 与光标之间的查询串。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionTrigger {
+    pub from: usize,
+    pub to: usize,
+    pub query: String,
+}
+
+/// 工作区文件候选：相对根的路径（`/` 分隔）与是否为目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionEntry {
+    pub path: String,
+    pub is_directory: bool,
+}
+
+/// 提及面板的显示上限。
+pub const MENTION_LIMIT: usize = 100;
+
+/// 文件提及面板状态：触发区间、过滤后的候选与高亮索引。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionPanel {
+    trigger: MentionTrigger,
+    items: Vec<MentionEntry>,
+    active: usize,
+}
+
+impl MentionPanel {
+    /// 组装面板状态；`items` 不可为空，`active` 调用方保证在界内。
+    pub fn new(trigger: MentionTrigger, items: Vec<MentionEntry>, active: usize) -> Self {
+        Self {
+            trigger,
+            items,
+            active,
+        }
+    }
+
+    /// 触发区间。
+    pub fn trigger(&self) -> &MentionTrigger {
+        &self.trigger
+    }
+
+    /// 过滤后的候选。
+    pub fn items(&self) -> &[MentionEntry] {
+        &self.items
+    }
+
+    /// 高亮索引。
+    pub fn active(&self) -> usize {
+        self.active
+    }
+
+    /// 按偏移循环移动高亮项。
+    pub fn move_active(&mut self, delta: isize) {
+        let len = self.items.len() as isize;
+        self.active = (self.active as isize + delta).rem_euclid(len) as usize;
+    }
+}
+
+/// 解析光标前的文件提及触发。
+///
+/// `@` 必须在行首、空白或 `[` 之后，且 `@` 与光标之间只能是查询字符；
+/// 围栏代码块内不触发。
+pub fn mention_trigger(text: &str, cursor: usize) -> Option<MentionTrigger> {
+    if cursor > text.len() || !text.is_char_boundary(cursor) {
+        return None;
+    }
+    if open_fence(&text[..line_start(text, cursor)]).is_some() {
+        return None;
+    }
+    let at = text[..cursor].rfind('@')?;
+    if let Some(previous) = text[..at].chars().next_back()
+        && !(previous.is_whitespace() || previous == '[')
+    {
+        return None;
+    }
+    let query = &text[at + 1..cursor];
+    if query.chars().any(|ch| !is_mention_query_char(ch)) {
+        return None;
+    }
+    Some(MentionTrigger {
+        from: at,
+        to: cursor,
+        query: query.to_string(),
+    })
+}
+
+/// 查询字符：非空白且非提及边界标点；允许中文等多字节字符，`.` 属于文件名字符。
+fn is_mention_query_char(ch: char) -> bool {
+    !ch.is_whitespace()
+        && !matches!(
+            ch,
+            ',' | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+                | '，'
+                | '。'
+                | '；'
+                | '：'
+                | '！'
+                | '？'
+                | '、'
+                | '…'
+        )
+}
+
+/// 按查询过滤候选：文件名优先打分排序后截取展示上限；空查询按路径排序全部展示。
+pub fn filter_mentions(entries: &[MentionEntry], query: &str) -> Vec<MentionEntry> {
+    let query = query.trim().to_lowercase();
+    let mut scored: Vec<(u32, &MentionEntry)> = entries
+        .iter()
+        .filter_map(|entry| {
+            let score = mention_score(&entry.path, &query);
+            (score > 0).then_some((score, entry))
+        })
+        .collect();
+    scored.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.path.cmp(&right.1.path))
+    });
+    scored
+        .into_iter()
+        .take(MENTION_LIMIT)
+        .map(|(_, entry)| entry.clone())
+        .collect()
+}
+
+/// 文件名优先的模糊打分；对齐 lx-agent 的 `getProjectFileMatchScore`。
+fn mention_score(path: &str, query: &str) -> u32 {
+    if query.is_empty() {
+        return 1;
+    }
+    let normalized = path.to_lowercase();
+    let file_name = path.rsplit('/').next().unwrap_or(path);
+    let normalized_name = file_name.to_lowercase();
+    if normalized_name == query {
+        return 5000;
+    }
+    if normalized == query {
+        return 4000;
+    }
+    if normalized_name.starts_with(query) {
+        return 3000;
+    }
+    if normalized.starts_with(query) {
+        return 2000;
+    }
+    let caps: String = file_name
+        .chars()
+        .filter(|ch| ch.is_ascii_uppercase())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect();
+    if !caps.is_empty() && caps.starts_with(query) {
+        return 2800 + u32::from(caps.len() == query.len()) * 100;
+    }
+    if !caps.is_empty() && caps.contains(query) {
+        return 2500;
+    }
+    if normalized_name.contains(query) {
+        return 1800;
+    }
+    if let Some(span) = subsequence_span(&normalized_name, query) {
+        return 1200.max(1500_u32.saturating_sub(span * 10));
+    }
+    if normalized.contains(query) {
+        return 800;
+    }
+    if let Some(span) = subsequence_span(&normalized, query) {
+        return 100.max(500_u32.saturating_sub(span));
+    }
+    0
+}
+
+/// 子序列匹配的字符跨度（首末距离 + 1）；未命中返回 None。
+fn subsequence_span(haystack: &str, needle: &str) -> Option<u32> {
+    let mut expected = needle.chars();
+    let mut current = expected.next()?;
+    let mut first: Option<u32> = None;
+    for (position, ch) in haystack.chars().enumerate() {
+        if ch != current {
+            continue;
+        }
+        let position = u32::try_from(position).ok()?;
+        let start = *first.get_or_insert(position);
+        match expected.next() {
+            Some(next) => current = next,
+            None => return Some(position - start + 1),
+        }
+    }
+    None
+}
+
+/// 提及插入文本：`@相对路径` 加尾随空格；目录带 `/`。
+pub fn mention_insertion(entry: &MentionEntry) -> String {
+    if entry.is_directory {
+        format!("@{}/ ", entry.path)
+    } else {
+        format!("@{} ", entry.path)
     }
 }
 

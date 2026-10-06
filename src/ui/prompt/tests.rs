@@ -1,6 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
+use crate::app::markdown::MentionEntry;
 use crate::layout::PaneId;
 use ratatui::style::Color;
 
@@ -157,4 +158,29 @@ fn renders_block_command_panel_below_cursor() {
     let blank = prompt(10, 3, "plain");
     render(area, &mut empty, &blank, None);
     assert_eq!(empty[(0, 1)].symbol(), " ");
+}
+
+#[test]
+fn renders_mention_panel_with_name_and_directory() {
+    let area = Rect::new(0, 0, 30, 10);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 10);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@app");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    editor.apply_mention_entries(
+        generation,
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(editor.mention().is_some());
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+
+    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(row.contains("app.rs"));
+    assert!(row.contains("src"));
 }

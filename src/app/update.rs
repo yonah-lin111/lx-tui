@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 use crate::layout::{self, PaneId};
 
 use super::actions::{Action, EditorCommand, OverlayKey};
+use super::markdown::MentionEntry;
 use super::overlay::{
     ConfirmClose, Menu, MenuCommand, MenuTarget, Overlay, OverlayKind, Rename, TextInput,
 };
@@ -40,6 +41,7 @@ pub fn apply(action: Action, state: &mut AppState) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    sync_mention_root(state);
     if route_panel(state, &command) {
         return;
     }
@@ -92,7 +94,12 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
 }
 
 /// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
+///
+/// 文件提及面板优先于块命令面板；两者互斥，同时只可能有一个打开。
 fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    if route_mention_panel(state, command) {
+        return true;
+    }
     match command {
         EditorCommand::Up => state.prompt.panel_move(-1),
         EditorCommand::Down => state.prompt.panel_move(1),
@@ -100,6 +107,28 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
         EditorCommand::Escape => state.prompt.panel_escape(),
         _ => false,
     }
+}
+
+/// 文件提及面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
+fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    match command {
+        EditorCommand::Up => state.prompt.mention_move(-1),
+        EditorCommand::Down => state.prompt.mention_move(1),
+        EditorCommand::Newline => state.prompt.mention_confirm(),
+        EditorCommand::Escape => state.prompt.mention_escape(),
+        _ => false,
+    }
+}
+
+/// 把活动工作区 cwd 同步为提及扫描根；根变化时 Prompt 内缓存失效。
+fn sync_mention_root(state: &mut AppState) {
+    let root = state.active_workspace().cwd.clone();
+    state.prompt.set_mention_root(root);
+}
+
+/// 写入文件提及扫描结果；过期代号在 Prompt 内丢弃。
+pub fn apply_mention_entries(state: &mut AppState, generation: u64, entries: Vec<MentionEntry>) {
+    state.prompt.apply_mention_entries(generation, entries);
 }
 
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
@@ -112,11 +141,13 @@ pub fn scroll_prompt(state: &mut AppState, direction: isize) {
 
 /// 鼠标点击 prompt：把视口单元格映射为光标位置。
 pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
+    sync_mention_root(state);
     state.prompt.set_cursor_from_cell(row, col);
 }
 
 /// 点击 prompt：键盘焦点交给编辑器。
 pub fn focus_prompt(state: &mut AppState) {
+    sync_mention_root(state);
     state.prompt_focused = true;
 }
 

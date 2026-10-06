@@ -795,3 +795,84 @@ fn drag_workspace_shifts_other_active_workspace() {
     assert!(drag_workspace_to(&mut state, 2));
     assert_eq!(state.active_workspace, 0);
 }
+
+#[test]
+fn mention_panel_keys_are_consumed_before_editing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some());
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "@app.rs ");
+    assert!(state.prompt.mention().is_none());
+}
+
+#[test]
+fn switching_workspace_root_invalidates_mention_cache() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, first_root) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some());
+
+    state.workspaces[0].cwd = Some(std::path::PathBuf::from("/tmp/other"));
+    apply_editor(&mut state, EditorCommand::InsertChar('a'));
+    assert!(state.prompt.mention().is_none());
+    let (_, next_root) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("rescan requested");
+    assert_ne!(next_root, first_root);
+    assert_eq!(next_root, std::path::PathBuf::from("/tmp/other"));
+}
+
+#[test]
+fn clear_panel_hides_mention_panel_on_focus_loss() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some());
+    let pane = state.active_tab().layout.focus();
+    focus_pane(&mut state, pane);
+    assert!(state.prompt.mention().is_none());
+}

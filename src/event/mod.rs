@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind};
 use crate::app::toast::{Toast, ToastKind};
@@ -24,11 +25,15 @@ use crate::pty::{PtyEvent, PtySession};
 use crate::tui::Tui;
 use crate::ui;
 
-/// 应用级事件：后台任务（目前是 PTY 读线程）经此汇入主循环。
+/// 应用级事件：后台任务（PTY 读线程与提及扫描）经此汇入主循环。
 #[derive(Debug)]
 pub enum AppEvent {
     PaneOutput(PaneId, Vec<u8>),
     PaneExit(PaneId),
+    MentionScanned {
+        generation: u64,
+        entries: Vec<MentionEntry>,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -101,6 +106,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
             event = events.next() => match event {
                 Some(Ok(event)) => {
                     handle_terminal_event(event, state, &mut sessions, &geometry, config, &mut dirty);
+                    pump_mention_scan(state, &sender);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -654,6 +660,26 @@ fn handle_terminal_event(
     }
 }
 
+/// @ 提及面板需要缓存且无在途扫描时，发起后台扫描并把结果投递回主循环。
+///
+/// prompt 未聚焦时不扫描；扫描失败按空结果处理（面板保持隐藏）。
+fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
+    if !state.prompt_focused {
+        return;
+    }
+    let Some((generation, root)) = state.prompt.take_mention_scan_request() else {
+        return;
+    };
+    let sender = sender.clone();
+    tokio::task::spawn_blocking(move || {
+        let entries = crate::files::scan(&root);
+        let _ = sender.send(AppEvent::MentionScanned {
+            generation,
+            entries,
+        });
+    });
+}
+
 /// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。
 fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u16) {
     match state.overlay.as_ref() {
@@ -761,6 +787,10 @@ fn handle_app_event(
             }
         }
         AppEvent::PaneExit(id) => update::mark_pane_exited(state, id),
+        AppEvent::MentionScanned {
+            generation,
+            entries,
+        } => update::apply_mention_entries(state, generation, entries),
     }
 }
 
