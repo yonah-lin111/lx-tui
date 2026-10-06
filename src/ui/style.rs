@@ -121,5 +121,10 @@ pub fn mascot_pixel(ch: char) -> Option<Color> {
     }
 }
 
+/// lx 页占位元素（白）：未来内容面板的边框与文案。
+pub fn lx_placeholder() -> Style {
+    Style::default().fg(Color::Indexed(231))
+}
+
 #[cfg(test)]
 mod tests;

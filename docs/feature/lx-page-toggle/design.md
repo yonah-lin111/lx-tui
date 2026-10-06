@@ -165,15 +165,19 @@ match pane.kind {
 
 ### 5.4 lx 页布局与降级
 
-从上到下居中堆叠：狐狸艺术 → 空行 → `lx` 字标（`style::strong()`）→ 空行 → 提示（`style::muted()`，`text::lx_hint()`＝“click [>_] to open terminal”）。
+垂直结构（自底向上，模仿 Claude Code 的信息层级）：
 
-降级规则（`inner` 为窗格内容区）：
+1. **底部输入框**：贴内容区底部 3 行，宽屏左右各留 2 列边距（窄屏无边距）；muted 圆角边框，内容行 `>`（accent）+ `Ask anything…`（muted），纯视觉占位、不可输入；最小宽度 8、最小高度 3，放不下时整页退化为居中字标。
+2. **切换提示**：输入框上方 1 行，左对齐输入框，`click [>_] to open terminal`（muted）；宽度不足时省略。
+3. **白色占位面板**：品牌区与底部区之间的剩余空间，白色圆角边框 + 居中白色 `placeholder`（`style::lx_placeholder`，Indexed 231），代表未来内容区；不足 3 行时省略。
+4. **顶部品牌区**：小狐狸像素图（14 列 × 5 单元格行，摆尾/眨眼/抖耳）左对齐，`lx` 字标在右侧垂直居中（bold）；高度不足 6 行时整块省略。
 
-1. `width ≥ FOX_W + 2` 且 `height ≥ FOX_ROWS + 4`：全尺寸狐狸 + 字标；宽度再满足提示长度 + 4 才画提示；
-2. 否则 `width ≥ HEAD_W + 2` 且 `height ≥ HEAD_ROWS + 2`：紧凑狐狸头（简化像素图）+ 字标；
-3. 否则：仅居中 `lx` 文本。
+演进说明：原「居中大狐狸 + 字标 + 提示」布局被本结构取代；全尺寸狐狸（18×7）与紧凑狐狸头（10×4）两套艺术随之下线，仅保留 14×5 小狐狸以保证头部比例接近 Claude Code。
 
-尺寸常量在实现时按最终像素图落定（预估全尺寸 16 列 × 14 像素＝16×7 单元格；紧凑头 10×8 像素＝10×4 单元格）。
+### 5.4.1 像素小狐狸
+
+- 尺寸 14 列 × 10 像素行（= 5 单元格行）；分层同 5.5：base（耳/头/身）+ 耳覆盖（常态/抖动）+ 尾覆盖（内/外）+ 眨眼覆盖；
+- 动画相位与周期沿用 3.2（摆尾 400ms 换向、眨眼 2.4s 一次、抖耳 4.8s 一次）。
 
 ### 5.5 动画叠加
 
@@ -190,6 +194,9 @@ match pane.kind {
 pub const LX_TITLE: &str = "lx";
 pub const LX_TOGGLE_TERMINAL: &str = "[>_]"; // lx 视图按钮（去终端）
 pub const LX_TOGGLE_LX: &str = "[lx]";       // 终端视图按钮（去 lx）
+pub const LX_INPUT_PROMPT: &str = ">";       // 底部输入框前缀
+pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
+pub const LX_CONTENT_PLACEHOLDER: &str = "placeholder";
 pub fn lx_hint() -> String                    // "click [>_] to open terminal"
 ```
 

@@ -15,6 +15,11 @@ pub const LX_TITLE: &str = "lx";
 /// 视图切换按钮：显示点击后的目的地视图。
 pub const LX_TOGGLE_TERMINAL: &str = "[>_]";
 pub const LX_TOGGLE_LX: &str = "[lx]";
+/// lx 页底部输入框（当前为纯视觉占位）。
+pub const LX_INPUT_PROMPT: &str = ">";
+pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
+/// lx 页未来内容区的白色占位文案。
+pub const LX_CONTENT_PLACEHOLDER: &str = "placeholder";
 
 /// lx 页切换提示。
 pub fn lx_hint() -> String {
