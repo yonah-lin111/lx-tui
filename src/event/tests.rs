@@ -396,8 +396,7 @@ fn mouse_wheel_extends_in_progress_selection() {
     for i in 0..40 {
         target.terminal.feed(format!("line {i:02}\r\n").as_bytes());
     }
-    // 鼠标上报开启时选区滚动仍优先，不转发给应用。
-    target.terminal.feed(b"\x1b[?1000h\x1b[?1006h");
+    // 本地选区只存在于非鼠标上报窗格；选中滚动优先于本地回滚。
     let inner = pane_inner(&geo, pane);
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -583,6 +582,71 @@ fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
     assert_eq!(target.terminal.display_offset(), 0);
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_drag_on_mouse_report_pane_skips_local_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+        target
+            .terminal
+            .feed(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
+    }
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    for kind in [
+        MouseEventKind::Down(MouseButton::Left),
+        MouseEventKind::Drag(MouseButton::Left),
+        MouseEventKind::Up(MouseButton::Left),
+    ] {
+        handle_terminal_event(
+            mouse(kind, inner.x + 1, inner.y + 1),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut dirty,
+        );
+    }
+
+    assert!(
+        state.terminal_selection.is_none(),
+        "mouse-report app owns selection"
+    );
+    assert!(state.selection.is_none());
+}
+
+#[test]
+fn mouse_down_on_plain_pane_starts_local_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert_eq!(state.terminal_selection, Some(pane));
     assert!(dirty);
 }
 

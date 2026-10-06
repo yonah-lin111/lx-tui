@@ -487,7 +487,13 @@ fn handle_terminal_event(
                         Some(PaneKind::Terminal)
                     ) {
                         update::focus_pane(state, pane);
-                        update::begin_terminal_selection(state, pane, row, col);
+                        // 应用在鼠标上报模式时按键归它自己（对齐 herdr）：转发并按它的
+                        // 选区逻辑处理，不启动本地选区。
+                        if forward_pane_mouse_event(state, sessions, pane, inner, &mouse) {
+                            update::clear_selection(state);
+                        } else {
+                            update::begin_terminal_selection(state, pane, row, col);
+                        }
                         *dirty = true;
                     } else {
                         update::clear_selection(state);
@@ -576,6 +582,15 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
+                if state.terminal_selection.is_none()
+                    && state.selection.is_none()
+                    && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
+                    && forward_pane_mouse_event(state, sessions, pane, inner, &mouse)
+                {
+                    *dirty = true;
+                    return;
+                }
                 // 终端拖拽选区：把终点更新到鼠标位置的内容；prompt 选区同时移动编辑器光标。
                 let pane = if let Some(pane) = state.terminal_selection {
                     pane
@@ -632,6 +647,15 @@ fn handle_terminal_event(
                 }
                 if state.resizing_prompt {
                     update::end_prompt_resize(state);
+                    *dirty = true;
+                    return;
+                }
+                // 没有本地选区时，鼠标上报模式的应用自己处理释放（对齐 herdr）。
+                if state.terminal_selection.is_none()
+                    && state.selection.is_none()
+                    && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
+                    && forward_pane_mouse_event(state, sessions, pane, inner, &mouse)
+                {
                     *dirty = true;
                     return;
                 }
@@ -762,6 +786,9 @@ fn handle_terminal_event(
                     set_pointer_shape(shape);
                     *dirty = true;
                 }
+                if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+                    forward_pane_mouse_event(state, sessions, pane, inner, &mouse);
+                }
             }
             _ => {}
         },
@@ -856,6 +883,48 @@ fn handle_pane_wheel(
             true
         }
     }
+}
+
+/// 把鼠标按键、拖拽或移动按应用声明的协议转发给窗格；非鼠标上报模式返回 false 交回本地选区。
+///
+/// 对齐 herdr：应用接管鼠标时 lx-tui 不做本地选区，滚动与选择都由应用自己实现；
+/// 拖拽与无按键移动还需应用分别开启 1002/1003 才上报，避免多发未订阅的事件。
+fn forward_pane_mouse_event(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    pane: PaneId,
+    inner: Rect,
+    mouse: &MouseEvent,
+) -> bool {
+    let Some((routing, mode)) = state
+        .pane_anywhere(pane)
+        .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
+    else {
+        return false;
+    };
+    let reportable = routing == WheelRouting::MouseReport
+        && match mouse.kind {
+            MouseEventKind::Drag(_) => {
+                mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+            }
+            MouseEventKind::Moved => mode.contains(TermMode::MOUSE_MOTION),
+            _ => true,
+        };
+    if !reportable {
+        return false;
+    }
+    let column = mouse.column.saturating_sub(inner.x);
+    let row = mouse.row.saturating_sub(inner.y);
+    let Some(bytes) =
+        input::encode::encode_mouse_button(mouse.kind, column, row, mouse.modifiers, mode)
+    else {
+        return false;
+    };
+    if !matches!(mouse.kind, MouseEventKind::Moved) {
+        update::reset_pane_scroll(state, pane);
+    }
+    write_to_pane(sessions, pane, &bytes);
+    true
 }
 
 /// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。

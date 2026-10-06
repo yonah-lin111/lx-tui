@@ -1,7 +1,7 @@
 //! crossterm 按键到终端字节序列的编码；方向键形态由 DECCKM 模式决定。
 
 use alacritty_terminal::term::TermMode;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 
 /// 把按键编码为写入 PTY 的字节；不支持的按键返回 None。
 ///
@@ -45,27 +45,85 @@ pub fn encode_mouse_wheel(
     modifiers: KeyModifiers,
     mode: TermMode,
 ) -> Option<Vec<u8>> {
-    let mut code = match kind {
+    let code = match kind {
         MouseEventKind::ScrollUp => 64u16,
         MouseEventKind::ScrollDown => 65,
         MouseEventKind::ScrollLeft => 66,
         MouseEventKind::ScrollRight => 67,
         _ => return None,
     };
+    encode_mouse_sequence(code, column, row, modifiers, false, mode)
+}
+
+/// 编码鼠标按键/拖拽/移动为终端鼠标序列；协议选择与坐标规则同 `encode_mouse_wheel`。
+///
+/// `Drag` 与 `Moved` 分别是加了 32 的按键移动位与无按键移动位；`Up` 在 SGR 下以小写 `m`
+/// 收尾，旧式协议用按钮 3 表示释放。
+pub fn encode_mouse_button(
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
+    modifiers: KeyModifiers,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
+    let (code, release) = match kind {
+        MouseEventKind::Down(button) => (mouse_button_code(button), false),
+        MouseEventKind::Up(button) => (mouse_button_code(button), true),
+        MouseEventKind::Drag(button) => (mouse_button_code(button) + 32, false),
+        MouseEventKind::Moved => (35, false),
+        _ => return None,
+    };
+    encode_mouse_sequence(code, column, row, modifiers, release, mode)
+}
+
+/// 鼠标按键的基础协议码：左 0、中 1、右 2。
+fn mouse_button_code(button: MouseButton) -> u16 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+/// 修饰键协议偏移：Shift +4、Alt +8、Control +16。
+fn modifier_offset(modifiers: KeyModifiers) -> u16 {
+    let mut offset = 0;
     if modifiers.contains(KeyModifiers::SHIFT) {
-        code += 4;
+        offset += 4;
     }
     if modifiers.contains(KeyModifiers::ALT) {
-        code += 8;
+        offset += 8;
     }
     if modifiers.contains(KeyModifiers::CONTROL) {
-        code += 16;
+        offset += 16;
     }
+    offset
+}
 
+/// 编码鼠标协议序列：SGR 优先，其次 UTF8，最后旧式；坐标均为 1 基。
+fn encode_mouse_sequence(
+    code: u16,
+    column: u16,
+    row: u16,
+    modifiers: KeyModifiers,
+    release: bool,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
+    let offset = modifier_offset(modifiers);
     if mode.contains(TermMode::SGR_MOUSE) {
-        return Some(format!("\x1b[<{code};{};{}M", column + 1, row + 1).into_bytes());
+        let terminator = if release { 'm' } else { 'M' };
+        return Some(
+            format!(
+                "\x1b[<{};{};{}{terminator}",
+                code + offset,
+                column + 1,
+                row + 1
+            )
+            .into_bytes(),
+        );
     }
 
+    let code = if release { 3 + offset } else { code + offset };
     let mut bytes = b"\x1b[M".to_vec();
     if mode.contains(TermMode::UTF8_MOUSE) {
         push_mouse_codepoint(&mut bytes, u32::from(code) + 32)?;
