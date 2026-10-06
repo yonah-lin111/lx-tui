@@ -20,6 +20,24 @@ pub const DIVIDER_MID: &str = "─";
 pub const AGENTS_COLLAPSE_LABEL: &str = "[▼]";
 pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 
+/// 侧栏工作区列表底部的新建按钮。
+pub const ADD_WORKSPACE_LABEL: &str = "[+]";
+
+/// 工作区右键菜单项；按命令映射，禁止在逻辑层硬编码。
+pub const MENU_RENAME_WORKSPACE: &str = "Rename";
+pub const MENU_CLOSE_WORKSPACE: &str = "Close";
+
+/// 重命名与关闭确认浮层标题。
+pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
+pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
+/// 关闭确认键位提示。
+pub const CONFIRM_CLOSE_HINT: &str = "[Enter] confirm  [Esc] cancel";
+
+/// 关闭确认问题文案。
+pub fn confirm_close_question(name: &str) -> String {
+    format!("close \"{name}\"?")
+}
+
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。
 pub const EXIT_LABEL: &str = "[exit]";
 

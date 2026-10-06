@@ -548,3 +548,68 @@ fn error_toast_uses_red_border() {
     let buffer = terminal.backend().buffer().clone();
     assert_eq!(buffer[(area.x, area.y)].fg, ratatui::style::Color::Red);
 }
+
+#[test]
+fn add_workspace_button_sits_at_workspaces_footer_left() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let button = add_workspace_button(&view, false).expect("button is visible");
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    assert_eq!(button.x, sections.workspaces.x);
+    assert_eq!(button.y, sections.workspaces.bottom() - 1);
+    assert_eq!(
+        button.width,
+        text::ADD_WORKSPACE_LABEL.chars().count() as u16
+    );
+    assert!(button.right() < view.sidebar.right());
+
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[button.y as usize].chars().collect();
+    let rendered: String = (button.x..button.right())
+        .map(|x| row[x as usize])
+        .collect();
+    assert_eq!(rendered, text::ADD_WORKSPACE_LABEL);
+}
+
+#[test]
+fn workspace_items_hit_list_rows_but_not_footer_or_agents() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let first_row = sections.workspaces.y;
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, first_row),
+        Some(0)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, first_row + 1),
+        Some(1)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, first_row + 2),
+        None
+    );
+    let footer_y = sections.workspaces.bottom() - 1;
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, footer_y),
+        None
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, sections.divider.y),
+        None
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, sections.agents.y),
+        None
+    );
+}
+
+#[test]
+fn add_workspace_button_hidden_when_sidebar_has_no_sections() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = true;
+    let view = view_for(&state);
+    assert_eq!(add_workspace_button(&view, false), None);
+    assert_eq!(workspace_item_at(&view, &state, 0, 1), None);
+}

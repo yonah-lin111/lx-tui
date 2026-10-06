@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
+use super::overlay::Overlay;
 use super::prompt::Prompt;
 use super::selection::Selection;
 use super::toast::Toast;
@@ -34,6 +35,10 @@ pub struct AppState {
     pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
+    /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
+    pub overlay: Option<Overlay>,
+    /// 新建工作区的下一个编号；单调递增不回收。
+    pub next_workspace_number: u32,
 }
 
 /// 工作区。
@@ -42,6 +47,17 @@ pub struct Workspace {
     pub name: String,
     pub tabs: Vec<Tab>,
     pub active_tab: usize,
+}
+
+impl Workspace {
+    /// 单窗格终端工作区；新建工作区使用。
+    pub(crate) fn single_terminal(name: String) -> Self {
+        Self {
+            name,
+            tabs: vec![Tab::single_terminal("shell")],
+            active_tab: 0,
+        }
+    }
 }
 
 /// 标签页：布局树与窗格载荷一一对应。
@@ -82,7 +98,7 @@ impl Tab {
     }
 
     /// 单窗格终端标签。
-    fn single_terminal(title: &str) -> Self {
+    pub(crate) fn single_terminal(title: &str) -> Self {
         Self::with_layout(title, TileLayout::new())
     }
 
@@ -150,6 +166,8 @@ impl AppState {
                 active_tab: 0,
             }],
             active_workspace: 0,
+            overlay: None,
+            next_workspace_number: 2,
         }
     }
 

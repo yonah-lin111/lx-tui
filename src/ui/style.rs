@@ -25,6 +25,11 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
+/// 选中项：终端原生反显，不铺自绘背景。
+pub fn selection() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
+}
+
 /// 状态：失败（Red）。
 pub fn error() -> Style {
     Style::default().fg(Color::Red)

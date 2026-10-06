@@ -397,3 +397,220 @@ fn hover_without_toast_is_noop() {
     dismiss_toast(&mut state);
     assert!(state.toast.is_none());
 }
+
+#[test]
+fn create_workspace_activates_single_shell_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace, 1);
+    let workspace = state.active_workspace();
+    assert_eq!(workspace.name, "workspace 2");
+    assert_eq!(workspace.tabs.len(), 1);
+    assert_eq!(workspace.tabs[0].title, "shell");
+    assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
+    assert!(!state.prompt_focused);
+}
+
+#[test]
+fn create_workspace_numbers_never_reuse() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    assert_eq!(state.workspaces[1].name, "workspace 2");
+    assert_eq!(state.workspaces[2].name, "workspace 3");
+    state.active_workspace = 1;
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 1 }));
+    confirm_close(&mut state);
+    assert_eq!(state.workspaces.len(), 2);
+    create_workspace(&mut state);
+    assert_eq!(state.active_workspace().name, "workspace 4");
+}
+
+#[test]
+fn switch_workspace_clears_selection_and_prompt_focus() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let pane = state.active_tab().layout.focus();
+    focus_prompt(&mut state);
+    begin_selection(&mut state, pane, 0, 0);
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.active_workspace, 0);
+    assert!(!state.prompt_focused);
+    assert!(state.selection.is_none());
+    switch_workspace(&mut state, 5);
+    assert_eq!(state.active_workspace, 0);
+}
+
+#[test]
+fn open_workspace_menu_offers_rename_and_close() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 0, (10, 5));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.target, MenuTarget::Workspace(0));
+    assert_eq!(
+        menu.commands,
+        vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace]
+    );
+    assert_eq!(menu.selected, 0);
+}
+
+#[test]
+fn open_workspace_menu_hides_close_for_last_workspace() {
+    let mut state = AppState::demo();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.commands, vec![MenuCommand::RenameWorkspace]);
+    open_workspace_menu(&mut state, 9, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.target, MenuTarget::Workspace(0));
+}
+
+#[test]
+fn menu_selection_wraps_and_reports_changes() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 0, (0, 0));
+    move_menu_selection(&mut state, -1);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.selected, 1);
+    move_menu_selection(&mut state, 1);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.selected, 0);
+    assert!(set_menu_selection(&mut state, 1));
+    assert!(!set_menu_selection(&mut state, 1));
+    assert!(!set_menu_selection(&mut state, 9));
+}
+
+#[test]
+fn activate_menu_rename_opens_prefilled_input() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 1, (0, 0));
+    activate_menu(&mut state);
+    let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
+        panic!("rename overlay expected");
+    };
+    assert_eq!(rename.target, 1);
+    assert_eq!(rename.input.text(), "workspace 2");
+    assert_eq!(rename.input.cursor(), 11);
+}
+
+#[test]
+fn activate_menu_close_opens_confirmation() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 1, (0, 0));
+    set_menu_selection(&mut state, 1);
+    activate_menu(&mut state);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::ConfirmClose)
+    );
+    assert_eq!(state.workspaces.len(), 2);
+}
+
+#[test]
+fn overlay_esc_closes_and_enter_dispatches() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 0, (0, 0));
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+
+    open_workspace_menu(&mut state, 0, (0, 0));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Rename)
+    );
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+
+    open_workspace_menu(&mut state, 0, (0, 0));
+    set_menu_selection(&mut state, 1);
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::ConfirmClose)
+    );
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn rename_overlay_edits_and_commits_trimmed_name() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 1, (0, 0));
+    activate_menu(&mut state);
+    for key in [
+        OverlayKey::Backspace,
+        OverlayKey::Backspace,
+        OverlayKey::Char(' '),
+        OverlayKey::Char('a'),
+        OverlayKey::Char('p'),
+        OverlayKey::Char('i'),
+    ] {
+        apply_overlay_key(&mut state, key);
+    }
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[1].name, "workspace api");
+}
+
+#[test]
+fn rename_overlay_rejects_empty_name() {
+    let mut state = AppState::demo();
+    let original = state.workspaces[0].name.clone();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    activate_menu(&mut state);
+    apply_overlay_key(&mut state, OverlayKey::Home);
+    for _ in 0..200 {
+        apply_overlay_key(&mut state, OverlayKey::Delete);
+    }
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Rename)
+    );
+    assert_eq!(state.workspaces[0].name, original);
+}
+
+#[test]
+fn confirm_close_removes_workspace_and_keeps_active_identity() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    let active_name = state.active_workspace().name.clone();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 0 }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace().name, active_name);
+    assert_eq!(state.active_workspace, 1);
+
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 1 }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    assert_eq!(state.active_workspace, 0);
+}
+
+#[test]
+fn confirm_close_refuses_last_workspace() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 0 }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    assert!(state.overlay.is_none());
+}

@@ -6,9 +6,12 @@ use ratatui::layout::Rect;
 
 use crate::layout::{self, PaneId};
 
-use super::actions::{Action, EditorCommand};
+use super::actions::{Action, EditorCommand, OverlayKey};
+use super::overlay::{
+    ConfirmClose, Menu, MenuCommand, MenuTarget, Overlay, OverlayKind, Rename, TextInput,
+};
 use super::selection::Selection;
-use super::state::{AppState, PaneKind};
+use super::state::{AppState, PaneKind, Workspace};
 use super::toast::Toast;
 
 /// 应用行为。
@@ -270,6 +273,162 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
 /// 最近一次 toast 到期时间；事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     state.toast.as_ref().and_then(Toast::next_deadline)
+}
+
+/// 新建工作区并激活；编号单调递增不回收，PTY 由事件循环按状态对齐启动。
+pub fn create_workspace(state: &mut AppState) {
+    let number = state.next_workspace_number;
+    state.next_workspace_number = state.next_workspace_number.saturating_add(1);
+    state
+        .workspaces
+        .push(Workspace::single_terminal(format!("workspace {number}")));
+    state.active_workspace = state.workspaces.len().saturating_sub(1);
+    state.selection = None;
+    state.prompt_focused = false;
+}
+
+/// 切换当前工作区；越界忽略。
+pub fn switch_workspace(state: &mut AppState, index: usize) {
+    if index >= state.workspaces.len() {
+        return;
+    }
+    state.active_workspace = index;
+    state.selection = None;
+    state.prompt_focused = false;
+}
+
+/// 打开工作区右键菜单；仅剩一个工作区时不提供关闭项。
+pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u16)) {
+    if target >= state.workspaces.len() {
+        return;
+    }
+    let mut commands = vec![MenuCommand::RenameWorkspace];
+    if state.workspaces.len() > 1 {
+        commands.push(MenuCommand::CloseWorkspace);
+    }
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: MenuTarget::Workspace(target),
+        commands,
+        selected: 0,
+    }));
+}
+
+/// 关闭当前浮层。
+pub fn close_overlay(state: &mut AppState) {
+    state.overlay = None;
+}
+
+/// 菜单高亮按步长循环移动。
+pub fn move_menu_selection(state: &mut AppState, step: isize) {
+    let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
+        return;
+    };
+    if menu.commands.is_empty() {
+        return;
+    }
+    let len = menu.commands.len() as isize;
+    menu.selected = (menu.selected as isize + step).rem_euclid(len) as usize;
+}
+
+/// 菜单悬停高亮；索引越界忽略；返回是否变化。
+pub fn set_menu_selection(state: &mut AppState, index: usize) -> bool {
+    let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
+        return false;
+    };
+    if index >= menu.commands.len() || menu.selected == index {
+        return false;
+    }
+    menu.selected = index;
+    true
+}
+
+/// 执行菜单当前项：重命名打开输入浮层，关闭打开确认浮层。
+pub fn activate_menu(state: &mut AppState) {
+    let Some(Overlay::Menu(menu)) = state.overlay.take() else {
+        return;
+    };
+    let MenuTarget::Workspace(target) = menu.target;
+    match menu.commands.get(menu.selected) {
+        Some(MenuCommand::RenameWorkspace) => {
+            let Some(workspace) = state.workspaces.get(target) else {
+                return;
+            };
+            state.overlay = Some(Overlay::Rename(Rename {
+                target,
+                input: TextInput::new(workspace.name.clone()),
+            }));
+        }
+        Some(MenuCommand::CloseWorkspace) => {
+            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target }));
+        }
+        None => {}
+    }
+}
+
+/// 浮层按键分派；输入层已按浮层种类过滤。
+pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
+    match key {
+        OverlayKey::Esc => close_overlay(state),
+        OverlayKey::Up => move_menu_selection(state, -1),
+        OverlayKey::Down => move_menu_selection(state, 1),
+        OverlayKey::Enter => match state.overlay.as_ref().map(Overlay::kind) {
+            Some(OverlayKind::Menu) => activate_menu(state),
+            Some(OverlayKind::Rename) => commit_rename(state),
+            Some(OverlayKind::ConfirmClose) => confirm_close(state),
+            None => {}
+        },
+        OverlayKey::Char(ch) => edit_rename(state, |input| input.insert_char(ch)),
+        OverlayKey::Backspace => edit_rename(state, TextInput::backspace),
+        OverlayKey::Delete => edit_rename(state, TextInput::delete),
+        OverlayKey::Left => edit_rename(state, TextInput::move_left),
+        OverlayKey::Right => edit_rename(state, TextInput::move_right),
+        OverlayKey::Home => edit_rename(state, TextInput::move_home),
+        OverlayKey::End => edit_rename(state, TextInput::move_end),
+    }
+}
+
+/// 对重命名输入执行一次编辑；其他浮层忽略。
+fn edit_rename(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
+    if let Some(Overlay::Rename(rename)) = state.overlay.as_mut() {
+        edit(&mut rename.input);
+    }
+}
+
+/// 提交重命名；空名不保存且浮层保持打开。
+fn commit_rename(state: &mut AppState) {
+    let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
+        return;
+    };
+    let name = rename.input.text().trim().to_string();
+    if name.is_empty() {
+        return;
+    }
+    let target = rename.target;
+    let Some(workspace) = state.workspaces.get_mut(target) else {
+        state.overlay = None;
+        return;
+    };
+    workspace.name = name;
+    state.overlay = None;
+}
+
+/// 确认关闭工作区：至少保留一个；关闭当前工作区后焦点落到同索引，越界回退末项。
+fn confirm_close(state: &mut AppState) {
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
+        return;
+    };
+    if state.workspaces.len() <= 1 || confirm.target >= state.workspaces.len() {
+        return;
+    }
+    let removed_active = confirm.target == state.active_workspace;
+    state.workspaces.remove(confirm.target);
+    if removed_active {
+        state.active_workspace = state.active_workspace.min(state.workspaces.len() - 1);
+    } else if confirm.target < state.active_workspace {
+        state.active_workspace -= 1;
+    }
+    state.selection = None;
 }
 
 #[cfg(test)]

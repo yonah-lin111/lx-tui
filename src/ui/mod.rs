@@ -2,11 +2,13 @@
 
 pub mod layout;
 pub mod markdown;
+pub mod overlay;
 pub mod prompt;
 pub mod style;
 pub mod terminal;
 pub mod text;
 pub mod toast;
+pub mod widgets;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -52,12 +54,19 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_tab_bar(frame, view.tab_bar, state);
     render_exit_button(frame, &view);
     let pane_cursor = render_panes(frame, &pane_rects, state);
-    if let Some(position) = render_prompt(frame, view.prompt, state).or(pane_cursor) {
-        frame.set_cursor_position(position);
-    }
+    let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
     render_collapse_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     toast::render(frame, area, state, &view, &pane_rects, config);
+    let overlay_cursor = overlay::render(frame, area, state);
+    // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
+    let cursor = match state.overlay {
+        Some(_) => overlay_cursor,
+        None => prompt_cursor,
+    };
+    if let Some(position) = cursor {
+        frame.set_cursor_position(position);
+    }
 }
 
 /// 折叠面板的按钮目标。
@@ -282,13 +291,81 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         frame.render_widget(List::new(items), inner);
         return;
     };
-    frame.render_widget(List::new(items), sections.workspaces);
+    frame.render_widget(List::new(items), workspace_list_area(sections.workspaces));
+    if let Some(button) = add_button_area(sections.workspaces) {
+        render_add_workspace_button(frame, button);
+    }
     render_agents_header(
         frame,
         sections.divider,
         agents_button_area(area, sections.divider),
     );
     // agents 分区暂无内容，保持空占位。
+}
+
+/// 工作区列表内容区：footer 行保留给新建按钮。
+fn workspace_list_area(workspaces: Rect) -> Rect {
+    Rect {
+        height: workspaces.height.saturating_sub(1),
+        ..workspaces
+    }
+}
+
+/// 新建工作区按钮矩形：工作区列表底行左侧；空间不足时不显示。
+pub fn add_workspace_button(view: &layout::ViewLayout, agents_collapsed: bool) -> Option<Rect> {
+    add_button_area(layout::sidebar_sections(view.sidebar, agents_collapsed)?.workspaces)
+}
+
+fn add_button_area(workspaces: Rect) -> Option<Rect> {
+    let footer = Rect {
+        y: workspaces.bottom().saturating_sub(1),
+        height: workspaces.height.min(1),
+        ..workspaces
+    };
+    let width = text::ADD_WORKSPACE_LABEL.chars().count() as u16;
+    (footer.height > 0 && footer.width >= width).then_some(Rect::new(footer.x, footer.y, width, 1))
+}
+
+/// 新建工作区按钮：强调色标签，点击立即创建并激活。
+fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
+    for (offset, symbol) in text::ADD_WORKSPACE_LABEL.chars().enumerate() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.x + offset as u16, area.y))
+        {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
+}
+
+/// 工作区项行命中：返回被点工作区索引；footer 行与空行不命中。
+///
+/// 列表无滚动，第 N 项渲染在内容区第 N 行；分区缺失时退回整块内容区。
+pub fn workspace_item_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let list = match layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
+        Some(sections) => workspace_list_area(sections.workspaces),
+        None => {
+            let sidebar = view.sidebar;
+            Rect::new(
+                sidebar.x.saturating_add(1),
+                sidebar.y.saturating_add(1),
+                sidebar.width.saturating_sub(2),
+                sidebar.height.saturating_sub(2),
+            )
+        }
+    };
+    if list.width == 0 || list.height == 0 || !list.contains((column, row).into()) {
+        return None;
+    }
+    let index = usize::from(row - list.y);
+    (index < state.workspaces.len()).then_some(index)
 }
 
 /// agents 表头：贯穿的横线与左对齐的 ` Agents ` 标题；与折叠按钮重叠时省略标题。

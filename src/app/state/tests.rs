@@ -58,3 +58,20 @@ fn pane_lookup_does_not_reach_prompt() {
     let id = state.prompt.id();
     assert!(state.pane_mut_anywhere(id).is_none());
 }
+
+#[test]
+fn demo_starts_without_overlay_and_numbering_at_two() {
+    let state = AppState::demo();
+    assert!(state.overlay.is_none());
+    assert_eq!(state.next_workspace_number, 2);
+}
+
+#[test]
+fn single_terminal_workspace_has_one_shell_pane() {
+    let workspace = Workspace::single_terminal("workspace 7".to_string());
+    assert_eq!(workspace.name, "workspace 7");
+    assert_eq!(workspace.active_tab, 0);
+    assert_eq!(workspace.tabs.len(), 1);
+    assert_eq!(workspace.tabs[0].title, "shell");
+    assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
+}

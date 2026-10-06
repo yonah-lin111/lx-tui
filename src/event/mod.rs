@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::app::actions::{Action, EditorCommand};
+use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
@@ -46,13 +47,15 @@ pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<(
 async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
     initialize_prompt_width(tui, state, config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
-    let mut sessions = spawn_sessions(state, &sender);
+    let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
 
     while !state.should_quit {
+        // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
+        reconcile_sessions(state, &mut sessions, &sender);
         let geometry = current_geometry(tui, state, config)?;
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
@@ -107,13 +110,25 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     Ok(())
 }
 
-/// 为全部窗格启动 PTY；单个失败不阻断其余窗格。
-fn spawn_sessions(
+/// 按状态对齐 PTY 会话：新增终端窗格启动会话，被移除或非终端的窗格终止会话；幂等。
+fn reconcile_sessions(
     state: &AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
     sender: &mpsc::UnboundedSender<AppEvent>,
-) -> HashMap<PaneId, PtySession> {
-    let mut sessions = HashMap::new();
+) {
+    sessions.retain(|id, session| {
+        let alive = state
+            .pane_anywhere(*id)
+            .is_some_and(|pane| pane.kind == PaneKind::Terminal);
+        if !alive {
+            session.kill();
+        }
+        alive
+    });
     for id in state.all_pane_ids() {
+        if sessions.contains_key(&id) {
+            continue;
+        }
         let Some(pane) = state.pane_anywhere(id) else {
             continue;
         };
@@ -136,7 +151,6 @@ fn spawn_sessions(
             Err(error) => tracing::error!(pane = id.raw(), %error, "pty spawn failed"),
         }
     }
-    sessions
 }
 
 /// 启动时右栏宽度取主区可用宽度的一半，复刻旧 50% 分割的版面。
@@ -213,7 +227,8 @@ fn handle_terminal_event(
                 .active_pane()
                 .map(|pane| pane.terminal.mode())
                 .unwrap_or_else(TermMode::empty);
-            let Some(routed) = input::route(key, mode, state.prompt_focused) else {
+            let overlay = state.overlay.as_ref().map(Overlay::kind);
+            let Some(routed) = input::route(key, mode, state.prompt_focused, overlay) else {
                 return;
             };
             match routed {
@@ -223,6 +238,10 @@ fn handle_terminal_event(
                 }
                 Routed::Editor(command) => {
                     update::apply_editor(state, command);
+                    *dirty = true;
+                }
+                Routed::Overlay(key) => {
+                    update::apply_overlay_key(state, key);
                     *dirty = true;
                 }
                 Routed::Copy => {
@@ -276,6 +295,11 @@ fn handle_terminal_event(
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if state.overlay.is_some() {
+                    handle_overlay_click(state, *screen, mouse.column, mouse.row);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config)
                     && toast.contains((mouse.column, mouse.row).into())
                 {
@@ -300,6 +324,16 @@ fn handle_terminal_event(
                     if update::set_prompt_hover(state, false) {
                         reset_pointer_shape();
                     }
+                    *dirty = true;
+                } else if let Some(index) =
+                    ui::workspace_item_at(view, state, mouse.column, mouse.row)
+                {
+                    update::switch_workspace(state, index);
+                    *dirty = true;
+                } else if ui::add_workspace_button(view, state.agents_collapsed)
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                {
+                    update::create_workspace(state);
                     *dirty = true;
                 } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
                     .is_some_and(|(_, right)| right == state.prompt.id())
@@ -328,7 +362,31 @@ fn handle_terminal_event(
                     update::clear_selection(state);
                 }
             }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // 菜单打开时右键不穿透：工作区项上重开，其余位置关闭。
+                if matches!(state.overlay, Some(Overlay::Menu(_))) {
+                    match ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+                        Some(index) => {
+                            update::open_workspace_menu(state, index, (mouse.column, mouse.row))
+                        }
+                        None => update::close_overlay(state),
+                    }
+                    *dirty = true;
+                    return;
+                }
+                // 重命名与关闭确认期间右键吞掉，不替换模态。
+                if state.overlay.is_some() {
+                    return;
+                }
+                if let Some(index) = ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+                    update::open_workspace_menu(state, index, (mouse.column, mouse.row));
+                    *dirty = true;
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if state.overlay.is_some() {
+                    return;
+                }
                 if state.resizing_prompt {
                     let width =
                         ui::layout::prompt_width_at(view, mouse.column, config.min_pane_width);
@@ -356,6 +414,9 @@ fn handle_terminal_event(
                 *dirty = true;
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if state.overlay.is_some() {
+                    return;
+                }
                 if state.resizing_prompt {
                     update::end_prompt_resize(state);
                     *dirty = true;
@@ -389,6 +450,9 @@ fn handle_terminal_event(
                 *dirty = true;
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if state.overlay.is_some() {
+                    return;
+                }
                 if state.resizing_prompt
                     || state
                         .selection
@@ -410,6 +474,19 @@ fn handle_terminal_event(
                 }
             }
             MouseEventKind::Moved => {
+                // 浮层打开时悬停只服务菜单高亮，不触碰底层 hover 状态。
+                if state.overlay.is_some() {
+                    if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
+                        let layout = ui::overlay::menu_layout(*screen, menu);
+                        if let Some(index) =
+                            ui::widgets::menu::item_at(&layout, mouse.column, mouse.row)
+                            && update::set_menu_selection(state, index)
+                        {
+                            *dirty = true;
+                        }
+                    }
+                    return;
+                }
                 let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)
                     .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
                 if update::set_toast_hover(state, hovering_toast) {
@@ -432,6 +509,37 @@ fn handle_terminal_event(
         },
         TerminalEvent::Resize(_, _) => *dirty = true,
         _ => {}
+    }
+}
+
+/// 浮层左键点击：菜单项执行命令，点击浮层外取消；点击浮层内空白不动作。
+fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u16) {
+    match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => {
+            let layout = ui::overlay::menu_layout(screen, menu);
+            match ui::widgets::menu::item_at(&layout, column, row) {
+                Some(index) => {
+                    update::set_menu_selection(state, index);
+                    update::activate_menu(state);
+                }
+                None => update::close_overlay(state),
+            }
+        }
+        Some(Overlay::Rename(_)) => {
+            let inside = ui::overlay::rename_shell(screen)
+                .is_some_and(|shell| shell.area.contains((column, row).into()));
+            if !inside {
+                update::close_overlay(state);
+            }
+        }
+        Some(Overlay::ConfirmClose(_)) => {
+            let inside = ui::overlay::confirm_shell(screen)
+                .is_some_and(|shell| shell.area.contains((column, row).into()));
+            if !inside {
+                update::close_overlay(state);
+            }
+        }
+        None => {}
     }
 }
 

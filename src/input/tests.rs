@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// 无浮层路由的测试别名；浮层路由直接调用 `super::route`。
+fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Routed> {
+    super::route(key, mode, prompt_focused, None)
+}
+
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
 }
@@ -304,6 +309,108 @@ fn ctrl_q_quits_even_when_prompt_focused() {
     let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
         route(key, TermMode::empty(), true),
+        Some(Routed::Action(Action::Quit))
+    );
+}
+
+#[test]
+fn menu_overlay_routes_navigation_keys_only() {
+    let route_menu = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::Menu),
+        )
+    };
+    for (code, expected) in [
+        (KeyCode::Esc, OverlayKey::Esc),
+        (KeyCode::Up, OverlayKey::Up),
+        (KeyCode::Down, OverlayKey::Down),
+        (KeyCode::Enter, OverlayKey::Enter),
+    ] {
+        assert_eq!(
+            route_menu(code, KeyModifiers::NONE),
+            Some(Routed::Overlay(expected)),
+            "{code:?}"
+        );
+    }
+    for code in [KeyCode::Char('q'), KeyCode::Backspace, KeyCode::Left] {
+        assert_eq!(route_menu(code, KeyModifiers::NONE), None, "{code:?}");
+    }
+}
+
+#[test]
+fn confirm_overlay_routes_enter_and_esc_only() {
+    let route_confirm = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::ConfirmClose),
+        )
+    };
+    assert_eq!(
+        route_confirm(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_confirm(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(route_confirm(KeyCode::Char('y')), None);
+}
+
+#[test]
+fn rename_overlay_routes_editing_keys() {
+    let route_rename = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            true,
+            Some(OverlayKind::Rename),
+        )
+    };
+    assert_eq!(
+        route_rename(KeyCode::Char('a'), KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Char('a')))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Char('A'), KeyModifiers::SHIFT),
+        Some(Routed::Overlay(OverlayKey::Char('A')))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Backspace, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Backspace))
+    );
+    assert_eq!(
+        route_rename(KeyCode::Delete, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Delete))
+    );
+    for (code, expected) in [
+        (KeyCode::Left, OverlayKey::Left),
+        (KeyCode::Right, OverlayKey::Right),
+        (KeyCode::Home, OverlayKey::Home),
+        (KeyCode::End, OverlayKey::End),
+    ] {
+        assert_eq!(
+            route_rename(code, KeyModifiers::NONE),
+            Some(Routed::Overlay(expected)),
+            "{code:?}"
+        );
+    }
+    assert_eq!(
+        route_rename(KeyCode::Char('a'), KeyModifiers::CONTROL),
+        None
+    );
+    assert_eq!(route_rename(KeyCode::Up, KeyModifiers::NONE), None);
+}
+
+#[test]
+fn overlay_does_not_swallow_ctrl_q() {
+    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    assert_eq!(
+        super::route(key, TermMode::empty(), false, Some(OverlayKind::Menu)),
         Some(Routed::Action(Action::Quit))
     );
 }
