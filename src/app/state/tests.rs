@@ -80,6 +80,10 @@ fn demo_starts_without_overlay_or_scroll() {
     assert!(state.workspace_scroll_drag.is_none());
     assert!(!state.workspaces[0].name_is_manual);
     assert!(state.workspaces[0].cwd.is_some());
+    assert!(state.workspaces[0].is_initial);
+    assert_eq!(state.sidebar_width, DEFAULT_SIDEBAR_WIDTH);
+    assert!(!state.resizing_sidebar);
+    assert!(!state.sidebar_hover);
 }
 
 #[test]
@@ -91,6 +95,7 @@ fn single_terminal_workspace_is_auto_named_with_root_pane() {
     assert_eq!(workspace.tabs[0].title, "shell");
     assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
     assert!(!workspace.name_is_manual);
+    assert!(!workspace.is_initial);
     assert_eq!(
         workspace.root_pane(),
         Some(workspace.tabs[0].layout.focus())

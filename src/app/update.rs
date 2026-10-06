@@ -231,6 +231,33 @@ pub fn end_prompt_resize(state: &mut AppState) {
     state.resizing_prompt = false;
 }
 
+/// 在侧栏分割线上开始拖拽；清除已有选区。
+pub fn begin_sidebar_resize(state: &mut AppState) {
+    state.selection = None;
+    state.resizing_sidebar = true;
+}
+
+/// 拖拽中更新侧栏宽度；未处于拖拽时忽略。
+pub fn drag_sidebar(state: &mut AppState, width: u16) {
+    if state.resizing_sidebar {
+        state.sidebar_width = width;
+    }
+}
+
+/// 结束侧栏拖拽。
+pub fn end_sidebar_resize(state: &mut AppState) {
+    state.resizing_sidebar = false;
+}
+
+/// 更新侧栏分割线悬停状态；返回是否发生变化。
+pub fn set_sidebar_hover(state: &mut AppState, hover: bool) -> bool {
+    if state.sidebar_hover == hover {
+        return false;
+    }
+    state.sidebar_hover = hover;
+    true
+}
+
 /// 更新右栏分割线悬停状态；返回是否发生变化。
 pub fn set_prompt_hover(state: &mut AppState, hover: bool) -> bool {
     if state.prompt_hover == hover {

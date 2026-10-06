@@ -20,6 +20,7 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         screen,
         &config,
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     );

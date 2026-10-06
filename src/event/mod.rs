@@ -45,7 +45,7 @@ pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<(
 }
 
 async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
-    initialize_prompt_width(tui, state, config)?;
+    initialize_layout_widths(tui, state, config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();
@@ -200,10 +200,15 @@ fn reconcile_sessions(
     }
 }
 
-/// 启动时右栏宽度取主区可用宽度的一半，复刻旧 50% 分割的版面。
-fn initialize_prompt_width(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+/// 启动时确定栏宽：右栏取主区可用宽度的一半（复刻旧 50% 分割），左栏取配置值。
+fn initialize_layout_widths(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+) -> io::Result<()> {
     let size = tui.terminal().size()?;
     let area = Rect::new(0, 0, size.width, size.height);
+    state.sidebar_width = config.sidebar_width;
     state.prompt_width = ui::layout::default_prompt_width(area, config, state.sidebar_collapsed);
     Ok(())
 }
@@ -225,6 +230,7 @@ fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Res
         screen,
         config,
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     );
@@ -376,9 +382,14 @@ fn handle_terminal_event(
                         ui::CollapseTarget::Agents => Action::ToggleAgents,
                     };
                     update::apply(action, state);
-                    if update::set_prompt_hover(state, false) {
+                    let mut pointer_reset = update::set_prompt_hover(state, false);
+                    pointer_reset |= update::set_sidebar_hover(state, false);
+                    if pointer_reset {
                         reset_pointer_shape();
                     }
+                    *dirty = true;
+                } else if ui::sidebar_boundary_at(view, mouse.column, mouse.row) {
+                    update::begin_sidebar_resize(state);
                     *dirty = true;
                 } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row) {
                     *dirty = true;
@@ -458,6 +469,12 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                if state.resizing_sidebar {
+                    let width = ui::layout::sidebar_width_at(view, config, mouse.column);
+                    update::drag_sidebar(state, width);
+                    *dirty = true;
+                    return;
+                }
                 if state.resizing_prompt {
                     let width =
                         ui::layout::prompt_width_at(view, mouse.column, config.min_pane_width);
@@ -489,6 +506,11 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.workspace_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.resizing_sidebar {
+                    update::end_sidebar_resize(state);
+                    *dirty = true;
                     return;
                 }
                 if state.resizing_prompt {
@@ -577,11 +599,16 @@ fn handle_terminal_event(
                 if update::set_toast_hover(state, hovering_toast) {
                     *dirty = true;
                 }
-                let hover = !hovering_toast
+                let sidebar_hover =
+                    !hovering_toast && ui::sidebar_boundary_at(view, mouse.column, mouse.row);
+                let prompt_hover = !hovering_toast
+                    && !sidebar_hover
                     && layout::resize_boundary_at(rects, mouse.column, mouse.row)
                         .is_some_and(|(_, right)| right == state.prompt.id());
-                if update::set_prompt_hover(state, hover) {
-                    let shape = if hover {
+                let mut hover_changed = update::set_sidebar_hover(state, sidebar_hover);
+                hover_changed |= update::set_prompt_hover(state, prompt_hover);
+                if hover_changed {
+                    let shape = if sidebar_hover || prompt_hover {
                         crate::platform::PointerShape::EwResize
                     } else {
                         crate::platform::PointerShape::Default

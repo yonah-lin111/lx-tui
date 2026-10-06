@@ -35,6 +35,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         area,
         config,
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     );
@@ -237,16 +238,32 @@ fn collapsed_content_x(area: Rect, separator_right: bool) -> u16 {
     }
 }
 
-/// 右栏分割线提示：悬停或拖拽时把两列边框改为强调色。
+/// 左右栏分割线提示：悬停或拖拽时把相邻两列边框改为强调色。
 fn render_resize_hint(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
-    if state.prompt_collapsed
-        || !(state.resizing_prompt || state.prompt_hover)
-        || view.prompt.x == 0
+    if !state.sidebar_collapsed
+        && view.sidebar.width > 0
+        && (state.resizing_sidebar || state.sidebar_hover)
     {
-        return;
+        highlight_divider(
+            frame,
+            view,
+            [view.sidebar.right().saturating_sub(1), view.sidebar.right()],
+        );
     }
+    if !state.prompt_collapsed && view.prompt.x > 0 && (state.resizing_prompt || state.prompt_hover)
+    {
+        highlight_divider(
+            frame,
+            view,
+            [view.prompt.x.saturating_sub(1), view.prompt.x],
+        );
+    }
+}
+
+/// 把分割线相邻两列中的边框符号改为强调色。
+fn highlight_divider(frame: &mut Frame<'_>, view: &layout::ViewLayout, columns: [u16; 2]) {
     let buf = frame.buffer_mut();
-    for column in [view.prompt.x.saturating_sub(1), view.prompt.x] {
+    for column in columns {
         for row in view.panes.y..view.panes.bottom() {
             if let Some(cell) = buf.cell_mut((column, row))
                 && cell.symbol() == text::STRIP_LINE
@@ -262,19 +279,6 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let items: Vec<ListItem<'_>> = state
-        .workspaces
-        .iter()
-        .enumerate()
-        .map(|(index, workspace)| {
-            let style = if index == state.active_workspace {
-                style::accent()
-            } else {
-                style::text()
-            };
-            ListItem::new(Line::from(Span::styled(workspace.name.as_str(), style)))
-        })
-        .collect();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::border(false))
@@ -288,6 +292,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         return;
     }
     let Some(sections) = layout::sidebar_sections(area, state.agents_collapsed) else {
+        let items = workspace_items(state, usize::from(inner.width));
         frame.render_widget(List::new(items), inner);
         return;
     };
@@ -300,6 +305,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         },
         None => list,
     };
+    let items = workspace_items(state, usize::from(list_area.width));
     let mut list_state = ListState::default().with_offset(state.workspace_scroll);
     frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
     if let Some(scrollbar) = &scrollbar {
@@ -314,6 +320,41 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         agents_button_area(area, sections.divider),
     );
     // agents 分区暂无内容，保持空占位。
+}
+
+/// 工作区列表项：激活项强调色；启动工作区在名字后追加不可移除的 `*` 标记。
+///
+/// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
+fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
+    let marker_width = text::INITIAL_WORKSPACE_MARKER.chars().count();
+    state
+        .workspaces
+        .iter()
+        .enumerate()
+        .map(|(index, workspace)| {
+            let item_style = if index == state.active_workspace {
+                style::accent()
+            } else {
+                style::text()
+            };
+            let name_width = if workspace.is_initial {
+                width.saturating_sub(marker_width)
+            } else {
+                width
+            };
+            let mut spans = vec![Span::styled(
+                text::ellipsize(&workspace.name, name_width),
+                item_style,
+            )];
+            if workspace.is_initial {
+                spans.push(Span::styled(
+                    text::INITIAL_WORKSPACE_MARKER,
+                    style::marker(),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect()
 }
 
 /// 工作区列表内容区：footer 行保留给新建按钮。
@@ -360,6 +401,17 @@ pub fn workspace_section_at(
 ) -> bool {
     layout::sidebar_sections(view.sidebar, state.agents_collapsed)
         .is_some_and(|sections| sections.workspaces.contains((column, row).into()))
+}
+
+/// 侧栏分割线命中：展开态相邻两列边框（侧栏右边框与主区左列），限主区行范围。
+pub fn sidebar_boundary_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool {
+    if view.sidebar.width <= COLLAPSED_STRIP || view.panes.width == 0 {
+        return false;
+    }
+    if row < view.panes.y || row >= view.panes.bottom() {
+        return false;
+    }
+    column == view.sidebar.right().saturating_sub(1) || column == view.sidebar.right()
 }
 
 /// 新建工作区按钮矩形：工作区列表底行左侧；空间不足时不显示。

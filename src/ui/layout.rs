@@ -20,10 +20,11 @@ pub fn compute(
     area: Rect,
     config: &Config,
     sidebar_collapsed: bool,
+    sidebar_width: u16,
     prompt_collapsed: bool,
     prompt_width: u16,
 ) -> ViewLayout {
-    let sidebar_width = sidebar_width(area, config, sidebar_collapsed);
+    let sidebar_width = resolved_sidebar_width(area, config, sidebar_collapsed, sidebar_width);
     let sidebar = Rect {
         width: sidebar_width,
         ..area
@@ -119,10 +120,30 @@ pub fn sidebar_sections(sidebar: Rect, agents_collapsed: bool) -> Option<Sidebar
 
 /// 启动默认右栏宽度：主区可用宽度的一半，复刻旧 50% 分割的版面。
 pub fn default_prompt_width(area: Rect, config: &Config, sidebar_collapsed: bool) -> u16 {
-    let available = area
-        .width
-        .saturating_sub(sidebar_width(area, config, sidebar_collapsed));
+    let available = area.width.saturating_sub(resolved_sidebar_width(
+        area,
+        config,
+        sidebar_collapsed,
+        config.sidebar_width,
+    ));
     clamp_prompt_width(available, available / 2, config.min_pane_width)
+}
+
+/// 拖拽侧栏分割线到屏幕列 `boundary_x` 时侧栏应有的宽度（屏幕坐标）。
+///
+/// 上限同时受配置与"主区至少 `min_pane_width`"约束；空间不足时回退最小宽度。
+pub fn sidebar_width_at(view: &ViewLayout, config: &Config, boundary_x: u16) -> u16 {
+    let total = view
+        .panes
+        .right()
+        .saturating_sub(view.sidebar.x)
+        .max(view.sidebar.width);
+    let max = config
+        .sidebar_max_width
+        .min(total.saturating_sub(config.min_pane_width))
+        .max(config.sidebar_min_width);
+    let desired = boundary_x.saturating_sub(view.sidebar.x).saturating_add(1);
+    desired.clamp(config.sidebar_min_width, max)
 }
 
 /// 拖拽分割线到屏幕列 `boundary_x` 时右栏应有的宽度（屏幕坐标）。
@@ -136,11 +157,13 @@ pub fn prompt_width_at(view: &ViewLayout, boundary_x: u16, min_width: u16) -> u1
     )
 }
 
-/// 左栏宽度：展开取配置值，折叠且宽度充足取窄条，否则隐藏。
-fn sidebar_width(area: Rect, config: &Config, sidebar_collapsed: bool) -> u16 {
+/// 左栏宽度：展开取运行时值并钳制配置边界，折叠且宽度充足取窄条，否则隐藏。
+fn resolved_sidebar_width(area: Rect, config: &Config, sidebar_collapsed: bool, width: u16) -> u16 {
     let wide_enough = area.width >= config.narrow_width;
     if !sidebar_collapsed && wide_enough {
-        config.sidebar_width.min(area.width)
+        width
+            .clamp(config.sidebar_min_width, config.sidebar_max_width)
+            .min(area.width)
     } else if sidebar_collapsed && wide_enough {
         COLLAPSED_STRIP
     } else {

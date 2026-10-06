@@ -30,6 +30,7 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
         Rect::new(0, 0, 100, 24),
         &Config::default(),
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     )
@@ -690,4 +691,84 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
         workspace_item_at(&view, &state, list.right() - 1, list.y),
         None
     );
+}
+
+#[test]
+fn initial_workspace_renders_green_marker() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    let initial = state.workspaces[0].name.clone();
+    let created = state.workspaces[1].name.clone();
+    let lines = render_lines(&state);
+    let marker_line = lines
+        .iter()
+        .position(|line| line.contains(&format!("{initial} *")))
+        .expect("initial workspace shows marker");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(&created) && !line.contains(&format!("{created} *")))
+    );
+
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let row: Vec<char> = lines[marker_line].chars().collect();
+    let marker_x = row
+        .iter()
+        .position(|symbol| *symbol == '*')
+        .expect("marker is rendered");
+    assert_eq!(
+        buffer[(marker_x as u16, marker_line as u16)].fg,
+        ratatui::style::Color::Green
+    );
+}
+
+#[test]
+fn long_initial_workspace_name_keeps_marker_visible() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "a-very-long-workspace-name-that-would-be-clipped".to_string();
+    let lines = render_lines(&state);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains('…') && line.contains(" *")),
+        "marker should survive ellipsis"
+    );
+}
+
+#[test]
+fn sidebar_boundary_hits_adjacent_columns_in_pane_rows() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let left = view.sidebar.right() - 1;
+    let right = view.sidebar.right();
+    assert!(sidebar_boundary_at(&view, left, view.panes.y));
+    assert!(sidebar_boundary_at(&view, right, view.panes.bottom() - 1));
+    assert!(!sidebar_boundary_at(&view, left, view.panes.y - 1));
+    assert!(!sidebar_boundary_at(&view, left - 1, view.panes.y));
+
+    let mut collapsed = AppState::demo();
+    collapsed.sidebar_collapsed = true;
+    let view = view_for(&collapsed);
+    assert!(!sidebar_boundary_at(
+        &view,
+        view.sidebar.right() - 1,
+        view.panes.y
+    ));
+}
+
+#[test]
+fn sidebar_boundary_hit_uses_runtime_width() {
+    let mut state = AppState::demo();
+    state.sidebar_width = 32;
+    let view = view_for(&state);
+    assert_eq!(view.sidebar.width, 32);
+    assert!(sidebar_boundary_at(&view, 31, view.panes.y));
+    assert!(sidebar_boundary_at(&view, 32, view.panes.y));
+    assert!(!sidebar_boundary_at(&view, 23, view.panes.y));
 }

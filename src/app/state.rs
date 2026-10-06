@@ -19,12 +19,21 @@ const DEFAULT_ROWS: u16 = 24;
 /// 生产启动时按主区可用宽度的一半覆盖，之后可拖拽。
 const DEFAULT_PROMPT_WIDTH: u16 = 30;
 
+/// 侧栏展开宽度的兜底初值（列）；生产启动时由配置覆盖。
+const DEFAULT_SIDEBAR_WIDTH: u16 = 24;
+
 /// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端；prompt 为全局右栏。
 #[derive(Debug)]
 pub struct AppState {
     pub should_quit: bool,
     pub sidebar_collapsed: bool,
     pub agents_collapsed: bool,
+    /// 侧栏展开宽度（列）；启动时取配置值，可拖拽。
+    pub sidebar_width: u16,
+    /// 侧栏分割线是否正在拖拽。
+    pub resizing_sidebar: bool,
+    /// 侧栏分割线是否悬停。
+    pub sidebar_hover: bool,
     pub toast: Option<Toast>,
     pub selection: Option<Selection>,
     pub resizing_prompt: bool,
@@ -54,6 +63,8 @@ pub struct Workspace {
     pub name_is_manual: bool,
     /// 驱动命名的窗格 cwd（自动命名跟踪用）。
     pub cwd: Option<PathBuf>,
+    /// 是否为启动时创建的工作区；列表项显示不可移除的 `*` 标记。
+    pub is_initial: bool,
 }
 
 impl Workspace {
@@ -65,6 +76,7 @@ impl Workspace {
             active_tab: 0,
             name_is_manual: false,
             cwd,
+            is_initial: false,
         }
     }
 
@@ -209,6 +221,9 @@ impl AppState {
             should_quit: false,
             sidebar_collapsed: false,
             agents_collapsed: false,
+            sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            resizing_sidebar: false,
+            sidebar_hover: false,
             toast: None,
             selection: None,
             resizing_prompt: false,
@@ -223,6 +238,7 @@ impl AppState {
                 active_tab: 0,
                 name_is_manual: false,
                 cwd,
+                is_initial: true,
             }],
             active_workspace: 0,
             workspace_scroll: 0,

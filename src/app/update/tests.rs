@@ -411,6 +411,7 @@ fn create_workspace_activates_deduped_cwd_workspace() {
     assert_eq!(workspace.tabs[0].title, "shell");
     assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
     assert!(!workspace.name_is_manual);
+    assert!(!workspace.is_initial);
     assert!(!state.prompt_focused);
 }
 
@@ -665,4 +666,36 @@ fn confirm_close_refuses_last_workspace() {
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
     assert!(state.overlay.is_none());
+}
+
+#[test]
+fn sidebar_resize_only_applies_while_resizing() {
+    let mut state = AppState::demo();
+    let before = state.sidebar_width;
+    drag_sidebar(&mut state, 32);
+    assert_eq!(state.sidebar_width, before);
+    begin_sidebar_resize(&mut state);
+    assert!(state.resizing_sidebar);
+    drag_sidebar(&mut state, 32);
+    assert_eq!(state.sidebar_width, 32);
+    end_sidebar_resize(&mut state);
+    assert!(!state.resizing_sidebar);
+}
+
+#[test]
+fn begin_sidebar_resize_clears_selection() {
+    let mut state = AppState::demo();
+    let focus = state.active_tab().layout.focus();
+    begin_selection(&mut state, focus, 0, 0);
+    begin_sidebar_resize(&mut state);
+    assert!(state.selection.is_none());
+}
+
+#[test]
+fn set_sidebar_hover_reports_changes() {
+    let mut state = AppState::demo();
+    assert!(set_sidebar_hover(&mut state, true));
+    assert!(!set_sidebar_hover(&mut state, true));
+    assert!(set_sidebar_hover(&mut state, false));
+    assert!(!state.sidebar_hover);
 }

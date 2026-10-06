@@ -23,6 +23,9 @@ pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 /// 侧栏工作区列表底部的新建按钮。
 pub const ADD_WORKSPACE_LABEL: &str = "[+]";
 
+/// 初始工作区标记：不可移除，跟随启动工作区。
+pub const INITIAL_WORKSPACE_MARKER: &str = " *";
+
 /// 工作区右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";
 pub const MENU_CLOSE_WORKSPACE: &str = "Close";
