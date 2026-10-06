@@ -13,7 +13,7 @@ pub mod widgets;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::app::state::{AppState, Pane, PaneKind};
 use crate::config::Config;
@@ -291,7 +291,20 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         frame.render_widget(List::new(items), inner);
         return;
     };
-    frame.render_widget(List::new(items), workspace_list_area(sections.workspaces));
+    let list = workspace_list_area(sections.workspaces);
+    let scrollbar = workspace_scrollbar_for(list, state);
+    let list_area = match &scrollbar {
+        Some(_) => Rect {
+            width: list.width.saturating_sub(1),
+            ..list
+        },
+        None => list,
+    };
+    let mut list_state = ListState::default().with_offset(state.workspace_scroll);
+    frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
+    if let Some(scrollbar) = &scrollbar {
+        widgets::scrollbar::render(frame, scrollbar);
+    }
     if let Some(button) = add_button_area(sections.workspaces) {
         render_add_workspace_button(frame, button);
     }
@@ -309,6 +322,44 @@ fn workspace_list_area(workspaces: Rect) -> Rect {
         height: workspaces.height.saturating_sub(1),
         ..workspaces
     }
+}
+
+/// 工作区列表滚动条几何；不需要滚动或分区缺失时 None。
+pub fn workspace_scrollbar(
+    view: &layout::ViewLayout,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
+    workspace_scrollbar_for(workspace_list_area(sections.workspaces), state)
+}
+
+fn workspace_scrollbar_for(
+    list: Rect,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    widgets::scrollbar::layout(
+        list,
+        state.workspaces.len(),
+        usize::from(list.height),
+        state.workspace_scroll,
+    )
+}
+
+/// 工作区列表可见行数（不含 footer）；无分区时 None。
+pub fn workspace_list_rows(view: &layout::ViewLayout, state: &AppState) -> Option<usize> {
+    let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
+    Some(usize::from(workspace_list_area(sections.workspaces).height))
+}
+
+/// 坐标是否落在侧栏 workspaces 区（含 footer）。
+pub fn workspace_section_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+        .is_some_and(|sections| sections.workspaces.contains((column, row).into()))
 }
 
 /// 新建工作区按钮矩形：工作区列表底行左侧；空间不足时不显示。
@@ -340,9 +391,9 @@ fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-/// 工作区项行命中：返回被点工作区索引；footer 行与空行不命中。
+/// 工作区项行命中：返回被点工作区索引；footer、滚动条列与空行不命中。
 ///
-/// 列表无滚动，第 N 项渲染在内容区第 N 行；分区缺失时退回整块内容区。
+/// 第 N 项渲染在内容区第 `N - workspace_scroll` 行；分区缺失时退回整块内容区。
 pub fn workspace_item_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -364,7 +415,16 @@ pub fn workspace_item_at(
     if list.width == 0 || list.height == 0 || !list.contains((column, row).into()) {
         return None;
     }
-    let index = usize::from(row - list.y);
+    let content_width = match workspace_scrollbar_for(list, state) {
+        Some(_) => list.width.saturating_sub(1),
+        None => list.width,
+    };
+    if column >= list.x.saturating_add(content_width) {
+        return None;
+    }
+    let index = state
+        .workspace_scroll
+        .saturating_add(usize::from(row - list.y));
     (index < state.workspaces.len()).then_some(index)
 }
 

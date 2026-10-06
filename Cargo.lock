@@ -709,6 +709,7 @@ dependencies = [
  "alacritty_terminal",
  "base64",
  "crossterm",
+ "libc",
  "portable-pty",
  "ratatui",
  "tokio",

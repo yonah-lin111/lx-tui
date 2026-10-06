@@ -13,9 +13,22 @@ fn demo_state_has_expected_shape() {
 }
 
 #[test]
-fn workspace_name_uses_current_path_last_segment() {
-    assert_eq!(workspace_name_from(Path::new("/a/b/lx-tui")), "lx-tui");
-    assert_eq!(workspace_name_from(Path::new("/")), FALLBACK_WORKSPACE_NAME);
+fn workspace_label_takes_last_segment_and_home() {
+    assert_eq!(workspace_label(Path::new("/a/b/lx-tui"), None), "lx-tui");
+    assert_eq!(
+        workspace_label(Path::new("/Users/me"), Some(Path::new("/Users/me"))),
+        "~"
+    );
+    assert_eq!(workspace_label(Path::new("/"), None), "/");
+}
+
+#[test]
+fn unique_workspace_name_appends_smallest_free_suffix() {
+    let taken = |candidate: &str| candidate == "lx-tui";
+    assert_eq!(unique_workspace_name("api", taken), "api");
+    assert_eq!(unique_workspace_name("lx-tui", taken), "lx-tui 2");
+    let taken = |candidate: &str| candidate == "lx-tui" || candidate == "lx-tui 2";
+    assert_eq!(unique_workspace_name("lx-tui", taken), "lx-tui 3");
 }
 
 #[test]
@@ -60,18 +73,26 @@ fn pane_lookup_does_not_reach_prompt() {
 }
 
 #[test]
-fn demo_starts_without_overlay_and_numbering_at_two() {
+fn demo_starts_without_overlay_or_scroll() {
     let state = AppState::demo();
     assert!(state.overlay.is_none());
-    assert_eq!(state.next_workspace_number, 2);
+    assert_eq!(state.workspace_scroll, 0);
+    assert!(state.workspace_scroll_drag.is_none());
+    assert!(!state.workspaces[0].name_is_manual);
+    assert!(state.workspaces[0].cwd.is_some());
 }
 
 #[test]
-fn single_terminal_workspace_has_one_shell_pane() {
-    let workspace = Workspace::single_terminal("workspace 7".to_string());
+fn single_terminal_workspace_is_auto_named_with_root_pane() {
+    let workspace = Workspace::single_terminal("workspace 7".to_string(), None);
     assert_eq!(workspace.name, "workspace 7");
     assert_eq!(workspace.active_tab, 0);
     assert_eq!(workspace.tabs.len(), 1);
     assert_eq!(workspace.tabs[0].title, "shell");
     assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
+    assert!(!workspace.name_is_manual);
+    assert_eq!(
+        workspace.root_pane(),
+        Some(workspace.tabs[0].layout.focus())
+    );
 }

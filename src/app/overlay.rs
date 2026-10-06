@@ -94,6 +94,12 @@ impl TextInput {
         self.cursor += 1;
     }
 
+    /// 清空文本并把光标移到开头。
+    pub fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
     /// 删除光标前一个字符。
     pub fn backspace(&mut self) {
         if self.cursor == 0 {

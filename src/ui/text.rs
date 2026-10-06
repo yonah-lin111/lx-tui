@@ -30,8 +30,11 @@ pub const MENU_CLOSE_WORKSPACE: &str = "Close";
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
-/// 关闭确认键位提示。
-pub const CONFIRM_CLOSE_HINT: &str = "[Enter] confirm  [Esc] cancel";
+/// 模态底部按钮：名称在前、快捷键在后。
+pub const BUTTON_SAVE: &str = "[save ↵]";
+pub const BUTTON_CLEAR: &str = "[clear ^c]";
+pub const BUTTON_CANCEL: &str = "[cancel esc]";
+pub const BUTTON_CONFIRM: &str = "[confirm ↵]";
 
 /// 关闭确认问题文案。
 pub fn confirm_close_question(name: &str) -> String {

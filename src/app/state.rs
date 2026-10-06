@@ -1,6 +1,7 @@
 //! 应用状态：唯一状态来源，纯数据，可在无终端环境下构造与测试。
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
@@ -35,10 +36,12 @@ pub struct AppState {
     pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
+    /// 工作区列表滚动偏移（顶部项索引）。
+    pub workspace_scroll: usize,
+    /// 拖拽滚动条 thumb 时相对顶部的抓取偏移。
+    pub workspace_scroll_drag: Option<u16>,
     /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
     pub overlay: Option<Overlay>,
-    /// 新建工作区的下一个编号；单调递增不回收。
-    pub next_workspace_number: u32,
 }
 
 /// 工作区。
@@ -47,16 +50,27 @@ pub struct Workspace {
     pub name: String,
     pub tabs: Vec<Tab>,
     pub active_tab: usize,
+    /// 用户是否手动改过名；为真时 cwd 变化不再自动改名。
+    pub name_is_manual: bool,
+    /// 驱动命名的窗格 cwd（自动命名跟踪用）。
+    pub cwd: Option<PathBuf>,
 }
 
 impl Workspace {
-    /// 单窗格终端工作区；新建工作区使用。
-    pub(crate) fn single_terminal(name: String) -> Self {
+    /// 单窗格终端工作区；新建工作区使用，初始为自动命名。
+    pub(crate) fn single_terminal(name: String, cwd: Option<PathBuf>) -> Self {
         Self {
             name,
             tabs: vec![Tab::single_terminal("shell")],
             active_tab: 0,
+            name_is_manual: false,
+            cwd,
         }
+    }
+
+    /// 身份窗格：第一个标签的根窗格，工作区命名跟随它的 cwd。
+    pub fn root_pane(&self) -> Option<PaneId> {
+        self.tabs.first().and_then(|tab| tab.root_pane())
     }
 }
 
@@ -102,6 +116,11 @@ impl Tab {
         Self::with_layout(title, TileLayout::new())
     }
 
+    /// 根窗格：树序第一个窗格，工作区身份跟随它。
+    pub fn root_pane(&self) -> Option<PaneId> {
+        self.layout.pane_ids().into_iter().next()
+    }
+
     /// 按标识取窗格。
     pub fn pane(&self, id: PaneId) -> Option<&Pane> {
         self.panes.get(&id)
@@ -123,31 +142,69 @@ impl Pane {
     }
 }
 
-/// 当前路径无最后一段（根路径）或不可用时的兜底工作区名。
-const FALLBACK_WORKSPACE_NAME: &str = "workspace";
+/// 自动工作区名：HOME 显示 `~`，否则取路径末段；根路径等无末段时显示完整路径。
+///
+/// 与 herdr 的 `fallback_label_from_cwd` 对齐（HOME 特判 + file_name 回退 display）。
+pub fn workspace_label(cwd: &Path, home: Option<&Path>) -> String {
+    if home.is_some_and(|home| cwd == home) {
+        return "~".to_string();
+    }
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| cwd.display().to_string())
+}
 
-/// 工作区名：当前进程工作路径的最后一段；解析失败回退常量。
-fn workspace_name() -> String {
+/// 工作区自动名：当前进程工作目录的标签；读不到 cwd 时回退 `workspace`。
+pub fn workspace_name() -> String {
+    current_workspace_identity().1
+}
+
+/// 当前进程 cwd 与其自动工作区名；读不到 cwd 时 cwd 为 None。
+pub fn current_workspace_identity() -> (Option<PathBuf>, String) {
     match std::env::current_dir() {
-        Ok(path) => workspace_name_from(&path),
+        Ok(path) => {
+            let name = workspace_label(&path, home_dir().as_deref());
+            (Some(path), name)
+        }
         // 读不到 cwd 属于极端环境问题，工作区名兜底即可，不阻断启动。
-        Err(_) => FALLBACK_WORKSPACE_NAME.to_string(),
+        Err(_) => (None, FALLBACK_WORKSPACE_NAME.to_string()),
     }
 }
 
-/// 路径的最后一段；根路径、空段或非 UTF-8 名称回退常量。
-fn workspace_name_from(path: &std::path::Path) -> String {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .unwrap_or(FALLBACK_WORKSPACE_NAME)
-        .to_string()
+/// HOME 环境变量；缺失或为空时 None。
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+}
+
+/// 当前路径无最后一段且显示为空时的兜底工作区名。
+const FALLBACK_WORKSPACE_NAME: &str = "workspace";
+
+/// 去重命名：`base` 已被占用时追加最小未用序号（`base 2`、`base 3`…）。
+///
+/// `taken` 由调用方给出占用判定（排除自身）。
+pub fn unique_workspace_name(base: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(base) {
+        return base.to_string();
+    }
+    let mut suffix: u32 = 2;
+    loop {
+        let candidate = format!("{base} {suffix}");
+        if !taken(&candidate) {
+            return candidate;
+        }
+        suffix = suffix.saturating_add(1);
+    }
 }
 
 impl AppState {
     /// 构造初始状态：单个工作区（以当前路径末段命名），shell 与 logs 两个终端标签，
     /// 加全局 prompt 右栏。
     pub fn demo() -> Self {
+        let (cwd, name) = current_workspace_identity();
         Self {
             should_quit: false,
             sidebar_collapsed: false,
@@ -161,13 +218,16 @@ impl AppState {
             prompt: Prompt::new(PaneId::alloc()),
             prompt_width: DEFAULT_PROMPT_WIDTH,
             workspaces: vec![Workspace {
-                name: workspace_name(),
+                name,
                 tabs: vec![Tab::single_terminal("shell"), Tab::single_terminal("logs")],
                 active_tab: 0,
+                name_is_manual: false,
+                cwd,
             }],
             active_workspace: 0,
+            workspace_scroll: 0,
+            workspace_scroll_drag: None,
             overlay: None,
-            next_workspace_number: 2,
         }
     }
 

@@ -43,6 +43,15 @@ fn menu_state(commands: Vec<MenuCommand>, selected: usize) -> AppState {
     state
 }
 
+fn rename_state(name: &str) -> AppState {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Rename(Rename {
+        target: 0,
+        input: TextInput::new(name),
+    }));
+    state
+}
+
 #[test]
 fn menu_layout_maps_commands_to_text_labels() {
     let state = menu_state(
@@ -79,42 +88,64 @@ fn menu_renders_labels_and_reversed_selection() {
 }
 
 #[test]
-fn rename_modal_renders_prefilled_text_and_cursor() {
-    let mut state = AppState::demo();
-    state.overlay = Some(Overlay::Rename(Rename {
-        target: 0,
-        input: TextInput::new("workspace 2"),
-    }));
+fn rename_modal_renders_input_buttons_and_cursor() {
+    let state = rename_state("workspace 2");
     let (lines, cursor) = draw_overlay(&state);
-    assert_eq!(cursor, Some((32, 11)));
-    assert!(lines[10].contains(text::RENAME_WORKSPACE_TITLE));
-    assert!(lines[11].contains("workspace 2"));
+    assert_eq!(cursor, Some((32, 10)));
+    assert!(lines[9].contains(text::RENAME_WORKSPACE_TITLE));
+    assert!(lines[10].contains("workspace 2"));
+    let buttons = lines[12].clone();
+    assert!(buttons.contains(text::BUTTON_SAVE), "{buttons}");
+    assert!(buttons.contains(text::BUTTON_CLEAR), "{buttons}");
+    assert!(buttons.contains(text::BUTTON_CANCEL), "{buttons}");
 }
 
 #[test]
 fn rename_modal_keeps_cursor_visible_for_long_names() {
-    let mut state = AppState::demo();
-    let name = "x".repeat(60);
-    state.overlay = Some(Overlay::Rename(Rename {
-        target: 0,
-        input: TextInput::new(name),
-    }));
+    let state = rename_state(&"x".repeat(60));
     let (lines, cursor) = draw_overlay(&state);
     let cursor = cursor.expect("cursor is set");
     assert!(cursor.0 < SCREEN.right());
     assert_eq!(cursor.0, 58);
-    assert_eq!(lines[11].chars().filter(|ch| *ch == 'x').count(), 37);
+    assert_eq!(cursor.1, 10);
+    assert_eq!(lines[10].chars().filter(|ch| *ch == 'x').count(), 37);
 }
 
 #[test]
-fn confirm_modal_renders_question_and_hint() {
+fn rename_buttons_hit_their_cells() {
+    let shell = rename_shell(SCREEN).expect("rename modal fits");
+    assert_eq!(rename_button_at(&shell, 23, 12), Some(RenameButton::Save));
+    assert_eq!(rename_button_at(&shell, 33, 12), Some(RenameButton::Clear));
+    assert_eq!(rename_button_at(&shell, 45, 12), Some(RenameButton::Cancel));
+    assert_eq!(rename_button_at(&shell, 22, 12), None);
+    assert_eq!(rename_button_at(&shell, 23, 11), None);
+}
+
+#[test]
+fn confirm_modal_renders_question_and_buttons() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 0 }));
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
     assert!(lines[10].contains(text::CONFIRM_CLOSE_TITLE));
     assert!(lines[11].contains("close \""));
-    assert!(lines[12].contains(text::CONFIRM_CLOSE_HINT));
+    let buttons = lines[12].clone();
+    assert!(buttons.contains(text::BUTTON_CONFIRM), "{buttons}");
+    assert!(buttons.contains(text::BUTTON_CANCEL), "{buttons}");
+}
+
+#[test]
+fn confirm_buttons_hit_their_cells() {
+    let shell = confirm_shell(SCREEN).expect("confirm modal fits");
+    assert_eq!(
+        confirm_button_at(&shell, 27, 12),
+        Some(ConfirmButton::Confirm)
+    );
+    assert_eq!(
+        confirm_button_at(&shell, 40, 12),
+        Some(ConfirmButton::Cancel)
+    );
+    assert_eq!(confirm_button_at(&shell, 26, 12), None);
 }
 
 #[test]

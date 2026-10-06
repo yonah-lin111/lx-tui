@@ -10,12 +10,33 @@ use crate::app::state::AppState;
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
-/// 重命名浮层尺寸（列，行）。
+/// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
 const RENAME_WIDTH: u16 = 40;
-const RENAME_HEIGHT: u16 = 3;
-/// 关闭确认浮层尺寸（列，行）：标题、问题与键位提示。
+const RENAME_HEIGHT: u16 = 5;
+/// 关闭确认浮层尺寸（列，行）：问题行与按钮行。
 const CONFIRM_WIDTH: u16 = 40;
 const CONFIRM_HEIGHT: u16 = 4;
+/// 按钮间距与所在内容行。
+const BUTTON_GAP: u16 = 2;
+const RENAME_BUTTON_ROW: u16 = 2;
+const CONFIRM_BUTTON_ROW: u16 = 1;
+const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
+
+/// 重命名浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameButton {
+    Save,
+    Clear,
+    Cancel,
+}
+
+/// 关闭确认浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmButton {
+    Confirm,
+    Cancel,
+}
 
 /// 菜单几何与文案；渲染与鼠标命中共用。
 pub fn menu_layout(screen: Rect, menu: &Menu) -> widgets::menu::MenuLayout {
@@ -30,6 +51,41 @@ pub fn rename_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
 /// 关闭确认浮层几何。
 pub fn confirm_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, CONFIRM_WIDTH, CONFIRM_HEIGHT)
+}
+
+/// 命中重命名按钮。
+pub fn rename_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<RenameButton> {
+    let rects =
+        widgets::modal::button_row(shell.inner, &RENAME_BUTTONS, BUTTON_GAP, RENAME_BUTTON_ROW);
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(RenameButton::Save),
+        Some(1) => Some(RenameButton::Clear),
+        Some(2) => Some(RenameButton::Cancel),
+        _ => None,
+    }
+}
+
+/// 命中关闭确认按钮。
+pub fn confirm_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<ConfirmButton> {
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &CONFIRM_BUTTONS,
+        BUTTON_GAP,
+        CONFIRM_BUTTON_ROW,
+    );
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(ConfirmButton::Confirm),
+        Some(1) => Some(ConfirmButton::Cancel),
+        _ => None,
+    }
 }
 
 /// 渲染当前浮层；返回需要同步的硬件光标位置（仅重命名输入）。
@@ -60,7 +116,7 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
         .collect()
 }
 
-/// 重命名浮层：单行输入；视口跟随光标，保证光标可见。
+/// 重命名浮层：单行输入 + 底部按钮；视口跟随光标，保证光标可见。
 fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option<(u16, u16)> {
     let shell = rename_shell(screen)?;
     widgets::modal::render(frame, &shell, text::RENAME_WORKSPACE_TITLE);
@@ -72,9 +128,19 @@ fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option
     let cursor = rename.input.cursor().min(chars.len());
     let offset = cursor.saturating_sub(width.saturating_sub(1));
     let visible: String = chars[offset..].iter().take(width).collect();
+    let input_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(visible, style::text()))),
-        shell.inner,
+        input_area,
+    );
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(shell.inner, &RENAME_BUTTONS, BUTTON_GAP, RENAME_BUTTON_ROW),
+        &[
+            (text::BUTTON_SAVE, style::accent()),
+            (text::BUTTON_CLEAR, style::muted()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
     );
     let column = shell
         .inner
@@ -84,7 +150,7 @@ fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option
     Some((column, shell.inner.y))
 }
 
-/// 关闭确认浮层：问题与键位提示。
+/// 关闭确认浮层：问题与底部按钮。
 fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm: &ConfirmClose) {
     let Some(shell) = confirm_shell(screen) else {
         return;
@@ -100,17 +166,38 @@ fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm
         .map(|workspace| workspace.name.as_str())
         .unwrap_or_default();
     let question = text::confirm_close_question(name);
-    let lines = vec![
-        Line::from(Span::styled(
+    let question_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
             text::ellipsize(&question, width),
             style::text(),
-        )),
-        Line::from(Span::styled(
-            text::ellipsize(text::CONFIRM_CLOSE_HINT, width),
-            style::muted(),
-        )),
-    ];
-    frame.render_widget(Paragraph::new(lines), shell.inner);
+        ))),
+        question_area,
+    );
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &CONFIRM_BUTTONS,
+            BUTTON_GAP,
+            CONFIRM_BUTTON_ROW,
+        ),
+        &[
+            (text::BUTTON_CONFIRM, style::accent()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
+    );
+}
+
+/// 渲染按钮行；矩形与文案一一对应。
+fn render_buttons(
+    frame: &mut Frame<'_>,
+    rects: &[Rect],
+    buttons: &[(&str, ratatui::style::Style)],
+) {
+    for (rect, (label, button_style)) in rects.iter().zip(buttons) {
+        frame.render_widget(Paragraph::new(Span::styled(*label, *button_style)), *rect);
+    }
 }
 
 #[cfg(test)]

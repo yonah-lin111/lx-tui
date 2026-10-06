@@ -86,6 +86,55 @@ pub fn default_shell() -> String {
     shell
 }
 
+/// 读取进程当前工作目录；平台不支持、进程已退出或无权限时返回 None。
+///
+/// macOS 用 `proc_pidinfo(PROC_PIDVNODEPATHINFO)`，Linux 读 `/proc/<pid>/cwd`。
+pub fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::process_cwd(pid)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// macOS 专属实现：proc_pidinfo 读取进程 vnode 路径信息。
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ffi::CStr;
+    use std::path::PathBuf;
+
+    /// 进程当前目录路径；调用失败返回 None。
+    pub(super) fn process_cwd(pid: u32) -> Option<PathBuf> {
+        // 零值初始化后由 proc_pidinfo 填充；失败时字段不会被读取。
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+        // SAFETY: 传入本函数栈上、尺寸正确的结构体指针，pid 由调用方提供。
+        let written = unsafe {
+            libc::proc_pidinfo(
+                pid as i32,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                (&raw mut info).cast(),
+                size,
+            )
+        };
+        if written != size {
+            return None;
+        }
+        // SAFETY: 成功后 vip_path 是 NUL 结尾的 C 字符串。
+        let path = unsafe { CStr::from_ptr(info.pvi_cdir.vip_path.as_ptr().cast()) };
+        path.to_str().ok().map(PathBuf::from)
+    }
+}
+
 /// 开启鼠标上报：Unix 用显式 VT 序列；Windows 走 crossterm 的 WinAPI 捕获。
 pub fn enable_mouse_capture(writer: &mut impl Write) -> io::Result<()> {
     #[cfg(windows)]

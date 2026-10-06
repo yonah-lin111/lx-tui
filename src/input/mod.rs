@@ -80,6 +80,9 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         OverlayKind::Rename => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),
             KeyCode::Left if plain => Some(OverlayKey::Left),

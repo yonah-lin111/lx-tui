@@ -613,3 +613,81 @@ fn add_workspace_button_hidden_when_sidebar_has_no_sections() {
     assert_eq!(add_workspace_button(&view, false), None);
     assert_eq!(workspace_item_at(&view, &state, 0, 1), None);
 }
+
+#[test]
+fn workspace_scrollbar_appears_only_on_overflow() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    assert_eq!(workspace_scrollbar(&view, &state), None);
+
+    for _ in 0..20 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let bar = workspace_scrollbar(&view, &state).expect("scrollbar is visible");
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = Rect {
+        height: sections.workspaces.height.saturating_sub(1),
+        ..sections.workspaces
+    };
+    assert_eq!(bar.track.x, list.right() - 1);
+    assert_eq!(bar.track.y, list.y);
+    assert_eq!(bar.track.height, list.height);
+    assert_eq!(bar.total, 21);
+    assert_eq!(bar.visible, usize::from(list.height));
+}
+
+#[test]
+fn workspace_list_renders_scrolled_window_and_scrollbar() {
+    let mut state = AppState::demo();
+    for _ in 0..20 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = Rect {
+        height: sections.workspaces.height.saturating_sub(1),
+        ..sections.workspaces
+    };
+    let rows = usize::from(list.height);
+    state.workspace_scroll = update::workspace_scroll_max(&state, rows);
+    let expected = state.workspaces[state.workspace_scroll].name.clone();
+    let lines = render_lines(&state);
+    let top: Vec<char> = lines[list.y as usize].chars().collect();
+    let rendered: String = (list.x..list.right().saturating_sub(1))
+        .map(|x| top[x as usize])
+        .collect();
+    assert!(rendered.contains(&expected), "{rendered}");
+
+    let scrollbar_row: Vec<char> = lines[list.y as usize].chars().collect();
+    assert_eq!(
+        scrollbar_row[usize::from(list.right() - 1)].to_string(),
+        "▕"
+    );
+    let bottom_row: Vec<char> = lines[list.bottom() as usize - 1].chars().collect();
+    assert_eq!(bottom_row[usize::from(list.right() - 1)].to_string(), "▐");
+}
+
+#[test]
+fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
+    let mut state = AppState::demo();
+    for _ in 0..20 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = Rect {
+        height: sections.workspaces.height.saturating_sub(1),
+        ..sections.workspaces
+    };
+    state.workspace_scroll = 5;
+    assert_eq!(workspace_item_at(&view, &state, list.x, list.y), Some(5));
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x, list.y + 1),
+        Some(6)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, list.right() - 1, list.y),
+        None
+    );
+}

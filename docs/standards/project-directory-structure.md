@@ -42,7 +42,7 @@ lx-tui/
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell）
+    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       静态资源，按需创建

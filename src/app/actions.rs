@@ -17,6 +17,7 @@ pub enum OverlayKey {
     Down,
     Enter,
     Char(char),
+    Clear,
     Backspace,
     Delete,
     Left,

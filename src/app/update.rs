@@ -1,5 +1,6 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
+use std::path::Path;
 use std::time::Instant;
 
 use ratatui::layout::Rect;
@@ -11,7 +12,10 @@ use super::overlay::{
     ConfirmClose, Menu, MenuCommand, MenuTarget, Overlay, OverlayKind, Rename, TextInput,
 };
 use super::selection::Selection;
-use super::state::{AppState, PaneKind, Workspace};
+use super::state::{
+    AppState, PaneKind, Workspace, current_workspace_identity, home_dir, unique_workspace_name,
+    workspace_label,
+};
 use super::toast::Toast;
 
 /// 应用行为。
@@ -275,16 +279,44 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     state.toast.as_ref().and_then(Toast::next_deadline)
 }
 
-/// 新建工作区并激活；编号单调递增不回收，PTY 由事件循环按状态对齐启动。
+/// 新建工作区并激活：名字取当前 cwd 末段（对齐 herdr），重名追加最小未用序号；
+/// PTY 由事件循环按状态对齐启动。
 pub fn create_workspace(state: &mut AppState) {
-    let number = state.next_workspace_number;
-    state.next_workspace_number = state.next_workspace_number.saturating_add(1);
-    state
-        .workspaces
-        .push(Workspace::single_terminal(format!("workspace {number}")));
+    let (cwd, base) = current_workspace_identity();
+    let name = unique_workspace_name(&base, |candidate| {
+        state
+            .workspaces
+            .iter()
+            .any(|workspace| workspace.name == candidate)
+    });
+    state.workspaces.push(Workspace::single_terminal(name, cwd));
     state.active_workspace = state.workspaces.len().saturating_sub(1);
     state.selection = None;
     state.prompt_focused = false;
+}
+
+/// 跟踪窗格 cwd 变化：自动命名工作区跟随 cwd 改名，手动命名工作区忽略；返回是否变化。
+pub fn update_workspace_cwd(state: &mut AppState, index: usize, cwd: &Path) -> bool {
+    let Some(workspace) = state.workspaces.get(index) else {
+        return false;
+    };
+    if workspace.name_is_manual || workspace.cwd.as_deref() == Some(cwd) {
+        return false;
+    }
+    let base = workspace_label(cwd, home_dir().as_deref());
+    let name = unique_workspace_name(&base, |candidate| {
+        state
+            .workspaces
+            .iter()
+            .enumerate()
+            .any(|(other, workspace)| other != index && workspace.name == candidate)
+    });
+    let Some(workspace) = state.workspaces.get_mut(index) else {
+        return false;
+    };
+    workspace.cwd = Some(cwd.to_path_buf());
+    workspace.name = name;
+    true
 }
 
 /// 切换当前工作区；越界忽略。
@@ -302,6 +334,8 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     if target >= state.workspaces.len() {
         return;
     }
+    // 打开模态时结束可能残留的滚动条拖拽。
+    state.workspace_scroll_drag = None;
     let mut commands = vec![MenuCommand::RenameWorkspace];
     if state.workspaces.len() > 1 {
         commands.push(MenuCommand::CloseWorkspace);
@@ -379,6 +413,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
             None => {}
         },
         OverlayKey::Char(ch) => edit_rename(state, |input| input.insert_char(ch)),
+        OverlayKey::Clear => edit_rename(state, TextInput::clear),
         OverlayKey::Backspace => edit_rename(state, TextInput::backspace),
         OverlayKey::Delete => edit_rename(state, TextInput::delete),
         OverlayKey::Left => edit_rename(state, TextInput::move_left),
@@ -410,6 +445,7 @@ fn commit_rename(state: &mut AppState) {
         return;
     };
     workspace.name = name;
+    workspace.name_is_manual = true;
     state.overlay = None;
 }
 
@@ -429,6 +465,63 @@ fn confirm_close(state: &mut AppState) {
         state.active_workspace -= 1;
     }
     state.selection = None;
+}
+
+/// 工作区列表最大滚动偏移；列表放得下时恒为 0。
+pub fn workspace_scroll_max(state: &AppState, visible: usize) -> usize {
+    state.workspaces.len().saturating_sub(visible.max(1))
+}
+
+/// 滚动工作区列表；越界钳制；返回是否变化。
+pub fn scroll_workspace_list(state: &mut AppState, delta: isize, visible: usize) -> bool {
+    let max = workspace_scroll_max(state, visible);
+    let target = (state.workspace_scroll.min(max) as isize).saturating_add(delta);
+    let offset = target.clamp(0, max as isize) as usize;
+    if offset == state.workspace_scroll {
+        return false;
+    }
+    state.workspace_scroll = offset;
+    true
+}
+
+/// 直接设置滚动偏移（滚动条点击/拖拽）；越界钳制；返回是否变化。
+pub fn set_workspace_scroll(state: &mut AppState, offset: usize, visible: usize) -> bool {
+    let offset = offset.min(workspace_scroll_max(state, visible));
+    if offset == state.workspace_scroll {
+        return false;
+    }
+    state.workspace_scroll = offset;
+    true
+}
+
+/// 保证当前工作区可见并钳制偏移；列表长度或可见行变化后调用；返回是否变化。
+pub fn ensure_workspace_visible(state: &mut AppState, visible: usize) -> bool {
+    let visible = visible.max(1);
+    let max = workspace_scroll_max(state, visible);
+    let active = state
+        .active_workspace
+        .min(state.workspaces.len().saturating_sub(1));
+    let mut offset = state.workspace_scroll.min(max);
+    if active < offset {
+        offset = active;
+    } else if active >= offset.saturating_add(visible) {
+        offset = active + 1 - visible;
+    }
+    if offset == state.workspace_scroll {
+        return false;
+    }
+    state.workspace_scroll = offset;
+    true
+}
+
+/// 仅把滚动偏移钳制到合法范围（窗口缩放后调用，不强制跟随 active）；返回是否变化。
+pub fn clamp_workspace_scroll(state: &mut AppState, visible: usize) -> bool {
+    let max = workspace_scroll_max(state, visible);
+    if state.workspace_scroll <= max {
+        return false;
+    }
+    state.workspace_scroll = max;
+    true
 }
 
 #[cfg(test)]

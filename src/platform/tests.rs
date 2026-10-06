@@ -80,3 +80,23 @@ fn pointer_shape_sequence_wraps_for_tmux_and_screen() {
         passthrough
     );
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn process_cwd_reads_own_process_directory() {
+    let cwd = process_cwd(std::process::id()).expect("own cwd is readable");
+    let expected = std::env::current_dir().expect("cwd is available");
+    // macOS 返回的路径可能带 /private 前缀，比较末段与存在性。
+    assert!(cwd.is_dir(), "cwd should be a directory: {cwd:?}");
+    assert_eq!(
+        cwd.canonicalize().ok(),
+        expected.canonicalize().ok(),
+        "cwd should match the test process directory"
+    );
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn process_cwd_returns_none_for_invalid_pid() {
+    assert_eq!(process_cwd(u32::MAX), None);
+}

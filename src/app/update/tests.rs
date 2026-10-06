@@ -1,6 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
+use crate::app::state::workspace_name;
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
 use std::time::Duration;
@@ -399,32 +400,79 @@ fn hover_without_toast_is_noop() {
 }
 
 #[test]
-fn create_workspace_activates_single_shell_workspace() {
+fn create_workspace_activates_deduped_cwd_workspace() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     assert_eq!(state.workspaces.len(), 2);
     assert_eq!(state.active_workspace, 1);
     let workspace = state.active_workspace();
-    assert_eq!(workspace.name, "workspace 2");
+    assert_eq!(workspace.name, format!("{} 2", workspace_name()));
     assert_eq!(workspace.tabs.len(), 1);
     assert_eq!(workspace.tabs[0].title, "shell");
     assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
+    assert!(!workspace.name_is_manual);
     assert!(!state.prompt_focused);
 }
 
 #[test]
-fn create_workspace_numbers_never_reuse() {
+fn update_workspace_cwd_renames_auto_named_workspace() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
+    let cwd = std::path::Path::new("/tmp/other-project");
+    assert!(update_workspace_cwd(&mut state, 1, cwd));
+    assert_eq!(state.workspaces[1].name, "other-project");
+    assert_eq!(state.workspaces[1].cwd.as_deref(), Some(cwd));
+    assert!(!update_workspace_cwd(&mut state, 1, cwd));
+}
+
+#[test]
+fn update_workspace_cwd_ignores_manually_named_workspace() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "api".to_string();
+    state.workspaces[0].name_is_manual = true;
+    assert!(!update_workspace_cwd(
+        &mut state,
+        0,
+        std::path::Path::new("/tmp/other-project")
+    ));
+    assert_eq!(state.workspaces[0].name, "api");
+}
+
+#[test]
+fn update_workspace_cwd_dedupes_against_other_workspaces() {
+    let mut state = AppState::demo();
     create_workspace(&mut state);
-    assert_eq!(state.workspaces[1].name, "workspace 2");
-    assert_eq!(state.workspaces[2].name, "workspace 3");
-    state.active_workspace = 1;
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 1 }));
-    confirm_close(&mut state);
-    assert_eq!(state.workspaces.len(), 2);
-    create_workspace(&mut state);
-    assert_eq!(state.active_workspace().name, "workspace 4");
+    state.workspaces[1].name = "api".to_string();
+    state.workspaces[1].name_is_manual = true;
+    assert!(update_workspace_cwd(
+        &mut state,
+        0,
+        std::path::Path::new("/tmp/api")
+    ));
+    assert_eq!(state.workspaces[0].name, "api 2");
+}
+
+#[test]
+fn workspace_scroll_clamps_and_follows_active() {
+    let mut state = AppState::demo();
+    for _ in 0..15 {
+        create_workspace(&mut state);
+    }
+    assert_eq!(state.workspaces.len(), 16);
+    assert!(scroll_workspace_list(&mut state, 3, 10));
+    assert_eq!(state.workspace_scroll, 3);
+    assert!(ensure_workspace_visible(&mut state, 10));
+    assert_eq!(state.workspace_scroll, 6);
+    assert!(!ensure_workspace_visible(&mut state, 10));
+    assert!(set_workspace_scroll(&mut state, 4, 10));
+    assert!(set_workspace_scroll(&mut state, 99, 10));
+    assert_eq!(state.workspace_scroll, 6);
+    assert!(!scroll_workspace_list(&mut state, 1, 10));
+    assert_eq!(workspace_scroll_max(&state, 10), 6);
+    assert!(scroll_workspace_list(&mut state, -99, 10));
+    assert_eq!(state.workspace_scroll, 0);
+    assert!(!clamp_workspace_scroll(&mut state, 16));
+    assert!(!clamp_workspace_scroll(&mut state, 1));
 }
 
 #[test]
@@ -497,14 +545,15 @@ fn menu_selection_wraps_and_reports_changes() {
 fn activate_menu_rename_opens_prefilled_input() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
+    let expected = state.workspaces[1].name.clone();
     open_workspace_menu(&mut state, 1, (0, 0));
     activate_menu(&mut state);
     let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
         panic!("rename overlay expected");
     };
     assert_eq!(rename.target, 1);
-    assert_eq!(rename.input.text(), "workspace 2");
-    assert_eq!(rename.input.cursor(), 11);
+    assert_eq!(rename.input.text(), expected);
+    assert_eq!(rename.input.cursor(), expected.chars().count());
 }
 
 #[test]
@@ -567,7 +616,10 @@ fn rename_overlay_edits_and_commits_trimmed_name() {
     }
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert!(state.overlay.is_none());
-    assert_eq!(state.workspaces[1].name, "workspace api");
+    assert_eq!(
+        state.workspaces[1].name,
+        format!("{} api", workspace_name())
+    );
 }
 
 #[test]

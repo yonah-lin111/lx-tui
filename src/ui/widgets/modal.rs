@@ -41,5 +41,37 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     frame.render_widget(block, shell.area);
 }
 
+/// 按钮行：按标签宽度水平居中排布；`row_offset` 为相对内容区顶部的行号。
+pub fn button_row(inner: Rect, labels: &[&str], gap: u16, row_offset: u16) -> Vec<Rect> {
+    let widths: Vec<u16> = labels
+        .iter()
+        .map(|label| label.chars().count() as u16)
+        .collect();
+    let total = widths.iter().copied().sum::<u16>()
+        + gap.saturating_mul(widths.len().saturating_sub(1) as u16);
+    let mut x = inner.x + inner.width.saturating_sub(total) / 2;
+    let y = inner.y + row_offset.min(inner.height.saturating_sub(1));
+    widths
+        .iter()
+        .map(|width| {
+            let rect = Rect::new(
+                x,
+                y,
+                (*width).min(inner.width.saturating_sub(x.saturating_sub(inner.x))),
+                1,
+            );
+            x = x.saturating_add(*width).saturating_add(gap);
+            rect
+        })
+        .collect()
+}
+
+/// 命中按钮索引。
+pub fn button_at(rects: &[Rect], column: u16, row: u16) -> Option<usize> {
+    rects
+        .iter()
+        .position(|rect| rect.contains((column, row).into()))
+}
+
 #[cfg(test)]
 mod tests;

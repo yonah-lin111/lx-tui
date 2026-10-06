@@ -384,6 +384,10 @@ fn rename_overlay_routes_editing_keys() {
         Some(Routed::Overlay(OverlayKey::Backspace))
     );
     assert_eq!(
+        route_rename(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Clear))
+    );
+    assert_eq!(
         route_rename(KeyCode::Delete, KeyModifiers::NONE),
         Some(Routed::Overlay(OverlayKey::Delete))
     );
