@@ -1,4 +1,4 @@
-//! prompt 编辑器渲染：文本、markdown 高亮、选区与光标，只读状态。
+//! prompt 编辑器渲染：文本、markdown 高亮与选区，只读状态。
 
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
@@ -10,14 +10,8 @@ use crate::app::selection::Selection;
 use crate::ui::markdown::{self, Token, TokenKind};
 use crate::ui::style;
 
-/// 绘制 prompt 内容区；`focused` 为真时叠加光标反显。
-pub fn render(
-    area: Rect,
-    buf: &mut Buffer,
-    prompt: &Prompt,
-    focused: bool,
-    selection: Option<&Selection>,
-) {
+/// 绘制 prompt 内容区；光标由调用方以终端原生硬件光标呈现。
+pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&Selection>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -42,13 +36,6 @@ pub fn render(
         paint_row(buf, area, y, prompt.text(), row, line_tokens, base);
         if let Some(selection) = selection {
             paint_selection(buf, area, y, (index - scroll) as u16, selection);
-        }
-    }
-
-    if focused && let Some((row, col)) = prompt.cursor_cell() {
-        let col = col.min(area.width - 1);
-        if let Some(cell) = buf.cell_mut((area.x + col, area.y + row)) {
-            cell.modifier |= Modifier::REVERSED;
         }
     }
 }

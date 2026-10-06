@@ -4,7 +4,6 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthChar;
 
 use crate::app::overlay::{ConfirmClose, Menu, MenuCommand, Overlay, Rename};
 use crate::app::state::AppState;
@@ -117,43 +116,13 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
         .collect()
 }
 
-/// 重命名浮层：单行输入 + 底部按钮；视口按显示宽度跟随光标，保证光标与 IME 预输入可见。
+/// 重命名浮层：单行输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
 fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option<(u16, u16)> {
     let shell = rename_shell(screen)?;
     widgets::modal::render(frame, &shell, text::RENAME_WORKSPACE_TITLE);
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return None;
     }
-    let width = usize::from(shell.inner.width);
-    let chars: Vec<char> = rename.input.text().chars().collect();
-    let cursor = rename.input.cursor().min(chars.len());
-    // 与 prompt 光标一致：按显示宽度（宽字符两列）定位与滚动，而非字符数。
-    let cursor_width: usize = chars[..cursor]
-        .iter()
-        .map(|ch| ch.width().unwrap_or(0))
-        .sum();
-    let offset = cursor_width.saturating_sub(width.saturating_sub(1));
-    let mut start = 0;
-    let mut skipped = 0;
-    while start < chars.len() && skipped < offset {
-        skipped += chars[start].width().unwrap_or(0);
-        start += 1;
-    }
-    let mut visible = String::new();
-    let mut used = 0;
-    for ch in &chars[start..] {
-        let cell = ch.width().unwrap_or(0);
-        if used + cell > width {
-            break;
-        }
-        used += cell;
-        visible.push(*ch);
-    }
-    let input_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(visible, style::text()))),
-        input_area,
-    );
     render_buttons(
         frame,
         &widgets::modal::button_row(shell.inner, &RENAME_BUTTONS, BUTTON_GAP, RENAME_BUTTON_ROW),
@@ -163,12 +132,12 @@ fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option
             (text::BUTTON_CANCEL, style::muted()),
         ],
     );
-    let column = shell
-        .inner
-        .x
-        .saturating_add(u16::try_from(cursor_width.saturating_sub(skipped)).unwrap_or(u16::MAX))
-        .min(shell.inner.right().saturating_sub(1));
-    Some((column, shell.inner.y))
+    widgets::input::render(
+        frame,
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+        rename.input.text(),
+        rename.input.cursor(),
+    )
 }
 
 /// 关闭确认浮层：问题与底部按钮。

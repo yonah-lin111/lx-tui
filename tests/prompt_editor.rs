@@ -63,10 +63,10 @@ fn typed_markdown_renders_highlight_and_cursor() {
     assert_eq!(heading.fg, Color::Yellow);
     assert!(heading.modifier.contains(Modifier::BOLD));
 
-    assert!(
-        buffer[(inner.x + 6, inner.y)]
-            .modifier
-            .contains(Modifier::REVERSED)
+    assert!(terminal.backend().cursor_visible());
+    assert_eq!(
+        terminal.backend().cursor_position(),
+        Position::new(inner.x + 6, inner.y)
     );
 }
 
@@ -87,10 +87,10 @@ fn click_places_cursor_and_wheel_scrolls_viewport() {
     let buffer = terminal.backend().buffer();
     let inner = layout::pane_inner_rect(view.prompt);
     assert_eq!(buffer[(inner.x, inner.y)].symbol(), "0");
-    assert!(
-        buffer[(inner.x, inner.y)]
-            .modifier
-            .contains(Modifier::REVERSED)
+    assert!(terminal.backend().cursor_visible());
+    assert_eq!(
+        terminal.backend().cursor_position(),
+        Position::new(inner.x, inner.y)
     );
 
     update::scroll_prompt(&mut state, 1);
@@ -98,11 +98,7 @@ fn click_places_cursor_and_wheel_scrolls_viewport() {
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     assert_eq!(buffer[(inner.x, inner.y)].symbol(), "3");
-    assert!(
-        !buffer[(inner.x, inner.y)]
-            .modifier
-            .contains(Modifier::REVERSED)
-    );
+    assert!(!terminal.backend().cursor_visible());
 }
 
 #[test]

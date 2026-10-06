@@ -662,7 +662,6 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         inner,
         frame.buffer_mut(),
         &state.prompt,
-        focused,
         state.selection_for(state.prompt.id()),
     );
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
