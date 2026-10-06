@@ -18,16 +18,28 @@ fn stacked<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
         .collect()
 }
 
-/// 视图。
+/// 视图；窗口锚点默认跟随高亮。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     active: usize,
     anchor_row: u16,
     max_height: Option<u16>,
 ) -> CommandPanelView<'a> {
+    view_anchored(items, active, None, anchor_row, max_height)
+}
+
+/// 指定窗口锚点的视图。
+fn view_anchored<'a>(
+    items: &'a [CommandItem<'a>],
+    active: usize,
+    window_anchor: Option<usize>,
+    anchor_row: u16,
+    max_height: Option<u16>,
+) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active,
+        window_anchor,
         anchor_row,
         max_height,
     }
@@ -233,6 +245,37 @@ fn item_at_maps_rows_to_items() {
         item_at(&layout, &items, 2, layout.content.bottom() + 1),
         None
     );
+}
+
+#[test]
+fn window_stays_while_hovering_visible_item() {
+    let area = Rect::new(0, 0, 24, 12);
+    let items = stacked(&[
+        ("f0", "s"),
+        ("f1", "s"),
+        ("f2", "s"),
+        ("f3", "s"),
+        ("f4", "s"),
+        ("f5", "s"),
+        ("f6", "s"),
+        ("f7", "s"),
+        ("f8", "s"),
+        ("f9", "s"),
+    ]);
+    let anchored =
+        layout(area, &view_anchored(&items, 9, Some(9), 0, Some(8))).expect("panel layout");
+    assert_eq!(anchored.start, 7);
+    assert_eq!(anchored.visible, 3);
+
+    // 悬停窗口内的条目：锚点不动，窗口不滚动。
+    let hovered =
+        layout(area, &view_anchored(&items, 8, Some(9), 0, Some(8))).expect("panel layout");
+    assert_eq!(hovered.start, 7);
+
+    // 高亮落在锚点窗口之外（如列表变化）时回退为以高亮为底。
+    let fallback =
+        layout(area, &view_anchored(&items, 4, Some(9), 0, Some(8))).expect("panel layout");
+    assert_eq!(fallback.start, 2);
 }
 
 #[test]

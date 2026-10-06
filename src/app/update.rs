@@ -1,7 +1,7 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
@@ -12,7 +12,7 @@ use super::markdown::MentionEntry;
 use super::overlay::{
     ConfirmClose, Menu, MenuCommand, MenuTarget, Overlay, OverlayKind, Rename, TextInput,
 };
-use super::selection::Selection;
+use super::selection::{EdgeScroll, Selection};
 use super::state::{
     AppState, PaneKind, Workspace, current_workspace_identity, home_dir, unique_workspace_name,
     workspace_label,
@@ -29,6 +29,7 @@ pub fn apply(action: Action, state: &mut AppState) {
             if state.prompt_collapsed {
                 state.prompt_focused = false;
                 state.selection = None;
+                state.selection_autoscroll = None;
                 state.prompt.clear_panel();
             }
         }
@@ -60,6 +61,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
             _ => false,
         };
         state.selection = None;
+        state.selection_autoscroll = None;
         if replaced {
             return;
         }
@@ -182,6 +184,7 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
             let (cols, rows) = layout::prompt_inner_size(*rect);
             if state.prompt.size() != (cols, rows) {
                 state.selection = None;
+                state.selection_autoscroll = None;
             }
             state.prompt.resize(cols, rows);
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
@@ -209,25 +212,96 @@ pub fn mark_pane_exited(state: &mut AppState, id: PaneId) {
 /// 在区域内容区开始一次文本选择；与右栏拖拽互斥。
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.resizing_prompt = false;
-    state.selection = Some(Selection::begin(pane, row, col));
+    let content_row = selection_row(state, pane, row);
+    state.selection = Some(Selection::begin(pane, content_row, col));
+    state.selection_autoscroll = None;
 }
 
-/// 扩展当前选区；窗格不一致时忽略。
+/// 扩展当前选区；窗格不一致时忽略；prompt 拖到视口边缘时安排自动滚动。
 pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
+    let content_row = selection_row(state, pane, row);
     if let Some(selection) = state.selection.as_mut()
         && selection.pane() == pane
     {
-        selection.drag(row, col);
+        selection.drag(content_row, col);
     }
+    state.selection_autoscroll = edge_scroll(state, pane, row, col);
+}
+
+/// 视口行坐标到选区内容行坐标；prompt 视口滚动时锚点保持在内容位置。
+fn selection_row(state: &AppState, pane: PaneId, row: u16) -> u16 {
+    if pane == state.prompt.id() {
+        let scroll = u16::try_from(state.prompt.scroll()).unwrap_or(u16::MAX);
+        row.saturating_add(scroll)
+    } else {
+        row
+    }
+}
+
+/// 拖选边缘自动滚动的触发距离（视口行）。
+const EDGE_SCROLL_ROWS: u16 = 3;
+/// 拖选边缘自动滚动的步进间隔：越靠近边缘越快。
+const EDGE_SCROLL_FAST: Duration = Duration::from_millis(30);
+const EDGE_SCROLL_MEDIUM: Duration = Duration::from_millis(60);
+const EDGE_SCROLL_SLOW: Duration = Duration::from_millis(120);
+
+/// prompt 拖选进入视口上/下边缘时安排自动滚动；其余情况返回 None。
+fn edge_scroll(state: &AppState, pane: PaneId, row: u16, column: u16) -> Option<EdgeScroll> {
+    let selection = state.selection?;
+    if pane != state.prompt.id() || !selection.is_dragging() {
+        return None;
+    }
+    let height = state.prompt.size().1;
+    if height == 0 {
+        return None;
+    }
+    let row = row.min(height - 1);
+    let distance = row.min(height - 1 - row);
+    if distance > EDGE_SCROLL_ROWS {
+        return None;
+    }
+    let interval = match distance {
+        0 | 1 => EDGE_SCROLL_FAST,
+        2 => EDGE_SCROLL_MEDIUM,
+        _ => EDGE_SCROLL_SLOW,
+    };
+    Some(EdgeScroll {
+        row,
+        column,
+        next: Instant::now() + interval,
+    })
+}
+
+/// 拖选边缘自动滚动一步：滚动一行并把选区终点保持在指针单元格。
+fn edge_scroll_step(state: &mut AppState) -> bool {
+    let Some(edge) = state.selection_autoscroll else {
+        return false;
+    };
+    let bottom = state.prompt.size().1.saturating_sub(1);
+    let direction = if edge.row <= bottom.saturating_sub(edge.row) {
+        -1
+    } else {
+        1
+    };
+    if !state.prompt.scroll_by(direction) {
+        state.selection_autoscroll = None;
+        return false;
+    }
+    let prompt = state.prompt.id();
+    drag_selection(state, prompt, edge.row, edge.column);
+    place_prompt_cursor(state, edge.row, edge.column);
+    true
 }
 
 /// 清除选区。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
+    state.selection_autoscroll = None;
 }
 
 /// 松开鼠标：结束拖动；空选区（未拖动）直接清除，非空选区保留供复制或删除。
 pub fn end_selection_drag(state: &mut AppState) {
+    state.selection_autoscroll = None;
     let keep = state
         .selection
         .as_ref()
@@ -353,7 +427,7 @@ pub fn set_toast_hover(state: &mut AppState, hovered: bool) -> bool {
     true
 }
 
-/// 清除已过期的 toast；返回是否发生变化（用于置脏重绘）。
+/// 清除已过期的 toast、推进拖选边缘自动滚动；返回是否发生变化（用于置脏重绘）。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let expired = state
         .toast
@@ -362,12 +436,31 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     if expired {
         state.toast = None;
     }
-    expired
+    let mut changed = expired;
+    if state.selection_autoscroll.is_some() {
+        let dragging = state.selection.is_some_and(|selection| {
+            selection.is_dragging() && selection.pane() == state.prompt.id()
+        });
+        if !dragging {
+            state.selection_autoscroll = None;
+        } else if state
+            .selection_autoscroll
+            .is_some_and(|edge| now >= edge.next)
+        {
+            changed |= edge_scroll_step(state);
+        }
+    }
+    changed
 }
 
-/// 最近一次 toast 到期时间；事件循环据此安排唤醒。
+/// 最近一次 toast 到期或拖选自动滚动步进时间；事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
-    state.toast.as_ref().and_then(Toast::next_deadline)
+    let toast = state.toast.as_ref().and_then(Toast::next_deadline);
+    let edge = state.selection_autoscroll.map(|edge| edge.next);
+    match (toast, edge) {
+        (Some(toast), Some(edge)) => Some(toast.min(edge)),
+        (toast, edge) => toast.or(edge),
+    }
 }
 
 /// 新建工作区并激活：名字取当前 cwd 末段（对齐 herdr），重名追加最小未用序号；

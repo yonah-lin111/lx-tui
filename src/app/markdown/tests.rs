@@ -325,6 +325,29 @@ fn mention_panel_clamped_move_stops_at_ends() {
 }
 
 #[test]
+fn mention_panel_hover_keeps_window_anchor() {
+    let entries: Vec<MentionEntry> = (0..4)
+        .map(|index| MentionEntry {
+            path: format!("f{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    let trigger = MentionTrigger {
+        from: 0,
+        to: 1,
+        query: String::new(),
+    };
+    let mut panel = MentionPanel::new(trigger, entries, 0);
+    panel.move_active_clamped(3);
+    assert_eq!(panel.anchor(), 3);
+    panel.set_active(1);
+    assert_eq!(panel.active(), 1);
+    assert_eq!(panel.anchor(), 3, "悬停不应移动窗口锚点");
+    panel.move_active_clamped(-1);
+    assert_eq!(panel.anchor(), panel.active());
+}
+
+#[test]
 fn mention_panel_move_wraps_both_directions() {
     let entries = vec![
         MentionEntry {

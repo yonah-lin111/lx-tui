@@ -551,11 +551,14 @@ impl Prompt {
         Some((visible as u16, col as u16))
     }
 
-    /// 按视觉行滚动视口；光标不动，超界时钳到可滚动范围。
-    pub fn scroll_by(&mut self, lines: isize) {
+    /// 按视觉行滚动视口；光标不动，超界时钳到可滚动范围；返回是否实际移动。
+    pub fn scroll_by(&mut self, lines: isize) -> bool {
         let max = self.max_scroll();
         let target = (self.scroll.min(max) as isize).saturating_add(lines);
-        self.scroll = target.clamp(0, max as isize) as usize;
+        let next = target.clamp(0, max as isize) as usize;
+        let moved = next != self.scroll;
+        self.scroll = next;
+        moved
     }
 
     /// 直接设置视口滚动偏移（滚动条点击/拖拽）；越界钳到可滚动范围。
@@ -577,7 +580,7 @@ impl Prompt {
         self.settle();
     }
 
-    /// 选区（视口坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
+    /// 选区（内容行坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
     pub fn selection_bounds(&self, start: (u16, u16), end: (u16, u16)) -> Option<(usize, usize)> {
         if start == end {
             return None;
@@ -587,12 +590,12 @@ impl Prompt {
         } else {
             (end, start)
         };
-        let from = self.viewport_offset(first, false);
-        let to = self.viewport_offset(last, true);
+        let from = self.content_offset(first, false);
+        let to = self.content_offset(last, true);
         (from < to).then_some((from, to))
     }
 
-    /// 取选区文本（视口坐标，端点包含）；空选区或选中内容为空时返回 None。
+    /// 取选区文本（内容行坐标，端点包含）；空选区或选中内容为空时返回 None。
     pub fn selection_text(&self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
         let (from, to) = self.selection_bounds(start, end)?;
         Some(self.text[from..to].to_string())
@@ -812,8 +815,18 @@ impl Prompt {
 
     /// 视口坐标映射到文本字节偏移；`after` 为真时取该单元格字符之后。
     fn viewport_offset(&self, (row, col): (u16, u16), after: bool) -> usize {
+        self.content_offset_at(self.scroll.saturating_add(usize::from(row)), col, after)
+    }
+
+    /// 内容行坐标映射到文本字节偏移；`after` 为真时取该单元格字符之后。
+    fn content_offset(&self, (row, col): (u16, u16), after: bool) -> usize {
+        self.content_offset_at(usize::from(row), col, after)
+    }
+
+    /// 视觉行索引（内容坐标）映射到文本字节偏移。
+    fn content_offset_at(&self, index: usize, col: u16, after: bool) -> usize {
         let rows = self.visual_rows();
-        let index = (self.scroll + usize::from(row)).min(rows.len() - 1);
+        let index = index.min(rows.len() - 1);
         let visual = rows[index];
         let slice = &self.text[visual.start..visual.end];
         let mut cell = 0;

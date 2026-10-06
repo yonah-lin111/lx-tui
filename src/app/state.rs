@@ -8,7 +8,7 @@ use crate::terminal::Terminal;
 
 use super::overlay::Overlay;
 use super::prompt::Prompt;
-use super::selection::Selection;
+use super::selection::{EdgeScroll, Selection};
 use super::toast::Toast;
 
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
@@ -36,6 +36,8 @@ pub struct AppState {
     pub sidebar_hover: bool,
     pub toast: Option<Toast>,
     pub selection: Option<Selection>,
+    /// prompt 拖选到视口边缘时的自动滚动状态；None 表示未激活。
+    pub selection_autoscroll: Option<EdgeScroll>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -230,6 +232,7 @@ impl AppState {
             sidebar_hover: false,
             toast: None,
             selection: None,
+            selection_autoscroll: None,
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,

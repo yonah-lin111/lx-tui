@@ -38,7 +38,7 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
         paint_row(buf, area, y, prompt.text(), row, line_tokens, base);
         if let Some(selection) = selection {
-            paint_selection(buf, area, y, (index - scroll) as u16, selection);
+            paint_selection(buf, area, y, index as u16, selection);
         }
     }
     render_panels(buf, area, prompt);
@@ -58,7 +58,13 @@ fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
         command_panel::render(
             area,
             buf,
-            &mention_view(&items, panel.active(), anchor_row, area.height / 2),
+            &mention_view(
+                &items,
+                panel.active(),
+                panel.anchor(),
+                anchor_row,
+                area.height / 2,
+            ),
         );
         return;
     }
@@ -80,6 +86,7 @@ fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
         &CommandPanelView {
             items: &items,
             active: panel.active(),
+            window_anchor: None,
             anchor_row,
             max_height: None,
         },
@@ -96,7 +103,13 @@ pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Op
         .collect();
     let layout = command_panel::layout(
         area,
-        &mention_view(&items, data.active, data.anchor_row, area.height / 2),
+        &mention_view(
+            &items,
+            data.active,
+            data.anchor,
+            data.anchor_row,
+            area.height / 2,
+        ),
     )?;
     command_panel::item_at(&layout, &items, column, row)
 }
@@ -111,15 +124,22 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
         .collect();
     command_panel::layout(
         area,
-        &mention_view(&items, data.active, data.anchor_row, area.height / 2),
+        &mention_view(
+            &items,
+            data.active,
+            data.anchor,
+            data.anchor_row,
+            area.height / 2,
+        ),
     )
     .map(|layout| layout.rect)
 }
 
-/// 提及面板渲染数据：条目文本、高亮索引与锚点行。
+/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点与锚点行。
 struct MentionPanelData {
     texts: Vec<(String, String)>,
     active: usize,
+    anchor: usize,
     anchor_row: u16,
 }
 
@@ -130,20 +150,23 @@ fn mention_panel_data(prompt: &Prompt) -> Option<MentionPanelData> {
     Some(MentionPanelData {
         texts: panel.items().iter().map(mention_item_text).collect(),
         active: panel.active(),
+        anchor: panel.anchor(),
         anchor_row,
     })
 }
 
-/// 提及面板视图：最大高度取容器（prompt 内容区）的一半。
+/// 提及面板视图：最大高度取容器（prompt 内容区）的一半；窗口锚定面板状态。
 fn mention_view<'a>(
     items: &'a [CommandItem<'a>],
     active: usize,
+    anchor: usize,
     anchor_row: u16,
     max_height: u16,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active,
+        window_anchor: Some(anchor),
         anchor_row,
         max_height: Some(max_height),
     }
@@ -211,7 +234,7 @@ fn paint_row(
     }
 }
 
-/// 选区按视口坐标反显；空白单元格同样覆盖，保证拖拽范围可见。
+/// 选区按内容行坐标反显；空白单元格同样覆盖，保证拖拽范围可见。
 fn paint_selection(buf: &mut Buffer, area: Rect, y: u16, row: u16, selection: &Selection) {
     for col in 0..area.width {
         if selection.contains(row, col)

@@ -231,13 +231,13 @@ fn replace_range_swaps_selection_and_undo_restores_it() {
 }
 
 #[test]
-fn selection_maps_through_scroll() {
+fn selection_uses_content_rows_not_viewport() {
     let mut prompt = prompt(10, 2);
     prompt.insert_str("1\n2\n3\n4");
     assert_eq!(prompt.scroll(), 2);
     assert_eq!(
         prompt.selection_text((0, 0), (1, 0)).as_deref(),
-        Some("3\n4")
+        Some("1\n2")
     );
 }
 

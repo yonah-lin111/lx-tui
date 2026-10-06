@@ -24,12 +24,15 @@ pub enum CommandItem<'a> {
     Stacked { label: &'a str, detail: &'a str },
 }
 
-/// 面板视图：条目、高亮索引、锚点行与最大高度。
+/// 面板视图：条目、高亮索引、窗口锚点、锚点行与最大高度。
 ///
 /// `anchor_row` 为内容区内的视觉行；面板绘制在其上方或下方，不覆盖该行。
+/// `window_anchor` 为窗口底部锚定的条目索引：窗口以它为底向前回退填满预算；
+/// `None` 表示锚定高亮。鼠标悬停只改 `active`、不改锚点，窗口因此不滚动。
 pub struct CommandPanelView<'a> {
     pub items: &'a [CommandItem<'a>],
     pub active: usize,
+    pub window_anchor: Option<usize>,
     pub anchor_row: u16,
     /// 面板最大高度（含边框）；None 表示仅受可用空间限制。
     pub max_height: Option<u16>,
@@ -74,8 +77,16 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     };
     let budget = usize::from(height.saturating_sub(2));
     let active = view.active.min(view.items.len() - 1);
-    let start = window_start(view.items, active, budget);
-    let visible = visible_count(view.items, start, budget);
+    let anchor = view
+        .window_anchor
+        .map_or(active, |anchor| anchor.min(view.items.len() - 1));
+    let mut start = window_start(view.items, anchor, budget);
+    let mut visible = visible_count(view.items, start, budget);
+    // 锚点窗口不含高亮时回退到以高亮为底，保证高亮始终可见。
+    if active < start || active >= start.saturating_add(visible) {
+        start = window_start(view.items, active, budget);
+        visible = visible_count(view.items, start, budget);
+    }
     if visible == 0 {
         return None;
     }

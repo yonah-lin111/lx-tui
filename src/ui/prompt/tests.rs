@@ -199,3 +199,30 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     assert_eq!(mention_item_at(&editor, area, 2, 6), None);
     assert_eq!(mention_item_at(&editor, area, 2, 1), None);
 }
+
+#[test]
+fn mention_panel_window_keeps_still_when_hovering_visible_item() {
+    let area = Rect::new(0, 0, 30, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 20);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    let entries: Vec<MentionEntry> = (0..10)
+        .map(|index| MentionEntry {
+            path: format!("src/f{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    editor.apply_mention_entries(generation, entries);
+
+    editor.mention_move(9);
+    let rect = mention_panel_rect(&editor, area).expect("panel visible");
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
+
+    // 悬停窗口内条目：窗口保持不动，不因悬停向上滚动。
+    editor.mention_set_active(8);
+    assert_eq!(mention_panel_rect(&editor, area), Some(rect));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 7), Some(9));
+}

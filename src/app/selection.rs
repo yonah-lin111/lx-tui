@@ -1,4 +1,9 @@
 //! 选区模型：本标签内单次文本选择，坐标为窗格内容区（0 基行列）。
+//!
+//! 坐标以内容行为准：prompt 选区在视口滚动时锚点保持不动，终端窗格无滚动偏移，
+//! 两者坐标一致。
+
+use std::time::Instant;
 
 use crate::layout::PaneId;
 
@@ -73,6 +78,14 @@ impl Selection {
         }
         true
     }
+}
+
+/// prompt 拖选到视口边缘时的自动滚动：指针单元格（视口坐标）与下次步进时刻。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EdgeScroll {
+    pub row: u16,
+    pub column: u16,
+    pub next: Instant,
 }
 
 #[cfg(test)]
