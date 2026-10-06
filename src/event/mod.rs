@@ -588,47 +588,53 @@ fn handle_terminal_event(
                 if state.overlay.is_some() {
                     return;
                 }
-                if state.resizing_prompt
-                    || state
-                        .selection
-                        .is_some_and(|selection| selection.is_dragging())
-                {
+                if state.resizing_prompt {
                     return;
                 }
+                let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                    -1
+                } else {
+                    1
+                };
                 if mention_panel_rect(state, view)
                     .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
                 {
-                    let delta = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
-                    update::move_mention(state, delta);
+                    update::scroll_mention(state, direction);
                     *dirty = true;
+                    return;
+                }
+                // prompt 拖选期间滚轮滚动视口，并把选区终点延伸到指针所在单元格。
+                if state.selection.is_some_and(|selection| {
+                    selection.is_dragging() && selection.pane() == state.prompt.id()
+                }) {
+                    update::scroll_prompt(state, direction);
+                    let inner = layout::pane_inner_rect(view.prompt);
+                    if inner.width > 0 && inner.height > 0 {
+                        let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                        let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                        update::drag_selection(state, state.prompt.id(), row, col);
+                        update::place_prompt_cursor(state, row, col);
+                    }
+                    *dirty = true;
+                    return;
+                }
+                if state
+                    .selection
+                    .is_some_and(|selection| selection.is_dragging())
+                {
                     return;
                 }
                 if let Some((pane, _)) = pane_at(rects, mouse.column, mouse.row)
                     && pane == state.prompt.id()
                 {
                     update::clear_selection(state);
-                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
                     update::scroll_prompt(state, direction);
                     *dirty = true;
                 } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
                     && let Some(rows) = ui::workspace_list_rows(view, state)
+                    && update::scroll_workspace_list(state, direction, rows)
                 {
-                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
-                    if update::scroll_workspace_list(state, direction, rows) {
-                        *dirty = true;
-                    }
+                    *dirty = true;
                 }
             }
             MouseEventKind::Moved => {

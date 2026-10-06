@@ -215,6 +215,12 @@ impl MentionPanel {
         let len = self.items.len() as isize;
         self.active = (self.active as isize + delta).rem_euclid(len) as usize;
     }
+
+    /// 按偏移移动高亮项；越界钳制不循环（滚轮语义）。
+    pub fn move_active_clamped(&mut self, delta: isize) {
+        let max = self.items.len().saturating_sub(1) as isize;
+        self.active = (self.active as isize + delta).clamp(0, max) as usize;
+    }
 }
 
 /// 解析光标前的文件提及触发。

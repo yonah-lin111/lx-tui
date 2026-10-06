@@ -23,13 +23,13 @@ fn view<'a>(
     items: &'a [CommandItem<'a>],
     active: usize,
     anchor_row: u16,
-    max_items: Option<usize>,
+    max_height: Option<u16>,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active,
         anchor_row,
-        max_items,
+        max_height,
     }
 }
 
@@ -90,7 +90,7 @@ fn flips_above_when_below_is_tight() {
     ]);
     let rect = render(area, &mut buf, &view(&items, 0, 4, None)).expect("panel renders");
 
-    assert_eq!(rect, Rect::new(0, 0, 7, 4));
+    assert_eq!(rect, Rect::new(0, 0, 8, 4));
     assert_eq!(rect.bottom(), 4);
     assert!(buf[(2, 1)].modifier.contains(Modifier::REVERSED));
 }
@@ -109,7 +109,7 @@ fn scrolls_window_to_keep_active_visible() {
     ]);
     let rect = render(area, &mut buf, &view(&items, 5, 0, None)).expect("panel renders");
 
-    assert_eq!(rect, Rect::new(0, 1, 20, 7));
+    assert_eq!(rect, Rect::new(0, 1, 21, 7));
     assert!(row_text(&buf, area, 2).contains("Heading 2"));
     assert!(!row_text(&buf, area, 2).contains("Heading 1"));
     assert!(row_text(&buf, area, 6).contains("Heading 6"));
@@ -180,7 +180,7 @@ fn stacked_item_without_detail_takes_one_row() {
 }
 
 #[test]
-fn caps_visible_items_and_follows_active() {
+fn caps_panel_height_and_follows_active() {
     let area = Rect::new(0, 0, 24, 12);
     let mut buf = Buffer::empty(area);
     let labels: Vec<(String, String)> = (0..10)
@@ -190,11 +190,19 @@ fn caps_visible_items_and_follows_active() {
         .iter()
         .map(|(label, detail)| CommandItem::Stacked { label, detail })
         .collect();
-    let rect = render(area, &mut buf, &view(&items, 5, 0, Some(3))).expect("panel renders");
+    let rect = render(area, &mut buf, &view(&items, 5, 0, Some(8))).expect("panel renders");
 
     assert_eq!(rect.height, 8);
-    assert!(row_text(&buf, area, 2).contains("file3.rs"));
-    assert!(row_text(&buf, area, 6).contains("file5.rs"));
+    assert!(
+        row_text(&buf, area, 2).contains("file3.rs"),
+        "row2={:?}",
+        row_text(&buf, area, 2)
+    );
+    assert!(
+        row_text(&buf, area, 6).contains("file5.rs"),
+        "row6={:?}",
+        row_text(&buf, area, 6)
+    );
     assert!(buf[(2, 6)].modifier.contains(Modifier::REVERSED));
     assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
 }
@@ -203,19 +211,28 @@ fn caps_visible_items_and_follows_active() {
 fn item_at_maps_rows_to_items() {
     let area = Rect::new(0, 0, 24, 12);
     let items = stacked(&[("a.rs", "src"), ("b.rs", "src"), ("c.rs", "src")]);
-    let layout = layout(area, &view(&items, 0, 0, Some(2))).expect("panel layout");
+    let layout = layout(area, &view(&items, 0, 0, Some(6))).expect("panel layout");
 
     assert_eq!(layout.start, 0);
     assert_eq!(layout.visible, 2);
-    assert_eq!(item_at(&layout, &items, 2, layout.inner.y), Some(0));
-    assert_eq!(item_at(&layout, &items, 2, layout.inner.y + 1), Some(0));
-    assert_eq!(item_at(&layout, &items, 2, layout.inner.y + 2), Some(1));
+    assert!(layout.scrollbar.is_some());
+    assert_eq!(layout.content.width, layout.inner.width - 1);
+    assert_eq!(item_at(&layout, &items, 2, layout.content.y), Some(0));
+    assert_eq!(item_at(&layout, &items, 2, layout.content.y + 1), Some(0));
+    assert_eq!(item_at(&layout, &items, 2, layout.content.y + 2), Some(1));
     assert_eq!(item_at(&layout, &items, 2, layout.rect.y), None);
     assert_eq!(
-        item_at(&layout, &items, layout.rect.x, layout.inner.y),
+        item_at(&layout, &items, layout.rect.x, layout.content.y),
         None
     );
-    assert_eq!(item_at(&layout, &items, 2, layout.inner.bottom() + 1), None);
+    assert_eq!(
+        item_at(&layout, &items, layout.inner.right() - 1, layout.content.y),
+        None
+    );
+    assert_eq!(
+        item_at(&layout, &items, 2, layout.content.bottom() + 1),
+        None
+    );
 }
 
 #[test]
@@ -229,9 +246,40 @@ fn item_at_respects_window_offset() {
         ("f4", "s"),
         ("f5", "s"),
     ]);
-    let layout = layout(area, &view(&items, 5, 0, Some(3))).expect("panel layout");
+    let layout = layout(area, &view(&items, 5, 0, Some(8))).expect("panel layout");
 
     assert_eq!(layout.start, 3);
-    assert_eq!(item_at(&layout, &items, 2, layout.inner.y), Some(3));
-    assert_eq!(item_at(&layout, &items, 2, layout.inner.y + 4), Some(5));
+    assert_eq!(item_at(&layout, &items, 2, layout.content.y), Some(3));
+    assert_eq!(item_at(&layout, &items, 2, layout.content.y + 4), Some(5));
+}
+
+#[test]
+fn renders_scrollbar_when_overflowing() {
+    let area = Rect::new(0, 0, 24, 12);
+    let mut buf = Buffer::empty(area);
+    let items = stacked(&[
+        ("f0", "s"),
+        ("f1", "s"),
+        ("f2", "s"),
+        ("f3", "s"),
+        ("f4", "s"),
+        ("f5", "s"),
+    ]);
+    let layout = layout(area, &view(&items, 0, 0, Some(8))).expect("panel layout");
+    render(area, &mut buf, &view(&items, 0, 0, Some(8))).expect("panel renders");
+
+    let bar = layout.scrollbar.expect("scrollbar visible");
+    assert_eq!(bar.track.x, layout.inner.right() - 1);
+    assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].symbol(), "▐");
+    assert!(
+        buf[(bar.thumb.x, bar.thumb.y)]
+            .modifier
+            .contains(Modifier::BOLD)
+    );
+    assert_eq!(buf[(bar.track.x, bar.track.bottom() - 1)].symbol(), "▕");
+    assert!(
+        buf[(bar.track.x, bar.track.bottom() - 1)]
+            .modifier
+            .contains(Modifier::DIM)
+    );
 }

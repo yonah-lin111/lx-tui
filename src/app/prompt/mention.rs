@@ -44,6 +44,16 @@ impl MentionState {
         true
     }
 
+    /// 滚轮移动高亮：越界钳制不循环；面板未打开或未变化返回 false。
+    pub fn scroll_active(&mut self, delta: isize) -> bool {
+        let Some(panel) = self.panel.as_mut() else {
+            return false;
+        };
+        let before = panel.active();
+        panel.move_active_clamped(delta);
+        panel.active() != before
+    }
+
     /// 确认高亮条目：关闭面板并返回替换区间与插入文本；未打开或区间越界返回 None。
     pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
         let panel = self.panel.as_ref()?;

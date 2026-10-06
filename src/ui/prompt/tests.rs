@@ -162,9 +162,9 @@ fn renders_block_command_panel_below_cursor() {
 
 #[test]
 fn renders_mention_panel_stacked_and_hit_tests_items() {
-    let area = Rect::new(0, 0, 30, 10);
+    let area = Rect::new(0, 0, 30, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
-    editor.resize(30, 10);
+    editor.resize(30, 20);
     editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
     editor.insert_str("@");
     let (generation, _) = editor.take_mention_scan_request().expect("scan requested");

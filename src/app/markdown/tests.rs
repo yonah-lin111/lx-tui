@@ -299,6 +299,32 @@ fn filter_mentions_matches_subsequence_and_caps_items() {
 }
 
 #[test]
+fn mention_panel_clamped_move_stops_at_ends() {
+    let entries = vec![
+        MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "b.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let trigger = MentionTrigger {
+        from: 0,
+        to: 1,
+        query: String::new(),
+    };
+    let mut panel = MentionPanel::new(trigger, entries, 0);
+    panel.move_active_clamped(-1);
+    assert_eq!(panel.active(), 0);
+    panel.move_active_clamped(1);
+    assert_eq!(panel.active(), 1);
+    panel.move_active_clamped(1);
+    assert_eq!(panel.active(), 1);
+}
+
+#[test]
 fn mention_panel_move_wraps_both_directions() {
     let entries = vec![
         MentionEntry {

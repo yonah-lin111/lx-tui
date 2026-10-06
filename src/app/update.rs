@@ -141,9 +141,9 @@ pub fn select_mention(state: &mut AppState, index: usize) {
     state.prompt.mention_confirm_at(index);
 }
 
-/// 滚轮在提及面板上移动高亮；返回是否消费。
-pub fn move_mention(state: &mut AppState, delta: isize) -> bool {
-    state.prompt.mention_move(delta)
+/// 滚轮在提及面板上移动高亮：越界钳制不循环；返回是否变化。
+pub fn scroll_mention(state: &mut AppState, delta: isize) -> bool {
+    state.prompt.mention_scroll(delta)
 }
 
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。

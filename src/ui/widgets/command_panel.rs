@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
+use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 
 /// 面板最小可用尺寸（含边框）。
 const MIN_WIDTH: u16 = 3;
@@ -23,22 +24,25 @@ pub enum CommandItem<'a> {
     Stacked { label: &'a str, detail: &'a str },
 }
 
-/// 面板视图：条目、高亮索引、锚点行与可见条目上限。
+/// 面板视图：条目、高亮索引、锚点行与最大高度。
 ///
 /// `anchor_row` 为内容区内的视觉行；面板绘制在其上方或下方，不覆盖该行。
 pub struct CommandPanelView<'a> {
     pub items: &'a [CommandItem<'a>],
     pub active: usize,
     pub anchor_row: u16,
-    /// 可见条目上限；None 表示仅受可用空间限制。
-    pub max_items: Option<usize>,
+    /// 面板最大高度（含边框）；None 表示仅受可用空间限制。
+    pub max_height: Option<u16>,
 }
 
-/// 面板布局：面板矩形、内容区、首个可见条目与可见条目数；绘制与命中测试共用。
+/// 面板布局：面板矩形、条目内容区、滚动条、首个可见条目与可见条目数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PanelLayout {
     pub rect: Rect,
     pub inner: Rect,
+    /// 条目绘制与命中区；滚动条出现时不含其占用列。
+    pub content: Rect,
+    pub scrollbar: Option<ScrollbarLayout>,
     pub start: usize,
     pub visible: usize,
 }
@@ -48,12 +52,11 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     if view.items.is_empty() || area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
         return None;
     }
-    let max_items = view
-        .max_items
-        .unwrap_or(view.items.len())
-        .min(view.items.len());
-    let content_rows: u16 = view.items[..max_items].iter().map(item_height).sum();
+    let content_rows: u16 = view.items.iter().map(item_height).sum();
     let needed = content_rows.saturating_add(2);
+    let needed = view
+        .max_height
+        .map_or(needed, |max_height| needed.min(max_height));
     let below = area
         .height
         .saturating_sub(view.anchor_row.saturating_add(1));
@@ -69,18 +72,38 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     } else {
         area.y + view.anchor_row - height
     };
-    let rect = Rect::new(area.x, y, panel_width(area.width, view.items), height);
-    let inner = inner_rect(rect);
-    let budget = usize::from(inner.height);
+    let budget = usize::from(height.saturating_sub(2));
     let active = view.active.min(view.items.len() - 1);
     let start = window_start(view.items, active, budget);
     let visible = visible_count(view.items, start, budget);
     if visible == 0 {
         return None;
     }
+    let overflow = view.items.len() > visible;
+    let width = panel_width(area.width, view.items)
+        .saturating_add(u16::from(overflow))
+        .min(area.width);
+    let rect = Rect::new(area.x, y, width, height);
+    let inner = inner_rect(rect);
+    let scrollbar = if overflow {
+        scrollbar::layout(inner, view.items.len(), visible, start)
+    } else {
+        None
+    };
+    let content = match scrollbar {
+        Some(_) => Rect::new(
+            inner.x,
+            inner.y,
+            inner.width.saturating_sub(1),
+            inner.height,
+        ),
+        None => inner,
+    };
     Some(PanelLayout {
         rect,
         inner,
+        content,
+        scrollbar,
         start,
         visible,
     })
@@ -95,6 +118,9 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
         .border_style(style::muted());
     block.render(layout.rect, buf);
     render_items(buf, &layout, view);
+    if let Some(scrollbar) = layout.scrollbar.as_ref() {
+        scrollbar::render_buffer(buf, scrollbar);
+    }
     Some(layout.rect)
 }
 
@@ -105,10 +131,10 @@ pub fn item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    if !layout.inner.contains(Position::new(column, row)) {
+    if !layout.content.contains(Position::new(column, row)) {
         return None;
     }
-    let mut y = layout.inner.y;
+    let mut y = layout.content.y;
     for (offset, item) in items
         .iter()
         .skip(layout.start)
@@ -209,7 +235,7 @@ fn visible_count(items: &[CommandItem<'_>], start: usize, budget: usize) -> usiz
 
 /// 绘制可见条目；窗口滚动保证高亮项可见，单行预览列按最长标签对齐。
 fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<'_>) {
-    if layout.inner.width == 0 || layout.inner.height == 0 {
+    if layout.content.width == 0 || layout.content.height == 0 {
         return;
     }
     let label_width = view
@@ -220,7 +246,7 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
         })
         .max()
         .unwrap_or(0);
-    let mut y = layout.inner.y;
+    let mut y = layout.content.y;
     for (offset, item) in view
         .items
         .iter()
@@ -229,7 +255,7 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
         .enumerate()
     {
         let height = item_height(item);
-        let row = Rect::new(layout.inner.x, y, layout.inner.width, height);
+        let row = Rect::new(layout.content.x, y, layout.content.width, height);
         render_item(
             buf,
             row,

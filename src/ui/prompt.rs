@@ -44,9 +44,6 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     render_panels(buf, area, prompt);
 }
 
-/// 提及面板最多可见条目数（每条两行，超出后窗口跟随高亮滚动）。
-const MENTION_MAX_VISIBLE: usize = 5;
-
 /// 绘制浮层面板：文件提及优先，其次块命令；状态由 app 层维护，这里只做只读映射。
 fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     let Some((anchor_row, _)) = prompt.cursor_cell() else {
@@ -61,12 +58,7 @@ fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
         command_panel::render(
             area,
             buf,
-            &CommandPanelView {
-                items: &items,
-                active: panel.active(),
-                anchor_row,
-                max_items: Some(MENTION_MAX_VISIBLE),
-            },
+            &mention_view(&items, panel.active(), anchor_row, area.height / 2),
         );
         return;
     }
@@ -89,7 +81,7 @@ fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
             items: &items,
             active: panel.active(),
             anchor_row,
-            max_items: None,
+            max_height: None,
         },
     );
 }
@@ -102,7 +94,10 @@ pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Op
         .iter()
         .map(|(label, detail)| CommandItem::Stacked { label, detail })
         .collect();
-    let layout = command_panel::layout(area, &mention_view(&items, data.active, data.anchor_row))?;
+    let layout = command_panel::layout(
+        area,
+        &mention_view(&items, data.active, data.anchor_row, area.height / 2),
+    )?;
     command_panel::item_at(&layout, &items, column, row)
 }
 
@@ -114,8 +109,11 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
         .iter()
         .map(|(label, detail)| CommandItem::Stacked { label, detail })
         .collect();
-    command_panel::layout(area, &mention_view(&items, data.active, data.anchor_row))
-        .map(|layout| layout.rect)
+    command_panel::layout(
+        area,
+        &mention_view(&items, data.active, data.anchor_row, area.height / 2),
+    )
+    .map(|layout| layout.rect)
 }
 
 /// 提及面板渲染数据：条目文本、高亮索引与锚点行。
@@ -136,17 +134,18 @@ fn mention_panel_data(prompt: &Prompt) -> Option<MentionPanelData> {
     })
 }
 
-/// 提及面板视图：可见条目上限固定。
+/// 提及面板视图：最大高度取容器（prompt 内容区）的一半。
 fn mention_view<'a>(
     items: &'a [CommandItem<'a>],
     active: usize,
     anchor_row: u16,
+    max_height: u16,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active,
         anchor_row,
-        max_items: Some(MENTION_MAX_VISIBLE),
+        max_height: Some(max_height),
     }
 }
 

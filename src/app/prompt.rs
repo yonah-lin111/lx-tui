@@ -287,6 +287,11 @@ impl Prompt {
         self.mention.set_active(index)
     }
 
+    /// 滚轮在提及面板上移动高亮：越界钳制不循环；返回是否变化。
+    pub fn mention_scroll(&mut self, delta: isize) -> bool {
+        self.mention.scroll_active(delta)
+    }
+
     /// 提及面板点选：设置高亮并确认插入；返回是否消费。
     pub fn mention_confirm_at(&mut self, index: usize) -> bool {
         self.mention.set_active(index);

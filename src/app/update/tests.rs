@@ -905,7 +905,14 @@ fn mouse_mention_hover_select_and_wheel_flow() {
     assert!(hover_mention(&mut state, 1));
     assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
     assert!(!hover_mention(&mut state, 1));
-    assert!(move_mention(&mut state, 1));
+    assert!(!scroll_mention(&mut state, 1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
+    assert!(scroll_mention(&mut state, -1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    assert!(!scroll_mention(&mut state, -1));
+    apply_editor(&mut state, EditorCommand::Up);
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
+    apply_editor(&mut state, EditorCommand::Down);
     assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
     select_mention(&mut state, 1);
     assert_eq!(state.prompt.text(), "@b.rs ");
