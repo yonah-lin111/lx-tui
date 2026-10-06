@@ -46,3 +46,15 @@ fn block_command_text_covers_all_commands() {
         ("Table".to_string(), "|  |  |".to_string())
     );
 }
+
+#[test]
+fn pane_title_prefers_osc_then_cwd_label_then_id() {
+    let id = PaneId::alloc();
+    assert_eq!(
+        pane_title(id, Some("Claude Code"), Some("lx-tui")),
+        "Claude Code"
+    );
+    assert_eq!(pane_title(id, Some("  "), Some("lx-tui")), "lx-tui");
+    assert_eq!(pane_title(id, None, Some("")), format!("pane {}", id.raw()));
+    assert_eq!(pane_title(id, None, None), format!("pane {}", id.raw()));
+}

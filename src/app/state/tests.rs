@@ -8,7 +8,8 @@ fn demo_state_has_expected_shape() {
     let state = AppState::demo();
     assert_eq!(state.workspaces.len(), 1);
     assert_eq!(state.active_workspace().name, workspace_name());
-    assert_eq!(state.active_tab().title, "shell");
+    assert_eq!(state.active_workspace().tabs.len(), 1);
+    assert_eq!(state.active_tab().name, None);
     assert_eq!(state.active_tab().layout.pane_ids().len(), 1);
 }
 
@@ -20,6 +21,14 @@ fn workspace_label_takes_last_segment_and_home() {
         "~"
     );
     assert_eq!(workspace_label(Path::new("/"), None), "/");
+}
+
+#[test]
+fn tab_label_uses_custom_name_or_position() {
+    assert_eq!(tab_label(0, None), "tab 1");
+    assert_eq!(tab_label(4, None), "tab 5");
+    assert_eq!(tab_label(1, Some("dev")), "dev");
+    assert_eq!(tab_label(1, Some("  ")), "tab 2");
 }
 
 #[test]
@@ -76,6 +85,7 @@ fn pane_lookup_does_not_reach_prompt() {
 fn demo_starts_without_overlay_or_scroll() {
     let state = AppState::demo();
     assert!(state.overlay.is_none());
+    assert_eq!(state.tab_scroll, 0);
     assert_eq!(state.workspace_scroll, 0);
     assert!(state.workspace_scroll_drag.is_none());
     assert!(state.workspace_drag.is_none());
@@ -93,7 +103,7 @@ fn single_terminal_workspace_is_auto_named_with_root_pane() {
     assert_eq!(workspace.name, "workspace 7");
     assert_eq!(workspace.active_tab, 0);
     assert_eq!(workspace.tabs.len(), 1);
-    assert_eq!(workspace.tabs[0].title, "shell");
+    assert_eq!(workspace.tabs[0].name, None);
     assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
     assert!(!workspace.name_is_manual);
     assert!(!workspace.is_initial);

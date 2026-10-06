@@ -261,3 +261,109 @@ fn mouse_drag_prompt_scrollbar_thumb() {
     );
     assert!(state.prompt_scroll_drag.is_none());
 }
+
+#[test]
+fn mouse_click_switches_tab_and_add_creates_one() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    crate::app::update::create_tab(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let bar = ui::tab_bar::layout(&geo.view, state.active_workspace(), state.tab_scroll);
+    let (_, first) = bar.tabs[0];
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), first.x, first.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.active_workspace().active_tab, 0);
+    assert!(dirty);
+
+    let bar = ui::tab_bar::layout(&geo.view, state.active_workspace(), state.tab_scroll);
+    let add = bar.add.expect("add button is visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), add.x, add.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.active_workspace().tabs.len(), 3);
+    assert_eq!(state.active_workspace().active_tab, 2);
+}
+
+#[test]
+fn mouse_right_click_tab_opens_tab_menu() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    crate::app::update::create_tab(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let bar = ui::tab_bar::layout(&geo.view, state.active_workspace(), state.tab_scroll);
+    let (_, first) = bar.tabs[0];
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), first.x, first.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("tab menu overlay expected");
+    };
+    assert_eq!(
+        menu.target,
+        crate::app::overlay::OverlayTarget::Tab {
+            workspace: 0,
+            tab: 0
+        }
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_click_scroll_buttons_scrolls_tab_bar() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    for _ in 1..30 {
+        crate::app::update::create_tab(&mut state);
+    }
+    crate::app::update::set_tab_scroll(&mut state, 0, usize::MAX);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let bar = ui::tab_bar::layout(&geo.view, state.active_workspace(), state.tab_scroll);
+    assert!(bar.max_scroll > 0);
+    let right = bar.scroll_right.expect("right button is visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), right.x, right.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tab_scroll > 0);
+
+    let bar = ui::tab_bar::layout(&geo.view, state.active_workspace(), state.tab_scroll);
+    let left = bar.scroll_left.expect("left button is visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), left.x, left.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.tab_scroll, 0);
+}

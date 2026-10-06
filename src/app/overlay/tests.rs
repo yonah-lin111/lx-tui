@@ -60,16 +60,21 @@ fn text_input_movement_clamps_at_bounds() {
 fn overlay_kind_reports_variant() {
     let menu = Overlay::Menu(Menu {
         anchor: (0, 0),
-        target: MenuTarget::Workspace(0),
+        target: OverlayTarget::Workspace(0),
         commands: vec![MenuCommand::RenameWorkspace],
         selected: 0,
     });
     assert_eq!(menu.kind(), OverlayKind::Menu);
     let rename = Overlay::Rename(Rename {
-        target: 0,
+        target: OverlayTarget::Workspace(0),
         input: TextInput::new("a"),
     });
     assert_eq!(rename.kind(), OverlayKind::Rename);
-    let confirm = Overlay::ConfirmClose(ConfirmClose { target: 0 });
+    let confirm = Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Tab {
+            workspace: 0,
+            tab: 1,
+        },
+    });
     assert_eq!(confirm.kind(), OverlayKind::ConfirmClose);
 }

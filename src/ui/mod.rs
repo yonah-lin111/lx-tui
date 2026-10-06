@@ -5,6 +5,7 @@ pub mod markdown;
 pub mod overlay;
 pub mod prompt;
 pub mod style;
+pub mod tab_bar;
 pub mod terminal;
 pub mod text;
 pub mod toast;
@@ -53,7 +54,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
             render_sidebar(frame, view.sidebar, state);
         }
     }
-    render_tab_bar(frame, view.tab_bar, state);
+    tab_bar::render(frame, &view, state);
     render_exit_button(frame, &view);
     let pane_cursor = render_panes(frame, &pane_rects, state);
     let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
@@ -551,25 +552,6 @@ fn render_exit_button(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
     }
 }
 
-/// 标签栏：当前工作区的标签切换。
-fn render_tab_bar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let workspace = state.active_workspace();
-    let mut spans: Vec<Span<'_>> = Vec::with_capacity(workspace.tabs.len() * 2);
-    for (index, tab) in workspace.tabs.iter().enumerate() {
-        let style = if index == workspace.active_tab {
-            style::accent()
-        } else {
-            style::muted()
-        };
-        spans.push(Span::styled(format!(" {} ", tab.title), style));
-        spans.push(Span::styled("│", style::muted()));
-    }
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
-}
-
 /// 主区域：BSP 平铺窗格；矩形由调用方按当前几何计算，与命中测试共用。
 ///
 /// 返回聚焦终端窗格的光标绝对坐标：终端把 IME 预输入绘制在硬件光标处，需与仿真光标同步。
@@ -691,7 +673,7 @@ fn prompt_scrollbar_for(
 
 /// 窗格标题：空占位与终端走通用标题规则。
 fn pane_display_title(id: PaneId, pane: &Pane) -> String {
-    text::pane_title(id, pane.terminal.title())
+    text::pane_title(id, pane.terminal.title(), pane.cwd_label.as_deref())
 }
 
 /// 终端尺寸不足时的提示。

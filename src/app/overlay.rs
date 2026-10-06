@@ -31,35 +31,39 @@ impl Overlay {
 #[derive(Debug)]
 pub struct Menu {
     pub anchor: (u16, u16),
-    pub target: MenuTarget,
+    pub target: OverlayTarget,
     pub commands: Vec<MenuCommand>,
     pub selected: usize,
 }
 
-/// 菜单作用目标。
+/// 浮层作用目标：工作区或工作区内的标签。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MenuTarget {
+pub enum OverlayTarget {
     Workspace(usize),
+    Tab { workspace: usize, tab: usize },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuCommand {
+    NewTab,
     RenameWorkspace,
     CloseWorkspace,
+    RenameTab,
+    CloseTab,
 }
 
-/// 重命名浮层：目标工作区索引与单行输入。
+/// 重命名浮层：目标与单行输入。
 #[derive(Debug)]
 pub struct Rename {
-    pub target: usize,
+    pub target: OverlayTarget,
     pub input: TextInput,
 }
 
-/// 关闭确认浮层：目标工作区索引。
+/// 关闭确认浮层：目标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfirmClose {
-    pub target: usize,
+    pub target: OverlayTarget,
 }
 
 /// 单行文本输入：字符缓冲与字符索引光标（范围 `0..=字符数`）。

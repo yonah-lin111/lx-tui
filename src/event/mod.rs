@@ -14,7 +14,7 @@ use tokio_stream::StreamExt;
 
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneKind};
+use crate::app::state::{AppState, PaneKind, home_dir, workspace_label};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
@@ -60,7 +60,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         reconcile_sessions(state, &mut sessions, &sender);
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
             cwd_check = None;
-            if poll_workspace_cwds(state, &sessions) {
+            if poll_process_cwds(state, &sessions) {
                 dirty = true;
             }
         }
@@ -72,6 +72,9 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
             if let Some(rows) = ui::workspace_list_rows(&geometry.view, state) {
                 update::clamp_workspace_scroll(state, rows);
             }
+            let tab_bar =
+                ui::tab_bar::layout(&geometry.view, state.active_workspace(), state.tab_scroll);
+            update::set_tab_scroll(state, state.tab_scroll, tab_bar.max_scroll);
             dirty = true;
         }
         if update::tick(state, Instant::now()) {
@@ -112,9 +115,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
                         handle_app_event(message, state, &mut sessions);
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
-                    if state.workspaces.iter().any(|workspace| !workspace.name_is_manual) {
-                        cwd_check.get_or_insert_with(|| Instant::now() + CWD_CHECK_DELAY);
-                    }
+                    cwd_check.get_or_insert_with(|| Instant::now() + CWD_CHECK_DELAY);
                     dirty = true;
                 }
             }
@@ -131,10 +132,28 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
 /// PTY 输出后的 cwd 去抖检查延迟。
 const CWD_CHECK_DELAY: Duration = Duration::from_millis(300);
 
-/// 轮询自动命名工作区身份窗格的 cwd 并同步名字；返回是否变化。
+/// 轮询窗格 shell 进程的 cwd：全部窗格更新标题标签，自动命名工作区同步名字；
+/// 返回是否有变化。
 ///
-/// 手动命名工作区不参与轮询；窗格退出或读不到 cwd 时保持原名。
-fn poll_workspace_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession>) -> bool {
+/// 手动命名工作区不参与改名；窗格退出或读不到 cwd 时保持原值。
+fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession>) -> bool {
+    let home = home_dir();
+    let mut cwds: HashMap<PaneId, std::path::PathBuf> = HashMap::new();
+    for id in state.all_pane_ids() {
+        let Some(pid) = sessions.get(&id).and_then(PtySession::process_id) else {
+            continue;
+        };
+        if let Some(cwd) = crate::platform::process_cwd(pid) {
+            cwds.insert(id, cwd);
+        }
+    }
+    let mut changed = false;
+    for (id, cwd) in &cwds {
+        let label = workspace_label(cwd, home.as_deref());
+        if update::update_pane_cwd(state, *id, label) {
+            changed = true;
+        }
+    }
     let tracked: Vec<(usize, PaneId)> = state
         .workspaces
         .iter()
@@ -142,15 +161,10 @@ fn poll_workspace_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySessi
         .filter(|(_, workspace)| !workspace.name_is_manual)
         .filter_map(|(index, workspace)| workspace.root_pane().map(|pane| (index, pane)))
         .collect();
-    let mut changed = false;
     for (index, pane) in tracked {
-        let Some(pid) = sessions.get(&pane).and_then(PtySession::process_id) else {
-            continue;
-        };
-        let Some(cwd) = crate::platform::process_cwd(pid) else {
-            continue;
-        };
-        if update::update_workspace_cwd(state, index, &cwd) {
+        if let Some(cwd) = cwds.get(&pane)
+            && update::update_workspace_cwd(state, index, cwd)
+        {
             changed = true;
         }
     }
@@ -295,9 +309,13 @@ fn handle_terminal_event(
                 }
                 Routed::Overlay(key) => {
                     let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     update::apply_overlay_key(state, key);
                     if was_confirm {
                         ensure_workspace_visible(state, view);
+                    }
+                    if was_confirm || was_menu {
+                        reveal_active_tab(state, view);
                     }
                     *dirty = true;
                 }
@@ -358,6 +376,7 @@ fn handle_terminal_event(
                     if was_confirm {
                         ensure_workspace_visible(state, view);
                     }
+                    reveal_active_tab(state, view);
                     *dirty = true;
                     return;
                 }
@@ -370,6 +389,40 @@ fn handle_terminal_event(
                 }
                 if ui::exit_button_at(view, mouse.column, mouse.row) {
                     update::apply(Action::Quit, state);
+                    *dirty = true;
+                    return;
+                }
+                let tab_bar = ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
+                if tab_bar
+                    .scroll_left
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                {
+                    if update::scroll_tab_bar(state, -1, tab_bar.max_scroll) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if tab_bar
+                    .scroll_right
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                {
+                    if update::scroll_tab_bar(state, 1, tab_bar.max_scroll) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if let Some(index) = ui::tab_bar::tab_at(&tab_bar, mouse.column, mouse.row) {
+                    update::switch_tab(state, index);
+                    reveal_active_tab(state, view);
+                    *dirty = true;
+                    return;
+                }
+                if tab_bar
+                    .add
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                {
+                    update::create_tab(state);
+                    reveal_active_tab(state, view);
                     *dirty = true;
                     return;
                 }
@@ -400,6 +453,7 @@ fn handle_terminal_event(
                 {
                     update::switch_workspace(state, index);
                     ensure_workspace_visible(state, view);
+                    reveal_active_tab(state, view);
                     update::begin_workspace_drag(state, index);
                     *dirty = true;
                 } else if ui::add_workspace_button(view)
@@ -407,6 +461,7 @@ fn handle_terminal_event(
                 {
                     update::create_workspace(state);
                     ensure_workspace_visible(state, view);
+                    reveal_active_tab(state, view);
                     *dirty = true;
                 } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
                     .is_some_and(|(_, right)| right == state.prompt.id())
@@ -436,13 +491,18 @@ fn handle_terminal_event(
                 }
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                // 菜单打开时右键不穿透：工作区项上重开，其余位置关闭。
+                // 菜单打开时右键不穿透：标签或工作区项上重开，其余位置关闭。
                 if matches!(state.overlay, Some(Overlay::Menu(_))) {
-                    match ui::workspace_item_at(view, state, mouse.column, mouse.row) {
-                        Some(index) => {
-                            update::open_workspace_menu(state, index, (mouse.column, mouse.row))
-                        }
-                        None => update::close_overlay(state),
+                    let tab_bar =
+                        ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
+                    if let Some(index) = ui::tab_bar::tab_at(&tab_bar, mouse.column, mouse.row) {
+                        update::open_tab_menu(state, index, (mouse.column, mouse.row));
+                    } else if let Some(index) =
+                        ui::workspace_item_at(view, state, mouse.column, mouse.row)
+                    {
+                        update::open_workspace_menu(state, index, (mouse.column, mouse.row));
+                    } else {
+                        update::close_overlay(state);
                     }
                     *dirty = true;
                     return;
@@ -451,7 +511,13 @@ fn handle_terminal_event(
                 if state.overlay.is_some() {
                     return;
                 }
-                if let Some(index) = ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+                let tab_bar = ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
+                if let Some(index) = ui::tab_bar::tab_at(&tab_bar, mouse.column, mouse.row) {
+                    update::open_tab_menu(state, index, (mouse.column, mouse.row));
+                    *dirty = true;
+                } else if let Some(index) =
+                    ui::workspace_item_at(view, state, mouse.column, mouse.row)
+                {
                     update::open_workspace_menu(state, index, (mouse.column, mouse.row));
                     *dirty = true;
                 }
@@ -746,6 +812,15 @@ fn ensure_workspace_visible(state: &mut AppState, view: &ui::layout::ViewLayout)
     if let Some(rows) = ui::workspace_list_rows(view, state) {
         update::ensure_workspace_visible(state, rows);
     }
+}
+
+/// 保证激活标签在标签栏可见范围内（切换/创建/关闭后调用）。
+fn reveal_active_tab(state: &mut AppState, view: &ui::layout::ViewLayout) {
+    let workspace = state.active_workspace();
+    let tab_bar = ui::tab_bar::layout(view, workspace, state.tab_scroll);
+    let offset = ui::tab_bar::reveal_scroll(&tab_bar, workspace);
+    let max = tab_bar.max_scroll;
+    update::set_tab_scroll(state, offset, max);
 }
 
 fn handle_app_event(

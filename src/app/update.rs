@@ -9,12 +9,12 @@ use crate::layout::{self, PaneId};
 
 use super::actions::{Action, EditorCommand, OverlayKey};
 use super::overlay::{
-    ConfirmClose, Menu, MenuCommand, MenuTarget, Overlay, OverlayKind, Rename, TextInput,
+    ConfirmClose, Menu, MenuCommand, Overlay, OverlayKind, OverlayTarget, Rename, TextInput,
 };
 use super::selection::Selection;
 use super::state::{
-    AppState, PaneKind, Workspace, current_workspace_identity, home_dir, unique_workspace_name,
-    workspace_label,
+    AppState, PaneKind, Tab, Workspace, current_workspace_identity, home_dir, tab_label,
+    unique_workspace_name, workspace_label,
 };
 use super::toast::Toast;
 
@@ -158,6 +158,18 @@ pub fn mark_pane_exited(state: &mut AppState, id: PaneId) {
     if let Some(pane) = state.pane_mut_anywhere(id) {
         pane.exited = true;
     }
+}
+
+/// 更新窗格 cwd 标题标签；变化返回 true（供置脏重绘）。
+pub fn update_pane_cwd(state: &mut AppState, id: PaneId, label: String) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if pane.cwd_label.as_deref() == Some(label.as_str()) {
+        return false;
+    }
+    pane.cwd_label = Some(label);
+    true
 }
 
 /// 在区域内容区开始一次文本选择；与右栏拖拽互斥。
@@ -387,10 +399,71 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     }
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
-        target: MenuTarget::Workspace(target),
+        target: OverlayTarget::Workspace(target),
         commands,
         selected: 0,
     }));
+}
+
+/// 打开标签右键菜单；仅剩一个标签时不提供关闭项。
+pub fn open_tab_menu(state: &mut AppState, tab: usize, anchor: (u16, u16)) {
+    let workspace_index = state.active_workspace;
+    let Some(workspace) = state.workspaces.get(workspace_index) else {
+        return;
+    };
+    if tab >= workspace.tabs.len() {
+        return;
+    }
+    state.workspace_scroll_drag = None;
+    let mut commands = vec![MenuCommand::NewTab, MenuCommand::RenameTab];
+    if workspace.tabs.len() > 1 {
+        commands.push(MenuCommand::CloseTab);
+    }
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::Tab {
+            workspace: workspace_index,
+            tab,
+        },
+        commands,
+        selected: 0,
+    }));
+}
+
+/// 新建标签并激活：追加自动命名标签；PTY 由事件循环按状态对齐启动。
+pub fn create_tab(state: &mut AppState) {
+    let workspace = state.active_workspace_mut();
+    workspace.tabs.push(Tab::single_terminal());
+    workspace.active_tab = workspace.tabs.len().saturating_sub(1);
+    state.selection = None;
+    state.prompt_focused = false;
+}
+
+/// 切换当前工作区的标签；越界忽略。
+pub fn switch_tab(state: &mut AppState, index: usize) {
+    let workspace = state.active_workspace_mut();
+    if index >= workspace.tabs.len() {
+        return;
+    }
+    workspace.active_tab = index;
+    state.selection = None;
+    state.prompt_focused = false;
+}
+
+/// 标签栏滚动最大偏移；由调用方按当前几何计算并钳制。
+pub fn set_tab_scroll(state: &mut AppState, offset: usize, max: usize) -> bool {
+    let offset = offset.min(max);
+    if offset == state.tab_scroll {
+        return false;
+    }
+    state.tab_scroll = offset;
+    true
+}
+
+/// 按步长滚动标签栏；越界钳制；返回是否变化。
+pub fn scroll_tab_bar(state: &mut AppState, delta: isize, max: usize) -> bool {
+    let target = (state.tab_scroll.min(max) as isize).saturating_add(delta);
+    set_tab_scroll(state, target.clamp(0, max as isize) as usize, max)
 }
 
 /// 关闭当前浮层。
@@ -422,26 +495,47 @@ pub fn set_menu_selection(state: &mut AppState, index: usize) -> bool {
     true
 }
 
-/// 执行菜单当前项：重命名打开输入浮层，关闭打开确认浮层。
+/// 执行菜单当前项：新建立即生效；重命名打开输入浮层，关闭打开确认浮层。
 pub fn activate_menu(state: &mut AppState) {
     let Some(Overlay::Menu(menu)) = state.overlay.take() else {
         return;
     };
-    let MenuTarget::Workspace(target) = menu.target;
-    match menu.commands.get(menu.selected) {
-        Some(MenuCommand::RenameWorkspace) => {
+    match (menu.commands.get(menu.selected), menu.target) {
+        (Some(MenuCommand::NewTab), OverlayTarget::Tab { .. }) => create_tab(state),
+        (Some(MenuCommand::RenameWorkspace), OverlayTarget::Workspace(target)) => {
             let Some(workspace) = state.workspaces.get(target) else {
                 return;
             };
             state.overlay = Some(Overlay::Rename(Rename {
-                target,
+                target: menu.target,
                 input: TextInput::new(workspace.name.clone()),
             }));
         }
-        Some(MenuCommand::CloseWorkspace) => {
-            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target }));
+        (Some(MenuCommand::CloseWorkspace), OverlayTarget::Workspace(_)) => {
+            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+                target: menu.target,
+            }));
         }
-        None => {}
+        (Some(MenuCommand::RenameTab), OverlayTarget::Tab { workspace, tab }) => {
+            let Some(label) = state
+                .workspaces
+                .get(workspace)
+                .and_then(|workspace| workspace.tabs.get(tab))
+                .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))
+            else {
+                return;
+            };
+            state.overlay = Some(Overlay::Rename(Rename {
+                target: menu.target,
+                input: TextInput::new(label),
+            }));
+        }
+        (Some(MenuCommand::CloseTab), OverlayTarget::Tab { .. }) => {
+            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+                target: menu.target,
+            }));
+        }
+        _ => {}
     }
 }
 
@@ -485,29 +579,70 @@ fn commit_rename(state: &mut AppState) {
         return;
     }
     let target = rename.target;
-    let Some(workspace) = state.workspaces.get_mut(target) else {
-        state.overlay = None;
-        return;
-    };
-    workspace.name = name;
-    workspace.name_is_manual = true;
+    match target {
+        OverlayTarget::Workspace(index) => {
+            let Some(workspace) = state.workspaces.get_mut(index) else {
+                state.overlay = None;
+                return;
+            };
+            workspace.name = name;
+            workspace.name_is_manual = true;
+        }
+        OverlayTarget::Tab { workspace, tab } => {
+            let Some(tab_state) = state
+                .workspaces
+                .get_mut(workspace)
+                .and_then(|workspace| workspace.tabs.get_mut(tab))
+            else {
+                state.overlay = None;
+                return;
+            };
+            tab_state.name = Some(name);
+        }
+    }
     state.overlay = None;
 }
 
-/// 确认关闭工作区：至少保留一个；关闭当前工作区后焦点落到同索引，越界回退末项。
+/// 确认关闭目标：工作区或标签；两者都至少保留一个。
 fn confirm_close(state: &mut AppState) {
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
         return;
     };
-    if state.workspaces.len() <= 1 || confirm.target >= state.workspaces.len() {
+    match confirm.target {
+        OverlayTarget::Workspace(target) => close_workspace(state, target),
+        OverlayTarget::Tab { workspace, tab } => close_tab(state, workspace, tab),
+    }
+}
+
+/// 关闭工作区：至少保留一个；关闭当前工作区后焦点落到同索引，越界回退末项。
+fn close_workspace(state: &mut AppState, target: usize) {
+    if state.workspaces.len() <= 1 || target >= state.workspaces.len() {
         return;
     }
-    let removed_active = confirm.target == state.active_workspace;
-    state.workspaces.remove(confirm.target);
+    let removed_active = target == state.active_workspace;
+    state.workspaces.remove(target);
     if removed_active {
         state.active_workspace = state.active_workspace.min(state.workspaces.len() - 1);
-    } else if confirm.target < state.active_workspace {
+    } else if target < state.active_workspace {
         state.active_workspace -= 1;
+    }
+    state.selection = None;
+}
+
+/// 关闭标签：至少保留一个；关闭当前标签后焦点落到同索引，越界回退末项。
+fn close_tab(state: &mut AppState, workspace: usize, tab: usize) {
+    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
+        return;
+    };
+    if workspace_state.tabs.len() <= 1 || tab >= workspace_state.tabs.len() {
+        return;
+    }
+    workspace_state.tabs.remove(tab);
+    let last = workspace_state.tabs.len() - 1;
+    if tab < workspace_state.active_tab {
+        workspace_state.active_tab -= 1;
+    } else if tab == workspace_state.active_tab {
+        workspace_state.active_tab = workspace_state.active_tab.min(last);
     }
     state.selection = None;
 }

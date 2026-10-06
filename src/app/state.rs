@@ -45,6 +45,8 @@ pub struct AppState {
     pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
+    /// 标签栏滚动偏移（首个可见标签索引）；仅作用于当前工作区。
+    pub tab_scroll: usize,
     /// 工作区列表滚动偏移（顶部项索引）。
     pub workspace_scroll: usize,
     /// 拖拽滚动条 thumb 时相对顶部的抓取偏移。
@@ -76,7 +78,7 @@ impl Workspace {
     pub(crate) fn single_terminal(name: String, cwd: Option<PathBuf>) -> Self {
         Self {
             name,
-            tabs: vec![Tab::single_terminal("shell")],
+            tabs: vec![Tab::single_terminal()],
             active_tab: 0,
             name_is_manual: false,
             cwd,
@@ -90,10 +92,10 @@ impl Workspace {
     }
 }
 
-/// 标签页：布局树与窗格载荷一一对应。
+/// 标签页：布局树与窗格载荷一一对应；未重命名时按位置显示自动标题。
 #[derive(Debug)]
 pub struct Tab {
-    pub title: String,
+    pub name: Option<String>,
     pub layout: TileLayout,
     panes: BTreeMap<PaneId, Pane>,
 }
@@ -111,25 +113,27 @@ pub struct Pane {
     pub kind: PaneKind,
     pub terminal: Terminal,
     pub exited: bool,
+    /// 窗格 shell 进程 cwd 的显示标签；标题无 OSC 时回退展示。
+    pub cwd_label: Option<String>,
 }
 
 impl Tab {
-    fn with_layout(title: &str, layout: TileLayout) -> Self {
+    fn with_layout(name: Option<String>, layout: TileLayout) -> Self {
         let panes = layout
             .pane_ids()
             .into_iter()
             .map(|id| (id, Pane::new()))
             .collect();
         Self {
-            title: title.to_string(),
+            name,
             layout,
             panes,
         }
     }
 
-    /// 单窗格终端标签。
-    pub(crate) fn single_terminal(title: &str) -> Self {
-        Self::with_layout(title, TileLayout::new())
+    /// 单窗格终端标签；初始未重命名，按位置显示自动标题。
+    pub(crate) fn single_terminal() -> Self {
+        Self::with_layout(None, TileLayout::new())
     }
 
     /// 根窗格：树序第一个窗格，工作区身份跟随它。
@@ -154,6 +158,7 @@ impl Pane {
             kind: PaneKind::Terminal,
             terminal: Terminal::new(DEFAULT_COLS, DEFAULT_ROWS),
             exited: false,
+            cwd_label: None,
         }
     }
 }
@@ -199,6 +204,14 @@ pub fn home_dir() -> Option<PathBuf> {
 /// 当前路径无最后一段且显示为空时的兜底工作区名。
 const FALLBACK_WORKSPACE_NAME: &str = "workspace";
 
+/// 标签标题：重命名后显示自定义名，否则按位置显示 `tab N`。
+pub fn tab_label(index: usize, name: Option<&str>) -> String {
+    match name {
+        Some(name) if !name.trim().is_empty() => name.to_string(),
+        _ => format!("tab {}", index.saturating_add(1)),
+    }
+}
+
 /// 去重命名：`base` 已被占用时追加最小未用序号（`base 2`、`base 3`…）。
 ///
 /// `taken` 由调用方给出占用判定（排除自身）。
@@ -217,7 +230,7 @@ pub fn unique_workspace_name(base: &str, taken: impl Fn(&str) -> bool) -> String
 }
 
 impl AppState {
-    /// 构造初始状态：单个工作区（以当前路径末段命名），shell 与 logs 两个终端标签，
+    /// 构造初始状态：单个工作区（以当前路径末段命名），单个自动命名终端标签，
     /// 加全局 prompt 右栏。
     pub fn demo() -> Self {
         let (cwd, name) = current_workspace_identity();
@@ -238,13 +251,14 @@ impl AppState {
             prompt_width: DEFAULT_PROMPT_WIDTH,
             workspaces: vec![Workspace {
                 name,
-                tabs: vec![Tab::single_terminal("shell"), Tab::single_terminal("logs")],
+                tabs: vec![Tab::single_terminal()],
                 active_tab: 0,
                 name_is_manual: false,
                 cwd,
                 is_initial: true,
             }],
             active_workspace: 0,
+            tab_scroll: 0,
             workspace_scroll: 0,
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,

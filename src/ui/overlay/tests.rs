@@ -1,7 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::overlay::{MenuTarget, TextInput};
+use crate::app::overlay::{OverlayTarget, TextInput};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
@@ -36,7 +36,7 @@ fn menu_state(commands: Vec<MenuCommand>, selected: usize) -> AppState {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Menu(Menu {
         anchor: (10, 5),
-        target: MenuTarget::Workspace(0),
+        target: OverlayTarget::Workspace(0),
         commands,
         selected,
     }));
@@ -46,7 +46,7 @@ fn menu_state(commands: Vec<MenuCommand>, selected: usize) -> AppState {
 fn rename_state(name: &str) -> AppState {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Rename(Rename {
-        target: 0,
+        target: OverlayTarget::Workspace(0),
         input: TextInput::new(name),
     }));
     state
@@ -141,7 +141,9 @@ fn rename_buttons_hit_their_cells() {
 #[test]
 fn confirm_modal_renders_question_and_buttons() {
     let mut state = AppState::demo();
-    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 0 }));
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(0),
+    }));
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
     assert!(lines[10].contains(text::CONFIRM_CLOSE_TITLE));
@@ -171,4 +173,52 @@ fn no_overlay_renders_nothing() {
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
     assert!(!lines.iter().any(|line| line.contains("Rename")));
+}
+
+#[test]
+fn tab_menu_renders_new_rename_close_labels() {
+    let state = menu_state(
+        vec![
+            MenuCommand::NewTab,
+            MenuCommand::RenameTab,
+            MenuCommand::CloseTab,
+        ],
+        0,
+    );
+    let (lines, cursor) = draw_overlay(&state);
+    assert_eq!(cursor, None);
+    assert!(lines[6].contains(text::MENU_NEW_TAB));
+    assert!(lines[7].contains(text::MENU_RENAME_TAB));
+    assert!(lines[8].contains(text::MENU_CLOSE_TAB));
+}
+
+#[test]
+fn rename_modal_uses_tab_title_for_tab_target() {
+    let mut state = AppState::demo();
+    crate::app::update::create_tab(&mut state);
+    state.overlay = Some(Overlay::Rename(Rename {
+        target: OverlayTarget::Tab {
+            workspace: 0,
+            tab: 1,
+        },
+        input: TextInput::new("tab 2"),
+    }));
+    let (lines, _) = draw_overlay(&state);
+    assert!(lines[9].contains(text::RENAME_TAB_TITLE));
+    assert!(lines[10].contains("tab 2"));
+}
+
+#[test]
+fn confirm_modal_uses_tab_label_for_tab_target() {
+    let mut state = AppState::demo();
+    crate::app::update::create_tab(&mut state);
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Tab {
+            workspace: 0,
+            tab: 1,
+        },
+    }));
+    let (lines, _) = draw_overlay(&state);
+    assert!(lines[10].contains(text::CONFIRM_CLOSE_TAB_TITLE));
+    assert!(lines[11].contains("tab 2"));
 }

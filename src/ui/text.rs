@@ -24,16 +24,27 @@ pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 /// 侧栏工作区列表底部的新建按钮。
 pub const ADD_WORKSPACE_LABEL: &str = "[+]";
 
+/// 标签栏：新建标签按钮、标签分隔线与溢出滚动按钮。
+pub const ADD_TAB_LABEL: &str = "[+]";
+pub const TAB_SEPARATOR: &str = "│";
+pub const TAB_SCROLL_LEFT_LABEL: &str = "[<]";
+pub const TAB_SCROLL_RIGHT_LABEL: &str = "[>]";
+
 /// 初始工作区标记：不可移除，跟随启动工作区。
 pub const INITIAL_WORKSPACE_MARKER: &str = " *";
 
-/// 工作区右键菜单项；按命令映射，禁止在逻辑层硬编码。
+/// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
+pub const MENU_NEW_TAB: &str = "New tab";
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";
 pub const MENU_CLOSE_WORKSPACE: &str = "Close";
+pub const MENU_RENAME_TAB: &str = "Rename";
+pub const MENU_CLOSE_TAB: &str = "Close";
 
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
+pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
+pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
 /// 模态底部按钮：名称在前、快捷键在后。
 pub const BUTTON_SAVE: &str = "[save enter]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";
@@ -100,11 +111,14 @@ pub fn ellipsize(text: &str, max_chars: usize) -> String {
     truncated
 }
 
-/// 窗格标题：优先 OSC 标题，否则按标识生成。
-pub fn pane_title(id: PaneId, osc_title: Option<&str>) -> String {
+/// 窗格标题：优先 OSC 标题，其次窗格 cwd 末段标签，最后按标识生成。
+pub fn pane_title(id: PaneId, osc_title: Option<&str>, cwd_label: Option<&str>) -> String {
     match osc_title {
         Some(title) if !title.trim().is_empty() => title.to_string(),
-        _ => format!("pane {}", id.raw()),
+        _ => match cwd_label {
+            Some(label) if !label.trim().is_empty() => label.to_string(),
+            _ => format!("pane {}", id.raw()),
+        },
     }
 }
 

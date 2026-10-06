@@ -5,8 +5,8 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::overlay::{ConfirmClose, Menu, MenuCommand, Overlay, Rename};
-use crate::app::state::AppState;
+use crate::app::overlay::{ConfirmClose, Menu, MenuCommand, Overlay, OverlayTarget, Rename};
+use crate::app::state::{AppState, tab_label};
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
@@ -105,13 +105,47 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
     }
 }
 
+/// 重命名浮层标题：按目标种类分派。
+fn rename_title(target: OverlayTarget) -> &'static str {
+    match target {
+        OverlayTarget::Workspace(_) => text::RENAME_WORKSPACE_TITLE,
+        OverlayTarget::Tab { .. } => text::RENAME_TAB_TITLE,
+    }
+}
+
+/// 关闭确认浮层标题与目标名：按目标种类分派。
+fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, String) {
+    match target {
+        OverlayTarget::Workspace(index) => (
+            text::CONFIRM_CLOSE_TITLE,
+            state
+                .workspaces
+                .get(index)
+                .map(|workspace| workspace.name.clone())
+                .unwrap_or_default(),
+        ),
+        OverlayTarget::Tab { workspace, tab } => {
+            let name = state
+                .workspaces
+                .get(workspace)
+                .and_then(|workspace| workspace.tabs.get(tab))
+                .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))
+                .unwrap_or_default();
+            (text::CONFIRM_CLOSE_TAB_TITLE, name)
+        }
+    }
+}
+
 /// 菜单命令到文案的映射；文案集中在 `ui/text.rs`。
 fn menu_labels(menu: &Menu) -> Vec<&'static str> {
     menu.commands
         .iter()
         .map(|command| match command {
+            MenuCommand::NewTab => text::MENU_NEW_TAB,
             MenuCommand::RenameWorkspace => text::MENU_RENAME_WORKSPACE,
             MenuCommand::CloseWorkspace => text::MENU_CLOSE_WORKSPACE,
+            MenuCommand::RenameTab => text::MENU_RENAME_TAB,
+            MenuCommand::CloseTab => text::MENU_CLOSE_TAB,
         })
         .collect()
 }
@@ -119,7 +153,7 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
 /// 重命名浮层：单行输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
 fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option<(u16, u16)> {
     let shell = rename_shell(screen)?;
-    widgets::modal::render(frame, &shell, text::RENAME_WORKSPACE_TITLE);
+    widgets::modal::render(frame, &shell, rename_title(rename.target));
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return None;
     }
@@ -145,17 +179,13 @@ fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm
     let Some(shell) = confirm_shell(screen) else {
         return;
     };
-    widgets::modal::render(frame, &shell, text::CONFIRM_CLOSE_TITLE);
+    let (title, name) = confirm_text(state, confirm.target);
+    widgets::modal::render(frame, &shell, title);
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return;
     }
     let width = usize::from(shell.inner.width);
-    let name = state
-        .workspaces
-        .get(confirm.target)
-        .map(|workspace| workspace.name.as_str())
-        .unwrap_or_default();
-    let question = text::confirm_close_question(name);
+    let question = text::confirm_close_question(&name);
     let question_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(

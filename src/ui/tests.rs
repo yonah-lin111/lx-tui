@@ -924,3 +924,63 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
     let middle: Vec<char> = lines[gutter.y as usize + 1].chars().collect();
     assert_eq!(middle[usize::from(gutter.x)].to_string(), "▕");
 }
+
+#[test]
+fn tab_bar_renders_auto_titles_and_add_button() {
+    let state = AppState::demo();
+    let lines = render_lines(&state);
+    assert!(lines[0].contains("tab 1"), "{}", lines[0]);
+    assert!(!lines[0].contains("logs"));
+    assert!(lines[0].contains(text::ADD_TAB_LABEL), "{}", lines[0]);
+}
+
+#[test]
+fn tab_bar_overflow_renders_scroll_buttons_and_keeps_exit() {
+    let mut state = AppState::demo();
+    for _ in 1..12 {
+        update::create_tab(&mut state);
+    }
+    let lines = render_lines(&state);
+    assert!(
+        lines[0].contains(text::TAB_SCROLL_LEFT_LABEL),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].contains(text::TAB_SCROLL_RIGHT_LABEL),
+        "{}",
+        lines[0]
+    );
+    assert!(
+        lines[0].trim_end().ends_with(text::EXIT_LABEL),
+        "{}",
+        lines[0]
+    );
+}
+
+#[test]
+fn pane_title_uses_cwd_label_before_placeholder() {
+    let mut state = AppState::demo();
+    let id = state.active_tab().layout.focus();
+    update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("dev-dir")));
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains(&format!("pane {}", id.raw())))
+    );
+}
+
+#[test]
+fn pane_title_prefers_osc_over_cwd_label() {
+    let mut state = AppState::demo();
+    let id = state.active_tab().layout.focus();
+    update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
+    if let Some(pane) = state.active_tab_mut().pane_mut(id) {
+        let _ = pane.terminal.feed(b"\x1b]0;Claude Code\x07");
+    }
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("Claude Code")));
+    assert!(!lines.iter().any(|line| line.contains("dev-dir")));
+}
