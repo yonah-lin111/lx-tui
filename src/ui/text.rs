@@ -1,5 +1,6 @@
 //! 全部用户可见文案；组件与逻辑禁止散落硬编码字符串。
 
+use crate::app::markdown::BlockCommandId;
 use crate::layout::PaneId;
 
 pub const SIDEBAR_TITLE: &str = "Workspaces";
@@ -26,6 +27,41 @@ pub const EXIT_LABEL: &str = "[exit]";
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
 pub const TOAST_COPY_FAILED: &str = "Copy failed";
+
+/// markdown 块命令面板条目标签。
+pub const BLOCK_HEADING_LABEL: &str = "Heading";
+pub const BLOCK_UNORDERED_LABEL: &str = "Bullet List";
+pub const BLOCK_TASK_LABEL: &str = "Task List";
+pub const BLOCK_ORDERED_LABEL: &str = "Numbered List";
+pub const BLOCK_QUOTE_LABEL: &str = "Quote";
+pub const BLOCK_CODE_LABEL: &str = "Code Block";
+pub const BLOCK_TABLE_LABEL: &str = "Table";
+
+/// markdown 块命令面板条目预览（纯语法片段，不翻译）。
+pub const BLOCK_UNORDERED_PREVIEW: &str = "-";
+pub const BLOCK_TASK_PREVIEW: &str = "- [ ]";
+pub const BLOCK_ORDERED_PREVIEW: &str = "1.";
+pub const BLOCK_QUOTE_PREVIEW: &str = ">";
+pub const BLOCK_CODE_PREVIEW: &str = "```";
+pub const BLOCK_TABLE_PREVIEW: &str = "|  |  |";
+
+/// 块命令面板条目（标签、预览）；标题带级别。
+pub fn block_command_text(id: BlockCommandId) -> (String, String) {
+    match id {
+        BlockCommandId::Heading(level) => (
+            format!("{BLOCK_HEADING_LABEL} {level}"),
+            "#".repeat(usize::from(level)),
+        ),
+        BlockCommandId::UnorderedList => {
+            (BLOCK_UNORDERED_LABEL.into(), BLOCK_UNORDERED_PREVIEW.into())
+        }
+        BlockCommandId::TaskList => (BLOCK_TASK_LABEL.into(), BLOCK_TASK_PREVIEW.into()),
+        BlockCommandId::OrderedList => (BLOCK_ORDERED_LABEL.into(), BLOCK_ORDERED_PREVIEW.into()),
+        BlockCommandId::Quote => (BLOCK_QUOTE_LABEL.into(), BLOCK_QUOTE_PREVIEW.into()),
+        BlockCommandId::CodeBlock => (BLOCK_CODE_LABEL.into(), BLOCK_CODE_PREVIEW.into()),
+        BlockCommandId::Table => (BLOCK_TABLE_LABEL.into(), BLOCK_TABLE_PREVIEW.into()),
+    }
+}
 
 /// 单行截断：按字符数近似（现有文案为 ASCII），超出以省略号收尾。
 pub fn ellipsize(text: &str, max_chars: usize) -> String {

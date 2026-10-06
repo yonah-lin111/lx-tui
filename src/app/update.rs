@@ -21,6 +21,7 @@ pub fn apply(action: Action, state: &mut AppState) {
             if state.prompt_collapsed {
                 state.prompt_focused = false;
                 state.selection = None;
+                state.prompt.clear_panel();
             }
         }
         Action::ToggleAgents => state.agents_collapsed = !state.agents_collapsed,
@@ -32,6 +33,9 @@ pub fn apply(action: Action, state: &mut AppState) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    if route_panel(state, &command) {
+        return;
+    }
     if let Some((start, end)) = prompt_selection_bounds(state) {
         let replaced = match &command {
             EditorCommand::InsertChar(ch) => {
@@ -76,6 +80,18 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::Outdent => state.prompt.outdent(),
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
+        EditorCommand::Escape => {}
+    }
+}
+
+/// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
+fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    match command {
+        EditorCommand::Up => state.prompt.panel_move(-1),
+        EditorCommand::Down => state.prompt.panel_move(1),
+        EditorCommand::Newline => state.prompt.panel_confirm(),
+        EditorCommand::Escape => state.prompt.panel_escape(),
+        _ => false,
     }
 }
 
@@ -97,9 +113,10 @@ pub fn focus_prompt(state: &mut AppState) {
     state.prompt_focused = true;
 }
 
-/// 点击终端窗格：焦点回到窗格，prompt 失焦。
+/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
+    state.prompt.clear_panel();
     state.active_tab_mut().layout.focus_pane(id);
 }
 

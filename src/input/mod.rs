@@ -104,6 +104,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
         KeyCode::Enter => Some(EditorCommand::Newline),
         KeyCode::Backspace => Some(EditorCommand::Backspace),
         KeyCode::Delete => Some(EditorCommand::Delete),
+        KeyCode::Esc if modifiers.is_empty() => Some(EditorCommand::Escape),
         KeyCode::Tab if modifiers.is_empty() => Some(EditorCommand::Indent),
         KeyCode::Tab if modifiers == KeyModifiers::SHIFT => Some(EditorCommand::Outdent),
         KeyCode::BackTab => Some(EditorCommand::Outdent),

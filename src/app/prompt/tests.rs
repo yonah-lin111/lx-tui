@@ -570,3 +570,121 @@ fn resize_keeps_cursor_visible_and_guards_zero_size() {
     assert_eq!(prompt.size(), (1, 1));
     assert!(prompt.cursor_cell().is_some());
 }
+
+#[test]
+fn panel_opens_on_trigger_and_closes_off_line_end() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("#");
+    let panel = prompt.panel().expect("panel opens");
+    assert_eq!(panel.items().len(), 6);
+    assert_eq!(panel.active(), 0);
+    assert_eq!(panel.trigger().kind, markdown::BlockTriggerKind::Heading);
+    prompt.move_left();
+    assert!(prompt.panel().is_none());
+    prompt.move_right();
+    assert!(prompt.panel().is_some());
+}
+
+#[test]
+fn panel_move_wraps_and_confirm_inserts_task_list() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("-");
+    assert!(prompt.panel_move(-1));
+    assert_eq!(prompt.panel().expect("panel").active(), 1);
+    assert!(prompt.panel_confirm());
+    assert_eq!(prompt.text(), "- [ ] ");
+    assert_eq!(prompt.cursor_cell(), Some((0, 6)));
+    assert!(prompt.panel().is_none());
+}
+
+#[test]
+fn panel_confirm_suppressed_until_next_edit() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("#");
+    assert!(prompt.panel_confirm());
+    assert_eq!(prompt.text(), "# ");
+    assert!(prompt.panel().is_none());
+    assert!(!prompt.panel_confirm());
+    prompt.insert_char('a');
+    assert_eq!(prompt.text(), "# a");
+    assert!(prompt.panel().is_none());
+}
+
+#[test]
+fn panel_escape_closes_and_next_edit_reopens() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str(">");
+    assert!(prompt.panel().is_some());
+    assert!(prompt.panel_escape());
+    assert_eq!(prompt.text(), ">");
+    assert!(prompt.panel().is_none());
+    assert!(!prompt.panel_escape());
+    prompt.insert_char(' ');
+    assert!(prompt.panel().is_some());
+}
+
+#[test]
+fn panel_confirm_replaces_only_trigger_marker() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("  ##");
+    assert!(prompt.panel_confirm());
+    assert_eq!(prompt.text(), "  # ");
+    assert_eq!(prompt.cursor_cell(), Some((0, 4)));
+}
+
+#[test]
+fn panel_recomputes_on_backspace() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("# ");
+    assert!(prompt.panel().is_some());
+    prompt.backspace();
+    assert_eq!(prompt.text(), "#");
+    assert!(prompt.panel().is_some());
+    prompt.backspace();
+    assert_eq!(prompt.text(), "");
+    assert!(prompt.panel().is_none());
+}
+
+#[test]
+fn panel_hidden_inside_fence_and_continuous_list() {
+    let mut fenced = prompt(30, 10);
+    fenced.insert_str("```");
+    assert!(fenced.panel().is_some());
+    fenced.insert_char('\n');
+    fenced.insert_char('#');
+    assert!(fenced.panel().is_none());
+    fenced.insert_char('\n');
+    fenced.insert_str("```");
+    assert!(fenced.panel().is_none());
+
+    let mut list = prompt(30, 10);
+    list.insert_str("- a\n-");
+    assert!(list.panel().is_none());
+}
+
+#[test]
+fn panel_confirm_is_single_undo_step() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("-");
+    prompt.panel_move(1);
+    assert!(prompt.panel_confirm());
+    assert_eq!(prompt.text(), "- [ ] ");
+    prompt.undo();
+    assert_eq!(prompt.text(), "-");
+    assert!(prompt.panel().is_some());
+}
+
+#[test]
+fn clear_panel_drops_state_until_next_edit() {
+    let mut prompt = prompt(30, 10);
+    prompt.insert_str("|");
+    assert!(prompt.panel().is_some());
+    prompt.clear_panel();
+    assert!(prompt.panel().is_none());
+    assert!(!prompt.panel_move(1));
+    prompt.insert_char(' ');
+    assert_eq!(prompt.text(), "| ");
+    assert!(prompt.panel().is_none());
+    prompt.backspace();
+    assert!(prompt.panel().is_some());
+}

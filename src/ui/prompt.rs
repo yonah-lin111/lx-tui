@@ -9,6 +9,8 @@ use crate::app::prompt::{Prompt, VisualRow};
 use crate::app::selection::Selection;
 use crate::ui::markdown::{self, Token, TokenKind};
 use crate::ui::style;
+use crate::ui::text;
+use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
 
 /// 绘制 prompt 内容区；`focused` 为真时叠加光标反显。
 pub fn render(
@@ -51,6 +53,35 @@ pub fn render(
             cell.modifier |= Modifier::REVERSED;
         }
     }
+    render_command_panel(buf, area, prompt);
+}
+
+/// 绘制块命令面板；状态与文案由 app 层维护，这里只做只读映射。
+fn render_command_panel(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
+    let Some(panel) = prompt.panel() else {
+        return;
+    };
+    let Some((anchor_row, _)) = prompt.cursor_cell() else {
+        return;
+    };
+    let copy: Vec<(String, String)> = panel
+        .items()
+        .iter()
+        .map(|id| text::block_command_text(*id))
+        .collect();
+    let items: Vec<CommandItem<'_>> = copy
+        .iter()
+        .map(|(label, preview)| CommandItem { label, preview })
+        .collect();
+    command_panel::render(
+        area,
+        buf,
+        &CommandPanelView {
+            items: &items,
+            active: panel.active(),
+            anchor_row,
+        },
+    );
 }
 
 /// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。

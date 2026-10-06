@@ -157,3 +157,24 @@ fn wide_chars_mark_spacer_cells() {
     assert_eq!(buf[(2, 0)].symbol(), "好");
     assert_eq!(buf[(3, 0)].diff_option, CellDiffOption::Skip);
 }
+
+#[test]
+fn renders_block_command_panel_below_cursor() {
+    let area = Rect::new(0, 0, 30, 10);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 10);
+    editor.insert_str("#");
+    assert!(editor.panel().is_some());
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, true, None);
+
+    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(row.contains("Heading 1"));
+    assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+
+    let mut empty = Buffer::empty(area);
+    let blank = prompt(10, 3, "plain");
+    render(area, &mut empty, &blank, true, None);
+    assert_eq!(empty[(0, 1)].symbol(), " ");
+}

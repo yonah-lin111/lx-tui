@@ -397,3 +397,41 @@ fn hover_without_toast_is_noop() {
     dismiss_toast(&mut state);
     assert!(state.toast.is_none());
 }
+
+#[test]
+fn losing_prompt_focus_clears_block_panel() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('#'));
+    assert!(state.prompt.panel().is_some());
+    let pane = state.active_tab().layout.focus();
+    focus_pane(&mut state, pane);
+    assert!(state.prompt.panel().is_none());
+}
+
+#[test]
+fn collapsing_prompt_clears_block_panel() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('-'));
+    assert!(state.prompt.panel().is_some());
+    apply(Action::TogglePrompt, &mut state);
+    assert!(state.prompt.panel().is_none());
+}
+
+#[test]
+fn panel_keys_are_consumed_before_editing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 5);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('-'));
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(1));
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "- [ ] ");
+    assert!(state.prompt.panel().is_none());
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert_eq!(state.prompt.text(), "- [ ] ");
+}

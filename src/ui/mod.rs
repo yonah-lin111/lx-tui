@@ -7,6 +7,7 @@ pub mod style;
 pub mod terminal;
 pub mod text;
 pub mod toast;
+pub mod widgets;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};

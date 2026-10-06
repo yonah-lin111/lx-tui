@@ -36,4 +36,5 @@ pub enum EditorCommand {
     Outdent,
     Undo,
     Redo,
+    Escape,
 }

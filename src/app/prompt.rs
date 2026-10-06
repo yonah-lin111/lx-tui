@@ -2,6 +2,7 @@
 
 use unicode_width::UnicodeWidthChar;
 
+use super::markdown::{self, BlockPanel};
 use crate::layout::PaneId;
 
 /// 粘贴文本中的制表符展开内容。
@@ -31,6 +32,10 @@ pub struct Prompt {
     redo: Vec<Snapshot>,
     /// 最近一次编辑类别；连续同类编辑合并为一步。
     last_edit: Option<EditKind>,
+    /// 块命令面板；由光标处触发标记逼近得到。
+    panel: Option<BlockPanel>,
+    /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
+    panel_suppressed: bool,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -96,6 +101,8 @@ impl Prompt {
             undo: Vec::new(),
             redo: Vec::new(),
             last_edit: None,
+            panel: None,
+            panel_suppressed: false,
         }
     }
 
@@ -123,7 +130,7 @@ impl Prompt {
     pub fn resize(&mut self, cols: u16, rows: u16) {
         self.width = cols.max(1);
         self.height = rows.max(1);
-        self.keep_cursor_visible();
+        self.scroll_cursor_into_view();
     }
 
     /// 插入一个字符；换行与制表符按编辑器语义处理，其余控制字符忽略。
@@ -165,7 +172,7 @@ impl Prompt {
         self.record(EditKind::Other);
         self.text.insert_str(end, &insert);
         self.cursor = end + insert.len();
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 删除光标前一个字符；紧跟列表标记时先把标记替换为等宽空格。
@@ -180,7 +187,7 @@ impl Prompt {
         self.record(EditKind::Delete);
         self.text.remove(previous);
         self.cursor = previous;
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 删除光标处字符；文末为 no-op。
@@ -190,7 +197,7 @@ impl Prompt {
         }
         self.record(EditKind::Delete);
         self.text.remove(self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 撤销上一步编辑；无可撤销内容时 no-op。
@@ -213,6 +220,62 @@ impl Prompt {
         self.restore(snapshot);
     }
 
+    /// 当前块命令面板；未打开时为 None。
+    pub fn panel(&self) -> Option<&BlockPanel> {
+        self.panel.as_ref()
+    }
+
+    /// 面板打开时按偏移循环移动高亮；返回是否消费该按键。
+    pub fn panel_move(&mut self, delta: isize) -> bool {
+        match self.panel.as_mut() {
+            Some(panel) => {
+                panel.move_active(delta);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 面板打开时确认高亮命令：替换触发区间并压制重弹；返回是否消费该按键。
+    pub fn panel_confirm(&mut self) -> bool {
+        let Some(panel) = self.panel.as_ref() else {
+            return false;
+        };
+        let trigger = panel.trigger();
+        if trigger.from > trigger.to || trigger.to > self.text.len() {
+            return false;
+        }
+        let Some(id) = panel.items().get(panel.active()).copied() else {
+            return false;
+        };
+        let insertion = markdown::block_insertion(id);
+        self.panel = None;
+        self.break_group();
+        self.record(EditKind::Other);
+        self.text
+            .replace_range(trigger.from..trigger.to, &insertion.text);
+        self.cursor = trigger.from + insertion.cursor;
+        self.panel_suppressed = true;
+        self.scroll_cursor_into_view();
+        true
+    }
+
+    /// 面板打开时关闭且不改文本；返回是否消费该按键。
+    pub fn panel_escape(&mut self) -> bool {
+        if self.panel.is_none() {
+            return false;
+        }
+        self.panel = None;
+        self.panel_suppressed = true;
+        true
+    }
+
+    /// 清空面板并解除压制；prompt 失焦或折叠时调用。
+    pub fn clear_panel(&mut self) {
+        self.panel = None;
+        self.panel_suppressed = false;
+    }
+
     /// 当前逻辑行整体右移一个缩进单位；围栏代码块内改为光标处插入空格。
     pub fn indent(&mut self) {
         if self.in_fence() {
@@ -223,7 +286,7 @@ impl Prompt {
         let start = line_start(&self.text, self.cursor);
         self.text.insert_str(start, TAB_STOP);
         self.cursor += INDENT_UNIT;
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 当前逻辑行整体左移一个缩进单位；行首无空格时 no-op。
@@ -241,21 +304,21 @@ impl Prompt {
         let offset = self.cursor - start;
         self.text.replace_range(start..start + remove, "");
         self.cursor = start + offset.saturating_sub(remove);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标左移一个字符。
     pub fn move_left(&mut self) {
         self.break_group();
         self.cursor = prev_boundary(&self.text, self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标右移一个字符。
     pub fn move_right(&mut self) {
         self.break_group();
         self.cursor = next_boundary(&self.text, self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标上移一个视觉行，保持显示列；首行时钳到行首。
@@ -269,7 +332,7 @@ impl Prompt {
             let target = rows[index - 1];
             self.cursor = target.start + offset_at_col(&self.text[target.start..target.end], col);
         }
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标下移一个视觉行，保持显示列；末行时钳到行尾。
@@ -283,7 +346,7 @@ impl Prompt {
             let target = rows[index + 1];
             self.cursor = target.start + offset_at_col(&self.text[target.start..target.end], col);
         }
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标移到当前视觉行行首。
@@ -292,7 +355,7 @@ impl Prompt {
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].start;
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标移到当前视觉行行尾。
@@ -301,35 +364,35 @@ impl Prompt {
         let rows = self.visual_rows();
         let (index, _) = self.cursor_visual_in(&rows);
         self.cursor = rows[index].end;
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标移到逻辑行行首。
     pub fn move_line_start(&mut self) {
         self.break_group();
         self.cursor = line_start(&self.text, self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标移到逻辑行行尾（换行前）。
     pub fn move_line_end(&mut self) {
         self.break_group();
         self.cursor = line_end(&self.text, self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标左移到前一个词的词首。
     pub fn move_word_backward(&mut self) {
         self.break_group();
         self.cursor = self.word_start_before(self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 光标右移到下一个词的词尾（readline M-f 语义）。
     pub fn move_word_forward(&mut self) {
         self.break_group();
         self.cursor = self.word_end_after(self.cursor);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。
@@ -338,7 +401,7 @@ impl Prompt {
         if start < self.cursor {
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
-            self.keep_cursor_visible();
+            self.settle();
         }
     }
 
@@ -347,7 +410,7 @@ impl Prompt {
         let end = self.word_end_after(self.cursor);
         if end > self.cursor {
             self.text.replace_range(self.cursor..end, "");
-            self.keep_cursor_visible();
+            self.settle();
         }
     }
 
@@ -357,7 +420,7 @@ impl Prompt {
         if start < self.cursor {
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
-            self.keep_cursor_visible();
+            self.settle();
         }
     }
 
@@ -366,7 +429,7 @@ impl Prompt {
         let end = line_end(&self.text, self.cursor);
         if end > self.cursor {
             self.text.replace_range(self.cursor..end, "");
-            self.keep_cursor_visible();
+            self.settle();
         }
     }
 
@@ -432,7 +495,7 @@ impl Prompt {
     pub fn set_cursor_from_cell(&mut self, row: u16, col: u16) {
         self.break_group();
         self.cursor = self.viewport_offset((row, col), false);
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 选区（视口坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
@@ -466,7 +529,7 @@ impl Prompt {
         self.record(EditKind::Insert);
         self.text.replace_range(start..end, &sanitized);
         self.cursor = start + sanitized.len();
-        self.keep_cursor_visible();
+        self.settle();
         true
     }
 
@@ -475,7 +538,7 @@ impl Prompt {
         self.record(EditKind::Insert);
         self.text.insert_str(self.cursor, insert);
         self.cursor += insert.len();
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 记录一次编辑前的快照；连续 Insert/Delete 合并为一步，Other 独立成步。
@@ -502,7 +565,7 @@ impl Prompt {
         self.text = snapshot.text;
         self.cursor = snapshot.cursor;
         self.last_edit = None;
-        self.keep_cursor_visible();
+        self.settle();
     }
 
     /// 结束当前合并组；光标移动或重新定位后调用。
@@ -531,14 +594,14 @@ impl Prompt {
             self.text
                 .replace_range(start..start + item.marker_end, &replacement);
             self.cursor = start + replacement.len();
-            self.keep_cursor_visible();
+            self.settle();
             return true;
         }
         let insert = format!("\n{}{}", " ".repeat(item.indent), item.continuation());
         self.record(EditKind::Other);
         self.text.insert_str(self.cursor, &insert);
         self.cursor += insert.len();
-        self.keep_cursor_visible();
+        self.settle();
         true
     }
 
@@ -574,7 +637,7 @@ impl Prompt {
         self.record(EditKind::Delete);
         self.text
             .replace_range(start + item.indent..start + item.marker_end, &blanks);
-        self.keep_cursor_visible();
+        self.settle();
         true
     }
 
@@ -666,8 +729,30 @@ impl Prompt {
         visual.end
     }
 
+    /// 编辑或光标移动后的统一收尾：解除面板压制、保持光标可见并重算面板。
+    fn settle(&mut self) {
+        self.panel_suppressed = false;
+        self.scroll_cursor_into_view();
+        self.refresh_panel();
+    }
+
+    /// 重算块命令面板：触发标记决定候选列表，同类同位置保留高亮。
+    fn refresh_panel(&mut self) {
+        let Some(trigger) = markdown::block_trigger(&self.text, self.cursor) else {
+            self.panel = None;
+            return;
+        };
+        let previous = self.panel.as_ref().filter(|panel| {
+            panel.trigger().kind == trigger.kind && panel.trigger().to == trigger.to
+        });
+        let active = previous.map_or(0, BlockPanel::active);
+        let items = markdown::block_commands(trigger.kind);
+        let active = active.min(items.len().saturating_sub(1));
+        self.panel = Some(BlockPanel::new(trigger, items, active));
+    }
+
     /// 调整滚动量，保证光标所在视觉行可见。
-    fn keep_cursor_visible(&mut self) {
+    fn scroll_cursor_into_view(&mut self) {
         let rows = self.visual_rows();
         let height = usize::from(self.height.max(1));
         let (row, _) = self.cursor_visual_in(&rows);

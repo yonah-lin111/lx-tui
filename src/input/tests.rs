@@ -307,3 +307,15 @@ fn ctrl_q_quits_even_when_prompt_focused() {
         Some(Routed::Action(Action::Quit))
     );
 }
+
+#[test]
+fn prompt_focus_maps_escape_and_unfocused_passes_to_pane() {
+    assert_eq!(
+        route(key(KeyCode::Esc), TermMode::empty(), true),
+        Some(Routed::Editor(EditorCommand::Escape))
+    );
+    assert_eq!(
+        route(key(KeyCode::Esc), TermMode::empty(), false),
+        Some(Routed::Pane(vec![0x1b]))
+    );
+}
