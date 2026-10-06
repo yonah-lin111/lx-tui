@@ -426,7 +426,10 @@ fn add_button_area(workspaces: Rect) -> Option<Rect> {
         ..workspaces
     };
     let width = text::ADD_WORKSPACE_LABEL.chars().count() as u16;
-    (footer.height > 0 && footer.width >= width).then_some(Rect::new(footer.x, footer.y, width, 1))
+    // 与 Agents 标题同列：标题前缀一个空格，按钮整体右移一列。
+    let x = footer.x.saturating_add(1);
+    (footer.height > 0 && footer.width >= width.saturating_add(1))
+        .then_some(Rect::new(x, footer.y, width, 1))
 }
 
 /// 新建工作区按钮：强调色标签，点击立即创建并激活。

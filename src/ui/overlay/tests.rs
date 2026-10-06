@@ -112,13 +112,30 @@ fn rename_modal_keeps_cursor_visible_for_long_names() {
 }
 
 #[test]
+fn rename_modal_cursor_uses_display_width_for_wide_chars() {
+    let state = rename_state("中文名称");
+    let (lines, cursor) = draw_overlay(&state);
+    assert_eq!(cursor, Some((29, 10)));
+    let text: String = lines[10].chars().filter(|ch| !ch.is_whitespace()).collect();
+    assert!(text.contains("中文名称"), "{text}");
+}
+
+#[test]
+fn rename_modal_scrolls_by_display_width_for_long_wide_names() {
+    let state = rename_state(&"中".repeat(30));
+    let (lines, cursor) = draw_overlay(&state);
+    assert_eq!(cursor, Some((57, 10)));
+    assert_eq!(lines[10].matches('中').count(), 18);
+}
+
+#[test]
 fn rename_buttons_hit_their_cells() {
     let shell = rename_shell(SCREEN).expect("rename modal fits");
-    assert_eq!(rename_button_at(&shell, 23, 12), Some(RenameButton::Save));
-    assert_eq!(rename_button_at(&shell, 33, 12), Some(RenameButton::Clear));
-    assert_eq!(rename_button_at(&shell, 45, 12), Some(RenameButton::Cancel));
-    assert_eq!(rename_button_at(&shell, 22, 12), None);
-    assert_eq!(rename_button_at(&shell, 23, 11), None);
+    assert_eq!(rename_button_at(&shell, 21, 12), Some(RenameButton::Save));
+    assert_eq!(rename_button_at(&shell, 35, 12), Some(RenameButton::Clear));
+    assert_eq!(rename_button_at(&shell, 47, 12), Some(RenameButton::Cancel));
+    assert_eq!(rename_button_at(&shell, 20, 12), None);
+    assert_eq!(rename_button_at(&shell, 21, 11), None);
 }
 
 #[test]
@@ -138,14 +155,14 @@ fn confirm_modal_renders_question_and_buttons() {
 fn confirm_buttons_hit_their_cells() {
     let shell = confirm_shell(SCREEN).expect("confirm modal fits");
     assert_eq!(
-        confirm_button_at(&shell, 27, 12),
+        confirm_button_at(&shell, 25, 12),
         Some(ConfirmButton::Confirm)
     );
     assert_eq!(
-        confirm_button_at(&shell, 40, 12),
+        confirm_button_at(&shell, 42, 12),
         Some(ConfirmButton::Cancel)
     );
-    assert_eq!(confirm_button_at(&shell, 26, 12), None);
+    assert_eq!(confirm_button_at(&shell, 24, 12), None);
 }
 
 #[test]

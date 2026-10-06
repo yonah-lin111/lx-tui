@@ -742,3 +742,6 @@ fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, R
         }
     })
 }
+
+#[cfg(test)]
+mod tests;

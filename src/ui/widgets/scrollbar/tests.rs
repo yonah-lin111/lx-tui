@@ -53,6 +53,15 @@ fn thumb_grab_offset_only_hits_thumb() {
 }
 
 #[test]
+fn thumb_grab_offset_ignores_track_above_thumb() {
+    let bar = layout(LIST, 20, 10, 10).expect("scrollbar is needed");
+    assert_eq!(bar.thumb.y, 5);
+    assert_eq!(thumb_grab_offset(&bar, 0), None);
+    assert_eq!(thumb_grab_offset(&bar, 4), None);
+    assert_eq!(thumb_grab_offset(&bar, 5), Some(0));
+}
+
+#[test]
 fn track_click_maps_row_to_offset() {
     let bar = layout(LIST, 20, 10, 0).expect("scrollbar is needed");
     assert_eq!(offset_from_track_row(&bar, 0), 0);

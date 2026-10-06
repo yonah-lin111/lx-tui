@@ -52,7 +52,11 @@ pub fn layout(area: Rect, total: usize, visible: usize, offset: usize) -> Option
 
 /// 命中 thumb：返回抓取偏移（点击行相对 thumb 顶部）。
 pub fn thumb_grab_offset(layout: &ScrollbarLayout, row: u16) -> Option<u16> {
-    (row >= layout.thumb.y && row < layout.thumb.bottom()).then_some(row - layout.thumb.y)
+    if row >= layout.thumb.y && row < layout.thumb.bottom() {
+        Some(row - layout.thumb.y)
+    } else {
+        None
+    }
 }
 
 /// 点击轨道：以 thumb 中心对齐点击行，返回目标偏移。

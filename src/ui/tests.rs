@@ -556,7 +556,9 @@ fn add_workspace_button_sits_at_workspaces_footer_left() {
     let view = view_for(&state);
     let button = add_workspace_button(&view, false).expect("button is visible");
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    assert_eq!(button.x, sections.workspaces.x);
+    // 与 Agents 标题同列：标题前缀一个空格，按钮右移一列对齐 'A'。
+    assert_eq!(button.x, sections.workspaces.x + 1);
+    assert_eq!(button.x, sections.divider.x + 1);
     assert_eq!(button.y, sections.workspaces.bottom() - 1);
     assert_eq!(
         button.width,

@@ -61,7 +61,7 @@ fn render_draws_border_and_title() {
 #[test]
 fn button_row_centers_buttons_with_gap() {
     let shell = layout(SCREEN, 40, 5).expect("modal fits");
-    let labels = ["[save ↵]", "[clear ^c]", "[cancel esc]"];
+    let labels = ["[save enter]", "[clear ^c]", "[cancel esc]"];
     let rects = button_row(shell.inner, &labels, 2, 2);
     assert_eq!(rects.len(), 3);
     let widths: Vec<u16> = labels
@@ -89,7 +89,7 @@ fn button_row_clamps_row_offset_inside_inner() {
 #[test]
 fn button_at_hits_button_cells_only() {
     let shell = layout(SCREEN, 40, 5).expect("modal fits");
-    let labels = ["[save ↵]", "[cancel esc]"];
+    let labels = ["[save enter]", "[cancel esc]"];
     let rects = button_row(shell.inner, &labels, 2, 2);
     assert_eq!(button_at(&rects, rects[0].x, rects[0].y), Some(0));
     assert_eq!(button_at(&rects, rects[1].right() - 1, rects[1].y), Some(1));
