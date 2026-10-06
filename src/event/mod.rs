@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind, home_dir, workspace_label};
 use crate::app::toast::{Toast, ToastKind};
@@ -24,11 +25,15 @@ use crate::pty::{PtyEvent, PtySession};
 use crate::tui::Tui;
 use crate::ui;
 
-/// 应用级事件：后台任务（目前是 PTY 读线程）经此汇入主循环。
+/// 应用级事件：后台任务（PTY 读线程与提及扫描）经此汇入主循环。
 #[derive(Debug)]
 pub enum AppEvent {
     PaneOutput(PaneId, Vec<u8>),
     PaneExit(PaneId),
+    MentionScanned {
+        generation: u64,
+        entries: Vec<MentionEntry>,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -104,6 +109,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
             event = events.next() => match event {
                 Some(Ok(event)) => {
                     handle_terminal_event(event, state, &mut sessions, &geometry, config, &mut dirty);
+                    pump_mention_scan(state, &sender);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -468,6 +474,9 @@ fn handle_terminal_event(
                 {
                     update::begin_prompt_resize(state);
                     *dirty = true;
+                } else if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
+                    update::select_mention(state, index);
+                    *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
                     let row = mouse.row - inner.y;
                     let col = mouse.column - inner.x;
@@ -645,10 +654,39 @@ fn handle_terminal_event(
                 if state.overlay.is_some() {
                     return;
                 }
-                if state.resizing_prompt
-                    || state
-                        .selection
-                        .is_some_and(|selection| selection.is_dragging())
+                if state.resizing_prompt {
+                    return;
+                }
+                let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                    -1
+                } else {
+                    1
+                };
+                if mention_panel_rect(state, view)
+                    .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                {
+                    update::scroll_mention(state, direction);
+                    *dirty = true;
+                    return;
+                }
+                // prompt 拖选期间滚轮滚动视口，并把选区终点延伸到指针所在单元格。
+                if state.selection.is_some_and(|selection| {
+                    selection.is_dragging() && selection.pane() == state.prompt.id()
+                }) {
+                    update::scroll_prompt(state, direction);
+                    let inner = layout::pane_inner_rect(view.prompt);
+                    if inner.width > 0 && inner.height > 0 {
+                        let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                        let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                        update::drag_selection(state, state.prompt.id(), row, col);
+                        update::place_prompt_cursor(state, row, col);
+                    }
+                    *dirty = true;
+                    return;
+                }
+                if state
+                    .selection
+                    .is_some_and(|selection| selection.is_dragging())
                 {
                     return;
                 }
@@ -656,24 +694,13 @@ fn handle_terminal_event(
                     && pane == state.prompt.id()
                 {
                     update::clear_selection(state);
-                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
                     update::scroll_prompt(state, direction);
                     *dirty = true;
                 } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
                     && let Some(rows) = ui::workspace_list_rows(view, state)
+                    && update::scroll_workspace_list(state, direction, rows)
                 {
-                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
-                    if update::scroll_workspace_list(state, direction, rows) {
-                        *dirty = true;
-                    }
+                    *dirty = true;
                 }
             }
             MouseEventKind::Moved => {
@@ -687,6 +714,12 @@ fn handle_terminal_event(
                         {
                             *dirty = true;
                         }
+                    }
+                    return;
+                }
+                if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
+                    if update::hover_mention(state, index) {
+                        *dirty = true;
                     }
                     return;
                 }
@@ -718,6 +751,26 @@ fn handle_terminal_event(
         TerminalEvent::Resize(_, _) => *dirty = true,
         _ => {}
     }
+}
+
+/// @ 提及面板需要缓存且无在途扫描时，发起后台扫描并把结果投递回主循环。
+///
+/// prompt 未聚焦时不扫描；扫描失败按空结果处理（面板保持隐藏）。
+fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
+    if !state.prompt_focused {
+        return;
+    }
+    let Some((generation, root)) = state.prompt.take_mention_scan_request() else {
+        return;
+    };
+    let sender = sender.clone();
+    tokio::task::spawn_blocking(move || {
+        let entries = crate::files::scan(&root);
+        let _ = sender.send(AppEvent::MentionScanned {
+            generation,
+            entries,
+        });
+    });
 }
 
 /// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。
@@ -836,6 +889,10 @@ fn handle_app_event(
             }
         }
         AppEvent::PaneExit(id) => update::mark_pane_exited(state, id),
+        AppEvent::MentionScanned {
+            generation,
+            entries,
+        } => update::apply_mention_entries(state, generation, entries),
     }
 }
 
@@ -857,6 +914,23 @@ fn write_to_pane(sessions: &mut HashMap<PaneId, PtySession>, id: PaneId, bytes: 
     {
         tracing::warn!(pane = id.raw(), %error, "pty write failed");
     }
+}
+
+/// 提及面板命中：返回条目索引；面板未打开或未命中返回 None。
+fn mention_item_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let area = layout::pane_inner_rect(view.prompt);
+    ui::prompt::mention_item_at(&state.prompt, area, column, row)
+}
+
+/// 提及面板矩形；用于滚轮命中。
+fn mention_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
+    let area = layout::pane_inner_rect(view.prompt);
+    ui::prompt::mention_panel_rect(&state.prompt, area)
 }
 
 /// 命中窗格内容区：返回窗格标识与其内容区矩形。

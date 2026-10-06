@@ -5,6 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::UnicodeWidthChar;
 
+use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{Prompt, VisualRow};
 use crate::app::selection::Selection;
 use crate::ui::markdown::{self, Token, TokenKind};
@@ -37,18 +38,37 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
         paint_row(buf, area, y, prompt.text(), row, line_tokens, base);
         if let Some(selection) = selection {
-            paint_selection(buf, area, y, (index - scroll) as u16, selection);
+            paint_selection(buf, area, y, index as u16, selection);
         }
     }
-    render_command_panel(buf, area, prompt);
+    render_panels(buf, area, prompt);
 }
 
-/// 绘制块命令面板；状态与文案由 app 层维护，这里只做只读映射。
-fn render_command_panel(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
-    let Some(panel) = prompt.panel() else {
+/// 绘制浮层面板：文件提及优先，其次块命令；状态由 app 层维护，这里只做只读映射。
+fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
+    let Some((anchor_row, _)) = prompt.cursor_cell() else {
         return;
     };
-    let Some((anchor_row, _)) = prompt.cursor_cell() else {
+    if let Some(panel) = prompt.mention() {
+        let texts: Vec<(String, String)> = panel.items().iter().map(mention_item_text).collect();
+        let items: Vec<CommandItem<'_>> = texts
+            .iter()
+            .map(|(label, detail)| CommandItem::Stacked { label, detail })
+            .collect();
+        command_panel::render(
+            area,
+            buf,
+            &mention_view(
+                &items,
+                panel.active(),
+                panel.anchor(),
+                anchor_row,
+                area.height / 2,
+            ),
+        );
+        return;
+    }
+    let Some(panel) = prompt.panel() else {
         return;
     };
     let copy: Vec<(String, String)> = panel
@@ -58,7 +78,7 @@ fn render_command_panel(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
         .collect();
     let items: Vec<CommandItem<'_>> = copy
         .iter()
-        .map(|(label, preview)| CommandItem { label, preview })
+        .map(|(label, preview)| CommandItem::Inline { label, preview })
         .collect();
     command_panel::render(
         area,
@@ -66,9 +86,104 @@ fn render_command_panel(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
         &CommandPanelView {
             items: &items,
             active: panel.active(),
+            window_anchor: None,
             anchor_row,
+            max_height: None,
         },
     );
+}
+
+/// 提及面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
+pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let data = mention_panel_data(prompt)?;
+    let items: Vec<CommandItem<'_>> = data
+        .texts
+        .iter()
+        .map(|(label, detail)| CommandItem::Stacked { label, detail })
+        .collect();
+    let layout = command_panel::layout(
+        area,
+        &mention_view(
+            &items,
+            data.active,
+            data.anchor,
+            data.anchor_row,
+            area.height / 2,
+        ),
+    )?;
+    command_panel::item_at(&layout, &items, column, row)
+}
+
+/// 提及面板矩形；用于滚轮命中。
+pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
+    let data = mention_panel_data(prompt)?;
+    let items: Vec<CommandItem<'_>> = data
+        .texts
+        .iter()
+        .map(|(label, detail)| CommandItem::Stacked { label, detail })
+        .collect();
+    command_panel::layout(
+        area,
+        &mention_view(
+            &items,
+            data.active,
+            data.anchor,
+            data.anchor_row,
+            area.height / 2,
+        ),
+    )
+    .map(|layout| layout.rect)
+}
+
+/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点与锚点行。
+struct MentionPanelData {
+    texts: Vec<(String, String)>,
+    active: usize,
+    anchor: usize,
+    anchor_row: u16,
+}
+
+/// 提及面板渲染数据；面板未打开或光标滚出视口返回 None。
+fn mention_panel_data(prompt: &Prompt) -> Option<MentionPanelData> {
+    let panel = prompt.mention()?;
+    let (anchor_row, _) = prompt.cursor_cell()?;
+    Some(MentionPanelData {
+        texts: panel.items().iter().map(mention_item_text).collect(),
+        active: panel.active(),
+        anchor: panel.anchor(),
+        anchor_row,
+    })
+}
+
+/// 提及面板视图：最大高度取容器（prompt 内容区）的一半；窗口锚定面板状态。
+fn mention_view<'a>(
+    items: &'a [CommandItem<'a>],
+    active: usize,
+    anchor: usize,
+    anchor_row: u16,
+    max_height: u16,
+) -> CommandPanelView<'a> {
+    CommandPanelView {
+        items,
+        active,
+        window_anchor: Some(anchor),
+        anchor_row,
+        max_height: Some(max_height),
+    }
+}
+
+/// 提及条目展示：第一行文件名（目录带 `/`），第二行父目录。
+fn mention_item_text(entry: &MentionEntry) -> (String, String) {
+    let (directory, name) = entry
+        .path
+        .rsplit_once('/')
+        .unwrap_or(("", entry.path.as_str()));
+    let label = if entry.is_directory {
+        format!("{name}/")
+    } else {
+        name.to_string()
+    };
+    (label, directory.to_string())
 }
 
 /// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。
@@ -119,7 +234,7 @@ fn paint_row(
     }
 }
 
-/// 选区按视口坐标反显；空白单元格同样覆盖，保证拖拽范围可见。
+/// 选区按内容行坐标反显；空白单元格同样覆盖，保证拖拽范围可见。
 fn paint_selection(buf: &mut Buffer, area: Rect, y: u16, row: u16, selection: &Selection) {
     for col in 0..area.width {
         if selection.contains(row, col)

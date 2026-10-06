@@ -1,5 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
+use std::path::PathBuf;
+
 use super::*;
 
 fn prompt(cols: u16, rows: u16) -> Prompt {
@@ -229,13 +231,13 @@ fn replace_range_swaps_selection_and_undo_restores_it() {
 }
 
 #[test]
-fn selection_maps_through_scroll() {
+fn selection_uses_content_rows_not_viewport() {
     let mut prompt = prompt(10, 2);
     prompt.insert_str("1\n2\n3\n4");
     assert_eq!(prompt.scroll(), 2);
     assert_eq!(
         prompt.selection_text((0, 0), (1, 0)).as_deref(),
-        Some("3\n4")
+        Some("1\n2")
     );
 }
 
@@ -351,7 +353,7 @@ fn line_commands_use_logical_lines_not_visual_rows() {
 }
 
 #[test]
-fn line_deletion_stops_at_newline() {
+fn line_deletion_stops_at_newline_and_start_joins_previous_line() {
     let mut prompt = prompt(10, 3);
     prompt.insert_str("ab\ncd");
     prompt.move_up();
@@ -362,7 +364,25 @@ fn line_deletion_stops_at_newline() {
     assert_eq!(prompt.cursor_cell(), Some((1, 0)));
     prompt.move_line_start();
     prompt.delete_to_line_start();
-    assert_eq!(prompt.text(), "\ncd");
+    assert_eq!(prompt.text(), "cd");
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+}
+
+#[test]
+fn delete_to_line_start_joins_only_at_line_start() {
+    let mut prompt = prompt(10, 3);
+    prompt.insert_str("ab\ncd");
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), "ab\n");
+    assert_eq!(prompt.cursor_cell(), Some((1, 0)));
+
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), "ab");
+    assert_eq!(prompt.cursor_cell(), Some((0, 2)));
+
+    prompt.move_line_start();
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), "ab");
 }
 
 #[test]
@@ -837,4 +857,158 @@ fn clear_panel_drops_state_until_next_edit() {
     assert!(prompt.panel().is_none());
     prompt.backspace();
     assert!(prompt.panel().is_some());
+}
+
+/// 文件候选条目。
+fn file(path: &str) -> MentionEntry {
+    MentionEntry {
+        path: path.into(),
+        is_directory: false,
+    }
+}
+
+/// 构造已缓存候选的提及场景：根已同步、`@` 已输入且扫描结果已写入。
+fn mention_prompt(entries: Vec<MentionEntry>) -> Prompt {
+    let mut prompt = prompt(40, 8);
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));
+    prompt.insert_char('@');
+    let (generation, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(root, PathBuf::from("/tmp/ws"));
+    assert!(prompt.apply_mention_entries(generation, entries));
+    prompt
+}
+
+#[test]
+fn mention_panel_opens_after_scan_and_filters_locally() {
+    let mut prompt = prompt(40, 8);
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));
+    prompt.insert_char('@');
+    assert!(prompt.mention().is_none());
+    let (generation, _) = prompt.take_mention_scan_request().expect("scan requested");
+    assert!(prompt.take_mention_scan_request().is_none());
+    let entries = vec![file("src/app.rs"), file("docs/readme.md")];
+    assert!(prompt.apply_mention_entries(generation, entries));
+    assert_eq!(prompt.mention().expect("panel open").items().len(), 2);
+
+    prompt.insert_char('d');
+    let panel = prompt.mention().expect("panel filtered");
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].path, "docs/readme.md");
+
+    prompt.backspace();
+    assert_eq!(prompt.mention().expect("panel restored").items().len(), 2);
+}
+
+#[test]
+fn mention_panel_confirm_inserts_path_and_is_single_undo_step() {
+    let mut prompt = mention_prompt(vec![
+        MentionEntry {
+            path: "src".into(),
+            is_directory: true,
+        },
+        file("src/app.rs"),
+    ]);
+    assert_eq!(prompt.mention().expect("panel").active(), 0);
+    assert!(prompt.mention_move(1));
+    assert!(prompt.mention_confirm());
+    assert_eq!(prompt.text(), "@src/app.rs ");
+    assert_eq!(prompt.cursor_cell(), Some((0, 12)));
+    assert!(prompt.mention().is_none());
+    prompt.undo();
+    assert_eq!(prompt.text(), "@");
+}
+
+#[test]
+fn mention_panel_escape_closes_until_next_edit() {
+    let mut prompt = mention_prompt(vec![file("main.rs")]);
+    assert!(prompt.mention().is_some());
+    assert!(prompt.mention_escape());
+    assert!(prompt.mention().is_none());
+    assert!(!prompt.mention_escape());
+    prompt.insert_char('m');
+    assert!(prompt.mention().is_some());
+}
+
+#[test]
+fn mention_panel_closes_when_query_leaves_trigger() {
+    let mut prompt = mention_prompt(vec![file("app.rs")]);
+    prompt.insert_char(' ');
+    assert!(prompt.mention().is_none());
+}
+
+#[test]
+fn mention_scan_result_is_dropped_after_root_change() {
+    let mut prompt = prompt(40, 8);
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/a")));
+    prompt.insert_char('@');
+    let (generation, _) = prompt.take_mention_scan_request().expect("scan requested");
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/b")));
+    assert!(!prompt.apply_mention_entries(generation, vec![file("app.rs")]));
+    assert!(prompt.mention().is_none());
+    let (next_generation, root) = prompt
+        .take_mention_scan_request()
+        .expect("rescan on new root");
+    assert_ne!(next_generation, generation);
+    assert_eq!(root, PathBuf::from("/tmp/b"));
+}
+
+#[test]
+fn mention_scan_request_requires_root_and_trigger() {
+    let mut prompt = prompt(40, 8);
+    prompt.insert_char('@');
+    assert!(prompt.take_mention_scan_request().is_none());
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));
+    prompt.backspace();
+    assert!(prompt.take_mention_scan_request().is_none());
+    prompt.insert_char('@');
+    assert!(prompt.take_mention_scan_request().is_some());
+}
+
+#[test]
+fn clear_panel_invalidates_pending_mention_scan() {
+    let mut prompt = prompt(40, 8);
+    prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));
+    prompt.insert_char('@');
+    let (generation, _) = prompt.take_mention_scan_request().expect("scan requested");
+    prompt.clear_panel();
+    assert!(!prompt.apply_mention_entries(generation, vec![file("app.rs")]));
+    assert!(prompt.mention().is_none());
+}
+
+#[test]
+fn backspace_removes_whole_mention_after_trailing_space() {
+    let mut prompt = prompt(30, 5);
+    prompt.insert_str("@src/app.rs ");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "");
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+}
+
+#[test]
+fn backspace_keeps_plain_deletion_without_trailing_space() {
+    let mut prompt = prompt(30, 5);
+    prompt.insert_str("@f.rs");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "@f.r");
+}
+
+#[test]
+fn backspace_with_mention_panel_open_edits_query() {
+    let mut prompt = mention_prompt(vec![file("main.rs")]);
+    prompt.insert_char('m');
+    assert!(prompt.mention().is_some());
+    prompt.backspace();
+    assert_eq!(prompt.text(), "@");
+    assert!(prompt.mention().is_some());
+}
+
+#[test]
+fn mention_set_active_and_confirm_at_inserts_clicked_item() {
+    let mut prompt = mention_prompt(vec![file("a.rs"), file("b.rs")]);
+    assert!(prompt.mention_set_active(1));
+    assert_eq!(prompt.mention().expect("panel").active(), 1);
+    assert!(!prompt.mention_set_active(1));
+    assert!(!prompt.mention_set_active(5));
+    assert!(prompt.mention_confirm_at(0));
+    assert_eq!(prompt.text(), "@a.rs ");
 }

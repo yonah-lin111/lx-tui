@@ -1,6 +1,7 @@
 //! 集成测试：prompt markdown 输入、点击定位、滚轮滚动贯穿几何同步、状态更新与渲染。
 
 use lx_tui::app::actions::EditorCommand;
+use lx_tui::app::markdown::MentionEntry;
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
 use lx_tui::config::Config;
@@ -185,4 +186,57 @@ fn panel_task_command_then_backspace_clears_marker() {
     update::apply_editor(&mut state, EditorCommand::Backspace);
     assert_eq!(state.prompt.text(), "");
     assert_eq!(state.prompt.cursor_cell(), Some((0, 0)));
+}
+
+#[test]
+fn ctrl_u_joins_line_at_line_start() {
+    let (mut state, _config, _view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertText("ab\ncd".into()));
+    update::apply_editor(&mut state, EditorCommand::LineStart);
+    update::apply_editor(&mut state, EditorCommand::DeleteToLineStart);
+    assert_eq!(state.prompt.text(), "abcd");
+}
+
+#[test]
+fn mention_panel_renders_and_confirms_insertion() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    update::apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
+    );
+
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
+    let inner = layout::pane_inner_rect(view.prompt);
+    let name_row: String = (inner.x..inner.x + inner.width)
+        .map(|x| buffer[(x, inner.y + 2)].symbol())
+        .collect();
+    let detail_row: String = (inner.x..inner.x + inner.width)
+        .map(|x| buffer[(x, inner.y + 3)].symbol())
+        .collect();
+    assert!(name_row.contains("app.rs"));
+    assert!(detail_row.contains("src"));
+
+    update::apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "@src/app.rs ");
+}
+
+#[test]
+fn backspace_removes_whole_mention_after_insertion() {
+    let (mut state, _config, _view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertText("@src/app.rs ".into()));
+    update::apply_editor(&mut state, EditorCommand::Backspace);
+    assert_eq!(state.prompt.text(), "");
 }

@@ -1,6 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
+use crate::app::markdown::MentionEntry;
 use crate::layout::PaneId;
 use ratatui::style::Color;
 
@@ -157,4 +158,71 @@ fn renders_block_command_panel_below_cursor() {
     let blank = prompt(10, 3, "plain");
     render(area, &mut empty, &blank, None);
     assert_eq!(empty[(0, 1)].symbol(), " ");
+}
+
+#[test]
+fn renders_mention_panel_stacked_and_hit_tests_items() {
+    let area = Rect::new(0, 0, 30, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 20);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    editor.apply_mention_entries(
+        generation,
+        vec![
+            MentionEntry {
+                path: "src/app.rs".into(),
+                is_directory: false,
+            },
+            MentionEntry {
+                path: "src/lib.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+
+    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    let name_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    assert!(name_row.contains("app.rs"));
+    assert!(dir_row.contains("src"));
+    assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
+    assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+
+    assert_eq!(mention_item_at(&editor, area, 2, 2), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 3), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 4), Some(1));
+    assert_eq!(mention_item_at(&editor, area, 2, 5), Some(1));
+    assert_eq!(mention_item_at(&editor, area, 2, 6), None);
+    assert_eq!(mention_item_at(&editor, area, 2, 1), None);
+}
+
+#[test]
+fn mention_panel_window_keeps_still_when_hovering_visible_item() {
+    let area = Rect::new(0, 0, 30, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 20);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    let entries: Vec<MentionEntry> = (0..10)
+        .map(|index| MentionEntry {
+            path: format!("src/f{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    editor.apply_mention_entries(generation, entries);
+
+    editor.mention_move(9);
+    let rect = mention_panel_rect(&editor, area).expect("panel visible");
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
+
+    // 悬停窗口内条目：窗口保持不动，不因悬停向上滚动。
+    editor.mention_set_active(8);
+    assert_eq!(mention_panel_rect(&editor, area), Some(rect));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
+    assert_eq!(mention_item_at(&editor, area, 2, rect.y + 7), Some(9));
 }

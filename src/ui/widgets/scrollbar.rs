@@ -1,6 +1,7 @@
 //! 滚动条组件：几何、命中与渲染；不依赖应用领域数据。
 
 use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use crate::ui::style;
@@ -93,7 +94,11 @@ fn offset_for_thumb_top(layout: &ScrollbarLayout, thumb_top: usize) -> usize {
 
 /// 渲染滚动条：轨道 muted、thumb accent。
 pub fn render(frame: &mut Frame<'_>, layout: &ScrollbarLayout) {
-    let buf = frame.buffer_mut();
+    render_buffer(frame.buffer_mut(), layout);
+}
+
+/// 在缓冲区内渲染滚动条：轨道 muted、thumb accent。
+pub fn render_buffer(buf: &mut Buffer, layout: &ScrollbarLayout) {
     for y in layout.track.y..layout.track.bottom() {
         if let Some(cell) = buf.cell_mut((layout.track.x, y)) {
             cell.reset();

@@ -176,3 +176,217 @@ fn panel_move_wraps_both_directions() {
     panel.move_active(2);
     assert_eq!(panel.active(), 2);
 }
+
+/// 文本末尾的提及触发。
+fn mention(text: &str) -> Option<MentionTrigger> {
+    mention_trigger(text, text.len())
+}
+
+#[test]
+fn mention_trigger_forms() {
+    assert_eq!(
+        mention("@").map(|trigger| (trigger.from, trigger.query)),
+        Some((0, String::new()))
+    );
+    assert_eq!(
+        mention("a @sr").map(|trigger| (trigger.from, trigger.to, trigger.query)),
+        Some((2, 5, "sr".into()))
+    );
+    assert_eq!(mention("[@sr").map(|trigger| trigger.from), Some(1));
+    assert_eq!(
+        mention("@src/app.rs").map(|trigger| trigger.query),
+        Some("src/app.rs".into())
+    );
+    assert_eq!(mention("a@sr"), None);
+    assert_eq!(mention("@a,b"), None);
+    assert_eq!(mention("@a b"), None);
+    assert_eq!(mention("@@a"), None);
+}
+
+#[test]
+fn mention_trigger_allows_cjk_query() {
+    assert_eq!(
+        mention("@主页").map(|trigger| trigger.query),
+        Some("主页".into())
+    );
+}
+
+#[test]
+fn mention_trigger_suppressed_inside_fence() {
+    assert_eq!(mention("```\n@a"), None);
+    assert_eq!(
+        mention("```\ncode\n```\n@a").map(|trigger| trigger.query),
+        Some("a".into())
+    );
+}
+
+#[test]
+fn mention_insertion_appends_trailing_space() {
+    let file = MentionEntry {
+        path: "src/app.rs".into(),
+        is_directory: false,
+    };
+    assert_eq!(mention_insertion(&file), "@src/app.rs ");
+    let directory = MentionEntry {
+        path: "src".into(),
+        is_directory: true,
+    };
+    assert_eq!(mention_insertion(&directory), "@src/ ");
+}
+
+#[test]
+fn filter_mentions_ranks_name_matches_first() {
+    let entries = vec![
+        MentionEntry {
+            path: "src/main.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "docs/appendix.md".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "app.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let filtered = filter_mentions(&entries, "app.rs");
+    let paths: Vec<&str> = filtered.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(paths, vec!["app.rs", "src/app.rs"]);
+}
+
+#[test]
+fn filter_mentions_empty_query_sorts_by_path() {
+    let entries = vec![
+        MentionEntry {
+            path: "z.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "m.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let filtered = filter_mentions(&entries, "");
+    let paths: Vec<&str> = filtered.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(paths, vec!["a.rs", "m.rs", "z.rs"]);
+}
+
+#[test]
+fn filter_mentions_matches_subsequence_and_caps_items() {
+    let entries = vec![MentionEntry {
+        path: "src/app.rs".into(),
+        is_directory: false,
+    }];
+    assert_eq!(filter_mentions(&entries, "sar").len(), 1);
+    assert!(filter_mentions(&entries, "qzx").is_empty());
+
+    let many: Vec<MentionEntry> = (0..150)
+        .map(|index| MentionEntry {
+            path: format!("file{index:03}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    assert_eq!(filter_mentions(&many, "").len(), MENTION_LIMIT);
+}
+
+#[test]
+fn mention_panel_clamped_move_stops_at_ends() {
+    let entries = vec![
+        MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "b.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let trigger = MentionTrigger {
+        from: 0,
+        to: 1,
+        query: String::new(),
+    };
+    let mut panel = MentionPanel::new(trigger, entries, 0);
+    panel.move_active_clamped(-1);
+    assert_eq!(panel.active(), 0);
+    panel.move_active_clamped(1);
+    assert_eq!(panel.active(), 1);
+    panel.move_active_clamped(1);
+    assert_eq!(panel.active(), 1);
+}
+
+#[test]
+fn mention_panel_hover_keeps_window_anchor() {
+    let entries: Vec<MentionEntry> = (0..4)
+        .map(|index| MentionEntry {
+            path: format!("f{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    let trigger = MentionTrigger {
+        from: 0,
+        to: 1,
+        query: String::new(),
+    };
+    let mut panel = MentionPanel::new(trigger, entries, 0);
+    panel.move_active_clamped(3);
+    assert_eq!(panel.anchor(), 3);
+    panel.set_active(1);
+    assert_eq!(panel.active(), 1);
+    assert_eq!(panel.anchor(), 3, "悬停不应移动窗口锚点");
+    panel.move_active_clamped(-1);
+    assert_eq!(panel.anchor(), panel.active());
+}
+
+#[test]
+fn mention_panel_move_wraps_both_directions() {
+    let entries = vec![
+        MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "b.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let trigger = MentionTrigger {
+        from: 0,
+        to: 1,
+        query: String::new(),
+    };
+    let mut panel = MentionPanel::new(trigger, entries, 0);
+    panel.move_active(-1);
+    assert_eq!(panel.active(), 1);
+    panel.move_active(1);
+    assert_eq!(panel.active(), 0);
+}
+
+#[test]
+fn mention_deletion_range_covers_token_and_trailing_blank() {
+    let text = "@src/app.rs ";
+    assert_eq!(mention_deletion_range(text, text.len()), Some(0..12));
+    let text = "a @f.rs ";
+    assert_eq!(mention_deletion_range(text, text.len()), Some(2..8));
+    let text = "@主页 ";
+    assert_eq!(mention_deletion_range(text, text.len()), Some(0..8));
+}
+
+#[test]
+fn mention_deletion_range_requires_boundary_and_trailing_blank() {
+    assert_eq!(mention_deletion_range("@f.rs", 5), None);
+    assert_eq!(mention_deletion_range("@f.rs x", 7), None);
+    assert_eq!(mention_deletion_range("[@f.rs] ", 8), None);
+    assert_eq!(mention_deletion_range("a@f.rs ", 7), None);
+    assert_eq!(mention_deletion_range("@@f.rs ", 7), None);
+    assert_eq!(mention_deletion_range("", 0), None);
+}

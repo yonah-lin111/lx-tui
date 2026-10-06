@@ -250,6 +250,90 @@ fn delete_keys_remove_prompt_selection() {
 }
 
 #[test]
+fn scrolling_keeps_prompt_selection_anchor_in_content() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 3);
+    let prompt = state.prompt.id();
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText("a\nb\nc\nd\ne".into()),
+    );
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 2, 0);
+    assert_eq!(prompt_selection_text(&state).as_deref(), Some("c\nd\ne"));
+
+    scroll_prompt(&mut state, -1);
+    assert_eq!(state.prompt.scroll(), 0);
+    assert_eq!(prompt_selection_text(&state).as_deref(), Some("c\nd\ne"));
+}
+
+#[test]
+fn dragging_to_prompt_edge_autoscrolls_and_extends_selection() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 4);
+    let prompt = state.prompt.id();
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText("l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7".into()),
+    );
+    scroll_prompt(&mut state, -1);
+    assert_eq!(state.prompt.scroll(), 1);
+
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 3, 1);
+    let edge = state.selection_autoscroll.expect("edge scroll armed");
+    assert_eq!((edge.row, edge.column), (3, 1));
+    assert_eq!(
+        prompt_selection_text(&state).as_deref(),
+        Some("l1\nl2\nl3\nl4")
+    );
+
+    let deadline = next_deadline(&state).expect("deadline");
+    assert!(tick(&mut state, deadline));
+    assert_eq!(state.prompt.scroll(), 2);
+    assert_eq!(
+        prompt_selection_text(&state).as_deref(),
+        Some("l1\nl2\nl3\nl4\nl5")
+    );
+
+    // 滚到边界后停止并解除自动滚动。
+    state.prompt.scroll_to(4);
+    let deadline = next_deadline(&state).expect("deadline");
+    assert!(!tick(&mut state, deadline));
+    assert!(state.selection_autoscroll.is_none());
+}
+
+#[test]
+fn autoscroll_arms_only_near_prompt_edges() {
+    let mut state = AppState::demo();
+    state.prompt.resize(20, 10);
+    let prompt = state.prompt.id();
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText(
+            "l0\nl1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\nla\nlb\nlc\nld\nle".into(),
+        ),
+    );
+    begin_selection(&mut state, prompt, 2, 0);
+    drag_selection(&mut state, prompt, 5, 0);
+    assert!(state.selection_autoscroll.is_none(), "中部拖动不自动滚动");
+
+    drag_selection(&mut state, prompt, 9, 0);
+    assert!(state.selection_autoscroll.is_some(), "底边拖动自动滚动");
+    drag_selection(&mut state, prompt, 5, 0);
+    assert!(state.selection_autoscroll.is_none(), "离开边缘停止");
+
+    let logs = state.active_tab().layout.pane_ids()[0];
+    begin_selection(&mut state, logs, 0, 0);
+    drag_selection(&mut state, logs, 9, 0);
+    assert!(state.selection_autoscroll.is_none(), "终端选区不自动滚动");
+
+    drag_selection(&mut state, prompt, 9, 0);
+    end_selection_drag(&mut state);
+    assert!(state.selection_autoscroll.is_none(), "松开鼠标停止");
+}
+
+#[test]
 fn navigation_clears_prompt_selection_without_editing() {
     let mut state = AppState::demo();
     state.prompt.resize(20, 5);
@@ -998,4 +1082,127 @@ fn update_pane_cwd_reports_changes() {
             .pane(id)
             .is_some_and(|pane| pane.cwd_label.as_deref() == Some("herdr"))
     );
+}
+
+#[test]
+fn mention_panel_keys_are_consumed_before_editing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some());
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "@app.rs ");
+    assert!(state.prompt.mention().is_none());
+}
+
+#[test]
+fn switching_workspace_root_invalidates_mention_cache() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, first_root) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some());
+
+    state.workspaces[0].cwd = Some(std::path::PathBuf::from("/tmp/other"));
+    apply_editor(&mut state, EditorCommand::InsertChar('a'));
+    assert!(state.prompt.mention().is_none());
+    let (_, next_root) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("rescan requested");
+    assert_ne!(next_root, first_root);
+    assert_eq!(next_root, std::path::PathBuf::from("/tmp/other"));
+}
+
+#[test]
+fn clear_panel_hides_mention_panel_on_focus_loss() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![MentionEntry {
+            path: "a.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some());
+    let pane = state.active_tab().layout.focus();
+    focus_pane(&mut state, pane);
+    assert!(state.prompt.mention().is_none());
+}
+
+#[test]
+fn mouse_mention_hover_select_and_wheel_flow() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![
+            MentionEntry {
+                path: "a.rs".into(),
+                is_directory: false,
+            },
+            MentionEntry {
+                path: "b.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+
+    assert!(hover_mention(&mut state, 1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
+    assert!(!hover_mention(&mut state, 1));
+    assert!(!scroll_mention(&mut state, 1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
+    assert!(scroll_mention(&mut state, -1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    assert!(!scroll_mention(&mut state, -1));
+    apply_editor(&mut state, EditorCommand::Up);
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    select_mention(&mut state, 1);
+    assert_eq!(state.prompt.text(), "@b.rs ");
+    assert!(state.prompt.mention().is_none());
 }

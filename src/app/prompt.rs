@@ -1,8 +1,15 @@
 //! prompt 右栏编辑器：纯文本缓冲区、光标、软换行视口与选区取文，无 IO。
 
+mod list;
+mod mention;
+
+use std::path::PathBuf;
+
 use unicode_width::UnicodeWidthChar;
 
-use super::markdown::{self, BlockPanel};
+use self::list::{ListContext, list_context, parse_list_item};
+use self::mention::MentionState;
+use super::markdown::{self, BlockPanel, MentionEntry, MentionPanel};
 use crate::layout::PaneId;
 
 /// 粘贴文本中的制表符展开内容。
@@ -34,6 +41,8 @@ pub struct Prompt {
     last_edit: Option<EditKind>,
     /// 块命令面板；由光标处触发标记逼近得到。
     panel: Option<BlockPanel>,
+    /// 文件提及面板状态；含扫描缓存与在途代号。
+    mention: MentionState,
     /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
     panel_suppressed: bool,
 }
@@ -61,45 +70,6 @@ enum EditKind {
     Other,
 }
 
-/// 行首列表项标记类别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ListKind {
-    Bullet(char),
-    Ordered { number: u64, delimiter: char },
-    Task(char),
-}
-
-/// 行首列表项：缩进、分隔空格结束偏移（标记+一个空格）、标记段结束偏移（含后随全部空白）与类别。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ListItem {
-    indent: usize,
-    sep_end: usize,
-    marker_end: usize,
-    kind: ListKind,
-}
-
-/// 当前列表项与上文列表的关系；决定 Backspace 删除标记的方式。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ListContext {
-    /// 同列表已有前一项：标记替换为等宽空格。
-    Sibling,
-    /// 嵌套在上一级列表项内容中：删除标记、保留缩进。
-    Nested,
-    /// 顶层列表首项：连同缩进整段删除。
-    TopLevel,
-}
-
-impl ListItem {
-    /// 下一行延续用的标记文本（不含缩进）。
-    fn continuation(self) -> String {
-        match self.kind {
-            ListKind::Bullet(marker) => format!("{marker} "),
-            ListKind::Ordered { number, delimiter } => format!("{}{delimiter} ", number + 1),
-            ListKind::Task(marker) => format!("{marker} [ ] "),
-        }
-    }
-}
-
 impl Prompt {
     /// 创建空编辑器。
     pub fn new(id: PaneId) -> Self {
@@ -114,6 +84,7 @@ impl Prompt {
             redo: Vec::new(),
             last_edit: None,
             panel: None,
+            mention: MentionState::default(),
             panel_suppressed: false,
         }
     }
@@ -187,9 +158,19 @@ impl Prompt {
         self.settle();
     }
 
-    /// 删除光标前一个字符；紧跟列表标记时先按列表上下文处理标记。
+    /// 删除光标前一个字符；@ 提及后的空白处整块删除提及，紧跟列表标记时按列表上下文处理标记。
     pub fn backspace(&mut self) {
         if self.cursor == 0 {
+            return;
+        }
+        if self.mention.panel().is_none()
+            && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
+        {
+            let start = range.start;
+            self.record(EditKind::Delete);
+            self.text.replace_range(range, "");
+            self.cursor = start;
+            self.settle();
             return;
         }
         if !self.in_fence() && self.delete_list_markup() {
@@ -283,9 +264,77 @@ impl Prompt {
     }
 
     /// 清空面板并解除压制；prompt 失焦或折叠时调用。
+    ///
+    /// 同时作废在途的提及扫描结果，避免失焦后异步结果把面板重新弹出。
     pub fn clear_panel(&mut self) {
         self.panel = None;
+        self.mention.clear();
         self.panel_suppressed = false;
+    }
+
+    /// 当前文件提及面板；未打开时为 None。
+    pub fn mention(&self) -> Option<&MentionPanel> {
+        self.mention.panel()
+    }
+
+    /// 提及面板打开时按偏移循环移动高亮；返回是否消费该按键。
+    pub fn mention_move(&mut self, delta: isize) -> bool {
+        self.mention.move_active(delta)
+    }
+
+    /// 提及面板悬停高亮：设置高亮索引；返回是否变化。
+    pub fn mention_set_active(&mut self, index: usize) -> bool {
+        self.mention.set_active(index)
+    }
+
+    /// 滚轮在提及面板上移动高亮：越界钳制不循环；返回是否变化。
+    pub fn mention_scroll(&mut self, delta: isize) -> bool {
+        self.mention.scroll_active(delta)
+    }
+
+    /// 提及面板点选：设置高亮并确认插入；返回是否消费。
+    pub fn mention_confirm_at(&mut self, index: usize) -> bool {
+        self.mention.set_active(index);
+        self.mention_confirm()
+    }
+
+    /// 提及面板打开时确认高亮条目：替换触发区间并压制重弹；返回是否消费该按键。
+    pub fn mention_confirm(&mut self) -> bool {
+        let Some((range, insertion)) = self.mention.confirm(self.text.len()) else {
+            return false;
+        };
+        self.break_group();
+        self.record(EditKind::Other);
+        self.text.replace_range(range.clone(), &insertion);
+        self.cursor = range.start + insertion.len();
+        self.panel_suppressed = true;
+        self.scroll_cursor_into_view();
+        true
+    }
+
+    /// 提及面板打开时关闭且不改文本；返回是否消费该按键。
+    pub fn mention_escape(&mut self) -> bool {
+        if !self.mention.escape() {
+            return false;
+        }
+        self.panel_suppressed = true;
+        true
+    }
+
+    /// 同步提及扫描根；根变化时清除缓存并作废在途结果。
+    pub fn set_mention_root(&mut self, root: Option<PathBuf>) {
+        self.mention.set_root(root, &self.text, self.cursor);
+    }
+
+    /// 需要新扫描时返回（代号，根路径）并标记处理中；仅事件循环调用。
+    pub fn take_mention_scan_request(&mut self) -> Option<(u64, PathBuf)> {
+        self.mention.take_scan_request(&self.text, self.cursor)
+    }
+
+    /// 写入扫描结果；代号过期（根变化或失焦）时丢弃；返回是否采纳。
+    pub fn apply_mention_entries(&mut self, generation: u64, entries: Vec<MentionEntry>) -> bool {
+        self.mention
+            .apply_entries(generation, entries, &self.text, self.cursor)
     }
 
     /// 当前逻辑行整体右移一个缩进单位；围栏代码块内改为光标处插入空格。
@@ -426,14 +475,23 @@ impl Prompt {
         }
     }
 
-    /// 删除光标到逻辑行首。
+    /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（对齐 opencode deleteToLineStart）。
     pub fn delete_to_line_start(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
         let start = line_start(&self.text, self.cursor);
         if start < self.cursor {
+            self.record(EditKind::Delete);
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
             self.settle();
+            return;
         }
+        self.record(EditKind::Delete);
+        self.text.remove(self.cursor - 1);
+        self.cursor -= 1;
+        self.settle();
     }
 
     /// 删除光标到逻辑行尾（不删除换行）。
@@ -493,11 +551,14 @@ impl Prompt {
         Some((visible as u16, col as u16))
     }
 
-    /// 按视觉行滚动视口；光标不动，超界时钳到可滚动范围。
-    pub fn scroll_by(&mut self, lines: isize) {
+    /// 按视觉行滚动视口；光标不动，超界时钳到可滚动范围；返回是否实际移动。
+    pub fn scroll_by(&mut self, lines: isize) -> bool {
         let max = self.max_scroll();
         let target = (self.scroll.min(max) as isize).saturating_add(lines);
-        self.scroll = target.clamp(0, max as isize) as usize;
+        let next = target.clamp(0, max as isize) as usize;
+        let moved = next != self.scroll;
+        self.scroll = next;
+        moved
     }
 
     /// 直接设置视口滚动偏移（滚动条点击/拖拽）；越界钳到可滚动范围。
@@ -519,7 +580,7 @@ impl Prompt {
         self.settle();
     }
 
-    /// 选区（视口坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
+    /// 选区（内容行坐标，端点包含）对应的字节范围；空选区或选中内容为空时返回 None。
     pub fn selection_bounds(&self, start: (u16, u16), end: (u16, u16)) -> Option<(usize, usize)> {
         if start == end {
             return None;
@@ -529,12 +590,12 @@ impl Prompt {
         } else {
             (end, start)
         };
-        let from = self.viewport_offset(first, false);
-        let to = self.viewport_offset(last, true);
+        let from = self.content_offset(first, false);
+        let to = self.content_offset(last, true);
         (from < to).then_some((from, to))
     }
 
-    /// 取选区文本（视口坐标，端点包含）；空选区或选中内容为空时返回 None。
+    /// 取选区文本（内容行坐标，端点包含）；空选区或选中内容为空时返回 None。
     pub fn selection_text(&self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
         let (from, to) = self.selection_bounds(start, end)?;
         Some(self.text[from..to].to_string())
@@ -754,8 +815,18 @@ impl Prompt {
 
     /// 视口坐标映射到文本字节偏移；`after` 为真时取该单元格字符之后。
     fn viewport_offset(&self, (row, col): (u16, u16), after: bool) -> usize {
+        self.content_offset_at(self.scroll.saturating_add(usize::from(row)), col, after)
+    }
+
+    /// 内容行坐标映射到文本字节偏移；`after` 为真时取该单元格字符之后。
+    fn content_offset(&self, (row, col): (u16, u16), after: bool) -> usize {
+        self.content_offset_at(usize::from(row), col, after)
+    }
+
+    /// 视觉行索引（内容坐标）映射到文本字节偏移。
+    fn content_offset_at(&self, index: usize, col: u16, after: bool) -> usize {
         let rows = self.visual_rows();
-        let index = (self.scroll + usize::from(row)).min(rows.len() - 1);
+        let index = index.min(rows.len() - 1);
         let visual = rows[index];
         let slice = &self.text[visual.start..visual.end];
         let mut cell = 0;
@@ -779,6 +850,7 @@ impl Prompt {
         self.panel_suppressed = false;
         self.scroll_cursor_into_view();
         self.refresh_panel();
+        self.mention.refresh(&self.text, self.cursor);
     }
 
     /// 重算块命令面板：触发标记决定候选列表，同类同位置保留高亮。
@@ -833,125 +905,6 @@ fn push_bounded(stack: &mut Vec<Snapshot>, snapshot: Snapshot) {
         stack.remove(0);
     }
     stack.push(snapshot);
-}
-
-/// 解析行首列表项（无序/有序/任务）；非列表返回 None。
-fn parse_list_item(line: &str) -> Option<ListItem> {
-    let indent = line.len() - line.trim_start_matches(' ').len();
-    let rest = &line[indent..];
-    let first = rest.chars().next()?;
-    let (kind, marker_len) = if matches!(first, '-' | '*' | '+') {
-        (ListKind::Bullet(first), 1)
-    } else if first.is_ascii_digit() {
-        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
-        let delimiter = *rest.as_bytes().get(digits)?;
-        if !matches!(delimiter, b'.' | b')') {
-            return None;
-        }
-        (
-            ListKind::Ordered {
-                number: rest[..digits].parse().ok()?,
-                delimiter: delimiter as char,
-            },
-            digits + 1,
-        )
-    } else {
-        return None;
-    };
-    let spaces = rest[marker_len..]
-        .bytes()
-        .take_while(|byte| *byte == b' ')
-        .count();
-    if spaces == 0 {
-        return None;
-    }
-    let mut sep_end = indent + marker_len + 1;
-    let mut marker_end = indent + marker_len + spaces;
-    let mut kind = kind;
-    if let ListKind::Bullet(marker) = kind {
-        let after = &line.as_bytes()[marker_end..];
-        if after.len() >= 4
-            && after[0] == b'['
-            && after[2] == b']'
-            && matches!(after[1], b' ' | b'x' | b'X')
-        {
-            let task_spaces = after[3..].iter().take_while(|byte| **byte == b' ').count();
-            if task_spaces > 0 {
-                sep_end = marker_end + 3 + 1;
-                marker_end += 3 + task_spaces;
-                kind = ListKind::Task(marker);
-            }
-        }
-    }
-    Some(ListItem {
-        indent,
-        sep_end,
-        marker_end,
-        kind,
-    })
-}
-
-/// 上溯当前行之前的列表关系。
-///
-/// 同缩进且标记族相同视为同列表前项；低缩进列表项视为嵌套父项；
-/// 空行、低缩进非列表内容行或更高层级列表项之后的边界视为顶层首项。
-fn list_context(text: &str, line_start_at: usize, item: &ListItem) -> ListContext {
-    let mut at = line_start_at;
-    while at > 0 {
-        let previous_end = at - 1;
-        let previous_start = line_start(text, previous_end);
-        let previous = &text[previous_start..previous_end];
-        if previous.trim().is_empty() {
-            return ListContext::TopLevel;
-        }
-        match parse_list_item(previous) {
-            Some(previous_item) if previous_item.indent == item.indent => {
-                return if same_list_family(previous_item.kind, item.kind) {
-                    ListContext::Sibling
-                } else {
-                    ListContext::TopLevel
-                };
-            }
-            Some(previous_item) if previous_item.indent < item.indent => {
-                return ListContext::Nested;
-            }
-            Some(_) => {}
-            None => {
-                let indent = previous.len() - previous.trim_start_matches(' ').len();
-                if indent <= item.indent {
-                    return ListContext::TopLevel;
-                }
-            }
-        }
-        at = previous_start;
-    }
-    ListContext::TopLevel
-}
-
-/// 两个列表项是否属于同一列表：有序要求分隔符相同，无序/任务要求项目符号相同。
-fn same_list_family(left: ListKind, right: ListKind) -> bool {
-    match (left, right) {
-        (
-            ListKind::Ordered {
-                delimiter: left, ..
-            },
-            ListKind::Ordered {
-                delimiter: right, ..
-            },
-        ) => left == right,
-        (ListKind::Bullet(_) | ListKind::Task(_), ListKind::Bullet(_) | ListKind::Task(_)) => {
-            bullet_marker(left) == bullet_marker(right)
-        }
-        (ListKind::Ordered { .. }, _) | (_, ListKind::Ordered { .. }) => false,
-    }
-}
-
-/// 无序/任务列表项的项目符号字符。
-fn bullet_marker(kind: ListKind) -> Option<char> {
-    match kind {
-        ListKind::Bullet(marker) | ListKind::Task(marker) => Some(marker),
-        ListKind::Ordered { .. } => None,
-    }
 }
 
 /// 围栏代码块行：至多 3 个前导空格后以 ``` 开头。

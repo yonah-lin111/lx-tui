@@ -5,6 +5,7 @@
 pub mod app;
 pub mod config;
 pub mod event;
+pub mod files;
 pub mod input;
 pub mod layout;
 pub mod platform;
