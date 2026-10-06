@@ -13,10 +13,10 @@ use crate::ui::style;
 const MIN_WIDTH: u16 = 3;
 const MIN_HEIGHT: u16 = 3;
 
-/// 标签与预览之间的间距（列）。
-const ITEM_GAP: usize = 2;
+/// 名称列与预览列之间的间距（列）。
+const COLUMN_GAP: usize = 1;
 
-/// 面板条目：主文案与格式预览；绘制时格式在前、名称在后。
+/// 面板条目：名称与格式预览；绘制时名称在前、预览按列对齐。
 pub struct CommandItem<'a> {
     pub label: &'a str,
     pub preview: &'a str,
@@ -63,18 +63,23 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     Some(rect)
 }
 
-/// 面板宽度：最长条目的预览+间距+标签，加两边框与左侧内边距，钳制在内容区内。
+/// 面板宽度：最长标签 + 间距 + 最长预览，加两边框与左侧内边距，钳制在内容区内。
 fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
-    let content = items
+    let label = items
         .iter()
-        .map(|item| item.label.width() + ITEM_GAP + item.preview.width())
+        .map(|item| item.label.width())
         .max()
-        .unwrap_or(0)
-        .min(usize::from(available));
+        .unwrap_or(0);
+    let preview = items
+        .iter()
+        .map(|item| item.preview.width())
+        .max()
+        .unwrap_or(0);
+    let content = (label + COLUMN_GAP + preview).min(usize::from(available));
     ((content + 4) as u16).min(available).max(MIN_WIDTH)
 }
 
-/// 绘制可见条目；窗口滚动保证高亮项可见。
+/// 绘制可见条目；窗口滚动保证高亮项可见，预览列按最长标签对齐。
 fn render_items(buf: &mut Buffer, inner: Rect, view: &CommandPanelView<'_>) {
     if inner.width == 0 || inner.height == 0 {
         return;
@@ -84,22 +89,36 @@ fn render_items(buf: &mut Buffer, inner: Rect, view: &CommandPanelView<'_>) {
     let start = active
         .saturating_sub(visible.saturating_sub(1))
         .min(view.items.len().saturating_sub(visible));
+    let label_width = view
+        .items
+        .iter()
+        .map(|item| item.label.width())
+        .max()
+        .unwrap_or(0);
     for (offset, item) in view.items.iter().skip(start).take(visible).enumerate() {
         let row = Rect::new(inner.x, inner.y + offset as u16, inner.width, 1);
-        render_item(buf, row, item, start + offset == active);
+        render_item(buf, row, item, start + offset == active, label_width);
     }
 }
 
-/// 绘制单条目：格式预览在前、名称在后；高亮项整行反显，超宽由 Paragraph 截断。
-fn render_item(buf: &mut Buffer, area: Rect, item: &CommandItem<'_>, active: bool) {
+/// 绘制单条目：名称在前、预览列对齐；高亮项整行反显，超宽由 Paragraph 截断。
+fn render_item(
+    buf: &mut Buffer,
+    area: Rect,
+    item: &CommandItem<'_>,
+    active: bool,
+    label_width: usize,
+) {
     if area.width < 3 {
         return;
     }
+    let padding = label_width.saturating_sub(item.label.width());
+    let label = format!("{}{}", item.label, " ".repeat(padding));
     let line = Line::from(vec![
         Span::raw(" "),
+        Span::styled(label, style::text()),
+        Span::raw(" ".repeat(COLUMN_GAP)),
         Span::styled(item.preview, style::muted()),
-        Span::raw(" ".repeat(ITEM_GAP)),
-        Span::styled(item.label, style::text()),
     ]);
     let row_style = if active {
         Style::default().add_modifier(Modifier::REVERSED)

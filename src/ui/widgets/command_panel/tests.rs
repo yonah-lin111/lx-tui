@@ -36,15 +36,38 @@ fn renders_below_anchor_without_covering_it() {
     )
     .expect("panel renders");
 
-    assert_eq!(rect, Rect::new(0, 3, 18, 5));
+    assert_eq!(rect, Rect::new(0, 3, 17, 5));
     assert_eq!(buf[(0, 3)].symbol(), "╭");
     assert_eq!(buf[(0, 2)].symbol(), " ");
     assert!(buf[(2, 4)].modifier.contains(Modifier::REVERSED));
     let row = row_text(&buf, area, 4);
-    assert!(row.contains("Heading 1"));
-    let format_at = row.find('#').expect("preview first");
-    let label_at = row.find("Heading 1").expect("label after");
-    assert!(format_at < label_at);
+    let label_at = row.find("Heading 1").expect("label first");
+    let format_at = row.find('#').expect("preview after");
+    assert!(label_at < format_at);
+}
+
+#[test]
+fn aligns_preview_column_across_items() {
+    let area = Rect::new(0, 0, 24, 8);
+    let mut buf = Buffer::empty(area);
+    let items = items(&[("Heading 1", "#"), ("Hi", "##")]);
+    let rect = render(
+        area,
+        &mut buf,
+        &CommandPanelView {
+            items: &items,
+            active: 0,
+            anchor_row: 0,
+        },
+    )
+    .expect("panel renders");
+
+    assert_eq!(rect, Rect::new(0, 1, 16, 4));
+    let first = row_text(&buf, area, 2);
+    let second = row_text(&buf, area, 3);
+    assert_eq!(first.find('#'), second.find('#'));
+    assert!(first.contains("Heading 1"));
+    assert!(second.contains("Hi"));
 }
 
 #[test]
@@ -70,7 +93,7 @@ fn flips_above_when_below_is_tight() {
     )
     .expect("panel renders");
 
-    assert_eq!(rect, Rect::new(0, 0, 8, 4));
+    assert_eq!(rect, Rect::new(0, 0, 7, 4));
     assert_eq!(rect.bottom(), 4);
     assert!(buf[(2, 1)].modifier.contains(Modifier::REVERSED));
 }
@@ -98,7 +121,7 @@ fn scrolls_window_to_keep_active_visible() {
     )
     .expect("panel renders");
 
-    assert_eq!(rect, Rect::new(0, 1, 21, 7));
+    assert_eq!(rect, Rect::new(0, 1, 20, 7));
     assert!(row_text(&buf, area, 2).contains("Heading 2"));
     assert!(!row_text(&buf, area, 2).contains("Heading 1"));
     assert!(row_text(&buf, area, 6).contains("Heading 6"));
