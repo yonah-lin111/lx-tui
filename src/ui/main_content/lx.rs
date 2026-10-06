@@ -9,9 +9,9 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 
 use crate::ui::{style, text};
 
-/// 小狐狸像素图尺寸（列 × 像素行 = 单元格行 × 2）。
-const FOX_WIDTH: u16 = 14;
-const FOX_ROWS: u16 = 5;
+/// 狐狸像素图尺寸（列 × 像素行 = 单元格行 × 2）。
+const FOX_WIDTH: u16 = 18;
+const FOX_ROWS: u16 = 7;
 
 /// 底部输入框高度（含边框）与最小宽度。
 const INPUT_HEIGHT: u16 = 3;
@@ -21,28 +21,36 @@ const SECTION_GAP: u16 = 1;
 /// 占位面板至少需要的高度（上下边框 + 一行内容）。
 const PANEL_MIN_HEIGHT: u16 = 3;
 
-/// 空白像素行（14 列）。
-const BLANK: &str = "..............";
+/// 空白像素行（18 列）。
+const BLANK: &str = "..................";
 
-/// 小狐狸底图：耳/尾/眼为覆盖层。
+/// 全尺寸狐狸底图：耳/尾/眼为覆盖层。
 const FOX_BASE: &[&str] = &[
     BLANK,
     BLANK,
     BLANK,
-    ".kkkkkkkkkkkk.",
-    ".kppppppppppk.",
-    ".kpwwkppkwwpk.",
-    ".kpkkkppkkkpk.",
-    ".kpppnnpppppk.",
-    "..kppppppppk..",
-    "..kkkkkkkkkk..",
+    "..kkkkkkkkkkkkkk..",
+    ".kppppppppppppppk.",
+    ".kppppppppppppppk.",
+    ".kppkwwppppwwkppk.",
+    ".kppkkkppppkkkppk.",
+    ".kppppppnnppppppk.",
+    ".kkkkkkkkkkkkkkkk.",
+    "..kkkkkkkkkkk.....",
+    "..kpppppppppk.....",
+    "..kpbbbbbbbpk.....",
+    "..kkkk....kkkk....",
 ];
 
 /// 立耳（常态）。
 const FOX_EARS_UP: &[&str] = &[
-    "...k......k...",
-    "..kbk....kbk..",
-    "..kkk....kkk..",
+    "...k..........k...",
+    "..kbk........kbk..",
+    "..kkk........kkk..",
+    BLANK,
+    BLANK,
+    BLANK,
+    BLANK,
     BLANK,
     BLANK,
     BLANK,
@@ -54,9 +62,13 @@ const FOX_EARS_UP: &[&str] = &[
 
 /// 抖耳：右耳下沉一像素。
 const FOX_EARS_TWITCH: &[&str] = &[
-    "...k..........",
-    "..kbk....k....",
-    "..kkk...kbk...",
+    "...k..............",
+    "..kbk.........k...",
+    "..kkk........kbk..",
+    BLANK,
+    BLANK,
+    BLANK,
+    BLANK,
     BLANK,
     BLANK,
     BLANK,
@@ -76,8 +88,12 @@ const FOX_TAIL_IN: &[&str] = &[
     BLANK,
     BLANK,
     BLANK,
-    "............n.",
-    "...........nn.",
+    BLANK,
+    BLANK,
+    "..kkkkkkkkkkk..n..",
+    "..kpppppppppk.nnn.",
+    "..kpbbbbbbbpkknnnk",
+    "..kkkk....kkkk.kk.",
 ];
 
 /// 摆尾：尾梢朝外。
@@ -90,8 +106,12 @@ const FOX_TAIL_OUT: &[&str] = &[
     BLANK,
     BLANK,
     BLANK,
-    ".............n",
-    "............nn",
+    BLANK,
+    BLANK,
+    "..kkkkkkkkkkk...n.",
+    "..kpppppppppk..nnn",
+    "..kpbbbbbbbpk.knnn",
+    "..kkkk....kkkk..kk",
 ];
 
 /// 眨眼：眼白行转为描边线，瞳孔行还原毛色。
@@ -101,8 +121,12 @@ const FOX_BLINK: &[&str] = &[
     BLANK,
     BLANK,
     BLANK,
-    ".kpkkkppkkkpk.",
-    ".kppppppppppk.",
+    BLANK,
+    ".kppkkkppppkkkppk.",
+    ".kppppppppppppppk.",
+    BLANK,
+    BLANK,
+    BLANK,
     BLANK,
     BLANK,
     BLANK,
@@ -144,9 +168,9 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: u64) {
     let hint_y = input.y.checked_sub(SECTION_GAP).filter(|_| hint_fits);
     let content_bottom = hint_y.unwrap_or(input.y);
 
-    // 顶部品牌区：狐狸在左、字标在右；整块放不下时省略。
+    // 顶部品牌区：狐狸在左、字标在右；高度或宽度放不下整只狐狸时省略。
     let mut next_y = area.y;
-    if content_bottom >= next_y + FOX_ROWS + SECTION_GAP {
+    if content_bottom >= next_y + FOX_ROWS + SECTION_GAP && input.width >= FOX_WIDTH {
         draw_header(buf, input.x, input.width, next_y, phase);
         next_y += FOX_ROWS + SECTION_GAP;
     }
@@ -178,23 +202,29 @@ fn input_box(area: Rect) -> Option<Rect> {
 }
 
 /// 输入框：muted 圆角边框 + `>` 前缀与占位文案；纯视觉占位，不可输入。
+///
+/// 占位文案按内容区宽度截断，窄窗格里不画出半截字符。
 fn draw_input(buf: &mut Buffer, rect: Rect) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::muted());
     let inner = block.inner(rect);
     block.render(rect, buf);
-    if inner.width == 0 || inner.height == 0 {
+    if inner.width < 2 || inner.height == 0 {
         return;
     }
+    let placeholder = text::ellipsize(
+        text::LX_INPUT_PLACEHOLDER,
+        usize::from(inner.width.saturating_sub(2)),
+    );
     Paragraph::new(Line::from(vec![
         Span::styled(format!("{} ", text::LX_INPUT_PROMPT), style::accent()),
-        Span::styled(text::LX_INPUT_PLACEHOLDER, style::muted()),
+        Span::styled(placeholder, style::muted()),
     ]))
     .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
 }
 
-/// 品牌区：狐狸在左，字标在狐狸右侧垂直居中；宽度不足时省略字标。
+/// 品牌区：完整狐狸在左，字标在狐狸右侧垂直居中；宽度不足时省略字标。
 fn draw_header(buf: &mut Buffer, x: u16, width: u16, y: u16, phase: u64) {
     draw_art(buf, x, y, phase);
     let wordmark_x = x.saturating_add(FOX_WIDTH).saturating_add(2);
@@ -209,7 +239,7 @@ fn draw_header(buf: &mut Buffer, x: u16, width: u16, y: u16, phase: u64) {
     }
 }
 
-/// 白色占位面板：未来内容区的边界，内部居中占位文案。
+/// 白色占位面板：未来内容区的边界，内部居中占位文案（放不下时只留边框）。
 fn draw_panel(rect: Rect, buf: &mut Buffer) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -217,6 +247,9 @@ fn draw_panel(rect: Rect, buf: &mut Buffer) {
     let inner = block.inner(rect);
     block.render(rect, buf);
     if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    if usize::from(inner.width) < text::LX_CONTENT_PLACEHOLDER.chars().count() {
         return;
     }
     let y = inner.y + inner.height / 2;

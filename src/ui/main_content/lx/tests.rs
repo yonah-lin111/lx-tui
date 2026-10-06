@@ -44,7 +44,7 @@ fn art_layers_are_consistent() {
 fn tail_alternates_every_two_phases_and_ears_twitch_periodically() {
     let phase0 = compose(&FOX, 0);
     let phase2 = compose(&FOX, 2);
-    assert_ne!(phase0[8], phase2[8], "摆尾帧应切换");
+    assert_ne!(phase0[10], phase2[10], "摆尾帧应切换");
     let twitch = compose(&FOX, 10);
     assert_ne!(phase0[0], twitch[0], "抖耳帧应切换");
     assert_eq!(compose(&FOX, 12), compose(&FOX, 0), "24 帧周期回环");
@@ -53,10 +53,10 @@ fn tail_alternates_every_two_phases_and_ears_twitch_periodically() {
 #[test]
 fn blink_closes_eyes_at_expected_phases() {
     let open = compose(&FOX, 0);
-    assert_eq!(open[5][3], 'w');
+    assert_eq!(open[6][5], 'w');
     let blink = compose(&FOX, 6);
-    assert_eq!(blink[5][3], 'k', "眼白行闭合成描边");
-    assert_eq!(blink[6][3], 'p', "瞳孔行还原毛色");
+    assert_eq!(blink[6][5], 'k', "眼白行闭合成描边");
+    assert_eq!(blink[7][5], 'p', "瞳孔行还原毛色");
     assert_eq!(compose(&FOX, 7), blink, "闭眼持续 2 帧");
     assert_eq!(compose(&FOX, 8), open, "之后恢复睁眼");
 }
@@ -110,15 +110,17 @@ fn roomy_page_draws_header_panel_hint_and_input() {
 }
 
 #[test]
-fn medium_page_drops_panel_but_keeps_header_and_input() {
-    let area = Rect::new(0, 0, 60, 12);
+fn header_is_skipped_when_the_fox_does_not_fit() {
+    let area = Rect::new(0, 0, 16, 12);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, 0);
     let text = buffer_text(&buf);
-    assert!(!text.contains("placeholder"), "空间不足时省略占位面板");
-    assert!(text.contains("click [>_] to open terminal"));
-    assert!(text.contains("Ask anything…"));
-    assert!(text.contains('▀') || text.contains('█'), "品牌区仍可见");
+    assert!(
+        !text.contains('▀') && !text.contains('█'),
+        "宽度不足不画残缺狐狸"
+    );
+    assert!(text.contains("placeholder"), "占位面板仍在");
+    assert!(text.contains("> Ask"), "输入框占位仍可见（按宽度截断）");
 }
 
 #[test]
