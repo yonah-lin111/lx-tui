@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{
-    Event as TerminalEvent, EventStream, KeyEventKind, MouseButton, MouseEventKind,
+    Event as TerminalEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -21,6 +22,7 @@ use crate::config::Config;
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
 use crate::pty::{PtyEvent, PtySession};
+use crate::terminal::WheelRouting;
 use crate::tui::Tui;
 use crate::ui;
 
@@ -346,6 +348,7 @@ fn handle_terminal_event(
                 Routed::Pane(bytes) => {
                     let id = state.active_tab().layout.focus();
                     write_to_pane(sessions, id, &bytes);
+                    update::reset_pane_scroll(state, id);
                     *dirty = true;
                 }
             }
@@ -366,6 +369,7 @@ fn handle_terminal_event(
                 text.into_bytes()
             };
             write_to_pane(sessions, id, &payload);
+            update::reset_pane_scroll(state, id);
             *dirty = true;
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
@@ -641,7 +645,10 @@ fn handle_terminal_event(
                 update::clear_selection(state);
                 *dirty = true;
             }
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {
                 if state.overlay.is_some() {
                     return;
                 }
@@ -652,28 +659,26 @@ fn handle_terminal_event(
                 {
                     return;
                 }
-                if let Some((pane, _)) = pane_at(rects, mouse.column, mouse.row)
-                    && pane == state.prompt.id()
-                {
-                    update::clear_selection(state);
-                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
-                    update::scroll_prompt(state, direction);
-                    *dirty = true;
-                } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
-                    && let Some(rows) = ui::workspace_list_rows(view, state)
-                {
-                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                        -1
-                    } else {
-                        1
-                    };
-                    if update::scroll_workspace_list(state, direction, rows) {
+                if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+                    if pane == state.prompt.id() {
+                        update::clear_selection(state);
+                        if let Some(direction) = vertical_wheel_direction(mouse.kind) {
+                            update::scroll_prompt(state, direction);
+                            *dirty = true;
+                        }
+                    } else if state
+                        .pane_anywhere(pane)
+                        .is_some_and(|target| target.kind == PaneKind::Terminal)
+                        && handle_pane_wheel(state, sessions, pane, inner, &mouse)
+                    {
                         *dirty = true;
                     }
+                } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
+                    && let Some(rows) = ui::workspace_list_rows(view, state)
+                    && let Some(direction) = vertical_wheel_direction(mouse.kind)
+                    && update::scroll_workspace_list(state, direction, rows)
+                {
+                    *dirty = true;
                 }
             }
             MouseEventKind::Moved => {
@@ -717,6 +722,68 @@ fn handle_terminal_event(
         },
         TerminalEvent::Resize(_, _) => *dirty = true,
         _ => {}
+    }
+}
+
+/// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
+fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
+    match kind {
+        MouseEventKind::ScrollUp => Some(-1),
+        MouseEventKind::ScrollDown => Some(1),
+        _ => None,
+    }
+}
+
+/// 按终端模式把滚轮交给窗格：转发鼠标上报、备用屏方向键或本地回滚。
+///
+/// 前两种由应用接管滚动，本地视口吸回底部；返回事件是否被消费（需要重绘）。
+fn handle_pane_wheel(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    pane: PaneId,
+    inner: Rect,
+    mouse: &MouseEvent,
+) -> bool {
+    let Some((routing, mode)) = state
+        .pane_anywhere(pane)
+        .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
+    else {
+        return false;
+    };
+    match routing {
+        WheelRouting::HostScroll => {
+            let Some(direction) = vertical_wheel_direction(mouse.kind) else {
+                return false;
+            };
+            update::scroll_pane(state, pane, direction)
+        }
+        WheelRouting::MouseReport => {
+            let column = mouse.column.saturating_sub(inner.x);
+            let row = mouse.row.saturating_sub(inner.y);
+            let Some(bytes) =
+                input::encode::encode_mouse_wheel(mouse.kind, column, row, mouse.modifiers, mode)
+            else {
+                return false;
+            };
+            update::reset_pane_scroll(state, pane);
+            write_to_pane(sessions, pane, &bytes);
+            true
+        }
+        WheelRouting::AlternateScroll => {
+            let code = match mouse.kind {
+                MouseEventKind::ScrollUp => KeyCode::Up,
+                MouseEventKind::ScrollDown => KeyCode::Down,
+                _ => return false,
+            };
+            let Some(bytes) =
+                input::encode::encode_key(KeyEvent::new(code, KeyModifiers::NONE), mode)
+            else {
+                return false;
+            };
+            update::reset_pane_scroll(state, pane);
+            write_to_pane(sessions, pane, &bytes);
+            true
+        }
     }
 }
 

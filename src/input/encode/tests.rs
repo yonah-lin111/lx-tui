@@ -89,6 +89,88 @@ fn super_combos_are_not_encoded() {
 }
 
 #[test]
+fn encodes_sgr_wheel_with_modifiers_and_one_based_coords() {
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::SGR_MOUSE
+        ),
+        Some(b"\x1b[<64;1;1M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollDown,
+            4,
+            6,
+            KeyModifiers::SHIFT,
+            TermMode::SGR_MOUSE
+        ),
+        Some(b"\x1b[<69;5;7M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollLeft,
+            2,
+            3,
+            KeyModifiers::CONTROL,
+            TermMode::SGR_MOUSE
+        ),
+        Some(b"\x1b[<82;3;4M".to_vec())
+    );
+}
+
+#[test]
+fn encodes_legacy_wheel_bytes() {
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        Some(vec![0x1b, b'[', b'M', 96, 33, 33])
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollDown,
+            4,
+            6,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        Some(vec![0x1b, b'[', b'M', 97, 37, 39])
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        None
+    );
+}
+
+#[test]
+fn encodes_utf8_wheel_codepoints() {
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollDown,
+            4,
+            6,
+            KeyModifiers::NONE,
+            TermMode::UTF8_MOUSE
+        ),
+        Some(b"\x1b[M\x61\x25\x27".to_vec())
+    );
+}
+
+#[test]
 fn encodes_special_keys() {
     assert_eq!(
         encode_key(key(KeyCode::Enter), TermMode::empty()),

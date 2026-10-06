@@ -4,11 +4,13 @@ use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::event::{Event as EmulatorEvent, EventListener};
-use alacritty_terminal::grid::{Dimensions, Grid};
-use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::grid::{Dimensions, Grid, Scroll};
+use alacritty_terminal::index::{Column, Point, Side};
 use alacritty_terminal::selection::{Selection as TermSelection, SelectionType};
 use alacritty_terminal::term::cell::Cell;
-use alacritty_terminal::term::{Config as EmulatorConfig, RenderableContent, Term, TermMode};
+use alacritty_terminal::term::{
+    Config as EmulatorConfig, RenderableContent, Term, TermMode, viewport_to_point,
+};
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
 
 /// 回滚缓冲行数。
@@ -48,6 +50,17 @@ impl EventListener for Listener {
             .unwrap_or_else(PoisonError::into_inner)
             .push(event);
     }
+}
+
+/// 滚轮去向：由终端当前模式决定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelRouting {
+    /// 应用启用了鼠标上报（1000/1002/1003）：滚轮编码后写入 PTY。
+    MouseReport,
+    /// 备用屏且启用 alternate scroll（DECSET 1007）：滚轮转成方向键写入 PTY。
+    AlternateScroll,
+    /// 默认：滚动本地回滚缓冲。
+    HostScroll,
 }
 
 /// 单个窗格的终端仿真状态。
@@ -132,6 +145,40 @@ impl Terminal {
         self.title.as_deref()
     }
 
+    /// 当前滚轮去向：鼠标上报优先，其次备用屏 alternate scroll，最后本地回滚。
+    pub fn wheel_routing(&self) -> WheelRouting {
+        let mode = self.mode();
+        if mode.intersects(TermMode::MOUSE_MODE) {
+            WheelRouting::MouseReport
+        } else if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
+            WheelRouting::AlternateScroll
+        } else {
+            WheelRouting::HostScroll
+        }
+    }
+
+    /// 滚轮滚动回滚视口；`delta` 为正查看更旧内容（视口上移），返回视口是否移动。
+    pub fn scroll_display(&mut self, delta: i32) -> bool {
+        if delta == 0 {
+            return false;
+        }
+        let before = self.display_offset();
+        self.term.scroll_display(Scroll::Delta(delta));
+        self.display_offset() != before
+    }
+
+    /// 回滚视口回到底部（最新输出）；返回视口是否移动。
+    pub fn scroll_to_bottom(&mut self) -> bool {
+        let before = self.display_offset();
+        self.term.scroll_display(Scroll::Bottom);
+        self.display_offset() != before
+    }
+
+    /// 回滚视口距底部的行数（0 表示位于底部）。
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
     /// 渲染视图内容（只读）。
     pub fn renderable_content(&self) -> RenderableContent<'_> {
         self.term.renderable_content()
@@ -156,14 +203,21 @@ impl Terminal {
     }
 
     /// 提取视口范围内（含端点）的文本；宽字符与换行交给仿真器处理。
+    ///
+    /// 入参为视口 0 基行列；滚回历史后需换算成网格行，否则会复制到错误内容。
     pub fn text_in_range(&mut self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
         let (first, last) = if start <= end {
             (start, end)
         } else {
             (end, start)
         };
-        let point =
-            |(row, col): (u16, u16)| Point::new(Line(i32::from(row)), Column(usize::from(col)));
+        let offset = self.display_offset();
+        let point = |(row, col): (u16, u16)| {
+            viewport_to_point(
+                offset,
+                Point::new(usize::from(row), Column(usize::from(col))),
+            )
+        };
         let mut selection = TermSelection::new(SelectionType::Simple, point(first), Side::Left);
         selection.update(point(last), Side::Right);
         self.term.selection = Some(selection);

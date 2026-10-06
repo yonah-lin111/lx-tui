@@ -1,6 +1,6 @@
 //! 单元测试；仅测试构建编译。
 
-use crossterm::event::{KeyModifiers, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 use super::*;
 
@@ -328,6 +328,155 @@ fn mouse_right_click_tab_opens_tab_menu() {
         }
     );
     assert!(dirty);
+}
+
+/// 目标窗格内容区矩形。
+fn pane_inner(geo: &Geometry, pane: PaneId) -> Rect {
+    let (_, rect) = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .expect("pane rect");
+    layout::pane_inner_rect(*rect)
+}
+
+/// 给窗格塞满回滚历史，并滚回顶部 5 行。
+fn scrolled_pane(state: &mut AppState, pane: PaneId) {
+    let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+    for i in 0..40 {
+        target.terminal.feed(format!("line {i:02}\r\n").as_bytes());
+    }
+    assert!(target.terminal.scroll_display(5));
+    assert!(target.terminal.display_offset() > 0);
+}
+
+#[test]
+fn mouse_wheel_over_terminal_pane_scrolls_backlog() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    scrolled_pane(&mut state, pane);
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, inner.x, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    let offset = target.terminal.display_offset();
+    assert!(offset > 0, "wheel up scrolls into backlog");
+    assert!(dirty);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, inner.x, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert!(target.terminal.display_offset() < offset);
+}
+
+#[test]
+fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    scrolled_pane(&mut state, pane);
+    let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+    target.terminal.feed(b"\x1b[?1000h\x1b[?1006h");
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, inner.x, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), 0);
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_wheel_on_alternate_screen_consumes_without_local_scroll() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+    target.terminal.feed(b"\x1b[?1049h\x1b[?1007h");
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, inner.x, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), 0);
+    assert!(dirty);
+}
+
+#[test]
+fn key_and_paste_snap_scrolled_pane_back_to_bottom() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    scrolled_pane(&mut state, pane);
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(
+        target.terminal.display_offset(),
+        0,
+        "typing returns to bottom"
+    );
+
+    scrolled_pane(&mut state, pane);
+    handle_terminal_event(
+        TerminalEvent::Paste("x".to_string()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(
+        target.terminal.display_offset(),
+        0,
+        "paste returns to bottom"
+    );
 }
 
 #[test]

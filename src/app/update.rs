@@ -110,6 +110,26 @@ pub fn scroll_prompt(state: &mut AppState, direction: isize) {
     state.prompt.scroll_by(direction.signum() * WHEEL_LINES);
 }
 
+/// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。
+pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if pane.kind != PaneKind::Terminal {
+        return false;
+    }
+    // 仿真器的 delta 正数指向历史（视口上移），与方向的上下语义相反。
+    pane.terminal
+        .scroll_display(-(direction.signum() * WHEEL_LINES) as i32)
+}
+
+/// 键盘或粘贴输入后把窗格视口吸回最新输出；返回视口是否移动。
+pub fn reset_pane_scroll(state: &mut AppState, id: PaneId) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.kind == PaneKind::Terminal && pane.terminal.scroll_to_bottom())
+}
+
 /// 鼠标点击 prompt：把视口单元格映射为光标位置。
 pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
     state.prompt.set_cursor_from_cell(row, col);
