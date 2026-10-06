@@ -699,3 +699,60 @@ fn set_sidebar_hover_reports_changes() {
     assert!(set_sidebar_hover(&mut state, false));
     assert!(!state.sidebar_hover);
 }
+
+#[test]
+fn drag_workspace_reorders_and_follows_active() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    let names: Vec<String> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.clone())
+        .collect();
+
+    switch_workspace(&mut state, 0);
+    begin_workspace_drag(&mut state, 0);
+    assert!(drag_workspace_to(&mut state, 2));
+    assert_eq!(state.workspace_drag, Some(2));
+    assert_eq!(state.active_workspace, 2);
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        vec![names[1].as_str(), names[2].as_str(), names[0].as_str()]
+    );
+    assert!(state.workspaces[2].is_initial);
+
+    end_workspace_drag(&mut state);
+    assert!(state.workspace_drag.is_none());
+}
+
+#[test]
+fn drag_workspace_clamps_and_ignores_noops() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 0);
+    begin_workspace_drag(&mut state, 0);
+    assert!(!drag_workspace_to(&mut state, 0));
+    assert!(drag_workspace_to(&mut state, 99));
+    assert_eq!(state.workspace_drag, Some(1));
+    assert_eq!(state.active_workspace, 1);
+
+    end_workspace_drag(&mut state);
+    assert!(!drag_workspace_to(&mut state, 0));
+}
+
+#[test]
+fn drag_workspace_shifts_other_active_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 1);
+    begin_workspace_drag(&mut state, 0);
+    assert!(drag_workspace_to(&mut state, 2));
+    assert_eq!(state.active_workspace, 0);
+}

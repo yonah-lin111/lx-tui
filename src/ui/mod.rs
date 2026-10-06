@@ -12,6 +12,7 @@ pub mod widgets;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
 
@@ -322,7 +323,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     // agents 分区暂无内容，保持空占位。
 }
 
-/// 工作区列表项：激活项强调色；启动工作区在名字后追加不可移除的 `*` 标记。
+/// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
 ///
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
@@ -332,11 +333,17 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         .iter()
         .enumerate()
         .map(|(index, workspace)| {
-            let item_style = if index == state.active_workspace {
+            let dragging = state.workspace_drag == Some(index);
+            let mut item_style = if index == state.active_workspace {
                 style::accent()
             } else {
                 style::text()
             };
+            let mut marker_style = style::marker();
+            if dragging {
+                item_style = item_style.add_modifier(Modifier::REVERSED);
+                marker_style = marker_style.add_modifier(Modifier::REVERSED);
+            }
             let name_width = if workspace.is_initial {
                 width.saturating_sub(marker_width)
             } else {
@@ -347,10 +354,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
                 item_style,
             )];
             if workspace.is_initial {
-                spans.push(Span::styled(
-                    text::INITIAL_WORKSPACE_MARKER,
-                    style::marker(),
-                ));
+                spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
             }
             ListItem::new(Line::from(spans))
         })
@@ -446,15 +450,8 @@ fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-/// 工作区项行命中：返回被点工作区索引；footer、滚动条列与空行不命中。
-///
-/// 第 N 项渲染在内容区第 `N - workspace_scroll` 行；分区缺失时退回整块内容区。
-pub fn workspace_item_at(
-    view: &layout::ViewLayout,
-    state: &AppState,
-    column: u16,
-    row: u16,
-) -> Option<usize> {
+/// 工作区列表内容区（不含 footer 与滚动条列）；分区缺失时退回侧栏内容区。
+fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     let list = match layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
         Some(sections) => workspace_list_area(sections.workspaces),
         None => {
@@ -467,7 +464,20 @@ pub fn workspace_item_at(
             )
         }
     };
-    if list.width == 0 || list.height == 0 || !list.contains((column, row).into()) {
+    (list.width > 0 && list.height > 0).then_some(list)
+}
+
+/// 工作区项行命中：返回被点工作区索引；footer、滚动条列与空行不命中。
+///
+/// 第 N 项渲染在内容区第 `N - workspace_scroll` 行；分区缺失时退回整块内容区。
+pub fn workspace_item_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let list = workspace_list_rect(view, state)?;
+    if !list.contains((column, row).into()) {
         return None;
     }
     let content_width = match workspace_scrollbar_for(list, state) {
@@ -481,6 +491,23 @@ pub fn workspace_item_at(
         .workspace_scroll
         .saturating_add(usize::from(row - list.y));
     (index < state.workspaces.len()).then_some(index)
+}
+
+/// 拖动排序目标索引：指针行映射到列表行（纵向越界钳到首/末项，横向不限）。
+pub fn workspace_drop_index(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    row: u16,
+) -> Option<usize> {
+    let list = workspace_list_rect(view, state)?;
+    if state.workspaces.is_empty() {
+        return None;
+    }
+    let clamped = row.clamp(list.y, list.bottom().saturating_sub(1));
+    let slot = state
+        .workspace_scroll
+        .saturating_add(usize::from(clamped - list.y));
+    Some(slot.min(state.workspaces.len().saturating_sub(1)))
 }
 
 /// agents 表头：贯穿的横线与左对齐的 ` Agents ` 标题；与折叠按钮重叠时省略标题。

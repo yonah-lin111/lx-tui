@@ -78,6 +78,7 @@ fn demo_starts_without_overlay_or_scroll() {
     assert!(state.overlay.is_none());
     assert_eq!(state.workspace_scroll, 0);
     assert!(state.workspace_scroll_drag.is_none());
+    assert!(state.workspace_drag.is_none());
     assert!(!state.workspaces[0].name_is_manual);
     assert!(state.workspaces[0].cwd.is_some());
     assert!(state.workspaces[0].is_initial);

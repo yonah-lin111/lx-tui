@@ -106,3 +106,62 @@ fn mouse_drag_resizes_prompt() {
     );
     assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
 }
+
+#[test]
+fn mouse_drag_reorders_workspaces() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    crate::app::update::create_workspace(&mut state);
+    crate::app::update::create_workspace(&mut state);
+    let names: Vec<String> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.clone())
+        .collect();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections = crate::ui::layout::sidebar_sections(geo.view.sidebar, false)
+        .expect("sidebar sections are visible");
+    let list_y = sections.workspaces.y;
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), 2, list_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_drag, Some(0));
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Drag(MouseButton::Left), 2, list_y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_drag, Some(2));
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), 2, list_y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.workspace_drag.is_none());
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        vec![names[1].as_str(), names[2].as_str(), names[0].as_str()]
+    );
+    assert_eq!(state.active_workspace, 2);
+}

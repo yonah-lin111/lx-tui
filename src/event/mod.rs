@@ -398,6 +398,7 @@ fn handle_terminal_event(
                 {
                     update::switch_workspace(state, index);
                     ensure_workspace_visible(state, view);
+                    update::begin_workspace_drag(state, index);
                     *dirty = true;
                 } else if ui::add_workspace_button(view, state.agents_collapsed)
                     .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
@@ -482,6 +483,14 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
+                if state.workspace_drag.is_some() {
+                    if let Some(target) = ui::workspace_drop_index(view, state, mouse.row)
+                        && update::drag_workspace_to(state, target)
+                    {
+                        *dirty = true;
+                    }
+                    return;
+                }
                 let Some(selection) = state.selection else {
                     return;
                 };
@@ -506,6 +515,11 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.workspace_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.workspace_drag.is_some() {
+                    update::end_workspace_drag(state);
+                    *dirty = true;
                     return;
                 }
                 if state.resizing_sidebar {

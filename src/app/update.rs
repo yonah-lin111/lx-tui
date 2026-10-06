@@ -521,6 +521,45 @@ pub fn set_workspace_scroll(state: &mut AppState, offset: usize, visible: usize)
     true
 }
 
+/// 开始拖动排序：记录被拖工作区索引；按下时已切换激活。
+pub fn begin_workspace_drag(state: &mut AppState, index: usize) {
+    if index < state.workspaces.len() {
+        state.workspace_drag = Some(index);
+    }
+}
+
+/// 拖动排序：把被拖工作区移动到 `target` 索引并钳制；激活项跟随其新位置；返回是否变化。
+pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
+    let Some(from) = state.workspace_drag else {
+        return false;
+    };
+    let len = state.workspaces.len();
+    if len == 0 || from >= len {
+        return false;
+    }
+    let to = target.min(len - 1);
+    if to == from {
+        return false;
+    }
+    let workspace = state.workspaces.remove(from);
+    state.workspaces.insert(to, workspace);
+    state.workspace_drag = Some(to);
+    let active = state.active_workspace;
+    if active == from {
+        state.active_workspace = to;
+    } else if from < active && active <= to {
+        state.active_workspace -= 1;
+    } else if to <= active && active < from {
+        state.active_workspace += 1;
+    }
+    true
+}
+
+/// 结束拖动排序。
+pub fn end_workspace_drag(state: &mut AppState) {
+    state.workspace_drag = None;
+}
+
 /// 保证当前工作区可见并钳制偏移；列表长度或可见行变化后调用；返回是否变化。
 pub fn ensure_workspace_visible(state: &mut AppState, visible: usize) -> bool {
     let visible = visible.max(1);

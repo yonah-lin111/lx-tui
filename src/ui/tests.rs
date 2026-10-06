@@ -774,3 +774,52 @@ fn sidebar_boundary_hit_uses_runtime_width() {
     assert!(sidebar_boundary_at(&view, 32, view.panes.y));
     assert!(!sidebar_boundary_at(&view, 23, view.panes.y));
 }
+
+#[test]
+fn workspace_drop_index_maps_rows_with_scroll_and_clamps() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    update::create_workspace(&mut state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list_y = sections.workspaces.y;
+    assert_eq!(workspace_drop_index(&view, &state, list_y), Some(0));
+    assert_eq!(workspace_drop_index(&view, &state, list_y + 2), Some(2));
+    assert_eq!(workspace_drop_index(&view, &state, 0), Some(0));
+    assert_eq!(
+        workspace_drop_index(&view, &state, sections.workspaces.bottom()),
+        Some(2)
+    );
+
+    state.workspace_scroll = 1;
+    assert_eq!(workspace_drop_index(&view, &state, list_y), Some(1));
+
+    state.workspaces.clear();
+    assert_eq!(workspace_drop_index(&view, &state, list_y), None);
+}
+
+#[test]
+fn dragged_workspace_item_renders_reversed() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    state.workspace_drag = Some(0);
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    assert!(
+        buffer[(sections.workspaces.x, sections.workspaces.y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert!(
+        !buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+}
