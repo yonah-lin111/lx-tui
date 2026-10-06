@@ -147,6 +147,26 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
 }
 
 #[test]
+fn backspace_deletes_sole_task_marker_without_blank_placeholder() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    for ch in "- [ ] ".chars() {
+        update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
+    }
+    update::apply_editor(&mut state, EditorCommand::Backspace);
+    assert_eq!(state.prompt.text(), "");
+
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
+    let inner = layout::pane_inner_rect(view.prompt);
+    assert!(
+        buffer[(inner.x, inner.y)]
+            .modifier
+            .contains(Modifier::REVERSED)
+    );
+}
+
+#[test]
 fn clicking_terminal_pane_reads_back_focus_and_keeps_editing_target() {
     let mut state = AppState::demo();
     update::focus_prompt(&mut state);

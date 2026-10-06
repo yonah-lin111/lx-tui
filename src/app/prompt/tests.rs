@@ -527,21 +527,171 @@ fn indent_affects_current_logical_line_only() {
 }
 
 #[test]
-fn backspace_replaces_list_marker_with_blanks() {
-    let mut editor = prompt(20, 3);
-    editor.insert_str("- ab");
-    editor.move_left();
-    editor.move_left();
-    editor.backspace();
-    assert_eq!(editor.text(), "  ab");
-    assert_eq!(editor.cursor_cell(), Some((0, 2)));
-    editor.backspace();
-    assert_eq!(editor.text(), " ab");
+fn backspace_deletes_sole_list_marker_entirely() {
+    let mut bullet = prompt(20, 3);
+    bullet.insert_str("- ab");
+    bullet.move_left();
+    bullet.move_left();
+    bullet.backspace();
+    assert_eq!(bullet.text(), "ab");
+    assert_eq!(bullet.cursor_cell(), Some((0, 0)));
+
+    let mut task = prompt(20, 3);
+    task.insert_str("- [ ] ab");
+    task.move_left();
+    task.move_left();
+    task.backspace();
+    assert_eq!(task.text(), "ab");
+    assert_eq!(task.cursor_cell(), Some((0, 0)));
 
     let mut ordered = prompt(20, 3);
     ordered.insert_str("1. ");
     ordered.backspace();
-    assert_eq!(ordered.text(), "   ");
+    assert_eq!(ordered.text(), "");
+    assert_eq!(ordered.cursor_cell(), Some((0, 0)));
+
+    let mut indented = prompt(20, 3);
+    indented.insert_str("  - ");
+    indented.backspace();
+    assert_eq!(indented.text(), "");
+    assert_eq!(indented.cursor_cell(), Some((0, 0)));
+}
+
+#[test]
+fn backspace_removes_extra_spaces_after_marker_first() {
+    let mut bullet = prompt(20, 3);
+    bullet.insert_str("-  ab");
+    bullet.move_left();
+    bullet.move_left();
+    bullet.backspace();
+    assert_eq!(bullet.text(), "- ab");
+    assert_eq!(bullet.cursor_cell(), Some((0, 2)));
+    bullet.backspace();
+    assert_eq!(bullet.text(), "ab");
+    assert_eq!(bullet.cursor_cell(), Some((0, 0)));
+
+    let mut task = prompt(20, 3);
+    task.insert_str("- [ ]  ");
+    task.backspace();
+    assert_eq!(task.text(), "- [ ] ");
+    assert_eq!(task.cursor_cell(), Some((0, 6)));
+
+    let mut ordered = prompt(20, 3);
+    ordered.insert_str("1.   ab");
+    ordered.move_left();
+    ordered.move_left();
+    ordered.backspace();
+    assert_eq!(ordered.text(), "1. ab");
+    assert_eq!(ordered.cursor_cell(), Some((0, 3)));
+}
+
+#[test]
+fn backspace_keeps_blank_placeholder_after_previous_item() {
+    let mut bullet = prompt(20, 4);
+    bullet.insert_str("- a\n- ab");
+    bullet.move_left();
+    bullet.move_left();
+    bullet.backspace();
+    assert_eq!(bullet.text(), "- a\n  ab");
+    assert_eq!(bullet.cursor_cell(), Some((1, 2)));
+
+    let mut task = prompt(20, 4);
+    task.insert_str("- a\n- [ ] ");
+    task.backspace();
+    assert_eq!(task.text(), "- a\n      ");
+    assert_eq!(task.cursor_cell(), Some((1, 6)));
+
+    let mut ordered = prompt(20, 4);
+    ordered.insert_str("1. a\n2. ab");
+    ordered.move_left();
+    ordered.move_left();
+    ordered.backspace();
+    assert_eq!(ordered.text(), "1. a\n   ab");
+    assert_eq!(ordered.cursor_cell(), Some((1, 3)));
+}
+
+#[test]
+fn backspace_on_nested_first_item_keeps_indent() {
+    let mut bullet = prompt(20, 4);
+    bullet.insert_str("- a\n  - ab");
+    bullet.move_left();
+    bullet.move_left();
+    bullet.backspace();
+    assert_eq!(bullet.text(), "- a\n  ab");
+    assert_eq!(bullet.cursor_cell(), Some((1, 2)));
+
+    let mut task = prompt(20, 4);
+    task.insert_str("- a\n  - [ ] ");
+    task.backspace();
+    assert_eq!(task.text(), "- a\n  ");
+    assert_eq!(task.cursor_cell(), Some((1, 2)));
+}
+
+#[test]
+fn backspace_on_nested_sibling_keeps_indent_and_blanks() {
+    let mut editor = prompt(20, 5);
+    editor.insert_str("- a\n  - b\n  - ab");
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), "- a\n  - b\n    ab");
+    assert_eq!(editor.cursor_cell(), Some((2, 4)));
+}
+
+#[test]
+fn backspace_dedenting_after_nested_list_keeps_blanks() {
+    let mut editor = prompt(20, 5);
+    editor.insert_str("- a\n  - b\n- ab");
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), "- a\n  - b\n  ab");
+    assert_eq!(editor.cursor_cell(), Some((2, 2)));
+}
+
+#[test]
+fn backspace_after_indented_continuation_still_sees_previous_item() {
+    let mut editor = prompt(20, 5);
+    editor.insert_str("- a\n  continued\n- ab");
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), "- a\n  continued\n  ab");
+    assert_eq!(editor.cursor_cell(), Some((2, 2)));
+}
+
+#[test]
+fn backspace_after_blank_line_treats_item_as_new_list() {
+    let mut editor = prompt(20, 5);
+    editor.insert_str("- a\n\n- ab");
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), "- a\n\nab");
+    assert_eq!(editor.cursor_cell(), Some((2, 0)));
+}
+
+#[test]
+fn backspace_on_different_bullet_starts_new_list() {
+    let mut editor = prompt(20, 4);
+    editor.insert_str("- a\n+ ab");
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), "- a\nab");
+    assert_eq!(editor.cursor_cell(), Some((1, 0)));
+}
+
+#[test]
+fn backspace_inside_marker_deletes_plain_character() {
+    let mut editor = prompt(20, 3);
+    editor.insert_str("- ab");
+    editor.move_left();
+    editor.move_left();
+    editor.move_left();
+    editor.backspace();
+    assert_eq!(editor.text(), " ab");
+    assert_eq!(editor.cursor_cell(), Some((0, 0)));
 }
 
 #[test]
