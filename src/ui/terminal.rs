@@ -7,10 +7,9 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::app::selection::Selection;
 use crate::terminal::Terminal;
 
-/// 渲染终端内容；`selection` 命中的单元格反显高亮。
+/// 渲染终端内容；仿真器选区命中的单元格反显高亮。
 ///
 /// 返回聚焦且光标可见时仿真光标在 `area` 内的坐标；调用方据此同步硬件光标，
 /// 让 IME 预输入与候选窗跟随终端光标（显示与闪烁由终端原生光标承担）。
@@ -19,7 +18,6 @@ pub fn render(
     buf: &mut Buffer,
     terminal: &Terminal,
     focused: bool,
-    selection: Option<&Selection>,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
@@ -57,7 +55,10 @@ pub fn render(
                 target.set_char(cell.c);
             }
             let mut style = cell_style(cell);
-            if selection.is_some_and(|selection| selection.contains(row as u16, col)) {
+            if content
+                .selection
+                .is_some_and(|selection| selection.contains(indexed.point))
+            {
                 style = style.add_modifier(Modifier::REVERSED);
             }
             target.set_style(style);

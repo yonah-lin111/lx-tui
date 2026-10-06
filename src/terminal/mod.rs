@@ -202,28 +202,44 @@ impl Terminal {
         Some((row as usize, content.cursor.point.column.0))
     }
 
-    /// 提取视口范围内（含端点）的文本；宽字符与换行交给仿真器处理。
+    /// 开始一次简单选区；入参为视口 0 基行列。
     ///
-    /// 入参为视口 0 基行列；滚回历史后需换算成网格行，否则会复制到错误内容。
-    pub fn text_in_range(&mut self, start: (u16, u16), end: (u16, u16)) -> Option<String> {
-        let (first, last) = if start <= end {
-            (start, end)
-        } else {
-            (end, start)
-        };
-        let offset = self.display_offset();
-        let point = |(row, col): (u16, u16)| {
-            viewport_to_point(
-                offset,
-                Point::new(usize::from(row), Column(usize::from(col))),
-            )
-        };
-        let mut selection = TermSelection::new(SelectionType::Simple, point(first), Side::Left);
-        selection.update(point(last), Side::Right);
-        self.term.selection = Some(selection);
+    /// 选区由仿真器按内容坐标持有：输出滚动时由其随内容旋转，滚回历史不改变锚点。
+    pub fn start_selection(&mut self, row: u16, col: u16) {
+        let point = self.viewport_point(row, col);
+        self.term.selection = Some(TermSelection::new(SelectionType::Simple, point, Side::Left));
+    }
+
+    /// 更新选区终点（视口 0 基行列）；无选区时忽略。
+    ///
+    /// 终点与锚点的先后方向决定端点归属；`include_all` 保证两个端点单元格都入选，
+    /// 与反向拖拽时"所见即所得"一致。
+    pub fn update_selection(&mut self, row: u16, col: u16) {
+        let point = self.viewport_point(row, col);
+        if let Some(selection) = self.term.selection.as_mut() {
+            selection.update(point, Side::Right);
+            selection.include_all();
+        }
+    }
+
+    /// 提取并清空选区文本；宽字符与换行交给仿真器处理。
+    pub fn take_selection_text(&mut self) -> Option<String> {
         let text = self.term.selection_to_string();
         self.term.selection = None;
         text
+    }
+
+    /// 清空选区。
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// 视口 0 基行列转换为网格点（计入回滚偏移）。
+    fn viewport_point(&self, row: u16, col: u16) -> Point {
+        viewport_to_point(
+            self.display_offset(),
+            Point::new(usize::from(row), Column(usize::from(col))),
+        )
     }
 }
 

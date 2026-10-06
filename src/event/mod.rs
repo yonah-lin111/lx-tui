@@ -485,7 +485,7 @@ fn handle_terminal_event(
                         Some(PaneKind::Terminal)
                     ) {
                         update::focus_pane(state, pane);
-                        update::begin_selection(state, pane, row, col);
+                        update::begin_terminal_selection(state, pane, row, col);
                         *dirty = true;
                     } else {
                         update::clear_selection(state);
@@ -574,10 +574,14 @@ fn handle_terminal_event(
                     }
                     return;
                 }
-                let Some(selection) = state.selection else {
+                // 终端拖拽选区：把终点更新到鼠标位置的内容；prompt 选区同时移动编辑器光标。
+                let pane = if let Some(pane) = state.terminal_selection {
+                    pane
+                } else if let Some(selection) = state.selection {
+                    selection.pane()
+                } else {
                     return;
                 };
-                let pane = selection.pane();
                 let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
                     return;
                 };
@@ -587,7 +591,11 @@ fn handle_terminal_event(
                 }
                 let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
                 let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
-                update::drag_selection(state, pane, row, col);
+                if state.terminal_selection == Some(pane) {
+                    update::drag_terminal_selection(state, pane, row, col);
+                } else {
+                    update::drag_selection(state, pane, row, col);
+                }
                 if pane == state.prompt.id() {
                     update::place_prompt_cursor(state, row, col);
                 }
@@ -626,19 +634,25 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if let Some(text) = update::finish_selection(state) {
-                    let anchor = state.selection.map(|selection| selection.pane());
+                if let Some(pane) = state.terminal_selection
+                    && let Some(text) = update::finish_terminal_selection(state, pane)
+                {
                     let now = Instant::now();
                     if crate::platform::write_clipboard(&text) {
                         update::show_toast(
                             state,
-                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now),
+                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now),
                         );
                     } else {
                         tracing::warn!("clipboard write failed");
                         update::show_toast(
                             state,
-                            Toast::new(ToastKind::Error, ui::text::TOAST_COPY_FAILED, anchor, now),
+                            Toast::new(
+                                ToastKind::Error,
+                                ui::text::TOAST_COPY_FAILED,
+                                Some(pane),
+                                now,
+                            ),
                         );
                     }
                 }
@@ -652,11 +666,21 @@ fn handle_terminal_event(
                 if state.overlay.is_some() {
                     return;
                 }
-                if state.resizing_prompt
-                    || state
-                        .selection
-                        .is_some_and(|selection| selection.is_dragging())
+                if state.resizing_prompt {
+                    return;
+                }
+                // prompt 拖拽选区期间吞掉滚轮（设计约束：不滚动）。
+                if state
+                    .selection
+                    .is_some_and(|selection| selection.is_dragging())
                 {
+                    return;
+                }
+                // 终端拖拽选区优先于鼠标上报：滚动选区所在窗格并延伸选区。
+                if let Some(pane) = state.terminal_selection
+                    && scroll_selection_wheel(state, pane, rects, &mouse)
+                {
+                    *dirty = true;
                     return;
                 }
                 if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
@@ -732,6 +756,32 @@ fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
         MouseEventKind::ScrollDown => Some(1),
         _ => None,
     }
+}
+
+/// 拖拽选择中滚轮：滚动选区所在窗格，并把选区光标延伸到鼠标位置（钳在窗格内）。
+///
+/// 纵向滚轮消费事件（对齐 herdr：选区进行中优先于鼠标上报）；横向返回 false 交回常规路径。
+fn scroll_selection_wheel(
+    state: &mut AppState,
+    pane: PaneId,
+    rects: &[(PaneId, Rect)],
+    mouse: &MouseEvent,
+) -> bool {
+    let Some(direction) = vertical_wheel_direction(mouse.kind) else {
+        return false;
+    };
+    let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+        return true;
+    };
+    let inner = layout::pane_inner_rect(*rect);
+    if inner.width == 0 || inner.height == 0 {
+        return true;
+    }
+    update::scroll_pane(state, pane, direction);
+    let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+    let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+    update::drag_terminal_selection(state, pane, row, col);
+    true
 }
 
 /// 按终端模式把滚轮交给窗格：转发鼠标上报、备用屏方向键或本地回滚。

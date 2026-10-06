@@ -176,28 +176,31 @@ fn feed_and_exit_mark_pane() {
 }
 
 #[test]
-fn selection_finish_extracts_terminal_text() {
+fn terminal_selection_finish_extracts_text() {
     let mut state = AppState::demo();
     create_tab(&mut state);
     let logs = state.workspaces[0].tabs[1].layout.pane_ids()[0];
     feed_pane(&mut state, logs, b"hello");
-    begin_selection(&mut state, logs, 0, 0);
-    drag_selection(&mut state, logs, 0, 4);
-    assert_eq!(finish_selection(&mut state).as_deref(), Some("hello"));
-    assert!(state.selection.is_some());
+    begin_terminal_selection(&mut state, logs, 0, 0);
+    drag_terminal_selection(&mut state, logs, 0, 4);
+    assert_eq!(
+        finish_terminal_selection(&mut state, logs).as_deref(),
+        Some("hello")
+    );
+    assert!(state.terminal_selection.is_none());
 }
 
 #[test]
-fn selection_ignores_non_terminal_pane() {
+fn terminal_selection_ignores_non_terminal_pane() {
     let mut state = AppState::demo();
     let focus = state.active_tab().layout.focus();
     if let Some(pane) = state.active_tab_mut().pane_mut(focus) {
         pane.kind = PaneKind::Placeholder;
     }
-    begin_selection(&mut state, focus, 0, 0);
-    drag_selection(&mut state, focus, 0, 3);
-    assert_eq!(finish_selection(&mut state), None);
-    assert!(state.selection.is_some());
+    begin_terminal_selection(&mut state, focus, 0, 0);
+    drag_terminal_selection(&mut state, focus, 0, 3);
+    assert!(state.terminal_selection.is_none());
+    assert_eq!(finish_terminal_selection(&mut state, focus), None);
 }
 
 #[test]
@@ -208,7 +211,7 @@ fn selection_extracts_prompt_text() {
     apply_editor(&mut state, EditorCommand::InsertText("Drag".into()));
     begin_selection(&mut state, prompt, 0, 0);
     drag_selection(&mut state, prompt, 0, 3);
-    assert_eq!(finish_selection(&mut state).as_deref(), Some("Drag"));
+    assert_eq!(prompt_selection_text(&state).as_deref(), Some("Drag"));
 }
 
 #[test]
@@ -217,7 +220,7 @@ fn empty_prompt_selection_yields_nothing() {
     let prompt = state.prompt.id();
     begin_selection(&mut state, prompt, 0, 0);
     drag_selection(&mut state, prompt, 0, 3);
-    assert_eq!(finish_selection(&mut state), None);
+    assert_eq!(prompt_selection_text(&state), None);
 }
 
 #[test]
@@ -304,10 +307,10 @@ fn selection_drag_ignores_other_pane() {
     let mut state = AppState::demo();
     create_tab(&mut state);
     let focus = state.workspaces[0].tabs[0].layout.focus();
-    let logs = state.workspaces[0].tabs[1].layout.pane_ids()[0];
-    begin_selection(&mut state, logs, 0, 0);
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
     drag_selection(&mut state, focus, 2, 2);
-    assert_eq!(finish_selection(&mut state), None);
+    assert_eq!(prompt_selection_text(&state), None);
 }
 
 #[test]

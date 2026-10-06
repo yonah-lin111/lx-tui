@@ -35,7 +35,10 @@ pub struct AppState {
     /// 侧栏分割线是否悬停。
     pub sidebar_hover: bool,
     pub toast: Option<Toast>,
+    /// prompt 等编辑器的视口选区。
     pub selection: Option<Selection>,
+    /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
+    pub terminal_selection: Option<PaneId>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -243,6 +246,7 @@ impl AppState {
             sidebar_hover: false,
             toast: None,
             selection: None,
+            terminal_selection: None,
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,
@@ -301,11 +305,6 @@ impl AppState {
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
             .find_map(|tab| tab.pane(id))
-    }
-
-    /// 指定窗格上的选区范围（左上 -> 右下），供渲染高亮使用。
-    pub fn selection_range(&self, pane: PaneId) -> Option<((u16, u16), (u16, u16))> {
-        self.selection_for(pane).and_then(Selection::range)
     }
 
     /// 指定窗格上的选区。

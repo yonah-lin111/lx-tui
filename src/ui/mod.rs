@@ -592,13 +592,9 @@ fn render_panes(
         }
         match pane.kind {
             PaneKind::Terminal => {
-                if let Some((row, col)) = terminal::render(
-                    inner,
-                    frame.buffer_mut(),
-                    &pane.terminal,
-                    focused,
-                    state.selection_for(*id),
-                ) {
+                if let Some((row, col)) =
+                    terminal::render(inner, frame.buffer_mut(), &pane.terminal, focused)
+                {
                     cursor = Some((inner.x + col, inner.y + row));
                 }
             }

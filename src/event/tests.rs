@@ -387,6 +387,57 @@ fn mouse_wheel_over_terminal_pane_scrolls_backlog() {
 }
 
 #[test]
+fn mouse_wheel_extends_in_progress_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+    for i in 0..40 {
+        target.terminal.feed(format!("line {i:02}\r\n").as_bytes());
+    }
+    // 鼠标上报开启时选区滚动仍优先，不转发给应用。
+    target.terminal.feed(b"\x1b[?1000h\x1b[?1006h");
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 2,
+            inner.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.terminal_selection, Some(pane));
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollUp, inner.x + 2, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), 3);
+    let content = target.terminal.renderable_content();
+    let range = content.selection.expect("selection range");
+    // 锚点钉在网格行 0（鼠标按下的内容），终点随视口滚到网格行 -3。
+    assert_eq!(range.start.line.0, -3);
+    assert_eq!(range.end.line.0, 0);
+    assert_eq!(range.start.column.0, 2);
+    assert_eq!(range.end.column.0, 2);
+    assert!(dirty);
+}
+
+#[test]
 fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
     let config = Config::default();
     let mut state = AppState::demo();

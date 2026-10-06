@@ -27,7 +27,7 @@ pub fn apply(action: Action, state: &mut AppState) {
             state.prompt_collapsed = !state.prompt_collapsed;
             if state.prompt_collapsed {
                 state.prompt_focused = false;
-                state.selection = None;
+                clear_selection(state);
                 state.prompt.clear_panel();
             }
         }
@@ -57,7 +57,7 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
             }
             _ => false,
         };
-        state.selection = None;
+        clear_selection(state);
         if replaced {
             return;
         }
@@ -155,7 +155,7 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
         if *id == state.prompt.id() {
             let (cols, rows) = layout::prompt_inner_size(*rect);
             if state.prompt.size() != (cols, rows) {
-                state.selection = None;
+                clear_selection(state);
             }
             state.prompt.resize(cols, rows);
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
@@ -192,13 +192,14 @@ pub fn update_pane_cwd(state: &mut AppState, id: PaneId, label: String) -> bool 
     true
 }
 
-/// 在区域内容区开始一次文本选择；与右栏拖拽互斥。
+/// 在 prompt 开始一次文本选择；与右栏拖拽、终端选区互斥。
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.resizing_prompt = false;
+    clear_terminal_selection(state);
     state.selection = Some(Selection::begin(pane, row, col));
 }
 
-/// 扩展当前选区；窗格不一致时忽略。
+/// 扩展当前 prompt 选区；窗格不一致时忽略。
 pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     if let Some(selection) = state.selection.as_mut()
         && selection.pane() == pane
@@ -207,9 +208,56 @@ pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     }
 }
 
-/// 清除选区。
+/// 在终端窗格开始拖拽选择；选区存于仿真器，随输出滚动钉在内容上。
+pub fn begin_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
+    state.selection = None;
+    clear_terminal_selection(state);
+    let started = state.pane_mut_anywhere(pane).is_some_and(|target| {
+        if target.kind != PaneKind::Terminal {
+            return false;
+        }
+        target.terminal.start_selection(row, col);
+        true
+    });
+    state.terminal_selection = started.then_some(pane);
+}
+
+/// 扩展终端选区到新的视口坐标；目标窗格不一致时忽略。
+pub fn drag_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
+    if state.terminal_selection != Some(pane) {
+        return;
+    }
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.terminal.update_selection(row, col);
+    }
+}
+
+/// 结束终端选区并提取文本；空选区返回 None。
+pub fn finish_terminal_selection(state: &mut AppState, pane: PaneId) -> Option<String> {
+    state.terminal_selection = None;
+    let target = state.pane_mut_anywhere(pane)?;
+    if target.kind != PaneKind::Terminal {
+        return None;
+    }
+    target
+        .terminal
+        .take_selection_text()
+        .filter(|text| !text.is_empty())
+}
+
+/// 放弃进行中的终端选区（清空仿真器高亮）。
+pub fn clear_terminal_selection(state: &mut AppState) {
+    if let Some(pane) = state.terminal_selection.take()
+        && let Some(target) = state.pane_mut_anywhere(pane)
+    {
+        target.terminal.clear_selection();
+    }
+}
+
+/// 清除 prompt 与终端选区。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
+    clear_terminal_selection(state);
 }
 
 /// 松开鼠标：结束拖动；空选区（未拖动）直接清除，非空选区保留供复制或删除。
@@ -229,43 +277,28 @@ pub fn end_selection_drag(state: &mut AppState) {
 
 /// prompt 选区文本（保留选区，供 Ctrl/Cmd+C 复制）；空选区返回 None。
 pub fn prompt_selection_text(state: &AppState) -> Option<String> {
+    let (start, end) = prompt_selection_range(state)?;
+    state.prompt.selection_text(start, end)
+}
+
+/// prompt 选区对应的视口行列范围；选区不在 prompt 或为空时返回 None。
+fn prompt_selection_range(state: &AppState) -> Option<((u16, u16), (u16, u16))> {
     let selection = state.selection?;
     if selection.pane() != state.prompt.id() {
         return None;
     }
-    let (start, end) = selection.range()?;
-    state.prompt.selection_text(start, end)
+    selection.range()
 }
 
 /// prompt 选区对应的字节范围；选区不在 prompt 或为空时返回 None。
 fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)> {
-    let selection = state.selection?;
-    if selection.pane() != state.prompt.id() {
-        return None;
-    }
-    let (start, end) = selection.range()?;
+    let (start, end) = prompt_selection_range(state)?;
     state.prompt.selection_bounds(start, end)
-}
-
-/// 结束选区并提取文本（选区保留高亮）；未拖动、prompt 空选区或空占位窗格返回 None。
-pub fn finish_selection(state: &mut AppState) -> Option<String> {
-    let selection = state.selection?;
-    let (start, end) = selection.range()?;
-    if selection.pane() == state.prompt.id() {
-        return state.prompt.selection_text(start, end);
-    }
-    let pane = state.pane_mut_anywhere(selection.pane())?;
-    if pane.kind != PaneKind::Terminal {
-        return None;
-    }
-    pane.terminal
-        .text_in_range(start, end)
-        .filter(|text| !text.is_empty())
 }
 
 /// 在 prompt 右栏分割线上开始拖拽；清除已有选区。
 pub fn begin_prompt_resize(state: &mut AppState) {
-    state.selection = None;
+    clear_selection(state);
     state.resizing_prompt = true;
 }
 
@@ -283,7 +316,7 @@ pub fn end_prompt_resize(state: &mut AppState) {
 
 /// 在侧栏分割线上开始拖拽；清除已有选区。
 pub fn begin_sidebar_resize(state: &mut AppState) {
-    state.selection = None;
+    clear_selection(state);
     state.resizing_sidebar = true;
 }
 
@@ -368,7 +401,7 @@ pub fn create_workspace(state: &mut AppState) {
     });
     state.workspaces.push(Workspace::single_terminal(name, cwd));
     state.active_workspace = state.workspaces.len().saturating_sub(1);
-    state.selection = None;
+    clear_selection(state);
     state.prompt_focused = false;
 }
 
@@ -402,7 +435,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
         return;
     }
     state.active_workspace = index;
-    state.selection = None;
+    clear_selection(state);
     state.prompt_focused = false;
 }
 
@@ -455,7 +488,7 @@ pub fn create_tab(state: &mut AppState) {
     let workspace = state.active_workspace_mut();
     workspace.tabs.push(Tab::single_terminal());
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
-    state.selection = None;
+    clear_selection(state);
     state.prompt_focused = false;
 }
 
@@ -466,7 +499,7 @@ pub fn switch_tab(state: &mut AppState, index: usize) {
         return;
     }
     workspace.active_tab = index;
-    state.selection = None;
+    clear_selection(state);
     state.prompt_focused = false;
 }
 
@@ -646,7 +679,7 @@ fn close_workspace(state: &mut AppState, target: usize) {
     } else if target < state.active_workspace {
         state.active_workspace -= 1;
     }
-    state.selection = None;
+    clear_selection(state);
 }
 
 /// 关闭标签：至少保留一个；关闭当前标签后焦点落到同索引，越界回退末项。
@@ -664,7 +697,7 @@ fn close_tab(state: &mut AppState, workspace: usize, tab: usize) {
     } else if tab == workspace_state.active_tab {
         workspace_state.active_tab = workspace_state.active_tab.min(last);
     }
-    state.selection = None;
+    clear_selection(state);
 }
 
 /// 工作区列表最大滚动偏移；列表放得下时恒为 0。
