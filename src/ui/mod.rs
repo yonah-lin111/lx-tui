@@ -298,7 +298,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         frame.render_widget(List::new(items), inner);
         return;
     };
-    let list = workspace_list_area(sections.workspaces);
+    let list = sections.workspaces;
     let scrollbar = workspace_scrollbar_for(list, state);
     let list_area = match &scrollbar {
         Some(_) => Rect {
@@ -313,7 +313,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if let Some(scrollbar) = &scrollbar {
         widgets::scrollbar::render(frame, scrollbar);
     }
-    if let Some(button) = add_button_area(sections.workspaces) {
+    if let Some(button) = add_button_area(area) {
         render_add_workspace_button(frame, button);
     }
     render_agents_header(
@@ -362,21 +362,13 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         .collect()
 }
 
-/// 工作区列表内容区：footer 行保留给新建按钮。
-fn workspace_list_area(workspaces: Rect) -> Rect {
-    Rect {
-        height: workspaces.height.saturating_sub(1),
-        ..workspaces
-    }
-}
-
 /// 工作区列表滚动条几何；不需要滚动或分区缺失时 None。
 pub fn workspace_scrollbar(
     view: &layout::ViewLayout,
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
     let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
-    workspace_scrollbar_for(workspace_list_area(sections.workspaces), state)
+    workspace_scrollbar_for(sections.workspaces, state)
 }
 
 fn workspace_scrollbar_for(
@@ -391,10 +383,10 @@ fn workspace_scrollbar_for(
     )
 }
 
-/// 工作区列表可见行数（不含 footer）；无分区时 None。
+/// 工作区列表可见行数；无分区时 None。
 pub fn workspace_list_rows(view: &layout::ViewLayout, state: &AppState) -> Option<usize> {
     let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
-    Some(usize::from(workspace_list_area(sections.workspaces).height))
+    Some(usize::from(sections.workspaces.height))
 }
 
 /// 坐标是否落在侧栏 workspaces 区（含 footer）。
@@ -419,22 +411,21 @@ pub fn sidebar_boundary_at(view: &layout::ViewLayout, column: u16, row: u16) -> 
     column == view.sidebar.right().saturating_sub(1) || column == view.sidebar.right()
 }
 
-/// 新建工作区按钮矩形：工作区列表底行左侧；空间不足时不显示。
-pub fn add_workspace_button(view: &layout::ViewLayout, agents_collapsed: bool) -> Option<Rect> {
-    add_button_area(layout::sidebar_sections(view.sidebar, agents_collapsed)?.workspaces)
+/// 新建工作区按钮矩形：侧栏顶边框右端（原折叠按钮位置）；折叠或空间不足时不显示。
+pub fn add_workspace_button(view: &layout::ViewLayout) -> Option<Rect> {
+    add_button_area(view.sidebar)
 }
 
-fn add_button_area(workspaces: Rect) -> Option<Rect> {
-    let footer = Rect {
-        y: workspaces.bottom().saturating_sub(1),
-        height: workspaces.height.min(1),
-        ..workspaces
-    };
+fn add_button_area(sidebar: Rect) -> Option<Rect> {
+    if sidebar.width <= COLLAPSED_STRIP || sidebar.height == 0 {
+        return None;
+    }
     let width = text::ADD_WORKSPACE_LABEL.chars().count() as u16;
-    // 与 Agents 标题同列：标题前缀一个空格，按钮整体右移一列。
-    let x = footer.x.saturating_add(1);
-    (footer.height > 0 && footer.width >= width.saturating_add(1))
-        .then_some(Rect::new(x, footer.y, width, 1))
+    let x = sidebar
+        .right()
+        .saturating_sub(width.saturating_add(PANEL_BUTTON_MARGIN));
+    (sidebar.width >= width.saturating_add(PANEL_BUTTON_MARGIN).saturating_add(1))
+        .then_some(Rect::new(x, sidebar.y, width, 1))
 }
 
 /// 新建工作区按钮：强调色标签，点击立即创建并激活。
@@ -451,10 +442,10 @@ fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
     }
 }
 
-/// 工作区列表内容区（不含 footer 与滚动条列）；分区缺失时退回侧栏内容区。
+/// 工作区列表内容区（不含滚动条列）；分区缺失时退回侧栏内容区。
 fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
     let list = match layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
-        Some(sections) => workspace_list_area(sections.workspaces),
+        Some(sections) => sections.workspaces,
         None => {
             let sidebar = view.sidebar;
             Rect::new(
@@ -468,7 +459,7 @@ fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Re
     (list.width > 0 && list.height > 0).then_some(list)
 }
 
-/// 工作区项行命中：返回被点工作区索引；footer、滚动条列与空行不命中。
+/// 工作区项行命中：返回被点工作区索引；滚动条列与空行不命中。
 ///
 /// 第 N 项渲染在内容区第 `N - workspace_scroll` 行；分区缺失时退回整块内容区。
 pub fn workspace_item_at(

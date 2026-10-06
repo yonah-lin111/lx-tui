@@ -402,7 +402,7 @@ fn handle_terminal_event(
                     ensure_workspace_visible(state, view);
                     update::begin_workspace_drag(state, index);
                     *dirty = true;
-                } else if ui::add_workspace_button(view, state.agents_collapsed)
+                } else if ui::add_workspace_button(view)
                     .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
                 {
                     update::create_workspace(state);

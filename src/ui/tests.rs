@@ -551,20 +551,18 @@ fn error_toast_uses_red_border() {
 }
 
 #[test]
-fn add_workspace_button_sits_at_workspaces_footer_left() {
+fn add_workspace_button_sits_at_sidebar_top_border_right() {
     let state = AppState::demo();
     let view = view_for(&state);
-    let button = add_workspace_button(&view, false).expect("button is visible");
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    // 与 Agents 标题同列：标题前缀一个空格，按钮右移一列对齐 'A'。
-    assert_eq!(button.x, sections.workspaces.x + 1);
-    assert_eq!(button.x, sections.divider.x + 1);
-    assert_eq!(button.y, sections.workspaces.bottom() - 1);
+    let button = add_workspace_button(&view).expect("button is visible");
+    // 原折叠按钮位置：顶边框右端，距右边框 1 列。
+    assert_eq!(button.y, view.sidebar.y);
+    assert_eq!(button.right(), view.sidebar.right() - 1);
     assert_eq!(
         button.width,
         text::ADD_WORKSPACE_LABEL.chars().count() as u16
     );
-    assert!(button.right() < view.sidebar.right());
+    assert!(button.x > view.sidebar.x);
 
     let lines = render_lines(&state);
     let row: Vec<char> = lines[button.y as usize].chars().collect();
@@ -575,7 +573,7 @@ fn add_workspace_button_sits_at_workspaces_footer_left() {
 }
 
 #[test]
-fn workspace_items_hit_list_rows_but_not_footer_or_agents() {
+fn workspace_items_hit_full_list_rows() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     let view = view_for(&state);
@@ -593,11 +591,6 @@ fn workspace_items_hit_list_rows_but_not_footer_or_agents() {
         workspace_item_at(&view, &state, sections.workspaces.x, first_row + 2),
         None
     );
-    let footer_y = sections.workspaces.bottom() - 1;
-    assert_eq!(
-        workspace_item_at(&view, &state, sections.workspaces.x, footer_y),
-        None
-    );
     assert_eq!(
         workspace_item_at(&view, &state, sections.workspaces.x, sections.divider.y),
         None
@@ -609,11 +602,27 @@ fn workspace_items_hit_list_rows_but_not_footer_or_agents() {
 }
 
 #[test]
-fn add_workspace_button_hidden_when_sidebar_has_no_sections() {
+fn workspace_list_last_row_is_hittable_without_footer() {
+    let mut state = AppState::demo();
+    for _ in 0..11 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let last = sections.workspaces.bottom() - 1;
+    let index = usize::from(last - sections.workspaces.y);
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, last),
+        Some(index)
+    );
+}
+
+#[test]
+fn add_workspace_button_hidden_when_sidebar_collapsed() {
     let mut state = AppState::demo();
     state.sidebar_collapsed = true;
     let view = view_for(&state);
-    assert_eq!(add_workspace_button(&view, false), None);
+    assert_eq!(add_workspace_button(&view), None);
     assert_eq!(workspace_item_at(&view, &state, 0, 1), None);
 }
 
@@ -629,10 +638,7 @@ fn workspace_scrollbar_appears_only_on_overflow() {
     let view = view_for(&state);
     let bar = workspace_scrollbar(&view, &state).expect("scrollbar is visible");
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    let list = Rect {
-        height: sections.workspaces.height.saturating_sub(1),
-        ..sections.workspaces
-    };
+    let list = sections.workspaces;
     assert_eq!(bar.track.x, list.right() - 1);
     assert_eq!(bar.track.y, list.y);
     assert_eq!(bar.track.height, list.height);
@@ -648,10 +654,7 @@ fn workspace_list_renders_scrolled_window_and_scrollbar() {
     }
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    let list = Rect {
-        height: sections.workspaces.height.saturating_sub(1),
-        ..sections.workspaces
-    };
+    let list = sections.workspaces;
     let rows = usize::from(list.height);
     state.workspace_scroll = update::workspace_scroll_max(&state, rows);
     let expected = state.workspaces[state.workspace_scroll].name.clone();
@@ -679,10 +682,7 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
     }
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    let list = Rect {
-        height: sections.workspaces.height.saturating_sub(1),
-        ..sections.workspaces
-    };
+    let list = sections.workspaces;
     state.workspace_scroll = 5;
     assert_eq!(workspace_item_at(&view, &state, list.x, list.y), Some(5));
     assert_eq!(
