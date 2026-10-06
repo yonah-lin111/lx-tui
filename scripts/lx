@@ -9,7 +9,17 @@ while [ -L "$target" ]; do
     *) target=$(dirname "$target")/$link ;;
     esac
 done
+script_root=$(cd "$(dirname "$target")/.." && pwd)
 
-root=$(cd "$(dirname "$target")/.." && pwd)
+root=$script_root
+current=$(pwd)
+if current_root=$(git -C "$current" rev-parse --show-toplevel 2>/dev/null); then
+    current_common=$(git -C "$current" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || current_common=
+    script_common=$(git -C "$script_root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || script_common=
+    if [ "$current_common" = "$script_common" ]; then
+        root=$current_root
+    fi
+fi
+
 cd "$root"
 exec cargo run "$@"
