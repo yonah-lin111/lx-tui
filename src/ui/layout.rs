@@ -118,7 +118,7 @@ pub fn sidebar_sections(sidebar: Rect, agents_collapsed: bool) -> Option<Sidebar
     })
 }
 
-/// 启动默认右栏宽度：主区可用宽度的一半，复刻旧 50% 分割的版面。
+/// 启动默认右栏宽度：主区可用宽度的 2/5，主区保持更宽。
 pub fn default_prompt_width(area: Rect, config: &Config, sidebar_collapsed: bool) -> u16 {
     let available = area.width.saturating_sub(resolved_sidebar_width(
         area,
@@ -126,7 +126,11 @@ pub fn default_prompt_width(area: Rect, config: &Config, sidebar_collapsed: bool
         sidebar_collapsed,
         config.sidebar_width,
     ));
-    clamp_prompt_width(available, available / 2, config.min_pane_width)
+    clamp_prompt_width(
+        available,
+        available.saturating_mul(2) / 5,
+        config.min_pane_width,
+    )
 }
 
 /// 拖拽侧栏分割线到屏幕列 `boundary_x` 时侧栏应有的宽度（屏幕坐标）。

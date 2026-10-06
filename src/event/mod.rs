@@ -224,7 +224,7 @@ fn reconcile_sessions(
     }
 }
 
-/// 启动时确定栏宽：右栏取主区可用宽度的一半（复刻旧 50% 分割），左栏取配置值。
+/// 启动时确定栏宽：右栏取主区可用宽度的 2/5（主区更宽），左栏取配置值。
 fn initialize_layout_widths(
     tui: &mut Tui,
     state: &mut AppState,

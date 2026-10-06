@@ -168,10 +168,10 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: u64) {
     let hint_y = input.y.checked_sub(SECTION_GAP).filter(|_| hint_fits);
     let content_bottom = hint_y.unwrap_or(input.y);
 
-    // 顶部品牌区：狐狸在左、字标在右；高度或宽度放不下整只狐狸时省略。
+    // 顶部品牌区：狐狸在左；高度或宽度放不下整只狐狸时省略。
     let mut next_y = area.y;
     if content_bottom >= next_y + FOX_ROWS + SECTION_GAP && input.width >= FOX_WIDTH {
-        draw_header(buf, input.x, input.width, next_y, phase);
+        draw_art(buf, input.x, next_y, phase);
         next_y += FOX_ROWS + SECTION_GAP;
     }
 
@@ -222,21 +222,6 @@ fn draw_input(buf: &mut Buffer, rect: Rect) {
         Span::styled(placeholder, style::muted()),
     ]))
     .render(Rect::new(inner.x, inner.y, inner.width, 1), buf);
-}
-
-/// 品牌区：完整狐狸在左，字标在狐狸右侧垂直居中；宽度不足时省略字标。
-fn draw_header(buf: &mut Buffer, x: u16, width: u16, y: u16, phase: u64) {
-    draw_art(buf, x, y, phase);
-    let wordmark_x = x.saturating_add(FOX_WIDTH).saturating_add(2);
-    if wordmark_x.saturating_add(2) <= x.saturating_add(width) {
-        draw_left(
-            buf,
-            wordmark_x,
-            y + FOX_ROWS / 2,
-            text::LX_TITLE,
-            style::strong(),
-        );
-    }
 }
 
 /// 白色占位面板：未来内容区的边界，内部居中占位文案（放不下时只留边框）。

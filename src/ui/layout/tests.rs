@@ -211,17 +211,17 @@ fn sidebar_sections_need_room_for_content() {
 }
 
 #[test]
-fn default_prompt_width_is_half_of_main_area() {
+fn default_prompt_width_is_two_fifths_of_main_area() {
     let config = Config::default();
     let area = Rect::new(0, 0, 100, 30);
-    assert_eq!(default_prompt_width(area, &config, false), 38);
+    assert_eq!(default_prompt_width(area, &config, false), 30);
     assert_eq!(
         default_prompt_width(area, &config, true),
-        (100 - COLLAPSED_STRIP) / 2
+        (100 - COLLAPSED_STRIP) * 2 / 5
     );
     assert_eq!(
         default_prompt_width(Rect::new(0, 0, 60, 30), &config, false),
-        30
+        24
     );
 }
 

@@ -126,7 +126,6 @@ fn lx_view_renders_page_without_cursor() {
     let cursor = render(Rect::new(0, 0, 60, 12), &mut buf, &pane, true, 0);
     assert_eq!(cursor, None, "lx 页不产生硬件光标");
     let text = buffer_text(&buf);
-    assert!(text.contains("lx"), "字标可见: {text}");
     assert!(text.contains("click [>_] to open terminal"), "提示可见");
     assert!(text.contains('▀') || text.contains('█'), "像素画可见");
 }

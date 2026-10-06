@@ -85,6 +85,11 @@ cargo test
 - [x] 根因：动画重绘会重置 Ghostty 等终端的光标闪烁相位，硬件光标闪烁不可在重绘下稳定维持；Ghostty 未显式配置 `cursor-style-blink` 时尊重 DEC 模式 12
 - [x] 测试：`tests/cursor_steady.rs` 真实 PTY 断言启动关闭闪烁、lx 页空闲期零 Show/Hide；`tui::tests` 断言退出恢复闪烁（`\x1b[?12h`）
 
+## 界面调整（第五轮）
+
+- [x] 移除 lx 页狐狸右侧的 `lx` 字标（仅保留最小退化时的居中字标）
+- [x] prompt 右栏启动默认宽度由主区可用宽度的一半改为 2/5（主区更宽，不再对半）
+
 ## 测试矩阵
 
 | 层 | 用例 |
