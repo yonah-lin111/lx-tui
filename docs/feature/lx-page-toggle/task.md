@@ -79,6 +79,12 @@ cargo test
 - [x] `src/tui/cursor.rs`：`QuietCursor` 后端包装，Show/Hide 只在可见性变化时下发、MoveTo 只在内容 diff 可能移动物理光标或位置变化时下发；`Write` 透传给恢复流程
 - [x] 测试：未变化帧零光标指令、内容帧重定位、可见性指令去重（计数后端）
 
+## Bugfix（第四轮，用户决策）
+
+- [x] 全部输入框光标不再闪烁、且不改变终端配置的光标形状：进入 TUI 下发 DEC 模式 12 `\x1b[?12l`（只关闪烁），退出恢复 `\x1b[?12h`
+- [x] 根因：动画重绘会重置 Ghostty 等终端的光标闪烁相位，硬件光标闪烁不可在重绘下稳定维持；Ghostty 未显式配置 `cursor-style-blink` 时尊重 DEC 模式 12
+- [x] 测试：`tests/cursor_steady.rs` 真实 PTY 断言启动关闭闪烁、lx 页空闲期零 Show/Hide；`tui::tests` 断言退出恢复闪烁（`\x1b[?12h`）
+
 ## 测试矩阵
 
 | 层 | 用例 |

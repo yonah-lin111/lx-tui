@@ -20,6 +20,14 @@ use crate::tui::cursor::QuietCursor;
 const DRAIN_QUIET: Duration = Duration::from_millis(10);
 const DRAIN_LIMIT: Duration = Duration::from_millis(100);
 
+/// 关闭硬件光标闪烁（DEC 私有模式 12）：只改闪烁、不改终端配置的光标形状。
+///
+/// 动画重绘会重置部分终端（Ghostty 等）的闪烁相位，硬件光标闪烁无法在重绘下
+/// 稳定维持，只能整体关掉；不支持的终端静默忽略。
+const CURSOR_BLINK_OFF: &[u8] = b"\x1b[?12l";
+/// 恢复硬件光标闪烁，退出时还原 TUI 进入前的常态。
+const CURSOR_BLINK_ON: &[u8] = b"\x1b[?12h";
+
 /// 持有终端句柄；Drop 时兜底恢复终端状态。
 pub struct Tui {
     terminal: Terminal<QuietCursor<CrosstermBackend<Stdout>>>,
@@ -35,6 +43,8 @@ impl Tui {
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         crate::platform::enable_mouse_capture(&mut stdout)?;
         crate::platform::enable_keyboard_enhancement(&mut stdout)?;
+        stdout.write_all(CURSOR_BLINK_OFF)?;
+        stdout.flush()?;
         let terminal = Terminal::new(QuietCursor::new(CrosstermBackend::new(stdout)))?;
         Ok(Self {
             terminal,
@@ -75,6 +85,7 @@ fn restore_terminal(
     crate::platform::disable_mouse_capture(writer)?;
     drain();
     crate::platform::disable_keyboard_enhancement(writer)?;
+    writer.write_all(CURSOR_BLINK_ON)?;
     execute!(writer, LeaveAlternateScreen, DisableBracketedPaste, Show)?;
     restore_cooked()
 }

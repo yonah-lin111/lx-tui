@@ -52,6 +52,7 @@ fn restore_disables_mouse_before_draining_and_restores_cooked_last() {
         .find("\x1b[<1u")
         .expect("keyboard enhancement popped");
     let leave_screen = output.find("\x1b[?1049l").expect("alternate screen left");
+    let cursor_reset = output.find("\x1b[?12h").expect("cursor blink restored");
     let steps = steps.borrow();
     let step_at = |name: &str| {
         steps
@@ -82,5 +83,9 @@ fn restore_disables_mouse_before_draining_and_restores_cooked_last() {
     assert!(
         leave_screen < cooked_at,
         "cooked mode must be restored after leaving the alternate screen"
+    );
+    assert!(
+        cursor_reset < cooked_at,
+        "cursor blink must be restored before leaving raw mode"
     );
 }
