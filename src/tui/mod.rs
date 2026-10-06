@@ -1,5 +1,7 @@
 //! 终端生命周期：原始模式、备用屏幕、鼠标上报与恢复。
 
+mod cursor;
+
 use std::io::{self, Stdout, Write};
 use std::time::{Duration, Instant};
 
@@ -12,13 +14,15 @@ use crossterm::terminal::{
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 
+use crate::tui::cursor::QuietCursor;
+
 /// 退出清空输入时的静默窗口与等待上限（覆盖禁用序列到达终端前的在途上报）。
 const DRAIN_QUIET: Duration = Duration::from_millis(10);
 const DRAIN_LIMIT: Duration = Duration::from_millis(100);
 
 /// 持有终端句柄；Drop 时兜底恢复终端状态。
 pub struct Tui {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
+    terminal: Terminal<QuietCursor<CrosstermBackend<Stdout>>>,
     restored: bool,
 }
 
@@ -31,7 +35,7 @@ impl Tui {
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
         crate::platform::enable_mouse_capture(&mut stdout)?;
         crate::platform::enable_keyboard_enhancement(&mut stdout)?;
-        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let terminal = Terminal::new(QuietCursor::new(CrosstermBackend::new(stdout)))?;
         Ok(Self {
             terminal,
             restored: false,
@@ -39,7 +43,7 @@ impl Tui {
     }
 
     /// 终端句柄。
-    pub fn terminal(&mut self) -> &mut Terminal<CrosstermBackend<Stdout>> {
+    pub(crate) fn terminal(&mut self) -> &mut Terminal<QuietCursor<CrosstermBackend<Stdout>>> {
         &mut self.terminal
     }
 
