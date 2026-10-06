@@ -2,7 +2,7 @@
 
 use lx_tui::app::actions::EditorCommand;
 use lx_tui::app::markdown::MentionEntry;
-use lx_tui::app::state::AppState;
+use lx_tui::app::state::{AppState, PaneView};
 use lx_tui::app::update;
 use lx_tui::config::Config;
 use lx_tui::layout;
@@ -118,6 +118,9 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
 
     let pane = state.active_tab().layout.focus();
     update::focus_pane(&mut state, pane);
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.view = PaneView::Terminal;
+    }
     let terminal = draw(&state, &config);
     let rects = layout::pane_rects(
         &state.active_tab().layout,

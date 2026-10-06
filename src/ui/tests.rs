@@ -36,6 +36,14 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
     )
 }
 
+/// 把活动窗格置为终端视图：终端标题与网格断言的前置。
+fn terminal_view(state: &mut AppState) {
+    let focus = state.active_tab().layout.focus();
+    if let Some(pane) = state.active_tab_mut().pane_mut(focus) {
+        pane.view = PaneView::Terminal;
+    }
+}
+
 fn button_for(view: &layout::ViewLayout, target: CollapseTarget) -> CollapseButton {
     button_for_state(view, false, target)
 }
@@ -459,6 +467,7 @@ fn resize_hint_highlights_divider_on_hover() {
 #[test]
 fn placeholder_pane_renders_title_without_content() {
     let mut state = AppState::demo();
+    terminal_view(&mut state);
     let focus = state.active_tab().layout.focus();
     if let Some(pane) = state.active_tab_mut().pane_mut(focus) {
         pane.kind = PaneKind::Placeholder;
@@ -961,6 +970,7 @@ fn tab_bar_overflow_renders_scroll_buttons_and_keeps_exit() {
 #[test]
 fn pane_title_uses_cwd_label_before_placeholder() {
     let mut state = AppState::demo();
+    terminal_view(&mut state);
     let id = state.active_tab().layout.focus();
     update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
     let lines = render_lines(&state);
@@ -975,6 +985,7 @@ fn pane_title_uses_cwd_label_before_placeholder() {
 #[test]
 fn pane_title_prefers_osc_over_cwd_label() {
     let mut state = AppState::demo();
+    terminal_view(&mut state);
     let id = state.active_tab().layout.focus();
     update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
     if let Some(pane) = state.active_tab_mut().pane_mut(id) {
@@ -983,4 +994,37 @@ fn pane_title_prefers_osc_over_cwd_label() {
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("Claude Code")));
     assert!(!lines.iter().any(|line| line.contains("dev-dir")));
+}
+
+/// 矩形内的渲染文本。
+fn rendered_area(lines: &[String], area: Rect) -> String {
+    let row: Vec<char> = lines[area.y as usize].chars().collect();
+    (area.x..area.right()).map(|x| row[x as usize]).collect()
+}
+
+#[test]
+fn pane_title_and_toggle_label_follow_view() {
+    let mut state = AppState::demo();
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+    );
+    let (id, rect) = rects[0];
+    assert_eq!(id, state.active_tab().layout.focus());
+
+    let button = main_content::toggle_button(rect).expect("toggle button visible");
+    let lines = render_lines(&state);
+    let title_area = Rect::new(rect.x + 1, rect.y, 4, 1);
+    assert_eq!(rendered_area(&lines, title_area), " lx ");
+    assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_TERMINAL);
+
+    update::toggle_pane_view(&mut state, id);
+    let lines = render_lines(&state);
+    let terminal_title = format!(" pane {} ", id.raw());
+    let title_area = Rect::new(rect.x + 1, rect.y, terminal_title.chars().count() as u16, 1);
+    assert_eq!(rendered_area(&lines, title_area), terminal_title);
+    assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_LX);
 }

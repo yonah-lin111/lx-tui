@@ -14,7 +14,7 @@ use super::overlay::{
 };
 use super::selection::Selection;
 use super::state::{
-    AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll, Tab, Workspace,
+    AppState, AutoscrollDirection, PaneKind, PaneView, SelectionAutoscroll, Tab, Workspace,
     current_workspace_identity, home_dir, tab_label, unique_workspace_name, workspace_label,
 };
 use super::toast::Toast;
@@ -152,6 +152,9 @@ const WHEEL_LINES: isize = 3;
 /// 边缘自动滚动每步的间隔。
 const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 
+/// lx 页动画帧间隔。
+const LX_FRAME_INTERVAL: Duration = Duration::from_millis(200);
+
 /// 按方向滚动 prompt 视口（负数向上、正数向下）；光标不动，编辑后自动吸回。
 pub fn scroll_prompt(state: &mut AppState, direction: isize) {
     scroll_prompt_selection(state, direction, WHEEL_LINES);
@@ -217,6 +220,43 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
     state.prompt.clear_panel();
     state.active_tab_mut().layout.focus_pane(id);
+}
+
+/// 切换窗格主内容视图（lx 页 ↔ 终端）；返回是否变化。
+///
+/// 切到 lx 时清掉该窗格上的终端选区与滚动条拖拽：隐藏终端不接受交互。
+pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
+    let Some(view) = state.active_tab_mut().pane_mut(id).map(|pane| {
+        pane.view = match pane.view {
+            PaneView::Lx => PaneView::Terminal,
+            PaneView::Terminal => PaneView::Lx,
+        };
+        pane.view
+    }) else {
+        return false;
+    };
+    if view == PaneView::Lx {
+        if state.terminal_selection == Some(id) {
+            clear_terminal_selection(state);
+        }
+        if state
+            .terminal_scroll_drag
+            .is_some_and(|(pane, _)| pane == id)
+        {
+            state.terminal_scroll_drag = None;
+        }
+    }
+    true
+}
+
+/// 推进 lx 页动画：按帧间隔步进相位；无可见 lx 窗格时冻结；返回是否变化。
+fn tick_lx_animation(state: &mut AppState, now: Instant) -> bool {
+    if !state.lx_visible() || now.duration_since(state.lx_last_tick) < LX_FRAME_INTERVAL {
+        return false;
+    }
+    state.lx_phase = state.lx_phase.wrapping_add(1);
+    state.lx_last_tick = now;
+    true
 }
 
 /// 按几何同步各窗格终端与 prompt 编辑器的尺寸。
@@ -596,7 +636,7 @@ pub fn set_toast_hover(state: &mut AppState, hovered: bool) -> bool {
     true
 }
 
-/// 清除已过期的 toast、推进拖选边缘自动滚动；返回是否发生变化（用于置脏重绘）。
+/// 清除已过期的 toast、推进拖选边缘自动滚动与 lx 动画；返回是否发生变化（用于置脏重绘）。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let expired = state
         .toast
@@ -606,19 +646,20 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         state.toast = None;
     }
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || scrolled
+    let animated = tick_lx_animation(state, now);
+    expired || scrolled || animated
 }
 
-/// 最近一次定时到期时间（toast 消失或自动滚动）；事件循环据此安排唤醒。
+/// 最近一次定时到期时间（toast 消失、自动滚动或 lx 动画帧）；事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
     let autoscroll = state
         .selection_autoscroll
         .map(|autoscroll| autoscroll.next_at);
-    match (toast, autoscroll) {
-        (Some(toast), Some(autoscroll)) => Some(toast.min(autoscroll)),
-        (toast, autoscroll) => toast.or(autoscroll),
-    }
+    let animation = state
+        .lx_visible()
+        .then_some(state.lx_last_tick + LX_FRAME_INTERVAL);
+    [toast, autoscroll, animation].into_iter().flatten().min()
 }
 
 /// 新建工作区并激活：名字取当前 cwd 末段（对齐 herdr），重名追加最小未用序号；

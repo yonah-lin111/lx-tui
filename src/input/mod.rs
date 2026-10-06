@@ -28,12 +28,14 @@ pub enum Routed {
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区，
-/// 未映射的按键被吞掉，绝不写入 PTY。
+/// 未映射的按键被吞掉，绝不写入 PTY；`pane_lx` 为真（活动窗格显示 lx 页）时
+/// 除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,
     mode: TermMode,
     prompt_focused: bool,
     overlay: Option<OverlayKind>,
+    pane_lx: bool,
 ) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
@@ -55,6 +57,9 @@ pub fn route(
             return Some(Routed::Copy);
         }
         return editor_command(key).map(Routed::Editor);
+    }
+    if pane_lx {
+        return None;
     }
     encode::encode_key(key, mode).map(Routed::Pane)
 }

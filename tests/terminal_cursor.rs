@@ -1,7 +1,7 @@
 //! 集成测试：硬件光标跟随聚焦终端窗格的仿真光标（IME 预输入）与显隐规则。
 
 use lx_tui::app::actions::EditorCommand;
-use lx_tui::app::state::AppState;
+use lx_tui::app::state::{AppState, PaneView};
 use lx_tui::app::update;
 use lx_tui::config::Config;
 use lx_tui::layout;
@@ -31,6 +31,9 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
     rects.push((state.prompt.id(), view.prompt));
     update::resize_panes(&mut state, &rects);
     let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.active_tab_mut().pane_mut(pane) {
+        target.view = PaneView::Terminal;
+    }
     let pane_rect = rects
         .iter()
         .find(|(id, _)| *id == pane)

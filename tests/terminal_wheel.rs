@@ -65,6 +65,8 @@ impl App {
             wait_for(&emulator, "[exit]", WAIT),
             "app must render the exit button"
         );
+        // 默认 lx 页：点击窗格顶栏右端切换按钮进入终端视图。
+        enter_terminal(&emulator, &writer);
         // 焦点默认在终端窗格：键入 200 行编号输出。
         send(
             &writer,
@@ -135,6 +137,44 @@ fn send(writer: &Arc<Mutex<Box<dyn Write + Send>>>, bytes: &[u8]) {
     let mut writer = writer.lock().unwrap();
     writer.write_all(bytes).expect("write to pty");
     writer.flush().expect("flush pty");
+}
+
+/// 屏幕上切换按钮的 0 基字符坐标：含按钮标签且与 `lx` 标题同行的唯一一行。
+fn find_toggle(emulator: &Arc<Mutex<Terminal>>) -> Option<(u16, u16)> {
+    let text = screen_text(&emulator.lock().unwrap());
+    for (row, line) in text.lines().enumerate() {
+        if line.contains("[>_]") && line.contains("lx") {
+            let byte = line.find("[>_]")?;
+            let col = line[..byte].chars().count() as u16;
+            return Some((row as u16, col));
+        }
+    }
+    None
+}
+
+/// 点击窗格顶栏的视图切换按钮：从默认 lx 页进入终端视图。
+fn enter_terminal(emulator: &Arc<Mutex<Terminal>>, writer: &Arc<Mutex<Box<dyn Write + Send>>>) {
+    let (row, col) = find_toggle(emulator).unwrap_or_else(|| {
+        panic!(
+            "toggle button must be visible:\n{}",
+            screen_text(&emulator.lock().unwrap())
+        )
+    });
+    send(
+        writer,
+        format!("\x1b[<0;{};{}M", col + 1, row + 1).as_bytes(),
+    );
+    send(
+        writer,
+        format!("\x1b[<0;{};{}m", col + 1, row + 1).as_bytes(),
+    );
+    assert!(
+        wait_for(emulator, "[lx]", WAIT),
+        "click at SGR ({}, {}) must switch the pane to terminal view:\n{}",
+        col + 1,
+        row + 1,
+        screen_text(&emulator.lock().unwrap())
+    );
 }
 
 #[test]

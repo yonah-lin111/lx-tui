@@ -10,6 +10,16 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// prompt 占位窗格。
 pub const PROMPT_TITLE: &str = "prompt";
+/// 主内容 lx 页标题。
+pub const LX_TITLE: &str = "lx";
+/// 视图切换按钮：显示点击后的目的地视图。
+pub const LX_TOGGLE_TERMINAL: &str = "[>_]";
+pub const LX_TOGGLE_LX: &str = "[lx]";
+
+/// lx 页切换提示。
+pub fn lx_hint() -> String {
+    format!("click {} to open terminal", LX_TOGGLE_TERMINAL)
+}
 /// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
 pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";

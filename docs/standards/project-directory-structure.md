@@ -32,7 +32,7 @@ lx-tui/
       layout.rs                 屏幕区域划分（侧栏/标签栏/主区/右栏）
       style.rs                  语义化样式 Token（codex 风格 ANSI 配色）
       text.rs                   全部用户可见文案
-      terminal.rs               终端网格到 Buffer 的渲染
+      main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）
@@ -54,7 +54,7 @@ lx-tui/
 
 1. `app/`：唯一状态来源；`state.rs` 只放数据结构（含窗格终端仿真状态），`update.rs` 只做状态转换；不得执行 IO、渲染或线程操作。
 2. `layout.rs`（根级）：BSP 平铺模型与几何计算，`pane_rects` / `pane_inner_size` / 方向导航等均为纯函数，可直接用 `Rect` 单元测试。
-3. `ui/`：接收 `&AppState` 绘制；`layout.rs` 负责屏幕区域划分，`terminal.rs` 负责把仿真网格写入 `Buffer`，均为纯渲染。
+3. `ui/`：接收 `&AppState` 绘制；`layout.rs` 负责屏幕区域划分，`main_content.rs` 按窗格视图分派 lx 页与终端网格并写入 `Buffer`，均为纯渲染。
 4. `event/`：唯一事件循环；tokio `select!` 收敛键盘、PTY 输出与定时事件为 `app` 行为调用与窗格写入，并做帧节流。
 5. `input/`：终端事件到应用行为的映射与按键编码；`encode.rs` 为纯函数，按键判断不得散落在 `ui/` 组件中。
 6. `terminal/`：终端仿真状态机（alacritty_terminal 封装）；字节进、画面出，不触碰 IO、不依赖其他模块状态。

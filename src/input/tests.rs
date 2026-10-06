@@ -2,9 +2,9 @@
 
 use super::*;
 
-/// 无浮层路由的测试别名；浮层路由直接调用 `super::route`。
+/// 无浮层、终端视图路由的测试别名；浮层与 lx 视图直接调用 `super::route`。
 fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Routed> {
-    super::route(key, mode, prompt_focused, None)
+    super::route(key, mode, prompt_focused, None, false)
 }
 
 fn key(code: KeyCode) -> KeyEvent {
@@ -333,6 +333,7 @@ fn menu_overlay_routes_navigation_keys_only() {
             TermMode::empty(),
             false,
             Some(OverlayKind::Menu),
+            false,
         )
     };
     for (code, expected) in [
@@ -360,6 +361,7 @@ fn confirm_overlay_routes_enter_and_esc_only() {
             TermMode::empty(),
             false,
             Some(OverlayKind::ConfirmClose),
+            false,
         )
     };
     assert_eq!(
@@ -381,6 +383,7 @@ fn rename_overlay_routes_editing_keys() {
             TermMode::empty(),
             true,
             Some(OverlayKind::Rename),
+            false,
         )
     };
     assert_eq!(
@@ -426,7 +429,40 @@ fn rename_overlay_routes_editing_keys() {
 fn overlay_does_not_swallow_ctrl_q() {
     let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
-        super::route(key, TermMode::empty(), false, Some(OverlayKind::Menu)),
+        super::route(
+            key,
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::Menu),
+            false
+        ),
         Some(Routed::Action(Action::Quit))
+    );
+}
+
+#[test]
+fn lx_view_swallows_keys_except_ctrl_q() {
+    for code in [
+        KeyCode::Char('l'),
+        KeyCode::Enter,
+        KeyCode::Tab,
+        KeyCode::Up,
+        KeyCode::Backspace,
+    ] {
+        assert_eq!(
+            super::route(key(code), TermMode::empty(), false, None, true),
+            None,
+            "{code:?} 应被 lx 页吞掉"
+        );
+    }
+    let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+    assert_eq!(
+        super::route(quit, TermMode::empty(), false, None, true),
+        Some(Routed::Action(Action::Quit))
+    );
+    // prompt 聚焦优先于 lx 吞键：按键仍进入编辑器。
+    assert_eq!(
+        super::route(key(KeyCode::Char('a')), TermMode::empty(), true, None, true),
+        Some(Routed::Editor(EditorCommand::InsertChar('a')))
     );
 }

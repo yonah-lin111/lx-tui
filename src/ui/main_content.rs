@@ -1,4 +1,7 @@
-//! 终端网格渲染：把仿真终端视口画进 ratatui Buffer，只读不写。
+//! 主内容渲染：按窗格视图分派 lx 欢迎页与终端网格，并负责顶边框切换按钮。
+//! 只读状态、只写 Buffer。
+
+mod lx;
 
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
@@ -7,13 +10,94 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::app::state::{Pane, PaneView};
+use crate::layout::PaneId;
 use crate::terminal::{Terminal, WheelRouting};
 use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
+use crate::ui::{style, text};
+
+/// 切换按钮距窗格右角的留白列数。
+const TOGGLE_MARGIN: u16 = 1;
+
+/// 渲染窗格主内容；终端视图返回聚焦光标位置，lx 视图无硬件光标。
+pub fn render(
+    area: Rect,
+    buf: &mut Buffer,
+    pane: &Pane,
+    focused: bool,
+    lx_phase: u64,
+) -> Option<(u16, u16)> {
+    match pane.view {
+        PaneView::Lx => {
+            lx::render(area, buf, lx_phase);
+            None
+        }
+        PaneView::Terminal => render_terminal(area, buf, &pane.terminal, focused),
+    }
+}
+
+/// 终端滚动条几何：仅终端视图覆盖在内容区最右一列。
+pub fn scrollbar(inner: Rect, pane: &Pane) -> Option<ScrollbarLayout> {
+    match pane.view {
+        PaneView::Terminal => terminal_scrollbar(inner, &pane.terminal),
+        PaneView::Lx => None,
+    }
+}
+
+/// 视图切换按钮矩形：窗格顶边框右端距右角 1 列；空间不足返回 None。
+pub fn toggle_button(rect: Rect) -> Option<Rect> {
+    let width = toggle_width();
+    if rect.height == 0 || rect.width < width + TOGGLE_MARGIN + 2 {
+        return None;
+    }
+    Some(Rect::new(
+        rect.right() - TOGGLE_MARGIN - width,
+        rect.y,
+        width,
+        1,
+    ))
+}
+
+/// 按钮标签：显示点击后的目的地视图。
+pub fn toggle_label(view: PaneView) -> &'static str {
+    match view {
+        PaneView::Lx => text::LX_TOGGLE_TERMINAL,
+        PaneView::Terminal => text::LX_TOGGLE_LX,
+    }
+}
+
+/// 命中测试：返回按钮所属窗格；无按钮或未命中返回 None。
+pub fn toggle_button_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<PaneId> {
+    rects.iter().find_map(|(id, rect)| {
+        toggle_button(*rect)
+            .filter(|area| area.contains((column, row).into()))
+            .map(|_| *id)
+    })
+}
+
+/// 在窗格顶边框右端覆盖绘制切换按钮；调用方保证已渲染边框与标题。
+pub fn draw_toggle_button(buf: &mut Buffer, rect: Rect, view: PaneView) {
+    let Some(area) = toggle_button(rect) else {
+        return;
+    };
+    for (offset, symbol) in toggle_label(view).chars().enumerate() {
+        if let Some(cell) = buf.cell_mut((area.x + offset as u16, area.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
+}
+
+/// 两种标签等宽：[lx] 与 [>_]。
+fn toggle_width() -> u16 {
+    u16::try_from(text::LX_TOGGLE_LX.chars().count()).unwrap_or(u16::MAX)
+}
 
 /// 终端滚动条几何：仅本地回滚模式且有回滚内容时，覆盖在内容区最右一列。
 ///
 /// 鼠标上报（opencode/claude 等）与备用屏应用自己滚动，不显示。
-pub fn scrollbar(inner: Rect, terminal: &Terminal) -> Option<ScrollbarLayout> {
+fn terminal_scrollbar(inner: Rect, terminal: &Terminal) -> Option<ScrollbarLayout> {
     if terminal.wheel_routing() != WheelRouting::HostScroll {
         return None;
     }
@@ -33,7 +117,7 @@ pub fn scrollbar(inner: Rect, terminal: &Terminal) -> Option<ScrollbarLayout> {
 ///
 /// 返回聚焦且光标可见时仿真光标在 `area` 内的坐标；调用方据此同步硬件光标，
 /// 让 IME 预输入与候选窗跟随终端光标（显示与闪烁由终端原生光标承担）。
-pub fn render(
+fn render_terminal(
     area: Rect,
     buf: &mut Buffer,
     terminal: &Terminal,

@@ -83,6 +83,10 @@ pub struct AppState {
     pub prompt_scroll_drag: Option<u16>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
+    /// lx 页动画相位（200ms 一帧）；lx 页不可见时冻结。
+    pub lx_phase: u64,
+    /// 上次 lx 动画推进时刻。
+    pub lx_last_tick: Instant,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
     /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
@@ -137,10 +141,20 @@ pub enum PaneKind {
     Placeholder,
 }
 
-/// 窗格载荷：种类、终端仿真状态与退出标记。
+/// 窗格主内容视图：lx 欢迎页与终端网格互斥。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneView {
+    /// lx 欢迎页（默认视图）。
+    Lx,
+    /// 终端网格。
+    Terminal,
+}
+
+/// 窗格载荷：种类、主内容视图、终端仿真状态与退出标记。
 #[derive(Debug)]
 pub struct Pane {
     pub kind: PaneKind,
+    pub view: PaneView,
     pub terminal: Terminal,
     pub exited: bool,
     /// 窗格 shell 进程 cwd 的显示标签；标题无 OSC 时回退展示。
@@ -186,6 +200,7 @@ impl Pane {
     fn new() -> Self {
         Self {
             kind: PaneKind::Terminal,
+            view: PaneView::Lx,
             terminal: Terminal::new(DEFAULT_COLS, DEFAULT_ROWS),
             exited: false,
             cwd_label: None,
@@ -295,6 +310,8 @@ impl AppState {
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
             terminal_scroll_drag: None,
+            lx_phase: 0,
+            lx_last_tick: Instant::now(),
             workspace_drag: None,
             overlay: None,
         }
@@ -362,6 +379,14 @@ impl AppState {
             .flat_map(|workspace| workspace.tabs.iter())
             .flat_map(|tab| tab.layout.pane_ids())
             .collect()
+    }
+
+    /// 当前标签是否存在 lx 视图窗格；动画推进与定时唤醒的依据。
+    pub fn lx_visible(&self) -> bool {
+        self.active_tab()
+            .panes
+            .values()
+            .any(|pane| pane.view == PaneView::Lx)
     }
 }
 

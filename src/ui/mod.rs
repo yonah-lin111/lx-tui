@@ -1,12 +1,12 @@
 //! 渲染层：只读取状态，禁止修改状态或执行 IO。
 
 pub mod layout;
+pub mod main_content;
 pub mod markdown;
 pub mod overlay;
 pub mod prompt;
 pub mod style;
 pub mod tab_bar;
-pub mod terminal;
 pub mod text;
 pub mod toast;
 pub mod widgets;
@@ -17,7 +17,7 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
 
-use crate::app::state::{AppState, Pane, PaneKind};
+use crate::app::state::{AppState, Pane, PaneKind, PaneView};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
@@ -577,7 +577,10 @@ fn render_panes(
         } else {
             style::muted()
         };
-        let mut title = pane_display_title(*id, pane);
+        let mut title = match pane.view {
+            PaneView::Lx => text::LX_TITLE.to_string(),
+            PaneView::Terminal => pane_display_title(*id, pane),
+        };
         if pane.exited {
             title.push_str(" (exited)");
         }
@@ -593,13 +596,14 @@ fn render_panes(
         match pane.kind {
             PaneKind::Terminal => {
                 if let Some((row, col)) =
-                    terminal::render(inner, frame.buffer_mut(), &pane.terminal, focused)
+                    main_content::render(inner, frame.buffer_mut(), pane, focused, state.lx_phase)
                 {
                     cursor = Some((inner.x + col, inner.y + row));
                 }
-                if let Some(scrollbar) = terminal::scrollbar(inner, &pane.terminal) {
+                if let Some(scrollbar) = main_content::scrollbar(inner, pane) {
                     widgets::scrollbar::render(frame, &scrollbar);
                 }
+                main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
             }
             PaneKind::Placeholder => {}
         }

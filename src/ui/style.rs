@@ -107,5 +107,19 @@ pub fn markdown_url() -> Style {
     Style::default().fg(Color::Cyan)
 }
 
+/// lx 页吉祥物像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
+///
+/// `k` 描边藏青、`p` 主体粉、`n` 深粉、`b` 天空蓝、`w` 高光白；其余字符视为透明。
+pub fn mascot_pixel(ch: char) -> Option<Color> {
+    match ch {
+        'k' => Some(Color::Indexed(17)),
+        'p' => Some(Color::Indexed(218)),
+        'n' => Some(Color::Indexed(168)),
+        'b' => Some(Color::Indexed(117)),
+        'w' => Some(Color::Indexed(231)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests;

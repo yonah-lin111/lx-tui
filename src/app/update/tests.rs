@@ -6,6 +6,16 @@ use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
 use std::time::Duration;
 
+/// demo 状态并把活动窗格置为终端视图：避免 lx 动画干扰定时类断言。
+fn demo_terminal() -> AppState {
+    let mut state = AppState::demo();
+    let focus = state.active_tab().layout.focus();
+    if let Some(pane) = state.active_tab_mut().pane_mut(focus) {
+        pane.view = PaneView::Terminal;
+    }
+    state
+}
+
 #[test]
 fn quit_sets_flag() {
     let mut state = AppState::demo();
@@ -542,7 +552,7 @@ fn show_toast_replaces_previous_and_resets_deadline() {
 
 #[test]
 fn tick_clears_expired_toast_only() {
-    let mut state = AppState::demo();
+    let mut state = demo_terminal();
     let now = Instant::now();
     show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
     assert!(!tick(
@@ -557,7 +567,7 @@ fn tick_clears_expired_toast_only() {
 
 #[test]
 fn toast_hover_suspends_expiry_until_pointer_leaves() {
-    let mut state = AppState::demo();
+    let mut state = demo_terminal();
     let now = Instant::now();
     show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
     assert!(set_toast_hover(&mut state, true));
@@ -572,7 +582,7 @@ fn toast_hover_suspends_expiry_until_pointer_leaves() {
 
 #[test]
 fn hover_without_toast_is_noop() {
-    let mut state = AppState::demo();
+    let mut state = demo_terminal();
     assert!(!set_toast_hover(&mut state, true));
     assert_eq!(next_deadline(&state), None);
     dismiss_toast(&mut state);
@@ -1298,4 +1308,60 @@ fn mouse_mention_hover_select_and_wheel_flow() {
     select_mention(&mut state, 1);
     assert_eq!(state.prompt.text(), "@b.rs ");
     assert!(state.prompt.mention().is_none());
+}
+
+#[test]
+fn toggle_pane_view_flips_target_and_hides_terminal_state() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(view(&state, pane), PaneView::Lx);
+
+    assert!(toggle_pane_view(&mut state, pane));
+    assert_eq!(view(&state, pane), PaneView::Terminal);
+    begin_terminal_selection(&mut state, pane, 0, 0);
+    assert_eq!(state.terminal_selection, Some(pane));
+    state.terminal_scroll_drag = Some((pane, 0));
+
+    assert!(toggle_pane_view(&mut state, pane));
+    assert_eq!(view(&state, pane), PaneView::Lx);
+    assert!(state.terminal_selection.is_none(), "切回 lx 清理终端选区");
+    assert!(
+        state.terminal_scroll_drag.is_none(),
+        "切回 lx 清理滚动条拖拽"
+    );
+    assert!(!toggle_pane_view(&mut state, PaneId::alloc()));
+}
+
+#[test]
+fn lx_animation_advances_only_while_visible() {
+    let mut state = AppState::demo();
+    let now = Instant::now();
+    state.lx_last_tick = now;
+    assert!(tick(&mut state, now + LX_FRAME_INTERVAL));
+    assert_eq!(state.lx_phase, 1);
+    assert!(!tick(&mut state, now + LX_FRAME_INTERVAL), "同刻只推进一步");
+
+    let pane = state.active_tab().layout.focus();
+    assert!(toggle_pane_view(&mut state, pane));
+    assert!(!state.lx_visible());
+    assert!(!tick(&mut state, now + LX_FRAME_INTERVAL * 10));
+    assert_eq!(state.lx_phase, 1, "无 lx 视图时动画冻结");
+    assert_eq!(next_deadline(&state), None);
+}
+
+#[test]
+fn lx_animation_registers_frame_deadline_when_visible() {
+    let mut state = AppState::demo();
+    let now = Instant::now();
+    state.lx_last_tick = now;
+    assert_eq!(next_deadline(&state), Some(now + LX_FRAME_INTERVAL));
+
+    let pane = state.active_tab().layout.focus();
+    toggle_pane_view(&mut state, pane);
+    assert_eq!(next_deadline(&state), None);
+}
+
+/// 窗格视图（测试断言用）。
+fn view(state: &AppState, pane: PaneId) -> PaneView {
+    state.pane_anywhere(pane).expect("pane exists").view
 }

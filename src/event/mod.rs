@@ -16,7 +16,7 @@ use tokio_stream::StreamExt;
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneKind, home_dir, workspace_label};
+use crate::app::state::{AppState, PaneKind, PaneView, home_dir, workspace_label};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
@@ -305,7 +305,11 @@ fn handle_terminal_event(
                 .map(|pane| pane.terminal.mode())
                 .unwrap_or_else(TermMode::empty);
             let overlay = state.overlay.as_ref().map(Overlay::kind);
-            let Some(routed) = input::route(key, mode, state.prompt_focused, overlay) else {
+            let pane_lx = state
+                .active_pane()
+                .is_some_and(|pane| pane.view == PaneView::Lx);
+            let Some(routed) = input::route(key, mode, state.prompt_focused, overlay, pane_lx)
+            else {
                 return;
             };
             match routed {
@@ -365,6 +369,13 @@ fn handle_terminal_event(
             if state.prompt_focused {
                 update::apply_editor(state, EditorCommand::InsertText(text));
                 *dirty = true;
+                return;
+            }
+            // lx 视图不接收输入：粘贴同样吞掉，不写入隐藏终端。
+            if state
+                .active_pane()
+                .is_some_and(|pane| pane.view == PaneView::Lx)
+            {
                 return;
             }
             let id = state.active_tab().layout.focus();
@@ -483,6 +494,12 @@ fn handle_terminal_event(
                 } else if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     update::select_mention(state, index);
                     *dirty = true;
+                } else if let Some(pane) =
+                    pane_toggle_button_at(state, rects, mouse.column, mouse.row)
+                {
+                    // 按钮是控件：只切换视图，不改变焦点。
+                    update::toggle_pane_view(state, pane);
+                    *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
                     let row = mouse.row - inner.y;
                     let col = mouse.column - inner.x;
@@ -495,14 +512,22 @@ fn handle_terminal_event(
                         state.pane_anywhere(pane).map(|pane| pane.kind),
                         Some(PaneKind::Terminal)
                     ) {
-                        // 滚动条按下先于焦点与选区：thumb 拖拽，轨道点击跳转。
-                        if handle_terminal_scrollbar_press(
+                        if state
+                            .pane_anywhere(pane)
+                            .is_some_and(|target| target.view == PaneView::Lx)
+                        {
+                            // lx 页不接受终端交互：仅聚焦并清掉既有选区。
+                            update::focus_pane(state, pane);
+                            update::clear_selection(state);
+                            *dirty = true;
+                        } else if handle_terminal_scrollbar_press(
                             state,
                             pane,
                             inner,
                             mouse.column,
                             mouse.row,
                         ) {
+                            // 滚动条按下先于焦点与选区：thumb 拖拽，轨道点击跳转。
                             *dirty = true;
                         } else {
                             update::focus_pane(state, pane);
@@ -589,7 +614,7 @@ fn handle_terminal_event(
                             let inner = layout::pane_inner_rect(*rect);
                             state
                                 .pane_anywhere(pane)
-                                .and_then(|target| ui::terminal::scrollbar(inner, &target.terminal))
+                                .and_then(|target| ui::main_content::scrollbar(inner, target))
                         });
                     let Some(bar) = bar else {
                         return;
@@ -787,10 +812,9 @@ fn handle_terminal_event(
                             update::scroll_prompt(state, direction);
                             *dirty = true;
                         }
-                    } else if state
-                        .pane_anywhere(pane)
-                        .is_some_and(|target| target.kind == PaneKind::Terminal)
-                        && handle_pane_wheel(state, sessions, pane, inner, &mouse)
+                    } else if state.pane_anywhere(pane).is_some_and(|target| {
+                        target.kind == PaneKind::Terminal && target.view == PaneView::Terminal
+                    }) && handle_pane_wheel(state, sessions, pane, inner, &mouse)
                     {
                         *dirty = true;
                     }
@@ -974,6 +998,13 @@ fn forward_pane_mouse_event(
     inner: Rect,
     mouse: &MouseEvent,
 ) -> bool {
+    // lx 视图不向隐藏终端转发任何鼠标事件。
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.view == PaneView::Lx)
+    {
+        return false;
+    }
     let Some((routing, mode)) = state
         .pane_anywhere(pane)
         .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
@@ -1102,7 +1133,7 @@ fn handle_terminal_scrollbar_press(
 ) -> bool {
     let Some(bar) = state
         .pane_anywhere(pane)
-        .and_then(|target| ui::terminal::scrollbar(inner, &target.terminal))
+        .and_then(|target| ui::main_content::scrollbar(inner, target))
     else {
         return false;
     };
@@ -1201,6 +1232,20 @@ fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, R
         } else {
             None
         }
+    })
+}
+
+/// 命中窗格顶边框右端的视图切换按钮：仅 Terminal 窗格有按钮（prompt 栏与占位窗格无）。
+fn pane_toggle_button_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<PaneId> {
+    ui::main_content::toggle_button_at(rects, column, row).filter(|pane| {
+        state
+            .pane_anywhere(*pane)
+            .is_some_and(|target| target.kind == PaneKind::Terminal)
     })
 }
 
