@@ -161,26 +161,41 @@ fn renders_block_command_panel_below_cursor() {
 }
 
 #[test]
-fn renders_mention_panel_with_name_and_directory() {
+fn renders_mention_panel_stacked_and_hit_tests_items() {
     let area = Rect::new(0, 0, 30, 10);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
     editor.resize(30, 10);
     editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
-    editor.insert_str("@app");
+    editor.insert_str("@");
     let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
     editor.apply_mention_entries(
         generation,
-        vec![MentionEntry {
-            path: "src/app.rs".into(),
-            is_directory: false,
-        }],
+        vec![
+            MentionEntry {
+                path: "src/app.rs".into(),
+                is_directory: false,
+            },
+            MentionEntry {
+                path: "src/lib.rs".into(),
+                is_directory: false,
+            },
+        ],
     );
-    assert!(editor.mention().is_some());
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
 
     assert_eq!(buf[(0, 1)].symbol(), "╭");
-    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
-    assert!(row.contains("app.rs"));
-    assert!(row.contains("src"));
+    let name_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    assert!(name_row.contains("app.rs"));
+    assert!(dir_row.contains("src"));
+    assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
+    assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+
+    assert_eq!(mention_item_at(&editor, area, 2, 2), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 3), Some(0));
+    assert_eq!(mention_item_at(&editor, area, 2, 4), Some(1));
+    assert_eq!(mention_item_at(&editor, area, 2, 5), Some(1));
+    assert_eq!(mention_item_at(&editor, area, 2, 6), None);
+    assert_eq!(mention_item_at(&editor, area, 2, 1), None);
 }

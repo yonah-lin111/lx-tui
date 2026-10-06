@@ -32,6 +32,18 @@ impl MentionState {
         }
     }
 
+    /// 设置高亮索引；面板未打开、索引越界或未变化返回 false。
+    pub fn set_active(&mut self, index: usize) -> bool {
+        let Some(panel) = self.panel.as_mut() else {
+            return false;
+        };
+        if index >= panel.items().len() || panel.active() == index {
+            return false;
+        }
+        panel.set_active(index);
+        true
+    }
+
     /// 确认高亮条目：关闭面板并返回替换区间与插入文本；未打开或区间越界返回 None。
     pub fn confirm(&mut self, text_len: usize) -> Option<(Range<usize>, String)> {
         let panel = self.panel.as_ref()?;

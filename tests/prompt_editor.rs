@@ -219,12 +219,24 @@ fn mention_panel_renders_and_confirms_insertion() {
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
     let inner = layout::pane_inner_rect(view.prompt);
-    let panel_row: String = (inner.x..inner.x + inner.width)
+    let name_row: String = (inner.x..inner.x + inner.width)
         .map(|x| buffer[(x, inner.y + 2)].symbol())
         .collect();
-    assert!(panel_row.contains("app.rs"));
-    assert!(panel_row.contains("src"));
+    let detail_row: String = (inner.x..inner.x + inner.width)
+        .map(|x| buffer[(x, inner.y + 3)].symbol())
+        .collect();
+    assert!(name_row.contains("app.rs"));
+    assert!(detail_row.contains("src"));
 
     update::apply_editor(&mut state, EditorCommand::Newline);
     assert_eq!(state.prompt.text(), "@src/app.rs ");
+}
+
+#[test]
+fn backspace_removes_whole_mention_after_insertion() {
+    let (mut state, _config, _view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertText("@src/app.rs ".into()));
+    update::apply_editor(&mut state, EditorCommand::Backspace);
+    assert_eq!(state.prompt.text(), "");
 }

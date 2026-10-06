@@ -974,3 +974,41 @@ fn clear_panel_invalidates_pending_mention_scan() {
     assert!(!prompt.apply_mention_entries(generation, vec![file("app.rs")]));
     assert!(prompt.mention().is_none());
 }
+
+#[test]
+fn backspace_removes_whole_mention_after_trailing_space() {
+    let mut prompt = prompt(30, 5);
+    prompt.insert_str("@src/app.rs ");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "");
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+}
+
+#[test]
+fn backspace_keeps_plain_deletion_without_trailing_space() {
+    let mut prompt = prompt(30, 5);
+    prompt.insert_str("@f.rs");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "@f.r");
+}
+
+#[test]
+fn backspace_with_mention_panel_open_edits_query() {
+    let mut prompt = mention_prompt(vec![file("main.rs")]);
+    prompt.insert_char('m');
+    assert!(prompt.mention().is_some());
+    prompt.backspace();
+    assert_eq!(prompt.text(), "@");
+    assert!(prompt.mention().is_some());
+}
+
+#[test]
+fn mention_set_active_and_confirm_at_inserts_clicked_item() {
+    let mut prompt = mention_prompt(vec![file("a.rs"), file("b.rs")]);
+    assert!(prompt.mention_set_active(1));
+    assert_eq!(prompt.mention().expect("panel").active(), 1);
+    assert!(!prompt.mention_set_active(1));
+    assert!(!prompt.mention_set_active(5));
+    assert!(prompt.mention_confirm_at(0));
+    assert_eq!(prompt.text(), "@a.rs ");
+}

@@ -158,9 +158,19 @@ impl Prompt {
         self.settle();
     }
 
-    /// 删除光标前一个字符；紧跟列表标记时先按列表上下文处理标记。
+    /// 删除光标前一个字符；@ 提及后的空白处整块删除提及，紧跟列表标记时按列表上下文处理标记。
     pub fn backspace(&mut self) {
         if self.cursor == 0 {
+            return;
+        }
+        if self.mention.panel().is_none()
+            && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
+        {
+            let start = range.start;
+            self.record(EditKind::Delete);
+            self.text.replace_range(range, "");
+            self.cursor = start;
+            self.settle();
             return;
         }
         if !self.in_fence() && self.delete_list_markup() {
@@ -270,6 +280,17 @@ impl Prompt {
     /// 提及面板打开时按偏移循环移动高亮；返回是否消费该按键。
     pub fn mention_move(&mut self, delta: isize) -> bool {
         self.mention.move_active(delta)
+    }
+
+    /// 提及面板悬停高亮：设置高亮索引；返回是否变化。
+    pub fn mention_set_active(&mut self, index: usize) -> bool {
+        self.mention.set_active(index)
+    }
+
+    /// 提及面板点选：设置高亮并确认插入；返回是否消费。
+    pub fn mention_confirm_at(&mut self, index: usize) -> bool {
+        self.mention.set_active(index);
+        self.mention_confirm()
     }
 
     /// 提及面板打开时确认高亮条目：替换触发区间并压制重弹；返回是否消费该按键。

@@ -1,5 +1,7 @@
 //! markdown 编辑领域：块命令与文件提及的触发识别、候选过滤与插入计算，纯函数、无 UI 依赖。
 
+use std::ops::Range;
+
 /// 块命令触发类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockTriggerKind {
@@ -203,6 +205,11 @@ impl MentionPanel {
         self.active
     }
 
+    /// 直接设置高亮索引；越界钳到末项。
+    pub fn set_active(&mut self, index: usize) {
+        self.active = index.min(self.items.len().saturating_sub(1));
+    }
+
     /// 按偏移循环移动高亮项。
     pub fn move_active(&mut self, delta: isize) {
         let len = self.items.len() as isize;
@@ -359,6 +366,53 @@ pub fn mention_insertion(entry: &MentionEntry) -> String {
     } else {
         format!("@{} ", entry.path)
     }
+}
+
+/// @ 提及整块删除范围：光标紧跟提及后的空白时返回（提及起点..光标），供 Backspace 一次删净。
+///
+/// 提及必须位于行首或空白之后且路径非空；光标不在空白后时返回 None（走普通退格）。
+pub fn mention_deletion_range(text: &str, cursor: usize) -> Option<Range<usize>> {
+    if cursor == 0 || cursor > text.len() || !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let previous = text[..cursor].chars().next_back()?;
+    if previous != ' ' && previous != '\t' {
+        return None;
+    }
+    let end = cursor - previous.len_utf8();
+    mention_token_ranges(text)
+        .into_iter()
+        .find(|range| range.end == end)
+        .map(|range| range.start..cursor)
+}
+
+/// 全文中的 @ 提及区间：`@` 位于行首或空白之后，路径由查询字符组成且非空。
+fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while let Some(offset) = text[index..].find('@') {
+        let at = index + offset;
+        let boundary = text[..at]
+            .chars()
+            .next_back()
+            .is_none_or(|previous| previous.is_whitespace());
+        if boundary {
+            let mut end = at + 1;
+            for ch in text[end..].chars() {
+                if !is_mention_query_char(ch) || ch == '@' {
+                    break;
+                }
+                end += ch.len_utf8();
+            }
+            if end > at + 1 {
+                ranges.push(at..end);
+            }
+            index = end;
+        } else {
+            index = at + 1;
+        }
+    }
+    ranges
 }
 
 /// 行首标记匹配；返回类别与标记在行内的起始偏移（跳过前导空格）。

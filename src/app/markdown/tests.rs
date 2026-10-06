@@ -321,3 +321,23 @@ fn mention_panel_move_wraps_both_directions() {
     panel.move_active(1);
     assert_eq!(panel.active(), 0);
 }
+
+#[test]
+fn mention_deletion_range_covers_token_and_trailing_blank() {
+    let text = "@src/app.rs ";
+    assert_eq!(mention_deletion_range(text, text.len()), Some(0..12));
+    let text = "a @f.rs ";
+    assert_eq!(mention_deletion_range(text, text.len()), Some(2..8));
+    let text = "@主页 ";
+    assert_eq!(mention_deletion_range(text, text.len()), Some(0..8));
+}
+
+#[test]
+fn mention_deletion_range_requires_boundary_and_trailing_blank() {
+    assert_eq!(mention_deletion_range("@f.rs", 5), None);
+    assert_eq!(mention_deletion_range("@f.rs x", 7), None);
+    assert_eq!(mention_deletion_range("[@f.rs] ", 8), None);
+    assert_eq!(mention_deletion_range("a@f.rs ", 7), None);
+    assert_eq!(mention_deletion_range("@@f.rs ", 7), None);
+    assert_eq!(mention_deletion_range("", 0), None);
+}

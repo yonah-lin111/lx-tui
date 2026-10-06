@@ -419,6 +419,9 @@ fn handle_terminal_event(
                 {
                     update::begin_prompt_resize(state);
                     *dirty = true;
+                } else if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
+                    update::select_mention(state, index);
+                    *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
                     let row = mouse.row - inner.y;
                     let col = mouse.column - inner.x;
@@ -592,6 +595,18 @@ fn handle_terminal_event(
                 {
                     return;
                 }
+                if mention_panel_rect(state, view)
+                    .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                {
+                    let delta = if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    };
+                    update::move_mention(state, delta);
+                    *dirty = true;
+                    return;
+                }
                 if let Some((pane, _)) = pane_at(rects, mouse.column, mouse.row)
                     && pane == state.prompt.id()
                 {
@@ -627,6 +642,12 @@ fn handle_terminal_event(
                         {
                             *dirty = true;
                         }
+                    }
+                    return;
+                }
+                if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
+                    if update::hover_mention(state, index) {
+                        *dirty = true;
                     }
                     return;
                 }
@@ -812,6 +833,23 @@ fn write_to_pane(sessions: &mut HashMap<PaneId, PtySession>, id: PaneId, bytes: 
     {
         tracing::warn!(pane = id.raw(), %error, "pty write failed");
     }
+}
+
+/// 提及面板命中：返回条目索引；面板未打开或未命中返回 None。
+fn mention_item_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let area = layout::pane_inner_rect(view.prompt);
+    ui::prompt::mention_item_at(&state.prompt, area, column, row)
+}
+
+/// 提及面板矩形；用于滚轮命中。
+fn mention_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
+    let area = layout::pane_inner_rect(view.prompt);
+    ui::prompt::mention_panel_rect(&state.prompt, area)
 }
 
 /// 命中窗格内容区：返回窗格标识与其内容区矩形。

@@ -876,3 +876,38 @@ fn clear_panel_hides_mention_panel_on_focus_loss() {
     focus_pane(&mut state, pane);
     assert!(state.prompt.mention().is_none());
 }
+
+#[test]
+fn mouse_mention_hover_select_and_wheel_flow() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(
+        &mut state,
+        generation,
+        vec![
+            MentionEntry {
+                path: "a.rs".into(),
+                is_directory: false,
+            },
+            MentionEntry {
+                path: "b.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+
+    assert!(hover_mention(&mut state, 1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
+    assert!(!hover_mention(&mut state, 1));
+    assert!(move_mention(&mut state, 1));
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    select_mention(&mut state, 1);
+    assert_eq!(state.prompt.text(), "@b.rs ");
+    assert!(state.prompt.mention().is_none());
+}

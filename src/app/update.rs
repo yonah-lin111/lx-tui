@@ -131,6 +131,21 @@ pub fn apply_mention_entries(state: &mut AppState, generation: u64, entries: Vec
     state.prompt.apply_mention_entries(generation, entries);
 }
 
+/// 鼠标悬停提及条目：更新高亮；返回是否变化。
+pub fn hover_mention(state: &mut AppState, index: usize) -> bool {
+    state.prompt.mention_set_active(index)
+}
+
+/// 鼠标点选提及条目：确认插入。
+pub fn select_mention(state: &mut AppState, index: usize) {
+    state.prompt.mention_confirm_at(index);
+}
+
+/// 滚轮在提及面板上移动高亮；返回是否消费。
+pub fn move_mention(state: &mut AppState, delta: isize) -> bool {
+    state.prompt.mention_move(delta)
+}
+
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 const WHEEL_LINES: isize = 3;
 
