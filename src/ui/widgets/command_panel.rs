@@ -16,7 +16,7 @@ const MIN_HEIGHT: u16 = 3;
 /// 标签与预览之间的间距（列）。
 const ITEM_GAP: usize = 2;
 
-/// 面板条目：主文案与次要预览。
+/// 面板条目：主文案与格式预览；绘制时格式在前、名称在后。
 pub struct CommandItem<'a> {
     pub label: &'a str,
     pub preview: &'a str,
@@ -63,7 +63,7 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     Some(rect)
 }
 
-/// 面板宽度：最长条目的标签+间距+预览，加两边框与左侧内边距，钳制在内容区内。
+/// 面板宽度：最长条目的预览+间距+标签，加两边框与左侧内边距，钳制在内容区内。
 fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
     let content = items
         .iter()
@@ -71,7 +71,7 @@ fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
         .max()
         .unwrap_or(0)
         .min(usize::from(available));
-    ((content + 3) as u16).min(available).max(MIN_WIDTH)
+    ((content + 4) as u16).min(available).max(MIN_WIDTH)
 }
 
 /// 绘制可见条目；窗口滚动保证高亮项可见。
@@ -90,16 +90,16 @@ fn render_items(buf: &mut Buffer, inner: Rect, view: &CommandPanelView<'_>) {
     }
 }
 
-/// 绘制单条目：高亮项整行反显，标签与预览超宽由 Paragraph 截断。
+/// 绘制单条目：格式预览在前、名称在后；高亮项整行反显，超宽由 Paragraph 截断。
 fn render_item(buf: &mut Buffer, area: Rect, item: &CommandItem<'_>, active: bool) {
     if area.width < 3 {
         return;
     }
     let line = Line::from(vec![
         Span::raw(" "),
-        Span::styled(item.label, style::text()),
-        Span::raw(" ".repeat(ITEM_GAP)),
         Span::styled(item.preview, style::muted()),
+        Span::raw(" ".repeat(ITEM_GAP)),
+        Span::styled(item.label, style::text()),
     ]);
     let row_style = if active {
         Style::default().add_modifier(Modifier::REVERSED)
