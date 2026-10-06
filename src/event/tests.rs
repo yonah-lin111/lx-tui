@@ -438,6 +438,129 @@ fn mouse_wheel_extends_in_progress_selection() {
 }
 
 #[test]
+fn mouse_drag_to_pane_edge_arms_autoscroll() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+        for i in 0..80 {
+            target.terminal.feed(format!("line {i:02}\r\n").as_bytes());
+        }
+    }
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 2,
+            inner.y + 5,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            inner.x + 2,
+            inner.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        state.selection_autoscroll.is_some(),
+        "edge drag arms autoscroll"
+    );
+
+    let before = state
+        .pane_anywhere(pane)
+        .expect("terminal pane")
+        .terminal
+        .display_offset();
+    assert!(crate::app::update::tick(
+        &mut state,
+        Instant::now() + Duration::from_millis(31)
+    ));
+    let after = state
+        .pane_anywhere(pane)
+        .expect("terminal pane")
+        .terminal
+        .display_offset();
+    assert!(after > before, "autoscroll tick scrolls the viewport");
+}
+
+#[test]
+fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    overflow_prompt(&mut state, &geo.view);
+    let prompt = state.prompt.id();
+    let inner = pane_inner(&geo, prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + 1,
+            inner.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .selection
+            .is_some_and(|selection| selection.is_dragging())
+    );
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, inner.x + 1, inner.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.scroll() > 0, "wheel scrolls prompt viewport");
+    let range = state
+        .selection
+        .and_then(|selection| selection.range())
+        .expect("selection range");
+    assert!(
+        range.0.0 < 0,
+        "anchor pinned to text, shifted above viewport"
+    );
+    assert!(dirty);
+}
+
+#[test]
 fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
     let config = Config::default();
     let mut state = AppState::demo();

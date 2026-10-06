@@ -69,6 +69,8 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         let geometry = current_geometry(tui, state, config)?;
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
+            // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
+            update::stop_selection_autoscroll(state);
             resize_sessions(&mut sessions, &geometry.rects);
             last_rects.clone_from(&geometry.rects);
             if let Some(rows) = ui::workspace_list_rows(&geometry.view, state) {
@@ -599,6 +601,13 @@ fn handle_terminal_event(
                 if pane == state.prompt.id() {
                     update::place_prompt_cursor(state, row, col);
                 }
+                update::arm_selection_autoscroll(
+                    state,
+                    pane,
+                    inner,
+                    (mouse.column, mouse.row),
+                    Instant::now(),
+                );
                 *dirty = true;
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -669,11 +678,23 @@ fn handle_terminal_event(
                 if state.resizing_prompt {
                     return;
                 }
-                // prompt 拖拽选区期间吞掉滚轮（设计约束：不滚动）。
-                if state
-                    .selection
-                    .is_some_and(|selection| selection.is_dragging())
+                // prompt 拖拽选区：滚轮滚动视口，锚点钉在文本上，终点跟到鼠标。
+                if let Some(selection) = state.selection
+                    && selection.is_dragging()
                 {
+                    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                        && let Some((_, rect)) =
+                            rects.iter().find(|(id, _)| *id == selection.pane())
+                    {
+                        let inner = layout::pane_inner_rect(*rect);
+                        if inner.width > 0 && inner.height > 0 {
+                            let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                            let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                            if update::wheel_prompt_selection(state, direction, row, col) {
+                                *dirty = true;
+                            }
+                        }
+                    }
                     return;
                 }
                 // 终端拖拽选区优先于鼠标上报：滚动选区所在窗格并延伸选区。

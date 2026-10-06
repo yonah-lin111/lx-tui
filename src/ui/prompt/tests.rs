@@ -12,8 +12,8 @@ fn prompt(cols: u16, rows: u16, text: &str) -> Prompt {
 }
 
 fn selection(prompt: &Prompt, start: (u16, u16), end: (u16, u16)) -> Selection {
-    let mut selection = Selection::begin(prompt.id(), start.0, start.1);
-    selection.drag(end.0, end.1);
+    let mut selection = Selection::begin(prompt.id(), i32::from(start.0), start.1);
+    selection.drag(i32::from(end.0), end.1);
     selection
 }
 

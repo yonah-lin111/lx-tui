@@ -1,7 +1,7 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
 
@@ -13,8 +13,8 @@ use super::overlay::{
 };
 use super::selection::Selection;
 use super::state::{
-    AppState, PaneKind, Tab, Workspace, current_workspace_identity, home_dir, tab_label,
-    unique_workspace_name, workspace_label,
+    AppState, AutoscrollDirection, PaneKind, SelectionAutoscroll, Tab, Workspace,
+    current_workspace_identity, home_dir, tab_label, unique_workspace_name, workspace_label,
 };
 use super::toast::Toast;
 
@@ -105,6 +105,9 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 const WHEEL_LINES: isize = 3;
 
+/// 边缘自动滚动每步的间隔。
+const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
+
 /// 按方向滚动 prompt 视口（负数向上、正数向下）；光标不动，编辑后自动吸回。
 pub fn scroll_prompt(state: &mut AppState, direction: isize) {
     state.prompt.scroll_by(direction.signum() * WHEEL_LINES);
@@ -112,6 +115,11 @@ pub fn scroll_prompt(state: &mut AppState, direction: isize) {
 
 /// 按方向滚动终端窗格回滚视口（负数向上、正数向下）；返回视口是否移动。
 pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {
+    scroll_pane_lines(state, id, direction, WHEEL_LINES)
+}
+
+/// 按方向滚动终端窗格指定行数；返回视口是否移动。
+fn scroll_pane_lines(state: &mut AppState, id: PaneId, direction: isize, lines: isize) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
@@ -120,7 +128,32 @@ pub fn scroll_pane(state: &mut AppState, id: PaneId, direction: isize) -> bool {
     }
     // 仿真器的 delta 正数指向历史（视口上移），与方向的上下语义相反。
     pane.terminal
-        .scroll_display(-(direction.signum() * WHEEL_LINES) as i32)
+        .scroll_display(-(direction.signum() * lines) as i32)
+}
+
+/// 滚动 prompt 视口并把进行中的选区平移相同行数（锚点钉在文本上）；返回视口是否移动。
+fn scroll_prompt_selection(state: &mut AppState, direction: isize, lines: isize) -> bool {
+    let before = state.prompt.scroll();
+    state.prompt.scroll_by(direction.signum() * lines);
+    let moved = state.prompt.scroll() as isize - before as isize;
+    if moved == 0 {
+        return false;
+    }
+    if let Some(selection) = state.selection.as_mut() {
+        selection.shift_rows(-(moved as i32));
+    }
+    true
+}
+
+/// prompt 拖拽选区时滚轮：滚动视口并保持选区锚点，终点跟到鼠标单元格；返回视口是否移动。
+pub fn wheel_prompt_selection(state: &mut AppState, direction: isize, row: u16, col: u16) -> bool {
+    if !scroll_prompt_selection(state, direction, WHEEL_LINES) {
+        return false;
+    }
+    let prompt = state.prompt.id();
+    drag_selection(state, prompt, row, col);
+    place_prompt_cursor(state, row, col);
+    true
 }
 
 /// 键盘或粘贴输入后把窗格视口吸回最新输出；返回视口是否移动。
@@ -196,7 +229,8 @@ pub fn update_pane_cwd(state: &mut AppState, id: PaneId, label: String) -> bool 
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.resizing_prompt = false;
     clear_terminal_selection(state);
-    state.selection = Some(Selection::begin(pane, row, col));
+    state.selection_autoscroll = None;
+    state.selection = Some(Selection::begin(pane, i32::from(row), col));
 }
 
 /// 扩展当前 prompt 选区；窗格不一致时忽略。
@@ -204,13 +238,14 @@ pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     if let Some(selection) = state.selection.as_mut()
         && selection.pane() == pane
     {
-        selection.drag(row, col);
+        selection.drag(i32::from(row), col);
     }
 }
 
 /// 在终端窗格开始拖拽选择；选区存于仿真器，随输出滚动钉在内容上。
 pub fn begin_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.selection = None;
+    state.selection_autoscroll = None;
     clear_terminal_selection(state);
     let started = state.pane_mut_anywhere(pane).is_some_and(|target| {
         if target.kind != PaneKind::Terminal {
@@ -235,6 +270,7 @@ pub fn drag_terminal_selection(state: &mut AppState, pane: PaneId, row: u16, col
 /// 结束终端选区并提取文本；空选区返回 None。
 pub fn finish_terminal_selection(state: &mut AppState, pane: PaneId) -> Option<String> {
     state.terminal_selection = None;
+    state.selection_autoscroll = None;
     let target = state.pane_mut_anywhere(pane)?;
     if target.kind != PaneKind::Terminal {
         return None;
@@ -257,11 +293,13 @@ pub fn clear_terminal_selection(state: &mut AppState) {
 /// 清除 prompt 与终端选区。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
+    state.selection_autoscroll = None;
     clear_terminal_selection(state);
 }
 
 /// 松开鼠标：结束拖动；空选区（未拖动）直接清除，非空选区保留供复制或删除。
 pub fn end_selection_drag(state: &mut AppState) {
+    state.selection_autoscroll = None;
     let keep = state
         .selection
         .as_ref()
@@ -275,6 +313,137 @@ pub fn end_selection_drag(state: &mut AppState) {
     }
 }
 
+/// 拖拽选择时按鼠标相对窗格内容区的位置安排边缘自动滚动。
+///
+/// 鼠标越出上下边缘：立即按距离滚动并延伸选区，随后进入定时自动滚动；
+/// 停在边缘行：只登记计划；回到内部：清除计划。
+pub fn arm_selection_autoscroll(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    mouse: (u16, u16),
+    now: Instant,
+) {
+    if !selection_dragging_on(state, pane) {
+        state.selection_autoscroll = None;
+        return;
+    }
+    let top = inner.y;
+    let bottom = inner.bottom().saturating_sub(1);
+    let (direction, distance) = if mouse.1 < top {
+        (AutoscrollDirection::Up, top - mouse.1)
+    } else if mouse.1 > bottom {
+        (AutoscrollDirection::Down, mouse.1 - bottom)
+    } else if mouse.1 == top {
+        (AutoscrollDirection::Up, 0)
+    } else if mouse.1 == bottom {
+        (AutoscrollDirection::Down, 0)
+    } else {
+        state.selection_autoscroll = None;
+        return;
+    };
+    if distance > 0 {
+        autoscroll_step(
+            state,
+            pane,
+            direction,
+            edge_scroll_lines(distance),
+            mouse,
+            inner,
+        );
+    }
+    state.selection_autoscroll = Some(SelectionAutoscroll {
+        pane,
+        direction,
+        mouse,
+        inner,
+        next_at: now + AUTOSCROLL_INTERVAL,
+    });
+}
+
+/// 停止边缘自动滚动。
+pub fn stop_selection_autoscroll(state: &mut AppState) {
+    state.selection_autoscroll = None;
+}
+
+/// 自动滚动到点后补一步；返回是否产生变化。
+fn tick_selection_autoscroll(state: &mut AppState, now: Instant) -> bool {
+    let Some(autoscroll) = state.selection_autoscroll else {
+        return false;
+    };
+    if now < autoscroll.next_at {
+        return false;
+    }
+    if !selection_dragging_on(state, autoscroll.pane) {
+        state.selection_autoscroll = None;
+        return false;
+    }
+    if !autoscroll_step(
+        state,
+        autoscroll.pane,
+        autoscroll.direction,
+        1,
+        autoscroll.mouse,
+        autoscroll.inner,
+    ) {
+        // 到达回滚边界或视口尽头，停止。
+        state.selection_autoscroll = None;
+        return false;
+    }
+    if let Some(autoscroll) = state.selection_autoscroll.as_mut() {
+        autoscroll.next_at = now + AUTOSCROLL_INTERVAL;
+    }
+    true
+}
+
+/// 自动滚动一步：滚动若干行并把选区终点推进到鼠标位置；返回视口是否移动。
+fn autoscroll_step(
+    state: &mut AppState,
+    pane: PaneId,
+    direction: AutoscrollDirection,
+    lines: isize,
+    mouse: (u16, u16),
+    inner: Rect,
+) -> bool {
+    let step = match direction {
+        AutoscrollDirection::Up => -1,
+        AutoscrollDirection::Down => 1,
+    };
+    let terminal = state.terminal_selection == Some(pane);
+    let moved = if terminal {
+        scroll_pane_lines(state, pane, step, lines)
+    } else {
+        scroll_prompt_selection(state, step, lines)
+    };
+    if !moved {
+        return false;
+    }
+    let row = mouse.1.clamp(inner.y, inner.bottom().saturating_sub(1)) - inner.y;
+    let col = mouse.0.clamp(inner.x, inner.right().saturating_sub(1)) - inner.x;
+    if terminal {
+        drag_terminal_selection(state, pane, row, col);
+    } else {
+        drag_selection(state, pane, row, col);
+        place_prompt_cursor(state, row, col);
+    }
+    true
+}
+
+/// 该窗格上是否存在进行中的选择拖拽。
+fn selection_dragging_on(state: &AppState, pane: PaneId) -> bool {
+    if state.terminal_selection == Some(pane) {
+        return true;
+    }
+    state
+        .selection
+        .is_some_and(|selection| selection.is_dragging() && selection.pane() == pane)
+}
+
+/// 边缘距离对应的立即滚动行数（对齐 herdr：距离 × 3，夹在 3..=15）。
+fn edge_scroll_lines(distance: u16) -> isize {
+    usize::from(distance).saturating_mul(3).clamp(3, 15) as isize
+}
+
 /// prompt 选区文本（保留选区，供 Ctrl/Cmd+C 复制）；空选区返回 None。
 pub fn prompt_selection_text(state: &AppState) -> Option<String> {
     let (start, end) = prompt_selection_range(state)?;
@@ -282,12 +451,18 @@ pub fn prompt_selection_text(state: &AppState) -> Option<String> {
 }
 
 /// prompt 选区对应的视口行列范围；选区不在 prompt 或为空时返回 None。
+///
+/// 锚点滚出视口上方（行号为负）时按视口顶行截断。
 fn prompt_selection_range(state: &AppState) -> Option<((u16, u16), (u16, u16))> {
     let selection = state.selection?;
     if selection.pane() != state.prompt.id() {
         return None;
     }
-    selection.range()
+    let (start, end) = selection.range()?;
+    Some((
+        (start.0.max(0) as u16, start.1),
+        (end.0.max(0) as u16, end.1),
+    ))
 }
 
 /// prompt 选区对应的字节范围；选区不在 prompt 或为空时返回 None。
@@ -381,12 +556,20 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     if expired {
         state.toast = None;
     }
-    expired
+    let scrolled = tick_selection_autoscroll(state, now);
+    expired || scrolled
 }
 
-/// 最近一次 toast 到期时间；事件循环据此安排唤醒。
+/// 最近一次定时到期时间（toast 消失或自动滚动）；事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
-    state.toast.as_ref().and_then(Toast::next_deadline)
+    let toast = state.toast.as_ref().and_then(Toast::next_deadline);
+    let autoscroll = state
+        .selection_autoscroll
+        .map(|autoscroll| autoscroll.next_at);
+    match (toast, autoscroll) {
+        (Some(toast), Some(autoscroll)) => Some(toast.min(autoscroll)),
+        (toast, autoscroll) => toast.or(autoscroll),
+    }
 }
 
 /// 新建工作区并激活：名字取当前 cwd 末段（对齐 herdr），重名追加最小未用序号；

@@ -2,6 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use ratatui::layout::Rect;
 
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
@@ -22,6 +25,26 @@ const DEFAULT_PROMPT_WIDTH: u16 = 30;
 /// 侧栏展开宽度的兜底初值（列）；生产启动时由配置覆盖。
 const DEFAULT_SIDEBAR_WIDTH: u16 = 24;
 
+/// 选区拖拽边缘自动滚动方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoscrollDirection {
+    Up,
+    Down,
+}
+
+/// 选区拖拽边缘自动滚动计划。
+///
+/// 鼠标停在（或越出）窗格上下边缘时登记；`inner` 与 `mouse` 为登记时的几何快照，
+/// 几何变化时调用方需停止滚动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionAutoscroll {
+    pub pane: PaneId,
+    pub direction: AutoscrollDirection,
+    pub mouse: (u16, u16),
+    pub inner: Rect,
+    pub next_at: Instant,
+}
+
 /// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端；prompt 为全局右栏。
 #[derive(Debug)]
 pub struct AppState {
@@ -39,6 +62,8 @@ pub struct AppState {
     pub selection: Option<Selection>,
     /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
     pub terminal_selection: Option<PaneId>,
+    /// 选区拖拽边缘自动滚动计划；None 表示未激活。
+    pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -247,6 +272,7 @@ impl AppState {
             toast: None,
             selection: None,
             terminal_selection: None,
+            selection_autoscroll: None,
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,

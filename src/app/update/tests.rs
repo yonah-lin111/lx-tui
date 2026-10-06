@@ -190,6 +190,84 @@ fn terminal_selection_finish_extracts_text() {
     assert!(state.terminal_selection.is_none());
 }
 
+/// 填满终端回滚历史。
+fn fill_scrollback(state: &mut AppState, pane: PaneId, lines: usize) {
+    let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+    for i in 0..lines {
+        target.terminal.feed(format!("line {i:02}\r\n").as_bytes());
+    }
+}
+
+#[test]
+fn arm_selection_autoscroll_beyond_edge_scrolls_immediately() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    fill_scrollback(&mut state, pane, 80);
+    let inner = Rect::new(0, 5, 40, 10);
+    begin_terminal_selection(&mut state, pane, 5, 0);
+    drag_terminal_selection(&mut state, pane, 5, 2);
+
+    // 鼠标在内容区上方 3 行：立即滚动 9 行并登记计划。
+    arm_selection_autoscroll(&mut state, pane, inner, (2, inner.y - 3), Instant::now());
+    let autoscroll = state.selection_autoscroll.expect("autoscroll armed");
+    assert_eq!(autoscroll.direction, AutoscrollDirection::Up);
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), 9);
+
+    let before = target.terminal.display_offset();
+    assert!(tick(&mut state, Instant::now() + Duration::from_millis(31)));
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), before + 1);
+}
+
+#[test]
+fn edge_autoscroll_stops_at_scrollback_top() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    fill_scrollback(&mut state, pane, 20);
+    let inner = Rect::new(0, 0, 40, 10);
+    begin_terminal_selection(&mut state, pane, 5, 0);
+    drag_terminal_selection(&mut state, pane, 5, 2);
+    let now = Instant::now();
+    arm_selection_autoscroll(&mut state, pane, inner, (2, 0), now);
+    assert!(state.selection_autoscroll.is_some());
+
+    let mut at = now;
+    let mut guard = 0;
+    while state.selection_autoscroll.is_some() && guard < 100 {
+        at += Duration::from_millis(31);
+        tick(&mut state, at);
+        guard += 1;
+    }
+    assert!(guard < 100, "autoscroll must stop by itself");
+    assert!(state.selection_autoscroll.is_none());
+}
+
+#[test]
+fn prompt_selection_wheel_keeps_anchor_and_moves_cursor() {
+    let mut state = AppState::demo();
+    state.prompt.resize(10, 2);
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText("1\n2\n3\n4\n5\n6".into()),
+    );
+    set_prompt_scroll(&mut state, 0);
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 1, 0);
+
+    assert!(wheel_prompt_selection(&mut state, 1, 1, 0));
+    let scroll = state.prompt.scroll();
+    assert_eq!(scroll, WHEEL_LINES as usize);
+    let range = state
+        .selection
+        .and_then(|selection| selection.range())
+        .expect("selection range");
+    // 锚点随滚动上移保持钉在文本上，终点跟到鼠标所在视口行。
+    assert_eq!(range.0.0, -(WHEEL_LINES as i32));
+    assert_eq!(range.1.0, 1);
+}
+
 #[test]
 fn terminal_selection_ignores_non_terminal_pane() {
     let mut state = AppState::demo();
