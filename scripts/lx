@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+target=$0
+while [ -L "$target" ]; do
+    link=$(readlink "$target")
+    case $link in
+    /*) target=$link ;;
+    *) target=$(dirname "$target")/$link ;;
+    esac
+done
+
+root=$(cd "$(dirname "$target")/.." && pwd)
+cd "$root"
+exec cargo run "$@"
