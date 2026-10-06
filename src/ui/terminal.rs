@@ -11,15 +11,18 @@ use crate::app::selection::Selection;
 use crate::terminal::Terminal;
 
 /// 渲染终端内容；`focused` 为真时叠加光标反显，`selection` 命中的单元格反显高亮。
+///
+/// 返回聚焦且光标可见时仿真光标在 `area` 内的坐标；调用方据此同步硬件光标，
+/// 让 IME 预输入与候选窗跟随终端光标。
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
     terminal: &Terminal,
     focused: bool,
     selection: Option<&Selection>,
-) {
+) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
-        return;
+        return None;
     }
 
     let content = terminal.renderable_content();
@@ -62,15 +65,16 @@ pub fn render(
         }
     }
 
-    if focused
-        && terminal.mode().contains(TermMode::SHOW_CURSOR)
-        && let Some((row, col)) = terminal.cursor_viewport()
-        && (row as u16) < area.height
-        && (col as u16) < area.width
+    let cursor = (focused && terminal.mode().contains(TermMode::SHOW_CURSOR))
+        .then(|| terminal.cursor_viewport())
+        .flatten()
+        .filter(|(row, col)| *row < usize::from(area.height) && *col < usize::from(area.width));
+    if let Some((row, col)) = cursor
         && let Some(target) = buf.cell_mut((area.x + col as u16, area.y + row as u16))
     {
         target.modifier |= Modifier::REVERSED;
     }
+    cursor.map(|(row, col)| (row as u16, col as u16))
 }
 
 /// 单元格样式：颜色与修饰符映射到 ratatui。

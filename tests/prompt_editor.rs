@@ -121,7 +121,29 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
     let pane = state.active_tab().layout.focus();
     update::focus_pane(&mut state, pane);
     let terminal = draw(&state, &config);
-    assert!(!terminal.backend().cursor_visible());
+    let rects = layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+    );
+    let rect = rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, rect)| *rect)
+        .expect("focused pane is tiled");
+    let inner = layout::pane_inner_rect(rect);
+    let (row, col) = state
+        .active_tab()
+        .pane(pane)
+        .expect("focused pane exists")
+        .terminal
+        .cursor_viewport()
+        .expect("terminal cursor is visible");
+    assert!(terminal.backend().cursor_visible());
+    assert_eq!(
+        terminal.backend().cursor_position(),
+        Position::new(inner.x + col as u16, inner.y + row as u16)
+    );
 }
 
 #[test]

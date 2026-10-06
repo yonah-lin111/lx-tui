@@ -51,8 +51,8 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     }
     render_tab_bar(frame, view.tab_bar, state);
     render_exit_button(frame, &view);
-    render_panes(frame, &pane_rects, state);
-    if let Some(position) = render_prompt(frame, view.prompt, state) {
+    let pane_cursor = render_panes(frame, &pane_rects, state);
+    if let Some(position) = render_prompt(frame, view.prompt, state).or(pane_cursor) {
         frame.set_cursor_position(position);
     }
     render_collapse_buttons(frame, &view, state);
@@ -360,9 +360,16 @@ fn render_tab_bar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 }
 
 /// 主区域：BSP 平铺窗格；矩形由调用方按当前几何计算，与命中测试共用。
-fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &AppState) {
+///
+/// 返回聚焦终端窗格的光标绝对坐标：终端把 IME 预输入绘制在硬件光标处，需与仿真光标同步。
+fn render_panes(
+    frame: &mut Frame<'_>,
+    pane_rects: &[(PaneId, Rect)],
+    state: &AppState,
+) -> Option<(u16, u16)> {
     let tab = state.active_tab();
     let focus = tab.layout.focus();
+    let mut cursor = None;
     for (id, rect) in pane_rects {
         if rect.width == 0 || rect.height == 0 {
             continue;
@@ -392,17 +399,20 @@ fn render_panes(frame: &mut Frame<'_>, pane_rects: &[(PaneId, Rect)], state: &Ap
         }
         match pane.kind {
             PaneKind::Terminal => {
-                terminal::render(
+                if let Some((row, col)) = terminal::render(
                     inner,
                     frame.buffer_mut(),
                     &pane.terminal,
                     focused,
                     state.selection_for(*id),
-                );
+                ) {
+                    cursor = Some((inner.x + col, inner.y + row));
+                }
             }
             PaneKind::Placeholder => {}
         }
     }
+    cursor
 }
 
 /// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。
