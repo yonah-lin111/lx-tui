@@ -2,6 +2,7 @@
 
 pub mod layout;
 pub mod markdown;
+pub mod overlay;
 pub mod prompt;
 pub mod style;
 pub mod terminal;
@@ -11,8 +12,9 @@ pub mod widgets;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
 
 use crate::app::state::{AppState, Pane, PaneKind};
 use crate::config::Config;
@@ -34,6 +36,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         area,
         config,
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     );
@@ -53,12 +56,19 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_tab_bar(frame, view.tab_bar, state);
     render_exit_button(frame, &view);
     let pane_cursor = render_panes(frame, &pane_rects, state);
-    if let Some(position) = render_prompt(frame, view.prompt, state).or(pane_cursor) {
-        frame.set_cursor_position(position);
-    }
+    let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
     render_collapse_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     toast::render(frame, area, state, &view, &pane_rects, config);
+    let overlay_cursor = overlay::render(frame, area, state);
+    // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
+    let cursor = match state.overlay {
+        Some(_) => overlay_cursor,
+        None => prompt_cursor,
+    };
+    if let Some(position) = cursor {
+        frame.set_cursor_position(position);
+    }
 }
 
 /// 折叠面板的按钮目标。
@@ -77,7 +87,7 @@ pub struct CollapseButton {
     pub collapsed: bool,
 }
 
-/// 左栏、右栏顶边与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
+/// 左栏、右栏底边与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
 pub fn collapse_buttons(view: &layout::ViewLayout, agents_collapsed: bool) -> Vec<CollapseButton> {
     let mut buttons = Vec::new();
     if let Some(button) = panel_button(CollapseTarget::Sidebar, view.sidebar) {
@@ -120,15 +130,16 @@ pub fn exit_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool 
     exit_button(view).is_some_and(|area| area.contains((column, row).into()))
 }
 
-/// 单个面板的折叠按钮：折叠态取整条窄条，展开态在顶边右端。
+/// 单个面板的折叠按钮：折叠态取整条窄条，展开态在底边右端。
 fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
     if panel.width == 0 || panel.height == 0 {
         return None;
     }
+    let row = panel.bottom().saturating_sub(1);
     if panel.width == COLLAPSED_STRIP {
         Some(CollapseButton {
             target,
-            area: Rect::new(panel.x, panel.y, COLLAPSED_STRIP, 1),
+            area: Rect::new(panel.x, row, COLLAPSED_STRIP, 1),
             collapsed: true,
         })
     } else if panel.width > COLLAPSED_STRIP {
@@ -136,7 +147,7 @@ fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
             target,
             area: Rect::new(
                 panel.right() - PANEL_BUTTON_WIDTH - PANEL_BUTTON_MARGIN,
-                panel.y,
+                row,
                 PANEL_BUTTON_WIDTH,
                 1,
             ),
@@ -172,7 +183,7 @@ fn agents_button_area(sidebar: Rect, divider: Rect) -> Rect {
     )
 }
 
-/// 在面板顶边与 agents 表头绘制折叠按钮，必须晚于面板内容渲染。
+/// 在面板底边与 agents 表头绘制折叠按钮，必须晚于面板内容渲染。
 ///
 /// 折叠态面板标签恰好占满 3 个内容列（水平居中），其余按钮贴所在行右端。
 fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
@@ -229,16 +240,32 @@ fn collapsed_content_x(area: Rect, separator_right: bool) -> u16 {
     }
 }
 
-/// 右栏分割线提示：悬停或拖拽时把两列边框改为强调色。
+/// 左右栏分割线提示：悬停或拖拽时把相邻两列边框改为强调色。
 fn render_resize_hint(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
-    if state.prompt_collapsed
-        || !(state.resizing_prompt || state.prompt_hover)
-        || view.prompt.x == 0
+    if !state.sidebar_collapsed
+        && view.sidebar.width > 0
+        && (state.resizing_sidebar || state.sidebar_hover)
     {
-        return;
+        highlight_divider(
+            frame,
+            view,
+            [view.sidebar.right().saturating_sub(1), view.sidebar.right()],
+        );
     }
+    if !state.prompt_collapsed && view.prompt.x > 0 && (state.resizing_prompt || state.prompt_hover)
+    {
+        highlight_divider(
+            frame,
+            view,
+            [view.prompt.x.saturating_sub(1), view.prompt.x],
+        );
+    }
+}
+
+/// 把分割线相邻两列中的边框符号改为强调色。
+fn highlight_divider(frame: &mut Frame<'_>, view: &layout::ViewLayout, columns: [u16; 2]) {
     let buf = frame.buffer_mut();
-    for column in [view.prompt.x.saturating_sub(1), view.prompt.x] {
+    for column in columns {
         for row in view.panes.y..view.panes.bottom() {
             if let Some(cell) = buf.cell_mut((column, row))
                 && cell.symbol() == text::STRIP_LINE
@@ -254,19 +281,6 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let items: Vec<ListItem<'_>> = state
-        .workspaces
-        .iter()
-        .enumerate()
-        .map(|(index, workspace)| {
-            let style = if index == state.active_workspace {
-                style::accent()
-            } else {
-                style::text()
-            };
-            ListItem::new(Line::from(Span::styled(workspace.name.as_str(), style)))
-        })
-        .collect();
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::border(false))
@@ -280,16 +294,212 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         return;
     }
     let Some(sections) = layout::sidebar_sections(area, state.agents_collapsed) else {
+        let items = workspace_items(state, usize::from(inner.width));
         frame.render_widget(List::new(items), inner);
         return;
     };
-    frame.render_widget(List::new(items), sections.workspaces);
+    let list = sections.workspaces;
+    let scrollbar = workspace_scrollbar_for(list, state);
+    let list_area = match &scrollbar {
+        Some(_) => Rect {
+            width: list.width.saturating_sub(1),
+            ..list
+        },
+        None => list,
+    };
+    let items = workspace_items(state, usize::from(list_area.width));
+    let mut list_state = ListState::default().with_offset(state.workspace_scroll);
+    frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
+    if let Some(scrollbar) = &scrollbar {
+        widgets::scrollbar::render(frame, scrollbar);
+    }
+    if let Some(button) = add_button_area(area) {
+        render_add_workspace_button(frame, button);
+    }
     render_agents_header(
         frame,
         sections.divider,
         agents_button_area(area, sections.divider),
     );
     // agents 分区暂无内容，保持空占位。
+}
+
+/// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
+///
+/// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
+fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
+    let marker_width = text::INITIAL_WORKSPACE_MARKER.chars().count();
+    state
+        .workspaces
+        .iter()
+        .enumerate()
+        .map(|(index, workspace)| {
+            let dragging = state.workspace_drag == Some(index);
+            let mut item_style = if index == state.active_workspace {
+                style::accent()
+            } else {
+                style::text()
+            };
+            let mut marker_style = style::marker();
+            if dragging {
+                item_style = item_style.add_modifier(Modifier::REVERSED);
+                marker_style = marker_style.add_modifier(Modifier::REVERSED);
+            }
+            let name_width = if workspace.is_initial {
+                width.saturating_sub(marker_width)
+            } else {
+                width
+            };
+            let mut spans = vec![Span::styled(
+                text::ellipsize(&workspace.name, name_width),
+                item_style,
+            )];
+            if workspace.is_initial {
+                spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect()
+}
+
+/// 工作区列表滚动条几何；不需要滚动或分区缺失时 None。
+pub fn workspace_scrollbar(
+    view: &layout::ViewLayout,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
+    workspace_scrollbar_for(sections.workspaces, state)
+}
+
+fn workspace_scrollbar_for(
+    list: Rect,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    widgets::scrollbar::layout(
+        list,
+        state.workspaces.len(),
+        usize::from(list.height),
+        state.workspace_scroll,
+    )
+}
+
+/// 工作区列表可见行数；无分区时 None。
+pub fn workspace_list_rows(view: &layout::ViewLayout, state: &AppState) -> Option<usize> {
+    let sections = layout::sidebar_sections(view.sidebar, state.agents_collapsed)?;
+    Some(usize::from(sections.workspaces.height))
+}
+
+/// 坐标是否落在侧栏 workspaces 区（含 footer）。
+pub fn workspace_section_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+        .is_some_and(|sections| sections.workspaces.contains((column, row).into()))
+}
+
+/// 侧栏分割线命中：展开态相邻两列边框（侧栏右边框与主区左列），限主区行范围。
+pub fn sidebar_boundary_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool {
+    if view.sidebar.width <= COLLAPSED_STRIP || view.panes.width == 0 {
+        return false;
+    }
+    if row < view.panes.y || row >= view.panes.bottom() {
+        return false;
+    }
+    column == view.sidebar.right().saturating_sub(1) || column == view.sidebar.right()
+}
+
+/// 新建工作区按钮矩形：侧栏顶边框右端（原折叠按钮位置）；折叠或空间不足时不显示。
+pub fn add_workspace_button(view: &layout::ViewLayout) -> Option<Rect> {
+    add_button_area(view.sidebar)
+}
+
+fn add_button_area(sidebar: Rect) -> Option<Rect> {
+    if sidebar.width <= COLLAPSED_STRIP || sidebar.height == 0 {
+        return None;
+    }
+    let width = text::ADD_WORKSPACE_LABEL.chars().count() as u16;
+    let x = sidebar
+        .right()
+        .saturating_sub(width.saturating_add(PANEL_BUTTON_MARGIN));
+    (sidebar.width >= width.saturating_add(PANEL_BUTTON_MARGIN).saturating_add(1))
+        .then_some(Rect::new(x, sidebar.y, width, 1))
+}
+
+/// 新建工作区按钮：强调色标签，点击立即创建并激活。
+fn render_add_workspace_button(frame: &mut Frame<'_>, area: Rect) {
+    for (offset, symbol) in text::ADD_WORKSPACE_LABEL.chars().enumerate() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.x + offset as u16, area.y))
+        {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
+}
+
+/// 工作区列表内容区（不含滚动条列）；分区缺失时退回侧栏内容区。
+fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    let list = match layout::sidebar_sections(view.sidebar, state.agents_collapsed) {
+        Some(sections) => sections.workspaces,
+        None => {
+            let sidebar = view.sidebar;
+            Rect::new(
+                sidebar.x.saturating_add(1),
+                sidebar.y.saturating_add(1),
+                sidebar.width.saturating_sub(2),
+                sidebar.height.saturating_sub(2),
+            )
+        }
+    };
+    (list.width > 0 && list.height > 0).then_some(list)
+}
+
+/// 工作区项行命中：返回被点工作区索引；滚动条列与空行不命中。
+///
+/// 第 N 项渲染在内容区第 `N - workspace_scroll` 行；分区缺失时退回整块内容区。
+pub fn workspace_item_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let list = workspace_list_rect(view, state)?;
+    if !list.contains((column, row).into()) {
+        return None;
+    }
+    let content_width = match workspace_scrollbar_for(list, state) {
+        Some(_) => list.width.saturating_sub(1),
+        None => list.width,
+    };
+    if column >= list.x.saturating_add(content_width) {
+        return None;
+    }
+    let index = state
+        .workspace_scroll
+        .saturating_add(usize::from(row - list.y));
+    (index < state.workspaces.len()).then_some(index)
+}
+
+/// 拖动排序目标索引：指针行映射到列表行（纵向越界钳到首/末项，横向不限）。
+pub fn workspace_drop_index(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    row: u16,
+) -> Option<usize> {
+    let list = workspace_list_rect(view, state)?;
+    if state.workspaces.is_empty() {
+        return None;
+    }
+    let clamped = row.clamp(list.y, list.bottom().saturating_sub(1));
+    let slot = state
+        .workspace_scroll
+        .saturating_add(usize::from(clamped - list.y));
+    Some(slot.min(state.workspaces.len().saturating_sub(1)))
 }
 
 /// agents 表头：贯穿的横线与左对齐的 ` Agents ` 标题；与折叠按钮重叠时省略标题。
@@ -418,6 +628,7 @@ fn render_panes(
 
 /// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。
 ///
+/// 文本区固定预留最右 1 列作滚动条槽，文本溢出时该列显示滚动条。
 /// 返回聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
 fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
@@ -440,15 +651,42 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
+    let text_area = crate::layout::prompt_text_rect(area);
     prompt::render(
-        inner,
+        text_area,
         frame.buffer_mut(),
         &state.prompt,
-        focused,
         state.selection_for(state.prompt.id()),
     );
+    if let Some(scrollbar) = prompt_scrollbar_for(area, state) {
+        widgets::scrollbar::render(frame, &scrollbar);
+    }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
-    Some((inner.x + col.min(inner.width - 1), inner.y + row))
+    Some((
+        text_area.x + col.min(text_area.width.saturating_sub(1)),
+        text_area.y + row,
+    ))
+}
+
+/// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。
+pub fn prompt_scrollbar(
+    view: &layout::ViewLayout,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    prompt_scrollbar_for(view.prompt, state)
+}
+
+fn prompt_scrollbar_for(
+    panel: Rect,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    let gutter = crate::layout::prompt_scrollbar_rect(panel)?;
+    widgets::scrollbar::layout(
+        gutter,
+        state.prompt.visual_rows().len(),
+        usize::from(gutter.height),
+        state.prompt.scroll(),
+    )
 }
 
 /// 窗格标题：空占位与终端走通用标题规则。

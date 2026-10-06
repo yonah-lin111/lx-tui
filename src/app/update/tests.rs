@@ -1,6 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
+use crate::app::state::workspace_name;
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
 use std::time::Duration;
@@ -156,8 +157,9 @@ fn resize_syncs_terminal_size() {
 fn resize_syncs_prompt_editor_size() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
+    // 30 列面板：28 列内容区，最右 1 列预留滚动条槽。
     resize_panes(&mut state, &[(id, Rect::new(70, 0, 30, 20))]);
-    assert_eq!(state.prompt.size(), (28, 18));
+    assert_eq!(state.prompt.size(), (27, 18));
 }
 
 #[test]
@@ -434,4 +436,362 @@ fn panel_keys_are_consumed_before_editing() {
     assert!(state.prompt.panel().is_none());
     apply_editor(&mut state, EditorCommand::Escape);
     assert_eq!(state.prompt.text(), "- [ ] ");
+}
+
+#[test]
+fn create_workspace_activates_deduped_cwd_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace, 1);
+    let workspace = state.active_workspace();
+    assert_eq!(workspace.name, format!("{} 2", workspace_name()));
+    assert_eq!(workspace.tabs.len(), 1);
+    assert_eq!(workspace.tabs[0].title, "shell");
+    assert_eq!(workspace.tabs[0].layout.pane_ids().len(), 1);
+    assert!(!workspace.name_is_manual);
+    assert!(!workspace.is_initial);
+    assert!(!state.prompt_focused);
+}
+
+#[test]
+fn update_workspace_cwd_renames_auto_named_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let cwd = std::path::Path::new("/tmp/other-project");
+    assert!(update_workspace_cwd(&mut state, 1, cwd));
+    assert_eq!(state.workspaces[1].name, "other-project");
+    assert_eq!(state.workspaces[1].cwd.as_deref(), Some(cwd));
+    assert!(!update_workspace_cwd(&mut state, 1, cwd));
+}
+
+#[test]
+fn update_workspace_cwd_ignores_manually_named_workspace() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "api".to_string();
+    state.workspaces[0].name_is_manual = true;
+    assert!(!update_workspace_cwd(
+        &mut state,
+        0,
+        std::path::Path::new("/tmp/other-project")
+    ));
+    assert_eq!(state.workspaces[0].name, "api");
+}
+
+#[test]
+fn update_workspace_cwd_dedupes_against_other_workspaces() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    state.workspaces[1].name = "api".to_string();
+    state.workspaces[1].name_is_manual = true;
+    assert!(update_workspace_cwd(
+        &mut state,
+        0,
+        std::path::Path::new("/tmp/api")
+    ));
+    assert_eq!(state.workspaces[0].name, "api 2");
+}
+
+#[test]
+fn workspace_scroll_clamps_and_follows_active() {
+    let mut state = AppState::demo();
+    for _ in 0..15 {
+        create_workspace(&mut state);
+    }
+    assert_eq!(state.workspaces.len(), 16);
+    assert!(scroll_workspace_list(&mut state, 3, 10));
+    assert_eq!(state.workspace_scroll, 3);
+    assert!(ensure_workspace_visible(&mut state, 10));
+    assert_eq!(state.workspace_scroll, 6);
+    assert!(!ensure_workspace_visible(&mut state, 10));
+    assert!(set_workspace_scroll(&mut state, 4, 10));
+    assert!(set_workspace_scroll(&mut state, 99, 10));
+    assert_eq!(state.workspace_scroll, 6);
+    assert!(!scroll_workspace_list(&mut state, 1, 10));
+    assert_eq!(workspace_scroll_max(&state, 10), 6);
+    assert!(scroll_workspace_list(&mut state, -99, 10));
+    assert_eq!(state.workspace_scroll, 0);
+    assert!(!clamp_workspace_scroll(&mut state, 16));
+    assert!(!clamp_workspace_scroll(&mut state, 1));
+}
+
+#[test]
+fn switch_workspace_clears_selection_and_prompt_focus() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let pane = state.active_tab().layout.focus();
+    focus_prompt(&mut state);
+    begin_selection(&mut state, pane, 0, 0);
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.active_workspace, 0);
+    assert!(!state.prompt_focused);
+    assert!(state.selection.is_none());
+    switch_workspace(&mut state, 5);
+    assert_eq!(state.active_workspace, 0);
+}
+
+#[test]
+fn open_workspace_menu_offers_rename_and_close() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 0, (10, 5));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.target, MenuTarget::Workspace(0));
+    assert_eq!(
+        menu.commands,
+        vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace]
+    );
+    assert_eq!(menu.selected, 0);
+}
+
+#[test]
+fn open_workspace_menu_hides_close_for_last_workspace() {
+    let mut state = AppState::demo();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.commands, vec![MenuCommand::RenameWorkspace]);
+    open_workspace_menu(&mut state, 9, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.target, MenuTarget::Workspace(0));
+}
+
+#[test]
+fn menu_selection_wraps_and_reports_changes() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 0, (0, 0));
+    move_menu_selection(&mut state, -1);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.selected, 1);
+    move_menu_selection(&mut state, 1);
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.selected, 0);
+    assert!(set_menu_selection(&mut state, 1));
+    assert!(!set_menu_selection(&mut state, 1));
+    assert!(!set_menu_selection(&mut state, 9));
+}
+
+#[test]
+fn activate_menu_rename_opens_prefilled_input() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let expected = state.workspaces[1].name.clone();
+    open_workspace_menu(&mut state, 1, (0, 0));
+    activate_menu(&mut state);
+    let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
+        panic!("rename overlay expected");
+    };
+    assert_eq!(rename.target, 1);
+    assert_eq!(rename.input.text(), expected);
+    assert_eq!(rename.input.cursor(), expected.chars().count());
+}
+
+#[test]
+fn activate_menu_close_opens_confirmation() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 1, (0, 0));
+    set_menu_selection(&mut state, 1);
+    activate_menu(&mut state);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::ConfirmClose)
+    );
+    assert_eq!(state.workspaces.len(), 2);
+}
+
+#[test]
+fn overlay_esc_closes_and_enter_dispatches() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 0, (0, 0));
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+
+    open_workspace_menu(&mut state, 0, (0, 0));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Rename)
+    );
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+
+    open_workspace_menu(&mut state, 0, (0, 0));
+    set_menu_selection(&mut state, 1);
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::ConfirmClose)
+    );
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn rename_overlay_edits_and_commits_trimmed_name() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    open_workspace_menu(&mut state, 1, (0, 0));
+    activate_menu(&mut state);
+    for key in [
+        OverlayKey::Backspace,
+        OverlayKey::Backspace,
+        OverlayKey::Char(' '),
+        OverlayKey::Char('a'),
+        OverlayKey::Char('p'),
+        OverlayKey::Char('i'),
+    ] {
+        apply_overlay_key(&mut state, key);
+    }
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(state.overlay.is_none());
+    assert_eq!(
+        state.workspaces[1].name,
+        format!("{} api", workspace_name())
+    );
+}
+
+#[test]
+fn rename_overlay_rejects_empty_name() {
+    let mut state = AppState::demo();
+    let original = state.workspaces[0].name.clone();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    activate_menu(&mut state);
+    apply_overlay_key(&mut state, OverlayKey::Home);
+    for _ in 0..200 {
+        apply_overlay_key(&mut state, OverlayKey::Delete);
+    }
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(
+        state.overlay.as_ref().map(Overlay::kind),
+        Some(OverlayKind::Rename)
+    );
+    assert_eq!(state.workspaces[0].name, original);
+}
+
+#[test]
+fn confirm_close_removes_workspace_and_keeps_active_identity() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    let active_name = state.active_workspace().name.clone();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 0 }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace().name, active_name);
+    assert_eq!(state.active_workspace, 1);
+
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 1 }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    assert_eq!(state.active_workspace, 0);
+}
+
+#[test]
+fn confirm_close_refuses_last_workspace() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose { target: 0 }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn sidebar_resize_only_applies_while_resizing() {
+    let mut state = AppState::demo();
+    let before = state.sidebar_width;
+    drag_sidebar(&mut state, 32);
+    assert_eq!(state.sidebar_width, before);
+    begin_sidebar_resize(&mut state);
+    assert!(state.resizing_sidebar);
+    drag_sidebar(&mut state, 32);
+    assert_eq!(state.sidebar_width, 32);
+    end_sidebar_resize(&mut state);
+    assert!(!state.resizing_sidebar);
+}
+
+#[test]
+fn begin_sidebar_resize_clears_selection() {
+    let mut state = AppState::demo();
+    let focus = state.active_tab().layout.focus();
+    begin_selection(&mut state, focus, 0, 0);
+    begin_sidebar_resize(&mut state);
+    assert!(state.selection.is_none());
+}
+
+#[test]
+fn set_sidebar_hover_reports_changes() {
+    let mut state = AppState::demo();
+    assert!(set_sidebar_hover(&mut state, true));
+    assert!(!set_sidebar_hover(&mut state, true));
+    assert!(set_sidebar_hover(&mut state, false));
+    assert!(!state.sidebar_hover);
+}
+
+#[test]
+fn drag_workspace_reorders_and_follows_active() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    let names: Vec<String> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.clone())
+        .collect();
+
+    switch_workspace(&mut state, 0);
+    begin_workspace_drag(&mut state, 0);
+    assert!(drag_workspace_to(&mut state, 2));
+    assert_eq!(state.workspace_drag, Some(2));
+    assert_eq!(state.active_workspace, 2);
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(
+        order,
+        vec![names[1].as_str(), names[2].as_str(), names[0].as_str()]
+    );
+    assert!(state.workspaces[2].is_initial);
+
+    end_workspace_drag(&mut state);
+    assert!(state.workspace_drag.is_none());
+}
+
+#[test]
+fn drag_workspace_clamps_and_ignores_noops() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 0);
+    begin_workspace_drag(&mut state, 0);
+    assert!(!drag_workspace_to(&mut state, 0));
+    assert!(drag_workspace_to(&mut state, 99));
+    assert_eq!(state.workspace_drag, Some(1));
+    assert_eq!(state.active_workspace, 1);
+
+    end_workspace_drag(&mut state);
+    assert!(!drag_workspace_to(&mut state, 0));
+}
+
+#[test]
+fn drag_workspace_shifts_other_active_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 1);
+    begin_workspace_drag(&mut state, 0);
+    assert!(drag_workspace_to(&mut state, 2));
+    assert_eq!(state.active_workspace, 0);
 }

@@ -1,11 +1,13 @@
-//! 键盘路由：Ctrl+Q 退出；prompt 聚焦时按键映射为编辑命令，否则原样编码进焦点窗格。
+//! 键盘路由：Ctrl+Q 退出；浮层打开时按键按浮层种类过滤；
+//! prompt 聚焦时按键映射为编辑命令，否则原样编码进焦点窗格。
 
 pub mod encode;
 
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::actions::{Action, EditorCommand};
+use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::overlay::OverlayKind;
 
 /// 路由结果。
 #[derive(Debug, PartialEq, Eq)]
@@ -14,6 +16,8 @@ pub enum Routed {
     Action(Action),
     /// prompt 编辑器命令。
     Editor(EditorCommand),
+    /// 浮层按键。
+    Overlay(OverlayKey),
     /// 复制 prompt 选区到系统剪贴板。
     Copy,
     /// 原样写入焦点窗格的字节。
@@ -22,14 +26,23 @@ pub enum Routed {
 
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
+/// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区，
 /// 未映射的按键被吞掉，绝不写入 PTY。
-pub fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Routed> {
+pub fn route(
+    key: KeyEvent,
+    mode: TermMode,
+    prompt_focused: bool,
+    overlay: Option<OverlayKind>,
+) -> Option<Routed> {
     if key.kind == KeyEventKind::Release {
         return None;
     }
     if key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return Some(Routed::Action(Action::Quit));
+    }
+    if let Some(kind) = overlay {
+        return overlay_key(key, kind).map(Routed::Overlay);
     }
     if prompt_focused {
         if matches!(key.code, KeyCode::Char('c' | 'C'))
@@ -44,6 +57,42 @@ pub fn route(key: KeyEvent, mode: TermMode, prompt_focused: bool) -> Option<Rout
         return editor_command(key).map(Routed::Editor);
     }
     encode::encode_key(key, mode).map(Routed::Pane)
+}
+
+/// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
+fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    match kind {
+        OverlayKind::Menu => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        OverlayKind::ConfirmClose => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        OverlayKind::Rename => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+            _ => None,
+        },
+    }
 }
 
 /// 编辑键映射；Shift 只用于字符输入，导航键要求无修饰符。

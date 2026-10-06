@@ -81,6 +81,11 @@ impl PtySession {
         self.writer.flush()
     }
 
+    /// 子进程标识；用于读取其当前工作目录。
+    pub fn process_id(&self) -> Option<u32> {
+        self.child.process_id()
+    }
+
     /// 同步 PTY 窗口尺寸。
     pub fn resize(&mut self, cols: u16, rows: u16) -> io::Result<()> {
         let size = to_pty_size(cols, rows);

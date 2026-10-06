@@ -19,6 +19,7 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
         screen,
         &config,
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     );

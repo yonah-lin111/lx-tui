@@ -12,7 +12,8 @@ use ratatui::layout::Rect;
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::app::actions::{Action, EditorCommand};
+use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
@@ -44,20 +45,33 @@ pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<(
 }
 
 async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
-    initialize_prompt_width(tui, state, config)?;
+    initialize_layout_widths(tui, state, config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
-    let mut sessions = spawn_sessions(state, &sender);
+    let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();
     let mut dirty = true;
     let mut last_draw = Instant::now();
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
+    // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
+    let mut cwd_check: Option<Instant> = None;
 
     while !state.should_quit {
+        // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
+        reconcile_sessions(state, &mut sessions, &sender);
+        if cwd_check.is_some_and(|at| Instant::now() >= at) {
+            cwd_check = None;
+            if poll_workspace_cwds(state, &sessions) {
+                dirty = true;
+            }
+        }
         let geometry = current_geometry(tui, state, config)?;
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
             resize_sessions(&mut sessions, &geometry.rects);
             last_rects.clone_from(&geometry.rects);
+            if let Some(rows) = ui::workspace_list_rows(&geometry.view, state) {
+                update::clamp_workspace_scroll(state, rows);
+            }
             dirty = true;
         }
         if update::tick(state, Instant::now()) {
@@ -79,6 +93,9 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         if let Some(deadline) = update::next_deadline(state) {
             wait = wait.min(deadline.saturating_duration_since(Instant::now()));
         }
+        if let Some(at) = cwd_check {
+            wait = wait.min(at.saturating_duration_since(Instant::now()));
+        }
 
         tokio::select! {
             event = events.next() => match event {
@@ -94,6 +111,10 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
                     while let Ok(message) = receiver.try_recv() {
                         handle_app_event(message, state, &mut sessions);
                     }
+                    // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
+                    if state.workspaces.iter().any(|workspace| !workspace.name_is_manual) {
+                        cwd_check.get_or_insert_with(|| Instant::now() + CWD_CHECK_DELAY);
+                    }
                     dirty = true;
                 }
             }
@@ -107,13 +128,54 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     Ok(())
 }
 
-/// 为全部窗格启动 PTY；单个失败不阻断其余窗格。
-fn spawn_sessions(
+/// PTY 输出后的 cwd 去抖检查延迟。
+const CWD_CHECK_DELAY: Duration = Duration::from_millis(300);
+
+/// 轮询自动命名工作区身份窗格的 cwd 并同步名字；返回是否变化。
+///
+/// 手动命名工作区不参与轮询；窗格退出或读不到 cwd 时保持原名。
+fn poll_workspace_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession>) -> bool {
+    let tracked: Vec<(usize, PaneId)> = state
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(_, workspace)| !workspace.name_is_manual)
+        .filter_map(|(index, workspace)| workspace.root_pane().map(|pane| (index, pane)))
+        .collect();
+    let mut changed = false;
+    for (index, pane) in tracked {
+        let Some(pid) = sessions.get(&pane).and_then(PtySession::process_id) else {
+            continue;
+        };
+        let Some(cwd) = crate::platform::process_cwd(pid) else {
+            continue;
+        };
+        if update::update_workspace_cwd(state, index, &cwd) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// 按状态对齐 PTY 会话：新增终端窗格启动会话，被移除或非终端的窗格终止会话；幂等。
+fn reconcile_sessions(
     state: &AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
     sender: &mpsc::UnboundedSender<AppEvent>,
-) -> HashMap<PaneId, PtySession> {
-    let mut sessions = HashMap::new();
+) {
+    sessions.retain(|id, session| {
+        let alive = state
+            .pane_anywhere(*id)
+            .is_some_and(|pane| pane.kind == PaneKind::Terminal);
+        if !alive {
+            session.kill();
+        }
+        alive
+    });
     for id in state.all_pane_ids() {
+        if sessions.contains_key(&id) {
+            continue;
+        }
         let Some(pane) = state.pane_anywhere(id) else {
             continue;
         };
@@ -136,13 +198,17 @@ fn spawn_sessions(
             Err(error) => tracing::error!(pane = id.raw(), %error, "pty spawn failed"),
         }
     }
-    sessions
 }
 
-/// 启动时右栏宽度取主区可用宽度的一半，复刻旧 50% 分割的版面。
-fn initialize_prompt_width(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+/// 启动时确定栏宽：右栏取主区可用宽度的一半（复刻旧 50% 分割），左栏取配置值。
+fn initialize_layout_widths(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+) -> io::Result<()> {
     let size = tui.terminal().size()?;
     let area = Rect::new(0, 0, size.width, size.height);
+    state.sidebar_width = config.sidebar_width;
     state.prompt_width = ui::layout::default_prompt_width(area, config, state.sidebar_collapsed);
     Ok(())
 }
@@ -164,6 +230,7 @@ fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Res
         screen,
         config,
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     );
@@ -213,7 +280,8 @@ fn handle_terminal_event(
                 .active_pane()
                 .map(|pane| pane.terminal.mode())
                 .unwrap_or_else(TermMode::empty);
-            let Some(routed) = input::route(key, mode, state.prompt_focused) else {
+            let overlay = state.overlay.as_ref().map(Overlay::kind);
+            let Some(routed) = input::route(key, mode, state.prompt_focused, overlay) else {
                 return;
             };
             match routed {
@@ -223,6 +291,14 @@ fn handle_terminal_event(
                 }
                 Routed::Editor(command) => {
                     update::apply_editor(state, command);
+                    *dirty = true;
+                }
+                Routed::Overlay(key) => {
+                    let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    update::apply_overlay_key(state, key);
+                    if was_confirm {
+                        ensure_workspace_visible(state, view);
+                    }
                     *dirty = true;
                 }
                 Routed::Copy => {
@@ -276,6 +352,15 @@ fn handle_terminal_event(
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if state.overlay.is_some() {
+                    let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    handle_overlay_click(state, *screen, mouse.column, mouse.row);
+                    if was_confirm {
+                        ensure_workspace_visible(state, view);
+                    }
+                    *dirty = true;
+                    return;
+                }
                 if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config)
                     && toast.contains((mouse.column, mouse.row).into())
                 {
@@ -297,9 +382,31 @@ fn handle_terminal_event(
                         ui::CollapseTarget::Agents => Action::ToggleAgents,
                     };
                     update::apply(action, state);
-                    if update::set_prompt_hover(state, false) {
+                    let mut pointer_reset = update::set_prompt_hover(state, false);
+                    pointer_reset |= update::set_sidebar_hover(state, false);
+                    if pointer_reset {
                         reset_pointer_shape();
                     }
+                    *dirty = true;
+                } else if ui::sidebar_boundary_at(view, mouse.column, mouse.row) {
+                    update::begin_sidebar_resize(state);
+                    *dirty = true;
+                } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
+                    || handle_prompt_scrollbar_press(state, view, mouse.column, mouse.row)
+                {
+                    *dirty = true;
+                } else if let Some(index) =
+                    ui::workspace_item_at(view, state, mouse.column, mouse.row)
+                {
+                    update::switch_workspace(state, index);
+                    ensure_workspace_visible(state, view);
+                    update::begin_workspace_drag(state, index);
+                    *dirty = true;
+                } else if ui::add_workspace_button(view)
+                    .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
+                {
+                    update::create_workspace(state);
+                    ensure_workspace_visible(state, view);
                     *dirty = true;
                 } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
                     .is_some_and(|(_, right)| right == state.prompt.id())
@@ -328,12 +435,73 @@ fn handle_terminal_event(
                     update::clear_selection(state);
                 }
             }
+            MouseEventKind::Down(MouseButton::Right) => {
+                // 菜单打开时右键不穿透：工作区项上重开，其余位置关闭。
+                if matches!(state.overlay, Some(Overlay::Menu(_))) {
+                    match ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+                        Some(index) => {
+                            update::open_workspace_menu(state, index, (mouse.column, mouse.row))
+                        }
+                        None => update::close_overlay(state),
+                    }
+                    *dirty = true;
+                    return;
+                }
+                // 重命名与关闭确认期间右键吞掉，不替换模态。
+                if state.overlay.is_some() {
+                    return;
+                }
+                if let Some(index) = ui::workspace_item_at(view, state, mouse.column, mouse.row) {
+                    update::open_workspace_menu(state, index, (mouse.column, mouse.row));
+                    *dirty = true;
+                }
+            }
             MouseEventKind::Drag(MouseButton::Left) => {
+                if state.overlay.is_some() {
+                    return;
+                }
+                if let Some(grab) = state.workspace_scroll_drag {
+                    let Some(bar) = ui::workspace_scrollbar(view, state) else {
+                        return;
+                    };
+                    let rows = ui::workspace_list_rows(view, state).unwrap_or(0);
+                    let offset =
+                        ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                    if update::set_workspace_scroll(state, offset, rows) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if let Some(grab) = state.prompt_scroll_drag {
+                    let Some(bar) = ui::prompt_scrollbar(view, state) else {
+                        return;
+                    };
+                    let offset =
+                        ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                    if update::set_prompt_scroll(state, offset) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if state.resizing_sidebar {
+                    let width = ui::layout::sidebar_width_at(view, config, mouse.column);
+                    update::drag_sidebar(state, width);
+                    *dirty = true;
+                    return;
+                }
                 if state.resizing_prompt {
                     let width =
                         ui::layout::prompt_width_at(view, mouse.column, config.min_pane_width);
                     update::drag_prompt(state, width);
                     *dirty = true;
+                    return;
+                }
+                if state.workspace_drag.is_some() {
+                    if let Some(target) = ui::workspace_drop_index(view, state, mouse.row)
+                        && update::drag_workspace_to(state, target)
+                    {
+                        *dirty = true;
+                    }
                     return;
                 }
                 let Some(selection) = state.selection else {
@@ -356,6 +524,25 @@ fn handle_terminal_event(
                 *dirty = true;
             }
             MouseEventKind::Up(MouseButton::Left) => {
+                if state.overlay.is_some() {
+                    return;
+                }
+                if state.workspace_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.prompt_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.workspace_drag.is_some() {
+                    update::end_workspace_drag(state);
+                    *dirty = true;
+                    return;
+                }
+                if state.resizing_sidebar {
+                    update::end_sidebar_resize(state);
+                    *dirty = true;
+                    return;
+                }
                 if state.resizing_prompt {
                     update::end_prompt_resize(state);
                     *dirty = true;
@@ -389,6 +576,9 @@ fn handle_terminal_event(
                 *dirty = true;
             }
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                if state.overlay.is_some() {
+                    return;
+                }
                 if state.resizing_prompt
                     || state
                         .selection
@@ -407,19 +597,48 @@ fn handle_terminal_event(
                     };
                     update::scroll_prompt(state, direction);
                     *dirty = true;
+                } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
+                    && let Some(rows) = ui::workspace_list_rows(view, state)
+                {
+                    let direction = if mouse.kind == MouseEventKind::ScrollUp {
+                        -1
+                    } else {
+                        1
+                    };
+                    if update::scroll_workspace_list(state, direction, rows) {
+                        *dirty = true;
+                    }
                 }
             }
             MouseEventKind::Moved => {
+                // 浮层打开时悬停只服务菜单高亮，不触碰底层 hover 状态。
+                if state.overlay.is_some() {
+                    if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
+                        let layout = ui::overlay::menu_layout(*screen, menu);
+                        if let Some(index) =
+                            ui::widgets::menu::item_at(&layout, mouse.column, mouse.row)
+                            && update::set_menu_selection(state, index)
+                        {
+                            *dirty = true;
+                        }
+                    }
+                    return;
+                }
                 let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)
                     .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
                 if update::set_toast_hover(state, hovering_toast) {
                     *dirty = true;
                 }
-                let hover = !hovering_toast
+                let sidebar_hover =
+                    !hovering_toast && ui::sidebar_boundary_at(view, mouse.column, mouse.row);
+                let prompt_hover = !hovering_toast
+                    && !sidebar_hover
                     && layout::resize_boundary_at(rects, mouse.column, mouse.row)
                         .is_some_and(|(_, right)| right == state.prompt.id());
-                if update::set_prompt_hover(state, hover) {
-                    let shape = if hover {
+                let mut hover_changed = update::set_sidebar_hover(state, sidebar_hover);
+                hover_changed |= update::set_prompt_hover(state, prompt_hover);
+                if hover_changed {
+                    let shape = if sidebar_hover || prompt_hover {
                         crate::platform::PointerShape::EwResize
                     } else {
                         crate::platform::PointerShape::Default
@@ -432,6 +651,100 @@ fn handle_terminal_event(
         },
         TerminalEvent::Resize(_, _) => *dirty = true,
         _ => {}
+    }
+}
+
+/// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。
+fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u16) {
+    match state.overlay.as_ref() {
+        Some(Overlay::Menu(menu)) => {
+            let layout = ui::overlay::menu_layout(screen, menu);
+            match ui::widgets::menu::item_at(&layout, column, row) {
+                Some(index) => {
+                    update::set_menu_selection(state, index);
+                    update::activate_menu(state);
+                }
+                None => update::close_overlay(state),
+            }
+        }
+        Some(Overlay::Rename(_)) => {
+            let button = ui::overlay::rename_shell(screen)
+                .and_then(|shell| ui::overlay::rename_button_at(&shell, column, row));
+            match button {
+                Some(ui::overlay::RenameButton::Save) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::RenameButton::Clear) => {
+                    update::apply_overlay_key(state, OverlayKey::Clear)
+                }
+                Some(ui::overlay::RenameButton::Cancel) | None => update::close_overlay(state),
+            }
+        }
+        Some(Overlay::ConfirmClose(_)) => {
+            let button = ui::overlay::confirm_shell(screen)
+                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
+            match button {
+                Some(ui::overlay::ConfirmButton::Confirm) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::ConfirmButton::Cancel) | None => update::close_overlay(state),
+            }
+        }
+        None => {}
+    }
+}
+
+/// 工作区滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
+fn handle_workspace_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::workspace_scrollbar(view, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    let rows = ui::workspace_list_rows(view, state).unwrap_or(0);
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.workspace_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_workspace_scroll(state, offset, rows);
+        }
+    }
+    true
+}
+
+/// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点与光标；返回是否命中。
+fn handle_prompt_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::prompt_scrollbar(view, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.prompt_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_prompt_scroll(state, offset);
+        }
+    }
+    true
+}
+
+/// 保证当前工作区在列表可见范围内（创建/切换/关闭后调用）。
+fn ensure_workspace_visible(state: &mut AppState, view: &ui::layout::ViewLayout) {
+    if let Some(rows) = ui::workspace_list_rows(view, state) {
+        update::ensure_workspace_visible(state, rows);
     }
 }
 
@@ -482,3 +795,6 @@ fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, R
         }
     })
 }
+
+#[cfg(test)]
+mod tests;

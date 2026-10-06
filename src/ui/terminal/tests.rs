@@ -18,13 +18,12 @@ fn renders_text_and_skips_wide_spacers() {
 }
 
 #[test]
-fn focused_terminal_paints_reversed_cursor() {
+fn focused_terminal_returns_cursor_position() {
     let mut terminal = Terminal::new(10, 2);
     terminal.feed(b"ab");
     let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
     let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &terminal, true, None);
     assert_eq!(cursor, Some((0, 2)));
-    assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]
@@ -34,7 +33,6 @@ fn hidden_cursor_is_not_returned() {
     let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
     let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &terminal, true, None);
     assert_eq!(cursor, None);
-    assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]

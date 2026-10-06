@@ -9,6 +9,23 @@ pub enum Action {
     ToggleAgents,
 }
 
+/// 浮层按键；仅在浮层打开时产生，按浮层种类过滤后交给 update。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayKey {
+    Esc,
+    Up,
+    Down,
+    Enter,
+    Char(char),
+    Clear,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+}
+
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorCommand {

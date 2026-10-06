@@ -2,6 +2,7 @@
 
 pub mod actions;
 pub mod markdown;
+pub mod overlay;
 pub mod prompt;
 pub mod selection;
 pub mod state;

@@ -25,6 +25,16 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
+/// 选中项：终端原生反显，不铺自绘背景。
+pub fn selection() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
+}
+
+/// 初始工作区标记：Green，与 accent/正文/状态色区分。
+pub fn marker() -> Style {
+    Style::default().fg(Color::Green)
+}
+
 /// 状态：失败（Red）。
 pub fn error() -> Style {
     Style::default().fg(Color::Red)

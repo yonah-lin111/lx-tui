@@ -495,12 +495,21 @@ impl Prompt {
 
     /// 按视觉行滚动视口；光标不动，超界时钳到可滚动范围。
     pub fn scroll_by(&mut self, lines: isize) {
-        let max = self
-            .visual_rows()
-            .len()
-            .saturating_sub(usize::from(self.height.max(1)));
+        let max = self.max_scroll();
         let target = (self.scroll.min(max) as isize).saturating_add(lines);
         self.scroll = target.clamp(0, max as isize) as usize;
+    }
+
+    /// 直接设置视口滚动偏移（滚动条点击/拖拽）；越界钳到可滚动范围。
+    pub fn scroll_to(&mut self, offset: usize) {
+        self.scroll = offset.min(self.max_scroll());
+    }
+
+    /// 最大可滚动偏移：视觉行数减视口高度。
+    fn max_scroll(&self) -> usize {
+        self.visual_rows()
+            .len()
+            .saturating_sub(usize::from(self.height.max(1)))
     }
 
     /// 将视口单元格坐标映射为光标位置；超出文本时钳到最近行行尾。

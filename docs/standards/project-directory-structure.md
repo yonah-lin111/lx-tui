@@ -23,6 +23,7 @@ lx-tui/
     app/                        应用状态与更新逻辑，纯数据、无 IO、可测试
       mod.rs
       state.rs                  唯一应用状态定义（含窗格种类与终端仿真状态）
+      overlay.rs                浮层模型（右键菜单、重命名输入与关闭确认）
       selection.rs              选区模型（终端窗格内文本选择）
       actions.rs                行为枚举
       update.rs                 行为到状态的转换、窗格尺寸同步与输出喂入
@@ -32,7 +33,7 @@ lx-tui/
       style.rs                  语义化样式 Token（codex 风格 ANSI 配色）
       text.rs                   全部用户可见文案
       terminal.rs               终端网格到 Buffer 的渲染
-      widgets/                  无业务语义的可复用组件，按需创建
+      widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）
       encode.rs                 按键到终端字节序列
@@ -41,7 +42,7 @@ lx-tui/
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell）
+    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
   assets/                       静态资源，按需创建

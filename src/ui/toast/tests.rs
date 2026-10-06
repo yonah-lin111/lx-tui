@@ -10,6 +10,7 @@ fn view_for(state: &AppState) -> ViewLayout {
         Rect::new(0, 0, 100, 24),
         &Config::default(),
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     )

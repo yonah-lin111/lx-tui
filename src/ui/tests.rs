@@ -30,6 +30,7 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
         Rect::new(0, 0, 100, 24),
         &Config::default(),
         state.sidebar_collapsed,
+        state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
     )
@@ -267,7 +268,7 @@ fn agents_section_below_header_stays_empty() {
 }
 
 #[test]
-fn agents_button_aligns_with_top_button_and_toggles_header() {
+fn agents_button_aligns_with_panel_button_and_toggles_header() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let sidebar_button = button_for(&view, CollapseTarget::Sidebar);
@@ -321,7 +322,7 @@ fn collapsed_labels_fill_content_area_with_continuous_separator() {
     let view = view_for(&state);
     let lines = render_lines(&state);
 
-    let sidebar_row: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
+    let sidebar_row: Vec<char> = lines[view.sidebar.bottom() as usize - 1].chars().collect();
     let sidebar_start = collapsed_content_x(view.sidebar, true);
     assert_eq!(sidebar_start, view.sidebar.x);
     let sidebar_label: String = (sidebar_start..view.sidebar.right() - 1)
@@ -333,7 +334,7 @@ fn collapsed_labels_fill_content_area_with_continuous_separator() {
         text::STRIP_LINE
     );
 
-    let prompt_row: Vec<char> = lines[view.prompt.y as usize].chars().collect();
+    let prompt_row: Vec<char> = lines[view.prompt.bottom() as usize - 1].chars().collect();
     let prompt_start = collapsed_content_x(view.prompt, false);
     assert_eq!(prompt_start, view.prompt.x + 1);
     let prompt_label: String = (prompt_start..view.prompt.right())
@@ -371,8 +372,8 @@ fn collapsed_strips_hide_panel_content() {
             .take(view.prompt.width as usize)
             .collect()
     };
-    // 折叠按钮占据右栏首行，第二行起才是纯窄条。
-    assert_eq!(prompt(view.prompt.y as usize + 1), "│   ");
+    // 折叠按钮贴窄条底行，其余行是纯窄条。
+    assert_eq!(prompt(view.prompt.y as usize), "│   ");
     assert_eq!(prompt(10), "│   ");
 }
 
@@ -547,4 +548,379 @@ fn error_toast_uses_red_border() {
     }
     let buffer = terminal.backend().buffer().clone();
     assert_eq!(buffer[(area.x, area.y)].fg, ratatui::style::Color::Red);
+}
+
+#[test]
+fn add_workspace_button_sits_at_sidebar_top_border_right() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let button = add_workspace_button(&view).expect("button is visible");
+    // 原折叠按钮位置：顶边框右端，距右边框 1 列。
+    assert_eq!(button.y, view.sidebar.y);
+    assert_eq!(button.right(), view.sidebar.right() - 1);
+    assert_eq!(
+        button.width,
+        text::ADD_WORKSPACE_LABEL.chars().count() as u16
+    );
+    assert!(button.x > view.sidebar.x);
+
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[button.y as usize].chars().collect();
+    let rendered: String = (button.x..button.right())
+        .map(|x| row[x as usize])
+        .collect();
+    assert_eq!(rendered, text::ADD_WORKSPACE_LABEL);
+}
+
+#[test]
+fn workspace_items_hit_full_list_rows() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let first_row = sections.workspaces.y;
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, first_row),
+        Some(0)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, first_row + 1),
+        Some(1)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, first_row + 2),
+        None
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, sections.divider.y),
+        None
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, sections.agents.y),
+        None
+    );
+}
+
+#[test]
+fn workspace_list_last_row_is_hittable_without_footer() {
+    let mut state = AppState::demo();
+    for _ in 0..11 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let last = sections.workspaces.bottom() - 1;
+    let index = usize::from(last - sections.workspaces.y);
+    assert_eq!(
+        workspace_item_at(&view, &state, sections.workspaces.x, last),
+        Some(index)
+    );
+}
+
+#[test]
+fn add_workspace_button_hidden_when_sidebar_collapsed() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = true;
+    let view = view_for(&state);
+    assert_eq!(add_workspace_button(&view), None);
+    assert_eq!(workspace_item_at(&view, &state, 0, 1), None);
+}
+
+#[test]
+fn workspace_scrollbar_appears_only_on_overflow() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    assert_eq!(workspace_scrollbar(&view, &state), None);
+
+    for _ in 0..20 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let bar = workspace_scrollbar(&view, &state).expect("scrollbar is visible");
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = sections.workspaces;
+    assert_eq!(bar.track.x, list.right() - 1);
+    assert_eq!(bar.track.y, list.y);
+    assert_eq!(bar.track.height, list.height);
+    assert_eq!(bar.total, 21);
+    assert_eq!(bar.visible, usize::from(list.height));
+}
+
+#[test]
+fn workspace_list_renders_scrolled_window_and_scrollbar() {
+    let mut state = AppState::demo();
+    for _ in 0..20 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = sections.workspaces;
+    let rows = usize::from(list.height);
+    state.workspace_scroll = update::workspace_scroll_max(&state, rows);
+    let expected = state.workspaces[state.workspace_scroll].name.clone();
+    let lines = render_lines(&state);
+    let top: Vec<char> = lines[list.y as usize].chars().collect();
+    let rendered: String = (list.x..list.right().saturating_sub(1))
+        .map(|x| top[x as usize])
+        .collect();
+    assert!(rendered.contains(&expected), "{rendered}");
+
+    let scrollbar_row: Vec<char> = lines[list.y as usize].chars().collect();
+    assert_eq!(
+        scrollbar_row[usize::from(list.right() - 1)].to_string(),
+        "▕"
+    );
+    let bottom_row: Vec<char> = lines[list.bottom() as usize - 1].chars().collect();
+    assert_eq!(bottom_row[usize::from(list.right() - 1)].to_string(), "▐");
+}
+
+#[test]
+fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
+    let mut state = AppState::demo();
+    for _ in 0..20 {
+        update::create_workspace(&mut state);
+    }
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = sections.workspaces;
+    state.workspace_scroll = 5;
+    assert_eq!(workspace_item_at(&view, &state, list.x, list.y), Some(5));
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x, list.y + 1),
+        Some(6)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, list.right() - 1, list.y),
+        None
+    );
+}
+
+#[test]
+fn initial_workspace_renders_green_marker() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    let initial = state.workspaces[0].name.clone();
+    let created = state.workspaces[1].name.clone();
+    let lines = render_lines(&state);
+    let marker_line = lines
+        .iter()
+        .position(|line| line.contains(&format!("{initial} *")))
+        .expect("initial workspace shows marker");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(&created) && !line.contains(&format!("{created} *")))
+    );
+
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let row: Vec<char> = lines[marker_line].chars().collect();
+    let marker_x = row
+        .iter()
+        .position(|symbol| *symbol == '*')
+        .expect("marker is rendered");
+    assert_eq!(
+        buffer[(marker_x as u16, marker_line as u16)].fg,
+        ratatui::style::Color::Green
+    );
+}
+
+#[test]
+fn long_initial_workspace_name_keeps_marker_visible() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "a-very-long-workspace-name-that-would-be-clipped".to_string();
+    let lines = render_lines(&state);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains('…') && line.contains(" *")),
+        "marker should survive ellipsis"
+    );
+}
+
+#[test]
+fn sidebar_boundary_hits_adjacent_columns_in_pane_rows() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let left = view.sidebar.right() - 1;
+    let right = view.sidebar.right();
+    assert!(sidebar_boundary_at(&view, left, view.panes.y));
+    assert!(sidebar_boundary_at(&view, right, view.panes.bottom() - 1));
+    assert!(!sidebar_boundary_at(&view, left, view.panes.y - 1));
+    assert!(!sidebar_boundary_at(&view, left - 1, view.panes.y));
+
+    let mut collapsed = AppState::demo();
+    collapsed.sidebar_collapsed = true;
+    let view = view_for(&collapsed);
+    assert!(!sidebar_boundary_at(
+        &view,
+        view.sidebar.right() - 1,
+        view.panes.y
+    ));
+}
+
+#[test]
+fn sidebar_boundary_hit_uses_runtime_width() {
+    let mut state = AppState::demo();
+    state.sidebar_width = 32;
+    let view = view_for(&state);
+    assert_eq!(view.sidebar.width, 32);
+    assert!(sidebar_boundary_at(&view, 31, view.panes.y));
+    assert!(sidebar_boundary_at(&view, 32, view.panes.y));
+    assert!(!sidebar_boundary_at(&view, 23, view.panes.y));
+}
+
+#[test]
+fn workspace_drop_index_maps_rows_with_scroll_and_clamps() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    update::create_workspace(&mut state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list_y = sections.workspaces.y;
+    assert_eq!(workspace_drop_index(&view, &state, list_y), Some(0));
+    assert_eq!(workspace_drop_index(&view, &state, list_y + 2), Some(2));
+    assert_eq!(workspace_drop_index(&view, &state, 0), Some(0));
+    assert_eq!(
+        workspace_drop_index(&view, &state, sections.workspaces.bottom()),
+        Some(2)
+    );
+
+    state.workspace_scroll = 1;
+    assert_eq!(workspace_drop_index(&view, &state, list_y), Some(1));
+
+    state.workspaces.clear();
+    assert_eq!(workspace_drop_index(&view, &state, list_y), None);
+}
+
+#[test]
+fn dragged_workspace_item_renders_reversed() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    state.workspace_drag = Some(0);
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    assert!(
+        buffer[(sections.workspaces.x, sections.workspaces.y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert!(
+        !buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+}
+
+#[test]
+fn panel_collapse_buttons_sit_on_bottom_border() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let sidebar = button_for(&view, CollapseTarget::Sidebar);
+    let prompt = button_for(&view, CollapseTarget::Prompt);
+    assert!(!sidebar.collapsed && !prompt.collapsed);
+    assert_eq!(sidebar.area.y, view.sidebar.bottom() - 1);
+    assert_eq!(prompt.area.y, view.prompt.bottom() - 1);
+    assert_eq!(
+        collapse_button_at(&view, false, sidebar.area.x, sidebar.area.y),
+        Some(CollapseTarget::Sidebar)
+    );
+
+    let lines = render_lines(&state);
+    assert_eq!(
+        rendered_label(&lines, &sidebar),
+        text::SIDEBAR_COLLAPSE_LABEL
+    );
+    assert_eq!(rendered_label(&lines, &prompt), text::PROMPT_COLLAPSE_LABEL);
+}
+
+#[test]
+fn collapsed_panel_buttons_sit_on_bottom_strip_row() {
+    let mut state = AppState::demo();
+    update::apply(Action::ToggleSidebar, &mut state);
+    update::apply(Action::TogglePrompt, &mut state);
+    let view = view_for(&state);
+    let sidebar = button_for(&view, CollapseTarget::Sidebar);
+    let prompt = button_for(&view, CollapseTarget::Prompt);
+    assert!(sidebar.collapsed && prompt.collapsed);
+    assert_eq!(sidebar.area.y, view.sidebar.bottom() - 1);
+    assert_eq!(prompt.area.y, view.prompt.bottom() - 1);
+    assert_eq!(
+        rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Sidebar),
+        text::SIDEBAR_EXPAND_LABEL
+    );
+    assert_eq!(
+        rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Prompt),
+        text::PROMPT_EXPAND_LABEL
+    );
+}
+
+/// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。
+fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    state.prompt.resize(text.width, text.height);
+    for _ in 0..=usize::from(text.height) {
+        state.prompt.insert_str("line\n");
+    }
+}
+
+#[test]
+fn prompt_scrollbar_appears_only_on_overflow() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    assert_eq!(prompt_scrollbar(&view, &state), None);
+
+    overflow_prompt(&mut state, &view);
+    let view = view_for(&state);
+    let bar = prompt_scrollbar(&view, &state).expect("scrollbar is visible");
+    let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
+    assert_eq!(bar.track, gutter);
+    assert_eq!(bar.visible, usize::from(gutter.height));
+    assert_eq!(bar.total, state.prompt.visual_rows().len());
+    assert!(bar.total > bar.visible);
+}
+
+#[test]
+fn prompt_text_wraps_before_scrollbar_gutter() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    state.prompt.resize(text.width, text.height);
+    assert!(text.width > 1);
+    state
+        .prompt
+        .insert_str(&"x".repeat(usize::from(text.width) + 1));
+    assert_eq!(state.prompt.visual_rows().len(), 2);
+}
+
+#[test]
+fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    overflow_prompt(&mut state, &view);
+    let view = view_for(&state);
+    let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
+    update::set_prompt_scroll(&mut state, 0);
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[gutter.y as usize].chars().collect();
+    assert_eq!(row[usize::from(gutter.x)].to_string(), "▐");
+
+    update::set_prompt_scroll(&mut state, usize::MAX);
+    let lines = render_lines(&state);
+    let last: Vec<char> = lines[gutter.bottom() as usize - 1].chars().collect();
+    assert_eq!(last[usize::from(gutter.x)].to_string(), "▐");
+    let middle: Vec<char> = lines[gutter.y as usize + 1].chars().collect();
+    assert_eq!(middle[usize::from(gutter.x)].to_string(), "▕");
 }

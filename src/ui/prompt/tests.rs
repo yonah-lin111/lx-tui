@@ -22,7 +22,7 @@ fn paints_markdown_styles() {
     let area = Rect::new(0, 0, 20, 10);
     let prompt = prompt(20, 10, "## t\n**b**\n`c`\n> q\n- i\n[a](u)");
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, false, None);
+    render(area, &mut buf, &prompt, None);
 
     assert_eq!(buf[(0, 0)].symbol(), "#");
     assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
@@ -58,7 +58,7 @@ fn fence_lines_are_markers_and_content_stays_default() {
     let area = Rect::new(0, 0, 10, 4);
     let prompt = prompt(10, 4, "```\nx\n```");
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, false, None);
+    render(area, &mut buf, &prompt, None);
     assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
     assert_eq!(buf[(0, 1)].symbol(), "x");
     assert_eq!(buf[(0, 1)].fg, Color::Reset);
@@ -67,30 +67,15 @@ fn fence_lines_are_markers_and_content_stays_default() {
 }
 
 #[test]
-fn cursor_is_reversed_only_when_focused() {
-    let area = Rect::new(0, 0, 10, 3);
-    let prompt = prompt(10, 3, "ab");
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, false, None);
-    assert!(!buf[(2, 0)].modifier.contains(Modifier::REVERSED));
-
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, true, None);
-    assert!(buf[(2, 0)].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED));
-}
-
-#[test]
-fn renders_scrolled_viewport_and_cursor_cell() {
+fn renders_scrolled_viewport() {
     let area = Rect::new(0, 0, 4, 2);
     let prompt = prompt(4, 2, "abcdefghij");
     assert_eq!(prompt.scroll(), 1);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, true, None);
+    render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 0)].symbol(), "e");
     assert_eq!(buf[(3, 0)].symbol(), "h");
     assert_eq!(buf[(0, 1)].symbol(), "i");
-    assert!(buf[(2, 1)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]
@@ -104,7 +89,7 @@ fn wrapped_continuation_row_keeps_line_token_offsets() {
     );
     assert_eq!(prompt.visual_rows().len(), 2);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, false, None);
+    render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 1)].symbol(), "o");
     assert_eq!(buf[(0, 1)].fg, Color::LightBlue);
     assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
@@ -121,13 +106,8 @@ fn scrolled_viewport_hides_cursor_when_caret_leaves_view() {
     assert_eq!(prompt.scroll(), 1);
     assert_eq!(prompt.cursor_cell(), None);
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, true, None);
+    render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 0)].symbol(), "e");
-    for y in 0..2 {
-        for x in 0..4 {
-            assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED));
-        }
-    }
 }
 
 #[test]
@@ -136,7 +116,7 @@ fn selection_reverses_cells_including_empty_trailing() {
     let prompt = prompt(10, 3, "abc");
     let mut buf = Buffer::empty(area);
     let selection = selection(&prompt, (0, 0), (0, 5));
-    render(area, &mut buf, &prompt, false, Some(&selection));
+    render(area, &mut buf, &prompt, Some(&selection));
     for col in 0..=5 {
         assert!(
             buf[(col, 0)].modifier.contains(Modifier::REVERSED),
@@ -151,7 +131,7 @@ fn wide_chars_mark_spacer_cells() {
     let area = Rect::new(0, 0, 10, 3);
     let prompt = prompt(10, 3, "你好");
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, false, None);
+    render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 0)].symbol(), "你");
     assert_eq!(buf[(1, 0)].diff_option, CellDiffOption::Skip);
     assert_eq!(buf[(2, 0)].symbol(), "好");
@@ -166,7 +146,7 @@ fn renders_block_command_panel_below_cursor() {
     editor.insert_str("#");
     assert!(editor.panel().is_some());
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &editor, true, None);
+    render(area, &mut buf, &editor, None);
 
     assert_eq!(buf[(0, 1)].symbol(), "╭");
     let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
@@ -175,6 +155,6 @@ fn renders_block_command_panel_below_cursor() {
 
     let mut empty = Buffer::empty(area);
     let blank = prompt(10, 3, "plain");
-    render(area, &mut empty, &blank, true, None);
+    render(area, &mut empty, &blank, None);
     assert_eq!(empty[(0, 1)].symbol(), " ");
 }
