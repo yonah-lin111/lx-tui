@@ -161,3 +161,46 @@ fn selection_extracts_scrolled_back_content() {
     assert!(term.scroll_display(2));
     assert_eq!(extract(&mut term, (0, 0), (0, 3)).as_deref(), Some("l06"));
 }
+
+#[test]
+fn clear_screen_drops_scrollback_and_blanks_viewport() {
+    let mut term = Terminal::new(20, 5);
+    term.feed(b"$ one\r\n$ two\r\n$ three\r\n$ ");
+    assert_eq!(term.history_size(), 0);
+    term.feed(b"\x1b[H\x1b[2J");
+    term.feed(b"$ ");
+    assert_eq!(term.history_size(), 0);
+    assert_eq!(term.display_offset(), 0);
+    let grid = term.grid();
+    assert_eq!(grid[Line(0)][Column(0)].c, '$');
+    assert_eq!(grid[Line(1)][Column(0)].c, ' ');
+}
+
+#[test]
+fn clear_on_alternate_screen_keeps_primary_scrollback() {
+    let mut term = Terminal::new(20, 5);
+    for i in 0..8 {
+        term.feed(format!("line {i}\r\n").as_bytes());
+    }
+    let history = term.history_size();
+    assert!(history > 0);
+    term.feed(b"\x1b[?1049h");
+    term.feed(b"\x1b[H\x1b[2J");
+    term.feed(b"\x1b[?1049l");
+    assert_eq!(term.history_size(), history);
+}
+
+#[test]
+fn scroll_to_content_offset_moves_viewport_from_top() {
+    let mut term = Terminal::new(20, 5);
+    for i in 0..10 {
+        term.feed(format!("line {i}\r\n").as_bytes());
+    }
+    let history = term.history_size();
+    assert!(history > 0);
+    assert!(term.scroll_to_content_offset(0));
+    assert_eq!(term.display_offset(), history);
+    assert!(term.scroll_to_content_offset(history));
+    assert_eq!(term.display_offset(), 0);
+    assert!(!term.scroll_to_content_offset(history));
+}

@@ -12,6 +12,7 @@ use alacritty_terminal::term::{
     Config as EmulatorConfig, RenderableContent, Term, TermMode, viewport_to_point,
 };
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
+use alacritty_terminal::vte::{Params, Parser, Perform};
 
 /// 回滚缓冲行数。
 const SCROLLBACK_LINES: usize = 10_000;
@@ -63,10 +64,34 @@ pub enum WheelRouting {
     HostScroll,
 }
 
+/// 旁观解析器：只记录本批字节是否出现清屏（ED2），供 `feed` 决定丢弃回滚。
+#[derive(Debug, Default)]
+struct ClearWatcher {
+    erase_display: bool,
+}
+
+impl Perform for ClearWatcher {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        if action == 'J' && intermediates.is_empty() {
+            let mode = params
+                .iter()
+                .next()
+                .and_then(|param| param.first())
+                .copied()
+                .unwrap_or(0);
+            if mode == 2 {
+                self.erase_display = true;
+            }
+        }
+    }
+}
+
 /// 单个窗格的终端仿真状态。
 pub struct Terminal {
     term: Term<Listener>,
     parser: Processor,
+    clear_parser: Parser,
+    clear_watcher: ClearWatcher,
     events: Arc<Mutex<Vec<EmulatorEvent>>>,
     size: GridSize,
     title: Option<String>,
@@ -94,6 +119,8 @@ impl Terminal {
         Self {
             term,
             parser: Processor::new(),
+            clear_parser: Parser::new(),
+            clear_watcher: ClearWatcher::default(),
             events,
             size,
             title: None,
@@ -102,7 +129,17 @@ impl Terminal {
 
     /// 喂入 PTY 字节；返回需要写回 PTY 的响应（DSR/DA 等）。
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<u8> {
+        self.clear_watcher.erase_display = false;
+        self.clear_parser.advance(&mut self.clear_watcher, bytes);
+        let erase_display = self.clear_watcher.erase_display;
+
         self.parser.advance(&mut self.term, bytes);
+
+        // alacritty 的 ED2 会把屏上内容推进回滚缓冲（xterm 是原位擦除），使 clear 后
+        // 仍能向上翻出旧画面；主屏上按“清屏即清空”丢弃回滚，备用屏不动主屏历史。
+        if erase_display && !self.term.mode().contains(TermMode::ALT_SCREEN) {
+            self.term.grid_mut().clear_history();
+        }
 
         let mut responses = Vec::new();
         let events = Arc::clone(&self.events);
@@ -174,9 +211,21 @@ impl Terminal {
         self.display_offset() != before
     }
 
+    /// 回滚缓冲行数（不含当前视口）。
+    pub fn history_size(&self) -> usize {
+        self.term.grid().history_size()
+    }
+
     /// 回滚视口距底部的行数（0 表示位于底部）。
     pub fn display_offset(&self) -> usize {
         self.term.grid().display_offset()
+    }
+
+    /// 把视口移动到距内容顶部 `offset` 行（0 为最旧一屏）；返回视口是否移动。
+    pub fn scroll_to_content_offset(&mut self, offset: usize) -> bool {
+        let history = self.history_size();
+        let target = history.saturating_sub(offset.min(history));
+        self.scroll_display(target as i32 - self.display_offset() as i32)
     }
 
     /// 渲染视图内容（只读）。

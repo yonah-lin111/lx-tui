@@ -81,6 +81,8 @@ pub struct AppState {
     pub workspace_scroll_drag: Option<u16>,
     /// 拖拽 prompt 滚动条 thumb 时相对顶部的抓取偏移。
     pub prompt_scroll_drag: Option<u16>,
+    /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
     /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
@@ -292,6 +294,7 @@ impl AppState {
             workspace_scroll: 0,
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
+            terminal_scroll_drag: None,
             workspace_drag: None,
             overlay: None,
         }

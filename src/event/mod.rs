@@ -486,15 +486,26 @@ fn handle_terminal_event(
                         state.pane_anywhere(pane).map(|pane| pane.kind),
                         Some(PaneKind::Terminal)
                     ) {
-                        update::focus_pane(state, pane);
-                        // 应用在鼠标上报模式时按键归它自己（对齐 herdr）：转发并按它的
-                        // 选区逻辑处理，不启动本地选区。
-                        if forward_pane_mouse_event(state, sessions, pane, inner, &mouse) {
-                            update::clear_selection(state);
+                        // 滚动条按下先于焦点与选区：thumb 拖拽，轨道点击跳转。
+                        if handle_terminal_scrollbar_press(
+                            state,
+                            pane,
+                            inner,
+                            mouse.column,
+                            mouse.row,
+                        ) {
+                            *dirty = true;
                         } else {
-                            update::begin_terminal_selection(state, pane, row, col);
+                            update::focus_pane(state, pane);
+                            // 应用在鼠标上报模式时按键归它自己（对齐 herdr）：转发并按它的
+                            // 选区逻辑处理，不启动本地选区。
+                            if forward_pane_mouse_event(state, sessions, pane, inner, &mouse) {
+                                update::clear_selection(state);
+                            } else {
+                                update::begin_terminal_selection(state, pane, row, col);
+                            }
+                            *dirty = true;
                         }
-                        *dirty = true;
                     } else {
                         update::clear_selection(state);
                     }
@@ -557,6 +568,26 @@ fn handle_terminal_event(
                     let offset =
                         ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
                     if update::set_prompt_scroll(state, offset) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if let Some((pane, grab)) = state.terminal_scroll_drag {
+                    let bar = rects
+                        .iter()
+                        .find(|(id, _)| *id == pane)
+                        .and_then(|(_, rect)| {
+                            let inner = layout::pane_inner_rect(*rect);
+                            state
+                                .pane_anywhere(pane)
+                                .and_then(|target| ui::terminal::scrollbar(inner, &target.terminal))
+                        });
+                    let Some(bar) = bar else {
+                        return;
+                    };
+                    let offset =
+                        ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                    if update::set_terminal_scroll(state, pane, offset) {
                         *dirty = true;
                     }
                     return;
@@ -633,6 +664,9 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.prompt_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.terminal_scroll_drag.take().is_some() {
                     return;
                 }
                 if state.workspace_drag.is_some() {
@@ -1009,6 +1043,33 @@ fn handle_prompt_scrollbar_press(
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
             update::set_prompt_scroll(state, offset);
+        }
+    }
+    true
+}
+
+/// 终端窗格滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点；返回是否命中。
+fn handle_terminal_scrollbar_press(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::terminal::scrollbar(inner, &target.terminal))
+    else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.terminal_scroll_drag = Some((pane, grab)),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_terminal_scroll(state, pane, offset);
         }
     }
     true

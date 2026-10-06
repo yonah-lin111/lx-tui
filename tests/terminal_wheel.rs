@@ -170,3 +170,26 @@ fn drag_to_top_edge_autoscrolls_terminal_backlog() {
         "edge drag must autoscroll the pane backlog"
     );
 }
+
+#[test]
+fn scrollbar_renders_with_local_scrollback_in_real_binary() {
+    let app = App::spawn();
+    let screen = screen_text(&app.emulator.lock().unwrap());
+    assert!(screen.contains('▕'), "track visible with backlog");
+    assert!(screen.contains('▐'), "thumb visible with backlog");
+}
+
+#[test]
+fn clear_wipes_terminal_scrollback_in_real_binary() {
+    let app = App::spawn();
+    app.send(b"echo CLEAR-AAA; clear\r");
+    std::thread::sleep(Duration::from_secs(1));
+    app.wheel_up(5);
+    std::thread::sleep(Duration::from_millis(500));
+    let screen = screen_text(&app.emulator.lock().unwrap());
+    assert!(!screen.contains("CLEAR-AAA"), "cleared line must be gone");
+    assert!(
+        !screen.contains("WHEELTEST"),
+        "cleared scrollback must be gone"
+    );
+}

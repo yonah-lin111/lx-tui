@@ -917,6 +917,13 @@ pub fn set_prompt_scroll(state: &mut AppState, offset: usize) -> bool {
     state.prompt.scroll() != before
 }
 
+/// 把终端窗格视口移动到距内容顶部 `offset` 行（0 为最旧一屏）；返回视口是否移动。
+pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+    state.pane_mut_anywhere(pane).is_some_and(|target| {
+        target.kind == PaneKind::Terminal && target.terminal.scroll_to_content_offset(offset)
+    })
+}
+
 /// 开始拖动排序：记录被拖工作区索引；按下时已切换激活。
 pub fn begin_workspace_drag(state: &mut AppState, index: usize) {
     if index < state.workspaces.len() {

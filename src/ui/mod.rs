@@ -597,6 +597,9 @@ fn render_panes(
                 {
                     cursor = Some((inner.x + col, inner.y + row));
                 }
+                if let Some(scrollbar) = terminal::scrollbar(inner, &pane.terminal) {
+                    widgets::scrollbar::render(frame, &scrollbar);
+                }
             }
             PaneKind::Placeholder => {}
         }

@@ -72,3 +72,25 @@ fn selection_follows_content_when_scrolled() {
     assert!(!buf[(0, 0)].modifier.contains(Modifier::REVERSED), "one");
     assert!(buf[(0, 1)].modifier.contains(Modifier::REVERSED), "two");
 }
+
+#[test]
+fn scrollbar_appears_only_for_local_scrollback() {
+    let mut terminal = Terminal::new(10, 2);
+    terminal.feed(b"only");
+    assert_eq!(scrollbar(Rect::new(0, 0, 10, 2), &terminal), None);
+
+    for i in 0..8 {
+        terminal.feed(format!("line {i}\r\n").as_bytes());
+    }
+    let bar = scrollbar(Rect::new(0, 0, 10, 2), &terminal).expect("scrollbar");
+    assert_eq!(bar.track, Rect::new(9, 0, 1, 2));
+    assert_eq!(bar.thumb.bottom(), bar.track.bottom());
+
+    // 鼠标上报模式（opencode/claude 等）：应用自己滚动，隐藏滚动条。
+    terminal.feed(b"\x1b[?1000h\x1b[?1006h");
+    assert_eq!(scrollbar(Rect::new(0, 0, 10, 2), &terminal), None);
+
+    // 备用屏且应用不接管滚轮时也没有本地内容可滚。
+    terminal.feed(b"\x1b[?1000l\x1b[?1006l\x1b[?1049h");
+    assert_eq!(scrollbar(Rect::new(0, 0, 10, 2), &terminal), None);
+}

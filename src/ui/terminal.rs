@@ -7,7 +7,27 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::terminal::Terminal;
+use crate::terminal::{Terminal, WheelRouting};
+use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
+
+/// 终端滚动条几何：仅本地回滚模式且有回滚内容时，覆盖在内容区最右一列。
+///
+/// 鼠标上报（opencode/claude 等）与备用屏应用自己滚动，不显示。
+pub fn scrollbar(inner: Rect, terminal: &Terminal) -> Option<ScrollbarLayout> {
+    if terminal.wheel_routing() != WheelRouting::HostScroll {
+        return None;
+    }
+    let history = terminal.history_size();
+    if history == 0 || inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+    scrollbar::layout(
+        inner,
+        history + usize::from(inner.height),
+        usize::from(inner.height),
+        history.saturating_sub(terminal.display_offset()),
+    )
+}
 
 /// 渲染终端内容；仿真器选区命中的单元格反显高亮。
 ///

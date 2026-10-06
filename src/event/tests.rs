@@ -586,6 +586,72 @@ fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
 }
 
 #[test]
+fn terminal_scrollbar_thumb_drag_moves_viewport() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("terminal pane");
+        for i in 0..80 {
+            target.terminal.feed(format!("line {i:02}\r\n").as_bytes());
+        }
+    }
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    let history = target.terminal.history_size();
+    assert!(history > 0);
+    let inner = pane_inner(&geo, pane);
+    let bar = ui::terminal::scrollbar(inner, &target.terminal).expect("scrollbar");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.terminal_scroll_drag.is_some());
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), 0);
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            bar.track.x,
+            bar.track.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("terminal pane");
+    assert_eq!(target.terminal.display_offset(), history);
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.track.x,
+            bar.track.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.terminal_scroll_drag.is_none());
+}
+
+#[test]
 fn mouse_drag_on_mouse_report_pane_skips_local_selection() {
     let config = Config::default();
     let mut state = AppState::demo();
