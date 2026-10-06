@@ -165,3 +165,99 @@ fn mouse_drag_reorders_workspaces() {
     );
     assert_eq!(state.active_workspace, 2);
 }
+
+/// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。
+fn overflow_prompt(state: &mut AppState, view: &ui::layout::ViewLayout) {
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    state.prompt.resize(text.width, text.height);
+    for _ in 0..=usize::from(text.height) {
+        state.prompt.insert_str("line\n");
+    }
+    crate::app::update::set_prompt_scroll(state, 0);
+}
+
+#[test]
+fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    overflow_prompt(&mut state, &geo.view);
+    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.scroll() > 0, "track click jumps down");
+    assert!(
+        !state.prompt_focused,
+        "scrollbar press must not focus prompt"
+    );
+    assert!(state.prompt_scroll_drag.is_none());
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_drag_prompt_scrollbar_thumb() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    overflow_prompt(&mut state, &geo.view);
+    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+    let max = ui::widgets::scrollbar::offset_from_drag_row(&bar, bar.track.bottom() - 1, 0);
+    assert!(max > 0);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.thumb.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_scroll_drag, Some(0));
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.scroll(), max);
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt_scroll_drag.is_none());
+}

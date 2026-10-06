@@ -391,7 +391,9 @@ fn handle_terminal_event(
                 } else if ui::sidebar_boundary_at(view, mouse.column, mouse.row) {
                     update::begin_sidebar_resize(state);
                     *dirty = true;
-                } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row) {
+                } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
+                    || handle_prompt_scrollbar_press(state, view, mouse.column, mouse.row)
+                {
                     *dirty = true;
                 } else if let Some(index) =
                     ui::workspace_item_at(view, state, mouse.column, mouse.row)
@@ -470,6 +472,17 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                if let Some(grab) = state.prompt_scroll_drag {
+                    let Some(bar) = ui::prompt_scrollbar(view, state) else {
+                        return;
+                    };
+                    let offset =
+                        ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                    if update::set_prompt_scroll(state, offset) {
+                        *dirty = true;
+                    }
+                    return;
+                }
                 if state.resizing_sidebar {
                     let width = ui::layout::sidebar_width_at(view, config, mouse.column);
                     update::drag_sidebar(state, width);
@@ -515,6 +528,9 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.workspace_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.prompt_scroll_drag.take().is_some() {
                     return;
                 }
                 if state.workspace_drag.is_some() {
@@ -697,6 +713,29 @@ fn handle_workspace_scrollbar_press(
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
             update::set_workspace_scroll(state, offset, rows);
+        }
+    }
+    true
+}
+
+/// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点与光标；返回是否命中。
+fn handle_prompt_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::prompt_scrollbar(view, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.prompt_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_prompt_scroll(state, offset);
         }
     }
     true

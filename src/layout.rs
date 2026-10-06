@@ -451,6 +451,36 @@ pub fn pane_inner_size(rect: Rect) -> (u16, u16) {
     (inner.width.max(1), inner.height.max(1))
 }
 
+/// prompt 文本区矩形：内容区最右一列固定预留给滚动条槽（内容区宽度 >= 2 时）。
+pub fn prompt_text_rect(panel: Rect) -> Rect {
+    let inner = pane_inner_rect(panel);
+    if inner.width >= 2 {
+        Rect {
+            width: inner.width - 1,
+            ..inner
+        }
+    } else {
+        inner
+    }
+}
+
+/// prompt 滚动条槽矩形：内容区最右一列；内容区过窄时为 None。
+pub fn prompt_scrollbar_rect(panel: Rect) -> Option<Rect> {
+    let inner = pane_inner_rect(panel);
+    (inner.width >= 2 && inner.height > 0).then_some(Rect::new(
+        inner.right() - 1,
+        inner.y,
+        1,
+        inner.height,
+    ))
+}
+
+/// prompt 文本区尺寸：预留滚动条槽，最小 1x1。
+pub fn prompt_inner_size(rect: Rect) -> (u16, u16) {
+    let text = prompt_text_rect(rect);
+    (text.width.max(1), text.height.max(1))
+}
+
 /// 返回 `from` 指定方向上最近的窗格。
 pub fn pane_in_direction(
     rects: &[(PaneId, Rect)],

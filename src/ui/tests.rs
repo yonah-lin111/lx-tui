@@ -268,7 +268,7 @@ fn agents_section_below_header_stays_empty() {
 }
 
 #[test]
-fn agents_button_aligns_with_top_button_and_toggles_header() {
+fn agents_button_aligns_with_panel_button_and_toggles_header() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let sidebar_button = button_for(&view, CollapseTarget::Sidebar);
@@ -322,7 +322,7 @@ fn collapsed_labels_fill_content_area_with_continuous_separator() {
     let view = view_for(&state);
     let lines = render_lines(&state);
 
-    let sidebar_row: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
+    let sidebar_row: Vec<char> = lines[view.sidebar.bottom() as usize - 1].chars().collect();
     let sidebar_start = collapsed_content_x(view.sidebar, true);
     assert_eq!(sidebar_start, view.sidebar.x);
     let sidebar_label: String = (sidebar_start..view.sidebar.right() - 1)
@@ -334,7 +334,7 @@ fn collapsed_labels_fill_content_area_with_continuous_separator() {
         text::STRIP_LINE
     );
 
-    let prompt_row: Vec<char> = lines[view.prompt.y as usize].chars().collect();
+    let prompt_row: Vec<char> = lines[view.prompt.bottom() as usize - 1].chars().collect();
     let prompt_start = collapsed_content_x(view.prompt, false);
     assert_eq!(prompt_start, view.prompt.x + 1);
     let prompt_label: String = (prompt_start..view.prompt.right())
@@ -372,8 +372,8 @@ fn collapsed_strips_hide_panel_content() {
             .take(view.prompt.width as usize)
             .collect()
     };
-    // 折叠按钮占据右栏首行，第二行起才是纯窄条。
-    assert_eq!(prompt(view.prompt.y as usize + 1), "│   ");
+    // 折叠按钮贴窄条底行，其余行是纯窄条。
+    assert_eq!(prompt(view.prompt.y as usize), "│   ");
     assert_eq!(prompt(10), "│   ");
 }
 
@@ -822,4 +822,105 @@ fn dragged_workspace_item_renders_reversed() {
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
+}
+
+#[test]
+fn panel_collapse_buttons_sit_on_bottom_border() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let sidebar = button_for(&view, CollapseTarget::Sidebar);
+    let prompt = button_for(&view, CollapseTarget::Prompt);
+    assert!(!sidebar.collapsed && !prompt.collapsed);
+    assert_eq!(sidebar.area.y, view.sidebar.bottom() - 1);
+    assert_eq!(prompt.area.y, view.prompt.bottom() - 1);
+    assert_eq!(
+        collapse_button_at(&view, false, sidebar.area.x, sidebar.area.y),
+        Some(CollapseTarget::Sidebar)
+    );
+
+    let lines = render_lines(&state);
+    assert_eq!(
+        rendered_label(&lines, &sidebar),
+        text::SIDEBAR_COLLAPSE_LABEL
+    );
+    assert_eq!(rendered_label(&lines, &prompt), text::PROMPT_COLLAPSE_LABEL);
+}
+
+#[test]
+fn collapsed_panel_buttons_sit_on_bottom_strip_row() {
+    let mut state = AppState::demo();
+    update::apply(Action::ToggleSidebar, &mut state);
+    update::apply(Action::TogglePrompt, &mut state);
+    let view = view_for(&state);
+    let sidebar = button_for(&view, CollapseTarget::Sidebar);
+    let prompt = button_for(&view, CollapseTarget::Prompt);
+    assert!(sidebar.collapsed && prompt.collapsed);
+    assert_eq!(sidebar.area.y, view.sidebar.bottom() - 1);
+    assert_eq!(prompt.area.y, view.prompt.bottom() - 1);
+    assert_eq!(
+        rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Sidebar),
+        text::SIDEBAR_EXPAND_LABEL
+    );
+    assert_eq!(
+        rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Prompt),
+        text::PROMPT_EXPAND_LABEL
+    );
+}
+
+/// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。
+fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    state.prompt.resize(text.width, text.height);
+    for _ in 0..=usize::from(text.height) {
+        state.prompt.insert_str("line\n");
+    }
+}
+
+#[test]
+fn prompt_scrollbar_appears_only_on_overflow() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    assert_eq!(prompt_scrollbar(&view, &state), None);
+
+    overflow_prompt(&mut state, &view);
+    let view = view_for(&state);
+    let bar = prompt_scrollbar(&view, &state).expect("scrollbar is visible");
+    let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
+    assert_eq!(bar.track, gutter);
+    assert_eq!(bar.visible, usize::from(gutter.height));
+    assert_eq!(bar.total, state.prompt.visual_rows().len());
+    assert!(bar.total > bar.visible);
+}
+
+#[test]
+fn prompt_text_wraps_before_scrollbar_gutter() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    state.prompt.resize(text.width, text.height);
+    assert!(text.width > 1);
+    state
+        .prompt
+        .insert_str(&"x".repeat(usize::from(text.width) + 1));
+    assert_eq!(state.prompt.visual_rows().len(), 2);
+}
+
+#[test]
+fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    overflow_prompt(&mut state, &view);
+    let view = view_for(&state);
+    let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
+    update::set_prompt_scroll(&mut state, 0);
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[gutter.y as usize].chars().collect();
+    assert_eq!(row[usize::from(gutter.x)].to_string(), "▐");
+
+    update::set_prompt_scroll(&mut state, usize::MAX);
+    let lines = render_lines(&state);
+    let last: Vec<char> = lines[gutter.bottom() as usize - 1].chars().collect();
+    assert_eq!(last[usize::from(gutter.x)].to_string(), "▐");
+    let middle: Vec<char> = lines[gutter.y as usize + 1].chars().collect();
+    assert_eq!(middle[usize::from(gutter.x)].to_string(), "▕");
 }

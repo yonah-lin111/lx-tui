@@ -112,16 +112,17 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 
 /// 按几何同步各窗格终端与 prompt 编辑器的尺寸。
 ///
-/// prompt 尺寸变化会让视口选区坐标失效，此时清除选区。
+/// prompt 文本区固定预留滚动条槽；尺寸变化会让视口选区坐标失效，此时清除选区。
 pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
-        let (cols, rows) = layout::pane_inner_size(*rect);
         if *id == state.prompt.id() {
+            let (cols, rows) = layout::prompt_inner_size(*rect);
             if state.prompt.size() != (cols, rows) {
                 state.selection = None;
             }
             state.prompt.resize(cols, rows);
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
+            let (cols, rows) = layout::pane_inner_size(*rect);
             pane.terminal.resize(cols, rows);
         }
     }
@@ -519,6 +520,13 @@ pub fn set_workspace_scroll(state: &mut AppState, offset: usize, visible: usize)
     }
     state.workspace_scroll = offset;
     true
+}
+
+/// 直接设置 prompt 视口偏移（滚动条点击/拖拽）；越界钳制；返回是否变化。
+pub fn set_prompt_scroll(state: &mut AppState, offset: usize) -> bool {
+    let before = state.prompt.scroll();
+    state.prompt.scroll_to(offset);
+    state.prompt.scroll() != before
 }
 
 /// 开始拖动排序：记录被拖工作区索引；按下时已切换激活。

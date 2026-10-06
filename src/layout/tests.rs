@@ -227,3 +227,19 @@ fn resize_boundary_at_requires_shared_row() {
     assert_eq!(resize_boundary_at(&rects, 39, 5), Some((left, right)));
     assert_eq!(resize_boundary_at(&rects, 39, 15), None);
 }
+
+#[test]
+fn prompt_text_rect_reserves_scrollbar_column() {
+    let panel = Rect::new(10, 5, 10, 6);
+    assert_eq!(prompt_text_rect(panel), Rect::new(11, 6, 7, 4));
+    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(18, 6, 1, 4)));
+    assert_eq!(prompt_inner_size(panel), (7, 4));
+}
+
+#[test]
+fn prompt_geometry_degrades_when_too_narrow() {
+    let panel = Rect::new(0, 0, 3, 4);
+    assert_eq!(prompt_text_rect(panel), Rect::new(1, 1, 1, 2));
+    assert_eq!(prompt_scrollbar_rect(panel), None);
+    assert_eq!(prompt_inner_size(panel), (1, 2));
+}

@@ -87,7 +87,7 @@ pub struct CollapseButton {
     pub collapsed: bool,
 }
 
-/// 左栏、右栏顶边与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
+/// 左栏、右栏底边与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
 pub fn collapse_buttons(view: &layout::ViewLayout, agents_collapsed: bool) -> Vec<CollapseButton> {
     let mut buttons = Vec::new();
     if let Some(button) = panel_button(CollapseTarget::Sidebar, view.sidebar) {
@@ -130,15 +130,16 @@ pub fn exit_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool 
     exit_button(view).is_some_and(|area| area.contains((column, row).into()))
 }
 
-/// 单个面板的折叠按钮：折叠态取整条窄条，展开态在顶边右端。
+/// 单个面板的折叠按钮：折叠态取整条窄条，展开态在底边右端。
 fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
     if panel.width == 0 || panel.height == 0 {
         return None;
     }
+    let row = panel.bottom().saturating_sub(1);
     if panel.width == COLLAPSED_STRIP {
         Some(CollapseButton {
             target,
-            area: Rect::new(panel.x, panel.y, COLLAPSED_STRIP, 1),
+            area: Rect::new(panel.x, row, COLLAPSED_STRIP, 1),
             collapsed: true,
         })
     } else if panel.width > COLLAPSED_STRIP {
@@ -146,7 +147,7 @@ fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
             target,
             area: Rect::new(
                 panel.right() - PANEL_BUTTON_WIDTH - PANEL_BUTTON_MARGIN,
-                panel.y,
+                row,
                 PANEL_BUTTON_WIDTH,
                 1,
             ),
@@ -182,7 +183,7 @@ fn agents_button_area(sidebar: Rect, divider: Rect) -> Rect {
     )
 }
 
-/// 在面板顶边与 agents 表头绘制折叠按钮，必须晚于面板内容渲染。
+/// 在面板底边与 agents 表头绘制折叠按钮，必须晚于面板内容渲染。
 ///
 /// 折叠态面板标签恰好占满 3 个内容列（水平居中），其余按钮贴所在行右端。
 fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
@@ -636,6 +637,7 @@ fn render_panes(
 
 /// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。
 ///
+/// 文本区固定预留最右 1 列作滚动条槽，文本溢出时该列显示滚动条。
 /// 返回聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
 fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
@@ -658,14 +660,42 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
+    let text_area = crate::layout::prompt_text_rect(area);
     prompt::render(
-        inner,
+        text_area,
         frame.buffer_mut(),
         &state.prompt,
         state.selection_for(state.prompt.id()),
     );
+    if let Some(scrollbar) = prompt_scrollbar_for(area, state) {
+        widgets::scrollbar::render(frame, &scrollbar);
+    }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
-    Some((inner.x + col.min(inner.width - 1), inner.y + row))
+    Some((
+        text_area.x + col.min(text_area.width.saturating_sub(1)),
+        text_area.y + row,
+    ))
+}
+
+/// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。
+pub fn prompt_scrollbar(
+    view: &layout::ViewLayout,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    prompt_scrollbar_for(view.prompt, state)
+}
+
+fn prompt_scrollbar_for(
+    panel: Rect,
+    state: &AppState,
+) -> Option<widgets::scrollbar::ScrollbarLayout> {
+    let gutter = crate::layout::prompt_scrollbar_rect(panel)?;
+    widgets::scrollbar::layout(
+        gutter,
+        state.prompt.visual_rows().len(),
+        usize::from(gutter.height),
+        state.prompt.scroll(),
+    )
 }
 
 /// 窗格标题：空占位与终端走通用标题规则。
