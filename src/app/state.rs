@@ -2,13 +2,16 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use ratatui::layout::Rect;
 
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
 
 use super::overlay::Overlay;
 use super::prompt::Prompt;
-use super::selection::{EdgeScroll, Selection};
+use super::selection::Selection;
 use super::toast::Toast;
 
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
@@ -21,6 +24,26 @@ const DEFAULT_PROMPT_WIDTH: u16 = 30;
 
 /// 侧栏展开宽度的兜底初值（列）；生产启动时由配置覆盖。
 const DEFAULT_SIDEBAR_WIDTH: u16 = 24;
+
+/// 选区拖拽边缘自动滚动方向。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoscrollDirection {
+    Up,
+    Down,
+}
+
+/// 选区拖拽边缘自动滚动计划。
+///
+/// 鼠标停在（或越出）窗格上下边缘时登记；`inner` 与 `mouse` 为登记时的几何快照，
+/// 几何变化时调用方需停止滚动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectionAutoscroll {
+    pub pane: PaneId,
+    pub direction: AutoscrollDirection,
+    pub mouse: (u16, u16),
+    pub inner: Rect,
+    pub next_at: Instant,
+}
 
 /// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端；prompt 为全局右栏。
 #[derive(Debug)]
@@ -35,9 +58,12 @@ pub struct AppState {
     /// 侧栏分割线是否悬停。
     pub sidebar_hover: bool,
     pub toast: Option<Toast>,
+    /// prompt 等编辑器的视口选区。
     pub selection: Option<Selection>,
-    /// prompt 拖选到视口边缘时的自动滚动状态；None 表示未激活。
-    pub selection_autoscroll: Option<EdgeScroll>,
+    /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
+    pub terminal_selection: Option<PaneId>,
+    /// 选区拖拽边缘自动滚动计划；None 表示未激活。
+    pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
@@ -55,6 +81,8 @@ pub struct AppState {
     pub workspace_scroll_drag: Option<u16>,
     /// 拖拽 prompt 滚动条 thumb 时相对顶部的抓取偏移。
     pub prompt_scroll_drag: Option<u16>,
+    /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
     /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
@@ -245,6 +273,7 @@ impl AppState {
             sidebar_hover: false,
             toast: None,
             selection: None,
+            terminal_selection: None,
             selection_autoscroll: None,
             resizing_prompt: false,
             prompt_hover: false,
@@ -265,6 +294,7 @@ impl AppState {
             workspace_scroll: 0,
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
+            terminal_scroll_drag: None,
             workspace_drag: None,
             overlay: None,
         }
@@ -304,11 +334,6 @@ impl AppState {
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
             .find_map(|tab| tab.pane(id))
-    }
-
-    /// 指定窗格上的选区范围（左上 -> 右下），供渲染高亮使用。
-    pub fn selection_range(&self, pane: PaneId) -> Option<((u16, u16), (u16, u16))> {
-        self.selection_for(pane).and_then(Selection::range)
     }
 
     /// 指定窗格上的选区。

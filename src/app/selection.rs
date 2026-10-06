@@ -1,24 +1,24 @@
-//! 选区模型：本标签内单次文本选择，坐标为窗格内容区（0 基行列）。
+//! 选区模型：prompt 等编辑器的视口文本选择（0 基行列）。
 //!
-//! 坐标以内容行为准：prompt 选区在视口滚动时锚点保持不动，终端窗格无滚动偏移，
-//! 两者坐标一致。
-
-use std::time::Instant;
+//! 终端窗格的选区由 `terminal::Terminal` 内部的仿真器持有（内容坐标），
+//! 本类型只服务编辑器类窗格。
 
 use crate::layout::PaneId;
 
 /// 一次文本选择；`anchor` 为按下点，`cursor` 为当前拖动点。
+///
+/// 行坐标有符号：视口滚动后锚点按滚动量平移可暂时越过视口边界（负值在视口上方）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selection {
     pane: PaneId,
-    anchor: (u16, u16),
-    cursor: (u16, u16),
+    anchor: (i32, u16),
+    cursor: (i32, u16),
     dragging: bool,
 }
 
 impl Selection {
     /// 以按下点开始一次选择。
-    pub fn begin(pane: PaneId, row: u16, col: u16) -> Self {
+    pub fn begin(pane: PaneId, row: i32, col: u16) -> Self {
         Self {
             pane,
             anchor: (row, col),
@@ -33,8 +33,14 @@ impl Selection {
     }
 
     /// 扩展到新的拖动点。
-    pub fn drag(&mut self, row: u16, col: u16) {
+    pub fn drag(&mut self, row: i32, col: u16) {
         self.cursor = (row, col);
+    }
+
+    /// 视口滚动后平移两个端点，使选区继续钉在原文本上。
+    pub fn shift_rows(&mut self, delta: i32) {
+        self.anchor.0 += delta;
+        self.cursor.0 += delta;
     }
 
     /// 鼠标松开：结束拖动，选区保留。
@@ -48,7 +54,7 @@ impl Selection {
     }
 
     /// 规范化后的包含范围（左上 -> 右下）；未发生拖动时为 None。
-    pub fn range(&self) -> Option<((u16, u16), (u16, u16))> {
+    pub fn range(&self) -> Option<((i32, u16), (i32, u16))> {
         if self.anchor == self.cursor {
             return None;
         }
@@ -60,7 +66,7 @@ impl Selection {
     }
 
     /// 单元格是否落在选区内（端点包含）。
-    pub fn contains(&self, row: u16, col: u16) -> bool {
+    pub fn contains(&self, row: i32, col: u16) -> bool {
         let Some(((start_row, start_col), (end_row, end_col))) = self.range() else {
             return false;
         };
@@ -78,14 +84,6 @@ impl Selection {
         }
         true
     }
-}
-
-/// prompt 拖选到视口边缘时的自动滚动：指针单元格（视口坐标）与下次步进时刻。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct EdgeScroll {
-    pub row: u16,
-    pub column: u16,
-    pub next: Instant,
 }
 
 #[cfg(test)]

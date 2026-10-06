@@ -1,7 +1,7 @@
 //! crossterm 按键到终端字节序列的编码；方向键形态由 DECCKM 模式决定。
 
 use alacritty_terminal::term::TermMode;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 
 /// 把按键编码为写入 PTY 的字节；不支持的按键返回 None。
 ///
@@ -32,6 +32,117 @@ pub fn encode_key(key: KeyEvent, mode: TermMode) -> Option<Vec<u8>> {
         KeyCode::F(number) => function_key(number, modifiers),
         _ => None,
     }
+}
+
+/// 编码滚轮为终端鼠标序列；协议由 `mode` 的 SGR/UTF8 位选择，旧式协议兜底。
+///
+/// `column`/`row` 为窗格内容区 0 基坐标；三类协议各自换算成 1 基并加固定偏移；
+/// 旧式协议坐标超出单字节上限时返回 None（应用已在真正拖动，忽略一个滚轮事件可接受）。
+pub fn encode_mouse_wheel(
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
+    modifiers: KeyModifiers,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
+    let code = match kind {
+        MouseEventKind::ScrollUp => 64u16,
+        MouseEventKind::ScrollDown => 65,
+        MouseEventKind::ScrollLeft => 66,
+        MouseEventKind::ScrollRight => 67,
+        _ => return None,
+    };
+    encode_mouse_sequence(code, column, row, modifiers, false, mode)
+}
+
+/// 编码鼠标按键/拖拽/移动为终端鼠标序列；协议选择与坐标规则同 `encode_mouse_wheel`。
+///
+/// `Drag` 与 `Moved` 分别是加了 32 的按键移动位与无按键移动位；`Up` 在 SGR 下以小写 `m`
+/// 收尾，旧式协议用按钮 3 表示释放。
+pub fn encode_mouse_button(
+    kind: MouseEventKind,
+    column: u16,
+    row: u16,
+    modifiers: KeyModifiers,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
+    let (code, release) = match kind {
+        MouseEventKind::Down(button) => (mouse_button_code(button), false),
+        MouseEventKind::Up(button) => (mouse_button_code(button), true),
+        MouseEventKind::Drag(button) => (mouse_button_code(button) + 32, false),
+        MouseEventKind::Moved => (35, false),
+        _ => return None,
+    };
+    encode_mouse_sequence(code, column, row, modifiers, release, mode)
+}
+
+/// 鼠标按键的基础协议码：左 0、中 1、右 2。
+fn mouse_button_code(button: MouseButton) -> u16 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+/// 修饰键协议偏移：Shift +4、Alt +8、Control +16。
+fn modifier_offset(modifiers: KeyModifiers) -> u16 {
+    let mut offset = 0;
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        offset += 4;
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        offset += 8;
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        offset += 16;
+    }
+    offset
+}
+
+/// 编码鼠标协议序列：SGR 优先，其次 UTF8，最后旧式；坐标均为 1 基。
+fn encode_mouse_sequence(
+    code: u16,
+    column: u16,
+    row: u16,
+    modifiers: KeyModifiers,
+    release: bool,
+    mode: TermMode,
+) -> Option<Vec<u8>> {
+    let offset = modifier_offset(modifiers);
+    if mode.contains(TermMode::SGR_MOUSE) {
+        let terminator = if release { 'm' } else { 'M' };
+        return Some(
+            format!(
+                "\x1b[<{};{};{}{terminator}",
+                code + offset,
+                column + 1,
+                row + 1
+            )
+            .into_bytes(),
+        );
+    }
+
+    let code = if release { 3 + offset } else { code + offset };
+    let mut bytes = b"\x1b[M".to_vec();
+    if mode.contains(TermMode::UTF8_MOUSE) {
+        push_mouse_codepoint(&mut bytes, u32::from(code) + 32)?;
+        push_mouse_codepoint(&mut bytes, u32::from(column) + 33)?;
+        push_mouse_codepoint(&mut bytes, u32::from(row) + 33)?;
+    } else {
+        bytes.push(u8::try_from(code + 32).ok()?);
+        bytes.push(u8::try_from(column + 33).ok()?);
+        bytes.push(u8::try_from(row + 33).ok()?);
+    }
+    Some(bytes)
+}
+
+/// UTF-8 编码一个鼠标协议码点；超出合法码点返回 None。
+fn push_mouse_codepoint(bytes: &mut Vec<u8>, value: u32) -> Option<()> {
+    let ch = char::from_u32(value)?;
+    let mut buffer = [0u8; 4];
+    bytes.extend_from_slice(ch.encode_utf8(&mut buffer).as_bytes());
+    Some(())
 }
 
 fn encode_char(c: char, modifiers: KeyModifiers) -> Vec<u8> {

@@ -7,10 +7,29 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-use crate::app::selection::Selection;
-use crate::terminal::Terminal;
+use crate::terminal::{Terminal, WheelRouting};
+use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 
-/// 渲染终端内容；`selection` 命中的单元格反显高亮。
+/// 终端滚动条几何：仅本地回滚模式且有回滚内容时，覆盖在内容区最右一列。
+///
+/// 鼠标上报（opencode/claude 等）与备用屏应用自己滚动，不显示。
+pub fn scrollbar(inner: Rect, terminal: &Terminal) -> Option<ScrollbarLayout> {
+    if terminal.wheel_routing() != WheelRouting::HostScroll {
+        return None;
+    }
+    let history = terminal.history_size();
+    if history == 0 || inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+    scrollbar::layout(
+        inner,
+        history + usize::from(inner.height),
+        usize::from(inner.height),
+        history.saturating_sub(terminal.display_offset()),
+    )
+}
+
+/// 渲染终端内容；仿真器选区命中的单元格反显高亮。
 ///
 /// 返回聚焦且光标可见时仿真光标在 `area` 内的坐标；调用方据此同步硬件光标，
 /// 让 IME 预输入与候选窗跟随终端光标（显示与闪烁由终端原生光标承担）。
@@ -19,7 +38,6 @@ pub fn render(
     buf: &mut Buffer,
     terminal: &Terminal,
     focused: bool,
-    selection: Option<&Selection>,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
@@ -57,7 +75,10 @@ pub fn render(
                 target.set_char(cell.c);
             }
             let mut style = cell_style(cell);
-            if selection.is_some_and(|selection| selection.contains(row as u16, col)) {
+            if content
+                .selection
+                .is_some_and(|selection| selection.contains(indexed.point))
+            {
                 style = style.add_modifier(Modifier::REVERSED);
             }
             target.set_style(style);

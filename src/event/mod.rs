@@ -6,7 +6,8 @@ use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{
-    Event as TerminalEvent, EventStream, KeyEventKind, MouseButton, MouseEventKind,
+    Event as TerminalEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::layout::Rect;
 use tokio::sync::mpsc;
@@ -22,6 +23,7 @@ use crate::config::Config;
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
 use crate::pty::{PtyEvent, PtySession};
+use crate::terminal::WheelRouting;
 use crate::tui::Tui;
 use crate::ui;
 
@@ -72,6 +74,8 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         let geometry = current_geometry(tui, state, config)?;
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
+            // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
+            update::stop_selection_autoscroll(state);
             resize_sessions(&mut sessions, &geometry.rects);
             last_rects.clone_from(&geometry.rects);
             if let Some(rows) = ui::workspace_list_rows(&geometry.view, state) {
@@ -352,6 +356,7 @@ fn handle_terminal_event(
                 Routed::Pane(bytes) => {
                     let id = state.active_tab().layout.focus();
                     write_to_pane(sessions, id, &bytes);
+                    update::reset_pane_scroll(state, id);
                     *dirty = true;
                 }
             }
@@ -372,6 +377,7 @@ fn handle_terminal_event(
                 text.into_bytes()
             };
             write_to_pane(sessions, id, &payload);
+            update::reset_pane_scroll(state, id);
             *dirty = true;
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
@@ -489,9 +495,26 @@ fn handle_terminal_event(
                         state.pane_anywhere(pane).map(|pane| pane.kind),
                         Some(PaneKind::Terminal)
                     ) {
-                        update::focus_pane(state, pane);
-                        update::begin_selection(state, pane, row, col);
-                        *dirty = true;
+                        // 滚动条按下先于焦点与选区：thumb 拖拽，轨道点击跳转。
+                        if handle_terminal_scrollbar_press(
+                            state,
+                            pane,
+                            inner,
+                            mouse.column,
+                            mouse.row,
+                        ) {
+                            *dirty = true;
+                        } else {
+                            update::focus_pane(state, pane);
+                            // 应用在鼠标上报模式时按键归它自己（对齐 herdr）：转发并按它的
+                            // 选区逻辑处理，不启动本地选区。
+                            if forward_pane_mouse_event(state, sessions, pane, inner, &mouse) {
+                                update::clear_selection(state);
+                            } else {
+                                update::begin_terminal_selection(state, pane, row, col);
+                            }
+                            *dirty = true;
+                        }
                     } else {
                         update::clear_selection(state);
                     }
@@ -558,6 +581,26 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                if let Some((pane, grab)) = state.terminal_scroll_drag {
+                    let bar = rects
+                        .iter()
+                        .find(|(id, _)| *id == pane)
+                        .and_then(|(_, rect)| {
+                            let inner = layout::pane_inner_rect(*rect);
+                            state
+                                .pane_anywhere(pane)
+                                .and_then(|target| ui::terminal::scrollbar(inner, &target.terminal))
+                        });
+                    let Some(bar) = bar else {
+                        return;
+                    };
+                    let offset =
+                        ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                    if update::set_terminal_scroll(state, pane, offset) {
+                        *dirty = true;
+                    }
+                    return;
+                }
                 if state.resizing_sidebar {
                     let width = ui::layout::sidebar_width_at(view, config, mouse.column);
                     update::drag_sidebar(state, width);
@@ -579,10 +622,23 @@ fn handle_terminal_event(
                     }
                     return;
                 }
-                let Some(selection) = state.selection else {
+                // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
+                if state.terminal_selection.is_none()
+                    && state.selection.is_none()
+                    && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
+                    && forward_pane_mouse_event(state, sessions, pane, inner, &mouse)
+                {
+                    *dirty = true;
+                    return;
+                }
+                // 终端拖拽选区：把终点更新到鼠标位置的内容；prompt 选区同时移动编辑器光标。
+                let pane = if let Some(pane) = state.terminal_selection {
+                    pane
+                } else if let Some(selection) = state.selection {
+                    selection.pane()
+                } else {
                     return;
                 };
-                let pane = selection.pane();
                 let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
                     return;
                 };
@@ -592,10 +648,21 @@ fn handle_terminal_event(
                 }
                 let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
                 let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
-                update::drag_selection(state, pane, row, col);
+                if state.terminal_selection == Some(pane) {
+                    update::drag_terminal_selection(state, pane, row, col);
+                } else {
+                    update::drag_selection(state, pane, row, col);
+                }
                 if pane == state.prompt.id() {
                     update::place_prompt_cursor(state, row, col);
                 }
+                update::arm_selection_autoscroll(
+                    state,
+                    pane,
+                    inner,
+                    (mouse.column, mouse.row),
+                    Instant::now(),
+                );
                 *dirty = true;
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -606,6 +673,9 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.prompt_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.terminal_scroll_drag.take().is_some() {
                     return;
                 }
                 if state.workspace_drag.is_some() {
@@ -623,6 +693,15 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
+                // 没有本地选区时，鼠标上报模式的应用自己处理释放（对齐 herdr）。
+                if state.terminal_selection.is_none()
+                    && state.selection.is_none()
+                    && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
+                    && forward_pane_mouse_event(state, sessions, pane, inner, &mouse)
+                {
+                    *dirty = true;
+                    return;
+                }
                 if state
                     .selection
                     .is_some_and(|selection| selection.pane() == state.prompt.id())
@@ -631,73 +710,93 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if let Some(text) = update::finish_selection(state) {
-                    let anchor = state.selection.map(|selection| selection.pane());
+                if let Some(pane) = state.terminal_selection
+                    && let Some(text) = update::finish_terminal_selection(state, pane)
+                {
                     let now = Instant::now();
                     if crate::platform::write_clipboard(&text) {
                         update::show_toast(
                             state,
-                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now),
+                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now),
                         );
                     } else {
                         tracing::warn!("clipboard write failed");
                         update::show_toast(
                             state,
-                            Toast::new(ToastKind::Error, ui::text::TOAST_COPY_FAILED, anchor, now),
+                            Toast::new(
+                                ToastKind::Error,
+                                ui::text::TOAST_COPY_FAILED,
+                                Some(pane),
+                                now,
+                            ),
                         );
                     }
                 }
                 update::clear_selection(state);
                 *dirty = true;
             }
-            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+            MouseEventKind::ScrollUp
+            | MouseEventKind::ScrollDown
+            | MouseEventKind::ScrollLeft
+            | MouseEventKind::ScrollRight => {
                 if state.overlay.is_some() {
                     return;
                 }
                 if state.resizing_prompt {
                     return;
                 }
-                let direction = if mouse.kind == MouseEventKind::ScrollUp {
-                    -1
-                } else {
-                    1
-                };
-                if mention_panel_rect(state, view)
-                    .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                // @ 提及面板打开且指针在其上：滚轮滚面板，不穿透到 prompt 与窗格。
+                if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                    && mention_panel_rect(state, view)
+                        .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
                 {
                     update::scroll_mention(state, direction);
                     *dirty = true;
                     return;
                 }
-                // prompt 拖选期间滚轮滚动视口，并把选区终点延伸到指针所在单元格。
-                if state.selection.is_some_and(|selection| {
-                    selection.is_dragging() && selection.pane() == state.prompt.id()
-                }) {
-                    update::scroll_prompt(state, direction);
-                    let inner = layout::pane_inner_rect(view.prompt);
-                    if inner.width > 0 && inner.height > 0 {
-                        let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
-                        let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
-                        update::drag_selection(state, state.prompt.id(), row, col);
-                        update::place_prompt_cursor(state, row, col);
+                // prompt 拖拽选区：滚轮滚动视口，锚点钉在文本上，终点跟到鼠标。
+                if let Some(selection) = state.selection
+                    && selection.is_dragging()
+                {
+                    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                        && let Some((_, rect)) =
+                            rects.iter().find(|(id, _)| *id == selection.pane())
+                    {
+                        let inner = layout::pane_inner_rect(*rect);
+                        if inner.width > 0 && inner.height > 0 {
+                            let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                            let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                            if update::wheel_prompt_selection(state, direction, row, col) {
+                                *dirty = true;
+                            }
+                        }
                     }
+                    return;
+                }
+                // 终端拖拽选区优先于鼠标上报：滚动选区所在窗格并延伸选区。
+                if let Some(pane) = state.terminal_selection
+                    && scroll_selection_wheel(state, pane, rects, &mouse)
+                {
                     *dirty = true;
                     return;
                 }
-                if state
-                    .selection
-                    .is_some_and(|selection| selection.is_dragging())
-                {
-                    return;
-                }
-                if let Some((pane, _)) = pane_at(rects, mouse.column, mouse.row)
-                    && pane == state.prompt.id()
-                {
-                    update::clear_selection(state);
-                    update::scroll_prompt(state, direction);
-                    *dirty = true;
+                if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+                    if pane == state.prompt.id() {
+                        update::clear_selection(state);
+                        if let Some(direction) = vertical_wheel_direction(mouse.kind) {
+                            update::scroll_prompt(state, direction);
+                            *dirty = true;
+                        }
+                    } else if state
+                        .pane_anywhere(pane)
+                        .is_some_and(|target| target.kind == PaneKind::Terminal)
+                        && handle_pane_wheel(state, sessions, pane, inner, &mouse)
+                    {
+                        *dirty = true;
+                    }
                 } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
                     && let Some(rows) = ui::workspace_list_rows(view, state)
+                    && let Some(direction) = vertical_wheel_direction(mouse.kind)
                     && update::scroll_workspace_list(state, direction, rows)
                 {
                     *dirty = true;
@@ -745,6 +844,9 @@ fn handle_terminal_event(
                     set_pointer_shape(shape);
                     *dirty = true;
                 }
+                if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+                    forward_pane_mouse_event(state, sessions, pane, inner, &mouse);
+                }
             }
             _ => {}
         },
@@ -771,6 +873,136 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
             entries,
         });
     });
+}
+
+/// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
+fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
+    match kind {
+        MouseEventKind::ScrollUp => Some(-1),
+        MouseEventKind::ScrollDown => Some(1),
+        _ => None,
+    }
+}
+
+/// 拖拽选择中滚轮：滚动选区所在窗格，并把选区光标延伸到鼠标位置（钳在窗格内）。
+///
+/// 纵向滚轮消费事件（对齐 herdr：选区进行中优先于鼠标上报）；横向返回 false 交回常规路径。
+fn scroll_selection_wheel(
+    state: &mut AppState,
+    pane: PaneId,
+    rects: &[(PaneId, Rect)],
+    mouse: &MouseEvent,
+) -> bool {
+    let Some(direction) = vertical_wheel_direction(mouse.kind) else {
+        return false;
+    };
+    let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+        return true;
+    };
+    let inner = layout::pane_inner_rect(*rect);
+    if inner.width == 0 || inner.height == 0 {
+        return true;
+    }
+    update::scroll_pane(state, pane, direction);
+    let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+    let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+    update::drag_terminal_selection(state, pane, row, col);
+    true
+}
+
+/// 按终端模式把滚轮交给窗格：转发鼠标上报、备用屏方向键或本地回滚。
+///
+/// 前两种由应用接管滚动，本地视口吸回底部；返回事件是否被消费（需要重绘）。
+fn handle_pane_wheel(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    pane: PaneId,
+    inner: Rect,
+    mouse: &MouseEvent,
+) -> bool {
+    let Some((routing, mode)) = state
+        .pane_anywhere(pane)
+        .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
+    else {
+        return false;
+    };
+    match routing {
+        WheelRouting::HostScroll => {
+            let Some(direction) = vertical_wheel_direction(mouse.kind) else {
+                return false;
+            };
+            update::scroll_pane(state, pane, direction)
+        }
+        WheelRouting::MouseReport => {
+            let column = mouse.column.saturating_sub(inner.x);
+            let row = mouse.row.saturating_sub(inner.y);
+            let Some(bytes) =
+                input::encode::encode_mouse_wheel(mouse.kind, column, row, mouse.modifiers, mode)
+            else {
+                return false;
+            };
+            update::reset_pane_scroll(state, pane);
+            write_to_pane(sessions, pane, &bytes);
+            true
+        }
+        WheelRouting::AlternateScroll => {
+            let code = match mouse.kind {
+                MouseEventKind::ScrollUp => KeyCode::Up,
+                MouseEventKind::ScrollDown => KeyCode::Down,
+                _ => return false,
+            };
+            let Some(bytes) =
+                input::encode::encode_key(KeyEvent::new(code, KeyModifiers::NONE), mode)
+            else {
+                return false;
+            };
+            update::reset_pane_scroll(state, pane);
+            write_to_pane(sessions, pane, &bytes);
+            true
+        }
+    }
+}
+
+/// 把鼠标按键、拖拽或移动按应用声明的协议转发给窗格；非鼠标上报模式返回 false 交回本地选区。
+///
+/// 对齐 herdr：应用接管鼠标时 lx-tui 不做本地选区，滚动与选择都由应用自己实现；
+/// 拖拽与无按键移动还需应用分别开启 1002/1003 才上报，避免多发未订阅的事件。
+fn forward_pane_mouse_event(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    pane: PaneId,
+    inner: Rect,
+    mouse: &MouseEvent,
+) -> bool {
+    let Some((routing, mode)) = state
+        .pane_anywhere(pane)
+        .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
+    else {
+        return false;
+    };
+    let reportable = routing == WheelRouting::MouseReport
+        && match mouse.kind {
+            MouseEventKind::Drag(_) => {
+                mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+            }
+            MouseEventKind::Moved => mode.contains(TermMode::MOUSE_MOTION),
+            _ => true,
+        };
+    if !reportable {
+        return false;
+    }
+    let column = mouse.column.saturating_sub(inner.x);
+    let row = mouse.row.saturating_sub(inner.y);
+    let Some(bytes) =
+        input::encode::encode_mouse_button(mouse.kind, column, row, mouse.modifiers, mode)
+    else {
+        return false;
+    };
+    if !matches!(mouse.kind, MouseEventKind::Moved) {
+        update::reset_pane_scroll(state, pane);
+    }
+    write_to_pane(sessions, pane, &bytes);
+    true
 }
 
 /// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。
@@ -855,6 +1087,33 @@ fn handle_prompt_scrollbar_press(
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
             update::set_prompt_scroll(state, offset);
+        }
+    }
+    true
+}
+
+/// 终端窗格滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点；返回是否命中。
+fn handle_terminal_scrollbar_press(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::terminal::scrollbar(inner, &target.terminal))
+    else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.terminal_scroll_drag = Some((pane, grab)),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_terminal_scroll(state, pane, offset);
         }
     }
     true

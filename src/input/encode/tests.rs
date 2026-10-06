@@ -89,6 +89,161 @@ fn super_combos_are_not_encoded() {
 }
 
 #[test]
+fn encodes_sgr_wheel_with_modifiers_and_one_based_coords() {
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::SGR_MOUSE
+        ),
+        Some(b"\x1b[<64;1;1M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollDown,
+            4,
+            6,
+            KeyModifiers::SHIFT,
+            TermMode::SGR_MOUSE
+        ),
+        Some(b"\x1b[<69;5;7M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollLeft,
+            2,
+            3,
+            KeyModifiers::CONTROL,
+            TermMode::SGR_MOUSE
+        ),
+        Some(b"\x1b[<82;3;4M".to_vec())
+    );
+}
+
+#[test]
+fn encodes_legacy_wheel_bytes() {
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollUp,
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        Some(vec![0x1b, b'[', b'M', 96, 33, 33])
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollDown,
+            4,
+            6,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        Some(vec![0x1b, b'[', b'M', 97, 37, 39])
+    );
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        None
+    );
+}
+
+#[test]
+fn encodes_utf8_wheel_codepoints() {
+    assert_eq!(
+        encode_mouse_wheel(
+            MouseEventKind::ScrollDown,
+            4,
+            6,
+            KeyModifiers::NONE,
+            TermMode::UTF8_MOUSE
+        ),
+        Some(b"\x1b[M\x61\x25\x27".to_vec())
+    );
+}
+
+#[test]
+fn encodes_sgr_button_press_drag_release_and_motion() {
+    let sgr = TermMode::SGR_MOUSE;
+    assert_eq!(
+        encode_mouse_button(
+            MouseEventKind::Down(MouseButton::Left),
+            2,
+            3,
+            KeyModifiers::NONE,
+            sgr
+        ),
+        Some(b"\x1b[<0;3;4M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_button(
+            MouseEventKind::Drag(MouseButton::Left),
+            2,
+            3,
+            KeyModifiers::NONE,
+            sgr
+        ),
+        Some(b"\x1b[<32;3;4M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_button(MouseEventKind::Moved, 2, 3, KeyModifiers::NONE, sgr),
+        Some(b"\x1b[<35;3;4M".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_button(
+            MouseEventKind::Up(MouseButton::Left),
+            2,
+            3,
+            KeyModifiers::NONE,
+            sgr
+        ),
+        Some(b"\x1b[<0;3;4m".to_vec())
+    );
+    assert_eq!(
+        encode_mouse_button(
+            MouseEventKind::Down(MouseButton::Right),
+            2,
+            3,
+            KeyModifiers::SHIFT,
+            sgr
+        ),
+        Some(b"\x1b[<6;3;4M".to_vec())
+    );
+}
+
+#[test]
+fn encodes_legacy_button_release_as_button_three() {
+    assert_eq!(
+        encode_mouse_button(
+            MouseEventKind::Down(MouseButton::Middle),
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        Some(vec![0x1b, b'[', b'M', 33, 33, 33])
+    );
+    assert_eq!(
+        encode_mouse_button(
+            MouseEventKind::Up(MouseButton::Left),
+            0,
+            0,
+            KeyModifiers::NONE,
+            TermMode::empty()
+        ),
+        Some(vec![0x1b, b'[', b'M', 35, 33, 33])
+    );
+}
+
+#[test]
 fn encodes_special_keys() {
     assert_eq!(
         encode_key(key(KeyCode::Enter), TermMode::empty()),

@@ -237,7 +237,7 @@ fn paint_row(
 /// 选区按内容行坐标反显；空白单元格同样覆盖，保证拖拽范围可见。
 fn paint_selection(buf: &mut Buffer, area: Rect, y: u16, row: u16, selection: &Selection) {
     for col in 0..area.width {
-        if selection.contains(row, col)
+        if selection.contains(i32::from(row), col)
             && let Some(cell) = buf.cell_mut((area.x + col, y))
         {
             cell.modifier |= Modifier::REVERSED;
