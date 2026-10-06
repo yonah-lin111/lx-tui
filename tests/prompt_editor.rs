@@ -177,3 +177,16 @@ fn clicking_terminal_pane_reads_back_focus_and_keeps_editing_target() {
     assert!(!state.prompt_focused);
     assert_eq!(state.active_tab().layout.focus(), pane);
 }
+
+#[test]
+fn panel_task_command_then_backspace_clears_marker() {
+    let (mut state, _config, _view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertChar('-'));
+    update::apply_editor(&mut state, EditorCommand::Down);
+    update::apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(state.prompt.text(), "- [ ] ");
+    update::apply_editor(&mut state, EditorCommand::Backspace);
+    assert_eq!(state.prompt.text(), "");
+    assert_eq!(state.prompt.cursor_cell(), Some((0, 0)));
+}
