@@ -552,9 +552,10 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
         .selection
         .and_then(|selection| selection.range())
         .expect("selection range");
+    assert_eq!(range.0.0, 0, "anchor stays pinned to its text line");
     assert!(
-        range.0.0 < 0,
-        "anchor pinned to text, shifted above viewport"
+        range.1.0 > 0,
+        "cursor follows the mouse cell in content rows"
     );
     assert!(dirty);
 }

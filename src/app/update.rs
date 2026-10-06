@@ -175,18 +175,11 @@ fn scroll_pane_lines(state: &mut AppState, id: PaneId, direction: isize, lines: 
         .scroll_display(-(direction.signum() * lines) as i32)
 }
 
-/// 滚动 prompt 视口并把进行中的选区平移相同行数（锚点钉在文本上）；返回视口是否移动。
+/// 滚动 prompt 视口；选区是内容行坐标，视口滚动天然不影响选区；返回视口是否移动。
 fn scroll_prompt_selection(state: &mut AppState, direction: isize, lines: isize) -> bool {
     let before = state.prompt.scroll();
     state.prompt.scroll_by(direction.signum() * lines);
-    let moved = state.prompt.scroll() as isize - before as isize;
-    if moved == 0 {
-        return false;
-    }
-    if let Some(selection) = state.selection.as_mut() {
-        selection.shift_rows(-(moved as i32));
-    }
-    true
+    state.prompt.scroll() != before
 }
 
 /// prompt 拖拽选区时滚轮：滚动视口并保持选区锚点，终点跟到鼠标单元格；返回视口是否移动。
@@ -276,15 +269,26 @@ pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.resizing_prompt = false;
     clear_terminal_selection(state);
     state.selection_autoscroll = None;
-    state.selection = Some(Selection::begin(pane, i32::from(row), col));
+    let row = selection_content_row(state, pane, row);
+    state.selection = Some(Selection::begin(pane, row, col));
 }
 
 /// 扩展当前 prompt 选区；窗格不一致时忽略。
 pub fn drag_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
+    let row = selection_content_row(state, pane, row);
     if let Some(selection) = state.selection.as_mut()
         && selection.pane() == pane
     {
-        selection.drag(i32::from(row), col);
+        selection.drag(row, col);
+    }
+}
+
+/// 视口行换算成内容行：只有 prompt 视口会滚动，加回滚动量即可。
+fn selection_content_row(state: &AppState, pane: PaneId, row: u16) -> i32 {
+    if pane == state.prompt.id() {
+        i32::from(row) + state.prompt.scroll() as i32
+    } else {
+        i32::from(row)
     }
 }
 
@@ -497,17 +501,13 @@ pub fn prompt_selection_text(state: &AppState) -> Option<String> {
 }
 
 /// prompt 选区对应的内容行列范围；选区不在 prompt 或为空时返回 None。
-///
-/// 选区行是“视口行”（滚轮滚动时按滚动量平移以钉住文本），换算成内容行需加回滚动量，
-/// 这样锚点滚出视口上方时仍能取到完整文本。
 fn prompt_selection_range(state: &AppState) -> Option<((u16, u16), (u16, u16))> {
     let selection = state.selection?;
     if selection.pane() != state.prompt.id() {
         return None;
     }
-    let scroll = state.prompt.scroll() as i32;
     let (start, end) = selection.range()?;
-    let content_row = |row: i32| u16::try_from(row + scroll).ok();
+    let content_row = |row: i32| u16::try_from(row).ok();
     Some((
         (content_row(start.0)?, start.1),
         (content_row(end.0)?, end.1),

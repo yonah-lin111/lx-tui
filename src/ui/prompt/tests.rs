@@ -2,6 +2,8 @@
 
 use super::*;
 use crate::app::markdown::MentionEntry;
+use crate::app::state::AppState;
+use crate::app::update;
 use crate::layout::PaneId;
 use ratatui::style::Color;
 
@@ -125,6 +127,34 @@ fn selection_reverses_cells_including_empty_trailing() {
         );
     }
     assert!(!buf[(6, 0)].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn scrolled_prompt_selection_highlights_visible_rows() {
+    let mut state = AppState::demo();
+    state.prompt.resize(10, 2);
+    state.prompt.insert_str("1\n2\n3\n4\n5\n6");
+    update::set_prompt_scroll(&mut state, 4);
+    let prompt = state.prompt.id();
+    // 视口停在底部（内容行 4/5 可见）：按下与拖拽走事件层坐标（视口行）。
+    update::begin_selection(&mut state, prompt, 0, 0);
+    update::drag_selection(&mut state, prompt, 1, 2);
+    assert_eq!(state.prompt.scroll(), 4);
+
+    let area = Rect::new(0, 0, 10, 2);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &state.prompt, state.selection_for(prompt));
+    for col in 0..=2 {
+        assert!(
+            buf[(col, 0)].modifier.contains(Modifier::REVERSED),
+            "row 0 col {col} should be selected"
+        );
+        assert!(
+            buf[(col, 1)].modifier.contains(Modifier::REVERSED),
+            "row 1 col {col} should be selected"
+        );
+    }
+    assert!(!buf[(3, 1)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]

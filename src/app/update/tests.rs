@@ -263,9 +263,13 @@ fn prompt_selection_wheel_keeps_anchor_and_moves_cursor() {
         .selection
         .and_then(|selection| selection.range())
         .expect("selection range");
-    // 锚点随滚动上移保持钉在文本上，终点跟到鼠标所在视口行。
-    assert_eq!(range.0.0, -(WHEEL_LINES as i32));
-    assert_eq!(range.1.0, 1);
+    // 选区是内容行：锚点钉在第 1 行不动，终点跟到鼠标所在视口行（滚动量 + 1）。
+    assert_eq!(range.0, (0, 0));
+    assert_eq!(range.1.0, scroll as i32 + 1);
+    assert_eq!(
+        prompt_selection_text(&state).as_deref(),
+        Some("1\n2\n3\n4\n5")
+    );
 }
 
 #[test]

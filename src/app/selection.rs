@@ -1,13 +1,11 @@
-//! 选区模型：prompt 等编辑器的视口文本选择（0 基行列）。
+//! 选区模型：prompt 等编辑器的文本选择（内容行、0 基列）。
 //!
-//! 终端窗格的选区由 `terminal::Terminal` 内部的仿真器持有（内容坐标），
-//! 本类型只服务编辑器类窗格。
+//! 与渲染和取词一致用内容行坐标：视口滚动不影响选区（锚点天然钉在文本上）。
+//! 终端窗格的选区由 `terminal::Terminal` 内部的仿真器持有，本类型只服务编辑器类窗格。
 
 use crate::layout::PaneId;
 
-/// 一次文本选择；`anchor` 为按下点，`cursor` 为当前拖动点。
-///
-/// 行坐标有符号：视口滚动后锚点按滚动量平移可暂时越过视口边界（负值在视口上方）。
+/// 一次文本选择；`anchor` 为按下点，`cursor` 为当前拖动点，均为内容行坐标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Selection {
     pane: PaneId,
@@ -35,12 +33,6 @@ impl Selection {
     /// 扩展到新的拖动点。
     pub fn drag(&mut self, row: i32, col: u16) {
         self.cursor = (row, col);
-    }
-
-    /// 视口滚动后平移两个端点，使选区继续钉在原文本上。
-    pub fn shift_rows(&mut self, delta: i32) {
-        self.anchor.0 += delta;
-        self.cursor.0 += delta;
     }
 
     /// 鼠标松开：结束拖动，选区保留。
