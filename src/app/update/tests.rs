@@ -1710,6 +1710,42 @@ fn mouse_mention_hover_select_and_wheel_flow() {
 }
 
 #[test]
+fn mouse_block_panel_hover_select_and_wheel_flow() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('#'));
+    assert!(state.prompt.panel().is_some(), "块命令面板打开");
+
+    assert!(hover_panel(&mut state, 2));
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(2));
+    assert_eq!(
+        state.prompt.panel().map(|panel| panel.anchor()),
+        Some(0),
+        "悬停只改高亮，不动窗口锚点"
+    );
+    assert!(!hover_panel(&mut state, 2));
+
+    assert!(scroll_panel(&mut state, 1));
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(3));
+    assert_eq!(state.prompt.panel().map(|panel| panel.anchor()), Some(3));
+    assert!(scroll_panel(&mut state, 99));
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(5));
+    assert!(!scroll_panel(&mut state, 1), "到底后钳制不循环");
+    assert!(scroll_panel(&mut state, -99));
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(0));
+
+    apply_editor(&mut state, EditorCommand::Up);
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(5));
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(0));
+
+    select_panel(&mut state, 1);
+    assert_eq!(state.prompt.text(), "## ");
+    assert!(state.prompt.panel().is_none(), "点选后关闭面板");
+}
+
+#[test]
 fn toggle_pane_view_flips_target_and_hides_terminal_state() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();

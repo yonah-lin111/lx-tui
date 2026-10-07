@@ -713,7 +713,7 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
 }
 
 #[test]
-fn initial_workspace_renders_green_marker() {
+fn initial_workspace_marker_uses_row_text_style() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     let initial = state.workspaces[0].name.clone();
@@ -741,9 +741,14 @@ fn initial_workspace_renders_green_marker() {
         .iter()
         .position(|symbol| *symbol == '*')
         .expect("marker is rendered");
+    // `*` 不再有独立颜色，跟随行内正文样式。
     assert_eq!(
         buffer[(marker_x as u16, marker_line as u16)].fg,
-        ratatui::style::Color::Green
+        ratatui::style::Color::Reset
+    );
+    assert_eq!(
+        buffer[(marker_x as u16, marker_line as u16)].bg,
+        ratatui::style::Color::Reset
     );
 }
 
@@ -816,10 +821,12 @@ fn workspace_drop_index_maps_rows_with_scroll_and_clamps() {
 }
 
 #[test]
-fn dragged_workspace_item_renders_reversed() {
+fn workspace_rows_fill_selected_and_hover_backgrounds() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
-    state.workspace_drag = Some(0);
+    update::create_workspace(&mut state);
+    state.workspace_hover = Some(1);
+
     let config = Config::default();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
@@ -829,15 +836,63 @@ fn dragged_workspace_item_renders_reversed() {
     let buffer = terminal.backend().buffer().clone();
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let x = sections.workspaces.x;
+    let y = sections.workspaces.y;
+    let right = sections.workspaces.right() - 1;
+
+    // 激活项（create_workspace 激活末项）青底黑字，整行铺满。
+    assert_eq!(buffer[(x, y + 2)].bg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(x, y + 2)].fg, ratatui::style::Color::Black);
+    assert_eq!(
+        buffer[(right, y + 2)].bg,
+        ratatui::style::Color::Cyan,
+        "行尾空白同样铺背景"
+    );
+
+    // 悬停项终端反显（同右键菜单选中项）。
     assert!(
-        buffer[(sections.workspaces.x, sections.workspaces.y)]
+        buffer[(x, y + 1)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert_eq!(buffer[(x, y + 1)].bg, ratatui::style::Color::Reset);
+
+    // 未交互项无背景。
+    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
+}
+
+#[test]
+fn dragged_workspace_item_renders_reversed() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    state.workspace_drag = Some(0);
+    state.workspace_dragging = true;
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let y = sections.workspaces.y;
+    assert!(
+        buffer[(sections.workspaces.x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
     assert!(
-        !buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
+        !buffer[(sections.workspaces.x, y + 1)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
+    );
+    // 拖动反显整行铺满，空格区同样反显。
+    assert!(
+        buffer[(sections.workspaces.right() - 1, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED),
+        "拖动高亮覆盖整行空白区"
     );
 }
 
@@ -858,24 +913,36 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    let mut reversed = |state: &AppState| {
+    let mut observe = |state: &AppState| {
         if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
             panic!("draw failed: {error}");
         }
         let buffer = terminal.backend().buffer().clone();
-        [
-            buffer[(sections.workspaces.x, sections.workspaces.y)]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED),
-            buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
-                .modifier
-                .contains(ratatui::style::Modifier::REVERSED),
-        ]
+        (
+            [
+                buffer[(sections.workspaces.x, sections.workspaces.y)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::REVERSED),
+                buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
+                    .modifier
+                    .contains(ratatui::style::Modifier::REVERSED),
+            ],
+            buffer[(sections.workspaces.x, sections.workspaces.y)].bg,
+        )
     };
 
-    assert_eq!(reversed(&state), [true, false], "按下未移动只反显被按行");
+    // 按下未移动：直接整行选中态（青底），不做拖动反显，一次性完成切换。
+    assert_eq!(
+        observe(&state),
+        ([false, false], ratatui::style::Color::Cyan),
+        "按下未移动显示选中态"
+    );
     state.workspace_dragging = true;
-    assert_eq!(reversed(&state), [true, true], "指针移动后整块反显");
+    assert_eq!(
+        observe(&state),
+        ([true, true], ratatui::style::Color::Reset),
+        "指针移动后整块反显"
+    );
 }
 
 #[test]

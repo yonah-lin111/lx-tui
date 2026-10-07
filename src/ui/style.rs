@@ -1,5 +1,6 @@
-//! 语义样式 Token：沿用 codex 的终端原生 ANSI 配色，无自绘背景。
-//! 组件禁止直接写死颜色与修饰符。
+//! 语义样式 Token：沿用 codex 的终端原生 ANSI 配色。
+//! 默认不铺自绘背景；仅侧栏/标签栏的选中行使用 ANSI-16 背景（`selected_item`），
+//! 悬停行沿用终端原生反显（`selection`）。组件禁止直接写死颜色与修饰符。
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -25,14 +26,17 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
-/// 选中项：终端原生反显，不铺自绘背景。
-pub fn selection() -> Style {
-    Style::default().add_modifier(Modifier::REVERSED)
+/// 选中项：主题强调色填充（Cyan 底、黑字、加粗）；侧栏激活项与激活标签共用。
+pub fn selected_item() -> Style {
+    Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
 }
 
-/// 初始工作区标记：Green，与 accent/正文/状态色区分。
-pub fn marker() -> Style {
-    Style::default().fg(Color::Green)
+/// 列表/菜单当前项：终端原生反显；侧栏/标签栏的鼠标悬停与右键菜单选中项共用。
+pub fn selection() -> Style {
+    Style::default().add_modifier(Modifier::REVERSED)
 }
 
 /// 状态：失败（Red）。

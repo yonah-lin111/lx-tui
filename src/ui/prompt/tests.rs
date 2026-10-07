@@ -191,6 +191,50 @@ fn renders_block_command_panel_below_cursor() {
 }
 
 #[test]
+fn block_panel_rect_and_items_hit_test() {
+    let area = Rect::new(0, 0, 30, 10);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 10);
+    editor.insert_str("#");
+    let rect = panel_rect(&editor, area).expect("panel visible");
+    assert_eq!(rect.y, 1, "面板贴在锚点行下方");
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 1), Some(0));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 2), Some(1));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 6), Some(5));
+    assert_eq!(
+        panel_item_at(&editor, area, 2, rect.y + 7),
+        None,
+        "下边框不命中"
+    );
+    assert_eq!(
+        panel_item_at(&editor, area, 2, rect.y),
+        None,
+        "上边框不命中"
+    );
+}
+
+#[test]
+fn block_panel_window_keeps_still_when_hovering_visible_item() {
+    let area = Rect::new(0, 0, 30, 7);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 7);
+    editor.insert_str("#");
+    editor.panel_move(5);
+    let rect = panel_rect(&editor, area).expect("panel visible");
+    let top = panel_item_at(&editor, area, 2, rect.y + 1);
+
+    // 悬停窗口内条目：窗口保持不动（锚点不跟随悬停）。
+    assert!(editor.panel_set_active(3));
+    assert_eq!(editor.panel().map(|panel| panel.active()), Some(3));
+    assert_eq!(panel_rect(&editor, area), Some(rect));
+    assert_eq!(panel_item_at(&editor, area, 2, rect.y + 1), top);
+
+    // 键盘移动：锚点跟随高亮，窗口滚动。
+    editor.panel_move(-1);
+    assert_ne!(panel_item_at(&editor, area, 2, rect.y + 1), top);
+}
+
+#[test]
 fn renders_mention_panel_stacked_and_hit_tests_items() {
     let area = Rect::new(0, 0, 30, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));

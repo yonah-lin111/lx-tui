@@ -177,6 +177,38 @@ fn panel_move_wraps_both_directions() {
     assert_eq!(panel.active(), 2);
 }
 
+#[test]
+fn panel_hover_keeps_anchor_and_wheel_follows_active() {
+    let trigger = BlockTrigger {
+        from: 0,
+        to: 1,
+        kind: BlockTriggerKind::Heading,
+    };
+    let mut panel = BlockPanel::new(trigger, block_commands(BlockTriggerKind::Heading), 0);
+    assert_eq!(panel.anchor(), 0);
+
+    panel.set_active(4);
+    assert_eq!(panel.active(), 4);
+    assert_eq!(panel.anchor(), 0, "悬停只改高亮，窗口锚点不动");
+
+    panel.move_active_clamped(-1);
+    assert_eq!(panel.active(), 3);
+    assert_eq!(panel.anchor(), 3, "移动高亮时锚点跟随");
+
+    panel.move_active_clamped(-99);
+    assert_eq!(panel.active(), 0);
+    assert_eq!(panel.anchor(), 0);
+    panel.move_active_clamped(99);
+    assert_eq!(panel.active(), 5);
+    assert_eq!(panel.anchor(), 5);
+
+    panel.set_active(99);
+    assert_eq!(panel.active(), 5, "悬停索引越界钳到末项");
+    panel.move_active(1);
+    assert_eq!(panel.active(), 0, "键盘移动保持循环");
+    assert_eq!(panel.anchor(), 0);
+}
+
 /// 文本末尾的提及触发。
 fn mention(text: &str) -> Option<MentionTrigger> {
     mention_trigger(text, text.len())

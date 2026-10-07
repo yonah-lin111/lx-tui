@@ -170,7 +170,8 @@ pub fn reveal_scroll(bar: &TabBarLayout, workspace: &Workspace) -> usize {
     }
 }
 
-/// 渲染标签栏：激活标签强调色、分隔线 muted、`[+]` 强调色、滚动按钮可滚强调色/不可滚 muted。
+/// 渲染标签栏：激活标签青底黑字、悬停标签终端反显（只铺标签文字区，不含尾部 `|` 分隔符）、
+/// `[+]` 强调色、滚动按钮可滚强调色/不可滚 muted。
 pub fn render(frame: &mut Frame<'_>, view: &ViewLayout, state: &AppState) {
     let workspace = state.active_workspace();
     let bar = layout(view, workspace, state.tab_scroll);
@@ -179,16 +180,19 @@ pub fn render(frame: &mut Frame<'_>, view: &ViewLayout, state: &AppState) {
             continue;
         };
         let label = tab_label(*index, tab.name.as_deref());
-        let tab_style = if *index == workspace.active_tab {
-            style::accent()
+        let label_style = if *index == workspace.active_tab {
+            style::selected_item()
+        } else if state.tab_hover == Some(*index) {
+            style::selection()
         } else {
             style::muted()
         };
         let label_width = usize::from(rect.width).saturating_sub(TAB_PADDING + TAB_SEPARATOR);
-        let text = format!(" {} ", text::ellipsize(&label, label_width));
+        let label_text = text::ellipsize(&label, label_width);
+        let text = format!(" {:<width$} ", label_text, width = label_width);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled(text, tab_style),
+                Span::styled(text, label_style),
                 Span::styled(text::TAB_SEPARATOR, style::muted()),
             ])),
             *rect,

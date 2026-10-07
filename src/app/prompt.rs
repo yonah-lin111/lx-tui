@@ -229,6 +229,34 @@ impl Prompt {
         }
     }
 
+    /// 块命令面板悬停高亮：设置高亮索引、窗口锚点不动；越界或未变化返回 false。
+    pub fn panel_set_active(&mut self, index: usize) -> bool {
+        let Some(panel) = self.panel.as_mut() else {
+            return false;
+        };
+        if index >= panel.items().len() || panel.active() == index {
+            return false;
+        }
+        panel.set_active(index);
+        true
+    }
+
+    /// 滚轮在块命令面板上移动高亮：越界钳制不循环；未打开或未变化返回 false。
+    pub fn panel_scroll(&mut self, delta: isize) -> bool {
+        let Some(panel) = self.panel.as_mut() else {
+            return false;
+        };
+        let before = panel.active();
+        panel.move_active_clamped(delta);
+        panel.active() != before
+    }
+
+    /// 块命令面板点选：设置高亮并确认插入；返回是否消费。
+    pub fn panel_confirm_at(&mut self, index: usize) -> bool {
+        self.panel_set_active(index);
+        self.panel_confirm()
+    }
+
     /// 面板打开时确认高亮命令：替换触发区间并压制重弹；返回是否消费该按键。
     pub fn panel_confirm(&mut self) -> bool {
         let Some(panel) = self.panel.as_ref() else {

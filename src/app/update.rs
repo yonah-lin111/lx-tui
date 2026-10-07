@@ -155,6 +155,21 @@ pub fn scroll_mention(state: &mut AppState, delta: isize) -> bool {
     state.prompt.mention_scroll(delta)
 }
 
+/// 鼠标悬停块命令条目：只提高亮、不动窗口锚点；返回是否变化。
+pub fn hover_panel(state: &mut AppState, index: usize) -> bool {
+    state.prompt.panel_set_active(index)
+}
+
+/// 鼠标点选块命令条目：确认插入。
+pub fn select_panel(state: &mut AppState, index: usize) {
+    state.prompt.panel_confirm_at(index);
+}
+
+/// 滚轮在块命令面板上移动高亮：越界钳制不循环；返回是否变化。
+pub fn scroll_panel(state: &mut AppState, delta: isize) -> bool {
+    state.prompt.panel_scroll(delta)
+}
+
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 const WHEEL_LINES: isize = 3;
 
@@ -660,6 +675,24 @@ pub fn set_prompt_hover(state: &mut AppState, hover: bool) -> bool {
         return false;
     }
     state.prompt_hover = hover;
+    true
+}
+
+/// 更新侧栏工作区列表悬停项；返回是否发生变化。
+pub fn set_workspace_hover(state: &mut AppState, hover: Option<usize>) -> bool {
+    if state.workspace_hover == hover {
+        return false;
+    }
+    state.workspace_hover = hover;
+    true
+}
+
+/// 更新标签栏悬停标签；返回是否发生变化。
+pub fn set_tab_hover(state: &mut AppState, hover: Option<usize>) -> bool {
+    if state.tab_hover == hover {
+        return false;
+    }
+    state.tab_hover = hover;
     true
 }
 
@@ -1217,10 +1250,13 @@ pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
 }
 
 /// 开始拖动排序：记录被拖工作区索引；按下时已切换激活；整块反显等指针移动后再显示。
+///
+/// 拖动期间 hover 反显优先，清空悬停高亮直到指针再次移动。
 pub fn begin_workspace_drag(state: &mut AppState, index: usize) {
     if index < state.workspaces.len() {
         state.workspace_drag = Some(index);
         state.workspace_dragging = false;
+        state.workspace_hover = None;
     }
 }
 

@@ -4,6 +4,9 @@ use super::*;
 use crate::app::state::AppState;
 use crate::app::update;
 use crate::config::Config;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
+use ratatui::style::Color;
 
 const SCREEN: Rect = Rect {
     x: 0,
@@ -29,6 +32,51 @@ fn state_with_tabs(count: usize) -> AppState {
         update::create_tab(&mut state);
     }
     state
+}
+
+fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
+    let view = view_for(state);
+    let mut terminal =
+        Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| super::render(frame, &view, state)) {
+        panic!("draw failed: {error}");
+    }
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn active_and_hovered_tabs_fill_backgrounds() {
+    let mut state = state_with_tabs(2);
+    state.tab_hover = Some(0);
+    let view = view_for(&state);
+    let bar = layout(&view, state.active_workspace(), 0);
+    let buffer = render_buffer(&state);
+    let (hover_index, hover_rect) = bar.tabs[0];
+    let (active_index, active_rect) = bar.tabs[1];
+    assert_eq!(hover_index, 0, "hover 指向非激活标签");
+    assert_eq!(active_index, 1);
+
+    // 悬停标签终端反显（同右键菜单选中项），不含尾部 | 分隔符。
+    assert!(
+        buffer[(hover_rect.x, hover_rect.y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert_eq!(buffer[(hover_rect.x, hover_rect.y)].bg, Color::Reset);
+    let active = &buffer[(active_rect.x, active_rect.y)];
+    assert_eq!(active.bg, Color::Cyan);
+    assert_eq!(active.fg, Color::Black);
+    assert!(active.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(
+        buffer[(active_rect.right() - 2, active_rect.y)].bg,
+        Color::Cyan,
+        "标签文字区铺满背景"
+    );
+    assert_eq!(
+        buffer[(active_rect.right() - 1, active_rect.y)].bg,
+        Color::Reset,
+        "尾部 | 分隔符不参与高亮"
+    );
 }
 
 #[test]

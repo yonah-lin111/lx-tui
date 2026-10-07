@@ -109,8 +109,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
-            tui.terminal()
-                .draw(|frame| ui::render(frame, state, config))?;
+            tui.draw(|frame| ui::render(frame, state, config))?;
             dirty = false;
             last_draw = Instant::now();
         }
@@ -550,6 +549,9 @@ fn handle_terminal_event(
                 } else if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     update::select_mention(state, index);
                     *dirty = true;
+                } else if let Some(index) = panel_item_at(state, view, mouse.column, mouse.row) {
+                    update::select_panel(state, index);
+                    *dirty = true;
                 } else if let Some(pane) =
                     pane_toggle_button_at(state, rects, mouse.column, mouse.row)
                 {
@@ -847,6 +849,15 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
+                // 块命令面板同上：滚轮移动高亮到底/顶后钳制。
+                if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                    && panel_rect(state, view)
+                        .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                {
+                    update::scroll_panel(state, direction);
+                    *dirty = true;
+                    return;
+                }
                 // prompt 拖拽选区：滚轮滚动视口，锚点钉在文本上，终点跟到鼠标。
                 if let Some(selection) = state.selection
                     && selection.is_dragging()
@@ -891,6 +902,9 @@ fn handle_terminal_event(
                     && let Some(direction) = vertical_wheel_direction(mouse.kind)
                     && update::scroll_workspace_list(state, direction, rows)
                 {
+                    // 列表滚动后指针下的工作区可能已换行：按新偏移重算悬停。
+                    let hover = ui::workspace_item_at(view, state, mouse.column, mouse.row);
+                    update::set_workspace_hover(state, hover);
                     *dirty = true;
                 }
             }
@@ -908,8 +922,28 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                // 侧栏工作区行与标签栏的悬停高亮先于浮层命中计算：指针离开条目区即清空。
+                let workspace_hover = if state.sidebar_collapsed || state.workspace_drag.is_some() {
+                    None
+                } else {
+                    ui::workspace_item_at(view, state, mouse.column, mouse.row)
+                };
+                let tab_layout =
+                    ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
+                let tab_hover = ui::tab_bar::tab_at(&tab_layout, mouse.column, mouse.row);
+                let mut item_hover_changed = update::set_workspace_hover(state, workspace_hover);
+                item_hover_changed |= update::set_tab_hover(state, tab_hover);
+                if item_hover_changed {
+                    *dirty = true;
+                }
                 if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     if update::hover_mention(state, index) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if let Some(index) = panel_item_at(state, view, mouse.column, mouse.row) {
+                    if update::hover_panel(state, index) {
                         *dirty = true;
                     }
                     return;
@@ -1360,6 +1394,23 @@ fn mention_item_at(
 fn mention_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
     let area = layout::pane_inner_rect(view.prompt);
     ui::prompt::mention_panel_rect(&state.prompt, area)
+}
+
+/// 块命令面板命中：返回条目索引；面板未打开或未命中返回 None。
+fn panel_item_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let area = layout::pane_inner_rect(view.prompt);
+    ui::prompt::panel_item_at(&state.prompt, area, column, row)
+}
+
+/// 块命令面板矩形；用于滚轮命中。
+fn panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
+    let area = layout::pane_inner_rect(view.prompt);
+    ui::prompt::panel_rect(&state.prompt, area)
 }
 
 /// 命中窗格内容区：返回窗格标识与其内容区矩形。

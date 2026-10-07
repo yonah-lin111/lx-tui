@@ -79,8 +79,12 @@ pub struct AppState {
     pub active_workspace: usize,
     /// 标签栏滚动偏移（首个可见标签索引）；仅作用于当前工作区。
     pub tab_scroll: usize,
+    /// 鼠标悬停的可见标签索引；None 表示未悬停任何标签。
+    pub tab_hover: Option<usize>,
     /// 工作区列表滚动偏移（顶部项索引）。
     pub workspace_scroll: usize,
+    /// 鼠标悬停的工作区索引（仅可见行）；None 表示未悬停任何行。
+    pub workspace_hover: Option<usize>,
     /// 拖拽滚动条 thumb 时相对顶部的抓取偏移。
     pub workspace_scroll_drag: Option<u16>,
     /// 拖拽 prompt 滚动条 thumb 时相对顶部的抓取偏移。
@@ -384,7 +388,9 @@ impl AppState {
             }],
             active_workspace: 0,
             tab_scroll: 0,
+            tab_hover: None,
             workspace_scroll: 0,
+            workspace_hover: None,
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
             terminal_scroll_drag: None,

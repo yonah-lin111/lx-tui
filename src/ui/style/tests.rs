@@ -19,3 +19,11 @@ fn styles_stay_palette_native() {
         ));
     }
 }
+
+#[test]
+fn selected_item_fills_accent_with_contrast_foreground() {
+    let style = selected_item();
+    assert_eq!(style.fg, Some(Color::Black));
+    assert_eq!(style.bg, Some(Color::Cyan));
+    assert!(style.add_modifier.contains(Modifier::BOLD));
+}

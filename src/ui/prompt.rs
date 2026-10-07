@@ -68,29 +68,69 @@ fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
         );
         return;
     }
-    let Some(panel) = prompt.panel() else {
+    let Some(data) = block_panel_data(prompt) else {
         return;
     };
-    let copy: Vec<(String, String)> = panel
-        .items()
-        .iter()
-        .map(|id| text::block_command_text(*id))
-        .collect();
-    let items: Vec<CommandItem<'_>> = copy
+    let items = block_items(&data);
+    command_panel::render(area, buf, &block_view(&items, &data));
+}
+
+/// 块命令面板渲染数据：条目文本、高亮索引、窗口锚点与锚点行。
+struct BlockPanelData {
+    texts: Vec<(String, String)>,
+    active: usize,
+    anchor: usize,
+    anchor_row: u16,
+}
+
+/// 块命令面板渲染数据；面板未打开或光标滚出视口返回 None。
+fn block_panel_data(prompt: &Prompt) -> Option<BlockPanelData> {
+    let panel = prompt.panel()?;
+    let (anchor_row, _) = prompt.cursor_cell()?;
+    Some(BlockPanelData {
+        texts: panel
+            .items()
+            .iter()
+            .map(|id| text::block_command_text(*id))
+            .collect(),
+        active: panel.active(),
+        anchor: panel.anchor(),
+        anchor_row,
+    })
+}
+
+/// 块命令面板条目：单行（名称 + 右侧预览）。
+fn block_items<'a>(data: &'a BlockPanelData) -> Vec<CommandItem<'a>> {
+    data.texts
         .iter()
         .map(|(label, preview)| CommandItem::Inline { label, preview })
-        .collect();
-    command_panel::render(
-        area,
-        buf,
-        &CommandPanelView {
-            items: &items,
-            active: panel.active(),
-            window_anchor: None,
-            anchor_row,
-            max_height: None,
-        },
-    );
+        .collect()
+}
+
+/// 块命令面板视图：窗口锚定面板状态，不设高度上限。
+fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> CommandPanelView<'a> {
+    CommandPanelView {
+        items,
+        active: data.active,
+        window_anchor: Some(data.anchor),
+        anchor_row: data.anchor_row,
+        max_height: None,
+    }
+}
+
+/// 块命令面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
+pub fn panel_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let data = block_panel_data(prompt)?;
+    let items = block_items(&data);
+    let layout = command_panel::layout(area, &block_view(&items, &data))?;
+    command_panel::item_at(&layout, &items, column, row)
+}
+
+/// 块命令面板矩形；用于滚轮命中。
+pub fn panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
+    let data = block_panel_data(prompt)?;
+    let items = block_items(&data);
+    command_panel::layout(area, &block_view(&items, &data)).map(|layout| layout.rect)
 }
 
 /// 提及面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。

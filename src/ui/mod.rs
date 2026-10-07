@@ -15,7 +15,6 @@ use std::path::Path;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
 
@@ -331,7 +330,8 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     // agents 分区暂无内容，保持空占位。
 }
 
-/// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
+/// 工作区列表项：激活项强调色填充（青底黑字）、鼠标悬停项终端反显（同右键菜单选中项）；
+/// 拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。悬停与选中互斥，拖动反显优先。
 ///
 /// 顶层项统一缩进 2 列：组父项行在左缘显示折叠箭头（accent 色，占 2 列），其名字与
 /// 分组子项的连接符同列；子项连接符（`├─ `/`└─ `，末位按可见子项判定）之后是名字。
@@ -351,29 +351,30 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             items.push(ListItem::new(Line::default()));
             continue;
         };
-        let dragging = if state.workspace_dragging {
-            drag_block.contains(&row.index)
+        // 拖动反显只在指针真正移动后生效；按下未移动直接显示选中态，避免文字先亮、空白后补的两段式高亮。
+        let dragging = state.workspace_dragging && drag_block.contains(&row.index);
+        // 选中背景整行铺满；拖动块整行反显；hover 复用终端原生反显（同右键菜单）。
+        let highlight = if dragging {
+            Some(style::selection())
+        } else if row.index == state.active_workspace {
+            Some(style::selected_item())
+        } else if state.workspace_hover == Some(row.index) {
+            Some(style::selection())
         } else {
-            state.workspace_drag == Some(row.index)
+            None
         };
-        let mut item_style = if row.index == state.active_workspace {
+        let highlight = highlight.unwrap_or_default();
+        let item_style = if row.index == state.active_workspace {
             style::accent()
         } else {
             style::text()
-        };
-        let mut marker_style = style::marker();
-        if dragging {
-            item_style = item_style.add_modifier(Modifier::REVERSED);
-            marker_style = marker_style.add_modifier(Modifier::REVERSED);
         }
-        let mut prefix_style = if row.parent {
-            style::accent()
+        .patch(highlight);
+        let prefix_style = if row.parent {
+            style::accent().patch(highlight)
         } else {
             item_style
         };
-        if dragging {
-            prefix_style = prefix_style.add_modifier(Modifier::REVERSED);
-        }
         let prefix = if row.parent {
             let arrow = if row.collapsed {
                 text::WORKSPACE_GROUP_COLLAPSED
@@ -420,9 +421,9 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             spans.push(Span::styled(index_text, item_style));
         }
         if workspace.is_initial {
-            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
+            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, item_style));
         }
-        items.push(ListItem::new(Line::from(spans)));
+        items.push(ListItem::new(Line::from(spans)).style(highlight));
     }
     items
 }

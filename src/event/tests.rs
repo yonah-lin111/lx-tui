@@ -1395,3 +1395,162 @@ fn mouse_reporting_pane_does_not_steal_boundary_drag() {
     );
     assert!(state.resizing_pane.is_some());
 }
+
+#[test]
+fn mouse_motion_tracks_workspace_and_tab_hover() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    crate::app::update::create_workspace(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections =
+        crate::ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            sections.workspaces.x + 1,
+            sections.workspaces.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_hover, Some(0));
+    assert!(dirty, "悬停变化置脏重绘");
+
+    dirty = false;
+    let bar = crate::ui::tab_bar::layout(&geo.view, state.active_workspace(), state.tab_scroll);
+    let (index, rect) = bar.tabs[0];
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, rect.x + 1, rect.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.tab_hover, Some(index));
+    assert!(dirty);
+
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            geo.view.panes.x + 2,
+            geo.view.panes.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_hover, None);
+    assert_eq!(state.tab_hover, None);
+    assert!(dirty, "离开条目区同样置脏");
+
+    // 拖动排序期间不产生悬停高亮。
+    crate::app::update::begin_workspace_drag(&mut state, 0);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            sections.workspaces.x + 1,
+            sections.workspaces.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_hover, None, "拖动反显优先于 hover");
+}
+
+#[test]
+fn wheel_over_workspace_list_rescrolls_hover() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    for _ in 1..30 {
+        crate::app::update::create_workspace(&mut state);
+    }
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections =
+        crate::ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.workspace_hover = Some(0);
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            sections.workspaces.x + 1,
+            sections.workspaces.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.workspace_scroll, 1);
+    assert_eq!(state.workspace_hover, Some(1), "滚动后按新偏移重算悬停");
+}
+
+#[test]
+fn mouse_interacts_with_block_command_panel() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('#'),
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::layout::pane_inner_rect(geo.view.prompt);
+    let rect = crate::ui::prompt::panel_rect(&state.prompt, area).expect("block panel visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 滚轮悬停在面板上：移动高亮，不滚动 prompt 视口。
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, rect.x + 2, rect.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(1));
+
+    // 悬停条目：只改高亮。
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, rect.x + 2, rect.y + 4),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(3));
+
+    // 左键点击第 2 项：确认插入 H2 并关闭面板。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x + 2,
+            rect.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.text(), "## ");
+    assert!(state.prompt.panel().is_none());
+}

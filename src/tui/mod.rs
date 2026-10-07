@@ -9,7 +9,8 @@ use crossterm::cursor::Show;
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
-    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -55,6 +56,19 @@ impl Tui {
     /// 终端句柄。
     pub(crate) fn terminal(&mut self) -> &mut Terminal<QuietCursor<CrosstermBackend<Stdout>>> {
         &mut self.terminal
+    }
+
+    /// 绘制一帧：整帧包在终端同步更新块内提交，支持该模式的终端整帧原子呈现，
+    /// 避免选中背景切换时出现逐格涂抹；不支持的终端忽略私有模式、保持原绘制路径。
+    pub(crate) fn draw<F>(&mut self, render: F) -> io::Result<()>
+    where
+        F: FnOnce(&mut ratatui::Frame<'_>),
+    {
+        let mut stdout = io::stdout();
+        execute!(stdout, BeginSynchronizedUpdate)?;
+        let result = self.terminal.draw(render).map(|_| ());
+        let _ = execute!(io::stdout(), EndSynchronizedUpdate);
+        result
     }
 
     /// 恢复终端；重复调用安全。
