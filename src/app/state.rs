@@ -89,6 +89,8 @@ pub struct AppState {
     pub lx_last_tick: Instant,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
+    /// 拖拽是否已产生指针移动；按下未移动时不整块反显。
+    pub workspace_dragging: bool,
     /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
@@ -383,6 +385,7 @@ impl AppState {
             lx_phase: 0,
             lx_last_tick: Instant::now(),
             workspace_drag: None,
+            workspace_dragging: false,
             overlay: None,
             git_requests: Vec::new(),
             collapsed_groups: Vec::new(),
@@ -468,8 +471,8 @@ impl AppState {
             .values()
             .any(|pane| pane.view == PaneView::Lx)
     }
-    /// 侧栏可见行：同仓库 ≥2 个已打开工作区且含非 linked 主项时成组，
-    /// 主项之后（索引更大）的同仓库项为子项（linked 显示分支短名，重复主 checkout 显示工作区名）；
+    /// 侧栏可见行：同仓库 ≥1 个 linked worktree 且含非 linked 主项时成组，
+    /// 根之后（索引更大）的 linked 项为子项；重复主 checkout 与非组项为独立顶层行。
     /// 折叠的组只保留父项与当前激活子项。
     ///
     /// linked 子项标签与组内更早子项重复时给出显示去重序号（含被折叠隐藏的子项，序号稳定）。
@@ -499,20 +502,19 @@ impl AppState {
                         child_index: None,
                     });
                 }
-                Some((key, parent)) if index > parent => {
-                    let child_index =
-                        if workspace.name_is_manual || !git.is_some_and(|git| git.is_linked) {
-                            None
-                        } else {
-                            match git.and_then(WorkspaceGit::short_branch) {
-                                Some(label) => {
-                                    let count = child_counts.entry((key, label)).or_insert(0);
-                                    *count += 1;
-                                    (*count > 1).then_some(*count)
-                                }
-                                None => None,
+                Some((key, parent)) if index > parent && git.is_some_and(|git| git.is_linked) => {
+                    let child_index = if workspace.name_is_manual {
+                        None
+                    } else {
+                        match git.and_then(WorkspaceGit::short_branch) {
+                            Some(label) => {
+                                let count = child_counts.entry((key, label)).or_insert(0);
+                                *count += 1;
+                                (*count > 1).then_some(*count)
                             }
-                        };
+                            None => None,
+                        }
+                    };
                     if !collapsed(key) || self.active_workspace == index {
                         rows.push(WorkspaceRow {
                             index,
@@ -534,7 +536,9 @@ impl AppState {
         }
         rows
     }
-    /// 已成立分组的父项索引：仓库根 → 首个非 linked 主项；成员不足 2 或无主项时不成组。
+
+    /// 已成立分组的根索引：仓库根 → 创建最早的非 linked 主项（根窗格标识随创建递增，
+    /// 拖拽换位不改变）；无主项或无 linked worktree 成员时不成组（重复主 checkout 平铺）。
     fn group_parents(&self) -> BTreeMap<&Path, usize> {
         let mut members: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
         for (index, workspace) in self.workspaces.iter().enumerate() {
@@ -547,43 +551,61 @@ impl AppState {
         }
         members
             .into_iter()
-            .filter(|(_, indices)| indices.len() >= 2)
             .filter_map(|(key, indices)| {
-                let parent = indices.iter().copied().find(|index| {
-                    self.workspaces
-                        .get(*index)
-                        .and_then(|workspace| workspace.git.as_ref())
-                        .is_some_and(|git| !git.is_linked)
-                })?;
+                if !indices
+                    .iter()
+                    .any(|index| self.workspace_git(*index).is_some_and(|git| git.is_linked))
+                {
+                    return None;
+                }
+                let parent = indices
+                    .iter()
+                    .copied()
+                    .filter(|index| self.workspace_git(*index).is_some_and(|git| !git.is_linked))
+                    .min_by_key(|index| self.workspace_created_key(*index))?;
                 Some((key, parent))
             })
             .collect()
     }
 
-    /// 拖拽块：组（父项 + 索引更大的同仓库成员）的全部成员索引；非组内项返回自身。
-    ///
-    /// 折叠隐藏的子项与重复主 checkout 项都在块内，随父项一起移动。
-    pub fn workspace_block(&self, index: usize) -> Vec<usize> {
-        let Some(git) = self
-            .workspaces
+    /// 工作区 git 元数据。
+    fn workspace_git(&self, index: usize) -> Option<&WorkspaceGit> {
+        self.workspaces
             .get(index)
             .and_then(|workspace| workspace.git.as_ref())
-        else {
+    }
+
+    /// 创建序键：根窗格标识随创建单调递增；无窗格时排最后。
+    fn workspace_created_key(&self, index: usize) -> u32 {
+        self.workspaces
+            .get(index)
+            .and_then(Workspace::root_pane)
+            .map(PaneId::raw)
+            .unwrap_or(u32::MAX)
+    }
+
+    /// 拖拽块：树的根与 linked 子项整体移动；重复主 checkout 等独立项返回自身。
+    ///
+    /// 折叠隐藏的子项在块内；根按创建序固定，拖拽换位不会改变树的归属。
+    pub fn workspace_block(&self, index: usize) -> Vec<usize> {
+        let Some(git) = self.workspace_git(index) else {
             return vec![index];
         };
         let Some(parent) = self.group_parents().get(git.repo_root.as_path()).copied() else {
             return vec![index];
         };
+        if index != parent && !git.is_linked {
+            return vec![index];
+        }
         let block: Vec<usize> = self
             .workspaces
             .iter()
             .enumerate()
             .filter(|(other, workspace)| {
-                *other >= parent
-                    && workspace
-                        .git
-                        .as_ref()
-                        .is_some_and(|other_git| other_git.repo_root == git.repo_root)
+                workspace.git.as_ref().is_some_and(|other_git| {
+                    other_git.repo_root == git.repo_root
+                        && (*other == parent || (*other > parent && other_git.is_linked))
+                })
             })
             .map(|(other, _)| other)
             .collect();

@@ -749,8 +749,10 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     if target >= state.workspaces.len() {
         return;
     }
-    // 打开模态时结束可能残留的滚动条拖拽。
+    // 打开模态时结束可能残留的滚动条拖拽与排序拖拽。
     state.workspace_scroll_drag = None;
+    state.workspace_drag = None;
+    state.workspace_dragging = false;
     let mut commands = vec![MenuCommand::RenameWorkspace];
     if state
         .workspaces
@@ -1176,15 +1178,17 @@ pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
     })
 }
 
-/// 开始拖动排序：记录被拖工作区索引；按下时已切换激活。
+/// 开始拖动排序：记录被拖工作区索引；按下时已切换激活；整块反显等指针移动后再显示。
 pub fn begin_workspace_drag(state: &mut AppState, index: usize) {
     if index < state.workspaces.len() {
         state.workspace_drag = Some(index);
+        state.workspace_dragging = false;
     }
 }
 
-/// 拖动排序：把被拖工作区所在的组（父项 + 全部子项）整体移动到落点，
-/// 落点落在别的组上时吸附到该组边界；激活项与拖动索引跟随新位置；返回是否变化。
+/// 拖动排序：把被拖工作区所在的组（根 + linked 子项）整体移动到落点，
+/// 落点落在别的组上时吸附到该组边界；重复主 checkout 等独立项单项移动；
+/// 激活项与拖动索引跟随新位置；返回是否变化。
 pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     let Some(from) = state.workspace_drag else {
         return false;
@@ -1193,6 +1197,7 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     if len == 0 || from >= len {
         return false;
     }
+    state.workspace_dragging = true;
     let target = target.min(len - 1);
     let block = state.workspace_block(from);
     let hovered = state.workspace_block(target);
@@ -1240,6 +1245,7 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
 /// 结束拖动排序。
 pub fn end_workspace_drag(state: &mut AppState) {
     state.workspace_drag = None;
+    state.workspace_dragging = false;
 }
 
 /// 保证当前工作区可见并钳制偏移；列表长度或可见行变化后调用；返回是否变化。

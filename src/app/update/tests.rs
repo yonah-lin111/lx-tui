@@ -1080,7 +1080,7 @@ fn drag_workspace_child_moves_whole_group() {
 }
 
 #[test]
-fn drag_workspace_keeps_duplicate_main_grouped() {
+fn drag_workspace_keeps_duplicate_main_independent() {
     let mut state = AppState::demo();
     let demo = state.workspaces[0].name.clone();
     push_git_workspace(
@@ -1102,22 +1102,44 @@ fn drag_workspace_keeps_duplicate_main_grouped() {
         git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
     );
 
-    // 拖父项压到重复主 checkout 行：同属一块，无操作。
-    begin_workspace_drag(&mut state, 1);
-    assert!(!drag_workspace_to(&mut state, 2));
-    assert_eq!(state.workspace_drag, Some(1));
-
-    // 拖整组到顶部：组内顺序与父项身份不变。
+    // 拖重复主 checkout 到顶部：只移动它自己，树不动。
+    begin_workspace_drag(&mut state, 2);
     assert!(drag_workspace_to(&mut state, 0));
     let order: Vec<&str> = state
         .workspaces
         .iter()
         .map(|workspace| workspace.name.as_str())
         .collect();
-    assert_eq!(order, vec!["repo", "repo 2", "feat", demo.as_str()]);
+    assert_eq!(order, vec!["repo 2", demo.as_str(), "repo", "feat"]);
     let rows = state.workspace_rows();
-    assert_eq!(rows[0].index, 0);
-    assert!(rows[0].parent, "父项仍是索引最小的非 linked 项");
+    assert!(rows[2].parent, "树根身份按创建序稳定");
+    assert!(rows[3].child);
+
+    // 拖树（父项）越过重复项：整树移动，重复项相对位置不变。
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["repo", "feat", "repo 2", demo.as_str()]);
+    let rows = state.workspace_rows();
+    assert!(rows[0].parent);
+    assert!(rows[1].child);
+    assert!(!rows[2].parent && !rows[2].child, "重复项保持独立顶层行");
+}
+
+#[test]
+fn workspace_drag_highlight_waits_for_pointer_move() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    begin_workspace_drag(&mut state, 0);
+    assert!(!state.workspace_dragging, "按下未移动不整块反显");
+    assert!(!drag_workspace_to(&mut state, 0));
+    assert!(state.workspace_dragging, "指针移动后进入拖动高亮");
+    end_workspace_drag(&mut state);
+    assert!(state.workspace_drag.is_none() && !state.workspace_dragging);
 }
 
 #[test]

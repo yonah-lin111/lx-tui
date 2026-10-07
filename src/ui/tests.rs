@@ -841,6 +841,43 @@ fn dragged_workspace_item_renders_reversed() {
 }
 
 #[test]
+fn drag_highlight_marks_group_only_after_pointer_move() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    state.workspace_drag = Some(0);
+
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let mut reversed = |state: &AppState| {
+        if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
+            panic!("draw failed: {error}");
+        }
+        let buffer = terminal.backend().buffer().clone();
+        [
+            buffer[(sections.workspaces.x, sections.workspaces.y)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+        ]
+    };
+
+    assert_eq!(reversed(&state), [true, false], "按下未移动只反显被按行");
+    state.workspace_dragging = true;
+    assert_eq!(reversed(&state), [true, true], "指针移动后整块反显");
+}
+
+#[test]
 fn panel_collapse_buttons_sit_on_bottom_border() {
     let state = AppState::demo();
     let view = view_for(&state);
@@ -1054,7 +1091,7 @@ fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: Workspac
 }
 
 #[test]
-fn sidebar_renders_duplicate_main_checkout_as_child() {
+fn sidebar_renders_duplicate_main_checkout_top_level() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "main".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
@@ -1064,12 +1101,26 @@ fn sidebar_renders_duplicate_main_checkout_as_child() {
         "/repo",
         git_info("/repo", "/repo", false, Some("main")),
     );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
 
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("▾ main")));
     assert!(
-        lines.iter().any(|line| line.contains("  └─ main 2")),
-        "重复主 checkout 缩进为子项并显示工作区名: {lines:?}"
+        lines.iter().any(|line| line.contains("  main 2")),
+        "重复主 checkout 与根同列、独立顶层: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("─ main 2")),
+        "重复主 checkout 不显示连接符: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("  └─ feature/x")),
+        "linked worktree 仍是子项: {lines:?}"
     );
 }
 

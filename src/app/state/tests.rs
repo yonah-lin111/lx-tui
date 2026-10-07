@@ -397,7 +397,7 @@ fn workspace_block_excludes_linked_member_before_parent() {
 }
 
 #[test]
-fn workspace_rows_render_duplicate_main_checkout_as_child() {
+fn workspace_rows_keep_duplicate_main_checkout_top_level() {
     let mut state = AppState::demo();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
     push_git_workspace(
@@ -417,11 +417,46 @@ fn workspace_rows_render_duplicate_main_checkout_as_child() {
     assert_eq!(rows.len(), 3);
     assert!(rows[0].parent && !rows[0].child);
     assert!(
-        rows[1].child && !rows[1].parent,
-        "重复主 checkout 渲染为子项"
+        !rows[1].child && !rows[1].parent,
+        "重复主 checkout 为独立顶层项"
     );
-    assert_eq!(rows[1].child_index, None, "工作区名唯一，不加序号");
     assert!(rows[2].child);
-    assert_eq!(state.workspace_block(0), vec![0, 1, 2]);
-    assert_eq!(state.workspace_block(1), vec![0, 1, 2]);
+    assert_eq!(
+        state.workspace_block(0),
+        vec![0, 2],
+        "树块只含根与 linked 子项"
+    );
+    assert_eq!(
+        state.workspace_block(1),
+        vec![1],
+        "重复主 checkout 独立拖动"
+    );
+    assert_eq!(state.workspace_block(2), vec![0, 2]);
+
+    // 重复项被拖到根之前：根身份按创建序不变，子项仍挂在根下。
+    state.workspaces.swap(0, 1);
+    let rows = state.workspace_rows();
+    assert_eq!(rows[0].index, 0);
+    assert!(!rows[0].parent && !rows[0].child, "重复项仍为普通项");
+    assert_eq!(rows[1].index, 1);
+    assert!(rows[1].parent, "创建最早的主项仍是树根");
+    assert_eq!(rows[2].index, 2);
+    assert!(rows[2].child);
+    assert_eq!(state.workspace_block(1), vec![1, 2]);
+}
+
+#[test]
+fn workspace_rows_keep_duplicate_mains_flat_without_linked() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "repo 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| !row.parent && !row.child));
 }
