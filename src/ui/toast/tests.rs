@@ -57,6 +57,31 @@ fn anchored_toast_centers_below_container_top_border() {
 }
 
 #[test]
+fn titled_toast_keeps_three_rows_and_fits_title() {
+    let mut state = AppState::demo();
+    update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Info, text::TOAST_COPIED, None, Instant::now())
+            .with_title(text::TOAST_CLIPBOARD_TITLE),
+    );
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let rect = rect(
+        &state,
+        &view,
+        &rects,
+        Rect::new(0, 0, 100, 24),
+        &Config::default(),
+    )
+    .expect("toast area is resolvable");
+    assert_eq!(rect.height, 3);
+    assert_eq!(
+        usize::from(rect.width),
+        text::TOAST_COPIED.chars().count() + 4
+    );
+}
+
+#[test]
 fn pane_anchored_toast_targets_that_pane() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();

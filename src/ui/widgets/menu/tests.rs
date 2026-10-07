@@ -12,9 +12,11 @@ const SCREEN: Rect = Rect {
     height: 24,
 };
 
+const TITLE: &str = "workspace";
+
 #[test]
 fn layout_sizes_to_longest_label_with_minimum_width() {
-    let menu = layout(SCREEN, (0, 0), &["Rename", "Close"]);
+    let menu = layout(SCREEN, (0, 0), TITLE, &["Rename", "Close"]);
     assert_eq!(menu.area.width, MIN_WIDTH);
     assert_eq!(menu.area.height, 4);
     assert_eq!(menu.item_rects.len(), 2);
@@ -22,13 +24,16 @@ fn layout_sizes_to_longest_label_with_minimum_width() {
     assert_eq!(menu.item_rects[1].y, 2);
     assert_eq!(menu.item_rects[0].width, MIN_WIDTH - 2);
 
-    let wide = layout(SCREEN, (0, 0), &["a very long menu entry label"]);
+    let wide = layout(SCREEN, (0, 0), TITLE, &["a very long menu entry label"]);
     assert_eq!(wide.area.width, 32);
+
+    let long_title = layout(SCREEN, (0, 0), &"t".repeat(40), &["Close"]);
+    assert_eq!(long_title.area.width, 44);
 }
 
 #[test]
 fn layout_clamps_anchor_to_screen() {
-    let menu = layout(SCREEN, (79, 23), &["Rename", "Close"]);
+    let menu = layout(SCREEN, (79, 23), TITLE, &["Rename", "Close"]);
     assert_eq!(menu.area.right(), SCREEN.right());
     assert_eq!(menu.area.bottom(), SCREEN.bottom());
     assert_eq!(menu.area.x, SCREEN.width - menu.area.width);
@@ -38,7 +43,7 @@ fn layout_clamps_anchor_to_screen() {
 #[test]
 fn layout_shrinks_to_small_screen() {
     let screen = Rect::new(0, 0, 10, 3);
-    let menu = layout(screen, (9, 2), &["Rename", "Close"]);
+    let menu = layout(screen, (9, 2), TITLE, &["Rename", "Close"]);
     assert_eq!(menu.area.width, 10);
     assert_eq!(menu.area.height, 3);
     assert_eq!(menu.item_rects.len(), 2);
@@ -47,7 +52,7 @@ fn layout_shrinks_to_small_screen() {
 
 #[test]
 fn item_at_hits_rows_inside_border_only() {
-    let menu = layout(SCREEN, (10, 5), &["Rename", "Close"]);
+    let menu = layout(SCREEN, (10, 5), TITLE, &["Rename", "Close"]);
     assert_eq!(item_at(&menu, 11, 6), Some(0));
     assert_eq!(item_at(&menu, 11, 7), Some(1));
     assert_eq!(item_at(&menu, 10, 6), None);
@@ -57,16 +62,22 @@ fn item_at_hits_rows_inside_border_only() {
 }
 
 #[test]
-fn render_draws_border_labels_and_reversed_selection() {
-    let menu = layout(SCREEN, (10, 5), &["Rename", "Close"]);
+fn render_draws_border_title_labels_and_reversed_selection() {
+    let menu = layout(SCREEN, (10, 5), TITLE, &["Rename", "Close"]);
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
-    if let Err(error) = terminal.draw(|frame| render(frame, &menu, &["Rename", "Close"], Some(1))) {
+    if let Err(error) =
+        terminal.draw(|frame| render(frame, &menu, TITLE, &["Rename", "Close"], Some(1)))
+    {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
     let text_at = |x: u16, y: u16| buffer[(x, y)].symbol().to_string();
     assert_eq!(text_at(menu.area.x, menu.area.y), "╭");
     assert_eq!(text_at(menu.area.right() - 1, menu.area.y), "╮");
+    let title_row: String = (menu.area.x..menu.area.right())
+        .map(|x| text_at(x, menu.area.y))
+        .collect();
+    assert!(title_row.contains(TITLE), "{title_row}");
     let row: String = (menu.item_rects[0].x..menu.item_rects[0].right())
         .map(|x| text_at(x, menu.item_rects[0].y))
         .collect();

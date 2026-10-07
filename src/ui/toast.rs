@@ -72,27 +72,32 @@ pub fn render(
         return;
     };
     frame.render_widget(Clear, area);
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(border_style(toast.kind));
+    if let Some(title) = toast.title.as_deref() {
+        block = block.title(Span::styled(
+            format!(
+                " {} ",
+                text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
+            ),
+            style::muted(),
+        ));
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
     let width = usize::from(inner.width);
-    let mut lines: Vec<Line<'_>> = Vec::with_capacity(2);
-    if let Some(title) = toast.title.as_deref() {
-        lines.push(Line::from(Span::styled(
-            text::ellipsize(title, width),
-            style::strong(),
-        )));
-    }
-    lines.push(Line::from(Span::styled(
-        text::ellipsize(&toast.message, width),
-        style::text(),
-    )));
-    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            text::ellipsize(&toast.message, width),
+            style::text(),
+        )))
+        .alignment(Alignment::Center),
+        inner,
+    );
 }
 
 /// 边框语义色：普通提示用强调色，失败用红色。
@@ -103,9 +108,9 @@ fn border_style(kind: ToastKind) -> Style {
     }
 }
 
-/// 盒尺寸：最长行宽 + 左右边框与内边距；有标题时多一行。
+/// 盒尺寸：正文最长行与边框标题各自加边框与内边距取宽；高度固定三行。
 fn box_size(toast: &Toast) -> (u16, u16) {
-    let cols = toast
+    let text = toast
         .title
         .as_deref()
         .into_iter()
@@ -113,9 +118,8 @@ fn box_size(toast: &Toast) -> (u16, u16) {
         .map(|line| line.chars().count())
         .max()
         .unwrap_or_default();
-    let width = u16::try_from(cols.saturating_add(4)).unwrap_or(u16::MAX);
-    let height = if toast.title.is_some() { 4 } else { 3 };
-    (width, height)
+    let width = u16::try_from(text.saturating_add(4)).unwrap_or(u16::MAX);
+    (width, 3)
 }
 
 #[cfg(test)]

@@ -126,8 +126,13 @@ pub fn worktree_dialog_button_at(
 }
 
 /// 菜单几何与文案；渲染与鼠标命中共用。
-pub fn menu_layout(screen: Rect, menu: &Menu) -> widgets::menu::MenuLayout {
-    widgets::menu::layout(screen, menu.anchor, &menu_labels(menu))
+pub fn menu_layout(state: &AppState, screen: Rect, menu: &Menu) -> widgets::menu::MenuLayout {
+    widgets::menu::layout(
+        screen,
+        menu.anchor,
+        &menu_title(state, menu),
+        &menu_labels(menu),
+    )
 }
 
 /// 重命名浮层几何。
@@ -180,8 +185,9 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
     match state.overlay.as_ref()? {
         Overlay::Menu(menu) => {
             let labels = menu_labels(menu);
-            let layout = menu_layout(screen, menu);
-            widgets::menu::render(frame, &layout, &labels, Some(menu.selected));
+            let title = menu_title(state, menu);
+            let layout = widgets::menu::layout(screen, menu.anchor, &title, &labels);
+            widgets::menu::render(frame, &layout, &title, &labels, Some(menu.selected));
             None
         }
         Overlay::Rename(rename) => render_rename(frame, screen, rename),
@@ -262,6 +268,40 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             MenuCommand::ClosePane => text::MENU_CLOSE_PANE,
         })
         .collect()
+}
+
+/// 菜单边框标题：目标名优先，取不到时回退种类名。
+fn menu_title(state: &AppState, menu: &Menu) -> String {
+    match menu.target {
+        OverlayTarget::Workspace(index) => state
+            .workspaces
+            .get(index)
+            .map(|workspace| workspace.name.clone())
+            .unwrap_or_else(|| text::MENU_TITLE_WORKSPACE.to_string()),
+        OverlayTarget::Tab { workspace, tab } => state
+            .workspaces
+            .get(workspace)
+            .and_then(|workspace| workspace.tabs.get(tab))
+            .map(|tab_state| tab_label(tab, tab_state.name.as_deref()))
+            .unwrap_or_else(|| text::MENU_TITLE_TAB.to_string()),
+        OverlayTarget::Pane {
+            workspace,
+            tab,
+            pane,
+        } => state
+            .workspaces
+            .get(workspace)
+            .and_then(|workspace| workspace.tabs.get(tab))
+            .and_then(|tab_state| tab_state.pane(pane))
+            .map(|pane_state| {
+                text::pane_title(
+                    pane,
+                    pane_state.terminal.title(),
+                    pane_state.cwd_label.as_deref(),
+                )
+            })
+            .unwrap_or_else(|| text::MENU_TITLE_PANE.to_string()),
+    }
 }
 
 /// 重命名浮层：单行输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。

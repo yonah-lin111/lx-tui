@@ -104,6 +104,13 @@ pub const EXIT_LABEL: &str = "[exit]";
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
 pub const TOAST_COPY_FAILED: &str = "Copy failed";
+/// 复制反馈 toast 的边框标题。
+pub const TOAST_CLIPBOARD_TITLE: &str = "Clipboard";
+
+/// 右键菜单边框标题：目标名缺失时按种类回退。
+pub const MENU_TITLE_WORKSPACE: &str = "workspace";
+pub const MENU_TITLE_TAB: &str = "tab";
+pub const MENU_TITLE_PANE: &str = "pane";
 
 /// markdown 块命令面板条目标签。
 pub const BLOCK_HEADING_LABEL: &str = "Heading";

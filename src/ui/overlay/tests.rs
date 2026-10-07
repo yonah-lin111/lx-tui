@@ -34,6 +34,7 @@ fn draw_overlay(state: &AppState) -> (Vec<String>, Option<(u16, u16)>) {
 
 fn menu_state(commands: Vec<MenuCommand>, selected: usize) -> AppState {
     let mut state = AppState::demo();
+    state.workspaces[0].name = "demo".into();
     state.overlay = Some(Overlay::Menu(Menu {
         anchor: (10, 5),
         target: OverlayTarget::Workspace(0),
@@ -61,10 +62,38 @@ fn menu_layout_maps_commands_to_text_labels() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
-    let layout = menu_layout(SCREEN, menu);
+    let layout = menu_layout(&state, SCREEN, menu);
     assert_eq!(layout.area.x, 10);
     assert_eq!(layout.area.y, 5);
     assert_eq!(layout.item_rects.len(), 2);
+}
+
+#[test]
+fn menu_renders_target_name_in_border_title() {
+    let state = menu_state(
+        vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],
+        0,
+    );
+    let (lines, _) = draw_overlay(&state);
+    assert!(lines[5].contains("demo"), "title row={:?}", lines[5]);
+    assert!(lines[5].contains('╭'), "title row={:?}", lines[5]);
+}
+
+#[test]
+fn menu_falls_back_to_target_kind_title() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (10, 5),
+        target: OverlayTarget::Workspace(99),
+        commands: vec![MenuCommand::CloseWorkspace],
+        selected: 0,
+    }));
+    let (lines, _) = draw_overlay(&state);
+    assert!(
+        lines[5].contains(text::MENU_TITLE_WORKSPACE),
+        "title row={:?}",
+        lines[5]
+    );
 }
 
 #[test]

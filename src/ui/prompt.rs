@@ -212,7 +212,7 @@ fn mention_view<'a>(
     }
 }
 
-/// 提及条目展示：第一行文件名（目录带 `/`），第二行父目录。
+/// 提及条目展示：第一行文件名（目录带 `/`），第二行 `└─ ` 前缀的父目录。
 fn mention_item_text(entry: &MentionEntry) -> (String, String) {
     let (directory, name) = entry
         .path
@@ -223,7 +223,12 @@ fn mention_item_text(entry: &MentionEntry) -> (String, String) {
     } else {
         name.to_string()
     };
-    (label, directory.to_string())
+    let detail = if directory.is_empty() {
+        String::new()
+    } else {
+        format!("{} {directory}", text::WORKSPACE_TREE_LAST)
+    };
+    (label, detail)
 }
 
 /// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。

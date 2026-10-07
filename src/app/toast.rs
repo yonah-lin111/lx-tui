@@ -44,7 +44,7 @@ impl Toast {
         }
     }
 
-    /// 附加标题；渲染时占一行。
+    /// 附加标题；渲染在顶边框上。
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
         self

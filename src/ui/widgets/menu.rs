@@ -19,14 +19,16 @@ pub struct MenuLayout {
     pub item_rects: Vec<Rect>,
 }
 
-/// 按锚点与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
-pub fn layout(screen: Rect, anchor: (u16, u16), labels: &[&str]) -> MenuLayout {
+/// 按锚点、标题与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
+pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) -> MenuLayout {
     let max_label = labels
         .iter()
         .map(|label| label.chars().count())
         .max()
         .unwrap_or_default();
-    let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING))
+    // 边框标题以 ` title ` 占位，加减两角。
+    let max_title = title.chars().count().saturating_add(4);
+    let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING).max(max_title))
         .unwrap_or(u16::MAX)
         .max(MIN_WIDTH)
         .min(screen.width);
@@ -61,17 +63,25 @@ pub fn item_at(layout: &MenuLayout, column: u16, row: u16) -> Option<usize> {
         .position(|rect| rect.contains((column, row).into()))
 }
 
-/// 渲染菜单：清底、强调色边框、逐项文本；选中项反显。
+/// 渲染菜单：清底、强调色边框与标题、逐项文本；选中项反显。
 pub fn render(
     frame: &mut Frame<'_>,
     layout: &MenuLayout,
+    title: &str,
     labels: &[&str],
     selected: Option<usize>,
 ) {
     frame.render_widget(Clear, layout.area);
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent());
+    if !title.is_empty() {
+        let max_title = usize::from(layout.area.width.saturating_sub(2));
+        block = block.title(Span::styled(
+            format!(" {} ", text::ellipsize(title, max_title)),
+            style::muted(),
+        ));
+    }
     frame.render_widget(block, layout.area);
     let width = usize::from(layout.area.width.saturating_sub(2));
     for (index, label) in labels.iter().enumerate() {

@@ -263,6 +263,7 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
     assert!(name_row.contains("app.rs"));
     assert!(dir_row.contains("src"));
+    assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
     assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
     assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
 

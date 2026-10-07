@@ -509,7 +509,11 @@ fn toast_renders_title_and_message() {
         .with_title("Clipboard"),
     );
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("Clipboard")));
+    let title_line = lines
+        .iter()
+        .find(|line| line.contains("Clipboard"))
+        .expect("toast title is visible");
+    assert!(title_line.contains('╭'), "title must sit on the top border");
     assert!(lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
 }
 

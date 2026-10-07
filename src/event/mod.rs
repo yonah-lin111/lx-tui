@@ -381,7 +381,8 @@ fn handle_terminal_event(
                         if crate::platform::write_clipboard(&text) {
                             update::show_toast(
                                 state,
-                                Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now),
+                                Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now)
+                                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                             );
                         } else {
                             tracing::warn!("clipboard write failed");
@@ -392,7 +393,8 @@ fn handle_terminal_event(
                                     ui::text::TOAST_COPY_FAILED,
                                     anchor,
                                     now,
-                                ),
+                                )
+                                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                             );
                         }
                         *dirty = true;
@@ -812,7 +814,8 @@ fn handle_terminal_event(
                     if crate::platform::write_clipboard(&text) {
                         update::show_toast(
                             state,
-                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now),
+                            Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now)
+                                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                         );
                     } else {
                         tracing::warn!("clipboard write failed");
@@ -823,7 +826,8 @@ fn handle_terminal_event(
                                 ui::text::TOAST_COPY_FAILED,
                                 Some(pane),
                                 now,
-                            ),
+                            )
+                            .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                         );
                     }
                 }
@@ -912,7 +916,7 @@ fn handle_terminal_event(
                 // 浮层打开时悬停只服务菜单高亮，不触碰底层 hover 状态。
                 if state.overlay.is_some() {
                     if let Some(Overlay::Menu(menu)) = state.overlay.as_ref() {
-                        let layout = ui::overlay::menu_layout(*screen, menu);
+                        let layout = ui::overlay::menu_layout(state, *screen, menu);
                         if let Some(index) =
                             ui::widgets::menu::item_at(&layout, mouse.column, mouse.row)
                             && update::set_menu_selection(state, index)
@@ -1152,7 +1156,7 @@ fn forward_pane_mouse_event(
 fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u16) {
     match state.overlay.as_ref() {
         Some(Overlay::Menu(menu)) => {
-            let layout = ui::overlay::menu_layout(screen, menu);
+            let layout = ui::overlay::menu_layout(state, screen, menu);
             match ui::widgets::menu::item_at(&layout, column, row) {
                 Some(index) => {
                     update::set_menu_selection(state, index);

@@ -515,7 +515,7 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("pane menu overlay expected");
     };
-    let menu_layout = ui::overlay::menu_layout(geo.screen, menu);
+    let menu_layout = ui::overlay::menu_layout(&state, geo.screen, menu);
     let item = menu_layout.item_rects[0];
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), item.x + 1, item.y),
