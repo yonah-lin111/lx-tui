@@ -27,6 +27,9 @@ use crate::layout::{COLLAPSED_STRIP, PaneId};
 const PANEL_BUTTON_WIDTH: u16 = 3;
 const PANEL_BUTTON_MARGIN: u16 = 1;
 
+/// 工作区列表行统一左缩进列数（箭头、连接符与普通项一起右移）。
+const WORKSPACE_ITEM_MARGIN: usize = 1;
+
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     let area = frame.area();
@@ -367,7 +370,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_GROUP_EXPANDED
             };
-            format!("{arrow}  ")
+            format!("{:width$}{arrow}  ", "", width = WORKSPACE_ITEM_MARGIN)
         } else if row.child {
             let group = workspace_repo_root(state, row.index);
             let last = !rows[row_index + 1..]
@@ -378,9 +381,9 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_TREE_MIDDLE
             };
-            format!("{tree} ")
+            format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_MARGIN)
         } else {
-            String::new()
+            " ".repeat(WORKSPACE_ITEM_MARGIN)
         };
         let label = workspace_item_label(workspace, row.child);
         let name_width =
@@ -553,7 +556,7 @@ pub fn workspace_item_at(
     state.workspace_rows().get(slot).map(|entry| entry.index)
 }
 
-/// 分组折叠箭头命中：仅父项行的首格；返回父项工作区索引。
+/// 分组折叠箭头命中：仅父项行的箭头格（内容区第 `WORKSPACE_ITEM_MARGIN` 列）；返回父项工作区索引。
 pub fn workspace_group_toggle_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -561,7 +564,8 @@ pub fn workspace_group_toggle_at(
     row: u16,
 ) -> Option<usize> {
     let list = workspace_list_rect(view, state)?;
-    if column != list.x || !list.contains((column, row).into()) {
+    let arrow_column = list.x.saturating_add(WORKSPACE_ITEM_MARGIN as u16);
+    if column != arrow_column || !list.contains((column, row).into()) {
         return None;
     }
     let slot = state

@@ -1074,13 +1074,13 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     state.workspaces[2].name_is_manual = true;
 
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("main")));
+    assert!(lines.iter().any(|line| line.contains(" ▾  main")));
     assert!(
-        lines.iter().any(|line| line.contains("├─ feature/x")),
+        lines.iter().any(|line| line.contains(" ├─ feature/x")),
         "non-last child uses middle connector: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("└─ notes")),
+        lines.iter().any(|line| line.contains(" └─ notes")),
         "last child uses last connector and manual name wins: {lines:?}"
     );
     let parent_line = lines
@@ -1303,8 +1303,8 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
 
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_EXPANDED));
-    assert!(joined.contains("├─ feature/x"), "非末位子项用中连接符");
-    assert!(joined.contains("└─ notes"));
+    assert!(joined.contains(" ├─ feature/x"), "非末位子项用中连接符");
+    assert!(joined.contains(" └─ notes"));
 
     state.collapsed_groups.push(PathBuf::from("/repo"));
     let joined = render_lines(&state).join("\n");
@@ -1315,7 +1315,7 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
     state.active_workspace = 1;
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
-    assert!(joined.contains("└─ feature/x"), "唯一可见子项用末连接符");
+    assert!(joined.contains(" └─ feature/x"), "唯一可见子项用末连接符");
     assert!(!joined.contains("notes"));
 }
 
@@ -1336,16 +1336,22 @@ fn workspace_group_toggle_hit_targets_parent_chevron_cell_only() {
         .expect("sidebar sections")
         .workspaces;
     assert_eq!(
-        workspace_group_toggle_at(&view, &state, list.x, list.y),
-        Some(0)
+        workspace_group_toggle_at(&view, &state, list.x + 1, list.y),
+        Some(0),
+        "缩进 1 列后的箭头格命中"
     );
     assert_eq!(
-        workspace_group_toggle_at(&view, &state, list.x + 1, list.y),
+        workspace_group_toggle_at(&view, &state, list.x, list.y),
+        None,
+        "缩进列本身不命中"
+    );
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x + 2, list.y),
         None,
         "箭头之外不命中"
     );
     assert_eq!(
-        workspace_group_toggle_at(&view, &state, list.x, list.y + 1),
+        workspace_group_toggle_at(&view, &state, list.x + 1, list.y + 1),
         None,
         "子项行不命中"
     );
