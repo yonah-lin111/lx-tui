@@ -44,14 +44,13 @@ impl MentionState {
         true
     }
 
-    /// 滚轮移动高亮：越界钳制不循环；面板未打开或未变化返回 false。
-    pub fn scroll_active(&mut self, delta: isize) -> bool {
-        let Some(panel) = self.panel.as_mut() else {
-            return false;
-        };
-        let before = panel.active();
-        panel.move_active_clamped(delta);
-        panel.active() != before
+    /// 滚轮滚动可见窗口：显式视口从 `base` 起偏移、越界钳制不循环；高亮不动；
+    /// 面板未打开或视口未移动返回 false。
+    pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
+        match self.panel.as_mut() {
+            Some(panel) => panel.scroll_viewport(delta, base),
+            None => false,
+        }
     }
 
     /// 确认高亮条目：关闭面板并返回替换区间与插入文本；未打开或区间越界返回 None。

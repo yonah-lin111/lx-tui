@@ -11,7 +11,7 @@ use crate::app::selection::Selection;
 use crate::ui::markdown::{self, Token, TokenKind};
 use crate::ui::style;
 use crate::ui::text;
-use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
+use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
 /// 绘制 prompt 内容区；光标由调用方以终端原生硬件光标呈现。
 pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&Selection>) {
@@ -46,26 +46,9 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
 
 /// 绘制浮层面板：文件提及优先，其次块命令；状态由 app 层维护，这里只做只读映射。
 fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
-    let Some((anchor_row, _)) = prompt.cursor_cell() else {
-        return;
-    };
-    if let Some(panel) = prompt.mention() {
-        let texts: Vec<(String, String)> = panel.items().iter().map(mention_item_text).collect();
-        let items: Vec<CommandItem<'_>> = texts
-            .iter()
-            .map(|(label, detail)| CommandItem::Stacked { label, detail })
-            .collect();
-        command_panel::render(
-            area,
-            buf,
-            &mention_view(
-                &items,
-                panel.active(),
-                panel.anchor(),
-                anchor_row,
-                area.height / 2,
-            ),
-        );
+    if let Some(data) = mention_panel_data(prompt) {
+        let items = data.items();
+        command_panel::render(area, buf, &mention_view(&items, &data, area.height / 2));
         return;
     }
     let Some(data) = block_panel_data(prompt) else {
@@ -75,11 +58,12 @@ fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     command_panel::render(area, buf, &block_view(&items, &data));
 }
 
-/// 块命令面板渲染数据：条目文本、高亮索引、窗口锚点与锚点行。
+/// 块命令面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口与锚点行。
 struct BlockPanelData {
     texts: Vec<(String, String)>,
     active: usize,
     anchor: usize,
+    viewport: Option<usize>,
     anchor_row: u16,
 }
 
@@ -95,6 +79,7 @@ fn block_panel_data(prompt: &Prompt) -> Option<BlockPanelData> {
             .collect(),
         active: panel.active(),
         anchor: panel.anchor(),
+        viewport: panel.viewport(),
         anchor_row,
     })
 }
@@ -107,15 +92,23 @@ fn block_items<'a>(data: &'a BlockPanelData) -> Vec<CommandItem<'a>> {
         .collect()
 }
 
-/// 块命令面板视图：窗口锚定面板状态，不设高度上限。
+/// 块命令面板视图：窗口锚定面板状态，显式视口优先，不设高度上限。
 fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active: data.active,
         window_anchor: Some(data.anchor),
+        window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: None,
     }
+}
+
+/// 块命令面板布局；面板未打开或空间不足返回 None。
+pub fn panel_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let data = block_panel_data(prompt)?;
+    let items = block_items(&data);
+    command_panel::layout(area, &block_view(&items, &data))
 }
 
 /// 块命令面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
@@ -128,59 +121,57 @@ pub fn panel_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Opti
 
 /// 块命令面板矩形；用于滚轮命中。
 pub fn panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
-    let data = block_panel_data(prompt)?;
-    let items = block_items(&data);
-    command_panel::layout(area, &block_view(&items, &data)).map(|layout| layout.rect)
+    panel_layout(prompt, area).map(|layout| layout.rect)
+}
+
+/// 提及面板布局；面板未打开或空间不足返回 None。
+pub fn mention_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let data = mention_panel_data(prompt)?;
+    let items = data.items();
+    command_panel::layout(area, &mention_view(&items, &data, area.height / 2))
 }
 
 /// 提及面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
     let data = mention_panel_data(prompt)?;
-    let items: Vec<CommandItem<'_>> = data
-        .texts
-        .iter()
-        .map(|(label, detail)| CommandItem::Stacked { label, detail })
-        .collect();
-    let layout = command_panel::layout(
-        area,
-        &mention_view(
-            &items,
-            data.active,
-            data.anchor,
-            data.anchor_row,
-            area.height / 2,
-        ),
-    )?;
+    let items = data.items();
+    let layout = command_panel::layout(area, &mention_view(&items, &data, area.height / 2))?;
     command_panel::item_at(&layout, &items, column, row)
 }
 
 /// 提及面板矩形；用于滚轮命中。
 pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
-    let data = mention_panel_data(prompt)?;
-    let items: Vec<CommandItem<'_>> = data
-        .texts
-        .iter()
-        .map(|(label, detail)| CommandItem::Stacked { label, detail })
-        .collect();
-    command_panel::layout(
-        area,
-        &mention_view(
-            &items,
-            data.active,
-            data.anchor,
-            data.anchor_row,
-            area.height / 2,
-        ),
-    )
-    .map(|layout| layout.rect)
+    mention_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点与锚点行。
+/// 提及条目文本：图标、标签与父目录明细。
+struct MentionItemText {
+    icon: &'static str,
+    label: String,
+    detail: String,
+}
+
+/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口与锚点行。
 struct MentionPanelData {
-    texts: Vec<(String, String)>,
+    texts: Vec<MentionItemText>,
     active: usize,
     anchor: usize,
+    viewport: Option<usize>,
     anchor_row: u16,
+}
+
+impl MentionPanelData {
+    /// 组装条目视图；图标列固定占位，标签与明细借用自身文本。
+    fn items(&self) -> Vec<CommandItem<'_>> {
+        self.texts
+            .iter()
+            .map(|entry| CommandItem::Stacked {
+                icon: Some(entry.icon),
+                label: entry.label.as_str(),
+                detail: entry.detail.as_str(),
+            })
+            .collect()
+    }
 }
 
 /// 提及面板渲染数据；面板未打开或光标滚出视口返回 None。
@@ -191,29 +182,29 @@ fn mention_panel_data(prompt: &Prompt) -> Option<MentionPanelData> {
         texts: panel.items().iter().map(mention_item_text).collect(),
         active: panel.active(),
         anchor: panel.anchor(),
+        viewport: panel.viewport(),
         anchor_row,
     })
 }
 
-/// 提及面板视图：最大高度取容器（prompt 内容区）的一半；窗口锚定面板状态。
+/// 提及面板视图：最大高度取容器（prompt 内容区）的一半；显式视口优先于窗口锚点。
 fn mention_view<'a>(
     items: &'a [CommandItem<'a>],
-    active: usize,
-    anchor: usize,
-    anchor_row: u16,
+    data: &MentionPanelData,
     max_height: u16,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
-        active,
-        window_anchor: Some(anchor),
-        anchor_row,
+        active: data.active,
+        window_anchor: Some(data.anchor),
+        window_start: data.viewport,
+        anchor_row: data.anchor_row,
         max_height: Some(max_height),
     }
 }
 
-/// 提及条目展示：第一行文件名（目录带 `/`），第二行 `└─ ` 前缀的父目录。
-fn mention_item_text(entry: &MentionEntry) -> (String, String) {
+/// 提及条目展示：第一行目录/文件图标 + 文件名（目录带 `/`），第二行 `└─ ` 前缀的父目录。
+fn mention_item_text(entry: &MentionEntry) -> MentionItemText {
     let (directory, name) = entry
         .path
         .rsplit_once('/')
@@ -228,7 +219,16 @@ fn mention_item_text(entry: &MentionEntry) -> (String, String) {
     } else {
         format!("{} {directory}", text::WORKSPACE_TREE_LAST)
     };
-    (label, detail)
+    let icon = if entry.is_directory {
+        text::MENTION_DIR_ICON
+    } else {
+        text::MENTION_FILE_ICON
+    };
+    MentionItemText {
+        icon,
+        label,
+        detail,
+    }
 }
 
 /// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。

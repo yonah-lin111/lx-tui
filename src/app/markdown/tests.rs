@@ -178,7 +178,7 @@ fn panel_move_wraps_both_directions() {
 }
 
 #[test]
-fn panel_hover_keeps_anchor_and_wheel_follows_active() {
+fn panel_hover_keeps_anchor_and_wheel_scrolls_viewport() {
     let trigger = BlockTrigger {
         from: 0,
         to: 1,
@@ -186,26 +186,30 @@ fn panel_hover_keeps_anchor_and_wheel_follows_active() {
     };
     let mut panel = BlockPanel::new(trigger, block_commands(BlockTriggerKind::Heading), 0);
     assert_eq!(panel.anchor(), 0);
+    assert_eq!(panel.viewport(), None);
 
     panel.set_active(4);
     assert_eq!(panel.active(), 4);
     assert_eq!(panel.anchor(), 0, "悬停只改高亮，窗口锚点不动");
 
-    panel.move_active_clamped(-1);
-    assert_eq!(panel.active(), 3);
-    assert_eq!(panel.anchor(), 3, "移动高亮时锚点跟随");
-
-    panel.move_active_clamped(-99);
-    assert_eq!(panel.active(), 0);
+    // 滚轮只滚视口：高亮与锚点不动。
+    assert!(panel.scroll_viewport(1, 0));
+    assert_eq!(panel.viewport(), Some(1));
+    assert_eq!(panel.active(), 4);
     assert_eq!(panel.anchor(), 0);
-    panel.move_active_clamped(99);
-    assert_eq!(panel.active(), 5);
-    assert_eq!(panel.anchor(), 5);
+
+    // 视口两端钳制不循环；未移动返回 false。
+    assert!(panel.scroll_viewport(99, 1));
+    assert_eq!(panel.viewport(), Some(5));
+    assert!(!panel.scroll_viewport(99, 5));
+    assert!(panel.scroll_viewport(-99, 5));
+    assert_eq!(panel.viewport(), Some(0));
 
     panel.set_active(99);
     assert_eq!(panel.active(), 5, "悬停索引越界钳到末项");
     panel.move_active(1);
     assert_eq!(panel.active(), 0, "键盘移动保持循环");
+    assert_eq!(panel.viewport(), None, "键盘移动后窗口重新跟随高亮");
     assert_eq!(panel.anchor(), 0);
 }
 
@@ -331,29 +335,29 @@ fn filter_mentions_matches_subsequence_and_caps_items() {
 }
 
 #[test]
-fn mention_panel_clamped_move_stops_at_ends() {
-    let entries = vec![
-        MentionEntry {
-            path: "a.rs".into(),
+fn mention_panel_wheel_scrolls_viewport_and_clamps() {
+    let entries: Vec<MentionEntry> = (0..4)
+        .map(|index| MentionEntry {
+            path: format!("f{index}.rs"),
             is_directory: false,
-        },
-        MentionEntry {
-            path: "b.rs".into(),
-            is_directory: false,
-        },
-    ];
+        })
+        .collect();
     let trigger = MentionTrigger {
         from: 0,
         to: 1,
         query: String::new(),
     };
     let mut panel = MentionPanel::new(trigger, entries, 0);
-    panel.move_active_clamped(-1);
-    assert_eq!(panel.active(), 0);
-    panel.move_active_clamped(1);
-    assert_eq!(panel.active(), 1);
-    panel.move_active_clamped(1);
-    assert_eq!(panel.active(), 1);
+    assert!(panel.scroll_viewport(2, 0));
+    assert_eq!(panel.viewport(), Some(2));
+    assert_eq!(panel.active(), 0, "滚轮不动高亮");
+
+    assert!(panel.scroll_viewport(99, 2));
+    assert_eq!(panel.viewport(), Some(3), "越界钳到末项");
+    assert!(!panel.scroll_viewport(99, 3));
+    assert!(panel.scroll_viewport(-99, 3));
+    assert_eq!(panel.viewport(), Some(0));
+    assert!(!panel.scroll_viewport(-99, 0));
 }
 
 #[test]
@@ -370,12 +374,18 @@ fn mention_panel_hover_keeps_window_anchor() {
         query: String::new(),
     };
     let mut panel = MentionPanel::new(trigger, entries, 0);
-    panel.move_active_clamped(3);
+    panel.move_active(3);
     assert_eq!(panel.anchor(), 3);
     panel.set_active(1);
     assert_eq!(panel.active(), 1);
     assert_eq!(panel.anchor(), 3, "悬停不应移动窗口锚点");
-    panel.move_active_clamped(-1);
+
+    // 滚轮滚动后的悬停同样不移动显式视口。
+    assert!(panel.scroll_viewport(1, 0));
+    panel.set_active(0);
+    assert_eq!(panel.viewport(), Some(1), "悬停不应移动显式视口");
+    panel.move_active(1);
+    assert_eq!(panel.viewport(), None);
     assert_eq!(panel.anchor(), panel.active());
 }
 

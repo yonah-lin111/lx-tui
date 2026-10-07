@@ -1512,11 +1512,12 @@ fn mouse_interacts_with_block_command_panel() {
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = crate::layout::pane_inner_rect(geo.view.prompt);
-    let rect = crate::ui::prompt::panel_rect(&state.prompt, area).expect("block panel visible");
+    let panel = crate::ui::prompt::panel_layout(&state.prompt, area).expect("block panel visible");
+    let rect = panel.rect;
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    // 滚轮悬停在面板上：移动高亮，不滚动 prompt 视口。
+    // 滚轮悬停在面板上：只滚动视口（记录显式视口起点），不移动高亮、不滚动 prompt 视口。
     handle_terminal_event(
         mouse(MouseEventKind::ScrollDown, rect.x + 2, rect.y + 1),
         &mut state,
@@ -1525,7 +1526,15 @@ fn mouse_interacts_with_block_command_panel() {
         &config,
         &mut dirty,
     );
-    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(1));
+    assert_eq!(
+        state.prompt.panel().map(|panel| panel.active()),
+        Some(0),
+        "滚轮不动高亮"
+    );
+    assert_eq!(
+        state.prompt.panel().map(|panel| panel.viewport()),
+        Some(Some(1))
+    );
 
     // 悬停条目：只改高亮。
     handle_terminal_event(
@@ -1553,4 +1562,55 @@ fn mouse_interacts_with_block_command_panel() {
     );
     assert_eq!(state.prompt.text(), "## ");
     assert!(state.prompt.panel().is_none());
+}
+
+#[test]
+fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('@'),
+    );
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    let entries: Vec<crate::app::markdown::MentionEntry> = (0..8)
+        .map(|index| crate::app::markdown::MentionEntry {
+            path: format!("src/f{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    crate::app::update::apply_mention_entries(&mut state, generation, entries);
+
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::layout::pane_inner_rect(geo.view.prompt);
+    let before = crate::ui::prompt::mention_layout(&state.prompt, area).expect("mention panel");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            before.rect.x + 2,
+            before.rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let after = crate::ui::prompt::mention_layout(&state.prompt, area).expect("mention panel");
+    assert_eq!(after.start, before.start + 1, "滚轮下移视口一项");
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.active()),
+        Some(0),
+        "滚轮不动高亮"
+    );
+    assert!(dirty);
 }

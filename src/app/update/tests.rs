@@ -1695,15 +1695,23 @@ fn mouse_mention_hover_select_and_wheel_flow() {
     assert!(hover_mention(&mut state, 1));
     assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
     assert!(!hover_mention(&mut state, 1));
-    assert!(!scroll_mention(&mut state, 1));
+    // 滚轮只滚视口：高亮不动，视口从当前窗口起点偏移并钳制。
+    assert!(scroll_mention(&mut state, 1, 0));
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.viewport()),
+        Some(Some(1))
+    );
     assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
-    assert!(scroll_mention(&mut state, -1));
-    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
-    assert!(!scroll_mention(&mut state, -1));
+    assert!(!scroll_mention(&mut state, 1, 1), "到底后钳制不循环");
+    assert!(scroll_mention(&mut state, -1, 1));
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.viewport()),
+        Some(Some(0))
+    );
     apply_editor(&mut state, EditorCommand::Up);
-    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
-    apply_editor(&mut state, EditorCommand::Down);
     assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(0));
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(state.prompt.mention().map(|panel| panel.active()), Some(1));
     select_mention(&mut state, 1);
     assert_eq!(state.prompt.text(), "@b.rs ");
     assert!(state.prompt.mention().is_none());
@@ -1726,19 +1734,29 @@ fn mouse_block_panel_hover_select_and_wheel_flow() {
     );
     assert!(!hover_panel(&mut state, 2));
 
-    assert!(scroll_panel(&mut state, 1));
-    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(3));
-    assert_eq!(state.prompt.panel().map(|panel| panel.anchor()), Some(3));
-    assert!(scroll_panel(&mut state, 99));
-    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(5));
-    assert!(!scroll_panel(&mut state, 1), "到底后钳制不循环");
-    assert!(scroll_panel(&mut state, -99));
-    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(0));
+    // 滚轮只滚视口：高亮与锚点不动。
+    assert!(scroll_panel(&mut state, 1, 0));
+    assert_eq!(
+        state.prompt.panel().map(|panel| panel.viewport()),
+        Some(Some(1))
+    );
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(2));
+    assert!(scroll_panel(&mut state, 99, 1));
+    assert_eq!(
+        state.prompt.panel().map(|panel| panel.viewport()),
+        Some(Some(5))
+    );
+    assert!(!scroll_panel(&mut state, 1, 5), "到底后钳制不循环");
+    assert!(scroll_panel(&mut state, -99, 5));
+    assert_eq!(
+        state.prompt.panel().map(|panel| panel.viewport()),
+        Some(Some(0))
+    );
 
     apply_editor(&mut state, EditorCommand::Up);
-    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(5));
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(1));
     apply_editor(&mut state, EditorCommand::Down);
-    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(0));
+    assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(2));
 
     select_panel(&mut state, 1);
     assert_eq!(state.prompt.text(), "## ");

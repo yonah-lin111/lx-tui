@@ -150,9 +150,9 @@ pub fn select_mention(state: &mut AppState, index: usize) {
     state.prompt.mention_confirm_at(index);
 }
 
-/// 滚轮在提及面板上移动高亮：越界钳制不循环；返回是否变化。
-pub fn scroll_mention(state: &mut AppState, delta: isize) -> bool {
-    state.prompt.mention_scroll(delta)
+/// 滚轮在提及面板上滚动可见窗口：`base` 为当前窗口起点；高亮不动。
+pub fn scroll_mention(state: &mut AppState, delta: isize, base: usize) -> bool {
+    state.prompt.mention_scroll(delta, base)
 }
 
 /// 鼠标悬停块命令条目：只提高亮、不动窗口锚点；返回是否变化。
@@ -165,9 +165,9 @@ pub fn select_panel(state: &mut AppState, index: usize) {
     state.prompt.panel_confirm_at(index);
 }
 
-/// 滚轮在块命令面板上移动高亮：越界钳制不循环；返回是否变化。
-pub fn scroll_panel(state: &mut AppState, delta: isize) -> bool {
-    state.prompt.panel_scroll(delta)
+/// 滚轮在块命令面板上滚动可见窗口：`base` 为当前窗口起点；高亮不动。
+pub fn scroll_panel(state: &mut AppState, delta: isize, base: usize) -> bool {
+    state.prompt.panel_scroll(delta, base)
 }
 
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。

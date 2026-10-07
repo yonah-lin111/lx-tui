@@ -241,14 +241,13 @@ impl Prompt {
         true
     }
 
-    /// 滚轮在块命令面板上移动高亮：越界钳制不循环；未打开或未变化返回 false。
-    pub fn panel_scroll(&mut self, delta: isize) -> bool {
+    /// 滚轮在块命令面板上滚动可见窗口：视口从 `base` 起偏移、越界钳制不循环；
+    /// 高亮不动；未打开或视口未移动返回 false。
+    pub fn panel_scroll(&mut self, delta: isize, base: usize) -> bool {
         let Some(panel) = self.panel.as_mut() else {
             return false;
         };
-        let before = panel.active();
-        panel.move_active_clamped(delta);
-        panel.active() != before
+        panel.scroll_viewport(delta, base)
     }
 
     /// 块命令面板点选：设置高亮并确认插入；返回是否消费。
@@ -315,9 +314,10 @@ impl Prompt {
         self.mention.set_active(index)
     }
 
-    /// 滚轮在提及面板上移动高亮：越界钳制不循环；返回是否变化。
-    pub fn mention_scroll(&mut self, delta: isize) -> bool {
-        self.mention.scroll_active(delta)
+    /// 滚轮在提及面板上滚动可见窗口：视口从 `base` 起偏移、越界钳制不循环；
+    /// 高亮不动；返回视口是否移动。
+    pub fn mention_scroll(&mut self, delta: isize, base: usize) -> bool {
+        self.mention.scroll_viewport(delta, base)
     }
 
     /// 提及面板点选：设置高亮并确认插入；返回是否消费。

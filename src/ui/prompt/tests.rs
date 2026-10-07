@@ -262,6 +262,9 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     let name_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
     let dir_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
     assert!(name_row.contains("app.rs"));
+    assert!(name_row.contains(text::MENTION_FILE_ICON), "{name_row}");
+    assert_eq!(buf[(3, 2)].symbol(), text::MENTION_FILE_ICON);
+    assert!(buf[(3, 2)].modifier.contains(Modifier::DIM));
     assert!(dir_row.contains("src"));
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
     assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
@@ -273,6 +276,39 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     assert_eq!(mention_item_at(&editor, area, 2, 5), Some(1));
     assert_eq!(mention_item_at(&editor, area, 2, 6), None);
     assert_eq!(mention_item_at(&editor, area, 2, 1), None);
+}
+
+#[test]
+fn mention_panel_marks_directory_and_file_icons() {
+    let area = Rect::new(0, 0, 30, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 20);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    editor.apply_mention_entries(
+        generation,
+        vec![
+            MentionEntry {
+                path: "src".into(),
+                is_directory: true,
+            },
+            MentionEntry {
+                path: "src/app.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+
+    let dir_row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    let file_row: String = (0..area.width).map(|x| buf[(x, 3)].symbol()).collect();
+    assert!(dir_row.contains(text::MENTION_DIR_ICON), "{dir_row}");
+    assert!(dir_row.contains("src/"), "{dir_row}");
+    assert!(file_row.contains(text::MENTION_FILE_ICON), "{file_row}");
+    assert!(file_row.contains("app.rs"), "{file_row}");
+    assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
 }
 
 #[test]

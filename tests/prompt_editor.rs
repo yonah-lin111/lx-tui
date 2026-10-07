@@ -231,10 +231,48 @@ fn mention_panel_renders_and_confirms_insertion() {
         .map(|x| buffer[(x, inner.y + 3)].symbol())
         .collect();
     assert!(name_row.contains("app.rs"));
+    assert!(name_row.contains(ui::text::MENTION_FILE_ICON), "{name_row}");
     assert!(detail_row.contains("src"));
 
     update::apply_editor(&mut state, EditorCommand::Newline);
     assert_eq!(state.prompt.text(), "@src/app.rs ");
+}
+
+#[test]
+fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    let entries: Vec<MentionEntry> = (0..8)
+        .map(|index| MentionEntry {
+            path: format!("src/f{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    update::apply_mention_entries(&mut state, generation, entries);
+
+    let inner = layout::pane_inner_rect(view.prompt);
+    let before = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    assert!(update::scroll_mention(&mut state, 1, before.start));
+    let after = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    assert_eq!(after.start, before.start + 1, "滚轮下移视口一项");
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.active()),
+        Some(0),
+        "滚轮不动高亮"
+    );
+
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
+    let first_row: String = (inner.x..inner.x + inner.width)
+        .map(|x| buffer[(x, inner.y + 2)].symbol())
+        .collect();
+    assert!(first_row.contains("f1.rs"), "视口应下移一项：{first_row}");
+    assert!(!first_row.contains("f0.rs"), "{first_row}");
 }
 
 #[test]

@@ -55,6 +55,10 @@ pub const WORKSPACE_GROUP_COLLAPSED: &str = "▸";
 pub const WORKSPACE_TREE_MIDDLE: &str = "├─";
 pub const WORKSPACE_TREE_LAST: &str = "└─";
 
+/// @ 提及面板条目标记：目录 / 文件（Nerd Font 图标，随条目以 muted 着色）。
+pub const MENTION_DIR_ICON: &str = "\u{f07b}";
+pub const MENTION_FILE_ICON: &str = "\u{f15c}";
+
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";

@@ -15,18 +15,34 @@ fn inline<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
 fn stacked<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
     pairs
         .iter()
-        .map(|&(label, detail)| CommandItem::Stacked { label, detail })
+        .map(|&(label, detail)| CommandItem::Stacked {
+            icon: None,
+            label,
+            detail,
+        })
         .collect()
 }
 
-/// 视图；窗口锚点默认跟随高亮。
+/// 带图标双行条目。
+fn stacked_icons<'a>(triples: &[(&'a str, &'a str, &'a str)]) -> Vec<CommandItem<'a>> {
+    triples
+        .iter()
+        .map(|&(icon, label, detail)| CommandItem::Stacked {
+            icon: Some(icon),
+            label,
+            detail,
+        })
+        .collect()
+}
+
+/// 视图；窗口锚点默认跟随高亮，无显式视口。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     active: usize,
     anchor_row: u16,
     max_height: Option<u16>,
 ) -> CommandPanelView<'a> {
-    view_anchored(items, active, None, anchor_row, max_height)
+    view_window(items, active, None, None, anchor_row, max_height)
 }
 
 /// 指定窗口锚点的视图。
@@ -37,10 +53,23 @@ fn view_anchored<'a>(
     anchor_row: u16,
     max_height: Option<u16>,
 ) -> CommandPanelView<'a> {
+    view_window(items, active, window_anchor, None, anchor_row, max_height)
+}
+
+/// 指定窗口锚点与显式视口的视图。
+fn view_window<'a>(
+    items: &'a [CommandItem<'a>],
+    active: usize,
+    window_anchor: Option<usize>,
+    window_start: Option<usize>,
+    anchor_row: u16,
+    max_height: Option<u16>,
+) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active,
         window_anchor,
+        window_start,
         anchor_row,
         max_height,
     }
@@ -206,7 +235,11 @@ fn caps_panel_height_and_follows_active() {
         .collect();
     let items: Vec<CommandItem<'_>> = labels
         .iter()
-        .map(|(label, detail)| CommandItem::Stacked { label, detail })
+        .map(|(label, detail)| CommandItem::Stacked {
+            icon: None,
+            label,
+            detail,
+        })
         .collect();
     let rect = render(area, &mut buf, &view(&items, 5, 0, Some(8))).expect("panel renders");
 
@@ -282,6 +315,54 @@ fn window_stays_while_hovering_visible_item() {
     let fallback =
         layout(area, &view_anchored(&items, 4, Some(9), 0, Some(8))).expect("panel layout");
     assert_eq!(fallback.start, 2);
+}
+
+#[test]
+fn explicit_window_start_ignores_active_highlight() {
+    let area = Rect::new(0, 0, 24, 12);
+    let labels: Vec<(String, String)> = (0..10)
+        .map(|index| (format!("file{index}.rs"), "src".to_string()))
+        .collect();
+    let items: Vec<CommandItem<'_>> = labels
+        .iter()
+        .map(|(label, detail)| CommandItem::Stacked {
+            icon: None,
+            label,
+            detail,
+        })
+        .collect();
+
+    // 显式视口起点优先于锚点：高亮第 0 项时窗口仍从第 2 项开始，高亮可滚出窗口。
+    let mut buf = Buffer::empty(area);
+    let view = view_window(&items, 0, Some(0), Some(2), 0, Some(8));
+    let scrolled = layout(area, &view).expect("panel layout");
+    assert_eq!(scrolled.start, 2);
+    assert_eq!(scrolled.visible, 3);
+    render(area, &mut buf, &view).expect("panel renders");
+    assert!(row_text(&buf, area, 2).contains("file2.rs"));
+    assert!(!row_text(&buf, area, 2).contains("file0.rs"));
+    assert!(!buf[(3, 2)].modifier.contains(Modifier::REVERSED));
+
+    // 视口起点越界时钳到贴底窗口，保证窗口填满预算。
+    let bottom =
+        layout(area, &view_window(&items, 0, Some(0), Some(99), 0, Some(8))).expect("panel layout");
+    assert_eq!(bottom.start, 7);
+    assert_eq!(bottom.visible, 3);
+}
+
+#[test]
+fn renders_stacked_icon_muted_before_label() {
+    let area = Rect::new(0, 0, 24, 8);
+    let mut buf = Buffer::empty(area);
+    let items = stacked_icons(&[("\u{f15c}", "app.rs", "src")]);
+    let rect = render(area, &mut buf, &view(&items, 0, 0, None)).expect("panel renders");
+
+    assert_eq!(rect.width, 12, "宽度计入图标与其后空格");
+    assert_eq!(buf[(3, 2)].symbol(), "\u{f15c}");
+    assert!(buf[(3, 2)].modifier.contains(Modifier::DIM));
+    assert_eq!(buf[(4, 2)].symbol(), " ");
+    assert_eq!(buf[(5, 2)].symbol(), "a");
+    assert!(row_text(&buf, area, 2).contains("app.rs"));
 }
 
 #[test]

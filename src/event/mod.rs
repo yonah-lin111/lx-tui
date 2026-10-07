@@ -844,21 +844,21 @@ fn handle_terminal_event(
                 if state.resizing_prompt || state.resizing_pane.is_some() {
                     return;
                 }
-                // @ 提及面板打开且指针在其上：滚轮滚面板，不穿透到 prompt 与窗格。
+                // @ 提及面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
                 if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                    && mention_panel_rect(state, view)
-                        .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                    && let Some(panel) = mention_panel_layout(state, view)
+                    && panel.rect.contains((mouse.column, mouse.row).into())
                 {
-                    update::scroll_mention(state, direction);
+                    update::scroll_mention(state, direction, panel.start);
                     *dirty = true;
                     return;
                 }
-                // 块命令面板同上：滚轮移动高亮到底/顶后钳制。
+                // 块命令面板同上：滚轮滚动视口，到底/顶后钳制不循环。
                 if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                    && panel_rect(state, view)
-                        .is_some_and(|rect| rect.contains((mouse.column, mouse.row).into()))
+                    && let Some(panel) = block_panel_layout(state, view)
+                    && panel.rect.contains((mouse.column, mouse.row).into())
                 {
-                    update::scroll_panel(state, direction);
+                    update::scroll_panel(state, direction, panel.start);
                     *dirty = true;
                     return;
                 }
@@ -1394,10 +1394,13 @@ fn mention_item_at(
     ui::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
-/// 提及面板矩形；用于滚轮命中。
-fn mention_panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
+/// 提及面板布局；用于滚轮命中与视口滚动。
+fn mention_panel_layout(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+) -> Option<ui::widgets::command_panel::PanelLayout> {
     let area = layout::pane_inner_rect(view.prompt);
-    ui::prompt::mention_panel_rect(&state.prompt, area)
+    ui::prompt::mention_layout(&state.prompt, area)
 }
 
 /// 块命令面板命中：返回条目索引；面板未打开或未命中返回 None。
@@ -1411,10 +1414,13 @@ fn panel_item_at(
     ui::prompt::panel_item_at(&state.prompt, area, column, row)
 }
 
-/// 块命令面板矩形；用于滚轮命中。
-fn panel_rect(state: &AppState, view: &ui::layout::ViewLayout) -> Option<Rect> {
+/// 块命令面板布局；用于滚轮命中与视口滚动。
+fn block_panel_layout(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+) -> Option<ui::widgets::command_panel::PanelLayout> {
     let area = layout::pane_inner_rect(view.prompt);
-    ui::prompt::panel_rect(&state.prompt, area)
+    ui::prompt::panel_layout(&state.prompt, area)
 }
 
 /// 命中窗格内容区：返回窗格标识与其内容区矩形。

@@ -40,17 +40,19 @@ pub struct BlockInsertion {
     pub cursor: usize,
 }
 
-/// 块命令面板状态：触发区间、候选命令、高亮索引与窗口锚点。
+/// 块命令面板状态：触发区间、候选命令、高亮索引、窗口锚点与显式视口。
 ///
 /// `anchor` 是窗口底部锚定的条目：窗口以它为底向前回退填满预算。鼠标悬停只改
-/// `active` 不动 `anchor`（悬停项必然可见，窗口因此保持稳定）；键盘与滚轮导航
-/// 同步锚点到高亮项，让窗口跟随高亮滚动。
+/// `active` 不动 `anchor`（悬停项必然可见，窗口因此保持稳定）；键盘导航同步锚点到
+/// 高亮项，让窗口跟随高亮滚动。`viewport` 是滚轮滚动后的显式窗口起点，滚轮只动它、
+/// 不动高亮；键盘导航将其清空，窗口重新跟随高亮。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlockPanel {
     trigger: BlockTrigger,
     items: Vec<BlockCommandId>,
     active: usize,
     anchor: usize,
+    viewport: Option<usize>,
 }
 
 impl BlockPanel {
@@ -61,6 +63,7 @@ impl BlockPanel {
             items,
             active,
             anchor: active,
+            viewport: None,
         }
     }
 
@@ -84,23 +87,31 @@ impl BlockPanel {
         self.anchor
     }
 
+    /// 滚轮滚动后的显式视口起点；跟随高亮时为 None。
+    pub fn viewport(&self) -> Option<usize> {
+        self.viewport
+    }
+
     /// 直接设置高亮索引（鼠标悬停）；越界钳到末项，窗口锚点不动。
     pub fn set_active(&mut self, index: usize) {
         self.active = index.min(self.items.len().saturating_sub(1));
     }
 
-    /// 按偏移循环移动高亮项；窗口锚点跟随高亮。
+    /// 按偏移循环移动高亮项；窗口锚点跟随高亮，显式视口清除（窗口重新跟随高亮）。
     pub fn move_active(&mut self, delta: isize) {
         let len = self.items.len() as isize;
         self.active = (self.active as isize + delta).rem_euclid(len) as usize;
         self.anchor = self.active;
+        self.viewport = None;
     }
 
-    /// 按偏移移动高亮项；越界钳制不循环（滚轮语义）；窗口锚点跟随高亮。
-    pub fn move_active_clamped(&mut self, delta: isize) {
+    /// 滚轮滚动可见窗口：显式视口从 `base` 起偏移并钳制（不循环），高亮与锚点不动。
+    pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
         let max = self.items.len().saturating_sub(1) as isize;
-        self.active = (self.active as isize + delta).clamp(0, max) as usize;
-        self.anchor = self.active;
+        let next = (base.min(max as usize) as isize + delta).clamp(0, max) as usize;
+        let changed = next != base;
+        self.viewport = Some(next);
+        changed
     }
 }
 
@@ -196,17 +207,19 @@ pub struct MentionEntry {
 /// 提及面板的显示上限。
 pub const MENTION_LIMIT: usize = 100;
 
-/// 文件提及面板状态：触发区间、过滤后的候选、高亮索引与窗口锚点。
+/// 文件提及面板状态：触发区间、过滤后的候选、高亮索引、窗口锚点与显式视口。
 ///
 /// `anchor` 是窗口底部锚定的条目：窗口以它为底向前回退填满预算。鼠标悬停只改
-/// `active` 不动 `anchor`（悬停项必然可见，窗口因此保持稳定）；键盘与滚轮导航
-/// 同步锚点到高亮项，让窗口跟随高亮滚动。
+/// `active` 不动 `anchor`（悬停项必然可见，窗口因此保持稳定）；键盘导航同步锚点到
+/// 高亮项，让窗口跟随高亮滚动。`viewport` 是滚轮滚动后的显式窗口起点，滚轮只动它、
+/// 不动高亮；键盘导航将其清空，窗口重新跟随高亮。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MentionPanel {
     trigger: MentionTrigger,
     items: Vec<MentionEntry>,
     active: usize,
     anchor: usize,
+    viewport: Option<usize>,
 }
 
 impl MentionPanel {
@@ -217,6 +230,7 @@ impl MentionPanel {
             items,
             active,
             anchor: active,
+            viewport: None,
         }
     }
 
@@ -240,23 +254,31 @@ impl MentionPanel {
         self.anchor
     }
 
+    /// 滚轮滚动后的显式视口起点；跟随高亮时为 None。
+    pub fn viewport(&self) -> Option<usize> {
+        self.viewport
+    }
+
     /// 直接设置高亮索引（鼠标悬停）；越界钳到末项，窗口锚点不动。
     pub fn set_active(&mut self, index: usize) {
         self.active = index.min(self.items.len().saturating_sub(1));
     }
 
-    /// 按偏移循环移动高亮项；窗口锚点跟随高亮。
+    /// 按偏移循环移动高亮项；窗口锚点跟随高亮，显式视口清除（窗口重新跟随高亮）。
     pub fn move_active(&mut self, delta: isize) {
         let len = self.items.len() as isize;
         self.active = (self.active as isize + delta).rem_euclid(len) as usize;
         self.anchor = self.active;
+        self.viewport = None;
     }
 
-    /// 按偏移移动高亮项；越界钳制不循环（滚轮语义）；窗口锚点跟随高亮。
-    pub fn move_active_clamped(&mut self, delta: isize) {
+    /// 滚轮滚动可见窗口：显式视口从 `base` 起偏移并钳制（不循环），高亮与锚点不动。
+    pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
         let max = self.items.len().saturating_sub(1) as isize;
-        self.active = (self.active as isize + delta).clamp(0, max) as usize;
-        self.anchor = self.active;
+        let next = (base.min(max as usize) as isize + delta).clamp(0, max) as usize;
+        let changed = next != base;
+        self.viewport = Some(next);
+        changed
     }
 }
 

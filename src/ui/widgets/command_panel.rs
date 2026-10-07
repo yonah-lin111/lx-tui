@@ -17,22 +17,32 @@ const MIN_HEIGHT: u16 = 3;
 /// 名称列与预览列之间的间距（列）。
 const COLUMN_GAP: usize = 1;
 
-/// 面板条目：单行（名称 + 右侧预览）或双行（名称在上、明细在下）。
+/// 面板条目：单行（名称 + 右侧预览）或双行（图标 + 名称在上、明细在下）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandItem<'a> {
-    Inline { label: &'a str, preview: &'a str },
-    Stacked { label: &'a str, detail: &'a str },
+    Inline {
+        label: &'a str,
+        preview: &'a str,
+    },
+    Stacked {
+        icon: Option<&'a str>,
+        label: &'a str,
+        detail: &'a str,
+    },
 }
 
-/// 面板视图：条目、高亮索引、窗口锚点、锚点行与最大高度。
+/// 面板视图：条目、高亮索引、窗口锚点/显式视口、锚点行与最大高度。
 ///
 /// `anchor_row` 为内容区内的视觉行；面板绘制在其上方或下方，不覆盖该行。
 /// `window_anchor` 为窗口底部锚定的条目索引：窗口以它为底向前回退填满预算；
 /// `None` 表示锚定高亮。鼠标悬停只改 `active`、不改锚点，窗口因此不滚动。
+/// `window_start` 为滚轮滚动后的显式视口起点，优先于 `window_anchor`：窗口从该
+/// 条目起向前填充，高亮允许不在窗口内。
 pub struct CommandPanelView<'a> {
     pub items: &'a [CommandItem<'a>],
     pub active: usize,
     pub window_anchor: Option<usize>,
+    pub window_start: Option<usize>,
     pub anchor_row: u16,
     /// 面板最大高度（含边框）；None 表示仅受可用空间限制。
     pub max_height: Option<u16>,
@@ -77,13 +87,20 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
     };
     let budget = usize::from(height.saturating_sub(2));
     let active = view.active.min(view.items.len() - 1);
-    let anchor = view
-        .window_anchor
-        .map_or(active, |anchor| anchor.min(view.items.len() - 1));
-    let mut start = window_start(view.items, anchor, budget);
+    let mut start = match view.window_start {
+        // 显式视口：滚轮滚动后的窗口起点，高亮允许不在窗口内。
+        Some(start) => start.min(max_window_start(view.items, budget)),
+        None => {
+            let anchor = view
+                .window_anchor
+                .map_or(active, |anchor| anchor.min(view.items.len() - 1));
+            window_start(view.items, anchor, budget)
+        }
+    };
     let mut visible = visible_count(view.items, start, budget);
-    // 锚点窗口不含高亮时回退到以高亮为底，保证高亮始终可见。
-    if active < start || active >= start.saturating_add(visible) {
+    // 跟随高亮时锚点窗口不含高亮（如列表变化）时回退到以高亮为底，保证高亮可见；
+    // 显式视口不回退，否则滚轮滚动会被高亮拽回。
+    if view.window_start.is_none() && (active < start || active >= start.saturating_add(visible)) {
         start = window_start(view.items, active, budget);
         visible = visible_count(view.items, start, budget);
     }
@@ -179,9 +196,7 @@ fn item_height(item: &CommandItem<'_>) -> u16 {
 fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
     let label = items
         .iter()
-        .map(|item| match item {
-            CommandItem::Inline { label, .. } | CommandItem::Stacked { label, .. } => label.width(),
-        })
+        .map(|item| item_label_width(item))
         .max()
         .unwrap_or(0);
     let preview = items
@@ -213,6 +228,21 @@ fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
     }
     .min(usize::from(available));
     ((content + 4) as u16).min(available).max(MIN_WIDTH)
+}
+
+/// 显式视口起点的最大值：再靠后窗口就填不满预算（底部留白），钳到贴底窗口。
+fn max_window_start(items: &[CommandItem<'_>], budget: usize) -> usize {
+    window_start(items, items.len().saturating_sub(1), budget)
+}
+
+/// 条目标签列宽：双行条目的图标与其后一个空格计入名称列。
+fn item_label_width(item: &CommandItem<'_>) -> usize {
+    match item {
+        CommandItem::Inline { label, .. } => label.width(),
+        CommandItem::Stacked { icon, label, .. } => {
+            icon.map_or(0, |icon| icon.width() + 1) + label.width()
+        }
+    }
 }
 
 /// 窗口起点：从高亮项向前回退，直到行数预算装不下。
@@ -253,9 +283,7 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
     let label_width = view
         .items
         .iter()
-        .map(|item| match item {
-            CommandItem::Inline { label, .. } | CommandItem::Stacked { label, .. } => label.width(),
-        })
+        .map(|item| item_label_width(item))
         .max()
         .unwrap_or(0);
     let mut y = layout.content.y;
@@ -310,11 +338,18 @@ fn render_item(
                 .style(row_style)
                 .render(Rect { height: 1, ..inner }, buf);
         }
-        CommandItem::Stacked { label, detail } => {
-            let mut lines = vec![Line::from(vec![
-                Span::raw(" "),
-                Span::styled(*label, style::text()),
-            ])];
+        CommandItem::Stacked {
+            icon,
+            label,
+            detail,
+        } => {
+            let mut spans = vec![Span::raw(" ")];
+            if let Some(icon) = icon {
+                spans.push(Span::styled(*icon, style::muted()));
+                spans.push(Span::raw(" "));
+            }
+            spans.push(Span::styled(*label, style::text()));
+            let mut lines = vec![Line::from(spans)];
             if !detail.is_empty() {
                 lines.push(Line::from(vec![
                     Span::raw(" "),
