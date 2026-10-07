@@ -431,11 +431,14 @@ fn workspace_repo_root(state: &AppState, index: usize) -> Option<&Path> {
         .map(|git| git.repo_root.as_path())
 }
 
-/// 列表项标签：分组子项自动命名时显示分支短名（去 `worktree/` 前缀），其余显示工作区名。
+/// 列表项标签：分组 linked 子项自动命名时显示分支短名（去 `worktree/` 前缀）；
+/// 重复主 checkout 子项与其余行显示工作区名。
 fn workspace_item_label(workspace: &Workspace, grouped_child: bool) -> String {
     if grouped_child
         && !workspace.name_is_manual
-        && let Some(branch) = workspace.git.as_ref().and_then(|git| git.short_branch())
+        && let Some(git) = workspace.git.as_ref()
+        && git.is_linked
+        && let Some(branch) = git.short_branch()
     {
         return branch.to_string();
     }

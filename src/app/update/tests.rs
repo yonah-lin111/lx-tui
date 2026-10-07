@@ -1080,6 +1080,47 @@ fn drag_workspace_child_moves_whole_group() {
 }
 
 #[test]
+fn drag_workspace_keeps_duplicate_main_grouped() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "repo 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.wt/feat",
+        git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
+    );
+
+    // 拖父项压到重复主 checkout 行：同属一块，无操作。
+    begin_workspace_drag(&mut state, 1);
+    assert!(!drag_workspace_to(&mut state, 2));
+    assert_eq!(state.workspace_drag, Some(1));
+
+    // 拖整组到顶部：组内顺序与父项身份不变。
+    assert!(drag_workspace_to(&mut state, 0));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["repo", "repo 2", "feat", demo.as_str()]);
+    let rows = state.workspace_rows();
+    assert_eq!(rows[0].index, 0);
+    assert!(rows[0].parent, "父项仍是索引最小的非 linked 项");
+}
+
+#[test]
 fn drag_workspace_snaps_to_other_group_boundary() {
     let mut state = AppState::demo();
     let demo = state.workspaces[0].name.clone();

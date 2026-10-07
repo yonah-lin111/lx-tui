@@ -395,3 +395,33 @@ fn workspace_block_excludes_linked_member_before_parent() {
     assert_eq!(state.workspace_block(0), vec![0]);
     assert_eq!(state.workspace_block(1), vec![1]);
 }
+
+#[test]
+fn workspace_rows_render_duplicate_main_checkout_as_child() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "repo 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 3);
+    assert!(rows[0].parent && !rows[0].child);
+    assert!(
+        rows[1].child && !rows[1].parent,
+        "重复主 checkout 渲染为子项"
+    );
+    assert_eq!(rows[1].child_index, None, "工作区名唯一，不加序号");
+    assert!(rows[2].child);
+    assert_eq!(state.workspace_block(0), vec![0, 1, 2]);
+    assert_eq!(state.workspace_block(1), vec![0, 1, 2]);
+}

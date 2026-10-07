@@ -1054,6 +1054,26 @@ fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: Workspac
 }
 
 #[test]
+fn sidebar_renders_duplicate_main_checkout_as_child() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "main 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("▾ main")));
+    assert!(
+        lines.iter().any(|line| line.contains("  └─ main 2")),
+        "重复主 checkout 缩进为子项并显示工作区名: {lines:?}"
+    );
+}
+
+#[test]
 fn sidebar_renders_duplicate_child_index_before_initial_marker() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "main".to_string();

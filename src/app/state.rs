@@ -468,11 +468,11 @@ impl AppState {
             .values()
             .any(|pane| pane.view == PaneView::Lx)
     }
-
     /// 侧栏可见行：同仓库 ≥2 个已打开工作区且含非 linked 主项时成组，
-    /// 主项之后（索引更大）的 linked 项为子项；折叠的组只保留父项与当前激活子项。
+    /// 主项之后（索引更大）的同仓库项为子项（linked 显示分支短名，重复主 checkout 显示工作区名）；
+    /// 折叠的组只保留父项与当前激活子项。
     ///
-    /// 子项标签与组内更早子项重复时给出显示去重序号（含被折叠隐藏的子项，序号稳定）。
+    /// linked 子项标签与组内更早子项重复时给出显示去重序号（含被折叠隐藏的子项，序号稳定）。
     /// 列表保持工作区原始顺序，不做父项前置重排；渲染、命中与滚动共用此结果。
     pub fn workspace_rows(&self) -> Vec<WorkspaceRow> {
         let parents = self.group_parents();
@@ -499,19 +499,20 @@ impl AppState {
                         child_index: None,
                     });
                 }
-                Some((key, parent)) if index > parent && git.is_some_and(|git| git.is_linked) => {
-                    let child_index = if workspace.name_is_manual {
-                        None
-                    } else {
-                        match git.and_then(WorkspaceGit::short_branch) {
-                            Some(label) => {
-                                let count = child_counts.entry((key, label)).or_insert(0);
-                                *count += 1;
-                                (*count > 1).then_some(*count)
+                Some((key, parent)) if index > parent => {
+                    let child_index =
+                        if workspace.name_is_manual || !git.is_some_and(|git| git.is_linked) {
+                            None
+                        } else {
+                            match git.and_then(WorkspaceGit::short_branch) {
+                                Some(label) => {
+                                    let count = child_counts.entry((key, label)).or_insert(0);
+                                    *count += 1;
+                                    (*count > 1).then_some(*count)
+                                }
+                                None => None,
                             }
-                            None => None,
-                        }
-                    };
+                        };
                     if !collapsed(key) || self.active_workspace == index {
                         rows.push(WorkspaceRow {
                             index,
@@ -533,7 +534,6 @@ impl AppState {
         }
         rows
     }
-
     /// 已成立分组的父项索引：仓库根 → 首个非 linked 主项；成员不足 2 或无主项时不成组。
     fn group_parents(&self) -> BTreeMap<&Path, usize> {
         let mut members: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
@@ -560,9 +560,9 @@ impl AppState {
             .collect()
     }
 
-    /// 拖拽块：组（父项 + 主项之后的 linked 子项）的全部成员索引；非组内项返回自身。
+    /// 拖拽块：组（父项 + 索引更大的同仓库成员）的全部成员索引；非组内项返回自身。
     ///
-    /// 折叠隐藏的子项仍在块内，随父项一起移动。
+    /// 折叠隐藏的子项与重复主 checkout 项都在块内，随父项一起移动。
     pub fn workspace_block(&self, index: usize) -> Vec<usize> {
         let Some(git) = self
             .workspaces
@@ -579,11 +579,11 @@ impl AppState {
             .iter()
             .enumerate()
             .filter(|(other, workspace)| {
-                let Some(other_git) = workspace.git.as_ref() else {
-                    return false;
-                };
-                other_git.repo_root == git.repo_root
-                    && (*other == parent || (*other > parent && other_git.is_linked))
+                *other >= parent
+                    && workspace
+                        .git
+                        .as_ref()
+                        .is_some_and(|other_git| other_git.repo_root == git.repo_root)
             })
             .map(|(other, _)| other)
             .collect();
