@@ -1,6 +1,7 @@
 //! PTY 会话：spawn 子进程、读写与尺寸同步；每个窗格一个会话。
 
 use std::io::{self, Read, Write};
+use std::path::PathBuf;
 
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
@@ -24,11 +25,13 @@ pub struct PtySession {
 }
 
 impl PtySession {
-    /// 启动 `$SHELL`；输出由专属读线程经 `on_event` 回传。
+    /// 启动 `$SHELL`；`cwd` 为工作目录（None 回退进程当前目录）；
+    /// 输出由专属读线程经 `on_event` 回传。
     pub fn spawn(
         id: PaneId,
         cols: u16,
         rows: u16,
+        cwd: Option<PathBuf>,
         on_event: impl Fn(PtyEvent) + Send + 'static,
     ) -> io::Result<Self> {
         let pty_system = native_pty_system();
@@ -39,7 +42,7 @@ impl PtySession {
         let shell = crate::platform::default_shell();
         let mut command = CommandBuilder::new(shell);
         command.env("TERM", "xterm-256color");
-        if let Ok(cwd) = std::env::current_dir() {
+        if let Some(cwd) = cwd.or_else(|| std::env::current_dir().ok()) {
             command.cwd(cwd);
         }
         let child = pair
@@ -117,3 +120,6 @@ fn to_pty_size(cols: u16, rows: u16) -> PtySize {
         pixel_height: 0,
     }
 }
+
+#[cfg(test)]
+mod tests;

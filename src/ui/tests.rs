@@ -2,10 +2,13 @@
 
 use super::*;
 use crate::app::actions::Action;
+use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
+use crate::app::state::WorkspaceGit;
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
+use std::path::PathBuf;
 use std::time::Instant;
 
 fn render_lines(state: &AppState) -> Vec<String> {
@@ -1027,4 +1030,241 @@ fn pane_title_and_toggle_label_follow_view() {
     let title_area = Rect::new(rect.x + 1, rect.y, terminal_title.chars().count() as u16, 1);
     assert_eq!(rendered_area(&lines, title_area), terminal_title);
     assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_LX);
+}
+
+/// 工作区 git 元数据（侧栏分组渲染测试用）。
+fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(checkout),
+        is_linked: linked,
+        branch: branch.map(str::to_string),
+    }
+}
+
+/// 追加带 git 元数据的工作区。
+fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) {
+    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
+    workspace.git = Some(git);
+    state.workspaces.push(workspace);
+}
+
+#[test]
+fn sidebar_indents_grouped_linked_worktree_with_branch_label() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info(
+            "/repo",
+            "/repo/.worktrees/notes",
+            true,
+            Some("worktree/notes"),
+        ),
+    );
+    state.workspaces[2].name_is_manual = true;
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("main")));
+    assert!(lines.iter().any(|line| line.contains("feature/x")));
+    assert!(
+        lines.iter().any(|line| line.contains("  feature/x")),
+        "linked child is indented: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("  notes")),
+        "manual name wins over branch: {lines:?}"
+    );
+}
+
+#[test]
+fn sidebar_keeps_linked_only_worktrees_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "one".to_string();
+    state.workspaces[0].git = Some(git_info(
+        "/repo",
+        "/repo/.worktrees/one",
+        true,
+        Some("feature/one"),
+    ));
+    push_git_workspace(
+        &mut state,
+        "two",
+        "/repo/.worktrees/two",
+        git_info("/repo", "/repo/.worktrees/two", true, Some("feature/two")),
+    );
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("one")));
+    assert!(lines.iter().any(|line| line.contains("two")));
+    assert!(!lines.iter().any(|line| line.contains("feature/one")));
+    assert!(!lines.iter().any(|line| line.contains("feature/two")));
+}
+
+#[test]
+fn sidebar_keeps_single_git_workspace_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "solo".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("solo")));
+    assert!(!lines.iter().any(|line| line.contains("main")));
+}
+
+/// worktree 对话框条目。
+fn dialog_entry(
+    path: &str,
+    branch: Option<&str>,
+    linked: bool,
+    open: Option<usize>,
+) -> WorktreeOpenEntry {
+    WorktreeOpenEntry {
+        path: PathBuf::from(path),
+        branch: branch.map(str::to_string),
+        is_bare: false,
+        is_linked: linked,
+        already_open: open,
+    }
+}
+
+/// 构造对话框浮层（loading 已结束）。
+fn worktree_open_dialog(entries: Vec<WorktreeOpenEntry>, selected: usize) -> WorktreeOpen {
+    WorktreeOpen {
+        source: 0,
+        repo_root: PathBuf::from("/repo"),
+        entries,
+        selected,
+        query: TextInput::new(""),
+        loading: false,
+        failed: false,
+    }
+}
+
+#[test]
+fn worktree_dialog_renders_search_entries_status_and_buttons() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    state.overlay = Some(Overlay::WorktreeOpen(worktree_open_dialog(
+        vec![
+            dialog_entry("/repo", Some("main"), false, Some(0)),
+            dialog_entry("/repo/.worktrees/feat", Some("feature/x"), true, None),
+        ],
+        0,
+    )));
+
+    let lines = render_lines(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::WORKTREE_OPEN_TITLE));
+    assert!(joined.contains(text::WORKTREE_OPEN_FILTER));
+    assert!(joined.contains("feature/x"));
+    assert!(joined.contains(text::WORKTREE_STATUS_OPEN));
+    assert!(joined.contains("/repo/.worktrees/feat"));
+    assert!(joined.contains(text::BUTTON_OPEN));
+    assert!(joined.contains(text::BUTTON_CANCEL));
+}
+
+#[test]
+fn worktree_dialog_renders_loading_and_empty_states() {
+    let mut state = AppState::demo();
+    let mut dialog = worktree_open_dialog(Vec::new(), 0);
+    dialog.loading = true;
+    state.overlay = Some(Overlay::WorktreeOpen(dialog));
+    let lines = render_lines(&state);
+    assert!(lines.join("\n").contains(text::WORKTREE_OPEN_LOADING));
+
+    let mut dialog = worktree_open_dialog(Vec::new(), 0);
+    dialog.failed = true;
+    state.overlay = Some(Overlay::WorktreeOpen(dialog));
+    let lines = render_lines(&state);
+    assert!(lines.join("\n").contains(text::WORKTREE_OPEN_FAILED));
+
+    state.overlay = Some(Overlay::WorktreeOpen(worktree_open_dialog(Vec::new(), 0)));
+    let lines = render_lines(&state);
+    assert!(lines.join("\n").contains(text::WORKTREE_OPEN_EMPTY));
+}
+
+#[test]
+fn worktree_dialog_hit_testing_maps_rows_and_buttons() {
+    let screen = Rect::new(0, 0, 100, 24);
+    let dialog = worktree_open_dialog(
+        vec![
+            dialog_entry("/repo", Some("main"), false, Some(0)),
+            dialog_entry("/repo/.worktrees/feat", Some("feature/x"), true, None),
+            dialog_entry("/repo/.worktrees/notes", None, true, None),
+        ],
+        0,
+    );
+    let shell = overlay::worktree_dialog_shell(screen, dialog.entries.len()).expect("shell fits");
+    let first_row = shell.inner.y + 2;
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(&shell, &dialog, shell.inner.x + 1, first_row),
+        Some(0)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(&shell, &dialog, shell.inner.x + 1, first_row + 2),
+        Some(1)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(&shell, &dialog, shell.inner.x + 1, first_row + 2 * 3),
+        None,
+        "rows below the list do not hit entries"
+    );
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(
+            &shell,
+            &dialog,
+            shell.inner.x.saturating_sub(1),
+            first_row
+        ),
+        None
+    );
+
+    let open_button = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_OPEN, text::BUTTON_CANCEL],
+        2,
+        shell.inner.height.saturating_sub(1),
+    );
+    assert_eq!(
+        overlay::worktree_dialog_button_at(&shell, open_button[0].x, open_button[0].y),
+        Some(overlay::WorktreeDialogButton::Open)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_button_at(&shell, open_button[1].x, open_button[1].y),
+        Some(overlay::WorktreeDialogButton::Cancel)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_button_at(&shell, open_button[1].right(), open_button[1].y),
+        None
+    );
+}
+
+#[test]
+fn worktree_dialog_window_follows_selection() {
+    let entries: Vec<WorktreeOpenEntry> = (0..6)
+        .map(|index| {
+            dialog_entry(
+                &format!("/repo/.worktrees/w{index}"),
+                Some(&format!("worktree/w{index}")),
+                true,
+                None,
+            )
+        })
+        .collect();
+    let mut dialog = worktree_open_dialog(entries, 0);
+    assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 0);
+    dialog.selected = 4;
+    assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 3);
+    dialog.selected = 5;
+    assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 4);
 }

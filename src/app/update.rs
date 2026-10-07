@@ -1,5 +1,12 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
+mod worktree;
+
+pub use worktree::{
+    apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
+    open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
+};
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -722,6 +729,13 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     // 打开模态时结束可能残留的滚动条拖拽。
     state.workspace_scroll_drag = None;
     let mut commands = vec![MenuCommand::RenameWorkspace];
+    if state
+        .workspaces
+        .get(target)
+        .is_some_and(|workspace| workspace.git.is_some())
+    {
+        commands.push(MenuCommand::OpenWorktree);
+    }
     if state.workspaces.len() > 1 {
         commands.push(MenuCommand::CloseWorkspace);
     }
@@ -869,6 +883,9 @@ pub fn activate_menu(state: &mut AppState) {
                 input: TextInput::new(workspace.name.clone()),
             }));
         }
+        (Some(MenuCommand::OpenWorktree), OverlayTarget::Workspace(target)) => {
+            open_worktree_dialog(state, target);
+        }
         (Some(MenuCommand::CloseWorkspace), OverlayTarget::Workspace(_)) => {
             state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
                 target: menu.target,
@@ -954,6 +971,10 @@ fn split_pane(
 
 /// 浮层按键分派；输入层已按浮层种类过滤。
 pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
+    if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
+        apply_worktree_open_key(state, key);
+        return;
+    }
     match key {
         OverlayKey::Esc => close_overlay(state),
         OverlayKey::Up => move_menu_selection(state, -1),
@@ -962,7 +983,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
             Some(OverlayKind::Menu) => activate_menu(state),
             Some(OverlayKind::Rename) => commit_rename(state),
             Some(OverlayKind::ConfirmClose) => confirm_close(state),
-            None => {}
+            Some(OverlayKind::WorktreeOpen) | None => {}
         },
         OverlayKey::Char(ch) => edit_rename(state, |input| input.insert_char(ch)),
         OverlayKey::Clear => edit_rename(state, TextInput::clear),

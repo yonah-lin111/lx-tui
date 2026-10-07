@@ -97,6 +97,23 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
             _ => None,
         },
+        OverlayKind::WorktreeOpen => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+            _ => None,
+        },
     }
 }
 

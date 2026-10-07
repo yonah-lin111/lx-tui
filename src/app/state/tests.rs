@@ -184,3 +184,15 @@ fn remove_pane_drops_payload_and_promotes_sibling() {
     assert_eq!(tab.layout.focus(), first);
     assert!(tab.pane(second).is_none());
 }
+
+#[test]
+fn workspace_cwd_for_pane_finds_owning_workspace_only() {
+    let state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state.workspace_cwd_for_pane(pane),
+        state.workspaces[0].cwd.clone()
+    );
+    assert_eq!(state.workspace_cwd_for_pane(state.prompt.id()), None);
+    assert_eq!(state.workspace_cwd_for_pane(PaneId::alloc()), None);
+}

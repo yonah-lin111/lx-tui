@@ -89,8 +89,10 @@ pub struct AppState {
     pub lx_last_tick: Instant,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
-    /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
+    /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
+    /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
+    pub git_requests: Vec<PathBuf>,
 }
 
 /// 工作区。
@@ -105,6 +107,21 @@ pub struct Workspace {
     pub cwd: Option<PathBuf>,
     /// 是否为启动时创建的工作区；列表项显示不可移除的 `*` 标记。
     pub is_initial: bool,
+    /// 所属 git checkout 的元数据；非仓库或尚未查询到时为 None。
+    pub git: Option<WorkspaceGit>,
+}
+
+/// 工作区所属 git checkout 的只读元数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceGit {
+    /// 仓库主 checkout 路径（同一仓库的分组键）。
+    pub repo_root: PathBuf,
+    /// 本工作区 cwd 所在 checkout 路径。
+    pub checkout_path: PathBuf,
+    /// 是否为 linked worktree（非主 checkout）。
+    pub is_linked: bool,
+    /// 当前分支短名；detached 或 bare 为 None。
+    pub branch: Option<String>,
 }
 
 impl Workspace {
@@ -117,6 +134,7 @@ impl Workspace {
             name_is_manual: false,
             cwd,
             is_initial: false,
+            git: None,
         }
     }
 
@@ -325,6 +343,7 @@ impl AppState {
                 name_is_manual: false,
                 cwd,
                 is_initial: true,
+                git: None,
             }],
             active_workspace: 0,
             tab_scroll: 0,
@@ -336,6 +355,7 @@ impl AppState {
             lx_last_tick: Instant::now(),
             workspace_drag: None,
             overlay: None,
+            git_requests: Vec::new(),
         }
     }
 
@@ -373,6 +393,14 @@ impl AppState {
             .iter()
             .flat_map(|workspace| workspace.tabs.iter())
             .find_map(|tab| tab.pane(id))
+    }
+
+    /// 窗格所属工作区的工作目录；PTY 启动目录与 git 查询依据。
+    pub fn workspace_cwd_for_pane(&self, id: PaneId) -> Option<PathBuf> {
+        self.workspaces
+            .iter()
+            .find(|workspace| workspace.tabs.iter().any(|tab| tab.pane(id).is_some()))
+            .and_then(|workspace| workspace.cwd.clone())
     }
 
     /// 指定窗格上的选区。

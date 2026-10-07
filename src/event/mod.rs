@@ -1,7 +1,10 @@
 //! 唯一事件循环：tokio select 收敛键盘、PTY 输出与渲染调度。
 
-use std::collections::HashMap;
+mod git;
+
+use std::collections::{HashMap, HashSet};
 use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use alacritty_terminal::term::TermMode;
@@ -16,7 +19,7 @@ use tokio_stream::StreamExt;
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneKind, PaneView, home_dir, workspace_label};
+use crate::app::state::{AppState, PaneKind, PaneView, WorkspaceGit, home_dir, workspace_label};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
@@ -27,7 +30,7 @@ use crate::terminal::WheelRouting;
 use crate::tui::Tui;
 use crate::ui;
 
-/// 应用级事件：后台任务（PTY 读线程与提及扫描）经此汇入主循环。
+/// 应用级事件：后台任务（PTY 读线程、提及扫描与 git 查询）经此汇入主循环。
 #[derive(Debug)]
 pub enum AppEvent {
     PaneOutput(PaneId, Vec<u8>),
@@ -35,6 +38,17 @@ pub enum AppEvent {
     MentionScanned {
         generation: u64,
         entries: Vec<MentionEntry>,
+    },
+    /// 工作区 git 元数据查询结果。
+    GitRefreshed {
+        cwd: PathBuf,
+        checkout: Option<WorkspaceGit>,
+    },
+    /// worktree 对话框列表查询结果。
+    WorktreeListed {
+        repo_root: PathBuf,
+        entries: Vec<crate::git::WorktreeEntry>,
+        failed: bool,
     },
 }
 
@@ -61,6 +75,9 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
     let mut cwd_check: Option<Instant> = None;
+    // 对话框列表查询在途的仓库根；结果返回前不重复发起。
+    let mut git_inflight: HashSet<PathBuf> = HashSet::new();
+    seed_git_requests(state);
 
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
@@ -71,6 +88,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
                 dirty = true;
             }
         }
+        git::pump_git_queries(state, &sender, &mut git_inflight);
         let geometry = current_geometry(tui, state, config)?;
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
@@ -114,15 +132,16 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
                 Some(Ok(event)) => {
                     handle_terminal_event(event, state, &mut sessions, &geometry, config, &mut dirty);
                     pump_mention_scan(state, &sender);
+                    git::pump_git_queries(state, &sender, &mut git_inflight);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
             },
             message = receiver.recv() => {
                 if let Some(message) = message {
-                    handle_app_event(message, state, &mut sessions);
+                    handle_app_event(message, state, &mut sessions, &mut git_inflight);
                     while let Ok(message) = receiver.try_recv() {
-                        handle_app_event(message, state, &mut sessions);
+                        handle_app_event(message, state, &mut sessions, &mut git_inflight);
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
                     cwd_check.get_or_insert_with(|| Instant::now() + CWD_CHECK_DELAY);
@@ -141,6 +160,18 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
 
 /// PTY 输出后的 cwd 去抖检查延迟。
 const CWD_CHECK_DELAY: Duration = Duration::from_millis(300);
+
+/// 启动时为已有工作区登记一次 git 元数据查询。
+fn seed_git_requests(state: &mut AppState) {
+    let cwds: Vec<PathBuf> = state
+        .workspaces
+        .iter()
+        .filter_map(|workspace| workspace.cwd.clone())
+        .collect();
+    for cwd in cwds {
+        update::request_git_refresh(state, &cwd);
+    }
+}
 
 /// 轮询窗格 shell 进程的 cwd：全部窗格更新标题标签，自动命名工作区同步名字；
 /// 返回是否有变化。
@@ -176,6 +207,15 @@ fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession
             && update::update_workspace_cwd(state, index, cwd)
         {
             changed = true;
+            // 缓存 checkout 仍包含新 cwd 时只是进了子目录；否则重查 git 元数据。
+            let stale = !state
+                .workspaces
+                .get(index)
+                .and_then(|workspace| workspace.git.as_ref())
+                .is_some_and(|git| cwd.starts_with(&git.checkout_path));
+            if stale {
+                update::request_git_refresh(state, cwd);
+            }
         }
     }
     changed
@@ -208,7 +248,8 @@ fn reconcile_sessions(
         }
         let size = pane.terminal.size();
         let sink = sender.clone();
-        let result = PtySession::spawn(id, size.cols, size.rows, move |event| {
+        let cwd = state.workspace_cwd_for_pane(id);
+        let result = PtySession::spawn(id, size.cols, size.rows, cwd, move |event| {
             let message = match event {
                 PtyEvent::Output(bytes) => AppEvent::PaneOutput(id, bytes),
                 PtyEvent::Exited => AppEvent::PaneExit(id),
@@ -324,11 +365,12 @@ fn handle_terminal_event(
                 Routed::Overlay(key) => {
                     let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
+                    let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
                     update::apply_overlay_key(state, key);
-                    if was_confirm {
+                    if was_confirm || was_worktree {
                         ensure_workspace_visible(state, view);
                     }
-                    if was_confirm || was_menu {
+                    if was_confirm || was_menu || was_worktree {
                         reveal_active_tab(state, view);
                     }
                     *dirty = true;
@@ -366,6 +408,10 @@ fn handle_terminal_event(
             }
         }
         TerminalEvent::Paste(text) => {
+            // 浮层打开时粘贴吞掉，不穿透到底层终端（与键盘过滤一致）。
+            if state.overlay.is_some() {
+                return;
+            }
             if state.prompt_focused {
                 update::apply_editor(state, EditorCommand::InsertText(text));
                 *dirty = true;
@@ -395,8 +441,9 @@ fn handle_terminal_event(
             MouseEventKind::Down(MouseButton::Left) => {
                 if state.overlay.is_some() {
                     let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
                     handle_overlay_click(state, *screen, mouse.column, mouse.row);
-                    if was_confirm {
+                    if was_confirm || was_worktree {
                         ensure_workspace_visible(state, view);
                     }
                     reveal_active_tab(state, view);
@@ -1057,6 +1104,26 @@ fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u1
                 Some(ui::overlay::ConfirmButton::Cancel) | None => update::close_overlay(state),
             }
         }
+        Some(Overlay::WorktreeOpen(dialog)) => {
+            let Some(shell) = ui::overlay::worktree_dialog_shell(screen, dialog.entries.len())
+            else {
+                update::close_overlay(state);
+                return;
+            };
+            if let Some(index) = ui::overlay::worktree_dialog_entry_at(&shell, dialog, column, row)
+            {
+                update::set_worktree_open_selection(state, index);
+                return;
+            }
+            match ui::overlay::worktree_dialog_button_at(&shell, column, row) {
+                Some(ui::overlay::WorktreeDialogButton::Open) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::WorktreeDialogButton::Cancel) | None => {
+                    update::close_overlay(state)
+                }
+            }
+        }
         None => {}
     }
 }
@@ -1184,6 +1251,7 @@ fn handle_app_event(
     message: AppEvent,
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
+    git_inflight: &mut HashSet<PathBuf>,
 ) {
     match message {
         AppEvent::PaneOutput(id, bytes) => {
@@ -1197,6 +1265,17 @@ fn handle_app_event(
             generation,
             entries,
         } => update::apply_mention_entries(state, generation, entries),
+        AppEvent::GitRefreshed { cwd, checkout } => {
+            update::apply_git_refresh(state, &cwd, checkout)
+        }
+        AppEvent::WorktreeListed {
+            repo_root,
+            entries,
+            failed,
+        } => {
+            git_inflight.remove(&repo_root);
+            update::apply_worktree_list(state, &repo_root, entries, failed);
+        }
     }
 }
 

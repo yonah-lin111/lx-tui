@@ -1,9 +1,11 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::state::workspace_name;
+use crate::app::overlay::WorktreeStatus;
+use crate::app::state::{WorkspaceGit, workspace_name};
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// demo 状态并把活动窗格置为终端视图：避免 lx 动画干扰定时类断言。
@@ -1581,4 +1583,333 @@ fn lx_animation_registers_frame_deadline_when_visible() {
 /// 窗格视图（测试断言用）。
 fn view(state: &AppState, pane: PaneId) -> PaneView {
     state.pane_anywhere(pane).expect("pane exists").view
+}
+
+/// 构造工作区 git 元数据。
+fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(checkout),
+        is_linked: linked,
+        branch: branch.map(str::to_string),
+    }
+}
+
+/// 追加一个带 git 元数据的自动命名工作区。
+fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) -> usize {
+    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
+    workspace.git = Some(git);
+    state.workspaces.push(workspace);
+    state.workspaces.len() - 1
+}
+
+/// 构造一条 git worktree 记录。
+fn worktree_entry(path: &str, branch: Option<&str>, bare: bool) -> crate::git::WorktreeEntry {
+    crate::git::WorktreeEntry {
+        path: PathBuf::from(path),
+        branch: branch.map(str::to_string),
+        is_bare: bare,
+    }
+}
+
+#[test]
+fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
+    let mut state = AppState::demo();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu opens");
+    };
+    assert!(!menu.commands.contains(&MenuCommand::OpenWorktree));
+
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu opens");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![MenuCommand::RenameWorkspace, MenuCommand::OpenWorktree]
+    );
+
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu opens");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::RenameWorkspace,
+            MenuCommand::OpenWorktree,
+            MenuCommand::CloseWorkspace
+        ]
+    );
+}
+
+#[test]
+fn open_worktree_dialog_requires_git_metadata_and_starts_loading() {
+    let mut state = AppState::demo();
+    open_worktree_dialog(&mut state, 0);
+    assert!(state.overlay.is_none());
+
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("worktree dialog opens");
+    };
+    assert_eq!(dialog.source, 0);
+    assert_eq!(dialog.repo_root, PathBuf::from("/repo"));
+    assert!(dialog.loading);
+    assert!(dialog.entries.is_empty());
+}
+
+#[test]
+fn apply_worktree_list_fills_entries_and_marks_open_checkouts() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    let linked = push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+            worktree_entry("/repo/.worktrees/notes", None, false),
+        ],
+        false,
+    );
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("worktree dialog stays open");
+    };
+    assert!(!dialog.loading);
+    assert!(!dialog.failed);
+    assert_eq!(dialog.entries.len(), 3);
+    assert_eq!(dialog.entries[0].already_open, Some(0));
+    assert_eq!(dialog.entries[1].already_open, Some(linked));
+    assert_eq!(dialog.entries[2].already_open, None);
+    assert!(dialog.entries[2].is_linked);
+    assert_eq!(dialog.entries[0].status(), WorktreeStatus::Open);
+}
+
+#[test]
+fn apply_worktree_list_ignores_results_for_other_repo_or_closed_dialog() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/other"),
+        vec![worktree_entry("/other", Some("main"), false)],
+        false,
+    );
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert!(dialog.entries.is_empty());
+    assert!(dialog.loading);
+
+    close_overlay(&mut state);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![worktree_entry("/repo", Some("main"), false)],
+        false,
+    );
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn apply_worktree_list_marks_failure_without_entries() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(&mut state, Path::new("/repo"), Vec::new(), true);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert!(dialog.failed);
+    assert!(!dialog.loading);
+    assert!(dialog.entries.is_empty());
+}
+
+#[test]
+fn commit_worktree_open_creates_workspace_with_checkout_cwd_and_git() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Down);
+    apply_worktree_open_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace, 1);
+    let opened = state.active_workspace();
+    assert_eq!(opened.name, "feat");
+    assert_eq!(opened.cwd, Some(PathBuf::from("/repo/.worktrees/feat")));
+    let git = opened.git.as_ref().expect("git metadata is carried over");
+    assert_eq!(git.repo_root, PathBuf::from("/repo"));
+    assert_eq!(git.checkout_path, PathBuf::from("/repo/.worktrees/feat"));
+    assert!(git.is_linked);
+    assert_eq!(git.branch.as_deref(), Some("feature/x"));
+}
+
+#[test]
+fn commit_worktree_open_switches_to_existing_workspace_without_duplicate() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    let existing = push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Down);
+    apply_worktree_open_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace, existing);
+}
+
+#[test]
+fn commit_worktree_open_ignores_empty_dialog() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    commit_worktree_open(&mut state);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("empty dialog stays open");
+    };
+    assert!(dialog.loading);
+    assert_eq!(state.workspaces.len(), 1);
+}
+
+#[test]
+fn apply_worktree_open_key_edits_query_and_closes_on_escape() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Char('f'));
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.query.text(), "f");
+    assert_eq!(dialog.selected_entry_index(), Some(1));
+
+    apply_worktree_open_key(&mut state, OverlayKey::Backspace);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.query.text(), "");
+
+    apply_worktree_open_key(&mut state, OverlayKey::Char('f'));
+    apply_worktree_open_key(&mut state, OverlayKey::Clear);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.query.text(), "");
+
+    apply_worktree_open_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn set_worktree_open_selection_ignores_out_of_range() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    assert!(set_worktree_open_selection(&mut state, 1));
+    assert!(!set_worktree_open_selection(&mut state, 1));
+    assert!(!set_worktree_open_selection(&mut state, 5));
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.selected, 1);
+}
+
+#[test]
+fn apply_git_refresh_updates_workspaces_with_matching_cwd_only() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo"));
+    let other = push_git_workspace(
+        &mut state,
+        "other",
+        "/elsewhere",
+        git_info("/x", "/x", false, None),
+    );
+
+    apply_git_refresh(
+        &mut state,
+        Path::new("/repo"),
+        Some(git_info("/repo", "/repo", false, Some("main"))),
+    );
+    assert!(state.workspaces[0].git.is_some());
+    assert!(state.workspaces[other].git.is_some());
+
+    apply_git_refresh(&mut state, Path::new("/repo"), None);
+    assert!(state.workspaces[0].git.is_none());
+    assert!(state.workspaces[other].git.is_some());
+}
+
+#[test]
+fn request_git_refresh_dedups_pending_cwds_and_take_drains() {
+    let mut state = AppState::demo();
+    request_git_refresh(&mut state, Path::new("/a"));
+    request_git_refresh(&mut state, Path::new("/a"));
+    request_git_refresh(&mut state, Path::new("/b"));
+    assert_eq!(
+        state.git_requests,
+        vec![PathBuf::from("/a"), PathBuf::from("/b")]
+    );
+    let taken = take_git_requests(&mut state);
+    assert_eq!(taken, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+    assert!(state.git_requests.is_empty());
 }

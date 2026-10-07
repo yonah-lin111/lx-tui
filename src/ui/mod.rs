@@ -11,19 +11,25 @@ pub mod text;
 pub mod toast;
 pub mod widgets;
 
+use std::collections::BTreeMap;
+use std::path::Path;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
 
-use crate::app::state::{AppState, Pane, PaneKind, PaneView};
+use crate::app::state::{AppState, Pane, PaneKind, PaneView, Workspace};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
 /// 展开态折叠按钮：标签宽度与距面板右缘的留白。
 const PANEL_BUTTON_WIDTH: u16 = 3;
 const PANEL_BUTTON_MARGIN: u16 = 1;
+
+/// 分组 linked 子项的缩进列数。
+const WORKSPACE_CHILD_INDENT: usize = 2;
 
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
@@ -327,9 +333,12 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 /// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
 ///
+/// 同一 git 仓库有 ≥2 个已打开工作区且含主 checkout 时，主项之后的 linked 项缩进为子项
+/// 并显示分支短名（自动命名时）；列表保持工作区原顺序，命中映射仍为一行一项。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
     let marker_width = text::INITIAL_WORKSPACE_MARKER.chars().count();
+    let grouped = grouped_child_flags(state);
     state
         .workspaces
         .iter()
@@ -346,21 +355,85 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
                 item_style = item_style.add_modifier(Modifier::REVERSED);
                 marker_style = marker_style.add_modifier(Modifier::REVERSED);
             }
-            let name_width = if workspace.is_initial {
-                width.saturating_sub(marker_width)
-            } else {
-                width
-            };
-            let mut spans = vec![Span::styled(
-                text::ellipsize(&workspace.name, name_width),
+            let child = grouped.get(index).copied().unwrap_or(false);
+            let indent = if child { WORKSPACE_CHILD_INDENT } else { 0 };
+            let label = workspace_item_label(workspace, child);
+            let name_width = width
+                .saturating_sub(indent)
+                .saturating_sub(if workspace.is_initial {
+                    marker_width
+                } else {
+                    0
+                });
+            let mut spans = Vec::new();
+            if indent > 0 {
+                spans.push(Span::styled(" ".repeat(indent), item_style));
+            }
+            spans.push(Span::styled(
+                text::ellipsize(&label, name_width),
                 item_style,
-            )];
+            ));
             if workspace.is_initial {
                 spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
             }
             ListItem::new(Line::from(spans))
         })
         .collect()
+}
+
+/// 分组子项标记：同仓库 ≥2 个已打开工作区、含非 linked 主项，且主项在子项之前。
+///
+/// 主项之前的 linked 项不缩进（列表不做父项前置重排）。
+fn grouped_child_flags(state: &AppState) -> Vec<bool> {
+    let mut groups: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
+    for (index, workspace) in state.workspaces.iter().enumerate() {
+        if let Some(git) = workspace.git.as_ref() {
+            groups
+                .entry(git.repo_root.as_path())
+                .or_default()
+                .push(index);
+        }
+    }
+    let mut flags = vec![false; state.workspaces.len()];
+    for members in groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+        let Some(parent) = members.iter().copied().find(|index| {
+            state
+                .workspaces
+                .get(*index)
+                .and_then(|workspace| workspace.git.as_ref())
+                .is_some_and(|git| !git.is_linked)
+        }) else {
+            continue;
+        };
+        for member in members {
+            let linked = state
+                .workspaces
+                .get(*member)
+                .and_then(|workspace| workspace.git.as_ref())
+                .is_some_and(|git| git.is_linked);
+            if linked && *member > parent {
+                flags[*member] = true;
+            }
+        }
+    }
+    flags
+}
+
+/// 列表项标签：分组子项自动命名时显示分支短名（去 `worktree/` 前缀），其余显示工作区名。
+fn workspace_item_label(workspace: &Workspace, grouped_child: bool) -> String {
+    if grouped_child
+        && !workspace.name_is_manual
+        && let Some(branch) = workspace.git.as_ref().and_then(|git| git.branch.as_deref())
+    {
+        return branch
+            .strip_prefix("worktree/")
+            .unwrap_or(branch)
+            .to_string();
+    }
+    workspace.name.clone()
 }
 
 /// 工作区列表滚动条几何；不需要滚动或分区缺失时 None。

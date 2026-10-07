@@ -51,6 +51,7 @@ pub const INITIAL_WORKSPACE_MARKER: &str = " *";
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";
+pub const MENU_OPEN_WORKTREE: &str = "Open worktree…";
 pub const MENU_CLOSE_WORKSPACE: &str = "Close";
 pub const MENU_RENAME_TAB: &str = "Rename";
 pub const MENU_CLOSE_TAB: &str = "Close";
@@ -66,11 +67,24 @@ pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
 pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
+
+/// worktree 对话框：标题、搜索占位、状态行与条目标记。
+pub const WORKTREE_OPEN_TITLE: &str = "open worktree";
+pub const WORKTREE_OPEN_FILTER: &str = "filter worktrees";
+pub const WORKTREE_OPEN_LOADING: &str = "loading…";
+pub const WORKTREE_OPEN_FAILED: &str = "failed to list worktrees";
+pub const WORKTREE_OPEN_EMPTY: &str = "no worktrees found";
+pub const WORKTREE_OPEN_MARKER: &str = "›";
+pub const WORKTREE_STATUS_OPEN: &str = "open";
+pub const WORKTREE_STATUS_DETACHED: &str = "detached";
+pub const WORKTREE_STATUS_ROOT: &str = "root";
+
 /// 模态底部按钮：名称在前、快捷键在后。
 pub const BUTTON_SAVE: &str = "[save enter]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
 pub const BUTTON_CONFIRM: &str = "[confirm enter]";
+pub const BUTTON_OPEN: &str = "[open enter]";
 
 /// 关闭确认问题文案。
 pub fn confirm_close_question(name: &str) -> String {
