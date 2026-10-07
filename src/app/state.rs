@@ -1,6 +1,6 @@
 //! 应用状态：唯一状态来源，纯数据，可在无终端环境下构造与测试。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -126,6 +126,15 @@ pub struct WorkspaceGit {
     pub branch: Option<String>,
 }
 
+impl WorkspaceGit {
+    /// 展示用分支名：去掉 `worktree/` 前缀；detached 或 bare 为 None。
+    pub fn short_branch(&self) -> Option<&str> {
+        self.branch
+            .as_deref()
+            .map(|branch| branch.strip_prefix("worktree/").unwrap_or(branch))
+    }
+}
+
 /// 侧栏工作区列表的可见行；折叠的组只保留父项与当前激活子项。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkspaceRow {
@@ -137,6 +146,8 @@ pub struct WorkspaceRow {
     pub parent: bool,
     /// 父项所在组是否已折叠。
     pub collapsed: bool,
+    /// 子项标签与组内更早子项重复时的去重序号（2、3…）；无重复为 None。
+    pub child_index: Option<u32>,
 }
 
 impl Workspace {
@@ -192,6 +203,8 @@ pub struct Pane {
     pub exited: bool,
     /// 窗格 shell 进程 cwd 的显示标签；标题无 OSC 时回退展示。
     pub cwd_label: Option<String>,
+    /// 窗格 shell 进程最近一次轮询到的 cwd；新建工作区取焦点窗格路径用。
+    pub cwd: Option<PathBuf>,
 }
 
 impl Tab {
@@ -259,6 +272,7 @@ impl Pane {
             terminal: Terminal::new(DEFAULT_COLS, DEFAULT_ROWS),
             exited: false,
             cwd_label: None,
+            cwd: None,
         }
     }
 }
@@ -458,8 +472,70 @@ impl AppState {
     /// 侧栏可见行：同仓库 ≥2 个已打开工作区且含非 linked 主项时成组，
     /// 主项之后（索引更大）的 linked 项为子项；折叠的组只保留父项与当前激活子项。
     ///
+    /// 子项标签与组内更早子项重复时给出显示去重序号（含被折叠隐藏的子项，序号稳定）。
     /// 列表保持工作区原始顺序，不做父项前置重排；渲染、命中与滚动共用此结果。
     pub fn workspace_rows(&self) -> Vec<WorkspaceRow> {
+        let parents = self.group_parents();
+        let collapsed = |key: &Path| {
+            self.collapsed_groups
+                .iter()
+                .any(|group| group.as_path() == key)
+        };
+        let mut child_counts: HashMap<(&Path, &str), u32> = HashMap::new();
+        let mut rows = Vec::with_capacity(self.workspaces.len());
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            let git = workspace.git.as_ref();
+            let group = git.and_then(|git| {
+                let parent = parents.get(git.repo_root.as_path())?;
+                Some((git.repo_root.as_path(), *parent))
+            });
+            match group {
+                Some((key, parent)) if parent == index => {
+                    rows.push(WorkspaceRow {
+                        index,
+                        child: false,
+                        parent: true,
+                        collapsed: collapsed(key),
+                        child_index: None,
+                    });
+                }
+                Some((key, parent)) if index > parent && git.is_some_and(|git| git.is_linked) => {
+                    let child_index = if workspace.name_is_manual {
+                        None
+                    } else {
+                        match git.and_then(WorkspaceGit::short_branch) {
+                            Some(label) => {
+                                let count = child_counts.entry((key, label)).or_insert(0);
+                                *count += 1;
+                                (*count > 1).then_some(*count)
+                            }
+                            None => None,
+                        }
+                    };
+                    if !collapsed(key) || self.active_workspace == index {
+                        rows.push(WorkspaceRow {
+                            index,
+                            child: true,
+                            parent: false,
+                            collapsed: false,
+                            child_index,
+                        });
+                    }
+                }
+                _ => rows.push(WorkspaceRow {
+                    index,
+                    child: false,
+                    parent: false,
+                    collapsed: false,
+                    child_index: None,
+                }),
+            }
+        }
+        rows
+    }
+
+    /// 已成立分组的父项索引：仓库根 → 首个非 linked 主项；成员不足 2 或无主项时不成组。
+    fn group_parents(&self) -> BTreeMap<&Path, usize> {
         let mut members: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
         for (index, workspace) in self.workspaces.iter().enumerate() {
             if let Some(git) = workspace.git.as_ref() {
@@ -469,64 +545,60 @@ impl AppState {
                     .push(index);
             }
         }
-        // 成组条件：≥2 个成员且至少一个非 linked 主项；父项取首个非 linked 成员。
-        let mut groups: BTreeMap<&Path, (usize, bool)> = BTreeMap::new();
-        for (key, indices) in &members {
-            if indices.len() < 2 {
-                continue;
-            }
-            let Some(parent) = indices.iter().copied().find(|index| {
-                self.workspaces
-                    .get(*index)
-                    .and_then(|workspace| workspace.git.as_ref())
-                    .is_some_and(|git| !git.is_linked)
-            }) else {
-                continue;
-            };
-            let collapsed = self
-                .collapsed_groups
-                .iter()
-                .any(|group| group.as_path() == *key);
-            groups.insert(key, (parent, collapsed));
-        }
+        members
+            .into_iter()
+            .filter(|(_, indices)| indices.len() >= 2)
+            .filter_map(|(key, indices)| {
+                let parent = indices.iter().copied().find(|index| {
+                    self.workspaces
+                        .get(*index)
+                        .and_then(|workspace| workspace.git.as_ref())
+                        .is_some_and(|git| !git.is_linked)
+                })?;
+                Some((key, parent))
+            })
+            .collect()
+    }
 
-        let mut rows = Vec::with_capacity(self.workspaces.len());
-        for (index, workspace) in self.workspaces.iter().enumerate() {
-            let group = workspace
-                .git
-                .as_ref()
-                .and_then(|git| groups.get(git.repo_root.as_path()).copied());
-            match group {
-                Some((parent, collapsed)) if parent == index => {
-                    rows.push(WorkspaceRow {
-                        index,
-                        child: false,
-                        parent: true,
-                        collapsed,
-                    });
-                }
-                Some((parent, collapsed))
-                    if index > parent
-                        && workspace.git.as_ref().is_some_and(|git| git.is_linked) =>
-                {
-                    if !collapsed || self.active_workspace == index {
-                        rows.push(WorkspaceRow {
-                            index,
-                            child: true,
-                            parent: false,
-                            collapsed: false,
-                        });
-                    }
-                }
-                _ => rows.push(WorkspaceRow {
-                    index,
-                    child: false,
-                    parent: false,
-                    collapsed: false,
-                }),
-            }
+    /// 拖拽块：组（父项 + 主项之后的 linked 子项）的全部成员索引；非组内项返回自身。
+    ///
+    /// 折叠隐藏的子项仍在块内，随父项一起移动。
+    pub fn workspace_block(&self, index: usize) -> Vec<usize> {
+        let Some(git) = self
+            .workspaces
+            .get(index)
+            .and_then(|workspace| workspace.git.as_ref())
+        else {
+            return vec![index];
+        };
+        let Some(parent) = self.group_parents().get(git.repo_root.as_path()).copied() else {
+            return vec![index];
+        };
+        let block: Vec<usize> = self
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter(|(other, workspace)| {
+                let Some(other_git) = workspace.git.as_ref() else {
+                    return false;
+                };
+                other_git.repo_root == git.repo_root
+                    && (*other == parent || (*other > parent && other_git.is_linked))
+            })
+            .map(|(other, _)| other)
+            .collect();
+        if block.contains(&index) {
+            block
+        } else {
+            vec![index]
         }
-        rows
+    }
+
+    /// 当前工作区焦点终端窗格的实时 cwd；非终端或尚未轮询到时 None。
+    pub fn active_terminal_cwd(&self) -> Option<PathBuf> {
+        self.active_pane()
+            .filter(|pane| pane.kind == PaneKind::Terminal)
+            .and_then(|pane| pane.cwd.clone())
     }
 }
 

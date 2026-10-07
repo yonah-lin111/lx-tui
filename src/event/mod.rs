@@ -173,10 +173,10 @@ fn seed_git_requests(state: &mut AppState) {
     }
 }
 
-/// 轮询窗格 shell 进程的 cwd：全部窗格更新标题标签，自动命名工作区同步名字；
-/// 返回是否有变化。
+/// 轮询窗格 shell 进程的 cwd：全部窗格更新 cwd 与标题标签，工作区跟随根窗格 cwd
+/// （自动命名同步改名，手动命名只更新目录并重查 git 归属）；返回是否有变化。
 ///
-/// 手动命名工作区不参与改名；窗格退出或读不到 cwd 时保持原值。
+/// 窗格退出或读不到 cwd 时保持原值。
 fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession>) -> bool {
     let home = home_dir();
     let mut cwds: HashMap<PaneId, std::path::PathBuf> = HashMap::new();
@@ -191,7 +191,7 @@ fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession
     let mut changed = false;
     for (id, cwd) in &cwds {
         let label = workspace_label(cwd, home.as_deref());
-        if update::update_pane_cwd(state, *id, label) {
+        if update::update_pane_cwd(state, *id, cwd, label) {
             changed = true;
         }
     }
@@ -199,7 +199,6 @@ fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession
         .workspaces
         .iter()
         .enumerate()
-        .filter(|(_, workspace)| !workspace.name_is_manual)
         .filter_map(|(index, workspace)| workspace.root_pane().map(|pane| (index, pane)))
         .collect();
     for (index, pane) in tracked {

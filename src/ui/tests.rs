@@ -8,7 +8,7 @@ use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn render_lines(state: &AppState) -> Vec<String> {
@@ -979,7 +979,7 @@ fn pane_title_uses_cwd_label_before_placeholder() {
     let mut state = AppState::demo();
     terminal_view(&mut state);
     let id = state.active_tab().layout.focus();
-    update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
+    update::update_pane_cwd(&mut state, id, Path::new("/dev-dir"), "dev-dir".to_string());
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("dev-dir")));
     assert!(
@@ -994,7 +994,7 @@ fn pane_title_prefers_osc_over_cwd_label() {
     let mut state = AppState::demo();
     terminal_view(&mut state);
     let id = state.active_tab().layout.focus();
-    update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
+    update::update_pane_cwd(&mut state, id, Path::new("/dev-dir"), "dev-dir".to_string());
     if let Some(pane) = state.active_tab_mut().pane_mut(id) {
         let _ = pane.terminal.feed(b"\x1b]0;Claude Code\x07");
     }
@@ -1051,6 +1051,41 @@ fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: Workspac
     let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
     workspace.git = Some(git);
     state.workspaces.push(workspace);
+}
+
+#[test]
+fn sidebar_renders_duplicate_child_index_before_initial_marker() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat2",
+        "/repo/.worktrees/feat2",
+        git_info(
+            "/repo",
+            "/repo/.worktrees/feat2",
+            true,
+            Some("worktree/feature/x"),
+        ),
+    );
+    state.workspaces[2].is_initial = true;
+
+    let lines = render_lines(&state);
+    assert!(
+        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        "first duplicate keeps clean label: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("  └─ feature/x 2 *")),
+        "second duplicate gets index before marker: {lines:?}"
+    );
 }
 
 #[test]

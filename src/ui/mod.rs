@@ -340,13 +340,17 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
     let marker_width = text::INITIAL_WORKSPACE_MARKER.chars().count();
     let rows = state.workspace_rows();
+    let drag_block = state
+        .workspace_drag
+        .map(|from| state.workspace_block(from))
+        .unwrap_or_default();
     let mut items = Vec::with_capacity(rows.len());
     for (row_index, row) in rows.iter().enumerate() {
         let Some(workspace) = state.workspaces.get(row.index) else {
             items.push(ListItem::new(Line::default()));
             continue;
         };
-        let dragging = state.workspace_drag == Some(row.index);
+        let dragging = drag_block.contains(&row.index);
         let mut item_style = if row.index == state.active_workspace {
             style::accent()
         } else {
@@ -387,14 +391,18 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
         let label = workspace_item_label(workspace, row.child);
-        let name_width =
-            width
-                .saturating_sub(prefix.chars().count())
-                .saturating_sub(if workspace.is_initial {
-                    marker_width
-                } else {
-                    0
-                });
+        let index_text = row
+            .child_index
+            .map(|index| format!(" {index}"))
+            .unwrap_or_default();
+        let name_width = width
+            .saturating_sub(prefix.chars().count())
+            .saturating_sub(index_text.chars().count())
+            .saturating_sub(if workspace.is_initial {
+                marker_width
+            } else {
+                0
+            });
         let mut spans = Vec::new();
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
@@ -403,6 +411,9 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             text::ellipsize(&label, name_width),
             item_style,
         ));
+        if !index_text.is_empty() {
+            spans.push(Span::styled(index_text, item_style));
+        }
         if workspace.is_initial {
             spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
         }
@@ -424,12 +435,9 @@ fn workspace_repo_root(state: &AppState, index: usize) -> Option<&Path> {
 fn workspace_item_label(workspace: &Workspace, grouped_child: bool) -> String {
     if grouped_child
         && !workspace.name_is_manual
-        && let Some(branch) = workspace.git.as_ref().and_then(|git| git.branch.as_deref())
+        && let Some(branch) = workspace.git.as_ref().and_then(|git| git.short_branch())
     {
-        return branch
-            .strip_prefix("worktree/")
-            .unwrap_or(branch)
-            .to_string();
+        return branch.to_string();
     }
     workspace.name.clone()
 }

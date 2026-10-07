@@ -658,6 +658,18 @@ fn create_workspace_activates_deduped_cwd_workspace() {
 }
 
 #[test]
+fn create_workspace_uses_focused_terminal_cwd() {
+    let mut state = AppState::demo();
+    let id = state.active_tab().layout.focus();
+    let cwd = std::path::Path::new("/tmp/focused");
+    assert!(update_pane_cwd(&mut state, id, cwd, "focused".to_string()));
+    create_workspace(&mut state);
+    let workspace = state.active_workspace();
+    assert_eq!(workspace.cwd.as_deref(), Some(cwd));
+    assert_eq!(workspace.name, "focused");
+}
+
+#[test]
 fn update_workspace_cwd_renames_auto_named_workspace() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
@@ -669,16 +681,15 @@ fn update_workspace_cwd_renames_auto_named_workspace() {
 }
 
 #[test]
-fn update_workspace_cwd_ignores_manually_named_workspace() {
+fn update_workspace_cwd_tracks_manual_name_without_renaming() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "api".to_string();
     state.workspaces[0].name_is_manual = true;
-    assert!(!update_workspace_cwd(
-        &mut state,
-        0,
-        std::path::Path::new("/tmp/other-project")
-    ));
+    let cwd = std::path::Path::new("/tmp/other-project");
+    assert!(update_workspace_cwd(&mut state, 0, cwd));
     assert_eq!(state.workspaces[0].name, "api");
+    assert_eq!(state.workspaces[0].cwd.as_deref(), Some(cwd));
+    assert!(!update_workspace_cwd(&mut state, 0, cwd));
 }
 
 #[test]
@@ -1003,6 +1014,108 @@ fn drag_workspace_shifts_other_active_workspace() {
     begin_workspace_drag(&mut state, 0);
     assert!(drag_workspace_to(&mut state, 2));
     assert_eq!(state.active_workspace, 0);
+}
+
+#[test]
+fn drag_workspace_moves_collapsed_group_as_block() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.wt/feat",
+        git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
+    );
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+
+    begin_workspace_drag(&mut state, 1);
+    assert!(drag_workspace_to(&mut state, 3));
+    assert_eq!(state.workspace_drag, Some(2));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec![demo.as_str(), "tmp", "repo", "feat"]);
+}
+
+#[test]
+fn drag_workspace_child_moves_whole_group() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.wt/feat",
+        git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
+    );
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
+
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["repo", "feat", demo.as_str(), "tmp"]);
+    assert_eq!(state.workspace_drag, Some(1));
+}
+
+#[test]
+fn drag_workspace_snaps_to_other_group_boundary() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "a",
+        "/a",
+        git_info("/a", "/a", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "a-feat",
+        "/a/.wt/feat",
+        git_info("/a", "/a/.wt/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "b",
+        "/b",
+        git_info("/b", "/b", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "b-feat",
+        "/b/.wt/feat",
+        git_info("/b", "/b/.wt/feat", true, Some("feature/x")),
+    );
+
+    begin_workspace_drag(&mut state, 1);
+    assert!(drag_workspace_to(&mut state, 4));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec![demo.as_str(), "b", "b-feat", "a", "a-feat"]);
 }
 
 #[test]
@@ -1395,15 +1508,19 @@ fn tab_scroll_clamps_and_reports_changes() {
 fn update_pane_cwd_reports_changes() {
     let mut state = AppState::demo();
     let id = state.active_tab().layout.focus();
-    assert!(update_pane_cwd(&mut state, id, "lx-tui".to_string()));
-    assert!(!update_pane_cwd(&mut state, id, "lx-tui".to_string()));
-    assert!(update_pane_cwd(&mut state, id, "herdr".to_string()));
-    assert!(
-        state
-            .active_tab()
-            .pane(id)
-            .is_some_and(|pane| pane.cwd_label.as_deref() == Some("herdr"))
-    );
+    let cwd = std::path::Path::new("/tmp/lx-tui");
+    assert!(update_pane_cwd(&mut state, id, cwd, "lx-tui".to_string()));
+    assert!(!update_pane_cwd(&mut state, id, cwd, "lx-tui".to_string()));
+    assert!(update_pane_cwd(
+        &mut state,
+        id,
+        std::path::Path::new("/tmp/herdr"),
+        "herdr".to_string()
+    ));
+    assert!(state.active_tab().pane(id).is_some_and(|pane| {
+        pane.cwd_label.as_deref() == Some("herdr")
+            && pane.cwd.as_deref() == Some(std::path::Path::new("/tmp/herdr"))
+    }));
 }
 
 #[test]

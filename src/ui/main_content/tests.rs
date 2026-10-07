@@ -104,6 +104,7 @@ fn pane_with(view: PaneView, terminal: Terminal) -> Pane {
         terminal,
         exited: false,
         cwd_label: None,
+        cwd: None,
     }
 }
 
