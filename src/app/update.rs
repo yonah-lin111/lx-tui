@@ -365,10 +365,11 @@ pub fn finish_terminal_selection(state: &mut AppState, pane: PaneId) -> Option<S
     if target.kind != PaneKind::Terminal {
         return None;
     }
+    // 全空白选区没有可复制的内容，与空选区一样不产生文本。
     target
         .terminal
         .take_selection_text()
-        .filter(|text| !text.is_empty())
+        .filter(|text| !text.trim().is_empty())
 }
 
 /// 放弃进行中的终端选区（清空仿真器高亮）。

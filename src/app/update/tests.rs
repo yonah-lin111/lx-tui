@@ -200,6 +200,18 @@ fn terminal_selection_finish_extracts_text() {
     assert!(state.terminal_selection.is_none());
 }
 
+#[test]
+fn terminal_selection_finish_ignores_whitespace_only() {
+    let mut state = AppState::demo();
+    create_tab(&mut state);
+    let logs = state.workspaces[0].tabs[1].layout.pane_ids()[0];
+    // 空终端只有空格：拖一块空白选区不应产生可复制文本。
+    begin_terminal_selection(&mut state, logs, 0, 0);
+    drag_terminal_selection(&mut state, logs, 0, 4);
+    assert_eq!(finish_terminal_selection(&mut state, logs), None);
+    assert!(state.terminal_selection.is_none());
+}
+
 /// 填满终端回滚历史。
 fn fill_scrollback(state: &mut AppState, pane: PaneId, lines: usize) {
     let target = state.pane_mut_anywhere(pane).expect("terminal pane");

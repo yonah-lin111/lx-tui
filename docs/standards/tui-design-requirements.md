@@ -67,7 +67,7 @@
 ## 选择与复制
 
 - 终端窗格与 prompt 编辑器支持文本选择；空占位窗格没有内容，不参与选择。
-- 交互：左键按下即定位光标并锚定选择，拖动实时反显高亮且光标跟随释放点；终端窗格松开时非空选区写入系统剪贴板并清除选区（空选区仅保留点击定位的光标、不提示），写入结果通过全局 toast 在选区所在窗格反馈（成功 `Copied to clipboard`、失败 `Copy failed`）；prompt 松开后保留选区高亮，按 `Ctrl/Cmd+C` 才复制（同样 toast 反馈），滚轮滚动其视口、折叠或尺寸变化时清除选区。
+- 交互：左键按下即定位光标并锚定选择，拖动实时反显高亮且光标跟随释放点；终端窗格松开时非空选区写入系统剪贴板并清除选区（空选区与全空白选区视为无可复制内容，仅清除选区、不提示），写入结果通过全局 toast 在选区所在窗格反馈（成功 `Copied to clipboard`、失败 `Copy failed`）；prompt 松开后保留选区高亮，按 `Ctrl/Cmd+C` 才复制（同样 toast 反馈），滚轮滚动其视口、折叠或尺寸变化时清除选区。
 - 终端文本提取交给终端仿真器（`alacritty_terminal` 的 Selection），宽字符、换行与行尾空格由其处理；选择范围仅限当前视口。
 - prompt 选区按渲染后的视口行列坐标映射回文本字节偏移，软换行连续行不插入换行、宽字符整字命中；复制时提取原文写入剪贴板；有选区时输入类按键用新内容替换选区、`Backspace`/`Delete` 删除选区（一次撤销即可恢复），其余编辑命令先清除选区。
 - 剪贴板写入（参考 opencode）：OSC 52 立即写（tmux/screen 自动加 passthrough 包装）；原生工具（macOS `pbcopy`、Windows PowerShell `Set-Clipboard`、Linux `wl-copy`/`xclip`/`xsel`）在后台线程限时执行，绝不阻塞事件循环；OS 代码只出现在 `src/platform/`。
