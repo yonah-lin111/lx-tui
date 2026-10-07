@@ -673,7 +673,7 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
 }
 
 /// 新建工作区并激活：名字取当前 cwd 末段（对齐 herdr），重名追加最小未用序号；
-/// PTY 由事件循环按状态对齐启动。
+/// 立即登记 cwd 的 git 元数据查询；PTY 由事件循环按状态对齐启动。
 pub fn create_workspace(state: &mut AppState) {
     let (cwd, base) = current_workspace_identity();
     let name = unique_workspace_name(&base, |candidate| {
@@ -682,8 +682,13 @@ pub fn create_workspace(state: &mut AppState) {
             .iter()
             .any(|workspace| workspace.name == candidate)
     });
-    state.workspaces.push(Workspace::single_terminal(name, cwd));
+    state
+        .workspaces
+        .push(Workspace::single_terminal(name, cwd.clone()));
     state.active_workspace = state.workspaces.len().saturating_sub(1);
+    if let Some(cwd) = cwd.as_deref() {
+        request_git_refresh(state, cwd);
+    }
     clear_selection(state);
     state.prompt_focused = false;
 }

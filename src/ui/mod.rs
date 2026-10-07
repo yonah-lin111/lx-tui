@@ -27,8 +27,8 @@ use crate::layout::{COLLAPSED_STRIP, PaneId};
 const PANEL_BUTTON_WIDTH: u16 = 3;
 const PANEL_BUTTON_MARGIN: u16 = 1;
 
-/// 工作区列表行统一左缩进列数（箭头、连接符与普通项一起右移）。
-const WORKSPACE_ITEM_MARGIN: usize = 1;
+/// 分组子项连接符相对父项的缩进列数。
+const WORKSPACE_CHILD_INDENT: usize = 2;
 
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
@@ -332,8 +332,8 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 /// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
 ///
-/// 分组父项行左端显示单格折叠箭头（accent 色，占 3 列），分组子项用 `├─ `/`└─ ` 连接符
-/// （末位按可见子项判定）；父/子标签同列对齐。折叠组只渲染父项与当前激活子项。
+/// 组父项行贴内容区左缘显示折叠箭头（accent 色，占 3 列），分组子项连接符再缩进 2 列
+/// （`├─ `/`└─ `，末位按可见子项判定）；非 git 工作区不缩进。折叠组只渲染父项与当前激活子项。
 /// 行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
@@ -370,7 +370,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_GROUP_EXPANDED
             };
-            format!("{:width$}{arrow}  ", "", width = WORKSPACE_ITEM_MARGIN)
+            format!("{arrow}  ")
         } else if row.child {
             let group = workspace_repo_root(state, row.index);
             let last = !rows[row_index + 1..]
@@ -381,9 +381,9 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_TREE_MIDDLE
             };
-            format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_MARGIN)
+            format!("{:width$}{tree} ", "", width = WORKSPACE_CHILD_INDENT)
         } else {
-            " ".repeat(WORKSPACE_ITEM_MARGIN)
+            String::new()
         };
         let label = workspace_item_label(workspace, row.child);
         let name_width =
@@ -556,7 +556,7 @@ pub fn workspace_item_at(
     state.workspace_rows().get(slot).map(|entry| entry.index)
 }
 
-/// 分组折叠箭头命中：仅父项行的箭头格（内容区第 `WORKSPACE_ITEM_MARGIN` 列）；返回父项工作区索引。
+/// 分组折叠箭头命中：仅父项行的箭头格（内容区第 0 列）；返回父项工作区索引。
 pub fn workspace_group_toggle_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -564,8 +564,7 @@ pub fn workspace_group_toggle_at(
     row: u16,
 ) -> Option<usize> {
     let list = workspace_list_rect(view, state)?;
-    let arrow_column = list.x.saturating_add(WORKSPACE_ITEM_MARGIN as u16);
-    if column != arrow_column || !list.contains((column, row).into()) {
+    if column != list.x || !list.contains((column, row).into()) {
         return None;
     }
     let slot = state

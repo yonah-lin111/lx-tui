@@ -1957,3 +1957,114 @@ fn collapsed_group_scroll_and_visibility_follow_visible_rows() {
     assert!(ensure_workspace_visible(&mut state, 1));
     assert_eq!(state.workspace_scroll, 1);
 }
+
+#[test]
+fn apply_git_refresh_auto_opens_parent_for_first_linked_workspace() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/feat"));
+    apply_git_refresh(
+        &mut state,
+        Path::new("/repo/.worktrees/feat"),
+        Some(git_info(
+            "/repo",
+            "/repo/.worktrees/feat",
+            true,
+            Some("feature/x"),
+        )),
+    );
+
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.workspaces[0].cwd, Some(PathBuf::from("/repo")));
+    let parent_git = state.workspaces[0].git.as_ref().expect("parent metadata");
+    assert!(!parent_git.is_linked);
+    assert_eq!(parent_git.checkout_path, PathBuf::from("/repo"));
+    assert_eq!(
+        state.workspaces[1].cwd,
+        Some(PathBuf::from("/repo/.worktrees/feat"))
+    );
+    assert_eq!(state.active_workspace, 1, "激活跟随原工作区");
+
+    apply_git_refresh(
+        &mut state,
+        Path::new("/repo/.worktrees/feat"),
+        Some(git_info(
+            "/repo",
+            "/repo/.worktrees/feat",
+            true,
+            Some("feature/x"),
+        )),
+    );
+    assert_eq!(state.workspaces.len(), 2, "已有元数据刷新不重复补开");
+}
+
+#[test]
+fn ensure_main_workspace_skips_when_parent_is_open() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    assert_eq!(worktree::ensure_main_workspace(&mut state, 1), None);
+    assert_eq!(state.workspaces.len(), 2);
+}
+
+#[test]
+fn commit_worktree_open_auto_opens_parent_before_linked_source() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/source"));
+    state.workspaces[0].git = Some(git_info(
+        "/repo",
+        "/repo/.worktrees/source",
+        true,
+        Some("source"),
+    ));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Down);
+    apply_worktree_open_key(&mut state, OverlayKey::Enter);
+
+    assert_eq!(state.workspaces.len(), 3);
+    assert_eq!(
+        state.workspaces[0].cwd,
+        Some(PathBuf::from("/repo")),
+        "父项插到仓库首个成员之前"
+    );
+    assert!(
+        state.workspaces[0]
+            .git
+            .as_ref()
+            .is_some_and(|git| !git.is_linked)
+    );
+    assert_eq!(
+        state.workspaces[1].cwd,
+        Some(PathBuf::from("/repo/.worktrees/source"))
+    );
+    assert_eq!(
+        state.workspaces[2].cwd,
+        Some(PathBuf::from("/repo/.worktrees/feat"))
+    );
+    assert_eq!(state.active_workspace, 2, "激活跟随新打开的 worktree");
+
+    let rows = state.workspace_rows();
+    assert!(rows[0].parent);
+    assert!(rows[1].child && rows[2].child, "树形结构始终成立");
+}
+
+#[test]
+fn create_workspace_requests_git_metadata_for_cwd() {
+    let mut state = AppState::demo();
+    assert!(state.git_requests.is_empty());
+    create_workspace(&mut state);
+    assert_eq!(state.git_requests.len(), 1);
+}
