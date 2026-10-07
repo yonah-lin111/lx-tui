@@ -51,6 +51,9 @@ pub const INITIAL_WORKSPACE_MARKER: &str = " *";
 /// 工作区分组折叠箭头：展开 / 折叠。
 pub const WORKSPACE_GROUP_EXPANDED: &str = "▾";
 pub const WORKSPACE_GROUP_COLLAPSED: &str = "▸";
+/// 分组子项树形连接符：非末位 / 末位（按可见子项判定）。
+pub const WORKSPACE_TREE_MIDDLE: &str = "├─";
+pub const WORKSPACE_TREE_LAST: &str = "└─";
 
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";

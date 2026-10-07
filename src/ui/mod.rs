@@ -11,6 +11,8 @@ pub mod text;
 pub mod toast;
 pub mod widgets;
 
+use std::path::Path;
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Modifier;
@@ -24,9 +26,6 @@ use crate::layout::{COLLAPSED_STRIP, PaneId};
 /// 展开态折叠按钮：标签宽度与距面板右缘的留白。
 const PANEL_BUTTON_WIDTH: u16 = 3;
 const PANEL_BUTTON_MARGIN: u16 = 1;
-
-/// 分组 linked 子项的缩进列数。
-const WORKSPACE_CHILD_INDENT: usize = 2;
 
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
@@ -330,14 +329,15 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 /// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
 ///
-/// 分组父项行左端显示单格折叠箭头（accent 色），分组子项缩进 2 列并显示分支短名（自动命名时）；
-/// 折叠组只渲染父项与当前激活子项。行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
+/// 分组父项行左端显示单格折叠箭头（accent 色，占 3 列），分组子项用 `├─ `/`└─ ` 连接符
+/// （末位按可见子项判定）；父/子标签同列对齐。折叠组只渲染父项与当前激活子项。
+/// 行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
     let marker_width = text::INITIAL_WORKSPACE_MARKER.chars().count();
     let rows = state.workspace_rows();
     let mut items = Vec::with_capacity(rows.len());
-    for row in rows {
+    for (row_index, row) in rows.iter().enumerate() {
         let Some(workspace) = state.workspaces.get(row.index) else {
             items.push(ListItem::new(Line::default()));
             continue;
@@ -367,9 +367,18 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_GROUP_EXPANDED
             };
-            format!("{arrow} ")
+            format!("{arrow}  ")
         } else if row.child {
-            " ".repeat(WORKSPACE_CHILD_INDENT)
+            let group = workspace_repo_root(state, row.index);
+            let last = !rows[row_index + 1..]
+                .iter()
+                .any(|later| later.child && workspace_repo_root(state, later.index) == group);
+            let tree = if last {
+                text::WORKSPACE_TREE_LAST
+            } else {
+                text::WORKSPACE_TREE_MIDDLE
+            };
+            format!("{tree} ")
         } else {
             String::new()
         };
@@ -396,6 +405,15 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         items.push(ListItem::new(Line::from(spans)));
     }
     items
+}
+
+/// 工作区所属仓库根（分组键）；无 git 元数据时 None。
+fn workspace_repo_root(state: &AppState, index: usize) -> Option<&Path> {
+    state
+        .workspaces
+        .get(index)
+        .and_then(|workspace| workspace.git.as_ref())
+        .map(|git| git.repo_root.as_path())
 }
 
 /// 列表项标签：分组子项自动命名时显示分支短名（去 `worktree/` 前缀），其余显示工作区名。

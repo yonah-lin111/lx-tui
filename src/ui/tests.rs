@@ -1050,7 +1050,7 @@ fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: Workspac
 }
 
 #[test]
-fn sidebar_indents_grouped_linked_worktree_with_branch_label() {
+fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "main".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
@@ -1075,15 +1075,29 @@ fn sidebar_indents_grouped_linked_worktree_with_branch_label() {
 
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("main")));
-    assert!(lines.iter().any(|line| line.contains("feature/x")));
     assert!(
-        lines.iter().any(|line| line.contains("  feature/x")),
-        "linked child is indented: {lines:?}"
+        lines.iter().any(|line| line.contains("├─ feature/x")),
+        "non-last child uses middle connector: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("  notes")),
-        "manual name wins over branch: {lines:?}"
+        lines.iter().any(|line| line.contains("└─ notes")),
+        "last child uses last connector and manual name wins: {lines:?}"
     );
+    let parent_line = lines
+        .iter()
+        .find(|line| line.contains("main"))
+        .expect("parent row");
+    let child_line = lines
+        .iter()
+        .find(|line| line.contains("feature/x"))
+        .expect("child row");
+    let parent_col = parent_line
+        .find("main")
+        .map(|byte| parent_line[..byte].chars().count());
+    let child_col = child_line
+        .find("feature/x")
+        .map(|byte| child_line[..byte].chars().count());
+    assert_eq!(parent_col, child_col, "父/子标签同列对齐");
 }
 
 #[test]
@@ -1289,8 +1303,8 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
 
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_EXPANDED));
-    assert!(joined.contains("feature/x"));
-    assert!(joined.contains("notes"));
+    assert!(joined.contains("├─ feature/x"), "非末位子项用中连接符");
+    assert!(joined.contains("└─ notes"));
 
     state.collapsed_groups.push(PathBuf::from("/repo"));
     let joined = render_lines(&state).join("\n");
@@ -1301,7 +1315,7 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
     state.active_workspace = 1;
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
-    assert!(joined.contains("feature/x"), "激活子项保持可见");
+    assert!(joined.contains("└─ feature/x"), "唯一可见子项用末连接符");
     assert!(!joined.contains("notes"));
 }
 
