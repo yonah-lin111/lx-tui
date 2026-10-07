@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use ratatui::layout::{Direction, Rect};
 
-use crate::layout::{PaneId, TileLayout};
+use crate::layout::{BoundaryHit, PaneId, TileLayout};
 use crate::terminal::Terminal;
 
 use super::overlay::Overlay;
@@ -57,6 +57,10 @@ pub struct AppState {
     pub resizing_sidebar: bool,
     /// 侧栏分割线是否悬停。
     pub sidebar_hover: bool,
+    /// 正在拖拽的主区窗格分割线（两侧窗格与方向）。
+    pub resizing_pane: Option<BoundaryHit>,
+    /// 悬停的主区窗格分割线。
+    pub pane_hover: Option<BoundaryHit>,
     pub toast: Option<Toast>,
     /// prompt 等编辑器的视口选区。
     pub selection: Option<Selection>,
@@ -308,6 +312,8 @@ impl AppState {
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             resizing_sidebar: false,
             sidebar_hover: false,
+            resizing_pane: None,
+            pane_hover: None,
             toast: None,
             selection: None,
             terminal_selection: None,

@@ -21,6 +21,7 @@ fn pane_rects(state: &AppState, view: &ViewLayout) -> Vec<(PaneId, Rect)> {
         &state.active_tab().layout,
         view.panes,
         Config::default().min_pane_width,
+        Config::default().min_pane_height,
     )
 }
 

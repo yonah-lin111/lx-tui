@@ -1265,7 +1265,7 @@ fn activate_menu_split_down_places_pane_below() {
     let tab = state.active_tab();
     assert_eq!(tab.layout.pane_ids().len(), 2);
     let new_id = tab.layout.focus();
-    let rects = crate::layout::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10);
+    let rects = crate::layout::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10, 3);
     let rect_of = |id: PaneId| rects.iter().find(|(pane, _)| *pane == id).map(|(_, r)| *r);
     assert_eq!(rect_of(source).map(|rect| rect.y), Some(0));
     assert_eq!(rect_of(new_id).map(|rect| rect.y), Some(10));

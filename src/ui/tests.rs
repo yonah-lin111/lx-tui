@@ -541,6 +541,7 @@ fn error_toast_uses_red_border() {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     let area = toast::rect(
         &state,
@@ -1011,6 +1012,7 @@ fn pane_title_and_toggle_label_follow_view() {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     let (id, rect) = rects[0];
     assert_eq!(id, state.active_tab().layout.focus());

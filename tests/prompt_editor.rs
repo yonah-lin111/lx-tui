@@ -29,6 +29,7 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     rects.push((state.prompt.id(), view.prompt));
     update::resize_panes(&mut state, &rects);
@@ -126,6 +127,7 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     let rect = rects
         .iter()

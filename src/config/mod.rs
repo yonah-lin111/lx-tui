@@ -17,6 +17,8 @@ pub struct Config {
     pub min_height: u16,
     /// 窗格最小宽度（含边框列）。
     pub min_pane_width: u16,
+    /// 窗格最小高度（含边框行）。
+    pub min_pane_height: u16,
 }
 
 impl Default for Config {
@@ -29,6 +31,7 @@ impl Default for Config {
             min_width: 40,
             min_height: 10,
             min_pane_width: 10,
+            min_pane_height: 3,
         }
     }
 }

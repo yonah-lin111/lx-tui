@@ -27,6 +27,7 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     rects.push((state.prompt.id(), view.prompt));
     update::resize_panes(&mut state, &rects);

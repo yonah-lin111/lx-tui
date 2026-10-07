@@ -23,6 +23,7 @@ const ENABLE_MOUSE_BUTTON_REPORTING: &[u8] = b"\x1b[?1000h\x1b[?1002h\x1b[?1003h
 pub enum PointerShape {
     Default,
     EwResize,
+    NsResize,
 }
 
 impl PointerShape {
@@ -31,6 +32,7 @@ impl PointerShape {
         match self {
             Self::Default => "default",
             Self::EwResize => "ew-resize",
+            Self::NsResize => "ns-resize",
         }
     }
 }

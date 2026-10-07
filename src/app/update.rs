@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::{Direction, Rect};
 
-use crate::layout::{self, PaneId};
+use crate::layout::{self, BoundaryHit, PaneId};
 
 use super::actions::{Action, EditorCommand, OverlayKey};
 use super::markdown::MentionEntry;
@@ -596,6 +596,44 @@ pub fn drag_sidebar(state: &mut AppState, width: u16) {
 /// 结束侧栏拖拽。
 pub fn end_sidebar_resize(state: &mut AppState) {
     state.resizing_sidebar = false;
+}
+
+/// 在主区窗格分割线上开始拖拽；清除已有选区。
+pub fn begin_pane_resize(state: &mut AppState, hit: BoundaryHit) {
+    clear_selection(state);
+    state.resizing_pane = Some(hit);
+}
+
+/// 拖拽中把分割线移到 `pos`（水平分割为屏幕列，垂直分割为屏幕行）；未处于该拖拽或调整失败时返回 false。
+pub fn drag_pane_boundary(
+    state: &mut AppState,
+    hit: BoundaryHit,
+    area: Rect,
+    pos: u16,
+    min_width: u16,
+    min_height: u16,
+) -> bool {
+    if state.resizing_pane != Some(hit) {
+        return false;
+    }
+    state
+        .active_tab_mut()
+        .layout
+        .resize_boundary(hit, area, pos, min_width, min_height)
+}
+
+/// 结束主区窗格拖拽。
+pub fn end_pane_resize(state: &mut AppState) {
+    state.resizing_pane = None;
+}
+
+/// 更新主区窗格分割线悬停状态；返回是否发生变化。
+pub fn set_pane_hover(state: &mut AppState, hover: Option<BoundaryHit>) -> bool {
+    if state.pane_hover == hover {
+        return false;
+    }
+    state.pane_hover = hover;
+    true
 }
 
 /// 更新侧栏分割线悬停状态；返回是否发生变化。

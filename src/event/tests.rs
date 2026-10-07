@@ -17,6 +17,7 @@ fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     if !state.prompt_collapsed {
         rects.push((state.prompt.id(), view.prompt));
@@ -1194,4 +1195,203 @@ fn lx_view_ignores_wheel_and_mouse_report() {
 /// 窗格视图（测试断言用）。
 fn view_of(state: &AppState, pane: PaneId) -> PaneView {
     state.pane_anywhere(pane).expect("pane exists").view
+}
+
+/// 按状态重新计算窗格矩形（拖拽后断言用）。
+fn pane_rects_of(state: &AppState, geo: &Geometry, config: &Config) -> Vec<(PaneId, Rect)> {
+    layout::pane_rects(
+        &state.active_tab().layout,
+        geo.view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    )
+}
+
+fn rect_of(rects: &[(PaneId, Rect)], pane: PaneId) -> Rect {
+    rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .map(|(_, rect)| *rect)
+        .expect("pane rect")
+}
+
+#[test]
+fn mouse_drag_resizes_pane_boundary() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let left = state.active_tab().layout.focus();
+    let right = state
+        .active_tab_mut()
+        .split_pane(left, ratatui::layout::Direction::Horizontal)
+        .expect("split succeeds");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let before = pane_rects_of(&state, &geo, &config);
+    let left_before = rect_of(&before, left);
+    let boundary = rect_of(&before, right).x;
+    let row = left_before.y + 1;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), boundary, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.resizing_pane,
+        Some(layout::BoundaryHit {
+            first: left,
+            second: right,
+            direction: ratatui::layout::Direction::Horizontal,
+        })
+    );
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Drag(MouseButton::Left), boundary + 4, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let after = pane_rects_of(&state, &geo, &config);
+    assert_eq!(rect_of(&after, left).width, left_before.width + 4);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), boundary + 4, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.resizing_pane.is_none());
+}
+
+#[test]
+fn mouse_drag_resizes_vertical_pane_boundary() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let top = state.active_tab().layout.focus();
+    let bottom = state
+        .active_tab_mut()
+        .split_pane(top, ratatui::layout::Direction::Vertical)
+        .expect("split succeeds");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let before = pane_rects_of(&state, &geo, &config);
+    let top_before = rect_of(&before, top);
+    let boundary = rect_of(&before, bottom).y;
+    let column = top_before.x + 1;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), column, boundary),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.resizing_pane,
+        Some(layout::BoundaryHit {
+            first: top,
+            second: bottom,
+            direction: ratatui::layout::Direction::Vertical,
+        })
+    );
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            column,
+            boundary + 4,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let after = pane_rects_of(&state, &geo, &config);
+    assert_eq!(rect_of(&after, top).height, top_before.height + 4);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), column, boundary + 4),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.resizing_pane.is_none());
+}
+
+#[test]
+fn mouse_down_on_collapsed_pane_boundary_does_not_start_resize() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let left = state.active_tab().layout.focus();
+    let right = state
+        .active_tab_mut()
+        .split_pane(left, ratatui::layout::Direction::Horizontal)
+        .expect("split succeeds");
+    assert!(state.active_tab_mut().layout.set_collapsed(right, true));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let rects = pane_rects_of(&state, &geo, &config);
+    let boundary = rect_of(&rects, right).x;
+    let row = rect_of(&rects, left).y + 1;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), boundary, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.resizing_pane.is_none());
+}
+
+#[test]
+fn mouse_reporting_pane_does_not_steal_boundary_drag() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let left = state.active_tab().layout.focus();
+    let right = state
+        .active_tab_mut()
+        .split_pane(left, ratatui::layout::Direction::Horizontal)
+        .expect("split succeeds");
+    {
+        let target = state.pane_mut_anywhere(left).expect("terminal pane");
+        target
+            .terminal
+            .feed(b"\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h");
+    }
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let rects = pane_rects_of(&state, &geo, &config);
+    let boundary = rect_of(&rects, right).x;
+    let row = rect_of(&rects, left).y + 1;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), boundary, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.resizing_pane.is_some());
 }

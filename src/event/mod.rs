@@ -9,7 +9,7 @@ use crossterm::event::{
     Event as TerminalEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
     MouseButton, MouseEvent, MouseEventKind,
 };
-use ratatui::layout::Rect;
+use ratatui::layout::{Direction, Rect};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
@@ -262,6 +262,7 @@ fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Res
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
     if !state.prompt_collapsed {
         rects.push((state.prompt.id(), view.prompt));
@@ -487,7 +488,7 @@ fn handle_terminal_event(
                     reveal_active_tab(state, view);
                     *dirty = true;
                 } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
-                    .is_some_and(|(_, right)| right == state.prompt.id())
+                    .is_some_and(|hit| hit.second == state.prompt.id())
                 {
                     update::begin_prompt_resize(state);
                     *dirty = true;
@@ -499,6 +500,11 @@ fn handle_terminal_event(
                 {
                     // 按钮是控件：只切换视图，不改变焦点。
                     update::toggle_pane_view(state, pane);
+                    *dirty = true;
+                } else if let Some(hit) = layout::resize_boundary_at(rects, mouse.column, mouse.row)
+                    .filter(|hit| pane_boundary_draggable(state, *hit))
+                {
+                    update::begin_pane_resize(state, hit);
                     *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
                     let row = mouse.row - inner.y;
@@ -611,6 +617,23 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                if let Some(hit) = state.resizing_pane {
+                    let pos = match hit.direction {
+                        Direction::Horizontal => mouse.column,
+                        Direction::Vertical => mouse.row,
+                    };
+                    if update::drag_pane_boundary(
+                        state,
+                        hit,
+                        view.panes,
+                        pos,
+                        config.min_pane_width,
+                        config.min_pane_height,
+                    ) {
+                        *dirty = true;
+                    }
+                    return;
+                }
                 if state.resizing_sidebar {
                     let width = ui::layout::sidebar_width_at(view, config, mouse.column);
                     update::drag_sidebar(state, width);
@@ -688,6 +711,11 @@ fn handle_terminal_event(
                 if state.terminal_scroll_drag.take().is_some() {
                     return;
                 }
+                if state.resizing_pane.is_some() {
+                    update::end_pane_resize(state);
+                    *dirty = true;
+                    return;
+                }
                 if state.workspace_drag.is_some() {
                     update::end_workspace_drag(state);
                     *dirty = true;
@@ -752,7 +780,7 @@ fn handle_terminal_event(
                 if state.overlay.is_some() {
                     return;
                 }
-                if state.resizing_prompt {
+                if state.resizing_prompt || state.resizing_pane.is_some() {
                     return;
                 }
                 // @ 提及面板打开且指针在其上：滚轮滚面板，不穿透到 prompt 与窗格。
@@ -836,19 +864,29 @@ fn handle_terminal_event(
                 if update::set_toast_hover(state, hovering_toast) {
                     *dirty = true;
                 }
+                let boundary = layout::resize_boundary_at(rects, mouse.column, mouse.row);
                 let sidebar_hover =
                     !hovering_toast && ui::sidebar_boundary_at(view, mouse.column, mouse.row);
                 let prompt_hover = !hovering_toast
                     && !sidebar_hover
-                    && layout::resize_boundary_at(rects, mouse.column, mouse.row)
-                        .is_some_and(|(_, right)| right == state.prompt.id());
+                    && boundary.is_some_and(|hit| hit.second == state.prompt.id());
+                let pane_hover = if hovering_toast || sidebar_hover || prompt_hover {
+                    None
+                } else {
+                    boundary.filter(|hit| pane_boundary_draggable(state, *hit))
+                };
                 let mut hover_changed = update::set_sidebar_hover(state, sidebar_hover);
                 hover_changed |= update::set_prompt_hover(state, prompt_hover);
+                hover_changed |= update::set_pane_hover(state, pane_hover);
                 if hover_changed {
                     let shape = if sidebar_hover || prompt_hover {
                         crate::platform::PointerShape::EwResize
                     } else {
-                        crate::platform::PointerShape::Default
+                        match pane_hover.map(|hit| hit.direction) {
+                            Some(Direction::Horizontal) => crate::platform::PointerShape::EwResize,
+                            Some(Direction::Vertical) => crate::platform::PointerShape::NsResize,
+                            None => crate::platform::PointerShape::Default,
+                        }
                     };
                     set_pointer_shape(shape);
                     *dirty = true;
@@ -1247,6 +1285,15 @@ fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, R
             None
         }
     })
+}
+
+/// 主区窗格边框可拖：两侧均为活动标签窗格且都未折叠；prompt 右栏边界归 prompt 拖拽。
+fn pane_boundary_draggable(state: &AppState, hit: layout::BoundaryHit) -> bool {
+    let tab = state.active_tab();
+    tab.pane(hit.first).is_some()
+        && tab.pane(hit.second).is_some()
+        && Some(hit.first) != tab.layout.collapsed()
+        && Some(hit.second) != tab.layout.collapsed()
 }
 
 /// 命中窗格顶边框右端的视图切换按钮：仅 Terminal 窗格有按钮（prompt 栏与占位窗格无）。

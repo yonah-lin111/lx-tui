@@ -34,6 +34,15 @@ pub enum NavDirection {
     Down,
 }
 
+/// 命中相邻两窗格之间的分割边框；`first` 在左/上，`second` 在右/下。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundaryHit {
+    pub first: PaneId,
+    pub second: PaneId,
+    /// 分割方向：`Horizontal` 为左右并排（边框是竖线），`Vertical` 为上下堆叠（边框是横线）。
+    pub direction: Direction,
+}
+
 /// BSP 树节点。
 #[derive(Debug, Clone)]
 enum Node {
@@ -148,25 +157,25 @@ impl TileLayout {
         self.focus = ids[next];
     }
 
-    /// 把 `left` 与 `right` 相邻窗格之间的水平分割线拖到 `boundary_x`。
+    /// 把 `hit` 两侧窗格之间的分割线拖到 `pos`（水平分割为屏幕列，垂直分割为屏幕行）。
     ///
-    /// `area` 为窗格区矩形；两侧窗格各保持至少 `min_width` 列（含边框），
-    /// 可用宽度不足 `2 * min_width` 时不做调整并返回 false。
+    /// `area` 为两侧窗格所在的分割区域；两侧窗格各保持至少 `min_width` / `min_height`
+    ///（含边框），空间不足、方向不符或窗格不存在时不做调整并返回 false。
     pub fn resize_boundary(
         &mut self,
-        left: PaneId,
-        right: PaneId,
+        hit: BoundaryHit,
         area: Rect,
-        boundary_x: u16,
+        pos: u16,
         min_width: u16,
+        min_height: u16,
     ) -> bool {
         resize_boundary_node(
             &mut self.root,
-            left,
-            right,
+            hit,
             area,
-            boundary_x,
+            pos,
             min_width,
+            min_height,
             self.collapsed,
         )
     }
@@ -294,10 +303,23 @@ fn first_id(node: &Node) -> PaneId {
 
 /// 计算每个窗格在给定区域内的矩形；折叠窗格压缩为父分割边缘的窄条。
 ///
-/// 水平分割的两侧宽度不小于 `min_width`（含边框）；可用宽度不足时退回按比例。
-pub fn pane_rects(layout: &TileLayout, area: Rect, min_width: u16) -> Vec<(PaneId, Rect)> {
+/// 分割两侧的宽度/高度不小于 `min_width` / `min_height`（含边框）；
+/// 空间不足时退回按比例。
+pub fn pane_rects(
+    layout: &TileLayout,
+    area: Rect,
+    min_width: u16,
+    min_height: u16,
+) -> Vec<(PaneId, Rect)> {
     let mut rects = Vec::new();
-    collect_rects(&layout.root, area, layout.collapsed, min_width, &mut rects);
+    collect_rects(
+        &layout.root,
+        area,
+        layout.collapsed,
+        min_width,
+        min_height,
+        &mut rects,
+    );
     rects
 }
 
@@ -306,6 +328,7 @@ fn collect_rects(
     area: Rect,
     collapsed: Option<PaneId>,
     min_width: u16,
+    min_height: u16,
     rects: &mut Vec<(PaneId, Rect)>,
 ) {
     match node {
@@ -317,10 +340,10 @@ fn collect_rects(
             second,
         } => {
             let (first_area, second_area) = child_areas(
-                *direction, *ratio, area, collapsed, first, second, min_width,
+                *direction, *ratio, area, collapsed, first, second, min_width, min_height,
             );
-            collect_rects(first, first_area, collapsed, min_width, rects);
-            collect_rects(second, second_area, collapsed, min_width, rects);
+            collect_rects(first, first_area, collapsed, min_width, min_height, rects);
+            collect_rects(second, second_area, collapsed, min_width, min_height, rects);
         }
     }
 }
@@ -334,22 +357,23 @@ fn child_areas(
     first: &Node,
     second: &Node,
     min_width: u16,
+    min_height: u16,
 ) -> (Rect, Rect) {
     match collapsed {
         Some(id) if is_pane(first, id) => split_rect_edge(area, direction, COLLAPSED_STRIP, false),
         Some(id) if is_pane(second, id) => split_rect_edge(area, direction, COLLAPSED_STRIP, true),
-        _ => split_rect(area, direction, ratio, min_width),
+        _ => split_rect(area, direction, ratio, min_width, min_height),
     }
 }
 
-/// 在树中定位包含 `left`/`right` 的水平分割节点并更新 ratio。
+/// 在树中定位包含 `hit` 两侧窗格的分割节点并按方向更新 ratio。
 fn resize_boundary_node(
     node: &mut Node,
-    left: PaneId,
-    right: PaneId,
+    hit: BoundaryHit,
     area: Rect,
-    boundary_x: u16,
+    pos: u16,
     min_width: u16,
+    min_height: u16,
     collapsed: Option<PaneId>,
 ) -> bool {
     let Node::Split {
@@ -361,50 +385,79 @@ fn resize_boundary_node(
     else {
         return false;
     };
-    if contains(first, left) && contains(second, right) {
-        if *direction != Direction::Horizontal || area.width < min_width.saturating_mul(2) {
+    if contains(first, hit.first) && contains(second, hit.second) {
+        if *direction != hit.direction {
             return false;
         }
-        let first_width = boundary_x
-            .saturating_sub(area.x)
-            .clamp(min_width, area.width - min_width);
-        *ratio = f32::from(first_width) / f32::from(area.width);
+        match direction {
+            Direction::Horizontal => {
+                if area.width < min_width.saturating_mul(2) {
+                    return false;
+                }
+                let first_width = pos
+                    .saturating_sub(area.x)
+                    .clamp(min_width, area.width - min_width);
+                *ratio = f32::from(first_width) / f32::from(area.width);
+            }
+            Direction::Vertical => {
+                if area.height < min_height.saturating_mul(2) {
+                    return false;
+                }
+                let first_height = pos
+                    .saturating_sub(area.y)
+                    .clamp(min_height, area.height - min_height);
+                *ratio = f32::from(first_height) / f32::from(area.height);
+            }
+        }
         return true;
     }
-    if contains(first, left) && contains(first, right) {
+    if contains(first, hit.first) && contains(first, hit.second) {
         let (first_area, _) = child_areas(
-            *direction, *ratio, area, collapsed, first, second, min_width,
+            *direction, *ratio, area, collapsed, first, second, min_width, min_height,
         );
         return resize_boundary_node(
-            first, left, right, first_area, boundary_x, min_width, collapsed,
+            first, hit, first_area, pos, min_width, min_height, collapsed,
         );
     }
-    if contains(second, left) && contains(second, right) {
+    if contains(second, hit.first) && contains(second, hit.second) {
         let (_, second_area) = child_areas(
-            *direction, *ratio, area, collapsed, first, second, min_width,
+            *direction, *ratio, area, collapsed, first, second, min_width, min_height,
         );
         return resize_boundary_node(
             second,
-            left,
-            right,
+            hit,
             second_area,
-            boundary_x,
+            pos,
             min_width,
+            min_height,
             collapsed,
         );
     }
     false
 }
 
-/// 命中相邻两列区域边框：返回边界两侧的 (左区域, 右区域)。
+/// 命中相邻两窗格之间的边框：先查竖直边框（左右并排），再查水平边框（上下堆叠）。
 ///
-/// 只命中边框列本身（左区域 `right()-1` 或右区域 `x`），不侵入内容区；
+/// 只命中边框线本身（竖直边框为相邻两列，水平边框为相邻两行），不侵入内容区；
 /// 零尺寸区域不参与。窗格与全局 prompt 右栏共用同一命中规则。
-pub fn resize_boundary_at(
-    rects: &[(PaneId, Rect)],
-    column: u16,
-    row: u16,
-) -> Option<(PaneId, PaneId)> {
+pub fn resize_boundary_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<BoundaryHit> {
+    column_boundary_at(rects, column, row)
+        .map(|(first, second)| BoundaryHit {
+            first,
+            second,
+            direction: Direction::Horizontal,
+        })
+        .or_else(|| {
+            row_boundary_at(rects, column, row).map(|(first, second)| BoundaryHit {
+                first,
+                second,
+                direction: Direction::Vertical,
+            })
+        })
+}
+
+/// 命中左右并排窗格间的竖直边框：返回边界两侧的 (左, 右) 窗格。
+fn column_boundary_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, PaneId)> {
     let hovered =
         |rect: &Rect| rect.width > 0 && rect.height > 0 && rect.contains((column, row).into());
     let row_hit =
@@ -428,6 +481,34 @@ pub fn resize_boundary_at(
         .iter()
         .find_map(|(id, rect)| (row_hit(rect) && rect.x == boundary).then_some(*id))?;
     Some((left, right))
+}
+
+/// 命中上下堆叠窗格间的水平边框：返回边界两侧的 (上, 下) 窗格。
+fn row_boundary_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, PaneId)> {
+    let hovered =
+        |rect: &Rect| rect.width > 0 && rect.height > 0 && rect.contains((column, row).into());
+    let col_hit = |rect: &Rect| {
+        rect.width > 0 && rect.height > 0 && column >= rect.x && column < rect.right()
+    };
+
+    // 命中行若是下区域的顶边框，边界即该行；若是上区域的底边框，边界在下一行。
+    let boundary = rects
+        .iter()
+        .find_map(|(_, rect)| (hovered(rect) && rect.y == row).then_some(row))
+        .or_else(|| {
+            rects.iter().find_map(|(_, rect)| {
+                (hovered(rect) && rect.bottom().saturating_sub(1) == row)
+                    .then_some(row.saturating_add(1))
+            })
+        })?;
+
+    let top = rects
+        .iter()
+        .find_map(|(id, rect)| (col_hit(rect) && rect.bottom() == boundary).then_some(*id))?;
+    let bottom = rects
+        .iter()
+        .find_map(|(id, rect)| (col_hit(rect) && rect.y == boundary).then_some(*id))?;
+    Some((top, bottom))
 }
 
 /// 节点是否为指定窗格叶子。
@@ -471,10 +552,16 @@ fn split_rect_edge(area: Rect, direction: Direction, len: u16, second: bool) -> 
     }
 }
 
-/// 按比例分割；水平分割时首侧宽度钳制在 `[min_width, width - min_width]`。
+/// 按比例分割；分割方向的两侧宽度/高度钳制在 `[min, total - min]`。
 ///
-/// 可用宽度不足 `2 * min_width` 时退回纯比例分割。
-fn split_rect(area: Rect, direction: Direction, ratio: f32, min_width: u16) -> (Rect, Rect) {
+/// 可用宽度/高度不足 `2 * min` 时退回纯比例分割。
+fn split_rect(
+    area: Rect,
+    direction: Direction,
+    ratio: f32,
+    min_width: u16,
+    min_height: u16,
+) -> (Rect, Rect) {
     match direction {
         Direction::Horizontal => {
             let mut first_width = ((f32::from(area.width) * ratio).round() as u16).min(area.width);
@@ -494,7 +581,11 @@ fn split_rect(area: Rect, direction: Direction, ratio: f32, min_width: u16) -> (
             )
         }
         Direction::Vertical => {
-            let first_height = ((f32::from(area.height) * ratio).round() as u16).min(area.height);
+            let mut first_height =
+                ((f32::from(area.height) * ratio).round() as u16).min(area.height);
+            if area.height >= min_height.saturating_mul(2) {
+                first_height = first_height.clamp(min_height, area.height - min_height);
+            }
             (
                 Rect {
                     height: first_height,

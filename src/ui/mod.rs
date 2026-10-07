@@ -45,6 +45,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         &state.active_tab().layout,
         view.panes,
         config.min_pane_width,
+        config.min_pane_height,
     );
 
     if view.sidebar.width > 0 {
