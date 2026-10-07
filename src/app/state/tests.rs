@@ -196,3 +196,120 @@ fn workspace_cwd_for_pane_finds_owning_workspace_only() {
     assert_eq!(state.workspace_cwd_for_pane(state.prompt.id()), None);
     assert_eq!(state.workspace_cwd_for_pane(PaneId::alloc()), None);
 }
+
+/// 工作区 git 元数据（分组行测试用）。
+fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(checkout),
+        is_linked: linked,
+        branch: branch.map(str::to_string),
+    }
+}
+
+/// 追加带 git 元数据的工作区。
+fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) {
+    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
+    workspace.git = Some(git);
+    state.workspaces.push(workspace);
+}
+
+#[test]
+fn workspace_rows_group_parent_with_linked_children() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].index, 0);
+    assert!(rows[0].parent && !rows[0].child && !rows[0].collapsed);
+    assert_eq!(rows[1].index, 1);
+    assert!(rows[1].child && !rows[1].parent);
+    assert_eq!(rows[2].index, 2);
+    assert!(rows[2].child);
+}
+
+#[test]
+fn workspace_rows_hide_collapsed_children_except_active() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].parent && rows[0].collapsed);
+
+    state.active_workspace = 2;
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].parent && rows[0].collapsed);
+    assert_eq!(rows[1].index, 2);
+    assert!(rows[1].child);
+}
+
+#[test]
+fn workspace_rows_keep_linked_only_group_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/one", true, Some("one")));
+    push_git_workspace(
+        &mut state,
+        "two",
+        "/repo/two",
+        git_info("/repo", "/repo/two", true, Some("two")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| !row.parent && !row.child));
+}
+
+#[test]
+fn workspace_rows_keep_children_before_parent_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/wt", true, Some("wt")));
+    push_git_workspace(
+        &mut state,
+        "main",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(!rows[0].parent && !rows[0].child);
+    assert!(rows[1].parent && !rows[1].child);
+}
+
+#[test]
+fn workspace_rows_keep_single_git_workspace_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].parent && !rows[0].child);
+}

@@ -5,6 +5,7 @@ mod worktree;
 pub use worktree::{
     apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
     open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
+    toggle_workspace_group,
 };
 
 use std::path::Path;
@@ -1112,9 +1113,9 @@ fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pane: PaneId) 
     }
 }
 
-/// 工作区列表最大滚动偏移；列表放得下时恒为 0。
+/// 工作区列表最大滚动偏移（按可见行计）；列表放得下时恒为 0。
 pub fn workspace_scroll_max(state: &AppState, visible: usize) -> usize {
-    state.workspaces.len().saturating_sub(visible.max(1))
+    state.workspace_rows().len().saturating_sub(visible.max(1))
 }
 
 /// 滚动工作区列表；越界钳制；返回是否变化。
@@ -1196,9 +1197,11 @@ pub fn end_workspace_drag(state: &mut AppState) {
 pub fn ensure_workspace_visible(state: &mut AppState, visible: usize) -> bool {
     let visible = visible.max(1);
     let max = workspace_scroll_max(state, visible);
-    let active = state
-        .active_workspace
-        .min(state.workspaces.len().saturating_sub(1));
+    let rows = state.workspace_rows();
+    let active = rows
+        .iter()
+        .position(|row| row.index == state.active_workspace)
+        .unwrap_or(0);
     let mut offset = state.workspace_scroll.min(max);
     if active < offset {
         offset = active;

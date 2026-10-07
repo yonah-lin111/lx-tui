@@ -519,6 +519,15 @@ fn handle_terminal_event(
                 {
                     *dirty = true;
                 } else if let Some(index) =
+                    ui::workspace_group_toggle_at(view, state, mouse.column, mouse.row)
+                {
+                    update::toggle_workspace_group(state, index);
+                    if let Some(rows) = ui::workspace_list_rows(view, state) {
+                        update::clamp_workspace_scroll(state, rows);
+                    }
+                    ensure_workspace_visible(state, view);
+                    *dirty = true;
+                } else if let Some(index) =
                     ui::workspace_item_at(view, state, mouse.column, mouse.row)
                 {
                     update::switch_workspace(state, index);

@@ -1268,3 +1268,111 @@ fn worktree_dialog_window_follows_selection() {
     dialog.selected = 5;
     assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 4);
 }
+
+#[test]
+fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+
+    let joined = render_lines(&state).join("\n");
+    assert!(joined.contains(text::WORKSPACE_GROUP_EXPANDED));
+    assert!(joined.contains("feature/x"));
+    assert!(joined.contains("notes"));
+
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+    let joined = render_lines(&state).join("\n");
+    assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
+    assert!(!joined.contains("feature/x"));
+    assert!(!joined.contains("notes"));
+
+    state.active_workspace = 1;
+    let joined = render_lines(&state).join("\n");
+    assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
+    assert!(joined.contains("feature/x"), "激活子项保持可见");
+    assert!(!joined.contains("notes"));
+}
+
+#[test]
+fn workspace_group_toggle_hit_targets_parent_chevron_cell_only() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+
+    let view = view_for(&state);
+    let list = layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+        .expect("sidebar sections")
+        .workspaces;
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x, list.y),
+        Some(0)
+    );
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x + 1, list.y),
+        None,
+        "箭头之外不命中"
+    );
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x, list.y + 1),
+        None,
+        "子项行不命中"
+    );
+}
+
+#[test]
+fn workspace_item_at_maps_visible_rows_when_collapsed() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+
+    let view = view_for(&state);
+    let list = layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+        .expect("sidebar sections")
+        .workspaces;
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x + 3, list.y),
+        Some(0)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x + 3, list.y + 1),
+        None,
+        "隐藏行不命中"
+    );
+
+    state.active_workspace = 2;
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x + 3, list.y + 1),
+        Some(2)
+    );
+}

@@ -93,6 +93,8 @@ pub struct AppState {
     pub overlay: Option<Overlay>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
     pub git_requests: Vec<PathBuf>,
+    /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
+    pub collapsed_groups: Vec<PathBuf>,
 }
 
 /// 工作区。
@@ -122,6 +124,19 @@ pub struct WorkspaceGit {
     pub is_linked: bool,
     /// 当前分支短名；detached 或 bare 为 None。
     pub branch: Option<String>,
+}
+
+/// 侧栏工作区列表的可见行；折叠的组只保留父项与当前激活子项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceRow {
+    /// 工作区索引。
+    pub index: usize,
+    /// 分组子项：缩进并显示分支短名。
+    pub child: bool,
+    /// 分组父项：显示折叠箭头。
+    pub parent: bool,
+    /// 父项所在组是否已折叠。
+    pub collapsed: bool,
 }
 
 impl Workspace {
@@ -356,6 +371,7 @@ impl AppState {
             workspace_drag: None,
             overlay: None,
             git_requests: Vec::new(),
+            collapsed_groups: Vec::new(),
         }
     }
 
@@ -437,6 +453,80 @@ impl AppState {
             .panes
             .values()
             .any(|pane| pane.view == PaneView::Lx)
+    }
+
+    /// 侧栏可见行：同仓库 ≥2 个已打开工作区且含非 linked 主项时成组，
+    /// 主项之后（索引更大）的 linked 项为子项；折叠的组只保留父项与当前激活子项。
+    ///
+    /// 列表保持工作区原始顺序，不做父项前置重排；渲染、命中与滚动共用此结果。
+    pub fn workspace_rows(&self) -> Vec<WorkspaceRow> {
+        let mut members: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            if let Some(git) = workspace.git.as_ref() {
+                members
+                    .entry(git.repo_root.as_path())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        // 成组条件：≥2 个成员且至少一个非 linked 主项；父项取首个非 linked 成员。
+        let mut groups: BTreeMap<&Path, (usize, bool)> = BTreeMap::new();
+        for (key, indices) in &members {
+            if indices.len() < 2 {
+                continue;
+            }
+            let Some(parent) = indices.iter().copied().find(|index| {
+                self.workspaces
+                    .get(*index)
+                    .and_then(|workspace| workspace.git.as_ref())
+                    .is_some_and(|git| !git.is_linked)
+            }) else {
+                continue;
+            };
+            let collapsed = self
+                .collapsed_groups
+                .iter()
+                .any(|group| group.as_path() == *key);
+            groups.insert(key, (parent, collapsed));
+        }
+
+        let mut rows = Vec::with_capacity(self.workspaces.len());
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            let group = workspace
+                .git
+                .as_ref()
+                .and_then(|git| groups.get(git.repo_root.as_path()).copied());
+            match group {
+                Some((parent, collapsed)) if parent == index => {
+                    rows.push(WorkspaceRow {
+                        index,
+                        child: false,
+                        parent: true,
+                        collapsed,
+                    });
+                }
+                Some((parent, collapsed))
+                    if index > parent
+                        && workspace.git.as_ref().is_some_and(|git| git.is_linked) =>
+                {
+                    if !collapsed || self.active_workspace == index {
+                        rows.push(WorkspaceRow {
+                            index,
+                            child: true,
+                            parent: false,
+                            collapsed: false,
+                        });
+                    }
+                }
+                _ => rows.push(WorkspaceRow {
+                    index,
+                    child: false,
+                    parent: false,
+                    collapsed: false,
+                }),
+            }
+        }
+        rows
     }
 }
 

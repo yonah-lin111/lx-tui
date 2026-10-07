@@ -176,6 +176,26 @@ pub fn commit_worktree_open(state: &mut AppState) {
     state.prompt_focused = false;
 }
 
+/// 切换工作区分组折叠：按仓库根路径记录；仅组父项调用。
+pub fn toggle_workspace_group(state: &mut AppState, index: usize) {
+    let Some(workspace) = state.workspaces.get(index) else {
+        return;
+    };
+    let Some(git) = workspace.git.as_ref() else {
+        return;
+    };
+    let key = git.repo_root.clone();
+    if let Some(position) = state
+        .collapsed_groups
+        .iter()
+        .position(|group| *group == key)
+    {
+        state.collapsed_groups.remove(position);
+    } else {
+        state.collapsed_groups.push(key);
+    }
+}
+
 /// 已打开为工作区的 checkout 索引：优先按 git 元数据匹配，未查询到时按 cwd 兜底。
 fn open_workspace_for_checkout(state: &AppState, path: &Path) -> Option<usize> {
     state.workspaces.iter().position(|workspace| {

@@ -11,9 +11,6 @@ pub mod text;
 pub mod toast;
 pub mod widgets;
 
-use std::collections::BTreeMap;
-use std::path::Path;
-
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Modifier;
@@ -333,93 +330,72 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 /// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
 ///
-/// 同一 git 仓库有 ≥2 个已打开工作区且含主 checkout 时，主项之后的 linked 项缩进为子项
-/// 并显示分支短名（自动命名时）；列表保持工作区原顺序，命中映射仍为一行一项。
+/// 分组父项行左端显示单格折叠箭头（accent 色），分组子项缩进 2 列并显示分支短名（自动命名时）；
+/// 折叠组只渲染父项与当前激活子项。行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
     let marker_width = text::INITIAL_WORKSPACE_MARKER.chars().count();
-    let grouped = grouped_child_flags(state);
-    state
-        .workspaces
-        .iter()
-        .enumerate()
-        .map(|(index, workspace)| {
-            let dragging = state.workspace_drag == Some(index);
-            let mut item_style = if index == state.active_workspace {
-                style::accent()
+    let rows = state.workspace_rows();
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let Some(workspace) = state.workspaces.get(row.index) else {
+            items.push(ListItem::new(Line::default()));
+            continue;
+        };
+        let dragging = state.workspace_drag == Some(row.index);
+        let mut item_style = if row.index == state.active_workspace {
+            style::accent()
+        } else {
+            style::text()
+        };
+        let mut marker_style = style::marker();
+        if dragging {
+            item_style = item_style.add_modifier(Modifier::REVERSED);
+            marker_style = marker_style.add_modifier(Modifier::REVERSED);
+        }
+        let mut prefix_style = if row.parent {
+            style::accent()
+        } else {
+            item_style
+        };
+        if dragging {
+            prefix_style = prefix_style.add_modifier(Modifier::REVERSED);
+        }
+        let prefix = if row.parent {
+            let arrow = if row.collapsed {
+                text::WORKSPACE_GROUP_COLLAPSED
             } else {
-                style::text()
+                text::WORKSPACE_GROUP_EXPANDED
             };
-            let mut marker_style = style::marker();
-            if dragging {
-                item_style = item_style.add_modifier(Modifier::REVERSED);
-                marker_style = marker_style.add_modifier(Modifier::REVERSED);
-            }
-            let child = grouped.get(index).copied().unwrap_or(false);
-            let indent = if child { WORKSPACE_CHILD_INDENT } else { 0 };
-            let label = workspace_item_label(workspace, child);
-            let name_width = width
-                .saturating_sub(indent)
+            format!("{arrow} ")
+        } else if row.child {
+            " ".repeat(WORKSPACE_CHILD_INDENT)
+        } else {
+            String::new()
+        };
+        let label = workspace_item_label(workspace, row.child);
+        let name_width =
+            width
+                .saturating_sub(prefix.chars().count())
                 .saturating_sub(if workspace.is_initial {
                     marker_width
                 } else {
                     0
                 });
-            let mut spans = Vec::new();
-            if indent > 0 {
-                spans.push(Span::styled(" ".repeat(indent), item_style));
-            }
-            spans.push(Span::styled(
-                text::ellipsize(&label, name_width),
-                item_style,
-            ));
-            if workspace.is_initial {
-                spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
-            }
-            ListItem::new(Line::from(spans))
-        })
-        .collect()
-}
-
-/// 分组子项标记：同仓库 ≥2 个已打开工作区、含非 linked 主项，且主项在子项之前。
-///
-/// 主项之前的 linked 项不缩进（列表不做父项前置重排）。
-fn grouped_child_flags(state: &AppState) -> Vec<bool> {
-    let mut groups: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
-    for (index, workspace) in state.workspaces.iter().enumerate() {
-        if let Some(git) = workspace.git.as_ref() {
-            groups
-                .entry(git.repo_root.as_path())
-                .or_default()
-                .push(index);
+        let mut spans = Vec::new();
+        if !prefix.is_empty() {
+            spans.push(Span::styled(prefix, prefix_style));
         }
+        spans.push(Span::styled(
+            text::ellipsize(&label, name_width),
+            item_style,
+        ));
+        if workspace.is_initial {
+            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, marker_style));
+        }
+        items.push(ListItem::new(Line::from(spans)));
     }
-    let mut flags = vec![false; state.workspaces.len()];
-    for members in groups.values() {
-        if members.len() < 2 {
-            continue;
-        }
-        let Some(parent) = members.iter().copied().find(|index| {
-            state
-                .workspaces
-                .get(*index)
-                .and_then(|workspace| workspace.git.as_ref())
-                .is_some_and(|git| !git.is_linked)
-        }) else {
-            continue;
-        };
-        for member in members {
-            let linked = state
-                .workspaces
-                .get(*member)
-                .and_then(|workspace| workspace.git.as_ref())
-                .is_some_and(|git| git.is_linked);
-            if linked && *member > parent {
-                flags[*member] = true;
-            }
-        }
-    }
-    flags
+    items
 }
 
 /// 列表项标签：分组子项自动命名时显示分支短名（去 `worktree/` 前缀），其余显示工作区名。
@@ -451,7 +427,7 @@ fn workspace_scrollbar_for(
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
     widgets::scrollbar::layout(
         list,
-        state.workspaces.len(),
+        state.workspace_rows().len(),
         usize::from(list.height),
         state.workspace_scroll,
     )
@@ -533,9 +509,9 @@ fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Re
     (list.width > 0 && list.height > 0).then_some(list)
 }
 
-/// 工作区项行命中：返回被点工作区索引；滚动条列与空行不命中。
+/// 工作区项行命中：返回被点工作区索引；滚动条列、空行与被折叠隐藏的行不命中。
 ///
-/// 第 N 项渲染在内容区第 `N - workspace_scroll` 行；分区缺失时退回整块内容区。
+/// 可见行由 `AppState::workspace_rows` 给出；分区缺失时退回整块内容区。
 pub fn workspace_item_at(
     view: &layout::ViewLayout,
     state: &AppState,
@@ -553,27 +529,50 @@ pub fn workspace_item_at(
     if column >= list.x.saturating_add(content_width) {
         return None;
     }
-    let index = state
+    let slot = state
         .workspace_scroll
         .saturating_add(usize::from(row - list.y));
-    (index < state.workspaces.len()).then_some(index)
+    state.workspace_rows().get(slot).map(|entry| entry.index)
 }
 
-/// 拖动排序目标索引：指针行映射到列表行（纵向越界钳到首/末项，横向不限）。
+/// 分组折叠箭头命中：仅父项行的首格；返回父项工作区索引。
+pub fn workspace_group_toggle_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let list = workspace_list_rect(view, state)?;
+    if column != list.x || !list.contains((column, row).into()) {
+        return None;
+    }
+    let slot = state
+        .workspace_scroll
+        .saturating_add(usize::from(row - list.y));
+    state
+        .workspace_rows()
+        .get(slot)
+        .filter(|entry| entry.parent)
+        .map(|entry| entry.index)
+}
+
+/// 拖动排序目标索引：指针行映射到可见行的工作区索引（纵向越界钳到首/末行，横向不限）。
 pub fn workspace_drop_index(
     view: &layout::ViewLayout,
     state: &AppState,
     row: u16,
 ) -> Option<usize> {
     let list = workspace_list_rect(view, state)?;
-    if state.workspaces.is_empty() {
+    let rows = state.workspace_rows();
+    if rows.is_empty() {
         return None;
     }
     let clamped = row.clamp(list.y, list.bottom().saturating_sub(1));
     let slot = state
         .workspace_scroll
         .saturating_add(usize::from(clamped - list.y));
-    Some(slot.min(state.workspaces.len().saturating_sub(1)))
+    rows.get(slot.min(rows.len().saturating_sub(1)))
+        .map(|entry| entry.index)
 }
 
 /// agents 表头：贯穿的横线与左对齐的 ` Agents ` 标题；与折叠按钮重叠时省略标题。

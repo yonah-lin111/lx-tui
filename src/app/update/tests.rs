@@ -1913,3 +1913,47 @@ fn request_git_refresh_dedups_pending_cwds_and_take_drains() {
     assert_eq!(taken, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
     assert!(state.git_requests.is_empty());
 }
+
+#[test]
+fn toggle_workspace_group_flips_repo_key_and_ignores_plain_workspaces() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    toggle_workspace_group(&mut state, 0);
+    assert_eq!(state.collapsed_groups, vec![PathBuf::from("/repo")]);
+    toggle_workspace_group(&mut state, 0);
+    assert!(state.collapsed_groups.is_empty());
+
+    state
+        .workspaces
+        .push(Workspace::single_terminal("plain".to_string(), None));
+    toggle_workspace_group(&mut state, 1);
+    assert!(state.collapsed_groups.is_empty());
+}
+
+#[test]
+fn collapsed_group_scroll_and_visibility_follow_visible_rows() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+
+    assert_eq!(workspace_scroll_max(&state, 2), 1);
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+    assert_eq!(workspace_scroll_max(&state, 2), 0, "折叠后仅剩父项一行");
+
+    state.active_workspace = 2;
+    assert_eq!(workspace_scroll_max(&state, 1), 1);
+    state.workspace_scroll = 5;
+    assert!(ensure_workspace_visible(&mut state, 1));
+    assert_eq!(state.workspace_scroll, 1);
+}
