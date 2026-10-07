@@ -1,5 +1,13 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
+mod worktree;
+
+pub use worktree::{
+    apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
+    open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
+    toggle_workspace_group,
+};
+
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -293,14 +301,15 @@ pub fn mark_pane_exited(state: &mut AppState, id: PaneId) {
     }
 }
 
-/// 更新窗格 cwd 标题标签；变化返回 true（供置脏重绘）。
-pub fn update_pane_cwd(state: &mut AppState, id: PaneId, label: String) -> bool {
+/// 更新窗格 shell cwd（路径与标题标签）；任一变化返回 true（供置脏重绘）。
+pub fn update_pane_cwd(state: &mut AppState, id: PaneId, cwd: &Path, label: String) -> bool {
     let Some(pane) = state.pane_mut_anywhere(id) else {
         return false;
     };
-    if pane.cwd_label.as_deref() == Some(label.as_str()) {
+    if pane.cwd.as_deref() == Some(cwd) && pane.cwd_label.as_deref() == Some(label.as_str()) {
         return false;
     }
+    pane.cwd = Some(cwd.to_path_buf());
     pane.cwd_label = Some(label);
     true
 }
@@ -702,43 +711,64 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     [toast, autoscroll, animation].into_iter().flatten().min()
 }
 
-/// 新建工作区并激活：名字取当前 cwd 末段（对齐 herdr），重名追加最小未用序号；
+/// 新建工作区并激活：目录取当前工作区焦点终端的实时 cwd，回退主终端 cwd 与进程 cwd；
+/// 名字取目录末段（对齐 herdr），重名追加最小未用序号；立即登记 cwd 的 git 元数据查询；
 /// PTY 由事件循环按状态对齐启动。
 pub fn create_workspace(state: &mut AppState) {
-    let (cwd, base) = current_workspace_identity();
+    let (cwd, base) = match state
+        .active_terminal_cwd()
+        .or_else(|| state.active_workspace().cwd.clone())
+    {
+        Some(cwd) => {
+            let base = workspace_label(&cwd, home_dir().as_deref());
+            (Some(cwd), base)
+        }
+        None => current_workspace_identity(),
+    };
     let name = unique_workspace_name(&base, |candidate| {
         state
             .workspaces
             .iter()
             .any(|workspace| workspace.name == candidate)
     });
-    state.workspaces.push(Workspace::single_terminal(name, cwd));
+    state
+        .workspaces
+        .push(Workspace::single_terminal(name, cwd.clone()));
     state.active_workspace = state.workspaces.len().saturating_sub(1);
+    if let Some(cwd) = cwd.as_deref() {
+        request_git_refresh(state, cwd);
+    }
     clear_selection(state);
     state.prompt_focused = false;
 }
 
-/// 跟踪窗格 cwd 变化：自动命名工作区跟随 cwd 改名，手动命名工作区忽略；返回是否变化。
+/// 跟踪窗格 cwd 变化：更新工作区 cwd（自动命名时同步改名，手动命名只更新目录）；返回是否变化。
 pub fn update_workspace_cwd(state: &mut AppState, index: usize, cwd: &Path) -> bool {
     let Some(workspace) = state.workspaces.get(index) else {
         return false;
     };
-    if workspace.name_is_manual || workspace.cwd.as_deref() == Some(cwd) {
+    if workspace.cwd.as_deref() == Some(cwd) {
         return false;
     }
-    let base = workspace_label(cwd, home_dir().as_deref());
-    let name = unique_workspace_name(&base, |candidate| {
-        state
-            .workspaces
-            .iter()
-            .enumerate()
-            .any(|(other, workspace)| other != index && workspace.name == candidate)
-    });
+    let name = if workspace.name_is_manual {
+        None
+    } else {
+        let base = workspace_label(cwd, home_dir().as_deref());
+        Some(unique_workspace_name(&base, |candidate| {
+            state
+                .workspaces
+                .iter()
+                .enumerate()
+                .any(|(other, workspace)| other != index && workspace.name == candidate)
+        }))
+    };
     let Some(workspace) = state.workspaces.get_mut(index) else {
         return false;
     };
     workspace.cwd = Some(cwd.to_path_buf());
-    workspace.name = name;
+    if let Some(name) = name {
+        workspace.name = name;
+    }
     true
 }
 
@@ -757,9 +787,18 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     if target >= state.workspaces.len() {
         return;
     }
-    // 打开模态时结束可能残留的滚动条拖拽。
+    // 打开模态时结束可能残留的滚动条拖拽与排序拖拽。
     state.workspace_scroll_drag = None;
+    state.workspace_drag = None;
+    state.workspace_dragging = false;
     let mut commands = vec![MenuCommand::RenameWorkspace];
+    if state
+        .workspaces
+        .get(target)
+        .is_some_and(|workspace| workspace.git.is_some())
+    {
+        commands.push(MenuCommand::OpenWorktree);
+    }
     if state.workspaces.len() > 1 {
         commands.push(MenuCommand::CloseWorkspace);
     }
@@ -907,6 +946,9 @@ pub fn activate_menu(state: &mut AppState) {
                 input: TextInput::new(workspace.name.clone()),
             }));
         }
+        (Some(MenuCommand::OpenWorktree), OverlayTarget::Workspace(target)) => {
+            open_worktree_dialog(state, target);
+        }
         (Some(MenuCommand::CloseWorkspace), OverlayTarget::Workspace(_)) => {
             state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
                 target: menu.target,
@@ -992,6 +1034,10 @@ fn split_pane(
 
 /// 浮层按键分派；输入层已按浮层种类过滤。
 pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
+    if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
+        apply_worktree_open_key(state, key);
+        return;
+    }
     match key {
         OverlayKey::Esc => close_overlay(state),
         OverlayKey::Up => move_menu_selection(state, -1),
@@ -1000,7 +1046,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
             Some(OverlayKind::Menu) => activate_menu(state),
             Some(OverlayKind::Rename) => commit_rename(state),
             Some(OverlayKind::ConfirmClose) => confirm_close(state),
-            None => {}
+            Some(OverlayKind::WorktreeOpen) | None => {}
         },
         OverlayKey::Char(ch) => edit_rename(state, |input| input.insert_char(ch)),
         OverlayKey::Clear => edit_rename(state, TextInput::clear),
@@ -1129,9 +1175,9 @@ fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pane: PaneId) 
     }
 }
 
-/// 工作区列表最大滚动偏移；列表放得下时恒为 0。
+/// 工作区列表最大滚动偏移（按可见行计）；列表放得下时恒为 0。
 pub fn workspace_scroll_max(state: &AppState, visible: usize) -> usize {
-    state.workspaces.len().saturating_sub(visible.max(1))
+    state.workspace_rows().len().saturating_sub(visible.max(1))
 }
 
 /// 滚动工作区列表；越界钳制；返回是否变化。
@@ -1170,14 +1216,17 @@ pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
     })
 }
 
-/// 开始拖动排序：记录被拖工作区索引；按下时已切换激活。
+/// 开始拖动排序：记录被拖工作区索引；按下时已切换激活；整块反显等指针移动后再显示。
 pub fn begin_workspace_drag(state: &mut AppState, index: usize) {
     if index < state.workspaces.len() {
         state.workspace_drag = Some(index);
+        state.workspace_dragging = false;
     }
 }
 
-/// 拖动排序：把被拖工作区移动到 `target` 索引并钳制；激活项跟随其新位置；返回是否变化。
+/// 拖动排序：把被拖工作区所在的组（根 + linked 子项）整体移动到落点，
+/// 落点落在别的组上时吸附到该组边界；重复主 checkout 等独立项单项移动；
+/// 激活项与拖动索引跟随新位置；返回是否变化。
 pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     let Some(from) = state.workspace_drag else {
         return false;
@@ -1186,36 +1235,66 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
     if len == 0 || from >= len {
         return false;
     }
-    let to = target.min(len - 1);
-    if to == from {
+    state.workspace_dragging = true;
+    let target = target.min(len - 1);
+    let block = state.workspace_block(from);
+    let hovered = state.workspace_block(target);
+    if hovered.iter().any(|member| block.contains(member)) {
         return false;
     }
-    let workspace = state.workspaces.remove(from);
-    state.workspaces.insert(to, workspace);
-    state.workspace_drag = Some(to);
-    let active = state.active_workspace;
-    if active == from {
-        state.active_workspace = to;
-    } else if from < active && active <= to {
-        state.active_workspace -= 1;
-    } else if to <= active && active < from {
-        state.active_workspace += 1;
+    // 落点坐标：向下拖插到目标块之后，向上拖插到目标块之前。
+    let at = if target > from {
+        hovered.last().map_or(len, |last| last.saturating_add(1))
+    } else {
+        hovered.first().copied().unwrap_or(0)
+    };
+    let removed_before =
+        |position: usize| block.iter().filter(|member| **member < position).count();
+    let insert_at = at - removed_before(at);
+    let kept: Vec<usize> = (0..len).filter(|index| !block.contains(index)).collect();
+    let mut order = kept;
+    for (offset, member) in block.iter().enumerate() {
+        order.insert(insert_at + offset, *member);
     }
+    if order.iter().enumerate().all(|(index, old)| index == *old) {
+        return false;
+    }
+    let new_index = |old: usize| match block.iter().position(|member| *member == old) {
+        Some(offset) => insert_at + offset,
+        None => {
+            let rank = old - removed_before(old);
+            if rank < insert_at {
+                rank
+            } else {
+                rank + block.len()
+            }
+        }
+    };
+    state.active_workspace = new_index(state.active_workspace);
+    state.workspace_drag = Some(new_index(from));
+    let mut slots: Vec<Option<Workspace>> = state.workspaces.drain(..).map(Some).collect();
+    state.workspaces = order
+        .into_iter()
+        .filter_map(|old| slots[old].take())
+        .collect();
     true
 }
 
 /// 结束拖动排序。
 pub fn end_workspace_drag(state: &mut AppState) {
     state.workspace_drag = None;
+    state.workspace_dragging = false;
 }
 
 /// 保证当前工作区可见并钳制偏移；列表长度或可见行变化后调用；返回是否变化。
 pub fn ensure_workspace_visible(state: &mut AppState, visible: usize) -> bool {
     let visible = visible.max(1);
     let max = workspace_scroll_max(state, visible);
-    let active = state
-        .active_workspace
-        .min(state.workspaces.len().saturating_sub(1));
+    let rows = state.workspace_rows();
+    let active = rows
+        .iter()
+        .position(|row| row.index == state.active_workspace)
+        .unwrap_or(0);
     let mut offset = state.workspace_scroll.min(max);
     if active < offset {
         offset = active;

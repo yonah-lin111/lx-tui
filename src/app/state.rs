@@ -1,6 +1,6 @@
 //! 应用状态：唯一状态来源，纯数据，可在无终端环境下构造与测试。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -93,8 +93,14 @@ pub struct AppState {
     pub lx_last_tick: Instant,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
-    /// 同一时刻最多一个浮层：右键菜单、重命名或关闭确认。
+    /// 拖拽是否已产生指针移动；按下未移动时不整块反显。
+    pub workspace_dragging: bool,
+    /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
+    /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
+    pub git_requests: Vec<PathBuf>,
+    /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
+    pub collapsed_groups: Vec<PathBuf>,
 }
 
 /// 工作区。
@@ -109,6 +115,45 @@ pub struct Workspace {
     pub cwd: Option<PathBuf>,
     /// 是否为启动时创建的工作区；列表项显示不可移除的 `*` 标记。
     pub is_initial: bool,
+    /// 所属 git checkout 的元数据；非仓库或尚未查询到时为 None。
+    pub git: Option<WorkspaceGit>,
+}
+
+/// 工作区所属 git checkout 的只读元数据。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceGit {
+    /// 仓库主 checkout 路径（同一仓库的分组键）。
+    pub repo_root: PathBuf,
+    /// 本工作区 cwd 所在 checkout 路径。
+    pub checkout_path: PathBuf,
+    /// 是否为 linked worktree（非主 checkout）。
+    pub is_linked: bool,
+    /// 当前分支短名；detached 或 bare 为 None。
+    pub branch: Option<String>,
+}
+
+impl WorkspaceGit {
+    /// 展示用分支名：去掉 `worktree/` 前缀；detached 或 bare 为 None。
+    pub fn short_branch(&self) -> Option<&str> {
+        self.branch
+            .as_deref()
+            .map(|branch| branch.strip_prefix("worktree/").unwrap_or(branch))
+    }
+}
+
+/// 侧栏工作区列表的可见行；折叠的组只保留父项与当前激活子项。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkspaceRow {
+    /// 工作区索引。
+    pub index: usize,
+    /// 分组子项：缩进并显示分支短名。
+    pub child: bool,
+    /// 分组父项：显示折叠箭头。
+    pub parent: bool,
+    /// 父项所在组是否已折叠。
+    pub collapsed: bool,
+    /// 子项标签与组内更早子项重复时的去重序号（2、3…）；无重复为 None。
+    pub child_index: Option<u32>,
 }
 
 impl Workspace {
@@ -121,6 +166,7 @@ impl Workspace {
             name_is_manual: false,
             cwd,
             is_initial: false,
+            git: None,
         }
     }
 
@@ -163,6 +209,8 @@ pub struct Pane {
     pub exited: bool,
     /// 窗格 shell 进程 cwd 的显示标签；标题无 OSC 时回退展示。
     pub cwd_label: Option<String>,
+    /// 窗格 shell 进程最近一次轮询到的 cwd；新建工作区取焦点窗格路径用。
+    pub cwd: Option<PathBuf>,
 }
 
 impl Tab {
@@ -230,6 +278,7 @@ impl Pane {
             terminal: Terminal::new(DEFAULT_COLS, DEFAULT_ROWS),
             exited: false,
             cwd_label: None,
+            cwd: None,
         }
     }
 }
@@ -331,6 +380,7 @@ impl AppState {
                 name_is_manual: false,
                 cwd,
                 is_initial: true,
+                git: None,
             }],
             active_workspace: 0,
             tab_scroll: 0,
@@ -341,7 +391,10 @@ impl AppState {
             lx_phase: 0,
             lx_last_tick: Instant::now(),
             workspace_drag: None,
+            workspace_dragging: false,
             overlay: None,
+            git_requests: Vec::new(),
+            collapsed_groups: Vec::new(),
         }
     }
 
@@ -381,6 +434,14 @@ impl AppState {
             .find_map(|tab| tab.pane(id))
     }
 
+    /// 窗格所属工作区的工作目录；PTY 启动目录与 git 查询依据。
+    pub fn workspace_cwd_for_pane(&self, id: PaneId) -> Option<PathBuf> {
+        self.workspaces
+            .iter()
+            .find(|workspace| workspace.tabs.iter().any(|tab| tab.pane(id).is_some()))
+            .and_then(|workspace| workspace.cwd.clone())
+    }
+
     /// 指定窗格上的选区。
     pub fn selection_for(&self, pane: PaneId) -> Option<&Selection> {
         self.selection
@@ -415,6 +476,157 @@ impl AppState {
             .panes
             .values()
             .any(|pane| pane.view == PaneView::Lx)
+    }
+    /// 侧栏可见行：同仓库 ≥1 个 linked worktree 且含非 linked 主项时成组，
+    /// 根之后（索引更大）的 linked 项为子项；重复主 checkout 与非组项为独立顶层行。
+    /// 折叠的组只保留父项与当前激活子项。
+    ///
+    /// linked 子项标签与组内更早子项重复时给出显示去重序号（含被折叠隐藏的子项，序号稳定）。
+    /// 列表保持工作区原始顺序，不做父项前置重排；渲染、命中与滚动共用此结果。
+    pub fn workspace_rows(&self) -> Vec<WorkspaceRow> {
+        let parents = self.group_parents();
+        let collapsed = |key: &Path| {
+            self.collapsed_groups
+                .iter()
+                .any(|group| group.as_path() == key)
+        };
+        let mut child_counts: HashMap<(&Path, &str), u32> = HashMap::new();
+        let mut rows = Vec::with_capacity(self.workspaces.len());
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            let git = workspace.git.as_ref();
+            let group = git.and_then(|git| {
+                let parent = parents.get(git.repo_root.as_path())?;
+                Some((git.repo_root.as_path(), *parent))
+            });
+            match group {
+                Some((key, parent)) if parent == index => {
+                    rows.push(WorkspaceRow {
+                        index,
+                        child: false,
+                        parent: true,
+                        collapsed: collapsed(key),
+                        child_index: None,
+                    });
+                }
+                Some((key, parent)) if index > parent && git.is_some_and(|git| git.is_linked) => {
+                    let child_index = if workspace.name_is_manual {
+                        None
+                    } else {
+                        match git.and_then(WorkspaceGit::short_branch) {
+                            Some(label) => {
+                                let count = child_counts.entry((key, label)).or_insert(0);
+                                *count += 1;
+                                (*count > 1).then_some(*count)
+                            }
+                            None => None,
+                        }
+                    };
+                    if !collapsed(key) || self.active_workspace == index {
+                        rows.push(WorkspaceRow {
+                            index,
+                            child: true,
+                            parent: false,
+                            collapsed: false,
+                            child_index,
+                        });
+                    }
+                }
+                _ => rows.push(WorkspaceRow {
+                    index,
+                    child: false,
+                    parent: false,
+                    collapsed: false,
+                    child_index: None,
+                }),
+            }
+        }
+        rows
+    }
+
+    /// 已成立分组的根索引：仓库根 → 创建最早的非 linked 主项（根窗格标识随创建递增，
+    /// 拖拽换位不改变）；无主项或无 linked worktree 成员时不成组（重复主 checkout 平铺）。
+    fn group_parents(&self) -> BTreeMap<&Path, usize> {
+        let mut members: BTreeMap<&Path, Vec<usize>> = BTreeMap::new();
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            if let Some(git) = workspace.git.as_ref() {
+                members
+                    .entry(git.repo_root.as_path())
+                    .or_default()
+                    .push(index);
+            }
+        }
+        members
+            .into_iter()
+            .filter_map(|(key, indices)| {
+                if !indices
+                    .iter()
+                    .any(|index| self.workspace_git(*index).is_some_and(|git| git.is_linked))
+                {
+                    return None;
+                }
+                let parent = indices
+                    .iter()
+                    .copied()
+                    .filter(|index| self.workspace_git(*index).is_some_and(|git| !git.is_linked))
+                    .min_by_key(|index| self.workspace_created_key(*index))?;
+                Some((key, parent))
+            })
+            .collect()
+    }
+
+    /// 工作区 git 元数据。
+    fn workspace_git(&self, index: usize) -> Option<&WorkspaceGit> {
+        self.workspaces
+            .get(index)
+            .and_then(|workspace| workspace.git.as_ref())
+    }
+
+    /// 创建序键：根窗格标识随创建单调递增；无窗格时排最后。
+    fn workspace_created_key(&self, index: usize) -> u32 {
+        self.workspaces
+            .get(index)
+            .and_then(Workspace::root_pane)
+            .map(PaneId::raw)
+            .unwrap_or(u32::MAX)
+    }
+
+    /// 拖拽块：树的根与 linked 子项整体移动；重复主 checkout 等独立项返回自身。
+    ///
+    /// 折叠隐藏的子项在块内；根按创建序固定，拖拽换位不会改变树的归属。
+    pub fn workspace_block(&self, index: usize) -> Vec<usize> {
+        let Some(git) = self.workspace_git(index) else {
+            return vec![index];
+        };
+        let Some(parent) = self.group_parents().get(git.repo_root.as_path()).copied() else {
+            return vec![index];
+        };
+        if index != parent && !git.is_linked {
+            return vec![index];
+        }
+        let block: Vec<usize> = self
+            .workspaces
+            .iter()
+            .enumerate()
+            .filter(|(other, workspace)| {
+                workspace.git.as_ref().is_some_and(|other_git| {
+                    other_git.repo_root == git.repo_root
+                        && (*other == parent || (*other > parent && other_git.is_linked))
+                })
+            })
+            .map(|(other, _)| other)
+            .collect();
+        if block.contains(&index) {
+            block
+        } else {
+            vec![index]
+        }
+    }
+
+    /// 当前工作区焦点终端窗格的实时 cwd；非终端或尚未轮询到时 None。
+    pub fn active_terminal_cwd(&self) -> Option<PathBuf> {
+        self.active_pane()
+            .filter(|pane| pane.kind == PaneKind::Terminal)
+            .and_then(|pane| pane.cwd.clone())
     }
 }
 

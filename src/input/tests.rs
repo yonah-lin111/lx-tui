@@ -466,3 +466,57 @@ fn lx_view_swallows_keys_except_ctrl_q() {
         Some(Routed::Editor(EditorCommand::InsertChar('a')))
     );
 }
+
+#[test]
+fn worktree_open_overlay_routes_search_and_navigation_keys() {
+    let route_overlay = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::WorktreeOpen),
+            false,
+        )
+    };
+    assert_eq!(
+        route_overlay(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Up),
+        Some(Routed::Overlay(OverlayKey::Up))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Down),
+        Some(Routed::Overlay(OverlayKey::Down))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Char('f')),
+        Some(Routed::Overlay(OverlayKey::Char('f')))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Backspace),
+        Some(Routed::Overlay(OverlayKey::Backspace))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Home),
+        Some(Routed::Overlay(OverlayKey::Home))
+    );
+    assert_eq!(route_overlay(KeyCode::Tab), None);
+
+    let ctrl = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+    assert_eq!(
+        super::route(
+            ctrl,
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::WorktreeOpen),
+            false
+        ),
+        None
+    );
+}

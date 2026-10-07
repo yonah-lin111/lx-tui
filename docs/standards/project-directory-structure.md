@@ -40,6 +40,7 @@ lx-tui/
     event/                      唯一事件循环：tokio select、PTY 消息与渲染调度
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
+    git/                        git 查询：worktree 列表的执行与解析（唯一执行 git 命令的模块）
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
     platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd）
@@ -58,21 +59,23 @@ lx-tui/
 4. `event/`：唯一事件循环；tokio `select!` 收敛键盘、PTY 输出与定时事件为 `app` 行为调用与窗格写入，并做帧节流。
 5. `input/`：终端事件到应用行为的映射与按键编码；`encode.rs` 为纯函数，按键判断不得散落在 `ui/` 组件中。
 6. `terminal/`：终端仿真状态机（alacritty_terminal 封装）；字节进、画面出，不触碰 IO、不依赖其他模块状态。
-7. `pty/`：真实进程会话；唯一允许持有 `portable-pty` 句柄与读线程的模块。
-8. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
-9. `config/`：配置结构、默认值与校验；配置变更不直接改运行时状态，交由 `app` 行为处理。
-10. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控；核心模块不得出现裸 OS 分支。
-11. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
+7. `pty/`：真实进程会话；唯一允许持有 `portable-pty` 句柄与读线程的模块；窗格 shell 按所属工作区 cwd 启动。
+8. `git/`：唯一执行 git 命令的模块（`git worktree list --porcelain` 的查询与解析）；由事件层在后台线程调用，app 只接收转换后的纯数据。
+9. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
+10. `config/`：配置结构、默认值与校验；配置变更不直接改运行时状态，交由 `app` 行为处理。
+11. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控；核心模块不得出现裸 OS 分支。
+12. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
 
 ## 依赖方向
 
 ```text
 main -> 所有模块（只装配，不写业务）
-event -> input, app, ui, tui, pty, terminal
+event -> input, app, ui, tui, pty, terminal, git
 ui -> app（只读状态）, layout（窗格几何）, terminal（只读网格）
 input -> app（行为定义）, layout（方向导航）
 app -> layout（平铺模型）, terminal（仿真状态）, config
 pty -> layout（PaneId）
+git -> 仅标准库
 terminal -> 仅 alacritty_terminal / vte 与标准库（纯，无 IO）
 tui -> 仅 crossterm / ratatui
 layout -> 仅 ratatui 几何类型与标准库
@@ -80,7 +83,7 @@ config -> 仅标准库
 platform -> 仅标准库与 OS 依赖
 ```
 
-- `app/` 不得导入 `ui`、`input`、`event`、`pty`、`tui`。
+- `app/` 不得导入 `ui`、`input`、`event`、`pty`、`tui`、`git`。
 - `ui/` 不得修改状态、不得执行 IO、不得依赖 `pty`、`tui`、`event`。
 - `terminal/` 保持纯内存：不得使用 `std::io`、线程或 `pty`。
 - `input/` 不得依赖具体终端实例；按键编码只依赖传入的 `TermMode`。

@@ -184,3 +184,279 @@ fn remove_pane_drops_payload_and_promotes_sibling() {
     assert_eq!(tab.layout.focus(), first);
     assert!(tab.pane(second).is_none());
 }
+
+#[test]
+fn workspace_cwd_for_pane_finds_owning_workspace_only() {
+    let state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state.workspace_cwd_for_pane(pane),
+        state.workspaces[0].cwd.clone()
+    );
+    assert_eq!(state.workspace_cwd_for_pane(state.prompt.id()), None);
+    assert_eq!(state.workspace_cwd_for_pane(PaneId::alloc()), None);
+}
+
+/// 工作区 git 元数据（分组行测试用）。
+fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(checkout),
+        is_linked: linked,
+        branch: branch.map(str::to_string),
+    }
+}
+
+/// 追加带 git 元数据的工作区。
+fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) {
+    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
+    workspace.git = Some(git);
+    state.workspaces.push(workspace);
+}
+
+#[test]
+fn workspace_rows_group_parent_with_linked_children() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(rows[0].index, 0);
+    assert!(rows[0].parent && !rows[0].child && !rows[0].collapsed);
+    assert_eq!(rows[1].index, 1);
+    assert!(rows[1].child && !rows[1].parent);
+    assert_eq!(rows[2].index, 2);
+    assert!(rows[2].child);
+}
+
+#[test]
+fn workspace_rows_hide_collapsed_children_except_active() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].parent && rows[0].collapsed);
+
+    state.active_workspace = 2;
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(rows[0].parent && rows[0].collapsed);
+    assert_eq!(rows[1].index, 2);
+    assert!(rows[1].child);
+}
+
+#[test]
+fn workspace_rows_keep_linked_only_group_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/one", true, Some("one")));
+    push_git_workspace(
+        &mut state,
+        "two",
+        "/repo/two",
+        git_info("/repo", "/repo/two", true, Some("two")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| !row.parent && !row.child));
+}
+
+#[test]
+fn workspace_rows_keep_children_before_parent_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/wt", true, Some("wt")));
+    push_git_workspace(
+        &mut state,
+        "main",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(!rows[0].parent && !rows[0].child);
+    assert!(rows[1].parent && !rows[1].child);
+}
+
+#[test]
+fn workspace_rows_keep_single_git_workspace_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].parent && !rows[0].child);
+}
+
+#[test]
+fn workspace_rows_index_duplicate_child_labels() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat2",
+        "/repo/.worktrees/feat2",
+        git_info(
+            "/repo",
+            "/repo/.worktrees/feat2",
+            true,
+            Some("worktree/feature/x"),
+        ),
+    );
+    push_git_workspace(
+        &mut state,
+        "other",
+        "/repo/.worktrees/other",
+        git_info("/repo", "/repo/.worktrees/other", true, Some("other")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows[0].child_index, None);
+    assert_eq!(rows[1].child_index, None);
+    assert_eq!(rows[2].child_index, Some(2), "重复标签第 2 个带序号");
+    assert_eq!(rows[3].child_index, None);
+
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+    state.active_workspace = 2;
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].index, 2);
+    assert_eq!(rows[1].child_index, Some(2), "隐藏首个重复后序号仍稳定");
+}
+
+#[test]
+fn workspace_block_covers_group_members_only() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
+
+    assert_eq!(state.workspace_block(0), vec![0, 1, 2]);
+    assert_eq!(state.workspace_block(2), vec![0, 1, 2]);
+    assert_eq!(state.workspace_block(3), vec![3]);
+}
+
+#[test]
+fn workspace_block_excludes_linked_member_before_parent() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/wt", true, Some("wt")));
+    push_git_workspace(
+        &mut state,
+        "main",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+
+    assert_eq!(state.workspace_block(0), vec![0]);
+    assert_eq!(state.workspace_block(1), vec![1]);
+}
+
+#[test]
+fn workspace_rows_keep_duplicate_main_checkout_top_level() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "repo 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 3);
+    assert!(rows[0].parent && !rows[0].child);
+    assert!(
+        !rows[1].child && !rows[1].parent,
+        "重复主 checkout 为独立顶层项"
+    );
+    assert!(rows[2].child);
+    assert_eq!(
+        state.workspace_block(0),
+        vec![0, 2],
+        "树块只含根与 linked 子项"
+    );
+    assert_eq!(
+        state.workspace_block(1),
+        vec![1],
+        "重复主 checkout 独立拖动"
+    );
+    assert_eq!(state.workspace_block(2), vec![0, 2]);
+
+    // 重复项被拖到根之前：根身份按创建序不变，子项仍挂在根下。
+    state.workspaces.swap(0, 1);
+    let rows = state.workspace_rows();
+    assert_eq!(rows[0].index, 0);
+    assert!(!rows[0].parent && !rows[0].child, "重复项仍为普通项");
+    assert_eq!(rows[1].index, 1);
+    assert!(rows[1].parent, "创建最早的主项仍是树根");
+    assert_eq!(rows[2].index, 2);
+    assert!(rows[2].child);
+    assert_eq!(state.workspace_block(1), vec![1, 2]);
+}
+
+#[test]
+fn workspace_rows_keep_duplicate_mains_flat_without_linked() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "repo 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+
+    let rows = state.workspace_rows();
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| !row.parent && !row.child));
+}

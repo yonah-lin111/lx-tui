@@ -2,10 +2,13 @@
 
 use super::*;
 use crate::app::actions::Action;
+use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
+use crate::app::state::WorkspaceGit;
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 fn render_lines(state: &AppState) -> Vec<String> {
@@ -662,6 +665,10 @@ fn workspace_list_renders_scrolled_window_and_scrollbar() {
     for _ in 0..20 {
         update::create_workspace(&mut state);
     }
+    // 短名断言：顶层缩进占 2 列，长名会被省略号截断。
+    for (index, workspace) in state.workspaces.iter_mut().enumerate() {
+        workspace.name = format!("w{index}");
+    }
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let list = sections.workspaces;
@@ -835,6 +842,43 @@ fn dragged_workspace_item_renders_reversed() {
 }
 
 #[test]
+fn drag_highlight_marks_group_only_after_pointer_move() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    state.workspace_drag = Some(0);
+
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let mut reversed = |state: &AppState| {
+        if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
+            panic!("draw failed: {error}");
+        }
+        let buffer = terminal.backend().buffer().clone();
+        [
+            buffer[(sections.workspaces.x, sections.workspaces.y)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+            buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
+                .modifier
+                .contains(ratatui::style::Modifier::REVERSED),
+        ]
+    };
+
+    assert_eq!(reversed(&state), [true, false], "按下未移动只反显被按行");
+    state.workspace_dragging = true;
+    assert_eq!(reversed(&state), [true, true], "指针移动后整块反显");
+}
+
+#[test]
 fn panel_collapse_buttons_sit_on_bottom_border() {
     let state = AppState::demo();
     let view = view_for(&state);
@@ -973,7 +1017,7 @@ fn pane_title_uses_cwd_label_before_placeholder() {
     let mut state = AppState::demo();
     terminal_view(&mut state);
     let id = state.active_tab().layout.focus();
-    update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
+    update::update_pane_cwd(&mut state, id, Path::new("/dev-dir"), "dev-dir".to_string());
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("dev-dir")));
     assert!(
@@ -988,7 +1032,7 @@ fn pane_title_prefers_osc_over_cwd_label() {
     let mut state = AppState::demo();
     terminal_view(&mut state);
     let id = state.active_tab().layout.focus();
-    update::update_pane_cwd(&mut state, id, "dev-dir".to_string());
+    update::update_pane_cwd(&mut state, id, Path::new("/dev-dir"), "dev-dir".to_string());
     if let Some(pane) = state.active_tab_mut().pane_mut(id) {
         let _ = pane.terminal.feed(b"\x1b]0;Claude Code\x07");
     }
@@ -1029,4 +1073,449 @@ fn pane_title_and_toggle_label_follow_view() {
     let title_area = Rect::new(rect.x + 1, rect.y, terminal_title.chars().count() as u16, 1);
     assert_eq!(rendered_area(&lines, title_area), terminal_title);
     assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_LX);
+}
+
+/// 工作区 git 元数据（侧栏分组渲染测试用）。
+fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(checkout),
+        is_linked: linked,
+        branch: branch.map(str::to_string),
+    }
+}
+
+/// 追加带 git 元数据的工作区。
+fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) {
+    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
+    workspace.git = Some(git);
+    state.workspaces.push(workspace);
+}
+
+#[test]
+fn sidebar_renders_duplicate_main_checkout_top_level() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "main 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("▾ main")));
+    assert!(
+        lines.iter().any(|line| line.contains("  main 2")),
+        "重复主 checkout 与根同列、独立顶层: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.contains("─ main 2")),
+        "重复主 checkout 不显示连接符: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("  └─ feature/x")),
+        "linked worktree 仍是子项: {lines:?}"
+    );
+}
+
+#[test]
+fn sidebar_renders_duplicate_child_index_before_initial_marker() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat2",
+        "/repo/.worktrees/feat2",
+        git_info(
+            "/repo",
+            "/repo/.worktrees/feat2",
+            true,
+            Some("worktree/feature/x"),
+        ),
+    );
+    state.workspaces[2].is_initial = true;
+
+    let lines = render_lines(&state);
+    assert!(
+        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        "first duplicate keeps clean label: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("  └─ feature/x 2 *")),
+        "second duplicate gets index before marker: {lines:?}"
+    );
+}
+
+#[test]
+fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info(
+            "/repo",
+            "/repo/.worktrees/notes",
+            true,
+            Some("worktree/notes"),
+        ),
+    );
+    state.workspaces[2].name_is_manual = true;
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("▾ main")));
+    assert!(
+        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        "non-last child indents and uses middle connector: {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("  └─ notes")),
+        "last child uses last connector and manual name wins: {lines:?}"
+    );
+    let parent_line = lines
+        .iter()
+        .find(|line| line.contains("main"))
+        .expect("parent row");
+    let child_line = lines
+        .iter()
+        .find(|line| line.contains("feature/x"))
+        .expect("child row");
+    let plain_line = lines
+        .iter()
+        .find(|line| line.contains("tmp"))
+        .expect("plain row");
+    let char_col =
+        |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
+    let parent_col = char_col(parent_line, "main");
+    let child_col = char_col(child_line, "feature/x");
+    let connector_col = char_col(child_line, "├");
+    assert_eq!(parent_col, connector_col, "父项首字母与子项直角符号对齐");
+    assert_eq!(
+        child_col,
+        parent_col.map(|column| column + WORKSPACE_ITEM_INDENT + 1),
+        "子项名字在连接符之后"
+    );
+    assert_eq!(
+        char_col(plain_line, "tmp"),
+        parent_col,
+        "普通项与父项名字同列"
+    );
+}
+
+#[test]
+fn sidebar_keeps_linked_only_worktrees_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "one".to_string();
+    state.workspaces[0].git = Some(git_info(
+        "/repo",
+        "/repo/.worktrees/one",
+        true,
+        Some("feature/one"),
+    ));
+    push_git_workspace(
+        &mut state,
+        "two",
+        "/repo/.worktrees/two",
+        git_info("/repo", "/repo/.worktrees/two", true, Some("feature/two")),
+    );
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("one")));
+    assert!(lines.iter().any(|line| line.contains("two")));
+    assert!(!lines.iter().any(|line| line.contains("feature/one")));
+    assert!(!lines.iter().any(|line| line.contains("feature/two")));
+}
+
+#[test]
+fn sidebar_keeps_single_git_workspace_flat() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "solo".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+
+    let lines = render_lines(&state);
+    assert!(lines.iter().any(|line| line.contains("solo")));
+    assert!(!lines.iter().any(|line| line.contains("main")));
+}
+
+/// worktree 对话框条目。
+fn dialog_entry(
+    path: &str,
+    branch: Option<&str>,
+    linked: bool,
+    open: Option<usize>,
+) -> WorktreeOpenEntry {
+    WorktreeOpenEntry {
+        path: PathBuf::from(path),
+        branch: branch.map(str::to_string),
+        is_bare: false,
+        is_linked: linked,
+        already_open: open,
+    }
+}
+
+/// 构造对话框浮层（loading 已结束）。
+fn worktree_open_dialog(entries: Vec<WorktreeOpenEntry>, selected: usize) -> WorktreeOpen {
+    WorktreeOpen {
+        source: 0,
+        repo_root: PathBuf::from("/repo"),
+        entries,
+        selected,
+        query: TextInput::new(""),
+        loading: false,
+        failed: false,
+    }
+}
+
+#[test]
+fn worktree_dialog_renders_search_entries_status_and_buttons() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    state.overlay = Some(Overlay::WorktreeOpen(worktree_open_dialog(
+        vec![
+            dialog_entry("/repo", Some("main"), false, Some(0)),
+            dialog_entry("/repo/.worktrees/feat", Some("feature/x"), true, None),
+        ],
+        0,
+    )));
+
+    let lines = render_lines(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::WORKTREE_OPEN_TITLE));
+    assert!(joined.contains(text::WORKTREE_OPEN_FILTER));
+    assert!(joined.contains("feature/x"));
+    assert!(joined.contains(text::WORKTREE_STATUS_OPEN));
+    assert!(joined.contains("/repo/.worktrees/feat"));
+    assert!(joined.contains(text::BUTTON_OPEN));
+    assert!(joined.contains(text::BUTTON_CANCEL));
+}
+
+#[test]
+fn worktree_dialog_renders_loading_and_empty_states() {
+    let mut state = AppState::demo();
+    let mut dialog = worktree_open_dialog(Vec::new(), 0);
+    dialog.loading = true;
+    state.overlay = Some(Overlay::WorktreeOpen(dialog));
+    let lines = render_lines(&state);
+    assert!(lines.join("\n").contains(text::WORKTREE_OPEN_LOADING));
+
+    let mut dialog = worktree_open_dialog(Vec::new(), 0);
+    dialog.failed = true;
+    state.overlay = Some(Overlay::WorktreeOpen(dialog));
+    let lines = render_lines(&state);
+    assert!(lines.join("\n").contains(text::WORKTREE_OPEN_FAILED));
+
+    state.overlay = Some(Overlay::WorktreeOpen(worktree_open_dialog(Vec::new(), 0)));
+    let lines = render_lines(&state);
+    assert!(lines.join("\n").contains(text::WORKTREE_OPEN_EMPTY));
+}
+
+#[test]
+fn worktree_dialog_hit_testing_maps_rows_and_buttons() {
+    let screen = Rect::new(0, 0, 100, 24);
+    let dialog = worktree_open_dialog(
+        vec![
+            dialog_entry("/repo", Some("main"), false, Some(0)),
+            dialog_entry("/repo/.worktrees/feat", Some("feature/x"), true, None),
+            dialog_entry("/repo/.worktrees/notes", None, true, None),
+        ],
+        0,
+    );
+    let shell = overlay::worktree_dialog_shell(screen, dialog.entries.len()).expect("shell fits");
+    let first_row = shell.inner.y + 2;
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(&shell, &dialog, shell.inner.x + 1, first_row),
+        Some(0)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(&shell, &dialog, shell.inner.x + 1, first_row + 2),
+        Some(1)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(&shell, &dialog, shell.inner.x + 1, first_row + 2 * 3),
+        None,
+        "rows below the list do not hit entries"
+    );
+    assert_eq!(
+        overlay::worktree_dialog_entry_at(
+            &shell,
+            &dialog,
+            shell.inner.x.saturating_sub(1),
+            first_row
+        ),
+        None
+    );
+
+    let open_button = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_OPEN, text::BUTTON_CANCEL],
+        2,
+        shell.inner.height.saturating_sub(1),
+    );
+    assert_eq!(
+        overlay::worktree_dialog_button_at(&shell, open_button[0].x, open_button[0].y),
+        Some(overlay::WorktreeDialogButton::Open)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_button_at(&shell, open_button[1].x, open_button[1].y),
+        Some(overlay::WorktreeDialogButton::Cancel)
+    );
+    assert_eq!(
+        overlay::worktree_dialog_button_at(&shell, open_button[1].right(), open_button[1].y),
+        None
+    );
+}
+
+#[test]
+fn worktree_dialog_window_follows_selection() {
+    let entries: Vec<WorktreeOpenEntry> = (0..6)
+        .map(|index| {
+            dialog_entry(
+                &format!("/repo/.worktrees/w{index}"),
+                Some(&format!("worktree/w{index}")),
+                true,
+                None,
+            )
+        })
+        .collect();
+    let mut dialog = worktree_open_dialog(entries, 0);
+    assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 0);
+    dialog.selected = 4;
+    assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 3);
+    dialog.selected = 5;
+    assert_eq!(overlay::worktree_dialog_visible_start(&dialog, 2), 4);
+}
+
+#[test]
+fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+
+    let joined = render_lines(&state).join("\n");
+    assert!(joined.contains(text::WORKSPACE_GROUP_EXPANDED));
+    assert!(joined.contains("  ├─ feature/x"), "非末位子项用中连接符");
+    assert!(joined.contains("  └─ notes"));
+
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+    let joined = render_lines(&state).join("\n");
+    assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
+    assert!(!joined.contains("feature/x"));
+    assert!(!joined.contains("notes"));
+
+    state.active_workspace = 1;
+    let joined = render_lines(&state).join("\n");
+    assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
+    assert!(joined.contains("  └─ feature/x"), "唯一可见子项用末连接符");
+    assert!(!joined.contains("notes"));
+}
+
+#[test]
+fn workspace_group_toggle_hit_targets_parent_chevron_cell_only() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+
+    let view = view_for(&state);
+    let list = layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+        .expect("sidebar sections")
+        .workspaces;
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x, list.y),
+        Some(0),
+        "父项箭头格命中"
+    );
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x + 1, list.y),
+        None,
+        "箭头之外不命中"
+    );
+    assert_eq!(
+        workspace_group_toggle_at(&view, &state, list.x, list.y + 1),
+        None,
+        "子项行不命中"
+    );
+}
+
+#[test]
+fn workspace_item_at_maps_visible_rows_when_collapsed() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "main".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+
+    let view = view_for(&state);
+    let list = layout::sidebar_sections(view.sidebar, state.agents_collapsed)
+        .expect("sidebar sections")
+        .workspaces;
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x + 3, list.y),
+        Some(0)
+    );
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x + 3, list.y + 1),
+        None,
+        "隐藏行不命中"
+    );
+
+    state.active_workspace = 2;
+    assert_eq!(
+        workspace_item_at(&view, &state, list.x + 3, list.y + 1),
+        Some(2)
+    );
 }

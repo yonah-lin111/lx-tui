@@ -1,9 +1,11 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::state::workspace_name;
+use crate::app::overlay::WorktreeStatus;
+use crate::app::state::{WorkspaceGit, workspace_name};
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
+use std::path::PathBuf;
 use std::time::Duration;
 
 /// demo 状态并把活动窗格置为终端视图：避免 lx 动画干扰定时类断言。
@@ -656,6 +658,18 @@ fn create_workspace_activates_deduped_cwd_workspace() {
 }
 
 #[test]
+fn create_workspace_uses_focused_terminal_cwd() {
+    let mut state = AppState::demo();
+    let id = state.active_tab().layout.focus();
+    let cwd = std::path::Path::new("/tmp/focused");
+    assert!(update_pane_cwd(&mut state, id, cwd, "focused".to_string()));
+    create_workspace(&mut state);
+    let workspace = state.active_workspace();
+    assert_eq!(workspace.cwd.as_deref(), Some(cwd));
+    assert_eq!(workspace.name, "focused");
+}
+
+#[test]
 fn update_workspace_cwd_renames_auto_named_workspace() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
@@ -667,16 +681,15 @@ fn update_workspace_cwd_renames_auto_named_workspace() {
 }
 
 #[test]
-fn update_workspace_cwd_ignores_manually_named_workspace() {
+fn update_workspace_cwd_tracks_manual_name_without_renaming() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "api".to_string();
     state.workspaces[0].name_is_manual = true;
-    assert!(!update_workspace_cwd(
-        &mut state,
-        0,
-        std::path::Path::new("/tmp/other-project")
-    ));
+    let cwd = std::path::Path::new("/tmp/other-project");
+    assert!(update_workspace_cwd(&mut state, 0, cwd));
     assert_eq!(state.workspaces[0].name, "api");
+    assert_eq!(state.workspaces[0].cwd.as_deref(), Some(cwd));
+    assert!(!update_workspace_cwd(&mut state, 0, cwd));
 }
 
 #[test]
@@ -1001,6 +1014,171 @@ fn drag_workspace_shifts_other_active_workspace() {
     begin_workspace_drag(&mut state, 0);
     assert!(drag_workspace_to(&mut state, 2));
     assert_eq!(state.active_workspace, 0);
+}
+
+#[test]
+fn drag_workspace_moves_collapsed_group_as_block() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.wt/feat",
+        git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
+    );
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+
+    begin_workspace_drag(&mut state, 1);
+    assert!(drag_workspace_to(&mut state, 3));
+    assert_eq!(state.workspace_drag, Some(2));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec![demo.as_str(), "tmp", "repo", "feat"]);
+}
+
+#[test]
+fn drag_workspace_child_moves_whole_group() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.wt/feat",
+        git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
+    );
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
+
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["repo", "feat", demo.as_str(), "tmp"]);
+    assert_eq!(state.workspace_drag, Some(1));
+}
+
+#[test]
+fn drag_workspace_keeps_duplicate_main_independent() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "repo",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "repo 2",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.wt/feat",
+        git_info("/repo", "/repo/.wt/feat", true, Some("feature/x")),
+    );
+
+    // 拖重复主 checkout 到顶部：只移动它自己，树不动。
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["repo 2", demo.as_str(), "repo", "feat"]);
+    let rows = state.workspace_rows();
+    assert!(rows[2].parent, "树根身份按创建序稳定");
+    assert!(rows[3].child);
+
+    // 拖树（父项）越过重复项：整树移动，重复项相对位置不变。
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec!["repo", "feat", "repo 2", demo.as_str()]);
+    let rows = state.workspace_rows();
+    assert!(rows[0].parent);
+    assert!(rows[1].child);
+    assert!(!rows[2].parent && !rows[2].child, "重复项保持独立顶层行");
+}
+
+#[test]
+fn workspace_drag_highlight_waits_for_pointer_move() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    begin_workspace_drag(&mut state, 0);
+    assert!(!state.workspace_dragging, "按下未移动不整块反显");
+    assert!(!drag_workspace_to(&mut state, 0));
+    assert!(state.workspace_dragging, "指针移动后进入拖动高亮");
+    end_workspace_drag(&mut state);
+    assert!(state.workspace_drag.is_none() && !state.workspace_dragging);
+}
+
+#[test]
+fn drag_workspace_snaps_to_other_group_boundary() {
+    let mut state = AppState::demo();
+    let demo = state.workspaces[0].name.clone();
+    push_git_workspace(
+        &mut state,
+        "a",
+        "/a",
+        git_info("/a", "/a", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "a-feat",
+        "/a/.wt/feat",
+        git_info("/a", "/a/.wt/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "b",
+        "/b",
+        git_info("/b", "/b", false, Some("main")),
+    );
+    push_git_workspace(
+        &mut state,
+        "b-feat",
+        "/b/.wt/feat",
+        git_info("/b", "/b/.wt/feat", true, Some("feature/x")),
+    );
+
+    begin_workspace_drag(&mut state, 1);
+    assert!(drag_workspace_to(&mut state, 4));
+    let order: Vec<&str> = state
+        .workspaces
+        .iter()
+        .map(|workspace| workspace.name.as_str())
+        .collect();
+    assert_eq!(order, vec![demo.as_str(), "b", "b-feat", "a", "a-feat"]);
 }
 
 #[test]
@@ -1393,15 +1571,19 @@ fn tab_scroll_clamps_and_reports_changes() {
 fn update_pane_cwd_reports_changes() {
     let mut state = AppState::demo();
     let id = state.active_tab().layout.focus();
-    assert!(update_pane_cwd(&mut state, id, "lx-tui".to_string()));
-    assert!(!update_pane_cwd(&mut state, id, "lx-tui".to_string()));
-    assert!(update_pane_cwd(&mut state, id, "herdr".to_string()));
-    assert!(
-        state
-            .active_tab()
-            .pane(id)
-            .is_some_and(|pane| pane.cwd_label.as_deref() == Some("herdr"))
-    );
+    let cwd = std::path::Path::new("/tmp/lx-tui");
+    assert!(update_pane_cwd(&mut state, id, cwd, "lx-tui".to_string()));
+    assert!(!update_pane_cwd(&mut state, id, cwd, "lx-tui".to_string()));
+    assert!(update_pane_cwd(
+        &mut state,
+        id,
+        std::path::Path::new("/tmp/herdr"),
+        "herdr".to_string()
+    ));
+    assert!(state.active_tab().pane(id).is_some_and(|pane| {
+        pane.cwd_label.as_deref() == Some("herdr")
+            && pane.cwd.as_deref() == Some(std::path::Path::new("/tmp/herdr"))
+    }));
 }
 
 #[test]
@@ -1581,4 +1763,488 @@ fn lx_animation_registers_frame_deadline_when_visible() {
 /// 窗格视图（测试断言用）。
 fn view(state: &AppState, pane: PaneId) -> PaneView {
     state.pane_anywhere(pane).expect("pane exists").view
+}
+
+/// 构造工作区 git 元数据。
+fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
+    WorkspaceGit {
+        repo_root: PathBuf::from(repo_root),
+        checkout_path: PathBuf::from(checkout),
+        is_linked: linked,
+        branch: branch.map(str::to_string),
+    }
+}
+
+/// 追加一个带 git 元数据的自动命名工作区。
+fn push_git_workspace(state: &mut AppState, name: &str, cwd: &str, git: WorkspaceGit) -> usize {
+    let mut workspace = Workspace::single_terminal(name.to_string(), Some(PathBuf::from(cwd)));
+    workspace.git = Some(git);
+    state.workspaces.push(workspace);
+    state.workspaces.len() - 1
+}
+
+/// 构造一条 git worktree 记录。
+fn worktree_entry(path: &str, branch: Option<&str>, bare: bool) -> crate::git::WorktreeEntry {
+    crate::git::WorktreeEntry {
+        path: PathBuf::from(path),
+        branch: branch.map(str::to_string),
+        is_bare: bare,
+    }
+}
+
+#[test]
+fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
+    let mut state = AppState::demo();
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu opens");
+    };
+    assert!(!menu.commands.contains(&MenuCommand::OpenWorktree));
+
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu opens");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![MenuCommand::RenameWorkspace, MenuCommand::OpenWorktree]
+    );
+
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu opens");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::RenameWorkspace,
+            MenuCommand::OpenWorktree,
+            MenuCommand::CloseWorkspace
+        ]
+    );
+}
+
+#[test]
+fn open_worktree_dialog_requires_git_metadata_and_starts_loading() {
+    let mut state = AppState::demo();
+    open_worktree_dialog(&mut state, 0);
+    assert!(state.overlay.is_none());
+
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("worktree dialog opens");
+    };
+    assert_eq!(dialog.source, 0);
+    assert_eq!(dialog.repo_root, PathBuf::from("/repo"));
+    assert!(dialog.loading);
+    assert!(dialog.entries.is_empty());
+}
+
+#[test]
+fn apply_worktree_list_fills_entries_and_marks_open_checkouts() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    let linked = push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+            worktree_entry("/repo/.worktrees/notes", None, false),
+        ],
+        false,
+    );
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("worktree dialog stays open");
+    };
+    assert!(!dialog.loading);
+    assert!(!dialog.failed);
+    assert_eq!(dialog.entries.len(), 3);
+    assert_eq!(dialog.entries[0].already_open, Some(0));
+    assert_eq!(dialog.entries[1].already_open, Some(linked));
+    assert_eq!(dialog.entries[2].already_open, None);
+    assert!(dialog.entries[2].is_linked);
+    assert_eq!(dialog.entries[0].status(), WorktreeStatus::Open);
+}
+
+#[test]
+fn apply_worktree_list_ignores_results_for_other_repo_or_closed_dialog() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/other"),
+        vec![worktree_entry("/other", Some("main"), false)],
+        false,
+    );
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert!(dialog.entries.is_empty());
+    assert!(dialog.loading);
+
+    close_overlay(&mut state);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![worktree_entry("/repo", Some("main"), false)],
+        false,
+    );
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn apply_worktree_list_marks_failure_without_entries() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(&mut state, Path::new("/repo"), Vec::new(), true);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert!(dialog.failed);
+    assert!(!dialog.loading);
+    assert!(dialog.entries.is_empty());
+}
+
+#[test]
+fn commit_worktree_open_creates_workspace_with_checkout_cwd_and_git() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Down);
+    apply_worktree_open_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace, 1);
+    let opened = state.active_workspace();
+    assert_eq!(opened.name, "feat");
+    assert_eq!(opened.cwd, Some(PathBuf::from("/repo/.worktrees/feat")));
+    let git = opened.git.as_ref().expect("git metadata is carried over");
+    assert_eq!(git.repo_root, PathBuf::from("/repo"));
+    assert_eq!(git.checkout_path, PathBuf::from("/repo/.worktrees/feat"));
+    assert!(git.is_linked);
+    assert_eq!(git.branch.as_deref(), Some("feature/x"));
+}
+
+#[test]
+fn commit_worktree_open_switches_to_existing_workspace_without_duplicate() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    let existing = push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Down);
+    apply_worktree_open_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.active_workspace, existing);
+}
+
+#[test]
+fn commit_worktree_open_ignores_empty_dialog() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    commit_worktree_open(&mut state);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("empty dialog stays open");
+    };
+    assert!(dialog.loading);
+    assert_eq!(state.workspaces.len(), 1);
+}
+
+#[test]
+fn apply_worktree_open_key_edits_query_and_closes_on_escape() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Char('f'));
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.query.text(), "f");
+    assert_eq!(dialog.selected_entry_index(), Some(1));
+
+    apply_worktree_open_key(&mut state, OverlayKey::Backspace);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.query.text(), "");
+
+    apply_worktree_open_key(&mut state, OverlayKey::Char('f'));
+    apply_worktree_open_key(&mut state, OverlayKey::Clear);
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.query.text(), "");
+
+    apply_worktree_open_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn set_worktree_open_selection_ignores_out_of_range() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    assert!(set_worktree_open_selection(&mut state, 1));
+    assert!(!set_worktree_open_selection(&mut state, 1));
+    assert!(!set_worktree_open_selection(&mut state, 5));
+    let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
+        panic!("dialog stays open");
+    };
+    assert_eq!(dialog.selected, 1);
+}
+
+#[test]
+fn apply_git_refresh_updates_workspaces_with_matching_cwd_only() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo"));
+    let other = push_git_workspace(
+        &mut state,
+        "other",
+        "/elsewhere",
+        git_info("/x", "/x", false, None),
+    );
+
+    apply_git_refresh(
+        &mut state,
+        Path::new("/repo"),
+        Some(git_info("/repo", "/repo", false, Some("main"))),
+    );
+    assert!(state.workspaces[0].git.is_some());
+    assert!(state.workspaces[other].git.is_some());
+
+    apply_git_refresh(&mut state, Path::new("/repo"), None);
+    assert!(state.workspaces[0].git.is_none());
+    assert!(state.workspaces[other].git.is_some());
+}
+
+#[test]
+fn request_git_refresh_dedups_pending_cwds_and_take_drains() {
+    let mut state = AppState::demo();
+    request_git_refresh(&mut state, Path::new("/a"));
+    request_git_refresh(&mut state, Path::new("/a"));
+    request_git_refresh(&mut state, Path::new("/b"));
+    assert_eq!(
+        state.git_requests,
+        vec![PathBuf::from("/a"), PathBuf::from("/b")]
+    );
+    let taken = take_git_requests(&mut state);
+    assert_eq!(taken, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+    assert!(state.git_requests.is_empty());
+}
+
+#[test]
+fn toggle_workspace_group_flips_repo_key_and_ignores_plain_workspaces() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    toggle_workspace_group(&mut state, 0);
+    assert_eq!(state.collapsed_groups, vec![PathBuf::from("/repo")]);
+    toggle_workspace_group(&mut state, 0);
+    assert!(state.collapsed_groups.is_empty());
+
+    state
+        .workspaces
+        .push(Workspace::single_terminal("plain".to_string(), None));
+    toggle_workspace_group(&mut state, 1);
+    assert!(state.collapsed_groups.is_empty());
+}
+
+#[test]
+fn collapsed_group_scroll_and_visibility_follow_visible_rows() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    push_git_workspace(
+        &mut state,
+        "notes",
+        "/repo/.worktrees/notes",
+        git_info("/repo", "/repo/.worktrees/notes", true, Some("notes")),
+    );
+
+    assert_eq!(workspace_scroll_max(&state, 2), 1);
+    state.collapsed_groups.push(PathBuf::from("/repo"));
+    assert_eq!(workspace_scroll_max(&state, 2), 0, "折叠后仅剩父项一行");
+
+    state.active_workspace = 2;
+    assert_eq!(workspace_scroll_max(&state, 1), 1);
+    state.workspace_scroll = 5;
+    assert!(ensure_workspace_visible(&mut state, 1));
+    assert_eq!(state.workspace_scroll, 1);
+}
+
+#[test]
+fn apply_git_refresh_auto_opens_parent_for_first_linked_workspace() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/feat"));
+    apply_git_refresh(
+        &mut state,
+        Path::new("/repo/.worktrees/feat"),
+        Some(git_info(
+            "/repo",
+            "/repo/.worktrees/feat",
+            true,
+            Some("feature/x"),
+        )),
+    );
+
+    assert_eq!(state.workspaces.len(), 2);
+    assert_eq!(state.workspaces[0].cwd, Some(PathBuf::from("/repo")));
+    let parent_git = state.workspaces[0].git.as_ref().expect("parent metadata");
+    assert!(!parent_git.is_linked);
+    assert_eq!(parent_git.checkout_path, PathBuf::from("/repo"));
+    assert_eq!(
+        state.workspaces[1].cwd,
+        Some(PathBuf::from("/repo/.worktrees/feat"))
+    );
+    assert_eq!(state.active_workspace, 1, "激活跟随原工作区");
+
+    apply_git_refresh(
+        &mut state,
+        Path::new("/repo/.worktrees/feat"),
+        Some(git_info(
+            "/repo",
+            "/repo/.worktrees/feat",
+            true,
+            Some("feature/x"),
+        )),
+    );
+    assert_eq!(state.workspaces.len(), 2, "已有元数据刷新不重复补开");
+}
+
+#[test]
+fn ensure_main_workspace_skips_when_parent_is_open() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    assert_eq!(worktree::ensure_main_workspace(&mut state, 1), None);
+    assert_eq!(state.workspaces.len(), 2);
+}
+
+#[test]
+fn commit_worktree_open_auto_opens_parent_before_linked_source() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/source"));
+    state.workspaces[0].git = Some(git_info(
+        "/repo",
+        "/repo/.worktrees/source",
+        true,
+        Some("source"),
+    ));
+    open_worktree_dialog(&mut state, 0);
+    apply_worktree_list(
+        &mut state,
+        Path::new("/repo"),
+        vec![
+            worktree_entry("/repo", Some("main"), false),
+            worktree_entry("/repo/.worktrees/feat", Some("feature/x"), false),
+        ],
+        false,
+    );
+    apply_worktree_open_key(&mut state, OverlayKey::Down);
+    apply_worktree_open_key(&mut state, OverlayKey::Enter);
+
+    assert_eq!(state.workspaces.len(), 3);
+    assert_eq!(
+        state.workspaces[0].cwd,
+        Some(PathBuf::from("/repo")),
+        "父项插到仓库首个成员之前"
+    );
+    assert!(
+        state.workspaces[0]
+            .git
+            .as_ref()
+            .is_some_and(|git| !git.is_linked)
+    );
+    assert_eq!(
+        state.workspaces[1].cwd,
+        Some(PathBuf::from("/repo/.worktrees/source"))
+    );
+    assert_eq!(
+        state.workspaces[2].cwd,
+        Some(PathBuf::from("/repo/.worktrees/feat"))
+    );
+    assert_eq!(state.active_workspace, 2, "激活跟随新打开的 worktree");
+
+    let rows = state.workspace_rows();
+    assert!(rows[0].parent);
+    assert!(rows[1].child && rows[2].child, "树形结构始终成立");
+}
+
+#[test]
+fn create_workspace_requests_git_metadata_for_cwd() {
+    let mut state = AppState::demo();
+    assert!(state.git_requests.is_empty());
+    create_workspace(&mut state);
+    assert_eq!(state.git_requests.len(), 1);
 }
