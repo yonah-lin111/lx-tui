@@ -1,5 +1,7 @@
 //! 浮层模型：右键菜单、重命名输入与关闭确认；同一时刻最多存在一个浮层。
 
+use crate::layout::PaneId;
+
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
@@ -36,11 +38,19 @@ pub struct Menu {
     pub selected: usize,
 }
 
-/// 浮层作用目标：工作区或工作区内的标签。
+/// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayTarget {
     Workspace(usize),
-    Tab { workspace: usize, tab: usize },
+    Tab {
+        workspace: usize,
+        tab: usize,
+    },
+    Pane {
+        workspace: usize,
+        tab: usize,
+        pane: PaneId,
+    },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -51,12 +61,24 @@ pub enum MenuCommand {
     CloseWorkspace,
     RenameTab,
     CloseTab,
+    SplitRight,
+    SplitDown,
+    SwitchToTerminal,
+    SwitchToLx,
+    ClosePane,
+}
+
+/// 重命名作用目标：工作区或标签；窗格不可重命名，因此不在此枚举内。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenameTarget {
+    Workspace(usize),
+    Tab { workspace: usize, tab: usize },
 }
 
 /// 重命名浮层：目标与单行输入。
 #[derive(Debug)]
 pub struct Rename {
-    pub target: OverlayTarget,
+    pub target: RenameTarget,
     pub input: TextInput,
 }
 

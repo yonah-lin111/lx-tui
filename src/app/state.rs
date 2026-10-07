@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Direction, Rect};
 
 use crate::layout::{PaneId, TileLayout};
 use crate::terminal::Terminal;
@@ -183,6 +183,28 @@ impl Tab {
     /// 根窗格：树序第一个窗格，工作区身份跟随它。
     pub fn root_pane(&self) -> Option<PaneId> {
         self.layout.pane_ids().into_iter().next()
+    }
+
+    /// 在指定窗格处按方向分割：新窗格继承源窗格视图并获得焦点；源窗格不存在返回 None。
+    pub fn split_pane(&mut self, source: PaneId, direction: Direction) -> Option<PaneId> {
+        let view = self.pane(source)?.view;
+        if !self.layout.focus_pane(source) {
+            return None;
+        }
+        let id = self.layout.split_focused(direction, 0.5);
+        let mut pane = Pane::new();
+        pane.view = view;
+        self.panes.insert(id, pane);
+        Some(id)
+    }
+
+    /// 移除窗格：布局删叶提兄弟并同步移除载荷；仅剩一个窗格或窗格不存在返回 false。
+    pub fn remove_pane(&mut self, id: PaneId) -> bool {
+        if self.panes.len() <= 1 || !self.layout.remove_pane(id) {
+            return false;
+        }
+        self.panes.remove(&id);
+        true
     }
 
     /// 按标识取窗格。

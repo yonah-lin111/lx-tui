@@ -792,7 +792,7 @@ fn activate_menu_rename_opens_prefilled_input() {
     let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
         panic!("rename overlay expected");
     };
-    assert_eq!(rename.target, OverlayTarget::Workspace(1));
+    assert_eq!(rename.target, RenameTarget::Workspace(1));
     assert_eq!(rename.input.text(), expected);
     assert_eq!(rename.input.cursor(), expected.chars().count());
 }
@@ -1099,7 +1099,7 @@ fn activate_menu_rename_tab_prefills_auto_title() {
     };
     assert_eq!(
         rename.target,
-        OverlayTarget::Tab {
+        RenameTarget::Tab {
             workspace: 0,
             tab: 1
         }
@@ -1166,6 +1166,211 @@ fn confirm_close_refuses_last_tab() {
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.active_workspace().tabs.len(), 1);
     assert!(state.overlay.is_none());
+}
+
+/// demo 状态并把活动标签拆成左右两个窗格；焦点在新窗格。
+fn demo_two_panes() -> (AppState, PaneId, PaneId) {
+    let mut state = AppState::demo();
+    let first = state.active_tab().layout.focus();
+    let second = state
+        .active_tab_mut()
+        .split_pane(first, Direction::Horizontal)
+        .expect("split succeeds");
+    (state, first, second)
+}
+
+#[test]
+fn open_pane_menu_offers_split_switch_and_close() {
+    let (mut state, _, pane) = demo_two_panes();
+    open_pane_menu(&mut state, pane, (7, 3));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu overlay expected");
+    };
+    assert_eq!(menu.anchor, (7, 3));
+    assert_eq!(
+        menu.target,
+        OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane
+        }
+    );
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::SplitRight,
+            MenuCommand::SplitDown,
+            MenuCommand::SwitchToTerminal,
+            MenuCommand::ClosePane
+        ]
+    );
+
+    state.overlay = None;
+    open_pane_menu(&mut state, PaneId::alloc(), (0, 0));
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn open_pane_menu_hides_close_for_last_pane() {
+    let mut state = AppState::demo();
+    let only = state.active_tab().layout.focus();
+    open_pane_menu(&mut state, only, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu overlay expected");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::SplitRight,
+            MenuCommand::SplitDown,
+            MenuCommand::SwitchToTerminal
+        ]
+    );
+}
+
+#[test]
+fn open_pane_menu_switch_command_follows_target_view() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.pane_mut_anywhere(pane).expect("pane exists").view = PaneView::Terminal;
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu overlay expected");
+    };
+    assert!(menu.commands.contains(&MenuCommand::SwitchToLx));
+}
+
+#[test]
+fn activate_menu_split_right_creates_pane_inheriting_view() {
+    let (mut state, first, _) = demo_two_panes();
+    state.pane_mut_anywhere(first).expect("pane exists").view = PaneView::Terminal;
+    open_pane_menu(&mut state, first, (0, 0));
+    activate_menu(&mut state);
+
+    let tab = state.active_tab();
+    assert_eq!(tab.layout.pane_ids().len(), 3);
+    let focus = tab.layout.focus();
+    assert_ne!(focus, first);
+    assert_eq!(tab.pane(focus).expect("new pane").view, PaneView::Terminal);
+    assert_eq!(tab.pane(first).expect("source").view, PaneView::Terminal);
+}
+
+#[test]
+fn activate_menu_split_down_places_pane_below() {
+    let mut state = AppState::demo();
+    let source = state.active_tab().layout.focus();
+    open_pane_menu(&mut state, source, (0, 0));
+    set_menu_selection(&mut state, 1);
+    activate_menu(&mut state);
+
+    let tab = state.active_tab();
+    assert_eq!(tab.layout.pane_ids().len(), 2);
+    let new_id = tab.layout.focus();
+    let rects = crate::layout::pane_rects(&tab.layout, Rect::new(0, 0, 80, 20), 10);
+    let rect_of = |id: PaneId| rects.iter().find(|(pane, _)| *pane == id).map(|(_, r)| *r);
+    assert_eq!(rect_of(source).map(|rect| rect.y), Some(0));
+    assert_eq!(rect_of(new_id).map(|rect| rect.y), Some(10));
+}
+
+#[test]
+fn activate_menu_switch_toggles_only_target_pane() {
+    let (mut state, first, second) = demo_two_panes();
+    focus_pane(&mut state, first);
+    open_pane_menu(&mut state, second, (0, 0));
+    set_menu_selection(&mut state, 2);
+    activate_menu(&mut state);
+
+    assert_eq!(
+        state.active_tab().pane(second).expect("pane exists").view,
+        PaneView::Terminal
+    );
+    assert_eq!(
+        state.active_tab().pane(first).expect("pane exists").view,
+        PaneView::Lx
+    );
+    assert_eq!(state.active_tab().layout.focus(), first);
+}
+
+#[test]
+fn activate_menu_close_pane_opens_confirmation() {
+    let (mut state, _, second) = demo_two_panes();
+    open_pane_menu(&mut state, second, (0, 0));
+    set_menu_selection(&mut state, 3);
+    activate_menu(&mut state);
+
+    let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm close overlay expected");
+    };
+    assert_eq!(
+        confirm.target,
+        OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane: second
+        }
+    );
+    assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+}
+
+#[test]
+fn confirm_close_pane_removes_and_focuses_sibling() {
+    let (mut state, first, second) = demo_two_panes();
+    assert_eq!(state.active_tab().layout.focus(), second);
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane: second,
+        },
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.active_tab().layout.pane_ids(), vec![first]);
+    assert_eq!(state.active_tab().layout.focus(), first);
+    assert!(state.active_tab().pane(second).is_none());
+}
+
+#[test]
+fn confirm_close_pane_refuses_last_pane() {
+    let mut state = AppState::demo();
+    let only = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane: only,
+        },
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.active_tab().layout.pane_ids(), vec![only]);
+}
+
+#[test]
+fn confirm_close_pane_clears_transient_state_for_removed_pane() {
+    let (mut state, _, second) = demo_two_panes();
+    state.terminal_selection = Some(second);
+    state.terminal_scroll_drag = Some((second, 3));
+    state.selection_autoscroll = Some(SelectionAutoscroll {
+        pane: second,
+        direction: AutoscrollDirection::Down,
+        mouse: (1, 1),
+        inner: Rect::new(0, 0, 10, 5),
+        next_at: Instant::now(),
+    });
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane: second,
+        },
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+
+    assert!(state.terminal_selection.is_none());
+    assert!(state.terminal_scroll_drag.is_none());
+    assert!(state.selection_autoscroll.is_none());
 }
 
 #[test]

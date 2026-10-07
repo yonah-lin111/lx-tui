@@ -5,7 +5,9 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::app::overlay::{ConfirmClose, Menu, MenuCommand, Overlay, OverlayTarget, Rename};
+use crate::app::overlay::{
+    ConfirmClose, Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget,
+};
 use crate::app::state::{AppState, tab_label};
 use crate::ui::widgets;
 use crate::ui::{style, text};
@@ -106,10 +108,10 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
 }
 
 /// 重命名浮层标题：按目标种类分派。
-fn rename_title(target: OverlayTarget) -> &'static str {
+fn rename_title(target: RenameTarget) -> &'static str {
     match target {
-        OverlayTarget::Workspace(_) => text::RENAME_WORKSPACE_TITLE,
-        OverlayTarget::Tab { .. } => text::RENAME_TAB_TITLE,
+        RenameTarget::Workspace(_) => text::RENAME_WORKSPACE_TITLE,
+        RenameTarget::Tab { .. } => text::RENAME_TAB_TITLE,
     }
 }
 
@@ -133,6 +135,26 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
                 .unwrap_or_default();
             (text::CONFIRM_CLOSE_TAB_TITLE, name)
         }
+        OverlayTarget::Pane {
+            workspace,
+            tab,
+            pane,
+        } => {
+            let name = state
+                .workspaces
+                .get(workspace)
+                .and_then(|workspace| workspace.tabs.get(tab))
+                .and_then(|tab_state| tab_state.pane(pane))
+                .map(|pane_state| {
+                    text::pane_title(
+                        pane,
+                        pane_state.terminal.title(),
+                        pane_state.cwd_label.as_deref(),
+                    )
+                })
+                .unwrap_or_default();
+            (text::CONFIRM_CLOSE_PANE_TITLE, name)
+        }
     }
 }
 
@@ -146,6 +168,11 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             MenuCommand::CloseWorkspace => text::MENU_CLOSE_WORKSPACE,
             MenuCommand::RenameTab => text::MENU_RENAME_TAB,
             MenuCommand::CloseTab => text::MENU_CLOSE_TAB,
+            MenuCommand::SplitRight => text::MENU_SPLIT_RIGHT,
+            MenuCommand::SplitDown => text::MENU_SPLIT_DOWN,
+            MenuCommand::SwitchToTerminal => text::MENU_SWITCH_TO_TERMINAL,
+            MenuCommand::SwitchToLx => text::MENU_SWITCH_TO_LX,
+            MenuCommand::ClosePane => text::MENU_CLOSE_PANE,
         })
         .collect()
 }

@@ -548,17 +548,9 @@ fn handle_terminal_event(
                 }
             }
             MouseEventKind::Down(MouseButton::Right) => {
-                // 菜单打开时右键不穿透：标签或工作区项上重开，其余位置关闭。
+                // 菜单打开时右键不穿透：标签、工作区项或窗格上改挂菜单，其余位置关闭。
                 if matches!(state.overlay, Some(Overlay::Menu(_))) {
-                    let tab_bar =
-                        ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
-                    if let Some(index) = ui::tab_bar::tab_at(&tab_bar, mouse.column, mouse.row) {
-                        update::open_tab_menu(state, index, (mouse.column, mouse.row));
-                    } else if let Some(index) =
-                        ui::workspace_item_at(view, state, mouse.column, mouse.row)
-                    {
-                        update::open_workspace_menu(state, index, (mouse.column, mouse.row));
-                    } else {
+                    if !open_right_click_menu(state, rects, view, mouse.column, mouse.row) {
                         update::close_overlay(state);
                     }
                     *dirty = true;
@@ -568,14 +560,7 @@ fn handle_terminal_event(
                 if state.overlay.is_some() {
                     return;
                 }
-                let tab_bar = ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
-                if let Some(index) = ui::tab_bar::tab_at(&tab_bar, mouse.column, mouse.row) {
-                    update::open_tab_menu(state, index, (mouse.column, mouse.row));
-                    *dirty = true;
-                } else if let Some(index) =
-                    ui::workspace_item_at(view, state, mouse.column, mouse.row)
-                {
-                    update::open_workspace_menu(state, index, (mouse.column, mouse.row));
+                if open_right_click_menu(state, rects, view, mouse.column, mouse.row) {
                     *dirty = true;
                 }
             }
@@ -1074,6 +1059,35 @@ fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u1
         }
         None => {}
     }
+}
+
+/// 命中标签、工作区项或主区窗格时打开对应右键菜单；返回是否打开。
+///
+/// prompt 右栏、边框与切换按钮不参与：`pane_at` 只用窗格内容区，
+/// 且目标必须在当前标签的窗格载荷中。
+fn open_right_click_menu(
+    state: &mut AppState,
+    rects: &[(PaneId, Rect)],
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let tab_bar = ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
+    if let Some(index) = ui::tab_bar::tab_at(&tab_bar, column, row) {
+        update::open_tab_menu(state, index, (column, row));
+        return true;
+    }
+    if let Some(index) = ui::workspace_item_at(view, state, column, row) {
+        update::open_workspace_menu(state, index, (column, row));
+        return true;
+    }
+    if let Some((pane, _)) = pane_at(rects, column, row)
+        && state.active_tab().pane(pane).is_some()
+    {
+        update::open_pane_menu(state, pane, (column, row));
+        return true;
+    }
+    false
 }
 
 /// 工作区滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。

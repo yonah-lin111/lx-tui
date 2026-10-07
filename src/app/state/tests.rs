@@ -134,3 +134,53 @@ fn panes_default_to_lx_view_and_report_visibility() {
     }
     assert!(!state.lx_visible());
 }
+
+#[test]
+fn split_pane_inherits_view_and_focuses_new_pane() {
+    let mut state = AppState::demo();
+    let source = state.active_tab().layout.focus();
+    state.pane_mut_anywhere(source).expect("pane exists").view = PaneView::Terminal;
+
+    let tab = state.active_tab_mut();
+    let new_id = tab
+        .split_pane(source, Direction::Horizontal)
+        .expect("split succeeds");
+    assert_eq!(tab.layout.pane_ids().len(), 2);
+    assert_eq!(tab.layout.focus(), new_id);
+    assert_eq!(tab.pane(new_id).expect("new pane").view, PaneView::Terminal);
+    assert_eq!(tab.pane(source).expect("source").view, PaneView::Terminal);
+}
+
+#[test]
+fn split_pane_rejects_unknown_source() {
+    let mut state = AppState::demo();
+    let foreign = PaneId::alloc();
+    let tab = state.active_tab_mut();
+    assert!(tab.split_pane(foreign, Direction::Vertical).is_none());
+    assert_eq!(tab.layout.pane_ids().len(), 1);
+}
+
+#[test]
+fn remove_pane_keeps_at_least_one() {
+    let mut state = AppState::demo();
+    let only = state.active_tab().layout.focus();
+    let tab = state.active_tab_mut();
+    assert!(!tab.remove_pane(only));
+    assert_eq!(tab.layout.pane_ids(), vec![only]);
+    assert!(tab.pane(only).is_some());
+}
+
+#[test]
+fn remove_pane_drops_payload_and_promotes_sibling() {
+    let mut state = AppState::demo();
+    let tab = state.active_tab_mut();
+    let first = tab.layout.focus();
+    let second = tab
+        .split_pane(first, Direction::Horizontal)
+        .expect("split succeeds");
+
+    assert!(tab.remove_pane(second));
+    assert_eq!(tab.layout.pane_ids(), vec![first]);
+    assert_eq!(tab.layout.focus(), first);
+    assert!(tab.pane(second).is_none());
+}

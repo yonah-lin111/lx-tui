@@ -345,6 +345,190 @@ fn mouse_right_click_tab_opens_tab_menu() {
     assert!(dirty);
 }
 
+#[test]
+fn mouse_right_click_pane_opens_pane_menu_at_pointer() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    let (column, row) = (inner.x + 1, inner.y + 1);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu overlay expected");
+    };
+    assert_eq!(menu.anchor, (column, row));
+    assert_eq!(
+        menu.target,
+        crate::app::overlay::OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane
+        }
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_right_click_prompt_does_not_open_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let inner = layout::pane_inner_rect(geo.view.prompt);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none());
+    assert!(!dirty);
+}
+
+#[test]
+fn mouse_right_click_other_pane_retargets_open_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let first = state.active_tab().layout.focus();
+    let second = state
+        .active_tab_mut()
+        .split_pane(first, ratatui::layout::Direction::Horizontal)
+        .expect("split succeeds");
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    for pane in [first, second] {
+        let inner = pane_inner(&geo, pane);
+        handle_terminal_event(
+            mouse(
+                MouseEventKind::Down(MouseButton::Right),
+                inner.x + 1,
+                inner.y + 1,
+            ),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut dirty,
+        );
+        let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+            panic!("pane menu overlay expected");
+        };
+        assert_eq!(
+            menu.target,
+            crate::app::overlay::OverlayTarget::Pane {
+                workspace: 0,
+                tab: 0,
+                pane
+            }
+        );
+    }
+}
+
+#[test]
+fn mouse_right_click_prompt_closes_open_pane_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_some());
+
+    let prompt_inner = layout::pane_inner_rect(geo.view.prompt);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            prompt_inner.x + 1,
+            prompt_inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn mouse_click_pane_menu_split_item_creates_pane() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu overlay expected");
+    };
+    let menu_layout = ui::overlay::menu_layout(geo.screen, menu);
+    let item = menu_layout.item_rects[0];
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), item.x + 1, item.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+}
+
 /// 目标窗格内容区矩形。
 fn pane_inner(geo: &Geometry, pane: PaneId) -> Rect {
     let (_, rect) = geo

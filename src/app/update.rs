@@ -3,14 +3,15 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use ratatui::layout::Rect;
+use ratatui::layout::{Direction, Rect};
 
 use crate::layout::{self, PaneId};
 
 use super::actions::{Action, EditorCommand, OverlayKey};
 use super::markdown::MentionEntry;
 use super::overlay::{
-    ConfirmClose, Menu, MenuCommand, Overlay, OverlayKind, OverlayTarget, Rename, TextInput,
+    ConfirmClose, Menu, MenuCommand, Overlay, OverlayKind, OverlayTarget, Rename, RenameTarget,
+    TextInput,
 };
 use super::selection::Selection;
 use super::state::{
@@ -757,6 +758,36 @@ pub fn open_tab_menu(state: &mut AppState, tab: usize, anchor: (u16, u16)) {
     }));
 }
 
+/// 打开窗格右键菜单；仅剩一个窗格时不提供关闭项。
+pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
+    let workspace = state.active_workspace;
+    let tab = state.active_workspace().active_tab;
+    let view = state.active_tab().pane(pane).map(|target| target.view);
+    let Some(view) = view else {
+        return;
+    };
+    state.workspace_scroll_drag = None;
+    state.terminal_scroll_drag = None;
+    let mut commands = vec![MenuCommand::SplitRight, MenuCommand::SplitDown];
+    commands.push(match view {
+        PaneView::Lx => MenuCommand::SwitchToTerminal,
+        PaneView::Terminal => MenuCommand::SwitchToLx,
+    });
+    if state.active_tab().layout.pane_ids().len() > 1 {
+        commands.push(MenuCommand::ClosePane);
+    }
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::Pane {
+            workspace,
+            tab,
+            pane,
+        },
+        commands,
+        selected: 0,
+    }));
+}
+
 /// 新建标签并激活：追加自动命名标签；PTY 由事件循环按状态对齐启动。
 pub fn create_tab(state: &mut AppState) {
     let workspace = state.active_workspace_mut();
@@ -834,7 +865,7 @@ pub fn activate_menu(state: &mut AppState) {
                 return;
             };
             state.overlay = Some(Overlay::Rename(Rename {
-                target: menu.target,
+                target: RenameTarget::Workspace(target),
                 input: TextInput::new(workspace.name.clone()),
             }));
         }
@@ -853,7 +884,7 @@ pub fn activate_menu(state: &mut AppState) {
                 return;
             };
             state.overlay = Some(Overlay::Rename(Rename {
-                target: menu.target,
+                target: RenameTarget::Tab { workspace, tab },
                 input: TextInput::new(label),
             }));
         }
@@ -862,8 +893,63 @@ pub fn activate_menu(state: &mut AppState) {
                 target: menu.target,
             }));
         }
+        (
+            Some(MenuCommand::SplitRight),
+            OverlayTarget::Pane {
+                workspace,
+                tab,
+                pane,
+            },
+        ) => {
+            split_pane(state, workspace, tab, pane, Direction::Horizontal);
+        }
+        (
+            Some(MenuCommand::SplitDown),
+            OverlayTarget::Pane {
+                workspace,
+                tab,
+                pane,
+            },
+        ) => {
+            split_pane(state, workspace, tab, pane, Direction::Vertical);
+        }
+        (
+            Some(MenuCommand::SwitchToTerminal | MenuCommand::SwitchToLx),
+            OverlayTarget::Pane { pane, .. },
+        ) => {
+            toggle_pane_view(state, pane);
+        }
+        (Some(MenuCommand::ClosePane), OverlayTarget::Pane { .. }) => {
+            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+                target: menu.target,
+            }));
+        }
         _ => {}
     }
+}
+
+/// 在目标窗格处按方向分割并聚焦新窗格；新窗格继承源窗格视图。
+fn split_pane(
+    state: &mut AppState,
+    workspace: usize,
+    tab: usize,
+    pane: PaneId,
+    direction: Direction,
+) -> bool {
+    let Some(tab_state) = state
+        .workspaces
+        .get_mut(workspace)
+        .and_then(|workspace| workspace.tabs.get_mut(tab))
+    else {
+        return false;
+    };
+    if tab_state.split_pane(pane, direction).is_none() {
+        return false;
+    }
+    state.prompt_focused = false;
+    state.prompt.clear_panel();
+    clear_selection(state);
+    true
 }
 
 /// 浮层按键分派；输入层已按浮层种类过滤。
@@ -907,7 +993,7 @@ fn commit_rename(state: &mut AppState) {
     }
     let target = rename.target;
     match target {
-        OverlayTarget::Workspace(index) => {
+        RenameTarget::Workspace(index) => {
             let Some(workspace) = state.workspaces.get_mut(index) else {
                 state.overlay = None;
                 return;
@@ -915,7 +1001,7 @@ fn commit_rename(state: &mut AppState) {
             workspace.name = name;
             workspace.name_is_manual = true;
         }
-        OverlayTarget::Tab { workspace, tab } => {
+        RenameTarget::Tab { workspace, tab } => {
             let Some(tab_state) = state
                 .workspaces
                 .get_mut(workspace)
@@ -930,7 +1016,7 @@ fn commit_rename(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 确认关闭目标：工作区或标签；两者都至少保留一个。
+/// 确认关闭目标：工作区、标签或窗格；工作区与标签都至少保留一个。
 fn confirm_close(state: &mut AppState) {
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.take() else {
         return;
@@ -938,6 +1024,11 @@ fn confirm_close(state: &mut AppState) {
     match confirm.target {
         OverlayTarget::Workspace(target) => close_workspace(state, target),
         OverlayTarget::Tab { workspace, tab } => close_tab(state, workspace, tab),
+        OverlayTarget::Pane {
+            workspace,
+            tab,
+            pane,
+        } => close_pane(state, workspace, tab, pane),
     }
 }
 
@@ -972,6 +1063,32 @@ fn close_tab(state: &mut AppState, workspace: usize, tab: usize) {
         workspace_state.active_tab = workspace_state.active_tab.min(last);
     }
     clear_selection(state);
+}
+
+/// 关闭窗格：至少保留一个；被关闭窗格是焦点时，焦点落到提升兄弟子树的首个窗格。
+fn close_pane(state: &mut AppState, workspace: usize, tab: usize, pane: PaneId) {
+    let Some(tab_state) = state
+        .workspaces
+        .get_mut(workspace)
+        .and_then(|workspace| workspace.tabs.get_mut(tab))
+    else {
+        return;
+    };
+    if !tab_state.remove_pane(pane) {
+        return;
+    }
+    if state.terminal_selection == Some(pane) {
+        state.terminal_selection = None;
+    }
+    if state.terminal_scroll_drag.is_some_and(|(id, _)| id == pane) {
+        state.terminal_scroll_drag = None;
+    }
+    if state
+        .selection_autoscroll
+        .is_some_and(|plan| plan.pane == pane)
+    {
+        state.selection_autoscroll = None;
+    }
 }
 
 /// 工作区列表最大滚动偏移；列表放得下时恒为 0。

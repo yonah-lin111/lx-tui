@@ -54,12 +54,18 @@ pub const MENU_RENAME_WORKSPACE: &str = "Rename";
 pub const MENU_CLOSE_WORKSPACE: &str = "Close";
 pub const MENU_RENAME_TAB: &str = "Rename";
 pub const MENU_CLOSE_TAB: &str = "Close";
+pub const MENU_SPLIT_RIGHT: &str = "Split right";
+pub const MENU_SPLIT_DOWN: &str = "Split down";
+pub const MENU_SWITCH_TO_TERMINAL: &str = "Switch to terminal";
+pub const MENU_SWITCH_TO_LX: &str = "Switch to lx";
+pub const MENU_CLOSE_PANE: &str = "Close";
 
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
+pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
 /// 模态底部按钮：名称在前、快捷键在后。
 pub const BUTTON_SAVE: &str = "[save enter]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";

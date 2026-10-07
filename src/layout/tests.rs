@@ -243,3 +243,56 @@ fn prompt_geometry_degrades_when_too_narrow() {
     assert_eq!(prompt_scrollbar_rect(panel), None);
     assert_eq!(prompt_inner_size(panel), (1, 2));
 }
+
+#[test]
+fn remove_pane_promotes_sibling_to_parent_area() {
+    let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
+    assert!(layout.remove_pane(right));
+    assert_eq!(layout.pane_ids(), vec![left]);
+    let rects = pane_rects(&layout, area(80, 20), 10);
+    assert_eq!(rect_of(&rects, left), Some(Rect::new(0, 0, 80, 20)));
+}
+
+#[test]
+fn remove_pane_moves_focus_to_promoted_sibling_subtree() {
+    let (mut layout, left, right, bottom) = demo_layout();
+    assert_eq!(layout.focus(), bottom);
+    assert!(layout.remove_pane(bottom));
+    assert_eq!(layout.focus(), right);
+
+    assert!(layout.focus_pane(right));
+    assert!(layout.remove_pane(right));
+    assert_eq!(layout.focus(), left);
+    assert_eq!(layout.pane_ids(), vec![left]);
+}
+
+#[test]
+fn remove_pane_keeps_focus_when_other_pane_removed() {
+    let (mut layout, left, right, _) = demo_layout();
+    assert!(layout.focus_pane(left));
+    assert!(layout.remove_pane(right));
+    assert_eq!(layout.focus(), left);
+}
+
+#[test]
+fn remove_pane_rejects_last_or_unknown_pane() {
+    let mut single = TileLayout::new();
+    let only = single.focus();
+    assert!(!single.remove_pane(only));
+    assert_eq!(single.pane_ids(), vec![only]);
+
+    let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
+    let foreign = PaneId(9999);
+    assert!(!layout.remove_pane(foreign));
+    assert_eq!(layout.pane_ids(), vec![left, right]);
+}
+
+#[test]
+fn remove_pane_clears_collapse_when_collapsed_pane_removed() {
+    let (mut layout, left, right) = two_pane_layout(Direction::Horizontal);
+    assert!(layout.set_collapsed(right, true));
+    assert_eq!(layout.focus(), left);
+    assert!(layout.remove_pane(right));
+    assert_eq!(layout.collapsed(), None);
+    assert_eq!(layout.pane_ids(), vec![left]);
+}

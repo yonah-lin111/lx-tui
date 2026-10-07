@@ -170,6 +170,30 @@ impl TileLayout {
             self.collapsed,
         )
     }
+
+    /// 删除窗格叶节点并把兄弟子树提升为父节点；返回是否删除。
+    ///
+    /// 仅剩一个窗格或窗格不存在时返回 false（调用方保证至少保留一个）；
+    /// 被删窗格处于折叠态时清除折叠；被删窗格持有焦点时，
+    /// 焦点落到提升兄弟子树的树序第一个窗格。
+    pub fn remove_pane(&mut self, id: PaneId) -> bool {
+        let ids = self.pane_ids();
+        if ids.len() <= 1 || !ids.contains(&id) {
+            return false;
+        }
+        if self.collapsed == Some(id) {
+            self.collapsed = None;
+        }
+        let root = std::mem::replace(&mut self.root, Node::Pane(id));
+        let (root, promoted) = remove_node(root, id);
+        self.root = root;
+        if self.focus == id
+            && let Some(next) = promoted
+        {
+            self.focus = next;
+        }
+        true
+    }
 }
 
 impl Default for TileLayout {
@@ -214,6 +238,57 @@ fn collect_ids(node: &Node, ids: &mut Vec<PaneId>) {
             collect_ids(first, ids);
             collect_ids(second, ids);
         }
+    }
+}
+
+/// 删除目标叶节点并提升兄弟子树；返回新树与提升子树的树序第一个窗格。
+fn remove_node(node: Node, target: PaneId) -> (Node, Option<PaneId>) {
+    let Node::Split {
+        direction,
+        ratio,
+        first,
+        second,
+    } = node
+    else {
+        return (node, None);
+    };
+    if is_pane(&first, target) {
+        let promoted = first_id(&second);
+        return (*second, Some(promoted));
+    }
+    if is_pane(&second, target) {
+        let promoted = first_id(&first);
+        return (*first, Some(promoted));
+    }
+    let (first, promoted) = remove_node(*first, target);
+    if promoted.is_some() {
+        return (
+            Node::Split {
+                direction,
+                ratio,
+                first: Box::new(first),
+                second,
+            },
+            promoted,
+        );
+    }
+    let (second, promoted) = remove_node(*second, target);
+    (
+        Node::Split {
+            direction,
+            ratio,
+            first: Box::new(first),
+            second: Box::new(second),
+        },
+        promoted,
+    )
+}
+
+/// 子树树序第一个窗格标识。
+fn first_id(node: &Node) -> PaneId {
+    match node {
+        Node::Pane(id) => *id,
+        Node::Split { first, .. } => first_id(first),
     }
 }
 

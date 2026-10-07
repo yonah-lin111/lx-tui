@@ -66,7 +66,7 @@ fn overlay_kind_reports_variant() {
     });
     assert_eq!(menu.kind(), OverlayKind::Menu);
     let rename = Overlay::Rename(Rename {
-        target: OverlayTarget::Workspace(0),
+        target: RenameTarget::Workspace(0),
         input: TextInput::new("a"),
     });
     assert_eq!(rename.kind(), OverlayKind::Rename);

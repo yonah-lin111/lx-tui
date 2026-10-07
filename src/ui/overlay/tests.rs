@@ -1,7 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::overlay::{OverlayTarget, TextInput};
+use crate::app::overlay::{OverlayTarget, RenameTarget, TextInput};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Modifier;
@@ -46,7 +46,7 @@ fn menu_state(commands: Vec<MenuCommand>, selected: usize) -> AppState {
 fn rename_state(name: &str) -> AppState {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::Rename(Rename {
-        target: OverlayTarget::Workspace(0),
+        target: RenameTarget::Workspace(0),
         input: TextInput::new(name),
     }));
     state
@@ -193,11 +193,51 @@ fn tab_menu_renders_new_rename_close_labels() {
 }
 
 #[test]
+fn pane_menu_renders_split_switch_and_close_labels() {
+    let state = menu_state(
+        vec![
+            MenuCommand::SplitRight,
+            MenuCommand::SplitDown,
+            MenuCommand::SwitchToTerminal,
+            MenuCommand::ClosePane,
+        ],
+        0,
+    );
+    let (lines, cursor) = draw_overlay(&state);
+    assert_eq!(cursor, None);
+    assert!(lines[6].contains(text::MENU_SPLIT_RIGHT));
+    assert!(lines[7].contains(text::MENU_SPLIT_DOWN));
+    assert!(lines[8].contains(text::MENU_SWITCH_TO_TERMINAL));
+    assert!(lines[9].contains(text::MENU_CLOSE_PANE));
+}
+
+#[test]
+fn confirm_modal_uses_pane_title_for_pane_target() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state
+        .active_tab_mut()
+        .pane_mut(pane)
+        .expect("pane exists")
+        .cwd_label = Some("demo-cwd".into());
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Pane {
+            workspace: 0,
+            tab: 0,
+            pane,
+        },
+    }));
+    let (lines, _) = draw_overlay(&state);
+    assert!(lines[10].contains(text::CONFIRM_CLOSE_PANE_TITLE));
+    assert!(lines[11].contains("demo-cwd"));
+}
+
+#[test]
 fn rename_modal_uses_tab_title_for_tab_target() {
     let mut state = AppState::demo();
     crate::app::update::create_tab(&mut state);
     state.overlay = Some(Overlay::Rename(Rename {
-        target: OverlayTarget::Tab {
+        target: RenameTarget::Tab {
             workspace: 0,
             tab: 1,
         },
