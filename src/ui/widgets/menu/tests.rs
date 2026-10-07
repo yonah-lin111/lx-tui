@@ -3,7 +3,7 @@
 use super::*;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 
 const SCREEN: Rect = Rect {
     x: 0,
@@ -78,6 +78,15 @@ fn render_draws_border_title_labels_and_reversed_selection() {
         .map(|x| text_at(x, menu.area.y))
         .collect();
     assert!(title_row.contains(TITLE), "{title_row}");
+    assert_eq!(buffer[(menu.area.x, menu.area.y)].bg, Color::Indexed(236));
+    assert_eq!(
+        buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].bg,
+        Color::Indexed(236)
+    );
+    assert_eq!(
+        buffer[(menu.item_rects[0].x, menu.item_rects[0].y)].fg,
+        Color::Indexed(252)
+    );
     let row: String = (menu.item_rects[0].x..menu.item_rects[0].right())
         .map(|x| text_at(x, menu.item_rects[0].y))
         .collect();
@@ -89,6 +98,8 @@ fn render_draws_border_title_labels_and_reversed_selection() {
     for x in menu.item_rects[1].x..menu.item_rects[1].right() {
         let cell = &buffer[(x, menu.item_rects[1].y)];
         assert!(cell.modifier.contains(Modifier::REVERSED), "x={x}");
+        assert_eq!(cell.fg, Color::Reset, "x={x}");
+        assert_eq!(cell.bg, Color::Reset, "x={x}");
     }
     for x in menu.item_rects[0].x..menu.item_rects[0].right() {
         let cell = &buffer[(x, menu.item_rects[0].y)];

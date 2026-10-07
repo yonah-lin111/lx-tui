@@ -74,7 +74,8 @@ pub fn render(
     frame.render_widget(Clear, layout.area);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::accent());
+        .border_style(style::accent())
+        .style(style::overlay_panel());
     if !title.is_empty() {
         let max_title = usize::from(layout.area.width.saturating_sub(2));
         block = block.title(Span::styled(
@@ -89,7 +90,7 @@ pub fn render(
             continue;
         };
         let item_style = if selected == Some(index) {
-            style::selection()
+            style::overlay_selection()
         } else {
             style::text()
         };

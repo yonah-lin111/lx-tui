@@ -27,3 +27,18 @@ fn selected_item_fills_accent_with_contrast_foreground() {
     assert_eq!(style.bg, Some(Color::Cyan));
     assert!(style.add_modifier.contains(Modifier::BOLD));
 }
+
+#[test]
+fn overlay_panel_paints_indexed_surface_with_readable_foreground() {
+    let style = overlay_panel();
+    assert_eq!(style.fg, Some(Color::Indexed(252)));
+    assert_eq!(style.bg, Some(Color::Indexed(236)));
+}
+
+#[test]
+fn overlay_selection_resets_terminal_colors_before_reversing() {
+    let style = overlay_selection();
+    assert_eq!(style.fg, Some(Color::Reset));
+    assert_eq!(style.bg, Some(Color::Reset));
+    assert!(style.add_modifier.contains(Modifier::REVERSED));
+}

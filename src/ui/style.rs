@@ -1,6 +1,7 @@
 //! 语义样式 Token：沿用 codex 的终端原生 ANSI 配色。
 //! 默认不铺自绘背景；仅侧栏/标签栏的选中行使用 ANSI-16 背景（`selected_item`），
-//! 悬停行沿用终端原生反显（`selection`）。组件禁止直接写死颜色与修饰符。
+//! 悬停行沿用终端原生反显（`selection`）；浮层面板使用自包含深底浅字（`overlay_panel`）。
+//! 组件禁止直接写死颜色与修饰符。
 
 use ratatui::style::{Color, Modifier, Style};
 
@@ -34,9 +35,19 @@ pub fn selected_item() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 列表/菜单当前项：终端原生反显；侧栏/标签栏的鼠标悬停与右键菜单选中项共用。
+/// 列表/菜单当前项：终端原生反显；侧栏/标签栏的鼠标悬停使用；浮层内改用 `overlay_selection`。
 pub fn selection() -> Style {
     Style::default().add_modifier(Modifier::REVERSED)
+}
+
+/// 浮层内选中/悬停项：先重置为终端默认前景/背景再反显，不受浮层底色影响。
+///
+/// 与 `selection` 的区别仅在于显式重置面板底色，效果与侧栏/标签栏的悬停一致。
+pub fn overlay_selection() -> Style {
+    Style::default()
+        .fg(Color::Reset)
+        .bg(Color::Reset)
+        .add_modifier(Modifier::REVERSED)
 }
 
 /// 状态：失败（Red）。
@@ -47,6 +58,16 @@ pub fn error() -> Style {
 /// 浮层标题：正文加粗。
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
+///
+/// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、
+/// 文字前景 Indexed 252；边框与强调/错误色在各自绘制时覆盖前景。
+pub fn overlay_panel() -> Style {
+    Style::default()
+        .fg(Color::Indexed(252))
+        .bg(Color::Indexed(236))
 }
 
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：次要信息。

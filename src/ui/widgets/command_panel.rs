@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
@@ -126,7 +126,8 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     Clear.render(layout.rect, buf);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::muted());
+        .border_style(style::muted())
+        .style(style::overlay_panel());
     block.render(layout.rect, buf);
     render_items(buf, &layout, view);
     if let Some(scrollbar) = layout.scrollbar.as_ref() {
@@ -290,7 +291,7 @@ fn render_item(
         return;
     }
     let row_style = if active {
-        Style::default().add_modifier(Modifier::REVERSED)
+        style::overlay_selection()
     } else {
         Style::default()
     };

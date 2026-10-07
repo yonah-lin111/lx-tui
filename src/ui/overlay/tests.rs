@@ -4,7 +4,7 @@ use super::*;
 use crate::app::overlay::{OverlayTarget, RenameTarget, TextInput};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 
 const SCREEN: Rect = Rect {
     x: 0,
@@ -114,6 +114,24 @@ fn menu_renders_labels_and_reversed_selection() {
     }
     let buffer = terminal.backend().buffer().clone();
     assert!(buffer[(11, 7)].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn modal_uses_overlay_panel_background() {
+    let state = rename_state("demo");
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| {
+        render(frame, frame.area(), &state);
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let shell = rename_shell(SCREEN).expect("rename modal fits");
+    assert_eq!(buffer[(shell.area.x, shell.area.y)].bg, Color::Indexed(236));
+    assert_eq!(
+        buffer[(shell.inner.x, shell.inner.y)].bg,
+        Color::Indexed(236)
+    );
 }
 
 #[test]

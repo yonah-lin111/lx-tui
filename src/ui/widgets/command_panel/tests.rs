@@ -1,6 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
+use ratatui::style::{Color, Modifier};
 
 /// 单行条目。
 fn inline<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
@@ -65,6 +66,11 @@ fn renders_below_anchor_without_covering_it() {
 
     assert_eq!(rect, Rect::new(0, 3, 17, 5));
     assert_eq!(buf[(0, 3)].symbol(), "╭");
+    assert_eq!(buf[(0, 3)].bg, Color::Indexed(236));
+    assert_eq!(buf[(1, 5)].bg, Color::Indexed(236));
+    assert_eq!(buf[(1, 5)].fg, Color::Indexed(252));
+    assert_eq!(buf[(2, 4)].bg, Color::Reset);
+    assert_eq!(buf[(2, 4)].fg, Color::Reset);
     assert_eq!(buf[(0, 2)].symbol(), " ");
     assert!(buf[(2, 4)].modifier.contains(Modifier::REVERSED));
     let row = row_text(&buf, area, 4);

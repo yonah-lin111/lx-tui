@@ -74,7 +74,8 @@ pub fn render(
     frame.render_widget(Clear, area);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(border_style(toast.kind));
+        .border_style(border_style(toast.kind))
+        .style(style::overlay_panel());
     if let Some(title) = toast.title.as_deref() {
         block = block.title(Span::styled(
             format!(

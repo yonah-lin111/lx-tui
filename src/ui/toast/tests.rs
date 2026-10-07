@@ -82,6 +82,31 @@ fn titled_toast_keeps_three_rows_and_fits_title() {
 }
 
 #[test]
+fn toast_paints_overlay_panel_background() {
+    let mut state = AppState::demo();
+    show(&mut state, None);
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let config = Config::default();
+    let area = rect(&state, &view, &rects, Rect::new(0, 0, 100, 24), &config)
+        .expect("toast area is resolvable");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 24))
+        .expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| crate::ui::render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    assert_eq!(
+        buffer[(area.x, area.y)].bg,
+        ratatui::style::Color::Indexed(236)
+    );
+    assert_eq!(
+        buffer[(area.x + 1, area.y + 1)].bg,
+        ratatui::style::Color::Indexed(236)
+    );
+}
+
+#[test]
 fn pane_anchored_toast_targets_that_pane() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
