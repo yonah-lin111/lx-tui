@@ -664,6 +664,10 @@ fn workspace_list_renders_scrolled_window_and_scrollbar() {
     for _ in 0..20 {
         update::create_workspace(&mut state);
     }
+    // 短名断言：顶层缩进占 2 列，长名会被省略号截断。
+    for (index, workspace) in state.workspaces.iter_mut().enumerate() {
+        workspace.name = format!("w{index}");
+    }
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let list = sections.workspaces;
@@ -1072,9 +1076,12 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         ),
     );
     state.workspaces[2].name_is_manual = true;
+    state
+        .workspaces
+        .push(Workspace::single_terminal("tmp".to_string(), None));
 
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("▾  main")));
+    assert!(lines.iter().any(|line| line.contains("▾ main")));
     assert!(
         lines.iter().any(|line| line.contains("  ├─ feature/x")),
         "non-last child indents and uses middle connector: {lines:?}"
@@ -1091,16 +1098,25 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         .iter()
         .find(|line| line.contains("feature/x"))
         .expect("child row");
-    let parent_col = parent_line
-        .find("main")
-        .map(|byte| parent_line[..byte].chars().count());
-    let child_col = child_line
-        .find("feature/x")
-        .map(|byte| child_line[..byte].chars().count());
+    let plain_line = lines
+        .iter()
+        .find(|line| line.contains("tmp"))
+        .expect("plain row");
+    let char_col =
+        |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
+    let parent_col = char_col(parent_line, "main");
+    let child_col = char_col(child_line, "feature/x");
+    let connector_col = char_col(child_line, "├");
+    assert_eq!(parent_col, connector_col, "父项首字母与子项直角符号对齐");
     assert_eq!(
         child_col,
-        parent_col.map(|column| column + WORKSPACE_CHILD_INDENT),
-        "子项连接符相对父项缩进 {WORKSPACE_CHILD_INDENT} 列"
+        parent_col.map(|column| column + WORKSPACE_ITEM_INDENT + 1),
+        "子项名字在连接符之后"
+    );
+    assert_eq!(
+        char_col(plain_line, "tmp"),
+        parent_col,
+        "普通项与父项名字同列"
     );
 }
 

@@ -27,8 +27,8 @@ use crate::layout::{COLLAPSED_STRIP, PaneId};
 const PANEL_BUTTON_WIDTH: u16 = 3;
 const PANEL_BUTTON_MARGIN: u16 = 1;
 
-/// 分组子项连接符相对父项的缩进列数。
-const WORKSPACE_CHILD_INDENT: usize = 2;
+/// 工作区列表顶层项的统一缩进列数；子项连接符与父项/普通项名字在此列对齐。
+const WORKSPACE_ITEM_INDENT: usize = 2;
 
 /// 渲染整个界面。
 pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
@@ -332,8 +332,9 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
 
 /// 工作区列表项：激活项强调色；拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
 ///
-/// 组父项行贴内容区左缘显示折叠箭头（accent 色，占 3 列），分组子项连接符再缩进 2 列
-/// （`├─ `/`└─ `，末位按可见子项判定）；非 git 工作区不缩进。折叠组只渲染父项与当前激活子项。
+/// 顶层项统一缩进 2 列：组父项行在左缘显示折叠箭头（accent 色，占 2 列），其名字与
+/// 分组子项的连接符同列；子项连接符（`├─ `/`└─ `，末位按可见子项判定）之后是名字。
+/// 非 git / 未分组项与父项名字同列。折叠组只渲染父项与当前激活子项。
 /// 行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
@@ -370,7 +371,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_GROUP_EXPANDED
             };
-            format!("{arrow}  ")
+            format!("{arrow} ")
         } else if row.child {
             let group = workspace_repo_root(state, row.index);
             let last = !rows[row_index + 1..]
@@ -381,9 +382,9 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             } else {
                 text::WORKSPACE_TREE_MIDDLE
             };
-            format!("{:width$}{tree} ", "", width = WORKSPACE_CHILD_INDENT)
+            format!("{:width$}{tree} ", "", width = WORKSPACE_ITEM_INDENT)
         } else {
-            String::new()
+            " ".repeat(WORKSPACE_ITEM_INDENT)
         };
         let label = workspace_item_label(workspace, row.child);
         let name_width =
