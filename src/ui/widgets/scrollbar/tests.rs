@@ -82,7 +82,7 @@ fn drag_row_maps_with_grab_offset() {
 }
 
 #[test]
-fn render_draws_track_and_accent_thumb() {
+fn render_draws_track_and_text_thumb() {
     let bar = layout(LIST, 20, 10, 0).expect("scrollbar is needed");
     let mut terminal = Terminal::new(TestBackend::new(20, 10)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, &bar)) {
@@ -90,8 +90,25 @@ fn render_draws_track_and_accent_thumb() {
     }
     let buffer = terminal.backend().buffer().clone();
     assert_eq!(buffer[(19, 0)].symbol(), THUMB_SYMBOL);
-    assert_eq!(buffer[(19, 0)].fg, Color::Cyan);
-    assert!(buffer[(19, 0)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buffer[(19, 0)].modifier, Modifier::empty());
+    assert_eq!(buffer[(19, 0)].fg, Color::Reset);
+    assert_eq!(buffer[(19, 0)].bg, Color::Reset);
     assert_eq!(buffer[(19, 9)].symbol(), TRACK_SYMBOL);
     assert!(buffer[(19, 9)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn thumb_style_matches_text_style_and_avoids_reversed_black_gap() {
+    let bar = layout(LIST, 20, 10, 0).expect("scrollbar is needed");
+    let mut terminal = Terminal::new(TestBackend::new(20, 10)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &bar)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let text_style = style::text();
+    assert_eq!(buffer[(19, 0)].modifier, text_style.add_modifier);
+    assert!(
+        !buffer[(19, 0)].modifier.contains(Modifier::REVERSED),
+        "thumb must not be reversed to prevent inverted black gap on right half-block"
+    );
 }

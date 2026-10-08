@@ -92,12 +92,12 @@ fn offset_for_thumb_top(layout: &ScrollbarLayout, thumb_top: usize) -> usize {
     thumb_top.min(max_thumb_top).saturating_mul(max_offset) / max_thumb_top
 }
 
-/// 渲染滚动条：轨道 muted、thumb accent。
+/// 渲染滚动条：轨道 muted、thumb text（终端原生前景色，避免半块字符反显产生黑边）。
 pub fn render(frame: &mut Frame<'_>, layout: &ScrollbarLayout) {
     render_buffer(frame.buffer_mut(), layout);
 }
 
-/// 在缓冲区内渲染滚动条：轨道 muted、thumb accent。
+/// 在缓冲区内渲染滚动条：轨道 muted、thumb text（终端原生前景色，避免半块字符反显产生黑边）。
 pub fn render_buffer(buf: &mut Buffer, layout: &ScrollbarLayout) {
     for y in layout.track.y..layout.track.bottom() {
         if let Some(cell) = buf.cell_mut((layout.track.x, y)) {
@@ -110,7 +110,7 @@ pub fn render_buffer(buf: &mut Buffer, layout: &ScrollbarLayout) {
         if let Some(cell) = buf.cell_mut((layout.thumb.x, y)) {
             cell.reset();
             cell.set_symbol(THUMB_SYMBOL);
-            cell.set_style(style::accent());
+            cell.set_style(style::text());
         }
     }
 }
