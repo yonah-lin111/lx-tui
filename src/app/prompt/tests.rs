@@ -1180,3 +1180,179 @@ fn can_undo_and_can_redo_follow_history() {
     prompt.redo();
     assert!(prompt.can_undo() && !prompt.can_redo());
 }
+
+// ---- 斜杠模板命令面板与模板块操作 ----
+
+/// 插入文本并触发 settle 的辅助：逐字符走 insert_char（与真实键盘输入一致）。
+fn type_text(prompt: &mut Prompt, text: &str) {
+    for ch in text.chars() {
+        prompt.insert_char(ch);
+    }
+}
+
+#[test]
+fn slash_panel_opens_filters_and_closes_off_line_end() {
+    let mut prompt = prompt(40, 8);
+    type_text(&mut prompt, "/");
+    let panel = prompt.slash_panel().expect("panel on bare slash");
+    assert_eq!(panel.items().len(), 5);
+    assert_eq!(panel.trigger().query, "");
+
+    type_text(&mut prompt, "ref");
+    let panel = prompt.slash_panel().expect("panel filters");
+    assert_eq!(panel.items(), &[markdown::SlashCommandId::Refactor]);
+
+    prompt.insert_char(' ');
+    assert!(prompt.slash_panel().is_none(), "行尾不再是纯命令时关闭");
+
+    prompt.backspace();
+    assert!(prompt.slash_panel().is_some());
+    prompt.move_home();
+    assert!(prompt.slash_panel().is_none(), "光标离开行尾时关闭");
+}
+
+#[test]
+fn slash_panel_suppressed_inside_fence_and_template() {
+    let mut fenced = prompt(40, 10);
+    type_text(&mut fenced, "```\n/x");
+    assert!(fenced.slash_panel().is_none(), "围栏内不触发");
+
+    let mut in_template = prompt(40, 10);
+    type_text(&mut in_template, "&&& addTemplate --start 「title: 」\n/x");
+    assert!(in_template.slash_panel().is_none(), "模板块内不触发");
+}
+
+#[test]
+fn slash_confirm_inserts_template_and_is_single_undo_step() {
+    let mut prompt = prompt(40, 10);
+    type_text(&mut prompt, "/add");
+    assert!(prompt.slash_confirm());
+
+    let (content, offset) = markdown::slash_template_content(markdown::SlashCommandId::Add);
+    assert_eq!(prompt.text(), content);
+    assert!(prompt.cursor_cell().is_some());
+    assert!(prompt.slash_panel().is_none(), "确认后面板关闭");
+    assert!(prompt.text().as_bytes()[offset - 1] == b' ');
+
+    prompt.undo();
+    assert_eq!(prompt.text(), "/add", "整块插入单步回退");
+    assert!(
+        prompt.slash_panel().is_some(),
+        "回退后触发恢复、面板重新打开"
+    );
+}
+
+#[test]
+fn slash_escape_closes_panel_without_editing() {
+    let mut prompt = prompt(40, 8);
+    type_text(&mut prompt, "/bug");
+    assert!(prompt.slash_escape());
+    assert!(prompt.slash_panel().is_none());
+    assert_eq!(prompt.text(), "/bug");
+    assert!(!prompt.slash_escape(), "已关闭时不再消费");
+}
+
+#[test]
+fn slash_panel_navigation_and_mouse_helpers() {
+    let mut prompt = prompt(40, 8);
+    type_text(&mut prompt, "/");
+    assert!(prompt.slash_move(1));
+    assert_eq!(prompt.slash_panel().map(|p| p.active()), Some(1));
+    assert!(prompt.slash_set_active(3));
+    assert!(!prompt.slash_set_active(3), "重复设置返回 false");
+    assert!(prompt.slash_scroll(1, 0));
+    assert_eq!(prompt.slash_panel().and_then(|p| p.viewport()), Some(1));
+    prompt.slash_confirm_at(0);
+    assert!(prompt.text().starts_with("&&& addTemplate --start"));
+}
+
+/// 插入一个标准 add 模板块并返回其起始行索引。
+fn with_add_template(prompt: &mut Prompt) -> usize {
+    type_text(prompt, "/add");
+    assert!(prompt.slash_confirm());
+    0
+}
+
+#[test]
+fn template_block_body_extracts_inner_content() {
+    let mut prompt = prompt(60, 20);
+    with_add_template(&mut prompt);
+    let body = prompt.template_block_body(0).expect("body");
+    assert!(body.starts_with("# Add Requirement"));
+    assert!(body.ends_with("- Notes: \n  - "));
+    assert!(!body.contains("&&&"));
+    assert_eq!(prompt.template_block_body(1), None);
+}
+
+#[test]
+fn clean_template_block_removes_empty_items_and_undoes_once() {
+    let mut prompt = prompt(60, 20);
+    with_add_template(&mut prompt);
+    let before = prompt.text().to_string();
+    assert!(prompt.clean_template_block(0));
+    assert!(prompt.text().contains("# Add Requirement"));
+    assert!(!prompt.text().contains("- Reference: "));
+    assert!(prompt.text().ends_with("&&& addTemplate --end"));
+
+    prompt.undo();
+    assert_eq!(prompt.text(), before, "清理为单步撤销");
+}
+
+#[test]
+fn delete_template_block_removes_whole_block_and_undoes_once() {
+    let mut prompt = prompt(60, 20);
+    type_text(&mut prompt, "before\n");
+    type_text(&mut prompt, "/bug");
+    assert!(prompt.slash_confirm());
+    let start_line = prompt
+        .text()
+        .split('\n')
+        .position(|l| l.starts_with("&&& bug"))
+        .expect("line");
+    let before = prompt.text().to_string();
+    assert!(prompt.delete_template_block(start_line));
+    assert_eq!(prompt.text(), "before\n");
+    prompt.undo();
+    assert_eq!(prompt.text(), before, "删除为单步撤销");
+}
+
+#[test]
+fn toggle_template_status_cycles_and_preserves_cursor_line() {
+    let mut prompt = prompt(60, 20);
+    with_add_template(&mut prompt);
+    assert!(prompt.toggle_template_status(0));
+    assert!(prompt.text().contains("&&& addTemplate --end in_progress"));
+    assert!(prompt.toggle_template_status(0));
+    assert!(prompt.text().contains("&&& addTemplate --end done"));
+    assert!(prompt.toggle_template_status(0));
+    assert!(prompt.text().contains("&&& addTemplate --end"));
+    assert!(!prompt.text().contains("done"));
+    prompt.undo();
+    assert!(
+        prompt.text().contains("&&& addTemplate --end done"),
+        "状态切换为单步撤销"
+    );
+}
+
+#[test]
+fn template_block_ops_noop_on_plain_lines() {
+    let mut prompt = prompt(40, 8);
+    type_text(&mut prompt, "plain");
+    assert!(!prompt.clean_template_block(0));
+    assert!(!prompt.delete_template_block(0));
+    assert!(!prompt.toggle_template_status(0));
+    assert_eq!(prompt.template_block_body(0), None);
+}
+
+#[test]
+fn template_block_body_of_unclosed_block_reads_to_end() {
+    let mut prompt = prompt(60, 10);
+    prompt.insert_str("&&& bugTemplate --start 「title: 」\n# Fix");
+    assert_eq!(
+        prompt.template_block_body(0).as_deref(),
+        Some("# Fix"),
+        "未闭合块正文延伸到文末"
+    );
+    assert!(!prompt.clean_template_block(0), "无空项时清理不产生变更");
+    assert!(prompt.text().ends_with("# Fix"));
+}

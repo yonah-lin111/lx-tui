@@ -1,4 +1,10 @@
-//! markdown 编辑领域：块命令与文件提及的触发识别、候选过滤与插入计算，纯函数、无 UI 依赖。
+//! markdown 编辑领域：块命令、文件提及与模板斜杠命令的触发识别、候选过滤与插入计算，纯函数、无 UI 依赖。
+
+mod slash;
+mod template;
+
+pub use slash::*;
+pub use template::*;
 
 use std::ops::Range;
 
@@ -319,7 +325,7 @@ pub fn mention_trigger(text: &str, cursor: usize) -> Option<MentionTrigger> {
 }
 
 /// 查询字符：非空白且非提及边界标点；允许中文等多字节字符，`.` 属于文件名字符。
-fn is_mention_query_char(ch: char) -> bool {
+pub(crate) fn is_mention_query_char(ch: char) -> bool {
     !ch.is_whitespace()
         && !matches!(
             ch,

@@ -5,6 +5,8 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::app::markdown::{SlashCommandId, TemplateStatus};
+
 /// 正文。
 pub fn text() -> Style {
     Style::default()
@@ -146,6 +148,52 @@ pub fn markdown_link_text() -> Style {
 /// markdown URL。
 pub fn markdown_url() -> Style {
     Style::default().fg(Color::Cyan)
+}
+
+/// 模板块结构标记（`&&&`、`--start`/`--end`、状态与元数据）：次要信息。
+pub fn template_marker() -> Style {
+    muted()
+}
+
+/// 模板块命令名：按业务分色并加粗；未知命令用通用紫。
+pub fn template_command(id: Option<SlashCommandId>) -> Style {
+    let color = match id {
+        Some(SlashCommandId::Add) => Color::Green,
+        Some(SlashCommandId::Bug) => Color::LightRed,
+        Some(SlashCommandId::Refactor) => Color::LightMagenta,
+        Some(SlashCommandId::Common) => Color::LightBlue,
+        Some(SlashCommandId::Style) => Color::Magenta,
+        None => Color::LightMagenta,
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+/// 模板块标题占位符 `「title: …」`：Yellow 下划线。
+pub fn template_title() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// `@文件` 提及：Yellow 下划线。
+pub fn markdown_file_mention() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// 模板块操作按钮：常态次要信息。
+pub fn template_button() -> Style {
+    muted()
+}
+
+/// 模板块状态按钮：todo 次要、in_progress 强调、done 成功。
+pub fn template_status(status: TemplateStatus) -> Style {
+    match status {
+        TemplateStatus::Todo => muted(),
+        TemplateStatus::InProgress => accent(),
+        TemplateStatus::Done => Style::default().fg(Color::Green),
+    }
 }
 
 /// lx 页吉祥物像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。

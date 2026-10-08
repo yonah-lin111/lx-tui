@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::markdown::BlockCommandId;
+use crate::app::markdown::{BlockCommandId, SlashCommandId, TemplateStatus};
 use crate::layout::PaneId;
 
 pub const SIDEBAR_TITLE: &str = "Workspaces";
@@ -150,9 +150,32 @@ pub const MENU_TITLE_WORKSPACE: &str = "workspace";
 pub const MENU_TITLE_TAB: &str = "tab";
 pub const MENU_TITLE_PANE: &str = "pane";
 
-/// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及。
+/// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠模板命令。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";
 pub const MENTION_PANEL_TITLE: &str = "Files";
+pub const SLASH_PANEL_TITLE: &str = "Templates";
+
+/// 斜杠命令面板条目：短名标签 + 长别名预览。
+pub fn slash_command_text(id: SlashCommandId) -> (String, String) {
+    (format!("/{}", id.short_name()), id.long_name().to_string())
+}
+
+/// 模板块操作按钮文案；状态按钮按当前状态取标签。
+pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
+pub const TEMPLATE_BUTTON_RUN: &str = "[run]";
+pub const TEMPLATE_BUTTON_DONE: &str = "[done]";
+pub const TEMPLATE_BUTTON_COPY: &str = "[copy]";
+pub const TEMPLATE_BUTTON_CLEAN: &str = "[clean]";
+pub const TEMPLATE_BUTTON_DEL: &str = "[del]";
+
+/// 状态按钮标签：todo / run / done。
+pub fn template_status_label(status: TemplateStatus) -> &'static str {
+    match status {
+        TemplateStatus::Todo => TEMPLATE_BUTTON_TODO,
+        TemplateStatus::InProgress => TEMPLATE_BUTTON_RUN,
+        TemplateStatus::Done => TEMPLATE_BUTTON_DONE,
+    }
+}
 
 /// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";

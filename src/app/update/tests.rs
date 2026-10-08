@@ -2829,3 +2829,41 @@ fn create_workspace_requests_git_metadata_for_cwd() {
     create_workspace(&mut state);
     assert_eq!(state.git_requests.len(), 1);
 }
+
+#[test]
+fn slash_panel_keys_are_consumed_before_editing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('/'));
+    assert!(state.prompt.slash_panel().is_some());
+
+    // 上下键只移动高亮，不移动文本光标（光标仍在行尾）。
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(
+        state.prompt.slash_panel().map(|panel| panel.active()),
+        Some(1)
+    );
+    apply_editor(&mut state, EditorCommand::Up);
+    assert_eq!(
+        state.prompt.slash_panel().map(|panel| panel.active()),
+        Some(0)
+    );
+    assert_eq!(state.prompt.text(), "/");
+
+    // Esc 关闭面板且不改文本，下一次编辑可重新触发。
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(state.prompt.slash_panel().is_none());
+    apply_editor(&mut state, EditorCommand::InsertChar('a'));
+    assert!(state.prompt.slash_panel().is_some());
+
+    // 回车确认插入标准模板块。
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert!(
+        state
+            .prompt
+            .text()
+            .starts_with("&&& addTemplate --start 「title: 」")
+    );
+    assert!(state.prompt.slash_panel().is_none());
+}

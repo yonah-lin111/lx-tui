@@ -1890,3 +1890,149 @@ fn mouse_click_prompt_text_row_places_cursor_below_header() {
     assert_eq!(state.prompt.cursor_cell(), Some((1, 1)));
     assert!(dirty);
 }
+
+#[test]
+fn mouse_interacts_with_slash_panel() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertChar('/'),
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let panel = crate::ui::prompt::slash_layout(&state.prompt, area).expect("slash panel visible");
+    let rect = panel.rect;
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 悬停第 2 项：只改高亮。
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, rect.x + 2, rect.y + 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.prompt.slash_panel().map(|panel| panel.active()),
+        Some(1)
+    );
+
+    // 左键点击第 1 项：插入 add 模板并关闭面板。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x + 2,
+            rect.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.text().starts_with("&&& addTemplate --start"));
+    assert!(state.prompt.slash_panel().is_none());
+}
+
+/// 构造带 add 模板块的宽屏场景，返回几何与按钮行文本区。
+fn template_button_state() -> (AppState, Config, Geometry, Rect) {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 80;
+    state.prompt.resize(78, 12);
+    crate::app::update::focus_prompt(&mut state);
+    let (content, _) =
+        crate::app::markdown::slash_template_content(crate::app::markdown::SlashCommandId::Add);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText(content.into()),
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    (state, config, geo, area)
+}
+
+#[test]
+fn mouse_template_buttons_clean_status_and_delete() {
+    let (mut state, config, geo, area) = template_button_state();
+    let buttons = crate::ui::prompt::template_buttons(&state.prompt, area);
+    assert_eq!(buttons.len(), 4, "宽屏下按钮可见");
+    let hit = |button| {
+        buttons
+            .iter()
+            .find(|hit| hit.button == button)
+            .copied()
+            .expect("button")
+    };
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 状态按钮：todo → in_progress。
+    let status = hit(crate::ui::prompt::TemplateBlockButton::Status);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            status.rect.x + 1,
+            status.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .prompt
+            .text()
+            .contains("&&& addTemplate --end in_progress")
+    );
+
+    // 清理按钮：移除未填写空项。
+    let clean = hit(crate::ui::prompt::TemplateBlockButton::Clean);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            clean.rect.x + 1,
+            clean.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!state.prompt.text().contains("- Reference: "));
+    assert!(
+        state
+            .prompt
+            .text()
+            .contains("&&& addTemplate --end in_progress")
+    );
+
+    // 删除按钮：整块消失。
+    let buttons = crate::ui::prompt::template_buttons(&state.prompt, area);
+    let delete = buttons
+        .iter()
+        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Delete)
+        .copied()
+        .expect("delete button");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            delete.rect.x + 1,
+            delete.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.text(), "");
+}

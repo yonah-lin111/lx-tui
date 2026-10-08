@@ -539,8 +539,14 @@ fn handle_terminal_event(
                 } else if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     update::select_mention(state, index);
                     *dirty = true;
+                } else if let Some(index) = slash_item_at(state, view, mouse.column, mouse.row) {
+                    update::select_slash(state, index);
+                    *dirty = true;
                 } else if let Some(index) = panel_item_at(state, view, mouse.column, mouse.row) {
                     update::select_panel(state, index);
+                    *dirty = true;
+                } else if let Some(hit) = template_button_at(state, view, mouse.column, mouse.row) {
+                    apply_template_button(state, hit);
                     *dirty = true;
                 } else if !state.prompt_collapsed
                     && let Some(button) =
@@ -858,7 +864,16 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                // 块命令面板同上：滚轮滚动视口，到底/顶后钳制不循环。
+                // 斜杠命令面板同上：滚轮滚动视口，到底/顶后钳制不循环。
+                if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                    && let Some(panel) = slash_panel_layout(state, view)
+                    && panel.rect.contains((mouse.column, mouse.row).into())
+                {
+                    update::scroll_slash(state, direction, panel.start);
+                    *dirty = true;
+                    return;
+                }
+                // 块命令面板同上。
                 if let Some(direction) = vertical_wheel_direction(mouse.kind)
                     && let Some(panel) = block_panel_layout(state, view)
                     && panel.rect.contains((mouse.column, mouse.row).into())
@@ -952,6 +967,12 @@ fn handle_terminal_event(
                 }
                 if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     if update::hover_mention(state, index) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if let Some(index) = slash_item_at(state, view, mouse.column, mouse.row) {
+                    if update::hover_slash(state, index) {
                         *dirty = true;
                     }
                     return;
@@ -1462,6 +1483,73 @@ fn block_panel_layout(
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
     let area = layout::prompt_text_rect(view.prompt);
     ui::prompt::panel_layout(&state.prompt, area)
+}
+
+/// 斜杠命令面板命中：返回条目索引；面板未打开或未命中返回 None。
+fn slash_item_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let area = layout::prompt_text_rect(view.prompt);
+    ui::prompt::slash_item_at(&state.prompt, area, column, row)
+}
+
+/// 斜杠命令面板布局；用于滚轮命中与视口滚动。
+fn slash_panel_layout(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+) -> Option<ui::widgets::command_panel::PanelLayout> {
+    let area = layout::prompt_text_rect(view.prompt);
+    ui::prompt::slash_layout(&state.prompt, area)
+}
+
+/// 模板块操作按钮命中；未命中返回 None。
+fn template_button_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<ui::prompt::TemplateButtonHit> {
+    let area = layout::prompt_text_rect(view.prompt);
+    ui::prompt::template_button_at(&state.prompt, area, column, row)
+}
+
+/// 执行模板块按钮动作：复制写剪贴板并 Toast，其余就地变更（均单步可撤销）。
+fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHit) {
+    match hit.button {
+        ui::prompt::TemplateBlockButton::Copy => {
+            let Some(text) = update::copy_template_block(state, hit.line) else {
+                return;
+            };
+            let anchor = Some(state.prompt.id());
+            let now = Instant::now();
+            if crate::platform::write_clipboard(&text) {
+                update::show_toast(
+                    state,
+                    Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now)
+                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                );
+            } else {
+                tracing::warn!("clipboard write failed");
+                update::show_toast(
+                    state,
+                    Toast::new(ToastKind::Error, ui::text::TOAST_COPY_FAILED, anchor, now)
+                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                );
+            }
+        }
+        ui::prompt::TemplateBlockButton::Clean => {
+            update::clean_template_block(state, hit.line);
+        }
+        ui::prompt::TemplateBlockButton::Delete => {
+            update::delete_template_block(state, hit.line);
+        }
+        ui::prompt::TemplateBlockButton::Status => {
+            update::toggle_template_status(state, hit.line);
+        }
+    }
 }
 
 /// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。

@@ -543,3 +543,144 @@ fn toolbar_hidden_when_prompt_too_short() {
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
     assert_eq!(buf[(2, 2)].symbol(), " ");
 }
+
+// ---- 斜杠命令面板与模板块按钮 ----
+
+#[test]
+fn slash_panel_renders_templates_title_and_hit_tests_items() {
+    let area = Rect::new(0, 0, 40, 10);
+    let prompt = prompt(40, 10, "/");
+    let layout = slash_layout(&prompt, area).expect("slash panel visible");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+
+    let lines: Vec<String> = (layout.rect.y..layout.rect.bottom())
+        .map(|y| {
+            (layout.rect.x..layout.rect.right())
+                .map(|x| buf[(x, y)].symbol())
+                .collect()
+        })
+        .collect();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(text::SLASH_PANEL_TITLE)),
+        "顶边标题为 Templates: {lines:?}"
+    );
+    assert!(lines.iter().any(|line| line.contains("/add")));
+    assert!(lines.iter().any(|line| line.contains("addTemplate")));
+
+    assert_eq!(
+        slash_item_at(&prompt, area, layout.content.x + 1, layout.content.y),
+        Some(0)
+    );
+    assert_eq!(
+        slash_item_at(&prompt, area, layout.rect.x, layout.rect.y),
+        None
+    );
+    assert_eq!(
+        slash_panel_rect(&prompt, area).map(|rect| rect.height),
+        Some(layout.rect.height)
+    );
+}
+
+#[test]
+fn template_command_and_title_and_mention_styles() {
+    let area = Rect::new(0, 0, 60, 3);
+    let prompt = prompt(60, 3, "&&& addTemplate --start 「title: 」\n@src/app.rs");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+
+    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
+    assert_eq!(buf[(4, 0)].symbol(), "a");
+    assert_eq!(buf[(4, 0)].fg, Color::Green, "add 命令为绿色");
+    assert!(buf[(4, 0)].modifier.contains(Modifier::BOLD));
+    let dash = buf[(16, 0)].symbol();
+    assert_eq!(dash, "-", "--start 为 dim 标记");
+    assert!(buf[(16, 0)].modifier.contains(Modifier::DIM));
+
+    assert_eq!(buf[(24, 0)].symbol(), "「");
+    assert_eq!(buf[(24, 0)].fg, Color::Yellow);
+    assert!(buf[(24, 0)].modifier.contains(Modifier::UNDERLINED));
+
+    assert_eq!(buf[(0, 1)].symbol(), "@");
+    assert_eq!(buf[(0, 1)].fg, Color::Yellow, "@文件为 Yellow 下划线");
+    assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
+}
+
+#[test]
+fn template_buttons_render_and_hit_test() {
+    let area = Rect::new(0, 0, 70, 10);
+    let prompt = prompt(
+        70,
+        10,
+        "&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end",
+    );
+    let buttons = template_buttons(&prompt, area);
+    assert_eq!(buttons.len(), 4, "状态、复制、清理、删除");
+    assert_eq!(buttons[0].button, TemplateBlockButton::Status);
+    assert_eq!(buttons[1].button, TemplateBlockButton::Copy);
+    assert_eq!(buttons[2].button, TemplateBlockButton::Clean);
+    assert_eq!(buttons[3].button, TemplateBlockButton::Delete);
+
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
+    assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
+    assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
+
+    for hit in &buttons {
+        let cell = hit.rect;
+        assert_eq!(
+            template_button_at(&prompt, area, cell.x, cell.y),
+            Some(*hit)
+        );
+    }
+    assert_eq!(template_button_at(&prompt, area, 0, 0), None);
+}
+
+#[test]
+fn template_buttons_hide_when_text_would_overlap() {
+    let area = Rect::new(0, 0, 40, 10);
+    let prompt = prompt(
+        40,
+        10,
+        "&&& addTemplate --start 「title: 」\n&&& addTemplate --end",
+    );
+    assert!(template_buttons(&prompt, area).is_empty(), "窄屏整组隐藏");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(
+        !row.contains(text::TEMPLATE_BUTTON_COPY),
+        "正文不被按钮遮挡: {row}"
+    );
+}
+
+#[test]
+fn template_status_button_label_follows_block_status() {
+    let area = Rect::new(0, 0, 70, 10);
+    let done = prompt(
+        70,
+        10,
+        "&&& bugTemplate --start 「title: 」\n&&& bugTemplate --end done",
+    );
+    let buttons = template_buttons(&done, area);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &done, None);
+    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(row.contains(text::TEMPLATE_BUTTON_DONE), "{row}");
+    assert_eq!(buttons[0].button, TemplateBlockButton::Status);
+
+    let run = prompt(
+        70,
+        10,
+        "&&& bugTemplate --start 「title: 」\n&&& bugTemplate --end in_progress",
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &run, None);
+    let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+}
