@@ -82,7 +82,7 @@ pub fn render(
                 " {} ",
                 text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
             ),
-            style::overlay_border_title(),
+            style::border_title(),
         ));
     }
     let inner = block.inner(area);

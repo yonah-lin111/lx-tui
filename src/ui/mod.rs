@@ -702,7 +702,7 @@ fn render_panes(
         if pane.exited {
             title.push_str(" (exited)");
         }
-        // 边框标题统一 muted（与 prompt 标题一致）；焦点只由边框颜色区分，按钮除外。
+        // 边框标题统一淡蓝色（Cyan + dim）；焦点只由边框颜色区分，按钮除外。
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(style::border(focused))

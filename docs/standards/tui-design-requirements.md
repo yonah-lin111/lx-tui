@@ -38,7 +38,7 @@
 ## 配色与样式
 
 - 样式只从 `ui/style.rs` 的语义函数取用（`text` / `muted` / `accent` / `border` / `selected_item` / `selection` / `overlay_panel` / `overlay_selection`），禁止在组件中直接写死颜色与修饰符。
-- 面板边框标题统一去掉边框强调色与粗体：普通面板（侧栏、窗格、prompt）用 `style::border_title`（muted 前景，与 prompt 标题一致）；浮层面板（toast、右键菜单、模态弹窗）用 `style::overlay_border_title`（保持面板前景 Indexed 252，保证与自包含底色的对比）。按钮（折叠按钮、视图切换按钮、prompt 工具栏按钮、`[exit]`、`[+]` 等）保持强调色。
+- 面板边框标题统一用 `style::border_title`（淡蓝色：Cyan + dim、不加粗，与分支状态同色系；焦点/浮层的强调色边框不改变标题观感），覆盖侧栏、窗格、prompt、toast、右键菜单与模态弹窗；按钮（折叠按钮、视图切换按钮、prompt 工具栏按钮、`[exit]`、`[+]` 等）保持强调色。
 - 配色沿用 codex：跟随终端原生 ANSI 色——正文使用终端默认前景，次要信息用 `dim`，强调/焦点用 `Cyan` 加粗；状态色沿用 codex 语义（成功 `Green`、失败 `Red`、注意 `Yellow` 仅在已知暗色终端使用）。
 - markdown 高亮沿用 ANSI 槽位与修饰符（同步 lx-agent 的色彩语义，不做 RGB 与背景）：语法标记为 `dim`，标题/粗体 `Yellow` 加粗，斜体 `Yellow` 斜体，删除线 `LightRed` 加删除线，行内代码 `LightRed`，代码块内容保持默认前景（不做语言级 token 着色），引用 `LightMagenta` 斜体，链接文字 `LightBlue` 下划线、URL `Cyan`；映射集中在 `ui/style.rs` 的 markdown 语义函数。
 - 默认不铺自绘背景，保持终端透明；不使用 RGB、渐变、阴影或动画。例外一：侧栏/标签栏选中行的整行背景（仅 ANSI-16 的 `Cyan`，经 `ui/style.rs` 的 `selected_item` 取用）；悬停行使用终端原生反显（`selection`，同右键菜单选中项），不引入自绘背景。例外二：lx 页吉祥物像素画使用 256 色 Indexed 调色板（仅经 `ui/style.rs` 的 `mascot_pixel` / `lx_placeholder` 取色）与 200ms 帧动画，其余区域维持原规则。例外三：四类浮层（toast、右键菜单、命令面板、模态容器）的整块面板底色（仅经 `ui/style.rs` 的 `overlay_panel` 取用：Indexed 236 底、252 字）。

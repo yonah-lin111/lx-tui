@@ -27,18 +27,13 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
-/// 面板边框标题：与 prompt 标题一致的 muted 文本。
+/// 面板边框标题：淡蓝色（Cyan + dim、不加粗），与分支状态同色系。
 ///
-/// 标题样式叠加在边框样式之上，这里显式重置前景并移除粗体，
-/// 避免焦点/浮层的强调色边框把标题染成 accent。
+/// 标题样式叠加在边框样式之上，这里显式指定前景并移除粗体，
+/// 保证焦点/浮层的强调色边框不会改变标题观感。
 pub fn border_title() -> Style {
-    muted().fg(Color::Reset).remove_modifier(Modifier::BOLD)
-}
-
-/// 浮层面板边框标题：保持自包含面板前景（Indexed 252）与底色对比，
-/// 只去掉边框强调色与粗体；明暗终端下均与面板底色可读。
-pub fn overlay_border_title() -> Style {
-    overlay_panel()
+    Style::default()
+        .fg(Color::Cyan)
         .add_modifier(Modifier::DIM)
         .remove_modifier(Modifier::BOLD)
 }

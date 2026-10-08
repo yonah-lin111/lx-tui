@@ -1286,20 +1286,20 @@ fn pane_title_and_toggle_label_follow_view() {
     assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_LX);
 }
 
-/// 浮层顶边框标题单元格：面板前景（Indexed 252）dim、非粗体，保持与面板底色对比。
+/// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，面板底色保留。
 fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
     let cell = &buffer[(area.x + 1, area.y)];
     assert!(
         cell.modifier.contains(ratatui::style::Modifier::DIM),
         "边框标题必须 dim: {cell:?}"
     );
-    assert_eq!(cell.fg, ratatui::style::Color::Indexed(252));
+    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
     assert_eq!(cell.bg, ratatui::style::Color::Indexed(236));
     assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
 }
 
 #[test]
-fn focused_pane_title_uses_muted_style() {
+fn focused_pane_title_uses_soft_blue_style() {
     let state = AppState::demo();
     let config = Config::default();
     let view = view_for(&state);
@@ -1316,10 +1316,10 @@ fn focused_pane_title_uses_muted_style() {
         let cell = &buffer[(x, rect.y)];
         assert!(
             cell.modifier.contains(ratatui::style::Modifier::DIM),
-            "焦点窗格标题与 prompt 标题一致为 muted"
+            "边框标题为淡蓝色（Cyan + dim）"
         );
         assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
-        assert_eq!(cell.fg, ratatui::style::Color::Reset);
+        assert_eq!(cell.fg, ratatui::style::Color::Cyan);
     }
     // 焦点仍由边框颜色区分。
     assert_eq!(
@@ -1330,7 +1330,7 @@ fn focused_pane_title_uses_muted_style() {
 }
 
 #[test]
-fn overlay_border_titles_use_muted_style() {
+fn overlay_border_titles_use_soft_blue_style() {
     let screen = Rect::new(0, 0, 100, 24);
     let config = Config::default();
 
