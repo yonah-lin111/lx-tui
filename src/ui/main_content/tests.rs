@@ -196,3 +196,16 @@ fn toggle_button_hit_ignores_narrow_panes() {
     let rect = Rect::new(0, 0, 6, 5);
     assert_eq!(toggle_button_at(&[(id, rect)], 2, 0), None);
 }
+
+#[test]
+fn control_chars_render_as_blank() {
+    let mut terminal = Terminal::new(10, 2);
+    terminal.feed(b"a\tb");
+    let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
+    render_terminal(Rect::new(0, 0, 10, 2), &mut buf, &terminal, false);
+    assert_eq!(buf[(0, 0)].symbol(), "a");
+    assert_eq!(buf[(1, 0)].symbol(), " ", "制表符落格渲染为空白");
+    assert_eq!(buf[(8, 0)].symbol(), "b");
+    let previous = Buffer::empty(Rect::new(0, 0, 10, 2));
+    previous.diff(&buf);
+}

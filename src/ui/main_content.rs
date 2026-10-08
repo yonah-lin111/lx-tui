@@ -153,11 +153,14 @@ fn render_terminal(
         }
 
         if let Some(target) = buf.cell_mut((x, y)) {
-            if cell.flags.contains(Flags::HIDDEN) {
-                target.set_char(' ');
+            // 仿真器会把制表符等控制字符落格（如 alacritty 的 put_tab）；ratatui 0.30
+            // 的 diff 对单字节控制字符有 debug_assert，这里统一渲染为空白。
+            let symbol = if cell.flags.contains(Flags::HIDDEN) || cell.c.is_control() {
+                ' '
             } else {
-                target.set_char(cell.c);
-            }
+                cell.c
+            };
+            target.set_char(symbol);
             let mut style = cell_style(cell);
             if content
                 .selection
