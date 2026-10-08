@@ -29,10 +29,12 @@ pub struct TabBarLayout {
     pub overflow: bool,
 }
 
-/// 单个标签的完整宽度（含内边距与分隔线）。
+/// 单个标签的完整宽度（含图标、内边距与分隔线）。
 fn tab_width(tab_name: Option<&str>, index: usize) -> u16 {
-    let label_width = tab_label(index, tab_name).chars().count();
-    u16::try_from(label_width + TAB_PADDING + TAB_SEPARATOR).unwrap_or(u16::MAX)
+    let label = tab_label(index, tab_name);
+    let label_width = label.chars().count();
+    let icon_width = text::TAB_ITEM_ICON.chars().count() + 1;
+    u16::try_from(label_width + icon_width + TAB_PADDING + TAB_SEPARATOR).unwrap_or(u16::MAX)
 }
 
 /// 按当前几何计算标签栏布局；不溢出时不出现滚动按钮，`[+]` 紧跟最后一个标签。
@@ -187,9 +189,10 @@ pub fn render(frame: &mut Frame<'_>, view: &ViewLayout, state: &AppState) {
         } else {
             style::muted()
         };
-        let label_width = usize::from(rect.width).saturating_sub(TAB_PADDING + TAB_SEPARATOR);
-        let label_text = text::ellipsize(&label, label_width);
-        let text = format!(" {:<width$} ", label_text, width = label_width);
+        let content_width = usize::from(rect.width).saturating_sub(TAB_PADDING + TAB_SEPARATOR);
+        let tab_content = format!("{} {label}", text::TAB_ITEM_ICON);
+        let content_text = text::ellipsize(&tab_content, content_width);
+        let text = format!(" {:<width$} ", content_text, width = content_width);
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(text, label_style),

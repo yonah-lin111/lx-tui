@@ -39,14 +39,19 @@ pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 /// 侧栏工作区列表底部的新建按钮。
 pub const ADD_WORKSPACE_LABEL: &str = "[+]";
 
-/// 标签栏：新建标签按钮、标签分隔线与溢出滚动按钮。
+/// 标签栏：新建标签按钮、标签分隔线、溢出滚动按钮与条目左侧图标。
 pub const ADD_TAB_LABEL: &str = "[+]";
 pub const TAB_SEPARATOR: &str = "│";
 pub const TAB_SCROLL_LEFT_LABEL: &str = "[<]";
 pub const TAB_SCROLL_RIGHT_LABEL: &str = "[>]";
+pub const TAB_ITEM_ICON: &str = "▪";
 
 /// 初始工作区标记：不可移除，跟随启动工作区。
 pub const INITIAL_WORKSPACE_MARKER: &str = " *";
+
+/// 工作区条目标记：Git 仓库与普通目录（标准单宽通用符号）。
+pub const WORKSPACE_GIT_ICON: &str = "⑂";
+pub const WORKSPACE_NON_GIT_ICON: &str = "•";
 
 /// 工作区分组折叠箭头：展开 / 折叠。
 pub const WORKSPACE_GROUP_EXPANDED: &str = "▾";

@@ -396,6 +396,17 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         } else {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
+        let icon = if workspace.git.is_some() {
+            text::WORKSPACE_GIT_ICON
+        } else {
+            text::WORKSPACE_NON_GIT_ICON
+        };
+        let icon_prefix = format!("{icon} ");
+        let icon_style = if row.index == state.active_workspace {
+            item_style
+        } else {
+            style::muted().patch(highlight)
+        };
         let label = workspace_item_label(workspace, row.child);
         let index_text = row
             .child_index
@@ -403,6 +414,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             .unwrap_or_default();
         let name_width = width
             .saturating_sub(prefix.chars().count())
+            .saturating_sub(icon_prefix.chars().count())
             .saturating_sub(index_text.chars().count())
             .saturating_sub(if workspace.is_initial {
                 marker_width
@@ -413,6 +425,7 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         if !prefix.is_empty() {
             spans.push(Span::styled(prefix, prefix_style));
         }
+        spans.push(Span::styled(icon_prefix, icon_style));
         spans.push(Span::styled(
             text::ellipsize(&label, name_width),
             item_style,

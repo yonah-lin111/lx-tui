@@ -1055,8 +1055,35 @@ fn tab_bar_renders_auto_titles_and_add_button() {
     let state = AppState::demo();
     let lines = render_lines(&state);
     assert!(lines[0].contains("tab 1"), "{}", lines[0]);
+    assert!(lines[0].contains(text::TAB_ITEM_ICON), "{}", lines[0]);
     assert!(!lines[0].contains("logs"));
     assert!(lines[0].contains(text::ADD_TAB_LABEL), "{}", lines[0]);
+}
+
+#[test]
+fn workspace_items_distinguish_git_and_non_git_icons() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "plain-dir".to_string();
+    state.workspaces[0].git = None;
+    push_git_workspace(
+        &mut state,
+        "repo-dir",
+        "/repo",
+        git_info("/repo", "/repo", false, Some("main")),
+    );
+    let lines = render_lines(&state);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(&format!("{} plain-dir", text::WORKSPACE_NON_GIT_ICON))),
+        "non-git workspace must show non-git icon: {lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(&format!("{} repo-dir", text::WORKSPACE_GIT_ICON))),
+        "git workspace must show git icon: {lines:?}"
+    );
 }
 
 #[test]
@@ -1182,17 +1209,17 @@ fn sidebar_renders_duplicate_main_checkout_top_level() {
     );
 
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("▾ main")));
+    assert!(lines.iter().any(|line| line.contains("▾ ⑂ main")));
     assert!(
-        lines.iter().any(|line| line.contains("  main 2")),
+        lines.iter().any(|line| line.contains("  ⑂ main 2")),
         "重复主 checkout 与根同列、独立顶层: {lines:?}"
     );
     assert!(
-        !lines.iter().any(|line| line.contains("─ main 2")),
+        !lines.iter().any(|line| line.contains("─ ⑂ main 2")),
         "重复主 checkout 不显示连接符: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("  └─ feature/x")),
+        lines.iter().any(|line| line.contains("  └─ ⑂ feature/x")),
         "linked worktree 仍是子项: {lines:?}"
     );
 }
@@ -1223,11 +1250,13 @@ fn sidebar_renders_duplicate_child_index_before_initial_marker() {
 
     let lines = render_lines(&state);
     assert!(
-        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        lines.iter().any(|line| line.contains("  ├─ ⑂ feature/x")),
         "first duplicate keeps clean label: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("  └─ feature/x 2 *")),
+        lines
+            .iter()
+            .any(|line| line.contains("  └─ ⑂ feature/x 2 *")),
         "second duplicate gets index before marker: {lines:?}"
     );
 }
@@ -1260,13 +1289,13 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         .push(Workspace::single_terminal("tmp".to_string(), None));
 
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("▾ main")));
+    assert!(lines.iter().any(|line| line.contains("▾ ⑂ main")));
     assert!(
-        lines.iter().any(|line| line.contains("  ├─ feature/x")),
+        lines.iter().any(|line| line.contains("  ├─ ⑂ feature/x")),
         "non-last child indents and uses middle connector: {lines:?}"
     );
     assert!(
-        lines.iter().any(|line| line.contains("  └─ notes")),
+        lines.iter().any(|line| line.contains("  └─ ⑂ notes")),
         "last child uses last connector and manual name wins: {lines:?}"
     );
     let parent_line = lines
@@ -1286,11 +1315,17 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     let parent_col = char_col(parent_line, "main");
     let child_col = char_col(child_line, "feature/x");
     let connector_col = char_col(child_line, "├");
-    assert_eq!(parent_col, connector_col, "父项首字母与子项直角符号对齐");
+    let parent_icon_col = char_col(parent_line, text::WORKSPACE_GIT_ICON);
+    let plain_icon_col = char_col(plain_line, text::WORKSPACE_NON_GIT_ICON);
+    assert_eq!(parent_icon_col, connector_col, "父项图标与子项直角符号对齐");
+    assert_eq!(
+        plain_icon_col, connector_col,
+        "普通项图标与子项直角符号对齐"
+    );
     assert_eq!(
         child_col,
         parent_col.map(|column| column + WORKSPACE_ITEM_INDENT + 1),
-        "子项名字在连接符之后"
+        "子项名字在连接符与图标之后"
     );
     assert_eq!(
         char_col(plain_line, "tmp"),
@@ -1502,8 +1537,8 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
 
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_EXPANDED));
-    assert!(joined.contains("  ├─ feature/x"), "非末位子项用中连接符");
-    assert!(joined.contains("  └─ notes"));
+    assert!(joined.contains("  ├─ ⑂ feature/x"), "非末位子项用中连接符");
+    assert!(joined.contains("  └─ ⑂ notes"));
 
     state.collapsed_groups.push(PathBuf::from("/repo"));
     let joined = render_lines(&state).join("\n");
@@ -1514,7 +1549,10 @@ fn sidebar_renders_group_chevron_and_hides_collapsed_children() {
     state.active_workspace = 1;
     let joined = render_lines(&state).join("\n");
     assert!(joined.contains(text::WORKSPACE_GROUP_COLLAPSED));
-    assert!(joined.contains("  └─ feature/x"), "唯一可见子项用末连接符");
+    assert!(
+        joined.contains("  └─ ⑂ feature/x"),
+        "唯一可见子项用末连接符"
+    );
     assert!(!joined.contains("notes"));
 }
 

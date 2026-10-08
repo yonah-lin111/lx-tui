@@ -163,3 +163,20 @@ fn reveal_scroll_keeps_visible_active_untouched() {
     let bar = layout(&view, state.active_workspace(), 0);
     assert_eq!(reveal_scroll(&bar, state.active_workspace()), 0);
 }
+
+#[test]
+fn tabs_render_icon_prefix() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let bar = layout(&view, state.active_workspace(), 0);
+    let buffer = render_buffer(&state);
+    let (_, rect) = bar.tabs[0];
+    let row: String = (rect.x..rect.right())
+        .map(|x| buffer[(x, rect.y)].symbol())
+        .collect();
+    assert!(
+        row.contains(text::TAB_ITEM_ICON),
+        "tab row must contain tab icon: {row:?}"
+    );
+    assert!(row.contains("tab 1"), "tab row must contain label: {row:?}");
+}
