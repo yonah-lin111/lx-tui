@@ -249,9 +249,14 @@ fn prompt_focus_maps_history_and_indent_keys() {
             EditorCommand::EnterFolder,
         ),
         (
+            KeyCode::Enter,
+            KeyModifiers::SHIFT,
+            EditorCommand::EnterFolder,
+        ),
+        (
             KeyCode::Backspace,
             KeyModifiers::SHIFT,
-            EditorCommand::LeaveFolder,
+            EditorCommand::Backspace,
         ),
         (
             KeyCode::Backspace,

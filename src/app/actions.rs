@@ -36,8 +36,6 @@ pub enum EditorCommand {
     /// Shift+Enter：@ 面板高亮目录可进入时进入；未消费时同 `NewlineBelow`。
     EnterFolder,
     Backspace,
-    /// Shift+Backspace：@ 路径上下文时回退一级目录；未消费时同 `Backspace`。
-    LeaveFolder,
     Delete,
     Left,
     Right,

@@ -406,17 +406,6 @@ fn scope_relative<'a>(path: &'a str, scope: &str) -> Option<&'a str> {
     Some(path.get(scope.len()..).unwrap_or(path))
 }
 
-/// Shift+Backspace 的目录回退区间：删除 query 中倒数第二个 `/` 到光标之间的内容，
-/// 即丢掉「当前目录末段 + 过滤词」回上一级；只有一段路径（`@src/`）时退到 `@`。
-/// query 不含 `/`（无目录上下文）返回 None，交回普通退格。
-pub fn mention_parent_range(text: &str, cursor: usize) -> Option<Range<usize>> {
-    let trigger = mention_trigger(text, cursor)?;
-    let last = trigger.query.rfind('/')?;
-    let keep = trigger.query[..last].rfind('/').map_or(0, |prev| prev + 1);
-    let start = trigger.from + 1 + keep;
-    (start < trigger.to).then_some(start..trigger.to)
-}
-
 /// 文件名优先的模糊打分；对齐 lx-agent 的 `getProjectFileMatchScore`。
 fn mention_score(path: &str, query: &str) -> u32 {
     if query.is_empty() {

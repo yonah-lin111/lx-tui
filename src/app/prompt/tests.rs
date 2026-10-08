@@ -1104,7 +1104,7 @@ fn mention_enter_folder_is_undoable_and_restores_root_scope() {
 }
 
 #[test]
-fn mention_leave_folder_steps_up_by_directory_level() {
+fn mention_enter_folder_undo_steps_back_one_directory_level() {
     let mut prompt = mention_prompt(folder_entries());
     prompt.mention_set_active(1);
     assert!(prompt.mention_enter_folder());
@@ -1112,30 +1112,11 @@ fn mention_leave_folder_steps_up_by_directory_level() {
     assert!(prompt.mention_enter_folder());
     assert_eq!(prompt.text(), "@src/ui/");
 
-    assert!(prompt.mention_leave_folder());
-    assert_eq!(prompt.text(), "@src/");
-    assert!(prompt.mention_leave_folder());
-    assert_eq!(prompt.text(), "@");
-}
-
-#[test]
-fn mention_leave_folder_drops_filter_and_works_when_panel_hidden() {
-    let mut prompt = mention_prompt(folder_entries());
-    prompt.mention_set_active(1);
-    assert!(prompt.mention_enter_folder());
-    prompt.insert_str("zzz");
-    assert_eq!(prompt.text(), "@src/zzz");
-    assert!(prompt.mention().is_none(), "过滤无候选时面板隐藏");
-    assert!(prompt.mention_leave_folder(), "面板隐藏时仍按文本回退");
-    assert_eq!(prompt.text(), "@");
-}
-
-#[test]
-fn mention_leave_folder_falls_back_without_path_context() {
-    let mut prompt = mention_prompt(vec![file("main.rs")]);
-    prompt.insert_char('m');
-    assert!(!prompt.mention_leave_folder(), "无 / 不构成路径上下文");
-    assert_eq!(prompt.text(), "@m");
-    prompt.backspace();
-    assert_eq!(prompt.text(), "@");
+    prompt.undo();
+    assert_eq!(prompt.text(), "@src/", "一次撤销回到上一级");
+    let panel = prompt.mention().expect("panel at parent");
+    assert_eq!(panel.scope_name(), Some("src"));
+    prompt.undo();
+    assert_eq!(prompt.text(), "@", "再次撤销回到根");
+    assert!(prompt.mention().expect("root panel").scope_name().is_none());
 }

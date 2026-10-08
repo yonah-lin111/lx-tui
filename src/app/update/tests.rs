@@ -1663,7 +1663,7 @@ fn enter_folder_falls_back_to_newline_when_panel_closed() {
 }
 
 #[test]
-fn leave_folder_key_steps_up_and_falls_back_to_backspace() {
+fn undo_key_steps_back_folder_levels() {
     let mut state = mention_state(vec![
         MentionEntry {
             path: "src".into(),
@@ -1683,15 +1683,19 @@ fn leave_folder_key_steps_up_and_falls_back_to_backspace() {
     apply_editor(&mut state, EditorCommand::EnterFolder);
     assert_eq!(state.prompt.text(), "@src/ui/");
 
-    apply_editor(&mut state, EditorCommand::LeaveFolder);
+    // 回退上一级走编辑器撤销。
+    apply_editor(&mut state, EditorCommand::Undo);
     assert_eq!(state.prompt.text(), "@src/");
-    apply_editor(&mut state, EditorCommand::LeaveFolder);
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.scope_name()),
+        Some(Some("src"))
+    );
+    apply_editor(&mut state, EditorCommand::Undo);
     assert_eq!(state.prompt.text(), "@");
-
-    // 无路径上下文：回落普通退格删除查询字符。
-    apply_editor(&mut state, EditorCommand::InsertChar('a'));
-    apply_editor(&mut state, EditorCommand::LeaveFolder);
-    assert_eq!(state.prompt.text(), "@");
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.scope_name()),
+        Some(None)
+    );
 }
 
 #[test]

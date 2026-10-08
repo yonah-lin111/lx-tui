@@ -444,7 +444,7 @@ fn renders_titles_and_footer_on_border() {
             &items,
             Some("Files"),
             Some("src"),
-            Some("[open ⇧↵] [back ⇧⌫]"),
+            Some("[open ⇧↵] [back ^z]"),
         ),
     )
     .expect("panel renders");
@@ -457,7 +457,7 @@ fn renders_titles_and_footer_on_border() {
         "左侧标题在右标题之前：{top}"
     );
     let bottom = row_text(&buf, area, rect.bottom() - 1);
-    assert!(bottom.contains("[open ⇧↵] [back ⇧⌫]"), "{bottom}");
+    assert!(bottom.contains("[open ⇧↵] [back ^z]"), "{bottom}");
 }
 
 #[test]
@@ -465,7 +465,7 @@ fn panel_width_covers_footer_and_titles() {
     use unicode_width::UnicodeWidthStr;
 
     let area = Rect::new(0, 0, 60, 8);
-    let footer = "[open ⇧↵] [back ⇧⌫]";
+    let footer = "[open ⇧↵] [back ^z]";
     let items = stacked(&[("a.rs", "s")]);
     let plain = layout(area, &view(&items, 0, 0, None)).expect("plain layout");
     let titled = layout(
@@ -495,7 +495,7 @@ fn clamps_titles_when_area_is_narrow() {
             &items,
             Some("Files"),
             Some("very-long-directory"),
-            Some("[open ⇧↵] [back ⇧⌫]"),
+            Some("[open ⇧↵] [back ^z]"),
         ),
     )
     .expect("panel renders");

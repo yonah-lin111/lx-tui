@@ -514,32 +514,6 @@ fn filter_mentions_scope_returns_entries_with_original_paths() {
 }
 
 #[test]
-fn mention_parent_range_steps_up_directory_levels() {
-    let text = "@src/ui/ma";
-    assert_eq!(mention_parent_range(text, text.len()), Some(5..10));
-    let text = "@src/ui/";
-    assert_eq!(mention_parent_range(text, text.len()), Some(5..8));
-    let text = "@src/";
-    assert_eq!(mention_parent_range(text, text.len()), Some(1..5));
-    let text = "@";
-    assert_eq!(mention_parent_range(text, text.len()), None);
-    let text = "@ma";
-    assert_eq!(mention_parent_range(text, text.len()), None);
-    assert_eq!(mention_parent_range("a@sr", 4), None);
-}
-
-#[test]
-fn mention_parent_range_deletes_scope_word_and_filter() {
-    let mut text = "@src/ui/ma".to_string();
-    let range = mention_parent_range(&text, text.len()).expect("path context");
-    text.replace_range(range, "");
-    assert_eq!(text, "@src/");
-    let range = mention_parent_range(&text, text.len()).expect("path context");
-    text.replace_range(range, "");
-    assert_eq!(text, "@");
-}
-
-#[test]
 fn mention_panel_scope_name_reads_last_directory_segment() {
     let entries = vec![MentionEntry {
         path: "src/app.rs".into(),

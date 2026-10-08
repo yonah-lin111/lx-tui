@@ -336,8 +336,8 @@ fn mention_panel_folder_navigation_flow() {
     assert!(top.contains(" src "), "{top}");
     assert!(bottom.contains(ui::text::MENTION_PANEL_FOOTER), "{bottom}");
 
-    // Shift+Backspace 回退到根，候选恢复全量。
-    update::apply_editor(&mut state, EditorCommand::LeaveFolder);
+    // Ctrl/Cmd+Z 撤销进入，回退到根，候选恢复全量。
+    update::apply_editor(&mut state, EditorCommand::Undo);
     assert_eq!(state.prompt.text(), "@");
     assert_eq!(
         state.prompt.mention().map(|panel| panel.items().len()),

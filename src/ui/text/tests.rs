@@ -106,7 +106,7 @@ fn ui_icons_are_single_width_and_non_pua() {
 fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
     use unicode_width::UnicodeWidthChar;
 
-    for (name, symbol) in [("Shift", '⇧'), ("Return", '↵'), ("Backspace", '⌫')] {
+    for (name, symbol) in [("Shift", '⇧'), ("Return", '↵')] {
         assert!(
             MENTION_PANEL_FOOTER.contains(symbol),
             "底边提示缺少 {name} 符号"
@@ -121,4 +121,8 @@ fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
             "{name} 使用了私有区(PUA)字符 U+{cp:04X}，主流终端会乱码"
         );
     }
+    assert!(
+        MENTION_PANEL_FOOTER.contains("^z"),
+        "回退提示沿用 [clear ^c] 的 ^z 记法"
+    );
 }
