@@ -9,7 +9,7 @@ use crate::app::state::{
 };
 use crate::git;
 
-use super::{clear_selection, switch_workspace};
+use super::{clear_selection, swap_display_prompt, switch_workspace};
 
 /// 登记一次工作区 git 元数据查询；同一路径去重。
 pub fn request_git_refresh(state: &mut AppState, cwd: &Path) {
@@ -84,6 +84,11 @@ pub fn ensure_main_workspace(state: &mut AppState, index: usize) -> Option<usize
     state.workspaces.insert(insert_at, workspace);
     if state.active_workspace >= insert_at {
         state.active_workspace += 1;
+    }
+    if let Some(pinned) = state.prompt_pinned
+        && pinned >= insert_at
+    {
+        state.prompt_pinned = Some(pinned + 1);
     }
     Some(insert_at)
 }
@@ -237,7 +242,11 @@ pub fn commit_worktree_open(state: &mut AppState) {
     });
     state.workspaces.push(workspace);
     let child = state.workspaces.len().saturating_sub(1);
+    let from = state.active_workspace;
     state.active_workspace = child;
+    if state.prompt_pinned.is_none() {
+        swap_display_prompt(state, from, child);
+    }
     clear_selection(state);
     state.prompt_focused = false;
     ensure_main_workspace(state, child);

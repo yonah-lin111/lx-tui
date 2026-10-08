@@ -1,5 +1,7 @@
 //! 全部用户可见文案；组件与逻辑禁止散落硬编码字符串。
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::app::markdown::BlockCommandId;
 use crate::layout::PaneId;
 
@@ -21,6 +23,10 @@ pub const PROMPT_UNDO_LABEL: &str = "[undo]";
 pub const PROMPT_REDO_LABEL: &str = "[redo]";
 pub const PROMPT_SELECT_ALL_LABEL: &str = "[select all]";
 pub const PROMPT_SAVE_DOT: &str = "●";
+/// prompt 未钉住时的按钮（点击钉住）。
+pub const PROMPT_PIN_LABEL: &str = "[pin]";
+/// prompt 已钉住时的按钮（点击释放）。
+pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
 /// 主内容 lx 页标题。
 pub const LX_TITLE: &str = "lx";
 /// 视图切换按钮：显示点击后的目的地视图。
@@ -80,8 +86,10 @@ pub const MENTION_FILE_ICON: &str = "•";
 
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";
+pub const MENU_NEW_TERMINAL: &str = "New terminal";
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";
-pub const MENU_OPEN_WORKTREE: &str = "Open worktree…";
+pub const MENU_OPEN_WORKTREE: &str = "Open worktree";
+pub const MENU_OPEN_PROMPT: &str = "Open prompt";
 pub const MENU_CLOSE_WORKSPACE: &str = "Close";
 pub const MENU_RENAME_TAB: &str = "Rename";
 pub const MENU_CLOSE_TAB: &str = "Close";
@@ -89,6 +97,7 @@ pub const MENU_SPLIT_RIGHT: &str = "Split right";
 pub const MENU_SPLIT_DOWN: &str = "Split down";
 pub const MENU_SWITCH_TO_TERMINAL: &str = "Switch to terminal";
 pub const MENU_SWITCH_TO_LX: &str = "Switch to lx";
+pub const MENU_SWITCH_TO_WORKSPACE_CWD: &str = "Switch to ws path";
 pub const MENU_CLOSE_PANE: &str = "Close";
 
 /// 重命名与关闭确认浮层标题。
@@ -97,6 +106,7 @@ pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
 pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
+pub const CONFIRM_SWITCH_CWD_TITLE: &str = "switch to ws path";
 
 /// worktree 对话框：标题、搜索占位、状态行与条目标记。
 pub const WORKTREE_OPEN_TITLE: &str = "open worktree";
@@ -119,6 +129,11 @@ pub const BUTTON_OPEN: &str = "[open enter]";
 /// 关闭确认问题文案。
 pub fn confirm_close_question(name: &str) -> String {
     format!("close \"{name}\"?")
+}
+
+/// 切换工作区路径确认问题文案。
+pub fn confirm_switch_cwd_question(path: &str) -> String {
+    format!("switch cwd to \"{path}\"?")
 }
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。
@@ -188,6 +203,55 @@ pub fn ellipsize(text: &str, max_chars: usize) -> String {
     let mut truncated: String = text.chars().take(max_chars - 1).collect();
     truncated.push('…');
     truncated
+}
+
+/// 路径中间截断：保留首尾并在中间放省略号（对齐 opencode 的 `truncateMiddle`）。
+///
+/// 按显示列计算，宽字符不会越界；宽度足够时原样返回。
+pub fn ellipsize_middle(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width == 0 {
+        return String::new();
+    }
+    if max_width == 1 {
+        return "…".to_string();
+    }
+    let keep = max_width - 1;
+    let keep_start = keep.div_ceil(2);
+    let keep_end = keep / 2;
+    format!(
+        "{}…{}",
+        take_prefix_width(text, keep_start),
+        take_suffix_width(text, keep_end)
+    )
+}
+
+/// 取显示列不超过 `max_width` 的前缀；宽字符放不下时在字符边界处截断。
+fn take_prefix_width(text: &str, max_width: usize) -> &str {
+    let mut width = 0;
+    for (offset, ch) in text.char_indices() {
+        let char_width = ch.width().unwrap_or(0);
+        if width + char_width > max_width {
+            return &text[..offset];
+        }
+        width += char_width;
+    }
+    text
+}
+
+/// 取显示列不超过 `max_width` 的后缀；宽字符放不下时在字符边界处截断。
+fn take_suffix_width(text: &str, max_width: usize) -> &str {
+    let mut width = 0;
+    for (offset, ch) in text.char_indices().rev() {
+        let char_width = ch.width().unwrap_or(0);
+        if width + char_width > max_width {
+            return &text[offset + ch.len_utf8()..];
+        }
+        width += char_width;
+    }
+    text
 }
 
 /// 窗格标题：优先 OSC 标题，其次窗格 cwd 末段标签，最后按标识生成。

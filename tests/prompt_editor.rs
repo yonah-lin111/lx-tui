@@ -212,8 +212,10 @@ fn mention_panel_renders_and_confirms_insertion() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     update::apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "src/app.rs".into(),
@@ -253,7 +255,8 @@ fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
             is_directory: false,
         })
         .collect();
-    update::apply_mention_entries(&mut state, generation, entries);
+    let prompt = state.prompt.id();
+    update::apply_mention_entries(&mut state, prompt, generation, entries);
 
     let inner = layout::prompt_text_rect(view.prompt);
     let before = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
@@ -293,8 +296,10 @@ fn mention_panel_folder_navigation_flow() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     update::apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![
             MentionEntry {

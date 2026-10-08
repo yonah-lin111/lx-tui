@@ -1262,6 +1262,120 @@ fn prompt_title_moves_path_name_to_top_right() {
 }
 
 #[test]
+fn prompt_top_bar_prefers_bound_prompt_root() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    let view = view_for(&state);
+
+    // 显式绑定根路径优先于工作区路径。
+    state.prompt_root = Some(PathBuf::from("/elsewhere/bound-root"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:bound-root"), "{top}");
+    assert!(!top.contains("ws:lx-tui"), "{top}");
+
+    // 绑定路径无末段时回退工作区路径。
+    state.prompt_root = Some(PathBuf::from("/"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:lx-tui"), "{top}");
+
+    // 未绑定时仍显示工作区路径。
+    state.prompt_root = None;
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:lx-tui"), "{top}");
+}
+
+#[test]
+fn prompt_pin_button_sits_left_of_collapse_and_tracks_state() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let collapse = button_for(&view, CollapseTarget::Prompt);
+    let pin = prompt_pin_button(view.prompt, false).expect("pin visible");
+    assert_eq!(pin.width, text::PROMPT_PIN_LABEL.chars().count() as u16);
+    assert_eq!(
+        pin.right(),
+        collapse.area.x - 1,
+        "右缘贴折叠按钮左侧，间隔 1 列"
+    );
+    assert_eq!(pin.y, collapse.area.y);
+    assert!(prompt_pin_at(&view, &state, pin.x, pin.y));
+    assert!(!prompt_pin_at(&view, &state, pin.x, pin.y - 1));
+
+    state.prompt_pinned = Some(0);
+    let pinned = prompt_pin_button(view.prompt, true).expect("pin visible");
+    assert_eq!(
+        pinned.width,
+        text::PROMPT_UNPIN_LABEL.chars().count() as u16
+    );
+    assert_eq!(pinned.right(), pin.right(), "右缘固定贴折叠按钮");
+    assert!(prompt_pin_at(&view, &state, pinned.x, pinned.y));
+    assert!(!prompt_pin_at(&view, &state, pinned.x, pinned.y - 1));
+
+    update::apply(Action::TogglePrompt, &mut state);
+    let collapsed = view_for(&state);
+    assert_eq!(prompt_pin_button(collapsed.prompt, false), None);
+}
+
+#[test]
+fn prompt_pin_button_renders_action_label_in_accent() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let pin = prompt_pin_button(view.prompt, false).expect("pin visible");
+    let buffer = render_buffer(&state);
+    let rendered: String = (pin.x..pin.right())
+        .map(|x| buffer[(x, pin.y)].symbol())
+        .collect();
+    assert_eq!(rendered, text::PROMPT_PIN_LABEL);
+    for x in pin.x..pin.right() {
+        assert_eq!(buffer[(x, pin.y)].fg, ratatui::style::Color::Cyan);
+    }
+
+    state.prompt_pinned = Some(0);
+    let unpin = prompt_pin_button(view.prompt, true).expect("pin visible");
+    let buffer = render_buffer(&state);
+    let rendered: String = (unpin.x..unpin.right())
+        .map(|x| buffer[(x, unpin.y)].symbol())
+        .collect();
+    assert_eq!(rendered, text::PROMPT_UNPIN_LABEL);
+}
+
+#[test]
+fn prompt_status_follows_pinned_workspace() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "one".to_string();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/one"));
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/one", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "two",
+        "/repo/two",
+        git_info("/repo", "/repo/two", false, Some("dev")),
+    );
+
+    state.prompt_pinned = Some(0);
+    update::switch_workspace(&mut state, 1);
+    assert_eq!(state.active_workspace, 1);
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let top = prompt_line(&lines, &view, view.prompt.y);
+    let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    assert!(top.contains("ws:one"), "钉住时顶栏取显示中工作区: {top}");
+    assert!(
+        bottom.contains("b:main"),
+        "钉住时底边取显示中工作区: {bottom}"
+    );
+
+    update::release_prompt_pin(&mut state);
+    let lines = render_lines(&state);
+    let top = prompt_line(&lines, &view, view.prompt.y);
+    let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    assert!(top.contains("ws:two"), "释放后顶栏回到激活工作区: {top}");
+    assert!(
+        bottom.contains("b:dev"),
+        "释放后底边回到激活工作区: {bottom}"
+    );
+}
+
+#[test]
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
@@ -1498,6 +1612,15 @@ fn overlay_border_titles_use_soft_blue_style() {
     assert_overlay_title(&buffer, menu_layout.area);
 
     // 模态（重命名）顶边框标题。
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    let rename_index = menu
+        .commands
+        .iter()
+        .position(|command| *command == crate::app::overlay::MenuCommand::RenameWorkspace)
+        .expect("rename offered by menu");
+    update::set_menu_selection(&mut state, rename_index);
     update::activate_menu(&mut state);
     let shell = overlay::rename_shell(screen).expect("rename modal visible");
     let buffer = render_buffer(&state);

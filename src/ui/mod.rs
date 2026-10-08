@@ -65,7 +65,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_exit_button(frame, &view);
     let pane_cursor = render_panes(frame, &pane_rects, state);
     let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
-    render_collapse_buttons(frame, &view, state);
+    render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
@@ -138,6 +138,35 @@ pub fn exit_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool 
     exit_button(view).is_some_and(|area| area.contains((column, row).into()))
 }
 
+/// prompt 钉住按钮：展开态位于底边折叠按钮左侧（间隔 1 列）；折叠态或空间不足返回 None。
+///
+/// 标签宽度随钉住态变化（`[pin]` / `[unpin]`），右缘固定贴折叠按钮左侧。
+pub fn prompt_pin_button(panel: Rect, pinned: bool) -> Option<Rect> {
+    if panel.width <= COLLAPSED_STRIP || panel.height == 0 {
+        return None;
+    }
+    let label = if pinned {
+        text::PROMPT_UNPIN_LABEL
+    } else {
+        text::PROMPT_PIN_LABEL
+    };
+    let width = label.chars().count() as u16;
+    let collapse_x = panel
+        .right()
+        .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
+    let x = collapse_x.checked_sub(width + 1)?;
+    if x <= panel.x {
+        return None;
+    }
+    Some(Rect::new(x, panel.bottom().saturating_sub(1), width, 1))
+}
+
+/// 钉住按钮命中：坐标是否落在 prompt 底边钉住按钮内。
+pub fn prompt_pin_at(view: &layout::ViewLayout, state: &AppState, column: u16, row: u16) -> bool {
+    prompt_pin_button(view.prompt, state.prompt_pinned.is_some())
+        .is_some_and(|area| area.contains((column, row).into()))
+}
+
 /// 单个面板的折叠按钮：折叠态取整条窄条，展开态在底边右端。
 fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
     if panel.width == 0 || panel.height == 0 {
@@ -191,10 +220,10 @@ fn agents_button_area(sidebar: Rect, divider: Rect) -> Rect {
     )
 }
 
-/// 在面板底边与 agents 表头绘制折叠按钮，必须晚于面板内容渲染。
+/// 在面板底边与 agents 表头绘制折叠按钮与 prompt 钉住按钮，必须晚于面板内容渲染。
 ///
 /// 折叠态面板标签恰好占满 3 个内容列（水平居中），其余按钮贴所在行右端。
-fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+fn render_panel_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
     for button in collapse_buttons(view, state.agents_collapsed) {
         let label = match (button.target, button.collapsed) {
             (CollapseTarget::Sidebar, false) => text::SIDEBAR_COLLAPSE_LABEL,
@@ -216,6 +245,28 @@ fn render_collapse_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, sta
                 cell.set_char(symbol);
                 cell.set_style(style::accent());
             }
+        }
+    }
+    render_prompt_pin(frame, view, state);
+}
+
+/// prompt 底边钉住按钮：标签显示点击后的动作（未钉 `[pin]`、已钉 `[unpin]`）。
+fn render_prompt_pin(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+    let pinned = state.prompt_pinned.is_some();
+    let Some(area) = prompt_pin_button(view.prompt, pinned) else {
+        return;
+    };
+    let label = if pinned {
+        text::PROMPT_UNPIN_LABEL
+    } else {
+        text::PROMPT_PIN_LABEL
+    };
+    for (offset, symbol) in label.chars().enumerate() {
+        let x = area.x + offset as u16;
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, area.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
         }
     }
 }
@@ -750,7 +801,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
             format!(" {} ", text::PROMPT_TITLE),
             style::border_title(),
         ));
-    if let Some(name) = workspace_path_name(state) {
+    if let Some(name) = prompt_path_name(state) {
         // 前缀与值分色，与底边框 `b:分支` 一致：前缀强调色、值 muted。
         let label = Line::from(vec![
             Span::styled(" ", style::muted()),
@@ -785,12 +836,23 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     ))
 }
 
-/// 激活工作区路径末段名：优先 checkout 路径，回退工作区 cwd；
+/// Prompt 顶栏路径名：优先显式绑定根路径末段，回退显示中工作区路径末段。
+fn prompt_path_name(state: &AppState) -> Option<&str> {
+    state
+        .prompt_root
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .or_else(|| workspace_path_name(state))
+}
+
+/// 显示中 prompt 所属工作区的路径末段名：优先 checkout 路径，回退工作区 cwd；
 /// 无可用路径或路径无末段时为 None。
 fn workspace_path_name(state: &AppState) -> Option<&str> {
     state
         .workspaces
-        .get(state.active_workspace)
+        .get(state.prompt_workspace())
         .and_then(|workspace| {
             workspace
                 .git
@@ -825,9 +887,10 @@ fn prompt_scrollbar_for(
 }
 
 /// prompt 底边框左侧 git 状态：`b:分支`（linked worktree 显示仓库主 checkout 分支），
-/// linked worktree 追加 ` wt:工作区名`；非 git 不显示，右端避让折叠按钮。
+/// linked worktree 追加 ` wt:工作区名`；取显示中 prompt 所属工作区，非 git 不显示，
+/// 右端避让钉住按钮与折叠按钮。
 fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
-    let Some(workspace) = state.workspaces.get(state.active_workspace) else {
+    let Some(workspace) = state.workspaces.get(state.prompt_workspace()) else {
         return;
     };
     let branch = workspace.git.as_ref().and_then(|git| git.status_branch());
@@ -836,9 +899,11 @@ fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppSta
         return;
     }
     let start = area.x.saturating_add(2);
-    let end = area
-        .right()
-        .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
+    let end = prompt_pin_button(area, state.prompt_pinned.is_some()).map_or(
+        area.right()
+            .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN),
+        |pin| pin.x.saturating_sub(1),
+    );
     if area.height == 0 || end <= start {
         return;
     }

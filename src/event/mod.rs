@@ -36,6 +36,8 @@ pub enum AppEvent {
     PaneOutput(PaneId, Vec<u8>),
     PaneExit(PaneId),
     MentionScanned {
+        /// 发起扫描的 prompt 编辑器标识；结果按此路由到显示中或挂起的草稿。
+        prompt: PaneId,
         generation: u64,
         entries: Vec<MentionEntry>,
     },
@@ -172,48 +174,22 @@ fn seed_git_requests(state: &mut AppState) {
     }
 }
 
-/// 轮询窗格 shell 进程的 cwd：全部窗格更新 cwd 与标题标签，工作区跟随根窗格 cwd
-/// （自动命名同步改名，手动命名只更新目录并重查 git 归属）；返回是否有变化。
+/// 轮询窗格 shell 进程的 cwd：更新各窗格的 cwd 与标题标签；返回是否有变化。
 ///
-/// 窗格退出或读不到 cwd 时保持原值。
+/// 工作区路径在生命周期内不可变，不随窗格 cwd 漂移；窗格退出或读不到 cwd 时保持原值。
 fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession>) -> bool {
     let home = home_dir();
-    let mut cwds: HashMap<PaneId, std::path::PathBuf> = HashMap::new();
+    let mut changed = false;
     for id in state.all_pane_ids() {
         let Some(pid) = sessions.get(&id).and_then(PtySession::process_id) else {
             continue;
         };
-        if let Some(cwd) = crate::platform::process_cwd(pid) {
-            cwds.insert(id, cwd);
-        }
-    }
-    let mut changed = false;
-    for (id, cwd) in &cwds {
-        let label = workspace_label(cwd, home.as_deref());
-        if update::update_pane_cwd(state, *id, cwd, label) {
+        let Some(cwd) = crate::platform::process_cwd(pid) else {
+            continue;
+        };
+        let label = workspace_label(&cwd, home.as_deref());
+        if update::update_pane_cwd(state, id, &cwd, label) {
             changed = true;
-        }
-    }
-    let tracked: Vec<(usize, PaneId)> = state
-        .workspaces
-        .iter()
-        .enumerate()
-        .filter_map(|(index, workspace)| workspace.root_pane().map(|pane| (index, pane)))
-        .collect();
-    for (index, pane) in tracked {
-        if let Some(cwd) = cwds.get(&pane)
-            && update::update_workspace_cwd(state, index, cwd)
-        {
-            changed = true;
-            // 缓存 checkout 仍包含新 cwd 时只是进了子目录；否则重查 git 元数据。
-            let stale = !state
-                .workspaces
-                .get(index)
-                .and_then(|workspace| workspace.git.as_ref())
-                .is_some_and(|git| cwd.starts_with(&git.checkout_path));
-            if stale {
-                update::request_git_refresh(state, cwd);
-            }
         }
     }
     changed
@@ -365,11 +341,12 @@ fn handle_terminal_event(
                     let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-                    update::apply_overlay_key(state, key);
-                    if was_confirm || was_worktree {
-                        ensure_workspace_visible(state, view);
+                    if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
+                        write_to_pane(sessions, pane, &bytes);
+                        update::reset_pane_scroll(state, pane);
                     }
                     if was_confirm || was_menu || was_worktree {
+                        ensure_workspace_visible(state, view);
                         reveal_active_tab(state, view);
                     }
                     *dirty = true;
@@ -442,9 +419,15 @@ fn handle_terminal_event(
             MouseEventKind::Down(MouseButton::Left) => {
                 if state.overlay.is_some() {
                     let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-                    handle_overlay_click(state, *screen, mouse.column, mouse.row);
-                    if was_confirm || was_worktree {
+                    if let Some((pane, bytes)) =
+                        handle_overlay_click(state, *screen, mouse.column, mouse.row)
+                    {
+                        write_to_pane(sessions, pane, &bytes);
+                        update::reset_pane_scroll(state, pane);
+                    }
+                    if was_confirm || was_menu || was_worktree {
                         ensure_workspace_visible(state, view);
                     }
                     reveal_active_tab(state, view);
@@ -494,6 +477,11 @@ fn handle_terminal_event(
                 {
                     update::create_tab(state);
                     reveal_active_tab(state, view);
+                    *dirty = true;
+                    return;
+                }
+                if ui::prompt_pin_at(view, state, mouse.column, mouse.row) {
+                    update::toggle_prompt_pin(state);
                     *dirty = true;
                     return;
                 }
@@ -1024,6 +1012,7 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     if !state.prompt_focused {
         return;
     }
+    let prompt = state.prompt.id();
     let Some((generation, root)) = state.prompt.take_mention_scan_request() else {
         return;
     };
@@ -1031,6 +1020,7 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     tokio::task::spawn_blocking(move || {
         let entries = crate::files::scan(&root);
         let _ = sender.send(AppEvent::MentionScanned {
+            prompt,
             generation,
             entries,
         });
@@ -1175,7 +1165,14 @@ fn forward_pane_mouse_event(
 }
 
 /// 浮层左键点击：菜单项与按钮执行命令，其余位置取消。
-fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u16) {
+///
+/// 确认切换工作区路径时返回写入目标窗格的 shell 命令。
+fn handle_overlay_click(
+    state: &mut AppState,
+    screen: Rect,
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, Vec<u8>)> {
     match state.overlay.as_ref() {
         Some(Overlay::Menu(menu)) => {
             let layout = ui::overlay::menu_layout(state, screen, menu);
@@ -1186,6 +1183,7 @@ fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u1
                 }
                 None => update::close_overlay(state),
             }
+            None
         }
         Some(Overlay::Rename(_)) => {
             let button = ui::overlay::rename_shell(screen)
@@ -1197,7 +1195,10 @@ fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u1
                 Some(ui::overlay::RenameButton::Clear) => {
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
-                Some(ui::overlay::RenameButton::Cancel) | None => update::close_overlay(state),
+                Some(ui::overlay::RenameButton::Cancel) | None => {
+                    update::close_overlay(state);
+                    None
+                }
             }
         }
         Some(Overlay::ConfirmClose(_)) => {
@@ -1207,30 +1208,47 @@ fn handle_overlay_click(state: &mut AppState, screen: Rect, column: u16, row: u1
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => update::close_overlay(state),
+                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                    update::close_overlay(state);
+                    None
+                }
+            }
+        }
+        Some(Overlay::ConfirmSwitchCwd(confirm)) => {
+            let button = ui::overlay::confirm_switch_cwd_shell(screen, &confirm.path)
+                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
+            match button {
+                Some(ui::overlay::ConfirmButton::Confirm) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                    update::close_overlay(state);
+                    None
+                }
             }
         }
         Some(Overlay::WorktreeOpen(dialog)) => {
             let Some(shell) = ui::overlay::worktree_dialog_shell(screen, dialog.entries.len())
             else {
                 update::close_overlay(state);
-                return;
+                return None;
             };
             if let Some(index) = ui::overlay::worktree_dialog_entry_at(&shell, dialog, column, row)
             {
                 update::set_worktree_open_selection(state, index);
-                return;
+                return None;
             }
             match ui::overlay::worktree_dialog_button_at(&shell, column, row) {
                 Some(ui::overlay::WorktreeDialogButton::Open) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
                 Some(ui::overlay::WorktreeDialogButton::Cancel) | None => {
-                    update::close_overlay(state)
+                    update::close_overlay(state);
+                    None
                 }
             }
         }
-        None => {}
+        None => None,
     }
 }
 
@@ -1368,9 +1386,10 @@ fn handle_app_event(
         }
         AppEvent::PaneExit(id) => update::mark_pane_exited(state, id),
         AppEvent::MentionScanned {
+            prompt,
             generation,
             entries,
-        } => update::apply_mention_entries(state, generation, entries),
+        } => update::apply_mention_entries(state, prompt, generation, entries),
         AppEvent::GitRefreshed { cwd, checkout } => {
             update::apply_git_refresh(state, &cwd, checkout)
         }

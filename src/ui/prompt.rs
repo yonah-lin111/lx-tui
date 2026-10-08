@@ -3,7 +3,7 @@
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use unicode_width::UnicodeWidthChar;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{Prompt, VisualRow};
@@ -126,9 +126,12 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     render_panels(buf, area, prompt);
 }
 
+/// 提及条目父路径可用宽度：面板最宽占满文本区，扣除两侧边框、滚动条列与行内前导空格。
+const MENTION_DETAIL_MARGIN: usize = 5;
+
 /// 绘制浮层面板：文件提及优先，其次块命令；状态由 app 层维护，这里只做只读映射。
 fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
-    if let Some(data) = mention_panel_data(prompt) {
+    if let Some(data) = mention_panel_data(prompt, area.width) {
         let items = data.items();
         command_panel::render(area, buf, &mention_view(&items, &data, area.height / 2));
         return;
@@ -211,14 +214,14 @@ pub fn panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
 
 /// 提及面板布局；面板未打开或空间不足返回 None。
 pub fn mention_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
-    let data = mention_panel_data(prompt)?;
+    let data = mention_panel_data(prompt, area.width)?;
     let items = data.items();
     command_panel::layout(area, &mention_view(&items, &data, area.height / 2))
 }
 
 /// 提及面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
 pub fn mention_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
-    let data = mention_panel_data(prompt)?;
+    let data = mention_panel_data(prompt, area.width)?;
     let items = data.items();
     let layout = command_panel::layout(area, &mention_view(&items, &data, area.height / 2))?;
     command_panel::item_at(&layout, &items, column, row)
@@ -262,11 +265,16 @@ impl MentionPanelData {
 }
 
 /// 提及面板渲染数据；面板未打开或光标滚出视口返回 None。
-fn mention_panel_data(prompt: &Prompt) -> Option<MentionPanelData> {
+fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
     let panel = prompt.mention()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
+    let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
     Some(MentionPanelData {
-        texts: panel.items().iter().map(mention_item_text).collect(),
+        texts: panel
+            .items()
+            .iter()
+            .map(|entry| mention_item_text(entry, detail_width))
+            .collect(),
         active: panel.active(),
         anchor: panel.anchor(),
         viewport: panel.viewport(),
@@ -297,7 +305,9 @@ fn mention_view<'a>(
 }
 
 /// 提及条目展示：第一行目录/文件图标 + 文件名（目录带 `/`），第二行 `└─ ` 前缀的父目录。
-fn mention_item_text(entry: &MentionEntry) -> MentionItemText {
+///
+/// 父目录超出可用宽度时按显示列中间截断（保留路径首尾），对齐 opencode 的路径省略逻辑。
+fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemText {
     let (directory, name) = entry
         .path
         .rsplit_once('/')
@@ -310,7 +320,9 @@ fn mention_item_text(entry: &MentionEntry) -> MentionItemText {
     let detail = if directory.is_empty() {
         String::new()
     } else {
-        format!("{} {directory}", text::WORKSPACE_TREE_LAST)
+        let prefix = format!("{} ", text::WORKSPACE_TREE_LAST);
+        let path_width = detail_width.saturating_sub(prefix.width());
+        format!("{prefix}{}", text::ellipsize_middle(directory, path_width))
     };
     let icon = if entry.is_directory {
         text::MENTION_DIR_ICON

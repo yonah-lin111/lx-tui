@@ -5,7 +5,7 @@ use crate::app::overlay::WorktreeStatus;
 use crate::app::state::{WorkspaceGit, workspace_name};
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// demo 状态并把活动窗格置为终端视图：避免 lx 动画干扰定时类断言。
@@ -670,43 +670,6 @@ fn create_workspace_uses_focused_terminal_cwd() {
 }
 
 #[test]
-fn update_workspace_cwd_renames_auto_named_workspace() {
-    let mut state = AppState::demo();
-    create_workspace(&mut state);
-    let cwd = std::path::Path::new("/tmp/other-project");
-    assert!(update_workspace_cwd(&mut state, 1, cwd));
-    assert_eq!(state.workspaces[1].name, "other-project");
-    assert_eq!(state.workspaces[1].cwd.as_deref(), Some(cwd));
-    assert!(!update_workspace_cwd(&mut state, 1, cwd));
-}
-
-#[test]
-fn update_workspace_cwd_tracks_manual_name_without_renaming() {
-    let mut state = AppState::demo();
-    state.workspaces[0].name = "api".to_string();
-    state.workspaces[0].name_is_manual = true;
-    let cwd = std::path::Path::new("/tmp/other-project");
-    assert!(update_workspace_cwd(&mut state, 0, cwd));
-    assert_eq!(state.workspaces[0].name, "api");
-    assert_eq!(state.workspaces[0].cwd.as_deref(), Some(cwd));
-    assert!(!update_workspace_cwd(&mut state, 0, cwd));
-}
-
-#[test]
-fn update_workspace_cwd_dedupes_against_other_workspaces() {
-    let mut state = AppState::demo();
-    create_workspace(&mut state);
-    state.workspaces[1].name = "api".to_string();
-    state.workspaces[1].name_is_manual = true;
-    assert!(update_workspace_cwd(
-        &mut state,
-        0,
-        std::path::Path::new("/tmp/api")
-    ));
-    assert_eq!(state.workspaces[0].name, "api 2");
-}
-
-#[test]
 fn workspace_scroll_clamps_and_follows_active() {
     let mut state = AppState::demo();
     for _ in 0..15 {
@@ -744,8 +707,21 @@ fn switch_workspace_clears_selection_and_prompt_focus() {
     assert_eq!(state.active_workspace, 0);
 }
 
+/// 在当前菜单浮层中高亮指定命令项。
+fn select_menu_command(state: &mut AppState, command: MenuCommand) {
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    let index = menu
+        .commands
+        .iter()
+        .position(|candidate| *candidate == command)
+        .expect("command offered by menu");
+    set_menu_selection(state, index);
+}
+
 #[test]
-fn open_workspace_menu_offers_rename_and_close() {
+fn open_workspace_menu_offers_terminal_prompt_rename_and_close() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 0, (10, 5));
@@ -755,7 +731,12 @@ fn open_workspace_menu_offers_rename_and_close() {
     assert_eq!(menu.target, OverlayTarget::Workspace(0));
     assert_eq!(
         menu.commands,
-        vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace]
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::CloseWorkspace
+        ]
     );
     assert_eq!(menu.selected, 0);
 }
@@ -767,7 +748,14 @@ fn open_workspace_menu_hides_close_for_last_workspace() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
-    assert_eq!(menu.commands, vec![MenuCommand::RenameWorkspace]);
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace
+        ]
+    );
     open_workspace_menu(&mut state, 9, (0, 0));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
@@ -784,7 +772,7 @@ fn menu_selection_wraps_and_reports_changes() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
-    assert_eq!(menu.selected, 1);
+    assert_eq!(menu.selected, 3);
     move_menu_selection(&mut state, 1);
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
@@ -801,6 +789,7 @@ fn activate_menu_rename_opens_prefilled_input() {
     create_workspace(&mut state);
     let expected = state.workspaces[1].name.clone();
     open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     activate_menu(&mut state);
     let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
         panic!("rename overlay expected");
@@ -815,7 +804,7 @@ fn activate_menu_close_opens_confirmation() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 1, (0, 0));
-    set_menu_selection(&mut state, 1);
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
     activate_menu(&mut state);
     assert_eq!(
         state.overlay.as_ref().map(Overlay::kind),
@@ -833,6 +822,7 @@ fn overlay_esc_closes_and_enter_dispatches() {
     assert!(state.overlay.is_none());
 
     open_workspace_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(
         state.overlay.as_ref().map(Overlay::kind),
@@ -842,7 +832,7 @@ fn overlay_esc_closes_and_enter_dispatches() {
     assert!(state.overlay.is_none());
 
     open_workspace_menu(&mut state, 0, (0, 0));
-    set_menu_selection(&mut state, 1);
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(
         state.overlay.as_ref().map(Overlay::kind),
@@ -857,6 +847,7 @@ fn rename_overlay_edits_and_commits_trimmed_name() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     activate_menu(&mut state);
     for key in [
         OverlayKey::Backspace,
@@ -881,6 +872,7 @@ fn rename_overlay_rejects_empty_name() {
     let mut state = AppState::demo();
     let original = state.workspaces[0].name.clone();
     open_workspace_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Home);
     for _ in 0..200 {
@@ -925,6 +917,233 @@ fn confirm_close_refuses_last_workspace() {
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(state.workspaces.len(), 1);
     assert!(state.overlay.is_none());
+}
+
+#[test]
+fn switch_workspace_swaps_prompt_drafts() {
+    let mut state = AppState::demo();
+    assert_prompt_slots(&state);
+    state.prompt.insert_str("alpha");
+    create_workspace(&mut state);
+    assert_prompt_slots(&state);
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(state.prompt.text(), "", "新工作区使用独立空草稿");
+
+    state.prompt.insert_str("beta");
+    switch_workspace(&mut state, 0);
+    assert_prompt_slots(&state);
+    assert_eq!(state.prompt.text(), "alpha", "切回恢复原工作区草稿");
+    switch_workspace(&mut state, 1);
+    assert_eq!(state.prompt.text(), "beta");
+}
+
+/// 断言 prompt 草稿槽位不变量：恰有一处 None，且属于显示中的工作区。
+fn assert_prompt_slots(state: &AppState) {
+    let empty: Vec<usize> = state
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(_, workspace)| workspace.prompt.is_none())
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(empty, vec![state.prompt_workspace()]);
+}
+
+#[test]
+fn pinned_switch_keeps_shown_draft_and_edits_land_in_owner() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("alpha");
+    create_workspace(&mut state);
+    state.prompt.insert_str("beta");
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(1));
+
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.active_workspace, 0);
+    assert_eq!(state.prompt_workspace(), 1, "钉住时显示来源不随激活切换");
+    assert_eq!(state.prompt.text(), "beta");
+    state.prompt.insert_str("+gamma");
+
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, None);
+    assert_eq!(state.prompt.text(), "alpha", "释放后回到激活工作区草稿");
+    switch_workspace(&mut state, 1);
+    assert_eq!(
+        state.prompt.text(),
+        "beta+gamma",
+        "钉住期间的编辑写回所属工作区"
+    );
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn toggle_prompt_pin_releases_on_explicit_open_prompt() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 0);
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(0));
+    switch_workspace(&mut state, 1);
+    assert_eq!(
+        state.prompt_workspace(),
+        0,
+        "钉住期间点击其它工作区不换草稿"
+    );
+
+    open_prompt_for_workspace(&mut state, 1);
+    assert_eq!(state.prompt_pinned, None, "显式 Open prompt 释放钉住");
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(state.prompt_root, state.workspaces[1].cwd.clone());
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn toggle_prompt_pin_releases_on_pane_open_prompt() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let pane = state.active_tab().layout.focus();
+    switch_workspace(&mut state, 0);
+    toggle_prompt_pin(&mut state);
+    switch_workspace(&mut state, 1);
+    assert_eq!(state.prompt_workspace(), 0);
+
+    open_prompt_for_pane(&mut state, pane);
+    assert_eq!(state.prompt_pinned, None, "窗格 Open prompt 释放钉住");
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn close_pinned_workspace_releases_pin() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(1));
+
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(1),
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    assert_eq!(state.prompt_pinned, None, "被钉工作区关闭即释放");
+    assert_eq!(state.prompt_workspace(), 0);
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn close_workspace_before_pin_remaps_pin_index() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.prompt.insert_str("last");
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(2));
+
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(1),
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.prompt_pinned, Some(1), "钉住索引随前移重映射");
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.prompt.text(), "last", "显示草稿随工作区身份跟随");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn create_workspace_while_pinned_keeps_shown_draft() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("alpha");
+    toggle_prompt_pin(&mut state);
+    create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.prompt_workspace(), 0);
+    assert_eq!(state.prompt.text(), "alpha");
+
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt.text(), "", "释放后显示新工作区空草稿");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn drag_workspace_remaps_pinned_index() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.prompt.insert_str("mark");
+    toggle_prompt_pin(&mut state);
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.prompt_workspace(), 2);
+
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    assert_eq!(state.prompt_pinned, Some(0), "钉住索引随拖拽重映射");
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.prompt.text(), "mark", "显示草稿随工作区移动");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn ensure_main_workspace_shifts_pinned_index() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.workspaces[2].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/linked"),
+        is_linked: true,
+        branch: Some("feat/x".to_string()),
+        main_branch: None,
+    });
+    state.prompt.insert_str("mark");
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(2));
+
+    let inserted = worktree::ensure_main_workspace(&mut state, 2).expect("main workspace inserted");
+    assert_eq!(inserted, 2);
+    assert_eq!(state.prompt_pinned, Some(3), "钉住索引随插入平移");
+    assert_eq!(state.prompt_workspace(), 3);
+    assert_eq!(state.prompt.text(), "mark", "显示草稿随工作区身份跟随");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn pane_prompt_root_binding_is_per_workspace() {
+    let mut state = AppState::demo();
+    state.prompt_root = Some(PathBuf::from("/bound/a"));
+    create_workspace(&mut state);
+    assert_eq!(state.prompt_root, None, "新工作区草稿无显式绑定");
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.prompt_root.as_deref(), Some(Path::new("/bound/a")));
+    switch_workspace(&mut state, 1);
+    assert_eq!(state.prompt_root, None);
+}
+
+#[test]
+fn mention_scan_result_routes_to_parked_prompt_draft() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    let parked = state.prompt.id();
+    create_workspace(&mut state);
+
+    let entries = vec![MentionEntry {
+        path: "app.rs".into(),
+        is_directory: false,
+    }];
+    apply_mention_entries(&mut state, parked, generation, entries);
+    assert!(
+        state.prompt.mention().is_none(),
+        "结果不落到显示中的其它草稿"
+    );
+    switch_workspace(&mut state, 0);
+    assert!(state.prompt.mention().is_some(), "切回后挂起草稿已有缓存");
+    assert_prompt_slots(&state);
 }
 
 #[test]
@@ -1358,8 +1577,9 @@ fn demo_two_panes() -> (AppState, PaneId, PaneId) {
 }
 
 #[test]
-fn open_pane_menu_offers_split_switch_and_close() {
+fn open_pane_menu_offers_split_switch_prompt_path_and_close() {
     let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/lx-tui"));
     open_pane_menu(&mut state, pane, (7, 3));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("pane menu overlay expected");
@@ -1379,6 +1599,8 @@ fn open_pane_menu_offers_split_switch_and_close() {
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
             MenuCommand::SwitchToTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::SwitchToWorkspaceCwd,
             MenuCommand::ClosePane
         ]
     );
@@ -1389,8 +1611,9 @@ fn open_pane_menu_offers_split_switch_and_close() {
 }
 
 #[test]
-fn open_pane_menu_hides_close_for_last_pane() {
+fn open_pane_menu_hides_close_and_path_for_last_pane_without_cwd() {
     let mut state = AppState::demo();
+    state.workspaces[0].cwd = None;
     let only = state.active_tab().layout.focus();
     open_pane_menu(&mut state, only, (0, 0));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
@@ -1401,7 +1624,8 @@ fn open_pane_menu_hides_close_for_last_pane() {
         vec![
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
-            MenuCommand::SwitchToTerminal
+            MenuCommand::SwitchToTerminal,
+            MenuCommand::OpenPrompt
         ]
     );
 }
@@ -1472,7 +1696,7 @@ fn activate_menu_switch_toggles_only_target_pane() {
 fn activate_menu_close_pane_opens_confirmation() {
     let (mut state, _, second) = demo_two_panes();
     open_pane_menu(&mut state, second, (0, 0));
-    set_menu_selection(&mut state, 3);
+    select_menu_command(&mut state, MenuCommand::ClosePane);
     activate_menu(&mut state);
 
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
@@ -1552,6 +1776,206 @@ fn confirm_close_pane_clears_transient_state_for_removed_pane() {
 }
 
 #[test]
+fn create_terminal_in_workspace_appends_terminal_tab_and_activates() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let target_cwd = state.workspaces[1].cwd.clone();
+    state.active_workspace = 0;
+    state.prompt_focused = true;
+
+    create_terminal_in_workspace(&mut state, 1);
+
+    assert_eq!(state.active_workspace, 1);
+    let workspace = state.active_workspace();
+    assert_eq!(workspace.tabs.len(), 2);
+    assert_eq!(workspace.active_tab, 1);
+    let pane = workspace.tabs[1].root_pane().expect("root pane exists");
+    assert_eq!(
+        workspace.tabs[1].pane(pane).expect("pane exists").view,
+        PaneView::Terminal
+    );
+    assert_eq!(state.workspace_cwd_for_pane(pane), target_cwd);
+    assert!(!state.prompt_focused);
+
+    create_terminal_in_workspace(&mut state, 9);
+    assert_eq!(state.active_workspace().tabs.len(), 2);
+}
+
+#[test]
+fn activate_menu_new_terminal_targets_clicked_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.active_workspace = 0;
+    open_workspace_menu(&mut state, 1, (0, 0));
+    activate_menu(&mut state);
+
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.workspaces[1].tabs.len(), 2);
+    assert_eq!(state.workspaces[2].tabs.len(), 1);
+}
+
+#[test]
+fn open_prompt_for_workspace_switches_binds_and_focuses() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    state.workspaces[1].cwd = Some(PathBuf::from("/tmp/target"));
+    state.active_workspace = 0;
+    state.prompt_collapsed = true;
+
+    open_prompt_for_workspace(&mut state, 1);
+
+    assert_eq!(state.active_workspace, 1);
+    assert!(state.prompt_focused);
+    assert!(!state.prompt_collapsed);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/target"))
+    );
+}
+
+#[test]
+fn activate_menu_open_prompt_from_workspace_menu_binds_workspace_cwd() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    state.workspaces[1].cwd = Some(PathBuf::from("/tmp/ws-target"));
+    state.active_workspace = 0;
+    open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::OpenPrompt);
+    activate_menu(&mut state);
+
+    assert_eq!(state.active_workspace, 1);
+    assert!(state.prompt_focused);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/ws-target"))
+    );
+}
+
+#[test]
+fn open_prompt_for_pane_binds_pane_cwd_and_keeps_workspace() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.prompt_collapsed = true;
+    update_pane_cwd(
+        &mut state,
+        pane,
+        std::path::Path::new("/tmp/pane-dir"),
+        "pane-dir".to_string(),
+    );
+
+    open_prompt_for_pane(&mut state, pane);
+
+    assert_eq!(state.active_workspace, 0);
+    assert!(state.prompt_focused);
+    assert!(!state.prompt_collapsed);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/pane-dir"))
+    );
+}
+
+#[test]
+fn open_prompt_for_pane_falls_back_to_workspace_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-root"));
+
+    open_prompt_for_pane(&mut state, pane);
+
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/ws-root"))
+    );
+}
+
+#[test]
+fn activate_menu_open_prompt_from_pane_menu_binds_pane_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    update_pane_cwd(
+        &mut state,
+        pane,
+        std::path::Path::new("/tmp/pane-dir"),
+        "pane-dir".to_string(),
+    );
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::OpenPrompt);
+    activate_menu(&mut state);
+
+    assert!(state.prompt_focused);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/pane-dir"))
+    );
+}
+
+#[test]
+fn switch_to_ws_path_opens_confirm_and_returns_cd_command() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws path"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::SwitchToWorkspaceCwd);
+    activate_menu(&mut state);
+
+    let Some(Overlay::ConfirmSwitchCwd(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm switch cwd overlay expected");
+    };
+    assert_eq!(confirm.workspace, 0);
+    assert_eq!(confirm.tab, 0);
+    assert_eq!(confirm.pane, pane);
+    assert_eq!(confirm.path, PathBuf::from("/tmp/ws path"));
+
+    let action = apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(action, Some((pane, b"cd \"/tmp/ws path\"\n".to_vec())));
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn switch_to_ws_path_cancel_returns_no_command() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/ws"),
+    }));
+
+    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Esc), None);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn switch_cwd_command_escapes_shell_specials() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/a\"b$c\\d`e"),
+    }));
+
+    let Some((target, bytes)) = apply_overlay_key(&mut state, OverlayKey::Enter) else {
+        panic!("cd command expected");
+    };
+    assert_eq!(target, pane);
+    let command = String::from_utf8(bytes).expect("command is utf-8");
+    assert_eq!(command, "cd \"/tmp/a\\\"b\\$c\\\\d\\`e\"\n");
+}
+
+#[test]
+fn switch_cwd_confirm_with_missing_pane_returns_none() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 9,
+        pane,
+        path: PathBuf::from("/tmp/ws"),
+    }));
+
+    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Enter), None);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
 fn tab_scroll_clamps_and_reports_changes() {
     let mut state = AppState::demo();
     assert!(!set_tab_scroll(&mut state, 0, 5));
@@ -1596,8 +2020,10 @@ fn mention_panel_keys_are_consumed_before_editing() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "app.rs".into(),
@@ -1622,7 +2048,8 @@ fn mention_state(entries: Vec<MentionEntry>) -> AppState {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
-    apply_mention_entries(&mut state, generation, entries);
+    let prompt = state.prompt.id();
+    apply_mention_entries(&mut state, prompt, generation, entries);
     state
 }
 
@@ -1708,8 +2135,10 @@ fn switching_workspace_root_invalidates_mention_cache() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "a.rs".into(),
@@ -1739,8 +2168,10 @@ fn clear_panel_hides_mention_panel_on_focus_loss() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "a.rs".into(),
@@ -1763,8 +2194,10 @@ fn mouse_mention_hover_select_and_wheel_flow() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![
             MentionEntry {
@@ -1949,7 +2382,12 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
     };
     assert_eq!(
         menu.commands,
-        vec![MenuCommand::RenameWorkspace, MenuCommand::OpenWorktree]
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::OpenWorktree
+        ]
     );
 
     push_git_workspace(
@@ -1965,6 +2403,8 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
     assert_eq!(
         menu.commands,
         vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
             MenuCommand::RenameWorkspace,
             MenuCommand::OpenWorktree,
             MenuCommand::CloseWorkspace

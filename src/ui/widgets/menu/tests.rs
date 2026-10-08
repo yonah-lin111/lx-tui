@@ -62,6 +62,39 @@ fn item_at_hits_rows_inside_border_only() {
 }
 
 #[test]
+fn layout_measures_display_width_for_wide_labels() {
+    // 6 个 CJK 字符 = 12 显示列 + 4 内边距 = 16，而非按字符计数的 10。
+    let menu = layout(SCREEN, (0, 0), TITLE, &["新建终端标签"]);
+    assert_eq!(menu.area.width, 16);
+}
+
+#[test]
+fn layout_sizes_title_by_display_width() {
+    // 7 个 CJK 字符 = 14 显示列 + 4 = 18，标题不再按字符数低估。
+    let menu = layout(SCREEN, (0, 0), "工作区菜单标题", &["Close"]);
+    assert_eq!(menu.area.width, 18);
+}
+
+#[test]
+fn render_shows_full_wide_label_without_ellipsis() {
+    let label = "新建终端标签页";
+    let menu = layout(SCREEN, (0, 0), TITLE, &[label]);
+    assert_eq!(menu.area.width, 18);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, &menu, TITLE, &[label], None)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let row: String = (menu.item_rects[0].x..menu.item_rects[0].right())
+        .map(|x| buffer[(x, menu.item_rects[0].y)].symbol())
+        .collect();
+    assert!(!row.contains('…'), "宽度充裕时不应省略: {row:?}");
+    // 宽字符的占位格在缓冲中为空格，去掉空格后应还原完整标签。
+    let compact: String = row.chars().filter(|ch| *ch != ' ').collect();
+    assert_eq!(compact, label);
+}
+
+#[test]
 fn render_draws_border_title_labels_and_reversed_selection() {
     let menu = layout(SCREEN, (10, 5), TITLE, &["Rename", "Close"]);
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");

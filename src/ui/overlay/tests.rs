@@ -5,6 +5,8 @@ use crate::app::overlay::{OverlayTarget, RenameTarget, TextInput};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
+use std::path::PathBuf;
+use unicode_width::UnicodeWidthStr;
 
 const SCREEN: Rect = Rect {
     x: 0,
@@ -308,4 +310,105 @@ fn confirm_modal_uses_tab_label_for_tab_target() {
     let (lines, _) = draw_overlay(&state);
     assert!(lines[10].contains(text::CONFIRM_CLOSE_TAB_TITLE));
     assert!(lines[11].contains("tab 2"));
+}
+
+#[test]
+fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
+    let state = menu_state(
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::SwitchToWorkspaceCwd,
+        ],
+        0,
+    );
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(
+        menu_labels(menu),
+        vec![
+            text::MENU_NEW_TERMINAL,
+            text::MENU_OPEN_PROMPT,
+            text::MENU_SWITCH_TO_WORKSPACE_CWD
+        ]
+    );
+}
+
+#[test]
+fn workspace_menu_renders_all_labels_without_ellipsis() {
+    let state = menu_state(
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::OpenWorktree,
+            MenuCommand::CloseWorkspace,
+        ],
+        0,
+    );
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    for label in [
+        text::MENU_NEW_TERMINAL,
+        text::MENU_OPEN_PROMPT,
+        text::MENU_RENAME_WORKSPACE,
+        text::MENU_OPEN_WORKTREE,
+        text::MENU_CLOSE_WORKSPACE,
+    ] {
+        assert!(joined.contains(label), "缺少 {label}: {joined}");
+    }
+    assert!(!joined.contains('…'), "菜单文案不得出现省略: {joined}");
+}
+
+#[test]
+fn switch_cwd_confirm_renders_title_and_full_path() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let path = PathBuf::from("/tmp/workspace path");
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: path.clone(),
+    }));
+    let (lines, cursor) = draw_overlay(&state);
+    assert_eq!(cursor, None);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::CONFIRM_SWITCH_CWD_TITLE), "{joined}");
+    assert!(joined.contains("/tmp/workspace path"), "{joined}");
+}
+
+#[test]
+fn switch_cwd_confirm_shell_widens_for_long_paths_and_clamps() {
+    let long = PathBuf::from(format!("/tmp/{}", "d".repeat(60)));
+    let wide_screen = Rect::new(0, 0, 100, 24);
+    let shell = confirm_switch_cwd_shell(wide_screen, &long).expect("dialog fits");
+    assert!(shell.area.width > CONFIRM_WIDTH);
+    let question = text::confirm_switch_cwd_question(&long.display().to_string());
+    assert!(usize::from(shell.inner.width) >= question.width());
+
+    let narrow = Rect::new(0, 0, 30, 24);
+    let clamped = confirm_switch_cwd_shell(narrow, &long).expect("dialog fits");
+    assert_eq!(clamped.area.width, 30);
+}
+
+#[test]
+fn switch_cwd_confirm_buttons_hit_their_cells() {
+    let path = PathBuf::from("/tmp/ws");
+    let shell = confirm_switch_cwd_shell(SCREEN, &path).expect("dialog fits");
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        BUTTON_GAP,
+        CONFIRM_BUTTON_ROW,
+    );
+    assert_eq!(
+        confirm_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(ConfirmButton::Confirm)
+    );
+    assert_eq!(
+        confirm_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(ConfirmButton::Cancel)
+    );
 }

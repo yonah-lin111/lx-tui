@@ -2,6 +2,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
+use crate::app::overlay::ConfirmSwitchCwd;
+
 use super::*;
 
 fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
@@ -528,6 +530,86 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
 
     assert!(state.overlay.is_none());
     assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+}
+
+/// 切换路径确认浮层的确认按钮矩形。
+fn confirm_switch_button(state: &mut AppState, path: &str, confirm: bool) -> (Rect, Geometry) {
+    let config = Config::default();
+    let geo = geometry(state, &config, Rect::new(0, 0, 120, 30));
+    let shell = ui::overlay::confirm_switch_cwd_shell(geo.screen, std::path::Path::new(path))
+        .expect("dialog fits");
+    let buttons = ui::widgets::modal::button_row(
+        shell.inner,
+        &[ui::text::BUTTON_CONFIRM, ui::text::BUTTON_CANCEL],
+        2,
+        1,
+    );
+    let index = usize::from(!confirm);
+    (buttons[index], geo)
+}
+
+#[test]
+fn confirm_switch_cwd_click_confirm_returns_cd_command() {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/target"),
+    }));
+    let (button, geo) = confirm_switch_button(&mut state, "/tmp/target", true);
+
+    let action = handle_overlay_click(&mut state, geo.screen, button.x, button.y);
+
+    assert_eq!(action, Some((pane, b"cd \"/tmp/target\"\n".to_vec())));
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn confirm_switch_cwd_click_cancel_closes_without_command() {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/target"),
+    }));
+    let (button, geo) = confirm_switch_button(&mut state, "/tmp/target", false);
+
+    let action = handle_overlay_click(&mut state, geo.screen, button.x, button.y);
+
+    assert_eq!(action, None);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn mouse_click_confirm_switch_cwd_closes_overlay() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/target"),
+    }));
+    let (button, geo) = confirm_switch_button(&mut state, "/tmp/target", true);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none());
+    assert!(dirty);
 }
 
 /// 目标窗格内容区矩形。
@@ -1583,7 +1665,8 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
             is_directory: false,
         })
         .collect();
-    crate::app::update::apply_mention_entries(&mut state, generation, entries);
+    let prompt = state.prompt.id();
+    crate::app::update::apply_mention_entries(&mut state, prompt, generation, entries);
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = crate::layout::prompt_text_rect(geo.view.prompt);
@@ -1617,6 +1700,39 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
 /// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
 fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
     layout::prompt_toolbar_button_rect(geo.view.prompt, button).expect("toolbar button visible")
+}
+
+#[test]
+fn mouse_click_prompt_pin_toggles_pin() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let pin = ui::prompt_pin_button(geo.view.prompt, false).expect("pin visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_pinned, Some(state.active_workspace));
+    assert!(dirty);
+
+    let unpin = ui::prompt_pin_button(geo.view.prompt, true).expect("pin visible");
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), unpin.x, unpin.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_pinned, None);
+    assert!(dirty);
 }
 
 /// 构造 prompt 工具栏测试场景：宽右栏、已同步几何。

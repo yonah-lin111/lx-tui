@@ -10,6 +10,7 @@ pub enum OverlayKind {
     Menu,
     Rename,
     ConfirmClose,
+    ConfirmSwitchCwd,
     WorktreeOpen,
 }
 
@@ -19,6 +20,7 @@ pub enum Overlay {
     Menu(Menu),
     Rename(Rename),
     ConfirmClose(ConfirmClose),
+    ConfirmSwitchCwd(ConfirmSwitchCwd),
     WorktreeOpen(WorktreeOpen),
 }
 
@@ -29,6 +31,7 @@ impl Overlay {
             Self::Menu(_) => OverlayKind::Menu,
             Self::Rename(_) => OverlayKind::Rename,
             Self::ConfirmClose(_) => OverlayKind::ConfirmClose,
+            Self::ConfirmSwitchCwd(_) => OverlayKind::ConfirmSwitchCwd,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
         }
     }
@@ -62,8 +65,10 @@ pub enum OverlayTarget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuCommand {
     NewTab,
+    NewTerminal,
     RenameWorkspace,
     OpenWorktree,
+    OpenPrompt,
     CloseWorkspace,
     RenameTab,
     CloseTab,
@@ -71,6 +76,7 @@ pub enum MenuCommand {
     SplitDown,
     SwitchToTerminal,
     SwitchToLx,
+    SwitchToWorkspaceCwd,
     ClosePane,
 }
 
@@ -92,6 +98,15 @@ pub struct Rename {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConfirmClose {
     pub target: OverlayTarget,
+}
+
+/// 切换工作区路径确认浮层：目标窗格与要写入的目标路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmSwitchCwd {
+    pub workspace: usize,
+    pub tab: usize,
+    pub pane: PaneId,
+    pub path: PathBuf,
 }
 
 /// 打开已有 worktree 的浮层：源工作区、仓库根、条目与搜索输入。

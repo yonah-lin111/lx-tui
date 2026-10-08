@@ -378,6 +378,47 @@ fn mention_panel_renders_title_folder_name_and_footer() {
 }
 
 #[test]
+fn mention_panel_middle_truncates_overlong_parent_path() {
+    let area = Rect::new(0, 0, 30, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 20);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    editor.apply_mention_entries(
+        generation,
+        vec![MentionEntry {
+            path: "alpha/beta/gamma/delta/epsilon/zeta/file.rs".into(),
+            is_directory: false,
+        }],
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+
+    let rect = mention_panel_rect(&editor, area).expect("panel visible");
+    let name_row: String = (0..area.width)
+        .map(|x| buf[(x, rect.y + 1)].symbol())
+        .collect();
+    let dir_row: String = (0..area.width)
+        .map(|x| buf[(x, rect.y + 2)].symbol())
+        .collect();
+    assert!(name_row.contains("file.rs"), "{name_row}");
+    assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
+    assert!(dir_row.contains('…'), "超长父路径应中间截断: {dir_row}");
+    // 保留路径首尾：开头目录与紧邻的父目录可见，中段被省略。
+    assert!(dir_row.contains("alpha/"), "{dir_row}");
+    assert!(dir_row.contains("zeta"), "{dir_row}");
+    assert!(!dir_row.contains("gamma"), "{dir_row}");
+    // 截断后的明细必须完整落在面板内（不能被裁切）；按字符列计。
+    let tail_start = dir_row.rfind("zeta").expect("tail visible");
+    let detail_end = dir_row[..tail_start].chars().count() + 4;
+    assert!(
+        detail_end < usize::from(rect.right()),
+        "{dir_row:?} rect={rect:?} end={detail_end}"
+    );
+}
+
+#[test]
 fn mention_panel_window_keeps_still_when_hovering_visible_item() {
     let area = Rect::new(0, 0, 30, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));

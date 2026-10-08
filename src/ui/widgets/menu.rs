@@ -4,6 +4,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::{style, text};
 
@@ -20,14 +21,17 @@ pub struct MenuLayout {
 }
 
 /// 按锚点、标题与标签计算菜单几何；锚点与尺寸均夹取到屏幕内。
+///
+/// 宽度按终端显示列（`UnicodeWidthStr::width`）计算，宽字符与中文不再误判为窄；
+/// 仅在超出屏幕宽度时兜底钳制。
 pub fn layout(screen: Rect, anchor: (u16, u16), title: &str, labels: &[&str]) -> MenuLayout {
     let max_label = labels
         .iter()
-        .map(|label| label.chars().count())
+        .map(|label| label.width())
         .max()
         .unwrap_or_default();
     // 边框标题以 ` title ` 占位，加减两角。
-    let max_title = title.chars().count().saturating_add(4);
+    let max_title = title.width().saturating_add(4);
     let width = u16::try_from(max_label.saturating_add(HORIZONTAL_PADDING).max(max_title))
         .unwrap_or(u16::MAX)
         .max(MIN_WIDTH)
@@ -94,7 +98,13 @@ pub fn render(
         } else {
             style::text()
         };
-        let line = Line::from(Span::styled(text::ellipsize(label, width), item_style));
+        // 几何按显示宽度计算，宽度充裕时完整渲染；仅在钳到窄屏时截断。
+        let rendered = if label.width() <= width {
+            (*label).to_string()
+        } else {
+            text::ellipsize(label, width)
+        };
+        let line = Line::from(Span::styled(rendered, item_style));
         // 行级样式让选中项整行反显，而不是只反显文字。
         frame.render_widget(Paragraph::new(line).style(item_style), *rect);
     }
