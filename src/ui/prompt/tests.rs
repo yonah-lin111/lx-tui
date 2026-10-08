@@ -655,6 +655,52 @@ fn template_block_draws_status_colored_border_box() {
 }
 
 #[test]
+fn template_block_paints_status_background() {
+    let area = Rect::new(0, 0, 60, 4);
+    let cases = [
+        (
+            "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end",
+            Color::Indexed(17),
+        ),
+        (
+            "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
+            Color::Indexed(58),
+        ),
+        (
+            "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end done",
+            Color::Indexed(22),
+        ),
+    ];
+    for (text, bg) in cases {
+        let editor = prompt(60, 4, text);
+        let mut buf = Buffer::empty(area);
+        render(area, &mut buf, &editor, None);
+        for y in 0..3 {
+            for x in 0..area.width {
+                assert_eq!(buf[(x, y)].bg, bg, "{text:?} ({x},{y})");
+            }
+        }
+        assert_eq!(buf[(0, 3)].bg, Color::Reset, "块外行不着色");
+    }
+}
+
+#[test]
+fn template_block_background_skips_selected_cells() {
+    let area = Rect::new(0, 0, 60, 4);
+    let editor = prompt(
+        60,
+        4,
+        "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
+    );
+    let selection = selection(&editor, (1, 3), (1, 8));
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, Some(&selection));
+    assert_eq!(buf[(5, 1)].bg, Color::Reset, "选区格不铺块底色");
+    assert!(buf[(5, 1)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(20, 1)].bg, Color::Indexed(58), "非选区格铺块底色");
+}
+
+#[test]
 fn template_buttons_render_and_hit_test() {
     let area = Rect::new(0, 0, 70, 10);
     let prompt = prompt(

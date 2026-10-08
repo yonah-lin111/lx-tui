@@ -205,6 +205,18 @@ pub fn template_border(status: TemplateStatus) -> Style {
     }
 }
 
+/// 模板块整行底色：按状态铺暗色底（todo 藏青 / in_progress 暗琥珀 / done 暗绿）。
+///
+/// 只设置背景，前景与修饰符由各单元格自身样式决定。
+pub fn template_block_bg(status: TemplateStatus) -> Style {
+    let color = match status {
+        TemplateStatus::Todo => Color::Indexed(17),
+        TemplateStatus::InProgress => Color::Indexed(58),
+        TemplateStatus::Done => Color::Indexed(22),
+    };
+    Style::default().bg(color)
+}
+
 /// lx 页吉祥物像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
 ///
 /// `k` 描边藏青、`p` 主体粉、`n` 深粉、`b` 天空蓝、`w` 高光白；其余字符视为透明。

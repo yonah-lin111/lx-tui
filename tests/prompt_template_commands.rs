@@ -18,6 +18,12 @@ use ratatui::style::{Color, Modifier};
 const WIDTH: u16 = 140;
 const HEIGHT: u16 = 30;
 
+/// 宽字符占用的后一格会被 ratatui diff 跳过（不写入后端缓冲），整行断言时排除。
+fn wide_spacer(buffer: &ratatui::buffer::Buffer, x: u16, y: u16) -> bool {
+    use unicode_width::UnicodeWidthStr;
+    x > 0 && buffer[(x - 1, y)].symbol().width() > 1
+}
+
 /// 构造已同步几何的宽屏 prompt 场景；prompt 加宽保证模板块按钮可见。
 fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
     let config = Config::default();
@@ -90,7 +96,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(state.prompt.text(), content);
     assert!(state.prompt.slash_panel().is_none());
 
-    // 高亮：命令名绿色加粗；标题独立成行 Yellow 下划线；块边框 todo 靛蓝。
+    // 高亮：命令名绿色加粗；标题独立成行 Cyan 下划线；块边框与整块底色 todo 藏青。
     let terminal = draw(&state, &config);
     let start_row = area.y;
     let row = line_text(&terminal, start_row);
@@ -116,6 +122,20 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(title.fg, Color::Cyan);
     assert!(title.modifier.contains(Modifier::UNDERLINED));
 
+    // 整块底色：起始行与标题行按 todo 铺底。
+    for y in [start_row, start_row + 1] {
+        for x in area.x..area.right() {
+            if wide_spacer(terminal.backend().buffer(), x, y) {
+                continue;
+            }
+            assert_eq!(
+                terminal.backend().buffer()[(x, y)].bg,
+                Color::Indexed(17),
+                "todo 整块底色 ({x},{y})"
+            );
+        }
+    }
+
     // 按钮组常显。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
     assert_eq!(buttons.len(), 4, "宽屏下 [todo]/[copy]/[clean]/[del] 可见");
@@ -125,6 +145,20 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(row.contains("[clean]"), "{row}");
     assert!(row.contains("[del]"), "{row}");
     assert!(row.contains('╮'), "右上角闭合: {row}");
+
+    // 切换状态后整块底色跟随。
+    update::toggle_template_status(&mut state, 0);
+    let terminal = draw(&state, &config);
+    for x in area.x..area.right() {
+        if wide_spacer(terminal.backend().buffer(), x, start_row) {
+            continue;
+        }
+        assert_eq!(
+            terminal.backend().buffer()[(x, start_row)].bg,
+            Color::Indexed(58),
+            "in_progress 整块底色 ({x})"
+        );
+    }
 }
 
 #[test]

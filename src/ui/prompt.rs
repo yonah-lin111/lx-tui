@@ -115,6 +115,7 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         offset += line.len() + 1;
     }
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
+    let mut block_rows = Vec::new();
     for (index, row) in rows
         .iter()
         .enumerate()
@@ -149,9 +150,13 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         }
         if let Some(info) = info {
             paint_template_border(buf, area, y, info, role, painted, buttons_start);
+            block_rows.push((y, info.status));
         }
     }
     render_template_buttons(buf, area, prompt);
+    for (y, status) in block_rows {
+        paint_template_background(buf, area, y, status);
+    }
     render_panels(buf, area, prompt);
 }
 
@@ -634,6 +639,19 @@ fn paint_template_border(
             }
         }
         None => {}
+    }
+}
+
+/// 模板块整行底色：按状态铺暗色底；选区反显格跳过，保持反显在终端默认底色上呈现。
+fn paint_template_background(buf: &mut Buffer, area: Rect, y: u16, status: TemplateStatus) {
+    let bg = style::template_block_bg(status);
+    for x in area.x..area.right() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            if cell.modifier.contains(Modifier::REVERSED) {
+                continue;
+            }
+            cell.set_style(bg);
+        }
     }
 }
 
