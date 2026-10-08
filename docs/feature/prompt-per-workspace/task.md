@@ -1,6 +1,6 @@
 # Prompt 按工作区隔离与钉住 — 执行任务
 
-- 分支：`feature/prompt-per-workspace`（基于 `feature/workspace-context-menu` 堆叠）
+- 分支：`feature/prompt-per-workspace`（已合并进 `dev`，合并提交 `6838c72`）
 - 规则：生产代码禁止 `unwrap()/expect()`；用户可见文案收敛至 `ui/text.rs`；样式统一从 `ui/style.rs` 取；测试驱动，按受影响范围严格验证。
 
 ## 执行清单

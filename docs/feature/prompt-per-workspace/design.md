@@ -1,6 +1,6 @@
 # Prompt 按工作区隔离与钉住 — 设计
 
-- 分支：`feature/prompt-per-workspace`（基于 `feature/workspace-context-menu` 堆叠，未合并）
+- 分支：`feature/prompt-per-workspace`（已合并进 `dev`，合并提交 `6838c72`）
 - 状态：**已完成**
 
 ## 1. 背景与目标

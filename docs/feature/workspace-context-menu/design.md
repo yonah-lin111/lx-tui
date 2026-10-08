@@ -1,6 +1,6 @@
 # 工作区固定路径与右键菜单增强 — 设计
 
-- 分支：`feature/workspace-context-menu`
+- 分支：`feature/workspace-context-menu`（已合并进 `dev`，合并提交 `6838c72`）
 - 状态：**已完成**；工作区路径固定化、右键菜单扩展、Prompt 独立路径绑定与菜单按显示宽度自适应均已落地
 
 ## 1. 背景与目标
