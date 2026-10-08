@@ -20,7 +20,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::state::{AppState, Pane, PaneKind, PaneView, Workspace, home_dir, workspace_label};
+use crate::app::state::{AppState, Pane, PaneKind, PaneView, Workspace};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
@@ -294,7 +294,7 @@ fn render_sidebar(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         .border_style(style::border(false))
         .title(Span::styled(
             format!(" {} ", text::SIDEBAR_TITLE),
-            style::muted(),
+            style::border_title(),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -695,11 +695,6 @@ fn render_panes(
         };
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && !state.prompt_focused;
-        let title_style = if focused {
-            style::accent()
-        } else {
-            style::muted()
-        };
         let mut title = match pane.view {
             PaneView::Lx => text::LX_TITLE.to_string(),
             PaneView::Terminal => pane_display_title(*id, pane),
@@ -707,10 +702,11 @@ fn render_panes(
         if pane.exited {
             title.push_str(" (exited)");
         }
+        // 边框标题统一 muted（与 prompt 标题一致）；焦点只由边框颜色区分，按钮除外。
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(style::border(focused))
-            .title(Span::styled(format!(" {title} "), title_style));
+            .title(Span::styled(format!(" {title} "), style::border_title()));
         let inner = block.inner(*rect);
         frame.render_widget(block, *rect);
         if inner.width == 0 || inner.height == 0 {
@@ -752,7 +748,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         .border_style(style::border(focused))
         .title(Span::styled(
             format!(" {} ", text::PROMPT_TITLE),
-            style::muted(),
+            style::border_title(),
         ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -760,7 +756,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         return None;
     }
     prompt::render_header(area, frame.buffer_mut(), &state.prompt);
-    render_prompt_status(frame, area, state);
+    render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
     prompt::render(
         text_area,
@@ -799,14 +795,17 @@ fn prompt_scrollbar_for(
     )
 }
 
-/// prompt 底边框左侧状态信息：工作区路径、git 分支与 linked worktree 标记。
-///
-/// 嵌入底边框线（零额外行高），右端避让折叠按钮；空间不足自右向左依次丢弃
-/// `[wt]`、分支，最后截断路径，极小宽度整体隐藏。
-fn render_prompt_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+/// prompt 底边框左侧 git 状态：`⑂ 分支`，linked worktree 追加 ` -wt:工作区名`；
+/// 非 git 不显示，右端避让折叠按钮。
+fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let Some(workspace) = state.workspaces.get(state.active_workspace) else {
         return;
     };
+    let branch = workspace.git.as_ref().and_then(|git| git.short_branch());
+    let linked = workspace.git.as_ref().is_some_and(|git| git.is_linked);
+    if branch.is_none() && !linked {
+        return;
+    }
     let start = area.x.saturating_add(2);
     let end = area
         .right()
@@ -814,14 +813,11 @@ fn render_prompt_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.height == 0 || end <= start {
         return;
     }
-    let path = workspace
-        .cwd
-        .as_deref()
-        .map(|cwd| workspace_label(cwd, home_dir().as_deref()))
-        .unwrap_or_else(|| workspace.name.clone());
-    let branch = workspace.git.as_ref().and_then(|git| git.short_branch());
-    let linked = workspace.git.as_ref().is_some_and(|git| git.is_linked);
-    let spans = prompt_status_spans(&path, branch, linked, usize::from(end - start));
+    let spans = branch_status_spans(
+        branch,
+        linked.then_some(workspace.name.as_str()),
+        usize::from(end - start),
+    );
     if spans.is_empty() {
         return;
     }
@@ -835,61 +831,28 @@ fn render_prompt_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     );
 }
 
-/// 底边框状态片段（文本、样式）；空间不足时按优先级自右向左裁剪。
-fn prompt_status_spans(
-    path: &str,
+/// 底边框分支状态片段：`⑂ 分支` 与 linked worktree 的 ` -wt:工作区名`；
+/// 工作区名按剩余宽度截断，放不下时省略 `-wt` 片段。
+fn branch_status_spans(
     branch: Option<&str>,
-    linked: bool,
+    worktree: Option<&str>,
     available: usize,
 ) -> Vec<(String, Style)> {
-    let branch_spans = |branch: &str| {
-        vec![
-            (" ".to_string(), style::muted()),
-            (text::WORKSPACE_GIT_ICON.to_string(), style::accent()),
-            (format!(" {branch}"), style::muted()),
-        ]
-    };
-    let wt_spans = || {
-        vec![
-            (" ".to_string(), style::muted()),
-            (text::PROMPT_WORKTREE_LABEL.to_string(), style::accent()),
-        ]
-    };
-    let mut spans = vec![
-        (" ".to_string(), style::muted()),
-        (path.to_string(), style::muted()),
-    ];
+    let mut spans = vec![(" ".to_string(), style::muted())];
     if let Some(branch) = branch {
-        spans.extend(branch_spans(branch));
+        spans.push((text::WORKSPACE_GIT_ICON.to_string(), style::accent()));
+        spans.push((format!(" {branch}"), style::muted()));
     }
-    if linked {
-        spans.extend(wt_spans());
+    if let Some(worktree) = worktree {
+        let separator = if branch.is_some() { " " } else { "" };
+        let prefix = format!("{separator}-wt:");
+        let used = spans_width(&spans).saturating_add(prefix.len());
+        if used < available {
+            spans.push((prefix, style::accent()));
+            spans.push((text::ellipsize(worktree, available - used), style::muted()));
+        }
     }
-    if spans_width(&spans) <= available {
-        return spans;
-    }
-    if linked {
-        spans.truncate(spans.len() - wt_spans().len());
-    }
-    if spans_width(&spans) <= available {
-        return spans;
-    }
-    if let Some(branch) = branch {
-        spans.truncate(spans.len() - branch_spans(branch).len());
-    }
-    if spans_width(&spans) <= available {
-        return spans;
-    }
-    if available == 0 {
-        return Vec::new();
-    }
-    if available == 1 {
-        return vec![(" ".to_string(), style::muted())];
-    }
-    vec![
-        (" ".to_string(), style::muted()),
-        (text::ellipsize(path, available - 1), style::muted()),
-    ]
+    spans
 }
 
 /// 片段列宽合计。

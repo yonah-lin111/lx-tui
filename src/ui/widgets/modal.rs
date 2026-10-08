@@ -37,7 +37,10 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())
-        .title(Span::styled(format!(" {title} "), style::muted()))
+        .title(Span::styled(
+            format!(" {title} "),
+            style::overlay_border_title(),
+        ))
         .style(style::overlay_panel());
     frame.render_widget(block, shell.area);
 }
