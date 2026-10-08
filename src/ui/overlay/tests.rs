@@ -336,6 +336,32 @@ fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
 }
 
 #[test]
+fn workspace_menu_renders_all_labels_without_ellipsis() {
+    let state = menu_state(
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::OpenWorktree,
+            MenuCommand::CloseWorkspace,
+        ],
+        0,
+    );
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    for label in [
+        text::MENU_NEW_TERMINAL,
+        text::MENU_OPEN_PROMPT,
+        text::MENU_RENAME_WORKSPACE,
+        text::MENU_OPEN_WORKTREE,
+        text::MENU_CLOSE_WORKSPACE,
+    ] {
+        assert!(joined.contains(label), "缺少 {label}: {joined}");
+    }
+    assert!(!joined.contains('…'), "菜单文案不得出现省略: {joined}");
+}
+
+#[test]
 fn switch_cwd_confirm_renders_title_and_full_path() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();

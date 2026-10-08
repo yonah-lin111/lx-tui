@@ -16,6 +16,26 @@ fn ellipsize_marks_truncation() {
 }
 
 #[test]
+fn ellipsize_middle_keeps_head_and_tail() {
+    assert_eq!(ellipsize_middle("abcdefgh", 8), "abcdefgh");
+    assert_eq!(ellipsize_middle("abcdefgh", 9), "abcdefgh");
+    assert_eq!(ellipsize_middle("abcdefgh", 5), "ab…gh");
+    assert_eq!(ellipsize_middle("abcdefgh", 4), "ab…h");
+    assert_eq!(ellipsize_middle("abcdefgh", 1), "…");
+    assert_eq!(ellipsize_middle("abcdefgh", 0), "");
+}
+
+#[test]
+fn ellipsize_middle_measures_display_width() {
+    // 4 个 CJK 字符 = 8 列；预算 5 列：保留首 2 列 + `…` + 尾 2 列。
+    assert_eq!(ellipsize_middle("中文路径", 5), "中…径");
+    // 预算 4 列：尾预算 1 列放不下宽字符，省略尾部。
+    assert_eq!(ellipsize_middle("中文路径", 4), "中…");
+    // 零宽字符不占列宽。
+    assert_eq!(ellipsize_middle("a\u{200b}bcdef", 5), "a\u{200b}b…ef");
+}
+
+#[test]
 fn block_command_text_covers_all_commands() {
     assert_eq!(
         block_command_text(BlockCommandId::Heading(3)),
