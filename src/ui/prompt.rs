@@ -15,22 +15,22 @@ use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
-pub fn render_header(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
+pub fn render_header(panel: Rect, buf: &mut Buffer, prompt: &Prompt, focused: bool) {
     let Some(header) = layout::prompt_header_rect(panel) else {
         return;
     };
-    render_divider(panel, header, buf);
+    render_divider(panel, header, buf, focused);
     render_toolbar(panel, buf, prompt);
 }
 
-/// 分割线整行 `─`，两端衔接外层边框的 `├` / `┤`。
-fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer) {
+/// 分割线整行 `─`，两端衔接外层边框的 `├` / `┤`；样式跟随边框焦点态。
+fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
     let y = header.y + layout::PROMPT_TOOLBAR_HEIGHT;
     for x in header.x..header.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_symbol(text::DIVIDER_MID);
-            cell.set_style(style::border(false));
+            cell.set_style(style::border(focused));
         }
     }
     for (x, symbol) in [
@@ -40,7 +40,7 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer) {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
             cell.set_symbol(symbol);
-            cell.set_style(style::border(false));
+            cell.set_style(style::border(focused));
         }
     }
 }

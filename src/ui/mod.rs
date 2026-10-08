@@ -653,7 +653,7 @@ fn render_agents_header(frame: &mut Frame<'_>, row: Rect, button: Rect) {
         if let Some(cell) = buf.cell_mut((label_area.x + offset as u16, row.y)) {
             cell.reset();
             cell.set_char(symbol);
-            cell.set_style(style::muted());
+            cell.set_style(style::border_title());
         }
     }
 }
@@ -743,19 +743,25 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         return None;
     }
     let focused = state.prompt_focused;
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::border(focused))
         .title(Span::styled(
-            format!(" {} ", prompt_title(state)),
+            format!(" {} ", text::PROMPT_TITLE),
             style::border_title(),
         ));
+    if let Some(name) = workspace_path_name(state) {
+        let label = format!(" {}{name} ", text::PROMPT_WORKSPACE_PREFIX);
+        block = block.title_top(
+            Line::from(Span::styled(label, style::border_title())).alignment(Alignment::Right),
+        );
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
-    prompt::render_header(area, frame.buffer_mut(), &state.prompt);
+    prompt::render_header(area, frame.buffer_mut(), &state.prompt, focused);
     render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
     prompt::render(
@@ -774,10 +780,10 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     ))
 }
 
-/// prompt 边框标题：`Prompt - 路径末段名`；优先 checkout 路径，回退工作区 cwd，
-/// 无可用路径时仅 `Prompt`。
-fn prompt_title(state: &AppState) -> String {
-    let name = state
+/// 激活工作区路径末段名：优先 checkout 路径，回退工作区 cwd；
+/// 无可用路径或路径无末段时为 None。
+fn workspace_path_name(state: &AppState) -> Option<&str> {
+    state
         .workspaces
         .get(state.active_workspace)
         .and_then(|workspace| {
@@ -789,11 +795,7 @@ fn prompt_title(state: &AppState) -> String {
         })
         .and_then(Path::file_name)
         .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty());
-    match name {
-        Some(name) => format!("{} - {name}", text::PROMPT_TITLE),
-        None => text::PROMPT_TITLE.to_string(),
-    }
+        .filter(|name| !name.is_empty())
 }
 
 /// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。
@@ -817,8 +819,8 @@ fn prompt_scrollbar_for(
     )
 }
 
-/// prompt 底边框左侧 git 状态：`⑂ 分支`（linked worktree 显示仓库主 checkout 分支），
-/// linked worktree 追加 ` -wt:工作区名`；非 git 不显示，右端避让折叠按钮。
+/// prompt 底边框左侧 git 状态：`b:分支`（linked worktree 显示仓库主 checkout 分支），
+/// linked worktree 追加 ` wt:工作区名`；非 git 不显示，右端避让折叠按钮。
 fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let Some(workspace) = state.workspaces.get(state.active_workspace) else {
         return;
@@ -853,8 +855,8 @@ fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppSta
     );
 }
 
-/// 底边框分支状态片段：`⑂ 分支` 与 linked worktree 的 ` -wt:工作区名`；
-/// 工作区名按剩余宽度截断，放不下时省略 `-wt` 片段。
+/// 底边框分支状态片段：`b:分支` 与 linked worktree 的 ` wt:工作区名`；
+/// 工作区名按剩余宽度截断，放不下时省略 `wt:` 片段。
 fn branch_status_spans(
     branch: Option<&str>,
     worktree: Option<&str>,
@@ -862,12 +864,12 @@ fn branch_status_spans(
 ) -> Vec<(String, Style)> {
     let mut spans = vec![(" ".to_string(), style::muted())];
     if let Some(branch) = branch {
-        spans.push((text::WORKSPACE_GIT_ICON.to_string(), style::accent()));
-        spans.push((format!(" {branch}"), style::muted()));
+        spans.push((text::PROMPT_BRANCH_PREFIX.to_string(), style::accent()));
+        spans.push((branch.to_string(), style::muted()));
     }
     if let Some(worktree) = worktree {
         let separator = if branch.is_some() { " " } else { "" };
-        let prefix = format!("{separator}-wt:");
+        let prefix = format!("{separator}{}", text::PROMPT_WORKTREE_PREFIX);
         let used = spans_width(&spans).saturating_add(prefix.len());
         if used < available {
             spans.push((prefix, style::accent()));

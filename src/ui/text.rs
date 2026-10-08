@@ -8,8 +8,14 @@ pub const SIDEBAR_TITLE: &str = "Workspaces";
 pub const SIDEBAR_AGENTS_TITLE: &str = "Agents";
 pub const MIN_SIZE_HINT: &str = "terminal too small";
 
-/// prompt 面板边框标题；渲染时追加 ` - 路径末段名`。
+/// prompt 面板边框标题；路径末段名以 `ws:` 前缀渲染在顶边框右侧。
 pub const PROMPT_TITLE: &str = "Prompt";
+/// prompt 底边框分支前缀。
+pub const PROMPT_BRANCH_PREFIX: &str = "b:";
+/// prompt 顶边框右侧的工作区路径名前缀。
+pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
+/// prompt 底边框 linked worktree 标记前缀。
+pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[undo]";
 pub const PROMPT_REDO_LABEL: &str = "[redo]";

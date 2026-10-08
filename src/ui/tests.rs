@@ -266,6 +266,12 @@ fn agents_header_is_left_aligned_without_junctions() {
     let rendered: String = row[start..start + label.chars().count()].iter().collect();
     assert_eq!(rendered, label);
 
+    // 标题与其他边框标题同色（淡蓝色）。
+    let buffer = render_buffer(&state);
+    let cell = &buffer[(sections.divider.x + 1, sections.divider.y)];
+    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
+
     let top: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
     let workspaces_start = top
         .iter()
@@ -1099,11 +1105,11 @@ fn prompt_bottom_shows_branch_and_worktree_only() {
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
     let view = view_for(&state);
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("⑂ main"), "{bottom}");
-    assert!(!bottom.contains("-wt:"), "{bottom}");
+    assert!(bottom.contains("b:main"), "{bottom}");
+    assert!(!bottom.contains("wt:"), "{bottom}");
     assert!(!bottom.contains("/repo"), "不显示项目路径: {bottom}");
 
-    // linked worktree：显示仓库主 checkout 分支 + ` -wt:工作区名`，不显示自身分支。
+    // linked worktree：显示仓库主 checkout 分支 + ` wt:工作区名`，不显示自身分支。
     state.workspaces[0].git = Some(WorkspaceGit {
         repo_root: PathBuf::from("/repo"),
         checkout_path: PathBuf::from("/repo/.worktrees/work"),
@@ -1112,8 +1118,9 @@ fn prompt_bottom_shows_branch_and_worktree_only() {
         main_branch: Some("dev".to_string()),
     });
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("⑂ dev"), "{bottom}");
-    assert!(bottom.contains("-wt:work"), "{bottom}");
+    assert!(bottom.contains("b:dev"), "{bottom}");
+    assert!(bottom.contains("wt:work"), "{bottom}");
+    assert!(!bottom.contains("-wt:"), "不再使用 -wt: 标记: {bottom}");
     assert!(
         !bottom.contains("feat/"),
         "不显示 worktree 自身分支: {bottom}"
@@ -1122,17 +1129,30 @@ fn prompt_bottom_shows_branch_and_worktree_only() {
     // 非 git 不显示任何状态。
     state.workspaces[0].git = None;
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(!bottom.contains("⑂"), "{bottom}");
-    assert!(!bottom.contains("-wt:"), "{bottom}");
+    assert!(!bottom.contains("b:"), "{bottom}");
+    assert!(!bottom.contains("wt:"), "{bottom}");
 }
 
 #[test]
-fn prompt_title_appends_path_last_segment() {
+fn prompt_title_moves_path_name_to_top_right() {
     let mut state = AppState::demo();
     state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
     let view = view_for(&state);
     let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("Prompt - lx-tui"), "{top}");
+    assert!(top.contains(text::PROMPT_TITLE), "{top}");
+    assert!(top.contains("ws:lx-tui"), "{top}");
+    assert!(!top.contains(" - "), "路径名不再跟在标题后: {top}");
+    let chars: Vec<char> = top.chars().collect();
+    let label: Vec<char> = "ws:lx-tui".chars().collect();
+    let label_start = chars
+        .windows(label.len())
+        .position(|window| window == label.as_slice())
+        .expect("ws 标签已渲染");
+    assert_eq!(
+        chars.len() - label_start - label.len(),
+        2,
+        "ws 标签贴右上角（后接空格与右边框）: {top}"
+    );
 
     // linked worktree：取 checkout 路径末段，而非工作区 cwd 子目录。
     state.workspaces[0].git = Some(WorkspaceGit {
@@ -1144,18 +1164,18 @@ fn prompt_title_appends_path_last_segment() {
     });
     state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/work/src"));
     let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("Prompt - work"), "{top}");
+    assert!(top.contains("ws:work"), "{top}");
 
-    // 非 git 回退工作区 cwd；无路径时仅 `Prompt`。
+    // 非 git 回退工作区 cwd；无路径时无 `ws:` 片段。
     state.workspaces[0].git = None;
     state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
     let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("Prompt - plain"), "{top}");
+    assert!(top.contains("ws:plain"), "{top}");
 
     state.workspaces[0].cwd = None;
     let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
     assert!(top.contains(text::PROMPT_TITLE), "{top}");
-    assert!(!top.contains(" - "), "{top}");
+    assert!(!top.contains("ws:"), "{top}");
 }
 
 #[test]
