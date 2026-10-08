@@ -598,12 +598,16 @@ fn slash_filter_ranks_short_and_long_aliases() {
 fn slash_template_content_matches_protocol_and_cursor() {
     for id in SlashCommandId::ALL {
         let (content, cursor) = slash_template_content(id);
-        let start = format!("&&& {} --start 「title: 」", id.long_name());
+        let start = format!("&&& {} --start\n「title: 」", id.long_name());
         let end = format!("&&& {} --end", id.long_name());
         assert!(content.starts_with(&start), "{content}");
         assert!(content.ends_with(&end), "{content}");
         assert_eq!(content.as_bytes().get(cursor - 1), Some(&b' '));
         assert!(content[cursor..].starts_with('」'), "光标落在 」 之前");
+        assert!(
+            parse_template_start_line(content.lines().next().expect("start line")).is_some(),
+            "起止行仍是合法开始行"
+        );
     }
     let (add, _) = slash_template_content(SlashCommandId::Add);
     assert!(add.contains("# Add Requirement"));
@@ -745,6 +749,36 @@ fn clean_template_content_preserves_subblocks_and_collapses_blanks() {
     assert!(cleaned.contains("- Requirements: \n  - \n+++ suppleTemplate --end"));
     assert!(!cleaned.contains("\n\n\n"), "折叠多余空行");
     assert!(cleaned.ends_with("- Location: x"));
+}
+
+#[test]
+fn copy_template_content_strips_supple_and_log_markers() {
+    let content = "「title: 标题」\n# Add Requirement\n\n+++ suppleTemplate --start 「title: 」\n- Extra: keep out\n+++ suppleTemplate --end\n%%% logTemplate --start 「title: 」\n- Time: 10:00\n%%% logTemplate --end\n- Location: here";
+    let copied = copy_template_content(content);
+    assert!(copied.starts_with("「title: 标题」\n# Add Requirement"));
+    assert!(!copied.contains("suppleTemplate"), "{copied}");
+    assert!(!copied.contains("Extra"), "补充子块内容整体剔除: {copied}");
+    assert!(!copied.contains("%%%"), "记录子块标记剔除: {copied}");
+    assert!(
+        copied.contains("- Time: 10:00"),
+        "记录子块内容保留: {copied}"
+    );
+    assert!(copied.ends_with("- Location: here"));
+}
+
+#[test]
+fn copy_template_content_drops_comments_and_unfilled_items() {
+    let content =
+        "# Add\n// 注释行\n- Reference: \n  // 子注释\n- Location: here\n- Requirements: \n  - \n";
+    let copied = copy_template_content(content);
+    assert_eq!(copied, "# Add\n- Location: here");
+}
+
+#[test]
+fn copy_template_content_keeps_legacy_log_blocks() {
+    let content = "- Location: x\n+++ log --start\n- Records: a\n+++ log --end";
+    let copied = copy_template_content(content);
+    assert_eq!(copied, "- Location: x\n- Records: a");
 }
 
 #[test]

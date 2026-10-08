@@ -1278,7 +1278,7 @@ fn template_block_body_extracts_inner_content() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);
     let body = prompt.template_block_body(0).expect("body");
-    assert!(body.starts_with("# Add Requirement"));
+    assert!(body.starts_with("「title: 」\n# Add Requirement"), "{body}");
     assert!(body.ends_with("- Notes: \n  - "));
     assert!(!body.contains("&&&"));
     assert_eq!(prompt.template_block_body(1), None);

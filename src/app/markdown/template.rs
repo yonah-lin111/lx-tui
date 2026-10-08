@@ -368,6 +368,60 @@ pub fn clean_template_content(text: &str) -> String {
         .to_string()
 }
 
+/// 复制用正文（对齐 lx-agent 的复制语义，不修改原文）：
+/// 剔除 `+++` 补充子块（含内部内容）、保留 `%%%` 记录子块内容但剔除其起止标记行、
+/// 剔除 `//` 注释行，最后清理未填写空项。
+pub fn copy_template_content(text: &str) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    let mut inside_supple = false;
+    for line in text.split('\n') {
+        if let Some(kind) = copy_subblock_start(line) {
+            if kind == CopySubblock::Supple {
+                inside_supple = true;
+            }
+            continue;
+        }
+        if inside_supple {
+            if subblock_end(line) {
+                inside_supple = false;
+            }
+            continue;
+        }
+        if subblock_end(line) || is_comment_line(line) {
+            continue;
+        }
+        kept.push(line);
+    }
+    clean_template_content(&kept.join("\n"))
+}
+
+/// 复制语义下的子块类型：`+++` 补充块整体剔除；`%%%` 记录块保留内容、剔除标记。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CopySubblock {
+    Supple,
+    Log,
+}
+
+/// 子块起始行类型；`+++ log`/`+++ logTemplate` 为旧版记录块，按 log 处理（对齐 lx-agent）。
+fn copy_subblock_start(line: &str) -> Option<CopySubblock> {
+    let mut tokens = line.split_whitespace();
+    let marker = tokens.next()?;
+    let name = tokens.next()?;
+    if !tokens.any(|token| token == "--start") {
+        return None;
+    }
+    match (marker, name) {
+        ("%%%", _) | ("+++", "log" | "logTemplate") => Some(CopySubblock::Log),
+        ("+++", _) => Some(CopySubblock::Supple),
+        _ => None,
+    }
+}
+
+/// `//` 注释行（允许前置缩进）。
+fn is_comment_line(line: &str) -> bool {
+    line.trim_start().starts_with("//")
+}
+
 /// 列表项：缩进宽度与去空白后的项体。
 struct TemplateListItem<'a> {
     indent: usize,

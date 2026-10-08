@@ -133,6 +133,8 @@ fn slash_score(id: SlashCommandId, query: &str) -> u32 {
 }
 
 /// 标准模板文本与光标偏移（偏移相对模板起点，落在 `「title: 」` 的 `」` 之前）。
+///
+/// 标题占位符独立成行（`--start` 的下一行行首），避免与起止行标记和操作按钮挤在一行。
 pub fn slash_template_content(id: SlashCommandId) -> (&'static str, usize) {
     let content = match id {
         SlashCommandId::Add => ADD_TEMPLATE,
@@ -144,15 +146,15 @@ pub fn slash_template_content(id: SlashCommandId) -> (&'static str, usize) {
     (content, title_cursor(content))
 }
 
-const ADD_TEMPLATE: &str = "&&& addTemplate --start 「title: 」\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
+const ADD_TEMPLATE: &str = "&&& addTemplate --start\n「title: 」\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
 
-const BUG_TEMPLATE: &str = "&&& bugTemplate --start 「title: 」\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
+const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n「title: 」\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
 
-const COMMON_TEMPLATE: &str = "&&& commonTemplate --start 「title: 」\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
+const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n「title: 」\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
 
-const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start 「title: 」\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
+const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n「title: 」\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
 
-const STYLE_TEMPLATE: &str = "&&& styleTemplate --start 「title: 」\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
+const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n「title: 」\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
 
 /// 标题占位符内的光标偏移：`「title: 」` 的 `」` 前；无占位符回退文末。
 fn title_cursor(content: &str) -> usize {

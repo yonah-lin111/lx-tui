@@ -190,6 +190,19 @@ fn template_start_line_tokens_split_by_semantics() {
 }
 
 #[test]
+fn template_title_on_own_line_is_styled_inside_block() {
+    let lines = summarize(
+        "&&& addTemplate --start\n「title: 」\n# Add\n&&& addTemplate --end\n「title: 」",
+    );
+    assert_eq!(
+        lines[1],
+        vec![(TokenKind::TemplateTitle, "「title: 」")],
+        "块内独立标题行高亮"
+    );
+    assert!(lines[4].is_empty(), "块外同名行不高亮: {:?}", lines[4]);
+}
+
+#[test]
 fn template_end_line_tokens_include_status_and_metadata() {
     assert_eq!(
         kinds("&&& bugTemplate --end done {id:abc}"),

@@ -37,13 +37,14 @@ pub struct Token {
 /// 扫描全文，返回每条逻辑行的 token，与 `text.split('\n')` 一一对应。
 pub fn scan(text: &str) -> Vec<Vec<Token>> {
     let mut fence = false;
+    let mut template = false;
     text.split('\n')
-        .map(|line| scan_line(line, &mut fence))
+        .map(|line| scan_line(line, &mut fence, &mut template))
         .collect()
 }
 
-/// 扫描单行；`fence` 为跨行围栏代码块状态。
-fn scan_line(line: &str, fence: &mut bool) -> Vec<Token> {
+/// 扫描单行；`fence` 为跨行围栏代码块状态，`template` 为模板块状态。
+fn scan_line(line: &str, fence: &mut bool, template: &mut bool) -> Vec<Token> {
     let mut tokens = Vec::new();
     if is_fence(line) {
         *fence = !*fence;
@@ -55,9 +56,15 @@ fn scan_line(line: &str, fence: &mut bool) -> Vec<Token> {
         return tokens;
     }
     if scan_template_end(line, &mut tokens) {
+        *template = false;
         return tokens;
     }
     if scan_template_start(line, &mut tokens) {
+        *template = true;
+        return tokens;
+    }
+    if *template && let Some(range) = standalone_title(line) {
+        push(&mut tokens, range, TokenKind::TemplateTitle);
         return tokens;
     }
     if let Some(marker_end) = heading(line) {
@@ -112,6 +119,19 @@ fn scan_template_start(line: &str, tokens: &mut Vec<Token>) -> bool {
         );
     }
     true
+}
+
+/// 模板块内独立成行的标题占位符 `「title: …」` 区间（允许缩进与尾随空白）；
+/// 用于 `--start` 下一行行首的标题行高亮。
+fn standalone_title(line: &str) -> Option<Range<usize>> {
+    let start = line.len() - line.trim_start().len();
+    let rest = &line[start..];
+    if !rest.starts_with("「title:") {
+        return None;
+    }
+    let close = rest.find('」')?;
+    let end = start + close + '」'.len_utf8();
+    line[end..].trim().is_empty().then_some(start..end)
 }
 
 /// 模板块结束行 token：`&&&`、`--end`、状态词与 `{id:}`/`{wt:}` 元数据为结构标记，

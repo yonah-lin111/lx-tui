@@ -2857,13 +2857,13 @@ fn slash_panel_keys_are_consumed_before_editing() {
     apply_editor(&mut state, EditorCommand::InsertChar('a'));
     assert!(state.prompt.slash_panel().is_some());
 
-    // 回车确认插入标准模板块。
+    // 回车确认插入标准模板块（标题占位符独立成行）。
     apply_editor(&mut state, EditorCommand::Newline);
     assert!(
         state
             .prompt
             .text()
-            .starts_with("&&& addTemplate --start 「title: 」")
+            .starts_with("&&& addTemplate --start\n「title: 」")
     );
     assert!(state.prompt.slash_panel().is_none());
 }

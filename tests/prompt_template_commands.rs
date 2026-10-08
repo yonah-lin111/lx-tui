@@ -90,7 +90,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(state.prompt.text(), content);
     assert!(state.prompt.slash_panel().is_none());
 
-    // 高亮：命令名绿色加粗、标题 Yellow 下划线；块边框 todo 靛蓝。
+    // 高亮：命令名绿色加粗；标题独立成行 Yellow 下划线；块边框 todo 靛蓝。
     let terminal = draw(&state, &config);
     let start_row = area.y;
     let row = line_text(&terminal, start_row);
@@ -107,8 +107,12 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     let command = &terminal.backend().buffer()[(command_x, start_row)];
     assert_eq!(command.fg, Color::Green, "row={row:?}");
     assert!(command.modifier.contains(Modifier::BOLD));
-    let title_x = cell_x(&row, "「");
-    let title = &terminal.backend().buffer()[(title_x, start_row)];
+    assert!(!row.contains('「'), "标题不在起始行: {row}");
+
+    let title_row = line_text(&terminal, start_row + 1);
+    assert!(title_row.contains("「 title: 」"), "{title_row}");
+    let title_x = cell_x(&title_row, "「");
+    let title = &terminal.backend().buffer()[(title_x, start_row + 1)];
     assert_eq!(title.fg, Color::Yellow);
     assert!(title.modifier.contains(Modifier::UNDERLINED));
 
@@ -184,9 +188,9 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     let (content, _) = slash_template_content(SlashCommandId::Add);
     update::apply_editor(&mut state, EditorCommand::InsertText(content.into()));
 
-    // 复制正文不修改文本。
+    // 复制正文不修改文本（标题占位行保留）。
     let body = update::copy_template_block(&mut state, 0).expect("body");
-    assert!(body.starts_with("# Add Requirement"));
+    assert!(body.starts_with("「title: 」\n# Add Requirement"), "{body}");
     assert!(!body.contains("&&&"));
 
     // 状态按钮 todo → in_progress，渲染出 [run]。
