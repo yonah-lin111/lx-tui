@@ -1127,6 +1127,38 @@ fn prompt_bottom_shows_branch_and_worktree_only() {
 }
 
 #[test]
+fn prompt_title_appends_path_last_segment() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    let view = view_for(&state);
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("Prompt - lx-tui"), "{top}");
+
+    // linked worktree：取 checkout 路径末段，而非工作区 cwd 子目录。
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/.worktrees/work"),
+        is_linked: true,
+        branch: Some("feat/x".to_string()),
+        main_branch: Some("main".to_string()),
+    });
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/work/src"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("Prompt - work"), "{top}");
+
+    // 非 git 回退工作区 cwd；无路径时仅 `Prompt`。
+    state.workspaces[0].git = None;
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("Prompt - plain"), "{top}");
+
+    state.workspaces[0].cwd = None;
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains(text::PROMPT_TITLE), "{top}");
+    assert!(!top.contains(" - "), "{top}");
+}
+
+#[test]
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);

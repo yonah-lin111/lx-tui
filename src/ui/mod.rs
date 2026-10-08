@@ -747,7 +747,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         .border_type(BorderType::Rounded)
         .border_style(style::border(focused))
         .title(Span::styled(
-            format!(" {} ", text::PROMPT_TITLE),
+            format!(" {} ", prompt_title(state)),
             style::border_title(),
         ));
     let inner = block.inner(area);
@@ -772,6 +772,28 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         text_area.x + col.min(text_area.width.saturating_sub(1)),
         text_area.y + row,
     ))
+}
+
+/// prompt 边框标题：`Prompt - 路径末段名`；优先 checkout 路径，回退工作区 cwd，
+/// 无可用路径时仅 `Prompt`。
+fn prompt_title(state: &AppState) -> String {
+    let name = state
+        .workspaces
+        .get(state.active_workspace)
+        .and_then(|workspace| {
+            workspace
+                .git
+                .as_ref()
+                .map(|git| git.checkout_path.as_path())
+                .or(workspace.cwd.as_deref())
+        })
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty());
+    match name {
+        Some(name) => format!("{} - {name}", text::PROMPT_TITLE),
+        None => text::PROMPT_TITLE.to_string(),
+    }
 }
 
 /// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。

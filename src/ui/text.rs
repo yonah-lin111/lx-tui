@@ -8,8 +8,8 @@ pub const SIDEBAR_TITLE: &str = "Workspaces";
 pub const SIDEBAR_AGENTS_TITLE: &str = "Agents";
 pub const MIN_SIZE_HINT: &str = "terminal too small";
 
-/// prompt 占位窗格。
-pub const PROMPT_TITLE: &str = "prompt";
+/// prompt 面板边框标题；渲染时追加 ` - 路径末段名`。
+pub const PROMPT_TITLE: &str = "Prompt";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[undo]";
 pub const PROMPT_REDO_LABEL: &str = "[redo]";
