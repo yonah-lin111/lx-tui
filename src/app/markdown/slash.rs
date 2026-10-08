@@ -94,7 +94,8 @@ pub fn slash_trigger(text: &str, cursor: usize) -> Option<SlashTrigger> {
     })
 }
 
-/// 按查询过滤命令：短名/长名双向匹配；空查询返回全部，排序稳定按打分降序。
+/// 按查询过滤命令：短名/长名双向匹配，支持子序列模糊匹配（`cmm` → `common`）；
+/// 空查询返回全部，排序稳定按打分降序。
 pub fn slash_filter(query: &str) -> Vec<SlashCommandId> {
     let query = query.to_lowercase();
     let mut scored: Vec<(u32, SlashCommandId)> = SlashCommandId::ALL
@@ -108,7 +109,8 @@ pub fn slash_filter(query: &str) -> Vec<SlashCommandId> {
     scored.into_iter().map(|(_, id)| id).collect()
 }
 
-/// 短名/长名匹配打分：精确 > 短名前缀 > 长名前缀 > 包含。
+/// 短名优先的模糊打分；分层与数值对齐 `mention_score`（文件名优先）：
+/// 精确 > 短名前缀 > 长名前缀 > 短名包含 > 短名子序列 > 长名包含 > 长名子序列。
 fn slash_score(id: SlashCommandId, query: &str) -> u32 {
     if query.is_empty() {
         return 1;
@@ -116,20 +118,30 @@ fn slash_score(id: SlashCommandId, query: &str) -> u32 {
     let short = id.short_name();
     let long = id.long_name().to_lowercase();
     if short == query {
-        5000
-    } else if long == query {
-        4500
-    } else if short.starts_with(query) {
-        3000
-    } else if long.starts_with(query) {
-        2500
-    } else if short.contains(query) {
-        1500
-    } else if long.contains(query) {
-        1000
-    } else {
-        0
+        return 5000;
     }
+    if long == query {
+        return 4000;
+    }
+    if short.starts_with(query) {
+        return 3000;
+    }
+    if long.starts_with(query) {
+        return 2000;
+    }
+    if short.contains(query) {
+        return 1800;
+    }
+    if let Some(span) = super::subsequence_span(short, query) {
+        return 1200.max(1500_u32.saturating_sub(span * 10));
+    }
+    if long.contains(query) {
+        return 800;
+    }
+    if let Some(span) = super::subsequence_span(&long, query) {
+        return 100.max(500_u32.saturating_sub(span));
+    }
+    0
 }
 
 /// 标准模板文本与光标偏移（偏移相对模板起点，落在 `「title: 」` 的 `」` 之前）。

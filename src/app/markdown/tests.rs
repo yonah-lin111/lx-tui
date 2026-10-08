@@ -595,6 +595,19 @@ fn slash_filter_ranks_short_and_long_aliases() {
 }
 
 #[test]
+fn slash_filter_matches_subsequence_like_mentions() {
+    assert_eq!(slash_filter("cmm"), vec![SlashCommandId::Common]);
+    assert_eq!(slash_filter("cmn"), vec![SlashCommandId::Common]);
+    assert_eq!(slash_filter("rf"), vec![SlashCommandId::Refactor]);
+    assert_eq!(slash_filter("st"), vec![SlashCommandId::Style]);
+    assert_eq!(
+        slash_filter("common"),
+        vec![SlashCommandId::Common],
+        "精确短名优先"
+    );
+}
+
+#[test]
 fn slash_template_content_matches_protocol_and_cursor() {
     for id in SlashCommandId::ALL {
         let (content, cursor) = slash_template_content(id);
