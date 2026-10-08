@@ -130,7 +130,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
             }
             assert_eq!(
                 terminal.backend().buffer()[(x, y)].bg,
-                Color::Indexed(17),
+                Color::Rgb(35, 40, 56),
                 "todo 整块底色 ({x},{y})"
             );
         }
@@ -155,7 +155,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
         }
         assert_eq!(
             terminal.backend().buffer()[(x, start_row)].bg,
-            Color::Indexed(58),
+            Color::Rgb(51, 41, 28),
             "in_progress 整块底色 ({x})"
         );
     }

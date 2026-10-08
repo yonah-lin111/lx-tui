@@ -96,7 +96,11 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
         EditorCommand::Indent => state.prompt.indent(),
-        EditorCommand::Outdent => state.prompt.outdent(),
+        EditorCommand::Outdent => {
+            if !state.prompt.cycle_template_status_at_cursor() {
+                state.prompt.outdent();
+            }
+        }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
         EditorCommand::Escape => {}

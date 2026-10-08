@@ -19,6 +19,16 @@ impl Prompt {
         Some(markdown::copy_template_content(&body))
     }
 
+    /// 光标在模板块内时循环块状态（todo → in_progress → done）；返回是否已处理。
+    ///
+    /// 对齐 lx-agent `Shift-Tab`：不在块内返回 false，由调用方回退为反缩进。
+    pub fn cycle_template_status_at_cursor(&mut self) -> bool {
+        let Some(start) = markdown::template_block_start_at(&self.text, self.cursor) else {
+            return false;
+        };
+        self.toggle_template_status(start)
+    }
+
     /// 清理模板块内未填写的空项（单步撤销）；返回是否产生变更。
     pub fn clean_template_block(&mut self, start_line: usize) -> bool {
         let Some(range) = markdown::parse_template_block_at_line(&self.text, start_line) else {

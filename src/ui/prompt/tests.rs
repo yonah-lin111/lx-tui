@@ -660,15 +660,15 @@ fn template_block_paints_status_background() {
     let cases = [
         (
             "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end",
-            Color::Indexed(17),
+            Color::Rgb(35, 40, 56),
         ),
         (
             "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
-            Color::Indexed(58),
+            Color::Rgb(51, 41, 28),
         ),
         (
             "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end done",
-            Color::Indexed(22),
+            Color::Rgb(29, 46, 36),
         ),
     ];
     for (text, bg) in cases {
@@ -697,7 +697,7 @@ fn template_block_background_skips_selected_cells() {
     render(area, &mut buf, &editor, Some(&selection));
     assert_eq!(buf[(5, 1)].bg, Color::Reset, "选区格不铺块底色");
     assert!(buf[(5, 1)].modifier.contains(Modifier::REVERSED));
-    assert_eq!(buf[(20, 1)].bg, Color::Indexed(58), "非选区格铺块底色");
+    assert_eq!(buf[(20, 1)].bg, Color::Rgb(51, 41, 28), "非选区格铺块底色");
 }
 
 #[test]

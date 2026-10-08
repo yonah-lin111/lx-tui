@@ -205,14 +205,14 @@ pub fn template_border(status: TemplateStatus) -> Style {
     }
 }
 
-/// 模板块整行底色：按状态铺暗色底（todo 藏青 / in_progress 暗琥珀 / done 暗绿）。
+/// 模板块整行底色：按状态铺低饱和暗色底（todo 暗灰蓝 / in_progress 暗灰琥珀 / done 暗灰绿）。
 ///
-/// 只设置背景，前景与修饰符由各单元格自身样式决定。
+/// 固定 RGB，不受终端 256 色主题映射影响；只设置背景，前景与修饰符由各单元格自身样式决定。
 pub fn template_block_bg(status: TemplateStatus) -> Style {
     let color = match status {
-        TemplateStatus::Todo => Color::Indexed(17),
-        TemplateStatus::InProgress => Color::Indexed(58),
-        TemplateStatus::Done => Color::Indexed(22),
+        TemplateStatus::Todo => Color::Rgb(35, 40, 56),
+        TemplateStatus::InProgress => Color::Rgb(51, 41, 28),
+        TemplateStatus::Done => Color::Rgb(29, 46, 36),
     };
     Style::default().bg(color)
 }

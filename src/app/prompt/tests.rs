@@ -1297,6 +1297,30 @@ fn copy_text_at_cursor_extracts_block_without_title() {
 }
 
 #[test]
+fn cycle_status_at_cursor_cycles_inside_block() {
+    let mut editor = prompt(60, 20);
+    with_add_template(&mut editor);
+    assert!(editor.cycle_template_status_at_cursor());
+    assert!(
+        editor.text().contains("--end in_progress"),
+        "{}",
+        editor.text()
+    );
+    assert!(editor.cycle_template_status_at_cursor());
+    assert!(editor.text().contains("--end done"), "{}", editor.text());
+    assert!(editor.cycle_template_status_at_cursor());
+    assert!(
+        editor.text().trim_end().ends_with("--end"),
+        "回到 todo：{}",
+        editor.text()
+    );
+
+    let mut plain = prompt(40, 8);
+    type_text(&mut plain, "plain");
+    assert!(!plain.cycle_template_status_at_cursor(), "不在块内不处理");
+}
+
+#[test]
 fn clean_template_block_removes_empty_items_and_undoes_once() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);

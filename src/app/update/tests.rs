@@ -120,6 +120,38 @@ fn editor_commands_apply_undo_redo_indent_and_list_newline() {
 }
 
 #[test]
+fn shift_tab_cycles_template_status_inside_block_else_outdents() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText(
+            "&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end".into(),
+        ),
+    );
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().contains("--end in_progress"),
+        "{}",
+        state.prompt.text()
+    );
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().contains("--end done"),
+        "{}",
+        state.prompt.text()
+    );
+
+    apply_editor(&mut state, EditorCommand::InsertText("\n  x".into()));
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().ends_with("x"),
+        "块外反缩进：{}",
+        state.prompt.text()
+    );
+}
+
+#[test]
 fn scroll_prompt_moves_viewport_only() {
     let mut state = AppState::demo();
     state.prompt.resize(10, 2);
