@@ -750,7 +750,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
             format!(" {} ", text::PROMPT_TITLE),
             style::border_title(),
         ));
-    if let Some(name) = workspace_path_name(state) {
+    if let Some(name) = prompt_path_name(state) {
         // 前缀与值分色，与底边框 `b:分支` 一致：前缀强调色、值 muted。
         let label = Line::from(vec![
             Span::styled(" ", style::muted()),
@@ -783,6 +783,17 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         text_area.x + col.min(text_area.width.saturating_sub(1)),
         text_area.y + row,
     ))
+}
+
+/// Prompt 顶栏路径名：优先显式绑定根路径末段，回退激活工作区路径末段。
+fn prompt_path_name(state: &AppState) -> Option<&str> {
+    state
+        .prompt_root
+        .as_deref()
+        .and_then(Path::file_name)
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .or_else(|| workspace_path_name(state))
 }
 
 /// 激活工作区路径末段名：优先 checkout 路径，回退工作区 cwd；

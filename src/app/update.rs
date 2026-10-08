@@ -18,8 +18,8 @@ use crate::layout::{self, BoundaryHit, PaneId};
 use super::actions::{Action, EditorCommand, OverlayKey};
 use super::markdown::MentionEntry;
 use super::overlay::{
-    ConfirmClose, Menu, MenuCommand, Overlay, OverlayKind, OverlayTarget, Rename, RenameTarget,
-    TextInput,
+    ConfirmClose, ConfirmSwitchCwd, Menu, MenuCommand, Overlay, OverlayKind, OverlayTarget, Rename,
+    RenameTarget, TextInput,
 };
 use super::selection::Selection;
 use super::state::{
@@ -140,9 +140,12 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     }
 }
 
-/// 把活动工作区 cwd 同步为提及扫描根；根变化时 Prompt 内缓存失效。
+/// 把 prompt 的上下文根同步为提及扫描根：显式绑定路径优先，回退活动工作区 cwd。
 fn sync_mention_root(state: &mut AppState) {
-    let root = state.active_workspace().cwd.clone();
+    let root = state
+        .prompt_root
+        .clone()
+        .or_else(|| state.active_workspace().cwd.clone());
     state.prompt.set_mention_root(root);
 }
 
@@ -786,34 +789,96 @@ pub fn create_workspace(state: &mut AppState) {
     state.prompt_focused = false;
 }
 
-/// 跟踪窗格 cwd 变化：更新工作区 cwd（自动命名时同步改名，手动命名只更新目录）；返回是否变化。
-pub fn update_workspace_cwd(state: &mut AppState, index: usize, cwd: &Path) -> bool {
-    let Some(workspace) = state.workspaces.get(index) else {
-        return false;
+/// 在目标工作区追加终端标签并激活：初始 cwd 为工作区固定根路径，直接进入终端视图；
+/// PTY 由事件循环按状态对齐启动。
+pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
+    let Some(workspace) = state.workspaces.get_mut(target) else {
+        return;
     };
-    if workspace.cwd.as_deref() == Some(cwd) {
-        return false;
+    let mut tab = Tab::single_terminal();
+    if let Some(id) = tab.root_pane()
+        && let Some(pane) = tab.pane_mut(id)
+    {
+        pane.view = PaneView::Terminal;
     }
-    let name = if workspace.name_is_manual {
-        None
-    } else {
-        let base = workspace_label(cwd, home_dir().as_deref());
-        Some(unique_workspace_name(&base, |candidate| {
-            state
-                .workspaces
-                .iter()
-                .enumerate()
-                .any(|(other, workspace)| other != index && workspace.name == candidate)
-        }))
+    workspace.tabs.push(tab);
+    workspace.active_tab = workspace.tabs.len().saturating_sub(1);
+    state.active_workspace = target;
+    clear_selection(state);
+    state.prompt_focused = false;
+}
+
+/// 打开 Prompt 并绑定工作区路径：切换激活目标工作区，展开并聚焦；
+/// 提及扫描根与顶栏路径名随显式绑定根显示。
+pub fn open_prompt_for_workspace(state: &mut AppState, target: usize) {
+    let Some(root) = state
+        .workspaces
+        .get(target)
+        .map(|workspace| workspace.cwd.clone())
+    else {
+        return;
     };
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
+    switch_workspace(state, target);
+    state.prompt_root = root;
+    state.prompt_collapsed = false;
+    focus_prompt(state);
+}
+
+/// 打开 Prompt 并绑定窗格 cwd：保持当前工作区，展开并聚焦；
+/// 窗格尚未轮询到 cwd 时回退工作区路径。
+pub fn open_prompt_for_pane(state: &mut AppState, pane: PaneId) {
+    let root = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.cwd.clone())
+        .or_else(|| state.active_workspace().cwd.clone());
+    state.prompt_root = root;
+    state.prompt_collapsed = false;
+    focus_prompt(state);
+}
+
+/// 打开切换工作区路径的二次确认浮层；工作区无固定路径时忽略。
+fn open_confirm_switch_cwd(state: &mut AppState, workspace: usize, tab: usize, pane: PaneId) {
+    let Some(path) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.cwd.clone())
+    else {
+        return;
     };
-    workspace.cwd = Some(cwd.to_path_buf());
-    if let Some(name) = name {
-        workspace.name = name;
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace,
+        tab,
+        pane,
+        path,
+    }));
+}
+
+/// 切换工作区路径的 shell 命令：双引号包裹并转义 `\`、`"`、`$` 与反引号，杜绝命令注入。
+fn switch_cwd_command(path: &Path) -> Vec<u8> {
+    let mut command = String::from("cd \"");
+    for ch in path.to_string_lossy().chars() {
+        if matches!(ch, '\\' | '"' | '$' | '`') {
+            command.push('\\');
+        }
+        command.push(ch);
     }
-    true
+    command.push_str("\"\n");
+    command.into_bytes()
+}
+
+/// 确认切换工作区路径：关闭浮层并返回写入目标窗格的 `cd` 命令；
+/// 目标窗格已不存在或非终端时返回 None。
+fn confirm_switch_cwd(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
+    let Some(Overlay::ConfirmSwitchCwd(confirm)) = state.overlay.take() else {
+        return None;
+    };
+    let pane = state
+        .workspaces
+        .get(confirm.workspace)?
+        .tabs
+        .get(confirm.tab)?
+        .pane(confirm.pane)?;
+    (pane.kind == PaneKind::Terminal).then(|| (confirm.pane, switch_cwd_command(&confirm.path)))
 }
 
 /// 切换当前工作区；越界忽略。
@@ -835,7 +900,11 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
-    let mut commands = vec![MenuCommand::RenameWorkspace];
+    let mut commands = vec![
+        MenuCommand::NewTerminal,
+        MenuCommand::OpenPrompt,
+        MenuCommand::RenameWorkspace,
+    ];
     if state
         .workspaces
         .get(target)
@@ -894,6 +963,15 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
         PaneView::Lx => MenuCommand::SwitchToTerminal,
         PaneView::Terminal => MenuCommand::SwitchToLx,
     });
+    commands.push(MenuCommand::OpenPrompt);
+    // 仅工作区有固定路径时提供切回工作区路径。
+    if state
+        .workspaces
+        .get(workspace)
+        .is_some_and(|workspace| workspace.cwd.is_some())
+    {
+        commands.push(MenuCommand::SwitchToWorkspaceCwd);
+    }
     if state.active_tab().layout.pane_ids().len() > 1 {
         commands.push(MenuCommand::ClosePane);
     }
@@ -981,6 +1059,25 @@ pub fn activate_menu(state: &mut AppState) {
     };
     match (menu.commands.get(menu.selected), menu.target) {
         (Some(MenuCommand::NewTab), OverlayTarget::Tab { .. }) => create_tab(state),
+        (Some(MenuCommand::NewTerminal), OverlayTarget::Workspace(target)) => {
+            create_terminal_in_workspace(state, target);
+        }
+        (Some(MenuCommand::OpenPrompt), OverlayTarget::Workspace(target)) => {
+            open_prompt_for_workspace(state, target);
+        }
+        (Some(MenuCommand::OpenPrompt), OverlayTarget::Pane { pane, .. }) => {
+            open_prompt_for_pane(state, pane);
+        }
+        (
+            Some(MenuCommand::SwitchToWorkspaceCwd),
+            OverlayTarget::Pane {
+                workspace,
+                tab,
+                pane,
+            },
+        ) => {
+            open_confirm_switch_cwd(state, workspace, tab, pane);
+        }
         (Some(MenuCommand::RenameWorkspace), OverlayTarget::Workspace(target)) => {
             let Some(workspace) = state.workspaces.get(target) else {
                 return;
@@ -1077,29 +1174,74 @@ fn split_pane(
 }
 
 /// 浮层按键分派；输入层已按浮层种类过滤。
-pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) {
+///
+/// 确认切换工作区路径时返回写入目标窗格的 shell 命令；其余返回 None。
+pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneId, Vec<u8>)> {
     if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
         apply_worktree_open_key(state, key);
-        return;
+        return None;
     }
     match key {
-        OverlayKey::Esc => close_overlay(state),
-        OverlayKey::Up => move_menu_selection(state, -1),
-        OverlayKey::Down => move_menu_selection(state, 1),
+        OverlayKey::Esc => {
+            close_overlay(state);
+            None
+        }
+        OverlayKey::Up => {
+            move_menu_selection(state, -1);
+            None
+        }
+        OverlayKey::Down => {
+            move_menu_selection(state, 1);
+            None
+        }
         OverlayKey::Enter => match state.overlay.as_ref().map(Overlay::kind) {
-            Some(OverlayKind::Menu) => activate_menu(state),
-            Some(OverlayKind::Rename) => commit_rename(state),
-            Some(OverlayKind::ConfirmClose) => confirm_close(state),
-            Some(OverlayKind::WorktreeOpen) | None => {}
+            Some(OverlayKind::Menu) => {
+                activate_menu(state);
+                None
+            }
+            Some(OverlayKind::Rename) => {
+                commit_rename(state);
+                None
+            }
+            Some(OverlayKind::ConfirmClose) => {
+                confirm_close(state);
+                None
+            }
+            Some(OverlayKind::ConfirmSwitchCwd) => confirm_switch_cwd(state),
+            Some(OverlayKind::WorktreeOpen) | None => None,
         },
-        OverlayKey::Char(ch) => edit_rename(state, |input| input.insert_char(ch)),
-        OverlayKey::Clear => edit_rename(state, TextInput::clear),
-        OverlayKey::Backspace => edit_rename(state, TextInput::backspace),
-        OverlayKey::Delete => edit_rename(state, TextInput::delete),
-        OverlayKey::Left => edit_rename(state, TextInput::move_left),
-        OverlayKey::Right => edit_rename(state, TextInput::move_right),
-        OverlayKey::Home => edit_rename(state, TextInput::move_home),
-        OverlayKey::End => edit_rename(state, TextInput::move_end),
+        OverlayKey::Char(ch) => {
+            edit_rename(state, |input| input.insert_char(ch));
+            None
+        }
+        OverlayKey::Clear => {
+            edit_rename(state, TextInput::clear);
+            None
+        }
+        OverlayKey::Backspace => {
+            edit_rename(state, TextInput::backspace);
+            None
+        }
+        OverlayKey::Delete => {
+            edit_rename(state, TextInput::delete);
+            None
+        }
+        OverlayKey::Left => {
+            edit_rename(state, TextInput::move_left);
+            None
+        }
+        OverlayKey::Right => {
+            edit_rename(state, TextInput::move_right);
+            None
+        }
+        OverlayKey::Home => {
+            edit_rename(state, TextInput::move_home);
+            None
+        }
+        OverlayKey::End => {
+            edit_rename(state, TextInput::move_end);
+            None
+        }
     }
 }
 

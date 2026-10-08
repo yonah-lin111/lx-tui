@@ -74,6 +74,8 @@ pub struct AppState {
     /// prompt 是否持有键盘焦点；为真时按键进入编辑器而非焦点窗格。
     pub prompt_focused: bool,
     pub prompt: Prompt,
+    /// prompt 显式绑定的上下文根路径；None 时回退活动工作区 cwd。
+    pub prompt_root: Option<PathBuf>,
     pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -389,6 +391,7 @@ impl AppState {
             prompt_collapsed: false,
             prompt_focused: false,
             prompt: Prompt::new(PaneId::alloc()),
+            prompt_root: None,
             prompt_width: DEFAULT_PROMPT_WIDTH,
             workspaces: vec![Workspace {
                 name,

@@ -85,6 +85,7 @@ fn pane_lookup_does_not_reach_prompt() {
 fn demo_starts_without_overlay_or_scroll() {
     let state = AppState::demo();
     assert!(state.overlay.is_none());
+    assert!(state.prompt_root.is_none());
     assert_eq!(state.tab_scroll, 0);
     assert_eq!(state.workspace_scroll, 0);
     assert!(state.workspace_scroll_drag.is_none());

@@ -670,43 +670,6 @@ fn create_workspace_uses_focused_terminal_cwd() {
 }
 
 #[test]
-fn update_workspace_cwd_renames_auto_named_workspace() {
-    let mut state = AppState::demo();
-    create_workspace(&mut state);
-    let cwd = std::path::Path::new("/tmp/other-project");
-    assert!(update_workspace_cwd(&mut state, 1, cwd));
-    assert_eq!(state.workspaces[1].name, "other-project");
-    assert_eq!(state.workspaces[1].cwd.as_deref(), Some(cwd));
-    assert!(!update_workspace_cwd(&mut state, 1, cwd));
-}
-
-#[test]
-fn update_workspace_cwd_tracks_manual_name_without_renaming() {
-    let mut state = AppState::demo();
-    state.workspaces[0].name = "api".to_string();
-    state.workspaces[0].name_is_manual = true;
-    let cwd = std::path::Path::new("/tmp/other-project");
-    assert!(update_workspace_cwd(&mut state, 0, cwd));
-    assert_eq!(state.workspaces[0].name, "api");
-    assert_eq!(state.workspaces[0].cwd.as_deref(), Some(cwd));
-    assert!(!update_workspace_cwd(&mut state, 0, cwd));
-}
-
-#[test]
-fn update_workspace_cwd_dedupes_against_other_workspaces() {
-    let mut state = AppState::demo();
-    create_workspace(&mut state);
-    state.workspaces[1].name = "api".to_string();
-    state.workspaces[1].name_is_manual = true;
-    assert!(update_workspace_cwd(
-        &mut state,
-        0,
-        std::path::Path::new("/tmp/api")
-    ));
-    assert_eq!(state.workspaces[0].name, "api 2");
-}
-
-#[test]
 fn workspace_scroll_clamps_and_follows_active() {
     let mut state = AppState::demo();
     for _ in 0..15 {
@@ -744,8 +707,21 @@ fn switch_workspace_clears_selection_and_prompt_focus() {
     assert_eq!(state.active_workspace, 0);
 }
 
+/// 在当前菜单浮层中高亮指定命令项。
+fn select_menu_command(state: &mut AppState, command: MenuCommand) {
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    let index = menu
+        .commands
+        .iter()
+        .position(|candidate| *candidate == command)
+        .expect("command offered by menu");
+    set_menu_selection(state, index);
+}
+
 #[test]
-fn open_workspace_menu_offers_rename_and_close() {
+fn open_workspace_menu_offers_terminal_prompt_rename_and_close() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 0, (10, 5));
@@ -755,7 +731,12 @@ fn open_workspace_menu_offers_rename_and_close() {
     assert_eq!(menu.target, OverlayTarget::Workspace(0));
     assert_eq!(
         menu.commands,
-        vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace]
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::CloseWorkspace
+        ]
     );
     assert_eq!(menu.selected, 0);
 }
@@ -767,7 +748,14 @@ fn open_workspace_menu_hides_close_for_last_workspace() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
-    assert_eq!(menu.commands, vec![MenuCommand::RenameWorkspace]);
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace
+        ]
+    );
     open_workspace_menu(&mut state, 9, (0, 0));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
@@ -784,7 +772,7 @@ fn menu_selection_wraps_and_reports_changes() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
-    assert_eq!(menu.selected, 1);
+    assert_eq!(menu.selected, 3);
     move_menu_selection(&mut state, 1);
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
@@ -801,6 +789,7 @@ fn activate_menu_rename_opens_prefilled_input() {
     create_workspace(&mut state);
     let expected = state.workspaces[1].name.clone();
     open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     activate_menu(&mut state);
     let Some(Overlay::Rename(rename)) = state.overlay.as_ref() else {
         panic!("rename overlay expected");
@@ -815,7 +804,7 @@ fn activate_menu_close_opens_confirmation() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 1, (0, 0));
-    set_menu_selection(&mut state, 1);
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
     activate_menu(&mut state);
     assert_eq!(
         state.overlay.as_ref().map(Overlay::kind),
@@ -833,6 +822,7 @@ fn overlay_esc_closes_and_enter_dispatches() {
     assert!(state.overlay.is_none());
 
     open_workspace_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(
         state.overlay.as_ref().map(Overlay::kind),
@@ -842,7 +832,7 @@ fn overlay_esc_closes_and_enter_dispatches() {
     assert!(state.overlay.is_none());
 
     open_workspace_menu(&mut state, 0, (0, 0));
-    set_menu_selection(&mut state, 1);
+    select_menu_command(&mut state, MenuCommand::CloseWorkspace);
     apply_overlay_key(&mut state, OverlayKey::Enter);
     assert_eq!(
         state.overlay.as_ref().map(Overlay::kind),
@@ -857,6 +847,7 @@ fn rename_overlay_edits_and_commits_trimmed_name() {
     let mut state = AppState::demo();
     create_workspace(&mut state);
     open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     activate_menu(&mut state);
     for key in [
         OverlayKey::Backspace,
@@ -881,6 +872,7 @@ fn rename_overlay_rejects_empty_name() {
     let mut state = AppState::demo();
     let original = state.workspaces[0].name.clone();
     open_workspace_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::RenameWorkspace);
     activate_menu(&mut state);
     apply_overlay_key(&mut state, OverlayKey::Home);
     for _ in 0..200 {
@@ -1358,8 +1350,9 @@ fn demo_two_panes() -> (AppState, PaneId, PaneId) {
 }
 
 #[test]
-fn open_pane_menu_offers_split_switch_and_close() {
+fn open_pane_menu_offers_split_switch_prompt_path_and_close() {
     let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/lx-tui"));
     open_pane_menu(&mut state, pane, (7, 3));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("pane menu overlay expected");
@@ -1379,6 +1372,8 @@ fn open_pane_menu_offers_split_switch_and_close() {
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
             MenuCommand::SwitchToTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::SwitchToWorkspaceCwd,
             MenuCommand::ClosePane
         ]
     );
@@ -1389,8 +1384,9 @@ fn open_pane_menu_offers_split_switch_and_close() {
 }
 
 #[test]
-fn open_pane_menu_hides_close_for_last_pane() {
+fn open_pane_menu_hides_close_and_path_for_last_pane_without_cwd() {
     let mut state = AppState::demo();
+    state.workspaces[0].cwd = None;
     let only = state.active_tab().layout.focus();
     open_pane_menu(&mut state, only, (0, 0));
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
@@ -1401,7 +1397,8 @@ fn open_pane_menu_hides_close_for_last_pane() {
         vec![
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
-            MenuCommand::SwitchToTerminal
+            MenuCommand::SwitchToTerminal,
+            MenuCommand::OpenPrompt
         ]
     );
 }
@@ -1472,7 +1469,7 @@ fn activate_menu_switch_toggles_only_target_pane() {
 fn activate_menu_close_pane_opens_confirmation() {
     let (mut state, _, second) = demo_two_panes();
     open_pane_menu(&mut state, second, (0, 0));
-    set_menu_selection(&mut state, 3);
+    select_menu_command(&mut state, MenuCommand::ClosePane);
     activate_menu(&mut state);
 
     let Some(Overlay::ConfirmClose(confirm)) = state.overlay.as_ref() else {
@@ -1549,6 +1546,206 @@ fn confirm_close_pane_clears_transient_state_for_removed_pane() {
     assert!(state.terminal_selection.is_none());
     assert!(state.terminal_scroll_drag.is_none());
     assert!(state.selection_autoscroll.is_none());
+}
+
+#[test]
+fn create_terminal_in_workspace_appends_terminal_tab_and_activates() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let target_cwd = state.workspaces[1].cwd.clone();
+    state.active_workspace = 0;
+    state.prompt_focused = true;
+
+    create_terminal_in_workspace(&mut state, 1);
+
+    assert_eq!(state.active_workspace, 1);
+    let workspace = state.active_workspace();
+    assert_eq!(workspace.tabs.len(), 2);
+    assert_eq!(workspace.active_tab, 1);
+    let pane = workspace.tabs[1].root_pane().expect("root pane exists");
+    assert_eq!(
+        workspace.tabs[1].pane(pane).expect("pane exists").view,
+        PaneView::Terminal
+    );
+    assert_eq!(state.workspace_cwd_for_pane(pane), target_cwd);
+    assert!(!state.prompt_focused);
+
+    create_terminal_in_workspace(&mut state, 9);
+    assert_eq!(state.active_workspace().tabs.len(), 2);
+}
+
+#[test]
+fn activate_menu_new_terminal_targets_clicked_workspace() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.active_workspace = 0;
+    open_workspace_menu(&mut state, 1, (0, 0));
+    activate_menu(&mut state);
+
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.workspaces[1].tabs.len(), 2);
+    assert_eq!(state.workspaces[2].tabs.len(), 1);
+}
+
+#[test]
+fn open_prompt_for_workspace_switches_binds_and_focuses() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    state.workspaces[1].cwd = Some(PathBuf::from("/tmp/target"));
+    state.active_workspace = 0;
+    state.prompt_collapsed = true;
+
+    open_prompt_for_workspace(&mut state, 1);
+
+    assert_eq!(state.active_workspace, 1);
+    assert!(state.prompt_focused);
+    assert!(!state.prompt_collapsed);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/target"))
+    );
+}
+
+#[test]
+fn activate_menu_open_prompt_from_workspace_menu_binds_workspace_cwd() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    state.workspaces[1].cwd = Some(PathBuf::from("/tmp/ws-target"));
+    state.active_workspace = 0;
+    open_workspace_menu(&mut state, 1, (0, 0));
+    select_menu_command(&mut state, MenuCommand::OpenPrompt);
+    activate_menu(&mut state);
+
+    assert_eq!(state.active_workspace, 1);
+    assert!(state.prompt_focused);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/ws-target"))
+    );
+}
+
+#[test]
+fn open_prompt_for_pane_binds_pane_cwd_and_keeps_workspace() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.prompt_collapsed = true;
+    update_pane_cwd(
+        &mut state,
+        pane,
+        std::path::Path::new("/tmp/pane-dir"),
+        "pane-dir".to_string(),
+    );
+
+    open_prompt_for_pane(&mut state, pane);
+
+    assert_eq!(state.active_workspace, 0);
+    assert!(state.prompt_focused);
+    assert!(!state.prompt_collapsed);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/pane-dir"))
+    );
+}
+
+#[test]
+fn open_prompt_for_pane_falls_back_to_workspace_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-root"));
+
+    open_prompt_for_pane(&mut state, pane);
+
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/ws-root"))
+    );
+}
+
+#[test]
+fn activate_menu_open_prompt_from_pane_menu_binds_pane_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    update_pane_cwd(
+        &mut state,
+        pane,
+        std::path::Path::new("/tmp/pane-dir"),
+        "pane-dir".to_string(),
+    );
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::OpenPrompt);
+    activate_menu(&mut state);
+
+    assert!(state.prompt_focused);
+    assert_eq!(
+        state.prompt_root.as_deref(),
+        Some(std::path::Path::new("/tmp/pane-dir"))
+    );
+}
+
+#[test]
+fn switch_to_ws_path_opens_confirm_and_returns_cd_command() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws path"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::SwitchToWorkspaceCwd);
+    activate_menu(&mut state);
+
+    let Some(Overlay::ConfirmSwitchCwd(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm switch cwd overlay expected");
+    };
+    assert_eq!(confirm.workspace, 0);
+    assert_eq!(confirm.tab, 0);
+    assert_eq!(confirm.pane, pane);
+    assert_eq!(confirm.path, PathBuf::from("/tmp/ws path"));
+
+    let action = apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(action, Some((pane, b"cd \"/tmp/ws path\"\n".to_vec())));
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn switch_to_ws_path_cancel_returns_no_command() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/ws"),
+    }));
+
+    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Esc), None);
+    assert!(state.overlay.is_none());
+}
+
+#[test]
+fn switch_cwd_command_escapes_shell_specials() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane,
+        path: PathBuf::from("/tmp/a\"b$c\\d`e"),
+    }));
+
+    let Some((target, bytes)) = apply_overlay_key(&mut state, OverlayKey::Enter) else {
+        panic!("cd command expected");
+    };
+    assert_eq!(target, pane);
+    let command = String::from_utf8(bytes).expect("command is utf-8");
+    assert_eq!(command, "cd \"/tmp/a\\\"b\\$c\\\\d\\`e\"\n");
+}
+
+#[test]
+fn switch_cwd_confirm_with_missing_pane_returns_none() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 9,
+        pane,
+        path: PathBuf::from("/tmp/ws"),
+    }));
+
+    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Enter), None);
+    assert!(state.overlay.is_none());
 }
 
 #[test]
@@ -1949,7 +2146,12 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
     };
     assert_eq!(
         menu.commands,
-        vec![MenuCommand::RenameWorkspace, MenuCommand::OpenWorktree]
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::OpenWorktree
+        ]
     );
 
     push_git_workspace(
@@ -1965,6 +2167,8 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
     assert_eq!(
         menu.commands,
         vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenPrompt,
             MenuCommand::RenameWorkspace,
             MenuCommand::OpenWorktree,
             MenuCommand::CloseWorkspace

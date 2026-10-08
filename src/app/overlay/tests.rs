@@ -77,6 +77,13 @@ fn overlay_kind_reports_variant() {
         },
     });
     assert_eq!(confirm.kind(), OverlayKind::ConfirmClose);
+    let switch_cwd = Overlay::ConfirmSwitchCwd(ConfirmSwitchCwd {
+        workspace: 0,
+        tab: 0,
+        pane: PaneId::alloc(),
+        path: PathBuf::from("/tmp/ws"),
+    });
+    assert_eq!(switch_cwd.kind(), OverlayKind::ConfirmSwitchCwd);
     let worktree = Overlay::WorktreeOpen(worktree_dialog(vec![], 0));
     assert_eq!(worktree.kind(), OverlayKind::WorktreeOpen);
 }

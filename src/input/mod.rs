@@ -77,7 +77,7 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
         },
-        OverlayKind::ConfirmClose => match key.code {
+        OverlayKind::ConfirmClose | OverlayKind::ConfirmSwitchCwd => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,

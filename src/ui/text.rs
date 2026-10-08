@@ -80,8 +80,10 @@ pub const MENTION_FILE_ICON: &str = "•";
 
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";
+pub const MENU_NEW_TERMINAL: &str = "New terminal";
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";
 pub const MENU_OPEN_WORKTREE: &str = "Open worktree…";
+pub const MENU_OPEN_PROMPT: &str = "Open prompt";
 pub const MENU_CLOSE_WORKSPACE: &str = "Close";
 pub const MENU_RENAME_TAB: &str = "Rename";
 pub const MENU_CLOSE_TAB: &str = "Close";
@@ -89,6 +91,7 @@ pub const MENU_SPLIT_RIGHT: &str = "Split right";
 pub const MENU_SPLIT_DOWN: &str = "Split down";
 pub const MENU_SWITCH_TO_TERMINAL: &str = "Switch to terminal";
 pub const MENU_SWITCH_TO_LX: &str = "Switch to lx";
+pub const MENU_SWITCH_TO_WORKSPACE_CWD: &str = "Switch to ws path";
 pub const MENU_CLOSE_PANE: &str = "Close";
 
 /// 重命名与关闭确认浮层标题。
@@ -97,6 +100,7 @@ pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
 pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
+pub const CONFIRM_SWITCH_CWD_TITLE: &str = "switch to ws path";
 
 /// worktree 对话框：标题、搜索占位、状态行与条目标记。
 pub const WORKTREE_OPEN_TITLE: &str = "open worktree";
@@ -119,6 +123,11 @@ pub const BUTTON_OPEN: &str = "[open enter]";
 /// 关闭确认问题文案。
 pub fn confirm_close_question(name: &str) -> String {
     format!("close \"{name}\"?")
+}
+
+/// 切换工作区路径确认问题文案。
+pub fn confirm_switch_cwd_question(path: &str) -> String {
+    format!("switch cwd to \"{path}\"?")
 }
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。

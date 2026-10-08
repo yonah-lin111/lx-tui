@@ -1262,6 +1262,29 @@ fn prompt_title_moves_path_name_to_top_right() {
 }
 
 #[test]
+fn prompt_top_bar_prefers_bound_prompt_root() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    let view = view_for(&state);
+
+    // 显式绑定根路径优先于工作区路径。
+    state.prompt_root = Some(PathBuf::from("/elsewhere/bound-root"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:bound-root"), "{top}");
+    assert!(!top.contains("ws:lx-tui"), "{top}");
+
+    // 绑定路径无末段时回退工作区路径。
+    state.prompt_root = Some(PathBuf::from("/"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:lx-tui"), "{top}");
+
+    // 未绑定时仍显示工作区路径。
+    state.prompt_root = None;
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:lx-tui"), "{top}");
+}
+
+#[test]
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
@@ -1498,6 +1521,15 @@ fn overlay_border_titles_use_soft_blue_style() {
     assert_overlay_title(&buffer, menu_layout.area);
 
     // 模态（重命名）顶边框标题。
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    let rename_index = menu
+        .commands
+        .iter()
+        .position(|command| *command == crate::app::overlay::MenuCommand::RenameWorkspace)
+        .expect("rename offered by menu");
+    update::set_menu_selection(&mut state, rename_index);
     update::activate_menu(&mut state);
     let shell = overlay::rename_shell(screen).expect("rename modal visible");
     let buffer = render_buffer(&state);

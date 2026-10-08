@@ -48,6 +48,22 @@ fn block_command_text_covers_all_commands() {
 }
 
 #[test]
+fn confirm_switch_cwd_question_wraps_path_in_quotes() {
+    assert_eq!(
+        confirm_switch_cwd_question("/tmp/project"),
+        "switch cwd to \"/tmp/project\"?"
+    );
+}
+
+#[test]
+fn workspace_menu_copy_is_ws_abbreviated_english() {
+    assert_eq!(MENU_NEW_TERMINAL, "New terminal");
+    assert_eq!(MENU_OPEN_PROMPT, "Open prompt");
+    assert_eq!(MENU_SWITCH_TO_WORKSPACE_CWD, "Switch to ws path");
+    assert_eq!(CONFIRM_SWITCH_CWD_TITLE, "switch to ws path");
+}
+
+#[test]
 fn pane_title_prefers_osc_then_cwd_label_then_id() {
     let id = PaneId::alloc();
     assert_eq!(
