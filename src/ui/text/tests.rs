@@ -58,3 +58,31 @@ fn pane_title_prefers_osc_then_cwd_label_then_id() {
     assert_eq!(pane_title(id, None, Some("")), format!("pane {}", id.raw()));
     assert_eq!(pane_title(id, None, None), format!("pane {}", id.raw()));
 }
+
+#[test]
+fn mention_icons_are_single_width_and_non_pua() {
+    use unicode_width::UnicodeWidthStr;
+
+    assert_eq!(MENTION_DIR_ICON.width(), 1, "目录图标必须严格占用 1 列宽");
+    assert_eq!(MENTION_FILE_ICON.width(), 1, "文件图标必须严格占用 1 列宽");
+    assert_ne!(
+        MENTION_DIR_ICON, MENTION_FILE_ICON,
+        "目录与文件图标必须不同"
+    );
+
+    for (name, icon) in [
+        ("MENTION_DIR_ICON", MENTION_DIR_ICON),
+        ("MENTION_FILE_ICON", MENTION_FILE_ICON),
+    ] {
+        for ch in icon.chars() {
+            let cp = ch as u32;
+            let is_pua = (0xE000..=0xF8FF).contains(&cp)
+                || (0xF0000..=0xFFFFD).contains(&cp)
+                || (0x100000..=0x10FFFD).contains(&cp);
+            assert!(
+                !is_pua,
+                "{name} 包含私有区(PUA)字符 U+{cp:04X}，在未安装专用字体的终端中会乱码"
+            );
+        }
+    }
+}
