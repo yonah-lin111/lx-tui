@@ -33,6 +33,8 @@ pub enum EditorCommand {
     InsertText(String),
     Newline,
     NewlineBelow,
+    /// Shift+Enter：@ 面板高亮目录可进入时进入；未消费时同 `NewlineBelow`。
+    EnterFolder,
     Backspace,
     Delete,
     Left,

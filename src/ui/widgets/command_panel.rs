@@ -1,7 +1,7 @@
 //! 浮层命令面板：条目列表、高亮、窗口滚动与边框绘制；无业务语义、不读状态。
 
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::{Alignment, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget};
@@ -38,6 +38,9 @@ pub enum CommandItem<'a> {
 /// `None` 表示锚定高亮。鼠标悬停只改 `active`、不改锚点，窗口因此不滚动。
 /// `window_start` 为滚轮滚动后的显式视口起点，优先于 `window_anchor`：窗口从该
 /// 条目起向前填充，高亮允许不在窗口内。
+///
+/// `title` / `right_title` 绘制在顶边左右两端，`footer` 绘制在底边左端；
+/// 三者均参与面板宽度计算，可用宽度不足时由 Block 自然截断。
 pub struct CommandPanelView<'a> {
     pub items: &'a [CommandItem<'a>],
     pub active: usize,
@@ -46,6 +49,12 @@ pub struct CommandPanelView<'a> {
     pub anchor_row: u16,
     /// 面板最大高度（含边框）；None 表示仅受可用空间限制。
     pub max_height: Option<u16>,
+    /// 顶边左侧标题。
+    pub title: Option<&'a str>,
+    /// 顶边右侧状态文案（如当前目录名）。
+    pub right_title: Option<&'a str>,
+    /// 底边左侧快捷键提示。
+    pub footer: Option<&'a str>,
 }
 
 /// 面板布局：面板矩形、条目内容区、滚动条、首个可见条目与可见条目数。
@@ -108,7 +117,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         return None;
     }
     let overflow = view.items.len() > visible;
-    let width = panel_width(area.width, view.items)
+    let width = panel_width(area.width, view)
         .saturating_add(u16::from(overflow))
         .min(area.width);
     let rect = Rect::new(area.x, y, width, height);
@@ -141,10 +150,28 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
 pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Option<Rect> {
     let layout = layout(area, view)?;
     Clear.render(layout.rect, buf);
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::muted())
         .style(style::overlay_panel());
+    if let Some(title) = view.title {
+        block = block.title_top(Line::from(Span::styled(
+            format!(" {title} "),
+            style::muted(),
+        )));
+    }
+    if let Some(right_title) = view.right_title {
+        block = block.title_top(
+            Line::from(Span::styled(format!(" {right_title} "), style::muted()))
+                .alignment(Alignment::Right),
+        );
+    }
+    if let Some(footer) = view.footer {
+        block = block.title_bottom(Line::from(Span::styled(
+            format!(" {footer} "),
+            style::muted(),
+        )));
+    }
     block.render(layout.rect, buf);
     render_items(buf, &layout, view);
     if let Some(scrollbar) = layout.scrollbar.as_ref() {
@@ -192,8 +219,10 @@ fn item_height(item: &CommandItem<'_>) -> u16 {
     }
 }
 
-/// 面板宽度：单行按最长标签 + 间距 + 最长预览，双行按标签与明细的较宽者，加两边框与左侧内边距。
-fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
+/// 面板宽度：单行按最长标签 + 间距 + 最长预览，双行按标签与明细的较宽者，
+/// 与顶边左右标题、底边提示的完整宽度取大，加两边框与左侧内边距。
+fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
+    let items = view.items;
     let label = items
         .iter()
         .map(|item| item_label_width(item))
@@ -225,8 +254,12 @@ fn panel_width(available: u16, items: &[CommandItem<'_>]) -> u16 {
         (true, false) => label + COLUMN_GAP + preview,
         (false, true) => label.max(detail),
         _ => (label + COLUMN_GAP + preview).max(label.max(detail)),
-    }
-    .min(usize::from(available));
+    };
+    // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
+    let header = view.title.map_or(0, |title| title.width() + 2)
+        + view.right_title.map_or(0, |title| title.width() + 2);
+    let footer = view.footer.map_or(0, |footer| footer.width() + 2);
+    let content = content.max(header).max(footer).min(usize::from(available));
     ((content + 4) as u16).min(available).max(MIN_WIDTH)
 }
 

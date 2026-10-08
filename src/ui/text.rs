@@ -121,6 +121,13 @@ pub const MENU_TITLE_WORKSPACE: &str = "workspace";
 pub const MENU_TITLE_TAB: &str = "tab";
 pub const MENU_TITLE_PANE: &str = "pane";
 
+/// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及。
+pub const BLOCK_PANEL_TITLE: &str = "Commands";
+pub const MENTION_PANEL_TITLE: &str = "Files";
+
+/// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
+pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
+
 /// markdown 块命令面板条目标签。
 pub const BLOCK_HEADING_LABEL: &str = "Heading";
 pub const BLOCK_UNORDERED_LABEL: &str = "Bullet List";

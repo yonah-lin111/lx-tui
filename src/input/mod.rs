@@ -117,8 +117,10 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     }
 }
 
-/// 编辑键映射；Shift 只用于字符输入，导航键要求无修饰符。
+/// 编辑键映射；Shift 只用于字符输入与 @ 面板目录导航，导航键要求无修饰符。
 ///
+/// `Shift+Enter` 映射为 @ 面板目录进入命令；面板未消费时回落为行尾另起一行
+/// （见 `update::apply_editor`）。@ 面板的目录回退走编辑器撤销（`Ctrl+Z` / `Cmd+Z`）。
 /// Ctrl/Alt 组合同 opencode/readline：Ctrl+U 删除到逻辑行首（已在行首时删除前一个换行）、
 /// Ctrl+K 删除到行尾、Ctrl+W 向前删词、
 /// Ctrl+A/E 逻辑行首尾、Ctrl+D 正向删除、Ctrl+←/→ 按词移动；撤销/重做用
@@ -172,7 +174,7 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
     }
     match key.code {
         KeyCode::Char(ch) => Some(EditorCommand::InsertChar(ch)),
-        KeyCode::Enter if shift => Some(EditorCommand::NewlineBelow),
+        KeyCode::Enter if shift => Some(EditorCommand::EnterFolder),
         KeyCode::Enter => Some(EditorCommand::Newline),
         KeyCode::Backspace => Some(EditorCommand::Backspace),
         KeyCode::Delete => Some(EditorCommand::Delete),

@@ -67,6 +67,30 @@ impl MentionState {
         Some((range, insertion))
     }
 
+    /// 进入高亮目录：返回触发区间与写回文本（`@根相对路径/`，保持提及触发不闭合）。
+    ///
+    /// 高亮项不是目录、目录无缓存后代（进入后将无候选）、触发区间越界时返回 None。
+    pub fn enter_folder(&self, text_len: usize) -> Option<(Range<usize>, String)> {
+        let panel = self.panel.as_ref()?;
+        let entry = panel.items().get(panel.active())?;
+        if !entry.is_directory || !self.has_children(&entry.path) {
+            return None;
+        }
+        let trigger = panel.trigger();
+        if trigger.from > trigger.to || trigger.to > text_len {
+            return None;
+        }
+        Some((trigger.from..trigger.to, format!("@{}/", entry.path)))
+    }
+
+    /// 扫描缓存中是否存在该目录的后代；无子项目录不可进入，避免面板因零候选消失。
+    fn has_children(&self, path: &str) -> bool {
+        let prefix = format!("{path}/");
+        self.cache
+            .as_ref()
+            .is_some_and(|cache| cache.iter().any(|entry| entry.path.starts_with(&prefix)))
+    }
+
     /// 关闭面板且不改文本；返回是否消费该按键。
     pub fn escape(&mut self) -> bool {
         if self.panel.is_none() {
@@ -123,7 +147,9 @@ impl MentionState {
         true
     }
 
-    /// 重算面板：触发或缓存缺失时隐藏，同起点保留高亮。
+    /// 重算面板：触发或缓存缺失时隐藏，同起点且同目录范围保留高亮。
+    ///
+    /// 进入/回退目录会改变 query 的目录范围，此时高亮回到首项；同一层内继续过滤保持高亮。
     pub(super) fn refresh(&mut self, text: &str, cursor: usize) {
         let Some(trigger) = markdown::mention_trigger(text, cursor) else {
             self.panel = None;
@@ -138,10 +164,11 @@ impl MentionState {
             self.panel = None;
             return;
         }
-        let previous = self
-            .panel
-            .as_ref()
-            .filter(|panel| panel.trigger().from == trigger.from);
+        let previous = self.panel.as_ref().filter(|panel| {
+            panel.trigger().from == trigger.from
+                && markdown::mention_scope(&panel.trigger().query)
+                    == markdown::mention_scope(&trigger.query)
+        });
         let active = previous
             .map_or(0, MentionPanel::active)
             .min(items.len() - 1);

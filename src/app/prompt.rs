@@ -340,6 +340,22 @@ impl Prompt {
         true
     }
 
+    /// Shift+Enter：@ 面板高亮目录可进入时把其根相对路径写回文本（`@路径/`）；返回是否消费。
+    ///
+    /// 进入后提及触发保持打开，面板按路径范围只列该目录候选；高亮非目录或目录无候选时返回 false。
+    /// 写回按独立撤销步记录，撤销（`Ctrl+Z` / `Cmd+Z`）即回退到上一级目录。
+    pub fn mention_enter_folder(&mut self) -> bool {
+        let Some((range, insertion)) = self.mention.enter_folder(self.text.len()) else {
+            return false;
+        };
+        self.break_group();
+        self.record(EditKind::Other);
+        self.text.replace_range(range.clone(), &insertion);
+        self.cursor = range.start + insertion.len();
+        self.settle();
+        true
+    }
+
     /// 提及面板打开时关闭且不改文本；返回是否消费该按键。
     pub fn mention_escape(&mut self) -> bool {
         if !self.mention.escape() {
