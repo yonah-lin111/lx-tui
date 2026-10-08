@@ -866,6 +866,76 @@ fn workspace_rows_fill_selected_and_hover_backgrounds() {
 }
 
 #[test]
+fn hovered_parent_workspace_item_uses_uniform_reversed_style() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "repo".to_string();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feat")),
+    );
+    // 激活子项，使父项处于非激活状态。
+    state.active_workspace = 1;
+
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+
+    // 1. 未交互态：父项折叠箭头为 Cyan 强调色，无反显与背景。
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let x = sections.workspaces.x;
+    let y = sections.workspaces.y;
+
+    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
+    assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
+    assert!(
+        !buffer[(x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+
+    // 2. 悬停态：父项整行统一终端反显，箭头剥离独立 Cyan 前景以避免翻转为青色底块。
+    state.workspace_hover = Some(0);
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+
+    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
+    assert_eq!(
+        buffer[(x, y)].fg,
+        ratatui::style::Color::Reset,
+        "悬停时箭头前景重置为终端默认，避免在反显下呈现为青底"
+    );
+    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
+    assert!(
+        buffer[(x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+
+    // 3. 激活态：父项与子项保持一致的青底黑字整行填充。
+    state.workspace_hover = None;
+    state.active_workspace = 0;
+    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+
+    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
+    assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Black);
+    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Cyan);
+}
+
+#[test]
 fn dragged_workspace_item_renders_reversed() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);

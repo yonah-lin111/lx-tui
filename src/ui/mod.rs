@@ -363,18 +363,18 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         } else {
             None
         };
-        let highlight = highlight.unwrap_or_default();
         let item_style = if row.index == state.active_workspace {
             style::accent()
         } else {
             style::text()
         }
-        .patch(highlight);
-        let prefix_style = if row.parent {
-            style::accent().patch(highlight)
+        .patch(highlight.unwrap_or_default());
+        let prefix_style = if row.parent && highlight.is_none() {
+            style::accent()
         } else {
             item_style
         };
+        let highlight = highlight.unwrap_or_default();
         let prefix = if row.parent {
             let arrow = if row.collapsed {
                 text::WORKSPACE_GROUP_COLLAPSED
