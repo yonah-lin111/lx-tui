@@ -6,8 +6,7 @@ use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{
-    MentionEntry, TemplateStatus, parse_template_block_at_line, parse_template_end_line,
-    parse_template_start_line,
+    MentionEntry, TemplateLineInfo, TemplateLineRole, TemplateStatus, template_line_infos,
 };
 use crate::app::prompt::{Prompt, VisualRow};
 use crate::app::selection::Selection;
@@ -99,12 +98,16 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
 }
 
 /// 绘制 prompt 内容区；光标由调用方以终端原生硬件光标呈现。
+///
+/// 模板块行渲染为带边框的块：左边框（`╭─`/`│ `/`╰─`）、右边框（`╮`/`│`/`╯`），
+/// 边框颜色随块状态；起始行顶边右端常显操作按钮，左侧内容超出时以省略号截断。
 pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&Selection>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let rows = prompt.visual_rows();
     let tokens = markdown::scan(prompt.text());
+    let infos = template_line_infos(prompt.text());
     let mut line_starts = Vec::new();
     let mut offset = 0;
     for line in prompt.text().split('\n') {
@@ -121,9 +124,31 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         let y = area.y + (index - scroll) as u16;
         let line_tokens = tokens.get(row.line).map(Vec::as_slice).unwrap_or_default();
         let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
-        paint_row(buf, area, y, prompt.text(), row, line_tokens, base);
+        let info = infos.get(row.line).copied().flatten();
+        let first = index == 0 || rows[index - 1].line != row.line;
+        let last = index + 1 >= rows.len() || rows[index + 1].line != row.line;
+        let role = template_row_role(info, first, last);
+        let start_row = role == Some(TemplateLineRole::Start);
+        let text_start = area.x + template_gutter(info.is_some());
+        let buttons_start = if start_row {
+            let labels =
+                template_button_labels(info.map_or(TemplateStatus::Todo, |info| info.status));
+            template_buttons_start(area, template_buttons_total(&labels))
+        } else {
+            area.right()
+        };
+        let text_end = template_text_end(area, info.is_some(), start_row, buttons_start);
+        let geometry = RowGeometry {
+            start_x: text_start,
+            end_x: text_end,
+            ellipsize: start_row,
+        };
+        let painted = paint_row(buf, y, prompt.text(), row, line_tokens, base, geometry);
         if let Some(selection) = selection {
             paint_selection(buf, area, y, index as u16, selection);
+        }
+        if let Some(info) = info {
+            paint_template_border(buf, area, y, info, role, painted, buttons_start);
         }
     }
     render_template_buttons(buf, area, prompt);
@@ -423,11 +448,12 @@ pub enum TemplateBlockButton {
     Delete,
 }
 
-/// 模板块操作按钮命中：起始逻辑行索引、按钮与绘制矩形。
+/// 模板块操作按钮命中：起始逻辑行索引、按钮、所属块状态与绘制矩形。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TemplateButtonHit {
     pub line: usize,
     pub button: TemplateBlockButton,
+    pub status: TemplateStatus,
     pub rect: Rect,
 }
 
@@ -439,51 +465,105 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
     TemplateBlockButton::Delete,
 ];
 
-/// 计算可见模板块起始行的操作按钮布局：按钮组贴内容区右缘右对齐；
-/// 文本与按钮组重叠时整组省略（窄屏避让，正文优先）。
+/// 模板块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
+fn template_gutter(block: bool) -> u16 {
+    if block {
+        layout::PROMPT_TEMPLATE_GUTTER_LEFT
+    } else {
+        0
+    }
+}
+
+/// 视觉行的模板块角色：软换行续行降级为中间行（`╭`/`╰` 只在首末行）。
+fn template_row_role(
+    info: Option<TemplateLineInfo>,
+    first: bool,
+    last: bool,
+) -> Option<TemplateLineRole> {
+    let info = info?;
+    Some(match info.role {
+        TemplateLineRole::Start if !first => TemplateLineRole::Middle,
+        TemplateLineRole::End if !last => TemplateLineRole::Middle,
+        role => role,
+    })
+}
+
+/// 按钮组文案（状态标签 + 复制/清理/删除）。
+fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
+    TEMPLATE_BUTTONS.map(|button| template_button_label(button, status))
+}
+
+/// 按钮组总宽（含 1 列间距）。
+fn template_buttons_total(labels: &[&str; 4]) -> u16 {
+    let width: usize = labels.iter().map(|label| label.width()).sum();
+    (width + labels.len().saturating_sub(1)) as u16
+}
+
+/// 按钮组起点：右对齐贴右边框内侧；极窄时钳到左边框之后（按钮常显、优先于文本）。
+fn template_buttons_start(area: Rect, total: u16) -> u16 {
+    let corner = area.right().saturating_sub(1);
+    corner
+        .saturating_sub(total)
+        .max(area.x + layout::PROMPT_TEMPLATE_GUTTER_LEFT)
+}
+
+/// 视觉行文本区右边界（不含）：普通行到内容区右缘，块行到右边框前；
+/// 起始行再为按钮组让出一列间距（空间不足时退到左边框之后，文本仅剩省略号）。
+fn template_text_end(area: Rect, block: bool, start_row: bool, buttons_start: u16) -> u16 {
+    let end = if block {
+        area.right()
+            .saturating_sub(layout::PROMPT_TEMPLATE_GUTTER_RIGHT)
+    } else {
+        area.right()
+    };
+    if start_row {
+        end.min(buttons_start.saturating_sub(1))
+            .max(area.x + layout::PROMPT_TEMPLATE_GUTTER_LEFT)
+    } else {
+        end
+    }
+}
+
+/// 计算可见模板块起始行的操作按钮布局：按钮组常显、贴内容区右缘右对齐；
+/// 文本与按钮组重叠时由渲染层省略号截断，不遮挡按钮。
 pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
     let rows = prompt.visual_rows();
+    let infos = template_line_infos(prompt.text());
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
-    for (line_index, line) in prompt.text().split('\n').enumerate() {
-        if parse_template_start_line(line).is_none() {
+    for (index, row) in rows.iter().enumerate() {
+        let first = index == 0 || rows[index - 1].line != row.line;
+        if !first {
             continue;
         }
-        let Some(row_index) = rows.iter().position(|row| row.line == line_index) else {
-            continue;
-        };
-        let Some(visible) = row_index.checked_sub(scroll) else {
+        let Some(visible) = index.checked_sub(scroll) else {
             continue;
         };
         if visible >= usize::from(area.height) {
             continue;
         }
-        let status = template_block_status(prompt, line_index);
-        let labels: Vec<&str> = TEMPLATE_BUTTONS
-            .iter()
-            .map(|button| template_button_label(*button, status))
-            .collect();
-        let total: usize = labels.iter().map(|label| label.width()).sum::<usize>()
-            + labels.len().saturating_sub(1);
-        let Some(start) = usize::from(area.right()).checked_sub(total) else {
+        let Some(info) = infos.get(row.line).copied().flatten() else {
             continue;
         };
-        let text_end = usize::from(area.x) + line.width();
-        if text_end + 1 > start {
+        if info.role != TemplateLineRole::Start {
             continue;
         }
-        let mut x = start as u16;
-        for (button, label) in TEMPLATE_BUTTONS.iter().zip(&labels) {
+        let labels = template_button_labels(info.status);
+        let start = template_buttons_start(area, template_buttons_total(&labels));
+        let y = area.y + visible as u16;
+        let mut x = start;
+        for (button, label) in TEMPLATE_BUTTONS.iter().zip(labels) {
             let width = label.width() as u16;
             hits.push(TemplateButtonHit {
-                line: line_index,
+                line: row.line,
                 button: *button,
-                rect: Rect::new(x, area.y + visible as u16, width, 1),
+                status: info.status,
+                rect: Rect::new(x, y, width, 1),
             });
-            x += width + 1;
+            x = x.saturating_add(width + 1);
         }
     }
     hits
@@ -511,21 +591,58 @@ fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) ->
     }
 }
 
-/// 模板块结束行状态；缺结束行回退 `todo`。
-fn template_block_status(prompt: &Prompt, start_line: usize) -> TemplateStatus {
-    parse_template_block_at_line(prompt.text(), start_line)
-        .and_then(|range| prompt.text().split('\n').nth(range.end))
-        .and_then(parse_template_end_line)
-        .map_or(TemplateStatus::Todo, |end| end.status)
+/// 绘制模板块边框：左槽 `╭─`/`│ `/`╰─`、右槽 `╮`/`│`/`╯`；
+/// 起始行顶边与结束行底边以 `─` 补满文本之后的空间（按钮组由后续绘制覆盖）。
+fn paint_template_border(
+    buf: &mut Buffer,
+    area: Rect,
+    y: u16,
+    info: TemplateLineInfo,
+    role: Option<TemplateLineRole>,
+    painted: u16,
+    buttons_start: u16,
+) {
+    let border = style::template_border(info.status);
+    let left = area.x;
+    let right = area.right().saturating_sub(1);
+    let mut put = |x: u16, symbol: char| {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(border);
+        }
+    };
+    match role {
+        Some(TemplateLineRole::Start) => {
+            put(left, '╭');
+            put(left + 1, '─');
+            put(right, '╮');
+            for x in painted..buttons_start.min(right) {
+                put(x, '─');
+            }
+        }
+        Some(TemplateLineRole::Middle) => {
+            put(left, '│');
+            put(right, '│');
+        }
+        Some(TemplateLineRole::End) => {
+            put(left, '╰');
+            put(left + 1, '─');
+            put(right, '╯');
+            for x in painted..right {
+                put(x, '─');
+            }
+        }
+        None => {}
+    }
 }
 
 /// 绘制模板块操作按钮；状态按钮按状态着色，其余次要信息。
 fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     for hit in template_buttons(prompt, area) {
-        let status = template_block_status(prompt, hit.line);
-        let label = template_button_label(hit.button, status);
+        let label = template_button_label(hit.button, hit.status);
         let button_style = match hit.button {
-            TemplateBlockButton::Status => style::template_status(status),
+            TemplateBlockButton::Status => style::template_status(hit.status),
             _ => style::template_button(),
         };
         for (offset, symbol) in label.chars().enumerate() {
@@ -538,20 +655,35 @@ fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     }
 }
 
-/// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。
+/// 行绘制几何：文本区起止 x（不含右端）与超宽是否以 `…` 截断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowGeometry {
+    start_x: u16,
+    end_x: u16,
+    ellipsize: bool,
+}
+
+/// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过；
+/// 返回最后一个绘制单元格之后的 x（供边框补线）；`ellipsize` 时超宽以 `…` 收尾。
 ///
 /// `base` 为视觉行起点在逻辑行内的字节偏移；token 区间按逻辑行计。
 fn paint_row(
     buf: &mut Buffer,
-    area: Rect,
     y: u16,
     text: &str,
     row: &VisualRow,
     tokens: &[Token],
     base: usize,
-) {
-    let mut x = area.x;
+    geometry: RowGeometry,
+) -> u16 {
+    let RowGeometry {
+        start_x,
+        end_x,
+        ellipsize,
+    } = geometry;
+    let mut x = start_x;
     let mut token_index = 0;
+    let mut clipped = false;
     for (offset, ch) in text[row.start..row.end].char_indices() {
         let width = ch.width().unwrap_or(0);
         if width == 0 {
@@ -568,7 +700,8 @@ fn paint_row(
             .get(token_index)
             .filter(|token| token.range.contains(&absolute))
             .map_or_else(style::text, |token| token_style(token.kind));
-        if x.saturating_add(width as u16) > area.right() {
+        if x.saturating_add(width as u16) > end_x {
+            clipped = true;
             break;
         }
         if let Some(cell) = buf.cell_mut((x, y)) {
@@ -584,6 +717,15 @@ fn paint_row(
         }
         x += width as u16;
     }
+    if clipped && ellipsize && end_x > start_x {
+        if let Some(cell) = buf.cell_mut((end_x - 1, y)) {
+            cell.reset();
+            cell.set_char('…');
+            cell.set_style(style::muted());
+        }
+        x = end_x;
+    }
+    x
 }
 
 /// 选区按内容行坐标反显；空白单元格同样覆盖，保证拖拽范围可见。

@@ -503,12 +503,23 @@ impl Prompt {
         }
     }
 
-    /// 按内容宽度软换行得到的视觉行。
+    /// 按内容宽度软换行得到的视觉行；模板块行扣除左右边框槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
+        let margins = usize::from(
+            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
+                + crate::layout::PROMPT_TEMPLATE_GUTTER_RIGHT,
+        );
+        let infos = markdown::template_line_infos(&self.text);
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (line, segment) in self.text.split('\n').enumerate() {
+            let block = infos.get(line).is_some_and(Option::is_some);
+            let width = if block {
+                width.saturating_sub(margins).max(1)
+            } else {
+                width
+            };
             let line_end = line_start + segment.len();
             let mut row_start = line_start;
             let mut col = 0;
@@ -536,7 +547,7 @@ impl Prompt {
         rows
     }
 
-    /// 光标在视口内的坐标（行、列）；滚出视口时为 None。
+    /// 光标在视口内的坐标（行、列，列含模板块左边框槽）；滚出视口时为 None。
     pub fn cursor_cell(&self) -> Option<(u16, u16)> {
         if self.height == 0 || self.width == 0 {
             return None;
@@ -547,7 +558,8 @@ impl Prompt {
         if visible >= usize::from(self.height) {
             return None;
         }
-        let col = col.min(usize::from(self.width) - 1);
+        let gutter = usize::from(self.line_gutter(rows[row].line));
+        let col = (col + gutter).min(usize::from(self.width) - 1);
         Some((visible as u16, col as u16))
     }
 
@@ -834,6 +846,7 @@ impl Prompt {
         let rows = self.visual_rows();
         let index = index.min(rows.len() - 1);
         let visual = rows[index];
+        let col = col.saturating_sub(self.line_gutter(visual.line));
         let slice = &self.text[visual.start..visual.end];
         let mut cell = 0;
         for (offset, ch) in slice.char_indices() {
@@ -849,6 +862,15 @@ impl Prompt {
             cell += width;
         }
         visual.end
+    }
+
+    /// 模板块行左边框槽宽度；非模板块行为 0（渲染、光标与鼠标坐标映射共用）。
+    fn line_gutter(&self, line: usize) -> u16 {
+        if markdown::is_template_block_line(&self.text, line) {
+            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
+        } else {
+            0
+        }
     }
 
     /// 编辑或光标移动后的统一收尾：解除面板压制、保持光标可见并重算面板。

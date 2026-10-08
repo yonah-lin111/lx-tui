@@ -2867,3 +2867,27 @@ fn slash_panel_keys_are_consumed_before_editing() {
     );
     assert!(state.prompt.slash_panel().is_none());
 }
+
+#[test]
+fn prompt_copy_text_prefers_selection_then_full_text() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    assert_eq!(prompt_copy_text(&state), None, "空 prompt 无复制内容");
+
+    apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
+    assert_eq!(
+        prompt_copy_text(&state).as_deref(),
+        Some("hello world"),
+        "无选区复制全文"
+    );
+
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    assert_eq!(
+        prompt_copy_text(&state).as_deref(),
+        Some("hello"),
+        "有选区优先复制选区"
+    );
+}

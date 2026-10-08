@@ -586,26 +586,72 @@ fn slash_panel_renders_templates_title_and_hit_tests_items() {
 
 #[test]
 fn template_command_and_title_and_mention_styles() {
-    let area = Rect::new(0, 0, 60, 3);
-    let prompt = prompt(60, 3, "&&& addTemplate --start 「title: 」\n@src/app.rs");
+    let area = Rect::new(0, 0, 60, 4);
+    let editor = prompt(
+        60,
+        4,
+        "&&& addTemplate --start 「title: 」\n&&& addTemplate --end\n@src/app.rs",
+    );
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
+    render(area, &mut buf, &editor, None);
 
-    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
-    assert_eq!(buf[(4, 0)].symbol(), "a");
-    assert_eq!(buf[(4, 0)].fg, Color::Green, "add 命令为绿色");
-    assert!(buf[(4, 0)].modifier.contains(Modifier::BOLD));
-    let dash = buf[(16, 0)].symbol();
-    assert_eq!(dash, "-", "--start 为 dim 标记");
-    assert!(buf[(16, 0)].modifier.contains(Modifier::DIM));
+    // 模板块左边框占前两列，文本整体右移。
+    assert_eq!(buf[(0, 0)].symbol(), "╭");
+    assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "todo 边框为靛蓝");
+    assert_eq!(buf[(1, 0)].symbol(), "─");
 
-    assert_eq!(buf[(24, 0)].symbol(), "「");
-    assert_eq!(buf[(24, 0)].fg, Color::Yellow);
-    assert!(buf[(24, 0)].modifier.contains(Modifier::UNDERLINED));
+    assert!(buf[(2, 0)].modifier.contains(Modifier::DIM), "&&& 为 dim");
+    assert_eq!(buf[(6, 0)].symbol(), "a");
+    assert_eq!(buf[(6, 0)].fg, Color::Green, "add 命令为绿色");
+    assert!(buf[(6, 0)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(18, 0)].symbol(), "-", "--start 为 dim 标记");
+    assert!(buf[(18, 0)].modifier.contains(Modifier::DIM));
 
-    assert_eq!(buf[(0, 1)].symbol(), "@");
-    assert_eq!(buf[(0, 1)].fg, Color::Yellow, "@文件为 Yellow 下划线");
-    assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(buf[(26, 0)].symbol(), "「");
+    assert_eq!(buf[(26, 0)].fg, Color::Yellow);
+    assert!(buf[(26, 0)].modifier.contains(Modifier::UNDERLINED));
+
+    // 非模板块行不缩进、无边框。
+    assert_eq!(buf[(0, 2)].symbol(), "@");
+    assert_eq!(buf[(0, 2)].fg, Color::Yellow, "@文件为 Yellow 下划线");
+    assert!(buf[(0, 2)].modifier.contains(Modifier::UNDERLINED));
+}
+
+#[test]
+fn template_block_draws_status_colored_border_box() {
+    let area = Rect::new(0, 0, 60, 4);
+    let running = prompt(
+        60,
+        4,
+        "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &running, None);
+
+    assert_eq!(buf[(0, 0)].symbol(), "╭");
+    assert_eq!(buf[(0, 0)].fg, Color::Yellow, "in_progress 边框为黄");
+    assert_eq!(buf[(59, 0)].symbol(), "╮");
+    assert_eq!(buf[(59, 0)].fg, Color::Yellow);
+    assert_eq!(buf[(0, 1)].symbol(), "│");
+    assert_eq!(buf[(0, 1)].fg, Color::Yellow);
+    assert_eq!(buf[(59, 1)].symbol(), "│");
+    assert_eq!(buf[(0, 2)].symbol(), "╰");
+    assert_eq!(buf[(59, 2)].symbol(), "╯");
+    assert_eq!(buf[(0, 2)].fg, Color::Yellow);
+    // 结束行底边以 `─` 补满文本之后。
+    assert_eq!(buf[(40, 2)].symbol(), "─");
+    // 块外行无边框。
+    assert_eq!(buf[(0, 3)].symbol(), " ");
+
+    let done = prompt(
+        60,
+        4,
+        "&&& bugTemplate --start 「title: 」\n&&& bugTemplate --end done",
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &done, None);
+    assert_eq!(buf[(0, 0)].fg, Color::Green, "done 边框为绿");
+    assert_eq!(buf[(0, 1)].fg, Color::Green);
 }
 
 #[test]
@@ -622,6 +668,12 @@ fn template_buttons_render_and_hit_test() {
     assert_eq!(buttons[1].button, TemplateBlockButton::Copy);
     assert_eq!(buttons[2].button, TemplateBlockButton::Clean);
     assert_eq!(buttons[3].button, TemplateBlockButton::Delete);
+    assert_eq!(buttons[3].status, TemplateStatus::Todo);
+    assert_eq!(
+        buttons[3].rect.right(),
+        69,
+        "按钮组贴右角内侧、右边框在末列"
+    );
 
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
@@ -630,6 +682,7 @@ fn template_buttons_render_and_hit_test() {
     assert!(row.contains(text::TEMPLATE_BUTTON_COPY), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_CLEAN), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
+    assert_eq!(buf[(69, 0)].symbol(), "╮");
 
     for hit in &buttons {
         let cell = hit.rect;
@@ -642,21 +695,35 @@ fn template_buttons_render_and_hit_test() {
 }
 
 #[test]
-fn template_buttons_hide_when_text_would_overlap() {
+fn template_buttons_stay_visible_and_text_ellipsizes() {
     let area = Rect::new(0, 0, 40, 10);
-    let prompt = prompt(
+    let editor = prompt(
         40,
         10,
         "&&& addTemplate --start 「title: 」\n&&& addTemplate --end",
     );
-    assert!(template_buttons(&prompt, area).is_empty(), "窄屏整组隐藏");
+    let buttons = template_buttons(&editor, area);
+    assert_eq!(buttons.len(), 4, "窄屏按钮不隐藏");
+    assert!(buttons[0].rect.x >= area.x + 2, "按钮让开左边框");
     let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
+    render(area, &mut buf, &editor, None);
     let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
-    assert!(
-        !row.contains(text::TEMPLATE_BUTTON_COPY),
-        "正文不被按钮遮挡: {row}"
+    assert!(row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
+    assert!(row.contains('…'), "左上内容省略号截断: {row}");
+    assert!(!row.contains("addTemplate"), "按钮组外的正文被截断: {row}");
+
+    // 极窄区域仍绘制按钮（按可用宽度截断）。
+    let narrow = Rect::new(0, 0, 20, 10);
+    let narrow_prompt = prompt(
+        20,
+        10,
+        "&&& addTemplate --start 「title: 」\n&&& addTemplate --end",
     );
+    let mut buf = Buffer::empty(narrow);
+    render(narrow, &mut buf, &narrow_prompt, None);
+    let row: String = (0..narrow.width).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(row.contains("[todo]"), "{row}");
 }
 
 #[test]

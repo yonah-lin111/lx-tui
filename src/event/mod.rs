@@ -352,7 +352,7 @@ fn handle_terminal_event(
                     *dirty = true;
                 }
                 Routed::Copy => {
-                    if let Some(text) = update::prompt_selection_text(state) {
+                    if let Some(text) = update::prompt_copy_text(state) {
                         let anchor = Some(state.prompt.id());
                         let now = Instant::now();
                         if crate::platform::write_clipboard(&text) {

@@ -187,11 +187,20 @@ pub fn template_button() -> Style {
     muted()
 }
 
-/// 模板块状态按钮：todo 次要、in_progress 强调、done 成功。
+/// 模板块状态按钮：todo 次要、in_progress 黄、done 绿（对齐 lx-agent 状态色）。
 pub fn template_status(status: TemplateStatus) -> Style {
     match status {
         TemplateStatus::Todo => muted(),
-        TemplateStatus::InProgress => accent(),
+        TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
+        TemplateStatus::Done => Style::default().fg(Color::Green),
+    }
+}
+
+/// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
+pub fn template_border(status: TemplateStatus) -> Style {
+    match status {
+        TemplateStatus::Todo => Style::default().fg(Color::LightBlue),
+        TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
         TemplateStatus::Done => Style::default().fg(Color::Green),
     }
 }

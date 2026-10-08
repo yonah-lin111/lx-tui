@@ -756,3 +756,66 @@ fn inside_template_block_tracks_offsets() {
     assert!(!inside_template_block(text, outside));
     assert!(!inside_template_block(text, 0));
 }
+
+#[test]
+fn template_line_infos_mark_roles_and_status() {
+    let text = "a\n&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end done\nb";
+    let infos = template_line_infos(text);
+    assert_eq!(infos.len(), 5);
+    assert_eq!(infos[0], None);
+    assert_eq!(
+        infos[1],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Start,
+            status: TemplateStatus::Done,
+        })
+    );
+    assert_eq!(
+        infos[2],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Middle,
+            status: TemplateStatus::Done,
+        })
+    );
+    assert_eq!(
+        infos[3],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::End,
+            status: TemplateStatus::Done,
+        })
+    );
+    assert_eq!(infos[4], None);
+}
+
+#[test]
+fn template_line_infos_unclosed_block_extends_to_end() {
+    let text = "&&& bugTemplate --start 「title: 」\n# Fix";
+    let infos = template_line_infos(text);
+    assert_eq!(
+        infos[0],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Start,
+            status: TemplateStatus::Todo,
+        })
+    );
+    assert_eq!(
+        infos[1],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Middle,
+            status: TemplateStatus::Todo,
+        })
+    );
+}
+
+#[test]
+fn is_template_block_line_checks_membership_and_bounds() {
+    let text = "a\n&&& addTemplate --start 「title: 」\nbody\n&&& addTemplate --end\nb";
+    assert!(!is_template_block_line(text, 0));
+    assert!(is_template_block_line(text, 1));
+    assert!(is_template_block_line(text, 2));
+    assert!(is_template_block_line(text, 3));
+    assert!(!is_template_block_line(text, 4));
+    assert!(!is_template_block_line(text, 99), "越界行不算块内");
+    let unclosed = "&&& bugTemplate --start 「title: 」\n# Fix";
+    assert!(is_template_block_line(unclosed, 1));
+}

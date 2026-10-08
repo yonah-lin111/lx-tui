@@ -699,6 +699,14 @@ pub fn prompt_selection_text(state: &AppState) -> Option<String> {
     state.prompt.selection_text(start, end)
 }
 
+/// prompt 复制文本：优先选区；无选区时复制全文；无内容返回 None。
+pub fn prompt_copy_text(state: &AppState) -> Option<String> {
+    if let Some(text) = prompt_selection_text(state) {
+        return Some(text);
+    }
+    (!state.prompt.text().is_empty()).then(|| state.prompt.text().to_string())
+}
+
 /// prompt 选区对应的内容行列范围；选区不在 prompt 或为空时返回 None。
 fn prompt_selection_range(state: &AppState) -> Option<((u16, u16), (u16, u16))> {
     let selection = state.selection?;

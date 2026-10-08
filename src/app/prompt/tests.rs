@@ -1356,3 +1356,36 @@ fn template_block_body_of_unclosed_block_reads_to_end() {
     assert!(!prompt.clean_template_block(0), "无空项时清理不产生变更");
     assert!(prompt.text().ends_with("# Fix"));
 }
+
+#[test]
+fn template_block_lines_shift_cursor_and_mouse_mapping() {
+    let mut editor = prompt(40, 10);
+    editor.insert_str("&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end\nplain");
+
+    // 块内行：渲染列 = 左边框槽 2 + 文本列；点击左边框（col 0/1）落到文本行首。
+    editor.set_cursor_from_cell(1, 2);
+    assert_eq!(editor.cursor_cell(), Some((1, 2)), "块行文本首列映射");
+    editor.set_cursor_from_cell(1, 0);
+    assert_eq!(editor.cursor_cell(), Some((1, 2)), "点击左边框钳到文本行首");
+    editor.set_cursor_from_cell(1, 4);
+    assert_eq!(editor.cursor_cell(), Some((1, 4)));
+
+    // 块外行不缩进。
+    editor.set_cursor_from_cell(3, 0);
+    assert_eq!(editor.cursor_cell(), Some((3, 0)));
+}
+
+#[test]
+fn template_block_lines_wrap_inside_border_gutters() {
+    let mut editor = prompt(10, 20);
+    editor.insert_str("&&& addTemplate --start 「title: 」");
+    let rows = editor.visual_rows();
+    let block_rows: Vec<_> = rows.iter().filter(|row| row.line == 0).collect();
+    assert!(block_rows.len() > 1, "块行按扣除边框槽后的宽度换行");
+    assert!(
+        block_rows
+            .iter()
+            .all(|row| display_width(&editor.text()[row.start..row.end]) <= 10 - 3),
+        "换行宽度扣除左右边框槽"
+    );
+}

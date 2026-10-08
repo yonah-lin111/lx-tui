@@ -192,6 +192,85 @@ pub fn inside_template_block(text: &str, offset: usize) -> bool {
     inside
 }
 
+/// 模板块行的渲染角色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateLineRole {
+    Start,
+    Middle,
+    End,
+}
+
+/// 模板块行的渲染信息：角色与所属块状态（未闭合块按 `todo`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateLineInfo {
+    pub role: TemplateLineRole,
+    pub status: TemplateStatus,
+}
+
+/// 逐行扫描模板块归属；不在块内的行为 None，未闭合块延伸至文末。
+pub fn template_line_infos(text: &str) -> Vec<Option<TemplateLineInfo>> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut infos = vec![None; lines.len()];
+    let mut start: Option<usize> = None;
+    for (index, content) in lines.iter().enumerate() {
+        if start.is_some() {
+            if let Some(end) = parse_template_end_line(content) {
+                let from = start.take().unwrap_or(index);
+                for (line, info) in infos.iter_mut().enumerate().take(index + 1).skip(from) {
+                    *info = Some(TemplateLineInfo {
+                        role: if line == from {
+                            TemplateLineRole::Start
+                        } else if line == index {
+                            TemplateLineRole::End
+                        } else {
+                            TemplateLineRole::Middle
+                        },
+                        status: end.status,
+                    });
+                }
+            }
+        } else if parse_template_start_line(content).is_some() {
+            start = Some(index);
+        }
+    }
+    if let Some(from) = start {
+        for (line, info) in infos.iter_mut().enumerate().skip(from) {
+            *info = Some(TemplateLineInfo {
+                role: if line == from {
+                    TemplateLineRole::Start
+                } else {
+                    TemplateLineRole::Middle
+                },
+                status: TemplateStatus::Todo,
+            });
+        }
+    }
+    infos
+}
+
+/// `line` 是否位于模板块内（含起止行）；用于渲染与光标/鼠标坐标映射。
+pub fn is_template_block_line(text: &str, line: usize) -> bool {
+    let mut inside = false;
+    let mut lines = 0;
+    for (index, content) in text.split('\n').enumerate() {
+        lines = index + 1;
+        if index > line {
+            break;
+        }
+        if inside {
+            if index == line {
+                return true;
+            }
+            if parse_template_end_line(content).is_some() {
+                inside = false;
+            }
+        } else if parse_template_start_line(content).is_some() {
+            inside = true;
+        }
+    }
+    inside && line < lines
+}
+
 /// 循环切换模板块结束行状态并保留 command、id 与 wt；非结束行返回 None。
 pub fn cycle_template_status(line: &str) -> Option<String> {
     use std::fmt::Write;

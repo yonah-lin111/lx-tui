@@ -90,10 +90,19 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(state.prompt.text(), content);
     assert!(state.prompt.slash_panel().is_none());
 
-    // 高亮：命令名绿色加粗、标题 Yellow 下划线。
+    // 高亮：命令名绿色加粗、标题 Yellow 下划线；块边框 todo 靛蓝。
     let terminal = draw(&state, &config);
     let start_row = area.y;
     let row = line_text(&terminal, start_row);
+    assert_eq!(
+        terminal.backend().buffer()[(area.x, start_row)].symbol(),
+        "╭"
+    );
+    assert_eq!(
+        terminal.backend().buffer()[(area.x, start_row)].fg,
+        Color::LightBlue,
+        "todo 边框为靛蓝"
+    );
     let command_x = cell_x(&row, "addTemplate");
     let command = &terminal.backend().buffer()[(command_x, start_row)];
     assert_eq!(command.fg, Color::Green, "row={row:?}");
@@ -103,7 +112,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert_eq!(title.fg, Color::Yellow);
     assert!(title.modifier.contains(Modifier::UNDERLINED));
 
-    // 按钮组可见。
+    // 按钮组常显。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
     assert_eq!(buttons.len(), 4, "宽屏下 [todo]/[copy]/[clean]/[del] 可见");
     let row = line_text(&terminal, area.y);
@@ -111,6 +120,42 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(row.contains("[copy]"), "{row}");
     assert!(row.contains("[clean]"), "{row}");
     assert!(row.contains("[del]"), "{row}");
+    assert!(row.contains('╮'), "右上角闭合: {row}");
+}
+
+#[test]
+fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 40;
+    let screen = Rect::new(0, 0, WIDTH, HEIGHT);
+    let view = ui::layout::compute(
+        screen,
+        &config,
+        state.sidebar_collapsed,
+        state.sidebar_width,
+        state.prompt_collapsed,
+        state.prompt_width,
+    );
+    let mut rects = layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    rects.push((state.prompt.id(), view.prompt));
+    update::resize_panes(&mut state, &rects);
+    update::focus_prompt(&mut state);
+    let (content, _) = slash_template_content(SlashCommandId::Add);
+    update::apply_editor(&mut state, EditorCommand::InsertText(content.into()));
+
+    let area = layout::prompt_text_rect(view.prompt);
+    let terminal = draw(&state, &config);
+    let row = line_text(&terminal, area.y);
+    assert!(row.contains("[todo]"), "窄屏按钮不隐藏: {row}");
+    assert!(row.contains("[del]"), "{row}");
+    assert!(row.contains('…'), "左上内容省略号截断: {row}");
+    assert!(!row.contains("addTemplate"), "正文让位按钮: {row}");
 }
 
 #[test]
