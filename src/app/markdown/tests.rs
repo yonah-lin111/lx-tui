@@ -768,7 +768,10 @@ fn clean_template_content_preserves_subblocks_and_collapses_blanks() {
 fn copy_template_content_strips_supple_and_log_markers() {
     let content = "「title: 标题」\n# Add Requirement\n\n+++ suppleTemplate --start 「title: 」\n- Extra: keep out\n+++ suppleTemplate --end\n%%% logTemplate --start 「title: 」\n- Time: 10:00\n%%% logTemplate --end\n- Location: here";
     let copied = copy_template_content(content);
-    assert!(copied.starts_with("「title: 标题」\n# Add Requirement"));
+    assert!(
+        copied.starts_with("# Add Requirement"),
+        "标题占位行不进复制内容: {copied}"
+    );
     assert!(!copied.contains("suppleTemplate"), "{copied}");
     assert!(!copied.contains("Extra"), "补充子块内容整体剔除: {copied}");
     assert!(!copied.contains("%%%"), "记录子块标记剔除: {copied}");
@@ -802,6 +805,24 @@ fn inside_template_block_tracks_offsets() {
     assert!(inside_template_block(text, inside));
     assert!(!inside_template_block(text, outside));
     assert!(!inside_template_block(text, 0));
+}
+
+#[test]
+fn template_block_start_at_finds_enclosing_block() {
+    let text = "a\n&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end\nb";
+    assert_eq!(template_block_start_at(text, 0), None, "块外行");
+    assert_eq!(template_block_start_at(text, 2), Some(1), "起始行");
+    assert_eq!(
+        template_block_start_at(text, text.find("body").expect("body")),
+        Some(1),
+        "正文行"
+    );
+    assert_eq!(
+        template_block_start_at(text, text.find("--end").expect("end")),
+        Some(1),
+        "结束行"
+    );
+    assert_eq!(template_block_start_at(text, text.len()), None, "块后行");
 }
 
 #[test]

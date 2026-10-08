@@ -283,13 +283,18 @@ pub fn scroll_slash(state: &mut AppState, delta: isize, base: usize) -> bool {
     state.prompt.slash_scroll(delta, base)
 }
 
-/// 复制模板块正文（对齐 lx-agent：剔除补充子块/记录块标记/注释与空项）；
+/// 复制模板块正文（对齐 lx-agent：剔除标题占位行/补充子块/记录块标记/注释与空项）；
 /// 返回待写入剪贴板的文本。
 pub fn copy_template_block(state: &mut AppState, start_line: usize) -> Option<String> {
     state
         .prompt
         .template_block_body(start_line)
         .map(|body| super::markdown::copy_template_content(&body))
+}
+
+/// 复制光标所在模板块正文（Cmd/Ctrl+Shift+C）；不在模板块内返回 None。
+pub fn copy_template_block_at_cursor(state: &mut AppState) -> Option<String> {
+    state.prompt.copy_text_at_cursor()
 }
 
 /// 清理模板块内未填写的空项（单步撤销）；返回是否产生变更。

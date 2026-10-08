@@ -1285,6 +1285,18 @@ fn template_block_body_extracts_inner_content() {
 }
 
 #[test]
+fn copy_text_at_cursor_extracts_block_without_title() {
+    let mut editor = prompt(60, 20);
+    with_add_template(&mut editor);
+    let copied = editor.copy_text_at_cursor().expect("copy");
+    assert_eq!(copied, "# Add Requirement", "标题占位行与空项不进复制内容");
+
+    let mut plain = prompt(40, 8);
+    type_text(&mut plain, "plain");
+    assert_eq!(plain.copy_text_at_cursor(), None, "不在块内不复制");
+}
+
+#[test]
 fn clean_template_block_removes_empty_items_and_undoes_once() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);

@@ -168,10 +168,10 @@ pub fn template_command(id: Option<SlashCommandId>) -> Style {
     Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
-/// 模板块标题占位符 `「title: …」`：Yellow 下划线。
+/// 模板块标题占位符 `「title: …」`：Cyan 下划线（与状态色边框、@ 提及黄区分）。
 pub fn template_title() -> Style {
     Style::default()
-        .fg(Color::Yellow)
+        .fg(Color::Cyan)
         .add_modifier(Modifier::UNDERLINED)
 }
 

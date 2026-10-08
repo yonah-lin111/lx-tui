@@ -113,7 +113,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     assert!(title_row.contains("「 title: 」"), "{title_row}");
     let title_x = cell_x(&title_row, "「");
     let title = &terminal.backend().buffer()[(title_x, start_row + 1)];
-    assert_eq!(title.fg, Color::Yellow);
+    assert_eq!(title.fg, Color::Cyan);
     assert!(title.modifier.contains(Modifier::UNDERLINED));
 
     // 按钮组常显。
@@ -190,7 +190,7 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
 
     // 复制正文不修改文本（标题占位行保留）。
     let body = update::copy_template_block(&mut state, 0).expect("body");
-    assert!(body.starts_with("「title: 」\n# Add Requirement"), "{body}");
+    assert!(body.starts_with("# Add Requirement"), "{body}");
     assert!(!body.contains("&&&"));
 
     // 状态按钮 todo → in_progress，渲染出 [run]。

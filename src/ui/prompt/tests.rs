@@ -608,7 +608,7 @@ fn template_command_and_title_and_mention_styles() {
     assert!(buf[(18, 0)].modifier.contains(Modifier::DIM));
 
     assert_eq!(buf[(26, 0)].symbol(), "「");
-    assert_eq!(buf[(26, 0)].fg, Color::Yellow);
+    assert_eq!(buf[(26, 0)].fg, Color::Cyan, "标题占位符为 Cyan");
     assert!(buf[(26, 0)].modifier.contains(Modifier::UNDERLINED));
 
     // 非模板块行不缩进、无边框。

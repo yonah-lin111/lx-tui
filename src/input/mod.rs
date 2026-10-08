@@ -18,8 +18,10 @@ pub enum Routed {
     Editor(EditorCommand),
     /// 浮层按键。
     Overlay(OverlayKey),
-    /// 复制 prompt 选区到系统剪贴板。
+    /// 复制 prompt 选区（无选区为全文）到系统剪贴板。
     Copy,
+    /// 复制光标所在模板块正文到系统剪贴板。
+    CopyTemplateBlock,
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
 }
@@ -27,9 +29,9 @@ pub enum Routed {
 /// 路由一次按键；Release 事件与无法编码的按键返回 None。
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
-/// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区，
-/// 未映射的按键被吞掉，绝不写入 PTY；`pane_lx` 为真（活动窗格显示 lx 页）时
-/// 除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
+/// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
+/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文，未映射的按键被吞掉，绝不写入 PTY；
+/// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,
     mode: TermMode,
@@ -47,13 +49,14 @@ pub fn route(
         return overlay_key(key, kind).map(Routed::Overlay);
     }
     if prompt_focused {
-        if matches!(key.code, KeyCode::Char('c' | 'C'))
+        let copy_chord = matches!(key.code, KeyCode::Char('c' | 'C'))
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT)
-        {
+            && !key.modifiers.contains(KeyModifiers::ALT);
+        if copy_chord {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                return Some(Routed::CopyTemplateBlock);
+            }
             return Some(Routed::Copy);
         }
         return editor_command(key).map(Routed::Editor);

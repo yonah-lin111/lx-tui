@@ -124,14 +124,12 @@ fn scan_template_start(line: &str, tokens: &mut Vec<Token>) -> bool {
 /// 模板块内独立成行的标题占位符 `「title: …」` 区间（允许缩进与尾随空白）；
 /// 用于 `--start` 下一行行首的标题行高亮。
 fn standalone_title(line: &str) -> Option<Range<usize>> {
-    let start = line.len() - line.trim_start().len();
-    let rest = &line[start..];
-    if !rest.starts_with("「title:") {
+    if !markdown::is_title_line(line) {
         return None;
     }
-    let close = rest.find('」')?;
-    let end = start + close + '」'.len_utf8();
-    line[end..].trim().is_empty().then_some(start..end)
+    let start = line.len() - line.trim_start().len();
+    let close = line[start..].find('」')?;
+    Some(start..start + close + '」'.len_utf8())
 }
 
 /// 模板块结束行 token：`&&&`、`--end`、状态词与 `{id:}`/`{wt:}` 元数据为结构标记，

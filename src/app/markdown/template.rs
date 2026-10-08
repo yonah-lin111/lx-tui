@@ -192,6 +192,20 @@ pub fn inside_template_block(text: &str, offset: usize) -> bool {
     inside
 }
 
+/// offset 所在模板块的开始行；不在块内返回 None（含起止行自身）。
+pub fn template_block_start_at(text: &str, offset: usize) -> Option<usize> {
+    let bounded = offset.min(text.len());
+    if !text.is_char_boundary(bounded) {
+        return None;
+    }
+    let line = text[..bounded].matches('\n').count();
+    let infos = template_line_infos(text);
+    infos.get(line).copied().flatten()?;
+    (0..=line)
+        .rev()
+        .find(|index| infos[*index].is_some_and(|info| info.role == TemplateLineRole::Start))
+}
+
 /// 模板块行的渲染角色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TemplateLineRole {
@@ -369,12 +383,15 @@ pub fn clean_template_content(text: &str) -> String {
 }
 
 /// 复制用正文（对齐 lx-agent 的复制语义，不修改原文）：
-/// 剔除 `+++` 补充子块（含内部内容）、保留 `%%%` 记录子块内容但剔除其起止标记行、
-/// 剔除 `//` 注释行，最后清理未填写空项。
+/// 剔除标题占位行（`--start` 下一行）、`+++` 补充子块（含内部内容）、
+/// 保留 `%%%` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。
 pub fn copy_template_content(text: &str) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut inside_supple = false;
-    for line in text.split('\n') {
+    for (index, line) in text.split('\n').enumerate() {
+        if index == 0 && is_title_line(line) {
+            continue;
+        }
         if let Some(kind) = copy_subblock_start(line) {
             if kind == CopySubblock::Supple {
                 inside_supple = true;
@@ -393,6 +410,16 @@ pub fn copy_template_content(text: &str) -> String {
         kept.push(line);
     }
     clean_template_content(&kept.join("\n"))
+}
+
+/// 独立成行的标题占位行 `「title: …」`（允许缩进与尾随空白）。
+pub fn is_title_line(line: &str) -> bool {
+    let rest = line.trim_start();
+    if !rest.starts_with("「title:") {
+        return false;
+    }
+    rest.find('」')
+        .is_some_and(|close| rest[close + '」'.len_utf8()..].trim().is_empty())
 }
 
 /// 复制语义下的子块类型：`+++` 补充块整体剔除；`%%%` 记录块保留内容、剔除标记。

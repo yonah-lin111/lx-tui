@@ -12,6 +12,13 @@ impl Prompt {
         Some(self.text[from..to].to_string())
     }
 
+    /// 复制快捷键用正文：光标所在模板块按复制语义提取；不在块内返回 None。
+    pub fn copy_text_at_cursor(&self) -> Option<String> {
+        let start = markdown::template_block_start_at(&self.text, self.cursor)?;
+        let body = self.template_block_body(start)?;
+        Some(markdown::copy_template_content(&body))
+    }
+
     /// 清理模板块内未填写的空项（单步撤销）；返回是否产生变更。
     pub fn clean_template_block(&mut self, start_line: usize) -> bool {
         let Some(range) = markdown::parse_template_block_at_line(&self.text, start_line) else {

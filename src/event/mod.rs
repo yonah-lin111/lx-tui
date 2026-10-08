@@ -353,27 +353,13 @@ fn handle_terminal_event(
                 }
                 Routed::Copy => {
                     if let Some(text) = update::prompt_copy_text(state) {
-                        let anchor = Some(state.prompt.id());
-                        let now = Instant::now();
-                        if crate::platform::write_clipboard(&text) {
-                            update::show_toast(
-                                state,
-                                Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now)
-                                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                            );
-                        } else {
-                            tracing::warn!("clipboard write failed");
-                            update::show_toast(
-                                state,
-                                Toast::new(
-                                    ToastKind::Error,
-                                    ui::text::TOAST_COPY_FAILED,
-                                    anchor,
-                                    now,
-                                )
-                                .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                            );
-                        }
+                        copy_with_toast(state, &text);
+                        *dirty = true;
+                    }
+                }
+                Routed::CopyTemplateBlock => {
+                    if let Some(text) = update::copy_template_block_at_cursor(state) {
+                        copy_with_toast(state, &text);
                         *dirty = true;
                     }
                 }
@@ -1520,24 +1506,8 @@ fn template_button_at(
 fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHit) {
     match hit.button {
         ui::prompt::TemplateBlockButton::Copy => {
-            let Some(text) = update::copy_template_block(state, hit.line) else {
-                return;
-            };
-            let anchor = Some(state.prompt.id());
-            let now = Instant::now();
-            if crate::platform::write_clipboard(&text) {
-                update::show_toast(
-                    state,
-                    Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, anchor, now)
-                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                );
-            } else {
-                tracing::warn!("clipboard write failed");
-                update::show_toast(
-                    state,
-                    Toast::new(ToastKind::Error, ui::text::TOAST_COPY_FAILED, anchor, now)
-                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
-                );
+            if let Some(text) = update::copy_template_block(state, hit.line) {
+                copy_with_toast(state, &text);
             }
         }
         ui::prompt::TemplateBlockButton::Clean => {
@@ -1550,6 +1520,22 @@ fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHi
             update::toggle_template_status(state, hit.line);
         }
     }
+}
+
+/// 写系统剪贴板并在 prompt 锚点弹出成功/失败 toast。
+fn copy_with_toast(state: &mut AppState, text: &str) {
+    let anchor = Some(state.prompt.id());
+    let now = Instant::now();
+    let (kind, message) = if crate::platform::write_clipboard(text) {
+        (ToastKind::Info, ui::text::TOAST_COPIED)
+    } else {
+        tracing::warn!("clipboard write failed");
+        (ToastKind::Error, ui::text::TOAST_COPY_FAILED)
+    };
+    update::show_toast(
+        state,
+        Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+    );
 }
 
 /// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。

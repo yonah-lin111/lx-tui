@@ -23,23 +23,42 @@ const ROWS: u16 = 30;
 const PROMPT_X: u16 = 80;
 const PROMPT_Y: u16 = 20;
 
-/// 临时 `pbcopy` 桩：把 stdin 丢弃，避免测试写真实剪贴板。
+/// 临时 `pbcopy` 桩：把 stdin 落盘到 `copied.txt`，避免测试写真实剪贴板。
 struct PbcopyStub {
     dir: PathBuf,
 }
 
 impl PbcopyStub {
     fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!("lx-tui-copy-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("lx-tui-copy-{}-{id}", std::process::id()));
         fs::create_dir_all(&dir).expect("create stub dir");
         let script = dir.join("pbcopy");
-        fs::write(&script, "#!/bin/sh\ncat >/dev/null\n").expect("write stub");
+        fs::write(
+            &script,
+            "#!/bin/sh\ncat > \"$(dirname \"$0\")/copied.txt\"\n",
+        )
+        .expect("write stub");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).expect("chmod stub");
         Self { dir }
     }
 
     fn path(&self) -> &str {
         self.dir.to_str().expect("stub path is utf8")
+    }
+
+    /// 等待并读取最近一次复制内容。
+    fn copied(&self, timeout: Duration) -> Option<String> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Ok(text) = fs::read_to_string(self.dir.join("copied.txt")) {
+                return Some(text);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
     }
 }
 
@@ -236,4 +255,33 @@ fn kitty_super_c_copies_prompt_selection() {
         "cmd+c 应触发复制 toast：\n{}",
         app.screen()
     );
+}
+
+#[test]
+fn cmd_shift_c_copies_template_block_without_title() {
+    let stub = PbcopyStub::new();
+    let app = App::spawn(&stub);
+    app.send(&press(PROMPT_X, PROMPT_Y));
+    app.send(&release(PROMPT_X, PROMPT_Y));
+    std::thread::sleep(Duration::from_millis(100));
+    // `/add` 回车插入模板块，光标落在标题占位行（块内）。
+    app.send(b"/add");
+    std::thread::sleep(Duration::from_millis(100));
+    app.send(b"\r");
+    assert!(
+        app.wait_for("# Add Requirement", Duration::from_secs(3)),
+        "template inserted:\n{}",
+        app.screen()
+    );
+    // kitty 键盘协议：CSI 99;10u = 'c' + shift + super（Cmd+Shift+C）。
+    app.send(b"\x1b[99;10u");
+    assert!(
+        app.wait_for("Copied to clipboard", Duration::from_secs(3)),
+        "cmd+shift+c 应触发复制 toast：\n{}",
+        app.screen()
+    );
+    let copied = stub
+        .copied(Duration::from_secs(3))
+        .expect("pbcopy 收到内容");
+    assert_eq!(copied, "# Add Requirement", "复制内容不含标题占位行与空项");
 }
