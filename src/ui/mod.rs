@@ -751,10 +751,15 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
             style::border_title(),
         ));
     if let Some(name) = workspace_path_name(state) {
-        let label = format!(" {}{name} ", text::PROMPT_WORKSPACE_PREFIX);
-        block = block.title_top(
-            Line::from(Span::styled(label, style::border_title())).alignment(Alignment::Right),
-        );
+        // 前缀与值分色，与底边框 `b:分支` 一致：前缀强调色、值 muted。
+        let label = Line::from(vec![
+            Span::styled(" ", style::muted()),
+            Span::styled(text::PROMPT_WORKSPACE_PREFIX, style::accent()),
+            Span::styled(name.to_string(), style::muted()),
+            Span::styled(" ", style::muted()),
+        ])
+        .alignment(Alignment::Right);
+        block = block.title_top(label);
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);

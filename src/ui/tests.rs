@@ -1153,6 +1153,19 @@ fn prompt_title_moves_path_name_to_top_right() {
         2,
         "ws 标签贴右上角（后接空格与右边框）: {top}"
     );
+    // 高亮与底边框 `b:` 一致：前缀强调色、值 muted。
+    let buffer = render_buffer(&state);
+    let prefix = &buffer[(view.prompt.x + label_start as u16, view.prompt.y)];
+    assert_eq!(prefix.symbol(), "w");
+    assert_eq!(prefix.fg, ratatui::style::Color::Cyan);
+    assert!(prefix.modifier.contains(ratatui::style::Modifier::BOLD));
+    let value = &buffer[(
+        view.prompt.x + label_start as u16 + text::PROMPT_WORKSPACE_PREFIX.len() as u16,
+        view.prompt.y,
+    )];
+    assert_eq!(value.symbol(), "l");
+    assert!(value.modifier.contains(ratatui::style::Modifier::DIM));
+    assert_ne!(value.fg, ratatui::style::Color::Cyan);
 
     // linked worktree：取 checkout 路径末段，而非工作区 cwd 子目录。
     state.workspaces[0].git = Some(WorkspaceGit {
