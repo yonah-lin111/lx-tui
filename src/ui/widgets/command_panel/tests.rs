@@ -72,6 +72,24 @@ fn view_window<'a>(
         window_start,
         anchor_row,
         max_height,
+        title: None,
+        right_title: None,
+        footer: None,
+    }
+}
+
+/// 带边框文案的视图：顶边左/右标题与底边提示。
+fn view_titled<'a>(
+    items: &'a [CommandItem<'a>],
+    title: Option<&'a str>,
+    right_title: Option<&'a str>,
+    footer: Option<&'a str>,
+) -> CommandPanelView<'a> {
+    CommandPanelView {
+        title,
+        right_title,
+        footer,
+        ..view(items, 0, 0, None)
     }
 }
 
@@ -412,4 +430,75 @@ fn renders_scrollbar_when_overflowing() {
             .modifier
             .contains(Modifier::DIM)
     );
+}
+
+#[test]
+fn renders_titles_and_footer_on_border() {
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    let items = stacked(&[("app.rs", "src")]);
+    let rect = render(
+        area,
+        &mut buf,
+        &view_titled(
+            &items,
+            Some("Files"),
+            Some("src"),
+            Some("[open ⇧↵] [back ⇧⌫]"),
+        ),
+    )
+    .expect("panel renders");
+
+    let top = row_text(&buf, area, rect.y);
+    assert!(top.contains(" Files "), "{top}");
+    assert!(top.contains(" src "), "{top}");
+    assert!(
+        top.find(" Files ").expect("left title") < top.find(" src ").expect("right title"),
+        "左侧标题在右标题之前：{top}"
+    );
+    let bottom = row_text(&buf, area, rect.bottom() - 1);
+    assert!(bottom.contains("[open ⇧↵] [back ⇧⌫]"), "{bottom}");
+}
+
+#[test]
+fn panel_width_covers_footer_and_titles() {
+    use unicode_width::UnicodeWidthStr;
+
+    let area = Rect::new(0, 0, 60, 8);
+    let footer = "[open ⇧↵] [back ⇧⌫]";
+    let items = stacked(&[("a.rs", "s")]);
+    let plain = layout(area, &view(&items, 0, 0, None)).expect("plain layout");
+    let titled = layout(
+        area,
+        &view_titled(&items, Some("Files"), Some("src"), Some(footer)),
+    )
+    .expect("titled layout");
+
+    assert!(titled.rect.width > plain.rect.width);
+    assert!(
+        usize::from(titled.rect.width) >= footer.width() + 4,
+        "footer 必须完整可见: {} < {}",
+        titled.rect.width,
+        footer.width() + 4
+    );
+}
+
+#[test]
+fn clamps_titles_when_area_is_narrow() {
+    let area = Rect::new(0, 0, 12, 6);
+    let mut buf = Buffer::empty(area);
+    let items = stacked(&[("a.rs", "s")]);
+    let rect = render(
+        area,
+        &mut buf,
+        &view_titled(
+            &items,
+            Some("Files"),
+            Some("very-long-directory"),
+            Some("[open ⇧↵] [back ⇧⌫]"),
+        ),
+    )
+    .expect("panel renders");
+
+    assert_eq!(rect.width, 12, "宽度钳到可用区域且不 panic");
 }

@@ -60,10 +60,10 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
                 state.prompt.replace_range(start, end, &ch.to_string())
             }
             EditorCommand::InsertText(text) => state.prompt.replace_range(start, end, text),
-            EditorCommand::Newline | EditorCommand::NewlineBelow => {
+            EditorCommand::Newline | EditorCommand::NewlineBelow | EditorCommand::EnterFolder => {
                 state.prompt.replace_range(start, end, "\n")
             }
-            EditorCommand::Backspace | EditorCommand::Delete => {
+            EditorCommand::Backspace | EditorCommand::LeaveFolder | EditorCommand::Delete => {
                 state.prompt.replace_range(start, end, "")
             }
             _ => false,
@@ -78,7 +78,9 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::InsertText(text) => state.prompt.insert_str(&text),
         EditorCommand::Newline => state.prompt.newline(),
         EditorCommand::NewlineBelow => state.prompt.newline_below(),
+        EditorCommand::EnterFolder => state.prompt.newline_below(),
         EditorCommand::Backspace => state.prompt.backspace(),
+        EditorCommand::LeaveFolder => state.prompt.backspace(),
         EditorCommand::Delete => state.prompt.delete(),
         EditorCommand::Left => state.prompt.move_left(),
         EditorCommand::Right => state.prompt.move_right(),
@@ -119,12 +121,24 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
 }
 
 /// 文件提及面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
+///
+/// `Shift+Enter` 在面板打开时由面板接管（高亮非目录或无子项目录 no-op）；面板未打开时
+/// 回落为 `NewlineBelow`。`Shift+Backspace` 只在 @ 路径上下文（query 含 `/`）回退目录，
+/// 其余情况回落为普通退格。
 fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     match command {
         EditorCommand::Up => state.prompt.mention_move(-1),
         EditorCommand::Down => state.prompt.mention_move(1),
         EditorCommand::Newline => state.prompt.mention_confirm(),
         EditorCommand::Escape => state.prompt.mention_escape(),
+        EditorCommand::EnterFolder => {
+            if state.prompt.mention().is_none() {
+                return false;
+            }
+            state.prompt.mention_enter_folder();
+            true
+        }
+        EditorCommand::LeaveFolder => state.prompt.mention_leave_folder(),
         _ => false,
     }
 }

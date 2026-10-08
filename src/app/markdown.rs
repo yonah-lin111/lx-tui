@@ -244,6 +244,14 @@ impl MentionPanel {
         &self.items
     }
 
+    /// 当前浏览目录的末段名（query 最后一个 `/` 之前的部分）；未进入目录返回 None。
+    pub fn scope_name(&self) -> Option<&str> {
+        let query = self.trigger.query.as_str();
+        let scope = &query[..=query.rfind('/')?];
+        let scope = scope.strip_suffix('/')?;
+        (!scope.is_empty()).then(|| scope.rsplit('/').next().unwrap_or(scope))
+    }
+
     /// 高亮索引。
     pub fn active(&self) -> usize {
         self.active
@@ -336,13 +344,25 @@ fn is_mention_query_char(ch: char) -> bool {
         )
 }
 
-/// 按查询过滤候选：文件名优先打分排序后截取展示上限；空查询按路径排序全部展示。
+/// 按查询过滤候选：文件名优先打分排序后截取展示上限。
+///
+/// query 含 `/` 时按「目录范围 + 过滤词」解释：候选必须是范围目录的后代（范围自身除外），
+/// 空过滤词只保留直接子项；其余在范围内的相对路径上打分，无范围时保持全局打分。
+/// 空查询按路径排序全部展示。
 pub fn filter_mentions(entries: &[MentionEntry], query: &str) -> Vec<MentionEntry> {
     let query = query.trim().to_lowercase();
+    let (scope, rest) = split_mention_scope(&query);
     let mut scored: Vec<(u32, &MentionEntry)> = entries
         .iter()
         .filter_map(|entry| {
-            let score = mention_score(&entry.path, &query);
+            let path = match scope {
+                Some(scope) => scope_relative(&entry.path, scope)?,
+                None => entry.path.as_str(),
+            };
+            if scope.is_some() && rest.is_empty() && path.contains('/') {
+                return None;
+            }
+            let score = mention_score(path, rest);
             (score > 0).then_some((score, entry))
         })
         .collect();
@@ -357,6 +377,44 @@ pub fn filter_mentions(entries: &[MentionEntry], query: &str) -> Vec<MentionEntr
         .take(MENTION_LIMIT)
         .map(|(_, entry)| entry.clone())
         .collect()
+}
+
+/// 拆分提及 query 的目录范围与过滤词：`src/ui/ma` → (`Some("src/ui/")`, `"ma"`)；
+/// 无 `/` → (`None`, 全部 query)。范围前缀含尾 `/`，用于限定候选目录。
+fn split_mention_scope(query: &str) -> (Option<&str>, &str) {
+    match query.rfind('/') {
+        Some(index) => (Some(&query[..=index]), &query[index + 1..]),
+        None => (None, query),
+    }
+}
+
+/// query 的目录范围前缀（含尾 `/`）；无 `/` 返回 None。
+pub fn mention_scope(query: &str) -> Option<&str> {
+    split_mention_scope(query).0
+}
+
+/// scope 前缀下的相对路径（原大小写）；不在范围内或恰为范围自身返回 None。
+///
+/// 大小写折叠在极少数非 ASCII 情况下会改变字节长度，此时退回整路径参与打分，
+/// 候选已由前缀校验保证范围正确。
+fn scope_relative<'a>(path: &'a str, scope: &str) -> Option<&'a str> {
+    let normalized = path.to_lowercase();
+    let rest = normalized.strip_prefix(scope)?;
+    if rest.is_empty() {
+        return None;
+    }
+    Some(path.get(scope.len()..).unwrap_or(path))
+}
+
+/// Shift+Backspace 的目录回退区间：删除 query 中倒数第二个 `/` 到光标之间的内容，
+/// 即丢掉「当前目录末段 + 过滤词」回上一级；只有一段路径（`@src/`）时退到 `@`。
+/// query 不含 `/`（无目录上下文）返回 None，交回普通退格。
+pub fn mention_parent_range(text: &str, cursor: usize) -> Option<Range<usize>> {
+    let trigger = mention_trigger(text, cursor)?;
+    let last = trigger.query.rfind('/')?;
+    let keep = trigger.query[..last].rfind('/').map_or(0, |prev| prev + 1);
+    let start = trigger.from + 1 + keep;
+    (start < trigger.to).then_some(start..trigger.to)
 }
 
 /// 文件名优先的模糊打分；对齐 lx-agent 的 `getProjectFileMatchScore`。

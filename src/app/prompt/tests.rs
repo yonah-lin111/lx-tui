@@ -1012,3 +1012,130 @@ fn mention_set_active_and_confirm_at_inserts_clicked_item() {
     assert!(prompt.mention_confirm_at(0));
     assert_eq!(prompt.text(), "@a.rs ");
 }
+
+/// 进入目录场景：`src` 与 `src/ui` 及其后代 + 范围外文件。
+fn folder_entries() -> Vec<MentionEntry> {
+    vec![
+        MentionEntry {
+            path: "docs/readme.md".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "src".into(),
+            is_directory: true,
+        },
+        file("src/app.rs"),
+        file("src/main.rs"),
+        MentionEntry {
+            path: "src/ui".into(),
+            is_directory: true,
+        },
+        file("src/ui/mod.rs"),
+    ]
+}
+
+#[test]
+fn mention_enter_folder_writes_path_and_scopes_panel() {
+    let mut prompt = mention_prompt(folder_entries());
+    assert!(prompt.mention_set_active(1), "高亮 src 目录");
+    assert!(prompt.mention_enter_folder());
+    assert_eq!(prompt.text(), "@src/");
+    assert_eq!(prompt.cursor_cell(), Some((0, 5)));
+
+    let panel = prompt.mention().expect("scoped panel");
+    let paths: Vec<&str> = panel
+        .items()
+        .iter()
+        .map(|entry| entry.path.as_str())
+        .collect();
+    assert_eq!(
+        paths,
+        vec!["src/app.rs", "src/main.rs", "src/ui"],
+        "只列直接子项"
+    );
+    assert_eq!(panel.scope_name(), Some("src"));
+    assert_eq!(panel.active(), 0, "进入目录后高亮回到首项");
+}
+
+#[test]
+fn mention_enter_folder_nests_one_level_per_press() {
+    let mut prompt = mention_prompt(folder_entries());
+    assert!(prompt.mention_set_active(1));
+    assert!(prompt.mention_enter_folder());
+    assert_eq!(prompt.text(), "@src/");
+    assert!(prompt.mention_set_active(2), "高亮 src/ui");
+    assert!(prompt.mention_enter_folder());
+    assert_eq!(prompt.text(), "@src/ui/");
+    let panel = prompt.mention().expect("nested panel");
+    assert_eq!(panel.scope_name(), Some("ui"));
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].path, "src/ui/mod.rs");
+}
+
+#[test]
+fn mention_enter_folder_ignores_files_and_empty_directories() {
+    let mut prompt = mention_prompt(vec![
+        MentionEntry {
+            path: "empty".into(),
+            is_directory: true,
+        },
+        file("main.rs"),
+    ]);
+    assert_eq!(prompt.mention().expect("panel").active(), 0);
+    assert!(!prompt.mention_enter_folder(), "无缓存子项的目录不可进入");
+    assert_eq!(prompt.text(), "@");
+
+    prompt.mention_set_active(1);
+    assert!(!prompt.mention_enter_folder(), "高亮文件不可进入");
+    assert_eq!(prompt.text(), "@");
+}
+
+#[test]
+fn mention_enter_folder_is_undoable_and_restores_root_scope() {
+    let mut prompt = mention_prompt(folder_entries());
+    prompt.mention_set_active(1);
+    assert!(prompt.mention_enter_folder());
+    assert_eq!(prompt.text(), "@src/");
+    prompt.undo();
+    assert_eq!(prompt.text(), "@");
+    let panel = prompt.mention().expect("root panel");
+    assert!(panel.scope_name().is_none());
+    assert_eq!(panel.items().len(), 6, "撤销回到全量候选");
+}
+
+#[test]
+fn mention_leave_folder_steps_up_by_directory_level() {
+    let mut prompt = mention_prompt(folder_entries());
+    prompt.mention_set_active(1);
+    assert!(prompt.mention_enter_folder());
+    prompt.mention_set_active(2);
+    assert!(prompt.mention_enter_folder());
+    assert_eq!(prompt.text(), "@src/ui/");
+
+    assert!(prompt.mention_leave_folder());
+    assert_eq!(prompt.text(), "@src/");
+    assert!(prompt.mention_leave_folder());
+    assert_eq!(prompt.text(), "@");
+}
+
+#[test]
+fn mention_leave_folder_drops_filter_and_works_when_panel_hidden() {
+    let mut prompt = mention_prompt(folder_entries());
+    prompt.mention_set_active(1);
+    assert!(prompt.mention_enter_folder());
+    prompt.insert_str("zzz");
+    assert_eq!(prompt.text(), "@src/zzz");
+    assert!(prompt.mention().is_none(), "过滤无候选时面板隐藏");
+    assert!(prompt.mention_leave_folder(), "面板隐藏时仍按文本回退");
+    assert_eq!(prompt.text(), "@");
+}
+
+#[test]
+fn mention_leave_folder_falls_back_without_path_context() {
+    let mut prompt = mention_prompt(vec![file("main.rs")]);
+    prompt.insert_char('m');
+    assert!(!prompt.mention_leave_folder(), "无 / 不构成路径上下文");
+    assert_eq!(prompt.text(), "@m");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "@");
+}

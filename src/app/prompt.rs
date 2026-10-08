@@ -340,6 +340,34 @@ impl Prompt {
         true
     }
 
+    /// Shift+Enter：@ 面板高亮目录可进入时把其根相对路径写回文本（`@路径/`）；返回是否消费。
+    ///
+    /// 进入后提及触发保持打开，面板按路径范围只列该目录候选；高亮非目录或目录无候选时返回 false。
+    pub fn mention_enter_folder(&mut self) -> bool {
+        let Some((range, insertion)) = self.mention.enter_folder(self.text.len()) else {
+            return false;
+        };
+        self.break_group();
+        self.record(EditKind::Other);
+        self.text.replace_range(range.clone(), &insertion);
+        self.cursor = range.start + insertion.len();
+        self.settle();
+        true
+    }
+
+    /// Shift+Backspace：@ 路径上下文（query 含 `/`）时按目录层级回退一级；返回是否消费。
+    pub fn mention_leave_folder(&mut self) -> bool {
+        let Some(range) = markdown::mention_parent_range(&self.text, self.cursor) else {
+            return false;
+        };
+        self.break_group();
+        self.record(EditKind::Delete);
+        self.text.replace_range(range.clone(), "");
+        self.cursor = range.start;
+        self.settle();
+        true
+    }
+
     /// 提及面板打开时关闭且不改文本；返回是否消费该按键。
     pub fn mention_escape(&mut self) -> bool {
         if !self.mention.escape() {

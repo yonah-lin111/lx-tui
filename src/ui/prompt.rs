@@ -92,7 +92,7 @@ fn block_items<'a>(data: &'a BlockPanelData) -> Vec<CommandItem<'a>> {
         .collect()
 }
 
-/// 块命令面板视图：窗口锚定面板状态，显式视口优先，不设高度上限。
+/// 块命令面板视图：窗口锚定面板状态，显式视口优先，不设高度上限；顶边左侧为 `Commands` 标题。
 fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
@@ -101,6 +101,9 @@ fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> Comman
         window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: None,
+        title: Some(text::BLOCK_PANEL_TITLE),
+        right_title: None,
+        footer: None,
     }
 }
 
@@ -151,13 +154,15 @@ struct MentionItemText {
     detail: String,
 }
 
-/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口与锚点行。
+/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口、锚点行与当前目录名。
 struct MentionPanelData {
     texts: Vec<MentionItemText>,
     active: usize,
     anchor: usize,
     viewport: Option<usize>,
     anchor_row: u16,
+    /// 当前进入的目录末段名；未进入文件夹时 None。
+    scope: Option<String>,
 }
 
 impl MentionPanelData {
@@ -184,13 +189,16 @@ fn mention_panel_data(prompt: &Prompt) -> Option<MentionPanelData> {
         anchor: panel.anchor(),
         viewport: panel.viewport(),
         anchor_row,
+        scope: panel.scope_name().map(str::to_string),
     })
 }
 
 /// 提及面板视图：最大高度取容器（prompt 内容区）的一半；显式视口优先于窗口锚点。
+///
+/// 顶边左侧为 `Files` 标题，右侧为当前目录名（未进入文件夹时不显示），底边为目录导航快捷键。
 fn mention_view<'a>(
     items: &'a [CommandItem<'a>],
-    data: &MentionPanelData,
+    data: &'a MentionPanelData,
     max_height: u16,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
@@ -200,6 +208,9 @@ fn mention_view<'a>(
         window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: Some(max_height),
+        title: Some(text::MENTION_PANEL_TITLE),
+        right_title: data.scope.as_deref(),
+        footer: Some(text::MENTION_PANEL_FOOTER),
     }
 }
 

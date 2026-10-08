@@ -432,3 +432,135 @@ fn mention_deletion_range_requires_boundary_and_trailing_blank() {
     assert_eq!(mention_deletion_range("@@f.rs ", 7), None);
     assert_eq!(mention_deletion_range("", 0), None);
 }
+
+/// 目录范围过滤用条目：`src` 下的直接子项与更深层文件、范围外文件。
+fn scoped_entries() -> Vec<MentionEntry> {
+    vec![
+        MentionEntry {
+            path: "src".into(),
+            is_directory: true,
+        },
+        MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "src/main.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "src/ui".into(),
+            is_directory: true,
+        },
+        MentionEntry {
+            path: "src/ui/mod.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "src/ui/main_map.rs".into(),
+            is_directory: false,
+        },
+        MentionEntry {
+            path: "docs/main.md".into(),
+            is_directory: false,
+        },
+    ]
+}
+
+#[test]
+fn filter_mentions_scope_lists_direct_children_only() {
+    let filtered = filter_mentions(&scoped_entries(), "src/");
+    let paths: Vec<&str> = filtered.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["src/app.rs", "src/main.rs", "src/ui"],
+        "空过滤词只列直接子项且不含范围自身"
+    );
+}
+
+#[test]
+fn filter_mentions_scope_recurses_within_subtree_on_filter() {
+    let filtered = filter_mentions(&scoped_entries(), "src/ma");
+    let paths: Vec<&str> = filtered.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        vec!["src/main.rs", "src/ui/main_map.rs"],
+        "范围下递归匹配且排除范围外同名文件"
+    );
+    assert!(filter_mentions(&scoped_entries(), "src/zzz").is_empty());
+}
+
+#[test]
+fn filter_mentions_scope_prefix_is_case_insensitive() {
+    let entries = vec![MentionEntry {
+        path: "Src/App.rs".into(),
+        is_directory: false,
+    }];
+    assert_eq!(filter_mentions(&entries, "src/").len(), 1);
+    assert_eq!(filter_mentions(&entries, "SRC/APP").len(), 1);
+}
+
+#[test]
+fn filter_mentions_scope_returns_entries_with_original_paths() {
+    let filtered = filter_mentions(&scoped_entries(), "src/ui/");
+    assert_eq!(
+        filtered
+            .iter()
+            .map(|entry| (entry.path.as_str(), entry.is_directory))
+            .collect::<Vec<_>>(),
+        vec![("src/ui/main_map.rs", false), ("src/ui/mod.rs", false)],
+        "空过滤词按路径排序且路径保持根相对原样"
+    );
+}
+
+#[test]
+fn mention_parent_range_steps_up_directory_levels() {
+    let text = "@src/ui/ma";
+    assert_eq!(mention_parent_range(text, text.len()), Some(5..10));
+    let text = "@src/ui/";
+    assert_eq!(mention_parent_range(text, text.len()), Some(5..8));
+    let text = "@src/";
+    assert_eq!(mention_parent_range(text, text.len()), Some(1..5));
+    let text = "@";
+    assert_eq!(mention_parent_range(text, text.len()), None);
+    let text = "@ma";
+    assert_eq!(mention_parent_range(text, text.len()), None);
+    assert_eq!(mention_parent_range("a@sr", 4), None);
+}
+
+#[test]
+fn mention_parent_range_deletes_scope_word_and_filter() {
+    let mut text = "@src/ui/ma".to_string();
+    let range = mention_parent_range(&text, text.len()).expect("path context");
+    text.replace_range(range, "");
+    assert_eq!(text, "@src/");
+    let range = mention_parent_range(&text, text.len()).expect("path context");
+    text.replace_range(range, "");
+    assert_eq!(text, "@");
+}
+
+#[test]
+fn mention_panel_scope_name_reads_last_directory_segment() {
+    let entries = vec![MentionEntry {
+        path: "src/app.rs".into(),
+        is_directory: false,
+    }];
+    let panel_with = |query: &str| {
+        MentionPanel::new(
+            MentionTrigger {
+                from: 0,
+                to: 1 + query.len(),
+                query: query.to_string(),
+            },
+            entries.clone(),
+            0,
+        )
+    };
+    assert_eq!(panel_with("src/ui/").scope_name(), Some("ui"));
+    assert_eq!(panel_with("src/ui/ma").scope_name(), Some("ui"));
+    assert_eq!(panel_with("src/").scope_name(), Some("src"));
+    assert_eq!(panel_with("src").scope_name(), None, "无 / 表示未进入目录");
+    assert_eq!(panel_with("/").scope_name(), None);
+    assert_eq!(panel_with("ma").scope_name(), None);
+    assert_eq!(panel_with("").scope_name(), None);
+}

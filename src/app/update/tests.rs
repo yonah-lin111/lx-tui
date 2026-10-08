@@ -1612,6 +1612,88 @@ fn mention_panel_keys_are_consumed_before_editing() {
     assert!(state.prompt.mention().is_none());
 }
 
+/// 构造 `@` 已触发且候选已写入的提及场景。
+fn mention_state(entries: Vec<MentionEntry>) -> AppState {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    apply_mention_entries(&mut state, generation, entries);
+    state
+}
+
+#[test]
+fn enter_folder_key_scopes_panel_and_file_highlight_is_swallowed() {
+    let mut state = mention_state(vec![
+        MentionEntry {
+            path: "src".into(),
+            is_directory: true,
+        },
+        MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        },
+    ]);
+    apply_editor(&mut state, EditorCommand::EnterFolder);
+    assert_eq!(state.prompt.text(), "@src/");
+    let panel = state.prompt.mention().expect("scoped panel");
+    assert_eq!(panel.scope_name(), Some("src"));
+    assert_eq!(panel.items().len(), 1);
+
+    // 高亮文件时 Shift+Enter 被吞掉：不插入换行、不改文本。
+    apply_editor(&mut state, EditorCommand::EnterFolder);
+    assert_eq!(state.prompt.text(), "@src/");
+}
+
+#[test]
+fn enter_folder_falls_back_to_newline_when_panel_closed() {
+    let mut state = mention_state(vec![MentionEntry {
+        path: "src".into(),
+        is_directory: true,
+    }]);
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(state.prompt.mention().is_none());
+    assert!(state.prompt.text().starts_with('@'));
+    apply_editor(&mut state, EditorCommand::EnterFolder);
+    assert_eq!(state.prompt.text(), "@\n", "面板关闭时回落行尾另起一行");
+}
+
+#[test]
+fn leave_folder_key_steps_up_and_falls_back_to_backspace() {
+    let mut state = mention_state(vec![
+        MentionEntry {
+            path: "src".into(),
+            is_directory: true,
+        },
+        MentionEntry {
+            path: "src/ui".into(),
+            is_directory: true,
+        },
+        MentionEntry {
+            path: "src/ui/mod.rs".into(),
+            is_directory: false,
+        },
+    ]);
+    apply_editor(&mut state, EditorCommand::EnterFolder);
+    assert_eq!(state.prompt.text(), "@src/");
+    apply_editor(&mut state, EditorCommand::EnterFolder);
+    assert_eq!(state.prompt.text(), "@src/ui/");
+
+    apply_editor(&mut state, EditorCommand::LeaveFolder);
+    assert_eq!(state.prompt.text(), "@src/");
+    apply_editor(&mut state, EditorCommand::LeaveFolder);
+    assert_eq!(state.prompt.text(), "@");
+
+    // 无路径上下文：回落普通退格删除查询字符。
+    apply_editor(&mut state, EditorCommand::InsertChar('a'));
+    apply_editor(&mut state, EditorCommand::LeaveFolder);
+    assert_eq!(state.prompt.text(), "@");
+}
+
 #[test]
 fn switching_workspace_root_invalidates_mention_cache() {
     let mut state = AppState::demo();

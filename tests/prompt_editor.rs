@@ -283,3 +283,64 @@ fn backspace_removes_whole_mention_after_insertion() {
     update::apply_editor(&mut state, EditorCommand::Backspace);
     assert_eq!(state.prompt.text(), "");
 }
+
+#[test]
+fn mention_panel_folder_navigation_flow() {
+    let (mut state, config, view) = ready_state();
+    update::focus_prompt(&mut state);
+    update::apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    update::apply_mention_entries(
+        &mut state,
+        generation,
+        vec![
+            MentionEntry {
+                path: "docs/readme.md".into(),
+                is_directory: false,
+            },
+            MentionEntry {
+                path: "src".into(),
+                is_directory: true,
+            },
+            MentionEntry {
+                path: "src/app.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+
+    // 高亮 src 目录进入：文本写回 `@src/`，面板按范围过滤。
+    assert!(state.prompt.mention_set_active(1));
+    update::apply_editor(&mut state, EditorCommand::EnterFolder);
+    assert_eq!(state.prompt.text(), "@src/");
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.scope_name()),
+        Some(Some("src"))
+    );
+
+    // 顶边左 title、右上目录名、底边快捷键完整渲染。
+    let inner = layout::pane_inner_rect(view.prompt);
+    let panel = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
+    let terminal = draw(&state, &config);
+    let buffer = terminal.backend().buffer();
+    let top: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buffer[(x, panel.rect.y)].symbol())
+        .collect();
+    let bottom: String = (panel.rect.x..panel.rect.right())
+        .map(|x| buffer[(x, panel.rect.bottom() - 1)].symbol())
+        .collect();
+    assert!(top.contains(ui::text::MENTION_PANEL_TITLE), "{top}");
+    assert!(top.contains(" src "), "{top}");
+    assert!(bottom.contains(ui::text::MENTION_PANEL_FOOTER), "{bottom}");
+
+    // Shift+Backspace 回退到根，候选恢复全量。
+    update::apply_editor(&mut state, EditorCommand::LeaveFolder);
+    assert_eq!(state.prompt.text(), "@");
+    assert_eq!(
+        state.prompt.mention().map(|panel| panel.items().len()),
+        Some(3)
+    );
+}

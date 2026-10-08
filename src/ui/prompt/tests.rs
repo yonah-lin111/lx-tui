@@ -191,6 +191,20 @@ fn renders_block_command_panel_below_cursor() {
 }
 
 #[test]
+fn block_panel_renders_commands_title() {
+    let area = Rect::new(0, 0, 30, 10);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 10);
+    editor.insert_str("#");
+    let rect = panel_rect(&editor, area).expect("panel visible");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+
+    let top: String = (0..area.width).map(|x| buf[(x, rect.y)].symbol()).collect();
+    assert!(top.contains(text::BLOCK_PANEL_TITLE), "{top}");
+}
+
+#[test]
 fn block_panel_rect_and_items_hit_test() {
     let area = Rect::new(0, 0, 30, 10);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
@@ -309,6 +323,58 @@ fn mention_panel_marks_directory_and_file_icons() {
     assert!(file_row.contains(text::MENTION_FILE_ICON), "{file_row}");
     assert!(file_row.contains("app.rs"), "{file_row}");
     assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
+}
+
+#[test]
+fn mention_panel_renders_title_folder_name_and_footer() {
+    let area = Rect::new(0, 0, 40, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(40, 20);
+    editor.set_mention_root(Some(std::path::PathBuf::from("/tmp/ws")));
+    editor.insert_str("@");
+    let (generation, _) = editor.take_mention_scan_request().expect("scan requested");
+    editor.apply_mention_entries(
+        generation,
+        vec![
+            MentionEntry {
+                path: "src".into(),
+                is_directory: true,
+            },
+            MentionEntry {
+                path: "src/app.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+
+    // 根范围：只有左上标题与底边提示，右上不显示目录名。
+    let root_rect = mention_panel_rect(&editor, area).expect("panel visible");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let root_top: String = (0..area.width)
+        .map(|x| buf[(x, root_rect.y)].symbol())
+        .collect();
+    let root_bottom: String = (0..area.width)
+        .map(|x| buf[(x, root_rect.bottom() - 1)].symbol())
+        .collect();
+    assert!(root_top.contains(text::MENTION_PANEL_TITLE), "{root_top}");
+    assert!(
+        root_bottom.contains(text::MENTION_PANEL_FOOTER),
+        "{root_bottom}"
+    );
+
+    // 进入 src：右上显示目录名，底边提示保持。
+    assert!(editor.mention_enter_folder());
+    let rect = mention_panel_rect(&editor, area).expect("scoped panel visible");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let top: String = (0..area.width).map(|x| buf[(x, rect.y)].symbol()).collect();
+    let bottom: String = (0..area.width)
+        .map(|x| buf[(x, rect.bottom() - 1)].symbol())
+        .collect();
+    assert!(top.contains(text::MENTION_PANEL_TITLE), "{top}");
+    assert!(top.contains(" src "), "{top}");
+    assert!(bottom.contains(text::MENTION_PANEL_FOOTER), "{bottom}");
 }
 
 #[test]
