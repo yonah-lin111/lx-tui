@@ -120,6 +120,38 @@ fn editor_commands_apply_undo_redo_indent_and_list_newline() {
 }
 
 #[test]
+fn shift_tab_cycles_template_status_inside_block_else_outdents() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText(
+            "&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end".into(),
+        ),
+    );
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().contains("--end in_progress"),
+        "{}",
+        state.prompt.text()
+    );
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().contains("--end done"),
+        "{}",
+        state.prompt.text()
+    );
+
+    apply_editor(&mut state, EditorCommand::InsertText("\n  x".into()));
+    apply_editor(&mut state, EditorCommand::Outdent);
+    assert!(
+        state.prompt.text().ends_with("x"),
+        "块外反缩进：{}",
+        state.prompt.text()
+    );
+}
+
+#[test]
 fn scroll_prompt_moves_viewport_only() {
     let mut state = AppState::demo();
     state.prompt.resize(10, 2);
@@ -2828,4 +2860,66 @@ fn create_workspace_requests_git_metadata_for_cwd() {
     assert!(state.git_requests.is_empty());
     create_workspace(&mut state);
     assert_eq!(state.git_requests.len(), 1);
+}
+
+#[test]
+fn slash_panel_keys_are_consumed_before_editing() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('/'));
+    assert!(state.prompt.slash_panel().is_some());
+
+    // 上下键只移动高亮，不移动文本光标（光标仍在行尾）。
+    apply_editor(&mut state, EditorCommand::Down);
+    assert_eq!(
+        state.prompt.slash_panel().map(|panel| panel.active()),
+        Some(1)
+    );
+    apply_editor(&mut state, EditorCommand::Up);
+    assert_eq!(
+        state.prompt.slash_panel().map(|panel| panel.active()),
+        Some(0)
+    );
+    assert_eq!(state.prompt.text(), "/");
+
+    // Esc 关闭面板且不改文本，下一次编辑可重新触发。
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(state.prompt.slash_panel().is_none());
+    apply_editor(&mut state, EditorCommand::InsertChar('a'));
+    assert!(state.prompt.slash_panel().is_some());
+
+    // 回车确认插入标准模板块（标题占位符独立成行）。
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert!(
+        state
+            .prompt
+            .text()
+            .starts_with("&&& addTemplate --start\n「title: 」")
+    );
+    assert!(state.prompt.slash_panel().is_none());
+}
+
+#[test]
+fn prompt_copy_text_prefers_selection_then_full_text() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    assert_eq!(prompt_copy_text(&state), None, "空 prompt 无复制内容");
+
+    apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
+    assert_eq!(
+        prompt_copy_text(&state).as_deref(),
+        Some("hello world"),
+        "无选区复制全文"
+    );
+
+    let prompt = state.prompt.id();
+    begin_selection(&mut state, prompt, 0, 0);
+    drag_selection(&mut state, prompt, 0, 4);
+    assert_eq!(
+        prompt_copy_text(&state).as_deref(),
+        Some("hello"),
+        "有选区优先复制选区"
+    );
 }

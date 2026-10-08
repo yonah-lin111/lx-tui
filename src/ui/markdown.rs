@@ -2,6 +2,8 @@
 
 use std::ops::Range;
 
+use crate::app::markdown::{self, SlashCommandId};
+
 /// 高亮语义分类；样式映射见 `ui/style.rs`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
@@ -15,6 +17,14 @@ pub enum TokenKind {
     Quote,
     LinkText,
     Url,
+    /// `&&&` 起止行的结构标记（`&&&`、`--start`/`--end`、状态与元数据）。
+    TemplateMarker,
+    /// 模板块命令名；`None` 为未知命令。
+    TemplateCommand(Option<SlashCommandId>),
+    /// 标题占位符 `「title: …」`。
+    TemplateTitle,
+    /// `@path/to/file` 文件提及。
+    FileMention,
 }
 
 /// 逻辑行上的高亮区间（字节偏移，行内）。
@@ -27,13 +37,14 @@ pub struct Token {
 /// 扫描全文，返回每条逻辑行的 token，与 `text.split('\n')` 一一对应。
 pub fn scan(text: &str) -> Vec<Vec<Token>> {
     let mut fence = false;
+    let mut template = false;
     text.split('\n')
-        .map(|line| scan_line(line, &mut fence))
+        .map(|line| scan_line(line, &mut fence, &mut template))
         .collect()
 }
 
-/// 扫描单行；`fence` 为跨行围栏代码块状态。
-fn scan_line(line: &str, fence: &mut bool) -> Vec<Token> {
+/// 扫描单行；`fence` 为跨行围栏代码块状态，`template` 为模板块状态。
+fn scan_line(line: &str, fence: &mut bool, template: &mut bool) -> Vec<Token> {
     let mut tokens = Vec::new();
     if is_fence(line) {
         *fence = !*fence;
@@ -42,6 +53,18 @@ fn scan_line(line: &str, fence: &mut bool) -> Vec<Token> {
     }
     if *fence {
         push(&mut tokens, 0..line.len(), TokenKind::CodeBlock);
+        return tokens;
+    }
+    if scan_template_end(line, &mut tokens) {
+        *template = false;
+        return tokens;
+    }
+    if scan_template_start(line, &mut tokens) {
+        *template = true;
+        return tokens;
+    }
+    if *template && let Some(range) = standalone_title(line) {
+        push(&mut tokens, range, TokenKind::TemplateTitle);
         return tokens;
     }
     if let Some(marker_end) = heading(line) {
@@ -65,6 +88,97 @@ fn scan_line(line: &str, fence: &mut bool) -> Vec<Token> {
     }
     scan_inline(line, 0, &mut tokens);
     tokens
+}
+
+/// 模板块起始行 token：`&&&` 与 `--start` 为结构标记，命令名按业务分色，标题整体成段。
+fn scan_template_start(line: &str, tokens: &mut Vec<Token>) -> bool {
+    let Some(parsed) = markdown::parse_template_start_line(line) else {
+        return false;
+    };
+    let spans = word_spans(line);
+    if let Some((_, range)) = spans.first() {
+        push(tokens, range.clone(), TokenKind::TemplateMarker);
+    }
+    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == parsed.command) {
+        push(
+            tokens,
+            range.clone(),
+            TokenKind::TemplateCommand(SlashCommandId::from_name(parsed.command)),
+        );
+    }
+    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == "--start") {
+        push(tokens, range.clone(), TokenKind::TemplateMarker);
+    }
+    if let Some(open) = line.find('「')
+        && let Some(close) = line[open..].find('」')
+    {
+        push(
+            tokens,
+            open..open + close + '」'.len_utf8(),
+            TokenKind::TemplateTitle,
+        );
+    }
+    true
+}
+
+/// 模板块内独立成行的标题占位符 `「title: …」` 区间（允许缩进与尾随空白）；
+/// 用于 `--start` 下一行行首的标题行高亮。
+fn standalone_title(line: &str) -> Option<Range<usize>> {
+    if !markdown::is_title_line(line) {
+        return None;
+    }
+    let start = line.len() - line.trim_start().len();
+    let close = line[start..].find('」')?;
+    Some(start..start + close + '」'.len_utf8())
+}
+
+/// 模板块结束行 token：`&&&`、`--end`、状态词与 `{id:}`/`{wt:}` 元数据为结构标记，
+/// 命令名按业务分色。
+fn scan_template_end(line: &str, tokens: &mut Vec<Token>) -> bool {
+    let Some(parsed) = markdown::parse_template_end_line(line) else {
+        return false;
+    };
+    let spans = word_spans(line);
+    if let Some((_, range)) = spans.first() {
+        push(tokens, range.clone(), TokenKind::TemplateMarker);
+    }
+    if let Some(command) = parsed.command
+        && let Some((_, range)) = spans.iter().find(|(text, _)| *text == command)
+    {
+        push(
+            tokens,
+            range.clone(),
+            TokenKind::TemplateCommand(SlashCommandId::from_name(command)),
+        );
+    }
+    for (text, range) in &spans {
+        if matches!(*text, "--end" | "done" | "in_progress")
+            || text.starts_with("{id:")
+            || text.starts_with("{wt:")
+        {
+            push(tokens, range.clone(), TokenKind::TemplateMarker);
+        }
+    }
+    true
+}
+
+/// 按 ASCII 空白切分单词及行内字节区间；非 ASCII 视为词内字符。
+fn word_spans(line: &str) -> Vec<(&str, Range<usize>)> {
+    let bytes = line.as_bytes();
+    let mut spans = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_whitespace() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        spans.push((&line[start..index], start..index));
+    }
+    spans
 }
 
 /// 围栏代码块行：至多 3 个前导空格后以 ``` 开头。
@@ -174,6 +288,13 @@ fn scan_inline(line: &str, base: usize, tokens: &mut Vec<Token>) {
                 TokenKind::Marker,
             );
             index += close + 2;
+            continue;
+        }
+        if rest.starts_with('@')
+            && let Some(end) = file_mention_end(line, index)
+        {
+            push(tokens, index..index + end, TokenKind::FileMention);
+            index += end;
             continue;
         }
         if let Some(delimiter) = strong_delimiter(rest)
@@ -294,6 +415,27 @@ fn push(tokens: &mut Vec<Token>, range: Range<usize>, kind: TokenKind) {
 /// 下一个字符的字节长度。
 fn next_char_len(rest: &str) -> usize {
     rest.chars().next().map(char::len_utf8).unwrap_or(1)
+}
+
+/// `@` 起始的文件提及长度（含 `@`）：`@` 位于行首或空白/`[` 之后，
+/// 路径由查询字符组成且非空；否则返回 None。
+fn file_mention_end(line: &str, index: usize) -> Option<usize> {
+    let boundary = index == 0
+        || line[..index]
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_whitespace() || ch == '[');
+    if !boundary {
+        return None;
+    }
+    let mut end = 1;
+    for ch in line[index + 1..].chars() {
+        if ch == '@' || !markdown::is_mention_query_char(ch) {
+            break;
+        }
+        end += ch.len_utf8();
+    }
+    (end > 1).then_some(end)
 }
 
 #[cfg(test)]

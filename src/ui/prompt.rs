@@ -5,7 +5,9 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::markdown::MentionEntry;
+use crate::app::markdown::{
+    MentionEntry, TemplateLineInfo, TemplateLineRole, TemplateStatus, template_line_infos,
+};
 use crate::app::prompt::{Prompt, VisualRow};
 use crate::app::selection::Selection;
 use crate::layout::{self, PromptToolbarButton};
@@ -96,12 +98,16 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
 }
 
 /// 绘制 prompt 内容区；光标由调用方以终端原生硬件光标呈现。
+///
+/// 模板块行渲染为带边框的块：左边框（`╭─`/`│ `/`╰─`）、右边框（`╮`/`│`/`╯`），
+/// 边框颜色随块状态；起始行顶边右端常显操作按钮，左侧内容超出时以省略号截断。
 pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&Selection>) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     let rows = prompt.visual_rows();
     let tokens = markdown::scan(prompt.text());
+    let infos = template_line_infos(prompt.text());
     let mut line_starts = Vec::new();
     let mut offset = 0;
     for line in prompt.text().split('\n') {
@@ -109,6 +115,7 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         offset += line.len() + 1;
     }
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
+    let mut block_rows = Vec::new();
     for (index, row) in rows
         .iter()
         .enumerate()
@@ -118,10 +125,37 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         let y = area.y + (index - scroll) as u16;
         let line_tokens = tokens.get(row.line).map(Vec::as_slice).unwrap_or_default();
         let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
-        paint_row(buf, area, y, prompt.text(), row, line_tokens, base);
+        let info = infos.get(row.line).copied().flatten();
+        let first = index == 0 || rows[index - 1].line != row.line;
+        let last = index + 1 >= rows.len() || rows[index + 1].line != row.line;
+        let role = template_row_role(info, first, last);
+        let start_row = role == Some(TemplateLineRole::Start);
+        let text_start = area.x + template_gutter(info.is_some());
+        let buttons_start = if start_row {
+            let labels =
+                template_button_labels(info.map_or(TemplateStatus::Todo, |info| info.status));
+            template_buttons_start(area, template_buttons_total(&labels))
+        } else {
+            area.right()
+        };
+        let text_end = template_text_end(area, info.is_some(), start_row, buttons_start);
+        let geometry = RowGeometry {
+            start_x: text_start,
+            end_x: text_end,
+            ellipsize: start_row,
+        };
+        let painted = paint_row(buf, y, prompt.text(), row, line_tokens, base, geometry);
         if let Some(selection) = selection {
             paint_selection(buf, area, y, index as u16, selection);
         }
+        if let Some(info) = info {
+            paint_template_border(buf, area, y, info, role, painted, buttons_start);
+            block_rows.push((y, info.status));
+        }
+    }
+    render_template_buttons(buf, area, prompt);
+    for (y, status) in block_rows {
+        paint_template_background(buf, area, y, status);
     }
     render_panels(buf, area, prompt);
 }
@@ -129,11 +163,16 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
 /// 提及条目父路径可用宽度：面板最宽占满文本区，扣除两侧边框、滚动条列与行内前导空格。
 const MENTION_DETAIL_MARGIN: usize = 5;
 
-/// 绘制浮层面板：文件提及优先，其次块命令；状态由 app 层维护，这里只做只读映射。
+/// 绘制浮层面板：文件提及优先，其次斜杠命令，最后块命令；状态由 app 层维护，这里只做只读映射。
 fn render_panels(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     if let Some(data) = mention_panel_data(prompt, area.width) {
         let items = data.items();
         command_panel::render(area, buf, &mention_view(&items, &data, area.height / 2));
+        return;
+    }
+    if let Some(data) = slash_panel_data(prompt) {
+        let items = slash_items(&data);
+        command_panel::render(area, buf, &slash_view(&items, &data));
         return;
     }
     let Some(data) = block_panel_data(prompt) else {
@@ -210,6 +249,75 @@ pub fn panel_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Opti
 /// 块命令面板矩形；用于滚轮命中。
 pub fn panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     panel_layout(prompt, area).map(|layout| layout.rect)
+}
+
+/// 斜杠命令面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口与锚点行。
+struct SlashPanelData {
+    texts: Vec<(String, String)>,
+    active: usize,
+    anchor: usize,
+    viewport: Option<usize>,
+    anchor_row: u16,
+}
+
+/// 斜杠命令面板渲染数据；面板未打开或光标滚出视口返回 None。
+fn slash_panel_data(prompt: &Prompt) -> Option<SlashPanelData> {
+    let panel = prompt.slash_panel()?;
+    let (anchor_row, _) = prompt.cursor_cell()?;
+    Some(SlashPanelData {
+        texts: panel
+            .items()
+            .iter()
+            .map(|id| text::slash_command_text(*id))
+            .collect(),
+        active: panel.active(),
+        anchor: panel.anchor(),
+        viewport: panel.viewport(),
+        anchor_row,
+    })
+}
+
+/// 斜杠命令面板条目：单行（`/add` + 右侧长别名）。
+fn slash_items<'a>(data: &'a SlashPanelData) -> Vec<CommandItem<'a>> {
+    data.texts
+        .iter()
+        .map(|(label, preview)| CommandItem::Inline { label, preview })
+        .collect()
+}
+
+/// 斜杠命令面板视图：窗口锚定面板状态，显式视口优先；顶边左侧为 `Templates` 标题。
+fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &SlashPanelData) -> CommandPanelView<'a> {
+    CommandPanelView {
+        items,
+        active: data.active,
+        window_anchor: Some(data.anchor),
+        window_start: data.viewport,
+        anchor_row: data.anchor_row,
+        max_height: None,
+        title: Some(text::SLASH_PANEL_TITLE),
+        right_title: None,
+        footer: None,
+    }
+}
+
+/// 斜杠命令面板布局；面板未打开或空间不足返回 None。
+pub fn slash_layout(prompt: &Prompt, area: Rect) -> Option<PanelLayout> {
+    let data = slash_panel_data(prompt)?;
+    let items = slash_items(&data);
+    command_panel::layout(area, &slash_view(&items, &data))
+}
+
+/// 斜杠命令面板命中：返回被点中的条目索引；面板未打开或未命中返回 None。
+pub fn slash_item_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
+    let data = slash_panel_data(prompt)?;
+    let items = slash_items(&data);
+    let layout = command_panel::layout(area, &slash_view(&items, &data))?;
+    command_panel::item_at(&layout, &items, column, row)
+}
+
+/// 斜杠命令面板矩形；用于滚轮命中。
+pub fn slash_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
+    slash_layout(prompt, area).map(|layout| layout.rect)
 }
 
 /// 提及面板布局；面板未打开或空间不足返回 None。
@@ -336,20 +444,264 @@ fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemTe
     }
 }
 
-/// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过。
+/// 模板块操作按钮种类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateBlockButton {
+    Status,
+    Copy,
+    Clean,
+    Delete,
+}
+
+/// 模板块操作按钮命中：起始逻辑行索引、按钮、所属块状态与绘制矩形。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TemplateButtonHit {
+    pub line: usize,
+    pub button: TemplateBlockButton,
+    pub status: TemplateStatus,
+    pub rect: Rect,
+}
+
+/// 按钮组顺序：状态、复制、清理、删除。
+const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
+    TemplateBlockButton::Status,
+    TemplateBlockButton::Copy,
+    TemplateBlockButton::Clean,
+    TemplateBlockButton::Delete,
+];
+
+/// 模板块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
+fn template_gutter(block: bool) -> u16 {
+    if block {
+        layout::PROMPT_TEMPLATE_GUTTER_LEFT
+    } else {
+        0
+    }
+}
+
+/// 视觉行的模板块角色：软换行续行降级为中间行（`╭`/`╰` 只在首末行）。
+fn template_row_role(
+    info: Option<TemplateLineInfo>,
+    first: bool,
+    last: bool,
+) -> Option<TemplateLineRole> {
+    let info = info?;
+    Some(match info.role {
+        TemplateLineRole::Start if !first => TemplateLineRole::Middle,
+        TemplateLineRole::End if !last => TemplateLineRole::Middle,
+        role => role,
+    })
+}
+
+/// 按钮组文案（状态标签 + 复制/清理/删除）。
+fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
+    TEMPLATE_BUTTONS.map(|button| template_button_label(button, status))
+}
+
+/// 按钮组总宽（含 1 列间距）。
+fn template_buttons_total(labels: &[&str; 4]) -> u16 {
+    let width: usize = labels.iter().map(|label| label.width()).sum();
+    (width + labels.len().saturating_sub(1)) as u16
+}
+
+/// 按钮组起点：右对齐贴右边框内侧；极窄时钳到左边框之后（按钮常显、优先于文本）。
+fn template_buttons_start(area: Rect, total: u16) -> u16 {
+    let corner = area.right().saturating_sub(1);
+    corner
+        .saturating_sub(total)
+        .max(area.x + layout::PROMPT_TEMPLATE_GUTTER_LEFT)
+}
+
+/// 视觉行文本区右边界（不含）：普通行到内容区右缘，块行到右边框前；
+/// 起始行再为按钮组让出一列间距（空间不足时退到左边框之后，文本仅剩省略号）。
+fn template_text_end(area: Rect, block: bool, start_row: bool, buttons_start: u16) -> u16 {
+    let end = if block {
+        area.right()
+            .saturating_sub(layout::PROMPT_TEMPLATE_GUTTER_RIGHT)
+    } else {
+        area.right()
+    };
+    if start_row {
+        end.min(buttons_start.saturating_sub(1))
+            .max(area.x + layout::PROMPT_TEMPLATE_GUTTER_LEFT)
+    } else {
+        end
+    }
+}
+
+/// 计算可见模板块起始行的操作按钮布局：按钮组常显、贴内容区右缘右对齐；
+/// 文本与按钮组重叠时由渲染层省略号截断，不遮挡按钮。
+pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
+    if area.width == 0 || area.height == 0 {
+        return Vec::new();
+    }
+    let rows = prompt.visual_rows();
+    let infos = template_line_infos(prompt.text());
+    let scroll = prompt.scroll();
+    let mut hits = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let first = index == 0 || rows[index - 1].line != row.line;
+        if !first {
+            continue;
+        }
+        let Some(visible) = index.checked_sub(scroll) else {
+            continue;
+        };
+        if visible >= usize::from(area.height) {
+            continue;
+        }
+        let Some(info) = infos.get(row.line).copied().flatten() else {
+            continue;
+        };
+        if info.role != TemplateLineRole::Start {
+            continue;
+        }
+        let labels = template_button_labels(info.status);
+        let start = template_buttons_start(area, template_buttons_total(&labels));
+        let y = area.y + visible as u16;
+        let mut x = start;
+        for (button, label) in TEMPLATE_BUTTONS.iter().zip(labels) {
+            let width = label.width() as u16;
+            hits.push(TemplateButtonHit {
+                line: row.line,
+                button: *button,
+                status: info.status,
+                rect: Rect::new(x, y, width, 1),
+            });
+            x = x.saturating_add(width + 1);
+        }
+    }
+    hits
+}
+
+/// 命中模板块操作按钮；未命中返回 None。
+pub fn template_button_at(
+    prompt: &Prompt,
+    area: Rect,
+    column: u16,
+    row: u16,
+) -> Option<TemplateButtonHit> {
+    template_buttons(prompt, area)
+        .into_iter()
+        .find(|hit| hit.rect.contains((column, row).into()))
+}
+
+/// 按钮文案：状态按钮按模板块当前状态取标签。
+fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) -> &'static str {
+    match button {
+        TemplateBlockButton::Status => text::template_status_label(status),
+        TemplateBlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
+        TemplateBlockButton::Clean => text::TEMPLATE_BUTTON_CLEAN,
+        TemplateBlockButton::Delete => text::TEMPLATE_BUTTON_DEL,
+    }
+}
+
+/// 绘制模板块边框：左槽 `╭─`/`│ `/`╰─`、右槽 `╮`/`│`/`╯`；
+/// 起始行顶边与结束行底边以 `─` 补满文本之后的空间（按钮组由后续绘制覆盖）。
+fn paint_template_border(
+    buf: &mut Buffer,
+    area: Rect,
+    y: u16,
+    info: TemplateLineInfo,
+    role: Option<TemplateLineRole>,
+    painted: u16,
+    buttons_start: u16,
+) {
+    let border = style::template_border(info.status);
+    let left = area.x;
+    let right = area.right().saturating_sub(1);
+    let mut put = |x: u16, symbol: char| {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(border);
+        }
+    };
+    match role {
+        Some(TemplateLineRole::Start) => {
+            put(left, '╭');
+            put(left + 1, '─');
+            put(right, '╮');
+            for x in painted..buttons_start.min(right) {
+                put(x, '─');
+            }
+        }
+        Some(TemplateLineRole::Middle) => {
+            put(left, '│');
+            put(right, '│');
+        }
+        Some(TemplateLineRole::End) => {
+            put(left, '╰');
+            put(left + 1, '─');
+            put(right, '╯');
+            for x in painted..right {
+                put(x, '─');
+            }
+        }
+        None => {}
+    }
+}
+
+/// 模板块整行底色：按状态铺暗色底；选区反显格跳过，保持反显在终端默认底色上呈现。
+fn paint_template_background(buf: &mut Buffer, area: Rect, y: u16, status: TemplateStatus) {
+    let bg = style::template_block_bg(status);
+    for x in area.x..area.right() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            if cell.modifier.contains(Modifier::REVERSED) {
+                continue;
+            }
+            cell.set_style(bg);
+        }
+    }
+}
+
+/// 绘制模板块操作按钮；状态按钮按状态着色，其余次要信息。
+fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
+    for hit in template_buttons(prompt, area) {
+        let label = template_button_label(hit.button, hit.status);
+        let button_style = match hit.button {
+            TemplateBlockButton::Status => style::template_status(hit.status),
+            _ => style::template_button(),
+        };
+        for (offset, symbol) in label.chars().enumerate() {
+            if let Some(cell) = buf.cell_mut((hit.rect.x + offset as u16, hit.rect.y)) {
+                cell.reset();
+                cell.set_char(symbol);
+                cell.set_style(button_style);
+            }
+        }
+    }
+}
+
+/// 行绘制几何：文本区起止 x（不含右端）与超宽是否以 `…` 截断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RowGeometry {
+    start_x: u16,
+    end_x: u16,
+    ellipsize: bool,
+}
+
+/// 绘制一个视觉行：按 token 着色，宽字符占位单元格标记为跳过；
+/// 返回最后一个绘制单元格之后的 x（供边框补线）；`ellipsize` 时超宽以 `…` 收尾。
 ///
 /// `base` 为视觉行起点在逻辑行内的字节偏移；token 区间按逻辑行计。
 fn paint_row(
     buf: &mut Buffer,
-    area: Rect,
     y: u16,
     text: &str,
     row: &VisualRow,
     tokens: &[Token],
     base: usize,
-) {
-    let mut x = area.x;
+    geometry: RowGeometry,
+) -> u16 {
+    let RowGeometry {
+        start_x,
+        end_x,
+        ellipsize,
+    } = geometry;
+    let mut x = start_x;
     let mut token_index = 0;
+    let mut clipped = false;
     for (offset, ch) in text[row.start..row.end].char_indices() {
         let width = ch.width().unwrap_or(0);
         if width == 0 {
@@ -366,7 +718,8 @@ fn paint_row(
             .get(token_index)
             .filter(|token| token.range.contains(&absolute))
             .map_or_else(style::text, |token| token_style(token.kind));
-        if x.saturating_add(width as u16) > area.right() {
+        if x.saturating_add(width as u16) > end_x {
+            clipped = true;
             break;
         }
         if let Some(cell) = buf.cell_mut((x, y)) {
@@ -382,6 +735,15 @@ fn paint_row(
         }
         x += width as u16;
     }
+    if clipped && ellipsize && end_x > start_x {
+        if let Some(cell) = buf.cell_mut((end_x - 1, y)) {
+            cell.reset();
+            cell.set_char('…');
+            cell.set_style(style::muted());
+        }
+        x = end_x;
+    }
+    x
 }
 
 /// 选区按内容行坐标反显；空白单元格同样覆盖，保证拖拽范围可见。
@@ -408,6 +770,10 @@ fn token_style(kind: TokenKind) -> Style {
         TokenKind::Quote => style::markdown_quote(),
         TokenKind::LinkText => style::markdown_link_text(),
         TokenKind::Url => style::markdown_url(),
+        TokenKind::TemplateMarker => style::template_marker(),
+        TokenKind::TemplateCommand(id) => style::template_command(id),
+        TokenKind::TemplateTitle => style::template_title(),
+        TokenKind::FileMention => style::markdown_file_mention(),
     }
 }
 

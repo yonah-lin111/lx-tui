@@ -286,11 +286,16 @@ fn prompt_focus_maps_copy_keys() {
             Some(Routed::Copy),
             "{modifiers:?}"
         );
+        assert_eq!(
+            route_prompt(KeyCode::Char('c'), modifiers | KeyModifiers::SHIFT),
+            Some(Routed::CopyTemplateBlock),
+            "{modifiers:?}+SHIFT"
+        );
     }
     assert_eq!(
         route_prompt(
             KeyCode::Char('c'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            KeyModifiers::CONTROL | KeyModifiers::ALT
         ),
         None
     );

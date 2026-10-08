@@ -96,7 +96,11 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
         EditorCommand::Indent => state.prompt.indent(),
-        EditorCommand::Outdent => state.prompt.outdent(),
+        EditorCommand::Outdent => {
+            if !state.prompt.cycle_template_status_at_cursor() {
+                state.prompt.outdent();
+            }
+        }
         EditorCommand::Undo => state.prompt.undo(),
         EditorCommand::Redo => state.prompt.redo(),
         EditorCommand::Escape => {}
@@ -105,9 +109,13 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
 
 /// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
 ///
-/// 文件提及面板优先于块命令面板；两者互斥，同时只可能有一个打开。
+/// 文件提及面板优先于斜杠命令面板、斜杠命令面板优先于块命令面板；三者互斥，
+/// 同时只可能有一个打开。
 fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     if route_mention_panel(state, command) {
+        return true;
+    }
+    if route_slash_panel(state, command) {
         return true;
     }
     match command {
@@ -115,6 +123,17 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
         EditorCommand::Down => state.prompt.panel_move(1),
         EditorCommand::Newline => state.prompt.panel_confirm(),
         EditorCommand::Escape => state.prompt.panel_escape(),
+        _ => false,
+    }
+}
+
+/// 斜杠命令面板打开时的按键优先：上下选择、回车插入、Esc 关闭；返回是否消费。
+fn route_slash_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    match command {
+        EditorCommand::Up => state.prompt.slash_move(-1),
+        EditorCommand::Down => state.prompt.slash_move(1),
+        EditorCommand::Newline => state.prompt.slash_confirm(),
+        EditorCommand::Escape => state.prompt.slash_escape(),
         _ => false,
     }
 }
@@ -251,6 +270,50 @@ pub fn select_panel(state: &mut AppState, index: usize) {
 /// 滚轮在块命令面板上滚动可见窗口：`base` 为当前窗口起点；高亮不动。
 pub fn scroll_panel(state: &mut AppState, delta: isize, base: usize) -> bool {
     state.prompt.panel_scroll(delta, base)
+}
+
+/// 鼠标悬停斜杠命令条目：只提高亮、不动窗口锚点；返回是否变化。
+pub fn hover_slash(state: &mut AppState, index: usize) -> bool {
+    state.prompt.slash_set_active(index)
+}
+
+/// 鼠标点选斜杠命令条目：确认插入模板。
+pub fn select_slash(state: &mut AppState, index: usize) {
+    state.prompt.slash_confirm_at(index);
+}
+
+/// 滚轮在斜杠命令面板上滚动可见窗口：`base` 为当前窗口起点；高亮不动。
+pub fn scroll_slash(state: &mut AppState, delta: isize, base: usize) -> bool {
+    state.prompt.slash_scroll(delta, base)
+}
+
+/// 复制模板块正文（对齐 lx-agent：剔除标题占位行/补充子块/记录块标记/注释与空项）；
+/// 返回待写入剪贴板的文本。
+pub fn copy_template_block(state: &mut AppState, start_line: usize) -> Option<String> {
+    state
+        .prompt
+        .template_block_body(start_line)
+        .map(|body| super::markdown::copy_template_content(&body))
+}
+
+/// 复制光标所在模板块正文（Cmd/Ctrl+Shift+C）；不在模板块内返回 None。
+pub fn copy_template_block_at_cursor(state: &mut AppState) -> Option<String> {
+    state.prompt.copy_text_at_cursor()
+}
+
+/// 清理模板块内未填写的空项（单步撤销）；返回是否产生变更。
+pub fn clean_template_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.clean_template_block(start_line)
+}
+
+/// 删除整个模板块（单步撤销）；返回是否产生变更。
+pub fn delete_template_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.delete_template_block(start_line)
+}
+
+/// 切换模板块状态 todo → in_progress → done（单步撤销）；返回是否产生变更。
+pub fn toggle_template_status(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.toggle_template_status(start_line)
 }
 
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
@@ -647,6 +710,14 @@ fn edge_scroll_lines(distance: u16) -> isize {
 pub fn prompt_selection_text(state: &AppState) -> Option<String> {
     let (start, end) = prompt_selection_range(state)?;
     state.prompt.selection_text(start, end)
+}
+
+/// prompt 复制文本：优先选区；无选区时复制全文；无内容返回 None。
+pub fn prompt_copy_text(state: &AppState) -> Option<String> {
+    if let Some(text) = prompt_selection_text(state) {
+        return Some(text);
+    }
+    (!state.prompt.text().is_empty()).then(|| state.prompt.text().to_string())
 }
 
 /// prompt 选区对应的内容行列范围；选区不在 prompt 或为空时返回 None。

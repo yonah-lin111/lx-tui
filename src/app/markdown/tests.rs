@@ -538,3 +538,352 @@ fn mention_panel_scope_name_reads_last_directory_segment() {
     assert_eq!(panel_with("ma").scope_name(), None);
     assert_eq!(panel_with("").scope_name(), None);
 }
+
+// ---- 斜杠模板命令与模板块 ----
+
+#[test]
+fn slash_trigger_forms_and_rejections() {
+    let trigger = |text: &str| slash_trigger(text, text.len());
+    assert_eq!(trigger("/").map(|t| t.query), Some(String::new()));
+    assert_eq!(trigger("/add").map(|t| t.query), Some("add".into()));
+    assert_eq!(
+        trigger("/addTemplate").map(|t| t.query),
+        Some("addTemplate".into())
+    );
+    assert_eq!(trigger("  /bug").map(|t| t.query), Some("bug".into()));
+    assert_eq!(trigger("/a-b_c").map(|t| t.query), Some("a-b_c".into()));
+
+    assert_eq!(trigger("text /add"), None, "必须行首触发");
+    assert_eq!(trigger("/add more"), None, "行内出现空白不再触发");
+    assert_eq!(trigger("//"), None);
+    assert_eq!(trigger("/add@"), None);
+    assert_eq!(slash_trigger("/add", 2), None, "光标必须在行尾");
+
+    let text = "/add";
+    let trigger = slash_trigger(text, text.len()).expect("trigger");
+    assert_eq!(trigger.line_start, 0);
+    assert_eq!(trigger.line_end, 4);
+    assert_eq!(trigger.cursor, 4);
+}
+
+#[test]
+fn slash_trigger_suppressed_in_fence_and_template_block() {
+    assert_eq!(slash_trigger("```\n/add", 8), None);
+    let block = "&&& addTemplate --start 「title: 」\n/add\n&&& addTemplate --end";
+    let cursor = block.find("\n/add").expect("line") + 4;
+    assert_eq!(slash_trigger(block, cursor), None);
+    let after = format!("{block}\n/add");
+    assert_eq!(
+        slash_trigger(&after, after.len()).map(|t| t.query),
+        Some("add".into())
+    );
+}
+
+#[test]
+fn slash_filter_ranks_short_and_long_aliases() {
+    assert_eq!(slash_filter("").len(), 5);
+    assert_eq!(slash_filter("add"), vec![SlashCommandId::Add]);
+    assert_eq!(slash_filter("addt"), vec![SlashCommandId::Add]);
+    assert_eq!(slash_filter("ADD"), vec![SlashCommandId::Add]);
+    assert_eq!(slash_filter("addtemplate"), vec![SlashCommandId::Add]);
+    assert_eq!(slash_filter("ref"), vec![SlashCommandId::Refactor]);
+    assert_eq!(slash_filter("style"), vec![SlashCommandId::Style]);
+    assert_eq!(slash_filter("zzz"), Vec::new());
+    let all = slash_filter("template");
+    assert_eq!(all.len(), 5, "长名都含 template，稳定保留全部候选");
+    assert_eq!(all[0], SlashCommandId::Add, "稳定排序按内置顺序");
+}
+
+#[test]
+fn slash_filter_matches_subsequence_like_mentions() {
+    assert_eq!(slash_filter("cmm"), vec![SlashCommandId::Common]);
+    assert_eq!(slash_filter("cmn"), vec![SlashCommandId::Common]);
+    assert_eq!(slash_filter("rf"), vec![SlashCommandId::Refactor]);
+    assert_eq!(slash_filter("st"), vec![SlashCommandId::Style]);
+    assert_eq!(
+        slash_filter("common"),
+        vec![SlashCommandId::Common],
+        "精确短名优先"
+    );
+}
+
+#[test]
+fn slash_template_content_matches_protocol_and_cursor() {
+    for id in SlashCommandId::ALL {
+        let (content, cursor) = slash_template_content(id);
+        let start = format!("&&& {} --start\n「title: 」", id.long_name());
+        let end = format!("&&& {} --end", id.long_name());
+        assert!(content.starts_with(&start), "{content}");
+        assert!(content.ends_with(&end), "{content}");
+        assert_eq!(content.as_bytes().get(cursor - 1), Some(&b' '));
+        assert!(content[cursor..].starts_with('」'), "光标落在 」 之前");
+        assert!(
+            parse_template_start_line(content.lines().next().expect("start line")).is_some(),
+            "起止行仍是合法开始行"
+        );
+    }
+    let (add, _) = slash_template_content(SlashCommandId::Add);
+    assert!(add.contains("# Add Requirement"));
+    assert!(add.contains("- Requirements: \n  - "));
+}
+
+#[test]
+fn parse_template_start_line_forms() {
+    let parsed =
+        parse_template_start_line("&&& addTemplate --start 「title: 标题」").expect("start line");
+    assert_eq!(parsed.command, "addTemplate");
+    assert_eq!(parsed.title, Some(" 标题"));
+    let parsed = parse_template_start_line("  &&& bugTemplate").expect("short form");
+    assert_eq!(parsed.indent, "  ");
+    assert_eq!(parsed.title, None);
+    assert_eq!(
+        parse_template_start_line("&&& commonTemplate --start").map(|p| p.title),
+        Some(None)
+    );
+
+    assert_eq!(parse_template_start_line("&&& addTemplate --end"), None);
+    assert_eq!(
+        parse_template_start_line("&&& done"),
+        None,
+        "保留词不算起始行"
+    );
+    assert_eq!(
+        parse_template_start_line("&&& suppleTemplate --start"),
+        None
+    );
+    assert_eq!(parse_template_start_line("&&&addTemplate"), None);
+    assert_eq!(parse_template_start_line("&&& 1bad --start"), None);
+    assert_eq!(
+        parse_template_start_line("&&& addTemplate --start junk"),
+        None
+    );
+    assert_eq!(
+        parse_template_start_line("&&& addTemplate --start 「title: a」 trailing"),
+        None
+    );
+}
+
+#[test]
+fn parse_template_end_line_forms() {
+    let parsed =
+        parse_template_end_line("&&& addTemplate --end done {id:abc} {wt:main}").expect("end line");
+    assert_eq!(parsed.command, Some("addTemplate"));
+    assert!(parsed.end_flag);
+    assert_eq!(parsed.status, TemplateStatus::Done);
+    assert_eq!(parsed.id, Some("abc"));
+    assert_eq!(parsed.wt, Some("main"));
+    assert_eq!(
+        parse_template_end_line("&&& --end in_progress")
+            .expect("no command")
+            .status,
+        TemplateStatus::InProgress
+    );
+    assert_eq!(
+        parse_template_end_line("&&&").expect("bare marker").status,
+        TemplateStatus::Todo
+    );
+    assert_eq!(
+        parse_template_end_line("&&& done").map(|p| p.status),
+        Some(TemplateStatus::Done)
+    );
+
+    assert_eq!(
+        parse_template_end_line("&&& addTemplate"),
+        None,
+        "缺 --end 不是结束行"
+    );
+    assert_eq!(parse_template_end_line("&&& addTemplate --start"), None);
+    assert_eq!(parse_template_end_line("&&& --end junk"), None);
+    assert_eq!(parse_template_end_line("&&& --end --end"), None);
+}
+
+#[test]
+fn parse_template_block_finds_range_and_unclosed_tail() {
+    let text = "a\n&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end\nb";
+    assert_eq!(
+        parse_template_block_at_line(text, 1),
+        Some(TemplateBlockRange { start: 1, end: 3 })
+    );
+    assert_eq!(parse_template_block_at_line(text, 0), None);
+    assert_eq!(parse_template_block_at_line(text, 2), None);
+    let unclosed = "&&& bugTemplate --start 「title: 」\n# Fix";
+    assert_eq!(
+        parse_template_block_at_line(unclosed, 0),
+        Some(TemplateBlockRange { start: 0, end: 1 })
+    );
+}
+
+#[test]
+fn cycle_template_status_cycles_and_preserves_metadata() {
+    assert_eq!(
+        cycle_template_status("&&& addTemplate --end").as_deref(),
+        Some("&&& addTemplate --end in_progress")
+    );
+    assert_eq!(
+        cycle_template_status("&&& addTemplate --end in_progress").as_deref(),
+        Some("&&& addTemplate --end done")
+    );
+    assert_eq!(
+        cycle_template_status("&&& addTemplate --end done").as_deref(),
+        Some("&&& addTemplate --end")
+    );
+    assert_eq!(
+        cycle_template_status("  &&& bugTemplate --end done {id:ff} {wt:dev}").as_deref(),
+        Some("  &&& bugTemplate --end {id:ff} {wt:dev}")
+    );
+    assert_eq!(
+        cycle_template_status("&&& done").as_deref(),
+        Some("&&&"),
+        "done 循环回 todo 时移除状态后缀"
+    );
+    assert_eq!(cycle_template_status("&&& addTemplate"), None);
+    assert_eq!(cycle_template_status("plain"), None);
+}
+
+#[test]
+fn clean_template_content_drops_unfilled_items() {
+    let content = "# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - ";
+    let cleaned = clean_template_content(content);
+    assert_eq!(cleaned, "# Add Requirement");
+}
+
+#[test]
+fn clean_template_content_keeps_filled_children() {
+    let content = "- Requirements: \n  - keep me\n- Notes: \n  - \n- Location: here";
+    let cleaned = clean_template_content(content);
+    assert_eq!(cleaned, "- Requirements: \n  - keep me\n- Location: here");
+}
+
+#[test]
+fn clean_template_content_preserves_subblocks_and_collapses_blanks() {
+    let content = "- Reference: \n+++ suppleTemplate --start 「title: 」\n- Requirements: \n  - \n+++ suppleTemplate --end\n\n\n\n- Location: x";
+    let cleaned = clean_template_content(content);
+    assert!(cleaned.contains("+++ suppleTemplate --start"));
+    assert!(cleaned.contains("- Requirements: \n  - \n+++ suppleTemplate --end"));
+    assert!(!cleaned.contains("\n\n\n"), "折叠多余空行");
+    assert!(cleaned.ends_with("- Location: x"));
+}
+
+#[test]
+fn copy_template_content_strips_supple_and_log_markers() {
+    let content = "「title: 标题」\n# Add Requirement\n\n+++ suppleTemplate --start 「title: 」\n- Extra: keep out\n+++ suppleTemplate --end\n%%% logTemplate --start 「title: 」\n- Time: 10:00\n%%% logTemplate --end\n- Location: here";
+    let copied = copy_template_content(content);
+    assert!(
+        copied.starts_with("# Add Requirement"),
+        "标题占位行不进复制内容: {copied}"
+    );
+    assert!(!copied.contains("suppleTemplate"), "{copied}");
+    assert!(!copied.contains("Extra"), "补充子块内容整体剔除: {copied}");
+    assert!(!copied.contains("%%%"), "记录子块标记剔除: {copied}");
+    assert!(
+        copied.contains("- Time: 10:00"),
+        "记录子块内容保留: {copied}"
+    );
+    assert!(copied.ends_with("- Location: here"));
+}
+
+#[test]
+fn copy_template_content_drops_comments_and_unfilled_items() {
+    let content =
+        "# Add\n// 注释行\n- Reference: \n  // 子注释\n- Location: here\n- Requirements: \n  - \n";
+    let copied = copy_template_content(content);
+    assert_eq!(copied, "# Add\n- Location: here");
+}
+
+#[test]
+fn copy_template_content_keeps_legacy_log_blocks() {
+    let content = "- Location: x\n+++ log --start\n- Records: a\n+++ log --end";
+    let copied = copy_template_content(content);
+    assert_eq!(copied, "- Location: x\n- Records: a");
+}
+
+#[test]
+fn inside_template_block_tracks_offsets() {
+    let text = "a\n&&& addTemplate --start 「title: 」\nbody\n&&& addTemplate --end\nb";
+    let inside = text.find("body").expect("body");
+    let outside = text.rfind("\nb").expect("b") + 1;
+    assert!(inside_template_block(text, inside));
+    assert!(!inside_template_block(text, outside));
+    assert!(!inside_template_block(text, 0));
+}
+
+#[test]
+fn template_block_start_at_finds_enclosing_block() {
+    let text = "a\n&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end\nb";
+    assert_eq!(template_block_start_at(text, 0), None, "块外行");
+    assert_eq!(template_block_start_at(text, 2), Some(1), "起始行");
+    assert_eq!(
+        template_block_start_at(text, text.find("body").expect("body")),
+        Some(1),
+        "正文行"
+    );
+    assert_eq!(
+        template_block_start_at(text, text.find("--end").expect("end")),
+        Some(1),
+        "结束行"
+    );
+    assert_eq!(template_block_start_at(text, text.len()), None, "块后行");
+}
+
+#[test]
+fn template_line_infos_mark_roles_and_status() {
+    let text = "a\n&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end done\nb";
+    let infos = template_line_infos(text);
+    assert_eq!(infos.len(), 5);
+    assert_eq!(infos[0], None);
+    assert_eq!(
+        infos[1],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Start,
+            status: TemplateStatus::Done,
+        })
+    );
+    assert_eq!(
+        infos[2],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Middle,
+            status: TemplateStatus::Done,
+        })
+    );
+    assert_eq!(
+        infos[3],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::End,
+            status: TemplateStatus::Done,
+        })
+    );
+    assert_eq!(infos[4], None);
+}
+
+#[test]
+fn template_line_infos_unclosed_block_extends_to_end() {
+    let text = "&&& bugTemplate --start 「title: 」\n# Fix";
+    let infos = template_line_infos(text);
+    assert_eq!(
+        infos[0],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Start,
+            status: TemplateStatus::Todo,
+        })
+    );
+    assert_eq!(
+        infos[1],
+        Some(TemplateLineInfo {
+            role: TemplateLineRole::Middle,
+            status: TemplateStatus::Todo,
+        })
+    );
+}
+
+#[test]
+fn is_template_block_line_checks_membership_and_bounds() {
+    let text = "a\n&&& addTemplate --start 「title: 」\nbody\n&&& addTemplate --end\nb";
+    assert!(!is_template_block_line(text, 0));
+    assert!(is_template_block_line(text, 1));
+    assert!(is_template_block_line(text, 2));
+    assert!(is_template_block_line(text, 3));
+    assert!(!is_template_block_line(text, 4));
+    assert!(!is_template_block_line(text, 99), "越界行不算块内");
+    let unclosed = "&&& bugTemplate --start 「title: 」\n# Fix";
+    assert!(is_template_block_line(unclosed, 1));
+}

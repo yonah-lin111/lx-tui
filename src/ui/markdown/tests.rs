@@ -162,3 +162,130 @@ fn empty_text_yields_single_empty_line() {
     assert_eq!(lines.len(), 2);
     assert!(lines[0].is_empty() && lines[1].is_empty());
 }
+
+// ---- 模板块与 @ 文件提及 ----
+
+#[test]
+fn template_start_line_tokens_split_by_semantics() {
+    assert_eq!(
+        kinds("&&& addTemplate --start 「title: 」"),
+        vec![
+            (TokenKind::TemplateMarker, "&&&"),
+            (
+                TokenKind::TemplateCommand(Some(SlashCommandId::Add)),
+                "addTemplate"
+            ),
+            (TokenKind::TemplateMarker, "--start"),
+            (TokenKind::TemplateTitle, "「title: 」"),
+        ]
+    );
+    assert_eq!(
+        kinds("  &&& customTemplate --start"),
+        vec![
+            (TokenKind::TemplateMarker, "&&&"),
+            (TokenKind::TemplateCommand(None), "customTemplate"),
+            (TokenKind::TemplateMarker, "--start"),
+        ]
+    );
+}
+
+#[test]
+fn template_title_on_own_line_is_styled_inside_block() {
+    let lines = summarize(
+        "&&& addTemplate --start\n「title: 」\n# Add\n&&& addTemplate --end\n「title: 」",
+    );
+    assert_eq!(
+        lines[1],
+        vec![(TokenKind::TemplateTitle, "「title: 」")],
+        "块内独立标题行高亮"
+    );
+    assert!(lines[4].is_empty(), "块外同名行不高亮: {:?}", lines[4]);
+}
+
+#[test]
+fn template_end_line_tokens_include_status_and_metadata() {
+    assert_eq!(
+        kinds("&&& bugTemplate --end done {id:abc}"),
+        vec![
+            (TokenKind::TemplateMarker, "&&&"),
+            (
+                TokenKind::TemplateCommand(Some(SlashCommandId::Bug)),
+                "bugTemplate"
+            ),
+            (TokenKind::TemplateMarker, "--end"),
+            (TokenKind::TemplateMarker, "done"),
+            (TokenKind::TemplateMarker, "{id:abc}"),
+        ]
+    );
+    assert_eq!(
+        kinds("&&& --end in_progress"),
+        vec![
+            (TokenKind::TemplateMarker, "&&&"),
+            (TokenKind::TemplateMarker, "--end"),
+            (TokenKind::TemplateMarker, "in_progress"),
+        ]
+    );
+    assert_eq!(kinds("&&&"), vec![(TokenKind::TemplateMarker, "&&&")]);
+}
+
+#[test]
+fn template_body_lines_keep_markdown_highlight() {
+    let summary =
+        summarize("&&& addTemplate --start 「title: 」\n# Add Requirement\n&&& addTemplate --end");
+    assert_eq!(
+        summary[1],
+        vec![
+            (TokenKind::Marker, "# "),
+            (TokenKind::Heading, "Add Requirement"),
+        ]
+    );
+    assert_eq!(
+        summary[2].first(),
+        Some(&(TokenKind::TemplateMarker, "&&&"))
+    );
+}
+
+#[test]
+fn fence_suppresses_template_tokens() {
+    assert_eq!(
+        kinds("```\n&&& addTemplate --start"),
+        vec![(TokenKind::Marker, "```")]
+    );
+    let summary = summarize("```\n&&& addTemplate --start");
+    assert_eq!(
+        summary[1],
+        vec![(TokenKind::CodeBlock, "&&& addTemplate --start")]
+    );
+}
+
+#[test]
+fn file_mention_tokens_scan_paths() {
+    assert_eq!(
+        kinds("see @src/app.rs now"),
+        vec![(TokenKind::FileMention, "@src/app.rs")]
+    );
+    assert_eq!(
+        kinds("@README.md"),
+        vec![(TokenKind::FileMention, "@README.md")]
+    );
+    assert_eq!(
+        kinds("[@src/ui/]"),
+        vec![(TokenKind::FileMention, "@src/ui/")],
+        "`[` 后是提及边界，`]` 终止路径"
+    );
+    assert_eq!(kinds("mail a@b.com"), vec![], "非边界 @ 不视为文件提及");
+    assert_eq!(kinds("@"), vec![], "空提及不成词");
+    assert_eq!(
+        kinds("@file, next"),
+        vec![(TokenKind::FileMention, "@file")],
+        "边界标点终止路径"
+    );
+    assert_eq!(
+        kinds("`@not/mention`"),
+        vec![
+            (TokenKind::Marker, "`"),
+            (TokenKind::InlineCode, "@not/mention"),
+            (TokenKind::Marker, "`"),
+        ]
+    );
+}

@@ -2,6 +2,8 @@
 
 mod list;
 mod mention;
+mod panel;
+mod template;
 
 use std::path::PathBuf;
 
@@ -9,7 +11,7 @@ use unicode_width::UnicodeWidthChar;
 
 use self::list::{ListContext, list_context, parse_list_item};
 use self::mention::MentionState;
-use super::markdown::{self, BlockPanel, MentionEntry, MentionPanel};
+use super::markdown::{self, BlockPanel, MentionEntry, MentionPanel, SlashPanel};
 use crate::layout::PaneId;
 
 /// 粘贴文本中的制表符展开内容。
@@ -41,6 +43,8 @@ pub struct Prompt {
     last_edit: Option<EditKind>,
     /// 块命令面板；由光标处触发标记逼近得到。
     panel: Option<BlockPanel>,
+    /// 斜杠模板命令面板；由整行 `/` 触发逼近得到。
+    slash: Option<SlashPanel>,
     /// 文件提及面板状态；含扫描缓存与在途代号。
     mention: MentionState,
     /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
@@ -86,6 +90,7 @@ impl Prompt {
             redo: Vec::new(),
             last_edit: None,
             panel: None,
+            slash: None,
             mention: MentionState::default(),
             panel_suppressed: false,
             is_saved: true,
@@ -238,88 +243,11 @@ impl Prompt {
         self.restore(snapshot);
     }
 
-    /// 当前块命令面板；未打开时为 None。
-    pub fn panel(&self) -> Option<&BlockPanel> {
-        self.panel.as_ref()
-    }
-
-    /// 面板打开时按偏移循环移动高亮；返回是否消费该按键。
-    pub fn panel_move(&mut self, delta: isize) -> bool {
-        match self.panel.as_mut() {
-            Some(panel) => {
-                panel.move_active(delta);
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// 块命令面板悬停高亮：设置高亮索引、窗口锚点不动；越界或未变化返回 false。
-    pub fn panel_set_active(&mut self, index: usize) -> bool {
-        let Some(panel) = self.panel.as_mut() else {
-            return false;
-        };
-        if index >= panel.items().len() || panel.active() == index {
-            return false;
-        }
-        panel.set_active(index);
-        true
-    }
-
-    /// 滚轮在块命令面板上滚动可见窗口：视口从 `base` 起偏移、越界钳制不循环；
-    /// 高亮不动；未打开或视口未移动返回 false。
-    pub fn panel_scroll(&mut self, delta: isize, base: usize) -> bool {
-        let Some(panel) = self.panel.as_mut() else {
-            return false;
-        };
-        panel.scroll_viewport(delta, base)
-    }
-
-    /// 块命令面板点选：设置高亮并确认插入；返回是否消费。
-    pub fn panel_confirm_at(&mut self, index: usize) -> bool {
-        self.panel_set_active(index);
-        self.panel_confirm()
-    }
-
-    /// 面板打开时确认高亮命令：替换触发区间并压制重弹；返回是否消费该按键。
-    pub fn panel_confirm(&mut self) -> bool {
-        let Some(panel) = self.panel.as_ref() else {
-            return false;
-        };
-        let trigger = panel.trigger();
-        if trigger.from > trigger.to || trigger.to > self.text.len() {
-            return false;
-        }
-        let Some(id) = panel.items().get(panel.active()).copied() else {
-            return false;
-        };
-        let insertion = markdown::block_insertion(id);
-        self.panel = None;
-        self.break_group();
-        self.record(EditKind::Other);
-        self.text
-            .replace_range(trigger.from..trigger.to, &insertion.text);
-        self.cursor = trigger.from + insertion.cursor;
-        self.panel_suppressed = true;
-        self.scroll_cursor_into_view();
-        true
-    }
-
-    /// 面板打开时关闭且不改文本；返回是否消费该按键。
-    pub fn panel_escape(&mut self) -> bool {
-        if self.panel.is_none() {
-            return false;
-        }
-        self.panel = None;
-        self.panel_suppressed = true;
-        true
-    }
-
-    /// 清空面板并解除压制；prompt 失焦或折叠时调用。
     ///
     /// 同时作废在途的提及扫描结果，避免失焦后异步结果把面板重新弹出。
     pub fn clear_panel(&mut self) {
         self.panel = None;
+        self.slash = None;
         self.mention.clear();
         self.panel_suppressed = false;
     }
@@ -575,12 +503,23 @@ impl Prompt {
         }
     }
 
-    /// 按内容宽度软换行得到的视觉行。
+    /// 按内容宽度软换行得到的视觉行；模板块行扣除左右边框槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
+        let margins = usize::from(
+            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
+                + crate::layout::PROMPT_TEMPLATE_GUTTER_RIGHT,
+        );
+        let infos = markdown::template_line_infos(&self.text);
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (line, segment) in self.text.split('\n').enumerate() {
+            let block = infos.get(line).is_some_and(Option::is_some);
+            let width = if block {
+                width.saturating_sub(margins).max(1)
+            } else {
+                width
+            };
             let line_end = line_start + segment.len();
             let mut row_start = line_start;
             let mut col = 0;
@@ -608,7 +547,7 @@ impl Prompt {
         rows
     }
 
-    /// 光标在视口内的坐标（行、列）；滚出视口时为 None。
+    /// 光标在视口内的坐标（行、列，列含模板块左边框槽）；滚出视口时为 None。
     pub fn cursor_cell(&self) -> Option<(u16, u16)> {
         if self.height == 0 || self.width == 0 {
             return None;
@@ -619,7 +558,8 @@ impl Prompt {
         if visible >= usize::from(self.height) {
             return None;
         }
-        let col = col.min(usize::from(self.width) - 1);
+        let gutter = usize::from(self.line_gutter(rows[row].line));
+        let col = (col + gutter).min(usize::from(self.width) - 1);
         Some((visible as u16, col as u16))
     }
 
@@ -906,6 +846,7 @@ impl Prompt {
         let rows = self.visual_rows();
         let index = index.min(rows.len() - 1);
         let visual = rows[index];
+        let col = col.saturating_sub(self.line_gutter(visual.line));
         let slice = &self.text[visual.start..visual.end];
         let mut cell = 0;
         for (offset, ch) in slice.char_indices() {
@@ -923,27 +864,33 @@ impl Prompt {
         visual.end
     }
 
+    /// 模板块行左边框槽宽度；非模板块行为 0（渲染、光标与鼠标坐标映射共用）。
+    fn line_gutter(&self, line: usize) -> u16 {
+        if markdown::is_template_block_line(&self.text, line) {
+            crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
+        } else {
+            0
+        }
+    }
+
     /// 编辑或光标移动后的统一收尾：解除面板压制、保持光标可见并重算面板。
+    ///
+    /// 面板互斥收敛优先级：文件提及 > 斜杠命令 > 块命令；高优先级面板打开时清空其余。
     fn settle(&mut self) {
         self.panel_suppressed = false;
         self.scroll_cursor_into_view();
-        self.refresh_panel();
         self.mention.refresh(&self.text, self.cursor);
-    }
-
-    /// 重算块命令面板：触发标记决定候选列表，同类同位置保留高亮。
-    fn refresh_panel(&mut self) {
-        let Some(trigger) = markdown::block_trigger(&self.text, self.cursor) else {
+        if self.mention.panel().is_some() {
+            self.slash = None;
             self.panel = None;
             return;
-        };
-        let previous = self.panel.as_ref().filter(|panel| {
-            panel.trigger().kind == trigger.kind && panel.trigger().to == trigger.to
-        });
-        let active = previous.map_or(0, BlockPanel::active);
-        let items = markdown::block_commands(trigger.kind);
-        let active = active.min(items.len().saturating_sub(1));
-        self.panel = Some(BlockPanel::new(trigger, items, active));
+        }
+        self.refresh_slash_panel();
+        if self.slash.is_some() {
+            self.panel = None;
+            return;
+        }
+        self.refresh_panel();
     }
 
     /// 调整滚动量，保证光标所在视觉行可见。

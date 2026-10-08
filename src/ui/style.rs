@@ -6,6 +6,8 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::app::markdown::{SlashCommandId, TemplateStatus};
+
 /// 正文。
 pub fn text() -> Style {
     Style::default()
@@ -146,6 +148,73 @@ pub fn markdown_link_text() -> Style {
 /// markdown URL。
 pub fn markdown_url() -> Style {
     Style::default().fg(Color::Cyan)
+}
+
+/// 模板块结构标记（`&&&`、`--start`/`--end`、状态与元数据）：次要信息。
+pub fn template_marker() -> Style {
+    muted()
+}
+
+/// 模板块命令名：按业务分色并加粗；未知命令用通用紫。
+pub fn template_command(id: Option<SlashCommandId>) -> Style {
+    let color = match id {
+        Some(SlashCommandId::Add) => Color::Green,
+        Some(SlashCommandId::Bug) => Color::LightRed,
+        Some(SlashCommandId::Refactor) => Color::LightMagenta,
+        Some(SlashCommandId::Common) => Color::LightBlue,
+        Some(SlashCommandId::Style) => Color::Magenta,
+        None => Color::LightMagenta,
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
+/// 模板块标题占位符 `「title: …」`：Cyan 下划线（与状态色边框、@ 提及黄区分）。
+pub fn template_title() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// `@文件` 提及：Yellow 下划线。
+pub fn markdown_file_mention() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// 模板块操作按钮：常态次要信息。
+pub fn template_button() -> Style {
+    muted()
+}
+
+/// 模板块状态按钮：todo 次要、in_progress 黄、done 绿（对齐 lx-agent 状态色）。
+pub fn template_status(status: TemplateStatus) -> Style {
+    match status {
+        TemplateStatus::Todo => muted(),
+        TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
+        TemplateStatus::Done => Style::default().fg(Color::Green),
+    }
+}
+
+/// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
+pub fn template_border(status: TemplateStatus) -> Style {
+    match status {
+        TemplateStatus::Todo => Style::default().fg(Color::LightBlue),
+        TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
+        TemplateStatus::Done => Style::default().fg(Color::Green),
+    }
+}
+
+/// 模板块整行底色：按状态铺低饱和暗色底（todo 暗灰蓝 / in_progress 暗灰琥珀 / done 暗灰绿）。
+///
+/// 固定 RGB，不受终端 256 色主题映射影响；只设置背景，前景与修饰符由各单元格自身样式决定。
+pub fn template_block_bg(status: TemplateStatus) -> Style {
+    let color = match status {
+        TemplateStatus::Todo => Color::Rgb(35, 40, 56),
+        TemplateStatus::InProgress => Color::Rgb(51, 41, 28),
+        TemplateStatus::Done => Color::Rgb(29, 46, 36),
+    };
+    Style::default().bg(color)
 }
 
 /// lx 页吉祥物像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。

@@ -14,6 +14,10 @@ pub const PROMPT_DIVIDER_HEIGHT: u16 = 1;
 /// prompt 顶部保留行数（工具栏 + 分割线）。
 pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEIGHT;
 
+/// prompt 模板块边框占位：左侧（`╭─`/`│ `/`╰─`）与右侧竖线（`╮`/`│`/`╯`）列数。
+pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
+pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
+
 /// 工具栏左侧按钮（`[undo]` / `[redo]`）宽度（列）。
 const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 6;
 /// 工具栏按钮之间的空档（列）。
