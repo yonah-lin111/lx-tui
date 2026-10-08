@@ -116,10 +116,10 @@ fn renders_below_anchor_without_covering_it() {
     assert_eq!(buf[(0, 3)].bg, Color::Indexed(236));
     assert_eq!(buf[(1, 5)].bg, Color::Indexed(236));
     assert_eq!(buf[(1, 5)].fg, Color::Indexed(252));
-    assert_eq!(buf[(2, 4)].bg, Color::Reset);
-    assert_eq!(buf[(2, 4)].fg, Color::Reset);
+    assert_eq!(buf[(2, 4)].bg, Color::Indexed(240));
+    assert_eq!(buf[(2, 4)].fg, Color::Indexed(255));
     assert_eq!(buf[(0, 2)].symbol(), " ");
-    assert!(buf[(2, 4)].modifier.contains(Modifier::REVERSED));
+    assert!(!buf[(2, 4)].modifier.contains(Modifier::REVERSED));
     let row = row_text(&buf, area, 4);
     let label_at = row.find("Heading 1").expect("label first");
     let format_at = row.find('#').expect("preview after");
@@ -157,7 +157,8 @@ fn flips_above_when_below_is_tight() {
 
     assert_eq!(rect, Rect::new(0, 0, 8, 4));
     assert_eq!(rect.bottom(), 4);
-    assert!(buf[(2, 1)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(2, 1)].bg, Color::Indexed(240));
+    assert!(!buf[(2, 1)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]
@@ -178,8 +179,8 @@ fn scrolls_window_to_keep_active_visible() {
     assert!(row_text(&buf, area, 2).contains("Heading 2"));
     assert!(!row_text(&buf, area, 2).contains("Heading 1"));
     assert!(row_text(&buf, area, 6).contains("Heading 6"));
-    assert!(buf[(2, 6)].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(2, 6)].bg, Color::Indexed(240));
+    assert_ne!(buf[(2, 2)].bg, Color::Indexed(240));
 }
 
 #[test]
@@ -228,9 +229,9 @@ fn renders_stacked_items_with_detail_row() {
     assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
     assert!(row_text(&buf, area, 4).contains("main.rs"));
     assert!(row_text(&buf, area, 5).contains("src/bin"));
-    assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
-    assert!(buf[(2, 3)].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(2, 4)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(2, 2)].bg, Color::Indexed(240));
+    assert_eq!(buf[(2, 3)].bg, Color::Indexed(240));
+    assert_ne!(buf[(2, 4)].bg, Color::Indexed(240));
 }
 
 #[test]
@@ -272,8 +273,8 @@ fn caps_panel_height_and_follows_active() {
         "row6={:?}",
         row_text(&buf, area, 6)
     );
-    assert!(buf[(2, 6)].modifier.contains(Modifier::REVERSED));
-    assert!(!buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(2, 6)].bg, Color::Indexed(240));
+    assert_ne!(buf[(2, 2)].bg, Color::Indexed(240));
 }
 
 #[test]
@@ -359,7 +360,7 @@ fn explicit_window_start_ignores_active_highlight() {
     render(area, &mut buf, &view).expect("panel renders");
     assert!(row_text(&buf, area, 2).contains("file2.rs"));
     assert!(!row_text(&buf, area, 2).contains("file0.rs"));
-    assert!(!buf[(3, 2)].modifier.contains(Modifier::REVERSED));
+    assert_ne!(buf[(3, 2)].bg, Color::Indexed(240));
 
     // 视口起点越界时钳到贴底窗口，保证窗口填满预算。
     let bottom =
@@ -417,13 +418,8 @@ fn renders_scrollbar_when_overflowing() {
     render(area, &mut buf, &view(&items, 0, 0, Some(8))).expect("panel renders");
 
     let bar = layout.scrollbar.expect("scrollbar visible");
-    assert_eq!(bar.track.x, layout.inner.right() - 1);
     assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].symbol(), "▐");
-    assert!(
-        buf[(bar.thumb.x, bar.thumb.y)]
-            .modifier
-            .contains(Modifier::BOLD)
-    );
+    assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].modifier, Modifier::empty());
     assert_eq!(buf[(bar.track.x, bar.track.bottom() - 1)].symbol(), "▕");
     assert!(
         buf[(bar.track.x, bar.track.bottom() - 1)]

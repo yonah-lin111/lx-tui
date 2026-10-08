@@ -99,7 +99,7 @@ fn menu_falls_back_to_target_kind_title() {
 }
 
 #[test]
-fn menu_renders_labels_and_reversed_selection() {
+fn menu_renders_labels_and_overlay_selection() {
     let state = menu_state(
         vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],
         1,
@@ -115,7 +115,9 @@ fn menu_renders_labels_and_reversed_selection() {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
-    assert!(buffer[(11, 7)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buffer[(11, 7)].bg, Color::Indexed(240));
+    assert_eq!(buffer[(11, 7)].fg, Color::Indexed(255));
+    assert!(!buffer[(11, 7)].modifier.contains(Modifier::REVERSED));
 }
 
 #[test]

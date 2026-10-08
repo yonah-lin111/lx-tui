@@ -36,9 +36,17 @@ fn overlay_panel_paints_indexed_surface_with_readable_foreground() {
 }
 
 #[test]
-fn overlay_selection_resets_terminal_colors_before_reversing() {
+fn selection_uses_explicit_colors_without_reversed() {
+    let style = selection();
+    assert_eq!(style.fg, Some(Color::Indexed(255)));
+    assert_eq!(style.bg, Some(Color::Indexed(240)));
+    assert!(!style.add_modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn overlay_selection_uses_contrast_surface_without_reversed() {
     let style = overlay_selection();
-    assert_eq!(style.fg, Some(Color::Reset));
-    assert_eq!(style.bg, Some(Color::Reset));
-    assert!(style.add_modifier.contains(Modifier::REVERSED));
+    assert_eq!(style.fg, Some(Color::Indexed(255)));
+    assert_eq!(style.bg, Some(Color::Indexed(240)));
+    assert!(!style.add_modifier.contains(Modifier::REVERSED));
 }

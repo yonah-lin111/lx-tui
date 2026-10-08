@@ -879,20 +879,21 @@ fn workspace_rows_fill_selected_and_hover_backgrounds() {
         "行尾空白同样铺背景"
     );
 
-    // 悬停项终端反显（同右键菜单选中项）。
+    // 悬停项使用显式深色背景（selection）。
     assert!(
-        buffer[(x, y + 1)]
+        !buffer[(x, y + 1)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
-    assert_eq!(buffer[(x, y + 1)].bg, ratatui::style::Color::Reset);
+    assert_eq!(buffer[(x, y + 1)].bg, ratatui::style::Color::Indexed(240));
+    assert_eq!(buffer[(x, y + 1)].fg, ratatui::style::Color::Indexed(255));
 
     // 未交互项无背景。
     assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
 }
 
 #[test]
-fn hovered_parent_workspace_item_uses_uniform_reversed_style() {
+fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "repo".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
@@ -928,7 +929,7 @@ fn hovered_parent_workspace_item_uses_uniform_reversed_style() {
             .contains(ratatui::style::Modifier::REVERSED)
     );
 
-    // 2. 悬停态：父项整行统一终端反显，箭头剥离独立 Cyan 前景以避免翻转为青色底块。
+    // 2. 悬停态：父项整行统一深色高亮背景（Indexed 240），箭头为 Indexed 255 前景。
     state.workspace_hover = Some(0);
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
         panic!("draw failed: {error}");
@@ -938,12 +939,12 @@ fn hovered_parent_workspace_item_uses_uniform_reversed_style() {
     assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
     assert_eq!(
         buffer[(x, y)].fg,
-        ratatui::style::Color::Reset,
-        "悬停时箭头前景重置为终端默认，避免在反显下呈现为青底"
+        ratatui::style::Color::Indexed(255),
+        "悬停时箭头前景为 Indexed 255"
     );
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
+    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Indexed(240));
     assert!(
-        buffer[(x, y)]
+        !buffer[(x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
@@ -962,7 +963,7 @@ fn hovered_parent_workspace_item_uses_uniform_reversed_style() {
 }
 
 #[test]
-fn dragged_workspace_item_renders_reversed() {
+fn dragged_workspace_item_renders_selection() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     state.workspace_drag = Some(0);
@@ -978,20 +979,23 @@ fn dragged_workspace_item_renders_reversed() {
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let y = sections.workspaces.y;
     assert!(
-        buffer[(sections.workspaces.x, y)]
+        !buffer[(sections.workspaces.x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
+    );
+    assert_eq!(
+        buffer[(sections.workspaces.x, y)].bg,
+        ratatui::style::Color::Indexed(240)
     );
     assert!(
         !buffer[(sections.workspaces.x, y + 1)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
-    // 拖动反显整行铺满，空格区同样反显。
-    assert!(
-        buffer[(sections.workspaces.right() - 1, y)]
-            .modifier
-            .contains(ratatui::style::Modifier::REVERSED),
+    // 拖动高亮整行铺满，空格区同样覆盖。
+    assert_eq!(
+        buffer[(sections.workspaces.right() - 1, y)].bg,
+        ratatui::style::Color::Indexed(240),
         "拖动高亮覆盖整行空白区"
     );
 }
@@ -1020,12 +1024,10 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
         let buffer = terminal.backend().buffer().clone();
         (
             [
-                buffer[(sections.workspaces.x, sections.workspaces.y)]
-                    .modifier
-                    .contains(ratatui::style::Modifier::REVERSED),
-                buffer[(sections.workspaces.x, sections.workspaces.y + 1)]
-                    .modifier
-                    .contains(ratatui::style::Modifier::REVERSED),
+                buffer[(sections.workspaces.x, sections.workspaces.y)].bg
+                    == ratatui::style::Color::Indexed(240),
+                buffer[(sections.workspaces.x, sections.workspaces.y + 1)].bg
+                    == ratatui::style::Color::Indexed(240),
             ],
             buffer[(sections.workspaces.x, sections.workspaces.y)].bg,
         )
@@ -1040,8 +1042,8 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
     state.workspace_dragging = true;
     assert_eq!(
         observe(&state),
-        ([true, true], ratatui::style::Color::Reset),
-        "指针移动后整块反显"
+        ([true, true], ratatui::style::Color::Indexed(240)),
+        "指针移动后整块使用深色高亮背景"
     );
 }
 

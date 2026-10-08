@@ -182,7 +182,7 @@ fn renders_block_command_panel_below_cursor() {
     assert_eq!(buf[(0, 1)].symbol(), "╭");
     let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
     assert!(row.contains("Heading 1"));
-    assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(2, 2)].bg, Color::Indexed(240));
 
     let mut empty = Buffer::empty(area);
     let blank = prompt(10, 3, "plain");
@@ -282,7 +282,7 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
     assert!(dir_row.contains("src"));
     assert!(dir_row.contains(text::WORKSPACE_TREE_LAST), "{dir_row}");
     assert!(buf[(3, 3)].modifier.contains(Modifier::DIM));
-    assert!(buf[(2, 2)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buf[(2, 2)].bg, Color::Indexed(240));
 
     assert_eq!(mention_item_at(&editor, area, 2, 2), Some(0));
     assert_eq!(mention_item_at(&editor, area, 2, 3), Some(0));

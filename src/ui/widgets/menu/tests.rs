@@ -95,7 +95,7 @@ fn render_shows_full_wide_label_without_ellipsis() {
 }
 
 #[test]
-fn render_draws_border_title_labels_and_reversed_selection() {
+fn render_draws_border_title_labels_and_overlay_selection() {
     let menu = layout(SCREEN, (10, 5), TITLE, &["Rename", "Close"]);
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     if let Err(error) =
@@ -130,9 +130,9 @@ fn render_draws_border_title_labels_and_reversed_selection() {
     assert_eq!(close.trim_end(), "Close");
     for x in menu.item_rects[1].x..menu.item_rects[1].right() {
         let cell = &buffer[(x, menu.item_rects[1].y)];
-        assert!(cell.modifier.contains(Modifier::REVERSED), "x={x}");
-        assert_eq!(cell.fg, Color::Reset, "x={x}");
-        assert_eq!(cell.bg, Color::Reset, "x={x}");
+        assert!(!cell.modifier.contains(Modifier::REVERSED), "x={x}");
+        assert_eq!(cell.fg, Color::Indexed(255), "x={x}");
+        assert_eq!(cell.bg, Color::Indexed(240), "x={x}");
     }
     for x in menu.item_rects[0].x..menu.item_rects[0].right() {
         let cell = &buffer[(x, menu.item_rects[0].y)];

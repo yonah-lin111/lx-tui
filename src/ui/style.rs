@@ -1,6 +1,7 @@
 //! 语义样式 Token：沿用 codex 的终端原生 ANSI 配色。
-//! 默认不铺自绘背景；仅侧栏/标签栏的选中行使用 ANSI-16 背景（`selected_item`），
-//! 悬停行沿用终端原生反显（`selection`）；浮层面板使用自包含深底浅字（`overlay_panel`）。
+//! 默认不铺自绘背景；侧栏/标签栏的选中行使用 ANSI-16 背景（`selected_item`），
+//! 悬停行使用明确的深色高亮背景（`selection`）；浮层面板使用自包含深底浅字（`overlay_panel`），
+//! 浮层选中项使用显式高亮灰底白字（`overlay_selection`）。
 //! 组件禁止直接写死颜色与修饰符。
 
 use ratatui::style::{Color, Modifier, Style};
@@ -46,19 +47,18 @@ pub fn selected_item() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 列表/菜单当前项：终端原生反显；侧栏/标签栏的鼠标悬停使用；浮层内改用 `overlay_selection`。
+/// 列表/菜单当前项：高亮中灰底（Indexed 240）纯白字（Indexed 255）；侧栏/标签栏的鼠标悬停与拖拽使用，与右键菜单 hover 对齐。
 pub fn selection() -> Style {
-    Style::default().add_modifier(Modifier::REVERSED)
+    Style::default()
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(240))
 }
 
-/// 浮层内选中/悬停项：先重置为终端默认前景/背景再反显，不受浮层底色影响。
-///
-/// 与 `selection` 的区别仅在于显式重置面板底色，效果与侧栏/标签栏的悬停一致。
+/// 浮层内选中/悬停项：在 overlay_panel（Indexed 236）底色之上使用更高亮的中灰背景（Indexed 240）与高亮白字（Indexed 255）。
 pub fn overlay_selection() -> Style {
     Style::default()
-        .fg(Color::Reset)
-        .bg(Color::Reset)
-        .add_modifier(Modifier::REVERSED)
+        .fg(Color::Indexed(255))
+        .bg(Color::Indexed(240))
 }
 
 /// 状态：失败（Red）。

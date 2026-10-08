@@ -56,13 +56,14 @@ fn active_and_hovered_tabs_fill_backgrounds() {
     assert_eq!(hover_index, 0, "hover 指向非激活标签");
     assert_eq!(active_index, 1);
 
-    // 悬停标签终端反显（同右键菜单选中项），不含尾部 | 分隔符。
+    // 悬停标签使用显式深色背景（selection），不含尾部 | 分隔符。
     assert!(
-        buffer[(hover_rect.x, hover_rect.y)]
+        !buffer[(hover_rect.x, hover_rect.y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
-    assert_eq!(buffer[(hover_rect.x, hover_rect.y)].bg, Color::Reset);
+    assert_eq!(buffer[(hover_rect.x, hover_rect.y)].bg, Color::Indexed(240));
+    assert_eq!(buffer[(hover_rect.x, hover_rect.y)].fg, Color::Indexed(255));
     let active = &buffer[(active_rect.x, active_rect.y)];
     assert_eq!(active.bg, Color::Cyan);
     assert_eq!(active.fg, Color::Black);
