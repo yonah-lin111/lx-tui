@@ -36,6 +36,8 @@ pub enum AppEvent {
     PaneOutput(PaneId, Vec<u8>),
     PaneExit(PaneId),
     MentionScanned {
+        /// 发起扫描的 prompt 编辑器标识；结果按此路由到显示中或挂起的草稿。
+        prompt: PaneId,
         generation: u64,
         entries: Vec<MentionEntry>,
     },
@@ -475,6 +477,11 @@ fn handle_terminal_event(
                 {
                     update::create_tab(state);
                     reveal_active_tab(state, view);
+                    *dirty = true;
+                    return;
+                }
+                if ui::prompt_pin_at(view, state, mouse.column, mouse.row) {
+                    update::toggle_prompt_pin(state);
                     *dirty = true;
                     return;
                 }
@@ -1005,6 +1012,7 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     if !state.prompt_focused {
         return;
     }
+    let prompt = state.prompt.id();
     let Some((generation, root)) = state.prompt.take_mention_scan_request() else {
         return;
     };
@@ -1012,6 +1020,7 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     tokio::task::spawn_blocking(move || {
         let entries = crate::files::scan(&root);
         let _ = sender.send(AppEvent::MentionScanned {
+            prompt,
             generation,
             entries,
         });
@@ -1377,9 +1386,10 @@ fn handle_app_event(
         }
         AppEvent::PaneExit(id) => update::mark_pane_exited(state, id),
         AppEvent::MentionScanned {
+            prompt,
             generation,
             entries,
-        } => update::apply_mention_entries(state, generation, entries),
+        } => update::apply_mention_entries(state, prompt, generation, entries),
         AppEvent::GitRefreshed { cwd, checkout } => {
             update::apply_git_refresh(state, &cwd, checkout)
         }

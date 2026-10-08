@@ -140,18 +140,87 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     }
 }
 
-/// 把 prompt 的上下文根同步为提及扫描根：显式绑定路径优先，回退活动工作区 cwd。
+/// 把 prompt 的上下文根同步为提及扫描根：显式绑定路径优先，回退显示中工作区 cwd。
 fn sync_mention_root(state: &mut AppState) {
     let root = state
         .prompt_root
         .clone()
-        .or_else(|| state.active_workspace().cwd.clone());
+        .or_else(|| state.prompt_owner().cwd.clone());
     state.prompt.set_mention_root(root);
 }
 
-/// 写入文件提及扫描结果；过期代号在 Prompt 内丢弃。
-pub fn apply_mention_entries(state: &mut AppState, generation: u64, entries: Vec<MentionEntry>) {
-    state.prompt.apply_mention_entries(generation, entries);
+/// 切换显示中的 prompt 草稿：`from` 为当前显示工作区，`to` 为目标工作区。
+///
+/// 目标草稿移入 `state.prompt` / `state.prompt_root`，旧草稿停回 `from` 槽位；
+/// 槽位缺失（不变量被破坏）时兜底新建，避免 panic。
+fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
+    if from == to {
+        return;
+    }
+    let mut next = state
+        .workspaces
+        .get_mut(to)
+        .and_then(|workspace| workspace.prompt.take())
+        .unwrap_or_default();
+    std::mem::swap(&mut state.prompt, &mut next.editor);
+    std::mem::swap(&mut state.prompt_root, &mut next.root);
+    if let Some(workspace) = state.workspaces.get_mut(from) {
+        workspace.prompt = Some(next);
+    }
+    sync_mention_root(state);
+}
+
+/// 把激活工作区的挂起草稿装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
+///
+/// 仅用于显示中工作区被关闭：其草稿随工作区销毁，显示切到新激活工作区。
+fn load_displayed_draft(state: &mut AppState) {
+    let index = state.active_workspace;
+    let next = state
+        .workspaces
+        .get_mut(index)
+        .and_then(|workspace| workspace.prompt.take())
+        .unwrap_or_default();
+    state.prompt = next.editor;
+    state.prompt_root = next.root;
+    sync_mention_root(state);
+}
+
+/// 切换 prompt 钉住：未钉住时钉住当前显示的工作区，已钉住时释放。
+pub fn toggle_prompt_pin(state: &mut AppState) {
+    match state.prompt_pinned {
+        None => state.prompt_pinned = Some(state.active_workspace),
+        Some(_) => release_prompt_pin(state),
+    }
+}
+
+/// 释放钉住：显示切回激活工作区草稿并清除选区；未钉住时 no-op。
+pub fn release_prompt_pin(state: &mut AppState) {
+    let Some(pinned) = state.prompt_pinned.take() else {
+        return;
+    };
+    swap_display_prompt(state, pinned, state.active_workspace);
+    clear_selection(state);
+}
+
+/// 写入文件提及扫描结果；按编辑器标识路由到显示中或挂起的草稿，工作区已关则丢弃。
+pub fn apply_mention_entries(
+    state: &mut AppState,
+    prompt: PaneId,
+    generation: u64,
+    entries: Vec<MentionEntry>,
+) {
+    if state.prompt.id() == prompt {
+        state.prompt.apply_mention_entries(generation, entries);
+        return;
+    }
+    for workspace in &mut state.workspaces {
+        if let Some(draft) = workspace.prompt.as_mut()
+            && draft.editor.id() == prompt
+        {
+            draft.editor.apply_mention_entries(generation, entries);
+            return;
+        }
+    }
 }
 
 /// 鼠标悬停提及条目：更新高亮；返回是否变化。
@@ -781,7 +850,11 @@ pub fn create_workspace(state: &mut AppState) {
     state
         .workspaces
         .push(Workspace::single_terminal(name, cwd.clone()));
+    let from = state.active_workspace;
     state.active_workspace = state.workspaces.len().saturating_sub(1);
+    if state.prompt_pinned.is_none() {
+        swap_display_prompt(state, from, state.active_workspace);
+    }
     if let Some(cwd) = cwd.as_deref() {
         request_git_refresh(state, cwd);
     }
@@ -803,7 +876,11 @@ pub fn create_terminal_in_workspace(state: &mut AppState, target: usize) {
     }
     workspace.tabs.push(tab);
     workspace.active_tab = workspace.tabs.len().saturating_sub(1);
+    let from = state.active_workspace;
     state.active_workspace = target;
+    if state.prompt_pinned.is_none() {
+        swap_display_prompt(state, from, target);
+    }
     clear_selection(state);
     state.prompt_focused = false;
 }
@@ -818,6 +895,7 @@ pub fn open_prompt_for_workspace(state: &mut AppState, target: usize) {
     else {
         return;
     };
+    release_prompt_pin(state);
     switch_workspace(state, target);
     state.prompt_root = root;
     state.prompt_collapsed = false;
@@ -831,6 +909,7 @@ pub fn open_prompt_for_pane(state: &mut AppState, pane: PaneId) {
         .pane_anywhere(pane)
         .and_then(|target| target.cwd.clone())
         .or_else(|| state.active_workspace().cwd.clone());
+    release_prompt_pin(state);
     state.prompt_root = root;
     state.prompt_collapsed = false;
     focus_prompt(state);
@@ -886,7 +965,11 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     if index >= state.workspaces.len() {
         return;
     }
+    let from = state.active_workspace;
     state.active_workspace = index;
+    if state.prompt_pinned.is_none() {
+        swap_display_prompt(state, from, index);
+    }
     clear_selection(state);
     state.prompt_focused = false;
 }
@@ -1308,11 +1391,20 @@ fn close_workspace(state: &mut AppState, target: usize) {
         return;
     }
     let removed_active = target == state.active_workspace;
+    let display_removed = target == state.prompt_workspace();
     state.workspaces.remove(target);
     if removed_active {
         state.active_workspace = state.active_workspace.min(state.workspaces.len() - 1);
     } else if target < state.active_workspace {
         state.active_workspace -= 1;
+    }
+    match state.prompt_pinned {
+        Some(pinned) if pinned == target => state.prompt_pinned = None,
+        Some(pinned) if pinned > target => state.prompt_pinned = Some(pinned - 1),
+        _ => {}
+    }
+    if display_removed {
+        load_displayed_draft(state);
     }
     clear_selection(state);
 }
@@ -1460,6 +1552,9 @@ pub fn drag_workspace_to(state: &mut AppState, target: usize) -> bool {
         }
     };
     state.active_workspace = new_index(state.active_workspace);
+    if let Some(pinned) = state.prompt_pinned {
+        state.prompt_pinned = Some(new_index(pinned));
+    }
     state.workspace_drag = Some(new_index(from));
     let mut slots: Vec<Option<Workspace>> = state.workspaces.drain(..).map(Some).collect();
     state.workspaces = order

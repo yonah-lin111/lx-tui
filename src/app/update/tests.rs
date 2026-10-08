@@ -5,7 +5,7 @@ use crate::app::overlay::WorktreeStatus;
 use crate::app::state::{WorkspaceGit, workspace_name};
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// demo 状态并把活动窗格置为终端视图：避免 lx 动画干扰定时类断言。
@@ -920,6 +920,233 @@ fn confirm_close_refuses_last_workspace() {
 }
 
 #[test]
+fn switch_workspace_swaps_prompt_drafts() {
+    let mut state = AppState::demo();
+    assert_prompt_slots(&state);
+    state.prompt.insert_str("alpha");
+    create_workspace(&mut state);
+    assert_prompt_slots(&state);
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(state.prompt.text(), "", "新工作区使用独立空草稿");
+
+    state.prompt.insert_str("beta");
+    switch_workspace(&mut state, 0);
+    assert_prompt_slots(&state);
+    assert_eq!(state.prompt.text(), "alpha", "切回恢复原工作区草稿");
+    switch_workspace(&mut state, 1);
+    assert_eq!(state.prompt.text(), "beta");
+}
+
+/// 断言 prompt 草稿槽位不变量：恰有一处 None，且属于显示中的工作区。
+fn assert_prompt_slots(state: &AppState) {
+    let empty: Vec<usize> = state
+        .workspaces
+        .iter()
+        .enumerate()
+        .filter(|(_, workspace)| workspace.prompt.is_none())
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(empty, vec![state.prompt_workspace()]);
+}
+
+#[test]
+fn pinned_switch_keeps_shown_draft_and_edits_land_in_owner() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("alpha");
+    create_workspace(&mut state);
+    state.prompt.insert_str("beta");
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(1));
+
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.active_workspace, 0);
+    assert_eq!(state.prompt_workspace(), 1, "钉住时显示来源不随激活切换");
+    assert_eq!(state.prompt.text(), "beta");
+    state.prompt.insert_str("+gamma");
+
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, None);
+    assert_eq!(state.prompt.text(), "alpha", "释放后回到激活工作区草稿");
+    switch_workspace(&mut state, 1);
+    assert_eq!(
+        state.prompt.text(),
+        "beta+gamma",
+        "钉住期间的编辑写回所属工作区"
+    );
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn toggle_prompt_pin_releases_on_explicit_open_prompt() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 0);
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(0));
+    switch_workspace(&mut state, 1);
+    assert_eq!(
+        state.prompt_workspace(),
+        0,
+        "钉住期间点击其它工作区不换草稿"
+    );
+
+    open_prompt_for_workspace(&mut state, 1);
+    assert_eq!(state.prompt_pinned, None, "显式 Open prompt 释放钉住");
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(state.prompt_root, state.workspaces[1].cwd.clone());
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn toggle_prompt_pin_releases_on_pane_open_prompt() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    let pane = state.active_tab().layout.focus();
+    switch_workspace(&mut state, 0);
+    toggle_prompt_pin(&mut state);
+    switch_workspace(&mut state, 1);
+    assert_eq!(state.prompt_workspace(), 0);
+
+    open_prompt_for_pane(&mut state, pane);
+    assert_eq!(state.prompt_pinned, None, "窗格 Open prompt 释放钉住");
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn close_pinned_workspace_releases_pin() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(1));
+
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(1),
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    assert_eq!(state.prompt_pinned, None, "被钉工作区关闭即释放");
+    assert_eq!(state.prompt_workspace(), 0);
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn close_workspace_before_pin_remaps_pin_index() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.prompt.insert_str("last");
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(2));
+
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(1),
+    }));
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert_eq!(state.prompt_pinned, Some(1), "钉住索引随前移重映射");
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.prompt.text(), "last", "显示草稿随工作区身份跟随");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn create_workspace_while_pinned_keeps_shown_draft() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("alpha");
+    toggle_prompt_pin(&mut state);
+    create_workspace(&mut state);
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.prompt_workspace(), 0);
+    assert_eq!(state.prompt.text(), "alpha");
+
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt.text(), "", "释放后显示新工作区空草稿");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn drag_workspace_remaps_pinned_index() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.prompt.insert_str("mark");
+    toggle_prompt_pin(&mut state);
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.prompt_workspace(), 2);
+
+    begin_workspace_drag(&mut state, 2);
+    assert!(drag_workspace_to(&mut state, 0));
+    assert_eq!(state.prompt_pinned, Some(0), "钉住索引随拖拽重映射");
+    assert_eq!(state.active_workspace, 1);
+    assert_eq!(state.prompt.text(), "mark", "显示草稿随工作区移动");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn ensure_main_workspace_shifts_pinned_index() {
+    let mut state = AppState::demo();
+    create_workspace(&mut state);
+    create_workspace(&mut state);
+    state.workspaces[2].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/linked"),
+        is_linked: true,
+        branch: Some("feat/x".to_string()),
+        main_branch: None,
+    });
+    state.prompt.insert_str("mark");
+    toggle_prompt_pin(&mut state);
+    assert_eq!(state.prompt_pinned, Some(2));
+
+    let inserted = worktree::ensure_main_workspace(&mut state, 2).expect("main workspace inserted");
+    assert_eq!(inserted, 2);
+    assert_eq!(state.prompt_pinned, Some(3), "钉住索引随插入平移");
+    assert_eq!(state.prompt_workspace(), 3);
+    assert_eq!(state.prompt.text(), "mark", "显示草稿随工作区身份跟随");
+    assert_prompt_slots(&state);
+}
+
+#[test]
+fn pane_prompt_root_binding_is_per_workspace() {
+    let mut state = AppState::demo();
+    state.prompt_root = Some(PathBuf::from("/bound/a"));
+    create_workspace(&mut state);
+    assert_eq!(state.prompt_root, None, "新工作区草稿无显式绑定");
+    switch_workspace(&mut state, 0);
+    assert_eq!(state.prompt_root.as_deref(), Some(Path::new("/bound/a")));
+    switch_workspace(&mut state, 1);
+    assert_eq!(state.prompt_root, None);
+}
+
+#[test]
+fn mention_scan_result_routes_to_parked_prompt_draft() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 8);
+    focus_prompt(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('@'));
+    let (generation, _) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan requested");
+    let parked = state.prompt.id();
+    create_workspace(&mut state);
+
+    let entries = vec![MentionEntry {
+        path: "app.rs".into(),
+        is_directory: false,
+    }];
+    apply_mention_entries(&mut state, parked, generation, entries);
+    assert!(
+        state.prompt.mention().is_none(),
+        "结果不落到显示中的其它草稿"
+    );
+    switch_workspace(&mut state, 0);
+    assert!(state.prompt.mention().is_some(), "切回后挂起草稿已有缓存");
+    assert_prompt_slots(&state);
+}
+
+#[test]
 fn sidebar_resize_only_applies_while_resizing() {
     let mut state = AppState::demo();
     let before = state.sidebar_width;
@@ -1793,8 +2020,10 @@ fn mention_panel_keys_are_consumed_before_editing() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "app.rs".into(),
@@ -1819,7 +2048,8 @@ fn mention_state(entries: Vec<MentionEntry>) -> AppState {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
-    apply_mention_entries(&mut state, generation, entries);
+    let prompt = state.prompt.id();
+    apply_mention_entries(&mut state, prompt, generation, entries);
     state
 }
 
@@ -1905,8 +2135,10 @@ fn switching_workspace_root_invalidates_mention_cache() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "a.rs".into(),
@@ -1936,8 +2168,10 @@ fn clear_panel_hides_mention_panel_on_focus_loss() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![MentionEntry {
             path: "a.rs".into(),
@@ -1960,8 +2194,10 @@ fn mouse_mention_hover_select_and_wheel_flow() {
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
+    let prompt = state.prompt.id();
     apply_mention_entries(
         &mut state,
+        prompt,
         generation,
         vec![
             MentionEntry {

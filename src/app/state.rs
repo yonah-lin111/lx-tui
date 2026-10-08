@@ -45,7 +45,8 @@ pub struct SelectionAutoscroll {
     pub next_at: Instant,
 }
 
-/// 顶层层级：工作区包含标签，标签包含 BSP 窗格树与窗格终端；prompt 为全局右栏。
+/// 顶层层级：工作区包含标签与挂起的 prompt 草稿，标签包含 BSP 窗格树与窗格终端；
+/// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
 pub struct AppState {
     pub should_quit: bool,
@@ -73,9 +74,12 @@ pub struct AppState {
     pub prompt_collapsed: bool,
     /// prompt 是否持有键盘焦点；为真时按键进入编辑器而非焦点窗格。
     pub prompt_focused: bool,
+    /// 面板当前显示的 prompt 编辑器；其余工作区的草稿挂起在 `Workspace.prompt`。
     pub prompt: Prompt,
-    /// prompt 显式绑定的上下文根路径；None 时回退活动工作区 cwd。
+    /// 显示中 prompt 的显式绑定上下文根路径；None 时回退显示中工作区 cwd。
     pub prompt_root: Option<PathBuf>,
+    /// 钉住的显示来源工作区索引；None 时跟随激活工作区。
+    pub prompt_pinned: Option<usize>,
     pub prompt_width: u16,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
@@ -123,6 +127,31 @@ pub struct Workspace {
     pub is_initial: bool,
     /// 所属 git checkout 的元数据；非仓库或尚未查询到时为 None。
     pub git: Option<WorkspaceGit>,
+    /// 挂起的 prompt 草稿；None 表示该工作区草稿正被显示
+    /// （位于 `AppState.prompt` / `AppState.prompt_root`），全局恒有且仅有一处为 None。
+    pub prompt: Option<PromptDraft>,
+}
+
+/// 工作区挂起的 prompt 草稿：编辑器完整状态与显式上下文根绑定。
+#[derive(Debug)]
+pub struct PromptDraft {
+    pub editor: Prompt,
+    pub root: Option<PathBuf>,
+}
+
+impl PromptDraft {
+    pub fn new() -> Self {
+        Self {
+            editor: Prompt::new(PaneId::alloc()),
+            root: None,
+        }
+    }
+}
+
+impl Default for PromptDraft {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// 工作区所属 git checkout 的只读元数据。
@@ -186,6 +215,7 @@ impl Workspace {
             cwd,
             is_initial: false,
             git: None,
+            prompt: Some(PromptDraft::new()),
         }
     }
 
@@ -392,6 +422,7 @@ impl AppState {
             prompt_focused: false,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_root: None,
+            prompt_pinned: None,
             prompt_width: DEFAULT_PROMPT_WIDTH,
             workspaces: vec![Workspace {
                 name,
@@ -401,6 +432,7 @@ impl AppState {
                 cwd,
                 is_initial: true,
                 git: None,
+                prompt: None,
             }],
             active_workspace: 0,
             tab_scroll: 0,
@@ -428,6 +460,16 @@ impl AppState {
     /// 当前工作区（可变）。
     pub fn active_workspace_mut(&mut self) -> &mut Workspace {
         &mut self.workspaces[self.active_workspace]
+    }
+
+    /// 显示中 prompt 的工作区索引：钉住时为其目标，否则为激活工作区。
+    pub fn prompt_workspace(&self) -> usize {
+        self.prompt_pinned.unwrap_or(self.active_workspace)
+    }
+
+    /// 显示中 prompt 所属工作区；索引由构造与切换路径维持有效。
+    pub fn prompt_owner(&self) -> &Workspace {
+        &self.workspaces[self.prompt_workspace()]
     }
 
     /// 当前标签。

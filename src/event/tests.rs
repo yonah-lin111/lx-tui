@@ -1665,7 +1665,8 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
             is_directory: false,
         })
         .collect();
-    crate::app::update::apply_mention_entries(&mut state, generation, entries);
+    let prompt = state.prompt.id();
+    crate::app::update::apply_mention_entries(&mut state, prompt, generation, entries);
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let area = crate::layout::prompt_text_rect(geo.view.prompt);
@@ -1699,6 +1700,39 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
 /// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
 fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
     layout::prompt_toolbar_button_rect(geo.view.prompt, button).expect("toolbar button visible")
+}
+
+#[test]
+fn mouse_click_prompt_pin_toggles_pin() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let pin = ui::prompt_pin_button(geo.view.prompt, false).expect("pin visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_pinned, Some(state.active_workspace));
+    assert!(dirty);
+
+    let unpin = ui::prompt_pin_button(geo.view.prompt, true).expect("pin visible");
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), unpin.x, unpin.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_pinned, None);
+    assert!(dirty);
 }
 
 /// 构造 prompt 工具栏测试场景：宽右栏、已同步几何。
