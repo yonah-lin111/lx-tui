@@ -134,6 +134,8 @@ pub struct WorkspaceGit {
     pub is_linked: bool,
     /// 当前分支短名；detached 或 bare 为 None。
     pub branch: Option<String>,
+    /// 仓库主 checkout 的分支短名；linked worktree 的状态栏展示用。
+    pub main_branch: Option<String>,
 }
 
 impl WorkspaceGit {
@@ -142,6 +144,17 @@ impl WorkspaceGit {
         self.branch
             .as_deref()
             .map(|branch| branch.strip_prefix("worktree/").unwrap_or(branch))
+    }
+
+    /// 状态栏展示分支：linked worktree 取主 checkout 分支（回退本 checkout 分支），
+    /// 主 checkout 取自身分支；去掉 `worktree/` 前缀。
+    pub fn status_branch(&self) -> Option<&str> {
+        if self.is_linked
+            && let Some(main) = self.main_branch.as_deref()
+        {
+            return Some(main.strip_prefix("worktree/").unwrap_or(main));
+        }
+        self.short_branch()
     }
 }
 

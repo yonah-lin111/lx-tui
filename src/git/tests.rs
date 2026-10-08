@@ -105,11 +105,13 @@ fn checkout_prefers_longest_matching_prefix() {
     assert_eq!(found.checkout_path, PathBuf::from("/repo/nested"));
     assert!(found.is_linked);
     assert_eq!(found.branch.as_deref(), Some("nested"));
+    assert_eq!(found.main_branch.as_deref(), Some("main"));
     assert_eq!(found.repo_root, PathBuf::from("/repo"));
 
     let found = checkout(&list, Path::new("/repo/src")).expect("main checkout");
     assert_eq!(found.checkout_path, PathBuf::from("/repo"));
     assert!(!found.is_linked);
+    assert_eq!(found.main_branch.as_deref(), Some("main"));
 }
 
 #[test]

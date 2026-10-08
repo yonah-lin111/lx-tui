@@ -204,6 +204,7 @@ fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>)
         checkout_path: PathBuf::from(checkout),
         is_linked: linked,
         branch: branch.map(str::to_string),
+        main_branch: branch.map(str::to_string),
     }
 }
 
@@ -490,4 +491,20 @@ fn select_all_prompt_empty_text_has_no_bounds_and_stays_saved() {
     assert_eq!(selection.pane(), state.prompt.id());
     assert_eq!(selection.range(), None);
     assert!(state.prompt.is_saved(), "全选不得产生脏状态");
+}
+
+#[test]
+fn status_branch_prefers_main_checkout_branch_for_linked() {
+    let mut linked = git_info("/repo", "/repo/.worktrees/x", true, Some("feat/x"));
+    linked.main_branch = Some("dev".to_string());
+    assert_eq!(linked.status_branch(), Some("dev"));
+    assert_eq!(linked.short_branch(), Some("feat/x"));
+
+    let main = git_info("/repo", "/repo", false, Some("dev"));
+    assert_eq!(main.status_branch(), Some("dev"));
+
+    // 主 checkout 分支缺失时回退自身分支。
+    let mut fallback = git_info("/repo", "/repo/.worktrees/x", true, Some("feat/x"));
+    fallback.main_branch = None;
+    assert_eq!(fallback.status_branch(), Some("feat/x"));
 }

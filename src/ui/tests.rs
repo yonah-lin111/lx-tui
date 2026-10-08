@@ -1103,16 +1103,21 @@ fn prompt_bottom_shows_branch_and_worktree_only() {
     assert!(!bottom.contains("-wt:"), "{bottom}");
     assert!(!bottom.contains("/repo"), "不显示项目路径: {bottom}");
 
-    // linked worktree 追加 ` -wt:工作区名`。
-    state.workspaces[0].git = Some(git_info(
-        "/repo",
-        "/repo/.worktrees/work",
-        true,
-        Some("main"),
-    ));
+    // linked worktree：显示仓库主 checkout 分支 + ` -wt:工作区名`，不显示自身分支。
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/.worktrees/work"),
+        is_linked: true,
+        branch: Some("feat/prompt-controls".to_string()),
+        main_branch: Some("dev".to_string()),
+    });
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("⑂ main"), "{bottom}");
+    assert!(bottom.contains("⑂ dev"), "{bottom}");
     assert!(bottom.contains("-wt:work"), "{bottom}");
+    assert!(
+        !bottom.contains("feat/"),
+        "不显示 worktree 自身分支: {bottom}"
+    );
 
     // 非 git 不显示任何状态。
     state.workspaces[0].git = None;
@@ -1371,6 +1376,7 @@ fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>)
         checkout_path: PathBuf::from(checkout),
         is_linked: linked,
         branch: branch.map(str::to_string),
+        main_branch: branch.map(str::to_string),
     }
 }
 

@@ -1826,6 +1826,7 @@ fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>)
         checkout_path: PathBuf::from(checkout),
         is_linked: linked,
         branch: branch.map(str::to_string),
+        main_branch: branch.map(str::to_string),
     }
 }
 

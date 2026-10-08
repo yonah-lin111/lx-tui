@@ -795,13 +795,13 @@ fn prompt_scrollbar_for(
     )
 }
 
-/// prompt 底边框左侧 git 状态：`⑂ 分支`，linked worktree 追加 ` -wt:工作区名`；
-/// 非 git 不显示，右端避让折叠按钮。
+/// prompt 底边框左侧 git 状态：`⑂ 分支`（linked worktree 显示仓库主 checkout 分支），
+/// linked worktree 追加 ` -wt:工作区名`；非 git 不显示，右端避让折叠按钮。
 fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let Some(workspace) = state.workspaces.get(state.active_workspace) else {
         return;
     };
-    let branch = workspace.git.as_ref().and_then(|git| git.short_branch());
+    let branch = workspace.git.as_ref().and_then(|git| git.status_branch());
     let linked = workspace.git.as_ref().is_some_and(|git| git.is_linked);
     if branch.is_none() && !linked {
         return;

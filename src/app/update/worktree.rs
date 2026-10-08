@@ -55,6 +55,7 @@ pub fn ensure_main_workspace(state: &mut AppState, index: usize) -> Option<usize
     if open_workspace_for_checkout(state, &repo_root).is_some() {
         return None;
     }
+    let main_branch = git.main_branch.clone().or_else(|| git.branch.clone());
     let insert_at = state
         .workspaces
         .iter()
@@ -77,7 +78,8 @@ pub fn ensure_main_workspace(state: &mut AppState, index: usize) -> Option<usize
         repo_root: repo_root.clone(),
         checkout_path: repo_root,
         is_linked: false,
-        branch: None,
+        branch: main_branch.clone(),
+        main_branch,
     });
     state.workspaces.insert(insert_at, workspace);
     if state.active_workspace >= insert_at {
@@ -204,6 +206,7 @@ pub fn commit_worktree_open(state: &mut AppState) {
         return;
     };
     let repo_root = dialog.repo_root.clone();
+    let source = dialog.source;
     state.overlay = None;
 
     if let Some(index) = open_workspace_for_checkout(state, &entry.path) {
@@ -218,12 +221,19 @@ pub fn commit_worktree_open(state: &mut AppState) {
             .iter()
             .any(|workspace| workspace.name == candidate)
     });
+    // 源工作区的元数据带有仓库主 checkout 分支，供 linked worktree 的状态栏展示。
+    let main_branch = state
+        .workspaces
+        .get(source)
+        .and_then(|workspace| workspace.git.as_ref())
+        .and_then(|git| git.main_branch.clone());
     let mut workspace = Workspace::single_terminal(name, Some(entry.path.clone()));
     workspace.git = Some(WorkspaceGit {
         repo_root,
         checkout_path: entry.path.clone(),
         is_linked: entry.is_linked,
         branch: entry.branch.clone(),
+        main_branch,
     });
     state.workspaces.push(workspace);
     let child = state.workspaces.len().saturating_sub(1);
