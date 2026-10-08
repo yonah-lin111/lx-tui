@@ -403,3 +403,102 @@ fn mention_panel_window_keeps_still_when_hovering_visible_item() {
     assert_eq!(mention_item_at(&editor, area, 2, rect.y + 1), Some(6));
     assert_eq!(mention_item_at(&editor, area, 2, rect.y + 7), Some(9));
 }
+
+/// 工具栏渲染测试面板：40x8，内容区含顶部 2 行表头。
+fn toolbar_panel() -> Rect {
+    Rect::new(0, 0, 40, 8)
+}
+
+#[test]
+fn renders_toolbar_buttons_and_divider() {
+    let panel = toolbar_panel();
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(36, 6);
+    editor.insert_str("hi");
+    let mut buf = Buffer::empty(panel);
+    render_header(panel, &mut buf, &editor, false);
+
+    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
+    let render_label = |buf: &Buffer, rect: Rect| -> String {
+        (rect.x..rect.right())
+            .map(|x| buf[(x, rect.y)].symbol())
+            .collect()
+    };
+    let undo =
+        crate::layout::prompt_toolbar_button_rect(panel, crate::layout::PromptToolbarButton::Undo)
+            .expect("undo visible");
+    assert_eq!(render_label(&buf, undo), text::PROMPT_UNDO_LABEL);
+    assert_eq!(buf[(undo.x, bar.y)].fg, Color::Cyan, "可撤销时强调色");
+    assert!(buf[(undo.x, bar.y)].modifier.contains(Modifier::BOLD));
+
+    let redo =
+        crate::layout::prompt_toolbar_button_rect(panel, crate::layout::PromptToolbarButton::Redo)
+            .expect("redo visible");
+    assert_eq!(render_label(&buf, redo), text::PROMPT_REDO_LABEL);
+    assert!(buf[(redo.x, bar.y)].modifier.contains(Modifier::DIM));
+
+    let select_all = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::SelectAll,
+    )
+    .expect("select all visible");
+    assert_eq!(
+        render_label(&buf, select_all),
+        text::PROMPT_SELECT_ALL_LABEL
+    );
+
+    let save_x = bar.right() - 1;
+    assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_SAVE_DOT);
+    assert_eq!(buf[(save_x, bar.y)].fg, Color::Yellow, "编辑后未保存");
+
+    let divider_y = bar.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
+    assert_eq!(buf[(panel.x, divider_y)].symbol(), text::DIVIDER_LEFT_JOIN);
+    assert_eq!(
+        buf[(panel.right() - 1, divider_y)].symbol(),
+        text::DIVIDER_RIGHT_JOIN
+    );
+    assert_eq!(buf[(5, divider_y)].symbol(), text::DIVIDER_MID);
+
+    editor.mark_saved();
+    let mut buf = Buffer::empty(panel);
+    render_header(panel, &mut buf, &editor, false);
+    assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
+}
+
+#[test]
+fn divider_follows_prompt_focus_style() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let divider_y = crate::layout::prompt_toolbar_rect(panel)
+        .expect("toolbar visible")
+        .y
+        + crate::layout::PROMPT_DIVIDER_HEIGHT;
+
+    let mut buf = Buffer::empty(panel);
+    render_header(panel, &mut buf, &editor, true);
+    for x in [panel.x, 5, panel.right() - 1] {
+        let cell = &buf[(x, divider_y)];
+        assert_eq!(cell.fg, Color::Cyan, "聚焦分割线跟随强调色: x={x}");
+        assert!(cell.modifier.contains(Modifier::BOLD));
+    }
+
+    let mut buf = Buffer::empty(panel);
+    render_header(panel, &mut buf, &editor, false);
+    for x in [panel.x, 5, panel.right() - 1] {
+        let cell = &buf[(x, divider_y)];
+        assert_ne!(cell.fg, Color::Cyan, "失焦分割线不强调: x={x}");
+        assert!(cell.modifier.contains(Modifier::DIM));
+    }
+}
+
+#[test]
+fn toolbar_hidden_when_prompt_too_short() {
+    let panel = Rect::new(0, 0, 40, 4);
+    assert_eq!(crate::layout::prompt_header_rect(panel), None);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.insert_str("hi");
+    let mut buf = Buffer::empty(panel);
+    render_header(panel, &mut buf, &editor, false);
+    assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
+    assert_eq!(buf[(2, 2)].symbol(), " ");
+}

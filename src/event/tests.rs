@@ -704,8 +704,7 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     overflow_prompt(&mut state, &geo.view);
-    let prompt = state.prompt.id();
-    let inner = pane_inner(&geo, prompt);
+    let inner = crate::layout::prompt_text_rect(geo.view.prompt);
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
@@ -1511,7 +1510,7 @@ fn mouse_interacts_with_block_command_panel() {
         crate::app::actions::EditorCommand::InsertChar('#'),
     );
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::pane_inner_rect(geo.view.prompt);
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
     let panel = crate::ui::prompt::panel_layout(&state.prompt, area).expect("block panel visible");
     let rect = panel.rect;
     let mut sessions = HashMap::new();
@@ -1587,7 +1586,7 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
     crate::app::update::apply_mention_entries(&mut state, generation, entries);
 
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let area = crate::layout::pane_inner_rect(geo.view.prompt);
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
     let before = crate::ui::prompt::mention_layout(&state.prompt, area).expect("mention panel");
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -1612,5 +1611,166 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
         Some(0),
         "滚轮不动高亮"
     );
+    assert!(dirty);
+}
+
+/// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
+fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
+    layout::prompt_toolbar_button_rect(geo.view.prompt, button).expect("toolbar button visible")
+}
+
+/// 构造 prompt 工具栏测试场景：宽右栏、已同步几何。
+fn toolbar_geometry(state: &mut AppState) -> (Config, Geometry) {
+    let config = Config::default();
+    state.prompt_width = 40;
+    let geo = geometry(state, &config, Rect::new(0, 0, 120, 30));
+    crate::app::update::resize_panes(state, &geo.rects);
+    (config, geo)
+}
+
+#[test]
+fn mouse_click_prompt_toolbar_undo_redo_and_save() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    state.prompt.insert_str("hello");
+    assert!(!state.prompt.is_saved());
+    assert!(state.prompt.can_undo());
+
+    let undo = toolbar_button(&geo, layout::PromptToolbarButton::Undo);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), undo.x, undo.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.text(), "");
+    assert!(state.prompt.can_redo());
+    assert!(!state.prompt_focused, "工具栏按钮不抢焦点");
+    assert!(dirty);
+
+    let redo = toolbar_button(&geo, layout::PromptToolbarButton::Redo);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), redo.x, redo.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.text(), "hello");
+
+    let save = toolbar_button(&geo, layout::PromptToolbarButton::Save);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), save.x, save.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.is_saved(), "点击保存点复位为已保存");
+}
+
+#[test]
+fn mouse_click_prompt_toolbar_select_all_then_typing_replaces_text() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    state.prompt.insert_str("first\nsecond");
+    let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            select_all.x,
+            select_all.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .selection
+            .is_some_and(|selection| selection.pane() == state.prompt.id())
+    );
+    assert_eq!(
+        update::prompt_selection_text(&state).as_deref(),
+        Some("first\nsecond")
+    );
+
+    update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText("new".into()),
+    );
+    assert_eq!(state.prompt.text(), "new", "全选后输入替换全文");
+}
+
+#[test]
+fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.prompt.insert_str("ab\ncd");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
+    let divider = layout::prompt_divider_rect(geo.view.prompt).expect("divider visible");
+    let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
+    let blank_x = select_all.x - 1;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), blank_x, bar.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), blank_x, divider.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(!state.prompt_focused, "表头空白不聚焦文本视口");
+    assert!(state.selection.is_none());
+    assert_eq!(state.prompt.cursor_cell(), Some((1, 2)), "光标保持在文末");
+    assert!(!dirty, "表头空白点击无副作用");
+}
+
+#[test]
+fn mouse_click_prompt_text_row_places_cursor_below_header() {
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    state.prompt.insert_str("ab\ncd");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let text = layout::prompt_text_rect(geo.view.prompt);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            text.x + 1,
+            text.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt_focused);
+    assert_eq!(state.prompt.cursor_cell(), Some((1, 1)));
     assert!(dirty);
 }

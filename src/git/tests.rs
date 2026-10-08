@@ -105,11 +105,13 @@ fn checkout_prefers_longest_matching_prefix() {
     assert_eq!(found.checkout_path, PathBuf::from("/repo/nested"));
     assert!(found.is_linked);
     assert_eq!(found.branch.as_deref(), Some("nested"));
+    assert_eq!(found.main_branch.as_deref(), Some("main"));
     assert_eq!(found.repo_root, PathBuf::from("/repo"));
 
     let found = checkout(&list, Path::new("/repo/src")).expect("main checkout");
     assert_eq!(found.checkout_path, PathBuf::from("/repo"));
     assert!(!found.is_linked);
+    assert_eq!(found.main_branch.as_deref(), Some("main"));
 }
 
 #[test]
@@ -173,10 +175,17 @@ fn list_worktrees_reads_real_repo_with_linked_worktree() {
     let found = checkout(&list, &linked.join("src")).expect("linked checkout");
     assert!(found.is_linked);
     assert_eq!(found.checkout_path, linked);
+    assert_eq!(found.branch.as_deref(), Some("feature/x"));
+    assert_eq!(
+        found.main_branch.as_deref(),
+        Some("main"),
+        "linked worktree 需带出主 checkout 分支"
+    );
 
     let found = checkout(&list, &repo).expect("main checkout");
     assert!(!found.is_linked);
     assert_eq!(found.checkout_path, repo);
+    assert_eq!(found.main_branch.as_deref(), Some("main"));
 
     std::fs::remove_dir_all(&base).expect("cleanup");
 }

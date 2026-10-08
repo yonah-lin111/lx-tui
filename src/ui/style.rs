@@ -27,6 +27,17 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
+/// 面板边框标题：淡蓝色（Cyan + dim、不加粗），与分支状态同色系。
+///
+/// 标题样式叠加在边框样式之上，这里显式指定前景并移除粗体，
+/// 保证焦点/浮层的强调色边框不会改变标题观感。
+pub fn border_title() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
+}
+
 /// 选中项：主题强调色填充（Cyan 底、黑字、加粗）；侧栏激活项与激活标签共用。
 pub fn selected_item() -> Style {
     Style::default()
@@ -53,6 +64,11 @@ pub fn overlay_selection() -> Style {
 /// 状态：失败（Red）。
 pub fn error() -> Style {
     Style::default().fg(Color::Red)
+}
+
+/// prompt 保存状态点：已保存 Green、未保存 Yellow。
+pub fn status_dot(saved: bool) -> Style {
+    Style::default().fg(if saved { Color::Green } else { Color::Yellow })
 }
 
 /// 浮层标题：正文加粗。

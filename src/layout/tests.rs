@@ -314,9 +314,9 @@ fn resize_boundary_at_requires_shared_column() {
 #[test]
 fn prompt_text_rect_reserves_scrollbar_column() {
     let panel = Rect::new(10, 5, 10, 6);
-    assert_eq!(prompt_text_rect(panel), Rect::new(11, 6, 7, 4));
-    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(18, 6, 1, 4)));
-    assert_eq!(prompt_inner_size(panel), (7, 4));
+    assert_eq!(prompt_text_rect(panel), Rect::new(11, 8, 7, 2));
+    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(18, 8, 1, 2)));
+    assert_eq!(prompt_inner_size(panel), (7, 2));
 }
 
 #[test]
@@ -325,6 +325,75 @@ fn prompt_geometry_degrades_when_too_narrow() {
     assert_eq!(prompt_text_rect(panel), Rect::new(1, 1, 1, 2));
     assert_eq!(prompt_scrollbar_rect(panel), None);
     assert_eq!(prompt_inner_size(panel), (1, 2));
+}
+
+#[test]
+fn prompt_header_shifts_body_and_scrollbar() {
+    let panel = Rect::new(10, 5, 20, 8);
+    assert_eq!(prompt_header_rect(panel), Some(Rect::new(11, 6, 18, 2)));
+    assert_eq!(prompt_toolbar_rect(panel), Some(Rect::new(11, 6, 18, 1)));
+    assert_eq!(prompt_divider_rect(panel), Some(Rect::new(11, 7, 18, 1)));
+    assert_eq!(prompt_text_rect(panel), Rect::new(11, 8, 17, 4));
+    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(28, 8, 1, 4)));
+    assert_eq!(prompt_inner_size(panel), (17, 4));
+}
+
+#[test]
+fn prompt_header_hidden_when_body_too_short() {
+    // 内容区高度 == 2：隐藏表头，全部留给文本编辑区。
+    let panel = Rect::new(0, 0, 20, 4);
+    assert_eq!(prompt_header_rect(panel), None);
+    assert_eq!(prompt_toolbar_rect(panel), None);
+    assert_eq!(prompt_divider_rect(panel), None);
+    assert_eq!(prompt_text_rect(panel), Rect::new(1, 1, 17, 2));
+    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(18, 1, 1, 2)));
+}
+
+#[test]
+fn prompt_toolbar_buttons_hit_expected_cells() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row);
+    assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Undo));
+    assert_eq!(hit(bar.x + 7, bar.y), Some(PromptToolbarButton::Redo));
+    let select_all =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll).expect("select all fits");
+    assert_eq!(
+        hit(select_all.x, bar.y),
+        Some(PromptToolbarButton::SelectAll)
+    );
+    assert_eq!(
+        hit(bar.right() - 1, bar.y),
+        Some(PromptToolbarButton::Save),
+        "最右一列为保存点"
+    );
+    assert_eq!(hit(bar.x + 13, bar.y), None, "空白区不命中");
+    assert_eq!(
+        hit(bar.x, bar.y + PROMPT_TOOLBAR_HEIGHT),
+        None,
+        "分割线行不命中按钮"
+    );
+}
+
+#[test]
+fn prompt_toolbar_hides_select_all_when_narrow() {
+    // 内容区宽度 26 < 28：隐藏 select all，保留 undo/redo 与保存点。
+    let panel = Rect::new(0, 0, 28, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll),
+        None
+    );
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Save).is_some());
+    assert_eq!(
+        prompt_toolbar_button_at(
+            panel,
+            prompt_toolbar_rect(panel).expect("toolbar").right() - 1,
+            prompt_toolbar_rect(panel).expect("toolbar").y,
+        ),
+        Some(PromptToolbarButton::Save)
+    );
 }
 
 #[test]

@@ -28,6 +28,8 @@ pub struct Checkout {
     pub checkout_path: PathBuf,
     pub is_linked: bool,
     pub branch: Option<String>,
+    /// 仓库主 checkout（列表首项）的分支；linked worktree 的状态栏展示用。
+    pub main_branch: Option<String>,
 }
 
 /// 查询 cwd 所属仓库的全部 worktree；非仓库、git 缺失或命令失败返回 None。
@@ -70,6 +72,7 @@ pub fn checkout(list: &WorktreeList, cwd: &Path) -> Option<Checkout> {
         checkout_path: entry.path.clone(),
         is_linked: index > 0,
         branch: entry.branch.clone(),
+        main_branch: list.entries.first().and_then(|main| main.branch.clone()),
     })
 }
 

@@ -134,6 +134,8 @@ pub struct WorkspaceGit {
     pub is_linked: bool,
     /// 当前分支短名；detached 或 bare 为 None。
     pub branch: Option<String>,
+    /// 仓库主 checkout 的分支短名；linked worktree 的状态栏展示用。
+    pub main_branch: Option<String>,
 }
 
 impl WorkspaceGit {
@@ -142,6 +144,17 @@ impl WorkspaceGit {
         self.branch
             .as_deref()
             .map(|branch| branch.strip_prefix("worktree/").unwrap_or(branch))
+    }
+
+    /// 状态栏展示分支：linked worktree 取主 checkout 分支（回退本 checkout 分支），
+    /// 主 checkout 取自身分支；去掉 `worktree/` 前缀。
+    pub fn status_branch(&self) -> Option<&str> {
+        if self.is_linked
+            && let Some(main) = self.main_branch.as_deref()
+        {
+            return Some(main.strip_prefix("worktree/").unwrap_or(main));
+        }
+        self.short_branch()
     }
 }
 
@@ -453,6 +466,20 @@ impl AppState {
         self.selection
             .as_ref()
             .filter(|selection| selection.pane() == pane)
+    }
+
+    /// 全选 prompt 文本：按视觉行数与文本区宽度构造覆盖全文的选区；
+    /// 文本为空时构造空选区（无高亮、无脏状态）。
+    pub fn select_all_prompt(&mut self) {
+        let rows = self.prompt.visual_rows().len();
+        let (width, _) = self.prompt.size();
+        let max_row = rows.saturating_sub(1) as i32;
+        let max_col = if self.prompt.text().is_empty() {
+            0
+        } else {
+            width.saturating_sub(1)
+        };
+        self.selection = Some(Selection::full(self.prompt.id(), max_row, max_col));
     }
 
     /// 任意工作区/标签中的窗格（可变）；PTY 输出按窗格标识投递。

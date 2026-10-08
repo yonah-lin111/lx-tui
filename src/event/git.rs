@@ -30,6 +30,7 @@ pub fn pump_git_queries(
                     checkout_path: checkout.checkout_path,
                     is_linked: checkout.is_linked,
                     branch: checkout.branch,
+                    main_branch: checkout.main_branch,
                 });
             let _ = sender.send(AppEvent::GitRefreshed { cwd, checkout });
         });

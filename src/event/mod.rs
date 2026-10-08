@@ -554,6 +554,22 @@ fn handle_terminal_event(
                 } else if let Some(index) = panel_item_at(state, view, mouse.column, mouse.row) {
                     update::select_panel(state, index);
                     *dirty = true;
+                } else if !state.prompt_collapsed
+                    && let Some(button) =
+                        layout::prompt_toolbar_button_at(view.prompt, mouse.column, mouse.row)
+                {
+                    // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
+                    match button {
+                        layout::PromptToolbarButton::Undo => state.prompt.undo(),
+                        layout::PromptToolbarButton::Redo => state.prompt.redo(),
+                        layout::PromptToolbarButton::SelectAll => state.select_all_prompt(),
+                        layout::PromptToolbarButton::Save => state.prompt.mark_saved(),
+                    }
+                    *dirty = true;
+                } else if !state.prompt_collapsed
+                    && prompt_header_at(view.prompt, mouse.column, mouse.row)
+                {
+                    // 工具栏与分割线的空白区域吞掉点击：不聚焦文本视口、不移动文本光标。
                 } else if let Some(pane) =
                     pane_toggle_button_at(state, rects, mouse.column, mouse.row)
                 {
@@ -566,6 +582,7 @@ fn handle_terminal_event(
                     update::begin_pane_resize(state, hit);
                     *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+                    let inner = pane_content_inner(state, view, pane, inner);
                     let row = mouse.row - inner.y;
                     let col = mouse.column - inner.x;
                     if pane == state.prompt.id() {
@@ -734,7 +751,7 @@ fn handle_terminal_event(
                 let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
                     return;
                 };
-                let inner = layout::pane_inner_rect(*rect);
+                let inner = pane_content_inner(state, view, pane, layout::pane_inner_rect(*rect));
                 if inner.width == 0 || inner.height == 0 {
                     return;
                 }
@@ -870,7 +887,12 @@ fn handle_terminal_event(
                         && let Some((_, rect)) =
                             rects.iter().find(|(id, _)| *id == selection.pane())
                     {
-                        let inner = layout::pane_inner_rect(*rect);
+                        let inner = pane_content_inner(
+                            state,
+                            view,
+                            selection.pane(),
+                            layout::pane_inner_rect(*rect),
+                        );
                         if inner.width > 0 && inner.height > 0 {
                             let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
                             let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
@@ -1390,7 +1412,7 @@ fn mention_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = layout::pane_inner_rect(view.prompt);
+    let area = layout::prompt_text_rect(view.prompt);
     ui::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
@@ -1399,7 +1421,7 @@ fn mention_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = layout::pane_inner_rect(view.prompt);
+    let area = layout::prompt_text_rect(view.prompt);
     ui::prompt::mention_layout(&state.prompt, area)
 }
 
@@ -1410,7 +1432,7 @@ fn panel_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = layout::pane_inner_rect(view.prompt);
+    let area = layout::prompt_text_rect(view.prompt);
     ui::prompt::panel_item_at(&state.prompt, area, column, row)
 }
 
@@ -1419,8 +1441,27 @@ fn block_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = layout::pane_inner_rect(view.prompt);
+    let area = layout::prompt_text_rect(view.prompt);
     ui::prompt::panel_layout(&state.prompt, area)
+}
+
+/// 坐标是否落在 prompt 工具栏/分割线表头行（用于吞掉空白点击）。
+fn prompt_header_at(panel: Rect, column: u16, row: u16) -> bool {
+    layout::prompt_header_rect(panel).is_some_and(|header| header.contains((column, row).into()))
+}
+
+/// 窗格交互内容区：prompt 用文本区（顶部表头下移），其余窗格用整块内容区。
+fn pane_content_inner(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    pane: PaneId,
+    inner: Rect,
+) -> Rect {
+    if pane == state.prompt.id() {
+        layout::prompt_text_rect(view.prompt)
+    } else {
+        inner
+    }
 }
 
 /// 命中窗格内容区：返回窗格标识与其内容区矩形。

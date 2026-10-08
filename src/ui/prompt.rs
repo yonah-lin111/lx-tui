@@ -8,10 +8,92 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{Prompt, VisualRow};
 use crate::app::selection::Selection;
+use crate::layout::{self, PromptToolbarButton};
 use crate::ui::markdown::{self, Token, TokenKind};
 use crate::ui::style;
 use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
+
+/// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
+pub fn render_header(panel: Rect, buf: &mut Buffer, prompt: &Prompt, focused: bool) {
+    let Some(header) = layout::prompt_header_rect(panel) else {
+        return;
+    };
+    render_divider(panel, header, buf, focused);
+    render_toolbar(panel, buf, prompt);
+}
+
+/// 分割线整行 `─`，两端衔接外层边框的 `├` / `┤`；样式跟随边框焦点态。
+fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
+    let y = header.y + layout::PROMPT_TOOLBAR_HEIGHT;
+    for x in header.x..header.right() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_symbol(text::DIVIDER_MID);
+            cell.set_style(style::border(focused));
+        }
+    }
+    for (x, symbol) in [
+        (panel.x, text::DIVIDER_LEFT_JOIN),
+        (panel.right().saturating_sub(1), text::DIVIDER_RIGHT_JOIN),
+    ] {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_symbol(symbol);
+            cell.set_style(style::border(focused));
+        }
+    }
+}
+
+/// 工具栏：左侧 undo/redo（不可用时置灰），右侧 select all 与保存状态点。
+fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
+    let buttons = [
+        (
+            PromptToolbarButton::Undo,
+            text::PROMPT_UNDO_LABEL,
+            if prompt.can_undo() {
+                style::accent()
+            } else {
+                style::muted()
+            },
+        ),
+        (
+            PromptToolbarButton::Redo,
+            text::PROMPT_REDO_LABEL,
+            if prompt.can_redo() {
+                style::accent()
+            } else {
+                style::muted()
+            },
+        ),
+        (
+            PromptToolbarButton::SelectAll,
+            text::PROMPT_SELECT_ALL_LABEL,
+            style::accent(),
+        ),
+        (
+            PromptToolbarButton::Save,
+            text::PROMPT_SAVE_DOT,
+            style::status_dot(prompt.is_saved()),
+        ),
+    ];
+    for (button, label, button_style) in buttons {
+        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button) else {
+            continue;
+        };
+        for (offset, symbol) in label.chars().enumerate() {
+            let x = rect.x + offset as u16;
+            if x >= rect.right() {
+                break;
+            }
+            if let Some(cell) = buf.cell_mut((x, rect.y)) {
+                cell.reset();
+                cell.set_char(symbol);
+                cell.set_style(button_style);
+            }
+        }
+    }
+}
 
 /// 绘制 prompt 内容区；光标由调用方以终端原生硬件光标呈现。
 pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&Selection>) {

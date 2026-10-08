@@ -55,7 +55,7 @@ fn typed_markdown_renders_highlight_and_cursor() {
 
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     let marker = &buffer[(inner.x, inner.y)];
     assert_eq!(marker.symbol(), "#");
     assert!(marker.modifier.contains(Modifier::DIM));
@@ -87,7 +87,7 @@ fn click_places_cursor_and_wheel_scrolls_viewport() {
     assert_eq!(state.prompt.scroll(), 0);
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     assert_eq!(buffer[(inner.x, inner.y)].symbol(), "0");
     assert!(terminal.backend().cursor_visible());
     assert_eq!(
@@ -110,7 +110,7 @@ fn hardware_cursor_tracks_focused_prompt_for_ime_preedit() {
     update::apply_editor(&mut state, EditorCommand::InsertText("你好".into()));
 
     let terminal = draw(&state, &config);
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     assert!(terminal.backend().cursor_visible());
     assert_eq!(
         terminal.backend().cursor_position(),
@@ -160,7 +160,7 @@ fn backspace_deletes_sole_task_marker_without_blank_placeholder() {
     assert_eq!(state.prompt.text(), "");
 
     let terminal = draw(&state, &config);
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     assert!(terminal.backend().cursor_visible());
     assert_eq!(
         terminal.backend().cursor_position(),
@@ -223,7 +223,7 @@ fn mention_panel_renders_and_confirms_insertion() {
 
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     let name_row: String = (inner.x..inner.x + inner.width)
         .map(|x| buffer[(x, inner.y + 2)].symbol())
         .collect();
@@ -255,7 +255,7 @@ fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
         .collect();
     update::apply_mention_entries(&mut state, generation, entries);
 
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     let before = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
     assert!(update::scroll_mention(&mut state, 1, before.start));
     let after = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
@@ -322,7 +322,7 @@ fn mention_panel_folder_navigation_flow() {
     );
 
     // 顶边左 title、右上目录名、底边快捷键完整渲染。
-    let inner = layout::pane_inner_rect(view.prompt);
+    let inner = layout::prompt_text_rect(view.prompt);
     let panel = ui::prompt::mention_layout(&state.prompt, inner).expect("panel visible");
     let terminal = draw(&state, &config);
     let buffer = terminal.backend().buffer();

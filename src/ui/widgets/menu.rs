@@ -80,7 +80,7 @@ pub fn render(
         let max_title = usize::from(layout.area.width.saturating_sub(2));
         block = block.title(Span::styled(
             format!(" {} ", text::ellipsize(title, max_title)),
-            style::muted(),
+            style::border_title(),
         ));
     }
     frame.render_widget(block, layout.area);

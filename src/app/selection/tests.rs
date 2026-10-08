@@ -57,3 +57,23 @@ fn single_line_range_limits_columns() {
     assert!(!selection.contains(2, 6));
     assert!(!selection.contains(3, 2));
 }
+
+#[test]
+fn full_selection_covers_whole_pane_range() {
+    let pane = PaneId::from_raw_for_test(1);
+    let selection = Selection::full(pane, 4, 9);
+    assert_eq!(selection.pane(), pane);
+    assert!(!selection.is_dragging());
+    assert_eq!(selection.range(), Some(((0, 0), (4, 9))));
+    assert!(selection.contains(0, 0));
+    assert!(selection.contains(2, 5));
+    assert!(selection.contains(4, 9));
+    assert!(!selection.contains(5, 0));
+}
+
+#[test]
+fn full_selection_with_zero_extent_has_no_range() {
+    let selection = Selection::full(PaneId::from_raw_for_test(1), 0, 0);
+    assert_eq!(selection.range(), None);
+    assert!(!selection.contains(0, 0));
+}

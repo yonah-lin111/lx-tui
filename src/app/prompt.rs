@@ -45,6 +45,8 @@ pub struct Prompt {
     mention: MentionState,
     /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
     panel_suppressed: bool,
+    /// 当前是否处于已保存状态；任何文本写操作置 false。
+    is_saved: bool,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -86,6 +88,7 @@ impl Prompt {
             panel: None,
             mention: MentionState::default(),
             panel_suppressed: false,
+            is_saved: true,
         }
     }
 
@@ -107,6 +110,26 @@ impl Prompt {
     /// 内容区尺寸（列、行）。
     pub fn size(&self) -> (u16, u16) {
         (self.width, self.height)
+    }
+
+    /// 当前是否处于已保存状态。
+    pub fn is_saved(&self) -> bool {
+        self.is_saved
+    }
+
+    /// 手动标记为已保存（工具栏保存点）。
+    pub fn mark_saved(&mut self) {
+        self.is_saved = true;
+    }
+
+    /// 是否存在可撤销的编辑。
+    pub fn can_undo(&self) -> bool {
+        !self.undo.is_empty()
+    }
+
+    /// 是否存在可重做的编辑。
+    pub fn can_redo(&self) -> bool {
+        !self.redo.is_empty()
     }
 
     /// 同步内容区尺寸；光标保持在视口内。
@@ -198,6 +221,7 @@ impl Prompt {
         let Some(snapshot) = self.undo.pop() else {
             return;
         };
+        self.mark_dirty();
         let current = self.snapshot();
         push_bounded(&mut self.redo, current);
         self.restore(snapshot);
@@ -208,6 +232,7 @@ impl Prompt {
         let Some(snapshot) = self.redo.pop() else {
             return;
         };
+        self.mark_dirty();
         let current = self.snapshot();
         push_bounded(&mut self.undo, current);
         self.restore(snapshot);
@@ -504,6 +529,7 @@ impl Prompt {
     pub fn delete_word_backward(&mut self) {
         let start = self.word_start_before(self.cursor);
         if start < self.cursor {
+            self.mark_dirty();
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
             self.settle();
@@ -514,6 +540,7 @@ impl Prompt {
     pub fn delete_word_forward(&mut self) {
         let end = self.word_end_after(self.cursor);
         if end > self.cursor {
+            self.mark_dirty();
             self.text.replace_range(self.cursor..end, "");
             self.settle();
         }
@@ -542,6 +569,7 @@ impl Prompt {
     pub fn delete_to_line_end(&mut self) {
         let end = line_end(&self.text, self.cursor);
         if end > self.cursor {
+            self.mark_dirty();
             self.text.replace_range(self.cursor..end, "");
             self.settle();
         }
@@ -669,6 +697,7 @@ impl Prompt {
 
     /// 记录一次编辑前的快照；连续 Insert/Delete 合并为一步，Other 独立成步。
     fn record(&mut self, kind: EditKind) {
+        self.mark_dirty();
         if kind != EditKind::Other && self.last_edit == Some(kind) {
             return;
         }
@@ -684,6 +713,11 @@ impl Prompt {
             text: self.text.clone(),
             cursor: self.cursor,
         }
+    }
+
+    /// 标记文本已修改：任何写操作（含未记录快照的删除）都置脏。
+    fn mark_dirty(&mut self) {
+        self.is_saved = false;
     }
 
     /// 恢复快照并结束当前合并组。

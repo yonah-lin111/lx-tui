@@ -169,9 +169,9 @@ fn resize_syncs_terminal_size() {
 fn resize_syncs_prompt_editor_size() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
-    // 30 列面板：28 列内容区，最右 1 列预留滚动条槽。
+    // 30 列面板：28 列内容区，顶部 2 行工具栏表头，最右 1 列预留滚动条槽。
     resize_panes(&mut state, &[(id, Rect::new(70, 0, 30, 20))]);
-    assert_eq!(state.prompt.size(), (27, 18));
+    assert_eq!(state.prompt.size(), (27, 16));
 }
 
 #[test]
@@ -1912,6 +1912,7 @@ fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>)
         checkout_path: PathBuf::from(checkout),
         is_linked: linked,
         branch: branch.map(str::to_string),
+        main_branch: branch.map(str::to_string),
     }
 }
 

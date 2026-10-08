@@ -28,6 +28,26 @@ fn render_lines(state: &AppState) -> Vec<String> {
         .collect()
 }
 
+/// 渲染一帧并返回缓冲；单元格样式断言使用。
+fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    terminal.backend().buffer().clone()
+}
+
+/// prompt 面板内的行文本（按面板列范围裁剪）。
+fn prompt_line(lines: &[String], view: &layout::ViewLayout, y: u16) -> String {
+    lines[y as usize]
+        .chars()
+        .skip(view.prompt.x as usize)
+        .take(view.prompt.width as usize)
+        .collect()
+}
+
 fn view_for(state: &AppState) -> layout::ViewLayout {
     layout::compute(
         Rect::new(0, 0, 100, 24),
@@ -245,6 +265,12 @@ fn agents_header_is_left_aligned_without_junctions() {
     let start = sections.divider.x as usize;
     let rendered: String = row[start..start + label.chars().count()].iter().collect();
     assert_eq!(rendered, label);
+
+    // 标题与其他边框标题同色（淡蓝色）。
+    let buffer = render_buffer(&state);
+    let cell = &buffer[(sections.divider.x + 1, sections.divider.y)];
+    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
 
     let top: Vec<char> = lines[view.sidebar.y as usize].chars().collect();
     let workspaces_start = top
@@ -1121,6 +1147,158 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 }
 
 #[test]
+fn prompt_renders_toolbar_row_and_divider() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("hello");
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
+
+    let toolbar = prompt_line(&lines, &view, inner.y);
+    assert!(toolbar.contains(text::PROMPT_UNDO_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_SELECT_ALL_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_SAVE_DOT), "{toolbar}");
+
+    let divider_y = inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
+    let divider = prompt_line(&lines, &view, divider_y);
+    assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_MID), "{divider}");
+}
+
+#[test]
+fn prompt_bottom_shows_branch_and_worktree_only() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "work".to_string();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/work"));
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    let view = view_for(&state);
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("b:main"), "{bottom}");
+    assert!(!bottom.contains("wt:"), "{bottom}");
+    assert!(!bottom.contains("/repo"), "不显示项目路径: {bottom}");
+
+    // linked worktree：显示仓库主 checkout 分支 + ` wt:工作区名`，不显示自身分支。
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/.worktrees/work"),
+        is_linked: true,
+        branch: Some("feat/prompt-controls".to_string()),
+        main_branch: Some("dev".to_string()),
+    });
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("b:dev"), "{bottom}");
+    assert!(bottom.contains("wt:work"), "{bottom}");
+    assert!(!bottom.contains("-wt:"), "不再使用 -wt: 标记: {bottom}");
+    assert!(
+        !bottom.contains("feat/"),
+        "不显示 worktree 自身分支: {bottom}"
+    );
+
+    // 非 git 不显示任何状态。
+    state.workspaces[0].git = None;
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(!bottom.contains("b:"), "{bottom}");
+    assert!(!bottom.contains("wt:"), "{bottom}");
+}
+
+#[test]
+fn prompt_title_moves_path_name_to_top_right() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    let view = view_for(&state);
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains(text::PROMPT_TITLE), "{top}");
+    assert!(top.contains("ws:lx-tui"), "{top}");
+    assert!(!top.contains(" - "), "路径名不再跟在标题后: {top}");
+    let chars: Vec<char> = top.chars().collect();
+    let label: Vec<char> = "ws:lx-tui".chars().collect();
+    let label_start = chars
+        .windows(label.len())
+        .position(|window| window == label.as_slice())
+        .expect("ws 标签已渲染");
+    assert_eq!(
+        chars.len() - label_start - label.len(),
+        2,
+        "ws 标签贴右上角（后接空格与右边框）: {top}"
+    );
+    // 高亮与底边框 `b:` 一致：前缀强调色、值 muted。
+    let buffer = render_buffer(&state);
+    let prefix = &buffer[(view.prompt.x + label_start as u16, view.prompt.y)];
+    assert_eq!(prefix.symbol(), "w");
+    assert_eq!(prefix.fg, ratatui::style::Color::Cyan);
+    assert!(prefix.modifier.contains(ratatui::style::Modifier::BOLD));
+    let value = &buffer[(
+        view.prompt.x + label_start as u16 + text::PROMPT_WORKSPACE_PREFIX.len() as u16,
+        view.prompt.y,
+    )];
+    assert_eq!(value.symbol(), "l");
+    assert!(value.modifier.contains(ratatui::style::Modifier::DIM));
+    assert_ne!(value.fg, ratatui::style::Color::Cyan);
+
+    // linked worktree：取 checkout 路径末段，而非工作区 cwd 子目录。
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/.worktrees/work"),
+        is_linked: true,
+        branch: Some("feat/x".to_string()),
+        main_branch: Some("main".to_string()),
+    });
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/work/src"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:work"), "{top}");
+
+    // 非 git 回退工作区 cwd；无路径时无 `ws:` 片段。
+    state.workspaces[0].git = None;
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains("ws:plain"), "{top}");
+
+    state.workspaces[0].cwd = None;
+    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    assert!(top.contains(text::PROMPT_TITLE), "{top}");
+    assert!(!top.contains("ws:"), "{top}");
+}
+
+#[test]
+fn prompt_toolbar_styles_reflect_undo_and_save_state() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let undo_x = inner.x;
+    let bar_y = inner.y;
+    let dot_x = inner.right() - 1;
+
+    let buffer = render_buffer(&state);
+    assert_eq!(buffer[(undo_x, bar_y)].symbol(), "[");
+    assert!(
+        buffer[(undo_x, bar_y)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "无历史时 undo 置灰"
+    );
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::Green,
+        "初始已保存为绿点"
+    );
+
+    state.prompt.insert_str("x");
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(undo_x, bar_y)].fg,
+        ratatui::style::Color::Cyan,
+        "可撤销时强调色"
+    );
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::Yellow,
+        "编辑后未保存为黄点"
+    );
+}
+
+#[test]
 fn tab_bar_renders_auto_titles_and_add_button() {
     let state = AppState::demo();
     let lines = render_lines(&state);
@@ -1243,6 +1421,89 @@ fn pane_title_and_toggle_label_follow_view() {
     assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_LX);
 }
 
+/// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，面板底色保留。
+fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
+    let cell = &buffer[(area.x + 1, area.y)];
+    assert!(
+        cell.modifier.contains(ratatui::style::Modifier::DIM),
+        "边框标题必须 dim: {cell:?}"
+    );
+    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    assert_eq!(cell.bg, ratatui::style::Color::Indexed(236));
+    assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
+}
+
+#[test]
+fn focused_pane_title_uses_soft_blue_style() {
+    let state = AppState::demo();
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (id, rect) = rects[0];
+    assert_eq!(id, state.active_tab().layout.focus(), "唯一窗格持有焦点");
+    let buffer = render_buffer(&state);
+    for x in rect.x + 1..rect.x + 5 {
+        let cell = &buffer[(x, rect.y)];
+        assert!(
+            cell.modifier.contains(ratatui::style::Modifier::DIM),
+            "边框标题为淡蓝色（Cyan + dim）"
+        );
+        assert!(!cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    }
+    // 焦点仍由边框颜色区分。
+    assert_eq!(
+        buffer[(rect.x, rect.y + 1)].fg,
+        ratatui::style::Color::Cyan,
+        "焦点窗格边框保持强调色"
+    );
+}
+
+#[test]
+fn overlay_border_titles_use_soft_blue_style() {
+    let screen = Rect::new(0, 0, 100, 24);
+    let config = Config::default();
+
+    // toast 顶边框标题。
+    let mut state = AppState::demo();
+    update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Info, text::TOAST_COPIED, None, Instant::now())
+            .with_title("Clipboard"),
+    );
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let area = toast::rect(&state, &view, &rects, screen, &config).expect("toast visible");
+    let buffer = render_buffer(&state);
+    assert_overlay_title(&buffer, area);
+
+    // 右键菜单顶边框标题。
+    let mut state = AppState::demo();
+    update::open_workspace_menu(&mut state, 0, (5, 5));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    let menu_layout = overlay::menu_layout(&state, screen, menu);
+    let buffer = render_buffer(&state);
+    assert_overlay_title(&buffer, menu_layout.area);
+
+    // 模态（重命名）顶边框标题。
+    update::activate_menu(&mut state);
+    let shell = overlay::rename_shell(screen).expect("rename modal visible");
+    let buffer = render_buffer(&state);
+    assert_overlay_title(&buffer, shell.area);
+}
+
 /// 工作区 git 元数据（侧栏分组渲染测试用）。
 fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>) -> WorkspaceGit {
     WorkspaceGit {
@@ -1250,6 +1511,7 @@ fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>)
         checkout_path: PathBuf::from(checkout),
         is_linked: linked,
         branch: branch.map(str::to_string),
+        main_branch: branch.map(str::to_string),
     }
 }
 
@@ -1421,11 +1683,23 @@ fn sidebar_keeps_linked_only_worktrees_flat() {
         git_info("/repo", "/repo/.worktrees/two", true, Some("feature/two")),
     );
 
+    let view = view_for(&state);
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("one")));
-    assert!(lines.iter().any(|line| line.contains("two")));
-    assert!(!lines.iter().any(|line| line.contains("feature/one")));
-    assert!(!lines.iter().any(|line| line.contains("feature/two")));
+    // 底边框状态栏会显示分支名，断言只作用于侧栏区域。
+    let sidebar: String = lines
+        .iter()
+        .map(|line| {
+            line.chars()
+                .skip(view.sidebar.x as usize)
+                .take(view.sidebar.width as usize)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(sidebar.contains("one"));
+    assert!(sidebar.contains("two"));
+    assert!(!sidebar.contains("feature/one"));
+    assert!(!sidebar.contains("feature/two"));
 }
 
 #[test]
@@ -1434,9 +1708,21 @@ fn sidebar_keeps_single_git_workspace_flat() {
     state.workspaces[0].name = "solo".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
 
+    let view = view_for(&state);
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("solo")));
-    assert!(!lines.iter().any(|line| line.contains("main")));
+    // 底边框状态栏会显示分支名，断言只作用于侧栏区域。
+    let sidebar: String = lines
+        .iter()
+        .map(|line| {
+            line.chars()
+                .skip(view.sidebar.x as usize)
+                .take(view.sidebar.width as usize)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(sidebar.contains("solo"));
+    assert!(!sidebar.contains("main"));
 }
 
 /// worktree 对话框条目。

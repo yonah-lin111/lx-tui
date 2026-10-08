@@ -204,6 +204,7 @@ fn git_info(repo_root: &str, checkout: &str, linked: bool, branch: Option<&str>)
         checkout_path: PathBuf::from(checkout),
         is_linked: linked,
         branch: branch.map(str::to_string),
+        main_branch: branch.map(str::to_string),
     }
 }
 
@@ -459,4 +460,51 @@ fn workspace_rows_keep_duplicate_mains_flat_without_linked() {
     let rows = state.workspace_rows();
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| !row.parent && !row.child));
+}
+
+#[test]
+fn select_all_prompt_covers_full_text() {
+    let mut state = AppState::demo();
+    state.prompt.resize(5, 3);
+    state.prompt.insert_str("abcdefgh");
+    state.select_all_prompt();
+
+    let selection = state.selection.expect("selection created");
+    assert_eq!(selection.pane(), state.prompt.id());
+    let (start, end) = selection.range().expect("non-empty range");
+    assert_eq!((start, end), ((0, 0), (1, 4)));
+    let start = (u16::try_from(start.0).expect("row fits"), start.1);
+    let end = (u16::try_from(end.0).expect("row fits"), end.1);
+    assert_eq!(
+        state.prompt.selection_text(start, end).as_deref(),
+        Some("abcdefgh")
+    );
+}
+
+#[test]
+fn select_all_prompt_empty_text_has_no_bounds_and_stays_saved() {
+    let mut state = AppState::demo();
+    state.prompt.resize(5, 3);
+    state.select_all_prompt();
+
+    let selection = state.selection.expect("selection created");
+    assert_eq!(selection.pane(), state.prompt.id());
+    assert_eq!(selection.range(), None);
+    assert!(state.prompt.is_saved(), "全选不得产生脏状态");
+}
+
+#[test]
+fn status_branch_prefers_main_checkout_branch_for_linked() {
+    let mut linked = git_info("/repo", "/repo/.worktrees/x", true, Some("feat/x"));
+    linked.main_branch = Some("dev".to_string());
+    assert_eq!(linked.status_branch(), Some("dev"));
+    assert_eq!(linked.short_branch(), Some("feat/x"));
+
+    let main = git_info("/repo", "/repo", false, Some("dev"));
+    assert_eq!(main.status_branch(), Some("dev"));
+
+    // 主 checkout 分支缺失时回退自身分支。
+    let mut fallback = git_info("/repo", "/repo/.worktrees/x", true, Some("feat/x"));
+    fallback.main_branch = None;
+    assert_eq!(fallback.status_branch(), Some("feat/x"));
 }

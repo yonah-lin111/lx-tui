@@ -1120,3 +1120,63 @@ fn mention_enter_folder_undo_steps_back_one_directory_level() {
     assert_eq!(prompt.text(), "@", "再次撤销回到根");
     assert!(prompt.mention().expect("root panel").scope_name().is_none());
 }
+
+#[test]
+fn prompt_starts_saved_and_edits_mark_dirty() {
+    let mut prompt = prompt(20, 3);
+    assert!(prompt.is_saved());
+    prompt.insert_str("hello");
+    assert!(!prompt.is_saved());
+    prompt.mark_saved();
+    assert!(prompt.is_saved());
+    prompt.backspace();
+    assert!(!prompt.is_saved());
+}
+
+#[test]
+fn deletions_without_snapshot_still_mark_dirty() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("foo bar");
+    prompt.mark_saved();
+    prompt.delete_word_backward();
+    assert!(!prompt.is_saved(), "ctrl+w 删除必须置脏");
+
+    prompt.mark_saved();
+    prompt.move_line_start();
+    prompt.delete_to_line_end();
+    assert!(!prompt.is_saved(), "ctrl+k 删除必须置脏");
+
+    prompt.insert_str("baz");
+    prompt.mark_saved();
+    prompt.move_line_start();
+    prompt.delete_word_forward();
+    assert!(!prompt.is_saved(), "向后删词必须置脏");
+}
+
+#[test]
+fn undo_and_redo_mark_dirty_but_empty_history_keeps_saved() {
+    let mut prompt = prompt(20, 3);
+    prompt.undo();
+    prompt.redo();
+    assert!(prompt.is_saved(), "空历史 no-op 不得置脏");
+
+    prompt.insert_str("abc");
+    prompt.mark_saved();
+    prompt.undo();
+    assert!(!prompt.is_saved());
+    prompt.mark_saved();
+    prompt.redo();
+    assert!(!prompt.is_saved());
+}
+
+#[test]
+fn can_undo_and_can_redo_follow_history() {
+    let mut prompt = prompt(20, 3);
+    assert!(!prompt.can_undo() && !prompt.can_redo());
+    prompt.insert_str("abc");
+    assert!(prompt.can_undo() && !prompt.can_redo());
+    prompt.undo();
+    assert!(!prompt.can_undo() && prompt.can_redo());
+    prompt.redo();
+    assert!(prompt.can_undo() && !prompt.can_redo());
+}
