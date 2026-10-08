@@ -10,6 +10,13 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// prompt 占位窗格。
 pub const PROMPT_TITLE: &str = "prompt";
+/// prompt 工具栏按钮与保存状态点。
+pub const PROMPT_UNDO_LABEL: &str = "[undo]";
+pub const PROMPT_REDO_LABEL: &str = "[redo]";
+pub const PROMPT_SELECT_ALL_LABEL: &str = "[select all]";
+pub const PROMPT_SAVE_DOT: &str = "●";
+/// prompt 底边框状态信息：linked worktree 标记。
+pub const PROMPT_WORKTREE_LABEL: &str = "[wt]";
 /// 主内容 lx 页标题。
 pub const LX_TITLE: &str = "lx";
 /// 视图切换按钮：显示点击后的目的地视图。
@@ -33,6 +40,9 @@ pub const PROMPT_EXPAND_LABEL: &str = "[◀]";
 pub const STRIP_LINE: &str = "│";
 /// 侧栏 agents 分区表头：横向分割线与竖直折叠按钮。
 pub const DIVIDER_MID: &str = "─";
+/// 横向分割线与外层边框的衔接符号：左端 / 右端。
+pub const DIVIDER_LEFT_JOIN: &str = "├";
+pub const DIVIDER_RIGHT_JOIN: &str = "┤";
 pub const AGENTS_COLLAPSE_LABEL: &str = "[▼]";
 pub const AGENTS_EXPAND_LABEL: &str = "[▲]";
 

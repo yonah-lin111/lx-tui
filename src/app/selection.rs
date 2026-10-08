@@ -25,6 +25,16 @@ impl Selection {
         }
     }
 
+    /// 构造覆盖指定面板全文的选区（起始 (0, 0)，结束 (max_row, max_col)）。
+    pub fn full(pane: PaneId, max_row: i32, max_col: u16) -> Self {
+        Self {
+            pane,
+            anchor: (0, 0),
+            cursor: (max_row, max_col),
+            dragging: false,
+        }
+    }
+
     /// 所属窗格。
     pub fn pane(&self) -> PaneId {
         self.pane

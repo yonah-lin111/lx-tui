@@ -28,6 +28,26 @@ fn render_lines(state: &AppState) -> Vec<String> {
         .collect()
 }
 
+/// 渲染一帧并返回缓冲；单元格样式断言使用。
+fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    terminal.backend().buffer().clone()
+}
+
+/// prompt 面板内的行文本（按面板列范围裁剪）。
+fn prompt_line(lines: &[String], view: &layout::ViewLayout, y: u16) -> String {
+    lines[y as usize]
+        .chars()
+        .skip(view.prompt.x as usize)
+        .take(view.prompt.width as usize)
+        .collect()
+}
+
 fn view_for(state: &AppState) -> layout::ViewLayout {
     layout::compute(
         Rect::new(0, 0, 100, 24),
@@ -1051,6 +1071,112 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 }
 
 #[test]
+fn prompt_renders_toolbar_and_bottom_status() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("hello");
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/work"));
+    state.workspaces[0].git = Some(git_info(
+        "/repo",
+        "/repo/.worktrees/work",
+        true,
+        Some("feature/x"),
+    ));
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
+
+    let toolbar = prompt_line(&lines, &view, inner.y);
+    assert!(toolbar.contains(text::PROMPT_UNDO_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_SELECT_ALL_LABEL), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_SAVE_DOT), "{toolbar}");
+
+    let divider_y = inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
+    let divider = prompt_line(&lines, &view, divider_y);
+    assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_MID), "{divider}");
+
+    let status = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    assert!(status.contains("work"), "{status}");
+    assert!(status.contains(text::WORKSPACE_GIT_ICON), "{status}");
+    assert!(status.contains("feature/x"), "{status}");
+    assert!(status.contains(text::PROMPT_WORKTREE_LABEL), "{status}");
+}
+
+#[test]
+fn prompt_status_degrades_right_to_left() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/work"));
+    state.workspaces[0].git = Some(git_info(
+        "/repo",
+        "/repo/.worktrees/work",
+        true,
+        Some("main"),
+    ));
+
+    // 可用宽度 12：丢弃 [wt] 后 `work ⑂ main` 恰好放下。
+    state.prompt_width = 18;
+    let view = view_for(&state);
+    assert_eq!(view.prompt.width, 18);
+    let status = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(status.contains("work"), "{status}");
+    assert!(status.contains("main"), "{status}");
+    assert!(!status.contains(text::PROMPT_WORKTREE_LABEL), "{status}");
+
+    // 可用宽度 6：分支也放不下，只留路径。
+    state.prompt_width = 12;
+    let view = view_for(&state);
+    assert_eq!(view.prompt.width, 12);
+    let status = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(status.contains("work"), "{status}");
+    assert!(!status.contains("main"), "{status}");
+
+    // 可用宽度 4：路径截断省略。
+    state.prompt_width = 10;
+    let view = view_for(&state);
+    let status = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(status.contains("wo…"), "{status}");
+}
+
+#[test]
+fn prompt_toolbar_styles_reflect_undo_and_save_state() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let undo_x = inner.x;
+    let bar_y = inner.y;
+    let dot_x = inner.right() - 1;
+
+    let buffer = render_buffer(&state);
+    assert_eq!(buffer[(undo_x, bar_y)].symbol(), "[");
+    assert!(
+        buffer[(undo_x, bar_y)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "无历史时 undo 置灰"
+    );
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::Green,
+        "初始已保存为绿点"
+    );
+
+    state.prompt.insert_str("x");
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(undo_x, bar_y)].fg,
+        ratatui::style::Color::Cyan,
+        "可撤销时强调色"
+    );
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::Yellow,
+        "编辑后未保存为黄点"
+    );
+}
+
+#[test]
 fn tab_bar_renders_auto_titles_and_add_button() {
     let state = AppState::demo();
     let lines = render_lines(&state);
@@ -1364,9 +1490,21 @@ fn sidebar_keeps_single_git_workspace_flat() {
     state.workspaces[0].name = "solo".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
 
+    let view = view_for(&state);
     let lines = render_lines(&state);
-    assert!(lines.iter().any(|line| line.contains("solo")));
-    assert!(!lines.iter().any(|line| line.contains("main")));
+    // 底边框状态栏会显示分支名，断言只作用于侧栏区域。
+    let sidebar: String = lines
+        .iter()
+        .map(|line| {
+            line.chars()
+                .skip(view.sidebar.x as usize)
+                .take(view.sidebar.width as usize)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(sidebar.contains("solo"));
+    assert!(!sidebar.contains("main"));
 }
 
 /// worktree 对话框条目。

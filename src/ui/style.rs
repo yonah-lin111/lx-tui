@@ -55,6 +55,11 @@ pub fn error() -> Style {
     Style::default().fg(Color::Red)
 }
 
+/// prompt 保存状态点：已保存 Green、未保存 Yellow。
+pub fn status_dot(saved: bool) -> Style {
+    Style::default().fg(if saved { Color::Green } else { Color::Yellow })
+}
+
 /// 浮层标题：正文加粗。
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)

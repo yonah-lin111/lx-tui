@@ -15,10 +15,12 @@ use std::path::Path;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, BorderType, List, ListItem, ListState, Paragraph, Widget, Wrap};
+use unicode_width::UnicodeWidthStr;
 
-use crate::app::state::{AppState, Pane, PaneKind, PaneView, Workspace};
+use crate::app::state::{AppState, Pane, PaneKind, PaneView, Workspace, home_dir, workspace_label};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
@@ -757,6 +759,8 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
+    prompt::render_header(area, frame.buffer_mut(), &state.prompt);
+    render_prompt_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
     prompt::render(
         text_area,
@@ -793,6 +797,104 @@ fn prompt_scrollbar_for(
         usize::from(gutter.height),
         state.prompt.scroll(),
     )
+}
+
+/// prompt 底边框左侧状态信息：工作区路径、git 分支与 linked worktree 标记。
+///
+/// 嵌入底边框线（零额外行高），右端避让折叠按钮；空间不足自右向左依次丢弃
+/// `[wt]`、分支，最后截断路径，极小宽度整体隐藏。
+fn render_prompt_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
+    let Some(workspace) = state.workspaces.get(state.active_workspace) else {
+        return;
+    };
+    let start = area.x.saturating_add(2);
+    let end = area
+        .right()
+        .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
+    if area.height == 0 || end <= start {
+        return;
+    }
+    let path = workspace
+        .cwd
+        .as_deref()
+        .map(|cwd| workspace_label(cwd, home_dir().as_deref()))
+        .unwrap_or_else(|| workspace.name.clone());
+    let branch = workspace.git.as_ref().and_then(|git| git.short_branch());
+    let linked = workspace.git.as_ref().is_some_and(|git| git.is_linked);
+    let spans = prompt_status_spans(&path, branch, linked, usize::from(end - start));
+    if spans.is_empty() {
+        return;
+    }
+    let line: Vec<Span<'_>> = spans
+        .iter()
+        .map(|(text, span_style)| Span::styled(text.as_str(), *span_style))
+        .collect();
+    Paragraph::new(Line::from(line)).render(
+        Rect::new(start, area.bottom().saturating_sub(1), end - start, 1),
+        frame.buffer_mut(),
+    );
+}
+
+/// 底边框状态片段（文本、样式）；空间不足时按优先级自右向左裁剪。
+fn prompt_status_spans(
+    path: &str,
+    branch: Option<&str>,
+    linked: bool,
+    available: usize,
+) -> Vec<(String, Style)> {
+    let branch_spans = |branch: &str| {
+        vec![
+            (" ".to_string(), style::muted()),
+            (text::WORKSPACE_GIT_ICON.to_string(), style::accent()),
+            (format!(" {branch}"), style::muted()),
+        ]
+    };
+    let wt_spans = || {
+        vec![
+            (" ".to_string(), style::muted()),
+            (text::PROMPT_WORKTREE_LABEL.to_string(), style::accent()),
+        ]
+    };
+    let mut spans = vec![
+        (" ".to_string(), style::muted()),
+        (path.to_string(), style::muted()),
+    ];
+    if let Some(branch) = branch {
+        spans.extend(branch_spans(branch));
+    }
+    if linked {
+        spans.extend(wt_spans());
+    }
+    if spans_width(&spans) <= available {
+        return spans;
+    }
+    if linked {
+        spans.truncate(spans.len() - wt_spans().len());
+    }
+    if spans_width(&spans) <= available {
+        return spans;
+    }
+    if let Some(branch) = branch {
+        spans.truncate(spans.len() - branch_spans(branch).len());
+    }
+    if spans_width(&spans) <= available {
+        return spans;
+    }
+    if available == 0 {
+        return Vec::new();
+    }
+    if available == 1 {
+        return vec![(" ".to_string(), style::muted())];
+    }
+    vec![
+        (" ".to_string(), style::muted()),
+        (text::ellipsize(path, available - 1), style::muted()),
+    ]
+}
+
+/// 片段列宽合计。
+fn spans_width(spans: &[(String, Style)]) -> usize {
+    spans.iter().map(|(text, _)| text.width()).sum()
 }
 
 /// 窗格标题：空占位与终端走通用标题规则。

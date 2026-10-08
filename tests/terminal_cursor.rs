@@ -44,7 +44,7 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
         state,
         config,
         layout::pane_inner_rect(pane_rect),
-        layout::pane_inner_rect(view.prompt),
+        layout::prompt_text_rect(view.prompt),
     )
 }
 

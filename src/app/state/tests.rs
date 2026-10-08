@@ -460,3 +460,34 @@ fn workspace_rows_keep_duplicate_mains_flat_without_linked() {
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().all(|row| !row.parent && !row.child));
 }
+
+#[test]
+fn select_all_prompt_covers_full_text() {
+    let mut state = AppState::demo();
+    state.prompt.resize(5, 3);
+    state.prompt.insert_str("abcdefgh");
+    state.select_all_prompt();
+
+    let selection = state.selection.expect("selection created");
+    assert_eq!(selection.pane(), state.prompt.id());
+    let (start, end) = selection.range().expect("non-empty range");
+    assert_eq!((start, end), ((0, 0), (1, 4)));
+    let start = (u16::try_from(start.0).expect("row fits"), start.1);
+    let end = (u16::try_from(end.0).expect("row fits"), end.1);
+    assert_eq!(
+        state.prompt.selection_text(start, end).as_deref(),
+        Some("abcdefgh")
+    );
+}
+
+#[test]
+fn select_all_prompt_empty_text_has_no_bounds_and_stays_saved() {
+    let mut state = AppState::demo();
+    state.prompt.resize(5, 3);
+    state.select_all_prompt();
+
+    let selection = state.selection.expect("selection created");
+    assert_eq!(selection.pane(), state.prompt.id());
+    assert_eq!(selection.range(), None);
+    assert!(state.prompt.is_saved(), "全选不得产生脏状态");
+}
