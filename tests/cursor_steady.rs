@@ -13,6 +13,8 @@ use alacritty_terminal::index::{Column, Line};
 use lx_tui::terminal::Terminal;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
+mod common;
+
 const COLS: u16 = 100;
 const ROWS: u16 = 30;
 const WAIT: Duration = Duration::from_secs(10);
@@ -40,6 +42,7 @@ impl App {
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_lx-tui"));
         command.env("TERM", "xterm-256color");
         command.cwd(env!("CARGO_MANIFEST_DIR"));
+        common::isolate_database(&mut command);
         let child = pair.slave.spawn_command(command).expect("spawn lx-tui");
         drop(pair.slave);
 

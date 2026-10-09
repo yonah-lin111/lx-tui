@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use crate::layout::PaneId;
 
+use super::prompt::PromptItemStatus;
+use super::trust::TrustWorkspace;
+
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
@@ -14,6 +17,7 @@ pub enum OverlayKind {
     ConfirmSyncWorkspaceCwd,
     NewWorkspace,
     WorktreeOpen,
+    TrustWorkspace,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -26,6 +30,7 @@ pub enum Overlay {
     ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd),
     NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
+    TrustWorkspace(TrustWorkspace),
 }
 
 impl Overlay {
@@ -39,6 +44,7 @@ impl Overlay {
             Self::ConfirmSyncWorkspaceCwd(_) => OverlayKind::ConfirmSyncWorkspaceCwd,
             Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
+            Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
         }
     }
 }
@@ -52,7 +58,7 @@ pub struct Menu {
     pub selected: usize,
 }
 
-/// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格。
+/// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格，以及提示词树节点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayTarget {
     Workspace(usize),
@@ -64,6 +70,20 @@ pub enum OverlayTarget {
         workspace: usize,
         tab: usize,
         pane: PaneId,
+    },
+    /// 提示词树根层文件夹。
+    PromptFolder {
+        workspace: usize,
+        folder_id: i64,
+    },
+    /// 提示词条目。
+    PromptItem {
+        workspace: usize,
+        item_id: i64,
+    },
+    /// 提示词树空白区域。
+    PromptTree {
+        workspace: usize,
     },
 }
 
@@ -85,13 +105,26 @@ pub enum MenuCommand {
     SwitchToWorkspaceCwd,
     SyncWorkspaceToTerminalCwd,
     ClosePane,
+    NewPrompt,
+    NewFolder,
+    NewSubFolder,
+    RenameFolder,
+    DeleteFolder,
+    RenamePrompt,
+    DeletePrompt,
+    EditPrompt,
+    CopyPromptContent,
+    /// 把提示词切到下一个状态（todo → in_progress → completed → todo）。
+    ChangePromptStatus(PromptItemStatus),
 }
 
-/// 重命名作用目标：工作区或标签；窗格不可重命名，因此不在此枚举内。
+/// 重命名作用目标：工作区、标签或提示词树节点；窗格不可重命名，因此不在此枚举内。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
     Workspace(usize),
     Tab { workspace: usize, tab: usize },
+    PromptFolder { workspace: usize, folder_id: i64 },
+    PromptItem { workspace: usize, item_id: i64 },
 }
 
 /// 重命名浮层：目标与单行输入。

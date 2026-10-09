@@ -26,6 +26,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let result = event::run(&mut tui, &mut state, &config);
     tui.restore()?;
     result?;
+    if state.trust_refused {
+        // 启动信任被拒绝：终端已恢复，输出提示并以 0 退出。
+        eprintln!("lx-tui: {}", lx_tui::ui::text::TRUST_REFUSED_MESSAGE);
+        return Ok(());
+    }
 
     tracing::info!("lx-tui stopped");
     Ok(())

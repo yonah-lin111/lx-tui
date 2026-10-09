@@ -56,6 +56,39 @@ fn rename_state(name: &str) -> AppState {
 }
 
 #[test]
+fn trust_overlay_renders_question_path_and_buttons() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::TrustWorkspace(TrustWorkspace {
+        path: PathBuf::from("/tmp/trusted-workspace"),
+        trigger: crate::app::trust::TrustTrigger::Startup,
+    }));
+    let (lines, cursor) = draw_overlay(&state);
+    let body = lines.join("\n");
+    assert!(body.contains(text::TRUST_WORKSPACE_TITLE), "{body}");
+    assert!(body.contains(text::TRUST_WORKSPACE_QUESTION), "{body}");
+    assert!(body.contains("/tmp/trusted-workspace"), "{body}");
+    assert!(body.contains(text::BUTTON_TRUST), "{body}");
+    assert!(body.contains(text::BUTTON_DONT_TRUST), "{body}");
+    assert!(cursor.is_none(), "信任浮层不占用硬件光标");
+}
+
+#[test]
+fn trust_overlay_buttons_hit_expected_cells() {
+    let shell = trust_shell(SCREEN).expect("trust shell fits");
+    let rects =
+        widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW);
+    assert_eq!(
+        trust_button_at(&shell, rects[0].x, rects[0].y),
+        Some(TrustButton::Trust)
+    );
+    assert_eq!(
+        trust_button_at(&shell, rects[1].x, rects[1].y),
+        Some(TrustButton::Refuse)
+    );
+    assert_eq!(trust_button_at(&shell, shell.inner.x, shell.inner.y), None);
+}
+
+#[test]
 fn menu_layout_maps_commands_to_text_labels() {
     let state = menu_state(
         vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],

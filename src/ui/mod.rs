@@ -27,6 +27,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use crate::app::prompt::PromptMode;
 use crate::app::state::{AppState, Pane, PaneKind, PaneView};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
@@ -455,10 +456,11 @@ fn render_pane_agent_label(
     }
 }
 
-/// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。
+/// 右栏 prompt：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
+/// 树视图渲染提示词管理器；折叠时渲染为窄条。
 ///
-/// 文本区固定预留最右 1 列作滚动条槽，文本溢出时该列显示滚动条。
-/// 返回聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
+/// 文本区固定预留最右 1 列作滚动条槽，文本/树溢出时该列显示滚动条。
+/// 返回编辑视图聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
 fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
@@ -468,6 +470,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         return None;
     }
     let focused = state.prompt_focused;
+    let mode = state.prompt_owner().prompt_panel.mode;
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::border(focused))
@@ -475,33 +478,52 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
             format!(" {} ", text::PROMPT_TITLE),
             style::border_title(),
         ));
+    // 右侧路径名与左侧标题重叠时不绘制，保证面板标题始终可见。
     if let Some(name) = prompt_path_name(state) {
-        // 前缀与值分色，与底边框 `b:分支` 一致：前缀强调色、值 muted。
-        let label = Line::from(vec![
-            Span::styled(" ", style::muted()),
-            Span::styled(text::PROMPT_WORKSPACE_PREFIX, style::accent()),
-            Span::styled(name.to_string(), style::muted()),
-            Span::styled(" ", style::muted()),
-        ])
-        .alignment(Alignment::Right);
-        block = block.title_top(label);
+        let left = text::PROMPT_TITLE.width() + 2;
+        let right = name.width() + text::PROMPT_WORKSPACE_PREFIX.width() + 1;
+        if left + right < usize::from(area.width.saturating_sub(2)) {
+            // 前缀与值分色，与底边框 `b:分支` 一致：前缀强调色、值 muted。
+            let label = Line::from(vec![
+                Span::styled(" ", style::muted()),
+                Span::styled(text::PROMPT_WORKSPACE_PREFIX, style::accent()),
+                Span::styled(name.to_string(), style::muted()),
+                Span::styled(" ", style::muted()),
+            ])
+            .alignment(Alignment::Right);
+            block = block.title_top(label);
+        }
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
-    prompt::render_header(area, frame.buffer_mut(), &state.prompt, focused);
+    prompt::render_header(area, frame.buffer_mut(), &state.prompt, focused, mode);
     render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
-    prompt::render(
-        text_area,
-        frame.buffer_mut(),
-        &state.prompt,
-        state.selection_for(state.prompt.id()),
-    );
+    match mode {
+        PromptMode::Tree => {
+            prompt::tree::render(
+                text_area,
+                frame.buffer_mut(),
+                &state.prompt_owner().prompt_panel,
+            );
+        }
+        PromptMode::Editor => {
+            prompt::render(
+                text_area,
+                frame.buffer_mut(),
+                &state.prompt,
+                state.selection_for(state.prompt.id()),
+            );
+        }
+    }
     if let Some(scrollbar) = prompt_scrollbar_for(area, state) {
         widgets::scrollbar::render(frame, &scrollbar);
+    }
+    if mode == PromptMode::Tree {
+        return None;
     }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
     Some((
@@ -552,12 +574,12 @@ fn prompt_scrollbar_for(
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
     let gutter = crate::layout::prompt_scrollbar_rect(panel)?;
-    widgets::scrollbar::layout(
-        gutter,
-        state.prompt.visual_rows().len(),
-        usize::from(gutter.height),
-        state.prompt.scroll(),
-    )
+    let owner = state.prompt_owner();
+    let (total, offset) = match owner.prompt_panel.mode {
+        PromptMode::Tree => (owner.prompt_panel.rows().len(), owner.prompt_panel.scroll),
+        PromptMode::Editor => (state.prompt.visual_rows().len(), state.prompt.scroll()),
+    };
+    widgets::scrollbar::layout(gutter, total, usize::from(gutter.height), offset)
 }
 
 /// prompt 底边框左侧 git 状态：`b:分支`（linked worktree 显示仓库主 checkout 分支），

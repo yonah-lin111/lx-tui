@@ -4,6 +4,12 @@ mod list;
 mod mention;
 mod panel;
 mod template;
+pub mod tree;
+
+pub use tree::{
+    PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPanel, PromptRow, PromptRowKind,
+    PromptTree,
+};
 
 use std::path::PathBuf;
 
@@ -125,6 +131,22 @@ impl Prompt {
     /// 手动标记为已保存（工具栏保存点）。
     pub fn mark_saved(&mut self) {
         self.is_saved = true;
+    }
+
+    /// 替换全文（载入提示词条目）：净化文本、清空历史与浮层并回到已保存态；光标落在文末。
+    pub fn set_text(&mut self, text: &str) {
+        self.text = sanitize(text);
+        self.cursor = self.text.len();
+        self.scroll = 0;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_edit = None;
+        self.panel = None;
+        self.slash = None;
+        self.mention.clear();
+        self.panel_suppressed = false;
+        self.is_saved = true;
+        self.scroll_cursor_into_view();
     }
 
     /// 是否存在可撤销的编辑。

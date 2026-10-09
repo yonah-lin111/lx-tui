@@ -1,5 +1,7 @@
 //! prompt 编辑器渲染：文本、markdown 高亮与选区，只读状态。
 
+pub mod tree;
+
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -8,7 +10,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::markdown::{
     MentionEntry, TemplateLineInfo, TemplateLineRole, TemplateStatus, template_line_infos,
 };
-use crate::app::prompt::{Prompt, VisualRow};
+use crate::app::prompt::{Prompt, PromptMode, VisualRow};
 use crate::app::selection::Selection;
 use crate::layout::{self, PromptToolbarButton};
 use crate::ui::markdown::{self, Token, TokenKind};
@@ -17,12 +19,18 @@ use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
-pub fn render_header(panel: Rect, buf: &mut Buffer, prompt: &Prompt, focused: bool) {
+pub fn render_header(
+    panel: Rect,
+    buf: &mut Buffer,
+    prompt: &Prompt,
+    focused: bool,
+    mode: PromptMode,
+) {
     let Some(header) = layout::prompt_header_rect(panel) else {
         return;
     };
     render_divider(panel, header, buf, focused);
-    render_toolbar(panel, buf, prompt);
+    render_toolbar(panel, buf, prompt, mode);
 }
 
 /// 分割线整行 `─`，两端衔接外层边框的 `├` / `┤`；样式跟随边框焦点态。
@@ -47,38 +55,45 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
     }
 }
 
-/// 工具栏：左侧 undo/redo（不可用时置灰），右侧 select all 与保存状态点。
-fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
-    let buttons = [
-        (
-            PromptToolbarButton::Undo,
-            text::PROMPT_UNDO_LABEL,
-            if prompt.can_undo() {
-                style::accent()
-            } else {
-                style::muted()
-            },
-        ),
-        (
-            PromptToolbarButton::Redo,
-            text::PROMPT_REDO_LABEL,
-            if prompt.can_redo() {
-                style::accent()
-            } else {
-                style::muted()
-            },
-        ),
-        (
-            PromptToolbarButton::SelectAll,
-            text::PROMPT_SELECT_ALL_LABEL,
-            style::accent(),
-        ),
-        (
-            PromptToolbarButton::Save,
-            text::PROMPT_SAVE_DOT,
-            style::status_dot(prompt.is_saved()),
-        ),
-    ];
+/// 工具栏：模式切换按钮常显；编辑视图追加 undo/redo（不可用时置灰）、select all 与保存状态点。
+fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode) {
+    let mode_label = match mode {
+        PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
+        PromptMode::Tree => text::PROMPT_MODE_EDIT_LABEL,
+    };
+    let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
+    if mode == PromptMode::Editor {
+        buttons.extend([
+            (
+                PromptToolbarButton::Undo,
+                text::PROMPT_UNDO_LABEL,
+                if prompt.can_undo() {
+                    style::accent()
+                } else {
+                    style::muted()
+                },
+            ),
+            (
+                PromptToolbarButton::Redo,
+                text::PROMPT_REDO_LABEL,
+                if prompt.can_redo() {
+                    style::accent()
+                } else {
+                    style::muted()
+                },
+            ),
+            (
+                PromptToolbarButton::SelectAll,
+                text::PROMPT_SELECT_ALL_LABEL,
+                style::accent(),
+            ),
+            (
+                PromptToolbarButton::Save,
+                text::PROMPT_SAVE_DOT,
+                style::status_dot(prompt.is_saved()),
+            ),
+        ]);
+    }
     for (button, label, button_style) in buttons {
         let Some(rect) = layout::prompt_toolbar_button_rect(panel, button) else {
             continue;

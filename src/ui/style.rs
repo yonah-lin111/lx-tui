@@ -221,6 +221,16 @@ pub fn template_status(status: TemplateStatus) -> Style {
     }
 }
 
+/// 提示词条目状态标签：todo 次要、in_progress 黄、completed 绿（与模板块状态色一致）。
+pub fn prompt_status(status: crate::app::prompt::PromptItemStatus) -> Style {
+    use crate::app::prompt::PromptItemStatus;
+    match status {
+        PromptItemStatus::Todo => muted(),
+        PromptItemStatus::InProgress => Style::default().fg(Color::Yellow),
+        PromptItemStatus::Completed => Style::default().fg(Color::Green),
+    }
+}
+
 /// 模板块边框：按状态分色（todo 靛蓝 / in_progress 黄 / done 绿）。
 pub fn template_border(status: TemplateStatus) -> Style {
     match status {

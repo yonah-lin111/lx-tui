@@ -212,11 +212,9 @@ fn sidebar_collapse_button_renders_icons() {
 fn sidebar_lists_single_workspace_named_after_current_directory() {
     let state = AppState::demo();
     let lines = render_lines(&state);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains(&state.active_workspace().name))
-    );
+    // 侧栏宽度有限，长目录名会被截断；断言至少展示名字前缀。
+    let prefix: String = state.active_workspace().name.chars().take(8).collect();
+    assert!(lines.iter().any(|line| line.contains(&prefix)));
     assert!(!lines.iter().any(|line| line.contains("notes")));
 }
 
@@ -753,8 +751,11 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
 fn initial_workspace_marker_uses_row_text_style() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
-    let initial = state.workspaces[0].name.clone();
-    let created = state.workspaces[1].name.clone();
+    // 显式短名保证列表不截断，标记断言与工作目录名无关。
+    state.workspaces[0].name = "alpha".to_string();
+    state.workspaces[1].name = "beta".to_string();
+    let initial = "alpha".to_string();
+    let created = "beta".to_string();
     let lines = render_lines(&state);
     let marker_line = lines
         .iter()
@@ -1158,6 +1159,8 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 #[test]
 fn prompt_renders_toolbar_row_and_divider() {
     let mut state = AppState::demo();
+    // 足够宽以容纳模式/undo/redo 与右对齐的 select all。
+    state.prompt_width = 40;
     state.prompt.insert_str("hello");
     let view = view_for(&state);
     let lines = render_lines(&state);
@@ -1388,10 +1391,14 @@ fn prompt_status_follows_pinned_workspace() {
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let inner = crate::layout::pane_inner_rect(view.prompt);
-    let undo_x = inner.x;
-    let bar_y = inner.y;
-    let dot_x = inner.right() - 1;
+    let undo = crate::layout::prompt_toolbar_button_rect(
+        view.prompt,
+        crate::layout::PromptToolbarButton::Undo,
+    )
+    .expect("undo button visible");
+    let undo_x = undo.x;
+    let bar_y = undo.y;
+    let dot_x = crate::layout::pane_inner_rect(view.prompt).right() - 1;
 
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(undo_x, bar_y)].symbol(), "[");

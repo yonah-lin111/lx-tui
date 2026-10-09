@@ -19,10 +19,12 @@ use tokio_stream::StreamExt;
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
+use crate::app::prompt::PromptRowKind;
 use crate::app::state::{AppState, PaneKind, PaneView, WorkspaceGit, home_dir, workspace_label};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
+use crate::db::service::Persistence;
 use crate::detect::{STATE_TAIL_LINES, pane_agent_snapshot};
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
@@ -70,6 +72,8 @@ pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<(
 
 async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
     initialize_layout_widths(tui, state, config)?;
+    // 持久化服务：打开数据库、执行启动信任检查；库不可用时降级为无持久化。
+    let mut persistence = Persistence::start(state);
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();
@@ -87,6 +91,10 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         reconcile_sessions(state, &mut sessions, &sender);
+        // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
+        if persistence.pump(state) {
+            dirty = true;
+        }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
             cwd_check = None;
             if poll_process_cwds(state, &sessions) {
@@ -174,6 +182,8 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     for session in sessions.values_mut() {
         session.kill();
     }
+    // 退出前收尾：提交编辑中的提示词内容并落库。
+    persistence.shutdown(state);
     Ok(())
 }
 
@@ -392,7 +402,10 @@ fn handle_terminal_event(
                     );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-                    let was_new_ws = matches!(state.overlay, Some(Overlay::NewWorkspace(_)));
+                    let was_new_ws = matches!(
+                        state.overlay,
+                        Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
+                    );
                     if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
                         write_to_pane(sessions, pane, &bytes);
                         update::reset_pane_scroll(state, pane);
@@ -462,7 +475,10 @@ fn handle_terminal_event(
                     );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-                    let was_new_ws = matches!(state.overlay, Some(Overlay::NewWorkspace(_)));
+                    let was_new_ws = matches!(
+                        state.overlay,
+                        Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
+                    );
                     if let Some((pane, bytes)) =
                         handle_overlay_click(state, *screen, mouse.column, mouse.row)
                     {
@@ -602,11 +618,21 @@ fn handle_terminal_event(
                         layout::prompt_toolbar_button_at(view.prompt, mouse.column, mouse.row)
                 {
                     // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
+                    let editor_view = !update::prompt_tree_mode(state);
                     match button {
-                        layout::PromptToolbarButton::Undo => state.prompt.undo(),
-                        layout::PromptToolbarButton::Redo => state.prompt.redo(),
-                        layout::PromptToolbarButton::SelectAll => state.select_all_prompt(),
-                        layout::PromptToolbarButton::Save => state.prompt.mark_saved(),
+                        layout::PromptToolbarButton::Mode => {
+                            update::toggle_prompt_panel_mode(state);
+                        }
+                        layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
+                        layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
+                        layout::PromptToolbarButton::SelectAll if editor_view => {
+                            state.select_all_prompt();
+                        }
+                        layout::PromptToolbarButton::Save if editor_view => {
+                            state.prompt.mark_saved();
+                            update::commit_editing_prompt(state);
+                        }
+                        _ => {}
                     }
                     *dirty = true;
                 } else if !state.prompt_collapsed
@@ -630,8 +656,21 @@ fn handle_terminal_event(
                     let col = mouse.column - inner.x;
                     if pane == state.prompt.id() {
                         update::focus_prompt(state);
-                        update::place_prompt_cursor(state, row, col);
-                        update::begin_selection(state, pane, row, col);
+                        if update::prompt_tree_mode(state) {
+                            // 树视图：点击行选中；文件夹行同时折叠/展开。
+                            let hit = ui::prompt::tree::row_at(
+                                inner,
+                                &state.prompt_owner().prompt_panel,
+                                mouse.column,
+                                mouse.row,
+                            );
+                            if let Some(index) = hit {
+                                update::click_prompt_row(state, index);
+                            }
+                        } else {
+                            update::place_prompt_cursor(state, row, col);
+                            update::begin_selection(state, pane, row, col);
+                        }
                         *dirty = true;
                     } else if matches!(
                         state.pane_anywhere(pane).map(|pane| pane.kind),
@@ -711,7 +750,12 @@ fn handle_terminal_event(
                     };
                     let offset =
                         ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
-                    if update::set_prompt_scroll(state, offset) {
+                    if update::prompt_tree_mode(state) {
+                        let visible = update::prompt_tree_visible_rows(state);
+                        if update::set_prompt_tree_scroll(state, offset, visible) {
+                            *dirty = true;
+                        }
+                    } else if update::set_prompt_scroll(state, offset) {
                         *dirty = true;
                     }
                     return;
@@ -981,8 +1025,16 @@ fn handle_terminal_event(
                     if pane == state.prompt.id() {
                         update::clear_selection(state);
                         if let Some(direction) = vertical_wheel_direction(mouse.kind) {
-                            update::scroll_prompt(state, direction);
-                            *dirty = true;
+                            if update::prompt_tree_mode(state) {
+                                // 树视图滚轮按行滚动，光标/选中不动。
+                                let visible = update::prompt_tree_visible_rows(state);
+                                if update::scroll_prompt_tree(state, direction, visible) {
+                                    *dirty = true;
+                                }
+                            } else {
+                                update::scroll_prompt(state, direction);
+                                *dirty = true;
+                            }
                         }
                     } else if state.pane_anywhere(pane).is_some_and(|target| {
                         target.kind == PaneKind::Terminal && target.view == PaneView::Terminal
@@ -1373,6 +1425,18 @@ fn handle_overlay_click(
                 }
             }
         }
+        Some(Overlay::TrustWorkspace(_)) => {
+            let button = ui::overlay::trust_shell(screen)
+                .and_then(|shell| ui::overlay::trust_button_at(&shell, column, row));
+            match button {
+                Some(ui::overlay::TrustButton::Trust) => update::apply_trust_decision(state, true),
+                // 点击按钮之外视同拒绝信任：不因误触授予访问。
+                Some(ui::overlay::TrustButton::Refuse) | None => {
+                    update::apply_trust_decision(state, false);
+                }
+            }
+            None
+        }
         None => None,
     }
 }
@@ -1396,6 +1460,35 @@ fn open_right_click_menu(
     if let Some(index) = ui::workspace_item_at(view, state, column, row) {
         update::open_workspace_menu(state, index, (column, row));
         return true;
+    }
+    // 提示词树：行上打开节点菜单，空白区域打开新建菜单。
+    if !state.prompt_collapsed && update::prompt_tree_mode(state) {
+        let area = layout::prompt_text_rect(view.prompt);
+        if area.contains((column, row).into()) {
+            let hit = {
+                let panel = &state.prompt_owner().prompt_panel;
+                ui::prompt::tree::row_at(area, panel, column, row).and_then(|index| {
+                    let row_data = panel.rows().get(index).copied()?;
+                    let id = match row_data.kind {
+                        PromptRowKind::Folder => {
+                            panel.tree.folder_of_row(row_data).map(|folder| folder.id)
+                        }
+                        PromptRowKind::Item => panel.tree.item_of_row(row_data).map(|item| item.id),
+                    };
+                    Some((row_data.kind, id))
+                })
+            };
+            match hit {
+                Some((PromptRowKind::Folder, Some(folder_id))) => {
+                    update::open_prompt_folder_menu(state, folder_id, (column, row));
+                }
+                Some((PromptRowKind::Item, Some(item_id))) => {
+                    update::open_prompt_item_menu(state, item_id, (column, row));
+                }
+                _ => update::open_prompt_tree_menu(state, (column, row)),
+            }
+            return true;
+        }
     }
     if let Some((pane, _)) = pane_at(rects, column, row)
         && state.active_tab().pane(pane).is_some()
@@ -1430,7 +1523,8 @@ fn handle_workspace_scrollbar_press(
     true
 }
 
-/// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点与光标；返回是否命中。
+/// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；树视图滚动树、编辑视图滚动文本；
+/// 不改变焦点与光标；返回是否命中。
 fn handle_prompt_scrollbar_press(
     state: &mut AppState,
     view: &ui::layout::ViewLayout,
@@ -1447,7 +1541,12 @@ fn handle_prompt_scrollbar_press(
         Some(grab) => state.prompt_scroll_drag = Some(grab),
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
-            update::set_prompt_scroll(state, offset);
+            if update::prompt_tree_mode(state) {
+                let visible = update::prompt_tree_visible_rows(state);
+                update::set_prompt_tree_scroll(state, offset, visible);
+            } else {
+                update::set_prompt_scroll(state, offset);
+            }
         }
     }
     true

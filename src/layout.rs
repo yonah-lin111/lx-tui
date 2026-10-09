@@ -26,12 +26,15 @@ const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
 const PROMPT_SELECT_ALL_WIDTH: u16 = 12;
 /// `[select all]` 与保存点之间的空档（列）。
 const PROMPT_SELECT_ALL_GAP: u16 = 1;
-/// 显示 `[select all]` 所需的最小内容区宽度（列）：不足时只保留保存点。
-const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 28;
+/// 显示 `[select all]` 所需的最小内容区宽度（列）：不足时只保留保存点；
+/// 同时保证模式/undo/redo 左侧按钮组（20 列）与右对齐的 select all 不重叠。
+const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 35;
 
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptToolbarButton {
+    /// 视图模式切换：编辑视图显示 `[list]`、树视图显示 `[edit]`。
+    Mode,
     Undo,
     Redo,
     SelectAll,
@@ -717,14 +720,15 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
 pub fn prompt_toolbar_button_rect(panel: Rect, button: PromptToolbarButton) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
     let inner = pane_inner_rect(panel);
+    let stride = PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let rect = match button {
-        PromptToolbarButton::Undo => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
-        PromptToolbarButton::Redo => Rect::new(
-            bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP,
-            bar.y,
-            PROMPT_TOOLBAR_BUTTON_WIDTH,
-            1,
-        ),
+        PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
+        PromptToolbarButton::Undo => {
+            Rect::new(bar.x + stride, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1)
+        }
+        PromptToolbarButton::Redo => {
+            Rect::new(bar.x + stride * 2, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1)
+        }
         PromptToolbarButton::SelectAll => {
             if inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
@@ -749,6 +753,7 @@ pub fn prompt_toolbar_button_at(panel: Rect, column: u16, row: u16) -> Option<Pr
         return None;
     }
     [
+        PromptToolbarButton::Mode,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,
         PromptToolbarButton::SelectAll,

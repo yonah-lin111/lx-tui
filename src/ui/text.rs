@@ -3,6 +3,7 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, SlashCommandId, TemplateStatus};
+use crate::app::prompt::PromptItemStatus;
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
@@ -66,6 +67,19 @@ pub const PROMPT_SAVE_DOT: &str = "●";
 pub const PROMPT_PIN_LABEL: &str = "[pin]";
 /// prompt 已钉住时的按钮（点击释放）。
 pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
+/// prompt 视图模式按钮：编辑视图显示 `[list]`、树视图显示 `[edit]`。
+pub const PROMPT_MODE_LIST_LABEL: &str = "[list]";
+pub const PROMPT_MODE_EDIT_LABEL: &str = "[edit]";
+/// 提示词树符号：文件夹展开/折叠三角、条目图标与子层连接线。
+pub const PROMPT_TREE_EXPANDED: &str = "▾";
+pub const PROMPT_TREE_COLLAPSED: &str = "▸";
+pub const PROMPT_TREE_ITEM_ICON: &str = "•";
+pub const PROMPT_TREE_CONNECTOR: &str = "└─";
+/// 提示词树空状态。
+pub const PROMPT_TREE_EMPTY: &str = "no prompts yet";
+/// 新建提示词与文件夹的默认名（可随后重命名）。
+pub const PROMPT_DEFAULT_NAME: &str = "New prompt";
+pub const PROMPT_FOLDER_DEFAULT_NAME: &str = "New folder";
 /// prompt 编辑器空内容时的输入说明占位。
 pub const PROMPT_PLACEHOLDER: &str = "Write your prompt…";
 /// 主内容 lx 页标题。
@@ -142,9 +156,41 @@ pub const MENU_SWITCH_TO_WORKSPACE_CWD: &str = "Switch to ws path";
 pub const MENU_SYNC_WS_TO_TERMINAL_CWD: &str = "Sync ws to terminal path";
 pub const MENU_CLOSE_PANE: &str = "Close";
 
+/// 提示词树右键菜单项。
+pub const MENU_PROMPT_NEW_PROMPT: &str = "New prompt";
+pub const MENU_PROMPT_NEW_FOLDER: &str = "New folder";
+pub const MENU_PROMPT_NEW_SUBFOLDER: &str = "New subfolder";
+pub const MENU_PROMPT_EDIT: &str = "Edit";
+pub const MENU_PROMPT_RENAME: &str = "Rename";
+pub const MENU_PROMPT_COPY: &str = "Copy content";
+pub const MENU_PROMPT_DELETE: &str = "Delete";
+pub const MENU_PROMPT_MARK_TODO: &str = "Mark todo";
+pub const MENU_PROMPT_MARK_RUN: &str = "Mark run";
+pub const MENU_PROMPT_MARK_DONE: &str = "Mark done";
+
+/// 状态切换菜单项：按目标状态取标签。
+pub fn prompt_status_menu_label(status: PromptItemStatus) -> &'static str {
+    match status {
+        PromptItemStatus::Todo => MENU_PROMPT_MARK_TODO,
+        PromptItemStatus::InProgress => MENU_PROMPT_MARK_RUN,
+        PromptItemStatus::Completed => MENU_PROMPT_MARK_DONE,
+    }
+}
+
+/// 提示词条目状态标签（与模板块状态按钮同文案）。
+pub fn prompt_status_label(status: PromptItemStatus) -> &'static str {
+    match status {
+        PromptItemStatus::Todo => TEMPLATE_BUTTON_TODO,
+        PromptItemStatus::InProgress => TEMPLATE_BUTTON_RUN,
+        PromptItemStatus::Completed => TEMPLATE_BUTTON_DONE,
+    }
+}
+
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
+pub const RENAME_PROMPT_TITLE: &str = "rename prompt";
+pub const RENAME_FOLDER_TITLE: &str = "rename folder";
 /// rename 浮层输入为空时的输入说明占位（工作区与标签共用）。
 pub const RENAME_PLACEHOLDER: &str = "new name";
 /// new workspace 路径输入为空时的输入说明占位。
@@ -153,8 +199,18 @@ pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
 pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
+pub const CONFIRM_DELETE_PROMPT_TITLE: &str = "delete prompt";
+pub const CONFIRM_DELETE_FOLDER_TITLE: &str = "delete folder";
 pub const CONFIRM_SWITCH_CWD_TITLE: &str = "switch to ws path";
 pub const CONFIRM_SYNC_WS_CWD_TITLE: &str = "sync ws to terminal path";
+
+/// 信任工作区模态：标题、问题与按钮。
+pub const TRUST_WORKSPACE_TITLE: &str = "trust workspace";
+pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
+pub const BUTTON_TRUST: &str = "[trust & open enter]";
+pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
+/// 启动拒绝信任后的终端提示（恢复终端后由入口输出）。
+pub const TRUST_REFUSED_MESSAGE: &str = "workspace not trusted; exiting";
 
 /// worktree 对话框：标题、搜索占位、状态行与条目标记。
 pub const WORKTREE_OPEN_TITLE: &str = "open worktree";
@@ -178,6 +234,16 @@ pub const BUTTON_OPEN: &str = "[open enter]";
 /// 关闭确认问题文案。
 pub fn confirm_close_question(name: &str) -> String {
     format!("close \"{name}\"?")
+}
+
+/// 删除提示词确认问题文案。
+pub fn confirm_delete_question(name: &str) -> String {
+    format!("delete \"{name}\"?")
+}
+
+/// 删除文件夹确认问题文案：提示级联影响范围。
+pub fn confirm_delete_folder_question(name: &str) -> String {
+    format!("delete folder \"{name}\" and its contents?")
 }
 
 /// 切换工作区路径确认问题文案。
@@ -212,11 +278,17 @@ pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
 pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
 /// 工作区路径非目录。
 pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
+/// 信任检查拒绝时的取消提示。
+pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
+pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";
 
 /// 右键菜单边框标题：目标名缺失时按种类回退。
 pub const MENU_TITLE_WORKSPACE: &str = "workspace";
 pub const MENU_TITLE_TAB: &str = "tab";
 pub const MENU_TITLE_PANE: &str = "pane";
+pub const MENU_TITLE_PROMPT: &str = "prompt";
+pub const MENU_TITLE_FOLDER: &str = "folder";
+pub const MENU_TITLE_PROMPT_TREE: &str = "prompts";
 
 /// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠模板命令。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";

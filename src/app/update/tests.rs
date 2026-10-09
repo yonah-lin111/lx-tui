@@ -2096,6 +2096,17 @@ fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
     open_pane_menu(&mut state, pane, (0, 0));
     select_menu_command(&mut state, MenuCommand::SyncWorkspaceToTerminalCwd);
     activate_menu(&mut state);
+    // 同步触发前先做信任检查：未信任会弹信任浮层，此处直接以已信任结果续作。
+    let checked = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::CheckTrust { path, trigger } => Some((path.clone(), trigger.clone())),
+            _ => None,
+        })
+        .expect("trust check queued");
+    assert_eq!(checked.0, PathBuf::from("/tmp/new-term"));
+    resolve_trust_check(&mut state, &checked.0, true, checked.1);
 
     let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.as_ref() else {
         panic!("confirm sync ws cwd overlay expected");
@@ -3203,7 +3214,7 @@ fn commit_new_workspace_empty_input_uses_active_cwd() {
 }
 
 #[test]
-fn commit_new_workspace_valid_path_creates_workspace_with_path() {
+fn commit_new_workspace_valid_path_queues_trust_check() {
     let mut state = AppState::demo();
     let initial_count = state.workspaces.len();
     let tmp = std::env::temp_dir();
@@ -3216,9 +3227,12 @@ fn commit_new_workspace_valid_path_creates_workspace_with_path() {
 
     commit_new_workspace(&mut state);
 
-    assert!(state.overlay.is_none());
-    assert_eq!(state.workspaces.len(), initial_count + 1);
-    assert_eq!(state.active_workspace().cwd, Some(canonical_tmp));
+    assert!(state.overlay.is_none(), "弹窗关闭");
+    assert_eq!(state.workspaces.len(), initial_count, "信任检查前不创建");
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CheckTrust { path, .. } if *path == canonical_tmp
+    )));
 }
 
 #[test]

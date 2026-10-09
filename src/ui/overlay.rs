@@ -13,6 +13,7 @@ use crate::app::overlay::{
     Overlay, OverlayTarget, Rename, RenameTarget, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
 };
 use crate::app::state::{AppState, tab_label};
+use crate::app::trust::TrustWorkspace;
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
@@ -25,6 +26,9 @@ const NEW_WORKSPACE_HEIGHT: u16 = 5;
 /// 关闭确认浮层尺寸（列，行）：问题行与按钮行。
 const CONFIRM_WIDTH: u16 = 40;
 const CONFIRM_HEIGHT: u16 = 4;
+/// 信任浮层尺寸（列，行）：问题行、路径行、空行与按钮行。
+const TRUST_WIDTH: u16 = 52;
+const TRUST_HEIGHT: u16 = 6;
 /// worktree 对话框宽度与高度范围（行）：条目两行一条 + 搜索/分隔/按钮与外框。
 const WORKTREE_DIALOG_WIDTH: u16 = 56;
 const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 10;
@@ -39,6 +43,9 @@ const NEW_WORKSPACE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
 const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANCEL];
+const TRUST_BUTTONS: [&str; 2] = [text::BUTTON_TRUST, text::BUTTON_DONT_TRUST];
+/// 信任浮层按钮行号（相对内容区）。
+const TRUST_BUTTON_ROW: u16 = 3;
 
 /// 重命名浮层按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +75,13 @@ pub enum ConfirmButton {
 pub enum WorktreeDialogButton {
     Open,
     Cancel,
+}
+
+/// 信任浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustButton {
+    Trust,
+    Refuse,
 }
 
 /// worktree 对话框几何；条目两行一条，高度随条目数夹取。
@@ -245,6 +259,26 @@ pub fn confirm_button_at(
     }
 }
 
+/// 信任浮层几何。
+pub fn trust_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, TRUST_WIDTH, TRUST_HEIGHT)
+}
+
+/// 命中信任浮层按钮。
+pub fn trust_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<TrustButton> {
+    let rects =
+        widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW);
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(TrustButton::Trust),
+        Some(1) => Some(TrustButton::Refuse),
+        _ => None,
+    }
+}
+
 /// 渲染当前浮层；返回需要同步的硬件光标位置（重命名输入或新建工作区路径输入）。
 pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(u16, u16)> {
     match state.overlay.as_ref()? {
@@ -270,7 +304,48 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             None
         }
         Overlay::WorktreeOpen(dialog) => render_worktree_open(frame, screen, dialog),
+        Overlay::TrustWorkspace(trust) => {
+            render_trust(frame, screen, trust);
+            None
+        }
     }
+}
+
+/// 渲染信任浮层：问题、路径高亮与底部按钮。
+fn render_trust(frame: &mut Frame<'_>, screen: Rect, trust: &TrustWorkspace) {
+    let Some(shell) = trust_shell(screen) else {
+        return;
+    };
+    widgets::modal::render(frame, &shell, text::TRUST_WORKSPACE_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return;
+    }
+    let width = usize::from(shell.inner.width);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            text::ellipsize(text::TRUST_WORKSPACE_QUESTION, width),
+            style::text(),
+        )),
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+    );
+    let path = text::ellipsize_middle(&trust.path.display().to_string(), width);
+    frame.render_widget(
+        Paragraph::new(Span::styled(path, style::accent())),
+        Rect::new(
+            shell.inner.x,
+            shell.inner.y.saturating_add(1),
+            shell.inner.width,
+            1,
+        ),
+    );
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW),
+        &[
+            (text::BUTTON_TRUST, style::accent()),
+            (text::BUTTON_DONT_TRUST, style::muted()),
+        ],
+    );
 }
 
 /// 重命名浮层标题：按目标种类分派。
@@ -278,6 +353,8 @@ fn rename_title(target: RenameTarget) -> &'static str {
     match target {
         RenameTarget::Workspace(_) => text::RENAME_WORKSPACE_TITLE,
         RenameTarget::Tab { .. } => text::RENAME_TAB_TITLE,
+        RenameTarget::PromptFolder { .. } => text::RENAME_FOLDER_TITLE,
+        RenameTarget::PromptItem { .. } => text::RENAME_PROMPT_TITLE,
     }
 }
 
@@ -321,7 +398,37 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
                 .unwrap_or_default();
             (text::CONFIRM_CLOSE_PANE_TITLE, name)
         }
+        OverlayTarget::PromptFolder {
+            workspace,
+            folder_id,
+        } => (
+            text::CONFIRM_DELETE_FOLDER_TITLE,
+            prompt_folder_name(state, workspace, folder_id).unwrap_or_default(),
+        ),
+        OverlayTarget::PromptItem { workspace, item_id } => (
+            text::CONFIRM_DELETE_PROMPT_TITLE,
+            prompt_item_name(state, workspace, item_id).unwrap_or_default(),
+        ),
+        OverlayTarget::PromptTree { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
     }
+}
+
+/// 提示词树文件夹名。
+fn prompt_folder_name(state: &AppState, workspace: usize, folder_id: i64) -> Option<String> {
+    state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.tree.folder(folder_id))
+        .map(|folder| folder.name.clone())
+}
+
+/// 提示词条目名。
+fn prompt_item_name(state: &AppState, workspace: usize, item_id: i64) -> Option<String> {
+    state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
+        .map(|item| item.name.clone())
 }
 
 /// 菜单命令到文案的映射；文案集中在 `ui/text.rs`。
@@ -344,6 +451,14 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             MenuCommand::SwitchToWorkspaceCwd => text::MENU_SWITCH_TO_WORKSPACE_CWD,
             MenuCommand::SyncWorkspaceToTerminalCwd => text::MENU_SYNC_WS_TO_TERMINAL_CWD,
             MenuCommand::ClosePane => text::MENU_CLOSE_PANE,
+            MenuCommand::NewPrompt => text::MENU_PROMPT_NEW_PROMPT,
+            MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
+            MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
+            MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
+            MenuCommand::DeleteFolder | MenuCommand::DeletePrompt => text::MENU_PROMPT_DELETE,
+            MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
+            MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
+            MenuCommand::ChangePromptStatus(status) => text::prompt_status_menu_label(*status),
         })
         .collect()
 }
@@ -379,6 +494,16 @@ fn menu_title(state: &AppState, menu: &Menu) -> String {
                 )
             })
             .unwrap_or_else(|| text::MENU_TITLE_PANE.to_string()),
+        OverlayTarget::PromptFolder {
+            workspace,
+            folder_id,
+        } => prompt_folder_name(state, workspace, folder_id)
+            .unwrap_or_else(|| text::MENU_TITLE_FOLDER.to_string()),
+        OverlayTarget::PromptItem { workspace, item_id } => {
+            prompt_item_name(state, workspace, item_id)
+                .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
+        }
+        OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),
     }
 }
 
@@ -441,13 +566,18 @@ fn render_new_workspace(
     )
 }
 
-/// 关闭确认浮层：问题与底部按钮。
+/// 关闭确认浮层：问题与底部按钮；提示词删除按目标种类使用对应问题文案。
 fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm: &ConfirmClose) {
     let Some(shell) = confirm_shell(screen) else {
         return;
     };
     let (title, name) = confirm_text(state, confirm.target);
-    render_confirm_dialog(frame, &shell, title, &text::confirm_close_question(&name));
+    let question = match confirm.target {
+        OverlayTarget::PromptFolder { .. } => text::confirm_delete_folder_question(&name),
+        OverlayTarget::PromptItem { .. } => text::confirm_delete_question(&name),
+        _ => text::confirm_close_question(&name),
+    };
+    render_confirm_dialog(frame, &shell, title, &question);
 }
 
 /// 切换工作区路径确认浮层：完整展示目标路径与底部按钮。

@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod config;
+pub mod db;
 pub mod detect;
 pub mod event;
 pub mod files;
