@@ -536,13 +536,14 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
-/// Agents 条目行：悬停使用高亮底色；工作/阻塞实心圆点着色、空闲空心圆点弱化；
-/// 归属标签固定右对齐，宽度不足先截断名称。
+/// Agents 条目行：悬停使用高亮底色；聚焦窗格对应条目用行首符号标记（不独立着色）；
+/// 工作/阻塞实心圆点着色、空闲空心圆点弱化；归属标签固定右对齐，宽度不足先截断名称。
 fn agent_list_items<'a>(
     state: &'a AppState,
     items: &[AgentListItem],
     width: usize,
 ) -> Vec<ListItem<'a>> {
+    let focused = (!state.prompt_focused).then(|| state.active_tab().layout.focus());
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
         let snapshot = &item.snapshot;
@@ -551,16 +552,23 @@ fn agent_list_items<'a>(
         } else {
             Style::default()
         };
-        let dot = format!(" {} ", text::agent_status_dot(snapshot.state));
+        let marker = if focused == Some(item.pane_id) {
+            format!("{} ", text::AGENT_SELECTED_MARKER)
+        } else {
+            "  ".to_string()
+        };
+        let dot = format!("{} ", text::agent_status_dot(snapshot.state));
         let location = text::agent_location(item.tab_index, item.pane_id);
-        let fixed = dot.chars().count() + location.chars().count();
+        let fixed = marker.chars().count() + dot.chars().count() + location.chars().count();
         let name = text::ellipsize(
             text::agent_label(snapshot.kind),
             width.saturating_sub(fixed + 1),
         );
         let padding = width.saturating_sub(fixed + name.chars().count());
+        let marker_style = style::strong().patch(highlight);
         let dot_style = style::agent_status(snapshot.state).patch(highlight);
         let spans = vec![
+            Span::styled(marker, marker_style),
             Span::styled(dot, dot_style),
             Span::styled(name, style::strong().patch(highlight)),
             Span::styled(" ".repeat(padding), Style::default().patch(highlight)),

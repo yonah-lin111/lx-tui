@@ -96,12 +96,55 @@ fn agent_item_shows_dot_name_and_right_aligned_location() {
     let row = agents_row_text(&state);
     let location = text::agent_location(0, pane);
     assert!(
-        row.starts_with(&format!(" {} claude", text::AGENT_STATUS_DOT)),
-        "agent row must show dot and name: {row:?}"
+        row.starts_with(&format!(
+            "{} {} ",
+            text::AGENT_SELECTED_MARKER,
+            text::AGENT_STATUS_DOT
+        )),
+        "focused agent row must show marker and dot before the name: {row:?}"
     );
+    assert!(row.contains("clau"), "agent name is rendered: {row:?}");
     assert!(
         row.ends_with(&location),
         "location must be right aligned: {row:?}"
+    );
+}
+
+#[test]
+fn selected_agent_row_uses_symbol_marker_without_color() {
+    let mut state = AppState::demo();
+    add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    let row = agents_row_text(&state);
+    assert!(
+        row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+        "focused pane marks its agent item: {row:?}"
+    );
+
+    let buffer = render_buffer(&state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let marker = &buffer[(sections.agents.x, sections.agents.y)];
+    assert_eq!(
+        marker.fg,
+        ratatui::style::Color::Reset,
+        "marker must keep the default foreground, not a highlight color"
+    );
+    assert_eq!(
+        marker.bg,
+        ratatui::style::Color::Reset,
+        "marker has no background"
+    );
+
+    // prompt 持有键盘焦点时窗格不处于聚焦态，标记让位为空列。
+    state.prompt_focused = true;
+    let row = agents_row_text(&state);
+    assert!(
+        !row.contains(text::AGENT_SELECTED_MARKER),
+        "unfocused pane must not mark its agent item: {row:?}"
+    );
+    assert!(
+        row.starts_with(&format!("  {} ", text::AGENT_STATUS_DOT)),
+        "marker column stays reserved: {row:?}"
     );
 }
 

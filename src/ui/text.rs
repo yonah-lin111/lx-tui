@@ -13,6 +13,8 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// Agents 分区空状态。
 pub const AGENTS_EMPTY: &str = "no agents running";
+/// Agents 条目当前选中标记（跟随行内正文样式，不独立着色）。
+pub const AGENT_SELECTED_MARKER: &str = "▸";
 /// Agent 状态圆点：运行/阻塞实心、空闲空心。
 pub const AGENT_STATUS_DOT: &str = "●";
 pub const AGENT_STATUS_RING: &str = "○";
