@@ -528,7 +528,7 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
         },
         None => area,
     };
-    let items = agent_list_items(state, &items);
+    let items = agent_list_items(state, &items, usize::from(list_area.width));
     let mut list_state = ListState::default().with_offset(state.agent_scroll);
     frame.render_stateful_widget(List::new(items), list_area, &mut list_state);
     if let Some(scrollbar) = &scrollbar {
@@ -536,29 +536,38 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
-/// Agents 条目行：悬停整行高亮；工作/阻塞实心圆点着色、空闲空心圆点弱化。
-fn agent_list_items<'a>(state: &'a AppState, items: &[AgentListItem]) -> Vec<ListItem<'a>> {
+/// Agents 条目行：聚焦窗格（且 prompt 未持有键盘焦点）使用选中填充、悬停使用高亮底色；
+/// 工作/阻塞实心圆点着色、空闲空心圆点弱化；归属标签固定右对齐，宽度不足先截断名称。
+fn agent_list_items<'a>(
+    state: &'a AppState,
+    items: &[AgentListItem],
+    width: usize,
+) -> Vec<ListItem<'a>> {
+    let focused = (!state.prompt_focused).then(|| state.active_tab().layout.focus());
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
         let snapshot = &item.snapshot;
-        let highlight = if state.agent_hover == Some(slot) {
+        let highlight = if focused == Some(item.pane_id) {
+            style::selected_item()
+        } else if state.agent_hover == Some(slot) {
             style::selection()
         } else {
             Style::default()
         };
+        let dot = format!(" {} ", text::agent_status_dot(snapshot.state));
+        let location = text::agent_location(item.tab_index, item.pane_id);
+        let fixed = dot.chars().count() + location.chars().count();
+        let name = text::ellipsize(
+            text::agent_label(snapshot.kind),
+            width.saturating_sub(fixed + 1),
+        );
+        let padding = width.saturating_sub(fixed + name.chars().count());
         let dot_style = style::agent_status(snapshot.state).patch(highlight);
-        let name_style = style::strong().patch(highlight);
-        let location_style = style::muted().patch(highlight);
         let spans = vec![
-            Span::styled(
-                format!(" {} ", text::agent_status_dot(snapshot.state)),
-                dot_style,
-            ),
-            Span::styled(text::agent_label(snapshot.kind), name_style),
-            Span::styled(
-                format!(" {}", text::agent_location(item.tab_index, item.pane_id)),
-                location_style,
-            ),
+            Span::styled(dot, dot_style),
+            Span::styled(name, style::strong().patch(highlight)),
+            Span::styled(" ".repeat(padding), Style::default().patch(highlight)),
+            Span::styled(location, style::muted().patch(highlight)),
         ];
         rows.push(ListItem::new(Line::from(spans)).style(highlight));
     }

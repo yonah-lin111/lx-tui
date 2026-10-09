@@ -21,20 +21,35 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
     )
 }
 
-fn render_lines(state: &AppState) -> Vec<String> {
+fn render_buffer(state: &AppState) -> ratatui::buffer::Buffer {
     let config = Config::default();
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
         panic!("draw failed: {error}");
     }
-    let buffer = terminal.backend().buffer().clone();
+    terminal.backend().buffer().clone()
+}
+
+fn render_lines(state: &AppState) -> Vec<String> {
+    let buffer = render_buffer(state);
     (0..buffer.area.height)
         .map(|y| {
             (0..buffer.area.width)
                 .map(|x| buffer[(x, y)].symbol())
                 .collect()
         })
+        .collect()
+}
+
+/// Agents 分区某一行的内容文本（去侧栏边框与内边距）。
+fn agents_row_text(state: &AppState) -> String {
+    let view = view_for(state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    render_lines(state)[sections.agents.y as usize]
+        .chars()
+        .skip(view.sidebar.x as usize + 1)
+        .take(view.sidebar.width as usize - 2)
         .collect()
 }
 
@@ -75,20 +90,50 @@ fn agents_section_renders_empty_state() {
 }
 
 #[test]
-fn agent_item_shows_dot_name_and_location() {
+fn agent_item_shows_dot_name_and_right_aligned_location() {
     let mut state = AppState::demo();
     let pane = add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    let row = agents_row_text(&state);
+    let location = text::agent_location(0, pane);
+    assert!(
+        row.starts_with(&format!(" {} claude", text::AGENT_STATUS_DOT)),
+        "agent row must show dot and name: {row:?}"
+    );
+    assert!(
+        row.ends_with(&location),
+        "location must be right aligned: {row:?}"
+    );
+}
+
+#[test]
+fn agent_location_stays_visible_on_narrow_sidebar() {
+    let mut state = AppState::demo();
+    let pane = add_agent(&mut state, AgentKind::OpenCode, AgentState::Idle);
+    state.sidebar_width = 18;
+    let row = agents_row_text(&state);
+    assert!(
+        row.ends_with(&text::agent_location(0, pane)),
+        "location must survive a narrow sidebar: {row:?}"
+    );
+    assert!(
+        !row.contains("opencode"),
+        "name is truncated first to keep location visible: {row:?}"
+    );
+}
+
+#[test]
+fn focused_agent_row_gets_selected_background() {
+    let mut state = AppState::demo();
+    add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    // 聚焦填充优先于悬停高亮。
+    state.agent_hover = Some(0);
+    let buffer = render_buffer(&state);
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    let lines = render_lines(&state);
-    let row = &lines[sections.agents.y as usize];
-    assert!(
-        row.contains(&format!(
-            "{} claude {}",
-            text::AGENT_STATUS_DOT,
-            text::agent_location(0, pane)
-        )),
-        "agent row must show dot, name and location: {row:?}"
+    assert_eq!(
+        buffer[(sections.agents.x, sections.agents.y)].style().bg,
+        style::selected_item().bg,
+        "focused pane agent row must use selected background"
     );
 }
 
@@ -190,14 +235,10 @@ fn collapsed_agents_section_is_not_hittable() {
 fn hover_row_gets_selection_background() {
     let mut state = AppState::demo();
     add_agent(&mut state, AgentKind::Gemini, AgentState::Working);
+    // prompt 持有键盘焦点时窗格不处于聚焦态，悬停高亮生效。
+    state.prompt_focused = true;
     state.agent_hover = Some(0);
-    let config = Config::default();
-    let mut terminal =
-        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
-    if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
-        panic!("draw failed: {error}");
-    }
-    let buffer = terminal.backend().buffer().clone();
+    let buffer = render_buffer(&state);
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     assert_eq!(

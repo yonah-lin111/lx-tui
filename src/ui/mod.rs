@@ -392,11 +392,60 @@ fn render_panes(
                     widgets::scrollbar::render(frame, &scrollbar);
                 }
                 main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
+                render_pane_agent_label(frame, *rect, &title, pane);
             }
             PaneKind::Placeholder => {}
         }
     }
     cursor
+}
+
+/// 窗格顶边框右侧 Agent 标记 ` agent:xxx`：前缀强调色、值 muted（与 prompt 顶边框 `ws:` 对齐），
+/// 右端与切换按钮间隔 1 列；按钮缺失、空间不足或会覆盖左侧标题时不绘制。
+fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane: &Pane) {
+    let Some(agent) = pane.agent.as_ref() else {
+        return;
+    };
+    let Some(button) = main_content::toggle_button(rect) else {
+        return;
+    };
+    let spans = [
+        (" ".to_string(), style::muted()),
+        (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
+        (text::agent_label(agent.kind).to_string(), style::muted()),
+    ];
+    let label_width: u16 = spans
+        .iter()
+        .map(|(content, _)| content.chars().count() as u16)
+        .sum();
+    let Some(anchor) = button.x.checked_sub(2) else {
+        return;
+    };
+    let Some(start) = anchor
+        .checked_add(1)
+        .and_then(|end| end.checked_sub(label_width))
+    else {
+        return;
+    };
+    // " {title} " 与标记之间至少留 1 列，避免覆盖左侧标题。
+    let title_width = u16::try_from(title.width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    if start < rect.x.saturating_add(title_width).saturating_add(1) {
+        return;
+    }
+    let buf = frame.buffer_mut();
+    let mut x = start;
+    for (content, span_style) in spans {
+        for symbol in content.chars() {
+            if let Some(cell) = buf.cell_mut((x, rect.y)) {
+                cell.reset();
+                cell.set_char(symbol);
+                cell.set_style(span_style);
+            }
+            x = x.saturating_add(1);
+        }
+    }
 }
 
 /// 右栏 prompt 编辑器：全局固定区域，聚焦时可输入，内容可选择复制；折叠时渲染为窄条。

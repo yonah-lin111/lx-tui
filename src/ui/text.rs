@@ -39,6 +39,9 @@ pub fn agent_status_dot(state: AgentState) -> &'static str {
     }
 }
 
+/// 窗格顶边框 Agent 标记前缀；前缀强调色、值 muted，与 prompt 的 `ws:` 样式对齐。
+pub const PANE_AGENT_PREFIX: &str = "agent:";
+
 /// Agents 条目归属标签 `[tab N:pM]`：N 为标签位置（1 基）、M 为窗格标识。
 pub fn agent_location(tab_index: usize, pane: PaneId) -> String {
     format!("[tab {}:p{}]", tab_index.saturating_add(1), pane.raw())
