@@ -98,6 +98,7 @@ pub const MENU_SPLIT_DOWN: &str = "Split down";
 pub const MENU_SWITCH_TO_TERMINAL: &str = "Switch to terminal";
 pub const MENU_SWITCH_TO_LX: &str = "Switch to lx";
 pub const MENU_SWITCH_TO_WORKSPACE_CWD: &str = "Switch to ws path";
+pub const MENU_SYNC_WS_TO_TERMINAL_CWD: &str = "Sync ws to terminal path";
 pub const MENU_CLOSE_PANE: &str = "Close";
 
 /// 重命名与关闭确认浮层标题。
@@ -107,6 +108,7 @@ pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
 pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
 pub const CONFIRM_SWITCH_CWD_TITLE: &str = "switch to ws path";
+pub const CONFIRM_SYNC_WS_CWD_TITLE: &str = "sync ws to terminal path";
 
 /// worktree 对话框：标题、搜索占位、状态行与条目标记。
 pub const WORKTREE_OPEN_TITLE: &str = "open worktree";
@@ -134,6 +136,19 @@ pub fn confirm_close_question(name: &str) -> String {
 /// 切换工作区路径确认问题文案。
 pub fn confirm_switch_cwd_question(path: &str) -> String {
     format!("switch cwd to \"{path}\"?")
+}
+
+/// 同步当前工作区路径到终端路径的二次确认问题；超宽时使用中间截断保留首尾目录信息。
+pub fn confirm_sync_ws_cwd_question(path: &str, max_width: usize) -> String {
+    let prefix = "switch workspace path to \"";
+    let suffix = "\"?";
+    let overhead = prefix.width() + suffix.width();
+    if max_width <= overhead {
+        return format!("{prefix}{path}{suffix}");
+    }
+    let path_width = max_width.saturating_sub(overhead);
+    let ellipsized = ellipsize_middle(path, path_width);
+    format!("{prefix}{ellipsized}{suffix}")
 }
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。

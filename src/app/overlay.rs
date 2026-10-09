@@ -11,6 +11,7 @@ pub enum OverlayKind {
     Rename,
     ConfirmClose,
     ConfirmSwitchCwd,
+    ConfirmSyncWorkspaceCwd,
     WorktreeOpen,
 }
 
@@ -21,6 +22,7 @@ pub enum Overlay {
     Rename(Rename),
     ConfirmClose(ConfirmClose),
     ConfirmSwitchCwd(ConfirmSwitchCwd),
+    ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd),
     WorktreeOpen(WorktreeOpen),
 }
 
@@ -32,6 +34,7 @@ impl Overlay {
             Self::Rename(_) => OverlayKind::Rename,
             Self::ConfirmClose(_) => OverlayKind::ConfirmClose,
             Self::ConfirmSwitchCwd(_) => OverlayKind::ConfirmSwitchCwd,
+            Self::ConfirmSyncWorkspaceCwd(_) => OverlayKind::ConfirmSyncWorkspaceCwd,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
         }
     }
@@ -77,6 +80,7 @@ pub enum MenuCommand {
     SwitchToTerminal,
     SwitchToLx,
     SwitchToWorkspaceCwd,
+    SyncWorkspaceToTerminalCwd,
     ClosePane,
 }
 
@@ -105,6 +109,14 @@ pub struct ConfirmClose {
 pub struct ConfirmSwitchCwd {
     pub workspace: usize,
     pub tab: usize,
+    pub pane: PaneId,
+    pub path: PathBuf,
+}
+
+/// 切换当前工作区路径到终端路径确认浮层：目标工作区、目标窗格与要设置的终端路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmSyncWorkspaceCwd {
+    pub workspace: usize,
     pub pane: PaneId,
     pub path: PathBuf,
 }

@@ -76,11 +76,26 @@ fn confirm_switch_cwd_question_wraps_path_in_quotes() {
 }
 
 #[test]
+fn confirm_sync_ws_cwd_question_ellipsizes_middle_when_budget_is_small() {
+    assert_eq!(
+        confirm_sync_ws_cwd_question("/tmp/project", 60),
+        "switch workspace path to \"/tmp/project\"?"
+    );
+    // prefix (26) + suffix (2) = 28. max_width = 34 -> path_budget = 6 -> "/tm…ct"
+    assert_eq!(
+        confirm_sync_ws_cwd_question("/tmp/project", 34),
+        "switch workspace path to \"/tm…ct\"?"
+    );
+}
+
+#[test]
 fn workspace_menu_copy_is_ws_abbreviated_english() {
     assert_eq!(MENU_NEW_TERMINAL, "New terminal");
     assert_eq!(MENU_OPEN_PROMPT, "Open prompt");
     assert_eq!(MENU_SWITCH_TO_WORKSPACE_CWD, "Switch to ws path");
+    assert_eq!(MENU_SYNC_WS_TO_TERMINAL_CWD, "Sync ws to terminal path");
     assert_eq!(CONFIRM_SWITCH_CWD_TITLE, "switch to ws path");
+    assert_eq!(CONFIRM_SYNC_WS_CWD_TITLE, "sync ws to terminal path");
 }
 
 #[test]

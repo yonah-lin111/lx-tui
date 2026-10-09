@@ -9,8 +9,8 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, Menu, MenuCommand, Overlay, OverlayTarget, Rename,
-    RenameTarget, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, Overlay,
+    OverlayTarget, Rename, RenameTarget, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
 };
 use crate::app::state::{AppState, tab_label};
 use crate::ui::widgets;
@@ -158,6 +158,19 @@ pub fn confirm_switch_cwd_shell(screen: Rect, path: &Path) -> Option<widgets::mo
     widgets::modal::layout(screen, width, CONFIRM_HEIGHT)
 }
 
+/// 同步当前工作区路径确认浮层几何：宽度随完整问题展开，最小 CONFIRM_WIDTH，仅在超出屏幕时夹取。
+pub fn confirm_sync_workspace_cwd_shell(
+    screen: Rect,
+    path: &Path,
+) -> Option<widgets::modal::ModalShell> {
+    let question = format!("switch workspace path to \"{}\"?", path.display());
+    let width = u16::try_from(question.width().saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .max(CONFIRM_WIDTH)
+        .min(screen.width);
+    widgets::modal::layout(screen, width, CONFIRM_HEIGHT)
+}
+
 /// 命中重命名按钮。
 pub fn rename_button_at(
     shell: &widgets::modal::ModalShell,
@@ -210,6 +223,10 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::ConfirmSwitchCwd(confirm) => {
             render_confirm_switch_cwd(frame, screen, confirm);
+            None
+        }
+        Overlay::ConfirmSyncWorkspaceCwd(confirm) => {
+            render_confirm_sync_workspace_cwd(frame, screen, confirm);
             None
         }
         Overlay::WorktreeOpen(dialog) => render_worktree_open(frame, screen, dialog),
@@ -285,6 +302,7 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             MenuCommand::SwitchToTerminal => text::MENU_SWITCH_TO_TERMINAL,
             MenuCommand::SwitchToLx => text::MENU_SWITCH_TO_LX,
             MenuCommand::SwitchToWorkspaceCwd => text::MENU_SWITCH_TO_WORKSPACE_CWD,
+            MenuCommand::SyncWorkspaceToTerminalCwd => text::MENU_SYNC_WS_TO_TERMINAL_CWD,
             MenuCommand::ClosePane => text::MENU_CLOSE_PANE,
         })
         .collect()
@@ -364,6 +382,20 @@ fn render_confirm_switch_cwd(frame: &mut Frame<'_>, screen: Rect, confirm: &Conf
     };
     let question = text::confirm_switch_cwd_question(&confirm.path.display().to_string());
     render_confirm_dialog(frame, &shell, text::CONFIRM_SWITCH_CWD_TITLE, &question);
+}
+
+/// 同步当前工作区路径确认浮层：展示目标路径（超出截断）与底部按钮。
+fn render_confirm_sync_workspace_cwd(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    confirm: &ConfirmSyncWorkspaceCwd,
+) {
+    let Some(shell) = confirm_sync_workspace_cwd_shell(screen, &confirm.path) else {
+        return;
+    };
+    let width = usize::from(shell.inner.width);
+    let question = text::confirm_sync_ws_cwd_question(&confirm.path.display().to_string(), width);
+    render_confirm_dialog(frame, &shell, text::CONFIRM_SYNC_WS_CWD_TITLE, &question);
 }
 
 /// 确认类浮层通用渲染：标题、问题行与底部按钮。

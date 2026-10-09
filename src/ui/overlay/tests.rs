@@ -321,6 +321,7 @@ fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
             MenuCommand::NewTerminal,
             MenuCommand::OpenPrompt,
             MenuCommand::SwitchToWorkspaceCwd,
+            MenuCommand::SyncWorkspaceToTerminalCwd,
         ],
         0,
     );
@@ -332,7 +333,8 @@ fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
         vec![
             text::MENU_NEW_TERMINAL,
             text::MENU_OPEN_PROMPT,
-            text::MENU_SWITCH_TO_WORKSPACE_CWD
+            text::MENU_SWITCH_TO_WORKSPACE_CWD,
+            text::MENU_SYNC_WS_TO_TERMINAL_CWD,
         ]
     );
 }
@@ -399,6 +401,55 @@ fn switch_cwd_confirm_shell_widens_for_long_paths_and_clamps() {
 fn switch_cwd_confirm_buttons_hit_their_cells() {
     let path = PathBuf::from("/tmp/ws");
     let shell = confirm_switch_cwd_shell(SCREEN, &path).expect("dialog fits");
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        BUTTON_GAP,
+        CONFIRM_BUTTON_ROW,
+    );
+    assert_eq!(
+        confirm_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(ConfirmButton::Confirm)
+    );
+    assert_eq!(
+        confirm_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(ConfirmButton::Cancel)
+    );
+}
+
+#[test]
+fn sync_ws_cwd_confirm_renders_title_and_path() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let path = PathBuf::from("/tmp/terminal-target");
+    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
+        workspace: 0,
+        pane,
+        path: path.clone(),
+    }));
+    let (lines, cursor) = draw_overlay(&state);
+    assert_eq!(cursor, None);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::CONFIRM_SYNC_WS_CWD_TITLE), "{joined}");
+    assert!(joined.contains("/tmp/terminal-target"), "{joined}");
+}
+
+#[test]
+fn sync_ws_cwd_confirm_shell_widens_for_long_paths_and_clamps() {
+    let long = PathBuf::from(format!("/tmp/{}", "d".repeat(60)));
+    let wide_screen = Rect::new(0, 0, 100, 24);
+    let shell = confirm_sync_workspace_cwd_shell(wide_screen, &long).expect("dialog fits");
+    assert!(shell.area.width > CONFIRM_WIDTH);
+
+    let narrow = Rect::new(0, 0, 30, 24);
+    let clamped = confirm_sync_workspace_cwd_shell(narrow, &long).expect("dialog fits");
+    assert_eq!(clamped.area.width, 30);
+}
+
+#[test]
+fn sync_ws_cwd_confirm_buttons_hit_their_cells() {
+    let path = PathBuf::from("/tmp/terminal-target");
+    let shell = confirm_sync_workspace_cwd_shell(SCREEN, &path).expect("dialog fits");
     let buttons = widgets::modal::button_row(
         shell.inner,
         &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],

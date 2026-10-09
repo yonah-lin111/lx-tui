@@ -2008,6 +2008,148 @@ fn switch_cwd_confirm_with_missing_pane_returns_none() {
 }
 
 #[test]
+fn open_pane_menu_offers_sync_ws_when_terminal_has_different_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-cwd"));
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/term-cwd"));
+
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu expected");
+    };
+    assert!(
+        menu.commands
+            .contains(&MenuCommand::SyncWorkspaceToTerminalCwd)
+    );
+}
+
+#[test]
+fn open_pane_menu_hides_sync_ws_when_cwd_matches_or_missing_or_lx() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/same-cwd"));
+
+    // Case 1: Terminal view but cwd matches
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/same-cwd"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu expected");
+    };
+    assert!(
+        !menu
+            .commands
+            .contains(&MenuCommand::SyncWorkspaceToTerminalCwd)
+    );
+
+    // Case 2: Terminal view but cwd is None
+    state.overlay = None;
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.cwd = None;
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu expected");
+    };
+    assert!(
+        !menu
+            .commands
+            .contains(&MenuCommand::SyncWorkspaceToTerminalCwd)
+    );
+
+    // Case 3: Lx view with different cwd set
+    state.overlay = None;
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Lx;
+    pane_state.cwd = Some(PathBuf::from("/tmp/other-cwd"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu expected");
+    };
+    assert!(
+        !menu
+            .commands
+            .contains(&MenuCommand::SyncWorkspaceToTerminalCwd)
+    );
+}
+
+#[test]
+fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/old-ws"));
+    state.workspaces[0].name = "old-ws".to_string();
+    state.workspaces[0].name_is_manual = false;
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/tmp/old-ws"),
+        checkout_path: PathBuf::from("/tmp/old-ws"),
+        branch: Some("main".into()),
+        main_branch: Some("main".into()),
+        is_linked: false,
+    });
+    state.prompt_root = Some(PathBuf::from("/tmp/old-ws"));
+
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/new-term"));
+
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::SyncWorkspaceToTerminalCwd);
+    activate_menu(&mut state);
+
+    let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.as_ref() else {
+        panic!("confirm sync ws cwd overlay expected");
+    };
+    assert_eq!(confirm.workspace, 0);
+    assert_eq!(confirm.pane, pane);
+    assert_eq!(confirm.path, PathBuf::from("/tmp/new-term"));
+
+    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Enter), None);
+    assert!(state.overlay.is_none());
+
+    let ws = &state.workspaces[0];
+    assert_eq!(ws.cwd, Some(PathBuf::from("/tmp/new-term")));
+    assert_eq!(ws.name, "new-term");
+    assert!(ws.git.is_none());
+    assert!(state.git_requests.contains(&PathBuf::from("/tmp/new-term")));
+    assert_eq!(state.prompt_root, Some(PathBuf::from("/tmp/new-term")));
+}
+
+#[test]
+fn sync_ws_path_preserves_manual_name() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/old-ws"));
+    state.workspaces[0].name = "MyCustomWorkspace".to_string();
+    state.workspaces[0].name_is_manual = true;
+
+    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
+        workspace: 0,
+        pane,
+        path: PathBuf::from("/tmp/new-term"),
+    }));
+
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    let ws = &state.workspaces[0];
+    assert_eq!(ws.cwd, Some(PathBuf::from("/tmp/new-term")));
+    assert_eq!(ws.name, "MyCustomWorkspace");
+}
+
+#[test]
+fn sync_ws_path_cancel_escapes_without_changes() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/old-ws"));
+    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
+        workspace: 0,
+        pane,
+        path: PathBuf::from("/tmp/new-term"),
+    }));
+
+    assert_eq!(apply_overlay_key(&mut state, OverlayKey::Esc), None);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces[0].cwd, Some(PathBuf::from("/tmp/old-ws")));
+}
+
+#[test]
 fn tab_scroll_clamps_and_reports_changes() {
     let mut state = AppState::demo();
     assert!(!set_tab_scroll(&mut state, 0, 5));

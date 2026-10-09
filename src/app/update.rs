@@ -18,8 +18,8 @@ use crate::layout::{self, BoundaryHit, PaneId};
 use super::actions::{Action, EditorCommand, OverlayKey};
 use super::markdown::MentionEntry;
 use super::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, Menu, MenuCommand, Overlay, OverlayKind, OverlayTarget, Rename,
-    RenameTarget, TextInput,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, Overlay,
+    OverlayKind, OverlayTarget, Rename, RenameTarget, TextInput,
 };
 use super::selection::Selection;
 use super::state::{
@@ -1031,6 +1031,68 @@ fn confirm_switch_cwd(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
     (pane.kind == PaneKind::Terminal).then(|| (confirm.pane, switch_cwd_command(&confirm.path)))
 }
 
+/// 打开同步当前工作区路径到终端路径的二次确认浮层；终端无有效路径时忽略。
+fn open_confirm_sync_workspace_cwd(state: &mut AppState, workspace: usize, pane: PaneId) {
+    let Some(path) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|ws| ws.tabs.iter().find_map(|t| t.pane(pane)))
+        .and_then(|target| target.cwd.clone())
+    else {
+        return;
+    };
+    state.overlay = Some(Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
+        workspace,
+        pane,
+        path,
+    }));
+}
+
+/// 确认同步当前工作区路径到终端路径：关闭浮层，更新工作区 cwd、自动命名与 git 查询，
+/// 并同步活跃 prompt 根目录。
+fn confirm_sync_workspace_cwd(state: &mut AppState) {
+    let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.take() else {
+        return;
+    };
+    let new_cwd = confirm.path;
+    let target_ws = confirm.workspace;
+    let name_is_manual = state
+        .workspaces
+        .get(target_ws)
+        .is_some_and(|ws| ws.name_is_manual);
+    let new_name = if !name_is_manual {
+        let base = workspace_label(&new_cwd, home_dir().as_deref());
+        Some(unique_workspace_name(&base, |candidate| {
+            state
+                .workspaces
+                .iter()
+                .enumerate()
+                .any(|(i, ws)| i != target_ws && ws.name == candidate)
+        }))
+    } else {
+        None
+    };
+    let Some(workspace) = state.workspaces.get_mut(target_ws) else {
+        return;
+    };
+    workspace.cwd = Some(new_cwd.clone());
+    if let Some(name) = new_name {
+        workspace.name = name;
+    }
+    workspace.git = None;
+    request_git_refresh(state, &new_cwd);
+    if state.prompt_workspace() == target_ws {
+        state.prompt_root = Some(new_cwd);
+        sync_mention_root(state);
+    } else if let Some(draft) = state
+        .workspaces
+        .get_mut(target_ws)
+        .and_then(|ws| ws.prompt.as_mut())
+    {
+        draft.root = Some(new_cwd);
+    }
+}
+
 /// 切换当前工作区；越界忽略。
 pub fn switch_workspace(state: &mut AppState, index: usize) {
     if index >= state.workspaces.len() {
@@ -1125,6 +1187,17 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
         .is_some_and(|workspace| workspace.cwd.is_some())
     {
         commands.push(MenuCommand::SwitchToWorkspaceCwd);
+    }
+    // 仅目标窗格处于终端视图、已探测到有效终端路径，且与当前工作区路径不一致时提供同步工作区路径。
+    if view == PaneView::Terminal
+        && let Some(pane_target) = state.active_tab().pane(pane)
+        && let Some(terminal_cwd) = pane_target.cwd.as_deref()
+        && state
+            .workspaces
+            .get(workspace)
+            .is_some_and(|ws| ws.cwd.as_deref() != Some(terminal_cwd))
+    {
+        commands.push(MenuCommand::SyncWorkspaceToTerminalCwd);
     }
     if state.active_tab().layout.pane_ids().len() > 1 {
         commands.push(MenuCommand::ClosePane);
@@ -1231,6 +1304,14 @@ pub fn activate_menu(state: &mut AppState) {
             },
         ) => {
             open_confirm_switch_cwd(state, workspace, tab, pane);
+        }
+        (
+            Some(MenuCommand::SyncWorkspaceToTerminalCwd),
+            OverlayTarget::Pane {
+                workspace, pane, ..
+            },
+        ) => {
+            open_confirm_sync_workspace_cwd(state, workspace, pane);
         }
         (Some(MenuCommand::RenameWorkspace), OverlayTarget::Workspace(target)) => {
             let Some(workspace) = state.workspaces.get(target) else {
@@ -1362,6 +1443,10 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 None
             }
             Some(OverlayKind::ConfirmSwitchCwd) => confirm_switch_cwd(state),
+            Some(OverlayKind::ConfirmSyncWorkspaceCwd) => {
+                confirm_sync_workspace_cwd(state);
+                None
+            }
             Some(OverlayKind::WorktreeOpen) | None => None,
         },
         OverlayKey::Char(ch) => {

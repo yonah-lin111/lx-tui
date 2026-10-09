@@ -84,6 +84,12 @@ fn overlay_kind_reports_variant() {
         path: PathBuf::from("/tmp/ws"),
     });
     assert_eq!(switch_cwd.kind(), OverlayKind::ConfirmSwitchCwd);
+    let sync_cwd = Overlay::ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd {
+        workspace: 0,
+        pane: PaneId::alloc(),
+        path: PathBuf::from("/tmp/terminal"),
+    });
+    assert_eq!(sync_cwd.kind(), OverlayKind::ConfirmSyncWorkspaceCwd);
     let worktree = Overlay::WorktreeOpen(worktree_dialog(vec![], 0));
     assert_eq!(worktree.kind(), OverlayKind::WorktreeOpen);
 }

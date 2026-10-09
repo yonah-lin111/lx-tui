@@ -338,7 +338,10 @@ fn handle_terminal_event(
                     *dirty = true;
                 }
                 Routed::Overlay(key) => {
-                    let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    let was_confirm = matches!(
+                        state.overlay,
+                        Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
+                    );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
                     if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
@@ -404,7 +407,10 @@ fn handle_terminal_event(
         TerminalEvent::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 if state.overlay.is_some() {
-                    let was_confirm = matches!(state.overlay, Some(Overlay::ConfirmClose(_)));
+                    let was_confirm = matches!(
+                        state.overlay,
+                        Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
+                    );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
                     if let Some((pane, bytes)) =
@@ -1223,6 +1229,19 @@ fn handle_overlay_click(
         }
         Some(Overlay::ConfirmSwitchCwd(confirm)) => {
             let button = ui::overlay::confirm_switch_cwd_shell(screen, &confirm.path)
+                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
+            match button {
+                Some(ui::overlay::ConfirmButton::Confirm) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                    update::close_overlay(state);
+                    None
+                }
+            }
+        }
+        Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) => {
+            let button = ui::overlay::confirm_sync_workspace_cwd_shell(screen, &confirm.path)
                 .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
             match button {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
