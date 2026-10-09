@@ -145,10 +145,22 @@ fn rename_modal_renders_input_buttons_and_cursor() {
     assert_eq!(cursor, Some((32, 10)));
     assert!(lines[9].contains(text::RENAME_WORKSPACE_TITLE));
     assert!(lines[10].contains("workspace 2"));
+    assert!(!lines[10].contains(text::RENAME_PLACEHOLDER));
     let buttons = lines[12].clone();
     assert!(buttons.contains(text::BUTTON_SAVE), "{buttons}");
     assert!(buttons.contains(text::BUTTON_CLEAR), "{buttons}");
     assert!(buttons.contains(text::BUTTON_CANCEL), "{buttons}");
+}
+
+#[test]
+fn rename_modal_renders_placeholder_when_empty() {
+    let state = rename_state("");
+    let (lines, _) = draw_overlay(&state);
+    assert!(
+        lines[10].contains(text::RENAME_PLACEHOLDER),
+        "row={:?}",
+        lines[10]
+    );
 }
 
 #[test]
@@ -477,9 +489,24 @@ fn new_workspace_renders_title_buttons_and_cursor() {
     let joined = lines.join("\n");
     assert!(joined.contains(text::NEW_WORKSPACE_TITLE), "{joined}");
     assert!(joined.contains("/test/path"), "{joined}");
+    assert!(
+        !joined.contains(text::NEW_WORKSPACE_PLACEHOLDER),
+        "{joined}"
+    );
     assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
     assert!(joined.contains(text::BUTTON_CLEAR), "{joined}");
     assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+}
+
+#[test]
+fn new_workspace_renders_placeholder_when_empty() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new(""),
+    }));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::NEW_WORKSPACE_PLACEHOLDER), "{joined}");
 }
 
 #[test]

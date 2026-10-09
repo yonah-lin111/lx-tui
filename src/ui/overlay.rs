@@ -403,6 +403,7 @@ fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         rename.input.text(),
         rename.input.cursor(),
+        Some(text::RENAME_PLACEHOLDER),
     )
 }
 
@@ -436,6 +437,7 @@ fn render_new_workspace(
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         new_ws.input.text(),
         new_ws.input.cursor(),
+        Some(text::NEW_WORKSPACE_PLACEHOLDER),
     )
 }
 
@@ -529,17 +531,12 @@ fn render_worktree_open(
         return None;
     }
     let search_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
-    if dialog.query.text().is_empty() {
-        frame.render_widget(
-            Paragraph::new(Span::styled(text::WORKTREE_OPEN_FILTER, style::muted())),
-            search_area,
-        );
-    }
     let cursor = widgets::input::render(
         frame,
         search_area,
         dialog.query.text(),
         dialog.query.cursor(),
+        Some(text::WORKTREE_OPEN_FILTER),
     );
     let separator_area = Rect::new(
         shell.inner.x,

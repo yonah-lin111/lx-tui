@@ -27,6 +27,8 @@ pub const PROMPT_SAVE_DOT: &str = "●";
 pub const PROMPT_PIN_LABEL: &str = "[pin]";
 /// prompt 已钉住时的按钮（点击释放）。
 pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
+/// prompt 编辑器空内容时的输入说明占位。
+pub const PROMPT_PLACEHOLDER: &str = "Write your prompt…";
 /// 主内容 lx 页标题。
 pub const LX_TITLE: &str = "lx";
 /// 视图切换按钮：显示点击后的目的地视图。
@@ -104,6 +106,10 @@ pub const MENU_CLOSE_PANE: &str = "Close";
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
+/// rename 浮层输入为空时的输入说明占位（工作区与标签共用）。
+pub const RENAME_PLACEHOLDER: &str = "new name";
+/// new workspace 路径输入为空时的输入说明占位。
+pub const NEW_WORKSPACE_PLACEHOLDER: &str = "path to directory";
 pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
