@@ -558,7 +558,7 @@ fn agent_list_items<'a>(
             "  ".to_string()
         };
         let dot = format!("{} ", text::agent_status_dot(snapshot.state));
-        let location = text::agent_location(item.tab_index, item.pane_id);
+        let location = text::agent_location(item.tab_index);
         let fixed = marker.chars().count() + dot.chars().count() + location.chars().count();
         let name = text::ellipsize(
             text::agent_label(snapshot.kind),

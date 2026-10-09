@@ -92,9 +92,9 @@ fn agents_section_renders_empty_state() {
 #[test]
 fn agent_item_shows_dot_name_and_right_aligned_location() {
     let mut state = AppState::demo();
-    let pane = add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    add_agent(&mut state, AgentKind::Claude, AgentState::Working);
     let row = agents_row_text(&state);
-    let location = text::agent_location(0, pane);
+    let location = text::agent_location(0);
     assert!(
         row.starts_with(&format!(
             "{} {} ",
@@ -151,11 +151,11 @@ fn selected_agent_row_uses_symbol_marker_without_color() {
 #[test]
 fn agent_location_stays_visible_on_narrow_sidebar() {
     let mut state = AppState::demo();
-    let pane = add_agent(&mut state, AgentKind::OpenCode, AgentState::Idle);
+    add_agent(&mut state, AgentKind::OpenCode, AgentState::Idle);
     state.sidebar_width = 18;
     let row = agents_row_text(&state);
     assert!(
-        row.ends_with(&text::agent_location(0, pane)),
+        row.ends_with(&text::agent_location(0)),
         "location must survive a narrow sidebar: {row:?}"
     );
     assert!(
