@@ -271,7 +271,7 @@ pub fn slash_command_text(id: SlashCommandId) -> (String, String) {
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
 pub const TEMPLATE_BUTTON_RUN: &str = "[run]";
 pub const TEMPLATE_BUTTON_DONE: &str = "[done]";
-pub const TEMPLATE_BUTTON_COPY: &str = "[⎘]";
+pub const TEMPLATE_BUTTON_COPY: &str = "[⧉]";
 pub const TEMPLATE_BUTTON_CLEAN: &str = "[⌫]";
 pub const TEMPLATE_BUTTON_DEL: &str = "[✕]";
 
