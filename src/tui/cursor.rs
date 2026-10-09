@@ -1,7 +1,7 @@
 //! 光标指令去重后端：只在物理状态变化时下发 Hide/Show/MoveTo。
 //!
 //! ratatui 每帧经 `apply_buffer_with_cursor` 无条件重发 `Show` + `MoveTo`；
-//! 动画重绘（lx 页每 200ms）会不断重置终端光标闪烁相位，macOS Terminal 等
+//! 高频重绘（如终端持续输出）会不断重置终端光标闪烁相位，macOS Terminal 等
 //! 终端上表现为光标高速闪烁。这里按物理状态去重下发：
 //! - `Show`/`Hide` 只在可见性变化时下发；
 //! - `MoveTo` 只在内容 diff 可能移动了物理光标、或目标位置变化时下发。

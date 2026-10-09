@@ -766,7 +766,7 @@ fn render_panes(
         match pane.kind {
             PaneKind::Terminal => {
                 if let Some((row, col)) =
-                    main_content::render(inner, frame.buffer_mut(), pane, focused, state.lx_phase)
+                    main_content::render(inner, frame.buffer_mut(), pane, focused)
                 {
                     cursor = Some((inner.x + col, inner.y + row));
                 }

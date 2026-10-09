@@ -1,5 +1,5 @@
 //! lx 欢迎页：顶部品牌区（像素小狐狸 + 字标）、白色占位面板与底部输入框。
-//! 只读相位、只写 Buffer；颜色全部取自 `ui::style` 的吉祥物/占位调色板。
+//! 只写 Buffer；颜色全部取自 `ui::style` 的吉祥物/占位调色板。
 
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Alignment, Rect};
@@ -21,138 +21,29 @@ const SECTION_GAP: u16 = 1;
 /// 占位面板至少需要的高度（上下边框 + 一行内容）。
 const PANEL_MIN_HEIGHT: u16 = 3;
 
-/// 空白像素行（18 列）。
-const BLANK: &str = "..................";
-
-/// 全尺寸狐狸底图：耳/尾/眼为覆盖层。
-const FOX_BASE: &[&str] = &[
-    BLANK,
-    BLANK,
-    BLANK,
-    "..kkkkkkkkkkkkkk..",
-    ".kppppppppppppppk.",
-    ".kppppppppppppppk.",
-    ".kppkwwppppwwkppk.",
-    ".kppkkkppppkkkppk.",
-    ".kppppppnnppppppk.",
-    ".kkkkkkkkkkkkkkkk.",
-    "..kkkkkkkkkkk.....",
-    "..kpppppppppk.....",
-    "..kpbbbbbbbpk.....",
-    "..kkkk....kkkk....",
+/// 全尺寸狐狸像素图（18 列 × 14 像素行，静态）。
+const FOX: &[&str] = &[
+    "..k........k......",
+    ".kpk......kpk.....",
+    ".knpk....kpnk.....",
+    ".kppkkkkkkppk.....",
+    ".kppppppppppk.....",
+    ".kpwwppppwwpkkk...",
+    ".kpkkwnnwkkpkwwk..",
+    ".knppwwwwppnknwk..",
+    "..kppppppppkknnk..",
+    "..kppppppppkknnk..",
+    "..kpwwwwwwpkknnk..",
+    "..kppwwwwppkknnk..",
+    "..kkk....kkkkkkk..",
+    "..kkk....kkk......",
 ];
 
-/// 立耳（常态）。
-const FOX_EARS_UP: &[&str] = &[
-    "...k..........k...",
-    "..kbk........kbk..",
-    "..kkk........kkk..",
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-];
-
-/// 抖耳：右耳下沉一像素。
-const FOX_EARS_TWITCH: &[&str] = &[
-    "...k..............",
-    "..kbk.........k...",
-    "..kkk........kbk..",
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-];
-
-/// 摆尾：尾梢朝内。
-const FOX_TAIL_IN: &[&str] = &[
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    "..kkkkkkkkkkk..n..",
-    "..kpppppppppk.nnn.",
-    "..kpbbbbbbbpkknnnk",
-    "..kkkk....kkkk.kk.",
-];
-
-/// 摆尾：尾梢朝外。
-const FOX_TAIL_OUT: &[&str] = &[
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    "..kkkkkkkkkkk...n.",
-    "..kpppppppppk..nnn",
-    "..kpbbbbbbbpk.knnn",
-    "..kkkk....kkkk..kk",
-];
-
-/// 眨眼：眼白行转为描边线，瞳孔行还原毛色。
-const FOX_BLINK: &[&str] = &[
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    ".kppkkkppppkkkppk.",
-    ".kppppppppppppppk.",
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-    BLANK,
-];
-
-/// 分层像素图：底图 + 可选覆盖层；覆盖层非 `.` 像素替换底图。
-struct Art {
-    base: &'static [&'static str],
-    ears: Option<[&'static [&'static str]; 2]>,
-    tail: Option<[&'static [&'static str]; 2]>,
-    blink: Option<&'static [&'static str]>,
-}
-
-/// 小狐狸。
-const FOX: Art = Art {
-    base: FOX_BASE,
-    ears: Some([FOX_EARS_UP, FOX_EARS_TWITCH]),
-    tail: Some([FOX_TAIL_IN, FOX_TAIL_OUT]),
-    blink: Some(FOX_BLINK),
-};
-
-/// 渲染 lx 页；`phase` 为 200ms 粒度的动画相位。
+/// 渲染 lx 页。
 ///
 /// 垂直结构（自底向上）：输入框贴底 → 切换提示 → 白色占位面板 → 顶部品牌区；
 /// 空间不足时依次省略面板与品牌区，最小退化为居中字标。
-pub fn render(area: Rect, buf: &mut Buffer, phase: u64) {
+pub fn render(area: Rect, buf: &mut Buffer) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -171,7 +62,7 @@ pub fn render(area: Rect, buf: &mut Buffer, phase: u64) {
     // 顶部品牌区：狐狸在左；高度或宽度放不下整只狐狸时省略。
     let mut next_y = area.y;
     if content_bottom >= next_y + FOX_ROWS + SECTION_GAP && input.width >= FOX_WIDTH {
-        draw_art(buf, input.x, next_y, phase);
+        draw_art(buf, input.x, next_y);
         next_y += FOX_ROWS + SECTION_GAP;
     }
 
@@ -247,45 +138,9 @@ fn draw_panel(rect: Rect, buf: &mut Buffer) {
     );
 }
 
-/// 按相位合成当前帧（底图 + 覆盖层），纯函数。
-fn compose(art: &Art, phase: u64) -> Vec<Vec<char>> {
-    let mut grid: Vec<Vec<char>> = art.base.iter().map(|row| row.chars().collect()).collect();
-    for layer in layers(art, phase) {
-        for (y, row) in layer.iter().enumerate() {
-            for (x, ch) in row.chars().enumerate() {
-                if ch == '.' {
-                    continue;
-                }
-                if let Some(cell) = grid.get_mut(y).and_then(|row| row.get_mut(x)) {
-                    *cell = ch;
-                }
-            }
-        }
-    }
-    grid
-}
-
-/// 当前相位的覆盖层顺序：耳 → 尾 → 眼。
-fn layers(art: &Art, phase: u64) -> Vec<&'static [&'static str]> {
-    let mut layers = Vec::new();
-    if let Some(ears) = art.ears {
-        layers.push(ears[usize::from(matches!(phase % 24, 10 | 11))]);
-    }
-    if let Some(tail) = art.tail {
-        layers.push(tail[(phase / 2 % 2) as usize]);
-    }
-    if let Some(blink) = art.blink
-        && matches!(phase % 12, 6 | 7)
-    {
-        layers.push(blink);
-    }
-    layers
-}
-
-/// 把当前帧画进以 `(x, y)` 为左上角的单元格区域。
-fn draw_art(buf: &mut Buffer, x: u16, y: u16, phase: u64) {
-    let grid = compose(&FOX, phase);
-    for (row, pair) in grid.chunks(2).enumerate() {
+/// 把静态像素图画进以 `(x, y)` 为左上角的单元格区域。
+fn draw_art(buf: &mut Buffer, x: u16, y: u16) {
+    for (row, pair) in FOX.chunks(2).enumerate() {
         let [top, bottom] = pair else {
             break;
         };
@@ -294,8 +149,8 @@ fn draw_art(buf: &mut Buffer, x: u16, y: u16, phase: u64) {
             let Some(cell) = buf.cell_mut((x + column, cell_y)) else {
                 continue;
             };
-            let top = top.get(usize::from(column)).copied().unwrap_or('.');
-            let bottom = bottom.get(usize::from(column)).copied().unwrap_or('.');
+            let top = top.chars().nth(usize::from(column)).unwrap_or('.');
+            let bottom = bottom.chars().nth(usize::from(column)).unwrap_or('.');
             draw_pixels(cell, top, bottom);
         }
     }

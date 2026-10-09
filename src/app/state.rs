@@ -97,10 +97,6 @@ pub struct AppState {
     pub prompt_scroll_drag: Option<u16>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
-    /// lx 页动画相位（200ms 一帧）；lx 页不可见时冻结。
-    pub lx_phase: u64,
-    /// 上次 lx 动画推进时刻。
-    pub lx_last_tick: Instant,
     /// 正在拖动排序的工作区当前索引；None 表示未拖拽。
     pub workspace_drag: Option<usize>,
     /// 拖拽是否已产生指针移动；按下未移动时不整块反显。
@@ -442,8 +438,6 @@ impl AppState {
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
             terminal_scroll_drag: None,
-            lx_phase: 0,
-            lx_last_tick: Instant::now(),
             workspace_drag: None,
             workspace_dragging: false,
             overlay: None,
@@ -548,13 +542,6 @@ impl AppState {
             .collect()
     }
 
-    /// 当前标签是否存在 lx 视图窗格；动画推进与定时唤醒的依据。
-    pub fn lx_visible(&self) -> bool {
-        self.active_tab()
-            .panes
-            .values()
-            .any(|pane| pane.view == PaneView::Lx)
-    }
     /// 侧栏可见行：同仓库 ≥1 个 linked worktree 且含非 linked 主项时成组，
     /// 根之后（索引更大）的 linked 项为子项；重复主 checkout 与非组项为独立顶层行。
     /// 折叠的组只保留父项与当前激活子项。

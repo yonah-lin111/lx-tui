@@ -115,25 +115,13 @@ fn single_terminal_workspace_is_auto_named_with_root_pane() {
 }
 
 #[test]
-fn panes_default_to_lx_view_and_report_visibility() {
-    let mut state = AppState::demo();
+fn panes_default_to_lx_view() {
+    let state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     assert_eq!(
         state.pane_anywhere(pane).expect("pane exists").view,
         PaneView::Lx
     );
-    assert!(state.lx_visible());
-
-    for workspace in &mut state.workspaces {
-        for tab in &mut workspace.tabs {
-            for id in tab.layout.pane_ids() {
-                if let Some(target) = tab.pane_mut(id) {
-                    target.view = PaneView::Terminal;
-                }
-            }
-        }
-    }
-    assert!(!state.lx_visible());
 }
 
 #[test]

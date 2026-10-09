@@ -323,9 +323,6 @@ const WHEEL_LINES: isize = 3;
 /// 边缘自动滚动每步的间隔。
 const AUTOSCROLL_INTERVAL: Duration = Duration::from_millis(30);
 
-/// lx 页动画帧间隔。
-const LX_FRAME_INTERVAL: Duration = Duration::from_millis(200);
-
 /// 按方向滚动 prompt 视口（负数向上、正数向下）；光标不动，编辑后自动吸回。
 pub fn scroll_prompt(state: &mut AppState, direction: isize) {
     scroll_prompt_selection(state, direction, WHEEL_LINES);
@@ -417,16 +414,6 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
             state.terminal_scroll_drag = None;
         }
     }
-    true
-}
-
-/// 推进 lx 页动画：按帧间隔步进相位；无可见 lx 窗格时冻结；返回是否变化。
-fn tick_lx_animation(state: &mut AppState, now: Instant) -> bool {
-    if !state.lx_visible() || now.duration_since(state.lx_last_tick) < LX_FRAME_INTERVAL {
-        return false;
-    }
-    state.lx_phase = state.lx_phase.wrapping_add(1);
-    state.lx_last_tick = now;
     true
 }
 
@@ -873,7 +860,7 @@ pub fn set_toast_hover(state: &mut AppState, hovered: bool) -> bool {
     true
 }
 
-/// 清除已过期的 toast、推进拖选边缘自动滚动与 lx 动画；返回是否发生变化（用于置脏重绘）。
+/// 清除已过期的 toast、推进拖选边缘自动滚动；返回是否发生变化（用于置脏重绘）。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let expired = state
         .toast
@@ -883,20 +870,16 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         state.toast = None;
     }
     let scrolled = tick_selection_autoscroll(state, now);
-    let animated = tick_lx_animation(state, now);
-    expired || scrolled || animated
+    expired || scrolled
 }
 
-/// 最近一次定时到期时间（toast 消失、自动滚动或 lx 动画帧）；事件循环据此安排唤醒。
+/// 最近一次定时到期时间（toast 消失或自动滚动）；事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
     let autoscroll = state
         .selection_autoscroll
         .map(|autoscroll| autoscroll.next_at);
-    let animation = state
-        .lx_visible()
-        .then_some(state.lx_last_tick + LX_FRAME_INTERVAL);
-    [toast, autoscroll, animation].into_iter().flatten().min()
+    [toast, autoscroll].into_iter().flatten().min()
 }
 
 /// 打开新建工作区弹窗：清空滚动与拖拽状态，输入框初始为空。

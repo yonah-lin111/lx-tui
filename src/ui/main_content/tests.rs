@@ -124,7 +124,7 @@ fn buffer_text(buf: &Buffer) -> String {
 fn lx_view_renders_page_without_cursor() {
     let pane = pane_with(PaneView::Lx, Terminal::new(60, 12));
     let mut buf = Buffer::empty(Rect::new(0, 0, 60, 12));
-    let cursor = render(Rect::new(0, 0, 60, 12), &mut buf, &pane, true, 0);
+    let cursor = render(Rect::new(0, 0, 60, 12), &mut buf, &pane, true);
     assert_eq!(cursor, None, "lx 页不产生硬件光标");
     let text = buffer_text(&buf);
     assert!(text.contains("click [>_] to open terminal"), "提示可见");
@@ -137,7 +137,7 @@ fn terminal_view_dispatches_to_grid() {
     terminal.feed(b"ab");
     let pane = pane_with(PaneView::Terminal, terminal);
     let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-    let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &pane, true, 0);
+    let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &pane, true);
     assert_eq!(cursor, Some((0, 2)));
     assert_eq!(buf[(0, 0)].symbol(), "a");
     assert_eq!(buf[(1, 0)].symbol(), "b");

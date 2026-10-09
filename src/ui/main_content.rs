@@ -20,16 +20,10 @@ use crate::ui::{style, text};
 const TOGGLE_MARGIN: u16 = 1;
 
 /// 渲染窗格主内容；终端视图返回聚焦光标位置，lx 视图无硬件光标。
-pub fn render(
-    area: Rect,
-    buf: &mut Buffer,
-    pane: &Pane,
-    focused: bool,
-    lx_phase: u64,
-) -> Option<(u16, u16)> {
+pub fn render(area: Rect, buf: &mut Buffer, pane: &Pane, focused: bool) -> Option<(u16, u16)> {
     match pane.view {
         PaneView::Lx => {
-            lx::render(area, buf, lx_phase);
+            lx::render(area, buf);
             None
         }
         PaneView::Terminal => render_terminal(area, buf, &pane.terminal, focused),

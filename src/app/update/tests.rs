@@ -8,7 +8,7 @@ use crate::terminal::GridSize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-/// demo 状态并把活动窗格置为终端视图：避免 lx 动画干扰定时类断言。
+/// demo 状态并把活动窗格置为终端视图。
 fn demo_terminal() -> AppState {
     let mut state = AppState::demo();
     let focus = state.active_tab().layout.focus();
@@ -2476,35 +2476,6 @@ fn toggle_pane_view_flips_target_and_hides_terminal_state() {
         "切回 lx 清理滚动条拖拽"
     );
     assert!(!toggle_pane_view(&mut state, PaneId::alloc()));
-}
-
-#[test]
-fn lx_animation_advances_only_while_visible() {
-    let mut state = AppState::demo();
-    let now = Instant::now();
-    state.lx_last_tick = now;
-    assert!(tick(&mut state, now + LX_FRAME_INTERVAL));
-    assert_eq!(state.lx_phase, 1);
-    assert!(!tick(&mut state, now + LX_FRAME_INTERVAL), "同刻只推进一步");
-
-    let pane = state.active_tab().layout.focus();
-    assert!(toggle_pane_view(&mut state, pane));
-    assert!(!state.lx_visible());
-    assert!(!tick(&mut state, now + LX_FRAME_INTERVAL * 10));
-    assert_eq!(state.lx_phase, 1, "无 lx 视图时动画冻结");
-    assert_eq!(next_deadline(&state), None);
-}
-
-#[test]
-fn lx_animation_registers_frame_deadline_when_visible() {
-    let mut state = AppState::demo();
-    let now = Instant::now();
-    state.lx_last_tick = now;
-    assert_eq!(next_deadline(&state), Some(now + LX_FRAME_INTERVAL));
-
-    let pane = state.active_tab().layout.focus();
-    toggle_pane_view(&mut state, pane);
-    assert_eq!(next_deadline(&state), None);
 }
 
 /// 窗格视图（测试断言用）。
