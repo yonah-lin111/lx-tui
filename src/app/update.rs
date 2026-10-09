@@ -23,8 +23,9 @@ use super::overlay::{
 };
 use super::selection::Selection;
 use super::state::{
-    AppState, AutoscrollDirection, PaneKind, PaneView, SelectionAutoscroll, Tab, Workspace,
-    current_workspace_identity, home_dir, tab_label, unique_workspace_name, workspace_label,
+    AppState, AutoscrollDirection, CursorBlink, PaneKind, PaneView, SelectionAutoscroll, Tab,
+    Workspace, current_workspace_identity, home_dir, tab_label, unique_workspace_name,
+    workspace_label,
 };
 use super::toast::{Toast, ToastKind};
 use crate::detect::PaneAgentSnapshot;
@@ -898,7 +899,8 @@ pub fn set_toast_hover(state: &mut AppState, hovered: bool) -> bool {
     true
 }
 
-/// 清除已过期的 toast、推进拖选边缘自动滚动；返回是否发生变化（用于置脏重绘）。
+/// 清除已过期的 toast、推进拖选边缘自动滚动与输入光标闪烁；
+/// 返回是否发生变化（用于置脏重绘）。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let expired = state
         .toast
@@ -908,16 +910,69 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         state.toast = None;
     }
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || scrolled
+    let blinked = tick_cursor_blink(state, now);
+    expired || scrolled || blinked
 }
 
-/// 最近一次定时到期时间（toast 消失或自动滚动）；事件循环据此安排唤醒。
+/// 推进硬件光标闪烁：无可见硬件光标时停止闪烁状态，到点翻转相位。
+fn tick_cursor_blink(state: &mut AppState, now: Instant) -> bool {
+    if !blinking_cursor_active(state) {
+        return state.cursor_blink.take().is_some();
+    }
+    match state.cursor_blink.as_mut() {
+        Some(blink) => {
+            if !blink.is_due(now) {
+                return false;
+            }
+            blink.toggle(now);
+            true
+        }
+        None => {
+            state.cursor_blink = Some(CursorBlink::new(now));
+            false
+        }
+    }
+}
+
+/// 是否存在由闪烁相位驱动的硬件光标：浮层单行输入、prompt 编辑器或焦点终端窗格。
+fn blinking_cursor_active(state: &AppState) -> bool {
+    match state.overlay.as_ref() {
+        Some(overlay) => matches!(
+            overlay,
+            Overlay::Rename(_) | Overlay::NewWorkspace(_) | Overlay::WorktreeOpen(_)
+        ),
+        None => state.prompt_focused || focused_terminal_cursor_visible(state),
+    }
+}
+
+/// 焦点窗格的仿真光标是否可见（终端视图、程序未隐藏且未滚出视口）。
+fn focused_terminal_cursor_visible(state: &AppState) -> bool {
+    state
+        .active_pane()
+        .filter(|pane| pane.kind == PaneKind::Terminal && pane.view == PaneView::Terminal)
+        .is_some_and(|pane| pane.terminal.cursor_visible())
+}
+
+/// 输入交互后把硬件光标闪烁重置为亮相相位（打字期间光标常亮）。
+pub fn refresh_cursor_blink(state: &mut AppState, now: Instant) {
+    if !blinking_cursor_active(state) {
+        return;
+    }
+    match state.cursor_blink.as_mut() {
+        Some(blink) => blink.refresh(now),
+        None => state.cursor_blink = Some(CursorBlink::new(now)),
+    }
+}
+
+/// 最近一次定时到期时间（toast 消失、自动滚动或光标闪烁翻转）；
+/// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
     let autoscroll = state
         .selection_autoscroll
         .map(|autoscroll| autoscroll.next_at);
-    [toast, autoscroll].into_iter().flatten().min()
+    let blink = state.cursor_blink.as_ref().map(CursorBlink::next_deadline);
+    [toast, autoscroll, blink].into_iter().flatten().min()
 }
 
 /// 打开新建工作区弹窗：清空滚动与拖拽状态，输入框初始为空。

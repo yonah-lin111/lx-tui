@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::{Direction, Rect};
 
@@ -46,6 +46,57 @@ pub struct SelectionAutoscroll {
     pub next_at: Instant,
 }
 
+/// 硬件光标闪烁的亮相/暗相持续时长。
+pub const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
+
+/// 硬件光标（浮层单行输入、prompt 编辑器与焦点终端窗格）的闪烁相位。
+///
+/// 由事件循环经 `update::tick` 按 `deadline` 翻转、输入交互经
+/// `update::refresh_cursor_blink` 重置为亮相；渲染层按 `visible` 决定是否
+/// 设置硬件光标（沿用终端原生光标形状，不做自绘）。
+#[derive(Debug, Clone, Copy)]
+pub struct CursorBlink {
+    visible: bool,
+    deadline: Instant,
+}
+
+impl CursorBlink {
+    /// 从亮相相位开始计时。
+    pub fn new(now: Instant) -> Self {
+        Self {
+            visible: true,
+            deadline: now + CURSOR_BLINK_INTERVAL,
+        }
+    }
+
+    /// 当前是否亮相。
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// 是否到达下一次翻转时刻。
+    pub fn is_due(&self, now: Instant) -> bool {
+        now >= self.deadline
+    }
+
+    /// 翻转相位并顺延截止时刻。
+    pub fn toggle(&mut self, now: Instant) {
+        self.visible = !self.visible;
+        self.deadline = now + CURSOR_BLINK_INTERVAL;
+    }
+
+    /// 重置为亮相相位并顺延截止时刻（输入交互时调用）。
+    pub fn refresh(&mut self, now: Instant) {
+        self.visible = true;
+        self.deadline = now + CURSOR_BLINK_INTERVAL;
+    }
+
+    /// 下一次翻转时刻；事件循环据此安排唤醒。
+    pub fn next_deadline(&self) -> Instant {
+        self.deadline
+    }
+}
+
 /// 顶层层级：工作区包含标签与挂起的 prompt 草稿，标签包含 BSP 窗格树与窗格终端；
 /// prompt 面板为全局右栏，显示激活（或钉住）工作区的草稿。
 #[derive(Debug)]
@@ -75,6 +126,8 @@ pub struct AppState {
     pub prompt_collapsed: bool,
     /// prompt 是否持有键盘焦点；为真时按键进入编辑器而非焦点窗格。
     pub prompt_focused: bool,
+    /// 硬件光标的闪烁相位；None 表示当前无可闪烁硬件光标。
+    pub cursor_blink: Option<CursorBlink>,
     /// 面板当前显示的 prompt 编辑器；其余工作区的草稿挂起在 `Workspace.prompt`。
     pub prompt: Prompt,
     /// 显示中 prompt 的显式绑定上下文根路径；None 时回退显示中工作区 cwd。
@@ -426,6 +479,7 @@ impl AppState {
             prompt_hover: false,
             prompt_collapsed: false,
             prompt_focused: false,
+            cursor_blink: None,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_root: None,
             prompt_pinned: None,
@@ -518,6 +572,13 @@ impl AppState {
         self.selection
             .as_ref()
             .filter(|selection| selection.pane() == pane)
+    }
+
+    /// 硬件光标当前是否处于亮相相位；无闪烁状态（未驱动）时视为可见。
+    pub fn cursor_blink_visible(&self) -> bool {
+        self.cursor_blink
+            .as_ref()
+            .is_none_or(CursorBlink::is_visible)
     }
 
     /// 全选 prompt 文本：按视觉行数与文本区宽度构造覆盖全文的选区；

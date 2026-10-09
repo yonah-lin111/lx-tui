@@ -1,7 +1,8 @@
-//! 集成测试：硬件光标跟随聚焦终端窗格的仿真光标（IME 预输入）与显隐规则。
+//! 集成测试：硬件光标跟随聚焦终端窗格的仿真光标（IME 预输入）、闪烁相位显隐与显隐规则。
 
 use lx_tui::app::actions::EditorCommand;
-use lx_tui::app::state::{AppState, PaneView};
+use lx_tui::app::overlay::{Overlay, Rename, RenameTarget, TextInput};
+use lx_tui::app::state::{AppState, CursorBlink, PaneView};
 use lx_tui::app::update;
 use lx_tui::config::Config;
 use lx_tui::layout;
@@ -9,6 +10,7 @@ use lx_tui::ui;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::{Position, Rect};
+use std::time::Instant;
 
 /// 构造已同步几何的场景（100x24，右栏展开），返回终端窗格与 prompt 的内容区。
 fn ready_state() -> (AppState, Config, Rect, Rect) {
@@ -106,4 +108,77 @@ fn prompt_focus_moves_hardware_cursor_off_terminal() {
         terminal.backend().cursor_position(),
         Position::new(prompt_inner.x + 4, prompt_inner.y)
     );
+}
+
+/// 构造暗相闪烁状态（渲染层据此隐藏硬件光标）。
+fn blink_hidden() -> CursorBlink {
+    let now = Instant::now();
+    let mut blink = CursorBlink::new(now);
+    blink.toggle(now);
+    blink
+}
+
+/// 焦点终端窗格的光标按闪烁相位显隐；暗相隐藏、亮相恢复在仿真光标处。
+#[test]
+fn blink_phase_controls_terminal_cursor() {
+    let (mut state, config, pane_inner, _) = ready_state();
+    let pane = state.active_tab().layout.focus();
+    update::focus_pane(&mut state, pane);
+
+    state.cursor_blink = Some(blink_hidden());
+    let terminal = draw(&state, &config);
+    assert!(!terminal.backend().cursor_visible());
+
+    state.cursor_blink = Some(CursorBlink::new(Instant::now()));
+    let terminal = draw(&state, &config);
+    assert!(terminal.backend().cursor_visible());
+    let (row, col) = state
+        .active_tab()
+        .pane(pane)
+        .expect("focused pane exists")
+        .terminal
+        .cursor_viewport()
+        .expect("terminal cursor is visible");
+    assert_eq!(
+        terminal.backend().cursor_position(),
+        Position::new(pane_inner.x + col as u16, pane_inner.y + row as u16)
+    );
+}
+
+/// prompt 编辑器光标按闪烁相位显隐。
+#[test]
+fn blink_phase_controls_prompt_cursor() {
+    let (mut state, config, _, prompt_inner) = ready_state();
+    update::focus_prompt(&mut state);
+
+    state.cursor_blink = Some(blink_hidden());
+    let terminal = draw(&state, &config);
+    assert!(!terminal.backend().cursor_visible());
+
+    state.cursor_blink = Some(CursorBlink::new(Instant::now()));
+    let terminal = draw(&state, &config);
+    assert!(terminal.backend().cursor_visible());
+    assert_eq!(
+        terminal.backend().cursor_position(),
+        Position::new(prompt_inner.x, prompt_inner.y)
+    );
+}
+
+/// 浮层单行输入光标按闪烁相位显隐，且优先于 prompt 接管硬件光标。
+#[test]
+fn blink_phase_controls_overlay_input_cursor() {
+    let (mut state, config, _, _) = ready_state();
+    update::focus_prompt(&mut state);
+    state.overlay = Some(Overlay::Rename(Rename {
+        target: RenameTarget::Workspace(0),
+        input: TextInput::new("demo"),
+    }));
+
+    state.cursor_blink = Some(blink_hidden());
+    let terminal = draw(&state, &config);
+    assert!(!terminal.backend().cursor_visible());
+
+    state.cursor_blink = Some(CursorBlink::new(Instant::now()));
+    let terminal = draw(&state, &config);
+    assert!(terminal.backend().cursor_visible());
 }

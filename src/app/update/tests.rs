@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::overlay::WorktreeStatus;
-use crate::app::state::{WorkspaceGit, workspace_name};
+use crate::app::state::{CURSOR_BLINK_INTERVAL, WorkspaceGit, workspace_name};
 use crate::app::toast::{TOAST_DURATION, ToastKind};
 use crate::terminal::GridSize;
 use std::path::{Path, PathBuf};
@@ -297,6 +297,101 @@ fn edge_autoscroll_stops_at_scrollback_top() {
     }
     assert!(guard < 100, "autoscroll must stop by itself");
     assert!(state.selection_autoscroll.is_none());
+}
+
+#[test]
+fn cursor_blink_toggles_only_while_hardware_cursor_active() {
+    let mut state = AppState::demo();
+    let start = Instant::now();
+
+    // 无硬件光标（lx 视图、prompt 未聚焦）：不进入闪烁状态。
+    assert!(!tick(&mut state, start));
+    assert!(state.cursor_blink.is_none());
+    assert_eq!(next_deadline(&state), None);
+
+    // prompt 聚焦：初始化亮相相位，未到点不翻转。
+    focus_prompt(&mut state);
+    assert!(!tick(&mut state, start));
+    assert!(state.cursor_blink_visible());
+    assert_eq!(next_deadline(&state), Some(start + CURSOR_BLINK_INTERVAL));
+
+    // 到点翻转暗相，再一拍回到亮相。
+    let first = start + CURSOR_BLINK_INTERVAL;
+    assert!(tick(&mut state, first));
+    assert!(!state.cursor_blink_visible());
+    let second = first + CURSOR_BLINK_INTERVAL;
+    assert!(tick(&mut state, second));
+    assert!(state.cursor_blink_visible());
+
+    // 收回焦点：闪烁状态清除，立即回到常亮。
+    let focus = state.active_tab().layout.focus();
+    focus_pane(&mut state, focus);
+    assert!(tick(&mut state, second));
+    assert!(state.cursor_blink.is_none());
+    assert!(state.cursor_blink_visible());
+}
+
+#[test]
+fn cursor_blink_resets_to_visible_on_input() {
+    let mut state = AppState::demo();
+    focus_prompt(&mut state);
+    let start = Instant::now();
+    tick(&mut state, start);
+    let off = start + CURSOR_BLINK_INTERVAL;
+    tick(&mut state, off);
+    assert!(!state.cursor_blink_visible());
+
+    // 输入交互重置为亮相并顺延截止时刻。
+    let now = off + Duration::from_millis(100);
+    refresh_cursor_blink(&mut state, now);
+    assert!(state.cursor_blink_visible());
+    assert_eq!(next_deadline(&state), Some(now + CURSOR_BLINK_INTERVAL));
+}
+
+#[test]
+fn cursor_blink_covers_overlay_text_inputs() {
+    let mut state = AppState::demo();
+    let start = Instant::now();
+
+    // 确认浮层无文本输入：不闪烁。
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(0),
+    }));
+    tick(&mut state, start);
+    assert!(state.cursor_blink.is_none());
+
+    // 重命名浮层：闪烁随输入启动，关闭后清除。
+    state.overlay = Some(Overlay::Rename(Rename {
+        target: RenameTarget::Workspace(0),
+        input: TextInput::new("demo"),
+    }));
+    tick(&mut state, start);
+    assert!(state.cursor_blink.is_some());
+    close_overlay(&mut state);
+    assert!(tick(&mut state, start));
+    assert!(state.cursor_blink.is_none());
+}
+
+#[test]
+fn cursor_blink_follows_terminal_pane_cursor_visibility() {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    let start = Instant::now();
+
+    // 仿真光标可见：进入闪烁。
+    tick(&mut state, start);
+    assert!(state.cursor_blink.is_some());
+
+    // 程序隐藏光标（DECTCEM off）：闪烁停止，恢复常亮。
+    feed_pane(&mut state, pane, b"\x1b[?25l");
+    assert!(tick(&mut state, start));
+    assert!(state.cursor_blink.is_none());
+    assert!(state.cursor_blink_visible());
+
+    // 程序恢复光标：重新进入闪烁。
+    feed_pane(&mut state, pane, b"\x1b[?25h");
+    tick(&mut state, start);
+    assert!(state.cursor_blink.is_some());
 }
 
 #[test]
@@ -613,7 +708,8 @@ fn tick_clears_expired_toast_only() {
 
 #[test]
 fn toast_hover_suspends_expiry_until_pointer_leaves() {
-    let mut state = demo_terminal();
+    // 用 lx 视图状态隔离光标闪烁截止时刻，只断言 toast 的 deadline。
+    let mut state = AppState::demo();
     let now = Instant::now();
     show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
     assert!(set_toast_hover(&mut state, true));

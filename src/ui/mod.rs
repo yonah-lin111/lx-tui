@@ -73,11 +73,14 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_resize_hint(frame, &view, state);
     toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
-    // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
+    // 浮层是模态：输入浮层接管硬件光标，其余浮层不显示光标。
+    // 优先级：浮层输入 > prompt 编辑器 > 焦点窗格；显示的硬件光标统一按
+    // 闪烁相位显隐（暗相不设置光标，ratatui 随即下发 Hide）。
     let cursor = match state.overlay {
         Some(_) => overlay_cursor,
         None => prompt_cursor,
     };
+    let cursor = cursor.filter(|_| state.cursor_blink_visible());
     if let Some(position) = cursor {
         frame.set_cursor_position(position);
     }
