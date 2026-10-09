@@ -60,8 +60,8 @@ pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
 /// prompt 底边框 linked worktree 标记前缀。
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
-pub const PROMPT_UNDO_LABEL: &str = "[↶]";
-pub const PROMPT_REDO_LABEL: &str = "[↷]";
+pub const PROMPT_UNDO_LABEL: &str = "[←]";
+pub const PROMPT_REDO_LABEL: &str = "[→]";
 pub const PROMPT_SELECT_ALL_LABEL: &str = "[▣]";
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// prompt 未钉住时的按钮（点击钉住）。
@@ -271,8 +271,8 @@ pub fn slash_command_text(id: SlashCommandId) -> (String, String) {
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
 pub const TEMPLATE_BUTTON_RUN: &str = "[run]";
 pub const TEMPLATE_BUTTON_DONE: &str = "[done]";
-pub const TEMPLATE_BUTTON_COPY: &str = "[⧉]";
-pub const TEMPLATE_BUTTON_CLEAN: &str = "[⌫]";
+pub const TEMPLATE_BUTTON_COPY: &str = "[❐]";
+pub const TEMPLATE_BUTTON_CLEAN: &str = "[✧]";
 pub const TEMPLATE_BUTTON_DEL: &str = "[✕]";
 
 /// 状态按钮标签：todo / run / done。

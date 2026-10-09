@@ -154,6 +154,38 @@ fn ui_icons_are_single_width_and_non_pua() {
 }
 
 #[test]
+fn prompt_button_icons_are_single_width_and_non_pua() {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    // 按钮标签形如 `[x]`：方括号 ASCII，中间单个图标必须严格 1 列宽且非私有区。
+    for (name, label) in [
+        ("PROMPT_UNDO_LABEL", PROMPT_UNDO_LABEL),
+        ("PROMPT_REDO_LABEL", PROMPT_REDO_LABEL),
+        ("PROMPT_SELECT_ALL_LABEL", PROMPT_SELECT_ALL_LABEL),
+        ("TEMPLATE_BUTTON_COPY", TEMPLATE_BUTTON_COPY),
+        ("TEMPLATE_BUTTON_CLEAN", TEMPLATE_BUTTON_CLEAN),
+        ("TEMPLATE_BUTTON_DEL", TEMPLATE_BUTTON_DEL),
+    ] {
+        let mut chars = label.chars();
+        assert_eq!(chars.next(), Some('['), "{name} 左括号");
+        let icon = chars.next().expect("图标字符");
+        assert_eq!(chars.next(), Some(']'), "{name} 右括号");
+        assert_eq!(chars.next(), None, "{name} 只含一个图标字符");
+        assert_eq!(
+            icon.width(),
+            Some(1),
+            "{name} 图标 {icon:?} 必须严格 1 列宽"
+        );
+        let cp = icon as u32;
+        let is_pua = (0xE000..=0xF8FF).contains(&cp)
+            || (0xF0000..=0xFFFFD).contains(&cp)
+            || (0x100000..=0x10FFFD).contains(&cp);
+        assert!(!is_pua, "{name} 图标 {icon:?} 位于私有区，终端会乱码");
+    }
+    assert_eq!(PROMPT_SAVE_DOT.width(), 1, "保存点必须严格 1 列宽");
+}
+
+#[test]
 fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
     use unicode_width::UnicodeWidthChar;
 

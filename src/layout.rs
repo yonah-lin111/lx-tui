@@ -16,7 +16,7 @@ pub const PROMPT_HEADER_HEIGHT: u16 = 1;
 pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
 
-/// 工具栏左侧按钮（`[↶]` / `[↷]`）宽度（列）。
+/// 工具栏左侧按钮（`[←]` / `[→]`）宽度（列）。
 const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;

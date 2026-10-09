@@ -1,7 +1,7 @@
 //! 集成测试：prompt 模板斜杠命令全链路。
 //!
 //! 覆盖：输入 `/add` 弹出 Templates 面板 → 回车整行插入标准模板块 → markdown 高亮
-//! 呈现（命令分色、标题下划线）→ 点击 `[todo]`/`[⌫]`/`[✕]` 按钮操作 → 单步撤销。
+//! 呈现（命令分色、标题下划线）→ 点击 `[todo]`/`[✧]`/`[✕]` 按钮操作 → 单步撤销。
 
 use lx_tui::app::actions::EditorCommand;
 use lx_tui::app::markdown::{SlashCommandId, slash_template_content};
