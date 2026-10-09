@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
 use crate::app::state::{AppState, PaneKind};
-use crate::app::tooltip::TooltipTarget;
+use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
 use crate::layout::{self, PaneId};
 use crate::ui::layout::ViewLayout;
 use crate::ui::{self, main_content, sidebar, style, tab_bar, text};
@@ -32,7 +32,10 @@ pub fn render(
     view: &ViewLayout,
     pane_rects: &[(PaneId, Rect)],
 ) {
-    if state.overlay.is_some() {
+    let command_panel_open = state.prompt.mention().is_some()
+        || state.prompt.slash_panel().is_some()
+        || state.prompt.panel().is_some();
+    if state.overlay.is_some() || command_panel_open {
         return;
     }
     let Some(tooltip) = state
@@ -48,15 +51,23 @@ pub fn render(
     else {
         return;
     };
+    let title = text::TOOLTIP_TITLE;
     let hint = text::tooltip_hint(tooltip.target, state);
-    let Some(area) = rect(screen, anchor, hint) else {
+    let Some(area) = rect(screen, anchor, title, hint) else {
         return;
     };
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::muted())
-        .style(style::overlay_panel());
+        .style(style::overlay_panel())
+        .title(Span::styled(
+            format!(
+                " {} ",
+                text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
+            ),
+            style::border_title(),
+        ));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -132,16 +143,38 @@ fn targets(
         if let Some(area) = ui::prompt_pin_button(view.prompt, state.prompt_pinned.is_some()) {
             targets.push((TooltipTarget::PromptPin, area));
         }
+        let text_area = layout::prompt_text_rect(view.prompt);
+        for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
+            targets.push((
+                TooltipTarget::TemplateButton {
+                    line: hit.line,
+                    button: template_button_kind(hit.button),
+                },
+                hit.rect,
+            ));
+        }
     }
     targets
 }
 
+/// app 侧目标枚举与 ui 按钮种类的映射。
+fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButtonKind {
+    match button {
+        ui::prompt::TemplateBlockButton::Status => TemplateButtonKind::Status,
+        ui::prompt::TemplateBlockButton::Copy => TemplateButtonKind::Copy,
+        ui::prompt::TemplateBlockButton::Clean => TemplateButtonKind::Clean,
+        ui::prompt::TemplateBlockButton::Delete => TemplateButtonKind::Delete,
+    }
+}
+
 /// tooltip 矩形：按钮下一行、以按钮中心水平对齐并夹取进屏幕；下方放不下时翻到按钮上方。
-fn rect(screen: Rect, anchor: Rect, hint: &str) -> Option<Rect> {
+/// 宽度取标题与正文较长者加边框内边距（对齐 toast 盒宽语义）。
+fn rect(screen: Rect, anchor: Rect, title: &str, hint: &str) -> Option<Rect> {
     if screen.width == 0 || screen.height == 0 {
         return None;
     }
-    let width = u16::try_from(hint.chars().count().saturating_add(4))
+    let text = title.chars().count().max(hint.chars().count());
+    let width = u16::try_from(text.saturating_add(4))
         .unwrap_or(u16::MAX)
         .min(screen.width);
     if width == 0 {

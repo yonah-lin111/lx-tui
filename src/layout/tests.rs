@@ -355,7 +355,7 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
     let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row);
     assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Undo));
-    assert_eq!(hit(bar.x + 7, bar.y), Some(PromptToolbarButton::Redo));
+    assert_eq!(hit(bar.x + 4, bar.y), Some(PromptToolbarButton::Redo));
     let select_all =
         prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll).expect("select all fits");
     assert_eq!(
@@ -377,8 +377,8 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
 
 #[test]
 fn prompt_toolbar_hides_select_all_when_narrow() {
-    // 内容区宽度 26 < 28：隐藏 select all，保留 undo/redo 与保存点。
-    let panel = Rect::new(0, 0, 28, 8);
+    // 内容区宽度 10 < 12：隐藏 select all，保留 undo/redo 与保存点。
+    let panel = Rect::new(0, 0, 12, 8);
     assert_eq!(
         prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll),
         None

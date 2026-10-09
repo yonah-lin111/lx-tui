@@ -7,7 +7,7 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 
 use super::*;
-use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip};
+use crate::app::tooltip::{TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
 use crate::config::Config;
 
 fn view_for(state: &AppState) -> ViewLayout {
@@ -143,9 +143,10 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
 fn rect_prefers_below_and_flips_above_last_row() {
     let screen = Rect::new(0, 0, 100, 24);
     let hint = "new tab";
-    let below = rect(screen, Rect::new(10, 5, 6, 1), hint).expect("rect resolves");
+    let title = text::TOOLTIP_TITLE;
+    let below = rect(screen, Rect::new(10, 5, 6, 1), title, hint).expect("rect resolves");
     assert_eq!(below, Rect::new(10, 6, 11, 3));
-    let above = rect(screen, Rect::new(10, 23, 6, 1), hint).expect("rect resolves");
+    let above = rect(screen, Rect::new(10, 23, 6, 1), title, hint).expect("rect resolves");
     assert_eq!(above.y, 20);
     assert!(above.bottom() <= screen.bottom());
 }
@@ -154,7 +155,8 @@ fn rect_prefers_below_and_flips_above_last_row() {
 fn rect_clamps_to_screen_right() {
     let screen = Rect::new(0, 0, 100, 24);
     let hint = "scroll tabs right";
-    let area = rect(screen, Rect::new(94, 0, 6, 1), hint).expect("rect resolves");
+    let area =
+        rect(screen, Rect::new(94, 0, 6, 1), text::TOOLTIP_TITLE, hint).expect("rect resolves");
     assert_eq!(area.width, 21);
     assert_eq!(area.x, 79);
     assert_eq!(area.right(), screen.right());
@@ -167,7 +169,8 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
     let view = view_for(&state);
     let anchor = collapse_area(&view, ui::CollapseTarget::Sidebar);
     let hint = text::tooltip_hint(TooltipTarget::CollapseSidebar, &state);
-    let area = rect(Rect::new(0, 0, 100, 24), anchor, hint).expect("rect resolves");
+    let area =
+        rect(Rect::new(0, 0, 100, 24), anchor, text::TOOLTIP_TITLE, hint).expect("rect resolves");
 
     state.tooltip = Some(Tooltip::new(TooltipTarget::CollapseSidebar, now));
     let buffer = render_buffer(&state);
@@ -181,6 +184,10 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(area.x, area.y)].symbol(), "╭");
     assert_eq!(buffer[(area.x, area.y)].bg, Color::Indexed(236));
+    let top: String = (area.x..area.right())
+        .map(|x| buffer[(x, area.y)].symbol())
+        .collect();
+    assert!(top.contains(text::TOOLTIP_TITLE), "顶边框标题：{top:?}");
     let row: String = (area.x + 1..area.right() - 1)
         .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
@@ -196,7 +203,8 @@ fn render_skips_while_overlay_open() {
     let view = view_for(&state);
     let anchor = collapse_area(&view, ui::CollapseTarget::Sidebar);
     let hint = text::tooltip_hint(TooltipTarget::CollapseSidebar, &state);
-    let area = rect(Rect::new(0, 0, 100, 24), anchor, hint).expect("rect resolves");
+    let area =
+        rect(Rect::new(0, 0, 100, 24), anchor, text::TOOLTIP_TITLE, hint).expect("rect resolves");
 
     crate::app::update::open_tab_menu(&mut state, 0, (2, 2));
     let buffer = render_buffer(&state);
@@ -233,4 +241,41 @@ fn hint_flips_with_state() {
         text::tooltip_hint(TooltipTarget::PaneToggle(pane), &state),
         "switch to terminal"
     );
+    for (button, hint) in [
+        (TemplateButtonKind::Status, "cycle block status"),
+        (TemplateButtonKind::Copy, "copy block"),
+        (TemplateButtonKind::Clean, "clean block"),
+        (TemplateButtonKind::Delete, "delete block"),
+    ] {
+        assert_eq!(
+            text::tooltip_hint(TooltipTarget::TemplateButton { line: 0, button }, &state),
+            hint
+        );
+    }
+}
+
+#[test]
+fn hits_template_block_buttons_via_prompt_text_area() {
+    let mut state = AppState::demo();
+    state.prompt.resize(28, 20);
+    state
+        .prompt
+        .insert_str("&&& addTemplate --start\n# add\n&&& addTemplate --end");
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let area = layout::prompt_text_rect(view.prompt);
+    let hits = ui::prompt::template_buttons(&state.prompt, area);
+    assert_eq!(hits.len(), 4, "状态、复制、清理、删除按钮可见");
+    let copy = hits
+        .iter()
+        .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Copy)
+        .expect("copy button visible");
+    assert_eq!(
+        target_at(&view, &state, &rects, copy.rect.x, copy.rect.y),
+        Some(TooltipTarget::TemplateButton {
+            line: copy.line,
+            button: TemplateButtonKind::Copy,
+        })
+    );
+    assert_eq!(target_at(&view, &state, &rects, 0, 0), None, "边框角不命中");
 }

@@ -18,16 +18,16 @@ pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEI
 pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
 
-/// 工具栏左侧按钮（`[undo]` / `[redo]`）宽度（列）。
-const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 6;
+/// 工具栏左侧按钮（`[↶]` / `[↷]`）宽度（列）。
+const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
-/// `[select all]` 标签宽度（列）。
-const PROMPT_SELECT_ALL_WIDTH: u16 = 12;
-/// `[select all]` 与保存点之间的空档（列）。
+/// `[▣]` 标签宽度（列）。
+const PROMPT_SELECT_ALL_WIDTH: u16 = 3;
+/// `[▣]` 与保存点之间的空档（列）。
 const PROMPT_SELECT_ALL_GAP: u16 = 1;
-/// 显示 `[select all]` 所需的最小内容区宽度（列）：不足时只保留保存点。
-const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 28;
+/// 显示 `[▣]` 所需的最小内容区宽度（列）：不足时只保留保存点。
+const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 12;
 
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -713,7 +713,7 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[select all]` 在窄宽度下优先隐藏）。
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[▣]` 在窄宽度下优先隐藏）。
 pub fn prompt_toolbar_button_rect(panel: Rect, button: PromptToolbarButton) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
     let inner = pane_inner_rect(panel);

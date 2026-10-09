@@ -780,8 +780,13 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
     assert!(row.contains(text::TEMPLATE_BUTTON_TODO), "{row}");
     assert!(row.contains(text::TEMPLATE_BUTTON_DEL), "{row}");
-    assert!(row.contains('…'), "左上内容省略号截断: {row}");
-    assert!(!row.contains("addTemplate"), "按钮组外的正文被截断: {row}");
+    let text_side: String = (0..buttons[0].rect.x)
+        .map(|x| buf[(x, 0)].symbol())
+        .collect();
+    assert!(
+        text_side.contains('…'),
+        "按钮组左侧正文省略号截断: {text_side:?}"
+    );
 
     // 极窄区域仍绘制按钮（按可用宽度截断）。
     let narrow = Rect::new(0, 0, 20, 10);

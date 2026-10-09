@@ -1,7 +1,7 @@
 //! 集成测试：prompt 模板斜杠命令全链路。
 //!
 //! 覆盖：输入 `/add` 弹出 Templates 面板 → 回车整行插入标准模板块 → markdown 高亮
-//! 呈现（命令分色、标题下划线）→ 点击 `[todo]`/`[clean]`/`[del]` 按钮操作 → 单步撤销。
+//! 呈现（命令分色、标题下划线）→ 点击 `[todo]`/`[⌫]`/`[✕]` 按钮操作 → 单步撤销。
 
 use lx_tui::app::actions::EditorCommand;
 use lx_tui::app::markdown::{SlashCommandId, slash_template_content};
@@ -138,12 +138,12 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
 
     // 按钮组常显。
     let buttons = ui::prompt::template_buttons(&state.prompt, area);
-    assert_eq!(buttons.len(), 4, "宽屏下 [todo]/[copy]/[clean]/[del] 可见");
+    assert_eq!(buttons.len(), 4, "宽屏下状态与动作按钮可见");
     let row = line_text(&terminal, area.y);
-    assert!(row.contains("[todo]"), "{row}");
-    assert!(row.contains("[copy]"), "{row}");
-    assert!(row.contains("[clean]"), "{row}");
-    assert!(row.contains("[del]"), "{row}");
+    assert!(row.contains(ui::text::TEMPLATE_BUTTON_TODO), "{row}");
+    assert!(row.contains(ui::text::TEMPLATE_BUTTON_COPY), "{row}");
+    assert!(row.contains(ui::text::TEMPLATE_BUTTON_CLEAN), "{row}");
+    assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
     assert!(row.contains('╮'), "右上角闭合: {row}");
 
     // 切换状态后整块底色跟随。
@@ -191,7 +191,7 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
     let terminal = draw(&state, &config);
     let row = line_text(&terminal, area.y);
     assert!(row.contains("[todo]"), "窄屏按钮不隐藏: {row}");
-    assert!(row.contains("[del]"), "{row}");
+    assert!(row.contains(ui::text::TEMPLATE_BUTTON_DEL), "{row}");
     assert!(row.contains('…'), "左上内容省略号截断: {row}");
     assert!(!row.contains("addTemplate"), "正文让位按钮: {row}");
 }

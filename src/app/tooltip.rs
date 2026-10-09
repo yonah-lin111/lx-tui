@@ -9,6 +9,15 @@ use crate::layout::PaneId;
 /// 悬停停留多久后显示。
 pub const TOOLTIP_DELAY: Duration = Duration::from_millis(400);
 
+/// 模板块按钮种类；与 ui 侧 `TemplateBlockButton` 一一对应，避免 app 依赖 ui。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TemplateButtonKind {
+    Status,
+    Copy,
+    Clean,
+    Delete,
+}
+
 /// 可触发 tooltip 的按钮目标；文案映射由 `text::tooltip_hint` 穷尽匹配。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TooltipTarget {
@@ -27,6 +36,11 @@ pub enum TooltipTarget {
     PromptSelectAll,
     PromptSave,
     PromptPin,
+    /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
+    TemplateButton {
+        line: usize,
+        button: TemplateButtonKind,
+    },
 }
 
 /// 鼠标当前悬停的按钮；到显示时刻前只计时不渲染。

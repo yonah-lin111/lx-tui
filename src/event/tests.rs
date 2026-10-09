@@ -2386,3 +2386,35 @@ fn mouse_motion_with_overlay_open_keeps_tooltip_clear() {
     );
     assert!(state.tooltip.is_none(), "浮层打开时清除且不重新触发");
 }
+
+#[test]
+fn mouse_motion_over_template_button_arms_tooltip() {
+    use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
+
+    let (mut state, config, geo, area) = template_button_state();
+    let copy = crate::ui::prompt::template_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Copy)
+        .expect("copy button visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, copy.rect.x, copy.rect.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let tooltip = state.tooltip.as_ref().expect("template tooltip armed");
+    assert_eq!(
+        tooltip.target,
+        TooltipTarget::TemplateButton {
+            line: copy.line,
+            button: TemplateButtonKind::Copy,
+        }
+    );
+    assert!(!tooltip.is_visible(), "停留前只计时不显示");
+    assert!(dirty);
+}
