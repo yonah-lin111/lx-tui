@@ -1630,8 +1630,8 @@ fn open_pane_menu_offers_split_switch_prompt_path_and_close() {
         vec![
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
-            MenuCommand::SwitchToTerminal,
             MenuCommand::OpenPrompt,
+            MenuCommand::SwitchToTerminal,
             MenuCommand::SwitchToWorkspaceCwd,
             MenuCommand::ClosePane
         ]
@@ -1656,8 +1656,8 @@ fn open_pane_menu_hides_close_and_path_for_last_pane_without_cwd() {
         vec![
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
-            MenuCommand::SwitchToTerminal,
-            MenuCommand::OpenPrompt
+            MenuCommand::OpenPrompt,
+            MenuCommand::SwitchToTerminal
         ]
     );
 }
@@ -1710,7 +1710,7 @@ fn activate_menu_switch_toggles_only_target_pane() {
     let (mut state, first, second) = demo_two_panes();
     focus_pane(&mut state, first);
     open_pane_menu(&mut state, second, (0, 0));
-    set_menu_selection(&mut state, 2);
+    set_menu_selection(&mut state, 3);
     activate_menu(&mut state);
 
     assert_eq!(
@@ -2558,9 +2558,9 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
         menu.commands,
         vec![
             MenuCommand::NewTerminal,
+            MenuCommand::OpenWorktree,
             MenuCommand::OpenPrompt,
-            MenuCommand::RenameWorkspace,
-            MenuCommand::OpenWorktree
+            MenuCommand::RenameWorkspace
         ]
     );
 
@@ -2578,12 +2578,89 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
         menu.commands,
         vec![
             MenuCommand::NewTerminal,
+            MenuCommand::OpenWorktree,
             MenuCommand::OpenPrompt,
             MenuCommand::RenameWorkspace,
-            MenuCommand::OpenWorktree,
             MenuCommand::CloseWorkspace
         ]
     );
+}
+
+/// 右键菜单统一排序规则：新建/打开 → 切换/导航 → 重命名 → 关闭，Close 恒为最后一项。
+#[test]
+fn menus_follow_new_open_switch_rename_close_order() {
+    fn close_is_last(commands: &[MenuCommand]) -> bool {
+        matches!(
+            commands.last(),
+            Some(MenuCommand::CloseWorkspace | MenuCommand::CloseTab | MenuCommand::ClosePane)
+        )
+    }
+
+    // 工作区：New terminal → Open worktree → Open prompt → Rename → Close。
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    push_git_workspace(
+        &mut state,
+        "feat",
+        "/repo/.worktrees/feat",
+        git_info("/repo", "/repo/.worktrees/feat", true, Some("feature/x")),
+    );
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu overlay expected");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::NewTerminal,
+            MenuCommand::OpenWorktree,
+            MenuCommand::OpenPrompt,
+            MenuCommand::RenameWorkspace,
+            MenuCommand::CloseWorkspace
+        ]
+    );
+    assert!(close_is_last(&menu.commands));
+
+    // 标签：New tab → Rename → Close。
+    create_tab(&mut state);
+    open_tab_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("tab menu overlay expected");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::NewTab,
+            MenuCommand::RenameTab,
+            MenuCommand::CloseTab
+        ]
+    );
+    assert!(close_is_last(&menu.commands));
+
+    // 窗格：Split → Open prompt → Switch → Switch to ws path → Sync → Close。
+    state.overlay = None;
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-cwd"));
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/term-cwd"));
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("pane menu overlay expected");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::SplitRight,
+            MenuCommand::SplitDown,
+            MenuCommand::OpenPrompt,
+            MenuCommand::SwitchToLx,
+            MenuCommand::SwitchToWorkspaceCwd,
+            MenuCommand::SyncWorkspaceToTerminalCwd,
+            MenuCommand::ClosePane
+        ]
+    );
+    assert!(close_is_last(&menu.commands));
 }
 
 #[test]

@@ -261,6 +261,7 @@ fn pane_menu_renders_split_switch_and_close_labels() {
         vec![
             MenuCommand::SplitRight,
             MenuCommand::SplitDown,
+            MenuCommand::OpenPrompt,
             MenuCommand::SwitchToTerminal,
             MenuCommand::ClosePane,
         ],
@@ -270,8 +271,9 @@ fn pane_menu_renders_split_switch_and_close_labels() {
     assert_eq!(cursor, None);
     assert!(lines[6].contains(text::MENU_SPLIT_RIGHT));
     assert!(lines[7].contains(text::MENU_SPLIT_DOWN));
-    assert!(lines[8].contains(text::MENU_SWITCH_TO_TERMINAL));
-    assert!(lines[9].contains(text::MENU_CLOSE_PANE));
+    assert!(lines[8].contains(text::MENU_OPEN_PROMPT));
+    assert!(lines[9].contains(text::MENU_SWITCH_TO_TERMINAL));
+    assert!(lines[10].contains(text::MENU_CLOSE_PANE));
 }
 
 #[test]
@@ -356,9 +358,9 @@ fn workspace_menu_renders_all_labels_without_ellipsis() {
     let state = menu_state(
         vec![
             MenuCommand::NewTerminal,
+            MenuCommand::OpenWorktree,
             MenuCommand::OpenPrompt,
             MenuCommand::RenameWorkspace,
-            MenuCommand::OpenWorktree,
             MenuCommand::CloseWorkspace,
         ],
         0,
@@ -367,9 +369,9 @@ fn workspace_menu_renders_all_labels_without_ellipsis() {
     let joined = lines.join("\n");
     for label in [
         text::MENU_NEW_TERMINAL,
+        text::MENU_OPEN_WORKTREE,
         text::MENU_OPEN_PROMPT,
         text::MENU_RENAME_WORKSPACE,
-        text::MENU_OPEN_WORKTREE,
         text::MENU_CLOSE_WORKSPACE,
     ] {
         assert!(joined.contains(label), "缺少 {label}: {joined}");

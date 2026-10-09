@@ -1180,7 +1180,7 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     state.prompt_focused = false;
 }
 
-/// 打开工作区右键菜单；仅剩一个工作区时不提供关闭项。
+/// 打开工作区右键菜单；按「新建/打开 → 切换/导航 → 重命名 → 关闭」排序，仅剩一个工作区时不提供关闭项。
 pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u16)) {
     if target >= state.workspaces.len() {
         return;
@@ -1189,11 +1189,7 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     state.workspace_scroll_drag = None;
     state.workspace_drag = None;
     state.workspace_dragging = false;
-    let mut commands = vec![
-        MenuCommand::NewTerminal,
-        MenuCommand::OpenPrompt,
-        MenuCommand::RenameWorkspace,
-    ];
+    let mut commands = vec![MenuCommand::NewTerminal];
     if state
         .workspaces
         .get(target)
@@ -1201,6 +1197,8 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     {
         commands.push(MenuCommand::OpenWorktree);
     }
+    commands.push(MenuCommand::OpenPrompt);
+    commands.push(MenuCommand::RenameWorkspace);
     if state.workspaces.len() > 1 {
         commands.push(MenuCommand::CloseWorkspace);
     }
@@ -1237,7 +1235,7 @@ pub fn open_tab_menu(state: &mut AppState, tab: usize, anchor: (u16, u16)) {
     }));
 }
 
-/// 打开窗格右键菜单；仅剩一个窗格时不提供关闭项。
+/// 打开窗格右键菜单；按「新建/打开 → 切换/导航 → 重命名 → 关闭」排序，仅剩一个窗格时不提供关闭项。
 pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
     let workspace = state.active_workspace;
     let tab = state.active_workspace().active_tab;
@@ -1247,12 +1245,15 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
     };
     state.workspace_scroll_drag = None;
     state.terminal_scroll_drag = None;
-    let mut commands = vec![MenuCommand::SplitRight, MenuCommand::SplitDown];
+    let mut commands = vec![
+        MenuCommand::SplitRight,
+        MenuCommand::SplitDown,
+        MenuCommand::OpenPrompt,
+    ];
     commands.push(match view {
         PaneView::Lx => MenuCommand::SwitchToTerminal,
         PaneView::Terminal => MenuCommand::SwitchToLx,
     });
-    commands.push(MenuCommand::OpenPrompt);
     // 仅工作区有固定路径时提供切回工作区路径。
     if state
         .workspaces
