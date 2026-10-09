@@ -100,3 +100,96 @@ fn process_cwd_reads_own_process_directory() {
 fn process_cwd_returns_none_for_invalid_pid() {
     assert_eq!(process_cwd(u32::MAX), None);
 }
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn foreground_process_name_returns_none_for_invalid_pid() {
+    assert_eq!(foreground_process_name(u32::MAX), None);
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn resolve_process_name_keeps_native_agent_binaries() {
+    let argv = vec!["/Users/user/.local/bin/claude".to_string()];
+    assert_eq!(
+        resolve_process_name("claude", &argv).as_deref(),
+        Some("claude")
+    );
+    let argv = vec!["/opt/homebrew/bin/agy".to_string()];
+    assert_eq!(resolve_process_name("agy", &argv).as_deref(), Some("agy"));
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn resolve_process_name_unwraps_node_script_agents() {
+    let argv = vec![
+        "node".to_string(),
+        "/Users/user/.nvm/versions/node/v24/bin/codex".to_string(),
+        "--model".to_string(),
+        "gpt-5".to_string(),
+    ];
+    assert_eq!(
+        resolve_process_name("node", &argv).as_deref(),
+        Some("codex")
+    );
+
+    let argv = vec![
+        "node".to_string(),
+        "/Users/user/.nvm/versions/node/v24/lib/node_modules/@google/gemini-cli/bundle/gemini.js"
+            .to_string(),
+    ];
+    assert_eq!(
+        resolve_process_name("node", &argv).as_deref(),
+        Some("gemini")
+    );
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn resolve_process_name_prefers_effective_argv0_name() {
+    // exec -a codex sleep / nix 包装脚本：comm 与展示名不一致时跟随 argv0。
+    let argv = vec!["codex".to_string(), "30".to_string()];
+    assert_eq!(
+        resolve_process_name("sleep", &argv).as_deref(),
+        Some("codex")
+    );
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn resolve_process_name_falls_back_for_shells_and_eval_flags() {
+    let argv = vec!["-zsh".to_string()];
+    assert_eq!(resolve_process_name("zsh", &argv).as_deref(), Some("zsh"));
+
+    let argv = vec!["node".to_string(), "-e".to_string(), "codex".to_string()];
+    assert_eq!(resolve_process_name("node", &argv).as_deref(), Some("node"));
+
+    assert_eq!(
+        resolve_process_name("vim", &["vim".to_string()]).as_deref(),
+        Some("vim")
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn parse_procargs2_extracts_argv() {
+    let mut buffer = Vec::new();
+    buffer.extend_from_slice(&2i32.to_ne_bytes());
+    buffer.extend_from_slice(b"/usr/bin/env\0\0\0");
+    buffer.extend_from_slice(b"node\0");
+    buffer.extend_from_slice(b"/Users/user/bin/codex\0");
+    assert_eq!(
+        macos::parse_procargs2(&buffer),
+        vec!["node".to_string(), "/Users/user/bin/codex".to_string()]
+    );
+    assert!(macos::parse_procargs2(&[]).is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn parse_tpgid_handles_spaces_in_comm() {
+    let stat = "123 (weird name) S 1 123 123 0 -1 4194560 0 0 0 0";
+    assert_eq!(linux::parse_tpgid(stat), Some(123));
+    let stat = "123 (zsh) S 1 123 123 0 -1 4194560 0 0 0 0";
+    assert_eq!(linux::parse_tpgid(stat), None);
+}

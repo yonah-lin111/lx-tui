@@ -27,6 +27,7 @@ use super::state::{
     current_workspace_identity, home_dir, tab_label, unique_workspace_name, workspace_label,
 };
 use super::toast::{Toast, ToastKind};
+use crate::detect::PaneAgentSnapshot;
 use crate::ui::text;
 
 /// 应用行为。
@@ -473,6 +474,43 @@ pub fn update_pane_cwd(state: &mut AppState, id: PaneId, cwd: &Path, label: Stri
     }
     pane.cwd = Some(cwd.to_path_buf());
     pane.cwd_label = Some(label);
+    true
+}
+
+/// 更新窗格 Agent 快照（None 移除条目）；有变化返回 true（供置脏重绘）。
+pub fn update_pane_agent(
+    state: &mut AppState,
+    id: PaneId,
+    snapshot: Option<PaneAgentSnapshot>,
+) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if pane.agent == snapshot {
+        return false;
+    }
+    pane.agent = snapshot;
+    true
+}
+
+/// 点击 Agents 条目：切到所属标签、聚焦窗格、lx 视图切回终端、收回 prompt 焦点；返回是否成功。
+pub fn focus_agent_pane(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(tab_index) = state
+        .active_workspace()
+        .tabs
+        .iter()
+        .position(|tab| tab.pane(pane).is_some())
+    else {
+        return false;
+    };
+    state.active_workspace_mut().active_tab = tab_index;
+    if let Some(target) = state.active_tab_mut().pane_mut(pane)
+        && target.view == PaneView::Lx
+    {
+        target.view = PaneView::Terminal;
+    }
+    focus_pane(state, pane);
+    clear_selection(state);
     true
 }
 
@@ -1178,6 +1216,9 @@ pub fn switch_workspace(state: &mut AppState, index: usize) {
     }
     clear_selection(state);
     state.prompt_focused = false;
+    // Agents 列表随工作区切换：滚动与悬停复位，避免旧槽位错位。
+    state.agent_scroll = 0;
+    state.agent_hover = None;
 }
 
 /// 打开工作区右键菜单；按「新建/打开 → 切换/导航 → 重命名 → 关闭」排序，仅剩一个工作区时不提供关闭项。
@@ -1740,6 +1781,52 @@ pub fn set_workspace_scroll(state: &mut AppState, offset: usize, visible: usize)
         return false;
     }
     state.workspace_scroll = offset;
+    true
+}
+
+/// Agents 列表滚动上限。
+fn agent_scroll_max(state: &AppState, visible: usize) -> usize {
+    state.agent_panes().len().saturating_sub(visible.max(1))
+}
+
+/// 滚动 Agents 列表；越界钳制；返回是否变化。
+pub fn scroll_agent_list(state: &mut AppState, delta: isize, visible: usize) -> bool {
+    let max = agent_scroll_max(state, visible);
+    let target = (state.agent_scroll.min(max) as isize).saturating_add(delta);
+    let offset = target.clamp(0, max as isize) as usize;
+    if offset == state.agent_scroll {
+        return false;
+    }
+    state.agent_scroll = offset;
+    true
+}
+
+/// 直接设置 Agents 滚动偏移（滚动条点击/拖拽）；越界钳制；返回是否变化。
+pub fn set_agent_scroll(state: &mut AppState, offset: usize, visible: usize) -> bool {
+    let offset = offset.min(agent_scroll_max(state, visible));
+    if offset == state.agent_scroll {
+        return false;
+    }
+    state.agent_scroll = offset;
+    true
+}
+
+/// 钳制 Agents 滚动偏移（几何或列表变化后调用）；返回是否变化。
+pub fn clamp_agent_scroll(state: &mut AppState, visible: usize) -> bool {
+    let max = agent_scroll_max(state, visible);
+    if state.agent_scroll <= max {
+        return false;
+    }
+    state.agent_scroll = max;
+    true
+}
+
+/// 更新 Agents 悬停槽位；返回是否变化。
+pub fn set_agent_hover(state: &mut AppState, hover: Option<usize>) -> bool {
+    if state.agent_hover == hover {
+        return false;
+    }
+    state.agent_hover = hover;
     true
 }
 

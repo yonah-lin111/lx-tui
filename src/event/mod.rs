@@ -23,6 +23,7 @@ use crate::app::state::{AppState, PaneKind, PaneView, WorkspaceGit, home_dir, wo
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
+use crate::detect::{STATE_TAIL_LINES, pane_agent_snapshot};
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
 use crate::pty::{PtyEvent, PtySession};
@@ -77,6 +78,8 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
     let mut cwd_check: Option<Instant> = None;
+    // PTY 输出后的 Agent 去抖扫描时刻；与 cwd 检查同窗口合并。
+    let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
     seed_git_requests(state);
@@ -90,8 +93,19 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
                 dirty = true;
             }
         }
+        if agent_check.is_some_and(|at| Instant::now() >= at) {
+            agent_check = None;
+            if poll_active_agents(state, &sessions) {
+                dirty = true;
+            }
+        }
         git::pump_git_queries(state, &sender, &mut git_inflight);
         let geometry = current_geometry(tui, state, config)?;
+        if let Some(rows) = ui::agent_list_rows(&geometry.view, state)
+            && update::clamp_agent_scroll(state, rows)
+        {
+            dirty = true;
+        }
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
             // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
@@ -127,6 +141,9 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         if let Some(at) = cwd_check {
             wait = wait.min(at.saturating_duration_since(Instant::now()));
         }
+        if let Some(at) = agent_check {
+            wait = wait.min(at.saturating_duration_since(Instant::now()));
+        }
 
         tokio::select! {
             event = events.next() => match event {
@@ -146,6 +163,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
                     cwd_check.get_or_insert_with(|| Instant::now() + CWD_CHECK_DELAY);
+                    agent_check.get_or_insert_with(|| Instant::now() + AGENT_CHECK_DELAY);
                     dirty = true;
                 }
             }
@@ -161,6 +179,9 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
 
 /// PTY 输出后的 cwd 去抖检查延迟。
 const CWD_CHECK_DELAY: Duration = Duration::from_millis(300);
+
+/// PTY 输出后的 Agent 去抖扫描延迟；与 cwd 检查共用窗口。
+const AGENT_CHECK_DELAY: Duration = Duration::from_millis(300);
 
 /// 启动时为已有工作区登记一次 git 元数据查询。
 fn seed_git_requests(state: &mut AppState) {
@@ -189,6 +210,33 @@ fn poll_process_cwds(state: &mut AppState, sessions: &HashMap<PaneId, PtySession
         };
         let label = workspace_label(&cwd, home.as_deref());
         if update::update_pane_cwd(state, id, &cwd, label) {
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// 扫描当前激活工作区各终端窗格：前台进程定 Agent 身份、终端尾部行定状态；
+/// 未识别或非终端窗格清空快照；返回是否有变化。
+fn poll_active_agents(state: &mut AppState, sessions: &HashMap<PaneId, PtySession>) -> bool {
+    let mut changed = false;
+    for id in state.active_pane_ids() {
+        let Some(pane) = state.pane_anywhere(id) else {
+            continue;
+        };
+        if pane.kind != PaneKind::Terminal || pane.exited {
+            continue;
+        }
+        let snapshot = sessions
+            .get(&id)
+            .and_then(PtySession::process_id)
+            .and_then(crate::platform::foreground_process_name)
+            .and_then(|name| {
+                let lines = pane.terminal.tail_lines(STATE_TAIL_LINES);
+                let title = pane.terminal.title().map(str::to_string);
+                pane_agent_snapshot(&name, &lines, title.as_deref())
+            });
+        if update::update_pane_agent(state, id, snapshot) {
             changed = true;
         }
     }
@@ -499,8 +547,15 @@ fn handle_terminal_event(
                     *dirty = true;
                 } else if handle_workspace_scrollbar_press(state, view, mouse.column, mouse.row)
                     || handle_prompt_scrollbar_press(state, view, mouse.column, mouse.row)
+                    || handle_agent_scrollbar_press(state, view, mouse.column, mouse.row)
                 {
                     *dirty = true;
+                } else if let Some(pane) = ui::agent_item_at(view, state, mouse.column, mouse.row) {
+                    if update::focus_agent_pane(state, pane) {
+                        ensure_workspace_visible(state, view);
+                        reveal_active_tab(state, view);
+                        *dirty = true;
+                    }
                 } else if let Some(index) =
                     ui::workspace_group_toggle_at(view, state, mouse.column, mouse.row)
                 {
@@ -661,6 +716,18 @@ fn handle_terminal_event(
                     }
                     return;
                 }
+                if let Some(grab) = state.agent_scroll_drag {
+                    let Some(bar) = ui::agent_scrollbar(view, state) else {
+                        return;
+                    };
+                    let rows = ui::agent_list_rows(view, state).unwrap_or(0);
+                    let offset =
+                        ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                    if update::set_agent_scroll(state, offset, rows) {
+                        *dirty = true;
+                    }
+                    return;
+                }
                 if let Some((pane, grab)) = state.terminal_scroll_drag {
                     let bar = rects
                         .iter()
@@ -770,6 +837,9 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.prompt_scroll_drag.take().is_some() {
+                    return;
+                }
+                if state.agent_scroll_drag.take().is_some() {
                     return;
                 }
                 if state.terminal_scroll_drag.take().is_some() {
@@ -929,6 +999,15 @@ fn handle_terminal_event(
                     let hover = ui::workspace_item_at(view, state, mouse.column, mouse.row);
                     update::set_workspace_hover(state, hover);
                     *dirty = true;
+                } else if ui::agents_section_at(view, state, mouse.column, mouse.row)
+                    && let Some(rows) = ui::agent_list_rows(view, state)
+                    && let Some(direction) = vertical_wheel_direction(mouse.kind)
+                    && update::scroll_agent_list(state, direction, rows)
+                {
+                    // 列表滚动后指针下的条目可能已换行：按新偏移重算悬停。
+                    let hover = ui::agent_item_index_at(view, state, mouse.column, mouse.row);
+                    update::set_agent_hover(state, hover);
+                    *dirty = true;
                 }
             }
             MouseEventKind::Moved => {
@@ -954,8 +1033,10 @@ fn handle_terminal_event(
                 let tab_layout =
                     ui::tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
                 let tab_hover = ui::tab_bar::tab_at(&tab_layout, mouse.column, mouse.row);
+                let agent_hover = ui::agent_item_index_at(view, state, mouse.column, mouse.row);
                 let mut item_hover_changed = update::set_workspace_hover(state, workspace_hover);
                 item_hover_changed |= update::set_tab_hover(state, tab_hover);
+                item_hover_changed |= update::set_agent_hover(state, agent_hover);
                 if item_hover_changed {
                     *dirty = true;
                 }
@@ -1367,6 +1448,30 @@ fn handle_prompt_scrollbar_press(
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
             update::set_prompt_scroll(state, offset);
+        }
+    }
+    true
+}
+
+/// Agents 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点；返回是否命中。
+fn handle_agent_scrollbar_press(
+    state: &mut AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = ui::agent_scrollbar(view, state) else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    let rows = ui::agent_list_rows(view, state).unwrap_or(0);
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.agent_scroll_drag = Some(grab),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_agent_scroll(state, offset, rows);
         }
     }
     true

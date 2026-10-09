@@ -204,3 +204,33 @@ fn scroll_to_content_offset_moves_viewport_from_top() {
     assert_eq!(term.display_offset(), 0);
     assert!(!term.scroll_to_content_offset(history));
 }
+
+#[test]
+fn tail_lines_returns_bottom_viewport_rows() {
+    let mut term = Terminal::new(12, 3);
+    term.feed(b"alpha\r\nbeta\r\ngamma");
+    assert_eq!(
+        term.tail_lines(2),
+        vec!["beta".to_string(), "gamma".to_string()]
+    );
+    assert_eq!(
+        term.tail_lines(3),
+        vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()]
+    );
+
+    term.feed(b"\r\nX");
+    assert_eq!(
+        term.tail_lines(2),
+        vec!["gamma".to_string(), "X".to_string()],
+        "tail must follow viewport scroll"
+    );
+}
+
+#[test]
+fn tail_lines_handles_wide_chars_and_control_cells() {
+    let mut term = Terminal::new(8, 2);
+    term.feed("好a".as_bytes());
+    let lines = term.tail_lines(2);
+    assert_eq!(lines[0], "好a");
+    assert_eq!(term.tail_lines(0), Vec::<String>::new());
+}

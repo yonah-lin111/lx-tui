@@ -2036,3 +2036,216 @@ fn mouse_template_buttons_clean_status_and_delete() {
     );
     assert_eq!(state.prompt.text(), "");
 }
+
+/// 给当前焦点窗格挂 Agent 快照；返回窗格标识。
+fn mount_agent(
+    state: &mut AppState,
+    kind: crate::detect::AgentKind,
+    agent_state: crate::detect::AgentState,
+) -> PaneId {
+    let pane = state.active_tab().layout.focus();
+    update::update_pane_agent(
+        state,
+        pane,
+        Some(crate::detect::PaneAgentSnapshot {
+            kind,
+            state: agent_state,
+            title: None,
+        }),
+    );
+    pane
+}
+
+/// 追加 `count` 个各带一个 Agent 的标签。
+fn create_agent_tabs(state: &mut AppState, count: usize) {
+    use crate::detect::{AgentKind, AgentState};
+    for _ in 0..count {
+        update::create_tab(state);
+        mount_agent(state, AgentKind::Codex, AgentState::Working);
+    }
+}
+
+#[test]
+fn mouse_click_agent_item_switches_tab_and_terminal_view() {
+    use crate::detect::{AgentKind, AgentState};
+
+    let mut state = demo_terminal();
+    let mut sessions = HashMap::new();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 100, 24);
+    let first = mount_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    update::create_tab(&mut state);
+    mount_agent(&mut state, AgentKind::Codex, AgentState::Idle);
+    update::focus_prompt(&mut state);
+    if let Some(pane) = state.active_tab_mut().pane_mut(first) {
+        pane.view = PaneView::Lx;
+    }
+    let geo = geometry(&state, &config, screen);
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+    assert_eq!(state.active_workspace().active_tab, 1);
+
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            sections.agents.x,
+            sections.agents.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(dirty);
+    assert_eq!(state.active_workspace().active_tab, 0);
+    assert_eq!(state.active_tab().layout.focus(), first);
+    assert_eq!(
+        state.active_tab().pane(first).map(|pane| pane.view),
+        Some(PaneView::Terminal)
+    );
+    assert!(!state.prompt_focused);
+}
+
+#[test]
+fn mouse_hover_agent_item_tracks_hover() {
+    use crate::detect::{AgentKind, AgentState};
+
+    let mut state = demo_terminal();
+    let mut sessions = HashMap::new();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 100, 24);
+    mount_agent(&mut state, AgentKind::Gemini, AgentState::Blocked);
+    let geo = geometry(&state, &config, screen);
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, sections.agents.x, sections.agents.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.agent_hover, Some(0));
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            geo.view.panes.x + 1,
+            geo.view.panes.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.agent_hover, None);
+}
+
+#[test]
+fn wheel_over_agents_section_scrolls_list() {
+    let mut state = demo_terminal();
+    let mut sessions = HashMap::new();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 100, 24);
+    create_agent_tabs(&mut state, 20);
+    let geo = geometry(&state, &config, screen);
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, false).expect("sections are visible");
+
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            sections.agents.x,
+            sections.agents.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.agent_scroll, 1);
+    assert_eq!(state.agent_hover, Some(1), "hover follows the scrolled row");
+}
+
+#[test]
+fn mouse_drag_agent_scrollbar_thumb_scrolls_list() {
+    let mut state = demo_terminal();
+    let mut sessions = HashMap::new();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 100, 24);
+    create_agent_tabs(&mut state, 20);
+    let geo = geometry(&state, &config, screen);
+    let bar = ui::agent_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.thumb.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.agent_scroll_drag, Some(0));
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.agent_scroll > 0, "dragging thumb scrolls the list");
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.agent_scroll_drag, None);
+}
+
+#[test]
+fn poll_active_agents_ignores_plain_shell() {
+    let mut state = demo_terminal();
+    let pane = state.active_tab().layout.focus();
+    let mut sessions = HashMap::new();
+    let session = PtySession::spawn(pane, 80, 24, None, |_| {}).expect("shell spawns");
+    sessions.insert(pane, session);
+
+    assert!(
+        !poll_active_agents(&mut state, &sessions),
+        "plain shell must not register an agent"
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .and_then(|target| target.agent.as_ref())
+            .is_none()
+    );
+}

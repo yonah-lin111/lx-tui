@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use ratatui::layout::{Direction, Rect};
 
+use crate::detect::PaneAgentSnapshot;
 use crate::layout::{BoundaryHit, PaneId, TileLayout};
 use crate::terminal::Terminal;
 
@@ -97,6 +98,12 @@ pub struct AppState {
     pub prompt_scroll_drag: Option<u16>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
+    /// 鼠标悬停的侧栏 Agents 条目槽位索引（含滚动偏移）；None 表示未悬停。
+    pub agent_hover: Option<usize>,
+    /// 侧栏 Agents 列表滚动偏移（顶部条目索引）。
+    pub agent_scroll: usize,
+    /// 拖拽 Agents 滚动条 thumb 时相对顶部的抓取偏移。
+    pub agent_scroll_drag: Option<u16>,
     /// lx 页动画相位（200ms 一帧）；lx 页不可见时冻结。
     pub lx_phase: u64,
     /// 上次 lx 动画推进时刻。
@@ -260,6 +267,8 @@ pub struct Pane {
     pub cwd_label: Option<String>,
     /// 窗格 shell 进程最近一次轮询到的 cwd；新建工作区取焦点窗格路径用。
     pub cwd: Option<PathBuf>,
+    /// 窗格前台进程探测到的 Agent 快照；None 表示纯 Shell 或未识别程序。
+    pub agent: Option<PaneAgentSnapshot>,
 }
 
 impl Tab {
@@ -328,6 +337,7 @@ impl Pane {
             exited: false,
             cwd_label: None,
             cwd: None,
+            agent: None,
         }
     }
 }
@@ -442,6 +452,9 @@ impl AppState {
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
             terminal_scroll_drag: None,
+            agent_hover: None,
+            agent_scroll: 0,
+            agent_scroll_drag: None,
             lx_phase: 0,
             lx_last_tick: Instant::now(),
             workspace_drag: None,
@@ -546,6 +559,30 @@ impl AppState {
             .flat_map(|workspace| workspace.tabs.iter())
             .flat_map(|tab| tab.layout.pane_ids())
             .collect()
+    }
+
+    /// 当前激活工作区内全部窗格标识（按标签与树序）；Agent 探测扫描用。
+    pub fn active_pane_ids(&self) -> Vec<PaneId> {
+        self.active_workspace()
+            .tabs
+            .iter()
+            .flat_map(|tab| tab.layout.pane_ids())
+            .collect()
+    }
+
+    /// 当前工作区内探测到 Agent 的窗格（标签索引，窗格标识），按标签与树序排列；
+    /// Agents 分区渲染、命中与滚动计数共用。
+    pub fn agent_panes(&self) -> Vec<(usize, PaneId)> {
+        let workspace = self.active_workspace();
+        let mut panes = Vec::new();
+        for (tab_index, tab) in workspace.tabs.iter().enumerate() {
+            for id in tab.layout.pane_ids() {
+                if tab.pane(id).is_some_and(|pane| pane.agent.is_some()) {
+                    panes.push((tab_index, id));
+                }
+            }
+        }
+        panes
     }
 
     /// 当前标签是否存在 lx 视图窗格；动画推进与定时唤醒的依据。

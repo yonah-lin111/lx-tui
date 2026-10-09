@@ -3,7 +3,7 @@
 use super::*;
 use crate::app::actions::Action;
 use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
-use crate::app::state::WorkspaceGit;
+use crate::app::state::{Workspace, WorkspaceGit};
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
@@ -285,22 +285,29 @@ fn agents_header_is_left_aligned_without_junctions() {
 }
 
 #[test]
-fn agents_section_below_header_stays_empty() {
+fn agents_section_below_header_shows_empty_hint_only() {
     let state = AppState::demo();
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let lines = render_lines(&state);
-    for line in &lines[sections.agents.y as usize..sections.agents.bottom() as usize] {
+    for (index, line) in lines[sections.agents.y as usize..sections.agents.bottom() as usize]
+        .iter()
+        .enumerate()
+    {
         let row: String = line
             .chars()
             .skip(view.sidebar.x as usize)
             .take(view.sidebar.width as usize)
             .collect();
         let content = row.trim_matches(|symbol| symbol == '│' || symbol == ' ');
-        assert!(
-            content.is_empty(),
-            "agents section should stay empty: {row:?}"
-        );
+        if index == 0 {
+            assert_eq!(content, text::AGENTS_EMPTY, "empty state renders hint");
+        } else {
+            assert!(
+                content.is_empty(),
+                "agents section keeps remaining rows empty: {row:?}"
+            );
+        }
     }
 }
 
@@ -1781,7 +1788,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     );
     assert_eq!(
         child_col,
-        parent_col.map(|column| column + WORKSPACE_ITEM_INDENT + 1),
+        parent_col.map(|column| column + sidebar::WORKSPACE_ITEM_INDENT + 1),
         "子项名字在连接符与图标之后"
     );
     assert_eq!(

@@ -3,12 +3,46 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, SlashCommandId, TemplateStatus};
+use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
 pub const SIDEBAR_TITLE: &str = "Workspaces";
 /// 侧栏下半分区标题。
 pub const SIDEBAR_AGENTS_TITLE: &str = "Agents";
 pub const MIN_SIZE_HINT: &str = "terminal too small";
+
+/// Agents 分区空状态。
+pub const AGENTS_EMPTY: &str = "no agents running";
+/// Agent 状态圆点：运行/阻塞实心、空闲空心。
+pub const AGENT_STATUS_DOT: &str = "●";
+pub const AGENT_STATUS_RING: &str = "○";
+
+/// Agent 名称标签：稳定英文小写值（与进程匹配别名一致）。
+pub fn agent_label(kind: AgentKind) -> &'static str {
+    match kind {
+        AgentKind::Claude => "claude",
+        AgentKind::Codex => "codex",
+        AgentKind::Gemini => "gemini",
+        AgentKind::Antigravity => "agy",
+        AgentKind::OpenCode => "opencode",
+        AgentKind::Cursor => "cursor",
+        AgentKind::Pi => "pi",
+        AgentKind::Kimi => "kimi",
+    }
+}
+
+/// Agent 状态圆点符号：Idle/Unknown 空心，Working/Blocked 实心。
+pub fn agent_status_dot(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Idle | AgentState::Unknown => AGENT_STATUS_RING,
+        AgentState::Working | AgentState::Blocked => AGENT_STATUS_DOT,
+    }
+}
+
+/// Agents 条目归属标签 `[tab N:pM]`：N 为标签位置（1 基）、M 为窗格标识。
+pub fn agent_location(tab_index: usize, pane: PaneId) -> String {
+    format!("[tab {}:p{}]", tab_index.saturating_add(1), pane.raw())
+}
 
 /// prompt 面板边框标题；路径末段名以 `ws:` 前缀渲染在顶边框右侧。
 pub const PROMPT_TITLE: &str = "Prompt";
