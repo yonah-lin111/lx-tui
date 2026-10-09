@@ -20,11 +20,11 @@ pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
 const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
-/// `[▣]` 标签宽度（列）。
+/// `[≡]` 标签宽度（列）。
 const PROMPT_SELECT_ALL_WIDTH: u16 = 3;
-/// `[▣]` 与保存点之间的空档（列）。
+/// `[≡]` 与保存点之间的空档（列）。
 const PROMPT_SELECT_ALL_GAP: u16 = 1;
-/// 显示 `[▣]` 所需的最小面板宽度（列）：不足时只保留保存点。
+/// 显示 `[≡]` 所需的最小面板宽度（列）：不足时只保留保存点。
 const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 19;
 
 /// prompt 工具栏按钮。
@@ -702,7 +702,7 @@ pub fn prompt_toolbar_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[▣]` 在窄宽度下优先隐藏）。
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[≡]` 在窄宽度下优先隐藏）。
 ///
 /// 按钮嵌在分割线上：`├` 后留 1 空格起排左侧按钮组，右侧按钮组以空格留白贴 `┤`。
 pub fn prompt_toolbar_button_rect(panel: Rect, button: PromptToolbarButton) -> Option<Rect> {
