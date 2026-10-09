@@ -58,7 +58,7 @@ pub fn view(text: &str, cursor: usize, width: usize) -> InputView<'_> {
 }
 
 /// 渲染单行输入文本；空文本且有占位时渲染暗色输入说明；
-/// 返回硬件光标坐标（显示由终端原生光标承担，闪烁相位由应用控制）。
+/// 返回硬件光标坐标（终端原生光标负责显示与闪烁）。
 pub fn render(
     frame: &mut Frame<'_>,
     area: Rect,

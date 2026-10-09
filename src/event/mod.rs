@@ -148,21 +148,7 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
         tokio::select! {
             event = events.next() => match event {
                 Some(Ok(event)) => {
-                    // 按键、粘贴与左键按下/拖拽等交互把硬件光标闪烁重置为亮相。
-                    let refreshes_cursor = match &event {
-                        TerminalEvent::Key(key) => key.kind != KeyEventKind::Release,
-                        TerminalEvent::Paste(_) => true,
-                        TerminalEvent::Mouse(mouse) => matches!(
-                            mouse.kind,
-                            MouseEventKind::Down(MouseButton::Left)
-                                | MouseEventKind::Drag(MouseButton::Left)
-                        ),
-                        _ => false,
-                    };
                     handle_terminal_event(event, state, &mut sessions, &geometry, config, &mut dirty);
-                    if refreshes_cursor {
-                        update::refresh_cursor_blink(state, Instant::now());
-                    }
                     pump_mention_scan(state, &sender);
                     git::pump_git_queries(state, &sender, &mut git_inflight);
                 }

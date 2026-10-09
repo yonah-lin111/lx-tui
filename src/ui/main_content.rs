@@ -110,7 +110,7 @@ fn terminal_scrollbar(inner: Rect, terminal: &Terminal) -> Option<ScrollbarLayou
 /// 渲染终端内容；仿真器选区命中的单元格反显高亮。
 ///
 /// 返回聚焦且光标可见时仿真光标在 `area` 内的坐标；调用方据此同步硬件光标，
-/// 让 IME 预输入与候选窗跟随终端光标（显示由终端原生光标承担，闪烁由应用定时切换可见性）。
+/// 让 IME 预输入与候选窗跟随终端光标（显示与闪烁由终端原生光标承担）。
 fn render_terminal(
     area: Rect,
     buf: &mut Buffer,

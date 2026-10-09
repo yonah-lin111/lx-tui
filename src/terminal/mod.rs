@@ -279,11 +279,6 @@ impl Terminal {
         Some((row as usize, content.cursor.point.column.0))
     }
 
-    /// 光标是否可见：程序未隐藏（DECTCEM）且光标未滚出视口。
-    pub fn cursor_visible(&self) -> bool {
-        self.mode().contains(TermMode::SHOW_CURSOR) && self.cursor_viewport().is_some()
-    }
-
     /// 开始一次简单选区；入参为视口 0 基行列。
     ///
     /// 选区由仿真器按内容坐标持有：输出滚动时由其随内容旋转，滚回历史不改变锚点。
