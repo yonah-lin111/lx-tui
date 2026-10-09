@@ -1848,7 +1848,6 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let mut dirty = false;
 
     let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
-    let divider = layout::prompt_divider_rect(geo.view.prompt).expect("divider visible");
     let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
     let blank_x = select_all.x - 1;
     handle_terminal_event(
@@ -1860,7 +1859,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut dirty,
     );
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), blank_x, divider.y),
+        mouse(MouseEventKind::Down(MouseButton::Left), bar.x + 15, bar.y),
         &mut state,
         &mut sessions,
         &geo,

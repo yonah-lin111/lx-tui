@@ -1156,7 +1156,7 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 }
 
 #[test]
-fn prompt_renders_toolbar_row_and_divider() {
+fn prompt_renders_toolbar_and_divider_on_same_row() {
     let mut state = AppState::demo();
     state.prompt.insert_str("hello");
     let view = view_for(&state);
@@ -1168,12 +1168,9 @@ fn prompt_renders_toolbar_row_and_divider() {
     assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_SELECT_ALL_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_SAVE_DOT), "{toolbar}");
-
-    let divider_y = inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
-    let divider = prompt_line(&lines, &view, divider_y);
-    assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
-    assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
-    assert!(divider.contains(text::DIVIDER_MID), "{divider}");
+    assert!(toolbar.contains(text::DIVIDER_LEFT_JOIN), "{toolbar}");
+    assert!(toolbar.contains(text::DIVIDER_RIGHT_JOIN), "{toolbar}");
+    assert!(toolbar.contains(text::DIVIDER_MID), "{toolbar}");
 }
 
 #[test]
@@ -1388,10 +1385,20 @@ fn prompt_status_follows_pinned_workspace() {
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let inner = crate::layout::pane_inner_rect(view.prompt);
-    let undo_x = inner.x;
-    let bar_y = inner.y;
-    let dot_x = inner.right() - 1;
+    let bar = crate::layout::prompt_toolbar_rect(view.prompt).expect("toolbar visible");
+    let undo = crate::layout::prompt_toolbar_button_rect(
+        view.prompt,
+        crate::layout::PromptToolbarButton::Undo,
+    )
+    .expect("undo visible");
+    let save = crate::layout::prompt_toolbar_button_rect(
+        view.prompt,
+        crate::layout::PromptToolbarButton::Save,
+    )
+    .expect("save visible");
+    let undo_x = undo.x;
+    let bar_y = bar.y;
+    let dot_x = save.x;
 
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(undo_x, bar_y)].symbol(), "[");
