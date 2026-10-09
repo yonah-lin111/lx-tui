@@ -7,6 +7,7 @@
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::markdown::{SlashCommandId, TemplateStatus};
+use crate::detect::AgentState;
 
 /// 正文。
 pub fn text() -> Style {
@@ -76,6 +77,30 @@ pub fn status_dot(saved: bool) -> Style {
 /// 浮层标题：正文加粗。
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// 边框标题内的次要值（prompt `ws:` 值、窗格 `agent:` 值）：
+/// 聚焦面板的边框为强调色，值在其上叠加 dim；失焦面板回退 muted。
+/// 与 ratatui 把标题 span 叠加到边框样式上的结果一致（聚焦值 = Cyan + BOLD + DIM）。
+pub fn border_value(focused: bool) -> Style {
+    if focused {
+        accent().add_modifier(Modifier::DIM)
+    } else {
+        muted()
+    }
+}
+
+/// Agent 状态圆点：Working 绿、Blocked 黄、Idle 次要信息（Unknown 同 Idle）。
+pub fn agent_status(state: AgentState) -> Style {
+    match state {
+        AgentState::Working => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+        AgentState::Blocked => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+        AgentState::Idle | AgentState::Unknown => muted(),
+    }
 }
 
 /// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。

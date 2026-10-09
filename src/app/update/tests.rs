@@ -3269,3 +3269,88 @@ fn overlay_key_new_workspace_editing_and_lifecycle() {
     apply_overlay_key(&mut state, OverlayKey::Esc);
     assert!(state.overlay.is_none());
 }
+
+#[test]
+fn update_pane_agent_mounts_updates_and_clears() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let snapshot = PaneAgentSnapshot {
+        kind: crate::detect::AgentKind::Claude,
+        state: crate::detect::AgentState::Working,
+        title: Some("✳ task".to_string()),
+    };
+    assert!(update_pane_agent(&mut state, pane, Some(snapshot.clone())));
+    assert_eq!(
+        state.active_pane().and_then(|target| target.agent.clone()),
+        Some(snapshot.clone())
+    );
+    assert!(
+        !update_pane_agent(&mut state, pane, Some(snapshot)),
+        "unchanged snapshot must not dirty the frame"
+    );
+    assert!(update_pane_agent(&mut state, pane, None));
+    assert!(
+        state
+            .active_pane()
+            .and_then(|target| target.agent.as_ref())
+            .is_none()
+    );
+    assert!(!update_pane_agent(&mut state, pane, None));
+}
+
+#[test]
+fn focus_agent_pane_switches_tab_focus_and_view() {
+    use crate::detect::{AgentKind, AgentState};
+
+    let mut state = AppState::demo();
+    let first = state.active_tab().layout.focus();
+    let snapshot = PaneAgentSnapshot {
+        kind: AgentKind::Pi,
+        state: AgentState::Idle,
+        title: None,
+    };
+    update_pane_agent(&mut state, first, Some(snapshot.clone()));
+
+    create_tab(&mut state);
+    let second = state.active_tab().layout.focus();
+    update_pane_agent(&mut state, second, Some(snapshot));
+    focus_prompt(&mut state);
+    assert_eq!(state.active_workspace().active_tab, 1);
+
+    assert!(focus_agent_pane(&mut state, first));
+    assert_eq!(state.active_workspace().active_tab, 0);
+    assert_eq!(state.active_tab().layout.focus(), first);
+    assert_eq!(
+        state.active_tab().pane(first).map(|target| target.view),
+        Some(PaneView::Terminal),
+        "lx view must switch back to terminal"
+    );
+    assert!(!state.prompt_focused, "prompt focus must be released");
+}
+
+#[test]
+fn focus_agent_pane_rejects_foreign_pane() {
+    let mut state = AppState::demo();
+    assert!(!focus_agent_pane(&mut state, PaneId::alloc()));
+}
+
+#[test]
+fn agent_panes_follow_active_workspace() {
+    use crate::detect::{AgentKind, AgentState};
+
+    let mut state = AppState::demo();
+    let first = state.active_tab().layout.focus();
+    let snapshot = PaneAgentSnapshot {
+        kind: AgentKind::Codex,
+        state: AgentState::Idle,
+        title: None,
+    };
+    update_pane_agent(&mut state, first, Some(snapshot));
+    assert_eq!(state.agent_panes(), vec![(0, first)]);
+
+    create_workspace(&mut state);
+    assert!(
+        state.agent_panes().is_empty(),
+        "agents are scoped to the active workspace"
+    );
+}

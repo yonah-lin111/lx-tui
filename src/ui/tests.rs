@@ -3,7 +3,7 @@
 use super::*;
 use crate::app::actions::Action;
 use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
-use crate::app::state::WorkspaceGit;
+use crate::app::state::{Workspace, WorkspaceGit};
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
@@ -285,22 +285,29 @@ fn agents_header_is_left_aligned_without_junctions() {
 }
 
 #[test]
-fn agents_section_below_header_stays_empty() {
+fn agents_section_below_header_shows_empty_hint_only() {
     let state = AppState::demo();
     let view = view_for(&state);
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let lines = render_lines(&state);
-    for line in &lines[sections.agents.y as usize..sections.agents.bottom() as usize] {
+    for (index, line) in lines[sections.agents.y as usize..sections.agents.bottom() as usize]
+        .iter()
+        .enumerate()
+    {
         let row: String = line
             .chars()
             .skip(view.sidebar.x as usize)
             .take(view.sidebar.width as usize)
             .collect();
         let content = row.trim_matches(|symbol| symbol == '│' || symbol == ' ');
-        assert!(
-            content.is_empty(),
-            "agents section should stay empty: {row:?}"
-        );
+        if index == 0 {
+            assert_eq!(content, text::AGENTS_EMPTY, "empty state renders hint");
+        } else {
+            assert!(
+                content.is_empty(),
+                "agents section keeps remaining rows empty: {row:?}"
+            );
+        }
     }
 }
 
@@ -1537,6 +1544,84 @@ fn pane_title_and_toggle_label_follow_view() {
     assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_LX);
 }
 
+#[test]
+fn pane_border_shows_agent_label_separated_from_toggle_button() {
+    let mut state = AppState::demo();
+    terminal_view(&mut state);
+    let pane = state.active_tab().layout.focus();
+    update::update_pane_agent(
+        &mut state,
+        pane,
+        Some(crate::detect::PaneAgentSnapshot {
+            kind: crate::detect::AgentKind::Claude,
+            state: crate::detect::AgentState::Working,
+            title: None,
+        }),
+    );
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects[0];
+    let button = main_content::toggle_button(rect).expect("toggle button visible");
+    let label = format!(" {}claude", text::PANE_AGENT_PREFIX);
+    let label_width = label.chars().count() as u16;
+    // 右端落在按钮左侧第 2 列，与按钮之间保留 1 列边框。
+    let label_area = Rect::new(button.x - 2 - label_width + 1, rect.y, label_width, 1);
+    let lines = render_lines(&state);
+    assert_eq!(rendered_area(&lines, label_area), label);
+    let gap = Rect::new(button.x - 1, rect.y, 1, 1);
+    assert!(
+        matches!(rendered_area(&lines, gap).as_str(), "─" | " "),
+        "agent label must not touch the toggle button"
+    );
+
+    let name_col = label_area.x + 1 + text::PANE_AGENT_PREFIX.len() as u16;
+    let buffer = render_buffer(&state);
+    let prefix = &buffer[(label_area.x + 1, label_area.y)];
+    assert_eq!(
+        prefix.fg,
+        ratatui::style::Color::Cyan,
+        "agent prefix uses accent color like the prompt ws: label"
+    );
+    assert_eq!(prefix.modifier, ratatui::style::Modifier::BOLD);
+    let name = &buffer[(name_col, label_area.y)];
+    assert_eq!(
+        (name.fg, name.modifier),
+        (
+            ratatui::style::Color::Cyan,
+            ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM
+        ),
+        "focused pane matches the prompt ws: value style (accent + dim)"
+    );
+
+    // 窗格失焦（prompt 持有键盘焦点）：值回退 muted。
+    state.prompt_focused = true;
+    let buffer = render_buffer(&state);
+    let name = &buffer[(name_col, label_area.y)];
+    assert_eq!(
+        (name.fg, name.modifier),
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "unfocused pane keeps the agent name muted"
+    );
+}
+
+#[test]
+fn pane_border_agent_label_absent_without_agent() {
+    let mut state = AppState::demo();
+    terminal_view(&mut state);
+    let lines = render_lines(&state);
+    assert!(
+        !lines[0].contains(text::PANE_AGENT_PREFIX),
+        "no agent means no border label: {:?}",
+        lines[0]
+    );
+}
+
 /// 浮层顶边框标题单元格：淡蓝色（Cyan + dim）、非粗体，面板底色保留。
 fn assert_overlay_title(buffer: &ratatui::buffer::Buffer, area: Rect) {
     let cell = &buffer[(area.x + 1, area.y)];
@@ -1781,7 +1866,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     );
     assert_eq!(
         child_col,
-        parent_col.map(|column| column + WORKSPACE_ITEM_INDENT + 1),
+        parent_col.map(|column| column + sidebar::WORKSPACE_ITEM_INDENT + 1),
         "子项名字在连接符与图标之后"
     );
     assert_eq!(

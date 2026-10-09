@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use alacritty_terminal::event::{Event as EmulatorEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Grid, Scroll};
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection as TermSelection, SelectionType};
-use alacritty_terminal::term::cell::Cell;
+use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{
     Config as EmulatorConfig, RenderableContent, Term, TermMode, viewport_to_point,
 };
@@ -236,6 +236,34 @@ impl Terminal {
     /// 网格只读访问，测试使用。
     pub fn grid(&self) -> &Grid<Cell> {
         self.term.grid()
+    }
+
+    /// 视口尾部文本行（至多 `max_lines` 行，自底向上截取）；宽字符占位跳过、控制字符空白化。
+    ///
+    /// 供 Agent 状态仲裁扫描屏幕尾部提示；只读，不改变终端状态。
+    pub fn tail_lines(&self, max_lines: usize) -> Vec<String> {
+        if max_lines == 0 || self.size.rows == 0 {
+            return Vec::new();
+        }
+        let grid = self.term.grid();
+        let rows = usize::from(self.size.rows);
+        let start = rows.saturating_sub(max_lines);
+        let mut lines = Vec::with_capacity(rows - start);
+        for row in start..rows {
+            let mut text = String::new();
+            for col in 0..usize::from(self.size.cols) {
+                let cell = &grid[Line(row as i32)][Column(col)];
+                if cell
+                    .flags
+                    .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    continue;
+                }
+                text.push(if cell.c.is_control() { ' ' } else { cell.c });
+            }
+            lines.push(text.trim_end().to_string());
+        }
+        lines
     }
 
     /// 光标在视口中的位置（行、列）；隐藏或滚出视口时返回 None。
