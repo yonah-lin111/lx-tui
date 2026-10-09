@@ -122,22 +122,6 @@ fn agent_location_stays_visible_on_narrow_sidebar() {
 }
 
 #[test]
-fn focused_agent_row_gets_selected_background() {
-    let mut state = AppState::demo();
-    add_agent(&mut state, AgentKind::Claude, AgentState::Working);
-    // 聚焦填充优先于悬停高亮。
-    state.agent_hover = Some(0);
-    let buffer = render_buffer(&state);
-    let view = view_for(&state);
-    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
-    assert_eq!(
-        buffer[(sections.agents.x, sections.agents.y)].style().bg,
-        style::selected_item().bg,
-        "focused pane agent row must use selected background"
-    );
-}
-
-#[test]
 fn agent_dot_follows_state() {
     let mut state = AppState::demo();
     let pane = add_agent(&mut state, AgentKind::Codex, AgentState::Idle);
@@ -232,11 +216,23 @@ fn collapsed_agents_section_is_not_hittable() {
 }
 
 #[test]
+fn focused_pane_agent_row_has_no_selected_background() {
+    let mut state = AppState::demo();
+    add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    let buffer = render_buffer(&state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    assert_ne!(
+        buffer[(sections.agents.x, sections.agents.y)].style().bg,
+        style::selected_item().bg,
+        "pane focus alone must not fill the agent row"
+    );
+}
+
+#[test]
 fn hover_row_gets_selection_background() {
     let mut state = AppState::demo();
     add_agent(&mut state, AgentKind::Gemini, AgentState::Working);
-    // prompt 持有键盘焦点时窗格不处于聚焦态，悬停高亮生效。
-    state.prompt_focused = true;
     state.agent_hover = Some(0);
     let buffer = render_buffer(&state);
     let view = view_for(&state);

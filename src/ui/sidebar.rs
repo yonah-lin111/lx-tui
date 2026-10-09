@@ -536,20 +536,17 @@ pub fn render_agents(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     }
 }
 
-/// Agents 条目行：聚焦窗格（且 prompt 未持有键盘焦点）使用选中填充、悬停使用高亮底色；
-/// 工作/阻塞实心圆点着色、空闲空心圆点弱化；归属标签固定右对齐，宽度不足先截断名称。
+/// Agents 条目行：悬停使用高亮底色；工作/阻塞实心圆点着色、空闲空心圆点弱化；
+/// 归属标签固定右对齐，宽度不足先截断名称。
 fn agent_list_items<'a>(
     state: &'a AppState,
     items: &[AgentListItem],
     width: usize,
 ) -> Vec<ListItem<'a>> {
-    let focused = (!state.prompt_focused).then(|| state.active_tab().layout.focus());
     let mut rows = Vec::with_capacity(items.len());
     for (slot, item) in items.iter().enumerate() {
         let snapshot = &item.snapshot;
-        let highlight = if focused == Some(item.pane_id) {
-            style::selected_item()
-        } else if state.agent_hover == Some(slot) {
+        let highlight = if state.agent_hover == Some(slot) {
             style::selection()
         } else {
             Style::default()

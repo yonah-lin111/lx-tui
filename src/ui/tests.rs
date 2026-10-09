@@ -1580,6 +1580,7 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
         "agent label must not touch the toggle button"
     );
 
+    let name_col = label_area.x + 1 + text::PANE_AGENT_PREFIX.len() as u16;
     let buffer = render_buffer(&state);
     let prefix = &buffer[(label_area.x + 1, label_area.y)];
     assert_eq!(
@@ -1588,13 +1589,21 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
         "agent prefix uses accent color like the prompt ws: label"
     );
     assert_eq!(prefix.modifier, ratatui::style::Modifier::BOLD);
-    let name = &buffer[(
-        label_area.x + 1 + text::PANE_AGENT_PREFIX.len() as u16,
-        label_area.y,
-    )];
+    let name = &buffer[(name_col, label_area.y)];
+    assert_eq!(
+        name.fg,
+        ratatui::style::Color::Cyan,
+        "focused pane highlights the agent name"
+    );
+    assert!(name.modifier.contains(ratatui::style::Modifier::BOLD));
+
+    // 窗格失焦（prompt 持有键盘焦点）：值回退 muted。
+    state.prompt_focused = true;
+    let buffer = render_buffer(&state);
+    let name = &buffer[(name_col, label_area.y)];
     assert!(
         name.modifier.contains(ratatui::style::Modifier::DIM),
-        "agent name uses muted style like the prompt ws: value"
+        "unfocused pane keeps the agent name muted"
     );
 }
 

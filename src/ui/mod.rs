@@ -392,7 +392,7 @@ fn render_panes(
                     widgets::scrollbar::render(frame, &scrollbar);
                 }
                 main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
-                render_pane_agent_label(frame, *rect, &title, pane);
+                render_pane_agent_label(frame, *rect, &title, pane, focused);
             }
             PaneKind::Placeholder => {}
         }
@@ -401,18 +401,29 @@ fn render_panes(
 }
 
 /// 窗格顶边框右侧 Agent 标记 ` agent:xxx`：前缀强调色、值 muted（与 prompt 顶边框 `ws:` 对齐），
-/// 右端与切换按钮间隔 1 列；按钮缺失、空间不足或会覆盖左侧标题时不绘制。
-fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane: &Pane) {
+/// 窗格聚焦时值改用强调色高亮；右端与切换按钮间隔 1 列；按钮缺失、空间不足或会覆盖左侧标题时不绘制。
+fn render_pane_agent_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    title: &str,
+    pane: &Pane,
+    focused: bool,
+) {
     let Some(agent) = pane.agent.as_ref() else {
         return;
     };
     let Some(button) = main_content::toggle_button(rect) else {
         return;
     };
+    let value_style = if focused {
+        style::accent()
+    } else {
+        style::muted()
+    };
     let spans = [
         (" ".to_string(), style::muted()),
         (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
-        (text::agent_label(agent.kind).to_string(), style::muted()),
+        (text::agent_label(agent.kind).to_string(), value_style),
     ];
     let label_width: u16 = spans
         .iter()
