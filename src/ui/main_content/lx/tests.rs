@@ -4,17 +4,21 @@ use super::*;
 use ratatui::style::Color;
 
 /// 校验静态像素图：行宽一致、行数为偶（半块渲染按 2 行一组）、只含调色板字符。
-fn assert_fox_art(rows: &[&str]) {
-    assert_eq!(rows.len(), usize::from(FOX_ROWS) * 2, "行数 = 单元格行 × 2");
+fn assert_logo_art(rows: &[&str]) {
+    assert_eq!(
+        rows.len(),
+        usize::from(LOGO_ROWS) * 2,
+        "行数 = 单元格行 × 2"
+    );
     for row in rows {
         assert_eq!(
             row.chars().count(),
-            usize::from(FOX_WIDTH),
+            usize::from(LOGO_WIDTH),
             "像素行宽度一致"
         );
         for ch in row.chars() {
             assert!(
-                matches!(ch, '.' | 'k' | 'p' | 'n' | 'b' | 'w'),
+                matches!(ch, '.' | 'k' | 'p' | 'n' | 'b' | 'c' | 'w'),
                 "未知像素字符 {ch:?}"
             );
         }
@@ -22,19 +26,20 @@ fn assert_fox_art(rows: &[&str]) {
 }
 
 #[test]
-fn fox_art_is_consistent() {
-    assert_fox_art(FOX);
+fn logo_art_is_consistent() {
+    assert_logo_art(LOGO);
 }
 
 #[test]
-fn mascot_palette_maps_logo_colors() {
-    assert_eq!(style::mascot_pixel('k'), Some(Color::Indexed(17)));
-    assert_eq!(style::mascot_pixel('p'), Some(Color::Indexed(218)));
-    assert_eq!(style::mascot_pixel('n'), Some(Color::Indexed(168)));
-    assert_eq!(style::mascot_pixel('b'), Some(Color::Indexed(117)));
-    assert_eq!(style::mascot_pixel('w'), Some(Color::Indexed(231)));
-    assert_eq!(style::mascot_pixel('.'), None);
-    assert_eq!(style::mascot_pixel('x'), None);
+fn logo_palette_maps_logo_colors() {
+    assert_eq!(style::logo_pixel('k'), Some(Color::Indexed(17)));
+    assert_eq!(style::logo_pixel('p'), Some(Color::Indexed(218)));
+    assert_eq!(style::logo_pixel('n'), Some(Color::Indexed(168)));
+    assert_eq!(style::logo_pixel('b'), Some(Color::Indexed(117)));
+    assert_eq!(style::logo_pixel('c'), Some(Color::Indexed(195)));
+    assert_eq!(style::logo_pixel('w'), Some(Color::Indexed(231)));
+    assert_eq!(style::logo_pixel('.'), None);
+    assert_eq!(style::logo_pixel('x'), None);
     assert_eq!(
         style::lx_placeholder().fg,
         Some(Color::Indexed(231)),
@@ -68,21 +73,21 @@ fn roomy_page_draws_header_panel_hint_and_input() {
     assert!(text.contains("placeholder"), "白色占位面板可见");
     assert!(text.contains("Ask anything…"), "输入框占位文案可见");
     assert!(text.contains("click [>_] to open terminal"), "切换提示可见");
-    assert!(text.contains('▀') || text.contains('█'), "狐狸像素画可见");
+    assert!(text.contains('▀') || text.contains('█'), "logo 像素画可见");
     // 输入框贴内容区底部。
     let input = input_box(area).expect("input box");
     assert_eq!(input.bottom(), area.bottom());
 }
 
 #[test]
-fn header_is_skipped_when_the_fox_does_not_fit() {
+fn header_is_skipped_when_the_logo_does_not_fit() {
     let area = Rect::new(0, 0, 16, 12);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf);
     let text = buffer_text(&buf);
     assert!(
         !text.contains('▀') && !text.contains('█'),
-        "宽度不足不画残缺狐狸"
+        "宽度不足不画残缺 logo"
     );
     assert!(text.contains("placeholder"), "占位面板仍在");
     assert!(text.contains("> Ask"), "输入框占位仍可见（按宽度截断）");

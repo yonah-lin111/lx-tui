@@ -1,5 +1,5 @@
-//! lx 欢迎页：顶部品牌区（像素小狐狸 + 字标）、白色占位面板与底部输入框。
-//! 只写 Buffer；颜色全部取自 `ui::style` 的吉祥物/占位调色板。
+//! lx 欢迎页：顶部品牌区（LX 像素 logo）、白色占位面板与底部输入框。
+//! 只写 Buffer；颜色全部取自 `ui::style` 的 logo/占位调色板。
 
 use ratatui::buffer::{Buffer, Cell};
 use ratatui::layout::{Alignment, Rect};
@@ -9,9 +9,9 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 
 use crate::ui::{style, text};
 
-/// 狐狸像素图尺寸（列 × 像素行 = 单元格行 × 2）。
-const FOX_WIDTH: u16 = 18;
-const FOX_ROWS: u16 = 7;
+/// LX logo 像素图尺寸（列 × 像素行 = 单元格行 × 2）。
+const LOGO_WIDTH: u16 = 20;
+const LOGO_ROWS: u16 = 7;
 
 /// 底部输入框高度（含边框）与最小宽度。
 const INPUT_HEIGHT: u16 = 3;
@@ -21,22 +21,22 @@ const SECTION_GAP: u16 = 1;
 /// 占位面板至少需要的高度（上下边框 + 一行内容）。
 const PANEL_MIN_HEIGHT: u16 = 3;
 
-/// 全尺寸狐狸像素图（18 列 × 14 像素行，静态）。
-const FOX: &[&str] = &[
-    "..k........k......",
-    ".kpk......kpk.....",
-    ".knpk....kpnk.....",
-    ".kppkkkkkkppk.....",
-    ".kppppppppppk.....",
-    ".kpwwppppwwpkkk...",
-    ".kpkkwnnwkkpkwwk..",
-    ".knppwwwwppnknwk..",
-    "..kppppppppkknnk..",
-    "..kppppppppkknnk..",
-    "..kpwwwwwwpkknnk..",
-    "..kppwwwwppkknnk..",
-    "..kkk....kkkkkkk..",
-    "..kkk....kkk......",
+/// 全尺寸 LX logo 像素图（20 列 × 14 像素行，静态；取自参考 logo 的像素结构）。
+const LOGO: &[&str] = &[
+    ".kkk...kkkkk....kkkk",
+    "kppbk..kccck...kpppk",
+    "kppbk..kbbbk...kppnk",
+    "kppbk..kbbbk..kppnnk",
+    "kppbk..kkbbbbkppnnk.",
+    "kppbk...kbbbkppnnk..",
+    "kppbk....kbkppnnk...",
+    "kppbk....kbkppnk....",
+    "kppbk....kppnnknpk..",
+    "kppbk...kppnnknnpk..",
+    "kppbk..kppnnknnnnpk.",
+    "kppbkppkpppnkk.knnnk",
+    "kbbbbbkpnnkk...knnnk",
+    "kkkkkkkkkkk.....kkkk",
 ];
 
 /// 渲染 lx 页。
@@ -59,11 +59,11 @@ pub fn render(area: Rect, buf: &mut Buffer) {
     let hint_y = input.y.checked_sub(SECTION_GAP).filter(|_| hint_fits);
     let content_bottom = hint_y.unwrap_or(input.y);
 
-    // 顶部品牌区：狐狸在左；高度或宽度放不下整只狐狸时省略。
+    // 顶部品牌区：logo 在左；高度或宽度放不下完整 logo 时省略。
     let mut next_y = area.y;
-    if content_bottom >= next_y + FOX_ROWS + SECTION_GAP && input.width >= FOX_WIDTH {
+    if content_bottom >= next_y + LOGO_ROWS + SECTION_GAP && input.width >= LOGO_WIDTH {
         draw_art(buf, input.x, next_y);
-        next_y += FOX_ROWS + SECTION_GAP;
+        next_y += LOGO_ROWS + SECTION_GAP;
     }
 
     // 白色占位面板：填满品牌区与底部区之间的剩余空间。
@@ -138,14 +138,14 @@ fn draw_panel(rect: Rect, buf: &mut Buffer) {
     );
 }
 
-/// 把静态像素图画进以 `(x, y)` 为左上角的单元格区域。
+/// 把静态像素 logo 画进以 `(x, y)` 为左上角的单元格区域。
 fn draw_art(buf: &mut Buffer, x: u16, y: u16) {
-    for (row, pair) in FOX.chunks(2).enumerate() {
+    for (row, pair) in LOGO.chunks(2).enumerate() {
         let [top, bottom] = pair else {
             break;
         };
         let cell_y = y + row as u16;
-        for column in 0..FOX_WIDTH {
+        for column in 0..LOGO_WIDTH {
             let Some(cell) = buf.cell_mut((x + column, cell_y)) else {
                 continue;
             };
@@ -158,7 +158,7 @@ fn draw_art(buf: &mut Buffer, x: u16, y: u16) {
 
 /// 两个纵向像素画进一个单元格：同色实块，异色上半块（前景上/背景下）。
 fn draw_pixels(cell: &mut Cell, top: char, bottom: char) {
-    match (style::mascot_pixel(top), style::mascot_pixel(bottom)) {
+    match (style::logo_pixel(top), style::logo_pixel(bottom)) {
         (None, None) => {}
         (Some(color), None) => {
             cell.set_char('▀');
