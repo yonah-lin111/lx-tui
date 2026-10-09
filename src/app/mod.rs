@@ -7,4 +7,5 @@ pub mod prompt;
 pub mod selection;
 pub mod state;
 pub mod toast;
+pub mod tooltip;
 pub mod update;

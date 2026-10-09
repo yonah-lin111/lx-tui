@@ -3,6 +3,8 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, SlashCommandId, TemplateStatus};
+use crate::app::state::{AppState, PaneView};
+use crate::app::tooltip::TooltipTarget;
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
@@ -212,6 +214,34 @@ pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
 pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
 /// 工作区路径非目录。
 pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
+
+/// 按钮 tooltip 文案：显示点击后的动作，随按钮当前状态翻转（收起/展开、钉住、切换视图）。
+pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
+    match target {
+        TooltipTarget::CollapseSidebar if state.sidebar_collapsed => "expand sidebar",
+        TooltipTarget::CollapseSidebar => "collapse sidebar",
+        TooltipTarget::CollapsePrompt if state.prompt_collapsed => "expand prompt",
+        TooltipTarget::CollapsePrompt => "collapse prompt",
+        TooltipTarget::CollapseAgents if state.agents_collapsed => "expand agents",
+        TooltipTarget::CollapseAgents => "collapse agents",
+        TooltipTarget::PaneToggle(pane) => match state.pane_anywhere(pane).map(|pane| pane.view) {
+            Some(PaneView::Lx) => "switch to terminal",
+            Some(PaneView::Terminal) => "switch to lx",
+            None => "switch view",
+        },
+        TooltipTarget::AddWorkspace => "new workspace",
+        TooltipTarget::AddTab => "new tab",
+        TooltipTarget::TabScrollLeft => "scroll tabs left",
+        TooltipTarget::TabScrollRight => "scroll tabs right",
+        TooltipTarget::Exit => "quit lx-tui",
+        TooltipTarget::PromptUndo => "undo (ctrl+z)",
+        TooltipTarget::PromptRedo => "redo (ctrl+y)",
+        TooltipTarget::PromptSelectAll => "select all",
+        TooltipTarget::PromptSave => "mark saved",
+        TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
+        TooltipTarget::PromptPin => "pin prompt",
+    }
+}
 
 /// 右键菜单边框标题：目标名缺失时按种类回退。
 pub const MENU_TITLE_WORKSPACE: &str = "workspace";

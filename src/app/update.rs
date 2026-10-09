@@ -27,6 +27,7 @@ use super::state::{
     current_workspace_identity, home_dir, tab_label, unique_workspace_name, workspace_label,
 };
 use super::toast::{Toast, ToastKind};
+use super::tooltip::{Tooltip, TooltipTarget};
 use crate::detect::PaneAgentSnapshot;
 use crate::ui::text;
 
@@ -898,7 +899,28 @@ pub fn set_toast_hover(state: &mut AppState, hovered: bool) -> bool {
     true
 }
 
-/// 清除已过期的 toast、推进拖选边缘自动滚动；返回是否发生变化（用于置脏重绘）。
+/// 更新 tooltip 悬停目标：目标不变保持计时，变化则整体替换并重新计时；返回是否变化。
+pub fn set_tooltip_target(
+    state: &mut AppState,
+    target: Option<TooltipTarget>,
+    now: Instant,
+) -> bool {
+    match (state.tooltip.as_ref().map(|tooltip| tooltip.target), target) {
+        (None, None) => false,
+        (Some(current), Some(target)) if current == target => false,
+        (_, target) => {
+            state.tooltip = target.map(|target| Tooltip::new(target, now));
+            true
+        }
+    }
+}
+
+/// 立即清除 tooltip（左键按下、拖拽或浮层接管）；返回是否发生变化。
+pub fn clear_tooltip(state: &mut AppState) -> bool {
+    state.tooltip.take().is_some()
+}
+
+/// 清除已过期的 toast、提升到时的 tooltip、推进拖选边缘自动滚动；返回是否发生变化。
 pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let expired = state
         .toast
@@ -907,17 +929,22 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     if expired {
         state.toast = None;
     }
+    let revealed = state
+        .tooltip
+        .as_mut()
+        .is_some_and(|tooltip| tooltip.reveal(now));
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || scrolled
+    expired || revealed || scrolled
 }
 
-/// 最近一次定时到期时间（toast 消失或自动滚动）；事件循环据此安排唤醒。
+/// 最近一次定时到期时间（toast 消失、tooltip 显示或自动滚动）；事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
+    let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll
         .map(|autoscroll| autoscroll.next_at);
-    [toast, autoscroll].into_iter().flatten().min()
+    [toast, tooltip, autoscroll].into_iter().flatten().min()
 }
 
 /// 打开新建工作区弹窗：清空滚动与拖拽状态，输入框初始为空。

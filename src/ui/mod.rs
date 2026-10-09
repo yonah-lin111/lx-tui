@@ -10,6 +10,7 @@ pub mod style;
 pub mod tab_bar;
 pub mod text;
 pub mod toast;
+pub mod tooltip;
 pub mod widgets;
 
 pub use sidebar::{
@@ -71,6 +72,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
     render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
+    tooltip::render(frame, area, state, &view, &pane_rects);
     toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
     // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。

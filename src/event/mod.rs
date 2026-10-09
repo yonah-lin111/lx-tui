@@ -455,6 +455,9 @@ fn handle_terminal_event(
         }
         TerminalEvent::Mouse(mouse) => match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
+                if update::clear_tooltip(state) {
+                    *dirty = true;
+                }
                 if state.overlay.is_some() {
                     let was_confirm = matches!(
                         state.overlay,
@@ -1022,6 +1025,9 @@ fn handle_terminal_event(
                             *dirty = true;
                         }
                     }
+                    if update::clear_tooltip(state) {
+                        *dirty = true;
+                    }
                     return;
                 }
                 // 侧栏工作区行与标签栏的悬停高亮先于浮层命中计算：指针离开条目区即清空。
@@ -1044,10 +1050,16 @@ fn handle_terminal_event(
                     if update::hover_mention(state, index) {
                         *dirty = true;
                     }
+                    if update::clear_tooltip(state) {
+                        *dirty = true;
+                    }
                     return;
                 }
                 if let Some(index) = slash_item_at(state, view, mouse.column, mouse.row) {
                     if update::hover_slash(state, index) {
+                        *dirty = true;
+                    }
+                    if update::clear_tooltip(state) {
                         *dirty = true;
                     }
                     return;
@@ -1056,11 +1068,23 @@ fn handle_terminal_event(
                     if update::hover_panel(state, index) {
                         *dirty = true;
                     }
+                    if update::clear_tooltip(state) {
+                        *dirty = true;
+                    }
                     return;
                 }
                 let hovering_toast = ui::toast::rect(state, view, rects, *screen, config)
                     .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
                 if update::set_toast_hover(state, hovering_toast) {
+                    *dirty = true;
+                }
+                // 按钮 tooltip：拖拽排序或指针在 toast 上时不触发；目标变化重置显示计时。
+                let tooltip_target = if hovering_toast || state.workspace_drag.is_some() {
+                    None
+                } else {
+                    ui::tooltip::target_at(view, state, rects, mouse.column, mouse.row)
+                };
+                if update::set_tooltip_target(state, tooltip_target, Instant::now()) {
                     *dirty = true;
                 }
                 let boundary = layout::resize_boundary_at(rects, mouse.column, mouse.row);
