@@ -157,7 +157,27 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     for (y, status) in block_rows {
         paint_template_background(buf, area, y, status);
     }
+    if prompt.text().is_empty() {
+        paint_placeholder(buf, area);
+    }
     render_panels(buf, area, prompt);
+}
+
+/// 空内容输入说明：内容区首行左侧暗色占位，超出宽度的部分裁剪。
+fn paint_placeholder(buf: &mut Buffer, area: Rect) {
+    let mut x = area.x;
+    for ch in text::PROMPT_PLACEHOLDER.chars() {
+        let width = ch.width().unwrap_or(0);
+        if x.saturating_add(width as u16) > area.right() {
+            break;
+        }
+        if let Some(cell) = buf.cell_mut((x, area.y)) {
+            cell.reset();
+            cell.set_char(ch);
+            cell.set_style(style::muted());
+        }
+        x = x.saturating_add(width as u16);
+    }
 }
 
 /// 提及条目父路径可用宽度：面板最宽占满文本区，扣除两侧边框、滚动条列与行内前导空格。

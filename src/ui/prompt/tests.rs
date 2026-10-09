@@ -70,6 +70,30 @@ fn fence_lines_are_markers_and_content_stays_default() {
 }
 
 #[test]
+fn empty_prompt_renders_input_placeholder() {
+    let area = Rect::new(0, 0, 40, 4);
+    let prompt = prompt(40, 4, "");
+    assert!(prompt.text().is_empty());
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    let row: String = (0..40).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(row.starts_with(text::PROMPT_PLACEHOLDER), "row={row:?}");
+    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn prompt_placeholder_disappears_after_input() {
+    let area = Rect::new(0, 0, 40, 4);
+    let prompt = prompt(40, 4, "hi");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    let row: String = (0..40).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(!row.contains(text::PROMPT_PLACEHOLDER), "row={row:?}");
+    assert_eq!(buf[(0, 0)].symbol(), "h");
+    assert_eq!(buf[(1, 0)].symbol(), "i");
+}
+
+#[test]
 fn renders_scrolled_viewport() {
     let area = Rect::new(0, 0, 4, 2);
     let prompt = prompt(4, 2, "abcdefghij");
