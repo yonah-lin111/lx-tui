@@ -465,3 +465,42 @@ fn sync_ws_cwd_confirm_buttons_hit_their_cells() {
         Some(ConfirmButton::Cancel)
     );
 }
+
+#[test]
+fn new_workspace_renders_title_buttons_and_cursor() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new("/test/path"),
+    }));
+    let (lines, cursor) = draw_overlay(&state);
+    assert!(cursor.is_some(), "text input must place cursor");
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::NEW_WORKSPACE_TITLE), "{joined}");
+    assert!(joined.contains("/test/path"), "{joined}");
+    assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
+    assert!(joined.contains(text::BUTTON_CLEAR), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+}
+
+#[test]
+fn new_workspace_buttons_hit_their_cells() {
+    let shell = new_workspace_shell(SCREEN).expect("dialog fits");
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &NEW_WORKSPACE_BUTTONS,
+        BUTTON_GAP,
+        NEW_WORKSPACE_BUTTON_ROW,
+    );
+    assert_eq!(
+        new_workspace_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(NewWorkspaceButton::Create)
+    );
+    assert_eq!(
+        new_workspace_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(NewWorkspaceButton::Clear)
+    );
+    assert_eq!(
+        new_workspace_button_at(&shell, buttons[2].x, buttons[2].y),
+        Some(NewWorkspaceButton::Cancel)
+    );
+}

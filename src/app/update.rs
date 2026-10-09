@@ -8,7 +8,7 @@ pub use worktree::{
     toggle_workspace_group,
 };
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::{Direction, Rect};
@@ -18,15 +18,16 @@ use crate::layout::{self, BoundaryHit, PaneId};
 use super::actions::{Action, EditorCommand, OverlayKey};
 use super::markdown::MentionEntry;
 use super::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, Overlay,
-    OverlayKind, OverlayTarget, Rename, RenameTarget, TextInput,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewWorkspace,
+    Overlay, OverlayKind, OverlayTarget, Rename, RenameTarget, TextInput,
 };
 use super::selection::Selection;
 use super::state::{
     AppState, AutoscrollDirection, PaneKind, PaneView, SelectionAutoscroll, Tab, Workspace,
     current_workspace_identity, home_dir, tab_label, unique_workspace_name, workspace_label,
 };
-use super::toast::Toast;
+use super::toast::{Toast, ToastKind};
+use crate::ui::text;
 
 /// 应用行为。
 pub fn apply(action: Action, state: &mut AppState) {
@@ -898,19 +899,86 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     [toast, autoscroll, animation].into_iter().flatten().min()
 }
 
-/// 新建工作区并激活：目录取当前工作区焦点终端的实时 cwd，回退主终端 cwd 与进程 cwd；
-/// 名字取目录末段（对齐 herdr），重名追加最小未用序号；立即登记 cwd 的 git 元数据查询；
-/// PTY 由事件循环按状态对齐启动。
-pub fn create_workspace(state: &mut AppState) {
-    let (cwd, base) = match state
-        .active_terminal_cwd()
-        .or_else(|| state.active_workspace().cwd.clone())
+/// 打开新建工作区弹窗：清空滚动与拖拽状态，输入框初始为空。
+pub fn open_new_workspace_dialog(state: &mut AppState) {
+    state.workspace_scroll_drag = None;
+    state.workspace_drag = None;
+    state.workspace_dragging = false;
+    state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new(String::new()),
+    }));
+}
+
+/// 解析用户输入的工作区路径：
+/// 1. 空输入或纯引号包裹的空串返回 Ok(None)（表示继承默认工作区路径）；
+/// 2. 剥离匹配的外层双引号/单引号；
+/// 3. 支持 `~` / `~/...` 展开为当前用户 HOME 目录；
+/// 4. 相对路径以基准路径（当前工作区路径或进程路径）展开；
+/// 5. 校验目标路径必须在磁盘上存在且必须为目录。
+pub fn parse_workspace_path(
+    input: &str,
+    base_cwd: Option<&Path>,
+) -> Result<Option<PathBuf>, &'static str> {
+    let mut trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if (trimmed.starts_with('"') && trimmed.ends_with('"') && trimmed.len() >= 2)
+        || (trimmed.starts_with('\'') && trimmed.ends_with('\'') && trimmed.len() >= 2)
     {
+        trimmed = trimmed[1..trimmed.len() - 1].trim();
+    }
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let path = if trimmed == "~" {
+        home_dir().ok_or("Cannot resolve home directory")?
+    } else if let Some(rest) = trimmed.strip_prefix("~/") {
+        let home = home_dir().ok_or("Cannot resolve home directory")?;
+        home.join(rest)
+    } else {
+        let p = Path::new(trimmed);
+        if p.is_relative() {
+            if let Some(base) = base_cwd {
+                base.join(p)
+            } else if let Ok(current) = std::env::current_dir() {
+                current.join(p)
+            } else {
+                p.to_path_buf()
+            }
+        } else {
+            p.to_path_buf()
+        }
+    };
+    if !path.exists() {
+        return Err(text::TOAST_DIRECTORY_NOT_FOUND);
+    }
+    if !path.is_dir() {
+        return Err(text::TOAST_PATH_NOT_DIR);
+    }
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    Ok(Some(path))
+}
+
+/// 新建工作区并激活：如果提供了目标 cwd 则以其为根路径，否则取当前工作区焦点终端的实时 cwd
+/// 回退主终端 cwd 与进程 cwd；名字取目录末段（对齐 herdr），重名追加最小未用序号；
+/// 立即登记 cwd 的 git 元数据查询；PTY 由事件循环按状态对齐启动。
+pub fn create_workspace_with_cwd(state: &mut AppState, target_cwd: Option<PathBuf>) {
+    let (cwd, base) = match target_cwd {
         Some(cwd) => {
             let base = workspace_label(&cwd, home_dir().as_deref());
             (Some(cwd), base)
         }
-        None => current_workspace_identity(),
+        None => match state
+            .active_terminal_cwd()
+            .or_else(|| state.active_workspace().cwd.clone())
+        {
+            Some(cwd) => {
+                let base = workspace_label(&cwd, home_dir().as_deref());
+                (Some(cwd), base)
+            }
+            None => current_workspace_identity(),
+        },
     };
     let name = unique_workspace_name(&base, |candidate| {
         state
@@ -931,6 +999,11 @@ pub fn create_workspace(state: &mut AppState) {
     }
     clear_selection(state);
     state.prompt_focused = false;
+}
+
+/// 新建工作区（无指定路径，继承当前终端/工作区路径）。
+pub fn create_workspace(state: &mut AppState) {
+    create_workspace_with_cwd(state, None);
 }
 
 /// 在目标工作区追加终端标签并激活：初始 cwd 为工作区固定根路径，直接进入终端视图；
@@ -1438,6 +1511,10 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 commit_rename(state);
                 None
             }
+            Some(OverlayKind::NewWorkspace) => {
+                commit_new_workspace(state);
+                None
+            }
             Some(OverlayKind::ConfirmClose) => {
                 confirm_close(state);
                 None
@@ -1450,44 +1527,73 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             Some(OverlayKind::WorktreeOpen) | None => None,
         },
         OverlayKey::Char(ch) => {
-            edit_rename(state, |input| input.insert_char(ch));
+            edit_text_input(state, |input| input.insert_char(ch));
             None
         }
         OverlayKey::Clear => {
-            edit_rename(state, TextInput::clear);
+            edit_text_input(state, TextInput::clear);
             None
         }
         OverlayKey::Backspace => {
-            edit_rename(state, TextInput::backspace);
+            edit_text_input(state, TextInput::backspace);
             None
         }
         OverlayKey::Delete => {
-            edit_rename(state, TextInput::delete);
+            edit_text_input(state, TextInput::delete);
             None
         }
         OverlayKey::Left => {
-            edit_rename(state, TextInput::move_left);
+            edit_text_input(state, TextInput::move_left);
             None
         }
         OverlayKey::Right => {
-            edit_rename(state, TextInput::move_right);
+            edit_text_input(state, TextInput::move_right);
             None
         }
         OverlayKey::Home => {
-            edit_rename(state, TextInput::move_home);
+            edit_text_input(state, TextInput::move_home);
             None
         }
         OverlayKey::End => {
-            edit_rename(state, TextInput::move_end);
+            edit_text_input(state, TextInput::move_end);
             None
         }
     }
 }
 
-/// 对重命名输入执行一次编辑；其他浮层忽略。
-fn edit_rename(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
-    if let Some(Overlay::Rename(rename)) = state.overlay.as_mut() {
-        edit(&mut rename.input);
+/// 对单行输入类浮层（重命名、新建工作区路径）执行一次编辑；其他浮层忽略。
+fn edit_text_input(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
+    match state.overlay.as_mut() {
+        Some(Overlay::Rename(rename)) => edit(&mut rename.input),
+        Some(Overlay::NewWorkspace(new_ws)) => edit(&mut new_ws.input),
+        _ => {}
+    }
+}
+
+/// 提交新建工作区：校验路径，成功时关闭弹窗并创建工作区；
+/// 失败时弹出 Toast 错误并保持弹窗打开以便用户修改。
+fn commit_new_workspace(state: &mut AppState) {
+    let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_ref() else {
+        return;
+    };
+    let text_val = dialog.input.text().to_string();
+    let base_cwd = state
+        .active_workspace()
+        .cwd
+        .clone()
+        .or_else(|| state.active_terminal_cwd());
+    match parse_workspace_path(&text_val, base_cwd.as_deref()) {
+        Ok(parsed_cwd) => {
+            state.overlay = None;
+            create_workspace_with_cwd(state, parsed_cwd);
+        }
+        Err(err) => {
+            show_toast(
+                state,
+                Toast::new(ToastKind::Error, err, None, Instant::now())
+                    .with_title(text::TOAST_WORKSPACE_TITLE),
+            );
+        }
     }
 }
 

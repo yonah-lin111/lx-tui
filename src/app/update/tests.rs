@@ -3065,3 +3065,159 @@ fn prompt_copy_text_prefers_selection_then_full_text() {
         "有选区优先复制选区"
     );
 }
+
+#[test]
+fn parse_workspace_path_handles_empty_quotes_and_whitespace() {
+    assert_eq!(parse_workspace_path("", None), Ok(None));
+    assert_eq!(parse_workspace_path("   ", None), Ok(None));
+    assert_eq!(parse_workspace_path("\"\"", None), Ok(None));
+    assert_eq!(parse_workspace_path("''", None), Ok(None));
+    assert_eq!(parse_workspace_path("  \"\"  ", None), Ok(None));
+    assert_eq!(parse_workspace_path("  ''  ", None), Ok(None));
+}
+
+#[test]
+fn parse_workspace_path_strips_quotes_and_resolves_valid_dir() {
+    let tmp = std::env::temp_dir();
+    let canonical_tmp = tmp.canonicalize().unwrap_or(tmp);
+    let path_str = canonical_tmp.to_string_lossy().to_string();
+
+    let quoted_double = format!("\"{path_str}\"");
+    let quoted_single = format!("'{path_str}'");
+
+    assert_eq!(
+        parse_workspace_path(&quoted_double, None),
+        Ok(Some(canonical_tmp.clone()))
+    );
+    assert_eq!(
+        parse_workspace_path(&quoted_single, None),
+        Ok(Some(canonical_tmp.clone()))
+    );
+}
+
+#[test]
+fn parse_workspace_path_expands_relative_and_home() {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let src_canonical = cwd.join("src").canonicalize().unwrap_or(cwd.join("src"));
+
+    assert_eq!(
+        parse_workspace_path("src", Some(&cwd)),
+        Ok(Some(src_canonical))
+    );
+
+    if let Some(home) = home_dir() {
+        let home_canonical = home.canonicalize().unwrap_or(home);
+        assert_eq!(parse_workspace_path("~", None), Ok(Some(home_canonical)));
+    }
+}
+
+#[test]
+fn parse_workspace_path_errors_on_nonexistent_or_file() {
+    assert_eq!(
+        parse_workspace_path("/path/definitely/does_not_exist_abcxyz", None),
+        Err(crate::ui::text::TOAST_DIRECTORY_NOT_FOUND)
+    );
+
+    // Existing file, not directory
+    let cargo_toml = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    if cargo_toml.exists() {
+        assert_eq!(
+            parse_workspace_path(&cargo_toml.to_string_lossy(), None),
+            Err(crate::ui::text::TOAST_PATH_NOT_DIR)
+        );
+    }
+}
+
+#[test]
+fn open_new_workspace_dialog_opens_empty_overlay() {
+    let mut state = AppState::demo();
+    open_new_workspace_dialog(&mut state);
+    match &state.overlay {
+        Some(Overlay::NewWorkspace(dialog)) => {
+            assert_eq!(dialog.input.text(), "");
+        }
+        other => panic!("expected NewWorkspace overlay, got {other:?}"),
+    }
+}
+
+#[test]
+fn commit_new_workspace_empty_input_uses_active_cwd() {
+    let mut state = AppState::demo();
+    let initial_count = state.workspaces.len();
+    let active_cwd = state.active_workspace().cwd.clone();
+
+    open_new_workspace_dialog(&mut state);
+    commit_new_workspace(&mut state);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), initial_count + 1);
+    assert_eq!(state.active_workspace().cwd, active_cwd);
+}
+
+#[test]
+fn commit_new_workspace_valid_path_creates_workspace_with_path() {
+    let mut state = AppState::demo();
+    let initial_count = state.workspaces.len();
+    let tmp = std::env::temp_dir();
+    let canonical_tmp = tmp.canonicalize().unwrap_or(tmp);
+
+    open_new_workspace_dialog(&mut state);
+    if let Some(Overlay::NewWorkspace(ref mut dialog)) = state.overlay {
+        dialog.input = TextInput::new(canonical_tmp.to_string_lossy());
+    }
+
+    commit_new_workspace(&mut state);
+
+    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), initial_count + 1);
+    assert_eq!(state.active_workspace().cwd, Some(canonical_tmp));
+}
+
+#[test]
+fn commit_new_workspace_invalid_path_shows_toast_and_keeps_overlay() {
+    let mut state = AppState::demo();
+    let initial_count = state.workspaces.len();
+
+    open_new_workspace_dialog(&mut state);
+    if let Some(Overlay::NewWorkspace(ref mut dialog)) = state.overlay {
+        dialog.input = TextInput::new("/nonexistent/directory/path/12345");
+    }
+
+    commit_new_workspace(&mut state);
+
+    // Overlay must remain open
+    assert!(matches!(state.overlay, Some(Overlay::NewWorkspace(_))));
+    // Workspace count unchanged
+    assert_eq!(state.workspaces.len(), initial_count);
+    // Error toast shown
+    let toast = state.toast.as_ref().expect("toast must be shown");
+    assert_eq!(toast.kind, ToastKind::Error);
+    assert_eq!(toast.message, crate::ui::text::TOAST_DIRECTORY_NOT_FOUND);
+}
+
+#[test]
+fn overlay_key_new_workspace_editing_and_lifecycle() {
+    let mut state = AppState::demo();
+    open_new_workspace_dialog(&mut state);
+
+    // Type characters
+    apply_overlay_key(&mut state, OverlayKey::Char('/'));
+    apply_overlay_key(&mut state, OverlayKey::Char('t'));
+    apply_overlay_key(&mut state, OverlayKey::Char('m'));
+    apply_overlay_key(&mut state, OverlayKey::Char('p'));
+    match &state.overlay {
+        Some(Overlay::NewWorkspace(dialog)) => assert_eq!(dialog.input.text(), "/tmp"),
+        _ => panic!("overlay expected"),
+    }
+
+    // Clear with Clear command
+    apply_overlay_key(&mut state, OverlayKey::Clear);
+    match &state.overlay {
+        Some(Overlay::NewWorkspace(dialog)) => assert_eq!(dialog.input.text(), ""),
+        _ => panic!("overlay expected"),
+    }
+
+    // Cancel with Esc command
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+}

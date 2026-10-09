@@ -344,11 +344,12 @@ fn handle_terminal_event(
                     );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
+                    let was_new_ws = matches!(state.overlay, Some(Overlay::NewWorkspace(_)));
                     if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
                         write_to_pane(sessions, pane, &bytes);
                         update::reset_pane_scroll(state, pane);
                     }
-                    if was_confirm || was_menu || was_worktree {
+                    if was_confirm || was_menu || was_worktree || was_new_ws {
                         ensure_workspace_visible(state, view);
                         reveal_active_tab(state, view);
                     }
@@ -413,13 +414,14 @@ fn handle_terminal_event(
                     );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
+                    let was_new_ws = matches!(state.overlay, Some(Overlay::NewWorkspace(_)));
                     if let Some((pane, bytes)) =
                         handle_overlay_click(state, *screen, mouse.column, mouse.row)
                     {
                         write_to_pane(sessions, pane, &bytes);
                         update::reset_pane_scroll(state, pane);
                     }
-                    if was_confirm || was_menu || was_worktree {
+                    if was_confirm || was_menu || was_worktree || was_new_ws {
                         ensure_workspace_visible(state, view);
                     }
                     reveal_active_tab(state, view);
@@ -519,7 +521,7 @@ fn handle_terminal_event(
                 } else if ui::add_workspace_button(view)
                     .is_some_and(|area| area.contains((mouse.column, mouse.row).into()))
                 {
-                    update::create_workspace(state);
+                    update::open_new_workspace_dialog(state);
                     ensure_workspace_visible(state, view);
                     reveal_active_tab(state, view);
                     *dirty = true;
@@ -1209,6 +1211,22 @@ fn handle_overlay_click(
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
                 Some(ui::overlay::RenameButton::Cancel) | None => {
+                    update::close_overlay(state);
+                    None
+                }
+            }
+        }
+        Some(Overlay::NewWorkspace(_)) => {
+            let button = ui::overlay::new_workspace_shell(screen)
+                .and_then(|shell| ui::overlay::new_workspace_button_at(&shell, column, row));
+            match button {
+                Some(ui::overlay::NewWorkspaceButton::Create) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::NewWorkspaceButton::Clear) => {
+                    update::apply_overlay_key(state, OverlayKey::Clear)
+                }
+                Some(ui::overlay::NewWorkspaceButton::Cancel) | None => {
                     update::close_overlay(state);
                     None
                 }

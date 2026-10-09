@@ -90,6 +90,10 @@ fn overlay_kind_reports_variant() {
         path: PathBuf::from("/tmp/terminal"),
     });
     assert_eq!(sync_cwd.kind(), OverlayKind::ConfirmSyncWorkspaceCwd);
+    let new_ws = Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new(""),
+    });
+    assert_eq!(new_ws.kind(), OverlayKind::NewWorkspace);
     let worktree = Overlay::WorktreeOpen(worktree_dialog(vec![], 0));
     assert_eq!(worktree.kind(), OverlayKind::WorktreeOpen);
 }

@@ -12,6 +12,7 @@ pub enum OverlayKind {
     ConfirmClose,
     ConfirmSwitchCwd,
     ConfirmSyncWorkspaceCwd,
+    NewWorkspace,
     WorktreeOpen,
 }
 
@@ -23,6 +24,7 @@ pub enum Overlay {
     ConfirmClose(ConfirmClose),
     ConfirmSwitchCwd(ConfirmSwitchCwd),
     ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd),
+    NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
 }
 
@@ -35,6 +37,7 @@ impl Overlay {
             Self::ConfirmClose(_) => OverlayKind::ConfirmClose,
             Self::ConfirmSwitchCwd(_) => OverlayKind::ConfirmSwitchCwd,
             Self::ConfirmSyncWorkspaceCwd(_) => OverlayKind::ConfirmSyncWorkspaceCwd,
+            Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
         }
     }
@@ -119,6 +122,12 @@ pub struct ConfirmSyncWorkspaceCwd {
     pub workspace: usize,
     pub pane: PaneId,
     pub path: PathBuf,
+}
+
+/// 新建工作区浮层：单行路径输入。
+#[derive(Debug)]
+pub struct NewWorkspace {
+    pub input: TextInput,
 }
 
 /// 打开已有 worktree 的浮层：源工作区、仓库根、条目与搜索输入。

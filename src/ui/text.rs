@@ -103,6 +103,7 @@ pub const MENU_CLOSE_PANE: &str = "Close";
 
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
+pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
 pub const RENAME_TAB_TITLE: &str = "rename tab";
 pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
 pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
@@ -123,6 +124,7 @@ pub const WORKTREE_STATUS_ROOT: &str = "root";
 
 /// 模态底部按钮：名称在前、快捷键在后。
 pub const BUTTON_SAVE: &str = "[save enter]";
+pub const BUTTON_CREATE: &str = "[create enter]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
 pub const BUTTON_CONFIRM: &str = "[confirm enter]";
@@ -159,6 +161,12 @@ pub const TOAST_COPIED: &str = "Copied to clipboard";
 pub const TOAST_COPY_FAILED: &str = "Copy failed";
 /// 复制反馈 toast 的边框标题。
 pub const TOAST_CLIPBOARD_TITLE: &str = "Clipboard";
+/// 工作区反馈 toast 的边框标题。
+pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
+/// 工作区路径不存在。
+pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
+/// 工作区路径非目录。
+pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
 
 /// 右键菜单边框标题：目标名缺失时按种类回退。
 pub const MENU_TITLE_WORKSPACE: &str = "workspace";

@@ -9,8 +9,8 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, Overlay,
-    OverlayTarget, Rename, RenameTarget, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewWorkspace,
+    Overlay, OverlayTarget, Rename, RenameTarget, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
 };
 use crate::app::state::{AppState, tab_label};
 use crate::ui::widgets;
@@ -19,6 +19,9 @@ use crate::ui::{style, text};
 /// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
 const RENAME_WIDTH: u16 = 40;
 const RENAME_HEIGHT: u16 = 5;
+/// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
+const NEW_WORKSPACE_WIDTH: u16 = 44;
+const NEW_WORKSPACE_HEIGHT: u16 = 5;
 /// 关闭确认浮层尺寸（列，行）：问题行与按钮行。
 const CONFIRM_WIDTH: u16 = 40;
 const CONFIRM_HEIGHT: u16 = 4;
@@ -29,8 +32,11 @@ const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 20;
 /// 按钮间距与所在内容行。
 const BUTTON_GAP: u16 = 2;
 const RENAME_BUTTON_ROW: u16 = 2;
+const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
 const CONFIRM_BUTTON_ROW: u16 = 1;
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+const NEW_WORKSPACE_BUTTONS: [&str; 3] =
+    [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
 const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANCEL];
 
@@ -38,6 +44,14 @@ const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANC
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameButton {
     Save,
+    Clear,
+    Cancel,
+}
+
+/// 新建工作区浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewWorkspaceButton {
+    Create,
     Clear,
     Cancel,
 }
@@ -187,6 +201,31 @@ pub fn rename_button_at(
     }
 }
 
+/// 新建工作区浮层几何。
+pub fn new_workspace_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, NEW_WORKSPACE_WIDTH, NEW_WORKSPACE_HEIGHT)
+}
+
+/// 命中新建工作区按钮。
+pub fn new_workspace_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<NewWorkspaceButton> {
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &NEW_WORKSPACE_BUTTONS,
+        BUTTON_GAP,
+        RENAME_BUTTON_ROW,
+    );
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(NewWorkspaceButton::Create),
+        Some(1) => Some(NewWorkspaceButton::Clear),
+        Some(2) => Some(NewWorkspaceButton::Cancel),
+        _ => None,
+    }
+}
+
 /// 命中关闭确认按钮。
 pub fn confirm_button_at(
     shell: &widgets::modal::ModalShell,
@@ -206,7 +245,7 @@ pub fn confirm_button_at(
     }
 }
 
-/// 渲染当前浮层；返回需要同步的硬件光标位置（仅重命名输入）。
+/// 渲染当前浮层；返回需要同步的硬件光标位置（重命名输入或新建工作区路径输入）。
 pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(u16, u16)> {
     match state.overlay.as_ref()? {
         Overlay::Menu(menu) => {
@@ -217,6 +256,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             None
         }
         Overlay::Rename(rename) => render_rename(frame, screen, rename),
+        Overlay::NewWorkspace(new_ws) => render_new_workspace(frame, screen, new_ws),
         Overlay::ConfirmClose(confirm) => {
             render_confirm(frame, screen, state, confirm);
             None
@@ -363,6 +403,39 @@ fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         rename.input.text(),
         rename.input.cursor(),
+    )
+}
+
+/// 新建工作区浮层：单行路径输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
+fn render_new_workspace(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    new_ws: &NewWorkspace,
+) -> Option<(u16, u16)> {
+    let shell = new_workspace_shell(screen)?;
+    widgets::modal::render(frame, &shell, text::NEW_WORKSPACE_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &NEW_WORKSPACE_BUTTONS,
+            BUTTON_GAP,
+            NEW_WORKSPACE_BUTTON_ROW,
+        ),
+        &[
+            (text::BUTTON_CREATE, style::accent()),
+            (text::BUTTON_CLEAR, style::muted()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
+    );
+    widgets::input::render(
+        frame,
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+        new_ws.input.text(),
+        new_ws.input.cursor(),
     )
 }
 
