@@ -1591,18 +1591,21 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
     assert_eq!(prefix.modifier, ratatui::style::Modifier::BOLD);
     let name = &buffer[(name_col, label_area.y)];
     assert_eq!(
-        name.fg,
-        ratatui::style::Color::Cyan,
-        "focused pane highlights the agent name"
+        (name.fg, name.modifier),
+        (
+            ratatui::style::Color::Cyan,
+            ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM
+        ),
+        "focused pane matches the prompt ws: value style (accent + dim)"
     );
-    assert!(name.modifier.contains(ratatui::style::Modifier::BOLD));
 
     // 窗格失焦（prompt 持有键盘焦点）：值回退 muted。
     state.prompt_focused = true;
     let buffer = render_buffer(&state);
     let name = &buffer[(name_col, label_area.y)];
-    assert!(
-        name.modifier.contains(ratatui::style::Modifier::DIM),
+    assert_eq!(
+        (name.fg, name.modifier),
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
         "unfocused pane keeps the agent name muted"
     );
 }

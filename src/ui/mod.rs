@@ -415,11 +415,7 @@ fn render_pane_agent_label(
     let Some(button) = main_content::toggle_button(rect) else {
         return;
     };
-    let value_style = if focused {
-        style::accent()
-    } else {
-        style::muted()
-    };
+    let value_style = style::border_value(focused);
     let spans = [
         (" ".to_string(), style::muted()),
         (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
