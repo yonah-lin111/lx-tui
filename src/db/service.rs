@@ -1,11 +1,9 @@
 //! 同步持久化服务：打开数据库、执行 `app` 层效应出箱、按需载入提示词树。
 //!
 //! 事件循环持有唯一实例；app 层保持纯内存，所有 DB 读写经此收口。
-//! 启动信任门（`ensure_startup_trust`）由入口在进入 TUI 前调用：未信任工作区在
-//! 系统控制台询问（参考 Claude Code），拒绝则不进入应用；应用内部触发的信任检查
-//! 仍走 `Overlay::TrustWorkspace` 模态浮层。
+//! 启动信任门由入口在进入应用前调用：`untrusted_startup_path` 给出待信任路径，
+//! 信任页确认后以 `trust_path` 登记；应用内部触发的信任检查仍走模态浮层。
 
-use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -28,7 +26,7 @@ pub struct Persistence {
 impl Persistence {
     /// 打开默认数据库；库不可用时降级为无持久化模式。
     ///
-    /// 不做启动信任门，由入口在进入 TUI 前调用 `ensure_startup_trust`。
+    /// 不做启动信任门，由入口在进入 TUI 前处理（见 `untrusted_startup_path`）。
     pub fn start() -> Self {
         match Database::open_default() {
             Ok(db) => Self { db: Some(db) },
@@ -44,28 +42,16 @@ impl Persistence {
         Self { db: Some(db) }
     }
 
-    /// 启动信任门（进入 TUI 前）：已信任直接放行；未信任在系统控制台询问，
-    /// 用户确认则登记信任并放行；拒绝或无法询问（非终端）返回 false。
-    pub fn ensure_startup_trust(&self, state: &mut AppState) -> bool {
-        let Some(cwd) = state.active_workspace().cwd.clone() else {
-            return true;
-        };
+    /// 启动信任门目标：未信任的启动工作区规范化路径；已信任、无 cwd 或库不可用时 None。
+    pub fn untrusted_startup_path(&self, state: &AppState) -> Option<PathBuf> {
+        let cwd = state.active_workspace().cwd.clone()?;
         let path = canonical_path(&cwd);
-        if self.is_trusted(&path) {
-            return true;
-        }
-        match prompt_workspace_trust(&path) {
-            Ok(true) => {
-                let name = state.active_workspace().name.clone();
-                self.with_db(|db| db.trust_workspace(&path, &name));
-                true
-            }
-            Ok(false) => false,
-            Err(error) => {
-                tracing::warn!(%error, "console trust prompt failed");
-                false
-            }
-        }
+        (!self.is_trusted(&path)).then_some(path)
+    }
+
+    /// 记录工作区信任（写库）；库不可用或写失败返回 false（仅日志，不阻断进入）。
+    pub fn trust_path(&self, path: &Path, name: &str) -> bool {
+        self.with_db(|db| db.trust_workspace(path, name)).is_some()
     }
 
     /// 执行全部待办效应并惰性载入显示中工作区的提示词树；返回状态是否有变化。
@@ -269,43 +255,6 @@ fn workspace_index(state: &AppState, path: &Path) -> Option<usize> {
 /// 规范化路径；失败时保留原路径（路径可能刚被删除）。
 fn canonical_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// 控制台信任页（进入 TUI 前，终端仍处于 cooked 模式）：打印路径与询问并读取一行应答。
-///
-/// 这是设计内的启动交互而非调试输出：根规范禁止在 TUI 运行期间绕过 ratatui 写 stdout，
-/// 此询问发生在 `Tui::init` 之前，不破坏渲染约束。
-fn prompt_workspace_trust(path: &Path) -> std::io::Result<bool> {
-    let stdin = std::io::stdin();
-    if !stdin.is_terminal() {
-        return Ok(false);
-    }
-    {
-        let mut stdout = std::io::stdout().lock();
-        writeln!(stdout, "\n{}", text::TRUST_CONSOLE_TITLE)?;
-        writeln!(
-            stdout,
-            "\n  {}: {}\n",
-            text::TRUST_CONSOLE_PATH_PREFIX,
-            path.display()
-        )?;
-        writeln!(stdout, "{}", text::TRUST_CONSOLE_HINT)?;
-        writeln!(
-            stdout,
-            "\n{} {}\n",
-            text::TRUST_WORKSPACE_QUESTION,
-            text::TRUST_CONSOLE_ANSWER
-        )?;
-        stdout.flush()?;
-    }
-    let mut answer = String::new();
-    stdin.lock().read_line(&mut answer)?;
-    Ok(parse_trust_answer(&answer))
-}
-
-/// 控制台应答解析：`y` / `yes`（大小写不敏感）视为信任，其余（含空行/EOF）拒绝。
-pub fn parse_trust_answer(answer: &str) -> bool {
-    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
 }
 
 #[cfg(test)]

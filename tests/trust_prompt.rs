@@ -11,7 +11,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use alacritty_terminal::index::{Column, Line};
 use lx_tui::terminal::Terminal;
+use lx_tui::ui;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
+use ratatui::layout::Rect;
 
 const COLS: u16 = 100;
 const ROWS: u16 = 30;
@@ -183,4 +185,48 @@ fn untrusted_startup_declined_does_not_enter_app() {
         "输出拒绝提示: {output}"
     );
     assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
+}
+
+#[test]
+fn arrow_keys_move_selection_and_enter_confirms_no() {
+    let (workspace, db_path) = temp_paths("arrows");
+    let mut app = App::spawn(&workspace, &db_path);
+
+    assert!(app.wait_for("No, exit", WAIT), "信任页显示两个选项");
+    // 默认选中 Yes：下移到 No 并回车 → 拒绝退出。
+    app.send(b"\x1b[B\r");
+    assert!(app.wait_exit(WAIT), "选择 No 后进程退出");
+    assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
+}
+
+#[test]
+fn mouse_click_selects_option() {
+    let (workspace, db_path) = temp_paths("mouse");
+    let canonical = std::fs::canonicalize(&workspace).expect("canonical workspace");
+    let mut app = App::spawn(&workspace, &db_path);
+
+    assert!(app.wait_for("No, exit", WAIT), "信任页显示两个选项");
+    let layout = ui::trust::layout(Rect::new(0, 0, COLS, ROWS), &canonical);
+    let no = layout.options[1];
+    // SGR 鼠标左键按下 + 释放（1 基坐标）点击 `No, exit`。
+    let x = no.x + 1;
+    let y = no.y + 1;
+    app.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    assert!(app.wait_exit(WAIT), "点击 No 后进程退出");
+    assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
+}
+
+#[test]
+fn mouse_click_yes_enters_app() {
+    let (workspace, db_path) = temp_paths("mouse-yes");
+    let canonical = std::fs::canonicalize(&workspace).expect("canonical workspace");
+    let app = App::spawn(&workspace, &db_path);
+
+    assert!(app.wait_for("Yes, proceed", WAIT), "信任页显示两个选项");
+    let layout = ui::trust::layout(Rect::new(0, 0, COLS, ROWS), &canonical);
+    let yes = layout.options[0];
+    let x = yes.x + 1;
+    let y = yes.y + 1;
+    app.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    assert!(app.wait_for("placeholder", WAIT), "点击 Yes 后进入应用");
 }

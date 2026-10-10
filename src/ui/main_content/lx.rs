@@ -10,8 +10,8 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 use crate::ui::{style, text};
 
 /// LX logo 像素图尺寸（列 × 像素行 = 单元格行 × 2）。
-const LOGO_WIDTH: u16 = 20;
-const LOGO_ROWS: u16 = 7;
+pub(crate) const LOGO_WIDTH: u16 = 20;
+pub(crate) const LOGO_ROWS: u16 = 7;
 
 /// 底部输入框高度（含边框）与最小宽度。
 const INPUT_HEIGHT: u16 = 3;
@@ -139,7 +139,7 @@ fn draw_panel(rect: Rect, buf: &mut Buffer) {
 }
 
 /// 把静态像素 logo 画进以 `(x, y)` 为左上角的单元格区域。
-fn draw_art(buf: &mut Buffer, x: u16, y: u16) {
+pub(crate) fn draw_art(buf: &mut Buffer, x: u16, y: u16) {
     for (row, pair) in LOGO.chunks(2).enumerate() {
         let [top, bottom] = pair else {
             break;

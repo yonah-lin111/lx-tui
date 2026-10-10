@@ -10,6 +10,7 @@ pub mod style;
 pub mod tab_bar;
 pub mod text;
 pub mod toast;
+pub mod trust;
 pub mod widgets;
 
 pub use sidebar::{

@@ -1,6 +1,9 @@
 //! 唯一事件循环：tokio select 收敛键盘、PTY 输出与渲染调度。
 
 mod git;
+mod trust;
+
+pub use trust::startup_trust;
 
 use std::collections::{HashMap, HashSet};
 use std::io;

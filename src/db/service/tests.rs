@@ -40,47 +40,41 @@ fn trusted_service(label: &str) -> (Persistence, AppState, PathBuf, PathBuf) {
     database
         .trust_workspace(&cwd, "workspace")
         .expect("trust recorded");
-    let mut state = state_with_cwd(&cwd);
+    let state = state_with_cwd(&cwd);
     let service = Persistence::with_database(database);
-    assert!(service.ensure_startup_trust(&mut state), "已信任工作区放行");
     (service, state, cwd, db_path)
 }
 
 #[test]
-fn startup_gate_refuses_untrusted_workspace_without_terminal() {
-    // 测试进程 stdin 不是终端：无法询问视为拒绝，且不写库、不弹浮层。
+fn untrusted_startup_path_targets_untrusted_workspace() {
     let db_path = temp_db_path("untrusted");
     let cwd = workspace_path("untrusted");
     let database = Database::open(&db_path).expect("db opens");
-    let mut state = state_with_cwd(&cwd);
+    let state = state_with_cwd(&cwd);
     let service = Persistence::with_database(database);
-    assert!(!service.ensure_startup_trust(&mut state));
-    assert!(state.overlay.is_none(), "启动门不使用应用内浮层");
+    assert_eq!(service.untrusted_startup_path(&state), Some(cwd));
+}
+
+#[test]
+fn untrusted_startup_path_none_when_trusted() {
+    let (service, state, _, _) = trusted_service("startup-trusted");
+    assert_eq!(service.untrusted_startup_path(&state), None);
+}
+
+#[test]
+fn trust_path_records_workspace() {
+    let (service, _state, _, _) = trusted_service("trust-path");
+    let target = workspace_path("trust-path-new");
+    assert!(service.trust_path(&target, "new"));
     assert!(
-        !service
+        service
             .db
             .as_ref()
             .expect("db")
-            .is_trusted(&cwd)
+            .is_trusted(&target)
             .expect("query"),
-        "拒绝不写库"
+        "信任已写入"
     );
-}
-
-#[test]
-fn startup_gate_passes_trusted_workspace() {
-    let (_service, state, _, _) = trusted_service("startup-trusted");
-    assert!(state.overlay.is_none());
-}
-
-#[test]
-fn trust_answer_parsing_accepts_yes_only() {
-    for answer in ["y", "Y", "yes", "YES", " Yes \n"] {
-        assert!(parse_trust_answer(answer), "{answer:?} 视为信任");
-    }
-    for answer in ["", "\n", "n", "no", "nope", "yess", "随便"] {
-        assert!(!parse_trust_answer(answer), "{answer:?} 视为拒绝");
-    }
 }
 
 #[test]

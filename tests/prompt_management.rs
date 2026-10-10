@@ -95,7 +95,11 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         .expect("a trusted");
     let mut state = state_with_cwd(&workspace_a);
     let mut service = Persistence::with_database(database);
-    assert!(service.ensure_startup_trust(&mut state));
+    assert_eq!(
+        service.untrusted_startup_path(&state),
+        None,
+        "已信任工作区无启动信任页"
+    );
     assert!(state.overlay.is_none());
 
     // 2. 应用内信任弹窗：显式新建未信任工作区 b → 弹信任浮层 → 确认后创建并入库。
@@ -243,7 +247,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     let database = Database::open(&db_path).expect("reopen db");
     let mut reloaded = state_with_cwd(&workspace_a);
     let mut service = Persistence::with_database(database);
-    assert!(service.ensure_startup_trust(&mut reloaded));
+    assert_eq!(service.untrusted_startup_path(&reloaded), None);
     service.pump(&mut reloaded);
     let items = reloaded.active_workspace().prompt_panel.tree.items();
     assert_eq!(items.len(), 1, "重启后提示词持久化");

@@ -105,14 +105,16 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 
 ### 3.2 工作区信任模型（`src/app/trust.rs`）
 
-> 实施补充（用户要求）：启动信任改为**进入应用前**在系统控制台完成；应用内触发（新建工作区 / 终端同步）保持模态浮层。
+> 实施补充（用户要求）：启动信任改为**进入应用前**显示独立信任页（进入备用屏幕但**不进入主界面**，参考 Claude Code）；应用内触发（新建工作区 / 终端同步）保持模态浮层。
 
-1. **启动信任页（控制台，`db::service::ensure_startup_trust`，在 `Tui::init` 之前）**：
+1. **启动信任页（`event::startup_trust`，在 `Tui::init` 之后、主事件循环之前）**：
    - 计算真实规范化路径 `canonicalize(cwd)`；查询 `workspace` 表中 `path == target_path` 且 `is_trusted == 1`；
    - 已信任：直接进入应用；
-   - 未信任：在普通控制台打印标题、路径与说明，询问 `Do you trust the files in this folder? [y/N]`；
-     `y`/`yes`（大小写不敏感）→ 录入 DB 并进入应用；其余输入 → 输出提示、exit 0，**不进入应用**；
-   - stdin 非终端视为拒绝；数据库不可用降级放行（不阻断应用）。
+   - 未信任：显示独立信任页：LX 像素 logo + 圆角边框对话框（标题 `lx-tui workspace trust` /
+     `Do you trust the files in this folder?` / `path:` 高亮路径 / 说明文案 / `Yes, proceed` 与 `No, exit`
+     两个可选项 / 键鼠页脚）；`↑/↓` 或鼠标悬停切换、`Enter` 或左键点击确认、`Esc` 取消、`y`/`n` 快捷选择；
+   - 选择 `Yes`：录入 DB 并进入应用；选择 `No`：输出 `workspace not trusted; exiting`、exit 0，**不进入应用**；
+   - 数据库不可用降级放行（不阻断应用）。
 2. **应用内信任浮层（新建工作区 / 终端同步触发）**：
    - `Overlay::TrustWorkspace(TrustWorkspace)`：标题 `trust workspace`，问题 `Do you trust the files in this folder?`，
      路径高亮（中间省略）与按钮 `[trust & open enter]` / `[don't trust esc]`；
