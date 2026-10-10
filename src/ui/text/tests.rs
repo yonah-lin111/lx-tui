@@ -47,6 +47,7 @@ fn user_visible_labels_are_clean_ascii() {
         PROMPT_TREE_NO_MATCHES,
         PROMPT_TREE_SEARCH_PLACEHOLDER,
         PROMPT_TEMP_PROMPT_LABEL,
+        MODAL_CLOSE,
         SAVE_DRAFT_TITLE,
         SAVE_DRAFT_NAME,
         SAVE_DRAFT_ROOT,

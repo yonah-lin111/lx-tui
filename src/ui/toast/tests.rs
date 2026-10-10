@@ -3,6 +3,8 @@
 use super::*;
 use crate::app::actions::Action;
 use crate::app::update;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use std::time::Instant;
 
 fn view_for(state: &AppState) -> ViewLayout {
@@ -182,4 +184,31 @@ fn below_minimum_screen_has_no_toast() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn toast_renders_close_button_and_hit_test() {
+    let mut state = AppState::demo();
+    show(&mut state, None);
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let screen = Rect::new(0, 0, 100, 24);
+    let area = rect(&state, &view, &rects, screen, &Config::default()).expect("toast area");
+    let close = crate::ui::widgets::modal::close_button_rect(area).expect("close button fits");
+    assert!(close_button_at(area, close.x, close.y));
+    assert!(
+        !close_button_at(area, area.x + 1, area.y),
+        "内容区不命中关闭按钮"
+    );
+
+    let mut terminal =
+        Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| render(frame, screen, &state, &view, &rects, &Config::default()))
+        .expect("draw succeeds");
+    let buffer = terminal.backend().buffer();
+    let label: String = (close.x..close.right())
+        .map(|x| buffer[(x, close.y)].symbol())
+        .collect();
+    assert_eq!(label, text::MODAL_CLOSE);
 }

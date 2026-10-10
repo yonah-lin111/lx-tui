@@ -507,12 +507,18 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config)
-                    && toast.contains((mouse.column, mouse.row).into())
-                {
+                if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
+                    if toast.contains((mouse.column, mouse.row).into()) {
+                        // 点击 toast 内部内容不关闭；仅右上角 [x] 关闭。
+                        if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
+                            update::dismiss_toast(state);
+                            *dirty = true;
+                        }
+                        return;
+                    }
+                    // 点击 toast 之外：关闭 toast 后继续处理本次点击。
                     update::dismiss_toast(state);
                     *dirty = true;
-                    return;
                 }
                 if ui::exit_button_at(view, mouse.column, mouse.row) {
                     update::apply(Action::Quit, state);
@@ -1357,85 +1363,133 @@ fn handle_overlay_click(
                     update::set_menu_selection(state, index);
                     update::activate_menu(state);
                 }
-                None => update::close_overlay(state),
+                // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
+                None => {
+                    if !layout.area.contains((column, row).into()) {
+                        update::close_overlay(state);
+                    }
+                }
             }
             None
         }
         Some(Overlay::Rename(_)) => {
-            let button = ui::overlay::rename_shell(screen)
-                .and_then(|shell| ui::overlay::rename_button_at(&shell, column, row));
-            match button {
+            let Some(shell) = ui::overlay::rename_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::rename_button_at(&shell, column, row) {
                 Some(ui::overlay::RenameButton::Save) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
                 Some(ui::overlay::RenameButton::Clear) => {
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
-                Some(ui::overlay::RenameButton::Cancel) | None => {
+                Some(ui::overlay::RenameButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::NewWorkspace(_)) => {
-            let button = ui::overlay::new_workspace_shell(screen)
-                .and_then(|shell| ui::overlay::new_workspace_button_at(&shell, column, row));
-            match button {
+            let Some(shell) = ui::overlay::new_workspace_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::new_workspace_button_at(&shell, column, row) {
                 Some(ui::overlay::NewWorkspaceButton::Create) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
                 Some(ui::overlay::NewWorkspaceButton::Clear) => {
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
-                Some(ui::overlay::NewWorkspaceButton::Cancel) | None => {
+                Some(ui::overlay::NewWorkspaceButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::ConfirmClose(_)) => {
-            let button = ui::overlay::confirm_shell(screen)
-                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
-            match button {
+            let Some(shell) = ui::overlay::confirm_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                Some(ui::overlay::ConfirmButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::ConfirmSwitchCwd(confirm)) => {
-            let button = ui::overlay::confirm_switch_cwd_shell(screen, &confirm.path)
-                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
-            match button {
+            let path = confirm.path.clone();
+            let Some(shell) = ui::overlay::confirm_switch_cwd_shell(screen, &path) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                Some(ui::overlay::ConfirmButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) => {
-            let button = ui::overlay::confirm_sync_workspace_cwd_shell(screen, &confirm.path)
-                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
-            match button {
+            let path = confirm.path.clone();
+            let Some(shell) = ui::overlay::confirm_sync_workspace_cwd_shell(screen, &path) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                Some(ui::overlay::ConfirmButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::WorktreeOpen(dialog)) => {
-            let Some(shell) = ui::overlay::worktree_dialog_shell(screen, dialog.entries.len())
-            else {
+            let entry_count = dialog.entries.len();
+            let Some(shell) = ui::overlay::worktree_dialog_shell(screen, entry_count) else {
                 update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
                 return None;
             };
             if let Some(index) = ui::overlay::worktree_dialog_entry_at(&shell, dialog, column, row)
@@ -1447,15 +1501,24 @@ fn handle_overlay_click(
                 Some(ui::overlay::WorktreeDialogButton::Open) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::WorktreeDialogButton::Cancel) | None => {
+                Some(ui::overlay::WorktreeDialogButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::SaveDraft(dialog)) => {
-            let Some(shell) = ui::overlay::save_draft_shell(screen, dialog.entries.len()) else {
+            let entry_count = dialog.entries.len();
+            let Some(shell) = ui::overlay::save_draft_shell(screen, entry_count) else {
                 update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_ref() else {
                 return None;
             };
             if let Some(index) = ui::overlay::save_draft_entry_at(&shell, dialog, column, row) {
@@ -1474,26 +1537,53 @@ fn handle_overlay_click(
                 Some(ui::overlay::SaveDraftButton::Save) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::SaveDraftButton::Cancel) | None => {
+                Some(ui::overlay::SaveDraftButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::TrustWorkspace(_)) => {
-            let button = ui::overlay::trust_shell(screen)
-                .and_then(|shell| ui::overlay::trust_button_at(&shell, column, row));
-            match button {
+            let Some(shell) = ui::overlay::trust_shell(screen) else {
+                update::apply_trust_decision(state, false);
+                return None;
+            };
+            // 点击关闭按钮或浮层之外视同拒绝信任：不因误触授予访问；内部空白保持打开。
+            if ui::widgets::modal::close_button_at(shell.area, column, row)
+                || !shell.area.contains((column, row).into())
+            {
+                update::apply_trust_decision(state, false);
+                return None;
+            }
+            match ui::overlay::trust_button_at(&shell, column, row) {
                 Some(ui::overlay::TrustButton::Trust) => update::apply_trust_decision(state, true),
-                // 点击按钮之外视同拒绝信任：不因误触授予访问。
-                Some(ui::overlay::TrustButton::Refuse) | None => {
+                Some(ui::overlay::TrustButton::Refuse) => {
                     update::apply_trust_decision(state, false);
                 }
+                None => {}
             }
             None
         }
         None => None,
     }
+}
+
+/// 模态浮层通用点击前置：命中右上角关闭按钮或点击浮层之外时关闭；返回是否已处理。
+fn modal_dismissed(
+    state: &mut AppState,
+    shell: &ui::widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> bool {
+    if ui::widgets::modal::close_button_at(shell.area, column, row)
+        || !shell.area.contains((column, row).into())
+    {
+        update::close_overlay(state);
+        return true;
+    }
+    false
 }
 
 /// 命中标签、工作区项或主区窗格时打开对应右键菜单；返回是否打开。

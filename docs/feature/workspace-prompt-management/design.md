@@ -138,7 +138,8 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
    连接符）+ 动作行 `+ New folder`；点击文件夹仅选中、`[save enter]`/回车才执行；点击动作行
    追加内联新建文件夹行，名称直接在该行输入（挂根层，2 层约束不变）；字符输入归属选中行
    （内联行或顶部名称），提示词名/内联名去空白为空则拒绝；保存后以所填名称创建正式条目并
-   绑定编辑器、清空草稿；保存路径经 `Effect::SaveDraft` 出箱。
+   绑定编辑器、清空草稿；保存路径经 `Effect::SaveDraft` 出箱。弹窗顶边框右上角 `[x]` 与
+   点击弹窗外关闭，点击弹窗内部内容不关闭（通用模态交互，见 tui-design-requirements）。
 3. **搜索框**：树视图顶部常显，交互与模态输入框一致（`widgets::input` 视口 + 硬件光标 + 占位）：
    字符/`Backspace`/`Delete` 编辑过滤词、`←`/`→`/`Home`/`End` 移动光标、`Ctrl+C` 清空；
    过滤为大小写不敏感子串（匹配文件夹与条目；命中文件夹展示整棵子树、命中条目展示祖先链，

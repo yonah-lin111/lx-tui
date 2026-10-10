@@ -254,6 +254,8 @@ pub const BUTTON_CREATE: &str = "[create enter]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
 pub const BUTTON_CONFIRM: &str = "[confirm enter]";
+/// 模态浮层与 toast 右上角的关闭按钮。
+pub const MODAL_CLOSE: &str = "[x]";
 pub const BUTTON_OPEN: &str = "[open enter]";
 
 /// 关闭确认问题文案。

@@ -3,9 +3,9 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Clear};
+use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
-use crate::ui::style;
+use crate::ui::{style, text};
 
 /// 模态几何：整体区域与内容区。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,15 +31,33 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
     Some(ModalShell { area, inner })
 }
 
-/// 渲染清底、强调色边框与标题；内容由调用方绘制在 `shell.inner`。
+/// 渲染清底、强调色边框、标题与右上角关闭按钮；内容由调用方绘制在 `shell.inner`。
 pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     frame.render_widget(Clear, shell.area);
+    // 标题为关闭按钮预留右上角空间，避免重叠。
+    let title = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())
         .title(Span::styled(format!(" {title} "), style::border_title()))
         .style(style::overlay_panel());
     frame.render_widget(block, shell.area);
+    if let Some(rect) = close_button_rect(shell.area) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
+            rect,
+        );
+    }
+}
+
+/// 右上角关闭按钮矩形（顶边框 `[x]`）；区域过窄（< 10 列）时 None。
+pub fn close_button_rect(area: Rect) -> Option<Rect> {
+    (area.width >= 10).then_some(Rect::new(area.right().saturating_sub(4), area.y, 3, 1))
+}
+
+/// 命中右上角关闭按钮。
+pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
+    close_button_rect(area).is_some_and(|rect| rect.contains((column, row).into()))
 }
 
 /// 按钮行：按标签宽度水平居中排布；`row_offset` 为相对内容区顶部的行号。

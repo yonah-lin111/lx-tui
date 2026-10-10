@@ -99,3 +99,37 @@ fn button_at_hits_button_cells_only() {
     );
     assert_eq!(button_at(&rects, rects[0].x, rects[0].y + 1), None);
 }
+
+#[test]
+fn render_draws_close_button_and_hit_test() {
+    let shell = layout(SCREEN, 40, 3).expect("modal fits");
+    let close = close_button_rect(shell.area).expect("close button fits");
+    assert_eq!(close.x, shell.area.right() - 4);
+    assert_eq!(close.y, shell.area.y);
+    assert!(close_button_at(shell.area, close.x, close.y));
+    assert!(close_button_at(shell.area, close.right() - 1, close.y));
+    assert!(
+        !close_button_at(shell.area, close.x - 1, close.y),
+        "按钮左侧不命中"
+    );
+    assert!(
+        !close_button_at(shell.area, close.x, close.y + 1),
+        "边框下一行不命中"
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
+    terminal
+        .draw(|frame| render(frame, &shell, "rename workspace"))
+        .expect("draw succeeds");
+    let buffer = terminal.backend().buffer();
+    let label: String = (close.x..close.right())
+        .map(|x| buffer[(x, close.y)].symbol())
+        .collect();
+    assert_eq!(label, text::MODAL_CLOSE);
+}
+
+#[test]
+fn close_button_absent_on_narrow_modal() {
+    let shell = layout(Rect::new(0, 0, 30, 8), 9, 3).expect("modal fits");
+    assert_eq!(close_button_rect(shell.area), None);
+}
