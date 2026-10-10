@@ -4,8 +4,9 @@ use super::*;
 use crate::app::actions::EditorCommand;
 use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget};
 use crate::app::state::AppState;
-use crate::app::update::{apply_editor, apply_overlay_key};
+use crate::app::update::{apply_editor, apply_overlay_key, tick};
 use crate::db::{FolderRecord, PromptRecord};
+use std::time::{Duration, Instant};
 
 /// 一个工作区 + 已载入的示例树：根文件夹 1（子文件夹 2），条目 11/12 在文件夹内，10 在根。
 fn demo_state() -> AppState {
@@ -658,4 +659,128 @@ fn new_prompt_dialog_creates_with_custom_name_and_no_edit() {
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
     assert!(state.overlay.is_none());
     assert!(state.effects.is_empty());
+}
+
+#[test]
+fn autosave_commits_item_after_idle_delay() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str(" edited");
+    assert!(!state.prompt.is_saved());
+    let now = Instant::now();
+    assert!(!tick(&mut state, now), "首个观察点只记录计时");
+    assert!(!tick(&mut state, now + Duration::from_millis(799)));
+    assert!(state.effects.is_empty(), "未达静置时长不落库");
+    assert!(!state.prompt.is_saved(), "未落库保持黄点");
+    assert!(
+        tick(&mut state, now + Duration::from_millis(800)),
+        "静置达标触发保存"
+    );
+    assert!(state.prompt.is_saved(), "落库后复位为已保存");
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { id: 10, .. })),
+        "条目内容登记落库效应"
+    );
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(10)
+            .map(|item| item.content.as_str()),
+        Some("loose content edited"),
+        "内存树同步更新"
+    );
+}
+
+#[test]
+fn autosave_resets_timer_on_new_edits() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str("a");
+    let now = Instant::now();
+    assert!(!tick(&mut state, now));
+    state.prompt.insert_str("b");
+    assert!(
+        !tick(&mut state, now + Duration::from_millis(700)),
+        "新修订重置计时"
+    );
+    assert!(
+        !tick(&mut state, now + Duration::from_millis(1400)),
+        "距新起点仅 700ms"
+    );
+    assert!(state.effects.is_empty());
+    assert!(
+        tick(&mut state, now + Duration::from_millis(1500)),
+        "距新起点达标"
+    );
+    assert!(state.prompt.is_saved());
+}
+
+#[test]
+fn draft_never_autosaves() {
+    let mut state = demo_state();
+    assert!(edit_prompt_draft(&mut state));
+    state.prompt.insert_str("draft body");
+    let now = Instant::now();
+    assert!(!tick(&mut state, now + Duration::from_secs(30)));
+    assert!(state.effects.is_empty(), "草稿不落库");
+    assert!(!state.prompt.is_saved(), "草稿保持未保存（圆点恒灰）");
+    assert_eq!(
+        state.workspaces[0].prompt_panel.draft, "",
+        "未提交时草稿槽位不动"
+    );
+}
+
+#[test]
+fn save_prompt_now_saves_item_and_opens_picker_for_draft() {
+    // 条目：立即复位保存点并登记落库效应，无需等待静置。
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str("!");
+    save_prompt_now(&mut state);
+    assert!(state.prompt.is_saved());
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { id: 10, .. }))
+    );
+
+    // 草稿：提交缓冲到槽位并打开保存选择器。
+    let mut state = demo_state();
+    assert!(edit_prompt_draft(&mut state));
+    state.prompt.insert_str("draft body");
+    save_prompt_now(&mut state);
+    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+    assert!(matches!(state.overlay, Some(Overlay::SaveDraft(_))));
+}
+
+#[test]
+fn next_deadline_includes_prompt_autosave() {
+    let mut state = demo_state();
+    assert!(crate::app::update::next_deadline(&state).is_none());
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str("x");
+    assert!(
+        crate::app::update::next_deadline(&state).is_none(),
+        "尚无静置观察不安排唤醒"
+    );
+    let now = Instant::now();
+    assert!(!tick(&mut state, now), "首个观察点只记录计时");
+    let deadline = crate::app::update::next_deadline(&state).expect("自动保存待触发");
+    assert!(tick(&mut state, deadline), "到期唤醒触发保存");
+    assert!(
+        crate::app::update::next_deadline(&state).is_none(),
+        "保存后无待触发"
+    );
+
+    // 草稿不产生自动保存期限（空闲不轮询）。
+    let mut state = demo_state();
+    assert!(edit_prompt_draft(&mut state));
+    state.prompt.insert_str("x");
+    assert!(!tick(&mut state, Instant::now()));
+    assert!(crate::app::update::next_deadline(&state).is_none());
 }

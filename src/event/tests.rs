@@ -1825,6 +1825,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     );
     assert_eq!(state.prompt.text(), "hello");
 
+    // 默认绑定临时草稿：点击保存点提交缓冲并打开保存选择器。
     let save = toolbar_button(&geo, layout::PromptToolbarButton::Save);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), save.x, save.y),
@@ -1834,7 +1835,86 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
         &config,
         &mut dirty,
     );
-    assert!(state.prompt.is_saved(), "点击保存点复位为已保存");
+    assert!(
+        matches!(
+            state.overlay,
+            Some(crate::app::overlay::Overlay::SaveDraft(_))
+        ),
+        "草稿保存点打开保存选择器"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.draft, "hello",
+        "提交缓冲到草稿槽位"
+    );
+}
+
+#[test]
+fn ctrl_s_saves_prompt_from_editor() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.prompt_focused = true;
+
+    // 默认绑定临时草稿：Ctrl+S 提交缓冲并打开保存选择器。
+    state.prompt.insert_str("draft body");
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert!(
+        matches!(
+            state.overlay,
+            Some(crate::app::overlay::Overlay::SaveDraft(_))
+        ),
+        "Ctrl+S 在草稿上打开保存选择器"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+}
+
+#[test]
+fn ctrl_s_saves_open_item_immediately() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 7,
+            folder_id: None,
+            name: "item".into(),
+            content: "body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
+    state.prompt_focused = true;
+    state.prompt.insert_str("+");
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.is_saved(), "Ctrl+S 立即复位保存点");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SavePromptContent { id: 7, .. }
+        )),
+        "Ctrl+S 登记条目落库效应"
+    );
 }
 
 #[test]

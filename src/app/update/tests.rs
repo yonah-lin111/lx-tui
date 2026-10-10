@@ -969,6 +969,59 @@ fn switch_workspace_swaps_prompt_drafts() {
     assert_eq!(state.prompt.text(), "beta");
 }
 
+#[test]
+fn switch_workspace_defaults_to_draft_and_preserves_open_item() {
+    use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus};
+    let mut state = AppState::demo();
+    // 初始工作区默认绑定临时草稿。
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft),
+        "进入应用默认打开临时提示词"
+    );
+    // 工作区 0 打开条目 10。
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 10,
+            folder_id: None,
+            name: "item".into(),
+            content: "item body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert_eq!(state.prompt.text(), "item body");
+
+    // 新工作区默认草稿；切回 0 恢复条目编辑。
+    create_workspace(&mut state);
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(
+        state.workspaces[1].prompt_panel.editing,
+        Some(PromptEditing::Draft)
+    );
+    switch_workspace(&mut state, 0);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(10)),
+        "目标工作区已打开条目：切换保留条目编辑"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.prompt.text(), "item body");
+
+    // 树视图（无绑定）切走后回来默认落到临时提示词。
+    show_prompt_tree(&mut state);
+    switch_workspace(&mut state, 1);
+    switch_workspace(&mut state, 0);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft),
+        "无条目绑定时切换默认打开临时提示词"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.prompt.text(), "", "树视图切回重载草稿正文");
+}
+
 /// 断言 prompt 草稿槽位不变量：恰有一处 None，且属于显示中的工作区。
 fn assert_prompt_slots(state: &AppState) {
     let empty: Vec<usize> = state

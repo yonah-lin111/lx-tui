@@ -20,6 +20,8 @@ pub enum Routed {
     Overlay(OverlayKey),
     /// 复制 prompt 选区（无选区为全文）到系统剪贴板。
     Copy,
+    /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时草稿走保存选择器。
+    SavePrompt,
     /// 复制光标所在模板块正文到系统剪贴板。
     CopyTemplateBlock,
     /// 原样写入焦点窗格的字节。
@@ -58,6 +60,13 @@ pub fn route(
                 return Some(Routed::CopyTemplateBlock);
             }
             return Some(Routed::Copy);
+        }
+        let save_chord = matches!(key.code, KeyCode::Char('s' | 'S'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+            && !key.modifiers.contains(KeyModifiers::ALT);
+        if save_chord {
+            return Some(Routed::SavePrompt);
         }
         return editor_command(key).map(Routed::Editor);
     }

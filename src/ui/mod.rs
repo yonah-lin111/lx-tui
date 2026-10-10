@@ -516,6 +516,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         focused,
         mode,
         prompt_edit_title(state).as_deref(),
+        state.prompt_owner().prompt_panel.editing == Some(PromptEditing::Draft),
     );
     render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);

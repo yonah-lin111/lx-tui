@@ -302,6 +302,18 @@ pub fn clear_prompt_search(state: &mut AppState) -> bool {
     apply_prompt_search(state, &EditorCommand::Escape)
 }
 
+/// 立即保存（工具栏圆点与 Ctrl/Cmd+S 共用）：条目提交落库；
+/// 临时草稿提交缓冲后打开保存到文件夹选择器。
+pub fn save_prompt_now(state: &mut AppState) {
+    if prompt_draft_editing(state) {
+        commit_editing_prompt(state);
+        open_save_draft(state);
+    } else {
+        state.prompt.mark_saved();
+        commit_editing_prompt(state);
+    }
+}
+
 /// 工具栏 [temp prompt]：提交当前编辑内容并打开临时草稿编辑视图。
 pub fn open_temp_prompt(state: &mut AppState) -> bool {
     commit_editing_prompt(state);

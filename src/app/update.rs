@@ -26,6 +26,7 @@ use super::overlay::{
     ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewWorkspace,
     Overlay, OverlayKind, OverlayTarget, Rename, RenameTarget, TextInput,
 };
+use super::prompt::{PromptEditing, PromptMode};
 use super::selection::Selection;
 use super::state::{
     AppState, AutoscrollDirection, PaneKind, PaneView, SelectionAutoscroll, Tab, Workspace,
@@ -209,6 +210,16 @@ fn prompt_editing(state: &AppState) -> bool {
         .is_some_and(|workspace| workspace.prompt_panel.editing.is_some())
 }
 
+/// 显示中工作区是否处于已绑定条目的编辑视图（临时草稿不参与自动保存）。
+fn prompt_item_editing(state: &AppState) -> bool {
+    state
+        .workspaces
+        .get(state.prompt_workspace())
+        .is_some_and(|workspace| {
+            matches!(workspace.prompt_panel.editing, Some(PromptEditing::Item(_)))
+        })
+}
+
 /// 把 prompt 的上下文根同步为提及扫描根：显式绑定路径优先，回退显示中工作区 cwd。
 fn sync_mention_root(state: &mut AppState) {
     let root = state
@@ -222,15 +233,14 @@ fn sync_mention_root(state: &mut AppState) {
 ///
 /// 目标草稿移入 `state.prompt` / `state.prompt_root`，旧草稿停回 `from` 槽位；
 /// 槽位缺失（不变量被破坏）时兜底新建，避免 panic；
-/// 切换前提交 `from` 编辑中的提示词内容并解除编辑绑定。
+/// 切换前提交 `from` 编辑中的提示词内容（缓冲随之回到已保存态）；
+/// 编辑绑定随工作区保留，切回时由 `restore_prompt_view` 恢复。
 fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if from == to {
         return;
     }
     commit_prompt_buffer(state, from);
-    if let Some(workspace) = state.workspaces.get_mut(from) {
-        workspace.prompt_panel.editing = None;
-    }
+    state.prompt.mark_saved();
     let mut next = state
         .workspaces
         .get_mut(to)
@@ -241,12 +251,38 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt = Some(next);
     }
+    restore_prompt_view(state, to);
     sync_mention_root(state);
 }
 
-/// 把激活工作区的挂起草稿装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
+/// 恢复目标工作区的 prompt 视图：已绑定条目（且条目仍在）保持条目编辑；
+/// 否则默认落到临时提示词；树视图下缓冲内容已过期，重载草稿正文。
+fn restore_prompt_view(state: &mut AppState, index: usize) {
+    let Some(workspace) = state.workspaces.get(index) else {
+        return;
+    };
+    let panel = &workspace.prompt_panel;
+    if panel.mode == PromptMode::Editor {
+        match panel.editing {
+            Some(PromptEditing::Item(id)) if panel.tree.item(id).is_some() => {
+                select_prompt_item(state, index, id);
+                return;
+            }
+            Some(PromptEditing::Draft) => return,
+            _ => {}
+        }
+    }
+    let draft = state.workspaces[index].prompt_panel.draft.clone();
+    let workspace = &mut state.workspaces[index];
+    workspace.prompt_panel.mode = PromptMode::Editor;
+    workspace.prompt_panel.editing = Some(PromptEditing::Draft);
+    state.prompt.set_text(&draft);
+}
+
+/// 把激活工作区的挂起缓冲装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
 ///
-/// 仅用于显示中工作区被关闭：其草稿随工作区销毁，显示切到新激活工作区。
+/// 仅用于显示中工作区被关闭：其草稿随工作区销毁，显示切到新激活工作区；
+/// 视图按目标工作区的编辑绑定恢复（条目或临时提示词）。
 fn load_displayed_draft(state: &mut AppState) {
     let index = state.active_workspace;
     let next = state
@@ -256,6 +292,7 @@ fn load_displayed_draft(state: &mut AppState) {
         .unwrap_or_default();
     state.prompt = next.editor;
     state.prompt_root = next.root;
+    restore_prompt_view(state, index);
     sync_mention_root(state);
 }
 
@@ -960,17 +997,36 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     if expired {
         state.toast = None;
     }
+    let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || scrolled
+    expired || saved || scrolled
 }
 
-/// 最近一次定时到期时间（toast 消失或自动滚动）；事件循环据此安排唤醒。
+/// prompt 自动保存静置时长：条目编辑停止输入约 800ms 后提交落库。
+const PROMPT_AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
+
+/// 自动保存轮询：条目编辑视图下缓冲静置达标后提交落库并回到已保存态；
+/// 临时草稿与树视图不参与；返回是否触发保存。
+fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
+    if !prompt_item_editing(state) || !state.prompt.autosave_due(now, PROMPT_AUTOSAVE_DELAY) {
+        return false;
+    }
+    state.prompt.mark_saved();
+    commit_editing_prompt(state);
+    true
+}
+
+/// 最近一次定时到期时间（toast 消失、自动滚动或 prompt 自动保存）；
+/// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
     let autoscroll = state
         .selection_autoscroll
         .map(|autoscroll| autoscroll.next_at);
-    [toast, autoscroll].into_iter().flatten().min()
+    let autosave = prompt_item_editing(state)
+        .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
+        .flatten();
+    [toast, autoscroll, autosave].into_iter().flatten().min()
 }
 
 /// 打开新建工作区弹窗：清空滚动与拖拽状态，输入框初始为空。

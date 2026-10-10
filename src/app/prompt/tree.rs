@@ -320,14 +320,14 @@ pub struct PromptPanel {
 }
 
 impl PromptPanel {
-    /// 空面板：默认编辑视图，保持既有右栏行为。
+    /// 空面板：默认编辑视图并绑定临时草稿（进入应用/切换工作区默认打开临时提示词）。
     pub fn new() -> Self {
         Self {
             tree: PromptTree::new(),
             loaded: false,
             mode: PromptMode::Editor,
             selected: 0,
-            editing: None,
+            editing: Some(PromptEditing::Draft),
             scroll: 0,
             draft: String::new(),
             search: TextInput::new(""),

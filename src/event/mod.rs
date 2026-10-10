@@ -149,7 +149,8 @@ async fn run_loop(
             last_draw = Instant::now();
         }
 
-        let mut wait = if dirty {
+        // 待执行效应（如自动保存落库）必须尽快进入下一轮 pump，不随空闲睡死。
+        let mut wait = if dirty || !state.effects.is_empty() {
             FRAME_INTERVAL.saturating_sub(last_draw.elapsed())
         } else {
             IDLE_WAIT
@@ -427,6 +428,10 @@ fn handle_terminal_event(
                     }
                     *dirty = true;
                 }
+                Routed::SavePrompt => {
+                    update::save_prompt_now(state);
+                    *dirty = true;
+                }
                 Routed::Copy => {
                     if update::prompt_tree_mode(state) {
                         // 树视图 Ctrl+C 与模态输入框一致：清空搜索过滤。
@@ -657,14 +662,7 @@ fn handle_terminal_event(
                             state.select_all_prompt();
                         }
                         layout::PromptToolbarButton::Save if editor_view => {
-                            if update::prompt_draft_editing(state) {
-                                // 草稿没有归属条目：先提交缓冲，再打开保存到文件夹选择器。
-                                update::commit_editing_prompt(state);
-                                update::open_save_draft(state);
-                            } else {
-                                state.prompt.mark_saved();
-                                update::commit_editing_prompt(state);
-                            }
+                            update::save_prompt_now(state);
                         }
                         _ => {}
                     }

@@ -74,6 +74,11 @@ pub fn status_dot(saved: bool) -> Style {
     Style::default().fg(if saved { Color::Green } else { Color::Yellow })
 }
 
+/// 临时提示词保存状态点：恒灰（草稿不参与自动保存）。
+pub fn status_dot_draft() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+
 /// 浮层标题：正文加粗。
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)

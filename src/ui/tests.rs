@@ -1489,8 +1489,8 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     );
     assert_eq!(
         buffer[(dot_x, bar_y)].fg,
-        ratatui::style::Color::Green,
-        "初始已保存为绿点"
+        ratatui::style::Color::DarkGray,
+        "临时草稿恒灰点"
     );
 
     state.prompt.insert_str("x");
@@ -1502,8 +1502,36 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     );
     assert_eq!(
         buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::DarkGray,
+        "草稿编辑后仍为灰点（不参与自动保存）"
+    );
+
+    // 绑定条目：已保存绿点、编辑后黄点。
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 1,
+            folder_id: None,
+            name: "named".into(),
+            content: String::new(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(update::edit_prompt_item(&mut state, 0, 1));
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::Green,
+        "条目已保存为绿点"
+    );
+    state.prompt.insert_str("x");
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
         ratatui::style::Color::Yellow,
-        "编辑后未保存为黄点"
+        "条目编辑后未保存为黄点"
     );
 }
 

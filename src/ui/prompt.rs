@@ -19,7 +19,8 @@ use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制；
-/// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`）。
+/// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`）；
+/// `draft` 表示当前绑定临时草稿：保存点恒灰（草稿不参与自动保存）。
 pub fn render_header(
     panel: Rect,
     buf: &mut Buffer,
@@ -27,6 +28,7 @@ pub fn render_header(
     focused: bool,
     mode: PromptMode,
     title: Option<&str>,
+    draft: bool,
 ) {
     let Some(header) = layout::prompt_header_rect(panel) else {
         return;
@@ -37,7 +39,7 @@ pub fn render_header(
     {
         paint_header_title(header, buf, title);
     }
-    render_toolbar(panel, buf, prompt, mode);
+    render_toolbar(panel, buf, prompt, mode, draft);
 }
 
 /// 分割线行内嵌 title：起于左衔接符之后，超宽以 `…` 截断，不覆盖右衔接符。
@@ -77,7 +79,7 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
 
 /// 工具栏：模式切换按钮常显；树视图追加 `[temp prompt]`；编辑视图追加
 /// undo/redo（不可用时置灰）、select all 与保存状态点。
-fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode) {
+fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode, draft: bool) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree => text::PROMPT_MODE_EDIT_LABEL,
@@ -118,7 +120,11 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMo
             (
                 PromptToolbarButton::Save,
                 text::PROMPT_SAVE_DOT,
-                style::status_dot(prompt.is_saved()),
+                if draft {
+                    style::status_dot_draft()
+                } else {
+                    style::status_dot(prompt.is_saved())
+                },
             ),
         ]);
     }

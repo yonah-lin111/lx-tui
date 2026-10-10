@@ -1154,6 +1154,30 @@ fn deletions_without_snapshot_still_mark_dirty() {
 }
 
 #[test]
+fn autosave_due_waits_for_idle_delay_and_resets_on_edits() {
+    let mut prompt = Prompt::new(PaneId::from_raw_for_test(1));
+    let now = Instant::now();
+    let delay = Duration::from_millis(800);
+    // 干净缓冲不触发。
+    assert!(!prompt.autosave_due(now, delay));
+    prompt.insert_str("x");
+    assert!(!prompt.autosave_due(now, delay), "首个观察点只记录计时");
+    assert!(!prompt.autosave_due(now + delay - Duration::from_millis(1), delay));
+    assert!(prompt.autosave_due(now + delay, delay), "静置达标触发");
+    // 新编辑重置静置计时。
+    prompt.insert_str("y");
+    assert!(
+        !prompt.autosave_due(now + delay + Duration::from_millis(100), delay),
+        "新修订重置计时"
+    );
+    assert!(!prompt.autosave_due(now + delay + Duration::from_millis(700), delay));
+    assert!(prompt.autosave_due(now + delay + Duration::from_millis(900), delay));
+    // 保存后清除观察状态。
+    prompt.mark_saved();
+    assert!(!prompt.autosave_due(now + Duration::from_secs(60), delay));
+}
+
+#[test]
 fn undo_and_redo_mark_dirty_but_empty_history_keeps_saved() {
     let mut prompt = prompt(20, 3);
     prompt.undo();
