@@ -213,12 +213,16 @@ pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
 pub const TRUST_CONSOLE_HEADING: &str = "Accessing workspace:";
 /// 安全提示段落；`:` 前的前缀在渲染时加粗强调。
 pub const TRUST_CONSOLE_SAFETY: &str = "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what is in this folder first.";
-pub const TRUST_CONSOLE_HINT: &str = "lx-tui will be able to read, edit and execute files here.";
+/// 能力说明：加入工作区 + 文件读写执行。
+pub const TRUST_CONSOLE_HINT: &str =
+    "lx-tui will add this folder as a workspace and be able to read, edit and execute files here.";
+/// 能力说明：提示词管理（本地持久化、文件夹组织与编辑）。
+pub const TRUST_CONSOLE_PROMPT_HINT: &str = "Prompt management is included: create, organize into folders, edit and delete workspace prompts here.";
 /// 可选项：`No, exit` 在前为默认选中；`Yes, I trust this folder` 在后。
 pub const TRUST_OPTION_NO: &str = "No, exit";
 pub const TRUST_OPTION_YES: &str = "Yes, I trust this folder";
-/// 信任页选项选中标记（与侧栏选中行同语义）。
-pub const TRUST_SELECTION_MARKER: &str = "❯";
+/// 信任页选项选中标记（与侧栏 Agents 选中行同符号）。
+pub const TRUST_SELECTION_MARKER: &str = "▸";
 pub const TRUST_CONSOLE_FOOTER: &str = "[↑/↓] select  [enter] confirm  [esc] cancel";
 /// 启动拒绝信任后的终端提示（不进入应用，直接退出）。
 pub const TRUST_REFUSED_MESSAGE: &str = "workspace not trusted; exiting";

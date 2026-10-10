@@ -43,18 +43,20 @@ fn content_text(buf: &Buffer, layout: &TrustLayout, width: u16) -> String {
 fn renders_top_left_aligned_page_with_rule_logo_and_options() {
     let (buf, layout) = draw(100, 30, 0);
 
-    // logo 左上对齐（与内容同缩进）。
+    // 全宽分隔线在最上方。
+    assert_eq!(layout.rule.y, 0, "分隔线在 logo 与内容上方");
+    assert_eq!(buf[(0, layout.rule.y)].symbol(), text::DIVIDER_MID);
+    assert_eq!(buf[(99, layout.rule.y)].symbol(), text::DIVIDER_MID);
+
+    // logo 位于分隔线下方、左对齐（与内容同缩进）。
     let logo = layout.logo.expect("logo fits on large screen");
     assert_eq!(logo.x, PADDING_X);
+    assert_eq!(logo.y, 2, "分隔线与空行之后");
     let logo_row = row_text(&buf, Rect::new(logo.x, logo.y, logo.width, 1));
     assert!(
         logo_row.chars().any(|ch| matches!(ch, '▀' | '▄' | '█')),
         "logo 像素已绘制: {logo_row}"
     );
-
-    // 全宽分隔线。
-    assert_eq!(buf[(0, layout.rule.y)].symbol(), text::DIVIDER_MID);
-    assert_eq!(buf[(99, layout.rule.y)].symbol(), text::DIVIDER_MID);
 
     // 内容左上对齐：标题从第 1 列开始（前导 1 列缩进）。
     assert_eq!(buf[(0, layout.content_y)].symbol(), " ");
@@ -99,7 +101,7 @@ fn default_selection_is_safe_no_with_full_width_highlight() {
     let no = layout.options[0];
     assert_eq!(no.x, 0);
     assert_eq!(no.width, 100);
-    assert_eq!(buf[(no.x, no.y)].symbol(), "❯");
+    assert_eq!(buf[(no.x, no.y)].symbol(), text::TRUST_SELECTION_MARKER);
     assert_eq!(buf[(no.x, no.y)].bg, Color::Indexed(240));
     assert_eq!(buf[(99, no.y)].bg, Color::Indexed(240), "高亮铺满整行");
     assert_eq!(
@@ -115,7 +117,7 @@ fn default_selection_is_safe_no_with_full_width_highlight() {
     );
     assert_eq!(
         buf[(layout.options[1].x, layout.options[1].y)].symbol(),
-        "❯"
+        text::TRUST_SELECTION_MARKER
     );
 }
 
@@ -152,12 +154,16 @@ fn narrow_screen_degrades_and_stays_inside_screen() {
 
 #[test]
 fn mid_size_screen_keeps_safety_and_hint() {
-    let (buf, layout) = draw(60, 26, 0);
-    assert!(layout.options[1].bottom() <= 26);
+    let (buf, layout) = draw(60, 30, 0);
+    assert!(layout.options[1].bottom() <= 30);
     let text_joined = content_text(&buf, &layout, 60);
     assert!(text_joined.contains(SAFETY_PREFIX), "{text_joined}");
     assert!(
-        text_joined.contains("lx-tui will be able to read"),
+        text_joined.contains("lx-tui will add this folder as a workspace"),
+        "{text_joined}"
+    );
+    assert!(
+        text_joined.contains("Prompt management is included"),
         "{text_joined}"
     );
 }

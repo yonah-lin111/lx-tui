@@ -1,6 +1,6 @@
-//! 启动信任页渲染：LX logo、全宽顶部分隔线与左对齐的键鼠选项；纯渲染，无 IO。
+//! 启动信任页渲染：全宽顶部分隔线、LX logo 与左对齐的键鼠选项；纯渲染，无 IO。
 //!
-//! 布局对齐 Claude Code：左上对齐、不再居中；首帧由会话层清屏后绘制。
+//! 布局对齐 Claude Code：左上对齐，分隔线在所有内容最上方；首帧由会话层清屏后绘制。
 //! 长段落按显示宽度换行，放不下时依次省略说明、空行、安全提示、页脚与 logo。
 
 use std::path::Path;
@@ -16,8 +16,6 @@ use crate::ui::{style, text};
 
 /// 内容左侧缩进（列）。
 const PADDING_X: u16 = 1;
-/// 顶部分隔线与内容各占的收尾行数：分隔线 1 行 + 空行 1 行。
-const HEADER_ROWS: u16 = 2;
 
 /// 对话框内容行语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,13 +88,15 @@ pub fn layout(screen: Rect, path: &Path) -> TrustLayout {
     });
 
     let mut y = screen.y;
+    // 全宽分隔线在最上方，logo 与内容依次在其下。
+    let rule = Rect::new(screen.x, y, screen.width, 1);
+    y = y.saturating_add(1 + 1);
     let logo = logo_wanted.then(|| {
         let rect = Rect::new(screen.x + PADDING_X, y, lx::LOGO_WIDTH, lx::LOGO_ROWS);
         y = y.saturating_add(lx::LOGO_ROWS + 1);
         rect
     });
-    let rule = Rect::new(screen.x, y, screen.width, 1);
-    let content_y = y.saturating_add(HEADER_ROWS);
+    let content_y = y;
     let mut options = [Rect::default(); 2];
     for (index, line) in lines.iter().enumerate() {
         if let LineKind::Option(option) = line.kind
@@ -211,13 +211,10 @@ pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
     }
 }
 
-/// 头部行数：logo 时为其高度 + 1 空行，再加分隔线与空行；无 logo 仅分隔线与空行。
+/// 头部行数：分隔线 + 空行，logo 时再加其高度与空行。
 fn header_rows(logo: bool) -> u16 {
-    if logo {
-        lx::LOGO_ROWS + 1 + HEADER_ROWS
-    } else {
-        HEADER_ROWS
-    }
+    let base = 2;
+    if logo { base + lx::LOGO_ROWS + 1 } else { base }
 }
 
 /// 构建内容行：标题/路径/安全提示/说明/选项/页脚；四个开关控制降级。
@@ -251,6 +248,12 @@ fn build_lines(
     if hint {
         push_blank(&mut lines, blanks);
         for text in wrap_text(text::TRUST_CONSOLE_HINT, width) {
+            lines.push(DialogLine {
+                kind: LineKind::Hint,
+                text,
+            });
+        }
+        for text in wrap_text(text::TRUST_CONSOLE_PROMPT_HINT, width) {
             lines.push(DialogLine {
                 kind: LineKind::Hint,
                 text,

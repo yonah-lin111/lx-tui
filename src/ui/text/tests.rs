@@ -63,6 +63,8 @@ fn user_visible_labels_are_clean_ascii() {
         TRUST_CONSOLE_HEADING,
         TRUST_CONSOLE_SAFETY,
         TRUST_CONSOLE_HINT,
+        TRUST_CONSOLE_PROMPT_HINT,
+        TRUST_CONSOLE_PROMPT_HINT,
         TRUST_OPTION_YES,
         TRUST_OPTION_NO,
         TRUST_CONSOLE_FOOTER,
