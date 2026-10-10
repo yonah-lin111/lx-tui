@@ -181,8 +181,8 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     }
 }
 
-/// 提示词树视图按键路由：上下移动选中、回车激活、左右展开折叠；
-/// 可打印字符与退格进入搜索过滤，Esc 清空过滤；其余按键吞掉。
+/// 提示词树视图按键路由：上下移动选中、回车激活；
+/// 其余可映射按键进入搜索框（与模态单行输入一致：字符/移动/删除/清空）；无法映射时吞掉。
 fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
     let visible = prompt_tree_visible_rows(state);
     match command {
@@ -195,22 +195,9 @@ fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
         EditorCommand::Newline => {
             activate_prompt_row(state);
         }
-        EditorCommand::Left => {
-            collapse_prompt_row(state);
+        _ => {
+            apply_prompt_search(state, command);
         }
-        EditorCommand::Right => {
-            expand_prompt_row(state);
-        }
-        EditorCommand::InsertChar(ch) => {
-            push_prompt_search(state, *ch);
-        }
-        EditorCommand::Backspace => {
-            pop_prompt_search(state);
-        }
-        EditorCommand::Escape => {
-            clear_prompt_search(state);
-        }
-        _ => {}
     }
 }
 

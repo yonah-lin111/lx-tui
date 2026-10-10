@@ -53,7 +53,7 @@ fn apply_tree_loads_rows_and_marks_loaded() {
     let state = demo_state();
     assert!(state.workspaces[0].prompt_panel.loaded);
     let rows = state.workspaces[0].prompt_panel.rows();
-    assert_eq!(rows.len(), 5, "draft, root, sub, nested, loose");
+    assert_eq!(rows.len(), 4, "root, sub, nested, loose");
 }
 
 #[test]
@@ -70,27 +70,27 @@ fn toggle_mode_and_keyboard_navigation() {
     assert!(move_prompt_selection(&mut state, 1, 8));
     assert_eq!(state.workspaces[0].prompt_panel.selected, 2);
 
-    // Left/Right 折叠/展开选中文件夹。
+    // 折叠/展开选中文件夹（折叠经由行激活/点击；←/→ 已归搜索框光标）。
     let mut state = demo_state();
     enter_tree(&mut state);
     let mut state = {
-        // 选中子文件夹（展示行 2）后折叠。
-        move_prompt_selection(&mut state, 2, 8);
+        // 选中子文件夹（行 1）后折叠。
+        move_prompt_selection(&mut state, 1, 8);
         state
     };
     assert!(collapse_prompt_row(&mut state));
     let rows = state.workspaces[0].prompt_panel.rows();
-    assert_eq!(rows.len(), 4, "子文件夹折叠隐藏 nested");
+    assert_eq!(rows.len(), 3, "子文件夹折叠隐藏 nested");
     assert!(expand_prompt_row(&mut state));
-    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 5);
+    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
 }
 
 #[test]
 fn enter_on_item_opens_editor_and_escape_returns() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    // 行序：draft(0), root(1), sub(2), nested(3), loose(4)；选中 nested 并回车。
-    move_prompt_selection(&mut state, 3, 8);
+    // 行序：root(0), sub(1), nested(2), loose(3)；选中 nested 并回车。
+    move_prompt_selection(&mut state, 2, 8);
     assert!(activate_prompt_row(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(
@@ -107,7 +107,7 @@ fn enter_on_item_opens_editor_and_escape_returns() {
 }
 
 #[test]
-fn typing_in_tree_mode_filters_and_escape_clears() {
+fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
     let mut state = demo_state();
     enter_tree(&mut state);
     for ch in "nested".chars() {
@@ -115,18 +115,22 @@ fn typing_in_tree_mode_filters_and_escape_clears() {
     }
     assert_eq!(state.prompt.text(), "", "树视图输入不进入编辑器");
     let panel = &state.workspaces[0].prompt_panel;
-    assert_eq!(panel.search, "nested");
-    assert_eq!(panel.selected, 1, "过滤后选中首个结果");
-    assert_eq!(panel.rows().len(), 4, "draft + root + sub + nested");
+    assert_eq!(panel.search.text(), "nested");
+    assert_eq!(panel.selected, 0, "过滤后选中首个结果");
+    assert_eq!(panel.rows().len(), 3, "root + sub + nested");
+    // 单行输入语义：Home/End/←/→ 移动光标，Delete/Backspace 编辑过滤词。
+    apply_editor(&mut state, EditorCommand::Home);
+    apply_editor(&mut state, EditorCommand::Delete);
+    assert_eq!(state.workspaces[0].prompt_panel.search.text(), "ested");
+    apply_editor(&mut state, EditorCommand::End);
     apply_editor(&mut state, EditorCommand::Backspace);
-    assert_eq!(state.workspaces[0].prompt_panel.search, "neste");
+    assert_eq!(state.workspaces[0].prompt_panel.search.text(), "este");
     apply_editor(&mut state, EditorCommand::Escape);
-    assert!(state.workspaces[0].prompt_panel.search.is_empty());
-    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 5);
+    assert!(state.workspaces[0].prompt_panel.search.text().is_empty());
+    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
 
-    // 上移到草稿行（默认入口）回车 → 打开草稿编辑视图。
-    assert!(move_prompt_selection(&mut state, -1, 8));
-    apply_editor(&mut state, EditorCommand::Newline);
+    // 工具栏 [temp prompt] 入口打开草稿编辑视图。
+    assert!(open_temp_prompt(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(
         state.workspaces[0].prompt_panel.editing,
@@ -138,7 +142,7 @@ fn typing_in_tree_mode_filters_and_escape_clears() {
 fn editing_item_persists_on_commit_and_action_quit() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 3, 8);
+    move_prompt_selection(&mut state, 2, 8);
     activate_prompt_row(&mut state);
     apply_editor(&mut state, EditorCommand::InsertText(" updated".into()));
     show_prompt_tree(&mut state);
@@ -184,7 +188,7 @@ fn item_menu_lists_commands_and_dispatches_status_copy_delete() {
         menu.target,
         OverlayTarget::PromptItem { item_id: 12, .. }
     ));
-    assert_eq!(state.workspaces[0].prompt_panel.selected, 3);
+    assert_eq!(state.workspaces[0].prompt_panel.selected, 2);
 
     // 状态切换命令 → 内存与效应。
     state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
@@ -344,7 +348,7 @@ fn rename_flow_updates_memory_and_queues_effect() {
 fn delete_folder_cascades_editing_item_exit() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 3, 8);
+    move_prompt_selection(&mut state, 2, 8);
     activate_prompt_row(&mut state);
     assert_eq!(
         state.workspaces[0].prompt_panel.editing,
@@ -363,7 +367,7 @@ fn scroll_clamps_and_keeps_selection_visible() {
     enter_tree(&mut state);
     state.prompt.resize(30, 2);
     assert!(scroll_prompt_tree(&mut state, 5, 2));
-    assert!(state.workspaces[0].prompt_panel.scroll <= 3);
+    assert!(state.workspaces[0].prompt_panel.scroll <= 2);
     move_prompt_selection(&mut state, 3, 2);
     assert!(state.workspaces[0].prompt_panel.scroll <= state.workspaces[0].prompt_panel.selected);
     assert!(clamp_prompt_tree_scroll(&mut state, 4));

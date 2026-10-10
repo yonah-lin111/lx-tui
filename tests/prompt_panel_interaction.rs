@@ -1,8 +1,8 @@
 //! PTY 集成测试：prompt 面板真实鼠标/键盘流转。
 //!
 //! 覆盖用户反馈路径：[edit] 在无选中条目（含空树）时回退打开草稿、
-//! 草稿入口点击进入编辑、保存点 → 文件夹选择器落库、
-//! 树视图输入即过滤与 Esc 清空、条目右键 CRUD（重命名）。
+//! 工具栏 [temp prompt] 进入草稿编辑、保存点 → 文件夹选择器落库、
+//! 树视图搜索框（模态输入对齐）输入即过滤与 Esc 清空、条目右键 CRUD（重命名）。
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -194,11 +194,11 @@ fn spawn_trusted(label: &str) -> App {
 fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     let app = spawn_trusted("flow");
 
-    // [list] → 树视图：搜索框、置顶草稿入口与空状态。
+    // [list] → 树视图：搜索框、[temp prompt] 按钮与空状态。
     app.click("[list]");
     assert!(app.wait_for("no prompts yet"), "tree: \n{}", app.screen());
     assert!(app.wait_for("[edit]"), "mode button flips");
-    assert!(app.wait_for("+ New prompt"), "draft entry pinned");
+    assert!(app.wait_for("[temp prompt]"), "temp prompt button listed");
 
     // 空树点 [edit]：回退打开草稿编辑视图，不再无响应。
     app.click("[edit]");
@@ -256,8 +256,8 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
 
-    // 点击置顶草稿入口 → 草稿编辑视图（保存后草稿槽已清空，显示空占位）。
-    app.click("+ New prompt");
+    // 点击工具栏 [temp prompt] → 草稿编辑视图（保存后草稿槽已清空，显示空占位）。
+    app.click("[temp prompt]");
     assert!(
         app.wait_for("Write your prompt"),
         "draft editor reopened: \n{}",

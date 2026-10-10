@@ -353,12 +353,12 @@ fn prompt_header_hidden_when_body_too_short() {
 fn prompt_toolbar_buttons_hit_expected_cells() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row);
+    let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row, false);
     assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Mode));
     assert_eq!(hit(bar.x + 7, bar.y), Some(PromptToolbarButton::Undo));
     assert_eq!(hit(bar.x + 14, bar.y), Some(PromptToolbarButton::Redo));
-    let select_all =
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll).expect("select all fits");
+    let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
+        .expect("select all fits");
     assert_eq!(
         hit(select_all.x, bar.y),
         Some(PromptToolbarButton::SelectAll)
@@ -381,17 +381,18 @@ fn prompt_toolbar_hides_select_all_when_narrow() {
     // 内容区宽度 26 < 35：隐藏 select all，保留模式/undo/redo 与保存点。
     let panel = Rect::new(0, 0, 28, 8);
     assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll),
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false),
         None
     );
-    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo).is_some());
-    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo).is_some());
-    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Save).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, false).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo, false).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, false).is_some());
     assert_eq!(
         prompt_toolbar_button_at(
             panel,
             prompt_toolbar_rect(panel).expect("toolbar").right() - 1,
             prompt_toolbar_rect(panel).expect("toolbar").y,
+            false,
         ),
         Some(PromptToolbarButton::Save)
     );
@@ -448,4 +449,34 @@ fn remove_pane_clears_collapse_when_collapsed_pane_removed() {
     assert!(layout.remove_pane(right));
     assert_eq!(layout.collapsed(), None);
     assert_eq!(layout.pane_ids(), vec![left]);
+}
+
+#[test]
+fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let mode = prompt_toolbar_button_rect(panel, PromptToolbarButton::Mode, true)
+        .expect("mode visible in tree");
+    assert_eq!(mode.x, bar.x);
+    let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, true)
+        .expect("temp prompt visible in tree");
+    assert_eq!(temp.x, bar.x + 7, "模式按钮之后");
+    assert_eq!(temp.width, 13);
+    assert_eq!(
+        prompt_toolbar_button_at(panel, temp.x, bar.y, true),
+        Some(PromptToolbarButton::TempPrompt)
+    );
+    assert_eq!(
+        prompt_toolbar_button_at(panel, temp.x, bar.y, false),
+        Some(PromptToolbarButton::Undo),
+        "编辑视图同列为 undo"
+    );
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, true),
+        None
+    );
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, false),
+        None
+    );
 }

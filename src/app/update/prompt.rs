@@ -2,7 +2,7 @@
 //!
 //! DB 读写不在此层执行：变更登记为 `Effect` 出箱，由持久化服务执行并回报。
 
-use crate::app::actions::OverlayKey;
+use crate::app::actions::{EditorCommand, OverlayKey};
 use crate::app::effects::{DraftTarget, Effect};
 use crate::app::overlay::{
     Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft, SaveDraftEntry,
@@ -150,7 +150,6 @@ pub fn activate_prompt_row(state: &mut AppState) -> bool {
         return false;
     };
     match row.kind {
-        PromptRowKind::Draft => edit_prompt_draft(state),
         PromptRowKind::Folder => toggle_prompt_folder(state, index, row),
         PromptRowKind::Item => edit_prompt_row(state, index, row),
     }
@@ -178,7 +177,6 @@ pub fn click_prompt_row(state: &mut AppState, row: usize) -> bool {
         return changed;
     };
     match row_data.kind {
-        PromptRowKind::Draft => edit_prompt_draft(state) || changed,
         PromptRowKind::Folder => toggle_prompt_folder(state, index, row_data) || changed,
         PromptRowKind::Item => changed,
     }
@@ -260,54 +258,47 @@ pub fn edit_selected_prompt(state: &mut AppState) -> bool {
     edit_prompt_item(state, index, item_id)
 }
 
-/// 树视图追加搜索字符；命中过滤后选中首个结果行（草稿行之后）。
-pub fn push_prompt_search(state: &mut AppState, ch: char) -> bool {
+/// 树视图搜索框编辑：按单行输入语义执行命令（字符/移动/删除/清空）；
+/// 过滤词变化后选中落到首个结果，清空后钳制；返回是否被搜索框消费。
+pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> bool {
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     let Some(workspace_state) = state.workspaces.get_mut(index) else {
         return false;
     };
-    if !workspace_state.prompt_panel.push_search_char(ch) {
-        return false;
+    let panel = &mut workspace_state.prompt_panel;
+    let before = panel.search.text().to_string();
+    match command {
+        EditorCommand::InsertChar(ch) => panel.search.insert_char(*ch),
+        EditorCommand::Backspace => panel.search.backspace(),
+        EditorCommand::Delete => panel.search.delete(),
+        EditorCommand::Left => panel.search.move_left(),
+        EditorCommand::Right => panel.search.move_right(),
+        EditorCommand::Home => panel.search.move_home(),
+        EditorCommand::End => panel.search.move_end(),
+        EditorCommand::Escape => panel.search.clear(),
+        _ => return false,
     }
-    normalize_search_selection(&mut workspace_state.prompt_panel, visible);
+    if panel.search.text() != before {
+        if panel.search.text().trim().is_empty() {
+            panel.clamp_selection(visible);
+        } else {
+            panel.selected = 0;
+            scroll_selection_into_view(panel, visible);
+        }
+    }
     true
 }
 
-/// 树视图删除搜索词末字符；返回是否有变化。
-pub fn pop_prompt_search(state: &mut AppState) -> bool {
-    let index = state.prompt_workspace();
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    if !workspace_state.prompt_panel.pop_search_char() {
-        return false;
-    }
-    normalize_search_selection(&mut workspace_state.prompt_panel, visible);
-    true
-}
-
-/// 树视图清空搜索词；返回是否有变化。
+/// 清空显示中树视图的搜索词（Ctrl+C 清空语义）；返回是否被消费。
 pub fn clear_prompt_search(state: &mut AppState) -> bool {
-    let index = state.prompt_workspace();
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    if !workspace_state.prompt_panel.clear_search() {
-        return false;
-    }
-    workspace_state.prompt_panel.clamp_selection(visible);
-    true
+    apply_prompt_search(state, &EditorCommand::Escape)
 }
 
-/// 搜索词变化后的选中归一：非空时落到首个过滤结果，滚动跟随。
-fn normalize_search_selection(panel: &mut crate::app::prompt::PromptPanel, visible: usize) {
-    if !panel.search.trim().is_empty() && panel.rows().len() > 1 {
-        panel.selected = 1;
-    }
-    scroll_selection_into_view(panel, visible);
+/// 工具栏 [temp prompt]：提交当前编辑内容并打开临时草稿编辑视图。
+pub fn open_temp_prompt(state: &mut AppState) -> bool {
+    commit_editing_prompt(state);
+    edit_prompt_draft(state)
 }
 
 /// 打开草稿保存的文件夹选择浮层；文件夹按树层级顺序列出（忽略折叠）。

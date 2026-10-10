@@ -70,11 +70,10 @@ pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
 /// prompt 视图模式按钮：编辑视图显示 `[list]`、树视图显示 `[edit]`。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[list]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[edit]";
-/// 提示词树：搜索框、草稿入口与连接符（子层末项 `└─`、其余 `├─`，与侧栏工作区树一致）。
+/// 提示词树：搜索框、临时提示词按钮与连接符（子层末项 `└─`、其余 `├─`，与侧栏工作区树一致）。
 pub const PROMPT_TREE_SEARCH_ICON: &str = "⌕";
 pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
-pub const PROMPT_TREE_DRAFT_ICON: &str = "+";
-pub const PROMPT_TREE_DRAFT_LABEL: &str = "New prompt";
+pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[temp prompt]";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";
 pub const PROMPT_TREE_COLLAPSED: &str = "▸";
 pub const PROMPT_TREE_ITEM_ICON: &str = "•";

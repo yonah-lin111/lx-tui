@@ -55,14 +55,22 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
     }
 }
 
-/// 工具栏：模式切换按钮常显；编辑视图追加 undo/redo（不可用时置灰）、select all 与保存状态点。
+/// 工具栏：模式切换按钮常显；树视图追加 `[temp prompt]`；编辑视图追加
+/// undo/redo（不可用时置灰）、select all 与保存状态点。
 fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree => text::PROMPT_MODE_EDIT_LABEL,
     };
+    let tree = mode == PromptMode::Tree;
     let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
-    if mode == PromptMode::Editor {
+    if tree {
+        buttons.push((
+            PromptToolbarButton::TempPrompt,
+            text::PROMPT_TEMP_PROMPT_LABEL,
+            style::accent(),
+        ));
+    } else {
         buttons.extend([
             (
                 PromptToolbarButton::Undo,
@@ -95,7 +103,7 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMo
         ]);
     }
     for (button, label, button_style) in buttons {
-        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button) else {
+        let Some(rect) = layout::prompt_toolbar_button_rect(panel, button, tree) else {
             continue;
         };
         for (offset, symbol) in label.chars().enumerate() {

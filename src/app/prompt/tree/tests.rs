@@ -140,41 +140,35 @@ fn status_roundtrip_and_cycle() {
 fn panel_selection_clamps_and_locates_prompt() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
-    // 展示行 = 置顶草稿行 + 树行；下标 3 为 in-sub 条目。
-    panel.selected = 3;
+    // 行序：root(0), sub(1), in-sub(2), in-root(3), other(4), loose(5)。
+    panel.selected = 2;
     let row = panel.selected_row().expect("row exists");
     assert_eq!(panel.tree.item_of_row(row).map(|item| item.id), Some(12));
     assert_eq!(panel.selected_prompt_id(), Some(12));
     panel.selected = 99;
     panel.scroll = 99;
     panel.clamp_selection(3);
-    assert_eq!(panel.selected, 6);
-    assert_eq!(panel.scroll, 4);
+    assert_eq!(panel.selected, 5);
+    assert_eq!(panel.scroll, 3);
 }
 
-#[test]
-fn presentation_rows_start_with_draft_entry() {
-    let mut panel = PromptPanel::new();
-    panel.tree = sample_tree();
-    let rows = panel.rows();
-    assert_eq!(rows[0].kind, PromptRowKind::Draft);
-    assert_eq!(rows[0].depth, 0);
-    panel.selected = 0;
-    assert!(panel.draft_selected());
-    assert_eq!(panel.selected_prompt_id(), None);
+fn search(panel: &mut PromptPanel, query: &str) {
+    panel.search.clear();
+    for ch in query.chars() {
+        panel.search.insert_char(ch);
+    }
 }
 
 #[test]
 fn search_filters_folders_items_and_ancestors() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
-    panel.search = "in-".to_string();
+    search(&mut panel, "in-");
     let rows = panel.rows();
-    // 草稿行 + root(folder) + sub(folder) + in-sub + in-root。
-    assert_eq!(rows.len(), 5, "{rows:?}");
-    assert_eq!(rows[0].kind, PromptRowKind::Draft);
+    // root(folder) + sub(folder) + in-sub + in-root。
+    assert_eq!(rows.len(), 4, "{rows:?}");
     assert_eq!(
-        rows[1..].iter().map(|row| row.kind).collect::<Vec<_>>(),
+        rows.iter().map(|row| row.kind).collect::<Vec<_>>(),
         vec![
             PromptRowKind::Folder,
             PromptRowKind::Folder,
@@ -183,24 +177,24 @@ fn search_filters_folders_items_and_ancestors() {
         ]
     );
 
-    panel.search = "other".to_string();
+    search(&mut panel, "other");
     let rows = panel.rows();
-    assert_eq!(rows.len(), 2, "只保留命中文件夹：{rows:?}");
-    assert_eq!(rows[1].kind, PromptRowKind::Folder);
+    assert_eq!(rows.len(), 1, "只保留命中文件夹：{rows:?}");
+    assert_eq!(rows[0].kind, PromptRowKind::Folder);
 
-    panel.search = "zzz".to_string();
-    assert_eq!(panel.rows().len(), 1, "无命中仅剩草稿行");
+    search(&mut panel, "zzz");
+    assert!(panel.rows().is_empty(), "无命中为空列表");
 }
 
 #[test]
 fn search_matching_folder_shows_whole_subtree() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
-    panel.search = "root".to_string();
+    search(&mut panel, "root");
     let rows = panel.rows();
-    // 草稿行 + root + sub + in-sub + in-root（命中文件夹展示整棵子树）。
-    assert_eq!(rows.len(), 5, "{rows:?}");
-    assert!(rows[1..].iter().all(|row| row.depth <= 1));
+    // root + sub + in-sub + in-root（命中文件夹展示整棵子树）。
+    assert_eq!(rows.len(), 4, "{rows:?}");
+    assert!(rows.iter().all(|row| row.depth <= 1));
 }
 
 #[test]
@@ -208,26 +202,9 @@ fn search_ignores_collapsed_state() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
     panel.tree.toggle_folder(1);
-    panel.search = "in-sub".to_string();
+    search(&mut panel, "in-sub");
     let rows = panel.rows();
     // 折叠被忽略：root → sub → in-sub 仍可见。
-    assert_eq!(rows.len(), 4, "{rows:?}");
-    assert_eq!(rows[3].kind, PromptRowKind::Item);
-}
-
-#[test]
-fn push_pop_clear_search_toggle_state() {
-    let mut panel = PromptPanel::new();
-    panel.tree = sample_tree();
-    assert!(panel.push_search_char('r'));
-    assert!(panel.push_search_char('o'));
-    assert_eq!(panel.search, "ro");
-    assert!(panel.pop_search_char());
-    assert_eq!(panel.search, "r");
-    assert!(panel.pop_search_char());
-    assert!(!panel.pop_search_char(), "已空再删无变化");
-    panel.push_search_char('x');
-    assert!(panel.clear_search());
-    assert!(panel.search.is_empty());
-    assert!(!panel.clear_search(), "已空再清无变化");
+    assert_eq!(rows.len(), 3, "{rows:?}");
+    assert_eq!(rows[2].kind, PromptRowKind::Item);
 }

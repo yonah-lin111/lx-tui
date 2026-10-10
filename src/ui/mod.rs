@@ -503,14 +503,12 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     prompt::render_header(area, frame.buffer_mut(), &state.prompt, focused, mode);
     render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
-    match mode {
-        PromptMode::Tree => {
-            prompt::tree::render(
-                text_area,
-                frame.buffer_mut(),
-                &state.prompt_owner().prompt_panel,
-            );
-        }
+    let tree_cursor = match mode {
+        PromptMode::Tree => prompt::tree::render(
+            text_area,
+            frame.buffer_mut(),
+            &state.prompt_owner().prompt_panel,
+        ),
         PromptMode::Editor => {
             prompt::render(
                 text_area,
@@ -518,13 +516,15 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
                 &state.prompt,
                 state.selection_for(state.prompt.id()),
             );
+            None
         }
-    }
+    };
     if let Some(scrollbar) = prompt_scrollbar_for(area, state) {
         widgets::scrollbar::render(frame, &scrollbar);
     }
     if mode == PromptMode::Tree {
-        return None;
+        // 树视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
+        return focused.then_some(tree_cursor).flatten();
     }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
     Some((

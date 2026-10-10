@@ -1394,6 +1394,7 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let undo = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Undo,
+        false,
     )
     .expect("undo button visible");
     let undo_x = undo.x;

@@ -489,22 +489,29 @@ fn renders_toolbar_buttons_and_divider() {
             .map(|x| buf[(x, rect.y)].symbol())
             .collect()
     };
-    let undo =
-        crate::layout::prompt_toolbar_button_rect(panel, crate::layout::PromptToolbarButton::Undo)
-            .expect("undo visible");
+    let undo = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Undo,
+        false,
+    )
+    .expect("undo visible");
     assert_eq!(render_label(&buf, undo), text::PROMPT_UNDO_LABEL);
     assert_eq!(buf[(undo.x, bar.y)].fg, Color::Cyan, "可撤销时强调色");
     assert!(buf[(undo.x, bar.y)].modifier.contains(Modifier::BOLD));
 
-    let redo =
-        crate::layout::prompt_toolbar_button_rect(panel, crate::layout::PromptToolbarButton::Redo)
-            .expect("redo visible");
+    let redo = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Redo,
+        false,
+    )
+    .expect("redo visible");
     assert_eq!(render_label(&buf, redo), text::PROMPT_REDO_LABEL);
     assert!(buf[(redo.x, bar.y)].modifier.contains(Modifier::DIM));
 
     let select_all = crate::layout::prompt_toolbar_button_rect(
         panel,
         crate::layout::PromptToolbarButton::SelectAll,
+        false,
     )
     .expect("select all visible");
     assert_eq!(

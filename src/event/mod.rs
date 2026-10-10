@@ -428,7 +428,11 @@ fn handle_terminal_event(
                     *dirty = true;
                 }
                 Routed::Copy => {
-                    if let Some(text) = update::prompt_copy_text(state) {
+                    if update::prompt_tree_mode(state) {
+                        // 树视图 Ctrl+C 与模态输入框一致：清空搜索过滤。
+                        update::clear_prompt_search(state);
+                        *dirty = true;
+                    } else if let Some(text) = update::prompt_copy_text(state) {
                         copy_with_toast(state, &text);
                         *dirty = true;
                     }
@@ -625,14 +629,21 @@ fn handle_terminal_event(
                     apply_template_button(state, hit);
                     *dirty = true;
                 } else if !state.prompt_collapsed
-                    && let Some(button) =
-                        layout::prompt_toolbar_button_at(view.prompt, mouse.column, mouse.row)
+                    && let Some(button) = layout::prompt_toolbar_button_at(
+                        view.prompt,
+                        mouse.column,
+                        mouse.row,
+                        update::prompt_tree_mode(state),
+                    )
                 {
                     // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
                     let editor_view = !update::prompt_tree_mode(state);
                     match button {
                         layout::PromptToolbarButton::Mode => {
                             update::toggle_prompt_panel_mode(state);
+                        }
+                        layout::PromptToolbarButton::TempPrompt => {
+                            update::open_temp_prompt(state);
                         }
                         layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
                         layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
@@ -1506,8 +1517,6 @@ fn open_right_click_menu(
                             panel.tree.folder_of_row(row_data).map(|folder| folder.id)
                         }
                         PromptRowKind::Item => panel.tree.item_of_row(row_data).map(|item| item.id),
-                        // 草稿行没有 CRUD 目标：作为树空白处理（新建菜单）。
-                        PromptRowKind::Draft => None,
                     };
                     Some((row_data.kind, id))
                 })

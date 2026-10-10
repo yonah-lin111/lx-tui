@@ -3,6 +3,7 @@
 //! 树保持扁平存储（与 DB 记录一一对应），可见行由 `rows` 按折叠状态构建；
 //! 持久化以 DB 为准，重载时保留同名 id 的折叠状态。
 
+use crate::app::overlay::TextInput;
 use crate::db::{FolderRecord, PromptRecord};
 
 /// 提示词条目状态；与 DB 稳定值 `todo` / `in_progress` / `completed` 一一对应。
@@ -61,10 +62,9 @@ pub struct PromptItem {
     pub status: PromptItemStatus,
 }
 
-/// 可见行种类；`Draft` 为置顶的临时草稿入口行（不入库）。
+/// 可见行种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptRowKind {
-    Draft,
     Folder,
     Item,
 }
@@ -315,8 +315,8 @@ pub struct PromptPanel {
     pub scroll: usize,
     /// 临时草稿正文；保存后清空，不入库。
     pub draft: String,
-    /// 树视图搜索过滤词；空串为不过滤。
-    pub search: String,
+    /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
+    pub search: TextInput,
 }
 
 impl PromptPanel {
@@ -330,19 +330,13 @@ impl PromptPanel {
             editing: None,
             scroll: 0,
             draft: String::new(),
-            search: String::new(),
+            search: TextInput::new(""),
         }
     }
 
-    /// 可见行：置顶草稿入口行 + 过滤后的树行。
+    /// 可见行：过滤后的树行。
     pub fn rows(&self) -> Vec<PromptRow> {
-        let mut rows = vec![PromptRow {
-            kind: PromptRowKind::Draft,
-            index: 0,
-            depth: 0,
-        }];
-        rows.extend(self.filtered_tree_rows());
-        rows
+        self.filtered_tree_rows()
     }
 
     /// 过滤后的树行；无过滤词时与 `tree.rows()` 一致。
@@ -350,7 +344,7 @@ impl PromptPanel {
     /// 过滤忽略折叠状态：命中文件夹展示其整棵子树，命中条目展示祖先链；
     /// 临时草稿行不参与过滤（由 `rows` 恒置顶）。
     fn filtered_tree_rows(&self) -> Vec<PromptRow> {
-        let query = self.search.trim().to_lowercase();
+        let query = self.search.text().trim().to_lowercase();
         if query.is_empty() {
             return self.tree.rows();
         }
@@ -444,32 +438,6 @@ impl PromptPanel {
         self.selected_row()
             .and_then(|row| self.tree.item_of_row(row))
             .map(|item| item.id)
-    }
-
-    /// 选中行是否为置顶草稿入口。
-    pub fn draft_selected(&self) -> bool {
-        self.selected_row()
-            .is_some_and(|row| row.kind == PromptRowKind::Draft)
-    }
-
-    /// 追加搜索字符并返回是否有变化。
-    pub fn push_search_char(&mut self, ch: char) -> bool {
-        self.search.push(ch);
-        true
-    }
-
-    /// 删除搜索词末尾字符并返回是否有变化。
-    pub fn pop_search_char(&mut self) -> bool {
-        self.search.pop().is_some()
-    }
-
-    /// 清空搜索词并返回是否有变化。
-    pub fn clear_search(&mut self) -> bool {
-        if self.search.is_empty() {
-            return false;
-        }
-        self.search.clear();
-        true
     }
 
     /// 选中行钳制（树变化后调用）；滚动同步跟随。

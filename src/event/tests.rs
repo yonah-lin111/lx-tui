@@ -1699,7 +1699,8 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
 
 /// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
 fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
-    layout::prompt_toolbar_button_rect(geo.view.prompt, button).expect("toolbar button visible")
+    layout::prompt_toolbar_button_rect(geo.view.prompt, button, false)
+        .expect("toolbar button visible")
 }
 
 #[test]

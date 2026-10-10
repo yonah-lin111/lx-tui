@@ -274,9 +274,8 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     let mut service = Persistence::with_database(database);
     service.pump(&mut state);
 
-    // 树视图默认选中置顶草稿行；空树 [edit] 回退打开草稿（不再无响应）。
+    // 空树 [edit] 回退打开草稿（不再无响应）；工具栏 [temp prompt] 同样进入草稿编辑。
     update::show_prompt_tree(&mut state);
-    assert!(state.active_workspace().prompt_panel.draft_selected());
     update::toggle_prompt_panel_mode(&mut state);
     assert_eq!(
         state.active_workspace().prompt_panel.mode,

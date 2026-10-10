@@ -5,17 +5,18 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
 use crate::app::prompt::{PromptPanel, PromptRow, PromptRowKind};
+use crate::ui::widgets;
 use crate::ui::{style, text};
 
-/// 渲染树内容区：顶部搜索框行 + 置顶草稿行 + 过滤后的树行；
+/// 渲染树内容区：顶部搜索框行 + 过滤后的树行；返回搜索框硬件光标位置；
 /// 空树/无命中显示占位；选中行整行高亮，条目状态右对齐。
-pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) {
+pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
-        return;
+        return None;
     }
-    paint_search_row(buf, area, panel);
+    let cursor = paint_search_row(buf, area, panel);
     if area.height <= 1 {
-        return;
+        return cursor;
     }
     let rows_area = Rect {
         y: area.y + 1,
@@ -37,7 +38,7 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) {
             text::PROMPT_TREE_LAST
         };
         // 过滤时折叠被忽略：过滤视图下所有可见文件夹按展开态绘制三角。
-        let searching = !panel.search.trim().is_empty();
+        let searching = !panel.search.text().trim().is_empty();
         let expanded = row.kind == PromptRowKind::Folder
             && (!panel
                 .tree
@@ -55,9 +56,9 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) {
             expanded,
         );
     }
-    // 无树行时在草稿入口下方显示空状态 / 无命中占位。
-    if rows.len() <= 1 && scroll == 0 && rows_area.height >= 2 {
-        let empty = if panel.search.trim().is_empty() {
+    // 无树行时显示空状态 / 无命中占位。
+    if rows.is_empty() && rows_area.height >= 1 {
+        let empty = if panel.search.text().trim().is_empty() {
             text::PROMPT_TREE_EMPTY
         } else {
             text::PROMPT_TREE_NO_MATCHES
@@ -65,16 +66,18 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) {
         paint_text(
             buf,
             rows_area.x,
-            rows_area.y + 1,
+            rows_area.y,
             empty,
             style::muted(),
             rows_area.right(),
         );
     }
+    cursor
 }
 
-/// 绘制顶部搜索框行：图标 + 过滤词（为空时显示占位）。
-fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) {
+/// 绘制顶部搜索框行：图标 + 单行输入视口（与模态输入框一致：硬件光标 + 占位）；
+/// 返回光标位置（图标与空档之后为输入起点）。
+fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) -> Option<(u16, u16)> {
     let mut x = paint_text(
         buf,
         area.x,
@@ -84,18 +87,15 @@ fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) {
         area.right(),
     );
     x = paint_text(buf, x, area.y, " ", style::text(), area.right());
-    if panel.search.is_empty() {
-        paint_text(
-            buf,
-            x,
-            area.y,
-            text::PROMPT_TREE_SEARCH_PLACEHOLDER,
-            style::muted(),
-            area.right(),
-        );
+    let width = usize::from(area.right().saturating_sub(x));
+    let input = widgets::input::view(panel.search.text(), panel.search.cursor(), width);
+    let (visible, text_style) = if panel.search.text().is_empty() {
+        (text::PROMPT_TREE_SEARCH_PLACEHOLDER, style::muted())
     } else {
-        paint_text(buf, x, area.y, &panel.search, style::text(), area.right());
-    }
+        (input.visible, style::text())
+    };
+    paint_text(buf, x, area.y, visible, text_style, area.right());
+    Some((x.saturating_add(input.cursor_col), area.y))
 }
 
 /// 可见行是否为同级末项（决定 `└─` / `├─`）：其后再无同深度行，或先遇到更浅的行。
@@ -155,28 +155,6 @@ fn paint_row(
         x = paint_text(buf, x, y, &format!("{connector} "), sub, area.right());
     }
     match row.kind {
-        PromptRowKind::Draft => {
-            let icon_style = if selected { base } else { style::accent() };
-            x = paint_text(
-                buf,
-                x,
-                y,
-                text::PROMPT_TREE_DRAFT_ICON,
-                icon_style,
-                area.right(),
-            );
-            x = paint_text(buf, x, y, " ", base, area.right());
-            let max = usize::from(area.right().saturating_sub(x));
-            paint_name(
-                buf,
-                x,
-                y,
-                text::PROMPT_TREE_DRAFT_LABEL,
-                base,
-                max,
-                area.right(),
-            );
-        }
         PromptRowKind::Folder => {
             let Some(folder) = panel.tree.folder_of_row(row) else {
                 return;

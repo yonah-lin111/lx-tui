@@ -22,6 +22,8 @@ pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
 const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 6;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
+/// 树视图 `[temp prompt]` 按钮宽度（列）。
+const PROMPT_TEMP_PROMPT_WIDTH: u16 = 13;
 /// `[select all]` 标签宽度（列）。
 const PROMPT_SELECT_ALL_WIDTH: u16 = 12;
 /// `[select all]` 与保存点之间的空档（列）。
@@ -35,6 +37,8 @@ const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 35;
 pub enum PromptToolbarButton {
     /// 视图模式切换：编辑视图显示 `[list]`、树视图显示 `[edit]`。
     Mode,
+    /// 树视图 `[temp prompt]`：打开临时草稿编辑视图（仅树视图显示）。
+    TempPrompt,
     Undo,
     Redo,
     SelectAll,
@@ -716,21 +720,38 @@ pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[select all]` 在窄宽度下优先隐藏）。
-pub fn prompt_toolbar_button_rect(panel: Rect, button: PromptToolbarButton) -> Option<Rect> {
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[select all]` 在窄宽度下优先隐藏；
+/// 树视图与编辑视图各自的按钮集不同，`tree` 为是否树视图）。
+pub fn prompt_toolbar_button_rect(
+    panel: Rect,
+    button: PromptToolbarButton,
+    tree: bool,
+) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
     let inner = pane_inner_rect(panel);
     let stride = PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let rect = match button {
         PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
+        PromptToolbarButton::TempPrompt => {
+            if !tree {
+                return None;
+            }
+            Rect::new(bar.x + stride, bar.y, PROMPT_TEMP_PROMPT_WIDTH, 1)
+        }
         PromptToolbarButton::Undo => {
+            if tree {
+                return None;
+            }
             Rect::new(bar.x + stride, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1)
         }
         PromptToolbarButton::Redo => {
+            if tree {
+                return None;
+            }
             Rect::new(bar.x + stride * 2, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1)
         }
         PromptToolbarButton::SelectAll => {
-            if inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
+            if tree || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
             }
             Rect::new(
@@ -741,19 +762,30 @@ pub fn prompt_toolbar_button_rect(panel: Rect, button: PromptToolbarButton) -> O
                 1,
             )
         }
-        PromptToolbarButton::Save => Rect::new(bar.right().saturating_sub(1), bar.y, 1, 1),
+        PromptToolbarButton::Save => {
+            if tree {
+                return None;
+            }
+            Rect::new(bar.right().saturating_sub(1), bar.y, 1, 1)
+        }
     };
     (rect.right() <= bar.right()).then_some(rect)
 }
 
-/// 命中 prompt 工具栏按钮；表头隐藏、非工具栏行或未命中时为 None。
-pub fn prompt_toolbar_button_at(panel: Rect, column: u16, row: u16) -> Option<PromptToolbarButton> {
+/// 命中 prompt 工具栏按钮；表头隐藏、非工具栏行或未命中时为 None；`tree` 为是否树视图。
+pub fn prompt_toolbar_button_at(
+    panel: Rect,
+    column: u16,
+    row: u16,
+    tree: bool,
+) -> Option<PromptToolbarButton> {
     let bar = prompt_toolbar_rect(panel)?;
     if row != bar.y {
         return None;
     }
     [
         PromptToolbarButton::Mode,
+        PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,
         PromptToolbarButton::SelectAll,
@@ -761,7 +793,7 @@ pub fn prompt_toolbar_button_at(panel: Rect, column: u16, row: u16) -> Option<Pr
     ]
     .into_iter()
     .find(|button| {
-        prompt_toolbar_button_rect(panel, *button)
+        prompt_toolbar_button_rect(panel, *button, tree)
             .is_some_and(|rect| rect.contains((column, row).into()))
     })
 }
