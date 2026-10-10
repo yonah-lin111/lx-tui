@@ -138,11 +138,14 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         OverlayTarget::PromptTree { workspace: 0 },
         MenuCommand::NewFolder,
     );
-    // 菜单打开命名浮层：回车以默认名创建。
+    // 菜单打开命名浮层：输入名称后回车创建。
     assert!(
         matches!(state.overlay, Some(Overlay::NewNode(_))),
         "命名浮层打开"
     );
+    for ch in "root".chars() {
+        update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     let root_folder = state.active_workspace().prompt_panel.tree.folders()[0].id;
@@ -156,6 +159,9 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         },
         MenuCommand::NewSubFolder,
     );
+    for ch in "sub".chars() {
+        update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     assert_eq!(
@@ -175,6 +181,9 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     );
     update::close_overlay(&mut state);
     update::open_new_folder(&mut state, Some(sub_folder));
+    for ch in "deep".chars() {
+        update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     assert_eq!(
@@ -202,7 +211,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
             folder_id: Some(sub_folder)
         }
     );
-    assert_eq!(dialog.name.text(), "New prompt");
+    assert_eq!(dialog.name.text(), "", "输入框不预填");
     update::apply_overlay_key(&mut state, OverlayKey::Clear);
     for ch in "hello prompt".chars() {
         update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
@@ -251,6 +260,9 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         "b 工作区树为空"
     );
     update::open_new_prompt(&mut state, None);
+    for ch in "b item".chars() {
+        update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     update::switch_workspace(&mut state, 0);

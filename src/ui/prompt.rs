@@ -18,19 +18,39 @@ use crate::ui::style;
 use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
-/// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
+/// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制；
+/// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`）。
 pub fn render_header(
     panel: Rect,
     buf: &mut Buffer,
     prompt: &Prompt,
     focused: bool,
     mode: PromptMode,
+    title: Option<&str>,
 ) {
     let Some(header) = layout::prompt_header_rect(panel) else {
         return;
     };
     render_divider(panel, header, buf, focused);
+    if mode == PromptMode::Editor
+        && let Some(title) = title
+    {
+        paint_header_title(header, buf, title);
+    }
     render_toolbar(panel, buf, prompt, mode);
+}
+
+/// 分割线行内嵌 title：起于左衔接符之后，超宽以 `…` 截断，不覆盖右衔接符。
+fn paint_header_title(header: Rect, buf: &mut Buffer, title: &str) {
+    let start = header.x.saturating_add(1);
+    let end = header.right().saturating_sub(1);
+    let available = usize::from(end.saturating_sub(start));
+    if available < 4 {
+        return;
+    }
+    let label = text::ellipsize(&format!(" {title} "), available);
+    let y = header.y.saturating_add(layout::PROMPT_TOOLBAR_HEIGHT);
+    buf.set_stringn(start, y, &label, available, style::muted());
 }
 
 /// 分割线整行 `─`，两端衔接外层边框的 `├` / `┤`；样式跟随边框焦点态。

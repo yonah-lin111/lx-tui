@@ -371,20 +371,20 @@ pub fn refresh_save_draft(state: &mut AppState, folder_id: i64) {
     dialog.entries = entries;
 }
 
-/// 打开新建文件夹命名浮层；父级为根层（None）或指定文件夹。
+/// 打开新建文件夹命名浮层；父级为根层（None）或指定文件夹；输入不预填。
 pub fn open_new_folder(state: &mut AppState, parent_id: Option<i64>) {
     state.overlay = Some(Overlay::NewNode(NewNode {
         kind: NewNodeKind::Folder { parent_id },
-        name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
+        name: TextInput::new(""),
         resume: None,
     }));
 }
 
-/// 打开新建提示词命名浮层；确认创建后选中条目不进入编辑视图。
+/// 打开新建提示词命名浮层；输入不预填；确认创建后选中条目不进入编辑视图。
 pub fn open_new_prompt(state: &mut AppState, folder_id: Option<i64>) {
     state.overlay = Some(Overlay::NewNode(NewNode {
         kind: NewNodeKind::Prompt { folder_id },
-        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
+        name: TextInput::new(""),
         resume: None,
     }));
 }
@@ -396,7 +396,7 @@ pub fn open_new_folder_from_draft(state: &mut AppState) {
     };
     state.overlay = Some(Overlay::NewNode(NewNode {
         kind: NewNodeKind::Folder { parent_id: None },
-        name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
+        name: TextInput::new(""),
         resume: Some(Box::new(dialog)),
     }));
 }

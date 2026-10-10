@@ -284,12 +284,15 @@ fn background_and_folder_commands_queue_creation_effects() {
         selected: 0,
     }));
     crate::app::update::activate_menu(&mut state);
-    // 菜单打开命名浮层（提示词）：回车以默认名登记创建效应。
+    // 菜单打开命名浮层（提示词）：输入名称后回车登记创建效应。
     let Some(Overlay::NewNode(dialog)) = &state.overlay else {
         panic!("naming dialog open");
     };
     assert_eq!(dialog.kind, NewNodeKind::Prompt { folder_id: None });
-    assert_eq!(dialog.name.text(), text::PROMPT_DEFAULT_NAME);
+    assert_eq!(dialog.name.text(), "", "输入框不预填");
+    for ch in "draft".chars() {
+        apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
+    }
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
@@ -308,12 +311,15 @@ fn background_and_folder_commands_queue_creation_effects() {
         selected: 0,
     }));
     crate::app::update::activate_menu(&mut state);
-    // 菜单打开命名浮层：回车以默认名登记创建效应。
+    // 菜单打开命名浮层：输入名称后回车登记创建效应。
     let Some(Overlay::NewNode(dialog)) = &state.overlay else {
         panic!("naming dialog open");
     };
     assert_eq!(dialog.kind, NewNodeKind::Folder { parent_id: Some(1) });
-    assert_eq!(dialog.name.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
+    assert_eq!(dialog.name.text(), "", "输入框不预填");
+    for ch in "docs".chars() {
+        apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
+    }
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
@@ -485,7 +491,7 @@ fn save_draft_new_folder_opens_dialog_and_queues_folder_effect() {
         panic!("new folder dialog open");
     };
     assert_eq!(folder.kind, NewNodeKind::Folder { parent_id: None });
-    assert_eq!(folder.name.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
+    assert_eq!(folder.name.text(), "", "输入框不预填");
     assert!(folder.resume.is_some(), "来自选择器");
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
     assert!(
@@ -616,7 +622,7 @@ fn new_prompt_dialog_creates_with_custom_name_and_no_edit() {
         panic!("new prompt dialog open");
     };
     assert_eq!(dialog.kind, NewNodeKind::Prompt { folder_id: Some(1) });
-    assert_eq!(dialog.name.text(), text::PROMPT_DEFAULT_NAME);
+    assert_eq!(dialog.name.text(), "", "输入框不预填");
 
     // 空名拒绝：浮层保持打开且不登记效应。
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);

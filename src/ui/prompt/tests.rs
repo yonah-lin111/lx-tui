@@ -481,7 +481,7 @@ fn renders_toolbar_buttons_and_divider() {
     editor.resize(36, 6);
     editor.insert_str("hi");
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor);
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, None);
 
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
     let render_label = |buf: &Buffer, rect: Rect| -> String {
@@ -533,8 +533,65 @@ fn renders_toolbar_buttons_and_divider() {
 
     editor.mark_saved();
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor);
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, None);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
+}
+
+#[test]
+fn header_divider_embeds_edit_title_and_ellipsizes() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let divider_y = crate::layout::prompt_toolbar_rect(panel)
+        .expect("toolbar visible")
+        .y
+        + crate::layout::PROMPT_DIVIDER_HEIGHT;
+    let divider_row = |buf: &Buffer| -> String {
+        (panel.x..panel.right())
+            .map(|x| buf[(x, divider_y)].symbol())
+            .collect()
+    };
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        Some("my prompt"),
+    );
+    let row = divider_row(&buf);
+    assert!(row.contains(" my prompt "), "{row}");
+    assert!(row.starts_with(text::DIVIDER_LEFT_JOIN), "{row}");
+    assert!(row.ends_with(text::DIVIDER_RIGHT_JOIN), "{row}");
+
+    // 超宽标题以 `…` 截断，不覆盖右衔接符。
+    let long = "x".repeat(80);
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        Some(&long),
+    );
+    let row = divider_row(&buf);
+    assert!(row.contains('…'), "{row}");
+    assert!(row.ends_with(text::DIVIDER_RIGHT_JOIN), "{row}");
+
+    // 树视图不显示 title。
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Tree,
+        Some("my prompt"),
+    );
+    let row = divider_row(&buf);
+    assert!(!row.contains("my prompt"), "{row}");
 }
 
 #[test]
@@ -547,7 +604,7 @@ fn divider_follows_prompt_focus_style() {
         + crate::layout::PROMPT_DIVIDER_HEIGHT;
 
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, true, PromptMode::Editor);
+    render_header(panel, &mut buf, &editor, true, PromptMode::Editor, None);
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
         assert_eq!(cell.fg, Color::Cyan, "聚焦分割线跟随强调色: x={x}");
@@ -555,7 +612,7 @@ fn divider_follows_prompt_focus_style() {
     }
 
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor);
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, None);
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
         assert_ne!(cell.fg, Color::Cyan, "失焦分割线不强调: x={x}");
@@ -570,7 +627,7 @@ fn toolbar_hidden_when_prompt_too_short() {
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
     editor.insert_str("hi");
     let mut buf = Buffer::empty(panel);
-    render_header(panel, &mut buf, &editor, false, PromptMode::Editor);
+    render_header(panel, &mut buf, &editor, false, PromptMode::Editor, None);
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
     assert_eq!(buf[(2, 2)].symbol(), " ");
 }

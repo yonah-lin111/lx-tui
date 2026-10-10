@@ -1147,6 +1147,45 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
 }
 
 #[test]
+fn prompt_editor_divider_shows_editing_title() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let mut state = AppState::demo();
+    state.prompt_width = 40;
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 1,
+            folder_id: None,
+            name: "named prompt".into(),
+            content: String::new(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(update::edit_prompt_item(&mut state, 0, 1));
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let divider = prompt_line(
+        &lines,
+        &view,
+        inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
+    );
+    assert!(divider.contains(" named prompt "), "{divider}");
+
+    // 临时草稿显示固定标题。
+    update::show_prompt_tree(&mut state);
+    assert!(update::edit_prompt_draft(&mut state));
+    let lines = render_lines(&state);
+    let divider = prompt_line(
+        &lines,
+        &view,
+        inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
+    );
+    assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
+}
+
+#[test]
 fn prompt_scrollbar_appears_only_on_overflow() {
     let mut state = AppState::demo();
     let view = view_for(&state);

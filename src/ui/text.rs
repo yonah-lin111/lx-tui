@@ -74,6 +74,8 @@ pub const PROMPT_MODE_EDIT_LABEL: &str = "[edit]";
 pub const PROMPT_TREE_SEARCH_ICON: &str = "⌕";
 pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
 pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[temp prompt]";
+/// 临时草稿在编辑视图分割线行的标题。
+pub const PROMPT_DRAFT_TITLE: &str = "temp prompt";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";
 pub const PROMPT_TREE_COLLAPSED: &str = "▸";
 pub const PROMPT_TREE_ITEM_ICON: &str = "•";

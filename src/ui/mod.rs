@@ -28,7 +28,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::prompt::PromptMode;
+use crate::app::prompt::{PromptEditing, PromptMode};
 use crate::app::state::{AppState, Pane, PaneKind, PaneView};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
@@ -245,6 +245,15 @@ fn render_panel_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state:
 }
 
 /// prompt 底边钉住按钮：标签显示点击后的动作（未钉 `[pin]`、已钉 `[unpin]`）。
+/// 编辑视图标题：绑定条目的名称；临时草稿显示固定标题；无绑定不显示。
+fn prompt_edit_title(state: &AppState) -> Option<String> {
+    let panel = &state.prompt_owner().prompt_panel;
+    match panel.editing? {
+        PromptEditing::Item(id) => panel.tree.item(id).map(|item| item.name.clone()),
+        PromptEditing::Draft => Some(text::PROMPT_DRAFT_TITLE.to_string()),
+    }
+}
+
 fn render_prompt_pin(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
     let pinned = state.prompt_pinned.is_some();
     let Some(area) = prompt_pin_button(view.prompt, pinned) else {
@@ -500,7 +509,14 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
-    prompt::render_header(area, frame.buffer_mut(), &state.prompt, focused, mode);
+    prompt::render_header(
+        area,
+        frame.buffer_mut(),
+        &state.prompt,
+        focused,
+        mode,
+        prompt_edit_title(state).as_deref(),
+    );
     render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
     let tree_cursor = match mode {

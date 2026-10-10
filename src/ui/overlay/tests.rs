@@ -679,7 +679,7 @@ fn new_prompt_dialog_renders_title_and_default_name() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::NewNode(NewNode {
         kind: NewNodeKind::Prompt { folder_id: None },
-        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
+        name: TextInput::new(""),
         resume: None,
     }));
     let (lines, _) = draw_overlay(&state);
@@ -694,7 +694,7 @@ fn new_folder_dialog_renders_input_buttons_and_hit() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::NewNode(NewNode {
         kind: NewNodeKind::Folder { parent_id: None },
-        name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
+        name: TextInput::new(""),
         resume: None,
     }));
     let (lines, cursor) = draw_overlay(&state);
@@ -710,11 +710,8 @@ fn new_folder_dialog_renders_input_buttons_and_hit() {
     let shell = new_node_shell(SCREEN).expect("shell fits");
     assert_eq!(
         cursor,
-        Some((
-            shell.inner.x + text::PROMPT_FOLDER_DEFAULT_NAME.chars().count() as u16,
-            shell.inner.y
-        )),
-        "硬件光标在名称输入末尾"
+        Some((shell.inner.x, shell.inner.y)),
+        "空输入时光标在名称起点"
     );
     let buttons = widgets::modal::button_row(
         shell.inner,
