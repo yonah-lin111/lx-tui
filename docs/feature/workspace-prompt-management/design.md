@@ -131,7 +131,9 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 
 1. **列表模型**：树视图展示行 = 过滤后的树行；工具栏（树视图）右端常显
    `[temp prompt]` 按钮（右对齐）：点击提交当前编辑并打开临时草稿编辑视图；`[edit]` 在选中行非条目
-   （含空树）时回退打开草稿编辑视图（修复“点了没反应”的死按钮）。
+   （含空树）时回退打开草稿编辑视图（修复“点了没反应”的死按钮）。`New prompt`/`New folder`/
+   `New subfolder` 统一打开命名浮层（`New prompt` 预填 `New prompt`、`New folder` 预填 `New folder`）：
+   确认后创建并选中新节点，**新建提示词不再自动进入编辑视图**（停留在树视图，显式 `[edit]`/回车才编辑）。
 2. **临时草稿**：入口为工具栏 `[temp prompt]`；正文只存内存（`PromptPanel::draft`，随工作区
    隔离，不入库）；保存入口在编辑视图中执行——草稿编辑视图保存点打开“保存到文件夹”选择器：
    顶部 `name` 输入框预填默认名（可改）；列表为根层 `/` + 文件夹树形展示（`├─`/`└─` 末项

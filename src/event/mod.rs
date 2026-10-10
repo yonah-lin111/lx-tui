@@ -1510,27 +1510,27 @@ fn handle_overlay_click(
                 None => None,
             }
         }
-        Some(Overlay::NewFolder(_)) => {
-            let Some(shell) = ui::overlay::new_folder_shell(screen) else {
-                update::cancel_new_folder(state);
+        Some(Overlay::NewNode(_)) => {
+            let Some(shell) = ui::overlay::new_node_shell(screen) else {
+                update::cancel_new_node(state);
                 return None;
             };
             // [x] 或浮层之外：取消（来自选择器时恢复选择器）。
             if ui::widgets::modal::close_button_at(shell.area, column, row)
                 || !shell.area.contains((column, row).into())
             {
-                update::cancel_new_folder(state);
+                update::cancel_new_node(state);
                 return None;
             }
-            match ui::overlay::new_folder_button_at(&shell, column, row) {
-                Some(ui::overlay::NewFolderButton::Create) => {
+            match ui::overlay::new_node_button_at(&shell, column, row) {
+                Some(ui::overlay::NewNodeButton::Create) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::NewFolderButton::Clear) => {
+                Some(ui::overlay::NewNodeButton::Clear) => {
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
-                Some(ui::overlay::NewFolderButton::Cancel) => {
-                    update::cancel_new_folder(state);
+                Some(ui::overlay::NewNodeButton::Cancel) => {
+                    update::cancel_new_node(state);
                     None
                 }
                 // 内部空白：保持打开。

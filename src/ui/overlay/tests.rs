@@ -675,10 +675,25 @@ fn save_draft_picker_renders_name_tree_entries_and_buttons() {
 }
 
 #[test]
+fn new_prompt_dialog_renders_title_and_default_name() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Prompt { folder_id: None },
+        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
+        resume: None,
+    }));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::NEW_PROMPT_TITLE), "{joined}");
+    assert!(joined.contains(text::PROMPT_DEFAULT_NAME), "{joined}");
+    assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
+}
+
+#[test]
 fn new_folder_dialog_renders_input_buttons_and_hit() {
     let mut state = AppState::demo();
-    state.overlay = Some(Overlay::NewFolder(NewFolder {
-        parent_id: None,
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Folder { parent_id: None },
         name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
         resume: None,
     }));
@@ -692,7 +707,7 @@ fn new_folder_dialog_renders_input_buttons_and_hit() {
     assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
     assert!(joined.contains(text::BUTTON_CLEAR), "{joined}");
     assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
-    let shell = new_folder_shell(SCREEN).expect("shell fits");
+    let shell = new_node_shell(SCREEN).expect("shell fits");
     assert_eq!(
         cursor,
         Some((
@@ -703,21 +718,21 @@ fn new_folder_dialog_renders_input_buttons_and_hit() {
     );
     let buttons = widgets::modal::button_row(
         shell.inner,
-        &NEW_FOLDER_BUTTONS,
+        &NEW_NODE_BUTTONS,
         BUTTON_GAP,
         RENAME_BUTTON_ROW,
     );
     assert_eq!(
-        new_folder_button_at(&shell, buttons[0].x, buttons[0].y),
-        Some(NewFolderButton::Create)
+        new_node_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(NewNodeButton::Create)
     );
     assert_eq!(
-        new_folder_button_at(&shell, buttons[1].x, buttons[1].y),
-        Some(NewFolderButton::Clear)
+        new_node_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(NewNodeButton::Clear)
     );
     assert_eq!(
-        new_folder_button_at(&shell, buttons[2].x, buttons[2].y),
-        Some(NewFolderButton::Cancel)
+        new_node_button_at(&shell, buttons[2].x, buttons[2].y),
+        Some(NewNodeButton::Cancel)
     );
 }
 

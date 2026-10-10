@@ -160,6 +160,8 @@ fn create_folder_and_prompt_effects_reload_tree() {
     service.pump(&mut state);
     assert_eq!(state.workspaces[0].prompt_panel.tree.folders().len(), 2);
 
+    // 新建提示词只从树视图发起：创建后停留在树视图并选中条目。
+    crate::app::update::show_prompt_tree(&mut state);
     state.effects.push(Effect::CreatePrompt {
         workspace: cwd.clone(),
         folder_id: Some(folder_id),
@@ -171,13 +173,17 @@ fn create_folder_and_prompt_effects_reload_tree() {
     assert_eq!(item.folder_id, Some(folder_id));
     assert_eq!(
         state.workspaces[0].prompt_panel.mode,
-        crate::app::prompt::PromptMode::Editor,
-        "新建提示词进入编辑视图"
+        crate::app::prompt::PromptMode::Tree,
+        "新建提示词停留在树视图"
     );
     assert_eq!(
-        state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Item(item.id)),
-        "新建提示词绑定编辑目标"
+        state.workspaces[0].prompt_panel.editing, None,
+        "新建提示词不进入编辑视图"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected_prompt_id(),
+        Some(item.id),
+        "新建提示词在列表中被选中"
     );
 }
 
@@ -253,6 +259,11 @@ fn quit_shutdown_commits_editing_prompt() {
         name: "draft".into(),
     });
     service.pump(&mut state);
+    let id = state.workspaces[0].prompt_panel.tree.items()[0].id;
+    assert!(
+        crate::app::update::edit_prompt_item(&mut state, 0, id),
+        "显式进入编辑视图"
+    );
     crate::app::update::apply_editor(
         &mut state,
         crate::app::actions::EditorCommand::InsertText("typed".into()),

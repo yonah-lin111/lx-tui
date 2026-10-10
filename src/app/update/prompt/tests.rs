@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::actions::EditorCommand;
-use crate::app::overlay::{MenuCommand, Overlay, OverlayTarget};
+use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget};
 use crate::app::state::AppState;
 use crate::app::update::{apply_editor, apply_overlay_key};
 use crate::db::{FolderRecord, PromptRecord};
@@ -284,6 +284,13 @@ fn background_and_folder_commands_queue_creation_effects() {
         selected: 0,
     }));
     crate::app::update::activate_menu(&mut state);
+    // 菜单打开命名浮层（提示词）：回车以默认名登记创建效应。
+    let Some(Overlay::NewNode(dialog)) = &state.overlay else {
+        panic!("naming dialog open");
+    };
+    assert_eq!(dialog.kind, NewNodeKind::Prompt { folder_id: None });
+    assert_eq!(dialog.name.text(), text::PROMPT_DEFAULT_NAME);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         Effect::CreatePrompt {
@@ -302,10 +309,10 @@ fn background_and_folder_commands_queue_creation_effects() {
     }));
     crate::app::update::activate_menu(&mut state);
     // 菜单打开命名浮层：回车以默认名登记创建效应。
-    let Some(Overlay::NewFolder(dialog)) = &state.overlay else {
+    let Some(Overlay::NewNode(dialog)) = &state.overlay else {
         panic!("naming dialog open");
     };
-    assert_eq!(dialog.parent_id, Some(1));
+    assert_eq!(dialog.kind, NewNodeKind::Folder { parent_id: Some(1) });
     assert_eq!(dialog.name.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert!(state.effects.iter().any(|effect| matches!(
@@ -474,10 +481,10 @@ fn save_draft_new_folder_opens_dialog_and_queues_folder_effect() {
     // 回车选中动作行 → 打开命名浮层（不直接建库），Esc 取消恢复选择器。
     set_save_draft_selection(&mut state, 3);
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    let Some(Overlay::NewFolder(folder)) = &state.overlay else {
+    let Some(Overlay::NewNode(folder)) = &state.overlay else {
         panic!("new folder dialog open");
     };
-    assert_eq!(folder.parent_id, None);
+    assert_eq!(folder.kind, NewNodeKind::Folder { parent_id: None });
     assert_eq!(folder.name.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
     assert!(folder.resume.is_some(), "来自选择器");
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
@@ -488,7 +495,7 @@ fn save_draft_new_folder_opens_dialog_and_queues_folder_effect() {
 
     // 再次打开：清空后输入 docs，回车确认 → 恢复选择器并登记建文件夹效应。
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    assert!(matches!(state.overlay, Some(Overlay::NewFolder(_))));
+    assert!(matches!(state.overlay, Some(Overlay::NewNode(_))));
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);
     for ch in "docs".chars() {
         apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
@@ -517,7 +524,7 @@ fn save_draft_new_folder_opens_dialog_and_queues_folder_effect() {
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert!(
-        matches!(state.overlay, Some(Overlay::NewFolder(_))),
+        matches!(state.overlay, Some(Overlay::NewNode(_))),
         "空名拒绝"
     );
     assert!(state.effects.is_empty());
@@ -598,4 +605,51 @@ fn save_picker_selection_moves_and_clamps() {
     assert!(!move_save_draft_selection(&mut state, 1), "已在尾部");
     assert!(!set_save_draft_selection(&mut state, 99), "越界忽略");
     assert!(set_save_draft_selection(&mut state, 0));
+}
+
+#[test]
+fn new_prompt_dialog_creates_with_custom_name_and_no_edit() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    open_new_prompt(&mut state, Some(1));
+    let Some(Overlay::NewNode(dialog)) = &state.overlay else {
+        panic!("new prompt dialog open");
+    };
+    assert_eq!(dialog.kind, NewNodeKind::Prompt { folder_id: Some(1) });
+    assert_eq!(dialog.name.text(), text::PROMPT_DEFAULT_NAME);
+
+    // 空名拒绝：浮层保持打开且不登记效应。
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewNode(_))),
+        "空名拒绝"
+    );
+    assert!(state.effects.is_empty());
+
+    // 自定义名 + 回车：登记创建效应并关闭浮层（不进入编辑视图）。
+    for ch in "docs".chars() {
+        apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
+    }
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(state.overlay.is_none());
+    let Some(Effect::CreatePrompt {
+        folder_id, name, ..
+    }) = state
+        .effects
+        .iter()
+        .find(|effect| matches!(effect, Effect::CreatePrompt { .. }))
+        .cloned()
+    else {
+        panic!("create prompt effect queued");
+    };
+    assert_eq!(folder_id, Some(1));
+    assert_eq!(name, "docs");
+
+    // Esc 取消：不登记效应。
+    state.effects.clear();
+    open_new_prompt(&mut state, None);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+    assert!(state.effects.is_empty());
 }

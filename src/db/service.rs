@@ -134,9 +134,9 @@ impl Persistence {
                     return false;
                 };
                 let changed = self.reload_tree(state, &workspace);
-                let editing = workspace_index(state, &workspace)
-                    .is_some_and(|index| update::edit_prompt_item(state, index, id));
-                changed || editing
+                let selection = workspace_index(state, &workspace)
+                    .is_some_and(|index| update::select_prompt_item(state, index, id));
+                changed || selection
             }
             Effect::SaveDraft {
                 workspace,

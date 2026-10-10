@@ -5,8 +5,8 @@
 use crate::app::actions::{EditorCommand, OverlayKey};
 use crate::app::effects::Effect;
 use crate::app::overlay::{
-    Menu, MenuCommand, NewFolder, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft,
-    SaveDraftEntry, TextInput,
+    Menu, MenuCommand, NewNode, NewNodeKind, Overlay, OverlayTarget, Rename, RenameTarget,
+    SaveDraft, SaveDraftEntry, TextInput,
 };
 use crate::app::prompt::{
     PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptRow,
@@ -373,9 +373,18 @@ pub fn refresh_save_draft(state: &mut AppState, folder_id: i64) {
 
 /// 打开新建文件夹命名浮层；父级为根层（None）或指定文件夹。
 pub fn open_new_folder(state: &mut AppState, parent_id: Option<i64>) {
-    state.overlay = Some(Overlay::NewFolder(NewFolder {
-        parent_id,
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Folder { parent_id },
         name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
+        resume: None,
+    }));
+}
+
+/// 打开新建提示词命名浮层；确认创建后选中条目不进入编辑视图。
+pub fn open_new_prompt(state: &mut AppState, folder_id: Option<i64>) {
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Prompt { folder_id },
+        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
         resume: None,
     }));
 }
@@ -385,51 +394,64 @@ pub fn open_new_folder_from_draft(state: &mut AppState) {
     let Some(Overlay::SaveDraft(dialog)) = state.overlay.take() else {
         return;
     };
-    state.overlay = Some(Overlay::NewFolder(NewFolder {
-        parent_id: None,
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Folder { parent_id: None },
         name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
         resume: Some(Box::new(dialog)),
     }));
 }
 
-/// 取消新建文件夹：来自选择器时恢复选择器，否则直接关闭。
-pub fn cancel_new_folder(state: &mut AppState) {
-    let Some(Overlay::NewFolder(dialog)) = state.overlay.take() else {
+/// 取消新建节点：来自选择器时恢复选择器，否则直接关闭。
+pub fn cancel_new_node(state: &mut AppState) {
+    let Some(Overlay::NewNode(dialog)) = state.overlay.take() else {
         return;
     };
     state.overlay = dialog.resume.map(|dialog| Overlay::SaveDraft(*dialog));
 }
 
-/// 确认新建文件夹：名称去空白后为空则拒绝；来自选择器时先恢复选择器再登记创建
-/// （服务创建成功后刷新条目并选中新文件夹）。
-pub fn commit_new_folder(state: &mut AppState) {
-    let Some(Overlay::NewFolder(dialog)) = state.overlay.as_ref() else {
+/// 确认新建节点：名称去空白后为空则拒绝；来自选择器时先恢复选择器再登记创建
+/// （服务创建成功后刷新条目并选中新节点）。
+pub fn commit_new_node(state: &mut AppState) {
+    let Some(Overlay::NewNode(dialog)) = state.overlay.as_ref() else {
         return;
     };
     let name = dialog.name.text().trim().to_string();
     if name.is_empty() {
         return;
     }
-    let parent_id = dialog.parent_id;
-    let Some(Overlay::NewFolder(dialog)) = state.overlay.take() else {
+    let kind = dialog.kind;
+    let Some(Overlay::NewNode(dialog)) = state.overlay.take() else {
         return;
     };
     state.overlay = dialog.resume.map(|dialog| Overlay::SaveDraft(*dialog));
     let Some(cwd) = displayed_workspace_cwd(state) else {
         return;
     };
-    state.effects.push(Effect::CreateFolder {
-        workspace: cwd,
-        parent_id,
-        name,
-    });
+    match kind {
+        NewNodeKind::Folder { parent_id } => {
+            state.effects.push(Effect::CreateFolder {
+                workspace: cwd,
+                parent_id,
+                name,
+            });
+        }
+        NewNodeKind::Prompt { folder_id } => {
+            // 新条目须在未过滤列表中可见：先清搜索，保证服务端选中成功。
+            clear_search_for(state, state.prompt_workspace());
+            state.effects.push(Effect::CreatePrompt {
+                workspace: cwd,
+                folder_id,
+                name,
+            });
+        }
+    }
 }
 
-/// 新建文件夹浮层按键：回车确认、Esc 取消、其余为名称输入编辑。
-pub fn apply_new_folder_key(state: &mut AppState, key: OverlayKey) {
+/// 新建节点浮层按键：回车确认、Esc 取消、其余为名称输入编辑。
+pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
     match key {
-        OverlayKey::Esc => cancel_new_folder(state),
-        OverlayKey::Enter => commit_new_folder(state),
+        OverlayKey::Esc => cancel_new_node(state),
+        OverlayKey::Enter => commit_new_node(state),
         OverlayKey::Char(_)
         | OverlayKey::Clear
         | OverlayKey::Backspace
@@ -438,7 +460,7 @@ pub fn apply_new_folder_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Right
         | OverlayKey::Home
         | OverlayKey::End => {
-            let Some(Overlay::NewFolder(dialog)) = state.overlay.as_mut() else {
+            let Some(Overlay::NewNode(dialog)) = state.overlay.as_mut() else {
                 return;
             };
             let input = &mut dialog.name;
@@ -717,20 +739,6 @@ pub fn prompt_draft_editing(state: &AppState) -> bool {
         .is_some_and(|workspace| workspace.prompt_panel.editing == Some(PromptEditing::Draft))
 }
 
-/// 新建提示词：登记创建效应（默认名由文案层提供）；服务创建后进入编辑视图。
-pub fn create_prompt(state: &mut AppState, folder_id: Option<i64>) {
-    let Some(cwd) = displayed_workspace_cwd(state) else {
-        return;
-    };
-    // 新条目须在未过滤列表中可见：先清搜索，保证服务端绑定编辑视图成功。
-    clear_search_for(state, state.prompt_workspace());
-    state.effects.push(Effect::CreatePrompt {
-        workspace: cwd,
-        folder_id,
-        name: text::PROMPT_DEFAULT_NAME.to_string(),
-    });
-}
-
 /// 打开文件夹/条目的重命名浮层（预填当前名）。
 pub fn open_prompt_rename(state: &mut AppState, target: RenameTarget) {
     let workspace = state.prompt_workspace();
@@ -936,8 +944,8 @@ fn selected_row(state: &AppState, workspace: usize) -> Option<PromptRow> {
         .and_then(|workspace| workspace.prompt_panel.selected_row())
 }
 
-/// 选中指定工作区树中的条目行。
-fn select_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) -> bool {
+/// 选中指定工作区树中的条目行（服务在新建后调用）。
+pub fn select_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) -> bool {
     let visible = prompt_tree_visible_rows(state);
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return false;

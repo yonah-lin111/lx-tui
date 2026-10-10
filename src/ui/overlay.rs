@@ -9,9 +9,9 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewFolder,
-    NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft, SaveDraftEntry,
-    WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewNode,
+    NewNodeKind, NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft,
+    SaveDraftEntry, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
 };
 use crate::app::state::{AppState, tab_label};
 use crate::app::trust::TrustWorkspace;
@@ -21,9 +21,9 @@ use crate::ui::{style, text};
 /// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
 const RENAME_WIDTH: u16 = 40;
 const RENAME_HEIGHT: u16 = 5;
-/// 新建文件夹浮层尺寸（列，行）：输入行、空行与按钮行（容纳三个按钮）。
-const NEW_FOLDER_WIDTH: u16 = 42;
-const NEW_FOLDER_HEIGHT: u16 = 5;
+/// 新建节点浮层尺寸（列，行）：输入行、空行与按钮行（容纳三个按钮）。
+const NEW_NODE_WIDTH: u16 = 42;
+const NEW_NODE_HEIGHT: u16 = 5;
 /// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
 const NEW_WORKSPACE_WIDTH: u16 = 44;
 const NEW_WORKSPACE_HEIGHT: u16 = 5;
@@ -41,8 +41,7 @@ const BUTTON_GAP: u16 = 2;
 const RENAME_BUTTON_ROW: u16 = 2;
 const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
-const NEW_FOLDER_BUTTONS: [&str; 3] =
-    [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+const NEW_NODE_BUTTONS: [&str; 3] = [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const NEW_WORKSPACE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
@@ -67,9 +66,9 @@ pub enum NewWorkspaceButton {
     Cancel,
 }
 
-/// 新建文件夹浮层按钮。
+/// 新建节点浮层按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NewFolderButton {
+pub enum NewNodeButton {
     Create,
     Clear,
     Cancel,
@@ -248,27 +247,27 @@ pub fn new_workspace_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, NEW_WORKSPACE_WIDTH, NEW_WORKSPACE_HEIGHT)
 }
 
-/// 新建文件夹浮层几何。
-pub fn new_folder_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
-    widgets::modal::layout(screen, NEW_FOLDER_WIDTH, NEW_FOLDER_HEIGHT)
+/// 新建节点浮层几何。
+pub fn new_node_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, NEW_NODE_WIDTH, NEW_NODE_HEIGHT)
 }
 
-/// 命中新建文件夹按钮。
-pub fn new_folder_button_at(
+/// 命中新建节点按钮。
+pub fn new_node_button_at(
     shell: &widgets::modal::ModalShell,
     column: u16,
     row: u16,
-) -> Option<NewFolderButton> {
+) -> Option<NewNodeButton> {
     let rects = widgets::modal::button_row(
         shell.inner,
-        &NEW_FOLDER_BUTTONS,
+        &NEW_NODE_BUTTONS,
         BUTTON_GAP,
         RENAME_BUTTON_ROW,
     );
     match widgets::modal::button_at(&rects, column, row) {
-        Some(0) => Some(NewFolderButton::Create),
-        Some(1) => Some(NewFolderButton::Clear),
-        Some(2) => Some(NewFolderButton::Cancel),
+        Some(0) => Some(NewNodeButton::Create),
+        Some(1) => Some(NewNodeButton::Clear),
+        Some(2) => Some(NewNodeButton::Cancel),
         _ => None,
     }
 }
@@ -361,7 +360,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             render_trust(frame, screen, trust);
             None
         }
-        Overlay::NewFolder(folder) => render_new_folder(frame, screen, folder),
+        Overlay::NewNode(node) => render_new_node(frame, screen, node),
         Overlay::SaveDraft(dialog) => render_save_draft(frame, screen, dialog),
     }
 }
@@ -827,14 +826,14 @@ fn render_new_workspace(
     )
 }
 
-/// 新建文件夹浮层：单行名称输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
-fn render_new_folder(
-    frame: &mut Frame<'_>,
-    screen: Rect,
-    folder: &NewFolder,
-) -> Option<(u16, u16)> {
-    let shell = new_folder_shell(screen)?;
-    widgets::modal::render(frame, &shell, text::NEW_FOLDER_TITLE);
+/// 新建节点浮层：单行名称输入 + 底部按钮；标题与占位按节点种类分派。
+fn render_new_node(frame: &mut Frame<'_>, screen: Rect, node: &NewNode) -> Option<(u16, u16)> {
+    let shell = new_node_shell(screen)?;
+    let (title, placeholder) = match node.kind {
+        NewNodeKind::Folder { .. } => (text::NEW_FOLDER_TITLE, text::PROMPT_FOLDER_DEFAULT_NAME),
+        NewNodeKind::Prompt { .. } => (text::NEW_PROMPT_TITLE, text::PROMPT_DEFAULT_NAME),
+    };
+    widgets::modal::render(frame, &shell, title);
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return None;
     }
@@ -842,7 +841,7 @@ fn render_new_folder(
         frame,
         &widgets::modal::button_row(
             shell.inner,
-            &NEW_FOLDER_BUTTONS,
+            &NEW_NODE_BUTTONS,
             BUTTON_GAP,
             RENAME_BUTTON_ROW,
         ),
@@ -855,9 +854,9 @@ fn render_new_folder(
     widgets::input::render(
         frame,
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
-        folder.name.text(),
-        folder.name.cursor(),
-        Some(text::PROMPT_FOLDER_DEFAULT_NAME),
+        node.name.text(),
+        node.name.cursor(),
+        Some(placeholder),
     )
 }
 

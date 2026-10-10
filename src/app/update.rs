@@ -1547,10 +1547,10 @@ pub fn activate_menu(state: &mut AppState) {
             }));
         }
         (Some(MenuCommand::NewPrompt), OverlayTarget::PromptFolder { folder_id, .. }) => {
-            create_prompt(state, Some(folder_id));
+            open_new_prompt(state, Some(folder_id));
         }
         (Some(MenuCommand::NewPrompt), OverlayTarget::PromptTree { .. }) => {
-            create_prompt(state, None);
+            open_new_prompt(state, None);
         }
         (
             Some(MenuCommand::NewFolder | MenuCommand::NewSubFolder),
@@ -1650,9 +1650,9 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_save_draft_key(state, key);
         return None;
     }
-    // 新建文件夹命名浮层：回车确认、Esc 取消（来自选择器时恢复选择器）。
-    if matches!(state.overlay, Some(Overlay::NewFolder(_))) {
-        apply_new_folder_key(state, key);
+    // 新建节点命名浮层：回车确认、Esc 取消（来自选择器时恢复选择器）。
+    if matches!(state.overlay, Some(Overlay::NewNode(_))) {
+        apply_new_node_key(state, key);
         return None;
     }
     match key {
@@ -1692,7 +1692,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             }
             Some(OverlayKind::WorktreeOpen)
             | Some(OverlayKind::TrustWorkspace)
-            | Some(OverlayKind::NewFolder)
+            | Some(OverlayKind::NewNode)
             | Some(OverlayKind::SaveDraft)
             | None => None,
         },

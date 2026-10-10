@@ -18,7 +18,7 @@ pub enum OverlayKind {
     NewWorkspace,
     WorktreeOpen,
     TrustWorkspace,
-    NewFolder,
+    NewNode,
     SaveDraft,
 }
 
@@ -33,7 +33,7 @@ pub enum Overlay {
     NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
     TrustWorkspace(TrustWorkspace),
-    NewFolder(NewFolder),
+    NewNode(NewNode),
     SaveDraft(SaveDraft),
 }
 
@@ -49,21 +49,30 @@ impl Overlay {
             Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
             Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
-            Self::NewFolder(_) => OverlayKind::NewFolder,
+            Self::NewNode(_) => OverlayKind::NewNode,
             Self::SaveDraft(_) => OverlayKind::SaveDraft,
         }
     }
 }
 
-/// 新建文件夹命名浮层：父文件夹（`None` 为根层）、名称输入与来源选择器。
+/// 新建节点命名浮层：文件夹或提示词条目；名称输入与来源选择器。
 #[derive(Debug)]
-pub struct NewFolder {
-    /// 父文件夹 id：`None` 为根层，`Some` 为根层文件夹下的子文件夹。
-    pub parent_id: Option<i64>,
-    /// 文件夹名（预填默认名，可编辑）。
+pub struct NewNode {
+    pub kind: NewNodeKind,
+    /// 名称（预填对应默认名，可编辑）。
     pub name: TextInput,
-    /// 来自草稿保存选择器：取消或确认后恢复该选择器（确认后由服务刷新条目并选中新文件夹）。
+    /// 来自草稿保存选择器（仅文件夹）：取消或确认后恢复该选择器
+    /// （确认后由服务刷新条目并选中新文件夹）。
     pub resume: Option<Box<SaveDraft>>,
+}
+
+/// 新建节点种类：新建文件夹或新建提示词条目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewNodeKind {
+    /// 新建文件夹：`parent_id` 为父文件夹（`None` 为根层）。
+    Folder { parent_id: Option<i64> },
+    /// 新建提示词：`folder_id` 为所属文件夹（`None` 为根层）。
+    Prompt { folder_id: Option<i64> },
 }
 
 /// 草稿保存选择器：工作区、提示词名称输入、候选目标与高亮项。

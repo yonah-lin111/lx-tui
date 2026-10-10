@@ -202,6 +202,7 @@ pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
 pub const RENAME_PROMPT_TITLE: &str = "rename prompt";
 pub const RENAME_FOLDER_TITLE: &str = "rename folder";
 pub const NEW_FOLDER_TITLE: &str = "new folder";
+pub const NEW_PROMPT_TITLE: &str = "new prompt";
 /// rename 浮层输入为空时的输入说明占位（工作区与标签共用）。
 pub const RENAME_PLACEHOLDER: &str = "new name";
 /// new workspace 路径输入为空时的输入说明占位。

@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lx_tui::app::actions::{EditorCommand, OverlayKey};
-use lx_tui::app::overlay::{MenuCommand, NewWorkspace, Overlay, OverlayTarget, TextInput};
+use lx_tui::app::overlay::{
+    MenuCommand, NewNodeKind, NewWorkspace, Overlay, OverlayTarget, TextInput,
+};
 use lx_tui::app::prompt::{PromptEditing, PromptMode};
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
@@ -138,7 +140,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     );
     // 菜单打开命名浮层：回车以默认名创建。
     assert!(
-        matches!(state.overlay, Some(Overlay::NewFolder(_))),
+        matches!(state.overlay, Some(Overlay::NewNode(_))),
         "命名浮层打开"
     );
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
@@ -190,26 +192,45 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         },
         MenuCommand::NewPrompt,
     );
+    // 命名浮层：输入名称后回车创建；创建后停留在树视图并选中新条目（不进入编辑）。
+    let Some(Overlay::NewNode(dialog)) = &state.overlay else {
+        panic!("new prompt dialog open");
+    };
+    assert_eq!(
+        dialog.kind,
+        NewNodeKind::Prompt {
+            folder_id: Some(sub_folder)
+        }
+    );
+    assert_eq!(dialog.name.text(), "New prompt");
+    update::apply_overlay_key(&mut state, OverlayKey::Clear);
+    for ch in "hello prompt".chars() {
+        update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     assert_eq!(
         state.active_workspace().prompt_panel.mode,
-        PromptMode::Editor
+        PromptMode::Tree,
+        "创建后停留在树视图"
     );
-    let prompt_id = match state.active_workspace().prompt_panel.editing {
-        Some(PromptEditing::Item(id)) => id,
-        other => panic!("bound item expected, got {other:?}"),
-    };
-    assert_eq!(
-        state
-            .active_workspace()
-            .prompt_panel
-            .tree
-            .item(prompt_id)
-            .map(|item| item.folder_id),
-        Some(Some(sub_folder))
-    );
+    assert_eq!(state.active_workspace().prompt_panel.editing, None);
+    let prompt_id = state
+        .active_workspace()
+        .prompt_panel
+        .selected_prompt_id()
+        .expect("新条目被选中");
+    let item = state
+        .active_workspace()
+        .prompt_panel
+        .tree
+        .item(prompt_id)
+        .expect("item exists");
+    assert_eq!(item.name, "hello prompt");
+    assert_eq!(item.folder_id, Some(sub_folder));
 
-    // 7. 编辑内容并保存（返回树视图提交）；DB 收到内容。
+    // 7. 进入编辑、输入内容并保存（返回树视图提交）；DB 收到内容。
+    assert!(update::edit_prompt_item(&mut state, 0, prompt_id));
     update::apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
     update::show_prompt_tree(&mut state);
     service.pump(&mut state);
@@ -229,7 +250,8 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
             .is_empty(),
         "b 工作区树为空"
     );
-    update::create_prompt(&mut state, None);
+    update::open_new_prompt(&mut state, None);
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     update::switch_workspace(&mut state, 0);
     service.pump(&mut state);
@@ -317,7 +339,7 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     // 选中动作行回车 → 命名浮层；输入 docs 后回车建库并恢复选择器（选中新文件夹）。
     update::set_save_draft_selection(&mut state, 1);
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
-    assert!(matches!(state.overlay, Some(Overlay::NewFolder(_))));
+    assert!(matches!(state.overlay, Some(Overlay::NewNode(_))));
     update::apply_overlay_key(&mut state, OverlayKey::Clear);
     for ch in "docs".chars() {
         update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
