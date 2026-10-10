@@ -165,16 +165,28 @@ fn confirm_switch_cwd_question_wraps_path_in_quotes() {
 }
 
 #[test]
-fn confirm_sync_ws_cwd_question_ellipsizes_middle_when_budget_is_small() {
+fn confirm_sync_ws_cwd_question_keeps_full_path() {
     assert_eq!(
-        confirm_sync_ws_cwd_question("/tmp/project", 60),
+        confirm_sync_ws_cwd_question("/tmp/project"),
         "switch workspace path to \"/tmp/project\"?"
     );
-    // prefix (26) + suffix (2) = 28. max_width = 34 -> path_budget = 6 -> "/tm…ct"
+}
+
+#[test]
+fn wrap_breaks_at_spaces_within_display_width() {
     assert_eq!(
-        confirm_sync_ws_cwd_question("/tmp/project", 34),
-        "switch workspace path to \"/tm…ct\"?"
+        wrap("delete folder \"New folder\" and its contents?", 38),
+        vec!["delete folder \"New folder\" and its", "contents?"]
     );
+    assert_eq!(wrap("close \"a\"?", 40), vec!["close \"a\"?"]);
+    assert_eq!(wrap("", 10), vec![String::new()]);
+}
+
+#[test]
+fn wrap_hard_breaks_overlong_words_by_character() {
+    assert_eq!(wrap("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
+    // 宽字符按两列计：每行 2 个字符（4 列）。
+    assert_eq!(wrap("字字字字字", 4), vec!["字字", "字字", "字"]);
 }
 
 #[test]

@@ -253,7 +253,7 @@ fn confirm_modal_renders_question_and_buttons() {
 
 #[test]
 fn confirm_buttons_hit_their_cells() {
-    let shell = confirm_shell(SCREEN).expect("confirm modal fits");
+    let shell = confirm_shell(SCREEN, "close \"x\"?").expect("confirm modal fits");
     assert_eq!(
         confirm_button_at(&shell, 25, 12),
         Some(ConfirmButton::Confirm)
@@ -263,6 +263,46 @@ fn confirm_buttons_hit_their_cells() {
         Some(ConfirmButton::Cancel)
     );
     assert_eq!(confirm_button_at(&shell, 24, 12), None);
+}
+
+#[test]
+fn confirm_question_wraps_and_dialog_grows() {
+    let mut state = AppState::demo();
+    let name = "New folder11111 with a very long trailing name that cannot fit on one line";
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![crate::app::prompt::PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: name.to_string(),
+            collapsed: false,
+        }],
+        vec![],
+    );
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::PromptFolder {
+            workspace: 0,
+            folder_id: 1,
+        },
+    }));
+    let question = confirm_question(
+        &state,
+        OverlayTarget::PromptFolder {
+            workspace: 0,
+            folder_id: 1,
+        },
+    );
+    let shell = confirm_shell(SCREEN, &question).expect("dialog fits");
+    assert!(shell.area.height > 4, "高度随换行增长: {:?}", shell.area);
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(
+        joined.contains("delete folder \"New folder11111"),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("one line\" and its contents?"),
+        "整段问题可见（自动换行）: {joined}"
+    );
 }
 
 #[test]
@@ -454,7 +494,7 @@ fn switch_cwd_confirm_buttons_hit_their_cells() {
         shell.inner,
         &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
         BUTTON_GAP,
-        CONFIRM_BUTTON_ROW,
+        shell.inner.height.saturating_sub(1),
     );
     assert_eq!(
         confirm_button_at(&shell, buttons[0].x, buttons[0].y),
@@ -503,7 +543,7 @@ fn sync_ws_cwd_confirm_buttons_hit_their_cells() {
         shell.inner,
         &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
         BUTTON_GAP,
-        CONFIRM_BUTTON_ROW,
+        shell.inner.height.saturating_sub(1),
     );
     assert_eq!(
         confirm_button_at(&shell, buttons[0].x, buttons[0].y),

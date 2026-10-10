@@ -27,9 +27,8 @@ const NEW_FOLDER_HEIGHT: u16 = 5;
 /// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
 const NEW_WORKSPACE_WIDTH: u16 = 44;
 const NEW_WORKSPACE_HEIGHT: u16 = 5;
-/// 关闭确认浮层尺寸（列，行）：问题行与按钮行。
+/// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 按钮行 + 上下边框。
 const CONFIRM_WIDTH: u16 = 40;
-const CONFIRM_HEIGHT: u16 = 4;
 /// 信任浮层尺寸（列，行）：问题行、路径行、空行与按钮行。
 const TRUST_WIDTH: u16 = 52;
 const TRUST_HEIGHT: u16 = 6;
@@ -41,7 +40,6 @@ const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 20;
 const BUTTON_GAP: u16 = 2;
 const RENAME_BUTTON_ROW: u16 = 2;
 const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
-const CONFIRM_BUTTON_ROW: u16 = 1;
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const NEW_FOLDER_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
@@ -185,32 +183,48 @@ pub fn rename_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, RENAME_WIDTH, RENAME_HEIGHT)
 }
 
-/// 关闭确认浮层几何。
-pub fn confirm_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
-    widgets::modal::layout(screen, CONFIRM_WIDTH, CONFIRM_HEIGHT)
+/// 确认类浮层几何：宽度夹取到屏幕，高度随问题换行行数增长（按钮行 + 上下边框）。
+fn confirm_shell_for(
+    screen: Rect,
+    question: &str,
+    width: u16,
+) -> Option<widgets::modal::ModalShell> {
+    let width = width.min(screen.width);
+    let inner_width = usize::from(width.saturating_sub(2)).max(1);
+    let lines = text::wrap(question, inner_width).len().max(1);
+    let height = u16::try_from(lines)
+        .unwrap_or(u16::MAX)
+        .saturating_add(3)
+        .min(screen.height);
+    widgets::modal::layout(screen, width, height)
 }
 
-/// 切换工作区路径确认浮层几何：宽度随问题完整展开，仅在超出屏幕时夹取。
-pub fn confirm_switch_cwd_shell(screen: Rect, path: &Path) -> Option<widgets::modal::ModalShell> {
-    let question = text::confirm_switch_cwd_question(&path.display().to_string());
-    let width = u16::try_from(question.width().saturating_add(2))
+/// 关闭/删除确认浮层几何：固定宽度，问题按内容自动换行。
+pub fn confirm_shell(screen: Rect, question: &str) -> Option<widgets::modal::ModalShell> {
+    confirm_shell_for(screen, question, CONFIRM_WIDTH)
+}
+
+/// 路径确认浮层宽度：随问题完整展开，超出屏幕时夹取（再由换行承接）。
+fn path_confirm_width(screen: Rect, question: &str) -> u16 {
+    u16::try_from(question.width().saturating_add(2))
         .unwrap_or(u16::MAX)
         .max(CONFIRM_WIDTH)
-        .min(screen.width);
-    widgets::modal::layout(screen, width, CONFIRM_HEIGHT)
+        .min(screen.width)
 }
 
-/// 同步当前工作区路径确认浮层几何：宽度随完整问题展开，最小 CONFIRM_WIDTH，仅在超出屏幕时夹取。
+/// 切换工作区路径确认浮层几何：宽度随问题完整展开，超出屏幕时换行。
+pub fn confirm_switch_cwd_shell(screen: Rect, path: &Path) -> Option<widgets::modal::ModalShell> {
+    let question = text::confirm_switch_cwd_question(&path.display().to_string());
+    confirm_shell_for(screen, &question, path_confirm_width(screen, &question))
+}
+
+/// 同步当前工作区路径确认浮层几何：宽度随完整问题展开，超出屏幕时换行。
 pub fn confirm_sync_workspace_cwd_shell(
     screen: Rect,
     path: &Path,
 ) -> Option<widgets::modal::ModalShell> {
-    let question = format!("switch workspace path to \"{}\"?", path.display());
-    let width = u16::try_from(question.width().saturating_add(2))
-        .unwrap_or(u16::MAX)
-        .max(CONFIRM_WIDTH)
-        .min(screen.width);
-    widgets::modal::layout(screen, width, CONFIRM_HEIGHT)
+    let question = text::confirm_sync_ws_cwd_question(&path.display().to_string());
+    confirm_shell_for(screen, &question, path_confirm_width(screen, &question))
 }
 
 /// 命中重命名按钮。
@@ -289,7 +303,7 @@ pub fn confirm_button_at(
         shell.inner,
         &CONFIRM_BUTTONS,
         BUTTON_GAP,
-        CONFIRM_BUTTON_ROW,
+        shell.inner.height.saturating_sub(1),
     );
     match widgets::modal::button_at(&rects, column, row) {
         Some(0) => Some(ConfirmButton::Confirm),
@@ -847,17 +861,23 @@ fn render_new_folder(
     )
 }
 
-/// 关闭确认浮层：问题与底部按钮；提示词删除按目标种类使用对应问题文案。
-fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm: &ConfirmClose) {
-    let Some(shell) = confirm_shell(screen) else {
-        return;
-    };
-    let (title, name) = confirm_text(state, confirm.target);
-    let question = match confirm.target {
+/// 关闭/删除确认浮层的问题文案。
+pub fn confirm_question(state: &AppState, target: OverlayTarget) -> String {
+    let (_, name) = confirm_text(state, target);
+    match target {
         OverlayTarget::PromptFolder { .. } => text::confirm_delete_folder_question(&name),
         OverlayTarget::PromptItem { .. } => text::confirm_delete_question(&name),
         _ => text::confirm_close_question(&name),
+    }
+}
+
+/// 关闭确认浮层：问题与底部按钮；提示词删除按目标种类使用对应问题文案。
+fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm: &ConfirmClose) {
+    let question = confirm_question(state, confirm.target);
+    let Some(shell) = confirm_shell(screen, &question) else {
+        return;
     };
+    let (title, _) = confirm_text(state, confirm.target);
     render_confirm_dialog(frame, &shell, title, &question);
 }
 
@@ -876,15 +896,15 @@ fn render_confirm_sync_workspace_cwd(
     screen: Rect,
     confirm: &ConfirmSyncWorkspaceCwd,
 ) {
+    let question = text::confirm_sync_ws_cwd_question(&confirm.path.display().to_string());
     let Some(shell) = confirm_sync_workspace_cwd_shell(screen, &confirm.path) else {
         return;
     };
-    let width = usize::from(shell.inner.width);
-    let question = text::confirm_sync_ws_cwd_question(&confirm.path.display().to_string(), width);
     render_confirm_dialog(frame, &shell, text::CONFIRM_SYNC_WS_CWD_TITLE, &question);
 }
 
-/// 确认类浮层通用渲染：标题、问题行与底部按钮。
+/// 确认类浮层通用渲染：标题、自动换行的问题与底部按钮；问题行数超出可用高度时
+/// 末行以 `…` 截断提示。
 fn render_confirm_dialog(
     frame: &mut Frame<'_>,
     shell: &widgets::modal::ModalShell,
@@ -896,21 +916,32 @@ fn render_confirm_dialog(
         return;
     }
     let width = usize::from(shell.inner.width);
-    let question_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            text::ellipsize(question, width),
-            style::text(),
-        ))),
-        question_area,
-    );
+    let lines = text::wrap(question, width);
+    let max_rows = usize::from(shell.inner.height.saturating_sub(1));
+    for (index, line) in lines.iter().take(max_rows).enumerate() {
+        let clipped = lines.len() > max_rows && index + 1 == max_rows;
+        let visible = if clipped {
+            text::ellipsize(&format!("{line}…"), width)
+        } else {
+            line.clone()
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(visible, style::text())),
+            Rect::new(
+                shell.inner.x,
+                shell.inner.y.saturating_add(index as u16),
+                shell.inner.width,
+                1,
+            ),
+        );
+    }
     render_buttons(
         frame,
         &widgets::modal::button_row(
             shell.inner,
             &CONFIRM_BUTTONS,
             BUTTON_GAP,
-            CONFIRM_BUTTON_ROW,
+            shell.inner.height.saturating_sub(1),
         ),
         &[
             (text::BUTTON_CONFIRM, style::accent()),

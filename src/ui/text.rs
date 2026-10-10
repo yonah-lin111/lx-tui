@@ -279,17 +279,56 @@ pub fn confirm_switch_cwd_question(path: &str) -> String {
     format!("switch cwd to \"{path}\"?")
 }
 
-/// 同步当前工作区路径到终端路径的二次确认问题；超宽时使用中间截断保留首尾目录信息。
-pub fn confirm_sync_ws_cwd_question(path: &str, max_width: usize) -> String {
-    let prefix = "switch workspace path to \"";
-    let suffix = "\"?";
-    let overhead = prefix.width() + suffix.width();
-    if max_width <= overhead {
-        return format!("{prefix}{path}{suffix}");
+/// 同步当前工作区路径到终端路径的二次确认问题。
+pub fn confirm_sync_ws_cwd_question(path: &str) -> String {
+    format!("switch workspace path to \"{path}\"?")
+}
+
+/// 按显示宽度换行：优先在空白处断行，超宽单词按字符硬断（宽字符占两列）；
+/// 空文本返回单行空串，保证调用方至少有一行可渲染。
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for word in text.split_whitespace() {
+        let word_width = word.width();
+        let space = usize::from(!current.is_empty());
+        if current_width + space + word_width <= width {
+            if space == 1 {
+                current.push(' ');
+            }
+            current.push_str(word);
+            current_width += space + word_width;
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        if word_width <= width {
+            current.push_str(word);
+            current_width = word_width;
+            continue;
+        }
+        // 超宽单词按字符硬断。
+        for ch in word.chars() {
+            let char_width = ch.width().unwrap_or(0);
+            if current_width + char_width > width && !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            current.push(ch);
+            current_width += char_width;
+        }
     }
-    let path_width = max_width.saturating_sub(overhead);
-    let ellipsized = ellipsize_middle(path, path_width);
-    format!("{prefix}{ellipsized}{suffix}")
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。

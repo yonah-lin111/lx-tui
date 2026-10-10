@@ -1418,8 +1418,9 @@ fn handle_overlay_click(
                 None => None,
             }
         }
-        Some(Overlay::ConfirmClose(_)) => {
-            let Some(shell) = ui::overlay::confirm_shell(screen) else {
+        Some(Overlay::ConfirmClose(confirm)) => {
+            let question = ui::overlay::confirm_question(state, confirm.target);
+            let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
                 update::close_overlay(state);
                 return None;
             };
