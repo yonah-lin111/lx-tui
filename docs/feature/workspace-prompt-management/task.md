@@ -74,11 +74,12 @@
 
 ## 补充修订（用户要求）
 
-- 启动信任行为调整：`lx` 在未信任目录启动时**不进入应用、不进入备用屏幕**，先在当前终端屏幕
-  **行内**显示信任页（参考 Claude Code）：LX 像素 logo + 圆角边框对话框（`Accessing workspace:` /
-  中间省略的路径高亮 / `Quick safety check:` 安全提示 / 能力说明）+ `No, exit`（默认选中）与
-  `Yes, I trust this folder` 两个可选项与键鼠操作（`↑/↓` 或鼠标悬停切换、`Enter` / 左键点击确认、
-  `Esc` 取消、`y`/`n` 快捷选择）；选择 No 清屏后输出 `workspace not trusted; exiting` 并以 0 退出。
+- 启动信任行为调整：`lx` 在未信任目录启动时**不进入应用、不进入备用屏幕**，先清屏并在当前终端
+  屏幕**左上对齐**显示信任页（参考 Claude Code，无居中浮层/对话框底）：左对齐 LX 像素 logo +
+  全宽 `─` 分隔线 + 1 列缩进内容（`Accessing workspace:` / 中间省略的路径高亮 / `Quick safety check:`
+  安全提示 / 能力说明）+ `No, exit`（默认选中）与 `Yes, I trust this folder` 两个可选项（整行全宽
+  高亮）与键鼠操作（`↑/↓` 或鼠标悬停切换、`Enter` / 左键点击确认、`Esc` 取消、`y`/`n` 快捷选择）；
+  选择 No 清屏后输出 `workspace not trusted; exiting` 并以 0 退出。
   应用内部触发（显式路径新建工作区、终端右键同步）保持 `Overlay::TrustWorkspace` 弹窗；
   启动信任门由 `event::startup_trust` 在 `Tui::init` 之后、主循环之前执行（独立信任页小循环），
   `db::service::Persistence::{untrusted_startup_path, trust_path}` 提供查询与登记。

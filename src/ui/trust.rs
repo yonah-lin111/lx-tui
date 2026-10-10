@@ -1,25 +1,23 @@
-//! 启动信任页渲染：LX logo、边框对话框、高亮提示与键鼠可选项；纯渲染，无 IO。
+//! 启动信任页渲染：LX logo、全宽顶部分隔线与左对齐的键鼠选项；纯渲染，无 IO。
 //!
-//! 布局与命中共用 `layout`：对话框内容按宽度换行，屏幕高度不足时依次省略说明、
-//! 空行与页脚，logo 仅在放得下时显示。
+//! 布局对齐 Claude Code：左上对齐、不再居中；首帧由会话层清屏后绘制。
+//! 长段落按显示宽度换行，放不下时依次省略说明、空行、安全提示、页脚与 logo。
 
 use std::path::Path;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::main_content::lx;
 use crate::ui::{style, text};
 
-/// 对话框目标宽度（列，含边框；屏幕更窄时夹取）。
-const DIALOG_WIDTH: u16 = 64;
-/// 对话框左右内边距合计（列）。
-const DIALOG_PADDING: u16 = 2;
-/// logo 与对话框之间的空行。
-const LOGO_GAP: u16 = 1;
+/// 内容左侧缩进（列）。
+const PADDING_X: u16 = 1;
+/// 顶部分隔线与内容各占的收尾行数：分隔线 1 行 + 空行 1 行。
+const HEADER_ROWS: u16 = 2;
 
 /// 对话框内容行语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,83 +38,82 @@ enum LineKind {
 /// 安全提示前缀；渲染时加粗强调。
 const SAFETY_PREFIX: &str = "Quick safety check:";
 
-/// 一行内容：语义与最终文本（Path 行只存路径值，渲染时补前缀）。
+/// 一行内容：语义与最终文本（Path 行只存路径值）。
 #[derive(Debug)]
 struct DialogLine {
     kind: LineKind,
     text: String,
 }
 
-/// 信任页几何：logo 区域（可选）、对话框、内容行与两个选项的命中矩形。
+/// 信任页几何：logo（可选）、全宽分隔线、内容起行与两个选项的命中矩形。
 pub struct TrustLayout {
     pub logo: Option<Rect>,
-    pub dialog: Rect,
-    /// 选项行命中矩形：`[Yes, No]`。
+    /// 全宽顶部分隔线。
+    pub rule: Rect,
+    /// 内容首行（分隔线下方空行之后）。
+    pub content_y: u16,
+    /// 选项行命中矩形（全宽）：`[No, exit, Yes, I trust this folder]`。
     pub options: [Rect; 2],
     lines: Vec<DialogLine>,
 }
 
 /// 按屏幕与路径计算信任页布局；内容放不下时逐级降级
-/// （优先保留标题、路径与选项）：省略说明 → 空行 → 安全提示 → 页脚。
+/// （优先保留标题、路径与选项）：省略说明 → 空行 → 安全提示 → 页脚 → logo。
 pub fn layout(screen: Rect, path: &Path) -> TrustLayout {
-    let width = DIALOG_WIDTH.min(screen.width).max(4);
-    let text_width = usize::from(width.saturating_sub(2 + DIALOG_PADDING)).max(1);
+    let text_width = usize::from(screen.width.saturating_sub(2 * PADDING_X)).max(1);
     let path_text = path.display().to_string();
 
-    // 降级档位：(说明, 空行, 安全提示, 页脚)。
-    const CONFIGS: [(bool, bool, bool, bool); 5] = [
-        (true, true, true, true),
-        (false, true, true, true),
-        (false, false, true, true),
-        (false, false, false, true),
-        (false, false, false, false),
+    // 降级档位：(logo, (说明, 空行, 安全提示, 页脚))。
+    const CONFIGS: [(bool, (bool, bool, bool, bool)); 7] = [
+        (true, (true, true, true, true)),
+        (true, (false, true, true, true)),
+        (false, (true, true, true, true)),
+        (false, (false, true, true, true)),
+        (false, (false, false, true, true)),
+        (false, (false, false, false, true)),
+        (false, (false, false, false, false)),
     ];
-    let mut lines = build_lines(&path_text, text_width, true, true, true, true);
-    let mut height = lines.len() as u16 + 2;
-    for (hint, blanks, safety, footer) in CONFIGS {
-        if height <= screen.height {
+    let mut chosen: Option<(bool, Vec<DialogLine>)> = None;
+    for (logo, (hint, blanks, safety, footer)) in CONFIGS {
+        let lines = build_lines(&path_text, text_width, hint, blanks, safety, footer);
+        let header = header_rows(logo);
+        if usize::from(header) + lines.len() <= usize::from(screen.height) {
+            chosen = Some((logo, lines));
             break;
         }
-        lines = build_lines(&path_text, text_width, hint, blanks, safety, footer);
-        height = lines.len() as u16 + 2;
     }
-    let height = height.min(screen.height);
+    let (logo_wanted, lines) = chosen.unwrap_or_else(|| {
+        (
+            false,
+            build_lines(&path_text, text_width, false, false, false, false),
+        )
+    });
 
-    let dialog_x = screen.x + screen.width.saturating_sub(width) / 2;
-    let dialog_y = screen.y + screen.height.saturating_sub(height) / 2;
-    let logo_fits =
-        screen.width >= lx::LOGO_WIDTH && screen.height >= height + LOGO_GAP + lx::LOGO_ROWS;
-    let (logo, dialog_y) = if logo_fits {
-        let total = height + LOGO_GAP + lx::LOGO_ROWS;
-        let top = screen.y + screen.height.saturating_sub(total) / 2;
-        let logo = Rect::new(
-            screen.x + screen.width.saturating_sub(lx::LOGO_WIDTH) / 2,
-            top,
-            lx::LOGO_WIDTH,
-            lx::LOGO_ROWS,
-        );
-        (Some(logo), top + lx::LOGO_ROWS + LOGO_GAP)
-    } else {
-        (None, dialog_y)
-    };
-    let dialog = Rect::new(dialog_x, dialog_y, width, height);
-    let inner = Block::bordered().inner(dialog);
+    let mut y = screen.y;
+    let logo = logo_wanted.then(|| {
+        let rect = Rect::new(screen.x + PADDING_X, y, lx::LOGO_WIDTH, lx::LOGO_ROWS);
+        y = y.saturating_add(lx::LOGO_ROWS + 1);
+        rect
+    });
+    let rule = Rect::new(screen.x, y, screen.width, 1);
+    let content_y = y.saturating_add(HEADER_ROWS);
     let mut options = [Rect::default(); 2];
     for (index, line) in lines.iter().enumerate() {
         if let LineKind::Option(option) = line.kind
             && option < options.len()
         {
             options[option] = Rect::new(
-                inner.x + 1,
-                inner.y.saturating_add(index as u16),
-                inner.width.saturating_sub(2),
+                screen.x,
+                content_y.saturating_add(index as u16),
+                screen.width,
                 1,
             );
         }
     }
     TrustLayout {
         logo,
-        dialog,
+        rule,
+        content_y,
         options,
         lines,
     }
@@ -130,32 +127,28 @@ pub fn option_at(layout: &TrustLayout, column: u16, row: u16) -> Option<usize> {
         .position(|rect| rect.contains((column, row).into()))
 }
 
-/// 渲染信任页：清屏、logo、边框对话框与内容行；选中项整行高亮。
+/// 渲染信任页：分隔线、logo 与左对齐内容；选中项整行高亮（全宽，对齐 Claude Code）。
 pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
-    frame.render_widget(Clear, frame.area());
+    let screen = frame.area();
     if let Some(logo) = layout.logo {
         lx::draw_art(frame.buffer_mut(), logo.x, logo.y);
     }
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(style::accent())
-        .style(style::overlay_panel())
-        .title(Span::styled(
-            format!(" {} ", text::TRUST_CONSOLE_TITLE),
-            style::border_title(),
-        ));
-    let inner = block.inner(layout.dialog);
-    frame.render_widget(block, layout.dialog);
-    if inner.width == 0 || inner.height == 0 {
-        return;
+    // 顶部分隔线整行。
+    for x in layout.rule.x..layout.rule.right() {
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, layout.rule.y)) {
+            cell.reset();
+            cell.set_symbol(text::DIVIDER_MID);
+            cell.set_style(style::border(false));
+        }
     }
-    let row_width = inner.width.saturating_sub(2);
+    let content_x = screen.x + PADDING_X;
+    let content_width = screen.width.saturating_sub(2 * PADDING_X);
     for (index, line) in layout.lines.iter().enumerate() {
-        let y = inner.y.saturating_add(index as u16);
-        if y >= inner.bottom() {
+        let y = layout.content_y.saturating_add(index as u16);
+        if y >= screen.bottom() {
             break;
         }
-        let rect = Rect::new(inner.x + 1, y, row_width, 1);
+        let rect = Rect::new(content_x, y, content_width, 1);
         match line.kind {
             LineKind::Blank => {}
             LineKind::Heading => {
@@ -197,13 +190,15 @@ pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
                 } else {
                     (" ", style::text(), style::text())
                 };
+                // 选中行整行高亮：铺满全宽（对齐 Claude Code 的选择条）。
+                let row = Rect::new(screen.x, y, screen.width, 1);
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled(marker, marker_style),
                         Span::styled(format!(" {}", line.text), row_style),
                     ]))
                     .style(row_style),
-                    rect,
+                    row,
                 );
             }
             LineKind::Footer => {
@@ -213,6 +208,15 @@ pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
                 );
             }
         }
+    }
+}
+
+/// 头部行数：logo 时为其高度 + 1 空行，再加分隔线与空行；无 logo 仅分隔线与空行。
+fn header_rows(logo: bool) -> u16 {
+    if logo {
+        lx::LOGO_ROWS + 1 + HEADER_ROWS
+    } else {
+        HEADER_ROWS
     }
 }
 

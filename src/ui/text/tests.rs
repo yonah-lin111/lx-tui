@@ -60,7 +60,6 @@ fn user_visible_labels_are_clean_ascii() {
         TRUST_WORKSPACE_QUESTION,
         BUTTON_TRUST,
         BUTTON_DONT_TRUST,
-        TRUST_CONSOLE_TITLE,
         TRUST_CONSOLE_HEADING,
         TRUST_CONSOLE_SAFETY,
         TRUST_CONSOLE_HINT,

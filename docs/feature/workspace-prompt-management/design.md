@@ -110,11 +110,12 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 1. **启动信任页（`event::startup_trust`，主事件循环之前、行内会话 `Tui::init_inline`）**：
    - 计算真实规范化路径 `canonicalize(cwd)`；查询 `workspace` 表中 `path == target_path` 且 `is_trusted == 1`；
    - 已信任：直接进入应用（不进入任何会话）；
-   - 未信任：在当前终端屏幕行内显示信任页：LX 像素 logo + 圆角边框对话框（标题 `lx-tui workspace trust` /
-     `Accessing workspace:` / accent 路径 / `Quick safety check:` 安全提示 / 能力说明 /
-     `No, exit`（默认选中）与 `Yes, I trust this folder` 两个可选项 / 键鼠页脚）；
-     `↑/↓` 或鼠标悬停切换、`Enter` 或左键点击确认、`Esc` 取消、`y`/`n` 快捷选择；
-   - 选择 `Yes`：清屏、录入 DB 并进入应用（此后才进入备用屏）；选择 `No`：清屏后输出
+   - 未信任：清屏后在当前终端屏幕**左上对齐**绘制信任页（对齐 Claude Code，无居中浮层）：
+     左对齐 LX 像素 logo、全宽 `─` 分隔线，其下 1 列缩进的内容——`Accessing workspace:` / accent 路径 /
+     `Quick safety check:` 安全提示 / 能力说明 / `No, exit`（默认选中）与 `Yes, I trust this folder`
+     两个可选项（整行全宽高亮）/ 键鼠页脚；`↑/↓` 或鼠标悬停切换、`Enter` 或左键点击确认、
+     `Esc` 取消、`y`/`n` 快捷选择；
+   - 选择 `Yes`：清屏归位、录入 DB 并进入应用（此后才进入备用屏）；选择 `No`：清屏后输出
      `workspace not trusted; exiting`、exit 0，**不进入应用**；
    - 数据库不可用降级放行（不阻断应用）。
 2. **应用内信任浮层（新建工作区 / 终端同步触发）**：

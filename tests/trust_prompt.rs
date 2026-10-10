@@ -148,14 +148,10 @@ fn untrusted_startup_shows_console_trust_page_then_enters_on_yes() {
     let (workspace, db_path) = temp_paths("accept");
     let app = App::spawn(&workspace, &db_path);
 
-    // 进入应用前先在当前终端显示信任页：标题、标题行与两个选项，且未出现应用界面。
-    assert!(
-        app.wait_for("lx-tui workspace trust", WAIT),
-        "信任页先于应用显示"
-    );
+    // 进入应用前先在当前终端显示信任页：标题行与两个选项，且未出现应用界面。
     assert!(
         app.wait_for("Accessing workspace:", WAIT),
-        "信任页包含标题行"
+        "信任页先于应用显示"
     );
     assert!(
         app.wait_for("Yes, I trust this folder", WAIT),
