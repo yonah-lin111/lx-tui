@@ -300,18 +300,20 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
         "草稿不入库"
     );
 
-    // 保存选择器：只有根层与“新建文件夹”；输入名称后保存。
+    // 保存选择器：名称预填默认名；根层 + 新建文件夹动作行。
     update::open_save_draft(&mut state);
     let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
         panic!("save picker open");
     };
     assert_eq!(dialog.entries.len(), 2, "根层 + 新建文件夹");
+    // 选中动作行回车 → 内联新建行追加并选中；名称直接在该行输入。
     update::set_save_draft_selection(&mut state, 1);
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     update::apply_overlay_key(&mut state, OverlayKey::Clear);
     for ch in "docs".chars() {
         update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
     }
+    // 再回车（确定）执行保存：先建文件夹再存入草稿。
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
 

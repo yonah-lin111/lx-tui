@@ -301,7 +301,8 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     edit_prompt_draft(state)
 }
 
-/// 打开草稿保存的文件夹选择浮层；文件夹按树层级顺序列出（忽略折叠）。
+/// 打开草稿保存的文件夹选择浮层；文件夹按树层级顺序列出（忽略折叠）；
+/// 名称预填默认名，列表末尾为“新建文件夹”动作行。
 pub fn open_save_draft(state: &mut AppState) {
     let workspace = state.prompt_workspace();
     let Some(workspace_state) = state.workspaces.get(workspace) else {
@@ -326,15 +327,17 @@ pub fn open_save_draft(state: &mut AppState) {
             });
         }
     }
-    entries.push(SaveDraftEntry::NewFolder);
+    entries.push(SaveDraftEntry::AddFolder);
     state.overlay = Some(Overlay::SaveDraft(SaveDraft {
         workspace,
+        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
         entries,
         selected: 0,
     }));
 }
 
-/// 草稿保存选择器按键：上下移动、回车确认、Esc 关闭。
+/// 草稿保存选择器按键：上下移动、回车确认、Esc 关闭；
+/// 字符输入归属由选中行决定——选中内联新建行时编辑该行名称，否则编辑顶部名称输入。
 pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
     match key {
         OverlayKey::Esc => state.overlay = None,
@@ -345,8 +348,53 @@ pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
             move_save_draft_selection(state, 1);
         }
         OverlayKey::Enter => commit_save_draft(state),
+        OverlayKey::Char(_)
+        | OverlayKey::Clear
+        | OverlayKey::Backspace
+        | OverlayKey::Delete
+        | OverlayKey::Left
+        | OverlayKey::Right
+        | OverlayKey::Home
+        | OverlayKey::End => edit_save_draft_input(state, key),
+    }
+}
+
+/// 按选中行路由字符输入：内联新建行 → 该行名称；其余 → 顶部提示词名称。
+fn edit_save_draft_input(state: &mut AppState, key: OverlayKey) {
+    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
+        return;
+    };
+    let input = match dialog.entries.get_mut(dialog.selected) {
+        Some(SaveDraftEntry::DraftFolder { name }) => name,
+        _ => &mut dialog.name,
+    };
+    match key {
+        OverlayKey::Char(ch) => input.insert_char(ch),
+        OverlayKey::Clear => input.clear(),
+        OverlayKey::Backspace => input.backspace(),
+        OverlayKey::Delete => input.delete(),
+        OverlayKey::Left => input.move_left(),
+        OverlayKey::Right => input.move_right(),
+        OverlayKey::Home => input.move_home(),
+        OverlayKey::End => input.move_end(),
         _ => {}
     }
+}
+
+/// 追加内联新建文件夹行（挂在列表末尾的动作行之前）并选中它；返回是否有变化。
+pub fn add_save_draft_folder(state: &mut AppState) -> bool {
+    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let position = dialog.entries.len().saturating_sub(1);
+    dialog.entries.insert(
+        position,
+        SaveDraftEntry::DraftFolder {
+            name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
+        },
+    );
+    dialog.selected = position;
+    true
 }
 
 /// 移动草稿保存选择器高亮；返回是否有变化。
@@ -378,29 +426,55 @@ pub fn set_save_draft_selection(state: &mut AppState, index: usize) -> bool {
     true
 }
 
-/// 确认保存目标：根层或现有文件夹直接登记保存；“新建文件夹”转名称输入浮层。
+/// 确认保存（[save enter] 按钮 / Enter）：名称去空白后为空则拒绝；
+/// 选中动作行时追加内联新建行；否则按选中目标登记保存。
 pub fn commit_save_draft(state: &mut AppState) {
     let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_ref() else {
         return;
     };
     let workspace = dialog.workspace;
+    let prompt_name = dialog.name.text().trim().to_string();
+    if prompt_name.is_empty() {
+        return;
+    }
     let Some(entry) = dialog.entries.get(dialog.selected) else {
         return;
     };
     match entry {
-        SaveDraftEntry::NewFolder => {
-            state.overlay = Some(Overlay::Rename(Rename {
-                target: RenameTarget::NewDraftFolder { workspace },
-                input: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
-            }));
+        SaveDraftEntry::AddFolder => {
+            add_save_draft_folder(state);
         }
-        SaveDraftEntry::Root => save_draft_to_folder(state, workspace, None),
-        SaveDraftEntry::Folder { id, .. } => save_draft_to_folder(state, workspace, Some(*id)),
+        SaveDraftEntry::Root => {
+            save_draft(state, workspace, DraftTarget::Folder(None), prompt_name);
+        }
+        SaveDraftEntry::Folder { id, .. } => {
+            save_draft(
+                state,
+                workspace,
+                DraftTarget::Folder(Some(*id)),
+                prompt_name,
+            );
+        }
+        SaveDraftEntry::DraftFolder { name } => {
+            let folder_name = name.text().trim().to_string();
+            if folder_name.is_empty() {
+                return;
+            }
+            save_draft(
+                state,
+                workspace,
+                DraftTarget::NewFolder {
+                    parent_id: None,
+                    name: folder_name,
+                },
+                prompt_name,
+            );
+        }
     }
 }
 
-/// 把草稿登记为指定文件夹（None 为根层）下的正式条目；成功后由服务清空草稿。
-fn save_draft_to_folder(state: &mut AppState, workspace: usize, folder_id: Option<i64>) {
+/// 把草稿登记为正式条目（可选先建新文件夹）；成功后由服务清空草稿。
+fn save_draft(state: &mut AppState, workspace: usize, target: DraftTarget, name: String) {
     let Some(cwd) = workspace_cwd(state, workspace) else {
         return;
     };
@@ -411,8 +485,8 @@ fn save_draft_to_folder(state: &mut AppState, workspace: usize, folder_id: Optio
         .unwrap_or_default();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd,
-        target: DraftTarget::Folder(folder_id),
-        name: text::PROMPT_DEFAULT_NAME.to_string(),
+        target,
+        name,
         content,
     });
     state.overlay = None;
@@ -650,23 +724,6 @@ pub fn commit_prompt_rename(state: &mut AppState, target: RenameTarget, name: St
                     name,
                 });
             }
-        }
-        RenameTarget::NewDraftFolder { .. } => {
-            let content = state
-                .workspaces
-                .get(workspace)
-                .map(|workspace| workspace.prompt_panel.draft.clone())
-                .unwrap_or_default();
-            state.effects.push(Effect::SaveDraft {
-                workspace: cwd,
-                target: DraftTarget::NewFolder {
-                    parent_id: None,
-                    name,
-                },
-                name: text::PROMPT_DEFAULT_NAME.to_string(),
-                content,
-            });
-            clear_search_for(state, workspace);
         }
         _ => {}
     }

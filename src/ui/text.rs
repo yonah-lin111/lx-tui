@@ -82,11 +82,11 @@ pub const PROMPT_TREE_MIDDLE: &str = "├─";
 /// 提示词树空状态与搜索无命中占位。
 pub const PROMPT_TREE_EMPTY: &str = "no prompts yet";
 pub const PROMPT_TREE_NO_MATCHES: &str = "no matching prompts";
-/// 临时的草稿保存选择器：标题、根层项、新建文件夹项与页脚。
+/// 临时草稿保存选择器：标题、提示词名称标签、根层项与新建文件夹动作项。
 pub const SAVE_DRAFT_TITLE: &str = "save prompt to folder";
+pub const SAVE_DRAFT_NAME: &str = "name";
 pub const SAVE_DRAFT_ROOT: &str = "/";
 pub const SAVE_DRAFT_NEW_FOLDER: &str = "+ New folder";
-pub const SAVE_DRAFT_FOOTER: &str = "[enter] save  [esc] cancel";
 /// 新建提示词与文件夹的默认名（可随后重命名）。
 pub const PROMPT_DEFAULT_NAME: &str = "New prompt";
 pub const PROMPT_FOLDER_DEFAULT_NAME: &str = "New folder";
@@ -200,8 +200,6 @@ pub fn prompt_status_label(status: PromptItemStatus) -> &'static str {
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
 pub const RENAME_PROMPT_TITLE: &str = "rename prompt";
-/// 保存草稿时新建文件夹的名称输入标题。
-pub const RENAME_NEW_FOLDER_TITLE: &str = "new folder";
 pub const RENAME_FOLDER_TITLE: &str = "rename folder";
 /// rename 浮层输入为空时的输入说明占位（工作区与标签共用）。
 pub const RENAME_PLACEHOLDER: &str = "new name";

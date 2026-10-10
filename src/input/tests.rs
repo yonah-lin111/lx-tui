@@ -601,6 +601,17 @@ fn save_draft_overlay_routes_navigation_only() {
         route_overlay(KeyCode::Down),
         Some(Routed::Overlay(OverlayKey::Down))
     );
-    assert_eq!(route_overlay(KeyCode::Char('x')), None, "选择器无文本输入");
-    assert_eq!(route_overlay(KeyCode::Backspace), None);
+    assert_eq!(
+        route_overlay(KeyCode::Char('x')),
+        Some(Routed::Overlay(OverlayKey::Char('x'))),
+        "名称/内联行文本输入"
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Backspace),
+        Some(Routed::Overlay(OverlayKey::Backspace))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Left),
+        Some(Routed::Overlay(OverlayKey::Left))
+    );
 }

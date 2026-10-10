@@ -309,25 +309,32 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             render_trust(frame, screen, trust);
             None
         }
-        Overlay::SaveDraft(dialog) => {
-            render_save_draft(frame, screen, dialog);
-            None
-        }
+        Overlay::SaveDraft(dialog) => render_save_draft(frame, screen, dialog),
     }
 }
 
 /// 草稿保存选择器宽度。
-const SAVE_DRAFT_WIDTH: u16 = 40;
+const SAVE_DRAFT_WIDTH: u16 = 44;
 
-/// 草稿保存选择器几何：标题 + 条目单行 + 页脚。
+/// 选择器底部按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveDraftButton {
+    Save,
+    Cancel,
+}
+
+/// 选择器按钮标签（保存 / 取消）。
+const SAVE_DRAFT_BUTTONS: [&str; 2] = [text::BUTTON_SAVE, text::BUTTON_CANCEL];
+
+/// 草稿保存选择器几何：名称输入 + 分割线 + 条目单行 + 按钮行。
 pub fn save_draft_shell(screen: Rect, entry_count: usize) -> Option<widgets::modal::ModalShell> {
-    let height = (entry_count as u16).saturating_add(4).clamp(5, 30);
+    let height = (entry_count as u16).saturating_add(6).clamp(8, 30);
     widgets::modal::layout(screen, SAVE_DRAFT_WIDTH, height)
 }
 
-/// 选择器可视条目数（扣除页脚行）。
+/// 选择器可视条目数（扣除名称、分割线与按钮行）。
 pub fn save_draft_max_rows(shell: &widgets::modal::ModalShell) -> usize {
-    usize::from(shell.inner.height.saturating_sub(1))
+    usize::from(shell.inner.height.saturating_sub(3))
 }
 
 /// 列表窗口起始条目位置：让选中项落在窗口内。
@@ -338,7 +345,12 @@ pub fn save_draft_visible_start(dialog: &SaveDraft, max_rows: usize) -> usize {
     dialog.selected.saturating_add(1).saturating_sub(max_rows)
 }
 
-/// 命中选择器条目；页脚行、区域外或越界返回 None。
+/// 列表区起始行（名称 + 分割线之后）。
+fn save_draft_list_y(shell: &widgets::modal::ModalShell) -> u16 {
+    shell.inner.y.saturating_add(2)
+}
+
+/// 命中选择器条目；按钮行、区域外或越界返回 None。
 pub fn save_draft_entry_at(
     shell: &widgets::modal::ModalShell,
     dialog: &SaveDraft,
@@ -348,11 +360,12 @@ pub fn save_draft_entry_at(
     if column < shell.inner.x || column >= shell.inner.right() {
         return None;
     }
-    if row < shell.inner.y || row >= shell.inner.bottom().saturating_sub(1) {
+    let list_y = save_draft_list_y(shell);
+    if row < list_y {
         return None;
     }
     let max_rows = save_draft_max_rows(shell);
-    let offset = usize::from(row - shell.inner.y);
+    let offset = usize::from(row - list_y);
     if offset >= max_rows {
         return None;
     }
@@ -360,66 +373,180 @@ pub fn save_draft_entry_at(
     (index < dialog.entries.len()).then_some(index)
 }
 
-/// 条目标签：根层 `/`、文件夹按层级缩进、末项为新建文件夹。
-fn save_draft_entry_label(entry: &SaveDraftEntry) -> String {
-    match entry {
-        SaveDraftEntry::Root => text::SAVE_DRAFT_ROOT.to_string(),
-        SaveDraftEntry::Folder { depth, name, .. } => {
-            format!("{}{name}", "  ".repeat(*depth))
-        }
-        SaveDraftEntry::NewFolder => text::SAVE_DRAFT_NEW_FOLDER.to_string(),
+/// 命中选择器按钮。
+pub fn save_draft_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<SaveDraftButton> {
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &SAVE_DRAFT_BUTTONS,
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(SaveDraftButton::Save),
+        Some(1) => Some(SaveDraftButton::Cancel),
+        _ => None,
     }
 }
 
-/// 渲染草稿保存选择器：条目列表 + 页脚提示。
-fn render_save_draft(frame: &mut Frame<'_>, screen: Rect, dialog: &SaveDraft) {
-    let Some(shell) = save_draft_shell(screen, dialog.entries.len()) else {
-        return;
+/// 条目标签：根层 `/`、文件夹树形连接符（末项 `└─`）、内联新建行与追加动作行。
+fn save_draft_entry_label(entries: &[SaveDraftEntry], index: usize) -> String {
+    match &entries[index] {
+        SaveDraftEntry::Root => text::SAVE_DRAFT_ROOT.to_string(),
+        SaveDraftEntry::Folder { depth, name, .. } => {
+            if *depth == 0 {
+                name.clone()
+            } else {
+                let connector = if last_sibling(entries, index) {
+                    text::PROMPT_TREE_LAST
+                } else {
+                    text::PROMPT_TREE_MIDDLE
+                };
+                format!("{connector} {name}")
+            }
+        }
+        SaveDraftEntry::DraftFolder { name } => name.text().to_string(),
+        SaveDraftEntry::AddFolder => text::SAVE_DRAFT_NEW_FOLDER.to_string(),
+    }
+}
+
+/// 同级末项判定：其后再无同深度行，或先遇到更浅的行（与树视图一致）。
+fn last_sibling(entries: &[SaveDraftEntry], index: usize) -> bool {
+    let depth = match &entries[index] {
+        SaveDraftEntry::Folder { depth, .. } => *depth,
+        _ => return true,
     };
+    for entry in &entries[index + 1..] {
+        match entry {
+            SaveDraftEntry::Folder { depth: later, .. } => {
+                if *later < depth {
+                    return true;
+                }
+                if *later == depth {
+                    return false;
+                }
+            }
+            _ => return true,
+        }
+    }
+    true
+}
+
+/// 渲染草稿保存选择器：名称输入 + 分割线 + 条目列表 + 按钮；
+/// 返回活动输入（选中内联行时为该行名称，否则为顶部名称）的硬件光标位置。
+fn render_save_draft(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    dialog: &SaveDraft,
+) -> Option<(u16, u16)> {
+    let shell = save_draft_shell(screen, dialog.entries.len())?;
     widgets::modal::render(frame, &shell, text::SAVE_DRAFT_TITLE);
     if shell.inner.width == 0 || shell.inner.height == 0 {
-        return;
+        return None;
     }
-    let max_rows = save_draft_max_rows(&shell);
-    let start = save_draft_visible_start(dialog, max_rows);
-    for (offset, entry) in dialog.entries.iter().skip(start).take(max_rows).enumerate() {
-        let index = start + offset;
-        let selected = index == dialog.selected;
-        let label = text::ellipsize(
-            &save_draft_entry_label(entry),
-            usize::from(shell.inner.width),
-        );
-        let span_style = if selected {
-            style::selection()
-        } else {
-            match entry {
-                SaveDraftEntry::Folder { .. } => style::text(),
-                SaveDraftEntry::Root | SaveDraftEntry::NewFolder => style::accent(),
-            }
-        };
-        let row_area = Rect::new(
-            shell.inner.x,
-            shell.inner.y.saturating_add(offset as u16),
-            shell.inner.width,
-            1,
-        );
-        let paragraph = if selected {
-            Paragraph::new(Span::styled(label, span_style)).style(style::selection())
-        } else {
-            Paragraph::new(Span::styled(label, span_style))
-        };
-        frame.render_widget(paragraph, row_area);
-    }
-    let footer_area = Rect::new(
-        shell.inner.x,
-        shell.inner.bottom().saturating_sub(1),
-        shell.inner.width,
+    let width = usize::from(shell.inner.width);
+    // 名称行：`name ` 前缀 + 单行输入。
+    let label = format!("{} ", text::SAVE_DRAFT_NAME);
+    let label_width = label.chars().count() as u16;
+    frame.render_widget(
+        Paragraph::new(Span::styled(label, style::muted())),
+        Rect::new(shell.inner.x, shell.inner.y, label_width, 1),
+    );
+    let name_area = Rect::new(
+        shell.inner.x.saturating_add(label_width),
+        shell.inner.y,
+        shell.inner.width.saturating_sub(label_width),
         1,
     );
-    frame.render_widget(
-        Paragraph::new(Span::styled(text::SAVE_DRAFT_FOOTER, style::muted())),
-        footer_area,
+    let name_cursor = widgets::input::render(
+        frame,
+        name_area,
+        dialog.name.text(),
+        dialog.name.cursor(),
+        None,
     );
+    // 分割线。
+    frame.render_widget(
+        Paragraph::new(text::DIVIDER_MID.repeat(width)).style(style::border(false)),
+        Rect::new(
+            shell.inner.x,
+            shell.inner.y.saturating_add(1),
+            shell.inner.width,
+            1,
+        ),
+    );
+    // 条目列表。
+    let list_y = save_draft_list_y(&shell);
+    let max_rows = save_draft_max_rows(&shell);
+    let start = save_draft_visible_start(dialog, max_rows);
+    let mut active_cursor = None;
+    for (offset, index) in (start..dialog.entries.len()).take(max_rows).enumerate() {
+        let y = list_y.saturating_add(offset as u16);
+        let selected = index == dialog.selected;
+        let entry = &dialog.entries[index];
+        let row_area = Rect::new(shell.inner.x, y, shell.inner.width, 1);
+        match entry {
+            SaveDraftEntry::DraftFolder { name } => {
+                if selected {
+                    frame.render_widget(Paragraph::new("").style(style::selection()), row_area);
+                }
+                let view = widgets::input::view(
+                    name.text(),
+                    name.cursor(),
+                    usize::from(shell.inner.width),
+                );
+                let text_style = if selected {
+                    style::selection()
+                } else {
+                    style::text()
+                };
+                frame.render_widget(
+                    Paragraph::new(Span::styled(view.visible, text_style)),
+                    row_area,
+                );
+                if selected {
+                    active_cursor = Some((shell.inner.x.saturating_add(view.cursor_col), y));
+                }
+            }
+            _ => {
+                let label = text::ellipsize(&save_draft_entry_label(&dialog.entries, index), width);
+                let span_style = if selected {
+                    style::selection()
+                } else {
+                    match entry {
+                        SaveDraftEntry::Folder { .. } => style::text(),
+                        SaveDraftEntry::Root | SaveDraftEntry::AddFolder => style::accent(),
+                        SaveDraftEntry::DraftFolder { .. } => style::text(),
+                    }
+                };
+                let paragraph = if selected {
+                    Paragraph::new(Span::styled(label, span_style)).style(style::selection())
+                } else {
+                    Paragraph::new(Span::styled(label, span_style))
+                };
+                frame.render_widget(paragraph, row_area);
+            }
+        }
+    }
+    // 按钮行。
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &SAVE_DRAFT_BUTTONS,
+            BUTTON_GAP,
+            shell.inner.height.saturating_sub(1),
+        ),
+        &[
+            (text::BUTTON_SAVE, style::accent()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
+    );
+    // 选中内联行时硬件光标在该行；否则在名称输入。
+    active_cursor.or(name_cursor)
 }
 
 /// 渲染信任浮层：问题、路径高亮与底部按钮。
@@ -466,7 +593,6 @@ fn rename_title(target: RenameTarget) -> &'static str {
         RenameTarget::Tab { .. } => text::RENAME_TAB_TITLE,
         RenameTarget::PromptFolder { .. } => text::RENAME_FOLDER_TITLE,
         RenameTarget::PromptItem { .. } => text::RENAME_PROMPT_TITLE,
-        RenameTarget::NewDraftFolder { .. } => text::RENAME_NEW_FOLDER_TITLE,
     }
 }
 

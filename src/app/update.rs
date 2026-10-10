@@ -1798,9 +1798,7 @@ fn commit_rename(state: &mut AppState) {
             };
             tab_state.name = Some(name);
         }
-        RenameTarget::PromptFolder { .. }
-        | RenameTarget::PromptItem { .. }
-        | RenameTarget::NewDraftFolder { .. } => {
+        RenameTarget::PromptFolder { .. } | RenameTarget::PromptItem { .. } => {
             commit_prompt_rename(state, target, name);
         }
     }

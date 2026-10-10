@@ -1458,15 +1458,27 @@ fn handle_overlay_click(
                 update::close_overlay(state);
                 return None;
             };
-            match ui::overlay::save_draft_entry_at(&shell, dialog, column, row) {
-                // 单击即选中并保存（选择器语义与菜单一致）。
-                Some(index) => {
-                    update::set_save_draft_selection(state, index);
-                    update::commit_save_draft(state);
+            if let Some(index) = ui::overlay::save_draft_entry_at(&shell, dialog, column, row) {
+                // 点击文件夹仅选中，不执行；动作行（新建文件夹）点击即追加内联行。
+                let is_add = matches!(
+                    dialog.entries.get(index),
+                    Some(crate::app::overlay::SaveDraftEntry::AddFolder)
+                );
+                update::set_save_draft_selection(state, index);
+                if is_add {
+                    update::add_save_draft_folder(state);
                 }
-                None => update::close_overlay(state),
+                return None;
             }
-            None
+            match ui::overlay::save_draft_button_at(&shell, column, row) {
+                Some(ui::overlay::SaveDraftButton::Save) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::SaveDraftButton::Cancel) | None => {
+                    update::close_overlay(state);
+                    None
+                }
+            }
         }
         Some(Overlay::TrustWorkspace(_)) => {
             let button = ui::overlay::trust_shell(screen)

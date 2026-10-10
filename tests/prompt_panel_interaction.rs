@@ -217,11 +217,21 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "picker: \n{}",
         app.screen()
     );
+    assert!(app.wait_for("name"), "name input listed");
     assert!(app.wait_for("+ New folder"), "new folder option listed");
+    // 点击文件夹仅选中，不执行：选择器保持打开。
     app.click("/");
+    app.settle();
+    assert!(
+        app.screen().contains("save prompt to folder"),
+        "click selects only: \n{}",
+        app.screen()
+    );
+    // 点击 [save enter] 才执行保存。
+    app.click("[save enter]");
     assert!(
         app.wait_gone("save prompt to folder"),
-        "picker closed: \n{}",
+        "picker closed after confirm: \n{}",
         app.screen()
     );
 
@@ -256,11 +266,33 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
 
-    // 点击工具栏 [temp prompt] → 草稿编辑视图（保存后草稿槽已清空，显示空占位）。
+    // 点击工具栏 [temp prompt] → 草稿编辑视图；内联新建文件夹保存全流程。
     app.click("[temp prompt]");
     assert!(
         app.wait_for("Write your prompt"),
         "draft editor reopened: \n{}",
+        app.screen()
+    );
+    app.send(b"second draft");
+    assert!(app.wait_for("second draft"), "second draft typed");
+    app.click("●");
+    assert!(app.wait_for("+ New folder"), "picker reopened");
+    // 点击动作行 → 内联新建行（名称直接在该行输入）。
+    app.click("+ New folder");
+    app.settle();
+    app.send(b"\x03");
+    app.send(b"notes");
+    app.settle();
+    app.click("[save enter]");
+    assert!(
+        app.wait_gone("save prompt to folder"),
+        "inline folder saved: \n{}",
+        app.screen()
+    );
+    app.click("[list]");
+    assert!(
+        app.wait_for("notes"),
+        "new folder visible in tree: \n{}",
         app.screen()
     );
 }

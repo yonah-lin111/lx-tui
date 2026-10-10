@@ -52,20 +52,31 @@ impl Overlay {
     }
 }
 
-/// 草稿保存选择器：工作区、候选目标与高亮项。
+/// 草稿保存选择器：工作区、提示词名称输入、候选目标与高亮项。
 #[derive(Debug)]
 pub struct SaveDraft {
     pub workspace: usize,
+    /// 保存的提示词名称（预填默认名，可编辑）。
+    pub name: TextInput,
     pub entries: Vec<SaveDraftEntry>,
     pub selected: usize,
 }
 
-/// 草稿保存目标项：根层、现有文件夹（含层级缩进）或新建文件夹。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// 草稿保存目标项：根层、现有文件夹（含层级缩进）、内联新建文件夹行或追加动作行。
+#[derive(Debug)]
 pub enum SaveDraftEntry {
     Root,
-    Folder { id: i64, depth: usize, name: String },
-    NewFolder,
+    Folder {
+        id: i64,
+        depth: usize,
+        name: String,
+    },
+    /// 内联新建文件夹：名称直接在该行输入；确定后建于根层并保存草稿。
+    DraftFolder {
+        name: TextInput,
+    },
+    /// 动作行：点击/回车在列表末尾追加一个内联新建文件夹行。
+    AddFolder,
 }
 
 /// 右键菜单：锚点、目标、命令列表与高亮项索引。
@@ -141,22 +152,9 @@ pub enum MenuCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
     Workspace(usize),
-    Tab {
-        workspace: usize,
-        tab: usize,
-    },
-    PromptFolder {
-        workspace: usize,
-        folder_id: i64,
-    },
-    PromptItem {
-        workspace: usize,
-        item_id: i64,
-    },
-    /// 保存草稿时新建文件夹：提交名字后建文件夹并把草稿存入。
-    NewDraftFolder {
-        workspace: usize,
-    },
+    Tab { workspace: usize, tab: usize },
+    PromptFolder { workspace: usize, folder_id: i64 },
+    PromptItem { workspace: usize, item_id: i64 },
 }
 
 /// 重命名浮层：目标与单行输入。
