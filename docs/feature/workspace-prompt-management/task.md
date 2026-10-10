@@ -14,7 +14,7 @@
 
 ### 2. 工作区信任机制（`src/app/` 与 `src/ui/overlay.rs`）
 - [x] 定义 `OverlayKind::TrustWorkspace` 与 `Overlay::TrustWorkspace` 状态结构体
-- [x] `lx` 启动时增加工作区信任检测：未信任弹出模态确认浮层；拒绝则恢复终端并退出
+- [x] `lx` 启动时增加工作区信任门：未信任不进入应用，先在系统控制台显示信任页（`[y/N]`），拒绝则输出提示并退出；已信任直接进入
 - [x] 新建工作区弹窗确认后增加信任检测：未信任触发信任浮层；拒绝则取消创建
 - [x] 终端右键菜单同步按钮触发前增加信任检测：未信任触发信任浮层；拒绝则取消同步
 - [x] `ui/overlay.rs` 渲染信任模态框（标题、路径高亮、`[Trust & Open]`、`[Don't Trust]` 按钮）
@@ -71,3 +71,15 @@
      改为与工作目录名无关的稳定形式（长目录名截断与窄面板标题重叠）。
 - 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿
   （864 lib + 31 集成，含新增 `tests/prompt_management.rs` 端到端用例）。
+
+## 补充修订（用户要求）
+
+- 启动信任行为调整：`lx` 在未信任目录启动时**不进入应用**，先在系统控制台显示信任页
+  （标题 / 路径 / `Do you trust the files in this folder? [y/N]`，参考 Claude Code）；
+  `y`/`yes` 放行并入库，其余输入输出 `workspace not trusted; exiting` 后以 0 退出。
+  应用内部触发（显式路径新建工作区、终端右键同步）保持 `Overlay::TrustWorkspace` 弹窗；
+  启动信任门由 `db::service::Persistence::ensure_startup_trust` 在 `Tui::init` 之前执行。
+- 新增真实 PTY 集成测试 `tests/trust_prompt.rs`：未信任目录启动先显示控制台信任页，
+  `y` 进入应用、`n` 不进入应用并退出；`tests/prompt_management.rs` 改为覆盖应用内信任弹窗
+  （新建未信任工作区 → 弹窗确认 → 创建并入库）。
+- `Database::open` 增加 5 秒 `busy_timeout`，提升多实例并发下的健壮性。

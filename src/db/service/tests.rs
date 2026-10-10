@@ -41,27 +41,46 @@ fn trusted_service(label: &str) -> (Persistence, AppState, PathBuf, PathBuf) {
         .trust_workspace(&cwd, "workspace")
         .expect("trust recorded");
     let mut state = state_with_cwd(&cwd);
-    let service = Persistence::with_database(&mut state, database);
+    let service = Persistence::with_database(database);
+    assert!(service.ensure_startup_trust(&mut state), "已信任工作区放行");
     (service, state, cwd, db_path)
 }
 
 #[test]
-fn startup_untrusted_opens_trust_dialog() {
+fn startup_gate_refuses_untrusted_workspace_without_terminal() {
+    // 测试进程 stdin 不是终端：无法询问视为拒绝，且不写库、不弹浮层。
     let db_path = temp_db_path("untrusted");
     let cwd = workspace_path("untrusted");
     let database = Database::open(&db_path).expect("db opens");
     let mut state = state_with_cwd(&cwd);
-    let _service = Persistence::with_database(&mut state, database);
-    assert!(matches!(
-        state.overlay,
-        Some(crate::app::overlay::Overlay::TrustWorkspace(_))
-    ));
+    let service = Persistence::with_database(database);
+    assert!(!service.ensure_startup_trust(&mut state));
+    assert!(state.overlay.is_none(), "启动门不使用应用内浮层");
+    assert!(
+        !service
+            .db
+            .as_ref()
+            .expect("db")
+            .is_trusted(&cwd)
+            .expect("query"),
+        "拒绝不写库"
+    );
 }
 
 #[test]
-fn startup_trusted_does_not_open_dialog() {
+fn startup_gate_passes_trusted_workspace() {
     let (_service, state, _, _) = trusted_service("startup-trusted");
     assert!(state.overlay.is_none());
+}
+
+#[test]
+fn trust_answer_parsing_accepts_yes_only() {
+    for answer in ["y", "Y", "yes", "YES", " Yes \n"] {
+        assert!(parse_trust_answer(answer), "{answer:?} 视为信任");
+    }
+    for answer in ["", "\n", "n", "no", "nope", "yess", "随便"] {
+        assert!(!parse_trust_answer(answer), "{answer:?} 视为拒绝");
+    }
 }
 
 #[test]

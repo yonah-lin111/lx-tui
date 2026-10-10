@@ -1,4 +1,7 @@
-//! 信任行为：启动、新建工作区与终端同步三条路径的浮层、决策与续作/回退。
+//! 信任行为：应用内触发（新建工作区、终端同步）的浮层、决策与续作/回退。
+//!
+//! 启动进入的信任门在系统控制台完成（进入 TUI 前，见 `db::service::ensure_startup_trust`），
+//! 不经过本模块的浮层。
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -29,7 +32,7 @@ pub fn resolve_trust_check(
     }
 }
 
-/// 信任浮层决策：授予则记录信任并续作；拒绝按场景回退（启动退出 / 取消并提示）。
+/// 信任浮层决策：授予则记录信任并续作；拒绝则取消操作并提示。
 pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
     let Some(Overlay::TrustWorkspace(trust)) = state.overlay.take() else {
         return;
@@ -44,11 +47,6 @@ pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
         return;
     }
     match trust.trigger {
-        TrustTrigger::Startup => {
-            // 冷启动拒绝信任：干净退出，由入口恢复终端后输出提示。
-            state.trust_refused = true;
-            state.should_quit = true;
-        }
         TrustTrigger::CreateWorkspace { .. } => {
             toast_cancelled(state, text::TOAST_CREATE_CANCELLED)
         }
@@ -56,10 +54,9 @@ pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
     }
 }
 
-/// 信任授予后的续作：启动直接放行、新建创建工作区、同步打开二次确认。
+/// 信任授予后的续作：新建创建工作区、同步打开二次确认。
 fn resume_trust(state: &mut AppState, trigger: TrustTrigger) {
     match trigger {
-        TrustTrigger::Startup => {}
         TrustTrigger::CreateWorkspace { cwd } => {
             super::create_workspace_with_cwd(state, Some(cwd));
         }

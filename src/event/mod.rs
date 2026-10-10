@@ -62,18 +62,26 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// 空闲等待：只由输入或 PTY 输出唤醒。
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
 
-/// 同步入口：构造 tokio 运行时并阻塞到主循环结束。
-pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+/// 同步入口：构造 tokio 运行时并阻塞到主循环结束；持久化服务由入口构造并移交。
+pub fn run(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+    mut persistence: Persistence,
+) -> io::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(run_loop(tui, state, config))
+    runtime.block_on(run_loop(tui, state, config, &mut persistence))
 }
 
-async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+async fn run_loop(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+    persistence: &mut Persistence,
+) -> io::Result<()> {
     initialize_layout_widths(tui, state, config)?;
-    // 持久化服务：打开数据库、执行启动信任检查；库不可用时降级为无持久化。
-    let mut persistence = Persistence::start(state);
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();

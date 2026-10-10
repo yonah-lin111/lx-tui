@@ -36,7 +36,9 @@
 - 右键菜单与模态尺寸按终端显示列（`UnicodeWidthStr::width`）计算，正常窗口下菜单项与标题完整显示、不做省略，仅在物理宽度不足时夹取到屏幕宽度。
 - worktree 对话框：居中模态；顶部搜索行（占位 `filter worktrees`，输入即过滤名字/目录名/路径/状态，不区分大小写）、分隔线、两行条目（上行 `› 分支名或目录名` + 右对齐状态 `open` / `detached` / `root`，下行缩进路径）与底部按钮 `[open enter] [cancel esc]`；`↑/↓` 在过滤结果内移动（不循环），`Enter` / `[open]` 打开选中项（已作为工作区打开时直接切换、不重复创建；否则以该 checkout 为 cwd 新建工作区并带入 git 元数据），`Esc` / `[cancel]` / 点击弹窗外关闭；条目点击高亮，加载中显示 `loading…`、失败显示 `failed to list worktrees`、空列表显示 `no worktrees found`；列表查询在后台执行，不阻塞事件循环。
 - 需要确认的破坏性操作（关闭窗格等）必须二次确认。
-- 工作区信任浮层：居中模态；标题 `trust workspace`，问题行 `Do you trust the files in this folder?`、高亮展示目标路径（超宽按显示列中间省略）与底部按钮 `[trust & open enter]` / `[don't trust esc]`；`Enter` 或点击 `[trust & open]` 信任并继续（路径以 `is_trusted = 1` 录入本地库），`Esc` 或点击按钮之外拒绝并回退：启动进入时恢复终端并输出提示后以 0 退出，新建工作区时取消创建、终端同步时取消同步（均保留原状态并 Toast 告警）。未信任目录启动 `lx`、显式路径新建工作区与终端右键 `Sync ws to terminal path` 触发前都会先做信任检查；已信任路径直接放行，本地库不可用时视为放行（不因持久化故障阻断应用）。
+- 工作区信任：分两层实现。
+  - 启动信任页（进入应用前，系统控制台）：`lx` 在未信任目录启动时不进入应用，先在普通控制台打印标题 `lx-tui workspace trust`、工作区路径与说明 `lx-tui will be able to read, edit and execute files here.`，并询问 `Do you trust the files in this folder? [y/N]`；输入 `y`/`yes`（大小写不敏感）放行并录入本地库，其余输入（含空行）拒绝：输出 `workspace not trusted; exiting` 并以 0 退出，不进入应用。stdin 非终端或本地库不可用时按拒绝/放行降级（库不可用视为放行，不因持久化故障阻断应用）。
+  - 应用内信任浮层：居中模态；标题 `trust workspace`，问题行 `Do you trust the files in this folder?`、高亮展示目标路径（超宽按显示列中间省略）与底部按钮 `[trust & open enter]` / `[don't trust esc]`；`Enter` 或点击 `[trust & open]` 信任并继续（路径以 `is_trusted = 1` 录入本地库），`Esc` 或点击按钮之外拒绝：新建工作区时取消创建、终端同步时取消同步（均保留原状态并 Toast 告警）。显式路径新建工作区与终端右键 `Sync ws to terminal path` 触发前都会先做信任检查，已信任路径直接放行。
 
 ## 配色与样式
 

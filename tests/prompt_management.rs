@@ -1,15 +1,14 @@
-//! 端到端集成测试：工作区信任、提示词文件夹嵌套约束、条目编辑持久化与工作区隔离。
+//! 端到端集成测试：启动信任门、应用内信任弹窗、文件夹嵌套约束、条目持久化与工作区隔离。
 //!
-//! 全程驱动公开的 app 行为与持久化服务（不依赖终端）：
-//! 未信任工作区 → 确认信任 → 新建文件夹 → 嵌套子文件夹 → 第三层被阻止 →
-//! 新建提示词 → 编辑并保存 → 重开数据库验证持久化 → 工作区之间树相互隔离。
+//! 启动信任门（进入应用前的系统控制台询问）由 `tests/trust_prompt.rs` 在真实 PTY 中覆盖；
+//! 本用例覆盖已放行后的完整业务流与应用内信任弹窗（新建未信任工作区）。
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lx_tui::app::actions::{EditorCommand, OverlayKey};
-use lx_tui::app::overlay::{MenuCommand, Overlay, OverlayTarget};
+use lx_tui::app::overlay::{MenuCommand, NewWorkspace, Overlay, OverlayTarget, TextInput};
 use lx_tui::app::prompt::PromptMode;
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
@@ -79,7 +78,7 @@ fn draw_tree(state: &AppState) {
 }
 
 #[test]
-fn trust_folder_nesting_prompt_persistence_and_workspace_isolation() {
+fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     let root = temp_root("main");
     let workspace_a = root.join("workspace-a");
     let workspace_b = root.join("workspace-b");
@@ -89,26 +88,43 @@ fn trust_folder_nesting_prompt_persistence_and_workspace_isolation() {
     let workspace_b = std::fs::canonicalize(&workspace_b).expect("canonical b");
     let db_path = root.join("db").join("lx.db");
 
-    // 1. 未信任的新工作区：启动即弹出信任浮层，拒绝/信任前的树不可用。
+    // 1. 启动信任门放行工作区 a（控制台询问由 tests/trust_prompt.rs 覆盖）。
     let database = Database::open(&db_path).expect("db opens");
+    database
+        .trust_workspace(&workspace_a, "workspace-a")
+        .expect("a trusted");
     let mut state = state_with_cwd(&workspace_a);
-    let mut service = Persistence::with_database(&mut state, database);
+    let mut service = Persistence::with_database(database);
+    assert!(service.ensure_startup_trust(&mut state));
+    assert!(state.overlay.is_none());
+
+    // 2. 应用内信任弹窗：显式新建未信任工作区 b → 弹信任浮层 → 确认后创建并入库。
+    state.overlay = Some(Overlay::NewWorkspace(NewWorkspace {
+        input: TextInput::new(workspace_b.to_string_lossy()),
+    }));
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(state.overlay.is_none(), "新建弹窗先关闭");
+    service.pump(&mut state);
     assert!(
         matches!(state.overlay, Some(Overlay::TrustWorkspace(_))),
-        "未信任启动弹信任浮层"
+        "未信任路径弹信任浮层"
     );
-
-    // 2. 确认信任：录入 DB 并继续。
+    assert_eq!(state.workspaces.len(), 1, "确认前不创建");
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
-    assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 2, "信任后创建工作区");
+    assert_eq!(
+        state.workspaces[1].cwd.as_deref(),
+        Some(workspace_b.as_path())
+    );
     let reader = Database::open(&db_path).expect("reader opens");
     assert!(
-        reader.is_trusted(&workspace_a).expect("trust query"),
+        reader.is_trusted(&workspace_b).expect("trust query"),
         "信任已持久化"
     );
 
-    // 3. 切到树视图，空白菜单新建文件夹。
+    // 3. 回到工作区 a，切到树视图，空白菜单新建文件夹。
+    update::switch_workspace(&mut state, 0);
     update::show_prompt_tree(&mut state);
     assert_eq!(state.active_workspace().prompt_panel.mode, PromptMode::Tree);
     run_menu_command(
@@ -182,7 +198,7 @@ fn trust_folder_nesting_prompt_persistence_and_workspace_isolation() {
         Some(Some(sub_folder))
     );
 
-    // 7. 编辑内容并保存（Esc 返回树视图提交）；DB 收到内容。
+    // 7. 编辑内容并保存（返回树视图提交）；DB 收到内容。
     update::apply_editor(&mut state, EditorCommand::InsertText("hello world".into()));
     update::show_prompt_tree(&mut state);
     service.pump(&mut state);
@@ -190,13 +206,9 @@ fn trust_folder_nesting_prompt_persistence_and_workspace_isolation() {
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].content, "hello world");
 
-    // 8. 工作区隔离：新建第二个工作区，树独立加载且为空；a 的条目不受影响。
-    update::create_workspace_with_cwd(&mut state, Some(workspace_b.clone()));
+    // 8. 工作区隔离：切到 b，树独立加载且为空；在 b 新建条目互不影响。
+    update::switch_workspace(&mut state, 1);
     service.pump(&mut state);
-    assert_eq!(
-        state.active_workspace().cwd.as_deref(),
-        Some(workspace_b.as_path())
-    );
     assert!(
         state
             .active_workspace()
@@ -208,7 +220,6 @@ fn trust_folder_nesting_prompt_persistence_and_workspace_isolation() {
     );
     update::create_prompt(&mut state, None);
     service.pump(&mut state);
-    // 切回 a：树与内容原样。
     update::switch_workspace(&mut state, 0);
     service.pump(&mut state);
     assert_eq!(state.active_workspace().prompt_panel.tree.items().len(), 1);
@@ -231,7 +242,8 @@ fn trust_folder_nesting_prompt_persistence_and_workspace_isolation() {
     drop(state);
     let database = Database::open(&db_path).expect("reopen db");
     let mut reloaded = state_with_cwd(&workspace_a);
-    let mut service = Persistence::with_database(&mut reloaded, database);
+    let mut service = Persistence::with_database(database);
+    assert!(service.ensure_startup_trust(&mut reloaded));
     service.pump(&mut reloaded);
     let items = reloaded.active_workspace().prompt_panel.tree.items();
     assert_eq!(items.len(), 1, "重启后提示词持久化");

@@ -113,8 +113,6 @@ pub struct AppState {
     pub overlay: Option<Overlay>,
     /// 待执行的效应出箱（DB 读写与剪贴板）；由持久化服务取走执行。
     pub effects: Vec<Effect>,
-    /// 启动信任被拒绝：恢复终端后由入口输出提示并以 0 退出。
-    pub trust_refused: bool,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
     pub git_requests: Vec<PathBuf>,
     /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
@@ -464,7 +462,6 @@ impl AppState {
             workspace_dragging: false,
             overlay: None,
             effects: Vec::new(),
-            trust_refused: false,
             git_requests: Vec::new(),
             collapsed_groups: Vec::new(),
         }

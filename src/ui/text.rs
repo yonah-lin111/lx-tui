@@ -209,7 +209,12 @@ pub const TRUST_WORKSPACE_TITLE: &str = "trust workspace";
 pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
 pub const BUTTON_TRUST: &str = "[trust & open enter]";
 pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
-/// 启动拒绝信任后的终端提示（恢复终端后由入口输出）。
+/// 启动信任页（系统控制台，进入应用前）：标题、路径前缀、说明与应答提示。
+pub const TRUST_CONSOLE_TITLE: &str = "lx-tui workspace trust";
+pub const TRUST_CONSOLE_PATH_PREFIX: &str = "path";
+pub const TRUST_CONSOLE_HINT: &str = "lx-tui will be able to read, edit and execute files here.";
+pub const TRUST_CONSOLE_ANSWER: &str = "[y/N]";
+/// 启动拒绝信任后的终端提示（不进入应用，直接退出）。
 pub const TRUST_REFUSED_MESSAGE: &str = "workspace not trusted; exiting";
 
 /// worktree 对话框：标题、搜索占位、状态行与条目标记。

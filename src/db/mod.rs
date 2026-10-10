@@ -141,6 +141,8 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // 多实例并发（多个 lx 进程/测试）时等待短暂锁，而不是立刻失败。
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
         let database = Self { conn };
         database.migrate()?;

@@ -60,7 +60,9 @@ fn trust_overlay_renders_question_path_and_buttons() {
     let mut state = AppState::demo();
     state.overlay = Some(Overlay::TrustWorkspace(TrustWorkspace {
         path: PathBuf::from("/tmp/trusted-workspace"),
-        trigger: crate::app::trust::TrustTrigger::Startup,
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
+            cwd: PathBuf::from("/tmp/trusted-workspace"),
+        },
     }));
     let (lines, cursor) = draw_overlay(&state);
     let body = lines.join("\n");

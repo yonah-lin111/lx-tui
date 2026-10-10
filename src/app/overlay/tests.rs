@@ -98,7 +98,9 @@ fn overlay_kind_reports_variant() {
     assert_eq!(worktree.kind(), OverlayKind::WorktreeOpen);
     let trust = Overlay::TrustWorkspace(TrustWorkspace {
         path: PathBuf::from("/tmp/ws"),
-        trigger: crate::app::trust::TrustTrigger::Startup,
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
+            cwd: PathBuf::from("/tmp/ws"),
+        },
     });
     assert_eq!(trust.kind(), OverlayKind::TrustWorkspace);
 }

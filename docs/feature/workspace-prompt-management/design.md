@@ -29,7 +29,7 @@
 | # | 决策项 | 备选方案 | 确认结论 | 状态 |
 |---|--------|----------|----------|------|
 | 1 | **右栏 Prompt 交互架构** | A. 顶部树/下方编辑（上下分栏）<br>B. 树视图与编辑视图模式切换<br>C. 左右分栏 | **B. 树视图与编辑视图模式切换（List/Tree View ↔ Editor View）**：TUI 宽度宝贵（默认 ~50 列），全宽切换、回车进入编辑、Esc/点击顶栏返回树最舒适 | **已确认** |
-| 2 | **工作区启动不信任回退** | A. 直接退出程序（Exit 0/1）<br>B. 回退至 HOME 或上一信任工作区<br>C. 只读空闲工作区 | **A. 直接退出程序**（严格遵循 Claude Code 行为：恢复终端并 exit 0） | **已确认** |
+| 2 | **工作区启动不信任回退** | A. 直接退出程序（Exit 0/1）<br>B. 回退至 HOME 或上一信任工作区<br>C. 只读空闲工作区 | **A. 不进入应用，先在系统控制台完成信任页**（用户补充要求，对齐 Claude Code：未信任目录启动时先显示信任询问与路径，确认 `y` 才进入 TUI；拒绝输出提示并以 0 退出，全程不进入应用） | **已确认** |
 | 3 | **新建/同步不信任回退** | A. 关闭弹窗并放弃创建/同步<br>B. 保留原工作区并 Toast 提示 | **A. 关闭弹窗并放弃创建/同步，保留原工作区状态并给出 Toast 警告** | **已确认** |
 | 4 | **环境识别策略** | A. 编译期 `cfg!(debug_assertions)`<br>B. 环境变量 `LX_ENV` / `LX_TUI_ENV`<br>C. 组合策略：环境变量优先，缺省回退 debug 门控 | **C. 组合策略**：开发运行 `cargo run` 自动走 dev，生产打包或显式配置可覆盖 | **已确认** |
 | 5 | **数据库表名与迁移方案** | A. 沿用 lx-agent 的 project 表名<br>B. 改用 workspace 表名（workspace, workspace_folder, workspace_prompt） | **B. 改用 workspace 语义**（workspace, workspace_folder, workspace_prompt），原生 PRAGMA user_version 迁移 | **已确认** |
@@ -105,17 +105,21 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 
 ### 3.2 工作区信任模型（`src/app/trust.rs`）
 
-1. **信任检验逻辑**：
-   - 计算真实规范化路径 `canonicalize(cwd)`；
-   - 查询 `project` 表中 `path == target_path` 且 `is_trusted == 1`；
-   - 已信任：直接放行；
-   - 未信任：触发 `Overlay::TrustWorkspace(TrustWorkspaceRequest)` 浮层。
-2. **浮层交互**：
-   - 模态对话框展示：标题 `Trust Workspace`，文案 `Do you trust the files in this folder? [path]`；
-   - 操作按钮：`[Trust & Open]`（确认信任并录入 DB）与 `[Don't Trust]`（拒绝并回退）。
+> 实施补充（用户要求）：启动信任改为**进入应用前**在系统控制台完成；应用内触发（新建工作区 / 终端同步）保持模态浮层。
+
+1. **启动信任页（控制台，`db::service::ensure_startup_trust`，在 `Tui::init` 之前）**：
+   - 计算真实规范化路径 `canonicalize(cwd)`；查询 `workspace` 表中 `path == target_path` 且 `is_trusted == 1`；
+   - 已信任：直接进入应用；
+   - 未信任：在普通控制台打印标题、路径与说明，询问 `Do you trust the files in this folder? [y/N]`；
+     `y`/`yes`（大小写不敏感）→ 录入 DB 并进入应用；其余输入 → 输出提示、exit 0，**不进入应用**；
+   - stdin 非终端视为拒绝；数据库不可用降级放行（不阻断应用）。
+2. **应用内信任浮层（新建工作区 / 终端同步触发）**：
+   - `Overlay::TrustWorkspace(TrustWorkspace)`：标题 `trust workspace`，问题 `Do you trust the files in this folder?`，
+     路径高亮（中间省略）与按钮 `[trust & open enter]` / `[don't trust esc]`；
+   - `Enter` 信任并录入 DB 后续作；`Esc`/点击按钮之外拒绝。
 3. **回退行为**：
-   - 应用冷启动：拒绝信任直接恢复终端并退出，输出提示信息；
-   - 新建工作区：关闭浮层，放弃新建，保持当前聚焦工作区；
+   - 启动（控制台页）：拒绝输出 `workspace not trusted; exiting` 并以 0 退出，不进入应用；
+   - 新建工作区：关闭浮层，放弃新建，保持当前聚焦工作区并 Toast 提示；
    - 终端同步 cwd：关闭浮层，保留原工作区 cwd 不动，Toast 提示“Workspace sync cancelled”。
 
 ### 3.3 Prompt 管理器状态模型（`src/app/prompt/` 与 `src/app/state.rs`）

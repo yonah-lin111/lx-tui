@@ -108,18 +108,6 @@ fn grant_trust_records_and_resumes_creation() {
 }
 
 #[test]
-fn refuse_on_startup_quits_cleanly() {
-    let path = workspace_dir("startup-refuse");
-    let mut state = AppState::demo();
-    open_trust_dialog(&mut state, path, TrustTrigger::Startup);
-    apply_overlay_key(&mut state, OverlayKey::Esc);
-    assert!(state.should_quit);
-    assert!(state.trust_refused);
-    assert!(state.overlay.is_none());
-    assert!(state.effects.is_empty(), "拒绝不写库");
-}
-
-#[test]
 fn refuse_on_sync_cancels_with_toast() {
     let path = workspace_dir("sync-refuse");
     let mut state = AppState::demo();
