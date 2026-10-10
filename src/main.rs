@@ -16,7 +16,7 @@ fn main() {
     }
 }
 
-/// 启动编排：日志 -> 配置 -> 终端 -> 信任门 -> 事件循环。
+/// 启动编排：日志 -> 配置 -> 信任页（行内）-> 终端 -> 事件循环。
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing()?;
     tracing::info!("lx-tui starting");
@@ -24,20 +24,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
     let mut state = AppState::demo();
     let persistence = Persistence::start();
-    let mut tui = Tui::init()?;
-    // 启动信任门：未信任工作区先显示信任页（不进入应用）；拒绝则不进入应用。
-    let startup = event::startup_trust(&mut tui, &persistence, &mut state);
-    let refused = matches!(startup, Ok(false));
-    let result = match startup {
-        Ok(true) => event::run(&mut tui, &mut state, &config, persistence),
-        Ok(false) => Ok(()),
-        Err(error) => Err(error),
-    };
-    tui.restore()?;
-    if refused {
+    // 启动信任门：未信任时先在当前终端屏幕（行内）显示信任页；拒绝则不进入应用。
+    if !event::startup_trust(&persistence, &mut state)? {
         eprintln!("lx-tui: {}", lx_tui::ui::text::TRUST_REFUSED_MESSAGE);
         return Ok(());
     }
+    let mut tui = Tui::init()?;
+    let result = event::run(&mut tui, &mut state, &config, persistence);
+    tui.restore()?;
     result?;
 
     tracing::info!("lx-tui stopped");

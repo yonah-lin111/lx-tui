@@ -14,7 +14,7 @@
 
 ### 2. 工作区信任机制（`src/app/` 与 `src/ui/overlay.rs`）
 - [x] 定义 `OverlayKind::TrustWorkspace` 与 `Overlay::TrustWorkspace` 状态结构体
-- [x] `lx` 启动时增加工作区信任门：未信任不进入应用，先显示独立信任页（logo + 边框对话框 + `Yes, proceed`/`No, exit` 键鼠选择），选择 No 输出提示并退出；已信任直接进入
+- [x] `lx` 启动时增加工作区信任门：未信任先在当前终端行内显示信任页（logo + 边框对话框 + `No, exit`（默认）/`Yes, I trust this folder` 键鼠选择），选择 No 清屏输出提示并以 0 退出、不进入应用；已信任直接进入
 - [x] 新建工作区弹窗确认后增加信任检测：未信任触发信任浮层；拒绝则取消创建
 - [x] 终端右键菜单同步按钮触发前增加信任检测：未信任触发信任浮层；拒绝则取消同步
 - [x] `ui/overlay.rs` 渲染信任模态框（标题、路径高亮、`[Trust & Open]`、`[Don't Trust]` 按钮）
@@ -74,14 +74,16 @@
 
 ## 补充修订（用户要求）
 
-- 启动信任行为调整：`lx` 在未信任目录启动时**不进入应用**，先显示独立信任页（参考 Claude Code）：
-  LX 像素 logo + 圆角边框对话框（标题 / 问题 / 中间省略的路径高亮 / 说明）+ `Yes, proceed` / `No, exit`
-  两个可选项与键鼠操作（`↑/↓` 或鼠标悬停切换、`Enter` / 左键点击确认、`Esc` 取消、`y`/`n` 快捷选择）；
-  选择 No 输出 `workspace not trusted; exiting` 后以 0 退出。
+- 启动信任行为调整：`lx` 在未信任目录启动时**不进入应用、不进入备用屏幕**，先在当前终端屏幕
+  **行内**显示信任页（参考 Claude Code）：LX 像素 logo + 圆角边框对话框（`Accessing workspace:` /
+  中间省略的路径高亮 / `Quick safety check:` 安全提示 / 能力说明）+ `No, exit`（默认选中）与
+  `Yes, I trust this folder` 两个可选项与键鼠操作（`↑/↓` 或鼠标悬停切换、`Enter` / 左键点击确认、
+  `Esc` 取消、`y`/`n` 快捷选择）；选择 No 清屏后输出 `workspace not trusted; exiting` 并以 0 退出。
   应用内部触发（显式路径新建工作区、终端右键同步）保持 `Overlay::TrustWorkspace` 弹窗；
   启动信任门由 `event::startup_trust` 在 `Tui::init` 之后、主循环之前执行（独立信任页小循环），
   `db::service::Persistence::{untrusted_startup_path, trust_path}` 提供查询与登记。
 - 新增真实 PTY 集成测试 `tests/trust_prompt.rs`：未信任目录启动先显示信任页，
-  覆盖 `y` 进入应用、`n`/方向键选中 No/鼠标点击 No 不进入应用并退出、鼠标点击 Yes 进入应用；`tests/prompt_management.rs` 改为覆盖应用内信任弹窗
+  覆盖 `y` 进入应用、默认 `No` 回车退出、方向键切到 `Yes` 进入应用、鼠标点击 No 退出 / Yes 进入应用，
+  并断言回答前不进入备用屏（未打开应用）；`tests/prompt_management.rs` 改为覆盖应用内信任弹窗
   （新建未信任工作区 → 弹窗确认 → 创建并入库）。
 - `Database::open` 增加 5 秒 `busy_timeout`，提升多实例并发下的健壮性。

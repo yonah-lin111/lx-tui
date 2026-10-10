@@ -24,13 +24,21 @@ const LOGO_GAP: u16 = 1;
 /// 对话框内容行语义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineKind {
-    Question,
+    /// `Accessing workspace:` 标题行。
+    Heading,
+    /// 目标路径（accent 高亮）。
     Path,
+    /// 安全提示段落；`Quick safety check:` 前缀加粗。
+    Safety,
+    /// 能力说明。
     Hint,
     Option(usize),
     Footer,
     Blank,
 }
+
+/// 安全提示前缀；渲染时加粗强调。
+const SAFETY_PREFIX: &str = "Quick safety check:";
 
 /// 一行内容：语义与最终文本（Path 行只存路径值，渲染时补前缀）。
 #[derive(Debug)]
@@ -48,20 +56,28 @@ pub struct TrustLayout {
     lines: Vec<DialogLine>,
 }
 
-/// 按屏幕与路径计算信任页布局；内容放不下时逐级降级。
+/// 按屏幕与路径计算信任页布局；内容放不下时逐级降级
+/// （优先保留标题、路径与选项）：省略说明 → 空行 → 安全提示 → 页脚。
 pub fn layout(screen: Rect, path: &Path) -> TrustLayout {
     let width = DIALOG_WIDTH.min(screen.width).max(4);
     let text_width = usize::from(width.saturating_sub(2 + DIALOG_PADDING)).max(1);
     let path_text = path.display().to_string();
 
-    let mut lines = build_lines(&path_text, text_width, true, true);
+    // 降级档位：(说明, 空行, 安全提示, 页脚)。
+    const CONFIGS: [(bool, bool, bool, bool); 5] = [
+        (true, true, true, true),
+        (false, true, true, true),
+        (false, false, true, true),
+        (false, false, false, true),
+        (false, false, false, false),
+    ];
+    let mut lines = build_lines(&path_text, text_width, true, true, true, true);
     let mut height = lines.len() as u16 + 2;
-    if height > screen.height {
-        lines = build_lines(&path_text, text_width, false, true);
-        height = lines.len() as u16 + 2;
-    }
-    if height > screen.height {
-        lines = build_lines(&path_text, text_width, false, false);
+    for (hint, blanks, safety, footer) in CONFIGS {
+        if height <= screen.height {
+            break;
+        }
+        lines = build_lines(&path_text, text_width, hint, blanks, safety, footer);
         height = lines.len() as u16 + 2;
     }
     let height = height.min(screen.height);
@@ -142,7 +158,7 @@ pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
         let rect = Rect::new(inner.x + 1, y, row_width, 1);
         match line.kind {
             LineKind::Blank => {}
-            LineKind::Question => {
+            LineKind::Heading => {
                 frame.render_widget(
                     Paragraph::new(Span::styled(line.text.clone(), style::strong())),
                     rect,
@@ -150,15 +166,19 @@ pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
             }
             LineKind::Path => {
                 frame.render_widget(
-                    Paragraph::new(Line::from(vec![
-                        Span::styled(
-                            format!("{}: ", text::TRUST_CONSOLE_PATH_PREFIX),
-                            style::muted(),
-                        ),
-                        Span::styled(line.text.clone(), style::accent()),
-                    ])),
+                    Paragraph::new(Span::styled(line.text.clone(), style::accent())),
                     rect,
                 );
+            }
+            LineKind::Safety => {
+                let spans = match line.text.strip_prefix(SAFETY_PREFIX) {
+                    Some(rest) => Line::from(vec![
+                        Span::styled(SAFETY_PREFIX, style::strong()),
+                        Span::styled(rest.to_string(), style::text()),
+                    ]),
+                    None => Line::from(Span::styled(line.text.clone(), style::text())),
+                };
+                frame.render_widget(Paragraph::new(spans), rect);
             }
             LineKind::Hint => {
                 frame.render_widget(
@@ -196,41 +216,54 @@ pub fn render(frame: &mut Frame<'_>, layout: &TrustLayout, selected: usize) {
     }
 }
 
-/// 构建内容行：问题与说明按宽度换行；`hint`/`blanks` 为降级开关。
-fn build_lines(path: &str, width: usize, hint: bool, blanks: bool) -> Vec<DialogLine> {
+/// 构建内容行：标题/路径/安全提示/说明/选项/页脚；四个开关控制降级。
+fn build_lines(
+    path: &str,
+    width: usize,
+    hint: bool,
+    blanks: bool,
+    safety: bool,
+    footer: bool,
+) -> Vec<DialogLine> {
     let mut lines = Vec::new();
-    for text in wrap_text(text::TRUST_WORKSPACE_QUESTION, width) {
-        lines.push(DialogLine {
-            kind: LineKind::Question,
-            text,
-        });
-    }
-    push_blank(&mut lines, blanks);
-    let prefix_width = text::TRUST_CONSOLE_PATH_PREFIX.width() + 2;
     lines.push(DialogLine {
-        kind: LineKind::Path,
-        text: text::ellipsize_middle(path, width.saturating_sub(prefix_width)),
+        kind: LineKind::Heading,
+        text: text::TRUST_CONSOLE_HEADING.to_string(),
     });
     push_blank(&mut lines, blanks);
+    lines.push(DialogLine {
+        kind: LineKind::Path,
+        text: text::ellipsize_middle(path, width),
+    });
+    if safety {
+        push_blank(&mut lines, blanks);
+        for text in wrap_text(text::TRUST_CONSOLE_SAFETY, width) {
+            lines.push(DialogLine {
+                kind: LineKind::Safety,
+                text,
+            });
+        }
+    }
     if hint {
+        push_blank(&mut lines, blanks);
         for text in wrap_text(text::TRUST_CONSOLE_HINT, width) {
             lines.push(DialogLine {
                 kind: LineKind::Hint,
                 text,
             });
         }
-        push_blank(&mut lines, blanks);
     }
+    push_blank(&mut lines, blanks);
     lines.push(DialogLine {
         kind: LineKind::Option(0),
-        text: text::TRUST_OPTION_YES.to_string(),
+        text: text::TRUST_OPTION_NO.to_string(),
     });
     lines.push(DialogLine {
         kind: LineKind::Option(1),
-        text: text::TRUST_OPTION_NO.to_string(),
+        text: text::TRUST_OPTION_YES.to_string(),
     });
-    push_blank(&mut lines, blanks);
-    if text::TRUST_CONSOLE_FOOTER.width() <= width {
+    if footer && text::TRUST_CONSOLE_FOOTER.width() <= width {
+        push_blank(&mut lines, blanks);
         lines.push(DialogLine {
             kind: LineKind::Footer,
             text: text::TRUST_CONSOLE_FOOTER.to_string(),

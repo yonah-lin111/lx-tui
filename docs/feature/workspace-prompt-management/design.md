@@ -105,15 +105,17 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 
 ### 3.2 工作区信任模型（`src/app/trust.rs`）
 
-> 实施补充（用户要求）：启动信任改为**进入应用前**显示独立信任页（进入备用屏幕但**不进入主界面**，参考 Claude Code）；应用内触发（新建工作区 / 终端同步）保持模态浮层。
+> 实施补充（用户要求）：启动信任改为**进入应用前在当前终端屏幕行内显示信任页**（不进入备用屏幕、不进入主界面，对齐 Claude Code）；应用内触发（新建工作区 / 终端同步）保持模态浮层。
 
-1. **启动信任页（`event::startup_trust`，在 `Tui::init` 之后、主事件循环之前）**：
+1. **启动信任页（`event::startup_trust`，主事件循环之前、行内会话 `Tui::init_inline`）**：
    - 计算真实规范化路径 `canonicalize(cwd)`；查询 `workspace` 表中 `path == target_path` 且 `is_trusted == 1`；
-   - 已信任：直接进入应用；
-   - 未信任：显示独立信任页：LX 像素 logo + 圆角边框对话框（标题 `lx-tui workspace trust` /
-     `Do you trust the files in this folder?` / `path:` 高亮路径 / 说明文案 / `Yes, proceed` 与 `No, exit`
-     两个可选项 / 键鼠页脚）；`↑/↓` 或鼠标悬停切换、`Enter` 或左键点击确认、`Esc` 取消、`y`/`n` 快捷选择；
-   - 选择 `Yes`：录入 DB 并进入应用；选择 `No`：输出 `workspace not trusted; exiting`、exit 0，**不进入应用**；
+   - 已信任：直接进入应用（不进入任何会话）；
+   - 未信任：在当前终端屏幕行内显示信任页：LX 像素 logo + 圆角边框对话框（标题 `lx-tui workspace trust` /
+     `Accessing workspace:` / accent 路径 / `Quick safety check:` 安全提示 / 能力说明 /
+     `No, exit`（默认选中）与 `Yes, I trust this folder` 两个可选项 / 键鼠页脚）；
+     `↑/↓` 或鼠标悬停切换、`Enter` 或左键点击确认、`Esc` 取消、`y`/`n` 快捷选择；
+   - 选择 `Yes`：清屏、录入 DB 并进入应用（此后才进入备用屏）；选择 `No`：清屏后输出
+     `workspace not trusted; exiting`、exit 0，**不进入应用**；
    - 数据库不可用降级放行（不阻断应用）。
 2. **应用内信任浮层（新建工作区 / 终端同步触发）**：
    - `Overlay::TrustWorkspace(TrustWorkspace)`：标题 `trust workspace`，问题 `Do you trust the files in this folder?`，
@@ -168,7 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 
 ## 5. 验收标准
 
-1. `lx` 在未信任目录启动时弹出信任对话框，选信任则存库并正常进入；选不信任则干净退出终端。
+1. `lx` 在未信任目录启动时先在当前终端行内显示信任页（不进入应用），选 `Yes` 存库并进入应用；选 `No` 清屏提示并干净退出（exit 0）。
 2. 新建工作区与终端同步右键菜单同样执行信任校验；拒绝时干净回退，状态无残留。
 3. 提示词管理正确按当前工作区隔离并持久化至 `~/.lx-t/db/lx.db` 或 `~/.lx-t-dev/db/lx.db`。
 4. 提示词文件夹支持展开/折叠、最大嵌套 2 层、右键菜单功能健全（新建、重命名、删除、状态、复制）。

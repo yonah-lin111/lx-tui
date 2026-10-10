@@ -5,12 +5,12 @@ mod cursor;
 use std::io::{self, Stdout, Write};
 use std::time::{Duration, Instant};
 
-use crossterm::cursor::Show;
+use crossterm::cursor::{MoveTo, Show};
 use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
 use crossterm::execute;
 use crossterm::terminal::{
-    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
-    disable_raw_mode, enable_raw_mode,
+    BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate, EnterAlternateScreen,
+    LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -33,6 +33,8 @@ const CURSOR_BLINK_ON: &[u8] = b"\x1b[?12h";
 pub struct Tui {
     terminal: Terminal<QuietCursor<CrosstermBackend<Stdout>>>,
     restored: bool,
+    /// 是否处于备用屏会话；行内会话（启动信任页）为 false。
+    alternate: bool,
 }
 
 impl Tui {
@@ -50,6 +52,23 @@ impl Tui {
         Ok(Self {
             terminal,
             restored: false,
+            alternate: true,
+        })
+    }
+
+    /// 行内会话：原始模式 + 鼠标上报，不进入备用屏、不改光标闪烁；
+    /// 用于进入应用前的启动信任页（画面显示在当前终端屏幕上）。
+    pub fn init_inline() -> io::Result<Self> {
+        install_panic_hook();
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        crate::platform::enable_mouse_capture(&mut stdout)?;
+        stdout.flush()?;
+        let terminal = Terminal::new(QuietCursor::new(CrosstermBackend::new(stdout)))?;
+        Ok(Self {
+            terminal,
+            restored: false,
+            alternate: false,
         })
     }
 
@@ -78,12 +97,20 @@ impl Tui {
         }
         self.restored = true;
         let _ = crate::platform::set_pointer_shape(crate::platform::PointerShape::Default);
-        restore_terminal(
-            self.terminal.backend_mut(),
-            &mut drain_pending_input,
-            &mut disable_raw_mode,
-        )?;
-        self.terminal.show_cursor()
+        if self.alternate {
+            restore_terminal(
+                self.terminal.backend_mut(),
+                &mut drain_pending_input,
+                &mut disable_raw_mode,
+            )?;
+            self.terminal.show_cursor()
+        } else {
+            restore_inline(
+                self.terminal.backend_mut(),
+                &mut drain_pending_input,
+                &mut disable_raw_mode,
+            )
+        }
     }
 }
 
@@ -101,6 +128,20 @@ fn restore_terminal(
     crate::platform::disable_keyboard_enhancement(writer)?;
     writer.write_all(CURSOR_BLINK_ON)?;
     execute!(writer, LeaveAlternateScreen, DisableBracketedPaste, Show)?;
+    restore_cooked()
+}
+
+/// 行内会话恢复：先关鼠标上报，仍在原始模式下 drain 在途上报，清屏归位并显示光标，
+/// 最后恢复 cooked 模式；屏幕清空避免信任页残留在终端上（进入应用后为备用屏）。
+fn restore_inline(
+    writer: &mut impl Write,
+    drain: &mut dyn FnMut(),
+    restore_cooked: &mut dyn FnMut() -> io::Result<()>,
+) -> io::Result<()> {
+    crate::platform::disable_mouse_capture(writer)?;
+    drain();
+    execute!(writer, Clear(ClearType::All), MoveTo(0, 0), Show)?;
+    writer.flush()?;
     restore_cooked()
 }
 

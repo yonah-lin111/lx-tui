@@ -209,12 +209,15 @@ pub const TRUST_WORKSPACE_TITLE: &str = "trust workspace";
 pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
 pub const BUTTON_TRUST: &str = "[trust & open enter]";
 pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
-/// 启动信任页（系统控制台，进入应用前）：标题、路径前缀、说明、可选项与页脚。
+/// 启动信任页（行内控制台，进入应用前）：标题、标题行、安全提示、说明、可选项与页脚。
 pub const TRUST_CONSOLE_TITLE: &str = "lx-tui workspace trust";
-pub const TRUST_CONSOLE_PATH_PREFIX: &str = "path";
+pub const TRUST_CONSOLE_HEADING: &str = "Accessing workspace:";
+/// 安全提示段落；`:` 前的前缀在渲染时加粗强调。
+pub const TRUST_CONSOLE_SAFETY: &str = "Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, take a moment to review what is in this folder first.";
 pub const TRUST_CONSOLE_HINT: &str = "lx-tui will be able to read, edit and execute files here.";
-pub const TRUST_OPTION_YES: &str = "Yes, proceed";
+/// 可选项：`No, exit` 在前为默认选中；`Yes, I trust this folder` 在后。
 pub const TRUST_OPTION_NO: &str = "No, exit";
+pub const TRUST_OPTION_YES: &str = "Yes, I trust this folder";
 /// 信任页选项选中标记（与侧栏选中行同语义）。
 pub const TRUST_SELECTION_MARKER: &str = "❯";
 pub const TRUST_CONSOLE_FOOTER: &str = "[↑/↓] select  [enter] confirm  [esc] cancel";

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 use super::*;
 
@@ -44,7 +44,7 @@ fn renders_logo_bordered_dialog_and_options() {
     );
     assert!(title_row.contains(text::TRUST_CONSOLE_TITLE), "{title_row}");
 
-    let question = row_text(
+    let heading = row_text(
         &buf,
         Rect::new(
             layout.dialog.x + 1,
@@ -53,33 +53,37 @@ fn renders_logo_bordered_dialog_and_options() {
             1,
         ),
     );
-    assert!(
-        question.contains("Do you trust the files in this folder?"),
-        "{question}"
-    );
+    assert!(heading.contains(text::TRUST_CONSOLE_HEADING), "{heading}");
 
-    assert!(row_text(&buf, layout.options[0]).contains(text::TRUST_OPTION_YES));
-    assert!(row_text(&buf, layout.options[1]).contains(text::TRUST_OPTION_NO));
-
-    // 路径行：值用 accent 高亮。
+    // 路径行整行 accent 高亮（裸路径）；安全提示前缀加粗。
     let mut path_highlighted = false;
+    let mut safety_seen = false;
     for y in layout.dialog.y..layout.dialog.bottom() {
         let row = row_text(&buf, Rect::new(layout.dialog.x, y, layout.dialog.width, 1));
-        if let Some(position) = row.find(text::TRUST_CONSOLE_PATH_PREFIX) {
-            let x = layout.dialog.x
-                + position as u16
-                + text::TRUST_CONSOLE_PATH_PREFIX.len() as u16
-                + 2;
-            assert_eq!(buf[(x, y)].fg, Color::Cyan, "路径值强调色: {row}");
+        if let Some(position) = row.find(PATH) {
+            let x = layout.dialog.x + position as u16;
+            assert_eq!(buf[(x, y)].fg, Color::Cyan, "路径强调色: {row}");
             path_highlighted = true;
-            break;
+        }
+        if let Some(position) = row.find(SAFETY_PREFIX) {
+            let x = layout.dialog.x + position as u16;
+            assert!(
+                buf[(x, y)].modifier.contains(Modifier::BOLD),
+                "安全提示前缀加粗: {row}"
+            );
+            safety_seen = true;
         }
     }
     assert!(path_highlighted, "路径行存在");
+    assert!(safety_seen, "安全提示行存在");
+
+    assert!(row_text(&buf, layout.options[0]).contains(text::TRUST_OPTION_NO));
+    assert!(row_text(&buf, layout.options[1]).contains(text::TRUST_OPTION_YES));
 }
 
 #[test]
-fn selected_option_is_highlighted_with_marker() {
+fn default_selection_is_safe_no_and_highlight_switches() {
+    // 默认选中 `No, exit`（安全默认，对齐 Claude Code）。
     let (buf, layout) = draw(100, 30, 0);
     assert_eq!(
         buf[(layout.options[0].x, layout.options[0].y)].symbol(),
@@ -88,7 +92,7 @@ fn selected_option_is_highlighted_with_marker() {
     assert_eq!(
         buf[(layout.options[0].x, layout.options[0].y)].bg,
         Color::Indexed(240),
-        "选中项整行高亮"
+        "默认选中 No 整行高亮"
     );
     assert_eq!(
         buf[(layout.options[1].x, layout.options[1].y)].symbol(),
@@ -99,7 +103,7 @@ fn selected_option_is_highlighted_with_marker() {
     assert_eq!(
         buf[(layout.options[1].x, layout.options[1].y)].bg,
         Color::Indexed(240),
-        "切换选中"
+        "切换选中 Yes"
     );
     assert_eq!(
         buf[(layout.options[1].x, layout.options[1].y)].symbol(),
@@ -110,12 +114,12 @@ fn selected_option_is_highlighted_with_marker() {
 #[test]
 fn option_at_hits_option_rows_only() {
     let (_, layout) = draw(100, 30, 0);
-    let yes = layout.options[0];
-    let no = layout.options[1];
-    assert_eq!(option_at(&layout, yes.x + 1, yes.y), Some(0));
-    assert_eq!(option_at(&layout, no.x + 1, no.y), Some(1));
+    let no = layout.options[0];
+    let yes = layout.options[1];
+    assert_eq!(option_at(&layout, no.x + 1, no.y), Some(0));
+    assert_eq!(option_at(&layout, yes.x + 1, yes.y), Some(1));
     assert_eq!(option_at(&layout, layout.dialog.x, layout.dialog.y), None);
-    assert_eq!(option_at(&layout, yes.x, no.y + 1), None);
+    assert_eq!(option_at(&layout, no.x, yes.y + 1), None);
 }
 
 #[test]
@@ -132,11 +136,34 @@ fn narrow_screen_degrades_and_stays_inside_screen() {
         ));
         text_joined.push(' ');
     }
-    // 窄屏下问题换行，断言两段子串都出现。
+    // 极小高度下优先保留标题、路径与选项。
     assert!(
-        text_joined.contains("Do you trust the files"),
+        text_joined.contains(text::TRUST_CONSOLE_HEADING),
         "{text_joined}"
     );
-    assert!(text_joined.contains("folder?"), "{text_joined}");
+    assert!(text_joined.contains(PATH), "{text_joined}");
     assert!(text_joined.contains(text::TRUST_OPTION_NO), "{text_joined}");
+    assert!(
+        text_joined.contains(text::TRUST_OPTION_YES),
+        "{text_joined}"
+    );
+}
+
+#[test]
+fn mid_size_screen_keeps_safety_paragraph() {
+    let (buf, layout) = draw(60, 20, 0);
+    assert!(layout.options[1].bottom() <= 20);
+    let mut text_joined = String::new();
+    for y in layout.dialog.y..layout.dialog.bottom() {
+        text_joined.push_str(&row_text(
+            &buf,
+            Rect::new(layout.dialog.x, y, layout.dialog.width, 1),
+        ));
+        text_joined.push(' ');
+    }
+    assert!(text_joined.contains(SAFETY_PREFIX), "{text_joined}");
+    assert!(
+        text_joined.contains("lx-tui will be able to read"),
+        "{text_joined}"
+    );
 }

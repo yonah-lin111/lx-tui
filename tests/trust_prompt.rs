@@ -148,16 +148,25 @@ fn untrusted_startup_shows_console_trust_page_then_enters_on_yes() {
     let (workspace, db_path) = temp_paths("accept");
     let app = App::spawn(&workspace, &db_path);
 
-    // 进入应用前先显示信任页：含路径与询问，且未出现应用界面。
+    // 进入应用前先在当前终端显示信任页：标题、标题行与两个选项，且未出现应用界面。
     assert!(
         app.wait_for("lx-tui workspace trust", WAIT),
-        "控制台信任页先于应用显示"
+        "信任页先于应用显示"
     );
     assert!(
-        app.wait_for("Do you trust the files in this folder?", WAIT),
-        "信任页包含询问"
+        app.wait_for("Accessing workspace:", WAIT),
+        "信任页包含标题行"
+    );
+    assert!(
+        app.wait_for("Yes, I trust this folder", WAIT),
+        "信任页包含选项"
     );
     assert!(!app.screen().contains("placeholder"), "未回答前不进入应用");
+    // 行内显示：回答前不进入备用屏（未“打开应用”）。
+    assert!(
+        !app.raw().windows(8).any(|window| window == b"\x1b[?1049h"),
+        "信任页在普通屏幕行内显示"
+    );
 
     // 输入 y：放行并进入应用。
     app.send(b"y\n");
@@ -172,10 +181,7 @@ fn untrusted_startup_declined_does_not_enter_app() {
     let (workspace, db_path) = temp_paths("decline");
     let mut app = App::spawn(&workspace, &db_path);
 
-    assert!(
-        app.wait_for("Do you trust the files in this folder?", WAIT),
-        "信任页显示"
-    );
+    assert!(app.wait_for("No, exit", WAIT), "信任页显示");
     app.send(b"n\n");
     assert!(app.wait_exit(WAIT), "拒绝后进程退出");
 
@@ -188,26 +194,37 @@ fn untrusted_startup_declined_does_not_enter_app() {
 }
 
 #[test]
-fn arrow_keys_move_selection_and_enter_confirms_no() {
-    let (workspace, db_path) = temp_paths("arrows");
+fn enter_confirms_default_no() {
+    let (workspace, db_path) = temp_paths("default-no");
     let mut app = App::spawn(&workspace, &db_path);
 
-    assert!(app.wait_for("No, exit", WAIT), "信任页显示两个选项");
-    // 默认选中 Yes：下移到 No 并回车 → 拒绝退出。
-    app.send(b"\x1b[B\r");
-    assert!(app.wait_exit(WAIT), "选择 No 后进程退出");
+    assert!(app.wait_for("No, exit", WAIT), "信任页显示默认选项");
+    // 默认选中 No：直接回车 → 拒绝退出。
+    app.send(b"\r");
+    assert!(app.wait_exit(WAIT), "默认 No 回车后进程退出");
     assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
 }
 
 #[test]
-fn mouse_click_selects_option() {
-    let (workspace, db_path) = temp_paths("mouse");
+fn arrow_keys_move_selection_to_yes() {
+    let (workspace, db_path) = temp_paths("arrows");
+    let app = App::spawn(&workspace, &db_path);
+
+    assert!(app.wait_for("No, exit", WAIT), "信任页显示两个选项");
+    // 默认选中 No：下移到 Yes 并回车 → 进入应用。
+    app.send(b"\x1b[B\r");
+    assert!(app.wait_for("placeholder", WAIT), "选择 Yes 后进入应用");
+}
+
+#[test]
+fn mouse_click_no_exits() {
+    let (workspace, db_path) = temp_paths("mouse-no");
     let canonical = std::fs::canonicalize(&workspace).expect("canonical workspace");
     let mut app = App::spawn(&workspace, &db_path);
 
     assert!(app.wait_for("No, exit", WAIT), "信任页显示两个选项");
     let layout = ui::trust::layout(Rect::new(0, 0, COLS, ROWS), &canonical);
-    let no = layout.options[1];
+    let no = layout.options[0];
     // SGR 鼠标左键按下 + 释放（1 基坐标）点击 `No, exit`。
     let x = no.x + 1;
     let y = no.y + 1;
@@ -222,9 +239,12 @@ fn mouse_click_yes_enters_app() {
     let canonical = std::fs::canonicalize(&workspace).expect("canonical workspace");
     let app = App::spawn(&workspace, &db_path);
 
-    assert!(app.wait_for("Yes, proceed", WAIT), "信任页显示两个选项");
+    assert!(
+        app.wait_for("Yes, I trust this folder", WAIT),
+        "信任页显示两个选项"
+    );
     let layout = ui::trust::layout(Rect::new(0, 0, COLS, ROWS), &canonical);
-    let yes = layout.options[0];
+    let yes = layout.options[1];
     let x = yes.x + 1;
     let y = yes.y + 1;
     app.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
