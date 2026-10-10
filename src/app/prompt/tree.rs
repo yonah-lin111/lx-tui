@@ -69,7 +69,7 @@ pub enum PromptRowKind {
     Item,
 }
 
-/// 一行可见节点：种类、在对应列表中的索引与缩进深度（0 或 1）。
+/// 一行可见节点：种类、在对应列表中的索引与缩进深度（0 根层、1 根层文件夹内、2 子文件夹内）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PromptRow {
     pub kind: PromptRowKind,
@@ -229,7 +229,7 @@ impl PromptTree {
                     rows.push(PromptRow {
                         kind: PromptRowKind::Item,
                         index: item_index,
-                        depth: 1,
+                        depth: 2,
                     });
                 }
             }
@@ -402,7 +402,7 @@ impl PromptPanel {
                     rows.push(PromptRow {
                         kind: PromptRowKind::Item,
                         index: item_index,
-                        depth: 1,
+                        depth: 2,
                     });
                 }
             }

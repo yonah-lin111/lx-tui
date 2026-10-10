@@ -7,17 +7,6 @@ use std::path::PathBuf;
 use super::prompt::PromptItemStatus;
 use super::trust::TrustTrigger;
 
-/// 草稿保存目标：现有文件夹（或根层）或先建新文件夹再保存。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DraftTarget {
-    /// `None` 为工作区根层。
-    Folder(Option<i64>),
-    NewFolder {
-        parent_id: Option<i64>,
-        name: String,
-    },
-}
-
 /// 一次待执行的副作用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
@@ -40,10 +29,10 @@ pub enum Effect {
         folder_id: Option<i64>,
         name: String,
     },
-    /// 保存临时草稿为正式条目（可选先建新文件夹）；成功后清空草稿槽位。
+    /// 保存临时草稿为正式条目（写入指定文件夹）；成功后清空草稿槽位。
     SaveDraft {
         workspace: PathBuf,
-        target: DraftTarget,
+        folder_id: Option<i64>,
         name: String,
         content: String,
     },

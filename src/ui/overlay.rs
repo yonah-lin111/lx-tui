@@ -9,9 +9,9 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewWorkspace,
-    Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft, SaveDraftEntry, WorktreeOpen,
-    WorktreeOpenEntry, WorktreeStatus,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewFolder,
+    NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft, SaveDraftEntry,
+    WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
 };
 use crate::app::state::{AppState, tab_label};
 use crate::app::trust::TrustWorkspace;
@@ -21,6 +21,9 @@ use crate::ui::{style, text};
 /// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
 const RENAME_WIDTH: u16 = 40;
 const RENAME_HEIGHT: u16 = 5;
+/// 新建文件夹浮层尺寸（列，行）：输入行、空行与按钮行（容纳三个按钮）。
+const NEW_FOLDER_WIDTH: u16 = 42;
+const NEW_FOLDER_HEIGHT: u16 = 5;
 /// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
 const NEW_WORKSPACE_WIDTH: u16 = 44;
 const NEW_WORKSPACE_HEIGHT: u16 = 5;
@@ -40,6 +43,8 @@ const RENAME_BUTTON_ROW: u16 = 2;
 const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
 const CONFIRM_BUTTON_ROW: u16 = 1;
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+const NEW_FOLDER_BUTTONS: [&str; 3] =
+    [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const NEW_WORKSPACE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
@@ -59,6 +64,14 @@ pub enum RenameButton {
 /// 新建工作区浮层按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewWorkspaceButton {
+    Create,
+    Clear,
+    Cancel,
+}
+
+/// 新建文件夹浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewFolderButton {
     Create,
     Clear,
     Cancel,
@@ -221,6 +234,31 @@ pub fn new_workspace_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, NEW_WORKSPACE_WIDTH, NEW_WORKSPACE_HEIGHT)
 }
 
+/// 新建文件夹浮层几何。
+pub fn new_folder_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, NEW_FOLDER_WIDTH, NEW_FOLDER_HEIGHT)
+}
+
+/// 命中新建文件夹按钮。
+pub fn new_folder_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<NewFolderButton> {
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &NEW_FOLDER_BUTTONS,
+        BUTTON_GAP,
+        RENAME_BUTTON_ROW,
+    );
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(NewFolderButton::Create),
+        Some(1) => Some(NewFolderButton::Clear),
+        Some(2) => Some(NewFolderButton::Cancel),
+        _ => None,
+    }
+}
+
 /// 命中新建工作区按钮。
 pub fn new_workspace_button_at(
     shell: &widgets::modal::ModalShell,
@@ -309,6 +347,7 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             render_trust(frame, screen, trust);
             None
         }
+        Overlay::NewFolder(folder) => render_new_folder(frame, screen, folder),
         Overlay::SaveDraft(dialog) => render_save_draft(frame, screen, dialog),
     }
 }
@@ -392,7 +431,7 @@ pub fn save_draft_button_at(
     }
 }
 
-/// 条目标签：根层 `/`、文件夹树形连接符（末项 `└─`）、内联新建行与追加动作行。
+/// 条目标签：根层 `/`、文件夹树形连接符（末项 `└─`）与追加动作行。
 fn save_draft_entry_label(entries: &[SaveDraftEntry], index: usize) -> String {
     match &entries[index] {
         SaveDraftEntry::Root => text::SAVE_DRAFT_ROOT.to_string(),
@@ -408,7 +447,6 @@ fn save_draft_entry_label(entries: &[SaveDraftEntry], index: usize) -> String {
                 format!("{connector} {name}")
             }
         }
-        SaveDraftEntry::DraftFolder { name } => name.text().to_string(),
         SaveDraftEntry::AddFolder => text::SAVE_DRAFT_NEW_FOLDER.to_string(),
     }
 }
@@ -482,54 +520,26 @@ fn render_save_draft(
     let list_y = save_draft_list_y(&shell);
     let max_rows = save_draft_max_rows(&shell);
     let start = save_draft_visible_start(dialog, max_rows);
-    let mut active_cursor = None;
     for (offset, index) in (start..dialog.entries.len()).take(max_rows).enumerate() {
         let y = list_y.saturating_add(offset as u16);
         let selected = index == dialog.selected;
         let entry = &dialog.entries[index];
         let row_area = Rect::new(shell.inner.x, y, shell.inner.width, 1);
-        match entry {
-            SaveDraftEntry::DraftFolder { name } => {
-                if selected {
-                    frame.render_widget(Paragraph::new("").style(style::selection()), row_area);
-                }
-                let view = widgets::input::view(
-                    name.text(),
-                    name.cursor(),
-                    usize::from(shell.inner.width),
-                );
-                let text_style = if selected {
-                    style::selection()
-                } else {
-                    style::text()
-                };
-                frame.render_widget(
-                    Paragraph::new(Span::styled(view.visible, text_style)),
-                    row_area,
-                );
-                if selected {
-                    active_cursor = Some((shell.inner.x.saturating_add(view.cursor_col), y));
-                }
+        let label = text::ellipsize(&save_draft_entry_label(&dialog.entries, index), width);
+        let span_style = if selected {
+            style::selection()
+        } else {
+            match entry {
+                SaveDraftEntry::Folder { .. } => style::text(),
+                SaveDraftEntry::Root | SaveDraftEntry::AddFolder => style::accent(),
             }
-            _ => {
-                let label = text::ellipsize(&save_draft_entry_label(&dialog.entries, index), width);
-                let span_style = if selected {
-                    style::selection()
-                } else {
-                    match entry {
-                        SaveDraftEntry::Folder { .. } => style::text(),
-                        SaveDraftEntry::Root | SaveDraftEntry::AddFolder => style::accent(),
-                        SaveDraftEntry::DraftFolder { .. } => style::text(),
-                    }
-                };
-                let paragraph = if selected {
-                    Paragraph::new(Span::styled(label, span_style)).style(style::selection())
-                } else {
-                    Paragraph::new(Span::styled(label, span_style))
-                };
-                frame.render_widget(paragraph, row_area);
-            }
-        }
+        };
+        let paragraph = if selected {
+            Paragraph::new(Span::styled(label, span_style)).style(style::selection())
+        } else {
+            Paragraph::new(Span::styled(label, span_style))
+        };
+        frame.render_widget(paragraph, row_area);
     }
     // 按钮行。
     render_buttons(
@@ -545,8 +555,7 @@ fn render_save_draft(
             (text::BUTTON_CANCEL, style::muted()),
         ],
     );
-    // 选中内联行时硬件光标在该行；否则在名称输入。
-    active_cursor.or(name_cursor)
+    name_cursor
 }
 
 /// 渲染信任浮层：问题、路径高亮与底部按钮。
@@ -801,6 +810,40 @@ fn render_new_workspace(
         new_ws.input.text(),
         new_ws.input.cursor(),
         Some(text::NEW_WORKSPACE_PLACEHOLDER),
+    )
+}
+
+/// 新建文件夹浮层：单行名称输入 + 底部按钮；输入视口与光标由公共单行输入组件承担。
+fn render_new_folder(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    folder: &NewFolder,
+) -> Option<(u16, u16)> {
+    let shell = new_folder_shell(screen)?;
+    widgets::modal::render(frame, &shell, text::NEW_FOLDER_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &NEW_FOLDER_BUTTONS,
+            BUTTON_GAP,
+            RENAME_BUTTON_ROW,
+        ),
+        &[
+            (text::BUTTON_CREATE, style::accent()),
+            (text::BUTTON_CLEAR, style::muted()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
+    );
+    widgets::input::render(
+        frame,
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+        folder.name.text(),
+        folder.name.cursor(),
+        Some(text::PROMPT_FOLDER_DEFAULT_NAME),
     )
 }
 

@@ -508,6 +508,7 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
             text_area,
             frame.buffer_mut(),
             &state.prompt_owner().prompt_panel,
+            focused,
         ),
         PromptMode::Editor => {
             prompt::render(
@@ -574,11 +575,18 @@ fn prompt_scrollbar_for(
     panel: Rect,
     state: &AppState,
 ) -> Option<widgets::scrollbar::ScrollbarLayout> {
-    let gutter = crate::layout::prompt_scrollbar_rect(panel)?;
     let owner = state.prompt_owner();
-    let (total, offset) = match owner.prompt_panel.mode {
-        PromptMode::Tree => (owner.prompt_panel.rows().len(), owner.prompt_panel.scroll),
-        PromptMode::Editor => (state.prompt.visual_rows().len(), state.prompt.scroll()),
+    let (gutter, total, offset) = match owner.prompt_panel.mode {
+        PromptMode::Tree => (
+            crate::layout::prompt_tree_scrollbar_rect(panel)?,
+            owner.prompt_panel.rows().len(),
+            owner.prompt_panel.scroll,
+        ),
+        PromptMode::Editor => (
+            crate::layout::prompt_scrollbar_rect(panel)?,
+            state.prompt.visual_rows().len(),
+            state.prompt.scroll(),
+        ),
     };
     widgets::scrollbar::layout(gutter, total, usize::from(gutter.height), offset)
 }

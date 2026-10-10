@@ -7,7 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::app::effects::{DraftTarget, Effect};
+use crate::app::effects::Effect;
+use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
@@ -113,6 +114,11 @@ impl Persistence {
                     return false;
                 };
                 let changed = self.reload_tree(state, &workspace);
+                // 来自草稿保存选择器：刷新条目并选中新文件夹（选择器已同步恢复）。
+                if matches!(state.overlay, Some(Overlay::SaveDraft(_))) {
+                    update::refresh_save_draft(state, id);
+                    return true;
+                }
                 let selection = workspace_index(state, &workspace)
                     .is_some_and(|index| update::select_prompt_folder(state, index, id));
                 changed || selection
@@ -134,21 +140,10 @@ impl Persistence {
             }
             Effect::SaveDraft {
                 workspace,
-                target,
+                folder_id,
                 name,
                 content,
             } => {
-                let folder_id = match target {
-                    DraftTarget::Folder(id) => id,
-                    DraftTarget::NewFolder { parent_id, name } => {
-                        let Some(id) =
-                            self.with_db(|db| db.create_folder(&workspace, parent_id, &name))
-                        else {
-                            return false;
-                        };
-                        Some(id)
-                    }
-                };
                 let Some(id) =
                     self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, &content))
                 else {

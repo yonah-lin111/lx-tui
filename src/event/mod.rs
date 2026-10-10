@@ -1509,6 +1509,33 @@ fn handle_overlay_click(
                 None => None,
             }
         }
+        Some(Overlay::NewFolder(_)) => {
+            let Some(shell) = ui::overlay::new_folder_shell(screen) else {
+                update::cancel_new_folder(state);
+                return None;
+            };
+            // [x] 或浮层之外：取消（来自选择器时恢复选择器）。
+            if ui::widgets::modal::close_button_at(shell.area, column, row)
+                || !shell.area.contains((column, row).into())
+            {
+                update::cancel_new_folder(state);
+                return None;
+            }
+            match ui::overlay::new_folder_button_at(&shell, column, row) {
+                Some(ui::overlay::NewFolderButton::Create) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::NewFolderButton::Clear) => {
+                    update::apply_overlay_key(state, OverlayKey::Clear)
+                }
+                Some(ui::overlay::NewFolderButton::Cancel) => {
+                    update::cancel_new_folder(state);
+                    None
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
         Some(Overlay::SaveDraft(dialog)) => {
             let entry_count = dialog.entries.len();
             let Some(shell) = ui::overlay::save_draft_shell(screen, entry_count) else {
@@ -1522,14 +1549,14 @@ fn handle_overlay_click(
                 return None;
             };
             if let Some(index) = ui::overlay::save_draft_entry_at(&shell, dialog, column, row) {
-                // 点击文件夹仅选中，不执行；动作行（新建文件夹）点击即追加内联行。
+                // 点击文件夹仅选中，不执行；动作行（新建文件夹）点击打开命名浮层。
                 let is_add = matches!(
                     dialog.entries.get(index),
                     Some(crate::app::overlay::SaveDraftEntry::AddFolder)
                 );
                 update::set_save_draft_selection(state, index);
                 if is_add {
-                    update::add_save_draft_folder(state);
+                    update::open_new_folder_from_draft(state);
                 }
                 return None;
             }

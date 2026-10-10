@@ -53,7 +53,7 @@ fn rows_order_folders_before_root_items() {
         vec![
             (PromptRowKind::Folder, 0, 0),
             (PromptRowKind::Folder, 1, 1),
-            (PromptRowKind::Item, 2, 1),
+            (PromptRowKind::Item, 2, 2),
             (PromptRowKind::Item, 1, 1),
             (PromptRowKind::Folder, 2, 0),
             (PromptRowKind::Item, 0, 0),
@@ -194,7 +194,8 @@ fn search_matching_folder_shows_whole_subtree() {
     let rows = panel.rows();
     // root + sub + in-sub + in-root（命中文件夹展示整棵子树）。
     assert_eq!(rows.len(), 4, "{rows:?}");
-    assert!(rows.iter().all(|row| row.depth <= 1));
+    assert!(rows.iter().all(|row| row.depth <= 2));
+    assert!(rows.iter().any(|row| row.depth == 2), "子文件夹条目深一层");
 }
 
 #[test]

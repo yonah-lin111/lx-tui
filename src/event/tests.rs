@@ -226,6 +226,50 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
 }
 
 #[test]
+fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    update::show_prompt_tree(&mut state);
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        (0..40)
+            .map(|index| PromptItem {
+                id: index,
+                folder_id: None,
+                name: format!("item-{index:02}"),
+                content: String::new(),
+                status: PromptItemStatus::Todo,
+            })
+            .collect(),
+    );
+    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+    let gutter = crate::layout::prompt_tree_scrollbar_rect(geo.view.prompt).expect("gutter");
+    assert_eq!(bar.track, gutter, "树视图滚动条槽在搜索框与分割线之下");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.workspaces[0].prompt_panel.scroll > 0, "轨道点击跳转");
+    assert!(!state.prompt_focused, "滚动条按下不抢焦点");
+    assert!(state.prompt_scroll_drag.is_none());
+    assert!(dirty);
+}
+
+#[test]
 fn mouse_drag_prompt_scrollbar_thumb() {
     let config = Config::default();
     let mut state = demo_terminal();

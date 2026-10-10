@@ -8,9 +8,14 @@ use crate::app::prompt::{PromptPanel, PromptRow, PromptRowKind};
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
-/// 渲染树内容区：顶部搜索框行 + 过滤后的树行；返回搜索框硬件光标位置；
+/// 渲染树内容区：顶部搜索框行 + 分割线 + 过滤后的树行；返回搜索框硬件光标位置；
 /// 空树/无命中显示占位；选中行整行高亮，条目状态右对齐。
-pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) -> Option<(u16, u16)> {
+pub fn render(
+    area: Rect,
+    buf: &mut Buffer,
+    panel: &PromptPanel,
+    focused: bool,
+) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
     }
@@ -18,9 +23,13 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) -> Option<(u16,
     if area.height <= 1 {
         return cursor;
     }
+    paint_divider(buf, area, area.y + 1, focused);
+    if area.height <= 2 {
+        return cursor;
+    }
     let rows_area = Rect {
-        y: area.y + 1,
-        height: area.height - 1,
+        y: area.y + 2,
+        height: area.height - 2,
         ..area
     };
     let rows = panel.rows();
@@ -32,11 +41,7 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) -> Option<(u16,
         .take(usize::from(rows_area.height))
     {
         let selected = index == panel.selected;
-        let connector = if row.depth > 0 && !last_sibling(&rows, index) {
-            text::PROMPT_TREE_MIDDLE
-        } else {
-            text::PROMPT_TREE_LAST
-        };
+        let prefix = tree_prefix(&rows, index);
         // 过滤时折叠被忽略：过滤视图下所有可见文件夹按展开态绘制三角。
         let searching = !panel.search.text().trim().is_empty();
         let expanded = row.kind == PromptRowKind::Folder
@@ -52,7 +57,7 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) -> Option<(u16,
             panel,
             *row,
             selected,
-            connector,
+            &prefix,
             expanded,
         );
     }
@@ -73,6 +78,29 @@ pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) -> Option<(u16,
         );
     }
     cursor
+}
+
+/// 绘制搜索框下方分割线：整行 `─`，两端 `├` / `┤` 衔接面板边框；样式跟随边框焦点态。
+fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, focused: bool) {
+    let divider_style = style::border(focused);
+    let left_join = area.x.saturating_sub(1);
+    for x in left_join..=area.right() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            let symbol = if x == left_join && left_join < area.x {
+                text::DIVIDER_LEFT_JOIN
+            } else {
+                text::DIVIDER_MID
+            };
+            cell.set_symbol(symbol);
+            cell.set_style(divider_style);
+        }
+    }
+    if let Some(cell) = buf.cell_mut((area.right().saturating_add(1), y)) {
+        cell.reset();
+        cell.set_symbol(text::DIVIDER_RIGHT_JOIN);
+        cell.set_style(divider_style);
+    }
 }
 
 /// 绘制顶部搜索框行：图标 + 单行输入视口（与模态输入框一致：硬件光标 + 占位）；
@@ -98,6 +126,30 @@ fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) -> Option
     Some((x.saturating_add(input.cursor_col), area.y))
 }
 
+/// 行前缀：各祖先层的续接线（`│` 或空格）+ 本行连接符（`├─` / `└─`）；根层为空。
+///
+/// 第 s 段（列 3s）续接第 s+1 层行的连接符列：该层祖先之后仍有同层行时画 `│  `，
+/// 否则留空；保证嵌套文件夹内的条目与后续兄弟分支的竖线相接。
+fn tree_prefix(rows: &[PromptRow], index: usize) -> String {
+    let depth = rows[index].depth;
+    if depth == 0 {
+        return String::new();
+    }
+    let mut prefix = String::new();
+    for level in 1..depth {
+        let ancestor = rows[..index].iter().rposition(|row| row.depth == level);
+        let last = ancestor.is_none_or(|ancestor| last_sibling(rows, ancestor));
+        prefix.push_str(if last { "   " } else { "│  " });
+    }
+    prefix.push_str(if last_sibling(rows, index) {
+        text::PROMPT_TREE_LAST
+    } else {
+        text::PROMPT_TREE_MIDDLE
+    });
+    prefix.push(' ');
+    prefix
+}
+
 /// 可见行是否为同级末项（决定 `└─` / `├─`）：其后再无同深度行，或先遇到更浅的行。
 fn last_sibling(rows: &[PromptRow], index: usize) -> bool {
     let depth = rows[index].depth;
@@ -112,12 +164,12 @@ fn last_sibling(rows: &[PromptRow], index: usize) -> bool {
     true
 }
 
-/// 命中可见行索引（`panel.rows` 的下标，非选中索引）；搜索框行、区域外或超出末行返回 None。
+/// 命中可见行索引（`panel.rows` 的下标，非选中索引）；搜索框/分割线行、区域外或超出末行返回 None。
 pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<usize> {
     if !area.contains((column, row).into()) {
         return None;
     }
-    let rows_y = area.y.saturating_add(1);
+    let rows_y = area.y.saturating_add(2);
     if row < rows_y {
         return None;
     }
@@ -125,7 +177,7 @@ pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<
     (index < panel.rows().len()).then_some(index)
 }
 
-/// 绘制单行：连接线 + 图标 + 名称 +（条目）右对齐状态标签。
+/// 绘制单行：前缀（续接线 + 连接符）+ 图标 + 名称 +（条目）右对齐状态标签。
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
@@ -134,7 +186,7 @@ fn paint_row(
     panel: &PromptPanel,
     row: PromptRow,
     selected: bool,
-    connector: &str,
+    prefix: &str,
     expanded: bool,
 ) {
     let base = if selected {
@@ -151,8 +203,8 @@ fn paint_row(
         fill_row(buf, area, y);
     }
     let mut x = area.x;
-    if row.depth > 0 {
-        x = paint_text(buf, x, y, &format!("{connector} "), sub, area.right());
+    if !prefix.is_empty() {
+        x = paint_text(buf, x, y, prefix, sub, area.right());
     }
     match row.kind {
         PromptRowKind::Folder => {

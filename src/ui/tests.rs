@@ -1108,6 +1108,45 @@ fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
 }
 
 #[test]
+fn prompt_tree_renders_divider_and_scrollbar_below_search() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let mut state = AppState::demo();
+    update::show_prompt_tree(&mut state);
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        (0..30)
+            .map(|index| PromptItem {
+                id: index,
+                folder_id: None,
+                name: format!("item-{index:02}"),
+                content: String::new(),
+                status: PromptItemStatus::Todo,
+            })
+            .collect(),
+    );
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    let search = prompt_line(&lines, &view, text.y);
+    assert!(
+        search.contains(text::PROMPT_TREE_SEARCH_PLACEHOLDER),
+        "{search}"
+    );
+    // 分割线整行 `─`，两端 `├` / `┤` 衔接面板边框。
+    let divider = prompt_line(&lines, &view, text.y + 1);
+    assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
+    // 滚动条槽从分割线之下开始：搜索行与分割线行无滚动条，列表首行起有。
+    let gutter = crate::layout::prompt_tree_scrollbar_rect(view.prompt).expect("gutter");
+    assert_eq!(gutter.y, text.y + 2);
+    let search_row: Vec<char> = lines[text.y as usize].chars().collect();
+    assert_ne!(search_row[usize::from(gutter.x)].to_string(), "▐");
+    let list_row: Vec<char> = lines[gutter.y as usize].chars().collect();
+    assert_eq!(list_row[usize::from(gutter.x)].to_string(), "▐");
+}
+
+#[test]
 fn prompt_scrollbar_appears_only_on_overflow() {
     let mut state = AppState::demo();
     let view = view_for(&state);

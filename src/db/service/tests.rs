@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::app::effects::{DraftTarget, Effect};
+use crate::app::effects::Effect;
 use crate::app::prompt::PromptEditing;
 
 /// 独立临时库路径。
@@ -290,7 +290,7 @@ fn save_draft_effect_persists_content_binds_editor_and_clears_draft() {
     state.workspaces[0].prompt_panel.draft = "draft body".into();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd.clone(),
-        target: DraftTarget::Folder(None),
+        folder_id: None,
         name: "New prompt".into(),
         content: "draft body".into(),
     });
@@ -309,25 +309,39 @@ fn save_draft_effect_persists_content_binds_editor_and_clears_draft() {
 }
 
 #[test]
-fn save_draft_to_new_folder_creates_folder_then_prompt() {
+fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
     let (mut service, mut state, cwd, _) = trusted_service("save-draft-folder");
+    service.pump(&mut state);
     state.workspaces[0].prompt_panel.draft = "body".into();
+    // 选择器打开时建文件夹：服务刷新条目并选中新文件夹。
+    crate::app::update::open_save_draft(&mut state);
+    state.effects.push(Effect::CreateFolder {
+        workspace: cwd.clone(),
+        parent_id: None,
+        name: "saved folder".into(),
+    });
+    assert!(service.pump(&mut state));
+    let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
+        panic!("picker restored");
+    };
+    assert!(matches!(
+        &dialog.entries[dialog.selected],
+        crate::app::overlay::SaveDraftEntry::Folder { name, .. } if name == "saved folder"
+    ));
+    let folder_id = state.workspaces[0].prompt_panel.tree.folders()[0].id;
+    // 保存草稿到该文件夹。
+    state.overlay = None;
     state.effects.push(Effect::SaveDraft {
         workspace: cwd.clone(),
-        target: DraftTarget::NewFolder {
-            parent_id: None,
-            name: "saved folder".into(),
-        },
+        folder_id: Some(folder_id),
         name: "New prompt".into(),
         content: "body".into(),
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(panel.tree.folders().len(), 1);
-    let folder = panel.tree.folders()[0].clone();
-    assert_eq!(folder.name, "saved folder");
     let item = &panel.tree.items()[0];
-    assert_eq!(item.folder_id, Some(folder.id));
+    assert_eq!(item.folder_id, Some(folder_id));
     assert_eq!(item.content, "body");
     assert!(panel.draft.is_empty());
 }

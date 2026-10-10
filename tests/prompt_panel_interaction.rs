@@ -266,7 +266,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
 
-    // 点击工具栏 [temp prompt] → 草稿编辑视图；内联新建文件夹保存全流程。
+    // 点击工具栏 [temp prompt] → 草稿编辑视图；命名浮层新建文件夹保存全流程。
     app.click("[temp prompt]");
     assert!(
         app.wait_for("Write your prompt"),
@@ -277,16 +277,26 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     assert!(app.wait_for("second draft"), "second draft typed");
     app.click("●");
     assert!(app.wait_for("+ New folder"), "picker reopened");
-    // 点击动作行 → 内联新建行（名称直接在该行输入）。
+    // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");
-    app.settle();
+    assert!(
+        app.wait_for("new folder"),
+        "naming dialog: \n{}",
+        app.screen()
+    );
     app.send(b"\x03");
     app.send(b"notes");
-    app.settle();
+    assert!(app.wait_for("notes"), "folder name typed");
+    app.send(b"\r");
+    assert!(
+        app.wait_for("save prompt to folder"),
+        "picker restored: \n{}",
+        app.screen()
+    );
     app.click("[save enter]");
     assert!(
         app.wait_gone("save prompt to folder"),
-        "inline folder saved: \n{}",
+        "draft saved into new folder: \n{}",
         app.screen()
     );
     app.click("[list]");

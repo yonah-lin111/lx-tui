@@ -18,6 +18,7 @@ pub enum OverlayKind {
     NewWorkspace,
     WorktreeOpen,
     TrustWorkspace,
+    NewFolder,
     SaveDraft,
 }
 
@@ -32,6 +33,7 @@ pub enum Overlay {
     NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
     TrustWorkspace(TrustWorkspace),
+    NewFolder(NewFolder),
     SaveDraft(SaveDraft),
 }
 
@@ -47,9 +49,21 @@ impl Overlay {
             Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
             Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
+            Self::NewFolder(_) => OverlayKind::NewFolder,
             Self::SaveDraft(_) => OverlayKind::SaveDraft,
         }
     }
+}
+
+/// 新建文件夹命名浮层：父文件夹（`None` 为根层）、名称输入与来源选择器。
+#[derive(Debug)]
+pub struct NewFolder {
+    /// 父文件夹 id：`None` 为根层，`Some` 为根层文件夹下的子文件夹。
+    pub parent_id: Option<i64>,
+    /// 文件夹名（预填默认名，可编辑）。
+    pub name: TextInput,
+    /// 来自草稿保存选择器：取消或确认后恢复该选择器（确认后由服务刷新条目并选中新文件夹）。
+    pub resume: Option<Box<SaveDraft>>,
 }
 
 /// 草稿保存选择器：工作区、提示词名称输入、候选目标与高亮项。
@@ -62,7 +76,7 @@ pub struct SaveDraft {
     pub selected: usize,
 }
 
-/// 草稿保存目标项：根层、现有文件夹（含层级缩进）、内联新建文件夹行或追加动作行。
+/// 草稿保存目标项：根层、现有文件夹（含层级缩进）或追加动作行。
 #[derive(Debug)]
 pub enum SaveDraftEntry {
     Root,
@@ -71,11 +85,7 @@ pub enum SaveDraftEntry {
         depth: usize,
         name: String,
     },
-    /// 内联新建文件夹：名称直接在该行输入；确定后建于根层并保存草稿。
-    DraftFolder {
-        name: TextInput,
-    },
-    /// 动作行：点击/回车在列表末尾追加一个内联新建文件夹行。
+    /// 动作行：点击/回车打开新建文件夹命名浮层。
     AddFolder,
 }
 

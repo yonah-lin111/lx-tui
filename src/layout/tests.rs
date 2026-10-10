@@ -328,6 +328,19 @@ fn prompt_geometry_degrades_when_too_narrow() {
 }
 
 #[test]
+fn prompt_tree_scrollbar_starts_below_search_and_divider() {
+    let panel = Rect::new(10, 5, 20, 8);
+    assert_eq!(
+        prompt_tree_scrollbar_rect(panel),
+        Some(Rect::new(28, 10, 1, 2)),
+        "槽从搜索框与分割线之下开始"
+    );
+    // 正文区过矮（≤ 搜索框 + 分割线）时不显示。
+    let short = Rect::new(0, 0, 20, 6);
+    assert_eq!(prompt_tree_scrollbar_rect(short), None);
+}
+
+#[test]
 fn prompt_header_shifts_body_and_scrollbar() {
     let panel = Rect::new(10, 5, 20, 8);
     assert_eq!(prompt_header_rect(panel), Some(Rect::new(11, 6, 18, 2)));
@@ -460,16 +473,11 @@ fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
     assert_eq!(mode.x, bar.x);
     let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, true)
         .expect("temp prompt visible in tree");
-    assert_eq!(temp.x, bar.x + 7, "模式按钮之后");
+    assert_eq!(temp.right(), bar.right() - 1, "右对齐、与边框留 1 列");
     assert_eq!(temp.width, 13);
     assert_eq!(
         prompt_toolbar_button_at(panel, temp.x, bar.y, true),
         Some(PromptToolbarButton::TempPrompt)
-    );
-    assert_eq!(
-        prompt_toolbar_button_at(panel, temp.x, bar.y, false),
-        Some(PromptToolbarButton::Undo),
-        "编辑视图同列为 undo"
     );
     assert_eq!(
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, true),

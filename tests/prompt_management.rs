@@ -136,6 +136,12 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         OverlayTarget::PromptTree { workspace: 0 },
         MenuCommand::NewFolder,
     );
+    // 菜单打开命名浮层：回车以默认名创建。
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewFolder(_))),
+        "命名浮层打开"
+    );
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     let root_folder = state.active_workspace().prompt_panel.tree.folders()[0].id;
 
@@ -148,6 +154,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         },
         MenuCommand::NewSubFolder,
     );
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     assert_eq!(
         state.active_workspace().prompt_panel.tree.folders().len(),
@@ -165,7 +172,8 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         "第 2 层不展示新建子文件夹"
     );
     update::close_overlay(&mut state);
-    update::create_folder(&mut state, Some(sub_folder));
+    update::open_new_folder(&mut state, Some(sub_folder));
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
     assert_eq!(
         state.active_workspace().prompt_panel.tree.folders().len(),
@@ -306,14 +314,27 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
         panic!("save picker open");
     };
     assert_eq!(dialog.entries.len(), 2, "根层 + 新建文件夹");
-    // 选中动作行回车 → 内联新建行追加并选中；名称直接在该行输入。
+    // 选中动作行回车 → 命名浮层；输入 docs 后回车建库并恢复选择器（选中新文件夹）。
     update::set_save_draft_selection(&mut state, 1);
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(matches!(state.overlay, Some(Overlay::NewFolder(_))));
     update::apply_overlay_key(&mut state, OverlayKey::Clear);
     for ch in "docs".chars() {
         update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
     }
-    // 再回车（确定）执行保存：先建文件夹再存入草稿。
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
+    service.pump(&mut state);
+    let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
+        panic!("picker restored after folder creation");
+    };
+    assert!(
+        matches!(
+            &dialog.entries[dialog.selected],
+            lx_tui::app::overlay::SaveDraftEntry::Folder { name, .. } if name == "docs"
+        ),
+        "新文件夹已选中"
+    );
+    // 再回车（确定）执行保存：草稿存入该文件夹。
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
 

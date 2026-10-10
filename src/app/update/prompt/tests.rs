@@ -301,6 +301,13 @@ fn background_and_folder_commands_queue_creation_effects() {
         selected: 0,
     }));
     crate::app::update::activate_menu(&mut state);
+    // 菜单打开命名浮层：回车以默认名登记创建效应。
+    let Some(Overlay::NewFolder(dialog)) = &state.overlay else {
+        panic!("naming dialog open");
+    };
+    assert_eq!(dialog.parent_id, Some(1));
+    assert_eq!(dialog.name.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
         Effect::CreateFolder {
@@ -438,7 +445,7 @@ fn draft_roundtrip_keeps_content_and_picker_lists_folders() {
         .find(|effect| matches!(effect, Effect::SaveDraft { .. }))
         .cloned();
     let Some(Effect::SaveDraft {
-        target,
+        folder_id,
         name,
         content,
         ..
@@ -446,7 +453,7 @@ fn draft_roundtrip_keeps_content_and_picker_lists_folders() {
     else {
         panic!("save draft effect queued");
     };
-    assert_eq!(target, crate::app::effects::DraftTarget::Folder(None));
+    assert_eq!(folder_id, None);
     assert_eq!(name, text::PROMPT_DEFAULT_NAME);
     assert_eq!(content, "draft body");
 
@@ -456,7 +463,7 @@ fn draft_roundtrip_keeps_content_and_picker_lists_folders() {
 }
 
 #[test]
-fn save_draft_inline_new_folder_edits_name_and_queues_folder_effect() {
+fn save_draft_new_folder_opens_dialog_and_queues_folder_effect() {
     let mut state = demo_state();
     enter_tree(&mut state);
     edit_prompt_draft(&mut state);
@@ -464,55 +471,85 @@ fn save_draft_inline_new_folder_edits_name_and_queues_folder_effect() {
     show_prompt_tree(&mut state);
     open_save_draft(&mut state);
 
-    // 回车选中动作行 → 追加内联新建行并选中它（不弹第二个浮层）。
+    // 回车选中动作行 → 打开命名浮层（不直接建库），Esc 取消恢复选择器。
     set_save_draft_selection(&mut state, 3);
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
-        panic!("picker stays open");
+    let Some(Overlay::NewFolder(folder)) = &state.overlay else {
+        panic!("new folder dialog open");
     };
-    assert_eq!(dialog.entries.len(), 5);
-    assert_eq!(dialog.selected, 3, "选中新内联行");
+    assert_eq!(folder.parent_id, None);
+    assert_eq!(folder.name.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
+    assert!(folder.resume.is_some(), "来自选择器");
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
     assert!(
-        matches!(&dialog.entries[3], SaveDraftEntry::DraftFolder { name } if name.text() == text::PROMPT_FOLDER_DEFAULT_NAME)
+        matches!(state.overlay, Some(Overlay::SaveDraft(_))),
+        "取消恢复选择器"
     );
 
-    // 字符输入归属内联行：清空后输入 docs。
+    // 再次打开：清空后输入 docs，回车确认 → 恢复选择器并登记建文件夹效应。
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(matches!(state.overlay, Some(Overlay::NewFolder(_))));
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);
     for ch in "docs".chars() {
         apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
     }
-    // 顶部名称输入不受影响（仍为默认名）。
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
     let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
-        panic!("picker stays open");
+        panic!("picker restored");
     };
     assert_eq!(dialog.name.text(), text::PROMPT_DEFAULT_NAME);
-
-    // 回车执行：先建文件夹再保存草稿。
-    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    assert!(state.overlay.is_none());
-    let queued = state
+    let Some(Effect::CreateFolder {
+        parent_id, name, ..
+    }) = state
         .effects
         .iter()
-        .find(|effect| matches!(effect, Effect::SaveDraft { .. }))
-        .cloned();
-    let Some(Effect::SaveDraft {
-        target,
-        name,
-        content,
-        ..
-    }) = queued
+        .find(|effect| matches!(effect, Effect::CreateFolder { .. }))
+        .cloned()
     else {
-        panic!("save draft effect queued");
+        panic!("create folder effect queued");
     };
-    assert_eq!(
-        target,
-        crate::app::effects::DraftTarget::NewFolder {
-            parent_id: None,
-            name: "docs".into()
-        }
+    assert_eq!(parent_id, None);
+    assert_eq!(name, "docs");
+
+    // 空名拒绝：对话框保持打开且不登记效应。
+    state.effects.clear();
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(
+        matches!(state.overlay, Some(Overlay::NewFolder(_))),
+        "空名拒绝"
     );
-    assert_eq!(name, text::PROMPT_DEFAULT_NAME);
-    assert_eq!(content, "body");
+    assert!(state.effects.is_empty());
+}
+
+#[test]
+fn refresh_save_draft_rebuilds_entries_and_selects_new_folder() {
+    let mut state = demo_state();
+    open_save_draft(&mut state);
+    // 服务建库后由树记录重建条目：新文件夹追加在子层之后、动作行之前并选中。
+    let tree = &mut state.workspaces[0].prompt_panel.tree;
+    tree.replace(
+        vec![crate::app::prompt::PromptFolder {
+            id: 7,
+            parent_id: None,
+            name: "docs".into(),
+            collapsed: false,
+        }],
+        vec![],
+    );
+    refresh_save_draft(&mut state, 7);
+    let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
+        panic!("picker open");
+    };
+    assert!(matches!(
+        &dialog.entries[dialog.selected],
+        SaveDraftEntry::Folder { id: 7, .. }
+    ));
+    assert!(matches!(
+        dialog.entries.last(),
+        Some(SaveDraftEntry::AddFolder)
+    ));
 }
 
 #[test]
@@ -538,7 +575,9 @@ fn save_draft_commits_with_custom_name_and_rejects_empty_names() {
         apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
     }
     apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
-    let Some(Effect::SaveDraft { name, target, .. }) = state
+    let Some(Effect::SaveDraft {
+        name, folder_id, ..
+    }) = state
         .effects
         .iter()
         .find(|effect| matches!(effect, Effect::SaveDraft { .. }))
@@ -547,7 +586,7 @@ fn save_draft_commits_with_custom_name_and_rejects_empty_names() {
         panic!("save draft effect queued");
     };
     assert_eq!(name, "My prompt");
-    assert_eq!(target, crate::app::effects::DraftTarget::Folder(None));
+    assert_eq!(folder_id, None);
 }
 
 #[test]

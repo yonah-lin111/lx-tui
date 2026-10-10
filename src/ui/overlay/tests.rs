@@ -580,12 +580,6 @@ fn save_draft_state(entries: Vec<SaveDraftEntry>, selected: usize) -> AppState {
     state
 }
 
-fn draft_folder(name: &str) -> SaveDraftEntry {
-    SaveDraftEntry::DraftFolder {
-        name: TextInput::new(name),
-    }
-}
-
 #[test]
 fn save_draft_picker_renders_name_tree_entries_and_buttons() {
     let entries = vec![
@@ -641,22 +635,49 @@ fn save_draft_picker_renders_name_tree_entries_and_buttons() {
 }
 
 #[test]
-fn save_draft_selected_inline_row_gets_cursor() {
-    let entries = vec![
-        SaveDraftEntry::Root,
-        draft_folder("docs"),
-        SaveDraftEntry::AddFolder,
-    ];
-    let state = save_draft_state(entries, 1);
+fn new_folder_dialog_renders_input_buttons_and_hit() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewFolder(NewFolder {
+        parent_id: None,
+        name: TextInput::new(text::PROMPT_FOLDER_DEFAULT_NAME),
+        resume: None,
+    }));
     let (lines, cursor) = draw_overlay(&state);
     let joined = lines.join("\n");
-    assert!(joined.contains("docs"), "内联行名称渲染: {joined}");
-    let shell = save_draft_shell(SCREEN, 3).expect("shell fits");
-    let list_y = shell.inner.y + 2;
+    assert!(joined.contains(text::NEW_FOLDER_TITLE), "{joined}");
+    assert!(
+        joined.contains(text::PROMPT_FOLDER_DEFAULT_NAME),
+        "{joined}"
+    );
+    assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
+    assert!(joined.contains(text::BUTTON_CLEAR), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+    let shell = new_folder_shell(SCREEN).expect("shell fits");
     assert_eq!(
         cursor,
-        Some((shell.inner.x + 4, list_y + 1)),
-        "光标在内联行名称末尾"
+        Some((
+            shell.inner.x + text::PROMPT_FOLDER_DEFAULT_NAME.chars().count() as u16,
+            shell.inner.y
+        )),
+        "硬件光标在名称输入末尾"
+    );
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &NEW_FOLDER_BUTTONS,
+        BUTTON_GAP,
+        RENAME_BUTTON_ROW,
+    );
+    assert_eq!(
+        new_folder_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(NewFolderButton::Create)
+    );
+    assert_eq!(
+        new_folder_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(NewFolderButton::Clear)
+    );
+    assert_eq!(
+        new_folder_button_at(&shell, buttons[2].x, buttons[2].y),
+        Some(NewFolderButton::Cancel)
     );
 }
 
