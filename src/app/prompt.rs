@@ -7,8 +7,8 @@ mod template;
 pub mod tree;
 
 pub use tree::{
-    PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPanel, PromptRow, PromptRowKind,
-    PromptTree,
+    PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPanel, PromptRow,
+    PromptRowKind, PromptTree,
 };
 
 use std::path::PathBuf;

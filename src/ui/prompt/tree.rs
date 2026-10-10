@@ -7,45 +7,126 @@ use unicode_width::UnicodeWidthChar;
 use crate::app::prompt::{PromptPanel, PromptRow, PromptRowKind};
 use crate::ui::{style, text};
 
-/// 渲染树内容区：空树显示占位；选中行整行高亮，条目状态右对齐。
+/// 渲染树内容区：顶部搜索框行 + 置顶草稿行 + 过滤后的树行；
+/// 空树/无命中显示占位；选中行整行高亮，条目状态右对齐。
 pub fn render(area: Rect, buf: &mut Buffer, panel: &PromptPanel) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let rows = panel.rows();
-    if rows.is_empty() {
-        paint_text(
-            buf,
-            area.x,
-            area.y,
-            text::PROMPT_TREE_EMPTY,
-            style::muted(),
-            area.right(),
-        );
+    paint_search_row(buf, area, panel);
+    if area.height <= 1 {
         return;
     }
+    let rows_area = Rect {
+        y: area.y + 1,
+        height: area.height - 1,
+        ..area
+    };
+    let rows = panel.rows();
     let scroll = panel.scroll.min(rows.len().saturating_sub(1));
-    for (offset, row) in rows
+    for (index, row) in rows
         .iter()
-        .skip(scroll)
-        .take(usize::from(area.height))
         .enumerate()
+        .skip(scroll)
+        .take(usize::from(rows_area.height))
     {
-        let selected = scroll + offset == panel.selected;
-        paint_row(buf, area, area.y + offset as u16, panel, *row, selected);
+        let selected = index == panel.selected;
+        let connector = if row.depth > 0 && !last_sibling(&rows, index) {
+            text::PROMPT_TREE_MIDDLE
+        } else {
+            text::PROMPT_TREE_LAST
+        };
+        // 过滤时折叠被忽略：过滤视图下所有可见文件夹按展开态绘制三角。
+        let searching = !panel.search.trim().is_empty();
+        let expanded = row.kind == PromptRowKind::Folder
+            && (!panel
+                .tree
+                .folder_of_row(*row)
+                .is_some_and(|folder| folder.collapsed)
+                || searching);
+        paint_row(
+            buf,
+            rows_area,
+            rows_area.y + (index - scroll) as u16,
+            panel,
+            *row,
+            selected,
+            connector,
+            expanded,
+        );
+    }
+    // 无树行时在草稿入口下方显示空状态 / 无命中占位。
+    if rows.len() <= 1 && scroll == 0 && rows_area.height >= 2 {
+        let empty = if panel.search.trim().is_empty() {
+            text::PROMPT_TREE_EMPTY
+        } else {
+            text::PROMPT_TREE_NO_MATCHES
+        };
+        paint_text(
+            buf,
+            rows_area.x,
+            rows_area.y + 1,
+            empty,
+            style::muted(),
+            rows_area.right(),
+        );
     }
 }
 
-/// 命中可见行索引（`panel.rows` 的下标，非选中索引）；区域外或超出末行返回 None。
+/// 绘制顶部搜索框行：图标 + 过滤词（为空时显示占位）。
+fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) {
+    let mut x = paint_text(
+        buf,
+        area.x,
+        area.y,
+        text::PROMPT_TREE_SEARCH_ICON,
+        style::accent(),
+        area.right(),
+    );
+    x = paint_text(buf, x, area.y, " ", style::text(), area.right());
+    if panel.search.is_empty() {
+        paint_text(
+            buf,
+            x,
+            area.y,
+            text::PROMPT_TREE_SEARCH_PLACEHOLDER,
+            style::muted(),
+            area.right(),
+        );
+    } else {
+        paint_text(buf, x, area.y, &panel.search, style::text(), area.right());
+    }
+}
+
+/// 可见行是否为同级末项（决定 `└─` / `├─`）：其后再无同深度行，或先遇到更浅的行。
+fn last_sibling(rows: &[PromptRow], index: usize) -> bool {
+    let depth = rows[index].depth;
+    for row in &rows[index + 1..] {
+        if row.depth < depth {
+            return true;
+        }
+        if row.depth == depth {
+            return false;
+        }
+    }
+    true
+}
+
+/// 命中可见行索引（`panel.rows` 的下标，非选中索引）；搜索框行、区域外或超出末行返回 None。
 pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<usize> {
     if !area.contains((column, row).into()) {
         return None;
     }
-    let index = panel.scroll + usize::from(row.saturating_sub(area.y));
+    let rows_y = area.y.saturating_add(1);
+    if row < rows_y {
+        return None;
+    }
+    let index = panel.scroll + usize::from(row - rows_y);
     (index < panel.rows().len()).then_some(index)
 }
 
 /// 绘制单行：连接线 + 图标 + 名称 +（条目）右对齐状态标签。
+#[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
     area: Rect,
@@ -53,6 +134,8 @@ fn paint_row(
     panel: &PromptPanel,
     row: PromptRow,
     selected: bool,
+    connector: &str,
+    expanded: bool,
 ) {
     let base = if selected {
         style::selection()
@@ -69,24 +152,39 @@ fn paint_row(
     }
     let mut x = area.x;
     if row.depth > 0 {
-        x = paint_text(
-            buf,
-            x,
-            y,
-            &format!("{} ", text::PROMPT_TREE_CONNECTOR),
-            sub,
-            area.right(),
-        );
+        x = paint_text(buf, x, y, &format!("{connector} "), sub, area.right());
     }
     match row.kind {
+        PromptRowKind::Draft => {
+            let icon_style = if selected { base } else { style::accent() };
+            x = paint_text(
+                buf,
+                x,
+                y,
+                text::PROMPT_TREE_DRAFT_ICON,
+                icon_style,
+                area.right(),
+            );
+            x = paint_text(buf, x, y, " ", base, area.right());
+            let max = usize::from(area.right().saturating_sub(x));
+            paint_name(
+                buf,
+                x,
+                y,
+                text::PROMPT_TREE_DRAFT_LABEL,
+                base,
+                max,
+                area.right(),
+            );
+        }
         PromptRowKind::Folder => {
             let Some(folder) = panel.tree.folder_of_row(row) else {
                 return;
             };
-            let triangle = if folder.collapsed {
-                text::PROMPT_TREE_COLLAPSED
-            } else {
+            let triangle = if expanded {
                 text::PROMPT_TREE_EXPANDED
+            } else {
+                text::PROMPT_TREE_COLLAPSED
             };
             let triangle_style = if selected { base } else { style::accent() };
             x = paint_text(buf, x, y, triangle, triangle_style, area.right());

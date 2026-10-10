@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::app::effects::Effect;
+use crate::app::effects::{DraftTarget, Effect};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
@@ -122,7 +122,8 @@ impl Persistence {
                 folder_id,
                 name,
             } => {
-                let Some(id) = self.with_db(|db| db.create_prompt(&workspace, folder_id, &name))
+                let Some(id) =
+                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, ""))
                 else {
                     return false;
                 };
@@ -130,6 +131,36 @@ impl Persistence {
                 let editing = workspace_index(state, &workspace)
                     .is_some_and(|index| update::edit_prompt_item(state, index, id));
                 changed || editing
+            }
+            Effect::SaveDraft {
+                workspace,
+                target,
+                name,
+                content,
+            } => {
+                let folder_id = match target {
+                    DraftTarget::Folder(id) => id,
+                    DraftTarget::NewFolder { parent_id, name } => {
+                        let Some(id) =
+                            self.with_db(|db| db.create_folder(&workspace, parent_id, &name))
+                        else {
+                            return false;
+                        };
+                        Some(id)
+                    }
+                };
+                let Some(id) =
+                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, &content))
+                else {
+                    return false;
+                };
+                let changed = self.reload_tree(state, &workspace);
+                let Some(index) = workspace_index(state, &workspace) else {
+                    return changed;
+                };
+                update::finish_draft_save(state, index);
+                let bound = update::edit_prompt_item(state, index, id);
+                changed || bound
             }
             Effect::RenameFolder {
                 workspace,

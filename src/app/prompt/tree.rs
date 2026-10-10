@@ -61,9 +61,10 @@ pub struct PromptItem {
     pub status: PromptItemStatus,
 }
 
-/// 可见行种类。
+/// 可见行种类；`Draft` 为置顶的临时草稿入口行（不入库）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptRowKind {
+    Draft,
     Folder,
     Item,
 }
@@ -291,19 +292,31 @@ pub enum PromptMode {
     Editor,
 }
 
-/// 工作区提示词面板状态：树、视图模式、选中行、编辑目标与滚动偏移。
+/// 编辑视图绑定的目标：正式条目或临时草稿。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptEditing {
+    Item(i64),
+    /// 临时草稿：内容只存内存（`PromptPanel::draft`），不入库。
+    Draft,
+}
+
+/// 工作区提示词面板状态：树、视图模式、选中行、编辑目标、草稿与滚动偏移。
 #[derive(Debug)]
 pub struct PromptPanel {
     pub tree: PromptTree,
     /// 是否已从 DB 载入（含无持久化模式下的空树）。
     pub loaded: bool,
     pub mode: PromptMode,
-    /// 选中可见行索引；树为空时为 0。
+    /// 选中可见行索引；列表置顶草稿行恒为 0。
     pub selected: usize,
-    /// 编辑中的条目 id；仅编辑视图下有效。
-    pub editing: Option<i64>,
+    /// 编辑视图绑定的目标；仅编辑视图下有效。
+    pub editing: Option<PromptEditing>,
     /// 树视图首个可见行索引。
     pub scroll: usize,
+    /// 临时草稿正文；保存后清空，不入库。
+    pub draft: String,
+    /// 树视图搜索过滤词；空串为不过滤。
+    pub search: String,
 }
 
 impl PromptPanel {
@@ -316,12 +329,109 @@ impl PromptPanel {
             selected: 0,
             editing: None,
             scroll: 0,
+            draft: String::new(),
+            search: String::new(),
         }
     }
 
-    /// 可见行。
+    /// 可见行：置顶草稿入口行 + 过滤后的树行。
     pub fn rows(&self) -> Vec<PromptRow> {
-        self.tree.rows()
+        let mut rows = vec![PromptRow {
+            kind: PromptRowKind::Draft,
+            index: 0,
+            depth: 0,
+        }];
+        rows.extend(self.filtered_tree_rows());
+        rows
+    }
+
+    /// 过滤后的树行；无过滤词时与 `tree.rows()` 一致。
+    ///
+    /// 过滤忽略折叠状态：命中文件夹展示其整棵子树，命中条目展示祖先链；
+    /// 临时草稿行不参与过滤（由 `rows` 恒置顶）。
+    fn filtered_tree_rows(&self) -> Vec<PromptRow> {
+        let query = self.search.trim().to_lowercase();
+        if query.is_empty() {
+            return self.tree.rows();
+        }
+        let folders = self.tree.folders();
+        let items = self.tree.items();
+        let mut rows = Vec::new();
+        for (index, folder) in folders.iter().enumerate() {
+            if folder.parent_id.is_some() {
+                continue;
+            }
+            let full = name_matches(&folder.name, &query);
+            let sub_visible = |sub: &PromptFolder| {
+                full || name_matches(&sub.name, &query)
+                    || items.iter().any(|item| {
+                        item.folder_id == Some(sub.id) && name_matches(&item.name, &query)
+                    })
+            };
+            let any_child = folders
+                .iter()
+                .any(|sub| sub.parent_id == Some(folder.id) && sub_visible(sub))
+                || items.iter().any(|item| {
+                    item.folder_id == Some(folder.id) && name_matches(&item.name, &query)
+                });
+            if !(full || any_child) {
+                continue;
+            }
+            rows.push(PromptRow {
+                kind: PromptRowKind::Folder,
+                index,
+                depth: 0,
+            });
+            for (sub_index, sub) in folders.iter().enumerate() {
+                if sub.parent_id != Some(folder.id) {
+                    continue;
+                }
+                let sub_full = full || name_matches(&sub.name, &query);
+                let child_items: Vec<usize> = items
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, item)| {
+                        item.folder_id == Some(sub.id)
+                            && (sub_full || name_matches(&item.name, &query))
+                    })
+                    .map(|(item_index, _)| item_index)
+                    .collect();
+                if !sub_full && child_items.is_empty() {
+                    continue;
+                }
+                rows.push(PromptRow {
+                    kind: PromptRowKind::Folder,
+                    index: sub_index,
+                    depth: 1,
+                });
+                for item_index in child_items {
+                    rows.push(PromptRow {
+                        kind: PromptRowKind::Item,
+                        index: item_index,
+                        depth: 1,
+                    });
+                }
+            }
+            for (item_index, item) in items.iter().enumerate() {
+                if item.folder_id == Some(folder.id) && (full || name_matches(&item.name, &query)) {
+                    rows.push(PromptRow {
+                        kind: PromptRowKind::Item,
+                        index: item_index,
+                        depth: 1,
+                    });
+                }
+            }
+        }
+        for (item_index, item) in items.iter().enumerate() {
+            if item.folder_id.is_none() && name_matches(&item.name, &query) {
+                rows.push(PromptRow {
+                    kind: PromptRowKind::Item,
+                    index: item_index,
+                    depth: 0,
+                });
+            }
+        }
+        rows
     }
 
     /// 选中行数据。
@@ -329,11 +439,37 @@ impl PromptPanel {
         self.rows().get(self.selected).copied()
     }
 
-    /// 选中条目 id。
+    /// 选中条目 id；草稿行、文件夹行或空树为 None。
     pub fn selected_prompt_id(&self) -> Option<i64> {
         self.selected_row()
             .and_then(|row| self.tree.item_of_row(row))
             .map(|item| item.id)
+    }
+
+    /// 选中行是否为置顶草稿入口。
+    pub fn draft_selected(&self) -> bool {
+        self.selected_row()
+            .is_some_and(|row| row.kind == PromptRowKind::Draft)
+    }
+
+    /// 追加搜索字符并返回是否有变化。
+    pub fn push_search_char(&mut self, ch: char) -> bool {
+        self.search.push(ch);
+        true
+    }
+
+    /// 删除搜索词末尾字符并返回是否有变化。
+    pub fn pop_search_char(&mut self) -> bool {
+        self.search.pop().is_some()
+    }
+
+    /// 清空搜索词并返回是否有变化。
+    pub fn clear_search(&mut self) -> bool {
+        if self.search.is_empty() {
+            return false;
+        }
+        self.search.clear();
+        true
     }
 
     /// 选中行钳制（树变化后调用）；滚动同步跟随。
@@ -347,6 +483,11 @@ impl PromptPanel {
             self.scroll = self.selected + 1 - visible.max(1);
         }
     }
+}
+
+/// 名称是否命中过滤词（大小写不敏感子串）。
+fn name_matches(name: &str, query: &str) -> bool {
+    name.to_lowercase().contains(query)
 }
 
 impl Default for PromptPanel {

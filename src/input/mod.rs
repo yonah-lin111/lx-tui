@@ -120,6 +120,13 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
             _ => None,
         },
+        OverlayKind::SaveDraft => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            _ => None,
+        },
     }
 }
 

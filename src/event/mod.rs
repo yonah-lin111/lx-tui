@@ -640,8 +640,14 @@ fn handle_terminal_event(
                             state.select_all_prompt();
                         }
                         layout::PromptToolbarButton::Save if editor_view => {
-                            state.prompt.mark_saved();
-                            update::commit_editing_prompt(state);
+                            if update::prompt_draft_editing(state) {
+                                // 草稿没有归属条目：先提交缓冲，再打开保存到文件夹选择器。
+                                update::commit_editing_prompt(state);
+                                update::open_save_draft(state);
+                            } else {
+                                state.prompt.mark_saved();
+                                update::commit_editing_prompt(state);
+                            }
                         }
                         _ => {}
                     }
@@ -1436,6 +1442,21 @@ fn handle_overlay_click(
                 }
             }
         }
+        Some(Overlay::SaveDraft(dialog)) => {
+            let Some(shell) = ui::overlay::save_draft_shell(screen, dialog.entries.len()) else {
+                update::close_overlay(state);
+                return None;
+            };
+            match ui::overlay::save_draft_entry_at(&shell, dialog, column, row) {
+                // 单击即选中并保存（选择器语义与菜单一致）。
+                Some(index) => {
+                    update::set_save_draft_selection(state, index);
+                    update::commit_save_draft(state);
+                }
+                None => update::close_overlay(state),
+            }
+            None
+        }
         Some(Overlay::TrustWorkspace(_)) => {
             let button = ui::overlay::trust_shell(screen)
                 .and_then(|shell| ui::overlay::trust_button_at(&shell, column, row));
@@ -1485,6 +1506,8 @@ fn open_right_click_menu(
                             panel.tree.folder_of_row(row_data).map(|folder| folder.id)
                         }
                         PromptRowKind::Item => panel.tree.item_of_row(row_data).map(|item| item.id),
+                        // 草稿行没有 CRUD 目标：作为树空白处理（新建菜单）。
+                        PromptRowKind::Draft => None,
                     };
                     Some((row_data.kind, id))
                 })

@@ -181,7 +181,8 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     }
 }
 
-/// 提示词树视图按键路由：上下移动选中、回车激活、左右展开折叠；其余按键吞掉。
+/// 提示词树视图按键路由：上下移动选中、回车激活、左右展开折叠；
+/// 可打印字符与退格进入搜索过滤，Esc 清空过滤；其余按键吞掉。
 fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
     let visible = prompt_tree_visible_rows(state);
     match command {
@@ -199,6 +200,15 @@ fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
         }
         EditorCommand::Right => {
             expand_prompt_row(state);
+        }
+        EditorCommand::InsertChar(ch) => {
+            push_prompt_search(state, *ch);
+        }
+        EditorCommand::Backspace => {
+            pop_prompt_search(state);
+        }
+        EditorCommand::Escape => {
+            clear_prompt_search(state);
         }
         _ => {}
     }
@@ -1648,6 +1658,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         }
         return None;
     }
+    // 草稿保存选择器：上下移动、回车保存、Esc 关闭。
+    if matches!(state.overlay, Some(Overlay::SaveDraft(_))) {
+        apply_save_draft_key(state, key);
+        return None;
+    }
     match key {
         OverlayKey::Esc => {
             close_overlay(state);
@@ -1683,7 +1698,10 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 confirm_sync_workspace_cwd(state);
                 None
             }
-            Some(OverlayKind::WorktreeOpen) | Some(OverlayKind::TrustWorkspace) | None => None,
+            Some(OverlayKind::WorktreeOpen)
+            | Some(OverlayKind::TrustWorkspace)
+            | Some(OverlayKind::SaveDraft)
+            | None => None,
         },
         OverlayKey::Char(ch) => {
             edit_text_input(state, |input| input.insert_char(ch));
@@ -1793,7 +1811,9 @@ fn commit_rename(state: &mut AppState) {
             };
             tab_state.name = Some(name);
         }
-        RenameTarget::PromptFolder { .. } | RenameTarget::PromptItem { .. } => {
+        RenameTarget::PromptFolder { .. }
+        | RenameTarget::PromptItem { .. }
+        | RenameTarget::NewDraftFolder { .. } => {
             commit_prompt_rename(state, target, name);
         }
     }

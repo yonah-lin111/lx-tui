@@ -18,6 +18,7 @@ pub enum OverlayKind {
     NewWorkspace,
     WorktreeOpen,
     TrustWorkspace,
+    SaveDraft,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -31,6 +32,7 @@ pub enum Overlay {
     NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
     TrustWorkspace(TrustWorkspace),
+    SaveDraft(SaveDraft),
 }
 
 impl Overlay {
@@ -45,8 +47,25 @@ impl Overlay {
             Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
             Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
+            Self::SaveDraft(_) => OverlayKind::SaveDraft,
         }
     }
+}
+
+/// 草稿保存选择器：工作区、候选目标与高亮项。
+#[derive(Debug)]
+pub struct SaveDraft {
+    pub workspace: usize,
+    pub entries: Vec<SaveDraftEntry>,
+    pub selected: usize,
+}
+
+/// 草稿保存目标项：根层、现有文件夹（含层级缩进）或新建文件夹。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveDraftEntry {
+    Root,
+    Folder { id: i64, depth: usize, name: String },
+    NewFolder,
 }
 
 /// 右键菜单：锚点、目标、命令列表与高亮项索引。
@@ -122,9 +141,22 @@ pub enum MenuCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
     Workspace(usize),
-    Tab { workspace: usize, tab: usize },
-    PromptFolder { workspace: usize, folder_id: i64 },
-    PromptItem { workspace: usize, item_id: i64 },
+    Tab {
+        workspace: usize,
+        tab: usize,
+    },
+    PromptFolder {
+        workspace: usize,
+        folder_id: i64,
+    },
+    PromptItem {
+        workspace: usize,
+        item_id: i64,
+    },
+    /// 保存草稿时新建文件夹：提交名字后建文件夹并把草稿存入。
+    NewDraftFolder {
+        workspace: usize,
+    },
 }
 
 /// 重命名浮层：目标与单行输入。

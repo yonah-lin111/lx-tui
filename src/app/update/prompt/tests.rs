@@ -53,7 +53,7 @@ fn apply_tree_loads_rows_and_marks_loaded() {
     let state = demo_state();
     assert!(state.workspaces[0].prompt_panel.loaded);
     let rows = state.workspaces[0].prompt_panel.rows();
-    assert_eq!(rows.len(), 4, "root, sub, nested, loose");
+    assert_eq!(rows.len(), 5, "draft, root, sub, nested, loose");
 }
 
 #[test]
@@ -74,26 +74,29 @@ fn toggle_mode_and_keyboard_navigation() {
     let mut state = demo_state();
     enter_tree(&mut state);
     let mut state = {
-        // 选中子文件夹（行 1）后折叠。
-        move_prompt_selection(&mut state, 1, 8);
+        // 选中子文件夹（展示行 2）后折叠。
+        move_prompt_selection(&mut state, 2, 8);
         state
     };
     assert!(collapse_prompt_row(&mut state));
     let rows = state.workspaces[0].prompt_panel.rows();
-    assert_eq!(rows.len(), 3, "子文件夹折叠隐藏 nested");
+    assert_eq!(rows.len(), 4, "子文件夹折叠隐藏 nested");
     assert!(expand_prompt_row(&mut state));
-    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
+    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 5);
 }
 
 #[test]
 fn enter_on_item_opens_editor_and_escape_returns() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    // 行序：root(0), sub(1), nested(2), loose(3)；选中 nested 并回车。
-    move_prompt_selection(&mut state, 2, 8);
+    // 行序：draft(0), root(1), sub(2), nested(3), loose(4)；选中 nested 并回车。
+    move_prompt_selection(&mut state, 3, 8);
     assert!(activate_prompt_row(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
-    assert_eq!(state.workspaces[0].prompt_panel.editing, Some(12));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
     assert_eq!(state.prompt.text(), "nested content");
     assert!(state.prompt_focused);
 
@@ -104,21 +107,38 @@ fn enter_on_item_opens_editor_and_escape_returns() {
 }
 
 #[test]
-fn typing_in_tree_mode_is_ignored_and_enter_toggles_folder() {
+fn typing_in_tree_mode_filters_and_escape_clears() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    apply_editor(&mut state, EditorCommand::InsertChar('x'));
-    assert_eq!(state.prompt.text(), "", "树视图吞掉文本输入");
-    // 选中根文件夹行回车 → 折叠。
+    for ch in "nested".chars() {
+        apply_editor(&mut state, EditorCommand::InsertChar(ch));
+    }
+    assert_eq!(state.prompt.text(), "", "树视图输入不进入编辑器");
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.search, "nested");
+    assert_eq!(panel.selected, 1, "过滤后选中首个结果");
+    assert_eq!(panel.rows().len(), 4, "draft + root + sub + nested");
+    apply_editor(&mut state, EditorCommand::Backspace);
+    assert_eq!(state.workspaces[0].prompt_panel.search, "neste");
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert!(state.workspaces[0].prompt_panel.search.is_empty());
+    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 5);
+
+    // 上移到草稿行（默认入口）回车 → 打开草稿编辑视图。
+    assert!(move_prompt_selection(&mut state, -1, 8));
     apply_editor(&mut state, EditorCommand::Newline);
-    assert!(state.workspaces[0].prompt_panel.rows().len() < 4);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft)
+    );
 }
 
 #[test]
 fn editing_item_persists_on_commit_and_action_quit() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 2, 8);
+    move_prompt_selection(&mut state, 3, 8);
     activate_prompt_row(&mut state);
     apply_editor(&mut state, EditorCommand::InsertText(" updated".into()));
     show_prompt_tree(&mut state);
@@ -164,7 +184,7 @@ fn item_menu_lists_commands_and_dispatches_status_copy_delete() {
         menu.target,
         OverlayTarget::PromptItem { item_id: 12, .. }
     ));
-    assert_eq!(state.workspaces[0].prompt_panel.selected, 2);
+    assert_eq!(state.workspaces[0].prompt_panel.selected, 3);
 
     // 状态切换命令 → 内存与效应。
     state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
@@ -324,9 +344,12 @@ fn rename_flow_updates_memory_and_queues_effect() {
 fn delete_folder_cascades_editing_item_exit() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 2, 8);
+    move_prompt_selection(&mut state, 3, 8);
     activate_prompt_row(&mut state);
-    assert_eq!(state.workspaces[0].prompt_panel.editing, Some(12));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
     delete_prompt_folder(&mut state, 0, 1);
     assert!(state.workspaces[0].prompt_panel.tree.folder(1).is_none());
     assert!(state.workspaces[0].prompt_panel.tree.item(12).is_none());
@@ -340,8 +363,149 @@ fn scroll_clamps_and_keeps_selection_visible() {
     enter_tree(&mut state);
     state.prompt.resize(30, 2);
     assert!(scroll_prompt_tree(&mut state, 5, 2));
-    assert!(state.workspaces[0].prompt_panel.scroll <= 2);
+    assert!(state.workspaces[0].prompt_panel.scroll <= 3);
     move_prompt_selection(&mut state, 3, 2);
     assert!(state.workspaces[0].prompt_panel.scroll <= state.workspaces[0].prompt_panel.selected);
     assert!(clamp_prompt_tree_scroll(&mut state, 4));
+}
+
+#[test]
+fn edit_falls_back_to_draft_when_selection_is_not_item() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    // 选中根文件夹（展示行 1）后 [edit]：回退打开临时草稿，不再无响应。
+    move_prompt_selection(&mut state, 1, 8);
+    toggle_prompt_panel_mode(&mut state);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft)
+    );
+    assert!(state.prompt_focused);
+
+    // 空树同样回退草稿：清空全部条目后 [edit] 仍进入编辑视图。
+    let mut state = AppState::demo();
+    enter_tree(&mut state);
+    toggle_prompt_panel_mode(&mut state);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft)
+    );
+}
+
+#[test]
+fn draft_roundtrip_keeps_content_and_picker_lists_folders() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(edit_prompt_draft(&mut state));
+    apply_editor(&mut state, EditorCommand::InsertText("draft body".into()));
+    show_prompt_tree(&mut state);
+    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+
+    // 再次打开草稿：内容保留（不入库也不丢失）。
+    edit_prompt_draft(&mut state);
+    assert_eq!(state.prompt.text(), "draft body");
+    show_prompt_tree(&mut state);
+
+    // 保存选择器：根层 + 层级顺序文件夹 + 新建文件夹。
+    open_save_draft(&mut state);
+    let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
+        panic!("picker open");
+    };
+    assert_eq!(
+        dialog.entries,
+        vec![
+            SaveDraftEntry::Root,
+            SaveDraftEntry::Folder {
+                id: 1,
+                depth: 0,
+                name: "root".into()
+            },
+            SaveDraftEntry::Folder {
+                id: 2,
+                depth: 1,
+                name: "sub".into()
+            },
+            SaveDraftEntry::NewFolder,
+        ]
+    );
+
+    // 回车保存到根层：登记 SaveDraft 效应并关闭选择器。
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(state.overlay.is_none());
+    let queued = state
+        .effects
+        .iter()
+        .find(|effect| matches!(effect, Effect::SaveDraft { .. }))
+        .cloned();
+    let Some(Effect::SaveDraft {
+        target,
+        name,
+        content,
+        ..
+    }) = queued
+    else {
+        panic!("save draft effect queued");
+    };
+    assert_eq!(target, crate::app::effects::DraftTarget::Folder(None));
+    assert_eq!(name, text::PROMPT_DEFAULT_NAME);
+    assert_eq!(content, "draft body");
+
+    // 服务保存成功后的收尾：清空草稿与搜索词。
+    finish_draft_save(&mut state, 0);
+    assert!(state.workspaces[0].prompt_panel.draft.is_empty());
+}
+
+#[test]
+fn save_draft_new_folder_opens_name_input_and_queues_folder_effect() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    edit_prompt_draft(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertText("body".into()));
+    show_prompt_tree(&mut state);
+    open_save_draft(&mut state);
+    // 选中“新建文件夹”项并确认。
+    set_save_draft_selection(&mut state, 3);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    let Some(Overlay::Rename(rename)) = &state.overlay else {
+        panic!("rename open");
+    };
+    assert_eq!(rename.target, RenameTarget::NewDraftFolder { workspace: 0 });
+    assert_eq!(rename.input.text(), text::PROMPT_FOLDER_DEFAULT_NAME);
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Clear);
+    for ch in "docs".chars() {
+        apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
+    }
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(state.overlay.is_none());
+    let queued = state
+        .effects
+        .iter()
+        .find(|effect| matches!(effect, Effect::SaveDraft { .. }))
+        .cloned();
+    let Some(Effect::SaveDraft {
+        target, content, ..
+    }) = queued
+    else {
+        panic!("save draft effect queued");
+    };
+    assert_eq!(
+        target,
+        crate::app::effects::DraftTarget::NewFolder {
+            parent_id: None,
+            name: "docs".into()
+        }
+    );
+    assert_eq!(content, "body");
+}
+
+#[test]
+fn save_picker_selection_moves_and_clamps() {
+    let mut state = demo_state();
+    open_save_draft(&mut state);
+    assert!(!move_save_draft_selection(&mut state, -1), "已在头部");
+    assert!(move_save_draft_selection(&mut state, 3));
+    assert!(!move_save_draft_selection(&mut state, 1), "已在尾部");
+    assert!(!set_save_draft_selection(&mut state, 99), "越界忽略");
+    assert!(set_save_draft_selection(&mut state, 0));
 }

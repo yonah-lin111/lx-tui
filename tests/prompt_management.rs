@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lx_tui::app::actions::{EditorCommand, OverlayKey};
 use lx_tui::app::overlay::{MenuCommand, NewWorkspace, Overlay, OverlayTarget, TextInput};
-use lx_tui::app::prompt::PromptMode;
+use lx_tui::app::prompt::{PromptEditing, PromptMode};
 use lx_tui::app::state::AppState;
 use lx_tui::app::update;
 use lx_tui::config::Config;
@@ -187,11 +187,10 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         state.active_workspace().prompt_panel.mode,
         PromptMode::Editor
     );
-    let prompt_id = state
-        .active_workspace()
-        .prompt_panel
-        .editing
-        .expect("bound");
+    let prompt_id = match state.active_workspace().prompt_panel.editing {
+        Some(PromptEditing::Item(id)) => id,
+        other => panic!("bound item expected, got {other:?}"),
+    };
     assert_eq!(
         state
             .active_workspace()
@@ -258,4 +257,85 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
         1,
         "b 工作区独立保存"
     );
+}
+
+#[test]
+fn draft_prompt_saved_to_new_folder_end_to_end() {
+    let root = temp_root("draft");
+    let workspace = root.join("workspace");
+    std::fs::create_dir_all(&workspace).expect("create workspace");
+    let workspace = std::fs::canonicalize(&workspace).expect("canonical");
+    let db_path = root.join("db").join("lx.db");
+    let database = Database::open(&db_path).expect("db opens");
+    database
+        .trust_workspace(&workspace, "workspace")
+        .expect("trusted");
+    let mut state = state_with_cwd(&workspace);
+    let mut service = Persistence::with_database(database);
+    service.pump(&mut state);
+
+    // 树视图默认选中置顶草稿行；空树 [edit] 回退打开草稿（不再无响应）。
+    update::show_prompt_tree(&mut state);
+    assert!(state.active_workspace().prompt_panel.draft_selected());
+    update::toggle_prompt_panel_mode(&mut state);
+    assert_eq!(
+        state.active_workspace().prompt_panel.mode,
+        PromptMode::Editor
+    );
+    assert_eq!(
+        state.active_workspace().prompt_panel.editing,
+        Some(PromptEditing::Draft)
+    );
+
+    // 编辑草稿 → 回树（内容保留在内存槽位，不入库）。
+    update::apply_editor(&mut state, EditorCommand::InsertText("draft body".into()));
+    update::show_prompt_tree(&mut state);
+    assert_eq!(state.active_workspace().prompt_panel.draft, "draft body");
+    assert!(
+        state
+            .active_workspace()
+            .prompt_panel
+            .tree
+            .items()
+            .is_empty(),
+        "草稿不入库"
+    );
+
+    // 保存选择器：只有根层与“新建文件夹”；输入名称后保存。
+    update::open_save_draft(&mut state);
+    let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
+        panic!("save picker open");
+    };
+    assert_eq!(dialog.entries.len(), 2, "根层 + 新建文件夹");
+    update::set_save_draft_selection(&mut state, 1);
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
+    update::apply_overlay_key(&mut state, OverlayKey::Clear);
+    for ch in "docs".chars() {
+        update::apply_overlay_key(&mut state, OverlayKey::Char(ch));
+    }
+    update::apply_overlay_key(&mut state, OverlayKey::Enter);
+    service.pump(&mut state);
+
+    // 保存成功：文件夹与条目写入 DB，草稿清空，编辑器绑定新条目。
+    let panel = &state.active_workspace().prompt_panel;
+    assert!(panel.draft.is_empty());
+    assert_eq!(panel.mode, PromptMode::Editor);
+    assert_eq!(panel.tree.folders().len(), 1);
+    let folder = panel.tree.folders()[0].clone();
+    assert_eq!(folder.name, "docs");
+    let item = &panel.tree.items()[0];
+    assert_eq!(item.folder_id, Some(folder.id));
+    assert_eq!(item.content, "draft body");
+    assert_eq!(panel.editing, Some(PromptEditing::Item(item.id)));
+
+    // 重启后草稿保存的文件夹与条目仍在。
+    drop(service);
+    drop(state);
+    let database = Database::open(&db_path).expect("reopen db");
+    let mut reloaded = state_with_cwd(&workspace);
+    let mut service = Persistence::with_database(database);
+    service.pump(&mut reloaded);
+    let panel = &reloaded.active_workspace().prompt_panel;
+    assert_eq!(panel.tree.folders().len(), 1);
+    assert_eq!(panel.tree.items()[0].content, "draft body");
 }

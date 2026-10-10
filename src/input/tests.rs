@@ -573,3 +573,34 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
         None
     );
 }
+
+#[test]
+fn save_draft_overlay_routes_navigation_only() {
+    let route_overlay = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::SaveDraft),
+            false,
+        )
+    };
+    assert_eq!(
+        route_overlay(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Up),
+        Some(Routed::Overlay(OverlayKey::Up))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Down),
+        Some(Routed::Overlay(OverlayKey::Down))
+    );
+    assert_eq!(route_overlay(KeyCode::Char('x')), None, "选择器无文本输入");
+    assert_eq!(route_overlay(KeyCode::Backspace), None);
+}

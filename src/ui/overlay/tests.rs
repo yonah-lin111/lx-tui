@@ -568,3 +568,129 @@ fn new_workspace_buttons_hit_their_cells() {
         Some(NewWorkspaceButton::Cancel)
     );
 }
+
+fn save_draft_state(entries: Vec<SaveDraftEntry>, selected: usize) -> AppState {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::SaveDraft(SaveDraft {
+        workspace: 0,
+        entries,
+        selected,
+    }));
+    state
+}
+
+#[test]
+fn save_draft_picker_renders_entries_footer_and_selection() {
+    let entries = vec![
+        SaveDraftEntry::Root,
+        SaveDraftEntry::Folder {
+            id: 1,
+            depth: 0,
+            name: "ideas".into(),
+        },
+        SaveDraftEntry::Folder {
+            id: 2,
+            depth: 1,
+            name: "deep".into(),
+        },
+        SaveDraftEntry::NewFolder,
+    ];
+    let state = save_draft_state(entries, 1);
+    let (lines, cursor) = draw_overlay(&state);
+    assert!(cursor.is_none(), "选择器无硬件光标");
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::SAVE_DRAFT_TITLE), "{joined}");
+    assert!(joined.contains(text::SAVE_DRAFT_FOOTER), "{joined}");
+    assert!(joined.contains(text::SAVE_DRAFT_ROOT), "{joined}");
+    assert!(joined.contains("  deep"), "层级缩进: {joined}");
+    assert!(joined.contains(text::SAVE_DRAFT_NEW_FOLDER), "{joined}");
+
+    // 选中行整行铺选中底色（Indexed 240）。
+    let shell = save_draft_shell(SCREEN, 4).expect("shell fits");
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+    terminal
+        .draw(|frame| {
+            render(frame, frame.area(), &state);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let y = shell.inner.y + 1;
+    assert_eq!(buffer[(shell.inner.x, y)].bg, Color::Indexed(240));
+    assert_eq!(
+        buffer[(shell.inner.x, shell.inner.y)].bg,
+        Color::Indexed(236)
+    );
+}
+
+#[test]
+fn save_draft_entry_hit_maps_rows_and_footer() {
+    let dialog = SaveDraft {
+        workspace: 0,
+        entries: vec![
+            SaveDraftEntry::Root,
+            SaveDraftEntry::Folder {
+                id: 1,
+                depth: 0,
+                name: "a".into(),
+            },
+            SaveDraftEntry::NewFolder,
+        ],
+        selected: 0,
+    };
+    let shell = save_draft_shell(SCREEN, dialog.entries.len()).expect("shell");
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, shell.inner.y),
+        Some(0)
+    );
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, shell.inner.y + 2),
+        Some(2)
+    );
+    assert_eq!(
+        save_draft_entry_at(
+            &shell,
+            &dialog,
+            shell.inner.x,
+            shell.inner.bottom().saturating_sub(1)
+        ),
+        None,
+        "页脚行不可命中"
+    );
+    assert_eq!(
+        save_draft_entry_at(
+            &shell,
+            &dialog,
+            shell.inner.x.saturating_sub(1),
+            shell.inner.y
+        ),
+        None,
+        "横向区域外"
+    );
+}
+
+#[test]
+fn save_draft_picker_windows_to_selected_entry() {
+    let mut entries = Vec::new();
+    for index in 0..30 {
+        entries.push(SaveDraftEntry::Folder {
+            id: index,
+            depth: 0,
+            name: format!("f{index}"),
+        });
+    }
+    entries.push(SaveDraftEntry::NewFolder);
+    let dialog = SaveDraft {
+        workspace: 0,
+        entries,
+        selected: 30,
+    };
+    let shell = save_draft_shell(SCREEN, dialog.entries.len()).expect("shell");
+    let max_rows = save_draft_max_rows(&shell);
+    let start = save_draft_visible_start(&dialog, max_rows);
+    assert!(start > 0, "选中项在窗口内需要上移窗口");
+    let last_row = shell.inner.y + (max_rows as u16).saturating_sub(1);
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, last_row),
+        Some(30)
+    );
+}

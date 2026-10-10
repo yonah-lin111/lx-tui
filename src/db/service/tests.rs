@@ -5,7 +5,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::app::effects::Effect;
+use crate::app::effects::{DraftTarget, Effect};
+use crate::app::prompt::PromptEditing;
 
 /// 独立临时库路径。
 fn temp_db_path(label: &str) -> PathBuf {
@@ -175,7 +176,7 @@ fn create_folder_and_prompt_effects_reload_tree() {
     );
     assert_eq!(
         state.workspaces[0].prompt_panel.editing,
-        Some(item.id),
+        Some(PromptEditing::Item(item.id)),
         "新建提示词绑定编辑目标"
     );
 }
@@ -275,10 +276,58 @@ fn tree_loads_on_demand_for_displayed_workspace() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "existing")
+        .create_prompt(&cwd, None, "existing", "")
         .expect("seed");
     assert!(!state.workspaces[0].prompt_panel.loaded);
     service.pump(&mut state);
     assert!(state.workspaces[0].prompt_panel.loaded);
     assert_eq!(state.workspaces[0].prompt_panel.tree.items().len(), 1);
+}
+
+#[test]
+fn save_draft_effect_persists_content_binds_editor_and_clears_draft() {
+    let (mut service, mut state, cwd, db_path) = trusted_service("save-draft");
+    state.workspaces[0].prompt_panel.draft = "draft body".into();
+    state.effects.push(Effect::SaveDraft {
+        workspace: cwd.clone(),
+        target: DraftTarget::Folder(None),
+        name: "New prompt".into(),
+        content: "draft body".into(),
+    });
+    assert!(service.pump(&mut state));
+    let panel = &state.workspaces[0].prompt_panel;
+    assert!(panel.draft.is_empty(), "保存成功后清空草稿槽位");
+    let item = &panel.tree.items()[0];
+    assert_eq!(item.content, "draft body");
+    assert_eq!(item.folder_id, None);
+    assert_eq!(panel.editing, Some(PromptEditing::Item(item.id)));
+    drop(service);
+    let reader = Database::open(&db_path).expect("reader opens");
+    let records = reader.list_prompts(&cwd).expect("list");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].content, "draft body");
+}
+
+#[test]
+fn save_draft_to_new_folder_creates_folder_then_prompt() {
+    let (mut service, mut state, cwd, _) = trusted_service("save-draft-folder");
+    state.workspaces[0].prompt_panel.draft = "body".into();
+    state.effects.push(Effect::SaveDraft {
+        workspace: cwd.clone(),
+        target: DraftTarget::NewFolder {
+            parent_id: None,
+            name: "saved folder".into(),
+        },
+        name: "New prompt".into(),
+        content: "body".into(),
+    });
+    assert!(service.pump(&mut state));
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.tree.folders().len(), 1);
+    let folder = panel.tree.folders()[0].clone();
+    assert_eq!(folder.name, "saved folder");
+    let item = &panel.tree.items()[0];
+    assert_eq!(item.folder_id, Some(folder.id));
+    assert_eq!(item.content, "body");
+    assert!(panel.draft.is_empty());
 }

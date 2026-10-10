@@ -329,12 +329,13 @@ impl Database {
         Ok(())
     }
 
-    /// 新建提示词；`folder_id` 为 None 时挂在根层。
+    /// 新建提示词；`folder_id` 为 None 时挂在根层；`content` 为初始正文。
     pub fn create_prompt(
         &self,
         workspace: &Path,
         folder_id: Option<i64>,
         name: &str,
+        content: &str,
     ) -> Result<i64> {
         self.ensure_workspace(workspace)?;
         let workspace_external = self
@@ -356,8 +357,14 @@ impl Database {
         };
         self.conn.execute(
             r#"INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at)
-               VALUES (?1, ?2, ?3, ?4, '', 'todo', datetime('now'), datetime('now'))"#,
-            params![new_external_id("prompt"), workspace_external, folder_external, name],
+               VALUES (?1, ?2, ?3, ?4, ?5, 'todo', datetime('now'), datetime('now'))"#,
+            params![
+                new_external_id("prompt"),
+                workspace_external,
+                folder_external,
+                name,
+                content
+            ],
         )?;
         Ok(self.conn.last_insert_rowid())
     }

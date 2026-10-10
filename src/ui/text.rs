@@ -70,13 +70,24 @@ pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
 /// prompt 视图模式按钮：编辑视图显示 `[list]`、树视图显示 `[edit]`。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[list]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[edit]";
-/// 提示词树符号：文件夹展开/折叠三角、条目图标与子层连接线。
+/// 提示词树：搜索框、草稿入口与连接符（子层末项 `└─`、其余 `├─`，与侧栏工作区树一致）。
+pub const PROMPT_TREE_SEARCH_ICON: &str = "⌕";
+pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
+pub const PROMPT_TREE_DRAFT_ICON: &str = "+";
+pub const PROMPT_TREE_DRAFT_LABEL: &str = "New prompt";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";
 pub const PROMPT_TREE_COLLAPSED: &str = "▸";
 pub const PROMPT_TREE_ITEM_ICON: &str = "•";
-pub const PROMPT_TREE_CONNECTOR: &str = "└─";
-/// 提示词树空状态。
+pub const PROMPT_TREE_LAST: &str = "└─";
+pub const PROMPT_TREE_MIDDLE: &str = "├─";
+/// 提示词树空状态与搜索无命中占位。
 pub const PROMPT_TREE_EMPTY: &str = "no prompts yet";
+pub const PROMPT_TREE_NO_MATCHES: &str = "no matching prompts";
+/// 临时的草稿保存选择器：标题、根层项、新建文件夹项与页脚。
+pub const SAVE_DRAFT_TITLE: &str = "save prompt to folder";
+pub const SAVE_DRAFT_ROOT: &str = "/";
+pub const SAVE_DRAFT_NEW_FOLDER: &str = "+ New folder";
+pub const SAVE_DRAFT_FOOTER: &str = "[enter] save  [esc] cancel";
 /// 新建提示词与文件夹的默认名（可随后重命名）。
 pub const PROMPT_DEFAULT_NAME: &str = "New prompt";
 pub const PROMPT_FOLDER_DEFAULT_NAME: &str = "New folder";
@@ -190,6 +201,8 @@ pub fn prompt_status_label(status: PromptItemStatus) -> &'static str {
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
 pub const RENAME_PROMPT_TITLE: &str = "rename prompt";
+/// 保存草稿时新建文件夹的名称输入标题。
+pub const RENAME_NEW_FOLDER_TITLE: &str = "new folder";
 pub const RENAME_FOLDER_TITLE: &str = "rename folder";
 /// rename 浮层输入为空时的输入说明占位（工作区与标签共用）。
 pub const RENAME_PLACEHOLDER: &str = "new name";

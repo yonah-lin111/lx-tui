@@ -105,13 +105,13 @@ fn deleting_folder_cascades_subfolders_and_prompts() {
         .create_folder(&workspace, Some(root), "sub")
         .expect("sub folder");
     database
-        .create_prompt(&workspace, Some(root), "in root")
+        .create_prompt(&workspace, Some(root), "in root", "")
         .expect("root prompt");
     database
-        .create_prompt(&workspace, Some(sub), "in sub")
+        .create_prompt(&workspace, Some(sub), "in sub", "")
         .expect("sub prompt");
     database
-        .create_prompt(&workspace, None, "loose")
+        .create_prompt(&workspace, None, "loose", "")
         .expect("loose prompt");
 
     database.delete_folder(root).expect("delete root");
@@ -136,10 +136,10 @@ fn prompt_crud_persists_and_isolates_workspaces() {
         .create_folder(&left, None, "folder")
         .expect("folder ok");
     let prompt = database
-        .create_prompt(&left, Some(left_folder), "draft")
+        .create_prompt(&left, Some(left_folder), "draft", "")
         .expect("prompt ok");
     database
-        .create_prompt(&right, None, "other")
+        .create_prompt(&right, None, "other", "")
         .expect("other prompt ok");
 
     database
@@ -186,7 +186,7 @@ fn prompt_in_missing_folder_is_rejected() {
     let (database, _) = open_test_database("missing-folder");
     let workspace = workspace_path("missing-folder");
     let error = database
-        .create_prompt(&workspace, Some(999), "orphan")
+        .create_prompt(&workspace, Some(999), "orphan", "")
         .expect_err("missing folder rejected");
     assert!(matches!(error, DbError::FolderMissing));
 }
