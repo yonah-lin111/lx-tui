@@ -62,7 +62,7 @@ pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[←]";
 pub const PROMPT_REDO_LABEL: &str = "[→]";
-pub const PROMPT_SELECT_ALL_LABEL: &str = "[≡]";
+pub const PROMPT_SELECT_ALL_LABEL: &str = "[*]";
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// prompt 未钉住时的按钮（点击钉住）。
 pub const PROMPT_PIN_LABEL: &str = "[pin]";
