@@ -16,39 +16,36 @@ use crate::ui::style;
 use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
-/// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制。
+/// 绘制 prompt 顶部工具栏与穿过按钮行的分割线；内容区过矮时不绘制。
 pub fn render_header(panel: Rect, buf: &mut Buffer, prompt: &Prompt, focused: bool) {
     let Some(header) = layout::prompt_header_rect(panel) else {
         return;
     };
     render_divider(panel, header, buf, focused);
-    render_toolbar(panel, buf, prompt);
+    render_toolbar(panel, buf, prompt, focused);
 }
 
-/// 分割线整行 `─`，两端衔接外层边框的 `├` / `┤`；样式跟随边框焦点态。
+/// 分割线穿过工具栏按钮行：整行 `─`，两端以 `├` / `┤` 衔接边框；样式跟随边框焦点态。
 fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
-    let y = header.y + layout::PROMPT_TOOLBAR_HEIGHT;
-    for x in header.x..header.right() {
+    let y = header.y;
+    for x in panel.x..panel.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
             cell.reset();
-            cell.set_symbol(text::DIVIDER_MID);
-            cell.set_style(style::border(focused));
-        }
-    }
-    for (x, symbol) in [
-        (panel.x, text::DIVIDER_LEFT_JOIN),
-        (panel.right().saturating_sub(1), text::DIVIDER_RIGHT_JOIN),
-    ] {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.reset();
+            let symbol = if x == panel.x {
+                text::DIVIDER_LEFT_JOIN
+            } else if x == panel.right().saturating_sub(1) {
+                text::DIVIDER_RIGHT_JOIN
+            } else {
+                text::DIVIDER_MID
+            };
             cell.set_symbol(symbol);
             cell.set_style(style::border(focused));
         }
     }
 }
 
-/// 工具栏：左侧 undo/redo（不可用时置灰），右侧 select all 与保存状态点。
-fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
+/// 工具栏：左侧 undo/redo（不可用时置灰），右侧 select all 与保存状态点；嵌在分割线上。
+fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, focused: bool) {
     let buttons = [
         (
             PromptToolbarButton::Undo,
@@ -79,6 +76,21 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt) {
             style::status_dot(prompt.is_saved()),
         ),
     ];
+    // 按钮两侧留白：把分割线上的相邻格改回空格，形成"文字嵌线"样式（对齐顶边框标题）。
+    for (button, _, _) in &buttons {
+        let Some(rect) = layout::prompt_toolbar_button_rect(panel, *button) else {
+            continue;
+        };
+        for x in [rect.x.saturating_sub(1), rect.right()] {
+            if let Some(cell) = buf.cell_mut((x, rect.y))
+                && cell.symbol() == text::DIVIDER_MID
+            {
+                cell.reset();
+                cell.set_symbol(" ");
+                cell.set_style(style::border(focused));
+            }
+        }
+    }
     for (button, label, button_style) in buttons {
         let Some(rect) = layout::prompt_toolbar_button_rect(panel, button) else {
             continue;

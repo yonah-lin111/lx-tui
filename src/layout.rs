@@ -7,27 +7,25 @@ use ratatui::layout::{Direction, Rect};
 /// 折叠窄条宽度：3 个内容列 + 1 列贴主区的分隔线。
 pub const COLLAPSED_STRIP: u16 = 4;
 
-/// prompt 工具栏高度：1。
+/// prompt 工具栏高度：1（分割线与按钮同行嵌线）。
 pub const PROMPT_TOOLBAR_HEIGHT: u16 = 1;
-/// prompt 工具栏下方分割线高度：1。
-pub const PROMPT_DIVIDER_HEIGHT: u16 = 1;
-/// prompt 顶部保留行数（工具栏 + 分割线）。
-pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEIGHT;
+/// prompt 顶部保留行数（工具栏与分割线合并为一行）。
+pub const PROMPT_HEADER_HEIGHT: u16 = 1;
 
 /// prompt 模板块边框占位：左侧（`╭─`/`│ `/`╰─`）与右侧竖线（`╮`/`│`/`╯`）列数。
 pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
 
-/// 工具栏左侧按钮（`[undo]` / `[redo]`）宽度（列）。
-const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 6;
+/// 工具栏左侧按钮（`[←]` / `[→]`）宽度（列）。
+const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
-/// `[select all]` 标签宽度（列）。
-const PROMPT_SELECT_ALL_WIDTH: u16 = 12;
-/// `[select all]` 与保存点之间的空档（列）。
+/// `[≡]` 标签宽度（列）。
+const PROMPT_SELECT_ALL_WIDTH: u16 = 3;
+/// `[≡]` 与保存点之间的空档（列）。
 const PROMPT_SELECT_ALL_GAP: u16 = 1;
-/// 显示 `[select all]` 所需的最小内容区宽度（列）：不足时只保留保存点。
-const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 28;
+/// 显示 `[≡]` 所需的最小面板宽度（列）：不足时只保留保存点。
+const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = 19;
 
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -685,7 +683,7 @@ fn prompt_body_rect(inner: Rect) -> Rect {
     }
 }
 
-/// prompt 顶部表头矩形（工具栏 + 分割线）；内容区过矮时不显示。
+/// prompt 顶部表头矩形（分割线穿过工具栏按钮行）；内容区过矮时不显示。
 pub fn prompt_header_rect(panel: Rect) -> Option<Rect> {
     let inner = pane_inner_rect(panel);
     (inner.height > PROMPT_HEADER_HEIGHT).then_some(Rect::new(
@@ -696,7 +694,7 @@ pub fn prompt_header_rect(panel: Rect) -> Option<Rect> {
     ))
 }
 
-/// prompt 工具栏行矩形；表头隐藏时为 None。
+/// prompt 工具栏行矩形（与表头同一行）；表头隐藏时为 None。
 pub fn prompt_toolbar_rect(panel: Rect) -> Option<Rect> {
     prompt_header_rect(panel).map(|header| Rect {
         height: PROMPT_TOOLBAR_HEIGHT,
@@ -704,42 +702,35 @@ pub fn prompt_toolbar_rect(panel: Rect) -> Option<Rect> {
     })
 }
 
-/// prompt 工具栏下方分割线行矩形；表头隐藏时为 None。
-pub fn prompt_divider_rect(panel: Rect) -> Option<Rect> {
-    prompt_header_rect(panel).map(|header| Rect {
-        y: header.y + PROMPT_TOOLBAR_HEIGHT,
-        height: PROMPT_DIVIDER_HEIGHT,
-        ..header
-    })
-}
-
-/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[select all]` 在窄宽度下优先隐藏）。
+/// 工具栏按钮矩形；按钮在内容区放不下时为 None（`[≡]` 在窄宽度下优先隐藏）。
+///
+/// 按钮嵌在分割线上：`├` 后留 1 空格起排左侧按钮组，右侧按钮组以空格留白贴 `┤`。
 pub fn prompt_toolbar_button_rect(panel: Rect, button: PromptToolbarButton) -> Option<Rect> {
     let bar = prompt_toolbar_rect(panel)?;
-    let inner = pane_inner_rect(panel);
+    let left = panel.x.saturating_add(2);
+    let right = panel.right().saturating_sub(1);
     let rect = match button {
-        PromptToolbarButton::Undo => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
+        PromptToolbarButton::Undo => Rect::new(left, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
         PromptToolbarButton::Redo => Rect::new(
-            bar.x + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP,
+            left + PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP,
             bar.y,
             PROMPT_TOOLBAR_BUTTON_WIDTH,
             1,
         ),
         PromptToolbarButton::SelectAll => {
-            if inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
+            if panel.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
             }
             Rect::new(
-                bar.right()
-                    .saturating_sub(PROMPT_SELECT_ALL_WIDTH + PROMPT_SELECT_ALL_GAP + 1),
+                right.saturating_sub(PROMPT_SELECT_ALL_WIDTH + PROMPT_SELECT_ALL_GAP + 2),
                 bar.y,
                 PROMPT_SELECT_ALL_WIDTH,
                 1,
             )
         }
-        PromptToolbarButton::Save => Rect::new(bar.right().saturating_sub(1), bar.y, 1, 1),
+        PromptToolbarButton::Save => Rect::new(right.saturating_sub(2), bar.y, 1, 1),
     };
-    (rect.right() <= bar.right()).then_some(rect)
+    (rect.right() <= right).then_some(rect)
 }
 
 /// 命中 prompt 工具栏按钮；表头隐藏、非工具栏行或未命中时为 None。

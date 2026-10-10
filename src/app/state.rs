@@ -14,6 +14,7 @@ use super::overlay::Overlay;
 use super::prompt::Prompt;
 use super::selection::Selection;
 use super::toast::Toast;
+use super::tooltip::Tooltip;
 
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
 const DEFAULT_COLS: u16 = 80;
@@ -64,6 +65,8 @@ pub struct AppState {
     /// 悬停的主区窗格分割线。
     pub pane_hover: Option<BoundaryHit>,
     pub toast: Option<Toast>,
+    /// 鼠标悬停的按钮提示；到显示时刻前只计时。
+    pub tooltip: Option<Tooltip>,
     /// prompt 等编辑器的视口选区。
     pub selection: Option<Selection>,
     /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
@@ -419,6 +422,7 @@ impl AppState {
             resizing_pane: None,
             pane_hover: None,
             toast: None,
+            tooltip: None,
             selection: None,
             terminal_selection: None,
             selection_autoscroll: None,

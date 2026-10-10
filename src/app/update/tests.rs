@@ -4,6 +4,7 @@ use super::*;
 use crate::app::overlay::WorktreeStatus;
 use crate::app::state::{WorkspaceGit, workspace_name};
 use crate::app::toast::{TOAST_DURATION, ToastKind};
+use crate::app::tooltip::TOOLTIP_DELAY;
 use crate::terminal::GridSize;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -201,9 +202,9 @@ fn resize_syncs_terminal_size() {
 fn resize_syncs_prompt_editor_size() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
-    // 30 列面板：28 列内容区，顶部 2 行工具栏表头，最右 1 列预留滚动条槽。
+    // 30 列面板：28 列内容区，顶部 1 行工具栏表头，最右 1 列预留滚动条槽。
     resize_panes(&mut state, &[(id, Rect::new(70, 0, 30, 20))]);
-    assert_eq!(state.prompt.size(), (27, 16));
+    assert_eq!(state.prompt.size(), (27, 17));
 }
 
 #[test]
@@ -633,6 +634,73 @@ fn hover_without_toast_is_noop() {
     assert_eq!(next_deadline(&state), None);
     dismiss_toast(&mut state);
     assert!(state.toast.is_none());
+}
+
+#[test]
+fn set_tooltip_target_keeps_timer_for_same_target() {
+    let mut state = demo_terminal();
+    let now = Instant::now();
+    assert!(set_tooltip_target(
+        &mut state,
+        Some(TooltipTarget::AddTab),
+        now
+    ));
+    assert!(!set_tooltip_target(
+        &mut state,
+        Some(TooltipTarget::AddTab),
+        now + Duration::from_millis(100)
+    ));
+    assert_eq!(next_deadline(&state), Some(now + TOOLTIP_DELAY));
+}
+
+#[test]
+fn set_tooltip_target_resets_timer_on_change_and_clears_on_none() {
+    let mut state = demo_terminal();
+    let now = Instant::now();
+    assert!(set_tooltip_target(
+        &mut state,
+        Some(TooltipTarget::AddTab),
+        now
+    ));
+    let later = now + Duration::from_millis(200);
+    assert!(set_tooltip_target(
+        &mut state,
+        Some(TooltipTarget::Exit),
+        later
+    ));
+    assert_eq!(next_deadline(&state), Some(later + TOOLTIP_DELAY));
+    assert!(clear_tooltip(&mut state));
+    assert!(state.tooltip.is_none());
+    assert!(!clear_tooltip(&mut state));
+    assert!(!set_tooltip_target(&mut state, None, now));
+}
+
+#[test]
+fn tick_reveals_tooltip_at_deadline() {
+    let mut state = demo_terminal();
+    let now = Instant::now();
+    set_tooltip_target(&mut state, Some(TooltipTarget::PromptUndo), now);
+    assert!(!tick(
+        &mut state,
+        now + TOOLTIP_DELAY - Duration::from_millis(1)
+    ));
+    assert!(
+        !state
+            .tooltip
+            .as_ref()
+            .expect("tooltip present")
+            .is_visible()
+    );
+    assert!(tick(&mut state, now + TOOLTIP_DELAY));
+    assert!(
+        state
+            .tooltip
+            .as_ref()
+            .expect("tooltip present")
+            .is_visible()
+    );
+    assert!(!tick(&mut state, now + TOOLTIP_DELAY));
+    assert_eq!(next_deadline(&state), None);
 }
 
 #[test]

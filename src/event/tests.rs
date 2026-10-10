@@ -55,6 +55,15 @@ fn demo_terminal() -> AppState {
     state
 }
 
+/// 侧栏折叠按钮矩形：tooltip 悬停测试的固定目标。
+fn collapse_sidebar_area(geo: &Geometry) -> Rect {
+    ui::collapse_buttons(&geo.view, false)
+        .into_iter()
+        .find(|button| button.target == ui::CollapseTarget::Sidebar)
+        .expect("sidebar collapse button visible")
+        .area
+}
+
 #[test]
 fn mouse_drag_resizes_sidebar() {
     let config = Config::default();
@@ -1839,7 +1848,6 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let mut dirty = false;
 
     let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
-    let divider = layout::prompt_divider_rect(geo.view.prompt).expect("divider visible");
     let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
     let blank_x = select_all.x - 1;
     handle_terminal_event(
@@ -1851,7 +1859,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut dirty,
     );
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), blank_x, divider.y),
+        mouse(MouseEventKind::Down(MouseButton::Left), bar.x + 15, bar.y),
         &mut state,
         &mut sessions,
         &geo,
@@ -2248,4 +2256,164 @@ fn poll_active_agents_ignores_plain_shell() {
             .and_then(|target| target.agent.as_ref())
             .is_none()
     );
+}
+
+#[test]
+fn mouse_motion_over_button_arms_tooltip_and_leaving_clears() {
+    use crate::app::tooltip::TooltipTarget;
+
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let button = collapse_sidebar_area(&geo);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.x + 1, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let tooltip = state.tooltip.as_ref().expect("tooltip armed");
+    assert_eq!(tooltip.target, TooltipTarget::CollapseSidebar);
+    assert!(!tooltip.is_visible(), "停留前只计时不显示");
+    assert!(dirty, "悬停变化置脏重绘");
+
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            geo.view.panes.x + 2,
+            geo.view.panes.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tooltip.is_none(), "离开按钮立即清除");
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_down_clears_tooltip() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let button = collapse_sidebar_area(&geo);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.x + 1, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tooltip.is_some());
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            geo.view.panes.x + 2,
+            geo.view.panes.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tooltip.is_none(), "左键按下清空提示");
+}
+
+#[test]
+fn mouse_motion_during_workspace_drag_does_not_arm_tooltip() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    crate::app::update::create_workspace(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    crate::app::update::begin_workspace_drag(&mut state, 0);
+    let button = collapse_sidebar_area(&geo);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.x + 1, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tooltip.is_none(), "拖动排序期间不弹提示");
+}
+
+#[test]
+fn mouse_motion_with_overlay_open_keeps_tooltip_clear() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let button = collapse_sidebar_area(&geo);
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.x + 1, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tooltip.is_some());
+
+    crate::app::update::open_tab_menu(&mut state, 0, (2, 2));
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.x + 1, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.tooltip.is_none(), "浮层打开时清除且不重新触发");
+}
+
+#[test]
+fn mouse_motion_over_template_button_arms_tooltip() {
+    use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
+
+    let (mut state, config, geo, area) = template_button_state();
+    let copy = crate::ui::prompt::template_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == crate::ui::prompt::TemplateBlockButton::Copy)
+        .expect("copy button visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, copy.rect.x, copy.rect.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let tooltip = state.tooltip.as_ref().expect("template tooltip armed");
+    assert_eq!(
+        tooltip.target,
+        TooltipTarget::TemplateButton {
+            line: copy.line,
+            button: TemplateButtonKind::Copy,
+        }
+    );
+    assert!(!tooltip.is_visible(), "停留前只计时不显示");
+    assert!(dirty);
 }

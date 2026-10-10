@@ -3,6 +3,8 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, SlashCommandId, TemplateStatus};
+use crate::app::state::{AppState, PaneView};
+use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
@@ -58,9 +60,9 @@ pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
 /// prompt 底边框 linked worktree 标记前缀。
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
-pub const PROMPT_UNDO_LABEL: &str = "[undo]";
-pub const PROMPT_REDO_LABEL: &str = "[redo]";
-pub const PROMPT_SELECT_ALL_LABEL: &str = "[select all]";
+pub const PROMPT_UNDO_LABEL: &str = "[←]";
+pub const PROMPT_REDO_LABEL: &str = "[→]";
+pub const PROMPT_SELECT_ALL_LABEL: &str = "[≡]";
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// prompt 未钉住时的按钮（点击钉住）。
 pub const PROMPT_PIN_LABEL: &str = "[pin]";
@@ -213,6 +215,43 @@ pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
 /// 工作区路径非目录。
 pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
 
+/// tooltip 边框标题；当前所有按钮共用一个固定标题。
+pub const TOOLTIP_TITLE: &str = "Tooltip";
+
+/// 按钮 tooltip 文案：显示点击后的动作，随按钮当前状态翻转（收起/展开、钉住、切换视图）。
+pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
+    match target {
+        TooltipTarget::CollapseSidebar if state.sidebar_collapsed => "expand sidebar",
+        TooltipTarget::CollapseSidebar => "collapse sidebar",
+        TooltipTarget::CollapsePrompt if state.prompt_collapsed => "expand prompt",
+        TooltipTarget::CollapsePrompt => "collapse prompt",
+        TooltipTarget::CollapseAgents if state.agents_collapsed => "expand agents",
+        TooltipTarget::CollapseAgents => "collapse agents",
+        TooltipTarget::PaneToggle(pane) => match state.pane_anywhere(pane).map(|pane| pane.view) {
+            Some(PaneView::Lx) => "switch to terminal",
+            Some(PaneView::Terminal) => "switch to lx",
+            None => "switch view",
+        },
+        TooltipTarget::AddWorkspace => "new workspace",
+        TooltipTarget::AddTab => "new tab",
+        TooltipTarget::TabScrollLeft => "scroll tabs left",
+        TooltipTarget::TabScrollRight => "scroll tabs right",
+        TooltipTarget::Exit => "quit lx-tui",
+        TooltipTarget::PromptUndo => "undo (ctrl+z)",
+        TooltipTarget::PromptRedo => "redo (ctrl+y)",
+        TooltipTarget::PromptSelectAll => "select all",
+        TooltipTarget::PromptSave => "mark saved",
+        TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
+        TooltipTarget::PromptPin => "pin prompt",
+        TooltipTarget::TemplateButton { button, .. } => match button {
+            TemplateButtonKind::Status => "cycle block status",
+            TemplateButtonKind::Copy => "copy block",
+            TemplateButtonKind::Clean => "clean block",
+            TemplateButtonKind::Delete => "delete block",
+        },
+    }
+}
+
 /// 右键菜单边框标题：目标名缺失时按种类回退。
 pub const MENU_TITLE_WORKSPACE: &str = "workspace";
 pub const MENU_TITLE_TAB: &str = "tab";
@@ -228,13 +267,13 @@ pub fn slash_command_text(id: SlashCommandId) -> (String, String) {
     (format!("/{}", id.short_name()), id.long_name().to_string())
 }
 
-/// 模板块操作按钮文案；状态按钮按当前状态取标签。
+/// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
 pub const TEMPLATE_BUTTON_RUN: &str = "[run]";
 pub const TEMPLATE_BUTTON_DONE: &str = "[done]";
-pub const TEMPLATE_BUTTON_COPY: &str = "[copy]";
-pub const TEMPLATE_BUTTON_CLEAN: &str = "[clean]";
-pub const TEMPLATE_BUTTON_DEL: &str = "[del]";
+pub const TEMPLATE_BUTTON_COPY: &str = "[❐]";
+pub const TEMPLATE_BUTTON_CLEAN: &str = "[⌫]";
+pub const TEMPLATE_BUTTON_DEL: &str = "[✕]";
 
 /// 状态按钮标签：todo / run / done。
 pub fn template_status_label(status: TemplateStatus) -> &'static str {
