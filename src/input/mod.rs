@@ -20,6 +20,8 @@ pub enum Routed {
     Overlay(OverlayKey),
     /// 复制 prompt 选区（无选区为全文）到系统剪贴板。
     Copy,
+    /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时草稿走保存选择器。
+    SavePrompt,
     /// 复制光标所在模板块正文到系统剪贴板。
     CopyTemplateBlock,
     /// 原样写入焦点窗格的字节。
@@ -59,6 +61,13 @@ pub fn route(
             }
             return Some(Routed::Copy);
         }
+        let save_chord = matches!(key.code, KeyCode::Char('s' | 'S'))
+            && (key.modifiers.contains(KeyModifiers::CONTROL)
+                || key.modifiers.contains(KeyModifiers::SUPER))
+            && !key.modifiers.contains(KeyModifiers::ALT);
+        if save_chord {
+            return Some(Routed::SavePrompt);
+        }
         return editor_command(key).map(Routed::Editor);
     }
     if pane_lx {
@@ -82,12 +91,13 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         },
         OverlayKind::ConfirmClose
         | OverlayKind::ConfirmSwitchCwd
-        | OverlayKind::ConfirmSyncWorkspaceCwd => match key.code {
+        | OverlayKind::ConfirmSyncWorkspaceCwd
+        | OverlayKind::TrustWorkspace => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
         },
-        OverlayKind::Rename | OverlayKind::NewWorkspace => match key.code {
+        OverlayKind::Rename | OverlayKind::NewWorkspace | OverlayKind::NewNode => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -103,6 +113,23 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             _ => None,
         },
         OverlayKind::WorktreeOpen => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+            _ => None,
+        },
+        OverlayKind::SaveDraft => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),

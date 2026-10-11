@@ -74,6 +74,11 @@ pub fn status_dot(saved: bool) -> Style {
     Style::default().fg(if saved { Color::Green } else { Color::Yellow })
 }
 
+/// 临时提示词保存状态点：恒灰（草稿不参与自动保存）。
+pub fn status_dot_draft() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+
 /// 浮层标题：正文加粗。
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
@@ -218,6 +223,16 @@ pub fn template_status(status: TemplateStatus) -> Style {
         TemplateStatus::Todo => muted(),
         TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
         TemplateStatus::Done => Style::default().fg(Color::Green),
+    }
+}
+
+/// 提示词条目状态标签：todo 次要、in_progress 黄、completed 绿（与模板块状态色一致）。
+pub fn prompt_status(status: crate::app::prompt::PromptItemStatus) -> Style {
+    use crate::app::prompt::PromptItemStatus;
+    match status {
+        PromptItemStatus::Todo => muted(),
+        PromptItemStatus::InProgress => Style::default().fg(Color::Yellow),
+        PromptItemStatus::Completed => Style::default().fg(Color::Green),
     }
 }
 

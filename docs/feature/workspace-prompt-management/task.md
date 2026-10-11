@@ -1,0 +1,118 @@
+# 工作区提示词管理、嵌套文件夹与工作区信任机制 — 执行任务
+
+- 分支：`feature/workspace-prompt-management`
+- 规则：生产代码禁止 `unwrap()/expect()`；错误使用 `Result` 与 `?`；用户可见文案统一至 `ui/text.rs`；样式只从 `ui/style.rs` 取；变更前后运行测试。
+
+## 执行清单
+
+### 1. 数据库与持久化基础设施（`src/db/`）
+- [x] 引入 `rusqlite` 依赖与环境路径管理（生产 `~/.lx-t/db/lx.db`，开发 `~/.lx-t-dev/db/lx.db`）
+- [x] 实现 SQLite 初始化与 Schema 迁移版本控制（`workspace`, `workspace_folder`, `workspace_prompt`）
+- [x] 实现 Workspace 信任状态查询与插入 API（`get_workspace_trust`, `set_workspace_trusted`）
+- [x] 实现提示词与文件夹 CRUD API（支持最大 2 层文件夹深度约束校验）
+- [x] 单元测试：`src/db/tests.rs` 验证表迁移、层级限制、级联删除与事务一致性
+
+### 2. 工作区信任机制（`src/app/` 与 `src/ui/overlay.rs`）
+- [x] 定义 `OverlayKind::TrustWorkspace` 与 `Overlay::TrustWorkspace` 状态结构体
+- [x] `lx` 启动时增加工作区信任门：未信任先在当前终端行内显示信任页（logo + 边框对话框 + `No, exit`（默认）/`Yes, I trust this folder` 键鼠选择），选择 No 清屏输出提示并以 0 退出、不进入应用；已信任直接进入
+- [x] 新建工作区弹窗确认后增加信任检测：未信任触发信任浮层；拒绝则取消创建
+- [x] 终端右键菜单同步按钮触发前增加信任检测：未信任触发信任浮层；拒绝则取消同步
+- [x] `ui/overlay.rs` 渲染信任模态框（标题、路径高亮、`[Trust & Open]`、`[Don't Trust]` 按钮）
+- [x] 单元测试：`src/app/overlay/tests.rs` 与 `src/app/update/tests.rs` 覆盖三种触发路径与拒绝回退行为
+
+### 3. 提示词管理领域与状态模型（`src/app/prompt/`）
+- [x] 定义 `PromptTree`、`PromptFolder`、`PromptItem` 纯内存模型与树形构建算法
+- [x] 限制文件夹嵌套最大深度（`depth <= 1`，即最多 2 层）
+- [x] 在 `AppState` 中维护当前工作区的提示词树状态、当前选中提示词 id、树滚动位置
+- [x] 支持右栏在「提示词树状管理器视图」与「提示词编辑视图」之间切换（或分栏联动）
+- [x] 单元测试：`src/app/prompt/tests.rs` 验证树形折叠、新增限制、节点定位
+
+### 4. 浮层菜单与交互路由（`src/app/overlay.rs` 与 `src/app/update.rs`）
+- [x] 扩展 `OverlayTarget` 支持提示词条目、文件夹与空白区域目标
+- [x] 扩展 `MenuCommand`（`NewPrompt`, `NewFolder`, `RenameFolder`, `DeleteFolder`, `ChangeStatus`, `CopyContent`, `DeletePrompt`）
+- [x] 实现右键点击树节点弹出对应菜单，左键点击执行对应命令
+- [x] 实现重命名弹窗复用现有 `Rename` 浮层；删除弹窗复用 `ConfirmClose` 风格
+- [x] 单元测试：`src/app/update/tests.rs` 覆盖右键菜单命令分派与数据同步
+
+### 5. 渲染层支持（`src/ui/prompt.rs` 与 `src/ui/widgets/`）
+- [x] 在 `ui/prompt.rs` 中实现提示词树渲染：文件夹图标/折叠展开三角、缩进线、条目状态标签（`todo`/`run`/`done`）
+- [x] 在 `ui/text.rs` 增加信任弹窗文案、树节点状态文案与右键菜单文案
+- [x] 适配宽度受限场景下的文本截断与省略号
+- [x] 单元测试：`src/ui/prompt/tests.rs` 与 `src/ui/text/tests.rs` 确保无非法字符与对齐无误
+
+### 6. 集成测试与规范校验
+- [x] 端到端集成测试：新建未信任工作区 → 确认信任 → 新建文件夹 → 嵌套子文件夹 → 尝试建第 3 层（阻止） → 新建提示词 → 编辑内容并持久化 → 切换工作区隔离
+- [x] `cargo fmt`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [x] `cargo test`
+
+## 完成记录
+
+- 实施分支：`feature/workspace-prompt-management`（工作区 `.worktrees/workspace-prompt-management`）。
+- 架构落地：`src/db/`（rusqlite bundled + `PRAGMA user_version` 迁移 + 信任/文件夹/提示词 CRUD）与
+  `src/db/service.rs` 同步受控服务；app 层新增 `Effect` 出箱、`PromptTree/PromptPanel` 模型与
+  `update::{prompt,trust}` 子模块，DB 读写全部收口在事件循环内的服务执行。
+- 实施差异（相对 design.md）：
+  1. `OverlayTarget` 的提示词目标使用 DB 整数 id（`i64`）而非 external_id 字符串，保持枚举 `Copy`
+     并避免全量调用点改动；external_id 仍按设计存库。
+  2. 三层触发（启动/新建/同步）以“信任检查效应 + 决策续作”实现：启动检查在
+     `Persistence::with_database` 内完成；新建工作区与终端同步先入 `effect::CheckTrust` 队列，
+     由服务查库后选择续作或弹信任浮层。
+  3. 信任浮层按键：`Enter` = 信任并续作、`Esc`/点击按钮之外 = 拒绝；启动拒绝恢复终端后输出
+     `ui/text.rs::TRUST_REFUSED_MESSAGE` 并以 0 退出。
+  4. DB 路径按环境变量 `LX_TUI_ENV`/`LX_ENV` 优先、缺省 `cfg!(debug_assertions)` 判定；
+     额外支持 `LX_TUI_DB_PATH` 覆盖，供测试与集成测试隔离。
+  5. 提示词树默认编辑视图（保持既有右栏行为），工具栏最左新增模式按钮 `[list]`/`[edit]`；
+     因按钮组加宽，`[select all]` 的显示阈值提升到内容区 35 列。
+  6. 隐藏第二层折叠/展开后仍保留折叠状态（重载按文件夹 id 继承）；删除文件夹在内存与服务层
+     均级联，第三层新建在菜单（不展示）与 DB（`DepthExceeded`）双重阻止。
+  7. 既有测试适配：新建工作区显式路径改为断言信任检查效应；同步路径测试先以已信任结果续作；
+     三个真实 PTY 集成测试经 `tests/common` 隔离数据库并预信任工作目录；侧栏/prompt 标题断言
+     改为与工作目录名无关的稳定形式（长目录名截断与窄面板标题重叠）。
+- 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全绿
+  （864 lib + 31 集成，含新增 `tests/prompt_management.rs` 端到端用例）。
+
+## 补充修订（用户要求）
+
+- 启动信任行为调整：`lx` 在未信任目录启动时**不进入应用、不进入备用屏幕**，先清屏并在当前终端
+  屏幕**左上对齐**显示信任页（参考 Claude Code，无居中浮层/对话框底）：全宽 `─` 分隔线在最上方 +
+  其下左对齐 LX 像素 logo + 1 列缩进内容（`Accessing workspace:` / 中间省略的路径高亮 /
+  `Quick safety check:` 安全提示 / 能力说明：加入工作区与提示词管理）+ `No, exit`（默认选中）与
+  `Yes, I trust this folder` 两个可选项（整行全宽高亮 + `▸` 标记）与键鼠操作（`↑/↓` 或鼠标悬停
+  切换、`Enter` / 左键点击确认、`Esc` 取消、`y`/`n` 快捷选择）；
+  选择 No 清屏后输出 `workspace not trusted; exiting` 并以 0 退出。
+  应用内部触发（显式路径新建工作区、终端右键同步）保持 `Overlay::TrustWorkspace` 弹窗；
+  启动信任门由 `event::startup_trust` 在 `Tui::init` 之后、主循环之前执行（独立信任页小循环），
+  `db::service::Persistence::{untrusted_startup_path, trust_path}` 提供查询与登记。
+- 新增真实 PTY 集成测试 `tests/trust_prompt.rs`：未信任目录启动先显示信任页，
+  覆盖 `y` 进入应用、默认 `No` 回车退出、方向键切到 `Yes` 进入应用、鼠标点击 No 退出 / Yes 进入应用，
+  并断言回答前不进入备用屏（未打开应用）；`tests/prompt_management.rs` 改为覆盖应用内信任弹窗
+  （新建未信任工作区 → 弹窗确认 → 创建并入库）。
+- `Database::open` 增加 5 秒 `busy_timeout`，提升多实例并发下的健壮性。
+
+## 增补需求（用户验收反馈，已确认并实现）
+
+- **修复 [edit] 死按钮**：树视图选中文件夹或空树时点击 `[edit]` 无响应；改为回退打开临时草稿编辑视图。
+- **临时提示词（草稿）**：树视图工具栏右端常显 `[temp prompt]` 按钮（右对齐），点击提交当前编辑并进入
+  草稿编辑视图（不入库，正文只存内存、随工作区隔离）；保存入口在编辑视图执行——保存点弹出
+  “保存到文件夹”选择器：顶部 `name` 输入框可命名提示词（预填 `New prompt`）；文件夹树形展示
+  （`├─`/`└─` 末项连接符）；点击文件夹仅选中、`[save enter]`/回车才执行（空名拒绝）；点击
+  `+ New folder` 打开与列表一致的新建文件夹命名浮层（预填 `New folder`，确认后立即建库并返回选择器
+  并选中新文件夹，取消返回不创建；挂根层，2 层约束不变）；
+  保存后以所填名称创建正式条目并绑定编辑器、清空草稿。
+- **列表搜索**：树视图顶部常显搜索框 `⌕ search prompts…`，交互与模态输入框一致（硬件光标、视口滚动、
+  占位）；字符/`Backspace`/`Delete` 编辑过滤词、`←`/`→`/`Home`/`End` 移动光标、`Ctrl+C` 清空；
+  过滤为大小写不敏感子串（命中文件夹展示整棵子树、条目展示祖先链；忽略折叠状态并绘制展开态三角，
+  清空恢复）；`↑`/`↓` 移动结果、回车打开/折叠、`Esc` 清空（折叠不再占用 `←`/`→`）。
+- **新建提示词命名浮层**：`New prompt` 不再直接以默认名创建并进入编辑；改为打开命名浮层
+  （输入框不预填、占位 `New prompt`，`[create enter]`/`[clear ^c]`/`[cancel esc]`），确认后创建并选中条目、
+  停留在树视图（不自动打开编辑），取消不创建；编辑视图分割线行内嵌编辑目标 title
+  （条目名 / 草稿 `temp prompt`，超宽 `…` 截断）。
+- **树形连接符对齐侧栏**：子层行按末项判定绘制 `├─`/`└─`（与侧栏 git 工作区树一致），不再一律 `└─`；
+  嵌套文件夹内的条目再深一层，以祖先续接线 `│`（祖先非末项）/空格对齐；搜索框下方加贯穿分割线，
+  列表在分割线下方独立滚动并显示滚动条（轨道点击/thumb 拖拽/滚轮按行）。
+- **保存逻辑（自动保存与快捷键）**：条目编辑停止输入约 800ms 自动落库（tick 静置判定、
+  `next_deadline` 安排唤醒、新编辑重置计时），保存点黄→绿；草稿不自动保存、圆点恒灰；
+  `Ctrl/Cmd+S`（面板聚焦时）与点击保存点同语义（条目立即保存、草稿打开保存选择器）；
+  进入应用/切换工作区默认打开临时提示词（目标工作区已打开条目时保持），树视图切回也落回草稿；
+  切换/关闭/退出前仍即时提交兜底。

@@ -127,7 +127,13 @@ fn targets(
         targets.push((TooltipTarget::Exit, area));
     }
     if !state.prompt_collapsed {
+        let tree = state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree;
         for (button, target) in [
+            (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
+            (
+                layout::PromptToolbarButton::TempPrompt,
+                TooltipTarget::PromptTempPrompt,
+            ),
             (layout::PromptToolbarButton::Undo, TooltipTarget::PromptUndo),
             (layout::PromptToolbarButton::Redo, TooltipTarget::PromptRedo),
             (
@@ -136,7 +142,7 @@ fn targets(
             ),
             (layout::PromptToolbarButton::Save, TooltipTarget::PromptSave),
         ] {
-            if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button) {
+            if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, tree) {
                 targets.push((target, area));
             }
         }

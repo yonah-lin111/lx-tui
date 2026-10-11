@@ -4,8 +4,15 @@ mod list;
 mod mention;
 mod panel;
 mod template;
+pub mod tree;
+
+pub use tree::{
+    PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPanel, PromptRow,
+    PromptRowKind, PromptTree,
+};
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use unicode_width::UnicodeWidthChar;
 
@@ -51,6 +58,10 @@ pub struct Prompt {
     panel_suppressed: bool,
     /// 当前是否处于已保存状态；任何文本写操作置 false。
     is_saved: bool,
+    /// 内容修订号：每次置脏 +1（光标移动不计数），供自动保存静置判定。
+    revision: u64,
+    /// 自动保存静置观察：最近一次判定时的修订号与时间；修订号变化即重置计时。
+    autosave: Option<(u64, Instant)>,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -94,6 +105,8 @@ impl Prompt {
             mention: MentionState::default(),
             panel_suppressed: false,
             is_saved: true,
+            revision: 0,
+            autosave: None,
         }
     }
 
@@ -122,9 +135,55 @@ impl Prompt {
         self.is_saved
     }
 
-    /// 手动标记为已保存（工具栏保存点）。
+    /// 手动标记为已保存（工具栏保存点/手动保存/自动保存落库后）。
     pub fn mark_saved(&mut self) {
         self.is_saved = true;
+        self.autosave = None;
+    }
+
+    /// 自动保存待触发时刻：未保存且静置观察与当前修订一致时返回 `起点 + delay`；
+    /// 事件循环据此安排唤醒（空档期不轮询）。
+    pub fn autosave_deadline(&self, delay: Duration) -> Option<Instant> {
+        if self.is_saved {
+            return None;
+        }
+        let (revision, since) = self.autosave?;
+        (revision == self.revision).then_some(since + delay)
+    }
+
+    /// 自动保存静置判定：内容变更后静置达到 `delay` 返回 true；
+    /// 每次调用记录当前修订号的观察起点，后续新修订自动重置计时。
+    pub fn autosave_due(&mut self, now: Instant, delay: Duration) -> bool {
+        if self.is_saved {
+            self.autosave = None;
+            return false;
+        }
+        match self.autosave {
+            Some((revision, since)) if revision == self.revision => {
+                now.duration_since(since) >= delay
+            }
+            _ => {
+                self.autosave = Some((self.revision, now));
+                false
+            }
+        }
+    }
+
+    /// 替换全文（载入提示词条目）：净化文本、清空历史与浮层并回到已保存态；光标落在文末。
+    pub fn set_text(&mut self, text: &str) {
+        self.text = sanitize(text);
+        self.cursor = self.text.len();
+        self.scroll = 0;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_edit = None;
+        self.panel = None;
+        self.slash = None;
+        self.mention.clear();
+        self.panel_suppressed = false;
+        self.is_saved = true;
+        self.autosave = None;
+        self.scroll_cursor_into_view();
     }
 
     /// 是否存在可撤销的编辑。
@@ -658,6 +717,7 @@ impl Prompt {
     /// 标记文本已修改：任何写操作（含未记录快照的删除）都置脏。
     fn mark_dirty(&mut self) {
         self.is_saved = false;
+        self.revision = self.revision.wrapping_add(1);
     }
 
     /// 恢复快照并结束当前合并组。

@@ -56,6 +56,41 @@ fn rename_state(name: &str) -> AppState {
 }
 
 #[test]
+fn trust_overlay_renders_question_path_and_buttons() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::TrustWorkspace(TrustWorkspace {
+        path: PathBuf::from("/tmp/trusted-workspace"),
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
+            cwd: PathBuf::from("/tmp/trusted-workspace"),
+        },
+    }));
+    let (lines, cursor) = draw_overlay(&state);
+    let body = lines.join("\n");
+    assert!(body.contains(text::TRUST_WORKSPACE_TITLE), "{body}");
+    assert!(body.contains(text::TRUST_WORKSPACE_QUESTION), "{body}");
+    assert!(body.contains("/tmp/trusted-workspace"), "{body}");
+    assert!(body.contains(text::BUTTON_TRUST), "{body}");
+    assert!(body.contains(text::BUTTON_DONT_TRUST), "{body}");
+    assert!(cursor.is_none(), "信任浮层不占用硬件光标");
+}
+
+#[test]
+fn trust_overlay_buttons_hit_expected_cells() {
+    let shell = trust_shell(SCREEN).expect("trust shell fits");
+    let rects =
+        widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW);
+    assert_eq!(
+        trust_button_at(&shell, rects[0].x, rects[0].y),
+        Some(TrustButton::Trust)
+    );
+    assert_eq!(
+        trust_button_at(&shell, rects[1].x, rects[1].y),
+        Some(TrustButton::Refuse)
+    );
+    assert_eq!(trust_button_at(&shell, shell.inner.x, shell.inner.y), None);
+}
+
+#[test]
 fn menu_layout_maps_commands_to_text_labels() {
     let state = menu_state(
         vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],
@@ -218,7 +253,7 @@ fn confirm_modal_renders_question_and_buttons() {
 
 #[test]
 fn confirm_buttons_hit_their_cells() {
-    let shell = confirm_shell(SCREEN).expect("confirm modal fits");
+    let shell = confirm_shell(SCREEN, "close \"x\"?").expect("confirm modal fits");
     assert_eq!(
         confirm_button_at(&shell, 25, 12),
         Some(ConfirmButton::Confirm)
@@ -228,6 +263,46 @@ fn confirm_buttons_hit_their_cells() {
         Some(ConfirmButton::Cancel)
     );
     assert_eq!(confirm_button_at(&shell, 24, 12), None);
+}
+
+#[test]
+fn confirm_question_wraps_and_dialog_grows() {
+    let mut state = AppState::demo();
+    let name = "New folder11111 with a very long trailing name that cannot fit on one line";
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![crate::app::prompt::PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: name.to_string(),
+            collapsed: false,
+        }],
+        vec![],
+    );
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::PromptFolder {
+            workspace: 0,
+            folder_id: 1,
+        },
+    }));
+    let question = confirm_question(
+        &state,
+        OverlayTarget::PromptFolder {
+            workspace: 0,
+            folder_id: 1,
+        },
+    );
+    let shell = confirm_shell(SCREEN, &question).expect("dialog fits");
+    assert!(shell.area.height > 4, "高度随换行增长: {:?}", shell.area);
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(
+        joined.contains("delete folder \"New folder11111"),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("one line\" and its contents?"),
+        "整段问题可见（自动换行）: {joined}"
+    );
 }
 
 #[test]
@@ -419,7 +494,7 @@ fn switch_cwd_confirm_buttons_hit_their_cells() {
         shell.inner,
         &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
         BUTTON_GAP,
-        CONFIRM_BUTTON_ROW,
+        shell.inner.height.saturating_sub(1),
     );
     assert_eq!(
         confirm_button_at(&shell, buttons[0].x, buttons[0].y),
@@ -468,7 +543,7 @@ fn sync_ws_cwd_confirm_buttons_hit_their_cells() {
         shell.inner,
         &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
         BUTTON_GAP,
-        CONFIRM_BUTTON_ROW,
+        shell.inner.height.saturating_sub(1),
     );
     assert_eq!(
         confirm_button_at(&shell, buttons[0].x, buttons[0].y),
@@ -531,5 +606,219 @@ fn new_workspace_buttons_hit_their_cells() {
     assert_eq!(
         new_workspace_button_at(&shell, buttons[2].x, buttons[2].y),
         Some(NewWorkspaceButton::Cancel)
+    );
+}
+
+fn save_draft_state(entries: Vec<SaveDraftEntry>, selected: usize) -> AppState {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::SaveDraft(SaveDraft {
+        workspace: 0,
+        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
+        entries,
+        selected,
+    }));
+    state
+}
+
+#[test]
+fn save_draft_picker_renders_name_tree_entries_and_buttons() {
+    let entries = vec![
+        SaveDraftEntry::Root,
+        SaveDraftEntry::Folder {
+            id: 1,
+            depth: 0,
+            name: "ideas".into(),
+        },
+        SaveDraftEntry::Folder {
+            id: 2,
+            depth: 1,
+            name: "deep".into(),
+        },
+        SaveDraftEntry::AddFolder,
+    ];
+    let state = save_draft_state(entries, 1);
+    let (lines, cursor) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::SAVE_DRAFT_TITLE), "{joined}");
+    assert!(joined.contains(text::SAVE_DRAFT_NAME), "{joined}");
+    assert!(
+        joined.contains(text::PROMPT_DEFAULT_NAME),
+        "名称预填: {joined}"
+    );
+    assert!(joined.contains(text::SAVE_DRAFT_ROOT), "{joined}");
+    assert!(joined.contains("└─ deep"), "子层树形连接符: {joined}");
+    assert!(joined.contains(text::SAVE_DRAFT_NEW_FOLDER), "{joined}");
+    assert!(joined.contains(text::BUTTON_SAVE), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+    // 选中行非内联输入：硬件光标在名称输入。
+    let shell = save_draft_shell(SCREEN, 4).expect("shell fits");
+    let name_x = shell.inner.x + text::SAVE_DRAFT_NAME.chars().count() as u16 + 1;
+    assert_eq!(
+        cursor,
+        Some((
+            name_x + text::PROMPT_DEFAULT_NAME.chars().count() as u16,
+            shell.inner.y
+        )),
+        "硬件光标在名称输入末尾"
+    );
+    // 选中行整行铺选中底色（Indexed 240）。
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+    terminal
+        .draw(|frame| {
+            render(frame, frame.area(), &state);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    let list_y = shell.inner.y + 2;
+    assert_eq!(buffer[(shell.inner.x, list_y + 1)].bg, Color::Indexed(240));
+    assert_eq!(buffer[(shell.inner.x, list_y)].bg, Color::Indexed(236));
+}
+
+#[test]
+fn new_prompt_dialog_renders_title_and_default_name() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Prompt { folder_id: None },
+        name: TextInput::new(""),
+        resume: None,
+    }));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::NEW_PROMPT_TITLE), "{joined}");
+    assert!(joined.contains(text::PROMPT_DEFAULT_NAME), "{joined}");
+    assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
+}
+
+#[test]
+fn new_folder_dialog_renders_input_buttons_and_hit() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::NewNode(NewNode {
+        kind: NewNodeKind::Folder { parent_id: None },
+        name: TextInput::new(""),
+        resume: None,
+    }));
+    let (lines, cursor) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::NEW_FOLDER_TITLE), "{joined}");
+    assert!(
+        joined.contains(text::PROMPT_FOLDER_DEFAULT_NAME),
+        "{joined}"
+    );
+    assert!(joined.contains(text::BUTTON_CREATE), "{joined}");
+    assert!(joined.contains(text::BUTTON_CLEAR), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
+    let shell = new_node_shell(SCREEN).expect("shell fits");
+    assert_eq!(
+        cursor,
+        Some((shell.inner.x, shell.inner.y)),
+        "空输入时光标在名称起点"
+    );
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &NEW_NODE_BUTTONS,
+        BUTTON_GAP,
+        RENAME_BUTTON_ROW,
+    );
+    assert_eq!(
+        new_node_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(NewNodeButton::Create)
+    );
+    assert_eq!(
+        new_node_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(NewNodeButton::Clear)
+    );
+    assert_eq!(
+        new_node_button_at(&shell, buttons[2].x, buttons[2].y),
+        Some(NewNodeButton::Cancel)
+    );
+}
+
+#[test]
+fn save_draft_entry_hit_maps_rows_and_buttons() {
+    let dialog = SaveDraft {
+        workspace: 0,
+        name: TextInput::new("x"),
+        entries: vec![
+            SaveDraftEntry::Root,
+            SaveDraftEntry::Folder {
+                id: 1,
+                depth: 0,
+                name: "a".into(),
+            },
+            SaveDraftEntry::AddFolder,
+        ],
+        selected: 0,
+    };
+    let shell = save_draft_shell(SCREEN, dialog.entries.len()).expect("shell");
+    let list_y = shell.inner.y + 2;
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, shell.inner.y),
+        None,
+        "名称行不可命中条目"
+    );
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, list_y),
+        Some(0)
+    );
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, list_y + 2),
+        Some(2)
+    );
+    assert_eq!(
+        save_draft_entry_at(
+            &shell,
+            &dialog,
+            shell.inner.x,
+            shell.inner.bottom().saturating_sub(1)
+        ),
+        None,
+        "按钮行不可命中条目"
+    );
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x.saturating_sub(1), list_y),
+        None,
+        "横向区域外"
+    );
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &SAVE_DRAFT_BUTTONS,
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    assert_eq!(
+        save_draft_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(SaveDraftButton::Save)
+    );
+    assert_eq!(
+        save_draft_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(SaveDraftButton::Cancel)
+    );
+}
+
+#[test]
+fn save_draft_picker_windows_to_selected_entry() {
+    let mut entries = Vec::new();
+    for index in 0..30 {
+        entries.push(SaveDraftEntry::Folder {
+            id: index,
+            depth: 0,
+            name: format!("f{index}"),
+        });
+    }
+    entries.push(SaveDraftEntry::AddFolder);
+    let dialog = SaveDraft {
+        workspace: 0,
+        name: TextInput::new("x"),
+        entries,
+        selected: 30,
+    };
+    let shell = save_draft_shell(SCREEN, dialog.entries.len()).expect("shell");
+    let max_rows = save_draft_max_rows(&shell);
+    let start = save_draft_visible_start(&dialog, max_rows);
+    assert!(start > 0, "选中项在窗口内需要上移窗口");
+    let last_row = shell.inner.y + 2 + (max_rows as u16).saturating_sub(1);
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, last_row),
+        Some(30)
     );
 }

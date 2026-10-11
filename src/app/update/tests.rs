@@ -202,9 +202,9 @@ fn resize_syncs_terminal_size() {
 fn resize_syncs_prompt_editor_size() {
     let mut state = AppState::demo();
     let id = state.prompt.id();
-    // 30 列面板：28 列内容区，顶部 1 行工具栏表头，最右 1 列预留滚动条槽。
+    // 30 列面板：28 列内容区，顶部 2 行表头（按钮行 + 分割线），最右 1 列预留滚动条槽。
     resize_panes(&mut state, &[(id, Rect::new(70, 0, 30, 20))]);
-    assert_eq!(state.prompt.size(), (27, 17));
+    assert_eq!(state.prompt.size(), (27, 16));
 }
 
 #[test]
@@ -1035,6 +1035,59 @@ fn switch_workspace_swaps_prompt_drafts() {
     assert_eq!(state.prompt.text(), "alpha", "切回恢复原工作区草稿");
     switch_workspace(&mut state, 1);
     assert_eq!(state.prompt.text(), "beta");
+}
+
+#[test]
+fn switch_workspace_defaults_to_draft_and_preserves_open_item() {
+    use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus};
+    let mut state = AppState::demo();
+    // 初始工作区默认绑定临时草稿。
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft),
+        "进入应用默认打开临时提示词"
+    );
+    // 工作区 0 打开条目 10。
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 10,
+            folder_id: None,
+            name: "item".into(),
+            content: "item body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert_eq!(state.prompt.text(), "item body");
+
+    // 新工作区默认草稿；切回 0 恢复条目编辑。
+    create_workspace(&mut state);
+    assert_eq!(state.prompt_workspace(), 1);
+    assert_eq!(
+        state.workspaces[1].prompt_panel.editing,
+        Some(PromptEditing::Draft)
+    );
+    switch_workspace(&mut state, 0);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(10)),
+        "目标工作区已打开条目：切换保留条目编辑"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.prompt.text(), "item body");
+
+    // 树视图（无绑定）切走后回来默认落到临时提示词。
+    show_prompt_tree(&mut state);
+    switch_workspace(&mut state, 1);
+    switch_workspace(&mut state, 0);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Draft),
+        "无条目绑定时切换默认打开临时提示词"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(state.prompt.text(), "", "树视图切回重载草稿正文");
 }
 
 /// 断言 prompt 草稿槽位不变量：恰有一处 None，且属于显示中的工作区。
@@ -2164,6 +2217,17 @@ fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
     open_pane_menu(&mut state, pane, (0, 0));
     select_menu_command(&mut state, MenuCommand::SyncWorkspaceToTerminalCwd);
     activate_menu(&mut state);
+    // 同步触发前先做信任检查：未信任会弹信任浮层，此处直接以已信任结果续作。
+    let checked = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::CheckTrust { path, trigger } => Some((path.clone(), trigger.clone())),
+            _ => None,
+        })
+        .expect("trust check queued");
+    assert_eq!(checked.0, PathBuf::from("/tmp/new-term"));
+    resolve_trust_check(&mut state, &checked.0, true, checked.1);
 
     let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.as_ref() else {
         panic!("confirm sync ws cwd overlay expected");
@@ -3271,7 +3335,7 @@ fn commit_new_workspace_empty_input_uses_active_cwd() {
 }
 
 #[test]
-fn commit_new_workspace_valid_path_creates_workspace_with_path() {
+fn commit_new_workspace_valid_path_queues_trust_check() {
     let mut state = AppState::demo();
     let initial_count = state.workspaces.len();
     let tmp = std::env::temp_dir();
@@ -3284,9 +3348,12 @@ fn commit_new_workspace_valid_path_creates_workspace_with_path() {
 
     commit_new_workspace(&mut state);
 
-    assert!(state.overlay.is_none());
-    assert_eq!(state.workspaces.len(), initial_count + 1);
-    assert_eq!(state.active_workspace().cwd, Some(canonical_tmp));
+    assert!(state.overlay.is_none(), "弹窗关闭");
+    assert_eq!(state.workspaces.len(), initial_count, "信任检查前不创建");
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CheckTrust { path, .. } if *path == canonical_tmp
+    )));
 }
 
 #[test]

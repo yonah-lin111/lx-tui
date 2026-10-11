@@ -102,6 +102,44 @@ fn prompt_focus_maps_editing_keys() {
 }
 
 #[test]
+fn prompt_focus_maps_save_keys() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        assert_eq!(
+            route_prompt(KeyCode::Char('s'), modifiers),
+            Some(Routed::SavePrompt),
+            "{modifiers:?}"
+        );
+    }
+    assert_eq!(
+        route_prompt(
+            KeyCode::Char('S'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
+        Some(Routed::SavePrompt),
+        "Ctrl+Shift+S 同样触发保存"
+    );
+    assert_eq!(
+        route_prompt(
+            KeyCode::Char('s'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        ),
+        None,
+        "Ctrl+Alt+S 不触发保存"
+    );
+    assert_eq!(
+        route(
+            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+            TermMode::empty(),
+            false
+        ),
+        Some(Routed::Pane(vec![0x13])),
+        "未聚焦时 Ctrl+S 原样写入窗格"
+    );
+}
+
+#[test]
 fn prompt_focus_accepts_shifted_characters() {
     let key = KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT);
     assert_eq!(
@@ -571,5 +609,47 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
             false
         ),
         None
+    );
+}
+
+#[test]
+fn save_draft_overlay_routes_navigation_only() {
+    let route_overlay = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::SaveDraft),
+            false,
+        )
+    };
+    assert_eq!(
+        route_overlay(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Up),
+        Some(Routed::Overlay(OverlayKey::Up))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Down),
+        Some(Routed::Overlay(OverlayKey::Down))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Char('x')),
+        Some(Routed::Overlay(OverlayKey::Char('x'))),
+        "名称/内联行文本输入"
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Backspace),
+        Some(Routed::Overlay(OverlayKey::Backspace))
+    );
+    assert_eq!(
+        route_overlay(KeyCode::Left),
+        Some(Routed::Overlay(OverlayKey::Left))
     );
 }

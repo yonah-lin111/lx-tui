@@ -9,6 +9,95 @@ fn ellipsize_keeps_text_within_limit() {
 }
 
 #[test]
+fn prompt_status_labels_cover_all_states() {
+    use crate::app::prompt::PromptItemStatus;
+    assert_eq!(
+        prompt_status_label(PromptItemStatus::Todo),
+        TEMPLATE_BUTTON_TODO
+    );
+    assert_eq!(
+        prompt_status_label(PromptItemStatus::InProgress),
+        TEMPLATE_BUTTON_RUN
+    );
+    assert_eq!(
+        prompt_status_label(PromptItemStatus::Completed),
+        TEMPLATE_BUTTON_DONE
+    );
+    assert_eq!(
+        prompt_status_menu_label(PromptItemStatus::Todo),
+        MENU_PROMPT_MARK_TODO
+    );
+    assert_eq!(
+        prompt_status_menu_label(PromptItemStatus::InProgress),
+        MENU_PROMPT_MARK_RUN
+    );
+    assert_eq!(
+        prompt_status_menu_label(PromptItemStatus::Completed),
+        MENU_PROMPT_MARK_DONE
+    );
+}
+
+#[test]
+fn user_visible_labels_are_clean_ascii() {
+    // 用户可见文案禁止 Unicode 替换字符（U+FFFD），且不得为空。
+    for label in [
+        PROMPT_MODE_LIST_LABEL,
+        PROMPT_MODE_EDIT_LABEL,
+        PROMPT_TREE_EMPTY,
+        PROMPT_TREE_NO_MATCHES,
+        PROMPT_TREE_SEARCH_PLACEHOLDER,
+        PROMPT_TEMP_PROMPT_LABEL,
+        MODAL_CLOSE,
+        SAVE_DRAFT_TITLE,
+        SAVE_DRAFT_NAME,
+        SAVE_DRAFT_ROOT,
+        SAVE_DRAFT_NEW_FOLDER,
+        PROMPT_DEFAULT_NAME,
+        PROMPT_FOLDER_DEFAULT_NAME,
+        MENU_PROMPT_NEW_PROMPT,
+        MENU_PROMPT_NEW_FOLDER,
+        MENU_PROMPT_NEW_SUBFOLDER,
+        MENU_PROMPT_EDIT,
+        MENU_PROMPT_RENAME,
+        MENU_PROMPT_COPY,
+        MENU_PROMPT_DELETE,
+        MENU_PROMPT_MARK_TODO,
+        MENU_PROMPT_MARK_RUN,
+        MENU_PROMPT_MARK_DONE,
+        TRUST_WORKSPACE_TITLE,
+        TRUST_WORKSPACE_QUESTION,
+        BUTTON_TRUST,
+        BUTTON_DONT_TRUST,
+        TRUST_CONSOLE_HEADING,
+        TRUST_CONSOLE_SAFETY,
+        TRUST_CONSOLE_HINT,
+        TRUST_CONSOLE_PROMPT_HINT,
+        TRUST_CONSOLE_PROMPT_HINT,
+        TRUST_OPTION_YES,
+        TRUST_OPTION_NO,
+        TRUST_CONSOLE_FOOTER,
+        TRUST_REFUSED_MESSAGE,
+        TOAST_CREATE_CANCELLED,
+        TOAST_SYNC_CANCELLED,
+        MENU_TITLE_PROMPT,
+        MENU_TITLE_FOLDER,
+        MENU_TITLE_PROMPT_TREE,
+        CONFIRM_DELETE_PROMPT_TITLE,
+        CONFIRM_DELETE_FOLDER_TITLE,
+        RENAME_PROMPT_TITLE,
+        RENAME_FOLDER_TITLE,
+    ] {
+        assert!(!label.is_empty(), "文案不得为空");
+        assert!(!label.contains('\u{fffd}'), "文案禁止替换字符: {label}");
+    }
+    assert_eq!(confirm_delete_question("draft"), "delete \"draft\"?");
+    assert_eq!(
+        confirm_delete_folder_question("ideas"),
+        "delete folder \"ideas\" and its contents?"
+    );
+}
+
+#[test]
 fn ellipsize_marks_truncation() {
     assert_eq!(ellipsize("Copied to clipboard", 5), "Copi…");
     assert_eq!(ellipsize("abc", 1), "…");
@@ -76,16 +165,28 @@ fn confirm_switch_cwd_question_wraps_path_in_quotes() {
 }
 
 #[test]
-fn confirm_sync_ws_cwd_question_ellipsizes_middle_when_budget_is_small() {
+fn confirm_sync_ws_cwd_question_keeps_full_path() {
     assert_eq!(
-        confirm_sync_ws_cwd_question("/tmp/project", 60),
+        confirm_sync_ws_cwd_question("/tmp/project"),
         "switch workspace path to \"/tmp/project\"?"
     );
-    // prefix (26) + suffix (2) = 28. max_width = 34 -> path_budget = 6 -> "/tm…ct"
+}
+
+#[test]
+fn wrap_breaks_at_spaces_within_display_width() {
     assert_eq!(
-        confirm_sync_ws_cwd_question("/tmp/project", 34),
-        "switch workspace path to \"/tm…ct\"?"
+        wrap("delete folder \"New folder\" and its contents?", 38),
+        vec!["delete folder \"New folder\" and its", "contents?"]
     );
+    assert_eq!(wrap("close \"a\"?", 40), vec!["close \"a\"?"]);
+    assert_eq!(wrap("", 10), vec![String::new()]);
+}
+
+#[test]
+fn wrap_hard_breaks_overlong_words_by_character() {
+    assert_eq!(wrap("abcdefghij", 4), vec!["abcd", "efgh", "ij"]);
+    // 宽字符按两列计：每行 2 个字符（4 列）。
+    assert_eq!(wrap("字字字字字", 4), vec!["字字", "字字", "字"]);
 }
 
 #[test]

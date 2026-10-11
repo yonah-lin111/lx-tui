@@ -96,6 +96,13 @@ fn overlay_kind_reports_variant() {
     assert_eq!(new_ws.kind(), OverlayKind::NewWorkspace);
     let worktree = Overlay::WorktreeOpen(worktree_dialog(vec![], 0));
     assert_eq!(worktree.kind(), OverlayKind::WorktreeOpen);
+    let trust = Overlay::TrustWorkspace(TrustWorkspace {
+        path: PathBuf::from("/tmp/ws"),
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
+            cwd: PathBuf::from("/tmp/ws"),
+        },
+    });
+    assert_eq!(trust.kind(), OverlayKind::TrustWorkspace);
 }
 
 /// 构造测试对话框；条目按参数生成，源工作区为 0。

@@ -31,6 +31,8 @@ pub enum TooltipTarget {
     TabScrollLeft,
     TabScrollRight,
     Exit,
+    PromptMode,
+    PromptTempPrompt,
     PromptUndo,
     PromptRedo,
     PromptSelectAll,

@@ -1,7 +1,7 @@
 //! 主内容渲染：按窗格视图分派 lx 欢迎页与终端网格，并负责顶边框切换按钮。
 //! 只读状态、只写 Buffer。
 
-mod lx;
+pub(crate) mod lx;
 
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};

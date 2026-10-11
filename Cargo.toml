@@ -16,6 +16,7 @@ unicode-width = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ignore = "0.4.33"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 # macOS 读取进程 cwd 需要 proc_pidinfo（Linux 走 /proc，无额外依赖）。
 [target.'cfg(target_os = "macos")'.dependencies]

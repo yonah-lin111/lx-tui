@@ -109,8 +109,9 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
-    let undo = layout::prompt_toolbar_button_rect(view.prompt, layout::PromptToolbarButton::Undo)
-        .expect("undo button visible");
+    let undo =
+        layout::prompt_toolbar_button_rect(view.prompt, layout::PromptToolbarButton::Undo, false)
+            .expect("undo button visible");
     assert_eq!(
         target_at(&view, &state, &rects, undo.x, undo.y),
         Some(TooltipTarget::PromptUndo)

@@ -87,6 +87,12 @@ pub fn render(
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if let Some(rect) = crate::ui::widgets::modal::close_button_rect(area) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
+            rect,
+        );
+    }
     if inner.width == 0 || inner.height == 0 {
         return;
     }
@@ -99,6 +105,11 @@ pub fn render(
         .alignment(Alignment::Center),
         inner,
     );
+}
+
+/// 命中 toast 右上角关闭按钮。
+pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
+    crate::ui::widgets::modal::close_button_at(area, column, row)
 }
 
 /// 边框语义色：普通提示用强调色，失败用红色。

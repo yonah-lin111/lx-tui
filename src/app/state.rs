@@ -10,8 +10,9 @@ use crate::detect::PaneAgentSnapshot;
 use crate::layout::{BoundaryHit, PaneId, TileLayout};
 use crate::terminal::Terminal;
 
+use super::effects::Effect;
 use super::overlay::Overlay;
-use super::prompt::Prompt;
+use super::prompt::{Prompt, PromptPanel};
 use super::selection::Selection;
 use super::toast::Toast;
 use super::tooltip::Tooltip;
@@ -113,6 +114,8 @@ pub struct AppState {
     pub workspace_dragging: bool,
     /// 同一时刻最多一个浮层：右键菜单、重命名、关闭确认或 worktree 对话框。
     pub overlay: Option<Overlay>,
+    /// 待执行的效应出箱（DB 读写与剪贴板）；由持久化服务取走执行。
+    pub effects: Vec<Effect>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
     pub git_requests: Vec<PathBuf>,
     /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
@@ -136,6 +139,8 @@ pub struct Workspace {
     /// 挂起的 prompt 草稿；None 表示该工作区草稿正被显示
     /// （位于 `AppState.prompt` / `AppState.prompt_root`），全局恒有且仅有一处为 None。
     pub prompt: Option<PromptDraft>,
+    /// 提示词树状管理器状态（树、视图模式、选中与滚动）。
+    pub prompt_panel: PromptPanel,
 }
 
 /// 工作区挂起的 prompt 草稿：编辑器完整状态与显式上下文根绑定。
@@ -222,6 +227,7 @@ impl Workspace {
             is_initial: false,
             git: None,
             prompt: Some(PromptDraft::new()),
+            prompt_panel: PromptPanel::new(),
         }
     }
 
@@ -443,6 +449,7 @@ impl AppState {
                 is_initial: true,
                 git: None,
                 prompt: None,
+                prompt_panel: PromptPanel::new(),
             }],
             active_workspace: 0,
             tab_scroll: 0,
@@ -458,6 +465,7 @@ impl AppState {
             workspace_drag: None,
             workspace_dragging: false,
             overlay: None,
+            effects: Vec::new(),
             git_requests: Vec::new(),
             collapsed_groups: Vec::new(),
         }

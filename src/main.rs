@@ -2,6 +2,7 @@
 
 use lx_tui::app::state::AppState;
 use lx_tui::config::Config;
+use lx_tui::db::service::Persistence;
 use lx_tui::event;
 use lx_tui::tui::Tui;
 use tracing_subscriber::EnvFilter;
@@ -15,15 +16,21 @@ fn main() {
     }
 }
 
-/// 启动编排：日志 -> 配置 -> 终端 -> 事件循环。
+/// 启动编排：日志 -> 配置 -> 信任页（行内）-> 终端 -> 事件循环。
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing()?;
     tracing::info!("lx-tui starting");
 
     let config = Config::default();
     let mut state = AppState::demo();
+    let persistence = Persistence::start();
+    // 启动信任门：未信任时先在当前终端屏幕（行内）显示信任页；拒绝则不进入应用。
+    if !event::startup_trust(&persistence, &mut state)? {
+        eprintln!("lx-tui: {}", lx_tui::ui::text::TRUST_REFUSED_MESSAGE);
+        return Ok(());
+    }
     let mut tui = Tui::init()?;
-    let result = event::run(&mut tui, &mut state, &config);
+    let result = event::run(&mut tui, &mut state, &config, persistence);
     tui.restore()?;
     result?;
 

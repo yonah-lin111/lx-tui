@@ -212,11 +212,9 @@ fn sidebar_collapse_button_renders_icons() {
 fn sidebar_lists_single_workspace_named_after_current_directory() {
     let state = AppState::demo();
     let lines = render_lines(&state);
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains(&state.active_workspace().name))
-    );
+    // 侧栏宽度有限，长目录名会被截断；断言至少展示名字前缀。
+    let prefix: String = state.active_workspace().name.chars().take(8).collect();
+    assert!(lines.iter().any(|line| line.contains(&prefix)));
     assert!(!lines.iter().any(|line| line.contains("notes")));
 }
 
@@ -753,8 +751,11 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
 fn initial_workspace_marker_uses_row_text_style() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
-    let initial = state.workspaces[0].name.clone();
-    let created = state.workspaces[1].name.clone();
+    // 显式短名保证列表不截断，标记断言与工作目录名无关。
+    state.workspaces[0].name = "alpha".to_string();
+    state.workspaces[1].name = "beta".to_string();
+    let initial = "alpha".to_string();
+    let created = "beta".to_string();
     let lines = render_lines(&state);
     let marker_line = lines
         .iter()
@@ -1107,6 +1108,84 @@ fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
 }
 
 #[test]
+fn prompt_tree_renders_divider_and_scrollbar_below_search() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let mut state = AppState::demo();
+    update::show_prompt_tree(&mut state);
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        (0..30)
+            .map(|index| PromptItem {
+                id: index,
+                folder_id: None,
+                name: format!("item-{index:02}"),
+                content: String::new(),
+                status: PromptItemStatus::Todo,
+            })
+            .collect(),
+    );
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let text = crate::layout::prompt_text_rect(view.prompt);
+    let search = prompt_line(&lines, &view, text.y);
+    assert!(
+        search.contains(text::PROMPT_TREE_SEARCH_PLACEHOLDER),
+        "{search}"
+    );
+    // 分割线整行 `─`，两端 `├` / `┤` 衔接面板边框。
+    let divider = prompt_line(&lines, &view, text.y + 1);
+    assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
+    // 滚动条槽从分割线之下开始：搜索行与分割线行无滚动条，列表首行起有。
+    let gutter = crate::layout::prompt_tree_scrollbar_rect(view.prompt).expect("gutter");
+    assert_eq!(gutter.y, text.y + 2);
+    let search_row: Vec<char> = lines[text.y as usize].chars().collect();
+    assert_ne!(search_row[usize::from(gutter.x)].to_string(), "▐");
+    let list_row: Vec<char> = lines[gutter.y as usize].chars().collect();
+    assert_eq!(list_row[usize::from(gutter.x)].to_string(), "▐");
+}
+
+#[test]
+fn prompt_editor_divider_shows_editing_title() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let mut state = AppState::demo();
+    state.prompt_width = 40;
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 1,
+            folder_id: None,
+            name: "named prompt".into(),
+            content: String::new(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(update::edit_prompt_item(&mut state, 0, 1));
+    let view = view_for(&state);
+    let lines = render_lines(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
+    let divider = prompt_line(
+        &lines,
+        &view,
+        inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
+    );
+    assert!(divider.contains(" named prompt "), "{divider}");
+
+    // 临时草稿显示固定标题。
+    update::show_prompt_tree(&mut state);
+    assert!(update::edit_prompt_draft(&mut state));
+    let lines = render_lines(&state);
+    let divider = prompt_line(
+        &lines,
+        &view,
+        inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
+    );
+    assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
+}
+
+#[test]
 fn prompt_scrollbar_appears_only_on_overflow() {
     let mut state = AppState::demo();
     let view = view_for(&state);
@@ -1156,21 +1235,40 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 }
 
 #[test]
-fn prompt_renders_toolbar_and_divider_on_same_row() {
+fn prompt_renders_toolbar_and_divider_rows() {
     let mut state = AppState::demo();
+    // 足够宽以容纳模式/undo/redo 与右对齐的 select all。
+    state.prompt_width = 40;
     state.prompt.insert_str("hello");
     let view = view_for(&state);
     let lines = render_lines(&state);
     let inner = crate::layout::pane_inner_rect(view.prompt);
 
+    // 按钮行：功能按钮齐全，分割线不穿过按钮行。
     let toolbar = prompt_line(&lines, &view, inner.y);
+    assert!(toolbar.contains(text::PROMPT_MODE_LIST_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_UNDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_SELECT_ALL_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_SAVE_DOT), "{toolbar}");
-    assert!(toolbar.contains(text::DIVIDER_LEFT_JOIN), "{toolbar}");
-    assert!(toolbar.contains(text::DIVIDER_RIGHT_JOIN), "{toolbar}");
-    assert!(toolbar.contains(text::DIVIDER_MID), "{toolbar}");
+    assert!(
+        !toolbar.contains(text::DIVIDER_MID),
+        "分割线不穿过按钮行: {toolbar}"
+    );
+
+    // 下一行为贯穿分割线（两端 `├` / `┤`），编辑视图内嵌目标 title。
+    let divider = prompt_line(
+        &lines,
+        &view,
+        inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT,
+    );
+    assert!(divider.contains(text::DIVIDER_LEFT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
+    assert!(divider.contains(text::DIVIDER_MID), "{divider}");
+    assert!(
+        divider.contains(text::PROMPT_DRAFT_TITLE),
+        "草稿 title 内嵌分割线: {divider}"
+    );
 }
 
 #[test]
@@ -1385,20 +1483,15 @@ fn prompt_status_follows_pinned_workspace() {
 fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let mut state = AppState::demo();
     let view = view_for(&state);
-    let bar = crate::layout::prompt_toolbar_rect(view.prompt).expect("toolbar visible");
     let undo = crate::layout::prompt_toolbar_button_rect(
         view.prompt,
         crate::layout::PromptToolbarButton::Undo,
+        false,
     )
-    .expect("undo visible");
-    let save = crate::layout::prompt_toolbar_button_rect(
-        view.prompt,
-        crate::layout::PromptToolbarButton::Save,
-    )
-    .expect("save visible");
+    .expect("undo button visible");
     let undo_x = undo.x;
-    let bar_y = bar.y;
-    let dot_x = save.x;
+    let bar_y = undo.y;
+    let dot_x = crate::layout::pane_inner_rect(view.prompt).right() - 1;
 
     let buffer = render_buffer(&state);
     assert_eq!(buffer[(undo_x, bar_y)].symbol(), "[");
@@ -1410,8 +1503,8 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     );
     assert_eq!(
         buffer[(dot_x, bar_y)].fg,
-        ratatui::style::Color::Green,
-        "初始已保存为绿点"
+        ratatui::style::Color::DarkGray,
+        "临时草稿恒灰点"
     );
 
     state.prompt.insert_str("x");
@@ -1423,8 +1516,36 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     );
     assert_eq!(
         buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::DarkGray,
+        "草稿编辑后仍为灰点（不参与自动保存）"
+    );
+
+    // 绑定条目：已保存绿点、编辑后黄点。
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 1,
+            folder_id: None,
+            name: "named".into(),
+            content: String::new(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(update::edit_prompt_item(&mut state, 0, 1));
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
+        ratatui::style::Color::Green,
+        "条目已保存为绿点"
+    );
+    state.prompt.insert_str("x");
+    let buffer = render_buffer(&state);
+    assert_eq!(
+        buffer[(dot_x, bar_y)].fg,
         ratatui::style::Color::Yellow,
-        "编辑后未保存为黄点"
+        "条目编辑后未保存为黄点"
     );
 }
 

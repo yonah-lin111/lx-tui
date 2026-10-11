@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use crate::layout::PaneId;
 
+use super::prompt::PromptItemStatus;
+use super::trust::TrustWorkspace;
+
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayKind {
@@ -14,6 +17,9 @@ pub enum OverlayKind {
     ConfirmSyncWorkspaceCwd,
     NewWorkspace,
     WorktreeOpen,
+    TrustWorkspace,
+    NewNode,
+    SaveDraft,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -26,6 +32,9 @@ pub enum Overlay {
     ConfirmSyncWorkspaceCwd(ConfirmSyncWorkspaceCwd),
     NewWorkspace(NewWorkspace),
     WorktreeOpen(WorktreeOpen),
+    TrustWorkspace(TrustWorkspace),
+    NewNode(NewNode),
+    SaveDraft(SaveDraft),
 }
 
 impl Overlay {
@@ -39,8 +48,54 @@ impl Overlay {
             Self::ConfirmSyncWorkspaceCwd(_) => OverlayKind::ConfirmSyncWorkspaceCwd,
             Self::NewWorkspace(_) => OverlayKind::NewWorkspace,
             Self::WorktreeOpen(_) => OverlayKind::WorktreeOpen,
+            Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
+            Self::NewNode(_) => OverlayKind::NewNode,
+            Self::SaveDraft(_) => OverlayKind::SaveDraft,
         }
     }
+}
+
+/// 新建节点命名浮层：文件夹或提示词条目；名称输入与来源选择器。
+#[derive(Debug)]
+pub struct NewNode {
+    pub kind: NewNodeKind,
+    /// 名称（预填对应默认名，可编辑）。
+    pub name: TextInput,
+    /// 来自草稿保存选择器（仅文件夹）：取消或确认后恢复该选择器
+    /// （确认后由服务刷新条目并选中新文件夹）。
+    pub resume: Option<Box<SaveDraft>>,
+}
+
+/// 新建节点种类：新建文件夹或新建提示词条目。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewNodeKind {
+    /// 新建文件夹：`parent_id` 为父文件夹（`None` 为根层）。
+    Folder { parent_id: Option<i64> },
+    /// 新建提示词：`folder_id` 为所属文件夹（`None` 为根层）。
+    Prompt { folder_id: Option<i64> },
+}
+
+/// 草稿保存选择器：工作区、提示词名称输入、候选目标与高亮项。
+#[derive(Debug)]
+pub struct SaveDraft {
+    pub workspace: usize,
+    /// 保存的提示词名称（预填默认名，可编辑）。
+    pub name: TextInput,
+    pub entries: Vec<SaveDraftEntry>,
+    pub selected: usize,
+}
+
+/// 草稿保存目标项：根层、现有文件夹（含层级缩进）或追加动作行。
+#[derive(Debug)]
+pub enum SaveDraftEntry {
+    Root,
+    Folder {
+        id: i64,
+        depth: usize,
+        name: String,
+    },
+    /// 动作行：点击/回车打开新建文件夹命名浮层。
+    AddFolder,
 }
 
 /// 右键菜单：锚点、目标、命令列表与高亮项索引。
@@ -52,7 +107,7 @@ pub struct Menu {
     pub selected: usize,
 }
 
-/// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格。
+/// 菜单与关闭确认作用目标：工作区、工作区内的标签或标签内的窗格，以及提示词树节点。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayTarget {
     Workspace(usize),
@@ -64,6 +119,20 @@ pub enum OverlayTarget {
         workspace: usize,
         tab: usize,
         pane: PaneId,
+    },
+    /// 提示词树根层文件夹。
+    PromptFolder {
+        workspace: usize,
+        folder_id: i64,
+    },
+    /// 提示词条目。
+    PromptItem {
+        workspace: usize,
+        item_id: i64,
+    },
+    /// 提示词树空白区域。
+    PromptTree {
+        workspace: usize,
     },
 }
 
@@ -85,13 +154,26 @@ pub enum MenuCommand {
     SwitchToWorkspaceCwd,
     SyncWorkspaceToTerminalCwd,
     ClosePane,
+    NewPrompt,
+    NewFolder,
+    NewSubFolder,
+    RenameFolder,
+    DeleteFolder,
+    RenamePrompt,
+    DeletePrompt,
+    EditPrompt,
+    CopyPromptContent,
+    /// 把提示词切到下一个状态（todo → in_progress → completed → todo）。
+    ChangePromptStatus(PromptItemStatus),
 }
 
-/// 重命名作用目标：工作区或标签；窗格不可重命名，因此不在此枚举内。
+/// 重命名作用目标：工作区、标签或提示词树节点；窗格不可重命名，因此不在此枚举内。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenameTarget {
     Workspace(usize),
     Tab { workspace: usize, tab: usize },
+    PromptFolder { workspace: usize, folder_id: i64 },
+    PromptItem { workspace: usize, item_id: i64 },
 }
 
 /// 重命名浮层：目标与单行输入。

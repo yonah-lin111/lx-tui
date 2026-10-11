@@ -1,7 +1,11 @@
 //! 行为到状态的转换；几何信息由事件循环传入，保证逻辑纯且可测。
 
+mod prompt;
+mod trust;
 mod worktree;
 
+pub use prompt::*;
+pub use trust::*;
 pub use worktree::{
     apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
     open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
@@ -16,11 +20,13 @@ use ratatui::layout::{Direction, Rect};
 use crate::layout::{self, BoundaryHit, PaneId};
 
 use super::actions::{Action, EditorCommand, OverlayKey};
+use super::effects::Effect;
 use super::markdown::MentionEntry;
 use super::overlay::{
     ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewWorkspace,
     Overlay, OverlayKind, OverlayTarget, Rename, RenameTarget, TextInput,
 };
+use super::prompt::{PromptEditing, PromptMode};
 use super::selection::Selection;
 use super::state::{
     AppState, AutoscrollDirection, PaneKind, PaneView, SelectionAutoscroll, Tab, Workspace,
@@ -28,13 +34,18 @@ use super::state::{
 };
 use super::toast::{Toast, ToastKind};
 use super::tooltip::{Tooltip, TooltipTarget};
+use super::trust::TrustTrigger;
 use crate::detect::PaneAgentSnapshot;
 use crate::ui::text;
 
 /// 应用行为。
 pub fn apply(action: Action, state: &mut AppState) {
     match action {
-        Action::Quit => state.should_quit = true,
+        Action::Quit => {
+            // 退出前提交编辑中的提示词内容；效应由事件层在收尾时落库。
+            commit_editing_prompt(state);
+            state.should_quit = true;
+        }
         Action::ToggleSidebar => state.sidebar_collapsed = !state.sidebar_collapsed,
         Action::TogglePrompt => {
             state.prompt_collapsed = !state.prompt_collapsed;
@@ -53,8 +64,18 @@ pub fn apply(action: Action, state: &mut AppState) {
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，
 /// 其余命令先清除选区再执行（选区删除/替换作为一步撤销）。
 pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
+    // 树视图轻量接管按键：上下移动、回车激活、左右展开折叠，其余吞掉。
+    if prompt_tree_mode(state) {
+        route_prompt_tree(state, &command);
+        return;
+    }
     sync_mention_root(state);
     if route_panel(state, &command) {
+        return;
+    }
+    // 编辑绑定条目时 Esc 返回树视图并提交内容；无绑定时保持既有行为。
+    if command == EditorCommand::Escape && prompt_editing(state) {
+        show_prompt_tree(state);
         return;
     }
     if let Some((start, end)) = prompt_selection_bounds(state) {
@@ -162,6 +183,44 @@ fn route_mention_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     }
 }
 
+/// 提示词树视图按键路由：上下移动选中、回车激活；
+/// 其余可映射按键进入搜索框（与模态单行输入一致：字符/移动/删除/清空）；无法映射时吞掉。
+fn route_prompt_tree(state: &mut AppState, command: &EditorCommand) {
+    let visible = prompt_tree_visible_rows(state);
+    match command {
+        EditorCommand::Up => {
+            move_prompt_selection(state, -1, visible);
+        }
+        EditorCommand::Down => {
+            move_prompt_selection(state, 1, visible);
+        }
+        EditorCommand::Newline => {
+            activate_prompt_row(state);
+        }
+        _ => {
+            apply_prompt_search(state, command);
+        }
+    }
+}
+
+/// 显示中工作区是否处于已绑定条目的编辑视图。
+fn prompt_editing(state: &AppState) -> bool {
+    state
+        .workspaces
+        .get(state.prompt_workspace())
+        .is_some_and(|workspace| workspace.prompt_panel.editing.is_some())
+}
+
+/// 显示中工作区是否处于已绑定条目的编辑视图（临时草稿不参与自动保存）。
+fn prompt_item_editing(state: &AppState) -> bool {
+    state
+        .workspaces
+        .get(state.prompt_workspace())
+        .is_some_and(|workspace| {
+            matches!(workspace.prompt_panel.editing, Some(PromptEditing::Item(_)))
+        })
+}
+
 /// 把 prompt 的上下文根同步为提及扫描根：显式绑定路径优先，回退显示中工作区 cwd。
 fn sync_mention_root(state: &mut AppState) {
     let root = state
@@ -174,11 +233,15 @@ fn sync_mention_root(state: &mut AppState) {
 /// 切换显示中的 prompt 草稿：`from` 为当前显示工作区，`to` 为目标工作区。
 ///
 /// 目标草稿移入 `state.prompt` / `state.prompt_root`，旧草稿停回 `from` 槽位；
-/// 槽位缺失（不变量被破坏）时兜底新建，避免 panic。
+/// 槽位缺失（不变量被破坏）时兜底新建，避免 panic；
+/// 切换前提交 `from` 编辑中的提示词内容（缓冲随之回到已保存态）；
+/// 编辑绑定随工作区保留，切回时由 `restore_prompt_view` 恢复。
 fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if from == to {
         return;
     }
+    commit_prompt_buffer(state, from);
+    state.prompt.mark_saved();
     let mut next = state
         .workspaces
         .get_mut(to)
@@ -189,12 +252,38 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt = Some(next);
     }
+    restore_prompt_view(state, to);
     sync_mention_root(state);
 }
 
-/// 把激活工作区的挂起草稿装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
+/// 恢复目标工作区的 prompt 视图：已绑定条目（且条目仍在）保持条目编辑；
+/// 否则默认落到临时提示词；树视图下缓冲内容已过期，重载草稿正文。
+fn restore_prompt_view(state: &mut AppState, index: usize) {
+    let Some(workspace) = state.workspaces.get(index) else {
+        return;
+    };
+    let panel = &workspace.prompt_panel;
+    if panel.mode == PromptMode::Editor {
+        match panel.editing {
+            Some(PromptEditing::Item(id)) if panel.tree.item(id).is_some() => {
+                select_prompt_item(state, index, id);
+                return;
+            }
+            Some(PromptEditing::Draft) => return,
+            _ => {}
+        }
+    }
+    let draft = state.workspaces[index].prompt_panel.draft.clone();
+    let workspace = &mut state.workspaces[index];
+    workspace.prompt_panel.mode = PromptMode::Editor;
+    workspace.prompt_panel.editing = Some(PromptEditing::Draft);
+    state.prompt.set_text(&draft);
+}
+
+/// 把激活工作区的挂起缓冲装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
 ///
-/// 仅用于显示中工作区被关闭：其草稿随工作区销毁，显示切到新激活工作区。
+/// 仅用于显示中工作区被关闭：其草稿随工作区销毁，显示切到新激活工作区；
+/// 视图按目标工作区的编辑绑定恢复（条目或临时提示词）。
 fn load_displayed_draft(state: &mut AppState) {
     let index = state.active_workspace;
     let next = state
@@ -204,6 +293,7 @@ fn load_displayed_draft(state: &mut AppState) {
         .unwrap_or_default();
     state.prompt = next.editor;
     state.prompt_root = next.root;
+    restore_prompt_view(state, index);
     sync_mention_root(state);
 }
 
@@ -933,18 +1023,40 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         .tooltip
         .as_mut()
         .is_some_and(|tooltip| tooltip.reveal(now));
+    let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || revealed || scrolled
+    expired || revealed || saved || scrolled
 }
 
-/// 最近一次定时到期时间（toast 消失、tooltip 显示或自动滚动）；事件循环据此安排唤醒。
+/// prompt 自动保存静置时长：条目编辑停止输入约 800ms 后提交落库。
+const PROMPT_AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
+
+/// 自动保存轮询：条目编辑视图下缓冲静置达标后提交落库并回到已保存态；
+/// 临时草稿与树视图不参与；返回是否触发保存。
+fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
+    if !prompt_item_editing(state) || !state.prompt.autosave_due(now, PROMPT_AUTOSAVE_DELAY) {
+        return false;
+    }
+    state.prompt.mark_saved();
+    commit_editing_prompt(state);
+    true
+}
+
+/// 最近一次定时到期时间（toast 消失、tooltip 显示、自动滚动或 prompt 自动保存）；
+/// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
     let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll
         .map(|autoscroll| autoscroll.next_at);
-    [toast, tooltip, autoscroll].into_iter().flatten().min()
+    let autosave = prompt_item_editing(state)
+        .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
+        .flatten();
+    [toast, tooltip, autoscroll, autosave]
+        .into_iter()
+        .flatten()
+        .min()
 }
 
 /// 打开新建工作区弹窗：清空滚动与拖拽状态，输入框初始为空。
@@ -1153,7 +1265,11 @@ fn confirm_switch_cwd(state: &mut AppState) -> Option<(PaneId, Vec<u8>)> {
 }
 
 /// 打开同步当前工作区路径到终端路径的二次确认浮层；终端无有效路径时忽略。
-fn open_confirm_sync_workspace_cwd(state: &mut AppState, workspace: usize, pane: PaneId) {
+pub(crate) fn open_confirm_sync_workspace_cwd(
+    state: &mut AppState,
+    workspace: usize,
+    pane: PaneId,
+) {
     let Some(path) = state
         .workspaces
         .get(workspace)
@@ -1436,7 +1552,18 @@ pub fn activate_menu(state: &mut AppState) {
                 workspace, pane, ..
             },
         ) => {
-            open_confirm_sync_workspace_cwd(state, workspace, pane);
+            // 同步触发前做信任检查：未信任弹信任浮层，信任后进入二次确认。
+            if let Some(path) = state
+                .workspaces
+                .get(workspace)
+                .and_then(|ws| ws.tabs.iter().find_map(|t| t.pane(pane)))
+                .and_then(|target| target.cwd.clone())
+            {
+                state.effects.push(Effect::CheckTrust {
+                    path,
+                    trigger: TrustTrigger::SyncWorkspaceCwd { workspace, pane },
+                });
+            }
         }
         (Some(MenuCommand::RenameWorkspace), OverlayTarget::Workspace(target)) => {
             let Some(workspace) = state.workspaces.get(target) else {
@@ -1505,6 +1632,60 @@ pub fn activate_menu(state: &mut AppState) {
                 target: menu.target,
             }));
         }
+        (Some(MenuCommand::NewPrompt), OverlayTarget::PromptFolder { folder_id, .. }) => {
+            open_new_prompt(state, Some(folder_id));
+        }
+        (Some(MenuCommand::NewPrompt), OverlayTarget::PromptTree { .. }) => {
+            open_new_prompt(state, None);
+        }
+        (
+            Some(MenuCommand::NewFolder | MenuCommand::NewSubFolder),
+            OverlayTarget::PromptFolder { folder_id, .. },
+        ) => {
+            open_new_folder(state, Some(folder_id));
+        }
+        (Some(MenuCommand::NewFolder), OverlayTarget::PromptTree { .. }) => {
+            open_new_folder(state, None);
+        }
+        (
+            Some(MenuCommand::RenameFolder),
+            OverlayTarget::PromptFolder {
+                workspace,
+                folder_id,
+            },
+        ) => {
+            open_prompt_rename(
+                state,
+                RenameTarget::PromptFolder {
+                    workspace,
+                    folder_id,
+                },
+            );
+        }
+        (Some(MenuCommand::DeleteFolder), OverlayTarget::PromptFolder { .. })
+        | (Some(MenuCommand::DeletePrompt), OverlayTarget::PromptItem { .. }) => {
+            state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+                target: menu.target,
+            }));
+        }
+        (Some(MenuCommand::EditPrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
+            edit_prompt_item(state, workspace, item_id);
+        }
+        (
+            Some(MenuCommand::ChangePromptStatus(status)),
+            OverlayTarget::PromptItem { workspace, item_id },
+        ) => {
+            change_prompt_status(state, workspace, item_id, *status);
+        }
+        (Some(MenuCommand::RenamePrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
+            open_prompt_rename(state, RenameTarget::PromptItem { workspace, item_id });
+        }
+        (
+            Some(MenuCommand::CopyPromptContent),
+            OverlayTarget::PromptItem { workspace, item_id },
+        ) => {
+            copy_prompt_content(state, workspace, item_id);
+        }
         _ => {}
     }
 }
@@ -1539,6 +1720,25 @@ fn split_pane(
 pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneId, Vec<u8>)> {
     if matches!(state.overlay, Some(Overlay::WorktreeOpen(_))) {
         apply_worktree_open_key(state, key);
+        return None;
+    }
+    // 信任浮层：Enter 信任并续作，Esc 拒绝并回退；其余按键吞掉。
+    if matches!(state.overlay, Some(Overlay::TrustWorkspace(_))) {
+        match key {
+            OverlayKey::Enter => apply_trust_decision(state, true),
+            OverlayKey::Esc => apply_trust_decision(state, false),
+            _ => {}
+        }
+        return None;
+    }
+    // 草稿保存选择器：上下移动、回车保存、Esc 关闭。
+    if matches!(state.overlay, Some(Overlay::SaveDraft(_))) {
+        apply_save_draft_key(state, key);
+        return None;
+    }
+    // 新建节点命名浮层：回车确认、Esc 取消（来自选择器时恢复选择器）。
+    if matches!(state.overlay, Some(Overlay::NewNode(_))) {
+        apply_new_node_key(state, key);
         return None;
     }
     match key {
@@ -1576,7 +1776,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 confirm_sync_workspace_cwd(state);
                 None
             }
-            Some(OverlayKind::WorktreeOpen) | None => None,
+            Some(OverlayKind::WorktreeOpen)
+            | Some(OverlayKind::TrustWorkspace)
+            | Some(OverlayKind::NewNode)
+            | Some(OverlayKind::SaveDraft)
+            | None => None,
         },
         OverlayKey::Char(ch) => {
             edit_text_input(state, |input| input.insert_char(ch));
@@ -1622,7 +1826,8 @@ fn edit_text_input(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
     }
 }
 
-/// 提交新建工作区：校验路径，成功时关闭弹窗并创建工作区；
+/// 提交新建工作区：校验路径，成功时关闭弹窗；
+/// 显式路径先登记信任检查（效应由事件层执行），空输入继承当前路径直接创建；
 /// 失败时弹出 Toast 错误并保持弹窗打开以便用户修改。
 fn commit_new_workspace(state: &mut AppState) {
     let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_ref() else {
@@ -1637,7 +1842,13 @@ fn commit_new_workspace(state: &mut AppState) {
     match parse_workspace_path(&text_val, base_cwd.as_deref()) {
         Ok(parsed_cwd) => {
             state.overlay = None;
-            create_workspace_with_cwd(state, parsed_cwd);
+            match parsed_cwd {
+                Some(path) => state.effects.push(Effect::CheckTrust {
+                    path: path.clone(),
+                    trigger: TrustTrigger::CreateWorkspace { cwd: path },
+                }),
+                None => create_workspace_with_cwd(state, None),
+            }
         }
         Err(err) => {
             show_toast(
@@ -1679,6 +1890,9 @@ fn commit_rename(state: &mut AppState) {
             };
             tab_state.name = Some(name);
         }
+        RenameTarget::PromptFolder { .. } | RenameTarget::PromptItem { .. } => {
+            commit_prompt_rename(state, target, name);
+        }
     }
     state.overlay = None;
 }
@@ -1696,6 +1910,14 @@ fn confirm_close(state: &mut AppState) {
             tab,
             pane,
         } => close_pane(state, workspace, tab, pane),
+        OverlayTarget::PromptFolder {
+            workspace,
+            folder_id,
+        } => delete_prompt_folder(state, workspace, folder_id),
+        OverlayTarget::PromptItem { workspace, item_id } => {
+            delete_prompt_item(state, workspace, item_id);
+        }
+        OverlayTarget::PromptTree { .. } => {}
     }
 }
 
@@ -1706,6 +1928,10 @@ fn close_workspace(state: &mut AppState, target: usize) {
     }
     let removed_active = target == state.active_workspace;
     let display_removed = target == state.prompt_workspace();
+    // 被关闭工作区若在显示态，其编辑缓冲先提交落库再销毁。
+    if display_removed {
+        commit_prompt_buffer(state, target);
+    }
     state.workspaces.remove(target);
     if removed_active {
         state.active_workspace = state.active_workspace.min(state.workspaces.len() - 1);

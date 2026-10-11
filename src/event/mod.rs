@@ -1,6 +1,9 @@
 //! 唯一事件循环：tokio select 收敛键盘、PTY 输出与渲染调度。
 
 mod git;
+mod trust;
+
+pub use trust::startup_trust;
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -19,10 +22,12 @@ use tokio_stream::StreamExt;
 use crate::app::actions::{Action, EditorCommand, OverlayKey};
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
+use crate::app::prompt::PromptRowKind;
 use crate::app::state::{AppState, PaneKind, PaneView, WorkspaceGit, home_dir, workspace_label};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::config::Config;
+use crate::db::service::Persistence;
 use crate::detect::{STATE_TAIL_LINES, pane_agent_snapshot};
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
@@ -60,15 +65,25 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// 空闲等待：只由输入或 PTY 输出唤醒。
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
 
-/// 同步入口：构造 tokio 运行时并阻塞到主循环结束。
-pub fn run(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+/// 同步入口：构造 tokio 运行时并阻塞到主循环结束；持久化服务由入口构造并移交。
+pub fn run(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+    mut persistence: Persistence,
+) -> io::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(run_loop(tui, state, config))
+    runtime.block_on(run_loop(tui, state, config, &mut persistence))
 }
 
-async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::Result<()> {
+async fn run_loop(
+    tui: &mut Tui,
+    state: &mut AppState,
+    config: &Config,
+    persistence: &mut Persistence,
+) -> io::Result<()> {
     initialize_layout_widths(tui, state, config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
@@ -87,6 +102,10 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         reconcile_sessions(state, &mut sessions, &sender);
+        // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
+        if persistence.pump(state) {
+            dirty = true;
+        }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
             cwd_check = None;
             if poll_process_cwds(state, &sessions) {
@@ -130,7 +149,8 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
             last_draw = Instant::now();
         }
 
-        let mut wait = if dirty {
+        // 待执行效应（如自动保存落库）必须尽快进入下一轮 pump，不随空闲睡死。
+        let mut wait = if dirty || !state.effects.is_empty() {
             FRAME_INTERVAL.saturating_sub(last_draw.elapsed())
         } else {
             IDLE_WAIT
@@ -174,6 +194,8 @@ async fn run_loop(tui: &mut Tui, state: &mut AppState, config: &Config) -> io::R
     for session in sessions.values_mut() {
         session.kill();
     }
+    // 退出前收尾：提交编辑中的提示词内容并落库。
+    persistence.shutdown(state);
     Ok(())
 }
 
@@ -392,7 +414,10 @@ fn handle_terminal_event(
                     );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-                    let was_new_ws = matches!(state.overlay, Some(Overlay::NewWorkspace(_)));
+                    let was_new_ws = matches!(
+                        state.overlay,
+                        Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
+                    );
                     if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
                         write_to_pane(sessions, pane, &bytes);
                         update::reset_pane_scroll(state, pane);
@@ -403,8 +428,16 @@ fn handle_terminal_event(
                     }
                     *dirty = true;
                 }
+                Routed::SavePrompt => {
+                    update::save_prompt_now(state);
+                    *dirty = true;
+                }
                 Routed::Copy => {
-                    if let Some(text) = update::prompt_copy_text(state) {
+                    if update::prompt_tree_mode(state) {
+                        // 树视图 Ctrl+C 与模态输入框一致：清空搜索过滤。
+                        update::clear_prompt_search(state);
+                        *dirty = true;
+                    } else if let Some(text) = update::prompt_copy_text(state) {
                         copy_with_toast(state, &text);
                         *dirty = true;
                     }
@@ -465,7 +498,10 @@ fn handle_terminal_event(
                     );
                     let was_menu = matches!(state.overlay, Some(Overlay::Menu(_)));
                     let was_worktree = matches!(state.overlay, Some(Overlay::WorktreeOpen(_)));
-                    let was_new_ws = matches!(state.overlay, Some(Overlay::NewWorkspace(_)));
+                    let was_new_ws = matches!(
+                        state.overlay,
+                        Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
+                    );
                     if let Some((pane, bytes)) =
                         handle_overlay_click(state, *screen, mouse.column, mouse.row)
                     {
@@ -479,12 +515,18 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config)
-                    && toast.contains((mouse.column, mouse.row).into())
-                {
+                if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
+                    if toast.contains((mouse.column, mouse.row).into()) {
+                        // 点击 toast 内部内容不关闭；仅右上角 [x] 关闭。
+                        if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
+                            update::dismiss_toast(state);
+                            *dirty = true;
+                        }
+                        return;
+                    }
+                    // 点击 toast 之外：关闭 toast 后继续处理本次点击。
                     update::dismiss_toast(state);
                     *dirty = true;
-                    return;
                 }
                 if ui::exit_button_at(view, mouse.column, mouse.row) {
                     update::apply(Action::Quit, state);
@@ -601,15 +643,31 @@ fn handle_terminal_event(
                     apply_template_button(state, hit);
                     *dirty = true;
                 } else if !state.prompt_collapsed
-                    && let Some(button) =
-                        layout::prompt_toolbar_button_at(view.prompt, mouse.column, mouse.row)
+                    && let Some(button) = layout::prompt_toolbar_button_at(
+                        view.prompt,
+                        mouse.column,
+                        mouse.row,
+                        update::prompt_tree_mode(state),
+                    )
                 {
                     // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
+                    let editor_view = !update::prompt_tree_mode(state);
                     match button {
-                        layout::PromptToolbarButton::Undo => state.prompt.undo(),
-                        layout::PromptToolbarButton::Redo => state.prompt.redo(),
-                        layout::PromptToolbarButton::SelectAll => state.select_all_prompt(),
-                        layout::PromptToolbarButton::Save => state.prompt.mark_saved(),
+                        layout::PromptToolbarButton::Mode => {
+                            update::toggle_prompt_panel_mode(state);
+                        }
+                        layout::PromptToolbarButton::TempPrompt => {
+                            update::open_temp_prompt(state);
+                        }
+                        layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
+                        layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
+                        layout::PromptToolbarButton::SelectAll if editor_view => {
+                            state.select_all_prompt();
+                        }
+                        layout::PromptToolbarButton::Save if editor_view => {
+                            update::save_prompt_now(state);
+                        }
+                        _ => {}
                     }
                     *dirty = true;
                 } else if !state.prompt_collapsed
@@ -633,8 +691,21 @@ fn handle_terminal_event(
                     let col = mouse.column - inner.x;
                     if pane == state.prompt.id() {
                         update::focus_prompt(state);
-                        update::place_prompt_cursor(state, row, col);
-                        update::begin_selection(state, pane, row, col);
+                        if update::prompt_tree_mode(state) {
+                            // 树视图：点击行选中；文件夹行同时折叠/展开。
+                            let hit = ui::prompt::tree::row_at(
+                                inner,
+                                &state.prompt_owner().prompt_panel,
+                                mouse.column,
+                                mouse.row,
+                            );
+                            if let Some(index) = hit {
+                                update::click_prompt_row(state, index);
+                            }
+                        } else {
+                            update::place_prompt_cursor(state, row, col);
+                            update::begin_selection(state, pane, row, col);
+                        }
                         *dirty = true;
                     } else if matches!(
                         state.pane_anywhere(pane).map(|pane| pane.kind),
@@ -714,7 +785,12 @@ fn handle_terminal_event(
                     };
                     let offset =
                         ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
-                    if update::set_prompt_scroll(state, offset) {
+                    if update::prompt_tree_mode(state) {
+                        let visible = update::prompt_tree_visible_rows(state);
+                        if update::set_prompt_tree_scroll(state, offset, visible) {
+                            *dirty = true;
+                        }
+                    } else if update::set_prompt_scroll(state, offset) {
                         *dirty = true;
                     }
                     return;
@@ -984,8 +1060,16 @@ fn handle_terminal_event(
                     if pane == state.prompt.id() {
                         update::clear_selection(state);
                         if let Some(direction) = vertical_wheel_direction(mouse.kind) {
-                            update::scroll_prompt(state, direction);
-                            *dirty = true;
+                            if update::prompt_tree_mode(state) {
+                                // 树视图滚轮按行滚动，光标/选中不动。
+                                let visible = update::prompt_tree_visible_rows(state);
+                                if update::scroll_prompt_tree(state, direction, visible) {
+                                    *dirty = true;
+                                }
+                            } else {
+                                update::scroll_prompt(state, direction);
+                                *dirty = true;
+                            }
                         }
                     } else if state.pane_anywhere(pane).is_some_and(|target| {
                         target.kind == PaneKind::Terminal && target.view == PaneView::Terminal
@@ -1301,85 +1385,134 @@ fn handle_overlay_click(
                     update::set_menu_selection(state, index);
                     update::activate_menu(state);
                 }
-                None => update::close_overlay(state),
+                // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
+                None => {
+                    if !layout.area.contains((column, row).into()) {
+                        update::close_overlay(state);
+                    }
+                }
             }
             None
         }
         Some(Overlay::Rename(_)) => {
-            let button = ui::overlay::rename_shell(screen)
-                .and_then(|shell| ui::overlay::rename_button_at(&shell, column, row));
-            match button {
+            let Some(shell) = ui::overlay::rename_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::rename_button_at(&shell, column, row) {
                 Some(ui::overlay::RenameButton::Save) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
                 Some(ui::overlay::RenameButton::Clear) => {
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
-                Some(ui::overlay::RenameButton::Cancel) | None => {
+                Some(ui::overlay::RenameButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::NewWorkspace(_)) => {
-            let button = ui::overlay::new_workspace_shell(screen)
-                .and_then(|shell| ui::overlay::new_workspace_button_at(&shell, column, row));
-            match button {
+            let Some(shell) = ui::overlay::new_workspace_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::new_workspace_button_at(&shell, column, row) {
                 Some(ui::overlay::NewWorkspaceButton::Create) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
                 Some(ui::overlay::NewWorkspaceButton::Clear) => {
                     update::apply_overlay_key(state, OverlayKey::Clear)
                 }
-                Some(ui::overlay::NewWorkspaceButton::Cancel) | None => {
+                Some(ui::overlay::NewWorkspaceButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
-        Some(Overlay::ConfirmClose(_)) => {
-            let button = ui::overlay::confirm_shell(screen)
-                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
-            match button {
+        Some(Overlay::ConfirmClose(confirm)) => {
+            let question = ui::overlay::confirm_question(state, confirm.target);
+            let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                Some(ui::overlay::ConfirmButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::ConfirmSwitchCwd(confirm)) => {
-            let button = ui::overlay::confirm_switch_cwd_shell(screen, &confirm.path)
-                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
-            match button {
+            let path = confirm.path.clone();
+            let Some(shell) = ui::overlay::confirm_switch_cwd_shell(screen, &path) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                Some(ui::overlay::ConfirmButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) => {
-            let button = ui::overlay::confirm_sync_workspace_cwd_shell(screen, &confirm.path)
-                .and_then(|shell| ui::overlay::confirm_button_at(&shell, column, row));
-            match button {
+            let path = confirm.path.clone();
+            let Some(shell) = ui::overlay::confirm_sync_workspace_cwd_shell(screen, &path) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
                 Some(ui::overlay::ConfirmButton::Confirm) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::ConfirmButton::Cancel) | None => {
+                Some(ui::overlay::ConfirmButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
         }
         Some(Overlay::WorktreeOpen(dialog)) => {
-            let Some(shell) = ui::overlay::worktree_dialog_shell(screen, dialog.entries.len())
-            else {
+            let entry_count = dialog.entries.len();
+            let Some(shell) = ui::overlay::worktree_dialog_shell(screen, entry_count) else {
                 update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
                 return None;
             };
             if let Some(index) = ui::overlay::worktree_dialog_entry_at(&shell, dialog, column, row)
@@ -1391,14 +1524,116 @@ fn handle_overlay_click(
                 Some(ui::overlay::WorktreeDialogButton::Open) => {
                     update::apply_overlay_key(state, OverlayKey::Enter)
                 }
-                Some(ui::overlay::WorktreeDialogButton::Cancel) | None => {
+                Some(ui::overlay::WorktreeDialogButton::Cancel) => {
                     update::close_overlay(state);
                     None
                 }
+                // 内部空白：保持打开。
+                None => None,
             }
+        }
+        Some(Overlay::NewNode(_)) => {
+            let Some(shell) = ui::overlay::new_node_shell(screen) else {
+                update::cancel_new_node(state);
+                return None;
+            };
+            // [x] 或浮层之外：取消（来自选择器时恢复选择器）。
+            if ui::widgets::modal::close_button_at(shell.area, column, row)
+                || !shell.area.contains((column, row).into())
+            {
+                update::cancel_new_node(state);
+                return None;
+            }
+            match ui::overlay::new_node_button_at(&shell, column, row) {
+                Some(ui::overlay::NewNodeButton::Create) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::NewNodeButton::Clear) => {
+                    update::apply_overlay_key(state, OverlayKey::Clear)
+                }
+                Some(ui::overlay::NewNodeButton::Cancel) => {
+                    update::cancel_new_node(state);
+                    None
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
+        Some(Overlay::SaveDraft(dialog)) => {
+            let entry_count = dialog.entries.len();
+            let Some(shell) = ui::overlay::save_draft_shell(screen, entry_count) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_ref() else {
+                return None;
+            };
+            if let Some(index) = ui::overlay::save_draft_entry_at(&shell, dialog, column, row) {
+                // 点击文件夹仅选中，不执行；动作行（新建文件夹）点击打开命名浮层。
+                let is_add = matches!(
+                    dialog.entries.get(index),
+                    Some(crate::app::overlay::SaveDraftEntry::AddFolder)
+                );
+                update::set_save_draft_selection(state, index);
+                if is_add {
+                    update::open_new_folder_from_draft(state);
+                }
+                return None;
+            }
+            match ui::overlay::save_draft_button_at(&shell, column, row) {
+                Some(ui::overlay::SaveDraftButton::Save) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::SaveDraftButton::Cancel) => {
+                    update::close_overlay(state);
+                    None
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
+        Some(Overlay::TrustWorkspace(_)) => {
+            let Some(shell) = ui::overlay::trust_shell(screen) else {
+                update::apply_trust_decision(state, false);
+                return None;
+            };
+            // 点击关闭按钮或浮层之外视同拒绝信任：不因误触授予访问；内部空白保持打开。
+            if ui::widgets::modal::close_button_at(shell.area, column, row)
+                || !shell.area.contains((column, row).into())
+            {
+                update::apply_trust_decision(state, false);
+                return None;
+            }
+            match ui::overlay::trust_button_at(&shell, column, row) {
+                Some(ui::overlay::TrustButton::Trust) => update::apply_trust_decision(state, true),
+                Some(ui::overlay::TrustButton::Refuse) => {
+                    update::apply_trust_decision(state, false);
+                }
+                None => {}
+            }
+            None
         }
         None => None,
     }
+}
+
+/// 模态浮层通用点击前置：命中右上角关闭按钮或点击浮层之外时关闭；返回是否已处理。
+fn modal_dismissed(
+    state: &mut AppState,
+    shell: &ui::widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> bool {
+    if ui::widgets::modal::close_button_at(shell.area, column, row)
+        || !shell.area.contains((column, row).into())
+    {
+        update::close_overlay(state);
+        return true;
+    }
+    false
 }
 
 /// 命中标签、工作区项或主区窗格时打开对应右键菜单；返回是否打开。
@@ -1420,6 +1655,35 @@ fn open_right_click_menu(
     if let Some(index) = ui::workspace_item_at(view, state, column, row) {
         update::open_workspace_menu(state, index, (column, row));
         return true;
+    }
+    // 提示词树：行上打开节点菜单，空白区域打开新建菜单。
+    if !state.prompt_collapsed && update::prompt_tree_mode(state) {
+        let area = layout::prompt_text_rect(view.prompt);
+        if area.contains((column, row).into()) {
+            let hit = {
+                let panel = &state.prompt_owner().prompt_panel;
+                ui::prompt::tree::row_at(area, panel, column, row).and_then(|index| {
+                    let row_data = panel.rows().get(index).copied()?;
+                    let id = match row_data.kind {
+                        PromptRowKind::Folder => {
+                            panel.tree.folder_of_row(row_data).map(|folder| folder.id)
+                        }
+                        PromptRowKind::Item => panel.tree.item_of_row(row_data).map(|item| item.id),
+                    };
+                    Some((row_data.kind, id))
+                })
+            };
+            match hit {
+                Some((PromptRowKind::Folder, Some(folder_id))) => {
+                    update::open_prompt_folder_menu(state, folder_id, (column, row));
+                }
+                Some((PromptRowKind::Item, Some(item_id))) => {
+                    update::open_prompt_item_menu(state, item_id, (column, row));
+                }
+                _ => update::open_prompt_tree_menu(state, (column, row)),
+            }
+            return true;
+        }
     }
     if let Some((pane, _)) = pane_at(rects, column, row)
         && state.active_tab().pane(pane).is_some()
@@ -1454,7 +1718,8 @@ fn handle_workspace_scrollbar_press(
     true
 }
 
-/// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；不改变焦点与光标；返回是否命中。
+/// prompt 滚动条按下：thumb 开始拖拽，轨道点击跳转；树视图滚动树、编辑视图滚动文本；
+/// 不改变焦点与光标；返回是否命中。
 fn handle_prompt_scrollbar_press(
     state: &mut AppState,
     view: &ui::layout::ViewLayout,
@@ -1471,7 +1736,12 @@ fn handle_prompt_scrollbar_press(
         Some(grab) => state.prompt_scroll_drag = Some(grab),
         None => {
             let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
-            update::set_prompt_scroll(state, offset);
+            if update::prompt_tree_mode(state) {
+                let visible = update::prompt_tree_visible_rows(state);
+                update::set_prompt_tree_scroll(state, offset, visible);
+            } else {
+                update::set_prompt_scroll(state, offset);
+            }
         }
     }
     true

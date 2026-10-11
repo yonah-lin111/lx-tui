@@ -9,22 +9,29 @@ use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
-    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewWorkspace,
-    Overlay, OverlayTarget, Rename, RenameTarget, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewNode,
+    NewNodeKind, NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft,
+    SaveDraftEntry, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
 };
 use crate::app::state::{AppState, tab_label};
+use crate::app::trust::TrustWorkspace;
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
 /// 重命名浮层尺寸（列，行）：输入行、空行与按钮行。
 const RENAME_WIDTH: u16 = 40;
 const RENAME_HEIGHT: u16 = 5;
+/// 新建节点浮层尺寸（列，行）：输入行、空行与按钮行（容纳三个按钮）。
+const NEW_NODE_WIDTH: u16 = 42;
+const NEW_NODE_HEIGHT: u16 = 5;
 /// 新建工作区浮层尺寸（列，行）：输入行、空行与按钮行。
 const NEW_WORKSPACE_WIDTH: u16 = 44;
 const NEW_WORKSPACE_HEIGHT: u16 = 5;
-/// 关闭确认浮层尺寸（列，行）：问题行与按钮行。
+/// 关闭确认浮层最小宽度（列）；高度 = 问题换行行数 + 按钮行 + 上下边框。
 const CONFIRM_WIDTH: u16 = 40;
-const CONFIRM_HEIGHT: u16 = 4;
+/// 信任浮层尺寸（列，行）：问题行、路径行、空行与按钮行。
+const TRUST_WIDTH: u16 = 52;
+const TRUST_HEIGHT: u16 = 6;
 /// worktree 对话框宽度与高度范围（行）：条目两行一条 + 搜索/分隔/按钮与外框。
 const WORKTREE_DIALOG_WIDTH: u16 = 56;
 const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 10;
@@ -33,12 +40,15 @@ const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 20;
 const BUTTON_GAP: u16 = 2;
 const RENAME_BUTTON_ROW: u16 = 2;
 const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
-const CONFIRM_BUTTON_ROW: u16 = 1;
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+const NEW_NODE_BUTTONS: [&str; 3] = [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const NEW_WORKSPACE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 const CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM, text::BUTTON_CANCEL];
 const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANCEL];
+const TRUST_BUTTONS: [&str; 2] = [text::BUTTON_TRUST, text::BUTTON_DONT_TRUST];
+/// 信任浮层按钮行号（相对内容区）。
+const TRUST_BUTTON_ROW: u16 = 3;
 
 /// 重命名浮层按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +66,14 @@ pub enum NewWorkspaceButton {
     Cancel,
 }
 
+/// 新建节点浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewNodeButton {
+    Create,
+    Clear,
+    Cancel,
+}
+
 /// 关闭确认浮层按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmButton {
@@ -68,6 +86,13 @@ pub enum ConfirmButton {
 pub enum WorktreeDialogButton {
     Open,
     Cancel,
+}
+
+/// 信任浮层按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrustButton {
+    Trust,
+    Refuse,
 }
 
 /// worktree 对话框几何；条目两行一条，高度随条目数夹取。
@@ -157,32 +182,48 @@ pub fn rename_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, RENAME_WIDTH, RENAME_HEIGHT)
 }
 
-/// 关闭确认浮层几何。
-pub fn confirm_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
-    widgets::modal::layout(screen, CONFIRM_WIDTH, CONFIRM_HEIGHT)
+/// 确认类浮层几何：宽度夹取到屏幕，高度随问题换行行数增长（按钮行 + 上下边框）。
+fn confirm_shell_for(
+    screen: Rect,
+    question: &str,
+    width: u16,
+) -> Option<widgets::modal::ModalShell> {
+    let width = width.min(screen.width);
+    let inner_width = usize::from(width.saturating_sub(2)).max(1);
+    let lines = text::wrap(question, inner_width).len().max(1);
+    let height = u16::try_from(lines)
+        .unwrap_or(u16::MAX)
+        .saturating_add(3)
+        .min(screen.height);
+    widgets::modal::layout(screen, width, height)
 }
 
-/// 切换工作区路径确认浮层几何：宽度随问题完整展开，仅在超出屏幕时夹取。
-pub fn confirm_switch_cwd_shell(screen: Rect, path: &Path) -> Option<widgets::modal::ModalShell> {
-    let question = text::confirm_switch_cwd_question(&path.display().to_string());
-    let width = u16::try_from(question.width().saturating_add(2))
+/// 关闭/删除确认浮层几何：固定宽度，问题按内容自动换行。
+pub fn confirm_shell(screen: Rect, question: &str) -> Option<widgets::modal::ModalShell> {
+    confirm_shell_for(screen, question, CONFIRM_WIDTH)
+}
+
+/// 路径确认浮层宽度：随问题完整展开，超出屏幕时夹取（再由换行承接）。
+fn path_confirm_width(screen: Rect, question: &str) -> u16 {
+    u16::try_from(question.width().saturating_add(2))
         .unwrap_or(u16::MAX)
         .max(CONFIRM_WIDTH)
-        .min(screen.width);
-    widgets::modal::layout(screen, width, CONFIRM_HEIGHT)
+        .min(screen.width)
 }
 
-/// 同步当前工作区路径确认浮层几何：宽度随完整问题展开，最小 CONFIRM_WIDTH，仅在超出屏幕时夹取。
+/// 切换工作区路径确认浮层几何：宽度随问题完整展开，超出屏幕时换行。
+pub fn confirm_switch_cwd_shell(screen: Rect, path: &Path) -> Option<widgets::modal::ModalShell> {
+    let question = text::confirm_switch_cwd_question(&path.display().to_string());
+    confirm_shell_for(screen, &question, path_confirm_width(screen, &question))
+}
+
+/// 同步当前工作区路径确认浮层几何：宽度随完整问题展开，超出屏幕时换行。
 pub fn confirm_sync_workspace_cwd_shell(
     screen: Rect,
     path: &Path,
 ) -> Option<widgets::modal::ModalShell> {
-    let question = format!("switch workspace path to \"{}\"?", path.display());
-    let width = u16::try_from(question.width().saturating_add(2))
-        .unwrap_or(u16::MAX)
-        .max(CONFIRM_WIDTH)
-        .min(screen.width);
-    widgets::modal::layout(screen, width, CONFIRM_HEIGHT)
+    let question = text::confirm_sync_ws_cwd_question(&path.display().to_string());
+    confirm_shell_for(screen, &question, path_confirm_width(screen, &question))
 }
 
 /// 命中重命名按钮。
@@ -204,6 +245,31 @@ pub fn rename_button_at(
 /// 新建工作区浮层几何。
 pub fn new_workspace_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
     widgets::modal::layout(screen, NEW_WORKSPACE_WIDTH, NEW_WORKSPACE_HEIGHT)
+}
+
+/// 新建节点浮层几何。
+pub fn new_node_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, NEW_NODE_WIDTH, NEW_NODE_HEIGHT)
+}
+
+/// 命中新建节点按钮。
+pub fn new_node_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<NewNodeButton> {
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &NEW_NODE_BUTTONS,
+        BUTTON_GAP,
+        RENAME_BUTTON_ROW,
+    );
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(NewNodeButton::Create),
+        Some(1) => Some(NewNodeButton::Clear),
+        Some(2) => Some(NewNodeButton::Cancel),
+        _ => None,
+    }
 }
 
 /// 命中新建工作区按钮。
@@ -236,11 +302,31 @@ pub fn confirm_button_at(
         shell.inner,
         &CONFIRM_BUTTONS,
         BUTTON_GAP,
-        CONFIRM_BUTTON_ROW,
+        shell.inner.height.saturating_sub(1),
     );
     match widgets::modal::button_at(&rects, column, row) {
         Some(0) => Some(ConfirmButton::Confirm),
         Some(1) => Some(ConfirmButton::Cancel),
+        _ => None,
+    }
+}
+
+/// 信任浮层几何。
+pub fn trust_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, TRUST_WIDTH, TRUST_HEIGHT)
+}
+
+/// 命中信任浮层按钮。
+pub fn trust_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<TrustButton> {
+    let rects =
+        widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW);
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(TrustButton::Trust),
+        Some(1) => Some(TrustButton::Refuse),
         _ => None,
     }
 }
@@ -270,7 +356,256 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             None
         }
         Overlay::WorktreeOpen(dialog) => render_worktree_open(frame, screen, dialog),
+        Overlay::TrustWorkspace(trust) => {
+            render_trust(frame, screen, trust);
+            None
+        }
+        Overlay::NewNode(node) => render_new_node(frame, screen, node),
+        Overlay::SaveDraft(dialog) => render_save_draft(frame, screen, dialog),
     }
+}
+
+/// 草稿保存选择器宽度。
+const SAVE_DRAFT_WIDTH: u16 = 44;
+
+/// 选择器底部按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveDraftButton {
+    Save,
+    Cancel,
+}
+
+/// 选择器按钮标签（保存 / 取消）。
+const SAVE_DRAFT_BUTTONS: [&str; 2] = [text::BUTTON_SAVE, text::BUTTON_CANCEL];
+
+/// 草稿保存选择器几何：名称输入 + 分割线 + 条目单行 + 按钮行。
+pub fn save_draft_shell(screen: Rect, entry_count: usize) -> Option<widgets::modal::ModalShell> {
+    let height = (entry_count as u16).saturating_add(6).clamp(8, 30);
+    widgets::modal::layout(screen, SAVE_DRAFT_WIDTH, height)
+}
+
+/// 选择器可视条目数（扣除名称、分割线与按钮行）。
+pub fn save_draft_max_rows(shell: &widgets::modal::ModalShell) -> usize {
+    usize::from(shell.inner.height.saturating_sub(3))
+}
+
+/// 列表窗口起始条目位置：让选中项落在窗口内。
+pub fn save_draft_visible_start(dialog: &SaveDraft, max_rows: usize) -> usize {
+    if max_rows == 0 {
+        return 0;
+    }
+    dialog.selected.saturating_add(1).saturating_sub(max_rows)
+}
+
+/// 列表区起始行（名称 + 分割线之后）。
+fn save_draft_list_y(shell: &widgets::modal::ModalShell) -> u16 {
+    shell.inner.y.saturating_add(2)
+}
+
+/// 命中选择器条目；按钮行、区域外或越界返回 None。
+pub fn save_draft_entry_at(
+    shell: &widgets::modal::ModalShell,
+    dialog: &SaveDraft,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    if column < shell.inner.x || column >= shell.inner.right() {
+        return None;
+    }
+    let list_y = save_draft_list_y(shell);
+    if row < list_y {
+        return None;
+    }
+    let max_rows = save_draft_max_rows(shell);
+    let offset = usize::from(row - list_y);
+    if offset >= max_rows {
+        return None;
+    }
+    let index = save_draft_visible_start(dialog, max_rows) + offset;
+    (index < dialog.entries.len()).then_some(index)
+}
+
+/// 命中选择器按钮。
+pub fn save_draft_button_at(
+    shell: &widgets::modal::ModalShell,
+    column: u16,
+    row: u16,
+) -> Option<SaveDraftButton> {
+    let rects = widgets::modal::button_row(
+        shell.inner,
+        &SAVE_DRAFT_BUTTONS,
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(SaveDraftButton::Save),
+        Some(1) => Some(SaveDraftButton::Cancel),
+        _ => None,
+    }
+}
+
+/// 条目标签：根层 `/`、文件夹树形连接符（末项 `└─`）与追加动作行。
+fn save_draft_entry_label(entries: &[SaveDraftEntry], index: usize) -> String {
+    match &entries[index] {
+        SaveDraftEntry::Root => text::SAVE_DRAFT_ROOT.to_string(),
+        SaveDraftEntry::Folder { depth, name, .. } => {
+            if *depth == 0 {
+                name.clone()
+            } else {
+                let connector = if last_sibling(entries, index) {
+                    text::PROMPT_TREE_LAST
+                } else {
+                    text::PROMPT_TREE_MIDDLE
+                };
+                format!("{connector} {name}")
+            }
+        }
+        SaveDraftEntry::AddFolder => text::SAVE_DRAFT_NEW_FOLDER.to_string(),
+    }
+}
+
+/// 同级末项判定：其后再无同深度行，或先遇到更浅的行（与树视图一致）。
+fn last_sibling(entries: &[SaveDraftEntry], index: usize) -> bool {
+    let depth = match &entries[index] {
+        SaveDraftEntry::Folder { depth, .. } => *depth,
+        _ => return true,
+    };
+    for entry in &entries[index + 1..] {
+        match entry {
+            SaveDraftEntry::Folder { depth: later, .. } => {
+                if *later < depth {
+                    return true;
+                }
+                if *later == depth {
+                    return false;
+                }
+            }
+            _ => return true,
+        }
+    }
+    true
+}
+
+/// 渲染草稿保存选择器：名称输入 + 分割线 + 条目列表 + 按钮；
+/// 返回活动输入（选中内联行时为该行名称，否则为顶部名称）的硬件光标位置。
+fn render_save_draft(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    dialog: &SaveDraft,
+) -> Option<(u16, u16)> {
+    let shell = save_draft_shell(screen, dialog.entries.len())?;
+    widgets::modal::render(frame, &shell, text::SAVE_DRAFT_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    let width = usize::from(shell.inner.width);
+    // 名称行：`name ` 前缀 + 单行输入。
+    let label = format!("{} ", text::SAVE_DRAFT_NAME);
+    let label_width = label.chars().count() as u16;
+    frame.render_widget(
+        Paragraph::new(Span::styled(label, style::muted())),
+        Rect::new(shell.inner.x, shell.inner.y, label_width, 1),
+    );
+    let name_area = Rect::new(
+        shell.inner.x.saturating_add(label_width),
+        shell.inner.y,
+        shell.inner.width.saturating_sub(label_width),
+        1,
+    );
+    let name_cursor = widgets::input::render(
+        frame,
+        name_area,
+        dialog.name.text(),
+        dialog.name.cursor(),
+        None,
+    );
+    // 分割线。
+    frame.render_widget(
+        Paragraph::new(text::DIVIDER_MID.repeat(width)).style(style::border(false)),
+        Rect::new(
+            shell.inner.x,
+            shell.inner.y.saturating_add(1),
+            shell.inner.width,
+            1,
+        ),
+    );
+    // 条目列表。
+    let list_y = save_draft_list_y(&shell);
+    let max_rows = save_draft_max_rows(&shell);
+    let start = save_draft_visible_start(dialog, max_rows);
+    for (offset, index) in (start..dialog.entries.len()).take(max_rows).enumerate() {
+        let y = list_y.saturating_add(offset as u16);
+        let selected = index == dialog.selected;
+        let entry = &dialog.entries[index];
+        let row_area = Rect::new(shell.inner.x, y, shell.inner.width, 1);
+        let label = text::ellipsize(&save_draft_entry_label(&dialog.entries, index), width);
+        let span_style = if selected {
+            style::selection()
+        } else {
+            match entry {
+                SaveDraftEntry::Folder { .. } => style::text(),
+                SaveDraftEntry::Root | SaveDraftEntry::AddFolder => style::accent(),
+            }
+        };
+        let paragraph = if selected {
+            Paragraph::new(Span::styled(label, span_style)).style(style::selection())
+        } else {
+            Paragraph::new(Span::styled(label, span_style))
+        };
+        frame.render_widget(paragraph, row_area);
+    }
+    // 按钮行。
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &SAVE_DRAFT_BUTTONS,
+            BUTTON_GAP,
+            shell.inner.height.saturating_sub(1),
+        ),
+        &[
+            (text::BUTTON_SAVE, style::accent()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
+    );
+    name_cursor
+}
+
+/// 渲染信任浮层：问题、路径高亮与底部按钮。
+fn render_trust(frame: &mut Frame<'_>, screen: Rect, trust: &TrustWorkspace) {
+    let Some(shell) = trust_shell(screen) else {
+        return;
+    };
+    widgets::modal::render(frame, &shell, text::TRUST_WORKSPACE_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return;
+    }
+    let width = usize::from(shell.inner.width);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            text::ellipsize(text::TRUST_WORKSPACE_QUESTION, width),
+            style::text(),
+        )),
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+    );
+    let path = text::ellipsize_middle(&trust.path.display().to_string(), width);
+    frame.render_widget(
+        Paragraph::new(Span::styled(path, style::accent())),
+        Rect::new(
+            shell.inner.x,
+            shell.inner.y.saturating_add(1),
+            shell.inner.width,
+            1,
+        ),
+    );
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(shell.inner, &TRUST_BUTTONS, BUTTON_GAP, TRUST_BUTTON_ROW),
+        &[
+            (text::BUTTON_TRUST, style::accent()),
+            (text::BUTTON_DONT_TRUST, style::muted()),
+        ],
+    );
 }
 
 /// 重命名浮层标题：按目标种类分派。
@@ -278,6 +613,8 @@ fn rename_title(target: RenameTarget) -> &'static str {
     match target {
         RenameTarget::Workspace(_) => text::RENAME_WORKSPACE_TITLE,
         RenameTarget::Tab { .. } => text::RENAME_TAB_TITLE,
+        RenameTarget::PromptFolder { .. } => text::RENAME_FOLDER_TITLE,
+        RenameTarget::PromptItem { .. } => text::RENAME_PROMPT_TITLE,
     }
 }
 
@@ -321,7 +658,37 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
                 .unwrap_or_default();
             (text::CONFIRM_CLOSE_PANE_TITLE, name)
         }
+        OverlayTarget::PromptFolder {
+            workspace,
+            folder_id,
+        } => (
+            text::CONFIRM_DELETE_FOLDER_TITLE,
+            prompt_folder_name(state, workspace, folder_id).unwrap_or_default(),
+        ),
+        OverlayTarget::PromptItem { workspace, item_id } => (
+            text::CONFIRM_DELETE_PROMPT_TITLE,
+            prompt_item_name(state, workspace, item_id).unwrap_or_default(),
+        ),
+        OverlayTarget::PromptTree { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
     }
+}
+
+/// 提示词树文件夹名。
+fn prompt_folder_name(state: &AppState, workspace: usize, folder_id: i64) -> Option<String> {
+    state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.tree.folder(folder_id))
+        .map(|folder| folder.name.clone())
+}
+
+/// 提示词条目名。
+fn prompt_item_name(state: &AppState, workspace: usize, item_id: i64) -> Option<String> {
+    state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
+        .map(|item| item.name.clone())
 }
 
 /// 菜单命令到文案的映射；文案集中在 `ui/text.rs`。
@@ -344,6 +711,14 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             MenuCommand::SwitchToWorkspaceCwd => text::MENU_SWITCH_TO_WORKSPACE_CWD,
             MenuCommand::SyncWorkspaceToTerminalCwd => text::MENU_SYNC_WS_TO_TERMINAL_CWD,
             MenuCommand::ClosePane => text::MENU_CLOSE_PANE,
+            MenuCommand::NewPrompt => text::MENU_PROMPT_NEW_PROMPT,
+            MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
+            MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
+            MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
+            MenuCommand::DeleteFolder | MenuCommand::DeletePrompt => text::MENU_PROMPT_DELETE,
+            MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
+            MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
+            MenuCommand::ChangePromptStatus(status) => text::prompt_status_menu_label(*status),
         })
         .collect()
 }
@@ -379,6 +754,16 @@ fn menu_title(state: &AppState, menu: &Menu) -> String {
                 )
             })
             .unwrap_or_else(|| text::MENU_TITLE_PANE.to_string()),
+        OverlayTarget::PromptFolder {
+            workspace,
+            folder_id,
+        } => prompt_folder_name(state, workspace, folder_id)
+            .unwrap_or_else(|| text::MENU_TITLE_FOLDER.to_string()),
+        OverlayTarget::PromptItem { workspace, item_id } => {
+            prompt_item_name(state, workspace, item_id)
+                .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
+        }
+        OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),
     }
 }
 
@@ -441,13 +826,58 @@ fn render_new_workspace(
     )
 }
 
-/// 关闭确认浮层：问题与底部按钮。
+/// 新建节点浮层：单行名称输入 + 底部按钮；标题与占位按节点种类分派。
+fn render_new_node(frame: &mut Frame<'_>, screen: Rect, node: &NewNode) -> Option<(u16, u16)> {
+    let shell = new_node_shell(screen)?;
+    let (title, placeholder) = match node.kind {
+        NewNodeKind::Folder { .. } => (text::NEW_FOLDER_TITLE, text::PROMPT_FOLDER_DEFAULT_NAME),
+        NewNodeKind::Prompt { .. } => (text::NEW_PROMPT_TITLE, text::PROMPT_DEFAULT_NAME),
+    };
+    widgets::modal::render(frame, &shell, title);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(
+            shell.inner,
+            &NEW_NODE_BUTTONS,
+            BUTTON_GAP,
+            RENAME_BUTTON_ROW,
+        ),
+        &[
+            (text::BUTTON_CREATE, style::accent()),
+            (text::BUTTON_CLEAR, style::muted()),
+            (text::BUTTON_CANCEL, style::muted()),
+        ],
+    );
+    widgets::input::render(
+        frame,
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+        node.name.text(),
+        node.name.cursor(),
+        Some(placeholder),
+    )
+}
+
+/// 关闭/删除确认浮层的问题文案。
+pub fn confirm_question(state: &AppState, target: OverlayTarget) -> String {
+    let (_, name) = confirm_text(state, target);
+    match target {
+        OverlayTarget::PromptFolder { .. } => text::confirm_delete_folder_question(&name),
+        OverlayTarget::PromptItem { .. } => text::confirm_delete_question(&name),
+        _ => text::confirm_close_question(&name),
+    }
+}
+
+/// 关闭确认浮层：问题与底部按钮；提示词删除按目标种类使用对应问题文案。
 fn render_confirm(frame: &mut Frame<'_>, screen: Rect, state: &AppState, confirm: &ConfirmClose) {
-    let Some(shell) = confirm_shell(screen) else {
+    let question = confirm_question(state, confirm.target);
+    let Some(shell) = confirm_shell(screen, &question) else {
         return;
     };
-    let (title, name) = confirm_text(state, confirm.target);
-    render_confirm_dialog(frame, &shell, title, &text::confirm_close_question(&name));
+    let (title, _) = confirm_text(state, confirm.target);
+    render_confirm_dialog(frame, &shell, title, &question);
 }
 
 /// 切换工作区路径确认浮层：完整展示目标路径与底部按钮。
@@ -465,15 +895,15 @@ fn render_confirm_sync_workspace_cwd(
     screen: Rect,
     confirm: &ConfirmSyncWorkspaceCwd,
 ) {
+    let question = text::confirm_sync_ws_cwd_question(&confirm.path.display().to_string());
     let Some(shell) = confirm_sync_workspace_cwd_shell(screen, &confirm.path) else {
         return;
     };
-    let width = usize::from(shell.inner.width);
-    let question = text::confirm_sync_ws_cwd_question(&confirm.path.display().to_string(), width);
     render_confirm_dialog(frame, &shell, text::CONFIRM_SYNC_WS_CWD_TITLE, &question);
 }
 
-/// 确认类浮层通用渲染：标题、问题行与底部按钮。
+/// 确认类浮层通用渲染：标题、自动换行的问题与底部按钮；问题行数超出可用高度时
+/// 末行以 `…` 截断提示。
 fn render_confirm_dialog(
     frame: &mut Frame<'_>,
     shell: &widgets::modal::ModalShell,
@@ -485,21 +915,32 @@ fn render_confirm_dialog(
         return;
     }
     let width = usize::from(shell.inner.width);
-    let question_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            text::ellipsize(question, width),
-            style::text(),
-        ))),
-        question_area,
-    );
+    let lines = text::wrap(question, width);
+    let max_rows = usize::from(shell.inner.height.saturating_sub(1));
+    for (index, line) in lines.iter().take(max_rows).enumerate() {
+        let clipped = lines.len() > max_rows && index + 1 == max_rows;
+        let visible = if clipped {
+            text::ellipsize(&format!("{line}…"), width)
+        } else {
+            line.clone()
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(visible, style::text())),
+            Rect::new(
+                shell.inner.x,
+                shell.inner.y.saturating_add(index as u16),
+                shell.inner.width,
+                1,
+            ),
+        );
+    }
     render_buttons(
         frame,
         &widgets::modal::button_row(
             shell.inner,
             &CONFIRM_BUTTONS,
             BUTTON_GAP,
-            CONFIRM_BUTTON_ROW,
+            shell.inner.height.saturating_sub(1),
         ),
         &[
             (text::BUTTON_CONFIRM, style::accent()),

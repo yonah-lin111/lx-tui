@@ -235,6 +235,50 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
 }
 
 #[test]
+fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    update::show_prompt_tree(&mut state);
+    let panel = &mut state.workspaces[0].prompt_panel;
+    panel.tree.replace(
+        vec![],
+        (0..40)
+            .map(|index| PromptItem {
+                id: index,
+                folder_id: None,
+                name: format!("item-{index:02}"),
+                content: String::new(),
+                status: PromptItemStatus::Todo,
+            })
+            .collect(),
+    );
+    let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
+    let gutter = crate::layout::prompt_tree_scrollbar_rect(geo.view.prompt).expect("gutter");
+    assert_eq!(bar.track, gutter, "树视图滚动条槽在搜索框与分割线之下");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.workspaces[0].prompt_panel.scroll > 0, "轨道点击跳转");
+    assert!(!state.prompt_focused, "滚动条按下不抢焦点");
+    assert!(state.prompt_scroll_drag.is_none());
+    assert!(dirty);
+}
+
+#[test]
 fn mouse_drag_prompt_scrollbar_thumb() {
     let config = Config::default();
     let mut state = demo_terminal();
@@ -1708,7 +1752,8 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
 
 /// prompt 工具栏按钮矩形（按几何取，避免硬编码列）。
 fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
-    layout::prompt_toolbar_button_rect(geo.view.prompt, button).expect("toolbar button visible")
+    layout::prompt_toolbar_button_rect(geo.view.prompt, button, false)
+        .expect("toolbar button visible")
 }
 
 #[test]
@@ -1789,6 +1834,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     );
     assert_eq!(state.prompt.text(), "hello");
 
+    // 默认绑定临时草稿：点击保存点提交缓冲并打开保存选择器。
     let save = toolbar_button(&geo, layout::PromptToolbarButton::Save);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), save.x, save.y),
@@ -1798,7 +1844,86 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
         &config,
         &mut dirty,
     );
-    assert!(state.prompt.is_saved(), "点击保存点复位为已保存");
+    assert!(
+        matches!(
+            state.overlay,
+            Some(crate::app::overlay::Overlay::SaveDraft(_))
+        ),
+        "草稿保存点打开保存选择器"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.draft, "hello",
+        "提交缓冲到草稿槽位"
+    );
+}
+
+#[test]
+fn ctrl_s_saves_prompt_from_editor() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.prompt_focused = true;
+
+    // 默认绑定临时草稿：Ctrl+S 提交缓冲并打开保存选择器。
+    state.prompt.insert_str("draft body");
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert!(
+        matches!(
+            state.overlay,
+            Some(crate::app::overlay::Overlay::SaveDraft(_))
+        ),
+        "Ctrl+S 在草稿上打开保存选择器"
+    );
+    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+}
+
+#[test]
+fn ctrl_s_saves_open_item_immediately() {
+    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 7,
+            folder_id: None,
+            name: "item".into(),
+            content: "body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
+    state.prompt_focused = true;
+    state.prompt.insert_str("+");
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.is_saved(), "Ctrl+S 立即复位保存点");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SavePromptContent { id: 7, .. }
+        )),
+        "Ctrl+S 登记条目落库效应"
+    );
 }
 
 #[test]
@@ -2416,4 +2541,109 @@ fn mouse_motion_over_template_button_arms_tooltip() {
     );
     assert!(!tooltip.is_visible(), "停留前只计时不显示");
     assert!(dirty);
+}
+
+#[test]
+fn rename_overlay_inside_click_keeps_open_close_button_and_outside_dismiss() {
+    let screen = Rect::new(0, 0, 80, 24);
+    let mut state = AppState::demo();
+    let rename = || {
+        Some(Overlay::Rename(crate::app::overlay::Rename {
+            target: crate::app::overlay::RenameTarget::Workspace(0),
+            input: crate::app::overlay::TextInput::new("name"),
+        }))
+    };
+    state.overlay = rename();
+    let shell = ui::overlay::rename_shell(screen).expect("shell");
+    // 点击内部内容（输入行空白）：保持打开。
+    handle_overlay_click(&mut state, screen, shell.inner.x + 1, shell.inner.y);
+    assert!(state.overlay.is_some(), "点击内部内容不关闭");
+    // 右上角 [x]：关闭。
+    let close = ui::widgets::modal::close_button_rect(shell.area).expect("close button");
+    handle_overlay_click(&mut state, screen, close.x, close.y);
+    assert!(state.overlay.is_none(), "[x] 关闭");
+    // 点击浮层之外：关闭。
+    state.overlay = rename();
+    handle_overlay_click(&mut state, screen, 0, 0);
+    assert!(state.overlay.is_none(), "点击浮层之外关闭");
+}
+
+#[test]
+fn trust_overlay_inside_click_keeps_open_and_close_button_refuses() {
+    let screen = Rect::new(0, 0, 80, 24);
+    let mut state = AppState::demo();
+    let untrusted = PathBuf::from("/tmp/untrusted-close-test");
+    state.overlay = Some(Overlay::TrustWorkspace(crate::app::trust::TrustWorkspace {
+        path: untrusted.clone(),
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace { cwd: untrusted },
+    }));
+    let shell = ui::overlay::trust_shell(screen).expect("shell");
+    // 点击问题文本（内部内容）：保持打开且不授予信任。
+    handle_overlay_click(&mut state, screen, shell.inner.x + 1, shell.inner.y);
+    assert!(
+        matches!(state.overlay, Some(Overlay::TrustWorkspace(_))),
+        "内部点击不关闭"
+    );
+    assert!(state.effects.is_empty(), "未登记信任效应");
+    // 右上角 [x]：拒绝信任并关闭。
+    let close = ui::widgets::modal::close_button_rect(shell.area).expect("close button");
+    handle_overlay_click(&mut state, screen, close.x, close.y);
+    assert!(state.overlay.is_none(), "[x] 关闭");
+    assert!(state.effects.is_empty(), "拒绝不登记信任效应");
+}
+
+#[test]
+fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
+    let mut state = demo_terminal();
+    let show = |state: &mut AppState| {
+        update::show_toast(
+            state,
+            Toast::new(ToastKind::Info, "toast body", None, Instant::now()),
+        );
+    };
+    show(&mut state);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let area =
+        ui::toast::rect(&state, &geo.view, &geo.rects, geo.screen, &config).expect("toast visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 点击 toast 内部内容：保持显示。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x + 1,
+            area.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.toast.is_some(), "点击 toast 内容不关闭");
+
+    // 点击右上角 [x]：关闭。
+    let close = ui::widgets::modal::close_button_rect(area).expect("close button");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), close.x, close.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.toast.is_none(), "[x] 关闭 toast");
+
+    // 点击 toast 之外：关闭 toast 并继续处理点击。
+    show(&mut state);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), 0, 0),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.toast.is_none(), "点击 toast 之外关闭");
 }

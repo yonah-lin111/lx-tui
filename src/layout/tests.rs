@@ -314,27 +314,44 @@ fn resize_boundary_at_requires_shared_column() {
 #[test]
 fn prompt_text_rect_reserves_scrollbar_column() {
     let panel = Rect::new(10, 5, 10, 6);
-    assert_eq!(prompt_text_rect(panel), Rect::new(11, 7, 7, 3));
-    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(18, 7, 1, 3)));
-    assert_eq!(prompt_inner_size(panel), (7, 3));
+    assert_eq!(prompt_text_rect(panel), Rect::new(11, 8, 7, 2));
+    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(18, 8, 1, 2)));
+    assert_eq!(prompt_inner_size(panel), (7, 2));
 }
 
 #[test]
 fn prompt_geometry_degrades_when_too_narrow() {
     let panel = Rect::new(0, 0, 3, 4);
-    assert_eq!(prompt_text_rect(panel), Rect::new(1, 2, 1, 1));
+    assert_eq!(prompt_text_rect(panel), Rect::new(1, 1, 1, 2));
     assert_eq!(prompt_scrollbar_rect(panel), None);
-    assert_eq!(prompt_inner_size(panel), (1, 1));
+    assert_eq!(prompt_inner_size(panel), (1, 2));
+}
+
+#[test]
+fn prompt_tree_scrollbar_starts_below_search_and_divider() {
+    let panel = Rect::new(10, 5, 20, 8);
+    assert_eq!(
+        prompt_tree_scrollbar_rect(panel),
+        Some(Rect::new(28, 10, 1, 2)),
+        "槽从搜索框与分割线之下开始"
+    );
+    // 正文区过矮（≤ 搜索框 + 分割线）时不显示。
+    let short = Rect::new(0, 0, 20, 6);
+    assert_eq!(prompt_tree_scrollbar_rect(short), None);
 }
 
 #[test]
 fn prompt_header_shifts_body_and_scrollbar() {
     let panel = Rect::new(10, 5, 20, 8);
-    assert_eq!(prompt_header_rect(panel), Some(Rect::new(11, 6, 18, 1)));
+    assert_eq!(prompt_header_rect(panel), Some(Rect::new(11, 6, 18, 2)));
     assert_eq!(prompt_toolbar_rect(panel), Some(Rect::new(11, 6, 18, 1)));
-    assert_eq!(prompt_text_rect(panel), Rect::new(11, 7, 17, 5));
-    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(28, 7, 1, 5)));
-    assert_eq!(prompt_inner_size(panel), (17, 5));
+    assert_eq!(
+        prompt_divider_rect(panel),
+        Some(Rect::new(11, 7, 18, PROMPT_DIVIDER_HEIGHT))
+    );
+    assert_eq!(prompt_text_rect(panel), Rect::new(11, 8, 17, 4));
+    assert_eq!(prompt_scrollbar_rect(panel), Some(Rect::new(28, 8, 1, 4)));
+    assert_eq!(prompt_inner_size(panel), (17, 4));
 }
 
 #[test]
@@ -351,49 +368,53 @@ fn prompt_header_hidden_when_body_too_short() {
 fn prompt_toolbar_buttons_hit_expected_cells() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
-    let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row);
-    assert_eq!(hit(bar.x + 1, bar.y), Some(PromptToolbarButton::Undo));
-    assert_eq!(hit(bar.x + 5, bar.y), Some(PromptToolbarButton::Redo));
-    let select_all =
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll).expect("select all fits");
+    let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row, false);
+    assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Mode));
+    assert_eq!(hit(bar.x + 7, bar.y), Some(PromptToolbarButton::Undo));
+    assert_eq!(hit(bar.x + 11, bar.y), Some(PromptToolbarButton::Redo));
+    let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
+        .expect("select all fits");
     assert_eq!(
         hit(select_all.x, bar.y),
         Some(PromptToolbarButton::SelectAll)
     );
-    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save).expect("save visible");
+    let save =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, false).expect("save visible");
     assert_eq!(hit(save.x, bar.y), Some(PromptToolbarButton::Save));
-    assert_eq!(hit(bar.x + 13, bar.y), None, "分割线空白不命中");
-    assert_eq!(hit(bar.x, bar.y), None, "按钮留白不命中");
+    assert_eq!(hit(bar.x + 6, bar.y), None, "按钮空档不命中");
     assert_eq!(
         hit(bar.x + 1, bar.y + PROMPT_TOOLBAR_HEIGHT),
         None,
-        "表头下一行为文本区，不命中按钮"
+        "分割线行不命中按钮"
     );
 }
 
 #[test]
 fn prompt_toolbar_hides_select_all_when_narrow() {
-    // 面板宽度 18 < 19：隐藏 select all，保留 undo/redo 与保存点。
-    let panel = Rect::new(0, 0, 18, 8);
+    // 内容区宽度 19 < 20：隐藏 select all，保留模式/undo/redo 与保存点。
+    let panel = Rect::new(0, 0, 21, 8);
     assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll),
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false),
         None
     );
-    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo).is_some());
-    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo).is_some());
-    let save = prompt_toolbar_button_rect(panel, PromptToolbarButton::Save).expect("save visible");
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Mode, false).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, false).is_some());
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo, false).is_some());
+    let save =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, false).expect("save visible");
     assert_eq!(
         prompt_toolbar_button_at(
             panel,
             save.x,
             prompt_toolbar_rect(panel).expect("toolbar").y,
+            false,
         ),
         Some(PromptToolbarButton::Save)
     );
 
-    // 面板宽度 19：刚好容纳一条分割线，select all 恢复显示。
-    let panel = Rect::new(0, 0, 19, 8);
-    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll).is_some());
+    // 内容区宽度 20：刚好容纳按钮组，select all 恢复显示。
+    let panel = Rect::new(0, 0, 22, 8);
+    assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false).is_some());
 }
 
 #[test]
@@ -447,4 +468,29 @@ fn remove_pane_clears_collapse_when_collapsed_pane_removed() {
     assert!(layout.remove_pane(right));
     assert_eq!(layout.collapsed(), None);
     assert_eq!(layout.pane_ids(), vec![left]);
+}
+
+#[test]
+fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let mode = prompt_toolbar_button_rect(panel, PromptToolbarButton::Mode, true)
+        .expect("mode visible in tree");
+    assert_eq!(mode.x, bar.x);
+    let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, true)
+        .expect("temp prompt visible in tree");
+    assert_eq!(temp.right(), bar.right() - 1, "右对齐、与边框留 1 列");
+    assert_eq!(temp.width, 13);
+    assert_eq!(
+        prompt_toolbar_button_at(panel, temp.x, bar.y, true),
+        Some(PromptToolbarButton::TempPrompt)
+    );
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Undo, true),
+        None
+    );
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, false),
+        None
+    );
 }
