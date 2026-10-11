@@ -55,13 +55,17 @@ pub fn apply_prompt_tree(
     true
 }
 
-/// 切换树视图：提交编辑内容并清空编辑绑定。
+/// 切换树视图：提交编辑内容、回收空白 temp 并清空编辑绑定。
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
     let index = state.prompt_workspace();
+    let visible = prompt_tree_visible_rows(state);
     if let Some(workspace) = state.workspaces.get_mut(index) {
+        workspace.prompt_panel.drop_blank_temp_binding();
         workspace.prompt_panel.mode = PromptMode::Tree;
         workspace.prompt_panel.editing = None;
+        // 行集可能因 temp/分区标签变化：选中吸附到最近可选中行。
+        workspace.prompt_panel.clamp_selection(visible);
     }
     state.prompt.clear_panel();
     state.selection = None;
@@ -84,55 +88,83 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 
 /// 提交指定工作区的编辑器缓冲（其为显示态时缓冲位于 `state.prompt`）。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
-    let Some(workspace_state) = state.workspaces.get(workspace) else {
-        return;
-    };
-    let Some(target) = workspace_state.prompt_panel.editing else {
+    let Some(target) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.editing)
+    else {
         return;
     };
     let content = state.prompt.text().to_string();
-    let PromptEditing::Item(id) = target else {
-        if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
-            workspace_state.prompt_panel.draft = content;
+    match target {
+        PromptEditing::Temp(id) => {
+            if let Some(workspace_state) = state.workspaces.get_mut(workspace)
+                && let Some(temp) = workspace_state.prompt_panel.temp_mut(id)
+            {
+                temp.content = content;
+            }
         }
-        return;
-    };
-    let Some(cwd) = workspace_state.cwd.clone() else {
-        return;
-    };
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return;
-    };
-    let Some(item) = workspace_state.prompt_panel.tree.item_mut(id) else {
-        return;
-    };
-    if item.content == content {
-        return;
+        PromptEditing::Item(id) => {
+            let Some(cwd) = state
+                .workspaces
+                .get(workspace)
+                .and_then(|workspace| workspace.cwd.clone())
+            else {
+                return;
+            };
+            let Some(item) = state
+                .workspaces
+                .get_mut(workspace)
+                .and_then(|workspace| workspace.prompt_panel.tree.item_mut(id))
+            else {
+                return;
+            };
+            if item.content == content {
+                return;
+            }
+            item.content.clone_from(&content);
+            state.effects.push(Effect::SavePromptContent {
+                workspace: cwd,
+                id,
+                content,
+            });
+        }
     }
-    item.content.clone_from(&content);
-    state.effects.push(Effect::SavePromptContent {
-        workspace: cwd,
-        id,
-        content,
-    });
 }
 
-/// 树上移/下移选中行；`visible` 为可见行数，选中始终保持在视口内。
+/// 树上移/下移选中行：按方向逐格跳过分区标签行；`visible` 为可见行数，选中始终保持在视口内。
 pub fn move_prompt_selection(state: &mut AppState, delta: isize, visible: usize) -> bool {
     let index = state.prompt_workspace();
     let Some(workspace) = state.workspaces.get_mut(index) else {
         return false;
     };
-    let len = workspace.prompt_panel.rows().len();
-    if len == 0 {
+    let rows = workspace.prompt_panel.rows();
+    if rows.is_empty() {
         return false;
     }
-    let current = workspace.prompt_panel.selected;
-    let next = (current as isize + delta).clamp(0, len as isize - 1) as usize;
-    if next == current {
+    let step: isize = if delta >= 0 { 1 } else { -1 };
+    let mut selected = workspace.prompt_panel.selected.min(rows.len() - 1);
+    let mut moved = false;
+    for _ in 0..delta.unsigned_abs() {
+        let mut candidate = selected as isize + step;
+        let mut next = None;
+        while candidate >= 0 && (candidate as usize) < rows.len() {
+            if rows[candidate as usize].kind.selectable() {
+                next = Some(candidate as usize);
+                break;
+            }
+            candidate += step;
+        }
+        let Some(next) = next else {
+            break;
+        };
+        selected = next;
+        moved = true;
+    }
+    if !moved {
         return false;
     }
-    workspace.prompt_panel.selected = next;
+    workspace.prompt_panel.selected = selected;
     scroll_selection_into_view(&mut workspace.prompt_panel, visible);
     true
 }
@@ -150,7 +182,7 @@ pub fn select_prompt_row(state: &mut AppState, row: usize) -> bool {
     true
 }
 
-/// 激活选中行：草稿行打开草稿编辑，文件夹切换折叠，条目进入编辑视图。
+/// 激活选中行：文件夹切换折叠，条目/临时提示词进入编辑视图。
 pub fn activate_prompt_row(state: &mut AppState) -> bool {
     let index = state.prompt_workspace();
     let Some(row) = selected_row(state, index) else {
@@ -159,6 +191,8 @@ pub fn activate_prompt_row(state: &mut AppState) -> bool {
     match row.kind {
         PromptRowKind::Folder => toggle_prompt_folder(state, index, row),
         PromptRowKind::Item => edit_prompt_row(state, index, row),
+        PromptRowKind::Temp => edit_prompt_temp_row(state, index, row),
+        PromptRowKind::Section(_) => false,
     }
 }
 
@@ -172,20 +206,24 @@ pub fn expand_prompt_row(state: &mut AppState) -> bool {
     set_selected_folder_collapsed(state, false)
 }
 
-/// 鼠标点击行：选中；文件夹行同时切换折叠，草稿行直接打开草稿编辑。
+/// 鼠标点击行：选中；文件夹行同时切换折叠；分区标签行不可交互。
 pub fn click_prompt_row(state: &mut AppState, row: usize) -> bool {
-    let changed = select_prompt_row(state, row);
     let index = state.prompt_workspace();
     let Some(row_data) = state
         .workspaces
         .get(index)
         .and_then(|workspace| workspace.prompt_panel.rows().get(row).copied())
     else {
-        return changed;
+        return false;
     };
+    if !row_data.kind.selectable() {
+        return false;
+    }
+    let changed = select_prompt_row(state, row);
     match row_data.kind {
         PromptRowKind::Folder => toggle_prompt_folder(state, index, row_data) || changed,
-        PromptRowKind::Item => changed,
+        PromptRowKind::Item | PromptRowKind::Temp => changed,
+        PromptRowKind::Section(_) => false,
     }
 }
 
@@ -236,23 +274,45 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     true
 }
 
-/// 打开临时草稿的编辑视图并聚焦面板；草稿内容只存内存。
-pub fn edit_prompt_draft(state: &mut AppState) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace_state) = state.workspaces.get_mut(index) else {
+/// 打开指定临时提示词的编辑视图并聚焦面板；内容只存内存。
+pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) -> bool {
+    if workspace != state.prompt_workspace() {
+        return false;
+    }
+    let Some(content) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
+        .map(|temp| temp.content.clone())
+    else {
         return false;
     };
-    let draft = workspace_state.prompt_panel.draft.clone();
+    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
+        return false;
+    };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
-    workspace_state.prompt_panel.editing = Some(PromptEditing::Draft);
-    state.prompt.set_text(&draft);
+    workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(temp_id));
+    state.prompt.set_text(&content);
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
 }
 
+/// 打开选中临时提示词行的编辑视图。
+fn edit_prompt_temp_row(state: &mut AppState, workspace: usize, row: PromptRow) -> bool {
+    let Some(temp_id) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.temp_of_row(row))
+        .map(|temp| temp.id)
+    else {
+        return false;
+    };
+    edit_prompt_temp(state, workspace, temp_id)
+}
+
 /// 打开选中条目的编辑视图（`[✎]` 按钮 / 树视图回车）；
-/// 选中行非条目时回退打开临时草稿，保证 `[✎]` 永不无响应。
+/// 选中行非条目时新建临时提示词并进入编辑，保证 `[✎]` 永不无响应。
 pub fn edit_selected_prompt(state: &mut AppState) -> bool {
     let index = state.prompt_workspace();
     let Some(item_id) = state
@@ -260,7 +320,7 @@ pub fn edit_selected_prompt(state: &mut AppState) -> bool {
         .get(index)
         .and_then(|workspace| workspace.prompt_panel.selected_prompt_id())
     else {
-        return edit_prompt_draft(state);
+        return open_temp_prompt(state);
     };
     edit_prompt_item(state, index, item_id)
 }
@@ -291,6 +351,7 @@ pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> boo
             panel.clamp_selection(visible);
         } else {
             panel.selected = 0;
+            panel.clamp_selection(visible);
             scroll_selection_into_view(panel, visible);
         }
     }
@@ -302,9 +363,9 @@ pub fn clear_prompt_search(state: &mut AppState) -> bool {
     apply_prompt_search(state, &EditorCommand::Escape)
 }
 
-/// 立即保存（工具栏圆点）：条目提交落库；临时草稿提交缓冲后打开保存到文件夹选择器。
+/// 立即保存（工具栏圆点）：条目提交落库；临时提示词提交缓冲后打开保存到文件夹选择器。
 pub fn save_prompt_now(state: &mut AppState) {
-    if prompt_draft_editing(state) {
+    if prompt_temp_editing(state) {
         commit_editing_prompt(state);
         open_save_draft(state);
     } else {
@@ -322,10 +383,22 @@ pub fn save_prompt_shortcut(state: &mut AppState) {
     save_prompt_now(state);
 }
 
-/// 工具栏 [+]：提交当前编辑内容并打开临时草稿编辑视图。
+/// 工具栏 `[tmp]`：提交当前编辑内容并新建临时提示词编辑视图（不入库）。
 pub fn open_temp_prompt(state: &mut AppState) -> bool {
     commit_editing_prompt(state);
-    edit_prompt_draft(state)
+    let index = state.prompt_workspace();
+    let Some(workspace_state) = state.workspaces.get_mut(index) else {
+        return false;
+    };
+    // 不变量兜底：树视图下不存在待编辑的空 temp，残留空白项先回收。
+    workspace_state.prompt_panel.remove_blank_temps();
+    let id = workspace_state.prompt_panel.new_temp();
+    workspace_state.prompt_panel.mode = PromptMode::Editor;
+    workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));
+    state.prompt.set_text("");
+    state.prompt_collapsed = false;
+    super::focus_prompt(state);
+    true
 }
 
 /// 打开草稿保存的文件夹选择浮层；文件夹按树层级顺序列出（忽略折叠）；
@@ -595,7 +668,7 @@ pub fn commit_save_draft(state: &mut AppState) {
     }
 }
 
-/// 把草稿登记为正式条目（写入指定文件夹）；成功后由服务清空草稿。
+/// 把临时提示词登记为正式条目（写入指定文件夹）；成功后由服务移除该 temp。
 fn save_draft(state: &mut AppState, workspace: usize, folder_id: Option<i64>, name: String) {
     let Some(cwd) = workspace_cwd(state, workspace) else {
         return;
@@ -603,7 +676,11 @@ fn save_draft(state: &mut AppState, workspace: usize, folder_id: Option<i64>, na
     let content = state
         .workspaces
         .get(workspace)
-        .map(|workspace| workspace.prompt_panel.draft.clone())
+        .and_then(|workspace| match workspace.prompt_panel.editing {
+            Some(PromptEditing::Temp(id)) => workspace.prompt_panel.temp(id),
+            _ => None,
+        })
+        .map(|temp| temp.content.clone())
         .unwrap_or_default();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd,
@@ -615,10 +692,13 @@ fn save_draft(state: &mut AppState, workspace: usize, folder_id: Option<i64>, na
     clear_search_for(state, workspace);
 }
 
-/// 草稿保存成功后的收尾：清空草稿槽位与过滤词（新条目须在未过滤列表中可见）。
+/// 临时提示词保存成功后的收尾：移除已升格为条目的 temp 并清空过滤词
+/// （新条目须在未过滤列表中可见）。
 pub fn finish_draft_save(state: &mut AppState, workspace: usize) {
     if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
-        workspace_state.prompt_panel.draft.clear();
+        if let Some(PromptEditing::Temp(id)) = workspace_state.prompt_panel.editing {
+            workspace_state.prompt_panel.remove_temp(id);
+        }
         workspace_state.prompt_panel.search.clear();
     }
 }
@@ -712,6 +792,29 @@ pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u
     }));
 }
 
+/// 打开临时提示词右键菜单：编辑、复制与删除（删除仅内存、立即生效，无确认浮层）。
+pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u16)) {
+    let workspace = state.prompt_workspace();
+    let known = state
+        .workspaces
+        .get(workspace)
+        .is_some_and(|workspace| workspace.prompt_panel.temp(temp_id).is_some());
+    if !known {
+        return;
+    }
+    select_prompt_temp(state, workspace, temp_id);
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::TempPrompt { workspace, temp_id },
+        commands: vec![
+            MenuCommand::EditPrompt,
+            MenuCommand::CopyPromptContent,
+            MenuCommand::DeleteTemp,
+        ],
+        selected: 0,
+    }));
+}
+
 /// 打开文件夹右键菜单：新建提示词、新建子文件夹（仅根层）、重命名与删除。
 pub fn open_prompt_folder_menu(state: &mut AppState, folder_id: i64, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
@@ -751,12 +854,14 @@ pub fn open_prompt_tree_menu(state: &mut AppState, anchor: (u16, u16)) {
     }));
 }
 
-/// 显示中编辑视图是否绑定临时草稿。
-pub fn prompt_draft_editing(state: &AppState) -> bool {
+/// 显示中编辑视图是否绑定临时提示词。
+pub fn prompt_temp_editing(state: &AppState) -> bool {
     state
         .workspaces
         .get(state.prompt_workspace())
-        .is_some_and(|workspace| workspace.prompt_panel.editing == Some(PromptEditing::Draft))
+        .is_some_and(|workspace| {
+            matches!(workspace.prompt_panel.editing, Some(PromptEditing::Temp(_)))
+        })
 }
 
 /// 打开文件夹/条目的重命名浮层（预填当前名）。
@@ -874,7 +979,7 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
         .editing
         .and_then(|editing| match editing {
             PromptEditing::Item(id) => Some(id),
-            PromptEditing::Draft => None,
+            PromptEditing::Temp(_) => None,
         })
         .is_some_and(|id| {
             workspace_state
@@ -942,6 +1047,53 @@ pub fn copy_prompt_content(state: &mut AppState, workspace: usize, item_id: i64)
         return;
     };
     state.effects.push(Effect::CopyToClipboard(content));
+}
+
+/// 复制临时提示词正文到剪贴板；不入库、无确认。
+pub fn copy_prompt_temp_content(state: &mut AppState, workspace: usize, temp_id: u64) {
+    let Some(content) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
+        .map(|temp| temp.content.clone())
+    else {
+        return;
+    };
+    state.effects.push(Effect::CopyToClipboard(content));
+}
+
+/// 删除临时提示词：仅内存移除并钳制选中；不入库、无确认浮层。
+pub fn delete_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) -> bool {
+    let visible = prompt_tree_visible_rows(state);
+    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
+        return false;
+    };
+    if !workspace_state.prompt_panel.remove_temp(temp_id) {
+        return false;
+    }
+    workspace_state.prompt_panel.clamp_selection(visible);
+    true
+}
+
+/// 选中指定工作区中指定临时提示词行（服务/菜单在打开前调用）。
+pub fn select_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) -> bool {
+    let visible = prompt_tree_visible_rows(state);
+    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
+        return false;
+    };
+    let rows = workspace_state.prompt_panel.rows();
+    let position = rows.iter().position(|row| {
+        workspace_state
+            .prompt_panel
+            .temp_of_row(*row)
+            .is_some_and(|temp| temp.id == temp_id)
+    });
+    let Some(position) = position else {
+        return false;
+    };
+    workspace_state.prompt_panel.selected = position;
+    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
+    true
 }
 
 /// 显示中工作区的 cwd。

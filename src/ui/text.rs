@@ -79,9 +79,14 @@ pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
 pub const INPUT_PREFIX_ICON: &str = ">";
 /// 提示词树：搜索框、临时提示词按钮与连接符（子层末项 `└─`、其余 `├─`，与侧栏工作区树一致）。
 pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
-/// 树视图 `[+]`：打开临时草稿编辑视图（与侧栏/标签栏 `[+]` 同为“新建”语义）。
-pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[+]";
-/// 临时草稿在编辑视图分割线行的标题。
+/// 树视图 `[tmp]`：新建临时提示词编辑视图（仅内存、不入库）。
+pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
+/// 提示词树分区标签：临时区与已入库区（仅两侧都有内容时成对出现）。
+pub const PROMPT_SECTION_TMP: &str = "tmp:";
+pub const PROMPT_SECTION_SAVED: &str = "saved:";
+/// 临时提示词行的右对齐标注（替代条目状态词位置）。
+pub const PROMPT_TEMP_BADGE: &str = "[tmp]";
+/// 临时提示词在编辑视图分割线行的标题。
 pub const PROMPT_DRAFT_TITLE: &str = "temp prompt";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";
 pub const PROMPT_TREE_COLLAPSED: &str = "▸";

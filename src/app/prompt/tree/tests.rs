@@ -209,3 +209,122 @@ fn search_ignores_collapsed_state() {
     assert_eq!(rows.len(), 3, "{rows:?}");
     assert_eq!(rows[2].kind, PromptRowKind::Item);
 }
+
+#[test]
+fn temp_summary_uses_first_non_empty_line() {
+    let temp = TempPrompt {
+        id: 0,
+        content: "\n  代码审查专家  \n严格执行".into(),
+    };
+    assert_eq!(temp.summary(), "代码审查专家");
+    assert!(!temp.is_blank());
+    let blank = TempPrompt {
+        id: 1,
+        content: "  \n\t ".into(),
+    };
+    assert_eq!(blank.summary(), "");
+    assert!(blank.is_blank());
+}
+
+/// 追加一个内容非空的临时提示词并返回 id。
+fn push_temp(panel: &mut PromptPanel, content: &str) -> u64 {
+    let id = panel.new_temp();
+    panel.temp_mut(id).expect("new temp exists").content = content.to_string();
+    id
+}
+
+#[test]
+fn rows_pin_temps_before_tree_with_section_labels() {
+    let mut panel = PromptPanel::new();
+    panel.tree = sample_tree();
+    let temp_id = push_temp(&mut panel, "审查这段代码");
+    let rows = panel.rows();
+    let kinds: Vec<PromptRowKind> = rows.iter().map(|row| row.kind).collect();
+    let mut expected = vec![
+        PromptRowKind::Section(PromptSection::Temp),
+        PromptRowKind::Temp,
+        PromptRowKind::Section(PromptSection::Saved),
+    ];
+    expected.extend(sample_tree().rows().into_iter().map(|row| row.kind));
+    assert_eq!(kinds, expected, "{rows:?}");
+    let row = rows[1];
+    assert_eq!(panel.temp_of_row(row).map(|temp| temp.id), Some(temp_id));
+    assert_eq!(panel.tree.folder_of_row(rows[0]), None, "标签行不映射数据");
+
+    // 无 temp 时退化为纯树行（不出现任何标签）。
+    let mut bare = PromptPanel::new();
+    bare.tree = sample_tree();
+    assert_eq!(bare.rows(), sample_tree().rows());
+}
+
+#[test]
+fn blank_temp_is_hidden_from_rows() {
+    let mut panel = PromptPanel::new();
+    panel.tree = sample_tree();
+    push_temp(&mut panel, "  \n ");
+    let visible = push_temp(&mut panel, "有内容");
+    let rows = panel.rows();
+    let temps: Vec<u64> = rows
+        .iter()
+        .filter_map(|row| panel.temp_of_row(*row).map(|temp| temp.id))
+        .collect();
+    assert_eq!(temps, vec![visible], "空白 temp 不进入列表");
+}
+
+#[test]
+fn search_filters_temps_and_keeps_sections_per_visibility() {
+    let mut panel = PromptPanel::new();
+    panel.tree = sample_tree();
+    push_temp(&mut panel, "review 审查");
+    push_temp(&mut panel, "test 生成");
+
+    // 只命中 temp：tmp: 标签保留，DB 侧连标签一起消失。
+    search(&mut panel, "审");
+    let kinds: Vec<PromptRowKind> = panel.rows().iter().map(|row| row.kind).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            PromptRowKind::Section(PromptSection::Temp),
+            PromptRowKind::Temp
+        ]
+    );
+
+    // 只命中 DB：temp 侧连标签一起消失，退化为纯树行。
+    search(&mut panel, "in-sub");
+    let kinds: Vec<PromptRowKind> = panel.rows().iter().map(|row| row.kind).collect();
+    assert!(!kinds.contains(&PromptRowKind::Section(PromptSection::Temp)));
+    assert!(!kinds.contains(&PromptRowKind::Section(PromptSection::Saved)));
+
+    // 两侧都有命中（`e` 命中 review/test 与 loose/nested）：标签成对出现。
+    search(&mut panel, "e");
+    let kinds: Vec<PromptRowKind> = panel.rows().iter().map(|row| row.kind).collect();
+    assert!(kinds.contains(&PromptRowKind::Section(PromptSection::Temp)));
+    assert!(kinds.contains(&PromptRowKind::Section(PromptSection::Saved)));
+}
+
+#[test]
+fn clamp_selection_snaps_off_section_rows() {
+    let mut panel = PromptPanel::new();
+    panel.tree = sample_tree();
+    push_temp(&mut panel, "有内容");
+    // 行序：tmp:(0)、temp(1)、saved:(2)、root(3)…
+    panel.selected = 2;
+    panel.clamp_selection(4);
+    assert_eq!(panel.selected, 3, "选中吸附到标签之后的树行");
+    assert_eq!(
+        panel.selected_row().map(|row| row.kind),
+        Some(PromptRowKind::Folder)
+    );
+
+    // 选中落在末尾标签之后仍有树行：吸附向下。
+    panel.selected = 0;
+    panel.clamp_selection(4);
+    assert_eq!(panel.selected, 1, "tmp: 标签吸附到 temp 行");
+
+    // 只有 temp 的短列表：越界钳制后吸附到 temp 行。
+    let mut short = PromptPanel::new();
+    push_temp(&mut short, "唯一");
+    short.selected = 99;
+    short.clamp_selection(4);
+    assert_eq!(short.selected, 1);
+}

@@ -480,7 +480,7 @@ fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
     let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, true)
         .expect("temp prompt visible in tree");
     assert_eq!(temp.right(), bar.right() - 1, "右对齐、与边框留 1 列");
-    assert_eq!(temp.width, 3);
+    assert_eq!(temp.width, 5, "[tmp] 按钮宽度");
     assert_eq!(
         prompt_toolbar_button_at(panel, temp.x, bar.y, true),
         Some(PromptToolbarButton::TempPrompt)

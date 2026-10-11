@@ -20,7 +20,7 @@ pub enum Routed {
     Overlay(OverlayKey),
     /// 复制 prompt 选区（无选区为全文）到系统剪贴板。
     Copy,
-    /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时草稿走保存选择器。
+    /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时提示词走保存选择器。
     SavePrompt,
     /// 复制光标所在模板块正文到系统剪贴板。
     CopyTemplateBlock,

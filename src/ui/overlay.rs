@@ -656,6 +656,7 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
             text::CONFIRM_DELETE_PROMPT_TITLE,
             prompt_item_name(state, workspace, item_id).unwrap_or_default(),
         ),
+        OverlayTarget::TempPrompt { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
         OverlayTarget::PromptTree { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
     }
 }
@@ -676,6 +677,16 @@ fn prompt_item_name(state: &AppState, workspace: usize, item_id: i64) -> Option<
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
         .map(|item| item.name.clone())
+}
+
+/// 临时提示词展示名（内容首行摘要）；空白内容返回 None。
+fn prompt_temp_name(state: &AppState, workspace: usize, temp_id: u64) -> Option<String> {
+    state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
+        .map(|temp| temp.summary().to_string())
+        .filter(|name| !name.is_empty())
 }
 
 /// 菜单命令到文案的映射；文案集中在 `ui/text.rs`。
@@ -702,7 +713,9 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             MenuCommand::NewFolder => text::MENU_PROMPT_NEW_FOLDER,
             MenuCommand::NewSubFolder => text::MENU_PROMPT_NEW_SUBFOLDER,
             MenuCommand::RenameFolder | MenuCommand::RenamePrompt => text::MENU_PROMPT_RENAME,
-            MenuCommand::DeleteFolder | MenuCommand::DeletePrompt => text::MENU_PROMPT_DELETE,
+            MenuCommand::DeleteFolder | MenuCommand::DeletePrompt | MenuCommand::DeleteTemp => {
+                text::MENU_PROMPT_DELETE
+            }
             MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
             MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
             MenuCommand::ChangePromptStatus(status) => text::prompt_status_menu_label(*status),
@@ -748,6 +761,10 @@ fn menu_title(state: &AppState, menu: &Menu) -> String {
             .unwrap_or_else(|| text::MENU_TITLE_FOLDER.to_string()),
         OverlayTarget::PromptItem { workspace, item_id } => {
             prompt_item_name(state, workspace, item_id)
+                .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
+        }
+        OverlayTarget::TempPrompt { workspace, temp_id } => {
+            prompt_temp_name(state, workspace, temp_id)
                 .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
         }
         OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),

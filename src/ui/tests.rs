@@ -1234,9 +1234,9 @@ fn prompt_editor_divider_shows_editing_title() {
     );
     assert!(divider.contains(" named prompt "), "{divider}");
 
-    // 临时草稿显示固定标题。
+    // 临时提示词显示固定标题。
     update::show_prompt_tree(&mut state);
-    assert!(update::edit_prompt_draft(&mut state));
+    assert!(update::open_temp_prompt(&mut state));
     let lines = render_lines(&state);
     let divider = prompt_line(
         &lines,

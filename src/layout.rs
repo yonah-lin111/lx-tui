@@ -26,9 +26,9 @@ const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 const PROMPT_UNDO_REDO_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
-/// 树视图 `[+]` 按钮宽度（列）。
-const PROMPT_TEMP_PROMPT_WIDTH: u16 = 3;
-/// 显示 `[+]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
+/// 树视图 `[tmp]` 按钮宽度（列）。
+const PROMPT_TEMP_PROMPT_WIDTH: u16 = 5;
+/// 显示 `[tmp]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
 const PROMPT_TEMP_PROMPT_MIN_WIDTH: u16 =
     PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_TEMP_PROMPT_WIDTH + 1;
 /// `[*]` 标签宽度（列）。
@@ -48,7 +48,7 @@ const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + 1;
 /// 钉住按钮（`[◉]` / `[○]`）宽度（列）。
 const PROMPT_PIN_WIDTH: u16 = 3;
-/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在 `[*]` 左侧、树视图在 `[+]` 左侧，
+/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在 `[*]` 左侧、树视图在 `[tmp]` 左侧，
 /// 各自保证与左侧按钮组不重叠；不足时随右侧按钮一并隐藏。
 const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
     PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
@@ -60,9 +60,9 @@ const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
 pub enum PromptToolbarButton {
     /// 视图模式切换：编辑视图显示 `[≡]`、树视图显示 `[✎]`。
     Mode,
-    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在 `[*]` 左侧、树视图在 `[+]` 左侧）。
+    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在 `[*]` 左侧、树视图在 `[tmp]` 左侧）。
     Pin,
-    /// 树视图 `[+]`：打开临时草稿编辑视图（仅树视图显示）。
+    /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅树视图显示、不入库）。
     TempPrompt,
     Undo,
     Redo,

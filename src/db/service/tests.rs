@@ -296,9 +296,16 @@ fn tree_loads_on_demand_for_displayed_workspace() {
 }
 
 #[test]
-fn save_draft_effect_persists_content_binds_editor_and_clears_draft() {
+fn save_draft_effect_persists_content_binds_editor_and_removes_temp() {
     let (mut service, mut state, cwd, db_path) = trusted_service("save-draft");
-    state.workspaces[0].prompt_panel.draft = "draft body".into();
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound by default");
+    };
+    state.workspaces[0]
+        .prompt_panel
+        .temp_mut(temp_id)
+        .expect("temp exists")
+        .content = "draft body".into();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd.clone(),
         folder_id: None,
@@ -307,7 +314,7 @@ fn save_draft_effect_persists_content_binds_editor_and_clears_draft() {
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
-    assert!(panel.draft.is_empty(), "保存成功后清空草稿槽位");
+    assert!(panel.temp(temp_id).is_none(), "保存成功后移除已升格的 temp");
     let item = &panel.tree.items()[0];
     assert_eq!(item.content, "draft body");
     assert_eq!(item.folder_id, None);
@@ -323,7 +330,14 @@ fn save_draft_effect_persists_content_binds_editor_and_clears_draft() {
 fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
     let (mut service, mut state, cwd, _) = trusted_service("save-draft-folder");
     service.pump(&mut state);
-    state.workspaces[0].prompt_panel.draft = "body".into();
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound by default");
+    };
+    state.workspaces[0]
+        .prompt_panel
+        .temp_mut(temp_id)
+        .expect("temp exists")
+        .content = "body".into();
     // 选择器打开时建文件夹：服务刷新条目并选中新文件夹。
     crate::app::update::open_save_draft(&mut state);
     state.effects.push(Effect::CreateFolder {
@@ -354,5 +368,5 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
     let item = &panel.tree.items()[0];
     assert_eq!(item.folder_id, Some(folder_id));
     assert_eq!(item.content, "body");
-    assert!(panel.draft.is_empty());
+    assert!(panel.temp(temp_id).is_none());
 }

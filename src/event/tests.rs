@@ -1844,7 +1844,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
     );
     assert_eq!(state.prompt.text(), "hello");
 
-    // 默认绑定临时草稿：点击保存点提交缓冲并打开保存选择器。
+    // 默认绑定临时提示词：点击保存点提交缓冲并打开保存选择器。
     let save = toolbar_button(&geo, layout::PromptToolbarButton::Save);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), save.x, save.y),
@@ -1859,11 +1859,20 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
             state.overlay,
             Some(crate::app::overlay::Overlay::SaveDraft(_))
         ),
-        "草稿保存点打开保存选择器"
+        "临时提示词保存点打开保存选择器"
     );
+    let Some(crate::app::prompt::PromptEditing::Temp(temp_id)) =
+        state.workspaces[0].prompt_panel.editing
+    else {
+        panic!("temp bound");
+    };
     assert_eq!(
-        state.workspaces[0].prompt_panel.draft, "hello",
-        "提交缓冲到草稿槽位"
+        state.workspaces[0]
+            .prompt_panel
+            .temp(temp_id)
+            .map(|temp| temp.content.as_str()),
+        Some("hello"),
+        "提交缓冲到 temp"
     );
 }
 
@@ -1876,7 +1885,7 @@ fn ctrl_s_saves_prompt_from_editor() {
     let mut dirty = false;
     state.prompt_focused = true;
 
-    // 默认绑定临时草稿：Ctrl+S 提交缓冲并打开保存选择器。
+    // 默认绑定临时提示词：Ctrl+S 提交缓冲并打开保存选择器。
     state.prompt.insert_str("draft body");
     handle_terminal_event(
         TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
@@ -1892,9 +1901,20 @@ fn ctrl_s_saves_prompt_from_editor() {
             state.overlay,
             Some(crate::app::overlay::Overlay::SaveDraft(_))
         ),
-        "Ctrl+S 在草稿上打开保存选择器"
+        "Ctrl+S 在临时提示词上打开保存选择器"
     );
-    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+    let Some(crate::app::prompt::PromptEditing::Temp(temp_id)) =
+        state.workspaces[0].prompt_panel.editing
+    else {
+        panic!("temp bound");
+    };
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .temp(temp_id)
+            .map(|temp| temp.content.as_str()),
+        Some("draft body")
+    );
 }
 
 #[test]

@@ -20,7 +20,7 @@ use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, Pan
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制；
 /// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`）；
-/// `draft` 表示当前绑定临时草稿：保存点恒灰（草稿不参与自动保存）；
+/// `draft` 表示当前绑定临时提示词：保存点恒灰（不参与自动保存）；
 /// `pinned` 决定工具栏钉住按钮 `[◉]` / `[○]`。
 pub fn render_header(
     panel: Rect,
@@ -80,7 +80,7 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
     }
 }
 
-/// 工具栏：模式切换按钮常显；钉住按钮在右侧 `[*]`/`[+]` 左侧；树视图追加 `[+]`；
+/// 工具栏：模式切换按钮常显；钉住按钮在右侧 `[*]`/`[tmp]` 左侧；树视图追加 `[tmp]`；
 /// 编辑视图追加 undo/redo（不可用时置灰）、select all 与保存状态点（条目实心、草稿空心恒灰）。
 fn render_toolbar(
     panel: Rect,

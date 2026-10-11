@@ -4,7 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::prompt::{PromptPanel, PromptRow, PromptRowKind};
+use crate::app::prompt::{PromptPanel, PromptRow, PromptRowKind, PromptSection};
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
@@ -177,7 +177,8 @@ pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<
     (index < panel.rows().len()).then_some(index)
 }
 
-/// 绘制单行：前缀（续接线 + 连接符）+ 图标 + 名称 +（条目）右对齐状态标签。
+/// 绘制单行：前缀（续接线 + 连接符）+ 图标 + 名称 +（条目）右对齐状态标签；
+/// 分区标签行只画 muted 标签；临时提示词行右侧画 accent 的 `[tmp]` 标注。
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
@@ -253,6 +254,42 @@ fn paint_row(
                     style::prompt_status(item.status)
                 };
                 paint_text(buf, status_x, y, status, status_style, area.right());
+            }
+        }
+        PromptRowKind::Section(section) => {
+            let label = match section {
+                PromptSection::Temp => text::PROMPT_SECTION_TMP,
+                PromptSection::Saved => text::PROMPT_SECTION_SAVED,
+            };
+            paint_text(buf, x, y, label, sub, area.right());
+        }
+        PromptRowKind::Temp => {
+            let Some(temp) = panel.temp_of_row(row) else {
+                return;
+            };
+            let icon_style = if selected { base } else { style::muted() };
+            x = paint_text(
+                buf,
+                x,
+                y,
+                text::PROMPT_TREE_ITEM_ICON,
+                icon_style,
+                area.right(),
+            );
+            x = paint_text(buf, x, y, " ", base, area.right());
+            let badge = text::PROMPT_TEMP_BADGE;
+            let badge_width = width_of(badge) as u16;
+            let gap = u16::from(badge_width > 0);
+            let max = usize::from(
+                area.right()
+                    .saturating_sub(x)
+                    .saturating_sub(badge_width + gap),
+            );
+            paint_name(buf, x, y, temp.summary(), base, max, area.right());
+            if badge_width > 0 && badge_width <= area.width {
+                let badge_x = area.right() - badge_width;
+                let badge_style = if selected { base } else { style::accent() };
+                paint_text(buf, badge_x, y, badge, badge_style, area.right());
             }
         }
     }

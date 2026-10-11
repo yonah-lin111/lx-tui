@@ -1634,6 +1634,14 @@ fn modal_dismissed(
     false
 }
 
+/// 提示词树右键命中目标；分区标签行不打开菜单。
+enum PromptHit {
+    Folder(i64),
+    Item(i64),
+    Temp(u64),
+    Section,
+}
+
 /// 命中标签、工作区项或主区窗格时打开对应右键菜单；返回是否打开。
 ///
 /// prompt 右栏、边框与切换按钮不参与：`pane_at` 只用窗格内容区，
@@ -1654,7 +1662,7 @@ fn open_right_click_menu(
         update::open_workspace_menu(state, index, (column, row));
         return true;
     }
-    // 提示词树：行上打开节点菜单，空白区域打开新建菜单。
+    // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
     if !state.prompt_collapsed && update::prompt_tree_mode(state) {
         let area = layout::prompt_text_rect(view.prompt);
         if area.contains((column, row).into()) {
@@ -1662,23 +1670,34 @@ fn open_right_click_menu(
                 let panel = &state.prompt_owner().prompt_panel;
                 ui::prompt::tree::row_at(area, panel, column, row).and_then(|index| {
                     let row_data = panel.rows().get(index).copied()?;
-                    let id = match row_data.kind {
-                        PromptRowKind::Folder => {
-                            panel.tree.folder_of_row(row_data).map(|folder| folder.id)
-                        }
-                        PromptRowKind::Item => panel.tree.item_of_row(row_data).map(|item| item.id),
-                    };
-                    Some((row_data.kind, id))
+                    match row_data.kind {
+                        PromptRowKind::Folder => panel
+                            .tree
+                            .folder_of_row(row_data)
+                            .map(|folder| PromptHit::Folder(folder.id)),
+                        PromptRowKind::Item => panel
+                            .tree
+                            .item_of_row(row_data)
+                            .map(|item| PromptHit::Item(item.id)),
+                        PromptRowKind::Temp => panel
+                            .temp_of_row(row_data)
+                            .map(|temp| PromptHit::Temp(temp.id)),
+                        PromptRowKind::Section(_) => Some(PromptHit::Section),
+                    }
                 })
             };
             match hit {
-                Some((PromptRowKind::Folder, Some(folder_id))) => {
+                Some(PromptHit::Folder(folder_id)) => {
                     update::open_prompt_folder_menu(state, folder_id, (column, row));
                 }
-                Some((PromptRowKind::Item, Some(item_id))) => {
+                Some(PromptHit::Item(item_id)) => {
                     update::open_prompt_item_menu(state, item_id, (column, row));
                 }
-                _ => update::open_prompt_tree_menu(state, (column, row)),
+                Some(PromptHit::Temp(temp_id)) => {
+                    update::open_prompt_temp_menu(state, temp_id, (column, row));
+                }
+                Some(PromptHit::Section) => {}
+                None => update::open_prompt_tree_menu(state, (column, row)),
             }
             return true;
         }

@@ -316,22 +316,36 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     let mut service = Persistence::with_database(database);
     service.pump(&mut state);
 
-    // 空树 [/] 回退打开草稿（不再无响应）；工具栏 [+] 同样进入草稿编辑。
+    // 空树 [✎] 回退新建临时提示词（不再无响应）；工具栏 [tmp] 同样进入编辑。
     update::show_prompt_tree(&mut state);
     update::toggle_prompt_panel_mode(&mut state);
     assert_eq!(
         state.active_workspace().prompt_panel.mode,
         PromptMode::Editor
     );
-    assert_eq!(
+    assert!(matches!(
         state.active_workspace().prompt_panel.editing,
-        Some(PromptEditing::Draft)
-    );
+        Some(PromptEditing::Temp(_))
+    ));
+    let Some(PromptEditing::Temp(temp_id)) = state.active_workspace().prompt_panel.editing else {
+        panic!("temp bound");
+    };
 
-    // 编辑草稿 → 回树（内容保留在内存槽位，不入库）。
+    // 编辑临时提示词 → 回树：内容保留在内存（列表 tmp: 区可见），不入库。
     update::apply_editor(&mut state, EditorCommand::InsertText("draft body".into()));
     update::show_prompt_tree(&mut state);
-    assert_eq!(state.active_workspace().prompt_panel.draft, "draft body");
+    let panel = &state.active_workspace().prompt_panel;
+    assert_eq!(
+        panel.temp(temp_id).map(|temp| temp.content.as_str()),
+        Some("draft body")
+    );
+    assert!(
+        panel
+            .rows()
+            .iter()
+            .any(|row| { row.kind == lx_tui::app::prompt::PromptRowKind::Temp }),
+        "temp 进入列表"
+    );
     assert!(
         state
             .active_workspace()
@@ -339,10 +353,11 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
             .tree
             .items()
             .is_empty(),
-        "草稿不入库"
+        "临时提示词不入库"
     );
 
-    // 保存选择器：名称预填默认名；根层 + 新建文件夹动作行。
+    // 重新进入该 temp 并打开保存选择器：名称预填默认名；根层 + 新建文件夹动作行。
+    assert!(update::edit_prompt_temp(&mut state, 0, temp_id));
     update::open_save_draft(&mut state);
     let Some(Overlay::SaveDraft(dialog)) = &state.overlay else {
         panic!("save picker open");
@@ -368,13 +383,13 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
         ),
         "新文件夹已选中"
     );
-    // 再回车（确定）执行保存：草稿存入该文件夹。
+    // 再回车（确定）执行保存：临时提示词存入该文件夹。
     update::apply_overlay_key(&mut state, OverlayKey::Enter);
     service.pump(&mut state);
 
-    // 保存成功：文件夹与条目写入 DB，草稿清空，编辑器绑定新条目。
+    // 保存成功：文件夹与条目写入 DB，temp 移除，编辑器绑定新条目。
     let panel = &state.active_workspace().prompt_panel;
-    assert!(panel.draft.is_empty());
+    assert!(panel.temp(temp_id).is_none(), "保存后 temp 升格移除");
     assert_eq!(panel.mode, PromptMode::Editor);
     assert_eq!(panel.tree.folders().len(), 1);
     let folder = panel.tree.folders()[0].clone();

@@ -62,11 +62,54 @@ pub struct PromptItem {
     pub status: PromptItemStatus,
 }
 
+/// 临时提示词：仅存内存、不入库；列表展示名取内容首行摘要。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TempPrompt {
+    pub id: u64,
+    pub content: String,
+}
+
+impl TempPrompt {
+    /// 列表展示名：首个非空行（trim）；内容全空白时为空串。
+    pub fn summary(&self) -> &str {
+        self.content
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("")
+    }
+
+    /// 内容去空白后是否为空（空白 temp 不进入列表）。
+    pub fn is_blank(&self) -> bool {
+        self.content.trim().is_empty()
+    }
+}
+
+/// 分区标签种类：临时区与已入库区。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptSection {
+    /// 临时提示词区（`tmp:`）。
+    Temp,
+    /// 已入库提示词区（`saved:`）。
+    Saved,
+}
+
 /// 可见行种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptRowKind {
+    /// 分区标签行：不可选中、不可交互。
+    Section(PromptSection),
     Folder,
     Item,
+    /// 临时提示词行。
+    Temp,
+}
+
+impl PromptRowKind {
+    /// 行是否可选中（分区标签只作分隔）。
+    pub fn selectable(self) -> bool {
+        !matches!(self, Self::Section(_))
+    }
 }
 
 /// 一行可见节点：种类、在对应列表中的索引与缩进深度（0 根层、1 根层文件夹内、2 子文件夹内）。
@@ -292,57 +335,143 @@ pub enum PromptMode {
     Editor,
 }
 
-/// 编辑视图绑定的目标：正式条目或临时草稿。
+/// 编辑视图绑定的目标：正式条目或临时提示词。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptEditing {
     Item(i64),
-    /// 临时草稿：内容只存内存（`PromptPanel::draft`），不入库。
-    Draft,
+    /// 临时提示词：内容只存内存（`PromptPanel::temps`），不入库。
+    Temp(u64),
 }
 
-/// 工作区提示词面板状态：树、视图模式、选中行、编辑目标、草稿与滚动偏移。
+/// 工作区提示词面板状态：树、视图模式、选中行、编辑目标、临时提示词与滚动偏移。
 #[derive(Debug)]
 pub struct PromptPanel {
     pub tree: PromptTree,
     /// 是否已从 DB 载入（含无持久化模式下的空树）。
     pub loaded: bool,
     pub mode: PromptMode,
-    /// 选中可见行索引；列表置顶草稿行恒为 0。
+    /// 选中可见行索引；选中恒为可交互行（分区标签跳过）。
     pub selected: usize,
     /// 编辑视图绑定的目标；仅编辑视图下有效。
     pub editing: Option<PromptEditing>,
     /// 树视图首个可见行索引。
     pub scroll: usize,
-    /// 临时草稿正文；保存后清空，不入库。
-    pub draft: String,
+    /// 临时提示词列表（仅内存）；`[tmp]` 新建、保存到库后移除，列表中恒无空白项。
+    temps: Vec<TempPrompt>,
+    /// 下一个临时提示词 id（单调递增，不复用）。
+    next_temp_id: u64,
     /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
     pub search: TextInput,
 }
 
 impl PromptPanel {
-    /// 空面板：默认编辑视图并绑定临时草稿（进入应用/切换工作区默认打开临时提示词）。
+    /// 空面板：默认编辑视图并绑定一个空临时提示词（进入应用/切换工作区默认打开临时提示词）。
     pub fn new() -> Self {
         Self {
             tree: PromptTree::new(),
             loaded: false,
             mode: PromptMode::Editor,
             selected: 0,
-            editing: Some(PromptEditing::Draft),
+            editing: Some(PromptEditing::Temp(0)),
             scroll: 0,
-            draft: String::new(),
+            temps: vec![TempPrompt {
+                id: 0,
+                content: String::new(),
+            }],
+            next_temp_id: 1,
             search: TextInput::new(""),
         }
     }
 
-    /// 可见行：过滤后的树行。
+    /// 新建空临时提示词并返回其 id（不改变绑定）。
+    pub fn new_temp(&mut self) -> u64 {
+        let id = self.next_temp_id;
+        self.next_temp_id = self.next_temp_id.saturating_add(1);
+        self.temps.push(TempPrompt {
+            id,
+            content: String::new(),
+        });
+        id
+    }
+
+    /// 按 id 取临时提示词。
+    pub fn temp(&self, id: u64) -> Option<&TempPrompt> {
+        self.temps.iter().find(|temp| temp.id == id)
+    }
+
+    /// 按 id 取临时提示词（可变）。
+    pub fn temp_mut(&mut self, id: u64) -> Option<&mut TempPrompt> {
+        self.temps.iter_mut().find(|temp| temp.id == id)
+    }
+
+    /// 删除临时提示词；不存在时 no-op；返回是否移除。
+    pub fn remove_temp(&mut self, id: u64) -> bool {
+        let before = self.temps.len();
+        self.temps.retain(|temp| temp.id != id);
+        self.temps.len() != before
+    }
+
+    /// 回收全部空白临时提示词（不变量兜底：列表中的 temp 恒非空）。
+    pub fn remove_blank_temps(&mut self) {
+        self.temps.retain(|temp| !temp.is_blank());
+    }
+
+    /// 离开编辑视图的绑定回收：绑定的临时提示词为空时删除并清除绑定；返回是否回收。
+    pub fn drop_blank_temp_binding(&mut self) -> bool {
+        let Some(PromptEditing::Temp(id)) = self.editing else {
+            return false;
+        };
+        if !self.temp(id).is_some_and(TempPrompt::is_blank) {
+            return false;
+        }
+        self.remove_temp(id);
+        self.editing = None;
+        true
+    }
+
+    /// 可见行：有可见临时提示词时置顶 `tmp:` 区并在有树行时补 `saved:` 标签；
+    /// 无临时条目时与树行一致（保持无标签原状）。
     pub fn rows(&self) -> Vec<PromptRow> {
-        self.filtered_tree_rows()
+        let query = self.search.text().trim().to_lowercase();
+        let temp_indices: Vec<usize> = self
+            .temps
+            .iter()
+            .enumerate()
+            .filter(|(_, temp)| !temp.is_blank() && name_matches(temp.summary(), &query))
+            .map(|(index, _)| index)
+            .collect();
+        let tree_rows = self.filtered_tree_rows();
+        if temp_indices.is_empty() {
+            return tree_rows;
+        }
+        let mut rows = Vec::with_capacity(temp_indices.len() + tree_rows.len() + 2);
+        rows.push(PromptRow {
+            kind: PromptRowKind::Section(PromptSection::Temp),
+            index: 0,
+            depth: 0,
+        });
+        for index in temp_indices {
+            rows.push(PromptRow {
+                kind: PromptRowKind::Temp,
+                index,
+                depth: 0,
+            });
+        }
+        if !tree_rows.is_empty() {
+            rows.push(PromptRow {
+                kind: PromptRowKind::Section(PromptSection::Saved),
+                index: 0,
+                depth: 0,
+            });
+            rows.extend(tree_rows);
+        }
+        rows
     }
 
     /// 过滤后的树行；无过滤词时与 `tree.rows()` 一致。
     ///
-    /// 过滤忽略折叠状态：命中文件夹展示其整棵子树，命中条目展示祖先链；
-    /// 临时草稿行不参与过滤（由 `rows` 恒置顶）。
+    /// 过滤忽略折叠状态：命中文件夹展示其整棵子树，命中条目展示祖先链。
+    /// （临时提示词与分区标签由 `rows` 在树行之前构建。）
     fn filtered_tree_rows(&self) -> Vec<PromptRow> {
         let query = self.search.text().trim().to_lowercase();
         if query.is_empty() {
@@ -433,24 +562,47 @@ impl PromptPanel {
         self.rows().get(self.selected).copied()
     }
 
-    /// 选中条目 id；草稿行、文件夹行或空树为 None。
+    /// 行数据：按可见行取临时提示词。
+    pub fn temp_of_row(&self, row: PromptRow) -> Option<&TempPrompt> {
+        (row.kind == PromptRowKind::Temp)
+            .then(|| self.temps.get(row.index))
+            .flatten()
+    }
+
+    /// 选中条目 id；临时行、文件夹行、标签行或空树为 None。
     pub fn selected_prompt_id(&self) -> Option<i64> {
         self.selected_row()
             .and_then(|row| self.tree.item_of_row(row))
             .map(|item| item.id)
     }
 
-    /// 选中行钳制（树变化后调用）；滚动同步跟随。
+    /// 选中行钳制（树变化后调用）：吸附到最近可选中行，滚动同步跟随。
     pub fn clamp_selection(&mut self, visible: usize) {
-        let rows = self.rows().len();
-        self.selected = self.selected.min(rows.saturating_sub(1));
-        self.scroll = self.scroll.min(rows.saturating_sub(visible.max(1)));
+        let rows = self.rows();
+        let len = rows.len();
+        self.selected = snap_selectable(&rows, self.selected.min(len.saturating_sub(1)));
+        self.scroll = self.scroll.min(len.saturating_sub(visible.max(1)));
         if self.selected < self.scroll {
             self.scroll = self.selected;
         } else if self.selected >= self.scroll + visible.max(1) {
             self.scroll = self.selected + 1 - visible.max(1);
         }
     }
+}
+
+/// 吸附到最近的可选中行：优先向下取首个，缺失时向上取最近；全为标签行时归 0。
+fn snap_selectable(rows: &[PromptRow], index: usize) -> usize {
+    if rows.is_empty() {
+        return 0;
+    }
+    let start = index.min(rows.len() - 1);
+    if let Some(offset) = rows[start..].iter().position(|row| row.kind.selectable()) {
+        return start + offset;
+    }
+    rows[..start]
+        .iter()
+        .rposition(|row| row.kind.selectable())
+        .unwrap_or(0)
 }
 
 /// 名称是否命中过滤词（大小写不敏感子串）。

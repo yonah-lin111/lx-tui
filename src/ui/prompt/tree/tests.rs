@@ -276,3 +276,52 @@ fn row_at_maps_viewport_and_respects_scroll_and_search_row() {
     panel.scroll = 3;
     assert_eq!(row_at(area, &panel, 2, 3), None, "滚动超过末行");
 }
+
+#[test]
+fn temp_rows_render_section_labels_summary_and_badge() {
+    let mut panel = panel_with(
+        vec![],
+        vec![item(10, None, "alpha", PromptItemStatus::Todo)],
+    );
+    let temp_id = panel.new_temp();
+    panel.temp_mut(temp_id).expect("temp exists").content = "code review\nsecond line".into();
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false);
+
+    let tmp = row_text(&buf, area, 2);
+    assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
+    let temp = row_text(&buf, area, 3);
+    assert!(temp.starts_with("• code review"), "{temp}");
+    assert!(temp.ends_with(text::PROMPT_TEMP_BADGE), "{temp}");
+    assert_eq!(
+        buf[(area.right() - 5, 3)].fg,
+        Color::Cyan,
+        "tmp 徽标用强调色"
+    );
+    let saved = row_text(&buf, area, 4);
+    assert!(saved.starts_with(text::PROMPT_SECTION_SAVED), "{saved}");
+    let row = row_text(&buf, area, 5);
+    assert!(row.starts_with("• alpha"), "{row}");
+    assert!(row.contains("[todo]"), "{row}");
+}
+
+#[test]
+fn temp_section_hides_saved_label_when_tree_filtered_out() {
+    let mut panel = panel_with(
+        vec![],
+        vec![item(10, None, "alpha", PromptItemStatus::Todo)],
+    );
+    let temp_id = panel.new_temp();
+    panel.temp_mut(temp_id).expect("temp exists").content = "code review".into();
+    search(&mut panel, "code");
+    let area = Rect::new(0, 0, 40, 5);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false);
+    let tmp = row_text(&buf, area, 2);
+    assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
+    let temp = row_text(&buf, area, 3);
+    assert!(temp.contains("code review"), "{temp}");
+    let saved = row_text(&buf, area, 4);
+    assert!(!saved.contains(text::PROMPT_SECTION_SAVED), "{saved}");
+}

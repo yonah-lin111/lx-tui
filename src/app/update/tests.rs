@@ -1038,13 +1038,15 @@ fn switch_workspace_swaps_prompt_drafts() {
 }
 
 #[test]
-fn switch_workspace_defaults_to_draft_and_preserves_open_item() {
+fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
     use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus};
     let mut state = AppState::demo();
-    // 初始工作区默认绑定临时草稿。
-    assert_eq!(
-        state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Draft),
+    // 初始工作区默认绑定空临时提示词。
+    assert!(
+        matches!(
+            state.workspaces[0].prompt_panel.editing,
+            Some(PromptEditing::Temp(_))
+        ),
         "进入应用默认打开临时提示词"
     );
     // 工作区 0 打开条目 10。
@@ -1061,13 +1063,13 @@ fn switch_workspace_defaults_to_draft_and_preserves_open_item() {
     assert!(edit_prompt_item(&mut state, 0, 10));
     assert_eq!(state.prompt.text(), "item body");
 
-    // 新工作区默认草稿；切回 0 恢复条目编辑。
+    // 新工作区默认空临时提示词；切回 0 恢复条目编辑。
     create_workspace(&mut state);
     assert_eq!(state.prompt_workspace(), 1);
-    assert_eq!(
+    assert!(matches!(
         state.workspaces[1].prompt_panel.editing,
-        Some(PromptEditing::Draft)
-    );
+        Some(PromptEditing::Temp(_))
+    ));
     switch_workspace(&mut state, 0);
     assert_eq!(
         state.workspaces[0].prompt_panel.editing,
@@ -1077,17 +1079,63 @@ fn switch_workspace_defaults_to_draft_and_preserves_open_item() {
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(state.prompt.text(), "item body");
 
-    // 树视图（无绑定）切走后回来默认落到临时提示词。
+    // 树视图（无绑定）切走后回来默认落到新临时提示词。
     show_prompt_tree(&mut state);
     switch_workspace(&mut state, 1);
     switch_workspace(&mut state, 0);
-    assert_eq!(
-        state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Draft),
+    assert!(
+        matches!(
+            state.workspaces[0].prompt_panel.editing,
+            Some(PromptEditing::Temp(_))
+        ),
         "无条目绑定时切换默认打开临时提示词"
     );
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
-    assert_eq!(state.prompt.text(), "", "树视图切回重载草稿正文");
+    assert_eq!(state.prompt.text(), "", "树视图切回重载为空正文");
+}
+
+#[test]
+fn switch_workspace_parks_temp_and_prunes_blank_binding() {
+    use crate::app::prompt::PromptEditing;
+    let mut state = AppState::demo();
+    // 空白 temp 切换走：回收绑定；切回新建另一个空 temp。
+    let Some(PromptEditing::Temp(first)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
+    create_workspace(&mut state);
+    assert!(
+        state.workspaces[0].prompt_panel.temp(first).is_none(),
+        "空白 temp 随切换回收"
+    );
+    switch_workspace(&mut state, 0);
+    assert!(
+        matches!(
+            state.workspaces[0].prompt_panel.editing,
+            Some(PromptEditing::Temp(id)) if id != first
+        ),
+        "切回重建新的空 temp"
+    );
+
+    // 非空 temp 切换走：内容留存，切回恢复绑定与正文。
+    let Some(PromptEditing::Temp(second)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
+    state.prompt.insert_str("parked");
+    switch_workspace(&mut state, 1);
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .temp(second)
+            .map(|temp| temp.content.as_str()),
+        Some("parked"),
+        "切走即提交到 temp"
+    );
+    switch_workspace(&mut state, 0);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(second))
+    );
+    assert_eq!(state.prompt.text(), "parked");
 }
 
 /// 断言 prompt 草稿槽位不变量：恰有一处 None，且属于显示中的工作区。

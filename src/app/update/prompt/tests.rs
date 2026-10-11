@@ -3,6 +3,7 @@
 use super::*;
 use crate::app::actions::EditorCommand;
 use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget};
+use crate::app::prompt::PromptSection;
 use crate::app::state::AppState;
 use crate::app::update::{apply_editor, apply_overlay_key, tick};
 use crate::db::{FolderRecord, PromptRecord};
@@ -130,13 +131,17 @@ fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
     assert!(state.workspaces[0].prompt_panel.search.text().is_empty());
     assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
 
-    // 工具栏 [+] 入口打开草稿编辑视图。
+    // 工具栏 [tmp] 入口：新建空临时提示词并进入编辑视图。
     assert!(open_temp_prompt(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
-    assert_eq!(
-        state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Draft)
+    assert!(
+        matches!(
+            state.workspaces[0].prompt_panel.editing,
+            Some(PromptEditing::Temp(_))
+        ),
+        "绑定新建 temp"
     );
+    assert_eq!(state.prompt.text(), "", "新 temp 内容为空");
 }
 
 #[test]
@@ -395,42 +400,50 @@ fn scroll_clamps_and_keeps_selection_visible() {
 }
 
 #[test]
-fn edit_falls_back_to_draft_when_selection_is_not_item() {
+fn edit_falls_back_to_new_temp_when_selection_is_not_item() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    // 选中根文件夹（展示行 1）后 [edit]：回退打开临时草稿，不再无响应。
+    // 选中根文件夹（展示行 1）后 [edit]：新建空 temp，不再无响应。
     move_prompt_selection(&mut state, 1, 8);
     toggle_prompt_panel_mode(&mut state);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
-    assert_eq!(
+    assert!(matches!(
         state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Draft)
-    );
+        Some(PromptEditing::Temp(_))
+    ));
     assert!(state.prompt_focused);
 
-    // 空树同样回退草稿：清空全部条目后 [edit] 仍进入编辑视图。
+    // 空树同样回退新建 temp：清空全部条目后 [edit] 仍进入编辑视图。
     let mut state = AppState::demo();
     enter_tree(&mut state);
     toggle_prompt_panel_mode(&mut state);
-    assert_eq!(
+    assert!(matches!(
         state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Draft)
-    );
+        Some(PromptEditing::Temp(_))
+    ));
 }
 
 #[test]
-fn draft_roundtrip_keeps_content_and_picker_lists_folders() {
+fn temp_roundtrip_keeps_content_and_picker_lists_folders() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    assert!(edit_prompt_draft(&mut state));
+    assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
     apply_editor(&mut state, EditorCommand::InsertText("draft body".into()));
     show_prompt_tree(&mut state);
-    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(
+        panel.temp(temp_id).map(|temp| temp.content.as_str()),
+        Some("draft body")
+    );
+    // 行序：tmp:、temp、saved:、root、sub、nested、loose。
+    assert_eq!(panel.rows().len(), 7, "{:?}", panel.rows());
 
-    // 再次打开草稿：内容保留（不入库也不丢失）。
-    edit_prompt_draft(&mut state);
+    // 再次打开该 temp：内容保留（不入库也不丢失）。
+    assert!(edit_prompt_temp(&mut state, 0, temp_id));
     assert_eq!(state.prompt.text(), "draft body");
-    show_prompt_tree(&mut state);
 
     // 保存选择器：名称预填默认名 + 根层 + 层级顺序文件夹 + 新建文件夹动作行。
     open_save_draft(&mut state);
@@ -471,16 +484,153 @@ fn draft_roundtrip_keeps_content_and_picker_lists_folders() {
     assert_eq!(name, text::PROMPT_DEFAULT_NAME);
     assert_eq!(content, "draft body");
 
-    // 服务保存成功后的收尾：清空草稿与搜索词。
+    // 服务保存成功后的收尾：移除已升格的 temp 并清空搜索词。
     finish_draft_save(&mut state, 0);
-    assert!(state.workspaces[0].prompt_panel.draft.is_empty());
+    assert!(state.workspaces[0].prompt_panel.temp(temp_id).is_none());
+}
+
+#[test]
+fn temp_button_creates_new_temp_each_time_and_prunes_blank() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    // 第一次：空白 temp 切回列表即回收。
+    assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(first)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
+    show_prompt_tree(&mut state);
+    assert!(
+        state.workspaces[0].prompt_panel.temp(first).is_none(),
+        "空白 temp 离开编辑视图即回收"
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.rows().len(),
+        4,
+        "空白 temp 不进入列表"
+    );
+
+    // 第二次：内容非空则保留，列表出现 tmp: 分区且选中吸附到 temp 行。
+    assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(second)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
+    assert_ne!(first, second, "每次点击新建独立 temp");
+    apply_editor(&mut state, EditorCommand::InsertText("body".into()));
+    show_prompt_tree(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert!(panel.temp(second).is_some());
+    let rows = panel.rows();
+    assert_eq!(rows[0].kind, PromptRowKind::Section(PromptSection::Temp));
+    assert_eq!(rows[1].kind, PromptRowKind::Temp);
+    assert_eq!(rows[2].kind, PromptRowKind::Section(PromptSection::Saved));
+    assert_eq!(panel.selected, 1, "选中吸附到首个可选中行（跳过 tmp:）");
+}
+
+#[test]
+fn activate_temp_row_opens_editor_and_escape_returns() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(open_temp_prompt(&mut state));
+    apply_editor(&mut state, EditorCommand::InsertText("temp body".into()));
+    show_prompt_tree(&mut state);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected, 1,
+        "temp 行被选中"
+    );
+    assert!(activate_prompt_row(&mut state));
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert!(matches!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(_))
+    ));
+    assert_eq!(state.prompt.text(), "temp body");
+
+    // Esc 返回树：内容保留、绑定清除。
+    apply_editor(&mut state, EditorCommand::Escape);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.mode, PromptMode::Tree);
+    assert_eq!(panel.editing, None);
+    assert_eq!(
+        panel
+            .rows()
+            .iter()
+            .filter(|row| row.kind == PromptRowKind::Temp)
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn temp_menu_lists_commands_and_deletes_immediately() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(open_temp_prompt(&mut state));
+    apply_editor(&mut state, EditorCommand::InsertText("doomed".into()));
+    show_prompt_tree(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    let temp_id = panel
+        .rows()
+        .into_iter()
+        .find_map(|row| panel.temp_of_row(row).map(|temp| temp.id))
+        .expect("temp row visible");
+
+    open_prompt_temp_menu(&mut state, temp_id, (5, 5));
+    let Some(Overlay::Menu(menu)) = &state.overlay else {
+        panic!("menu open");
+    };
+    assert_eq!(
+        menu.commands,
+        vec![
+            MenuCommand::EditPrompt,
+            MenuCommand::CopyPromptContent,
+            MenuCommand::DeleteTemp,
+        ]
+    );
+    assert!(matches!(
+        menu.target,
+        OverlayTarget::TempPrompt { temp_id: id, .. } if id == temp_id
+    ));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected, 1,
+        "打开菜单即选中该行"
+    );
+
+    // 复制命令 → 剪贴板效应。
+    state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
+        anchor: (5, 5),
+        target: OverlayTarget::TempPrompt {
+            workspace: 0,
+            temp_id,
+        },
+        commands: vec![MenuCommand::CopyPromptContent],
+        selected: 0,
+    }));
+    crate::app::update::activate_menu(&mut state);
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CopyToClipboard(text) if text == "doomed"
+    )));
+
+    // 删除命令 → 立即移除（不打开确认浮层）。
+    state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
+        anchor: (5, 5),
+        target: OverlayTarget::TempPrompt {
+            workspace: 0,
+            temp_id,
+        },
+        commands: vec![MenuCommand::DeleteTemp],
+        selected: 0,
+    }));
+    crate::app::update::activate_menu(&mut state);
+    assert!(state.overlay.is_none(), "删除不经确认浮层");
+    assert!(state.workspaces[0].prompt_panel.temp(temp_id).is_none());
 }
 
 #[test]
 fn save_draft_new_folder_opens_dialog_and_queues_folder_effect() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    edit_prompt_draft(&mut state);
+    assert!(open_temp_prompt(&mut state));
     apply_editor(&mut state, EditorCommand::InsertText("body".into()));
     show_prompt_tree(&mut state);
     open_save_draft(&mut state);
@@ -570,7 +720,7 @@ fn refresh_save_draft_rebuilds_entries_and_selects_new_folder() {
 fn save_draft_commits_with_custom_name_and_rejects_empty_names() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    edit_prompt_draft(&mut state);
+    assert!(open_temp_prompt(&mut state));
     apply_editor(&mut state, EditorCommand::InsertText("body".into()));
     show_prompt_tree(&mut state);
     open_save_draft(&mut state);
@@ -720,22 +870,29 @@ fn autosave_resets_timer_on_new_edits() {
 }
 
 #[test]
-fn draft_never_autosaves() {
+fn temp_never_autosaves() {
     let mut state = demo_state();
-    assert!(edit_prompt_draft(&mut state));
+    assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
     state.prompt.insert_str("draft body");
     let now = Instant::now();
     assert!(!tick(&mut state, now + Duration::from_secs(30)));
-    assert!(state.effects.is_empty(), "草稿不落库");
-    assert!(!state.prompt.is_saved(), "草稿保持未保存（圆点恒灰）");
+    assert!(state.effects.is_empty(), "临时提示词不落库");
+    assert!(!state.prompt.is_saved(), "临时提示词保持未保存（圆点恒灰）");
     assert_eq!(
-        state.workspaces[0].prompt_panel.draft, "",
-        "未提交时草稿槽位不动"
+        state.workspaces[0]
+            .prompt_panel
+            .temp(temp_id)
+            .map(|temp| temp.content.as_str()),
+        Some(""),
+        "未提交时 temp 内容不动"
     );
 }
 
 #[test]
-fn save_prompt_now_saves_item_and_opens_picker_for_draft() {
+fn save_prompt_now_saves_item_and_opens_picker_for_temp() {
     // 条目：立即复位保存点并登记落库效应，无需等待静置。
     let mut state = demo_state();
     assert!(edit_prompt_item(&mut state, 0, 10));
@@ -749,12 +906,22 @@ fn save_prompt_now_saves_item_and_opens_picker_for_draft() {
             .any(|effect| matches!(effect, Effect::SavePromptContent { id: 10, .. }))
     );
 
-    // 草稿：提交缓冲到槽位并打开保存选择器。
+    // 临时提示词：提交缓冲到 temp 并打开保存选择器。
     let mut state = demo_state();
-    assert!(edit_prompt_draft(&mut state));
+    assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
     state.prompt.insert_str("draft body");
     save_prompt_now(&mut state);
-    assert_eq!(state.workspaces[0].prompt_panel.draft, "draft body");
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .temp(temp_id)
+            .map(|temp| temp.content.as_str()),
+        Some("draft body"),
+        "提交缓冲到 temp"
+    );
     assert!(matches!(state.overlay, Some(Overlay::SaveDraft(_))));
 }
 
@@ -777,9 +944,9 @@ fn next_deadline_includes_prompt_autosave() {
         "保存后无待触发"
     );
 
-    // 草稿不产生自动保存期限（空闲不轮询）。
+    // 临时提示词不产生自动保存期限（空闲不轮询）。
     let mut state = demo_state();
-    assert!(edit_prompt_draft(&mut state));
+    assert!(open_temp_prompt(&mut state));
     state.prompt.insert_str("x");
     assert!(!tick(&mut state, Instant::now()));
     assert!(crate::app::update::next_deadline(&state).is_none());

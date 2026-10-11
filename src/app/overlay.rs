@@ -130,6 +130,11 @@ pub enum OverlayTarget {
         workspace: usize,
         item_id: i64,
     },
+    /// 临时提示词（仅内存，不入库）。
+    TempPrompt {
+        workspace: usize,
+        temp_id: u64,
+    },
     /// 提示词树空白区域。
     PromptTree {
         workspace: usize,
@@ -161,6 +166,8 @@ pub enum MenuCommand {
     DeleteFolder,
     RenamePrompt,
     DeletePrompt,
+    /// 删除临时提示词（仅内存、立即生效、无确认浮层）。
+    DeleteTemp,
     EditPrompt,
     CopyPromptContent,
     /// 把提示词切到下一个状态（todo → in_progress → completed → todo）。

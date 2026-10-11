@@ -222,12 +222,12 @@ fn render_panel_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state:
     }
 }
 
-/// 编辑视图标题：绑定条目的名称；临时草稿显示固定标题；无绑定不显示。
+/// 编辑视图标题：绑定条目的名称；临时提示词显示固定标题；无绑定不显示。
 fn prompt_edit_title(state: &AppState) -> Option<String> {
     let panel = &state.prompt_owner().prompt_panel;
     match panel.editing? {
         PromptEditing::Item(id) => panel.tree.item(id).map(|item| item.name.clone()),
-        PromptEditing::Draft => Some(text::PROMPT_DRAFT_TITLE.to_string()),
+        PromptEditing::Temp(_) => Some(text::PROMPT_DRAFT_TITLE.to_string()),
     }
 }
 
@@ -473,7 +473,10 @@ fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<
         focused,
         mode,
         prompt_edit_title(state).as_deref(),
-        state.prompt_owner().prompt_panel.editing == Some(PromptEditing::Draft),
+        matches!(
+            state.prompt_owner().prompt_panel.editing,
+            Some(PromptEditing::Temp(_))
+        ),
         state.prompt_pinned.is_some(),
     );
     render_prompt_branch_status(frame, area, state);

@@ -47,6 +47,9 @@ fn user_visible_labels_are_clean_ascii() {
         PROMPT_TREE_NO_MATCHES,
         PROMPT_TREE_SEARCH_PLACEHOLDER,
         PROMPT_TEMP_PROMPT_LABEL,
+        PROMPT_SECTION_TMP,
+        PROMPT_SECTION_SAVED,
+        PROMPT_TEMP_BADGE,
         MODAL_CLOSE,
         SAVE_DRAFT_TITLE,
         SAVE_DRAFT_ROOT,
@@ -269,7 +272,6 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
         ("PROMPT_SELECT_ALL_LABEL", PROMPT_SELECT_ALL_LABEL),
         ("PROMPT_MODE_LIST_LABEL", PROMPT_MODE_LIST_LABEL),
         ("PROMPT_MODE_EDIT_LABEL", PROMPT_MODE_EDIT_LABEL),
-        ("PROMPT_TEMP_PROMPT_LABEL", PROMPT_TEMP_PROMPT_LABEL),
         ("PROMPT_PINNED_LABEL", PROMPT_PINNED_LABEL),
         ("PROMPT_UNPINNED_LABEL", PROMPT_UNPINNED_LABEL),
         ("TEMPLATE_BUTTON_COPY", TEMPLATE_BUTTON_COPY),
@@ -294,6 +296,14 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
     }
     assert_eq!(PROMPT_SAVE_DOT.width(), 1, "保存点必须严格 1 列宽");
     assert_eq!(PROMPT_DRAFT_DOT.width(), 1, "草稿空心点必须严格 1 列宽");
+    assert_eq!(
+        PROMPT_TEMP_PROMPT_LABEL.width(),
+        5,
+        "[tmp] 按钮标签宽度（布局常量同步）"
+    );
+    assert_eq!(PROMPT_TEMP_BADGE.width(), 5, "[tmp] 行内标注宽度");
+    assert_eq!(PROMPT_SECTION_TMP, "tmp:");
+    assert_eq!(PROMPT_SECTION_SAVED, "saved:");
 }
 
 #[test]
