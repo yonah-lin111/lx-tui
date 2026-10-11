@@ -567,11 +567,6 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if ui::prompt_pin_at(view, state, mouse.column, mouse.row) {
-                    update::toggle_prompt_pin(state);
-                    *dirty = true;
-                    return;
-                }
                 if let Some(target) =
                     ui::collapse_button_at(view, state.agents_collapsed, mouse.column, mouse.row)
                 {
@@ -658,6 +653,9 @@ fn handle_terminal_event(
                         }
                         layout::PromptToolbarButton::TempPrompt => {
                             update::open_temp_prompt(state);
+                        }
+                        layout::PromptToolbarButton::Pin => {
+                            update::toggle_prompt_pin(state);
                         }
                         layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
                         layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),

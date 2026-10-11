@@ -489,6 +489,7 @@ fn renders_toolbar_buttons_and_divider() {
         PromptMode::Editor,
         None,
         false,
+        false,
     );
 
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
@@ -556,6 +557,7 @@ fn renders_toolbar_buttons_and_divider() {
         PromptMode::Editor,
         None,
         false,
+        false,
     );
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
 
@@ -569,6 +571,7 @@ fn renders_toolbar_buttons_and_divider() {
         PromptMode::Editor,
         Some(text::PROMPT_DRAFT_TITLE),
         true,
+        false,
     );
     assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_DRAFT_DOT);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::DarkGray, "草稿恒灰空心点");
@@ -597,6 +600,7 @@ fn header_divider_embeds_edit_title_and_ellipsizes() {
         PromptMode::Editor,
         Some("my prompt"),
         false,
+        false,
     );
     let row = divider_row(&buf);
     assert!(row.contains(" my prompt "), "{row}");
@@ -614,6 +618,7 @@ fn header_divider_embeds_edit_title_and_ellipsizes() {
         PromptMode::Editor,
         Some(&long),
         false,
+        false,
     );
     let row = divider_row(&buf);
     assert!(row.contains('…'), "{row}");
@@ -629,9 +634,63 @@ fn header_divider_embeds_edit_title_and_ellipsizes() {
         PromptMode::Tree,
         Some("my prompt"),
         false,
+        false,
     );
     let row = divider_row(&buf);
     assert!(!row.contains("my prompt"), "{row}");
+}
+
+#[test]
+fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
+    let render_label = |buf: &Buffer, rect: Rect| -> String {
+        (rect.x..rect.right())
+            .map(|x| buf[(x, rect.y)].symbol())
+            .collect()
+    };
+
+    let pin = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Pin,
+        false,
+    )
+    .expect("pin visible");
+    let select_all = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::SelectAll,
+        false,
+    )
+    .expect("select all visible");
+    assert_eq!(pin.y, bar.y, "钉住按钮在功能按钮行");
+    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [*] 左侧，间隔 1 列");
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        None,
+        false,
+        false,
+    );
+    assert_eq!(render_label(&buf, pin), text::PROMPT_UNPINNED_LABEL);
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        None,
+        false,
+        true,
+    );
+    assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
 }
 
 #[test]
@@ -652,6 +711,7 @@ fn divider_follows_prompt_focus_style() {
         PromptMode::Editor,
         None,
         false,
+        false,
     );
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
@@ -667,6 +727,7 @@ fn divider_follows_prompt_focus_style() {
         false,
         PromptMode::Editor,
         None,
+        false,
         false,
     );
     for x in [panel.x, 5, panel.right() - 1] {
@@ -690,6 +751,7 @@ fn toolbar_hidden_when_prompt_too_short() {
         false,
         PromptMode::Editor,
         None,
+        false,
         false,
     );
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");

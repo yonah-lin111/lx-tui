@@ -494,3 +494,66 @@ fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
         None
     );
 }
+
+#[test]
+fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let pin =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, false).expect("pin visible");
+    let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
+        .expect("select all visible");
+    assert_eq!(pin.y, bar.y, "与功能按钮同行");
+    assert_eq!(pin.width, 3);
+    assert_eq!(select_all.x - pin.right(), 1, "紧邻 [*] 左侧、间隔 1 列");
+    assert_eq!(
+        prompt_toolbar_button_at(panel, pin.x, bar.y, false),
+        Some(PromptToolbarButton::Pin)
+    );
+
+    // 内容区宽度 20 < 21：钉住按钮随 [*] 一并隐藏。
+    let narrow = Rect::new(0, 0, 22, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, false),
+        None
+    );
+    assert!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::SelectAll, false).is_some(),
+        "窄屏时 [*] 仍在"
+    );
+
+    // 内容区宽度 21：钉住按钮恢复显示，与左侧按钮组间隔 1 列。
+    let wide = Rect::new(0, 0, 23, 8);
+    let pin =
+        prompt_toolbar_button_rect(wide, PromptToolbarButton::Pin, false).expect("pin visible");
+    let redo =
+        prompt_toolbar_button_rect(wide, PromptToolbarButton::Redo, false).expect("redo visible");
+    assert_eq!(pin.x, redo.right() + 1, "不与 undo/redo 重叠");
+}
+
+#[test]
+fn prompt_toolbar_tree_pin_sits_left_of_temp_prompt() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let pin =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, true).expect("pin visible");
+    let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, true)
+        .expect("temp prompt visible");
+    assert_eq!(pin.y, bar.y);
+    assert_eq!(temp.x - pin.right(), 1, "树视图紧邻 [+] 左侧");
+    assert_eq!(
+        prompt_toolbar_button_at(panel, pin.x, bar.y, true),
+        Some(PromptToolbarButton::Pin)
+    );
+
+    // 内容区宽度 11 < 12：钉住按钮随 [+] 一并隐藏。
+    let narrow = Rect::new(0, 0, 13, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, true),
+        None
+    );
+    assert!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::TempPrompt, true).is_some(),
+        "窄屏时 [+] 仍在"
+    );
+}

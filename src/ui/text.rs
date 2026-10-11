@@ -68,10 +68,10 @@ pub const PROMPT_SELECT_ALL_LABEL: &str = "[*]";
 pub const PROMPT_SAVE_DOT: &str = "●";
 /// 临时草稿保存状态点：空心（与空闲 agent 状态圆点一致），恒灰。
 pub const PROMPT_DRAFT_DOT: &str = "○";
-/// prompt 未钉住时的按钮（点击钉住）。
-pub const PROMPT_PIN_LABEL: &str = "[pin]";
-/// prompt 已钉住时的按钮（点击释放）。
-pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
+/// prompt 钉住按钮：未钉空心 `[○]`、已钉实心 `[◉]`（状态显示，动作见 tooltip；
+/// 与保存点/agent 状态圆点同符号系）。
+pub const PROMPT_UNPINNED_LABEL: &str = "[○]";
+pub const PROMPT_PINNED_LABEL: &str = "[◉]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";

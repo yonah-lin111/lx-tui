@@ -1763,7 +1763,12 @@ fn mouse_click_prompt_pin_toggles_pin() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
 
-    let pin = ui::prompt_pin_button(geo.view.prompt, false).expect("pin visible");
+    let pin = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Pin,
+        false,
+    )
+    .expect("pin visible");
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), pin.x, pin.y),
         &mut state,
@@ -1775,7 +1780,12 @@ fn mouse_click_prompt_pin_toggles_pin() {
     assert_eq!(state.prompt_pinned, Some(state.active_workspace));
     assert!(dirty);
 
-    let unpin = ui::prompt_pin_button(geo.view.prompt, true).expect("pin visible");
+    let unpin = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Pin,
+        false,
+    )
+    .expect("pin visible");
     dirty = false;
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), unpin.x, unpin.y),

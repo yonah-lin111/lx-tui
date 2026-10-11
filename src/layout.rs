@@ -46,12 +46,22 @@ const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_SELECT_ALL_WIDTH
     + PROMPT_SELECT_ALL_GAP
     + 1;
+/// 钉住按钮（`[◉]` / `[○]`）宽度（列）。
+const PROMPT_PIN_WIDTH: u16 = 3;
+/// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在 `[*]` 左侧、树视图在 `[+]` 左侧，
+/// 各自保证与左侧按钮组不重叠；不足时随右侧按钮一并隐藏。
+const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
+    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
+const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
+    PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptToolbarButton {
     /// 视图模式切换：编辑视图显示 `[≡]`、树视图显示 `[✎]`。
     Mode,
+    /// 钉住切换：未钉 `[○]`、已钉 `[◉]`（编辑视图在 `[*]` 左侧、树视图在 `[+]` 左侧）。
+    Pin,
     /// 树视图 `[+]`：打开临时草稿编辑视图（仅树视图显示）。
     TempPrompt,
     Undo,
@@ -759,6 +769,25 @@ pub fn prompt_toolbar_button_rect(
     let redo_x = undo_x + PROMPT_UNDO_REDO_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
     let rect = match button {
         PromptToolbarButton::Mode => Rect::new(bar.x, bar.y, PROMPT_TOOLBAR_BUTTON_WIDTH, 1),
+        PromptToolbarButton::Pin => {
+            let (anchor_button, min_width) = if tree {
+                (PromptToolbarButton::TempPrompt, PROMPT_PIN_MIN_WIDTH_TREE)
+            } else {
+                (PromptToolbarButton::SelectAll, PROMPT_PIN_MIN_WIDTH_EDITOR)
+            };
+            if inner.width < min_width {
+                return None;
+            }
+            let anchor = prompt_toolbar_button_rect(panel, anchor_button, tree)?;
+            Rect::new(
+                anchor
+                    .x
+                    .saturating_sub(PROMPT_PIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
+                bar.y,
+                PROMPT_PIN_WIDTH,
+                1,
+            )
+        }
         PromptToolbarButton::TempPrompt => {
             if !tree || inner.width < PROMPT_TEMP_PROMPT_MIN_WIDTH {
                 return None;
@@ -817,6 +846,7 @@ pub fn prompt_toolbar_button_at(
     }
     [
         PromptToolbarButton::Mode,
+        PromptToolbarButton::Pin,
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,

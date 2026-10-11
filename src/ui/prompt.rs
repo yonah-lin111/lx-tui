@@ -20,7 +20,8 @@ use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, Pan
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制；
 /// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`）；
-/// `draft` 表示当前绑定临时草稿：保存点恒灰（草稿不参与自动保存）。
+/// `draft` 表示当前绑定临时草稿：保存点恒灰（草稿不参与自动保存）；
+/// `pinned` 决定工具栏钉住按钮 `[◉]` / `[○]`。
 pub fn render_header(
     panel: Rect,
     buf: &mut Buffer,
@@ -29,6 +30,7 @@ pub fn render_header(
     mode: PromptMode,
     title: Option<&str>,
     draft: bool,
+    pinned: bool,
 ) {
     let Some(header) = layout::prompt_header_rect(panel) else {
         return;
@@ -39,7 +41,7 @@ pub fn render_header(
     {
         paint_header_title(header, buf, title);
     }
-    render_toolbar(panel, buf, prompt, mode, draft);
+    render_toolbar(panel, buf, prompt, mode, draft, pinned);
 }
 
 /// 分割线行内嵌 title：起于左衔接符之后，超宽以 `…` 截断，不覆盖右衔接符。
@@ -78,15 +80,33 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
     }
 }
 
-/// 工具栏：模式切换按钮常显；树视图追加 `[+]`；编辑视图追加
-/// undo/redo（不可用时置灰）、select all 与保存状态点（条目实心、草稿空心恒灰）。
-fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode, draft: bool) {
+/// 工具栏：模式切换按钮常显；钉住按钮在右侧 `[*]`/`[+]` 左侧；树视图追加 `[+]`；
+/// 编辑视图追加 undo/redo（不可用时置灰）、select all 与保存状态点（条目实心、草稿空心恒灰）。
+fn render_toolbar(
+    panel: Rect,
+    buf: &mut Buffer,
+    prompt: &Prompt,
+    mode: PromptMode,
+    draft: bool,
+    pinned: bool,
+) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
         PromptMode::Tree => text::PROMPT_MODE_EDIT_LABEL,
     };
     let tree = mode == PromptMode::Tree;
-    let mut buttons = vec![(PromptToolbarButton::Mode, mode_label, style::accent())];
+    let mut buttons = vec![
+        (PromptToolbarButton::Mode, mode_label, style::accent()),
+        (
+            PromptToolbarButton::Pin,
+            if pinned {
+                text::PROMPT_PINNED_LABEL
+            } else {
+                text::PROMPT_UNPINNED_LABEL
+            },
+            style::accent(),
+        ),
+    ];
     if tree {
         buttons.push((
             PromptToolbarButton::TempPrompt,

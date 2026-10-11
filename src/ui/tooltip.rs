@@ -124,6 +124,7 @@ fn targets(
         let tree = state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree;
         for (button, target) in [
             (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
+            (layout::PromptToolbarButton::Pin, TooltipTarget::PromptPin),
             (
                 layout::PromptToolbarButton::TempPrompt,
                 TooltipTarget::PromptTempPrompt,
@@ -139,9 +140,6 @@ fn targets(
             if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, tree) {
                 targets.push((target, area));
             }
-        }
-        if let Some(area) = ui::prompt_pin_button(view.prompt, state.prompt_pinned.is_some()) {
-            targets.push((TooltipTarget::PromptPin, area));
         }
         let text_area = layout::prompt_text_rect(view.prompt);
         for hit in ui::prompt::template_buttons(&state.prompt, text_area) {

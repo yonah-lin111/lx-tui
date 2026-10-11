@@ -144,6 +144,33 @@ impl App {
         self.click_at(col, row);
     }
 
+    /// 在包含 `anchor` 的行内、`anchor` 之后查找 `needle`
+    /// （同行同名符号消歧，如钉住按钮 `[○]` 与草稿保存点 `○`）。
+    fn find_after(&self, anchor: &str, needle: &str) -> Option<(u16, u16)> {
+        let screen = self.screen();
+        let width = needle.chars().count();
+        for (row, line) in screen.lines().enumerate() {
+            let Some(anchor_byte) = line.find(anchor) else {
+                continue;
+            };
+            let start = anchor_byte + anchor.len();
+            let Some(byte_index) = line[start..].find(needle) else {
+                continue;
+            };
+            let col = line[..start + byte_index].chars().count() + width / 2;
+            return Some((col as u16, row as u16));
+        }
+        None
+    }
+
+    /// 点击包含 `anchor` 的行内、`anchor` 之后的 `needle`。
+    fn click_after(&self, anchor: &str, needle: &str) {
+        let (col, row) = self
+            .find_after(anchor, needle)
+            .unwrap_or_else(|| panic!("{anchor:?} 之后缺少 {needle:?}\n{}", self.screen()));
+        self.click_at(col, row);
+    }
+
     fn right_click(&self, col: u16, row: u16) {
         let x = col + 1;
         let y = row + 1;
@@ -244,7 +271,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     // 输入草稿内容后点保存点 → 文件夹选择器。
     app.send(b"hello draft");
     assert!(app.wait_for("hello draft"), "draft typed");
-    app.click(text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(
         app.wait_for("save prompt to folder"),
         "picker: \n{}",
@@ -311,7 +338,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
     app.send(b"second draft");
     assert!(app.wait_for("second draft"), "second draft typed");
-    app.click(text::PROMPT_DRAFT_DOT);
+    app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(app.wait_for("+ New folder"), "picker reopened");
     // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");
