@@ -55,7 +55,7 @@ fn first_row_is_search_box_with_placeholder_and_cursor() {
     assert!(
         search_row.starts_with(&format!(
             "{} {}",
-            text::PROMPT_TREE_SEARCH_ICON,
+            text::INPUT_PREFIX_ICON,
             text::PROMPT_TREE_SEARCH_PLACEHOLDER
         )),
         "{search_row}"
@@ -70,7 +70,10 @@ fn first_row_is_search_box_with_placeholder_and_cursor() {
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &panel, false);
     let search_row = row_text(&buf, area, 0);
-    assert!(search_row.starts_with("⌕ ide"), "{search_row}");
+    assert!(
+        search_row.starts_with(&format!("{} ide", text::INPUT_PREFIX_ICON)),
+        "{search_row}"
+    );
     assert_eq!(cursor, Some((5, 0)), "光标在过滤词末尾");
 }
 
@@ -82,7 +85,11 @@ fn search_row_scrolls_viewport_for_long_query() {
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &panel, false);
     let search_row = row_text(&buf, area, 0);
-    assert_eq!(search_row.trim_end(), "⌕ 56789", "视口右移保证光标可见");
+    assert_eq!(
+        search_row.trim_end(),
+        format!("{} 56789", text::INPUT_PREFIX_ICON),
+        "视口右移保证光标可见"
+    );
     assert_eq!(cursor, Some((7, 0)), "光标在输入区最右列");
 }
 

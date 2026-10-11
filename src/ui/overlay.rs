@@ -499,22 +499,9 @@ fn render_save_draft(
         return None;
     }
     let width = usize::from(shell.inner.width);
-    // 名称行：`name ` 前缀 + 单行输入。
-    let label = format!("{} ", text::SAVE_DRAFT_NAME);
-    let label_width = label.chars().count() as u16;
-    frame.render_widget(
-        Paragraph::new(Span::styled(label, style::muted())),
-        Rect::new(shell.inner.x, shell.inner.y, label_width, 1),
-    );
-    let name_area = Rect::new(
-        shell.inner.x.saturating_add(label_width),
-        shell.inner.y,
-        shell.inner.width.saturating_sub(label_width),
-        1,
-    );
-    let name_cursor = widgets::input::render(
+    let name_cursor = render_input(
         frame,
-        name_area,
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         dialog.name.text(),
         dialog.name.cursor(),
         None,
@@ -783,7 +770,7 @@ fn render_rename(frame: &mut Frame<'_>, screen: Rect, rename: &Rename) -> Option
             (text::BUTTON_CANCEL, style::muted()),
         ],
     );
-    widgets::input::render(
+    render_input(
         frame,
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         rename.input.text(),
@@ -817,7 +804,7 @@ fn render_new_workspace(
             (text::BUTTON_CANCEL, style::muted()),
         ],
     );
-    widgets::input::render(
+    render_input(
         frame,
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         new_ws.input.text(),
@@ -851,7 +838,7 @@ fn render_new_node(frame: &mut Frame<'_>, screen: Rect, node: &NewNode) -> Optio
             (text::BUTTON_CANCEL, style::muted()),
         ],
     );
-    widgets::input::render(
+    render_input(
         frame,
         Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
         node.name.text(),
@@ -960,6 +947,39 @@ fn render_buttons(
     }
 }
 
+/// 模态输入行：左侧 `> ` 前缀（与 prompt 列表搜索框同图标）+ 单行输入；
+/// 返回硬件光标位置；宽度放不下前缀时输入区为空、不显示光标。
+fn render_input(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    text: &str,
+    cursor: usize,
+    placeholder: Option<&str>,
+) -> Option<(u16, u16)> {
+    let prefix = format!("{} ", text::INPUT_PREFIX_ICON);
+    let prefix_width = prefix.chars().count() as u16;
+    frame.render_widget(
+        Paragraph::new(Span::styled(prefix, style::accent())),
+        Rect {
+            width: area.width.min(prefix_width),
+            height: 1,
+            ..area
+        },
+    );
+    widgets::input::render(
+        frame,
+        Rect {
+            x: area.x.saturating_add(prefix_width),
+            width: area.width.saturating_sub(prefix_width),
+            height: 1,
+            ..area
+        },
+        text,
+        cursor,
+        placeholder,
+    )
+}
+
 /// worktree 对话框：搜索行、分隔线、两行条目与底部按钮；返回搜索光标位置。
 fn render_worktree_open(
     frame: &mut Frame<'_>,
@@ -972,7 +992,7 @@ fn render_worktree_open(
         return None;
     }
     let search_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
-    let cursor = widgets::input::render(
+    let cursor = render_input(
         frame,
         search_area,
         dialog.query.text(),

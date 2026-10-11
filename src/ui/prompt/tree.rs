@@ -103,14 +103,14 @@ fn paint_divider(buf: &mut Buffer, area: Rect, y: u16, focused: bool) {
     }
 }
 
-/// 绘制顶部搜索框行：图标 + 单行输入视口（与模态输入框一致：硬件光标 + 占位）；
+/// 绘制顶部搜索框行：`>` 前缀 + 单行输入视口（与模态输入框一致：硬件光标 + 占位）；
 /// 返回光标位置（图标与空档之后为输入起点）。
 fn paint_search_row(buf: &mut Buffer, area: Rect, panel: &PromptPanel) -> Option<(u16, u16)> {
     let mut x = paint_text(
         buf,
         area.x,
         area.y,
-        text::PROMPT_TREE_SEARCH_ICON,
+        text::INPUT_PREFIX_ICON,
         style::accent(),
         area.right(),
     );

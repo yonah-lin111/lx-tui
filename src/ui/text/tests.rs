@@ -49,7 +49,6 @@ fn user_visible_labels_are_clean_ascii() {
         PROMPT_TEMP_PROMPT_LABEL,
         MODAL_CLOSE,
         SAVE_DRAFT_TITLE,
-        SAVE_DRAFT_NAME,
         SAVE_DRAFT_ROOT,
         SAVE_DRAFT_NEW_FOLDER,
         PROMPT_DEFAULT_NAME,
@@ -223,6 +222,11 @@ fn ui_icons_are_single_width_and_non_pua() {
     );
 
     assert_eq!(TAB_ITEM_ICON.width(), 1, "Tab 图标必须严格占用 1 列宽");
+    assert_eq!(
+        INPUT_PREFIX_ICON.width(),
+        1,
+        "输入框前缀图标必须严格占用 1 列宽"
+    );
     assert_eq!(WORKSPACE_GIT_ICON.width(), 1, "Git 图标必须严格占用 1 列宽");
     assert_eq!(
         WORKSPACE_NON_GIT_ICON.width(),

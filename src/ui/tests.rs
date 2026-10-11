@@ -2,9 +2,12 @@
 
 use super::*;
 use crate::app::actions::Action;
-use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
+use crate::app::overlay::{
+    ConfirmClose, Overlay, OverlayTarget, TextInput, WorktreeOpen, WorktreeOpenEntry,
+};
 use crate::app::state::{Workspace, WorkspaceGit};
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
+use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip, TooltipTarget};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
 use ratatui::backend::TestBackend;
@@ -558,6 +561,64 @@ fn expired_toast_is_not_rendered() {
     update::tick(&mut state, Instant::now() + TOAST_DURATION);
     let lines = render_lines(&state);
     assert!(!lines.iter().any(|line| line.contains(text::TOAST_COPIED)));
+}
+
+/// 渲染一帧并返回硬件光标状态：可见性与位置（TestBackend 记录 Hide/Show 与 MoveTo）。
+fn render_cursor(state: &AppState) -> (bool, (u16, u16)) {
+    let config = Config::default();
+    let mut terminal =
+        RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
+    if let Err(error) = terminal.draw(|frame| render(frame, state, &config)) {
+        panic!("draw failed: {error}");
+    }
+    let backend = terminal.backend();
+    let position = backend.cursor_position();
+    (backend.cursor_visible(), (position.x, position.y))
+}
+
+/// prompt 聚焦且处于树视图：搜索框持有硬件光标。
+fn focused_tree_state() -> AppState {
+    let mut state = AppState::demo();
+    state.prompt_focused = true;
+    state.workspaces[0].prompt_panel.mode = PromptMode::Tree;
+    state
+}
+
+#[test]
+fn tooltip_over_prompt_search_hides_hardware_cursor() {
+    let mut state = focused_tree_state();
+    let (visible, _) = render_cursor(&state);
+    assert!(visible, "无浮层时搜索框硬件光标可见");
+
+    let now = Instant::now();
+    state.tooltip = Some(Tooltip::new(TooltipTarget::PromptMode, now));
+    assert!(update::tick(&mut state, now + TOOLTIP_DELAY));
+    let (visible, _) = render_cursor(&state);
+    assert!(!visible, "tooltip 覆盖搜索框时硬件光标隐藏");
+}
+
+#[test]
+fn toast_over_prompt_search_hides_hardware_cursor() {
+    let mut state = focused_tree_state();
+    let view = view_for(&state);
+    let message = "x".repeat(usize::from(view.prompt.width.saturating_sub(6)));
+    let anchor = state.prompt.id();
+    update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Info, message, Some(anchor), Instant::now()),
+    );
+    let (visible, _) = render_cursor(&state);
+    assert!(!visible, "toast 覆盖搜索框时硬件光标隐藏");
+}
+
+#[test]
+fn modal_without_input_hides_prompt_hardware_cursor() {
+    let mut state = focused_tree_state();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(0),
+    }));
+    let (visible, _) = render_cursor(&state);
+    assert!(!visible, "模态接管后 prompt 搜索框硬件光标隐藏");
 }
 
 #[test]

@@ -250,7 +250,10 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "picker: \n{}",
         app.screen()
     );
-    assert!(app.wait_for("name"), "name input listed");
+    assert!(
+        app.wait_for(&format!("{} New prompt", text::INPUT_PREFIX_ICON)),
+        "name input listed"
+    );
     assert!(app.wait_for("+ New folder"), "new folder option listed");
     // 点击文件夹仅选中，不执行：选择器保持打开。
     app.click("/");

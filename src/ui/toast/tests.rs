@@ -204,7 +204,9 @@ fn toast_renders_close_button_and_hit_test() {
     let mut terminal =
         Terminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
     terminal
-        .draw(|frame| render(frame, screen, &state, &view, &rects, &Config::default()))
+        .draw(|frame| {
+            render(frame, screen, &state, &view, &rects, &Config::default());
+        })
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();
     let label: String = (close.x..close.right())

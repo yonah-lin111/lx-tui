@@ -25,37 +25,30 @@ pub fn target_at(
 }
 
 /// 绘制 tooltip；必须晚于下层内容、早于 toast；浮层是模态，打开时不渲染。
+/// 返回绘制出的盒矩形，供调用方隐藏被其覆盖的硬件光标。
 pub fn render(
     frame: &mut Frame<'_>,
     screen: Rect,
     state: &AppState,
     view: &ViewLayout,
     pane_rects: &[(PaneId, Rect)],
-) {
+) -> Option<Rect> {
     let command_panel_open = state.prompt.mention().is_some()
         || state.prompt.slash_panel().is_some()
         || state.prompt.panel().is_some();
     if state.overlay.is_some() || command_panel_open {
-        return;
+        return None;
     }
-    let Some(tooltip) = state
+    let tooltip = state
         .tooltip
         .as_ref()
-        .filter(|tooltip| tooltip.is_visible())
-    else {
-        return;
-    };
-    let Some(anchor) = targets(view, state, pane_rects)
+        .filter(|tooltip| tooltip.is_visible())?;
+    let anchor = targets(view, state, pane_rects)
         .into_iter()
-        .find_map(|(target, area)| (target == tooltip.target).then_some(area))
-    else {
-        return;
-    };
+        .find_map(|(target, area)| (target == tooltip.target).then_some(area))?;
     let title = text::TOOLTIP_TITLE;
     let hint = text::tooltip_hint(tooltip.target, state);
-    let Some(area) = rect(screen, anchor, title, hint) else {
-        return;
-    };
+    let area = rect(screen, anchor, title, hint)?;
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -71,7 +64,7 @@ pub fn render(
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return Some(area);
     }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -81,6 +74,7 @@ pub fn render(
         .alignment(Alignment::Center),
         inner,
     );
+    Some(area)
 }
 
 /// 全部可提示按钮及其矩形；渲染与鼠标命中共用同一几何。

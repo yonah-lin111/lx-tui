@@ -74,13 +74,19 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
     render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
-    tooltip::render(frame, area, state, &view, &pane_rects);
-    toast::render(frame, area, state, &view, &pane_rects, config);
+    let tooltip_area = tooltip::render(frame, area, state, &view, &pane_rects);
+    let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
     // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
+    // 非模态时若光标位置被 tooltip/toast 盒覆盖（后绘制），一并隐藏，避免覆盖浮层。
     let cursor = match state.overlay {
         Some(_) => overlay_cursor,
-        None => prompt_cursor,
+        None => prompt_cursor.filter(|position| {
+            !tooltip_area
+                .into_iter()
+                .chain(toast_area)
+                .any(|box_area| box_area.contains((*position).into()))
+        }),
     };
     if let Some(position) = cursor {
         frame.set_cursor_position(position);

@@ -57,6 +57,7 @@ pub fn rect(
 }
 
 /// 绘制 toast；必须晚于全部下层内容。
+/// 返回绘制出的盒矩形，供调用方隐藏被其覆盖的硬件光标。
 pub fn render(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -64,13 +65,9 @@ pub fn render(
     view: &ViewLayout,
     pane_rects: &[(PaneId, Rect)],
     config: &Config,
-) {
-    let Some(area) = rect(state, view, pane_rects, screen, config) else {
-        return;
-    };
-    let Some(toast) = state.toast.as_ref() else {
-        return;
-    };
+) -> Option<Rect> {
+    let area = rect(state, view, pane_rects, screen, config)?;
+    let toast = state.toast.as_ref()?;
     frame.render_widget(Clear, area);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -94,7 +91,7 @@ pub fn render(
         );
     }
     if inner.width == 0 || inner.height == 0 {
-        return;
+        return Some(area);
     }
     let width = usize::from(inner.width);
     frame.render_widget(
@@ -105,6 +102,7 @@ pub fn render(
         .alignment(Alignment::Center),
         inner,
     );
+    Some(area)
 }
 
 /// 命中 toast 右上角关闭按钮。

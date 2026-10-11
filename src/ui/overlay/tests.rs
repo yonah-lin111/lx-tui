@@ -55,6 +55,11 @@ fn rename_state(name: &str) -> AppState {
     state
 }
 
+/// 模态输入行的 `> ` 前缀宽度（图标 + 空档）。
+fn input_prefix_width() -> u16 {
+    text::INPUT_PREFIX_ICON.chars().count() as u16 + 1
+}
+
 #[test]
 fn trust_overlay_renders_question_path_and_buttons() {
     let mut state = AppState::demo();
@@ -177,9 +182,13 @@ fn modal_uses_overlay_panel_background() {
 fn rename_modal_renders_input_buttons_and_cursor() {
     let state = rename_state("workspace 2");
     let (lines, cursor) = draw_overlay(&state);
-    assert_eq!(cursor, Some((32, 10)));
+    assert_eq!(cursor, Some((34, 10)));
     assert!(lines[9].contains(text::RENAME_WORKSPACE_TITLE));
-    assert!(lines[10].contains("workspace 2"));
+    assert!(
+        lines[10].contains(&format!("{} workspace 2", text::INPUT_PREFIX_ICON)),
+        "输入行带 > 前缀: {:?}",
+        lines[10]
+    );
     assert!(!lines[10].contains(text::RENAME_PLACEHOLDER));
     let buttons = lines[12].clone();
     assert!(buttons.contains(text::BUTTON_SAVE), "{buttons}");
@@ -206,14 +215,14 @@ fn rename_modal_keeps_cursor_visible_for_long_names() {
     assert!(cursor.0 < SCREEN.right());
     assert_eq!(cursor.0, 58);
     assert_eq!(cursor.1, 10);
-    assert_eq!(lines[10].chars().filter(|ch| *ch == 'x').count(), 37);
+    assert_eq!(lines[10].chars().filter(|ch| *ch == 'x').count(), 35);
 }
 
 #[test]
 fn rename_modal_cursor_uses_display_width_for_wide_chars() {
     let state = rename_state("中文名称");
     let (lines, cursor) = draw_overlay(&state);
-    assert_eq!(cursor, Some((29, 10)));
+    assert_eq!(cursor, Some((31, 10)));
     let text: String = lines[10].chars().filter(|ch| !ch.is_whitespace()).collect();
     assert!(text.contains("中文名称"), "{text}");
 }
@@ -223,7 +232,7 @@ fn rename_modal_scrolls_by_display_width_for_long_wide_names() {
     let state = rename_state(&"中".repeat(30));
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, Some((57, 10)));
-    assert_eq!(lines[10].matches('中').count(), 18);
+    assert_eq!(lines[10].matches('中').count(), 17);
 }
 
 #[test]
@@ -640,7 +649,14 @@ fn save_draft_picker_renders_name_tree_entries_and_buttons() {
     let (lines, cursor) = draw_overlay(&state);
     let joined = lines.join("\n");
     assert!(joined.contains(text::SAVE_DRAFT_TITLE), "{joined}");
-    assert!(joined.contains(text::SAVE_DRAFT_NAME), "{joined}");
+    assert!(
+        joined.contains(&format!(
+            "{} {}",
+            text::INPUT_PREFIX_ICON,
+            text::PROMPT_DEFAULT_NAME
+        )),
+        "名称输入行带 > 前缀: {joined}"
+    );
     assert!(
         joined.contains(text::PROMPT_DEFAULT_NAME),
         "名称预填: {joined}"
@@ -652,7 +668,7 @@ fn save_draft_picker_renders_name_tree_entries_and_buttons() {
     assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
     // 选中行非内联输入：硬件光标在名称输入。
     let shell = save_draft_shell(SCREEN, 4).expect("shell fits");
-    let name_x = shell.inner.x + text::SAVE_DRAFT_NAME.chars().count() as u16 + 1;
+    let name_x = shell.inner.x + input_prefix_width();
     assert_eq!(
         cursor,
         Some((
@@ -710,8 +726,8 @@ fn new_folder_dialog_renders_input_buttons_and_hit() {
     let shell = new_node_shell(SCREEN).expect("shell fits");
     assert_eq!(
         cursor,
-        Some((shell.inner.x, shell.inner.y)),
-        "空输入时光标在名称起点"
+        Some((shell.inner.x + input_prefix_width(), shell.inner.y)),
+        "空输入时光标在 > 前缀后的名称起点"
     );
     let buttons = widgets::modal::button_row(
         shell.inner,

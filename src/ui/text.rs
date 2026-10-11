@@ -75,8 +75,9 @@ pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
 /// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
 pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
 pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
+/// 单行输入框左侧统一前缀图标：模态输入框与 prompt 列表搜索框共用（置于输入区左侧、不占输入内容）。
+pub const INPUT_PREFIX_ICON: &str = ">";
 /// 提示词树：搜索框、临时提示词按钮与连接符（子层末项 `└─`、其余 `├─`，与侧栏工作区树一致）。
-pub const PROMPT_TREE_SEARCH_ICON: &str = "⌕";
 pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
 /// 树视图 `[+]`：打开临时草稿编辑视图（与侧栏/标签栏 `[+]` 同为“新建”语义）。
 pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[+]";
@@ -90,9 +91,8 @@ pub const PROMPT_TREE_MIDDLE: &str = "├─";
 /// 提示词树空状态与搜索无命中占位。
 pub const PROMPT_TREE_EMPTY: &str = "no prompts yet";
 pub const PROMPT_TREE_NO_MATCHES: &str = "no matching prompts";
-/// 临时草稿保存选择器：标题、提示词名称标签、根层项与新建文件夹动作项。
+/// 临时草稿保存选择器：标题、根层项与新建文件夹动作项。
 pub const SAVE_DRAFT_TITLE: &str = "save prompt to folder";
-pub const SAVE_DRAFT_NAME: &str = "name";
 pub const SAVE_DRAFT_ROOT: &str = "/";
 pub const SAVE_DRAFT_NEW_FOLDER: &str = "+ New folder";
 /// 新建提示词与文件夹的默认名（可随后重命名）。
