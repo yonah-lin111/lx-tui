@@ -263,6 +263,9 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
         ("PROMPT_UNDO_LABEL", PROMPT_UNDO_LABEL),
         ("PROMPT_REDO_LABEL", PROMPT_REDO_LABEL),
         ("PROMPT_SELECT_ALL_LABEL", PROMPT_SELECT_ALL_LABEL),
+        ("PROMPT_MODE_LIST_LABEL", PROMPT_MODE_LIST_LABEL),
+        ("PROMPT_MODE_EDIT_LABEL", PROMPT_MODE_EDIT_LABEL),
+        ("PROMPT_TEMP_PROMPT_LABEL", PROMPT_TEMP_PROMPT_LABEL),
         ("TEMPLATE_BUTTON_COPY", TEMPLATE_BUTTON_COPY),
         ("TEMPLATE_BUTTON_CLEAN", TEMPLATE_BUTTON_CLEAN),
         ("TEMPLATE_BUTTON_DEL", TEMPLATE_BUTTON_DEL),
@@ -284,6 +287,7 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
         assert!(!is_pua, "{name} 图标 {icon:?} 位于私有区，终端会乱码");
     }
     assert_eq!(PROMPT_SAVE_DOT.width(), 1, "保存点必须严格 1 列宽");
+    assert_eq!(PROMPT_DRAFT_DOT.width(), 1, "草稿空心点必须严格 1 列宽");
 }
 
 #[test]

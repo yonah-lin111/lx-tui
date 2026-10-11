@@ -251,8 +251,8 @@ pub fn edit_prompt_draft(state: &mut AppState) -> bool {
     true
 }
 
-/// 打开选中条目的编辑视图（`[edit]` 按钮 / 树视图回车）；
-/// 选中行非条目时回退打开临时草稿，保证 `[edit]` 永不无响应。
+/// 打开选中条目的编辑视图（`[✎]` 按钮 / 树视图回车）；
+/// 选中行非条目时回退打开临时草稿，保证 `[✎]` 永不无响应。
 pub fn edit_selected_prompt(state: &mut AppState) -> bool {
     let index = state.prompt_workspace();
     let Some(item_id) = state
@@ -302,8 +302,7 @@ pub fn clear_prompt_search(state: &mut AppState) -> bool {
     apply_prompt_search(state, &EditorCommand::Escape)
 }
 
-/// 立即保存（工具栏圆点与 Ctrl/Cmd+S 共用）：条目提交落库；
-/// 临时草稿提交缓冲后打开保存到文件夹选择器。
+/// 立即保存（工具栏圆点）：条目提交落库；临时草稿提交缓冲后打开保存到文件夹选择器。
 pub fn save_prompt_now(state: &mut AppState) {
     if prompt_draft_editing(state) {
         commit_editing_prompt(state);
@@ -314,7 +313,16 @@ pub fn save_prompt_now(state: &mut AppState) {
     }
 }
 
-/// 工具栏 [temp prompt]：提交当前编辑内容并打开临时草稿编辑视图。
+/// Ctrl/Cmd+S 语义：内容为空（去空白）时不响应——空草稿不打开选择器、空条目不落库；
+/// 非空时与工具栏圆点一致。
+pub fn save_prompt_shortcut(state: &mut AppState) {
+    if state.prompt.text().trim().is_empty() {
+        return;
+    }
+    save_prompt_now(state);
+}
+
+/// 工具栏 [+]：提交当前编辑内容并打开临时草稿编辑视图。
 pub fn open_temp_prompt(state: &mut AppState) -> bool {
     commit_editing_prompt(state);
     edit_prompt_draft(state)

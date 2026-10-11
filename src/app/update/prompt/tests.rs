@@ -130,7 +130,7 @@ fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
     assert!(state.workspaces[0].prompt_panel.search.text().is_empty());
     assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
 
-    // 工具栏 [temp prompt] 入口打开草稿编辑视图。
+    // 工具栏 [+] 入口打开草稿编辑视图。
     assert!(open_temp_prompt(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(

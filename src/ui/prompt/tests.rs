@@ -558,6 +558,20 @@ fn renders_toolbar_buttons_and_divider() {
         false,
     );
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
+
+    // 临时草稿：空心点（与空闲 agent 状态一致），恒灰。
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        Some(text::PROMPT_DRAFT_TITLE),
+        true,
+    );
+    assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_DRAFT_DOT);
+    assert_eq!(buf[(save_x, bar.y)].fg, Color::DarkGray, "草稿恒灰空心点");
 }
 
 #[test]

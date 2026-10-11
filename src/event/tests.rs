@@ -1927,6 +1927,48 @@ fn ctrl_s_saves_open_item_immediately() {
 }
 
 #[test]
+fn ctrl_s_ignores_empty_prompt_content() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    state.prompt_focused = true;
+    let press =
+        |state: &mut AppState, sessions: &mut HashMap<PaneId, PtySession>, dirty: &mut bool| {
+            handle_terminal_event(
+                TerminalEvent::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+                state,
+                sessions,
+                &geo,
+                &config,
+                dirty,
+            );
+        };
+
+    // 空草稿：不响应（不开保存选择器、无落库效应）。
+    press(&mut state, &mut sessions, &mut dirty);
+    assert!(state.overlay.is_none(), "空草稿 Ctrl+S 不打开选择器");
+    assert!(state.effects.is_empty(), "空草稿无落库效应");
+
+    // 仅空白同样不响应。
+    state.prompt.insert_str("   ");
+    press(&mut state, &mut sessions, &mut dirty);
+    assert!(state.overlay.is_none(), "空白草稿 Ctrl+S 不响应");
+
+    // 非空内容回归：照常提交缓冲并打开选择器。
+    state.prompt.insert_str("body");
+    press(&mut state, &mut sessions, &mut dirty);
+    assert!(
+        matches!(
+            state.overlay,
+            Some(crate::app::overlay::Overlay::SaveDraft(_))
+        ),
+        "非空草稿照常打开选择器"
+    );
+}
+
+#[test]
 fn mouse_click_prompt_toolbar_select_all_then_typing_replaces_text() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);

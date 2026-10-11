@@ -20,15 +20,15 @@ pub const PROMPT_TREE_HEADER_HEIGHT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
 
-/// 模式按钮（`[list]` / `[edit]`）宽度（列）。
-const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 6;
+/// 模式按钮（`[≡]` / `[✎]`）宽度（列）。
+const PROMPT_TOOLBAR_BUTTON_WIDTH: u16 = 3;
 /// 撤销/重做按钮（`[←]` / `[→]`）宽度（列）。
 const PROMPT_UNDO_REDO_WIDTH: u16 = 3;
 /// 工具栏按钮之间的空档（列）。
 const PROMPT_TOOLBAR_BUTTON_GAP: u16 = 1;
-/// 树视图 `[temp prompt]` 按钮宽度（列）。
-const PROMPT_TEMP_PROMPT_WIDTH: u16 = 13;
-/// 显示 `[temp prompt]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
+/// 树视图 `[+]` 按钮宽度（列）。
+const PROMPT_TEMP_PROMPT_WIDTH: u16 = 3;
+/// 显示 `[+]`（右对齐）所需的最小内容区宽度（列）：不足时隐藏，避免与左侧模式按钮重叠。
 const PROMPT_TEMP_PROMPT_MIN_WIDTH: u16 =
     PROMPT_TOOLBAR_BUTTON_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_TEMP_PROMPT_WIDTH + 1;
 /// `[*]` 标签宽度（列）。
@@ -50,9 +50,9 @@ const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptToolbarButton {
-    /// 视图模式切换：编辑视图显示 `[list]`、树视图显示 `[edit]`。
+    /// 视图模式切换：编辑视图显示 `[≡]`、树视图显示 `[✎]`。
     Mode,
-    /// 树视图 `[temp prompt]`：打开临时草稿编辑视图（仅树视图显示）。
+    /// 树视图 `[+]`：打开临时草稿编辑视图（仅树视图显示）。
     TempPrompt,
     Undo,
     Redo,

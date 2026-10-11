@@ -1,7 +1,7 @@
 //! PTY 集成测试：prompt 面板真实鼠标/键盘流转。
 //!
-//! 覆盖用户反馈路径：[edit] 在无选中条目（含空树）时回退打开草稿、
-//! 工具栏 [temp prompt] 进入草稿编辑、保存点 → 文件夹选择器落库、
+//! 覆盖用户反馈路径：[/] 在无选中条目（含空树）时回退打开草稿、
+//! 工具栏 [+] 进入草稿编辑、保存点 → 文件夹选择器落库、
 //! 树视图搜索框（模态输入对齐）输入即过滤与 Esc 清空、条目右键 CRUD（重命名）。
 
 use std::io::{Read, Write};
@@ -120,6 +120,30 @@ impl App {
         self.click_at(col, row);
     }
 
+    /// 在包含 `anchor` 的行内查找 `needle`（避开其他行的同名按钮，如侧栏/标签栏的 `[+]`）。
+    fn find_in_row_of(&self, anchor: &str, needle: &str) -> Option<(u16, u16)> {
+        let screen = self.screen();
+        let width = needle.chars().count();
+        for (row, line) in screen.lines().enumerate() {
+            if !line.contains(anchor) {
+                continue;
+            }
+            if let Some(byte_index) = line.find(needle) {
+                let col = line[..byte_index].chars().count() + width / 2;
+                return Some((col as u16, row as u16));
+            }
+        }
+        None
+    }
+
+    /// 点击包含 `anchor` 的行内的 `needle`。
+    fn click_in_row_of(&self, anchor: &str, needle: &str) {
+        let (col, row) = self
+            .find_in_row_of(anchor, needle)
+            .unwrap_or_else(|| panic!("row with {anchor:?} missing {needle:?}\n{}", self.screen()));
+        self.click_at(col, row);
+    }
+
     fn right_click(&self, col: u16, row: u16) {
         let x = col + 1;
         let y = row + 1;
@@ -195,14 +219,22 @@ fn spawn_trusted(label: &str) -> App {
 fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     let app = spawn_trusted("flow");
 
-    // [list] → 树视图：搜索框、[temp prompt] 按钮与空状态。
-    app.click("[list]");
+    // [≡] → 树视图：搜索框、[+] 按钮与空状态。
+    app.click(text::PROMPT_MODE_LIST_LABEL);
     assert!(app.wait_for("no prompts yet"), "tree: \n{}", app.screen());
-    assert!(app.wait_for("[edit]"), "mode button flips");
-    assert!(app.wait_for("[temp prompt]"), "temp prompt button listed");
+    assert!(
+        app.wait_for(text::PROMPT_MODE_EDIT_LABEL),
+        "mode button flips"
+    );
+    assert!(
+        app.find_in_row_of(text::PROMPT_MODE_EDIT_LABEL, text::PROMPT_TEMP_PROMPT_LABEL)
+            .is_some(),
+        "temp prompt button listed: \n{}",
+        app.screen()
+    );
 
-    // 空树点 [edit]：回退打开草稿编辑视图，不再无响应。
-    app.click("[edit]");
+    // 空树点 [/]：回退打开草稿编辑视图，不再无响应。
+    app.click(text::PROMPT_MODE_EDIT_LABEL);
     assert!(
         app.wait_for(text::PROMPT_UNDO_LABEL),
         "editor reentered: \n{}",
@@ -212,7 +244,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     // 输入草稿内容后点保存点 → 文件夹选择器。
     app.send(b"hello draft");
     assert!(app.wait_for("hello draft"), "draft typed");
-    app.click("●");
+    app.click(text::PROMPT_DRAFT_DOT);
     assert!(
         app.wait_for("save prompt to folder"),
         "picker: \n{}",
@@ -237,7 +269,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
 
     // 回到树：出现正式条目行与状态标签。
-    app.click("[list]");
+    app.click(text::PROMPT_MODE_LIST_LABEL);
     assert!(app.wait_for("• New prompt"), "item row: \n{}", app.screen());
     assert!(app.wait_for("[todo]"), "status label");
 
@@ -267,8 +299,8 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
 
-    // 点击工具栏 [temp prompt] → 草稿编辑视图；命名浮层新建文件夹保存全流程。
-    app.click("[temp prompt]");
+    // 点击工具栏 [+] → 草稿编辑视图；命名浮层新建文件夹保存全流程。
+    app.click_in_row_of(text::PROMPT_MODE_EDIT_LABEL, text::PROMPT_TEMP_PROMPT_LABEL);
     assert!(
         app.wait_for("Write your prompt"),
         "draft editor reopened: \n{}",
@@ -276,7 +308,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
     app.send(b"second draft");
     assert!(app.wait_for("second draft"), "second draft typed");
-    app.click("●");
+    app.click(text::PROMPT_DRAFT_DOT);
     assert!(app.wait_for("+ New folder"), "picker reopened");
     // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");
@@ -300,7 +332,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "draft saved into new folder: \n{}",
         app.screen()
     );
-    app.click("[list]");
+    app.click(text::PROMPT_MODE_LIST_LABEL);
     assert!(
         app.wait_for("notes"),
         "new folder visible in tree: \n{}",

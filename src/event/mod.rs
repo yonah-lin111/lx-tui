@@ -429,7 +429,7 @@ fn handle_terminal_event(
                     *dirty = true;
                 }
                 Routed::SavePrompt => {
-                    update::save_prompt_now(state);
+                    update::save_prompt_shortcut(state);
                     *dirty = true;
                 }
                 Routed::Copy => {

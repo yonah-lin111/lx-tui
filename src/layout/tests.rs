@@ -370,8 +370,8 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
     let hit = |column: u16, row: u16| prompt_toolbar_button_at(panel, column, row, false);
     assert_eq!(hit(bar.x, bar.y), Some(PromptToolbarButton::Mode));
-    assert_eq!(hit(bar.x + 7, bar.y), Some(PromptToolbarButton::Undo));
-    assert_eq!(hit(bar.x + 11, bar.y), Some(PromptToolbarButton::Redo));
+    assert_eq!(hit(bar.x + 4, bar.y), Some(PromptToolbarButton::Undo));
+    assert_eq!(hit(bar.x + 8, bar.y), Some(PromptToolbarButton::Redo));
     let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
         .expect("select all fits");
     assert_eq!(
@@ -381,7 +381,7 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
     let save =
         prompt_toolbar_button_rect(panel, PromptToolbarButton::Save, false).expect("save visible");
     assert_eq!(hit(save.x, bar.y), Some(PromptToolbarButton::Save));
-    assert_eq!(hit(bar.x + 6, bar.y), None, "按钮空档不命中");
+    assert_eq!(hit(bar.x + 3, bar.y), None, "按钮空档不命中");
     assert_eq!(
         hit(bar.x + 1, bar.y + PROMPT_TOOLBAR_HEIGHT),
         None,
@@ -391,8 +391,8 @@ fn prompt_toolbar_buttons_hit_expected_cells() {
 
 #[test]
 fn prompt_toolbar_hides_select_all_when_narrow() {
-    // 内容区宽度 19 < 20：隐藏 select all，保留模式/undo/redo 与保存点。
-    let panel = Rect::new(0, 0, 21, 8);
+    // 内容区宽度 16 < 17：隐藏 select all，保留模式/undo/redo 与保存点。
+    let panel = Rect::new(0, 0, 18, 8);
     assert_eq!(
         prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false),
         None
@@ -412,8 +412,8 @@ fn prompt_toolbar_hides_select_all_when_narrow() {
         Some(PromptToolbarButton::Save)
     );
 
-    // 内容区宽度 20：刚好容纳按钮组，select all 恢复显示。
-    let panel = Rect::new(0, 0, 22, 8);
+    // 内容区宽度 17：刚好容纳按钮组，select all 恢复显示。
+    let panel = Rect::new(0, 0, 19, 8);
     assert!(prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false).is_some());
 }
 
@@ -480,7 +480,7 @@ fn prompt_toolbar_tree_mode_shows_temp_prompt_only() {
     let temp = prompt_toolbar_button_rect(panel, PromptToolbarButton::TempPrompt, true)
         .expect("temp prompt visible in tree");
     assert_eq!(temp.right(), bar.right() - 1, "右对齐、与边框留 1 列");
-    assert_eq!(temp.width, 13);
+    assert_eq!(temp.width, 3);
     assert_eq!(
         prompt_toolbar_button_at(panel, temp.x, bar.y, true),
         Some(PromptToolbarButton::TempPrompt)

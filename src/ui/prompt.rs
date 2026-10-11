@@ -78,8 +78,8 @@ fn render_divider(panel: Rect, header: Rect, buf: &mut Buffer, focused: bool) {
     }
 }
 
-/// 工具栏：模式切换按钮常显；树视图追加 `[temp prompt]`；编辑视图追加
-/// undo/redo（不可用时置灰）、select all 与保存状态点。
+/// 工具栏：模式切换按钮常显；树视图追加 `[+]`；编辑视图追加
+/// undo/redo（不可用时置灰）、select all 与保存状态点（条目实心、草稿空心恒灰）。
 fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMode, draft: bool) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
@@ -120,7 +120,11 @@ fn render_toolbar(panel: Rect, buf: &mut Buffer, prompt: &Prompt, mode: PromptMo
             ),
             (
                 PromptToolbarButton::Save,
-                text::PROMPT_SAVE_DOT,
+                if draft {
+                    text::PROMPT_DRAFT_DOT
+                } else {
+                    text::PROMPT_SAVE_DOT
+                },
                 if draft {
                     style::status_dot_draft()
                 } else {

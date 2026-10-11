@@ -1250,7 +1250,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(toolbar.contains(text::PROMPT_UNDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_REDO_LABEL), "{toolbar}");
     assert!(toolbar.contains(text::PROMPT_SELECT_ALL_LABEL), "{toolbar}");
-    assert!(toolbar.contains(text::PROMPT_SAVE_DOT), "{toolbar}");
+    assert!(toolbar.contains(text::PROMPT_DRAFT_DOT), "{toolbar}");
     assert!(
         !toolbar.contains(text::DIVIDER_MID),
         "分割线不穿过按钮行: {toolbar}"

@@ -64,18 +64,22 @@ pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 pub const PROMPT_UNDO_LABEL: &str = "[←]";
 pub const PROMPT_REDO_LABEL: &str = "[→]";
 pub const PROMPT_SELECT_ALL_LABEL: &str = "[*]";
+/// 条目保存状态点：已保存实心绿、未保存实心黄。
 pub const PROMPT_SAVE_DOT: &str = "●";
+/// 临时草稿保存状态点：空心（与空闲 agent 状态圆点一致），恒灰。
+pub const PROMPT_DRAFT_DOT: &str = "○";
 /// prompt 未钉住时的按钮（点击钉住）。
 pub const PROMPT_PIN_LABEL: &str = "[pin]";
 /// prompt 已钉住时的按钮（点击释放）。
 pub const PROMPT_UNPIN_LABEL: &str = "[unpin]";
-/// prompt 视图模式按钮：编辑视图显示 `[list]`、树视图显示 `[edit]`。
-pub const PROMPT_MODE_LIST_LABEL: &str = "[list]";
-pub const PROMPT_MODE_EDIT_LABEL: &str = "[edit]";
+/// prompt 视图模式按钮：编辑视图显示 `[≡]`（切到列表）、树视图显示 `[/]`（切到编辑）。
+pub const PROMPT_MODE_LIST_LABEL: &str = "[≡]";
+pub const PROMPT_MODE_EDIT_LABEL: &str = "[/]";
 /// 提示词树：搜索框、临时提示词按钮与连接符（子层末项 `└─`、其余 `├─`，与侧栏工作区树一致）。
 pub const PROMPT_TREE_SEARCH_ICON: &str = "⌕";
 pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
-pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[temp prompt]";
+/// 树视图 `[+]`：打开临时草稿编辑视图（与侧栏/标签栏 `[+]` 同为“新建”语义）。
+pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[+]";
 /// 临时草稿在编辑视图分割线行的标题。
 pub const PROMPT_DRAFT_TITLE: &str = "temp prompt";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";
