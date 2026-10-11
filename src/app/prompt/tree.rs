@@ -360,6 +360,10 @@ pub struct PromptPanel {
     temps: Vec<TempPrompt>,
     /// 下一个临时提示词 id（单调递增，不复用）。
     next_temp_id: u64,
+    /// 进入树视图时暂存的编辑绑定；返回编辑且用户未改过选中时恢复。
+    tree_return: Option<PromptEditing>,
+    /// 本次树视图中用户是否显式改过选中（点击行 / 方向键）。
+    tree_selection_touched: bool,
     /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
     pub search: TextInput,
 }
@@ -379,7 +383,38 @@ impl PromptPanel {
                 content: String::new(),
             }],
             next_temp_id: 1,
+            tree_return: None,
+            tree_selection_touched: false,
             search: TextInput::new(""),
+        }
+    }
+
+    /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白 temp 回收之后调用）。
+    pub fn enter_tree_view(&mut self) {
+        self.tree_return = self.editing;
+        self.tree_selection_touched = false;
+    }
+
+    /// 记录用户显式改过选中（点击行 / 方向键）。
+    pub fn mark_tree_selection(&mut self) {
+        self.tree_selection_touched = true;
+    }
+
+    /// 本次树视图中用户是否显式改过选中。
+    pub fn tree_selection_touched(&self) -> bool {
+        self.tree_selection_touched
+    }
+
+    /// 返回编辑视图的恢复目标：暂存绑定仍有效时返回其绑定（用户未改过选中时由调用方取用）。
+    pub fn tree_restore_target(&self) -> Option<PromptEditing> {
+        match self.tree_return {
+            Some(PromptEditing::Item(id)) if self.tree.item(id).is_some() => {
+                Some(PromptEditing::Item(id))
+            }
+            Some(PromptEditing::Temp(id)) if self.temp(id).is_some() => {
+                Some(PromptEditing::Temp(id))
+            }
+            _ => None,
         }
     }
 

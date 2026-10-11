@@ -400,6 +400,83 @@ fn scroll_clamps_and_keeps_selection_visible() {
 }
 
 #[test]
+fn mode_roundtrip_without_selection_keeps_temp_editor() {
+    let mut state = AppState::demo();
+    state.workspaces[0].prompt_panel.tree.replace(
+        vec![],
+        vec![PromptItem {
+            id: 10,
+            folder_id: None,
+            name: "loose".into(),
+            content: "body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+    );
+    // 初始编辑视图绑定空 temp；列表首行即条目（默认高亮）。
+    assert!(matches!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(_))
+    ));
+    show_prompt_tree(&mut state);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.rows()[0].kind,
+        PromptRowKind::Item
+    );
+    // 未显式选中任何行：返回编辑保持原 temp 绑定，不自动打开首行条目。
+    toggle_prompt_panel_mode(&mut state);
+    assert!(matches!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(_))
+    ));
+    assert_eq!(state.prompt.text(), "");
+}
+
+#[test]
+fn mode_roundtrip_restores_open_item_without_selection() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 12));
+    show_prompt_tree(&mut state);
+    // 过滤自动把选中落到命中行（非用户显式选中）。
+    apply_editor(&mut state, EditorCommand::InsertChar('l'));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected, 0,
+        "过滤命中 loose"
+    );
+    toggle_prompt_panel_mode(&mut state);
+    // 恢复进入列表前的条目（而非过滤高亮行）。
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
+    assert_eq!(state.prompt.text(), "nested content");
+}
+
+#[test]
+fn mode_roundtrip_with_explicit_selection_opens_selected_item() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    move_prompt_selection(&mut state, 2, 8);
+    toggle_prompt_panel_mode(&mut state);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
+}
+
+#[test]
+fn mode_roundtrip_falls_back_to_temp_when_return_target_deleted() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    show_prompt_tree(&mut state);
+    delete_prompt_item(&mut state, 0, 10);
+    toggle_prompt_panel_mode(&mut state);
+    assert!(matches!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(_))
+    ));
+}
+
+#[test]
 fn edit_falls_back_to_new_temp_when_selection_is_not_item() {
     let mut state = demo_state();
     enter_tree(&mut state);

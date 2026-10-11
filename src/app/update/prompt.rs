@@ -55,13 +55,14 @@ pub fn apply_prompt_tree(
     true
 }
 
-/// 切换树视图：提交编辑内容、回收空白 temp 并清空编辑绑定。
+/// 切换树视图：提交编辑内容、回收空白 temp、暂存编辑绑定并清空绑定。
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     if let Some(workspace) = state.workspaces.get_mut(index) {
         workspace.prompt_panel.drop_blank_temp_binding();
+        workspace.prompt_panel.enter_tree_view();
         workspace.prompt_panel.mode = PromptMode::Tree;
         workspace.prompt_panel.editing = None;
         // 行集可能因 temp/分区标签变化：选中吸附到最近可选中行。
@@ -71,12 +72,35 @@ pub fn show_prompt_tree(state: &mut AppState) {
     state.selection = None;
 }
 
-/// 工具栏模式按钮：树视图进入选中条目编辑（无选中条目回退草稿），编辑视图切回树。
+/// 工具栏模式按钮：树视图返回编辑（用户未显式改过选中时恢复进入列表前的编辑绑定），
+/// 编辑视图切回树。
 pub fn toggle_prompt_panel_mode(state: &mut AppState) {
     if prompt_tree_mode(state) {
-        edit_selected_prompt(state);
+        restore_or_edit_selected(state);
     } else {
         show_prompt_tree(state);
+    }
+}
+
+/// 树视图返回编辑：用户未改过选中时恢复进入列表前的绑定（条目或临时提示词；
+/// 绑定已失效/空白 temp 已回收时新建空临时提示词），改过选中时打开选中条目
+/// （非条目回退新建临时提示词）。
+fn restore_or_edit_selected(state: &mut AppState) -> bool {
+    let index = state.prompt_workspace();
+    let Some(workspace) = state.workspaces.get(index) else {
+        return false;
+    };
+    if workspace.prompt_panel.tree_selection_touched() {
+        return edit_selected_prompt(state);
+    }
+    match workspace.prompt_panel.tree_restore_target() {
+        Some(PromptEditing::Item(id)) => {
+            // 恢复目标须在未过滤列表中可见：先清搜索，保证服务端选中成功。
+            clear_search_for(state, index);
+            edit_prompt_item(state, index, id)
+        }
+        Some(PromptEditing::Temp(id)) => edit_prompt_temp(state, index, id),
+        None => open_temp_prompt(state),
     }
 }
 
@@ -165,6 +189,7 @@ pub fn move_prompt_selection(state: &mut AppState, delta: isize, visible: usize)
         return false;
     }
     workspace.prompt_panel.selected = selected;
+    workspace.prompt_panel.mark_tree_selection();
     scroll_selection_into_view(&mut workspace.prompt_panel, visible);
     true
 }
@@ -179,6 +204,7 @@ pub fn select_prompt_row(state: &mut AppState, row: usize) -> bool {
         return false;
     }
     workspace.prompt_panel.selected = row;
+    workspace.prompt_panel.mark_tree_selection();
     true
 }
 
