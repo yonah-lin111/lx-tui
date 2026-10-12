@@ -320,6 +320,16 @@ impl Prompt {
         true
     }
 
+    /// 关闭 worktree 选择器且不改文本（点击文本区时调用，等同 `@` 面板的点击失焦）；
+    /// 返回是否关闭。选择器锚定光标行，不先关闭会让面板跟着点击漂移且无从关闭。
+    pub fn dismiss_worktree_chooser(&mut self) -> bool {
+        if !self.worktree_chooser_open() {
+            return false;
+        }
+        self.slash = None;
+        true
+    }
+
     /// 斜杠命令面板打开时关闭且不改文本；选择器关闭时丢弃 `/gitWorkTree` 行；
     /// 返回是否消费该按键。
     pub fn slash_escape(&mut self) -> bool {

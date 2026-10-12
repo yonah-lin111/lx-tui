@@ -1996,6 +1996,42 @@ fn bound_linked_block_asks_root_before_listing_files() {
 }
 
 #[test]
+fn chooser_highlight_survives_context_sync() {
+    // 事件层每次按键都会先同步上下文根（内部重算面板）：选择器高亮必须停在用户
+    // 移动到的项上，回车确认的也必须是高亮项（曾被打回 main，键盘无法切换取根）。
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.insert_char('@');
+    assert_eq!(prompt.mention_chooser(), Some(0), "默认高亮 main");
+    assert!(prompt.mention_move(1), "移动到 wt");
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    assert_eq!(prompt.mention_chooser(), Some(1), "同步根后高亮保持 wt");
+    assert!(prompt.mention_move(-1), "键盘切回 main");
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    assert_eq!(prompt.mention_chooser(), Some(0), "同步根后高亮保持 main");
+    prompt.mention_move(1);
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    assert!(prompt.mention_confirm(), "确认取根");
+    let (_, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(
+        root,
+        PathBuf::from("/repo/.worktrees/feat"),
+        "确认的是高亮的 wt"
+    );
+}
+
+#[test]
 fn binding_the_main_checkout_lists_files_without_root_choice() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));

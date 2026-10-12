@@ -418,7 +418,9 @@ impl MentionState {
             self.choice_binding = None;
             return;
         };
-        // 绑定变化（换块、改分支、脱离块）：取根选择复位并作废旧候选。
+        // 绑定签名变化（换块、改分支、脱离块）才复位取根选择；签名随会话记录，
+        // 同一会话内的重算不得复位：事件层每次按键都会先同步根并走到这里，
+        // 否则选择器高亮每次都被打回 main（键盘选 wt 按回车写成 main）。
         let binding = markdown::block_worktree_branch(text, cursor);
         if self.choice_binding.as_ref() != binding.as_ref() {
             if self.choice.take().is_some() {
@@ -427,7 +429,7 @@ impl MentionState {
                 self.generation = self.generation.wrapping_add(1);
             }
             self.chooser = None;
-            self.choice_binding = None;
+            self.choice_binding = binding;
         }
         let requiring_choice = self.root_choices(text, cursor).is_some() && self.choice.is_none();
         if requiring_choice {

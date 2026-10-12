@@ -178,6 +178,38 @@ fn place_prompt_cursor_maps_viewport_cell() {
 }
 
 #[test]
+fn prompt_click_dismisses_worktree_chooser_without_text_change() {
+    let mut state = AppState::demo();
+    // 工作区带 git 元数据：上下文根同步不会把仓库根清成 None 而顺带关掉面板，
+    // 关闭必须来自点击本身的处理。
+    let workspace = state.active_workspace;
+    state.workspaces[workspace].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo"),
+        is_linked: false,
+        branch: Some("main".into()),
+        main_branch: Some("main".into()),
+    });
+    state.prompt.resize(60, 12);
+    state.prompt_focused = true;
+    state.prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\nbody\n/gitW\n&&& addTemplate --end\n");
+    let cursor = state.prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    state.prompt.set_cursor_offset_for_test(cursor);
+    state.prompt.insert_char(' ');
+    state.prompt.backspace();
+    assert!(state.prompt.slash_confirm(), "opens chooser");
+    assert!(state.prompt.worktree_chooser_open());
+    let before = state.prompt.text().to_string();
+    // 点击文本区其他位置：选择器关闭且不改文本，不再跟随点击漂移（对齐 @ 面板）。
+    place_prompt_cursor(&mut state, 0, 1);
+    assert!(!state.prompt.worktree_chooser_open(), "点击关闭选择器");
+    assert_eq!(state.prompt.text(), before, "关闭不改文本");
+}
+
+#[test]
 fn toggle_agents_flips_flag() {
     let mut state = AppState::demo();
     apply(Action::ToggleAgents, &mut state);
