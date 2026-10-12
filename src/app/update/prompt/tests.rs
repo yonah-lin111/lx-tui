@@ -113,6 +113,74 @@ fn enter_on_item_opens_editor_and_escape_returns() {
 }
 
 #[test]
+fn prompt_row_double_click_detects_same_row_within_window() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let t0 = Instant::now();
+
+    assert!(!prompt_row_double_click(&mut state, 5, t0));
+    assert!(
+        !prompt_row_double_click(&mut state, 6, t0 + Duration::from_millis(50)),
+        "不同行不构成双击"
+    );
+    assert!(
+        !prompt_row_double_click(
+            &mut state,
+            6,
+            t0 + Duration::from_millis(50) + PROMPT_DOUBLE_CLICK_WINDOW + Duration::from_millis(1)
+        ),
+        "超出窗口不构成双击"
+    );
+    assert!(
+        prompt_row_double_click(
+            &mut state,
+            6,
+            t0 + Duration::from_millis(50) + PROMPT_DOUBLE_CLICK_WINDOW + Duration::from_millis(2)
+        ),
+        "窗口内同一行构成双击"
+    );
+    assert!(
+        !prompt_row_double_click(
+            &mut state,
+            6,
+            t0 + Duration::from_millis(50) + PROMPT_DOUBLE_CLICK_WINDOW + Duration::from_millis(3)
+        ),
+        "双击后点击序列复位"
+    );
+}
+
+#[test]
+fn open_prompt_row_edits_item_and_temp_but_not_folder() {
+    // 条目行：进入编辑视图并载入内容。
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    // 行序：tmp:(0)、default(1)、saved:(2)、root(3)、sub(4)、nested(5)、loose(6)。
+    assert!(open_prompt_row(&mut state, 5));
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
+    assert_eq!(state.prompt.text(), "nested content");
+
+    // 临时提示词行：进入其编辑视图。
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(open_prompt_row(&mut state, 1));
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert!(matches!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(_))
+    ));
+
+    // 文件夹行：不响应（折叠/展开由单击处理）。
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(!open_prompt_row(&mut state, 3));
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+}
+
+#[test]
 fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
     let mut state = demo_state();
     enter_tree(&mut state);

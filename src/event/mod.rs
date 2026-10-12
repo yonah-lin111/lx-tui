@@ -698,7 +698,11 @@ fn handle_terminal_event(
                                 mouse.row,
                             );
                             if let Some(index) = hit {
-                                update::click_prompt_row(state, index);
+                                if update::prompt_row_double_click(state, index, Instant::now()) {
+                                    update::open_prompt_row(state, index);
+                                } else {
+                                    update::click_prompt_row(state, index);
+                                }
                             }
                         } else {
                             update::place_prompt_cursor(state, row, col);

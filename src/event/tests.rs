@@ -2233,6 +2233,137 @@ fn mouse_click_prompt_text_row_places_cursor_below_header() {
     assert!(dirty);
 }
 
+/// prompt 树测试场景：进入树视图并重建树，返回匹配行的点击坐标；
+/// 树行自搜索框与分割线之下开始（行高 1）。
+fn prompt_tree_click(
+    state: &mut AppState,
+    geo: &Geometry,
+    folders: Vec<crate::app::prompt::PromptFolder>,
+    items: Vec<crate::app::prompt::PromptItem>,
+    kind: PromptRowKind,
+) -> (u16, u16) {
+    update::show_prompt_tree(state);
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(folders, items);
+    let area = layout::prompt_text_rect(geo.view.prompt);
+    let index = state.workspaces[0]
+        .prompt_panel
+        .rows()
+        .iter()
+        .position(|row| row.kind == kind)
+        .expect("row visible");
+    (area.x + 1, area.y + 2 + index as u16)
+}
+
+/// 左键双击同一坐标：事件循环连续注入两次按下。
+fn prompt_tree_double_click(
+    state: &mut AppState,
+    geo: &Geometry,
+    config: &Config,
+    point: (u16, u16),
+) {
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    for _ in 0..2 {
+        handle_terminal_event(
+            mouse(MouseEventKind::Down(MouseButton::Left), point.0, point.1),
+            state,
+            &mut sessions,
+            geo,
+            config,
+            &mut dirty,
+        );
+    }
+}
+
+#[test]
+fn mouse_double_click_prompt_item_row_opens_editor() {
+    use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus, PromptMode};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let point = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![],
+        vec![PromptItem {
+            id: 7,
+            folder_id: None,
+            name: "item".into(),
+            content: "item body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+        PromptRowKind::Item,
+    );
+
+    prompt_tree_double_click(&mut state, &geo, &config, point);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(7))
+    );
+    assert_eq!(
+        state.prompt.text(),
+        "item body",
+        "双击进入编辑并载入条目内容"
+    );
+    assert!(state.prompt_focused);
+}
+
+#[test]
+fn mouse_double_click_prompt_temp_row_opens_editor() {
+    use crate::app::prompt::{PromptEditing, PromptMode};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let point = prompt_tree_click(&mut state, &geo, vec![], vec![], PromptRowKind::Temp);
+
+    prompt_tree_double_click(&mut state, &geo, &config, point);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert!(
+        matches!(
+            state.workspaces[0].prompt_panel.editing,
+            Some(PromptEditing::Temp(_))
+        ),
+        "双击临时提示词行进入其编辑视图"
+    );
+}
+
+#[test]
+fn mouse_double_click_prompt_folder_toggles_once() {
+    use crate::app::prompt::{PromptFolder, PromptItem, PromptItemStatus};
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let point = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![PromptFolder {
+            id: 1,
+            parent_id: None,
+            name: "folder".into(),
+            collapsed: false,
+        }],
+        vec![PromptItem {
+            id: 7,
+            folder_id: Some(1),
+            name: "item".into(),
+            content: "item body".into(),
+            status: PromptItemStatus::Todo,
+        }],
+        PromptRowKind::Folder,
+    );
+
+    prompt_tree_double_click(&mut state, &geo, &config, point);
+    assert!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .folder(1)
+            .is_some_and(|folder| folder.collapsed),
+        "双击文件夹只折叠一次，不来回切换"
+    );
+}
+
 #[test]
 fn mouse_interacts_with_slash_panel() {
     let config = Config::default();

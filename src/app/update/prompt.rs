@@ -2,6 +2,8 @@
 //!
 //! DB 读写不在此层执行：变更登记为 `Effect` 出箱，由持久化服务执行并回报。
 
+use std::time::{Duration, Instant};
+
 use crate::app::actions::{EditorCommand, OverlayKey};
 use crate::app::effects::Effect;
 use crate::app::overlay::{
@@ -275,6 +277,36 @@ pub fn click_prompt_row(state: &mut AppState, row: usize) -> bool {
         PromptRowKind::Folder => toggle_prompt_folder(state, index, row_data) || changed,
         PromptRowKind::Item | PromptRowKind::Temp => changed,
         PromptRowKind::Section(_) => false,
+    }
+}
+
+/// prompt 树行双击判定窗口：同一可见行的两次左键按下间隔不超过该时长视为双击。
+const PROMPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
+
+/// 登记本次左键行点击并判定是否构成双击；双击后点击序列复位。
+pub fn prompt_row_double_click(state: &mut AppState, row: usize, now: Instant) -> bool {
+    let double = state.prompt_row_click.is_some_and(|(last_row, at)| {
+        last_row == row && now.saturating_duration_since(at) <= PROMPT_DOUBLE_CLICK_WINDOW
+    });
+    state.prompt_row_click = (!double).then_some((row, now));
+    double
+}
+
+/// 双击可见行：条目与临时提示词进入编辑视图；文件夹与分区标签行不响应
+/// （文件夹的单击已完成折叠/展开，双击不再叠加动作）。
+pub fn open_prompt_row(state: &mut AppState, row: usize) -> bool {
+    let index = state.prompt_workspace();
+    let Some(row_data) = state
+        .workspaces
+        .get(index)
+        .and_then(|workspace| workspace.prompt_panel.rows().get(row).copied())
+    else {
+        return false;
+    };
+    match row_data.kind {
+        PromptRowKind::Item => edit_prompt_row(state, index, row_data),
+        PromptRowKind::Temp => edit_prompt_temp_row(state, index, row_data),
+        PromptRowKind::Folder | PromptRowKind::Section(_) => false,
     }
 }
 

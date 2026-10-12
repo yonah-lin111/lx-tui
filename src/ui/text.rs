@@ -53,7 +53,7 @@ pub fn agent_location(tab_index: usize) -> String {
 }
 
 /// prompt 面板边框标题；路径末段名以 `ws:` 前缀渲染在顶边框右侧。
-pub const PROMPT_TITLE: &str = "Prompt";
+pub const PROMPT_TITLE: &str = "Prompt Manager";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
 /// prompt 顶边框右侧的工作区路径名前缀。

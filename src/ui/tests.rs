@@ -1471,6 +1471,8 @@ fn prompt_title_moves_path_name_to_top_right() {
 #[test]
 fn prompt_top_bar_prefers_bound_prompt_root() {
     let mut state = AppState::demo();
+    // 标题文案变长后，默认宽度容不下长路径名与标题共存；本用例只验证路径优先级。
+    state.prompt_width = 40;
     state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
     let view = view_for(&state);
 
