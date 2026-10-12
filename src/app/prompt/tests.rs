@@ -1686,6 +1686,39 @@ fn bound_worktree_line_is_excluded_from_block_copy() {
 }
 
 #[test]
+fn worktree_chooser_keeps_a_non_adjacent_command_line() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let fixture = "&&& addTemplate --start\n「title: 」\n/gitW\nbody\n&&& addTemplate --end\n";
+    prompt.set_text(fixture);
+    let cursor = prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    prompt.set_cursor_offset_for_test(cursor);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    assert!(prompt.slash_confirm(), "opens chooser");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "main".into(),
+        path: PathBuf::from("/repo"),
+        is_main: true,
+    }]);
+    prompt.rebuild_worktree_entries();
+    assert!(prompt.slash_confirm(), "confirm binding");
+    let text = prompt.text().to_string();
+    // 命令行整行保留（仅清空内容），绑定行插到结束行上方。
+    assert_eq!(
+        text.matches('\n').count(),
+        fixture.matches('\n').count() + 1
+    );
+    assert!(!text.contains("/gitW"), "{text}");
+    assert!(
+        text.contains("\n\nbody\n{wt:main}\n&&& addTemplate --end\n"),
+        "{text}"
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
+}
+
+#[test]
 fn worktree_chooser_escape_discards_the_slash_line() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));

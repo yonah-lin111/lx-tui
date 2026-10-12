@@ -441,7 +441,8 @@ pub const SLASH_WORKTREE_LABEL: &str = "/gitWorkTree";
 pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 
 /// prompt 底边框左侧设置按钮与 tooltip。
-pub const SETTINGS_LABEL: &str = "[⚙]";
+/// 设置按钮：单宽、非 emoji 的菜单符号（终端字体必定单色，避免彩色 emoji 与宽度偏移）。
+pub const SETTINGS_LABEL: &str = "[≡]";
 
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";

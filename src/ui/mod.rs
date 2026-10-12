@@ -606,24 +606,25 @@ pub fn settings_button_at(
     settings_button(view, state).is_some_and(|area| area.contains((column, row).into()))
 }
 
-/// 设置按钮几何常量：宽度 3（`[⚙]`）、左边距 1 列（边框之后）。
+/// 设置按钮几何常量：宽度 3（`[≡]`）、左边距 1 列（紧贴左边框内侧，与右端折叠按钮对称）。
 const SETTINGS_BUTTON_WIDTH: u16 = 3;
 const SETTINGS_BUTTON_MARGIN: u16 = 1;
 /// 显示设置按钮所需的最小侧栏宽度：图标 + 右端折叠按钮的安全余量。
 const SETTINGS_BUTTON_MIN_WIDTH: u16 = 12;
 
-/// 绘制侧栏底边框左侧设置按钮；图标强调色，常显。
+/// 绘制侧栏底边框左侧设置按钮：逐格 reset + 强调色，与折叠按钮绘制方式一致。
 fn render_settings_button(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
     let Some(area) = settings_button(view, state) else {
         return;
     };
-    frame.render_widget(
-        Paragraph::new(Line::from(Span::styled(
-            text::SETTINGS_LABEL,
-            style::accent(),
-        ))),
-        area,
-    );
+    for (offset, symbol) in text::SETTINGS_LABEL.chars().enumerate() {
+        let x = area.x + offset as u16;
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, area.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
 }
 
 /// prompt 底边框左侧 git 状态：`b:分支`（linked worktree 显示仓库主 checkout 分支），

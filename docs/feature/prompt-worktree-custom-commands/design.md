@@ -1,6 +1,6 @@
 # Prompt worktree and custom commands - design
 
-- Status: implemented (on `feat/prompt-worktree-custom-commands`); post-implementation review adjustments applied: the settings icon moved to the sidebar bottom border, the Commands page is a dark three-column layout, source tags render `[Built-in]`/`[User]`/`[Project]`/`[wt]`, and the binding lives on its own protected line above the end line.
+- Status: implemented (on `feat/prompt-worktree-custom-commands`); post-implementation review adjustments applied: the settings icon moved to the sidebar bottom border (single-width non-emoji glyph `[≡]`, painted like the collapse button), the Commands page is a dark list/editor layout with row selection and an empty placeholder (no preview pane, no per-row edit button), source tags render `[Built-in]`/`[User]`/`[Project]`/`[wt]`, and the binding lives on its own protected line above the end line.
 - References: `lx-agent/src/renderer/src/features/markdown/LxMarkdownEditor.tsx`, its slash command and custom command services.
 
 ## Goal
@@ -48,7 +48,7 @@ Load User and Project commands for the prompt's displayed workspace, then overla
 
 The dedicated `{wt:<branch>}` line above the end line is the source of truth; no duplicate binding state lives in the prompt. At cursor movement and edit settlement, locate the enclosing template range, require a closed end line, and parse the line directly above it. If it is `{wt:<full-branch>}`, resolve that branch against a fresh worktree list for the prompt owner's `repo_root`. Exactly one existing checkout is required. Its checkout path becomes the `@` scan root for that block, ahead of the prompt's explicit root. Outside a bound block, keep today's explicit-root/cwd behavior. An unresolved marker sets a visible error state and disables only that block's `@` candidates; it never falls back to another root. Changing root invalidates the existing mention cache/generation so stale asynchronous results cannot appear. A non-Git prompt owner offers no `/gitWorktree` candidates.
 
-Selecting `/gitWorktree` opens a second-level worktree chooser. Show main checkout and linked entries with branches; show the currently bound entry. Confirm replaces the existing binding line or inserts one above the end line, and consumes the `/gitWorkTree` line, all as one undo step. Selecting the same branch is harmless. If the list has no eligible entry, show an empty/error state without editing the block. Worktree queries stay in `src/git/` and run off the TUI event loop.
+Selecting `/gitWorktree` opens a second-level worktree chooser. Show main checkout and linked entries with branches; show the currently bound entry. Confirm replaces the existing binding line or inserts one above the end line, and clears the `/gitWorkTree` command line in place (the line itself is kept, mirroring the reference app's `/gitn`), all as one undo step. When the command line is already the line above the end line, the binding occupies that line. Selecting the same branch is harmless. If the list has no eligible entry, show an empty/error state without editing the block. Worktree queries stay in `src/git/` and run off the TUI event loop.
 
 ## UI and service
 
@@ -61,7 +61,7 @@ Selecting `/gitWorktree` opens a second-level worktree chooser. Show main checko
 ## Validation and acceptance
 
 1. The slash chooser has the correct scope and tags, handles keyboard/mouse selection, and keeps tag width stable at narrow prompt sizes.
-2. Binding-line insert/replace is one undo step; the line is protected from deletion/local edits; the trigger line is consumed; the active workspace does not change. Detached worktrees never appear.
+2. Binding-line insert/replace is one undo step; the line is protected from deletion/local edits; the command line is cleared in place and never removed; the active workspace does not change. Detached worktrees never appear.
 3. Bound `@` scans the selected checkout, invalidates stale results on binding/cursor changes, and reports missing or ambiguous branches without fallback.
 4. User/Project command precedence, reserved names, `.md` parsing, malformed files, atomic save/delete/rename, and live reload work across workspace switches and app restart.
 5. Local Web UI opens from the icon, edits and previews Markdown, saves to `.lx-t`, rejects unauthorized/oversized/path-traversal requests, and closes with the TUI.

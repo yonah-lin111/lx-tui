@@ -2493,7 +2493,7 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
         button.y.saturating_sub(1)
     ));
 
-    // 图标贴侧栏底边框左侧，与右端折叠按钮同列不重叠。
+    // 图标贴左角 1 列、宽 3 列，与右端折叠按钮同款（强调色逐格绘制）。
     let lines = render_lines(&state);
     let bottom: String = lines[button.y as usize]
         .chars()
@@ -2501,6 +2501,12 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
         .take(usize::from(view.sidebar.width))
         .collect();
     assert!(bottom.contains(text::SETTINGS_LABEL), "{bottom}");
+    assert_eq!(
+        bottom.chars().skip(1).take(3).collect::<String>(),
+        text::SETTINGS_LABEL,
+        "左边距 1 列: {bottom}"
+    );
+    assert!(bottom.contains(text::SIDEBAR_COLLAPSE_LABEL), "{bottom}");
 
     // 折叠态或服务不可用时隐藏。
     state.sidebar_collapsed = true;

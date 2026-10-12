@@ -102,8 +102,10 @@ async fn page_requires_token_and_serves_self_contained_html() {
     assert!(html.contains("color-scheme: dark"), "dark theme");
     assert!(
         html.contains("commands-grid"),
-        "commands three-column layout"
+        "commands list/editor layout"
     );
+    assert!(!html.contains("cmd-preview"), "no preview pane");
+    assert!(html.contains("editor-empty"), "empty placeholder container");
     service.shutdown();
 }
 

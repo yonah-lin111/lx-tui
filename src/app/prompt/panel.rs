@@ -228,8 +228,8 @@ impl Prompt {
         }
     }
 
-    /// 选择器确认：把选中分支写回块结束行上方的 `{wt:}` 行并整行丢弃 `/gitWorkTree`，
-    /// 两处改动作为一步撤销，不改活动工作区。
+    /// 选择器确认：把选中分支写到块结束行上方的 `{wt:}` 行并消耗 `/gitWorkTree` 命令，
+    /// 作为一步撤销；命令所在行保留（不删行），紧贴结束行时该行直接转为绑定行。
     fn confirm_worktree_binding(&mut self, branch: &str) -> bool {
         let Some(panel) = self.slash.as_ref() else {
             return false;
@@ -239,18 +239,31 @@ impl Prompt {
             _ => return false,
         };
         let trigger = panel.trigger().clone();
-        let Some((marker_range, marker_line)) =
+        let Some((marker_range, marker_text)) =
             markdown::set_line_worktree(&self.text, block_end_line, branch)
         else {
             return false;
         };
-        let mut edits = vec![(marker_range, marker_line)];
-        if trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len() {
-            // 整行丢弃触发行（含行尾换行），不留空行。
-            let end = self.text[trigger.line_start..]
-                .find('\n')
-                .map_or(self.text.len(), |offset| trigger.line_start + offset + 1);
-            edits.push((trigger.line_start..end, String::new()));
+        let valid_trigger =
+            trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len();
+        // 命令行为结束行上一行时，绑定行直接占用该行（只换内容、保留该行与换行）。
+        let trigger_line = self.text[..trigger.line_start.min(self.text.len())]
+            .matches('\n')
+            .count();
+        let occupy_trigger =
+            valid_trigger && marker_range.is_empty() && trigger_line + 1 == block_end_line;
+        let mut edits = Vec::new();
+        if occupy_trigger {
+            edits.push((
+                trigger.line_start..trigger.line_end,
+                marker_text.trim_end_matches('\n').to_string(),
+            ));
+        } else {
+            edits.push((marker_range, marker_text));
+            if valid_trigger {
+                // 清空命令行内容、保留该行与换行（对齐 lx-agent `/gitn` 清空命令行的语义）。
+                edits.push((trigger.line_start..trigger.line_end, String::new()));
+            }
         }
         self.slash = None;
         self.break_group();
