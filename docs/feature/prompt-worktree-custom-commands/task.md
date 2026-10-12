@@ -1,6 +1,6 @@
 # Prompt worktree and custom commands - tasks
 
-- Status: implemented on `feat/prompt-worktree-custom-commands`; pending user merge review.
+- Status: merged into `dev` (merge commit `862bc7e`).
 - Notes: 选择器绑定与 `/gitWorkTree` 均需光标位于模板块内（触发不跨块）；设置页仅编辑 User 作用域，Project 只读。
 - Post-implementation review: 设置按钮改挂侧栏底边框左端（`[≡]`，单宽非 emoji、逐格强调色绘制）；`/gitWorkTree` 确认不再删行（清空命令行、保留该行，紧贴结束行时该行直接转为绑定行）；来源标签修正双层方括号，worktree 行改用 `[wt]`；`{wt:分支}` 为结束行上方独立绑定行并加编辑保护（不可局部删除/修改）。
 - Post-implementation review 9: 修复 `/gitWorkTree` 选择器点击 prompt 文本区后跟随点击漂移且无法关闭（点击文本区即关闭、不改文本，对齐 `@` 面板；Esc 仍是丢弃命令行的清理路径）；修复 `@` 面板取根选择高亮被每次按键的上下文根同步打回 main（绑定签名随会话记录，仅签名变化才复位），键盘可正常在 main/wt 间切换且回车确认高亮项。
@@ -49,4 +49,4 @@
 
 - [x] Review changed paths against `docs/standards/` and preserve existing unrelated worktree edits.
 - [x] Run focused module/integration tests, `cargo fmt`, `cargo clippy --all-targets -- -D warnings`, and `cargo test`.
-- [ ] Ask the user to run `cargo run` (pending) and check TUI appearance and browser behavior interactively.
+- [x] Ask the user to run `cargo run` and check TUI appearance and browser behavior interactively (review rounds 1-9 found and fixed the reported issues).
