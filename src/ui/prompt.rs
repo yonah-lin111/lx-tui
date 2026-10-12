@@ -318,11 +318,15 @@ fn block_panel_data(prompt: &Prompt) -> Option<BlockPanelData> {
     })
 }
 
-/// 块命令面板条目：单行（名称 + 右侧预览）。
+/// 块命令面板条目：单行（名称 + 右侧预览，无来源标签）。
 fn block_items<'a>(data: &'a BlockPanelData) -> Vec<CommandItem<'a>> {
     data.texts
         .iter()
-        .map(|(label, preview)| CommandItem::Inline { label, preview })
+        .map(|(label, preview)| CommandItem::Inline {
+            label,
+            preview,
+            tag: "",
+        })
         .collect()
 }
 
@@ -361,42 +365,83 @@ pub fn panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     panel_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 斜杠命令面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口与锚点行。
+/// 斜杠面板单条渲染数据：标签、预览与右对齐来源标签。
+struct SlashRow {
+    label: String,
+    preview: String,
+    tag: String,
+}
+
+/// 斜杠命令面板渲染数据：条目、高亮索引、窗口锚点/显式视口、锚点行与面板模式。
 struct SlashPanelData {
-    texts: Vec<(String, String)>,
+    rows: Vec<SlashRow>,
     active: usize,
     anchor: usize,
     viewport: Option<usize>,
     anchor_row: u16,
+    chooser: bool,
 }
 
 /// 斜杠命令面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn slash_panel_data(prompt: &Prompt) -> Option<SlashPanelData> {
     let panel = prompt.slash_panel()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
+    let chooser = matches!(
+        panel.kind(),
+        crate::app::markdown::SlashPanelKind::WorktreeChooser { .. }
+    );
     Some(SlashPanelData {
-        texts: panel
-            .items()
-            .iter()
-            .map(|id| text::slash_command_text(*id))
-            .collect(),
+        rows: panel.items().iter().map(slash_row).collect(),
         active: panel.active(),
         anchor: panel.anchor(),
         viewport: panel.viewport(),
         anchor_row,
+        chooser,
     })
 }
 
-/// 斜杠命令面板条目：单行（`/add` + 右侧长别名）。
+/// 单条候选的渲染行：选择器显示分支与路径，`/gitWorkTree` 用固定文案。
+fn slash_row(item: &crate::app::markdown::SlashItem) -> SlashRow {
+    use crate::app::markdown::{CommandSource, SlashInsertion};
+    let tag = format!("[{}]", item.source.label());
+    match item.source {
+        CommandSource::Git => {
+            let (label, preview) = match &item.insertion {
+                SlashInsertion::WorktreeChooser => (
+                    text::SLASH_WORKTREE_LABEL.to_string(),
+                    text::SLASH_WORKTREE_PREVIEW.to_string(),
+                ),
+                SlashInsertion::Placeholder => (String::new(), item.preview.clone()),
+                _ => (item.name.clone(), item.preview.clone()),
+            };
+            SlashRow {
+                label,
+                preview,
+                tag,
+            }
+        }
+        _ => SlashRow {
+            label: item.label(),
+            preview: item.preview.clone(),
+            tag,
+        },
+    }
+}
+
+/// 斜杠命令面板条目：单行（标签 + 预览 + 右对齐来源标签）。
 fn slash_items<'a>(data: &'a SlashPanelData) -> Vec<CommandItem<'a>> {
-    data.texts
+    data.rows
         .iter()
-        .map(|(label, preview)| CommandItem::Inline { label, preview })
+        .map(|row| CommandItem::Inline {
+            label: row.label.as_str(),
+            preview: row.preview.as_str(),
+            tag: row.tag.as_str(),
+        })
         .collect()
 }
 
-/// 斜杠命令面板视图：窗口锚定面板状态，显式视口优先；顶边左侧为 `Templates` 标题。
-fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &SlashPanelData) -> CommandPanelView<'a> {
+/// 斜杠命令面板视图：窗口锚定面板状态，显式视口优先；选择器换标题。
+fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active: data.active,
@@ -404,7 +449,11 @@ fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &SlashPanelData) -> Comman
         window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: None,
-        title: Some(text::SLASH_PANEL_TITLE),
+        title: Some(if data.chooser {
+            text::WORKTREE_PANEL_TITLE
+        } else {
+            text::SLASH_PANEL_TITLE
+        }),
         right_title: None,
         footer: None,
     }

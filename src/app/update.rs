@@ -9,7 +9,7 @@ pub use trust::*;
 pub use worktree::{
     apply_git_refresh, apply_worktree_list, apply_worktree_open_key, commit_worktree_open,
     open_worktree_dialog, request_git_refresh, set_worktree_open_selection, take_git_requests,
-    toggle_workspace_group,
+    toggle_workspace_group, worktree_candidates,
 };
 
 use std::path::{Path, PathBuf};
@@ -221,13 +221,23 @@ fn prompt_item_editing(state: &AppState) -> bool {
         })
 }
 
-/// 把 prompt 的上下文根同步为提及扫描根：显式绑定路径优先，回退显示中工作区 cwd。
+/// 把 prompt 的上下文根同步为提及扫描根与 worktree 仓库根。
+///
+/// 提及根在 `MentionState` 内按光标所在块优先取 `{wt:}` 绑定，这里只提供
+/// 显式绑定路径（回退显示中工作区 cwd）与仓库根；worktree 根取工作区 git
+/// 元数据（非 git 工作区不提供 `/gitWorkTree` 候选）。
 fn sync_mention_root(state: &mut AppState) {
     let root = state
         .prompt_root
         .clone()
         .or_else(|| state.prompt_owner().cwd.clone());
+    let repo = state
+        .prompt_owner()
+        .git
+        .as_ref()
+        .map(|git| git.repo_root.clone());
     state.prompt.set_mention_root(root);
+    let _ = state.prompt.set_worktree_repo(repo);
 }
 
 /// 切换显示中的 prompt 草稿：`from` 为当前显示工作区，`to` 为目标工作区。

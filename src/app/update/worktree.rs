@@ -24,6 +24,30 @@ pub fn take_git_requests(state: &mut AppState) -> Vec<PathBuf> {
     std::mem::take(&mut state.git_requests)
 }
 
+/// worktree 列表结果 → prompt 绑定候选：排除 bare 与 detached（无分支）项。
+///
+/// 主 checkout 为首项（git 输出顺序），linked 条目按原顺序保留；同名分支由
+/// 解析侧判为歧义。
+pub fn worktree_candidates(
+    entries: Vec<git::WorktreeEntry>,
+) -> Vec<crate::app::markdown::WorktreeCandidate> {
+    entries
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let branch = entry.branch?;
+            if entry.is_bare {
+                return None;
+            }
+            Some(crate::app::markdown::WorktreeCandidate {
+                branch,
+                path: entry.path,
+                is_main: index == 0,
+            })
+        })
+        .collect()
+}
+
 /// 查询结果落地：cwd 与工作区当前 cwd 精确匹配时更新元数据（可能命中多个）；
 /// 工作区首次识别为 linked worktree 时自动补开主 checkout，保持树形结构。
 pub fn apply_git_refresh(state: &mut AppState, cwd: &Path, git: Option<WorkspaceGit>) {
@@ -281,4 +305,33 @@ fn open_workspace_for_checkout(state: &AppState, path: &Path) -> Option<usize> {
             .is_some_and(|git| git.checkout_path == path)
             || workspace.cwd.as_deref() == Some(path)
     })
+}
+
+#[cfg(test)]
+mod candidate_tests {
+    use super::*;
+
+    /// 构造 worktree 记录。
+    fn entry(path: &str, branch: Option<&str>, bare: bool) -> git::WorktreeEntry {
+        git::WorktreeEntry {
+            path: PathBuf::from(path),
+            branch: branch.map(str::to_string),
+            is_bare: bare,
+        }
+    }
+
+    #[test]
+    fn candidates_exclude_detached_and_bare_and_keep_order() {
+        let candidates = worktree_candidates(vec![
+            entry("/repo", Some("main"), false),
+            entry("/repo/.wt/detached", None, false),
+            entry("/repo/.wt/feat", Some("feature/x"), false),
+            entry("/repo/bare.git", Some("bare-branch"), true),
+        ]);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].branch, "main");
+        assert!(candidates[0].is_main);
+        assert_eq!(candidates[1].branch, "feature/x");
+        assert!(!candidates[1].is_main);
+    }
 }

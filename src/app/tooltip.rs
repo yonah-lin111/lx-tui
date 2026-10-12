@@ -38,6 +38,8 @@ pub enum TooltipTarget {
     PromptSelectAll,
     PromptSave,
     PromptPin,
+    /// prompt 底边框左侧设置按钮。
+    PromptSettings,
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
     TemplateButton {
         line: usize,

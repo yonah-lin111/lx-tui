@@ -2,9 +2,11 @@
 
 mod slash;
 mod template;
+mod worktree;
 
 pub use slash::*;
 pub use template::*;
+pub use worktree::*;
 
 use std::ops::Range;
 

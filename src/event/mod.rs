@@ -32,6 +32,8 @@ use crate::detect::{STATE_TAIL_LINES, pane_agent_snapshot};
 use crate::input::{self, Routed};
 use crate::layout::{self, PaneId};
 use crate::pty::{PtyEvent, PtySession};
+use crate::settings::commands::{self, CommandKind, CommandRecord, CommandScope, MdScope};
+use crate::settings::service::{SettingsEvent, SettingsService};
 use crate::terminal::WheelRouting;
 use crate::tui::Tui;
 use crate::ui;
@@ -56,6 +58,12 @@ pub enum AppEvent {
     WorktreeListed {
         repo_root: PathBuf,
         entries: Vec<crate::git::WorktreeEntry>,
+        failed: bool,
+    },
+    /// prompt 模板块绑定用的 worktree 候选查询结果。
+    PromptWorktreeListed {
+        repo_root: PathBuf,
+        candidates: Vec<crate::app::markdown::WorktreeCandidate>,
         failed: bool,
     },
 }
@@ -84,7 +92,22 @@ async fn run_loop(
     config: &Config,
     persistence: &mut Persistence,
 ) -> io::Result<()> {
-    initialize_layout_widths(tui, state, config)?;
+    // 运行时配置副本：设置页保存后经事件更新，渲染每帧读取。
+    let mut config = config.clone();
+    // 本地设置服务：仅回环监听；失败只影响设置页，不阻断 TUI。
+    let (settings_sender, mut settings_receiver) = mpsc::unbounded_channel::<SettingsEvent>();
+    let settings_service = match SettingsService::start(settings_sender).await {
+        Ok(service) => Some(service),
+        Err(error) => {
+            tracing::warn!(%error, "settings web service failed to start");
+            None
+        }
+    };
+    state.settings_available = settings_service.is_some();
+    // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
+    let mut commands_reload = true;
+    let mut last_prompt_workspace = state.prompt_workspace();
+    initialize_layout_widths(tui, state, &config)?;
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut sessions: HashMap<PaneId, PtySession> = HashMap::new();
     let mut events = EventStream::new();
@@ -102,6 +125,40 @@ async fn run_loop(
     while !state.should_quit {
         // 会话按状态对齐：新建工作区的窗格在此启动，被移除工作区的会话在此终止。
         reconcile_sessions(state, &mut sessions, &sender);
+        // 设置页事件：保存的配置与命令变更在事件循环内应用。
+        while let Ok(event) = settings_receiver.try_recv() {
+            match event {
+                SettingsEvent::ConfigChanged(updated) => config = updated,
+                SettingsEvent::CommandsChanged => commands_reload = true,
+            }
+            dirty = true;
+        }
+        // 设置图标点击：请求打开浏览器（后台执行，不阻塞事件循环）。
+        if state.settings_open_requested {
+            state.settings_open_requested = false;
+            if let Some(url) = settings_service.as_ref().map(SettingsService::url) {
+                tokio::task::spawn_blocking(move || {
+                    if let Err(error) = crate::platform::open_browser(&url) {
+                        tracing::warn!(%error, "opening the settings page failed");
+                    }
+                });
+            } else {
+                tracing::warn!("settings web service is unavailable");
+            }
+        }
+        // 显示工作区变化或设置页写入后重载自定义命令；git 元数据到达后同步仓库根。
+        let prompt_workspace = state.prompt_workspace();
+        if prompt_workspace != last_prompt_workspace {
+            last_prompt_workspace = prompt_workspace;
+            commands_reload = true;
+        }
+        if reload_custom_commands(state, commands_reload) || sync_prompt_repo(state) {
+            dirty = true;
+        }
+        commands_reload = false;
+        if let Some(service) = settings_service.as_ref() {
+            service.set_commands_snapshot(&command_views(state));
+        }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
             dirty = true;
@@ -119,7 +176,7 @@ async fn run_loop(
             }
         }
         git::pump_git_queries(state, &sender, &mut git_inflight);
-        let geometry = current_geometry(tui, state, config)?;
+        let geometry = current_geometry(tui, state, &config)?;
         if let Some(rows) = ui::agent_list_rows(&geometry.view, state)
             && update::clamp_agent_scroll(state, rows)
         {
@@ -144,7 +201,7 @@ async fn run_loop(
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
-            tui.draw(|frame| ui::render(frame, state, config))?;
+            tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();
         }
@@ -168,8 +225,9 @@ async fn run_loop(
         tokio::select! {
             event = events.next() => match event {
                 Some(Ok(event)) => {
-                    handle_terminal_event(event, state, &mut sessions, &geometry, config, &mut dirty);
+                    handle_terminal_event(event, state, &mut sessions, &geometry, &config, &mut dirty);
                     pump_mention_scan(state, &sender);
+                    pump_prompt_worktree(state, &sender, &mut git_inflight);
                     git::pump_git_queries(state, &sender, &mut git_inflight);
                 }
                 Some(Err(error)) => return Err(error),
@@ -194,9 +252,121 @@ async fn run_loop(
     for session in sessions.values_mut() {
         session.kill();
     }
+    // 设置服务随 TUI 退出关闭，避免回环端口悬挂。
+    if let Some(service) = settings_service.as_ref() {
+        service.shutdown();
+    }
     // 退出前收尾：提交编辑中的提示词内容并落库。
     persistence.shutdown(state);
     Ok(())
+}
+
+/// 重载自定义命令：User 与 Project 合并后注入 prompt；`force` 为真时执行。
+fn reload_custom_commands(state: &mut AppState, force: bool) -> bool {
+    if !force {
+        return false;
+    }
+    let (items, _) = custom_commands_for(state);
+    state.prompt.set_custom_commands(items);
+    true
+}
+
+/// 依据显示中 prompt 的工作区装载有效自定义命令与设置页视图快照。
+pub(crate) fn custom_commands_for(
+    state: &AppState,
+) -> (
+    Vec<crate::app::markdown::SlashItem>,
+    Vec<crate::settings::service::CommandView>,
+) {
+    let user_root = match crate::config::user_data_root() {
+        Ok(root) => root,
+        Err(_) => return (Vec::new(), Vec::new()),
+    };
+    let (user, _user_errors) = commands::list(CommandScope::User, &user_root);
+    let project_root = project_command_root(state);
+    let (project, _project_errors) = match project_root.as_deref() {
+        Some(root) => commands::list(CommandScope::Project, root),
+        None => (Vec::new(), Vec::new()),
+    };
+    let mut views: Vec<crate::settings::service::CommandView> = Vec::new();
+    let mut items = Vec::new();
+    for record in &user {
+        views.push(crate::settings::service::CommandView::of(
+            record,
+            CommandScope::User,
+        ));
+    }
+    for record in &project {
+        views.push(crate::settings::service::CommandView::of(
+            record,
+            CommandScope::Project,
+        ));
+    }
+    for record in &user {
+        items.push(slash_item_of(
+            record,
+            crate::app::markdown::CommandSource::User,
+        ));
+    }
+    for record in &project {
+        items.push(slash_item_of(
+            record,
+            crate::app::markdown::CommandSource::Project,
+        ));
+    }
+    (items, views)
+}
+
+/// Project 作用域根：git 主 checkout 优先，非 git 工作区用其路径；无路径时 None。
+fn project_command_root(state: &AppState) -> Option<PathBuf> {
+    let workspace = state.prompt_owner();
+    match workspace.git.as_ref() {
+        Some(git) => Some(git.repo_root.clone()),
+        None => workspace.cwd.clone(),
+    }
+}
+
+/// 命令记录 → 斜杠候选；`source` 由调用方按作用域给定。
+fn slash_item_of(
+    record: &CommandRecord,
+    source: crate::app::markdown::CommandSource,
+) -> crate::app::markdown::SlashItem {
+    use crate::app::markdown::{SlashItem, SlashScope};
+    match record.kind {
+        CommandKind::AgentMd => SlashItem::custom_markdown(
+            &record.name,
+            source,
+            match record.scope {
+                MdScope::Global => SlashScope::Global,
+                MdScope::Template => SlashScope::Template,
+            },
+            &record.body,
+            &record.description,
+        ),
+        CommandKind::AgentBlock => SlashItem::custom_block(
+            &record.name,
+            source,
+            record.title.as_deref(),
+            &record.body,
+            &record.description,
+        ),
+    }
+}
+
+/// 设置页命令快照（User 与 Project 合并后的视图）。
+fn command_views(state: &AppState) -> Vec<crate::settings::service::CommandView> {
+    custom_commands_for(state).1
+}
+
+/// 同步显示中工作区的 git 仓库根到 prompt（影响 `/gitWorkTree` 与绑定解析）；
+/// 返回是否发生变化。
+fn sync_prompt_repo(state: &mut AppState) -> bool {
+    let repo = state
+        .prompt_owner()
+        .git
+        .as_ref()
+        .map(|git| git.repo_root.clone());
+    state.prompt.set_worktree_repo(repo)
 }
 
 /// PTY 输出后的 cwd 去抖检查延迟。
@@ -564,6 +734,24 @@ fn handle_terminal_event(
                 {
                     update::create_tab(state);
                     reveal_active_tab(state, view);
+                    *dirty = true;
+                    return;
+                }
+                if ui::prompt_settings_button_at(view, state, mouse.column, mouse.row) {
+                    if state.settings_available {
+                        state.settings_open_requested = true;
+                    } else {
+                        let now = Instant::now();
+                        update::show_toast(
+                            state,
+                            Toast::new(
+                                ToastKind::Error,
+                                ui::text::TOAST_SETTINGS_UNAVAILABLE,
+                                None,
+                                now,
+                            ),
+                        );
+                    }
                     *dirty = true;
                     return;
                 }
@@ -1233,6 +1421,43 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     });
 }
 
+/// prompt 模板块的 worktree 绑定：选择器打开或块内绑定未解析时发起后台查询。
+///
+/// `inflight` 记录在途仓库根，避免同一仓库重复发起。
+fn pump_prompt_worktree(
+    state: &mut AppState,
+    sender: &mpsc::UnboundedSender<AppEvent>,
+    inflight: &mut HashSet<PathBuf>,
+) {
+    if state.prompt_collapsed {
+        return;
+    }
+    let chooser = state.prompt.worktree_chooser_open();
+    let repo = if chooser {
+        state.prompt.take_worktree_refresh()
+    } else {
+        state.prompt.take_worktree_request()
+    };
+    let Some(repo) = repo else {
+        return;
+    };
+    if !inflight.insert(repo.clone()) {
+        return;
+    }
+    let sender = sender.clone();
+    tokio::task::spawn_blocking(move || {
+        let (candidates, failed) = match crate::git::list_worktrees(&repo) {
+            Some(list) => (update::worktree_candidates(list.entries), false),
+            None => (Vec::new(), true),
+        };
+        let _ = sender.send(AppEvent::PromptWorktreeListed {
+            repo_root: repo,
+            candidates,
+            failed,
+        });
+    });
+}
+
 /// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
 fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
     match kind {
@@ -1869,6 +2094,26 @@ fn handle_app_event(
         } => {
             git_inflight.remove(&repo_root);
             update::apply_worktree_list(state, &repo_root, entries, failed);
+        }
+        AppEvent::PromptWorktreeListed {
+            repo_root,
+            candidates,
+            failed,
+        } => {
+            git_inflight.remove(&repo_root);
+            let targeted = state
+                .prompt_owner()
+                .git
+                .as_ref()
+                .is_some_and(|git| git.repo_root == repo_root);
+            if targeted {
+                if failed {
+                    state.prompt.worktree_failed();
+                } else {
+                    state.prompt.apply_worktree_entries(candidates);
+                }
+                state.prompt.rebuild_worktree_entries();
+            }
         }
     }
 }

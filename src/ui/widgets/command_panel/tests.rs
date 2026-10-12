@@ -7,7 +7,11 @@ use ratatui::style::{Color, Modifier};
 fn inline<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
     pairs
         .iter()
-        .map(|&(label, preview)| CommandItem::Inline { label, preview })
+        .map(|&(label, preview)| CommandItem::Inline {
+            label,
+            preview,
+            tag: "",
+        })
         .collect()
 }
 

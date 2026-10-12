@@ -107,6 +107,54 @@ pub fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     }
 }
 
+/// 在系统默认浏览器中打开 URL；OS 命令按 cfg 门控，失败返回错误。
+///
+/// 调用方须在后台线程执行（进程启动会短暂阻塞）；`open`/`xdg-open` 等命令
+/// 本身立即返回，不等待浏览器窗口。
+pub fn open_browser(url: &str) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        native_open("open", &[url])
+    }
+    #[cfg(target_os = "linux")]
+    {
+        match native_open("xdg-open", &[url]) {
+            Ok(()) => Ok(()),
+            Err(error) => native_open("gio", &["open", url]).map_err(|_| error),
+        }
+    }
+    #[cfg(windows)]
+    {
+        native_open("rundll32", &["url.dll,FileProtocolHandler", url])
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        let _ = url;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "opening a browser is not supported on this platform",
+        ))
+    }
+}
+
+/// 启动平台命令并立即返回；非零退出码视为失败。
+#[cfg(any(target_os = "macos", target_os = "linux", windows))]
+fn native_open(program: &str, args: &[&str]) -> io::Result<()> {
+    let status = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other(format!(
+            "{program} exited with status {status}"
+        )))
+    }
+}
+
 /// 读取 PTY 子进程的前台进程组主进程展示名；无前台进程、读不到或平台不支持时返回 None。
 ///
 /// macOS 用 `proc_pidinfo(PROC_PIDTBSDINFO)` 取 `e_tpgid` 与 `comm`、

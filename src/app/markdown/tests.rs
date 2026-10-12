@@ -567,11 +567,15 @@ fn slash_trigger_forms_and_rejections() {
 }
 
 #[test]
-fn slash_trigger_suppressed_in_fence_and_template_block() {
+fn slash_trigger_suppressed_in_fence_but_allowed_inside_template_blocks() {
     assert_eq!(slash_trigger("```\n/add", 8), None);
+    // 模板块内允许触发（`/gitWorkTree` 需要在块内绑定）；候选按作用域过滤。
     let block = "&&& addTemplate --start 「title: 」\n/add\n&&& addTemplate --end";
-    let cursor = block.find("\n/add").expect("line") + 4;
-    assert_eq!(slash_trigger(block, cursor), None);
+    let cursor = block.find("/add").expect("line") + "/add".len();
+    assert_eq!(
+        slash_trigger(block, cursor).map(|t| t.query),
+        Some("add".into())
+    );
     let after = format!("{block}\n/add");
     assert_eq!(
         slash_trigger(&after, after.len()).map(|t| t.query),
@@ -579,32 +583,178 @@ fn slash_trigger_suppressed_in_fence_and_template_block() {
     );
 }
 
+/// 空上下文：块外、无 git。
+fn outside_context() -> SlashContext {
+    SlashContext {
+        inside_block: false,
+        worktree_available: false,
+    }
+}
+
+/// 过滤结果的短名序列（内置命令）。
+fn filter_names(query: &str) -> Vec<String> {
+    slash_filter(&[], outside_context(), query)
+        .into_iter()
+        .map(|item| item.name)
+        .collect()
+}
+
 #[test]
 fn slash_filter_ranks_short_and_long_aliases() {
-    assert_eq!(slash_filter("").len(), 5);
-    assert_eq!(slash_filter("add"), vec![SlashCommandId::Add]);
-    assert_eq!(slash_filter("addt"), vec![SlashCommandId::Add]);
-    assert_eq!(slash_filter("ADD"), vec![SlashCommandId::Add]);
-    assert_eq!(slash_filter("addtemplate"), vec![SlashCommandId::Add]);
-    assert_eq!(slash_filter("ref"), vec![SlashCommandId::Refactor]);
-    assert_eq!(slash_filter("style"), vec![SlashCommandId::Style]);
-    assert_eq!(slash_filter("zzz"), Vec::new());
-    let all = slash_filter("template");
+    assert_eq!(filter_names("").len(), 5);
+    assert_eq!(filter_names("add"), vec!["add"]);
+    assert_eq!(filter_names("addt"), vec!["add"]);
+    assert_eq!(filter_names("ADD"), vec!["add"]);
+    assert_eq!(filter_names("addtemplate"), vec!["add"]);
+    assert_eq!(filter_names("ref"), vec!["refactor"]);
+    assert_eq!(filter_names("style"), vec!["style"]);
+    assert_eq!(filter_names("zzz"), Vec::<String>::new());
+    let all = filter_names("template");
     assert_eq!(all.len(), 5, "长名都含 template，稳定保留全部候选");
-    assert_eq!(all[0], SlashCommandId::Add, "稳定排序按内置顺序");
+    assert_eq!(all[0], "add", "稳定排序按内置顺序");
 }
 
 #[test]
 fn slash_filter_matches_subsequence_like_mentions() {
-    assert_eq!(slash_filter("cmm"), vec![SlashCommandId::Common]);
-    assert_eq!(slash_filter("cmn"), vec![SlashCommandId::Common]);
-    assert_eq!(slash_filter("rf"), vec![SlashCommandId::Refactor]);
-    assert_eq!(slash_filter("st"), vec![SlashCommandId::Style]);
-    assert_eq!(
-        slash_filter("common"),
-        vec![SlashCommandId::Common],
-        "精确短名优先"
+    assert_eq!(filter_names("cmm"), vec!["common"]);
+    assert_eq!(filter_names("cmn"), vec!["common"]);
+    assert_eq!(filter_names("rf"), vec!["refactor"]);
+    assert_eq!(filter_names("st"), vec!["style"]);
+    assert_eq!(filter_names("common"), vec!["common"], "精确短名优先");
+}
+
+/// 自定义命令构造：Markdown 与模板块。
+fn custom_items() -> Vec<SlashItem> {
+    vec![
+        SlashItem::custom_markdown(
+            "lint",
+            CommandSource::User,
+            SlashScope::Global,
+            "run lint",
+            "lint the change",
+        ),
+        SlashItem::custom_markdown(
+            "notes",
+            CommandSource::Project,
+            SlashScope::Template,
+            "add notes",
+            "template notes",
+        ),
+        SlashItem::custom_block(
+            "triage",
+            CommandSource::User,
+            Some("Triage"),
+            "body",
+            "triage the bug",
+        ),
+    ]
+}
+
+#[test]
+fn slash_filter_scopes_custom_commands_by_block_context() {
+    // 块外：global Markdown + 模板块命令；template 作用域隐藏。
+    let outside = slash_filter(&custom_items(), outside_context(), "");
+    let names: Vec<&str> = outside.iter().map(|item| item.name.as_str()).collect();
+    assert!(names.contains(&"lint"), "{names:?}");
+    assert!(names.contains(&"triage"), "{names:?}");
+    assert!(
+        !names.contains(&"notes"),
+        "template markdown hidden outside: {names:?}"
     );
+    // 块内：内置模板隐藏，template Markdown 出现，模板块命令隐藏。
+    let inside = slash_filter(
+        &custom_items(),
+        SlashContext {
+            inside_block: true,
+            worktree_available: false,
+        },
+        "",
+    );
+    let names: Vec<&str> = inside.iter().map(|item| item.name.as_str()).collect();
+    assert!(!names.contains(&"add"), "builtins hidden inside: {names:?}");
+    assert!(names.contains(&"notes"), "{names:?}");
+    assert!(
+        !names.contains(&"triage"),
+        "block command hidden inside: {names:?}"
+    );
+}
+
+#[test]
+fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
+    let inside = slash_filter(
+        &[],
+        SlashContext {
+            inside_block: true,
+            worktree_available: true,
+        },
+        "work",
+    );
+    assert_eq!(inside.len(), 1);
+    assert_eq!(inside[0].name, "gitWorkTree");
+    let without_git = slash_filter(
+        &[],
+        SlashContext {
+            inside_block: true,
+            worktree_available: false,
+        },
+        "work",
+    );
+    assert!(without_git.is_empty(), "no worktree command without git");
+    let outside = slash_filter(
+        &[],
+        SlashContext {
+            inside_block: false,
+            worktree_available: true,
+        },
+        "work",
+    );
+    assert!(outside.is_empty(), "no worktree command outside a block");
+}
+
+#[test]
+fn agent_block_content_wraps_body_and_places_cursor_in_title() {
+    let (content, cursor) = agent_block_content(
+        "triage",
+        None,
+        "&&& triage --start\ninner\n&&& triage --end",
+    );
+    assert!(
+        content.starts_with("&&& triage --start\n「title: 」"),
+        "{content}"
+    );
+    assert!(content.ends_with("&&& triage --end"), "{content}");
+    assert!(content.contains("inner"));
+    assert!(
+        !content.contains("&&& triage --start\ninner"),
+        "no nesting: {content}"
+    );
+    assert!(content[cursor..].starts_with('」'));
+    let (content, _) = agent_block_content("x", Some("My Title"), "body");
+    assert!(
+        content.starts_with("&&& x --start\n「My Title: 」"),
+        "{content}"
+    );
+}
+
+#[test]
+fn slash_insertion_maps_item_variants() {
+    let builtin = SlashItem::builtin(SlashCommandId::Add);
+    let (content, cursor) = slash_insertion(&builtin).expect("builtin insertion");
+    assert_eq!(content, slash_template_content(SlashCommandId::Add).0);
+    assert_eq!(cursor, slash_template_content(SlashCommandId::Add).1);
+    let raw = SlashItem::custom_markdown(
+        "lint",
+        CommandSource::User,
+        SlashScope::Global,
+        "run lint",
+        "",
+    );
+    assert_eq!(
+        slash_insertion(&raw),
+        Some(("run lint".to_string(), "run lint".len()))
+    );
+    assert!(slash_insertion(&SlashItem::worktree()).is_none());
+    assert!(slash_insertion(&SlashItem::placeholder("loading…")).is_none());
 }
 
 #[test]

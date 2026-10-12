@@ -18,7 +18,10 @@ use unicode_width::UnicodeWidthChar;
 
 use self::list::{ListContext, list_context, parse_list_item};
 use self::mention::MentionState;
-use super::markdown::{self, BlockPanel, MentionEntry, MentionPanel, SlashPanel};
+use super::markdown::{
+    self, BlockPanel, MentionEntry, MentionPanel, SlashItem, SlashPanel, WorktreeBinding,
+    WorktreeCandidate,
+};
 use crate::layout::PaneId;
 
 /// 粘贴文本中的制表符展开内容。
@@ -50,8 +53,12 @@ pub struct Prompt {
     last_edit: Option<EditKind>,
     /// 块命令面板；由光标处触发标记逼近得到。
     panel: Option<BlockPanel>,
-    /// 斜杠模板命令面板；由整行 `/` 触发逼近得到。
+    /// 斜杠模板命令面板；由整行 `/` 触发逼近得到，或 `/gitWorkTree` 的二级选择器。
     slash: Option<SlashPanel>,
+    /// 有效自定义斜杠命令（User 与 Project 合并后）；由事件层在载入/切换时注入。
+    custom: Vec<SlashItem>,
+    /// 显示中工作区是否有 git 仓库（决定 `/gitWorkTree` 候选）。
+    worktree_available: bool,
     /// 文件提及面板状态；含扫描缓存与在途代号。
     mention: MentionState,
     /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
@@ -102,6 +109,8 @@ impl Prompt {
             last_edit: None,
             panel: None,
             slash: None,
+            custom: Vec::new(),
+            worktree_available: false,
             mention: MentionState::default(),
             panel_suppressed: false,
             is_saved: true,
@@ -308,6 +317,7 @@ impl Prompt {
         self.panel = None;
         self.slash = None;
         self.mention.clear();
+        self.mention.unsuppress();
         self.panel_suppressed = false;
     }
 
@@ -378,8 +388,84 @@ impl Prompt {
     }
 
     /// 同步提及扫描根；根变化时清除缓存并作废在途结果。
+    ///
+    /// `panel_suppressed` 为真（Esc/确认后尚未编辑或移动）时保持面板压制，
+    /// 避免每次按键重算把面板重新弹出。
     pub fn set_mention_root(&mut self, root: Option<PathBuf>) {
+        if self.panel_suppressed {
+            self.mention.suppress();
+        } else {
+            self.mention.unsuppress();
+        }
         self.mention.set_root(root, &self.text, self.cursor);
+    }
+
+    /// 同步显示中工作区的仓库根与 git 可用性；变化时作废 worktree 候选。
+    /// 返回仓库根是否发生变化（调用方据此置脏重绘）。
+    pub fn set_worktree_repo(&mut self, repo: Option<PathBuf>) -> bool {
+        let changed = self.mention.worktree_repo() != repo.as_deref();
+        let available = repo.is_some();
+        if self.worktree_available != available {
+            self.worktree_available = available;
+            self.slash = None;
+        }
+        self.mention
+            .set_worktree_repo(repo, &self.text, self.cursor);
+        changed
+    }
+
+    /// 注入有效自定义命令；候选变化时关闭旧面板并由后续编辑重算。
+    pub fn set_custom_commands(&mut self, items: Vec<SlashItem>) {
+        if self.custom == items {
+            return;
+        }
+        self.custom = items;
+        self.slash = None;
+        self.refresh_slash_panel();
+    }
+
+    /// 光标所在块的 worktree 绑定；无块或无绑定返回 None。
+    pub fn block_binding(&self) -> Option<WorktreeBinding> {
+        self.mention.block_binding(&self.text, self.cursor)
+    }
+
+    /// 需要 worktree 列表时返回仓库根；仅事件循环调用。
+    pub fn take_worktree_request(&mut self) -> Option<PathBuf> {
+        self.mention.take_worktree_request(&self.text, self.cursor)
+    }
+
+    /// 选择器打开期间的强制刷新请求；仅事件循环调用。
+    pub fn take_worktree_refresh(&mut self) -> Option<PathBuf> {
+        self.mention.request_worktree_refresh()
+    }
+
+    /// 选择器是否正在等待 worktree 列表。
+    pub fn worktree_loading(&self) -> bool {
+        self.mention.worktree_loading()
+    }
+
+    /// 斜杠面板是否处于 worktree 选择器模式。
+    pub fn worktree_chooser_open(&self) -> bool {
+        matches!(
+            self.slash.as_ref().map(super::markdown::SlashPanel::kind),
+            Some(super::markdown::SlashPanelKind::WorktreeChooser { .. })
+        )
+    }
+
+    /// worktree 候选（已加载时）；选择器渲染用。
+    pub fn worktree_candidates(&self) -> Option<&[WorktreeCandidate]> {
+        self.mention.worktree_candidates()
+    }
+
+    /// 写入 worktree 列表结果并重算绑定；代号过期由 mention 状态自行判定。
+    pub fn apply_worktree_entries(&mut self, candidates: Vec<WorktreeCandidate>) {
+        self.mention
+            .apply_worktree_entries(candidates, &self.text, self.cursor);
+    }
+
+    /// worktree 查询失败：清空候选并允许后续重试。
+    pub fn worktree_failed(&mut self) {
+        self.mention.worktree_failed(&self.text, self.cursor);
     }
 
     /// 需要新扫描时返回（代号，根路径）并标记处理中；仅事件循环调用。
@@ -684,6 +770,12 @@ impl Prompt {
         self.cursor = start + sanitized.len();
         self.settle();
         true
+    }
+
+    /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。
+    #[cfg(test)]
+    pub(crate) fn set_cursor_offset_for_test(&mut self, offset: usize) {
+        self.cursor = offset.min(self.text.len());
     }
 
     /// 在光标处插入已净化的文本并推进光标。
