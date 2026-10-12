@@ -183,7 +183,9 @@ pub fn agent_block_content(command: &str, title: Option<&str>, body: &str) -> (S
     let title = title.unwrap_or_default().trim().replace(['{', '}'], "");
     let title = title.as_str();
     let body = normalize_block_body(body);
-    let content = format!("&&& {command} --start\n{{title: {title}}}\n{body}\n&&& {command} --end");
+    // 标题行与正文之间固定空一行（与 `{wt:}` 前的分隔一致）。
+    let content =
+        format!("&&& {command} --start\n{{title: {title}}}\n\n{body}\n&&& {command} --end");
     let cursor = title_cursor(&content);
     (content, cursor)
 }
@@ -249,15 +251,15 @@ pub fn slash_template_content(id: SlashCommandId) -> (&'static str, usize) {
     (content, title_cursor(content))
 }
 
-const ADD_TEMPLATE: &str = "&&& addTemplate --start\n{title: }\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
+const ADD_TEMPLATE: &str = "&&& addTemplate --start\n{title: }\n\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
 
-const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n{title: }\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
+const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n{title: }\n\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
 
-const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n{title: }\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
+const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n{title: }\n\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
 
-const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n{title: }\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
+const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n{title: }\n\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
 
-const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n{title: }\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
+const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n{title: }\n\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
 
 /// 标题占位符内的光标偏移：`{title: }` 的 `}` 前；无占位符回退文末。
 fn title_cursor(content: &str) -> usize {

@@ -301,14 +301,19 @@ impl MentionState {
         true
     }
 
-    /// 当前扫描根：块内绑定时同时提供绑定 checkout（`[wt]`）与仓库主 checkout，
-    /// 未绑定时为显式根/工作区 cwd；绑定不可解析时 None。
+    /// 当前扫描根：块内绑定 linked worktree 时同时提供该 checkout（`[wt]`）与
+    /// 仓库主 checkout，绑定主 checkout 或未绑定时只提供单根；绑定不可解析时 None。
     fn effective_roots(&self, text: &str, cursor: usize) -> Option<Vec<MentionRoot>> {
         match self.block_binding(text, cursor) {
             Some(WorktreeBinding::Bound(candidate)) => {
+                // 绑定主 checkout 时条目就是主工作区文件，不标注来源。
+                let linked = self
+                    .worktree_repo
+                    .as_deref()
+                    .is_none_or(|repo| repo != candidate.path);
                 let mut roots = vec![MentionRoot {
                     path: candidate.path.clone(),
-                    worktree: true,
+                    worktree: linked,
                 }];
                 // 绑定 checkout 之外，主 checkout 的文件同样可选（同一仓库）。
                 if let Some(repo) = self.worktree_repo.as_ref()
@@ -331,13 +336,21 @@ impl MentionState {
         }
     }
 
-    /// 合并多根候选：同一相对路径只保留首个（绑定 worktree 先于主 checkout）。
+    /// 合并多根候选：同一路径的文件保留各 checkout 的版本（绑定来源以 `[wt]`
+    /// 区分，先列绑定 checkout），目录只是导航节点、按路径去重且不标来源。
     fn merge_roots(entries: Vec<MentionEntry>) -> Vec<MentionEntry> {
-        let mut seen = std::collections::HashSet::with_capacity(entries.len());
-        entries
-            .into_iter()
-            .filter(|entry| seen.insert(entry.path.clone()))
-            .collect()
+        let mut seen_dirs = std::collections::HashSet::new();
+        let mut merged = Vec::with_capacity(entries.len());
+        for mut entry in entries {
+            if entry.is_directory {
+                if !seen_dirs.insert(entry.path.clone()) {
+                    continue;
+                }
+                entry.worktree = false;
+            }
+            merged.push(entry);
+        }
+        merged
     }
 
     /// 重算面板：触发或缓存缺失时隐藏，同起点且同目录范围保留高亮。

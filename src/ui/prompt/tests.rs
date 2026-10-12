@@ -326,7 +326,7 @@ fn mention_panel_tags_rows_when_block_binds_a_worktree() {
     editor.set_worktree_repo(Some(std::path::PathBuf::from("/repo")));
     editor.set_mention_root(Some(std::path::PathBuf::from("/fallback")));
     editor.set_text(
-        "&&& addTemplate --start\n{title: }\n{wt:feature/x}\nbody\n&&& addTemplate --end\n",
+        "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n",
     );
     editor.apply_worktree_entries(vec![crate::app::markdown::WorktreeCandidate {
         branch: "feature/x".into(),

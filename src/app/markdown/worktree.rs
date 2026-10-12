@@ -1,13 +1,14 @@
-//! 模板块的 git worktree 绑定：块顶部独立 `{wt:<branch>}` 行的读写、
+//! 模板块的 git worktree 绑定：块底部独立 `{wt:<branch>}` 行的读写、
 //! 候选解析与编辑保护。
 //!
-//! 绑定只存在于独立的绑定行：起始行下一行（有标题行时为标题行的下一行）——
-//! 即块顶部第二行。`{wt:}` 保存完整分支名，解析时对同一仓库的 worktree 列表
-//! 要求唯一匹配，detached/bare 条目永不入选。绑定行是结构性元数据：
-//! 编辑器禁止局部删除或修改。
+//! 绑定只存在于独立的绑定行：结束行的上一行——即块内最后一行，上方固定以
+//! 一个空行与正文分隔（标题行同样与正文隔一个空行）。`{wt:}` 保存完整分支名，
+//! 解析时对同一仓库的 worktree 列表要求唯一匹配，detached/bare 条目永不入选。
+//! 绑定行是结构性元数据：编辑器禁止局部删除或修改。
 
 use super::template::{
-    is_title_line, parse_template_end_line, parse_template_start_line, parse_worktree_line,
+    parse_template_block_at_line, parse_template_end_line, parse_template_start_line,
+    parse_worktree_line,
 };
 
 /// 候选 worktree：展示用分支名与 checkout 路径。
@@ -46,13 +47,12 @@ pub fn resolve_binding(candidates: &[WorktreeCandidate], branch: &str) -> Worktr
     }
 }
 
-/// 块顶部绑定行位置：起始行下一行；该行为标题行时顺延一行。
+/// 绑定行位置：结束行上一行；块未闭合、无结束行或该行即起始行时返回 None。
 fn binding_line_of(text: &str, start_line: usize) -> Option<usize> {
-    let after_start = start_line.checked_add(1)?;
-    if nth_line(text, after_start).is_some_and(is_title_line) {
-        return after_start.checked_add(1);
-    }
-    Some(after_start)
+    let range = parse_template_block_at_line(text, start_line)?;
+    parse_template_end_line(nth_line(text, range.end)?)?;
+    let line = range.end.checked_sub(1)?;
+    (line > start_line).then_some(line)
 }
 
 /// 结束行上方最近的模板块起始行；无起始行返回 None。
@@ -95,60 +95,50 @@ pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
     Some(range.end)
 }
 
-/// 把结束行所在块的绑定写为 `branch`：块顶部已有绑定行则整行替换，
-/// 否则在绑定位置插入一行；绑定行下方保留一个空行分隔元数据与正文。
+/// 把结束行所在块的绑定写为 `branch`：块底部已有绑定行、或 `occupy` 指定的
+/// 命令行恰占该行时整行替换，否则在结束行之前插入一行；绑定行上方保留一个
+/// 空行分隔正文与元数据。
 ///
-/// 返回（替换范围, 新文本）：插入时范围是绑定位置的空区间，替换时覆盖
-/// 绑定行整行（含换行）；新文本自带绑定行的换行。
+/// `occupy` 为占用绑定位置的行号（`/gitWorkTree` 命令行所在行），不占用传 None。
+/// 返回（替换范围, 新文本）：替换时覆盖绑定行内容（不含换行），新文本自带
+/// 上方分隔空行；插入时范围是结束行行首的空区间，新文本自带尾随换行。
 pub fn set_line_worktree(
     text: &str,
     end_line: usize,
     branch: &str,
+    occupy: Option<usize>,
 ) -> Option<(std::ops::Range<usize>, String)> {
     parse_template_end_line(nth_line(text, end_line)?)?;
     let start = block_start_before(text, end_line)?;
     let indent = parse_template_start_line(nth_line(text, start)?)?.indent;
-    let marker_line = binding_line_of(text, start)?;
     let marker = format!("{indent}{{wt:{branch}}}");
-    if marker_line < end_line
-        && let Some(previous) = nth_line(text, marker_line)
-        && parse_worktree_line(previous).is_some()
-    {
-        let (range, _) = nth_line_range(text, marker_line)?;
-        let range = line_slot(text, range);
-        return Some((range, binding_line_text(text, marker_line, &marker)));
+    let slot = end_line.checked_sub(1).filter(|line| *line > start);
+    if let Some(line) = slot {
+        let (range, current) = nth_line_range(text, line)?;
+        if parse_worktree_line(current).is_some() || occupy == Some(line) {
+            let gap = gap_before(text, line);
+            return Some((range, format!("{gap}{marker}")));
+        }
     }
-    let target = marker_line.min(end_line);
-    let (range, _) = nth_line_range(text, target)?;
-    // 插入的绑定行把原目标行下推：原行非空时补一个空行做分隔。
-    let gap = follows_blank(text, target);
-    Some((range.start..range.start, format!("{marker}\n{gap}")))
+    let (range, _) = nth_line_range(text, end_line)?;
+    // 插入到结束行之前：原末行非空时其后再补一个空行。
+    let gap = gap_before(text, end_line);
+    Some((range.start..range.start, format!("{gap}{marker}\n")))
 }
 
-/// 行内容范围扩展为整行槽位：含尾随换行（末行无换行时保持原范围）。
-fn line_slot(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
-    if text[range.end..].starts_with('\n') {
-        range.start..range.end + 1
-    } else {
-        range
-    }
-}
-
-/// 绑定行整行文本（含换行）加下方空行：紧随其后的原行非空时才补空行。
-fn binding_line_text(text: &str, line: usize, marker: &str) -> String {
-    format!("{marker}\n{}", follows_blank(text, line + 1))
-}
-
-/// 指定行非空时返回分隔用空行 `"\n"`；行缺失或已空返回空串。
-fn follows_blank(text: &str, line: usize) -> &'static str {
-    if nth_line(text, line).is_some_and(|next| !next.trim().is_empty()) {
+/// 绑定行上方需要的分隔空行：其上一行非空、且自身不是首个位置时返回 `"\n"`。
+fn gap_before(text: &str, line: usize) -> &'static str {
+    let Some(previous) = line.checked_sub(1) else {
+        return "";
+    };
+    if nth_line(text, previous).is_some_and(|above| !above.trim().is_empty()) {
         "\n"
     } else {
         ""
     }
 }
 
-/// 受保护绑定行的字节范围（整行内容，不含换行）：`{wt:}` 独占一行且位于模板块顶部。
+/// 受保护绑定行的字节范围（整行内容，不含换行）：`{wt:}` 独占一行且为块内末行。
 pub fn worktree_line_spans(text: &str) -> Vec<std::ops::Range<usize>> {
     let lines: Vec<&str> = text.split('\n').collect();
     let mut ranges = Vec::with_capacity(lines.len());

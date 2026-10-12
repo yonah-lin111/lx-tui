@@ -895,39 +895,50 @@ fn parse_worktree_line_forms() {
 
 #[test]
 fn worktree_marker_line_insert_replace_and_read() {
-    // 无标题行：绑定行插到起始行下一行（块顶部第二行）。
+    // 未绑定：绑定行插到结束行之前，上方补一个空行与正文分隔。
     let text = "&&& addTemplate --start\nbody\n&&& addTemplate --end done {id:42}\n";
-    let (range, replacement) = set_line_worktree(text, 2, "feature/x").expect("insert marker");
+    let (range, replacement) =
+        set_line_worktree(text, 2, "feature/x", None).expect("insert marker");
     let mut bound = text.to_string();
     bound.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         bound,
-        "&&& addTemplate --start\n{wt:feature/x}\n\nbody\n&&& addTemplate --end done {id:42}\n"
+        "&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done {id:42}\n"
     );
     assert_eq!(
         block_worktree_branch_at_line(&bound, 4),
-        Some((1, "feature/x".to_string()))
+        Some((3, "feature/x".to_string()))
     );
-    // 已绑定：整行替换（下方空行保留）。
-    let (range, replacement) = set_line_worktree(&bound, 4, "main").expect("replace marker");
+    // 已绑定：整行替换（上方空行保留，不重复补）。
+    let (range, replacement) = set_line_worktree(&bound, 4, "main", None).expect("replace marker");
     let mut rebound = bound.clone();
     rebound.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         rebound,
-        "&&& addTemplate --start\n{wt:main}\n\nbody\n&&& addTemplate --end done {id:42}\n"
+        "&&& addTemplate --start\nbody\n\n{wt:main}\n&&& addTemplate --end done {id:42}\n"
     );
-    // 有标题行：绑定行插到标题行下一行。
-    let titled = "&&& addTemplate --start\n{title: T}\nbody\n&&& addTemplate --end\n";
-    let (range, replacement) = set_line_worktree(titled, 3, "dev").expect("insert under title");
+    // 标题行与正文已隔空行：绑定行贴住结束行。
+    let titled = "&&& addTemplate --start\n{title: T}\n\nbody\n&&& addTemplate --end\n";
+    let (range, replacement) = set_line_worktree(titled, 4, "dev", None).expect("insert near end");
     let mut with_title = titled.to_string();
     with_title.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         with_title,
-        "&&& addTemplate --start\n{title: T}\n{wt:dev}\n\nbody\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: T}\n\nbody\n\n{wt:dev}\n&&& addTemplate --end\n"
     );
     assert_eq!(
-        block_worktree_branch_at_line(&with_title, 5),
-        Some((2, "dev".to_string()))
+        block_worktree_branch_at_line(&with_title, 6),
+        Some((5, "dev".to_string()))
+    );
+    // 命令行占用绑定位置时整行替换（不新增行）。
+    let occupied = "&&& addTemplate --start\nbody\n/gitW\n&&& addTemplate --end\n";
+    let (range, replacement) =
+        set_line_worktree(occupied, 3, "dev", Some(2)).expect("occupy marker line");
+    let mut occupied_text = occupied.to_string();
+    occupied_text.replace_range(range.start..range.end, &replacement);
+    assert_eq!(
+        occupied_text,
+        "&&& addTemplate --start\nbody\n\n{wt:dev}\n&&& addTemplate --end\n"
     );
     // 结束行上的旧版 `{wt:}` 不再是绑定来源。
     let legacy = "&&& addTemplate --start\nbody\n&&& addTemplate --end {wt:main}\n";
@@ -975,7 +986,7 @@ fn edit_touches_title_line_protects_marker_and_allows_value() {
 
 #[test]
 fn edit_touches_worktree_line_guards_binding_row() {
-    let text = "&&& x --start\n{wt:main}\nbody\n&&& x --end\n";
+    let text = "&&& x --start\nbody\n\n{wt:main}\n&&& x --end\n";
     let start = text.find("{wt:main}").expect("marker");
     let end = start + "{wt:main}".len();
     assert!(
@@ -1001,6 +1012,11 @@ fn edit_touches_worktree_line_guards_binding_row() {
     assert!(
         !edit_touches_worktree_line(text, end + 1, end + 3),
         "结束行内容可编辑"
+    );
+    // 上方分隔空行整行删除（含末行以上范围）放行，但紧贴绑定行的换行受保护。
+    assert!(
+        edit_touches_worktree_line(text, start - 1, start),
+        "上方空行换行删除被拒"
     );
     assert!(
         !edit_touches_worktree_line(text, 0, text.len()),

@@ -228,7 +228,7 @@ impl Prompt {
         }
     }
 
-    /// 选择器确认：把选中分支写到块顶部第二行（标题行下一行）的 `{wt:}` 绑定行并
+    /// 选择器确认：把选中分支写到块底部（结束行上一行）的 `{wt:}` 绑定行并
     /// 消耗 `/gitWorkTree` 命令，作为一步撤销；命令所在行保留（不删行），
     /// 恰位于绑定位置时该行直接转为绑定行。
     fn confirm_worktree_binding(&mut self, branch: &str) -> bool {
@@ -240,30 +240,24 @@ impl Prompt {
             _ => return false,
         };
         let trigger = panel.trigger().clone();
+        let valid_trigger =
+            trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len();
+        // 命令行所在行号：恰占绑定位置（结束行上一行）时绑定直接占用该行。
+        let trigger_line = self.text[..trigger.line_start.min(self.text.len())]
+            .matches('\n')
+            .count();
+        let occupy = valid_trigger.then_some(trigger_line);
         let Some((marker_range, marker_text)) =
-            markdown::set_line_worktree(&self.text, block_end_line, branch)
+            markdown::set_line_worktree(&self.text, block_end_line, branch, occupy)
         else {
             return false;
         };
-        let valid_trigger =
-            trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len();
-        // 命令行恰好位于绑定位置时，绑定行直接占用该行（整行槽位替换，含换行）。
-        let occupy_trigger =
-            valid_trigger && marker_range.is_empty() && marker_range.start == trigger.line_start;
-        let mut edits = Vec::new();
-        if occupy_trigger {
-            let slot_end = if self.text[trigger.line_end..].starts_with('\n') {
-                trigger.line_end + 1
-            } else {
-                trigger.line_end
-            };
-            edits.push((trigger.line_start..slot_end, marker_text.clone()));
-        } else {
-            edits.push((marker_range, marker_text));
-            if valid_trigger {
-                // 清空命令行内容、保留该行与换行（对齐 lx-agent `/gitn` 清空命令行的语义）。
-                edits.push((trigger.line_start..trigger.line_end, String::new()));
-            }
+        // 绑定编辑从命令行行首起替换即为占用，无需再清空该行。
+        let replaces_trigger = !marker_range.is_empty() && marker_range.start == trigger.line_start;
+        let mut edits = vec![(marker_range, marker_text)];
+        if valid_trigger && !replaces_trigger {
+            // 清空命令行内容、保留该行与换行（对齐 lx-agent `/gitn` 清空命令行的语义）。
+            edits.push((trigger.line_start..trigger.line_end, String::new()));
         }
         self.slash = None;
         self.break_group();
