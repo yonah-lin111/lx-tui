@@ -291,6 +291,37 @@ fn workspace_list_rect(view: &layout::ViewLayout, state: &AppState) -> Option<Re
     (list.width > 0 && list.height > 0).then_some(list)
 }
 
+/// 工作区列表内容区（排除滚动条列）；命中几何共用。
+fn workspace_list_content(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    let list = workspace_list_rect(view, state)?;
+    let content_width = match workspace_scrollbar_for(list, state) {
+        Some(_) => list.width.saturating_sub(1),
+        None => list.width,
+    };
+    (content_width > 0).then_some(Rect {
+        width: content_width,
+        ..list
+    })
+}
+
+/// 内容区行槽：坐标落在内容区（排除滚动条列）时返回可见行下标；下标可能越出已渲染行。
+fn workspace_slot_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<usize> {
+    let content = workspace_list_content(view, state)?;
+    if !content.contains((column, row).into()) {
+        return None;
+    }
+    Some(
+        state
+            .workspace_scroll
+            .saturating_add(usize::from(row - content.y)),
+    )
+}
+
 /// 工作区项行命中：返回被点工作区索引；滚动条列、空行与被折叠隐藏的行不命中。
 ///
 /// 可见行由 `AppState::workspace_rows` 给出；分区缺失时退回整块内容区。
@@ -300,21 +331,19 @@ pub fn workspace_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let list = workspace_list_rect(view, state)?;
-    if !list.contains((column, row).into()) {
-        return None;
-    }
-    let content_width = match workspace_scrollbar_for(list, state) {
-        Some(_) => list.width.saturating_sub(1),
-        None => list.width,
-    };
-    if column >= list.x.saturating_add(content_width) {
-        return None;
-    }
-    let slot = state
-        .workspace_scroll
-        .saturating_add(usize::from(row - list.y));
+    let slot = workspace_slot_at(view, state, column, row)?;
     state.workspace_rows().get(slot).map(|entry| entry.index)
+}
+
+/// 工作区列表空白区域命中：内容区内（排除滚动条列）且行槽越出已渲染行。
+pub fn workspace_list_blank_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    workspace_slot_at(view, state, column, row)
+        .is_some_and(|slot| slot >= state.workspace_rows().len())
 }
 
 /// 分组折叠箭头命中：仅父项行的箭头格（内容区第 0 列）；返回父项工作区索引。

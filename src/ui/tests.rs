@@ -711,6 +711,43 @@ fn workspace_items_hit_full_list_rows() {
 }
 
 #[test]
+fn workspace_list_blank_hits_rows_below_items_only() {
+    let mut state = AppState::demo();
+    update::create_workspace(&mut state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    let list = sections.workspaces;
+    assert!(
+        !workspace_list_blank_at(&view, &state, list.x, list.y),
+        "项行不命中空白"
+    );
+    assert!(
+        workspace_list_blank_at(&view, &state, list.x, list.y + 2),
+        "末项下方空行命中空白"
+    );
+    assert!(!workspace_list_blank_at(
+        &view,
+        &state,
+        list.x,
+        sections.divider.y
+    ));
+    assert!(!workspace_list_blank_at(
+        &view,
+        &state,
+        list.x,
+        sections.agents.y
+    ));
+}
+
+#[test]
+fn workspace_list_blank_hidden_when_sidebar_collapsed() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = true;
+    let view = view_for(&state);
+    assert!(!workspace_list_blank_at(&view, &state, 0, 1));
+}
+
+#[test]
 fn workspace_list_last_row_is_hittable_without_footer() {
     let mut state = AppState::demo();
     for _ in 0..11 {

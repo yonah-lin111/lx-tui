@@ -402,6 +402,143 @@ fn mouse_right_click_tab_opens_tab_menu() {
 }
 
 #[test]
+fn mouse_right_click_workspace_item_opens_workspace_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let (column, row) = (sections.workspaces.x, sections.workspaces.y);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace menu overlay expected");
+    };
+    assert_eq!(
+        menu.target,
+        crate::app::overlay::OverlayTarget::Workspace(0)
+    );
+    assert_eq!(menu.anchor, (column, row));
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_right_click_workspace_list_blank_opens_new_workspace_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let (column, row) = (sections.workspaces.x, sections.workspaces.y + 1);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace list menu overlay expected");
+    };
+    assert_eq!(
+        menu.target,
+        crate::app::overlay::OverlayTarget::WorkspaceList
+    );
+    assert_eq!(
+        menu.commands,
+        vec![crate::app::overlay::MenuCommand::NewWorkspace]
+    );
+    assert_eq!(menu.anchor, (column, row));
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_right_click_workspace_blank_retargets_open_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            inner.x + 1,
+            inner.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_some(), "窗格菜单先打开");
+
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let (column, row) = (sections.workspaces.x, sections.workspaces.y + 1);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("workspace list menu overlay expected");
+    };
+    assert_eq!(
+        menu.target,
+        crate::app::overlay::OverlayTarget::WorkspaceList,
+        "菜单改挂到工作区列表空白目标"
+    );
+    assert_eq!(menu.anchor, (column, row));
+}
+
+#[test]
+fn mouse_right_click_agents_blank_does_not_open_menu() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let sections =
+        ui::layout::sidebar_sections(geo.view.sidebar, state.agents_collapsed).expect("sections");
+    let (column, row) = (sections.agents.x, sections.agents.y + 1);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Right), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    assert!(state.overlay.is_none());
+    assert!(!dirty);
+}
+
+#[test]
 fn mouse_right_click_pane_opens_pane_menu_at_pointer() {
     let config = Config::default();
     let mut state = demo_terminal();

@@ -139,6 +139,29 @@ fn menu_falls_back_to_target_kind_title() {
 }
 
 #[test]
+fn menu_workspace_list_shows_list_title_and_new_workspace_label() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor: (10, 5),
+        target: OverlayTarget::WorkspaceList,
+        commands: vec![MenuCommand::NewWorkspace],
+        selected: 0,
+    }));
+    let (lines, _) = draw_overlay(&state);
+    assert!(
+        lines[5].contains(text::MENU_TITLE_WORKSPACES),
+        "title row={:?}",
+        lines[5]
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(text::MENU_NEW_WORKSPACE)),
+        "item label missing: {lines:?}"
+    );
+}
+
+#[test]
 fn menu_renders_labels_and_overlay_selection() {
     let state = menu_state(
         vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],

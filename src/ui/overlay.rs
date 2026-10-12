@@ -658,6 +658,7 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
         ),
         OverlayTarget::TempPrompt { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
         OverlayTarget::PromptTree { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
+        OverlayTarget::WorkspaceList => (text::CONFIRM_CLOSE_TITLE, String::new()),
     }
 }
 
@@ -696,6 +697,7 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
         .map(|command| match command {
             MenuCommand::NewTab => text::MENU_NEW_TAB,
             MenuCommand::NewTerminal => text::MENU_NEW_TERMINAL,
+            MenuCommand::NewWorkspace => text::MENU_NEW_WORKSPACE,
             MenuCommand::RenameWorkspace => text::MENU_RENAME_WORKSPACE,
             MenuCommand::OpenWorktree => text::MENU_OPEN_WORKTREE,
             MenuCommand::OpenPrompt => text::MENU_OPEN_PROMPT,
@@ -768,6 +770,7 @@ fn menu_title(state: &AppState, menu: &Menu) -> String {
                 .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
         }
         OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),
+        OverlayTarget::WorkspaceList => text::MENU_TITLE_WORKSPACES.to_string(),
     }
 }
 

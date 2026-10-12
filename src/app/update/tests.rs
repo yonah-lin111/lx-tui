@@ -864,6 +864,29 @@ fn open_workspace_menu_hides_close_for_last_workspace() {
 }
 
 #[test]
+fn open_workspace_list_menu_offers_new_workspace_only() {
+    let mut state = AppState::demo();
+    open_workspace_list_menu(&mut state, (10, 5));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.target, OverlayTarget::WorkspaceList);
+    assert_eq!(menu.commands, vec![MenuCommand::NewWorkspace]);
+    assert_eq!(menu.selected, 0);
+    assert_eq!(menu.anchor, (10, 5));
+}
+
+#[test]
+fn activate_menu_new_workspace_from_list_opens_dialog() {
+    let mut state = AppState::demo();
+    open_workspace_list_menu(&mut state, (0, 0));
+    activate_menu(&mut state);
+
+    assert!(matches!(state.overlay, Some(Overlay::NewWorkspace(_))));
+    assert_eq!(state.workspaces.len(), 1, "仅打开弹窗，不直接创建工作区");
+}
+
+#[test]
 fn menu_selection_wraps_and_reports_changes() {
     let mut state = AppState::demo();
     create_workspace(&mut state);

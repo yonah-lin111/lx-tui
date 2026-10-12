@@ -17,7 +17,8 @@ pub mod widgets;
 pub use sidebar::{
     add_workspace_button, agent_item_at, agent_item_index_at, agent_list_rows, agent_scrollbar,
     agents_section_at, sidebar_boundary_at, workspace_drop_index, workspace_group_toggle_at,
-    workspace_item_at, workspace_list_rows, workspace_scrollbar, workspace_section_at,
+    workspace_item_at, workspace_list_blank_at, workspace_list_rows, workspace_scrollbar,
+    workspace_section_at,
 };
 
 use std::path::Path;

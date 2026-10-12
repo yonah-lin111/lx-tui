@@ -167,6 +167,7 @@ pub const MENTION_FILE_ICON: &str = "•";
 /// 右键菜单项；按命令映射，禁止在逻辑层硬编码。
 pub const MENU_NEW_TAB: &str = "New tab";
 pub const MENU_NEW_TERMINAL: &str = "New terminal";
+pub const MENU_NEW_WORKSPACE: &str = "New workspace";
 pub const MENU_RENAME_WORKSPACE: &str = "Rename";
 pub const MENU_OPEN_WORKTREE: &str = "Open worktree";
 pub const MENU_OPEN_PROMPT: &str = "Open prompt";
@@ -412,6 +413,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
 
 /// 右键菜单边框标题：目标名缺失时按种类回退。
 pub const MENU_TITLE_WORKSPACE: &str = "workspace";
+pub const MENU_TITLE_WORKSPACES: &str = "workspaces";
 pub const MENU_TITLE_TAB: &str = "tab";
 pub const MENU_TITLE_PANE: &str = "pane";
 pub const MENU_TITLE_PROMPT: &str = "prompt";

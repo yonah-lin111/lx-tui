@@ -1382,6 +1382,19 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
     }));
 }
 
+/// 打开工作区列表空白区域右键菜单：仅新建工作区；同时结束可能残留的滚动条拖拽与排序拖拽。
+pub fn open_workspace_list_menu(state: &mut AppState, anchor: (u16, u16)) {
+    state.workspace_scroll_drag = None;
+    state.workspace_drag = None;
+    state.workspace_dragging = false;
+    state.overlay = Some(Overlay::Menu(Menu {
+        anchor,
+        target: OverlayTarget::WorkspaceList,
+        commands: vec![MenuCommand::NewWorkspace],
+        selected: 0,
+    }));
+}
+
 /// 打开标签右键菜单；仅剩一个标签时不提供关闭项。
 pub fn open_tab_menu(state: &mut AppState, tab: usize, anchor: (u16, u16)) {
     let workspace_index = state.active_workspace;
@@ -1532,6 +1545,9 @@ pub fn activate_menu(state: &mut AppState) {
     };
     match (menu.commands.get(menu.selected), menu.target) {
         (Some(MenuCommand::NewTab), OverlayTarget::Tab { .. }) => create_tab(state),
+        (Some(MenuCommand::NewWorkspace), OverlayTarget::WorkspaceList) => {
+            open_new_workspace_dialog(state);
+        }
         (Some(MenuCommand::NewTerminal), OverlayTarget::Workspace(target)) => {
             create_terminal_in_workspace(state, target);
         }
@@ -1936,6 +1952,7 @@ fn confirm_close(state: &mut AppState) {
         }
         OverlayTarget::TempPrompt { .. } => {}
         OverlayTarget::PromptTree { .. } => {}
+        OverlayTarget::WorkspaceList => {}
     }
 }
 

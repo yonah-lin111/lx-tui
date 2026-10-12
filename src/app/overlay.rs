@@ -111,6 +111,8 @@ pub struct Menu {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayTarget {
     Workspace(usize),
+    /// 工作区列表空白区域。
+    WorkspaceList,
     Tab {
         workspace: usize,
         tab: usize,
@@ -146,6 +148,7 @@ pub enum OverlayTarget {
 pub enum MenuCommand {
     NewTab,
     NewTerminal,
+    NewWorkspace,
     RenameWorkspace,
     OpenWorktree,
     OpenPrompt,

@@ -1642,7 +1642,7 @@ enum PromptHit {
     Section,
 }
 
-/// 命中标签、工作区项或主区窗格时打开对应右键菜单；返回是否打开。
+/// 命中标签、工作区项、工作区列表空白区域或主区窗格时打开对应右键菜单；返回是否打开。
 ///
 /// prompt 右栏、边框与切换按钮不参与：`pane_at` 只用窗格内容区，
 /// 且目标必须在当前标签的窗格载荷中。
@@ -1660,6 +1660,11 @@ fn open_right_click_menu(
     }
     if let Some(index) = ui::workspace_item_at(view, state, column, row) {
         update::open_workspace_menu(state, index, (column, row));
+        return true;
+    }
+    // 工作区列表空白区域：打开公共新建菜单。
+    if ui::workspace_list_blank_at(view, state, column, row) {
+        update::open_workspace_list_menu(state, (column, row));
         return true;
     }
     // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
