@@ -228,8 +228,9 @@ impl Prompt {
         }
     }
 
-    /// 选择器确认：把选中分支写到块结束行上方的 `{wt:}` 行并消耗 `/gitWorkTree` 命令，
-    /// 作为一步撤销；命令所在行保留（不删行），紧贴结束行时该行直接转为绑定行。
+    /// 选择器确认：把选中分支写到块顶部第二行（标题行下一行）的 `{wt:}` 绑定行并
+    /// 消耗 `/gitWorkTree` 命令，作为一步撤销；命令所在行保留（不删行），
+    /// 恰位于绑定位置时该行直接转为绑定行。
     fn confirm_worktree_binding(&mut self, branch: &str) -> bool {
         let Some(panel) = self.slash.as_ref() else {
             return false;
