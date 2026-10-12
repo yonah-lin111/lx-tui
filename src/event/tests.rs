@@ -2417,7 +2417,8 @@ fn template_button_state() -> (AppState, Config, Geometry, Rect) {
     let config = Config::default();
     let mut state = AppState::demo();
     state.prompt_width = 80;
-    state.prompt.resize(78, 12);
+    // 模板块含标题空行共 13 行，prompt 需足够高以完整显示起始行按钮。
+    state.prompt.resize(78, 16);
     crate::app::update::focus_prompt(&mut state);
     let (content, _) =
         crate::app::markdown::slash_template_content(crate::app::markdown::SlashCommandId::Add);

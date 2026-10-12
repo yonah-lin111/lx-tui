@@ -64,7 +64,7 @@ const TEMPLATE_RESERVED: [&str; 6] = [
     "logTemplate",
 ];
 
-/// 解析模板块起始行：`&&& <command> [--start] [「title: …」]`。
+/// 解析模板块起始行：`&&& <command> [--start] [{title: …}]`。
 pub fn parse_template_start_line(line: &str) -> Option<TemplateStartLine<'_>> {
     let trimmed = line.trim_start_matches(' ');
     let indent = &line[..line.len() - trimmed.len()];
@@ -90,9 +90,9 @@ pub fn parse_template_start_line(line: &str) -> Option<TemplateStartLine<'_>> {
     let title = if rest.trim().is_empty() {
         None
     } else {
-        let after = rest.trim_start_matches(' ').strip_prefix("「title:")?;
-        let close = after.find('」')?;
-        if !after[close + '」'.len_utf8()..].trim().is_empty() {
+        let after = rest.trim_start_matches(' ').strip_prefix("{title:")?;
+        let close = after.find('}')?;
+        if !after[close + 1..].trim().is_empty() || after[..close].contains(['{', '}']) {
             return None;
         }
         Some(&after[..close])
@@ -154,6 +154,19 @@ pub fn parse_template_end_line(line: &str) -> Option<TemplateEndLine<'_>> {
         id,
         wt,
     })
+}
+
+/// 解析独立的 worktree 绑定行：整行（允许缩进与尾随空白）必须是 `{wt:<branch>}`；
+/// 分支名非空且不含空白与花括号。
+pub fn parse_worktree_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let branch = inner.strip_prefix("wt:")?;
+    let valid = !branch.is_empty()
+        && !branch
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '{' || ch == '}');
+    valid.then_some(branch)
 }
 
 /// 解析 `line` 起始的模板块范围；非起始行返回 None，未闭合时 `end` 为文末行。
@@ -219,6 +232,8 @@ pub enum TemplateLineRole {
 pub struct TemplateLineInfo {
     pub role: TemplateLineRole,
     pub status: TemplateStatus,
+    /// 是否为结构分割行：标题行之下或 `{wt:}` 绑定行之上的空行，渲染为块边框横线。
+    pub separator: bool,
 }
 
 /// 逐行扫描模板块归属；不在块内的行为 None，未闭合块延伸至文末。
@@ -240,6 +255,7 @@ pub fn template_line_infos(text: &str) -> Vec<Option<TemplateLineInfo>> {
                             TemplateLineRole::Middle
                         },
                         status: end.status,
+                        separator: false,
                     });
                 }
             }
@@ -256,10 +272,36 @@ pub fn template_line_infos(text: &str) -> Vec<Option<TemplateLineInfo>> {
                     TemplateLineRole::Middle
                 },
                 status: TemplateStatus::Todo,
+                separator: false,
             });
         }
     }
+    mark_separator_rows(&lines, &mut infos);
     infos
+}
+
+/// 标记结构分割行：块内空行，且紧邻标题行之下或 `{wt:}` 绑定行之上。
+fn mark_separator_rows(lines: &[&str], infos: &mut [Option<TemplateLineInfo>]) {
+    for index in 0..lines.len() {
+        let Some(info) = infos[index] else {
+            continue;
+        };
+        if info.role != TemplateLineRole::Middle || !lines[index].trim().is_empty() {
+            continue;
+        }
+        let after_title = index > 0
+            && infos.get(index - 1).is_some_and(Option::is_some)
+            && is_title_line(lines[index - 1]);
+        let before_binding = infos.get(index + 1).is_some_and(Option::is_some)
+            && lines
+                .get(index + 1)
+                .is_some_and(|next| parse_worktree_line(next).is_some());
+        if (after_title || before_binding)
+            && let Some(Some(slot)) = infos.get_mut(index)
+        {
+            slot.separator = true;
+        }
+    }
 }
 
 /// `line` 是否位于模板块内（含起止行）；用于渲染与光标/鼠标坐标映射。
@@ -383,13 +425,17 @@ pub fn clean_template_content(text: &str) -> String {
 }
 
 /// 复制用正文（对齐 lx-agent 的复制语义，不修改原文）：
-/// 剔除标题占位行（`--start` 下一行）、`+++` 补充子块（含内部内容）、
+/// 剔除标题占位行（`--start` 下一行）、`{wt:}` 绑定行、`+++` 补充子块（含内部内容）、
 /// 保留 `%%%` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。
 pub fn copy_template_content(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
     let mut kept: Vec<&str> = Vec::new();
     let mut inside_supple = false;
-    for (index, line) in text.split('\n').enumerate() {
+    for (index, line) in lines.iter().enumerate() {
         if index == 0 && is_title_line(line) {
+            continue;
+        }
+        if parse_worktree_line(line).is_some() {
             continue;
         }
         if let Some(kind) = copy_subblock_start(line) {
@@ -412,14 +458,91 @@ pub fn copy_template_content(text: &str) -> String {
     clean_template_content(&kept.join("\n"))
 }
 
-/// 独立成行的标题占位行 `「title: …」`（允许缩进与尾随空白）。
+/// 解析独立标题行 `{title: …}`（允许缩进与尾随空白）；返回冒号后的原始内容。
+pub fn parse_title_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let title = inner.strip_prefix("title:")?;
+    (!title.contains(['{', '}'])).then_some(title)
+}
+
+/// `line` 是否为独立标题行 `{title: …}`。
 pub fn is_title_line(line: &str) -> bool {
-    let rest = line.trim_start();
-    if !rest.starts_with("「title:") {
-        return false;
+    parse_title_line(line).is_some()
+}
+
+/// 结构性标题行（模板块起始行下一行）的标记区间：受保护的 `{title:` 前缀
+/// 与收尾 `}` 及其后区域，之间的值为可编辑区。
+struct TitleMarker {
+    line_start: usize,
+    prefix_end: usize,
+    brace: usize,
+    line_end: usize,
+}
+
+/// 全部结构性标题行的标记区间。
+fn title_markers(text: &str) -> Vec<TitleMarker> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut offsets = Vec::with_capacity(lines.len());
+    let mut offset = 0;
+    for line in &lines {
+        offsets.push(offset);
+        offset += line.len() + 1;
     }
-    rest.find('」')
-        .is_some_and(|close| rest[close + '」'.len_utf8()..].trim().is_empty())
+    let mut markers = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if parse_template_start_line(line).is_none() {
+            continue;
+        }
+        let Some(next) = lines.get(index + 1) else {
+            continue;
+        };
+        if !is_title_line(next) {
+            continue;
+        }
+        let trimmed_len = next.trim_end().len();
+        let Some(line_start) = offsets.get(index + 1).copied() else {
+            continue;
+        };
+        let indent = next.len() - next.trim_start().len();
+        markers.push(TitleMarker {
+            line_start,
+            prefix_end: line_start + indent + "{title:".len(),
+            brace: line_start + trimmed_len.saturating_sub(1),
+            line_end: line_start + next.len(),
+        });
+    }
+    markers
+}
+
+/// 目标编辑是否移除或改写结构性标题行 `{title: …}` 的标记：值内编辑放行；
+/// 触碰 `{title:` 前缀、收尾 `}` 或相邻换行被拒绝；严格覆盖整行以上范围
+/// （清空全文、删整块）放行。
+pub fn edit_touches_title_line(text: &str, from: usize, to: usize) -> bool {
+    let insertion = from == to;
+    for marker in title_markers(text) {
+        if insertion {
+            // 只禁止写入前缀区（`{title:` 及其之前）；值内与 `}` 之后的插入放行，
+            // 换行不区分内容，避免误伤行尾回车。
+            if from >= marker.line_start && from < marker.prefix_end {
+                return true;
+            }
+            continue;
+        }
+        if from < marker.line_start && to > marker.line_end {
+            continue;
+        }
+        if to == marker.line_start || from == marker.line_end {
+            return true;
+        }
+        if from < marker.prefix_end && to > marker.line_start {
+            return true;
+        }
+        if to > marker.brace && from < marker.line_end {
+            return true;
+        }
+    }
+    false
 }
 
 /// 复制语义下的子块类型：`+++` 补充块整体剔除；`%%%` 记录块保留内容、剔除标记。

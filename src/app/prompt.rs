@@ -2,6 +2,7 @@
 
 mod list;
 mod mention;
+pub use mention::MentionRootChoice;
 mod panel;
 mod template;
 pub mod tree;
@@ -18,7 +19,10 @@ use unicode_width::UnicodeWidthChar;
 
 use self::list::{ListContext, list_context, parse_list_item};
 use self::mention::MentionState;
-use super::markdown::{self, BlockPanel, MentionEntry, MentionPanel, SlashPanel};
+use super::markdown::{
+    self, BlockPanel, MentionEntry, MentionPanel, SlashItem, SlashPanel, WorktreeBinding,
+    WorktreeCandidate,
+};
 use crate::layout::PaneId;
 
 /// 粘贴文本中的制表符展开内容。
@@ -50,8 +54,12 @@ pub struct Prompt {
     last_edit: Option<EditKind>,
     /// 块命令面板；由光标处触发标记逼近得到。
     panel: Option<BlockPanel>,
-    /// 斜杠模板命令面板；由整行 `/` 触发逼近得到。
+    /// 斜杠模板命令面板；由整行 `/` 触发逼近得到，或 `/gitWorkTree` 的二级选择器。
     slash: Option<SlashPanel>,
+    /// 有效自定义斜杠命令（User 与 Project 合并后）；由事件层在载入/切换时注入。
+    custom: Vec<SlashItem>,
+    /// 显示中工作区是否有 git 仓库（决定 `/gitWorkTree` 候选）。
+    worktree_available: bool,
     /// 文件提及面板状态；含扫描缓存与在途代号。
     mention: MentionState,
     /// 面板压制标记：Esc 关闭或确认插入后，等待下一次编辑/移动再重算。
@@ -102,6 +110,8 @@ impl Prompt {
             last_edit: None,
             panel: None,
             slash: None,
+            custom: Vec::new(),
+            worktree_available: false,
             mention: MentionState::default(),
             panel_suppressed: false,
             is_saved: true,
@@ -239,6 +249,9 @@ impl Prompt {
             .take_while(|byte| *byte == b' ')
             .count();
         let insert = format!("\n{}", " ".repeat(indent));
+        if self.protected_edit(end, end) {
+            return;
+        }
         self.record(EditKind::Other);
         self.text.insert_str(end, &insert);
         self.cursor = end + insert.len();
@@ -253,6 +266,9 @@ impl Prompt {
         if self.mention.panel().is_none()
             && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
         {
+            if self.protected_edit(range.start, range.end) {
+                return;
+            }
             let start = range.start;
             self.record(EditKind::Delete);
             self.text.replace_range(range, "");
@@ -264,6 +280,9 @@ impl Prompt {
             return;
         }
         let previous = prev_boundary(&self.text, self.cursor);
+        if self.protected_edit(previous, self.cursor) {
+            return;
+        }
         self.record(EditKind::Delete);
         self.text.remove(previous);
         self.cursor = previous;
@@ -273,6 +292,9 @@ impl Prompt {
     /// 删除光标处字符；文末为 no-op。
     pub fn delete(&mut self) {
         if self.cursor >= self.text.len() {
+            return;
+        }
+        if self.protected_edit(self.cursor, next_boundary(&self.text, self.cursor)) {
             return;
         }
         self.record(EditKind::Delete);
@@ -308,12 +330,28 @@ impl Prompt {
         self.panel = None;
         self.slash = None;
         self.mention.clear();
+        self.mention.unsuppress();
         self.panel_suppressed = false;
     }
 
     /// 当前文件提及面板；未打开时为 None。
     pub fn mention(&self) -> Option<&MentionPanel> {
         self.mention.panel()
+    }
+
+    /// 取根选择器高亮索引；选择器未显示时为 None。
+    pub fn mention_chooser(&self) -> Option<usize> {
+        self.mention.chooser()
+    }
+
+    /// 提及面板（选择器或文件候选）是否可见。
+    pub fn mention_active(&self) -> bool {
+        self.mention.view_open()
+    }
+
+    /// 提及面板标题后缀：绑定 linked worktree 且已选定取根时为 `main` / `wt`。
+    pub fn mention_root_label(&self) -> Option<&'static str> {
+        self.mention.root_label(&self.text, self.cursor)
     }
 
     /// 提及面板打开时按偏移循环移动高亮；返回是否消费该按键。
@@ -338,11 +376,18 @@ impl Prompt {
         self.mention_confirm()
     }
 
-    /// 提及面板打开时确认高亮条目：替换触发区间并压制重弹；返回是否消费该按键。
+    /// 提及面板打开时确认高亮条目：取根选择器确认取根，文件候选替换触发区间并压制重弹；
+    /// 返回是否消费该按键。
     pub fn mention_confirm(&mut self) -> bool {
+        if self.mention.choose_root(&self.text, self.cursor) {
+            return true;
+        }
         let Some((range, insertion)) = self.mention.confirm(self.text.len()) else {
             return false;
         };
+        if self.protected_edit(range.start, range.end) {
+            return false;
+        }
         self.break_group();
         self.record(EditKind::Other);
         self.text.replace_range(range.clone(), &insertion);
@@ -360,6 +405,9 @@ impl Prompt {
         let Some((range, insertion)) = self.mention.enter_folder(self.text.len()) else {
             return false;
         };
+        if self.protected_edit(range.start, range.end) {
+            return false;
+        }
         self.break_group();
         self.record(EditKind::Other);
         self.text.replace_range(range.clone(), &insertion);
@@ -378,8 +426,91 @@ impl Prompt {
     }
 
     /// 同步提及扫描根；根变化时清除缓存并作废在途结果。
+    ///
+    /// `panel_suppressed` 为真（Esc/确认后尚未编辑或移动）时保持面板压制，
+    /// 避免每次按键重算把面板重新弹出。
     pub fn set_mention_root(&mut self, root: Option<PathBuf>) {
+        if self.panel_suppressed {
+            self.mention.suppress();
+        } else {
+            self.mention.unsuppress();
+        }
         self.mention.set_root(root, &self.text, self.cursor);
+    }
+
+    /// 同步显示中工作区的仓库根与 git 可用性；变化时作废 worktree 候选。
+    /// 返回仓库根是否发生变化（调用方据此置脏重绘）。
+    pub fn set_worktree_repo(&mut self, repo: Option<PathBuf>) -> bool {
+        let changed = self.mention.worktree_repo() != repo.as_deref();
+        let available = repo.is_some();
+        if self.worktree_available != available {
+            self.worktree_available = available;
+            self.slash = None;
+        }
+        self.mention
+            .set_worktree_repo(repo, &self.text, self.cursor);
+        changed
+    }
+
+    /// 当前注入的自定义命令。
+    pub fn custom_commands(&self) -> &[SlashItem] {
+        &self.custom
+    }
+
+    /// 注入有效自定义命令；候选变化时关闭旧面板并由后续编辑重算。
+    pub fn set_custom_commands(&mut self, items: Vec<SlashItem>) {
+        if self.custom == items {
+            return;
+        }
+        self.custom = items;
+        self.slash = None;
+        self.refresh_slash_panel();
+    }
+
+    /// 光标所在块的 worktree 绑定；无块或无绑定返回 None。
+    pub fn block_binding(&self) -> Option<WorktreeBinding> {
+        self.mention.block_binding(&self.text, self.cursor)
+    }
+
+    /// 需要 worktree 列表时返回仓库根；仅事件循环调用。
+    pub fn take_worktree_request(&mut self) -> Option<PathBuf> {
+        self.mention.take_worktree_request(&self.text, self.cursor)
+    }
+
+    /// 选择器打开期间的强制刷新请求；仅事件循环调用。
+    pub fn take_worktree_refresh(&mut self) -> Option<PathBuf> {
+        self.mention.request_worktree_refresh()
+    }
+
+    /// 选择器是否正在等待 worktree 列表。
+    pub fn worktree_loading(&self) -> bool {
+        self.mention.worktree_loading()
+    }
+
+    /// 斜杠面板是否处于 worktree 选择器模式。
+    pub fn worktree_chooser_open(&self) -> bool {
+        matches!(
+            self.slash.as_ref().map(super::markdown::SlashPanel::kind),
+            Some(super::markdown::SlashPanelKind::WorktreeChooser { .. })
+        )
+    }
+
+    /// worktree 候选（已加载时）；选择器渲染用。
+    pub fn worktree_candidates(&self) -> Option<&[WorktreeCandidate]> {
+        self.mention.worktree_candidates()
+    }
+
+    /// 写入 worktree 列表结果并重算绑定；代号过期由 mention 状态自行判定。
+    pub fn apply_worktree_entries(&mut self, candidates: Vec<WorktreeCandidate>) -> bool {
+        let changed = self.mention.worktree_candidates() != Some(candidates.as_slice());
+        self.mention
+            .apply_worktree_entries(candidates, &self.text, self.cursor);
+        changed
+    }
+
+    /// worktree 查询失败：清空候选并允许后续重试。
+    pub fn worktree_failed(&mut self) {
+        self.mention.worktree_failed(&self.text, self.cursor);
     }
 
     /// 需要新扫描时返回（代号，根路径）并标记处理中；仅事件循环调用。
@@ -399,8 +530,11 @@ impl Prompt {
             self.insert_at(TAB_STOP);
             return;
         }
-        self.record(EditKind::Other);
         let start = line_start(&self.text, self.cursor);
+        if self.protected_edit(start, start) {
+            return;
+        }
+        self.record(EditKind::Other);
         self.text.insert_str(start, TAB_STOP);
         self.cursor += INDENT_UNIT;
         self.settle();
@@ -414,7 +548,7 @@ impl Prompt {
             .take_while(|byte| *byte == b' ')
             .count();
         let remove = spaces.min(INDENT_UNIT);
-        if remove == 0 {
+        if remove == 0 || self.protected_edit(start, start + remove) {
             return;
         }
         self.record(EditKind::Other);
@@ -515,7 +649,7 @@ impl Prompt {
     /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。
     pub fn delete_word_backward(&mut self) {
         let start = self.word_start_before(self.cursor);
-        if start < self.cursor {
+        if start < self.cursor && !self.protected_edit(start, self.cursor) {
             self.mark_dirty();
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
@@ -526,7 +660,7 @@ impl Prompt {
     /// 删除光标到下一个词尾（readline M-d 语义）。
     pub fn delete_word_forward(&mut self) {
         let end = self.word_end_after(self.cursor);
-        if end > self.cursor {
+        if end > self.cursor && !self.protected_edit(self.cursor, end) {
             self.mark_dirty();
             self.text.replace_range(self.cursor..end, "");
             self.settle();
@@ -540,10 +674,16 @@ impl Prompt {
         }
         let start = line_start(&self.text, self.cursor);
         if start < self.cursor {
+            if self.protected_edit(start, self.cursor) {
+                return;
+            }
             self.record(EditKind::Delete);
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
             self.settle();
+            return;
+        }
+        if self.protected_edit(self.cursor - 1, self.cursor) {
             return;
         }
         self.record(EditKind::Delete);
@@ -555,7 +695,7 @@ impl Prompt {
     /// 删除光标到逻辑行尾（不删除换行）。
     pub fn delete_to_line_end(&mut self) {
         let end = line_end(&self.text, self.cursor);
-        if end > self.cursor {
+        if end > self.cursor && !self.protected_edit(self.cursor, end) {
             self.mark_dirty();
             self.text.replace_range(self.cursor..end, "");
             self.settle();
@@ -677,6 +817,9 @@ impl Prompt {
         if start >= end || end > self.text.len() {
             return false;
         }
+        if self.protected_edit(start, end) {
+            return false;
+        }
         let sanitized = sanitize(insert);
         self.break_group();
         self.record(EditKind::Insert);
@@ -686,8 +829,23 @@ impl Prompt {
         true
     }
 
-    /// 在光标处插入已净化的文本并推进光标。
+    /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。
+    #[cfg(test)]
+    pub(crate) fn set_cursor_offset_for_test(&mut self, offset: usize) {
+        self.cursor = offset.min(self.text.len());
+    }
+
+    /// 编辑是否触碰受保护的 `{wt:}` 绑定行；触碰时拒绝该次编辑。
+    fn protected_edit(&self, from: usize, to: usize) -> bool {
+        markdown::edit_touches_worktree_line(&self.text, from, to)
+            || markdown::edit_touches_title_line(&self.text, from, to)
+    }
+
+    /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。
     fn insert_at(&mut self, insert: &str) {
+        if self.protected_edit(self.cursor, self.cursor) {
+            return;
+        }
         self.record(EditKind::Insert);
         self.text.insert_str(self.cursor, insert);
         self.cursor += insert.len();

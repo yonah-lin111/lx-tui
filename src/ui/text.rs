@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::markdown::{BlockCommandId, SlashCommandId, TemplateStatus};
+use crate::app::markdown::{BlockCommandId, TemplateStatus};
 use crate::app::prompt::PromptItemStatus;
 use crate::app::state::{AppState, PaneView};
 use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
@@ -349,7 +349,7 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。
-pub const EXIT_LABEL: &str = "[exit]";
+pub const EXIT_LABEL: &str = "[EXIT]";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
@@ -362,6 +362,9 @@ pub const TOAST_WORKSPACE_TITLE: &str = "Workspace";
 pub const TOAST_DIRECTORY_NOT_FOUND: &str = "Directory does not exist";
 /// 工作区路径非目录。
 pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
+/// 设置服务不可用时的提示。
+pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
+
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
 pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";
@@ -402,6 +405,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
+        TooltipTarget::SidebarSettings => "open settings",
         TooltipTarget::TemplateButton { button, .. } => match button {
             TemplateButtonKind::Status => "cycle block status",
             TemplateButtonKind::Copy => "copy block",
@@ -420,15 +424,25 @@ pub const MENU_TITLE_PROMPT: &str = "prompt";
 pub const MENU_TITLE_FOLDER: &str = "folder";
 pub const MENU_TITLE_PROMPT_TREE: &str = "prompts";
 
-/// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠模板命令。
+/// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠命令 / worktree 选择器。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";
 pub const MENTION_PANEL_TITLE: &str = "Files";
 pub const SLASH_PANEL_TITLE: &str = "Templates";
+pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
-/// 斜杠命令面板条目：短名标签 + 长别名预览。
-pub fn slash_command_text(id: SlashCommandId) -> (String, String) {
-    (format!("/{}", id.short_name()), id.long_name().to_string())
-}
+/// 斜杠命令面板右侧来源标签（不含方括号）。
+pub const SLASH_TAG_BUILTIN: &str = "Built-in";
+pub const SLASH_TAG_USER: &str = "User";
+pub const SLASH_TAG_PROJECT: &str = "Project";
+pub const SLASH_TAG_GIT: &str = "Git";
+
+/// `/gitWorkTree` 候选标签与预览。
+pub const SLASH_WORKTREE_LABEL: &str = "/gitWorkTree";
+pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
+
+/// prompt 底边框左侧设置按钮与 tooltip。
+/// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
+pub const SETTINGS_LABEL: &str = "[SET]";
 
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
@@ -483,6 +497,28 @@ pub fn block_command_text(id: BlockCommandId) -> (String, String) {
         BlockCommandId::CodeBlock => (BLOCK_CODE_LABEL.into(), BLOCK_CODE_PREVIEW.into()),
         BlockCommandId::Table => (BLOCK_TABLE_LABEL.into(), BLOCK_TABLE_PREVIEW.into()),
     }
+}
+
+/// 按显示宽度截断（`…` 收尾）；`max` 非正时返回空串。
+pub fn truncate_to_width(text: &str, max: usize) -> String {
+    if text.width() <= max {
+        return text.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in text.chars() {
+        let cell = ch.width().unwrap_or(0);
+        if width + cell > max.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        width += cell;
+    }
+    out.push('…');
+    out
 }
 
 /// 单行截断：按字符数近似（现有文案为 ASCII），超出以省略号收尾。

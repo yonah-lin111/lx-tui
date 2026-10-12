@@ -113,11 +113,11 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     let command = &terminal.backend().buffer()[(command_x, start_row)];
     assert_eq!(command.fg, Color::Green, "row={row:?}");
     assert!(command.modifier.contains(Modifier::BOLD));
-    assert!(!row.contains('「'), "标题不在起始行: {row}");
+    assert!(!row.contains("{title:"), "标题不在起始行: {row}");
 
     let title_row = line_text(&terminal, start_row + 1);
-    assert!(title_row.contains("「 title: 」"), "{title_row}");
-    let title_x = cell_x(&title_row, "「");
+    assert!(title_row.contains("{title: }"), "{title_row}");
+    let title_x = cell_x(&title_row, "{");
     let title = &terminal.backend().buffer()[(title_x, start_row + 1)];
     assert_eq!(title.fg, Color::Cyan);
     assert!(title.modifier.contains(Modifier::UNDERLINED));

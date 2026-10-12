@@ -198,14 +198,16 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     let rows = prompt.visual_rows();
     let tokens = markdown::scan(prompt.text());
     let infos = template_line_infos(prompt.text());
+    let lines: Vec<&str> = prompt.text().split('\n').collect();
     let mut line_starts = Vec::new();
     let mut offset = 0;
-    for line in prompt.text().split('\n') {
+    for line in &lines {
         line_starts.push(offset);
         offset += line.len() + 1;
     }
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
     let mut block_rows = Vec::new();
+    let mut separator_rows = Vec::new();
     for (index, row) in rows
         .iter()
         .enumerate()
@@ -241,11 +243,18 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         if let Some(info) = info {
             paint_template_border(buf, area, y, info, role, painted, buttons_start);
             block_rows.push((y, info.status));
+            // 模板块分割行（标题下/绑定行上的空行）：整行以边框线条绘制。
+            if first && last && info.separator {
+                separator_rows.push((y, info.status));
+            }
         }
     }
     render_template_buttons(buf, area, prompt);
     for (y, status) in block_rows {
         paint_template_background(buf, area, y, status);
+    }
+    for (y, status) in separator_rows {
+        paint_template_separator(buf, area, y, status);
     }
     if prompt.text().is_empty() {
         paint_placeholder(buf, area);
@@ -318,11 +327,15 @@ fn block_panel_data(prompt: &Prompt) -> Option<BlockPanelData> {
     })
 }
 
-/// 块命令面板条目：单行（名称 + 右侧预览）。
+/// 块命令面板条目：单行（名称 + 右侧预览，无来源标签）。
 fn block_items<'a>(data: &'a BlockPanelData) -> Vec<CommandItem<'a>> {
     data.texts
         .iter()
-        .map(|(label, preview)| CommandItem::Inline { label, preview })
+        .map(|(label, preview)| CommandItem::Inline {
+            label,
+            preview,
+            tag: "",
+        })
         .collect()
 }
 
@@ -361,42 +374,84 @@ pub fn panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     panel_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 斜杠命令面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口与锚点行。
+/// 斜杠面板单条渲染数据：标签、预览与右对齐来源标签。
+struct SlashRow {
+    label: String,
+    preview: String,
+    tag: String,
+}
+
+/// 斜杠命令面板渲染数据：条目、高亮索引、窗口锚点/显式视口、锚点行与面板模式。
 struct SlashPanelData {
-    texts: Vec<(String, String)>,
+    rows: Vec<SlashRow>,
     active: usize,
     anchor: usize,
     viewport: Option<usize>,
     anchor_row: u16,
+    chooser: bool,
 }
 
 /// 斜杠命令面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn slash_panel_data(prompt: &Prompt) -> Option<SlashPanelData> {
     let panel = prompt.slash_panel()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
+    let chooser = matches!(
+        panel.kind(),
+        crate::app::markdown::SlashPanelKind::WorktreeChooser { .. }
+    );
     Some(SlashPanelData {
-        texts: panel
-            .items()
-            .iter()
-            .map(|id| text::slash_command_text(*id))
-            .collect(),
+        rows: panel.items().iter().map(slash_row).collect(),
         active: panel.active(),
         anchor: panel.anchor(),
         viewport: panel.viewport(),
         anchor_row,
+        chooser,
     })
 }
 
-/// 斜杠命令面板条目：单行（`/add` + 右侧长别名）。
+/// 单条候选的渲染行：选择器显示分支与路径，`/gitWorkTree` 用固定文案。
+fn slash_row(item: &crate::app::markdown::SlashItem) -> SlashRow {
+    use crate::app::markdown::{CommandSource, SlashInsertion};
+    // tag 存纯文案，方括号由命令面板渲染层统一包裹。
+    let tag = item.source.label().to_string();
+    match item.source {
+        CommandSource::Git => {
+            let (label, preview) = match &item.insertion {
+                SlashInsertion::WorktreeChooser => (
+                    text::SLASH_WORKTREE_LABEL.to_string(),
+                    text::SLASH_WORKTREE_PREVIEW.to_string(),
+                ),
+                SlashInsertion::Placeholder => (String::new(), item.preview.clone()),
+                _ => (item.name.clone(), item.preview.clone()),
+            };
+            SlashRow {
+                label,
+                preview,
+                tag,
+            }
+        }
+        _ => SlashRow {
+            label: item.label(),
+            preview: item.preview.clone(),
+            tag,
+        },
+    }
+}
+
+/// 斜杠命令面板条目：单行（标签 + 预览 + 右对齐来源标签）。
 fn slash_items<'a>(data: &'a SlashPanelData) -> Vec<CommandItem<'a>> {
-    data.texts
+    data.rows
         .iter()
-        .map(|(label, preview)| CommandItem::Inline { label, preview })
+        .map(|row| CommandItem::Inline {
+            label: row.label.as_str(),
+            preview: row.preview.as_str(),
+            tag: row.tag.as_str(),
+        })
         .collect()
 }
 
-/// 斜杠命令面板视图：窗口锚定面板状态，显式视口优先；顶边左侧为 `Templates` 标题。
-fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &SlashPanelData) -> CommandPanelView<'a> {
+/// 斜杠命令面板视图：窗口锚定面板状态，显式视口优先；选择器换标题。
+fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
         items,
         active: data.active,
@@ -404,7 +459,11 @@ fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &SlashPanelData) -> Comman
         window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: None,
-        title: Some(text::SLASH_PANEL_TITLE),
+        title: Some(if data.chooser {
+            text::WORKTREE_PANEL_TITLE
+        } else {
+            text::SLASH_PANEL_TITLE
+        }),
         right_title: None,
         footer: None,
     }
@@ -450,55 +509,106 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     mention_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 提及条目文本：图标、标签与父目录明细。
-struct MentionItemText {
-    icon: &'static str,
-    label: String,
-    detail: String,
+/// 提及面板条目：文件候选（图标 + 文件名 + 父目录明细）或取根选择（单行）。
+enum MentionRowText {
+    File {
+        icon: &'static str,
+        label: String,
+        detail: String,
+    },
+    Choice {
+        label: &'static str,
+    },
 }
 
-/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口、锚点行与当前目录名。
+impl MentionRowText {
+    /// 组装条目视图：文件双行展示，取根选择单行。
+    fn item(&self) -> CommandItem<'_> {
+        match self {
+            Self::File {
+                icon,
+                label,
+                detail,
+            } => CommandItem::Stacked {
+                icon: Some(icon),
+                label,
+                detail,
+            },
+            Self::Choice { label } => CommandItem::Inline {
+                label,
+                preview: "",
+                tag: "",
+            },
+        }
+    }
+}
+
+/// 提及面板渲染数据：条目、高亮索引、窗口锚点/显式视口、锚点行、当前目录名与标题。
 struct MentionPanelData {
-    texts: Vec<MentionItemText>,
+    rows: Vec<MentionRowText>,
     active: usize,
     anchor: usize,
     viewport: Option<usize>,
     anchor_row: u16,
     /// 当前进入的目录末段名；未进入文件夹时 None。
     scope: Option<String>,
+    /// 面板标题：`Files`，选定取根后追加 `-[main]` / `-[wt]`。
+    title: String,
+    /// 取根选择器：两项单行、不显示目录导航页脚。
+    chooser: bool,
 }
 
 impl MentionPanelData {
     /// 组装条目视图；图标列固定占位，标签与明细借用自身文本。
     fn items(&self) -> Vec<CommandItem<'_>> {
-        self.texts
-            .iter()
-            .map(|entry| CommandItem::Stacked {
-                icon: Some(entry.icon),
-                label: entry.label.as_str(),
-                detail: entry.detail.as_str(),
-            })
-            .collect()
+        self.rows.iter().map(MentionRowText::item).collect()
     }
 }
 
 /// 提及面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
-    let panel = prompt.mention()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
+    if let Some(active) = prompt.mention_chooser() {
+        return Some(MentionPanelData {
+            rows: crate::app::prompt::MentionRootChoice::ALL
+                .iter()
+                .map(|choice| MentionRowText::Choice {
+                    label: choice.label(),
+                })
+                .collect(),
+            active,
+            anchor: active,
+            viewport: None,
+            anchor_row,
+            scope: None,
+            title: text::MENTION_PANEL_TITLE.to_string(),
+            chooser: true,
+        });
+    }
+    let panel = prompt.mention()?;
     let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
     Some(MentionPanelData {
-        texts: panel
+        rows: panel
             .items()
             .iter()
-            .map(|entry| mention_item_text(entry, detail_width))
+            .map(|entry| mention_row_text(entry, detail_width))
             .collect(),
         active: panel.active(),
         anchor: panel.anchor(),
         viewport: panel.viewport(),
         anchor_row,
         scope: panel.scope_name().map(str::to_string),
+        title: mention_title(prompt),
+        chooser: false,
     })
+}
+
+/// 提及面板标题：绑定 linked worktree 且已选定取根时追加 `-[main]` / `-[wt]`。
+fn mention_title(prompt: &Prompt) -> String {
+    match prompt.mention_root_label() {
+        Some(label) => format!("{}-[{label}]", text::MENTION_PANEL_TITLE),
+        None => text::MENTION_PANEL_TITLE.to_string(),
+    }
 }
 
 /// 提及面板视图：最大高度取容器（prompt 内容区）的一半；显式视口优先于窗口锚点。
@@ -516,16 +626,16 @@ fn mention_view<'a>(
         window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: Some(max_height),
-        title: Some(text::MENTION_PANEL_TITLE),
+        title: Some(data.title.as_str()),
         right_title: data.scope.as_deref(),
-        footer: Some(text::MENTION_PANEL_FOOTER),
+        footer: (!data.chooser).then_some(text::MENTION_PANEL_FOOTER),
     }
 }
 
 /// 提及条目展示：第一行目录/文件图标 + 文件名（目录带 `/`），第二行 `└─ ` 前缀的父目录。
 ///
 /// 父目录超出可用宽度时按显示列中间截断（保留路径首尾），对齐 opencode 的路径省略逻辑。
-fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemText {
+fn mention_row_text(entry: &MentionEntry, detail_width: usize) -> MentionRowText {
     let (directory, name) = entry
         .path
         .rsplit_once('/')
@@ -547,7 +657,7 @@ fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemTe
     } else {
         text::MENTION_FILE_ICON
     };
-    MentionItemText {
+    MentionRowText::File {
         icon,
         label,
         detail,
@@ -749,6 +859,26 @@ fn paint_template_border(
             }
         }
         None => {}
+    }
+}
+
+/// 绘制模板块分割线：`├─…─┤` 以块边框样式横贯整行，与块上下边同色；
+/// 保留单元格底色与选区反显修饰符。
+fn paint_template_separator(buf: &mut Buffer, area: Rect, y: u16, status: TemplateStatus) {
+    let border = style::template_border(status);
+    let right = area.right().saturating_sub(1);
+    for x in area.x..=right {
+        let symbol = if x == area.x {
+            '├'
+        } else if x == right {
+            '┤'
+        } else {
+            '─'
+        };
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_char(symbol);
+            cell.set_style(border);
+        }
     }
 }
 

@@ -17,12 +17,19 @@ const MIN_HEIGHT: u16 = 3;
 /// 名称列与预览列之间的间距（列）。
 const COLUMN_GAP: usize = 1;
 
-/// 面板条目：单行（名称 + 右侧预览）或双行（图标 + 名称在上、明细在下）。
+/// 名称/预览列与右侧来源标签之间的最小间距（列）。
+const TAG_GAP: usize = 2;
+
+/// 面板条目：单行（名称 + 预览 + 右对齐来源标签）或双行（图标 + 名称在上、明细在下）。
+///
+/// 单行条目的 `tag` 为右对齐来源标签（如 `[User]`），空串表示无标签；
+/// 超宽时优先保留名称与标签，预览先截断、再整体省略。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandItem<'a> {
     Inline {
         label: &'a str,
         preview: &'a str,
+        tag: &'a str,
     },
     Stacked {
         icon: Option<&'a str>,
@@ -244,16 +251,25 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
         })
         .max()
         .unwrap_or(0);
+    let tag = items
+        .iter()
+        .filter_map(|item| match item {
+            CommandItem::Inline { tag, .. } => Some(tag.width()),
+            CommandItem::Stacked { .. } => None,
+        })
+        .max()
+        .unwrap_or(0);
     let has_inline = items
         .iter()
         .any(|item| matches!(item, CommandItem::Inline { .. }));
     let has_stacked = items
         .iter()
         .any(|item| matches!(item, CommandItem::Stacked { .. }));
+    let tag = if tag == 0 { 0 } else { TAG_GAP + tag };
     let content = match (has_inline, has_stacked) {
-        (true, false) => label + COLUMN_GAP + preview,
-        (false, true) => label.max(detail),
-        _ => (label + COLUMN_GAP + preview).max(label.max(detail)),
+        (true, false) => label + COLUMN_GAP + preview + tag,
+        (false, true) => label.max(detail) + tag,
+        _ => (label + COLUMN_GAP + preview + tag).max(label.max(detail) + tag),
     };
     // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
     let header = view.title.map_or(0, |title| title.width() + 2)
@@ -358,15 +374,40 @@ fn render_item(
     };
     let inner = Rect::new(area.x + 1, area.y, area.width - 1, area.height);
     match item {
-        CommandItem::Inline { label, preview } => {
+        CommandItem::Inline {
+            label,
+            preview,
+            tag,
+        } => {
             let padding = label_width.saturating_sub(label.width());
             let label = format!("{label}{}", " ".repeat(padding));
-            let line = Line::from(vec![
-                Span::raw(" "),
-                Span::styled(label, style::text()),
-                Span::raw(" ".repeat(COLUMN_GAP)),
-                Span::styled(*preview, style::muted()),
-            ]);
+            let available = usize::from(inner.width);
+            let tag_label = (!tag.is_empty()).then(|| format!("[{tag}]"));
+            // 名称与标签优先；预览按剩余宽度截断，缺空间时整体省略。
+            let reserved = 1
+                + label.width()
+                + COLUMN_GAP
+                + tag_label.as_ref().map_or(0, |tag| COLUMN_GAP + tag.width());
+            let preview_width = available.saturating_sub(reserved);
+            let preview = if preview_width == 0 {
+                String::new()
+            } else {
+                crate::ui::text::truncate_to_width(preview, preview_width)
+            };
+            let mut spans = vec![Span::raw(" "), Span::styled(label, style::text())];
+            if !preview.is_empty() {
+                spans.push(Span::raw(" ".repeat(COLUMN_GAP)));
+                spans.push(Span::styled(preview, style::muted()));
+            }
+            if let Some(tag) = tag_label {
+                let used: usize = spans.iter().map(|span| span.content.width()).sum();
+                let pad = available.saturating_sub(used).saturating_sub(tag.width());
+                if pad > 0 {
+                    spans.push(Span::raw(" ".repeat(pad)));
+                    spans.push(Span::styled(tag, style::muted()));
+                }
+            }
+            let line = Line::from(spans);
             Paragraph::new(line)
                 .style(row_style)
                 .render(Rect { height: 1, ..inner }, buf);

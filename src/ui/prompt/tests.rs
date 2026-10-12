@@ -317,6 +317,93 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
 }
 
 #[test]
+fn template_separator_renders_block_border_line() {
+    let area = Rect::new(0, 0, 30, 10);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 10);
+    editor.set_text("&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    // 分割线整行以模板块边框样式绘制：├─…─┤。
+    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(row.starts_with("├──"), "{row}");
+    assert!(row.ends_with("┤"), "{row}");
+    assert_eq!(buf[(8, 2)].fg, Color::LightBlue, "todo 边框色");
+    assert!(row.contains('─'), "{row}");
+}
+
+#[test]
+fn mention_panel_asks_root_choice_then_titles_with_choice() {
+    let area = Rect::new(0, 0, 40, 20);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(40, 20);
+    editor.set_worktree_repo(Some(std::path::PathBuf::from("/repo")));
+    editor.set_mention_root(Some(std::path::PathBuf::from("/fallback")));
+    editor.set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n");
+    editor.apply_worktree_entries(vec![crate::app::markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: std::path::PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    let body_end = editor.text().find("body").expect("body line") + "body".len();
+    editor.set_cursor_offset_for_test(body_end);
+    editor.insert_char(' ');
+    editor.insert_char('@');
+    // 绑定 linked worktree：先显示 main / wt 取根选择器。
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+    assert!(painted.contains("main"), "{painted}");
+    assert!(painted.contains("wt"), "{painted}");
+    assert!(
+        !painted.contains("[wt]"),
+        "选择器阶段无 [wt] 标签: {painted}"
+    );
+    // 选 wt 后进入文件面板：标题追加 -[wt]，条目无右侧标签。
+    assert!(editor.mention_move(1));
+    assert!(editor.mention_confirm());
+    let (generation, root) = editor.take_mention_scan_request().expect("scan request");
+    assert_eq!(root, std::path::PathBuf::from("/repo/.worktrees/feat"));
+    editor.apply_mention_entries(
+        generation,
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+    assert!(painted.contains("app.rs"), "{painted}");
+    assert!(painted.contains("Files-[wt]"), "标题带取根标识: {painted}");
+
+    // 未绑定的块：直接列出显式根候选，标题无后缀。
+    let mut plain = Prompt::new(PaneId::from_raw_for_test(2));
+    plain.resize(40, 20);
+    plain.set_mention_root(Some(std::path::PathBuf::from("/fallback")));
+    plain.set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end\n");
+    let body_end = plain.text().find("body").expect("body line") + "body".len();
+    plain.set_cursor_offset_for_test(body_end);
+    plain.insert_char(' ');
+    plain.insert_char('@');
+    let (generation, root) = plain.take_mention_scan_request().expect("scan request");
+    assert_eq!(root, std::path::PathBuf::from("/fallback"));
+    plain.apply_mention_entries(
+        generation,
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &plain, None);
+    let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+    assert!(painted.contains("app.rs"), "{painted}");
+    assert!(painted.contains("Files"), "{painted}");
+    assert!(!painted.contains("Files-["), "未绑定无标题后缀: {painted}");
+}
+
+#[test]
 fn mention_panel_marks_directory_and_file_icons() {
     let area = Rect::new(0, 0, 30, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
@@ -804,7 +891,7 @@ fn template_command_and_title_and_mention_styles() {
     let editor = prompt(
         60,
         4,
-        "&&& addTemplate --start 「title: 」\n&&& addTemplate --end\n@src/app.rs",
+        "&&& addTemplate --start {title: }\n&&& addTemplate --end\n@src/app.rs",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
@@ -821,7 +908,7 @@ fn template_command_and_title_and_mention_styles() {
     assert_eq!(buf[(18, 0)].symbol(), "-", "--start 为 dim 标记");
     assert!(buf[(18, 0)].modifier.contains(Modifier::DIM));
 
-    assert_eq!(buf[(26, 0)].symbol(), "「");
+    assert_eq!(buf[(26, 0)].symbol(), "{");
     assert_eq!(buf[(26, 0)].fg, Color::Cyan, "标题占位符为 Cyan");
     assert!(buf[(26, 0)].modifier.contains(Modifier::UNDERLINED));
 
@@ -837,7 +924,7 @@ fn template_block_draws_status_colored_border_box() {
     let running = prompt(
         60,
         4,
-        "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
+        "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &running, None);
@@ -860,7 +947,7 @@ fn template_block_draws_status_colored_border_box() {
     let done = prompt(
         60,
         4,
-        "&&& bugTemplate --start 「title: 」\n&&& bugTemplate --end done",
+        "&&& bugTemplate --start {title: }\n&&& bugTemplate --end done",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &done, None);
@@ -873,15 +960,15 @@ fn template_block_paints_status_background() {
     let area = Rect::new(0, 0, 60, 4);
     let cases = [
         (
-            "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end",
+            "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end",
             Color::Rgb(35, 40, 56),
         ),
         (
-            "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
+            "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
             Color::Rgb(51, 41, 28),
         ),
         (
-            "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end done",
+            "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end done",
             Color::Rgb(29, 46, 36),
         ),
     ];
@@ -904,7 +991,7 @@ fn template_block_background_skips_selected_cells() {
     let editor = prompt(
         60,
         4,
-        "&&& bugTemplate --start 「title: 」\n# Fix\n&&& bugTemplate --end in_progress",
+        "&&& bugTemplate --start {title: }\n# Fix\n&&& bugTemplate --end in_progress",
     );
     let selection = selection(&editor, (1, 3), (1, 8));
     let mut buf = Buffer::empty(area);
@@ -920,7 +1007,7 @@ fn template_buttons_render_and_hit_test() {
     let prompt = prompt(
         70,
         10,
-        "&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end",
+        "&&& addTemplate --start {title: }\n# Add\n&&& addTemplate --end",
     );
     let buttons = template_buttons(&prompt, area);
     assert_eq!(buttons.len(), 4, "状态、复制、清理、删除");
@@ -960,7 +1047,7 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     let editor = prompt(
         40,
         10,
-        "&&& addTemplate --start 「title: 」\n&&& addTemplate --end",
+        "&&& addTemplate --start {title: }\n&&& addTemplate --end",
     );
     let buttons = template_buttons(&editor, area);
     assert_eq!(buttons.len(), 4, "窄屏按钮不隐藏");
@@ -983,7 +1070,7 @@ fn template_buttons_stay_visible_and_text_ellipsizes() {
     let narrow_prompt = prompt(
         20,
         10,
-        "&&& addTemplate --start 「title: 」\n&&& addTemplate --end",
+        "&&& addTemplate --start {title: }\n&&& addTemplate --end",
     );
     let mut buf = Buffer::empty(narrow);
     render(narrow, &mut buf, &narrow_prompt, None);
@@ -997,7 +1084,7 @@ fn template_status_button_label_follows_block_status() {
     let done = prompt(
         70,
         10,
-        "&&& bugTemplate --start 「title: 」\n&&& bugTemplate --end done",
+        "&&& bugTemplate --start {title: }\n&&& bugTemplate --end done",
     );
     let buttons = template_buttons(&done, area);
     let mut buf = Buffer::empty(area);
@@ -1009,7 +1096,7 @@ fn template_status_button_label_follows_block_status() {
     let run = prompt(
         70,
         10,
-        "&&& bugTemplate --start 「title: 」\n&&& bugTemplate --end in_progress",
+        "&&& bugTemplate --start {title: }\n&&& bugTemplate --end in_progress",
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &run, None);

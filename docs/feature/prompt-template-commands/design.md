@@ -10,7 +10,7 @@
 1. **`/` 斜杠模板命令面板**：
    - 支持 5 个核心模板命令：`/add`、`/bug`、`/common`、`/refactor`、`/style`（支持 `/addTemplate` 等别名）；
    - 插入标准多行 Markdown 模板块（`&&& <name>Template --start ... &&& <name>Template --end`）；
-   - 插入后光标自动定位到首行标题占位符 `「title: 」` 的冒号之后。
+   - 插入后光标自动定位到首行标题占位符 `{title: }` 的 `}` 之前。
 2. **Markdown 语法高亮对齐**：
    - 支持 `&&&` 模板块高亮（起止行标记 `dim`、命令名按业务类型加粗分色、标题占位符 `Yellow` 下划线、正文保持 Markdown 解析）；
    - 支持 `@文件`（`@path/to/file`）高亮为 `Yellow` 下划线（对齐 `lx-agent` 色彩语义）。
@@ -22,8 +22,8 @@
 
 | # | 决策项 | 结论 |
 |---|--------|------|
-| 1 | 命令标识与模板块格式 | 面板展示短名优先（`/add` 等），输入支持短名与长名双向别名匹配；插入模板严格对齐 `lx-agent` 的标准数据结构（`&&& addTemplate --start 「title: 」` ... `&&& addTemplate --end`），光标置于标题冒号后。 |
-| 2 | `&&&` 模板块与 `@` 文件高亮配色 | 精细分词对齐 `lx-agent`：起止标记 `&&&`/`--start`/`--end` 用 `dim`；命令名按业务分色（`add` 绿 / `bug` 红 / `refactor` 紫 / `common` 蓝 / `style` 洋红，均加粗）；`「title: ...」` 与 `@文件` 均用 `Yellow` 下划线；块内正文正常按 Markdown 语法高亮。 |
+| 1 | 命令标识与模板块格式 | 面板展示短名优先（`/add` 等），输入支持短名与长名双向别名匹配；插入模板严格对齐 `lx-agent` 的标准数据结构（`&&& addTemplate --start {title: }` ... `&&& addTemplate --end`），光标置于标题冒号后。 |
+| 2 | `&&&` 模板块与 `@` 文件高亮配色 | 精细分词对齐 `lx-agent`：起止标记 `&&&`/`--start`/`--end` 用 `dim`；命令名按业务分色（`add` 绿 / `bug` 红 / `refactor` 紫 / `common` 蓝 / `style` 洋红，均加粗）；`{title: ...}` 与 `@文件` 均用 `Yellow` 下划线；块内正文正常按 Markdown 语法高亮。 |
 | 3 | 斜杠命令触发位置与替换范围 | 严格行首触发（`^\s*/([a-zA-Z0-9_-]*)$`），光标在词尾；代码围栏内或已有模板块内坚决抑制；确认后整行替换为多行模板内容，单步可撤销；`@` 提及面板优先级高于 `/` 命令面板。 |
 | 4 | 模板块右侧功能按钮与交互 | 模板首行右端右对齐显示 `[todo]`、`[copy]`、`[clean]`、`[del]`；长文本重叠时文本优先；鼠标左键点击执行，`[clean]` 与 `[del]` 单步可撤销，`[copy]` 触发系统剪贴板与 Toast 反馈。 |
 
@@ -95,7 +95,7 @@
       // 新增：
       TemplateMarker,      // &&&, --start, --end
       TemplateCommand(SlashCommandId), // add(绿), bug(红), refactor(紫), common(蓝), style(洋红)
-      TemplateTitle,       // 「title: ...」
+      TemplateTitle,       // {title: ...}
       FileMention,         // @path/to/file
   }
   ```

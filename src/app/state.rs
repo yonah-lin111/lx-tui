@@ -122,6 +122,10 @@ pub struct AppState {
     pub git_requests: Vec<PathBuf>,
     /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
     pub collapsed_groups: Vec<PathBuf>,
+    /// 本地设置 Web 服务是否可用；决定底边框设置按钮的可用态。
+    pub settings_available: bool,
+    /// 设置按钮点击请求：事件层取走后打开浏览器。
+    pub settings_open_requested: bool,
 }
 
 /// 工作区。
@@ -471,6 +475,8 @@ impl AppState {
             effects: Vec::new(),
             git_requests: Vec::new(),
             collapsed_groups: Vec::new(),
+            settings_available: false,
+            settings_open_requested: false,
         }
     }
 

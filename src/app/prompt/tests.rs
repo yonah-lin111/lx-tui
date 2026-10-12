@@ -1224,7 +1224,8 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
 
     type_text(&mut prompt, "ref");
     let panel = prompt.slash_panel().expect("panel filters");
-    assert_eq!(panel.items(), &[markdown::SlashCommandId::Refactor]);
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].name, "refactor");
 
     prompt.insert_char(' ');
     assert!(prompt.slash_panel().is_none(), "行尾不再是纯命令时关闭");
@@ -1242,7 +1243,7 @@ fn slash_panel_suppressed_inside_fence_and_template() {
     assert!(fenced.slash_panel().is_none(), "围栏内不触发");
 
     let mut in_template = prompt(40, 10);
-    type_text(&mut in_template, "&&& addTemplate --start 「title: 」\n/x");
+    type_text(&mut in_template, "&&& addTemplate --start {title: }\n/x");
     assert!(in_template.slash_panel().is_none(), "模板块内不触发");
 }
 
@@ -1302,7 +1303,7 @@ fn template_block_body_extracts_inner_content() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);
     let body = prompt.template_block_body(0).expect("body");
-    assert!(body.starts_with("「title: 」\n# Add Requirement"), "{body}");
+    assert!(body.starts_with("{title: }\n\n# Add Requirement"), "{body}");
     assert!(body.ends_with("- Notes: \n  - "));
     assert!(!body.contains("&&&"));
     assert_eq!(prompt.template_block_body(1), None);
@@ -1407,7 +1408,7 @@ fn template_block_ops_noop_on_plain_lines() {
 #[test]
 fn template_block_body_of_unclosed_block_reads_to_end() {
     let mut prompt = prompt(60, 10);
-    prompt.insert_str("&&& bugTemplate --start 「title: 」\n# Fix");
+    prompt.insert_str("&&& bugTemplate --start {title: }\n# Fix");
     assert_eq!(
         prompt.template_block_body(0).as_deref(),
         Some("# Fix"),
@@ -1420,7 +1421,7 @@ fn template_block_body_of_unclosed_block_reads_to_end() {
 #[test]
 fn template_block_lines_shift_cursor_and_mouse_mapping() {
     let mut editor = prompt(40, 10);
-    editor.insert_str("&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end\nplain");
+    editor.insert_str("&&& addTemplate --start {title: }\n# Add\n&&& addTemplate --end\nplain");
 
     // 块内行：渲染列 = 左边框槽 2 + 文本列；点击左边框（col 0/1）落到文本行首。
     editor.set_cursor_from_cell(1, 2);
@@ -1438,7 +1439,7 @@ fn template_block_lines_shift_cursor_and_mouse_mapping() {
 #[test]
 fn template_block_lines_wrap_inside_border_gutters() {
     let mut editor = prompt(10, 20);
-    editor.insert_str("&&& addTemplate --start 「title: 」");
+    editor.insert_str("&&& addTemplate --start {title: }");
     let rows = editor.visual_rows();
     let block_rows: Vec<_> = rows.iter().filter(|row| row.line == 0).collect();
     assert!(block_rows.len() > 1, "块行按扣除边框槽后的宽度换行");
@@ -1448,4 +1449,639 @@ fn template_block_lines_wrap_inside_border_gutters() {
             .all(|row| display_width(&editor.text()[row.start..row.end]) <= 10 - 3),
         "换行宽度扣除左右边框槽"
     );
+}
+
+/// 自定义命令：User 与 Project 同名时后者覆盖（事件层合并后注入）。
+fn custom_items() -> Vec<markdown::SlashItem> {
+    vec![
+        markdown::SlashItem::custom_markdown(
+            "lint",
+            markdown::CommandSource::User,
+            markdown::SlashScope::Global,
+            "# Lint\nrun cargo clippy",
+            "lint the change",
+        ),
+        markdown::SlashItem::custom_markdown(
+            "notes",
+            markdown::CommandSource::Project,
+            markdown::SlashScope::Template,
+            "notes body",
+            "template notes",
+        ),
+        markdown::SlashItem::custom_block(
+            "triage",
+            markdown::CommandSource::User,
+            Some("Triage"),
+            "triage body",
+            "triage a bug",
+        ),
+    ]
+}
+
+#[test]
+fn custom_commands_show_by_scope_and_insert_as_single_undo_step() {
+    let mut prompt = prompt(40, 8);
+    prompt.set_custom_commands(custom_items());
+    type_text(&mut prompt, "/lint");
+    let panel = prompt.slash_panel().expect("panel opens");
+    assert_eq!(panel.items()[0].name, "lint");
+    assert_eq!(panel.items()[0].source, markdown::CommandSource::User);
+    assert!(prompt.slash_confirm());
+    assert_eq!(prompt.text(), "# Lint\nrun cargo clippy");
+    assert_eq!(prompt.cursor_cell(), Some((1, 16)));
+
+    prompt.undo();
+    assert_eq!(prompt.text(), "/lint", "整段插入单步回退");
+    assert!(prompt.slash_panel().is_some(), "回退后触发恢复");
+}
+
+#[test]
+fn template_scoped_markdown_only_inside_blocks_and_block_command_only_outside() {
+    // 未闭合块内（光标在块内）输入 `/`：只显示块内可用的 Markdown 命令。
+    let mut inside = prompt(80, 12);
+    inside.set_custom_commands(custom_items());
+    type_text(&mut inside, "&&& addTemplate --start\n{title: }\n/");
+    let names: Vec<&str> = inside
+        .slash_panel()
+        .expect("panel inside block")
+        .items()
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(names.contains(&"notes"), "{names:?}");
+    assert!(
+        names.contains(&"lint"),
+        "global markdown also inside: {names:?}"
+    );
+    assert!(
+        !names.contains(&"triage"),
+        "block command hidden inside: {names:?}"
+    );
+    assert!(!names.contains(&"add"), "builtins hidden inside: {names:?}");
+
+    // 块外（已闭合块之后）：显示内置与模板块命令，隐藏 template 作用域 Markdown。
+    let mut outside = prompt(80, 12);
+    outside.set_custom_commands(custom_items());
+    type_text(
+        &mut outside,
+        "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n/",
+    );
+    let names: Vec<&str> = outside
+        .slash_panel()
+        .expect("panel outside block")
+        .items()
+        .iter()
+        .map(|item| item.name.as_str())
+        .collect();
+    assert!(names.contains(&"triage"), "{names:?}");
+    assert!(names.contains(&"add"), "builtins outside: {names:?}");
+    assert!(
+        !names.contains(&"notes"),
+        "template markdown hidden outside: {names:?}"
+    );
+}
+
+#[test]
+fn custom_block_inserts_wrapped_template_with_cursor_in_title() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_custom_commands(custom_items());
+    type_text(&mut prompt, "/triage");
+    assert!(prompt.slash_confirm());
+    let text = prompt.text().to_string();
+    assert!(
+        text.starts_with("&&& triage --start\n{title: Triage}\n"),
+        "{text}"
+    );
+    assert!(text.ends_with("&&& triage --end"), "{text}");
+    assert!(text.contains("triage body"));
+    let (row, col) = prompt.cursor_cell().expect("cursor visible");
+    assert_eq!(row, 1, "光标落在标题行");
+    assert!(col > 0);
+}
+
+#[test]
+fn git_work_tree_candidate_only_inside_blocks_with_workspace_repo() {
+    // 块外不出现（无绑定目标）。
+    let mut outside = prompt(40, 8);
+    type_text(&mut outside, "/gitW");
+    assert!(outside.slash_panel().is_none(), "块外无 gitWorkTree 候选");
+
+    // 块内且无仓库元数据：不出现。
+    let mut no_repo = prompt(60, 10);
+    type_text(&mut no_repo, "&&& addTemplate --start\n/gitW");
+    assert!(no_repo.slash_panel().is_none(), "非 git 工作区无候选");
+
+    // 块内且已闭合且有仓库元数据：出现。
+    let mut prompt = prompt(60, 10);
+    let dir = std::env::temp_dir().join(format!("lx-tui-wt-prompt-{}", std::process::id()));
+    prompt.set_worktree_repo(Some(dir));
+    prompt.set_text("&&& addTemplate --start\n/gitW\n&&& addTemplate --end");
+    let offset = prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    prompt.set_cursor_offset_for_test(offset);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    let panel = prompt.slash_panel().expect("有仓库时出现候选");
+    assert_eq!(panel.items()[0].name, "gitWorkTree");
+    assert_eq!(panel.items()[0].source, markdown::CommandSource::Git);
+}
+
+#[test]
+fn worktree_chooser_updates_binding_as_single_undo_step_preserving_status_and_id() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_custom_commands(Vec::new());
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt
+        .set_text("&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end done {id:42}\n");
+
+    // 光标停在块内 `body` 行尾，触发 `/gitWorkTree`。
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "confirm opens chooser");
+    assert!(prompt.worktree_chooser_open());
+    prompt.apply_worktree_entries(vec![
+        markdown::WorktreeCandidate {
+            branch: "main".into(),
+            path: PathBuf::from("/repo"),
+            is_main: true,
+        },
+        markdown::WorktreeCandidate {
+            branch: "feature/x".into(),
+            path: PathBuf::from("/repo/.worktrees/feat"),
+            is_main: false,
+        },
+    ]);
+    prompt.rebuild_worktree_entries();
+    assert_eq!(prompt.slash_entry_count(), 2);
+    assert!(
+        prompt.slash_move(1),
+        "navigate to second entry (active={})",
+        prompt.slash_panel().map_or(0, |panel| panel.active())
+    );
+    assert!(prompt.slash_confirm(), "confirm binding");
+    let text = prompt.text().to_string();
+    assert!(
+        text.contains("body\n\n{wt:feature/x}\n&&& addTemplate --end done {id:42}"),
+        "绑定行独立成行、位于结束行上一行且上方空行: {text}"
+    );
+    assert!(!text.contains("/gitW"), "slash line consumed: {text}");
+    assert!(!text.contains("\n\n\n"), "触发行整行丢弃: {text}");
+    assert!(!prompt.worktree_chooser_open());
+    prompt.undo();
+    assert!(
+        prompt.text().contains("&&& addTemplate --end done {id:42}"),
+        "单步回退只撤销绑定改动"
+    );
+    assert!(!prompt.text().contains("{wt:"));
+}
+
+#[test]
+fn bound_worktree_line_is_edit_protected() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let text =
+        "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n";
+    prompt.set_text(text);
+    // 绑定行下一行（结束行）行首退格：不合并/删除绑定行。
+    let below_marker = prompt
+        .text()
+        .find("&&& addTemplate --end")
+        .expect("end line");
+    prompt.set_cursor_offset_for_test(below_marker);
+    prompt.backspace();
+    assert_eq!(prompt.text(), text);
+    // 绑定行内插入被忽略。
+    let marker = prompt.text().find("{wt:feature/x}").expect("marker");
+    prompt.set_cursor_offset_for_test(marker + 1);
+    prompt.insert_char('x');
+    assert_eq!(prompt.text(), text);
+    // 绑定行行首 Ctrl+U：不合并上一行。
+    prompt.set_cursor_offset_for_test(marker);
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), text);
+    // 绑定行局部删除与整行选区删除均被拒。
+    prompt.set_cursor_offset_for_test(marker + 2);
+    prompt.delete();
+    assert_eq!(prompt.text(), text);
+    assert!(!prompt.replace_range(marker, marker + "{wt:feature/x}".len(), ""));
+    assert_eq!(prompt.text(), text);
+    // 块删除按钮仍可整块删除（含绑定行）。
+    assert!(prompt.delete_template_block(0));
+    assert_eq!(prompt.text(), "");
+}
+
+#[test]
+fn title_marker_is_edit_protected_while_value_stays_editable() {
+    let mut prompt = prompt(80, 12);
+    let fixture = "&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n";
+    prompt.set_text(fixture);
+    let title = |prompt: &Prompt| {
+        prompt
+            .text()
+            .split('\n')
+            .nth(1)
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    // `}` 前输入写入标题值。
+    let brace = prompt.text().find('}').expect("brace");
+    prompt.set_cursor_offset_for_test(brace);
+    prompt.insert_char('T');
+    assert_eq!(title(&prompt), "{title: T}");
+
+    // 删除 `}` 被拒。
+    let brace = prompt.text().find('}').expect("brace");
+    prompt.set_cursor_offset_for_test(brace);
+    prompt.delete();
+    assert_eq!(title(&prompt), "{title: T}");
+
+    // `:` 后退格、行首退格（合并上一行）、整行内容删除均被拒。
+    let after_colon = prompt.text().find(": ").expect("colon") + 1;
+    prompt.set_cursor_offset_for_test(after_colon);
+    prompt.backspace();
+    assert_eq!(title(&prompt), "{title: T}");
+    let line_start = prompt.text().find("{title").expect("title line");
+    prompt.set_cursor_offset_for_test(line_start);
+    prompt.backspace();
+    assert_eq!(title(&prompt), "{title: T}");
+    assert!(!prompt.replace_range(line_start, line_start + "{title: T}".len(), ""));
+    assert_eq!(title(&prompt), "{title: T}");
+
+    // 值内退格照常删除（只取标题行内的 `T`）。
+    let value = prompt.text().find("{title: T}").expect("title value") + "{title: ".len();
+    prompt.set_cursor_offset_for_test(value + 1);
+    prompt.backspace();
+    assert_eq!(title(&prompt), "{title: }");
+
+    // 整块删除仍可用（结构元数据随块消失）。
+    assert!(prompt.delete_template_block(0));
+    assert_eq!(prompt.text(), "");
+}
+
+#[test]
+fn bound_worktree_line_is_excluded_from_block_copy() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    let copy = prompt.copy_text_at_cursor().expect("cursor inside block");
+    assert!(!copy.contains("{wt:"), "{copy}");
+    assert!(copy.contains("body"), "{copy}");
+}
+
+#[test]
+fn worktree_chooser_keeps_a_non_adjacent_command_line() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let fixture = "&&& addTemplate --start\n{title: }\n/gitW\nbody\n&&& addTemplate --end\n";
+    prompt.set_text(fixture);
+    let cursor = prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    prompt.set_cursor_offset_for_test(cursor);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    assert!(prompt.slash_confirm(), "opens chooser");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    prompt.rebuild_worktree_entries();
+    assert!(prompt.slash_confirm(), "confirm binding");
+    let text = prompt.text().to_string();
+    // 命令行不在绑定位置（绑定行为结束行上一行）：清空内容保留该行，
+    // 绑定行插到末行之下并补一个空行。
+    assert_eq!(
+        text.matches('\n').count(),
+        fixture.matches('\n').count() + 2
+    );
+    // 光标留在被清空的命令行上（不因下方插入绑定行而落到下一行）。
+    assert_eq!(
+        prompt.cursor_cell().map(|cell| cell.0),
+        Some(2),
+        "{}",
+        prompt.text()
+    );
+    assert!(!text.contains("/gitW"), "{text}");
+    assert_eq!(
+        text,
+        "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n"
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
+}
+
+#[test]
+fn worktree_chooser_keeps_a_deeper_command_line() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let fixture = "&&& addTemplate --start\n{title: }\nbody\n/gitW\n&&& addTemplate --end\n";
+    prompt.set_text(fixture);
+    let cursor = prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    prompt.set_cursor_offset_for_test(cursor);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    assert!(prompt.slash_confirm(), "opens chooser");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    prompt.rebuild_worktree_entries();
+    assert!(prompt.slash_confirm(), "confirm binding");
+    let text = prompt.text().to_string();
+    // 命令行恰占绑定行（结束行上一行）：整行替换为绑定行并补上方空行。
+    assert_eq!(
+        text,
+        "&&& addTemplate --start\n{title: }\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n"
+    );
+    // 光标落在绑定行行尾（不因新增分割线行而落到下一行）。
+    assert_eq!(
+        prompt.cursor_cell().map(|cell| cell.0),
+        Some(4),
+        "{}",
+        prompt.text()
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
+}
+
+#[test]
+fn worktree_chooser_refresh_fires_once_per_open() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "opens chooser");
+    // 选择器打开只发起一轮查询：结果到达后不再重查，否则持续刷新会把用户移动
+    // 重置回当前绑定项（表现为"切换后马上回到原来的"）。
+    assert!(prompt.take_worktree_refresh().is_some(), "首次加载");
+    assert!(prompt.take_worktree_refresh().is_none(), "在途不重复");
+    let candidates = vec![
+        markdown::WorktreeCandidate {
+            branch: "main".into(),
+            path: PathBuf::from("/repo"),
+            is_main: true,
+        },
+        markdown::WorktreeCandidate {
+            branch: "feature/x".into(),
+            path: PathBuf::from("/repo/.worktrees/feat"),
+            is_main: false,
+        },
+    ];
+    assert!(prompt.apply_worktree_entries(candidates.clone()));
+    prompt.rebuild_worktree_entries();
+    assert!(
+        prompt.take_worktree_refresh().is_none(),
+        "结果到达后不再重查"
+    );
+    // 同内容的结果不算变化：事件层据此保留用户在列表里的移动。
+    assert!(!prompt.apply_worktree_entries(candidates));
+    assert!(prompt.slash_move(1));
+    assert_eq!(prompt.slash_panel().map_or(0, |panel| panel.active()), 1);
+}
+
+#[test]
+fn worktree_chooser_main_checkout_removes_binding() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let fixture = "&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n";
+    prompt.set_text(fixture);
+    let body_end = prompt.text().find("body\n").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "opens chooser");
+    prompt.apply_worktree_entries(vec![
+        markdown::WorktreeCandidate {
+            branch: "main".into(),
+            path: PathBuf::from("/repo"),
+            is_main: true,
+        },
+        markdown::WorktreeCandidate {
+            branch: "feature/x".into(),
+            path: PathBuf::from("/repo/.worktrees/feat"),
+            is_main: false,
+        },
+    ]);
+    prompt.rebuild_worktree_entries();
+    // 选择器高亮当前绑定的 feature/x，上移一项选主 checkout。
+    assert!(prompt.slash_move(-1), "navigate to main checkout");
+    let before = prompt.text().to_string();
+    assert!(prompt.slash_confirm(), "confirm main checkout");
+    let text = prompt.text().to_string();
+    // 选择主 checkout = 解除绑定：绑定行与上方分割线一并移除，命令行清空保留。
+    assert!(!text.contains("{wt:"), "绑定行被移除: {text}");
+    assert!(
+        !text.contains("\n\n\n"),
+        "绑定行与其上方空行一并移除: {text}"
+    );
+    assert!(text.contains("body\n"), "{text}");
+    assert!(!text.contains("/gitW"), "{text}");
+    prompt.undo();
+    assert_eq!(prompt.text(), before, "单步撤销恢复绑定与命令行");
+}
+
+#[test]
+fn worktree_chooser_escape_discards_the_slash_line() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_text("&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm());
+    assert!(prompt.worktree_chooser_open());
+    assert!(prompt.slash_escape());
+    assert!(!prompt.worktree_chooser_open());
+    assert!(!prompt.text().contains("/gitW"), "选择器行被丢弃");
+    assert!(
+        prompt.text().contains("body\n\n&&& addTemplate --end"),
+        "丢弃后保留空行: {}",
+        prompt.text()
+    );
+}
+
+#[test]
+fn worktree_marker_inside_block_resolves_mention_root_and_reports_missing() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    // 候选未加载：绑定不可解析，不得回退到显式根。
+    assert_eq!(
+        prompt.block_binding(),
+        Some(markdown::WorktreeBinding::Missing("feature/x".into()))
+    );
+    assert!(prompt.take_worktree_request().is_some(), "未解析时请求刷新");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    match prompt.block_binding() {
+        Some(markdown::WorktreeBinding::Bound(candidate)) => {
+            assert_eq!(candidate.path, PathBuf::from("/repo/.worktrees/feat"))
+        }
+        other => panic!("expected bound candidate, got {other:?}"),
+    }
+}
+
+#[test]
+fn bound_linked_block_asks_root_before_listing_files() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.insert_char('@');
+    // 绑定 linked worktree：先弹取根选择器，未选前不发起扫描。
+    assert_eq!(prompt.mention_chooser(), Some(0), "选择器默认高亮 main");
+    assert!(prompt.mention().is_none());
+    assert!(prompt.take_mention_scan_request().is_none(), "未选根不扫描");
+    assert!(prompt.mention_move(1));
+    assert_eq!(prompt.mention_chooser(), Some(1));
+    assert!(prompt.mention_confirm(), "确认取根");
+    assert!(prompt.mention_chooser().is_none());
+    let (generation, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(root, PathBuf::from("/repo/.worktrees/feat"), "wt 取根");
+    prompt.apply_mention_entries(
+        generation,
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert_eq!(prompt.mention_root_label(), Some("wt"));
+    // Esc 结束会话，块内重新 `@` 后重新询问取根。
+    assert!(prompt.mention_escape());
+    let body_end = prompt.text().find("body ").expect("body line") + "body ".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char('@');
+    assert_eq!(prompt.mention_chooser(), Some(0));
+    assert!(prompt.mention_confirm(), "默认取根 main");
+    let (_, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(root, PathBuf::from("/repo"), "main 取主 checkout");
+    assert_eq!(prompt.mention_root_label(), Some("main"));
+}
+
+#[test]
+fn chooser_highlight_survives_context_sync() {
+    // 事件层每次按键都会先同步上下文根（内部重算面板）：选择器高亮必须停在用户
+    // 移动到的项上，回车确认的也必须是高亮项（曾被打回 main，键盘无法切换取根）。
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.insert_char('@');
+    assert_eq!(prompt.mention_chooser(), Some(0), "默认高亮 main");
+    assert!(prompt.mention_move(1), "移动到 wt");
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    assert_eq!(prompt.mention_chooser(), Some(1), "同步根后高亮保持 wt");
+    assert!(prompt.mention_move(-1), "键盘切回 main");
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    assert_eq!(prompt.mention_chooser(), Some(0), "同步根后高亮保持 main");
+    prompt.mention_move(1);
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    assert!(prompt.mention_confirm(), "确认取根");
+    let (_, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(
+        root,
+        PathBuf::from("/repo/.worktrees/feat"),
+        "确认的是高亮的 wt"
+    );
+}
+
+#[test]
+fn binding_the_main_checkout_lists_files_without_root_choice() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_text("&&& addTemplate --start\nbody\n\n{wt:main}\n&&& addTemplate --end done\n");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "main".into(),
+        path: PathBuf::from("/repo"),
+        is_main: true,
+    }]);
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.insert_char('@');
+    assert!(
+        prompt.mention_chooser().is_none(),
+        "绑定主 checkout 不询问取根"
+    );
+    let (_, root) = prompt.take_mention_scan_request().expect("scan request");
+    assert_eq!(root, PathBuf::from("/repo"));
+    assert_eq!(prompt.mention_root_label(), None, "主 checkout 无标题后缀");
+}
+
+#[test]
+fn mention_entries_from_bound_checkout_survive_explicit_root_change() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_mention_root(Some(PathBuf::from("/fallback")));
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
+    }]);
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.insert_char('@');
+    assert!(prompt.mention_confirm(), "默认取根 main");
+    assert!(prompt.mention().is_none(), "无缓存时候选面板隐藏");
+    let (generation, root) = prompt
+        .take_mention_scan_request()
+        .expect("scan request for chosen root");
+    assert_eq!(root, PathBuf::from("/repo"), "取根后扫描对应 checkout");
+    prompt.apply_mention_entries(
+        generation,
+        vec![markdown::MentionEntry {
+            path: "src".into(),
+            is_directory: true,
+        }],
+    );
+    assert!(prompt.mention().is_some(), "候选来自所选 checkout");
 }

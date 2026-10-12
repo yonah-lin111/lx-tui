@@ -13,6 +13,7 @@ pub mod input;
 pub mod layout;
 pub mod platform;
 pub mod pty;
+pub mod settings;
 pub mod terminal;
 pub mod tui;
 pub mod ui;

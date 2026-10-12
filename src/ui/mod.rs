@@ -67,12 +67,13 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
             render_collapsed_strip(frame, view.sidebar, true);
         } else {
             sidebar::render(frame, view.sidebar, state);
+            render_settings_button(frame, &view, state);
         }
     }
     tab_bar::render(frame, &view, state);
     render_exit_button(frame, &view);
     let pane_cursor = render_panes(frame, &pane_rects, state);
-    let prompt_cursor = render_prompt(frame, view.prompt, state).or(pane_cursor);
+    let prompt_cursor = render_prompt(frame, &view, state).or(pane_cursor);
     render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     let tooltip_area = tooltip::render(frame, area, state, &view, &pane_rects);
@@ -429,7 +430,12 @@ fn render_pane_agent_label(
 ///
 /// 文本区固定预留最右 1 列作滚动条槽，文本/树溢出时该列显示滚动条。
 /// 返回编辑视图聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
-fn render_prompt(frame: &mut Frame<'_>, area: Rect, state: &AppState) -> Option<(u16, u16)> {
+fn render_prompt(
+    frame: &mut Frame<'_>,
+    view: &layout::ViewLayout,
+    state: &AppState,
+) -> Option<(u16, u16)> {
+    let area = view.prompt;
     if area.width == 0 || area.height == 0 {
         return None;
     }
@@ -568,6 +574,57 @@ fn prompt_scrollbar_for(
         ),
     };
     widgets::scrollbar::layout(gutter, total, usize::from(gutter.height), offset)
+}
+
+/// 侧栏底边框左侧设置按钮几何：展开态且宽度足够时贴靠左边框（与右端折叠按钮同列）。
+///
+/// 折叠态、过窄或服务不可用时隐藏；渲染与鼠标命中共用。
+pub fn settings_button(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    let area = view.sidebar;
+    if !state.settings_available
+        || state.sidebar_collapsed
+        || area.width < SETTINGS_BUTTON_MIN_WIDTH
+        || area.height < 2
+    {
+        return None;
+    }
+    Some(Rect::new(
+        area.x + SETTINGS_BUTTON_MARGIN,
+        area.bottom().saturating_sub(1),
+        SETTINGS_BUTTON_WIDTH,
+        1,
+    ))
+}
+
+/// 命中侧栏底边框设置按钮。
+pub fn settings_button_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    settings_button(view, state).is_some_and(|area| area.contains((column, row).into()))
+}
+
+/// 设置按钮几何常量：宽度取自文案、左边距 1 列（紧贴左边框内侧，与右端折叠按钮对称）。
+const SETTINGS_BUTTON_WIDTH: u16 = text::SETTINGS_LABEL.len() as u16;
+const SETTINGS_BUTTON_MARGIN: u16 = 1;
+/// 显示设置按钮所需的最小侧栏宽度：按钮 + 右端折叠按钮与其边距的安全余量。
+const SETTINGS_BUTTON_MIN_WIDTH: u16 = SETTINGS_BUTTON_WIDTH + 3 + 1 + 2;
+
+/// 绘制侧栏底边框左侧设置按钮：逐格 reset + 强调色，与折叠按钮绘制方式一致。
+fn render_settings_button(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+    let Some(area) = settings_button(view, state) else {
+        return;
+    };
+    for (offset, symbol) in text::SETTINGS_LABEL.chars().enumerate() {
+        let x = area.x + offset as u16;
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, area.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
 }
 
 /// prompt 底边框左侧 git 状态：`b:分支`（linked worktree 显示仓库主 checkout 分支），

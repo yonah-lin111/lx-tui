@@ -127,7 +127,7 @@ fn shift_tab_cycles_template_status_inside_block_else_outdents() {
     apply_editor(
         &mut state,
         EditorCommand::InsertText(
-            "&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end".into(),
+            "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end".into(),
         ),
     );
     apply_editor(&mut state, EditorCommand::Outdent);
@@ -175,6 +175,38 @@ fn place_prompt_cursor_maps_viewport_cell() {
     assert_eq!(state.prompt.cursor_cell(), Some((0, 1)));
     place_prompt_cursor(&mut state, 1, 1);
     assert_eq!(state.prompt.cursor_cell(), Some((1, 1)));
+}
+
+#[test]
+fn prompt_click_dismisses_worktree_chooser_without_text_change() {
+    let mut state = AppState::demo();
+    // 工作区带 git 元数据：上下文根同步不会把仓库根清成 None 而顺带关掉面板，
+    // 关闭必须来自点击本身的处理。
+    let workspace = state.active_workspace;
+    state.workspaces[workspace].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo"),
+        is_linked: false,
+        branch: Some("main".into()),
+        main_branch: Some("main".into()),
+    });
+    state.prompt.resize(60, 12);
+    state.prompt_focused = true;
+    state.prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\nbody\n/gitW\n&&& addTemplate --end\n");
+    let cursor = state.prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    state.prompt.set_cursor_offset_for_test(cursor);
+    state.prompt.insert_char(' ');
+    state.prompt.backspace();
+    assert!(state.prompt.slash_confirm(), "opens chooser");
+    assert!(state.prompt.worktree_chooser_open());
+    let before = state.prompt.text().to_string();
+    // 点击文本区其他位置：选择器关闭且不改文本，不再跟随点击漂移（对齐 @ 面板）。
+    place_prompt_cursor(&mut state, 0, 1);
+    assert!(!state.prompt.worktree_chooser_open(), "点击关闭选择器");
+    assert_eq!(state.prompt.text(), before, "关闭不改文本");
 }
 
 #[test]
@@ -2528,7 +2560,7 @@ fn switching_workspace_root_invalidates_mention_cache() {
     state.prompt.resize(40, 8);
     focus_prompt(&mut state);
     apply_editor(&mut state, EditorCommand::InsertChar('@'));
-    let (generation, first_root) = state
+    let (generation, first_roots) = state
         .prompt
         .take_mention_scan_request()
         .expect("scan requested");
@@ -2547,12 +2579,12 @@ fn switching_workspace_root_invalidates_mention_cache() {
     state.workspaces[0].cwd = Some(std::path::PathBuf::from("/tmp/other"));
     apply_editor(&mut state, EditorCommand::InsertChar('a'));
     assert!(state.prompt.mention().is_none());
-    let (_, next_root) = state
+    let (_, next_roots) = state
         .prompt
         .take_mention_scan_request()
         .expect("rescan requested");
-    assert_ne!(next_root, first_root);
-    assert_eq!(next_root, std::path::PathBuf::from("/tmp/other"));
+    assert_ne!(next_roots, first_roots);
+    assert_eq!(next_roots, std::path::PathBuf::from("/tmp/other"));
 }
 
 #[test]
@@ -3308,7 +3340,7 @@ fn slash_panel_keys_are_consumed_before_editing() {
         state
             .prompt
             .text()
-            .starts_with("&&& addTemplate --start\n「title: 」")
+            .starts_with("&&& addTemplate --start\n{title: }")
     );
     assert!(state.prompt.slash_panel().is_none());
 }
