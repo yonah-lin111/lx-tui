@@ -246,9 +246,19 @@ fn spawn_trusted(label: &str) -> App {
 fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     let app = spawn_trusted("flow");
 
-    // [≡] → 树视图：搜索框、[+] 按钮与空状态。
+    // [≡] → 树视图：搜索框、[+] 按钮与 default temp 行（列表恒有 default temp）。
     app.click(text::PROMPT_MODE_LIST_LABEL);
-    assert!(app.wait_for("no prompts yet"), "tree: \n{}", app.screen());
+    assert!(
+        app.wait_for(text::PROMPT_TEMP_DEFAULT_NAME),
+        "tree: \n{}",
+        app.screen()
+    );
+    assert!(
+        app.find_in_row_of(text::PROMPT_TEMP_DEFAULT_NAME, text::PROMPT_TEMP_BADGE)
+            .is_some(),
+        "default temp row with badge: \n{}",
+        app.screen()
+    );
     assert!(
         app.wait_for(text::PROMPT_MODE_EDIT_LABEL),
         "mode button flips"

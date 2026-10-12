@@ -140,16 +140,16 @@ fn status_roundtrip_and_cycle() {
 fn panel_selection_clamps_and_locates_prompt() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
-    // 行序：root(0), sub(1), in-sub(2), in-root(3), other(4), loose(5)。
-    panel.selected = 2;
+    // 行序：tmp:(0)、default(1)、saved:(2)、root(3)、sub(4)、in-sub(5)、in-root(6)、other(7)、loose(8)。
+    panel.selected = 5;
     let row = panel.selected_row().expect("row exists");
     assert_eq!(panel.tree.item_of_row(row).map(|item| item.id), Some(12));
     assert_eq!(panel.selected_prompt_id(), Some(12));
     panel.selected = 99;
     panel.scroll = 99;
     panel.clamp_selection(3);
-    assert_eq!(panel.selected, 5);
-    assert_eq!(panel.scroll, 3);
+    assert_eq!(panel.selected, 8);
+    assert_eq!(panel.scroll, 6);
 }
 
 fn search(panel: &mut PromptPanel, query: &str) {
@@ -243,32 +243,53 @@ fn rows_pin_temps_before_tree_with_section_labels() {
     let mut expected = vec![
         PromptRowKind::Section(PromptSection::Temp),
         PromptRowKind::Temp,
+        PromptRowKind::Temp,
         PromptRowKind::Section(PromptSection::Saved),
     ];
     expected.extend(sample_tree().rows().into_iter().map(|row| row.kind));
     assert_eq!(kinds, expected, "{rows:?}");
-    let row = rows[1];
+    assert_eq!(
+        panel.temp_of_row(rows[1]).map(TempPrompt::display_name),
+        Some(text::PROMPT_TEMP_DEFAULT_NAME),
+        "空白 default temp 置顶"
+    );
+    let row = rows[2];
     assert_eq!(panel.temp_of_row(row).map(|temp| temp.id), Some(temp_id));
     assert_eq!(panel.tree.folder_of_row(rows[0]), None, "标签行不映射数据");
 
     // 无 temp 时退化为纯树行（不出现任何标签）。
     let mut bare = PromptPanel::new();
+    bare.remove_temp(0);
     bare.tree = sample_tree();
     assert_eq!(bare.rows(), sample_tree().rows());
 }
 
 #[test]
-fn blank_temp_is_hidden_from_rows() {
+fn blank_temp_shows_default_placeholder_name() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
-    push_temp(&mut panel, "  \n ");
+    let blank = panel.blank_temp().expect("new panel has blank temp");
     let visible = push_temp(&mut panel, "有内容");
     let rows = panel.rows();
     let temps: Vec<u64> = rows
         .iter()
         .filter_map(|row| panel.temp_of_row(*row).map(|temp| temp.id))
         .collect();
-    assert_eq!(temps, vec![visible], "空白 temp 不进入列表");
+    assert_eq!(temps, vec![blank, visible], "空白 default temp 恒在列表");
+    assert_eq!(
+        panel.temp(blank).map(TempPrompt::summary),
+        Some(""),
+        "空白项摘要为空串"
+    );
+    assert_eq!(
+        panel.temp(blank).map(TempPrompt::display_name),
+        Some(text::PROMPT_TEMP_DEFAULT_NAME),
+        "空白项展示占位名"
+    );
+    assert_eq!(
+        panel.temp(visible).map(TempPrompt::display_name),
+        Some("有内容")
+    );
 }
 
 #[test]
@@ -307,24 +328,24 @@ fn clamp_selection_snaps_off_section_rows() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
     push_temp(&mut panel, "有内容");
-    // 行序：tmp:(0)、temp(1)、saved:(2)、root(3)…
-    panel.selected = 2;
+    // 行序：tmp:(0)、default(1)、temp(2)、saved:(3)、root(4)…
+    panel.selected = 3;
     panel.clamp_selection(4);
-    assert_eq!(panel.selected, 3, "选中吸附到标签之后的树行");
+    assert_eq!(panel.selected, 4, "选中吸附到标签之后的树行");
     assert_eq!(
         panel.selected_row().map(|row| row.kind),
         Some(PromptRowKind::Folder)
     );
 
-    // 选中落在末尾标签之后仍有树行：吸附向下。
+    // 选中落在 tmp: 标签上：吸附向下到 default temp。
     panel.selected = 0;
     panel.clamp_selection(4);
     assert_eq!(panel.selected, 1, "tmp: 标签吸附到 temp 行");
 
-    // 只有 temp 的短列表：越界钳制后吸附到 temp 行。
+    // 只有 temp 的短列表：越界钳制后吸附到末行。
     let mut short = PromptPanel::new();
     push_temp(&mut short, "唯一");
     short.selected = 99;
     short.clamp_selection(4);
-    assert_eq!(short.selected, 1);
+    assert_eq!(short.selected, 2);
 }

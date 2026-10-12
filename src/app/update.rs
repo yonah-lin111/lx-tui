@@ -234,7 +234,8 @@ fn sync_mention_root(state: &mut AppState) {
 ///
 /// 目标草稿移入 `state.prompt` / `state.prompt_root`，旧草稿停回 `from` 槽位；
 /// 槽位缺失（不变量被破坏）时兜底新建，避免 panic；
-/// 切换前提交 `from` 编辑中的提示词内容并回收空白临时提示词（缓冲随之回到已保存态）；
+/// 切换前提交 `from` 编辑中的提示词内容并清除空白 temp 绑定
+/// （空白 default temp 保留在列表，缓冲随之回到已保存态）；
 /// 编辑绑定随工作区保留，切回时由 `restore_prompt_view` 恢复。
 fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if from == to {
@@ -260,7 +261,7 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
 }
 
 /// 恢复目标工作区的 prompt 视图：已绑定条目/临时提示词（且仍在）保持编辑；
-/// 否则新建空临时提示词；树视图下缓冲内容已过期，重载为空正文。
+/// 否则绑定该工作区恒保留的空白 default temp（缺失时新建）；树视图下缓冲内容已过期，重载为空正文。
 fn restore_prompt_view(state: &mut AppState, index: usize) {
     let Some(workspace) = state.workspaces.get(index) else {
         return;
@@ -278,7 +279,7 @@ fn restore_prompt_view(state: &mut AppState, index: usize) {
     }
     if let Some(workspace) = state.workspaces.get_mut(index) {
         workspace.prompt_panel.mode = PromptMode::Editor;
-        let id = workspace.prompt_panel.new_temp();
+        let id = workspace.prompt_panel.ensure_blank_temp();
         workspace.prompt_panel.editing = Some(PromptEditing::Temp(id));
     }
     state.prompt.set_text("");

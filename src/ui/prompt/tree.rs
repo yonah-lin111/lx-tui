@@ -285,7 +285,7 @@ fn paint_row(
                     .saturating_sub(x)
                     .saturating_sub(badge_width + gap),
             );
-            paint_name(buf, x, y, temp.summary(), base, max, area.right());
+            paint_name(buf, x, y, temp.display_name(), base, max, area.right());
             if badge_width > 0 && badge_width <= area.width {
                 let badge_x = area.right() - badge_width;
                 let badge_style = if selected { base } else { style::accent() };

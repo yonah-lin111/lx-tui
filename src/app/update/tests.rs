@@ -1095,25 +1095,26 @@ fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
 }
 
 #[test]
-fn switch_workspace_parks_temp_and_prunes_blank_binding() {
+fn switch_workspace_parks_temp_and_keeps_blank_default() {
     use crate::app::prompt::PromptEditing;
     let mut state = AppState::demo();
-    // 空白 temp 切换走：回收绑定；切回新建另一个空 temp。
+    // 空白 temp 切换走：default temp 保留在列表（清除绑定）；切回绑定同一条。
     let Some(PromptEditing::Temp(first)) = state.workspaces[0].prompt_panel.editing else {
         panic!("temp bound");
     };
     create_workspace(&mut state);
     assert!(
-        state.workspaces[0].prompt_panel.temp(first).is_none(),
-        "空白 temp 随切换回收"
+        state.workspaces[0].prompt_panel.temp(first).is_some(),
+        "空白 default temp 随切换保留"
     );
+    assert_eq!(state.workspaces[0].prompt_panel.editing, None);
     switch_workspace(&mut state, 0);
     assert!(
         matches!(
             state.workspaces[0].prompt_panel.editing,
-            Some(PromptEditing::Temp(id)) if id != first
+            Some(PromptEditing::Temp(id)) if id == first
         ),
-        "切回重建新的空 temp"
+        "切回绑定原 default temp"
     );
 
     // 非空 temp 切换走：内容留存，切回恢复绑定与正文。
@@ -1136,6 +1137,25 @@ fn switch_workspace_parks_temp_and_prunes_blank_binding() {
         Some(PromptEditing::Temp(second))
     );
     assert_eq!(state.prompt.text(), "parked");
+}
+
+#[test]
+fn switch_workspace_recreates_missing_default_temp() {
+    use crate::app::prompt::PromptEditing;
+    let mut state = AppState::demo();
+    // 列表里删除 ws0 的 default temp 后切走再切回：自动补建并绑定。
+    show_prompt_tree(&mut state);
+    let blank = state.workspaces[0]
+        .prompt_panel
+        .blank_temp()
+        .expect("default temp");
+    assert!(delete_prompt_temp(&mut state, 0, blank));
+    create_workspace(&mut state);
+    switch_workspace(&mut state, 0);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert!(panel.blank_temp().is_some(), "切回补建 default temp");
+    assert!(matches!(panel.editing, Some(PromptEditing::Temp(_))));
+    assert_eq!(panel.mode, PromptMode::Editor);
 }
 
 /// 断言 prompt 草稿槽位不变量：恰有一处 None，且属于显示中的工作区。

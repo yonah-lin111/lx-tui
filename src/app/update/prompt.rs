@@ -55,7 +55,8 @@ pub fn apply_prompt_tree(
     true
 }
 
-/// 切换树视图：提交编辑内容、回收空白 temp、暂存编辑绑定并清空绑定。
+/// 切换树视图：提交编辑内容、清除空白绑定、暂存编辑绑定并清空绑定；
+/// 列表恒保留一条空白 default temp（缺失时补建）并默认高亮它。
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
     let index = state.prompt_workspace();
@@ -65,11 +66,19 @@ pub fn show_prompt_tree(state: &mut AppState) {
         workspace.prompt_panel.enter_tree_view();
         workspace.prompt_panel.mode = PromptMode::Tree;
         workspace.prompt_panel.editing = None;
+        workspace.prompt_panel.ensure_blank_temp();
         // 行集可能因 temp/分区标签变化：选中吸附到最近可选中行。
         workspace.prompt_panel.clamp_selection(visible);
     }
     state.prompt.clear_panel();
     state.selection = None;
+    let blank = state
+        .workspaces
+        .get(index)
+        .and_then(|workspace| workspace.prompt_panel.blank_temp());
+    if let Some(temp_id) = blank {
+        select_prompt_temp(state, index, temp_id);
+    }
 }
 
 /// 工具栏模式按钮：树视图返回编辑（用户未显式改过选中时恢复进入列表前的编辑绑定），
@@ -416,7 +425,7 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     let Some(workspace_state) = state.workspaces.get_mut(index) else {
         return false;
     };
-    // 不变量兜底：树视图下不存在待编辑的空 temp，残留空白项先回收。
+    // 不变量兜底：空白项至多一条，残留空白项先回收（default temp 由新建项接替）。
     workspace_state.prompt_panel.remove_blank_temps();
     let id = workspace_state.prompt_panel.new_temp();
     workspace_state.prompt_panel.mode = PromptMode::Editor;

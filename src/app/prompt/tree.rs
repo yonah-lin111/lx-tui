@@ -5,6 +5,7 @@
 
 use crate::app::overlay::TextInput;
 use crate::db::{FolderRecord, PromptRecord};
+use crate::ui::text;
 
 /// 提示词条目状态；与 DB 稳定值 `todo` / `in_progress` / `completed` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,7 +63,7 @@ pub struct PromptItem {
     pub status: PromptItemStatus,
 }
 
-/// 临时提示词：仅存内存、不入库；列表展示名取内容首行摘要。
+/// 临时提示词：仅存内存、不入库；列表展示名取内容首行摘要（空白项取占位名 `default`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TempPrompt {
     pub id: u64,
@@ -79,9 +80,18 @@ impl TempPrompt {
             .unwrap_or("")
     }
 
-    /// 内容去空白后是否为空（空白 temp 不进入列表）。
+    /// 内容去空白后是否为空（空白 temp 即工作区恒保留的 default temp）。
     pub fn is_blank(&self) -> bool {
         self.content.trim().is_empty()
+    }
+
+    /// 列表展示名：非空内容取首行摘要；空白（default temp）取占位名。
+    pub fn display_name(&self) -> &str {
+        if self.is_blank() {
+            text::PROMPT_TEMP_DEFAULT_NAME
+        } else {
+            self.summary()
+        }
     }
 }
 
@@ -356,7 +366,8 @@ pub struct PromptPanel {
     pub editing: Option<PromptEditing>,
     /// 树视图首个可见行索引。
     pub scroll: usize,
-    /// 临时提示词列表（仅内存）；`[tmp]` 新建、保存到库后移除，列表中恒无空白项。
+    /// 临时提示词列表（仅内存）；`[tmp]` 新建、保存到库后移除；
+    /// 空白项至多一条（default temp，列表中占位名 `default`，恒保留）。
     temps: Vec<TempPrompt>,
     /// 下一个临时提示词 id（单调递增，不复用）。
     next_temp_id: u64,
@@ -389,7 +400,7 @@ impl PromptPanel {
         }
     }
 
-    /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白 temp 回收之后调用）。
+    /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白绑定清除之后调用）。
     pub fn enter_tree_view(&mut self) {
         self.tree_return = self.editing;
         self.tree_selection_touched = false;
@@ -429,6 +440,19 @@ impl PromptPanel {
         id
     }
 
+    /// 空白 default temp id：列表中恒保留、占位名 `default` 的空 temp。
+    pub fn blank_temp(&self) -> Option<u64> {
+        self.temps
+            .iter()
+            .find(|temp| temp.is_blank())
+            .map(|temp| temp.id)
+    }
+
+    /// 确保存在空白 default temp（缺失时新建）并返回其 id。
+    pub fn ensure_blank_temp(&mut self) -> u64 {
+        self.blank_temp().unwrap_or_else(|| self.new_temp())
+    }
+
     /// 按 id 取临时提示词。
     pub fn temp(&self, id: u64) -> Option<&TempPrompt> {
         self.temps.iter().find(|temp| temp.id == id)
@@ -446,12 +470,13 @@ impl PromptPanel {
         self.temps.len() != before
     }
 
-    /// 回收全部空白临时提示词（不变量兜底：列表中的 temp 恒非空）。
+    /// 回收全部空白临时提示词（`[tmp]` 新建前兜底，保证空白项至多一条）。
     pub fn remove_blank_temps(&mut self) {
         self.temps.retain(|temp| !temp.is_blank());
     }
 
-    /// 离开编辑视图的绑定回收：绑定的临时提示词为空时删除并清除绑定；返回是否回收。
+    /// 离开编辑视图的绑定回收：绑定的临时提示词为空时仅清除绑定
+    /// （空白 default temp 保留在列表）；返回是否回收。
     pub fn drop_blank_temp_binding(&mut self) -> bool {
         let Some(PromptEditing::Temp(id)) = self.editing else {
             return false;
@@ -459,20 +484,19 @@ impl PromptPanel {
         if !self.temp(id).is_some_and(TempPrompt::is_blank) {
             return false;
         }
-        self.remove_temp(id);
         self.editing = None;
         true
     }
 
-    /// 可见行：有可见临时提示词时置顶 `tmp:` 区并在有树行时补 `saved:` 标签；
-    /// 无临时条目时与树行一致（保持无标签原状）。
+    /// 可见行：置顶 `tmp:` 区（含空白 default temp）并在有树行时补 `saved:` 标签；
+    /// 无可见临时条目时与树行一致（保持无标签原状）。
     pub fn rows(&self) -> Vec<PromptRow> {
         let query = self.search.text().trim().to_lowercase();
         let temp_indices: Vec<usize> = self
             .temps
             .iter()
             .enumerate()
-            .filter(|(_, temp)| !temp.is_blank() && name_matches(temp.summary(), &query))
+            .filter(|(_, temp)| name_matches(temp.display_name(), &query))
             .map(|(index, _)| index)
             .collect();
         let tree_rows = self.filtered_tree_rows();

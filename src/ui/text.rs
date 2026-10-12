@@ -86,6 +86,8 @@ pub const PROMPT_SECTION_TMP: &str = "tmp:";
 pub const PROMPT_SECTION_SAVED: &str = "saved:";
 /// 临时提示词行的右对齐标注（替代条目状态词位置）。
 pub const PROMPT_TEMP_BADGE: &str = "[tmp]";
+/// 空白 default temp 在列表中的占位展示名（每个工作区恒保留一条）。
+pub const PROMPT_TEMP_DEFAULT_NAME: &str = "default";
 /// 临时提示词在编辑视图分割线行的标题。
 pub const PROMPT_DRAFT_TITLE: &str = "temp prompt";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";

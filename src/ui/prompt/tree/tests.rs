@@ -7,8 +7,12 @@ use ratatui::style::Color;
 use super::*;
 use crate::app::prompt::{PromptFolder, PromptItem, PromptItemStatus};
 
+/// 树行渲染用的面板：去掉默认空白 temp，聚焦树行布局。
 fn panel_with(folders: Vec<PromptFolder>, items: Vec<PromptItem>) -> PromptPanel {
     let mut panel = PromptPanel::new();
+    if let Some(id) = panel.blank_temp() {
+        panel.remove_temp(id);
+    }
     panel.tree.replace(folders, items);
     panel
 }
@@ -205,12 +209,26 @@ fn long_names_are_ellipsized_within_width() {
 
 #[test]
 fn empty_tree_shows_placeholder_under_search_row() {
-    let panel = PromptPanel::new();
+    // 防御分支：无 temp 且无树行时显示空状态占位（进入列表恒有 default temp）。
+    let panel = panel_with(vec![], vec![]);
     let area = Rect::new(0, 0, 30, 5);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
     let text = row_text(&buf, area, 2);
     assert!(text.starts_with(text::PROMPT_TREE_EMPTY), "{text}");
+}
+
+#[test]
+fn default_temp_renders_placeholder_name_and_badge() {
+    let panel = PromptPanel::new();
+    let area = Rect::new(0, 0, 40, 5);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false);
+    let tmp = row_text(&buf, area, 2);
+    assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
+    let default = row_text(&buf, area, 3);
+    assert!(default.starts_with("• default"), "{default}");
+    assert!(default.ends_with(text::PROMPT_TEMP_BADGE), "{default}");
 }
 
 #[test]

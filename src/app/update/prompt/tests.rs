@@ -55,7 +55,11 @@ fn apply_tree_loads_rows_and_marks_loaded() {
     let state = demo_state();
     assert!(state.workspaces[0].prompt_panel.loaded);
     let rows = state.workspaces[0].prompt_panel.rows();
-    assert_eq!(rows.len(), 4, "root, sub, nested, loose");
+    assert_eq!(
+        rows.len(),
+        7,
+        "tmp: + default + saved: + root, sub, nested, loose"
+    );
 }
 
 #[test]
@@ -65,34 +69,34 @@ fn toggle_mode_and_keyboard_navigation() {
     show_prompt_tree(&mut state);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
 
-    // 上移到头 no-op；下移跳过可见行。
+    // 上移到头 no-op；下移跳过标签行（saved: 行 2）落到 root。
     assert!(!move_prompt_selection(&mut state, -1, 8));
     assert!(move_prompt_selection(&mut state, 1, 8));
-    assert_eq!(state.workspaces[0].prompt_panel.selected, 1);
+    assert_eq!(state.workspaces[0].prompt_panel.selected, 3);
     assert!(move_prompt_selection(&mut state, 1, 8));
-    assert_eq!(state.workspaces[0].prompt_panel.selected, 2);
+    assert_eq!(state.workspaces[0].prompt_panel.selected, 4);
 
     // 折叠/展开选中文件夹（折叠经由行激活/点击；←/→ 已归搜索框光标）。
     let mut state = demo_state();
     enter_tree(&mut state);
     let mut state = {
-        // 选中子文件夹（行 1）后折叠。
-        move_prompt_selection(&mut state, 1, 8);
+        // 行序：tmp:(0)、default(1)、saved:(2)、root(3)、sub(4)…；选中子文件夹后折叠。
+        move_prompt_selection(&mut state, 2, 8);
         state
     };
     assert!(collapse_prompt_row(&mut state));
     let rows = state.workspaces[0].prompt_panel.rows();
-    assert_eq!(rows.len(), 3, "子文件夹折叠隐藏 nested");
+    assert_eq!(rows.len(), 6, "子文件夹折叠隐藏 nested");
     assert!(expand_prompt_row(&mut state));
-    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
+    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 7);
 }
 
 #[test]
 fn enter_on_item_opens_editor_and_escape_returns() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    // 行序：root(0), sub(1), nested(2), loose(3)；选中 nested 并回车。
-    move_prompt_selection(&mut state, 2, 8);
+    // 行序：tmp:(0)、default(1)、saved:(2)、root(3)、sub(4)、nested(5)、loose(6)；选中 nested 并回车。
+    move_prompt_selection(&mut state, 3, 8);
     assert!(activate_prompt_row(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
     assert_eq!(
@@ -129,7 +133,7 @@ fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
     assert_eq!(state.workspaces[0].prompt_panel.search.text(), "este");
     apply_editor(&mut state, EditorCommand::Escape);
     assert!(state.workspaces[0].prompt_panel.search.text().is_empty());
-    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 4);
+    assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 7);
 
     // 工具栏 [tmp] 入口：新建空临时提示词并进入编辑视图。
     assert!(open_temp_prompt(&mut state));
@@ -148,7 +152,8 @@ fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
 fn editing_item_persists_on_commit_and_action_quit() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 2, 8);
+    // 行序：tmp:(0)、default(1)、saved:(2)、root(3)、sub(4)、nested(5)…；选中 nested 打开编辑。
+    move_prompt_selection(&mut state, 3, 8);
     activate_prompt_row(&mut state);
     apply_editor(&mut state, EditorCommand::InsertText(" updated".into()));
     show_prompt_tree(&mut state);
@@ -194,7 +199,7 @@ fn item_menu_lists_commands_and_dispatches_status_copy_delete() {
         menu.target,
         OverlayTarget::PromptItem { item_id: 12, .. }
     ));
-    assert_eq!(state.workspaces[0].prompt_panel.selected, 2);
+    assert_eq!(state.workspaces[0].prompt_panel.selected, 5);
 
     // 状态切换命令 → 内存与效应。
     state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
@@ -374,7 +379,8 @@ fn rename_flow_updates_memory_and_queues_effect() {
 fn delete_folder_cascades_editing_item_exit() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 2, 8);
+    // 选中 nested（行 5）打开编辑，再级联删除其所在文件夹。
+    move_prompt_selection(&mut state, 3, 8);
     activate_prompt_row(&mut state);
     assert_eq!(
         state.workspaces[0].prompt_panel.editing,
@@ -392,8 +398,9 @@ fn scroll_clamps_and_keeps_selection_visible() {
     let mut state = demo_state();
     enter_tree(&mut state);
     state.prompt.resize(30, 2);
+    // 行数 7（tmp:、default、saved:、4 树行），视口 2 行 → 最大滚动 5。
     assert!(scroll_prompt_tree(&mut state, 5, 2));
-    assert!(state.workspaces[0].prompt_panel.scroll <= 2);
+    assert_eq!(state.workspaces[0].prompt_panel.scroll, 5, "越界钳制到末行");
     move_prompt_selection(&mut state, 3, 2);
     assert!(state.workspaces[0].prompt_panel.scroll <= state.workspaces[0].prompt_panel.selected);
     assert!(clamp_prompt_tree_scroll(&mut state, 4));
@@ -412,17 +419,16 @@ fn mode_roundtrip_without_selection_keeps_temp_editor() {
             status: PromptItemStatus::Todo,
         }],
     );
-    // 初始编辑视图绑定空 temp；列表首行即条目（默认高亮）。
+    // 初始编辑视图绑定空 temp；列表恒有 default temp，其后才是条目。
     assert!(matches!(
         state.workspaces[0].prompt_panel.editing,
         Some(PromptEditing::Temp(_))
     ));
     show_prompt_tree(&mut state);
-    assert_eq!(
-        state.workspaces[0].prompt_panel.rows()[0].kind,
-        PromptRowKind::Item
-    );
-    // 未显式选中任何行：返回编辑保持原 temp 绑定，不自动打开首行条目。
+    let rows = state.workspaces[0].prompt_panel.rows();
+    assert_eq!(rows[1].kind, PromptRowKind::Temp, "默认高亮 default temp");
+    assert_eq!(rows[3].kind, PromptRowKind::Item);
+    // 未显式选中任何行：返回编辑保持 temp 绑定，不自动打开任何条目。
     toggle_prompt_panel_mode(&mut state);
     assert!(matches!(
         state.workspaces[0].prompt_panel.editing,
@@ -436,8 +442,10 @@ fn mode_roundtrip_restores_open_item_without_selection() {
     let mut state = demo_state();
     assert!(edit_prompt_item(&mut state, 0, 12));
     show_prompt_tree(&mut state);
-    // 过滤自动把选中落到命中行（非用户显式选中）。
-    apply_editor(&mut state, EditorCommand::InsertChar('l'));
+    // 过滤自动把选中落到命中行（非用户显式选中）；"loo" 只命中 loose。
+    for ch in "loo".chars() {
+        apply_editor(&mut state, EditorCommand::InsertChar(ch));
+    }
     assert_eq!(
         state.workspaces[0].prompt_panel.selected, 0,
         "过滤命中 loose"
@@ -455,7 +463,8 @@ fn mode_roundtrip_restores_open_item_without_selection() {
 fn mode_roundtrip_with_explicit_selection_opens_selected_item() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    move_prompt_selection(&mut state, 2, 8);
+    // 行序：tmp:(0)、default(1)、saved:(2)、root(3)、sub(4)、nested(5)…；选中 nested。
+    move_prompt_selection(&mut state, 3, 8);
     toggle_prompt_panel_mode(&mut state);
     assert_eq!(
         state.workspaces[0].prompt_panel.editing,
@@ -477,10 +486,48 @@ fn mode_roundtrip_falls_back_to_temp_when_return_target_deleted() {
 }
 
 #[test]
+fn tree_entry_keeps_default_temp_and_selects_it() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(
+        panel.rows()[0].kind,
+        PromptRowKind::Section(PromptSection::Temp)
+    );
+    assert_eq!(panel.rows()[1].kind, PromptRowKind::Temp);
+    assert_eq!(
+        panel
+            .temp_of_row(panel.rows()[1])
+            .map(|temp| temp.display_name()),
+        Some(text::PROMPT_TEMP_DEFAULT_NAME),
+        "default temp 置顶且展示占位名"
+    );
+    assert_eq!(panel.selected, 1, "进入列表默认高亮 default temp");
+}
+
+#[test]
+fn deleted_default_temp_is_recreated_on_tree_entry() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    let blank = state.workspaces[0]
+        .prompt_panel
+        .blank_temp()
+        .expect("default temp");
+    assert!(delete_prompt_temp(&mut state, 0, blank));
+    assert_eq!(state.workspaces[0].prompt_panel.blank_temp(), None);
+
+    // 重新进入列表：default temp 自动补建并默认高亮。
+    show_prompt_tree(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert!(panel.blank_temp().is_some(), "进入列表补建 default temp");
+    assert_eq!(panel.selected, 1);
+}
+
+#[test]
 fn edit_falls_back_to_new_temp_when_selection_is_not_item() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    // 选中根文件夹（展示行 1）后 [edit]：新建空 temp，不再无响应。
+    // 选中根文件夹（展示行 3）后 [edit]：新建空 temp，不再无响应。
     move_prompt_selection(&mut state, 1, 8);
     toggle_prompt_panel_mode(&mut state);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
@@ -515,8 +562,8 @@ fn temp_roundtrip_keeps_content_and_picker_lists_folders() {
         panel.temp(temp_id).map(|temp| temp.content.as_str()),
         Some("draft body")
     );
-    // 行序：tmp:、temp、saved:、root、sub、nested、loose。
-    assert_eq!(panel.rows().len(), 7, "{:?}", panel.rows());
+    // 行序：tmp:、draft temp、default、saved:、root、sub、nested、loose。
+    assert_eq!(panel.rows().len(), 8, "{:?}", panel.rows());
 
     // 再次打开该 temp：内容保留（不入库也不丢失）。
     assert!(edit_prompt_temp(&mut state, 0, temp_id));
@@ -567,26 +614,22 @@ fn temp_roundtrip_keeps_content_and_picker_lists_folders() {
 }
 
 #[test]
-fn temp_button_creates_new_temp_each_time_and_prunes_blank() {
+fn temp_button_creates_new_temp_each_time_and_keeps_default() {
     let mut state = demo_state();
     enter_tree(&mut state);
-    // 第一次：空白 temp 切回列表即回收。
+    // 第一次：空白 temp 离开编辑视图保留在列表（default temp，占位名 default）。
     assert!(open_temp_prompt(&mut state));
     let Some(PromptEditing::Temp(first)) = state.workspaces[0].prompt_panel.editing else {
         panic!("temp bound");
     };
     show_prompt_tree(&mut state);
-    assert!(
-        state.workspaces[0].prompt_panel.temp(first).is_none(),
-        "空白 temp 离开编辑视图即回收"
-    );
-    assert_eq!(
-        state.workspaces[0].prompt_panel.rows().len(),
-        4,
-        "空白 temp 不进入列表"
-    );
+    let panel = &state.workspaces[0].prompt_panel;
+    assert!(panel.temp(first).is_some(), "空白 default temp 保留在列表");
+    assert_eq!(panel.blank_temp(), Some(first), "空白项即 default temp");
+    assert_eq!(panel.rows().len(), 7, "tmp: + default + saved: + 4 树行");
+    assert_eq!(panel.selected, 1, "默认高亮 default temp");
 
-    // 第二次：内容非空则保留，列表出现 tmp: 分区且选中吸附到 temp 行。
+    // 第二次：新建独立 temp；内容非空后与 default temp 同列，列表恒有空白项。
     assert!(open_temp_prompt(&mut state));
     let Some(PromptEditing::Temp(second)) = state.workspaces[0].prompt_panel.editing else {
         panic!("temp bound");
@@ -596,11 +639,16 @@ fn temp_button_creates_new_temp_each_time_and_prunes_blank() {
     show_prompt_tree(&mut state);
     let panel = &state.workspaces[0].prompt_panel;
     assert!(panel.temp(second).is_some());
+    assert!(
+        panel.blank_temp().is_some(),
+        "列表恒有空白 default temp（缺失时补建）"
+    );
     let rows = panel.rows();
     assert_eq!(rows[0].kind, PromptRowKind::Section(PromptSection::Temp));
     assert_eq!(rows[1].kind, PromptRowKind::Temp);
-    assert_eq!(rows[2].kind, PromptRowKind::Section(PromptSection::Saved));
-    assert_eq!(panel.selected, 1, "选中吸附到首个可选中行（跳过 tmp:）");
+    assert_eq!(rows[2].kind, PromptRowKind::Temp);
+    assert_eq!(rows[3].kind, PromptRowKind::Section(PromptSection::Saved));
+    assert_eq!(panel.selected, 2, "默认高亮 default temp 行");
 }
 
 #[test]
@@ -608,21 +656,26 @@ fn activate_temp_row_opens_editor_and_escape_returns() {
     let mut state = demo_state();
     enter_tree(&mut state);
     assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
     apply_editor(&mut state, EditorCommand::InsertText("temp body".into()));
     show_prompt_tree(&mut state);
-    assert_eq!(
-        state.workspaces[0].prompt_panel.selected, 1,
-        "temp 行被选中"
-    );
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.selected, 2, "默认高亮 default temp 行");
+    assert!(panel.temp(temp_id).is_some());
+
+    // 显式选中内容 temp 行后回车打开编辑视图。
+    assert!(select_prompt_temp(&mut state, 0, temp_id));
     assert!(activate_prompt_row(&mut state));
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
-    assert!(matches!(
+    assert_eq!(
         state.workspaces[0].prompt_panel.editing,
-        Some(PromptEditing::Temp(_))
-    ));
+        Some(PromptEditing::Temp(temp_id))
+    );
     assert_eq!(state.prompt.text(), "temp body");
 
-    // Esc 返回树：内容保留、绑定清除。
+    // Esc 返回树：内容保留、绑定清除、内容 temp 与 default temp 同列。
     apply_editor(&mut state, EditorCommand::Escape);
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(panel.mode, PromptMode::Tree);
@@ -633,7 +686,7 @@ fn activate_temp_row_opens_editor_and_escape_returns() {
             .iter()
             .filter(|row| row.kind == PromptRowKind::Temp)
             .count(),
-        1
+        2
     );
 }
 
