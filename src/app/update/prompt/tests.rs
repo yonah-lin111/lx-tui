@@ -486,6 +486,41 @@ fn mode_roundtrip_falls_back_to_temp_when_return_target_deleted() {
 }
 
 #[test]
+fn list_entry_highlights_open_item() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 12));
+    show_prompt_tree(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(panel.selected_prompt_id(), Some(12), "高亮当前编辑条目");
+    assert_eq!(
+        panel.selected_row().map(|row| row.kind),
+        Some(PromptRowKind::Item)
+    );
+}
+
+#[test]
+fn list_entry_highlights_open_temp_over_default() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(open_temp_prompt(&mut state));
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound");
+    };
+    apply_editor(&mut state, EditorCommand::InsertText("body".into()));
+    show_prompt_tree(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    assert_eq!(
+        panel
+            .selected_row()
+            .and_then(|row| panel.temp_of_row(row))
+            .map(|temp| temp.id),
+        Some(temp_id),
+        "高亮当前编辑 temp 而非 default"
+    );
+    assert_eq!(panel.selected, 1);
+}
+
+#[test]
 fn tree_entry_keeps_default_temp_and_selects_it() {
     let mut state = demo_state();
     enter_tree(&mut state);
@@ -648,7 +683,7 @@ fn temp_button_creates_new_temp_each_time_and_keeps_default() {
     assert_eq!(rows[1].kind, PromptRowKind::Temp);
     assert_eq!(rows[2].kind, PromptRowKind::Temp);
     assert_eq!(rows[3].kind, PromptRowKind::Section(PromptSection::Saved));
-    assert_eq!(panel.selected, 2, "默认高亮 default temp 行");
+    assert_eq!(panel.selected, 1, "高亮当前编辑 temp 行");
 }
 
 #[test]
@@ -662,7 +697,7 @@ fn activate_temp_row_opens_editor_and_escape_returns() {
     apply_editor(&mut state, EditorCommand::InsertText("temp body".into()));
     show_prompt_tree(&mut state);
     let panel = &state.workspaces[0].prompt_panel;
-    assert_eq!(panel.selected, 2, "默认高亮 default temp 行");
+    assert_eq!(panel.selected, 1, "高亮当前编辑 temp 行");
     assert!(panel.temp(temp_id).is_some());
 
     // 显式选中内容 temp 行后回车打开编辑视图。

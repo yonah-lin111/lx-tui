@@ -19,7 +19,8 @@ use crate::ui::text;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView, PanelLayout};
 
 /// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制；
-/// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`）；
+/// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`），
+/// 绑定临时提示词时 title 右端追加 accent `[tmp]` 标识；
 /// `draft` 表示当前绑定临时提示词：保存点恒灰（不参与自动保存）；
 /// `pinned` 决定工具栏钉住按钮 `[◉]` / `[○]`。
 pub fn render_header(
@@ -39,22 +40,37 @@ pub fn render_header(
     if mode == PromptMode::Editor
         && let Some(title) = title
     {
-        paint_header_title(header, buf, title);
+        paint_header_title(header, buf, title, draft);
     }
     render_toolbar(panel, buf, prompt, mode, draft, pinned);
 }
 
-/// 分割线行内嵌 title：起于左衔接符之后，超宽以 `…` 截断，不覆盖右衔接符。
-fn paint_header_title(header: Rect, buf: &mut Buffer, title: &str) {
+/// 分割线行内嵌 title：起于左衔接符之后，超宽以 `…` 截断，不覆盖右衔接符；
+/// 绑定临时提示词时在右端追加 accent 的 `[tmp]` 标识（与列表一致）。
+fn paint_header_title(header: Rect, buf: &mut Buffer, title: &str, draft: bool) {
     let start = header.x.saturating_add(1);
     let end = header.right().saturating_sub(1);
     let available = usize::from(end.saturating_sub(start));
     if available < 4 {
         return;
     }
-    let label = text::ellipsize(&format!(" {title} "), available);
     let y = header.y.saturating_add(layout::PROMPT_TOOLBAR_HEIGHT);
-    buf.set_stringn(start, y, &label, available, style::muted());
+    let badge = if draft {
+        format!(" {}", text::PROMPT_TEMP_BADGE)
+    } else {
+        String::new()
+    };
+    let badge_width = badge.width();
+    let badge_width = if badge_width + 4 <= available {
+        let x = end.saturating_sub(badge_width as u16);
+        buf.set_stringn(x, y, &badge, badge_width, style::accent());
+        badge_width
+    } else {
+        0
+    };
+    let title_available = available.saturating_sub(badge_width);
+    let label = text::ellipsize(&format!(" {title} "), title_available);
+    buf.set_stringn(start, y, &label, title_available, style::muted());
 }
 
 /// 分割线整行 `─`（位于按钮行下一行，不穿过功能按钮），

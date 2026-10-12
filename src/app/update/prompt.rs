@@ -56,7 +56,8 @@ pub fn apply_prompt_tree(
 }
 
 /// 切换树视图：提交编辑内容、清除空白绑定、暂存编辑绑定并清空绑定；
-/// 列表恒保留一条空白 default temp（缺失时补建）并默认高亮它。
+/// 列表恒保留一条空白 default temp（缺失时补建），进入列表默认高亮当前编辑目标
+/// （条目或临时提示词），无有效绑定时高亮 default temp。
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
     let index = state.prompt_workspace();
@@ -72,12 +73,27 @@ pub fn show_prompt_tree(state: &mut AppState) {
     }
     state.prompt.clear_panel();
     state.selection = None;
-    let blank = state
+    select_tree_entry_row(state, index);
+}
+
+/// 进入列表后的默认高亮：优先当前编辑目标（暂存绑定仍有效时），否则 default temp。
+fn select_tree_entry_row(state: &mut AppState, index: usize) {
+    let target = state
         .workspaces
         .get(index)
-        .and_then(|workspace| workspace.prompt_panel.blank_temp());
-    if let Some(temp_id) = blank {
-        select_prompt_temp(state, index, temp_id);
+        .and_then(|workspace| workspace.prompt_panel.tree_restore_target());
+    match target {
+        Some(PromptEditing::Item(id)) if select_prompt_item(state, index, id) => {}
+        Some(PromptEditing::Temp(id)) if select_prompt_temp(state, index, id) => {}
+        _ => {
+            let blank = state
+                .workspaces
+                .get(index)
+                .and_then(|workspace| workspace.prompt_panel.blank_temp());
+            if let Some(temp_id) = blank {
+                select_prompt_temp(state, index, temp_id);
+            }
+        }
     }
 }
 

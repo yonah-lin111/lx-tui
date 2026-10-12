@@ -1233,8 +1233,12 @@ fn prompt_editor_divider_shows_editing_title() {
         inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
     );
     assert!(divider.contains(" named prompt "), "{divider}");
+    assert!(
+        !divider.contains(text::PROMPT_TEMP_BADGE),
+        "条目不带 tmp 标识: {divider}"
+    );
 
-    // 临时提示词显示固定标题。
+    // 临时提示词显示固定标题与 accent `[tmp]` 标识。
     update::show_prompt_tree(&mut state);
     assert!(update::open_temp_prompt(&mut state));
     let lines = render_lines(&state);
@@ -1244,6 +1248,7 @@ fn prompt_editor_divider_shows_editing_title() {
         inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
     );
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
+    assert!(divider.contains(text::PROMPT_TEMP_BADGE), "{divider}");
 }
 
 #[test]
@@ -2079,7 +2084,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
     );
     let parent_line = lines
         .iter()
-        .find(|line| line.contains("main"))
+        .find(|line| line.contains(&format!("{} main", text::WORKSPACE_GIT_ICON)))
         .expect("parent row");
     let child_line = lines
         .iter()
@@ -2087,7 +2092,7 @@ fn sidebar_renders_tree_connectors_for_grouped_linked_worktrees() {
         .expect("child row");
     let plain_line = lines
         .iter()
-        .find(|line| line.contains("tmp"))
+        .find(|line| line.contains(&format!("{} tmp", text::WORKSPACE_NON_GIT_ICON)))
         .expect("plain row");
     let char_col =
         |line: &str, needle: &str| line.find(needle).map(|byte| line[..byte].chars().count());
