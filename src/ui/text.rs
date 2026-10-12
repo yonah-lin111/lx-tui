@@ -444,9 +444,6 @@ pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 /// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
 pub const SETTINGS_LABEL: &str = "[SET]";
 
-/// 提及面板的来源标签：绑定 worktree 时条目右对齐显示 `[wt]`。
-pub const MENTION_WORKTREE_TAG: &str = "wt";
-
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";
 pub const TEMPLATE_BUTTON_RUN: &str = "[run]";

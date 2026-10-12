@@ -500,57 +500,106 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     mention_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 提及条目文本：图标、标签、父目录明细与来源标签（绑定 worktree 的条目为 `wt`）。
-struct MentionItemText {
-    icon: &'static str,
-    label: String,
-    detail: String,
-    tag: &'static str,
+/// 提及面板条目：文件候选（图标 + 文件名 + 父目录明细）或取根选择（单行）。
+enum MentionRowText {
+    File {
+        icon: &'static str,
+        label: String,
+        detail: String,
+    },
+    Choice {
+        label: &'static str,
+    },
 }
 
-/// 提及面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口、锚点行与当前目录名。
+impl MentionRowText {
+    /// 组装条目视图：文件双行展示，取根选择单行。
+    fn item(&self) -> CommandItem<'_> {
+        match self {
+            Self::File {
+                icon,
+                label,
+                detail,
+            } => CommandItem::Stacked {
+                icon: Some(icon),
+                label,
+                detail,
+            },
+            Self::Choice { label } => CommandItem::Inline {
+                label,
+                preview: "",
+                tag: "",
+            },
+        }
+    }
+}
+
+/// 提及面板渲染数据：条目、高亮索引、窗口锚点/显式视口、锚点行、当前目录名与标题。
 struct MentionPanelData {
-    texts: Vec<MentionItemText>,
+    rows: Vec<MentionRowText>,
     active: usize,
     anchor: usize,
     viewport: Option<usize>,
     anchor_row: u16,
     /// 当前进入的目录末段名；未进入文件夹时 None。
     scope: Option<String>,
+    /// 面板标题：`Files`，选定取根后追加 `-[main]` / `-[wt]`。
+    title: String,
+    /// 取根选择器：两项单行、不显示目录导航页脚。
+    chooser: bool,
 }
 
 impl MentionPanelData {
     /// 组装条目视图；图标列固定占位，标签与明细借用自身文本。
     fn items(&self) -> Vec<CommandItem<'_>> {
-        self.texts
-            .iter()
-            .map(|entry| CommandItem::Stacked {
-                icon: Some(entry.icon),
-                label: entry.label.as_str(),
-                detail: entry.detail.as_str(),
-                tag: entry.tag,
-            })
-            .collect()
+        self.rows.iter().map(MentionRowText::item).collect()
     }
 }
 
 /// 提及面板渲染数据；面板未打开或光标滚出视口返回 None。
 fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
-    let panel = prompt.mention()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
+    if let Some(active) = prompt.mention_chooser() {
+        return Some(MentionPanelData {
+            rows: crate::app::prompt::MentionRootChoice::ALL
+                .iter()
+                .map(|choice| MentionRowText::Choice {
+                    label: choice.label(),
+                })
+                .collect(),
+            active,
+            anchor: active,
+            viewport: None,
+            anchor_row,
+            scope: None,
+            title: text::MENTION_PANEL_TITLE.to_string(),
+            chooser: true,
+        });
+    }
+    let panel = prompt.mention()?;
     let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
     Some(MentionPanelData {
-        texts: panel
+        rows: panel
             .items()
             .iter()
-            .map(|entry| mention_item_text(entry, detail_width))
+            .map(|entry| mention_row_text(entry, detail_width))
             .collect(),
         active: panel.active(),
         anchor: panel.anchor(),
         viewport: panel.viewport(),
         anchor_row,
         scope: panel.scope_name().map(str::to_string),
+        title: mention_title(prompt),
+        chooser: false,
     })
+}
+
+/// 提及面板标题：绑定 linked worktree 且已选定取根时追加 `-[main]` / `-[wt]`。
+fn mention_title(prompt: &Prompt) -> String {
+    match prompt.mention_root_label() {
+        Some(label) => format!("{}-[{label}]", text::MENTION_PANEL_TITLE),
+        None => text::MENTION_PANEL_TITLE.to_string(),
+    }
 }
 
 /// 提及面板视图：最大高度取容器（prompt 内容区）的一半；显式视口优先于窗口锚点。
@@ -568,16 +617,16 @@ fn mention_view<'a>(
         window_start: data.viewport,
         anchor_row: data.anchor_row,
         max_height: Some(max_height),
-        title: Some(text::MENTION_PANEL_TITLE),
+        title: Some(data.title.as_str()),
         right_title: data.scope.as_deref(),
-        footer: Some(text::MENTION_PANEL_FOOTER),
+        footer: (!data.chooser).then_some(text::MENTION_PANEL_FOOTER),
     }
 }
 
 /// 提及条目展示：第一行目录/文件图标 + 文件名（目录带 `/`），第二行 `└─ ` 前缀的父目录。
 ///
 /// 父目录超出可用宽度时按显示列中间截断（保留路径首尾），对齐 opencode 的路径省略逻辑。
-fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemText {
+fn mention_row_text(entry: &MentionEntry, detail_width: usize) -> MentionRowText {
     let (directory, name) = entry
         .path
         .rsplit_once('/')
@@ -599,16 +648,10 @@ fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemTe
     } else {
         text::MENTION_FILE_ICON
     };
-    let tag = if entry.worktree {
-        text::MENTION_WORKTREE_TAG
-    } else {
-        ""
-    };
-    MentionItemText {
+    MentionRowText::File {
         icon,
         label,
         detail,
-        tag,
     }
 }
 

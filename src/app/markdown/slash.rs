@@ -183,9 +183,11 @@ pub fn agent_block_content(command: &str, title: Option<&str>, body: &str) -> (S
     let title = title.unwrap_or_default().trim().replace(['{', '}'], "");
     let title = title.as_str();
     let body = normalize_block_body(body);
-    // 标题行与正文之间固定空一行（与 `{wt:}` 前的分隔一致）。
-    let content =
-        format!("&&& {command} --start\n{{title: {title}}}\n\n{body}\n&&& {command} --end");
+    // 标题行与正文之间固定一条分割线（与 `{wt:}` 前的分割线一致）。
+    let content = format!(
+        "&&& {command} --start\n{{title: {title}}}\n{}\n{body}\n&&& {command} --end",
+        super::template::TEMPLATE_SEPARATOR
+    );
     let cursor = title_cursor(&content);
     (content, cursor)
 }
@@ -225,7 +227,7 @@ pub fn normalize_block_body(body: &str) -> String {
     } else {
         (1, lines.len())
     };
-    // 正文自带的标题行剥离，由插入侧重新包壳，避免出现两行标题。
+    // 正文自带的标题行与标题下分割线剥离，由插入侧重新包壳，避免出现两行标题。
     let from = if lines
         .get(from)
         .is_some_and(|line| super::template::is_title_line(line))
@@ -234,6 +236,29 @@ pub fn normalize_block_body(body: &str) -> String {
     } else {
         from
     };
+    let from = if lines
+        .get(from)
+        .is_some_and(|line| super::template::is_template_separator(line))
+    {
+        from + 1
+    } else {
+        from
+    };
+    // 尾部的绑定行与其分割线同样剥离（重新包壳后绑定由 `/gitWorkTree` 重写）。
+    let mut to = to;
+    let last = |index: usize| {
+        index
+            .checked_sub(1)
+            .and_then(|index| lines.get(index).copied())
+    };
+    if last(to).is_some_and(|line| super::template::parse_worktree_line(line).is_some())
+        && to > from
+    {
+        to -= 1;
+    }
+    if last(to).is_some_and(super::template::is_template_separator) && to > from {
+        to -= 1;
+    }
     lines[from.min(to)..to].join("\n").trim_end().to_string()
 }
 
@@ -251,15 +276,15 @@ pub fn slash_template_content(id: SlashCommandId) -> (&'static str, usize) {
     (content, title_cursor(content))
 }
 
-const ADD_TEMPLATE: &str = "&&& addTemplate --start\n{title: }\n\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
+const ADD_TEMPLATE: &str = "&&& addTemplate --start\n{title: }\n---\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
 
-const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n{title: }\n\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
+const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n{title: }\n---\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
 
-const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n{title: }\n\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
+const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n{title: }\n---\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
 
-const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n{title: }\n\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
+const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n{title: }\n---\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
 
-const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n{title: }\n\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
+const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n{title: }\n---\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
 
 /// 标题占位符内的光标偏移：`{title: }` 的 `}` 前；无占位符回退文末。
 fn title_cursor(content: &str) -> usize {

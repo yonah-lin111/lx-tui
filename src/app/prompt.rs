@@ -2,7 +2,7 @@
 
 mod list;
 mod mention;
-pub use mention::MentionRoot;
+pub use mention::MentionRootChoice;
 mod panel;
 mod template;
 pub mod tree;
@@ -339,6 +339,21 @@ impl Prompt {
         self.mention.panel()
     }
 
+    /// 取根选择器高亮索引；选择器未显示时为 None。
+    pub fn mention_chooser(&self) -> Option<usize> {
+        self.mention.chooser()
+    }
+
+    /// 提及面板（选择器或文件候选）是否可见。
+    pub fn mention_active(&self) -> bool {
+        self.mention.view_open()
+    }
+
+    /// 提及面板标题后缀：绑定 linked worktree 且已选定取根时为 `main` / `wt`。
+    pub fn mention_root_label(&self) -> Option<&'static str> {
+        self.mention.root_label(&self.text, self.cursor)
+    }
+
     /// 提及面板打开时按偏移循环移动高亮；返回是否消费该按键。
     pub fn mention_move(&mut self, delta: isize) -> bool {
         self.mention.move_active(delta)
@@ -361,8 +376,12 @@ impl Prompt {
         self.mention_confirm()
     }
 
-    /// 提及面板打开时确认高亮条目：替换触发区间并压制重弹；返回是否消费该按键。
+    /// 提及面板打开时确认高亮条目：取根选择器确认取根，文件候选替换触发区间并压制重弹；
+    /// 返回是否消费该按键。
     pub fn mention_confirm(&mut self) -> bool {
+        if self.mention.choose_root(&self.text, self.cursor) {
+            return true;
+        }
         let Some((range, insertion)) = self.mention.confirm(self.text.len()) else {
             return false;
         };
@@ -493,7 +512,7 @@ impl Prompt {
     }
 
     /// 需要新扫描时返回（代号，根路径）并标记处理中；仅事件循环调用。
-    pub fn take_mention_scan_request(&mut self) -> Option<(u64, Vec<mention::MentionRoot>)> {
+    pub fn take_mention_scan_request(&mut self) -> Option<(u64, PathBuf)> {
         self.mention.take_scan_request(&self.text, self.cursor)
     }
 

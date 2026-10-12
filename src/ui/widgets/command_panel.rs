@@ -35,8 +35,6 @@ pub enum CommandItem<'a> {
         icon: Option<&'a str>,
         label: &'a str,
         detail: &'a str,
-        /// 首行右对齐来源标签（如 `wt`），空串表示无标签。
-        tag: &'a str,
     },
 }
 
@@ -255,8 +253,9 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
         .unwrap_or(0);
     let tag = items
         .iter()
-        .map(|item| match item {
-            CommandItem::Inline { tag, .. } | CommandItem::Stacked { tag, .. } => tag.width(),
+        .filter_map(|item| match item {
+            CommandItem::Inline { tag, .. } => Some(tag.width()),
+            CommandItem::Stacked { .. } => None,
         })
         .max()
         .unwrap_or(0);
@@ -417,26 +416,13 @@ fn render_item(
             icon,
             label,
             detail,
-            tag,
         } => {
-            let available = usize::from(inner.width);
             let mut spans = vec![Span::raw(" ")];
             if let Some(icon) = icon {
                 spans.push(Span::styled(*icon, style::muted()));
                 spans.push(Span::raw(" "));
             }
             spans.push(Span::styled(*label, style::text()));
-            if !tag.is_empty() {
-                let tag_label = format!("[{tag}]");
-                let used: usize = spans.iter().map(|span| span.content.width()).sum();
-                let pad = available
-                    .saturating_sub(used)
-                    .saturating_sub(tag_label.width());
-                if pad > 0 {
-                    spans.push(Span::raw(" ".repeat(pad)));
-                    spans.push(Span::styled(tag_label, style::muted()));
-                }
-            }
             let mut lines = vec![Line::from(spans)];
             if !detail.is_empty() {
                 lines.push(Line::from(vec![

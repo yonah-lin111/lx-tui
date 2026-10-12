@@ -13,14 +13,6 @@ use super::super::markdown::{
     resolve_binding,
 };
 
-/// 一次提及扫描的根：路径与候选来源（是否块绑定的 worktree checkout）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MentionRoot {
-    pub path: PathBuf,
-    /// 候选来自块绑定的 worktree checkout（面板条目右端标注 `[wt]`）。
-    pub worktree: bool,
-}
-
 /// 文件提及面板状态：面板、扫描根、缓存、在途代号、高亮与 worktree 绑定。
 #[derive(Debug, Default)]
 pub struct MentionState {
@@ -40,12 +32,63 @@ pub struct MentionState {
     worktree_queried_at: Option<Instant>,
     /// 面板压制：Esc/确认后保持关闭，直到绑定切换或编辑重置。
     suppressed: bool,
+    /// @ 面板取根选择（绑定 linked worktree 时先选 main / wt）。
+    choice: Option<MentionRootChoice>,
+    /// 取根选择器高亮索引（0 = main，1 = wt）；选择器未显示时为 None。
+    chooser: Option<usize>,
+    /// 选择取根时的块绑定签名；绑定变化时选择复位。
+    choice_binding: Option<(usize, String)>,
+}
+
+/// @ 面板取根选择：绑定 linked worktree 时先选主 checkout 或绑定 checkout。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MentionRootChoice {
+    Main,
+    Worktree,
+}
+
+impl MentionRootChoice {
+    /// 全部选项；面板按此顺序展示（0 = main，1 = wt）。
+    pub const ALL: [Self; 2] = [Self::Main, Self::Worktree];
+
+    /// 条目与面板标题后缀文案。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Worktree => "wt",
+        }
+    }
 }
 
 impl MentionState {
     /// 当前面板；未打开时为 None。
     pub fn panel(&self) -> Option<&MentionPanel> {
         self.panel.as_ref()
+    }
+
+    /// 取根选择器高亮索引；选择器未显示时为 None。
+    pub fn chooser(&self) -> Option<usize> {
+        self.chooser
+    }
+
+    /// 选择器或文件面板是否可见。
+    pub fn view_open(&self) -> bool {
+        self.chooser.is_some() || self.panel.is_some()
+    }
+
+    /// 面板标题后缀：绑定 linked worktree 且已选定取根时为 `main` / `wt`。
+    pub fn root_label(&self, text: &str, cursor: usize) -> Option<&'static str> {
+        self.root_choices(text, cursor)?;
+        self.choice.map(MentionRootChoice::label)
+    }
+
+    /// 绑定块需要取根选择时返回（主 checkout, 绑定 checkout）；否则 None。
+    fn root_choices(&self, text: &str, cursor: usize) -> Option<(PathBuf, PathBuf)> {
+        let Some(WorktreeBinding::Bound(candidate)) = self.block_binding(text, cursor) else {
+            return None;
+        };
+        let main = self.worktree_repo.clone()?;
+        (main != candidate.path).then_some((main, candidate.path))
     }
 
     /// 当前仓库根（调用方比较变化用）。
@@ -91,21 +134,17 @@ impl MentionState {
     }
 
     /// 需要新扫描时返回（代号，扫描根列表）并标记处理中；仅事件循环调用。
-    pub fn take_scan_request(
-        &mut self,
-        text: &str,
-        cursor: usize,
-    ) -> Option<(u64, Vec<MentionRoot>)> {
+    pub fn take_scan_request(&mut self, text: &str, cursor: usize) -> Option<(u64, PathBuf)> {
         if self.pending {
             return None;
         }
-        let roots = self.effective_roots(text, cursor)?;
+        let root = self.effective_root(text, cursor)?;
         if self.cache.is_some() {
             return None;
         }
         markdown::mention_trigger(text, cursor)?;
         self.pending = true;
-        Some((self.generation, roots))
+        Some((self.generation, root))
     }
 
     /// 需要 worktree 列表时返回仓库根；查询在途或仓库未知时 None。
@@ -172,8 +211,32 @@ impl MentionState {
         self.refresh(text, cursor);
     }
 
+    /// 取根选择器确认：记录选择、作废旧候选并转为文件面板；返回是否消费。
+    pub fn choose_root(&mut self, text: &str, cursor: usize) -> bool {
+        let Some(active) = self.chooser else {
+            return false;
+        };
+        self.choice = Some(if active == 0 {
+            MentionRootChoice::Main
+        } else {
+            MentionRootChoice::Worktree
+        });
+        self.choice_binding = markdown::block_worktree_branch(text, cursor);
+        self.chooser = None;
+        self.cache = None;
+        self.pending = false;
+        self.generation = self.generation.wrapping_add(1);
+        self.refresh(text, cursor);
+        true
+    }
+
     /// 按偏移循环移动高亮；面板未打开返回 false。
     pub fn move_active(&mut self, delta: isize) -> bool {
+        if let Some(active) = self.chooser {
+            let next = (active as isize + delta).rem_euclid(2) as usize;
+            self.chooser = Some(next);
+            return true;
+        }
         match self.panel.as_mut() {
             Some(panel) => {
                 panel.move_active(delta);
@@ -185,6 +248,13 @@ impl MentionState {
 
     /// 设置高亮索引；面板未打开、索引越界或未变化返回 false。
     pub fn set_active(&mut self, index: usize) -> bool {
+        if let Some(active) = self.chooser {
+            if index >= MentionRootChoice::ALL.len() || index == active {
+                return false;
+            }
+            self.chooser = Some(index);
+            return true;
+        }
         let Some(panel) = self.panel.as_mut() else {
             return false;
         };
@@ -215,6 +285,9 @@ impl MentionState {
         let range = trigger.from..trigger.to;
         let insertion = markdown::mention_insertion(&entry);
         self.panel = None;
+        // 会话结束：取根选择复位，下次 `@` 重新询问。
+        self.choice = None;
+        self.choice_binding = None;
         Some((range, insertion))
     }
 
@@ -244,16 +317,22 @@ impl MentionState {
 
     /// 关闭面板且不改文本；返回是否消费该按键。
     pub fn escape(&mut self) -> bool {
-        if self.panel.is_none() {
+        if !self.view_open() {
             return false;
         }
         self.panel = None;
+        self.chooser = None;
+        self.choice = None;
+        self.choice_binding = None;
         true
     }
 
     /// 失焦或折叠时清空面板并作废在途结果。
     pub fn clear(&mut self) {
         self.panel = None;
+        self.chooser = None;
+        self.choice = None;
+        self.choice_binding = None;
         self.pending = false;
         self.generation = self.generation.wrapping_add(1);
     }
@@ -261,9 +340,9 @@ impl MentionState {
     /// 同步扫描根；根或 worktree 绑定变化时清除缓存、关闭面板并作废在途结果；
     /// 根未变化也重算面板（绑定可能随光标移动切换）。
     pub fn set_root(&mut self, root: Option<PathBuf>, text: &str, cursor: usize) {
-        let previous = self.effective_roots(text, cursor);
+        let previous = self.effective_root(text, cursor);
         self.root = root;
-        let current = self.effective_roots(text, cursor);
+        let current = self.effective_root(text, cursor);
         if current != previous {
             self.cache = None;
             self.pending = false;
@@ -296,61 +375,28 @@ impl MentionState {
             return false;
         }
         self.pending = false;
-        self.cache = Some(Self::merge_roots(entries));
+        self.cache = Some(entries);
         self.refresh(text, cursor);
         true
     }
 
-    /// 当前扫描根：块内绑定 linked worktree 时同时提供该 checkout（`[wt]`）与
-    /// 仓库主 checkout，绑定主 checkout 或未绑定时只提供单根；绑定不可解析时 None。
-    fn effective_roots(&self, text: &str, cursor: usize) -> Option<Vec<MentionRoot>> {
+    /// 当前扫描根：绑定 linked worktree 且已选定取根时为该 checkout（main 为
+    /// 仓库主 checkout，wt 为绑定 checkout）；绑定主 checkout 或未绑定时为单根；
+    /// 选择器未决或绑定不可解析时 None。
+    fn effective_root(&self, text: &str, cursor: usize) -> Option<PathBuf> {
         match self.block_binding(text, cursor) {
             Some(WorktreeBinding::Bound(candidate)) => {
-                // 绑定主 checkout 时条目就是主工作区文件，不标注来源。
-                let linked = self
-                    .worktree_repo
-                    .as_deref()
-                    .is_none_or(|repo| repo != candidate.path);
-                let mut roots = vec![MentionRoot {
-                    path: candidate.path.clone(),
-                    worktree: linked,
-                }];
-                // 绑定 checkout 之外，主 checkout 的文件同样可选（同一仓库）。
-                if let Some(repo) = self.worktree_repo.as_ref()
-                    && repo != &candidate.path
-                {
-                    roots.push(MentionRoot {
-                        path: repo.clone(),
-                        worktree: false,
-                    });
+                let Some((main, bound)) = self.root_choices(text, cursor) else {
+                    return Some(candidate.path);
+                };
+                match self.choice? {
+                    MentionRootChoice::Main => Some(main),
+                    MentionRootChoice::Worktree => Some(bound),
                 }
-                Some(roots)
             }
             Some(WorktreeBinding::Missing(_) | WorktreeBinding::Ambiguous(_)) => None,
-            Some(WorktreeBinding::None) | None => self.root.clone().map(|path| {
-                vec![MentionRoot {
-                    path,
-                    worktree: false,
-                }]
-            }),
+            Some(WorktreeBinding::None) | None => self.root.clone(),
         }
-    }
-
-    /// 合并多根候选：同一路径的文件保留各 checkout 的版本（绑定来源以 `[wt]`
-    /// 区分，先列绑定 checkout），目录只是导航节点、按路径去重且不标来源。
-    fn merge_roots(entries: Vec<MentionEntry>) -> Vec<MentionEntry> {
-        let mut seen_dirs = std::collections::HashSet::new();
-        let mut merged = Vec::with_capacity(entries.len());
-        for mut entry in entries {
-            if entry.is_directory {
-                if !seen_dirs.insert(entry.path.clone()) {
-                    continue;
-                }
-                entry.worktree = false;
-            }
-            merged.push(entry);
-        }
-        merged
     }
 
     /// 重算面板：触发或缓存缺失时隐藏，同起点且同目录范围保留高亮。
@@ -359,12 +405,36 @@ impl MentionState {
     pub(super) fn refresh(&mut self, text: &str, cursor: usize) {
         if self.suppressed {
             self.panel = None;
+            self.chooser = None;
             return;
         }
         let Some(trigger) = markdown::mention_trigger(text, cursor) else {
+            // 触发消失即会话结束：取根选择复位。
             self.panel = None;
+            self.chooser = None;
+            self.choice = None;
+            self.choice_binding = None;
             return;
         };
+        // 绑定变化（换块、改分支、脱离块）：取根选择复位并作废旧候选。
+        let binding = markdown::block_worktree_branch(text, cursor);
+        if self.choice_binding.as_ref() != binding.as_ref() {
+            if self.choice.take().is_some() {
+                self.cache = None;
+                self.pending = false;
+                self.generation = self.generation.wrapping_add(1);
+            }
+            self.chooser = None;
+            self.choice_binding = None;
+        }
+        let requiring_choice = self.root_choices(text, cursor).is_some() && self.choice.is_none();
+        if requiring_choice {
+            // 绑定 linked worktree：先选 main / wt，再列文件候选。
+            self.chooser = Some(self.chooser.unwrap_or(0).min(1));
+            self.panel = None;
+            return;
+        }
+        self.chooser = None;
         let Some(cache) = self.cache.as_ref() else {
             self.panel = None;
             return;

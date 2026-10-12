@@ -23,7 +23,6 @@ fn stacked<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
             icon: None,
             label,
             detail,
-            tag: "",
         })
         .collect()
 }
@@ -36,7 +35,6 @@ fn stacked_icons<'a>(triples: &[(&'a str, &'a str, &'a str)]) -> Vec<CommandItem
             icon: Some(icon),
             label,
             detail,
-            tag: "",
         })
         .collect()
 }
@@ -264,7 +262,6 @@ fn caps_panel_height_and_follows_active() {
             icon: None,
             label,
             detail,
-            tag: "",
         })
         .collect();
     let rect = render(area, &mut buf, &view(&items, 5, 0, Some(8))).expect("panel renders");
@@ -355,7 +352,6 @@ fn explicit_window_start_ignores_active_highlight() {
             icon: None,
             label,
             detail,
-            tag: "",
         })
         .collect();
 

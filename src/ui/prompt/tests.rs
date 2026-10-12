@@ -286,12 +286,10 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
-                worktree: false,
             },
             MentionEntry {
                 path: "src/lib.rs".into(),
                 is_directory: false,
-                worktree: false,
             },
         ],
     );
@@ -319,15 +317,13 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
 }
 
 #[test]
-fn mention_panel_tags_rows_when_block_binds_a_worktree() {
+fn mention_panel_asks_root_choice_then_titles_with_choice() {
     let area = Rect::new(0, 0, 40, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
     editor.resize(40, 20);
     editor.set_worktree_repo(Some(std::path::PathBuf::from("/repo")));
     editor.set_mention_root(Some(std::path::PathBuf::from("/fallback")));
-    editor.set_text(
-        "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n",
-    );
+    editor.set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n");
     editor.apply_worktree_entries(vec![crate::app::markdown::WorktreeCandidate {
         branch: "feature/x".into(),
         path: std::path::PathBuf::from("/repo/.worktrees/feat"),
@@ -337,64 +333,58 @@ fn mention_panel_tags_rows_when_block_binds_a_worktree() {
     editor.set_cursor_offset_for_test(body_end);
     editor.insert_char(' ');
     editor.insert_char('@');
-    let (generation, roots) = editor.take_mention_scan_request().expect("scan request");
-    assert_eq!(
-        roots.first().map(|root| root.path.clone()),
-        Some(std::path::PathBuf::from("/repo/.worktrees/feat")),
-        "绑定 checkout 优先"
+    // 绑定 linked worktree：先显示 main / wt 取根选择器。
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
+    assert!(painted.contains("main"), "{painted}");
+    assert!(painted.contains("wt"), "{painted}");
+    assert!(
+        !painted.contains("[wt]"),
+        "选择器阶段无 [wt] 标签: {painted}"
     );
-    assert_eq!(roots.len(), 2, "绑定后同时扫描主 checkout: {roots:?}");
-    // 绑定 checkout 的候选与主 checkout 的候选并存：只有 worktree 来源带 [wt]。
+    // 选 wt 后进入文件面板：标题追加 -[wt]，条目无右侧标签。
+    assert!(editor.mention_move(1));
+    assert!(editor.mention_confirm());
+    let (generation, root) = editor.take_mention_scan_request().expect("scan request");
+    assert_eq!(root, std::path::PathBuf::from("/repo/.worktrees/feat"));
     editor.apply_mention_entries(
         generation,
-        vec![
-            MentionEntry {
-                path: "src/app.rs".into(),
-                is_directory: false,
-                worktree: true,
-            },
-            MentionEntry {
-                path: "src/main_only.rs".into(),
-                is_directory: false,
-                worktree: false,
-            },
-        ],
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert!(painted.contains("app.rs"), "{painted}");
-    assert!(painted.contains("main_only.rs"), "{painted}");
-    assert_eq!(
-        painted.matches("[wt]").count(),
-        1,
-        "仅绑定 checkout 的条目带 [wt]: {painted}"
-    );
+    assert!(painted.contains("Files-[wt]"), "标题带取根标识: {painted}");
 
-    // 未绑定的块：候选来自显式根，条目不标注来源。
+    // 未绑定的块：直接列出显式根候选，标题无后缀。
     let mut plain = Prompt::new(PaneId::from_raw_for_test(2));
     plain.resize(40, 20);
     plain.set_mention_root(Some(std::path::PathBuf::from("/fallback")));
-    plain.set_text("&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n");
+    plain.set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end\n");
     let body_end = plain.text().find("body").expect("body line") + "body".len();
     plain.set_cursor_offset_for_test(body_end);
     plain.insert_char(' ');
     plain.insert_char('@');
-    let (generation, roots) = plain.take_mention_scan_request().expect("scan request");
-    assert_eq!(roots.len(), 1);
-    assert_eq!(roots[0].path, std::path::PathBuf::from("/fallback"));
+    let (generation, root) = plain.take_mention_scan_request().expect("scan request");
+    assert_eq!(root, std::path::PathBuf::from("/fallback"));
     plain.apply_mention_entries(
         generation,
         vec![MentionEntry {
             path: "src/app.rs".into(),
             is_directory: false,
-            worktree: false,
         }],
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &plain, None);
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
-    assert!(!painted.contains("[wt]"), "{painted}");
+    assert!(painted.contains("app.rs"), "{painted}");
+    assert!(painted.contains("Files"), "{painted}");
+    assert!(!painted.contains("Files-["), "未绑定无标题后缀: {painted}");
 }
 
 #[test]
@@ -411,12 +401,10 @@ fn mention_panel_marks_directory_and_file_icons() {
             MentionEntry {
                 path: "src".into(),
                 is_directory: true,
-                worktree: false,
             },
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
-                worktree: false,
             },
         ],
     );
@@ -446,12 +434,10 @@ fn mention_panel_renders_title_folder_name_and_footer() {
             MentionEntry {
                 path: "src".into(),
                 is_directory: true,
-                worktree: false,
             },
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
-                worktree: false,
             },
         ],
     );
@@ -499,7 +485,6 @@ fn mention_panel_middle_truncates_overlong_parent_path() {
         vec![MentionEntry {
             path: "alpha/beta/gamma/delta/epsilon/zeta/file.rs".into(),
             is_directory: false,
-            worktree: false,
         }],
     );
     let mut buf = Buffer::empty(area);
@@ -540,7 +525,6 @@ fn mention_panel_window_keeps_still_when_hovering_visible_item() {
         .map(|index| MentionEntry {
             path: format!("src/f{index}.rs"),
             is_directory: false,
-            worktree: false,
         })
         .collect();
     editor.apply_mention_entries(generation, entries);

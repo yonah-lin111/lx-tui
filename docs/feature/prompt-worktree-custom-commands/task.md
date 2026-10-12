@@ -3,6 +3,7 @@
 - Status: implemented on `feat/prompt-worktree-custom-commands`; pending user merge review.
 - Notes: 选择器绑定与 `/gitWorkTree` 均需光标位于模板块内（触发不跨块）；设置页仅编辑 User 作用域，Project 只读。
 - Post-implementation review: 设置按钮改挂侧栏底边框左端（`[≡]`，单宽非 emoji、逐格强调色绘制）；`/gitWorkTree` 确认不再删行（清空命令行、保留该行，紧贴结束行时该行直接转为绑定行）；来源标签修正双层方括号，worktree 行改用 `[wt]`；`{wt:分支}` 为结束行上方独立绑定行并加编辑保护（不可局部删除/修改）。
+- Post-implementation review 6: 标题下与 `{wt:}` 上方的空行改为分割线 `---`（内置模板与自定义模板块同步，复制语义剔除结构分割线）；绑定 linked worktree 时 `@` 先弹 main/wt 取根选择器，选定后面板标题追加 `-[main]` / `-[wt]`，条目不再标 `[wt]`（单根扫描，移除合并/去重与逐条目标签）。
 - Post-implementation review 5: `{wt:分支}` 移到块底部（结束行上一行），标题与 wt 都与正文各隔一个空行（内置模板标题行后加空行）；@ 面板同路径文件保留两个 checkout 的版本（绑定 checkout 先列、仅 linked worktree 标注 `[wt]`，绑定主 checkout 不标注，目录去重不标注）。
 - Post-implementation review 4: 设置按钮改 `[SET]`、退出按钮改 `[EXIT]`；绑定块 @ 面板同时扫描绑定 checkout 与仓库主 checkout（仅绑定来源标注 `[wt]`，同路径去重取绑定条目）；`{wt:}` 绑定行下方固定空一行；`{title: }` 标记受保护（仅值内可编辑，前缀与 `}` 不可删除）。
 - Post-implementation review 3: 模板块标题行改 `{title: …}` 元数据格式；`{wt:分支}` 移到块顶部第二行（标题行下一行）；设置按钮文案改 `[setting]`；绑定期间 @ 候选条目带 `[wt]` 来源标签。

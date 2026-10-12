@@ -399,14 +399,25 @@ pub fn clean_template_content(text: &str) -> String {
 /// 剔除标题占位行（`--start` 下一行）、`{wt:}` 绑定行、`+++` 补充子块（含内部内容）、
 /// 保留 `%%%` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。
 pub fn copy_template_content(text: &str) -> String {
+    let lines: Vec<&str> = text.split('\n').collect();
     let mut kept: Vec<&str> = Vec::new();
     let mut inside_supple = false;
-    for (index, line) in text.split('\n').enumerate() {
+    for (index, line) in lines.iter().enumerate() {
         if index == 0 && is_title_line(line) {
             continue;
         }
         if parse_worktree_line(line).is_some() {
             continue;
+        }
+        // 紧邻标题行之下、绑定行之上的分割线属于结构元数据，一并剔除。
+        if is_template_separator(line) {
+            let after_title = index == 1 && lines.first().is_some_and(|first| is_title_line(first));
+            let before_binding = lines
+                .get(index + 1)
+                .is_some_and(|next| parse_worktree_line(next).is_some());
+            if after_title || before_binding {
+                continue;
+            }
         }
         if let Some(kind) = copy_subblock_start(line) {
             if kind == CopySubblock::Supple {
@@ -439,6 +450,14 @@ pub fn parse_title_line(line: &str) -> Option<&str> {
 /// `line` 是否为独立标题行 `{title: …}`。
 pub fn is_title_line(line: &str) -> bool {
     parse_title_line(line).is_some()
+}
+
+/// 模板块内的分割线：标题行与正文、正文与 `{wt:}` 绑定行之间各一条。
+pub const TEMPLATE_SEPARATOR: &str = "---";
+
+/// `line` 是否为模板块分割线（允许缩进与尾随空白）。
+pub fn is_template_separator(line: &str) -> bool {
+    line.trim() == TEMPLATE_SEPARATOR
 }
 
 /// 结构性标题行（模板块起始行下一行）的标记区间：受保护的 `{title:` 前缀

@@ -1,8 +1,8 @@
 //! 模板块的 git worktree 绑定：块底部独立 `{wt:<branch>}` 行的读写、
 //! 候选解析与编辑保护。
 //!
-//! 绑定只存在于独立的绑定行：结束行的上一行——即块内最后一行，上方固定以
-//! 一个空行与正文分隔（标题行同样与正文隔一个空行）。`{wt:}` 保存完整分支名，
+//! 绑定只存在于独立的绑定行：结束行的上一行——即块内最后一行，上方固定为一条
+//! 分割线 `---`（与标题行和正文之间的分割线同一形式）。`{wt:}` 保存完整分支名，
 //! 解析时对同一仓库的 worktree 列表要求唯一匹配，detached/bare 条目永不入选。
 //! 绑定行是结构性元数据：编辑器禁止局部删除或修改。
 
@@ -96,12 +96,12 @@ pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
 }
 
 /// 把结束行所在块的绑定写为 `branch`：块底部已有绑定行、或 `occupy` 指定的
-/// 命令行恰占该行时整行替换，否则在结束行之前插入一行；绑定行上方保留一个
-/// 空行分隔正文与元数据。
+/// 命令行恰占该行时整行替换，否则在结束行之前插入一行；绑定行上方固定为一条
+/// 分割线（空行被其替换，已是分割线时不重复补）。
 ///
 /// `occupy` 为占用绑定位置的行号（`/gitWorkTree` 命令行所在行），不占用传 None。
-/// 返回（替换范围, 新文本）：替换时覆盖绑定行内容（不含换行），新文本自带
-/// 上方分隔空行；插入时范围是结束行行首的空区间，新文本自带尾随换行。
+/// 返回（替换范围, 新文本）：替换时覆盖绑定行内容（不含换行），插入时范围是
+/// 结束行行首的空区间；新文本自带分割线与换行。
 pub fn set_line_worktree(
     text: &str,
     end_line: usize,
@@ -116,25 +116,29 @@ pub fn set_line_worktree(
     if let Some(line) = slot {
         let (range, current) = nth_line_range(text, line)?;
         if parse_worktree_line(current).is_some() || occupy == Some(line) {
-            let gap = gap_before(text, line);
-            return Some((range, format!("{gap}{marker}")));
+            let (from, prefix) = separator_before(text, line, range.start)?;
+            return Some((from..range.end, format!("{prefix}{marker}")));
         }
     }
     let (range, _) = nth_line_range(text, end_line)?;
-    // 插入到结束行之前：原末行非空时其后再补一个空行。
-    let gap = gap_before(text, end_line);
-    Some((range.start..range.start, format!("{gap}{marker}\n")))
+    let (from, prefix) = separator_before(text, end_line, range.start)?;
+    Some((from..range.start, format!("{prefix}{marker}\n")))
 }
 
-/// 绑定行上方需要的分隔空行：其上一行非空、且自身不是首个位置时返回 `"\n"`。
-fn gap_before(text: &str, line: usize) -> &'static str {
-    let Some(previous) = line.checked_sub(1) else {
-        return "";
-    };
-    if nth_line(text, previous).is_some_and(|above| !above.trim().is_empty()) {
-        "\n"
-    } else {
-        ""
+/// 绑定行上方的分割线准备：上一行已是分割线时原样保留；是空行时用分割线替换；
+/// 否则在行首插入一条。返回（替换起点, 前缀文本）。
+fn separator_before(text: &str, line: usize, line_start: usize) -> Option<(usize, String)> {
+    use super::template::{TEMPLATE_SEPARATOR, is_template_separator};
+    let previous = line
+        .checked_sub(1)
+        .and_then(|previous| nth_line(text, previous));
+    match previous {
+        Some(above) if is_template_separator(above) => Some((line_start, String::new())),
+        Some(above) if above.trim().is_empty() => {
+            let (range, _) = nth_line_range(text, line.checked_sub(1)?)?;
+            Some((range.start, format!("{TEMPLATE_SEPARATOR}\n")))
+        }
+        _ => Some((line_start, format!("{TEMPLATE_SEPARATOR}\n"))),
     }
 }
 

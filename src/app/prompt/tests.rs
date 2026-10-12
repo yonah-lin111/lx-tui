@@ -864,7 +864,6 @@ fn file(path: &str) -> MentionEntry {
     MentionEntry {
         path: path.into(),
         is_directory: false,
-        worktree: false,
     }
 }
 
@@ -873,14 +872,8 @@ fn mention_prompt(entries: Vec<MentionEntry>) -> Prompt {
     let mut prompt = prompt(40, 8);
     prompt.set_mention_root(Some(PathBuf::from("/tmp/ws")));
     prompt.insert_char('@');
-    let (generation, roots) = prompt.take_mention_scan_request().expect("scan requested");
-    assert_eq!(
-        roots,
-        vec![MentionRoot {
-            path: PathBuf::from("/tmp/ws"),
-            worktree: false,
-        }]
-    );
+    let (generation, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(root, PathBuf::from("/tmp/ws"));
     assert!(prompt.apply_mention_entries(generation, entries));
     prompt
 }
@@ -912,7 +905,6 @@ fn mention_panel_confirm_inserts_path_and_is_single_undo_step() {
         MentionEntry {
             path: "src".into(),
             is_directory: true,
-            worktree: false,
         },
         file("src/app.rs"),
     ]);
@@ -953,17 +945,11 @@ fn mention_scan_result_is_dropped_after_root_change() {
     prompt.set_mention_root(Some(PathBuf::from("/tmp/b")));
     assert!(!prompt.apply_mention_entries(generation, vec![file("app.rs")]));
     assert!(prompt.mention().is_none());
-    let (next_generation, roots) = prompt
+    let (next_generation, root) = prompt
         .take_mention_scan_request()
         .expect("rescan on new root");
     assert_ne!(next_generation, generation);
-    assert_eq!(
-        roots,
-        vec![MentionRoot {
-            path: PathBuf::from("/tmp/b"),
-            worktree: false,
-        }]
-    );
+    assert_eq!(root, PathBuf::from("/tmp/b"));
 }
 
 #[test]
@@ -1033,19 +1019,16 @@ fn folder_entries() -> Vec<MentionEntry> {
         MentionEntry {
             path: "docs/readme.md".into(),
             is_directory: false,
-            worktree: false,
         },
         MentionEntry {
             path: "src".into(),
             is_directory: true,
-            worktree: false,
         },
         file("src/app.rs"),
         file("src/main.rs"),
         MentionEntry {
             path: "src/ui".into(),
             is_directory: true,
-            worktree: false,
         },
         file("src/ui/mod.rs"),
     ]
@@ -1095,7 +1078,6 @@ fn mention_enter_folder_ignores_files_and_empty_directories() {
         MentionEntry {
             path: "empty".into(),
             is_directory: true,
-            worktree: false,
         },
         file("main.rs"),
     ]);
@@ -1321,7 +1303,10 @@ fn template_block_body_extracts_inner_content() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);
     let body = prompt.template_block_body(0).expect("body");
-    assert!(body.starts_with("{title: }\n\n# Add Requirement"), "{body}");
+    assert!(
+        body.starts_with("{title: }\n---\n# Add Requirement"),
+        "{body}"
+    );
     assert!(body.ends_with("- Notes: \n  - "));
     assert!(!body.contains("&&&"));
     assert_eq!(prompt.template_block_body(1), None);
@@ -1643,8 +1628,8 @@ fn worktree_chooser_updates_binding_as_single_undo_step_preserving_status_and_id
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
     assert!(
-        text.contains("body\n\n{wt:feature/x}\n&&& addTemplate --end done {id:42}"),
-        "绑定行独立成行、位于结束行上一行且上方空行: {text}"
+        text.contains("body\n---\n{wt:feature/x}\n&&& addTemplate --end done {id:42}"),
+        "绑定行独立成行、位于结束行上一行且上方分割线: {text}"
     );
     assert!(!text.contains("/gitW"), "slash line consumed: {text}");
     assert!(!text.contains("\n\n\n"), "触发行整行丢弃: {text}");
@@ -1695,7 +1680,7 @@ fn bound_worktree_line_is_edit_protected() {
 #[test]
 fn title_marker_is_edit_protected_while_value_stays_editable() {
     let mut prompt = prompt(80, 12);
-    let fixture = "&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n";
+    let fixture = "&&& addTemplate --start\n{title: }\n---\nbody\n&&& addTemplate --end\n";
     prompt.set_text(fixture);
     let title = |prompt: &Prompt| {
         prompt
@@ -1744,7 +1729,7 @@ fn title_marker_is_edit_protected_while_value_stays_editable() {
 #[test]
 fn bound_worktree_line_is_excluded_from_block_copy() {
     let mut prompt = prompt(80, 12);
-    prompt.set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n");
+    prompt.set_text("&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n");
     let body_end = prompt.text().find("body").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
     let copy = prompt.copy_text_at_cursor().expect("cursor inside block");
@@ -1772,7 +1757,7 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
     // 命令行不在绑定位置（绑定行为结束行上一行）：清空内容保留该行，
-    // 绑定行插到末行之下并补一个空行。
+    // 绑定行插到末行之下并补一条分割线。
     assert_eq!(
         text.matches('\n').count(),
         fixture.matches('\n').count() + 2
@@ -1780,7 +1765,7 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
     assert!(!text.contains("/gitW"), "{text}");
     assert_eq!(
         text,
-        "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:main}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: }\n\nbody\n---\n{wt:main}\n&&& addTemplate --end\n"
     );
     prompt.undo();
     assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
@@ -1805,10 +1790,10 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
     prompt.rebuild_worktree_entries();
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
-    // 命令行恰占绑定行（结束行上一行）：整行替换为绑定行，上方补空行。
+    // 命令行恰占绑定行（结束行上一行）：整行替换为分割线与绑定行。
     assert_eq!(
         text,
-        "&&& addTemplate --start\n{title: }\nbody\n\n{wt:main}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: }\nbody\n---\n{wt:main}\n&&& addTemplate --end\n"
     );
     prompt.undo();
     assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
@@ -1843,8 +1828,9 @@ fn worktree_marker_inside_block_resolves_mention_root_and_reports_missing() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt
-        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.set_text(
+        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done\n",
+    );
     let body_end = prompt.text().find("body").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
@@ -1869,12 +1855,13 @@ fn worktree_marker_inside_block_resolves_mention_root_and_reports_missing() {
 }
 
 #[test]
-fn bound_mention_scan_merges_main_checkout_and_keeps_versions() {
+fn bound_linked_block_asks_root_before_listing_files() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt
-        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.set_text(
+        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done\n",
+    );
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "feature/x".into(),
         path: PathBuf::from("/repo/.worktrees/feat"),
@@ -1884,62 +1871,41 @@ fn bound_mention_scan_merges_main_checkout_and_keeps_versions() {
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
     prompt.insert_char('@');
-    let (generation, _) = prompt.take_mention_scan_request().expect("scan request");
-    // 同路径保留两个 checkout 的版本（绑定 checkout 先列并标 `[wt]`），
-    // 目录只是导航节点：去重且不带来源标签。
+    // 绑定 linked worktree：先弹取根选择器，未选前不发起扫描。
+    assert_eq!(prompt.mention_chooser(), Some(0), "选择器默认高亮 main");
+    assert!(prompt.mention().is_none());
+    assert!(prompt.take_mention_scan_request().is_none(), "未选根不扫描");
+    assert!(prompt.mention_move(1));
+    assert_eq!(prompt.mention_chooser(), Some(1));
+    assert!(prompt.mention_confirm(), "确认取根");
+    assert!(prompt.mention_chooser().is_none());
+    let (generation, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(root, PathBuf::from("/repo/.worktrees/feat"), "wt 取根");
     prompt.apply_mention_entries(
         generation,
-        vec![
-            MentionEntry {
-                path: "src".into(),
-                is_directory: true,
-                worktree: true,
-            },
-            MentionEntry {
-                path: "src".into(),
-                is_directory: true,
-                worktree: false,
-            },
-            MentionEntry {
-                path: "src/app.rs".into(),
-                is_directory: false,
-                worktree: true,
-            },
-            MentionEntry {
-                path: "src/app.rs".into(),
-                is_directory: false,
-                worktree: false,
-            },
-            MentionEntry {
-                path: "docs/main.md".into(),
-                is_directory: false,
-                worktree: false,
-            },
-        ],
+        vec![MentionEntry {
+            path: "src/app.rs".into(),
+            is_directory: false,
+        }],
     );
-    let items = prompt.mention().expect("panel open").items().to_vec();
-    assert_eq!(items.len(), 4, "{items:?}");
-    let dirs: Vec<_> = items.iter().filter(|item| item.is_directory).collect();
-    assert_eq!(dirs.len(), 1, "目录去重: {items:?}");
-    assert!(!dirs[0].worktree, "目录不标来源: {items:?}");
-    let apps: Vec<_> = items
-        .iter()
-        .filter(|item| item.path == "src/app.rs")
-        .collect();
-    assert_eq!(apps.len(), 2, "同路径保留两份: {items:?}");
-    assert!(apps[0].worktree && !apps[1].worktree, "{items:?}");
-    let docs = items
-        .iter()
-        .find(|item| item.path == "docs/main.md")
-        .expect("docs/main.md");
-    assert!(!docs.worktree);
+    assert_eq!(prompt.mention_root_label(), Some("wt"));
+    // Esc 结束会话，块内重新 `@` 后重新询问取根。
+    assert!(prompt.mention_escape());
+    let body_end = prompt.text().find("body ").expect("body line") + "body ".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char('@');
+    assert_eq!(prompt.mention_chooser(), Some(0));
+    assert!(prompt.mention_confirm(), "默认取根 main");
+    let (_, root) = prompt.take_mention_scan_request().expect("scan requested");
+    assert_eq!(root, PathBuf::from("/repo"), "main 取主 checkout");
+    assert_eq!(prompt.mention_root_label(), Some("main"));
 }
 
 #[test]
-fn binding_the_main_checkout_scans_a_single_root() {
+fn binding_the_main_checkout_lists_files_without_root_choice() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
-    prompt.set_text("&&& addTemplate --start\nbody\n\n{wt:main}\n&&& addTemplate --end done\n");
+    prompt.set_text("&&& addTemplate --start\nbody\n---\n{wt:main}\n&&& addTemplate --end done\n");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "main".into(),
         path: PathBuf::from("/repo"),
@@ -1949,10 +1915,13 @@ fn binding_the_main_checkout_scans_a_single_root() {
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
     prompt.insert_char('@');
-    let (_, roots) = prompt.take_mention_scan_request().expect("scan request");
-    assert_eq!(roots.len(), 1, "绑定主 checkout 不重复扫描: {roots:?}");
-    assert!(!roots[0].worktree, "绑定主 checkout 的条目不标 [wt]");
-    assert_eq!(roots[0].path, PathBuf::from("/repo"));
+    assert!(
+        prompt.mention_chooser().is_none(),
+        "绑定主 checkout 不询问取根"
+    );
+    let (_, root) = prompt.take_mention_scan_request().expect("scan request");
+    assert_eq!(root, PathBuf::from("/repo"));
+    assert_eq!(prompt.mention_root_label(), None, "主 checkout 无标题后缀");
 }
 
 #[test]
@@ -1960,8 +1929,9 @@ fn mention_entries_from_bound_checkout_survive_explicit_root_change() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt
-        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
+    prompt.set_text(
+        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done\n",
+    );
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "feature/x".into(),
         path: PathBuf::from("/repo/.worktrees/feat"),
@@ -1971,31 +1941,18 @@ fn mention_entries_from_bound_checkout_survive_explicit_root_change() {
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
     prompt.insert_char('@');
+    assert!(prompt.mention_confirm(), "默认取根 main");
     assert!(prompt.mention().is_none(), "无缓存时候选面板隐藏");
-    let (generation, roots) = prompt
+    let (generation, root) = prompt
         .take_mention_scan_request()
-        .expect("scan request for bound checkout");
-    assert_eq!(
-        roots,
-        vec![
-            MentionRoot {
-                path: PathBuf::from("/repo/.worktrees/feat"),
-                worktree: true,
-            },
-            MentionRoot {
-                path: PathBuf::from("/repo"),
-                worktree: false,
-            },
-        ],
-        "绑定 checkout 优先，其次仓库主 checkout"
-    );
+        .expect("scan request for chosen root");
+    assert_eq!(root, PathBuf::from("/repo"), "取根后扫描对应 checkout");
     prompt.apply_mention_entries(
         generation,
         vec![markdown::MentionEntry {
             path: "src".into(),
             is_directory: true,
-            worktree: false,
         }],
     );
-    assert!(prompt.mention().is_some(), "候选来自绑定 checkout");
+    assert!(prompt.mention().is_some(), "候选来自所选 checkout");
 }

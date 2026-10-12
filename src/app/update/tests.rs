@@ -1379,7 +1379,6 @@ fn mention_scan_result_routes_to_parked_prompt_draft() {
     let entries = vec![MentionEntry {
         path: "app.rs".into(),
         is_directory: false,
-        worktree: false,
     }];
     apply_mention_entries(&mut state, parked, generation, entries);
     assert!(
@@ -2426,7 +2425,6 @@ fn mention_panel_keys_are_consumed_before_editing() {
         vec![MentionEntry {
             path: "app.rs".into(),
             is_directory: false,
-            worktree: false,
         }],
     );
     assert!(state.prompt.mention().is_some());
@@ -2458,12 +2456,10 @@ fn enter_folder_key_scopes_panel_and_file_highlight_is_swallowed() {
         MentionEntry {
             path: "src".into(),
             is_directory: true,
-            worktree: false,
         },
         MentionEntry {
             path: "src/app.rs".into(),
             is_directory: false,
-            worktree: false,
         },
     ]);
     apply_editor(&mut state, EditorCommand::EnterFolder);
@@ -2482,7 +2478,6 @@ fn enter_folder_falls_back_to_newline_when_panel_closed() {
     let mut state = mention_state(vec![MentionEntry {
         path: "src".into(),
         is_directory: true,
-        worktree: false,
     }]);
     apply_editor(&mut state, EditorCommand::Escape);
     assert!(state.prompt.mention().is_none());
@@ -2497,17 +2492,14 @@ fn undo_key_steps_back_folder_levels() {
         MentionEntry {
             path: "src".into(),
             is_directory: true,
-            worktree: false,
         },
         MentionEntry {
             path: "src/ui".into(),
             is_directory: true,
-            worktree: false,
         },
         MentionEntry {
             path: "src/ui/mod.rs".into(),
             is_directory: false,
-            worktree: false,
         },
     ]);
     apply_editor(&mut state, EditorCommand::EnterFolder);
@@ -2548,7 +2540,6 @@ fn switching_workspace_root_invalidates_mention_cache() {
         vec![MentionEntry {
             path: "a.rs".into(),
             is_directory: false,
-            worktree: false,
         }],
     );
     assert!(state.prompt.mention().is_some());
@@ -2561,12 +2552,7 @@ fn switching_workspace_root_invalidates_mention_cache() {
         .take_mention_scan_request()
         .expect("rescan requested");
     assert_ne!(next_roots, first_roots);
-    assert_eq!(
-        next_roots.len(),
-        1,
-        "非绑定工作区只有单个扫描根: {next_roots:?}"
-    );
-    assert_eq!(next_roots[0].path, std::path::PathBuf::from("/tmp/other"));
+    assert_eq!(next_roots, std::path::PathBuf::from("/tmp/other"));
 }
 
 #[test]
@@ -2587,7 +2573,6 @@ fn clear_panel_hides_mention_panel_on_focus_loss() {
         vec![MentionEntry {
             path: "a.rs".into(),
             is_directory: false,
-            worktree: false,
         }],
     );
     assert!(state.prompt.mention().is_some());
@@ -2615,12 +2600,10 @@ fn mouse_mention_hover_select_and_wheel_flow() {
             MentionEntry {
                 path: "a.rs".into(),
                 is_directory: false,
-                worktree: false,
             },
             MentionEntry {
                 path: "b.rs".into(),
                 is_directory: false,
-                worktree: false,
             },
         ],
     );

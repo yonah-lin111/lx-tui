@@ -19,17 +19,16 @@ const IGNORED_DIRECTORIES: [&str; 6] = [
 /// 扫描缓存的安全上限；超大根目录下停扫，避免缓存占用过多内存。
 const MAX_SCAN_ENTRIES: usize = 20_000;
 
-/// 扫描工作区根，返回相对路径（`/` 分隔）的文件与目录候选；`worktree` 标记
-/// 候选是否来自块绑定的 worktree checkout。
+/// 扫描工作区根，返回相对路径（`/` 分隔）的文件与目录候选。
 ///
 /// 跳过隐藏目录与常见构建目录，尊重根目录下的 `.gitignore`（不要求根是 Git 仓库）；
 /// 符号链接与不可读条目跳过；结果为遍历顺序，排序与截断由调用方完成。
-pub fn scan(root: &Path, worktree: bool) -> Vec<MentionEntry> {
-    scan_with_limit(root, MAX_SCAN_ENTRIES, worktree)
+pub fn scan(root: &Path) -> Vec<MentionEntry> {
+    scan_with_limit(root, MAX_SCAN_ENTRIES)
 }
 
 /// 带条目上限的扫描；上限仅用于防御超大目录，正常仓库不会命中。
-fn scan_with_limit(root: &Path, limit: usize, worktree: bool) -> Vec<MentionEntry> {
+fn scan_with_limit(root: &Path, limit: usize) -> Vec<MentionEntry> {
     let mut entries = Vec::new();
     let walker = WalkBuilder::new(root)
         .hidden(false)
@@ -67,7 +66,6 @@ fn scan_with_limit(root: &Path, limit: usize, worktree: bool) -> Vec<MentionEntr
         entries.push(MentionEntry {
             path: path.replace(std::path::MAIN_SEPARATOR, "/"),
             is_directory: file_type.is_dir(),
-            worktree,
         });
     }
     entries
