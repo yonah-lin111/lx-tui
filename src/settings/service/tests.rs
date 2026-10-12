@@ -99,6 +99,11 @@ async fn page_requires_token_and_serves_self_contained_html() {
     assert!(html.contains("Commands"), "commands tab present");
     assert!(!html.contains("https://"), "no external resources: {html}");
     assert!(!html.contains("http://"), "no external resources: {html}");
+    assert!(html.contains("color-scheme: dark"), "dark theme");
+    assert!(
+        html.contains("commands-grid"),
+        "commands three-column layout"
+    );
     service.shutdown();
 }
 
@@ -196,15 +201,7 @@ async fn command_crud_over_http_and_snapshot() {
         other => panic!("expected CommandsChanged, got {other:?}"),
     }
 
-    service.set_commands_snapshot(&[CommandView {
-        name: "review".into(),
-        scope: "user".into(),
-        kind: "agentMD".into(),
-        description: "review diff".into(),
-        md_scope: "template".into(),
-        title: String::new(),
-        body: "# Review\ncheck it".into(),
-    }]);
+    // 保存后无需 TUI 推送：服务端已按磁盘刷新快照。
     let state = request(service.port(), &get(&format!("/api/state?token={token}"))).await;
     assert!(
         body(&state).contains("\"name\":\"review\""),
@@ -270,6 +267,13 @@ async fn command_crud_over_http_and_snapshot() {
     )
     .await;
     assert_eq!(status(&missing), 404);
+    // 删除后无需 TUI 推送：快照同步移除。
+    let after = request(service.port(), &get(&format!("/api/state?token={token}"))).await;
+    assert!(
+        !body(&after).contains("\"name\":\"review\""),
+        "{}",
+        body(&after)
+    );
     service.shutdown();
 }
 

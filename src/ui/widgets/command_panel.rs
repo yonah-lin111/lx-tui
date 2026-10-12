@@ -381,7 +381,7 @@ fn render_item(
         } => {
             let padding = label_width.saturating_sub(label.width());
             let label = format!("{label}{}", " ".repeat(padding));
-            let available = usize::from(area.width);
+            let available = usize::from(inner.width);
             let tag_label = (!tag.is_empty()).then(|| format!("[{tag}]"));
             // 名称与标签优先；预览按剩余宽度截断，缺空间时整体省略。
             let reserved = 1

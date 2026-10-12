@@ -1,4 +1,4 @@
-//! 设置页 HTML：单文件自包含（内联 CSS/JS、无外部资源）。
+//! 设置页 HTML：单文件自包含（内联 CSS/JS、无外部资源）、黑色主题。
 
 /// 设置页正文；`token` 从 `location.search` 读取，所有请求附带。
 pub fn html() -> &'static str {
@@ -13,37 +13,64 @@ const PAGE: &str = r#"<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>lx-tui settings</title>
 <style>
-:root { color-scheme: light dark; }
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --panel: #0a0a0a;
+  --panel-raised: #121212;
+  --border: #272727;
+  --border-strong: #3a3a3a;
+  --text: #e6e6e6;
+  --muted: #8f8f8f;
+  --accent: #22d3ee;
+  --accent-ink: #001418;
+  --ok: #34d399;
+  --err: #f87171;
+}
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; min-height: 100vh; background: #fbfbfb; color: #222; }
-nav { width: 200px; border-right: 1px solid #ddd; padding: 16px 0; background: #f4f4f4; }
-nav h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: #666; }
-nav button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; background: none; font: inherit; cursor: pointer; color: #333; }
-nav button.active { background: #e2e2e2; color: #000; font-weight: 600; }
-main { flex: 1; padding: 24px; max-width: 860px; }
+body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; min-height: 100vh; background: var(--bg); color: var(--text); }
+nav { width: 200px; border-right: 1px solid var(--border); padding: 16px 0; background: var(--panel); }
+nav h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+nav button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; border-left: 2px solid transparent; background: none; font: inherit; cursor: pointer; color: var(--muted); }
+nav button:hover { color: var(--text); background: #151515; }
+nav button.active { background: #161616; color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
+main { flex: 1; padding: 24px; max-width: 1440px; }
 h2 { font-size: 16px; margin: 0 0 16px; }
-fieldset { border: 1px solid #ddd; border-radius: 6px; margin: 0 0 16px; padding: 12px; }
-legend { font-size: 12px; color: #666; padding: 0 6px; }
-label { display: block; margin: 8px 0 4px; font-size: 12px; color: #555; }
-input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font: inherit; background: #fff; color: inherit; }
-textarea { min-height: 180px; resize: vertical; }
+fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0 0 16px; padding: 12px; background: var(--panel); }
+legend { font-size: 12px; color: var(--muted); padding: 0 6px; }
+label { display: block; margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
+input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; font: inherit; background: var(--panel-raised); color: var(--text); }
+input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+textarea { min-height: 220px; resize: vertical; }
 .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 16px; }
-.actions { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
-button.primary { background: #0a7d4f; border: 0; color: #fff; padding: 7px 14px; border-radius: 4px; cursor: pointer; }
-button.ghost { background: none; border: 1px solid #bbb; padding: 6px 12px; border-radius: 4px; cursor: pointer; color: inherit; }
-button.danger { background: none; border: 1px solid #c33; color: #c33; padding: 6px 12px; border-radius: 4px; cursor: pointer; }
-.row { display: flex; justify-content: space-between; gap: 12px; align-items: center; border-bottom: 1px solid #eee; padding: 8px 0; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
+button.primary { background: var(--accent); border: 0; color: var(--accent-ink); padding: 7px 14px; border-radius: 4px; cursor: pointer; font-weight: 600; }
+button.ghost { background: none; border: 1px solid var(--border-strong); padding: 6px 12px; border-radius: 4px; cursor: pointer; color: var(--text); }
+button.ghost:hover { border-color: var(--muted); }
+button.danger { background: none; border: 1px solid var(--err); color: var(--err); padding: 6px 12px; border-radius: 4px; cursor: pointer; }
+.row { display: flex; justify-content: space-between; gap: 12px; align-items: center; border-bottom: 1px solid #1d1d1d; padding: 8px 0; }
 .row:last-child { border-bottom: 0; }
-.tag { font-size: 11px; border: 1px solid #bbb; border-radius: 3px; padding: 1px 6px; color: #555; margin-left: 6px; }
-.status { font-size: 12px; color: #666; margin-left: 8px; }
-.status.error { color: #c33; }
-.status.ok { color: #0a7d4f; }
-.preview { border: 1px dashed #ccc; border-radius: 4px; padding: 10px; min-height: 120px; background: #fff; overflow-wrap: anywhere; }
+.row .name { overflow-wrap: anywhere; }
+.tag { font-size: 11px; border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; color: var(--muted); margin-left: 6px; white-space: nowrap; }
+.status { font-size: 12px; color: var(--muted); margin-left: 8px; }
+.status.error { color: var(--err); }
+.status.ok { color: var(--ok); }
+.preview { border: 1px dashed var(--border-strong); border-radius: 4px; padding: 10px; min-height: 220px; background: var(--panel-raised); overflow-wrap: anywhere; }
 .preview h1, .preview h2, .preview h3 { margin: 8px 0 4px; }
-.preview pre { background: #f3f3f3; padding: 8px; border-radius: 4px; overflow: auto; }
-.preview code { background: #f3f3f3; padding: 0 3px; border-radius: 3px; }
+.preview pre { background: #161616; padding: 8px; border-radius: 4px; overflow: auto; }
+.preview code { background: #161616; padding: 0 3px; border-radius: 3px; }
+.preview a { color: var(--accent); }
 .hidden { display: none; }
-.columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.commands-grid { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.commands-grid .empty-hint { color: var(--muted); padding: 12px 0; }
+#editor { grid-column: 2 / 4; display: grid; grid-template-columns: minmax(280px, 1fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+#editor.hidden { display: none; }
+#editor .editor-left { min-width: 0; }
+#editor .footer { grid-column: 1 / -1; }
+@media (max-width: 1100px) {
+  .commands-grid { grid-template-columns: 1fr; }
+  #editor { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -78,24 +105,26 @@ button.danger { background: none; border: 1px solid #c33; color: #c33; padding: 
 
   <section id="view-commands" class="hidden">
     <h2>Commands</h2>
-    <p class="status" id="commands-status">Loading…</p>
-    <div class="actions">
-      <button class="primary" onclick="newCommand()">New command</button>
-      <button class="ghost" onclick="loadState()">Reload</button>
-      <label for="cmd-filter" style="margin:0 0 0 12px">Type</label>
-      <select id="cmd-filter" onchange="renderCommands()" style="width:auto">
-        <option value="all">All</option>
-        <option value="agentMD">Markdown insertion</option>
-        <option value="agentBlock">Template block</option>
-      </select>
-    </div>
-    <div id="command-list"></div>
+    <div class="commands-grid">
+      <div class="commands-list">
+        <div class="actions">
+          <button class="primary" onclick="newCommand()">New command</button>
+          <button class="ghost" onclick="loadState()">Reload</button>
+        </div>
+        <label for="cmd-filter">Type</label>
+        <select id="cmd-filter" onchange="renderCommands()">
+          <option value="all">All</option>
+          <option value="agentMD">Markdown insertion</option>
+          <option value="agentBlock">Template block</option>
+        </select>
+        <p class="status" id="commands-status">Loading…</p>
+        <div id="command-list"></div>
+      </div>
 
-    <div id="editor" class="hidden">
-      <fieldset>
-        <legend id="editor-legend">Edit command</legend>
-        <div class="columns">
-          <div>
+      <div id="editor" class="hidden">
+        <div class="editor-left">
+          <fieldset>
+            <legend id="editor-legend">Edit command</legend>
             <label for="cmd-name">Name</label>
             <input id="cmd-name" type="text" placeholder="my-command">
             <label for="cmd-scope">Scope</label>
@@ -116,20 +145,22 @@ button.danger { background: none; border: 1px solid #c33; color: #c33; padding: 
             <input id="cmd-title" type="text" placeholder="title">
             <label for="cmd-description">Description</label>
             <input id="cmd-description" type="text">
-            <label for="cmd-body">Markdown body</label>
+          </fieldset>
+          <fieldset>
+            <legend>Markdown body</legend>
             <textarea id="cmd-body" oninput="renderPreview()"></textarea>
-          </div>
-          <div>
-            <label>Preview</label>
-            <div id="cmd-preview" class="preview"></div>
-          </div>
+          </fieldset>
         </div>
-      </fieldset>
-      <div class="actions">
-        <button class="primary" onclick="saveCommand()">Save</button>
-        <button class="ghost" onclick="hideEditor()">Cancel</button>
-        <button class="danger" onclick="deleteCommand()">Delete</button>
-        <span class="status" id="editor-status"></span>
+        <fieldset>
+          <legend>Preview</legend>
+          <div id="cmd-preview" class="preview"></div>
+        </fieldset>
+        <div class="actions footer">
+          <button class="primary" onclick="saveCommand()">Save</button>
+          <button class="ghost" onclick="hideEditor()">Cancel</button>
+          <button class="danger" onclick="deleteCommand()">Delete</button>
+          <span class="status" id="editor-status"></span>
+        </div>
       </div>
     </div>
   </section>
@@ -206,6 +237,7 @@ function renderCommands() {
     const row = document.createElement('div');
     row.className = 'row';
     const left = document.createElement('div');
+    left.className = 'name';
     left.textContent = command.name;
     const tag = document.createElement('span');
     tag.className = 'tag';
@@ -230,6 +262,7 @@ function renderCommands() {
 }
 
 function newCommand() {
+  document.getElementById('cmd-filter').value = 'all';
   showEditor({name: '', scope: 'user', kind: 'agentMD', md_scope: 'global', title: '', description: '', body: ''});
   document.getElementById('cmd-name').disabled = false;
 }
@@ -271,6 +304,8 @@ function saveCommand() {
     document.getElementById('editor-status').className = 'status ok';
     loadState();
     editing = {name, scope: 'user', kind, md_scope: mdScope, title: payload.title, description: payload.description, body};
+    document.getElementById('cmd-name').disabled = true;
+    document.getElementById('editor-legend').textContent = 'Edit ' + name;
   }).catch((error) => {
     document.getElementById('editor-status').textContent = error.message;
     document.getElementById('editor-status').className = 'status error';

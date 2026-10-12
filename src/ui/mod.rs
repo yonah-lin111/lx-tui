@@ -67,6 +67,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
             render_collapsed_strip(frame, view.sidebar, true);
         } else {
             sidebar::render(frame, view.sidebar, state);
+            render_settings_button(frame, &view, state);
         }
     }
     tab_bar::render(frame, &view, state);
@@ -486,7 +487,6 @@ fn render_prompt(
         state.prompt_pinned.is_some(),
     );
     render_prompt_branch_status(frame, area, state);
-    render_prompt_settings_button(frame, view, state);
     let text_area = crate::layout::prompt_text_rect(area);
     let tree_cursor = match mode {
         PromptMode::Tree => prompt::tree::render(
@@ -576,13 +576,13 @@ fn prompt_scrollbar_for(
     widgets::scrollbar::layout(gutter, total, usize::from(gutter.height), offset)
 }
 
-/// prompt 底边框左侧设置按钮几何：展开态且宽度足够时贴靠左边框。
+/// 侧栏底边框左侧设置按钮几何：展开态且宽度足够时贴靠左边框（与右端折叠按钮同列）。
 ///
-/// 折叠态或过窄（与分支状态/折叠按钮挤在一起）时隐藏；渲染与鼠标命中共用。
-pub fn prompt_settings_button(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
-    let area = view.prompt;
+/// 折叠态、过窄或服务不可用时隐藏；渲染与鼠标命中共用。
+pub fn settings_button(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    let area = view.sidebar;
     if !state.settings_available
-        || state.prompt_collapsed
+        || state.sidebar_collapsed
         || area.width < SETTINGS_BUTTON_MIN_WIDTH
         || area.height < 2
     {
@@ -596,43 +596,30 @@ pub fn prompt_settings_button(view: &layout::ViewLayout, state: &AppState) -> Op
     ))
 }
 
-/// 分支状态为设置按钮预留的列宽（按钮占位 + 1 列间隔）；按钮隐藏时为 0。
-fn settings_reserved_width(area: Rect, state: &AppState) -> u16 {
-    if !state.settings_available || state.prompt_collapsed || area.width < SETTINGS_BUTTON_MIN_WIDTH
-    {
-        return 0;
-    }
-    SETTINGS_BUTTON_WIDTH + 1
-}
-
-/// 命中 prompt 底边框设置按钮。
-pub fn prompt_settings_button_at(
+/// 命中侧栏底边框设置按钮。
+pub fn settings_button_at(
     view: &layout::ViewLayout,
     state: &AppState,
     column: u16,
     row: u16,
 ) -> bool {
-    prompt_settings_button(view, state).is_some_and(|area| area.contains((column, row).into()))
+    settings_button(view, state).is_some_and(|area| area.contains((column, row).into()))
 }
 
 /// 设置按钮几何常量：宽度 3（`[⚙]`）、左边距 1 列（边框之后）。
 const SETTINGS_BUTTON_WIDTH: u16 = 3;
 const SETTINGS_BUTTON_MARGIN: u16 = 1;
-/// 显示设置按钮所需的最小 prompt 宽度：图标 + 分支状态 + 折叠按钮的安全余量。
-const SETTINGS_BUTTON_MIN_WIDTH: u16 = 24;
+/// 显示设置按钮所需的最小侧栏宽度：图标 + 右端折叠按钮的安全余量。
+const SETTINGS_BUTTON_MIN_WIDTH: u16 = 12;
 
-/// 绘制 prompt 底边框左侧设置按钮；图标强调色，无分支状态时也常显。
-fn render_prompt_settings_button(
-    frame: &mut Frame<'_>,
-    view: &layout::ViewLayout,
-    state: &AppState,
-) {
-    let Some(area) = prompt_settings_button(view, state) else {
+/// 绘制侧栏底边框左侧设置按钮；图标强调色，常显。
+fn render_settings_button(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {
+    let Some(area) = settings_button(view, state) else {
         return;
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
-            text::PROMPT_SETTINGS_LABEL,
+            text::SETTINGS_LABEL,
             style::accent(),
         ))),
         area,
@@ -641,7 +628,7 @@ fn render_prompt_settings_button(
 
 /// prompt 底边框左侧 git 状态：`b:分支`（linked worktree 显示仓库主 checkout 分支），
 /// linked worktree 追加 ` wt:工作区名`；取显示中 prompt 所属工作区，非 git 不显示，
-/// 右端避让折叠按钮，左端避让设置按钮。
+/// 右端避让折叠按钮。
 fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     let Some(workspace) = state.workspaces.get(state.prompt_workspace()) else {
         return;
@@ -651,8 +638,7 @@ fn render_prompt_branch_status(frame: &mut Frame<'_>, area: Rect, state: &AppSta
     if branch.is_none() && !linked {
         return;
     }
-    let settings = settings_reserved_width(area, state);
-    let start = area.x.saturating_add(2).saturating_add(settings);
+    let start = area.x.saturating_add(2);
     let end = area
         .right()
         .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);

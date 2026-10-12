@@ -403,7 +403,8 @@ fn slash_panel_data(prompt: &Prompt) -> Option<SlashPanelData> {
 /// 单条候选的渲染行：选择器显示分支与路径，`/gitWorkTree` 用固定文案。
 fn slash_row(item: &crate::app::markdown::SlashItem) -> SlashRow {
     use crate::app::markdown::{CommandSource, SlashInsertion};
-    let tag = format!("[{}]", item.source.label());
+    // tag 存纯文案，方括号由命令面板渲染层统一包裹。
+    let tag = item.source.label().to_string();
     match item.source {
         CommandSource::Git => {
             let (label, preview) = match &item.insertion {

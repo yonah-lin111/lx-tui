@@ -1,6 +1,6 @@
 # Prompt worktree and custom commands - design
 
-- Status: awaiting user review; implementation is not authorized yet.
+- Status: implemented (on `feat/prompt-worktree-custom-commands`); post-implementation review adjustments applied: the settings icon moved to the sidebar bottom border, the Commands page is a dark three-column layout, source tags render `[Built-in]`/`[User]`/`[Project]`/`[wt]`, and the binding lives on its own protected line above the end line.
 - References: `lx-agent/src/renderer/src/features/markdown/LxMarkdownEditor.tsx`, its slash command and custom command services.
 
 ## Goal
@@ -9,7 +9,7 @@ Add `/gitWorktree` inside `&&&` template blocks, editable Markdown slash command
 
 ## Confirmed decisions
 
-1. `/gitWorktree` appears only inside a template block. It binds that block's file mentions; it never switches the active workspace. Choosing another worktree replaces the end line's `{wt:<branch>}`. The command UI has no clear option.
+1. `/gitWorktree` appears only inside a closed template block. It binds that block's file mentions; it never switches the active workspace. Choosing another worktree writes/replaces a dedicated `{wt:<branch>}` line immediately above the end line; that line is structural metadata and must not be deleted or locally edited. The command UI has no clear option.
 2. Store the full Git branch name, not a checkout path or shortened display name. Omit detached and bare worktrees. A missing or ambiguous branch keeps the marker intact and makes `@` candidates unavailable in that block, with an explicit error.
 3. Custom commands have User and Project scopes. Project commands are shared by all checkouts of one repository; non-Git workspaces use their own workspace root. Project overrides User on name collision; built-in names are reserved.
 4. Custom commands support Markdown insertion (global or template-only) and complete `&&&` template-block insertion (block exterior only). Do not add the reference app's other command types.
@@ -22,7 +22,7 @@ Add `/gitWorktree` inside `&&&` template blocks, editable Markdown slash command
 - `src/app/markdown/slash.rs` has a fixed `SlashCommandId` list, filters only outside templates, and builds built-in template text. `Prompt.slash_confirm` in `src/app/prompt/panel.rs` replaces a whole slash line with that text.
 - `src/app/markdown/template.rs` already parses `{wt:...}` on template end lines. `sync_mention_root` in `src/app/update.rs` currently uses explicit prompt root or prompt-owner cwd; it does not inspect the current template block.
 - `src/git/` already queries `git worktree list --porcelain`; `WorkspaceGit` provides `repo_root` and `checkout_path`. The existing worktree-open dialog owns its list only while open, so the slash chooser needs its own request/result state or a shared repository cache.
-- `src/layout.rs` owns prompt-toolbar button rectangles; `src/ui/prompt.rs` draws the bar. The requested settings icon is on the bottom border, to the left of existing branch/worktree status, not in the top toolbar. Hit testing must share the layout geometry used by rendering.
+- `src/layout.rs` owns prompt-toolbar button rectangles; `src/ui/prompt.rs` draws the bar. The settings icon sits at the left end of the sidebar's bottom border (mirroring the sidebar collapse button on the right); it is hidden when the sidebar is collapsed or the settings service is unavailable. Hit testing must share the layout geometry used by rendering.
 - `src/db/mod.rs` already stores SQLite at `~/.lx-t/db/lx.db` (`~/.lx-t-dev/db/lx.db` in development). `src/config/mod.rs` currently has defaults and no settings file loader.
 
 ## Data and storage
@@ -46,14 +46,14 @@ Load User and Project commands for the prompt's displayed workspace, then overla
 
 ### `wt` resolution
 
-The block end line is the source of truth; no duplicate binding state lives in the prompt. At cursor movement and edit settlement, locate the enclosing template range and parse its end line. If it has `{wt:<full-branch>}`, resolve that branch against a fresh worktree list for the prompt owner's `repo_root`. Exactly one existing checkout is required. Its checkout path becomes the `@` scan root for that block, ahead of the prompt's explicit root. Outside a bound block, keep today's explicit-root/cwd behavior. An unresolved marker sets a visible error state and disables only that block's `@` candidates; it never falls back to another root. Changing root invalidates the existing mention cache/generation so stale asynchronous results cannot appear. A non-Git prompt owner offers no `/gitWorktree` candidates.
+The dedicated `{wt:<branch>}` line above the end line is the source of truth; no duplicate binding state lives in the prompt. At cursor movement and edit settlement, locate the enclosing template range, require a closed end line, and parse the line directly above it. If it is `{wt:<full-branch>}`, resolve that branch against a fresh worktree list for the prompt owner's `repo_root`. Exactly one existing checkout is required. Its checkout path becomes the `@` scan root for that block, ahead of the prompt's explicit root. Outside a bound block, keep today's explicit-root/cwd behavior. An unresolved marker sets a visible error state and disables only that block's `@` candidates; it never falls back to another root. Changing root invalidates the existing mention cache/generation so stale asynchronous results cannot appear. A non-Git prompt owner offers no `/gitWorktree` candidates.
 
-Selecting `/gitWorktree` opens a second-level worktree chooser. Show main checkout and linked entries with branches; show the currently bound entry. Confirm updates the matching end line as one undo step and preserves status and `{id:...}`. Selecting the same branch is harmless. If the list has no eligible entry, show an empty/error state without editing the block. Worktree queries stay in `src/git/` and run off the TUI event loop.
+Selecting `/gitWorktree` opens a second-level worktree chooser. Show main checkout and linked entries with branches; show the currently bound entry. Confirm replaces the existing binding line or inserts one above the end line, and consumes the `/gitWorkTree` line, all as one undo step. Selecting the same branch is harmless. If the list has no eligible entry, show an empty/error state without editing the block. Worktree queries stay in `src/git/` and run off the TUI event loop.
 
 ## UI and service
 
-- Put a single-column settings icon at the far left of the prompt bottom border in expanded mode. Hide it when the prompt is collapsed or too narrow to keep status and collapse control distinct. Use an icon supported by the terminal font and an English hover tooltip. A click asks the event layer to open the browser; `ui/` performs no IO.
-- Reuse the existing command-panel widget. Add an optional right-aligned tag field and reserve its width during layout so long names truncate before the tag. Keep rows and hit targets stable. Show built-in templates outside blocks, `/gitWorktree` and template-scoped Markdown inside blocks, and globally scoped Markdown in both locations.
+- Put a single-column settings icon at the far left of the sidebar's bottom border in expanded mode. Hide it when the sidebar is collapsed or too narrow, or when the settings service is unavailable. Use an icon supported by the terminal font and an English hover tooltip. A click asks the event layer to open the browser; `ui/` performs no IO.
+- Reuse the existing command-panel widget. Add an optional right-aligned tag field (rendered once in brackets; the data layer passes plain labels) and reserve its width during layout so long names truncate before the tag. Keep rows and hit targets stable. Show built-in templates outside blocks, `/gitWorktree` and template-scoped Markdown inside closed blocks, and globally scoped Markdown in both locations. Worktree-related rows (`/gitWorkTree` and chooser entries) are tagged `[wt]`.
 - Serve a single self-contained HTML page (minimal CSS and JavaScript) with a left navigation column and a right content area. Tabs: `General` and `Commands`; the latter has User/Project scope, Markdown/Template block type, list/create/edit/delete, name/description/scope fields, and a plain Markdown editor with preview. Display save errors and unsaved changes. All page text is English.
 - Bind only `127.0.0.1:0`; use a per-run unguessable capability token and same-origin checks for writes. Restrict methods, request size and command filename/path handling. The service reads/writes through a dedicated persistence/settings layer and not through `ui/`; TUI state changes enter through event messages. Browser launch is in `src/platform/` behind OS-specific cfg. Stop the listener when the TUI exits, including normal shutdown and recovery paths.
 - Persist current `Config` fields in `settings.json`, using defaults for missing fields and validating width relationships. The General tab edits the meaningful layout settings; internal safety bounds remain validated. Apply settings through app/event update after successful save, not inside rendering.
@@ -61,7 +61,7 @@ Selecting `/gitWorktree` opens a second-level worktree chooser. Show main checko
 ## Validation and acceptance
 
 1. The slash chooser has the correct scope and tags, handles keyboard/mouse selection, and keeps tag width stable at narrow prompt sizes.
-2. Block `wt` insert/replace is one undo step; status and id survive; the active workspace does not change. Detached worktrees never appear.
+2. Binding-line insert/replace is one undo step; the line is protected from deletion/local edits; the trigger line is consumed; the active workspace does not change. Detached worktrees never appear.
 3. Bound `@` scans the selected checkout, invalidates stale results on binding/cursor changes, and reports missing or ambiguous branches without fallback.
 4. User/Project command precedence, reserved names, `.md` parsing, malformed files, atomic save/delete/rename, and live reload work across workspace switches and app restart.
 5. Local Web UI opens from the icon, edits and previews Markdown, saves to `.lx-t`, rejects unauthorized/oversized/path-traversal requests, and closes with the TUI.

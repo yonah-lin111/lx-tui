@@ -67,6 +67,15 @@ fn scan_line(line: &str, fence: &mut bool, template: &mut bool) -> Vec<Token> {
         push(&mut tokens, range, TokenKind::TemplateTitle);
         return tokens;
     }
+    if *template && markdown::parse_worktree_line(line).is_some() {
+        let start = line.len() - line.trim_start().len();
+        push(
+            &mut tokens,
+            start..line.trim_end().len(),
+            TokenKind::TemplateMarker,
+        );
+        return tokens;
+    }
     if let Some(marker_end) = heading(line) {
         push(&mut tokens, 0..marker_end, TokenKind::Marker);
         push(&mut tokens, marker_end..line.len(), TokenKind::Heading);

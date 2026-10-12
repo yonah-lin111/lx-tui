@@ -2477,38 +2477,39 @@ fn workspace_item_at_maps_visible_rows_when_collapsed() {
 }
 
 #[test]
-fn prompt_settings_button_renders_hides_and_hits() {
+fn settings_button_renders_on_sidebar_bottom_and_hits() {
     let mut state = AppState::demo();
-    state.prompt_collapsed = false;
+    state.sidebar_collapsed = false;
     state.settings_available = true;
     let view = view_for(&state);
-    let button = prompt_settings_button(&view, &state).expect("button fits at 100 cols");
-    assert_eq!(button.y, view.prompt.bottom() - 1);
-    assert_eq!(button.x, view.prompt.x + 1);
-    assert!(prompt_settings_button_at(&view, &state, button.x, button.y));
-    assert!(!prompt_settings_button_at(
+    let button = settings_button(&view, &state).expect("button fits in the sidebar");
+    assert_eq!(button.y, view.sidebar.bottom() - 1);
+    assert_eq!(button.x, view.sidebar.x + 1);
+    assert!(settings_button_at(&view, &state, button.x, button.y));
+    assert!(!settings_button_at(
         &view,
         &state,
         button.x,
         button.y.saturating_sub(1)
     ));
 
+    // 图标贴侧栏底边框左侧，与右端折叠按钮同列不重叠。
     let lines = render_lines(&state);
     let bottom: String = lines[button.y as usize]
         .chars()
-        .skip(usize::from(view.prompt.x))
-        .take(usize::from(view.prompt.width))
+        .skip(usize::from(view.sidebar.x))
+        .take(usize::from(view.sidebar.width))
         .collect();
-    assert!(bottom.contains(text::PROMPT_SETTINGS_LABEL), "{bottom}");
+    assert!(bottom.contains(text::SETTINGS_LABEL), "{bottom}");
 
     // 折叠态或服务不可用时隐藏。
-    state.prompt_collapsed = true;
+    state.sidebar_collapsed = true;
     let collapsed_view = view_for(&state);
-    assert!(prompt_settings_button(&collapsed_view, &state).is_none());
-    state.prompt_collapsed = false;
+    assert!(settings_button(&collapsed_view, &state).is_none());
+    state.sidebar_collapsed = false;
     state.settings_available = false;
     let unavailable = view_for(&state);
-    assert!(prompt_settings_button(&unavailable, &state).is_none());
+    assert!(settings_button(&unavailable, &state).is_none());
 }
 
 #[test]
@@ -2517,18 +2518,24 @@ fn slash_rows_show_source_tags_and_worktree_selector_title() {
     state.prompt_focused = true;
     let dir = std::env::temp_dir().join(format!("lx-tui-ui-wt-{}", std::process::id()));
     state.prompt.set_worktree_repo(Some(dir));
-    state.prompt.insert_str("&&& addTemplate --start\n");
-    state.prompt.insert_char('/');
-    state.prompt.insert_str("gitW");
+    state
+        .prompt
+        .set_text("&&& addTemplate --start\n/gitW\n&&& addTemplate --end");
+    state.prompt.set_cursor_offset_for_test(
+        state.prompt.text().find("/gitW").expect("slash line") + "/gitW".len(),
+    );
+    state.prompt.insert_char(' ');
+    state.prompt.backspace();
     let panel = state.prompt.slash_panel().expect("chooser candidate");
     assert_eq!(panel.items()[0].name, "gitWorkTree");
-    // 面板候选一行渲染出 [Git] 标签与 /gitWorkTree 文案。
+    // 面板候选一行渲染出 [wt] 标签与 /gitWorkTree 文案，且标签只包一层方括号。
     let data = prompt_view_data(&state);
     assert!(
         data.iter()
-            .any(|line| line.contains("[Git]") && line.contains("/gitWorkTree")),
+            .any(|line| line.contains("[wt]") && line.contains("/gitWorkTree")),
         "{data:?}"
     );
+    assert!(data.iter().all(|line| !line.contains("[[")), "{data:?}");
 }
 
 /// 把 prompt 面板内所有行拼接成字符串（用于面板文案断言）。

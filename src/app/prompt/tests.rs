@@ -1571,11 +1571,15 @@ fn git_work_tree_candidate_only_inside_blocks_with_workspace_repo() {
     type_text(&mut no_repo, "&&& addTemplate --start\n/gitW");
     assert!(no_repo.slash_panel().is_none(), "非 git 工作区无候选");
 
-    // 块内且有仓库元数据：出现。
+    // 块内且已闭合且有仓库元数据：出现。
     let mut prompt = prompt(60, 10);
     let dir = std::env::temp_dir().join(format!("lx-tui-wt-prompt-{}", std::process::id()));
     prompt.set_worktree_repo(Some(dir));
-    type_text(&mut prompt, "&&& addTemplate --start\n/gitW");
+    prompt.set_text("&&& addTemplate --start\n/gitW\n&&& addTemplate --end");
+    let offset = prompt.text().find("/gitW").expect("slash line") + "/gitW".len();
+    prompt.set_cursor_offset_for_test(offset);
+    prompt.insert_char(' ');
+    prompt.backspace();
     let panel = prompt.slash_panel().expect("有仓库时出现候选");
     assert_eq!(panel.items()[0].name, "gitWorkTree");
     assert_eq!(panel.items()[0].source, markdown::CommandSource::Git);
@@ -1622,10 +1626,11 @@ fn worktree_chooser_updates_binding_as_single_undo_step_preserving_status_and_id
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
     assert!(
-        text.contains("&&& addTemplate --end done {id:42} {wt:feature/x}"),
-        "{text}"
+        text.contains("{wt:feature/x}\n&&& addTemplate --end done {id:42}"),
+        "绑定行独立成行、紧贴结束行上方: {text}"
     );
     assert!(!text.contains("/gitW"), "slash line consumed: {text}");
+    assert!(!text.contains("\n\n\n"), "触发行整行丢弃: {text}");
     assert!(!prompt.worktree_chooser_open());
     prompt.undo();
     assert!(
@@ -1636,10 +1641,55 @@ fn worktree_chooser_updates_binding_as_single_undo_step_preserving_status_and_id
 }
 
 #[test]
+fn bound_worktree_line_is_edit_protected() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let text = "&&& addTemplate --start\nbody\n{wt:feature/x}\n&&& addTemplate --end\n";
+    prompt.set_text(text);
+    // 结束行行首退格：不合并/删除绑定行。
+    let end_line_start = prompt
+        .text()
+        .find("&&& addTemplate --end")
+        .expect("end line");
+    prompt.set_cursor_offset_for_test(end_line_start);
+    prompt.backspace();
+    assert_eq!(prompt.text(), text);
+    // 绑定行内插入被忽略。
+    let marker = prompt.text().find("{wt:feature/x}").expect("marker");
+    prompt.set_cursor_offset_for_test(marker + 1);
+    prompt.insert_char('x');
+    assert_eq!(prompt.text(), text);
+    // 绑定行行首 Ctrl+U：不合并上一行。
+    prompt.set_cursor_offset_for_test(marker);
+    prompt.delete_to_line_start();
+    assert_eq!(prompt.text(), text);
+    // 绑定行局部删除与整行选区删除均被拒。
+    prompt.set_cursor_offset_for_test(marker + 2);
+    prompt.delete();
+    assert_eq!(prompt.text(), text);
+    assert!(!prompt.replace_range(marker, marker + "{wt:feature/x}".len(), ""));
+    assert_eq!(prompt.text(), text);
+    // 块删除按钮仍可整块删除（含绑定行）。
+    assert!(prompt.delete_template_block(0));
+    assert_eq!(prompt.text(), "");
+}
+
+#[test]
+fn bound_worktree_line_is_excluded_from_block_copy() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_text("&&& addTemplate --start\nbody\n{wt:feature/x}\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    let copy = prompt.copy_text_at_cursor().expect("cursor inside block");
+    assert!(!copy.contains("{wt:"), "{copy}");
+    assert!(copy.contains("body"), "{copy}");
+}
+
+#[test]
 fn worktree_chooser_escape_discards_the_slash_line() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
-    prompt.set_text("&&& addTemplate --start\n「title: 」\nbody\n");
+    prompt.set_text("&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end\n");
     let body_end = prompt.text().find("body").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
@@ -1652,7 +1702,11 @@ fn worktree_chooser_escape_discards_the_slash_line() {
     assert!(prompt.slash_escape());
     assert!(!prompt.worktree_chooser_open());
     assert!(!prompt.text().contains("/gitW"), "选择器行被丢弃");
-    assert!(prompt.text().ends_with("body\n\n"), "丢弃后保留空行");
+    assert!(
+        prompt.text().contains("body\n\n&&& addTemplate --end"),
+        "丢弃后保留空行: {}",
+        prompt.text()
+    );
 }
 
 #[test]
@@ -1660,7 +1714,7 @@ fn worktree_marker_inside_block_resolves_mention_root_and_reports_missing() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt.set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end done {wt:feature/x}\n");
+    prompt.set_text("&&& addTemplate --start\nbody\n{wt:feature/x}\n&&& addTemplate --end done\n");
     let body_end = prompt.text().find("body").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
@@ -1689,7 +1743,7 @@ fn mention_entries_from_bound_checkout_survive_explicit_root_change() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt.set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end done {wt:feature/x}\n");
+    prompt.set_text("&&& addTemplate --start\nbody\n{wt:feature/x}\n&&& addTemplate --end done\n");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "feature/x".into(),
         path: PathBuf::from("/repo/.worktrees/feat"),

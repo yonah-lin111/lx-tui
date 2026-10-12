@@ -254,7 +254,8 @@ fn title_cursor(content: &str) -> usize {
         .unwrap_or(content.len())
 }
 
-/// 命令来源：决定面板右侧 `[Built-in]` / `[User]` / `[Project]` / `[Git]` 标签。
+/// 命令来源：决定面板右侧 `[Built-in]` / `[User]` / `[Project]` / `[wt]` 标签；
+/// Git 来源即 worktree 相关行（`/gitWorkTree` 与其选择器条目），用 `wt` 更达意。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandSource {
     BuiltIn,
@@ -270,7 +271,7 @@ impl CommandSource {
             CommandSource::BuiltIn => "Built-in",
             CommandSource::User => "User",
             CommandSource::Project => "Project",
-            CommandSource::Git => "Git",
+            CommandSource::Git => "wt",
         }
     }
 }
@@ -290,7 +291,7 @@ pub enum SlashInsertion {
     },
     /// `/gitWorkTree`：不直接插入，打开二级 worktree 选择器。
     WorktreeChooser,
-    /// 二级选择器条目：把对应分支写回块结束行的 `{wt:}`。
+    /// 二级选择器条目：把对应分支写回块结束行上方的 `{wt:}` 行。
     WorktreeBinding(String),
     /// 选择器占位行：不可确认。
     Placeholder,
@@ -385,7 +386,7 @@ impl SlashItem {
         }
     }
 
-    /// 选择器条目：确认后写回对应分支的 `{wt:}`。
+    /// 选择器条目：确认后写回对应分支的 `{wt:}` 行。
     pub fn worktree_entry(candidate: &super::WorktreeCandidate) -> Self {
         Self {
             name: candidate.branch.clone(),

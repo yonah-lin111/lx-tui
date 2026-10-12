@@ -377,7 +377,7 @@ fn command_request(request: &Request, path: &str, state: &ServiceState) -> Respo
         ("PUT", false) => {
             let response = put_command(request, scope, &root, kind, &path_on_disk);
             if response.status == 200 {
-                let _ = state.sender().send(SettingsEvent::CommandsChanged);
+                after_command_change(state);
             }
             response
         }
@@ -385,12 +385,42 @@ fn command_request(request: &Request, path: &str, state: &ServiceState) -> Respo
             if commands::delete(&path_on_disk).is_err() {
                 return Response::error(404, "command not found");
             }
-            let _ = state.sender().send(SettingsEvent::CommandsChanged);
+            after_command_change(state);
             Response::json(200, "{\"ok\":true}")
         }
-        ("POST", true) => rename_command(request, &path_on_disk),
+        ("POST", true) => {
+            let response = rename_command(request, &path_on_disk);
+            if response.status == 200 {
+                after_command_change(state);
+            }
+            response
+        }
         _ => Response::error(405, "method not allowed"),
     }
+}
+
+/// 命令文件变更后：立刻按磁盘重建用户级快照（`/api/state` 无需等待 TUI 推送），
+/// 并投递事件让 TUI 重载自定义命令。
+fn after_command_change(state: &ServiceState) {
+    refresh_user_snapshot(state);
+    let _ = state.sender().send(SettingsEvent::CommandsChanged);
+}
+
+/// 从用户数据根重读 User 作用域命令并替换快照中的 User 部分；Project 部分由 TUI 提供。
+fn refresh_user_snapshot(state: &ServiceState) {
+    let root = match state.user_root() {
+        Some(root) => root,
+        None => match crate::config::user_data_root() {
+            Ok(root) => root,
+            Err(_) => return,
+        },
+    };
+    let (records, _errors) = commands::list(CommandScope::User, &root);
+    let user: Vec<CommandView> = records
+        .iter()
+        .map(|record| CommandView::of(record, CommandScope::User))
+        .collect();
+    state.replace_user_commands(user);
 }
 
 /// 保存（覆盖）命令文件。

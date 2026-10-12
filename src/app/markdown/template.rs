@@ -156,6 +156,19 @@ pub fn parse_template_end_line(line: &str) -> Option<TemplateEndLine<'_>> {
     })
 }
 
+/// 解析独立的 worktree 绑定行：整行（允许缩进与尾随空白）必须是 `{wt:<branch>}`；
+/// 分支名非空且不含空白与花括号。
+pub fn parse_worktree_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let branch = inner.strip_prefix("wt:")?;
+    let valid = !branch.is_empty()
+        && !branch
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == '{' || ch == '}');
+    valid.then_some(branch)
+}
+
 /// 解析 `line` 起始的模板块范围；非起始行返回 None，未闭合时 `end` 为文末行。
 pub fn parse_template_block_at_line(text: &str, line: usize) -> Option<TemplateBlockRange> {
     let lines: Vec<&str> = text.split('\n').collect();
@@ -383,13 +396,16 @@ pub fn clean_template_content(text: &str) -> String {
 }
 
 /// 复制用正文（对齐 lx-agent 的复制语义，不修改原文）：
-/// 剔除标题占位行（`--start` 下一行）、`+++` 补充子块（含内部内容）、
+/// 剔除标题占位行（`--start` 下一行）、`{wt:}` 绑定行、`+++` 补充子块（含内部内容）、
 /// 保留 `%%%` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。
 pub fn copy_template_content(text: &str) -> String {
     let mut kept: Vec<&str> = Vec::new();
     let mut inside_supple = false;
     for (index, line) in text.split('\n').enumerate() {
         if index == 0 && is_title_line(line) {
+            continue;
+        }
+        if parse_worktree_line(line).is_some() {
             continue;
         }
         if let Some(kind) = copy_subblock_start(line) {

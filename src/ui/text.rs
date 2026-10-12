@@ -405,7 +405,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
-        TooltipTarget::PromptSettings => "open settings",
+        TooltipTarget::SidebarSettings => "open settings",
         TooltipTarget::TemplateButton { button, .. } => match button {
             TemplateButtonKind::Status => "cycle block status",
             TemplateButtonKind::Copy => "copy block",
@@ -441,7 +441,7 @@ pub const SLASH_WORKTREE_LABEL: &str = "/gitWorkTree";
 pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 
 /// prompt 底边框左侧设置按钮与 tooltip。
-pub const PROMPT_SETTINGS_LABEL: &str = "[⚙]";
+pub const SETTINGS_LABEL: &str = "[⚙]";
 
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";

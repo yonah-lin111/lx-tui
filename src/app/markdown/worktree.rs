@@ -1,9 +1,11 @@
-//! 模板块的 git worktree 绑定：结束行 `{wt:<branch>}` 的读写与候选解析。
+//! 模板块的 git worktree 绑定：结束行上方独立 `{wt:<branch>}` 行的读写、
+//! 候选解析与编辑保护。
 //!
-//! 绑定只存在于结束行：不复制状态到别处。`{wt:}` 保存完整分支名，
-//! 解析时对同一仓库的 worktree 列表要求唯一匹配，detached/bare 条目永不入选。
+//! 绑定只存在于独立的绑定行：紧贴结束行（`&&& … --end`）上方、独占一行。
+//! `{wt:}` 保存完整分支名，解析时对同一仓库的 worktree 列表要求唯一匹配，
+//! detached/bare 条目永不入选。绑定行是结构性元数据：编辑器禁止局部删除或修改。
 
-use super::template::{parse_template_block_at_line, parse_template_end_line};
+use super::template::{parse_template_block_at_line, parse_template_end_line, parse_worktree_line};
 
 /// 候选 worktree：展示用分支名与 checkout 路径。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,55 +43,99 @@ pub fn resolve_binding(candidates: &[WorktreeCandidate], branch: &str) -> Worktr
     }
 }
 
-/// 结束行第 `line` 行是否有 `{wt:}` 绑定；无块结构或未绑定时 None。
+/// 结束行上方的绑定行：返回（绑定行索引, 分支）；无绑定返回 None。
+fn binding_at_end_line(text: &str, end_line: usize) -> Option<(usize, String)> {
+    let end = nth_line(text, end_line)?;
+    parse_template_end_line(end)?;
+    let branch = parse_worktree_line(nth_line(text, end_line.checked_sub(1)?)?)?;
+    Some((end_line - 1, branch.to_string()))
+}
+
+/// 光标所在块的绑定：返回（绑定行索引, 分支）；无块结构或未绑定返回 None。
 pub fn block_worktree_branch(text: &str, cursor: usize) -> Option<(usize, String)> {
     let start = super::template_block_start_at(text, cursor)?;
     let range = parse_template_block_at_line(text, start)?;
-    let line = nth_line(text, range.end)?;
-    let parsed = parse_template_end_line(line)?;
-    Some((range.end, parsed.wt?.to_string()))
+    binding_at_end_line(text, range.end)
 }
 
-/// 指定结束行的 `{wt:}` 绑定；行号越界或无绑定时 None。
-pub fn block_worktree_branch_at_line(text: &str, line: usize) -> Option<(usize, String)> {
-    let current = nth_line(text, line)?;
-    let parsed = parse_template_end_line(current)?;
-    Some((line, parsed.wt?.to_string()))
+/// 指定结束行的绑定：返回（绑定行索引, 分支）；行号越界或无绑定返回 None。
+pub fn block_worktree_branch_at_line(text: &str, end_line: usize) -> Option<(usize, String)> {
+    binding_at_end_line(text, end_line)
 }
 
-/// 光标所在块的结束行索引；不在块内返回 None。
+/// 光标所在块的结束行索引；块未闭合（末行非结束行）时返回 None。
 pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
     let start = super::template_block_start_at(text, cursor)?;
-    parse_template_block_at_line(text, start).map(|range| range.end)
+    let range = parse_template_block_at_line(text, start)?;
+    parse_template_end_line(nth_line(text, range.end)?)?;
+    Some(range.end)
 }
 
-/// 把某行结束行的 `{wt:}` 更新为 `branch`（保留 command、状态与 `{id:}`）。
+/// 把结束行上方的绑定写为 `branch`：已有绑定行则整行替换，否则在结束行上方插入一行。
 ///
-/// 返回 `(替换范围, 新行文本)`；行不是模板结束行时返回 None。
+/// 返回（替换范围, 新文本）；行不是模板结束行时返回 None。
 pub fn set_line_worktree(
     text: &str,
-    line: usize,
+    end_line: usize,
     branch: &str,
 ) -> Option<(std::ops::Range<usize>, String)> {
-    let (range, current) = nth_line_range(text, line)?;
-    let parsed = parse_template_end_line(current)?;
-    let mut out = String::from(parsed.indent);
-    out.push_str("&&&");
-    if let Some(command) = parsed.command {
-        out.push(' ');
-        out.push_str(command);
+    let parsed = parse_template_end_line(nth_line(text, end_line)?)?;
+    let marker = format!("{}{{wt:{branch}}}", parsed.indent);
+    if end_line > 0
+        && let Some(previous) = nth_line(text, end_line - 1)
+        && parse_worktree_line(previous).is_some()
+    {
+        let (range, _) = nth_line_range(text, end_line - 1)?;
+        return Some((range, marker));
     }
-    out.push_str(" --end");
-    out.push_str(parsed.status.suffix());
-    if let Some(id) = parsed.id {
-        out.push_str(" {id:");
-        out.push_str(id);
-        out.push('}');
+    let (end_range, _) = nth_line_range(text, end_line)?;
+    Some((end_range.start..end_range.start, format!("{marker}\n")))
+}
+
+/// 受保护绑定行的字节范围（整行内容，不含换行）：`{wt:}` 独占一行且下一行为模板结束行。
+pub fn worktree_line_spans(text: &str) -> Vec<std::ops::Range<usize>> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut spans = Vec::new();
+    let mut offset = 0;
+    for (index, line) in lines.iter().enumerate() {
+        let range = offset..offset + line.len();
+        offset = range.end + 1;
+        if parse_worktree_line(line).is_none() {
+            continue;
+        }
+        let Some(next) = lines.get(index + 1) else {
+            continue;
+        };
+        if parse_template_end_line(next).is_none() {
+            continue;
+        }
+        spans.push(range);
     }
-    out.push_str(" {wt:");
-    out.push_str(branch);
-    out.push('}');
-    Some((range, out))
+    spans
+}
+
+/// 目标编辑是否触碰受保护的绑定行：局部修改/删除（含相邻换行）被拒绝；
+/// 仅当区间完整包住整行（两端都超出）时才放行，如清空全文或删除整个块。
+pub fn edit_touches_worktree_line(text: &str, from: usize, to: usize) -> bool {
+    let insertion = from == to;
+    for span in worktree_line_spans(text) {
+        if insertion {
+            if from >= span.start && from <= span.end {
+                return true;
+            }
+            continue;
+        }
+        if from < span.start && to > span.end {
+            continue;
+        }
+        if from < span.end && to > span.start {
+            return true;
+        }
+        if to == span.start || from == span.end {
+            return true;
+        }
+    }
+    false
 }
 
 /// 第 `line` 行的字节范围；越界返回 None。

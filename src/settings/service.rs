@@ -74,6 +74,20 @@ impl ServiceState {
         self.user_root.clone()
     }
 
+    /// 用最新 User 命令替换快照中的 User 部分（Project 部分由 TUI 提供，保留）。
+    pub fn replace_user_commands(&self, user: Vec<CommandView>) {
+        if let Ok(mut slot) = self.commands.lock() {
+            let mut merged = user;
+            merged.extend(
+                slot.iter()
+                    .filter(|view| view.scope == "project")
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            );
+            *slot = merged;
+        }
+    }
+
     /// 命令快照副本。
     pub fn commands(&self) -> Vec<CommandView> {
         self.commands
@@ -160,6 +174,11 @@ impl SettingsService {
         if let Ok(mut slot) = self.state.commands.lock() {
             *slot = commands.to_vec();
         }
+    }
+
+    /// 用最新 User 命令替换快照中的 User 部分（Project 部分保留）。
+    pub fn replace_user_commands(&self, user: Vec<CommandView>) {
+        self.state.replace_user_commands(user);
     }
 
     /// 请求关闭；监听任务随后退出。幂等。

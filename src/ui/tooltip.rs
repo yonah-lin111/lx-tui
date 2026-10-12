@@ -107,6 +107,9 @@ fn targets(
     if let Some(area) = sidebar::add_workspace_button(view) {
         targets.push((TooltipTarget::AddWorkspace, area));
     }
+    if let Some(area) = ui::settings_button(view, state) {
+        targets.push((TooltipTarget::SidebarSettings, area));
+    }
     let bar = tab_bar::layout(view, state.active_workspace(), state.tab_scroll);
     if let Some(area) = bar.add {
         targets.push((TooltipTarget::AddTab, area));

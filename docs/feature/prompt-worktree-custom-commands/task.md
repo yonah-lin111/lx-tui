@@ -2,6 +2,7 @@
 
 - Status: implemented on `feat/prompt-worktree-custom-commands`; pending user merge review.
 - Notes: 选择器绑定与 `/gitWorkTree` 均需光标位于模板块内（触发不跨块）；设置页仅编辑 User 作用域，Project 只读。
+- Post-implementation review: 设置按钮改挂侧栏底边框左端；Commands 页改黑色主题三栏（列表/编辑/预览）并在服务端同步刷新快照；来源标签修正双层方括号，worktree 行改用 `[wt]`；`{wt:分支}` 改为结束行上方独立绑定行并加编辑保护（不可局部删除/修改）。
 - Rule: keep `app/` pure, `ui/` read-only, Git execution in `git/`, OS launch in `platform/`, and blocking file/HTTP work off the event loop.
 
 ## 1. Models and storage

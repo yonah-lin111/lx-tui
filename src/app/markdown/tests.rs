@@ -848,6 +848,78 @@ fn parse_template_end_line_forms() {
 }
 
 #[test]
+fn parse_worktree_line_forms() {
+    assert_eq!(parse_worktree_line("{wt:feature/x}"), Some("feature/x"));
+    assert_eq!(parse_worktree_line("  {wt:main}  "), Some("main"));
+    assert_eq!(parse_worktree_line("{wt:}"), None);
+    assert_eq!(parse_worktree_line("{wt:a b}"), None);
+    assert_eq!(parse_worktree_line("body {wt:main}"), None);
+    assert_eq!(parse_worktree_line("{wt:a{b}}"), None);
+    assert_eq!(parse_worktree_line("&&& addTemplate --end"), None);
+}
+
+#[test]
+fn worktree_marker_line_insert_replace_and_read() {
+    let text = "&&& addTemplate --start\nbody\n&&& addTemplate --end done {id:42}\n";
+    let (range, replacement) = set_line_worktree(text, 2, "feature/x").expect("insert marker");
+    let mut bound = text.to_string();
+    bound.replace_range(range.start..range.end, &replacement);
+    assert_eq!(
+        bound,
+        "&&& addTemplate --start\nbody\n{wt:feature/x}\n&&& addTemplate --end done {id:42}\n"
+    );
+    assert_eq!(
+        block_worktree_branch_at_line(&bound, 3),
+        Some((2, "feature/x".to_string()))
+    );
+    let (range, replacement) = set_line_worktree(&bound, 3, "main").expect("replace marker");
+    let mut rebound = bound.clone();
+    rebound.replace_range(range.start..range.end, &replacement);
+    assert_eq!(
+        rebound,
+        "&&& addTemplate --start\nbody\n{wt:main}\n&&& addTemplate --end done {id:42}\n"
+    );
+    // 结束行上的旧版 `{wt:}` 不再是绑定来源。
+    let legacy = "&&& addTemplate --start\nbody\n&&& addTemplate --end {wt:main}\n";
+    assert_eq!(block_worktree_branch_at_line(legacy, 2), None);
+}
+
+#[test]
+fn edit_touches_worktree_line_guards_binding_row() {
+    let text = "&&& x --start\nbody\n{wt:main}\n&&& x --end\n";
+    let start = text.find("{wt:main}").expect("marker");
+    let end = start + "{wt:main}".len();
+    assert!(
+        edit_touches_worktree_line(text, start, end),
+        "整行选中删除被拒"
+    );
+    assert!(
+        edit_touches_worktree_line(text, start, start + 1),
+        "局部改动被拒"
+    );
+    assert!(
+        edit_touches_worktree_line(text, start - 1, start),
+        "行首合并被拒"
+    );
+    assert!(
+        edit_touches_worktree_line(text, end, end + 1),
+        "结束行首退格被拒"
+    );
+    assert!(
+        edit_touches_worktree_line(text, start, start),
+        "行内插入被拒"
+    );
+    assert!(
+        !edit_touches_worktree_line(text, end + 1, end + 3),
+        "结束行内容可编辑"
+    );
+    assert!(
+        !edit_touches_worktree_line(text, 0, text.len()),
+        "整段替换放行"
+    );
+}
+
+#[test]
 fn parse_template_block_finds_range_and_unclosed_tail() {
     let text = "a\n&&& addTemplate --start 「title: 」\n# Add\n&&& addTemplate --end\nb";
     assert_eq!(

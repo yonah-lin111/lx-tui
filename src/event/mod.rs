@@ -744,7 +744,7 @@ fn handle_terminal_event(
                     *dirty = true;
                     return;
                 }
-                if ui::prompt_settings_button_at(view, state, mouse.column, mouse.row) {
+                if ui::settings_button_at(view, state, mouse.column, mouse.row) {
                     if state.settings_available {
                         state.settings_open_requested = true;
                     } else {

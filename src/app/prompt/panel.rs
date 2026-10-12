@@ -187,7 +187,7 @@ impl Prompt {
     }
 
     /// 斜杠命令面板确认：内置/自定义命令整行替换，`/gitWorkTree` 打开二级选择器，
-    /// 选择器确认把分支写回块结束行；返回是否消费。
+    /// 选择器确认把分支写回块结束行上方的 `{wt:}` 行；返回是否消费。
     pub fn slash_confirm(&mut self) -> bool {
         let Some(panel) = self.slash.as_ref() else {
             return false;
@@ -228,7 +228,7 @@ impl Prompt {
         }
     }
 
-    /// 选择器确认：把选中分支写回块结束行的 `{wt:}` 并丢弃 `/gitWorkTree` 行，
+    /// 选择器确认：把选中分支写回块结束行上方的 `{wt:}` 行并整行丢弃 `/gitWorkTree`，
     /// 两处改动作为一步撤销，不改活动工作区。
     fn confirm_worktree_binding(&mut self, branch: &str) -> bool {
         let Some(panel) = self.slash.as_ref() else {
@@ -244,29 +244,25 @@ impl Prompt {
         else {
             return false;
         };
-        let slash_edit = (trigger.line_start < trigger.line_end
-            && trigger.line_end <= self.text.len()
-            && trigger.line_start != marker_range.start)
-            .then(|| (trigger.line_start..trigger.line_end, String::new()));
+        let mut edits = vec![(marker_range, marker_line)];
+        if trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len() {
+            // 整行丢弃触发行（含行尾换行），不留空行。
+            let end = self.text[trigger.line_start..]
+                .find('\n')
+                .map_or(self.text.len(), |offset| trigger.line_start + offset + 1);
+            edits.push((trigger.line_start..end, String::new()));
+        }
         self.slash = None;
         self.break_group();
         self.record(EditKind::Other);
-        self.apply_worktree_edits((marker_range, marker_line), slash_edit);
+        self.apply_worktree_edits(edits);
         self.panel_suppressed = true;
         self.scroll_cursor_into_view();
         true
     }
 
-    /// 同一步撤销内替换两处区间：从后往前应用，偏移互不影响；光标钳到文本内。
-    fn apply_worktree_edits(
-        &mut self,
-        marker: (std::ops::Range<usize>, String),
-        slash: Option<(std::ops::Range<usize>, String)>,
-    ) {
-        let mut edits = vec![marker];
-        if let Some(slash) = slash {
-            edits.push(slash);
-        }
+    /// 同一步撤销内应用多段替换：从后往前执行，偏移互不影响；光标钳到文本内。
+    fn apply_worktree_edits(&mut self, mut edits: Vec<(std::ops::Range<usize>, String)>) {
         edits.sort_by_key(|(range, _)| range.start);
         for (range, replacement) in edits.into_iter().rev() {
             if range.start <= range.end && range.end <= self.text.len() {
@@ -348,7 +344,9 @@ impl Prompt {
         };
         let context = markdown::SlashContext {
             inside_block: markdown::inside_template_block(&self.text, self.cursor),
-            worktree_available: self.worktree_available,
+            // 绑定行需要锚定已闭合的结束行：块未闭合时不提供 `/gitWorkTree`。
+            worktree_available: self.worktree_available
+                && markdown::block_end_line_at(&self.text, self.cursor).is_some(),
         };
         let items = markdown::slash_filter(&self.custom, context, &trigger.query);
         if items.is_empty() {

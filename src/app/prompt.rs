@@ -248,6 +248,9 @@ impl Prompt {
             .take_while(|byte| *byte == b' ')
             .count();
         let insert = format!("\n{}", " ".repeat(indent));
+        if self.protected_edit(end, end) {
+            return;
+        }
         self.record(EditKind::Other);
         self.text.insert_str(end, &insert);
         self.cursor = end + insert.len();
@@ -262,6 +265,9 @@ impl Prompt {
         if self.mention.panel().is_none()
             && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
         {
+            if self.protected_edit(range.start, range.end) {
+                return;
+            }
             let start = range.start;
             self.record(EditKind::Delete);
             self.text.replace_range(range, "");
@@ -273,6 +279,9 @@ impl Prompt {
             return;
         }
         let previous = prev_boundary(&self.text, self.cursor);
+        if self.protected_edit(previous, self.cursor) {
+            return;
+        }
         self.record(EditKind::Delete);
         self.text.remove(previous);
         self.cursor = previous;
@@ -282,6 +291,9 @@ impl Prompt {
     /// 删除光标处字符；文末为 no-op。
     pub fn delete(&mut self) {
         if self.cursor >= self.text.len() {
+            return;
+        }
+        if self.protected_edit(self.cursor, next_boundary(&self.text, self.cursor)) {
             return;
         }
         self.record(EditKind::Delete);
@@ -353,6 +365,9 @@ impl Prompt {
         let Some((range, insertion)) = self.mention.confirm(self.text.len()) else {
             return false;
         };
+        if self.protected_edit(range.start, range.end) {
+            return false;
+        }
         self.break_group();
         self.record(EditKind::Other);
         self.text.replace_range(range.clone(), &insertion);
@@ -370,6 +385,9 @@ impl Prompt {
         let Some((range, insertion)) = self.mention.enter_folder(self.text.len()) else {
             return false;
         };
+        if self.protected_edit(range.start, range.end) {
+            return false;
+        }
         self.break_group();
         self.record(EditKind::Other);
         self.text.replace_range(range.clone(), &insertion);
@@ -490,8 +508,11 @@ impl Prompt {
             self.insert_at(TAB_STOP);
             return;
         }
-        self.record(EditKind::Other);
         let start = line_start(&self.text, self.cursor);
+        if self.protected_edit(start, start) {
+            return;
+        }
+        self.record(EditKind::Other);
         self.text.insert_str(start, TAB_STOP);
         self.cursor += INDENT_UNIT;
         self.settle();
@@ -505,7 +526,7 @@ impl Prompt {
             .take_while(|byte| *byte == b' ')
             .count();
         let remove = spaces.min(INDENT_UNIT);
-        if remove == 0 {
+        if remove == 0 || self.protected_edit(start, start + remove) {
             return;
         }
         self.record(EditKind::Other);
@@ -606,7 +627,7 @@ impl Prompt {
     /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。
     pub fn delete_word_backward(&mut self) {
         let start = self.word_start_before(self.cursor);
-        if start < self.cursor {
+        if start < self.cursor && !self.protected_edit(start, self.cursor) {
             self.mark_dirty();
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
@@ -617,7 +638,7 @@ impl Prompt {
     /// 删除光标到下一个词尾（readline M-d 语义）。
     pub fn delete_word_forward(&mut self) {
         let end = self.word_end_after(self.cursor);
-        if end > self.cursor {
+        if end > self.cursor && !self.protected_edit(self.cursor, end) {
             self.mark_dirty();
             self.text.replace_range(self.cursor..end, "");
             self.settle();
@@ -631,10 +652,16 @@ impl Prompt {
         }
         let start = line_start(&self.text, self.cursor);
         if start < self.cursor {
+            if self.protected_edit(start, self.cursor) {
+                return;
+            }
             self.record(EditKind::Delete);
             self.text.replace_range(start..self.cursor, "");
             self.cursor = start;
             self.settle();
+            return;
+        }
+        if self.protected_edit(self.cursor - 1, self.cursor) {
             return;
         }
         self.record(EditKind::Delete);
@@ -646,7 +673,7 @@ impl Prompt {
     /// 删除光标到逻辑行尾（不删除换行）。
     pub fn delete_to_line_end(&mut self) {
         let end = line_end(&self.text, self.cursor);
-        if end > self.cursor {
+        if end > self.cursor && !self.protected_edit(self.cursor, end) {
             self.mark_dirty();
             self.text.replace_range(self.cursor..end, "");
             self.settle();
@@ -768,6 +795,9 @@ impl Prompt {
         if start >= end || end > self.text.len() {
             return false;
         }
+        if self.protected_edit(start, end) {
+            return false;
+        }
         let sanitized = sanitize(insert);
         self.break_group();
         self.record(EditKind::Insert);
@@ -783,8 +813,16 @@ impl Prompt {
         self.cursor = offset.min(self.text.len());
     }
 
-    /// 在光标处插入已净化的文本并推进光标。
+    /// 编辑是否触碰受保护的 `{wt:}` 绑定行；触碰时拒绝该次编辑。
+    fn protected_edit(&self, from: usize, to: usize) -> bool {
+        markdown::edit_touches_worktree_line(&self.text, from, to)
+    }
+
+    /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。
     fn insert_at(&mut self, insert: &str) {
+        if self.protected_edit(self.cursor, self.cursor) {
+            return;
+        }
         self.record(EditKind::Insert);
         self.text.insert_str(self.cursor, insert);
         self.cursor += insert.len();
