@@ -414,6 +414,11 @@ impl Prompt {
         changed
     }
 
+    /// 当前注入的自定义命令。
+    pub fn custom_commands(&self) -> &[SlashItem] {
+        &self.custom
+    }
+
     /// 注入有效自定义命令；候选变化时关闭旧面板并由后续编辑重算。
     pub fn set_custom_commands(&mut self, items: Vec<SlashItem>) {
         if self.custom == items {

@@ -152,13 +152,15 @@ async fn run_loop(
             last_prompt_workspace = prompt_workspace;
             commands_reload = true;
         }
-        if reload_custom_commands(state, commands_reload) || sync_prompt_repo(state) {
+        let repo_changed = sync_prompt_repo(state);
+        if reload_custom_commands(state, commands_reload) || repo_changed {
             dirty = true;
+            // 命令集变化时刷新设置页快照（避免每帧克隆全量命令）。
+            if let Some(service) = settings_service.as_ref() {
+                service.set_commands_snapshot(&command_views(state));
+            }
         }
         commands_reload = false;
-        if let Some(service) = settings_service.as_ref() {
-            service.set_commands_snapshot(&command_views(state));
-        }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
             dirty = true;
@@ -261,14 +263,18 @@ async fn run_loop(
     Ok(())
 }
 
-/// 重载自定义命令：User 与 Project 合并后注入 prompt；`force` 为真时执行。
+/// 重载自定义命令：User 与 Project 合并后注入 prompt；命令集变化时返回 true。
+///
+/// 每个显示工作区变化、设置页写入与仓库根变化后调用；`set_custom_commands`
+/// 内部按内容比较，未变化时面板保持原样。
 fn reload_custom_commands(state: &mut AppState, force: bool) -> bool {
     if !force {
         return false;
     }
     let (items, _) = custom_commands_for(state);
+    let changed = items != state.prompt.custom_commands().to_vec();
     state.prompt.set_custom_commands(items);
-    true
+    changed
 }
 
 /// 依据显示中 prompt 的工作区装载有效自定义命令与设置页视图快照。
@@ -317,13 +323,14 @@ pub(crate) fn custom_commands_for(
     (items, views)
 }
 
-/// Project 作用域根：git 主 checkout 优先，非 git 工作区用其路径；无路径时 None。
+/// Project 作用域根：git 仓库取主 checkout；新工作区元数据未到达（cwd 已就绪）
+/// 时用工作区路径；完全无路径时 None（不创建无关目录）。
 fn project_command_root(state: &AppState) -> Option<PathBuf> {
     let workspace = state.prompt_owner();
-    match workspace.git.as_ref() {
-        Some(git) => Some(git.repo_root.clone()),
-        None => workspace.cwd.clone(),
+    if let Some(git) = workspace.git.as_ref() {
+        return Some(git.repo_root.clone());
     }
+    workspace.cwd.clone().filter(|cwd| cwd.is_dir())
 }
 
 /// 命令记录 → 斜杠候选；`source` 由调用方按作用域给定。
