@@ -169,9 +169,11 @@ impl MentionState {
     }
 
     /// 选择器打开期间的强制刷新；结果到达前不重复发起。
+    /// 仅在候选未加载（新开选择器）时发起：结果到达后保持，避免持续重查把
+    /// 用户在选择器里的移动反复重置。
     pub fn request_worktree_refresh(&mut self) -> Option<PathBuf> {
         let repo = self.worktree_repo.clone()?;
-        if self.worktree_pending {
+        if self.worktree_pending || self.worktree_candidates.is_some() {
             return None;
         }
         self.worktree_pending = true;

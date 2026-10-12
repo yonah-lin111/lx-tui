@@ -501,9 +501,11 @@ impl Prompt {
     }
 
     /// 写入 worktree 列表结果并重算绑定；代号过期由 mention 状态自行判定。
-    pub fn apply_worktree_entries(&mut self, candidates: Vec<WorktreeCandidate>) {
+    pub fn apply_worktree_entries(&mut self, candidates: Vec<WorktreeCandidate>) -> bool {
+        let changed = self.mention.worktree_candidates() != Some(candidates.as_slice());
         self.mention
             .apply_worktree_entries(candidates, &self.text, self.cursor);
+        changed
     }
 
     /// worktree 查询失败：清空候选并允许后续重试。

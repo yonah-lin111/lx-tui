@@ -232,6 +232,8 @@ pub enum TemplateLineRole {
 pub struct TemplateLineInfo {
     pub role: TemplateLineRole,
     pub status: TemplateStatus,
+    /// 是否为结构分割行：标题行之下或 `{wt:}` 绑定行之上的空行，渲染为块边框横线。
+    pub separator: bool,
 }
 
 /// 逐行扫描模板块归属；不在块内的行为 None，未闭合块延伸至文末。
@@ -253,6 +255,7 @@ pub fn template_line_infos(text: &str) -> Vec<Option<TemplateLineInfo>> {
                             TemplateLineRole::Middle
                         },
                         status: end.status,
+                        separator: false,
                     });
                 }
             }
@@ -269,10 +272,36 @@ pub fn template_line_infos(text: &str) -> Vec<Option<TemplateLineInfo>> {
                     TemplateLineRole::Middle
                 },
                 status: TemplateStatus::Todo,
+                separator: false,
             });
         }
     }
+    mark_separator_rows(&lines, &mut infos);
     infos
+}
+
+/// 标记结构分割行：块内空行，且紧邻标题行之下或 `{wt:}` 绑定行之上。
+fn mark_separator_rows(lines: &[&str], infos: &mut [Option<TemplateLineInfo>]) {
+    for index in 0..lines.len() {
+        let Some(info) = infos[index] else {
+            continue;
+        };
+        if info.role != TemplateLineRole::Middle || !lines[index].trim().is_empty() {
+            continue;
+        }
+        let after_title = index > 0
+            && infos.get(index - 1).is_some_and(Option::is_some)
+            && is_title_line(lines[index - 1]);
+        let before_binding = infos.get(index + 1).is_some_and(Option::is_some)
+            && lines
+                .get(index + 1)
+                .is_some_and(|next| parse_worktree_line(next).is_some());
+        if (after_title || before_binding)
+            && let Some(Some(slot)) = infos.get_mut(index)
+        {
+            slot.separator = true;
+        }
+    }
 }
 
 /// `line` 是否位于模板块内（含起止行）；用于渲染与光标/鼠标坐标映射。
@@ -409,16 +438,6 @@ pub fn copy_template_content(text: &str) -> String {
         if parse_worktree_line(line).is_some() {
             continue;
         }
-        // 紧邻标题行之下、绑定行之上的分割线属于结构元数据，一并剔除。
-        if is_template_separator(line) {
-            let after_title = index == 1 && lines.first().is_some_and(|first| is_title_line(first));
-            let before_binding = lines
-                .get(index + 1)
-                .is_some_and(|next| parse_worktree_line(next).is_some());
-            if after_title || before_binding {
-                continue;
-            }
-        }
         if let Some(kind) = copy_subblock_start(line) {
             if kind == CopySubblock::Supple {
                 inside_supple = true;
@@ -450,14 +469,6 @@ pub fn parse_title_line(line: &str) -> Option<&str> {
 /// `line` 是否为独立标题行 `{title: …}`。
 pub fn is_title_line(line: &str) -> bool {
     parse_title_line(line).is_some()
-}
-
-/// 模板块内的分割线：标题行与正文、正文与 `{wt:}` 绑定行之间各一条。
-pub const TEMPLATE_SEPARATOR: &str = "---";
-
-/// `line` 是否为模板块分割线（允许缩进与尾随空白）。
-pub fn is_template_separator(line: &str) -> bool {
-    line.trim() == TEMPLATE_SEPARATOR
 }
 
 /// 结构性标题行（模板块起始行下一行）的标记区间：受保护的 `{title:` 前缀

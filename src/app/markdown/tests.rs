@@ -879,7 +879,7 @@ fn worktree_marker_line_insert_replace_and_read() {
     bound.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         bound,
-        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done {id:42}\n"
+        "&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done {id:42}\n"
     );
     assert_eq!(
         block_worktree_branch_at_line(&bound, 4),
@@ -891,16 +891,16 @@ fn worktree_marker_line_insert_replace_and_read() {
     rebound.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         rebound,
-        "&&& addTemplate --start\nbody\n---\n{wt:main}\n&&& addTemplate --end done {id:42}\n"
+        "&&& addTemplate --start\nbody\n\n{wt:main}\n&&& addTemplate --end done {id:42}\n"
     );
     // 标题行与正文已隔空行：绑定行贴住结束行。
-    let titled = "&&& addTemplate --start\n{title: T}\n---\nbody\n&&& addTemplate --end\n";
+    let titled = "&&& addTemplate --start\n{title: T}\n\nbody\n&&& addTemplate --end\n";
     let (range, replacement) = set_line_worktree(titled, 4, "dev", None).expect("insert near end");
     let mut with_title = titled.to_string();
     with_title.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         with_title,
-        "&&& addTemplate --start\n{title: T}\n---\nbody\n---\n{wt:dev}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: T}\n\nbody\n\n{wt:dev}\n&&& addTemplate --end\n"
     );
     assert_eq!(
         block_worktree_branch_at_line(&with_title, 6),
@@ -914,7 +914,7 @@ fn worktree_marker_line_insert_replace_and_read() {
     occupied_text.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         occupied_text,
-        "&&& addTemplate --start\nbody\n---\n{wt:dev}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\nbody\n\n{wt:dev}\n&&& addTemplate --end\n"
     );
     // 结束行上的旧版 `{wt:}` 不再是绑定来源。
     let legacy = "&&& addTemplate --start\nbody\n&&& addTemplate --end {wt:main}\n";
@@ -962,7 +962,7 @@ fn edit_touches_title_line_protects_marker_and_allows_value() {
 
 #[test]
 fn edit_touches_worktree_line_guards_binding_row() {
-    let text = "&&& x --start\nbody\n---\n{wt:main}\n&&& x --end\n";
+    let text = "&&& x --start\nbody\n\n{wt:main}\n&&& x --end\n";
     let start = text.find("{wt:main}").expect("marker");
     let end = start + "{wt:main}".len();
     assert!(
@@ -989,7 +989,7 @@ fn edit_touches_worktree_line_guards_binding_row() {
         !edit_touches_worktree_line(text, end + 1, end + 3),
         "结束行内容可编辑"
     );
-    // 上方分割线的换行紧贴绑定行，删除被拒；分割线行本身可并入上一行。
+    // 上方空行的换行紧贴绑定行，删除被拒；空行本身可并入上一行。
     assert!(
         edit_touches_worktree_line(text, start - 1, start),
         "分割线换行删除被拒"
@@ -1139,6 +1139,7 @@ fn template_line_infos_mark_roles_and_status() {
         Some(TemplateLineInfo {
             role: TemplateLineRole::Start,
             status: TemplateStatus::Done,
+            separator: false,
         })
     );
     assert_eq!(
@@ -1146,6 +1147,7 @@ fn template_line_infos_mark_roles_and_status() {
         Some(TemplateLineInfo {
             role: TemplateLineRole::Middle,
             status: TemplateStatus::Done,
+            separator: false,
         })
     );
     assert_eq!(
@@ -1153,9 +1155,22 @@ fn template_line_infos_mark_roles_and_status() {
         Some(TemplateLineInfo {
             role: TemplateLineRole::End,
             status: TemplateStatus::Done,
+            separator: false,
         })
     );
     assert_eq!(infos[4], None);
+}
+
+#[test]
+fn template_line_infos_mark_separator_rows() {
+    // 标题下空行与绑定行上空行标记为结构分割行；正文中的空行不标记。
+    let text = "&&& x --start\n{title: T}\n\n# Head\n\n- a\n\n{wt:main}\n&&& x --end\n";
+    let infos = template_line_infos(text);
+    let separator = |index: usize| infos[index].is_some_and(|info| info.separator);
+    assert!(separator(2), "标题下空行: {infos:?}");
+    assert!(!separator(4), "正文空行: {infos:?}");
+    assert!(separator(6), "绑定行上空行: {infos:?}");
+    assert!(!separator(1) && !separator(3));
 }
 
 #[test]
@@ -1167,6 +1182,7 @@ fn template_line_infos_unclosed_block_extends_to_end() {
         Some(TemplateLineInfo {
             role: TemplateLineRole::Start,
             status: TemplateStatus::Todo,
+            separator: false,
         })
     );
     assert_eq!(
@@ -1174,6 +1190,7 @@ fn template_line_infos_unclosed_block_extends_to_end() {
         Some(TemplateLineInfo {
             role: TemplateLineRole::Middle,
             status: TemplateStatus::Todo,
+            separator: false,
         })
     );
 }

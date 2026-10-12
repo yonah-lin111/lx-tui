@@ -2116,10 +2116,10 @@ fn handle_app_event(
             if targeted {
                 if failed {
                     state.prompt.worktree_failed();
-                } else {
-                    state.prompt.apply_worktree_entries(candidates);
+                } else if state.prompt.apply_worktree_entries(candidates) {
+                    // 列表变化时重建选择器并把高亮对齐当前绑定；未变化保留用户浏览位置。
+                    state.prompt.rebuild_worktree_entries();
                 }
-                state.prompt.rebuild_worktree_entries();
             }
         }
     }

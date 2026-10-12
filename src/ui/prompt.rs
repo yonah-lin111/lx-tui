@@ -243,13 +243,8 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         if let Some(info) = info {
             paint_template_border(buf, area, y, info, role, painted, buttons_start);
             block_rows.push((y, info.status));
-            // 模板块分割线行：整行以边框线条绘制（内容为 `---` 的结构行）。
-            if first
-                && last
-                && lines
-                    .get(row.line)
-                    .is_some_and(|line| crate::app::markdown::is_template_separator(line))
-            {
+            // 模板块分割行（标题下/绑定行上的空行）：整行以边框线条绘制。
+            if first && last && info.separator {
                 separator_rows.push((y, info.status));
             }
         }

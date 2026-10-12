@@ -1,8 +1,8 @@
 //! 模板块的 git worktree 绑定：块底部独立 `{wt:<branch>}` 行的读写、
 //! 候选解析与编辑保护。
 //!
-//! 绑定只存在于独立的绑定行：结束行的上一行——即块内最后一行，上方固定为一条
-//! 分割线 `---`（与标题行和正文之间的分割线同一形式）。`{wt:}` 保存完整分支名，
+//! 绑定只存在于独立的绑定行：结束行的上一行——即块内最后一行，上方固定空一行
+//! （渲染为块边框分割线，与标题行和正文之间的一致）。`{wt:}` 保存完整分支名，
 //! 解析时对同一仓库的 worktree 列表要求唯一匹配，detached/bare 条目永不入选。
 //! 绑定行是结构性元数据：编辑器禁止局部删除或修改。
 
@@ -116,33 +116,29 @@ pub fn set_line_worktree(
     if let Some(line) = slot {
         let (range, current) = nth_line_range(text, line)?;
         if parse_worktree_line(current).is_some() || occupy == Some(line) {
-            let (from, prefix) = separator_before(text, line, range.start)?;
-            return Some((from..range.end, format!("{prefix}{marker}")));
+            let gap = gap_before(text, line);
+            return Some((range, format!("{gap}{marker}")));
         }
     }
     let (range, _) = nth_line_range(text, end_line)?;
-    let (from, prefix) = separator_before(text, end_line, range.start)?;
-    Some((from..range.start, format!("{prefix}{marker}\n")))
+    // 插入到结束行之前：原末行非空时其前补一个空行（渲染为分割线）。
+    let gap = gap_before(text, end_line);
+    Some((range.start..range.start, format!("{gap}{marker}\n")))
 }
 
-/// 绑定行上方的分割线准备：上一行已是分割线时原样保留；是空行时用分割线替换；
-/// 否则在行首插入一条。返回（替换起点, 前缀文本）。
-fn separator_before(text: &str, line: usize, line_start: usize) -> Option<(usize, String)> {
-    use super::template::{TEMPLATE_SEPARATOR, is_template_separator};
-    let previous = line
-        .checked_sub(1)
-        .and_then(|previous| nth_line(text, previous));
-    match previous {
-        Some(above) if is_template_separator(above) => Some((line_start, String::new())),
-        Some(above) if above.trim().is_empty() => {
-            let (range, _) = nth_line_range(text, line.checked_sub(1)?)?;
-            Some((range.start, format!("{TEMPLATE_SEPARATOR}\n")))
-        }
-        _ => Some((line_start, format!("{TEMPLATE_SEPARATOR}\n"))),
+/// 绑定行上方需要的空行：其上一行非空且自身不是首个位置时返回 `"\n"`。
+fn gap_before(text: &str, line: usize) -> &'static str {
+    let Some(previous) = line.checked_sub(1) else {
+        return "";
+    };
+    if nth_line(text, previous).is_some_and(|above| !above.trim().is_empty()) {
+        "\n"
+    } else {
+        ""
     }
 }
 
-/// 移除结束行所在块的绑定：删除绑定行与其上方分割线（若在）；无绑定返回 None。
+/// 移除结束行所在块的绑定：删除绑定行与其上方空行（若在）；无绑定返回 None。
 ///
 /// 返回（替换范围, 新文本）。
 pub fn clear_line_worktree(
@@ -158,7 +154,7 @@ pub fn clear_line_worktree(
     };
     let mut from = range.start;
     if let Some(above) = line.checked_sub(1)
-        && nth_line(text, above).is_some_and(super::template::is_template_separator)
+        && nth_line(text, above).is_some_and(|line| line.trim().is_empty())
     {
         from = nth_line_range(text, above)?.0.start;
     }

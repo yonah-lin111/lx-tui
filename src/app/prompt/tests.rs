@@ -1303,10 +1303,7 @@ fn template_block_body_extracts_inner_content() {
     let mut prompt = prompt(60, 20);
     with_add_template(&mut prompt);
     let body = prompt.template_block_body(0).expect("body");
-    assert!(
-        body.starts_with("{title: }\n---\n# Add Requirement"),
-        "{body}"
-    );
+    assert!(body.starts_with("{title: }\n\n# Add Requirement"), "{body}");
     assert!(body.ends_with("- Notes: \n  - "));
     assert!(!body.contains("&&&"));
     assert_eq!(prompt.template_block_body(1), None);
@@ -1628,8 +1625,8 @@ fn worktree_chooser_updates_binding_as_single_undo_step_preserving_status_and_id
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
     assert!(
-        text.contains("body\n---\n{wt:feature/x}\n&&& addTemplate --end done {id:42}"),
-        "绑定行独立成行、位于结束行上一行且上方分割线: {text}"
+        text.contains("body\n\n{wt:feature/x}\n&&& addTemplate --end done {id:42}"),
+        "绑定行独立成行、位于结束行上一行且上方空行: {text}"
     );
     assert!(!text.contains("/gitW"), "slash line consumed: {text}");
     assert!(!text.contains("\n\n\n"), "触发行整行丢弃: {text}");
@@ -1680,7 +1677,7 @@ fn bound_worktree_line_is_edit_protected() {
 #[test]
 fn title_marker_is_edit_protected_while_value_stays_editable() {
     let mut prompt = prompt(80, 12);
-    let fixture = "&&& addTemplate --start\n{title: }\n---\nbody\n&&& addTemplate --end\n";
+    let fixture = "&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n";
     prompt.set_text(fixture);
     let title = |prompt: &Prompt| {
         prompt
@@ -1729,7 +1726,7 @@ fn title_marker_is_edit_protected_while_value_stays_editable() {
 #[test]
 fn bound_worktree_line_is_excluded_from_block_copy() {
     let mut prompt = prompt(80, 12);
-    prompt.set_text("&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n");
+    prompt.set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n");
     let body_end = prompt.text().find("body").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
     let copy = prompt.copy_text_at_cursor().expect("cursor inside block");
@@ -1757,7 +1754,7 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
     // 命令行不在绑定位置（绑定行为结束行上一行）：清空内容保留该行，
-    // 绑定行插到末行之下并补一条分割线。
+    // 绑定行插到末行之下并补一个空行。
     assert_eq!(
         text.matches('\n').count(),
         fixture.matches('\n').count() + 2
@@ -1772,7 +1769,7 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
     assert!(!text.contains("/gitW"), "{text}");
     assert_eq!(
         text,
-        "&&& addTemplate --start\n{title: }\n\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n"
     );
     prompt.undo();
     assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
@@ -1797,10 +1794,10 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
     prompt.rebuild_worktree_entries();
     assert!(prompt.slash_confirm(), "confirm binding");
     let text = prompt.text().to_string();
-    // 命令行恰占绑定行（结束行上一行）：整行替换为分割线与绑定行。
+    // 命令行恰占绑定行（结束行上一行）：整行替换为绑定行并补上方空行。
     assert_eq!(
         text,
-        "&&& addTemplate --start\n{title: }\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: }\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n"
     );
     // 光标落在绑定行行尾（不因新增分割线行而落到下一行）。
     assert_eq!(
@@ -1814,10 +1811,51 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
 }
 
 #[test]
+fn worktree_chooser_refresh_fires_once_per_open() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_text("&&& addTemplate --start\nbody\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "opens chooser");
+    // 选择器打开只发起一轮查询：结果到达后不再重查，否则持续刷新会把用户移动
+    // 重置回当前绑定项（表现为"切换后马上回到原来的"）。
+    assert!(prompt.take_worktree_refresh().is_some(), "首次加载");
+    assert!(prompt.take_worktree_refresh().is_none(), "在途不重复");
+    let candidates = vec![
+        markdown::WorktreeCandidate {
+            branch: "main".into(),
+            path: PathBuf::from("/repo"),
+            is_main: true,
+        },
+        markdown::WorktreeCandidate {
+            branch: "feature/x".into(),
+            path: PathBuf::from("/repo/.worktrees/feat"),
+            is_main: false,
+        },
+    ];
+    assert!(prompt.apply_worktree_entries(candidates.clone()));
+    prompt.rebuild_worktree_entries();
+    assert!(
+        prompt.take_worktree_refresh().is_none(),
+        "结果到达后不再重查"
+    );
+    // 同内容的结果不算变化：事件层据此保留用户在列表里的移动。
+    assert!(!prompt.apply_worktree_entries(candidates));
+    assert!(prompt.slash_move(1));
+    assert_eq!(prompt.slash_panel().map_or(0, |panel| panel.active()), 1);
+}
+
+#[test]
 fn worktree_chooser_main_checkout_removes_binding() {
     let mut prompt = prompt(80, 14);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
-    let fixture = "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n";
+    let fixture = "&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n";
     prompt.set_text(fixture);
     let body_end = prompt.text().find("body\n").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
@@ -1847,7 +1885,10 @@ fn worktree_chooser_main_checkout_removes_binding() {
     let text = prompt.text().to_string();
     // 选择主 checkout = 解除绑定：绑定行与上方分割线一并移除，命令行清空保留。
     assert!(!text.contains("{wt:"), "绑定行被移除: {text}");
-    assert!(!text.contains("\n---\n"), "绑定分割线被移除: {text}");
+    assert!(
+        !text.contains("\n\n\n"),
+        "绑定行与其上方空行一并移除: {text}"
+    );
     assert!(text.contains("body\n"), "{text}");
     assert!(!text.contains("/gitW"), "{text}");
     prompt.undo();
@@ -1883,9 +1924,8 @@ fn worktree_marker_inside_block_resolves_mention_root_and_reports_missing() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt.set_text(
-        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done\n",
-    );
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
     let body_end = prompt.text().find("body").expect("body line") + "body".len();
     prompt.set_cursor_offset_for_test(body_end);
     prompt.insert_char(' ');
@@ -1914,9 +1954,8 @@ fn bound_linked_block_asks_root_before_listing_files() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt.set_text(
-        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done\n",
-    );
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "feature/x".into(),
         path: PathBuf::from("/repo/.worktrees/feat"),
@@ -1960,7 +1999,7 @@ fn bound_linked_block_asks_root_before_listing_files() {
 fn binding_the_main_checkout_lists_files_without_root_choice() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
-    prompt.set_text("&&& addTemplate --start\nbody\n---\n{wt:main}\n&&& addTemplate --end done\n");
+    prompt.set_text("&&& addTemplate --start\nbody\n\n{wt:main}\n&&& addTemplate --end done\n");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "main".into(),
         path: PathBuf::from("/repo"),
@@ -1984,9 +2023,8 @@ fn mention_entries_from_bound_checkout_survive_explicit_root_change() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_mention_root(Some(PathBuf::from("/fallback")));
-    prompt.set_text(
-        "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end done\n",
-    );
+    prompt
+        .set_text("&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end done\n");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
         branch: "feature/x".into(),
         path: PathBuf::from("/repo/.worktrees/feat"),

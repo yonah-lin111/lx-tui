@@ -321,7 +321,7 @@ fn template_separator_renders_block_border_line() {
     let area = Rect::new(0, 0, 30, 10);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
     editor.resize(30, 10);
-    editor.set_text("&&& addTemplate --start\n{title: }\n---\nbody\n&&& addTemplate --end\n");
+    editor.set_text("&&& addTemplate --start\n{title: }\n\nbody\n&&& addTemplate --end\n");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
     // 分割线整行以模板块边框样式绘制：├─…─┤。
@@ -329,8 +329,7 @@ fn template_separator_renders_block_border_line() {
     assert!(row.starts_with("├──"), "{row}");
     assert!(row.ends_with("┤"), "{row}");
     assert_eq!(buf[(8, 2)].fg, Color::LightBlue, "todo 边框色");
-    // `---` 文本被线条覆盖。
-    assert!(!row.contains('-'), "{row}");
+    assert!(row.contains('─'), "{row}");
 }
 
 #[test]
