@@ -114,10 +114,15 @@ impl Prompt {
         let Some(panel) = self.slash.as_ref() else {
             return;
         };
-        let markdown::SlashPanelKind::WorktreeChooser { block_end_line } = panel.kind() else {
+        let markdown::SlashPanelKind::WorktreeChooser {
+            block_end_line,
+            line,
+        } = panel.kind()
+        else {
             return;
         };
         let block_end_line = *block_end_line;
+        let line = line.clone();
         let trigger = panel.trigger().clone();
         let entries = self.worktree_entries();
         let candidates = self.worktree_candidates();
@@ -136,7 +141,10 @@ impl Prompt {
             .min(entries.len().saturating_sub(1));
         self.slash = Some(SlashPanel::with_kind(
             trigger,
-            markdown::SlashPanelKind::WorktreeChooser { block_end_line },
+            markdown::SlashPanelKind::WorktreeChooser {
+                block_end_line,
+                line,
+            },
             entries,
             active,
         ));
@@ -237,7 +245,7 @@ impl Prompt {
             return false;
         };
         let block_end_line = match panel.kind() {
-            markdown::SlashPanelKind::WorktreeChooser { block_end_line } => *block_end_line,
+            markdown::SlashPanelKind::WorktreeChooser { block_end_line, .. } => *block_end_line,
             _ => return false,
         };
         let trigger = panel.trigger().clone();
@@ -305,53 +313,49 @@ impl Prompt {
 
     /// 打开二级 worktree 选择器：光标处必须有模板块（绑定目标即该块结束行）。
     ///
-    /// 选择器条目由 UI 直接读取 worktree 状态；列表刷新由事件层调度。
+    /// 先把命令行整行回显为规范命令文本（`/gitWorkTree `）再打开选择器并锚定该行
+    /// （对齐 lx-agent：选择型命令先回显命令、再开二级面板）。回显作为独立一步撤销，
+    /// 撤销后回到用户输入中的命令行。选择器条目由 UI 直接读取 worktree 状态；
+    /// 列表刷新由事件层调度。
     fn open_worktree_chooser(&mut self, trigger: markdown::SlashTrigger) -> bool {
         let Some(block_end_line) = markdown::block_end_line_at(&self.text, self.cursor) else {
             return false;
         };
+        self.break_group();
+        self.record(EditKind::Other);
+        let line = markdown::WORKTREE_COMMAND_LINE.to_string();
+        self.text
+            .replace_range(trigger.line_start..trigger.line_end, &line);
+        self.cursor = trigger.line_start + line.len();
+        self.scroll_cursor_into_view();
+        let echo = markdown::SlashTrigger {
+            line_start: trigger.line_start,
+            line_end: self.cursor,
+            cursor: self.cursor,
+            // 选择器候选来自 worktree 状态，不按 query 过滤；占位即可。
+            query: String::new(),
+        };
         self.mention.request_worktree_list();
         self.slash = Some(SlashPanel::with_kind(
-            trigger,
-            markdown::SlashPanelKind::WorktreeChooser { block_end_line },
+            echo,
+            markdown::SlashPanelKind::WorktreeChooser {
+                block_end_line,
+                line,
+            },
             Vec::new(),
             0,
         ));
         true
     }
 
-    /// 关闭 worktree 选择器且不改文本（点击文本区时调用，等同 `@` 面板的点击失焦）；
-    /// 返回是否关闭。选择器锚定光标行，不先关闭会让面板跟着点击漂移且无从关闭。
-    pub fn dismiss_worktree_chooser(&mut self) -> bool {
-        if !self.worktree_chooser_open() {
+    /// 斜杠命令面板打开时关闭且不改文本；二级选择器同样只关闭、命令行保留
+    /// （对齐 lx-agent 的 `Esc` 只收起面板）；返回是否消费该按键。
+    pub fn slash_escape(&mut self) -> bool {
+        if self.slash.is_none() {
             return false;
         }
-        self.slash = None;
-        true
-    }
-
-    /// 斜杠命令面板打开时关闭且不改文本；选择器关闭时丢弃 `/gitWorkTree` 行；
-    /// 返回是否消费该按键。
-    pub fn slash_escape(&mut self) -> bool {
-        let Some(panel) = self.slash.as_ref() else {
-            return false;
-        };
-        let chooser = matches!(
-            panel.kind(),
-            markdown::SlashPanelKind::WorktreeChooser { .. }
-        );
-        let trigger = panel.trigger().clone();
         self.slash = None;
         self.panel_suppressed = true;
-        if chooser && trigger.line_start <= trigger.line_end && trigger.line_end <= self.text.len()
-        {
-            self.break_group();
-            self.record(EditKind::Other);
-            self.text
-                .replace_range(trigger.line_start..trigger.line_end, "");
-            self.cursor = trigger.line_start;
-            self.scroll_cursor_into_view();
-        }
         true
     }
 
@@ -370,14 +374,21 @@ impl Prompt {
         self.panel = Some(BlockPanel::new(trigger, items, active));
     }
 
-    /// 重算斜杠命令面板：整行 `/` 触发决定候选，同位置保留高亮；
-    /// 选择器模式不重算（由 worktree 结果与导航驱动）。
+    /// 重算斜杠命令面板：整行 `/` 触发决定候选，同位置保留高亮。
+    ///
+    /// 二级 worktree 选择器不改算候选（由 worktree 结果与导航驱动），但按命令行锚定
+    /// 同步：光标离开该行或该行文本变化即关闭（对齐 lx-agent 的二级面板同步），
+    /// 关闭不改文本（`Esc` 同样只关闭）。
     pub(super) fn refresh_slash_panel(&mut self) {
-        if matches!(
-            self.slash.as_ref().map(SlashPanel::kind),
-            Some(markdown::SlashPanelKind::WorktreeChooser { .. })
-        ) {
-            return;
+        if self.worktree_chooser_open() {
+            let anchored = self
+                .slash
+                .as_ref()
+                .is_some_and(|panel| panel.worktree_anchored(&self.text, self.cursor));
+            if anchored {
+                return;
+            }
+            self.slash = None;
         }
         let Some(trigger) = markdown::slash_trigger(&self.text, self.cursor) else {
             self.slash = None;

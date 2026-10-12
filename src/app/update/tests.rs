@@ -203,9 +203,19 @@ fn prompt_click_dismisses_worktree_chooser_without_text_change() {
     assert!(state.prompt.slash_confirm(), "opens chooser");
     assert!(state.prompt.worktree_chooser_open());
     let before = state.prompt.text().to_string();
-    // 点击文本区其他位置：选择器关闭且不改文本，不再跟随点击漂移（对齐 @ 面板）。
+    // 点击同一命令行：锚定不变，选择器保持打开。
+    place_prompt_cursor(&mut state, 2, 4);
+    assert!(
+        state.prompt.worktree_chooser_open(),
+        "同一行内点击不关闭: {}",
+        state.prompt.text()
+    );
+    // 点击其他行：命令行锚定失配即关闭且不改文本（对齐 lx-agent 的二级面板同步）。
     place_prompt_cursor(&mut state, 0, 1);
-    assert!(!state.prompt.worktree_chooser_open(), "点击关闭选择器");
+    assert!(
+        !state.prompt.worktree_chooser_open(),
+        "点击其他行关闭选择器"
+    );
     assert_eq!(state.prompt.text(), before, "关闭不改文本");
 }
 

@@ -480,10 +480,9 @@ pub fn reset_pane_scroll(state: &mut AppState, id: PaneId) -> bool {
 
 /// 鼠标点击 prompt：把视口单元格映射为光标位置。
 ///
-/// worktree 选择器打开时先关闭且不改文本（对齐 `@` 面板的点击失焦）：选择器锚定
-/// 光标行，否则点击其他位置会让面板跟着漂移且无法关闭。
+/// 光标落到别的行会让二级 worktree 选择器失配关闭（面板重算时按命令行锚定同步，
+/// 对齐 lx-agent）；落在原命令行上则保持打开且不改文本。
 pub fn place_prompt_cursor(state: &mut AppState, row: u16, col: u16) {
-    state.prompt.dismiss_worktree_chooser();
     sync_mention_root(state);
     state.prompt.set_cursor_from_cell(row, col);
 }

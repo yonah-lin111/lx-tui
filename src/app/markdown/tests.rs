@@ -567,6 +567,17 @@ fn slash_trigger_forms_and_rejections() {
 }
 
 #[test]
+fn slash_trigger_ignores_the_echoed_worktree_command() {
+    // 回显的命令行（末尾空格）不再构成命令触发：选择器关闭后不会退回命令候选面板。
+    let echoed = "&&& x --start\n/gitWorkTree \n&&& x --end\n";
+    let cursor = echoed.find("/gitWorkTree ").expect("echoed line") + "/gitWorkTree ".len();
+    assert_eq!(slash_trigger(echoed, cursor), None, "回显行不触发");
+    let typed = "&&& x --start\n/gitWorkTree\n&&& x --end\n";
+    let cursor = typed.find("/gitWorkTree\n").expect("typed line") + "/gitWorkTree".len();
+    assert!(slash_trigger(typed, cursor).is_some(), "无末尾空格仍是触发");
+}
+
+#[test]
 fn slash_trigger_suppressed_in_fence_but_allowed_inside_template_blocks() {
     assert_eq!(slash_trigger("```\n/add", 8), None);
     // 模板块内允许触发（`/gitWorkTree` 需要在块内绑定）；候选按作用域过滤。

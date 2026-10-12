@@ -1772,7 +1772,13 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
         "&&& addTemplate --start\n{title: }\n\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n"
     );
     prompt.undo();
-    assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
+    assert!(
+        prompt.text().contains("\n/gitWorkTree \n"),
+        "单步撤销只撤销绑定、恢复回显命令行: {}",
+        prompt.text()
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), fixture, "再撤销回退到输入中的命令行");
 }
 
 #[test]
@@ -1807,7 +1813,15 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
         prompt.text()
     );
     prompt.undo();
-    assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
+    assert!(
+        prompt
+            .text()
+            .contains("body\n/gitWorkTree \n&&& addTemplate --end\n"),
+        "单步撤销只撤销绑定、恢复回显命令行: {}",
+        prompt.text()
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), fixture, "再撤销回退到输入中的命令行");
 }
 
 #[test]
@@ -1896,7 +1910,63 @@ fn worktree_chooser_main_checkout_removes_binding() {
 }
 
 #[test]
-fn worktree_chooser_escape_discards_the_slash_line() {
+fn worktree_chooser_echoes_command_and_follows_the_command_line() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_text("&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "opens chooser");
+    assert!(prompt.worktree_chooser_open());
+    // 回显：整行替换为规范命令文本（末尾空格），光标停在行尾，选择器锚定该行。
+    let text = prompt.text().to_string();
+    assert!(
+        text.contains("body\n/gitWorkTree \n&&& addTemplate --end"),
+        "命令回显: {text}"
+    );
+    assert_eq!(prompt.cursor_cell().map(|cell| cell.0), Some(3), "{text}");
+
+    // 同一行内移动光标：仍锚定，选择器保持打开。
+    prompt.move_left();
+    assert!(prompt.worktree_chooser_open(), "同一行内移动不关闭");
+
+    // 光标离开该行：失配关闭且不改文本。
+    let moved = prompt.text().to_string();
+    prompt.move_up();
+    assert!(!prompt.worktree_chooser_open(), "光标离开命令行即关闭");
+    assert_eq!(prompt.text(), moved, "关闭不改文本");
+}
+
+#[test]
+fn worktree_chooser_closes_when_the_command_line_changes() {
+    let mut prompt = prompt(80, 12);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    prompt.set_text("&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n");
+    let body_end = prompt.text().find("body").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "opens chooser");
+    // 在回显行继续输入：该行内容变化即失配关闭（这次输入保留）。
+    prompt.insert_char('x');
+    assert!(!prompt.worktree_chooser_open(), "命令行内容变化即关闭");
+    assert!(
+        prompt.text().contains("/gitWorkTree x"),
+        "{}",
+        prompt.text()
+    );
+}
+
+#[test]
+fn worktree_chooser_escape_closes_without_text_change() {
     let mut prompt = prompt(80, 12);
     prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
     prompt.set_text("&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end\n");
@@ -1909,14 +1979,19 @@ fn worktree_chooser_escape_discards_the_slash_line() {
     type_text(&mut prompt, "gitW");
     assert!(prompt.slash_confirm());
     assert!(prompt.worktree_chooser_open());
+    let echoed = prompt.text().to_string();
+    // Esc 只关闭面板、命令行保留（对齐 lx-agent），不改文本。
     assert!(prompt.slash_escape());
     assert!(!prompt.worktree_chooser_open());
-    assert!(!prompt.text().contains("/gitW"), "选择器行被丢弃");
-    assert!(
-        prompt.text().contains("body\n\n&&& addTemplate --end"),
-        "丢弃后保留空行: {}",
-        prompt.text()
-    );
+    assert!(prompt.slash_panel().is_none());
+    assert_eq!(prompt.text(), echoed, "Esc 不改文本");
+    assert!(!prompt.slash_escape(), "已关闭时不再消费");
+    // 光标回到回显行尾再重算：末尾空格使该行不构成命令触发，命令面板不会重新弹出。
+    let end = echoed.find("/gitWorkTree ").expect("echo line") + "/gitWorkTree ".len();
+    prompt.set_cursor_offset_for_test(end);
+    prompt.move_left();
+    prompt.move_right();
+    assert!(prompt.slash_panel().is_none(), "回显行不再是命令触发");
 }
 
 #[test]

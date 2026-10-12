@@ -3,6 +3,7 @@
 - Status: merged into `dev` (merge commit `862bc7e`).
 - Notes: 选择器绑定与 `/gitWorkTree` 均需光标位于模板块内（触发不跨块）；设置页仅编辑 User 作用域，Project 只读。
 - Post-implementation review: 设置按钮改挂侧栏底边框左端（`[≡]`，单宽非 emoji、逐格强调色绘制）；`/gitWorkTree` 确认不再删行（清空命令行、保留该行，紧贴结束行时该行直接转为绑定行）；来源标签修正双层方括号，worktree 行改用 `[wt]`；`{wt:分支}` 为结束行上方独立绑定行并加编辑保护（不可局部删除/修改）。
+- Post-implementation review 10: `/gitWorkTree` 交互对齐 lx-agent（`LxMarkdownEditor.tsx`）：选中命令后先把命令行回显为规范命令文本 `/gitWorkTree `（末尾空格使其不再是命令触发，回显独立一步撤销）再打开二级选择器；选择器锚定该命令行，光标离开该行或行内容变化即关闭（点击其他行/重算走同一路径，不再跟随点击漂移），`Esc` 只关闭面板、命令行保留（此前会丢弃整行）。
 - Post-implementation review 9: 修复 `/gitWorkTree` 选择器点击 prompt 文本区后跟随点击漂移且无法关闭（点击文本区即关闭、不改文本，对齐 `@` 面板；Esc 仍是丢弃命令行的清理路径）；修复 `@` 面板取根选择高亮被每次按键的上下文根同步打回 main（绑定签名随会话记录，仅签名变化才复位），键盘可正常在 main/wt 间切换且回车确认高亮项。
 - Post-implementation review 8: 修复选择器打开期间 worktree 列表无限重查（结果到达后不再重查、列表未变化不重建选择器），解决「无法切换、切换后马上回到原来的」；标题下与 `{wt:}` 上方的 `---` 文本取消，改为纯空行（渲染为块边框分割线，文档不留符号）。
 - Post-implementation review 7: `/gitWorkTree` 选主 checkout = 解除绑定（移除绑定行与上方分割线，命令行清空保留）；绑定写入按编辑位置平移光标（占用命令行时落在绑定行行尾，不再落到下一行）；标题/绑定分割线行改为按模板块边框线条整行绘制（`├─…─┤`，块状态色）。

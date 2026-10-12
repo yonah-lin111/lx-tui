@@ -96,6 +96,11 @@ pub fn slash_trigger(text: &str, cursor: usize) -> Option<SlashTrigger> {
     })
 }
 
+/// `/gitWorkTree` 选中后的命令行回显文本：先把整行换成规范命令文本，再打开二级选择器
+/// （对齐 lx-agent 选择型命令：回显命令文本后打开二级面板）。末尾保留一个空格：该行不再是
+/// 命令触发（`slash_trigger` 只认纯命令字符），选择器关闭后命令行保持惰性、不会重新弹面板。
+pub const WORKTREE_COMMAND_LINE: &str = "/gitWorkTree ";
+
 /// 按查询过滤候选：内置模板 + 自定义命令 + `/gitWorkTree`。
 ///
 /// 可见范围：内置模板只在模板块外出现（块内已有模板）；globally 作用域的自定义
@@ -464,9 +469,12 @@ pub struct SlashContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SlashPanelKind {
     Commands,
-    /// worktree 选择器：绑定块的结束行索引；列表由 `Prompt` 的 worktree 状态提供。
+    /// worktree 选择器：绑定块的结束行索引 + 打开时命令行的整行文本（不含前导空白）；
+    /// 光标离开该行或该行文本变化即失配关闭（对齐 lx-agent 的二级面板同步）。
+    /// 列表由 `Prompt` 的 worktree 状态提供。
     WorktreeChooser {
         block_end_line: usize,
+        line: String,
     },
 }
 
@@ -512,6 +520,20 @@ impl SlashPanel {
     /// 触发区间。
     pub fn trigger(&self) -> &SlashTrigger {
         &self.trigger
+    }
+
+    /// 二级选择器是否仍锚定在打开时的命令行：光标所在行的起始偏移与整行文本都不变
+    /// （对齐 lx-agent：光标离开该行或该行内容变化即关闭）。
+    pub fn worktree_anchored(&self, text: &str, cursor: usize) -> bool {
+        let SlashPanelKind::WorktreeChooser { line, .. } = &self.kind else {
+            return false;
+        };
+        if cursor > text.len() || !text.is_char_boundary(cursor) {
+            return false;
+        }
+        let start = line_start(text, cursor);
+        let end = line_end(text, cursor);
+        start == self.trigger.line_start && text[start..end].trim_start() == line.as_str()
     }
 
     /// 候选命令。
