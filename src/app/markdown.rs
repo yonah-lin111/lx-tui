@@ -210,6 +210,8 @@ pub struct MentionTrigger {
 pub struct MentionEntry {
     pub path: String,
     pub is_directory: bool,
+    /// 是否来自块绑定的 worktree checkout（面板条目右端标注 `[wt]`）。
+    pub worktree: bool,
 }
 
 /// 提及面板的显示上限。

@@ -38,7 +38,7 @@ fn lists_files_and_directories_with_relative_paths() {
     write(&root, "src/app.rs", "fn main() {}");
     write(&root, "README.md", "# readme");
 
-    let entries = scan(&root);
+    let entries = scan(&root, false);
     assert_eq!(
         entry(&entries, "src").map(|entry| entry.is_directory),
         Some(true)
@@ -66,7 +66,7 @@ fn skips_hidden_and_ignored_directories_but_keeps_hidden_files() {
     write(&root, "src/main.rs", "fn main() {}");
     write(&root, ".gitignore", "");
 
-    let entries = scan(&root);
+    let entries = scan(&root, false);
     let listed = paths(&entries);
     for skipped in [".git", ".cache", "node_modules", "dist"] {
         assert!(!listed.contains(&skipped), "{skipped} should be skipped");
@@ -85,7 +85,7 @@ fn respects_gitignore_outside_git_repository() {
     write(&root, "server.log", "log");
     write(&root, "keep.rs", "fn main() {}");
 
-    let entries = scan(&root);
+    let entries = scan(&root, false);
     let listed = paths(&entries);
     assert!(!listed.contains(&"target"));
     assert!(!listed.contains(&"target/debug/build"));
@@ -102,7 +102,7 @@ fn stops_at_entry_limit() {
         write(&root, &format!("file{index}.rs"), "");
     }
 
-    let entries = scan_with_limit(&root, 2);
+    let entries = scan_with_limit(&root, 2, false);
     assert_eq!(entries.len(), 2);
 
     let _ = fs::remove_dir_all(&root);
@@ -115,7 +115,7 @@ fn skips_symbolic_links() {
     write(&root, "real.rs", "fn main() {}");
     std::os::unix::fs::symlink(root.join("real.rs"), root.join("link.rs")).expect("symlink");
 
-    let entries = scan(&root);
+    let entries = scan(&root, false);
     let listed = paths(&entries);
     assert!(listed.contains(&"real.rs"));
     assert!(!listed.contains(&"link.rs"));

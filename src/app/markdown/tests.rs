@@ -261,11 +261,13 @@ fn mention_insertion_appends_trailing_space() {
     let file = MentionEntry {
         path: "src/app.rs".into(),
         is_directory: false,
+        worktree: false,
     };
     assert_eq!(mention_insertion(&file), "@src/app.rs ");
     let directory = MentionEntry {
         path: "src".into(),
         is_directory: true,
+        worktree: false,
     };
     assert_eq!(mention_insertion(&directory), "@src/ ");
 }
@@ -276,18 +278,22 @@ fn filter_mentions_ranks_name_matches_first() {
         MentionEntry {
             path: "src/main.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "docs/appendix.md".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "app.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "src/app.rs".into(),
             is_directory: false,
+            worktree: false,
         },
     ];
     let filtered = filter_mentions(&entries, "app.rs");
@@ -301,14 +307,17 @@ fn filter_mentions_empty_query_sorts_by_path() {
         MentionEntry {
             path: "z.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "a.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "m.rs".into(),
             is_directory: false,
+            worktree: false,
         },
     ];
     let filtered = filter_mentions(&entries, "");
@@ -321,6 +330,7 @@ fn filter_mentions_matches_subsequence_and_caps_items() {
     let entries = vec![MentionEntry {
         path: "src/app.rs".into(),
         is_directory: false,
+        worktree: false,
     }];
     assert_eq!(filter_mentions(&entries, "sar").len(), 1);
     assert!(filter_mentions(&entries, "qzx").is_empty());
@@ -329,6 +339,7 @@ fn filter_mentions_matches_subsequence_and_caps_items() {
         .map(|index| MentionEntry {
             path: format!("file{index:03}.rs"),
             is_directory: false,
+            worktree: false,
         })
         .collect();
     assert_eq!(filter_mentions(&many, "").len(), MENTION_LIMIT);
@@ -340,6 +351,7 @@ fn mention_panel_wheel_scrolls_viewport_and_clamps() {
         .map(|index| MentionEntry {
             path: format!("f{index}.rs"),
             is_directory: false,
+            worktree: false,
         })
         .collect();
     let trigger = MentionTrigger {
@@ -366,6 +378,7 @@ fn mention_panel_hover_keeps_window_anchor() {
         .map(|index| MentionEntry {
             path: format!("f{index}.rs"),
             is_directory: false,
+            worktree: false,
         })
         .collect();
     let trigger = MentionTrigger {
@@ -395,10 +408,12 @@ fn mention_panel_move_wraps_both_directions() {
         MentionEntry {
             path: "a.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "b.rs".into(),
             is_directory: false,
+            worktree: false,
         },
     ];
     let trigger = MentionTrigger {
@@ -439,30 +454,37 @@ fn scoped_entries() -> Vec<MentionEntry> {
         MentionEntry {
             path: "src".into(),
             is_directory: true,
+            worktree: false,
         },
         MentionEntry {
             path: "src/app.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "src/main.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "src/ui".into(),
             is_directory: true,
+            worktree: false,
         },
         MentionEntry {
             path: "src/ui/mod.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "src/ui/main_map.rs".into(),
             is_directory: false,
+            worktree: false,
         },
         MentionEntry {
             path: "docs/main.md".into(),
             is_directory: false,
+            worktree: false,
         },
     ]
 }
@@ -495,6 +517,7 @@ fn filter_mentions_scope_prefix_is_case_insensitive() {
     let entries = vec![MentionEntry {
         path: "Src/App.rs".into(),
         is_directory: false,
+        worktree: false,
     }];
     assert_eq!(filter_mentions(&entries, "src/").len(), 1);
     assert_eq!(filter_mentions(&entries, "SRC/APP").len(), 1);
@@ -518,6 +541,7 @@ fn mention_panel_scope_name_reads_last_directory_segment() {
     let entries = vec![MentionEntry {
         path: "src/app.rs".into(),
         is_directory: false,
+        worktree: false,
     }];
     let panel_with = |query: &str| {
         MentionPanel::new(
@@ -878,19 +902,19 @@ fn worktree_marker_line_insert_replace_and_read() {
     bound.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         bound,
-        "&&& addTemplate --start\n{wt:feature/x}\nbody\n&&& addTemplate --end done {id:42}\n"
+        "&&& addTemplate --start\n{wt:feature/x}\n\nbody\n&&& addTemplate --end done {id:42}\n"
     );
     assert_eq!(
-        block_worktree_branch_at_line(&bound, 3),
+        block_worktree_branch_at_line(&bound, 4),
         Some((1, "feature/x".to_string()))
     );
-    // 已绑定：整行替换。
-    let (range, replacement) = set_line_worktree(&bound, 3, "main").expect("replace marker");
+    // 已绑定：整行替换（下方空行保留）。
+    let (range, replacement) = set_line_worktree(&bound, 4, "main").expect("replace marker");
     let mut rebound = bound.clone();
     rebound.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         rebound,
-        "&&& addTemplate --start\n{wt:main}\nbody\n&&& addTemplate --end done {id:42}\n"
+        "&&& addTemplate --start\n{wt:main}\n\nbody\n&&& addTemplate --end done {id:42}\n"
     );
     // 有标题行：绑定行插到标题行下一行。
     let titled = "&&& addTemplate --start\n{title: T}\nbody\n&&& addTemplate --end\n";
@@ -899,15 +923,54 @@ fn worktree_marker_line_insert_replace_and_read() {
     with_title.replace_range(range.start..range.end, &replacement);
     assert_eq!(
         with_title,
-        "&&& addTemplate --start\n{title: T}\n{wt:dev}\nbody\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: T}\n{wt:dev}\n\nbody\n&&& addTemplate --end\n"
     );
     assert_eq!(
-        block_worktree_branch_at_line(&with_title, 4),
+        block_worktree_branch_at_line(&with_title, 5),
         Some((2, "dev".to_string()))
     );
     // 结束行上的旧版 `{wt:}` 不再是绑定来源。
     let legacy = "&&& addTemplate --start\nbody\n&&& addTemplate --end {wt:main}\n";
     assert_eq!(block_worktree_branch_at_line(legacy, 2), None);
+}
+
+#[test]
+fn edit_touches_title_line_protects_marker_and_allows_value() {
+    let text = "&&& x --start\n{title: 标题}\n\nbody\n&&& x --end\n";
+    let start = text.find("{title:").expect("title line");
+    let prefix_end = start + "{title:".len();
+    let brace = start + "{title: 标题}".len() - 1;
+    let line_end = brace + 1;
+    // 值内编辑放行（含 `}` 前与 `:` 后）。
+    assert!(!edit_touches_title_line(text, prefix_end, prefix_end));
+    assert!(!edit_touches_title_line(text, brace, brace));
+    assert!(!edit_touches_title_line(
+        text,
+        prefix_end + 1,
+        prefix_end + 2
+    ));
+    assert!(!edit_touches_title_line(text, line_end, line_end));
+    // 前缀、收尾 `}` 与相邻换行被拒。
+    assert!(edit_touches_title_line(text, start, start + 1));
+    assert!(edit_touches_title_line(text, start, prefix_end));
+    assert!(edit_touches_title_line(text, prefix_end - 1, prefix_end));
+    assert!(edit_touches_title_line(text, brace, brace + 1));
+    // 删除值末尾字符（`}` 之前）放行。
+    assert!(!edit_touches_title_line(text, brace - 1, brace));
+    assert!(edit_touches_title_line(text, start, start));
+    assert!(edit_touches_title_line(text, start, line_end));
+    assert!(edit_touches_title_line(text, line_end, line_end + 1));
+    assert!(edit_touches_title_line(text, start - 1, start));
+    // 严格覆盖整行以上范围（清空全文、删整块）放行。
+    assert!(!edit_touches_title_line(text, 0, text.len()));
+    // 非结构性标题行（不在模板块起始行下一行）不受保护。
+    let loose = "正文\n{title: 不是结构行}\n";
+    let loose_start = loose.find("{title:").expect("title line");
+    assert!(!edit_touches_title_line(
+        loose,
+        loose_start,
+        loose_start + 2
+    ));
 }
 
 #[test]

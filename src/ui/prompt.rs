@@ -500,11 +500,12 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
     mention_layout(prompt, area).map(|layout| layout.rect)
 }
 
-/// 提及条目文本：图标、标签与父目录明细。
+/// 提及条目文本：图标、标签、父目录明细与来源标签（绑定 worktree 的条目为 `wt`）。
 struct MentionItemText {
     icon: &'static str,
     label: String,
     detail: String,
+    tag: &'static str,
 }
 
 /// 提及面板渲染数据：条目文本、高亮索引、窗口锚点/显式视口、锚点行与当前目录名。
@@ -516,8 +517,6 @@ struct MentionPanelData {
     anchor_row: u16,
     /// 当前进入的目录末段名；未进入文件夹时 None。
     scope: Option<String>,
-    /// 当前块是否绑定 worktree：条目右对齐显示 `[wt]` 来源标签。
-    worktree: bool,
 }
 
 impl MentionPanelData {
@@ -529,11 +528,7 @@ impl MentionPanelData {
                 icon: Some(entry.icon),
                 label: entry.label.as_str(),
                 detail: entry.detail.as_str(),
-                tag: if self.worktree {
-                    text::MENTION_WORKTREE_TAG
-                } else {
-                    ""
-                },
+                tag: entry.tag,
             })
             .collect()
     }
@@ -544,11 +539,6 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
     let panel = prompt.mention()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
     let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
-    // 绑定解析为唯一 checkout 时，候选来自该 worktree，条目标注来源。
-    let worktree = matches!(
-        prompt.block_binding(),
-        Some(crate::app::markdown::WorktreeBinding::Bound(_))
-    );
     Some(MentionPanelData {
         texts: panel
             .items()
@@ -560,7 +550,6 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
         viewport: panel.viewport(),
         anchor_row,
         scope: panel.scope_name().map(str::to_string),
-        worktree,
     })
 }
 
@@ -610,10 +599,16 @@ fn mention_item_text(entry: &MentionEntry, detail_width: usize) -> MentionItemTe
     } else {
         text::MENTION_FILE_ICON
     };
+    let tag = if entry.worktree {
+        text::MENTION_WORKTREE_TAG
+    } else {
+        ""
+    };
     MentionItemText {
         icon,
         label,
         detail,
+        tag,
     }
 }
 

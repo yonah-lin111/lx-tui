@@ -349,7 +349,7 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// 标签栏右端退出按钮；贴屏幕右缘，右缘与右栏折叠态按钮对齐。
-pub const EXIT_LABEL: &str = "[exit]";
+pub const EXIT_LABEL: &str = "[EXIT]";
 
 /// 复制反馈 toast。
 pub const TOAST_COPIED: &str = "Copied to clipboard";
@@ -442,7 +442,7 @@ pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 
 /// prompt 底边框左侧设置按钮与 tooltip。
 /// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
-pub const SETTINGS_LABEL: &str = "[setting]";
+pub const SETTINGS_LABEL: &str = "[SET]";
 
 /// 提及面板的来源标签：绑定 worktree 时条目右对齐显示 `[wt]`。
 pub const MENTION_WORKTREE_TAG: &str = "wt";

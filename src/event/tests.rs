@@ -1853,6 +1853,7 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
         .map(|index| crate::app::markdown::MentionEntry {
             path: format!("src/f{index}.rs"),
             is_directory: false,
+            worktree: false,
         })
         .collect();
     let prompt = state.prompt.id();

@@ -65,7 +65,7 @@ impl App {
         });
 
         assert!(
-            wait_for(&emulator, "[exit]", WAIT),
+            wait_for(&emulator, "[EXIT]", WAIT),
             "app must render the exit button"
         );
         // 默认 lx 页：点击窗格顶栏右端切换按钮进入终端视图。

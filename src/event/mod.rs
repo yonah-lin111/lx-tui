@@ -1414,12 +1414,16 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
         return;
     }
     let prompt = state.prompt.id();
-    let Some((generation, root)) = state.prompt.take_mention_scan_request() else {
+    let Some((generation, roots)) = state.prompt.take_mention_scan_request() else {
         return;
     };
     let sender = sender.clone();
     tokio::task::spawn_blocking(move || {
-        let entries = crate::files::scan(&root);
+        // 块绑定 worktree 时同时扫描绑定 checkout 与仓库主 checkout（首个来源优先）。
+        let mut entries = Vec::new();
+        for root in roots {
+            entries.extend(crate::files::scan(&root.path, root.worktree));
+        }
         let _ = sender.send(AppEvent::MentionScanned {
             prompt,
             generation,

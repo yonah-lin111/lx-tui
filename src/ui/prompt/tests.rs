@@ -286,10 +286,12 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
+                worktree: false,
             },
             MentionEntry {
                 path: "src/lib.rs".into(),
                 is_directory: false,
+                worktree: false,
             },
         ],
     );
@@ -335,22 +337,38 @@ fn mention_panel_tags_rows_when_block_binds_a_worktree() {
     editor.set_cursor_offset_for_test(body_end);
     editor.insert_char(' ');
     editor.insert_char('@');
-    let (generation, root) = editor.take_mention_scan_request().expect("scan request");
-    assert_eq!(root, std::path::PathBuf::from("/repo/.worktrees/feat"));
+    let (generation, roots) = editor.take_mention_scan_request().expect("scan request");
+    assert_eq!(
+        roots.first().map(|root| root.path.clone()),
+        Some(std::path::PathBuf::from("/repo/.worktrees/feat")),
+        "绑定 checkout 优先"
+    );
+    assert_eq!(roots.len(), 2, "绑定后同时扫描主 checkout: {roots:?}");
+    // 绑定 checkout 的候选与主 checkout 的候选并存：只有 worktree 来源带 [wt]。
     editor.apply_mention_entries(
         generation,
-        vec![MentionEntry {
-            path: "src/app.rs".into(),
-            is_directory: false,
-        }],
+        vec![
+            MentionEntry {
+                path: "src/app.rs".into(),
+                is_directory: false,
+                worktree: true,
+            },
+            MentionEntry {
+                path: "src/main_only.rs".into(),
+                is_directory: false,
+                worktree: false,
+            },
+        ],
     );
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &editor, None);
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert!(painted.contains("app.rs"), "{painted}");
-    assert!(
-        painted.contains("[wt]"),
-        "绑定 checkout 的条目带 [wt]: {painted}"
+    assert!(painted.contains("main_only.rs"), "{painted}");
+    assert_eq!(
+        painted.matches("[wt]").count(),
+        1,
+        "仅绑定 checkout 的条目带 [wt]: {painted}"
     );
 
     // 未绑定的块：候选来自显式根，条目不标注来源。
@@ -362,13 +380,15 @@ fn mention_panel_tags_rows_when_block_binds_a_worktree() {
     plain.set_cursor_offset_for_test(body_end);
     plain.insert_char(' ');
     plain.insert_char('@');
-    let (generation, root) = plain.take_mention_scan_request().expect("scan request");
-    assert_eq!(root, std::path::PathBuf::from("/fallback"));
+    let (generation, roots) = plain.take_mention_scan_request().expect("scan request");
+    assert_eq!(roots.len(), 1);
+    assert_eq!(roots[0].path, std::path::PathBuf::from("/fallback"));
     plain.apply_mention_entries(
         generation,
         vec![MentionEntry {
             path: "src/app.rs".into(),
             is_directory: false,
+            worktree: false,
         }],
     );
     let mut buf = Buffer::empty(area);
@@ -391,10 +411,12 @@ fn mention_panel_marks_directory_and_file_icons() {
             MentionEntry {
                 path: "src".into(),
                 is_directory: true,
+                worktree: false,
             },
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
+                worktree: false,
             },
         ],
     );
@@ -424,10 +446,12 @@ fn mention_panel_renders_title_folder_name_and_footer() {
             MentionEntry {
                 path: "src".into(),
                 is_directory: true,
+                worktree: false,
             },
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
+                worktree: false,
             },
         ],
     );
@@ -475,6 +499,7 @@ fn mention_panel_middle_truncates_overlong_parent_path() {
         vec![MentionEntry {
             path: "alpha/beta/gamma/delta/epsilon/zeta/file.rs".into(),
             is_directory: false,
+            worktree: false,
         }],
     );
     let mut buf = Buffer::empty(area);
@@ -515,6 +540,7 @@ fn mention_panel_window_keeps_still_when_hovering_visible_item() {
         .map(|index| MentionEntry {
             path: format!("src/f{index}.rs"),
             is_directory: false,
+            worktree: false,
         })
         .collect();
     editor.apply_mention_entries(generation, entries);

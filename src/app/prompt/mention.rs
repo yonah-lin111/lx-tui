@@ -13,6 +13,14 @@ use super::super::markdown::{
     resolve_binding,
 };
 
+/// 一次提及扫描的根：路径与候选来源（是否块绑定的 worktree checkout）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MentionRoot {
+    pub path: PathBuf,
+    /// 候选来自块绑定的 worktree checkout（面板条目右端标注 `[wt]`）。
+    pub worktree: bool,
+}
+
 /// 文件提及面板状态：面板、扫描根、缓存、在途代号、高亮与 worktree 绑定。
 #[derive(Debug, Default)]
 pub struct MentionState {
@@ -82,19 +90,22 @@ impl MentionState {
         Some(resolve_binding(candidates, &branch))
     }
 
-    /// 需要新扫描时返回（代号，根路径）并标记处理中；仅事件循环调用。
-    pub fn take_scan_request(&mut self, text: &str, cursor: usize) -> Option<(u64, PathBuf)> {
+    /// 需要新扫描时返回（代号，扫描根列表）并标记处理中；仅事件循环调用。
+    pub fn take_scan_request(
+        &mut self,
+        text: &str,
+        cursor: usize,
+    ) -> Option<(u64, Vec<MentionRoot>)> {
         if self.pending {
             return None;
         }
-        let root = self.effective_root(text, cursor);
-        let root = root?;
+        let roots = self.effective_roots(text, cursor)?;
         if self.cache.is_some() {
             return None;
         }
         markdown::mention_trigger(text, cursor)?;
         self.pending = true;
-        Some((self.generation, root))
+        Some((self.generation, roots))
     }
 
     /// 需要 worktree 列表时返回仓库根；查询在途或仓库未知时 None。
@@ -250,9 +261,9 @@ impl MentionState {
     /// 同步扫描根；根或 worktree 绑定变化时清除缓存、关闭面板并作废在途结果；
     /// 根未变化也重算面板（绑定可能随光标移动切换）。
     pub fn set_root(&mut self, root: Option<PathBuf>, text: &str, cursor: usize) {
-        let previous = self.effective_root(text, cursor);
+        let previous = self.effective_roots(text, cursor);
         self.root = root;
-        let current = self.effective_root(text, cursor);
+        let current = self.effective_roots(text, cursor);
         if current != previous {
             self.cache = None;
             self.pending = false;
@@ -285,18 +296,48 @@ impl MentionState {
             return false;
         }
         self.pending = false;
-        self.cache = Some(entries);
+        self.cache = Some(Self::merge_roots(entries));
         self.refresh(text, cursor);
         true
     }
 
-    /// 当前扫描根：块内绑定优先，其次显式根/工作区 cwd；绑定不可解析时 None。
-    fn effective_root(&self, text: &str, cursor: usize) -> Option<PathBuf> {
+    /// 当前扫描根：块内绑定时同时提供绑定 checkout（`[wt]`）与仓库主 checkout，
+    /// 未绑定时为显式根/工作区 cwd；绑定不可解析时 None。
+    fn effective_roots(&self, text: &str, cursor: usize) -> Option<Vec<MentionRoot>> {
         match self.block_binding(text, cursor) {
-            Some(WorktreeBinding::Bound(candidate)) => Some(candidate.path),
+            Some(WorktreeBinding::Bound(candidate)) => {
+                let mut roots = vec![MentionRoot {
+                    path: candidate.path.clone(),
+                    worktree: true,
+                }];
+                // 绑定 checkout 之外，主 checkout 的文件同样可选（同一仓库）。
+                if let Some(repo) = self.worktree_repo.as_ref()
+                    && repo != &candidate.path
+                {
+                    roots.push(MentionRoot {
+                        path: repo.clone(),
+                        worktree: false,
+                    });
+                }
+                Some(roots)
+            }
             Some(WorktreeBinding::Missing(_) | WorktreeBinding::Ambiguous(_)) => None,
-            Some(WorktreeBinding::None) | None => self.root.clone(),
+            Some(WorktreeBinding::None) | None => self.root.clone().map(|path| {
+                vec![MentionRoot {
+                    path,
+                    worktree: false,
+                }]
+            }),
         }
+    }
+
+    /// 合并多根候选：同一相对路径只保留首个（绑定 worktree 先于主 checkout）。
+    fn merge_roots(entries: Vec<MentionEntry>) -> Vec<MentionEntry> {
+        let mut seen = std::collections::HashSet::with_capacity(entries.len());
+        entries
+            .into_iter()
+            .filter(|entry| seen.insert(entry.path.clone()))
+            .collect()
     }
 
     /// 重算面板：触发或缓存缺失时隐藏，同起点且同目录范围保留高亮。

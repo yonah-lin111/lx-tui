@@ -96,7 +96,10 @@ pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
 }
 
 /// 把结束行所在块的绑定写为 `branch`：块顶部已有绑定行则整行替换，
-/// 否则在绑定位置插入一行；返回（替换范围, 新文本）。
+/// 否则在绑定位置插入一行；绑定行下方保留一个空行分隔元数据与正文。
+///
+/// 返回（替换范围, 新文本）：插入时范围是绑定位置的空区间，替换时覆盖
+/// 绑定行整行（含换行）；新文本自带绑定行的换行。
 pub fn set_line_worktree(
     text: &str,
     end_line: usize,
@@ -112,10 +115,37 @@ pub fn set_line_worktree(
         && parse_worktree_line(previous).is_some()
     {
         let (range, _) = nth_line_range(text, marker_line)?;
-        return Some((range, marker));
+        let range = line_slot(text, range);
+        return Some((range, binding_line_text(text, marker_line, &marker)));
     }
-    let (range, _) = nth_line_range(text, marker_line.min(end_line))?;
-    Some((range.start..range.start, format!("{marker}\n")))
+    let target = marker_line.min(end_line);
+    let (range, _) = nth_line_range(text, target)?;
+    // 插入的绑定行把原目标行下推：原行非空时补一个空行做分隔。
+    let gap = follows_blank(text, target);
+    Some((range.start..range.start, format!("{marker}\n{gap}")))
+}
+
+/// 行内容范围扩展为整行槽位：含尾随换行（末行无换行时保持原范围）。
+fn line_slot(text: &str, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    if text[range.end..].starts_with('\n') {
+        range.start..range.end + 1
+    } else {
+        range
+    }
+}
+
+/// 绑定行整行文本（含换行）加下方空行：紧随其后的原行非空时才补空行。
+fn binding_line_text(text: &str, line: usize, marker: &str) -> String {
+    format!("{marker}\n{}", follows_blank(text, line + 1))
+}
+
+/// 指定行非空时返回分隔用空行 `"\n"`；行缺失或已空返回空串。
+fn follows_blank(text: &str, line: usize) -> &'static str {
+    if nth_line(text, line).is_some_and(|next| !next.trim().is_empty()) {
+        "\n"
+    } else {
+        ""
+    }
 }
 
 /// 受保护绑定行的字节范围（整行内容，不含换行）：`{wt:}` 独占一行且位于模板块顶部。

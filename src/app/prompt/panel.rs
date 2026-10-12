@@ -247,15 +247,17 @@ impl Prompt {
         };
         let valid_trigger =
             trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len();
-        // 命令行恰好位于绑定位置时，绑定行直接占用该行（只换内容、保留该行与换行）。
+        // 命令行恰好位于绑定位置时，绑定行直接占用该行（整行槽位替换，含换行）。
         let occupy_trigger =
             valid_trigger && marker_range.is_empty() && marker_range.start == trigger.line_start;
         let mut edits = Vec::new();
         if occupy_trigger {
-            edits.push((
-                trigger.line_start..trigger.line_end,
-                marker_text.trim_end_matches('\n').to_string(),
-            ));
+            let slot_end = if self.text[trigger.line_end..].starts_with('\n') {
+                trigger.line_end + 1
+            } else {
+                trigger.line_end
+            };
+            edits.push((trigger.line_start..slot_end, marker_text.clone()));
         } else {
             edits.push((marker_range, marker_text));
             if valid_trigger {

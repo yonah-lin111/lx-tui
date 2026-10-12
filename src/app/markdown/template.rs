@@ -441,6 +441,80 @@ pub fn is_title_line(line: &str) -> bool {
     parse_title_line(line).is_some()
 }
 
+/// 结构性标题行（模板块起始行下一行）的标记区间：受保护的 `{title:` 前缀
+/// 与收尾 `}` 及其后区域，之间的值为可编辑区。
+struct TitleMarker {
+    line_start: usize,
+    prefix_end: usize,
+    brace: usize,
+    line_end: usize,
+}
+
+/// 全部结构性标题行的标记区间。
+fn title_markers(text: &str) -> Vec<TitleMarker> {
+    let lines: Vec<&str> = text.split('\n').collect();
+    let mut offsets = Vec::with_capacity(lines.len());
+    let mut offset = 0;
+    for line in &lines {
+        offsets.push(offset);
+        offset += line.len() + 1;
+    }
+    let mut markers = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        if parse_template_start_line(line).is_none() {
+            continue;
+        }
+        let Some(next) = lines.get(index + 1) else {
+            continue;
+        };
+        if !is_title_line(next) {
+            continue;
+        }
+        let trimmed_len = next.trim_end().len();
+        let Some(line_start) = offsets.get(index + 1).copied() else {
+            continue;
+        };
+        let indent = next.len() - next.trim_start().len();
+        markers.push(TitleMarker {
+            line_start,
+            prefix_end: line_start + indent + "{title:".len(),
+            brace: line_start + trimmed_len.saturating_sub(1),
+            line_end: line_start + next.len(),
+        });
+    }
+    markers
+}
+
+/// 目标编辑是否移除或改写结构性标题行 `{title: …}` 的标记：值内编辑放行；
+/// 触碰 `{title:` 前缀、收尾 `}` 或相邻换行被拒绝；严格覆盖整行以上范围
+/// （清空全文、删整块）放行。
+pub fn edit_touches_title_line(text: &str, from: usize, to: usize) -> bool {
+    let insertion = from == to;
+    for marker in title_markers(text) {
+        if insertion {
+            // 只禁止写入前缀区（`{title:` 及其之前）；值内与 `}` 之后的插入放行，
+            // 换行不区分内容，避免误伤行尾回车。
+            if from >= marker.line_start && from < marker.prefix_end {
+                return true;
+            }
+            continue;
+        }
+        if from < marker.line_start && to > marker.line_end {
+            continue;
+        }
+        if to == marker.line_start || from == marker.line_end {
+            return true;
+        }
+        if from < marker.prefix_end && to > marker.line_start {
+            return true;
+        }
+        if to > marker.brace && from < marker.line_end {
+            return true;
+        }
+    }
+    false
+}
+
 /// 复制语义下的子块类型：`+++` 补充块整体剔除；`%%%` 记录块保留内容、剔除标记。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CopySubblock {

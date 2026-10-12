@@ -2,6 +2,7 @@
 
 mod list;
 mod mention;
+pub use mention::MentionRoot;
 mod panel;
 mod template;
 pub mod tree;
@@ -492,7 +493,7 @@ impl Prompt {
     }
 
     /// 需要新扫描时返回（代号，根路径）并标记处理中；仅事件循环调用。
-    pub fn take_mention_scan_request(&mut self) -> Option<(u64, PathBuf)> {
+    pub fn take_mention_scan_request(&mut self) -> Option<(u64, Vec<mention::MentionRoot>)> {
         self.mention.take_scan_request(&self.text, self.cursor)
     }
 
@@ -816,6 +817,7 @@ impl Prompt {
     /// 编辑是否触碰受保护的 `{wt:}` 绑定行；触碰时拒绝该次编辑。
     fn protected_edit(&self, from: usize, to: usize) -> bool {
         markdown::edit_touches_worktree_line(&self.text, from, to)
+            || markdown::edit_touches_title_line(&self.text, from, to)
     }
 
     /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。

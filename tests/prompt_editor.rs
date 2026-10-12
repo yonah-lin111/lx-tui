@@ -220,6 +220,7 @@ fn mention_panel_renders_and_confirms_insertion() {
         vec![MentionEntry {
             path: "src/app.rs".into(),
             is_directory: false,
+            worktree: false,
         }],
     );
 
@@ -253,6 +254,7 @@ fn mention_panel_wheel_scrolls_viewport_and_keeps_active() {
         .map(|index| MentionEntry {
             path: format!("src/f{index}.rs"),
             is_directory: false,
+            worktree: false,
         })
         .collect();
     let prompt = state.prompt.id();
@@ -305,14 +307,17 @@ fn mention_panel_folder_navigation_flow() {
             MentionEntry {
                 path: "docs/readme.md".into(),
                 is_directory: false,
+                worktree: false,
             },
             MentionEntry {
                 path: "src".into(),
                 is_directory: true,
+                worktree: false,
             },
             MentionEntry {
                 path: "src/app.rs".into(),
                 is_directory: false,
+                worktree: false,
             },
         ],
     );
