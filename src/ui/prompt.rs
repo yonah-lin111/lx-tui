@@ -516,6 +516,8 @@ struct MentionPanelData {
     anchor_row: u16,
     /// 当前进入的目录末段名；未进入文件夹时 None。
     scope: Option<String>,
+    /// 当前块是否绑定 worktree：条目右对齐显示 `[wt]` 来源标签。
+    worktree: bool,
 }
 
 impl MentionPanelData {
@@ -527,6 +529,11 @@ impl MentionPanelData {
                 icon: Some(entry.icon),
                 label: entry.label.as_str(),
                 detail: entry.detail.as_str(),
+                tag: if self.worktree {
+                    text::MENTION_WORKTREE_TAG
+                } else {
+                    ""
+                },
             })
             .collect()
     }
@@ -537,6 +544,11 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
     let panel = prompt.mention()?;
     let (anchor_row, _) = prompt.cursor_cell()?;
     let detail_width = usize::from(width).saturating_sub(MENTION_DETAIL_MARGIN);
+    // 绑定解析为唯一 checkout 时，候选来自该 worktree，条目标注来源。
+    let worktree = matches!(
+        prompt.block_binding(),
+        Some(crate::app::markdown::WorktreeBinding::Bound(_))
+    );
     Some(MentionPanelData {
         texts: panel
             .items()
@@ -548,6 +560,7 @@ fn mention_panel_data(prompt: &Prompt, width: u16) -> Option<MentionPanelData> {
         viewport: panel.viewport(),
         anchor_row,
         scope: panel.scope_name().map(str::to_string),
+        worktree,
     })
 }
 

@@ -35,6 +35,8 @@ pub enum CommandItem<'a> {
         icon: Option<&'a str>,
         label: &'a str,
         detail: &'a str,
+        /// 首行右对齐来源标签（如 `wt`），空串表示无标签。
+        tag: &'a str,
     },
 }
 
@@ -253,9 +255,8 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
         .unwrap_or(0);
     let tag = items
         .iter()
-        .filter_map(|item| match item {
-            CommandItem::Inline { tag, .. } => Some(tag.width()),
-            CommandItem::Stacked { .. } => None,
+        .map(|item| match item {
+            CommandItem::Inline { tag, .. } | CommandItem::Stacked { tag, .. } => tag.width(),
         })
         .max()
         .unwrap_or(0);
@@ -268,8 +269,8 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
     let tag = if tag == 0 { 0 } else { TAG_GAP + tag };
     let content = match (has_inline, has_stacked) {
         (true, false) => label + COLUMN_GAP + preview + tag,
-        (false, true) => label.max(detail),
-        _ => (label + COLUMN_GAP + preview + tag).max(label.max(detail)),
+        (false, true) => label.max(detail) + tag,
+        _ => (label + COLUMN_GAP + preview + tag).max(label.max(detail) + tag),
     };
     // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
     let header = view.title.map_or(0, |title| title.width() + 2)
@@ -416,13 +417,26 @@ fn render_item(
             icon,
             label,
             detail,
+            tag,
         } => {
+            let available = usize::from(inner.width);
             let mut spans = vec![Span::raw(" ")];
             if let Some(icon) = icon {
                 spans.push(Span::styled(*icon, style::muted()));
                 spans.push(Span::raw(" "));
             }
             spans.push(Span::styled(*label, style::text()));
+            if !tag.is_empty() {
+                let tag_label = format!("[{tag}]");
+                let used: usize = spans.iter().map(|span| span.content.width()).sum();
+                let pad = available
+                    .saturating_sub(used)
+                    .saturating_sub(tag_label.width());
+                if pad > 0 {
+                    spans.push(Span::raw(" ".repeat(pad)));
+                    spans.push(Span::styled(tag_label, style::muted()));
+                }
+            }
             let mut lines = vec![Line::from(spans)];
             if !detail.is_empty() {
                 lines.push(Line::from(vec![

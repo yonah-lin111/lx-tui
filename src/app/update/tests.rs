@@ -127,7 +127,7 @@ fn shift_tab_cycles_template_status_inside_block_else_outdents() {
     apply_editor(
         &mut state,
         EditorCommand::InsertText(
-            "&&& addTemplate --start\n「title: 」\nbody\n&&& addTemplate --end".into(),
+            "&&& addTemplate --start\n{title: }\nbody\n&&& addTemplate --end".into(),
         ),
     );
     apply_editor(&mut state, EditorCommand::Outdent);
@@ -3308,7 +3308,7 @@ fn slash_panel_keys_are_consumed_before_editing() {
         state
             .prompt
             .text()
-            .starts_with("&&& addTemplate --start\n「title: 」")
+            .starts_with("&&& addTemplate --start\n{title: }")
     );
     assert!(state.prompt.slash_panel().is_none());
 }

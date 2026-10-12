@@ -21,7 +21,7 @@ pub enum TokenKind {
     TemplateMarker,
     /// 模板块命令名；`None` 为未知命令。
     TemplateCommand(Option<SlashCommandId>),
-    /// 标题占位符 `「title: …」`。
+    /// 标题占位符 `{title: …}`。
     TemplateTitle,
     /// `@path/to/file` 文件提及。
     FileMention,
@@ -118,27 +118,23 @@ fn scan_template_start(line: &str, tokens: &mut Vec<Token>) -> bool {
     if let Some((_, range)) = spans.iter().find(|(text, _)| *text == "--start") {
         push(tokens, range.clone(), TokenKind::TemplateMarker);
     }
-    if let Some(open) = line.find('「')
-        && let Some(close) = line[open..].find('」')
+    if let Some(open) = line.find("{title:")
+        && let Some(close) = line[open..].find('}')
     {
-        push(
-            tokens,
-            open..open + close + '」'.len_utf8(),
-            TokenKind::TemplateTitle,
-        );
+        push(tokens, open..open + close + 1, TokenKind::TemplateTitle);
     }
     true
 }
 
-/// 模板块内独立成行的标题占位符 `「title: …」` 区间（允许缩进与尾随空白）；
+/// 模板块内独立成行的标题占位符 `{title: …}` 区间（允许缩进与尾随空白）；
 /// 用于 `--start` 下一行行首的标题行高亮。
 fn standalone_title(line: &str) -> Option<Range<usize>> {
     if !markdown::is_title_line(line) {
         return None;
     }
     let start = line.len() - line.trim_start().len();
-    let close = line[start..].find('」')?;
-    Some(start..start + close + '」'.len_utf8())
+    let close = line[start..].find('}')?;
+    Some(start..start + close + 1)
 }
 
 /// 模板块结束行 token：`&&&`、`--end`、状态词与 `{id:}`/`{wt:}` 元数据为结构标记，

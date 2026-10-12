@@ -116,7 +116,7 @@ pub struct CommandRecord {
     pub scope: MdScope,
     pub description: String,
     pub argument_hint: Option<String>,
-    /// `agentBlock` 的可选标题；写入默认模板块的 `「title: …」`。
+    /// `agentBlock` 的可选标题；写入默认模板块的 `{title: …}`。
     pub title: Option<String>,
     /// 插入正文。
     pub body: String,

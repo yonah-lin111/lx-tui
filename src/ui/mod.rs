@@ -606,11 +606,11 @@ pub fn settings_button_at(
     settings_button(view, state).is_some_and(|area| area.contains((column, row).into()))
 }
 
-/// 设置按钮几何常量：宽度 3（`[≡]`）、左边距 1 列（紧贴左边框内侧，与右端折叠按钮对称）。
-const SETTINGS_BUTTON_WIDTH: u16 = 3;
+/// 设置按钮几何常量：宽度取自文案、左边距 1 列（紧贴左边框内侧，与右端折叠按钮对称）。
+const SETTINGS_BUTTON_WIDTH: u16 = text::SETTINGS_LABEL.len() as u16;
 const SETTINGS_BUTTON_MARGIN: u16 = 1;
-/// 显示设置按钮所需的最小侧栏宽度：图标 + 右端折叠按钮的安全余量。
-const SETTINGS_BUTTON_MIN_WIDTH: u16 = 12;
+/// 显示设置按钮所需的最小侧栏宽度：按钮 + 右端折叠按钮与其边距的安全余量。
+const SETTINGS_BUTTON_MIN_WIDTH: u16 = SETTINGS_BUTTON_WIDTH + 3 + 1 + 2;
 
 /// 绘制侧栏底边框左侧设置按钮：逐格 reset + 强调色，与折叠按钮绘制方式一致。
 fn render_settings_button(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &AppState) {

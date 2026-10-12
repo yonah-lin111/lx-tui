@@ -441,8 +441,11 @@ pub const SLASH_WORKTREE_LABEL: &str = "/gitWorkTree";
 pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 
 /// prompt 底边框左侧设置按钮与 tooltip。
-/// 设置按钮：单宽、非 emoji 的菜单符号（终端字体必定单色，避免彩色 emoji 与宽度偏移）。
-pub const SETTINGS_LABEL: &str = "[≡]";
+/// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
+pub const SETTINGS_LABEL: &str = "[setting]";
+
+/// 提及面板的来源标签：绑定 worktree 时条目右对齐显示 `[wt]`。
+pub const MENTION_WORKTREE_TAG: &str = "wt";
 
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";

@@ -168,7 +168,7 @@ fn empty_text_yields_single_empty_line() {
 #[test]
 fn template_start_line_tokens_split_by_semantics() {
     assert_eq!(
-        kinds("&&& addTemplate --start 「title: 」"),
+        kinds("&&& addTemplate --start {title: }"),
         vec![
             (TokenKind::TemplateMarker, "&&&"),
             (
@@ -176,7 +176,7 @@ fn template_start_line_tokens_split_by_semantics() {
                 "addTemplate"
             ),
             (TokenKind::TemplateMarker, "--start"),
-            (TokenKind::TemplateTitle, "「title: 」"),
+            (TokenKind::TemplateTitle, "{title: }"),
         ]
     );
     assert_eq!(
@@ -191,12 +191,11 @@ fn template_start_line_tokens_split_by_semantics() {
 
 #[test]
 fn template_title_on_own_line_is_styled_inside_block() {
-    let lines = summarize(
-        "&&& addTemplate --start\n「title: 」\n# Add\n&&& addTemplate --end\n「title: 」",
-    );
+    let lines =
+        summarize("&&& addTemplate --start\n{title: }\n# Add\n&&& addTemplate --end\n{title: }");
     assert_eq!(
         lines[1],
-        vec![(TokenKind::TemplateTitle, "「title: 」")],
+        vec![(TokenKind::TemplateTitle, "{title: }")],
         "块内独立标题行高亮"
     );
     assert!(lines[4].is_empty(), "块外同名行不高亮: {:?}", lines[4]);
@@ -231,7 +230,7 @@ fn template_end_line_tokens_include_status_and_metadata() {
 #[test]
 fn template_body_lines_keep_markdown_highlight() {
     let summary =
-        summarize("&&& addTemplate --start 「title: 」\n# Add Requirement\n&&& addTemplate --end");
+        summarize("&&& addTemplate --start {title: }\n# Add Requirement\n&&& addTemplate --end");
     assert_eq!(
         summary[1],
         vec![

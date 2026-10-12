@@ -246,12 +246,9 @@ impl Prompt {
         };
         let valid_trigger =
             trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len();
-        // 命令行为结束行上一行时，绑定行直接占用该行（只换内容、保留该行与换行）。
-        let trigger_line = self.text[..trigger.line_start.min(self.text.len())]
-            .matches('\n')
-            .count();
+        // 命令行恰好位于绑定位置时，绑定行直接占用该行（只换内容、保留该行与换行）。
         let occupy_trigger =
-            valid_trigger && marker_range.is_empty() && trigger_line + 1 == block_end_line;
+            valid_trigger && marker_range.is_empty() && marker_range.start == trigger.line_start;
         let mut edits = Vec::new();
         if occupy_trigger {
             edits.push((

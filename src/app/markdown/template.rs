@@ -64,7 +64,7 @@ const TEMPLATE_RESERVED: [&str; 6] = [
     "logTemplate",
 ];
 
-/// 解析模板块起始行：`&&& <command> [--start] [「title: …」]`。
+/// 解析模板块起始行：`&&& <command> [--start] [{title: …}]`。
 pub fn parse_template_start_line(line: &str) -> Option<TemplateStartLine<'_>> {
     let trimmed = line.trim_start_matches(' ');
     let indent = &line[..line.len() - trimmed.len()];
@@ -90,9 +90,9 @@ pub fn parse_template_start_line(line: &str) -> Option<TemplateStartLine<'_>> {
     let title = if rest.trim().is_empty() {
         None
     } else {
-        let after = rest.trim_start_matches(' ').strip_prefix("「title:")?;
-        let close = after.find('」')?;
-        if !after[close + '」'.len_utf8()..].trim().is_empty() {
+        let after = rest.trim_start_matches(' ').strip_prefix("{title:")?;
+        let close = after.find('}')?;
+        if !after[close + 1..].trim().is_empty() || after[..close].contains(['{', '}']) {
             return None;
         }
         Some(&after[..close])
@@ -428,14 +428,17 @@ pub fn copy_template_content(text: &str) -> String {
     clean_template_content(&kept.join("\n"))
 }
 
-/// 独立成行的标题占位行 `「title: …」`（允许缩进与尾随空白）。
+/// 解析独立标题行 `{title: …}`（允许缩进与尾随空白）；返回冒号后的原始内容。
+pub fn parse_title_line(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let inner = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let title = inner.strip_prefix("title:")?;
+    (!title.contains(['{', '}'])).then_some(title)
+}
+
+/// `line` 是否为独立标题行 `{title: …}`。
 pub fn is_title_line(line: &str) -> bool {
-    let rest = line.trim_start();
-    if !rest.starts_with("「title:") {
-        return false;
-    }
-    rest.find('」')
-        .is_some_and(|close| rest[close + '」'.len_utf8()..].trim().is_empty())
+    parse_title_line(line).is_some()
 }
 
 /// 复制语义下的子块类型：`+++` 补充块整体剔除；`%%%` 记录块保留内容、剔除标记。

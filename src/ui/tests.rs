@@ -2502,7 +2502,11 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
         .collect();
     assert!(bottom.contains(text::SETTINGS_LABEL), "{bottom}");
     assert_eq!(
-        bottom.chars().skip(1).take(3).collect::<String>(),
+        bottom
+            .chars()
+            .skip(1)
+            .take(text::SETTINGS_LABEL.chars().count())
+            .collect::<String>(),
         text::SETTINGS_LABEL,
         "左边距 1 列: {bottom}"
     );
