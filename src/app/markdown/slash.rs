@@ -206,7 +206,7 @@ pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
             body,
         } => Some(agent_block_content(command, title.as_deref(), body)),
         SlashInsertion::WorktreeChooser
-        | SlashInsertion::WorktreeBinding(_)
+        | SlashInsertion::WorktreeBinding { .. }
         | SlashInsertion::Placeholder => None,
     }
 }
@@ -332,7 +332,8 @@ pub enum SlashInsertion {
     /// `/gitWorkTree`：不直接插入，打开二级 worktree 选择器。
     WorktreeChooser,
     /// 二级选择器条目：把对应分支写回块结束行上方的 `{wt:}` 行。
-    WorktreeBinding(String),
+    /// 选择器条目确认写入的绑定：分支名与是否为主 checkout（主 checkout 表示解除绑定）。
+    WorktreeBinding { branch: String, is_main: bool },
     /// 选择器占位行：不可确认。
     Placeholder,
 }
@@ -431,7 +432,10 @@ impl SlashItem {
         Self {
             name: candidate.branch.clone(),
             source: CommandSource::Git,
-            insertion: SlashInsertion::WorktreeBinding(candidate.branch.clone()),
+            insertion: SlashInsertion::WorktreeBinding {
+                branch: candidate.branch.clone(),
+                is_main: candidate.is_main,
+            },
             preview: candidate.path.display().to_string(),
             scope: SlashScope::Global,
             selectable: true,

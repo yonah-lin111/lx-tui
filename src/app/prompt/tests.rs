@@ -1749,9 +1749,9 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
     prompt.backspace();
     assert!(prompt.slash_confirm(), "opens chooser");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
-        branch: "main".into(),
-        path: PathBuf::from("/repo"),
-        is_main: true,
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
     }]);
     prompt.rebuild_worktree_entries();
     assert!(prompt.slash_confirm(), "confirm binding");
@@ -1762,10 +1762,17 @@ fn worktree_chooser_keeps_a_non_adjacent_command_line() {
         text.matches('\n').count(),
         fixture.matches('\n').count() + 2
     );
+    // 光标留在被清空的命令行上（不因下方插入绑定行而落到下一行）。
+    assert_eq!(
+        prompt.cursor_cell().map(|cell| cell.0),
+        Some(2),
+        "{}",
+        prompt.text()
+    );
     assert!(!text.contains("/gitW"), "{text}");
     assert_eq!(
         text,
-        "&&& addTemplate --start\n{title: }\n\nbody\n---\n{wt:main}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: }\n\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n"
     );
     prompt.undo();
     assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
@@ -1783,9 +1790,9 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
     prompt.backspace();
     assert!(prompt.slash_confirm(), "opens chooser");
     prompt.apply_worktree_entries(vec![markdown::WorktreeCandidate {
-        branch: "main".into(),
-        path: PathBuf::from("/repo"),
-        is_main: true,
+        branch: "feature/x".into(),
+        path: PathBuf::from("/repo/.worktrees/feat"),
+        is_main: false,
     }]);
     prompt.rebuild_worktree_entries();
     assert!(prompt.slash_confirm(), "confirm binding");
@@ -1793,10 +1800,58 @@ fn worktree_chooser_keeps_a_deeper_command_line() {
     // 命令行恰占绑定行（结束行上一行）：整行替换为分割线与绑定行。
     assert_eq!(
         text,
-        "&&& addTemplate --start\n{title: }\nbody\n---\n{wt:main}\n&&& addTemplate --end\n"
+        "&&& addTemplate --start\n{title: }\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n"
+    );
+    // 光标落在绑定行行尾（不因新增分割线行而落到下一行）。
+    assert_eq!(
+        prompt.cursor_cell().map(|cell| cell.0),
+        Some(4),
+        "{}",
+        prompt.text()
     );
     prompt.undo();
     assert_eq!(prompt.text(), fixture, "单步撤销恢复命令行");
+}
+
+#[test]
+fn worktree_chooser_main_checkout_removes_binding() {
+    let mut prompt = prompt(80, 14);
+    prompt.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let fixture = "&&& addTemplate --start\nbody\n---\n{wt:feature/x}\n&&& addTemplate --end\n";
+    prompt.set_text(fixture);
+    let body_end = prompt.text().find("body\n").expect("body line") + "body".len();
+    prompt.set_cursor_offset_for_test(body_end);
+    prompt.insert_char(' ');
+    prompt.backspace();
+    prompt.newline();
+    prompt.insert_char('/');
+    type_text(&mut prompt, "gitW");
+    assert!(prompt.slash_confirm(), "opens chooser");
+    prompt.apply_worktree_entries(vec![
+        markdown::WorktreeCandidate {
+            branch: "main".into(),
+            path: PathBuf::from("/repo"),
+            is_main: true,
+        },
+        markdown::WorktreeCandidate {
+            branch: "feature/x".into(),
+            path: PathBuf::from("/repo/.worktrees/feat"),
+            is_main: false,
+        },
+    ]);
+    prompt.rebuild_worktree_entries();
+    // 选择器高亮当前绑定的 feature/x，上移一项选主 checkout。
+    assert!(prompt.slash_move(-1), "navigate to main checkout");
+    let before = prompt.text().to_string();
+    assert!(prompt.slash_confirm(), "confirm main checkout");
+    let text = prompt.text().to_string();
+    // 选择主 checkout = 解除绑定：绑定行与上方分割线一并移除，命令行清空保留。
+    assert!(!text.contains("{wt:"), "绑定行被移除: {text}");
+    assert!(!text.contains("\n---\n"), "绑定分割线被移除: {text}");
+    assert!(text.contains("body\n"), "{text}");
+    assert!(!text.contains("/gitW"), "{text}");
+    prompt.undo();
+    assert_eq!(prompt.text(), before, "单步撤销恢复绑定与命令行");
 }
 
 #[test]

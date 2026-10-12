@@ -198,14 +198,16 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     let rows = prompt.visual_rows();
     let tokens = markdown::scan(prompt.text());
     let infos = template_line_infos(prompt.text());
+    let lines: Vec<&str> = prompt.text().split('\n').collect();
     let mut line_starts = Vec::new();
     let mut offset = 0;
-    for line in prompt.text().split('\n') {
+    for line in &lines {
         line_starts.push(offset);
         offset += line.len() + 1;
     }
     let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
     let mut block_rows = Vec::new();
+    let mut separator_rows = Vec::new();
     for (index, row) in rows
         .iter()
         .enumerate()
@@ -241,11 +243,23 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         if let Some(info) = info {
             paint_template_border(buf, area, y, info, role, painted, buttons_start);
             block_rows.push((y, info.status));
+            // 模板块分割线行：整行以边框线条绘制（内容为 `---` 的结构行）。
+            if first
+                && last
+                && lines
+                    .get(row.line)
+                    .is_some_and(|line| crate::app::markdown::is_template_separator(line))
+            {
+                separator_rows.push((y, info.status));
+            }
         }
     }
     render_template_buttons(buf, area, prompt);
     for (y, status) in block_rows {
         paint_template_background(buf, area, y, status);
+    }
+    for (y, status) in separator_rows {
+        paint_template_separator(buf, area, y, status);
     }
     if prompt.text().is_empty() {
         paint_placeholder(buf, area);
@@ -850,6 +864,26 @@ fn paint_template_border(
             }
         }
         None => {}
+    }
+}
+
+/// 绘制模板块分割线：`├─…─┤` 以块边框样式横贯整行，与块上下边同色；
+/// 保留单元格底色与选区反显修饰符。
+fn paint_template_separator(buf: &mut Buffer, area: Rect, y: u16, status: TemplateStatus) {
+    let border = style::template_border(status);
+    let right = area.right().saturating_sub(1);
+    for x in area.x..=right {
+        let symbol = if x == area.x {
+            '├'
+        } else if x == right {
+            '┤'
+        } else {
+            '─'
+        };
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.set_char(symbol);
+            cell.set_style(border);
+        }
     }
 }
 

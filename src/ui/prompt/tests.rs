@@ -317,6 +317,23 @@ fn renders_mention_panel_stacked_and_hit_tests_items() {
 }
 
 #[test]
+fn template_separator_renders_block_border_line() {
+    let area = Rect::new(0, 0, 30, 10);
+    let mut editor = Prompt::new(PaneId::from_raw_for_test(1));
+    editor.resize(30, 10);
+    editor.set_text("&&& addTemplate --start\n{title: }\n---\nbody\n&&& addTemplate --end\n");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    // 分割线整行以模板块边框样式绘制：├─…─┤。
+    let row: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(row.starts_with("├──"), "{row}");
+    assert!(row.ends_with("┤"), "{row}");
+    assert_eq!(buf[(8, 2)].fg, Color::LightBlue, "todo 边框色");
+    // `---` 文本被线条覆盖。
+    assert!(!row.contains('-'), "{row}");
+}
+
+#[test]
 fn mention_panel_asks_root_choice_then_titles_with_choice() {
     let area = Rect::new(0, 0, 40, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));

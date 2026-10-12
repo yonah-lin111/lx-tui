@@ -207,8 +207,8 @@ impl Prompt {
                 }
                 false
             }
-            markdown::SlashInsertion::WorktreeBinding(branch) => {
-                self.confirm_worktree_binding(&branch)
+            markdown::SlashInsertion::WorktreeBinding { branch, is_main } => {
+                self.confirm_worktree_binding(&branch, is_main)
             }
             markdown::SlashInsertion::Placeholder => false,
             _ => {
@@ -230,8 +230,9 @@ impl Prompt {
 
     /// 选择器确认：把选中分支写到块底部（结束行上一行）的 `{wt:}` 绑定行并
     /// 消耗 `/gitWorkTree` 命令，作为一步撤销；命令所在行保留（不删行），
-    /// 恰位于绑定位置时该行直接转为绑定行。
-    fn confirm_worktree_binding(&mut self, branch: &str) -> bool {
+    /// 恰位于绑定位置时该行直接转为绑定行。选择主 checkout 表示解除绑定：
+    /// 移除 `{wt:}` 绑定行与其上方分割线。
+    fn confirm_worktree_binding(&mut self, branch: &str, is_main: bool) -> bool {
         let Some(panel) = self.slash.as_ref() else {
             return false;
         };
@@ -242,41 +243,64 @@ impl Prompt {
         let trigger = panel.trigger().clone();
         let valid_trigger =
             trigger.line_start < trigger.line_end && trigger.line_end <= self.text.len();
-        // 命令行所在行号：恰占绑定位置（结束行上一行）时绑定直接占用该行。
-        let trigger_line = self.text[..trigger.line_start.min(self.text.len())]
-            .matches('\n')
-            .count();
-        let occupy = valid_trigger.then_some(trigger_line);
-        let Some((marker_range, marker_text)) =
-            markdown::set_line_worktree(&self.text, block_end_line, branch, occupy)
-        else {
-            return false;
-        };
-        // 绑定编辑从命令行行首起替换即为占用，无需再清空该行。
-        let replaces_trigger = !marker_range.is_empty() && marker_range.start == trigger.line_start;
-        let mut edits = vec![(marker_range, marker_text)];
+        let mut edits = Vec::new();
+        let mut replaces_trigger = false;
+        if is_main {
+            // 主 checkout 即默认工作区：不写绑定，已有绑定行连同分割线移除。
+            if let Some(clear) = markdown::clear_line_worktree(&self.text, block_end_line) {
+                replaces_trigger = !clear.0.is_empty() && clear.0.start == trigger.line_start;
+                edits.push(clear);
+            }
+        } else {
+            // 命令行所在行号：恰占绑定位置（结束行上一行）时绑定直接占用该行。
+            let trigger_line = self.text[..trigger.line_start.min(self.text.len())]
+                .matches('\n')
+                .count();
+            let occupy = valid_trigger.then_some(trigger_line);
+            let Some((marker_range, marker_text)) =
+                markdown::set_line_worktree(&self.text, block_end_line, branch, occupy)
+            else {
+                return false;
+            };
+            // 绑定编辑从命令行行首起替换即为占用，无需再清空该行。
+            replaces_trigger = !marker_range.is_empty() && marker_range.start == trigger.line_start;
+            edits.push((marker_range, marker_text));
+        }
         if valid_trigger && !replaces_trigger {
             // 清空命令行内容、保留该行与换行（对齐 lx-agent `/gitn` 清空命令行的语义）。
             edits.push((trigger.line_start..trigger.line_end, String::new()));
         }
         self.slash = None;
         self.break_group();
-        self.record(EditKind::Other);
-        self.apply_worktree_edits(edits);
+        if edits
+            .iter()
+            .any(|(range, text)| !range.is_empty() || !text.is_empty())
+        {
+            self.record(EditKind::Other);
+            self.apply_worktree_edits(edits);
+        }
         self.panel_suppressed = true;
         self.scroll_cursor_into_view();
         true
     }
 
-    /// 同一步撤销内应用多段替换：从后往前执行，偏移互不影响；光标钳到文本内。
+    /// 同一步撤销内应用多段替换：从后往前执行，偏移互不影响；光标按编辑位置
+    /// 平移（区间前累计位移，区间内落到替换文本末），避免插入/删除后落到下一行。
     fn apply_worktree_edits(&mut self, mut edits: Vec<(std::ops::Range<usize>, String)>) {
         edits.sort_by_key(|(range, _)| range.start);
+        let mut cursor = self.cursor;
         for (range, replacement) in edits.into_iter().rev() {
-            if range.start <= range.end && range.end <= self.text.len() {
-                self.text.replace_range(range, &replacement);
+            if range.start > range.end || range.end > self.text.len() {
+                continue;
+            }
+            self.text.replace_range(range.clone(), &replacement);
+            if cursor >= range.end {
+                cursor = cursor - (range.end - range.start) + replacement.len();
+            } else if cursor > range.start {
+                cursor = range.start + replacement.len();
             }
         }
-        self.cursor = self.cursor.min(self.text.len());
+        self.cursor = cursor.min(self.text.len());
     }
 
     /// 打开二级 worktree 选择器：光标处必须有模板块（绑定目标即该块结束行）。

@@ -142,6 +142,29 @@ fn separator_before(text: &str, line: usize, line_start: usize) -> Option<(usize
     }
 }
 
+/// 移除结束行所在块的绑定：删除绑定行与其上方分割线（若在）；无绑定返回 None。
+///
+/// 返回（替换范围, 新文本）。
+pub fn clear_line_worktree(
+    text: &str,
+    end_line: usize,
+) -> Option<(std::ops::Range<usize>, String)> {
+    let (line, _) = binding_at_end_line(text, end_line)?;
+    let (range, _) = nth_line_range(text, line)?;
+    let to = if text[range.end..].starts_with('\n') {
+        range.end + 1
+    } else {
+        range.end
+    };
+    let mut from = range.start;
+    if let Some(above) = line.checked_sub(1)
+        && nth_line(text, above).is_some_and(super::template::is_template_separator)
+    {
+        from = nth_line_range(text, above)?.0.start;
+    }
+    Some((from..to, String::new()))
+}
+
 /// 受保护绑定行的字节范围（整行内容，不含换行）：`{wt:}` 独占一行且为块内末行。
 pub fn worktree_line_spans(text: &str) -> Vec<std::ops::Range<usize>> {
     let lines: Vec<&str> = text.split('\n').collect();
