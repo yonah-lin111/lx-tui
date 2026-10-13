@@ -35,7 +35,6 @@ fn demo_state() -> AppState {
             folder_id: None,
             name: "loose".into(),
             content: "loose content".into(),
-            status: "todo".into(),
             active_page_id: Some(10),
             pages: vec![PromptPageRecord {
                 id: 10,
@@ -49,7 +48,6 @@ fn demo_state() -> AppState {
             folder_id: Some(2),
             name: "nested".into(),
             content: "nested content".into(),
-            status: "completed".into(),
             active_page_id: Some(12),
             pages: vec![PromptPageRecord {
                 id: 12,
@@ -285,7 +283,7 @@ fn editing_item_persists_on_commit_and_action_quit() {
 }
 
 #[test]
-fn item_menu_lists_commands_and_dispatches_status_copy_delete() {
+fn item_menu_lists_commands_and_dispatches_copy_delete() {
     let mut state = demo_state();
     enter_tree(&mut state);
     open_prompt_item_menu(&mut state, 12, (5, 5));
@@ -296,7 +294,6 @@ fn item_menu_lists_commands_and_dispatches_status_copy_delete() {
         menu.commands,
         vec![
             MenuCommand::EditPrompt,
-            MenuCommand::ChangePromptStatus(PromptItemStatus::Todo),
             MenuCommand::RenamePrompt,
             MenuCommand::CopyPromptContent,
             MenuCommand::DeletePrompt,
@@ -307,34 +304,6 @@ fn item_menu_lists_commands_and_dispatches_status_copy_delete() {
         OverlayTarget::PromptItem { item_id: 12, .. }
     ));
     assert_eq!(state.workspaces[0].prompt_panel.selected, 5);
-
-    // 状态切换命令 → 内存与效应。
-    state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
-        anchor: (5, 5),
-        target: OverlayTarget::PromptItem {
-            workspace: 0,
-            item_id: 12,
-        },
-        commands: vec![MenuCommand::ChangePromptStatus(PromptItemStatus::Todo)],
-        selected: 0,
-    }));
-    crate::app::update::activate_menu(&mut state);
-    assert_eq!(
-        state.workspaces[0]
-            .prompt_panel
-            .tree
-            .item(12)
-            .map(|item| item.status),
-        Some(PromptItemStatus::Todo)
-    );
-    assert!(state.effects.iter().any(|effect| matches!(
-        effect,
-        Effect::SetPromptStatus {
-            id: 12,
-            status: PromptItemStatus::Todo,
-            ..
-        }
-    )));
 
     // 复制命令 → 剪贴板效应。
     state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
@@ -516,16 +485,10 @@ fn scroll_clamps_and_keeps_selection_visible() {
 #[test]
 fn mode_roundtrip_without_selection_keeps_temp_editor() {
     let mut state = AppState::demo();
-    state.workspaces[0].prompt_panel.tree.replace(
-        vec![],
-        vec![PromptItem::single(
-            10,
-            None,
-            "loose",
-            "body",
-            PromptItemStatus::Todo,
-        )],
-    );
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![PromptItem::single(10, None, "loose", "body")]);
     // 初始编辑视图绑定空 temp；列表恒有 default temp，其后才是条目。
     assert!(matches!(
         state.workspaces[0].prompt_panel.editing,
@@ -1421,64 +1384,6 @@ fn closing_displayed_workspace_commits_pre_paste_edits_without_placeholder() {
     assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
 }
 
-/// 构造工作区 git 元数据（测试断言用）。
-fn git_meta(repo_root: &str, checkout: &str, linked: bool) -> crate::app::state::WorkspaceGit {
-    crate::app::state::WorkspaceGit {
-        repo_root: std::path::PathBuf::from(repo_root),
-        checkout_path: std::path::PathBuf::from(checkout),
-        is_linked: linked,
-        branch: Some("feature/x".into()),
-        main_branch: Some("main".into()),
-    }
-}
-
-#[test]
-fn status_change_syncs_all_panels_sharing_prompt_key() {
-    let mut state = AppState::demo();
-    state.workspaces[0].cwd = Some(std::path::PathBuf::from("/repo"));
-    state.workspaces[0].git = Some(git_meta("/repo", "/repo", false));
-    let mut linked = crate::app::state::Workspace::single_terminal(
-        "feat".to_string(),
-        Some(std::path::PathBuf::from("/repo/.wt/feat")),
-    );
-    linked.git = Some(git_meta("/repo", "/repo/.wt/feat", true));
-    state.workspaces.push(linked);
-
-    let prompts = vec![PromptRecord {
-        id: 1,
-        folder_id: None,
-        name: "shared".into(),
-        content: "body".into(),
-        status: "todo".into(),
-        active_page_id: Some(1),
-        pages: vec![PromptPageRecord {
-            id: 1,
-            position: 0,
-            name: "Page 1".into(),
-            content: "body".into(),
-        }],
-    }];
-    apply_prompt_tree(&mut state, 0, Path::new("/repo"), vec![], prompts.clone());
-    apply_prompt_tree(&mut state, 1, Path::new("/repo"), vec![], prompts);
-
-    change_prompt_status(&mut state, 1, 1, PromptItemStatus::Completed);
-    for workspace in &state.workspaces {
-        assert_eq!(
-            workspace
-                .prompt_panel
-                .tree
-                .item(1)
-                .expect("item in every sharing panel")
-                .status,
-            PromptItemStatus::Completed
-        );
-    }
-    assert!(matches!(
-        state.effects.as_slice(),
-        [Effect::SetPromptStatus { status, .. }, ..] if *status == PromptItemStatus::Completed
-    ));
-}
-
 #[test]
 fn apply_tree_unbinds_editing_when_item_removed_by_sharing_panel() {
     let mut state = demo_state();
@@ -1495,7 +1400,6 @@ fn apply_tree_unbinds_editing_when_item_removed_by_sharing_panel() {
             folder_id: None,
             name: "remaining".into(),
             content: "c".into(),
-            status: "todo".into(),
             active_page_id: Some(11),
             pages: vec![PromptPageRecord {
                 id: 11,
@@ -1547,7 +1451,6 @@ fn reload_records(active: Option<i64>, first_content: &str, second: bool) -> Vec
         folder_id: None,
         name: "loose".into(),
         content: first_content.into(),
-        status: "todo".into(),
         active_page_id: active,
         pages,
     }]

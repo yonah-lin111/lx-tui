@@ -9,35 +9,6 @@ fn ellipsize_keeps_text_within_limit() {
 }
 
 #[test]
-fn prompt_status_labels_cover_all_states() {
-    use crate::app::prompt::PromptItemStatus;
-    assert_eq!(
-        prompt_status_label(PromptItemStatus::Todo),
-        TEMPLATE_BUTTON_TODO
-    );
-    assert_eq!(
-        prompt_status_label(PromptItemStatus::InProgress),
-        TEMPLATE_BUTTON_RUN
-    );
-    assert_eq!(
-        prompt_status_label(PromptItemStatus::Completed),
-        TEMPLATE_BUTTON_DONE
-    );
-    assert_eq!(
-        prompt_status_menu_label(PromptItemStatus::Todo),
-        MENU_PROMPT_MARK_TODO
-    );
-    assert_eq!(
-        prompt_status_menu_label(PromptItemStatus::InProgress),
-        MENU_PROMPT_MARK_RUN
-    );
-    assert_eq!(
-        prompt_status_menu_label(PromptItemStatus::Completed),
-        MENU_PROMPT_MARK_DONE
-    );
-}
-
-#[test]
 fn user_visible_labels_are_clean_ascii() {
     // 用户可见文案禁止 Unicode 替换字符（U+FFFD），且不得为空。
     for label in [
@@ -63,9 +34,6 @@ fn user_visible_labels_are_clean_ascii() {
         MENU_PROMPT_RENAME,
         MENU_PROMPT_COPY,
         MENU_PROMPT_DELETE,
-        MENU_PROMPT_MARK_TODO,
-        MENU_PROMPT_MARK_RUN,
-        MENU_PROMPT_MARK_DONE,
         TRUST_WORKSPACE_TITLE,
         TRUST_WORKSPACE_QUESTION,
         BUTTON_TRUST,

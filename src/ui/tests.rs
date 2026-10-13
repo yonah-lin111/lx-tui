@@ -959,7 +959,7 @@ fn workspace_drop_index_maps_rows_with_scroll_and_clamps() {
 }
 
 #[test]
-fn workspace_rows_fill_selected_and_hover_backgrounds() {
+fn workspace_rows_mark_selected_and_fill_hover_backgrounds() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     update::create_workspace(&mut state);
@@ -978,13 +978,13 @@ fn workspace_rows_fill_selected_and_hover_backgrounds() {
     let y = sections.workspaces.y;
     let right = sections.workspaces.right() - 1;
 
-    // 激活项（create_workspace 激活末项）青底黑字，整行铺满。
-    assert_eq!(buffer[(x, y + 2)].bg, ratatui::style::Color::Cyan);
-    assert_eq!(buffer[(x, y + 2)].fg, ratatui::style::Color::Black);
+    // 激活项（create_workspace 激活末项）行首 `❯` 标记，不铺背景。
+    assert_eq!(buffer[(x, y + 2)].symbol(), text::AGENT_SELECTED_MARKER);
+    assert_eq!(buffer[(x, y + 2)].bg, ratatui::style::Color::Reset);
     assert_eq!(
         buffer[(right, y + 2)].bg,
-        ratatui::style::Color::Cyan,
-        "行尾空白同样铺背景"
+        ratatui::style::Color::Reset,
+        "行尾空白无底色"
     );
 
     // 悬停项使用显式深色背景（selection）。
@@ -1018,7 +1018,7 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
 
-    // 1. 未交互态：父项折叠箭头为 Cyan 强调色，无反显与背景。
+    // 1. 未交互态：父项行首标记列为空、折叠箭头为 Cyan 强调色，无反显与背景。
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
         panic!("draw failed: {error}");
     }
@@ -1027,12 +1027,17 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let x = sections.workspaces.x;
     let y = sections.workspaces.y;
+    let arrow_x = x + 2;
 
-    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
-    assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Cyan);
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
+    assert_eq!(buffer[(x, y)].symbol(), " ");
+    assert_eq!(
+        buffer[(arrow_x, y)].symbol(),
+        text::WORKSPACE_GROUP_EXPANDED
+    );
+    assert_eq!(buffer[(arrow_x, y)].fg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Reset);
     assert!(
-        !buffer[(x, y)]
+        !buffer[(arrow_x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
@@ -1044,20 +1049,23 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     }
     let buffer = terminal.backend().buffer().clone();
 
-    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
     assert_eq!(
-        buffer[(x, y)].fg,
+        buffer[(arrow_x, y)].symbol(),
+        text::WORKSPACE_GROUP_EXPANDED
+    );
+    assert_eq!(
+        buffer[(arrow_x, y)].fg,
         ratatui::style::Color::Indexed(255),
         "悬停时箭头前景为 Indexed 255"
     );
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Indexed(240));
+    assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Indexed(240));
     assert!(
-        !buffer[(x, y)]
+        !buffer[(arrow_x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
 
-    // 3. 激活态：父项与子项保持一致的青底黑字整行填充。
+    // 3. 激活态：父项行首 `❯` 标记，箭头保留强调色、无填充背景。
     state.workspace_hover = None;
     state.active_workspace = 0;
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
@@ -1065,9 +1073,13 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     }
     let buffer = terminal.backend().buffer().clone();
 
-    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
-    assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Black);
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(x, y)].symbol(), text::AGENT_SELECTED_MARKER);
+    assert_eq!(
+        buffer[(arrow_x, y)].symbol(),
+        text::WORKSPACE_GROUP_EXPANDED
+    );
+    assert_eq!(buffer[(arrow_x, y)].fg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Reset);
 }
 
 #[test]
@@ -1141,11 +1153,11 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
         )
     };
 
-    // 按下未移动：直接整行选中态（青底），不做拖动反显，一次性完成切换。
+    // 按下未移动：激活项以行首标记表示，不做拖动反显。
     assert_eq!(
         observe(&state),
-        ([false, false], ratatui::style::Color::Cyan),
-        "按下未移动显示选中态"
+        ([false, false], ratatui::style::Color::Reset),
+        "按下未移动无拖动反显"
     );
     state.workspace_dragging = true;
     assert_eq!(
@@ -1299,22 +1311,14 @@ fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
 
 #[test]
 fn prompt_tree_renders_divider_and_scrollbar_below_search() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let mut state = AppState::demo();
     update::show_prompt_tree(&mut state);
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
         (0..30)
-            .map(|index| {
-                PromptItem::single(
-                    index,
-                    None,
-                    format!("item-{index:02}"),
-                    String::new(),
-                    PromptItemStatus::Todo,
-                )
-            })
+            .map(|index| PromptItem::single(index, None, format!("item-{index:02}"), String::new()))
             .collect(),
     );
     let view = view_for(&state);
@@ -1340,19 +1344,13 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
 
 #[test]
 fn prompt_editor_divider_shows_editing_title() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let mut state = AppState::demo();
     state.prompt_width = 40;
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
-        vec![PromptItem::single(
-            1,
-            None,
-            "named prompt",
-            String::new(),
-            PromptItemStatus::Todo,
-        )],
+        vec![PromptItem::single(1, None, "named prompt", String::new())],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let view = view_for(&state);
@@ -1778,17 +1776,11 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     );
 
     // 绑定条目：已保存绿点、编辑后黄点。
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
-        vec![PromptItem::single(
-            1,
-            None,
-            "named",
-            String::new(),
-            PromptItemStatus::Todo,
-        )],
+        vec![PromptItem::single(1, None, "named", String::new())],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let buffer = render_buffer(&state);

@@ -9,7 +9,7 @@ use crate::ui::widgets;
 use crate::ui::{style, text};
 
 /// 渲染树内容区：顶部搜索框行 + 分割线 + 过滤后的树行；返回搜索框硬件光标位置；
-/// 空树/无命中显示占位；选中行整行高亮，条目状态右对齐。
+/// 空树/无命中显示占位；选中行以行首 `❯` 标记（同 Agents 条目，不铺底色）。
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
@@ -177,8 +177,8 @@ pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<
     (index < panel.rows().len()).then_some(index)
 }
 
-/// 绘制单行：前缀（续接线 + 连接符）+ 图标 + 名称 +（条目）右对齐状态标签；
-/// 分区标签行只画 muted 标签；临时提示词行右侧画 accent 的 `[tmp]` 标注。
+/// 绘制单行：行首标记列（`❯ ` 或空）+ 前缀（续接线 + 连接符）+ 图标 + 名称
+/// +（条目）右对齐的彩色计数组；分区标签行只画 muted 标签。
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
@@ -190,20 +190,18 @@ fn paint_row(
     prefix: &str,
     expanded: bool,
 ) {
-    let base = if selected {
-        style::selection()
-    } else {
-        style::text()
-    };
-    let sub = if selected {
-        style::selection()
-    } else {
-        style::muted()
-    };
-    if selected {
-        fill_row(buf, area, y);
-    }
+    let base = style::text();
+    let sub = style::muted();
     let mut x = area.x;
+    // 分区标签不可选中：不占标记列，标签贴左缘。
+    if !matches!(row.kind, PromptRowKind::Section(_)) {
+        let marker = if selected {
+            format!("{} ", text::AGENT_SELECTED_MARKER)
+        } else {
+            "  ".to_string()
+        };
+        x = paint_text(buf, x, y, &marker, base, area.right());
+    }
     if !prefix.is_empty() {
         x = paint_text(buf, x, y, prefix, sub, area.right());
     }
@@ -217,8 +215,7 @@ fn paint_row(
             } else {
                 text::PROMPT_TREE_COLLAPSED
             };
-            let triangle_style = if selected { base } else { style::accent() };
-            x = paint_text(buf, x, y, triangle, triangle_style, area.right());
+            x = paint_text(buf, x, y, triangle, style::accent(), area.right());
             x = paint_text(buf, x, y, " ", base, area.right());
             let max = usize::from(area.right().saturating_sub(x));
             paint_name(buf, x, y, &folder.name, base, max, area.right());
@@ -227,30 +224,18 @@ fn paint_row(
             let Some(item) = panel.tree.item_of_row(row) else {
                 return;
             };
-            let icon_style = if selected { base } else { style::muted() };
             x = paint_text(
                 buf,
                 x,
                 y,
                 text::PROMPT_TREE_ITEM_ICON,
-                icon_style,
+                style::muted(),
                 area.right(),
             );
             x = paint_text(buf, x, y, " ", base, area.right());
-            // 右侧段：条目状态 + 各页模板块计数合计（零数量省略）；
+            // 右侧段：各页模板块计数合计（零数量省略）；
             // 物理宽度不足时从尾部逐个省略完整计数标签，名称最后截断。
             let mut segments: Vec<(String, ratatui::style::Style)> = Vec::new();
-            let status = text::prompt_status_label(item.status).to_string();
-            if !status.is_empty() {
-                segments.push((
-                    status,
-                    if selected {
-                        base
-                    } else {
-                        style::prompt_status(item.status)
-                    },
-                ));
-            }
             let counts = item.template_counts();
             for (status, count) in [
                 (crate::app::markdown::TemplateStatus::Todo, counts.todo),
@@ -265,11 +250,7 @@ fn paint_row(
                 }
                 segments.push((
                     text::template_count_label(status, count),
-                    if selected {
-                        base
-                    } else {
-                        style::template_status(status)
-                    },
+                    style::template_status(status),
                 ));
             }
             let used = paint_right_segments(buf, area, y, &mut segments, x);
@@ -287,31 +268,17 @@ fn paint_row(
             let Some(temp) = panel.temp_of_row(row) else {
                 return;
             };
-            let icon_style = if selected { base } else { style::muted() };
             x = paint_text(
                 buf,
                 x,
                 y,
                 text::PROMPT_TREE_ITEM_ICON,
-                icon_style,
+                style::muted(),
                 area.right(),
             );
             x = paint_text(buf, x, y, " ", base, area.right());
-            let badge = text::PROMPT_TEMP_BADGE;
-            let badge_width = width_of(badge) as u16;
-            let gap = u16::from(badge_width > 0);
-            let max = usize::from(
-                area.right()
-                    .saturating_sub(x)
-                    .saturating_sub(badge_width + gap),
-            );
+            let max = usize::from(area.right().saturating_sub(x));
             paint_name(buf, x, y, temp.display_name(), base, max, area.right());
-            if badge_width > 0 && badge_width <= area.width {
-                let badge_x = area.right() - badge_width;
-                // `[tmp]` 标注使用默认文字色（不再用主题 accent）。
-                let badge_style = if selected { base } else { style::text() };
-                paint_text(buf, badge_x, y, badge, badge_style, area.right());
-            }
         }
     }
 }
@@ -346,17 +313,6 @@ fn paint_right_segments(
         }
     }
     x
-}
-
-/// 选中行整行铺选中底色，保证高亮跨满行宽。
-fn fill_row(buf: &mut Buffer, area: Rect, y: u16) {
-    for x in area.x..area.right() {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.reset();
-            cell.set_char(' ');
-            cell.set_style(style::selection());
-        }
-    }
 }
 
 /// 绘制文本直到右界；超出右界的字符整体丢弃。

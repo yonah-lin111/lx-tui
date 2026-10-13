@@ -46,6 +46,13 @@ impl Prompt {
         self.replace_block_body(from, to, &cleaned)
     }
 
+    /// 补充块纯净正文（起止行之间的内容）；非补充块或空正文返回 None。
+    pub fn supple_block_body(&self, start_line: usize) -> Option<String> {
+        let span = self.block_span_of(start_line, BlockKind::Supple)?;
+        let (from, to) = self.block_body_span(span)?;
+        Some(self.text[from..to].to_string())
+    }
+
     /// 删除整个补充块（含两端标记，最多吸收一侧空行；单步撤销）。
     pub fn delete_supple_block(&mut self, start_line: usize) -> bool {
         let Some(span) = self.block_span_of(start_line, BlockKind::Supple) else {

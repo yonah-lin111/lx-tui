@@ -1,5 +1,5 @@
 //! 语义样式 Token：沿用 codex 的终端原生 ANSI 配色。
-//! 默认不铺自绘背景；侧栏/标签栏的选中行使用 ANSI-16 背景（`selected_item`），
+//! 默认不铺自绘背景；标签栏的选中行使用 ANSI-16 背景（`selected_item`），
 //! 悬停行使用明确的深色高亮背景（`selection`）；浮层面板使用自包含深底浅字（`overlay_panel`），
 //! 浮层选中项使用显式高亮灰底白字（`overlay_selection`）。
 //! 组件禁止直接写死颜色与修饰符。
@@ -42,7 +42,7 @@ pub fn border_title() -> Style {
         .remove_modifier(Modifier::BOLD)
 }
 
-/// 选中项：主题强调色填充（Cyan 底、黑字、加粗）；侧栏激活项与激活标签共用。
+/// 选中项：主题强调色填充（Cyan 底、黑字、加粗）；激活标签使用。
 pub fn selected_item() -> Style {
     Style::default()
         .fg(Color::Black)
@@ -50,7 +50,7 @@ pub fn selected_item() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 列表/菜单当前项：高亮中灰底（Indexed 240）纯白字（Indexed 255）；侧栏/标签栏的鼠标悬停与拖拽使用，与右键菜单 hover 对齐。
+/// 列表/菜单当前项：高亮中灰底（Indexed 240）纯白字（Indexed 255）；侧栏悬停/拖拽与终端选区使用，与右键菜单 hover 对齐。
 pub fn selection() -> Style {
     Style::default()
         .fg(Color::Indexed(255))
@@ -247,16 +247,6 @@ pub fn template_status(status: TemplateStatus) -> Style {
         TemplateStatus::Todo => muted(),
         TemplateStatus::InProgress => Style::default().fg(Color::Yellow),
         TemplateStatus::Done => Style::default().fg(Color::Green),
-    }
-}
-
-/// 提示词条目状态标签：todo 次要、in_progress 黄、completed 绿（与模板块状态色一致）。
-pub fn prompt_status(status: crate::app::prompt::PromptItemStatus) -> Style {
-    use crate::app::prompt::PromptItemStatus;
-    match status {
-        PromptItemStatus::Todo => muted(),
-        PromptItemStatus::InProgress => Style::default().fg(Color::Yellow),
-        PromptItemStatus::Completed => Style::default().fg(Color::Green),
     }
 }
 

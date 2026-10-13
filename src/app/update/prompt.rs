@@ -18,7 +18,7 @@ use crate::app::overlay::{
     Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
 };
 use crate::app::prompt::{
-    PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPageId, PromptRow,
+    PromptEditing, PromptFolder, PromptItem, PromptMode, PromptPageId, PromptRow,
 };
 use crate::app::state::AppState;
 use crate::db::{FolderRecord, PromptRecord};
@@ -558,16 +558,16 @@ pub fn reset_prompt_autosave(state: &mut AppState, prompt: crate::layout::PaneId
 /// 打开提示词条目右键菜单：编辑、状态切换、重命名、复制与删除。
 pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
-    let Some(item) = state
+    if state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
-    else {
+        .is_none()
+    {
         return;
-    };
+    }
     let commands = vec![
         MenuCommand::EditPrompt,
-        MenuCommand::ChangePromptStatus(item.status.next()),
         MenuCommand::RenamePrompt,
         MenuCommand::CopyPromptContent,
         MenuCommand::DeletePrompt,
@@ -795,39 +795,6 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
     state.effects.push(Effect::DeleteFolder {
         workspace: cwd,
         id: folder_id,
-    });
-}
-
-/// 切换提示词状态，登记状态更新。
-pub fn change_prompt_status(
-    state: &mut AppState,
-    workspace: usize,
-    item_id: i64,
-    status: PromptItemStatus,
-) {
-    let Some(cwd) = workspace_cwd(state, workspace) else {
-        return;
-    };
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return;
-    };
-    let Some(item) = workspace_state.prompt_panel.tree.item_mut(item_id) else {
-        return;
-    };
-    if item.status == status {
-        return;
-    }
-    item.status = status;
-    // 同仓库条目共享一棵树：状态同步到所有持有该条目的面板。
-    for workspace_state in &mut state.workspaces {
-        if let Some(item) = workspace_state.prompt_panel.tree.item_mut(item_id) {
-            item.status = status;
-        }
-    }
-    state.effects.push(Effect::SetPromptStatus {
-        workspace: cwd,
-        id: item_id,
-        status,
     });
 }
 

@@ -278,8 +278,29 @@ fn scroll_by_moves_viewport_without_cursor_and_reattaches_on_edit() {
         "底部虚拟空占位允许多滚半屏（高 2 → 1 行）"
     );
     prompt.insert_char('x');
-    assert_eq!(prompt.scroll(), 2, "编辑时按光标跟随收回留白");
+    assert_eq!(
+        prompt.scroll(),
+        3,
+        "编辑时视口不回拉：光标可见则保持底部留白"
+    );
     assert!(prompt.cursor_cell().is_some());
+}
+
+#[test]
+fn click_focus_keeps_bottom_padding_scroll() {
+    let mut prompt = prompt(10, 4);
+    prompt.insert_str("1\n2\n3\n4\n5\n6");
+    prompt.scroll_to(99);
+    let bottom = prompt.scroll();
+    assert_eq!(bottom, 4, "滚动可进入底部留白（6 行正文 + 2 行留白）");
+    // 点击可见文本行聚焦：光标被放到该行，视口保持不动。
+    prompt.set_cursor_from_cell(0, 1);
+    assert_eq!(prompt.scroll(), bottom, "点击聚焦不回拉滚动条");
+    assert!(prompt.cursor_cell().is_some(), "光标在视口内可见");
+    // 点击仍可把光标放到留白之上的末行。
+    prompt.scroll_to(99);
+    prompt.set_cursor_from_cell(u16::MAX, 0);
+    assert_eq!(prompt.scroll(), bottom, "点击留白区（钳到末行）也不回拉");
 }
 
 #[test]
@@ -1348,6 +1369,28 @@ fn copy_text_at_cursor_extracts_block_without_title() {
     let mut plain = prompt(40, 8);
     type_text(&mut plain, "plain");
     assert_eq!(plain.copy_text_at_cursor(), None, "不在块内不复制");
+}
+
+#[test]
+fn copy_text_at_cursor_extracts_supple_block_body() {
+    let mut editor = prompt(60, 20);
+    type_text(
+        &mut editor,
+        "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end",
+    );
+    // 光标在最内层 `+++` 块内：复制其正文（剔除标题占位行）。
+    let offset = editor.text().find("keep me").expect("body line");
+    editor.set_cursor_offset_for_test(offset);
+    assert_eq!(
+        editor.copy_text_at_cursor().as_deref(),
+        Some("- keep me"),
+        "光标在 `+++` 内复制补充块正文"
+    );
+    assert_eq!(
+        editor.supple_block_body(1).as_deref(),
+        Some("{title: Review}\n\n- keep me"),
+        "补充块正文含标题行（复制语义再剔除）"
+    );
 }
 
 #[test]

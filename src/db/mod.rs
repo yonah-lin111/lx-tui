@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// 旧正文迁移为唯一第一页时使用的默认页名。
 const FIRST_PAGE_NAME: &str = "Page 1";
@@ -55,7 +55,6 @@ CREATE TABLE IF NOT EXISTS workspace_prompt (
     folder_id TEXT,
     name TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'completed')),
     active_page_id INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -85,6 +84,35 @@ CREATE TABLE IF NOT EXISTS workspace_prompt_page (
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_page_prompt_id ON workspace_prompt_page(prompt_id);
 "#;
 
+/// v5 迁移的提示词表重建语句：移除 `status` 列（SQLite 不支持带 CHECK 的 DROP COLUMN）。
+/// 重建必须在关闭外键的独立事务中执行（见 `rebuild_prompt_without_status`）。
+const SCHEMA_V5_PROMPT: &str = r#"
+CREATE TABLE workspace_prompt_v5 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    folder_id TEXT,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    active_page_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
+    FOREIGN KEY (folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
+);
+
+INSERT INTO workspace_prompt_v5 (id, external_id, workspace_id, folder_id, name, content, active_page_id, created_at, updated_at)
+    SELECT id, external_id, workspace_id, folder_id, name, content, active_page_id, created_at, updated_at
+    FROM workspace_prompt;
+
+DROP TABLE workspace_prompt;
+
+ALTER TABLE workspace_prompt_v5 RENAME TO workspace_prompt;
+
+CREATE INDEX IF NOT EXISTS idx_workspace_prompt_workspace_id ON workspace_prompt(workspace_id);
+CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(folder_id);
+"#;
+
 /// 持久层错误；仅事件层记录日志，不直接面向用户。
 #[derive(Debug)]
 pub enum DbError {
@@ -102,6 +130,8 @@ pub enum DbError {
     PageMissing,
     /// 文件夹嵌套超过 2 层约束。
     DepthExceeded,
+    /// 迁移重建后外键校验发现悬空引用。
+    ForeignKeyViolation,
     /// 数据库版本高于当前程序支持值（不能用旧代码覆盖新结构）。
     UnsupportedSchema(i64),
 }
@@ -116,6 +146,7 @@ impl fmt::Display for DbError {
             Self::FolderMissing => write!(formatter, "folder not found"),
             Self::PageMissing => write!(formatter, "prompt page not found"),
             Self::DepthExceeded => write!(formatter, "folder nesting depth exceeded"),
+            Self::ForeignKeyViolation => write!(formatter, "foreign key violation after rebuild"),
             Self::UnsupportedSchema(version) => {
                 write!(
                     formatter,
@@ -168,8 +199,6 @@ pub struct PromptRecord {
     pub name: String,
     /// 第一页正文镜像；正文真源为 `pages`，读取当前页不得使用此列。
     pub content: String,
-    /// 状态稳定值：`todo` / `in_progress` / `completed`。
-    pub status: String,
     /// 上次打开的页 id；失效或为空时由应用层回退第一页。
     pub active_page_id: Option<i64>,
     /// 全部页（按 `position` 升序；迁移后至少一页）。
@@ -211,6 +240,7 @@ impl Database {
     /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。
     ///
     /// v4 迁移把每条旧提示词的正文原样复制为唯一 `Page 1` 并指向当前页；
+    /// v5 迁移重建提示词表移除状态列（在关闭外键的独立事务中完成，不删页表数据）。
     /// 已升级库不再回填（版本号门控），空库得到同一结构。
     fn migrate(&mut self) -> Result<()> {
         let version: i64 = self
@@ -220,9 +250,9 @@ impl Database {
             return Err(DbError::UnsupportedSchema(version));
         }
         if version < SCHEMA_VERSION {
-            let transaction = self.conn.transaction()?;
-            transaction.execute_batch(SCHEMA)?;
             if version < 4 {
+                let transaction = self.conn.transaction()?;
+                transaction.execute_batch(SCHEMA)?;
                 transaction.execute_batch(SCHEMA_V4)?;
                 // 老库的 workspace_prompt 由历史 SCHEMA 建立，缺 active_page_id 列。
                 if !column_exists(&transaction, "workspace_prompt", "active_page_id")? {
@@ -251,11 +281,44 @@ impl Database {
                        WHERE active_page_id IS NULL"#,
                     [],
                 )?;
+                transaction.pragma_update(None, "user_version", 4)?;
+                transaction.commit()?;
             }
+            // 旧库（v1..v4）带状态列：整表重建去列，必须在事务外关闭外键，
+            // 否则 `DROP TABLE workspace_prompt` 会级联删除页表数据。
+            if column_exists(&self.conn, "workspace_prompt", "status")? {
+                self.rebuild_prompt_without_status()?;
+            }
+            let transaction = self.conn.transaction()?;
+            transaction.execute_batch(SCHEMA)?;
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
         Ok(())
+    }
+
+    /// v5：重建 `workspace_prompt` 去 `status` 列（页表外键指向重建后的同名表）。
+    ///
+    /// `DROP TABLE` 在打开外键时会级联清空页表，因此重建必须在关闭外键的
+    /// 独立事务内完成；失败不推进版本，下次打开会重试（结构幂等）。
+    fn rebuild_prompt_without_status(&mut self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let result = (|| -> Result<()> {
+            let transaction = self.conn.transaction()?;
+            transaction.execute_batch(SCHEMA_V5_PROMPT)?;
+            let violations: i64 = transaction.query_row(
+                "SELECT COUNT(*) FROM pragma_foreign_key_check",
+                [],
+                |row| row.get(0),
+            )?;
+            if violations != 0 {
+                return Err(DbError::ForeignKeyViolation);
+            }
+            transaction.commit()?;
+            Ok(())
+        })();
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        result
     }
 
     /// 路径是否已信任（`is_trusted = 1`）。
@@ -342,7 +405,7 @@ impl Database {
             return Ok(Vec::new());
         };
         let mut statement = self.conn.prepare(
-            r#"SELECT p.id, p.external_id, f.id, p.name, p.content, p.status, p.active_page_id
+            r#"SELECT p.id, p.external_id, f.id, p.name, p.content, p.active_page_id
                FROM workspace_prompt p
                LEFT JOIN workspace_folder f ON p.folder_id = f.external_id
                WHERE p.workspace_id = ?1
@@ -355,8 +418,7 @@ impl Database {
                     folder_id: row.get(2)?,
                     name: row.get(3)?,
                     content: row.get(4)?,
-                    status: row.get(5)?,
-                    active_page_id: row.get(6)?,
+                    active_page_id: row.get(5)?,
                     pages: Vec::new(),
                 })
             })?
@@ -484,8 +546,8 @@ impl Database {
         };
         let transaction = self.conn.unchecked_transaction()?;
         transaction.execute(
-            r#"INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at)
-               VALUES (?1, ?2, ?3, ?4, ?5, 'todo', datetime('now'), datetime('now'))"#,
+            r#"INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, created_at, updated_at)
+               VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))"#,
             params![
                 new_external_id("prompt"),
                 workspace_external,
@@ -654,15 +716,6 @@ impl Database {
         if updated == 0 {
             return Err(DbError::PageMissing);
         }
-        Ok(())
-    }
-
-    /// 更新提示词状态（`todo` / `in_progress` / `completed`）。
-    pub fn update_prompt_status(&self, id: i64, status: &str) -> Result<()> {
-        self.conn.execute(
-            "UPDATE workspace_prompt SET status = ?1, updated_at = datetime('now') WHERE id = ?2",
-            params![status, id],
-        )?;
         Ok(())
     }
 

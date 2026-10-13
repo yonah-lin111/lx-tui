@@ -1138,7 +1138,7 @@ fn switch_workspace_swaps_prompt_drafts() {
 
 #[test]
 fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
-    use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus};
+    use crate::app::prompt::{PromptEditing, PromptItem};
     let mut state = AppState::demo();
     // 初始工作区默认绑定空临时提示词。
     assert!(
@@ -1151,13 +1151,7 @@ fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
     // 工作区 0 打开条目 10。
     state.workspaces[0].prompt_panel.tree.replace(
         vec![],
-        vec![PromptItem::single(
-            10,
-            None,
-            "item",
-            "item body",
-            PromptItemStatus::Todo,
-        )],
+        vec![PromptItem::single(10, None, "item", "item body")],
     );
     assert!(edit_prompt_item(&mut state, 0, 10));
     assert_eq!(state.prompt.text(), "item body");

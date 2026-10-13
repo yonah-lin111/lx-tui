@@ -3,7 +3,6 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, TemplateStatus};
-use crate::app::prompt::PromptItemStatus;
 use crate::app::state::{AppState, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
@@ -16,7 +15,7 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// Agents 分区空状态。
 pub const AGENTS_EMPTY: &str = "no agents running";
-/// Agents 条目当前选中标记（跟随行内正文样式，不独立着色）。
+/// 列表当前项标记：Agents 条目、工作区列表、提示词列表与页码菜单共用（不独立着色）。
 pub const AGENT_SELECTED_MARKER: &str = "❯";
 /// Agent 状态圆点：运行/阻塞实心、空闲空心。
 pub const AGENT_STATUS_DOT: &str = "●";
@@ -193,28 +192,6 @@ pub const MENU_PROMPT_EDIT: &str = "Edit";
 pub const MENU_PROMPT_RENAME: &str = "Rename";
 pub const MENU_PROMPT_COPY: &str = "Copy content";
 pub const MENU_PROMPT_DELETE: &str = "Delete";
-pub const MENU_PROMPT_MARK_TODO: &str = "Mark todo";
-pub const MENU_PROMPT_MARK_RUN: &str = "Mark run";
-pub const MENU_PROMPT_MARK_DONE: &str = "Mark done";
-
-/// 状态切换菜单项：按目标状态取标签。
-pub fn prompt_status_menu_label(status: PromptItemStatus) -> &'static str {
-    match status {
-        PromptItemStatus::Todo => MENU_PROMPT_MARK_TODO,
-        PromptItemStatus::InProgress => MENU_PROMPT_MARK_RUN,
-        PromptItemStatus::Completed => MENU_PROMPT_MARK_DONE,
-    }
-}
-
-/// 提示词条目状态标签（与模板块状态按钮同文案）。
-pub fn prompt_status_label(status: PromptItemStatus) -> &'static str {
-    match status {
-        PromptItemStatus::Todo => TEMPLATE_BUTTON_TODO,
-        PromptItemStatus::InProgress => TEMPLATE_BUTTON_RUN,
-        PromptItemStatus::Completed => TEMPLATE_BUTTON_DONE,
-    }
-}
-
 /// 标题行的页切换箭头（区别于折叠 `◀`/`▶` 与撤销/重做 `←`/`→`）。
 pub const PROMPT_PAGE_PREV: &str = "‹";
 pub const PROMPT_PAGE_NEXT: &str = "›";
@@ -480,6 +457,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             TemplateButtonKind::Delete => "delete block",
         },
         TooltipTarget::BlockButton { button, .. } => match button {
+            BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
         },

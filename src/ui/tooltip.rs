@@ -184,6 +184,7 @@ fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButt
 /// 补充块按钮 → app 侧种类。
 fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
     match button {
+        ui::prompt::BlockButton::Copy => BlockButtonKind::Copy,
         ui::prompt::BlockButton::Clean => BlockButtonKind::Clean,
         ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,
     }

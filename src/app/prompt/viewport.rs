@@ -177,7 +177,7 @@ impl Prompt {
             0
         }
     }
-    /// 调整滚动量，保证光标所在视觉行可见。
+    /// 调整滚动量，保证光标所在视觉行可见；已在底部留白内滚动时不回拉。
     pub(super) fn scroll_cursor_into_view(&mut self) {
         let rows = self.visual_rows();
         let height = usize::from(self.height.max(1));
@@ -187,6 +187,6 @@ impl Prompt {
         } else if row >= self.scroll + height {
             self.scroll = row + 1 - height;
         }
-        self.scroll = self.scroll.min(rows.len().saturating_sub(height));
+        self.scroll = self.scroll.min(self.max_scroll());
     }
 }

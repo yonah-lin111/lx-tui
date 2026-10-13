@@ -275,10 +275,6 @@ impl Persistence {
                 self.with_db(|db| db.set_prompt_active_page(id, page_id));
                 self.reload_tree(state, &prompt_key_for(state, &workspace))
             }
-            Effect::SetPromptStatus { id, status, .. } => {
-                self.with_db(|db| db.update_prompt_status(id, status.as_str()));
-                false
-            }
             Effect::CopyToClipboard(text) => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {

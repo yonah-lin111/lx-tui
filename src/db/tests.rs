@@ -29,6 +29,46 @@ fn workspace_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("lx-tui-ws-{label}"))
 }
 
+/// v5 之前的旧库 Schema（提示词表含状态列）；迁移测试构造旧库用。
+const LEGACY_SCHEMA: &str = r#"
+CREATE TABLE workspace (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'filesystem',
+    path TEXT UNIQUE,
+    is_trusted INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE workspace_folder (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    parent_folder_id TEXT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_prompt (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    folder_id TEXT,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'completed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
+    FOREIGN KEY (folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
+);
+"#;
+
 #[test]
 fn migration_creates_schema_and_is_idempotent() {
     let (database, path) = open_test_database("migrate");
@@ -148,9 +188,6 @@ fn prompt_crud_persists_and_isolates_workspaces() {
         .update_page_content(page_id, "hello\nworld")
         .expect("content ok");
     database
-        .update_prompt_status(prompt, "in_progress")
-        .expect("status ok");
-    database
         .rename_prompt(prompt, "renamed")
         .expect("rename ok");
 
@@ -158,13 +195,11 @@ fn prompt_crud_persists_and_isolates_workspaces() {
     assert_eq!(left_prompts.len(), 1);
     assert_eq!(left_prompts[0].name, "renamed");
     assert_eq!(left_prompts[0].content, "hello\nworld");
-    assert_eq!(left_prompts[0].status, "in_progress");
     assert_eq!(left_prompts[0].folder_id, Some(left_folder));
 
     let right_prompts = database.list_prompts(&right).expect("list ok");
     assert_eq!(right_prompts.len(), 1, "workspace isolation");
     assert_eq!(right_prompts[0].name, "other");
-    assert_eq!(right_prompts[0].status, "todo");
 
     database.delete_prompt(prompt).expect("delete ok");
     assert!(database.list_prompts(&left).expect("list ok").is_empty());
@@ -237,7 +272,7 @@ fn migrates_v1_database_to_current_schema() {
     {
         let conn = Connection::open(&path).expect("open");
         conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
-        conn.execute_batch(SCHEMA).expect("v1 schema");
+        conn.execute_batch(LEGACY_SCHEMA).expect("v1 schema");
         conn.execute_batch("PRAGMA user_version = 1;")
             .expect("version");
         conn.execute(
@@ -273,7 +308,7 @@ fn migrates_development_v2_database_keeping_data() {
     std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
     {
         let conn = Connection::open(&path).expect("open");
-        conn.execute_batch(SCHEMA).expect("v1 schema");
+        conn.execute_batch(LEGACY_SCHEMA).expect("v1 schema");
         conn.execute_batch(
             "CREATE TABLE managed_attachment_asset (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -446,6 +481,87 @@ fn seed_v3_database(label: &str, workspace: &Path, content: &str) -> PathBuf {
     )
     .expect("prompt row");
     conn.execute_batch("PRAGMA user_version = 3;")
+        .expect("version");
+    drop(conn);
+    path
+}
+
+#[test]
+fn v5_migration_drops_status_column_and_keeps_pages() {
+    let workspace = workspace_path("v5-drop-status");
+    let path = seed_v4_database("v5-drop-status", &workspace);
+    let database = Database::open(&path).expect("v4 upgrades");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let status_columns: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('workspace_prompt') WHERE name = 'status'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table info");
+    assert_eq!(status_columns, 0, "v5 重建移除状态列");
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].name, "paged");
+    assert_eq!(prompts[0].pages.len(), 1, "重建不丢页表数据");
+    assert_eq!(prompts[0].pages[0].content, "page body");
+    assert_eq!(prompts[0].active_page_id, Some(prompts[0].pages[0].id));
+    drop(database);
+    // 重复打开幂等：不再重建，版本保持当前值。
+    let reopened = Database::open(&path).expect("reopen ok");
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
+    assert_eq!(
+        reopened.list_prompts(&workspace).expect("list")[0]
+            .pages
+            .len(),
+        1
+    );
+}
+
+/// 构造 v4 库：旧基础表（含状态列）+ `active_page_id` 列与页表 + 一条两页数据。
+fn seed_v4_database(label: &str, workspace: &Path) -> PathBuf {
+    let path = temp_db_path(label);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    let conn = Connection::open(&path).expect("open");
+    conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
+    conn.execute_batch(LEGACY_SCHEMA).expect("legacy schema");
+    conn.execute_batch(
+        r#"
+        ALTER TABLE workspace_prompt ADD COLUMN active_page_id INTEGER;
+        CREATE TABLE workspace_prompt_page (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt_id INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (prompt_id, position),
+            FOREIGN KEY (prompt_id) REFERENCES workspace_prompt(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .expect("v4 schema");
+    conn.execute(
+        "INSERT INTO workspace (external_id, name, \"type\", path, is_trusted, created_at, updated_at) \
+         VALUES ('ws-v4', 'w', 'filesystem', ?1, 1, datetime('now'), datetime('now'))",
+        params![path_string(workspace)],
+    )
+    .expect("workspace row");
+    conn.execute(
+        "INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, active_page_id, created_at, updated_at) \
+         VALUES ('p-v4', 'ws-v4', NULL, 'paged', 'page body', 'in_progress', 1, datetime('now'), datetime('now'))",
+        [],
+    )
+    .expect("prompt row");
+    conn.execute(
+        "INSERT INTO workspace_prompt_page (id, prompt_id, position, name, content, created_at, updated_at) \
+         VALUES (1, 1, 0, 'Page 1', 'page body', datetime('now'), datetime('now'))",
+        [],
+    )
+    .expect("page row");
+    conn.execute_batch("PRAGMA user_version = 4;")
         .expect("version");
     drop(conn);
     path

@@ -12,13 +12,7 @@ fn folder(id: i64, parent_id: Option<i64>, name: &str) -> PromptFolder {
 }
 
 fn item(id: i64, folder_id: Option<i64>, name: &str) -> PromptItem {
-    PromptItem::single(
-        id,
-        folder_id,
-        name,
-        format!("content {id}"),
-        PromptItemStatus::Todo,
-    )
+    PromptItem::single(id, folder_id, name, format!("content {id}"))
 }
 
 fn sample_tree() -> PromptTree {
@@ -120,20 +114,6 @@ fn replace_keeps_collapsed_state_and_sorts_by_id() {
     assert!(tree.folder(2).is_some_and(|folder| folder.collapsed));
     assert_eq!(tree.folders().first().map(|folder| folder.id), Some(1));
     assert_eq!(tree.items().first().map(|item| item.id), Some(11));
-}
-
-#[test]
-fn status_roundtrip_and_cycle() {
-    for status in [
-        PromptItemStatus::Todo,
-        PromptItemStatus::InProgress,
-        PromptItemStatus::Completed,
-    ] {
-        assert_eq!(PromptItemStatus::parse(status.as_str()), status);
-    }
-    assert_eq!(PromptItemStatus::parse("unknown"), PromptItemStatus::Todo);
-    assert_eq!(PromptItemStatus::Todo.next(), PromptItemStatus::InProgress);
-    assert_eq!(PromptItemStatus::Completed.next(), PromptItemStatus::Todo);
 }
 
 #[test]

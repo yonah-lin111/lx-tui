@@ -274,11 +274,6 @@ fn save_and_status_effects_persist() {
         prompt: state.prompt.id(),
         revision: state.prompt.revision(),
     });
-    state.effects.push(Effect::SetPromptStatus {
-        workspace: cwd.clone(),
-        id,
-        status: crate::app::prompt::PromptItemStatus::Completed,
-    });
     service.pump(&mut state);
     let records = service
         .db
@@ -288,7 +283,6 @@ fn save_and_status_effects_persist() {
         .expect("list");
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].content, "hello");
-    assert_eq!(records[0].status, "completed");
 }
 
 #[test]

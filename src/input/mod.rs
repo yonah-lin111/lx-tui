@@ -22,7 +22,7 @@ pub enum Routed {
     Copy,
     /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时提示词走保存选择器。
     SavePrompt,
-    /// 复制光标所在模板块正文到系统剪贴板。
+    /// 复制光标所在模板块/补充块正文到系统剪贴板。
     CopyTemplateBlock,
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
@@ -32,7 +32,7 @@ pub enum Routed {
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
-/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文，未映射的按键被吞掉，绝不写入 PTY；
+/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块/补充块正文，未映射的按键被吞掉，绝不写入 PTY；
 /// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,

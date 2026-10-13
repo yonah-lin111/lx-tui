@@ -55,43 +55,6 @@ impl PromptPage {
     }
 }
 
-/// 提示词条目状态；与 DB 稳定值 `todo` / `in_progress` / `completed` 一一对应。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptItemStatus {
-    Todo,
-    InProgress,
-    Completed,
-}
-
-impl PromptItemStatus {
-    /// DB 稳定值。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Todo => "todo",
-            Self::InProgress => "in_progress",
-            Self::Completed => "completed",
-        }
-    }
-
-    /// 从 DB 稳定值解析；未知值回退 `todo`。
-    pub fn parse(value: &str) -> Self {
-        match value {
-            "in_progress" => Self::InProgress,
-            "completed" => Self::Completed,
-            _ => Self::Todo,
-        }
-    }
-
-    /// 状态循环：todo → in_progress → completed → todo。
-    pub fn next(self) -> Self {
-        match self {
-            Self::Todo => Self::InProgress,
-            Self::InProgress => Self::Completed,
-            Self::Completed => Self::Todo,
-        }
-    }
-}
-
 /// 文件夹：`parent_id` 指向根层文件夹（`Some` 时为第 2 层）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptFolder {
@@ -111,7 +74,6 @@ pub struct PromptItem {
     pub pages: Vec<PromptPage>,
     /// 上次打开的页 id；失效时回退第一页。
     pub active_page: PromptPageId,
-    pub status: PromptItemStatus,
 }
 
 impl PromptItem {
@@ -121,7 +83,6 @@ impl PromptItem {
         folder_id: Option<i64>,
         name: impl Into<String>,
         content: impl Into<String>,
-        status: PromptItemStatus,
     ) -> Self {
         let page = PromptPage::saved(id, text::default_page_name(1), content);
         Self {
@@ -130,7 +91,6 @@ impl PromptItem {
             name: name.into(),
             active_page: page.id,
             pages: vec![page],
-            status,
         }
     }
 
@@ -533,7 +493,6 @@ impl From<PromptRecord> for PromptItem {
             name: record.name,
             pages,
             active_page,
-            status: PromptItemStatus::parse(&record.status),
         }
     }
 }

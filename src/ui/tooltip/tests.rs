@@ -301,6 +301,7 @@ fn hits_template_block_buttons_via_prompt_text_area() {
 fn block_button_tooltips_have_hints() {
     let state = AppState::demo();
     for (button, hint) in [
+        (BlockButtonKind::Copy, "copy block"),
         (BlockButtonKind::Clean, "clean block"),
         (BlockButtonKind::Delete, "delete block"),
     ] {
@@ -322,7 +323,7 @@ fn hits_block_buttons_via_prompt_text_area() {
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);
     let hits = ui::prompt::block_buttons(&state.prompt, area);
-    assert_eq!(hits.len(), 2, "清理、删除按钮可见");
+    assert_eq!(hits.len(), 3, "复制、清理、删除按钮可见");
     let clean = hits
         .iter()
         .find(|hit| hit.button == ui::prompt::BlockButton::Clean)

@@ -4,9 +4,7 @@ mod page_menu;
 mod worktree;
 
 use page_menu::render_page_menu;
-pub use page_menu::{
-    page_menu_item_at, page_menu_layout, page_menu_max_rows, page_menu_visible_start,
-};
+pub use page_menu::{PageMenuLayout, page_menu_item_at, page_menu_layout, page_menu_visible_pages};
 use worktree::render_worktree_open;
 pub use worktree::{
     worktree_dialog_button_at, worktree_dialog_entry_at, worktree_dialog_max_rows,
@@ -691,7 +689,6 @@ fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             }
             MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
             MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
-            MenuCommand::ChangePromptStatus(status) => text::prompt_status_menu_label(*status),
         })
         .collect()
 }

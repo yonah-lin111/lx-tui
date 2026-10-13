@@ -4,7 +4,6 @@
 
 use std::path::PathBuf;
 
-use super::prompt::PromptItemStatus;
 use super::trust::TrustTrigger;
 
 /// 临时提示词升格为正式条目时携带的一页（名称与正文）。
@@ -100,12 +99,6 @@ pub enum Effect {
         workspace: PathBuf,
         id: i64,
         page_id: i64,
-    },
-    /// 更新提示词状态。
-    SetPromptStatus {
-        workspace: PathBuf,
-        id: i64,
-        status: PromptItemStatus,
     },
     /// 复制文本到系统剪贴板并弹出反馈 toast。
     CopyToClipboard(String),

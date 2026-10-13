@@ -876,10 +876,10 @@ fn draw_overlay_buffer(state: &AppState) -> ratatui::buffer::Buffer {
 }
 
 #[test]
-fn page_menu_renders_rows_counts_and_current_row_highlight() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus, PromptPage};
+fn page_menu_renders_split_buttons_two_line_pages_and_current_marker() {
+    use crate::app::prompt::{PromptItem, PromptPage};
     let mut state = AppState::demo();
-    let mut item = PromptItem::single(7, None, "paged", "", PromptItemStatus::Todo);
+    let mut item = PromptItem::single(7, None, "paged", "");
     item.pages[0].content = "&&& addTemplate --start\n&&& addTemplate --end".into();
     item.pages.push(PromptPage::saved(
         70,
@@ -901,41 +901,84 @@ fn page_menu_renders_rows_counts_and_current_row_highlight() {
         .collect();
     let body = lines.join("\n");
     assert!(body.contains(text::MENU_PAGE_NEW), "{body}");
+    assert!(body.contains(text::MENU_PAGE_DELETE), "{body}");
     assert!(body.contains("Page 1"), "{body}");
     assert!(body.contains("Notes"), "{body}");
     assert!(body.contains("[todo 1]"), "逐页 todo 计数: {body}");
     assert!(body.contains("[done 1]"), "逐页 done 计数: {body}");
-    assert!(body.contains(text::MENU_PAGE_DELETE), "{body}");
 
     let Some(Overlay::PageMenu(menu)) = &state.overlay else {
         panic!("page menu open");
     };
     let layout = page_menu_layout(&state, SCREEN, menu);
-    let current = layout.item_rects[menu.selected];
+    assert_eq!(menu.selected, 1, "打开时光标停在当前页");
+    // 顶部按钮平分菜单宽度，命中分别映射到首行与末行。
     assert_eq!(
-        Some(buffer[(current.x + 1, current.y)].bg),
-        style::selection().bg,
-        "当前页整行高亮"
+        layout.new_rect.width + layout.delete_rect.width,
+        layout.area.width - 2
     );
-    let other = layout.item_rects[menu.selected + 1];
+    assert!(layout.new_rect.width.abs_diff(layout.delete_rect.width) <= 1);
     assert_eq!(
-        Some(buffer[(other.x + 1, other.y)].bg),
+        page_menu_item_at(&state, SCREEN, menu, layout.new_rect.x, layout.new_rect.y),
+        Some(0)
+    );
+    assert_eq!(
+        page_menu_item_at(
+            &state,
+            SCREEN,
+            menu,
+            layout.delete_rect.x,
+            layout.delete_rect.y
+        ),
+        Some(menu.rows.len() - 1)
+    );
+
+    // 当前页首行带 `❯` 标记；光标移到下一页后当前页行无颜色高亮。
+    let current = layout.page_rects[menu.selected - 1];
+    let row: String = (current.x..current.right())
+        .map(|x| buffer[(x, current.y)].symbol())
+        .collect();
+    assert!(
+        row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
+        "当前页行首标记: {row:?}"
+    );
+    assert!(crate::app::update::set_page_menu_selection(&mut state, 2));
+    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
+        panic!("page menu open");
+    };
+    let buffer = draw_overlay_buffer(&state);
+    let current = layout.page_rects[0];
+    assert_eq!(
+        Some(buffer[(current.x, current.y)].bg),
         style::overlay_panel().bg,
-        "其余页行保持浮层底色"
+        "当前页行不铺颜色高亮"
     );
-    // 命中：项矩形可映射到行快照。
-    let (col, row) = (other.x + 1, other.y);
+    let row: String = (current.x..current.right())
+        .map(|x| buffer[(x, current.y)].symbol())
+        .collect();
+    assert!(row.starts_with(text::AGENT_SELECTED_MARKER), "{row:?}");
     assert_eq!(
-        widgets::menu::item_at(&layout, col, row),
-        Some(menu.selected + 1)
+        Some(buffer[(layout.page_rects[1].x, layout.page_rects[1].y)].bg),
+        style::overlay_selection().bg,
+        "光标行保留菜单反馈底色"
+    );
+    // 两行页项：两行都可命中同一行快照。
+    let page = layout.page_rects[1];
+    assert_eq!(
+        page_menu_item_at(&state, SCREEN, menu, page.x + 1, page.y),
+        Some(menu.selected)
+    );
+    assert_eq!(
+        page_menu_item_at(&state, SCREEN, menu, page.x + 1, page.y + 1),
+        Some(menu.selected)
     );
 }
 
 #[test]
 fn page_delete_confirm_uses_page_name_question() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus, PromptPage, PromptPageId};
+    use crate::app::prompt::{PromptItem, PromptPage, PromptPageId};
     let mut state = AppState::demo();
-    let mut item = PromptItem::single(7, None, "paged", "body", PromptItemStatus::Todo);
+    let mut item = PromptItem::single(7, None, "paged", "body");
     item.pages.push(PromptPage::saved(70, "Notes", ""));
     state.workspaces[0]
         .prompt_panel
@@ -955,9 +998,9 @@ fn page_delete_confirm_uses_page_name_question() {
 
 #[test]
 fn page_menu_windows_around_selected_row_when_tall() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus, PromptPage};
+    use crate::app::prompt::{PromptItem, PromptPage};
     let mut state = AppState::demo();
-    let mut item = PromptItem::single(7, None, "paged", "", PromptItemStatus::Todo);
+    let mut item = PromptItem::single(7, None, "paged", "");
     for index in 2..=30 {
         item.pages
             .push(PromptPage::saved(60 + index, format!("Page {index}"), ""));
@@ -971,11 +1014,33 @@ fn page_menu_windows_around_selected_row_when_tall() {
         &mut state,
         (10, 4)
     ));
+    let visible = page_menu_visible_pages(SCREEN);
+    assert!(visible >= 2, "测试屏幕需能显示多页");
+    let pages = 30;
+    assert!(pages > visible, "页数需超过视口");
+    // 光标移到中部页行：窗口跟随，该页可见。
+    let target = 15;
+    assert!(crate::app::update::set_page_menu_selection(
+        &mut state, target
+    ));
     let Some(Overlay::PageMenu(menu)) = &state.overlay else {
         panic!("page menu open");
     };
+    let layout = page_menu_layout(&state, SCREEN, menu);
+    assert_eq!(layout.page_rects.len(), visible);
+    assert_eq!(
+        layout.area.height,
+        u16::try_from(2 + 1 + visible * 2).expect("height"),
+        "菜单高度钳到屏幕内"
+    );
+    let selected_rect = layout.page_rects[target - layout.start - 1];
+    assert_eq!(
+        page_menu_item_at(&state, SCREEN, menu, selected_rect.x + 1, selected_rect.y),
+        Some(target),
+        "高亮页行在窗口内可命中"
+    );
+    // 光标移到末行（Delete page）：窗口贴底。
     let last = menu.rows.len() - 1;
-    assert!(last + 1 > page_menu_max_rows(SCREEN), "页数需超过视口");
     assert!(crate::app::update::set_page_menu_selection(
         &mut state, last
     ));
@@ -983,22 +1048,11 @@ fn page_menu_windows_around_selected_row_when_tall() {
         panic!("page menu open");
     };
     let layout = page_menu_layout(&state, SCREEN, menu);
-    assert_eq!(layout.item_rects.len(), page_menu_max_rows(SCREEN));
+    assert_eq!(layout.start, pages - visible, "窗口滚到尾部：最后一页可见");
+    let bottom = layout.page_rects[visible - 1];
     assert_eq!(
-        layout.area.height,
-        u16::try_from(page_menu_max_rows(SCREEN) + 2).expect("height"),
-        "菜单高度钳到屏幕内"
-    );
-    let first_row = layout.item_rects[0];
-    assert_eq!(
-        page_menu_item_at(&state, SCREEN, menu, first_row.x, first_row.y),
-        Some(last + 1 - page_menu_max_rows(SCREEN)),
-        "窗口滚到尾部，New page 让位"
-    );
-    let bottom = layout.item_rects[page_menu_max_rows(SCREEN) - 1];
-    assert_eq!(
-        page_menu_item_at(&state, SCREEN, menu, bottom.x, bottom.y),
-        Some(last),
-        "末行（Delete page）可命中"
+        page_menu_item_at(&state, SCREEN, menu, bottom.x, bottom.y + 1),
+        Some(pages),
+        "末页（两行）可命中"
     );
 }

@@ -382,7 +382,7 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
 
 #[test]
 fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -391,15 +391,7 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
     panel.tree.replace(
         vec![],
         (0..40)
-            .map(|index| {
-                PromptItem::single(
-                    index,
-                    None,
-                    format!("item-{index:02}"),
-                    String::new(),
-                    PromptItemStatus::Todo,
-                )
-            })
+            .map(|index| PromptItem::single(index, None, format!("item-{index:02}"), String::new()))
             .collect(),
     );
     let bar = ui::prompt_scrollbar(&geo.view, &state).expect("scrollbar is visible");
@@ -2204,22 +2196,16 @@ fn ctrl_s_saves_prompt_from_editor() {
 
 #[test]
 fn ctrl_s_saves_open_item_immediately() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let config = Config::default();
     let mut state = demo_terminal();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    state.workspaces[0].prompt_panel.tree.replace(
-        vec![],
-        vec![PromptItem::single(
-            7,
-            None,
-            "item",
-            "body",
-            PromptItemStatus::Todo,
-        )],
-    );
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![PromptItem::single(7, None, "item", "body")]);
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
     state.prompt_focused = true;
     state.prompt.insert_str("+");
@@ -2428,20 +2414,14 @@ fn prompt_tree_double_click(
 
 #[test]
 fn mouse_double_click_prompt_item_row_opens_editor() {
-    use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus, PromptMode};
+    use crate::app::prompt::{PromptEditing, PromptItem, PromptMode};
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     let point = prompt_tree_click(
         &mut state,
         &geo,
         vec![],
-        vec![PromptItem::single(
-            7,
-            None,
-            "item",
-            "item body",
-            PromptItemStatus::Todo,
-        )],
+        vec![PromptItem::single(7, None, "item", "item body")],
         PromptRowKind::Item,
     );
 
@@ -2479,7 +2459,7 @@ fn mouse_double_click_prompt_temp_row_opens_editor() {
 
 #[test]
 fn mouse_double_click_prompt_folder_toggles_once() {
-    use crate::app::prompt::{PromptFolder, PromptItem, PromptItemStatus};
+    use crate::app::prompt::{PromptFolder, PromptItem};
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
     let point = prompt_tree_click(
@@ -2491,13 +2471,7 @@ fn mouse_double_click_prompt_folder_toggles_once() {
             name: "folder".into(),
             collapsed: false,
         }],
-        vec![PromptItem::single(
-            7,
-            Some(1),
-            "item",
-            "item body",
-            PromptItemStatus::Todo,
-        )],
+        vec![PromptItem::single(7, Some(1), "item", "item body")],
         PromptRowKind::Folder,
     );
 
@@ -2657,6 +2631,50 @@ fn mouse_template_buttons_clean_status_and_delete() {
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "");
+}
+
+#[test]
+fn mouse_supple_copy_button_writes_clipboard_toast() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 80;
+    state.prompt.resize(78, 16);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText(
+            "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end"
+                .into(),
+        ),
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let copy = crate::ui::prompt::block_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == crate::ui::prompt::BlockButton::Copy)
+        .expect("supple copy button visible");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            copy.rect.x,
+            copy.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(dirty);
+    assert!(state.toast.is_some(), "复制按钮弹出剪贴板反馈");
+    assert_eq!(
+        state.toast.as_ref().map(|toast| toast.title.as_deref()),
+        Some(Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)),
+        "复制反馈沿用剪贴板 toast"
+    );
 }
 
 /// 给当前焦点窗格挂 Agent 快照；返回窗格标识。
@@ -3245,9 +3263,9 @@ fn terminal_paste_shell_escaped_path_builds_proposal_from_real_file() {
 
 /// 预置一个两页条目并进入编辑视图的 demo 状态。
 fn paged_prompt_state() -> AppState {
-    use crate::app::prompt::{PromptItem, PromptItemStatus, PromptPage};
+    use crate::app::prompt::{PromptItem, PromptPage};
     let mut state = demo_terminal();
-    let mut item = PromptItem::single(7, None, "paged", "alpha", PromptItemStatus::Todo);
+    let mut item = PromptItem::single(7, None, "paged", "alpha");
     item.pages.push(PromptPage::saved(70, "Page 2", "beta"));
     state.workspaces[0]
         .prompt_panel

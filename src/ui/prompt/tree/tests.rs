@@ -1,11 +1,11 @@
-//! 提示词树渲染单元测试：搜索框行（模态输入对齐）、连接符、状态标签、省略号、空状态与命中。
+//! 提示词树渲染单元测试：搜索框行（模态输入对齐）、连接符、`❯` 标记、省略号、空状态与命中。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use super::*;
-use crate::app::prompt::{PromptFolder, PromptItem, PromptItemStatus, PromptPage};
+use crate::app::prompt::{PromptFolder, PromptItem, PromptPage};
 
 /// 树行渲染用的面板：去掉默认空白 temp，聚焦树行布局。
 fn panel_with(folders: Vec<PromptFolder>, items: Vec<PromptItem>) -> PromptPanel {
@@ -26,8 +26,8 @@ fn folder(id: i64, parent_id: Option<i64>, name: &str) -> PromptFolder {
     }
 }
 
-fn item(id: i64, folder_id: Option<i64>, name: &str, status: PromptItemStatus) -> PromptItem {
-    PromptItem::single(id, folder_id, name, String::new(), status)
+fn item(id: i64, folder_id: Option<i64>, name: &str) -> PromptItem {
+    PromptItem::single(id, folder_id, name, String::new())
 }
 
 fn search(panel: &mut PromptPanel, query: &str) {
@@ -92,13 +92,10 @@ fn search_row_scrolls_viewport_for_long_query() {
 }
 
 #[test]
-fn renders_folder_and_item_rows_with_status() {
+fn renders_folder_and_item_rows_with_tree_prefix() {
     let mut panel = panel_with(
         vec![folder(1, None, "ideas"), folder(2, Some(1), "deep")],
-        vec![
-            item(10, None, "loose", PromptItemStatus::Todo),
-            item(11, Some(2), "nested", PromptItemStatus::InProgress),
-        ],
+        vec![item(10, None, "loose"), item(11, Some(2), "nested")],
     );
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
@@ -107,90 +104,80 @@ fn renders_folder_and_item_rows_with_status() {
     // 行 0 搜索框、行 1 分割线，树行从行 2 开始。
     assert_eq!(row_text(&buf, area, 1), text::DIVIDER_MID.repeat(40));
     let first = row_text(&buf, area, 2);
-    assert!(first.starts_with("▾ ideas"), "{first}");
+    assert!(first.starts_with("❯ ▾ ideas"), "选中行首标记: {first}");
     // 子层最后一个可见后代：末项连接符 `└─`。
     let second = row_text(&buf, area, 3);
-    assert!(second.starts_with("└─ ▾ deep"), "{second}");
+    assert!(second.starts_with("  └─ ▾ deep"), "{second}");
     // 嵌套文件夹内的条目深一层：deep 为末项，续接列留空。
     let third = row_text(&buf, area, 4);
-    assert!(third.starts_with("   └─ • nested"), "{third}");
-    assert!(third.contains("[run]"), "{third}");
+    assert!(third.starts_with("     └─ • nested"), "{third}");
     let fourth = row_text(&buf, area, 5);
-    assert!(fourth.starts_with("• loose"), "{fourth}");
-    assert!(fourth.contains("[todo]"), "{fourth}");
+    assert!(fourth.starts_with("  • loose"), "{fourth}");
 
     panel.tree.toggle_folder(1);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
     let first = row_text(&buf, area, 2);
-    assert!(first.starts_with("▸ ideas"), "{first}");
+    assert!(first.starts_with("❯ ▸ ideas"), "{first}");
     let second = row_text(&buf, area, 3);
-    assert!(second.starts_with("• loose"), "{second}");
+    assert!(second.starts_with("  • loose"), "{second}");
 }
 
 #[test]
 fn nested_items_keep_vertical_line_when_subfolder_has_later_siblings() {
     let panel = panel_with(
         vec![folder(1, None, "solo"), folder(2, Some(1), "deep")],
-        vec![
-            item(11, Some(2), "nested", PromptItemStatus::Todo),
-            item(12, Some(1), "sibling", PromptItemStatus::Todo),
-        ],
+        vec![item(11, Some(2), "nested"), item(12, Some(1), "sibling")],
     );
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
     // rows: solo、deep、nested、sibling；deep 之后仍有同层行（sibling）：续接列画 `│`。
     let deep = row_text(&buf, area, 3);
-    assert!(deep.starts_with("├─ ▾ deep"), "{deep}");
+    assert!(deep.starts_with("  ├─ ▾ deep"), "{deep}");
     let nested = row_text(&buf, area, 4);
-    assert!(nested.starts_with("│  └─ • nested"), "{nested}");
+    assert!(nested.starts_with("  │  └─ • nested"), "{nested}");
     let sibling = row_text(&buf, area, 5);
-    assert!(sibling.starts_with("└─ • sibling"), "{sibling}");
+    assert!(sibling.starts_with("  └─ • sibling"), "{sibling}");
 }
 
 #[test]
 fn nested_items_use_spaces_when_root_folder_is_last() {
     let panel = panel_with(
         vec![folder(1, None, "solo"), folder(2, Some(1), "deep")],
-        vec![item(11, Some(2), "nested", PromptItemStatus::Todo)],
+        vec![item(11, Some(2), "nested")],
     );
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
     // solo 为唯一根层文件夹（末项）：续接列留空，嵌套条目以空格对齐。
     let deep = row_text(&buf, area, 3);
-    assert!(deep.starts_with("└─ ▾ deep"), "{deep}");
+    assert!(deep.starts_with("  └─ ▾ deep"), "{deep}");
     let nested = row_text(&buf, area, 4);
-    assert!(nested.starts_with("   └─ • nested"), "{nested}");
+    assert!(nested.starts_with("     └─ • nested"), "{nested}");
 }
 
 #[test]
-fn selected_row_gets_selection_background() {
-    let mut panel = panel_with(
-        vec![],
-        vec![item(10, None, "final", PromptItemStatus::Completed)],
-    );
+fn selected_row_gets_marker_without_background() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "final")]);
     panel.selected = 0;
     let area = Rect::new(0, 0, 30, 4);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
+    let row = row_text(&buf, area, 2);
+    assert!(
+        row.starts_with(&format!("{} • final", text::AGENT_SELECTED_MARKER)),
+        "{row}"
+    );
     let cell = &buf[(29, 2)];
-    assert_eq!(cell.bg, Color::Indexed(240), "整行铺选中底色");
-    let status_cell = &buf[(24, 2)];
-    assert_eq!(status_cell.symbol(), "[");
+    assert_eq!(cell.bg, Color::Reset, "选中行不铺底色");
 }
 
 #[test]
 fn long_names_are_ellipsized_within_width() {
     let panel = panel_with(
         vec![],
-        vec![item(
-            10,
-            None,
-            "a very long prompt name that cannot fit",
-            PromptItemStatus::Todo,
-        )],
+        vec![item(10, None, "a very long prompt name that cannot fit")],
     );
     let area = Rect::new(0, 0, 18, 4);
     let mut buf = Buffer::empty(area);
@@ -198,7 +185,6 @@ fn long_names_are_ellipsized_within_width() {
     let text = row_text(&buf, area, 2);
     assert!(text.contains('…'), "{text}");
     assert_eq!(text.chars().count(), 18);
-    assert!(text.ends_with("[todo]"), "{text}");
 }
 
 #[test]
@@ -213,7 +199,7 @@ fn empty_tree_shows_placeholder_under_search_row() {
 }
 
 #[test]
-fn default_temp_renders_placeholder_name_and_badge() {
+fn default_temp_renders_placeholder_name() {
     let panel = PromptPanel::new();
     let area = Rect::new(0, 0, 40, 5);
     let mut buf = Buffer::empty(area);
@@ -221,16 +207,13 @@ fn default_temp_renders_placeholder_name_and_badge() {
     let tmp = row_text(&buf, area, 2);
     assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
     let default = row_text(&buf, area, 3);
-    assert!(default.starts_with("• default"), "{default}");
-    assert!(default.ends_with(text::PROMPT_TEMP_BADGE), "{default}");
+    assert!(default.starts_with("  • default"), "{default}");
+    assert!(!default.contains(text::PROMPT_TEMP_BADGE), "{default}");
 }
 
 #[test]
 fn filter_without_matches_shows_hint_placeholder() {
-    let mut panel = panel_with(
-        vec![],
-        vec![item(10, None, "alpha", PromptItemStatus::Todo)],
-    );
+    let mut panel = panel_with(vec![], vec![item(10, None, "alpha")]);
     search(&mut panel, "zzz");
     let area = Rect::new(0, 0, 30, 5);
     let mut buf = Buffer::empty(area);
@@ -243,10 +226,7 @@ fn filter_without_matches_shows_hint_placeholder() {
 fn filter_shows_ancestors_and_expands_collapsed_folders() {
     let mut panel = panel_with(
         vec![folder(1, None, "ideas"), folder(2, Some(1), "deep")],
-        vec![
-            item(10, None, "loose", PromptItemStatus::Todo),
-            item(11, Some(2), "nested", PromptItemStatus::InProgress),
-        ],
+        vec![item(10, None, "loose"), item(11, Some(2), "nested")],
     );
     panel.tree.toggle_folder(1);
     panel.tree.toggle_folder(2);
@@ -255,12 +235,12 @@ fn filter_shows_ancestors_and_expands_collapsed_folders() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
     let first = row_text(&buf, area, 2);
-    assert!(first.starts_with("▾ ideas"), "{first}");
+    assert!(first.starts_with("❯ ▾ ideas"), "{first}");
     // 过滤结果里 ideas 为唯一根层（末项）：子层续接列留空；折叠被忽略按展开绘制。
     let second = row_text(&buf, area, 3);
-    assert!(second.starts_with("└─ ▾ deep"), "{second}");
+    assert!(second.starts_with("  └─ ▾ deep"), "{second}");
     let third = row_text(&buf, area, 4);
-    assert!(third.starts_with("   └─ • nested"), "{third}");
+    assert!(third.starts_with("     └─ • nested"), "{third}");
 }
 
 #[test]
@@ -268,9 +248,9 @@ fn row_at_maps_viewport_and_respects_scroll_and_search_row() {
     let mut panel = panel_with(
         vec![],
         vec![
-            item(10, None, "a", PromptItemStatus::Todo),
-            item(11, None, "b", PromptItemStatus::Todo),
-            item(12, None, "c", PromptItemStatus::Todo),
+            item(10, None, "a"),
+            item(11, None, "b"),
+            item(12, None, "c"),
         ],
     );
     let area = Rect::new(2, 1, 20, 5);
@@ -290,11 +270,8 @@ fn row_at_maps_viewport_and_respects_scroll_and_search_row() {
 }
 
 #[test]
-fn temp_rows_render_section_labels_summary_and_badge() {
-    let mut panel = panel_with(
-        vec![],
-        vec![item(10, None, "alpha", PromptItemStatus::Todo)],
-    );
+fn temp_rows_render_section_labels_and_summary() {
+    let mut panel = panel_with(vec![], vec![item(10, None, "alpha")]);
     let temp_id = panel.new_temp();
     panel
         .temp_mut(temp_id)
@@ -309,26 +286,17 @@ fn temp_rows_render_section_labels_summary_and_badge() {
     let tmp = row_text(&buf, area, 2);
     assert!(tmp.starts_with(text::PROMPT_SECTION_TMP), "{tmp}");
     let temp = row_text(&buf, area, 3);
-    assert!(temp.starts_with("• code review"), "{temp}");
-    assert!(temp.ends_with(text::PROMPT_TEMP_BADGE), "{temp}");
-    assert_eq!(
-        buf[(area.right() - 5, 3)].fg,
-        Color::Reset,
-        "tmp 徽标改用默认文字色，不再用主题强调色"
-    );
+    assert!(temp.starts_with("  • code review"), "{temp}");
+    assert!(!temp.contains(text::PROMPT_TEMP_BADGE), "{temp}");
     let saved = row_text(&buf, area, 4);
     assert!(saved.starts_with(text::PROMPT_SECTION_SAVED), "{saved}");
     let row = row_text(&buf, area, 5);
-    assert!(row.starts_with("• alpha"), "{row}");
-    assert!(row.contains("[todo]"), "{row}");
+    assert!(row.starts_with("  • alpha"), "{row}");
 }
 
 #[test]
 fn temp_section_hides_saved_label_when_tree_filtered_out() {
-    let mut panel = panel_with(
-        vec![],
-        vec![item(10, None, "alpha", PromptItemStatus::Todo)],
-    );
+    let mut panel = panel_with(vec![], vec![item(10, None, "alpha")]);
     let temp_id = panel.new_temp();
     panel
         .temp_mut(temp_id)
@@ -352,7 +320,7 @@ fn temp_section_hides_saved_label_when_tree_filtered_out() {
 
 /// 组装一个两页条目：第一页 1 个 todo 模板，第二页 1 个 run 模板。
 fn paged_item() -> PromptItem {
-    let mut item = item(10, None, "alpha", PromptItemStatus::Todo);
+    let mut item = item(10, None, "alpha");
     item.pages[0].content = "&&& addTemplate --start\n&&& addTemplate --end".into();
     item.pages.push(PromptPage::saved(
         100,
@@ -371,10 +339,9 @@ fn item_row_summarizes_template_counts_across_pages() {
     render(area, &mut buf, &panel, false);
     // 行序（绝对行 = 搜索行 0 + 分割线 1 + 列表行）：tmp:、default、saved:、item。
     let row = row_text(&buf, area, 5);
-    assert!(row.contains("[todo]"), "条目自身状态保留: {row}");
     assert!(row.contains("[todo 1]"), "第一页 todo 计数: {row}");
     assert!(row.contains("[run 1]"), "第二页 run 计数: {row}");
-    assert!(row.starts_with("• alpha"), "{row}");
+    assert!(row.starts_with("  • alpha"), "{row}");
 }
 
 #[test]
@@ -385,29 +352,7 @@ fn item_row_omits_whole_count_labels_when_narrow() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
     let row = row_text(&buf, area, 5);
-    // 计数整体省略，不画半个标签；条目状态优先保留。
+    // 尾部计数标签要么完整保留、要么整体省略，不画半个标签。
+    assert!(row.contains("[todo 1]"), "{row}");
     assert!(!row.contains("run"), "尾部计数标签完整省略: {row}");
-    assert!(!row.contains("[todo 1]") || row.contains("[todo]"), "{row}");
-}
-
-#[test]
-fn temp_badge_uses_default_text_color_not_accent() {
-    let mut panel = PromptPanel::new();
-    let temp_id = panel.new_temp();
-    panel
-        .temp_mut(temp_id)
-        .expect("temp")
-        .active_page_mut()
-        .expect("page")
-        .content = "draft".into();
-    let area = Rect::new(0, 0, 40, 6);
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &panel, false);
-    let row = row_text(&buf, area, 4);
-    assert!(row.ends_with(text::PROMPT_TEMP_BADGE), "{row}");
-    assert_eq!(
-        buf[(area.right() - 5, 4)].fg,
-        Color::Reset,
-        "tmp 徽标为默认文字色"
-    );
 }

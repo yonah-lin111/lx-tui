@@ -1182,11 +1182,12 @@ fn supple_block_overrides_parent_template_colors() {
     assert_eq!(buf[(2, 3)].bg, Color::Rgb(46, 32, 54), "+++ 覆盖父底色");
 
     let hits = block_buttons(&prompt, area);
-    assert_eq!(hits.len(), 2, "补充块两个按钮");
+    assert_eq!(hits.len(), 3, "补充块复制、清理与删除三个按钮");
     assert!(hits.iter().all(|hit| hit.kind == BlockKind::Supple));
-    assert_eq!(hits[0].button, BlockButton::Clean);
-    assert_eq!(hits[1].button, BlockButton::Delete);
-    let hit = hits[0];
+    assert_eq!(hits[0].button, BlockButton::Copy);
+    assert_eq!(hits[1].button, BlockButton::Clean);
+    assert_eq!(hits[2].button, BlockButton::Delete);
+    let hit = hits[1];
     assert_eq!(
         block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
         Some(BlockButton::Clean)

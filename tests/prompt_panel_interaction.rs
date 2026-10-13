@@ -271,9 +271,15 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
     assert!(
-        app.find_in_row_of(text::PROMPT_TEMP_DEFAULT_NAME, text::PROMPT_TEMP_BADGE)
+        app.find_in_row_of(text::PROMPT_TEMP_DEFAULT_NAME, text::AGENT_SELECTED_MARKER)
             .is_some(),
-        "default temp row with badge: \n{}",
+        "default temp row with marker: \n{}",
+        app.screen()
+    );
+    assert!(
+        app.find_in_row_of(text::PROMPT_TEMP_DEFAULT_NAME, text::PROMPT_TEMP_BADGE)
+            .is_none(),
+        "temp rows no longer carry the [tmp] badge: \n{}",
         app.screen()
     );
     assert!(
@@ -325,10 +331,14 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
 
-    // 回到树：出现正式条目行与状态标签。
+    // 回到树：出现正式条目行，不再有状态标签。
     app.click(text::PROMPT_MODE_LIST_LABEL);
     assert!(app.wait_for("• New prompt"), "item row: \n{}", app.screen());
-    assert!(app.wait_for("[todo]"), "status label");
+    assert!(
+        app.find_in_row_of("• New prompt", "[todo]").is_none(),
+        "item rows carry no status label: \n{}",
+        app.screen()
+    );
 
     // 输入即过滤：命中保持可见，无命中显示占位；Ctrl+C 清空恢复，Esc 返回编辑视图。
     app.send(b"new");

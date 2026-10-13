@@ -21,6 +21,7 @@ pub enum TemplateButtonKind {
 /// 补充块按钮种类；与 ui 侧 `BlockButton` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockButtonKind {
+    Copy,
     Clean,
     Delete,
 }

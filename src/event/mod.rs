@@ -2413,6 +2413,11 @@ fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockButtonHit) {
     use crate::app::markdown::BlockKind;
     use ui::prompt::BlockButton;
     match (hit.kind, hit.button) {
+        (BlockKind::Supple, BlockButton::Copy) => {
+            if let Some(text) = update::copy_supple_block(state, hit.line) {
+                copy_with_toast(state, &text);
+            }
+        }
         (BlockKind::Supple, BlockButton::Clean) => {
             update::clean_supple_block(state, hit.line);
         }

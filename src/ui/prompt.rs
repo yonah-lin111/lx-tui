@@ -252,6 +252,7 @@ pub struct TemplateButtonHit {
 /// 补充块操作按钮种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockButton {
+    Copy,
     Clean,
     Delete,
 }
@@ -273,8 +274,9 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
     TemplateBlockButton::Delete,
 ];
 
-/// 补充块按钮组顺序：清理、删除。
-const SUPPLE_BUTTONS: [BlockButton; 2] = [BlockButton::Clean, BlockButton::Delete];
+/// 补充块按钮组顺序：复制、清理、删除。
+const SUPPLE_BUTTONS: [BlockButton; 3] =
+    [BlockButton::Copy, BlockButton::Clean, BlockButton::Delete];
 
 /// 块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
 fn block_gutter(block: bool) -> u16 {
@@ -305,8 +307,9 @@ fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
         BlockKind::Supple => SUPPLE_BUTTONS
             .iter()
             .map(|button| match button {
+                BlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
                 BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
-                _ => text::SUPPLE_BUTTON_DEL,
+                BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
             })
             .collect(),
     }
@@ -469,6 +472,7 @@ fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) ->
 /// 补充块按钮文案。
 fn block_button_label(button: BlockButton) -> &'static str {
     match button {
+        BlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
         BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
         BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
     }

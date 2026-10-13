@@ -299,6 +299,12 @@ pub fn block_span_at(text: &str, offset: usize) -> Option<BlockSpan> {
     })
 }
 
+/// offset 所在补充块（`+++`）的起始逻辑行；不在补充块内返回 None。
+pub fn supple_block_start_at(text: &str, offset: usize) -> Option<usize> {
+    let span = block_span_at(text, offset)?;
+    (span.kind == BlockKind::Supple).then_some(span.start)
+}
+
 /// 全部块范围（文档顺序，按结束行）。
 pub fn block_spans(text: &str) -> Vec<BlockSpan> {
     block_scan(text).spans

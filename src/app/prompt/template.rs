@@ -12,8 +12,15 @@ impl Prompt {
         Some(self.text[from..to].to_string())
     }
 
-    /// 复制快捷键用正文：光标所在模板块按复制语义提取；不在块内返回 None。
+    /// 复制快捷键用正文：光标所在模板块或补充块按复制语义提取；不在块内返回 None。
+    ///
+    /// `+++` 是 `&&&` 的内层块：光标在内层时优先复制内层正文。
     pub fn copy_text_at_cursor(&self) -> Option<String> {
+        if let Some(start) = markdown::supple_block_start_at(&self.text, self.cursor)
+            && let Some(body) = self.supple_block_body(start)
+        {
+            return Some(markdown::copy_template_content(&body));
+        }
         let start = markdown::template_block_start_at(&self.text, self.cursor)?;
         let body = self.template_block_body(start)?;
         Some(markdown::copy_template_content(&body))

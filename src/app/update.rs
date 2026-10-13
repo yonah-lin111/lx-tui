@@ -498,7 +498,15 @@ pub fn copy_template_block(state: &mut AppState, start_line: usize) -> Option<St
         .map(|body| super::markdown::copy_template_content(&body))
 }
 
-/// 复制光标所在模板块正文（Cmd/Ctrl+Shift+C）；不在模板块内返回 None。
+/// 复制补充块正文（同模板块复制语义）；返回待写入剪贴板的文本。
+pub fn copy_supple_block(state: &mut AppState, start_line: usize) -> Option<String> {
+    state
+        .prompt
+        .supple_block_body(start_line)
+        .map(|body| super::markdown::copy_template_content(&body))
+}
+
+/// 复制光标所在模板块或补充块正文（Cmd/Ctrl+Shift+C）；不在任何块内返回 None。
 pub fn copy_template_block_at_cursor(state: &mut AppState) -> Option<String> {
     state.prompt.copy_text_at_cursor()
 }
@@ -1841,12 +1849,6 @@ pub fn activate_menu(state: &mut AppState) {
         }
         (Some(MenuCommand::EditPrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
             edit_prompt_item(state, workspace, item_id);
-        }
-        (
-            Some(MenuCommand::ChangePromptStatus(status)),
-            OverlayTarget::PromptItem { workspace, item_id },
-        ) => {
-            change_prompt_status(state, workspace, item_id, *status);
         }
         (Some(MenuCommand::RenamePrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
             open_prompt_rename(state, RenameTarget::PromptItem { workspace, item_id });
