@@ -2334,9 +2334,6 @@ fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockButtonHit) {
         (BlockKind::Var, BlockButton::Top) => {
             update::move_var_block_to_top(state, hit.line);
         }
-        (BlockKind::Var, BlockButton::Fold) => {
-            update::toggle_var_fold(state, hit.line);
-        }
         _ => {}
     }
 }

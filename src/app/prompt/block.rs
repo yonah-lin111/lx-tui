@@ -1,7 +1,5 @@
 //! 补充块与变量块操作：清理、删除、合并、置顶与折叠视图状态；纯状态、无 IO。
 
-use std::collections::BTreeSet;
-
 use super::super::markdown::{self, BlockContext, BlockKind, BlockSpan};
 use super::{EditKind, Prompt};
 
@@ -117,28 +115,6 @@ impl Prompt {
         self.cursor = self.cursor.min(self.text.len());
         self.settle();
         true
-    }
-
-    /// 折叠/展开变量块（纯视图状态，不改正文）；目标非变量块起始行返回 false。
-    pub fn toggle_var_fold(&mut self, start_line: usize) -> bool {
-        if self.block_span_of(start_line, BlockKind::Var).is_none() {
-            return false;
-        }
-        if !self.folded.remove(&start_line) {
-            self.folded.insert(start_line);
-        }
-        self.settle();
-        true
-    }
-
-    /// 变量块是否处于折叠状态。
-    pub fn var_folded(&self, start_line: usize) -> bool {
-        self.folded.contains(&start_line)
-    }
-
-    /// 折叠起始行集合（渲染读取）。
-    pub fn folded_starts(&self) -> &BTreeSet<usize> {
-        &self.folded
     }
 
     /// `/addVarContent`：向首个变量块的 `@content:` 追加一条 `- @` 条目并清空命令行，

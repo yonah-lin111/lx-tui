@@ -3255,30 +3255,11 @@ fn var_button_state() -> (AppState, Config, Geometry, Rect) {
 }
 
 #[test]
-fn mouse_var_block_buttons_fold_clean_delete() {
+fn mouse_var_block_buttons_clean_delete() {
     use crate::ui::prompt::BlockButton;
     let (mut state, config, geo, area) = var_button_state();
     let mut sessions = HashMap::new();
     let mut dirty = false;
-
-    let fold = crate::ui::prompt::block_buttons(&state.prompt, area)
-        .into_iter()
-        .find(|hit| hit.button == BlockButton::Fold)
-        .expect("fold button");
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            fold.rect.x + 1,
-            fold.rect.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut dirty,
-    );
-    assert!(state.prompt.var_folded(0), "折叠为纯视图状态");
-    assert!(state.prompt.text().contains("empty:"), "折叠不改正文");
 
     let clean = crate::ui::prompt::block_buttons(&state.prompt, area)
         .into_iter()

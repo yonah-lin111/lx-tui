@@ -1216,14 +1216,13 @@ fn var_block_buttons_order_and_hit() {
     assert_eq!(
         buttons,
         vec![
-            BlockButton::Fold,
             BlockButton::Clean,
             BlockButton::Delete,
             BlockButton::Merge,
             BlockButton::Top,
         ]
     );
-    let hit = hits[1];
+    let hit = hits[0];
     assert_eq!(
         block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
         Some(BlockButton::Clean)

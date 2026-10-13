@@ -4,8 +4,7 @@ use super::super::markdown;
 use super::{Prompt, VisualRow, char_width, display_width, line_end, line_start};
 
 impl Prompt {
-    /// 按内容宽度软换行得到的视觉行；块行扣除左右边框槽后再换行；
-    /// 折叠的变量块（光标不在其中时）隐藏起始行以外的行。
+    /// 按内容宽度软换行得到的视觉行；块行扣除左右边框槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
         let margins = usize::from(
@@ -13,24 +12,11 @@ impl Prompt {
                 + crate::layout::PROMPT_TEMPLATE_GUTTER_RIGHT,
         );
         let infos = markdown::block_line_infos(&self.text);
-        let cursor_line = self.text[..self.cursor.min(self.text.len())]
-            .matches('\n')
-            .count();
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (line, segment) in self.text.split('\n').enumerate() {
             let info = infos.get(line).copied().flatten();
             let line_end = line_start + segment.len();
-            let hidden = info.is_some_and(|info| {
-                info.kind == markdown::BlockKind::Var
-                    && self.folded.contains(&info.start)
-                    && info.start != line
-                    && !(cursor_line >= info.start && cursor_line <= info.end)
-            });
-            if hidden {
-                line_start = line_end + 1;
-                continue;
-            }
             let width = if info.is_some() {
                 width.saturating_sub(margins).max(1)
             } else {

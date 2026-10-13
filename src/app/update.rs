@@ -562,11 +562,6 @@ pub fn move_var_block_to_top(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.move_var_block_to_top(start_line)
 }
 
-/// 折叠/展开变量块（纯视图状态）；返回是否产生变更。
-pub fn toggle_var_fold(state: &mut AppState, start_line: usize) -> bool {
-    state.prompt.toggle_var_fold(start_line)
-}
-
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 const WHEEL_LINES: isize = 3;
 

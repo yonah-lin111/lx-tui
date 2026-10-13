@@ -2588,21 +2588,6 @@ fn var_merge_and_move_to_top() {
 }
 
 #[test]
-fn var_fold_hides_lines_without_changing_text() {
-    let text = "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end\n";
-    let mut prompt = prompt(60, 20);
-    prompt.set_text(text);
-    let before = prompt.visual_rows().len();
-    assert!(prompt.toggle_var_fold(0));
-    assert_eq!(prompt.text(), text, "fold does not write text");
-    assert!(prompt.var_folded(0));
-    let after = prompt.visual_rows().len();
-    assert!(after < before, "folded rows hidden: {before} -> {after}");
-    assert!(prompt.toggle_var_fold(0));
-    assert_eq!(prompt.visual_rows().len(), before);
-}
-
-#[test]
 fn var_block_converts_fullwidth_colon_only_on_key_lines() {
     let mut editor = prompt(40, 10);
     editor.set_text("$$$ varTemplate --start\n{title: }\nnewkey\n$$$ varTemplate --end\n");

@@ -337,11 +337,6 @@ pub fn block_button() -> Style {
     muted()
 }
 
-/// 变量块折叠标记：次要信息。
-pub fn fold_marker() -> Style {
-    Style::default().fg(Color::LightCyan)
-}
-
 /// lx 页品牌 logo 像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
 ///
 /// `k` 描边藏青、`p` 主体粉、`n` 深粉、`b` 天空蓝、`c` 冰蓝高光、`w` 高光白；其余字符视为透明。

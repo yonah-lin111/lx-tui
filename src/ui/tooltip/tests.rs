@@ -305,7 +305,6 @@ fn block_button_tooltips_have_hints() {
         (BlockButtonKind::Delete, "delete block"),
         (BlockButtonKind::Merge, "merge into first variable block"),
         (BlockButtonKind::Top, "move to top"),
-        (BlockButtonKind::Fold, "collapse / expand variable block"),
     ] {
         assert_eq!(
             text::tooltip_hint(TooltipTarget::BlockButton { line: 0, button }, &state),
@@ -325,7 +324,7 @@ fn hits_block_buttons_via_prompt_text_area() {
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);
     let hits = ui::prompt::block_buttons(&state.prompt, area);
-    assert_eq!(hits.len(), 5, "折叠、清理、删除、合并、置顶按钮可见");
+    assert_eq!(hits.len(), 4, "清理、删除、合并、置顶按钮可见");
     let clean = hits
         .iter()
         .find(|hit| hit.button == ui::prompt::BlockButton::Clean)

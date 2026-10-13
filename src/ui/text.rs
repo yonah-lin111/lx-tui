@@ -449,7 +449,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             BlockButtonKind::Delete => "delete block",
             BlockButtonKind::Merge => "merge into first variable block",
             BlockButtonKind::Top => "move to top",
-            BlockButtonKind::Fold => "collapse / expand variable block",
         },
     }
 }
@@ -509,8 +508,6 @@ pub const VAR_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const VAR_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 pub const VAR_BUTTON_MERGE: &str = "[⋃]";
 pub const VAR_BUTTON_TOP: &str = "[⇧]";
-pub const VAR_BUTTON_FOLD: &str = "[▸]";
-pub const VAR_BUTTON_UNFOLD: &str = "[▾]";
 
 /// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";

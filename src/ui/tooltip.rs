@@ -188,7 +188,6 @@ fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
         ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,
         ui::prompt::BlockButton::Merge => BlockButtonKind::Merge,
         ui::prompt::BlockButton::Top => BlockButtonKind::Top,
-        ui::prompt::BlockButton::Fold => BlockButtonKind::Fold,
     }
 }
 

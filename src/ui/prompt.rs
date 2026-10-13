@@ -229,7 +229,7 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         let start_row = role == Some(BlockRole::Start);
         let text_start = area.x + block_gutter(info.is_some());
         let buttons_start = if start_row {
-            let labels = block_button_labels(info, prompt);
+            let labels = block_button_labels(info);
             block_buttons_start(area, block_buttons_total(&labels))
         } else {
             area.right()
@@ -308,7 +308,6 @@ pub enum BlockButton {
     Delete,
     Merge,
     Top,
-    Fold,
 }
 
 /// 补充块/变量块操作按钮命中。
@@ -317,8 +316,6 @@ pub struct BlockButtonHit {
     pub line: usize,
     pub kind: BlockKind,
     pub button: BlockButton,
-    /// 变量块当前是否折叠（决定 Fold 图标）。
-    pub folded: bool,
     pub rect: Rect,
 }
 
@@ -333,9 +330,8 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
 /// 补充块按钮组顺序：清理、删除。
 const SUPPLE_BUTTONS: [BlockButton; 2] = [BlockButton::Clean, BlockButton::Delete];
 
-/// 变量块按钮组顺序：折叠、清理、删除、合并、置顶。
-const VAR_BUTTONS: [BlockButton; 5] = [
-    BlockButton::Fold,
+/// 变量块按钮组顺序：清理、删除、合并、置顶。
+const VAR_BUTTONS: [BlockButton; 4] = [
     BlockButton::Clean,
     BlockButton::Delete,
     BlockButton::Merge,
@@ -362,7 +358,7 @@ fn block_row_role(info: Option<BlockLineInfo>, first: bool, last: bool) -> Optio
 }
 
 /// 按钮组文案（按块类型与状态）。
-fn block_button_labels(info: Option<BlockLineInfo>, prompt: &Prompt) -> Vec<&'static str> {
+fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
     let Some(info) = info else {
         return Vec::new();
     };
@@ -377,7 +373,7 @@ fn block_button_labels(info: Option<BlockLineInfo>, prompt: &Prompt) -> Vec<&'st
             .collect(),
         BlockKind::Var => VAR_BUTTONS
             .iter()
-            .map(|button| block_button_label(*button, prompt.var_folded(info.start)))
+            .map(|button| block_button_label(*button))
             .collect(),
     }
 }
@@ -495,14 +491,13 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
         if info.role != BlockRole::Start || info.kind == BlockKind::Template {
             continue;
         }
-        let labels = block_button_labels(Some(info), prompt);
+        let labels = block_button_labels(Some(info));
         let start = block_buttons_start(area, block_buttons_total(&labels));
         let y = area.y + visible as u16;
         let buttons: &[BlockButton] = match info.kind {
             BlockKind::Supple => &SUPPLE_BUTTONS,
             _ => &VAR_BUTTONS,
         };
-        let folded = prompt.var_folded(info.start);
         let mut x = start;
         for (button, label) in buttons.iter().zip(labels) {
             let width = label.width() as u16;
@@ -510,7 +505,6 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
                 line: row.line,
                 kind: info.kind,
                 button: *button,
-                folded,
                 rect: Rect::new(x, y, width, 1),
             });
             x = x.saturating_add(width + 1);
@@ -542,19 +536,12 @@ fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) ->
 }
 
 /// 补充块/变量块按钮文案。
-fn block_button_label(button: BlockButton, folded: bool) -> &'static str {
+fn block_button_label(button: BlockButton) -> &'static str {
     match button {
         BlockButton::Clean => text::VAR_BUTTON_CLEAN,
         BlockButton::Delete => text::VAR_BUTTON_DEL,
         BlockButton::Merge => text::VAR_BUTTON_MERGE,
         BlockButton::Top => text::VAR_BUTTON_TOP,
-        BlockButton::Fold => {
-            if folded {
-                text::VAR_BUTTON_UNFOLD
-            } else {
-                text::VAR_BUTTON_FOLD
-            }
-        }
     }
 }
 
@@ -676,11 +663,8 @@ fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
 /// 绘制补充块/变量块操作按钮。
 fn render_block_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     for hit in block_buttons(prompt, area) {
-        let label = block_button_label(hit.button, hit.folded);
-        let button_style = match hit.button {
-            BlockButton::Fold => style::fold_marker(),
-            _ => style::block_button(),
-        };
+        let label = block_button_label(hit.button);
+        let button_style = style::block_button();
         for (offset, symbol) in label.chars().enumerate() {
             if let Some(cell) = buf.cell_mut((hit.rect.x + offset as u16, hit.rect.y)) {
                 cell.reset();

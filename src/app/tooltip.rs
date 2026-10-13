@@ -25,7 +25,6 @@ pub enum BlockButtonKind {
     Delete,
     Merge,
     Top,
-    Fold,
 }
 
 /// 可触发 tooltip 的按钮目标；文案映射由 `text::tooltip_hint` 穷尽匹配。

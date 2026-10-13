@@ -80,8 +80,6 @@ pub struct Prompt {
     revision: u64,
     /// 自动保存静置观察：最近一次判定时的修订号与时间；修订号变化即重置计时。
     autosave: Option<(u64, Instant)>,
-    /// 折叠的变量块起始行集合；任何文本改动即清空，避免失效行索引。
-    folded: std::collections::BTreeSet<usize>,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -131,7 +129,6 @@ impl Prompt {
             is_saved: true,
             revision: 0,
             autosave: None,
-            folded: std::collections::BTreeSet::new(),
         }
     }
 
@@ -236,7 +233,6 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
-        self.folded.clear();
         self.scroll_cursor_into_view();
     }
 
@@ -834,12 +830,10 @@ impl Prompt {
         }
     }
 
-    /// 标记文本已修改：任何写操作（含未记录快照的删除）都置脏；
-    /// 同时清空折叠状态（行索引随文本变化而失效）。
+    /// 标记文本已修改：任何写操作（含未记录快照的删除）都置脏。
     fn mark_dirty(&mut self) {
         self.is_saved = false;
         self.revision = self.revision.wrapping_add(1);
-        self.folded.clear();
     }
 
     /// 恢复快照并结束当前合并组。
