@@ -25,6 +25,21 @@ pub enum TokenKind {
     TemplateTitle,
     /// `@path/to/file` 文件提及。
     FileMention,
+    /// `@[refer-file](path)` 文件引用。
+    ReferFile,
+    /// `@[refer-folder](path)` 目录引用。
+    ReferFolder,
+    /// `@[refer-image](path)` 图片引用。
+    ReferImage,
+}
+
+/// 引用类型 → 高亮分类。
+fn refer_token(kind: markdown::ReferKind) -> TokenKind {
+    match kind {
+        markdown::ReferKind::File => TokenKind::ReferFile,
+        markdown::ReferKind::Folder => TokenKind::ReferFolder,
+        markdown::ReferKind::Image => TokenKind::ReferImage,
+    }
 }
 
 /// 逻辑行上的高亮区间（字节偏移，行内）。
@@ -293,6 +308,18 @@ fn scan_inline(line: &str, base: usize, tokens: &mut Vec<Token>) {
                 TokenKind::Marker,
             );
             index += close + 2;
+            continue;
+        }
+        // 引用标记先于 `@` 提及判定：整段（含括号内路径）着引用色，路径不再参与其他语法。
+        if rest.starts_with('@')
+            && let Some(reference) = markdown::reference_at(line, index)
+        {
+            push(
+                tokens,
+                index..reference.range.end,
+                refer_token(reference.kind),
+            );
+            index = reference.range.end;
             continue;
         }
         if rest.starts_with('@')

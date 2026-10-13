@@ -636,6 +636,9 @@ fn token_style(kind: TokenKind) -> Style {
         TokenKind::TemplateCommand(id) => style::template_command(id),
         TokenKind::TemplateTitle => style::template_title(),
         TokenKind::FileMention => style::markdown_file_mention(),
+        TokenKind::ReferFile => style::markdown_refer_file(),
+        TokenKind::ReferFolder => style::markdown_refer_folder(),
+        TokenKind::ReferImage => style::markdown_refer_image(),
     }
 }
 

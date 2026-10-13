@@ -116,7 +116,7 @@ pub fn parse_references_in(text: &str, from: usize, to: usize) -> Vec<ParsedRefe
             index = at + REFER_PREFIX.len();
             continue;
         }
-        match parse_reference_at(text, at, to) {
+        match parse_reference_in(text, at, to) {
             Some(reference) => {
                 index = reference.range.end;
                 references.push(reference);
@@ -127,8 +127,13 @@ pub fn parse_references_in(text: &str, from: usize, to: usize) -> Vec<ParsedRefe
     references
 }
 
-/// 解析起点处的引用标记；结构完整且类型合法时返回。
-fn parse_reference_at(text: &str, at: usize, limit: usize) -> Option<ParsedReference> {
+/// `at` 处完整的引用标记（读到文本末尾）；供高亮等只读用途。
+pub fn reference_at(text: &str, at: usize) -> Option<ParsedReference> {
+    parse_reference_in(text, at, text.len())
+}
+
+/// `[at, limit)` 内的引用标记；结构完整且类型合法时返回。
+fn parse_reference_in(text: &str, at: usize, limit: usize) -> Option<ParsedReference> {
     let rest = text.get(at + REFER_PREFIX.len()..limit)?;
     let type_end = rest.find(']')?;
     let kind = ReferKind::parse(rest.get(..type_end)?)?;

@@ -238,3 +238,16 @@
 - 删除量：净减约 1500 行（`platform/clipboard.rs` 535 → 约 60 行）；相关测试同步删除
   （剪贴板读取、图像落盘、GC/孤儿扫描、迁移建资产表），新增“空粘贴忽略”“遗留 v2 库可打开”用例。
 - 图片必须先在磁盘上存在才能引用：用户需自行把截图保存为文件再粘贴其路径。
+
+## 12. 第四轮修订（用户确认，对应 design.md §14.4）
+
+- **shell 转义路径回落**：`platform::resolve_pasted_path` + `unescape_backslashes`；
+  `event::candidates_from_paths` 逐项先原文后去转义判定，命中后用真实路径做占位/候选/引用。
+- **粘贴不 arm 补全面板**：`update::apply_pasted_text`（= `InsertText` + `Prompt::suppress_completion_panels`）；
+  命令行 `Enter` 不再把刚粘贴文本的尾部当触发词替换掉。
+- **引用独立高亮**：`TokenKind::{ReferFile,ReferFolder,ReferImage}` + `ui/style.rs` 三个新样式
+  （亮绿/亮青/亮品红下划线），整段引用一个 token，与 `@` 提及（黄下划线）区分。
+- 测试：`resolve_pasted_path_prefers_literal_then_unescapes_shell_escapes`、
+  `terminal_paste_shell_escaped_path_builds_proposal_from_real_file`、
+  `terminal_paste_plain_text_does_not_arm_completion_panel`（已确认在无修复时失败）、
+  `refer_tokens_carry_kind_specific_highlights`。

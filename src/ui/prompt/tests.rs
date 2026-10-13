@@ -118,10 +118,14 @@ fn wrapped_continuation_row_keeps_line_token_offsets() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 1)].symbol(), "o");
-    assert_eq!(buf[(0, 1)].fg, Color::LightBlue);
+    assert_eq!(
+        buf[(0, 1)].fg,
+        Color::LightCyan,
+        "引用整段着 refer-folder 色"
+    );
     assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
     assert_eq!(buf[(7, 1)].symbol(), "/");
-    assert_eq!(buf[(7, 1)].fg, Color::Cyan);
+    assert_eq!(buf[(7, 1)].fg, Color::LightCyan, "路径与标记同色");
 }
 
 #[test]

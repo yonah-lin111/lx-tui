@@ -3041,3 +3041,55 @@ fn terminal_paste_missing_path_falls_back_to_text() {
     assert!(state.prompt.paste_panel().is_none());
     assert_eq!(state.prompt.text(), missing.display().to_string());
 }
+
+#[test]
+fn terminal_paste_plain_text_does_not_arm_completion_panel() {
+    let mut state = AppState::demo();
+    state.prompt_focused = true;
+    state
+        .prompt
+        .insert_str("see @[refer-file](/tmp/template.md) then ");
+    // 不存在且带 shell 转义的路径：按普通文本插入，且尾部 `a.md` 看起来像触发词。
+    let pasted = "/missing/ai_agent_api\\(1\\).md a.md".to_string();
+    paste::handle_terminal_paste(&mut state, pasted.clone());
+    assert!(
+        state.prompt.text().ends_with(&pasted),
+        "原文插入：{:?}",
+        state.prompt.text()
+    );
+    assert!(state.prompt.refer_panel().is_none(), "粘贴不重启补全面板");
+    let before = state.prompt.text().to_string();
+    // 紧跟的回车不得把粘贴文本尾部替换成候选原文。
+    crate::app::update::apply_editor(&mut state, crate::app::actions::EditorCommand::Newline);
+    let text = state.prompt.text();
+    assert!(text.starts_with(&before), "只追加换行：{text:?}");
+    assert_eq!(
+        text.matches("@[refer-file]").count(),
+        1,
+        "未插入额外引用：{text:?}"
+    );
+}
+
+#[test]
+fn terminal_paste_shell_escaped_path_builds_proposal_from_real_file() {
+    let dir = paste_temp_dir("escaped");
+    let file = dir.join("ai_agent_api(1).md");
+    std::fs::write(&file, b"x").expect("file");
+    let escaped = format!("{}/ai_agent_api\\(1\\).md", dir.display());
+    let mut state = AppState::demo();
+    state.prompt_focused = true;
+    paste::handle_terminal_paste(&mut state, escaped.clone());
+    let panel = state.prompt.paste_panel().expect("转义路径打开提案");
+    assert_eq!(panel.candidates[0].path, file, "候选用去转义后的真实路径");
+    assert!(
+        state
+            .prompt
+            .paste_confirm(crate::app::prompt::PasteAction::Reference)
+    );
+    assert_eq!(
+        state.prompt.text(),
+        format!("@[refer-file]({}/ai_agent_api\\(1\\).md) ", dir.display()),
+        "引用按语法转义括号"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -71,3 +71,39 @@ fn sniff_image_file_reads_header_and_ignores_missing() {
     assert!(!sniff_image_file(&dir.join("missing.png")));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn resolve_pasted_path_prefers_literal_then_unescapes_shell_escapes() {
+    let dir = std::env::temp_dir().join("lx-tui-resolve-pasted");
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let plain = dir.join("plain.md");
+    std::fs::write(&plain, b"x").expect("plain file");
+    let real = dir.join("ai_agent_api(1).md");
+    std::fs::write(&real, b"x").expect("paren file");
+    let escaped = std::path::PathBuf::from(format!("{}/ai_agent_api\\(1\\).md", dir.display()));
+
+    assert_eq!(
+        crate::platform::resolve_pasted_path(&plain),
+        Some(plain.clone()),
+        "原文存在时原样返回"
+    );
+    assert!(!escaped.exists(), "转义形式本身不是文件");
+    assert_eq!(
+        crate::platform::resolve_pasted_path(&escaped),
+        Some(real.clone()),
+        "shell 转义路径回落为真实路径"
+    );
+
+    let backslash = dir.join("literal\\(1).md");
+    std::fs::write(&backslash, b"x").expect("backslash file");
+    assert_eq!(
+        crate::platform::resolve_pasted_path(&backslash),
+        Some(backslash.clone()),
+        "文件名真含反斜杠时优先原文"
+    );
+    assert_eq!(
+        crate::platform::resolve_pasted_path(std::path::Path::new("/nope/\\a.md")),
+        None
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

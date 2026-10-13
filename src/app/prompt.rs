@@ -365,6 +365,18 @@ impl Prompt {
         self.restore(snapshot);
     }
 
+    /// 压制补全面板直到下一次编辑或移动（粘贴不是“正在输入”）。
+    ///
+    /// 粘贴普通文本后调用：清掉当次插入触发的候选面板并作废在途扫描，
+    /// 否则紧跟的 Enter 会把粘贴文本尾部当触发词替换成候选原文。
+    pub fn suppress_completion_panels(&mut self) {
+        self.panel = None;
+        self.slash = None;
+        self.refer = None;
+        self.mention.clear();
+        self.panel_suppressed = true;
+    }
+
     ///
     /// 同时作废在途的提及扫描结果，避免失焦后异步结果把面板重新弹出。
     pub fn clear_panel(&mut self) {

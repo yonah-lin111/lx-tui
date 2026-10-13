@@ -34,28 +34,32 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
         state.prompt.paste_stage(request, candidates);
         return;
     }
-    update::apply_editor(state, EditorCommand::InsertText(text));
+    // 普通文本：粘贴后压制补全面板，避免紧跟的 Enter 把尾部当触发词替换成候选原文。
+    update::apply_pasted_text(state, text);
 }
 
 /// 路径集合 → 已存在候选；任一项不存在返回 None（调用方回退普通文本）。
+///
+/// 每项先按原文判定，原文不存在时尝试 shell 去转义后的路径（终端转义粘贴）。
 fn candidates_from_paths(paths: &[PathBuf]) -> Option<Vec<PasteCandidate>> {
     let mut candidates: Vec<PasteCandidate> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for path in paths {
-        let metadata = std::fs::metadata(path).ok()?;
-        let key = crate::platform::path_key(path);
+        let path = crate::platform::resolve_pasted_path(path)?;
+        let metadata = std::fs::metadata(&path).ok()?;
+        let key = crate::platform::path_key(&path);
         if seen.contains(&key) {
             continue;
         }
         seen.push(key);
         let kind = if metadata.is_dir() {
             PasteCandidateKind::Folder
-        } else if crate::platform::sniff_image_file(path) {
+        } else if crate::platform::sniff_image_file(&path) {
             PasteCandidateKind::Image
         } else {
             PasteCandidateKind::File
         };
-        candidates.push(PasteCandidate::external(path.clone(), kind));
+        candidates.push(PasteCandidate::external(path, kind));
     }
     Some(candidates)
 }

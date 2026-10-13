@@ -59,6 +59,17 @@ pub fn apply(action: Action, state: &mut AppState) {
     }
 }
 
+/// 终端粘贴的普通文本：与 `InsertText` 一致，但插入后压制补全面板直到下一次编辑/移动。
+///
+/// 粘贴不是“正在输入”：若粘贴文本尾部凑巧是候选触发词，面板一旦打开，
+/// 紧跟的 Enter 会把这段正文替换成候选原文（把刚粘贴的路径吃掉）。
+pub fn apply_pasted_text(state: &mut AppState, text: String) {
+    apply_editor(state, EditorCommand::InsertText(text));
+    if !prompt_tree_mode(state) {
+        state.prompt.suppress_completion_panels();
+    }
+}
+
 /// 按键产生的编辑命令；仅当 prompt 聚焦时由事件循环调用。
 ///
 /// prompt 存在选区时：输入类命令用新内容替换选区，Backspace/Delete 删除选区，

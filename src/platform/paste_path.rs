@@ -4,6 +4,40 @@
 
 use std::path::{Path, PathBuf};
 
+/// 粘贴文本中的路径 → 实际存在的路径：优先原文；原文不存在时按 shell 转义再试一次。
+///
+/// 终端拖拽/部分复制会带 shell 转义的反斜杠（`ai_agent_api\\(1\\).md`），
+/// 原文不是合法文件时去掉这些反斜杠再判定，避免把转义文本当路径插进正文。
+pub fn resolve_pasted_path(path: &Path) -> Option<PathBuf> {
+    if path.exists() {
+        return Some(path.to_path_buf());
+    }
+    let text = path.to_str()?;
+    if !text.contains('\\') {
+        return None;
+    }
+    let unescaped = unescape_backslashes(text);
+    let candidate = Path::new(&unescaped);
+    candidate.exists().then(|| candidate.to_path_buf())
+}
+
+/// shell 风格反斜杠去转义：`\\(` → `(`、`\\ ` → ` `、`\\\\` → `\\`；末尾孤立反斜杠保留。
+fn unescape_backslashes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some(next) => out.push(next),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 /// 图片文件签名探测：读文件头，读不到或不认识按非图片处理。
 pub fn sniff_image_file(path: &Path) -> bool {
     use std::io::Read;

@@ -66,7 +66,9 @@
 
 只处理终端括号粘贴 `TerminalEvent::Paste(text)`：整段是**存在**的本机路径集合时，先按锚点写入纯路径占位并打开面板；其余文本（含空内容）同步走既有 `InsertText`（空内容不修改正文）。不设工具栏按钮，不设快捷键，应用不读取系统剪贴板。
 
-路径文本须先整体解析：支持单行和逐行 `file://` URI/绝对路径，逐项 URI 解码；任何一项不是存在的本机路径时，整段按普通文本处理，不做部分转换。不得仅因首字符为 `/` 或含图片扩展名就弹出面板。保持路径中的空格和非 ASCII 字符；引用标记中的 `)` 等分隔符按本项目 Markdown 引用语法处理，不能生成截断或歧义文本。若当前语法无法无损表达某路径，则禁用引用选项、保留路径选项。
+路径文本须先整体解析：支持单行和逐行 `file://` URI/绝对路径，逐项 URI 解码；任何一项不是存在的本机路径时，整段按普通文本处理，不做部分转换。终端拖拽/部分复制会带 shell 转义反斜杠（`ai_agent_api\(1\).md`），因此每项先按原文判定，原文不存在时再去掉反斜杠判定一次（命中后占位与候选用去转义后的真实路径，引用按语法重新转义）。
+
+普通文本插入后压制补全面板直到下一次编辑/移动：粘贴不是“正在输入”，否则粘贴文本尾部凑巧像触发词时，紧跟的 `Enter` 会把这段正文替换成候选原文（把刚粘贴的路径吃掉）。不得仅因首字符为 `/` 或含图片扩展名就弹出面板。保持路径中的空格和非 ASCII 字符；引用标记中的 `)` 等分隔符按本项目 Markdown 引用语法处理，不能生成截断或歧义文本。若当前语法无法无损表达某路径，则禁用引用选项、保留路径选项。
 
 ### 5.2 二级选择面板
 
@@ -196,6 +198,8 @@
 
 编辑器顶栏沿用现有 Mode、Pin、Undo、Redo、Select All 和保存状态点的位置规则，不设粘贴按钮。
 
+正文里的 `@[refer-*](path)` 引用有独立高亮（整段一个 token，路径不再按行内语法二次解析）：`refer-file` 亮绿下划线、`refer-folder` 亮青下划线、`refer-image` 亮品红下划线，与 `@` 提及的黄色下划线互不混淆（见 `ui/style.rs`）。
+
 粘贴二级面板与字母候选面板使用既有命令面板视觉 Token：固定行高、单一选中高亮、同一滚动/鼠标命中逻辑。粘贴面板仅两项（引用/路径），不嵌套第三层。字母候选行左侧保留名称，右端独立 tag 列；tag 过长时裁剪名称，极窄屏时隐藏 tag 而保留行命中和键盘导航。面板超出 prompt 内容区下边界时向上展开；滚动或缩放后重新测量，不能留下旧坐标热点。面板与正文点击按“浮层 > 工具栏 > 正文”的顺序命中。
 
 ## 13. 审核后的实施门槛
@@ -225,3 +229,9 @@
 2. **删除资产落盘与回收**：`attachments_dir`、`managed_asset` 表与 CRUD、`cleanup_startup/cleanup_managed/cleanup_orphan_files_in`、`platform::is_managed_asset_name/is_managed_temp_name`、`markdown::image_reference_paths` 删除；`all_prompt_contents` 与相关测试一并移除。Schema 只保留 `workspace/workspace_folder/workspace_prompt`；已有库里的遗留表和文件不再被读写（可手动删除 `~/.lx-t-*/attachments/`）。
 3. **空粘贴静默忽略**：终端自身粘贴只承载位图时送来的空 `Paste("")` 不再回退到应用读剪贴板，直接忽略。
 4. **保留能力**：`@[refer-image]` 语法与 `@[refer-*]` 快捷面板不变，图片通过粘贴其文件路径得到引用；`platform::sniff_image_file` 继续用于按文件头把路径候选归类为 image。
+
+### 14.4 第四轮：转义路径、粘贴不arm面板与引用配色（当前实现）
+
+1. **shell 转义路径回落**：`platform::resolve_pasted_path` 先按原文判定存在性，原文不存在且含反斜杠时去掉转义再判定（`platform/paste_path.rs::unescape_backslashes`）。修掉的 bug：粘贴 `/Users/yonah/Desktop/ai_agent_api\(1\).md` 时原文不是文件 → 回退普通文本，随后紧跟的 `Enter` 又把它当触发词换成了别的候选原文。
+2. **粘贴不重启补全面板**：`update::apply_pasted_text` = `InsertText` + `Prompt::suppress_completion_panels`（清块/斜杠/快捷/提及面板并压制到下一次编辑或移动）。粘贴不是“正在输入”，任何 `@` 提及、字母快捷、斜杠或块面板都不得由粘贴文本触发后吃掉紧跟的 `Enter`。
+3. **引用独立高亮**：`ui/markdown.rs` 新增 `TokenKind::{ReferFile,ReferFolder,ReferImage}`（优先于 `@` 提及扫描，整段 `@[refer-*](path)` 一个 token），`ui/style.rs` 给出三个互不相同、且都不同于 `@` 提及（黄下划线）的样式：亮绿 / 亮青 / 亮品红下划线。
