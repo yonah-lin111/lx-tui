@@ -207,6 +207,15 @@ async fn page_header_actions_fill_width_and_resizers() {
         html.contains("LIST_MAX_WIDTH = 560"),
         "list width clamp present"
     );
+    // 编辑器字段两列排布，窄屏回落单列。
+    assert!(
+        html.contains("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+        "editor fields two per row"
+    );
+    assert!(
+        html.contains(".field-grid { grid-template-columns: 1fr; }"),
+        "editor fields collapse to one column when narrow"
+    );
     service.shutdown();
 }
 

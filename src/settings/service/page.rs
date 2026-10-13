@@ -51,6 +51,9 @@ input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(-
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 textarea { min-height: 260px; resize: none; }
 .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 16px; }
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+.field-grid > div { display: flex; flex-direction: column; justify-content: flex-end; }
+.field-grid label { margin: 0 0 4px; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 button.primary { background: var(--accent); border: 0; color: var(--accent-ink); padding: 7px 14px; border-radius: 4px; cursor: pointer; font-weight: 600; }
 button.ghost { background: none; border: 1px solid var(--border-strong); padding: 6px 12px; border-radius: 4px; cursor: pointer; color: var(--text); }
@@ -95,6 +98,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
   .commands-grid { grid-template-columns: 1fr; grid-template-rows: max-content max-content; align-content: start; overflow-y: auto; }
   .cmd-resizer { display: none; }
   .command-list { max-height: 38vh; }
+  .field-grid { grid-template-columns: 1fr; }
 }
 .hidden { display: none; }
 </style>
@@ -170,26 +174,40 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
           </div>
           <div class="editor-body">
             <fieldset>
-              <label for="cmd-name">Name</label>
-              <input id="cmd-name" type="text" placeholder="my-command">
-              <label for="cmd-scope">Scope</label>
-              <select id="cmd-scope">
-                <option value="user">User</option>
-              </select>
-              <label for="cmd-kind">Type</label>
-              <select id="cmd-kind">
-                <option value="agentMD">Markdown insertion</option>
-                <option value="agentBlock">Template block</option>
-              </select>
-              <label for="cmd-md-scope">Visibility</label>
-              <select id="cmd-md-scope">
-                <option value="global">Global (everywhere)</option>
-                <option value="template">Template only</option>
-              </select>
-              <label for="cmd-title">Block title (template block only)</label>
-              <input id="cmd-title" type="text" placeholder="title">
-              <label for="cmd-description">Description</label>
-              <input id="cmd-description" type="text">
+              <div class="field-grid">
+                <div>
+                  <label for="cmd-name">Name</label>
+                  <input id="cmd-name" type="text" placeholder="my-command">
+                </div>
+                <div>
+                  <label for="cmd-scope">Scope</label>
+                  <select id="cmd-scope">
+                    <option value="user">User</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-kind">Type</label>
+                  <select id="cmd-kind">
+                    <option value="agentMD">Markdown insertion</option>
+                    <option value="agentBlock">Template block</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-md-scope">Visibility</label>
+                  <select id="cmd-md-scope">
+                    <option value="global">Global (everywhere)</option>
+                    <option value="template">Template only</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-title">Block title (template block only)</label>
+                  <input id="cmd-title" type="text" placeholder="title">
+                </div>
+                <div>
+                  <label for="cmd-description">Description</label>
+                  <input id="cmd-description" type="text">
+                </div>
+              </div>
             </fieldset>
             <fieldset class="editor-markdown">
               <legend>Markdown body</legend>
