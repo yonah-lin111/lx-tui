@@ -161,6 +161,56 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
 }
 
 #[tokio::test]
+async fn page_header_actions_fill_width_and_resizers() {
+    let (service, _events, _dir) = start("page-resize").await;
+    let token = service.token().to_string();
+    let response = request(service.port(), &get(&format!("/?token={token}"))).await;
+    assert_eq!(status(&response), 200);
+    let html = body(&response);
+
+    // 操作行与 Edit 标题同行：Save 出现在第一个字段之前。
+    let legend = html.find("id=\"editor-legend\"").expect("legend present");
+    let save = html
+        .find("onclick=\"saveCommand()\"")
+        .expect("save button present");
+    let first_field = html.find("id=\"cmd-name\"").expect("name field present");
+    assert!(
+        legend < save && save < first_field,
+        "actions live in the editor head"
+    );
+
+    // 内容撑满：不再有 max-width 上限。
+    assert!(
+        !html.contains("max-width: 1440px"),
+        "main fills available width"
+    );
+
+    // 两个拖拽分隔条与钳制常量。
+    assert!(
+        html.contains("id=\"side-resizer\""),
+        "sidebar resizer present"
+    );
+    assert!(
+        html.contains("id=\"cmd-resizer\""),
+        "command list resizer present"
+    );
+    assert!(html.contains("cursor: col-resize"), "resize cursor styled");
+    assert!(
+        html.contains("--cmd-list-width, 220px"),
+        "command list width variable wired"
+    );
+    assert!(
+        html.contains("pointerdown"),
+        "drag handled via pointer events"
+    );
+    assert!(
+        html.contains("LIST_MAX_WIDTH = 560"),
+        "list width clamp present"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn page_editor_supports_rename_flow() {
     let (service, _events, _dir) = start("page-rename").await;
     let port = service.port();

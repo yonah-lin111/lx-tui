@@ -30,12 +30,16 @@ const PAGE: &str = r#"<!DOCTYPE html>
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; overflow: hidden; background: var(--bg); color: var(--text); }
-nav.side { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 16px 0; background: var(--panel); }
+nav.side { width: 200px; flex-shrink: 0; padding: 16px 0; background: var(--panel); }
+.side-resizer { flex-shrink: 0; width: 5px; position: relative; cursor: col-resize; }
+.side-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border); }
+.side-resizer:hover::after, .side-resizer.dragging::after { background: var(--accent); }
+body.resizing { cursor: col-resize; user-select: none; }
 nav.side h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 nav.side button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; border-left: 2px solid transparent; background: none; font: inherit; cursor: pointer; color: var(--muted); }
 nav.side button:hover { color: var(--text); background: #151515; }
 nav.side button.active { background: #161616; color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; max-width: 1440px; }
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
 .view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .view.hidden { display: none; }
 #view-general { overflow-y: auto; }
@@ -58,8 +62,11 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .commands-toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; flex-shrink: 0; }
 .commands-toolbar label { margin: 0; }
 .commands-toolbar select { width: auto; }
-.commands-grid { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; align-items: stretch; }
-.commands-nav { display: flex; min-height: 0; flex-direction: column; gap: 2px; border-right: 1px solid var(--border); padding-right: 12px; }
+.commands-grid { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: var(--cmd-list-width, 220px) 5px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 8px; align-items: stretch; }
+.commands-nav { display: flex; min-height: 0; flex-direction: column; gap: 2px; }
+.cmd-resizer { position: relative; cursor: col-resize; }
+.cmd-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 1px; background: var(--border); }
+.cmd-resizer:hover::after, .cmd-resizer.dragging::after { background: var(--accent); }
 .command-list { display: flex; min-height: 60px; flex: 1 1 auto; flex-direction: column; gap: 2px; overflow-y: auto; scrollbar-width: none; }
 .command-list::-webkit-scrollbar { display: none; }
 .nav-empty { margin: 8px 0; font-size: 12px; color: var(--muted); }
@@ -74,19 +81,19 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .editor-empty { display: flex; min-height: 280px; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--muted); font-size: 12px; text-align: center; }
 #editor { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 #editor.hidden { display: none; }
-.editor-head { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); margin-bottom: 12px; padding-bottom: 8px; }
+.editor-head { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px 12px; border-bottom: 1px solid var(--border); margin-bottom: 12px; padding-bottom: 8px; }
 .editor-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.editor-head .actions { margin: 0; }
 .editor-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 .editor-body::-webkit-scrollbar { width: 8px; }
 .editor-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .editor-body > fieldset:first-of-type { flex-shrink: 0; }
-.editor-body > .actions { flex-shrink: 0; }
 .editor-markdown { display: flex; flex: 1 1 auto; flex-direction: column; }
 #cmd-body { flex: 1 1 auto; }
 .editor-card fieldset:last-of-type { margin-bottom: 0; }
 @media (max-width: 900px) {
   .commands-grid { grid-template-columns: 1fr; grid-template-rows: max-content max-content; align-content: start; overflow-y: auto; }
-  .commands-nav { border-right: 0; padding-right: 0; }
+  .cmd-resizer { display: none; }
   .command-list { max-height: 38vh; }
 }
 .hidden { display: none; }
@@ -98,6 +105,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
   <button id="tab-general" class="active" onclick="showTab('general')">General</button>
   <button id="tab-commands" onclick="showTab('commands')">Commands</button>
 </nav>
+<div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 <main>
   <section id="view-general" class="view">
     <h2>General</h2>
@@ -142,6 +150,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
           <span class="nav-name">New command</span>
         </button>
       </nav>
+      <div class="cmd-resizer" id="cmd-resizer" role="separator" aria-orientation="vertical" aria-label="Resize command list"></div>
 
       <section class="editor-card">
         <div id="editor-empty" class="editor-empty">
@@ -152,6 +161,12 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
         <div id="editor" class="hidden">
           <div class="editor-head">
             <h3 id="editor-legend">Edit command</h3>
+            <div class="actions">
+              <button class="primary" onclick="saveCommand()">Save</button>
+              <button class="ghost" onclick="hideEditor()">Cancel</button>
+              <button class="danger" onclick="deleteCommand()">Delete</button>
+              <span class="status" id="editor-status"></span>
+            </div>
           </div>
           <div class="editor-body">
             <fieldset>
@@ -180,12 +195,6 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
               <legend>Markdown body</legend>
               <textarea id="cmd-body"></textarea>
             </fieldset>
-            <div class="actions">
-              <button class="primary" onclick="saveCommand()">Save</button>
-              <button class="ghost" onclick="hideEditor()">Cancel</button>
-              <button class="danger" onclick="deleteCommand()">Delete</button>
-              <span class="status" id="editor-status"></span>
-            </div>
           </div>
         </div>
       </section>
@@ -379,6 +388,54 @@ function deleteCommand() {
     document.getElementById('editor-status').className = 'status error';
   });
 }
+
+const SIDE_MIN_WIDTH = 140;
+const SIDE_MAX_WIDTH = 360;
+const LIST_MIN_WIDTH = 140;
+const LIST_MAX_WIDTH = 560;
+let cmdListWidth = 220;
+
+function clampWidth(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function setupResizer(handle, read, write, min, max) {
+  handle.addEventListener('pointerdown', (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = read();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add('dragging');
+    document.body.classList.add('resizing');
+    const onMove = (moveEvent) => write(clampWidth(startWidth + moveEvent.clientX - startX, min, max));
+    const stop = () => {
+      handle.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      handle.removeEventListener('pointermove', onMove);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', stop, {once: true});
+    handle.addEventListener('pointercancel', stop, {once: true});
+  });
+}
+
+setupResizer(
+  document.getElementById('side-resizer'),
+  () => document.querySelector('nav.side').getBoundingClientRect().width,
+  (width) => { document.querySelector('nav.side').style.width = width + 'px'; },
+  SIDE_MIN_WIDTH,
+  SIDE_MAX_WIDTH
+);
+setupResizer(
+  document.getElementById('cmd-resizer'),
+  () => cmdListWidth,
+  (width) => {
+    cmdListWidth = width;
+    document.querySelector('.commands-grid').style.setProperty('--cmd-list-width', width + 'px');
+  },
+  LIST_MIN_WIDTH,
+  LIST_MAX_WIDTH
+);
 
 loadState();
 </script>
