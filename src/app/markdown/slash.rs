@@ -240,9 +240,11 @@ pub fn supple_block_content(command: &str, title: Option<&str>, body: &str) -> (
 }
 
 /// `/var` 插入的变量块正文与光标偏移（光标落在 `key` 之后）。
+///
+/// 标题行与 `@content:` 之间固定空一行（渲染为块边框分割线，与 `&&&`/`+++` 一致）。
 pub fn var_template_content() -> (String, usize) {
     let content =
-        "$$$ varTemplate --start\n{title: }\n@content:\nkey: \"var\"\n$$$ varTemplate --end";
+        "$$$ varTemplate --start\n{title: }\n\n@content:\nkey: \"var\"\n$$$ varTemplate --end";
     let cursor = content.find("key:").map_or(content.len(), |at| at + 3);
     (content.to_string(), cursor)
 }

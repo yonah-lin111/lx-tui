@@ -211,14 +211,13 @@ fn fill_roles(scan: &mut BlockScan) {
     }
 }
 
-/// 标记 `&&&` 结构分割行：标题行之下或 `{wt:}` 绑定行之上的块内空行。
+/// 标记块结构分割行：标题行之下或 `{wt:}` 绑定行之上的块内空行。
 fn mark_separators(lines: &[&str], scan: &mut BlockScan) {
     for index in 0..scan.infos.len() {
         let Some(info) = scan.infos[index] else {
             continue;
         };
-        if info.kind != BlockKind::Template
-            || info.role != BlockRole::Middle
+        if info.role != BlockRole::Middle
             || !lines.get(index).is_some_and(|line| line.trim().is_empty())
         {
             continue;
@@ -230,7 +229,7 @@ fn mark_separators(lines: &[&str], scan: &mut BlockScan) {
                 .copied()
                 .flatten()
                 .is_some_and(|prev| {
-                    prev.kind == BlockKind::Template
+                    prev.kind == info.kind
                         && lines.get(index - 1).is_some_and(|line| is_title_line(line))
                 });
         let before_binding = scan
@@ -239,7 +238,7 @@ fn mark_separators(lines: &[&str], scan: &mut BlockScan) {
             .copied()
             .flatten()
             .is_some_and(|next| {
-                next.kind == BlockKind::Template
+                next.kind == info.kind
                     && lines
                         .get(index + 1)
                         .is_some_and(|line| parse_worktree_line(line).is_some())

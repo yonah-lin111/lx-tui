@@ -1606,7 +1606,7 @@ fn var_template_content_places_cursor_after_key() {
     let (content, cursor) = var_template_content();
     assert_eq!(
         content,
-        "$$$ varTemplate --start\n{title: }\n@content:\nkey: \"var\"\n$$$ varTemplate --end"
+        "$$$ varTemplate --start\n{title: }\n\n@content:\nkey: \"var\"\n$$$ varTemplate --end"
     );
     assert!(
         content[cursor..].starts_with(':'),

@@ -2638,11 +2638,34 @@ fn add_var_content_appends_entry_and_clears_command_line() {
         query: "addVarContent".into(),
     };
     assert!(editor.add_var_content(&trigger));
-    assert!(editor.text().contains("  - @"), "{}", editor.text());
-    assert!(!editor.text().contains("/addVarContent"));
+    assert_eq!(
+        editor.text(),
+        "$$$ varTemplate --start\n{title: }\n@content:\n  - @\nkey: \"v\"\n$$$ varTemplate --end",
+        "命令行整行清除、块结构完整、条目插入 @content: 下"
+    );
     assert_eq!(editor.text().as_bytes()[editor.cursor() - 1], b'@');
     editor.undo();
     assert_eq!(editor.text(), text, "single undo step");
+}
+
+#[test]
+fn add_var_content_handles_command_line_above_block() {
+    let mut editor = prompt(40, 12);
+    let text = "/addVarContent\n$$$ varTemplate --start\n{title: }\n@content:\nkey: \"v\"\n$$$ varTemplate --end";
+    editor.set_text(text);
+    let trigger = markdown::SlashTrigger {
+        line_start: 0,
+        line_end: editor.text().find('\n').unwrap(),
+        cursor: "/addVarContent".len(),
+        query: "addVarContent".into(),
+    };
+    assert!(editor.add_var_content(&trigger));
+    assert_eq!(
+        editor.text(),
+        "$$$ varTemplate --start\n{title: }\n@content:\n  - @\nkey: \"v\"\n$$$ varTemplate --end",
+        "命令在块上方也按原始偏移正确重建"
+    );
+    assert_eq!(editor.text().as_bytes()[editor.cursor() - 1], b'@');
 }
 
 #[test]

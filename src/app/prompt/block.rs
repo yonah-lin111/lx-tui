@@ -126,23 +126,40 @@ impl Prompt {
         let Some((offset, insert)) = markdown::var_content_append(&self.text) else {
             return false;
         };
-        let clear = trigger.line_start..trigger.line_end;
-        let removed = clear.end - clear.start;
-        // 命令行与插入点不得重叠。
-        if clear.start < offset && offset < clear.end {
+        let mut clear = trigger.line_start..trigger.line_end;
+        // 整行移除命令行时吸收一侧换行（优先行尾，文末则行首），避免残留空白行。
+        if clear.end < self.text.len() && self.text.as_bytes()[clear.end] == b'\n' {
+            clear.end += 1;
+        } else if clear.start > 0 && self.text.as_bytes()[clear.start - 1] == b'\n' {
+            clear.start -= 1;
+        }
+        // 命令行与插入点（含插入文本占用的区间）不得重叠；否则拒绝，避免破坏正文。
+        if clear.start < offset && offset < clear.end
+            || offset < clear.start && clear.start < offset + insert.len()
+        {
             return false;
         }
-        let cursor = if clear.end <= offset {
-            offset - removed + insert.len()
+        // 清行与插入按原始偏移一次性重建，避免先插入再按旧偏移删除导致错位。
+        let (cursor, new) = if clear.end <= offset {
+            let cursor = clear.start + (offset - clear.end) + insert.len();
+            let mut new = String::with_capacity(self.text.len() + insert.len() - clear.len());
+            new.push_str(&self.text[..clear.start]);
+            new.push_str(&self.text[clear.end..offset]);
+            new.push_str(&insert);
+            new.push_str(&self.text[offset..]);
+            (cursor, new)
         } else {
-            offset + insert.len()
+            let cursor = offset + insert.len();
+            let mut new = String::with_capacity(self.text.len() + insert.len() - clear.len());
+            new.push_str(&self.text[..offset]);
+            new.push_str(&insert);
+            new.push_str(&self.text[offset..clear.start]);
+            new.push_str(&self.text[clear.end..]);
+            (cursor, new)
         };
         self.break_group();
         self.record(EditKind::Other);
-        self.text.insert_str(offset, &insert);
-        if clear.end <= offset || clear.start >= offset + insert.len() {
-            self.text.replace_range(clear, "");
-        }
+        self.text = new;
         self.cursor = cursor.min(self.text.len());
         self.settle();
         true

@@ -247,8 +247,8 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         if let Some(info) = info {
             paint_block_border(buf, area, y, info, role, painted, buttons_start);
             block_rows.push((y, info.kind, info.status));
-            if first && last && info.separator && info.kind == BlockKind::Template {
-                separator_rows.push((y, info.status));
+            if first && last && info.separator {
+                separator_rows.push((y, info.kind, info.status));
             }
         }
     }
@@ -257,8 +257,8 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     for (y, kind, status) in block_rows {
         paint_block_background(buf, area, y, kind, status);
     }
-    for (y, status) in separator_rows {
-        paint_template_separator(buf, area, y, status);
+    for (y, kind, status) in separator_rows {
+        paint_block_separator(buf, area, y, kind, status);
     }
     if prompt.text().is_empty() {
         paint_placeholder(buf, area);
@@ -600,9 +600,19 @@ fn paint_block_border(
     }
 }
 
-/// 绘制模板块分割线：`├─…─┤` 以块边框样式横贯整行，与块上下边同色。
-fn paint_template_separator(buf: &mut Buffer, area: Rect, y: u16, status: TemplateStatus) {
-    let border = style::template_border(status);
+/// 绘制块分割线：`├─…─┤` 以块边框样式横贯整行，与块上下边同色。
+fn paint_block_separator(
+    buf: &mut Buffer,
+    area: Rect,
+    y: u16,
+    kind: BlockKind,
+    status: TemplateStatus,
+) {
+    let border = match kind {
+        BlockKind::Template => style::template_border(status),
+        BlockKind::Supple => style::supple_border(),
+        BlockKind::Var => style::var_border(),
+    };
     let right = area.right().saturating_sub(1);
     for x in area.x..=right {
         let symbol = if x == area.x {
