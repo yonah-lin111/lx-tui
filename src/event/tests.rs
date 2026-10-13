@@ -3029,6 +3029,16 @@ fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
 }
 
 #[test]
+fn terminal_empty_paste_requests_clipboard_read() {
+    let mut state = AppState::demo();
+    state.prompt_focused = true;
+    state.prompt.insert_str("keep ");
+    paste::handle_terminal_paste(&mut state, String::new());
+    assert!(state.clipboard_read_requested, "空粘贴改走剪贴板读取");
+    assert_eq!(state.prompt.text(), "keep ", "空粘贴不写入正文");
+}
+
+#[test]
 fn terminal_paste_missing_path_falls_back_to_text() {
     let mut state = AppState::demo();
     state.prompt_focused = true;

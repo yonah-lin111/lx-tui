@@ -51,11 +51,17 @@ pub(super) fn request_clipboard_read(
 /// 终端 `Paste(text)`：整段是存在的路径集合时打开提案，否则按普通文本插入。
 ///
 /// 新粘贴先取消旧提案（Choosing → Reading），普通文本仍是同步编辑行为。
+/// 空括号粘贴（终端把 Cmd+V 当作自身粘贴、但剪贴板只有位图时送来的空内容）
+/// 改由应用读取系统剪贴板，让 `Cmd+V` 截图在支持该行为的终端上也能粘贴。
 pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     state.prompt.paste_cancel();
     // 树视图没有正文提案入口：文本按搜索框语义处理。
     if update::prompt_tree_mode(state) {
         update::apply_editor(state, EditorCommand::InsertText(text));
+        return;
+    }
+    if text.is_empty() {
+        state.clipboard_read_requested = true;
         return;
     }
     if let Some(paths) = crate::platform::parse_path_text(&text)
