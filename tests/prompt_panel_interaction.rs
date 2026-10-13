@@ -313,7 +313,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     assert!(app.wait_for("• New prompt"), "item row: \n{}", app.screen());
     assert!(app.wait_for("[todo]"), "status label");
 
-    // 输入即过滤：命中保持可见，无命中显示占位；Esc 清空恢复。
+    // 输入即过滤：命中保持可见，无命中显示占位；Ctrl+C 清空恢复，Esc 返回编辑视图。
     app.send(b"new");
     app.settle();
     assert!(app.screen().contains("• New prompt"), "match visible");
@@ -323,8 +323,21 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "no matches: \n{}",
         app.screen()
     );
+    app.send(b"\x03");
+    assert!(app.wait_for("• New prompt"), "ctrl+c clears filter");
     app.send(b"\x1b");
-    assert!(app.wait_for("• New prompt"), "esc clears filter");
+    assert!(
+        app.wait_for(text::PROMPT_UNDO_LABEL),
+        "esc returns to editor: \n{}",
+        app.screen()
+    );
+    // 回到列表继续后续断言。
+    app.click(text::PROMPT_MODE_LIST_LABEL);
+    assert!(
+        app.wait_for("• New prompt"),
+        "list reentered: \n{}",
+        app.screen()
+    );
 
     // 条目右键菜单 → 重命名。
     let (col, row) = app.find("• New prompt").expect("item row");
