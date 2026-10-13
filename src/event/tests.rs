@@ -3044,10 +3044,10 @@ fn rename_overlay_inside_click_keeps_open_close_button_and_outside_dismiss() {
     // 点击内部内容（输入行空白）：保持打开。
     handle_overlay_click(&mut state, screen, shell.inner.x + 1, shell.inner.y);
     assert!(state.overlay.is_some(), "点击内部内容不关闭");
-    // 右上角 [x]：关闭。
+    // 右上角 [✕]：关闭。
     let close = ui::widgets::modal::close_button_rect(shell.area).expect("close button");
     handle_overlay_click(&mut state, screen, close.x, close.y);
-    assert!(state.overlay.is_none(), "[x] 关闭");
+    assert!(state.overlay.is_none(), "[✕] 关闭");
     // 点击浮层之外：关闭。
     state.overlay = rename();
     handle_overlay_click(&mut state, screen, 0, 0);
@@ -3071,10 +3071,10 @@ fn trust_overlay_inside_click_keeps_open_and_close_button_refuses() {
         "内部点击不关闭"
     );
     assert!(state.effects.is_empty(), "未登记信任效应");
-    // 右上角 [x]：拒绝信任并关闭。
+    // 右上角 [✕]：拒绝信任并关闭。
     let close = ui::widgets::modal::close_button_rect(shell.area).expect("close button");
     handle_overlay_click(&mut state, screen, close.x, close.y);
-    assert!(state.overlay.is_none(), "[x] 关闭");
+    assert!(state.overlay.is_none(), "[✕] 关闭");
     assert!(state.effects.is_empty(), "拒绝不登记信任效应");
 }
 
@@ -3109,7 +3109,7 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
     );
     assert!(state.toast.is_some(), "点击 toast 内容不关闭");
 
-    // 点击右上角 [x]：关闭。
+    // 点击右上角 [✕]：关闭。
     let close = ui::widgets::modal::close_button_rect(area).expect("close button");
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), close.x, close.y),
@@ -3119,7 +3119,7 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
         &config,
         &mut dirty,
     );
-    assert!(state.toast.is_none(), "[x] 关闭 toast");
+    assert!(state.toast.is_none(), "[✕] 关闭 toast");
 
     // 点击 toast 之外：关闭 toast 并继续处理点击。
     show(&mut state);

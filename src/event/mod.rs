@@ -702,7 +702,7 @@ fn handle_terminal_event(
                 }
                 if let Some(toast) = ui::toast::rect(state, view, rects, *screen, config) {
                     if toast.contains((mouse.column, mouse.row).into()) {
-                        // 点击 toast 内部内容不关闭；仅右上角 [x] 关闭。
+                        // 点击 toast 内部内容不关闭；仅右上角 [✕] 关闭。
                         if ui::toast::close_button_at(toast, mouse.column, mouse.row) {
                             update::dismiss_toast(state);
                             *dirty = true;
@@ -1791,7 +1791,7 @@ fn handle_overlay_click(
                 update::cancel_new_node(state);
                 return None;
             };
-            // [x] 或浮层之外：取消（来自选择器时恢复选择器）。
+            // [✕] 或浮层之外：取消（来自选择器时恢复选择器）。
             if ui::widgets::modal::close_button_at(shell.area, column, row)
                 || !shell.area.contains((column, row).into())
             {

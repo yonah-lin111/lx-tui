@@ -306,6 +306,28 @@ fn prompt_button_icons_are_single_width_and_non_pua() {
     assert_eq!(PROMPT_SECTION_SAVED, "saved:");
 }
 
+/// 全局关闭按钮（模态 + toast）与 prompt 模板块删除按钮共用同一 `✕` 图标：
+/// 图标严格相等、单宽、非私有区，且标签宽度与 `modal::close_button_rect` 的 3 列命中框一致。
+#[test]
+fn modal_close_matches_template_delete_icon() {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+    let glyph = |label: &str| label.chars().nth(1).expect("图标字符");
+    assert_eq!(
+        glyph(MODAL_CLOSE),
+        glyph(TEMPLATE_BUTTON_DEL),
+        "全局关闭按钮与模板块删除按钮必须使用同一图标"
+    );
+    assert_eq!(MODAL_CLOSE.width(), 3, "关闭按钮宽度必须与 3 列命中框一致");
+    let icon = glyph(MODAL_CLOSE);
+    assert_eq!(icon.width(), Some(1), "关闭图标 {icon:?} 必须严格 1 列宽");
+    let cp = icon as u32;
+    let is_pua = (0xE000..=0xF8FF).contains(&cp)
+        || (0xF0000..=0xFFFFD).contains(&cp)
+        || (0x100000..=0x10FFFD).contains(&cp);
+    assert!(!is_pua, "关闭图标 {icon:?} 位于私有区，终端会乱码");
+}
+
 #[test]
 fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
     use unicode_width::UnicodeWidthChar;

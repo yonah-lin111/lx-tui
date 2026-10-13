@@ -50,7 +50,7 @@ pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
     }
 }
 
-/// 右上角关闭按钮矩形（顶边框 `[x]`）；区域过窄（< 10 列）时 None。
+/// 右上角关闭按钮矩形（顶边框 `[✕]`，3 列）；区域过窄（< 10 列）时 None。
 pub fn close_button_rect(area: Rect) -> Option<Rect> {
     (area.width >= 10).then_some(Rect::new(area.right().saturating_sub(4), area.y, 3, 1))
 }
