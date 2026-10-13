@@ -2381,12 +2381,17 @@ fn sync_ws_path_opens_confirm_and_updates_all_state_on_enter() {
         .effects
         .iter()
         .find_map(|effect| match effect {
-            Effect::CheckTrust { path, trigger } => Some((path.clone(), trigger.clone())),
+            Effect::CheckTrust {
+                path,
+                root,
+                trigger,
+            } => Some((path.clone(), root.clone(), trigger.clone())),
             _ => None,
         })
         .expect("trust check queued");
     assert_eq!(checked.0, PathBuf::from("/tmp/new-term"));
-    resolve_trust_check(&mut state, &checked.0, true, checked.1);
+    assert!(checked.1.is_none(), "同步路径的仓库归属由事件层后台解析");
+    resume_trust(&mut state, checked.2);
 
     let Some(Overlay::ConfirmSyncWorkspaceCwd(confirm)) = state.overlay.as_ref() else {
         panic!("confirm sync ws cwd overlay expected");
@@ -3035,6 +3040,23 @@ fn commit_worktree_open_creates_workspace_with_checkout_cwd_and_git() {
     apply_worktree_open_key(&mut state, OverlayKey::Enter);
 
     assert!(state.overlay.is_none());
+    assert_eq!(state.workspaces.len(), 1, "信任检查前不创建");
+    let Some(Effect::CheckTrust {
+        path,
+        root,
+        trigger,
+    }) = state.effects.first().cloned()
+    else {
+        panic!("trust check queued");
+    };
+    assert_eq!(path, PathBuf::from("/repo/.worktrees/feat"));
+    assert_eq!(
+        root,
+        Some(PathBuf::from("/repo")),
+        "信任目标为仓库主 checkout"
+    );
+    resume_trust(&mut state, trigger);
+
     assert_eq!(state.workspaces.len(), 2);
     assert_eq!(state.active_workspace, 1);
     let opened = state.active_workspace();
@@ -3307,6 +3329,10 @@ fn commit_worktree_open_auto_opens_parent_before_linked_source() {
     );
     apply_worktree_open_key(&mut state, OverlayKey::Down);
     apply_worktree_open_key(&mut state, OverlayKey::Enter);
+    let Some(Effect::CheckTrust { trigger, .. }) = state.effects.first().cloned() else {
+        panic!("trust check queued");
+    };
+    resume_trust(&mut state, trigger);
 
     assert_eq!(state.workspaces.len(), 3);
     assert_eq!(

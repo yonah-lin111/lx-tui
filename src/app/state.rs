@@ -16,6 +16,7 @@ use super::prompt::{Prompt, PromptPanel};
 use super::selection::Selection;
 use super::toast::Toast;
 use super::tooltip::Tooltip;
+use super::trust::TrustResolution;
 
 /// 新建窗格的初始网格尺寸；首帧后由真实几何覆盖。
 const DEFAULT_COLS: u16 = 80;
@@ -124,6 +125,8 @@ pub struct AppState {
     pub effects: Vec<Effect>,
     /// 待查询 git 元数据的工作区 cwd 队列；事件层取走并在后台执行。
     pub git_requests: Vec<PathBuf>,
+    /// 待解析仓库根的信任检查请求；事件层取走并在后台解析后回投。
+    pub trust_resolutions: Vec<TrustResolution>,
     /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
     pub collapsed_groups: Vec<PathBuf>,
     /// 本地设置 Web 服务是否可用；决定底边框设置按钮的可用态。
@@ -244,6 +247,15 @@ impl Workspace {
     /// 身份窗格：第一个标签的根窗格，工作区命名跟随它的 cwd。
     pub fn root_pane(&self) -> Option<PaneId> {
         self.tabs.first().and_then(|tab| tab.root_pane())
+    }
+
+    /// prompt 面板与提示词持久化的键：git 工作区取仓库主 checkout（同一仓库的
+    /// 主 checkout 与 linked worktree 共享一棵树），其余取工作区 cwd。
+    pub fn prompt_key(&self) -> Option<&Path> {
+        self.git
+            .as_ref()
+            .map(|git| git.repo_root.as_path())
+            .or(self.cwd.as_deref())
     }
 }
 
@@ -480,6 +492,7 @@ impl AppState {
             overlay: None,
             effects: Vec::new(),
             git_requests: Vec::new(),
+            trust_resolutions: Vec::new(),
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,

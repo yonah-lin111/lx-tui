@@ -42,7 +42,7 @@ fn demo_state() -> AppState {
             status: "completed".into(),
         },
     ];
-    apply_prompt_tree(&mut state, 0, folders, prompts);
+    apply_prompt_tree(&mut state, 0, std::path::Path::new("/ws"), folders, prompts);
     state.prompt.resize(30, 8);
     state
 }
@@ -1386,4 +1386,78 @@ fn closing_displayed_workspace_commits_pre_paste_edits_without_placeholder() {
     let content = saved_content(&state);
     assert_eq!(content, "nested contentX", "关闭前提交粘贴前的正文");
     assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
+}
+
+/// 构造工作区 git 元数据（测试断言用）。
+fn git_meta(repo_root: &str, checkout: &str, linked: bool) -> crate::app::state::WorkspaceGit {
+    crate::app::state::WorkspaceGit {
+        repo_root: std::path::PathBuf::from(repo_root),
+        checkout_path: std::path::PathBuf::from(checkout),
+        is_linked: linked,
+        branch: Some("feature/x".into()),
+        main_branch: Some("main".into()),
+    }
+}
+
+#[test]
+fn status_change_syncs_all_panels_sharing_prompt_key() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(std::path::PathBuf::from("/repo"));
+    state.workspaces[0].git = Some(git_meta("/repo", "/repo", false));
+    let mut linked = crate::app::state::Workspace::single_terminal(
+        "feat".to_string(),
+        Some(std::path::PathBuf::from("/repo/.wt/feat")),
+    );
+    linked.git = Some(git_meta("/repo", "/repo/.wt/feat", true));
+    state.workspaces.push(linked);
+
+    let prompts = vec![PromptRecord {
+        id: 1,
+        folder_id: None,
+        name: "shared".into(),
+        content: "body".into(),
+        status: "todo".into(),
+    }];
+    apply_prompt_tree(&mut state, 0, Path::new("/repo"), vec![], prompts.clone());
+    apply_prompt_tree(&mut state, 1, Path::new("/repo"), vec![], prompts);
+
+    change_prompt_status(&mut state, 1, 1, PromptItemStatus::Completed);
+    for workspace in &state.workspaces {
+        assert_eq!(
+            workspace
+                .prompt_panel
+                .tree
+                .item(1)
+                .expect("item in every sharing panel")
+                .status,
+            PromptItemStatus::Completed
+        );
+    }
+    assert!(matches!(
+        state.effects.as_slice(),
+        [Effect::SetPromptStatus { status, .. }, ..] if *status == PromptItemStatus::Completed
+    ));
+}
+
+#[test]
+fn apply_tree_unbinds_editing_when_item_removed_by_sharing_panel() {
+    let mut state = demo_state();
+    state.workspaces[0].prompt_panel.editing = Some(PromptEditing::Item(10));
+    state.workspaces[0].prompt_panel.mode = PromptMode::Editor;
+    // 同键面板删除条目 10 后重载：编辑绑定解除并退回树视图。
+    apply_prompt_tree(
+        &mut state,
+        0,
+        Path::new("/ws"),
+        vec![],
+        vec![PromptRecord {
+            id: 11,
+            folder_id: None,
+            name: "remaining".into(),
+            content: "c".into(),
+            status: "todo".into(),
+        }],
+    );
+    assert!(state.workspaces[0].prompt_panel.editing.is_none());
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
 }

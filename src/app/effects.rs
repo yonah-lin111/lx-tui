@@ -10,9 +10,13 @@ use super::trust::TrustTrigger;
 /// 一次待执行的副作用。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    /// 信任检查：路径已信任则执行续作，否则弹出信任浮层。
+    /// 信任检查：路径或所属仓库根已信任则执行续作，否则弹出信任浮层。
+    ///
+    /// `root` 为已解析的仓库主 checkout（worktree 对话框）；None 表示仓库归属未知，
+    /// 服务未命中快速判定时由事件层后台解析后回投。
     CheckTrust {
         path: PathBuf,
+        root: Option<PathBuf>,
         trigger: TrustTrigger,
     },
     /// 记录工作区信任（写库）。
