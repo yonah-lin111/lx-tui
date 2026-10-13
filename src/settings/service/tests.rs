@@ -144,6 +144,15 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
         html.contains(".editor-body::-webkit-scrollbar { width: 8px; }"),
         "editor fallback scrollbar styled"
     );
+    // 左栏条目两行排版：第一行斜杠+名称，第二行 tag 与名称左对齐。
+    assert!(
+        html.contains(".nav-item { display: grid; grid-template-columns: auto minmax(0, 1fr);"),
+        "command items stack name over tag"
+    );
+    assert!(
+        html.contains(".nav-item .tag { grid-column: 2; grid-row: 2;"),
+        "tag on second line aligned to name"
+    );
     assert!(
         html.contains("scrollbar-width: thin"),
         "editor fallback scrollbar thin"

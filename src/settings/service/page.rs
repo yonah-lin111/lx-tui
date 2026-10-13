@@ -63,12 +63,12 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .command-list { display: flex; min-height: 60px; flex: 1 1 auto; flex-direction: column; gap: 2px; overflow-y: auto; scrollbar-width: none; }
 .command-list::-webkit-scrollbar { display: none; }
 .nav-empty { margin: 8px 0; font-size: 12px; color: var(--muted); }
-.nav-item { display: flex; width: 100%; align-items: center; gap: 6px; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
+.nav-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 6px; row-gap: 2px; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
 .nav-item:hover { background: #151515; color: var(--text); }
 .nav-item.selected { background: #1c1c1c; color: #fff; }
-.nav-item .nav-slash { color: #5c5c5c; }
-.nav-item .nav-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nav-item .tag { flex-shrink: 0; font-size: 11px; border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; color: var(--muted); }
+.nav-item .nav-slash { grid-column: 1; grid-row: 1; color: #5c5c5c; }
+.nav-item .nav-name { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-item .tag { grid-column: 2; grid-row: 2; justify-self: start; font-size: 11px; border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; color: var(--muted); }
 .nav-item.new { margin-top: 8px; flex-shrink: 0; border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; padding-top: 10px; }
 .editor-card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 12px; }
 .editor-empty { display: flex; min-height: 280px; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--muted); font-size: 12px; text-align: center; }
