@@ -15,13 +15,18 @@ fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
         state.prompt_collapsed,
         state.prompt_width,
         state.prompt_left,
+        state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
-        &state.active_tab().layout,
-        view.panes,
-        config.min_pane_width,
-        config.min_pane_height,
-    );
+    let mut rects = if state.prompt_left && state.panes_collapsed {
+        Vec::new()
+    } else {
+        layout::pane_rects(
+            &state.active_tab().layout,
+            view.panes,
+            config.min_pane_width,
+            config.min_pane_height,
+        )
+    };
     if !state.prompt_collapsed {
         rects.push((state.prompt.id(), view.prompt));
     }
@@ -143,6 +148,9 @@ fn mouse_down_on_swap_button_swaps_sides_without_resize() {
     let mut sessions = HashMap::new();
     let mut dirty = false;
     let button = ui::swap_button(&geo.view).expect("swap button visible");
+    // 屏幕 120、侧栏 24：可用 96，右列默认 38。
+    let available = geo.view.panes.width + geo.view.prompt.width;
+    let side = ui::layout::side_width(available, config.min_pane_width);
 
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
@@ -154,14 +162,62 @@ fn mouse_down_on_swap_button_swaps_sides_without_resize() {
     );
     assert!(state.prompt_left);
     assert!(!state.resizing_prompt, "swap button must not start resize");
+    assert_eq!(
+        state.prompt_width,
+        available - side,
+        "right column resets to side width"
+    );
     assert!(dirty);
+}
+
+#[test]
+fn mouse_down_on_panes_collapse_button_collapses_panes() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    update::swap_prompt_side(&mut state, 96, 38);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let button = ui::collapse_buttons(&geo.view, false)
+        .into_iter()
+        .find(|button| button.target == ui::CollapseTarget::Panes)
+        .expect("panes collapse button visible");
+    assert!(!button.collapsed);
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            button.area.x,
+            button.area.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.panes_collapsed);
+
+    // 折叠后窗格不参与几何：PTY 不重排，命中集只剩 prompt。
+    let collapsed = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    assert!(
+        collapsed
+            .rects
+            .iter()
+            .all(|(id, _)| *id == state.prompt.id()),
+        "collapsed panes leave the geometry"
+    );
+    assert!(
+        ui::swap_button(&collapsed.view).is_some(),
+        "swap button stays clickable"
+    );
 }
 
 #[test]
 fn swapped_divider_drag_resizes_prompt_from_left() {
     let config = Config::default();
     let mut state = demo_terminal();
-    update::swap_prompt_side(&mut state);
+    update::swap_prompt_side(&mut state, 96, 38);
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
     assert!(geo.view.prompt_left);
     let mut sessions = HashMap::new();

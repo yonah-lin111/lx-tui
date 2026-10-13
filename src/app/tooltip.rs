@@ -23,6 +23,8 @@ pub enum TemplateButtonKind {
 pub enum TooltipTarget {
     CollapseSidebar,
     CollapsePrompt,
+    /// 主区折叠按钮（prompt 在左时的右列面板）。
+    CollapsePanes,
     CollapseAgents,
     /// 窗格顶边框的视图切换按钮。
     PaneToggle(PaneId),

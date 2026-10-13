@@ -495,7 +495,7 @@ fn initialize_layout_widths(
     let size = tui.terminal().size()?;
     let area = Rect::new(0, 0, size.width, size.height);
     state.sidebar_width = config.sidebar_width;
-    state.prompt_width = ui::layout::default_prompt_width(area, config, state.sidebar_collapsed);
+    state.prompt_width = ui::layout::default_side_width(area, config, state.sidebar_collapsed);
     Ok(())
 }
 
@@ -506,9 +506,10 @@ struct Geometry {
     view: ui::layout::ViewLayout,
 }
 
-/// 当前终端尺寸下活动标签的窗格几何（含 prompt 右栏）与屏幕区域划分。
+/// 当前终端尺寸下活动标签的窗格几何（含 prompt 栏）与屏幕区域划分。
 ///
-/// 右栏折叠时不参与命中、选择与尺寸同步，展开时按当前几何恢复。
+/// 折叠的右列面板不参与命中、选择与尺寸同步，展开时按当前几何恢复；
+/// 主区折叠时窗格 PTY 不重排（网格保持折叠前尺寸）。
 fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Result<Geometry> {
     let size = tui.terminal().size()?;
     let screen = Rect::new(0, 0, size.width, size.height);
@@ -520,13 +521,19 @@ fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Res
         state.prompt_collapsed,
         state.prompt_width,
         state.prompt_left,
+        state.panes_collapsed,
     );
-    let mut rects = layout::pane_rects(
-        &state.active_tab().layout,
-        view.panes,
-        config.min_pane_width,
-        config.min_pane_height,
-    );
+    // 折叠的右列面板不参与命中与尺寸同步：主区折叠时窗格 PTY 保持原尺寸。
+    let mut rects = if state.prompt_left && state.panes_collapsed {
+        Vec::new()
+    } else {
+        layout::pane_rects(
+            &state.active_tab().layout,
+            view.panes,
+            config.min_pane_width,
+            config.min_pane_height,
+        )
+    };
     if !state.prompt_collapsed {
         rects.push((state.prompt.id(), view.prompt));
     }
@@ -769,6 +776,7 @@ fn handle_terminal_event(
                     let action = match target {
                         ui::CollapseTarget::Sidebar => Action::ToggleSidebar,
                         ui::CollapseTarget::Prompt => Action::TogglePrompt,
+                        ui::CollapseTarget::Panes => Action::TogglePanes,
                         ui::CollapseTarget::Agents => Action::ToggleAgents,
                     };
                     update::apply(action, state);
@@ -817,8 +825,11 @@ fn handle_terminal_event(
                     reveal_active_tab(state, view);
                     *dirty = true;
                 } else if ui::swap_button_at(view, mouse.column, mouse.row) {
-                    // 交换按钮是控件：命中优先于分割线拖拽与面板点击。
-                    update::swap_prompt_side(state);
+                    // 交换按钮是控件：命中优先于分割线拖拽与面板点击；
+                    // 宽度按位置模型重置：右列取侧栏默认宽、左列占其余。
+                    let available = view.panes.width.saturating_add(view.prompt.width);
+                    let side = ui::layout::side_width(available, config.min_pane_width);
+                    update::swap_prompt_side(state, available, side);
                     *dirty = true;
                 } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
                     .is_some_and(|hit| prompt_boundary_hit(state, hit))

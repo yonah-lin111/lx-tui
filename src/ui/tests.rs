@@ -60,6 +60,7 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
         state.prompt_collapsed,
         state.prompt_width,
         state.prompt_left,
+        state.panes_collapsed,
     )
 }
 
@@ -122,7 +123,7 @@ fn collapse_buttons_render_directional_arrow_labels() {
     );
     assert_eq!(
         rendered_label(&lines, &button_for(&view, CollapseTarget::Prompt)),
-        text::PROMPT_COLLAPSE_LABEL
+        text::RIGHT_COLLAPSE_LABEL
     );
 
     update::apply(Action::ToggleSidebar, &mut state);
@@ -134,7 +135,7 @@ fn collapse_buttons_render_directional_arrow_labels() {
     );
     assert_eq!(
         rendered_label(&lines, &button_for(&view, CollapseTarget::Prompt)),
-        text::PROMPT_COLLAPSE_LABEL
+        text::RIGHT_COLLAPSE_LABEL
     );
 
     update::apply(Action::TogglePrompt, &mut state);
@@ -146,7 +147,7 @@ fn collapse_buttons_render_directional_arrow_labels() {
     );
     assert_eq!(
         rendered_collapsed_label(&lines, &view, CollapseTarget::Prompt),
-        text::PROMPT_EXPAND_LABEL
+        text::RIGHT_EXPAND_LABEL
     );
 }
 
@@ -166,7 +167,7 @@ fn prompt_sidebar_renders_content_and_collapse_button() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains(text::PROMPT_COLLAPSE_LABEL))
+            .any(|line| line.contains(text::RIGHT_COLLAPSE_LABEL))
     );
 }
 
@@ -179,12 +180,12 @@ fn collapsed_prompt_renders_strip_and_expand_icon() {
     let lines = render_lines(&state);
     assert_eq!(
         rendered_collapsed_label(&lines, &view, CollapseTarget::Prompt),
-        text::PROMPT_EXPAND_LABEL
+        text::RIGHT_EXPAND_LABEL
     );
     assert!(
         !lines
             .iter()
-            .any(|line| line.contains(text::PROMPT_COLLAPSE_LABEL))
+            .any(|line| line.contains(text::RIGHT_COLLAPSE_LABEL))
     );
     assert!(!lines.iter().any(|line| line.contains("hidden content")));
 }
@@ -386,7 +387,7 @@ fn collapsed_labels_fill_content_area_with_continuous_separator() {
     let prompt_label: String = (prompt_start..view.prompt.right())
         .map(|x| prompt_row[x as usize])
         .collect();
-    assert_eq!(prompt_label, text::PROMPT_EXPAND_LABEL);
+    assert_eq!(prompt_label, text::RIGHT_EXPAND_LABEL);
     assert_eq!(
         prompt_row[view.prompt.x as usize].to_string(),
         text::STRIP_LINE
@@ -1173,7 +1174,7 @@ fn panel_collapse_buttons_sit_on_bottom_border() {
         rendered_label(&lines, &sidebar),
         text::SIDEBAR_COLLAPSE_LABEL
     );
-    assert_eq!(rendered_label(&lines, &prompt), text::PROMPT_COLLAPSE_LABEL);
+    assert_eq!(rendered_label(&lines, &prompt), text::RIGHT_COLLAPSE_LABEL);
 }
 
 #[test]
@@ -1193,7 +1194,7 @@ fn collapsed_panel_buttons_sit_on_bottom_strip_row() {
     );
     assert_eq!(
         rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Prompt),
-        text::PROMPT_EXPAND_LABEL
+        text::RIGHT_EXPAND_LABEL
     );
 }
 
@@ -1212,7 +1213,7 @@ fn swap_button_renders_between_panels_and_moves_prompt() {
         assert_eq!(buffer[(x, button.y)].fg, ratatui::style::Color::Cyan);
     }
 
-    update::swap_prompt_side(&mut state);
+    update::swap_prompt_side(&mut state, 76, 30);
     let view = view_for(&state);
     assert!(view.prompt_left);
     assert!(view.prompt.right() <= view.panes.x);
@@ -1235,6 +1236,7 @@ fn swap_button_needs_vertical_room() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(swap_button(&short), None);
 }
@@ -1250,28 +1252,40 @@ fn swap_button_stays_visible_when_prompt_collapsed() {
 }
 
 #[test]
-fn swap_mirrors_prompt_collapse_affordances() {
+fn swapped_layout_moves_collapse_button_to_panes() {
     let mut state = AppState::demo();
-    update::swap_prompt_side(&mut state);
+    update::swap_prompt_side(&mut state, 76, 30);
     let view = view_for(&state);
-    let prompt = button_for(&view, CollapseTarget::Prompt);
+    // prompt 在左不可折叠：折叠按钮与能力归右列主区。
+    let buttons = collapse_buttons(&view, false);
+    assert!(
+        buttons
+            .iter()
+            .all(|button| button.target != CollapseTarget::Prompt)
+    );
+    let panes = buttons
+        .into_iter()
+        .find(|button| button.target == CollapseTarget::Panes)
+        .expect("panes collapse button");
+    assert!(!panes.collapsed);
+    assert_eq!(panes.area.y, view.panes.bottom() - 1);
     assert_eq!(
-        rendered_label(&render_lines(&state), &prompt),
-        text::PROMPT_LEFT_COLLAPSE_LABEL
+        rendered_label(&render_lines(&state), &panes),
+        text::RIGHT_COLLAPSE_LABEL
     );
 
-    update::apply(Action::TogglePrompt, &mut state);
+    // 折叠：主区收为贴右缘窄条（分隔线在左缘），prompt 占满其余宽度。
+    update::apply(Action::TogglePanes, &mut state);
     let view = view_for(&state);
-    let button = button_for(&view, CollapseTarget::Prompt);
-    assert!(button.collapsed);
+    assert_eq!(view.panes, Rect::new(96, 1, 4, 23));
+    assert_eq!(view.prompt, Rect::new(24, 1, 72, 23));
     let lines = render_lines(&state);
-    let row: Vec<char> = lines[button.area.y as usize].chars().collect();
-    // 窄条贴侧栏：分隔线在右缘、展开箭头 `[▶]` 占满内容区。
-    assert_eq!(row[usize::from(view.prompt.right() - 1)], '│');
-    let label: String = (button.area.x..button.area.right() - 1)
-        .map(|x| row[x as usize])
-        .collect();
-    assert_eq!(label, text::PROMPT_LEFT_EXPAND_LABEL);
+    let row: Vec<char> = lines[view.panes.y as usize].chars().collect();
+    assert_eq!(row[usize::from(view.panes.x)], '│');
+    assert_eq!(
+        rendered_collapsed_label(&lines, &view, CollapseTarget::Panes),
+        text::RIGHT_EXPAND_LABEL
+    );
 }
 
 /// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。

@@ -77,6 +77,8 @@ pub struct AppState {
     pub resizing_prompt: bool,
     pub prompt_hover: bool,
     pub prompt_collapsed: bool,
+    /// 主区是否折叠为右缘窄条；仅 prompt 在左（右列为主区）时有效，交换即复位。
+    pub panes_collapsed: bool,
     /// prompt 是否持有键盘焦点；为真时按键进入编辑器而非焦点窗格。
     pub prompt_focused: bool,
     /// 面板当前显示的 prompt 编辑器；其余工作区的草稿挂起在 `Workspace.prompt`。
@@ -443,6 +445,7 @@ impl AppState {
             resizing_prompt: false,
             prompt_hover: false,
             prompt_collapsed: false,
+            panes_collapsed: false,
             prompt_focused: false,
             prompt: Prompt::new(PaneId::alloc()),
             prompt_root: None,

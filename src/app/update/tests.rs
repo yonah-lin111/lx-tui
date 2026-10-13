@@ -620,13 +620,29 @@ fn drag_prompt_only_applies_while_resizing() {
 }
 
 #[test]
-fn swap_prompt_side_toggles_flag() {
+fn swap_prompt_side_resets_sides_and_restores_expanded() {
     let mut state = AppState::demo();
-    assert!(!state.prompt_left);
-    swap_prompt_side(&mut state);
+    state.prompt_collapsed = true;
+    swap_prompt_side(&mut state, 76, 30);
     assert!(state.prompt_left);
-    swap_prompt_side(&mut state);
+    assert_eq!(state.prompt_width, 46, "left column takes the rest width");
+    assert!(!state.prompt_collapsed, "swap restores both panels");
+    assert!(!state.panes_collapsed);
+
+    state.panes_collapsed = true;
+    swap_prompt_side(&mut state, 76, 30);
     assert!(!state.prompt_left);
+    assert_eq!(state.prompt_width, 30, "right column resets to side width");
+    assert!(!state.panes_collapsed);
+}
+
+#[test]
+fn toggle_panes_flips_flag() {
+    let mut state = AppState::demo();
+    apply(Action::TogglePanes, &mut state);
+    assert!(state.panes_collapsed);
+    apply(Action::TogglePanes, &mut state);
+    assert!(!state.panes_collapsed);
 }
 
 #[test]

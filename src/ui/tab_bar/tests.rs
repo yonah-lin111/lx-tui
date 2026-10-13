@@ -24,6 +24,7 @@ fn view_for(state: &AppState) -> ViewLayout {
         state.prompt_collapsed,
         state.prompt_width,
         state.prompt_left,
+        state.panes_collapsed,
     )
 }
 

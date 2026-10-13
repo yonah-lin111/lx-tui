@@ -88,6 +88,7 @@ fn targets(
         let target = match button.target {
             ui::CollapseTarget::Sidebar => TooltipTarget::CollapseSidebar,
             ui::CollapseTarget::Prompt => TooltipTarget::CollapsePrompt,
+            ui::CollapseTarget::Panes => TooltipTarget::CollapsePanes,
             ui::CollapseTarget::Agents => TooltipTarget::CollapseAgents,
         };
         targets.push((target, button.area));

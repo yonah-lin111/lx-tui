@@ -18,7 +18,7 @@ pub struct ViewLayout {
 
 /// 划分主界面；标签栏横跨主区与 prompt 栏，prompt 与窗格同顶同底；
 /// 侧栏折叠且宽度充足时保留窄条，prompt 始终可见；`prompt_left` 为真时
-/// prompt 紧贴侧栏、窗格在主区右侧。
+/// prompt 紧贴侧栏、窗格在主区右侧；右列面板折叠时收为 `COLLAPSED_STRIP` 窄条。
 pub fn compute(
     area: Rect,
     config: &Config,
@@ -27,6 +27,7 @@ pub fn compute(
     prompt_collapsed: bool,
     prompt_width: u16,
     prompt_left: bool,
+    panes_collapsed: bool,
 ) -> ViewLayout {
     let sidebar_width = resolved_sidebar_width(area, config, sidebar_collapsed, sidebar_width);
     let sidebar = Rect {
@@ -34,13 +35,21 @@ pub fn compute(
         ..area
     };
     let available = area.width.saturating_sub(sidebar_width);
-    let prompt_width = if prompt_collapsed {
-        COLLAPSED_STRIP.min(available)
+    let strip = COLLAPSED_STRIP.min(available);
+    // 位置模型：只有右列面板可折叠（prompt 在右折叠 prompt，prompt 在左折叠主区）。
+    let prompt_width = if prompt_left && panes_collapsed {
+        available.saturating_sub(strip)
+    } else if prompt_collapsed && !prompt_left {
+        strip
     } else {
         clamp_prompt_width(available, prompt_width, config.min_pane_width)
     };
+    let main_width = if prompt_left && panes_collapsed {
+        strip
+    } else {
+        available.saturating_sub(prompt_width)
+    };
     let main_x = area.x + sidebar_width;
-    let main_width = available.saturating_sub(prompt_width);
     let tab_bar = Rect {
         x: main_x,
         y: area.y,
@@ -125,19 +134,20 @@ pub fn sidebar_sections(sidebar: Rect, agents_collapsed: bool) -> Option<Sidebar
     })
 }
 
-/// 启动默认右栏宽度：主区可用宽度的 2/5，主区保持更宽。
-pub fn default_prompt_width(area: Rect, config: &Config, sidebar_collapsed: bool) -> u16 {
+/// 右列默认宽度（侧栏位）：主区可用宽度的 2/5，两侧各保 `min_width`。
+pub fn side_width(available: u16, min_width: u16) -> u16 {
+    clamp_prompt_width(available, available.saturating_mul(2) / 5, min_width)
+}
+
+/// 启动默认右列宽度：按终端区域推算可用宽度后取 [`side_width`]。
+pub fn default_side_width(area: Rect, config: &Config, sidebar_collapsed: bool) -> u16 {
     let available = area.width.saturating_sub(resolved_sidebar_width(
         area,
         config,
         sidebar_collapsed,
         config.sidebar_width,
     ));
-    clamp_prompt_width(
-        available,
-        available.saturating_mul(2) / 5,
-        config.min_pane_width,
-    )
+    side_width(available, config.min_pane_width)
 }
 
 /// 拖拽侧栏分割线到屏幕列 `boundary_x` 时侧栏应有的宽度（屏幕坐标）。

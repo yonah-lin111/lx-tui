@@ -6,6 +6,8 @@ pub enum Action {
     Quit,
     ToggleSidebar,
     TogglePrompt,
+    /// 折叠/展开右列主区（prompt 在左时）。
+    TogglePanes,
     ToggleAgents,
 }
 

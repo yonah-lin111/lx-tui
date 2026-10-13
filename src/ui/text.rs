@@ -125,11 +125,9 @@ pub fn lx_hint() -> String {
 /// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
 pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";
-pub const PROMPT_COLLAPSE_LABEL: &str = "[▶]";
-pub const PROMPT_EXPAND_LABEL: &str = "[◀]";
-/// prompt 换到主区左侧时的收起/展开按钮（箭头随所在侧镜像）。
-pub const PROMPT_LEFT_COLLAPSE_LABEL: &str = "[◀]";
-pub const PROMPT_LEFT_EXPAND_LABEL: &str = "[▶]";
+/// 右列面板（prompt 或主区）的收起/展开按钮。
+pub const RIGHT_COLLAPSE_LABEL: &str = "[▶]";
+pub const RIGHT_EXPAND_LABEL: &str = "[◀]";
 /// 主区与 prompt 分隔线中点的交换按钮：左格 `<`、右格 `>`。
 pub const SWAP_PROMPT_LABEL: &str = "<>";
 pub const STRIP_LINE: &str = "│";
@@ -384,6 +382,8 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::CollapseSidebar => "collapse sidebar",
         TooltipTarget::CollapsePrompt if state.prompt_collapsed => "expand prompt",
         TooltipTarget::CollapsePrompt => "collapse prompt",
+        TooltipTarget::CollapsePanes if state.panes_collapsed => "expand panes",
+        TooltipTarget::CollapsePanes => "collapse panes",
         TooltipTarget::CollapseAgents if state.agents_collapsed => "expand agents",
         TooltipTarget::CollapseAgents => "collapse agents",
         TooltipTarget::PaneToggle(pane) => match state.pane_anywhere(pane).map(|pane| pane.view) {

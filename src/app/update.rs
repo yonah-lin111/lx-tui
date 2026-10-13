@@ -55,6 +55,7 @@ pub fn apply(action: Action, state: &mut AppState) {
                 state.prompt.clear_panel();
             }
         }
+        Action::TogglePanes => state.panes_collapsed = !state.panes_collapsed,
         Action::ToggleAgents => state.agents_collapsed = !state.agents_collapsed,
     }
 }
@@ -875,9 +876,17 @@ fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)> {
     state.prompt.selection_bounds(start, end)
 }
 
-/// 交换主区窗格与 prompt 栏的左右位置；不改变宽度、焦点与选区。
-pub fn swap_prompt_side(state: &mut AppState) {
+/// 交换主区窗格与 prompt 栏的左右位置：翻转所在侧、两栏都恢复展开，
+/// 宽度按位置模型重置——prompt 落在左列取 `available - side_width`，落回右列取 `side_width`。
+pub fn swap_prompt_side(state: &mut AppState, available: u16, side_width: u16) {
     state.prompt_left = !state.prompt_left;
+    state.prompt_collapsed = false;
+    state.panes_collapsed = false;
+    state.prompt_width = if state.prompt_left {
+        available.saturating_sub(side_width)
+    } else {
+        side_width
+    };
 }
 
 /// 在 prompt 右栏分割线上开始拖拽；清除已有选区。

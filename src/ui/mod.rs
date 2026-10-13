@@ -55,6 +55,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         state.prompt_collapsed,
         state.prompt_width,
         state.prompt_left,
+        state.panes_collapsed,
     );
     let pane_rects = crate::layout::pane_rects(
         &state.active_tab().layout,
@@ -73,7 +74,13 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     }
     tab_bar::render(frame, &view, state);
     render_exit_button(frame, &view);
-    let pane_cursor = render_panes(frame, &pane_rects, state);
+    // 主区折叠：只画右缘窄条，不渲染窗格内容（PTY 尺寸保持折叠前）。
+    let pane_cursor = if state.prompt_left && state.panes_collapsed {
+        render_collapsed_strip(frame, view.panes, false);
+        None
+    } else {
+        render_panes(frame, &pane_rects, state)
+    };
     let prompt_cursor = render_prompt(frame, &view, state).or(pane_cursor);
     render_swap_button(frame, &view);
     render_panel_buttons(frame, &view, state);
@@ -102,6 +109,8 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
 pub enum CollapseTarget {
     Sidebar,
     Prompt,
+    /// 右列主区（prompt 在左时的可折叠面板）。
+    Panes,
     Agents,
 }
 
@@ -113,13 +122,19 @@ pub struct CollapseButton {
     pub collapsed: bool,
 }
 
-/// 左栏、右栏底边与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
+/// 左栏、右列与 agents 表头内的折叠按钮；渲染与鼠标命中共用同一几何。
+/// 位置模型下只有右列面板可折叠：prompt 在右折叠 prompt，prompt 在左折叠主区。
 pub fn collapse_buttons(view: &layout::ViewLayout, agents_collapsed: bool) -> Vec<CollapseButton> {
     let mut buttons = Vec::new();
     if let Some(button) = panel_button(CollapseTarget::Sidebar, view.sidebar) {
         buttons.push(button);
     }
-    if let Some(button) = panel_button(CollapseTarget::Prompt, view.prompt) {
+    let (target, panel) = if view.prompt_left {
+        (CollapseTarget::Panes, view.panes)
+    } else {
+        (CollapseTarget::Prompt, view.prompt)
+    };
+    if let Some(button) = panel_button(target, panel) {
         buttons.push(button);
     }
     if let Some(button) = agents_button(view, agents_collapsed) {
@@ -243,19 +258,15 @@ fn render_panel_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state:
         let label = match (button.target, button.collapsed) {
             (CollapseTarget::Sidebar, false) => text::SIDEBAR_COLLAPSE_LABEL,
             (CollapseTarget::Sidebar, true) => text::SIDEBAR_EXPAND_LABEL,
-            (CollapseTarget::Prompt, false) if state.prompt_left => {
-                text::PROMPT_LEFT_COLLAPSE_LABEL
-            }
-            (CollapseTarget::Prompt, false) => text::PROMPT_COLLAPSE_LABEL,
-            (CollapseTarget::Prompt, true) if state.prompt_left => text::PROMPT_LEFT_EXPAND_LABEL,
-            (CollapseTarget::Prompt, true) => text::PROMPT_EXPAND_LABEL,
+            (CollapseTarget::Prompt | CollapseTarget::Panes, false) => text::RIGHT_COLLAPSE_LABEL,
+            (CollapseTarget::Prompt | CollapseTarget::Panes, true) => text::RIGHT_EXPAND_LABEL,
             (CollapseTarget::Agents, false) => text::AGENTS_COLLAPSE_LABEL,
             (CollapseTarget::Agents, true) => text::AGENTS_EXPAND_LABEL,
         };
         let start = match button.target {
             CollapseTarget::Sidebar if button.collapsed => collapsed_content_x(button.area, true),
-            CollapseTarget::Prompt if button.collapsed => {
-                collapsed_content_x(button.area, state.prompt_left)
+            CollapseTarget::Prompt | CollapseTarget::Panes if button.collapsed => {
+                collapsed_content_x(button.area, false)
             }
             _ => button.area.x,
         };
@@ -319,10 +330,13 @@ fn render_resize_hint(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &
             [view.sidebar.right().saturating_sub(1), view.sidebar.right()],
         );
     }
-    if !state.prompt_collapsed
-        && view.panes.width > 0
-        && (state.resizing_prompt || state.prompt_hover)
-    {
+    // 右列面板折叠期间分隔线不可拖拽，也不高亮。
+    let right_collapsed = if view.prompt_left {
+        state.panes_collapsed
+    } else {
+        state.prompt_collapsed
+    };
+    if !right_collapsed && view.panes.width > 0 && (state.resizing_prompt || state.prompt_hover) {
         let prompt = view.prompt;
         let columns = if view.prompt_left {
             [prompt.right().saturating_sub(1), prompt.right()]
@@ -490,7 +504,7 @@ fn render_prompt(
         return None;
     }
     if state.prompt_collapsed {
-        render_collapsed_strip(frame, area, state.prompt_left);
+        render_collapsed_strip(frame, area, false);
         return None;
     }
     let focused = state.prompt_focused;

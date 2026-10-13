@@ -13,6 +13,7 @@ fn normal_width_shows_all_regions() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(view.sidebar.width, config.sidebar_width);
     assert_eq!(view.sidebar.height, 30);
@@ -35,6 +36,7 @@ fn tab_bar_spans_main_area_and_prompt() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(view.tab_bar.right(), view.prompt.right());
     assert_eq!(view.prompt.y, view.panes.y);
@@ -53,6 +55,7 @@ fn narrow_width_hides_sidebar_but_keeps_prompt() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(view.sidebar.width, 0);
     assert_eq!(view.prompt.width, 30);
@@ -69,6 +72,7 @@ fn collapsed_sidebar_keeps_strip() {
         config.sidebar_width,
         false,
         30,
+        false,
         false,
     );
     assert_eq!(view.sidebar.width, COLLAPSED_STRIP);
@@ -87,6 +91,7 @@ fn collapsed_narrow_sidebar_is_hidden() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(view.sidebar.width, 0);
     assert_eq!(view.prompt.width, 30);
@@ -102,6 +107,7 @@ fn collapsed_prompt_becomes_right_strip() {
         config.sidebar_width,
         true,
         30,
+        false,
         false,
     );
     assert_eq!(view.prompt, Rect::new(96, 1, COLLAPSED_STRIP, 29));
@@ -122,6 +128,7 @@ fn collapsing_prompt_keeps_stored_width() {
         true,
         42,
         false,
+        false,
     );
     let expanded = compute(
         Rect::new(0, 0, 100, 30),
@@ -130,6 +137,7 @@ fn collapsing_prompt_keeps_stored_width() {
         config.sidebar_width,
         false,
         42,
+        false,
         false,
     );
     assert_eq!(collapsed.prompt.width, COLLAPSED_STRIP);
@@ -147,6 +155,7 @@ fn prompt_width_is_clamped_both_sides() {
         false,
         5,
         false,
+        false,
     );
     assert_eq!(too_narrow.prompt.width, config.min_pane_width);
     let too_wide = compute(
@@ -156,6 +165,7 @@ fn prompt_width_is_clamped_both_sides() {
         config.sidebar_width,
         false,
         90,
+        false,
         false,
     );
     assert_eq!(
@@ -175,6 +185,7 @@ fn prompt_splits_evenly_when_area_is_tiny() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(view.prompt.width, 5);
     assert_eq!(view.panes.width, 5);
@@ -190,6 +201,7 @@ fn tiny_area_does_not_overflow() {
         config.sidebar_width,
         false,
         30,
+        false,
         false,
     );
     assert_eq!(view.panes.height, 1);
@@ -223,18 +235,24 @@ fn sidebar_sections_need_room_for_content() {
 }
 
 #[test]
-fn default_prompt_width_is_two_fifths_of_main_area() {
+fn default_side_width_is_two_fifths_of_main_area() {
     let config = Config::default();
     let area = Rect::new(0, 0, 100, 30);
-    assert_eq!(default_prompt_width(area, &config, false), 30);
+    assert_eq!(default_side_width(area, &config, false), 30);
     assert_eq!(
-        default_prompt_width(area, &config, true),
+        default_side_width(area, &config, true),
         (100 - COLLAPSED_STRIP) * 2 / 5
     );
     assert_eq!(
-        default_prompt_width(Rect::new(0, 0, 60, 30), &config, false),
+        default_side_width(Rect::new(0, 0, 60, 30), &config, false),
         24
     );
+}
+
+#[test]
+fn side_width_is_two_fifths_and_splits_when_tiny() {
+    assert_eq!(side_width(76, 10), 30);
+    assert_eq!(side_width(9, 10), 4);
 }
 
 #[test]
@@ -247,6 +265,7 @@ fn prompt_width_at_follows_boundary_and_clamps() {
         config.sidebar_width,
         false,
         30,
+        false,
         false,
     );
     assert_eq!(prompt_width_at(&view, 70, config.min_pane_width), 30);
@@ -268,6 +287,7 @@ fn sidebar_width_is_clamped_to_config_bounds() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(too_narrow.sidebar.width, config.sidebar_min_width);
     let too_wide = compute(
@@ -278,6 +298,7 @@ fn sidebar_width_is_clamped_to_config_bounds() {
         false,
         30,
         false,
+        false,
     );
     assert_eq!(too_wide.sidebar.width, config.sidebar_max_width);
     let collapsed = compute(
@@ -287,6 +308,7 @@ fn sidebar_width_is_clamped_to_config_bounds() {
         99,
         false,
         30,
+        false,
         false,
     );
     assert_eq!(collapsed.sidebar.width, COLLAPSED_STRIP);
@@ -302,6 +324,7 @@ fn sidebar_width_at_follows_boundary_and_keeps_pane_minimum() {
         config.sidebar_width,
         false,
         30,
+        false,
         false,
     );
     assert_eq!(sidebar_width_at(&view, &config, 23), config.sidebar_width);
@@ -324,12 +347,13 @@ fn sidebar_width_at_follows_boundary_and_keeps_pane_minimum() {
         false,
         60,
         false,
+        false,
     );
     assert_eq!(sidebar_width_at(&tight, &config, 99), 30);
 }
 
 #[test]
-fn prompt_left_swaps_panes_and_prompt() {
+fn prompt_left_places_prompt_next_to_sidebar() {
     let config = Config::default();
     let view = compute(
         Rect::new(0, 0, 100, 30),
@@ -337,17 +361,35 @@ fn prompt_left_swaps_panes_and_prompt() {
         false,
         config.sidebar_width,
         false,
-        30,
+        46,
         true,
+        false,
     );
     assert!(view.prompt_left);
     assert_eq!(view.tab_bar, Rect::new(24, 0, 76, 1));
-    assert_eq!(view.prompt, Rect::new(24, 1, 30, 29));
-    assert_eq!(view.panes, Rect::new(54, 1, 46, 29));
+    assert_eq!(view.prompt, Rect::new(24, 1, 46, 29));
+    assert_eq!(view.panes, Rect::new(70, 1, 30, 29));
 }
 
 #[test]
-fn collapsed_prompt_left_docks_to_sidebar() {
+fn collapsed_panes_dock_to_right_edge() {
+    let config = Config::default();
+    let view = compute(
+        Rect::new(0, 0, 100, 30),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        46,
+        true,
+        true,
+    );
+    assert_eq!(view.panes, Rect::new(96, 1, COLLAPSED_STRIP, 29));
+    assert_eq!(view.prompt, Rect::new(24, 1, 72, 29));
+}
+
+#[test]
+fn collapsed_prompt_ignored_when_prompt_left() {
     let config = Config::default();
     let view = compute(
         Rect::new(0, 0, 100, 30),
@@ -355,12 +397,12 @@ fn collapsed_prompt_left_docks_to_sidebar() {
         false,
         config.sidebar_width,
         true,
-        30,
+        46,
         true,
+        false,
     );
-    assert_eq!(view.prompt, Rect::new(24, 1, COLLAPSED_STRIP, 29));
-    assert_eq!(view.panes.x, 24 + COLLAPSED_STRIP);
-    assert_eq!(view.panes.right(), 100);
+    // 位置模型：prompt 在左不可折叠，折叠标记失效。
+    assert_eq!(view.prompt, Rect::new(24, 1, 46, 29));
 }
 
 #[test]
@@ -372,11 +414,12 @@ fn prompt_width_at_mirrors_for_left_prompt() {
         false,
         config.sidebar_width,
         false,
-        30,
+        46,
         true,
+        false,
     );
-    // 分隔线两列：53（prompt 右边框，映射为当前宽度）与 54（窗格左边框）。
-    assert_eq!(prompt_width_at(&view, 53, config.min_pane_width), 30);
+    // 分隔线两列：69（prompt 右边框，映射为当前宽度）与 70（窗格左边框）。
+    assert_eq!(prompt_width_at(&view, 69, config.min_pane_width), 46);
     assert_eq!(prompt_width_at(&view, 40, config.min_pane_width), 17);
     assert_eq!(
         prompt_width_at(&view, 99, config.min_pane_width),

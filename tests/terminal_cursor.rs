@@ -23,6 +23,7 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
         state.prompt_collapsed,
         state.prompt_width,
         state.prompt_left,
+        state.panes_collapsed,
     );
     let mut rects = layout::pane_rects(
         &state.active_tab().layout,
