@@ -131,16 +131,9 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteToLineEnd => state.prompt.delete_to_line_end(),
         EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
-        EditorCommand::Indent => {
-            if !select_var_colon(state, true) && !state.prompt.var_tab_jump(true) {
-                state.prompt.indent();
-            }
-        }
+        EditorCommand::Indent => state.prompt.indent(),
         EditorCommand::Outdent => {
-            if !state.prompt.cycle_template_status_at_cursor()
-                && !select_var_colon(state, false)
-                && !state.prompt.var_tab_jump(false)
-            {
+            if !state.prompt.cycle_template_status_at_cursor() {
                 state.prompt.outdent();
             }
         }
@@ -148,15 +141,6 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::Redo => state.prompt.redo(),
         EditorCommand::Escape => {}
     }
-}
-
-/// 变量键行 Tab / Shift+Tab：选中冒号右侧的值或左侧的键；不在变量键行返回 false。
-fn select_var_colon(state: &mut AppState, forward: bool) -> bool {
-    let Some((anchor, cursor)) = state.prompt.var_colon_select(forward) else {
-        return false;
-    };
-    state.selection = Some(Selection::text_range(state.prompt.id(), anchor, cursor));
-    true
 }
 
 /// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
@@ -540,26 +524,6 @@ pub fn clean_supple_block(state: &mut AppState, start_line: usize) -> bool {
 /// 删除整个补充块（单步撤销）；返回是否产生变更。
 pub fn delete_supple_block(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.delete_supple_block(start_line)
-}
-
-/// 清理变量块内未填写的条目（单步撤销）；返回是否产生变更。
-pub fn clean_var_block(state: &mut AppState, start_line: usize) -> bool {
-    state.prompt.clean_var_block(start_line)
-}
-
-/// 删除整个变量块（单步撤销）；返回是否产生变更。
-pub fn delete_var_block(state: &mut AppState, start_line: usize) -> bool {
-    state.prompt.delete_var_block(start_line)
-}
-
-/// 把变量块内容合并到文档首个变量块（单步撤销）；返回是否产生变更。
-pub fn merge_var_block(state: &mut AppState, start_line: usize) -> bool {
-    state.prompt.merge_var_block(start_line)
-}
-
-/// 把变量块置顶到文档开头连续变量块组之后（单步撤销）；返回是否产生变更。
-pub fn move_var_block_to_top(state: &mut AppState, start_line: usize) -> bool {
-    state.prompt.move_var_block_to_top(start_line)
 }
 
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。

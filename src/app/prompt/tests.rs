@@ -1238,7 +1238,7 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
     let mut prompt = prompt(40, 8);
     type_text(&mut prompt, "/");
     let panel = prompt.slash_panel().expect("panel on bare slash");
-    assert_eq!(panel.items().len(), 7, "5 个模板 + /var + /addVarContent");
+    assert_eq!(panel.items().len(), 5, "5 个内置模板");
     assert_eq!(panel.trigger().query, "");
 
     type_text(&mut prompt, "ref");
@@ -2465,25 +2465,7 @@ fn refer_shortcut_reference_candidates_keep_full_marker() {
     assert!(prompt.text().ends_with("@[refer-image](/tmp/shot.png) "));
 }
 
-// ---- 补充块 / 变量块 ----
-
-#[test]
-fn slash_var_inserts_variable_block_and_selects_key() {
-    let mut prompt = prompt(60, 12);
-    type_text(&mut prompt, "/var");
-    assert!(prompt.slash_confirm());
-    assert_eq!(prompt.text(), markdown::var_template_content().0);
-    assert_eq!(
-        markdown::block_context(prompt.text(), prompt.cursor()),
-        markdown::BlockContext::Var
-    );
-    assert!(
-        prompt.text()[prompt.cursor()..].starts_with(':'),
-        "cursor after key"
-    );
-    prompt.undo();
-    assert_eq!(prompt.text(), "/var");
-}
+// ---- 补充块 ----
 
 #[test]
 fn slash_supplement_offered_inside_template_and_inserts_subblock() {
@@ -2507,24 +2489,6 @@ fn slash_supplement_offered_inside_template_and_inserts_subblock() {
             prompt.text().find("##").unwrap_or(prompt.cursor())
         ),
         markdown::BlockContext::Supple
-    );
-}
-
-#[test]
-fn variable_reference_panel_offers_document_variables() {
-    let mut prompt = prompt(60, 20);
-    prompt
-        .set_text("$$$ varTemplate --start\n{title: }\nlang: \"rust\"\n$$$ varTemplate --end\n\n");
-    type_text(&mut prompt, "la");
-    let panel = prompt.refer_panel().expect("variable candidate");
-    assert_eq!(panel.items().len(), 1);
-    assert_eq!(panel.items()[0].name, "lang");
-    assert_eq!(panel.items()[0].tag, markdown::ReferTag::Variable);
-    assert!(prompt.refer_confirm());
-    assert!(
-        prompt.text().contains("rust "),
-        "value inserted: {}",
-        prompt.text()
     );
 }
 
@@ -2553,144 +2517,6 @@ fn supple_clean_and_delete_are_single_steps() {
     assert!(prompt.text().contains("&&& x --end"));
     prompt.undo();
     assert_eq!(prompt.text(), text);
-}
-
-#[test]
-fn var_merge_and_move_to_top() {
-    let text = concat!(
-        "$$$ varTemplate --start\n",
-        "a: \"1\"\n",
-        "$$$ varTemplate --end\n",
-        "mid\n",
-        "$$$ varTemplate --start\n",
-        "b: \"2\"\n",
-        "$$$ varTemplate --end\n",
-    );
-    let mut merged = prompt(60, 20);
-    merged.set_text(text);
-    assert!(merged.merge_var_block(4));
-    assert_eq!(
-        merged.text(),
-        markdown::merge_var_to_first(text, markdown::var_spans(text)[1]).unwrap()
-    );
-    merged.undo();
-    assert_eq!(merged.text(), text);
-
-    let mut top = prompt(60, 20);
-    top.set_text(text);
-    assert!(top.move_var_block_to_top(4));
-    assert_eq!(
-        top.text(),
-        markdown::move_var_to_top(text, markdown::var_spans(text)[1]).unwrap()
-    );
-    top.undo();
-    assert_eq!(top.text(), text);
-}
-
-#[test]
-fn var_block_converts_fullwidth_colon_only_on_key_lines() {
-    let mut editor = prompt(40, 10);
-    editor.set_text("$$$ varTemplate --start\n{title: }\nnewkey\n$$$ varTemplate --end\n");
-    let at = editor.text().find("newkey").unwrap() + "newkey".len();
-    editor.set_cursor_offset_for_test(at);
-    assert!(editor.var_colon_converts());
-    editor.insert_char('：');
-    assert!(editor.text().contains("newkey:"), "{}", editor.text());
-    assert!(!editor.text().contains('：'));
-
-    // 三引号正文内保留全角。
-    let mut triple = prompt(40, 10);
-    triple.set_text(
-        "$$$ varTemplate --start\n{title: }\nbody:\n  \"\"\"\n  text\n  \"\"\"\n$$$ varTemplate --end\n",
-    );
-    let at = triple.text().find("text").unwrap() + 4;
-    triple.set_cursor_offset_for_test(at);
-    assert!(!triple.var_colon_converts());
-}
-
-#[test]
-fn var_block_tab_jumps_between_keys() {
-    let mut editor = prompt(40, 10);
-    editor.set_text(
-        "$$$ varTemplate --start\n{title: }\na: \"1\"\nb: \"2\"\n$$$ varTemplate --end\n",
-    );
-    let a_end = editor.text().find("a:").unwrap() + 1;
-    let b_end = editor.text().find("b:").unwrap() + 1;
-    editor.set_cursor_offset_for_test(0);
-    assert!(editor.var_tab_jump(true));
-    assert_eq!(editor.cursor(), a_end);
-    assert!(editor.var_tab_jump(true));
-    assert_eq!(editor.cursor(), b_end);
-    assert!(editor.var_tab_jump(false));
-    assert_eq!(editor.cursor(), a_end);
-}
-
-#[test]
-fn add_var_content_appends_entry_and_clears_command_line() {
-    let mut editor = prompt(40, 12);
-    let text = "$$$ varTemplate --start\n{title: }\n@content:\nkey: \"v\"\n$$$ varTemplate --end\n/addVarContent";
-    editor.set_text(text);
-    let line_start = editor.text().find("/addVarContent").unwrap();
-    let trigger = markdown::SlashTrigger {
-        line_start,
-        line_end: editor.text().len(),
-        cursor: editor.text().len(),
-        query: "addVarContent".into(),
-    };
-    assert!(editor.add_var_content(&trigger));
-    assert_eq!(
-        editor.text(),
-        "$$$ varTemplate --start\n{title: }\n@content:\n  - @\nkey: \"v\"\n$$$ varTemplate --end",
-        "命令行整行清除、块结构完整、条目插入 @content: 下"
-    );
-    assert_eq!(editor.text().as_bytes()[editor.cursor() - 1], b'@');
-    editor.undo();
-    assert_eq!(editor.text(), text, "single undo step");
-}
-
-#[test]
-fn add_var_content_handles_command_line_above_block() {
-    let mut editor = prompt(40, 12);
-    let text = "/addVarContent\n$$$ varTemplate --start\n{title: }\n@content:\nkey: \"v\"\n$$$ varTemplate --end";
-    editor.set_text(text);
-    let trigger = markdown::SlashTrigger {
-        line_start: 0,
-        line_end: editor.text().find('\n').unwrap(),
-        cursor: "/addVarContent".len(),
-        query: "addVarContent".into(),
-    };
-    assert!(editor.add_var_content(&trigger));
-    assert_eq!(
-        editor.text(),
-        "$$$ varTemplate --start\n{title: }\n@content:\n  - @\nkey: \"v\"\n$$$ varTemplate --end",
-        "命令在块上方也按原始偏移正确重建"
-    );
-    assert_eq!(editor.text().as_bytes()[editor.cursor() - 1], b'@');
-}
-
-#[test]
-fn var_colon_select_targets_key_and_value() {
-    let text = "$$$ varTemplate --start\n{title: }\nkey: \"hello\"\n$$$ varTemplate --end\n";
-    let key_at = text.find("key").unwrap();
-    let value_at = text.find("\"hello\"").unwrap();
-
-    let mut forward = prompt(40, 10);
-    forward.set_text(text);
-    forward.set_cursor_offset_for_test(key_at + 1);
-    assert!(
-        forward.var_colon_select(true).is_some(),
-        "Tab selects value"
-    );
-    assert_eq!(forward.cursor(), value_at);
-
-    let mut backward = prompt(40, 10);
-    backward.set_text(text);
-    backward.set_cursor_offset_for_test(value_at + 2);
-    assert!(
-        backward.var_colon_select(false).is_some(),
-        "Shift+Tab selects key"
-    );
-    assert_eq!(backward.cursor(), key_at);
 }
 
 #[test]

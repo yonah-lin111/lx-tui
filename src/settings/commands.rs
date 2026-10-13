@@ -219,7 +219,7 @@ impl From<ConfigError> for CommandsError {
 pub type Result<T> = std::result::Result<T, CommandsError>;
 
 /// 内置命令名（短名与长别名）与模板块保留词；自定义命令不得占用。
-pub const RESERVED_NAMES: [&str; 22] = [
+pub const RESERVED_NAMES: [&str; 17] = [
     "add",
     "addTemplate",
     "bug",
@@ -237,11 +237,6 @@ pub const RESERVED_NAMES: [&str; 22] = [
     "supplement",
     "log",
     "tmp",
-    "var",
-    "varTemplate",
-    "singleLine",
-    "multiLine",
-    "addVarContent",
 ];
 
 /// 校验命令名：ASCII 字母开头，后随字母/数字/`_`/`-`，且不占用保留名。

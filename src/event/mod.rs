@@ -2300,7 +2300,7 @@ fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHi
     }
 }
 
-/// 补充块/变量块操作按钮命中；未命中返回 None。
+/// 补充块操作按钮命中；未命中返回 None。
 fn block_button_at(
     state: &AppState,
     view: &ui::layout::ViewLayout,
@@ -2311,7 +2311,7 @@ fn block_button_at(
     ui::prompt::block_button_at(&state.prompt, area, column, row)
 }
 
-/// 执行补充块/变量块按钮动作（均单步可撤销，折叠为纯视图状态）。
+/// 执行补充块按钮动作（单步可撤销）。
 fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockButtonHit) {
     use crate::app::markdown::BlockKind;
     use ui::prompt::BlockButton;
@@ -2321,18 +2321,6 @@ fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockButtonHit) {
         }
         (BlockKind::Supple, BlockButton::Delete) => {
             update::delete_supple_block(state, hit.line);
-        }
-        (BlockKind::Var, BlockButton::Clean) => {
-            update::clean_var_block(state, hit.line);
-        }
-        (BlockKind::Var, BlockButton::Delete) => {
-            update::delete_var_block(state, hit.line);
-        }
-        (BlockKind::Var, BlockButton::Merge) => {
-            update::merge_var_block(state, hit.line);
-        }
-        (BlockKind::Var, BlockButton::Top) => {
-            update::move_var_block_to_top(state, hit.line);
         }
         _ => {}
     }

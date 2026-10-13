@@ -6,8 +6,6 @@ mod refer_shortcut;
 mod slash;
 mod supple;
 mod template;
-mod var;
-mod variables;
 mod worktree;
 
 pub use blocks::*;
@@ -16,8 +14,6 @@ pub use refer_shortcut::*;
 pub use slash::*;
 pub use supple::*;
 pub use template::*;
-pub use var::*;
-pub use variables::*;
 pub use worktree::*;
 
 use std::ops::Range;

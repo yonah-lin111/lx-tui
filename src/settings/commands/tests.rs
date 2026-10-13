@@ -408,10 +408,7 @@ fn block_type_parses_serializes_and_rejects_unknown() {
 }
 
 #[test]
-fn supple_and_var_names_are_reserved() {
+fn supple_names_are_reserved() {
     assert!(validate_name("supplement").is_err());
-    assert!(validate_name("var").is_err());
-    assert!(validate_name("singleLine").is_err());
-    assert!(validate_name("multiLine").is_err());
-    assert!(validate_name("varTemplate").is_err());
+    assert!(validate_name("supple").is_err());
 }

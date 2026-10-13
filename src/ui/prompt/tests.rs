@@ -1149,27 +1149,6 @@ fn refer_panel_hit_maps_candidates() {
 }
 
 #[test]
-fn var_block_draws_fixed_cyan_border_and_background() {
-    use crate::app::markdown::BlockKind;
-    let area = Rect::new(0, 0, 60, 5);
-    let prompt = prompt(
-        60,
-        5,
-        "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end",
-    );
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
-    assert_eq!(buf[(0, 0)].symbol(), "╭");
-    assert_eq!(buf[(0, 0)].fg, Color::LightCyan, "var 固定亮青边框");
-    assert_eq!(buf[(59, 0)].symbol(), "╮");
-    assert_eq!(buf[(2, 1)].bg, Color::Rgb(26, 44, 46), "var 固定暗青底");
-    assert_eq!(buf[(0, 3)].symbol(), "╰");
-
-    let hits = block_buttons(&prompt, area);
-    assert!(hits.iter().all(|hit| hit.kind == BlockKind::Var));
-}
-
-#[test]
 fn supple_block_overrides_parent_template_colors() {
     use crate::app::markdown::BlockKind;
     let area = Rect::new(0, 0, 60, 6);
@@ -1196,32 +1175,6 @@ fn supple_block_overrides_parent_template_colors() {
     assert!(hits.iter().all(|hit| hit.kind == BlockKind::Supple));
     assert_eq!(hits[0].button, BlockButton::Clean);
     assert_eq!(hits[1].button, BlockButton::Delete);
-    let hit = hits[0];
-    assert_eq!(
-        block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
-        Some(BlockButton::Clean)
-    );
-}
-
-#[test]
-fn var_block_buttons_order_and_hit() {
-    let area = Rect::new(0, 0, 60, 5);
-    let prompt = prompt(
-        60,
-        5,
-        "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end",
-    );
-    let hits = block_buttons(&prompt, area);
-    let buttons: Vec<BlockButton> = hits.iter().map(|hit| hit.button).collect();
-    assert_eq!(
-        buttons,
-        vec![
-            BlockButton::Clean,
-            BlockButton::Delete,
-            BlockButton::Merge,
-            BlockButton::Top,
-        ]
-    );
     let hit = hits[0];
     assert_eq!(
         block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
@@ -1259,26 +1212,6 @@ fn refer_panel_width_grows_with_content_up_to_container() {
     assert_eq!(capped, area.width, "capped at container width");
 }
 
-#[test]
-fn refer_panel_tagged_row_is_not_truncated() {
-    let area = Rect::new(0, 0, 74, 12);
-    let text =
-        "$$$ varTemplate --start\n{title: }\n@content:\nkey: \"1111\"\n$$$ varTemplate --end\nkey";
-    let prompt = prompt(74, 12, text);
-    let layout = refer_layout(&prompt, area).expect("refer panel");
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
-    let row: String = (layout.rect.x..layout.rect.right())
-        .map(|x| buf[(x, layout.content.y)].symbol())
-        .collect();
-    assert!(row.contains("1111"), "value not truncated: {row:?}");
-    assert!(row.contains("[var]"), "tag shown: {row:?}");
-    assert!(
-        !row.contains('…'),
-        "no ellipsis for fitting content: {row:?}"
-    );
-}
-
 fn assert_full_width_separator(buf: &Buffer, width: u16, y: u16) {
     let separator: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
     let chars: Vec<char> = separator.chars().collect();
@@ -1288,16 +1221,6 @@ fn assert_full_width_separator(buf: &Buffer, width: u16, y: u16) {
         chars[1..chars.len() - 1].iter().all(|ch| *ch == '─'),
         "sep={separator:?}"
     );
-}
-
-#[test]
-fn var_block_renders_title_separator_like_template() {
-    let area = Rect::new(0, 0, 40, 8);
-    let (text, _) = crate::app::markdown::var_template_content();
-    let prompt = prompt(40, 8, &text);
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
-    assert_full_width_separator(&buf, 40, 2);
 }
 
 #[test]

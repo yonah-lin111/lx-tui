@@ -303,36 +303,7 @@ pub fn supple_block_bg() -> Style {
     Style::default().bg(Color::Rgb(46, 32, 54))
 }
 
-/// 变量块 `$$$` 结构标记：次要信息。
-pub fn var_marker() -> Style {
-    muted()
-}
-
-/// 变量块命令名：固定亮青加粗。
-pub fn var_command() -> Style {
-    Style::default()
-        .fg(Color::LightCyan)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// 变量块边框：固定亮青。
-pub fn var_border() -> Style {
-    Style::default().fg(Color::LightCyan)
-}
-
-/// 变量块整行底色：固定暗青绿。
-pub fn var_block_bg() -> Style {
-    Style::default().bg(Color::Rgb(26, 44, 46))
-}
-
-/// 变量键名：亮青下划线。
-pub fn var_key() -> Style {
-    Style::default()
-        .fg(Color::LightCyan)
-        .add_modifier(Modifier::UNDERLINED)
-}
-
-/// 块操作按钮（补充块/变量块）：常态次要信息。
+/// 块操作按钮（补充块）：常态次要信息。
 pub fn block_button() -> Style {
     muted()
 }

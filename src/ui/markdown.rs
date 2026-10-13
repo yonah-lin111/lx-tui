@@ -27,12 +27,6 @@ pub enum TokenKind {
     SuppleMarker,
     /// 补充块命令名。
     SuppleCommand,
-    /// `$$$` 起止行的结构标记。
-    VarMarker,
-    /// 变量块命令名 `varTemplate`。
-    VarCommand,
-    /// 变量块内的键名（冒号左侧）。
-    VarKey,
     /// `@path/to/file` 文件提及。
     FileMention,
     /// `@[refer-file](path)` 文件引用。
@@ -67,13 +61,12 @@ pub fn scan(text: &str) -> Vec<Vec<Token>> {
         .collect()
 }
 
-/// 跨行扫描状态：围栏、`&&&`、`+++`、`$$$` 的开合。
+/// 跨行扫描状态：围栏、`&&&`、`+++` 的开合。
 #[derive(Debug, Default, Clone, Copy)]
 struct ScanState {
     fence: bool,
     template: bool,
     supple: bool,
-    var: bool,
 }
 
 /// 扫描单行，按围栏/块状态产出 token。
@@ -118,22 +111,6 @@ fn scan_line(line: &str, state: &mut ScanState) -> Vec<Token> {
             );
             return tokens;
         }
-    } else if state.var {
-        if scan_var_end(line, &mut tokens) {
-            state.var = false;
-            return tokens;
-        }
-        if let Some(range) = standalone_title(line) {
-            push(&mut tokens, range, TokenKind::TemplateTitle);
-            return tokens;
-        }
-        if let Some(range) = var_key_range(line) {
-            push(&mut tokens, range, TokenKind::VarKey);
-            return tokens;
-        }
-    } else if scan_var_start(line, &mut tokens) {
-        state.var = true;
-        return tokens;
     }
     if let Some(marker_end) = heading(line) {
         push(&mut tokens, 0..marker_end, TokenKind::Marker);
@@ -263,62 +240,6 @@ fn scan_supple_end(line: &str, tokens: &mut Vec<Token>) -> bool {
         }
     }
     true
-}
-
-/// 变量块起始行 token：`$$$` 与 `--start` 标记，`varTemplate` 分色，标题成段。
-fn scan_var_start(line: &str, tokens: &mut Vec<Token>) -> bool {
-    let Some(parsed) = markdown::parse_var_start_line(line) else {
-        return false;
-    };
-    let spans = word_spans(line);
-    if let Some((_, range)) = spans.first() {
-        push(tokens, range.clone(), TokenKind::VarMarker);
-    }
-    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == "varTemplate") {
-        push(tokens, range.clone(), TokenKind::VarCommand);
-    }
-    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == "--start") {
-        push(tokens, range.clone(), TokenKind::VarMarker);
-    }
-    let _ = parsed;
-    push_inline_title(line, tokens);
-    true
-}
-
-/// 变量块结束行 token：`$$$`、`--end`、`{id:}` 标记，`varTemplate` 分色。
-fn scan_var_end(line: &str, tokens: &mut Vec<Token>) -> bool {
-    if markdown::parse_var_end_line(line).is_none() {
-        return false;
-    }
-    let spans = word_spans(line);
-    if let Some((_, range)) = spans.first() {
-        push(tokens, range.clone(), TokenKind::VarMarker);
-    }
-    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == "varTemplate") {
-        push(tokens, range.clone(), TokenKind::VarCommand);
-    }
-    for (text, range) in &spans {
-        if *text == "--end" || text.starts_with("{id:") {
-            push(tokens, range.clone(), TokenKind::VarMarker);
-        }
-    }
-    true
-}
-
-/// 变量键名区间：`<缩进><key>:` 的键名部分（键名字符集受限）。
-fn var_key_range(line: &str) -> Option<Range<usize>> {
-    let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
-    let rest = &line[indent..];
-    let colon = rest.find(':')?;
-    let key = rest[..colon].trim_end();
-    if key.is_empty()
-        || !key
-            .chars()
-            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
-    {
-        return None;
-    }
-    Some(indent..indent + key.len())
 }
 
 /// 行内标题（`{title: …}` 或 `「title: …」`）成段着色。

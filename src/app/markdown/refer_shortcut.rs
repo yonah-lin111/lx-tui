@@ -20,14 +20,12 @@ pub struct ReferTrigger {
     pub query: String,
 }
 
-/// 候选类型（tag 语义）：`@` 提及按目录信息区分 file/folder，引用按标记类型，变量为 var。
+/// 候选类型（tag 语义）：`@` 提及按目录信息区分 file/folder，引用按标记类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferTag {
     File,
     Folder,
     Refer(ReferKind),
-    /// 当前 Prompt 文档内已定义的变量。
-    Variable,
 }
 
 impl ReferTag {
@@ -39,7 +37,6 @@ impl ReferTag {
             Self::Refer(ReferKind::File) => "refer-file",
             Self::Refer(ReferKind::Folder) => "refer-folder",
             Self::Refer(ReferKind::Image) => "refer-image",
-            Self::Variable => "var",
         }
     }
 }
@@ -129,11 +126,8 @@ pub fn refer_trigger(text: &str, cursor: usize) -> Option<ReferTrigger> {
     if is_structural_line(text, line) {
         return None;
     }
-    // var 块与补充块内部不提供变量引用候选（避免改写定义/结构行）。
-    if matches!(
-        super::block_context(text, cursor),
-        super::BlockContext::Var | super::BlockContext::Supple
-    ) {
+    // 补充块内部不提供引用候选（避免改写定义/结构行）。
+    if super::block_context(text, cursor) == super::BlockContext::Supple {
         return None;
     }
     let infos = template_line_infos(text);
@@ -330,27 +324,6 @@ pub fn refer_candidates(
                 );
             }
         }
-    }
-    // 当前 Prompt 文档内变量：文档全局候选，与提及/引用并列；空值与默认占位不进入候选。
-    for variable in super::document_variables(text) {
-        let value = variable.value.trim();
-        if value.is_empty() || value == "var" {
-            continue;
-        }
-        if candidates
-            .iter()
-            .any(|candidate| candidate.tag == ReferTag::Variable && candidate.name == variable.name)
-        {
-            continue;
-        }
-        let order = candidates.len();
-        candidates.push(ReferCandidate {
-            text: variable.value.clone(),
-            name: variable.name.clone(),
-            path: variable.name.clone(),
-            tag: ReferTag::Variable,
-            order,
-        });
     }
     candidates
 }

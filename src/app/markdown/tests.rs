@@ -652,14 +652,10 @@ fn filter_names(query: &str) -> Vec<String> {
 
 #[test]
 fn slash_filter_ranks_short_and_long_aliases() {
-    assert_eq!(
-        filter_names("").len(),
-        7,
-        "5 个模板 + /var + /addVarContent"
-    );
-    assert_eq!(filter_names("add"), vec!["add", "addVarContent"]);
-    assert_eq!(filter_names("addt"), vec!["add", "addVarContent"]);
-    assert_eq!(filter_names("ADD"), vec!["add", "addVarContent"]);
+    assert_eq!(filter_names("").len(), 5, "5 个内置模板");
+    assert_eq!(filter_names("add"), vec!["add"]);
+    assert_eq!(filter_names("addt"), vec!["add"]);
+    assert_eq!(filter_names("ADD"), vec!["add"]);
     assert_eq!(filter_names("addtemplate"), vec!["add"]);
     assert_eq!(filter_names("ref"), vec!["refactor"]);
     assert_eq!(filter_names("style"), vec!["style"]);
@@ -1263,7 +1259,7 @@ fn is_template_block_line_checks_membership_and_bounds() {
     assert!(is_template_block_line(unclosed, 1));
 }
 
-// ---- 补充块 / 变量块解析 ----
+// ---- 补充块解析 ----
 
 #[test]
 fn parse_supple_start_line_forms() {
@@ -1290,20 +1286,6 @@ fn parse_supple_end_line_forms() {
 }
 
 #[test]
-fn parse_var_start_and_end_forms() {
-    assert!(parse_var_start_line("$$$").is_some());
-    assert!(parse_var_start_line("$$$ varTemplate").is_some());
-    assert!(parse_var_start_line("$$$ varTemplate --start").is_some());
-    assert!(parse_var_start_line("$$$ varTemplate --start {title: }").is_some());
-    assert!(parse_var_start_line("$$$ varTemplate --end").is_none());
-    assert!(parse_var_start_line("$$$ --end").is_none());
-    assert!(parse_var_end_line("$$$").is_some());
-    assert!(parse_var_end_line("$$$ --end").is_some());
-    assert!(parse_var_end_line("$$$ varTemplate --end {id:abc}").is_some());
-    assert!(parse_var_end_line("$$$ varTemplate --start").is_none());
-}
-
-#[test]
 fn block_scan_marks_template_and_nested_supple() {
     let text = concat!(
         "&&& addTemplate --start\n",
@@ -1323,20 +1305,6 @@ fn block_scan_marks_template_and_nested_supple() {
     assert_eq!(infos[4].unwrap().role, BlockRole::End);
     assert_eq!(infos[5].unwrap().kind, BlockKind::Template);
     assert_eq!(infos[5].unwrap().role, BlockRole::End);
-}
-
-#[test]
-fn block_scan_var_is_top_level() {
-    let text = "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end\nbody";
-    let infos = block_line_infos(text);
-    assert_eq!(infos[0].unwrap().kind, BlockKind::Var);
-    assert_eq!(infos[3].unwrap().role, BlockRole::End);
-    assert!(infos[4].is_none());
-    // `$$$` 在 `&&&` 内不取得变量块身份。
-    let nested = "&&& x --start\n$$$ varTemplate --start\n$$$ varTemplate --end\n&&& x --end";
-    let infos = block_line_infos(nested);
-    assert_eq!(infos[1].unwrap().kind, BlockKind::Template);
-    assert_eq!(infos[2].unwrap().kind, BlockKind::Template);
 }
 
 #[test]
@@ -1378,9 +1346,6 @@ fn block_context_reports_position() {
         "in supple\n",
         "+++ supplement --end\n",
         "&&& x --end\n",
-        "$$$ varTemplate --start\n",
-        "in var\n",
-        "$$$ varTemplate --end\n",
     );
     assert_eq!(block_context(text, 0), BlockContext::Normal);
     assert_eq!(
@@ -1390,163 +1355,6 @@ fn block_context_reports_position() {
     assert_eq!(
         block_context(text, text.find("in supple").unwrap()),
         BlockContext::Supple
-    );
-    assert_eq!(
-        block_context(text, text.find("in var").unwrap()),
-        BlockContext::Var
-    );
-}
-
-// ---- 变量解析与变换 ----
-
-#[test]
-fn document_variables_parses_single_triple_and_dotted() {
-    let text = concat!(
-        "$$$ varTemplate --start\n",
-        "@content:\n",
-        "key: \"var\"\n",
-        "temp.status: \"ready\"\n",
-        "body:\n",
-        "  \"\"\"\n",
-        "  line1\n",
-        "  line2\n",
-        "  \"\"\"\n",
-        "$$$ varTemplate --end\n",
-    );
-    let vars = document_variables(text);
-    assert_eq!(
-        vars,
-        vec![
-            VariableEntry {
-                name: "key".into(),
-                value: "var".into()
-            },
-            VariableEntry {
-                name: "temp.status".into(),
-                value: "ready".into()
-            },
-            VariableEntry {
-                name: "body".into(),
-                value: "line1\nline2".into()
-            },
-        ]
-    );
-}
-
-#[test]
-fn document_variables_vars_level_and_last_wins() {
-    let text = concat!(
-        "$$$ varTemplate --start\n",
-        "vars:\n",
-        "  a: \"1\"\n",
-        "  b: \"2\"\n",
-        "$$$ varTemplate --end\n",
-        "$$$ varTemplate --start\n",
-        "a: \"9\"\n",
-        "$$$ varTemplate --end\n",
-    );
-    let vars = document_variables(text);
-    assert_eq!(
-        vars,
-        vec![
-            VariableEntry {
-                name: "a".into(),
-                value: "9".into()
-            },
-            VariableEntry {
-                name: "b".into(),
-                value: "2".into()
-            },
-        ]
-    );
-}
-
-#[test]
-fn document_variables_frontmatter_fallback_only_without_blocks() {
-    let front = "---\nname: \"x\"\n---\nbody";
-    assert_eq!(
-        document_variables(front),
-        vec![VariableEntry {
-            name: "name".into(),
-            value: "x".into()
-        }]
-    );
-    let with_block = concat!(
-        "---\nname: \"x\"\n---\n",
-        "$$$ varTemplate --start\n",
-        "y: \"1\"\n",
-        "$$$ varTemplate --end\n",
-    );
-    assert_eq!(
-        document_variables(with_block),
-        vec![VariableEntry {
-            name: "y".into(),
-            value: "1".into()
-        }]
-    );
-}
-
-#[test]
-fn clean_var_content_drops_unfilled_keeps_content_key() {
-    let block = "@content:\n- @a.txt\nkey: \"var\"\nnotes: \"\"\nreal: \"kept\"";
-    let cleaned = clean_var_content(block);
-    assert!(cleaned.contains("@content:"));
-    assert!(cleaned.contains("- @a.txt"));
-    assert!(!cleaned.contains("\"var\""));
-    assert!(cleaned.contains("real: \"kept\""));
-}
-
-#[test]
-fn merge_var_to_first_appends_and_removes() {
-    let text = concat!(
-        "$$$ varTemplate --start\n",
-        "a: \"1\"\n",
-        "$$$ varTemplate --end\n",
-        "mid\n",
-        "$$$ varTemplate --start\n",
-        "b: \"2\"\n",
-        "$$$ varTemplate --end\n",
-    );
-    let span = var_spans(text)[1];
-    let merged = merge_var_to_first(text, span).expect("merged");
-    assert_eq!(
-        merged,
-        concat!(
-            "$$$ varTemplate --start\n",
-            "a: \"1\"\n",
-            "b: \"2\"\n",
-            "$$$ varTemplate --end\n",
-            "mid\n",
-        )
-    );
-}
-
-#[test]
-fn move_var_to_top_relocates_after_top_group() {
-    let text = concat!(
-        "$$$ varTemplate --start\n",
-        "a: \"1\"\n",
-        "$$$ varTemplate --end\n",
-        "mid\n",
-        "$$$ varTemplate --start\n",
-        "b: \"2\"\n",
-        "$$$ varTemplate --end\n",
-    );
-    let span = var_spans(text)[1];
-    let moved = move_var_to_top(text, span).expect("moved");
-    assert_eq!(
-        moved,
-        concat!(
-            "$$$ varTemplate --start\n",
-            "a: \"1\"\n",
-            "$$$ varTemplate --end\n",
-            "\n",
-            "$$$ varTemplate --start\n",
-            "b: \"2\"\n",
-            "$$$ varTemplate --end\n",
-            "\n",
-            "mid\n",
-        )
     );
 }
 
@@ -1566,22 +1374,16 @@ fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
 }
 
 #[test]
-fn slash_filter_scopes_builtin_supplement_and_var_by_context() {
+fn slash_filter_scopes_builtin_by_context() {
     let normal = filter_names_in(BlockContext::Normal, "");
     assert!(normal.contains(&"add".to_string()));
-    assert!(normal.contains(&"var".to_string()));
     assert!(!normal.contains(&"supplement".to_string()));
-    assert!(!normal.contains(&"singleLine".to_string()));
 
     let template = filter_names_in(BlockContext::Template, "");
     assert_eq!(template, vec!["supplement"]);
-    assert!(!template.contains(&"var".to_string()));
 
     let supple = filter_names_in(BlockContext::Supple, "");
     assert!(supple.is_empty(), "{supple:?}");
-
-    let var = filter_names_in(BlockContext::Var, "");
-    assert_eq!(var, vec!["singleLine", "multiLine"]);
 }
 
 #[test]
@@ -1602,32 +1404,7 @@ fn supple_block_content_wraps_and_places_cursor_in_title() {
 }
 
 #[test]
-fn var_template_content_places_cursor_after_key() {
-    let (content, cursor) = var_template_content();
-    assert_eq!(
-        content,
-        "$$$ varTemplate --start\n{title: }\n\n@content:\nkey: \"var\"\n$$$ varTemplate --end"
-    );
-    assert!(
-        content[cursor..].starts_with(':'),
-        "cursor after key: {content}"
-    );
-}
-
-#[test]
-fn slash_insertion_maps_new_builtins() {
-    assert_eq!(
-        slash_insertion(&SlashItem::builtin_var()).map(|(text, _)| text),
-        Some(var_template_content().0)
-    );
-    assert_eq!(
-        slash_insertion(&SlashItem::var_single_line()),
-        Some((VAR_SINGLE_LINE.to_string(), 3))
-    );
-    assert_eq!(
-        slash_insertion(&SlashItem::var_multi_line()),
-        Some((VAR_MULTI_LINE.to_string(), 3))
-    );
+fn slash_insertion_maps_supple_builtin() {
     let supple = SlashItem::builtin_supplement();
     let (text, _) = slash_insertion(&supple).expect("supple insertion");
     assert!(text.starts_with("+++ supplement --start"));
@@ -1657,23 +1434,6 @@ fn supple_block_worktree_binding_round_trips() {
 }
 
 #[test]
-fn var_content_append_targets_at_content() {
-    let text = "$$$ varTemplate --start\n{title: }\n@content:\n  - @a.txt\n$$$ varTemplate --end\n";
-    let (offset, insert) = var_content_append(text).expect("append point");
-    assert!(insert.ends_with("- @"), "{insert}");
-    let mut appended = text.to_string();
-    appended.insert_str(offset, &insert);
-    assert!(appended.contains("- @a.txt\n  - @"), "{appended}");
-
-    let without = "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end\n";
-    let (offset, insert) = var_content_append(without).expect("append point");
-    let mut appended = without.to_string();
-    appended.insert_str(offset, &insert);
-    assert!(appended.contains("@content:"), "{appended}");
-    assert!(appended.contains("- @"), "{appended}");
-}
-
-#[test]
 fn slash_filter_offers_worktree_in_supple_context_only() {
     let supple = slash_filter(
         &[],
@@ -1690,21 +1450,4 @@ fn slash_filter_offers_worktree_in_supple_context_only() {
             .collect::<Vec<_>>(),
         vec!["gitWorkTree"]
     );
-    let var = slash_filter(
-        &[],
-        SlashContext {
-            context: BlockContext::Var,
-            worktree_available: true,
-        },
-        "work",
-    );
-    assert!(var.is_empty(), "var 内不提供 /gitWorkTree");
-}
-
-#[test]
-fn slash_filter_offers_add_var_content_in_normal_context() {
-    let items = filter_names_in(BlockContext::Normal, "addvar");
-    assert_eq!(items, vec!["addVarContent"]);
-    let template = filter_names_in(BlockContext::Template, "addvar");
-    assert!(template.is_empty(), "{template:?}");
 }

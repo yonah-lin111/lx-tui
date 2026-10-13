@@ -1,21 +1,19 @@
-//! 统一块扫描：一次性识别代码围栏与顶层 `&&&`/`$$$`，再识别 `&&&` 内部的 `+++`。
+//! 统一块扫描：一次性识别代码围栏与顶层 `&&&`，再识别 `&&&` 内部的 `+++`。
 //!
 //! 纯函数、无 IO。行角色用 `BlockKind` + `Start/Middle/End` 表示；`&&&` 内的 `+++`
-//! 覆盖父块角色，`$$$` 为顶层块，不嵌入 `&&&`/`+++`。未闭合块延伸到其合法父范围末行。
+//! 覆盖父块角色。未闭合块延伸到其合法父范围末行。
 
 use super::supple::{parse_supple_end_line, parse_supple_start_line};
 use super::template::{
     TemplateStatus, is_title_line, parse_template_end_line, parse_template_start_line,
     parse_worktree_line,
 };
-use super::var::{parse_var_end_line, parse_var_start_line};
 
-/// 块类型：任务块 `&&&`、补充子块 `+++`、变量块 `$$$`。
+/// 块类型：任务块 `&&&`、补充子块 `+++`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockKind {
     Template,
     Supple,
-    Var,
 }
 
 /// 块内行角色。
@@ -33,7 +31,7 @@ pub struct BlockLineInfo {
     pub role: BlockRole,
     pub start: usize,
     pub end: usize,
-    /// `&&&` 状态；`+++`/`$$$` 恒为 `Todo`。
+    /// `&&&` 状态；`+++` 恒为 `Todo`。
     pub status: TemplateStatus,
     /// `&&&` 结构分割行（标题下或绑定行上的空行）；其余块恒为 false。
     pub separator: bool,
@@ -59,7 +57,7 @@ pub struct BlockScan {
     pub spans: Vec<BlockSpan>,
 }
 
-/// 光标所处的块上下文；决定斜杠命令与变量引用的可见性。
+/// 光标所处的块上下文；决定斜杠命令的可见性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockContext {
     /// 普通正文（不在任何块内）。
@@ -68,8 +66,6 @@ pub enum BlockContext {
     Template,
     /// `+++` 补充子块内。
     Supple,
-    /// `$$$` 变量块内。
-    Var,
 }
 
 /// 扫描全文，返回每行块归属与块范围。
@@ -80,7 +76,6 @@ pub fn block_scan(text: &str) -> BlockScan {
     let mut fence: Option<(u8, usize)> = None;
     let mut template: Option<usize> = None;
     let mut supple: Option<usize> = None;
-    let mut var: Option<usize> = None;
 
     for (index, line) in lines.iter().enumerate() {
         if let Some((marker, length)) = fence {
@@ -118,21 +113,8 @@ pub fn block_scan(text: &str) -> BlockScan {
             } else if parse_supple_start_line(line).is_some() {
                 supple = Some(index);
             }
-        } else if let Some(start) = var {
-            if parse_var_end_line(line).is_some() {
-                spans.push(BlockSpan {
-                    kind: BlockKind::Var,
-                    start,
-                    end: index,
-                    status: TemplateStatus::Todo,
-                    closed: true,
-                });
-                var = None;
-            }
         } else if parse_template_start_line(line).is_some() {
             template = Some(index);
-        } else if parse_var_start_line(line).is_some() {
-            var = Some(index);
         }
     }
 
@@ -155,15 +137,6 @@ pub fn block_scan(text: &str) -> BlockScan {
             closed: false,
         });
     }
-    if let Some(start) = var {
-        spans.push(BlockSpan {
-            kind: BlockKind::Var,
-            start,
-            end: last,
-            status: TemplateStatus::Todo,
-            closed: false,
-        });
-    }
 
     let mut scan = BlockScan { infos, spans };
     fill_roles(&mut scan);
@@ -176,9 +149,9 @@ pub fn block_line_infos(text: &str) -> Vec<Option<BlockLineInfo>> {
     block_scan(text).infos
 }
 
-/// 按固定优先级填充行归属：`&&&` 最外，`+++` 覆盖，`$$$` 顶层。
+/// 按固定优先级填充行归属：`&&&` 最外，`+++` 覆盖。
 fn fill_roles(scan: &mut BlockScan) {
-    for kind in [BlockKind::Template, BlockKind::Supple, BlockKind::Var] {
+    for kind in [BlockKind::Template, BlockKind::Supple] {
         let spans: Vec<BlockSpan> = scan
             .spans
             .iter()
@@ -270,7 +243,6 @@ pub fn block_context(text: &str, offset: usize) -> BlockContext {
     match block_at(text, offset).map(|info| info.kind) {
         Some(BlockKind::Template) => BlockContext::Template,
         Some(BlockKind::Supple) => BlockContext::Supple,
-        Some(BlockKind::Var) => BlockContext::Var,
         None => BlockContext::Normal,
     }
 }

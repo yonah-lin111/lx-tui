@@ -194,7 +194,7 @@ fn render_toolbar(
 
 /// 绘制 prompt 内容区；光标由调用方以终端原生硬件光标呈现。
 ///
-/// 块行按类型渲染：`&&&` 状态色、`+++` 固定品红、`$$$` 固定亮青；起始行顶边右端
+/// 块行按类型渲染：`&&&` 状态色、`+++` 固定品红；起始行顶边右端
 /// 常显该类型的操作按钮，文本超宽以省略号截断。
 pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&Selection>) {
     if area.width == 0 || area.height == 0 {
@@ -301,16 +301,14 @@ pub struct TemplateButtonHit {
     pub rect: Rect,
 }
 
-/// 补充块/变量块操作按钮种类。
+/// 补充块操作按钮种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockButton {
     Clean,
     Delete,
-    Merge,
-    Top,
 }
 
-/// 补充块/变量块操作按钮命中。
+/// 补充块操作按钮命中。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockButtonHit {
     pub line: usize,
@@ -329,14 +327,6 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
 
 /// 补充块按钮组顺序：清理、删除。
 const SUPPLE_BUTTONS: [BlockButton; 2] = [BlockButton::Clean, BlockButton::Delete];
-
-/// 变量块按钮组顺序：清理、删除、合并、置顶。
-const VAR_BUTTONS: [BlockButton; 4] = [
-    BlockButton::Clean,
-    BlockButton::Delete,
-    BlockButton::Merge,
-    BlockButton::Top,
-];
 
 /// 块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
 fn block_gutter(block: bool) -> u16 {
@@ -370,10 +360,6 @@ fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
                 BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
                 _ => text::SUPPLE_BUTTON_DEL,
             })
-            .collect(),
-        BlockKind::Var => VAR_BUTTONS
-            .iter()
-            .map(|button| block_button_label(*button))
             .collect(),
     }
 }
@@ -465,7 +451,7 @@ pub fn template_button_at(
         .find(|hit| hit.rect.contains((column, row).into()))
 }
 
-/// 计算可见补充块/变量块起始行的操作按钮布局。
+/// 计算可见补充块起始行的操作按钮布局。
 pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
@@ -488,16 +474,13 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
         let Some(info) = infos.get(row.line).copied().flatten() else {
             continue;
         };
-        if info.role != BlockRole::Start || info.kind == BlockKind::Template {
+        if info.role != BlockRole::Start || info.kind != BlockKind::Supple {
             continue;
         }
         let labels = block_button_labels(Some(info));
         let start = block_buttons_start(area, block_buttons_total(&labels));
         let y = area.y + visible as u16;
-        let buttons: &[BlockButton] = match info.kind {
-            BlockKind::Supple => &SUPPLE_BUTTONS,
-            _ => &VAR_BUTTONS,
-        };
+        let buttons: &[BlockButton] = &SUPPLE_BUTTONS;
         let mut x = start;
         for (button, label) in buttons.iter().zip(labels) {
             let width = label.width() as u16;
@@ -513,7 +496,7 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
     hits
 }
 
-/// 命中补充块/变量块操作按钮；未命中返回 None。
+/// 命中补充块操作按钮；未命中返回 None。
 pub fn block_button_at(
     prompt: &Prompt,
     area: Rect,
@@ -535,13 +518,11 @@ fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) ->
     }
 }
 
-/// 补充块/变量块按钮文案。
+/// 补充块按钮文案。
 fn block_button_label(button: BlockButton) -> &'static str {
     match button {
-        BlockButton::Clean => text::VAR_BUTTON_CLEAN,
-        BlockButton::Delete => text::VAR_BUTTON_DEL,
-        BlockButton::Merge => text::VAR_BUTTON_MERGE,
-        BlockButton::Top => text::VAR_BUTTON_TOP,
+        BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
+        BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
     }
 }
 
@@ -564,7 +545,6 @@ fn paint_block_border(
     let border = match info.kind {
         BlockKind::Template => style::template_border(info.status),
         BlockKind::Supple => style::supple_border(),
-        BlockKind::Var => style::var_border(),
     };
     let left = area.x;
     let right = area.right().saturating_sub(1);
@@ -611,7 +591,6 @@ fn paint_block_separator(
     let border = match kind {
         BlockKind::Template => style::template_border(status),
         BlockKind::Supple => style::supple_border(),
-        BlockKind::Var => style::var_border(),
     };
     let right = area.right().saturating_sub(1);
     for x in area.x..=right {
@@ -640,7 +619,6 @@ fn paint_block_background(
     let bg = match kind {
         BlockKind::Template => style::template_block_bg(status),
         BlockKind::Supple => style::supple_block_bg(),
-        BlockKind::Var => style::var_block_bg(),
     };
     for x in area.x..area.right() {
         if let Some(cell) = buf.cell_mut((x, y)) {
@@ -670,7 +648,7 @@ fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     }
 }
 
-/// 绘制补充块/变量块操作按钮。
+/// 绘制补充块操作按钮。
 fn render_block_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     for hit in block_buttons(prompt, area) {
         let label = block_button_label(hit.button);
@@ -787,9 +765,6 @@ fn token_style(kind: TokenKind) -> Style {
         TokenKind::TemplateTitle => style::template_title(),
         TokenKind::SuppleMarker => style::supple_marker(),
         TokenKind::SuppleCommand => style::supple_command(),
-        TokenKind::VarMarker => style::var_marker(),
-        TokenKind::VarCommand => style::var_command(),
-        TokenKind::VarKey => style::var_key(),
         TokenKind::FileMention => style::markdown_file_mention(),
         TokenKind::ReferFile => style::markdown_refer_file(),
         TokenKind::ReferFolder => style::markdown_refer_folder(),

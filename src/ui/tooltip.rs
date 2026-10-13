@@ -181,13 +181,11 @@ fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButt
     }
 }
 
-/// 补充块/变量块按钮 → app 侧种类。
+/// 补充块按钮 → app 侧种类。
 fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
     match button {
         ui::prompt::BlockButton::Clean => BlockButtonKind::Clean,
         ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,
-        ui::prompt::BlockButton::Merge => BlockButtonKind::Merge,
-        ui::prompt::BlockButton::Top => BlockButtonKind::Top,
     }
 }
 

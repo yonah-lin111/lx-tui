@@ -303,8 +303,6 @@ fn block_button_tooltips_have_hints() {
     for (button, hint) in [
         (BlockButtonKind::Clean, "clean block"),
         (BlockButtonKind::Delete, "delete block"),
-        (BlockButtonKind::Merge, "merge into first variable block"),
-        (BlockButtonKind::Top, "move to top"),
     ] {
         assert_eq!(
             text::tooltip_hint(TooltipTarget::BlockButton { line: 0, button }, &state),
@@ -317,14 +315,14 @@ fn block_button_tooltips_have_hints() {
 fn hits_block_buttons_via_prompt_text_area() {
     let mut state = AppState::demo();
     state.prompt.resize(40, 20);
-    state
-        .prompt
-        .insert_str("$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end");
+    state.prompt.insert_str(
+        "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end",
+    );
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);
     let hits = ui::prompt::block_buttons(&state.prompt, area);
-    assert_eq!(hits.len(), 4, "清理、删除、合并、置顶按钮可见");
+    assert_eq!(hits.len(), 2, "清理、删除按钮可见");
     let clean = hits
         .iter()
         .find(|hit| hit.button == ui::prompt::BlockButton::Clean)

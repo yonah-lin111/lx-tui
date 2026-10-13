@@ -104,19 +104,17 @@ pub const WORKTREE_COMMAND_LINE: &str = "/gitWorkTree ";
 
 /// 按查询过滤候选：内置命令 + 自定义命令 + `/gitWorkTree`。
 ///
-/// 可见范围由块上下文决定：内置模板命令与 `/var` 仅在普通正文；`/supplement`
-/// 与 supple 自定义块仅在 `&&&` 正文；`/singleLine`、`/multiLine` 仅在 `$$$` 正文；
-/// `/gitWorkTree` 仅在 `&&&`（含 `+++`）且有 git 元数据时出现。globally 作用域的自定义
-/// Markdown 任意位置出现，template 作用域仅在 `&&&`/`+++` 内。空查询返回全部，
-/// 排序稳定按打分降序，同分内置优先。
+/// 可见范围由块上下文决定：内置模板命令仅在普通正文；`/supplement`
+/// 与 supple 自定义块仅在 `&&&` 正文；`/gitWorkTree` 仅在 `&&&`（含 `+++`）
+/// 且有 git 元数据时出现。globally 作用域的自定义 Markdown 任意位置出现，
+/// template 作用域仅在 `&&&`/`+++` 内。空查询返回全部，排序稳定按打分降序，
+/// 同分内置优先。
 pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) -> Vec<SlashItem> {
     let query = query.to_lowercase();
     let mut candidates: Vec<SlashItem> = Vec::new();
     match context.context {
         BlockContext::Normal => {
             candidates.extend(SlashCommandId::ALL.into_iter().map(SlashItem::builtin));
-            candidates.push(SlashItem::builtin_var());
-            candidates.push(SlashItem::builtin_add_var_content());
         }
         BlockContext::Template => {
             candidates.push(SlashItem::builtin_supplement());
@@ -128,10 +126,6 @@ pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) ->
             if context.worktree_available {
                 candidates.push(SlashItem::worktree());
             }
-        }
-        BlockContext::Var => {
-            candidates.push(SlashItem::var_single_line());
-            candidates.push(SlashItem::var_multi_line());
         }
     }
     candidates.extend(
@@ -239,22 +233,6 @@ pub fn supple_block_content(command: &str, title: Option<&str>, body: &str) -> (
     (content, cursor)
 }
 
-/// `/var` 插入的变量块正文与光标偏移（光标落在 `key` 之后）。
-///
-/// 标题行与 `@content:` 之间固定空一行（渲染为块边框分割线，与 `&&&`/`+++` 一致）。
-pub fn var_template_content() -> (String, usize) {
-    let content =
-        "$$$ varTemplate --start\n{title: }\n\n@content:\nkey: \"var\"\n$$$ varTemplate --end";
-    let cursor = content.find("key:").map_or(content.len(), |at| at + 3);
-    (content.to_string(), cursor)
-}
-
-/// `/singleLine` 插入的单行变量占位。
-pub const VAR_SINGLE_LINE: &str = "key: \"value\"";
-
-/// `/multiLine` 插入的三引号多行变量占位。
-pub const VAR_MULTI_LINE: &str = "key:\n  \"\"\"\n  var\n  \"\"\"";
-
 /// 候选命令的插入结果：整行替换文本与光标偏移；选择器条目与占位行返回 None。
 pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
     match &item.insertion {
@@ -273,12 +251,8 @@ pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
             title,
             body,
         } => Some(supple_block_content(command, title.as_deref(), body)),
-        SlashInsertion::Var => Some(var_template_content()),
-        SlashInsertion::VarSingleLine => Some((VAR_SINGLE_LINE.to_string(), 3)),
-        SlashInsertion::VarMultiLine => Some((VAR_MULTI_LINE.to_string(), 3)),
         SlashInsertion::WorktreeChooser
         | SlashInsertion::WorktreeBinding { .. }
-        | SlashInsertion::AddVarContent
         | SlashInsertion::Placeholder => None,
     }
 }
@@ -396,14 +370,6 @@ pub enum SlashInsertion {
         title: Option<String>,
         body: String,
     },
-    /// `/var`：整行替换为变量块，光标落在 `key` 之后。
-    Var,
-    /// `/singleLine`：整行替换为单行变量占位，光标落在 `key` 之后。
-    VarSingleLine,
-    /// `/multiLine`：整行替换为三引号多行变量占位，光标落在 `key` 之后。
-    VarMultiLine,
-    /// `/addVarContent`：不直接插入，向首个变量块的 `@content:` 追加一条并打开提及面板。
-    AddVarContent,
     /// `/gitWorkTree`：不直接插入，打开二级 worktree 选择器。
     WorktreeChooser,
     /// 二级选择器条目：把对应分支写回块结束行上方的 `{wt:}` 行。
@@ -524,54 +490,6 @@ impl SlashItem {
             },
             preview: "supple".to_string(),
             scope: SlashScope::Template,
-            selectable: true,
-        }
-    }
-
-    /// 内置 `/var` 候选（仅在普通正文出现）。
-    pub fn builtin_var() -> Self {
-        Self {
-            name: "var".to_string(),
-            source: CommandSource::BuiltIn,
-            insertion: SlashInsertion::Var,
-            preview: String::new(),
-            scope: SlashScope::Global,
-            selectable: true,
-        }
-    }
-
-    /// 内置 `/singleLine` 候选（仅在 `$$$` 正文出现）。
-    pub fn var_single_line() -> Self {
-        Self {
-            name: "singleLine".to_string(),
-            source: CommandSource::BuiltIn,
-            insertion: SlashInsertion::VarSingleLine,
-            preview: String::new(),
-            scope: SlashScope::Global,
-            selectable: true,
-        }
-    }
-
-    /// 内置 `/multiLine` 候选（仅在 `$$$` 正文出现）。
-    pub fn var_multi_line() -> Self {
-        Self {
-            name: "multiLine".to_string(),
-            source: CommandSource::BuiltIn,
-            insertion: SlashInsertion::VarMultiLine,
-            preview: String::new(),
-            scope: SlashScope::Global,
-            selectable: true,
-        }
-    }
-
-    /// 内置 `/addVarContent` 候选（普通正文出现）。
-    pub fn builtin_add_var_content() -> Self {
-        Self {
-            name: "addVarContent".to_string(),
-            source: CommandSource::BuiltIn,
-            insertion: SlashInsertion::AddVarContent,
-            preview: "content".to_string(),
-            scope: SlashScope::Global,
             selectable: true,
         }
     }

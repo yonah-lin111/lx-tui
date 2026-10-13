@@ -258,7 +258,6 @@ impl Prompt {
         match ch {
             '\n' => self.insert_at("\n"),
             '\t' => self.insert_at(TAB_STOP),
-            '：' if self.var_colon_converts() => self.insert_at(":"),
             ch if ch.is_control() => {}
             ch => {
                 let mut buffer = [0_u8; 4];

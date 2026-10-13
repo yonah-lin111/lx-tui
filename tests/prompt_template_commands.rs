@@ -82,10 +82,10 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
         update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
     }
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
-    assert_eq!(panel.rect.height, 4, "查询 add 命中 add 与 addVarContent");
+    assert_eq!(panel.rect.height, 3, "查询 add 命中 add");
     assert_eq!(
         state.prompt.slash_panel().map(|panel| panel.items().len()),
-        Some(2)
+        Some(1)
     );
     let terminal = draw(&state, &config);
     assert!(
@@ -207,21 +207,13 @@ fn slash_panel_shows_all_candidates_for_bare_slash() {
     let area = layout::prompt_text_rect(view.prompt);
     update::apply_editor(&mut state, EditorCommand::InsertChar('/'));
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
-    assert_eq!(panel.rect.height, 9, "空查询展示全部 7 个候选 + 上下边框");
+    assert_eq!(panel.rect.height, 7, "空查询展示全部 5 个候选 + 上下边框");
     let terminal = draw(&state, &config);
     let text: String = (panel.rect.y..panel.rect.bottom())
         .map(|y| line_text(&terminal, y))
         .collect::<Vec<_>>()
         .join("\n");
-    for label in [
-        "/add",
-        "/bug",
-        "/common",
-        "/refactor",
-        "/style",
-        "/var",
-        "/addVarContent",
-    ] {
+    for label in ["/add", "/bug", "/common", "/refactor", "/style"] {
         assert!(text.contains(label), "缺少候选 {label}: {text}");
     }
 }
