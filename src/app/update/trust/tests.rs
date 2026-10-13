@@ -35,10 +35,16 @@ fn explicit_new_workspace_queues_trust_check() {
         .iter()
         .find(|effect| matches!(effect, Effect::CheckTrust { .. }))
         .cloned();
-    let Some(Effect::CheckTrust { path, trigger }) = effect else {
+    let Some(Effect::CheckTrust {
+        path,
+        root,
+        trigger,
+    }) = effect
+    else {
         panic!("trust check queued");
     };
     assert_eq!(path, std::fs::canonicalize(&dir).expect("canonical"));
+    assert!(root.is_none(), "显式路径的仓库归属由事件层后台解析");
     assert!(matches!(trigger, TrustTrigger::CreateWorkspace { .. }));
 }
 
@@ -57,14 +63,12 @@ fn empty_new_workspace_inherits_path_without_check() {
 }
 
 #[test]
-fn resolve_trusted_creates_workspace_and_untrusted_opens_dialog() {
+fn resume_creates_workspace_and_untrusted_requests_root_resolution() {
     let trusted = workspace_dir("trusted");
     let untrusted = workspace_dir("untrusted");
     let mut state = AppState::demo();
-    resolve_trust_check(
+    resume_trust(
         &mut state,
-        &trusted,
-        true,
         TrustTrigger::CreateWorkspace {
             cwd: trusted.clone(),
         },
@@ -75,19 +79,95 @@ fn resolve_trusted_creates_workspace_and_untrusted_opens_dialog() {
         Some(trusted.clone())
     );
 
-    resolve_trust_check(
+    request_trust_root(
         &mut state,
-        &untrusted,
-        false,
+        untrusted.clone(),
         TrustTrigger::CreateWorkspace {
             cwd: untrusted.clone(),
         },
     );
-    let Some(Overlay::TrustWorkspace(trust)) = &state.overlay else {
-        panic!("trust dialog open");
-    };
-    assert_eq!(trust.path, untrusted);
     assert_eq!(state.workspaces.len(), 2, "未信任不创建");
+    assert!(state.overlay.is_none(), "仓库根未解析前不弹浮层");
+    assert!(matches!(
+        state.trust_resolutions.as_slice(),
+        [resolution] if resolution.path == untrusted
+    ));
+}
+
+#[test]
+fn take_trust_resolutions_drains_queue() {
+    let mut state = AppState::demo();
+    let path = workspace_dir("drain");
+    request_trust_root(
+        &mut state,
+        path.clone(),
+        TrustTrigger::CreateWorkspace { cwd: path },
+    );
+    let taken = take_trust_resolutions(&mut state);
+    assert_eq!(taken.len(), 1);
+    assert!(state.trust_resolutions.is_empty(), "取走后清空");
+}
+
+/// worktree 条目：构造对话框条目与触发场景。
+fn worktree_trigger(entry_path: &str, repo_root: &str) -> TrustTrigger {
+    TrustTrigger::OpenWorktree {
+        entry: crate::app::overlay::WorktreeOpenEntry {
+            path: PathBuf::from(entry_path),
+            branch: Some("feature/x".into()),
+            is_bare: false,
+            is_linked: true,
+            already_open: None,
+        },
+        repo_root: PathBuf::from(repo_root),
+        main_branch: Some("main".into()),
+    }
+}
+
+#[test]
+fn grant_on_worktree_open_creates_child_and_main_checkout() {
+    let mut state = AppState::demo();
+    open_trust_dialog(
+        &mut state,
+        PathBuf::from("/repo"),
+        worktree_trigger("/repo/.wt/feat", "/repo"),
+    );
+    apply_overlay_key(&mut state, OverlayKey::Enter);
+    assert!(matches!(
+        state.effects.as_slice(),
+        [Effect::GrantTrust { path, .. }, ..] if path == std::path::Path::new("/repo")
+    ));
+    assert_eq!(
+        state.workspaces.len(),
+        3,
+        "主 checkout 自动补开 + worktree 条目"
+    );
+    let child = state
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.cwd.as_deref() == Some(std::path::Path::new("/repo/.wt/feat")))
+        .expect("worktree workspace created");
+    assert!(child.git.as_ref().is_some_and(|git| git.is_linked));
+    let main = state
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.cwd.as_deref() == Some(std::path::Path::new("/repo")))
+        .expect("main checkout auto-opened");
+    assert!(!main.git.as_ref().expect("git metadata").is_linked);
+}
+
+#[test]
+fn refuse_on_worktree_open_cancels_with_toast() {
+    let mut state = AppState::demo();
+    open_trust_dialog(
+        &mut state,
+        PathBuf::from("/repo"),
+        worktree_trigger("/repo/.wt/feat", "/repo"),
+    );
+    apply_overlay_key(&mut state, OverlayKey::Esc);
+    assert_eq!(state.workspaces.len(), 1, "拒绝不创建任何条目");
+    let toast = state.toast.as_ref().expect("cancelled toast");
+    assert_eq!(toast.message, crate::ui::text::TOAST_CREATE_CANCELLED);
+    assert!(state.effects.is_empty(), "拒绝不写库");
 }
 
 #[test]

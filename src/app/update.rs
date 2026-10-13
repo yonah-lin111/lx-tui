@@ -1695,6 +1695,7 @@ pub fn activate_menu(state: &mut AppState) {
             },
         ) => {
             // 同步触发前做信任检查：未信任弹信任浮层，信任后进入二次确认。
+            // 仓库归属未知（root: None），未命中快速判定时由事件层后台解析。
             if let Some(path) = state
                 .workspaces
                 .get(workspace)
@@ -1703,6 +1704,7 @@ pub fn activate_menu(state: &mut AppState) {
             {
                 state.effects.push(Effect::CheckTrust {
                     path,
+                    root: None,
                     trigger: TrustTrigger::SyncWorkspaceCwd { workspace, pane },
                 });
             }
@@ -1981,8 +1983,8 @@ fn edit_text_input(state: &mut AppState, edit: impl FnOnce(&mut TextInput)) {
 }
 
 /// 提交新建工作区：校验路径，成功时关闭弹窗；
-/// 显式路径先登记信任检查（效应由事件层执行），空输入继承当前路径直接创建；
-/// 失败时弹出 Toast 错误并保持弹窗打开以便用户修改。
+/// 显式路径先登记信任检查（效应由事件层执行；仓库归属未知时后台解析仓库根），
+/// 空输入继承当前路径直接创建；失败时弹出 Toast 错误并保持弹窗打开以便用户修改。
 fn commit_new_workspace(state: &mut AppState) {
     let Some(Overlay::NewWorkspace(dialog)) = state.overlay.as_ref() else {
         return;
@@ -1999,6 +2001,7 @@ fn commit_new_workspace(state: &mut AppState) {
             match parsed_cwd {
                 Some(path) => state.effects.push(Effect::CheckTrust {
                     path: path.clone(),
+                    root: None,
                     trigger: TrustTrigger::CreateWorkspace { cwd: path },
                 }),
                 None => create_workspace_with_cwd(state, None),

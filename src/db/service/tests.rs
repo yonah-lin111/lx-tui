@@ -47,19 +47,14 @@ fn trusted_service(label: &str) -> (Persistence, AppState, PathBuf, PathBuf) {
 }
 
 #[test]
-fn untrusted_startup_path_targets_untrusted_workspace() {
-    let db_path = temp_db_path("untrusted");
-    let cwd = workspace_path("untrusted");
+fn is_trusted_reports_workspace_rows() {
+    let db_path = temp_db_path("is-trusted");
+    let cwd = workspace_path("is-trusted");
     let database = Database::open(&db_path).expect("db opens");
-    let state = state_with_cwd(&cwd);
     let service = Persistence::with_database(database);
-    assert_eq!(service.untrusted_startup_path(&state), Some(cwd));
-}
-
-#[test]
-fn untrusted_startup_path_none_when_trusted() {
-    let (service, state, _, _) = trusted_service("startup-trusted");
-    assert_eq!(service.untrusted_startup_path(&state), None);
+    assert!(!service.is_trusted(&cwd), "未登记路径不信任");
+    assert!(service.trust_path(&cwd, "ws"), "登记成功");
+    assert!(service.is_trusted(&cwd), "登记后信任");
 }
 
 #[test]
@@ -90,6 +85,7 @@ fn check_trust_effect_creates_workspace_when_trusted() {
         .expect("trust");
     state.effects.push(Effect::CheckTrust {
         path: target.clone(),
+        root: None,
         trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
             cwd: target.clone(),
         },
@@ -105,6 +101,8 @@ fn check_trust_effect_opens_dialog_when_untrusted() {
     let target = workspace_path("check-untrusted-new");
     state.effects.push(Effect::CheckTrust {
         path: target.clone(),
+        // 非 git 路径的仓库根即自身。
+        root: Some(target.clone()),
         trigger: crate::app::trust::TrustTrigger::CreateWorkspace { cwd: target },
     });
     assert!(service.pump(&mut state));
@@ -113,6 +111,73 @@ fn check_trust_effect_opens_dialog_when_untrusted() {
         Some(crate::app::overlay::Overlay::TrustWorkspace(_))
     ));
     assert_eq!(state.workspaces.len(), 1);
+}
+
+#[test]
+fn check_trust_effect_requests_root_resolution_for_unknown_worktree() {
+    let (mut service, mut state, _, _) = trusted_service("check-resolve");
+    let target = workspace_path("check-resolve-worktree");
+    state.effects.push(Effect::CheckTrust {
+        path: target.clone(),
+        root: None,
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
+            cwd: target.clone(),
+        },
+    });
+    assert!(service.pump(&mut state));
+    assert!(state.overlay.is_none(), "尚未解析出仓库根不弹浮层");
+    assert!(matches!(
+        state.trust_resolutions.as_slice(),
+        [resolution] if resolution.path == target
+    ));
+    assert_eq!(state.workspaces.len(), 1, "未信任不创建");
+}
+
+#[test]
+fn check_trust_effect_root_trusted_resumes_without_recording_worktree() {
+    let (mut service, mut state, _, _) = trusted_service("check-root-trusted");
+    let repo_root = workspace_path("check-root-trusted-repo");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .trust_workspace(&repo_root, "repo")
+        .expect("trust root");
+    let worktree = workspace_path("check-root-trusted-wt");
+    state.effects.push(Effect::CheckTrust {
+        path: worktree.clone(),
+        root: Some(repo_root.clone()),
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace {
+            cwd: worktree.clone(),
+        },
+    });
+    assert!(service.pump(&mut state));
+    assert_eq!(state.workspaces.len(), 2, "仓库根已信任直接续作");
+    assert!(state.overlay.is_none(), "不弹信任浮层");
+    let db = service.db.as_ref().expect("db");
+    assert!(
+        !db.is_trusted(&worktree).expect("query"),
+        "worktree 路径不入库"
+    );
+    assert!(db.is_trusted(&repo_root).expect("query"), "只信任仓库根");
+}
+
+#[test]
+fn check_trust_effect_untrusted_root_opens_dialog_with_root_target() {
+    let (mut service, mut state, _, _) = trusted_service("check-root-untrusted");
+    let repo_root = workspace_path("check-root-untrusted-repo");
+    let worktree = workspace_path("check-root-untrusted-wt");
+    state.effects.push(Effect::CheckTrust {
+        path: worktree.clone(),
+        root: Some(repo_root.clone()),
+        trigger: crate::app::trust::TrustTrigger::CreateWorkspace { cwd: worktree },
+    });
+    assert!(service.pump(&mut state));
+    let Some(crate::app::overlay::Overlay::TrustWorkspace(trust)) = state.overlay.as_ref() else {
+        panic!("trust dialog open");
+    };
+    assert_eq!(trust.path, repo_root, "浮层目标为仓库主 checkout");
+    assert_eq!(state.workspaces.len(), 1, "未信任不创建");
 }
 
 #[test]
@@ -456,4 +521,139 @@ fn save_prompt_content_failure_keeps_dirty_and_pending() {
     service.pump(&mut state);
     assert!(!state.prompt.is_saved(), "失败保留脏状态等待重试");
     assert!(state.toast.is_some(), "失败给出可见反馈");
+}
+
+/// 仓库主 checkout 工作区的 git 元数据。
+fn main_git(repo_root: &std::path::Path) -> crate::app::state::WorkspaceGit {
+    crate::app::state::WorkspaceGit {
+        repo_root: repo_root.to_path_buf(),
+        checkout_path: repo_root.to_path_buf(),
+        is_linked: false,
+        branch: Some("main".into()),
+        main_branch: Some("main".into()),
+    }
+}
+
+/// linked worktree 工作区的 git 元数据。
+fn linked_git(
+    repo_root: &std::path::Path,
+    checkout: &std::path::Path,
+) -> crate::app::state::WorkspaceGit {
+    crate::app::state::WorkspaceGit {
+        repo_root: repo_root.to_path_buf(),
+        checkout_path: checkout.to_path_buf(),
+        is_linked: true,
+        branch: Some("feature/x".into()),
+        main_branch: Some("main".into()),
+    }
+}
+
+/// 追加一个 linked worktree 工作区条目并返回索引。
+fn push_linked(
+    state: &mut AppState,
+    repo_root: &std::path::Path,
+    worktree: &std::path::Path,
+) -> usize {
+    let mut workspace = crate::app::state::Workspace::single_terminal(
+        "feat".to_string(),
+        Some(worktree.to_path_buf()),
+    );
+    workspace.git = Some(linked_git(repo_root, worktree));
+    state.workspaces.push(workspace);
+    state.workspaces.len() - 1
+}
+
+#[test]
+fn prompt_effects_keyed_by_repo_root_share_tree_across_worktree() {
+    let (mut service, mut state, repo_root, _) = trusted_service("share-tree");
+    let worktree = workspace_path("share-tree-wt");
+    state.active_workspace_mut().git = Some(main_git(&repo_root));
+    push_linked(&mut state, &repo_root, &worktree);
+    // 在 worktree 条目中新建提示词：持久化键必须是仓库根。
+    state.effects.push(Effect::CreatePrompt {
+        workspace: worktree.clone(),
+        folder_id: None,
+        name: "shared".into(),
+    });
+    assert!(service.pump(&mut state));
+    let db = service.db.as_ref().expect("db");
+    assert_eq!(
+        db.list_prompts(&repo_root).expect("list root").len(),
+        1,
+        "提示词挂在仓库根名下"
+    );
+    assert!(
+        db.list_prompts(&worktree).expect("list wt").is_empty(),
+        "worktree 路径无独立提示词"
+    );
+    assert!(
+        !db.is_trusted(&worktree).expect("query"),
+        "worktree 路径不入库"
+    );
+    // 两个条目的面板共享同一棵树（内容与 id 一致）。
+    let main_items = state.workspaces[0].prompt_panel.tree.items();
+    let linked_items = state.workspaces[1].prompt_panel.tree.items();
+    assert_eq!(main_items.len(), 1);
+    assert_eq!(linked_items.len(), 1);
+    assert_eq!(main_items[0].id, linked_items[0].id);
+    assert_eq!(main_items[0].name, "shared");
+}
+
+#[test]
+fn save_prompt_content_syncs_all_sharing_panels() {
+    let (mut service, mut state, repo_root, _) = trusted_service("share-save");
+    let worktree = workspace_path("share-save-wt");
+    state.active_workspace_mut().git = Some(main_git(&repo_root));
+    push_linked(&mut state, &repo_root, &worktree);
+    state.effects.push(Effect::CreatePrompt {
+        workspace: worktree.clone(),
+        folder_id: None,
+        name: "shared".into(),
+    });
+    service.pump(&mut state);
+    let id = state.workspaces[1].prompt_panel.tree.items()[0].id;
+    state.effects.push(Effect::SavePromptContent {
+        workspace: worktree.clone(),
+        id,
+        content: "typed".into(),
+        prompt: crate::layout::PaneId::alloc(),
+        revision: 1,
+    });
+    service.pump(&mut state);
+    for workspace in &state.workspaces {
+        assert_eq!(
+            workspace
+                .prompt_panel
+                .tree
+                .item(id)
+                .expect("item in every sharing panel")
+                .content,
+            "typed"
+        );
+    }
+}
+
+#[test]
+fn ensure_tree_loaded_reloads_when_git_metadata_switches_key() {
+    let (mut service, mut state, repo_root, _) = trusted_service("share-rekey");
+    let worktree = workspace_path("share-rekey-wt");
+    // git 元数据未到：以 cwd 为键载入空树。
+    state.active_workspace_mut().cwd = Some(worktree.clone());
+    service.pump(&mut state);
+    assert!(state.workspaces[0].prompt_panel.loaded);
+    assert!(state.workspaces[0].prompt_panel.tree.items().is_empty());
+    // 仓库根下已有提示词；元数据到达后键切到仓库根，面板自动重载。
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(&repo_root, None, "existing", "")
+        .expect("seed");
+    state.active_workspace_mut().git = Some(linked_git(&repo_root, &worktree));
+    service.pump(&mut state);
+    assert_eq!(state.workspaces[0].prompt_panel.tree.items().len(), 1);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.loaded_key.as_deref(),
+        Some(repo_root.as_path())
+    );
 }

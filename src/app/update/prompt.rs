@@ -2,6 +2,7 @@
 //!
 //! DB 读写不在此层执行：变更登记为 `Effect` 出箱，由持久化服务执行并回报。
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::app::actions::{EditorCommand, OverlayKey};
@@ -38,10 +39,11 @@ pub fn prompt_tree_mode(state: &AppState) -> bool {
         .is_some_and(|workspace| workspace.prompt_panel.mode == PromptMode::Tree)
 }
 
-/// 用 DB 记录整体替换指定工作区的树；保持已有折叠状态。
+/// 用 DB 记录整体替换指定工作区的树（`key` 为该树对应的 prompt 键）；保持已有折叠状态。
 pub fn apply_prompt_tree(
     state: &mut AppState,
     workspace: usize,
+    key: &Path,
     folders: Vec<FolderRecord>,
     prompts: Vec<PromptRecord>,
 ) -> bool {
@@ -55,6 +57,14 @@ pub fn apply_prompt_tree(
     // 重载后的条目内容即数据库状态，未确认标记全部失效。
     workspace_state.prompt_panel.clear_pending_saves();
     workspace_state.prompt_panel.loaded = true;
+    workspace_state.prompt_panel.loaded_key = Some(key.to_path_buf());
+    // 编辑绑定的条目被同键面板删除时解除绑定，避免悬挂在已不存在的条目上。
+    if let Some(PromptEditing::Item(id)) = workspace_state.prompt_panel.editing
+        && workspace_state.prompt_panel.tree.item(id).is_none()
+    {
+        workspace_state.prompt_panel.editing = None;
+        workspace_state.prompt_panel.mode = PromptMode::Tree;
+    }
     workspace_state.prompt_panel.clamp_selection(visible);
     true
 }
@@ -837,15 +847,17 @@ pub fn mark_prompt_saved(
     false
 }
 
-/// 保存成功：清除条目的待确认标记（内存内容即数据库状态）。
-pub fn mark_prompt_item_persisted(state: &mut AppState, id: i64) -> bool {
+/// 保存成功：内容同步到所有持有该条目的面板（同仓库条目共享一棵树）并清除待确认标记。
+pub fn mark_prompt_item_persisted(state: &mut AppState, id: i64, content: &str) -> bool {
+    let mut found = false;
     for workspace in &mut state.workspaces {
-        if workspace.prompt_panel.tree.item(id).is_some() {
+        if let Some(item) = workspace.prompt_panel.tree.item_mut(id) {
+            item.content = content.to_string();
             workspace.prompt_panel.clear_item_pending(id);
-            return true;
+            found = true;
         }
     }
-    false
+    found
 }
 
 /// 保存失败：重置对应编辑器的自动保存观察，等待下一轮静置重试。
@@ -1184,6 +1196,12 @@ pub fn change_prompt_status(
         return;
     }
     item.status = status;
+    // 同仓库条目共享一棵树：状态同步到所有持有该条目的面板。
+    for workspace_state in &mut state.workspaces {
+        if let Some(item) = workspace_state.prompt_panel.tree.item_mut(item_id) {
+            item.status = status;
+        }
+    }
     state.effects.push(Effect::SetPromptStatus {
         workspace: cwd,
         id: item_id,

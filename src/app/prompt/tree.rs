@@ -3,6 +3,8 @@
 //! 树保持扁平存储（与 DB 记录一一对应），可见行由 `rows` 按折叠状态构建；
 //! 持久化以 DB 为准，重载时保留同名 id 的折叠状态。
 
+use std::path::PathBuf;
+
 use crate::app::overlay::TextInput;
 use crate::db::{FolderRecord, PromptRecord};
 use crate::ui::text;
@@ -359,6 +361,9 @@ pub struct PromptPanel {
     pub tree: PromptTree,
     /// 是否已从 DB 载入（含无持久化模式下的空树）。
     pub loaded: bool,
+    /// 已载入树对应的 prompt 键（git 工作区为仓库主 checkout，其余为 cwd）；
+    /// 未载入或工作区无路径时为 None；git 元数据晚到导致键变化时据此重载。
+    pub loaded_key: Option<PathBuf>,
     pub mode: PromptMode,
     /// 选中可见行索引；选中恒为可交互行（分区标签跳过）。
     pub selected: usize,
@@ -387,6 +392,7 @@ impl PromptPanel {
         Self {
             tree: PromptTree::new(),
             loaded: false,
+            loaded_key: None,
             mode: PromptMode::Editor,
             selected: 0,
             editing: Some(PromptEditing::Temp(0)),

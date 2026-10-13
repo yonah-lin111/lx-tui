@@ -55,6 +55,12 @@ pub enum AppEvent {
         cwd: PathBuf,
         checkout: Option<WorkspaceGit>,
     },
+    /// 信任检查的仓库根解析结果；主循环以其重新入队信任检查。
+    TrustRootResolved {
+        path: PathBuf,
+        root: PathBuf,
+        trigger: crate::app::trust::TrustTrigger,
+    },
     /// worktree 对话框列表查询结果。
     WorktreeListed {
         repo_root: PathBuf,
@@ -2146,6 +2152,15 @@ fn handle_app_event(
         AppEvent::GitRefreshed { cwd, checkout } => {
             update::apply_git_refresh(state, &cwd, checkout)
         }
+        AppEvent::TrustRootResolved {
+            path,
+            root,
+            trigger,
+        } => state.effects.push(crate::app::effects::Effect::CheckTrust {
+            path,
+            root: Some(root),
+            trigger,
+        }),
         AppEvent::WorktreeListed {
             repo_root,
             entries,

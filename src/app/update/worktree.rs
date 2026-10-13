@@ -3,10 +3,12 @@
 use std::path::{Path, PathBuf};
 
 use crate::app::actions::OverlayKey;
+use crate::app::effects::Effect;
 use crate::app::overlay::{Overlay, TextInput, WorktreeOpen, WorktreeOpenEntry};
 use crate::app::state::{
     AppState, Workspace, WorkspaceGit, home_dir, unique_workspace_name, workspace_label,
 };
+use crate::app::trust::TrustTrigger;
 use crate::git;
 
 use super::{clear_selection, swap_display_prompt, switch_workspace};
@@ -222,8 +224,9 @@ pub fn set_worktree_open_selection(state: &mut AppState, index: usize) -> bool {
     true
 }
 
-/// 打开选中项：已在工作区中打开则切换，否则按 checkout 创建新工作区并激活；
-/// 打开的若是 linked worktree 且主 checkout 未打开，自动补开主工作区。
+/// 打开选中项：已在工作区中打开则直接切换（无信任检查）；否则先对仓库主 checkout
+/// 做信任检查，通过后创建新工作区并激活；打开的若是 linked worktree 且主 checkout
+/// 未打开，自动补开主工作区。
 pub fn commit_worktree_open(state: &mut AppState) {
     let Some(Overlay::WorktreeOpen(dialog)) = state.overlay.as_ref() else {
         return;
@@ -243,6 +246,36 @@ pub fn commit_worktree_open(state: &mut AppState) {
         ensure_main_workspace(state, index);
         return;
     }
+    // 源工作区的元数据带有仓库主 checkout 分支，供 linked worktree 的状态栏展示。
+    let main_branch = state
+        .workspaces
+        .get(source)
+        .and_then(|workspace| workspace.git.as_ref())
+        .and_then(|git| git.main_branch.clone());
+    state.effects.push(Effect::CheckTrust {
+        path: entry.path.clone(),
+        root: Some(repo_root.clone()),
+        trigger: TrustTrigger::OpenWorktree {
+            entry,
+            repo_root,
+            main_branch,
+        },
+    });
+}
+
+/// 信任通过后打开 worktree checkout：按 checkout 创建新工作区并激活；
+/// 打开的若是 linked worktree 且主 checkout 未打开，自动补开主工作区。
+pub(super) fn open_worktree_checkout(
+    state: &mut AppState,
+    entry: WorktreeOpenEntry,
+    repo_root: PathBuf,
+    main_branch: Option<String>,
+) {
+    if let Some(index) = open_workspace_for_checkout(state, &entry.path) {
+        switch_workspace(state, index);
+        ensure_main_workspace(state, index);
+        return;
+    }
     let base = workspace_label(&entry.path, home_dir().as_deref());
     let name = unique_workspace_name(&base, |candidate| {
         state
@@ -250,12 +283,6 @@ pub fn commit_worktree_open(state: &mut AppState) {
             .iter()
             .any(|workspace| workspace.name == candidate)
     });
-    // 源工作区的元数据带有仓库主 checkout 分支，供 linked worktree 的状态栏展示。
-    let main_branch = state
-        .workspaces
-        .get(source)
-        .and_then(|workspace| workspace.git.as_ref())
-        .and_then(|git| git.main_branch.clone());
     let mut workspace = Workspace::single_terminal(name, Some(entry.path.clone()));
     workspace.git = Some(WorkspaceGit {
         repo_root,

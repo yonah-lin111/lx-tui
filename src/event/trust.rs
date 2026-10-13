@@ -6,7 +6,7 @@
 //! （由入口输出提示并以 0 退出）。
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind, read};
 use ratatui::backend::Backend as _;
@@ -14,6 +14,7 @@ use ratatui::layout::Rect;
 
 use crate::app::state::AppState;
 use crate::db::service::Persistence;
+use crate::git;
 use crate::tui::Tui;
 use crate::ui;
 
@@ -23,7 +24,7 @@ const OPTION_YES: usize = 1;
 
 /// 启动信任门：未信任时在行内显示信任页；返回是否放行（已信任或用户确认）。
 pub fn startup_trust(persistence: &Persistence, state: &mut AppState) -> io::Result<bool> {
-    let Some(path) = persistence.untrusted_startup_path(state) else {
+    let Some(path) = startup_trust_target(persistence, state) else {
         return Ok(true);
     };
     let name = state.active_workspace().name.clone();
@@ -36,6 +37,23 @@ pub fn startup_trust(persistence: &Persistence, state: &mut AppState) -> io::Res
         persistence.trust_path(&path, &name);
     }
     Ok(granted)
+}
+
+/// 启动信任目标：启动工作区路径未信任时解析到所属仓库主 checkout（worktree 归属
+/// 主工作区，与 prompt 键一致）；路径本身或仓库根已信任、无 cwd 或库不可用时 None。
+/// 在主循环之前执行，git 查询同步进行。
+fn startup_trust_target(persistence: &Persistence, state: &AppState) -> Option<PathBuf> {
+    let cwd = state.active_workspace().cwd.clone()?;
+    let path = std::fs::canonicalize(&cwd).unwrap_or(cwd);
+    if persistence.is_trusted(&path) {
+        return None;
+    }
+    // 非仓库路径回退自身（此时信任目标就是该路径）。
+    let root = git::list_worktrees(&path).map_or_else(|| path.clone(), |list| list.repo_root);
+    if root != path && persistence.is_trusted(&root) {
+        return None;
+    }
+    Some(root)
 }
 
 /// 信任页交互循环：返回是否选择 `Yes, I trust this folder`。
@@ -81,3 +99,6 @@ fn screen(tui: &mut Tui, path: &Path) -> io::Result<bool> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -12,7 +12,7 @@ use crate::git;
 
 use super::AppEvent;
 
-/// 发起工作区元数据查询与对话框列表查询；结果经 `AppEvent` 回投主循环。
+/// 发起工作区元数据查询、信任仓库根解析与对话框列表查询；结果经 `AppEvent` 回投主循环。
 ///
 /// `inflight` 记录对话框查询的仓库根，避免 loading 期间重复发起。
 pub fn pump_git_queries(
@@ -33,6 +33,20 @@ pub fn pump_git_queries(
                     main_branch: checkout.main_branch,
                 });
             let _ = sender.send(AppEvent::GitRefreshed { cwd, checkout });
+        });
+    }
+
+    for resolution in update::take_trust_resolutions(state) {
+        let sender = sender.clone();
+        tokio::task::spawn_blocking(move || {
+            // 非仓库路径回退自身（此时信任目标就是该路径）。
+            let root = git::list_worktrees(&resolution.path)
+                .map_or_else(|| resolution.path.clone(), |list| list.repo_root);
+            let _ = sender.send(AppEvent::TrustRootResolved {
+                path: resolution.path,
+                root,
+                trigger: resolution.trigger,
+            });
         });
     }
 
