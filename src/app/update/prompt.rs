@@ -141,12 +141,10 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 
 /// 提交指定工作区的编辑器缓冲（其为显示态时缓冲位于 `state.prompt`）。
 ///
-/// 粘贴提案未收束（占位文本只是待改写的中转态）时不提交：取消无法逆向写库，
-/// 因此占位文本绝不落库；面板确认或取消后按正常路径提交。
+/// 粘贴提案未收束时先取消提案回滚占位：占位只是待改写的中转态，取消无法逆向写库，
+/// 因此占位文本绝不落库；随后的提交只落粘贴前的正文，切换编辑目标/退出不丢编辑。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
-    if state.prompt.paste_panel().is_some() {
-        return;
-    }
+    state.prompt.paste_cancel();
     let Some(target) = state
         .workspaces
         .get(workspace)

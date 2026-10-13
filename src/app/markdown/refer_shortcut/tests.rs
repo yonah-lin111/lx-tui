@@ -69,26 +69,51 @@ fn trigger_blocked_on_title_and_wt_structural_lines() {
 
 #[test]
 fn scope_isolates_template_blocks() {
-    let text = "outside @abc\n&&& one\n@one\n&&& one --end\n&&& two\nbody\n&&& two --end";
+    let text = "outside @abc\n&&& one\n@one\n&&& one --end\n&&& two\n@two\n&&& two --end";
     let first = cursor_after(text, "@one");
     let scope = refer_scope(text, first).expect("block scope");
     let candidates = refer_candidates(text, &scope, &(first..first), &[]);
     let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
-    assert_eq!(texts, vec!["@one"]);
-    // 块外作用域可读到全文候选。
+    assert_eq!(texts, vec!["@one"], "块内只取本块正文");
+    let other = cursor_after(text, "@two");
+    let scope = refer_scope(text, other).expect("block scope");
+    let candidates = refer_candidates(text, &scope, &(other..other), &[]);
+    let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(texts, vec!["@two"], "其他块的内容不可见");
+    // 块外作用域只收块外候选：块内引用不泄漏。
     let outside = text.find("outside").expect("outside") + 3;
-    let whole = refer_scope(text, outside).expect("whole scope");
+    let whole = refer_scope(text, outside).expect("plain scope");
     let candidates = refer_candidates(text, &whole, &(outside..outside), &[]);
     let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
-    // 普通文本区收全文引用（含块内已有引用）。
-    assert_eq!(texts, vec!["@abc", "@one"]);
+    assert_eq!(texts, vec!["@abc"], "块内 @one / @two 不泄漏到块外");
+}
+
+#[test]
+fn scope_keeps_unclosed_blocks_separate() {
+    // 未闭合的外层块不把后面的新块并入自己的正文。
+    let text = "&&& one\n@one\n&&& two\n@two\nac";
+    let cursor = text.len();
+    let scope = refer_scope(text, cursor).expect("block scope");
+    let candidates = refer_candidates(text, &scope, &(cursor..cursor), &[]);
+    let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(texts, vec!["@two"], "内层块只取自己的正文");
+    let outer = cursor_after(text, "@one");
+    let scope = refer_scope(text, outer).expect("block scope");
+    let candidates = refer_candidates(text, &scope, &(outer..outer), &[]);
+    let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(texts, vec!["@one"], "外层块看不到后面的块");
 }
 
 #[test]
 fn candidates_dedupe_and_keep_first_order() {
     let text = "@abc x @def @abc @[refer-image](/tmp/a.png) @def";
     let scope = 0..text.len();
-    let candidates = refer_candidates(text, &scope, &(text.len()..text.len()), &[]);
+    let candidates = refer_candidates(
+        text,
+        std::slice::from_ref(&scope),
+        &(text.len()..text.len()),
+        &[],
+    );
     let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
     assert_eq!(texts, vec!["@abc", "@def", "@[refer-image](/tmp/a.png)"]);
     assert_eq!(candidates[2].tag, ReferTag::Refer(ReferKind::Image));
@@ -98,9 +123,10 @@ fn candidates_dedupe_and_keep_first_order() {
 #[test]
 fn candidates_mark_folders_and_skip_structural_markers() {
     let text = "@dir/ @start @end @plain";
+    let scope = 0..text.len();
     let candidates = refer_candidates(
         text,
-        &(0..text.len()),
+        std::slice::from_ref(&scope),
         &(text.len()..text.len()),
         &[mention("dir", true)],
     );
@@ -117,9 +143,10 @@ fn candidates_mark_folders_and_skip_structural_markers() {
 #[test]
 fn candidates_detect_folder_from_scan_entries() {
     let text = "@src";
+    let scope = 0..text.len();
     let candidates = refer_candidates(
         text,
-        &(0..text.len()),
+        std::slice::from_ref(&scope),
         &(text.len()..text.len()),
         &[mention("src", true)],
     );

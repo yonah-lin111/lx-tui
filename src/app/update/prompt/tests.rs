@@ -1,11 +1,13 @@
 //! 提示词树行为单元测试：视图切换、导航、菜单命令分发与编辑提交。
 
 use super::*;
-use crate::app::actions::EditorCommand;
-use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget};
+use crate::app::actions::{Action, EditorCommand};
+use crate::app::overlay::{ConfirmClose, MenuCommand, NewNodeKind, Overlay, OverlayTarget};
 use crate::app::prompt::PromptSection;
 use crate::app::state::AppState;
-use crate::app::update::{apply_editor, apply_overlay_key, tick};
+use crate::app::update::{
+    apply, apply_editor, apply_overlay_key, create_workspace, tick, toggle_prompt_pin,
+};
 use crate::db::{FolderRecord, PromptRecord};
 use std::time::{Duration, Instant};
 
@@ -1289,14 +1291,34 @@ fn manual_save_is_ignored_while_paste_proposal_open() {
     );
 }
 
-#[test]
-fn switching_to_temp_prompt_does_not_commit_placeholder() {
+/// 落库效应里的正文；无保存效应时 panic。
+fn saved_content(state: &AppState) -> String {
+    state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::SavePromptContent { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("条目保存效应")
+}
+
+/// 打开条目 `nested`、写入未保存的 `X`、再打开粘贴提案。
+fn item_editing_with_paste() -> AppState {
     let mut state = item_editing_state();
+    state.prompt.insert_str("X");
     stage_paste(&mut state);
     state.effects.clear();
-    // 切到临时提示词会提交当前编辑缓冲：提案未收束时占位文本不得覆盖条目内容。
-    assert!(open_temp_prompt(&mut state));
-    assert!(state.effects.is_empty(), "占位文本不落库");
+    state
+}
+
+#[test]
+fn switching_to_tree_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    show_prompt_tree(&mut state);
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
     assert_eq!(
         state.workspaces[0]
             .prompt_panel
@@ -1304,7 +1326,44 @@ fn switching_to_temp_prompt_does_not_commit_placeholder() {
             .item(12)
             .expect("item 12")
             .content,
-        "nested content",
-        "条目内容未被占位文本覆盖"
+        "nested contentX",
+        "条目内容为粘贴前正文"
     );
+}
+
+#[test]
+fn switching_to_temp_prompt_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    assert!(open_temp_prompt(&mut state));
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
+}
+
+#[test]
+fn quit_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    apply(Action::Quit, &mut state);
+    assert!(state.should_quit);
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "退出前提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
+}
+
+#[test]
+fn closing_displayed_workspace_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    // 钉住 ws0：新建工作区不切换显示，粘贴提案仍属于被关闭的显示工作区。
+    toggle_prompt_pin(&mut state);
+    create_workspace(&mut state);
+    assert_eq!(state.prompt_workspace(), 0);
+    state.effects.clear();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(0),
+    }));
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "关闭前提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
 }

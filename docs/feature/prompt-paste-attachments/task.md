@@ -269,3 +269,17 @@
   `candidates_order_follows_position_across_mention_and_reference`。
 - **未处理**：事件循环内同步读路径元数据/文件头（review 结论为“后续处理”，见 design.md §14.5.5）。
 
+## 14. 第六轮：候选作用域分段与提交前取消提案（对应 design.md §14.6）
+
+- **候选作用域分段**：`refer_scope` 返回 `Vec<Range<usize>>`；模板块起止行为边界，
+  块内候选只在本分段可见（不跨块、不泄漏到块外），未闭合外层块不再吞掉后续新块；
+  `refer_candidates` 改为按分段集合过滤（提及与引用同规则）。
+- **提交前取消提案**：`commit_prompt_buffer` 先回滚占位再提交，修复“切树/新建临时项/
+  关闭工作区/退出时粘贴前的未保存编辑丢失”（复审 P1）。
+- 测试（均已验证“无修复即失败”）：`scope_isolates_template_blocks`（更新）、
+  `scope_keeps_unclosed_blocks_separate`、`switching_to_tree_commits_pre_paste_edits_without_placeholder`、
+  `switching_to_temp_prompt_commits_pre_paste_edits_without_placeholder`、
+  `quit_commits_pre_paste_edits_without_placeholder`、
+  `closing_displayed_workspace_commits_pre_paste_edits_without_placeholder`。
+- **未处理**：review 记录的 `event/paste.rs` 事件循环内同步文件 IO（仍留作后续项）。
+

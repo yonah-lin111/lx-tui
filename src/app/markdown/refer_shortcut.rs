@@ -1,14 +1,13 @@
 //! 字母快捷输入：从正文已出现的 `@` 提及与 `@[refer-*]` 引用生成候选，纯函数无 IO。
 //!
-//! 触发词为光标前至少 2 个路径字符；候选只来自当前作用域（模板块正文或全文）已出现的
+//! 触发词为光标前至少 2 个路径字符；候选只来自光标所在分段（模板块正文或块外正文）已出现的
 //! 引用文本，不扫描文件系统、不产生新引用目标。
 
 use std::ops::Range;
 
 use super::{
-    MentionEntry, ParsedReference, ReferKind, TemplateLineRole, parse_references,
-    parse_references_in, parse_template_block_at_line, template_block_start_at,
-    template_line_infos,
+    MentionEntry, ParsedReference, ReferKind, TemplateLineInfo, TemplateLineRole, parse_references,
+    parse_references_in, template_line_infos,
 };
 
 /// 候选展示条数上限。
@@ -161,33 +160,65 @@ pub fn refer_trigger(text: &str, cursor: usize) -> Option<ReferTrigger> {
     })
 }
 
-/// 快捷候选作用域：光标在模板块正文时只取块内，普通文本区取全文。
+/// 快捷候选作用域：可参与候选的正文分段（字节区间，可多段）。
 ///
-/// 模板块起止行、标题、`{wt:}` 与结构空行不属于正文，作用域为 None。
-pub fn refer_scope(text: &str, cursor: usize) -> Option<Range<usize>> {
+/// 模板块起止行是分段边界，因此块内出现的提及/引用只在同一分段内可见——不跨块、
+/// 也不泄漏到块外（未闭合的外层块不会把内层块并入自己的正文）。光标在块外时取
+/// 全部块外分段。模板块起止行、标题、`{wt:}` 与结构空行不属于正文，作用域为 None。
+pub fn refer_scope(text: &str, cursor: usize) -> Option<Vec<Range<usize>>> {
     let line = text[..cursor.min(text.len())].matches('\n').count();
     if is_structural_line(text, line) {
         return None;
     }
     let infos = template_line_infos(text);
-    let Some(info) = infos.get(line).copied().flatten() else {
-        return Some(0..text.len());
+    let segment = body_segment_at(text, line)?;
+    match infos.get(line).copied().flatten() {
+        Some(info) if info.separator => None,
+        Some(_) => Some(vec![segment]),
+        None => Some(plain_segments(text, &infos)),
+    }
+}
+
+/// 光标所在正文分段：以模板块起止行为界，向两侧扩展连续的正文行。
+///
+/// 起止行本身不是正文（返回 None）。
+fn body_segment_at(text: &str, line: usize) -> Option<Range<usize>> {
+    let body = |index: usize| {
+        line_bounds(text, index).is_some_and(|(start, end)| {
+            let content = &text[start..end];
+            super::parse_template_start_line(content).is_none()
+                && super::parse_template_end_line(content).is_none()
+        })
     };
-    if info.role != TemplateLineRole::Middle || info.separator {
+    if !body(line) {
         return None;
     }
-    let start_line = template_block_start_at(text, cursor)?;
-    let range = parse_template_block_at_line(text, start_line)?;
-    let (_, start_end) = line_bounds(text, range.start)?;
-    let (end_start, end_end) = line_bounds(text, range.end)?;
-    let closed = super::parse_template_end_line(&text[end_start..end_end]).is_some();
-    let to = if closed {
-        end_start.checked_sub(1)?
-    } else {
-        text.len()
-    };
-    let from = start_end + 1;
+    let from = (0..=line).rev().take_while(|index| body(*index)).last()?;
+    let to = (line..).take_while(|index| body(*index)).last()?;
+    let (from, _) = line_bounds(text, from)?;
+    let (_, to) = line_bounds(text, to)?;
     (from <= to).then_some(from..to)
+}
+
+/// 块外正文分段：连续的非模板块行合并为一段。
+fn plain_segments(text: &str, infos: &[Option<TemplateLineInfo>]) -> Vec<Range<usize>> {
+    let mut segments = Vec::new();
+    let mut current: Option<Range<usize>> = None;
+    let mut offset = 0;
+    for (index, content) in text.split('\n').enumerate() {
+        let end = offset + content.len();
+        if infos.get(index).copied().flatten().is_none() {
+            match &mut current {
+                Some(segment) => segment.end = end,
+                None => current = Some(offset..end),
+            }
+        } else if let Some(segment) = current.take() {
+            segments.push(segment);
+        }
+        offset = end + 1;
+    }
+    segments.extend(current);
+    segments
 }
 
 /// 结构元数据行（标题行、`{wt:}` 绑定行）：不属于模板块正文，不参与快捷匹配。
@@ -218,7 +249,7 @@ fn line_bounds(text: &str, line: usize) -> Option<(usize, usize)> {
 /// 过滤触发词本身与 `@start` / `@end` 结构标记；重复原文只保留首次出现。
 pub fn refer_candidates(
     text: &str,
-    scope: &Range<usize>,
+    scopes: &[Range<usize>],
     trigger: &Range<usize>,
     entries: &[MentionEntry],
 ) -> Vec<ReferCandidate> {
@@ -228,13 +259,19 @@ pub fn refer_candidates(
         Reference(&'a ParsedReference),
     }
 
-    let from = scope.start;
-    let to = scope.end.min(text.len());
+    let in_scope = |range: &Range<usize>| {
+        scopes
+            .iter()
+            .any(|scope| range.start >= scope.start && range.end <= scope.end)
+    };
     let overlaps = |range: &Range<usize>| range.start < trigger.end && trigger.start < range.end;
-    let references = parse_references_in(text, from, to);
+    let references: Vec<ParsedReference> = parse_references_in(text, 0, text.len())
+        .into_iter()
+        .filter(|reference| in_scope(&reference.range))
+        .collect();
     let mut sources: Vec<(usize, Source<'_>)> = super::mention_token_ranges(text)
         .into_iter()
-        .filter(|range| range.start >= from && range.end <= to && !overlaps(range))
+        .filter(|range| in_scope(range) && !overlaps(range))
         .map(|range| (range.start, Source::Mention(range)))
         .collect();
     sources.extend(
