@@ -6,7 +6,7 @@
 use std::ops::Range;
 use std::path::PathBuf;
 
-use super::{EditKind, Prompt};
+use super::{EditKind, Prompt, Snapshot};
 use crate::app::markdown::ReferKind;
 
 /// 粘贴候选种类。
@@ -82,11 +82,13 @@ impl PasteAnchor {
     }
 }
 
-/// 占位插入现场；取消时据此回滚（含撤销步与保存态）。
-#[derive(Debug, Clone, Copy)]
+/// 占位插入现场；取消时据此回滚（含撤销步、重做栈与保存态）。
+#[derive(Debug)]
 struct Staged {
     was_saved: bool,
     revision: u64,
+    /// 占位插入前的重做栈：`record` 会清空它，取消必须原样还回。
+    redo: Vec<Snapshot>,
 }
 
 /// 粘贴二级面板：候选、占位插入范围与引用替换文本。
@@ -298,7 +300,9 @@ impl Prompt {
         let insertion = self.paste_insertion(start, &plain);
         let was_saved = self.is_saved;
         let revision = self.revision;
+        let redo = std::mem::take(&mut self.redo);
         if !self.replace_at(start, end, &insertion) {
+            self.redo = redo;
             return false;
         }
         let reference = references
@@ -307,6 +311,7 @@ impl Prompt {
         self.paste.set_staged(Staged {
             was_saved,
             revision,
+            redo,
         });
         let mut panel = PastePanel {
             request,
@@ -371,11 +376,12 @@ impl Prompt {
         had
     }
 
-    /// 回滚占位插入：弹出该步快照、恢复保存态与修订号，编辑痕迹归零。
+    /// 回滚占位插入：弹出该步快照、恢复重做栈、保存态与修订号，编辑痕迹归零。
     fn restore_staged(&mut self, staged: Staged) {
         if let Some(snapshot) = self.undo.pop() {
             self.restore(snapshot);
         }
+        self.redo = staged.redo;
         self.is_saved = staged.was_saved;
         self.revision = staged.revision;
         self.autosave = None;

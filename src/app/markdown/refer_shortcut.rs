@@ -6,8 +6,9 @@
 use std::ops::Range;
 
 use super::{
-    MentionEntry, ReferKind, TemplateLineRole, parse_references, parse_references_in,
-    parse_template_block_at_line, template_block_start_at, template_line_infos,
+    MentionEntry, ParsedReference, ReferKind, TemplateLineRole, parse_references,
+    parse_references_in, parse_template_block_at_line, template_block_start_at,
+    template_line_infos,
 };
 
 /// 候选展示条数上限。
@@ -213,6 +214,7 @@ fn line_bounds(text: &str, line: usize) -> Option<(usize, usize)> {
 
 /// 收集作用域内已出现的候选：`@` 提及与 `@[refer-*]` 引用，按原文去重保序。
 ///
+/// 两类来源按原文位置合并后再去重（`order` 必须反映正文首次出现顺序，同分排序依赖它）。
 /// 过滤触发词本身与 `@start` / `@end` 结构标记；重复原文只保留首次出现。
 pub fn refer_candidates(
     text: &str,
@@ -220,50 +222,67 @@ pub fn refer_candidates(
     trigger: &Range<usize>,
     entries: &[MentionEntry],
 ) -> Vec<ReferCandidate> {
+    /// 一条来源：`@` 提及的整段区间或完整的引用标记。
+    enum Source<'a> {
+        Mention(Range<usize>),
+        Reference(&'a ParsedReference),
+    }
+
     let from = scope.start;
     let to = scope.end.min(text.len());
-    let mut candidates: Vec<ReferCandidate> = Vec::new();
     let overlaps = |range: &Range<usize>| range.start < trigger.end && trigger.start < range.end;
-    for range in super::mention_token_ranges(text) {
-        if range.start < from || range.end > to || overlaps(&range) {
-            continue;
+    let references = parse_references_in(text, from, to);
+    let mut sources: Vec<(usize, Source<'_>)> = super::mention_token_ranges(text)
+        .into_iter()
+        .filter(|range| range.start >= from && range.end <= to && !overlaps(range))
+        .map(|range| (range.start, Source::Mention(range)))
+        .collect();
+    sources.extend(
+        references
+            .iter()
+            .filter(|reference| !overlaps(&reference.range))
+            .map(|reference| (reference.range.start, Source::Reference(reference))),
+    );
+    sources.sort_by_key(|(at, _)| *at);
+    let mut candidates: Vec<ReferCandidate> = Vec::new();
+    for (_, source) in sources {
+        match source {
+            Source::Mention(range) => {
+                let raw = &text[range];
+                let (path, folder) = match raw.strip_prefix('@') {
+                    Some(rest) => match rest.strip_suffix('/') {
+                        Some(dir) => (dir, true),
+                        None => (rest, directory_entry(rest, entries)),
+                    },
+                    None => continue,
+                };
+                if path == "start" || path == "end" {
+                    continue;
+                }
+                let name = path.rsplit('/').next().unwrap_or(path).to_string();
+                let tag = if folder {
+                    ReferTag::Folder
+                } else {
+                    ReferTag::File
+                };
+                push_unique(&mut candidates, raw, &name, path, tag);
+            }
+            Source::Reference(reference) => {
+                let name = reference
+                    .path
+                    .rsplit(['/', '\\'])
+                    .find(|part| !part.is_empty())
+                    .unwrap_or(reference.path.as_str())
+                    .to_string();
+                push_unique(
+                    &mut candidates,
+                    &reference.raw,
+                    &name,
+                    &reference.path,
+                    ReferTag::Refer(reference.kind),
+                );
+            }
         }
-        let raw = &text[range.clone()];
-        let (path, folder) = match raw.strip_prefix('@') {
-            Some(rest) => match rest.strip_suffix('/') {
-                Some(dir) => (dir, true),
-                None => (rest, directory_entry(rest, entries)),
-            },
-            None => continue,
-        };
-        if path == "start" || path == "end" {
-            continue;
-        }
-        let name = path.rsplit('/').next().unwrap_or(path).to_string();
-        let tag = if folder {
-            ReferTag::Folder
-        } else {
-            ReferTag::File
-        };
-        push_unique(&mut candidates, raw, &name, path, tag);
-    }
-    for reference in parse_references_in(text, from, to) {
-        if overlaps(&reference.range) {
-            continue;
-        }
-        let name = reference
-            .path
-            .rsplit(['/', '\\'])
-            .find(|part| !part.is_empty())
-            .unwrap_or(reference.path.as_str())
-            .to_string();
-        push_unique(
-            &mut candidates,
-            &reference.raw,
-            &name,
-            &reference.path,
-            ReferTag::Refer(reference.kind),
-        );
     }
     candidates
 }

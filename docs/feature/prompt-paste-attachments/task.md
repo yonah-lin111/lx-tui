@@ -252,3 +252,20 @@
   `terminal_paste_shell_escaped_path_builds_proposal_from_real_file`、
   `terminal_paste_plain_text_does_not_arm_completion_panel`（已确认在无修复时失败）、
   `refer_tokens_carry_kind_specific_highlights`。
+
+## 13. 第五轮：review 修复（对应 `review.md` 与 design.md §14.5）
+
+- **P1 占位文本不落库**：`commit_prompt_buffer` / `save_prompt_now` / `tick_prompt_autosave`
+  三处在粘贴提案未收束时拒绝提交（`next_deadline` 靠修订号失效自然不排唤醒）。
+- **P1 同源·提案模态**：`Prompt::undo/redo` 在提案未收束时忽略；`clear_panel`
+  （收起编辑器/失焦/进树/删除条目）先回滚占位再清面板。
+- **P2 取消恢复重做栈**：`Staged` 记录并还回 `redo`。
+- **P2 围栏排除**：`mention_token_ranges` 跳过代码围栏。
+- **P2 跨类型排序**：`refer_candidates` 按正文位置合并两类来源后再去重。
+- 测试（均已验证“无修复即失败”）：`paste_cancel_restores_redo_history`、
+  `undo_is_ignored_while_paste_proposal_open`、`clear_panel_rolls_back_paste_proposal`、
+  `autosave_defers_while_paste_proposal_open`、`manual_save_is_ignored_while_paste_proposal_open`、
+  `switching_to_temp_prompt_does_not_commit_placeholder`、`candidates_skip_fenced_mentions`、
+  `candidates_order_follows_position_across_mention_and_reference`。
+- **未处理**：事件循环内同步读路径元数据/文件头（review 结论为“后续处理”，见 design.md §14.5.5）。
+

@@ -1201,3 +1201,110 @@ fn next_deadline_includes_prompt_autosave() {
     assert!(!tick(&mut state, Instant::now()));
     assert!(crate::app::update::next_deadline(&state).is_none());
 }
+
+// ===== 粘贴提案与保存门禁 =====
+
+/// 打开 `nested` 条目编辑视图：条目编辑态才参与自动保存。
+fn item_editing_state() -> AppState {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    move_prompt_selection(&mut state, 3, 8);
+    assert!(activate_prompt_row(&mut state));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
+    state
+}
+
+/// 在光标处写入路径占位并打开粘贴面板。
+fn stage_paste(state: &mut AppState) {
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(state.prompt.cursor());
+    let request = state.prompt.begin_paste_read(anchor);
+    let candidate = crate::app::prompt::PasteCandidate::external(
+        std::path::PathBuf::from("/tmp/a.txt"),
+        crate::app::prompt::PasteCandidateKind::File,
+    );
+    assert!(state.prompt.paste_stage(request, vec![candidate]));
+    assert!(state.prompt.paste_panel().is_some());
+}
+
+#[test]
+fn autosave_defers_while_paste_proposal_open() {
+    let mut state = item_editing_state();
+    stage_paste(&mut state);
+    state.effects.clear();
+    let now = Instant::now();
+    assert!(!tick(&mut state, now));
+    assert!(
+        !tick(&mut state, now + Duration::from_millis(900)),
+        "提案未收束不触发自动保存"
+    );
+    assert!(state.effects.is_empty(), "占位文本不落库");
+    assert!(!state.prompt.is_saved(), "仍为脏状态");
+    assert!(
+        crate::app::update::next_deadline(&state).is_none(),
+        "提案未收束不安排唤醒（空闲不轮询）"
+    );
+
+    // 面板收束（路径确认）后恢复自动保存。
+    assert!(
+        state
+            .prompt
+            .paste_confirm(crate::app::prompt::PasteAction::Path)
+    );
+    assert!(!tick(&mut state, now + Duration::from_millis(1800)));
+    assert!(tick(&mut state, now + Duration::from_millis(3000)));
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { .. })),
+        "面板关闭后落库"
+    );
+}
+
+#[test]
+fn manual_save_is_ignored_while_paste_proposal_open() {
+    let mut state = item_editing_state();
+    stage_paste(&mut state);
+    state.effects.clear();
+    save_prompt_shortcut(&mut state);
+    assert!(state.effects.is_empty(), "占位文本不落库");
+    assert!(!state.prompt.is_saved(), "不改已保存态");
+    assert!(state.prompt.paste_panel().is_some(), "面板保持打开");
+
+    assert!(
+        state
+            .prompt
+            .paste_confirm(crate::app::prompt::PasteAction::Path)
+    );
+    save_prompt_shortcut(&mut state);
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { .. })),
+        "面板关闭后可手动保存"
+    );
+}
+
+#[test]
+fn switching_to_temp_prompt_does_not_commit_placeholder() {
+    let mut state = item_editing_state();
+    stage_paste(&mut state);
+    state.effects.clear();
+    // 切到临时提示词会提交当前编辑缓冲：提案未收束时占位文本不得覆盖条目内容。
+    assert!(open_temp_prompt(&mut state));
+    assert!(state.effects.is_empty(), "占位文本不落库");
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(12)
+            .expect("item 12")
+            .content,
+        "nested content",
+        "条目内容未被占位文本覆盖"
+    );
+}

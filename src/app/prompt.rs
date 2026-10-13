@@ -344,7 +344,13 @@ impl Prompt {
     }
 
     /// 撤销上一步编辑；无可撤销内容时 no-op。
+    ///
+    /// 粘贴提案未收束时忽略（与键盘一致：面板打开时编辑器按键被吞掉），
+    /// 否则会绕过面板改写缓冲、破坏提案登记的占位区间。
     pub fn undo(&mut self) {
+        if self.paste_panel().is_some() {
+            return;
+        }
         let Some(snapshot) = self.undo.pop() else {
             return;
         };
@@ -356,6 +362,9 @@ impl Prompt {
 
     /// 重做；无可重做内容时 no-op。
     pub fn redo(&mut self) {
+        if self.paste_panel().is_some() {
+            return;
+        }
         let Some(snapshot) = self.redo.pop() else {
             return;
         };
@@ -380,12 +389,14 @@ impl Prompt {
     ///
     /// 同时作废在途的提及扫描结果，避免失焦后异步结果把面板重新弹出。
     pub fn clear_panel(&mut self) {
+        // 失焦/收起编辑器等同“外部点击”：未确认的粘贴提案先回滚，
+        // 占位文本不得留在缓冲里被自动保存落库。
+        self.paste_cancel();
         self.panel = None;
         self.slash = None;
         self.mention.clear();
         self.mention.unsuppress();
         self.refer = None;
-        self.paste.cancel();
         self.panel_suppressed = false;
     }
 

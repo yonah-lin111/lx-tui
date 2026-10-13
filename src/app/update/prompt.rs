@@ -140,7 +140,13 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 }
 
 /// 提交指定工作区的编辑器缓冲（其为显示态时缓冲位于 `state.prompt`）。
+///
+/// 粘贴提案未收束（占位文本只是待改写的中转态）时不提交：取消无法逆向写库，
+/// 因此占位文本绝不落库；面板确认或取消后按正常路径提交。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
+    if state.prompt.paste_panel().is_some() {
+        return;
+    }
     let Some(target) = state
         .workspaces
         .get(workspace)
@@ -465,6 +471,10 @@ pub fn clear_prompt_search(state: &mut AppState) -> bool {
 
 /// 立即保存（工具栏圆点）：条目提交落库；临时提示词提交缓冲后打开保存到文件夹选择器。
 pub fn save_prompt_now(state: &mut AppState) {
+    // 粘贴提案未收束：占位文本不得落库，也不改已保存态（面板收束后再保存）。
+    if state.prompt.paste_panel().is_some() {
+        return;
+    }
     if prompt_temp_editing(state) {
         commit_editing_prompt(state);
         open_save_draft(state);

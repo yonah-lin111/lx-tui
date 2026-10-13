@@ -211,3 +211,30 @@ fn insertion_appends_trailing_space() {
     };
     assert_eq!(refer_insertion(&candidate), "@abc ");
 }
+
+#[test]
+fn candidates_skip_fenced_mentions() {
+    let text = "```\n@abc\n```\n@def\nac";
+    let cursor = text.len();
+    let scope = refer_scope(text, cursor).expect("scope");
+    let trigger = refer_trigger(text, cursor).expect("trigger");
+    let candidates = refer_candidates(text, &scope, &trigger.range, &[]);
+    let texts: Vec<&str> = candidates.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(texts, vec!["@def"], "围栏内 @abc 不是提及，不作为候选");
+}
+
+#[test]
+fn candidates_order_follows_position_across_mention_and_reference() {
+    let text = "@[refer-file](/tmp/abc) @abc ac";
+    let cursor = text.len();
+    let scope = refer_scope(text, cursor).expect("scope");
+    let trigger = refer_trigger(text, cursor).expect("trigger");
+    let candidates = refer_candidates(text, &scope, &trigger.range, &[]);
+    let filtered = filter_refer_candidates(candidates, "abc");
+    let texts: Vec<&str> = filtered.iter().map(|item| item.text.as_str()).collect();
+    assert_eq!(
+        texts,
+        vec!["@[refer-file](/tmp/abc)", "@abc"],
+        "同名同分时按正文首次出现排序（引用在前）"
+    );
+}

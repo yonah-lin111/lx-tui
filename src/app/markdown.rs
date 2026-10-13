@@ -510,7 +510,10 @@ pub fn mention_deletion_range(text: &str, cursor: usize) -> Option<Range<usize>>
         .map(|range| range.start..cursor)
 }
 
-/// 全文中的 @ 提及区间：`@` 位于行首或空白之后，路径由查询字符组成且非空。
+/// 全文中的 @ 提及区间：`@` 位于行首或空白之后，路径由查询字符组成且非空；跳过代码围栏。
+///
+/// 与 `parse_references_in` 同一排除规则：围栏内的 `@abc` 是示例文本而非提及，
+/// 既不作为快捷候选，也不按整块删除。
 fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut index = 0;
@@ -520,7 +523,7 @@ fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
             .chars()
             .next_back()
             .is_none_or(|previous| previous.is_whitespace());
-        if boundary {
+        if boundary && open_fence(&text[..at]).is_none() {
             let mut end = at + 1;
             for ch in text[end..].chars() {
                 if !is_mention_query_char(ch) || ch == '@' {

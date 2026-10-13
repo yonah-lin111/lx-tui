@@ -221,7 +221,7 @@
 2. ~~位图直接写正文引用~~ —— 已在第三轮整体移除（见 §14.3）。
 3. **整体删除附件功能**：不再有 `PromptAttachment` 概念——附件条 UI 与鼠标命中、`Prompt::attachments/add_attachments/remove_attachment/set_document` 与不可用标记、撤销快照中的附件、`TempPrompt/PromptItem` 附件字段、`Effect::{SaveDraft,SavePromptContent}` 的附件参数、DB 表 `workspace_prompt_attachment` 及其加载/写入/引用查询、`layout.rs` 附件条几何全部删除。
 
-### 14.3 第三轮：移除截图粘贴（当前实现）
+### 14.3 第三轮：移除截图粘贴
 
 用户要求图片与文件一律通过路径上传，因此删除整个剪贴板读取通道与资产落盘：
 
@@ -230,8 +230,28 @@
 3. **空粘贴静默忽略**：终端自身粘贴只承载位图时送来的空 `Paste("")` 不再回退到应用读剪贴板，直接忽略。
 4. **保留能力**：`@[refer-image]` 语法与 `@[refer-*]` 快捷面板不变，图片通过粘贴其文件路径得到引用；`platform::sniff_image_file` 继续用于按文件头把路径候选归类为 image。
 
-### 14.4 第四轮：转义路径、粘贴不arm面板与引用配色（当前实现）
+### 14.4 第四轮：转义路径、粘贴不arm面板与引用配色
 
 1. **shell 转义路径回落**：`platform::resolve_pasted_path` 先按原文判定存在性，原文不存在且含反斜杠时去掉转义再判定（`platform/paste_path.rs::unescape_backslashes`）。修掉的 bug：粘贴 `/Users/yonah/Desktop/ai_agent_api\(1\).md` 时原文不是文件 → 回退普通文本，随后紧跟的 `Enter` 又把它当触发词换成了别的候选原文。
 2. **粘贴不重启补全面板**：`update::apply_pasted_text` = `InsertText` + `Prompt::suppress_completion_panels`（清块/斜杠/快捷/提及面板并压制到下一次编辑或移动）。粘贴不是“正在输入”，任何 `@` 提及、字母快捷、斜杠或块面板都不得由粘贴文本触发后吃掉紧跟的 `Enter`。
 3. **引用独立高亮**：`ui/markdown.rs` 新增 `TokenKind::{ReferFile,ReferFolder,ReferImage}`（优先于 `@` 提及扫描，整段 `@[refer-*](path)` 一个 token），`ui/style.rs` 给出三个互不相同、且都不同于 `@` 提及（黄下划线）的样式：亮绿 / 橙（Indexed 208，避开主题蓝青）/ 亮品红下划线。
+
+### 14.5 第五轮：review 修复（当前实现，对应 `review.md`）
+
+1. **占位文本绝不落库**（P1）：占位只是待改写的中转态，取消无法逆向写库，因此
+   `update::prompt::commit_prompt_buffer`（落库唯一入口）、`update::prompt::save_prompt_now`
+   （含 Ctrl/Cmd+S 与工具栏保存点）、`update::tick_prompt_autosave` 三处都在提案未收束时拒绝提交。
+   `next_deadline` 无需额外门禁：占位插入必然推进修订号，已有的静置观察随即失效，
+   因此提案打开期间不安排唤醒（不空转）。
+2. **提案是模态的**（P1 同源）：键盘按键由粘贴面板吞掉（既有行为），工具栏 Undo/Redo 同样忽略
+   （`Prompt::undo/redo` 在提案未收束时直接返回）；`Prompt::clear_panel`（收起编辑器、失焦、
+   进树视图、删除条目/文件夹）按“外部点击”语义先回滚占位再清面板。
+3. **取消完全透明**（P2）：`Staged` 除保存态与修订号外还记录重做栈，取消时把 `record` 清空的
+   重做历史原样还回（撤销 `abc` 后粘贴再 Esc，`abc` 仍可 Redo）。
+4. **候选来源规则统一**（P2）：`markdown::mention_token_ranges` 跳过代码围栏（与
+   `parse_references_in` 一致，围栏内 `@abc` 既不是候选也不按整块删除）；
+   `refer_shortcut::refer_candidates` 把提及与引用两类来源按正文位置合并排序后再去重，
+   `order` 真正等于首次出现顺序，跨类型同分排序不再偏向提及。
+5. **未处理**：`event::paste::handle_terminal_paste` 仍在事件循环内同步做路径元数据与文件头读取
+   （慢速/挂载文件系统可能阻塞输入与绘制）。修复需要把候选识别放回后台任务并路由过期结果；
+   本轮按 review“后续处理”的建议不做，留作后续项。

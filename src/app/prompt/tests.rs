@@ -2260,6 +2260,51 @@ fn paste_cancel_reverts_placeholder_and_undo_step() {
 }
 
 #[test]
+fn paste_cancel_restores_redo_history() {
+    let mut prompt = prompt(80, 8);
+    prompt.insert_str("abc");
+    prompt.undo();
+    assert_eq!(prompt.text(), "");
+    assert!(prompt.can_redo(), "撤销后可重做");
+    let anchor = PasteAnchor::at_cursor(prompt.cursor());
+    let request = prompt.begin_paste_read(anchor);
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    assert!(!prompt.can_redo(), "占位插入清空重做栈");
+    assert!(prompt.paste_cancel());
+    assert!(prompt.can_redo(), "取消恢复重做栈");
+    prompt.redo();
+    assert_eq!(prompt.text(), "abc", "重做回到插入结果");
+}
+
+#[test]
+fn undo_is_ignored_while_paste_proposal_open() {
+    let mut prompt = prompt(80, 8);
+    prompt.set_text("keep ");
+    let anchor = PasteAnchor::at_cursor(prompt.cursor());
+    let request = prompt.begin_paste_read(anchor);
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    prompt.undo();
+    assert_eq!(prompt.text(), "keep /tmp/a.txt ", "面板打开时撤销不穿透");
+    assert!(prompt.paste_panel().is_some(), "面板保持打开");
+    assert!(prompt.can_undo(), "占位插入快照仍在");
+}
+
+#[test]
+fn clear_panel_rolls_back_paste_proposal() {
+    let mut prompt = prompt(80, 8);
+    prompt.set_text("keep ");
+    let revision = prompt.revision();
+    let anchor = PasteAnchor::at_cursor(prompt.cursor());
+    let request = prompt.begin_paste_read(anchor);
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    prompt.clear_panel();
+    assert_eq!(prompt.text(), "keep ", "失焦回滚占位");
+    assert!(prompt.paste_panel().is_none());
+    assert!(!prompt.can_undo(), "回滚不留撤销步");
+    assert_eq!(prompt.revision(), revision, "回滚恢复修订号");
+}
+
+#[test]
 fn paste_escape_reverts_placeholder() {
     let mut prompt = prompt(60, 8);
     let anchor = PasteAnchor::at_cursor(0);

@@ -1137,9 +1137,12 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
 const PROMPT_AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
 
 /// 自动保存轮询：条目编辑视图下缓冲静置达标后提交落库并回到已保存态；
-/// 临时提示词与树视图不参与；返回是否触发保存。
+/// 临时提示词与树视图不参与；粘贴提案未收束时占位文本不得落库；返回是否触发保存。
 fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
-    if !prompt_item_editing(state) || !state.prompt.autosave_due(now, PROMPT_AUTOSAVE_DELAY) {
+    if !prompt_item_editing(state)
+        || state.prompt.paste_panel().is_some()
+        || !state.prompt.autosave_due(now, PROMPT_AUTOSAVE_DELAY)
+    {
         return false;
     }
     // 不预先标记已保存：保存成功回执由服务按修订号确认；失败保持脏状态重试。
