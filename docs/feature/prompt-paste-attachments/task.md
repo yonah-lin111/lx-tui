@@ -1,0 +1,285 @@
+# Prompt 粘贴附件与引用快捷输入任务
+
+状态：已按用户指示实施完成（分支 `feat/prompt-paste-attachments`，工作区 `.worktrees/prompt-paste-attachments`）；
+自动化验证全绿，TUI 外观待用户 `cargo run` 人工验收。
+
+> 注：第 0–8 节是**第一轮**任务清单（含附件列表与剪贴板截图设计），已被 design.md §14 与本文
+> §9–§11 的三轮用户修订取代。当前范围：**图片与文件都只通过路径粘贴表达**——应用不读取系统剪贴板、
+> 不落盘、不登记资产、不做垃圾回收（第三轮，见 §11）。下列勾选保留为历史记录，不作为当前验收依据。
+
+## 0. 实施前检查
+
+- [x] 复核 `docs/standards/` 三份规范、当前工作区变更及功能相关文件的 codegraph / codebase-memory 覆盖。
+- [x] 依据 Context7 查剪贴板/图片编码候选库的当前 API 和平台支持；优先现有能力与标准库，记录新增依赖理由。
+- [x] 对齐 `lx-agent` 的 upload/reference/path 菜单与两字符引用快捷输入，仅移植语义，不移植 Electron DOM 假设。
+
+## 1. 纯数据模型与语法
+
+- [x] 定义附件类型、来源、稳定 ID、路径与展示名；加入 `Prompt`、`TempPrompt`、`PromptItem`，保证工作区和编辑目标切换时成组转移。
+- [x] 定义粘贴提案及生命周期：异步请求代号、目标 prompt、编辑修订、选区锚点、候选列表、活动项和取消逻辑。
+- [x] 扩展撤销/重做快照，使附件增删与正文替换均为单步可撤销操作；附件操作更新脏状态与自动保存修订。
+- [x] 复用既有 Markdown/模板块识别，解析已出现的 `@` 与 `@[refer-file/folder/image]`；避免代码围栏、标记内部和受保护行误触发。
+- [x] 实现 2 字符快捷触发、范围隔离、去重、排序、子序列匹配、完整原文替换和类型 tag 映射。
+- [x] 实现无损引用格式化；无法表达的路径禁用“引用”，不能生成损坏标记。
+- [x] 纯函数测试：路径空格/括号/Unicode、`ac`→`@abc`、块隔离、普通区全文、重复引用、图片 tag、保护区、撤销/重做。
+
+## 2. 平台剪贴板与截图文件（第一轮，已被 §11 取代）
+
+- [x] 在 `platform/` 加入 macOS/Windows/Linux 的文件列表、路径文本和位图读取，返回同一平台中立结果；缺能力时返回可显示错误。
+- [x] 后台读取并编码截图，原子写入应用数据根的 `attachments/`；路径限定、唯一 ID、格式识别、文件大小/资源上限与失败清理。
+- [x] 解析单行/多行绝对路径及 `file://` URI，逐项验证存在；任一项无效则整体作为普通文本。测试路径含空格、Unicode、百分号和错误 URI。
+- [x] 管理待处理截图的取消、失焦、请求过期和进程重启孤儿清理；验证不删除外部文件及符号链接目标。
+- [x] 用平台隔离的测试覆盖格式识别与错误分支；真实系统剪贴板交互留给手工 TUI 验收。
+
+## 3. 持久化与清理（第一轮，已被 §11 取代）
+
+- [x] 编写 SQLite v1→v2 迁移：两张新表均使用 `id INTEGER PRIMARY KEY AUTOINCREMENT` 与 `external_id TEXT NOT NULL UNIQUE`；附件 `prompt_id TEXT` 引用 `workspace_prompt.external_id`，`managed_asset_id TEXT` 引用资产 `external_id`；旧库读取为空附件且迁移可重复。
+- [x] 将创建、保存、加载 prompt 的正文与附件纳入同一事务；临时草稿转已保存条目时保留附件顺序和 ID。
+- [x] 删除 prompt、删除文件夹级联、移除附件或引用后，查询 managed 截图的跨 prompt 引用并安排后台清理；失败可下次启动重试。
+- [x] 添加数据库/服务测试：迁移、旧数据兼容、重启恢复、保存失败、级联清理、共享截图保留、外部文件不删。
+
+## 4. 事件路由与面板
+
+- [x] 在 prompt 工具栏增加粘贴图标与 tooltip，完善 `layout.rs` 的尺寸和命中规则；树视图、折叠和过窄布局不显示。
+- [x] `event/` 异步读取剪贴板，结果按 prompt 身份/修订/锚点校验；`TerminalEvent::Paste` 的有效路径文本走相同提案，普通文本继续原行为。
+- [x] 实现上传/引用/路径二级面板的键盘、鼠标、Esc、外部点击和互斥优先级；不产生预插入占位文本。
+- [x] 在 prompt 中显示附件名称、类型、缺失状态及移除入口；附件不遮挡正文或已有工具栏按钮。
+- [x] 绘制快捷输入候选及右侧 tag，处理长路径截断、窄屏、滚动和鼠标命中；可见文案集中到 `ui/text.rs`。
+- [x] 聚焦事件测试：普通粘贴、路径提案、截图结果过期、三种确认、取消、上传目录限制、工作区切换、面板优先级。
+- [x] 聚焦布局/渲染测试：按钮几何、附件显示、两类面板、类型 tag 与最小可用尺寸。
+
+## 5. 精确验证与交付
+
+- [x] 按受影响模块运行测试：`app::prompt`、`app::markdown`、`db`、`event`、`layout`、`ui::prompt` 和相关集成测试；`tui/` 恢复路径未改则不增加该范围测试。
+- [x] 运行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`；若全量耗时过高，先报告精确验证结果与尚未运行范围，不伪称全绿。
+- [x] 核对单文件 1000 行上限、`app/` 无 IO、`ui/` 无状态修改、OS 分支只在 `platform/`、生产代码无 `unwrap/expect`。
+- [x] 请用户运行 `cargo run` 验收 macOS/Windows/Linux 可用环境中的真实剪贴板文件、截图、路径文本、面板外观和键鼠交互。
+- [x] 更新任务完成状态和实际偏差；不执行 Git 状态变更。
+
+## 6. 执行顺序和每阶段完成判据
+
+按 6.1→6.6 执行。每阶段完成后更新本文件勾选状态；失败时停在当前阶段，保留可运行代码和已确认的数据格式，不以空实现或 `allow` 绕过验证。
+
+### 6.1 数据合同先行（已完成）
+
+目标文件：`src/app/prompt.rs`、`src/app/prompt/tree.rs`、`src/app/state.rs`、`src/app/markdown.rs` 及各自测试文件。
+
+1. 定义 `PromptAttachment`、`AttachmentKind`、`AttachmentSource`、`PasteCandidate`、`PasteProposal`，明确 ID、路径、显示名、顺序和目标编辑记录身份。模型只包含数据，不包含文件句柄、数据库连接或 UI 文案。
+2. `Prompt` 的加载入口一次接收正文与附件；`TempPrompt` 和 `PromptItem` 携带附件。检查默认临时项、钉住 prompt、跨工作区 `PromptDraft` 停泊和树重载的构造路径，避免新增字段遗漏。
+3. 更新撤销快照，附件新增/移除与引用插入都是独立的一步；重复添加同一路径不产生脏状态。检查撤销后 redo 可恢复，后续编辑正确清空 redo。
+4. 引用解析/格式化写往返测试，至少覆盖普通路径、空格、非 ASCII、括号、反斜杠和无法表示的路径；坏标记跳过，不越界切片。
+
+完成判据：无终端、无数据库环境即可构造纯状态并测试；任何附件变化都能经现有修订号和 `is_saved` 观察到。
+
+### 6.2 快捷输入独立闭环（已完成）
+
+目标文件：`src/app/prompt/`、`src/app/markdown/`、`src/input/mod.rs`、`src/ui/prompt.rs`、`src/ui/text.rs`，必要时复用 `src/ui/widgets/` 的现有命令面板。
+
+1. 明确触发区间为 UTF-8 字符边界，连续两个字符后才查询；`@` 前缀、结构行、代码围栏和引用标记内部不触发。鼠标移动光标后重算，但不因每帧渲染改变高亮。
+2. 实现块正文范围选择、普通区全文选择；候选扫描按源文顺序去重，过滤 `@start`/`@end`，按名称/路径和子序列评分稳定排序。
+3. 在现有面板按键路由之前处理该面板的 `Up/Down/Enter/Esc`；选择后完整原文替换触发词，调用统一编辑收尾，单步撤销。
+4. 右侧 tag 的最小占位与裁剪在渲染前算好；窄屏优先显示名称，高亮/命中矩形固定。已有 `@`、斜杠、块命令面板不能被新面板同时绘制。
+
+完成判据：`ac`→`@abc`、`@[refer-image]` tag、块 A/B 隔离、普通区全文、Esc 压制和鼠标确认均有聚焦测试；现有 prompt 面板导航测试继续通过。
+
+### 6.3 数据库迁移和保存闭环（已完成）
+
+目标文件：`src/db/mod.rs`、`src/db/service.rs`、`src/app/effects.rs`、`src/app/update/prompt.rs`、`src/app/update.rs` 及对应测试。
+
+1. 从 v1 数据库样本测试开始；将迁移分成独立步骤，事务中升级到 v2，同时建附件表和 managed 资产登记表，并处理高于当前版本的数据库。核对两张表的 `id`/`external_id`、`TEXT` 外键、时间字段、CHECK、索引；验证外键启用与 `ON DELETE CASCADE`。
+2. 将附件加入 `SaveDraft` 与已保存条目保存效应；数据库方法先把业务层 `PromptRecord.id: i64` 映射到 `workspace_prompt.external_id: TEXT`，再在同一事务中保存正文和附件的有序集合。旧条目读为空集合；树重载和条目编辑读取到同一顺序。managed 附件从资产表 JOIN 路径，外部附件读 `external_path`。
+3. 保存效应携带修订号，成功回执只确认对应修订；失败保留脏状态、待保存数据和错误反馈。临时草稿创建记录失败时不能执行 `finish_draft_save`。
+4. 删除 prompt/文件夹只删除数据库记录并产出待清理 managed 资产 ID；实际文件清理由 6.5 的独立流程完成，不放在数据库事务里。
+
+完成判据：v1→v2→重开幂等；正文和附件事务同时成功或同时失败；旧保存回执不覆盖新编辑；删除文件夹级联附件记录；外部路径没有删除调用。
+
+### 6.4 平台读取与粘贴二级面板（已完成）
+
+目标文件：`src/platform/`、`src/event/mod.rs`、`src/input/mod.rs`、`src/layout.rs`、`src/ui/prompt.rs`、`src/ui/text.rs` 与相关测试。
+
+1. 先以注入的剪贴板结果打通事件路由和面板，再分别接入 macOS/Windows/Linux 实际读取。平台功能不足时返回类型化错误；不得在事件循环同步等候桌面服务或图片编码。
+2. 点击工具栏图标发起后台请求；普通 `TerminalEvent::Paste` 仍可立即插入文本，只有整个文本能解析为存在的路径集合时打开提案。多行路径任一无效即整体按原文粘贴。
+3. 提案到达时校验请求代号、工作区、`PromptEditing`、`PaneId`、修订号、光标和选区；任何一项不匹配即丢弃结果。新请求覆盖旧请求，并清理旧截图租约。
+4. 面板只展示三项，目录混合时禁用上传并解释；键盘跳过禁用项。`Esc`、外部点击、失焦和目标变化取消且不改正文。选择引用/路径为单次正文编辑，上传为单次附件编辑。
+5. 工具栏按钮占位在 `layout.rs` 明确；树视图和过窄区域隐藏。附件展示与移除入口有独立命中范围，不得与编辑器文字、滚动条、工具栏已有按钮冲突。
+
+完成判据：三个选项、图片/目录/普通文件分类、有效/无效多行路径、过期异步结果、宽窄布局、键鼠操作均有针对性测试；平台错误可见且不会损坏原选区。
+
+### 6.5 Managed 截图所有权与清理（已完成）
+
+目标文件：`src/platform/` 的 OS 读取、负责后台落盘的事件服务、`src/db/` 的登记/查询，以及隔离临时目录的测试。
+
+1. 截图完成编码后写临时文件，再原子改名到应用数据根 `attachments/`；文件名和登记 ID 一致。请求失败或取消时释放租约，已确认并被正文/附件引用时转为持久所有权。
+2. 删除单项、文件夹、附件或最后一处正文引用后，数据库提交成功才运行引用检查。检查保存数据库中的所有附件及 `@[refer-image]` 正文引用，再检查未保存的内存 prompt、临时项和在途提案。
+3. 清理器只能删除本应用登记的 managed 普通文件；路径越界、外部路径、符号链接和不识别的文件名均跳过并记录。并发的新引用与删除需串行化最终检查，避免“检查后被重新引用”的竞态。
+4. 启动时重扫管理目录，删除没有任何引用的孤儿文件；删除失败留待下次重试，不让数据库内容回滚。测试使用假截图和临时目录，不碰用户真实数据目录。
+
+完成判据：取消无残留；共享引用保留；删除最后引用后清理；崩溃留下的未登记临时文件可恢复清理；外部文件与符号链接目标从不删除。
+
+### 6.6 组合验证和人工验收（自动化部分已完成，人工验收待用户）
+
+按顺序验证：纯状态→数据库→事件路由→布局渲染→相关集成测试。依项目规范运行格式化、Clippy 和测试；若修改 `src/tui/` 恢复路径，额外执行 `tui::tests` 顺序回归。最后检查新文件行数和模块边界。
+
+人工验证记录下列项目的“通过/失败 + 终端/OS”：文件管理器复制文件、截图复制位图、`file://` URI、多路径粘贴、普通文本、工具栏按钮、鼠标/键盘菜单、附件删除、重启恢复、窄屏和工作区切换。Agent 不能把自动化通过等同于 TUI 外观已验收。
+
+## 7. 测试输入与预期结果
+
+| 输入/操作 | 断言位置 | 必须断言 |
+| --- | --- | --- |
+| v1 数据库打开 | `db` 测试 | 原正文不变、附件空、版本为 v2，再打开不重复迁移；新表字段/外键类型与现有表约定一致 |
+| 保存正文+两附件中途失败 | `db/service` 测试 | 事务回滚、内存仍脏、原数据库内容完整 |
+| 临时项带附件保存 | `app/update` + `db/service` | 成功后临时项消失、新条目含附件；失败时临时项仍在 |
+| 复制 `/tmp/a.png` | `event` 测试 | 打开三选项，上传只增附件，引用只改正文，路径只写路径 |
+| 复制目录和文件 | `event/ui` 测试 | 上传灰显且不能确认，另两项覆盖全部路径 |
+| 复制不存在的 `/api/users` | `event` 测试 | 原文插入，不打开面板 |
+| 读取截图期间切工作区 | `event/app` 测试 | 旧结果丢弃，新工作区无附件/正文变化，截图租约清理 |
+| 输入 `ac` | `app/ui` 测试 | 命中 `@abc` 子序列，右侧 `[file]`，确认写原文、撤销写回 `ac` |
+| 块 A 与块 B 各有不同引用 | `app` 测试 | A/B 各只见本块；块外检索全文 |
+| 删除共享 managed 截图 | `db/cleanup` 测试 | 首次删除保留，最后引用删除后才删文件 |
+| 附件外部路径失效 | `ui/app` 测试 | 显示不可用，保存记录不被自动删除 |
+
+## 8. 改动边界复核
+
+- `app/` 只做纯数据转换；不可读取剪贴板、探测文件、编码图片或直接访问 SQLite。
+- `ui/` 只接收 `&AppState` 绘制和计算命中，不写状态、不执行 IO；可见字符串只在 `ui/text.rs`。
+- `platform/` 是 OS 专属剪贴板 API 的唯一归属；后台阻塞操作由事件层调度，PTY 输入路径保持原有功能。
+- 单文件不超过 1000 行；新增职责若使 `prompt.rs` 或 `event/mod.rs` 超限，按真实职责拆分到已有模块的同层子文件，子文件以约 500 行为目标。
+- 生产代码不使用 `unwrap`/`expect`，错误用 `Result` 传播，日志走 `tracing`；不直接写 stdout。
+- 不修改 Git 状态；仅在用户审核这两份文档后开始功能实现。
+
+
+## 9. 实施记录与偏差（本次执行）
+
+### 已完成范围（第一轮；第二轮修订见下）
+
+- 数据合同：`PasteCandidate`/粘贴提案（`src/app/prompt/paste.rs`）、
+  `@[refer-*]` 无损编解码与解析（`src/app/markdown/refer.rs`）、字母快捷候选
+  （`src/app/markdown/refer_shortcut.rs`）。
+- 快捷输入：2 字符触发、模板块正文/全文作用域隔离、结构行与 `{wt:}`/标题行排除、
+  去重保序、六级评分、`[file]/[folder]/[refer-*]` tag、完整原文替换（单步撤销）、
+  Esc/鼠标/面板优先级（粘贴 > 提及 > 快捷 > 斜杠 > 块命令）。
+- 持久化：`PRAGMA user_version` v1→v2 独立迁移（`managed_attachment_asset` +
+  `workspace_prompt_attachment`，TEXT 外键、CHECK、级联/限制删除）；
+  正文保存；保存回执按修订号确认（不再“先标记已保存”）；
+  失败保留脏状态、可见 toast、自动保存重试。
+- 平台：~~三平台剪贴板读取、位图签名与资产落盘~~（第三轮删除）；
+  保留 `platform/paste_path.rs`：`file://` URI 与多行路径解析、图片文件头签名探测（`sniff_image_file`）。
+- 事件：终端粘贴路径文本进提案、普通文本原样插入；选择区锚点替换；面板键鼠路由与外部点击取消。
+- 清理：~~managed 截图垃圾回收与启动孤儿扫描~~（第三轮删除，正文引用不再需要引用计数）。
+
+### 实施后修订（用户确认，对应 design.md §14）
+
+- 移除 prompt 顶栏粘贴按钮：`PromptToolbarButton::Paste` 及其几何/工具提示/文案/事件分支删除，
+  钉住按钮最小内容区宽度 25 → 21（`layout` 测试同步）。
+- 粘贴面板移除 “Upload as attachment”：`PasteAction` 两项 `Reference`/`Path`，面板两行；
+  `PasteCandidate::can_upload`、`PastePanel::upload_enabled`、`PASTE_ACTION_UPLOAD`、
+  `PASTE_UPLOAD_FOLDERS_DISABLED` 删除；普通文件不再能成为附件。
+- ~~`Ctrl/Cmd+Shift+V` 直接粘贴剪贴板图片~~（第三轮整体删除，见 §11）。
+- 正文引用快捷删除：`markdown::reference_deletion_range` + `Prompt::backspace` 回退链，
+  `@[refer-*](path) ` 尾随空白处一次 Backspace 整段删除（单步撤销）。
+
+### 记录偏差与风险
+
+- `src/event/mod.rs` 基线超 1000 行（存量债务）；新增职责落在
+  `src/event/paste.rs`，未对既有巨型事件循环做高风险重写。
+- 人工验收项（终端粘贴的路径文本、`file://` URI、多路径、普通文本、
+  面板键鼠与 Esc、引用一次 Backspace 删除、窄屏、工作区切换、重启恢复）待用户 `cargo run` 确认。
+
+
+## 10. 第二轮修订（用户确认，对应 design.md §14.2）
+
+### 变更
+
+- 路径粘贴改为占位插入：接受结果时先按锚点写入纯路径文本（一步撤销），再开面板；选“插入引用”改写占位、
+  选“插入路径”保持占位；`Esc`/外部点击/再次粘贴回滚占位并恢复保存态与修订号。
+- `Ctrl/Cmd+Shift+V` 位图直接插入 `@[refer-image](managed路径)`：落盘 → 登记 `managed_asset` → 写正文；
+  不弹面板、不显示附件 item；写入/登记失败（含受保护行）删除刚落盘文件并 toast。
+- 整体删除附件功能：`PromptAttachment`/附件条 UI 与命中/`Prompt::{attachments,add_attachments,remove_attachment,set_document}`
+  与不可用标记/撤销快照附件/`TempPrompt`、`PromptItem` 附件字段/`Effect` 附件参数/
+  DB `workspace_prompt_attachment` 及加载写入引用查询/`layout.rs` 附件条几何全部删除。
+- DB 收敛为单表 `managed_asset`（本应用管理的截图登记）；`SCHEMA_VERSION = 3`，
+  新增 2→3 迁移折叠开发期 v2 的附件表（仅在旧表存在时搬迁资产登记并删表）；
+  `PromptRecord`/正文读写无附件参数。
+- 回收触发点：启动扫描与删除 prompt/文件夹；正文引用移除后的回收推迟到下一次触发。
+
+### 记录偏差与风险（第二轮）
+
+- ~~触发键与位图粘贴通道~~（第三轮整体删除，见 §11）；prompt 聚焦时被吞掉的按键仍记 debug 日志（`LX_TUI_LOG=debug`）。
+- 取消回滚依赖“占位插入是撤销栈顶且面板打开期间不可编辑”的不变量；面板打开时按键被吞，鼠标点击外部即取消。
+- `event/mod.rs` 仍超 1000 行（存量债务）；本轮新增代码在 `event/paste.rs`、`app/prompt/paste.rs`。
+- 人工验收：路径占位 + 面板改写/取消回滚、引用一次 Backspace 删除、窄屏、重启恢复。
+
+## 11. 第三轮修订（用户确认，对应 design.md §14.3）
+
+### 变更
+
+- **删除整个剪贴板读取通道**：`platform::read_clipboard`（macOS osascript/pbpaste、Linux
+  wl-paste/xclip、Windows PowerShell）、`ClipboardContent/ClipboardError/ImageFormat`、
+  `secure_token`、`read_clipboard_payload`/`stage_screenshot(_in)`、`event::AppEvent::ClipboardRead`
+  与 `apply_clipboard_read`、`AppState::clipboard_read_requested`、输入层 `Routed::ClipboardPaste`
+  与 `clipboard_paste_chord`、`ui/text.rs` 的三条剪贴板/图片 toast 文案全部删除。
+- **Ctrl+V / Cmd+Shift+V 不再被拦截**：prompt 聚焦时按键照旧被吞（不写入 PTY），输入层只保留
+  复制/保存/模板复制映射。
+- **删除资产落盘与回收**：`attachments_dir`、DB `managed_asset` 表与 CRUD、
+  `Persistence::{register,unregister}_managed_asset`、`cleanup_startup/cleanup_managed/cleanup_orphan_files(_in)`、
+  `platform::{is_managed_asset_name,is_managed_temp_name}`、`markdown::image_reference_paths`、
+  `Database::all_prompt_contents` 全部删除。
+- **Schema 收敛**：`SCHEMA` 只建 `workspace/workspace_folder/workspace_prompt`；`SCHEMA_VERSION = 3`
+  保留（避免已有库被判为过新），迁移退化为单步建表 + 版本推进；旧库遗留的附件/资产表不再被读写，
+  数据原样保留。
+- **空粘贴静默忽略**：终端自身粘贴只承载位图时送来的空 `Paste("")` 不再回退读剪贴板。
+- **保留能力**：`@[refer-image]` 语法、`@[refer-*]` 快捷面板、路径占位 + 面板改写/回滚、
+  图片按文件头签名归类为 image（`sniff_image_file`）保持不变。
+
+### 记录偏差与风险（第三轮）
+
+- 用户已有开发库（`~/.lx-t-dev/db/lx.db`，v3）会保留遗留 `managed_asset` 表与一行登记，
+  磁盘上 `~/.lx-t-dev/attachments/` 的残留 PNG 不再被引用；二者无害，可手动删除。
+- 删除量：净减约 1500 行（`platform/clipboard.rs` 535 → 约 60 行）；相关测试同步删除
+  （剪贴板读取、图像落盘、GC/孤儿扫描、迁移建资产表），新增“空粘贴忽略”“遗留 v2 库可打开”用例。
+- 图片必须先在磁盘上存在才能引用：用户需自行把截图保存为文件再粘贴其路径。
+
+## 12. 第四轮修订（用户确认，对应 design.md §14.4）
+
+- **shell 转义路径回落**：`platform::resolve_pasted_path` + `unescape_backslashes`；
+  `event::candidates_from_paths` 逐项先原文后去转义判定，命中后用真实路径做占位/候选/引用。
+- **粘贴不 arm 补全面板**：`update::apply_pasted_text`（= `InsertText` + `Prompt::suppress_completion_panels`）；
+  命令行 `Enter` 不再把刚粘贴文本的尾部当触发词替换掉。
+- **引用独立高亮**：`TokenKind::{ReferFile,ReferFolder,ReferImage}` + `ui/style.rs` 三个新样式
+  （亮绿/橙 Indexed 208/亮品红下划线），整段引用一个 token，与 `@` 提及（黄下划线）区分
+  且不占用主题蓝青。
+- 测试：`resolve_pasted_path_prefers_literal_then_unescapes_shell_escapes`、
+  `terminal_paste_shell_escaped_path_builds_proposal_from_real_file`、
+  `terminal_paste_plain_text_does_not_arm_completion_panel`（已确认在无修复时失败）、
+  `refer_tokens_carry_kind_specific_highlights`。
+
+## 13. 第五轮：review 修复（对应 `review.md` 与 design.md §14.5）
+
+- **P1 占位文本不落库**：`commit_prompt_buffer` / `save_prompt_now` / `tick_prompt_autosave`
+  三处在粘贴提案未收束时拒绝提交（`next_deadline` 靠修订号失效自然不排唤醒）。
+- **P1 同源·提案模态**：`Prompt::undo/redo` 在提案未收束时忽略；`clear_panel`
+  （收起编辑器/失焦/进树/删除条目）先回滚占位再清面板。
+- **P2 取消恢复重做栈**：`Staged` 记录并还回 `redo`。
+- **P2 围栏排除**：`mention_token_ranges` 跳过代码围栏。
+- **P2 跨类型排序**：`refer_candidates` 按正文位置合并两类来源后再去重。
+- 测试（均已验证“无修复即失败”）：`paste_cancel_restores_redo_history`、
+  `undo_is_ignored_while_paste_proposal_open`、`clear_panel_rolls_back_paste_proposal`、
+  `autosave_defers_while_paste_proposal_open`、`manual_save_is_ignored_while_paste_proposal_open`、
+  `switching_to_temp_prompt_does_not_commit_placeholder`、`candidates_skip_fenced_mentions`、
+  `candidates_order_follows_position_across_mention_and_reference`。
+- **未处理**：事件循环内同步读路径元数据/文件头（review 结论为“后续处理”，见 design.md §14.5.5）。
+
+## 14. 第六轮：候选作用域分段与提交前取消提案（对应 design.md §14.6）
+
+- **候选作用域分段**：`refer_scope` 返回 `Vec<Range<usize>>`；模板块起止行为边界，
+  块内候选只在本分段可见（不跨块、不泄漏到块外），未闭合外层块不再吞掉后续新块；
+  `refer_candidates` 改为按分段集合过滤（提及与引用同规则）。
+- **提交前取消提案**：`commit_prompt_buffer` 先回滚占位再提交，修复“切树/新建临时项/
+  关闭工作区/退出时粘贴前的未保存编辑丢失”（复审 P1）。
+- 测试（均已验证“无修复即失败”）：`scope_isolates_template_blocks`（更新）、
+  `scope_keeps_unclosed_blocks_separate`、`switching_to_tree_commits_pre_paste_edits_without_placeholder`、
+  `switching_to_temp_prompt_commits_pre_paste_edits_without_placeholder`、
+  `quit_commits_pre_paste_edits_without_placeholder`、
+  `closing_displayed_workspace_commits_pre_paste_edits_without_placeholder`。
+- **未处理**：review 记录的 `event/paste.rs` 事件循环内同步文件 IO（仍留作后续项）。
+

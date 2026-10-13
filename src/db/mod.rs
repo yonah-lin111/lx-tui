@@ -14,11 +14,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// 当前 Schema 版本。
-const SCHEMA_VERSION: i64 = 1;
+/// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
+const SCHEMA_VERSION: i64 = 3;
 
-/// 首个版本的建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
-const SCHEMA_V1: &str = r#"
+/// 建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
+const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS workspace (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT NOT NULL UNIQUE,
@@ -78,6 +78,8 @@ pub enum DbError {
     FolderMissing,
     /// 文件夹嵌套超过 2 层约束。
     DepthExceeded,
+    /// 数据库版本高于当前程序支持值（不能用旧代码覆盖新结构）。
+    UnsupportedSchema(i64),
 }
 
 impl fmt::Display for DbError {
@@ -89,6 +91,12 @@ impl fmt::Display for DbError {
             Self::WorkspaceMissing => write!(formatter, "workspace not registered"),
             Self::FolderMissing => write!(formatter, "folder not found"),
             Self::DepthExceeded => write!(formatter, "folder nesting depth exceeded"),
+            Self::UnsupportedSchema(version) => {
+                write!(
+                    formatter,
+                    "database schema v{version} is newer than supported"
+                )
+            }
         }
     }
 }
@@ -144,7 +152,7 @@ impl Database {
         // 多实例并发（多个 lx 进程/测试）时等待短暂锁，而不是立刻失败。
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;")?;
-        let database = Self { conn };
+        let mut database = Self { conn };
         database.migrate()?;
         Ok(database)
     }
@@ -158,15 +166,22 @@ impl Database {
         Self::open(&database_path(is_dev_environment())?)
     }
 
-    /// 迁移到当前 Schema 版本；幂等。
-    fn migrate(&self) -> Result<()> {
+    /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
+    ///
+    /// 开发期的资产/附件表已随截图粘贴功能移除，老库中遗留的这些表不再被读写；
+    /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。
+    fn migrate(&mut self) -> Result<()> {
         let version: i64 = self
             .conn
             .query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if version > SCHEMA_VERSION {
+            return Err(DbError::UnsupportedSchema(version));
+        }
         if version < SCHEMA_VERSION {
-            self.conn.execute_batch(SCHEMA_V1)?;
-            self.conn
-                .execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))?;
+            let transaction = self.conn.transaction()?;
+            transaction.execute_batch(SCHEMA)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
         }
         Ok(())
     }
@@ -255,23 +270,27 @@ impl Database {
             return Ok(Vec::new());
         };
         let mut statement = self.conn.prepare(
-            r#"SELECT p.id, f.id, p.name, p.content, p.status
+            r#"SELECT p.id, p.external_id, f.id, p.name, p.content, p.status
                FROM workspace_prompt p
                LEFT JOIN workspace_folder f ON p.folder_id = f.external_id
                WHERE p.workspace_id = ?1
                ORDER BY p.id"#,
         )?;
-        let rows = statement.query_map(params![external], |row| {
-            Ok(PromptRecord {
-                id: row.get(0)?,
-                folder_id: row.get(1)?,
-                name: row.get(2)?,
-                content: row.get(3)?,
-                status: row.get(4)?,
-            })
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(DbError::from)
+        let prompts: Vec<(String, PromptRecord)> = statement
+            .query_map(params![external], |row| {
+                Ok((
+                    row.get::<_, String>(1)?,
+                    PromptRecord {
+                        id: row.get(0)?,
+                        folder_id: row.get(2)?,
+                        name: row.get(3)?,
+                        content: row.get(4)?,
+                        status: row.get(5)?,
+                    },
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(prompts.into_iter().map(|(_, record)| record).collect())
     }
 
     /// 新建文件夹；`parent_id` 必须为根层文件夹（目录嵌套最多 2 层）。
@@ -329,7 +348,7 @@ impl Database {
         Ok(())
     }
 
-    /// 新建提示词；`folder_id` 为 None 时挂在根层；`content` 为初始正文。
+    /// 新建提示词；`folder_id` 为 None 时挂在根层。
     pub fn create_prompt(
         &self,
         workspace: &Path,
@@ -379,11 +398,14 @@ impl Database {
     }
 
     /// 更新提示词正文。
-    pub fn update_prompt_content(&self, id: i64, content: &str) -> Result<()> {
-        self.conn.execute(
+    pub fn update_prompt_document(&self, id: i64, content: &str) -> Result<()> {
+        let updated = self.conn.execute(
             "UPDATE workspace_prompt SET content = ?1, updated_at = datetime('now') WHERE id = ?2",
             params![content, id],
         )?;
+        if updated == 0 {
+            return Err(DbError::WorkspaceMissing);
+        }
         Ok(())
     }
 

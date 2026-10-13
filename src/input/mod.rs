@@ -68,7 +68,14 @@ pub fn route(
         if save_chord {
             return Some(Routed::SavePrompt);
         }
-        return editor_command(key).map(Routed::Editor);
+        return match editor_command(key) {
+            Some(command) => Some(Routed::Editor(command)),
+            None => {
+                // 终端编码差异排查用：prompt 聚焦时被吞掉的按键（仅 debug 级）。
+                tracing::debug!(?key, "prompt key swallowed");
+                None
+            }
+        };
     }
     if pane_lx {
         return None;

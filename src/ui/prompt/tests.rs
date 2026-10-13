@@ -118,10 +118,14 @@ fn wrapped_continuation_row_keeps_line_token_offsets() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 1)].symbol(), "o");
-    assert_eq!(buf[(0, 1)].fg, Color::LightBlue);
+    assert_eq!(
+        buf[(0, 1)].fg,
+        Color::Indexed(208),
+        "引用整段着 refer-folder 色"
+    );
     assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
     assert_eq!(buf[(7, 1)].symbol(), "/");
-    assert_eq!(buf[(7, 1)].fg, Color::Cyan);
+    assert_eq!(buf[(7, 1)].fg, Color::Indexed(208), "路径与标记同色");
 }
 
 #[test]
@@ -1102,4 +1106,44 @@ fn template_status_button_label_follows_block_status() {
     render(area, &mut buf, &run, None);
     let row: String = (0..area.width).map(|x| buf[(x, 0)].symbol()).collect();
     assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
+}
+
+// ===== 粘贴/字母快捷面板 =====
+
+#[test]
+fn paste_panel_hit_and_layout_rows() {
+    let mut prompt = prompt(40, 10, "");
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
+    let request = prompt.begin_paste_read(anchor);
+    let candidates = vec![
+        crate::app::prompt::PasteCandidate::external(
+            std::path::PathBuf::from("/tmp/a.txt"),
+            crate::app::prompt::PasteCandidateKind::File,
+        ),
+        crate::app::prompt::PasteCandidate::external(
+            std::path::PathBuf::from("/tmp/dir"),
+            crate::app::prompt::PasteCandidateKind::Folder,
+        ),
+    ];
+    assert!(prompt.paste_stage(request, candidates));
+    let area = Rect::new(0, 0, 40, 10);
+    let layout = paste_layout(&prompt, area).expect("paste layout");
+    assert_eq!(layout.visible, 2);
+    let hit = paste_item_at(&prompt, area, layout.content.x + 1, layout.content.y);
+    assert_eq!(hit, Some(0));
+    let second = paste_item_at(&prompt, area, layout.content.x + 1, layout.content.y + 1);
+    assert_eq!(second, Some(1));
+}
+
+#[test]
+fn refer_panel_hit_maps_candidates() {
+    let prompt = prompt(40, 10, "@abc one\nac");
+    let panel = prompt.refer_panel().expect("refer panel");
+    assert_eq!(panel.items().len(), 1);
+    let area = Rect::new(0, 0, 40, 10);
+    let layout = refer_layout(&prompt, area).expect("refer layout");
+    assert_eq!(
+        refer_item_at(&prompt, area, layout.content.x + 1, layout.content.y),
+        Some(0)
+    );
 }

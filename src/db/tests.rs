@@ -143,7 +143,7 @@ fn prompt_crud_persists_and_isolates_workspaces() {
         .expect("other prompt ok");
 
     database
-        .update_prompt_content(prompt, "hello\nworld")
+        .update_prompt_document(prompt, "hello\nworld")
         .expect("content ok");
     database
         .update_prompt_status(prompt, "in_progress")
@@ -213,4 +213,183 @@ fn database_dir_follows_environment_flag() {
     assert_eq!(dev, home.join(".lx-t-dev").join("db"));
     assert_eq!(prod, home.join(".lx-t").join("db"));
     assert_eq!(database_path(false).expect("prod path"), prod.join("lx.db"));
+}
+
+// ===== 迁移与 Schema =====
+
+#[test]
+fn foreign_keys_are_enabled_on_connection() {
+    let (database, _) = open_test_database("foreign-keys");
+    let enabled: i64 = database
+        .conn
+        .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        .expect("pragma readable");
+    assert_eq!(enabled, 1);
+}
+
+#[test]
+fn migrates_v1_database_to_current_schema() {
+    let path = temp_db_path("v1-upgrade");
+    let workspace = workspace_path("v1-upgrade");
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let conn = Connection::open(&path).expect("open");
+        conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
+        conn.execute_batch(SCHEMA).expect("v1 schema");
+        conn.execute_batch("PRAGMA user_version = 1;")
+            .expect("version");
+        conn.execute(
+            "INSERT INTO workspace (external_id, name, \"type\", path, is_trusted, created_at, updated_at) \
+             VALUES ('ws-1', 'w', 'filesystem', ?1, 1, datetime('now'), datetime('now'))",
+            params![path_string(&workspace)],
+        )
+        .expect("workspace row");
+        conn.execute(
+            "INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at) \
+             VALUES ('p-1', 'ws-1', NULL, 'old', 'legacy body', 'todo', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("prompt row");
+    }
+    let database = Database::open(&path).expect("v1 upgrades to latest");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].content, "legacy body", "旧正文不改写");
+    assert_no_asset_tables(&database);
+    drop(database);
+    // 再次打开不重复迁移。
+    let reopened = Database::open(&path).expect("reopen ok");
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
+}
+
+/// 开发期 v2 的库（遗留附件表）：打开后数据保留，遗留表不再被读写。
+#[test]
+fn migrates_development_v2_database_keeping_data() {
+    let path = temp_db_path("v2-legacy");
+    let workspace = workspace_path("v2-legacy");
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let conn = Connection::open(&path).expect("open");
+        conn.execute_batch(SCHEMA).expect("v1 schema");
+        conn.execute_batch(
+            "CREATE TABLE managed_attachment_asset (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 external_id TEXT NOT NULL UNIQUE,
+                 path TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             CREATE TABLE workspace_prompt_attachment (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 external_id TEXT NOT NULL UNIQUE,
+                 prompt_id TEXT NOT NULL,
+                 managed_asset_id TEXT,
+                 external_path TEXT,
+                 position INTEGER NOT NULL,
+                 \"type\" TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );",
+        )
+        .expect("legacy attachment tables");
+        conn.execute(
+            "INSERT INTO workspace (external_id, name, \"type\", path, is_trusted, created_at, updated_at) \
+             VALUES ('ws-2', 'w', 'filesystem', ?1, 1, datetime('now'), datetime('now'))",
+            params![path_string(&workspace)],
+        )
+        .expect("workspace row");
+        conn.execute(
+            "INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at) \
+             VALUES ('p-2', 'ws-2', NULL, 'old', 'v2 body', 'todo', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("prompt row");
+        conn.execute_batch("PRAGMA user_version = 2;")
+            .expect("version");
+    }
+    let database = Database::open(&path).expect("v2 upgrades to current");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].content, "v2 body", "旧正文不改写");
+}
+
+/// 当前 Schema 的版本号。
+fn schema_version(database: &Database) -> i64 {
+    database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version")
+}
+
+/// 资产/附件表不存在：截图粘贴功能的表已从 Schema 移除。
+fn assert_no_asset_tables(database: &Database) {
+    for table in [
+        "managed_asset",
+        "managed_attachment_asset",
+        "workspace_prompt_attachment",
+    ] {
+        let count: i64 = database
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |row| row.get(0),
+            )
+            .expect("schema query");
+        assert_eq!(count, 0, "{table} table removed");
+    }
+}
+
+#[test]
+fn rejects_database_newer_than_supported() {
+    let path = temp_db_path("newer-schema");
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let conn = Connection::open(&path).expect("open");
+        conn.execute_batch("PRAGMA user_version = 99;")
+            .expect("version");
+    }
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("newer schema must be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, DbError::UnsupportedSchema(99)));
+}
+
+#[test]
+fn update_prompt_document_writes_content_and_rejects_unknown_row() {
+    let (database, _) = open_test_database("document-update");
+    let workspace = workspace_path("document-update");
+    let id = database
+        .create_prompt(&workspace, None, "p", "old")
+        .expect("create");
+    database
+        .update_prompt_document(id, "new")
+        .expect("update content");
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts[0].content, "new");
+    assert!(database.update_prompt_document(id + 999, "x").is_err());
+}
+
+#[test]
+fn deleting_folder_cascades_prompts() {
+    let (database, _) = open_test_database("folder-cascade");
+    let workspace = workspace_path("folder-cascade");
+    let folder = database
+        .create_folder(&workspace, None, "root")
+        .expect("folder");
+    database
+        .create_prompt(&workspace, Some(folder), "p", "")
+        .expect("create");
+    database.delete_folder(folder).expect("delete folder");
+    let count: i64 = database
+        .conn
+        .query_row("SELECT COUNT(*) FROM workspace_prompt", [], |row| {
+            row.get(0)
+        })
+        .expect("count");
+    assert_eq!(count, 0, "级联删除条目");
 }

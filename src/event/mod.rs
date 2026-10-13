@@ -1,6 +1,7 @@
 //! 唯一事件循环：tokio select 收敛键盘、PTY 输出与渲染调度。
 
 mod git;
+mod paste;
 mod trust;
 
 pub use trust::startup_trust;
@@ -19,7 +20,7 @@ use ratatui::layout::{Direction, Rect};
 use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 
-use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::actions::{Action, OverlayKey};
 use crate::app::markdown::MentionEntry;
 use crate::app::overlay::Overlay;
 use crate::app::prompt::PromptRowKind;
@@ -647,7 +648,7 @@ fn handle_terminal_event(
                 return;
             }
             if state.prompt_focused {
-                update::apply_editor(state, EditorCommand::InsertText(text));
+                paste::handle_terminal_paste(state, text);
                 *dirty = true;
                 return;
             }
@@ -836,6 +837,16 @@ fn handle_terminal_event(
                 {
                     update::begin_prompt_resize(state);
                     *dirty = true;
+                } else if let Some(index) =
+                    paste::paste_item_at(state, view, mouse.column, mouse.row)
+                {
+                    update::select_paste(state, index);
+                    *dirty = true;
+                } else if let Some(index) =
+                    paste::refer_item_at(state, view, mouse.column, mouse.row)
+                {
+                    update::select_refer(state, index);
+                    *dirty = true;
                 } else if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     update::select_mention(state, index);
                     *dirty = true;
@@ -900,7 +911,10 @@ fn handle_terminal_event(
                     let col = mouse.column - inner.x;
                     if pane == state.prompt.id() {
                         update::focus_prompt(state);
-                        if update::prompt_tree_mode(state) {
+                        if state.prompt.paste_panel().is_some() {
+                            // 粘贴面板打开时点击编辑区：关闭面板且不穿透、不移动光标。
+                            state.prompt.paste_cancel();
+                        } else if update::prompt_tree_mode(state) {
                             // 树视图：点击行选中；文件夹行同时折叠/展开。
                             let hit = ui::prompt::tree::row_at(
                                 inner,
@@ -1342,6 +1356,24 @@ fn handle_terminal_event(
                 item_hover_changed |= update::set_agent_hover(state, agent_hover);
                 if item_hover_changed {
                     *dirty = true;
+                }
+                if let Some(index) = paste::paste_item_at(state, view, mouse.column, mouse.row) {
+                    if update::hover_paste(state, index) {
+                        *dirty = true;
+                    }
+                    if update::clear_tooltip(state) {
+                        *dirty = true;
+                    }
+                    return;
+                }
+                if let Some(index) = paste::refer_item_at(state, view, mouse.column, mouse.row) {
+                    if update::hover_refer(state, index) {
+                        *dirty = true;
+                    }
+                    if update::clear_tooltip(state) {
+                        *dirty = true;
+                    }
+                    return;
                 }
                 if let Some(index) = mention_item_at(state, view, mouse.column, mouse.row) {
                     if update::hover_mention(state, index) {
@@ -1925,7 +1957,7 @@ fn open_right_click_menu(
     }
     // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
     if !state.prompt_collapsed && update::prompt_tree_mode(state) {
-        let area = layout::prompt_text_rect(view.prompt);
+        let area = paste::prompt_text_area(view);
         if area.contains((column, row).into()) {
             let hit = {
                 let panel = &state.prompt_owner().prompt_panel;
@@ -2172,7 +2204,7 @@ fn mention_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
@@ -2181,7 +2213,7 @@ fn mention_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::mention_layout(&state.prompt, area)
 }
 
@@ -2192,7 +2224,7 @@ fn panel_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::panel_item_at(&state.prompt, area, column, row)
 }
 
@@ -2201,7 +2233,7 @@ fn block_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::panel_layout(&state.prompt, area)
 }
 
@@ -2212,7 +2244,7 @@ fn slash_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::slash_item_at(&state.prompt, area, column, row)
 }
 
@@ -2221,7 +2253,7 @@ fn slash_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::slash_layout(&state.prompt, area)
 }
 
@@ -2232,7 +2264,7 @@ fn template_button_at(
     column: u16,
     row: u16,
 ) -> Option<ui::prompt::TemplateButtonHit> {
-    let area = layout::prompt_text_rect(view.prompt);
+    let area = paste::prompt_text_area(view);
     ui::prompt::template_button_at(&state.prompt, area, column, row)
 }
 
@@ -2285,7 +2317,7 @@ fn pane_content_inner(
     inner: Rect,
 ) -> Rect {
     if pane == state.prompt.id() {
-        layout::prompt_text_rect(view.prompt)
+        paste::prompt_text_area(view)
     } else {
         inner
     }

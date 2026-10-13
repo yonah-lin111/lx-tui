@@ -288,3 +288,42 @@ fn file_mention_tokens_scan_paths() {
         ]
     );
 }
+
+#[test]
+fn refer_tokens_carry_kind_specific_highlights() {
+    assert_eq!(
+        kinds("see @[refer-file](/tmp/a.md) and @[refer-folder](/tmp/dir)"),
+        vec![
+            (TokenKind::ReferFile, "@[refer-file](/tmp/a.md)"),
+            (TokenKind::ReferFolder, "@[refer-folder](/tmp/dir)"),
+        ]
+    );
+    assert_eq!(
+        kinds("@[refer-image](/tmp/a\\(1\\).png)"),
+        vec![(TokenKind::ReferImage, "@[refer-image](/tmp/a\\(1\\).png)")],
+        "括号转义的路径整段成一个引用 token"
+    );
+    assert_eq!(
+        kinds("@[refer-file](/a_b*c.md) tail"),
+        vec![(TokenKind::ReferFile, "@[refer-file](/a_b*c.md)")],
+        "引用整段成一个 token，路径里的 * 不参与强调解析"
+    );
+    assert_eq!(
+        kinds("@[refer-file](/a.md) @src/app.rs"),
+        vec![
+            (TokenKind::ReferFile, "@[refer-file](/a.md)"),
+            (TokenKind::FileMention, "@src/app.rs"),
+        ],
+        "引用与 @ 提及各自独立分类"
+    );
+    assert!(
+        !kinds("@[refer-unknown](/a.md)")
+            .iter()
+            .any(|(kind, _)| matches!(
+                kind,
+                TokenKind::ReferFile | TokenKind::ReferFolder | TokenKind::ReferImage
+            )),
+        "类型非法的标记不按引用着色"
+    );
+    assert_eq!(kinds("@[refer-file]"), vec![], "缺路径不成标记");
+}

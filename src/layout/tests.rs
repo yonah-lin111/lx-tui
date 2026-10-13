@@ -522,13 +522,20 @@ fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
         "窄屏时 [*] 仍在"
     );
 
-    // 内容区宽度 21：钉住按钮恢复显示，与左侧按钮组间隔 1 列。
-    let wide = Rect::new(0, 0, 23, 8);
+    // 内容区宽度 21：钉住按钮恢复显示。
+    let mid = Rect::new(0, 0, 23, 8);
+    assert!(
+        prompt_toolbar_button_rect(mid, PromptToolbarButton::Pin, false).is_some(),
+        "内容区 21 列时钉住按钮可见"
+    );
+
+    // 宽面板：钉住按钮紧邻 [*] 左侧、间隔 1 列。
+    let wide = Rect::new(0, 0, 27, 8);
     let pin =
         prompt_toolbar_button_rect(wide, PromptToolbarButton::Pin, false).expect("pin visible");
-    let redo =
-        prompt_toolbar_button_rect(wide, PromptToolbarButton::Redo, false).expect("redo visible");
-    assert_eq!(pin.x, redo.right() + 1, "不与 undo/redo 重叠");
+    let select_all = prompt_toolbar_button_rect(wide, PromptToolbarButton::SelectAll, false)
+        .expect("select all visible");
+    assert_eq!(pin.x, select_all.x - PROMPT_PIN_WIDTH - 1, "不与 [*] 重叠");
 }
 
 #[test]

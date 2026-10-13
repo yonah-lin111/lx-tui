@@ -102,6 +102,39 @@ fn prompt_focus_maps_editing_keys() {
 }
 
 #[test]
+fn prompt_focus_swallows_clipboard_paste_keys() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    // 图片/文件一律走路径引用，应用不再读取系统剪贴板：粘贴键在 prompt 内被吞掉。
+    for (code, modifiers) in [
+        (KeyCode::Char('v'), KeyModifiers::CONTROL),
+        (KeyCode::Char('V'), KeyModifiers::CONTROL),
+        (KeyCode::Char('v'), KeyModifiers::SUPER),
+        (
+            KeyCode::Char('V'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
+        ),
+    ] {
+        assert_eq!(
+            route_prompt(code, modifiers),
+            None,
+            "{code:?}+{modifiers:?} 在 prompt 中被吞掉"
+        );
+    }
+    assert!(
+        matches!(
+            route(
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                TermMode::empty(),
+                false
+            ),
+            Some(Routed::Pane(_))
+        ),
+        "prompt 未聚焦时 Ctrl+V 照常写入 PTY"
+    );
+}
+
+#[test]
 fn prompt_focus_maps_save_keys() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);

@@ -212,6 +212,30 @@ pub fn markdown_file_mention() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
+/// `@[refer-file](path)` 文件引用：LightGreen 下划线（与 @ 提及的 Yellow 区分）。
+pub fn markdown_refer_file() -> Style {
+    Style::default()
+        .fg(Color::LightGreen)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// `@[refer-folder](path)` 目录引用：橙（Indexed 208）下划线。
+///
+/// 固定 256 色橙：与 file 亮绿、image 亮品红、`@` 提及黄都能一眼分开，
+/// 且不占用主题蓝/青（边框、URL、link 已用）。
+pub fn markdown_refer_folder() -> Style {
+    Style::default()
+        .fg(Color::Indexed(208))
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// `@[refer-image](path)` 图片引用：LightMagenta 下划线。
+pub fn markdown_refer_image() -> Style {
+    Style::default()
+        .fg(Color::LightMagenta)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
 /// 模板块操作按钮：常态次要信息。
 pub fn template_button() -> Style {
     muted()

@@ -147,6 +147,7 @@ impl Persistence {
                 let Some(id) =
                     self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, &content))
                 else {
+                    // 失败：TempPrompt 仍在，保存选择器可重试。
                     return false;
                 };
                 let changed = self.reload_tree(state, &workspace);
@@ -181,9 +182,32 @@ impl Persistence {
                 self.with_db(|db| db.delete_prompt(id));
                 self.reload_tree(state, &workspace)
             }
-            Effect::SavePromptContent { id, content, .. } => {
-                self.with_db(|db| db.update_prompt_content(id, &content));
-                false
+            Effect::SavePromptContent {
+                id,
+                content,
+                prompt,
+                revision,
+                ..
+            } => {
+                let saved = self.with_db(|db| db.update_prompt_document(id, &content));
+                if saved.is_some() {
+                    update::mark_prompt_item_persisted(state, id);
+                    update::mark_prompt_saved(state, prompt, revision);
+                    true
+                } else {
+                    // 失败：保留脏状态与待保存内容，下一轮静置重试并给出可见反馈。
+                    update::reset_prompt_autosave(state, prompt);
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Error,
+                            text::TOAST_PROMPT_SAVE_FAILED,
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    true
+                }
             }
             Effect::SetPromptStatus { id, status, .. } => {
                 self.with_db(|db| db.update_prompt_status(id, status.as_str()));

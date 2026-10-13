@@ -15,7 +15,6 @@ pub const PROMPT_DIVIDER_HEIGHT: u16 = 1;
 pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEIGHT;
 /// 树视图顶部固定行数（搜索框 + 分割线）。
 pub const PROMPT_TREE_HEADER_HEIGHT: u16 = 2;
-
 /// prompt 模板块边框占位：左侧（`╭─`/`│ `/`╰─`）与右侧竖线（`╮`/`│`/`╯`）列数。
 pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
@@ -693,6 +692,11 @@ pub fn prompt_text_rect(panel: Rect) -> Rect {
     }
 }
 
+/// prompt 可点击内容区（文本区，不含滚动条槽）：面板锚点与命中用。
+pub fn prompt_content_rect(panel: Rect) -> Rect {
+    prompt_text_rect(panel)
+}
+
 /// prompt 滚动条槽矩形：与文本区起始行及高度一致，取内容区最右一列；内容区过窄时为 None。
 pub fn prompt_scrollbar_rect(panel: Rect) -> Option<Rect> {
     let inner = prompt_body_rect(pane_inner_rect(panel));
@@ -715,7 +719,8 @@ pub fn prompt_tree_scrollbar_rect(panel: Rect) -> Option<Rect> {
     ))
 }
 
-/// prompt 内容区扣除顶部表头后的文本/滚动条区域；高度不足时表头隐藏、退回全部内容区。
+/// prompt 内容区扣除顶部表头与附件条后的文本/滚动条区域；
+/// 高度不足时表头/附件条隐藏、退回全部内容区。
 fn prompt_body_rect(inner: Rect) -> Rect {
     if inner.height > PROMPT_HEADER_HEIGHT {
         Rect {

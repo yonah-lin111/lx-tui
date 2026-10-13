@@ -1,6 +1,6 @@
 //! 行首列表项解析：标记、任务项、续写标记与上文关系判定；纯函数、无 UI 依赖。
 
-use super::line_start;
+use super::{EditKind, is_fence, line_end, line_start};
 
 /// 行首列表项标记类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,5 +157,114 @@ fn bullet_marker(kind: ListKind) -> Option<char> {
     match kind {
         ListKind::Bullet(marker) | ListKind::Task(marker) => Some(marker),
         ListKind::Ordered { .. } => None,
+    }
+}
+
+use super::Prompt;
+
+impl Prompt {
+    /// 列表项续写换行；返回是否已按列表语义处理。
+    pub(super) fn continue_list(&mut self) -> bool {
+        let start = line_start(&self.text, self.cursor);
+        let end = line_end(&self.text, self.cursor);
+        let Some(item) = parse_list_item(&self.text[start..end]) else {
+            return false;
+        };
+        if self.cursor - start < item.marker_end {
+            return false;
+        }
+        if self.text[start + item.marker_end..end].trim().is_empty() {
+            let replacement = if item.indent == 0 {
+                String::new()
+            } else {
+                self.outer_list_prefix(start, item.indent)
+                    .unwrap_or_default()
+            };
+            self.record(EditKind::Other);
+            self.text
+                .replace_range(start..start + item.marker_end, &replacement);
+            self.cursor = start + replacement.len();
+            self.settle();
+            return true;
+        }
+        let insert = format!("\n{}{}", " ".repeat(item.indent), item.continuation());
+        self.record(EditKind::Other);
+        self.text.insert_str(self.cursor, &insert);
+        self.cursor += insert.len();
+        self.settle();
+        true
+    }
+    /// 沿上文找最近的低缩进列表项，返回其缩进+标记，用于空项退出层级。
+    pub(super) fn outer_list_prefix(
+        &self,
+        line_start_offset: usize,
+        indent: usize,
+    ) -> Option<String> {
+        self.text[..line_start_offset]
+            .split('\n')
+            .rev()
+            .find_map(|line| {
+                let item = parse_list_item(line)?;
+                (item.indent < indent)
+                    .then(|| format!("{}{}", " ".repeat(item.indent), item.continuation()))
+            })
+    }
+    /// Backspace 的列表标记删除；对齐 lx-agent（CodeMirror `deleteMarkupBackward`）。
+    ///
+    /// 光标与分隔空格之间只剩空格时先删这些多余空格；在分隔空格处，
+    /// 同列表非首项替换为等宽空格，列表首项整段删除（顶层含缩进，嵌套保留缩进）。
+    pub(super) fn delete_list_markup(&mut self) -> bool {
+        let start = line_start(&self.text, self.cursor);
+        let end = line_end(&self.text, self.cursor);
+        let line = &self.text[start..end];
+        let Some(item) = parse_list_item(line) else {
+            return false;
+        };
+        let offset = self.cursor - start;
+        if offset > item.sep_end {
+            if !line[item.sep_end..offset].bytes().all(|byte| byte == b' ') {
+                return false;
+            }
+            self.record(EditKind::Delete);
+            self.text
+                .replace_range(start + item.sep_end..self.cursor, "");
+            self.cursor = start + item.sep_end;
+            self.settle();
+            return true;
+        }
+        if offset < item.sep_end {
+            return false;
+        }
+        self.record(EditKind::Delete);
+        match list_context(&self.text, start, &item) {
+            ListContext::Sibling => {
+                let blanks = " ".repeat(item.sep_end - item.indent);
+                self.text
+                    .replace_range(start + item.indent..start + item.sep_end, &blanks);
+                self.cursor = start + item.sep_end;
+            }
+            ListContext::Nested => {
+                self.text
+                    .replace_range(start + item.indent..start + item.sep_end, "");
+                self.cursor = start + item.indent;
+            }
+            ListContext::TopLevel => {
+                self.text.replace_range(start..start + item.sep_end, "");
+                self.cursor = start;
+            }
+        }
+        self.settle();
+        true
+    }
+    /// 光标所在行是否位于未闭合的围栏代码块内。
+    pub(super) fn in_fence(&self) -> bool {
+        let start = line_start(&self.text, self.cursor);
+        let mut fence = false;
+        for line in self.text[..start].split('\n') {
+            if is_fence(line) {
+                fence = !fence;
+            }
+        }
+        fence
     }
 }

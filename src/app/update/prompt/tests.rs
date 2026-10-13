@@ -1,11 +1,13 @@
 //! 提示词树行为单元测试：视图切换、导航、菜单命令分发与编辑提交。
 
 use super::*;
-use crate::app::actions::EditorCommand;
-use crate::app::overlay::{MenuCommand, NewNodeKind, Overlay, OverlayTarget};
+use crate::app::actions::{Action, EditorCommand};
+use crate::app::overlay::{ConfirmClose, MenuCommand, NewNodeKind, Overlay, OverlayTarget};
 use crate::app::prompt::PromptSection;
 use crate::app::state::AppState;
-use crate::app::update::{apply_editor, apply_overlay_key, tick};
+use crate::app::update::{
+    apply, apply_editor, apply_overlay_key, create_workspace, tick, toggle_prompt_pin,
+};
 use crate::db::{FolderRecord, PromptRecord};
 use std::time::{Duration, Instant};
 
@@ -1079,7 +1081,13 @@ fn autosave_commits_item_after_idle_delay() {
         tick(&mut state, now + Duration::from_millis(800)),
         "静置达标触发保存"
     );
-    assert!(state.prompt.is_saved(), "落库后复位为已保存");
+    assert!(!state.prompt.is_saved(), "保存回执（服务）到达前保持未保存");
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    assert!(crate::app::update::mark_prompt_saved(
+        &mut state, prompt, revision
+    ));
+    assert!(state.prompt.is_saved(), "回执确认后复位为已保存");
     assert!(
         state
             .effects
@@ -1119,6 +1127,11 @@ fn autosave_resets_timer_on_new_edits() {
         tick(&mut state, now + Duration::from_millis(1500)),
         "距新起点达标"
     );
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    assert!(crate::app::update::mark_prompt_saved(
+        &mut state, prompt, revision
+    ));
     assert!(state.prompt.is_saved());
 }
 
@@ -1192,9 +1205,15 @@ fn next_deadline_includes_prompt_autosave() {
     assert!(!tick(&mut state, now), "首个观察点只记录计时");
     let deadline = crate::app::update::next_deadline(&state).expect("自动保存待触发");
     assert!(tick(&mut state, deadline), "到期唤醒触发保存");
+    // 回执未到时仍安排重试；模拟服务回执确认后不再有待触发。
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    assert!(crate::app::update::mark_prompt_saved(
+        &mut state, prompt, revision
+    ));
     assert!(
         crate::app::update::next_deadline(&state).is_none(),
-        "保存后无待触发"
+        "确认后无待触发"
     );
 
     // 临时提示词不产生自动保存期限（空闲不轮询）。
@@ -1203,4 +1222,168 @@ fn next_deadline_includes_prompt_autosave() {
     state.prompt.insert_str("x");
     assert!(!tick(&mut state, Instant::now()));
     assert!(crate::app::update::next_deadline(&state).is_none());
+}
+
+// ===== 粘贴提案与保存门禁 =====
+
+/// 打开 `nested` 条目编辑视图：条目编辑态才参与自动保存。
+fn item_editing_state() -> AppState {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    move_prompt_selection(&mut state, 3, 8);
+    assert!(activate_prompt_row(&mut state));
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
+    state
+}
+
+/// 在光标处写入路径占位并打开粘贴面板。
+fn stage_paste(state: &mut AppState) {
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(state.prompt.cursor());
+    let request = state.prompt.begin_paste_read(anchor);
+    let candidate = crate::app::prompt::PasteCandidate::external(
+        std::path::PathBuf::from("/tmp/a.txt"),
+        crate::app::prompt::PasteCandidateKind::File,
+    );
+    assert!(state.prompt.paste_stage(request, vec![candidate]));
+    assert!(state.prompt.paste_panel().is_some());
+}
+
+#[test]
+fn autosave_defers_while_paste_proposal_open() {
+    let mut state = item_editing_state();
+    stage_paste(&mut state);
+    state.effects.clear();
+    let now = Instant::now();
+    assert!(!tick(&mut state, now));
+    assert!(
+        !tick(&mut state, now + Duration::from_millis(900)),
+        "提案未收束不触发自动保存"
+    );
+    assert!(state.effects.is_empty(), "占位文本不落库");
+    assert!(!state.prompt.is_saved(), "仍为脏状态");
+    assert!(
+        crate::app::update::next_deadline(&state).is_none(),
+        "提案未收束不安排唤醒（空闲不轮询）"
+    );
+
+    // 面板收束（路径确认）后恢复自动保存。
+    assert!(
+        state
+            .prompt
+            .paste_confirm(crate::app::prompt::PasteAction::Path)
+    );
+    assert!(!tick(&mut state, now + Duration::from_millis(1800)));
+    assert!(tick(&mut state, now + Duration::from_millis(3000)));
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { .. })),
+        "面板关闭后落库"
+    );
+}
+
+#[test]
+fn manual_save_is_ignored_while_paste_proposal_open() {
+    let mut state = item_editing_state();
+    stage_paste(&mut state);
+    state.effects.clear();
+    save_prompt_shortcut(&mut state);
+    assert!(state.effects.is_empty(), "占位文本不落库");
+    assert!(!state.prompt.is_saved(), "不改已保存态");
+    assert!(state.prompt.paste_panel().is_some(), "面板保持打开");
+
+    assert!(
+        state
+            .prompt
+            .paste_confirm(crate::app::prompt::PasteAction::Path)
+    );
+    save_prompt_shortcut(&mut state);
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::SavePromptContent { .. })),
+        "面板关闭后可手动保存"
+    );
+}
+
+/// 落库效应里的正文；无保存效应时 panic。
+fn saved_content(state: &AppState) -> String {
+    state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::SavePromptContent { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("条目保存效应")
+}
+
+/// 打开条目 `nested`、写入未保存的 `X`、再打开粘贴提案。
+fn item_editing_with_paste() -> AppState {
+    let mut state = item_editing_state();
+    state.prompt.insert_str("X");
+    stage_paste(&mut state);
+    state.effects.clear();
+    state
+}
+
+#[test]
+fn switching_to_tree_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    show_prompt_tree(&mut state);
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(12)
+            .expect("item 12")
+            .content,
+        "nested contentX",
+        "条目内容为粘贴前正文"
+    );
+}
+
+#[test]
+fn switching_to_temp_prompt_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    assert!(open_temp_prompt(&mut state));
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
+}
+
+#[test]
+fn quit_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    apply(Action::Quit, &mut state);
+    assert!(state.should_quit);
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "退出前提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
+}
+
+#[test]
+fn closing_displayed_workspace_commits_pre_paste_edits_without_placeholder() {
+    let mut state = item_editing_with_paste();
+    // 钉住 ws0：新建工作区不切换显示，粘贴提案仍属于被关闭的显示工作区。
+    toggle_prompt_pin(&mut state);
+    create_workspace(&mut state);
+    assert_eq!(state.prompt_workspace(), 0);
+    state.effects.clear();
+    state.overlay = Some(Overlay::ConfirmClose(ConfirmClose {
+        target: OverlayTarget::Workspace(0),
+    }));
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert_eq!(state.workspaces.len(), 1);
+    let content = saved_content(&state);
+    assert_eq!(content, "nested contentX", "关闭前提交粘贴前的正文");
+    assert!(!content.contains("/tmp/a.txt"), "占位文本不落库");
 }

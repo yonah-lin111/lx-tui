@@ -52,6 +52,8 @@ pub fn apply_prompt_tree(
     let folders: Vec<PromptFolder> = folders.into_iter().map(PromptFolder::from).collect();
     let prompts: Vec<PromptItem> = prompts.into_iter().map(PromptItem::from).collect();
     workspace_state.prompt_panel.tree.replace(folders, prompts);
+    // 重载后的条目内容即数据库状态，未确认标记全部失效。
+    workspace_state.prompt_panel.clear_pending_saves();
     workspace_state.prompt_panel.loaded = true;
     workspace_state.prompt_panel.clamp_selection(visible);
     true
@@ -138,7 +140,11 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 }
 
 /// 提交指定工作区的编辑器缓冲（其为显示态时缓冲位于 `state.prompt`）。
+///
+/// 粘贴提案未收束时先取消提案回滚占位：占位只是待改写的中转态，取消无法逆向写库，
+/// 因此占位文本绝不落库；随后的提交只落粘贴前的正文，切换编辑目标/退出不丢编辑。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
+    state.prompt.paste_cancel();
     let Some(target) = state
         .workspaces
         .get(workspace)
@@ -147,6 +153,8 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
         return;
     };
     let content = state.prompt.text().to_string();
+    let prompt = state.prompt.id();
+    let revision = state.prompt.revision();
     match target {
         PromptEditing::Temp(id) => {
             if let Some(workspace_state) = state.workspaces.get_mut(workspace)
@@ -163,21 +171,34 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
             else {
                 return;
             };
-            let Some(item) = state
+            let pending = state
                 .workspaces
-                .get_mut(workspace)
-                .and_then(|workspace| workspace.prompt_panel.tree.item_mut(id))
-            else {
-                return;
-            };
-            if item.content == content {
-                return;
+                .get(workspace)
+                .is_some_and(|workspace| workspace.prompt_panel.item_pending(id));
+            {
+                let Some(item) = state
+                    .workspaces
+                    .get_mut(workspace)
+                    .and_then(|workspace| workspace.prompt_panel.tree.item_mut(id))
+                else {
+                    return;
+                };
+                if item.content == content && !pending {
+                    // 内容与库中一致且无未确认保存：直接确认对应修订，避免空转自动保存。
+                    state.prompt.confirm_saved(revision);
+                    return;
+                }
+                item.content.clone_from(&content);
             }
-            item.content.clone_from(&content);
+            if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+                workspace_state.prompt_panel.mark_item_pending(id);
+            }
             state.effects.push(Effect::SavePromptContent {
                 workspace: cwd,
                 id,
                 content,
+                prompt,
+                revision,
             });
         }
     }
@@ -448,6 +469,10 @@ pub fn clear_prompt_search(state: &mut AppState) -> bool {
 
 /// 立即保存（工具栏圆点）：条目提交落库；临时提示词提交缓冲后打开保存到文件夹选择器。
 pub fn save_prompt_now(state: &mut AppState) {
+    // 粘贴提案未收束：占位文本不得落库，也不改已保存态（面板收束后再保存）。
+    if state.prompt.paste_panel().is_some() {
+        return;
+    }
     if prompt_temp_editing(state) {
         commit_editing_prompt(state);
         open_save_draft(state);
@@ -791,6 +816,53 @@ fn clear_search_for(state: &mut AppState, workspace: usize) {
     if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
         workspace_state.prompt_panel.search.clear();
     }
+}
+
+/// 保存成功回执：按编辑器标识把对应修订标记为已保存（显示中或挂起草稿）。
+pub fn mark_prompt_saved(
+    state: &mut AppState,
+    prompt: crate::layout::PaneId,
+    revision: u64,
+) -> bool {
+    if state.prompt.id() == prompt {
+        return state.prompt.confirm_saved(revision);
+    }
+    for workspace in &mut state.workspaces {
+        if let Some(draft) = workspace.prompt.as_mut()
+            && draft.editor.id() == prompt
+        {
+            return draft.editor.confirm_saved(revision);
+        }
+    }
+    false
+}
+
+/// 保存成功：清除条目的待确认标记（内存内容即数据库状态）。
+pub fn mark_prompt_item_persisted(state: &mut AppState, id: i64) -> bool {
+    for workspace in &mut state.workspaces {
+        if workspace.prompt_panel.tree.item(id).is_some() {
+            workspace.prompt_panel.clear_item_pending(id);
+            return true;
+        }
+    }
+    false
+}
+
+/// 保存失败：重置对应编辑器的自动保存观察，等待下一轮静置重试。
+pub fn reset_prompt_autosave(state: &mut AppState, prompt: crate::layout::PaneId) -> bool {
+    if state.prompt.id() == prompt {
+        state.prompt.reset_autosave_watch();
+        return true;
+    }
+    for workspace in &mut state.workspaces {
+        if let Some(draft) = workspace.prompt.as_mut()
+            && draft.editor.id() == prompt
+        {
+            draft.editor.reset_autosave_watch();
+            return true;
+        }
+    }
+    false
 }
 
 /// 滚动树视口；越界钳制；返回是否变化。

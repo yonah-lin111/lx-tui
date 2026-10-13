@@ -201,6 +201,8 @@ fn save_and_status_effects_persist() {
         workspace: cwd.clone(),
         id,
         content: "hello".into(),
+        prompt: state.prompt.id(),
+        revision: state.prompt.revision(),
     });
     state.effects.push(Effect::SetPromptStatus {
         workspace: cwd.clone(),
@@ -369,4 +371,89 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
     assert_eq!(item.folder_id, Some(folder_id));
     assert_eq!(item.content, "body");
     assert!(panel.temp(temp_id).is_none());
+}
+
+#[test]
+fn save_draft_effect_moves_temp_into_tree() {
+    let (mut service, mut state, cwd, _) = trusted_service("draft-move");
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound by default");
+    };
+    {
+        let temp = state.workspaces[0]
+            .prompt_panel
+            .temp_mut(temp_id)
+            .expect("temp exists");
+        temp.content = "draft body".into();
+    }
+    state.effects.push(Effect::SaveDraft {
+        workspace: cwd.clone(),
+        folder_id: None,
+        name: "New prompt".into(),
+        content: "draft body".into(),
+    });
+    assert!(service.pump(&mut state));
+    let item = &state.workspaces[0].prompt_panel.tree.items()[0];
+    assert_eq!(item.content, "draft body");
+    let prompts = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&cwd)
+        .expect("list");
+    assert_eq!(prompts[0].content, "draft body");
+}
+
+#[test]
+fn save_prompt_content_confirms_revision_and_clears_pending() {
+    let (mut service, mut state, cwd, _) = trusted_service("save-confirm");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(&cwd, None, "p", "old")
+        .expect("seed");
+    service.pump(&mut state);
+    let id = state.workspaces[0].prompt_panel.tree.items()[0].id;
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    state.prompt.insert_str(" edited");
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    state.effects.push(Effect::SavePromptContent {
+        workspace: cwd.clone(),
+        id,
+        content: "old edited".into(),
+        prompt,
+        revision,
+    });
+    assert!(service.pump(&mut state));
+    assert!(state.prompt.is_saved(), "成功回执确认对应修订");
+    assert!(!state.workspaces[0].prompt_panel.item_pending(id));
+    let prompts = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&cwd)
+        .expect("list");
+    assert_eq!(prompts[0].content, "old edited");
+}
+
+#[test]
+fn save_prompt_content_failure_keeps_dirty_and_pending() {
+    let (mut service, mut state, cwd, _) = trusted_service("save-failure");
+    state.prompt.insert_str("body");
+    assert!(!state.prompt.is_saved());
+    let prompt = state.prompt.id();
+    let revision = state.prompt.revision();
+    // 指向不存在的条目：数据库写入失败。
+    state.effects.push(Effect::SavePromptContent {
+        workspace: cwd.clone(),
+        id: 999,
+        content: "body".into(),
+        prompt,
+        revision,
+    });
+    service.pump(&mut state);
+    assert!(!state.prompt.is_saved(), "失败保留脏状态等待重试");
+    assert!(state.toast.is_some(), "失败给出可见反馈");
 }

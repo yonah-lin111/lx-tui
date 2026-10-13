@@ -329,6 +329,11 @@ impl MentionState {
         true
     }
 
+    /// 当前扫描缓存；未扫描时为 None（快捷候选的目录判定用）。
+    pub fn entries(&self) -> &[MentionEntry] {
+        self.cache.as_deref().unwrap_or_default()
+    }
+
     /// 失焦或折叠时清空面板并作废在途结果。
     pub fn clear(&mut self) {
         self.panel = None;

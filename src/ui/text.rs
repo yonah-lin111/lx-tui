@@ -369,12 +369,37 @@ pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
 /// 设置服务不可用时的提示。
 pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 
+/// 提示词保存失败：内容保留脏状态，自动保存将重试。
+pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
+
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
 pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";
 
 /// tooltip 边框标题；当前所有按钮共用一个固定标题。
 pub const TOOLTIP_TITLE: &str = "Tooltip";
+
+/// 粘贴二级面板与附件条文案。
+pub const PASTE_PANEL_TITLE: &str = "Paste";
+pub const PASTE_ACTION_REFERENCE: &str = "Insert reference";
+pub const PASTE_ACTION_PATH: &str = "Insert path";
+pub const PASTE_REFERENCE_UNSUPPORTED: &str = "path cannot be referenced";
+/// 字母快捷候选面板标题。
+pub const REFER_PANEL_TITLE: &str = "References";
+/// 附件条：类型标签、缺失状态与移除按钮。
+pub const PROMPT_ATTACH_FILE_TAG: &str = "[file]";
+pub const PROMPT_ATTACH_IMAGE_TAG: &str = "[img]";
+pub const PROMPT_ATTACH_MISSING: &str = "(missing)";
+pub const PROMPT_ATTACH_REMOVE: &str = "[x]";
+
+/// 粘贴候选数量说明。
+pub fn paste_item_count(count: usize) -> String {
+    if count == 1 {
+        "1 item".to_string()
+    } else {
+        format!("{count} items")
+    }
+}
 
 /// 按钮 tooltip 文案：显示点击后的动作，随按钮当前状态翻转（收起/展开、钉住、切换视图）。
 pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {

@@ -52,11 +52,14 @@ pub enum Effect {
     },
     /// 删除提示词。
     DeletePrompt { workspace: PathBuf, id: i64 },
-    /// 保存提示词正文。
+    /// 保存提示词正文；回执携带修订号，成功后只确认对应修订。
     SavePromptContent {
         workspace: PathBuf,
         id: i64,
         content: String,
+        /// 发起保存时的 prompt 编辑器标识与内容修订号。
+        prompt: crate::layout::PaneId,
+        revision: u64,
     },
     /// 更新提示词状态。
     SetPromptStatus {

@@ -1,10 +1,14 @@
-//! 平台能力：剪贴板写入、鼠标捕获与默认 shell；OS 专属代码唯一落点。
+//! 平台能力：剪贴板写入、粘贴路径解析、鼠标捕获与默认 shell；OS 专属代码唯一落点。
 
 use std::io::{self, IsTerminal, Write};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+
+mod paste_path;
+pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 
 /// 原生复制命令的等待上限；超时终止，避免剪贴板被占用时无限阻塞。
 const NATIVE_COPY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -86,6 +90,18 @@ pub fn default_shell() -> String {
     #[cfg(not(windows))]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     shell
+}
+
+/// 路径稳定比较键：Windows 大小写不敏感，其余平台取原文本。
+pub fn path_key(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
 }
 
 /// 读取进程当前工作目录；平台不支持、进程已退出或无权限时返回 None。

@@ -377,6 +377,8 @@ pub struct PromptPanel {
     tree_selection_touched: bool,
     /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
     pub search: TextInput,
+    /// 已更新内存但数据库尚未确认的条目 ID（自动保存重试判定）。
+    pending_saves: Vec<i64>,
 }
 
 impl PromptPanel {
@@ -397,7 +399,30 @@ impl PromptPanel {
             tree_return: None,
             tree_selection_touched: false,
             search: TextInput::new(""),
+            pending_saves: Vec::new(),
         }
+    }
+
+    /// 标记条目已写入内存、等待数据库确认。
+    pub fn mark_item_pending(&mut self, id: i64) {
+        if !self.pending_saves.contains(&id) {
+            self.pending_saves.push(id);
+        }
+    }
+
+    /// 清除条目的待确认标记（保存成功或树从数据库重载后）。
+    pub fn clear_item_pending(&mut self, id: i64) {
+        self.pending_saves.retain(|pending| *pending != id);
+    }
+
+    /// 条目是否有未确认的保存。
+    pub fn item_pending(&self, id: i64) -> bool {
+        self.pending_saves.contains(&id)
+    }
+
+    /// 清除全部待确认标记（树重载：条目内容即数据库状态）。
+    pub fn clear_pending_saves(&mut self) {
+        self.pending_saves.clear();
     }
 
     /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白绑定清除之后调用）。
@@ -456,6 +481,11 @@ impl PromptPanel {
     /// 按 id 取临时提示词。
     pub fn temp(&self, id: u64) -> Option<&TempPrompt> {
         self.temps.iter().find(|temp| temp.id == id)
+    }
+
+    /// 全部临时提示词（内存引用扫描用）。
+    pub fn temps(&self) -> &[TempPrompt] {
+        &self.temps
     }
 
     /// 按 id 取临时提示词（可变）。

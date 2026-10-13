@@ -1,9 +1,13 @@
 //! markdown 编辑领域：块命令、文件提及与模板斜杠命令的触发识别、候选过滤与插入计算，纯函数、无 UI 依赖。
 
+mod refer;
+mod refer_shortcut;
 mod slash;
 mod template;
 mod worktree;
 
+pub use refer::*;
+pub use refer_shortcut::*;
 pub use slash::*;
 pub use template::*;
 pub use worktree::*;
@@ -506,7 +510,10 @@ pub fn mention_deletion_range(text: &str, cursor: usize) -> Option<Range<usize>>
         .map(|range| range.start..cursor)
 }
 
-/// 全文中的 @ 提及区间：`@` 位于行首或空白之后，路径由查询字符组成且非空。
+/// 全文中的 @ 提及区间：`@` 位于行首或空白之后，路径由查询字符组成且非空；跳过代码围栏。
+///
+/// 与 `parse_references_in` 同一排除规则：围栏内的 `@abc` 是示例文本而非提及，
+/// 既不作为快捷候选，也不按整块删除。
 fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut index = 0;
@@ -516,7 +523,7 @@ fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
             .chars()
             .next_back()
             .is_none_or(|previous| previous.is_whitespace());
-        if boundary {
+        if boundary && open_fence(&text[..at]).is_none() {
             let mut end = at + 1;
             for ch in text[end..].chars() {
                 if !is_mention_query_char(ch) || ch == '@' {
@@ -533,6 +540,24 @@ fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
         }
     }
     ranges
+}
+
+/// 光标紧跟 `@[refer-*](path) ` 末尾空白时一次性删除整段引用（含尾随空白）。
+///
+/// 与 `mention_deletion_range` 同构：只有标记完整结束于光标前的空白处才命中。
+pub fn reference_deletion_range(text: &str, cursor: usize) -> Option<Range<usize>> {
+    if cursor == 0 || cursor > text.len() || !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let previous = text[..cursor].chars().next_back()?;
+    if previous != ' ' && previous != '\t' {
+        return None;
+    }
+    let end = cursor - previous.len_utf8();
+    parse_references_in(text, 0, end)
+        .into_iter()
+        .find(|reference| reference.range.end == end)
+        .map(|reference| reference.range.start..cursor)
 }
 
 /// 行首标记匹配；返回类别与标记在行内的起始偏移（跳过前导空格）。
