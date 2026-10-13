@@ -110,6 +110,135 @@ async fn page_requires_token_and_serves_self_contained_html() {
 }
 
 #[tokio::test]
+async fn page_locks_viewport_and_avoids_extra_scrollbars() {
+    let (service, _events, _dir) = start("page-layout").await;
+    let token = service.token().to_string();
+    let response = request(service.port(), &get(&format!("/?token={token}"))).await;
+    assert_eq!(status(&response), 200);
+    let html = body(&response);
+
+    // 根容器锁定视口高度，永不出现根滚动条。
+    assert!(
+        html.contains("html, body { height: 100%; }"),
+        "viewport height locked"
+    );
+    assert!(
+        html.contains("display: flex; overflow: hidden;"),
+        "body overflow hidden"
+    );
+    // 宽屏时命令网格的行高被视口约束，滚动只发生在栏内。
+    assert!(
+        html.contains("grid-template-rows: minmax(0, 1fr)"),
+        "wide grid rows bounded by viewport"
+    );
+    assert!(
+        html.contains("grid-template-rows: max-content max-content"),
+        "narrow stacked grid sizes rows to content and scrolls inside"
+    );
+    // 左栏列表独立滚动但隐藏滚动条；右栏卡片依赖细滚动条兜底。
+    assert!(
+        html.contains(".command-list::-webkit-scrollbar { display: none; }"),
+        "left list scrollbar hidden"
+    );
+    assert!(
+        html.contains(".editor-body::-webkit-scrollbar { width: 8px; }"),
+        "editor fallback scrollbar styled"
+    );
+    assert!(
+        html.contains("scrollbar-width: thin"),
+        "editor fallback scrollbar thin"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn page_editor_supports_rename_flow() {
+    let (service, _events, _dir) = start("page-rename").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    // HTML/JS 层：Name 输入不再被禁用；保存时先调 rename 再 PUT。
+    let page = request(port, &get(&format!("/?token={token}"))).await;
+    assert_eq!(status(&page), 200);
+    let html = body(&page);
+    assert!(!html.contains(".disabled"), "name input never disabled");
+    assert!(html.contains("'/rename'"), "rename endpoint wired");
+    assert!(
+        html.contains("JSON.stringify({to: name})"),
+        "rename payload wired"
+    );
+
+    // 协议层：复刻前端保存序列（先 rename 后 PUT 新路径），内容跟随新名。
+    let origin = Some(format!("http://127.0.0.1:{port}"));
+    let payload = "{\"description\":\"d\",\"md_scope\":\"global\",\"body\":\"first\"}";
+    let created = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/commands/user/agentMD/alpha?token={token}"),
+            payload,
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&created), 200, "{created}");
+    let renamed = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/commands/user/agentMD/alpha/rename?token={token}"),
+            "{\"to\":\"beta\"}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&renamed), 200, "{renamed}");
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/commands/user/agentMD/beta?token={token}"),
+            "{\"description\":\"d\",\"md_scope\":\"global\",\"body\":\"second\"}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "{saved}");
+    let state = request(port, &get(&format!("/api/state?token={token}"))).await;
+    let state_body = body(&state);
+    assert!(state_body.contains("\"name\":\"beta\""), "{state_body}");
+    assert!(!state_body.contains("\"name\":\"alpha\""), "{state_body}");
+    assert!(state_body.contains("second"), "{state_body}");
+
+    // 改到已存在的名字必须失败，主流程因此不会覆盖另一条命令。
+    let created = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/commands/user/agentMD/gamma?token={token}"),
+            payload,
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&created), 200, "{created}");
+    let conflict = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/commands/user/agentMD/beta/rename?token={token}"),
+            "{\"to\":\"gamma\"}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&conflict), 422, "{conflict}");
+    let state = request(port, &get(&format!("/api/state?token={token}"))).await;
+    assert!(body(&state).contains("\"name\":\"beta\""), "beta kept");
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn state_returns_config_defaults() {
     let (service, _events, _dir) = start("state").await;
     let token = service.token().to_string();

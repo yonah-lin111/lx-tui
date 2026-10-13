@@ -28,20 +28,24 @@ const PAGE: &str = r#"<!DOCTYPE html>
   --err: #f87171;
 }
 * { box-sizing: border-box; }
-body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; min-height: 100vh; background: var(--bg); color: var(--text); }
-nav.side { width: 200px; border-right: 1px solid var(--border); padding: 16px 0; background: var(--panel); }
+html, body { height: 100%; }
+body { margin: 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; display: flex; overflow: hidden; background: var(--bg); color: var(--text); }
+nav.side { width: 200px; flex-shrink: 0; border-right: 1px solid var(--border); padding: 16px 0; background: var(--panel); }
 nav.side h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 nav.side button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; border-left: 2px solid transparent; background: none; font: inherit; cursor: pointer; color: var(--muted); }
 nav.side button:hover { color: var(--text); background: #151515; }
 nav.side button.active { background: #161616; color: var(--accent); border-left-color: var(--accent); font-weight: 600; }
-main { flex: 1; padding: 24px; max-width: 1440px; }
+main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; max-width: 1440px; }
+.view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+.view.hidden { display: none; }
+#view-general { overflow-y: auto; }
 h2 { font-size: 16px; margin: 0 0 16px; }
 fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0 0 16px; padding: 12px; background: var(--panel); }
 legend { font-size: 12px; color: var(--muted); padding: 0 6px; }
 label { display: block; margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
 input, select, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; font: inherit; background: var(--panel-raised); color: var(--text); }
 input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
-textarea { min-height: 260px; resize: vertical; }
+textarea { min-height: 260px; resize: none; }
 .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px 16px; }
 .actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 12px 0; }
 button.primary { background: var(--accent); border: 0; color: var(--accent-ink); padding: 7px 14px; border-radius: 4px; cursor: pointer; font-weight: 600; }
@@ -51,12 +55,13 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .status { font-size: 12px; color: var(--muted); margin-left: 8px; }
 .status.error { color: var(--err); }
 .status.ok { color: var(--ok); }
-.commands-toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; }
+.commands-toolbar { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; flex-shrink: 0; }
 .commands-toolbar label { margin: 0; }
 .commands-toolbar select { width: auto; }
-.commands-grid { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.commands-grid { display: grid; flex: 1 1 auto; min-height: 0; grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 16px; align-items: stretch; }
 .commands-nav { display: flex; min-height: 0; flex-direction: column; gap: 2px; border-right: 1px solid var(--border); padding-right: 12px; }
-.command-list { display: flex; min-height: 60px; flex: 1 1 auto; flex-direction: column; gap: 2px; overflow-y: auto; }
+.command-list { display: flex; min-height: 60px; flex: 1 1 auto; flex-direction: column; gap: 2px; overflow-y: auto; scrollbar-width: none; }
+.command-list::-webkit-scrollbar { display: none; }
 .nav-empty { margin: 8px 0; font-size: 12px; color: var(--muted); }
 .nav-item { display: flex; width: 100%; align-items: center; gap: 6px; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
 .nav-item:hover { background: #151515; color: var(--text); }
@@ -64,15 +69,25 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .nav-item .nav-slash { color: #5c5c5c; }
 .nav-item .nav-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item .tag { flex-shrink: 0; font-size: 11px; border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; color: var(--muted); }
-.nav-item.new { margin-top: 8px; border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; padding-top: 10px; }
-.editor-card { border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 12px; }
-.editor-empty { display: flex; min-height: 280px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--muted); font-size: 12px; text-align: center; }
-.editor-head { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); margin-bottom: 12px; padding-bottom: 8px; }
+.nav-item.new { margin-top: 8px; flex-shrink: 0; border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; padding-top: 10px; }
+.editor-card { display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 12px; }
+.editor-empty { display: flex; min-height: 280px; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--border-strong); border-radius: 6px; color: var(--muted); font-size: 12px; text-align: center; }
+#editor { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
+#editor.hidden { display: none; }
+.editor-head { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); margin-bottom: 12px; padding-bottom: 8px; }
 .editor-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.editor-body { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+.editor-body::-webkit-scrollbar { width: 8px; }
+.editor-body::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
+.editor-body > fieldset:first-of-type { flex-shrink: 0; }
+.editor-body > .actions { flex-shrink: 0; }
+.editor-markdown { display: flex; flex: 1 1 auto; flex-direction: column; }
+#cmd-body { flex: 1 1 auto; }
 .editor-card fieldset:last-of-type { margin-bottom: 0; }
 @media (max-width: 900px) {
-  .commands-grid { grid-template-columns: 1fr; }
+  .commands-grid { grid-template-columns: 1fr; grid-template-rows: max-content max-content; align-content: start; overflow-y: auto; }
   .commands-nav { border-right: 0; padding-right: 0; }
+  .command-list { max-height: 38vh; }
 }
 .hidden { display: none; }
 </style>
@@ -84,7 +99,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
   <button id="tab-commands" onclick="showTab('commands')">Commands</button>
 </nav>
 <main>
-  <section id="view-general">
+  <section id="view-general" class="view">
     <h2>General</h2>
     <p class="status" id="general-status">Loading…</p>
     <fieldset>
@@ -107,7 +122,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
     </div>
   </section>
 
-  <section id="view-commands" class="hidden">
+  <section id="view-commands" class="view hidden">
     <h2>Commands</h2>
     <div class="commands-toolbar">
       <label for="cmd-filter">Type</label>
@@ -138,37 +153,39 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
           <div class="editor-head">
             <h3 id="editor-legend">Edit command</h3>
           </div>
-          <fieldset>
-            <label for="cmd-name">Name</label>
-            <input id="cmd-name" type="text" placeholder="my-command">
-            <label for="cmd-scope">Scope</label>
-            <select id="cmd-scope">
-              <option value="user">User</option>
-            </select>
-            <label for="cmd-kind">Type</label>
-            <select id="cmd-kind">
-              <option value="agentMD">Markdown insertion</option>
-              <option value="agentBlock">Template block</option>
-            </select>
-            <label for="cmd-md-scope">Visibility</label>
-            <select id="cmd-md-scope">
-              <option value="global">Global (everywhere)</option>
-              <option value="template">Template only</option>
-            </select>
-            <label for="cmd-title">Block title (template block only)</label>
-            <input id="cmd-title" type="text" placeholder="title">
-            <label for="cmd-description">Description</label>
-            <input id="cmd-description" type="text">
-          </fieldset>
-          <fieldset>
-            <legend>Markdown body</legend>
-            <textarea id="cmd-body"></textarea>
-          </fieldset>
-          <div class="actions">
-            <button class="primary" onclick="saveCommand()">Save</button>
-            <button class="ghost" onclick="hideEditor()">Cancel</button>
-            <button class="danger" onclick="deleteCommand()">Delete</button>
-            <span class="status" id="editor-status"></span>
+          <div class="editor-body">
+            <fieldset>
+              <label for="cmd-name">Name</label>
+              <input id="cmd-name" type="text" placeholder="my-command">
+              <label for="cmd-scope">Scope</label>
+              <select id="cmd-scope">
+                <option value="user">User</option>
+              </select>
+              <label for="cmd-kind">Type</label>
+              <select id="cmd-kind">
+                <option value="agentMD">Markdown insertion</option>
+                <option value="agentBlock">Template block</option>
+              </select>
+              <label for="cmd-md-scope">Visibility</label>
+              <select id="cmd-md-scope">
+                <option value="global">Global (everywhere)</option>
+                <option value="template">Template only</option>
+              </select>
+              <label for="cmd-title">Block title (template block only)</label>
+              <input id="cmd-title" type="text" placeholder="title">
+              <label for="cmd-description">Description</label>
+              <input id="cmd-description" type="text">
+            </fieldset>
+            <fieldset class="editor-markdown">
+              <legend>Markdown body</legend>
+              <textarea id="cmd-body"></textarea>
+            </fieldset>
+            <div class="actions">
+              <button class="primary" onclick="saveCommand()">Save</button>
+              <button class="ghost" onclick="hideEditor()">Cancel</button>
+              <button class="danger" onclick="deleteCommand()">Delete</button>
+              <span class="status" id="editor-status"></span>
+            </div>
           </div>
         </div>
       </section>
@@ -296,7 +313,6 @@ function newCommand() {
   draft = true;
   selected = null;
   showEditor({name: '', scope: 'user', kind: 'agentMD', md_scope: 'global', title: '', description: '', body: ''});
-  document.getElementById('cmd-name').disabled = false;
   renderCommands();
 }
 
@@ -305,7 +321,6 @@ function showEditor(command) {
   document.getElementById('editor').classList.remove('hidden');
   document.getElementById('editor-legend').textContent = command.name ? ('Edit ' + command.name) : 'New command';
   document.getElementById('cmd-name').value = command.name || '';
-  document.getElementById('cmd-name').disabled = Boolean(command.name);
   document.getElementById('cmd-kind').value = command.kind || 'agentMD';
   document.getElementById('cmd-md-scope').value = command.md_scope || 'global';
   document.getElementById('cmd-title').value = command.title || '';
@@ -333,7 +348,14 @@ function saveCommand() {
     title: document.getElementById('cmd-title').value,
     body: body
   };
-  api('/api/commands/user/' + encodeURIComponent(kind) + '/' + encodeURIComponent(name), {method: 'PUT', body: JSON.stringify(payload)}).then(() => {
+  // 已存在的命令改名：先 rename（失败即中止，不动内容），再 PUT 新路径。
+  const renameStep = !draft && selected !== null && selected.name && name !== selected.name
+    ? api('/api/commands/user/' + encodeURIComponent(selected.kind) + '/' + encodeURIComponent(selected.name) + '/rename', {method: 'POST', body: JSON.stringify({to: name})}).then(() => {
+        selected = Object.assign({}, selected, {name: name});
+        renderCommands();
+      })
+    : Promise.resolve();
+  renameStep.then(() => api('/api/commands/user/' + encodeURIComponent(kind) + '/' + encodeURIComponent(name), {method: 'PUT', body: JSON.stringify(payload)})).then(() => {
     draft = false;
     selected = {name, scope: 'user', kind, md_scope: mdScope, title: payload.title, description: payload.description, body};
     showEditor(selected);
