@@ -110,6 +110,15 @@ fn enter_on_item_opens_editor_and_escape_returns() {
     apply_editor(&mut state, EditorCommand::Escape);
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
     assert_eq!(state.workspaces[0].prompt_panel.editing, None);
+
+    // 树视图 Esc 切换回编辑：恢复进入列表前的绑定。
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(12))
+    );
+    assert_eq!(state.prompt.text(), "nested content");
 }
 
 #[test]
@@ -181,7 +190,7 @@ fn open_prompt_row_edits_item_and_temp_but_not_folder() {
 }
 
 #[test]
-fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
+fn typing_in_tree_mode_filters_like_modal_input_and_ctrl_c_clears() {
     let mut state = demo_state();
     enter_tree(&mut state);
     for ch in "nested".chars() {
@@ -199,9 +208,20 @@ fn typing_in_tree_mode_filters_like_modal_input_and_escape_clears() {
     apply_editor(&mut state, EditorCommand::End);
     apply_editor(&mut state, EditorCommand::Backspace);
     assert_eq!(state.workspaces[0].prompt_panel.search.text(), "este");
-    apply_editor(&mut state, EditorCommand::Escape);
+    // Ctrl+C 清空过滤词并留在列表；Esc 返回编辑视图。
+    assert!(clear_prompt_search(&mut state));
     assert!(state.workspaces[0].prompt_panel.search.text().is_empty());
     assert_eq!(state.workspaces[0].prompt_panel.rows().len(), 7);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Editor);
+    assert!(
+        matches!(
+            state.workspaces[0].prompt_panel.editing,
+            Some(PromptEditing::Temp(_))
+        ),
+        "Esc 恢复进入列表前的编辑绑定"
+    );
 
     // 工具栏 [tmp] 入口：新建空临时提示词并进入编辑视图。
     assert!(open_temp_prompt(&mut state));
