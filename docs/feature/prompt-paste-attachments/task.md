@@ -161,17 +161,33 @@
 - 平台：`platform/clipboard.rs`（macOS osascript/pbpaste、Linux wl-paste/xclip、
   Windows PowerShell），文件列表 → 位图 → 文本探测；`file://` URI 与多行路径解析；
   位图签名识别；`secure_token` 随机资产 ID；原子落盘 `.tmp-*` → 重命名。
-- 事件：工具栏 `[⇩]` 后台读取（请求代号 + 修订 + 锚点校验），终端粘贴路径文本进同一提案、
-  普通文本原样插入；选择区锚点替换；面板键鼠路由与外部点击取消；附件条渲染/移除/滚轮。
+- 事件：`Ctrl+V`（`Ctrl+Shift+V` 同义）后台读取（请求代号 + 修订 + 锚点校验），终端粘贴路径文本进同一提案、
+  普通文本原样插入；位图登记后直接成为附件、不进面板；选择区锚点替换；面板键鼠路由与外部点击取消；
+  附件条渲染/移除/滚轮。
 - 清理：managed 截图统一垃圾回收（数据库引用 + 正文 `@[refer-image]` 引用 + 内存草稿/临时项），
   启动孤儿扫描（未登记同规则文件与 `.tmp-*`，符号链接/未知文件名跳过）。
 
+### 实施后修订（用户确认，对应 design.md §14）
+
+- 移除 prompt 顶栏粘贴按钮：`PromptToolbarButton::Paste` 及其几何/工具提示/文案/事件分支删除，
+  钉住按钮最小内容区宽度 25 → 21（`layout` 测试同步）。
+- 粘贴面板移除 “Upload as attachment”：`PasteAction` 两项 `Reference`/`Path`，面板两行；
+  `PasteCandidate::can_upload`、`PastePanel::upload_enabled`、`PASTE_ACTION_UPLOAD`、
+  `PASTE_UPLOAD_FOLDERS_DISABLED` 删除；普通文件不再能成为附件。
+- `Ctrl+V` 直接粘贴剪贴板图片：`Routed::ClipboardPaste` → 事件层 `clipboard_read_requested`；
+  位图登记后走 `Prompt::add_attachments` 直接入附件（`PasteState::settle` 校验代号与修订），
+  文件列表/路径进面板，普通文本插入；树视图吞掉按键。已知限制见 design.md §14.3。
+- 正文引用快捷删除：`markdown::reference_deletion_range` + `Prompt::backspace` 回退链，
+  `@[refer-*](path) ` 尾随空白处一次 Backspace 整段删除（单步撤销）。
+
 ### 记录偏差与风险
 
-- 工具栏读取期间未绘制独立 loading 指示（设计标注为“可显示”）；重复点击只保留最新请求。
+- 工具栏读取期间未绘制独立 loading 指示的问题随按钮移除消失；`Ctrl+V` 读取期间无 loading 提示。
 - 附件条为固定最大 3 行 + 滚轮滚动 + `n/总数` 计数，未提供独立滚动条 thumb。
-- `src/event/mod.rs` 基线已超 1000 行（2310 → 约 2405）；新增职责均落在
+- `src/event/mod.rs` 基线已超 1000 行（2310 → 约 2410）；新增职责均落在
   `src/event/paste.rs`，未对既有巨型事件循环做高风险重写，作为存量债务记录。
 - Windows/Linux 剪贴板命令路径未在本机（macOS）实测；单元测试只覆盖纯解析分支。
-- 人工验收项（文件管理器复制、截图工具位图、`file://` URI、多文件、窄屏、工作区切换、
-  重启恢复）需用户运行 `cargo run` 确认。
+- `Cmd+V` 无法拦截、部分终端吞 `Ctrl+V`、SSH 读到远端剪贴板（见 design.md §14.3）。
+- 人工验收项（`Ctrl+V` 截图、文件管理器复制的路径文本、`file://` URI、多路径、普通文本、
+  面板键鼠与 Esc、附件移除、引用一次 Backspace 删除、窄屏、工作区切换、重启恢复）
+  需用户运行 `cargo run` 确认。

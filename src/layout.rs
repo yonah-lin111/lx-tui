@@ -48,17 +48,12 @@ const PROMPT_SELECT_ALL_MIN_WIDTH: u16 = PROMPT_TOOLBAR_BUTTON_WIDTH
     + PROMPT_SELECT_ALL_WIDTH
     + PROMPT_SELECT_ALL_GAP
     + 1;
-/// 粘贴按钮（`[⇩]`）宽度（列）。
-const PROMPT_PASTE_WIDTH: u16 = 3;
-/// 显示 `[⇩]` 所需的最小内容区宽度（列）：不足时隐藏，不挤压 `[*]` 与保存点。
-const PROMPT_PASTE_MIN_WIDTH: u16 =
-    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PASTE_WIDTH;
 /// 钉住按钮（`[◉]` / `[○]`）宽度（列）。
 const PROMPT_PIN_WIDTH: u16 = 3;
 /// 显示钉住按钮所需的最小内容区宽度（列）：编辑视图在 `[*]` 左侧、树视图在 `[tmp]` 左侧，
-/// 各自保证与左侧按钮组（含粘贴按钮）不重叠；不足时随右侧按钮一并隐藏。
+/// 各自保证与左侧按钮组不重叠；不足时随右侧按钮一并隐藏。
 const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
-    PROMPT_PASTE_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
+    PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
     PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 
@@ -73,8 +68,6 @@ pub enum PromptToolbarButton {
     TempPrompt,
     Undo,
     Redo,
-    /// 编辑视图 `[⇩]`：从系统剪贴板粘贴文件或图片。
-    Paste,
     SelectAll,
     Save,
 }
@@ -866,13 +859,6 @@ pub fn prompt_toolbar_button_rect(
             }
             Rect::new(redo_x, bar.y, PROMPT_UNDO_REDO_WIDTH, 1)
         }
-        PromptToolbarButton::Paste => {
-            if tree || inner.width < PROMPT_PASTE_MIN_WIDTH {
-                return None;
-            }
-            let paste_x = redo_x + PROMPT_UNDO_REDO_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP;
-            Rect::new(paste_x, bar.y, PROMPT_PASTE_WIDTH, 1)
-        }
         PromptToolbarButton::SelectAll => {
             if tree || inner.width < PROMPT_SELECT_ALL_MIN_WIDTH {
                 return None;
@@ -912,7 +898,6 @@ pub fn prompt_toolbar_button_at(
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,
         PromptToolbarButton::Redo,
-        PromptToolbarButton::Paste,
         PromptToolbarButton::SelectAll,
         PromptToolbarButton::Save,
     ]

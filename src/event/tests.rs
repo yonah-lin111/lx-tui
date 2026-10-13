@@ -3069,7 +3069,7 @@ fn clipboard_read_stale_image_cleans_staged_file() {
 }
 
 #[test]
-fn clipboard_read_image_registers_asset_and_opens_panel() {
+fn clipboard_read_image_attaches_without_panel() {
     let service = paste_service("image-ok");
     let dir = paste_temp_dir("image-ok");
     let path = dir.join("fedcba9876543210fedcba9876543210.png");
@@ -3088,10 +3088,40 @@ fn clipboard_read_image_registers_asset_and_opens_panel() {
             path: path.clone(),
         },
     );
-    let panel = state.prompt.paste_panel().expect("panel");
-    assert_eq!(panel.candidates[0].kind, PasteCandidateKind::Image);
+    assert!(state.prompt.paste_panel().is_none(), "位图不进面板");
+    assert_eq!(state.prompt.attachments().len(), 1, "位图直接成为附件");
+    assert_eq!(state.prompt.attachments()[0].path, path);
     assert!(path.exists(), "登记后文件保留");
     assert_eq!(service.managed_asset_count_for_test(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn clipboard_read_image_duplicate_drops_registration_without_deleting_shared_file() {
+    let service = paste_service("image-duplicate");
+    let dir = paste_temp_dir("image-duplicate");
+    let path = dir.join("00112233445566778899aabbccddeeff.png");
+    std::fs::write(&path, b"png").expect("staged file");
+    let mut state = AppState::demo();
+    let existing =
+        crate::app::prompt::PasteCandidate::external(path.clone(), PasteCandidateKind::Image);
+    assert!(state.prompt.add_attachments(&[existing]));
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
+    let request = state.prompt.begin_paste_read(anchor);
+    let prompt = state.prompt.id();
+    paste::apply_clipboard_read(
+        &mut state,
+        &service,
+        prompt,
+        request,
+        paste::ClipboardPayload::Image {
+            asset_id: "00112233445566778899aabbccddeeff".to_string(),
+            path: path.clone(),
+        },
+    );
+    assert_eq!(state.prompt.attachments().len(), 1, "同路径去重");
+    assert_eq!(service.managed_asset_count_for_test(), 0, "撤销登记");
+    assert!(path.exists(), "已被附件引用的文件不删");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

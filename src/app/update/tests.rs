@@ -3648,7 +3648,6 @@ fn paste_panel_swallows_editing_keys_and_confirms_reference() {
     open_paste_panel(&mut state);
     apply_editor(&mut state, EditorCommand::InsertChar('x'));
     assert_eq!(state.prompt.text(), "see ", "面板打开时其他按键吞掉");
-    apply_editor(&mut state, EditorCommand::Down);
     apply_editor(&mut state, EditorCommand::Newline);
     assert_eq!(
         state.prompt.text(),
@@ -3689,10 +3688,13 @@ fn paste_panel_takes_priority_over_mention_and_slash() {
     apply_editor(&mut state, EditorCommand::Newline);
     assert_eq!(
         state.prompt.text(),
-        "see @ab",
+        "see @ab @[refer-file](/tmp/lx-tui-paste.txt) ",
         "Enter 归粘贴面板而非提及面板"
     );
-    assert_eq!(state.prompt.attachments().len(), 1, "默认高亮上传项生效");
+    assert!(
+        state.prompt.attachments().is_empty(),
+        "默认高亮引用项写正文、不产生附件"
+    );
 }
 
 #[test]

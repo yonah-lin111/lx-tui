@@ -511,7 +511,7 @@ fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
         Some(PromptToolbarButton::Pin)
     );
 
-    // 内容区宽度 20 < 21：钉住按钮随 [*] 一并隐藏；粘贴按钮仍在。
+    // 内容区宽度 20 < 21：钉住按钮随 [*] 一并隐藏。
     let narrow = Rect::new(0, 0, 22, 8);
     assert_eq!(
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, false),
@@ -521,30 +521,21 @@ fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
         prompt_toolbar_button_rect(narrow, PromptToolbarButton::SelectAll, false).is_some(),
         "窄屏时 [*] 仍在"
     );
-    assert_eq!(
-        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Paste, false),
-        None,
-        "内容区不足 21 列时粘贴按钮隐藏"
-    );
 
-    // 内容区宽度 21：粘贴按钮恢复显示；钉住仍需 25 列。
+    // 内容区宽度 21：钉住按钮恢复显示。
     let mid = Rect::new(0, 0, 23, 8);
     assert!(
-        prompt_toolbar_button_rect(mid, PromptToolbarButton::Paste, false).is_some(),
-        "内容区 21 列时粘贴按钮可见"
-    );
-    assert_eq!(
-        prompt_toolbar_button_rect(mid, PromptToolbarButton::Pin, false),
-        None
+        prompt_toolbar_button_rect(mid, PromptToolbarButton::Pin, false).is_some(),
+        "内容区 21 列时钉住按钮可见"
     );
 
-    // 内容区宽度 25：钉住按钮恢复显示，紧邻粘贴按钮右侧、不与左侧按钮组重叠。
+    // 宽面板：钉住按钮紧邻 [*] 左侧、间隔 1 列。
     let wide = Rect::new(0, 0, 27, 8);
     let pin =
         prompt_toolbar_button_rect(wide, PromptToolbarButton::Pin, false).expect("pin visible");
-    let paste =
-        prompt_toolbar_button_rect(wide, PromptToolbarButton::Paste, false).expect("paste visible");
-    assert_eq!(pin.x, paste.right() + 1, "不与粘贴按钮重叠");
+    let select_all = prompt_toolbar_button_rect(wide, PromptToolbarButton::SelectAll, false)
+        .expect("select all visible");
+    assert_eq!(pin.x, select_all.x - PROMPT_PIN_WIDTH - 1, "不与 [*] 重叠");
 }
 
 #[test]
@@ -601,27 +592,4 @@ fn attachment_bar_yields_to_tiny_panels() {
     let tiny = Rect::new(0, 0, 20, 4);
     assert_eq!(prompt_attachment_rect(tiny, 3), None);
     assert_eq!(prompt_text_rect_with(tiny, 3), prompt_text_rect(tiny));
-}
-
-#[test]
-fn paste_toolbar_button_geometry() {
-    let panel = Rect::new(0, 0, 30, 8);
-    let bar = prompt_toolbar_rect(panel).expect("toolbar");
-    let redo = prompt_toolbar_button_rect(panel, PromptToolbarButton::Redo, false).expect("redo");
-    let paste =
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Paste, false).expect("paste");
-    let select_all = prompt_toolbar_button_rect(panel, PromptToolbarButton::SelectAll, false)
-        .expect("select all");
-    assert_eq!(paste.y, bar.y);
-    assert_eq!(paste.x, redo.right() + 1, "紧邻 redo 右侧");
-    assert!(paste.right() <= select_all.x, "不覆盖 [*]");
-    assert_eq!(
-        prompt_toolbar_button_at(panel, paste.x, bar.y, false),
-        Some(PromptToolbarButton::Paste)
-    );
-    // 树视图不显示粘贴按钮。
-    assert_eq!(
-        prompt_toolbar_button_rect(panel, PromptToolbarButton::Paste, true),
-        None
-    );
 }

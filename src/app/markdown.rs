@@ -539,6 +539,24 @@ fn mention_token_ranges(text: &str) -> Vec<Range<usize>> {
     ranges
 }
 
+/// 光标紧跟 `@[refer-*](path) ` 末尾空白时一次性删除整段引用（含尾随空白）。
+///
+/// 与 `mention_deletion_range` 同构：只有标记完整结束于光标前的空白处才命中。
+pub fn reference_deletion_range(text: &str, cursor: usize) -> Option<Range<usize>> {
+    if cursor == 0 || cursor > text.len() || !text.is_char_boundary(cursor) {
+        return None;
+    }
+    let previous = text[..cursor].chars().next_back()?;
+    if previous != ' ' && previous != '\t' {
+        return None;
+    }
+    let end = cursor - previous.len_utf8();
+    parse_references_in(text, 0, end)
+        .into_iter()
+        .find(|reference| reference.range.end == end)
+        .map(|reference| reference.range.start..cursor)
+}
+
 /// 行首标记匹配；返回类别与标记在行内的起始偏移（跳过前导空格）。
 fn match_marker(line: &str) -> Option<(BlockTriggerKind, usize)> {
     let indent = line.len() - line.trim_start_matches(' ').len();

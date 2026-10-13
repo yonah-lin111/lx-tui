@@ -139,10 +139,6 @@ fn targets(
                 TooltipTarget::PromptSelectAll,
             ),
             (layout::PromptToolbarButton::Save, TooltipTarget::PromptSave),
-            (
-                layout::PromptToolbarButton::Paste,
-                TooltipTarget::PromptPaste,
-            ),
         ] {
             if let Some(area) = layout::prompt_toolbar_button_rect(view.prompt, button, tree) {
                 targets.push((target, area));

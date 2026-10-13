@@ -26,14 +26,6 @@ fn paste_panel_data(prompt: &Prompt) -> Option<PastePanelData> {
     let rows = PasteAction::ALL
         .iter()
         .map(|action| match action {
-            PasteAction::Upload => (
-                text::PASTE_ACTION_UPLOAD.to_string(),
-                if panel.upload_enabled() {
-                    count.clone()
-                } else {
-                    text::PASTE_UPLOAD_FOLDERS_DISABLED.to_string()
-                },
-            ),
             PasteAction::Reference => (
                 text::PASTE_ACTION_REFERENCE.to_string(),
                 if panel.reference_enabled() {

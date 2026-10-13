@@ -985,6 +985,25 @@ fn backspace_removes_whole_mention_after_trailing_space() {
 }
 
 #[test]
+fn backspace_removes_whole_reference_after_trailing_space() {
+    let mut prompt = prompt(40, 5);
+    prompt.insert_str("@[refer-file](/tmp/a.txt) ");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "", "引用标记整段删除");
+    assert_eq!(prompt.cursor_cell(), Some((0, 0)));
+    prompt.undo();
+    assert_eq!(prompt.text(), "@[refer-file](/tmp/a.txt) ", "单步撤销");
+}
+
+#[test]
+fn backspace_keeps_plain_deletion_inside_reference_without_trailing_space() {
+    let mut prompt = prompt(40, 5);
+    prompt.insert_str("@[refer-file](/tmp/a.txt)");
+    prompt.backspace();
+    assert_eq!(prompt.text(), "@[refer-file](/tmp/a.txt");
+}
+
+#[test]
 fn backspace_keeps_plain_deletion_without_trailing_space() {
     let mut prompt = prompt(30, 5);
     prompt.insert_str("@f.rs");
@@ -2213,6 +2232,23 @@ fn set_document_loads_attachments_and_set_text_clears_them() {
 }
 
 #[test]
+fn paste_settle_consumes_only_matching_request_and_revision() {
+    let mut prompt = prompt(40, 6);
+    let anchor = PasteAnchor::at_cursor(0);
+    let request = prompt.begin_paste_read(anchor);
+    assert_eq!(prompt.paste_settle(request + 1), None, "代号不符不收束");
+    assert_eq!(prompt.paste_settle(request), Some(anchor), "匹配时返回锚点");
+    assert_eq!(
+        prompt.paste_settle(request),
+        None,
+        "已收束的请求不可重复消费"
+    );
+    let stale = prompt.begin_paste_read(anchor);
+    prompt.insert_str("x");
+    assert_eq!(prompt.paste_settle(stale), None, "修订变化后旧请求失效");
+}
+
+#[test]
 fn paste_panel_reference_writes_marker_and_keeps_attachments_empty() {
     let mut prompt = prompt(60, 8);
     prompt.insert_str("see ");
@@ -2220,7 +2256,6 @@ fn paste_panel_reference_writes_marker_and_keeps_attachments_empty() {
     let request = prompt.begin_paste_read(anchor);
     assert!(prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
     let panel = prompt.paste_panel().expect("panel open");
-    assert!(panel.upload_enabled());
     assert!(panel.reference_enabled());
     assert!(prompt.paste_confirm(PasteAction::Reference));
     assert_eq!(prompt.text(), "see @[refer-file](/tmp/a.txt) ");
@@ -2229,14 +2264,11 @@ fn paste_panel_reference_writes_marker_and_keeps_attachments_empty() {
 }
 
 #[test]
-fn paste_panel_upload_adds_attachment_without_text_change() {
+fn add_attachments_adds_without_text_change() {
     let mut prompt = prompt(60, 8);
     prompt.insert_str("body");
-    let anchor = PasteAnchor::at_cursor(prompt.cursor());
-    let request = prompt.begin_paste_read(anchor);
-    assert!(prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
-    assert!(prompt.paste_confirm(PasteAction::Upload));
-    assert_eq!(prompt.text(), "body", "上传不改正文");
+    assert!(prompt.add_attachments(&[file_candidate("/tmp/a.txt")]));
+    assert_eq!(prompt.text(), "body", "附件不改正文");
     assert_eq!(prompt.attachments().len(), 1);
 }
 
@@ -2271,7 +2303,7 @@ fn paste_panel_replaces_selection_anchor() {
 }
 
 #[test]
-fn paste_panel_dirs_disable_upload_and_skip_highlight() {
+fn paste_panel_dirs_keep_reference_enabled() {
     let mut prompt = prompt(60, 8);
     let anchor = PasteAnchor::at_cursor(0);
     let request = prompt.begin_paste_read(anchor);
@@ -2281,8 +2313,7 @@ fn paste_panel_dirs_disable_upload_and_skip_highlight() {
     ];
     assert!(prompt.paste_complete(request, anchor, candidates));
     let panel = prompt.paste_panel().expect("panel");
-    assert!(!panel.upload_enabled(), "混有目录时上传禁用");
-    assert!(panel.reference_enabled());
+    assert!(panel.reference_enabled(), "目录可引用为 [refer-folder]");
     assert_eq!(
         panel.active_action(),
         Some(PasteAction::Reference),
@@ -2291,10 +2322,31 @@ fn paste_panel_dirs_disable_upload_and_skip_highlight() {
     assert!(prompt.paste_move(-1));
     assert_eq!(
         prompt.paste_panel().expect("panel").active_action(),
-        Some(PasteAction::Path),
-        "键盘跳过禁用项"
+        Some(PasteAction::Path)
     );
-    assert!(!prompt.paste_confirm(PasteAction::Upload), "禁用项不可确认");
+}
+
+#[test]
+fn paste_panel_disables_reference_for_unrepresentable_path() {
+    let mut prompt = prompt(60, 8);
+    let anchor = PasteAnchor::at_cursor(0);
+    let request = prompt.begin_paste_read(anchor);
+    let candidates = vec![PasteCandidate::external(
+        PathBuf::from("/tmp/a\nb.txt"),
+        PasteCandidateKind::File,
+    )];
+    assert!(prompt.paste_complete(request, anchor, candidates));
+    let panel = prompt.paste_panel().expect("panel");
+    assert!(!panel.reference_enabled(), "含换行路径无法引用");
+    assert_eq!(
+        panel.active_action(),
+        Some(PasteAction::Path),
+        "高亮落在首个可用项"
+    );
+    assert!(
+        !prompt.paste_confirm(PasteAction::Reference),
+        "禁用项不可确认"
+    );
     assert!(prompt.paste_panel().is_some(), "拒绝后面板保持");
 }
 

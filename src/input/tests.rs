@@ -102,6 +102,46 @@ fn prompt_focus_maps_editing_keys() {
 }
 
 #[test]
+fn prompt_focus_maps_clipboard_paste_keys() {
+    let route_prompt =
+        |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        assert_eq!(
+            route_prompt(KeyCode::Char('v'), modifiers),
+            Some(Routed::ClipboardPaste),
+            "{modifiers:?}"
+        );
+    }
+    assert_eq!(
+        route_prompt(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+        ),
+        Some(Routed::ClipboardPaste),
+        "Ctrl+Shift+V 同样读取剪贴板"
+    );
+    assert_eq!(
+        route_prompt(
+            KeyCode::Char('v'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        ),
+        None,
+        "Ctrl+Alt+V 不读取剪贴板"
+    );
+    assert!(
+        matches!(
+            route(
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                TermMode::empty(),
+                false
+            ),
+            Some(Routed::Pane(_))
+        ),
+        "prompt 未聚焦时 Ctrl+V 照常写入 PTY"
+    );
+}
+
+#[test]
 fn prompt_focus_maps_save_keys() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);

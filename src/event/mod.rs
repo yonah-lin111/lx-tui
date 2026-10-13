@@ -670,6 +670,13 @@ fn handle_terminal_event(
                         *dirty = true;
                     }
                 }
+                Routed::ClipboardPaste => {
+                    // 树视图的搜索框不是正文编辑目标：读取结果无处可去，吞掉按键。
+                    if !update::prompt_tree_mode(state) {
+                        state.clipboard_read_requested = true;
+                        *dirty = true;
+                    }
+                }
                 Routed::Pane(bytes) => {
                     let id = state.active_tab().layout.focus();
                     write_to_pane(sessions, id, &bytes);
@@ -909,9 +916,6 @@ fn handle_terminal_event(
                         }
                         layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
                         layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
-                        layout::PromptToolbarButton::Paste if editor_view => {
-                            state.clipboard_read_requested = true;
-                        }
                         layout::PromptToolbarButton::SelectAll if editor_view => {
                             state.select_all_prompt();
                         }

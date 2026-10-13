@@ -1158,7 +1158,7 @@ fn attachment_bar_render_paints_tag_name_and_remove_button() {
 }
 
 #[test]
-fn paste_panel_hit_and_layout_with_disabled_upload() {
+fn paste_panel_hit_and_layout_rows() {
     let mut prompt = prompt(40, 10, "");
     let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
     let request = prompt.begin_paste_read(anchor);
@@ -1175,7 +1175,7 @@ fn paste_panel_hit_and_layout_with_disabled_upload() {
     assert!(prompt.paste_complete(request, anchor, candidates));
     let area = Rect::new(0, 0, 40, 10);
     let layout = paste_layout(&prompt, area).expect("paste layout");
-    assert_eq!(layout.visible, 3);
+    assert_eq!(layout.visible, 2);
     let hit = paste_item_at(&prompt, area, layout.content.x + 1, layout.content.y);
     assert_eq!(hit, Some(0));
     let second = paste_item_at(&prompt, area, layout.content.x + 1, layout.content.y + 1);

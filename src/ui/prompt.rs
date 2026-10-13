@@ -161,11 +161,6 @@ fn render_toolbar(
                 },
             ),
             (
-                PromptToolbarButton::Paste,
-                text::PROMPT_PASTE_LABEL,
-                style::accent(),
-            ),
-            (
                 PromptToolbarButton::SelectAll,
                 text::PROMPT_SELECT_ALL_LABEL,
                 style::accent(),

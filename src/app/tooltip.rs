@@ -38,8 +38,6 @@ pub enum TooltipTarget {
     PromptSelectAll,
     PromptSave,
     PromptPin,
-    /// 编辑视图粘贴按钮。
-    PromptPaste,
     /// 侧栏底边框左侧设置按钮。
     SidebarSettings,
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。

@@ -149,11 +149,6 @@ impl PasteCandidate {
         }
     }
 
-    /// 是否可上传：目录不能成为附件。
-    pub fn can_upload(&self) -> bool {
-        self.kind != PasteCandidateKind::Folder
-    }
-
     /// 转成附件；目录返回 None。
     pub fn to_attachment(&self) -> Option<PromptAttachment> {
         match (&self.kind, &self.managed_asset_id) {
@@ -185,17 +180,16 @@ fn candidate_refer_kind(kind: PasteCandidateKind) -> crate::app::markdown::Refer
     }
 }
 
-/// 粘贴处理方式；面板三项固定顺序。
+/// 粘贴处理方式；面板两项固定顺序。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PasteAction {
-    Upload,
     Reference,
     Path,
 }
 
 impl PasteAction {
     /// 面板固定顺序。
-    pub const ALL: [Self; 3] = [Self::Upload, Self::Reference, Self::Path];
+    pub const ALL: [Self; 2] = [Self::Reference, Self::Path];
 }
 
 /// 提案锚点：请求时刻的选区（优先）与光标字节偏移。
@@ -242,11 +236,6 @@ impl PastePanel {
         panel
     }
 
-    /// 上传是否可用：全部候选可上传（无目录）。
-    pub fn upload_enabled(&self) -> bool {
-        !self.candidates.is_empty() && self.candidates.iter().all(PasteCandidate::can_upload)
-    }
-
     /// 引用是否可用：全部候选路径可无损表达。
     pub fn reference_enabled(&self) -> bool {
         !self.candidates.is_empty() && self.candidates.iter().all(|item| item.reference_ok)
@@ -255,7 +244,6 @@ impl PastePanel {
     /// 操作是否可用；路径模式只要候选非空。
     pub fn enabled(&self, action: PasteAction) -> bool {
         match action {
-            PasteAction::Upload => self.upload_enabled(),
             PasteAction::Reference => self.reference_enabled(),
             PasteAction::Path => !self.candidates.is_empty(),
         }
@@ -350,6 +338,16 @@ impl PasteState {
     pub fn request_matches(&self, request: u64) -> bool {
         self.pending
             .is_some_and(|pending| pending.request == request)
+    }
+
+    /// 收束不进入面板的结果：请求在途且修订未变时清除在途状态并返回登记锚点。
+    pub fn settle(&mut self, request: u64, revision: u64) -> Option<PasteAnchor> {
+        let pending = self.pending?;
+        if pending.request != request || pending.revision != revision {
+            return None;
+        }
+        self.pending = None;
+        Some(pending.anchor)
     }
 
     /// 写入读取结果：请求代号、修订号与锚点均匹配时打开面板并返回 true。
@@ -532,6 +530,11 @@ impl Prompt {
         self.paste.request_matches(request)
     }
 
+    /// 收束不进入面板的读取结果（如直接粘贴的截图）：请求在途且修订未变时消费并返回锚点。
+    pub fn paste_settle(&mut self, request: u64) -> Option<PasteAnchor> {
+        self.paste.settle(request, self.revision)
+    }
+
     /// 丢弃在途请求（不请求清理；普通文本回退用）；返回是否有在途状态。
     pub fn paste_discard(&mut self) -> bool {
         self.paste.close()
@@ -556,7 +559,7 @@ impl Prompt {
         self.paste.cancel()
     }
 
-    /// 确认粘贴面板操作：上传为一次附件变更，引用/路径为一次正文编辑。
+    /// 确认粘贴面板操作：引用/路径均为一次可撤销正文编辑。
     pub fn paste_confirm(&mut self, action: PasteAction) -> bool {
         let Some(panel) = self.paste.panel().cloned() else {
             return false;
@@ -565,7 +568,6 @@ impl Prompt {
             return false;
         }
         let applied = match action {
-            PasteAction::Upload => self.add_attachments(&panel.candidates),
             PasteAction::Reference => {
                 let parts: Option<Vec<String>> = panel
                     .candidates

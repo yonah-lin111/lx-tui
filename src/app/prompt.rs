@@ -308,13 +308,15 @@ impl Prompt {
         self.settle();
     }
 
-    /// 删除光标前一个字符；@ 提及后的空白处整块删除提及，紧跟列表标记时按列表上下文处理标记。
+    /// 删除光标前一个字符；@ 提及与 `@[refer-*]` 引用后的空白处整块删除该标记，
+    /// 紧跟列表标记时按列表上下文处理标记。
     pub fn backspace(&mut self) {
         if self.cursor == 0 {
             return;
         }
         if self.mention.panel().is_none()
             && let Some(range) = markdown::mention_deletion_range(&self.text, self.cursor)
+                .or_else(|| markdown::reference_deletion_range(&self.text, self.cursor))
         {
             if self.protected_edit(range.start, range.end) {
                 return;

@@ -28,7 +28,7 @@ pub enum ClipboardPayload {
     Error(ClipboardError),
 }
 
-/// 工具栏点击：记录请求代号并发起后台剪贴板读取。
+/// `Ctrl+V`：记录请求代号并发起后台剪贴板读取。
 pub(super) fn request_clipboard_read(
     state: &mut AppState,
     sender: &mpsc::UnboundedSender<AppEvent>,
@@ -69,6 +69,8 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
 }
 
 /// 读取结果路由：目标、请求、修订与锚点任一不匹配即丢弃并清理新生成的截图。
+///
+/// 位图直接成为附件（不进面板）；路径/路径文本才打开粘贴面板。
 pub(super) fn apply_clipboard_read(
     state: &mut AppState,
     persistence: &Persistence,
@@ -126,16 +128,32 @@ pub(super) fn apply_clipboard_read(
             update::apply_editor(state, EditorCommand::InsertText(content));
         }
         ClipboardPayload::Image { asset_id, path } => {
+            // 位图不进面板：直接成为当前 prompt 的附件（对齐 lx-agent 的截图粘贴）。
+            if state.prompt.paste_settle(request).is_none() {
+                if let Err(error) = std::fs::remove_file(&path)
+                    && error.kind() != std::io::ErrorKind::NotFound
+                {
+                    tracing::warn!(%error, path = %path.display(), "stale screenshot cleanup failed");
+                }
+                return;
+            }
             if !persistence.register_managed_asset(&asset_id, &path) {
                 let _ = std::fs::remove_file(&path);
-                state.prompt.paste_discard();
                 update::show_toast(state, toast(ToastKind::Error, text::TOAST_IMAGE_FAILED));
                 return;
             }
-            let anchor = paste_anchor(state);
-            let candidates = vec![PasteCandidate::managed(path.clone(), asset_id.clone())];
-            if !state.prompt.paste_complete(request, anchor, candidates) {
-                persistence.unregister_managed_asset(&asset_id);
+            let candidate = PasteCandidate::managed(path.clone(), asset_id.clone());
+            if state.prompt.add_attachments(&[candidate]) {
+                return;
+            }
+            // 未加入（路径已有同引用）：撤销登记；无人引用该路径时才删除刚落盘的文件。
+            let referenced = state
+                .prompt
+                .attachments()
+                .iter()
+                .any(|attachment| attachment.path == path);
+            persistence.unregister_managed_asset(&asset_id);
+            if !referenced {
                 let _ = std::fs::remove_file(&path);
             }
         }

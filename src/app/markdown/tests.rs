@@ -414,6 +414,46 @@ fn mention_panel_move_wraps_both_directions() {
 }
 
 #[test]
+fn reference_deletion_range_covers_marker_and_trailing_blank() {
+    let text = "@[refer-file](/tmp/a.txt) ";
+    assert_eq!(
+        reference_deletion_range(text, text.len()),
+        Some(0..text.len())
+    );
+    let text = "看 @[refer-image](/tmp/a b.png) 图";
+    let start = text.find("@[refer-image]").expect("marker");
+    let cursor = text.find(") 图").expect("trailing blank") + 2;
+    assert_eq!(reference_deletion_range(text, cursor), Some(start..cursor));
+}
+
+#[test]
+fn reference_deletion_range_requires_trailing_blank_and_valid_marker() {
+    let text = "@[refer-file](/tmp/a.txt)";
+    assert_eq!(
+        reference_deletion_range(text, text.len()),
+        None,
+        "无尾随空白"
+    );
+    assert_eq!(
+        reference_deletion_range("@[refer-file](/tmp/a.txt) x", 29),
+        None
+    );
+    assert_eq!(
+        reference_deletion_range("@[refer-bogus](/tmp/a) ", 23),
+        None,
+        "类型非法"
+    );
+    assert_eq!(reference_deletion_range("", 0), None);
+}
+
+#[test]
+fn reference_deletion_range_ignores_fenced_markers() {
+    let text = "```\n@[refer-file](/tmp/a.txt) \n```\n";
+    let cursor = text.find(") \n").expect("marker") + 2;
+    assert_eq!(reference_deletion_range(text, cursor), None);
+}
+
+#[test]
 fn mention_deletion_range_covers_token_and_trailing_blank() {
     let text = "@src/app.rs ";
     assert_eq!(mention_deletion_range(text, text.len()), Some(0..12));

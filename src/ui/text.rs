@@ -62,8 +62,6 @@ pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[←]";
-/// 编辑视图粘贴按钮（`[⇩]`）。
-pub const PROMPT_PASTE_LABEL: &str = "[⇩]";
 pub const PROMPT_REDO_LABEL: &str = "[→]";
 pub const PROMPT_SELECT_ALL_LABEL: &str = "[*]";
 /// 条目保存状态点：已保存实心绿、未保存实心黄。
@@ -387,10 +385,8 @@ pub const TOOLTIP_TITLE: &str = "Tooltip";
 
 /// 粘贴二级面板与附件条文案。
 pub const PASTE_PANEL_TITLE: &str = "Paste";
-pub const PASTE_ACTION_UPLOAD: &str = "Upload as attachment";
 pub const PASTE_ACTION_REFERENCE: &str = "Insert reference";
 pub const PASTE_ACTION_PATH: &str = "Insert path";
-pub const PASTE_UPLOAD_FOLDERS_DISABLED: &str = "folders cannot be uploaded";
 pub const PASTE_REFERENCE_UNSUPPORTED: &str = "path cannot be referenced";
 /// 字母快捷候选面板标题。
 pub const REFER_PANEL_TITLE: &str = "References";
@@ -445,7 +441,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptRedo => "redo (ctrl+y)",
         TooltipTarget::PromptSelectAll => "select all",
         TooltipTarget::PromptSave => "mark saved",
-        TooltipTarget::PromptPaste => "paste files or images from clipboard",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
         TooltipTarget::SidebarSettings => "open settings",
