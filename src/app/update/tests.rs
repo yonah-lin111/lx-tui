@@ -1123,6 +1123,7 @@ fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
             name: "item".into(),
             content: "item body".into(),
             status: PromptItemStatus::Todo,
+            attachments: Vec::new(),
         }],
     );
     assert!(edit_prompt_item(&mut state, 0, 10));
@@ -3621,4 +3622,86 @@ fn agent_panes_follow_active_workspace() {
         state.agent_panes().is_empty(),
         "agents are scoped to the active workspace"
     );
+}
+
+// ===== 粘贴二级面板按键路由 =====
+
+/// 打开一个含普通文件候选的粘贴面板。
+fn open_paste_panel(state: &mut AppState) {
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(state.prompt.cursor());
+    let request = state.prompt.begin_paste_read(anchor);
+    let candidate = crate::app::prompt::PasteCandidate::external(
+        PathBuf::from("/tmp/lx-tui-paste.txt"),
+        crate::app::prompt::PasteCandidateKind::File,
+    );
+    assert!(
+        state
+            .prompt
+            .paste_complete(request, anchor, vec![candidate])
+    );
+}
+
+#[test]
+fn paste_panel_swallows_editing_keys_and_confirms_reference() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("see ");
+    open_paste_panel(&mut state);
+    apply_editor(&mut state, EditorCommand::InsertChar('x'));
+    assert_eq!(state.prompt.text(), "see ", "面板打开时其他按键吞掉");
+    apply_editor(&mut state, EditorCommand::Down);
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(
+        state.prompt.text(),
+        "see @[refer-file](/tmp/lx-tui-paste.txt) "
+    );
+    assert!(state.prompt.paste_panel().is_none(), "确认后关闭面板");
+}
+
+#[test]
+fn paste_panel_escape_cancels_without_text_change() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("keep");
+    open_paste_panel(&mut state);
+    apply_editor(&mut state, EditorCommand::Escape);
+    assert_eq!(state.prompt.text(), "keep");
+    assert!(state.prompt.paste_panel().is_none());
+    assert!(state.prompt.take_paste_cleanup(), "取消登记截图清理");
+}
+
+#[test]
+fn paste_panel_takes_priority_over_mention_and_slash() {
+    let mut state = AppState::demo();
+    apply_editor(&mut state, EditorCommand::InsertText("see @ab".into()));
+    let (generation, _root) = state
+        .prompt
+        .take_mention_scan_request()
+        .expect("scan request");
+    state.prompt.apply_mention_entries(
+        generation,
+        vec![crate::app::markdown::MentionEntry {
+            path: "abc".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.prompt.mention().is_some(), "提及面板打开");
+    open_paste_panel(&mut state);
+    assert!(state.prompt.paste_panel().is_some());
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert_eq!(
+        state.prompt.text(),
+        "see @ab",
+        "Enter 归粘贴面板而非提及面板"
+    );
+    assert_eq!(state.prompt.attachments().len(), 1, "默认高亮上传项生效");
+}
+
+#[test]
+fn refer_panel_routes_keys_before_slash_and_edits() {
+    let mut state = AppState::demo();
+    state.prompt.insert_str("@abc 记录\nac");
+    assert!(state.prompt.refer_panel().is_some());
+    apply_editor(&mut state, EditorCommand::Newline);
+    assert!(state.prompt.text().ends_with("@abc "), "回车确认快捷候选");
+    state.prompt.undo();
+    assert!(state.prompt.text().ends_with("\nac"), "单步撤销回触发词");
 }

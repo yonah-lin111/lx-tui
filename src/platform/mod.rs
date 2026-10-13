@@ -1,10 +1,17 @@
-//! 平台能力：剪贴板写入、鼠标捕获与默认 shell；OS 专属代码唯一落点。
+//! 平台能力：剪贴板读写、鼠标捕获与默认 shell；OS 专属代码唯一落点。
 
 use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+
+mod clipboard;
+pub use clipboard::{
+    ClipboardContent, ClipboardError, ImageFormat, parse_path_text, read_clipboard, secure_token,
+    sniff_image, sniff_image_file,
+};
 
 /// 原生复制命令的等待上限；超时终止，避免剪贴板被占用时无限阻塞。
 const NATIVE_COPY_TIMEOUT: Duration = Duration::from_secs(2);
@@ -86,6 +93,54 @@ pub fn default_shell() -> String {
     #[cfg(not(windows))]
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
     shell
+}
+
+/// 路径稳定比较键：Windows 大小写不敏感，其余平台取原文本。
+pub fn path_key(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        path.to_string_lossy().to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string_lossy().into_owned()
+    }
+}
+
+/// 应用管理的截图目录：`<user_data_root>/attachments`；数据根不可用时 None。
+pub fn attachments_dir() -> Option<PathBuf> {
+    crate::config::user_data_root()
+        .ok()
+        .map(|root| root.join("attachments"))
+}
+
+/// managed 资产文件名规则：32 位小写十六进制 token + 图片扩展名。
+pub fn is_managed_asset_name(name: &str) -> bool {
+    let Some((stem, extension)) = name.rsplit_once('.') else {
+        return false;
+    };
+    is_asset_token(stem) && is_image_extension(extension)
+}
+
+/// 临时落盘文件名规则：`.tmp-{token}.{ext}`（原子改名前）。
+pub fn is_managed_temp_name(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix(".tmp-") else {
+        return false;
+    };
+    is_managed_asset_name(rest)
+}
+
+/// 32 位小写十六进制资产 token。
+fn is_asset_token(token: &str) -> bool {
+    token.len() == 32
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// 支持的图片扩展名。
+fn is_image_extension(extension: &str) -> bool {
+    matches!(extension, "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp")
 }
 
 /// 读取进程当前工作目录；平台不支持、进程已退出或无权限时返回 None。

@@ -7,6 +7,8 @@ use crate::app::overlay::TextInput;
 use crate::db::{FolderRecord, PromptRecord};
 use crate::ui::text;
 
+use super::{AttachmentKind, AttachmentSource, PromptAttachment};
+
 /// 提示词条目状态；与 DB 稳定值 `todo` / `in_progress` / `completed` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptItemStatus {
@@ -61,6 +63,8 @@ pub struct PromptItem {
     pub name: String,
     pub content: String,
     pub status: PromptItemStatus,
+    /// 已保存附件列表（与正文一起提交入库）。
+    pub attachments: Vec<PromptAttachment>,
 }
 
 /// 临时提示词：仅存内存、不入库；列表展示名取内容首行摘要（空白项取占位名 `default`）。
@@ -68,6 +72,8 @@ pub struct PromptItem {
 pub struct TempPrompt {
     pub id: u64,
     pub content: String,
+    /// 临时草稿附件；保存为正式条目时随正文一起转移。
+    pub attachments: Vec<PromptAttachment>,
 }
 
 impl TempPrompt {
@@ -326,12 +332,32 @@ impl From<FolderRecord> for PromptFolder {
 
 impl From<PromptRecord> for PromptItem {
     fn from(record: PromptRecord) -> Self {
+        let attachments = record
+            .attachments
+            .into_iter()
+            .map(|attachment| {
+                let source = if attachment.managed_asset_id.is_some() {
+                    AttachmentSource::Managed
+                } else {
+                    AttachmentSource::External
+                };
+                PromptAttachment {
+                    id: attachment.id,
+                    path: attachment.path,
+                    kind: AttachmentKind::parse(&attachment.kind),
+                    name: attachment.name,
+                    source,
+                    managed_asset_id: attachment.managed_asset_id,
+                }
+            })
+            .collect();
         Self {
             id: record.id,
             folder_id: record.folder_id,
             name: record.name,
             content: record.content,
             status: PromptItemStatus::parse(&record.status),
+            attachments,
         }
     }
 }
@@ -377,6 +403,8 @@ pub struct PromptPanel {
     tree_selection_touched: bool,
     /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
     pub search: TextInput,
+    /// 已更新内存但数据库尚未确认的条目 ID（自动保存重试判定）。
+    pending_saves: Vec<i64>,
 }
 
 impl PromptPanel {
@@ -392,12 +420,36 @@ impl PromptPanel {
             temps: vec![TempPrompt {
                 id: 0,
                 content: String::new(),
+                attachments: Vec::new(),
             }],
             next_temp_id: 1,
             tree_return: None,
             tree_selection_touched: false,
             search: TextInput::new(""),
+            pending_saves: Vec::new(),
         }
+    }
+
+    /// 标记条目已写入内存、等待数据库确认。
+    pub fn mark_item_pending(&mut self, id: i64) {
+        if !self.pending_saves.contains(&id) {
+            self.pending_saves.push(id);
+        }
+    }
+
+    /// 清除条目的待确认标记（保存成功或树从数据库重载后）。
+    pub fn clear_item_pending(&mut self, id: i64) {
+        self.pending_saves.retain(|pending| *pending != id);
+    }
+
+    /// 条目是否有未确认的保存。
+    pub fn item_pending(&self, id: i64) -> bool {
+        self.pending_saves.contains(&id)
+    }
+
+    /// 清除全部待确认标记（树重载：条目内容即数据库状态）。
+    pub fn clear_pending_saves(&mut self) {
+        self.pending_saves.clear();
     }
 
     /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白绑定清除之后调用）。
@@ -436,6 +488,7 @@ impl PromptPanel {
         self.temps.push(TempPrompt {
             id,
             content: String::new(),
+            attachments: Vec::new(),
         });
         id
     }
@@ -456,6 +509,11 @@ impl PromptPanel {
     /// 按 id 取临时提示词。
     pub fn temp(&self, id: u64) -> Option<&TempPrompt> {
         self.temps.iter().find(|temp| temp.id == id)
+    }
+
+    /// 全部临时提示词（内存引用扫描用）。
+    pub fn temps(&self) -> &[TempPrompt] {
+        &self.temps
     }
 
     /// 按 id 取临时提示词（可变）。

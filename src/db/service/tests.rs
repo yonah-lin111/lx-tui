@@ -201,6 +201,9 @@ fn save_and_status_effects_persist() {
         workspace: cwd.clone(),
         id,
         content: "hello".into(),
+        attachments: Vec::new(),
+        prompt: state.prompt.id(),
+        revision: state.prompt.revision(),
     });
     state.effects.push(Effect::SetPromptStatus {
         workspace: cwd.clone(),
@@ -287,7 +290,7 @@ fn tree_loads_on_demand_for_displayed_workspace() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "existing", "")
+        .create_prompt(&cwd, None, "existing", "", &[])
         .expect("seed");
     assert!(!state.workspaces[0].prompt_panel.loaded);
     service.pump(&mut state);
@@ -311,6 +314,7 @@ fn save_draft_effect_persists_content_binds_editor_and_removes_temp() {
         folder_id: None,
         name: "New prompt".into(),
         content: "draft body".into(),
+        attachments: Vec::new(),
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
@@ -361,6 +365,7 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
         folder_id: Some(folder_id),
         name: "New prompt".into(),
         content: "body".into(),
+        attachments: Vec::new(),
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
@@ -369,4 +374,263 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
     assert_eq!(item.folder_id, Some(folder_id));
     assert_eq!(item.content, "body");
     assert!(panel.temp(temp_id).is_none());
+}
+
+// ===== v2：附件持久化与 managed 清理 =====
+
+/// 独立测试目录（managed 截图与外部文件）。
+fn temp_dir(label: &str) -> PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "lx-tui-service-files-{label}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("temp dir");
+    path
+}
+
+#[test]
+fn save_draft_effect_persists_attachments_and_moves_temp() {
+    let (mut service, mut state, cwd, _) = trusted_service("draft-attach");
+    let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+        panic!("temp bound by default");
+    };
+    let attachment = crate::app::prompt::PromptAttachment::external(
+        PathBuf::from("/tmp/legacy-note.txt"),
+        crate::app::prompt::AttachmentKind::File,
+    );
+    {
+        let temp = state.workspaces[0]
+            .prompt_panel
+            .temp_mut(temp_id)
+            .expect("temp exists");
+        temp.content = "draft body".into();
+        temp.attachments = vec![attachment.clone()];
+    }
+    state.effects.push(Effect::SaveDraft {
+        workspace: cwd.clone(),
+        folder_id: None,
+        name: "New prompt".into(),
+        content: "draft body".into(),
+        attachments: vec![attachment],
+    });
+    assert!(service.pump(&mut state));
+    let item = &state.workspaces[0].prompt_panel.tree.items()[0];
+    assert_eq!(item.attachments.len(), 1, "附件随草稿转移");
+    let prompts = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&cwd)
+        .expect("list");
+    assert_eq!(prompts[0].attachments.len(), 1);
+    assert_eq!(
+        prompts[0].attachments[0].path,
+        PathBuf::from("/tmp/legacy-note.txt")
+    );
+}
+
+#[test]
+fn save_prompt_content_confirms_revision_and_clears_pending() {
+    let (mut service, mut state, cwd, _) = trusted_service("save-confirm");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(&cwd, None, "p", "old", &[])
+        .expect("seed");
+    service.pump(&mut state);
+    let id = state.workspaces[0].prompt_panel.tree.items()[0].id;
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    state.prompt.insert_str(" edited");
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    state.effects.push(Effect::SavePromptContent {
+        workspace: cwd.clone(),
+        id,
+        content: "old edited".into(),
+        attachments: Vec::new(),
+        prompt,
+        revision,
+    });
+    assert!(service.pump(&mut state));
+    assert!(state.prompt.is_saved(), "成功回执确认对应修订");
+    assert!(!state.workspaces[0].prompt_panel.item_pending(id));
+    let prompts = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&cwd)
+        .expect("list");
+    assert_eq!(prompts[0].content, "old edited");
+}
+
+#[test]
+fn save_prompt_content_failure_keeps_dirty_and_pending() {
+    let (mut service, mut state, cwd, _) = trusted_service("save-failure");
+    state.prompt.insert_str("body");
+    assert!(!state.prompt.is_saved());
+    let prompt = state.prompt.id();
+    let revision = state.prompt.revision();
+    // 指向不存在的条目：数据库写入失败。
+    state.effects.push(Effect::SavePromptContent {
+        workspace: cwd.clone(),
+        id: 999,
+        content: "body".into(),
+        attachments: Vec::new(),
+        prompt,
+        revision,
+    });
+    service.pump(&mut state);
+    assert!(!state.prompt.is_saved(), "失败保留脏状态等待重试");
+    assert!(state.toast.is_some(), "失败给出可见反馈");
+}
+
+#[test]
+fn managed_cleanup_keeps_shared_assets_and_never_deletes_external_files() {
+    let (mut service, state, cwd, _) = trusted_service("gc-shared");
+    let dir = temp_dir("gc-shared");
+    let asset_id = "0123456789abcdef0123456789abcdef";
+    let asset_path = dir.join(format!("{asset_id}.png"));
+    std::fs::write(&asset_path, b"png").expect("asset file");
+    let external_path = dir.join("external-note.txt");
+    std::fs::write(&external_path, b"note").expect("external file");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .register_managed_asset(asset_id, &asset_path)
+        .expect("register");
+    let image = |id: &str| AttachmentWrite {
+        id: id.to_string(),
+        managed_asset_id: Some(asset_id.to_string()),
+        external_path: None,
+        kind: "image".to_string(),
+        name: "shot.png".to_string(),
+    };
+    let external = AttachmentWrite {
+        id: "att-ext".to_string(),
+        managed_asset_id: None,
+        external_path: Some(external_path.clone()),
+        kind: "file".to_string(),
+        name: "external-note.txt".to_string(),
+    };
+    let first = service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(&cwd, None, "first", "", &[image("att-1")])
+        .expect("first");
+    let second = service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(&cwd, None, "second", "", &[image("att-2"), external])
+        .expect("second");
+    service.cleanup_managed(&state);
+    assert!(asset_path.exists(), "共享引用保留");
+    assert!(external_path.exists(), "外部文件不删");
+
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .delete_prompt(first)
+        .expect("delete first");
+    service.cleanup_managed(&state);
+    assert!(asset_path.exists(), "仍有第二个 prompt 引用");
+
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .delete_prompt(second)
+        .expect("delete second");
+    service.cleanup_managed(&state);
+    assert!(!asset_path.exists(), "最后引用删除后清理文件");
+    assert!(external_path.exists(), "外部文件始终保留");
+    assert!(
+        service
+            .db
+            .as_ref()
+            .expect("db")
+            .list_managed_assets()
+            .expect("assets")
+            .is_empty(),
+        "登记行随文件一并回收"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn managed_cleanup_respects_in_memory_temp_references() {
+    let (mut service, mut state, _cwd, _) = trusted_service("gc-temp");
+    let dir = temp_dir("gc-temp");
+    let asset_id = "fedcba9876543210fedcba9876543210";
+    let asset_path = dir.join(format!("{asset_id}.png"));
+    std::fs::write(&asset_path, b"png").expect("asset file");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .register_managed_asset(asset_id, &asset_path)
+        .expect("register");
+    // 只有内存临时草稿引用：正文引用与附件都算。
+    {
+        let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+            panic!("temp bound");
+        };
+        let temp = state.workspaces[0]
+            .prompt_panel
+            .temp_mut(temp_id)
+            .expect("temp");
+        temp.content = format!("@[refer-image]({})", asset_path.display());
+    }
+    service.cleanup_managed(&state);
+    assert!(asset_path.exists(), "内存引用保护资产");
+
+    {
+        let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
+            panic!("temp bound");
+        };
+        let temp = state.workspaces[0]
+            .prompt_panel
+            .temp_mut(temp_id)
+            .expect("temp");
+        temp.content = String::new();
+    }
+    service.cleanup_managed(&state);
+    assert!(!asset_path.exists(), "无人引用时回收");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn orphan_scan_removes_temp_and_unregistered_files_but_keeps_registered() {
+    let (service, _state, _cwd, _) = trusted_service("orphan-scan");
+    let dir = temp_dir("orphan-scan");
+    let token = "00112233445566778899aabbccddeeff";
+    let registered_path = dir.join(format!("{token}.png"));
+    std::fs::write(&registered_path, b"png").expect("registered");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .register_managed_asset(token, &registered_path)
+        .expect("register");
+    let unregistered = dir.join("ffffffffffffffffffffffffffffffff.png");
+    std::fs::write(&unregistered, b"png").expect("unregistered");
+    let temp = dir.join(".tmp-00112233445566778899aabbccddeeff.png");
+    std::fs::write(&temp, b"png").expect("temp");
+    let unknown = dir.join("notes.txt");
+    std::fs::write(&unknown, b"note").expect("unknown");
+    let nested = dir.join("subdir");
+    std::fs::create_dir_all(&nested).expect("nested dir");
+
+    service.cleanup_orphan_files_in(&dir);
+    assert!(registered_path.exists(), "已登记文件保留");
+    assert!(!unregistered.exists(), "未登记同规则文件清理");
+    assert!(!temp.exists(), "临时落盘文件清理");
+    assert!(unknown.exists(), "不认识的文件名跳过");
+    assert!(nested.exists(), "目录不处理");
+    let _ = std::fs::remove_dir_all(&dir);
 }

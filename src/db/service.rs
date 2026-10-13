@@ -4,17 +4,19 @@
 //! 启动信任门由入口在进入应用前调用：`untrusted_startup_path` 给出待信任路径，
 //! 信任页确认后以 `trust_path` 登记；应用内部触发的信任检查仍走模态浮层。
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::app::effects::Effect;
 use crate::app::overlay::Overlay;
+use crate::app::prompt::{AttachmentSource, PromptAttachment};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::ui::text;
 
-use super::Database;
+use super::{AttachmentWrite, Database};
 
 /// 单次泵送内效应执行的轮数上限（效应可级联产生新效应，如信任授予后的续作）。
 const MAX_EFFECT_ROUNDS: usize = 16;
@@ -53,6 +55,26 @@ impl Persistence {
     /// 记录工作区信任（写库）；库不可用或写失败返回 false（仅日志，不阻断进入）。
     pub fn trust_path(&self, path: &Path, name: &str) -> bool {
         self.with_db(|db| db.trust_workspace(path, name)).is_some()
+    }
+
+    /// 登记 managed 截图资产；失败返回 false（调用方删除刚生成的文件）。
+    pub fn register_managed_asset(&self, asset_id: &str, path: &Path) -> bool {
+        self.with_db(|db| db.register_managed_asset(asset_id, path))
+            .is_some()
+    }
+
+    /// 撤销 managed 资产登记（仅用于登记后结果失效的回滚）；文件由调用方处理。
+    pub fn unregister_managed_asset(&self, asset_id: &str) {
+        self.with_db(|db| db.delete_managed_asset(asset_id));
+    }
+
+    /// 测试辅助：managed 资产登记数。
+    #[cfg(test)]
+    pub fn managed_asset_count_for_test(&self) -> usize {
+        self.db
+            .as_ref()
+            .and_then(|db| db.list_managed_assets().ok())
+            .map_or(0, |assets| assets.len())
     }
 
     /// 执行全部待办效应并惰性载入显示中工作区的提示词树；返回状态是否有变化。
@@ -129,7 +151,7 @@ impl Persistence {
                 name,
             } => {
                 let Some(id) =
-                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, ""))
+                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, "", &[]))
                 else {
                     return false;
                 };
@@ -143,10 +165,13 @@ impl Persistence {
                 folder_id,
                 name,
                 content,
+                attachments,
             } => {
-                let Some(id) =
-                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, &content))
-                else {
+                let writes = attachment_writes(&attachments);
+                let Some(id) = self.with_db(|db| {
+                    db.create_prompt(&workspace, folder_id, &name, &content, &writes)
+                }) else {
+                    // 失败：TempPrompt 与附件仍在，保存选择器可重试。
                     return false;
                 };
                 let changed = self.reload_tree(state, &workspace);
@@ -167,7 +192,9 @@ impl Persistence {
             }
             Effect::DeleteFolder { workspace, id } => {
                 self.with_db(|db| db.delete_folder(id));
-                self.reload_tree(state, &workspace)
+                let changed = self.reload_tree(state, &workspace);
+                self.cleanup_managed(state);
+                changed
             }
             Effect::RenamePrompt {
                 workspace,
@@ -179,11 +206,40 @@ impl Persistence {
             }
             Effect::DeletePrompt { workspace, id } => {
                 self.with_db(|db| db.delete_prompt(id));
-                self.reload_tree(state, &workspace)
+                let changed = self.reload_tree(state, &workspace);
+                self.cleanup_managed(state);
+                changed
             }
-            Effect::SavePromptContent { id, content, .. } => {
-                self.with_db(|db| db.update_prompt_content(id, &content));
-                false
+            Effect::SavePromptContent {
+                id,
+                content,
+                attachments,
+                prompt,
+                revision,
+                ..
+            } => {
+                let writes = attachment_writes(&attachments);
+                let saved = self.with_db(|db| db.update_prompt_document(id, &content, &writes));
+                if saved.is_some() {
+                    update::mark_prompt_item_persisted(state, id);
+                    update::mark_prompt_saved(state, prompt, revision);
+                    // 正文引用可能被编辑移除：保存成功后统一回收无人引用的 managed 截图。
+                    self.cleanup_managed(state);
+                    true
+                } else {
+                    // 失败：保留脏状态与待保存内容，下一轮静置重试并给出可见反馈。
+                    update::reset_prompt_autosave(state, prompt);
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Error,
+                            text::TOAST_PROMPT_SAVE_FAILED,
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    true
+                }
             }
             Effect::SetPromptStatus { id, status, .. } => {
                 self.with_db(|db| db.update_prompt_status(id, status.as_str()));
@@ -214,6 +270,130 @@ impl Persistence {
             Err(error) => {
                 tracing::warn!(%error, "database operation failed");
                 None
+            }
+        }
+    }
+
+    /// 启动清理：回收无人引用的 managed 截图与崩溃遗留的临时文件；失败留给下次启动重试。
+    pub fn cleanup_startup(&mut self) {
+        let state = AppState::demo();
+        self.cleanup_managed(&state);
+        self.cleanup_orphan_files();
+    }
+
+    /// managed 截图垃圾回收：数据库提交后运行，先完成引用检查再删除文件。
+    ///
+    /// 引用来源：已保存附件的资产 ID、已保存正文与内存提示词中的 `@[refer-image]`
+    /// 路径、内存附件路径；仅凭登记与引用判断，绝不删除外部文件或符号链接目标。
+    pub fn cleanup_managed(&mut self, state: &AppState) {
+        let Some(db) = &self.db else {
+            return;
+        };
+        let Ok(assets) = db.list_managed_assets() else {
+            tracing::warn!("managed asset listing failed; skipping cleanup");
+            return;
+        };
+        if assets.is_empty() {
+            return;
+        }
+        let mut referenced_ids: HashSet<String> = match db.managed_attachment_ids() {
+            Ok(ids) => ids.into_iter().collect(),
+            Err(error) => {
+                tracing::warn!(%error, "managed attachment lookup failed; skipping cleanup");
+                return;
+            }
+        };
+        let mut referenced_paths: HashSet<String> = HashSet::new();
+        if let Ok(contents) = db.all_prompt_contents() {
+            for content in contents {
+                collect_reference_paths(&content, &mut referenced_paths);
+            }
+        }
+        let mut push_memory = |text: &str, attachments: &[PromptAttachment]| {
+            for attachment in attachments {
+                if let Some(asset) = &attachment.managed_asset_id {
+                    referenced_ids.insert(asset.clone());
+                }
+                referenced_paths.insert(crate::platform::path_key(&attachment.path));
+            }
+            collect_reference_paths(text, &mut referenced_paths);
+        };
+        push_memory(state.prompt.text(), state.prompt.attachments());
+        for workspace in &state.workspaces {
+            if let Some(draft) = workspace.prompt.as_ref() {
+                push_memory(draft.editor.text(), draft.editor.attachments());
+            }
+            for temp in workspace.prompt_panel.temps() {
+                push_memory(&temp.content, &temp.attachments);
+            }
+        }
+        for asset in assets {
+            let key = crate::platform::path_key(&asset.path);
+            if referenced_ids.contains(&asset.external_id) || referenced_paths.contains(&key) {
+                continue;
+            }
+            if let Err(error) = db.delete_managed_asset(&asset.external_id) {
+                tracing::warn!(%error, "managed asset row delete failed");
+                continue;
+            }
+            match std::fs::remove_file(&asset.path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    tracing::warn!(%error, path = %asset.path.display(), "managed asset file delete failed");
+                }
+            }
+        }
+    }
+
+    /// 管理目录孤儿扫描：删除本功能命名规则的未登记文件与临时落盘文件；
+    /// 符号链接与不认识的文件名一律跳过并记录。
+    fn cleanup_orphan_files(&self) {
+        if let Some(dir) = crate::platform::attachments_dir() {
+            self.cleanup_orphan_files_in(&dir);
+        }
+    }
+
+    /// 指定管理目录的孤儿扫描（目录可注入，测试隔离用）。
+    pub fn cleanup_orphan_files_in(&self, dir: &Path) {
+        let Some(db) = &self.db else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let registered: HashSet<String> = db
+            .list_managed_assets()
+            .map(|assets| {
+                assets
+                    .into_iter()
+                    .map(|asset| crate::platform::path_key(&asset.path))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_file() || file_type.is_symlink() {
+                tracing::warn!(path = %path.display(), "skipping non-file entry in attachments dir");
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let removable = crate::platform::is_managed_temp_name(name)
+                || (crate::platform::is_managed_asset_name(name)
+                    && !registered.contains(&crate::platform::path_key(&path)));
+            if !removable {
+                if !crate::platform::is_managed_asset_name(name) {
+                    tracing::warn!(path = %path.display(), "skipping unrecognized file in attachments dir");
+                }
+                continue;
+            }
+            if let Err(error) = std::fs::remove_file(&path) {
+                tracing::warn!(%error, path = %path.display(), "orphan cleanup failed");
             }
         }
     }
@@ -276,6 +456,30 @@ fn workspace_index(state: &AppState, path: &Path) -> Option<usize> {
         .workspaces
         .iter()
         .position(|workspace| workspace.cwd.as_deref() == Some(path))
+}
+
+/// 附件模型 → 数据库写入参数： managed 走资产引用，外部文件记路径。
+fn attachment_writes(attachments: &[PromptAttachment]) -> Vec<AttachmentWrite> {
+    attachments
+        .iter()
+        .map(|attachment| AttachmentWrite {
+            id: attachment.id.clone(),
+            managed_asset_id: attachment.managed_asset_id.clone(),
+            external_path: match attachment.source {
+                AttachmentSource::External => Some(attachment.path.clone()),
+                AttachmentSource::Managed => None,
+            },
+            kind: attachment.kind.as_str().to_string(),
+            name: attachment.name.clone(),
+        })
+        .collect()
+}
+
+/// 正文中的 `@[refer-image]` 路径收集（比较键）。
+fn collect_reference_paths(text: &str, paths: &mut HashSet<String>) {
+    for path in crate::app::markdown::image_reference_paths(text) {
+        paths.insert(crate::platform::path_key(Path::new(&path)));
+    }
 }
 
 /// 规范化路径；失败时保留原路径（路径可能刚被删除）。

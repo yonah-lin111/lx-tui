@@ -133,10 +133,16 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
 
 /// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
 ///
-/// 文件提及面板优先于斜杠命令面板、斜杠命令面板优先于块命令面板；三者互斥，
-/// 同时只可能有一个打开。
+/// 优先级：粘贴选择 > 文件提及 > 字母快捷 > 斜杠命令 > 块命令；互斥面板同一时刻只可能
+/// 打开一个；粘贴面板打开时其余按键按面板策略吞掉。
 fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    if route_paste_panel(state, command) {
+        return true;
+    }
     if route_mention_panel(state, command) {
+        return true;
+    }
+    if route_refer_panel(state, command) {
         return true;
     }
     if route_slash_panel(state, command) {
@@ -147,6 +153,50 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
         EditorCommand::Down => state.prompt.panel_move(1),
         EditorCommand::Newline => state.prompt.panel_confirm(),
         EditorCommand::Escape => state.prompt.panel_escape(),
+        _ => false,
+    }
+}
+
+/// 粘贴二级面板按键：上下移动、回车确认、Esc 取消；面板打开时其余命令吞掉。
+///
+/// 确认时按高亮可用项执行（上传/引用/路径）；写入被受保护行拒绝时保持面板不改正文。
+fn route_paste_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    if state.prompt.paste_panel().is_none() {
+        return false;
+    }
+    match command {
+        EditorCommand::Up => {
+            state.prompt.paste_move(-1);
+        }
+        EditorCommand::Down => {
+            state.prompt.paste_move(1);
+        }
+        EditorCommand::Newline => {
+            if let Some(action) = state
+                .prompt
+                .paste_panel()
+                .and_then(|panel| panel.active_action())
+            {
+                state.prompt.paste_confirm(action);
+            } else {
+                state.prompt.paste_cancel();
+            }
+        }
+        EditorCommand::Escape => {
+            state.prompt.paste_cancel();
+        }
+        _ => {}
+    }
+    true
+}
+
+/// 字母快捷面板按键：上下移动、回车确认、Esc 关闭；返回是否消费。
+fn route_refer_panel(state: &mut AppState, command: &EditorCommand) -> bool {
+    match command {
+        EditorCommand::Up => state.prompt.refer_move(-1),
+        EditorCommand::Down => state.prompt.refer_move(1),
+        EditorCommand::Newline => state.prompt.refer_confirm(),
+        EditorCommand::Escape => state.prompt.refer_escape(),
         _ => false,
     }
 }
@@ -251,6 +301,8 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if from == to {
         return;
     }
+    // 工作区切换取消在途粘贴提案与待处理截图（引用检查随后由事件层执行）。
+    state.prompt.paste_cancel();
     commit_prompt_buffer(state, from);
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt_panel.drop_blank_temp_binding();
@@ -266,6 +318,7 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt = Some(next);
     }
+    state.prompt_attachment_scroll = 0;
     restore_prompt_view(state, to);
     sync_mention_root(state);
 }
@@ -293,6 +346,7 @@ fn restore_prompt_view(state: &mut AppState, index: usize) {
         workspace.prompt_panel.editing = Some(PromptEditing::Temp(id));
     }
     state.prompt.set_text("");
+    state.prompt_attachment_scroll = 0;
 }
 
 /// 把激活工作区的挂起缓冲装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
@@ -301,6 +355,7 @@ fn restore_prompt_view(state: &mut AppState, index: usize) {
 /// 视图按目标工作区的编辑绑定恢复（条目或临时提示词）。
 fn load_displayed_draft(state: &mut AppState) {
     let index = state.active_workspace;
+    state.prompt.paste_cancel();
     let next = state
         .workspaces
         .get_mut(index)
@@ -308,6 +363,7 @@ fn load_displayed_draft(state: &mut AppState) {
         .unwrap_or_default();
     state.prompt = next.editor;
     state.prompt_root = next.root;
+    state.prompt_attachment_scroll = 0;
     restore_prompt_view(state, index);
     sync_mention_root(state);
 }
@@ -353,6 +409,45 @@ pub fn apply_mention_entries(
 /// 鼠标悬停提及条目：更新高亮；返回是否变化。
 pub fn hover_mention(state: &mut AppState, index: usize) -> bool {
     state.prompt.mention_set_active(index)
+}
+
+/// 鼠标悬停字母快捷候选：更新高亮；返回是否变化。
+pub fn hover_refer(state: &mut AppState, index: usize) -> bool {
+    state.prompt.refer_set_active(index)
+}
+
+/// 鼠标点选字母快捷候选：确认插入完整原文。
+pub fn select_refer(state: &mut AppState, index: usize) {
+    state.prompt.refer_set_active(index);
+    state.prompt.refer_confirm();
+}
+
+/// 鼠标悬停粘贴面板操作项：仅接受可用项；返回是否变化。
+pub fn hover_paste(state: &mut AppState, index: usize) -> bool {
+    state.prompt.paste_set_active(index)
+}
+
+/// 鼠标点选粘贴面板操作项：按该项执行。
+pub fn select_paste(state: &mut AppState, index: usize) {
+    if let Some(action) = super::prompt::PasteAction::ALL.get(index).copied() {
+        state.prompt.paste_confirm(action);
+    }
+}
+
+/// 移除提示词附件；返回是否产生变更。
+pub fn remove_prompt_attachment(state: &mut AppState, id: &str) -> bool {
+    state.prompt.remove_attachment(id)
+}
+
+/// 滚轮滚动附件条视口；越界钳制；返回是否变化。
+pub fn scroll_prompt_attachments(state: &mut AppState, direction: isize) -> bool {
+    let count = state.prompt.attachments().len();
+    let max = count.saturating_sub(usize::from(layout::PROMPT_ATTACHMENT_BAR_ROWS));
+    let before = state.prompt_attachment_scroll.min(max);
+    let next = (before as isize + direction).clamp(0, max as isize) as usize;
+    let moved = next != before || next != state.prompt_attachment_scroll;
+    state.prompt_attachment_scroll = next;
+    moved
 }
 
 /// 鼠标点选提及条目：确认插入。
@@ -533,7 +628,12 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
 pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
         if *id == state.prompt.id() {
-            let (cols, rows) = layout::prompt_inner_size(*rect);
+            let attachment_rows = if prompt_tree_mode(state) {
+                0
+            } else {
+                layout::prompt_attachment_rows(state.prompt.attachments().len())
+            };
+            let (cols, rows) = layout::prompt_inner_size_with(*rect, attachment_rows);
             if state.prompt.size() != (cols, rows) {
                 clear_selection(state);
             }
@@ -1055,7 +1155,7 @@ fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
     if !prompt_item_editing(state) || !state.prompt.autosave_due(now, PROMPT_AUTOSAVE_DELAY) {
         return false;
     }
-    state.prompt.mark_saved();
+    // 不预先标记已保存：保存成功回执由服务按修订号确认；失败保持脏状态重试。
     commit_editing_prompt(state);
     true
 }

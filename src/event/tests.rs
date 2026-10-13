@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use crate::app::overlay::ConfirmSwitchCwd;
 
 use super::*;
+use crate::app::prompt::PasteCandidateKind;
 
 fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
     let view = ui::layout::compute(
@@ -251,6 +252,7 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
                 name: format!("item-{index:02}"),
                 content: String::new(),
                 status: PromptItemStatus::Todo,
+                attachments: Vec::new(),
             })
             .collect(),
     );
@@ -2070,6 +2072,7 @@ fn ctrl_s_saves_open_item_immediately() {
             name: "item".into(),
             content: "body".into(),
             status: PromptItemStatus::Todo,
+            attachments: Vec::new(),
         }],
     );
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
@@ -2293,6 +2296,7 @@ fn mouse_double_click_prompt_item_row_opens_editor() {
             name: "item".into(),
             content: "item body".into(),
             status: PromptItemStatus::Todo,
+            attachments: Vec::new(),
         }],
         PromptRowKind::Item,
     );
@@ -2349,6 +2353,7 @@ fn mouse_double_click_prompt_folder_toggles_once() {
             name: "item".into(),
             content: "item body".into(),
             status: PromptItemStatus::Todo,
+            attachments: Vec::new(),
         }],
         PromptRowKind::Folder,
     );
@@ -2987,4 +2992,175 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
         &mut dirty,
     );
     assert!(state.toast.is_none(), "点击 toast 之外关闭");
+}
+
+// ===== 粘贴入口与结果路由 =====
+
+/// 独立临时目录（粘贴测试文件隔离）。
+fn paste_temp_dir(label: &str) -> PathBuf {
+    let path =
+        std::env::temp_dir().join(format!("lx-tui-event-paste-{label}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    std::fs::create_dir_all(&path).expect("temp dir");
+    path
+}
+
+/// 独立数据库服务（managed 登记用）。
+fn paste_service(label: &str) -> crate::db::service::Persistence {
+    let path = std::env::temp_dir()
+        .join(format!("lx-tui-event-db-{label}-{}", std::process::id()))
+        .join("lx.db");
+    let database = crate::db::Database::open(&path).expect("db opens");
+    crate::db::service::Persistence::with_database(database)
+}
+
+#[test]
+fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
+    let dir = paste_temp_dir("terminal");
+    let file = dir.join("note.txt");
+    std::fs::write(&file, b"note").expect("file");
+    let mut state = AppState::demo();
+    state.prompt_focused = true;
+    paste::handle_terminal_paste(&mut state, file.display().to_string());
+    let panel = state.prompt.paste_panel().expect("proposal open");
+    assert_eq!(panel.candidates.len(), 1);
+    assert_eq!(panel.candidates[0].kind, PasteCandidateKind::File);
+    // 新粘贴先取消旧提案；普通文本仍同步插入。
+    paste::handle_terminal_paste(&mut state, "/api/users".to_string());
+    assert!(state.prompt.paste_panel().is_none());
+    assert_eq!(state.prompt.text(), "/api/users");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn terminal_paste_missing_path_falls_back_to_text() {
+    let mut state = AppState::demo();
+    state.prompt_focused = true;
+    let missing = std::env::temp_dir().join("lx-tui-definitely-missing-paste.txt");
+    let _ = std::fs::remove_file(&missing);
+    paste::handle_terminal_paste(&mut state, missing.display().to_string());
+    assert!(state.prompt.paste_panel().is_none());
+    assert_eq!(state.prompt.text(), missing.display().to_string());
+}
+
+#[test]
+fn clipboard_read_stale_image_cleans_staged_file() {
+    let service = paste_service("stale-image");
+    let dir = paste_temp_dir("stale-image");
+    let path = dir.join("00112233445566778899aabbccddeeff.png");
+    std::fs::write(&path, b"png").expect("staged file");
+    let mut state = AppState::demo();
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
+    let request = state.prompt.begin_paste_read(anchor);
+    let prompt = state.prompt.id();
+    paste::apply_clipboard_read(
+        &mut state,
+        &service,
+        prompt,
+        request + 1,
+        paste::ClipboardPayload::Image {
+            asset_id: "00112233445566778899aabbccddeeff".to_string(),
+            path: path.clone(),
+        },
+    );
+    assert!(!path.exists(), "过期结果删除未登记落盘文件");
+    assert!(state.prompt.paste_panel().is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn clipboard_read_image_registers_asset_and_opens_panel() {
+    let service = paste_service("image-ok");
+    let dir = paste_temp_dir("image-ok");
+    let path = dir.join("fedcba9876543210fedcba9876543210.png");
+    std::fs::write(&path, b"png").expect("staged file");
+    let mut state = AppState::demo();
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
+    let request = state.prompt.begin_paste_read(anchor);
+    let prompt = state.prompt.id();
+    paste::apply_clipboard_read(
+        &mut state,
+        &service,
+        prompt,
+        request,
+        paste::ClipboardPayload::Image {
+            asset_id: "fedcba9876543210fedcba9876543210".to_string(),
+            path: path.clone(),
+        },
+    );
+    let panel = state.prompt.paste_panel().expect("panel");
+    assert_eq!(panel.candidates[0].kind, PasteCandidateKind::Image);
+    assert!(path.exists(), "登记后文件保留");
+    assert_eq!(service.managed_asset_count_for_test(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn clipboard_read_text_paths_open_proposal_and_other_text_inserts() {
+    let service = paste_service("text-fallback");
+    let dir = paste_temp_dir("text-fallback");
+    let file = dir.join("a b.txt");
+    std::fs::write(&file, b"x").expect("file");
+    let mut state = AppState::demo();
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
+    let request = state.prompt.begin_paste_read(anchor);
+    let prompt = state.prompt.id();
+    paste::apply_clipboard_read(
+        &mut state,
+        &service,
+        prompt,
+        request,
+        paste::ClipboardPayload::Text(file.display().to_string()),
+    );
+    assert!(state.prompt.paste_panel().is_some(), "整段路径进入提案");
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(state.prompt.cursor());
+    let request = state.prompt.begin_paste_read(anchor);
+    let prompt = state.prompt.id();
+    paste::apply_clipboard_read(
+        &mut state,
+        &service,
+        prompt,
+        request,
+        paste::ClipboardPayload::Text("/api/users 文档".to_string()),
+    );
+    assert!(state.prompt.paste_panel().is_none());
+    assert_eq!(state.prompt.text(), "/api/users 文档");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn refresh_attachment_availability_marks_missing_files() {
+    let dir = paste_temp_dir("availability");
+    let existing = dir.join("exists.txt");
+    std::fs::write(&existing, b"x").expect("file");
+    let mut state = AppState::demo();
+    let candidates = vec![
+        crate::app::prompt::PasteCandidate::external(existing.clone(), PasteCandidateKind::File),
+        crate::app::prompt::PasteCandidate::external(
+            dir.join("missing.txt"),
+            PasteCandidateKind::File,
+        ),
+    ];
+    assert!(state.prompt.add_attachments(&candidates));
+    assert!(paste::refresh_attachment_availability(&mut state));
+    let ids: Vec<(String, bool)> = state
+        .prompt
+        .attachments()
+        .iter()
+        .map(|attachment| {
+            (
+                attachment.name.clone(),
+                state.prompt.attachment_available(&attachment.id),
+            )
+        })
+        .collect();
+    assert!(
+        ids.iter()
+            .any(|(name, available)| name == "missing.txt" && !available)
+    );
+    assert!(
+        ids.iter()
+            .any(|(name, available)| name == "exists.txt" && *available)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

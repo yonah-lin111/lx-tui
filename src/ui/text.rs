@@ -62,6 +62,8 @@ pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
 pub const PROMPT_UNDO_LABEL: &str = "[←]";
+/// 编辑视图粘贴按钮（`[⇩]`）。
+pub const PROMPT_PASTE_LABEL: &str = "[⇩]";
 pub const PROMPT_REDO_LABEL: &str = "[→]";
 pub const PROMPT_SELECT_ALL_LABEL: &str = "[*]";
 /// 条目保存状态点：已保存实心绿、未保存实心黄。
@@ -365,12 +367,52 @@ pub const TOAST_PATH_NOT_DIR: &str = "Path is not a directory";
 /// 设置服务不可用时的提示。
 pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 
+/// 提示词保存失败：内容保留脏状态，自动保存将重试。
+pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
+/// 剪贴板读取失败的通用提示。
+pub const TOAST_CLIPBOARD_READ_FAILED: &str = "Clipboard read failed";
+/// 剪贴板为空。
+pub const TOAST_CLIPBOARD_EMPTY: &str = "Clipboard is empty";
+/// 图片读取/保存失败。
+pub const TOAST_IMAGE_FAILED: &str = "Image paste failed";
+/// 粘贴面板：目录存在时不能上传为附件。
+pub const TOAST_PASTE_FOLDER_UPLOAD: &str = "Folders cannot be uploaded";
+
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
 pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";
 
 /// tooltip 边框标题；当前所有按钮共用一个固定标题。
 pub const TOOLTIP_TITLE: &str = "Tooltip";
+
+/// 粘贴二级面板与附件条文案。
+pub const PASTE_PANEL_TITLE: &str = "Paste";
+pub const PASTE_ACTION_UPLOAD: &str = "Upload as attachment";
+pub const PASTE_ACTION_REFERENCE: &str = "Insert reference";
+pub const PASTE_ACTION_PATH: &str = "Insert path";
+pub const PASTE_UPLOAD_FOLDERS_DISABLED: &str = "folders cannot be uploaded";
+pub const PASTE_REFERENCE_UNSUPPORTED: &str = "path cannot be referenced";
+/// 字母快捷候选面板标题。
+pub const REFER_PANEL_TITLE: &str = "References";
+/// 附件条：类型标签、缺失状态与移除按钮。
+pub const PROMPT_ATTACH_FILE_TAG: &str = "[file]";
+pub const PROMPT_ATTACH_IMAGE_TAG: &str = "[img]";
+pub const PROMPT_ATTACH_MISSING: &str = "(missing)";
+pub const PROMPT_ATTACH_REMOVE: &str = "[x]";
+
+/// 粘贴候选数量说明。
+pub fn paste_item_count(count: usize) -> String {
+    if count == 1 {
+        "1 item".to_string()
+    } else {
+        format!("{count} items")
+    }
+}
+
+/// 附件条滚动指示：`visible/total`。
+pub fn attachment_count_label(visible: usize, total: usize) -> String {
+    format!("{visible}/{total}")
+}
 
 /// 按钮 tooltip 文案：显示点击后的动作，随按钮当前状态翻转（收起/展开、钉住、切换视图）。
 pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
@@ -403,6 +445,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptRedo => "redo (ctrl+y)",
         TooltipTarget::PromptSelectAll => "select all",
         TooltipTarget::PromptSave => "mark saved",
+        TooltipTarget::PromptPaste => "paste files or images from clipboard",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
         TooltipTarget::SidebarSettings => "open settings",

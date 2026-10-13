@@ -126,6 +126,10 @@ pub struct AppState {
     pub settings_available: bool,
     /// 设置按钮点击请求：事件层取走后打开浏览器。
     pub settings_open_requested: bool,
+    /// 工具栏粘贴按钮点击请求：事件层取走后异步读取系统剪贴板。
+    pub clipboard_read_requested: bool,
+    /// 附件条滚动偏移（顶部附件索引）。
+    pub prompt_attachment_scroll: usize,
 }
 
 /// 工作区。
@@ -477,6 +481,8 @@ impl AppState {
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,
+            clipboard_read_requested: false,
+            prompt_attachment_scroll: 0,
         }
     }
 

@@ -52,6 +52,8 @@ pub fn apply_prompt_tree(
     let folders: Vec<PromptFolder> = folders.into_iter().map(PromptFolder::from).collect();
     let prompts: Vec<PromptItem> = prompts.into_iter().map(PromptItem::from).collect();
     workspace_state.prompt_panel.tree.replace(folders, prompts);
+    // 重载后的条目内容即数据库状态，未确认标记全部失效。
+    workspace_state.prompt_panel.clear_pending_saves();
     workspace_state.prompt_panel.loaded = true;
     workspace_state.prompt_panel.clamp_selection(visible);
     true
@@ -147,12 +149,16 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
         return;
     };
     let content = state.prompt.text().to_string();
+    let attachments = state.prompt.attachments().to_vec();
+    let prompt = state.prompt.id();
+    let revision = state.prompt.revision();
     match target {
         PromptEditing::Temp(id) => {
             if let Some(workspace_state) = state.workspaces.get_mut(workspace)
                 && let Some(temp) = workspace_state.prompt_panel.temp_mut(id)
             {
                 temp.content = content;
+                temp.attachments = attachments;
             }
         }
         PromptEditing::Item(id) => {
@@ -163,21 +169,36 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
             else {
                 return;
             };
-            let Some(item) = state
+            let pending = state
                 .workspaces
-                .get_mut(workspace)
-                .and_then(|workspace| workspace.prompt_panel.tree.item_mut(id))
-            else {
-                return;
-            };
-            if item.content == content {
-                return;
+                .get(workspace)
+                .is_some_and(|workspace| workspace.prompt_panel.item_pending(id));
+            {
+                let Some(item) = state
+                    .workspaces
+                    .get_mut(workspace)
+                    .and_then(|workspace| workspace.prompt_panel.tree.item_mut(id))
+                else {
+                    return;
+                };
+                if item.content == content && item.attachments == attachments && !pending {
+                    // 内容与库中一致且无未确认保存：直接确认对应修订，避免空转自动保存。
+                    state.prompt.confirm_saved(revision);
+                    return;
+                }
+                item.content.clone_from(&content);
+                item.attachments.clone_from(&attachments);
             }
-            item.content.clone_from(&content);
+            if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
+                workspace_state.prompt_panel.mark_item_pending(id);
+            }
             state.effects.push(Effect::SavePromptContent {
                 workspace: cwd,
                 id,
                 content,
+                attachments,
+                prompt,
+                revision,
             });
         }
     }
@@ -338,11 +359,11 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     if workspace != state.prompt_workspace() || !select_prompt_item(state, workspace, item_id) {
         return false;
     }
-    let Some(content) = state
+    let Some((content, attachments)) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
-        .map(|item| item.content.clone())
+        .map(|item| (item.content.clone(), item.attachments.clone()))
     else {
         return false;
     };
@@ -351,7 +372,8 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Item(item_id));
-    state.prompt.set_text(&content);
+    state.prompt.set_document(&content, attachments);
+    state.prompt_attachment_scroll = 0;
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
@@ -362,11 +384,11 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     if workspace != state.prompt_workspace() {
         return false;
     }
-    let Some(content) = state
+    let Some((content, attachments)) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
-        .map(|temp| temp.content.clone())
+        .map(|temp| (temp.content.clone(), temp.attachments.clone()))
     else {
         return false;
     };
@@ -375,7 +397,8 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(temp_id));
-    state.prompt.set_text(&content);
+    state.prompt.set_document(&content, attachments);
+    state.prompt_attachment_scroll = 0;
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
@@ -479,6 +502,7 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));
     state.prompt.set_text("");
+    state.prompt_attachment_scroll = 0;
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
@@ -756,20 +780,21 @@ fn save_draft(state: &mut AppState, workspace: usize, folder_id: Option<i64>, na
     let Some(cwd) = workspace_cwd(state, workspace) else {
         return;
     };
-    let content = state
+    let (content, attachments) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| match workspace.prompt_panel.editing {
             Some(PromptEditing::Temp(id)) => workspace.prompt_panel.temp(id),
             _ => None,
         })
-        .map(|temp| temp.content.clone())
+        .map(|temp| (temp.content.clone(), temp.attachments.clone()))
         .unwrap_or_default();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd,
         folder_id,
         name,
         content,
+        attachments,
     });
     state.overlay = None;
     clear_search_for(state, workspace);
@@ -791,6 +816,53 @@ fn clear_search_for(state: &mut AppState, workspace: usize) {
     if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
         workspace_state.prompt_panel.search.clear();
     }
+}
+
+/// 保存成功回执：按编辑器标识把对应修订标记为已保存（显示中或挂起草稿）。
+pub fn mark_prompt_saved(
+    state: &mut AppState,
+    prompt: crate::layout::PaneId,
+    revision: u64,
+) -> bool {
+    if state.prompt.id() == prompt {
+        return state.prompt.confirm_saved(revision);
+    }
+    for workspace in &mut state.workspaces {
+        if let Some(draft) = workspace.prompt.as_mut()
+            && draft.editor.id() == prompt
+        {
+            return draft.editor.confirm_saved(revision);
+        }
+    }
+    false
+}
+
+/// 保存成功：清除条目的待确认标记（内存内容即数据库状态）。
+pub fn mark_prompt_item_persisted(state: &mut AppState, id: i64) -> bool {
+    for workspace in &mut state.workspaces {
+        if workspace.prompt_panel.tree.item(id).is_some() {
+            workspace.prompt_panel.clear_item_pending(id);
+            return true;
+        }
+    }
+    false
+}
+
+/// 保存失败：重置对应编辑器的自动保存观察，等待下一轮静置重试。
+pub fn reset_prompt_autosave(state: &mut AppState, prompt: crate::layout::PaneId) -> bool {
+    if state.prompt.id() == prompt {
+        state.prompt.reset_autosave_watch();
+        return true;
+    }
+    for workspace in &mut state.workspaces {
+        if let Some(draft) = workspace.prompt.as_mut()
+            && draft.editor.id() == prompt
+        {
+            draft.editor.reset_autosave_watch();
+            return true;
+        }
+    }
+    false
 }
 
 /// 滚动树视口；越界钳制；返回是否变化。

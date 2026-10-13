@@ -31,6 +31,7 @@ fn demo_state() -> AppState {
             name: "loose".into(),
             content: "loose content".into(),
             status: "todo".into(),
+            attachments: Vec::new(),
         },
         PromptRecord {
             id: 12,
@@ -38,6 +39,7 @@ fn demo_state() -> AppState {
             name: "nested".into(),
             content: "nested content".into(),
             status: "completed".into(),
+            attachments: Vec::new(),
         },
     ];
     apply_prompt_tree(&mut state, 0, folders, prompts);
@@ -485,6 +487,7 @@ fn mode_roundtrip_without_selection_keeps_temp_editor() {
             name: "loose".into(),
             content: "body".into(),
             status: PromptItemStatus::Todo,
+            attachments: Vec::new(),
         }],
     );
     // 初始编辑视图绑定空 temp；列表恒有 default temp，其后才是条目。
@@ -1059,7 +1062,13 @@ fn autosave_commits_item_after_idle_delay() {
         tick(&mut state, now + Duration::from_millis(800)),
         "静置达标触发保存"
     );
-    assert!(state.prompt.is_saved(), "落库后复位为已保存");
+    assert!(!state.prompt.is_saved(), "保存回执（服务）到达前保持未保存");
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    assert!(crate::app::update::mark_prompt_saved(
+        &mut state, prompt, revision
+    ));
+    assert!(state.prompt.is_saved(), "回执确认后复位为已保存");
     assert!(
         state
             .effects
@@ -1099,6 +1108,11 @@ fn autosave_resets_timer_on_new_edits() {
         tick(&mut state, now + Duration::from_millis(1500)),
         "距新起点达标"
     );
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    assert!(crate::app::update::mark_prompt_saved(
+        &mut state, prompt, revision
+    ));
     assert!(state.prompt.is_saved());
 }
 
@@ -1172,9 +1186,15 @@ fn next_deadline_includes_prompt_autosave() {
     assert!(!tick(&mut state, now), "首个观察点只记录计时");
     let deadline = crate::app::update::next_deadline(&state).expect("自动保存待触发");
     assert!(tick(&mut state, deadline), "到期唤醒触发保存");
+    // 回执未到时仍安排重试；模拟服务回执确认后不再有待触发。
+    let revision = state.prompt.revision();
+    let prompt = state.prompt.id();
+    assert!(crate::app::update::mark_prompt_saved(
+        &mut state, prompt, revision
+    ));
     assert!(
         crate::app::update::next_deadline(&state).is_none(),
-        "保存后无待触发"
+        "确认后无待触发"
     );
 
     // 临时提示词不产生自动保存期限（空闲不轮询）。

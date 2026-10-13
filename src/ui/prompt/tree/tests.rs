@@ -33,6 +33,7 @@ fn item(id: i64, folder_id: Option<i64>, name: &str, status: PromptItemStatus) -
         name: name.to_string(),
         content: String::new(),
         status,
+        attachments: Vec::new(),
     }
 }
 
