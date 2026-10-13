@@ -59,6 +59,7 @@ fn view_for(state: &AppState) -> layout::ViewLayout {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     )
 }
 
@@ -1194,6 +1195,83 @@ fn collapsed_panel_buttons_sit_on_bottom_strip_row() {
         rendered_collapsed_label(&render_lines(&state), &view, CollapseTarget::Prompt),
         text::PROMPT_EXPAND_LABEL
     );
+}
+
+#[test]
+fn swap_button_renders_between_panels_and_moves_prompt() {
+    let mut state = AppState::demo();
+    let view = view_for(&state);
+    let button = swap_button(&view).expect("swap button visible");
+    assert!(view.panes.x < view.prompt.x);
+    assert_eq!(
+        rendered_area(&render_lines(&state), button),
+        text::SWAP_PROMPT_LABEL
+    );
+    let buffer = render_buffer(&state);
+    for x in button.x..button.right() {
+        assert_eq!(buffer[(x, button.y)].fg, ratatui::style::Color::Cyan);
+    }
+
+    update::swap_prompt_side(&mut state);
+    let view = view_for(&state);
+    assert!(view.prompt_left);
+    assert!(view.prompt.right() <= view.panes.x);
+    let button = swap_button(&view).expect("swap button visible after swap");
+    assert_eq!(button.x, view.prompt.right() - 1);
+    assert_eq!(
+        rendered_area(&render_lines(&state), button),
+        text::SWAP_PROMPT_LABEL
+    );
+}
+
+#[test]
+fn swap_button_needs_vertical_room() {
+    let config = Config::default();
+    let short = layout::compute(
+        Rect::new(0, 0, 100, 2),
+        &config,
+        false,
+        config.sidebar_width,
+        false,
+        30,
+        false,
+    );
+    assert_eq!(swap_button(&short), None);
+}
+
+#[test]
+fn swap_button_stays_visible_when_prompt_collapsed() {
+    let mut state = AppState::demo();
+    update::apply(Action::TogglePrompt, &mut state);
+    let view = view_for(&state);
+    assert!(state.prompt_collapsed);
+    let button = swap_button(&view).expect("swap button visible on collapsed strip");
+    assert_eq!(button.right(), view.prompt.x + 1);
+}
+
+#[test]
+fn swap_mirrors_prompt_collapse_affordances() {
+    let mut state = AppState::demo();
+    update::swap_prompt_side(&mut state);
+    let view = view_for(&state);
+    let prompt = button_for(&view, CollapseTarget::Prompt);
+    assert_eq!(
+        rendered_label(&render_lines(&state), &prompt),
+        text::PROMPT_LEFT_COLLAPSE_LABEL
+    );
+
+    update::apply(Action::TogglePrompt, &mut state);
+    let view = view_for(&state);
+    let button = button_for(&view, CollapseTarget::Prompt);
+    assert!(button.collapsed);
+    let lines = render_lines(&state);
+    let row: Vec<char> = lines[button.area.y as usize].chars().collect();
+    // 窄条贴侧栏：分隔线在右缘、展开箭头 `[▶]` 占满内容区。
+    assert_eq!(row[usize::from(view.prompt.right() - 1)], '│');
+    let label: String = (button.area.x..button.area.right() - 1)
+        .map(|x| row[x as usize])
+        .collect();
+    assert_eq!(label, text::PROMPT_LEFT_EXPAND_LABEL);
 }
 
 /// 让 prompt 文本溢出视口：按视口尺寸 resize 后写入两倍视口高度的行。

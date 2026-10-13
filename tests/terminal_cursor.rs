@@ -22,6 +22,7 @@ fn ready_state() -> (AppState, Config, Rect, Rect) {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     );
     let mut rects = layout::pane_rects(
         &state.active_tab().layout,

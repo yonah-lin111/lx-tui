@@ -12,10 +12,13 @@ pub struct ViewLayout {
     pub tab_bar: Rect,
     pub panes: Rect,
     pub prompt: Rect,
+    /// prompt 是否位于主区左侧（与 panes 互换）。
+    pub prompt_left: bool,
 }
 
-/// 划分主界面；标签栏横跨主区与右栏，右栏与窗格同顶同底；
-/// 侧栏折叠且宽度充足时保留窄条，右栏 prompt 始终可见。
+/// 划分主界面；标签栏横跨主区与 prompt 栏，prompt 与窗格同顶同底；
+/// 侧栏折叠且宽度充足时保留窄条，prompt 始终可见；`prompt_left` 为真时
+/// prompt 紧贴侧栏、窗格在主区右侧。
 pub fn compute(
     area: Rect,
     config: &Config,
@@ -23,6 +26,7 @@ pub fn compute(
     sidebar_width: u16,
     prompt_collapsed: bool,
     prompt_width: u16,
+    prompt_left: bool,
 ) -> ViewLayout {
     let sidebar_width = resolved_sidebar_width(area, config, sidebar_collapsed, sidebar_width);
     let sidebar = Rect {
@@ -35,29 +39,31 @@ pub fn compute(
     } else {
         clamp_prompt_width(available, prompt_width, config.min_pane_width)
     };
-    let main = Rect {
-        x: area.x + sidebar_width,
-        width: available.saturating_sub(prompt_width),
-        ..area
-    };
+    let main_x = area.x + sidebar_width;
+    let main_width = available.saturating_sub(prompt_width);
     let tab_bar = Rect {
-        x: main.x,
+        x: main_x,
         y: area.y,
         width: available,
         height: 1.min(area.height),
     };
     let body_y = area.y + tab_bar.height;
     let body_height = area.height.saturating_sub(tab_bar.height);
+    let (panes_x, prompt_x) = if prompt_left {
+        (main_x + prompt_width, main_x)
+    } else {
+        (main_x, area.x + area.width - prompt_width)
+    };
     let prompt = Rect {
-        x: area.x + area.width - prompt_width,
+        x: prompt_x,
         y: body_y,
         width: prompt_width,
         height: body_height,
     };
     let panes = Rect {
-        x: main.x,
+        x: panes_x,
         y: body_y,
-        width: main.width,
+        width: main_width,
         height: body_height,
     };
 
@@ -66,6 +72,7 @@ pub fn compute(
         tab_bar,
         panes,
         prompt,
+        prompt_left,
     }
 }
 
@@ -150,15 +157,16 @@ pub fn sidebar_width_at(view: &ViewLayout, config: &Config, boundary_x: u16) -> 
     desired.clamp(config.sidebar_min_width, max)
 }
 
-/// 拖拽分割线到屏幕列 `boundary_x` 时右栏应有的宽度（屏幕坐标）。
+/// 拖拽分割线到屏幕列 `boundary_x` 时 prompt 应有的宽度（屏幕坐标）；
+/// 按 prompt 所在侧换算：prompt 临靠哪条分割线，哪列就映射为当前宽度。
 pub fn prompt_width_at(view: &ViewLayout, boundary_x: u16, min_width: u16) -> u16 {
-    let screen_right = view.prompt.right();
-    let available = screen_right.saturating_sub(view.sidebar.width);
-    clamp_prompt_width(
-        available,
-        screen_right.saturating_sub(boundary_x),
-        min_width,
-    )
+    let available = view.panes.width.saturating_add(view.prompt.width);
+    let width = if view.prompt_left {
+        boundary_x.saturating_sub(view.prompt.x).saturating_add(1)
+    } else {
+        view.prompt.right().saturating_sub(boundary_x)
+    };
+    clamp_prompt_width(available, width, min_width)
 }
 
 /// 左栏宽度：展开取运行时值并钳制配置边界，折叠且宽度充足取窄条，否则隐藏。

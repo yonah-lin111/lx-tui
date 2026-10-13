@@ -86,6 +86,8 @@ pub struct AppState {
     /// 钉住的显示来源工作区索引；None 时跟随激活工作区。
     pub prompt_pinned: Option<usize>,
     pub prompt_width: u16,
+    /// prompt 是否与主区窗格互换、显示在主区左侧；仅存内存，启动复位。
+    pub prompt_left: bool,
     pub workspaces: Vec<Workspace>,
     pub active_workspace: usize,
     /// 标签栏滚动偏移（首个可见标签索引）；仅作用于当前工作区。
@@ -446,6 +448,7 @@ impl AppState {
             prompt_root: None,
             prompt_pinned: None,
             prompt_width: DEFAULT_PROMPT_WIDTH,
+            prompt_left: false,
             workspaces: vec![Workspace {
                 name,
                 tabs: vec![Tab::single_terminal()],

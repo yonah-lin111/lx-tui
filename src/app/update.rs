@@ -875,6 +875,11 @@ fn prompt_selection_bounds(state: &AppState) -> Option<(usize, usize)> {
     state.prompt.selection_bounds(start, end)
 }
 
+/// 交换主区窗格与 prompt 栏的左右位置；不改变宽度、焦点与选区。
+pub fn swap_prompt_side(state: &mut AppState) {
+    state.prompt_left = !state.prompt_left;
+}
+
 /// 在 prompt 右栏分割线上开始拖拽；清除已有选区。
 pub fn begin_prompt_resize(state: &mut AppState) {
     clear_selection(state);

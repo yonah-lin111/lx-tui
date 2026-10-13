@@ -14,6 +14,7 @@ fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     );
     let mut rects = layout::pane_rects(
         &state.active_tab().layout,
@@ -132,6 +133,94 @@ fn mouse_drag_resizes_prompt() {
         &mut dirty,
     );
     assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
+}
+
+#[test]
+fn mouse_down_on_swap_button_swaps_sides_without_resize() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let button = ui::swap_button(&geo.view).expect("swap button visible");
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt_left);
+    assert!(!state.resizing_prompt, "swap button must not start resize");
+    assert!(dirty);
+}
+
+#[test]
+fn swapped_divider_drag_resizes_prompt_from_left() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    update::swap_prompt_side(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    assert!(geo.view.prompt_left);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    // 交换后分隔线两列为 prompt 右边框与窗格左边框；取 prompt 侧一列。
+    let boundary = geo.view.prompt.right() - 1;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), boundary, 5),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.resizing_prompt, "press on left divider starts resize");
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Drag(MouseButton::Left), boundary + 5, 5),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
+}
+
+#[test]
+fn mouse_move_over_swap_button_is_not_divider_hover() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let button = ui::swap_button(&geo.view).expect("swap button visible");
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.x, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        !state.prompt_hover,
+        "swap button is a control, not a divider"
+    );
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, geo.view.prompt.x, button.y + 1),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt_hover, "divider rows still highlight on hover");
 }
 
 #[test]

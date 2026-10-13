@@ -123,6 +123,9 @@ fn targets(
     if let Some(area) = ui::exit_button(view) {
         targets.push((TooltipTarget::Exit, area));
     }
+    if let Some(area) = ui::swap_button(view) {
+        targets.push((TooltipTarget::SwapPromptSide, area));
+    }
     if !state.prompt_collapsed {
         let tree = state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree;
         for (button, target) in [

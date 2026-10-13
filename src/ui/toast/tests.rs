@@ -15,6 +15,7 @@ fn view_for(state: &AppState) -> ViewLayout {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     )
 }
 

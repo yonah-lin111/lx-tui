@@ -519,6 +519,7 @@ fn current_geometry(tui: &mut Tui, state: &AppState, config: &Config) -> io::Res
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     );
     let mut rects = layout::pane_rects(
         &state.active_tab().layout,
@@ -815,8 +816,12 @@ fn handle_terminal_event(
                     ensure_workspace_visible(state, view);
                     reveal_active_tab(state, view);
                     *dirty = true;
+                } else if ui::swap_button_at(view, mouse.column, mouse.row) {
+                    // 交换按钮是控件：命中优先于分割线拖拽与面板点击。
+                    update::swap_prompt_side(state);
+                    *dirty = true;
                 } else if layout::resize_boundary_at(rects, mouse.column, mouse.row)
-                    .is_some_and(|hit| hit.second == state.prompt.id())
+                    .is_some_and(|hit| prompt_boundary_hit(state, hit))
                 {
                     update::begin_prompt_resize(state);
                     *dirty = true;
@@ -1371,10 +1376,14 @@ fn handle_terminal_event(
                 let boundary = layout::resize_boundary_at(rects, mouse.column, mouse.row);
                 let sidebar_hover =
                     !hovering_toast && ui::sidebar_boundary_at(view, mouse.column, mouse.row);
+                // 交换按钮是控件：悬停它不视为分割线悬停（不高亮、不显示拖拽指针）。
+                let swap_hover =
+                    !hovering_toast && ui::swap_button_at(view, mouse.column, mouse.row);
                 let prompt_hover = !hovering_toast
                     && !sidebar_hover
-                    && boundary.is_some_and(|hit| hit.second == state.prompt.id());
-                let pane_hover = if hovering_toast || sidebar_hover || prompt_hover {
+                    && !swap_hover
+                    && boundary.is_some_and(|hit| prompt_boundary_hit(state, hit));
+                let pane_hover = if hovering_toast || sidebar_hover || prompt_hover || swap_hover {
                     None
                 } else {
                     boundary.filter(|hit| pane_boundary_draggable(state, *hit))
@@ -2281,6 +2290,11 @@ fn pane_at(rects: &[(PaneId, Rect)], column: u16, row: u16) -> Option<(PaneId, R
             None
         }
     })
+}
+
+/// 边界命中是否属于 prompt 面板：prompt 在右时为 `second`、换到左侧时为 `first`。
+fn prompt_boundary_hit(state: &AppState, hit: layout::BoundaryHit) -> bool {
+    hit.first == state.prompt.id() || hit.second == state.prompt.id()
 }
 
 /// 主区窗格边框可拖：两侧均为活动标签窗格且都未折叠；prompt 右栏边界归 prompt 拖拽。

@@ -37,6 +37,7 @@ fn ready_state() -> (AppState, Config, ui::layout::ViewLayout) {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     );
     let mut rects = layout::pane_rects(
         &state.active_tab().layout,
@@ -174,6 +175,7 @@ fn narrow_prompt_keeps_buttons_and_ellipsizes_header() {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     );
     let mut rects = layout::pane_rects(
         &state.active_tab().layout,

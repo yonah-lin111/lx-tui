@@ -620,6 +620,16 @@ fn drag_prompt_only_applies_while_resizing() {
 }
 
 #[test]
+fn swap_prompt_side_toggles_flag() {
+    let mut state = AppState::demo();
+    assert!(!state.prompt_left);
+    swap_prompt_side(&mut state);
+    assert!(state.prompt_left);
+    swap_prompt_side(&mut state);
+    assert!(!state.prompt_left);
+}
+
+#[test]
 fn set_prompt_hover_reports_changes() {
     let mut state = AppState::demo();
     assert!(set_prompt_hover(&mut state, true));

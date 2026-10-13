@@ -54,6 +54,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     );
     let pane_rects = crate::layout::pane_rects(
         &state.active_tab().layout,
@@ -74,6 +75,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_exit_button(frame, &view);
     let pane_cursor = render_panes(frame, &pane_rects, state);
     let prompt_cursor = render_prompt(frame, &view, state).or(pane_cursor);
+    render_swap_button(frame, &view);
     render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
     let tooltip_area = tooltip::render(frame, area, state, &view, &pane_rects);
@@ -154,6 +156,44 @@ pub fn exit_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool 
     exit_button(view).is_some_and(|area| area.contains((column, row).into()))
 }
 
+/// 交换按钮矩形：主区与 prompt 分隔线垂直正中 2 列（左格 `<`、右格 `>`）；
+/// 两侧面板缺失或过矮（内容区 < 3 行）时返回 None。
+pub fn swap_button(view: &layout::ViewLayout) -> Option<Rect> {
+    let width = u16::try_from(text::SWAP_PROMPT_LABEL.chars().count()).unwrap_or(u16::MAX);
+    let prompt = view.prompt;
+    if view.panes.width == 0 || prompt.width == 0 || prompt.height < 3 {
+        return None;
+    }
+    let x = if view.prompt_left {
+        prompt.right().saturating_sub(1)
+    } else {
+        prompt.x.saturating_sub(1)
+    };
+    Some(Rect::new(x, prompt.y + prompt.height / 2, width, 1))
+}
+
+/// 命中测试：坐标是否落在交换按钮内。
+pub fn swap_button_at(view: &layout::ViewLayout, column: u16, row: u16) -> bool {
+    swap_button(view).is_some_and(|area| area.contains((column, row).into()))
+}
+
+/// 交换按钮：覆盖在分隔线正中绘制 `<` 与 `>`；必须晚于两侧面板渲染。
+fn render_swap_button(frame: &mut Frame<'_>, view: &layout::ViewLayout) {
+    let Some(area) = swap_button(view) else {
+        return;
+    };
+    for (offset, symbol) in text::SWAP_PROMPT_LABEL.chars().enumerate() {
+        if let Some(cell) = frame
+            .buffer_mut()
+            .cell_mut((area.x + offset as u16, area.y))
+        {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
+}
+
 /// 单个面板的折叠按钮：折叠态取整条窄条，展开态在底边右端。
 fn panel_button(target: CollapseTarget, panel: Rect) -> Option<CollapseButton> {
     if panel.width == 0 || panel.height == 0 {
@@ -203,14 +243,20 @@ fn render_panel_buttons(frame: &mut Frame<'_>, view: &layout::ViewLayout, state:
         let label = match (button.target, button.collapsed) {
             (CollapseTarget::Sidebar, false) => text::SIDEBAR_COLLAPSE_LABEL,
             (CollapseTarget::Sidebar, true) => text::SIDEBAR_EXPAND_LABEL,
+            (CollapseTarget::Prompt, false) if state.prompt_left => {
+                text::PROMPT_LEFT_COLLAPSE_LABEL
+            }
             (CollapseTarget::Prompt, false) => text::PROMPT_COLLAPSE_LABEL,
+            (CollapseTarget::Prompt, true) if state.prompt_left => text::PROMPT_LEFT_EXPAND_LABEL,
             (CollapseTarget::Prompt, true) => text::PROMPT_EXPAND_LABEL,
             (CollapseTarget::Agents, false) => text::AGENTS_COLLAPSE_LABEL,
             (CollapseTarget::Agents, true) => text::AGENTS_EXPAND_LABEL,
         };
         let start = match button.target {
             CollapseTarget::Sidebar if button.collapsed => collapsed_content_x(button.area, true),
-            CollapseTarget::Prompt if button.collapsed => collapsed_content_x(button.area, false),
+            CollapseTarget::Prompt if button.collapsed => {
+                collapsed_content_x(button.area, state.prompt_left)
+            }
             _ => button.area.x,
         };
         for (offset, symbol) in label.chars().enumerate() {
@@ -273,13 +319,17 @@ fn render_resize_hint(frame: &mut Frame<'_>, view: &layout::ViewLayout, state: &
             [view.sidebar.right().saturating_sub(1), view.sidebar.right()],
         );
     }
-    if !state.prompt_collapsed && view.prompt.x > 0 && (state.resizing_prompt || state.prompt_hover)
+    if !state.prompt_collapsed
+        && view.panes.width > 0
+        && (state.resizing_prompt || state.prompt_hover)
     {
-        highlight_divider(
-            frame,
-            view,
-            [view.prompt.x.saturating_sub(1), view.prompt.x],
-        );
+        let prompt = view.prompt;
+        let columns = if view.prompt_left {
+            [prompt.right().saturating_sub(1), prompt.right()]
+        } else {
+            [prompt.x.saturating_sub(1), prompt.x]
+        };
+        highlight_divider(frame, view, columns);
     }
 }
 
@@ -440,7 +490,7 @@ fn render_prompt(
         return None;
     }
     if state.prompt_collapsed {
-        render_collapsed_strip(frame, area, false);
+        render_collapsed_strip(frame, area, state.prompt_left);
         return None;
     }
     let focused = state.prompt_focused;

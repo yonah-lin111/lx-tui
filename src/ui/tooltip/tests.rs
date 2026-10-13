@@ -18,6 +18,7 @@ fn view_for(state: &AppState) -> ViewLayout {
         state.sidebar_width,
         state.prompt_collapsed,
         state.prompt_width,
+        state.prompt_left,
     )
 }
 
@@ -63,6 +64,18 @@ fn hits_collapse_buttons_and_misses_content() {
     assert_eq!(
         target_at(&view, &state, &rects, pane_point.0, pane_point.1),
         None
+    );
+}
+
+#[test]
+fn hits_swap_prompt_button() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let button = ui::swap_button(&view).expect("swap button visible");
+    assert_eq!(
+        target_at(&view, &state, &rects, button.x, button.y),
+        Some(TooltipTarget::SwapPromptSide)
     );
 }
 

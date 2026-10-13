@@ -127,6 +127,11 @@ pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";
 pub const PROMPT_COLLAPSE_LABEL: &str = "[▶]";
 pub const PROMPT_EXPAND_LABEL: &str = "[◀]";
+/// prompt 换到主区左侧时的收起/展开按钮（箭头随所在侧镜像）。
+pub const PROMPT_LEFT_COLLAPSE_LABEL: &str = "[◀]";
+pub const PROMPT_LEFT_EXPAND_LABEL: &str = "[▶]";
+/// 主区与 prompt 分隔线中点的交换按钮：左格 `<`、右格 `>`。
+pub const SWAP_PROMPT_LABEL: &str = "<>";
 pub const STRIP_LINE: &str = "│";
 /// 侧栏 agents 分区表头：横向分割线与竖直折叠按钮。
 pub const DIVIDER_MID: &str = "─";
@@ -405,6 +410,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
         TooltipTarget::PromptPin => "pin prompt",
+        TooltipTarget::SwapPromptSide => "swap prompt side",
         TooltipTarget::SidebarSettings => "open settings",
         TooltipTarget::TemplateButton { button, .. } => match button {
             TemplateButtonKind::Status => "cycle block status",

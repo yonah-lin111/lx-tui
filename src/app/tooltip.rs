@@ -31,6 +31,8 @@ pub enum TooltipTarget {
     TabScrollLeft,
     TabScrollRight,
     Exit,
+    /// 主区与 prompt 分隔线中点的交换按钮。
+    SwapPromptSide,
     PromptMode,
     PromptTempPrompt,
     PromptUndo,
