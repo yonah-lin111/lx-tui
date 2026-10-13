@@ -1323,7 +1323,7 @@ fn template_block_body_extracts_inner_content() {
     with_add_template(&mut prompt);
     let body = prompt.template_block_body(0).expect("body");
     assert!(body.starts_with("{title: }\n\n# Add Requirement"), "{body}");
-    assert!(body.ends_with("- Notes: \n  - "));
+    assert!(body.ends_with("- Notes: \n  - \n"), "{body}");
     assert!(!body.contains("&&&"));
     assert_eq!(prompt.template_block_body(1), None);
 }
@@ -1373,9 +1373,48 @@ fn clean_template_block_removes_empty_items_and_undoes_once() {
     assert!(prompt.text().contains("# Add Requirement"));
     assert!(!prompt.text().contains("- Reference: "));
     assert!(prompt.text().ends_with("&&& addTemplate --end"));
+    assert!(
+        prompt.text().contains("\n\n&&& addTemplate --end"),
+        "清理保留块底部空行: {}",
+        prompt.text()
+    );
 
     prompt.undo();
     assert_eq!(prompt.text(), before, "清理为单步撤销");
+}
+
+#[test]
+fn clean_template_block_normalizes_bottom_gap() {
+    // 旧结构（结束行上方无空行）：清理末尾补齐块底部空行。
+    let mut legacy = prompt(60, 10);
+    legacy
+        .set_text("&&& addTemplate --start\n{title: }\nbody\n- Reference: \n&&& addTemplate --end");
+    assert!(legacy.clean_template_block(0));
+    assert_eq!(
+        legacy.text(),
+        "&&& addTemplate --start\n{title: }\nbody\n\n&&& addTemplate --end"
+    );
+
+    // 已含底部空行且无空项：no-op，不产生多余撤销步。
+    let mut normalized = prompt(60, 10);
+    normalized.set_text("&&& addTemplate --start\n{title: }\nbody\n\n&&& addTemplate --end");
+    assert!(!normalized.clean_template_block(0));
+}
+
+#[test]
+fn clean_template_block_keeps_binding_above_end() {
+    let mut prompt = prompt(60, 10);
+    prompt.set_text(
+        "&&& addTemplate --start\n{title: }\nbody\n- Reference: \n\n{wt:main}\n&&& addTemplate --end",
+    );
+    assert!(prompt.clean_template_block(0));
+    assert!(
+        prompt
+            .text()
+            .contains("body\n\n{wt:main}\n&&& addTemplate --end"),
+        "绑定行仍是块内末行、上方空行随清理保留: {}",
+        prompt.text()
+    );
 }
 
 #[test]
@@ -1916,13 +1955,12 @@ fn worktree_chooser_main_checkout_removes_binding() {
     let before = prompt.text().to_string();
     assert!(prompt.slash_confirm(), "confirm main checkout");
     let text = prompt.text().to_string();
-    // 选择主 checkout = 解除绑定：绑定行与上方分割线一并移除，命令行清空保留。
+    // 选择主 checkout = 解除绑定：只移除绑定行，上方空行保留为块底部留白；命令行清空保留。
     assert!(!text.contains("{wt:"), "绑定行被移除: {text}");
-    assert!(
-        !text.contains("\n\n\n"),
-        "绑定行与其上方空行一并移除: {text}"
+    assert_eq!(
+        text, "&&& addTemplate --start\nbody\n\n\n&&& addTemplate --end\n",
+        "解绑保留空行、命令行清空留行: {text}"
     );
-    assert!(text.contains("body\n"), "{text}");
     assert!(!text.contains("/gitW"), "{text}");
     prompt.undo();
     assert_eq!(prompt.text(), before, "单步撤销恢复绑定与命令行");

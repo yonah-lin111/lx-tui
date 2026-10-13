@@ -199,7 +199,8 @@ fn slash_score(item: &SlashItem, query: &str) -> u32 {
     0
 }
 
-/// 自定义模板块正文：`&&& <name> --start` + `{title: …}` 标题占位行 + 正文 + `&&& <name> --end`。
+/// 自定义模板块正文：`&&& <name> --start` + `{title: …}` 标题占位行 + 正文
+/// + 底部空行 + `&&& <name> --end`。
 ///
 /// 正文若自带完整块结构会先规范化，避免嵌套起止行；光标偏移落在标题占位符的
 /// `}` 之前；标题缺省时值为空。
@@ -208,9 +209,13 @@ pub fn agent_block_content(command: &str, title: Option<&str>, body: &str) -> (S
     let title = title.unwrap_or_default().trim().replace(['{', '}'], "");
     let title = title.as_str();
     let body = normalize_block_body(body);
-    // 标题行与正文之间固定空一行（渲染为块边框分割线，与 `{wt:}` 上方一致）。
-    let content =
-        format!("&&& {command} --start\n{{title: {title}}}\n\n{body}\n&&& {command} --end");
+    // 标题行与正文之间固定空一行（渲染为块边框分割线，与 `{wt:}` 上方一致）；
+    // 正文与结束行之间固定空一行（块底部留白，正文为空时与标题下空行合并为一行）。
+    let content = if body.is_empty() {
+        format!("&&& {command} --start\n{{title: {title}}}\n\n&&& {command} --end")
+    } else {
+        format!("&&& {command} --start\n{{title: {title}}}\n\n{body}\n\n&&& {command} --end")
+    };
     let cursor = title_cursor(&content);
     (content, cursor)
 }
@@ -221,14 +226,18 @@ pub const SUPPLEMENT_COMMAND: &str = "supplement";
 const SUPPLEMENT_BODY: &str =
     "## Supplementary Requirements\n\n- Reference: \n- Requirements: \n  - \n- Notes: \n  - ";
 
-/// 补充块规范正文：`+++ <name> --start` + 标题行 + 空行 + 正文 + `+++ <name> --end`。
+/// 补充块规范正文：`+++ <name> --start` + 标题行 + 空行 + 正文 + 底部空行
+/// + `+++ <name> --end`。
 ///
 /// 光标偏移落在标题占位符的 `}` 之前；标题缺省时值为空。
 pub fn supple_block_content(command: &str, title: Option<&str>, body: &str) -> (String, usize) {
     let title = title.unwrap_or_default().trim().replace(['{', '}'], "");
     let body = body.trim_end();
-    let content =
-        format!("+++ {command} --start\n{{title: {title}}}\n\n{body}\n+++ {command} --end");
+    let content = if body.is_empty() {
+        format!("+++ {command} --start\n{{title: {title}}}\n\n+++ {command} --end")
+    } else {
+        format!("+++ {command} --start\n{{title: {title}}}\n\n{body}\n\n+++ {command} --end")
+    };
     let cursor = title_cursor(&content);
     (content, cursor)
 }
@@ -311,15 +320,15 @@ pub fn slash_template_content(id: SlashCommandId) -> (&'static str, usize) {
     (content, title_cursor(content))
 }
 
-const ADD_TEMPLATE: &str = "&&& addTemplate --start\n{title: }\n\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n&&& addTemplate --end";
+const ADD_TEMPLATE: &str = "&&& addTemplate --start\n{title: }\n\n# Add Requirement\n\n- Reference: \n- Location: \n- Description: \n- Requirements: \n  - \n- Notes: \n  - \n\n&&& addTemplate --end";
 
-const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n{title: }\n\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& bugTemplate --end";
+const BUG_TEMPLATE: &str = "&&& bugTemplate --start\n{title: }\n\n# Fix Bug\n\n- Reference: \n- Location: \n- Description: \n- Reproduction: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n\n&&& bugTemplate --end";
 
-const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n{title: }\n\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& commonTemplate --end";
+const COMMON_TEMPLATE: &str = "&&& commonTemplate --start\n{title: }\n\n# Execute Task\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n\n&&& commonTemplate --end";
 
-const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n{title: }\n\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n&&& refactorTemplate --end";
+const REFACTOR_TEMPLATE: &str = "&&& refactorTemplate --start\n{title: }\n\n# Refactor Feature\n\n- Reference: \n- Location: \n- Goal: \n- Requirements: \n  - \n- Notes: \n  - \n\n&&& refactorTemplate --end";
 
-const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n{title: }\n\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n&&& styleTemplate --end";
+const STYLE_TEMPLATE: &str = "&&& styleTemplate --start\n{title: }\n\n# Design Style\n\n- Reference: \n- Location: \n- Requirements: \n  - \n- Expectations: \n- Notes: \n  - \n\n&&& styleTemplate --end";
 
 /// 标题占位符内的光标偏移：`{title: }` 的 `}` 前；无占位符回退文末。
 fn title_cursor(content: &str) -> usize {

@@ -337,6 +337,25 @@ fn template_separator_renders_block_border_line() {
 }
 
 #[test]
+fn template_bottom_gap_renders_as_plain_blank_row() {
+    let area = Rect::new(0, 0, 30, 8);
+    let editor = prompt(30, 8, "&&& x --start\n{title: }\n\nbody\n\n&&& x --end");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    // 标题下空行渲染为分割线；结束行上方的块底部空行按普通空行渲染（只有两侧边框）。
+    let title_sep: String = (0..area.width).map(|x| buf[(x, 2)].symbol()).collect();
+    assert!(title_sep.starts_with("├──"), "{title_sep}");
+    assert!(title_sep.ends_with("┤"), "{title_sep}");
+    let bottom_row: String = (0..area.width).map(|x| buf[(x, 4)].symbol()).collect();
+    assert_eq!(buf[(0, 4)].symbol(), "│", "{bottom_row}");
+    assert_eq!(buf[(29, 4)].symbol(), "│", "{bottom_row}");
+    assert!(
+        !bottom_row.contains('─'),
+        "底部空行不画分割线: {bottom_row}"
+    );
+}
+
+#[test]
 fn mention_panel_asks_root_choice_then_titles_with_choice() {
     let area = Rect::new(0, 0, 40, 20);
     let mut editor = Prompt::new(PaneId::from_raw_for_test(1));

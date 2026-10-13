@@ -253,6 +253,11 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
     assert!(state.prompt.text().contains("# Add Requirement"));
     assert!(!state.prompt.text().contains("- Reference: "));
     assert!(state.prompt.text().contains("--end in_progress"));
+    assert!(
+        state.prompt.text().contains("\n\n&&& addTemplate --end"),
+        "清理保留块底部空行: {}",
+        state.prompt.text()
+    );
 
     // 单步撤销恢复清理前内容。
     update::apply_editor(&mut state, EditorCommand::Undo);

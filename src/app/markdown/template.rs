@@ -424,6 +424,21 @@ pub fn clean_template_content(text: &str) -> String {
         .to_string()
 }
 
+/// 清理后的块正文补齐底部结构空行：末行为 `{wt:}` 绑定行时保持原样；
+/// 否则在结束行前保证一空行（块底部留白；空正文保持不变）。
+pub fn ensure_bottom_gap(body: String) -> String {
+    let trimmed = body.trim_end_matches('\n');
+    if trimmed.is_empty()
+        || trimmed
+            .lines()
+            .last()
+            .is_some_and(|line| parse_worktree_line(line).is_some())
+    {
+        return trimmed.to_string();
+    }
+    format!("{trimmed}\n")
+}
+
 /// 复制用正文（对齐 lx-agent 的复制语义，不修改原文）：
 /// 剔除标题占位行（`--start` 下一行）、`{wt:}` 绑定行、`+++` 补充子块（含内部内容）、
 /// 保留 `%%%` 记录子块内容但剔除其起止标记行、剔除 `//` 注释行，最后清理未填写空项。

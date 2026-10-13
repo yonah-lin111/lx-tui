@@ -42,7 +42,10 @@ impl Prompt {
         let Some((from, to)) = self.block_body_span(span) else {
             return false;
         };
-        let cleaned = markdown::clean_template_content(&self.text[from..to]);
+        let mut cleaned = markdown::clean_template_content(&self.text[from..to]);
+        if span.closed {
+            cleaned = markdown::ensure_bottom_gap(cleaned);
+        }
         self.replace_block_body(from, to, &cleaned)
     }
 

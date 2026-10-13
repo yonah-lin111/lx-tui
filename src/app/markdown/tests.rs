@@ -776,6 +776,10 @@ fn agent_block_content_wraps_body_and_places_cursor_in_title() {
     assert!(content.ends_with("&&& triage --end"), "{content}");
     assert!(content.contains("inner"));
     assert!(
+        content.contains("inner\n\n&&& triage --end"),
+        "正文与结束行之间空一行: {content}"
+    );
+    assert!(
         !content.contains("&&& triage --start\ninner"),
         "no nesting: {content}"
     );
@@ -785,6 +789,13 @@ fn agent_block_content_wraps_body_and_places_cursor_in_title() {
         content.starts_with("&&& x --start\n{title: My Title}"),
         "{content}"
     );
+    assert!(
+        content.ends_with("body\n\n&&& x --end"),
+        "自定义块底部空行: {content}"
+    );
+    // 正文为空时标题下空行同时充当底部空行，不叠出多行空行。
+    let (content, _) = agent_block_content("x", None, "");
+    assert!(content.ends_with("{title: }\n\n&&& x --end"), "{content}");
 }
 
 #[test]
@@ -818,6 +829,11 @@ fn slash_template_content_matches_protocol_and_cursor() {
         assert!(content.ends_with(&end), "{content}");
         assert_eq!(content.as_bytes().get(cursor - 1), Some(&b' '));
         assert!(content[cursor..].starts_with('}'), "光标落在 }} 之前");
+        assert_eq!(
+            content.lines().rev().nth(1),
+            Some(""),
+            "结束行上方固定一空行: {content}"
+        );
         assert!(
             parse_template_start_line(content.lines().next().expect("start line")).is_some(),
             "起止行仍是合法开始行"
@@ -973,6 +989,19 @@ fn worktree_marker_line_insert_replace_and_read() {
 }
 
 #[test]
+fn clear_line_worktree_keeps_bottom_gap() {
+    let text = "&&& addTemplate --start\nbody\n\n{wt:feature/x}\n&&& addTemplate --end\n";
+    let (range, replacement) = clear_line_worktree(text, 4).expect("clear binding");
+    let mut cleared = text.to_string();
+    cleared.replace_range(range, &replacement);
+    assert_eq!(
+        cleared, "&&& addTemplate --start\nbody\n\n&&& addTemplate --end\n",
+        "解绑只删绑定行，保留上方空行"
+    );
+    assert_eq!(clear_line_worktree(&cleared, 3), None, "无绑定返回 None");
+}
+
+#[test]
 fn edit_touches_title_line_protects_marker_and_allows_value() {
     let text = "&&& x --start\n{title: 标题}\n\nbody\n&&& x --end\n";
     let start = text.find("{title:").expect("title line");
@@ -1116,6 +1145,19 @@ fn clean_template_content_preserves_subblocks_and_collapses_blanks() {
     assert!(cleaned.contains("- Requirements: \n  - \n+++ suppleTemplate --end"));
     assert!(!cleaned.contains("\n\n\n"), "折叠多余空行");
     assert!(cleaned.ends_with("- Location: x"));
+}
+
+#[test]
+fn ensure_bottom_gap_keeps_binding_and_is_idempotent() {
+    assert_eq!(ensure_bottom_gap("body".to_string()), "body\n");
+    assert_eq!(ensure_bottom_gap("body\n".to_string()), "body\n");
+    assert_eq!(
+        ensure_bottom_gap("body\n\n{wt:main}".to_string()),
+        "body\n\n{wt:main}",
+        "绑定行为末行时不补空行"
+    );
+    assert_eq!(ensure_bottom_gap(String::new()), "");
+    assert_eq!(ensure_bottom_gap("\n".to_string()), "");
 }
 
 #[test]
@@ -1393,7 +1435,10 @@ fn supple_block_content_wraps_and_places_cursor_in_title() {
         content.starts_with("+++ supplement --start\n{title: }"),
         "{content}"
     );
-    assert!(content.ends_with("+++ supplement --end"), "{content}");
+    assert!(
+        content.ends_with("## Head\n\n+++ supplement --end"),
+        "正文与结束行之间空一行: {content}"
+    );
     assert!(content.contains("## Head"));
     assert!(content[cursor..].starts_with('}'));
     let (content, _) = supple_block_content("note", Some("标题"), "body");
@@ -1431,6 +1476,10 @@ fn supple_block_worktree_binding_round_trips() {
     let (range, new) = clear_line_worktree(&text, end).expect("clear");
     text.replace_range(range, &new);
     assert!(!text.contains("{wt:"), "{text}");
+    assert!(
+        text.contains("body\n\n+++ supplement --end"),
+        "解绑保留子块底部空行: {text}"
+    );
 }
 
 #[test]

@@ -8,7 +8,7 @@ impl Prompt {
     /// 模板块纯净正文（起止行之间的内容）；非模板块或空正文返回 None。
     pub fn template_block_body(&self, start_line: usize) -> Option<String> {
         let range = markdown::parse_template_block_at_line(&self.text, start_line)?;
-        let (from, to) = self.inner_span(range)?;
+        let (from, to, _) = self.inner_span(range)?;
         Some(self.text[from..to].to_string())
     }
 
@@ -34,10 +34,13 @@ impl Prompt {
         let Some(range) = markdown::parse_template_block_at_line(&self.text, start_line) else {
             return false;
         };
-        let Some((from, to)) = self.inner_span(range) else {
+        let Some((from, to, closed)) = self.inner_span(range) else {
             return false;
         };
-        let cleaned = markdown::clean_template_content(&self.text[from..to]);
+        let mut cleaned = markdown::clean_template_content(&self.text[from..to]);
+        if closed {
+            cleaned = markdown::ensure_bottom_gap(cleaned);
+        }
         if cleaned == self.text[from..to] {
             return false;
         }
@@ -95,9 +98,9 @@ impl Prompt {
         self.settle();
     }
 
-    /// 模板块正文区间：起始行末换行之后到结束行前换行之前；
+    /// 模板块正文区间与闭合态：起始行末换行之后到结束行前换行之前；
     /// 未闭合（末行非结束行）时到文末；无可清理内容返回 None。
-    pub(super) fn inner_span(&self, range: TemplateBlockRange) -> Option<(usize, usize)> {
+    pub(super) fn inner_span(&self, range: TemplateBlockRange) -> Option<(usize, usize, bool)> {
         let (_, start_end) = self.line_bounds(range.start)?;
         let (end_start, end_line_end) = self.line_bounds(range.end)?;
         let closed =
@@ -108,7 +111,7 @@ impl Prompt {
             self.text.len()
         };
         let from = start_end + 1;
-        (from <= to && to <= self.text.len()).then_some((from, to))
+        (from <= to && to <= self.text.len()).then_some((from, to, closed))
     }
 
     /// 逻辑行索引的字节范围（不含换行）；越界返回 None。

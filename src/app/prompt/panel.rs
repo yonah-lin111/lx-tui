@@ -239,7 +239,7 @@ impl Prompt {
     /// 选择器确认：把选中分支写到块底部（结束行上一行）的 `{wt:}` 绑定行并
     /// 消耗 `/gitWorkTree` 命令，作为一步撤销；命令所在行保留（不删行），
     /// 恰位于绑定位置时该行直接转为绑定行。选择主 checkout 表示解除绑定：
-    /// 移除 `{wt:}` 绑定行与其上方分割线。
+    /// 移除 `{wt:}` 绑定行（保留其上方空行：块底部留白）。
     fn confirm_worktree_binding(&mut self, branch: &str, is_main: bool) -> bool {
         let Some(panel) = self.slash.as_ref() else {
             return false;
@@ -254,7 +254,7 @@ impl Prompt {
         let mut edits = Vec::new();
         let mut replaces_trigger = false;
         if is_main {
-            // 主 checkout 即默认工作区：不写绑定，已有绑定行连同分割线移除。
+            // 主 checkout 即默认工作区：不写绑定，已有绑定行移除（保留底部空行）。
             if let Some(clear) = markdown::clear_line_worktree(&self.text, block_end_line) {
                 replaces_trigger = !clear.0.is_empty() && clear.0.start == trigger.line_start;
                 edits.push(clear);

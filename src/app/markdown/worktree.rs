@@ -118,7 +118,8 @@ fn gap_before(text: &str, line: usize) -> &'static str {
     }
 }
 
-/// 移除结束行所在块的绑定：删除绑定行与其上方空行（若在）；无绑定返回 None。
+/// 移除结束行所在块的绑定：只删除 `{wt:}` 绑定行，保留其上方空行
+/// （块底部结构留白，解绑后结束行上方仍有空行）；无绑定返回 None。
 ///
 /// 返回（替换范围, 新文本）。
 pub fn clear_line_worktree(
@@ -133,13 +134,7 @@ pub fn clear_line_worktree(
     } else {
         range.end
     };
-    let mut from = range.start;
-    if let Some(above) = line.checked_sub(1)
-        && nth_line(text, above).is_some_and(|line| line.trim().is_empty())
-    {
-        from = nth_line_range(text, above)?.0.start;
-    }
-    Some((from..to, String::new()))
+    Some((range.start..to, String::new()))
 }
 
 /// 受保护绑定行的字节范围（整行内容，不含换行）：`{wt:}` 独占一行且为块内末行。
