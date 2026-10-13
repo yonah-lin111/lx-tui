@@ -29,7 +29,7 @@ pub enum ClipboardPayload {
     Error(ClipboardError),
 }
 
-/// `Ctrl+V`：记录请求代号并发起后台剪贴板读取。
+/// `Ctrl/Cmd+Shift+V`：记录请求代号并发起后台剪贴板读取。
 pub(super) fn request_clipboard_read(
     state: &mut AppState,
     sender: &mpsc::UnboundedSender<AppEvent>,
@@ -51,8 +51,8 @@ pub(super) fn request_clipboard_read(
 /// 终端 `Paste(text)`：整段是存在的路径集合时打开提案，否则按普通文本插入。
 ///
 /// 新粘贴先取消旧提案（Choosing → Reading），普通文本仍是同步编辑行为。
-/// 空括号粘贴（终端把 Cmd+V 当作自身粘贴、但剪贴板只有位图时送来的空内容）
-/// 改由应用读取系统剪贴板，让 `Cmd+V` 截图在支持该行为的终端上也能粘贴。
+/// 空括号粘贴（终端把 Cmd+V/Ctrl+V 当作自身粘贴、但剪贴板只有位图时送来的空内容）
+/// 改由应用读取系统剪贴板，让截图粘贴在支持该行为的终端上也能生效。
 pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     state.prompt.paste_cancel();
     // 树视图没有正文提案入口：文本按搜索框语义处理。

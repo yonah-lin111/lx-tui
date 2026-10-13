@@ -24,7 +24,7 @@ pub enum Routed {
     SavePrompt,
     /// 复制光标所在模板块正文到系统剪贴板。
     CopyTemplateBlock,
-    /// 读取系统剪贴板：位图直接成为附件，路径/文本进入既有粘贴通路。
+    /// 读取系统剪贴板：位图写入 `@[refer-image]` 引用，路径/文本进入既有粘贴通路。
     ClipboardPaste,
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
@@ -34,7 +34,7 @@ pub enum Routed {
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
-/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文、`Ctrl/Cmd+V` 由应用读取系统剪贴板
+/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文、`Ctrl/Cmd+Shift+V` 由应用读取系统剪贴板
 /// （终端只送文本，图片必须自读），未映射的按键被吞掉，绝不写入 PTY；
 /// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
 pub fn route(
@@ -72,6 +72,7 @@ pub fn route(
             return Some(Routed::SavePrompt);
         }
         let paste_chord = matches!(key.code, KeyCode::Char('v' | 'V'))
+            && key.modifiers.contains(KeyModifiers::SHIFT)
             && (key.modifiers.contains(KeyModifiers::CONTROL)
                 || key.modifiers.contains(KeyModifiers::SUPER))
             && !key.modifiers.contains(KeyModifiers::ALT);

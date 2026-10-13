@@ -126,7 +126,7 @@ pub struct AppState {
     pub settings_available: bool,
     /// 设置按钮点击请求：事件层取走后打开浏览器。
     pub settings_open_requested: bool,
-    /// `Ctrl+V` 读取请求：事件层取走后异步读取系统剪贴板。
+    /// `Ctrl/Cmd+Shift+V` 读取请求：事件层取走后异步读取系统剪贴板。
     pub clipboard_read_requested: bool,
 }
 

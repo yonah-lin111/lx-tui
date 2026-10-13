@@ -105,7 +105,10 @@ fn prompt_focus_maps_editing_keys() {
 fn prompt_focus_maps_clipboard_paste_keys() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
-    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+    for modifiers in [
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        KeyModifiers::SUPER | KeyModifiers::SHIFT,
+    ] {
         assert_eq!(
             route_prompt(KeyCode::Char('v'), modifiers),
             Some(Routed::ClipboardPaste),
@@ -114,30 +117,40 @@ fn prompt_focus_maps_clipboard_paste_keys() {
     }
     assert_eq!(
         route_prompt(
-            KeyCode::Char('v'),
+            KeyCode::Char('V'),
             KeyModifiers::CONTROL | KeyModifiers::SHIFT
         ),
         Some(Routed::ClipboardPaste),
-        "Ctrl+Shift+V 同样读取剪贴板"
+        "大写 V 同样读取剪贴板"
     );
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        assert_eq!(
+            route_prompt(KeyCode::Char('v'), modifiers),
+            None,
+            "不带 Shift 的 {modifiers:?}+V 不再读取剪贴板"
+        );
+    }
     assert_eq!(
         route_prompt(
             KeyCode::Char('v'),
-            KeyModifiers::CONTROL | KeyModifiers::ALT
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT
         ),
         None,
-        "Ctrl+Alt+V 不读取剪贴板"
+        "带 Alt 不读取剪贴板"
     );
     assert!(
         matches!(
             route(
-                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+                KeyEvent::new(
+                    KeyCode::Char('v'),
+                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
+                ),
                 TermMode::empty(),
                 false
             ),
             Some(Routed::Pane(_))
         ),
-        "prompt 未聚焦时 Ctrl+V 照常写入 PTY"
+        "prompt 未聚焦时 Ctrl+Shift+V 照常写入 PTY"
     );
 }
 
