@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::markdown::{BlockCommandId, TemplateStatus};
 use crate::app::prompt::PromptItemStatus;
 use crate::app::state::{AppState, PaneView};
-use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
+use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
@@ -444,6 +444,10 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",
         },
+        TooltipTarget::BlockButton { button, .. } => match button {
+            BlockButtonKind::Clean => "clean block",
+            BlockButtonKind::Delete => "delete block",
+        },
     }
 }
 
@@ -492,6 +496,10 @@ pub fn template_status_label(status: TemplateStatus) -> &'static str {
         TemplateStatus::Done => TEMPLATE_BUTTON_DONE,
     }
 }
+
+/// 补充块操作按钮：清理与删除（复用模板块图标）。
+pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
+pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 
 /// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";

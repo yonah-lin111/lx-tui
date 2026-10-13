@@ -189,7 +189,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
                   <label for="cmd-kind">Type</label>
                   <select id="cmd-kind">
                     <option value="agentMD">Markdown insertion</option>
-                    <option value="agentBlock">Template block</option>
+                    <option value="agentBlock">Agent block</option>
                   </select>
                 </div>
                 <div>
@@ -200,7 +200,14 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
                   </select>
                 </div>
                 <div>
-                  <label for="cmd-title">Block title (template block only)</label>
+                  <label for="cmd-block-type">Block type (agent block only)</label>
+                  <select id="cmd-block-type">
+                    <option value="template">Task block (&&&amp;&amp;&amp;)</option>
+                    <option value="supple">Supplement block (+++)</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-title">Block title (agent block only)</label>
                   <input id="cmd-title" type="text" placeholder="title">
                 </div>
                 <div>
@@ -350,6 +357,7 @@ function showEditor(command) {
   document.getElementById('cmd-name').value = command.name || '';
   document.getElementById('cmd-kind').value = command.kind || 'agentMD';
   document.getElementById('cmd-md-scope').value = command.md_scope || 'global';
+  document.getElementById('cmd-block-type').value = command.block_type || 'template';
   document.getElementById('cmd-title').value = command.title || '';
   document.getElementById('cmd-description').value = command.description || '';
   document.getElementById('cmd-body').value = command.body || '';
@@ -369,9 +377,11 @@ function saveCommand() {
   const kind = document.getElementById('cmd-kind').value;
   const mdScope = document.getElementById('cmd-md-scope').value;
   const body = document.getElementById('cmd-body').value;
+  const blockType = document.getElementById('cmd-block-type').value;
   const payload = {
     description: document.getElementById('cmd-description').value,
     md_scope: mdScope,
+    block_type: blockType,
     title: document.getElementById('cmd-title').value,
     body: body
   };
@@ -384,7 +394,7 @@ function saveCommand() {
     : Promise.resolve();
   renameStep.then(() => api('/api/commands/user/' + encodeURIComponent(kind) + '/' + encodeURIComponent(name), {method: 'PUT', body: JSON.stringify(payload)})).then(() => {
     draft = false;
-    selected = {name, scope: 'user', kind, md_scope: mdScope, title: payload.title, description: payload.description, body};
+    selected = {name, scope: 'user', kind, md_scope: mdScope, block_type: blockType, title: payload.title, description: payload.description, body};
     showEditor(selected);
     document.getElementById('editor-status').textContent = 'Saved';
     document.getElementById('editor-status').className = 'status ok';

@@ -83,7 +83,7 @@ impl Prompt {
 
     /// 替换字节区间并按区间位置调整光标（区间之后的偏移平移，区间内钳到插入后）；
     /// 调用方负责记录撤销快照。
-    fn replace_span(&mut self, from: usize, to: usize, replacement: &str) {
+    pub(super) fn replace_span(&mut self, from: usize, to: usize, replacement: &str) {
         self.text.replace_range(from..to, replacement);
         self.cursor = if self.cursor >= to {
             self.cursor - (to - from) + replacement.len()
@@ -97,7 +97,7 @@ impl Prompt {
 
     /// 模板块正文区间：起始行末换行之后到结束行前换行之前；
     /// 未闭合（末行非结束行）时到文末；无可清理内容返回 None。
-    fn inner_span(&self, range: TemplateBlockRange) -> Option<(usize, usize)> {
+    pub(super) fn inner_span(&self, range: TemplateBlockRange) -> Option<(usize, usize)> {
         let (_, start_end) = self.line_bounds(range.start)?;
         let (end_start, end_line_end) = self.line_bounds(range.end)?;
         let closed =
@@ -112,7 +112,7 @@ impl Prompt {
     }
 
     /// 逻辑行索引的字节范围（不含换行）；越界返回 None。
-    fn line_bounds(&self, line: usize) -> Option<(usize, usize)> {
+    pub(super) fn line_bounds(&self, line: usize) -> Option<(usize, usize)> {
         let mut start = 0;
         for (index, content) in self.text.split('\n').enumerate() {
             let end = start + content.len();

@@ -4,24 +4,24 @@ use super::super::markdown;
 use super::{Prompt, VisualRow, char_width, display_width};
 
 impl Prompt {
-    /// 按内容宽度软换行得到的视觉行；模板块行扣除左右边框槽后再换行。
+    /// 按内容宽度软换行得到的视觉行；块行扣除左右边框槽后再换行。
     pub fn visual_rows(&self) -> Vec<VisualRow> {
         let width = usize::from(self.width.max(1));
         let margins = usize::from(
             crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
                 + crate::layout::PROMPT_TEMPLATE_GUTTER_RIGHT,
         );
-        let infos = markdown::template_line_infos(&self.text);
+        let infos = markdown::block_line_infos(&self.text);
         let mut rows = Vec::new();
         let mut line_start = 0;
         for (line, segment) in self.text.split('\n').enumerate() {
-            let block = infos.get(line).is_some_and(Option::is_some);
-            let width = if block {
+            let info = infos.get(line).copied().flatten();
+            let line_end = line_start + segment.len();
+            let width = if info.is_some() {
                 width.saturating_sub(margins).max(1)
             } else {
                 width
             };
-            let line_end = line_start + segment.len();
             let mut row_start = line_start;
             let mut col = 0;
             for (offset, ch) in segment.char_indices() {
@@ -155,9 +155,9 @@ impl Prompt {
         }
         visual.end
     }
-    /// 模板块行左边框槽宽度；非模板块行为 0（渲染、光标与鼠标坐标映射共用）。
+    /// 块行左边框槽宽度；非块行为 0（渲染、光标与鼠标坐标映射共用）。
     fn line_gutter(&self, line: usize) -> u16 {
-        if markdown::is_template_block_line(&self.text, line) {
+        if markdown::block_span_at_line(&self.text, line).is_some() {
             crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT
         } else {
             0

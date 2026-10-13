@@ -1,15 +1,13 @@
-//! 模板块的 git worktree 绑定：块底部独立 `{wt:<branch>}` 行的读写、
-//! 候选解析与编辑保护。
+//! 块（`&&&` 任务块与 `+++` 补充块）的 git worktree 绑定：块底部独立 `{wt:<branch>}` 行的
+//! 读写、候选解析与编辑保护。
 //!
 //! 绑定只存在于独立的绑定行：结束行的上一行——即块内最后一行，上方固定空一行
 //! （渲染为块边框分割线，与标题行和正文之间的一致）。`{wt:}` 保存完整分支名，
 //! 解析时对同一仓库的 worktree 列表要求唯一匹配，detached/bare 条目永不入选。
 //! 绑定行是结构性元数据：编辑器禁止局部删除或修改。
 
-use super::template::{
-    parse_template_block_at_line, parse_template_end_line, parse_template_start_line,
-    parse_worktree_line,
-};
+use super::blocks::{BlockKind, block_scan};
+use super::template::parse_worktree_line;
 
 /// 候选 worktree：展示用分支名与 checkout 路径。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,52 +45,38 @@ pub fn resolve_binding(candidates: &[WorktreeCandidate], branch: &str) -> Worktr
     }
 }
 
-/// 绑定行位置：结束行上一行；块未闭合、无结束行或该行即起始行时返回 None。
-fn binding_line_of(text: &str, start_line: usize) -> Option<usize> {
-    let range = parse_template_block_at_line(text, start_line)?;
-    parse_template_end_line(nth_line(text, range.end)?)?;
-    let line = range.end.checked_sub(1)?;
-    (line > start_line).then_some(line)
+/// 结束行所在的块绑定行：`&&&` 或 `+++` 的结束行上一行（且大于起始行）；否则 None。
+/// 返回（块类型, 起始行, 绑定行）。
+fn binding_line_for(text: &str, end_line: usize) -> Option<(BlockKind, usize, usize)> {
+    let span = block_scan(text).spans.into_iter().find(|span| {
+        span.end == end_line
+            && span.closed
+            && matches!(span.kind, BlockKind::Template | BlockKind::Supple)
+    })?;
+    let line = end_line.checked_sub(1).filter(|line| *line > span.start)?;
+    Some((span.kind, span.start, line))
 }
 
-/// 结束行上方最近的模板块起始行；无起始行返回 None。
-fn block_start_before(text: &str, end_line: usize) -> Option<usize> {
-    (0..end_line).rev().find(|index| {
-        nth_line(text, *index).is_some_and(|line| parse_template_start_line(line).is_some())
-    })
-}
-
-/// 指定结束行的块绑定：返回（绑定行索引, 分支）；无绑定返回 None。
-fn binding_at_end_line(text: &str, end_line: usize) -> Option<(usize, String)> {
-    parse_template_end_line(nth_line(text, end_line)?)?;
-    let start = block_start_before(text, end_line)?;
-    let line = binding_line_of(text, start)?;
-    if line >= end_line {
+/// 光标所在块（`&&&`/`+++`）的结束行索引；块未闭合或不在块内时返回 None。
+pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
+    let info = super::block_at(text, cursor)?;
+    if !info.closed {
         return None;
     }
-    let branch = parse_worktree_line(nth_line(text, line)?)?;
-    Some((line, branch.to_string()))
+    matches!(info.kind, BlockKind::Template | BlockKind::Supple).then_some(info.end)
 }
 
 /// 光标所在块的绑定：返回（绑定行索引, 分支）；无块结构或未绑定返回 None。
 pub fn block_worktree_branch(text: &str, cursor: usize) -> Option<(usize, String)> {
-    let start = super::template_block_start_at(text, cursor)?;
-    let line = binding_line_of(text, start)?;
-    let branch = parse_worktree_line(nth_line(text, line)?)?;
-    Some((line, branch.to_string()))
+    let end = block_end_line_at(text, cursor)?;
+    block_worktree_branch_at_line(text, end)
 }
 
 /// 指定结束行的块绑定：返回（绑定行索引, 分支）；行号越界或无绑定返回 None。
 pub fn block_worktree_branch_at_line(text: &str, end_line: usize) -> Option<(usize, String)> {
-    binding_at_end_line(text, end_line)
-}
-
-/// 光标所在块的结束行索引；块未闭合（末行非结束行）时返回 None。
-pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
-    let start = super::template_block_start_at(text, cursor)?;
-    let range = super::template::parse_template_block_at_line(text, start)?;
-    parse_template_end_line(nth_line(text, range.end)?)?;
-    Some(range.end)
+    let (_, _, line) = binding_line_for(text, end_line)?;
+    let branch = parse_worktree_line(nth_line(text, line)?)?;
+    Some((line, branch.to_string()))
 }
 
 /// 把结束行所在块的绑定写为 `branch`：块底部已有绑定行、或 `occupy` 指定的
@@ -100,25 +84,21 @@ pub fn block_end_line_at(text: &str, cursor: usize) -> Option<usize> {
 /// 分割线（空行被其替换，已是分割线时不重复补）。
 ///
 /// `occupy` 为占用绑定位置的行号（`/gitWorkTree` 命令行所在行），不占用传 None。
-/// 返回（替换范围, 新文本）：替换时覆盖绑定行内容（不含换行），插入时范围是
-/// 结束行行首的空区间；新文本自带分割线与换行。
+/// 返回（替换范围, 新文本）。
 pub fn set_line_worktree(
     text: &str,
     end_line: usize,
     branch: &str,
     occupy: Option<usize>,
 ) -> Option<(std::ops::Range<usize>, String)> {
-    parse_template_end_line(nth_line(text, end_line)?)?;
-    let start = block_start_before(text, end_line)?;
-    let indent = parse_template_start_line(nth_line(text, start)?)?.indent;
+    let (_, start, slot) = binding_line_for(text, end_line)?;
+    let start_line = nth_line(text, start)?;
+    let indent = &start_line[..start_line.len() - start_line.trim_start_matches(' ').len()];
     let marker = format!("{indent}{{wt:{branch}}}");
-    let slot = end_line.checked_sub(1).filter(|line| *line > start);
-    if let Some(line) = slot {
-        let (range, current) = nth_line_range(text, line)?;
-        if parse_worktree_line(current).is_some() || occupy == Some(line) {
-            let gap = gap_before(text, line);
-            return Some((range, format!("{gap}{marker}")));
-        }
+    let (range, current) = nth_line_range(text, slot)?;
+    if parse_worktree_line(current).is_some() || occupy == Some(slot) {
+        let gap = gap_before(text, slot);
+        return Some((range, format!("{gap}{marker}")));
     }
     let (range, _) = nth_line_range(text, end_line)?;
     // 插入到结束行之前：原末行非空时其前补一个空行（渲染为分割线）。
@@ -145,7 +125,8 @@ pub fn clear_line_worktree(
     text: &str,
     end_line: usize,
 ) -> Option<(std::ops::Range<usize>, String)> {
-    let (line, _) = binding_at_end_line(text, end_line)?;
+    let (_, _, line) = binding_line_for(text, end_line)?;
+    parse_worktree_line(nth_line(text, line)?)?;
     let (range, _) = nth_line_range(text, line)?;
     let to = if text[range.end..].starts_with('\n') {
         range.end + 1
@@ -172,11 +153,11 @@ pub fn worktree_line_spans(text: &str) -> Vec<std::ops::Range<usize>> {
         ranges.push(range);
     }
     let mut spans = Vec::new();
-    for (index, line) in lines.iter().enumerate() {
-        if parse_template_start_line(line).is_none() {
+    for span in block_scan(text).spans {
+        if !span.closed || !matches!(span.kind, BlockKind::Template | BlockKind::Supple) {
             continue;
         }
-        let Some(marker_line) = binding_line_of(text, index) else {
+        let Some(marker_line) = span.end.checked_sub(1).filter(|line| *line > span.start) else {
             continue;
         };
         let Some(candidate) = lines.get(marker_line) else {

@@ -108,6 +108,32 @@ impl MdScope {
     }
 }
 
+/// `agentBlock` 的块类型：`template` 生成 `&&&`，`supple` 生成 `+++`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockType {
+    Template,
+    Supple,
+}
+
+impl BlockType {
+    /// 稳定标识（frontmatter 与 JSON 使用）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BlockType::Template => "template",
+            BlockType::Supple => "supple",
+        }
+    }
+
+    /// 由稳定标识解析；未知值返回 None（调用方报解析错误）。
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "template" => Some(BlockType::Template),
+            "supple" => Some(BlockType::Supple),
+            _ => None,
+        }
+    }
+}
+
 /// 一条已解析的自定义命令；`name` 由文件名派生。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandRecord {
@@ -121,6 +147,8 @@ pub struct CommandRecord {
     /// 插入正文。
     pub body: String,
     pub kind: CommandKind,
+    /// `agentBlock` 的块类型；`agentMD` 恒为 `Template`。
+    pub block: BlockType,
     /// 来源文件路径（保存/删除用）。
     pub path: PathBuf,
 }
@@ -191,7 +219,7 @@ impl From<ConfigError> for CommandsError {
 pub type Result<T> = std::result::Result<T, CommandsError>;
 
 /// 内置命令名（短名与长别名）与模板块保留词；自定义命令不得占用。
-pub const RESERVED_NAMES: [&str; 16] = [
+pub const RESERVED_NAMES: [&str; 17] = [
     "add",
     "addTemplate",
     "bug",
@@ -206,6 +234,7 @@ pub const RESERVED_NAMES: [&str; 16] = [
     "done",
     "in_progress",
     "supple",
+    "supplement",
     "log",
     "tmp",
 ];
@@ -356,7 +385,7 @@ pub fn parse_file(
     let mut argument_hint = None;
     let mut title = None;
     let mut scope = None;
-    let mut block = None;
+    let mut block = BlockType::Template;
     for line in front.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -378,10 +407,10 @@ pub fn parse_file(
                 scope = Some(parsed);
             }
             "block" => {
-                if value != "template" {
+                let Some(parsed) = BlockType::parse(&value) else {
                     return Err(format!("invalid block value: {value}"));
-                }
-                block = Some(value);
+                };
+                block = parsed;
             }
             // 未知键忽略，保持与参考实现的前向兼容。
             _ => {}
@@ -396,11 +425,6 @@ pub fn parse_file(
             MdScope::Template
         }
     };
-    if let Some(value) = block.as_deref()
-        && value != "template"
-    {
-        return Err(format!("invalid block value: {value}"));
-    }
     let body = body.trim_end().to_string();
     if body.is_empty() {
         return Err("command body is empty".into());
@@ -413,6 +437,7 @@ pub fn parse_file(
         title,
         body,
         kind,
+        block,
         path: path.to_path_buf(),
     })
 }
@@ -462,7 +487,9 @@ pub fn serialize(record: &CommandRecord) -> String {
             out.push('\n');
         }
         CommandKind::AgentBlock => {
-            out.push_str("block: template\n");
+            out.push_str("block: ");
+            out.push_str(record.block.as_str());
+            out.push('\n');
             if let Some(title) = record.title.as_deref()
                 && !title.is_empty()
             {

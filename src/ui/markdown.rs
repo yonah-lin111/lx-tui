@@ -23,6 +23,10 @@ pub enum TokenKind {
     TemplateCommand(Option<SlashCommandId>),
     /// 标题占位符 `{title: …}`。
     TemplateTitle,
+    /// `+++` 起止行的结构标记。
+    SuppleMarker,
+    /// 补充块命令名。
+    SuppleCommand,
     /// `@path/to/file` 文件提及。
     FileMention,
     /// `@[refer-file](path)` 文件引用。
@@ -51,45 +55,62 @@ pub struct Token {
 
 /// 扫描全文，返回每条逻辑行的 token，与 `text.split('\n')` 一一对应。
 pub fn scan(text: &str) -> Vec<Vec<Token>> {
-    let mut fence = false;
-    let mut template = false;
+    let mut state = ScanState::default();
     text.split('\n')
-        .map(|line| scan_line(line, &mut fence, &mut template))
+        .map(|line| scan_line(line, &mut state))
         .collect()
 }
 
-/// 扫描单行；`fence` 为跨行围栏代码块状态，`template` 为模板块状态。
-fn scan_line(line: &str, fence: &mut bool, template: &mut bool) -> Vec<Token> {
+/// 跨行扫描状态：围栏、`&&&`、`+++` 的开合。
+#[derive(Debug, Default, Clone, Copy)]
+struct ScanState {
+    fence: bool,
+    template: bool,
+    supple: bool,
+}
+
+/// 扫描单行，按围栏/块状态产出 token。
+fn scan_line(line: &str, state: &mut ScanState) -> Vec<Token> {
     let mut tokens = Vec::new();
     if is_fence(line) {
-        *fence = !*fence;
+        state.fence = !state.fence;
         push(&mut tokens, 0..line.len(), TokenKind::Marker);
         return tokens;
     }
-    if *fence {
+    if state.fence {
         push(&mut tokens, 0..line.len(), TokenKind::CodeBlock);
         return tokens;
     }
     if scan_template_end(line, &mut tokens) {
-        *template = false;
+        state.template = false;
         return tokens;
     }
     if scan_template_start(line, &mut tokens) {
-        *template = true;
+        state.template = true;
         return tokens;
     }
-    if *template && let Some(range) = standalone_title(line) {
-        push(&mut tokens, range, TokenKind::TemplateTitle);
-        return tokens;
-    }
-    if *template && markdown::parse_worktree_line(line).is_some() {
-        let start = line.len() - line.trim_start().len();
-        push(
-            &mut tokens,
-            start..line.trim_end().len(),
-            TokenKind::TemplateMarker,
-        );
-        return tokens;
+    if state.template {
+        if scan_supple_end(line, &mut tokens) {
+            state.supple = false;
+            return tokens;
+        }
+        if scan_supple_start(line, &mut tokens) {
+            state.supple = true;
+            return tokens;
+        }
+        if let Some(range) = standalone_title(line) {
+            push(&mut tokens, range, TokenKind::TemplateTitle);
+            return tokens;
+        }
+        if markdown::parse_worktree_line(line).is_some() {
+            let start = line.len() - line.trim_start().len();
+            push(
+                &mut tokens,
+                start..line.trim_end().len(),
+                TokenKind::TemplateMarker,
+            );
+            return tokens;
+        }
     }
     if let Some(marker_end) = heading(line) {
         push(&mut tokens, 0..marker_end, TokenKind::Marker);
@@ -182,6 +203,62 @@ fn scan_template_end(line: &str, tokens: &mut Vec<Token>) -> bool {
     true
 }
 
+/// 补充分块起始行 token：`+++` 与 `--start` 为结构标记，命令名分色，标题整体成段。
+fn scan_supple_start(line: &str, tokens: &mut Vec<Token>) -> bool {
+    let Some(parsed) = markdown::parse_supple_start_line(line) else {
+        return false;
+    };
+    let spans = word_spans(line);
+    if let Some((_, range)) = spans.first() {
+        push(tokens, range.clone(), TokenKind::SuppleMarker);
+    }
+    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == parsed.command) {
+        push(tokens, range.clone(), TokenKind::SuppleCommand);
+    }
+    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == "--start") {
+        push(tokens, range.clone(), TokenKind::SuppleMarker);
+    }
+    push_inline_title(line, tokens);
+    true
+}
+
+/// 补充分块结束行 token：`+++`、`--end` 与 `{id:}`/`{wt:}` 为结构标记，命令名分色。
+fn scan_supple_end(line: &str, tokens: &mut Vec<Token>) -> bool {
+    let Some(parsed) = markdown::parse_supple_end_line(line) else {
+        return false;
+    };
+    let spans = word_spans(line);
+    if let Some((_, range)) = spans.first() {
+        push(tokens, range.clone(), TokenKind::SuppleMarker);
+    }
+    if let Some((_, range)) = spans.iter().find(|(text, _)| *text == parsed.command) {
+        push(tokens, range.clone(), TokenKind::SuppleCommand);
+    }
+    for (text, range) in &spans {
+        if *text == "--end" || text.starts_with("{id:") || text.starts_with("{wt:") {
+            push(tokens, range.clone(), TokenKind::SuppleMarker);
+        }
+    }
+    true
+}
+
+/// 行内标题（`{title: …}` 或 `「title: …」`）成段着色。
+fn push_inline_title(line: &str, tokens: &mut Vec<Token>) {
+    if let Some(open) = line.find("{title:")
+        && let Some(close) = line[open..].find('}')
+    {
+        push(tokens, open..open + close + 1, TokenKind::TemplateTitle);
+    } else if let Some(open) = line.find("「title:")
+        && let Some(close) = line[open..].find('」')
+    {
+        push(
+            tokens,
+            open..open + close + '」'.len_utf8(),
+            TokenKind::TemplateTitle,
+        );
+    }
+}
+
 /// 按 ASCII 空白切分单词及行内字节区间；非 ASCII 视为词内字符。
 fn word_spans(line: &str) -> Vec<(&str, Range<usize>)> {
     let bytes = line.as_bytes();
@@ -200,7 +277,6 @@ fn word_spans(line: &str) -> Vec<(&str, Range<usize>)> {
     }
     spans
 }
-
 /// 围栏代码块行：至多 3 个前导空格后以 ``` 开头。
 fn is_fence(line: &str) -> bool {
     let trimmed = line.trim_start_matches(' ');

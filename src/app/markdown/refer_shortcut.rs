@@ -126,6 +126,10 @@ pub fn refer_trigger(text: &str, cursor: usize) -> Option<ReferTrigger> {
     if is_structural_line(text, line) {
         return None;
     }
+    // 补充块内部不提供引用候选（避免改写定义/结构行）。
+    if super::block_context(text, cursor) == super::BlockContext::Supple {
+        return None;
+    }
     let infos = template_line_infos(text);
     if let Some(info) = infos.get(line).copied().flatten()
         && (info.role != TemplateLineRole::Middle || info.separator)

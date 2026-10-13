@@ -35,6 +35,16 @@ impl Selection {
         }
     }
 
+    /// 以固定端点构造一次非拖拽选区（键盘选择）。
+    pub fn text_range(pane: PaneId, anchor: (i32, u16), cursor: (i32, u16)) -> Self {
+        Self {
+            pane,
+            anchor,
+            cursor,
+            dragging: false,
+        }
+    }
+
     /// 所属窗格。
     pub fn pane(&self) -> PaneId {
         self.pane

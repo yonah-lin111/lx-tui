@@ -637,7 +637,7 @@ fn slash_trigger_suppressed_in_fence_but_allowed_inside_template_blocks() {
 /// 空上下文：块外、无 git。
 fn outside_context() -> SlashContext {
     SlashContext {
-        inside_block: false,
+        context: BlockContext::Normal,
         worktree_available: false,
     }
 }
@@ -652,7 +652,7 @@ fn filter_names(query: &str) -> Vec<String> {
 
 #[test]
 fn slash_filter_ranks_short_and_long_aliases() {
-    assert_eq!(filter_names("").len(), 5);
+    assert_eq!(filter_names("").len(), 5, "5 个内置模板");
     assert_eq!(filter_names("add"), vec!["add"]);
     assert_eq!(filter_names("addt"), vec!["add"]);
     assert_eq!(filter_names("ADD"), vec!["add"]);
@@ -716,7 +716,7 @@ fn slash_filter_scopes_custom_commands_by_block_context() {
     let inside = slash_filter(
         &custom_items(),
         SlashContext {
-            inside_block: true,
+            context: BlockContext::Template,
             worktree_available: false,
         },
         "",
@@ -735,7 +735,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let inside = slash_filter(
         &[],
         SlashContext {
-            inside_block: true,
+            context: BlockContext::Template,
             worktree_available: true,
         },
         "work",
@@ -745,7 +745,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let without_git = slash_filter(
         &[],
         SlashContext {
-            inside_block: true,
+            context: BlockContext::Template,
             worktree_available: false,
         },
         "work",
@@ -754,7 +754,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let outside = slash_filter(
         &[],
         SlashContext {
-            inside_block: false,
+            context: BlockContext::Normal,
             worktree_available: true,
         },
         "work",
@@ -1257,4 +1257,197 @@ fn is_template_block_line_checks_membership_and_bounds() {
     assert!(!is_template_block_line(text, 99), "越界行不算块内");
     let unclosed = "&&& bugTemplate --start {title: }\n# Fix";
     assert!(is_template_block_line(unclosed, 1));
+}
+
+// ---- 补充块解析 ----
+
+#[test]
+fn parse_supple_start_line_forms() {
+    let parsed = parse_supple_start_line("+++ supplement --start").expect("valid");
+    assert_eq!(parsed.command, "supplement");
+    assert_eq!(parsed.title, None);
+    assert!(parse_supple_start_line("  +++ suppleTemplate --start {title: T}").is_some());
+    assert!(parse_supple_start_line("+++ supplement --start 「title: 标题」").is_some());
+    // 缺 --start 或保留词均为非法起始。
+    assert!(parse_supple_start_line("+++ supplement").is_none());
+    assert!(parse_supple_start_line("+++ log --start").is_none());
+    assert!(parse_supple_start_line("+++ logTemplate --start").is_none());
+    assert!(parse_supple_start_line("++ supplement --start").is_none());
+    assert!(parse_supple_start_line("+++ supplement --end").is_none());
+}
+
+#[test]
+fn parse_supple_end_line_forms() {
+    let parsed = parse_supple_end_line("+++ supplement --end").expect("valid");
+    assert_eq!(parsed.command, "supplement");
+    assert!(parse_supple_end_line("+++ x --end {id:abc} {wt:main}").is_some());
+    assert!(parse_supple_end_line("+++ log --end").is_none());
+    assert!(parse_supple_end_line("+++ x --start").is_none());
+}
+
+#[test]
+fn block_scan_marks_template_and_nested_supple() {
+    let text = concat!(
+        "&&& addTemplate --start\n",
+        "{title: }\n",
+        "+++ supplement --start\n",
+        "- a\n",
+        "+++ supplement --end\n",
+        "&&& addTemplate --end\n",
+    );
+    let infos = block_line_infos(text);
+    assert_eq!(infos[0].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[0].unwrap().role, BlockRole::Start);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[2].unwrap().role, BlockRole::Start);
+    assert_eq!(infos[3].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[4].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[4].unwrap().role, BlockRole::End);
+    assert_eq!(infos[5].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[5].unwrap().role, BlockRole::End);
+}
+
+#[test]
+fn block_scan_ignores_supple_outside_template_and_fences() {
+    let text = "+++ supplement --start\n- a\n+++ supplement --end";
+    assert!(block_line_infos(text).iter().all(Option::is_none));
+    let fenced = "```\n&&& x --start\n```\n&&& x --start\n&&& x --end";
+    let infos = block_line_infos(fenced);
+    assert!(infos[1].is_none(), "围栏内的 &&& 不识别");
+    assert_eq!(infos[3].unwrap().role, BlockRole::Start);
+    assert_eq!(infos[4].unwrap().role, BlockRole::End);
+}
+
+#[test]
+fn block_scan_unclosed_extends_to_end() {
+    let text = "&&& x --start\n+++ supplement --start\n- a";
+    let infos = block_line_infos(text);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[2].unwrap().role, BlockRole::Middle);
+    assert_eq!(infos[2].unwrap().end, 2);
+}
+
+#[test]
+fn block_scan_supple_crossing_parent_end_is_invalid() {
+    // 补充块未闭合即遇到父 `&&&` 结束行：子块作废，其行仍属父块正文。
+    let text = "&&& x --start\n+++ supplement --start\n- a\n&&& x --end";
+    let infos = block_line_infos(text);
+    assert_eq!(infos[1].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[3].unwrap().role, BlockRole::End);
+}
+
+#[test]
+fn block_context_reports_position() {
+    let text = concat!(
+        "plain\n",
+        "&&& x --start\n",
+        "+++ supplement --start\n",
+        "in supple\n",
+        "+++ supplement --end\n",
+        "&&& x --end\n",
+    );
+    assert_eq!(block_context(text, 0), BlockContext::Normal);
+    assert_eq!(
+        block_context(text, text.find("&&&").unwrap()),
+        BlockContext::Template
+    );
+    assert_eq!(
+        block_context(text, text.find("in supple").unwrap()),
+        BlockContext::Supple
+    );
+}
+
+/// 指定上下文的候选短名序列。
+fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
+    slash_filter(
+        &[],
+        SlashContext {
+            context: ctx,
+            worktree_available: false,
+        },
+        query,
+    )
+    .into_iter()
+    .map(|item| item.name)
+    .collect()
+}
+
+#[test]
+fn slash_filter_scopes_builtin_by_context() {
+    let normal = filter_names_in(BlockContext::Normal, "");
+    assert!(normal.contains(&"add".to_string()));
+    assert!(!normal.contains(&"supplement".to_string()));
+
+    let template = filter_names_in(BlockContext::Template, "");
+    assert_eq!(template, vec!["supplement"]);
+
+    let supple = filter_names_in(BlockContext::Supple, "");
+    assert!(supple.is_empty(), "{supple:?}");
+}
+
+#[test]
+fn supple_block_content_wraps_and_places_cursor_in_title() {
+    let (content, cursor) = supple_block_content("supplement", None, "## Head");
+    assert!(
+        content.starts_with("+++ supplement --start\n{title: }"),
+        "{content}"
+    );
+    assert!(content.ends_with("+++ supplement --end"), "{content}");
+    assert!(content.contains("## Head"));
+    assert!(content[cursor..].starts_with('}'));
+    let (content, _) = supple_block_content("note", Some("标题"), "body");
+    assert!(
+        content.starts_with("+++ note --start\n{title: 标题}"),
+        "{content}"
+    );
+}
+
+#[test]
+fn slash_insertion_maps_supple_builtin() {
+    let supple = SlashItem::builtin_supplement();
+    let (text, _) = slash_insertion(&supple).expect("supple insertion");
+    assert!(text.starts_with("+++ supplement --start"));
+}
+
+#[test]
+fn supple_block_worktree_binding_round_trips() {
+    let text = "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end";
+    let cursor = text.find("body").unwrap();
+    assert_eq!(
+        block_end_line_at(text, cursor),
+        Some(3),
+        "光标在 +++ 内定位到子块结束行"
+    );
+    let (range, new) = set_line_worktree(text, 3, "main", None).expect("set supple binding");
+    let mut text = text.to_string();
+    text.replace_range(range, &new);
+    assert!(text.contains("{wt:main}"));
+    let end = block_end_line_at(&text, text.find("body").unwrap()).expect("end");
+    assert_eq!(
+        block_worktree_branch(&text, text.find("body").unwrap()).map(|(_, branch)| branch),
+        Some("main".to_string())
+    );
+    let (range, new) = clear_line_worktree(&text, end).expect("clear");
+    text.replace_range(range, &new);
+    assert!(!text.contains("{wt:"), "{text}");
+}
+
+#[test]
+fn slash_filter_offers_worktree_in_supple_context_only() {
+    let supple = slash_filter(
+        &[],
+        SlashContext {
+            context: BlockContext::Supple,
+            worktree_available: true,
+        },
+        "",
+    );
+    assert_eq!(
+        supple
+            .iter()
+            .map(|item| item.name.clone())
+            .collect::<Vec<_>>(),
+        vec!["gitWorkTree"]
+    );
 }

@@ -1238,7 +1238,7 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
     let mut prompt = prompt(40, 8);
     type_text(&mut prompt, "/");
     let panel = prompt.slash_panel().expect("panel on bare slash");
-    assert_eq!(panel.items().len(), 5);
+    assert_eq!(panel.items().len(), 5, "5 个内置模板");
     assert_eq!(panel.trigger().query, "");
 
     type_text(&mut prompt, "ref");
@@ -2463,4 +2463,80 @@ fn refer_shortcut_reference_candidates_keep_full_marker() {
     assert_eq!(panel.items()[0].tag.label(), "refer-image");
     assert!(prompt.refer_confirm());
     assert!(prompt.text().ends_with("@[refer-image](/tmp/shot.png) "));
+}
+
+// ---- 补充块 ----
+
+#[test]
+fn slash_supplement_offered_inside_template_and_inserts_subblock() {
+    let mut prompt = prompt(60, 12);
+    type_text(&mut prompt, "&&& addTemplate --start {title: }\n");
+    type_text(&mut prompt, "/supplement");
+    let panel = prompt
+        .slash_panel()
+        .expect("supplement offered in template");
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].name, "supplement");
+    assert!(prompt.slash_confirm());
+    assert!(
+        prompt.text().contains("+++ supplement --start"),
+        "{}",
+        prompt.text()
+    );
+    assert_eq!(
+        markdown::block_context(
+            prompt.text(),
+            prompt.text().find("##").unwrap_or(prompt.cursor())
+        ),
+        markdown::BlockContext::Supple
+    );
+}
+
+#[test]
+fn supple_clean_and_delete_are_single_steps() {
+    let text = concat!(
+        "&&& x --start\n",
+        "{title: }\n",
+        "+++ supplement --start\n",
+        "- Reference: \n",
+        "- Requirements: \n",
+        "  - \n",
+        "+++ supplement --end\n",
+        "&&& x --end",
+    );
+    let mut prompt = prompt(60, 20);
+    prompt.set_text(text);
+    assert!(prompt.clean_supple_block(2));
+    assert!(!prompt.text().contains("- Reference:"));
+    assert!(prompt.text().contains("+++ supplement --end"));
+    prompt.undo();
+    assert_eq!(prompt.text(), text, "clean is one undo step");
+
+    assert!(prompt.delete_supple_block(2));
+    assert!(!prompt.text().contains("+++ supplement"));
+    assert!(prompt.text().contains("&&& x --end"));
+    prompt.undo();
+    assert_eq!(prompt.text(), text);
+}
+
+#[test]
+fn slash_panel_offers_git_worktree_inside_supple_block() {
+    let mut editor = prompt(60, 12);
+    editor.set_text(
+        "&&& x --start\n{title: }\n+++ supplement --start\nbody\n/w\n+++ supplement --end\n&&& x --end",
+    );
+    editor.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let at = editor.text().find("/w").unwrap() + 2;
+    editor.set_cursor_offset_for_test(at);
+    editor.refresh_slash_panel();
+    let panel = editor.slash_panel().expect("supple 内 slash 面板");
+    assert!(
+        panel.items().iter().any(|item| item.name == "gitWorkTree"),
+        "{:?}",
+        panel
+            .items()
+            .iter()
+            .map(|item| item.name.clone())
+            .collect::<Vec<_>>()
+    );
 }

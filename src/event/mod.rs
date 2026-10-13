@@ -357,13 +357,22 @@ fn slash_item_of(
             &record.body,
             &record.description,
         ),
-        CommandKind::AgentBlock => SlashItem::custom_block(
-            &record.name,
-            source,
-            record.title.as_deref(),
-            &record.body,
-            &record.description,
-        ),
+        CommandKind::AgentBlock => match record.block {
+            crate::settings::commands::BlockType::Template => SlashItem::custom_block(
+                &record.name,
+                source,
+                record.title.as_deref(),
+                &record.body,
+                &record.description,
+            ),
+            crate::settings::commands::BlockType::Supple => SlashItem::custom_supple(
+                &record.name,
+                source,
+                record.title.as_deref(),
+                &record.body,
+                &record.description,
+            ),
+        },
     }
 }
 
@@ -864,6 +873,9 @@ fn handle_terminal_event(
                     *dirty = true;
                 } else if let Some(hit) = template_button_at(state, view, mouse.column, mouse.row) {
                     apply_template_button(state, hit);
+                    *dirty = true;
+                } else if let Some(hit) = block_button_at(state, view, mouse.column, mouse.row) {
+                    apply_block_button(state, hit);
                     *dirty = true;
                 } else if !state.prompt_collapsed
                     && let Some(button) = layout::prompt_toolbar_button_at(
@@ -2300,6 +2312,32 @@ fn apply_template_button(state: &mut AppState, hit: ui::prompt::TemplateButtonHi
         ui::prompt::TemplateBlockButton::Status => {
             update::toggle_template_status(state, hit.line);
         }
+    }
+}
+
+/// 补充块操作按钮命中；未命中返回 None。
+fn block_button_at(
+    state: &AppState,
+    view: &ui::layout::ViewLayout,
+    column: u16,
+    row: u16,
+) -> Option<ui::prompt::BlockButtonHit> {
+    let area = paste::prompt_text_area(view);
+    ui::prompt::block_button_at(&state.prompt, area, column, row)
+}
+
+/// 执行补充块按钮动作（单步可撤销）。
+fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockButtonHit) {
+    use crate::app::markdown::BlockKind;
+    use ui::prompt::BlockButton;
+    match (hit.kind, hit.button) {
+        (BlockKind::Supple, BlockButton::Clean) => {
+            update::clean_supple_block(state, hit.line);
+        }
+        (BlockKind::Supple, BlockButton::Delete) => {
+            update::delete_supple_block(state, hit.line);
+        }
+        _ => {}
     }
 }
 

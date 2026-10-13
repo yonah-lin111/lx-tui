@@ -265,7 +265,7 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
     let has_stacked = items
         .iter()
         .any(|item| matches!(item, CommandItem::Stacked { .. }));
-    let tag = if tag == 0 { 0 } else { TAG_GAP + tag };
+    let tag = if tag == 0 { 0 } else { TAG_GAP + tag + 2 };
     let content = match (has_inline, has_stacked) {
         (true, false) => label + COLUMN_GAP + preview + tag,
         (false, true) => label.max(detail) + tag,

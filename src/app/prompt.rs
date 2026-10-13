@@ -5,6 +5,7 @@ mod mention;
 mod paste;
 pub use mention::MentionRootChoice;
 pub use paste::*;
+mod block;
 mod panel;
 mod refer;
 mod template;

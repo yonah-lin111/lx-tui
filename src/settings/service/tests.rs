@@ -516,3 +516,33 @@ async fn shutdown_stops_listening() {
     }
     assert!(closed, "listener stops after shutdown");
 }
+
+#[tokio::test]
+async fn agent_block_supple_type_round_trips_over_http() {
+    let (service, _events, _dir) = start("commands-supple").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let origin = Some(format!("http://127.0.0.1:{port}"));
+    let url = format!("/api/commands/user/agentBlock/note?token={token}");
+    let payload = "{\"description\":\"n\",\"md_scope\":\"template\",\"block_type\":\"supple\",\"title\":\"T\",\"body\":\"+++ note --start\\nx\\n+++ note --end\"}";
+    let saved = request(port, &write("PUT", &url, payload, origin.as_deref())).await;
+    assert_eq!(status(&saved), 200, "{saved}");
+
+    let state = request(port, &get(&format!("/api/state?token={token}"))).await;
+    let body = body(&state);
+    assert!(body.contains("\"block_type\":\"supple\""), "{body}");
+
+    // 非法 block_type 被拒绝。
+    let bad = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/commands/user/agentBlock/bad?token={token}"),
+            "{\"body\":\"x\",\"block_type\":\"bogus\"}",
+            origin.as_deref(),
+        ),
+    )
+    .await;
+    assert_eq!(status(&bad), 422, "{bad}");
+    service.shutdown();
+}

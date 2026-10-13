@@ -4,7 +4,9 @@ use super::{MAX_BODY_BYTES, MAX_HEADER_BYTES, ServiceState, SettingsEvent, page}
 use std::collections::HashMap;
 
 use crate::config::Config;
-use crate::settings::commands::{self, CommandKind, CommandRecord, CommandScope, MdScope};
+use crate::settings::commands::{
+    self, BlockType, CommandKind, CommandRecord, CommandScope, MdScope,
+};
 
 /// `GET /api/state` 与 `PUT /api/commands` 使用的命令视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +21,8 @@ pub struct CommandView {
     pub md_scope: String,
     /// `agentBlock` 的标题；其余为空。
     pub title: String,
+    /// `agentBlock` 的块类型（`template` / `supple`）；其余恒为 `template`。
+    pub block_type: String,
     pub body: String,
 }
 
@@ -32,6 +36,7 @@ impl CommandView {
             description: record.description.clone(),
             md_scope: record.scope.as_str().to_string(),
             title: record.title.clone().unwrap_or_default(),
+            block_type: record.block.as_str().to_string(),
             body: record.body.clone(),
         }
     }
@@ -439,9 +444,17 @@ fn put_command(
     let mut title = None;
     let mut argument_hint = None;
     let mut body = None;
+    let mut block_type = BlockType::Template;
     for (key, value) in blocks {
         match key.as_str() {
             "description" => description = value.as_string().unwrap_or_default(),
+            "block_type" => {
+                let Some(parsed) = value.as_string().and_then(|value| BlockType::parse(&value))
+                else {
+                    return Response::error(422, "invalid block_type");
+                };
+                block_type = parsed;
+            }
             "md_scope" => {
                 let Some(parsed) = value.as_string().and_then(|value| MdScope::parse(&value))
                 else {
@@ -479,6 +492,7 @@ fn put_command(
         title,
         body,
         kind,
+        block: block_type,
         path: path_on_disk.to_path_buf(),
     };
     if let Err(error) = commands::save(scope, root, &record, true) {
@@ -508,13 +522,14 @@ fn rename_command(request: &Request, path_on_disk: &std::path::Path) -> Response
 /// 命令视图 → JSON。
 fn command_view_json(view: &CommandView) -> String {
     format!(
-        "{{\"name\":{},\"scope\":{},\"kind\":{},\"description\":{},\"md_scope\":{},\"title\":{},\"body\":{}}}",
+        "{{\"name\":{},\"scope\":{},\"kind\":{},\"description\":{},\"md_scope\":{},\"title\":{},\"block_type\":{},\"body\":{}}}",
         json_string(&view.name),
         json_string(&view.scope),
         json_string(&view.kind),
         json_string(&view.description),
         json_string(&view.md_scope),
         json_string(&view.title),
+        json_string(&view.block_type),
         json_string(&view.body),
     )
 }

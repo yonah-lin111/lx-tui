@@ -1,5 +1,6 @@
 //! 斜杠命令：触发识别、内置/自定义候选过滤、插入内容与面板状态。
 
+use super::blocks::BlockContext;
 use super::template::{parse_template_end_line, parse_template_start_line};
 use super::{line_end, line_start, open_fence};
 
@@ -101,30 +102,49 @@ pub fn slash_trigger(text: &str, cursor: usize) -> Option<SlashTrigger> {
 /// 命令触发（`slash_trigger` 只认纯命令字符），选择器关闭后命令行保持惰性、不会重新弹面板。
 pub const WORKTREE_COMMAND_LINE: &str = "/gitWorkTree ";
 
-/// 按查询过滤候选：内置模板 + 自定义命令 + `/gitWorkTree`。
+/// 按查询过滤候选：内置命令 + 自定义命令 + `/gitWorkTree`。
 ///
-/// 可见范围：内置模板只在模板块外出现（块内已有模板）；globally 作用域的自定义
-/// Markdown 两处都出现，template 作用域的只在块内出现；`/gitWorkTree` 仅在块外
-/// 且工作区有 git 元数据时出现。空查询返回全部，排序稳定按打分降序，同分内置优先。
+/// 可见范围由块上下文决定：内置模板命令仅在普通正文；`/supplement`
+/// 与 supple 自定义块仅在 `&&&` 正文；`/gitWorkTree` 仅在 `&&&`（含 `+++`）
+/// 且有 git 元数据时出现。globally 作用域的自定义 Markdown 任意位置出现，
+/// template 作用域仅在 `&&&`/`+++` 内。空查询返回全部，排序稳定按打分降序，
+/// 同分内置优先。
 pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) -> Vec<SlashItem> {
     let query = query.to_lowercase();
     let mut candidates: Vec<SlashItem> = Vec::new();
-    if !context.inside_block {
-        candidates.extend(SlashCommandId::ALL.into_iter().map(SlashItem::builtin));
-    } else if context.worktree_available {
-        // `/gitWorkTree` 只在模板块内出现：绑定该块的文件提及根。
-        candidates.push(SlashItem::worktree());
+    match context.context {
+        BlockContext::Normal => {
+            candidates.extend(SlashCommandId::ALL.into_iter().map(SlashItem::builtin));
+        }
+        BlockContext::Template => {
+            candidates.push(SlashItem::builtin_supplement());
+            if context.worktree_available {
+                candidates.push(SlashItem::worktree());
+            }
+        }
+        BlockContext::Supple => {
+            if context.worktree_available {
+                candidates.push(SlashItem::worktree());
+            }
+        }
     }
     candidates.extend(
         custom
             .iter()
             .filter(|item| match &item.insertion {
-                // 完整模板块：仅在块外插入。
-                SlashInsertion::AgentBlock { .. } => !context.inside_block,
-                // template 作用域的 Markdown：仅在块内。
+                // 完整 `&&&` 模板块：仅在块外插入。
+                SlashInsertion::AgentBlock { .. } => context.context == BlockContext::Normal,
+                // 完整 `+++` 补充块：仅在 `&&&` 正文插入。
+                SlashInsertion::SuppleBlock { .. } => context.context == BlockContext::Template,
+                // template 作用域的 Markdown：仅在 `&&&`/`+++` 内。
                 SlashInsertion::Raw(_) => match item.scope {
                     SlashScope::Global => true,
-                    SlashScope::Template => context.inside_block,
+                    SlashScope::Template => {
+                        matches!(
+                            context.context,
+                            BlockContext::Template | BlockContext::Supple
+                        )
+                    }
                 },
                 _ => false,
             })
@@ -195,6 +215,24 @@ pub fn agent_block_content(command: &str, title: Option<&str>, body: &str) -> (S
     (content, cursor)
 }
 
+/// 内置补充块正文（`/supplement`）。
+pub const SUPPLEMENT_COMMAND: &str = "supplement";
+
+const SUPPLEMENT_BODY: &str =
+    "## Supplementary Requirements\n\n- Reference: \n- Requirements: \n  - \n- Notes: \n  - ";
+
+/// 补充块规范正文：`+++ <name> --start` + 标题行 + 空行 + 正文 + `+++ <name> --end`。
+///
+/// 光标偏移落在标题占位符的 `}` 之前；标题缺省时值为空。
+pub fn supple_block_content(command: &str, title: Option<&str>, body: &str) -> (String, usize) {
+    let title = title.unwrap_or_default().trim().replace(['{', '}'], "");
+    let body = body.trim_end();
+    let content =
+        format!("+++ {command} --start\n{{title: {title}}}\n\n{body}\n+++ {command} --end");
+    let cursor = title_cursor(&content);
+    (content, cursor)
+}
+
 /// 候选命令的插入结果：整行替换文本与光标偏移；选择器条目与占位行返回 None。
 pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
     match &item.insertion {
@@ -208,6 +246,11 @@ pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
             title,
             body,
         } => Some(agent_block_content(command, title.as_deref(), body)),
+        SlashInsertion::SuppleBlock {
+            command,
+            title,
+            body,
+        } => Some(supple_block_content(command, title.as_deref(), body)),
         SlashInsertion::WorktreeChooser
         | SlashInsertion::WorktreeBinding { .. }
         | SlashInsertion::Placeholder => None,
@@ -321,6 +364,12 @@ pub enum SlashInsertion {
         title: Option<String>,
         body: String,
     },
+    /// 补充块：整行替换为 `+++ <name> --start/--end` 块，光标落在标题内。
+    SuppleBlock {
+        command: String,
+        title: Option<String>,
+        body: String,
+    },
     /// `/gitWorkTree`：不直接插入，打开二级 worktree 选择器。
     WorktreeChooser,
     /// 二级选择器条目：把对应分支写回块结束行上方的 `{wt:}` 行。
@@ -407,6 +456,44 @@ impl SlashItem {
         }
     }
 
+    /// 自定义补充块命令（设置页 `block: supple`）。
+    pub fn custom_supple(
+        name: &str,
+        source: CommandSource,
+        title: Option<&str>,
+        body: &str,
+        description: &str,
+    ) -> Self {
+        Self {
+            name: name.to_string(),
+            source,
+            insertion: SlashInsertion::SuppleBlock {
+                command: name.to_string(),
+                title: title.map(str::to_string),
+                body: body.to_string(),
+            },
+            preview: description.to_string(),
+            scope: SlashScope::Template,
+            selectable: true,
+        }
+    }
+
+    /// 内置 `/supplement` 候选（仅在 `&&&` 正文出现）。
+    pub fn builtin_supplement() -> Self {
+        Self {
+            name: SUPPLEMENT_COMMAND.to_string(),
+            source: CommandSource::BuiltIn,
+            insertion: SlashInsertion::SuppleBlock {
+                command: SUPPLEMENT_COMMAND.to_string(),
+                title: None,
+                body: SUPPLEMENT_BODY.to_string(),
+            },
+            preview: "supple".to_string(),
+            scope: SlashScope::Template,
+            selectable: true,
+        }
+    }
+
     /// `/gitWorkTree` 候选：打开二级 worktree 选择器。
     pub fn worktree() -> Self {
         Self {
@@ -459,8 +546,8 @@ impl SlashItem {
 /// 面板候选的可见范围上下文。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlashContext {
-    /// 光标是否位于已闭合或未闭合的模板块内。
-    pub inside_block: bool,
+    /// 光标处的块上下文。
+    pub context: BlockContext,
     /// 显示中工作区是否具备 git 仓库元数据。
     pub worktree_available: bool,
 }

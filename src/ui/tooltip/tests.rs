@@ -7,7 +7,7 @@ use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 
 use super::*;
-use crate::app::tooltip::{TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
+use crate::app::tooltip::{BlockButtonKind, TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
 use crate::config::Config;
 
 fn view_for(state: &AppState) -> ViewLayout {
@@ -295,4 +295,43 @@ fn hits_template_block_buttons_via_prompt_text_area() {
         })
     );
     assert_eq!(target_at(&view, &state, &rects, 0, 0), None, "边框角不命中");
+}
+
+#[test]
+fn block_button_tooltips_have_hints() {
+    let state = AppState::demo();
+    for (button, hint) in [
+        (BlockButtonKind::Clean, "clean block"),
+        (BlockButtonKind::Delete, "delete block"),
+    ] {
+        assert_eq!(
+            text::tooltip_hint(TooltipTarget::BlockButton { line: 0, button }, &state),
+            hint
+        );
+    }
+}
+
+#[test]
+fn hits_block_buttons_via_prompt_text_area() {
+    let mut state = AppState::demo();
+    state.prompt.resize(40, 20);
+    state.prompt.insert_str(
+        "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end",
+    );
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let area = layout::prompt_text_rect(view.prompt);
+    let hits = ui::prompt::block_buttons(&state.prompt, area);
+    assert_eq!(hits.len(), 2, "清理、删除按钮可见");
+    let clean = hits
+        .iter()
+        .find(|hit| hit.button == ui::prompt::BlockButton::Clean)
+        .expect("clean button visible");
+    assert_eq!(
+        target_at(&view, &state, &rects, clean.rect.x, clean.rect.y),
+        Some(TooltipTarget::BlockButton {
+            line: clean.line,
+            button: BlockButtonKind::Clean,
+        })
+    );
 }

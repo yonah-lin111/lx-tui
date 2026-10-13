@@ -853,8 +853,8 @@ fn toolbar_hidden_when_prompt_too_short() {
 
 #[test]
 fn slash_panel_renders_templates_title_and_hit_tests_items() {
-    let area = Rect::new(0, 0, 40, 10);
-    let prompt = prompt(40, 10, "/");
+    let area = Rect::new(0, 0, 60, 10);
+    let prompt = prompt(60, 10, "/");
     let layout = slash_layout(&prompt, area).expect("slash panel visible");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
@@ -1146,4 +1146,89 @@ fn refer_panel_hit_maps_candidates() {
         refer_item_at(&prompt, area, layout.content.x + 1, layout.content.y),
         Some(0)
     );
+}
+
+#[test]
+fn supple_block_overrides_parent_template_colors() {
+    use crate::app::markdown::BlockKind;
+    let area = Rect::new(0, 0, 60, 6);
+    let prompt = prompt(
+        60,
+        6,
+        concat!(
+            "&&& x --start\n",
+            "{title: }\n",
+            "+++ supplement --start\n",
+            "- a\n",
+            "+++ supplement --end\n",
+            "&&& x --end",
+        ),
+    );
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "父块 todo 边框");
+    assert_eq!(buf[(0, 2)].fg, Color::LightMagenta, "+++ 覆盖父边框色");
+    assert_eq!(buf[(2, 3)].bg, Color::Rgb(46, 32, 54), "+++ 覆盖父底色");
+
+    let hits = block_buttons(&prompt, area);
+    assert_eq!(hits.len(), 2, "补充块两个按钮");
+    assert!(hits.iter().all(|hit| hit.kind == BlockKind::Supple));
+    assert_eq!(hits[0].button, BlockButton::Clean);
+    assert_eq!(hits[1].button, BlockButton::Delete);
+    let hit = hits[0];
+    assert_eq!(
+        block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
+        Some(BlockButton::Clean)
+    );
+}
+
+#[test]
+fn refer_panel_width_grows_with_content_up_to_container() {
+    let area = Rect::new(0, 0, 40, 10);
+    let short = prompt(40, 10, "@a.txt one\nat");
+    let narrow = refer_layout(&short, area)
+        .expect("short refer panel")
+        .rect
+        .width;
+    let long = prompt(40, 10, "@a/very/long/path/to/name.txt one\nname");
+    let wide = refer_layout(&long, area)
+        .expect("long refer panel")
+        .rect
+        .width;
+    assert!(
+        wide > narrow,
+        "panel grows with content: {narrow} -> {wide}"
+    );
+    assert!(wide <= area.width, "panel never exceeds container: {wide}");
+    let huge = prompt(
+        40,
+        10,
+        &format!("@{}verylongname.txt one\nvery", "p/".repeat(60)),
+    );
+    let capped = refer_layout(&huge, area)
+        .expect("huge refer panel")
+        .rect
+        .width;
+    assert_eq!(capped, area.width, "capped at container width");
+}
+
+fn assert_full_width_separator(buf: &Buffer, width: u16, y: u16) {
+    let separator: String = (0..width).map(|x| buf[(x, y)].symbol()).collect();
+    let chars: Vec<char> = separator.chars().collect();
+    assert_eq!(chars.first(), Some(&'├'), "sep={separator:?}");
+    assert_eq!(chars.last(), Some(&'┤'), "sep={separator:?}");
+    assert!(
+        chars[1..chars.len() - 1].iter().all(|ch| *ch == '─'),
+        "sep={separator:?}"
+    );
+}
+
+#[test]
+fn supple_block_renders_title_separator_like_template() {
+    let area = Rect::new(0, 0, 40, 12);
+    let text = "&&& x --start\n{title: }\n\n+++ supplement --start\n{title: }\n\n## S\n+++ supplement --end\n&&& x --end";
+    let prompt = prompt(40, 12, text);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    assert_full_width_separator(&buf, 40, 5);
 }

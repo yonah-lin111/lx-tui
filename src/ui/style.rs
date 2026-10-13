@@ -281,6 +281,33 @@ pub fn template_block_bg(status: TemplateStatus) -> Style {
     Style::default().bg(color)
 }
 
+/// 补充块 `+++` 结构标记：次要信息。
+pub fn supple_marker() -> Style {
+    muted()
+}
+
+/// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。
+pub fn supple_command() -> Style {
+    Style::default()
+        .fg(Color::LightMagenta)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 补充块边框：固定品红（覆盖父块状态色）。
+pub fn supple_border() -> Style {
+    Style::default().fg(Color::LightMagenta)
+}
+
+/// 补充块整行底色：固定暗紫（覆盖父 `&&&` 状态底色）。
+pub fn supple_block_bg() -> Style {
+    Style::default().bg(Color::Rgb(46, 32, 54))
+}
+
+/// 块操作按钮（补充块）：常态次要信息。
+pub fn block_button() -> Style {
+    muted()
+}
+
 /// lx 页品牌 logo 像素色：按像素字符映射 256 色（仅 lx 页使用，不影响其余区域的 ANSI 槽位规则）。
 ///
 /// `k` 描边藏青、`p` 主体粉、`n` 深粉、`b` 天空蓝、`c` 冰蓝高光、`w` 高光白；其余字符视为透明。

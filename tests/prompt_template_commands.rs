@@ -82,7 +82,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
         update::apply_editor(&mut state, EditorCommand::InsertChar(ch));
     }
     let panel = ui::prompt::slash_layout(&state.prompt, area).expect("slash panel opens");
-    assert_eq!(panel.rect.height, 3, "查询 add 只留 1 个候选");
+    assert_eq!(panel.rect.height, 3, "查询 add 命中 add");
     assert_eq!(
         state.prompt.slash_panel().map(|panel| panel.items().len()),
         Some(1)

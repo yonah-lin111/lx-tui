@@ -516,6 +516,16 @@ pub fn toggle_template_status(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.toggle_template_status(start_line)
 }
 
+/// 清理补充块内未填写的空项（单步撤销）；返回是否产生变更。
+pub fn clean_supple_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.clean_supple_block(start_line)
+}
+
+/// 删除整个补充块（单步撤销）；返回是否产生变更。
+pub fn delete_supple_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.delete_supple_block(start_line)
+}
+
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。
 const WHEEL_LINES: isize = 3;
 
