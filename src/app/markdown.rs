@@ -1,15 +1,23 @@
 //! markdown 编辑领域：块命令、文件提及与模板斜杠命令的触发识别、候选过滤与插入计算，纯函数、无 UI 依赖。
 
+mod blocks;
 mod refer;
 mod refer_shortcut;
 mod slash;
+mod supple;
 mod template;
+mod var;
+mod variables;
 mod worktree;
 
+pub use blocks::*;
 pub use refer::*;
 pub use refer_shortcut::*;
 pub use slash::*;
+pub use supple::*;
 pub use template::*;
+pub use var::*;
+pub use variables::*;
 pub use worktree::*;
 
 use std::ops::Range;

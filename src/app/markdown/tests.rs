@@ -637,7 +637,7 @@ fn slash_trigger_suppressed_in_fence_but_allowed_inside_template_blocks() {
 /// 空上下文：块外、无 git。
 fn outside_context() -> SlashContext {
     SlashContext {
-        inside_block: false,
+        context: BlockContext::Normal,
         worktree_available: false,
     }
 }
@@ -652,7 +652,7 @@ fn filter_names(query: &str) -> Vec<String> {
 
 #[test]
 fn slash_filter_ranks_short_and_long_aliases() {
-    assert_eq!(filter_names("").len(), 5);
+    assert_eq!(filter_names("").len(), 6, "5 个模板 + /var");
     assert_eq!(filter_names("add"), vec!["add"]);
     assert_eq!(filter_names("addt"), vec!["add"]);
     assert_eq!(filter_names("ADD"), vec!["add"]);
@@ -716,7 +716,7 @@ fn slash_filter_scopes_custom_commands_by_block_context() {
     let inside = slash_filter(
         &custom_items(),
         SlashContext {
-            inside_block: true,
+            context: BlockContext::Template,
             worktree_available: false,
         },
         "",
@@ -735,7 +735,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let inside = slash_filter(
         &[],
         SlashContext {
-            inside_block: true,
+            context: BlockContext::Template,
             worktree_available: true,
         },
         "work",
@@ -745,7 +745,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let without_git = slash_filter(
         &[],
         SlashContext {
-            inside_block: true,
+            context: BlockContext::Template,
             worktree_available: false,
         },
         "work",
@@ -754,7 +754,7 @@ fn slash_filter_adds_worktree_candidate_only_with_git_inside_blocks() {
     let outside = slash_filter(
         &[],
         SlashContext {
-            inside_block: false,
+            context: BlockContext::Normal,
             worktree_available: true,
         },
         "work",
@@ -1257,4 +1257,374 @@ fn is_template_block_line_checks_membership_and_bounds() {
     assert!(!is_template_block_line(text, 99), "越界行不算块内");
     let unclosed = "&&& bugTemplate --start {title: }\n# Fix";
     assert!(is_template_block_line(unclosed, 1));
+}
+
+// ---- 补充块 / 变量块解析 ----
+
+#[test]
+fn parse_supple_start_line_forms() {
+    let parsed = parse_supple_start_line("+++ supplement --start").expect("valid");
+    assert_eq!(parsed.command, "supplement");
+    assert_eq!(parsed.title, None);
+    assert!(parse_supple_start_line("  +++ suppleTemplate --start {title: T}").is_some());
+    assert!(parse_supple_start_line("+++ supplement --start 「title: 标题」").is_some());
+    // 缺 --start 或保留词均为非法起始。
+    assert!(parse_supple_start_line("+++ supplement").is_none());
+    assert!(parse_supple_start_line("+++ log --start").is_none());
+    assert!(parse_supple_start_line("+++ logTemplate --start").is_none());
+    assert!(parse_supple_start_line("++ supplement --start").is_none());
+    assert!(parse_supple_start_line("+++ supplement --end").is_none());
+}
+
+#[test]
+fn parse_supple_end_line_forms() {
+    let parsed = parse_supple_end_line("+++ supplement --end").expect("valid");
+    assert_eq!(parsed.command, "supplement");
+    assert!(parse_supple_end_line("+++ x --end {id:abc} {wt:main}").is_some());
+    assert!(parse_supple_end_line("+++ log --end").is_none());
+    assert!(parse_supple_end_line("+++ x --start").is_none());
+}
+
+#[test]
+fn parse_var_start_and_end_forms() {
+    assert!(parse_var_start_line("$$$").is_some());
+    assert!(parse_var_start_line("$$$ varTemplate").is_some());
+    assert!(parse_var_start_line("$$$ varTemplate --start").is_some());
+    assert!(parse_var_start_line("$$$ varTemplate --start {title: }").is_some());
+    assert!(parse_var_start_line("$$$ varTemplate --end").is_none());
+    assert!(parse_var_start_line("$$$ --end").is_none());
+    assert!(parse_var_end_line("$$$").is_some());
+    assert!(parse_var_end_line("$$$ --end").is_some());
+    assert!(parse_var_end_line("$$$ varTemplate --end {id:abc}").is_some());
+    assert!(parse_var_end_line("$$$ varTemplate --start").is_none());
+}
+
+#[test]
+fn block_scan_marks_template_and_nested_supple() {
+    let text = concat!(
+        "&&& addTemplate --start\n",
+        "{title: }\n",
+        "+++ supplement --start\n",
+        "- a\n",
+        "+++ supplement --end\n",
+        "&&& addTemplate --end\n",
+    );
+    let infos = block_line_infos(text);
+    assert_eq!(infos[0].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[0].unwrap().role, BlockRole::Start);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[2].unwrap().role, BlockRole::Start);
+    assert_eq!(infos[3].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[4].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[4].unwrap().role, BlockRole::End);
+    assert_eq!(infos[5].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[5].unwrap().role, BlockRole::End);
+}
+
+#[test]
+fn block_scan_var_is_top_level() {
+    let text = "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end\nbody";
+    let infos = block_line_infos(text);
+    assert_eq!(infos[0].unwrap().kind, BlockKind::Var);
+    assert_eq!(infos[3].unwrap().role, BlockRole::End);
+    assert!(infos[4].is_none());
+    // `$$$` 在 `&&&` 内不取得变量块身份。
+    let nested = "&&& x --start\n$$$ varTemplate --start\n$$$ varTemplate --end\n&&& x --end";
+    let infos = block_line_infos(nested);
+    assert_eq!(infos[1].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Template);
+}
+
+#[test]
+fn block_scan_ignores_supple_outside_template_and_fences() {
+    let text = "+++ supplement --start\n- a\n+++ supplement --end";
+    assert!(block_line_infos(text).iter().all(Option::is_none));
+    let fenced = "```\n&&& x --start\n```\n&&& x --start\n&&& x --end";
+    let infos = block_line_infos(fenced);
+    assert!(infos[1].is_none(), "围栏内的 &&& 不识别");
+    assert_eq!(infos[3].unwrap().role, BlockRole::Start);
+    assert_eq!(infos[4].unwrap().role, BlockRole::End);
+}
+
+#[test]
+fn block_scan_unclosed_extends_to_end() {
+    let text = "&&& x --start\n+++ supplement --start\n- a";
+    let infos = block_line_infos(text);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Supple);
+    assert_eq!(infos[2].unwrap().role, BlockRole::Middle);
+    assert_eq!(infos[2].unwrap().end, 2);
+}
+
+#[test]
+fn block_scan_supple_crossing_parent_end_is_invalid() {
+    // 补充块未闭合即遇到父 `&&&` 结束行：子块作废，其行仍属父块正文。
+    let text = "&&& x --start\n+++ supplement --start\n- a\n&&& x --end";
+    let infos = block_line_infos(text);
+    assert_eq!(infos[1].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[2].unwrap().kind, BlockKind::Template);
+    assert_eq!(infos[3].unwrap().role, BlockRole::End);
+}
+
+#[test]
+fn block_context_reports_position() {
+    let text = concat!(
+        "plain\n",
+        "&&& x --start\n",
+        "+++ supplement --start\n",
+        "in supple\n",
+        "+++ supplement --end\n",
+        "&&& x --end\n",
+        "$$$ varTemplate --start\n",
+        "in var\n",
+        "$$$ varTemplate --end\n",
+    );
+    assert_eq!(block_context(text, 0), BlockContext::Normal);
+    assert_eq!(
+        block_context(text, text.find("&&&").unwrap()),
+        BlockContext::Template
+    );
+    assert_eq!(
+        block_context(text, text.find("in supple").unwrap()),
+        BlockContext::Supple
+    );
+    assert_eq!(
+        block_context(text, text.find("in var").unwrap()),
+        BlockContext::Var
+    );
+}
+
+// ---- 变量解析与变换 ----
+
+#[test]
+fn document_variables_parses_single_triple_and_dotted() {
+    let text = concat!(
+        "$$$ varTemplate --start\n",
+        "@content:\n",
+        "key: \"var\"\n",
+        "temp.status: \"ready\"\n",
+        "body:\n",
+        "  \"\"\"\n",
+        "  line1\n",
+        "  line2\n",
+        "  \"\"\"\n",
+        "$$$ varTemplate --end\n",
+    );
+    let vars = document_variables(text);
+    assert_eq!(
+        vars,
+        vec![
+            VariableEntry {
+                name: "key".into(),
+                value: "var".into()
+            },
+            VariableEntry {
+                name: "temp.status".into(),
+                value: "ready".into()
+            },
+            VariableEntry {
+                name: "body".into(),
+                value: "line1\nline2".into()
+            },
+        ]
+    );
+}
+
+#[test]
+fn document_variables_vars_level_and_last_wins() {
+    let text = concat!(
+        "$$$ varTemplate --start\n",
+        "vars:\n",
+        "  a: \"1\"\n",
+        "  b: \"2\"\n",
+        "$$$ varTemplate --end\n",
+        "$$$ varTemplate --start\n",
+        "a: \"9\"\n",
+        "$$$ varTemplate --end\n",
+    );
+    let vars = document_variables(text);
+    assert_eq!(
+        vars,
+        vec![
+            VariableEntry {
+                name: "a".into(),
+                value: "9".into()
+            },
+            VariableEntry {
+                name: "b".into(),
+                value: "2".into()
+            },
+        ]
+    );
+}
+
+#[test]
+fn document_variables_frontmatter_fallback_only_without_blocks() {
+    let front = "---\nname: \"x\"\n---\nbody";
+    assert_eq!(
+        document_variables(front),
+        vec![VariableEntry {
+            name: "name".into(),
+            value: "x".into()
+        }]
+    );
+    let with_block = concat!(
+        "---\nname: \"x\"\n---\n",
+        "$$$ varTemplate --start\n",
+        "y: \"1\"\n",
+        "$$$ varTemplate --end\n",
+    );
+    assert_eq!(
+        document_variables(with_block),
+        vec![VariableEntry {
+            name: "y".into(),
+            value: "1".into()
+        }]
+    );
+}
+
+#[test]
+fn clean_var_content_drops_unfilled_keeps_content_key() {
+    let block = "@content:\n- @a.txt\nkey: \"var\"\nnotes: \"\"\nreal: \"kept\"";
+    let cleaned = clean_var_content(block);
+    assert!(cleaned.contains("@content:"));
+    assert!(cleaned.contains("- @a.txt"));
+    assert!(!cleaned.contains("\"var\""));
+    assert!(cleaned.contains("real: \"kept\""));
+}
+
+#[test]
+fn merge_var_to_first_appends_and_removes() {
+    let text = concat!(
+        "$$$ varTemplate --start\n",
+        "a: \"1\"\n",
+        "$$$ varTemplate --end\n",
+        "mid\n",
+        "$$$ varTemplate --start\n",
+        "b: \"2\"\n",
+        "$$$ varTemplate --end\n",
+    );
+    let span = var_spans(text)[1];
+    let merged = merge_var_to_first(text, span).expect("merged");
+    assert_eq!(
+        merged,
+        concat!(
+            "$$$ varTemplate --start\n",
+            "a: \"1\"\n",
+            "b: \"2\"\n",
+            "$$$ varTemplate --end\n",
+            "mid\n",
+        )
+    );
+}
+
+#[test]
+fn move_var_to_top_relocates_after_top_group() {
+    let text = concat!(
+        "$$$ varTemplate --start\n",
+        "a: \"1\"\n",
+        "$$$ varTemplate --end\n",
+        "mid\n",
+        "$$$ varTemplate --start\n",
+        "b: \"2\"\n",
+        "$$$ varTemplate --end\n",
+    );
+    let span = var_spans(text)[1];
+    let moved = move_var_to_top(text, span).expect("moved");
+    assert_eq!(
+        moved,
+        concat!(
+            "$$$ varTemplate --start\n",
+            "a: \"1\"\n",
+            "$$$ varTemplate --end\n",
+            "\n",
+            "$$$ varTemplate --start\n",
+            "b: \"2\"\n",
+            "$$$ varTemplate --end\n",
+            "\n",
+            "mid\n",
+        )
+    );
+}
+
+/// 指定上下文的候选短名序列。
+fn filter_names_in(ctx: BlockContext, query: &str) -> Vec<String> {
+    slash_filter(
+        &[],
+        SlashContext {
+            context: ctx,
+            worktree_available: false,
+        },
+        query,
+    )
+    .into_iter()
+    .map(|item| item.name)
+    .collect()
+}
+
+#[test]
+fn slash_filter_scopes_builtin_supplement_and_var_by_context() {
+    let normal = filter_names_in(BlockContext::Normal, "");
+    assert!(normal.contains(&"add".to_string()));
+    assert!(normal.contains(&"var".to_string()));
+    assert!(!normal.contains(&"supplement".to_string()));
+    assert!(!normal.contains(&"singleLine".to_string()));
+
+    let template = filter_names_in(BlockContext::Template, "");
+    assert_eq!(template, vec!["supplement"]);
+    assert!(!template.contains(&"var".to_string()));
+
+    let supple = filter_names_in(BlockContext::Supple, "");
+    assert!(supple.is_empty(), "{supple:?}");
+
+    let var = filter_names_in(BlockContext::Var, "");
+    assert_eq!(var, vec!["singleLine", "multiLine"]);
+}
+
+#[test]
+fn supple_block_content_wraps_and_places_cursor_in_title() {
+    let (content, cursor) = supple_block_content("supplement", None, "## Head");
+    assert!(
+        content.starts_with("+++ supplement --start\n{title: }"),
+        "{content}"
+    );
+    assert!(content.ends_with("+++ supplement --end"), "{content}");
+    assert!(content.contains("## Head"));
+    assert!(content[cursor..].starts_with('}'));
+    let (content, _) = supple_block_content("note", Some("标题"), "body");
+    assert!(
+        content.starts_with("+++ note --start\n{title: 标题}"),
+        "{content}"
+    );
+}
+
+#[test]
+fn var_template_content_places_cursor_after_key() {
+    let (content, cursor) = var_template_content();
+    assert_eq!(
+        content,
+        "$$$ varTemplate --start\n{title: }\n@content:\nkey: \"var\"\n$$$ varTemplate --end"
+    );
+    assert!(
+        content[cursor..].starts_with(':'),
+        "cursor after key: {content}"
+    );
+}
+
+#[test]
+fn slash_insertion_maps_new_builtins() {
+    assert_eq!(
+        slash_insertion(&SlashItem::builtin_var()).map(|(text, _)| text),
+        Some(var_template_content().0)
+    );
+    assert_eq!(
+        slash_insertion(&SlashItem::var_single_line()),
+        Some((VAR_SINGLE_LINE.to_string(), 3))
+    );
+    assert_eq!(
+        slash_insertion(&SlashItem::var_multi_line()),
+        Some((VAR_MULTI_LINE.to_string(), 3))
+    );
+    let supple = SlashItem::builtin_supplement();
+    let (text, _) = slash_insertion(&supple).expect("supple insertion");
+    assert!(text.starts_with("+++ supplement --start"));
 }

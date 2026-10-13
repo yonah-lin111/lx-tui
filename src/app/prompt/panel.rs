@@ -395,7 +395,7 @@ impl Prompt {
             return;
         };
         let context = markdown::SlashContext {
-            inside_block: markdown::inside_template_block(&self.text, self.cursor),
+            context: markdown::block_context(&self.text, self.cursor),
             // 绑定行需要锚定已闭合的结束行：块未闭合时不提供 `/gitWorkTree`。
             worktree_available: self.worktree_available
                 && markdown::block_end_line_at(&self.text, self.cursor).is_some(),

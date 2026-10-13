@@ -28,6 +28,7 @@ fn record(name: &str, kind: CommandKind, scope: MdScope, body: &str) -> CommandR
         title: None,
         body: body.to_string(),
         kind,
+        block: BlockType::Template,
         path: PathBuf::new(),
     }
 }
@@ -368,4 +369,49 @@ fn split_frontmatter_requires_leading_delimiter_line() {
     let (front, body) = split_frontmatter("---\na: b\nbody");
     assert!(front.is_empty());
     assert_eq!(body, "---\na: b\nbody");
+}
+
+#[test]
+fn block_type_parses_serializes_and_rejects_unknown() {
+    let supple =
+        "---\nblock: supple\ndescription: d\n---\n+++ note --start\nbody\n+++ note --end\n";
+    let record = parse_file(
+        "note",
+        supple,
+        CommandKind::AgentBlock,
+        Path::new("/x/note.md"),
+    )
+    .expect("supple parses");
+    assert_eq!(record.block, BlockType::Supple);
+    assert!(serialize(&record).contains("block: supple"));
+
+    let legacy = parse_file(
+        "blk",
+        "---\ndescription: d\n---\nbody",
+        CommandKind::AgentBlock,
+        Path::new("/x/blk.md"),
+    )
+    .expect("legacy parses");
+    assert_eq!(legacy.block, BlockType::Template, "旧文件默认 template");
+    assert!(serialize(&legacy).contains("block: template"));
+
+    assert!(
+        parse_file(
+            "bad",
+            "---\nblock: bogus\n---\nbody",
+            CommandKind::AgentBlock,
+            Path::new("/x/bad.md"),
+        )
+        .is_err(),
+        "未知 block 值报错"
+    );
+}
+
+#[test]
+fn supple_and_var_names_are_reserved() {
+    assert!(validate_name("supplement").is_err());
+    assert!(validate_name("var").is_err());
+    assert!(validate_name("singleLine").is_err());
+    assert!(validate_name("multiLine").is_err());
+    assert!(validate_name("varTemplate").is_err());
 }

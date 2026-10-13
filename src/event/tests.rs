@@ -3238,3 +3238,82 @@ fn terminal_paste_shell_escaped_path_builds_proposal_from_real_file() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// 构造带变量块的宽屏场景，返回几何与按钮行文本区。
+fn var_button_state() -> (AppState, Config, Geometry, Rect) {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 80;
+    state.prompt.resize(78, 16);
+    crate::app::update::focus_prompt(&mut state);
+    state.prompt.set_text(
+        "$$$ varTemplate --start\n{title: }\nempty: \"\"\nkeep: \"v\"\n$$$ varTemplate --end",
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    (state, config, geo, area)
+}
+
+#[test]
+fn mouse_var_block_buttons_fold_clean_delete() {
+    use crate::ui::prompt::BlockButton;
+    let (mut state, config, geo, area) = var_button_state();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let fold = crate::ui::prompt::block_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == BlockButton::Fold)
+        .expect("fold button");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            fold.rect.x + 1,
+            fold.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt.var_folded(0), "折叠为纯视图状态");
+    assert!(state.prompt.text().contains("empty:"), "折叠不改正文");
+
+    let clean = crate::ui::prompt::block_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == BlockButton::Clean)
+        .expect("clean button");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            clean.rect.x + 1,
+            clean.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!state.prompt.text().contains("empty:"), "清理空值项");
+    assert!(state.prompt.text().contains("keep"), "保留已填项");
+
+    let delete = crate::ui::prompt::block_buttons(&state.prompt, area)
+        .into_iter()
+        .find(|hit| hit.button == BlockButton::Delete)
+        .expect("delete button");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            delete.rect.x + 1,
+            delete.rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!state.prompt.text().contains("varTemplate"), "整块删除");
+}

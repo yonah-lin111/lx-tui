@@ -131,9 +131,14 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteToLineEnd => state.prompt.delete_to_line_end(),
         EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
-        EditorCommand::Indent => state.prompt.indent(),
+        EditorCommand::Indent => {
+            if !state.prompt.var_tab_jump(true) {
+                state.prompt.indent();
+            }
+        }
         EditorCommand::Outdent => {
-            if !state.prompt.cycle_template_status_at_cursor() {
+            if !state.prompt.cycle_template_status_at_cursor() && !state.prompt.var_tab_jump(false)
+            {
                 state.prompt.outdent();
             }
         }
@@ -514,6 +519,41 @@ pub fn delete_template_block(state: &mut AppState, start_line: usize) -> bool {
 /// 切换模板块状态 todo → in_progress → done（单步撤销）；返回是否产生变更。
 pub fn toggle_template_status(state: &mut AppState, start_line: usize) -> bool {
     state.prompt.toggle_template_status(start_line)
+}
+
+/// 清理补充块内未填写的空项（单步撤销）；返回是否产生变更。
+pub fn clean_supple_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.clean_supple_block(start_line)
+}
+
+/// 删除整个补充块（单步撤销）；返回是否产生变更。
+pub fn delete_supple_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.delete_supple_block(start_line)
+}
+
+/// 清理变量块内未填写的条目（单步撤销）；返回是否产生变更。
+pub fn clean_var_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.clean_var_block(start_line)
+}
+
+/// 删除整个变量块（单步撤销）；返回是否产生变更。
+pub fn delete_var_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.delete_var_block(start_line)
+}
+
+/// 把变量块内容合并到文档首个变量块（单步撤销）；返回是否产生变更。
+pub fn merge_var_block(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.merge_var_block(start_line)
+}
+
+/// 把变量块置顶到文档开头连续变量块组之后（单步撤销）；返回是否产生变更。
+pub fn move_var_block_to_top(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.move_var_block_to_top(start_line)
+}
+
+/// 折叠/展开变量块（纯视图状态）；返回是否产生变更。
+pub fn toggle_var_fold(state: &mut AppState, start_line: usize) -> bool {
+    state.prompt.toggle_var_fold(start_line)
 }
 
 /// 滚轮一格滚动的视觉行数；对齐 opencode 默认步长。

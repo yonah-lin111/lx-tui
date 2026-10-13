@@ -1238,7 +1238,7 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
     let mut prompt = prompt(40, 8);
     type_text(&mut prompt, "/");
     let panel = prompt.slash_panel().expect("panel on bare slash");
-    assert_eq!(panel.items().len(), 5);
+    assert_eq!(panel.items().len(), 6, "5 个模板 + /var");
     assert_eq!(panel.trigger().query, "");
 
     type_text(&mut prompt, "ref");
@@ -2463,4 +2463,179 @@ fn refer_shortcut_reference_candidates_keep_full_marker() {
     assert_eq!(panel.items()[0].tag.label(), "refer-image");
     assert!(prompt.refer_confirm());
     assert!(prompt.text().ends_with("@[refer-image](/tmp/shot.png) "));
+}
+
+// ---- 补充块 / 变量块 ----
+
+#[test]
+fn slash_var_inserts_variable_block_and_selects_key() {
+    let mut prompt = prompt(60, 12);
+    type_text(&mut prompt, "/var");
+    assert!(prompt.slash_confirm());
+    assert_eq!(prompt.text(), markdown::var_template_content().0);
+    assert_eq!(
+        markdown::block_context(prompt.text(), prompt.cursor()),
+        markdown::BlockContext::Var
+    );
+    assert!(
+        prompt.text()[prompt.cursor()..].starts_with(':'),
+        "cursor after key"
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), "/var");
+}
+
+#[test]
+fn slash_supplement_offered_inside_template_and_inserts_subblock() {
+    let mut prompt = prompt(60, 12);
+    type_text(&mut prompt, "&&& addTemplate --start {title: }\n");
+    type_text(&mut prompt, "/supplement");
+    let panel = prompt
+        .slash_panel()
+        .expect("supplement offered in template");
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].name, "supplement");
+    assert!(prompt.slash_confirm());
+    assert!(
+        prompt.text().contains("+++ supplement --start"),
+        "{}",
+        prompt.text()
+    );
+    assert_eq!(
+        markdown::block_context(
+            prompt.text(),
+            prompt.text().find("##").unwrap_or(prompt.cursor())
+        ),
+        markdown::BlockContext::Supple
+    );
+}
+
+#[test]
+fn variable_reference_panel_offers_document_variables() {
+    let mut prompt = prompt(60, 20);
+    prompt
+        .set_text("$$$ varTemplate --start\n{title: }\nlang: \"rust\"\n$$$ varTemplate --end\n\n");
+    type_text(&mut prompt, "la");
+    let panel = prompt.refer_panel().expect("variable candidate");
+    assert_eq!(panel.items().len(), 1);
+    assert_eq!(panel.items()[0].name, "lang");
+    assert_eq!(panel.items()[0].tag, markdown::ReferTag::Variable);
+    assert!(prompt.refer_confirm());
+    assert!(
+        prompt.text().contains("rust "),
+        "value inserted: {}",
+        prompt.text()
+    );
+}
+
+#[test]
+fn supple_clean_and_delete_are_single_steps() {
+    let text = concat!(
+        "&&& x --start\n",
+        "{title: }\n",
+        "+++ supplement --start\n",
+        "- Reference: \n",
+        "- Requirements: \n",
+        "  - \n",
+        "+++ supplement --end\n",
+        "&&& x --end",
+    );
+    let mut prompt = prompt(60, 20);
+    prompt.set_text(text);
+    assert!(prompt.clean_supple_block(2));
+    assert!(!prompt.text().contains("- Reference:"));
+    assert!(prompt.text().contains("+++ supplement --end"));
+    prompt.undo();
+    assert_eq!(prompt.text(), text, "clean is one undo step");
+
+    assert!(prompt.delete_supple_block(2));
+    assert!(!prompt.text().contains("+++ supplement"));
+    assert!(prompt.text().contains("&&& x --end"));
+    prompt.undo();
+    assert_eq!(prompt.text(), text);
+}
+
+#[test]
+fn var_merge_and_move_to_top() {
+    let text = concat!(
+        "$$$ varTemplate --start\n",
+        "a: \"1\"\n",
+        "$$$ varTemplate --end\n",
+        "mid\n",
+        "$$$ varTemplate --start\n",
+        "b: \"2\"\n",
+        "$$$ varTemplate --end\n",
+    );
+    let mut merged = prompt(60, 20);
+    merged.set_text(text);
+    assert!(merged.merge_var_block(4));
+    assert_eq!(
+        merged.text(),
+        markdown::merge_var_to_first(text, markdown::var_spans(text)[1]).unwrap()
+    );
+    merged.undo();
+    assert_eq!(merged.text(), text);
+
+    let mut top = prompt(60, 20);
+    top.set_text(text);
+    assert!(top.move_var_block_to_top(4));
+    assert_eq!(
+        top.text(),
+        markdown::move_var_to_top(text, markdown::var_spans(text)[1]).unwrap()
+    );
+    top.undo();
+    assert_eq!(top.text(), text);
+}
+
+#[test]
+fn var_fold_hides_lines_without_changing_text() {
+    let text = "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end\n";
+    let mut prompt = prompt(60, 20);
+    prompt.set_text(text);
+    let before = prompt.visual_rows().len();
+    assert!(prompt.toggle_var_fold(0));
+    assert_eq!(prompt.text(), text, "fold does not write text");
+    assert!(prompt.var_folded(0));
+    let after = prompt.visual_rows().len();
+    assert!(after < before, "folded rows hidden: {before} -> {after}");
+    assert!(prompt.toggle_var_fold(0));
+    assert_eq!(prompt.visual_rows().len(), before);
+}
+
+#[test]
+fn var_block_converts_fullwidth_colon_only_on_key_lines() {
+    let mut editor = prompt(40, 10);
+    editor.set_text("$$$ varTemplate --start\n{title: }\nnewkey\n$$$ varTemplate --end\n");
+    let at = editor.text().find("newkey").unwrap() + "newkey".len();
+    editor.set_cursor_offset_for_test(at);
+    assert!(editor.var_colon_converts());
+    editor.insert_char('：');
+    assert!(editor.text().contains("newkey:"), "{}", editor.text());
+    assert!(!editor.text().contains('：'));
+
+    // 三引号正文内保留全角。
+    let mut triple = prompt(40, 10);
+    triple.set_text(
+        "$$$ varTemplate --start\n{title: }\nbody:\n  \"\"\"\n  text\n  \"\"\"\n$$$ varTemplate --end\n",
+    );
+    let at = triple.text().find("text").unwrap() + 4;
+    triple.set_cursor_offset_for_test(at);
+    assert!(!triple.var_colon_converts());
+}
+
+#[test]
+fn var_block_tab_jumps_between_keys() {
+    let mut editor = prompt(40, 10);
+    editor.set_text(
+        "$$$ varTemplate --start\n{title: }\na: \"1\"\nb: \"2\"\n$$$ varTemplate --end\n",
+    );
+    let a_end = editor.text().find("a:").unwrap() + 1;
+    let b_end = editor.text().find("b:").unwrap() + 1;
+    editor.set_cursor_offset_for_test(0);
+    assert!(editor.var_tab_jump(true));
+    assert_eq!(editor.cursor(), a_end);
+    assert!(editor.var_tab_jump(true));
+    assert_eq!(editor.cursor(), b_end);
+    assert!(editor.var_tab_jump(false));
+    assert_eq!(editor.cursor(), a_end);
 }
