@@ -18,6 +18,16 @@ pub enum TemplateButtonKind {
     Delete,
 }
 
+/// 补充块/变量块按钮种类；与 ui 侧 `BlockButton` 一一对应。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlockButtonKind {
+    Clean,
+    Delete,
+    Merge,
+    Top,
+    Fold,
+}
+
 /// 可触发 tooltip 的按钮目标；文案映射由 `text::tooltip_hint` 穷尽匹配。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TooltipTarget {
@@ -48,6 +58,11 @@ pub enum TooltipTarget {
     TemplateButton {
         line: usize,
         button: TemplateButtonKind,
+    },
+    /// prompt 文本区内的补充块/变量块按钮；`line` 为块起始逻辑行。
+    BlockButton {
+        line: usize,
+        button: BlockButtonKind,
     },
 }
 

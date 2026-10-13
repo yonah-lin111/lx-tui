@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
 use crate::app::state::{AppState, PaneKind};
-use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
+use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::{self, PaneId};
 use crate::ui::layout::ViewLayout;
 use crate::ui::{self, main_content, sidebar, style, tab_bar, text};
@@ -158,6 +158,15 @@ fn targets(
                 hit.rect,
             ));
         }
+        for hit in ui::prompt::block_buttons(&state.prompt, text_area) {
+            targets.push((
+                TooltipTarget::BlockButton {
+                    line: hit.line,
+                    button: block_button_kind(hit.button),
+                },
+                hit.rect,
+            ));
+        }
     }
     targets
 }
@@ -169,6 +178,17 @@ fn template_button_kind(button: ui::prompt::TemplateBlockButton) -> TemplateButt
         ui::prompt::TemplateBlockButton::Copy => TemplateButtonKind::Copy,
         ui::prompt::TemplateBlockButton::Clean => TemplateButtonKind::Clean,
         ui::prompt::TemplateBlockButton::Delete => TemplateButtonKind::Delete,
+    }
+}
+
+/// 补充块/变量块按钮 → app 侧种类。
+fn block_button_kind(button: ui::prompt::BlockButton) -> BlockButtonKind {
+    match button {
+        ui::prompt::BlockButton::Clean => BlockButtonKind::Clean,
+        ui::prompt::BlockButton::Delete => BlockButtonKind::Delete,
+        ui::prompt::BlockButton::Merge => BlockButtonKind::Merge,
+        ui::prompt::BlockButton::Top => BlockButtonKind::Top,
+        ui::prompt::BlockButton::Fold => BlockButtonKind::Fold,
     }
 }
 

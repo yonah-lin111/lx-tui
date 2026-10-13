@@ -132,12 +132,14 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::DeleteWordBackward => state.prompt.delete_word_backward(),
         EditorCommand::DeleteWordForward => state.prompt.delete_word_forward(),
         EditorCommand::Indent => {
-            if !state.prompt.var_tab_jump(true) {
+            if !select_var_colon(state, true) && !state.prompt.var_tab_jump(true) {
                 state.prompt.indent();
             }
         }
         EditorCommand::Outdent => {
-            if !state.prompt.cycle_template_status_at_cursor() && !state.prompt.var_tab_jump(false)
+            if !state.prompt.cycle_template_status_at_cursor()
+                && !select_var_colon(state, false)
+                && !state.prompt.var_tab_jump(false)
             {
                 state.prompt.outdent();
             }
@@ -146,6 +148,15 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::Redo => state.prompt.redo(),
         EditorCommand::Escape => {}
     }
+}
+
+/// 变量键行 Tab / Shift+Tab：选中冒号右侧的值或左侧的键；不在变量键行返回 false。
+fn select_var_colon(state: &mut AppState, forward: bool) -> bool {
+    let Some((anchor, cursor)) = state.prompt.var_colon_select(forward) else {
+        return false;
+    };
+    state.selection = Some(Selection::text_range(state.prompt.id(), anchor, cursor));
+    true
 }
 
 /// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。

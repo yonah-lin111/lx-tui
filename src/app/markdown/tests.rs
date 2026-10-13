@@ -652,10 +652,14 @@ fn filter_names(query: &str) -> Vec<String> {
 
 #[test]
 fn slash_filter_ranks_short_and_long_aliases() {
-    assert_eq!(filter_names("").len(), 6, "5 个模板 + /var");
-    assert_eq!(filter_names("add"), vec!["add"]);
-    assert_eq!(filter_names("addt"), vec!["add"]);
-    assert_eq!(filter_names("ADD"), vec!["add"]);
+    assert_eq!(
+        filter_names("").len(),
+        7,
+        "5 个模板 + /var + /addVarContent"
+    );
+    assert_eq!(filter_names("add"), vec!["add", "addVarContent"]);
+    assert_eq!(filter_names("addt"), vec!["add", "addVarContent"]);
+    assert_eq!(filter_names("ADD"), vec!["add", "addVarContent"]);
     assert_eq!(filter_names("addtemplate"), vec!["add"]);
     assert_eq!(filter_names("ref"), vec!["refactor"]);
     assert_eq!(filter_names("style"), vec!["style"]);
@@ -1627,4 +1631,80 @@ fn slash_insertion_maps_new_builtins() {
     let supple = SlashItem::builtin_supplement();
     let (text, _) = slash_insertion(&supple).expect("supple insertion");
     assert!(text.starts_with("+++ supplement --start"));
+}
+
+#[test]
+fn supple_block_worktree_binding_round_trips() {
+    let text = "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end";
+    let cursor = text.find("body").unwrap();
+    assert_eq!(
+        block_end_line_at(text, cursor),
+        Some(3),
+        "光标在 +++ 内定位到子块结束行"
+    );
+    let (range, new) = set_line_worktree(text, 3, "main", None).expect("set supple binding");
+    let mut text = text.to_string();
+    text.replace_range(range, &new);
+    assert!(text.contains("{wt:main}"));
+    let end = block_end_line_at(&text, text.find("body").unwrap()).expect("end");
+    assert_eq!(
+        block_worktree_branch(&text, text.find("body").unwrap()).map(|(_, branch)| branch),
+        Some("main".to_string())
+    );
+    let (range, new) = clear_line_worktree(&text, end).expect("clear");
+    text.replace_range(range, &new);
+    assert!(!text.contains("{wt:"), "{text}");
+}
+
+#[test]
+fn var_content_append_targets_at_content() {
+    let text = "$$$ varTemplate --start\n{title: }\n@content:\n  - @a.txt\n$$$ varTemplate --end\n";
+    let (offset, insert) = var_content_append(text).expect("append point");
+    assert!(insert.ends_with("- @"), "{insert}");
+    let mut appended = text.to_string();
+    appended.insert_str(offset, &insert);
+    assert!(appended.contains("- @a.txt\n  - @"), "{appended}");
+
+    let without = "$$$ varTemplate --start\n{title: }\nkey: \"v\"\n$$$ varTemplate --end\n";
+    let (offset, insert) = var_content_append(without).expect("append point");
+    let mut appended = without.to_string();
+    appended.insert_str(offset, &insert);
+    assert!(appended.contains("@content:"), "{appended}");
+    assert!(appended.contains("- @"), "{appended}");
+}
+
+#[test]
+fn slash_filter_offers_worktree_in_supple_context_only() {
+    let supple = slash_filter(
+        &[],
+        SlashContext {
+            context: BlockContext::Supple,
+            worktree_available: true,
+        },
+        "",
+    );
+    assert_eq!(
+        supple
+            .iter()
+            .map(|item| item.name.clone())
+            .collect::<Vec<_>>(),
+        vec!["gitWorkTree"]
+    );
+    let var = slash_filter(
+        &[],
+        SlashContext {
+            context: BlockContext::Var,
+            worktree_available: true,
+        },
+        "work",
+    );
+    assert!(var.is_empty(), "var 内不提供 /gitWorkTree");
+}
+
+#[test]
+fn slash_filter_offers_add_var_content_in_normal_context() {
+    let items = filter_names_in(BlockContext::Normal, "addvar");
+    assert_eq!(items, vec!["addVarContent"]);
+    let template = filter_names_in(BlockContext::Template, "addvar");
+    assert!(template.is_empty(), "{template:?}");
 }

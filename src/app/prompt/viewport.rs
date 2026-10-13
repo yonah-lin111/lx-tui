@@ -1,7 +1,7 @@
 //! prompt 视口几何与坐标映射：软换行、滚动、选区范围与单元格/字节换算。
 
 use super::super::markdown;
-use super::{Prompt, VisualRow, char_width, display_width};
+use super::{Prompt, VisualRow, char_width, display_width, line_end, line_start};
 
 impl Prompt {
     /// 按内容宽度软换行得到的视觉行；块行扣除左右边框槽后再换行；
@@ -177,6 +177,71 @@ impl Prompt {
             0
         }
     }
+    /// 变量键行冒号两侧的选区单元格：`forward`（Tab）选冒号右侧的值，
+    /// 反向（Shift+Tab）选左侧的键；同时把光标移到 token 起点。
+    /// 不在变量键行时返回 None，由调用方回退到其它行为。
+    pub fn var_colon_select(&mut self, forward: bool) -> Option<((i32, u16), (i32, u16))> {
+        let (from, to) = self.var_colon_token(forward)?;
+        let anchor = self.cell_for_offset(from)?;
+        let end = to.saturating_sub(1).max(from);
+        let cursor = self.cell_for_offset(end)?;
+        self.break_group();
+        self.cursor = from;
+        Some((anchor, cursor))
+    }
+
+    /// 光标所在变量键行的 token 字节范围：`forward` 为冒号右侧值、否则左侧键。
+    fn var_colon_token(&self, forward: bool) -> Option<(usize, usize)> {
+        if markdown::block_context(&self.text, self.cursor) != markdown::BlockContext::Var {
+            return None;
+        }
+        if markdown::var_in_triple_quotes(&self.text, self.cursor) {
+            return None;
+        }
+        let start = line_start(&self.text, self.cursor);
+        let end = line_end(&self.text, self.cursor);
+        let line = &self.text[start..end];
+        let indent = line.len() - line.trim_start_matches([' ', '\t']).len();
+        let rest = &line[indent..];
+        let colon = rest.find(':')?;
+        let key = rest[..colon].trim_end();
+        if key.is_empty()
+            || key.starts_with('@')
+            || !key
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+        {
+            return None;
+        }
+        let key_start = start + indent;
+        let colon_at = start + indent + colon;
+        if forward {
+            let after = &line[indent + colon + 1..];
+            let lead = after.len() - after.trim_start().len();
+            let value_start = colon_at + 1 + lead;
+            let value = after.trim_end();
+            if value.is_empty() {
+                return Some((value_start, value_start));
+            }
+            Some((value_start, value_start + value.len()))
+        } else {
+            Some((key_start, key_start + key.len()))
+        }
+    }
+
+    /// 字节偏移 →（视觉行索引, 列，含块左边框槽）。
+    fn cell_for_offset(&self, offset: usize) -> Option<(i32, u16)> {
+        let rows = self.visual_rows();
+        for (index, row) in rows.iter().enumerate() {
+            if offset >= row.start && offset <= row.end {
+                let col = display_width(&self.text[row.start..offset.min(row.end)]);
+                let gutter = usize::from(self.line_gutter(row.line));
+                return Some((index as i32, (col + gutter) as u16));
+            }
+        }
+        None
+    }
+
     /// 调整滚动量，保证光标所在视觉行可见。
     pub(super) fn scroll_cursor_into_view(&mut self) {
         let rows = self.visual_rows();

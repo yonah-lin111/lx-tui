@@ -141,6 +141,37 @@ impl Prompt {
         &self.folded
     }
 
+    /// `/addVarContent`：向首个变量块的 `@content:` 追加一条 `- @` 条目并清空命令行，
+    /// 光标落在 `@` 之后（触发文件提及面板）；无变量块返回 false。
+    pub fn add_var_content(&mut self, trigger: &markdown::SlashTrigger) -> bool {
+        if trigger.line_start > trigger.line_end || trigger.line_end > self.text.len() {
+            return false;
+        }
+        let Some((offset, insert)) = markdown::var_content_append(&self.text) else {
+            return false;
+        };
+        let clear = trigger.line_start..trigger.line_end;
+        let removed = clear.end - clear.start;
+        // 命令行与插入点不得重叠。
+        if clear.start < offset && offset < clear.end {
+            return false;
+        }
+        let cursor = if clear.end <= offset {
+            offset - removed + insert.len()
+        } else {
+            offset + insert.len()
+        };
+        self.break_group();
+        self.record(EditKind::Other);
+        self.text.insert_str(offset, &insert);
+        if clear.end <= offset || clear.start >= offset + insert.len() {
+            self.text.replace_range(clear, "");
+        }
+        self.cursor = cursor.min(self.text.len());
+        self.settle();
+        true
+    }
+
     /// 变量块键行内输入的全角冒号是否应转为半角 `:`：
     /// 仅在变量块内、不在三引号正文、且当前行尚未出现分隔冒号时。
     pub fn var_colon_converts(&self) -> bool {

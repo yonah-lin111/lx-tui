@@ -626,3 +626,71 @@ fn apply_edits(text: &str, mut edits: Vec<(std::ops::Range<usize>, String)>) -> 
     }
     result
 }
+
+/// `/addVarContent` 追加位置：首个闭合变量块的 `@content:` 列表末尾。
+///
+/// 返回（插入字节偏移, 插入文本）。无闭合变量块返回 None；块内无 `@content:` 时
+/// 在起始行后新建保留键。插入文本以 `@` 结尾，调用方据此打开文件提及面板。
+pub fn var_content_append(text: &str) -> Option<(usize, String)> {
+    let span = block_spans(text)
+        .into_iter()
+        .find(|span| span.kind == BlockKind::Var && span.closed)?;
+    let lines = split_lines(text);
+    let mut offsets = Vec::with_capacity(lines.len());
+    let mut offset = 0;
+    for line in &lines {
+        offsets.push(offset);
+        offset += line.len() + 1;
+    }
+    let line_end = |index: usize| offsets[index] + lines[index].len();
+    let indent_of = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
+
+    let mut content_index = None;
+    let mut in_triple = false;
+    for (index, line) in lines.iter().enumerate().take(span.end).skip(span.start + 1) {
+        let count = line.matches("\"\"\"").count();
+        if in_triple {
+            if count % 2 == 1 {
+                in_triple = false;
+            }
+            continue;
+        }
+        if count % 2 == 1 {
+            in_triple = true;
+            continue;
+        }
+        if line.trim() == "@content:" {
+            content_index = Some(index);
+            break;
+        }
+    }
+
+    match content_index {
+        Some(content) => {
+            let indent = &lines[content][..indent_of(lines[content])];
+            let mut anchor = content;
+            for (index, line) in lines.iter().enumerate().take(span.end).skip(content + 1) {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let is_item = trimmed.starts_with("- ")
+                    || trimmed.starts_with("* ")
+                    || trimmed.starts_with("+ ");
+                if is_item {
+                    anchor = index;
+                } else {
+                    break;
+                }
+            }
+            Some((line_end(anchor), format!("\n{indent}  - @")))
+        }
+        None => {
+            let indent = &lines[span.start][..indent_of(lines[span.start])];
+            Some((
+                line_end(span.start),
+                format!("\n{indent}@content:\n{indent}  - @"),
+            ))
+        }
+    }
+}

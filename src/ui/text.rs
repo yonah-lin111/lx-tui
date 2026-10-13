@@ -5,7 +5,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::markdown::{BlockCommandId, TemplateStatus};
 use crate::app::prompt::PromptItemStatus;
 use crate::app::state::{AppState, PaneView};
-use crate::app::tooltip::{TemplateButtonKind, TooltipTarget};
+use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
 
@@ -443,6 +443,13 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             TemplateButtonKind::Copy => "copy block",
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",
+        },
+        TooltipTarget::BlockButton { button, .. } => match button {
+            BlockButtonKind::Clean => "clean block",
+            BlockButtonKind::Delete => "delete block",
+            BlockButtonKind::Merge => "merge into first variable block",
+            BlockButtonKind::Top => "move to top",
+            BlockButtonKind::Fold => "collapse / expand variable block",
         },
     }
 }

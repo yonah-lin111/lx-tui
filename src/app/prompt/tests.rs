@@ -1238,7 +1238,7 @@ fn slash_panel_opens_filters_and_closes_off_line_end() {
     let mut prompt = prompt(40, 8);
     type_text(&mut prompt, "/");
     let panel = prompt.slash_panel().expect("panel on bare slash");
-    assert_eq!(panel.items().len(), 6, "5 个模板 + /var");
+    assert_eq!(panel.items().len(), 7, "5 个模板 + /var + /addVarContent");
     assert_eq!(panel.trigger().query, "");
 
     type_text(&mut prompt, "ref");
@@ -2638,4 +2638,71 @@ fn var_block_tab_jumps_between_keys() {
     assert_eq!(editor.cursor(), b_end);
     assert!(editor.var_tab_jump(false));
     assert_eq!(editor.cursor(), a_end);
+}
+
+#[test]
+fn add_var_content_appends_entry_and_clears_command_line() {
+    let mut editor = prompt(40, 12);
+    let text = "$$$ varTemplate --start\n{title: }\n@content:\nkey: \"v\"\n$$$ varTemplate --end\n/addVarContent";
+    editor.set_text(text);
+    let line_start = editor.text().find("/addVarContent").unwrap();
+    let trigger = markdown::SlashTrigger {
+        line_start,
+        line_end: editor.text().len(),
+        cursor: editor.text().len(),
+        query: "addVarContent".into(),
+    };
+    assert!(editor.add_var_content(&trigger));
+    assert!(editor.text().contains("  - @"), "{}", editor.text());
+    assert!(!editor.text().contains("/addVarContent"));
+    assert_eq!(editor.text().as_bytes()[editor.cursor() - 1], b'@');
+    editor.undo();
+    assert_eq!(editor.text(), text, "single undo step");
+}
+
+#[test]
+fn var_colon_select_targets_key_and_value() {
+    let text = "$$$ varTemplate --start\n{title: }\nkey: \"hello\"\n$$$ varTemplate --end\n";
+    let key_at = text.find("key").unwrap();
+    let value_at = text.find("\"hello\"").unwrap();
+
+    let mut forward = prompt(40, 10);
+    forward.set_text(text);
+    forward.set_cursor_offset_for_test(key_at + 1);
+    assert!(
+        forward.var_colon_select(true).is_some(),
+        "Tab selects value"
+    );
+    assert_eq!(forward.cursor(), value_at);
+
+    let mut backward = prompt(40, 10);
+    backward.set_text(text);
+    backward.set_cursor_offset_for_test(value_at + 2);
+    assert!(
+        backward.var_colon_select(false).is_some(),
+        "Shift+Tab selects key"
+    );
+    assert_eq!(backward.cursor(), key_at);
+}
+
+#[test]
+fn slash_panel_offers_git_worktree_inside_supple_block() {
+    let mut editor = prompt(60, 12);
+    editor.set_text(
+        "&&& x --start\n{title: }\n+++ supplement --start\nbody\n/w\n+++ supplement --end\n&&& x --end",
+    );
+    editor.set_worktree_repo(Some(PathBuf::from("/repo")));
+    let at = editor.text().find("/w").unwrap() + 2;
+    editor.set_cursor_offset_for_test(at);
+    editor.refresh_slash_panel();
+    let panel = editor.slash_panel().expect("supple 内 slash 面板");
+    assert!(
+        panel.items().iter().any(|item| item.name == "gitWorkTree"),
+        "{:?}",
+        panel
+            .items()
+            .iter()
+            .map(|item| item.name.clone())
+            .collect::<Vec<_>>()
+    );
 }

@@ -116,6 +116,7 @@ pub fn slash_filter(custom: &[SlashItem], context: SlashContext, query: &str) ->
         BlockContext::Normal => {
             candidates.extend(SlashCommandId::ALL.into_iter().map(SlashItem::builtin));
             candidates.push(SlashItem::builtin_var());
+            candidates.push(SlashItem::builtin_add_var_content());
         }
         BlockContext::Template => {
             candidates.push(SlashItem::builtin_supplement());
@@ -275,6 +276,7 @@ pub fn slash_insertion(item: &SlashItem) -> Option<(String, usize)> {
         SlashInsertion::VarMultiLine => Some((VAR_MULTI_LINE.to_string(), 3)),
         SlashInsertion::WorktreeChooser
         | SlashInsertion::WorktreeBinding { .. }
+        | SlashInsertion::AddVarContent
         | SlashInsertion::Placeholder => None,
     }
 }
@@ -398,6 +400,8 @@ pub enum SlashInsertion {
     VarSingleLine,
     /// `/multiLine`：整行替换为三引号多行变量占位，光标落在 `key` 之后。
     VarMultiLine,
+    /// `/addVarContent`：不直接插入，向首个变量块的 `@content:` 追加一条并打开提及面板。
+    AddVarContent,
     /// `/gitWorkTree`：不直接插入，打开二级 worktree 选择器。
     WorktreeChooser,
     /// 二级选择器条目：把对应分支写回块结束行上方的 `{wt:}` 行。
@@ -553,6 +557,18 @@ impl SlashItem {
             source: CommandSource::BuiltIn,
             insertion: SlashInsertion::VarMultiLine,
             preview: String::new(),
+            scope: SlashScope::Global,
+            selectable: true,
+        }
+    }
+
+    /// 内置 `/addVarContent` 候选（普通正文出现）。
+    pub fn builtin_add_var_content() -> Self {
+        Self {
+            name: "addVarContent".to_string(),
+            source: CommandSource::BuiltIn,
+            insertion: SlashInsertion::AddVarContent,
+            preview: "content".to_string(),
             scope: SlashScope::Global,
             selectable: true,
         }

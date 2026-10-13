@@ -219,6 +219,7 @@ impl Prompt {
                 self.confirm_worktree_binding(&branch, is_main)
             }
             markdown::SlashInsertion::Placeholder => false,
+            markdown::SlashInsertion::AddVarContent => self.add_var_content(&trigger),
             _ => {
                 let Some((content, cursor)) = markdown::slash_insertion(&item) else {
                     return false;

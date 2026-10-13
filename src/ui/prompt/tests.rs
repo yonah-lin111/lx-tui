@@ -853,8 +853,8 @@ fn toolbar_hidden_when_prompt_too_short() {
 
 #[test]
 fn slash_panel_renders_templates_title_and_hit_tests_items() {
-    let area = Rect::new(0, 0, 40, 10);
-    let prompt = prompt(40, 10, "/");
+    let area = Rect::new(0, 0, 60, 10);
+    let prompt = prompt(60, 10, "/");
     let layout = slash_layout(&prompt, area).expect("slash panel visible");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
@@ -1228,4 +1228,34 @@ fn var_block_buttons_order_and_hit() {
         block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
         Some(BlockButton::Clean)
     );
+}
+
+#[test]
+fn refer_panel_width_grows_with_content_up_to_container() {
+    let area = Rect::new(0, 0, 40, 10);
+    let short = prompt(40, 10, "@a.txt one\nat");
+    let narrow = refer_layout(&short, area)
+        .expect("short refer panel")
+        .rect
+        .width;
+    let long = prompt(40, 10, "@a/very/long/path/to/name.txt one\nname");
+    let wide = refer_layout(&long, area)
+        .expect("long refer panel")
+        .rect
+        .width;
+    assert!(
+        wide > narrow,
+        "panel grows with content: {narrow} -> {wide}"
+    );
+    assert!(wide <= area.width, "panel never exceeds container: {wide}");
+    let huge = prompt(
+        40,
+        10,
+        &format!("@{}verylongname.txt one\nvery", "p/".repeat(60)),
+    );
+    let capped = refer_layout(&huge, area)
+        .expect("huge refer panel")
+        .rect
+        .width;
+    assert_eq!(capped, area.width, "capped at container width");
 }
