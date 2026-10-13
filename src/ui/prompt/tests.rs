@@ -1302,32 +1302,25 @@ fn header_page_controls_render_counter_name_and_edges() {
     };
     let row_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
     assert_eq!(
-        header_page_control_at(header, "named prompt", false, &data, controls.prev.x, row_y),
+        header_page_control_at(header, "named prompt", &data, controls.prev.x, row_y),
         Some(PageControl::Prev)
     );
     assert_eq!(
-        header_page_control_at(
-            header,
-            "named prompt",
-            false,
-            &data,
-            controls.counter.x,
-            row_y
-        ),
+        header_page_control_at(header, "named prompt", &data, controls.counter.x, row_y),
         Some(PageControl::Counter)
     );
     assert_eq!(
-        header_page_control_at(header, "named prompt", false, &data, controls.next.x, row_y),
+        header_page_control_at(header, "named prompt", &data, controls.next.x, row_y),
         Some(PageControl::Next)
     );
     let name_col = char_col(&row, "· Intro", panel.x) + 2;
     assert_eq!(
-        header_page_control_at(header, "named prompt", false, &data, name_col, row_y),
+        header_page_control_at(header, "named prompt", &data, name_col, row_y),
         Some(PageControl::Name),
         "页名段命中（点击进入重命名）"
     );
     assert_eq!(
-        header_page_control_at(header, "named prompt", false, &data, header.x + 3, row_y),
+        header_page_control_at(header, "named prompt", &data, header.x + 3, row_y),
         None,
         "点击提示词标题不进入重命名"
     );
@@ -1434,7 +1427,6 @@ fn header_rename_input_replaces_page_name_with_cursor() {
     let cursor = header_rename_cursor(
         header,
         "named prompt",
-        false,
         &PageHeaderData {
             current: 1,
             total: 1,

@@ -163,10 +163,11 @@ fn menu_workspace_list_shows_list_title_and_new_workspace_label() {
 
 #[test]
 fn menu_renders_labels_and_overlay_selection() {
-    let state = menu_state(
+    let mut state = menu_state(
         vec![MenuCommand::RenameWorkspace, MenuCommand::CloseWorkspace],
         1,
     );
+    state.menu_hover = true;
     let (lines, cursor) = draw_overlay(&state);
     assert_eq!(cursor, None);
     assert!(lines[6].contains(text::MENU_RENAME_WORKSPACE));
@@ -181,6 +182,20 @@ fn menu_renders_labels_and_overlay_selection() {
     assert_eq!(buffer[(11, 7)].bg, Color::Indexed(240));
     assert_eq!(buffer[(11, 7)].fg, Color::Indexed(255));
     assert!(!buffer[(11, 7)].modifier.contains(Modifier::REVERSED));
+
+    // 指针离开容器：高亮反馈整体移除。
+    state.menu_hover = false;
+    if let Err(error) = terminal.draw(|frame| {
+        render(frame, frame.area(), &state);
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buffer = terminal.backend().buffer().clone();
+    assert_eq!(
+        buffer[(11, 7)].bg,
+        style::overlay_panel().bg.expect("panel bg"),
+        "离开容器后无悬停高亮"
+    );
 }
 
 #[test]
@@ -876,7 +891,7 @@ fn draw_overlay_buffer(state: &AppState) -> ratatui::buffer::Buffer {
 }
 
 #[test]
-fn page_menu_renders_split_buttons_two_line_pages_and_current_marker() {
+fn page_menu_renders_border_chips_two_line_pages_and_current_marker() {
     use crate::app::prompt::{PromptItem, PromptPage};
     let mut state = AppState::demo();
     let mut item = PromptItem::single(7, None, "paged", "");
@@ -900,8 +915,7 @@ fn page_menu_renders_split_buttons_two_line_pages_and_current_marker() {
         .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
         .collect();
     let body = lines.join("\n");
-    assert!(body.contains(text::MENU_PAGE_NEW), "{body}");
-    assert!(body.contains(text::MENU_PAGE_DELETE), "{body}");
+    assert!(body.contains(text::MENU_TITLE_PAGES), "{body}");
     assert!(body.contains("Page 1"), "{body}");
     assert!(body.contains("Notes"), "{body}");
     assert!(body.contains("[todo 1]"), "逐页 todo 计数: {body}");
@@ -912,12 +926,16 @@ fn page_menu_renders_split_buttons_two_line_pages_and_current_marker() {
     };
     let layout = page_menu_layout(&state, SCREEN, menu);
     assert_eq!(menu.selected, 1, "打开时光标停在当前页");
-    // 顶部按钮平分菜单宽度，命中分别映射到首行与末行。
-    assert_eq!(
-        layout.new_rect.width + layout.delete_rect.width,
-        layout.area.width - 2
-    );
-    assert!(layout.new_rect.width.abs_diff(layout.delete_rect.width) <= 1);
+    // 按钮嵌在顶部边框右端：同行、贴右角、按钮之间有间隔。
+    assert_eq!(layout.new_rect.y, layout.area.y);
+    assert_eq!(layout.delete_rect.y, layout.area.y);
+    assert_eq!(layout.delete_rect.right(), layout.area.right() - 1);
+    assert!(layout.new_rect.right() < layout.delete_rect.x);
+    let top: String = (layout.area.x..layout.area.right())
+        .map(|x| buffer[(x, layout.area.y)].symbol())
+        .collect();
+    assert!(top.contains(text::MENU_PAGE_NEW), "{top:?}");
+    assert!(top.contains(text::MENU_PAGE_DELETE), "{top:?}");
     assert_eq!(
         page_menu_item_at(&state, SCREEN, menu, layout.new_rect.x, layout.new_rect.y),
         Some(0)
@@ -933,7 +951,7 @@ fn page_menu_renders_split_buttons_two_line_pages_and_current_marker() {
         Some(menu.rows.len() - 1)
     );
 
-    // 当前页首行带 `❯` 标记；光标移到下一页后当前页行无颜色高亮。
+    // 当前页首行带 `❯` 标记；指针离开容器后整菜单无悬停底色。
     let current = layout.page_rects[menu.selected - 1];
     let row: String = (current.x..current.right())
         .map(|x| buffer[(x, current.y)].symbol())
@@ -942,28 +960,19 @@ fn page_menu_renders_split_buttons_two_line_pages_and_current_marker() {
         row.starts_with(&format!("{} ", text::AGENT_SELECTED_MARKER)),
         "当前页行首标记: {row:?}"
     );
-    assert!(crate::app::update::set_page_menu_selection(&mut state, 2));
-    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
-        panic!("page menu open");
-    };
+    state.menu_hover = false;
     let buffer = draw_overlay_buffer(&state);
-    let current = layout.page_rects[0];
     assert_eq!(
         Some(buffer[(current.x, current.y)].bg),
         style::overlay_panel().bg,
-        "当前页行不铺颜色高亮"
+        "指针离开容器：当前页行不铺颜色高亮"
     );
     let row: String = (current.x..current.right())
         .map(|x| buffer[(x, current.y)].symbol())
         .collect();
     assert!(row.starts_with(text::AGENT_SELECTED_MARKER), "{row:?}");
-    assert_eq!(
-        Some(buffer[(layout.page_rects[1].x, layout.page_rects[1].y)].bg),
-        style::overlay_selection().bg,
-        "光标行保留菜单反馈底色"
-    );
     // 两行页项：两行都可命中同一行快照。
-    let page = layout.page_rects[1];
+    let page = layout.page_rects[0];
     assert_eq!(
         page_menu_item_at(&state, SCREEN, menu, page.x + 1, page.y),
         Some(menu.selected)
@@ -1030,7 +1039,7 @@ fn page_menu_windows_around_selected_row_when_tall() {
     assert_eq!(layout.page_rects.len(), visible);
     assert_eq!(
         layout.area.height,
-        u16::try_from(2 + 1 + visible * 2).expect("height"),
+        u16::try_from(2 + visible * 2).expect("height"),
         "菜单高度钳到屏幕内"
     );
     let selected_rect = layout.page_rects[target - layout.start - 1];
@@ -1039,7 +1048,7 @@ fn page_menu_windows_around_selected_row_when_tall() {
         Some(target),
         "高亮页行在窗口内可命中"
     );
-    // 光标移到末行（Delete page）：窗口贴底。
+    // 光标移到末行（删除按钮）：窗口贴底。
     let last = menu.rows.len() - 1;
     assert!(crate::app::update::set_page_menu_selection(
         &mut state, last

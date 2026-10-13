@@ -83,8 +83,6 @@ pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
 /// 提示词树分区标签：临时区与已入库区（仅两侧都有内容时成对出现）。
 pub const PROMPT_SECTION_TMP: &str = "tmp:";
 pub const PROMPT_SECTION_SAVED: &str = "saved:";
-/// 临时提示词行的右对齐标注（替代条目状态词位置）。
-pub const PROMPT_TEMP_BADGE: &str = "[tmp]";
 /// 空白 default temp 在列表中的占位展示名（每个工作区恒保留一条）。
 pub const PROMPT_TEMP_DEFAULT_NAME: &str = "default";
 /// 临时提示词在编辑视图分割线行的标题。
@@ -205,8 +203,8 @@ pub fn default_page_name(index: usize) -> String {
 }
 
 /// 页菜单动作项与标题。
-pub const MENU_PAGE_NEW: &str = "New page";
-pub const MENU_PAGE_DELETE: &str = "Delete page";
+pub const MENU_PAGE_NEW: &str = "[add]";
+pub const MENU_PAGE_DELETE: &str = "[del]";
 pub const MENU_TITLE_PAGES: &str = "pages";
 
 /// 页内模板块状态计数标签（仅统计闭合顶层 `&&&`）。
@@ -456,6 +454,8 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",
         },
+        TooltipTarget::PageMenuAdd => "add page",
+        TooltipTarget::PageMenuDelete => "delete page",
         TooltipTarget::BlockButton { button, .. } => match button {
             BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",

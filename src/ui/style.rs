@@ -31,6 +31,16 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
+/// 叠加在强调色边框上的灰字（显式前景 + dim）：临时提示词标题等。
+///
+/// `set_stringn` 只覆盖样式里显式给出的字段，`muted()` 不设前景，
+/// 会把底层（聚焦态青色）边框前景带出来；这里显式重置前景。
+pub fn muted_on_border() -> Style {
+    Style::default()
+        .fg(Color::Reset)
+        .add_modifier(Modifier::DIM)
+}
+
 /// 面板边框标题：淡蓝色（Cyan + dim、不加粗），与分支状态同色系。
 ///
 /// 标题样式叠加在边框样式之上，这里显式指定前景并移除粗体，

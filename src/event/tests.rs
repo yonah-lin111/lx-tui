@@ -1808,6 +1808,188 @@ fn mouse_reporting_pane_does_not_steal_boundary_drag() {
 }
 
 #[test]
+fn mouse_motion_tracks_prompt_tree_hover() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    crate::app::update::show_prompt_tree(&mut state);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let scroll = state.prompt_owner().prompt_panel.scroll;
+    let hovered = state.prompt_owner().prompt_panel.selected;
+    let rows_area_y = area.y + 2;
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 悬停树行列表区（选中行可见）。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            area.x + 2,
+            rows_area_y + (hovered - scroll) as u16,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_tree_hover, Some(hovered));
+    assert!(dirty, "悬停变化置脏重绘");
+
+    // 移到搜索行（区域内非列表行）：清除悬停。
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, area.x + 2, area.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_tree_hover, None);
+    assert!(dirty, "离开列表行清空悬停");
+
+    // 离开提示词面板：保持清空。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            geo.view.panes.x + 2,
+            geo.view.panes.y + 2,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_tree_hover, None);
+
+    // 编辑视图（非树视图）不产生列表悬停。
+    crate::app::update::toggle_prompt_panel_mode(&mut state);
+    assert!(
+        !crate::app::update::prompt_tree_mode(&state),
+        "已切到编辑视图"
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, area.x + 2, rows_area_y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt_tree_hover, None);
+}
+
+#[test]
+fn mouse_leaving_overlay_menu_clears_hover_feedback() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    crate::app::update::open_tab_menu(&mut state, 0, (10, 4));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu open");
+    };
+    let layout = ui::overlay::menu_layout(&state, geo.screen, menu);
+    let item = layout.item_rects[1];
+
+    // 悬停某行：高亮跟随。
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, item.x + 1, item.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.menu_hover);
+    assert_eq!(
+        state.overlay.as_ref().and_then(|overlay| match overlay {
+            Overlay::Menu(menu) => Some(menu.selected),
+            _ => None,
+        }),
+        Some(1)
+    );
+
+    // 移出容器：清除悬停高亮反馈（选中项保持不变）。
+    dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            geo.screen.x,
+            geo.screen.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!state.menu_hover, "离开容器移除悬停效果");
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_leaving_page_menu_clears_hover_feedback() {
+    let config = Config::default();
+    let mut state = demo_terminal();
+    assert!(crate::app::update::open_temp_prompt(&mut state));
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    assert!(crate::app::update::open_prompt_page_menu(
+        &mut state,
+        (10, 4)
+    ));
+    assert!(state.menu_hover, "页码菜单打开时指针位于容器内");
+
+    // 移出容器：清除悬停高亮反馈。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            geo.screen.x,
+            geo.screen.bottom().saturating_sub(1),
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!state.menu_hover, "离开容器移除悬停效果");
+
+    // 回到边框按钮：恢复悬停并命中对应行。
+    let Some(Overlay::PageMenu(menu)) = state.overlay.as_ref() else {
+        panic!("page menu open");
+    };
+    let layout2 = ui::overlay::page_menu_layout(&state, geo.screen, menu);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Moved,
+            layout2.new_rect.x,
+            layout2.new_rect.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.menu_hover);
+    assert_eq!(
+        state.overlay.as_ref().and_then(|overlay| match overlay {
+            Overlay::PageMenu(menu) => Some(menu.selected),
+            _ => None,
+        }),
+        Some(0),
+        "悬停 [add] 按钮"
+    );
+}
+
+#[test]
 fn mouse_motion_tracks_workspace_and_tab_hover() {
     let config = Config::default();
     let mut state = demo_terminal();

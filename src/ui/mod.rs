@@ -85,9 +85,19 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_swap_button(frame, &view);
     render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
-    let tooltip_area = tooltip::render(frame, area, state, &view, &pane_rects);
+    // 页码菜单打开时其边框按钮 tooltip 需绘制在菜单之上（常规 tooltip 早于浮层绘制会被盖住）。
+    let page_menu_open = matches!(
+        state.overlay,
+        Some(crate::app::overlay::Overlay::PageMenu(_))
+    );
+    let tooltip_area = (!page_menu_open)
+        .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
+        .flatten();
     let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
+    let menu_tooltip_area = page_menu_open
+        .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
+        .flatten();
     // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
     // 非模态时若光标位置被 tooltip/toast 盒覆盖（后绘制），一并隐藏，避免覆盖浮层。
     let cursor = match state.overlay {
@@ -95,6 +105,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         None => prompt_cursor.filter(|position| {
             !tooltip_area
                 .into_iter()
+                .chain(menu_tooltip_area)
                 .chain(toast_area)
                 .any(|box_area| box_area.contains((*position).into()))
         }),
@@ -543,10 +554,6 @@ pub fn prompt_page_control_at(
     let header = crate::layout::prompt_header_rect(panel)?;
     let page = prompt_page_header(state)?;
     let title = prompt_edit_title(state)?;
-    let draft = matches!(
-        state.prompt_owner().prompt_panel.editing,
-        Some(PromptEditing::Temp(_))
-    );
     let data = prompt::PageHeaderData {
         current: page.current,
         total: page.total,
@@ -571,7 +578,7 @@ pub fn prompt_page_control_at(
         }
         return None;
     }
-    prompt::header_page_control_at(header, &title, draft, &data, column, row)
+    prompt::header_page_control_at(header, &title, &data, column, row)
 }
 
 /// 右栏 prompt：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
@@ -656,6 +663,7 @@ fn render_prompt(
             frame.buffer_mut(),
             &state.prompt_owner().prompt_panel,
             focused,
+            state.prompt_tree_hover,
         ),
         PromptMode::Editor => {
             prompt::render(
@@ -689,7 +697,7 @@ fn render_prompt(
                 .map(|(input, cursor)| (input.as_str(), *cursor)),
         };
         return focused
-            .then(|| prompt::header_rename_cursor(header, title, draft, &data))
+            .then(|| prompt::header_rename_cursor(header, title, &data))
             .flatten();
     }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;

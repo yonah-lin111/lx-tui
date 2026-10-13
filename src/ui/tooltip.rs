@@ -5,6 +5,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
+use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::{self, PaneId};
@@ -16,10 +17,11 @@ pub fn target_at(
     view: &ViewLayout,
     state: &AppState,
     pane_rects: &[(PaneId, Rect)],
+    screen: Rect,
     column: u16,
     row: u16,
 ) -> Option<TooltipTarget> {
-    targets(view, state, pane_rects)
+    targets(view, state, pane_rects, screen)
         .into_iter()
         .find_map(|(target, area)| area.contains((column, row).into()).then_some(target))
 }
@@ -36,14 +38,16 @@ pub fn render(
     let command_panel_open = state.prompt.mention().is_some()
         || state.prompt.slash_panel().is_some()
         || state.prompt.panel().is_some();
-    if state.overlay.is_some() || command_panel_open {
+    // 页码菜单的边框按钮提示例外：由调用方在浮层之后渲染（覆盖在菜单上）。
+    let page_menu_open = matches!(state.overlay, Some(Overlay::PageMenu(_)));
+    if command_panel_open || (state.overlay.is_some() && !page_menu_open) {
         return None;
     }
     let tooltip = state
         .tooltip
         .as_ref()
         .filter(|tooltip| tooltip.is_visible())?;
-    let anchor = targets(view, state, pane_rects)
+    let anchor = targets(view, state, pane_rects, screen)
         .into_iter()
         .find_map(|(target, area)| (target == tooltip.target).then_some(area))?;
     let title = text::TOOLTIP_TITLE;
@@ -78,11 +82,21 @@ pub fn render(
 }
 
 /// 全部可提示按钮及其矩形；渲染与鼠标命中共用同一几何。
+///
+/// 页码菜单打开时只返回其边框按钮（浮层是模态，其余按钮不可达）。
 fn targets(
     view: &ViewLayout,
     state: &AppState,
     pane_rects: &[(PaneId, Rect)],
+    screen: Rect,
 ) -> Vec<(TooltipTarget, Rect)> {
+    if let Some(Overlay::PageMenu(menu)) = &state.overlay {
+        let layout = ui::overlay::page_menu_layout(state, screen, menu);
+        return vec![
+            (TooltipTarget::PageMenuAdd, layout.new_rect),
+            (TooltipTarget::PageMenuDelete, layout.delete_rect),
+        ];
+    }
     let mut targets = Vec::new();
     for button in ui::collapse_buttons(view, state.agents_collapsed) {
         let target = match button.target {

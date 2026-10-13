@@ -9,12 +9,13 @@ use crate::ui::widgets;
 use crate::ui::{style, text};
 
 /// 渲染树内容区：顶部搜索框行 + 分割线 + 过滤后的树行；返回搜索框硬件光标位置；
-/// 空树/无命中显示占位；选中行以行首 `❯` 标记（同 Agents 条目，不铺底色）。
+/// 空树/无命中显示占位；选中行以行首 `❯` 标记（同 Agents 条目），悬停行铺选中底色。
 pub fn render(
     area: Rect,
     buf: &mut Buffer,
     panel: &PromptPanel,
     focused: bool,
+    hover: Option<usize>,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
@@ -41,6 +42,7 @@ pub fn render(
         .take(usize::from(rows_area.height))
     {
         let selected = index == panel.selected;
+        let hovered = hover == Some(index) && !matches!(row.kind, PromptRowKind::Section(_));
         let prefix = tree_prefix(&rows, index);
         // 过滤时折叠被忽略：过滤视图下所有可见文件夹按展开态绘制三角。
         let searching = !panel.search.text().trim().is_empty();
@@ -57,6 +59,7 @@ pub fn render(
             panel,
             *row,
             selected,
+            hovered,
             &prefix,
             expanded,
         );
@@ -178,7 +181,8 @@ pub fn row_at(area: Rect, panel: &PromptPanel, column: u16, row: u16) -> Option<
 }
 
 /// 绘制单行：行首标记列（`❯ ` 或空）+ 前缀（续接线 + 连接符）+ 图标 + 名称
-/// +（条目）右对齐的彩色计数组；分区标签行只画 muted 标签。
+/// +（条目）右对齐的彩色计数组；分区标签行只画 muted 标签；
+/// 悬停行整行铺选中底色（与工作区列表一致），文字统一切换为高亮前景。
 #[allow(clippy::too_many_arguments)]
 fn paint_row(
     buf: &mut Buffer,
@@ -187,11 +191,22 @@ fn paint_row(
     panel: &PromptPanel,
     row: PromptRow,
     selected: bool,
+    hovered: bool,
     prefix: &str,
     expanded: bool,
 ) {
-    let base = style::text();
-    let sub = style::muted();
+    let highlight = if hovered {
+        style::selection()
+    } else {
+        ratatui::style::Style::default()
+    };
+    if hovered {
+        fill_row(buf, area, y);
+    }
+    let base = style::text().patch(highlight);
+    let sub = style::muted().patch(highlight);
+    let accent = style::accent().patch(highlight);
+    let muted = style::muted().patch(highlight);
     let mut x = area.x;
     // 分区标签不可选中：不占标记列，标签贴左缘。
     if !matches!(row.kind, PromptRowKind::Section(_)) {
@@ -215,7 +230,7 @@ fn paint_row(
             } else {
                 text::PROMPT_TREE_COLLAPSED
             };
-            x = paint_text(buf, x, y, triangle, style::accent(), area.right());
+            x = paint_text(buf, x, y, triangle, accent, area.right());
             x = paint_text(buf, x, y, " ", base, area.right());
             let max = usize::from(area.right().saturating_sub(x));
             paint_name(buf, x, y, &folder.name, base, max, area.right());
@@ -224,14 +239,7 @@ fn paint_row(
             let Some(item) = panel.tree.item_of_row(row) else {
                 return;
             };
-            x = paint_text(
-                buf,
-                x,
-                y,
-                text::PROMPT_TREE_ITEM_ICON,
-                style::muted(),
-                area.right(),
-            );
+            x = paint_text(buf, x, y, text::PROMPT_TREE_ITEM_ICON, muted, area.right());
             x = paint_text(buf, x, y, " ", base, area.right());
             // 右侧段：各页模板块计数合计（零数量省略）；
             // 物理宽度不足时从尾部逐个省略完整计数标签，名称最后截断。
@@ -250,7 +258,7 @@ fn paint_row(
                 }
                 segments.push((
                     text::template_count_label(status, count),
-                    style::template_status(status),
+                    style::template_status(status).patch(highlight),
                 ));
             }
             let used = paint_right_segments(buf, area, y, &mut segments, x);
@@ -268,17 +276,21 @@ fn paint_row(
             let Some(temp) = panel.temp_of_row(row) else {
                 return;
             };
-            x = paint_text(
-                buf,
-                x,
-                y,
-                text::PROMPT_TREE_ITEM_ICON,
-                style::muted(),
-                area.right(),
-            );
+            x = paint_text(buf, x, y, text::PROMPT_TREE_ITEM_ICON, muted, area.right());
             x = paint_text(buf, x, y, " ", base, area.right());
             let max = usize::from(area.right().saturating_sub(x));
             paint_name(buf, x, y, temp.display_name(), base, max, area.right());
+        }
+    }
+}
+
+/// 悬停行整行铺选中底色，保证反馈跨满行宽。
+fn fill_row(buf: &mut Buffer, area: Rect, y: u16) {
+    for x in area.x..area.right() {
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_char(' ');
+            cell.set_style(style::selection());
         }
     }
 }

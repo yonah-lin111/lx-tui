@@ -277,7 +277,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         app.screen()
     );
     assert!(
-        app.find_in_row_of(text::PROMPT_TEMP_DEFAULT_NAME, text::PROMPT_TEMP_BADGE)
+        app.find_in_row_of(text::PROMPT_TEMP_DEFAULT_NAME, "[tmp]")
             .is_none(),
         "temp rows no longer carry the [tmp] badge: \n{}",
         app.screen()

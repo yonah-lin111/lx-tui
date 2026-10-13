@@ -1362,12 +1362,9 @@ fn prompt_editor_divider_shows_editing_title() {
         inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
     );
     assert!(divider.contains(" named prompt "), "{divider}");
-    assert!(
-        !divider.contains(text::PROMPT_TEMP_BADGE),
-        "条目不带 tmp 标识: {divider}"
-    );
+    assert!(!divider.contains("[tmp]"), "条目不带 tmp 标识: {divider}");
 
-    // 临时提示词显示固定标题与默认文字色 `[tmp]` 标识（加宽以完整容纳）。
+    // 临时提示词显示固定标题（无 `[tmp]` 标识），标题为未聚焦灰。
     state.prompt_width = 56;
     let view = view_for(&state);
     update::show_prompt_tree(&mut state);
@@ -1380,10 +1377,22 @@ fn prompt_editor_divider_shows_editing_title() {
         inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
     );
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
-    assert!(divider.contains(text::PROMPT_TEMP_BADGE), "{divider}");
+    assert!(!divider.contains("[tmp]"), "标题不带 tmp 标识: {divider}");
     assert!(divider.contains("Page 1"), "内嵌当前页名: {divider}");
     assert!(divider.contains('‹') && divider.contains('›'), "{divider}");
     assert!(divider.contains("1/1"), "{divider}");
+    // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
+    let buffer = render_buffer(&state);
+    let y = inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
+    let title_byte = divider.find(text::PROMPT_DRAFT_TITLE).expect("title col");
+    let title_col = u16::try_from(divider[..title_byte].chars().count()).expect("col fits");
+    let cell = &buffer[(view.prompt.x + title_col, y)];
+    let debug_row: String = (view.prompt.x..view.prompt.right())
+        .map(|x| buffer[(x, y)].symbol())
+        .collect();
+    assert_eq!(cell.symbol(), "t", "标题起点单元格: {debug_row:?}");
+    assert_eq!(cell.fg, ratatui::style::Color::Reset, "标题前景为默认灰");
+    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
 }
 
 #[test]

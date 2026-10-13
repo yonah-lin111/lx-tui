@@ -277,7 +277,8 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             let labels = menu_labels(menu);
             let title = menu_title(state, menu);
             let layout = widgets::menu::layout(screen, menu.anchor, &title, &labels);
-            widgets::menu::render(frame, &layout, &title, &labels, Some(menu.selected));
+            let selected = state.menu_hover.then_some(menu.selected);
+            widgets::menu::render(frame, &layout, &title, &labels, selected);
             None
         }
         Overlay::Rename(rename) => render_rename(frame, screen, rename),

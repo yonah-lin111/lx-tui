@@ -1121,6 +1121,15 @@ pub fn set_tab_hover(state: &mut AppState, hover: Option<usize>) -> bool {
     true
 }
 
+/// 更新提示词列表悬停行；返回是否发生变化。
+pub fn set_prompt_tree_hover(state: &mut AppState, hover: Option<usize>) -> bool {
+    if state.prompt_tree_hover == hover {
+        return false;
+    }
+    state.prompt_tree_hover = hover;
+    true
+}
+
 /// 展示 toast；单条替换并重置倒计时。
 pub fn show_toast(state: &mut AppState, toast: Toast) {
     state.toast = Some(toast);
@@ -1680,6 +1689,8 @@ pub fn move_menu_selection(state: &mut AppState, step: isize) {
     }
     let len = menu.commands.len() as isize;
     menu.selected = (menu.selected as isize + step).rem_euclid(len) as usize;
+    // 键盘移动同样显示高亮反馈。
+    state.menu_hover = true;
 }
 
 /// 菜单悬停高亮；索引越界忽略；返回是否变化。
@@ -1687,10 +1698,21 @@ pub fn set_menu_selection(state: &mut AppState, index: usize) -> bool {
     let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
         return false;
     };
-    if index >= menu.commands.len() || menu.selected == index {
+    if index >= menu.commands.len() {
         return false;
     }
+    let changed = menu.selected != index || !state.menu_hover;
     menu.selected = index;
+    state.menu_hover = true;
+    changed
+}
+
+/// 指针离开菜单容器：移除悬停高亮反馈；返回是否变化。
+pub fn clear_menu_hover(state: &mut AppState) -> bool {
+    if !state.menu_hover {
+        return false;
+    }
+    state.menu_hover = false;
     true
 }
 

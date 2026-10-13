@@ -1,10 +1,11 @@
 //! 页码菜单：行文案、几何、命中与渲染。
 //!
-//! 顶部一行两个等宽按钮（新建 / 删除），其下每页占两行：首行 `❯` 标记与页名、
-//! 次行彩色模板块计数；页数超出屏幕时窗口跟随光标滚动。
+//! 顶部边框右端内嵌 `[add]` / `[del]` 两个按钮（带 tooltip），其下每页占两行：
+//! 首行 `❯` 标记与页名、次行彩色模板块计数；页数超出屏幕时窗口跟随光标滚动。
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
@@ -14,22 +15,19 @@ use crate::app::prompt::{PromptEditing, PromptPageId};
 use crate::app::state::AppState;
 use crate::ui::{style, text};
 
-/// 顶部按钮行占用的行数。
-const BUTTONS_ROW: u16 = 1;
-
-/// 页码菜单几何：整体区域、顶部按钮与可见页行（每项两行）。
+/// 页码菜单几何：整体区域、边框按钮与可见页行（每项两行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageMenuLayout {
     pub area: Rect,
-    /// 顶部“新建”按钮（左半）。
+    /// 顶部边框右端的新建按钮。
     pub new_rect: Rect,
-    /// 顶部“删除”按钮（右半）。
+    /// 顶部边框右端的删除按钮。
     pub delete_rect: Rect,
     /// 可见页行矩形（顺序对应窗口内页，每项高 2 行）。
     pub page_rects: Vec<Rect>,
     /// 窗口内第一页的页序号（0 起；行快照下标为其加一）。
     pub start: usize,
-    /// 页总数（不含按钮行）。
+    /// 页总数（不含边框按钮）。
     pub pages: usize,
 }
 
@@ -95,10 +93,9 @@ fn count_segments(counts: &TemplateCounts) -> Vec<(String, TemplateStatus)> {
     .collect()
 }
 
-/// 页码菜单可视页数（扣除边框与顶部按钮行，每页两行）。
+/// 页码菜单可视页数（扣除上下边框，每页两行）。
 pub fn page_menu_visible_pages(screen: Rect) -> usize {
-    let interior = screen.height.saturating_sub(2 + BUTTONS_ROW);
-    usize::from(interior / 2)
+    usize::from(screen.height.saturating_sub(2) / 2)
 }
 
 /// 页窗口起点：光标停在页行时保持该页可见（靠底部对齐）；按钮行光标贴两端。
@@ -124,20 +121,19 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
     let visible = page_menu_visible_pages(screen).min(pages);
     let start = page_window_start(menu, visible, pages);
     let end = (start + visible).min(pages);
-    let page_rects_width = labels[start..end]
+    let page_width = labels[start..end]
         .iter()
         .map(|label| label.name_width().max(label.counts_width()))
         .max()
         .unwrap_or_default();
-    // 顶部按钮等宽平分：宽度容纳两个较宽按钮标签。
-    let button_label = text::MENU_PAGE_DELETE
-        .width()
-        .max(text::MENU_PAGE_NEW.width());
-    let desired = u16::try_from(page_rects_width.max(button_label * 2)).unwrap_or(u16::MAX);
+    // 顶部边框：左对齐标题 + 右端两个按钮，最小宽度保证不重叠。
+    let chips = text::MENU_PAGE_NEW.width() + 1 + text::MENU_PAGE_DELETE.width();
+    let top_width = text::MENU_TITLE_PAGES.width() + 2 + chips + 3;
+    let desired = u16::try_from(page_width.max(top_width)).unwrap_or(u16::MAX);
     let interior = desired.min(screen.width.saturating_sub(2));
     let width = interior + 2;
     let shown = end - start;
-    let height = u16::try_from(2 + BUTTONS_ROW as usize + shown * 2)
+    let height = u16::try_from(2 + shown * 2)
         .unwrap_or(u16::MAX)
         .min(screen.height);
     let x = menu
@@ -149,24 +145,22 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
         .1
         .clamp(screen.y, screen.y + screen.height.saturating_sub(height));
     let area = Rect::new(x, y, width, height);
-    let buttons_y = area.y + 1;
-    let left = interior.div_ceil(2);
-    let new_rect = Rect::new(area.x + 1, buttons_y, left, BUTTONS_ROW);
+    let delete_width = u16::try_from(text::MENU_PAGE_DELETE.width()).unwrap_or(u16::MAX);
     let delete_rect = Rect::new(
-        area.x + 1 + left,
-        buttons_y,
-        interior.saturating_sub(left),
-        BUTTONS_ROW,
+        area.right().saturating_sub(1 + delete_width),
+        area.y,
+        delete_width,
+        1,
+    );
+    let new_width = u16::try_from(text::MENU_PAGE_NEW.width()).unwrap_or(u16::MAX);
+    let new_rect = Rect::new(
+        delete_rect.x.saturating_sub(1 + new_width),
+        area.y,
+        new_width,
+        1,
     );
     let page_rects = (0..shown)
-        .map(|index| {
-            Rect::new(
-                area.x + 1,
-                area.y + 1 + BUTTONS_ROW + (index as u16) * 2,
-                interior,
-                2,
-            )
-        })
+        .map(|index| Rect::new(area.x + 1, area.y + 1 + (index as u16) * 2, interior, 2))
         .collect();
     PageMenuLayout {
         area,
@@ -200,7 +194,8 @@ pub fn page_menu_item_at(
         .map(|index| layout.start + index + 1)
 }
 
-/// 渲染页码菜单：顶部等宽按钮、两行页项、当前页 `❯` 标记与彩色计数。
+/// 渲染页码菜单：顶部边框按钮、两行页项、当前页 `❯` 标记与彩色计数。
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_page_menu(
     frame: &mut Frame<'_>,
     screen: Rect,
@@ -214,28 +209,29 @@ pub(super) fn render_page_menu(
         .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(style::accent())
         .style(style::overlay_panel())
+        .title_alignment(Alignment::Left)
         .title(Span::styled(
             format!(" {} ", text::MENU_TITLE_PAGES),
             style::border_title(),
         ));
     frame.render_widget(block, layout.area);
     let last = menu.rows.len().saturating_sub(1);
-    render_button(
-        frame,
-        layout.new_rect,
-        text::MENU_PAGE_NEW,
-        menu.selected == 0,
-        false,
-    );
     let delete_enabled = matches!(
         menu.rows.get(last),
         Some(PageMenuRow::DeletePage { enabled: true })
     );
-    render_button(
+    render_chip(
+        frame,
+        layout.new_rect,
+        text::MENU_PAGE_NEW,
+        state.menu_hover && menu.selected == 0,
+        false,
+    );
+    render_chip(
         frame,
         layout.delete_rect,
         text::MENU_PAGE_DELETE,
-        menu.selected == last,
+        state.menu_hover && menu.selected == last,
         !delete_enabled,
     );
     for (index, rect) in layout.page_rects.iter().enumerate() {
@@ -246,7 +242,7 @@ pub(super) fn render_page_menu(
         let Some(label) = labels.get(layout.start + index) else {
             continue;
         };
-        let selected = menu.selected == row_index;
+        let selected = state.menu_hover && menu.selected == row_index;
         let base = if selected {
             style::overlay_selection()
         } else {
@@ -275,7 +271,7 @@ pub(super) fn render_page_menu(
             if index > 0 {
                 x += 1;
             }
-            let segment_style = style::template_status(*status);
+            let segment_style = style::template_status(*status).patch(base);
             paint_text(
                 frame,
                 Rect {
@@ -291,26 +287,23 @@ pub(super) fn render_page_menu(
     }
 }
 
-/// 顶部按钮：等宽半区、文案居中；禁用（最后一页）置灰。
-fn render_button(frame: &mut Frame<'_>, rect: Rect, label: &str, selected: bool, disabled: bool) {
+/// 边框按钮：文字覆盖在顶部边框上、贴右端；选中反显、禁用置灰。
+fn render_chip(frame: &mut Frame<'_>, rect: Rect, label: &str, selected: bool, disabled: bool) {
     let base = if selected {
         style::overlay_selection()
     } else {
-        style::overlay_panel()
+        style::accent()
     };
-    fill_row(frame, rect, base);
     let text_style = if disabled {
-        base.add_modifier(ratatui::style::Modifier::DIM)
+        base.add_modifier(Modifier::DIM)
     } else {
         base
     };
-    let width = label.width() as u16;
-    let x = rect.x + rect.width.saturating_sub(width) / 2;
-    paint_text(frame, Rect { x, ..rect }, label, text_style);
+    paint_text(frame, rect, label, text_style);
 }
 
 /// 整行底色：选中/悬停行铺满，保证反馈跨满行宽。
-fn fill_row(frame: &mut Frame<'_>, rect: Rect, row_style: ratatui::style::Style) {
+fn fill_row(frame: &mut Frame<'_>, rect: Rect, row_style: Style) {
     for y in rect.y..rect.y.saturating_add(rect.height) {
         for x in rect.x..rect.right() {
             if let Some(cell) = frame.buffer_mut().cell_mut((x, y)) {
@@ -323,7 +316,7 @@ fn fill_row(frame: &mut Frame<'_>, rect: Rect, row_style: ratatui::style::Style)
 }
 
 /// 行内文本绘制：超出右界整体丢弃。
-fn paint_text(frame: &mut Frame<'_>, rect: Rect, content: &str, cell_style: ratatui::style::Style) {
+fn paint_text(frame: &mut Frame<'_>, rect: Rect, content: &str, cell_style: Style) {
     let mut x = rect.x;
     for ch in content.chars() {
         let width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0) as u16;

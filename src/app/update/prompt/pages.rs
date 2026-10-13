@@ -41,10 +41,12 @@ pub fn move_page_menu_selection(state: &mut AppState, delta: isize) -> bool {
         return false;
     }
     let next = (menu.selected as isize + delta).clamp(0, len as isize - 1) as usize;
-    if next == menu.selected {
+    if next == menu.selected && state.menu_hover {
         return false;
     }
     menu.selected = next;
+    // 键盘移动同样显示高亮反馈。
+    state.menu_hover = true;
     true
 }
 
@@ -53,11 +55,13 @@ pub fn set_page_menu_selection(state: &mut AppState, index: usize) -> bool {
     let Some(Overlay::PageMenu(menu)) = state.overlay.as_mut() else {
         return false;
     };
-    if index >= menu.rows.len() || menu.selected == index {
+    if index >= menu.rows.len() {
         return false;
     }
+    let changed = menu.selected != index || !state.menu_hover;
     menu.selected = index;
-    true
+    state.menu_hover = true;
+    changed
 }
 
 /// 打开页码菜单：先结算当前页，再按内存最新正文生成逐页统计快照。
@@ -106,6 +110,8 @@ pub fn open_prompt_page_menu(state: &mut AppState, anchor: (u16, u16)) -> bool {
         rows,
         selected,
     }));
+    // 菜单锚定在点击处：指针位于容器内，初始显示反馈。
+    state.menu_hover = true;
     true
 }
 

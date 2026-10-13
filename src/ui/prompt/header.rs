@@ -111,7 +111,6 @@ pub fn render_header(
 pub fn header_rename_cursor(
     header: Rect,
     title: &str,
-    draft: bool,
     page: &PageHeaderData<'_>,
 ) -> Option<(u16, u16)> {
     let (input, cursor) = page.rename?;
@@ -120,12 +119,7 @@ pub fn header_rename_cursor(
     if area.width == 0 {
         return None;
     }
-    let badge = if draft {
-        format!("{} ", text::PROMPT_TEMP_BADGE)
-    } else {
-        String::new()
-    };
-    let visible = format!(" {title} {badge}");
+    let visible = format!(" {title} ");
     let max_prefix = usize::from(area.width).saturating_sub(4);
     let prefix = text::truncate_to_width(&visible, max_prefix);
     let x = area.x.saturating_add(prefix.width() as u16 + 2);
@@ -146,7 +140,6 @@ pub fn header_rename_cursor(
 pub fn header_page_control_at(
     header: Rect,
     title: &str,
-    draft: bool,
     page: &PageHeaderData<'_>,
     column: u16,
     row: u16,
@@ -170,29 +163,19 @@ pub fn header_page_control_at(
     if !area.contains((column, row).into()) {
         return None;
     }
-    let (name_start, name_width) = header_name_span(area, title, draft, Some(page.name))?;
+    let (name_start, name_width) = header_name_span(area, title, Some(page.name))?;
     (column >= name_start && column < name_start.saturating_add(name_width))
         .then_some(PageControl::Name)
 }
 
 /// 页名段的起点列与宽度：整段放得下或仅截断标题时可见；都放不下时为 None。
-fn header_name_span(
-    area: Rect,
-    title: &str,
-    draft: bool,
-    name: Option<&str>,
-) -> Option<(u16, u16)> {
+fn header_name_span(area: Rect, title: &str, name: Option<&str>) -> Option<(u16, u16)> {
     let name = name.filter(|name| !name.is_empty())?;
     let title_part = format!(" {title} ");
-    let badge = if draft {
-        format!("{} ", text::PROMPT_TEMP_BADGE)
-    } else {
-        String::new()
-    };
     let name_part = format!("· {name} ");
-    let full_width = (title_part.width() + badge.width() + name_part.width()) as u16;
+    let full_width = (title_part.width() + name_part.width()) as u16;
     if full_width <= area.width {
-        let start = area.x + (title_part.width() + badge.width()) as u16;
+        let start = area.x + title_part.width() as u16;
         return Some((start, name_part.width() as u16));
     }
     let name_width = name_part.width() as u16;
@@ -217,14 +200,10 @@ fn paint_header_title(
         return;
     }
     let title = title.unwrap_or("");
-    let badge = if draft {
-        format!("{} ", text::PROMPT_TEMP_BADGE)
-    } else {
-        String::new()
-    };
     let title_part = format!(" {title} ");
+    let title_style = header_title_style(draft);
     if let Some((input, cursor)) = page.and_then(|page| page.rename) {
-        paint_header_rename(buf, area, &title_part, &badge, input, cursor);
+        paint_header_rename(buf, area, &title_part, title_style, input, cursor);
         return;
     }
     let name_part = page
@@ -232,11 +211,11 @@ fn paint_header_title(
         .filter(|name| !name.is_empty())
         .map(|name| format!("· {name} "))
         .unwrap_or_default();
-    let full = format!("{title_part}{badge}{name_part}");
+    let full = format!("{title_part}{name_part}");
     let available = usize::from(area.width);
     if full.width() <= available {
-        paint_title_segments(buf, area.x, area.y, &title_part, &badge, &full);
-        let name_start = area.x + (title_part.width() + badge.width()) as u16;
+        buf.set_stringn(area.x, area.y, &title_part, title_part.width(), title_style);
+        let name_start = area.x + title_part.width() as u16;
         buf.set_stringn(
             name_start,
             area.y,
@@ -249,63 +228,40 @@ fn paint_header_title(
     let name_width = name_part.width();
     if name_width > 0 && name_width.saturating_add(2) <= available {
         let prefix_available = available - name_width;
-        // 截断优先作用于标题；`[tmp]` 徽标完整保留（放不下时整体省略）。
-        let title_room = prefix_available.saturating_sub(badge.width());
-        let (prefix, badge_shown) = if badge.is_empty() || title_room < 2 {
-            (text::truncate_to_width(&title_part, prefix_available), "")
-        } else {
-            (
-                format!(
-                    "{}{}",
-                    text::truncate_to_width(&title_part, title_room),
-                    badge
-                ),
-                badge.as_str(),
-            )
-        };
-        paint_title_segments(buf, area.x, area.y, &prefix, badge_shown, &prefix);
+        let prefix = text::truncate_to_width(&title_part, prefix_available);
+        buf.set_stringn(area.x, area.y, &prefix, prefix.width(), title_style);
         let name_start = area.x.saturating_add((available - name_width) as u16);
         buf.set_stringn(name_start, area.y, &name_part, name_width, style::muted());
         return;
     }
     // 页名也放不下：整体截断，不保留页名命中区。
     let label = text::truncate_to_width(&full, available);
-    paint_title_segments(buf, area.x, area.y, &label, "", &label);
+    buf.set_stringn(area.x, area.y, &label, label.width(), title_style);
 }
 
-/// 绘制标题段：标题 muted、`[tmp]` 徽标默认文字色；`badge` 为空时按普通标题绘制。
-fn paint_title_segments(buf: &mut Buffer, x: u16, y: u16, title: &str, badge: &str, full: &str) {
-    let title_width = title.width();
-    buf.set_stringn(x, y, title, title_width, style::muted());
-    if !badge.is_empty() {
-        let offset = full
-            .find(badge)
-            .map(|byte| full[..byte].width())
-            .unwrap_or(0);
-        buf.set_stringn(
-            x.saturating_add(offset as u16),
-            y,
-            badge,
-            badge.width(),
-            style::text(),
-        );
+/// 分割线行标题样式：临时提示词用未聚焦灰（显式前景，不被聚焦边框染色），
+/// 正式条目沿用弱化标题色。
+fn header_title_style(draft: bool) -> ratatui::style::Style {
+    if draft {
+        style::muted_on_border()
+    } else {
+        style::muted()
     }
 }
 
-/// 页重命名输入：`title` 与徽标按剩余宽度截断，页名段位置渲染单行输入视口。
+/// 页重命名输入：`title` 按剩余宽度截断，页名段位置渲染单行输入视口。
 fn paint_header_rename(
     buf: &mut Buffer,
     area: Rect,
     title_part: &str,
-    badge: &str,
+    title_style: ratatui::style::Style,
     input: &str,
     cursor: usize,
 ) {
-    let visible = format!("{title_part}{badge}");
     let max_prefix = usize::from(area.width).saturating_sub(4);
-    let prefix = text::truncate_to_width(&visible, max_prefix);
+    let prefix = text::truncate_to_width(title_part, max_prefix);
     let prefix_columns = prefix.width();
-    paint_title_segments(buf, area.x, area.y, &prefix, "", prefix.as_str());
+    buf.set_stringn(area.x, area.y, &prefix, prefix.width(), title_style);
     let x = area.x.saturating_add(prefix_columns as u16);
     let available = usize::from(area.right().saturating_sub(x));
     if available < 3 {
