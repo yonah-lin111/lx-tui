@@ -207,7 +207,9 @@
 - 整体删除附件功能：`PromptAttachment`/附件条 UI 与命中/`Prompt::{attachments,add_attachments,remove_attachment,set_document}`
   与不可用标记/撤销快照附件/`TempPrompt`、`PromptItem` 附件字段/`Effect` 附件参数/
   DB `workspace_prompt_attachment` 及加载写入引用查询/`layout.rs` 附件条几何全部删除。
-- DB v2 收敛为单表 `managed_asset`（本应用管理的截图登记）；`PromptRecord`/`body` 读写无附件参数。
+- DB 收敛为单表 `managed_asset`（本应用管理的截图登记）；`SCHEMA_VERSION = 3`，
+  新增 2→3 迁移折叠开发期 v2 的附件表（仅在旧表存在时搬迁资产登记并删表）；
+  `PromptRecord`/正文读写无附件参数。
 - 回收触发点：启动扫描与删除 prompt/文件夹；正文引用移除后的回收推迟到下一次触发。
 
 ### 记录偏差与风险（第二轮）

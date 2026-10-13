@@ -14,8 +14,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// 当前 Schema 版本（v2 增加本应用管理的截图资产登记）。
-const SCHEMA_VERSION: i64 = 2;
+/// 当前 Schema 版本：v2 增加本应用管理的截图资产登记；v3 折叠开发期 v2 的附件表。
+const SCHEMA_VERSION: i64 = 3;
 
 /// 首个版本的建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
 const SCHEMA_V1: &str = r#"
@@ -75,6 +75,17 @@ CREATE TABLE IF NOT EXISTS managed_asset (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+"#;
+
+/// v3 迁移：折叠开发期 v2 建过的附件表（附件功能已移除）。
+///
+/// 仅当旧表存在时执行：把资产登记搬进 `managed_asset` 后删除附件表。资产路径不丢，
+/// 引用关系在正文里，因此不会误删仍被引用的截图。
+const SCHEMA_V3_LEGACY: &str = r#"
+INSERT OR IGNORE INTO managed_asset (external_id, path, created_at, updated_at)
+SELECT external_id, path, created_at, updated_at FROM managed_attachment_asset;
+DROP TABLE IF EXISTS workspace_prompt_attachment;
+DROP TABLE IF EXISTS managed_attachment_asset;
 "#;
 
 /// 持久层错误；仅事件层记录日志，不直接面向用户。
@@ -207,7 +218,20 @@ impl Database {
         if version < 2 {
             let transaction = self.conn.transaction()?;
             transaction.execute_batch(SCHEMA_V2)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 2)?;
+            transaction.commit()?;
+        }
+        if version < 3 {
+            let legacy: i64 = self.conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'managed_attachment_asset'",
+                [],
+                |row| row.get(0),
+            )?;
+            let transaction = self.conn.transaction()?;
+            if legacy > 0 {
+                transaction.execute_batch(SCHEMA_V3_LEGACY)?;
+            }
+            transaction.pragma_update(None, "user_version", 3)?;
             transaction.commit()?;
         }
         Ok(())

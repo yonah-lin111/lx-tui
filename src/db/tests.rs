@@ -251,12 +251,12 @@ fn migrates_v1_database_adding_managed_asset_table() {
         )
         .expect("prompt row");
     }
-    let database = Database::open(&path).expect("v1 upgrades to v2");
+    let database = Database::open(&path).expect("v1 upgrades to latest");
     let version: i64 = database
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
     let count: i64 = database
         .conn
         .query_row(
@@ -276,7 +276,69 @@ fn migrates_v1_database_adding_managed_asset_table() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
-    assert_eq!(version, 2);
+    assert_eq!(version, 3);
+}
+
+/// 开发期 v2 建过附件表的库：升级后保留资产登记、删除附件表。
+#[test]
+fn migrates_development_v2_attachment_tables() {
+    let path = temp_db_path("v2-legacy");
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let conn = Connection::open(&path).expect("open");
+        conn.execute_batch(SCHEMA_V1).expect("v1 schema");
+        conn.execute_batch(SCHEMA_V2).expect("v2 schema");
+        conn.execute_batch(
+            "CREATE TABLE managed_attachment_asset (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 external_id TEXT NOT NULL UNIQUE,
+                 path TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );
+             CREATE TABLE workspace_prompt_attachment (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 external_id TEXT NOT NULL UNIQUE,
+                 prompt_id TEXT NOT NULL,
+                 managed_asset_id TEXT,
+                 external_path TEXT,
+                 position INTEGER NOT NULL,
+                 \"type\" TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 updated_at TEXT NOT NULL
+             );",
+        )
+        .expect("legacy attachment tables");
+        conn.execute(
+            "INSERT INTO managed_attachment_asset (external_id, path, created_at, updated_at) \
+             VALUES ('0123456789abcdef0123456789abcdef', '/tmp/shot.png', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("legacy asset");
+        conn.execute_batch("PRAGMA user_version = 2;")
+            .expect("version");
+    }
+    let database = Database::open(&path).expect("v2 upgrades to v3");
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, 3);
+    let assets = database.list_managed_assets().expect("assets");
+    assert_eq!(assets.len(), 1, "资产登记搬到 managed_asset");
+    assert_eq!(assets[0].external_id, "0123456789abcdef0123456789abcdef");
+    for table in ["managed_attachment_asset", "workspace_prompt_attachment"] {
+        let count: i64 = database
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |row| row.get(0),
+            )
+            .expect("schema query");
+        assert_eq!(count, 0, "legacy table {table} dropped");
+    }
 }
 
 #[test]

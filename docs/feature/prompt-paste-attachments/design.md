@@ -160,7 +160,7 @@ Ctrl+V / 终端 Paste(text)
 
 ## 9. 存储格式、迁移和原子性
 
-数据库当前 `SCHEMA_VERSION = 1`。`workspace`、`workspace_folder`、`workspace_prompt` 均使用自增 `id INTEGER` 作内部行标识、`external_id TEXT NOT NULL UNIQUE` 作稳定跨表标识；`workspace_prompt.folder_id` 与 `workspace_id` 都是指向其他表 `external_id` 的 `TEXT` 外键。实施时将 v1 建表保留为历史步骤，新增**独立**的 v2 迁移，不能把 v2 表直接塞进 v1 后再声称完成升级。v2 表按同一约定定义为：
+数据库 `SCHEMA_VERSION = 3`。`workspace`、`workspace_folder`、`workspace_prompt` 均使用自增 `id INTEGER` 作内部行标识、`external_id TEXT NOT NULL UNIQUE` 作稳定跨表标识；`workspace_prompt.folder_id` 与 `workspace_id` 都是指向其他表 `external_id` 的 `TEXT` 外键。实施时将 v1 建表保留为历史步骤，新增**独立**的 v2 迁移，不能把 v2 表直接塞进 v1 后再声称完成升级。v2 表按同一约定定义为：
 
 ```sql
 CREATE TABLE managed_asset (
@@ -174,7 +174,7 @@ CREATE TABLE managed_asset (
 
 字段语义：`id` 是数据库内部持久行号；`external_id` 是安全随机资产标识（与文件名 stem 一致）用于稳定标识；`path` 唯一，指向管理目录下的实际文件；`created_at`/`updated_at` 沿用 `datetime('now')`。登记只表示“这是本应用可管理、可回收的资产”，不表示任何 prompt 正在引用它；引用关系只存在于正文。
 
-迁移顺序：读 `user_version`；0→1 建旧表、1→2 建 `managed_asset`；每步在 SQLite 事务中完成建表与版本推进。版本高于程序支持值时返回明确错误。外键启用状态须在打开连接时核验。
+迁移顺序：读 `user_version`；0→1 建旧表、1→2 建 `managed_asset`、2→3 折叠开发期 v2 建过的附件表（仅当旧表存在时把资产登记搬进 `managed_asset` 再删除附件表，附件功能已移除）；每步在 SQLite 事务中完成建表与版本推进。版本高于程序支持值时返回明确错误。外键启用状态须在打开连接时核验。
 
 `create_prompt`、`SaveDraft`、`SavePromptContent` 只写正文并在提交成功后更新内存“已保存”标志。效应须携带目标条目 ID 与编辑修订号；若旧保存结果晚于新修订，只确认其对应版本，不将新内容误标为已保存。数据库失败时保留待保存内容、重试能力和可见错误状态；不能沿用“先标记已保存，再忽略写入错误”的时序。临时草稿保存失败时，`TempPrompt` 仍在，保存选择器可重试。
 
