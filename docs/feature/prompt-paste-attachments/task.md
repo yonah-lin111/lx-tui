@@ -214,9 +214,9 @@
 
 ### 记录偏差与风险（第二轮）
 
-- 触发键为 `Ctrl/Cmd+Shift+V`（不带 Shift 的 Ctrl+V/Cmd+V 不再读取）：路由层同时接受 CONTROL/SUPER+SHIFT；能否到达应用取决于终端（kitty/WezTerm/Ghostty 会下发；Terminal.app/iTerm2 默认无 Cmd+Shift+V 绑定，通常可直接下发，被占用则在终端里改键）。额外回退：终端自身粘贴只承载位图时发出的空括号粘贴改走应用读取剪贴板。
+- 触发键：`Ctrl+V`（legacy 终端的 Ctrl+Shift+V 同码）与 `Cmd+Shift+V`（kitty 协议下报为大写 `V`、无 SHIFT 修饰位；按大写 V 视为已按 Shift）；`Cmd+V` 不触发。prompt 聚焦时被吞掉的按键记 debug 日志（`LX_TUI_LOG=debug`）便于核对终端编码。额外回退：终端自身粘贴只承载位图时发出的空括号粘贴改走应用读取剪贴板。
 
 - 取消回滚依赖“占位插入是撤销栈顶且面板打开期间不可编辑”的不变量；面板打开时按键被吞，鼠标点击外部即取消。
 - 截图登记后若用户在保存前清空引用，文件会留到下一次启动/删除触发回收。
 - `event/mod.rs` 仍超 1000 行（存量债务）；本轮新增代码在 `event/paste.rs`、`app/prompt/paste.rs`。
-- 人工验收：`Ctrl/Cmd+Shift+V` 截图写引用、路径占位 + 面板改写/取消回滚、引用一次 Backspace 删除、窄屏、重启恢复。
+- 人工验收：`Ctrl+V`/`Cmd+Shift+V` 截图写引用、路径占位 + 面板改写/取消回滚、引用一次 Backspace 删除、窄屏、重启恢复。

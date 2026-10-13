@@ -71,20 +71,38 @@ pub fn route(
         if save_chord {
             return Some(Routed::SavePrompt);
         }
-        let paste_chord = matches!(key.code, KeyCode::Char('v' | 'V'))
-            && key.modifiers.contains(KeyModifiers::SHIFT)
-            && (key.modifiers.contains(KeyModifiers::CONTROL)
-                || key.modifiers.contains(KeyModifiers::SUPER))
-            && !key.modifiers.contains(KeyModifiers::ALT);
-        if paste_chord {
+        if clipboard_paste_chord(key) {
             return Some(Routed::ClipboardPaste);
         }
-        return editor_command(key).map(Routed::Editor);
+        return match editor_command(key) {
+            Some(command) => Some(Routed::Editor(command)),
+            None => {
+                // 终端编码差异排查用：prompt 聚焦时被吞掉的按键（仅 debug 级）。
+                tracing::debug!(?key, "prompt key swallowed");
+                None
+            }
+        };
     }
     if pane_lx {
         return None;
     }
     encode::encode_key(key, mode).map(Routed::Pane)
+}
+
+/// 剪贴板读取键：`Ctrl+V`（含 `Shift`）或 `Cmd+Shift+V`。
+///
+/// kitty 键盘协议在“Shift 改变字符”时**不**在修饰位里报 `SHIFT`（`Cmd+Shift+V` 送达为
+/// `Char('V')` + `SUPER`），因此大写 `V` 视为已按 Shift。legacy 终端把 `Ctrl+Shift+V`
+/// 与 `Ctrl+V` 编成同一字节（`0x16`），两者都接受。`Alt` 组合不触发。
+fn clipboard_paste_chord(key: KeyEvent) -> bool {
+    if !matches!(key.code, KeyCode::Char('v' | 'V')) || key.modifiers.contains(KeyModifiers::ALT) {
+        return false;
+    }
+    let shifted = key.modifiers.contains(KeyModifiers::SHIFT) || key.code == KeyCode::Char('V');
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        return true;
+    }
+    key.modifiers.contains(KeyModifiers::SUPER) && shifted
 }
 
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。

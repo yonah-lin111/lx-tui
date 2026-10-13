@@ -105,39 +105,52 @@ fn prompt_focus_maps_editing_keys() {
 fn prompt_focus_maps_clipboard_paste_keys() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
-    for modifiers in [
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT,
-        KeyModifiers::SUPER | KeyModifiers::SHIFT,
-    ] {
-        assert_eq!(
-            route_prompt(KeyCode::Char('v'), modifiers),
-            Some(Routed::ClipboardPaste),
-            "{modifiers:?}"
-        );
-    }
+    // Ctrl+V 与 legacy 终端的 Ctrl+Shift+V 同码，两者都触发。
     assert_eq!(
-        route_prompt(
-            KeyCode::Char('V'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT
-        ),
-        Some(Routed::ClipboardPaste),
-        "大写 V 同样读取剪贴板"
+        route_prompt(KeyCode::Char('v'), KeyModifiers::CONTROL),
+        Some(Routed::ClipboardPaste)
     );
-    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
-        assert_eq!(
-            route_prompt(KeyCode::Char('v'), modifiers),
-            None,
-            "不带 Shift 的 {modifiers:?}+V 不再读取剪贴板"
-        );
-    }
     assert_eq!(
         route_prompt(
             KeyCode::Char('v'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT
         ),
-        None,
-        "带 Alt 不读取剪贴板"
+        Some(Routed::ClipboardPaste)
     );
+    // kitty 协议下 Shift 改变字符：大写 V 不再带 SHIFT 修饰位。
+    assert_eq!(
+        route_prompt(KeyCode::Char('V'), KeyModifiers::CONTROL),
+        Some(Routed::ClipboardPaste),
+        "Ctrl+Shift+V（报为大写 V）读取剪贴板"
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Char('V'), KeyModifiers::SUPER),
+        Some(Routed::ClipboardPaste),
+        "Cmd+Shift+V（报为大写 V）读取剪贴板"
+    );
+    assert_eq!(
+        route_prompt(
+            KeyCode::Char('v'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT
+        ),
+        Some(Routed::ClipboardPaste),
+        "Cmd+Shift+V（显式 SHIFT）读取剪贴板"
+    );
+    assert_eq!(
+        route_prompt(KeyCode::Char('v'), KeyModifiers::SUPER),
+        None,
+        "不带 Shift 的 Cmd+V 不读取剪贴板"
+    );
+    for modifiers in [
+        KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
+        KeyModifiers::SUPER | KeyModifiers::SHIFT | KeyModifiers::ALT,
+    ] {
+        assert_eq!(
+            route_prompt(KeyCode::Char('v'), modifiers),
+            None,
+            "带 Alt 不读取剪贴板：{modifiers:?}"
+        );
+    }
     assert!(
         matches!(
             route(

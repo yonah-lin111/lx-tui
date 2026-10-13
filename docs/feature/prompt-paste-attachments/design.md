@@ -66,7 +66,7 @@
 
 ### 5.1 剪贴板入口
 
-剪贴板读取由 `Ctrl/Cmd+Shift+V` 触发（不带 `Shift` 的 `Ctrl+V`/`Cmd+V` 不再读取，避免与终端自身粘贴/readline 冲突），不设工具栏按钮；终端把该键用作自身粘贴时不产生按键事件，此时退回终端括号粘贴文本，不构成回退风险。若终端把 `Cmd+V` 处理成“自身粘贴”但剪贴板只有位图，会送来**空括号粘贴**：这种情况改由应用读取系统剪贴板（见 §14.1.3）。读取由事件层异步执行。若为位图，创建 managed 截图后**直接把 `@[refer-image](path)` 写入正文**，不打开面板；若为文件列表/路径文本，逐项校验存在性，保留顺序并去重后进入占位插入 + 提案；若为普通文本，走现有 `InsertText` 路径。`TerminalEvent::Paste(text)` 仍负责终端发来的括号粘贴；对明确且全部有效的路径文本也可进入同一提案流程，其他文本原样插入。读取来源不可用、格式错误或读超时时显示 toast，不能静默吞掉用户的内容。
+剪贴板读取由 `Ctrl+V`（legacy 终端的 `Ctrl+Shift+V` 与它同码，二者都触发）或 `Cmd+Shift+V` 触发，不设工具栏按钮；终端把该键用作自身粘贴时不产生按键事件，此时退回终端括号粘贴文本，不构成回退风险。若终端把 `Cmd+V` 处理成“自身粘贴”但剪贴板只有位图，会送来**空括号粘贴**：这种情况改由应用读取系统剪贴板（见 §14.1.3）。读取由事件层异步执行。若为位图，创建 managed 截图后**直接把 `@[refer-image](path)` 写入正文**，不打开面板；若为文件列表/路径文本，逐项校验存在性，保留顺序并去重后进入占位插入 + 提案；若为普通文本，走现有 `InsertText` 路径。`TerminalEvent::Paste(text)` 仍负责终端发来的括号粘贴；对明确且全部有效的路径文本也可进入同一提案流程，其他文本原样插入。读取来源不可用、格式错误或读超时时显示 toast，不能静默吞掉用户的内容。
 
 路径文本须先整体解析：支持单行和逐行 `file://` URI/绝对路径，逐项 URI 解码；任何一项不是存在的本机路径时，整段按普通文本处理，不做部分转换。不得仅因首字符为 `/` 或含图片扩展名就弹出面板。保持路径中的空格和非 ASCII 字符；引用标记中的 `)` 等分隔符必须按本项目 Markdown 引用语法处理，不能生成截断或歧义文本。若当前语法无法无损表达某路径，应禁用引用选项并明确提示，保留路径选项。
 
@@ -238,8 +238,9 @@ CREATE TABLE managed_asset (
 
 1. **移除 prompt 顶栏粘贴按钮**：`PromptToolbarButton::Paste`、对应几何/工具提示/文案与事件分支全部删除；工具栏恢复 Mode/Pin/Undo/Redo/Select All/保存点，钉住按钮最小宽度随之从 25 列回到 21 列。
 2. **移除粘帖面板的 “Upload as attachment”**：`PasteAction` 只保留 `Reference`/`Path`，面板两行；目录仍可引用为 `@[refer-folder](...)`，只有路径无法无损表达（含换行/NUL）时才禁用引用。
-3. **`Ctrl/Cmd+Shift+V` 直接粘贴剪贴板图片**：位图必须由应用自读系统剪贴板（终端括号粘贴只承载文本），入口键为 `Ctrl/Cmd+Shift+V`（不带 `Shift` 的 `Ctrl+V`/`Cmd+V` 不触发，`Alt` 组合不触发）；仅在 prompt 聚焦且编辑视图生效，树视图吞掉按键。
-   - `Cmd+Shift+V`（Super+Shift+V）在路由层同样接受（`input::route` 同时匹配 CONTROL/SUPER + SHIFT）；能否生效取决于终端是否把该键下发给应用：支持 kitty 键盘协议的终端（kitty/WezTerm/Ghostty 等，本项目已 push `DISAMBIGUATE_ESCAPE_CODES`）会下发 Super+Shift+V；Terminal.app 与 iTerm2 默认没有 `Cmd+Shift+V` 绑定，通常可以直接下发（若被占用则在终端里改键或映射为发送 `0x16`）。
+3. **`Ctrl+V` / `Cmd+Shift+V` 直接粘贴剪贴板图片**：位图必须由应用自读系统剪贴板（终端括号粘贴只承载文本）；`Alt` 组合不触发，`Cmd+V`（无 `Shift`）不触发；仅在 prompt 聚焦且编辑视图生效，树视图吞掉按键。
+   - 修饰位判定：kitty 键盘协议在“Shift 改变字符”时**不**在修饰位里报 `SHIFT`（`Cmd+Shift+V` 送达为 `Char('V')` + `SUPER`），因此大写 `V` 视为已按 Shift；legacy 终端把 `Ctrl+Shift+V` 与 `Ctrl+V` 编成同一字节（`0x16`），两者都触发。`Cmd+V`（无 Shift）不触发。
+   - 能否生效取决于终端是否把该键下发给应用：支持 kitty 键盘协议的终端（kitty/WezTerm/Ghostty 等，本项目已 push `DISAMBIGUATE_ESCAPE_CODES`）会下发 `Super`；Terminal.app 与 iTerm2 默认没有 `Cmd+Shift+V` 绑定，通常可直接下发（若被占用则在终端里改键或映射为发送 `0x16`）。
    - 回退：终端把 `Cmd+V`/`Ctrl+V` 当作自身粘贴但只承载位图时会发出**空括号粘贴**，此时应用改为自读系统剪贴板，使截图粘贴在这些终端上仍可用；不支持（完全不发事件）时不触发。
    - 已知限制：Windows Terminal / VS Code 终端默认把 `Ctrl+V` 用作自身粘贴（`Ctrl+Shift+V` 一般可下发）；SSH 会话读到的是远端剪贴板。
 4. **正文引用的快捷删除**：新增 `markdown::reference_deletion_range`，与 `mention_deletion_range` 同构——光标紧跟 `@[refer-*](path) ` 尾随空白时一次 Backspace 删除整段标记（含尾随空白），单步可撤销；围栏内标记不参与。
