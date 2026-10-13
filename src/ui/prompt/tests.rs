@@ -120,12 +120,12 @@ fn wrapped_continuation_row_keeps_line_token_offsets() {
     assert_eq!(buf[(0, 1)].symbol(), "o");
     assert_eq!(
         buf[(0, 1)].fg,
-        Color::LightCyan,
+        Color::Indexed(208),
         "引用整段着 refer-folder 色"
     );
     assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
     assert_eq!(buf[(7, 1)].symbol(), "/");
-    assert_eq!(buf[(7, 1)].fg, Color::LightCyan, "路径与标记同色");
+    assert_eq!(buf[(7, 1)].fg, Color::Indexed(208), "路径与标记同色");
 }
 
 #[test]

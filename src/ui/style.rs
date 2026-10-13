@@ -219,10 +219,13 @@ pub fn markdown_refer_file() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@[refer-folder](path)` 目录引用：LightCyan 下划线。
+/// `@[refer-folder](path)` 目录引用：橙（Indexed 208）下划线。
+///
+/// 固定 256 色橙：与 file 亮绿、image 亮品红、`@` 提及黄都能一眼分开，
+/// 且不占用主题蓝/青（边框、URL、link 已用）。
 pub fn markdown_refer_folder() -> Style {
     Style::default()
-        .fg(Color::LightCyan)
+        .fg(Color::Indexed(208))
         .add_modifier(Modifier::UNDERLINED)
 }
 

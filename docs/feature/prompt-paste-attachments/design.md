@@ -198,7 +198,7 @@
 
 编辑器顶栏沿用现有 Mode、Pin、Undo、Redo、Select All 和保存状态点的位置规则，不设粘贴按钮。
 
-正文里的 `@[refer-*](path)` 引用有独立高亮（整段一个 token，路径不再按行内语法二次解析）：`refer-file` 亮绿下划线、`refer-folder` 亮青下划线、`refer-image` 亮品红下划线，与 `@` 提及的黄色下划线互不混淆（见 `ui/style.rs`）。
+正文里的 `@[refer-*](path)` 引用有独立高亮（整段一个 token，路径不再按行内语法二次解析）：`refer-file` 亮绿下划线、`refer-folder` 橙（Indexed 208）下划线、`refer-image` 亮品红下划线，与 `@` 提及的黄色下划线互不混淆（见 `ui/style.rs`）。
 
 粘贴二级面板与字母候选面板使用既有命令面板视觉 Token：固定行高、单一选中高亮、同一滚动/鼠标命中逻辑。粘贴面板仅两项（引用/路径），不嵌套第三层。字母候选行左侧保留名称，右端独立 tag 列；tag 过长时裁剪名称，极窄屏时隐藏 tag 而保留行命中和键盘导航。面板超出 prompt 内容区下边界时向上展开；滚动或缩放后重新测量，不能留下旧坐标热点。面板与正文点击按“浮层 > 工具栏 > 正文”的顺序命中。
 
@@ -234,4 +234,4 @@
 
 1. **shell 转义路径回落**：`platform::resolve_pasted_path` 先按原文判定存在性，原文不存在且含反斜杠时去掉转义再判定（`platform/paste_path.rs::unescape_backslashes`）。修掉的 bug：粘贴 `/Users/yonah/Desktop/ai_agent_api\(1\).md` 时原文不是文件 → 回退普通文本，随后紧跟的 `Enter` 又把它当触发词换成了别的候选原文。
 2. **粘贴不重启补全面板**：`update::apply_pasted_text` = `InsertText` + `Prompt::suppress_completion_panels`（清块/斜杠/快捷/提及面板并压制到下一次编辑或移动）。粘贴不是“正在输入”，任何 `@` 提及、字母快捷、斜杠或块面板都不得由粘贴文本触发后吃掉紧跟的 `Enter`。
-3. **引用独立高亮**：`ui/markdown.rs` 新增 `TokenKind::{ReferFile,ReferFolder,ReferImage}`（优先于 `@` 提及扫描，整段 `@[refer-*](path)` 一个 token），`ui/style.rs` 给出三个互不相同、且都不同于 `@` 提及（黄下划线）的样式：亮绿 / 亮青 / 亮品红下划线。
+3. **引用独立高亮**：`ui/markdown.rs` 新增 `TokenKind::{ReferFile,ReferFolder,ReferImage}`（优先于 `@` 提及扫描，整段 `@[refer-*](path)` 一个 token），`ui/style.rs` 给出三个互不相同、且都不同于 `@` 提及（黄下划线）的样式：亮绿 / 橙（Indexed 208，避开主题蓝青）/ 亮品红下划线。

@@ -246,7 +246,8 @@
 - **粘贴不 arm 补全面板**：`update::apply_pasted_text`（= `InsertText` + `Prompt::suppress_completion_panels`）；
   命令行 `Enter` 不再把刚粘贴文本的尾部当触发词替换掉。
 - **引用独立高亮**：`TokenKind::{ReferFile,ReferFolder,ReferImage}` + `ui/style.rs` 三个新样式
-  （亮绿/亮青/亮品红下划线），整段引用一个 token，与 `@` 提及（黄下划线）区分。
+  （亮绿/橙 Indexed 208/亮品红下划线），整段引用一个 token，与 `@` 提及（黄下划线）区分
+  且不占用主题蓝青。
 - 测试：`resolve_pasted_path_prefers_literal_then_unescapes_shell_escapes`、
   `terminal_paste_shell_escaped_path_builds_proposal_from_real_file`、
   `terminal_paste_plain_text_does_not_arm_completion_panel`（已确认在无修复时失败）、
