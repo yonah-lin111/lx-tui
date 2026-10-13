@@ -215,7 +215,7 @@ fn database_dir_follows_environment_flag() {
     assert_eq!(database_path(false).expect("prod path"), prod.join("lx.db"));
 }
 
-// ===== v2：managed 截图资产登记 =====
+// ===== 迁移与 Schema =====
 
 #[test]
 fn foreign_keys_are_enabled_on_connection() {
@@ -228,14 +228,14 @@ fn foreign_keys_are_enabled_on_connection() {
 }
 
 #[test]
-fn migrates_v1_database_adding_managed_asset_table() {
+fn migrates_v1_database_to_current_schema() {
     let path = temp_db_path("v1-upgrade");
     let workspace = workspace_path("v1-upgrade");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
     {
         let conn = Connection::open(&path).expect("open");
         conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
-        conn.execute_batch(SCHEMA_V1).expect("v1 schema");
+        conn.execute_batch(SCHEMA).expect("v1 schema");
         conn.execute_batch("PRAGMA user_version = 1;")
             .expect("version");
         conn.execute(
@@ -252,42 +252,26 @@ fn migrates_v1_database_adding_managed_asset_table() {
         .expect("prompt row");
     }
     let database = Database::open(&path).expect("v1 upgrades to latest");
-    let version: i64 = database
-        .conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .expect("version");
-    assert_eq!(version, 3);
-    let count: i64 = database
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'managed_asset'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("schema query");
-    assert_eq!(count, 1, "managed_asset table exists");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
     let prompts = database.list_prompts(&workspace).expect("list");
     assert_eq!(prompts.len(), 1);
     assert_eq!(prompts[0].content, "legacy body", "旧正文不改写");
+    assert_no_asset_tables(&database);
     drop(database);
     // 再次打开不重复迁移。
     let reopened = Database::open(&path).expect("reopen ok");
-    let version: i64 = reopened
-        .conn
-        .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .expect("version");
-    assert_eq!(version, 3);
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
 }
 
-/// 开发期 v2 建过附件表的库：升级后保留资产登记、删除附件表。
+/// 开发期 v2 的库（遗留附件表）：打开后数据保留，遗留表不再被读写。
 #[test]
-fn migrates_development_v2_attachment_tables() {
+fn migrates_development_v2_database_keeping_data() {
     let path = temp_db_path("v2-legacy");
+    let workspace = workspace_path("v2-legacy");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
     {
         let conn = Connection::open(&path).expect("open");
-        conn.execute_batch(SCHEMA_V1).expect("v1 schema");
-        // 真实的开发期 v2 只有旧附件表，没有 managed_asset。
+        conn.execute_batch(SCHEMA).expect("v1 schema");
         conn.execute_batch(
             "CREATE TABLE managed_attachment_asset (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -311,24 +295,42 @@ fn migrates_development_v2_attachment_tables() {
         )
         .expect("legacy attachment tables");
         conn.execute(
-            "INSERT INTO managed_attachment_asset (external_id, path, created_at, updated_at) \
-             VALUES ('0123456789abcdef0123456789abcdef', '/tmp/shot.png', datetime('now'), datetime('now'))",
+            "INSERT INTO workspace (external_id, name, \"type\", path, is_trusted, created_at, updated_at) \
+             VALUES ('ws-2', 'w', 'filesystem', ?1, 1, datetime('now'), datetime('now'))",
+            params![path_string(&workspace)],
+        )
+        .expect("workspace row");
+        conn.execute(
+            "INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at) \
+             VALUES ('p-2', 'ws-2', NULL, 'old', 'v2 body', 'todo', datetime('now'), datetime('now'))",
             [],
         )
-        .expect("legacy asset");
+        .expect("prompt row");
         conn.execute_batch("PRAGMA user_version = 2;")
             .expect("version");
     }
-    let database = Database::open(&path).expect("v2 upgrades to v3");
-    let version: i64 = database
+    let database = Database::open(&path).expect("v2 upgrades to current");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].content, "v2 body", "旧正文不改写");
+}
+
+/// 当前 Schema 的版本号。
+fn schema_version(database: &Database) -> i64 {
+    database
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
-        .expect("version");
-    assert_eq!(version, 3);
-    let assets = database.list_managed_assets().expect("assets");
-    assert_eq!(assets.len(), 1, "资产登记搬到 managed_asset");
-    assert_eq!(assets[0].external_id, "0123456789abcdef0123456789abcdef");
-    for table in ["managed_attachment_asset", "workspace_prompt_attachment"] {
+        .expect("version")
+}
+
+/// 资产/附件表不存在：截图粘贴功能的表已从 Schema 移除。
+fn assert_no_asset_tables(database: &Database) {
+    for table in [
+        "managed_asset",
+        "managed_attachment_asset",
+        "workspace_prompt_attachment",
+    ] {
         let count: i64 = database
             .conn
             .query_row(
@@ -337,7 +339,7 @@ fn migrates_development_v2_attachment_tables() {
                 |row| row.get(0),
             )
             .expect("schema query");
-        assert_eq!(count, 0, "legacy table {table} dropped");
+        assert_eq!(count, 0, "{table} table removed");
     }
 }
 
@@ -390,21 +392,4 @@ fn deleting_folder_cascades_prompts() {
         })
         .expect("count");
     assert_eq!(count, 0, "级联删除条目");
-}
-
-#[test]
-fn managed_assets_register_list_and_delete() {
-    let (database, _) = open_test_database("managed-asset");
-    let asset_path = PathBuf::from("/tmp/lx-tui-assets/0123456789abcdef0123456789abcdef.png");
-    database
-        .register_managed_asset("0123456789abcdef0123456789abcdef", &asset_path)
-        .expect("register");
-    let assets = database.list_managed_assets().expect("assets");
-    assert_eq!(assets.len(), 1);
-    assert_eq!(assets[0].external_id, "0123456789abcdef0123456789abcdef");
-    assert_eq!(assets[0].path, asset_path);
-    database
-        .delete_managed_asset("0123456789abcdef0123456789abcdef")
-        .expect("delete");
-    assert!(database.list_managed_assets().expect("assets").is_empty());
 }

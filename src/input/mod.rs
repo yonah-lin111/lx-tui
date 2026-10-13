@@ -24,8 +24,6 @@ pub enum Routed {
     SavePrompt,
     /// 复制光标所在模板块正文到系统剪贴板。
     CopyTemplateBlock,
-    /// 读取系统剪贴板：位图写入 `@[refer-image]` 引用，路径/文本进入既有粘贴通路。
-    ClipboardPaste,
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
 }
@@ -34,8 +32,7 @@ pub enum Routed {
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
-/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文、`Ctrl/Cmd+Shift+V` 由应用读取系统剪贴板
-/// （终端只送文本，图片必须自读），未映射的按键被吞掉，绝不写入 PTY；
+/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文，未映射的按键被吞掉，绝不写入 PTY；
 /// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,
@@ -71,9 +68,6 @@ pub fn route(
         if save_chord {
             return Some(Routed::SavePrompt);
         }
-        if clipboard_paste_chord(key) {
-            return Some(Routed::ClipboardPaste);
-        }
         return match editor_command(key) {
             Some(command) => Some(Routed::Editor(command)),
             None => {
@@ -87,22 +81,6 @@ pub fn route(
         return None;
     }
     encode::encode_key(key, mode).map(Routed::Pane)
-}
-
-/// 剪贴板读取键：`Ctrl+V`（含 `Shift`）或 `Cmd+Shift+V`。
-///
-/// kitty 键盘协议在“Shift 改变字符”时**不**在修饰位里报 `SHIFT`（`Cmd+Shift+V` 送达为
-/// `Char('V')` + `SUPER`），因此大写 `V` 视为已按 Shift。legacy 终端把 `Ctrl+Shift+V`
-/// 与 `Ctrl+V` 编成同一字节（`0x16`），两者都接受。`Alt` 组合不触发。
-fn clipboard_paste_chord(key: KeyEvent) -> bool {
-    if !matches!(key.code, KeyCode::Char('v' | 'V')) || key.modifiers.contains(KeyModifiers::ALT) {
-        return false;
-    }
-    let shifted = key.modifiers.contains(KeyModifiers::SHIFT) || key.code == KeyCode::Char('V');
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        return true;
-    }
-    key.modifiers.contains(KeyModifiers::SUPER) && shifted
 }
 
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。

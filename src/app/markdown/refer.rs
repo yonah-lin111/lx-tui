@@ -163,14 +163,5 @@ fn find_closing_paren(text: &str, body_start: usize, limit: usize) -> Option<usi
     None
 }
 
-/// 文本中的图片引用路径（用于 managed 资产引用统计）。
-pub fn image_reference_paths(text: &str) -> Vec<String> {
-    parse_references(text)
-        .into_iter()
-        .filter(|reference| reference.kind == ReferKind::Image)
-        .map(|reference| reference.path)
-        .collect()
-}
-
 #[cfg(test)]
 mod tests;

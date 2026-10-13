@@ -14,11 +14,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// 当前 Schema 版本：v2 增加本应用管理的截图资产登记；v3 折叠开发期 v2 的附件表。
+/// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
 const SCHEMA_VERSION: i64 = 3;
 
-/// 首个版本的建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
-const SCHEMA_V1: &str = r#"
+/// 建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
+const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS workspace (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT NOT NULL UNIQUE,
@@ -61,40 +61,6 @@ CREATE TABLE IF NOT EXISTS workspace_prompt (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_workspace_id ON workspace_prompt(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(folder_id);
-"#;
-
-/// v2 迁移：本应用管理的截图资产登记表。
-///
-/// 约定与 v1 一致：内部 `id INTEGER`、对外 `external_id TEXT UNIQUE`。登记只表示
-/// “文件由本应用创建、可被回收”，引用关系记在 prompt 正文的 `@[refer-image]` 中。
-const SCHEMA_V2: &str = r#"
-CREATE TABLE IF NOT EXISTS managed_asset (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    path TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-"#;
-
-/// v3 迁移：折叠开发期 v2 建过的附件表（附件功能已移除）。
-///
-/// 开发期 v2 的库只有旧附件表、没有 `managed_asset`，因此这里必须先建新表再搬迁登记，
-/// 否则迁移在旧库上直接失败（数据库不可用 → 截图粘贴无法登记）。仅当旧表存在时执行；
-/// 资产路径不丢，引用关系在正文里，不会误删仍被引用的截图。
-const SCHEMA_V3_LEGACY: &str = r#"
-CREATE TABLE IF NOT EXISTS managed_asset (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    path TEXT NOT NULL UNIQUE,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-INSERT OR IGNORE INTO managed_asset (external_id, path, created_at, updated_at)
-SELECT external_id, path, created_at, updated_at FROM managed_attachment_asset;
-DROP TABLE IF EXISTS workspace_prompt_attachment;
-DROP TABLE IF EXISTS managed_attachment_asset;
 "#;
 
 /// 持久层错误；仅事件层记录日志，不直接面向用户。
@@ -160,13 +126,6 @@ pub struct FolderRecord {
     pub name: String,
 }
 
-/// 应用管理的截图资产登记记录。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManagedAssetRecord {
-    pub external_id: String,
-    pub path: PathBuf,
-}
-
 /// 提示词记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptRecord {
@@ -207,10 +166,10 @@ impl Database {
         Self::open(&database_path(is_dev_environment())?)
     }
 
-    /// 逐版本迁移到当前 Schema；每步在建表与版本推进的同一事务中完成，幂等。
+    /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
-    /// v1 建表保留为历史步骤；v2 在此基础上新增附件表与资产登记表，
-    /// 旧 v1 数据不改正文、附件为空。版本高于程序支持值时返回错误。
+    /// 开发期的资产/附件表已随截图粘贴功能移除，老库中遗留的这些表不再被读写；
+    /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。
     fn migrate(&mut self) -> Result<()> {
         let version: i64 = self
             .conn
@@ -218,31 +177,10 @@ impl Database {
         if version > SCHEMA_VERSION {
             return Err(DbError::UnsupportedSchema(version));
         }
-        if version < 1 {
+        if version < SCHEMA_VERSION {
             let transaction = self.conn.transaction()?;
-            transaction.execute_batch(SCHEMA_V1)?;
-            transaction.pragma_update(None, "user_version", 1)?;
-            transaction.commit()?;
-        }
-        if version < 2 {
-            let transaction = self.conn.transaction()?;
-            transaction.execute_batch(SCHEMA_V2)?;
-            transaction.pragma_update(None, "user_version", 2)?;
-            transaction.commit()?;
-        }
-        if version < 3 {
-            let legacy: i64 = self.conn.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'managed_attachment_asset'",
-                [],
-                |row| row.get(0),
-            )?;
-            let transaction = self.conn.transaction()?;
-            if legacy > 0 {
-                transaction.execute_batch(SCHEMA_V3_LEGACY)?;
-            } else {
-                transaction.execute_batch(SCHEMA_V2)?;
-            }
-            transaction.pragma_update(None, "user_version", 3)?;
+            transaction.execute_batch(SCHEMA)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
         Ok(())
@@ -485,48 +423,6 @@ impl Database {
         self.conn
             .execute("DELETE FROM workspace_prompt WHERE id = ?1", params![id])?;
         Ok(())
-    }
-
-    /// 登记应用管理的截图资产；`external_id` 与文件名 stem 一致。
-    pub fn register_managed_asset(&self, external_id: &str, path: &Path) -> Result<()> {
-        self.conn.execute(
-            r#"INSERT INTO managed_asset (external_id, path, created_at, updated_at)
-               VALUES (?1, ?2, datetime('now'), datetime('now'))"#,
-            params![external_id, path_string(path)],
-        )?;
-        Ok(())
-    }
-
-    /// 全部 managed 资产登记（用于垃圾回收）。
-    pub fn list_managed_assets(&self) -> Result<Vec<ManagedAssetRecord>> {
-        let mut statement = self
-            .conn
-            .prepare("SELECT external_id, path FROM managed_asset ORDER BY id")?;
-        let rows = statement.query_map([], |row| {
-            Ok(ManagedAssetRecord {
-                external_id: row.get(0)?,
-                path: PathBuf::from(row.get::<_, String>(1)?),
-            })
-        })?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(DbError::from)
-    }
-
-    /// 删除 managed 资产登记（文件清理由调用方在引用检查后进行）。
-    pub fn delete_managed_asset(&self, external_id: &str) -> Result<()> {
-        self.conn.execute(
-            "DELETE FROM managed_asset WHERE external_id = ?1",
-            params![external_id],
-        )?;
-        Ok(())
-    }
-
-    /// 全部已保存提示词正文（managed 截图引用扫描用）。
-    pub fn all_prompt_contents(&self) -> Result<Vec<String>> {
-        let mut statement = self.conn.prepare("SELECT content FROM workspace_prompt")?;
-        let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(DbError::from)
     }
 }
 

@@ -126,8 +126,6 @@ pub struct AppState {
     pub settings_available: bool,
     /// 设置按钮点击请求：事件层取走后打开浏览器。
     pub settings_open_requested: bool,
-    /// `Ctrl/Cmd+Shift+V` 读取请求：事件层取走后异步读取系统剪贴板。
-    pub clipboard_read_requested: bool,
 }
 
 /// 工作区。
@@ -479,7 +477,6 @@ impl AppState {
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,
-            clipboard_read_requested: false,
         }
     }
 

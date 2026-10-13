@@ -81,12 +81,6 @@ fn parse_references_in_scopes_range() {
 }
 
 #[test]
-fn image_reference_paths_filters_by_kind() {
-    let text = "@[refer-file](/a.txt) @[refer-image](/b.png) @[refer-image](/c\\).png)";
-    assert_eq!(image_reference_paths(text), vec!["/b.png", "/c).png"]);
-}
-
-#[test]
 fn decode_unknown_escape_keeps_literal_backslash() {
     assert_eq!(decode_path("C:\\Users\\x"), "C:\\Users\\x");
 }

@@ -102,68 +102,35 @@ fn prompt_focus_maps_editing_keys() {
 }
 
 #[test]
-fn prompt_focus_maps_clipboard_paste_keys() {
+fn prompt_focus_swallows_clipboard_paste_keys() {
     let route_prompt =
         |code, modifiers| route(KeyEvent::new(code, modifiers), TermMode::empty(), true);
-    // Ctrl+V 与 legacy 终端的 Ctrl+Shift+V 同码，两者都触发。
-    assert_eq!(
-        route_prompt(KeyCode::Char('v'), KeyModifiers::CONTROL),
-        Some(Routed::ClipboardPaste)
-    );
-    assert_eq!(
-        route_prompt(
-            KeyCode::Char('v'),
-            KeyModifiers::CONTROL | KeyModifiers::SHIFT
+    // 图片/文件一律走路径引用，应用不再读取系统剪贴板：粘贴键在 prompt 内被吞掉。
+    for (code, modifiers) in [
+        (KeyCode::Char('v'), KeyModifiers::CONTROL),
+        (KeyCode::Char('V'), KeyModifiers::CONTROL),
+        (KeyCode::Char('v'), KeyModifiers::SUPER),
+        (
+            KeyCode::Char('V'),
+            KeyModifiers::SUPER | KeyModifiers::SHIFT,
         ),
-        Some(Routed::ClipboardPaste)
-    );
-    // kitty 协议下 Shift 改变字符：大写 V 不再带 SHIFT 修饰位。
-    assert_eq!(
-        route_prompt(KeyCode::Char('V'), KeyModifiers::CONTROL),
-        Some(Routed::ClipboardPaste),
-        "Ctrl+Shift+V（报为大写 V）读取剪贴板"
-    );
-    assert_eq!(
-        route_prompt(KeyCode::Char('V'), KeyModifiers::SUPER),
-        Some(Routed::ClipboardPaste),
-        "Cmd+Shift+V（报为大写 V）读取剪贴板"
-    );
-    assert_eq!(
-        route_prompt(
-            KeyCode::Char('v'),
-            KeyModifiers::SUPER | KeyModifiers::SHIFT
-        ),
-        Some(Routed::ClipboardPaste),
-        "Cmd+Shift+V（显式 SHIFT）读取剪贴板"
-    );
-    assert_eq!(
-        route_prompt(KeyCode::Char('v'), KeyModifiers::SUPER),
-        None,
-        "不带 Shift 的 Cmd+V 不读取剪贴板"
-    );
-    for modifiers in [
-        KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT,
-        KeyModifiers::SUPER | KeyModifiers::SHIFT | KeyModifiers::ALT,
     ] {
         assert_eq!(
-            route_prompt(KeyCode::Char('v'), modifiers),
+            route_prompt(code, modifiers),
             None,
-            "带 Alt 不读取剪贴板：{modifiers:?}"
+            "{code:?}+{modifiers:?} 在 prompt 中被吞掉"
         );
     }
     assert!(
         matches!(
             route(
-                KeyEvent::new(
-                    KeyCode::Char('v'),
-                    KeyModifiers::CONTROL | KeyModifiers::SHIFT
-                ),
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
                 TermMode::empty(),
                 false
             ),
             Some(Routed::Pane(_))
         ),
-        "prompt 未聚焦时 Ctrl+Shift+V 照常写入 PTY"
+        "prompt 未聚焦时 Ctrl+V 照常写入 PTY"
     );
 }
 

@@ -1,11 +1,10 @@
 //! prompt 粘贴提案：候选识别、占位插入与引用/路径二级面板的纯状态转换。
 //!
 //! 路径粘贴先写入纯路径占位文本，再由面板把占位文本改写成引用格式或保持原样；
-//! 取消（Esc/外部点击）回滚到粘贴前，不留下多余撤销步。位图不进面板，直接以
-//! `@[refer-image](path)` 引用插入。
+//! 取消（Esc/外部点击）回滚到粘贴前，不留下多余撤销步。
 
 use std::ops::Range;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::{EditKind, Prompt};
 use crate::app::markdown::ReferKind;
@@ -35,17 +34,6 @@ impl PasteCandidate {
         Self {
             path,
             kind,
-            reference_ok,
-        }
-    }
-
-    /// 本应用管理的截图候选（已登记资产，引用即插入其路径）。
-    pub fn staged_image(path: PathBuf) -> Self {
-        let reference_ok =
-            crate::app::markdown::format_reference(ReferKind::Image, &path).is_some();
-        Self {
-            path,
-            kind: PasteCandidateKind::Image,
             reference_ok,
         }
     }
@@ -207,12 +195,6 @@ impl PasteState {
         request
     }
 
-    /// 请求是否仍是在途目标（用于结果登记前的快速判定）。
-    pub fn request_matches(&self, request: u64) -> bool {
-        self.pending
-            .is_some_and(|pending| pending.request == request)
-    }
-
     /// 收束不进入面板的结果：请求在途且修订未变时清除在途状态并返回登记锚点。
     pub fn settle(&mut self, request: u64, revision: u64) -> Option<PasteAnchor> {
         let pending = self.pending?;
@@ -284,21 +266,6 @@ impl Prompt {
         self.paste.begin(self.revision, anchor)
     }
 
-    /// 结果仍在途且目标是当前编辑器时返回 true；登记 managed 资源前校验。
-    pub fn paste_request_matches(&self, request: u64) -> bool {
-        self.paste.request_matches(request)
-    }
-
-    /// 收束不进入面板的读取结果（直接插入的截图）：请求在途且修订未变时返回锚点。
-    pub fn paste_settle(&mut self, request: u64) -> Option<PasteAnchor> {
-        self.paste.settle(request, self.revision)
-    }
-
-    /// 丢弃在途请求（不触碰正文；普通文本回退用）；返回是否有在途状态。
-    pub fn paste_discard(&mut self) -> bool {
-        self.paste.close()
-    }
-
     /// 写入读取结果：请求与修订匹配时按登记的锚点先占位插入纯路径文本再打开面板。
     ///
     /// 占位插入与后续格式改写同属一步撤销；触碰受保护行时不写入也不打开面板。
@@ -351,20 +318,6 @@ impl Prompt {
         panel.active = panel.first_enabled();
         self.paste.open(panel);
         true
-    }
-
-    /// 在锚点直接插入引用（截图粘贴）；路径不可无损表达或触碰受保护行时返回 false。
-    pub fn insert_reference(&mut self, anchor: &PasteAnchor, kind: ReferKind, path: &Path) -> bool {
-        let Some(reference) = crate::app::markdown::format_reference(kind, path) else {
-            return false;
-        };
-        let (start, end) = anchor.range();
-        let end = end.min(self.text.len());
-        if start > end || !self.text.is_char_boundary(start) || !self.text.is_char_boundary(end) {
-            return false;
-        }
-        let insertion = self.paste_insertion(start, &[reference]);
-        self.replace_at(start, end, &insertion)
     }
 
     /// 键盘移动粘贴面板高亮；返回是否消费。

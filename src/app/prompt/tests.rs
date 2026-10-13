@@ -2364,36 +2364,6 @@ fn paste_stage_refuses_protected_template_lines() {
     assert!(prompt.text().contains("{wt:main}"));
 }
 
-#[test]
-fn insert_reference_is_single_undo_step() {
-    let mut prompt = prompt(60, 8);
-    prompt.insert_str("shot ");
-    let anchor = PasteAnchor::at_cursor(prompt.cursor());
-    assert!(prompt.insert_reference(
-        &anchor,
-        crate::app::markdown::ReferKind::Image,
-        std::path::Path::new("/tmp/attachments/00112233445566778899aabbccddeeff.png")
-    ));
-    assert_eq!(
-        prompt.text(),
-        "shot @[refer-image](/tmp/attachments/00112233445566778899aabbccddeeff.png) "
-    );
-    prompt.undo();
-    assert_eq!(prompt.text(), "shot ");
-}
-
-#[test]
-fn insert_reference_refuses_control_characters() {
-    let mut prompt = prompt(60, 8);
-    let anchor = PasteAnchor::at_cursor(0);
-    assert!(!prompt.insert_reference(
-        &anchor,
-        crate::app::markdown::ReferKind::Image,
-        std::path::Path::new("/tmp/a\nb.png")
-    ));
-    assert_eq!(prompt.text(), "");
-}
-
 // ===== 字母快捷面板 =====
 
 #[test]

@@ -3001,15 +3001,6 @@ fn paste_temp_dir(label: &str) -> PathBuf {
     path
 }
 
-/// 独立数据库服务（managed 登记用）。
-fn paste_service(label: &str) -> crate::db::service::Persistence {
-    let path = std::env::temp_dir()
-        .join(format!("lx-tui-event-db-{label}-{}", std::process::id()))
-        .join("lx.db");
-    let database = crate::db::Database::open(&path).expect("db opens");
-    crate::db::service::Persistence::with_database(database)
-}
-
 #[test]
 fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
     let dir = paste_temp_dir("terminal");
@@ -3029,13 +3020,15 @@ fn terminal_paste_valid_paths_open_proposal_and_plain_text_inserts() {
 }
 
 #[test]
-fn terminal_empty_paste_requests_clipboard_read() {
+fn terminal_empty_paste_is_ignored() {
     let mut state = AppState::demo();
     state.prompt_focused = true;
     state.prompt.insert_str("keep ");
+    state.prompt.paste_cancel();
+    // 终端自身粘贴只承载位图时送来空内容：没有正文可插入，静默忽略。
     paste::handle_terminal_paste(&mut state, String::new());
-    assert!(state.clipboard_read_requested, "空粘贴改走剪贴板读取");
-    assert_eq!(state.prompt.text(), "keep ", "空粘贴不写入正文");
+    assert_eq!(state.prompt.text(), "keep ");
+    assert!(state.prompt.paste_panel().is_none());
 }
 
 #[test]
@@ -3047,126 +3040,4 @@ fn terminal_paste_missing_path_falls_back_to_text() {
     paste::handle_terminal_paste(&mut state, missing.display().to_string());
     assert!(state.prompt.paste_panel().is_none());
     assert_eq!(state.prompt.text(), missing.display().to_string());
-}
-
-#[test]
-fn clipboard_read_stale_image_cleans_staged_file() {
-    let service = paste_service("stale-image");
-    let dir = paste_temp_dir("stale-image");
-    let path = dir.join("00112233445566778899aabbccddeeff.png");
-    std::fs::write(&path, b"png").expect("staged file");
-    let mut state = AppState::demo();
-    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
-    let request = state.prompt.begin_paste_read(anchor);
-    let prompt = state.prompt.id();
-    paste::apply_clipboard_read(
-        &mut state,
-        &service,
-        prompt,
-        request + 1,
-        paste::ClipboardPayload::Image {
-            asset_id: "00112233445566778899aabbccddeeff".to_string(),
-            path: path.clone(),
-        },
-    );
-    assert!(!path.exists(), "过期结果删除未登记落盘文件");
-    assert!(state.prompt.paste_panel().is_none());
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn clipboard_read_image_inserts_reference_without_panel() {
-    let service = paste_service("image-ok");
-    let dir = paste_temp_dir("image-ok");
-    let path = dir.join("fedcba9876543210fedcba9876543210.png");
-    std::fs::write(&path, b"png").expect("staged file");
-    let mut state = AppState::demo();
-    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
-    let request = state.prompt.begin_paste_read(anchor);
-    let prompt = state.prompt.id();
-    paste::apply_clipboard_read(
-        &mut state,
-        &service,
-        prompt,
-        request,
-        paste::ClipboardPayload::Image {
-            asset_id: "fedcba9876543210fedcba9876543210".to_string(),
-            path: path.clone(),
-        },
-    );
-    assert!(state.prompt.paste_panel().is_none(), "位图不进面板");
-    assert_eq!(
-        state.prompt.text(),
-        format!("@[refer-image]({}) ", path.display()),
-        "位图直接写入引用"
-    );
-    assert!(path.exists(), "登记后文件保留");
-    assert_eq!(service.managed_asset_count_for_test(), 1);
-    state.prompt.undo();
-    assert_eq!(state.prompt.text(), "", "引用插入单步撤销");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn clipboard_read_image_on_protected_line_drops_registration() {
-    let service = paste_service("image-protected");
-    let dir = paste_temp_dir("image-protected");
-    let path = dir.join("00112233445566778899aabbccddeeff.png");
-    std::fs::write(&path, b"png").expect("staged file");
-    let mut state = AppState::demo();
-    state
-        .prompt
-        .set_text("&&& x --start\n\n{wt:main}\n&&& x --end\n");
-    let end = state.prompt.text().find("{wt:main}").expect("marker") + "{wt:main}".len();
-    state.prompt.set_cursor_offset_for_test(end);
-    let anchor = crate::app::prompt::PasteAnchor::at_cursor(end);
-    let request = state.prompt.begin_paste_read(anchor);
-    let prompt = state.prompt.id();
-    paste::apply_clipboard_read(
-        &mut state,
-        &service,
-        prompt,
-        request,
-        paste::ClipboardPayload::Image {
-            asset_id: "00112233445566778899aabbccddeeff".to_string(),
-            path: path.clone(),
-        },
-    );
-    assert!(!path.exists(), "受保护行拒绝后删除刚落盘文件");
-    assert_eq!(service.managed_asset_count_for_test(), 0, "撤销登记");
-    assert_eq!(service.managed_asset_count_for_test(), 0);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn clipboard_read_text_paths_open_proposal_and_other_text_inserts() {
-    let service = paste_service("text-fallback");
-    let dir = paste_temp_dir("text-fallback");
-    let file = dir.join("a b.txt");
-    std::fs::write(&file, b"x").expect("file");
-    let mut state = AppState::demo();
-    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
-    let request = state.prompt.begin_paste_read(anchor);
-    let prompt = state.prompt.id();
-    paste::apply_clipboard_read(
-        &mut state,
-        &service,
-        prompt,
-        request,
-        paste::ClipboardPayload::Text(file.display().to_string()),
-    );
-    assert!(state.prompt.paste_panel().is_some(), "整段路径进入提案");
-    let anchor = crate::app::prompt::PasteAnchor::at_cursor(state.prompt.cursor());
-    let request = state.prompt.begin_paste_read(anchor);
-    let prompt = state.prompt.id();
-    paste::apply_clipboard_read(
-        &mut state,
-        &service,
-        prompt,
-        request,
-        paste::ClipboardPayload::Text("/api/users 文档".to_string()),
-    );
-    assert!(state.prompt.paste_panel().is_none());
-    assert_eq!(state.prompt.text(), "/api/users 文档");
-    let _ = std::fs::remove_dir_all(&dir);
 }

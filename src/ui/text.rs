@@ -367,14 +367,6 @@ pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 
 /// 提示词保存失败：内容保留脏状态，自动保存将重试。
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
-/// 剪贴板读取失败的通用提示。
-pub const TOAST_CLIPBOARD_READ_FAILED: &str = "Clipboard read failed";
-/// 剪贴板为空。
-pub const TOAST_CLIPBOARD_EMPTY: &str = "Clipboard is empty";
-/// 图片读取/保存失败。
-pub const TOAST_IMAGE_FAILED: &str = "Image paste failed";
-/// 粘贴面板：目录存在时不能上传为附件。
-pub const TOAST_PASTE_FOLDER_UPLOAD: &str = "Folders cannot be uploaded";
 
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";

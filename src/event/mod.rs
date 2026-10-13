@@ -67,12 +67,6 @@ pub enum AppEvent {
         candidates: Vec<crate::app::markdown::WorktreeCandidate>,
         failed: bool,
     },
-    /// 系统剪贴板读取结果；位图已在后台落盘为 managed 临时资产。
-    ClipboardRead {
-        prompt: PaneId,
-        request: u64,
-        payload: paste::ClipboardPayload,
-    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -111,8 +105,6 @@ async fn run_loop(
         }
     };
     state.settings_available = settings_service.is_some();
-    // 启动清理：回收无人引用的 managed 截图与崩溃遗留的临时文件。
-    persistence.cleanup_startup();
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
     let mut last_prompt_workspace = state.prompt_workspace();
@@ -170,12 +162,6 @@ async fn run_loop(
             }
         }
         commands_reload = false;
-        // 工具栏粘贴按钮：后台读取系统剪贴板（不阻塞事件循环）。
-        if state.clipboard_read_requested {
-            state.clipboard_read_requested = false;
-            paste::request_clipboard_read(state, &sender);
-            dirty = true;
-        }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
             dirty = true;
@@ -252,9 +238,9 @@ async fn run_loop(
             },
             message = receiver.recv() => {
                 if let Some(message) = message {
-                    handle_app_event(message, state, &mut sessions, &mut git_inflight, persistence);
+                    handle_app_event(message, state, &mut sessions, &mut git_inflight);
                     while let Ok(message) = receiver.try_recv() {
-                        handle_app_event(message, state, &mut sessions, &mut git_inflight, persistence);
+                        handle_app_event(message, state, &mut sessions, &mut git_inflight);
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
                     cwd_check.get_or_insert_with(|| Instant::now() + CWD_CHECK_DELAY);
@@ -637,13 +623,6 @@ fn handle_terminal_event(
                 Routed::CopyTemplateBlock => {
                     if let Some(text) = update::copy_template_block_at_cursor(state) {
                         copy_with_toast(state, &text);
-                        *dirty = true;
-                    }
-                }
-                Routed::ClipboardPaste => {
-                    // 树视图的搜索框不是正文编辑目标：读取结果无处可去，吞掉按键。
-                    if !update::prompt_tree_mode(state) {
-                        state.clipboard_read_requested = true;
                         *dirty = true;
                     }
                 }
@@ -2130,7 +2109,6 @@ fn handle_app_event(
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
     git_inflight: &mut HashSet<PathBuf>,
-    persistence: &mut Persistence,
 ) {
     match message {
         AppEvent::PaneOutput(id, bytes) => {
@@ -2176,11 +2154,6 @@ fn handle_app_event(
                 }
             }
         }
-        AppEvent::ClipboardRead {
-            prompt,
-            request,
-            payload,
-        } => paste::apply_clipboard_read(state, persistence, prompt, request, payload),
     }
 }
 

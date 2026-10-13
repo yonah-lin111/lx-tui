@@ -1,11 +1,11 @@
 # Prompt 粘贴附件与引用快捷输入任务
 
 状态：已按用户指示实施完成（分支 `feat/prompt-paste-attachments`，工作区 `.worktrees/prompt-paste-attachments`）；
-自动化验证全绿，TUI 外观与真实系统剪贴板交互待用户 `cargo run` 人工验收。
+自动化验证全绿，TUI 外观待用户 `cargo run` 人工验收。
 
-> 注：第 0–8 节是**第一轮**任务清单（含附件列表设计），已被 design.md §14 与本文 §9–§10 的
-> 两轮用户修订取代（顶栏按钮与上传项移除、`Ctrl+V` 直读、位图写引用、附件功能整体删除）。
-> 下列勾选保留为历史记录，不作为当前验收依据。
+> 注：第 0–8 节是**第一轮**任务清单（含附件列表与剪贴板截图设计），已被 design.md §14 与本文
+> §9–§11 的三轮用户修订取代。当前范围：**图片与文件都只通过路径粘贴表达**——应用不读取系统剪贴板、
+> 不落盘、不登记资产、不做垃圾回收（第三轮，见 §11）。下列勾选保留为历史记录，不作为当前验收依据。
 
 ## 0. 实施前检查
 
@@ -23,7 +23,7 @@
 - [x] 实现无损引用格式化；无法表达的路径禁用“引用”，不能生成损坏标记。
 - [x] 纯函数测试：路径空格/括号/Unicode、`ac`→`@abc`、块隔离、普通区全文、重复引用、图片 tag、保护区、撤销/重做。
 
-## 2. 平台剪贴板与截图文件
+## 2. 平台剪贴板与截图文件（第一轮，已被 §11 取代）
 
 - [x] 在 `platform/` 加入 macOS/Windows/Linux 的文件列表、路径文本和位图读取，返回同一平台中立结果；缺能力时返回可显示错误。
 - [x] 后台读取并编码截图，原子写入应用数据根的 `attachments/`；路径限定、唯一 ID、格式识别、文件大小/资源上限与失败清理。
@@ -31,7 +31,7 @@
 - [x] 管理待处理截图的取消、失焦、请求过期和进程重启孤儿清理；验证不删除外部文件及符号链接目标。
 - [x] 用平台隔离的测试覆盖格式识别与错误分支；真实系统剪贴板交互留给手工 TUI 验收。
 
-## 3. 持久化与清理
+## 3. 持久化与清理（第一轮，已被 §11 取代）
 
 - [x] 编写 SQLite v1→v2 迁移：两张新表均使用 `id INTEGER PRIMARY KEY AUTOINCREMENT` 与 `external_id TEXT NOT NULL UNIQUE`；附件 `prompt_id TEXT` 引用 `workspace_prompt.external_id`，`managed_asset_id TEXT` 引用资产 `external_id`；旧库读取为空附件且迁移可重复。
 - [x] 将创建、保存、加载 prompt 的正文与附件纳入同一事务；临时草稿转已保存条目时保留附件顺序和 ID。
@@ -162,14 +162,10 @@
   `workspace_prompt_attachment`，TEXT 外键、CHECK、级联/限制删除）；
   正文保存；保存回执按修订号确认（不再“先标记已保存”）；
   失败保留脏状态、可见 toast、自动保存重试。
-- 平台：`platform/clipboard.rs`（macOS osascript/pbpaste、Linux wl-paste/xclip、
-  Windows PowerShell），文件列表 → 位图 → 文本探测；`file://` URI 与多行路径解析；
-  位图签名识别；`secure_token` 随机资产 ID；原子落盘 `.tmp-*` → 重命名。
-- 事件：`Ctrl/Cmd+Shift+V` 后台读取（请求代号 + 修订校验），终端粘贴路径文本进同一提案、
-  普通文本原样插入；位图登记后直接写入 `@[refer-image]` 引用、不进面板；选择区锚点替换；
-  面板键鼠路由与外部点击取消。
-- 清理：managed 截图统一垃圾回收（正文 `@[refer-image]` 引用 + 内存草稿/临时项），
-  启动孤儿扫描（未登记同规则文件与 `.tmp-*`，符号链接/未知文件名跳过）。
+- 平台：~~三平台剪贴板读取、位图签名与资产落盘~~（第三轮删除）；
+  保留 `platform/paste_path.rs`：`file://` URI 与多行路径解析、图片文件头签名探测（`sniff_image_file`）。
+- 事件：终端粘贴路径文本进提案、普通文本原样插入；选择区锚点替换；面板键鼠路由与外部点击取消。
+- 清理：~~managed 截图垃圾回收与启动孤儿扫描~~（第三轮删除，正文引用不再需要引用计数）。
 
 ### 实施后修订（用户确认，对应 design.md §14）
 
@@ -178,22 +174,16 @@
 - 粘贴面板移除 “Upload as attachment”：`PasteAction` 两项 `Reference`/`Path`，面板两行；
   `PasteCandidate::can_upload`、`PastePanel::upload_enabled`、`PASTE_ACTION_UPLOAD`、
   `PASTE_UPLOAD_FOLDERS_DISABLED` 删除；普通文件不再能成为附件。
-- `Ctrl/Cmd+Shift+V` 直接粘贴剪贴板图片：`Routed::ClipboardPaste` → 事件层 `clipboard_read_requested`；
-  位图登记后写 `@[refer-image]` 引用（`PasteState::settle` 校验代号与修订），
-  文件列表/路径进面板，普通文本插入；树视图吞掉按键。已知限制见 design.md §14.1.3。
+- ~~`Ctrl/Cmd+Shift+V` 直接粘贴剪贴板图片~~（第三轮整体删除，见 §11）。
 - 正文引用快捷删除：`markdown::reference_deletion_range` + `Prompt::backspace` 回退链，
   `@[refer-*](path) ` 尾随空白处一次 Backspace 整段删除（单步撤销）。
 
 ### 记录偏差与风险
 
-- 工具栏读取期间未绘制独立 loading 指示的问题随按钮移除消失；`Ctrl/Cmd+Shift+V` 读取期间无 loading 提示。
-- `src/event/mod.rs` 基线已超 1000 行（2310 → 约 2410）；新增职责均落在
-  `src/event/paste.rs`，未对既有巨型事件循环做高风险重写，作为存量债务记录。
-- Windows/Linux 剪贴板命令路径未在本机（macOS）实测；单元测试只覆盖纯解析分支。
-- 无 `Shift` 的 `Ctrl+V`/`Cmd+V` 不再读取剪贴板；部分终端吞 `Ctrl+V`、SSH 读到远端剪贴板（见 design.md §14.1.3）。
-- 人工验收项（`Ctrl+V` 截图、文件管理器复制的路径文本、`file://` URI、多路径、普通文本、
-  面板键鼠与 Esc、引用一次 Backspace 删除、窄屏、工作区切换、重启恢复）
-  需用户运行 `cargo run` 确认（第二轮行为见 §10，触发键为 `Ctrl/Cmd+Shift+V`）。
+- `src/event/mod.rs` 基线超 1000 行（存量债务）；新增职责落在
+  `src/event/paste.rs`，未对既有巨型事件循环做高风险重写。
+- 人工验收项（终端粘贴的路径文本、`file://` URI、多路径、普通文本、
+  面板键鼠与 Esc、引用一次 Backspace 删除、窄屏、工作区切换、重启恢复）待用户 `cargo run` 确认。
 
 
 ## 10. 第二轮修订（用户确认，对应 design.md §14.2）
@@ -214,9 +204,37 @@
 
 ### 记录偏差与风险（第二轮）
 
-- 触发键：`Ctrl+V`（legacy 终端的 Ctrl+Shift+V 同码）与 `Cmd+Shift+V`（kitty 协议下报为大写 `V`、无 SHIFT 修饰位；按大写 V 视为已按 Shift）；`Cmd+V` 不触发。prompt 聚焦时被吞掉的按键记 debug 日志（`LX_TUI_LOG=debug`）便于核对终端编码。额外回退：终端自身粘贴只承载位图时发出的空括号粘贴改走应用读取剪贴板。
-
+- ~~触发键与位图粘贴通道~~（第三轮整体删除，见 §11）；prompt 聚焦时被吞掉的按键仍记 debug 日志（`LX_TUI_LOG=debug`）。
 - 取消回滚依赖“占位插入是撤销栈顶且面板打开期间不可编辑”的不变量；面板打开时按键被吞，鼠标点击外部即取消。
-- 截图登记后若用户在保存前清空引用，文件会留到下一次启动/删除触发回收。
 - `event/mod.rs` 仍超 1000 行（存量债务）；本轮新增代码在 `event/paste.rs`、`app/prompt/paste.rs`。
-- 人工验收：`Ctrl+V`/`Cmd+Shift+V` 截图写引用、路径占位 + 面板改写/取消回滚、引用一次 Backspace 删除、窄屏、重启恢复。
+- 人工验收：路径占位 + 面板改写/取消回滚、引用一次 Backspace 删除、窄屏、重启恢复。
+
+## 11. 第三轮修订（用户确认，对应 design.md §14.3）
+
+### 变更
+
+- **删除整个剪贴板读取通道**：`platform::read_clipboard`（macOS osascript/pbpaste、Linux
+  wl-paste/xclip、Windows PowerShell）、`ClipboardContent/ClipboardError/ImageFormat`、
+  `secure_token`、`read_clipboard_payload`/`stage_screenshot(_in)`、`event::AppEvent::ClipboardRead`
+  与 `apply_clipboard_read`、`AppState::clipboard_read_requested`、输入层 `Routed::ClipboardPaste`
+  与 `clipboard_paste_chord`、`ui/text.rs` 的三条剪贴板/图片 toast 文案全部删除。
+- **Ctrl+V / Cmd+Shift+V 不再被拦截**：prompt 聚焦时按键照旧被吞（不写入 PTY），输入层只保留
+  复制/保存/模板复制映射。
+- **删除资产落盘与回收**：`attachments_dir`、DB `managed_asset` 表与 CRUD、
+  `Persistence::{register,unregister}_managed_asset`、`cleanup_startup/cleanup_managed/cleanup_orphan_files(_in)`、
+  `platform::{is_managed_asset_name,is_managed_temp_name}`、`markdown::image_reference_paths`、
+  `Database::all_prompt_contents` 全部删除。
+- **Schema 收敛**：`SCHEMA` 只建 `workspace/workspace_folder/workspace_prompt`；`SCHEMA_VERSION = 3`
+  保留（避免已有库被判为过新），迁移退化为单步建表 + 版本推进；旧库遗留的附件/资产表不再被读写，
+  数据原样保留。
+- **空粘贴静默忽略**：终端自身粘贴只承载位图时送来的空 `Paste("")` 不再回退读剪贴板。
+- **保留能力**：`@[refer-image]` 语法、`@[refer-*]` 快捷面板、路径占位 + 面板改写/回滚、
+  图片按文件头签名归类为 image（`sniff_image_file`）保持不变。
+
+### 记录偏差与风险（第三轮）
+
+- 用户已有开发库（`~/.lx-t-dev/db/lx.db`，v3）会保留遗留 `managed_asset` 表与一行登记，
+  磁盘上 `~/.lx-t-dev/attachments/` 的残留 PNG 不再被引用；二者无害，可手动删除。
+- 删除量：净减约 1500 行（`platform/clipboard.rs` 535 → 约 60 行）；相关测试同步删除
+  （剪贴板读取、图像落盘、GC/孤儿扫描、迁移建资产表），新增“空粘贴忽略”“遗留 v2 库可打开”用例。
+- 图片必须先在磁盘上存在才能引用：用户需自行把截图保存为文件再粘贴其路径。

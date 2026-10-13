@@ -301,7 +301,7 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if from == to {
         return;
     }
-    // 工作区切换取消在途粘贴提案与待处理截图（引用检查随后由事件层执行）。
+    // 工作区切换取消在途粘贴提案。
     state.prompt.paste_cancel();
     commit_prompt_buffer(state, from);
     if let Some(workspace) = state.workspaces.get_mut(from) {
