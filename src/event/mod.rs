@@ -587,6 +587,20 @@ fn handle_terminal_event(
     } = geometry;
     match event {
         TerminalEvent::Key(key) if key.kind != KeyEventKind::Release => {
+            // 页重命名输入优先于编辑器：除 Ctrl+Q 外的按键按单行输入语义消费。
+            let quit =
+                key.code == KeyCode::Char('q') && key.modifiers.contains(KeyModifiers::CONTROL);
+            if !quit
+                && state.overlay.is_none()
+                && state.prompt_focused
+                && update::page_rename_active(state)
+            {
+                if let Some(overlay_key) = input::page_rename_key(key) {
+                    update::apply_page_rename_key(state, overlay_key);
+                }
+                *dirty = true;
+                return;
+            }
             let mode = state
                 .active_pane()
                 .map(|pane| pane.terminal.mode())
@@ -885,7 +899,9 @@ fn handle_terminal_event(
                         update::prompt_tree_mode(state),
                     )
                 {
-                    // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标。
+                    // 工具栏按钮是控件：执行动作，不抢焦点、不移动文本光标；
+                    // 页重命名输入先提交（空名保留旧名）。
+                    update::finish_page_rename(state);
                     let editor_view = !update::prompt_tree_mode(state);
                     match button {
                         layout::PromptToolbarButton::Mode => {
@@ -906,6 +922,41 @@ fn handle_terminal_event(
                             update::save_prompt_now(state);
                         }
                         _ => {}
+                    }
+                    *dirty = true;
+                } else if !state.prompt_collapsed
+                    && update::page_rename_active(state)
+                    && state.overlay.is_none()
+                {
+                    // 页重命名输入期间：点击输入区保持输入态；点击其余位置提交
+                    // （空名保留旧名）并吞掉本次点击。
+                    if ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row)
+                        != Some(ui::prompt::PageControl::Name)
+                    {
+                        update::finish_page_rename(state);
+                    }
+                    *dirty = true;
+                } else if let Some(control) = (!state.prompt_collapsed)
+                    .then(|| {
+                        ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row)
+                    })
+                    .flatten()
+                {
+                    // 标题行页控件是控件：不移动正文光标；命中后仍把焦点交给编辑器。
+                    update::focus_prompt(state);
+                    match control {
+                        ui::prompt::PageControl::Prev => {
+                            update::switch_prompt_page(state, -1);
+                        }
+                        ui::prompt::PageControl::Next => {
+                            update::switch_prompt_page(state, 1);
+                        }
+                        ui::prompt::PageControl::Counter => {
+                            update::open_prompt_page_menu(state, (mouse.column, mouse.row));
+                        }
+                        ui::prompt::PageControl::Name => {
+                            update::begin_page_rename(state);
+                        }
                     }
                     *dirty = true;
                 } else if !state.prompt_collapsed
@@ -948,8 +999,11 @@ fn handle_terminal_event(
                                 }
                             }
                         } else {
-                            update::place_prompt_cursor(state, row, col);
-                            update::begin_selection(state, pane, row, col);
+                            // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。
+                            if !state.prompt.row_in_padding(row) {
+                                update::place_prompt_cursor(state, row, col);
+                                update::begin_selection(state, pane, row, col);
+                            }
                         }
                         *dirty = true;
                     } else if matches!(
@@ -1141,7 +1195,7 @@ fn handle_terminal_event(
                 } else {
                     update::drag_selection(state, pane, row, col);
                 }
-                if pane == state.prompt.id() {
+                if pane == state.prompt.id() && !state.prompt.row_in_padding(row) {
                     update::place_prompt_cursor(state, row, col);
                 }
                 update::arm_selection_autoscroll(
@@ -1353,6 +1407,18 @@ fn handle_terminal_event(
                         {
                             *dirty = true;
                         }
+                    }
+                    if let Some(Overlay::PageMenu(menu)) = state.overlay.as_ref()
+                        && let Some(index) = ui::overlay::page_menu_item_at(
+                            state,
+                            *screen,
+                            menu,
+                            mouse.column,
+                            mouse.row,
+                        )
+                        && update::set_page_menu_selection(state, index)
+                    {
+                        *dirty = true;
                     }
                     if update::clear_tooltip(state) {
                         *dirty = true;
@@ -1682,6 +1748,22 @@ fn handle_overlay_click(
     row: u16,
 ) -> Option<(PaneId, Vec<u8>)> {
     match state.overlay.as_ref() {
+        Some(Overlay::PageMenu(menu)) => {
+            let layout = ui::overlay::page_menu_layout(state, screen, menu);
+            match ui::overlay::page_menu_item_at(state, screen, menu, column, row) {
+                Some(index) => {
+                    update::set_page_menu_selection(state, index);
+                    update::activate_page_menu_row(state);
+                }
+                // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
+                None => {
+                    if !layout.area.contains((column, row).into()) {
+                        update::close_overlay(state);
+                    }
+                }
+            }
+            None
+        }
         Some(Overlay::Menu(menu)) => {
             let layout = ui::overlay::menu_layout(state, screen, menu);
             match ui::widgets::menu::item_at(&layout, column, row) {

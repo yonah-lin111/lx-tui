@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use super::*;
-use crate::app::prompt::{PromptFolder, PromptItem, PromptItemStatus};
+use crate::app::prompt::{PromptFolder, PromptItem, PromptItemStatus, PromptPage};
 
 /// 树行渲染用的面板：去掉默认空白 temp，聚焦树行布局。
 fn panel_with(folders: Vec<PromptFolder>, items: Vec<PromptItem>) -> PromptPanel {
@@ -27,13 +27,7 @@ fn folder(id: i64, parent_id: Option<i64>, name: &str) -> PromptFolder {
 }
 
 fn item(id: i64, folder_id: Option<i64>, name: &str, status: PromptItemStatus) -> PromptItem {
-    PromptItem {
-        id,
-        folder_id,
-        name: name.to_string(),
-        content: String::new(),
-        status,
-    }
+    PromptItem::single(id, folder_id, name, String::new(), status)
 }
 
 fn search(panel: &mut PromptPanel, query: &str) {
@@ -302,7 +296,12 @@ fn temp_rows_render_section_labels_summary_and_badge() {
         vec![item(10, None, "alpha", PromptItemStatus::Todo)],
     );
     let temp_id = panel.new_temp();
-    panel.temp_mut(temp_id).expect("temp exists").content = "code review\nsecond line".into();
+    panel
+        .temp_mut(temp_id)
+        .expect("temp exists")
+        .active_page_mut()
+        .expect("temp has page")
+        .content = "code review\nsecond line".into();
     let area = Rect::new(0, 0, 40, 6);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false);
@@ -314,8 +313,8 @@ fn temp_rows_render_section_labels_summary_and_badge() {
     assert!(temp.ends_with(text::PROMPT_TEMP_BADGE), "{temp}");
     assert_eq!(
         buf[(area.right() - 5, 3)].fg,
-        Color::Cyan,
-        "tmp 徽标用强调色"
+        Color::Reset,
+        "tmp 徽标改用默认文字色，不再用主题强调色"
     );
     let saved = row_text(&buf, area, 4);
     assert!(saved.starts_with(text::PROMPT_SECTION_SAVED), "{saved}");
@@ -331,7 +330,12 @@ fn temp_section_hides_saved_label_when_tree_filtered_out() {
         vec![item(10, None, "alpha", PromptItemStatus::Todo)],
     );
     let temp_id = panel.new_temp();
-    panel.temp_mut(temp_id).expect("temp exists").content = "code review".into();
+    panel
+        .temp_mut(temp_id)
+        .expect("temp exists")
+        .active_page_mut()
+        .expect("temp has page")
+        .content = "code review".into();
     search(&mut panel, "code");
     let area = Rect::new(0, 0, 40, 5);
     let mut buf = Buffer::empty(area);
@@ -342,4 +346,68 @@ fn temp_section_hides_saved_label_when_tree_filtered_out() {
     assert!(temp.contains("code review"), "{temp}");
     let saved = row_text(&buf, area, 4);
     assert!(!saved.contains(text::PROMPT_SECTION_SAVED), "{saved}");
+}
+
+// ===== 列表逐页/汇总模板块计数 =====
+
+/// 组装一个两页条目：第一页 1 个 todo 模板，第二页 1 个 run 模板。
+fn paged_item() -> PromptItem {
+    let mut item = item(10, None, "alpha", PromptItemStatus::Todo);
+    item.pages[0].content = "&&& addTemplate --start\n&&& addTemplate --end".into();
+    item.pages.push(PromptPage::saved(
+        100,
+        "Page 2",
+        "&&& bugTemplate --start\n&&& bugTemplate --end in_progress",
+    ));
+    item
+}
+
+#[test]
+fn item_row_summarizes_template_counts_across_pages() {
+    let mut panel = PromptPanel::new();
+    panel.tree.replace(vec![], vec![paged_item()]);
+    let area = Rect::new(0, 0, 44, 6);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false);
+    // 行序（绝对行 = 搜索行 0 + 分割线 1 + 列表行）：tmp:、default、saved:、item。
+    let row = row_text(&buf, area, 5);
+    assert!(row.contains("[todo]"), "条目自身状态保留: {row}");
+    assert!(row.contains("[todo 1]"), "第一页 todo 计数: {row}");
+    assert!(row.contains("[run 1]"), "第二页 run 计数: {row}");
+    assert!(row.starts_with("• alpha"), "{row}");
+}
+
+#[test]
+fn item_row_omits_whole_count_labels_when_narrow() {
+    let mut panel = PromptPanel::new();
+    panel.tree.replace(vec![], vec![paged_item()]);
+    let area = Rect::new(0, 0, 18, 6);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false);
+    let row = row_text(&buf, area, 5);
+    // 计数整体省略，不画半个标签；条目状态优先保留。
+    assert!(!row.contains("run"), "尾部计数标签完整省略: {row}");
+    assert!(!row.contains("[todo 1]") || row.contains("[todo]"), "{row}");
+}
+
+#[test]
+fn temp_badge_uses_default_text_color_not_accent() {
+    let mut panel = PromptPanel::new();
+    let temp_id = panel.new_temp();
+    panel
+        .temp_mut(temp_id)
+        .expect("temp")
+        .active_page_mut()
+        .expect("page")
+        .content = "draft".into();
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false);
+    let row = row_text(&buf, area, 4);
+    assert!(row.ends_with(text::PROMPT_TEMP_BADGE), "{row}");
+    assert_eq!(
+        buf[(area.right() - 5, 4)].fg,
+        Color::Reset,
+        "tmp 徽标为默认文字色"
+    );
 }

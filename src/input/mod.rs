@@ -83,13 +83,37 @@ pub fn route(
     encode::encode_key(key, mode).map(Routed::Pane)
 }
 
+/// 页重命名输入键映射：Enter/Esc 结束、单行编辑键、Ctrl+C 清空；其余返回 None（吞掉）。
+///
+/// 与重命名浮层同一套语义，但不依赖 `Overlay`（页重命名是标题行内联输入）。
+pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => Some(OverlayKey::Esc),
+        KeyCode::Enter => Some(OverlayKey::Enter),
+        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(OverlayKey::Clear)
+        }
+        KeyCode::Backspace => Some(OverlayKey::Backspace),
+        KeyCode::Delete => Some(OverlayKey::Delete),
+        KeyCode::Left if plain => Some(OverlayKey::Left),
+        KeyCode::Right if plain => Some(OverlayKey::Right),
+        KeyCode::Home => Some(OverlayKey::Home),
+        KeyCode::End => Some(OverlayKey::End),
+        KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+        _ => None,
+    }
+}
+
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
 fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     let plain = !key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     match kind {
-        OverlayKind::Menu => match key.code {
+        OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),

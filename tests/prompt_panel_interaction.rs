@@ -15,8 +15,6 @@ use lx_tui::terminal::Terminal;
 use lx_tui::ui::text;
 use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 
-static DB_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
 const COLS: u16 = 100;
 const ROWS: u16 = 30;
 const WAIT: Duration = Duration::from_secs(10);
@@ -28,7 +26,7 @@ struct App {
 }
 
 impl App {
-    fn spawn(cwd: &Path) -> Self {
+    fn spawn(cwd: &Path, db_path: &Path) -> Self {
         let pty = native_pty_system();
         let pair = pty
             .openpty(PtySize {
@@ -40,7 +38,7 @@ impl App {
             .expect("open pty");
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_lx-tui"));
         command.env("TERM", "xterm-256color");
-        command.env("LX_TUI_DB_PATH", DB_PATH.get().expect("db path"));
+        command.env("LX_TUI_DB_PATH", db_path);
         command.cwd(cwd);
         let child = pair.slave.spawn_command(command).expect("spawn");
         drop(pair.slave);
@@ -163,6 +161,26 @@ impl App {
         None
     }
 
+    /// 点击草稿选择器内的根条目行 `/`（避开标题行页控件的 `1/1`）。
+    fn click_save_draft_root(&self) {
+        let screen = self.screen();
+        let rows: Vec<&str> = screen.lines().collect();
+        let start = rows
+            .iter()
+            .position(|line| line.contains("save prompt to folder"))
+            .unwrap_or(0);
+        for (row, line) in rows.iter().enumerate().skip(start) {
+            if line.contains("1/1") || !line.contains('/') {
+                continue;
+            }
+            let byte = line.find('/').expect("slash");
+            let col = line[..byte].chars().count();
+            self.click_at(col as u16, row as u16);
+            return;
+        }
+        panic!("root entry row missing\n{}", self.screen());
+    }
+
     /// 点击包含 `anchor` 的行内、`anchor` 之后的 `needle`。
     fn click_after(&self, anchor: &str, needle: &str) {
         let (col, row) = self
@@ -232,8 +250,7 @@ fn spawn_trusted(label: &str) -> App {
         .trust_workspace(&workspace, "workspace")
         .expect("trusted");
     drop(database);
-    let _ = DB_PATH.set(db_path);
-    let app = App::spawn(&workspace);
+    let app = App::spawn(&workspace, &db_path);
     assert!(
         app.wait_for("Write your prompt"),
         "app started: {}",
@@ -293,7 +310,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     );
     assert!(app.wait_for("+ New folder"), "new folder option listed");
     // 点击文件夹仅选中，不执行：选择器保持打开。
-    app.click("/");
+    app.click_save_draft_root();
     app.settle();
     assert!(
         app.screen().contains("save prompt to folder"),
@@ -389,6 +406,58 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     assert!(
         app.wait_for("notes"),
         "new folder visible in tree: \n{}",
+        app.screen()
+    );
+}
+
+#[test]
+fn page_controls_create_switch_and_rename_via_real_mouse_and_keys() {
+    let app = spawn_trusted("pages");
+
+    // 默认绑定空 temp：标题行显示 `1/1` 页控件。
+    assert!(
+        app.wait_for("1/1"),
+        "title page counter: \n{}",
+        app.screen()
+    );
+    app.click("Write your");
+    app.settle();
+    app.send(b"page one body");
+    assert!(app.wait_for("page one body"), "first page typed");
+
+    // 点击计数打开页码菜单：New page / Delete page 与页行。
+    app.click("1/1");
+    assert!(
+        app.wait_for(text::MENU_PAGE_NEW),
+        "page menu: \n{}",
+        app.screen()
+    );
+    assert!(app.wait_for(text::MENU_PAGE_DELETE));
+
+    // 点击 New page：追加末尾、立即切换并进入默认名编辑
+    // （正文为空；输入落入页名而不是编辑器）。
+    app.click(text::MENU_PAGE_NEW);
+    assert!(
+        app.wait_for("2/2"),
+        "switched to new page: \n{}",
+        app.screen()
+    );
+    app.send(b"XYZ");
+    app.send(b"\x1b");
+    app.settle();
+    assert!(
+        app.screen().contains("Write your prompt"),
+        "重命名输入不写入正文，新页正文为空: \n{}",
+        app.screen()
+    );
+    assert!(!app.screen().contains("page one body"), "新页正文为空");
+
+    // 左箭头回第一页：旧正文保留。
+    app.click(text::PROMPT_PAGE_PREV);
+    assert!(app.wait_for("1/2"), "back to page 1: \n{}", app.screen());
+    assert!(
+        app.wait_for("page one body"),
+        "page one content kept: \n{}",
         app.screen()
     );
 }

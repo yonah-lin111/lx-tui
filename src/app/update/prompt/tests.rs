@@ -2,13 +2,16 @@
 
 use super::*;
 use crate::app::actions::{Action, EditorCommand};
-use crate::app::overlay::{ConfirmClose, MenuCommand, NewNodeKind, Overlay, OverlayTarget};
-use crate::app::prompt::PromptSection;
+use crate::app::overlay::{
+    ConfirmClose, MenuCommand, NewNodeKind, Overlay, OverlayTarget, PageMenuRow, SaveDraftEntry,
+};
+use crate::app::prompt::{PromptPage, PromptPageId, PromptRowKind, PromptSection};
 use crate::app::state::AppState;
 use crate::app::update::{
     apply, apply_editor, apply_overlay_key, create_workspace, tick, toggle_prompt_pin,
 };
-use crate::db::{FolderRecord, PromptRecord};
+use crate::db::{FolderRecord, PromptPageRecord, PromptRecord};
+use crate::ui::text;
 use std::time::{Duration, Instant};
 
 /// 一个工作区 + 已载入的示例树：根文件夹 1（子文件夹 2），条目 11/12 在文件夹内，10 在根。
@@ -33,6 +36,13 @@ fn demo_state() -> AppState {
             name: "loose".into(),
             content: "loose content".into(),
             status: "todo".into(),
+            active_page_id: Some(10),
+            pages: vec![PromptPageRecord {
+                id: 10,
+                position: 0,
+                name: "Page 1".into(),
+                content: "loose content".into(),
+            }],
         },
         PromptRecord {
             id: 12,
@@ -40,6 +50,13 @@ fn demo_state() -> AppState {
             name: "nested".into(),
             content: "nested content".into(),
             status: "completed".into(),
+            active_page_id: Some(12),
+            pages: vec![PromptPageRecord {
+                id: 12,
+                position: 0,
+                name: "Page 1".into(),
+                content: "nested content".into(),
+            }],
         },
     ];
     apply_prompt_tree(&mut state, 0, std::path::Path::new("/ws"), folders, prompts);
@@ -262,7 +279,7 @@ fn editing_item_persists_on_commit_and_action_quit() {
             .prompt_panel
             .tree
             .item(12)
-            .map(|item| item.content.as_str()),
+            .map(|item| item.active_content()),
         Some("nested content updated")
     );
 }
@@ -501,13 +518,13 @@ fn mode_roundtrip_without_selection_keeps_temp_editor() {
     let mut state = AppState::demo();
     state.workspaces[0].prompt_panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 10,
-            folder_id: None,
-            name: "loose".into(),
-            content: "body".into(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(
+            10,
+            None,
+            "loose",
+            "body",
+            PromptItemStatus::Todo,
+        )],
     );
     // 初始编辑视图绑定空 temp；列表恒有 default temp，其后才是条目。
     assert!(matches!(
@@ -684,7 +701,7 @@ fn temp_roundtrip_keeps_content_and_picker_lists_folders() {
     show_prompt_tree(&mut state);
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(
-        panel.temp(temp_id).map(|temp| temp.content.as_str()),
+        panel.temp(temp_id).map(|temp| temp.active_content()),
         Some("draft body")
     );
     // 行序：tmp:、draft temp、default、saved:、root、sub、nested、loose。
@@ -723,7 +740,8 @@ fn temp_roundtrip_keeps_content_and_picker_lists_folders() {
     let Some(Effect::SaveDraft {
         folder_id,
         name,
-        content,
+        pages,
+        active,
         ..
     }) = queued
     else {
@@ -731,7 +749,9 @@ fn temp_roundtrip_keeps_content_and_picker_lists_folders() {
     };
     assert_eq!(folder_id, None);
     assert_eq!(name, text::PROMPT_DEFAULT_NAME);
-    assert_eq!(content, "draft body");
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].content, "draft body");
+    assert_eq!(active, 0);
 
     // 服务保存成功后的收尾：移除已升格的 temp 并清空搜索词。
     finish_draft_save(&mut state, 0);
@@ -974,10 +994,8 @@ fn refresh_save_draft_rebuilds_entries_and_selects_new_folder() {
 #[test]
 fn save_draft_commits_with_custom_name_and_rejects_empty_names() {
     let mut state = demo_state();
-    enter_tree(&mut state);
     assert!(open_temp_prompt(&mut state));
     apply_editor(&mut state, EditorCommand::InsertText("body".into()));
-    show_prompt_tree(&mut state);
     open_save_draft(&mut state);
 
     // 名称改为自定义（选中行为根层 → 字符输入归属顶部名称框）。
@@ -1084,8 +1102,13 @@ fn autosave_commits_item_after_idle_delay() {
     assert!(!state.prompt.is_saved(), "保存回执（服务）到达前保持未保存");
     let revision = state.prompt.revision();
     let prompt = state.prompt.id();
-    assert!(crate::app::update::mark_prompt_saved(
-        &mut state, prompt, revision
+    assert!(crate::app::update::mark_prompt_page_persisted(
+        &mut state,
+        10,
+        10,
+        "loose content edited",
+        prompt,
+        revision
     ));
     assert!(state.prompt.is_saved(), "回执确认后复位为已保存");
     assert!(
@@ -1100,7 +1123,7 @@ fn autosave_commits_item_after_idle_delay() {
             .prompt_panel
             .tree
             .item(10)
-            .map(|item| item.content.as_str()),
+            .map(|item| item.active_content()),
         Some("loose content edited"),
         "内存树同步更新"
     );
@@ -1129,8 +1152,13 @@ fn autosave_resets_timer_on_new_edits() {
     );
     let revision = state.prompt.revision();
     let prompt = state.prompt.id();
-    assert!(crate::app::update::mark_prompt_saved(
-        &mut state, prompt, revision
+    assert!(crate::app::update::mark_prompt_page_persisted(
+        &mut state,
+        10,
+        10,
+        "loose contentab",
+        prompt,
+        revision
     ));
     assert!(state.prompt.is_saved());
 }
@@ -1151,7 +1179,7 @@ fn temp_never_autosaves() {
         state.workspaces[0]
             .prompt_panel
             .temp(temp_id)
-            .map(|temp| temp.content.as_str()),
+            .map(|temp| temp.active_content()),
         Some(""),
         "未提交时 temp 内容不动"
     );
@@ -1184,7 +1212,7 @@ fn save_prompt_now_saves_item_and_opens_picker_for_temp() {
         state.workspaces[0]
             .prompt_panel
             .temp(temp_id)
-            .map(|temp| temp.content.as_str()),
+            .map(|temp| temp.active_content()),
         Some("draft body"),
         "提交缓冲到 temp"
     );
@@ -1208,8 +1236,13 @@ fn next_deadline_includes_prompt_autosave() {
     // 回执未到时仍安排重试；模拟服务回执确认后不再有待触发。
     let revision = state.prompt.revision();
     let prompt = state.prompt.id();
-    assert!(crate::app::update::mark_prompt_saved(
-        &mut state, prompt, revision
+    assert!(crate::app::update::mark_prompt_page_persisted(
+        &mut state,
+        10,
+        10,
+        "loose contentx",
+        prompt,
+        revision
     ));
     assert!(
         crate::app::update::next_deadline(&state).is_none(),
@@ -1345,7 +1378,7 @@ fn switching_to_tree_commits_pre_paste_edits_without_placeholder() {
             .tree
             .item(12)
             .expect("item 12")
-            .content,
+            .active_content(),
         "nested contentX",
         "条目内容为粘贴前正文"
     );
@@ -1417,6 +1450,13 @@ fn status_change_syncs_all_panels_sharing_prompt_key() {
         name: "shared".into(),
         content: "body".into(),
         status: "todo".into(),
+        active_page_id: Some(1),
+        pages: vec![PromptPageRecord {
+            id: 1,
+            position: 0,
+            name: "Page 1".into(),
+            content: "body".into(),
+        }],
     }];
     apply_prompt_tree(&mut state, 0, Path::new("/repo"), vec![], prompts.clone());
     apply_prompt_tree(&mut state, 1, Path::new("/repo"), vec![], prompts);
@@ -1456,8 +1496,401 @@ fn apply_tree_unbinds_editing_when_item_removed_by_sharing_panel() {
             name: "remaining".into(),
             content: "c".into(),
             status: "todo".into(),
+            active_page_id: Some(11),
+            pages: vec![PromptPageRecord {
+                id: 11,
+                position: 0,
+                name: "Page 1".into(),
+                content: "c".into(),
+            }],
         }],
     );
     assert!(state.workspaces[0].prompt_panel.editing.is_none());
     assert_eq!(state.workspaces[0].prompt_panel.mode, PromptMode::Tree);
+}
+
+// ===== 分页行为 =====
+
+/// 给条目 10 追加第二页（id 110）并返回两页 id。
+fn add_second_page(state: &mut AppState) -> (PromptPageId, PromptPageId) {
+    let item = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item_mut(10)
+        .expect("item 10");
+    item.pages.push(PromptPage::saved(
+        110,
+        text::default_page_name(2),
+        "second page",
+    ));
+    (PromptPageId::Saved(10), PromptPageId::Saved(110))
+}
+
+/// demo 树的完整记录快照（重载用）；`active` / 第一页正文可定制。
+fn reload_records(active: Option<i64>, first_content: &str, second: bool) -> Vec<PromptRecord> {
+    let mut pages = vec![PromptPageRecord {
+        id: 10,
+        position: 0,
+        name: "Page 1".into(),
+        content: first_content.into(),
+    }];
+    if second {
+        pages.push(PromptPageRecord {
+            id: 110,
+            position: 1,
+            name: "Page 2".into(),
+            content: "second page".into(),
+        });
+    }
+    vec![PromptRecord {
+        id: 10,
+        folder_id: None,
+        name: "loose".into(),
+        content: first_content.into(),
+        status: "todo".into(),
+        active_page_id: active,
+        pages,
+    }]
+}
+
+#[test]
+fn switch_page_settles_edits_and_isolates_undo_history() {
+    let mut state = demo_state();
+    let (first, second) = add_second_page(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str(" edited");
+    assert!(state.prompt.can_undo());
+    assert!(select_prompt_page(&mut state, second));
+    assert_eq!(state.prompt.text(), "second page");
+    assert!(!state.prompt.can_undo(), "切页清空撤销历史（与旧页隔离）");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SavePromptContent { id: 10, page_id: 10, content, .. }
+                if content == "loose content edited"
+        )),
+        "旧页正文先结算保存"
+    );
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::SetActivePage {
+            id: 10,
+            page_id: 110,
+            ..
+        }
+    )));
+    // 切回旧页可见刚才的编辑，且页身份回写。
+    assert!(select_prompt_page(&mut state, first));
+    assert_eq!(state.prompt.text(), "loose content edited");
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::SetActivePage {
+            id: 10,
+            page_id: 10,
+            ..
+        }
+    )));
+}
+
+#[test]
+fn relative_page_switch_stops_at_edges() {
+    let mut state = demo_state();
+    let (_first, second) = add_second_page(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert!(!switch_prompt_page(&mut state, -1), "第一页左箭头置灰");
+    assert!(switch_prompt_page(&mut state, 1));
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(10)
+            .unwrap()
+            .active_page,
+        second
+    );
+    assert!(!switch_prompt_page(&mut state, 1), "末页右箭头不隐式新建");
+    assert_eq!(
+        state
+            .effects
+            .iter()
+            .filter(|effect| matches!(effect, Effect::CreatePage { .. }))
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn page_rename_commits_non_empty_and_keeps_name_on_escape() {
+    let mut state = demo_state();
+    let (_first, second) = add_second_page(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert!(select_prompt_page(&mut state, second));
+    state.effects.clear();
+    assert!(begin_page_rename(&mut state));
+    assert!(page_rename_active(&state));
+    // 空名回车拒绝并保持输入态。
+    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
+    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(page_rename_active(&state), "空名拒绝并保持输入态");
+    for ch in "Intro".chars() {
+        apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Char(ch));
+    }
+    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(!page_rename_active(&state));
+    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
+    assert_eq!(item.page(second).unwrap().name, "Intro");
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::RenamePage { page_id: 110, name, .. } if name == "Intro"
+    )));
+    // Esc 保留改名后的名称。
+    assert!(begin_page_rename(&mut state));
+    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Clear);
+    apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Esc);
+    assert!(!page_rename_active(&state));
+    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
+    assert_eq!(item.page(second).unwrap().name, "Intro");
+}
+
+#[test]
+fn delete_current_page_confirms_non_empty_and_guards_last_page() {
+    let mut state = demo_state();
+    let (first, second) = add_second_page(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    // 非空页：先二次确认；取消后页与正文保持原状。
+    assert!(delete_current_page(&mut state));
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::ConfirmClose(ConfirmClose {
+            target: OverlayTarget::PromptPage { page, .. },
+        })) if page == first
+    ));
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
+    assert!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(10)
+            .unwrap()
+            .page(first)
+            .is_some()
+    );
+    // 确认删除：显示原下一页。
+    assert!(delete_current_page(&mut state));
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
+    assert!(item.page(first).is_none());
+    assert_eq!(item.active_page, second);
+    assert_eq!(state.prompt.text(), "second page");
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::DeletePage {
+            id: 10,
+            page_id: 10,
+            ..
+        }
+    )));
+    // 空白页直接删除（无确认浮层）。
+    {
+        let item = state.workspaces[0].prompt_panel.tree.item_mut(10).unwrap();
+        item.pages
+            .push(PromptPage::saved(120, text::default_page_name(3), ""));
+        item.active_page = PromptPageId::Saved(120);
+    }
+    assert!(delete_current_page(&mut state));
+    assert!(state.overlay.is_none(), "空白页无确认直接删除");
+    assert!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(10)
+            .unwrap()
+            .page(PromptPageId::Saved(120))
+            .is_none()
+    );
+    // 最后一页不可删除。
+    assert!(!delete_current_page(&mut state));
+}
+
+#[test]
+fn page_menu_snapshots_counts_and_switches_on_activate() {
+    let mut state = demo_state();
+    {
+        let item = state.workspaces[0].prompt_panel.tree.item_mut(10).unwrap();
+        item.pages[0].content = "&&& addTemplate --start\nbody\n&&& addTemplate --end".into();
+        item.pages.push(PromptPage::saved(
+            110,
+            "Page 2",
+            "&&& bugTemplate --start\n&&& bugTemplate --end",
+        ));
+    }
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert!(open_prompt_page_menu(&mut state, (3, 3)));
+    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
+        panic!("page menu open");
+    };
+    assert_eq!(menu.rows.len(), 4, "New page + 两页 + Delete page");
+    assert!(matches!(menu.rows[0], PageMenuRow::NewPage));
+    assert!(matches!(
+        &menu.rows[1],
+        PageMenuRow::Page { current: true, counts, .. } if counts.todo == 1
+    ));
+    assert!(matches!(
+        &menu.rows[2],
+        PageMenuRow::Page { current: false, counts, .. } if counts.todo == 1
+    ));
+    assert!(matches!(
+        menu.rows[3],
+        PageMenuRow::DeletePage { enabled: true }
+    ));
+    assert_eq!(menu.selected, 1, "当前页行默认高亮");
+    assert!(set_page_menu_selection(&mut state, 2));
+    assert!(activate_page_menu_row(&mut state));
+    assert!(state.overlay.is_none(), "选择页行后关闭菜单");
+    assert_eq!(
+        state.prompt.text(),
+        "&&& bugTemplate --start\n&&& bugTemplate --end"
+    );
+}
+
+#[test]
+fn page_menu_delete_disabled_for_single_page() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert!(open_prompt_page_menu(&mut state, (3, 3)));
+    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
+        panic!("page menu open");
+    };
+    let last = menu.rows.len() - 1;
+    assert!(matches!(
+        menu.rows.last(),
+        Some(PageMenuRow::DeletePage { enabled: false })
+    ));
+    assert!(set_page_menu_selection(&mut state, last));
+    assert!(!activate_page_menu_row(&mut state), "禁用删除不动作");
+    assert!(state.overlay.is_some(), "菜单保持打开");
+}
+
+#[test]
+fn copy_content_uses_active_page_only() {
+    let mut state = demo_state();
+    let (_first, second) = add_second_page(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert!(select_prompt_page(&mut state, second));
+    state.effects.clear();
+    copy_prompt_content(&mut state, 0, 10);
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CopyToClipboard(text) if text == "second page"
+    )));
+}
+
+#[test]
+fn tree_reload_preserves_pending_page_content() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str(" edited");
+    commit_prompt_buffer(&mut state, 0);
+    assert!(state.workspaces[0].prompt_panel.page_pending(10, 10));
+    // 别处改名触发的重载：数据库正文仍旧，但未确认页保留内存正文与标记。
+    apply_prompt_tree(
+        &mut state,
+        0,
+        Path::new("/ws"),
+        vec![],
+        reload_records(Some(10), "loose content", false),
+    );
+    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
+    assert_eq!(
+        item.active_content(),
+        "loose content edited",
+        "未确认页不被重载覆盖"
+    );
+    assert!(state.workspaces[0].prompt_panel.page_pending(10, 10));
+}
+
+#[test]
+fn tree_reload_rebinds_editor_when_shared_panel_switches_page() {
+    let mut state = demo_state();
+    {
+        let item = state.workspaces[0].prompt_panel.tree.item_mut(10).unwrap();
+        item.pages.push(PromptPage::saved(
+            110,
+            text::default_page_name(2),
+            "second page",
+        ));
+    }
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    state.prompt.insert_str(" edited");
+    state.effects.clear();
+    // 同键面板把当前页切到第二页后重载：旧页先结算，再重绑新页。
+    apply_prompt_tree(
+        &mut state,
+        0,
+        Path::new("/ws"),
+        vec![],
+        reload_records(Some(110), "loose content", true),
+    );
+    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
+    assert_eq!(item.active_page, PromptPageId::Saved(110));
+    assert_eq!(state.prompt.text(), "second page", "编辑缓冲重绑新当前页");
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SavePromptContent { page_id: 10, content, .. }
+                if content == "loose content edited"
+        )),
+        "旧页正文先结算保存"
+    );
+}
+
+#[test]
+fn overlay_enter_activates_page_menu_and_escape_closes_without_switch() {
+    let mut state = demo_state();
+    let (_first, second) = add_second_page(&mut state);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert!(select_prompt_page(&mut state, second));
+    // 菜单当前页行高亮；上移到第一页行并回车：切页并关闭。
+    assert!(open_prompt_page_menu(&mut state, (3, 3)));
+    assert!(set_page_menu_selection(&mut state, 1));
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.prompt.text(), "loose content");
+    // Esc 关闭菜单且不改正文。
+    assert!(open_prompt_page_menu(&mut state, (3, 3)));
+    apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Esc);
+    assert!(state.overlay.is_none());
+    assert_eq!(state.prompt.text(), "loose content");
+}
+
+#[test]
+fn tree_load_repairs_invalid_active_page_to_first() {
+    let mut state = demo_state();
+    state.effects.clear();
+    // 记录的当前页 id 失效：读取回退第一页并登记修复。
+    apply_prompt_tree(
+        &mut state,
+        0,
+        Path::new("/ws"),
+        vec![],
+        reload_records(Some(999), "loose content", false),
+    );
+    let item = state.workspaces[0].prompt_panel.tree.item(10).unwrap();
+    assert_eq!(
+        item.active_page,
+        PromptPageId::Saved(10),
+        "失效 id 回退第一页"
+    );
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SetActivePage {
+                id: 10,
+                page_id: 10,
+                ..
+            }
+        )),
+        "登记当前页修复: {:?}",
+        state.effects
+    );
 }

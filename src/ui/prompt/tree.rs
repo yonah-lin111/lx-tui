@@ -237,24 +237,44 @@ fn paint_row(
                 area.right(),
             );
             x = paint_text(buf, x, y, " ", base, area.right());
-            let status = text::prompt_status_label(item.status);
-            let status_width = width_of(status) as u16;
-            let gap = u16::from(status_width > 0);
-            let max = usize::from(
-                area.right()
-                    .saturating_sub(x)
-                    .saturating_sub(status_width + gap),
-            );
-            paint_name(buf, x, y, &item.name, base, max, area.right());
-            if status_width > 0 && status_width <= area.width {
-                let status_x = area.right() - status_width;
-                let status_style = if selected {
-                    base
-                } else {
-                    style::prompt_status(item.status)
-                };
-                paint_text(buf, status_x, y, status, status_style, area.right());
+            // 右侧段：条目状态 + 各页模板块计数合计（零数量省略）；
+            // 物理宽度不足时从尾部逐个省略完整计数标签，名称最后截断。
+            let mut segments: Vec<(String, ratatui::style::Style)> = Vec::new();
+            let status = text::prompt_status_label(item.status).to_string();
+            if !status.is_empty() {
+                segments.push((
+                    status,
+                    if selected {
+                        base
+                    } else {
+                        style::prompt_status(item.status)
+                    },
+                ));
             }
+            let counts = item.template_counts();
+            for (status, count) in [
+                (crate::app::markdown::TemplateStatus::Todo, counts.todo),
+                (
+                    crate::app::markdown::TemplateStatus::InProgress,
+                    counts.in_progress,
+                ),
+                (crate::app::markdown::TemplateStatus::Done, counts.done),
+            ] {
+                if count == 0 {
+                    continue;
+                }
+                segments.push((
+                    text::template_count_label(status, count),
+                    if selected {
+                        base
+                    } else {
+                        style::template_status(status)
+                    },
+                ));
+            }
+            let used = paint_right_segments(buf, area, y, &mut segments, x);
+            let max = usize::from(used.saturating_sub(x).saturating_sub(1));
+            paint_name(buf, x, y, &item.name, base, max, area.right());
         }
         PromptRowKind::Section(section) => {
             let label = match section {
@@ -288,11 +308,44 @@ fn paint_row(
             paint_name(buf, x, y, temp.display_name(), base, max, area.right());
             if badge_width > 0 && badge_width <= area.width {
                 let badge_x = area.right() - badge_width;
-                let badge_style = if selected { base } else { style::accent() };
+                // `[tmp]` 标注使用默认文字色（不再用主题 accent）。
+                let badge_style = if selected { base } else { style::text() };
                 paint_text(buf, badge_x, y, badge, badge_style, area.right());
             }
         }
     }
+}
+
+/// 右对齐绘制状态/计数段（从右向左排布）；宽度不足时从尾部逐个省略完整标签；
+/// 返回最左绘制段之后的 x（名称区右界，名称与前一段留 1 列空档）。
+fn paint_right_segments(
+    buf: &mut Buffer,
+    area: Rect,
+    y: u16,
+    segments: &mut Vec<(String, ratatui::style::Style)>,
+    left_limit: u16,
+) -> u16 {
+    loop {
+        let total: usize = segments
+            .iter()
+            .map(|(label, _)| width_of(label))
+            .sum::<usize>()
+            + segments.len().saturating_sub(1);
+        if segments.is_empty() || total <= usize::from(area.right().saturating_sub(left_limit)) {
+            break;
+        }
+        segments.pop();
+    }
+    let mut x = area.right();
+    for (index, (label, label_style)) in segments.iter().enumerate().rev() {
+        let width = width_of(label) as u16;
+        x = x.saturating_sub(width);
+        paint_text(buf, x, y, label, *label_style, area.right());
+        if index > 0 {
+            x = x.saturating_sub(1);
+        }
+    }
+    x
 }
 
 /// 选中行整行铺选中底色，保证高亮跨满行宽。

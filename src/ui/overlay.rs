@@ -1,17 +1,30 @@
 //! 浮层渲染：右键菜单、重命名与关闭确认；几何与命中供事件循环复用。
 
+mod page_menu;
+mod worktree;
+
+use page_menu::render_page_menu;
+pub use page_menu::{
+    page_menu_item_at, page_menu_layout, page_menu_max_rows, page_menu_visible_start,
+};
+use worktree::render_worktree_open;
+pub use worktree::{
+    worktree_dialog_button_at, worktree_dialog_entry_at, worktree_dialog_max_rows,
+    worktree_dialog_shell, worktree_dialog_visible_start,
+};
+
 use std::path::Path;
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::text::{Line, Span};
+use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{
     ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewNode,
     NewNodeKind, NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft,
-    SaveDraftEntry, WorktreeOpen, WorktreeOpenEntry, WorktreeStatus,
+    SaveDraftEntry,
 };
 use crate::app::state::{AppState, tab_label};
 use crate::app::trust::TrustWorkspace;
@@ -93,78 +106,6 @@ pub enum WorktreeDialogButton {
 pub enum TrustButton {
     Trust,
     Refuse,
-}
-
-/// worktree 对话框几何；条目两行一条，高度随条目数夹取。
-pub fn worktree_dialog_shell(
-    screen: Rect,
-    entry_count: usize,
-) -> Option<widgets::modal::ModalShell> {
-    let rows = entry_count.max(1).saturating_mul(2) as u16;
-    let height = rows
-        .saturating_add(6)
-        .clamp(WORKTREE_DIALOG_MIN_HEIGHT, WORKTREE_DIALOG_MAX_HEIGHT);
-    widgets::modal::layout(screen, WORKTREE_DIALOG_WIDTH, height)
-}
-
-/// 对话框列表可视条目数；每条两行。
-pub fn worktree_dialog_max_rows(shell: &widgets::modal::ModalShell) -> usize {
-    usize::from(shell.inner.height.saturating_sub(3)) / 2
-}
-
-/// 列表窗口起始条目位置：让选中项落在窗口内。
-pub fn worktree_dialog_visible_start(dialog: &WorktreeOpen, max_rows: usize) -> usize {
-    if max_rows == 0 {
-        return 0;
-    }
-    let filtered = dialog.filtered_indices();
-    let position = dialog
-        .selected_entry_index()
-        .and_then(|index| filtered.iter().position(|candidate| *candidate == index))
-        .unwrap_or(0);
-    position.saturating_add(1).saturating_sub(max_rows)
-}
-
-/// 命中对话框条目；返回条目索引（非过滤位置）。
-pub fn worktree_dialog_entry_at(
-    shell: &widgets::modal::ModalShell,
-    dialog: &WorktreeOpen,
-    column: u16,
-    row: u16,
-) -> Option<usize> {
-    let list_y = shell.inner.y.saturating_add(2);
-    if column < shell.inner.x || column >= shell.inner.right() || row < list_y {
-        return None;
-    }
-    let max_rows = worktree_dialog_max_rows(shell);
-    if max_rows == 0 {
-        return None;
-    }
-    let offset = usize::from(row - list_y) / 2;
-    if offset >= max_rows {
-        return None;
-    }
-    let start = worktree_dialog_visible_start(dialog, max_rows);
-    dialog.filtered_indices().get(start + offset).copied()
-}
-
-/// 命中对话框按钮。
-pub fn worktree_dialog_button_at(
-    shell: &widgets::modal::ModalShell,
-    column: u16,
-    row: u16,
-) -> Option<WorktreeDialogButton> {
-    let rects = widgets::modal::button_row(
-        shell.inner,
-        &WORKTREE_DIALOG_BUTTONS,
-        BUTTON_GAP,
-        shell.inner.height.saturating_sub(1),
-    );
-    match widgets::modal::button_at(&rects, column, row) {
-        Some(0) => Some(WorktreeDialogButton::Open),
-        Some(1) => Some(WorktreeDialogButton::Cancel),
-        _ => None,
-    }
 }
 
 /// 菜单几何与文案；渲染与鼠标命中共用。
@@ -362,6 +303,10 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::NewNode(node) => render_new_node(frame, screen, node),
         Overlay::SaveDraft(dialog) => render_save_draft(frame, screen, dialog),
+        Overlay::PageMenu(menu) => {
+            render_page_menu(frame, screen, state, menu);
+            None
+        }
     }
 }
 
@@ -656,10 +601,36 @@ fn confirm_text(state: &AppState, target: OverlayTarget) -> (&'static str, Strin
             text::CONFIRM_DELETE_PROMPT_TITLE,
             prompt_item_name(state, workspace, item_id).unwrap_or_default(),
         ),
+        OverlayTarget::PromptPage {
+            workspace,
+            owner,
+            page,
+        } => (
+            text::CONFIRM_DELETE_PAGE_TITLE,
+            prompt_page_name(state, workspace, owner, page).unwrap_or_default(),
+        ),
         OverlayTarget::TempPrompt { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
         OverlayTarget::PromptTree { .. } => (text::CONFIRM_CLOSE_TITLE, String::new()),
         OverlayTarget::WorkspaceList => (text::CONFIRM_CLOSE_TITLE, String::new()),
     }
+}
+
+/// 提示词页名（删除确认用）。
+fn prompt_page_name(
+    state: &AppState,
+    workspace: usize,
+    owner: crate::app::prompt::PromptEditing,
+    page: crate::app::prompt::PromptPageId,
+) -> Option<String> {
+    let panel = &state.workspaces.get(workspace)?.prompt_panel;
+    let pages = match owner {
+        crate::app::prompt::PromptEditing::Item(id) => &panel.tree.item(id)?.pages,
+        crate::app::prompt::PromptEditing::Temp(id) => &panel.temp(id)?.pages,
+    };
+    pages
+        .iter()
+        .find(|candidate| candidate.id == page)
+        .map(|page| page.name.clone())
 }
 
 /// 提示词树文件夹名。
@@ -770,6 +741,7 @@ fn menu_title(state: &AppState, menu: &Menu) -> String {
                 .unwrap_or_else(|| text::MENU_TITLE_PROMPT.to_string())
         }
         OverlayTarget::PromptTree { .. } => text::MENU_TITLE_PROMPT_TREE.to_string(),
+        OverlayTarget::PromptPage { .. } => text::MENU_TITLE_PAGES.to_string(),
         OverlayTarget::WorkspaceList => text::MENU_TITLE_WORKSPACES.to_string(),
     }
 }
@@ -873,6 +845,7 @@ pub fn confirm_question(state: &AppState, target: OverlayTarget) -> String {
     match target {
         OverlayTarget::PromptFolder { .. } => text::confirm_delete_folder_question(&name),
         OverlayTarget::PromptItem { .. } => text::confirm_delete_question(&name),
+        OverlayTarget::PromptPage { .. } => text::confirm_delete_page_question(&name),
         _ => text::confirm_close_question(&name),
     }
 }
@@ -998,151 +971,6 @@ fn render_input(
         cursor,
         placeholder,
     )
-}
-
-/// worktree 对话框：搜索行、分隔线、两行条目与底部按钮；返回搜索光标位置。
-fn render_worktree_open(
-    frame: &mut Frame<'_>,
-    screen: Rect,
-    dialog: &WorktreeOpen,
-) -> Option<(u16, u16)> {
-    let shell = worktree_dialog_shell(screen, dialog.entries.len())?;
-    widgets::modal::render(frame, &shell, text::WORKTREE_OPEN_TITLE);
-    if shell.inner.width == 0 || shell.inner.height == 0 {
-        return None;
-    }
-    let search_area = Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1);
-    let cursor = render_input(
-        frame,
-        search_area,
-        dialog.query.text(),
-        dialog.query.cursor(),
-        Some(text::WORKTREE_OPEN_FILTER),
-    );
-    let separator_area = Rect::new(
-        shell.inner.x,
-        shell.inner.y.saturating_add(1),
-        shell.inner.width,
-        1,
-    );
-    frame.render_widget(
-        Paragraph::new(text::DIVIDER_MID.repeat(usize::from(shell.inner.width)))
-            .style(style::border(false)),
-        separator_area,
-    );
-
-    let list_y = shell.inner.y.saturating_add(2);
-    let list_area = Rect::new(
-        shell.inner.x,
-        list_y,
-        shell.inner.width,
-        shell.inner.height.saturating_sub(3),
-    );
-    let message = if dialog.loading {
-        Some(text::WORKTREE_OPEN_LOADING)
-    } else if dialog.failed {
-        Some(text::WORKTREE_OPEN_FAILED)
-    } else if dialog.filtered_indices().is_empty() {
-        Some(text::WORKTREE_OPEN_EMPTY)
-    } else {
-        None
-    };
-    if let Some(message) = message {
-        frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {message}"), style::muted())),
-            Rect {
-                height: 1,
-                ..list_area
-            },
-        );
-    } else {
-        let max_rows = worktree_dialog_max_rows(&shell);
-        let start = worktree_dialog_visible_start(dialog, max_rows);
-        let selected = dialog.selected_entry_index();
-        for (visible, entry_index) in dialog
-            .filtered_indices()
-            .iter()
-            .skip(start)
-            .take(max_rows)
-            .enumerate()
-        {
-            let Some(entry) = dialog.entries.get(*entry_index) else {
-                continue;
-            };
-            let y = list_y.saturating_add((visible as u16).saturating_mul(2));
-            render_worktree_entry(frame, shell.inner, y, entry, Some(*entry_index) == selected);
-        }
-    }
-
-    render_buttons(
-        frame,
-        &widgets::modal::button_row(
-            shell.inner,
-            &WORKTREE_DIALOG_BUTTONS,
-            BUTTON_GAP,
-            shell.inner.height.saturating_sub(1),
-        ),
-        &[
-            (text::BUTTON_OPEN, style::accent()),
-            (text::BUTTON_CANCEL, style::muted()),
-        ],
-    );
-    cursor
-}
-
-/// 单条 worktree：首行 `› 名字` 加右对齐状态，次行缩进路径。
-fn render_worktree_entry(
-    frame: &mut Frame<'_>,
-    inner: Rect,
-    y: u16,
-    entry: &WorktreeOpenEntry,
-    selected: bool,
-) {
-    let width = usize::from(inner.width);
-    let marker = if selected {
-        text::WORKTREE_OPEN_MARKER
-    } else {
-        " "
-    };
-    let name_style = if selected {
-        style::accent()
-    } else {
-        style::text()
-    };
-    let status = match entry.status() {
-        WorktreeStatus::Open => text::WORKTREE_STATUS_OPEN,
-        WorktreeStatus::Detached => text::WORKTREE_STATUS_DETACHED,
-        WorktreeStatus::Root => text::WORKTREE_STATUS_ROOT,
-        WorktreeStatus::Branch => "",
-    };
-    let prefix = format!("{marker} ");
-    let name_width = width
-        .saturating_sub(prefix.chars().count())
-        .saturating_sub(status.chars().count())
-        .saturating_sub(1);
-    let title = format!(
-        "{prefix}{}",
-        text::ellipsize(&entry.display_name(), name_width)
-    );
-    let pad = width
-        .saturating_sub(title.chars().count())
-        .saturating_sub(status.chars().count())
-        .max(1);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(title, name_style),
-            Span::styled(" ".repeat(pad), name_style),
-            Span::styled(status, style::muted()),
-        ])),
-        Rect::new(inner.x, y, inner.width, 1),
-    );
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            text::ellipsize(&format!("  {}", entry.path.display()), width),
-            style::muted(),
-        )),
-        Rect::new(inner.x, y.saturating_add(1), inner.width, 1),
-    );
 }
 
 #[cfg(test)]

@@ -57,6 +57,46 @@ pub struct BlockScan {
     pub spans: Vec<BlockSpan>,
 }
 
+/// 模板块状态计数：仅统计闭合的顶层 `&&&`（`+++`、代码围栏与未闭合块不纳入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TemplateCounts {
+    pub todo: usize,
+    pub in_progress: usize,
+    pub done: usize,
+}
+
+impl TemplateCounts {
+    /// 合并两组计数（跨页聚合）。
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            todo: self.todo + other.todo,
+            in_progress: self.in_progress + other.in_progress,
+            done: self.done + other.done,
+        }
+    }
+
+    /// 是否全部为零。
+    pub fn is_empty(self) -> bool {
+        self.todo == 0 && self.in_progress == 0 && self.done == 0
+    }
+}
+
+/// 统计正文的闭合顶层模板块状态；未闭合块不纳入完成情况。
+pub fn template_counts(text: &str) -> TemplateCounts {
+    let mut counts = TemplateCounts::default();
+    for span in block_spans(text) {
+        if span.kind != BlockKind::Template || !span.closed {
+            continue;
+        }
+        match span.status {
+            TemplateStatus::Todo => counts.todo += 1,
+            TemplateStatus::InProgress => counts.in_progress += 1,
+            TemplateStatus::Done => counts.done += 1,
+        }
+    }
+    counts
+}
+
 /// 光标所处的块上下文；决定斜杠命令的可见性。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockContext {

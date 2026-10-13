@@ -53,6 +53,7 @@ pub fn apply(action: Action, state: &mut AppState) {
                 state.prompt_focused = false;
                 clear_selection(state);
                 state.prompt.clear_panel();
+                cancel_page_rename(state);
             }
         }
         Action::TogglePanes => state.panes_collapsed = !state.panes_collapsed,
@@ -322,6 +323,7 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     commit_prompt_buffer(state, from);
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt_panel.drop_blank_temp_binding();
+        workspace.prompt_panel.cancel_page_rename();
     }
     state.prompt.mark_saved();
     let mut next = state
@@ -595,10 +597,11 @@ pub fn focus_prompt(state: &mut AppState) {
     state.prompt_focused = true;
 }
 
-/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板。
+/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
     state.prompt.clear_panel();
+    cancel_page_rename(state);
     state.active_tab_mut().layout.focus_pane(id);
 }
 
@@ -912,7 +915,17 @@ fn autoscroll_step(
     let moved = if terminal {
         scroll_pane_lines(state, pane, step, lines)
     } else {
-        scroll_prompt_selection(state, step, lines)
+        // 拖选自动滚动到真实正文边界即停，不进入底部虚拟留白。
+        let cap = state.prompt.text_max_scroll();
+        if state.prompt.scroll() >= cap {
+            false
+        } else {
+            scroll_prompt_selection(state, step, lines);
+            if state.prompt.scroll() > cap {
+                state.prompt.scroll_to(cap);
+            }
+            true
+        }
     };
     if !moved {
         return false;
@@ -1645,8 +1658,12 @@ pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 菜单高亮按步长循环移动。
+/// 菜单高亮按步长循环移动；页码菜单按列表语义钳制移动。
 pub fn move_menu_selection(state: &mut AppState, step: isize) {
+    if matches!(state.overlay, Some(Overlay::PageMenu(_))) {
+        move_page_menu_selection(state, step);
+        return;
+    }
     let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
         return;
     };
@@ -1937,6 +1954,10 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 confirm_close(state);
                 None
             }
+            Some(OverlayKind::PageMenu) => {
+                activate_page_menu_row(state);
+                None
+            }
             Some(OverlayKind::ConfirmSwitchCwd) => confirm_switch_cwd(state),
             Some(OverlayKind::ConfirmSyncWorkspaceCwd) => {
                 confirm_sync_workspace_cwd(state);
@@ -2083,6 +2104,13 @@ fn confirm_close(state: &mut AppState) {
         } => delete_prompt_folder(state, workspace, folder_id),
         OverlayTarget::PromptItem { workspace, item_id } => {
             delete_prompt_item(state, workspace, item_id);
+        }
+        OverlayTarget::PromptPage {
+            workspace,
+            owner,
+            page,
+        } => {
+            confirm_delete_page(state, workspace, owner, page);
         }
         OverlayTarget::TempPrompt { .. } => {}
         OverlayTarget::PromptTree { .. } => {}

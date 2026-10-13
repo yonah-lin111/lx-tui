@@ -272,19 +272,29 @@ fn scroll_by_moves_viewport_without_cursor_and_reattaches_on_edit() {
     prompt.scroll_by(1);
     assert_eq!(prompt.scroll(), 1);
     prompt.scroll_by(5);
-    assert_eq!(prompt.scroll(), 2);
+    assert_eq!(
+        prompt.scroll(),
+        3,
+        "底部虚拟空占位允许多滚半屏（高 2 → 1 行）"
+    );
     prompt.insert_char('x');
-    assert_eq!(prompt.scroll(), 2);
+    assert_eq!(prompt.scroll(), 2, "编辑时按光标跟随收回留白");
     assert!(prompt.cursor_cell().is_some());
 }
 
 #[test]
-fn scroll_by_keeps_viewport_fixed_within_short_text() {
+fn scroll_by_can_enter_bottom_padding_for_short_text() {
     let mut prompt = prompt(10, 5);
     prompt.insert_str("1\n2");
-    assert_eq!(prompt.scroll(), 0);
+    assert_eq!(prompt.scroll(), 0, "短正文初次打开仍在顶部");
     prompt.scroll_by(3);
-    assert_eq!(prompt.scroll(), 0);
+    assert_eq!(
+        prompt.scroll(),
+        2,
+        "滚轮可进入底部半屏留白（5 / 2 向下取整）"
+    );
+    prompt.scroll_to(99);
+    assert_eq!(prompt.scroll(), 2, "滚动条偏移同样钳到留白上限");
 }
 
 #[test]

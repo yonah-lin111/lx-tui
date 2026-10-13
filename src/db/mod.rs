@@ -15,7 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
+
+/// 旧正文迁移为唯一第一页时使用的默认页名。
+const FIRST_PAGE_NAME: &str = "Page 1";
 
 /// 建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
 const SCHEMA: &str = r#"
@@ -53,6 +56,7 @@ CREATE TABLE IF NOT EXISTS workspace_prompt (
     name TEXT NOT NULL,
     content TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'completed')),
+    active_page_id INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
@@ -61,6 +65,24 @@ CREATE TABLE IF NOT EXISTS workspace_prompt (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_workspace_id ON workspace_prompt(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(folder_id);
+"#;
+
+/// v4 分页建表语句：页表以 `(prompt_id, position)` 唯一约束保证创建顺序；
+/// `workspace_prompt.content` 保留为第一页镜像（兼容既有读取者）。
+const SCHEMA_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS workspace_prompt_page (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (prompt_id, position),
+    FOREIGN KEY (prompt_id) REFERENCES workspace_prompt(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_prompt_page_prompt_id ON workspace_prompt_page(prompt_id);
 "#;
 
 /// 持久层错误；仅事件层记录日志，不直接面向用户。
@@ -76,6 +98,8 @@ pub enum DbError {
     WorkspaceMissing,
     /// 目标文件夹不存在。
     FolderMissing,
+    /// 目标提示词页不存在。
+    PageMissing,
     /// 文件夹嵌套超过 2 层约束。
     DepthExceeded,
     /// 数据库版本高于当前程序支持值（不能用旧代码覆盖新结构）。
@@ -90,6 +114,7 @@ impl fmt::Display for DbError {
             Self::Sqlite(error) => write!(formatter, "sqlite error: {error}"),
             Self::WorkspaceMissing => write!(formatter, "workspace not registered"),
             Self::FolderMissing => write!(formatter, "folder not found"),
+            Self::PageMissing => write!(formatter, "prompt page not found"),
             Self::DepthExceeded => write!(formatter, "folder nesting depth exceeded"),
             Self::UnsupportedSchema(version) => {
                 write!(
@@ -126,15 +151,29 @@ pub struct FolderRecord {
     pub name: String,
 }
 
+/// 提示词页记录；`position` 为创建顺序（删除留空、不重排）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptPageRecord {
+    pub id: i64,
+    pub position: i64,
+    pub name: String,
+    pub content: String,
+}
+
 /// 提示词记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromptRecord {
     pub id: i64,
     pub folder_id: Option<i64>,
     pub name: String,
+    /// 第一页正文镜像；正文真源为 `pages`，读取当前页不得使用此列。
     pub content: String,
     /// 状态稳定值：`todo` / `in_progress` / `completed`。
     pub status: String,
+    /// 上次打开的页 id；失效或为空时由应用层回退第一页。
+    pub active_page_id: Option<i64>,
+    /// 全部页（按 `position` 升序；迁移后至少一页）。
+    pub pages: Vec<PromptPageRecord>,
 }
 
 /// SQLite 连接包装：打开、迁移与领域读写。
@@ -170,6 +209,9 @@ impl Database {
     ///
     /// 开发期的资产/附件表已随截图粘贴功能移除，老库中遗留的这些表不再被读写；
     /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。
+    ///
+    /// v4 迁移把每条旧提示词的正文原样复制为唯一 `Page 1` 并指向当前页；
+    /// 已升级库不再回填（版本号门控），空库得到同一结构。
     fn migrate(&mut self) -> Result<()> {
         let version: i64 = self
             .conn
@@ -180,6 +222,36 @@ impl Database {
         if version < SCHEMA_VERSION {
             let transaction = self.conn.transaction()?;
             transaction.execute_batch(SCHEMA)?;
+            if version < 4 {
+                transaction.execute_batch(SCHEMA_V4)?;
+                // 老库的 workspace_prompt 由历史 SCHEMA 建立，缺 active_page_id 列。
+                if !column_exists(&transaction, "workspace_prompt", "active_page_id")? {
+                    transaction.execute_batch(
+                        "ALTER TABLE workspace_prompt ADD COLUMN active_page_id INTEGER;",
+                    )?;
+                }
+                // 旧正文逐字进入唯一 Page 1；已有页的提示词（重复迁移）不重复生成。
+                transaction.execute(
+                    r#"INSERT INTO workspace_prompt_page
+                           (prompt_id, position, name, content, created_at, updated_at)
+                       SELECT p.id, 0, ?1, p.content, datetime('now'), datetime('now')
+                       FROM workspace_prompt p
+                       WHERE NOT EXISTS (
+                           SELECT 1 FROM workspace_prompt_page pg WHERE pg.prompt_id = p.id
+                       )"#,
+                    params![FIRST_PAGE_NAME],
+                )?;
+                transaction.execute(
+                    r#"UPDATE workspace_prompt
+                       SET active_page_id = (
+                           SELECT pg.id FROM workspace_prompt_page pg
+                           WHERE pg.prompt_id = workspace_prompt.id
+                           ORDER BY pg.position LIMIT 1
+                       )
+                       WHERE active_page_id IS NULL"#,
+                    [],
+                )?;
+            }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;
         }
@@ -264,33 +336,59 @@ impl Database {
             .map_err(DbError::from)
     }
 
-    /// 工作区内全部提示词（按创建顺序）。
+    /// 工作区内全部提示词（按创建顺序）；每条的页集合一次批量读取。
     pub fn list_prompts(&self, workspace: &Path) -> Result<Vec<PromptRecord>> {
         let Some(external) = self.workspace_external_id(workspace)? else {
             return Ok(Vec::new());
         };
         let mut statement = self.conn.prepare(
-            r#"SELECT p.id, p.external_id, f.id, p.name, p.content, p.status
+            r#"SELECT p.id, p.external_id, f.id, p.name, p.content, p.status, p.active_page_id
                FROM workspace_prompt p
                LEFT JOIN workspace_folder f ON p.folder_id = f.external_id
                WHERE p.workspace_id = ?1
                ORDER BY p.id"#,
         )?;
-        let prompts: Vec<(String, PromptRecord)> = statement
+        let mut prompts: Vec<PromptRecord> = statement
             .query_map(params![external], |row| {
-                Ok((
-                    row.get::<_, String>(1)?,
-                    PromptRecord {
-                        id: row.get(0)?,
-                        folder_id: row.get(2)?,
-                        name: row.get(3)?,
-                        content: row.get(4)?,
-                        status: row.get(5)?,
-                    },
-                ))
+                Ok(PromptRecord {
+                    id: row.get(0)?,
+                    folder_id: row.get(2)?,
+                    name: row.get(3)?,
+                    content: row.get(4)?,
+                    status: row.get(5)?,
+                    active_page_id: row.get(6)?,
+                    pages: Vec::new(),
+                })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(prompts.into_iter().map(|(_, record)| record).collect())
+        let mut pages_statement = self.conn.prepare(
+            r#"SELECT pg.prompt_id, pg.id, pg.position, pg.name, pg.content
+               FROM workspace_prompt_page pg
+               JOIN workspace_prompt p ON p.id = pg.prompt_id
+               WHERE p.workspace_id = ?1
+               ORDER BY pg.prompt_id, pg.position"#,
+        )?;
+        let mut pages: std::collections::HashMap<i64, Vec<PromptPageRecord>> =
+            std::collections::HashMap::new();
+        let rows = pages_statement.query_map(params![external], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                PromptPageRecord {
+                    id: row.get(1)?,
+                    position: row.get(2)?,
+                    name: row.get(3)?,
+                    content: row.get(4)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (prompt_id, page) = row?;
+            pages.entry(prompt_id).or_default().push(page);
+        }
+        for prompt in &mut prompts {
+            prompt.pages = pages.remove(&prompt.id).unwrap_or_default();
+        }
+        Ok(prompts)
     }
 
     /// 新建文件夹；`parent_id` 必须为根层文件夹（目录嵌套最多 2 层）。
@@ -348,13 +446,17 @@ impl Database {
         Ok(())
     }
 
-    /// 新建提示词；`folder_id` 为 None 时挂在根层。
+    /// 新建提示词与全部页；`folder_id` 为 None 时挂在根层。
+    ///
+    /// `pages` 为（页名，正文）序列（临时提示词升格时携带全部页）；
+    /// 为空时建立唯一的空 `Page 1`。第一页正文写入镜像列，当前页指向第一页。
+    /// 同一事务完成，成功后才由调用方移除临时对象。
     pub fn create_prompt(
         &self,
         workspace: &Path,
         folder_id: Option<i64>,
         name: &str,
-        content: &str,
+        pages: &[(String, String)],
     ) -> Result<i64> {
         self.ensure_workspace(workspace)?;
         let workspace_external = self
@@ -374,7 +476,14 @@ impl Database {
             }
             None => None,
         };
-        self.conn.execute(
+        let default_page = (FIRST_PAGE_NAME.to_string(), String::new());
+        let pages: Vec<&(String, String)> = if pages.is_empty() {
+            vec![&default_page]
+        } else {
+            pages.iter().collect()
+        };
+        let transaction = self.conn.unchecked_transaction()?;
+        transaction.execute(
             r#"INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at)
                VALUES (?1, ?2, ?3, ?4, ?5, 'todo', datetime('now'), datetime('now'))"#,
             params![
@@ -382,10 +491,27 @@ impl Database {
                 workspace_external,
                 folder_external,
                 name,
-                content
+                pages[0].1
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let prompt_id = transaction.last_insert_rowid();
+        let mut first_page_id = 0;
+        for (position, (page_name, content)) in pages.iter().enumerate() {
+            transaction.execute(
+                r#"INSERT INTO workspace_prompt_page (prompt_id, position, name, content, created_at, updated_at)
+                   VALUES (?1, ?2, ?3, ?4, datetime('now'), datetime('now'))"#,
+                params![prompt_id, position as i64, page_name, content],
+            )?;
+            if position == 0 {
+                first_page_id = transaction.last_insert_rowid();
+            }
+        }
+        transaction.execute(
+            "UPDATE workspace_prompt SET active_page_id = ?1 WHERE id = ?2",
+            params![first_page_id, prompt_id],
+        )?;
+        transaction.commit()?;
+        Ok(prompt_id)
     }
 
     /// 重命名提示词。
@@ -397,14 +523,136 @@ impl Database {
         Ok(())
     }
 
-    /// 更新提示词正文。
-    pub fn update_prompt_document(&self, id: i64, content: &str) -> Result<()> {
-        let updated = self.conn.execute(
-            "UPDATE workspace_prompt SET content = ?1, updated_at = datetime('now') WHERE id = ?2",
+    /// 更新一页正文；该页为第一页（最小 `position`）时同一事务同步镜像列。
+    pub fn update_page_content(&self, id: i64, content: &str) -> Result<()> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let updated = transaction.execute(
+            "UPDATE workspace_prompt_page SET content = ?1, updated_at = datetime('now') WHERE id = ?2",
             params![content, id],
         )?;
         if updated == 0 {
+            return Err(DbError::PageMissing);
+        }
+        transaction.execute(
+            r#"UPDATE workspace_prompt SET content = ?1, updated_at = datetime('now')
+               WHERE id = (SELECT prompt_id FROM workspace_prompt_page WHERE id = ?2)
+                 AND (SELECT position FROM workspace_prompt_page WHERE id = ?2) = (
+                     SELECT MIN(position) FROM workspace_prompt_page
+                     WHERE prompt_id = (SELECT prompt_id FROM workspace_prompt_page WHERE id = ?2)
+                 )"#,
+            params![content, id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// 追加一页到末尾（`position` 取最大加一）并设为当前页，返回新页 id。
+    pub fn create_prompt_page(&self, prompt_id: i64, name: &str) -> Result<i64> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let exists: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM workspace_prompt WHERE id = ?1",
+                params![prompt_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if exists.is_none() {
             return Err(DbError::WorkspaceMissing);
+        }
+        let position: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM workspace_prompt_page WHERE prompt_id = ?1",
+            params![prompt_id],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            r#"INSERT INTO workspace_prompt_page (prompt_id, position, name, content, created_at, updated_at)
+               VALUES (?1, ?2, ?3, '', datetime('now'), datetime('now'))"#,
+            params![prompt_id, position, name],
+        )?;
+        let id = transaction.last_insert_rowid();
+        transaction.execute(
+            "UPDATE workspace_prompt SET active_page_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![id, prompt_id],
+        )?;
+        transaction.commit()?;
+        Ok(id)
+    }
+
+    /// 重命名一页。
+    pub fn rename_prompt_page(&self, id: i64, name: &str) -> Result<()> {
+        let updated = self.conn.execute(
+            "UPDATE workspace_prompt_page SET name = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![name, id],
+        )?;
+        if updated == 0 {
+            return Err(DbError::PageMissing);
+        }
+        Ok(())
+    }
+
+    /// 删除一页；删除当前页时同事务选择后继页（优先下一页、其次前一页）。
+    ///
+    /// 返回删除后应显示的页 id；删除的不是当前页时为 None。
+    pub fn delete_prompt_page(&self, id: i64) -> Result<Option<i64>> {
+        let transaction = self.conn.unchecked_transaction()?;
+        let row: Option<(i64, i64)> = transaction
+            .query_row(
+                "SELECT prompt_id, position FROM workspace_prompt_page WHERE id = ?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        let Some((prompt_id, position)) = row else {
+            return Err(DbError::PageMissing);
+        };
+        transaction.execute(
+            "DELETE FROM workspace_prompt_page WHERE id = ?1",
+            params![id],
+        )?;
+        let current: Option<i64> = transaction
+            .query_row(
+                "SELECT active_page_id FROM workspace_prompt WHERE id = ?1",
+                params![prompt_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .flatten();
+        if current != Some(id) {
+            transaction.commit()?;
+            return Ok(None);
+        }
+        let next: Option<i64> = transaction
+            .query_row(
+                "SELECT id FROM workspace_prompt_page WHERE prompt_id = ?1 AND position > ?2 ORDER BY position LIMIT 1",
+                params![prompt_id, position],
+                |row| row.get(0),
+            )
+            .optional()?
+            .or(transaction
+                .query_row(
+                    "SELECT id FROM workspace_prompt_page WHERE prompt_id = ?1 AND position < ?2 ORDER BY position DESC LIMIT 1",
+                    params![prompt_id, position],
+                    |row| row.get(0),
+                )
+                .optional()?);
+        transaction.execute(
+            "UPDATE workspace_prompt SET active_page_id = ?1, updated_at = datetime('now') WHERE id = ?2",
+            params![next, prompt_id],
+        )?;
+        transaction.commit()?;
+        Ok(next)
+    }
+
+    /// 记录提示词的当前页；页不属于该提示词时拒绝。
+    pub fn set_prompt_active_page(&self, prompt_id: i64, page_id: i64) -> Result<()> {
+        let updated = self.conn.execute(
+            r#"UPDATE workspace_prompt SET active_page_id = ?1, updated_at = datetime('now')
+               WHERE id = ?2
+                 AND EXISTS (SELECT 1 FROM workspace_prompt_page WHERE id = ?1 AND prompt_id = ?2)"#,
+            params![page_id, prompt_id],
+        )?;
+        if updated == 0 {
+            return Err(DbError::PageMissing);
         }
         Ok(())
     }
@@ -474,6 +722,13 @@ fn new_external_id(prefix: &str) -> String {
 /// 路径稳定字符串形式；展示用 lossy 转换。
 fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// 表是否已有指定列（`PRAGMA table_info`）；仅迁移期使用。
+fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut names = statement.query_map([], |row| row.get::<_, String>(1))?;
+    Ok(names.any(|name| name.is_ok_and(|name| name == column)))
 }
 
 #[cfg(test)]

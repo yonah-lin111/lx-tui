@@ -215,6 +215,36 @@ pub fn prompt_status_label(status: PromptItemStatus) -> &'static str {
     }
 }
 
+/// 标题行的页切换箭头（区别于折叠 `◀`/`▶` 与撤销/重做 `←`/`→`）。
+pub const PROMPT_PAGE_PREV: &str = "‹";
+pub const PROMPT_PAGE_NEXT: &str = "›";
+/// 页码文本 `2/4`（当前页 / 总页数）。
+pub fn page_counter(current: usize, total: usize) -> String {
+    format!("{current}/{total}")
+}
+/// 默认页名 `Page N`；`index` 从 1 起。
+pub fn default_page_name(index: usize) -> String {
+    format!("Page {index}")
+}
+
+/// 页菜单动作项与标题。
+pub const MENU_PAGE_NEW: &str = "New page";
+pub const MENU_PAGE_DELETE: &str = "Delete page";
+pub const MENU_TITLE_PAGES: &str = "pages";
+
+/// 页内模板块状态计数标签（仅统计闭合顶层 `&&&`）。
+pub fn template_count_label(status: TemplateStatus, count: usize) -> String {
+    let name = match status {
+        TemplateStatus::Todo => "todo",
+        TemplateStatus::InProgress => "run",
+        TemplateStatus::Done => "done",
+    };
+    format!("[{name} {count}]")
+}
+
+/// 删除非空页的二次确认标题。
+pub const CONFIRM_DELETE_PAGE_TITLE: &str = "delete page";
+
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
 pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
@@ -293,6 +323,11 @@ pub fn confirm_delete_question(name: &str) -> String {
 /// 删除文件夹确认问题文案：提示级联影响范围。
 pub fn confirm_delete_folder_question(name: &str) -> String {
     format!("delete folder \"{name}\" and its contents?")
+}
+
+/// 删除提示词页确认问题文案。
+pub fn confirm_delete_page_question(name: &str) -> String {
+    format!("delete page \"{name}\"?")
 }
 
 /// 切换工作区路径确认问题文案。

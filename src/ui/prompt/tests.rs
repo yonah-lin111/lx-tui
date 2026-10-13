@@ -581,6 +581,7 @@ fn renders_toolbar_buttons_and_divider() {
         None,
         false,
         false,
+        None,
     );
 
     let bar = crate::layout::prompt_toolbar_rect(panel).expect("toolbar visible");
@@ -649,6 +650,7 @@ fn renders_toolbar_buttons_and_divider() {
         None,
         false,
         false,
+        None,
     );
     assert_eq!(buf[(save_x, bar.y)].fg, Color::Green, "保存后绿点");
 
@@ -663,6 +665,7 @@ fn renders_toolbar_buttons_and_divider() {
         Some(text::PROMPT_DRAFT_TITLE),
         true,
         false,
+        None,
     );
     assert_eq!(buf[(save_x, bar.y)].symbol(), text::PROMPT_DRAFT_DOT);
     assert_eq!(buf[(save_x, bar.y)].fg, Color::DarkGray, "草稿恒灰空心点");
@@ -692,6 +695,7 @@ fn header_divider_embeds_edit_title_and_ellipsizes() {
         Some("my prompt"),
         false,
         false,
+        None,
     );
     let row = divider_row(&buf);
     assert!(row.contains(" my prompt "), "{row}");
@@ -710,6 +714,7 @@ fn header_divider_embeds_edit_title_and_ellipsizes() {
         Some(&long),
         false,
         false,
+        None,
     );
     let row = divider_row(&buf);
     assert!(row.contains('…'), "{row}");
@@ -726,6 +731,7 @@ fn header_divider_embeds_edit_title_and_ellipsizes() {
         Some("my prompt"),
         false,
         false,
+        None,
     );
     let row = divider_row(&buf);
     assert!(!row.contains("my prompt"), "{row}");
@@ -767,6 +773,7 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         None,
         false,
         false,
+        None,
     );
     assert_eq!(render_label(&buf, pin), text::PROMPT_UNPINNED_LABEL);
 
@@ -780,6 +787,7 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         None,
         false,
         true,
+        None,
     );
     assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
 }
@@ -803,6 +811,7 @@ fn divider_follows_prompt_focus_style() {
         None,
         false,
         false,
+        None,
     );
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
@@ -820,6 +829,7 @@ fn divider_follows_prompt_focus_style() {
         None,
         false,
         false,
+        None,
     );
     for x in [panel.x, 5, panel.right() - 1] {
         let cell = &buf[(x, divider_y)];
@@ -844,6 +854,7 @@ fn toolbar_hidden_when_prompt_too_short() {
         None,
         false,
         false,
+        None,
     );
     assert_eq!(buf[(1, 1)].symbol(), " ", "内容区过矮不绘制工具栏");
     assert_eq!(buf[(2, 1)].symbol(), " ");
@@ -1231,4 +1242,207 @@ fn supple_block_renders_title_separator_like_template() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     assert_full_width_separator(&buf, 40, 5);
+}
+
+// ===== 标题行页控件与文件名 =====
+
+/// 字符串在行内的字符列（`find` 返回字节偏移，宽字符前缀下不等于列）。
+fn char_col(row: &str, needle: &str, x: u16) -> u16 {
+    let byte = row.find(needle).expect("needle visible");
+    u16::try_from(row[..byte].chars().count()).expect("col") + x
+}
+
+/// 标题行渲染工具：宽面板，返回整行字符串。
+fn header_row(panel: Rect, editor: &Prompt, page: Option<PageHeaderData<'_>>) -> String {
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        editor,
+        false,
+        PromptMode::Editor,
+        Some("named prompt"),
+        false,
+        false,
+        page,
+    );
+    let header = crate::layout::prompt_header_rect(panel).expect("header");
+    (panel.x..panel.right())
+        .map(|x| buf[(x, header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT)].symbol())
+        .collect()
+}
+
+#[test]
+fn header_page_controls_render_counter_name_and_edges() {
+    let panel = Rect::new(0, 0, 56, 8);
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let row = header_row(
+        panel,
+        &editor,
+        Some(PageHeaderData {
+            current: 2,
+            total: 4,
+            name: "Intro",
+            rename: None,
+        }),
+    );
+    assert!(row.contains("named prompt"), "{row}");
+    assert!(row.contains("· Intro"), "页名跟随标题: {row}");
+    assert!(row.contains("2/4"), "页码: {row}");
+    assert!(row.contains('‹') && row.contains('›'), "左右箭头: {row}");
+    // 命中：箭头 / 计数 / 页名。
+    let header = crate::layout::prompt_header_rect(panel).expect("header");
+    let controls = page_controls(header, "2/4").expect("controls visible");
+    let data = PageHeaderData {
+        current: 2,
+        total: 4,
+        name: "Intro",
+        rename: None,
+    };
+    let row_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    assert_eq!(
+        header_page_control_at(header, "named prompt", false, &data, controls.prev.x, row_y),
+        Some(PageControl::Prev)
+    );
+    assert_eq!(
+        header_page_control_at(
+            header,
+            "named prompt",
+            false,
+            &data,
+            controls.counter.x,
+            row_y
+        ),
+        Some(PageControl::Counter)
+    );
+    assert_eq!(
+        header_page_control_at(header, "named prompt", false, &data, controls.next.x, row_y),
+        Some(PageControl::Next)
+    );
+    let name_col = char_col(&row, "· Intro", panel.x) + 2;
+    assert_eq!(
+        header_page_control_at(header, "named prompt", false, &data, name_col, row_y),
+        Some(PageControl::Name),
+        "页名段命中（点击进入重命名）"
+    );
+    assert_eq!(
+        header_page_control_at(header, "named prompt", false, &data, header.x + 3, row_y),
+        None,
+        "点击提示词标题不进入重命名"
+    );
+}
+
+#[test]
+fn header_arrows_grey_out_at_page_edges() {
+    let panel = Rect::new(0, 0, 56, 8);
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let header = crate::layout::prompt_header_rect(panel).expect("header");
+    let controls = page_controls(header, "1/2").expect("controls");
+    let row_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        Some("t"),
+        false,
+        false,
+        Some(PageHeaderData {
+            current: 1,
+            total: 2,
+            name: "Page 1",
+            rename: None,
+        }),
+    );
+    assert_eq!(
+        buf[(controls.prev.x, row_y)].fg,
+        Color::Reset,
+        "第一页左箭头置灰"
+    );
+    assert_eq!(buf[(controls.next.x, row_y)].fg, Color::Cyan, "右箭头可用");
+
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        Some("t"),
+        false,
+        false,
+        Some(PageHeaderData {
+            current: 2,
+            total: 2,
+            name: "Page 2",
+            rename: None,
+        }),
+    );
+    assert_eq!(
+        buf[(controls.next.x, row_y)].fg,
+        Color::Reset,
+        "末页右箭头置灰"
+    );
+    assert_eq!(buf[(controls.prev.x, row_y)].fg, Color::Cyan);
+}
+
+#[test]
+fn header_page_controls_hide_when_too_narrow() {
+    let header = crate::layout::prompt_header_rect(Rect::new(0, 0, 12, 8)).expect("header");
+    assert!(page_controls(header, "1/2").is_none(), "放不下整组时隐藏");
+    let header = crate::layout::prompt_header_rect(Rect::new(0, 0, 56, 8)).expect("header");
+    assert!(page_controls(header, "1/2").is_some());
+    assert!(
+        page_controls(header, "999/1000").is_some(),
+        "页码变宽仍完整容纳"
+    );
+}
+
+#[test]
+fn header_rename_input_replaces_page_name_with_cursor() {
+    let panel = Rect::new(0, 0, 56, 8);
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let header = crate::layout::prompt_header_rect(panel).expect("header");
+    let data = PageHeaderData {
+        current: 1,
+        total: 1,
+        name: "Page 1",
+        rename: Some(("Draft", 2)),
+    };
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        true,
+        PromptMode::Editor,
+        Some("named prompt"),
+        false,
+        false,
+        Some(data),
+    );
+    let row_y = header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT;
+    let row: String = (panel.x..panel.right())
+        .map(|x| buf[(x, row_y)].symbol())
+        .collect();
+    assert!(row.contains("named prompt"), "{row}");
+    assert!(row.contains("· Draft"), "输入替换页名段: {row}");
+    let cursor = header_rename_cursor(
+        header,
+        "named prompt",
+        false,
+        &PageHeaderData {
+            current: 1,
+            total: 1,
+            name: "Page 1",
+            rename: Some(("Draft", 2)),
+        },
+    )
+    .expect("cursor");
+    assert_eq!(cursor.1, row_y);
+    let input_col = char_col(&row, "Draft", panel.x);
+    assert_eq!(cursor.0, input_col + 2, "光标列随字符索引: row={row}");
 }

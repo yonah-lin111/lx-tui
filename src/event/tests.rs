@@ -391,12 +391,14 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
     panel.tree.replace(
         vec![],
         (0..40)
-            .map(|index| PromptItem {
-                id: index,
-                folder_id: None,
-                name: format!("item-{index:02}"),
-                content: String::new(),
-                status: PromptItemStatus::Todo,
+            .map(|index| {
+                PromptItem::single(
+                    index,
+                    None,
+                    format!("item-{index:02}"),
+                    String::new(),
+                    PromptItemStatus::Todo,
+                )
             })
             .collect(),
     );
@@ -2153,7 +2155,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
         state.workspaces[0]
             .prompt_panel
             .temp(temp_id)
-            .map(|temp| temp.content.as_str()),
+            .map(|temp| temp.active_content()),
         Some("hello"),
         "提交缓冲到 temp"
     );
@@ -2195,7 +2197,7 @@ fn ctrl_s_saves_prompt_from_editor() {
         state.workspaces[0]
             .prompt_panel
             .temp(temp_id)
-            .map(|temp| temp.content.as_str()),
+            .map(|temp| temp.active_content()),
         Some("draft body")
     );
 }
@@ -2210,13 +2212,13 @@ fn ctrl_s_saves_open_item_immediately() {
     let mut dirty = false;
     state.workspaces[0].prompt_panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 7,
-            folder_id: None,
-            name: "item".into(),
-            content: "body".into(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(
+            7,
+            None,
+            "item",
+            "body",
+            PromptItemStatus::Todo,
+        )],
     );
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
     state.prompt_focused = true;
@@ -2433,13 +2435,13 @@ fn mouse_double_click_prompt_item_row_opens_editor() {
         &mut state,
         &geo,
         vec![],
-        vec![PromptItem {
-            id: 7,
-            folder_id: None,
-            name: "item".into(),
-            content: "item body".into(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(
+            7,
+            None,
+            "item",
+            "item body",
+            PromptItemStatus::Todo,
+        )],
         PromptRowKind::Item,
     );
 
@@ -2489,13 +2491,13 @@ fn mouse_double_click_prompt_folder_toggles_once() {
             name: "folder".into(),
             collapsed: false,
         }],
-        vec![PromptItem {
-            id: 7,
-            folder_id: Some(1),
-            name: "item".into(),
-            content: "item body".into(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(
+            7,
+            Some(1),
+            "item",
+            "item body",
+            PromptItemStatus::Todo,
+        )],
         PromptRowKind::Folder,
     );
 
@@ -3237,4 +3239,178 @@ fn terminal_paste_shell_escaped_path_builds_proposal_from_real_file() {
         "引用按语法转义括号"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ===== 分页鼠标命中 =====
+
+/// 预置一个两页条目并进入编辑视图的 demo 状态。
+fn paged_prompt_state() -> AppState {
+    use crate::app::prompt::{PromptItem, PromptItemStatus, PromptPage};
+    let mut state = demo_terminal();
+    let mut item = PromptItem::single(7, None, "paged", "alpha", PromptItemStatus::Todo);
+    item.pages.push(PromptPage::saved(70, "Page 2", "beta"));
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item]);
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
+    state
+}
+
+#[test]
+fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let header = crate::layout::prompt_header_rect(geo.view.prompt).expect("header");
+    // 第一页左箭头置灰：点击不切页、不移动正文光标。
+    state.prompt.set_cursor_offset_for_test(0);
+    let controls = ui::prompt::page_controls(header, "1/2").expect("controls");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            controls.prev.x,
+            controls.prev.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.text(), "alpha", "边界箭头不动作");
+    assert_eq!(state.prompt.cursor(), 0, "控件点击不移动正文光标");
+    // 右箭头：切到第二页。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            controls.next.x,
+            controls.next.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.text(), "beta");
+    assert!(state.prompt_focused);
+    // 计数：打开页码菜单。
+    let controls = ui::prompt::page_controls(header, "2/2").expect("controls");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            controls.counter.x,
+            controls.counter.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(matches!(state.overlay, Some(Overlay::PageMenu(_))));
+    // Esc 关闭菜单且不穿透编辑器。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none());
+    assert_eq!(state.prompt.text(), "beta");
+}
+
+#[test]
+fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let header = crate::layout::prompt_header_rect(geo.view.prompt).expect("header");
+    // 标题 ` paged ` + 页名段 `· Page 1 `：点击页名起始后两列。
+    let name_col = header.x + 1 + " paged ".len() as u16 + 2;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            name_col,
+            header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        crate::app::update::page_rename_active(&state),
+        "点击页名进入重命名"
+    );
+    assert_eq!(state.prompt.text(), "alpha", "重命名不改正文");
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .page_rename()
+            .expect("rename active")
+            .input
+            .text(),
+        "Page 1X",
+        "字符输入进入页名"
+    );
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!crate::app::update::page_rename_active(&state));
+    let item = state.workspaces[0].prompt_panel.tree.item(7).expect("item");
+    assert_eq!(item.pages[0].name, "Page 1X");
+}
+
+#[test]
+fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
+    let config = Config::default();
+    let mut state = paged_prompt_state();
+    state.prompt.set_text("short");
+    state.prompt.set_cursor_offset_for_test(0);
+    state.prompt_focused = false;
+    let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let text_area = crate::layout::prompt_text_rect(geo.view.prompt);
+    assert!(text_area.height >= 2, "测试视口需能容纳留白");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            text_area.x + 2,
+            text_area.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.prompt_focused, "点击留白聚焦编辑器");
+    assert_eq!(
+        state.prompt.cursor(),
+        0,
+        "点击留白不移动光标到不存在的文本行"
+    );
 }

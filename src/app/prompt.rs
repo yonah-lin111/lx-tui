@@ -12,8 +12,9 @@ mod template;
 pub mod tree;
 
 pub use tree::{
-    PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPanel, PromptRow,
-    PromptRowKind, PromptSection, PromptTree, TempPrompt,
+    PageRename, PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptPage,
+    PromptPageId, PromptPanel, PromptRow, PromptRowKind, PromptSection, PromptTree, TempPrompt,
+    pages_template_counts,
 };
 
 mod text;

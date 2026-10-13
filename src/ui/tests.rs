@@ -1306,12 +1306,14 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
     panel.tree.replace(
         vec![],
         (0..30)
-            .map(|index| PromptItem {
-                id: index,
-                folder_id: None,
-                name: format!("item-{index:02}"),
-                content: String::new(),
-                status: PromptItemStatus::Todo,
+            .map(|index| {
+                PromptItem::single(
+                    index,
+                    None,
+                    format!("item-{index:02}"),
+                    String::new(),
+                    PromptItemStatus::Todo,
+                )
             })
             .collect(),
     );
@@ -1344,13 +1346,13 @@ fn prompt_editor_divider_shows_editing_title() {
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 1,
-            folder_id: None,
-            name: "named prompt".into(),
-            content: String::new(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(
+            1,
+            None,
+            "named prompt",
+            String::new(),
+            PromptItemStatus::Todo,
+        )],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let view = view_for(&state);
@@ -1367,10 +1369,13 @@ fn prompt_editor_divider_shows_editing_title() {
         "条目不带 tmp 标识: {divider}"
     );
 
-    // 临时提示词显示固定标题与 accent `[tmp]` 标识。
+    // 临时提示词显示固定标题与默认文字色 `[tmp]` 标识（加宽以完整容纳）。
+    state.prompt_width = 56;
+    let view = view_for(&state);
     update::show_prompt_tree(&mut state);
     assert!(update::open_temp_prompt(&mut state));
     let lines = render_lines(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
     let divider = prompt_line(
         &lines,
         &view,
@@ -1378,6 +1383,9 @@ fn prompt_editor_divider_shows_editing_title() {
     );
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
     assert!(divider.contains(text::PROMPT_TEMP_BADGE), "{divider}");
+    assert!(divider.contains("Page 1"), "内嵌当前页名: {divider}");
+    assert!(divider.contains('‹') && divider.contains('›'), "{divider}");
+    assert!(divider.contains("1/1"), "{divider}");
 }
 
 #[test]
@@ -1392,7 +1400,11 @@ fn prompt_scrollbar_appears_only_on_overflow() {
     let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
     assert_eq!(bar.track, gutter);
     assert_eq!(bar.visible, usize::from(gutter.height));
-    assert_eq!(bar.total, state.prompt.visual_rows().len());
+    assert_eq!(
+        bar.total,
+        state.prompt.visual_rows().len() + state.prompt.bottom_padding(),
+        "滚动条总长含底部虚拟空占位"
+    );
     assert!(bar.total > bar.visible);
 }
 
@@ -1432,8 +1444,8 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 #[test]
 fn prompt_renders_toolbar_and_divider_rows() {
     let mut state = AppState::demo();
-    // 足够宽以容纳模式/undo/redo 与右对齐的 select all。
-    state.prompt_width = 40;
+    // 足够宽以容纳模式/undo/redo、右对齐的 select all 与标题行页控件。
+    state.prompt_width = 56;
     state.prompt.insert_str("hello");
     let view = view_for(&state);
     let lines = render_lines(&state);
@@ -1770,13 +1782,13 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 1,
-            folder_id: None,
-            name: "named".into(),
-            content: String::new(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(
+            1,
+            None,
+            "named",
+            String::new(),
+            PromptItemStatus::Todo,
+        )],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let buffer = render_buffer(&state);
