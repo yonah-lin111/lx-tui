@@ -287,7 +287,7 @@ fn migrates_development_v2_attachment_tables() {
     {
         let conn = Connection::open(&path).expect("open");
         conn.execute_batch(SCHEMA_V1).expect("v1 schema");
-        conn.execute_batch(SCHEMA_V2).expect("v2 schema");
+        // 真实的开发期 v2 只有旧附件表，没有 managed_asset。
         conn.execute_batch(
             "CREATE TABLE managed_attachment_asset (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,

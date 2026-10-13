@@ -79,9 +79,18 @@ CREATE TABLE IF NOT EXISTS managed_asset (
 
 /// v3 迁移：折叠开发期 v2 建过的附件表（附件功能已移除）。
 ///
-/// 仅当旧表存在时执行：把资产登记搬进 `managed_asset` 后删除附件表。资产路径不丢，
-/// 引用关系在正文里，因此不会误删仍被引用的截图。
+/// 开发期 v2 的库只有旧附件表、没有 `managed_asset`，因此这里必须先建新表再搬迁登记，
+/// 否则迁移在旧库上直接失败（数据库不可用 → 截图粘贴无法登记）。仅当旧表存在时执行；
+/// 资产路径不丢，引用关系在正文里，不会误删仍被引用的截图。
 const SCHEMA_V3_LEGACY: &str = r#"
+CREATE TABLE IF NOT EXISTS managed_asset (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 INSERT OR IGNORE INTO managed_asset (external_id, path, created_at, updated_at)
 SELECT external_id, path, created_at, updated_at FROM managed_attachment_asset;
 DROP TABLE IF EXISTS workspace_prompt_attachment;
@@ -230,6 +239,8 @@ impl Database {
             let transaction = self.conn.transaction()?;
             if legacy > 0 {
                 transaction.execute_batch(SCHEMA_V3_LEGACY)?;
+            } else {
+                transaction.execute_batch(SCHEMA_V2)?;
             }
             transaction.pragma_update(None, "user_version", 3)?;
             transaction.commit()?;
