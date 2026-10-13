@@ -149,7 +149,6 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
         return;
     };
     let content = state.prompt.text().to_string();
-    let attachments = state.prompt.attachments().to_vec();
     let prompt = state.prompt.id();
     let revision = state.prompt.revision();
     match target {
@@ -158,7 +157,6 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
                 && let Some(temp) = workspace_state.prompt_panel.temp_mut(id)
             {
                 temp.content = content;
-                temp.attachments = attachments;
             }
         }
         PromptEditing::Item(id) => {
@@ -181,13 +179,12 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
                 else {
                     return;
                 };
-                if item.content == content && item.attachments == attachments && !pending {
+                if item.content == content && !pending {
                     // 内容与库中一致且无未确认保存：直接确认对应修订，避免空转自动保存。
                     state.prompt.confirm_saved(revision);
                     return;
                 }
                 item.content.clone_from(&content);
-                item.attachments.clone_from(&attachments);
             }
             if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
                 workspace_state.prompt_panel.mark_item_pending(id);
@@ -196,7 +193,6 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
                 workspace: cwd,
                 id,
                 content,
-                attachments,
                 prompt,
                 revision,
             });
@@ -359,11 +355,11 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     if workspace != state.prompt_workspace() || !select_prompt_item(state, workspace, item_id) {
         return false;
     }
-    let Some((content, attachments)) = state
+    let Some(content) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
-        .map(|item| (item.content.clone(), item.attachments.clone()))
+        .map(|item| item.content.clone())
     else {
         return false;
     };
@@ -372,8 +368,7 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Item(item_id));
-    state.prompt.set_document(&content, attachments);
-    state.prompt_attachment_scroll = 0;
+    state.prompt.set_text(&content);
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
@@ -384,11 +379,11 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     if workspace != state.prompt_workspace() {
         return false;
     }
-    let Some((content, attachments)) = state
+    let Some(content) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
-        .map(|temp| (temp.content.clone(), temp.attachments.clone()))
+        .map(|temp| temp.content.clone())
     else {
         return false;
     };
@@ -397,8 +392,7 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(temp_id));
-    state.prompt.set_document(&content, attachments);
-    state.prompt_attachment_scroll = 0;
+    state.prompt.set_text(&content);
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
@@ -502,7 +496,6 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));
     state.prompt.set_text("");
-    state.prompt_attachment_scroll = 0;
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
@@ -780,21 +773,20 @@ fn save_draft(state: &mut AppState, workspace: usize, folder_id: Option<i64>, na
     let Some(cwd) = workspace_cwd(state, workspace) else {
         return;
     };
-    let (content, attachments) = state
+    let content = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| match workspace.prompt_panel.editing {
             Some(PromptEditing::Temp(id)) => workspace.prompt_panel.temp(id),
             _ => None,
         })
-        .map(|temp| (temp.content.clone(), temp.attachments.clone()))
+        .map(|temp| temp.content.clone())
         .unwrap_or_default();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd,
         folder_id,
         name,
         content,
-        attachments,
     });
     state.overlay = None;
     clear_search_for(state, workspace);

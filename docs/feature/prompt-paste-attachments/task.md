@@ -3,6 +3,10 @@
 状态：已按用户指示实施完成（分支 `feat/prompt-paste-attachments`，工作区 `.worktrees/prompt-paste-attachments`）；
 自动化验证全绿，TUI 外观与真实系统剪贴板交互待用户 `cargo run` 人工验收。
 
+> 注：第 0–8 节是**第一轮**任务清单（含附件列表设计），已被 design.md §14 与本文 §9–§10 的
+> 两轮用户修订取代（顶栏按钮与上传项移除、`Ctrl+V` 直读、位图写引用、附件功能整体删除）。
+> 下列勾选保留为历史记录，不作为当前验收依据。
+
 ## 0. 实施前检查
 
 - [x] 复核 `docs/standards/` 三份规范、当前工作区变更及功能相关文件的 codegraph / codebase-memory 覆盖。
@@ -146,25 +150,25 @@
 
 ## 9. 实施记录与偏差（本次执行）
 
-### 已完成范围
+### 已完成范围（第一轮；第二轮修订见下）
 
-- 数据合同：`PromptAttachment`/`PasteCandidate`/粘贴提案（`src/app/prompt/attachment.rs`）、
+- 数据合同：`PasteCandidate`/粘贴提案（`src/app/prompt/paste.rs`）、
   `@[refer-*]` 无损编解码与解析（`src/app/markdown/refer.rs`）、字母快捷候选
-  （`src/app/markdown/refer_shortcut.rs`）；附件进入撤销快照，`set_document` 原子加载正文+附件。
+  （`src/app/markdown/refer_shortcut.rs`）。
 - 快捷输入：2 字符触发、模板块正文/全文作用域隔离、结构行与 `{wt:}`/标题行排除、
   去重保序、六级评分、`[file]/[folder]/[refer-*]` tag、完整原文替换（单步撤销）、
   Esc/鼠标/面板优先级（粘贴 > 提及 > 快捷 > 斜杠 > 块命令）。
 - 持久化：`PRAGMA user_version` v1→v2 独立迁移（`managed_attachment_asset` +
   `workspace_prompt_attachment`，TEXT 外键、CHECK、级联/限制删除）；
-  正文与附件同事务保存/替换；保存回执按修订号确认（不再“先标记已保存”）；
+  正文保存；保存回执按修订号确认（不再“先标记已保存”）；
   失败保留脏状态、可见 toast、自动保存重试。
 - 平台：`platform/clipboard.rs`（macOS osascript/pbpaste、Linux wl-paste/xclip、
   Windows PowerShell），文件列表 → 位图 → 文本探测；`file://` URI 与多行路径解析；
   位图签名识别；`secure_token` 随机资产 ID；原子落盘 `.tmp-*` → 重命名。
-- 事件：`Ctrl+V`（`Ctrl+Shift+V` 同义）后台读取（请求代号 + 修订 + 锚点校验），终端粘贴路径文本进同一提案、
-  普通文本原样插入；位图登记后直接成为附件、不进面板；选择区锚点替换；面板键鼠路由与外部点击取消；
-  附件条渲染/移除/滚轮。
-- 清理：managed 截图统一垃圾回收（数据库引用 + 正文 `@[refer-image]` 引用 + 内存草稿/临时项），
+- 事件：`Ctrl+V`（`Ctrl+Shift+V` 同义）后台读取（请求代号 + 修订校验），终端粘贴路径文本进同一提案、
+  普通文本原样插入；位图登记后直接写入 `@[refer-image]` 引用、不进面板；选择区锚点替换；
+  面板键鼠路由与外部点击取消。
+- 清理：managed 截图统一垃圾回收（正文 `@[refer-image]` 引用 + 内存草稿/临时项），
   启动孤儿扫描（未登记同规则文件与 `.tmp-*`，符号链接/未知文件名跳过）。
 
 ### 实施后修订（用户确认，对应 design.md §14）
@@ -175,19 +179,40 @@
   `PasteCandidate::can_upload`、`PastePanel::upload_enabled`、`PASTE_ACTION_UPLOAD`、
   `PASTE_UPLOAD_FOLDERS_DISABLED` 删除；普通文件不再能成为附件。
 - `Ctrl+V` 直接粘贴剪贴板图片：`Routed::ClipboardPaste` → 事件层 `clipboard_read_requested`；
-  位图登记后走 `Prompt::add_attachments` 直接入附件（`PasteState::settle` 校验代号与修订），
-  文件列表/路径进面板，普通文本插入；树视图吞掉按键。已知限制见 design.md §14.3。
+  位图登记后写 `@[refer-image]` 引用（`PasteState::settle` 校验代号与修订），
+  文件列表/路径进面板，普通文本插入；树视图吞掉按键。已知限制见 design.md §14.1.3。
 - 正文引用快捷删除：`markdown::reference_deletion_range` + `Prompt::backspace` 回退链，
   `@[refer-*](path) ` 尾随空白处一次 Backspace 整段删除（单步撤销）。
 
 ### 记录偏差与风险
 
 - 工具栏读取期间未绘制独立 loading 指示的问题随按钮移除消失；`Ctrl+V` 读取期间无 loading 提示。
-- 附件条为固定最大 3 行 + 滚轮滚动 + `n/总数` 计数，未提供独立滚动条 thumb。
 - `src/event/mod.rs` 基线已超 1000 行（2310 → 约 2410）；新增职责均落在
   `src/event/paste.rs`，未对既有巨型事件循环做高风险重写，作为存量债务记录。
 - Windows/Linux 剪贴板命令路径未在本机（macOS）实测；单元测试只覆盖纯解析分支。
-- `Cmd+V` 无法拦截、部分终端吞 `Ctrl+V`、SSH 读到远端剪贴板（见 design.md §14.3）。
+- `Cmd+V` 无法拦截、部分终端吞 `Ctrl+V`、SSH 读到远端剪贴板（见 design.md §14.1.3）。
 - 人工验收项（`Ctrl+V` 截图、文件管理器复制的路径文本、`file://` URI、多路径、普通文本、
-  面板键鼠与 Esc、附件移除、引用一次 Backspace 删除、窄屏、工作区切换、重启恢复）
-  需用户运行 `cargo run` 确认。
+  面板键鼠与 Esc、引用一次 Backspace 删除、窄屏、工作区切换、重启恢复）
+  需用户运行 `cargo run` 确认（第二轮行为见 §10）。
+
+
+## 10. 第二轮修订（用户确认，对应 design.md §14.2）
+
+### 变更
+
+- 路径粘贴改为占位插入：接受结果时先按锚点写入纯路径文本（一步撤销），再开面板；选“插入引用”改写占位、
+  选“插入路径”保持占位；`Esc`/外部点击/再次粘贴回滚占位并恢复保存态与修订号。
+- `Ctrl+V` 位图直接插入 `@[refer-image](managed路径)`：落盘 → 登记 `managed_asset` → 写正文；
+  不弹面板、不显示附件 item；写入/登记失败（含受保护行）删除刚落盘文件并 toast。
+- 整体删除附件功能：`PromptAttachment`/附件条 UI 与命中/`Prompt::{attachments,add_attachments,remove_attachment,set_document}`
+  与不可用标记/撤销快照附件/`TempPrompt`、`PromptItem` 附件字段/`Effect` 附件参数/
+  DB `workspace_prompt_attachment` 及加载写入引用查询/`layout.rs` 附件条几何全部删除。
+- DB v2 收敛为单表 `managed_asset`（本应用管理的截图登记）；`PromptRecord`/`body` 读写无附件参数。
+- 回收触发点：启动扫描与删除 prompt/文件夹；正文引用移除后的回收推迟到下一次触发。
+
+### 记录偏差与风险（第二轮）
+
+- 取消回滚依赖“占位插入是撤销栈顶且面板打开期间不可编辑”的不变量；面板打开时按键被吞，鼠标点击外部即取消。
+- 截图登记后若用户在保存前清空引用，文件会留到下一次启动/删除触发回收。
+- `event/mod.rs` 仍超 1000 行（存量债务）；本轮新增代码在 `event/paste.rs`、`app/prompt/paste.rs`。
+- 人工验收：`Ctrl+V` 截图写引用、路径占位 + 面板改写/取消回滚、引用一次 Backspace 删除、窄屏、重启恢复。

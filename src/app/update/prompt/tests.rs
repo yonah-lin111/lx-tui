@@ -31,7 +31,6 @@ fn demo_state() -> AppState {
             name: "loose".into(),
             content: "loose content".into(),
             status: "todo".into(),
-            attachments: Vec::new(),
         },
         PromptRecord {
             id: 12,
@@ -39,7 +38,6 @@ fn demo_state() -> AppState {
             name: "nested".into(),
             content: "nested content".into(),
             status: "completed".into(),
-            attachments: Vec::new(),
         },
     ];
     apply_prompt_tree(&mut state, 0, folders, prompts);
@@ -487,7 +485,6 @@ fn mode_roundtrip_without_selection_keeps_temp_editor() {
             name: "loose".into(),
             content: "body".into(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
     );
     // 初始编辑视图绑定空 temp；列表恒有 default temp，其后才是条目。

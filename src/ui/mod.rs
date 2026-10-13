@@ -487,20 +487,7 @@ fn render_prompt(
         state.prompt_pinned.is_some(),
     );
     render_prompt_branch_status(frame, area, state);
-    let attachment_rows = if mode == PromptMode::Editor {
-        crate::layout::prompt_attachment_rows(state.prompt.attachments().len())
-    } else {
-        0
-    };
-    let text_area = crate::layout::prompt_text_rect_with(area, attachment_rows);
-    if mode == PromptMode::Editor {
-        prompt::render_attachments(
-            area,
-            frame.buffer_mut(),
-            &state.prompt,
-            state.prompt_attachment_scroll,
-        );
-    }
+    let text_area = crate::layout::prompt_text_rect(area);
     let tree_cursor = match mode {
         PromptMode::Tree => prompt::tree::render(
             text_area,
@@ -581,10 +568,7 @@ fn prompt_scrollbar_for(
             owner.prompt_panel.scroll,
         ),
         PromptMode::Editor => (
-            crate::layout::prompt_scrollbar_rect_with(
-                panel,
-                crate::layout::prompt_attachment_rows(state.prompt.attachments().len()),
-            )?,
+            crate::layout::prompt_scrollbar_rect(panel)?,
             state.prompt.visual_rows().len(),
             state.prompt.scroll(),
         ),

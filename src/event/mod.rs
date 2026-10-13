@@ -127,10 +127,6 @@ async fn run_loop(
     let mut cwd_check: Option<Instant> = None;
     // PTY 输出后的 Agent 去抖扫描时刻；与 cwd 检查同窗口合并。
     let mut agent_check: Option<Instant> = None;
-    // prompt 附件存在性刷新时刻；有附件时才安排，空闲不轮询。
-    let mut attachment_check: Option<Instant> = None;
-    // 上一帧附件条行数：附件增删会改变正文可用高度，需重算编辑器尺寸。
-    let mut attachment_rows = 0_u16;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
     seed_git_requests(state);
@@ -184,20 +180,6 @@ async fn run_loop(
         if persistence.pump(state) {
             dirty = true;
         }
-        // 粘贴取消/确认后的 managed 截图回收：数据库提交后统一引用检查。
-        if state.prompt.take_paste_cleanup() {
-            persistence.cleanup_managed(state);
-            dirty = true;
-        }
-        if attachment_check.is_some_and(|at| Instant::now() >= at) {
-            attachment_check = None;
-            if paste::refresh_attachment_availability(state) {
-                dirty = true;
-            }
-        }
-        if attachment_check.is_none() && !state.prompt.attachments().is_empty() {
-            attachment_check = Some(Instant::now() + ATTACHMENT_CHECK_DELAY);
-        }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
             cwd_check = None;
             if poll_process_cwds(state, &sessions) {
@@ -217,13 +199,7 @@ async fn run_loop(
         {
             dirty = true;
         }
-        let current_attachment_rows = if state.prompt_collapsed || update::prompt_tree_mode(state) {
-            0
-        } else {
-            layout::prompt_attachment_rows(state.prompt.attachments().len())
-        };
-        if geometry.rects != last_rects || current_attachment_rows != attachment_rows {
-            attachment_rows = current_attachment_rows;
+        if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
             // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
             update::stop_selection_autoscroll(state);
@@ -260,9 +236,6 @@ async fn run_loop(
             wait = wait.min(at.saturating_duration_since(Instant::now()));
         }
         if let Some(at) = agent_check {
-            wait = wait.min(at.saturating_duration_since(Instant::now()));
-        }
-        if let Some(at) = attachment_check {
             wait = wait.min(at.saturating_duration_since(Instant::now()));
         }
 
@@ -423,9 +396,6 @@ const CWD_CHECK_DELAY: Duration = Duration::from_millis(300);
 
 /// PTY 输出后的 Agent 去抖扫描延迟；与 cwd 检查共用窗口。
 const AGENT_CHECK_DELAY: Duration = Duration::from_millis(300);
-
-/// prompt 附件存在性刷新间隔（仅在存在附件时轮询）。
-const ATTACHMENT_CHECK_DELAY: Duration = Duration::from_secs(2);
 
 /// 启动时为已有工作区登记一次 git 元数据查询。
 fn seed_git_requests(state: &mut AppState) {
@@ -940,14 +910,6 @@ fn handle_terminal_event(
                 {
                     update::begin_pane_resize(state, hit);
                     *dirty = true;
-                } else if let Some(hit) =
-                    paste::prompt_attachment_at(state, view, mouse.column, mouse.row)
-                {
-                    // 附件条内点击：仅移除按钮生效；其余位置吞掉，不移动文本光标。
-                    if hit.remove.contains((mouse.column, mouse.row).into()) {
-                        update::remove_prompt_attachment(state, &hit.id);
-                    }
-                    *dirty = true;
                 } else if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
                     let inner = pane_content_inner(state, view, pane, inner);
                     let row = mouse.row - inner.y;
@@ -1266,15 +1228,6 @@ fn handle_terminal_event(
                     return;
                 }
                 if state.resizing_prompt || state.resizing_pane.is_some() {
-                    return;
-                }
-                // 附件条上滚轮：在固定高度内滚动可见附件，不穿透到正文与窗格。
-                if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                    && paste::prompt_attachment_at(state, view, mouse.column, mouse.row).is_some()
-                {
-                    if update::scroll_prompt_attachments(state, direction) {
-                        *dirty = true;
-                    }
                     return;
                 }
                 // @ 提及面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
@@ -2005,7 +1958,7 @@ fn open_right_click_menu(
     }
     // 提示词树：行上打开节点菜单，空白区域打开新建菜单；分区标签行不响应。
     if !state.prompt_collapsed && update::prompt_tree_mode(state) {
-        let area = paste::prompt_text_area(state, view);
+        let area = paste::prompt_text_area(view);
         if area.contains((column, row).into()) {
             let hit = {
                 let panel = &state.prompt_owner().prompt_panel;
@@ -2258,7 +2211,7 @@ fn mention_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::mention_item_at(&state.prompt, area, column, row)
 }
 
@@ -2267,7 +2220,7 @@ fn mention_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::mention_layout(&state.prompt, area)
 }
 
@@ -2278,7 +2231,7 @@ fn panel_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::panel_item_at(&state.prompt, area, column, row)
 }
 
@@ -2287,7 +2240,7 @@ fn block_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::panel_layout(&state.prompt, area)
 }
 
@@ -2298,7 +2251,7 @@ fn slash_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::slash_item_at(&state.prompt, area, column, row)
 }
 
@@ -2307,7 +2260,7 @@ fn slash_panel_layout(
     state: &AppState,
     view: &ui::layout::ViewLayout,
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::slash_layout(&state.prompt, area)
 }
 
@@ -2318,7 +2271,7 @@ fn template_button_at(
     column: u16,
     row: u16,
 ) -> Option<ui::prompt::TemplateButtonHit> {
-    let area = paste::prompt_text_area(state, view);
+    let area = paste::prompt_text_area(view);
     ui::prompt::template_button_at(&state.prompt, area, column, row)
 }
 
@@ -2371,7 +2324,7 @@ fn pane_content_inner(
     inner: Rect,
 ) -> Rect {
     if pane == state.prompt.id() {
-        paste::prompt_text_area(state, view)
+        paste::prompt_text_area(view)
     } else {
         inner
     }

@@ -1123,7 +1123,6 @@ fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
             name: "item".into(),
             content: "item body".into(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
     );
     assert!(edit_prompt_item(&mut state, 0, 10));
@@ -3634,11 +3633,7 @@ fn open_paste_panel(state: &mut AppState) {
         PathBuf::from("/tmp/lx-tui-paste.txt"),
         crate::app::prompt::PasteCandidateKind::File,
     );
-    assert!(
-        state
-            .prompt
-            .paste_complete(request, anchor, vec![candidate])
-    );
+    assert!(state.prompt.paste_stage(request, vec![candidate]));
 }
 
 #[test]
@@ -3647,7 +3642,11 @@ fn paste_panel_swallows_editing_keys_and_confirms_reference() {
     state.prompt.insert_str("see ");
     open_paste_panel(&mut state);
     apply_editor(&mut state, EditorCommand::InsertChar('x'));
-    assert_eq!(state.prompt.text(), "see ", "面板打开时其他按键吞掉");
+    assert_eq!(
+        state.prompt.text(),
+        "see /tmp/lx-tui-paste.txt ",
+        "面板打开时其他按键吞掉，占位文本保持"
+    );
     apply_editor(&mut state, EditorCommand::Newline);
     assert_eq!(
         state.prompt.text(),
@@ -3657,14 +3656,19 @@ fn paste_panel_swallows_editing_keys_and_confirms_reference() {
 }
 
 #[test]
-fn paste_panel_escape_cancels_without_text_change() {
+fn paste_panel_escape_reverts_placeholder() {
     let mut state = AppState::demo();
-    state.prompt.insert_str("keep");
+    state.prompt.set_text("keep ");
     open_paste_panel(&mut state);
+    assert_eq!(
+        state.prompt.text(),
+        "keep /tmp/lx-tui-paste.txt ",
+        "先写占位路径"
+    );
     apply_editor(&mut state, EditorCommand::Escape);
-    assert_eq!(state.prompt.text(), "keep");
+    assert_eq!(state.prompt.text(), "keep ", "Esc 回滚占位插入");
     assert!(state.prompt.paste_panel().is_none());
-    assert!(state.prompt.take_paste_cleanup(), "取消登记截图清理");
+    assert!(!state.prompt.can_undo(), "回滚不留撤销步");
 }
 
 #[test]
@@ -3690,10 +3694,6 @@ fn paste_panel_takes_priority_over_mention_and_slash() {
         state.prompt.text(),
         "see @ab @[refer-file](/tmp/lx-tui-paste.txt) ",
         "Enter 归粘贴面板而非提及面板"
-    );
-    assert!(
-        state.prompt.attachments().is_empty(),
-        "默认高亮引用项写正文、不产生附件"
     );
 }
 

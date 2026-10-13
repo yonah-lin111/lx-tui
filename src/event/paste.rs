@@ -6,6 +6,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 
 use crate::app::actions::EditorCommand;
+use crate::app::markdown::ReferKind;
 use crate::app::prompt::{PasteAnchor, PasteCandidate, PasteCandidateKind};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
@@ -62,15 +63,15 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     {
         let anchor = paste_anchor(state);
         let request = state.prompt.begin_paste_read(anchor);
-        state.prompt.paste_complete(request, anchor, candidates);
+        state.prompt.paste_stage(request, candidates);
         return;
     }
     update::apply_editor(state, EditorCommand::InsertText(text));
 }
 
-/// 读取结果路由：目标、请求、修订与锚点任一不匹配即丢弃并清理新生成的截图。
+/// 读取结果路由：目标、请求与修订任一不匹配即丢弃并清理新生成的截图。
 ///
-/// 位图直接成为附件（不进面板）；路径/路径文本才打开粘贴面板。
+/// 位图直接以 `@[refer-image]` 插入正文（不进面板）；路径/路径文本走占位插入 + 面板。
 pub(super) fn apply_clipboard_read(
     state: &mut AppState,
     persistence: &Persistence,
@@ -105,8 +106,7 @@ pub(super) fn apply_clipboard_read(
                 );
                 return;
             };
-            let anchor = paste_anchor(state);
-            if !state.prompt.paste_complete(request, anchor, candidates) {
+            if !state.prompt.paste_stage(request, candidates) {
                 state.prompt.paste_discard();
                 update::show_toast(
                     state,
@@ -118,43 +118,35 @@ pub(super) fn apply_clipboard_read(
             // 纯文本先尝试整段路径解析；失败走普通文本插入。
             if let Some(paths) = crate::platform::parse_path_text(&content)
                 && let Some(candidates) = candidates_from_paths(&paths)
+                && state.prompt.paste_stage(request, candidates)
             {
-                let anchor = paste_anchor(state);
-                if state.prompt.paste_complete(request, anchor, candidates) {
-                    return;
-                }
+                return;
             }
             state.prompt.paste_discard();
             update::apply_editor(state, EditorCommand::InsertText(content));
         }
         ClipboardPayload::Image { asset_id, path } => {
-            // 位图不进面板：直接成为当前 prompt 的附件（对齐 lx-agent 的截图粘贴）。
-            if state.prompt.paste_settle(request).is_none() {
+            // 位图不进面板：登记 managed 资产后直接把正文写成 @[refer-image]（对齐 lx-agent）。
+            let Some(anchor) = state.prompt.paste_settle(request) else {
                 if let Err(error) = std::fs::remove_file(&path)
                     && error.kind() != std::io::ErrorKind::NotFound
                 {
                     tracing::warn!(%error, path = %path.display(), "stale screenshot cleanup failed");
                 }
                 return;
-            }
+            };
             if !persistence.register_managed_asset(&asset_id, &path) {
                 let _ = std::fs::remove_file(&path);
                 update::show_toast(state, toast(ToastKind::Error, text::TOAST_IMAGE_FAILED));
                 return;
             }
-            let candidate = PasteCandidate::managed(path.clone(), asset_id.clone());
-            if state.prompt.add_attachments(&[candidate]) {
-                return;
-            }
-            // 未加入（路径已有同引用）：撤销登记；无人引用该路径时才删除刚落盘的文件。
-            let referenced = state
+            if !state
                 .prompt
-                .attachments()
-                .iter()
-                .any(|attachment| attachment.path == path);
-            persistence.unregister_managed_asset(&asset_id);
-            if !referenced {
+                .insert_reference(&anchor, ReferKind::Image, &path)
+            {
+                persistence.unregister_managed_asset(&asset_id);
                 let _ = std::fs::remove_file(&path);
+                update::show_toast(state, toast(ToastKind::Error, text::TOAST_IMAGE_FAILED));
             }
         }
     }
@@ -255,18 +247,6 @@ pub(super) fn paste_anchor(state: &AppState) -> PasteAnchor {
     PasteAnchor { selection, cursor }
 }
 
-/// 附件存在性刷新：路径失效的附件标记为不可用（保留元数据）。
-pub(super) fn refresh_attachment_availability(state: &mut AppState) -> bool {
-    let unavailable: Vec<String> = state
-        .prompt
-        .attachment_paths()
-        .into_iter()
-        .filter(|(_, path)| !path.exists())
-        .map(|(id, _)| id)
-        .collect();
-    state.prompt.set_unavailable_attachments(unavailable)
-}
-
 /// 粘贴二级面板命中。
 pub(super) fn paste_item_at(
     state: &AppState,
@@ -274,7 +254,7 @@ pub(super) fn paste_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = prompt_text_area(state, view);
+    let area = prompt_text_area(view);
     ui::prompt::paste_item_at(&state.prompt, area, column, row)
 }
 
@@ -285,35 +265,13 @@ pub(super) fn refer_item_at(
     column: u16,
     row: u16,
 ) -> Option<usize> {
-    let area = prompt_text_area(state, view);
+    let area = prompt_text_area(view);
     ui::prompt::refer_item_at(&state.prompt, area, column, row)
 }
 
-/// 附件条命中（整行与移除按钮）。
-pub(super) fn prompt_attachment_at(
-    state: &AppState,
-    view: &ui::layout::ViewLayout,
-    column: u16,
-    row: u16,
-) -> Option<ui::prompt::AttachmentHit> {
-    if update::prompt_tree_mode(state) {
-        return None;
-    }
-    ui::prompt::attachment_hits(&state.prompt, view.prompt, state.prompt_attachment_scroll)
-        .into_iter()
-        .find(|hit| hit.row.contains((column, row).into()))
-}
-
-/// prompt 文本区（扣除附件条）。
-pub(super) fn prompt_text_area(
-    state: &AppState,
-    view: &ui::layout::ViewLayout,
-) -> ratatui::layout::Rect {
-    layout::prompt_content_rect(
-        view.prompt,
-        state.prompt.attachments().len(),
-        !update::prompt_tree_mode(state),
-    )
+/// prompt 文本区。
+pub(super) fn prompt_text_area(view: &ui::layout::ViewLayout) -> ratatui::layout::Rect {
+    layout::prompt_content_rect(view.prompt)
 }
 
 /// 错误/toast 快捷构造。

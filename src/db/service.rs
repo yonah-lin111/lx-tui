@@ -10,13 +10,12 @@ use std::time::Instant;
 
 use crate::app::effects::Effect;
 use crate::app::overlay::Overlay;
-use crate::app::prompt::{AttachmentSource, PromptAttachment};
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::ui::text;
 
-use super::{AttachmentWrite, Database};
+use super::Database;
 
 /// 单次泵送内效应执行的轮数上限（效应可级联产生新效应，如信任授予后的续作）。
 const MAX_EFFECT_ROUNDS: usize = 16;
@@ -151,7 +150,7 @@ impl Persistence {
                 name,
             } => {
                 let Some(id) =
-                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, "", &[]))
+                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, ""))
                 else {
                     return false;
                 };
@@ -165,13 +164,11 @@ impl Persistence {
                 folder_id,
                 name,
                 content,
-                attachments,
             } => {
-                let writes = attachment_writes(&attachments);
-                let Some(id) = self.with_db(|db| {
-                    db.create_prompt(&workspace, folder_id, &name, &content, &writes)
-                }) else {
-                    // 失败：TempPrompt 与附件仍在，保存选择器可重试。
+                let Some(id) =
+                    self.with_db(|db| db.create_prompt(&workspace, folder_id, &name, &content))
+                else {
+                    // 失败：TempPrompt 仍在，保存选择器可重试。
                     return false;
                 };
                 let changed = self.reload_tree(state, &workspace);
@@ -213,13 +210,11 @@ impl Persistence {
             Effect::SavePromptContent {
                 id,
                 content,
-                attachments,
                 prompt,
                 revision,
                 ..
             } => {
-                let writes = attachment_writes(&attachments);
-                let saved = self.with_db(|db| db.update_prompt_document(id, &content, &writes));
+                let saved = self.with_db(|db| db.update_prompt_document(id, &content));
                 if saved.is_some() {
                     update::mark_prompt_item_persisted(state, id);
                     update::mark_prompt_saved(state, prompt, revision);
@@ -296,40 +291,24 @@ impl Persistence {
         if assets.is_empty() {
             return;
         }
-        let mut referenced_ids: HashSet<String> = match db.managed_attachment_ids() {
-            Ok(ids) => ids.into_iter().collect(),
-            Err(error) => {
-                tracing::warn!(%error, "managed attachment lookup failed; skipping cleanup");
-                return;
-            }
-        };
         let mut referenced_paths: HashSet<String> = HashSet::new();
         if let Ok(contents) = db.all_prompt_contents() {
             for content in contents {
                 collect_reference_paths(&content, &mut referenced_paths);
             }
         }
-        let mut push_memory = |text: &str, attachments: &[PromptAttachment]| {
-            for attachment in attachments {
-                if let Some(asset) = &attachment.managed_asset_id {
-                    referenced_ids.insert(asset.clone());
-                }
-                referenced_paths.insert(crate::platform::path_key(&attachment.path));
-            }
-            collect_reference_paths(text, &mut referenced_paths);
-        };
-        push_memory(state.prompt.text(), state.prompt.attachments());
+        collect_reference_paths(state.prompt.text(), &mut referenced_paths);
         for workspace in &state.workspaces {
             if let Some(draft) = workspace.prompt.as_ref() {
-                push_memory(draft.editor.text(), draft.editor.attachments());
+                collect_reference_paths(draft.editor.text(), &mut referenced_paths);
             }
             for temp in workspace.prompt_panel.temps() {
-                push_memory(&temp.content, &temp.attachments);
+                collect_reference_paths(&temp.content, &mut referenced_paths);
             }
         }
         for asset in assets {
             let key = crate::platform::path_key(&asset.path);
-            if referenced_ids.contains(&asset.external_id) || referenced_paths.contains(&key) {
+            if referenced_paths.contains(&key) {
                 continue;
             }
             if let Err(error) = db.delete_managed_asset(&asset.external_id) {
@@ -456,23 +435,6 @@ fn workspace_index(state: &AppState, path: &Path) -> Option<usize> {
         .workspaces
         .iter()
         .position(|workspace| workspace.cwd.as_deref() == Some(path))
-}
-
-/// 附件模型 → 数据库写入参数： managed 走资产引用，外部文件记路径。
-fn attachment_writes(attachments: &[PromptAttachment]) -> Vec<AttachmentWrite> {
-    attachments
-        .iter()
-        .map(|attachment| AttachmentWrite {
-            id: attachment.id.clone(),
-            managed_asset_id: attachment.managed_asset_id.clone(),
-            external_path: match attachment.source {
-                AttachmentSource::External => Some(attachment.path.clone()),
-                AttachmentSource::Managed => None,
-            },
-            kind: attachment.kind.as_str().to_string(),
-            name: attachment.name.clone(),
-        })
-        .collect()
 }
 
 /// 正文中的 `@[refer-image]` 路径收集（比较键）。

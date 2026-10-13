@@ -1220,7 +1220,6 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
                 name: format!("item-{index:02}"),
                 content: String::new(),
                 status: PromptItemStatus::Todo,
-                attachments: Vec::new(),
             })
             .collect(),
     );
@@ -1259,7 +1258,6 @@ fn prompt_editor_divider_shows_editing_title() {
             name: "named prompt".into(),
             content: String::new(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
@@ -1686,7 +1684,6 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
             name: "named".into(),
             content: String::new(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));

@@ -15,9 +15,6 @@ pub const PROMPT_DIVIDER_HEIGHT: u16 = 1;
 pub const PROMPT_HEADER_HEIGHT: u16 = PROMPT_TOOLBAR_HEIGHT + PROMPT_DIVIDER_HEIGHT;
 /// 树视图顶部固定行数（搜索框 + 分割线）。
 pub const PROMPT_TREE_HEADER_HEIGHT: u16 = 2;
-/// 附件条最大行数；超出在固定高度内滚动。
-pub const PROMPT_ATTACHMENT_BAR_ROWS: u16 = 3;
-
 /// prompt 模板块边框占位：左侧（`╭─`/`│ `/`╰─`）与右侧竖线（`╮`/`│`/`╯`）列数。
 pub const PROMPT_TEMPLATE_GUTTER_LEFT: u16 = 2;
 pub const PROMPT_TEMPLATE_GUTTER_RIGHT: u16 = 1;
@@ -684,12 +681,7 @@ pub fn pane_inner_size(rect: Rect) -> (u16, u16) {
 
 /// prompt 文本区矩形：扣除顶部工具栏表头，最右一列固定预留给滚动条槽（内容区宽度 >= 2 时）。
 pub fn prompt_text_rect(panel: Rect) -> Rect {
-    prompt_text_rect_with(panel, 0)
-}
-
-/// 扣附件条后的 prompt 文本区矩形；`attachment_rows` 为附件条实际行数。
-pub fn prompt_text_rect_with(panel: Rect, attachment_rows: u16) -> Rect {
-    let inner = prompt_body_rect(pane_inner_rect(panel), attachment_rows);
+    let inner = prompt_body_rect(pane_inner_rect(panel));
     if inner.width >= 2 {
         Rect {
             width: inner.width - 1,
@@ -700,49 +692,14 @@ pub fn prompt_text_rect_with(panel: Rect, attachment_rows: u16) -> Rect {
     }
 }
 
-/// 按显示模式与附件数量计算 prompt 文本区：树视图无附件条。
-pub fn prompt_content_rect(panel: Rect, attachments: usize, editor: bool) -> Rect {
-    let rows = if editor {
-        prompt_attachment_rows(attachments)
-    } else {
-        0
-    };
-    prompt_text_rect_with(panel, rows)
-}
-
-/// 附件条行数：按附件数量截到固定最大高度。
-pub fn prompt_attachment_rows(count: usize) -> u16 {
-    u16::try_from(count)
-        .unwrap_or(u16::MAX)
-        .min(PROMPT_ATTACHMENT_BAR_ROWS)
-}
-
-/// 附件条矩形：分割线之下、正文之上，占满内容区宽度；至少保留 1 行正文。
-pub fn prompt_attachment_rect(panel: Rect, count: usize) -> Option<Rect> {
-    let inner = pane_inner_rect(panel);
-    let requested = prompt_attachment_rows(count);
-    let available = inner
-        .height
-        .saturating_sub(PROMPT_HEADER_HEIGHT + 1)
-        .min(requested);
-    (available > 0).then(|| {
-        Rect::new(
-            inner.x,
-            inner.y + PROMPT_HEADER_HEIGHT,
-            inner.width,
-            available,
-        )
-    })
+/// prompt 可点击内容区（文本区，不含滚动条槽）：面板锚点与命中用。
+pub fn prompt_content_rect(panel: Rect) -> Rect {
+    prompt_text_rect(panel)
 }
 
 /// prompt 滚动条槽矩形：与文本区起始行及高度一致，取内容区最右一列；内容区过窄时为 None。
 pub fn prompt_scrollbar_rect(panel: Rect) -> Option<Rect> {
-    prompt_scrollbar_rect_with(panel, 0)
-}
-
-/// 扣附件条后的滚动条槽矩形。
-pub fn prompt_scrollbar_rect_with(panel: Rect, attachment_rows: u16) -> Option<Rect> {
-    let inner = prompt_body_rect(pane_inner_rect(panel), attachment_rows);
+    let inner = prompt_body_rect(pane_inner_rect(panel));
     (inner.width >= 2 && inner.height > 0).then_some(Rect::new(
         inner.right() - 1,
         inner.y,
@@ -753,7 +710,7 @@ pub fn prompt_scrollbar_rect_with(panel: Rect, attachment_rows: u16) -> Option<R
 
 /// 树视图滚动条槽：搜索框与分割线之下、贴右缘 1 列（搜索框固定不滚动）。
 pub fn prompt_tree_scrollbar_rect(panel: Rect) -> Option<Rect> {
-    let inner = prompt_body_rect(pane_inner_rect(panel), 0);
+    let inner = prompt_body_rect(pane_inner_rect(panel));
     (inner.width >= 2 && inner.height > PROMPT_TREE_HEADER_HEIGHT).then_some(Rect::new(
         inner.right() - 1,
         inner.y + PROMPT_TREE_HEADER_HEIGHT,
@@ -764,11 +721,11 @@ pub fn prompt_tree_scrollbar_rect(panel: Rect) -> Option<Rect> {
 
 /// prompt 内容区扣除顶部表头与附件条后的文本/滚动条区域；
 /// 高度不足时表头/附件条隐藏、退回全部内容区。
-fn prompt_body_rect(inner: Rect, attachment_rows: u16) -> Rect {
-    if inner.height > PROMPT_HEADER_HEIGHT + attachment_rows {
+fn prompt_body_rect(inner: Rect) -> Rect {
+    if inner.height > PROMPT_HEADER_HEIGHT {
         Rect {
-            y: inner.y + PROMPT_HEADER_HEIGHT + attachment_rows,
-            height: inner.height - PROMPT_HEADER_HEIGHT - attachment_rows,
+            y: inner.y + PROMPT_HEADER_HEIGHT,
+            height: inner.height - PROMPT_HEADER_HEIGHT,
             ..inner
         }
     } else {
@@ -910,12 +867,7 @@ pub fn prompt_toolbar_button_at(
 
 /// prompt 文本区尺寸：预留滚动条槽，最小 1x1。
 pub fn prompt_inner_size(rect: Rect) -> (u16, u16) {
-    prompt_inner_size_with(rect, 0)
-}
-
-/// 扣附件条后的 prompt 文本区尺寸。
-pub fn prompt_inner_size_with(rect: Rect, attachment_rows: u16) -> (u16, u16) {
-    let text = prompt_text_rect_with(rect, attachment_rows);
+    let text = prompt_text_rect(rect);
     (text.width.max(1), text.height.max(1))
 }
 

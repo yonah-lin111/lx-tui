@@ -144,11 +144,7 @@ fn targets(
                 targets.push((target, area));
             }
         }
-        let text_area = crate::layout::prompt_content_rect(
-            view.prompt,
-            state.prompt.attachments().len(),
-            state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Editor,
-        );
+        let text_area = crate::layout::prompt_content_rect(view.prompt);
         for hit in ui::prompt::template_buttons(&state.prompt, text_area) {
             targets.push((
                 TooltipTarget::TemplateButton {

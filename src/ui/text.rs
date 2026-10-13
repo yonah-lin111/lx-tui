@@ -405,11 +405,6 @@ pub fn paste_item_count(count: usize) -> String {
     }
 }
 
-/// 附件条滚动指示：`visible/total`。
-pub fn attachment_count_label(visible: usize, total: usize) -> String {
-    format!("{visible}/{total}")
-}
-
 /// 按钮 tooltip 文案：显示点击后的动作，随按钮当前状态翻转（收起/展开、钉住、切换视图）。
 pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
     match target {

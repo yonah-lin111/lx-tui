@@ -201,7 +201,6 @@ fn save_and_status_effects_persist() {
         workspace: cwd.clone(),
         id,
         content: "hello".into(),
-        attachments: Vec::new(),
         prompt: state.prompt.id(),
         revision: state.prompt.revision(),
     });
@@ -290,7 +289,7 @@ fn tree_loads_on_demand_for_displayed_workspace() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "existing", "", &[])
+        .create_prompt(&cwd, None, "existing", "")
         .expect("seed");
     assert!(!state.workspaces[0].prompt_panel.loaded);
     service.pump(&mut state);
@@ -314,7 +313,6 @@ fn save_draft_effect_persists_content_binds_editor_and_removes_temp() {
         folder_id: None,
         name: "New prompt".into(),
         content: "draft body".into(),
-        attachments: Vec::new(),
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
@@ -365,7 +363,6 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
         folder_id: Some(folder_id),
         name: "New prompt".into(),
         content: "body".into(),
-        attachments: Vec::new(),
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
@@ -390,44 +387,34 @@ fn temp_dir(label: &str) -> PathBuf {
 }
 
 #[test]
-fn save_draft_effect_persists_attachments_and_moves_temp() {
-    let (mut service, mut state, cwd, _) = trusted_service("draft-attach");
+fn save_draft_effect_moves_temp_into_tree() {
+    let (mut service, mut state, cwd, _) = trusted_service("draft-move");
     let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {
         panic!("temp bound by default");
     };
-    let attachment = crate::app::prompt::PromptAttachment::external(
-        PathBuf::from("/tmp/legacy-note.txt"),
-        crate::app::prompt::AttachmentKind::File,
-    );
     {
         let temp = state.workspaces[0]
             .prompt_panel
             .temp_mut(temp_id)
             .expect("temp exists");
         temp.content = "draft body".into();
-        temp.attachments = vec![attachment.clone()];
     }
     state.effects.push(Effect::SaveDraft {
         workspace: cwd.clone(),
         folder_id: None,
         name: "New prompt".into(),
         content: "draft body".into(),
-        attachments: vec![attachment],
     });
     assert!(service.pump(&mut state));
     let item = &state.workspaces[0].prompt_panel.tree.items()[0];
-    assert_eq!(item.attachments.len(), 1, "附件随草稿转移");
+    assert_eq!(item.content, "draft body");
     let prompts = service
         .db
         .as_ref()
         .expect("db")
         .list_prompts(&cwd)
         .expect("list");
-    assert_eq!(prompts[0].attachments.len(), 1);
-    assert_eq!(
-        prompts[0].attachments[0].path,
-        PathBuf::from("/tmp/legacy-note.txt")
-    );
+    assert_eq!(prompts[0].content, "draft body");
 }
 
 #[test]
@@ -437,7 +424,7 @@ fn save_prompt_content_confirms_revision_and_clears_pending() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "p", "old", &[])
+        .create_prompt(&cwd, None, "p", "old")
         .expect("seed");
     service.pump(&mut state);
     let id = state.workspaces[0].prompt_panel.tree.items()[0].id;
@@ -449,7 +436,6 @@ fn save_prompt_content_confirms_revision_and_clears_pending() {
         workspace: cwd.clone(),
         id,
         content: "old edited".into(),
-        attachments: Vec::new(),
         prompt,
         revision,
     });
@@ -477,7 +463,6 @@ fn save_prompt_content_failure_keeps_dirty_and_pending() {
         workspace: cwd.clone(),
         id: 999,
         content: "body".into(),
-        attachments: Vec::new(),
         prompt,
         revision,
     });
@@ -487,49 +472,36 @@ fn save_prompt_content_failure_keeps_dirty_and_pending() {
 }
 
 #[test]
-fn managed_cleanup_keeps_shared_assets_and_never_deletes_external_files() {
+fn managed_cleanup_keeps_shared_references_and_leaves_unrelated_files() {
     let (mut service, state, cwd, _) = trusted_service("gc-shared");
     let dir = temp_dir("gc-shared");
     let asset_id = "0123456789abcdef0123456789abcdef";
     let asset_path = dir.join(format!("{asset_id}.png"));
     std::fs::write(&asset_path, b"png").expect("asset file");
-    let external_path = dir.join("external-note.txt");
-    std::fs::write(&external_path, b"note").expect("external file");
+    let unrelated_path = dir.join("unrelated.txt");
+    std::fs::write(&unrelated_path, b"note").expect("unrelated file");
     service
         .db
         .as_ref()
         .expect("db")
         .register_managed_asset(asset_id, &asset_path)
         .expect("register");
-    let image = |id: &str| AttachmentWrite {
-        id: id.to_string(),
-        managed_asset_id: Some(asset_id.to_string()),
-        external_path: None,
-        kind: "image".to_string(),
-        name: "shot.png".to_string(),
-    };
-    let external = AttachmentWrite {
-        id: "att-ext".to_string(),
-        managed_asset_id: None,
-        external_path: Some(external_path.clone()),
-        kind: "file".to_string(),
-        name: "external-note.txt".to_string(),
-    };
+    let reference = format!("see @[refer-image]({})", asset_path.display());
     let first = service
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "first", "", &[image("att-1")])
+        .create_prompt(&cwd, None, "first", &reference)
         .expect("first");
     let second = service
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "second", "", &[image("att-2"), external])
+        .create_prompt(&cwd, None, "second", &reference)
         .expect("second");
     service.cleanup_managed(&state);
-    assert!(asset_path.exists(), "共享引用保留");
-    assert!(external_path.exists(), "外部文件不删");
+    assert!(asset_path.exists(), "共享正文引用保留");
+    assert!(unrelated_path.exists(), "目录内无关文件不删");
 
     service
         .db
@@ -548,7 +520,7 @@ fn managed_cleanup_keeps_shared_assets_and_never_deletes_external_files() {
         .expect("delete second");
     service.cleanup_managed(&state);
     assert!(!asset_path.exists(), "最后引用删除后清理文件");
-    assert!(external_path.exists(), "外部文件始终保留");
+    assert!(unrelated_path.exists(), "目录内无关文件始终保留");
     assert!(
         service
             .db

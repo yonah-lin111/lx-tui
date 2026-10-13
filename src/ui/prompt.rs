@@ -1,12 +1,8 @@
 //! prompt 编辑器渲染：文本、markdown 高亮与选区，只读状态。
 
-mod attachments;
 mod panels;
 pub mod tree;
 
-pub use self::attachments::{
-    AttachmentHit, attachment_bar_rect, attachment_hits, render_attachments,
-};
 use self::panels::render_panels;
 pub use self::panels::{
     mention_item_at, mention_layout, mention_panel_rect, panel_item_at, panel_layout, panel_rect,

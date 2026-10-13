@@ -564,32 +564,3 @@ fn prompt_toolbar_tree_pin_sits_left_of_temp_prompt() {
         "窄屏时 [+] 仍在"
     );
 }
-
-#[test]
-fn attachment_bar_reserves_rows_and_shrinks_text_area() {
-    let panel = Rect::new(0, 0, 30, 10);
-    let without = prompt_text_rect(panel);
-    assert_eq!(prompt_attachment_rect(panel, 0), None);
-    let two = prompt_text_rect_with(panel, 2);
-    assert_eq!(two.y, without.y + 2);
-    assert_eq!(two.height + 2, without.height);
-    assert_eq!(
-        prompt_inner_size_with(panel, 2).1 + 2,
-        prompt_inner_size(panel).1
-    );
-
-    // 行数按固定上限截断；滚动条槽从附件条之下开始。
-    let bar = prompt_attachment_rect(panel, 7).expect("bar");
-    assert_eq!(bar, Rect::new(1, 3, 28, PROMPT_ATTACHMENT_BAR_ROWS));
-    let gutter = prompt_scrollbar_rect_with(panel, PROMPT_ATTACHMENT_BAR_ROWS).expect("gutter");
-    assert_eq!(gutter.y, bar.bottom());
-    assert_eq!(gutter.height, without.height - PROMPT_ATTACHMENT_BAR_ROWS);
-}
-
-#[test]
-fn attachment_bar_yields_to_tiny_panels() {
-    // 内容区高度 2：表头都放不下，附件条不显示，正文退回全部内容区。
-    let tiny = Rect::new(0, 0, 20, 4);
-    assert_eq!(prompt_attachment_rect(tiny, 3), None);
-    assert_eq!(prompt_text_rect_with(tiny, 3), prompt_text_rect(tiny));
-}

@@ -2187,109 +2187,48 @@ fn file_candidate(path: &str) -> PasteCandidate {
 }
 
 #[test]
-fn attachments_dedupe_by_path_and_are_single_undo_step() {
-    let mut prompt = prompt(40, 6);
-    let candidates = vec![
-        PasteCandidate::external(PathBuf::from("/tmp/a.png"), PasteCandidateKind::Image),
-        PasteCandidate::external(PathBuf::from("/tmp/dir"), PasteCandidateKind::Folder),
-        file_candidate("/tmp/a.png"),
-        file_candidate("/tmp/b.txt"),
-    ];
-    assert!(prompt.add_attachments(&candidates));
-    assert_eq!(prompt.attachments().len(), 2, "目录不入附件，重复路径去重");
-    assert!(!prompt.is_saved(), "附件变更置脏");
-    let revision = prompt.revision();
-    assert!(!prompt.add_attachments(&candidates), "重复添加无变化");
-    assert_eq!(prompt.revision(), revision, "无变化不推进修订号");
-    prompt.undo();
-    assert!(prompt.attachments().is_empty(), "附件新增为一次撤销步");
-    prompt.redo();
-    assert_eq!(prompt.attachments().len(), 2, "重做恢复附件集合");
-}
-
-#[test]
-fn remove_attachment_is_single_undo_step() {
-    let mut prompt = prompt(40, 6);
-    assert!(prompt.add_attachments(&[file_candidate("/tmp/a.txt"), file_candidate("/tmp/b.txt")]));
-    let id = prompt.attachments()[0].id.clone();
-    assert!(prompt.remove_attachment(&id));
-    assert_eq!(prompt.attachments().len(), 1);
-    prompt.undo();
-    assert_eq!(prompt.attachments().len(), 2, "移除附件可单步撤销");
-    assert!(!prompt.remove_attachment("missing"));
-}
-
-#[test]
-fn set_document_loads_attachments_and_set_text_clears_them() {
-    let mut prompt = prompt(40, 6);
-    let attachment = PromptAttachment::external(PathBuf::from("/tmp/a.txt"), AttachmentKind::File);
-    prompt.set_document("body", vec![attachment]);
-    assert_eq!(prompt.text(), "body");
-    assert_eq!(prompt.attachments().len(), 1, "正文与附件原子加载");
-    assert!(prompt.is_saved());
-    prompt.set_text("");
-    assert!(prompt.attachments().is_empty(), "切正文清空附件");
-}
-
-#[test]
-fn paste_settle_consumes_only_matching_request_and_revision() {
-    let mut prompt = prompt(40, 6);
-    let anchor = PasteAnchor::at_cursor(0);
-    let request = prompt.begin_paste_read(anchor);
-    assert_eq!(prompt.paste_settle(request + 1), None, "代号不符不收束");
-    assert_eq!(prompt.paste_settle(request), Some(anchor), "匹配时返回锚点");
-    assert_eq!(
-        prompt.paste_settle(request),
-        None,
-        "已收束的请求不可重复消费"
-    );
-    let stale = prompt.begin_paste_read(anchor);
-    prompt.insert_str("x");
-    assert_eq!(prompt.paste_settle(stale), None, "修订变化后旧请求失效");
-}
-
-#[test]
-fn paste_panel_reference_writes_marker_and_keeps_attachments_empty() {
+fn paste_stage_inserts_placeholder_then_reference_rewrites() {
     let mut prompt = prompt(60, 8);
     prompt.insert_str("see ");
     let anchor = PasteAnchor::at_cursor(prompt.cursor());
     let request = prompt.begin_paste_read(anchor);
-    assert!(prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    assert_eq!(prompt.text(), "see /tmp/a.txt ", "先写纯路径占位");
     let panel = prompt.paste_panel().expect("panel open");
     assert!(panel.reference_enabled());
     assert!(prompt.paste_confirm(PasteAction::Reference));
-    assert_eq!(prompt.text(), "see @[refer-file](/tmp/a.txt) ");
-    assert!(prompt.attachments().is_empty(), "引用不产生附件");
+    assert_eq!(
+        prompt.text(),
+        "see @[refer-file](/tmp/a.txt) ",
+        "引用改写占位"
+    );
     assert!(prompt.paste_panel().is_none(), "确认后关闭面板");
+    prompt.undo();
+    assert_eq!(prompt.text(), "see ", "占位与改写同属一步撤销");
 }
 
 #[test]
-fn add_attachments_adds_without_text_change() {
-    let mut prompt = prompt(60, 8);
-    prompt.insert_str("body");
-    assert!(prompt.add_attachments(&[file_candidate("/tmp/a.txt")]));
-    assert_eq!(prompt.text(), "body", "附件不改正文");
-    assert_eq!(prompt.attachments().len(), 1);
-}
-
-#[test]
-fn paste_panel_path_mode_inserts_space_separated_paths() {
+fn paste_stage_path_confirm_keeps_placeholder() {
     let mut prompt = prompt(80, 8);
     let anchor = PasteAnchor::at_cursor(0);
     let request = prompt.begin_paste_read(anchor);
-    assert!(prompt.paste_complete(
+    assert!(prompt.paste_stage(
         request,
-        anchor,
         vec![file_candidate("/tmp/a.txt"), file_candidate("/tmp/b b.txt")]
     ));
+    assert_eq!(prompt.text(), "/tmp/a.txt /tmp/b b.txt ", "多路径空格连接");
     assert!(prompt.paste_confirm(PasteAction::Path));
-    assert_eq!(prompt.text(), "/tmp/a.txt /tmp/b b.txt ");
+    assert_eq!(
+        prompt.text(),
+        "/tmp/a.txt /tmp/b b.txt ",
+        "路径保持占位文本"
+    );
     prompt.undo();
-    assert_eq!(prompt.text(), "", "路径插入单步撤销");
+    assert_eq!(prompt.text(), "", "路径粘贴单步撤销");
 }
 
 #[test]
-fn paste_panel_replaces_selection_anchor() {
+fn paste_stage_replaces_selection_anchor() {
     let mut prompt = prompt(80, 8);
     prompt.insert_str("hello world");
     let anchor = PasteAnchor {
@@ -2297,9 +2236,38 @@ fn paste_panel_replaces_selection_anchor() {
         cursor: 11,
     };
     let request = prompt.begin_paste_read(anchor);
-    assert!(prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    assert_eq!(prompt.text(), "hello /tmp/a.txt ");
     assert!(prompt.paste_confirm(PasteAction::Path));
     assert_eq!(prompt.text(), "hello /tmp/a.txt ");
+}
+
+#[test]
+fn paste_cancel_reverts_placeholder_and_undo_step() {
+    let mut prompt = prompt(80, 8);
+    prompt.set_text("keep ");
+    let revision = prompt.revision();
+    let anchor = PasteAnchor::at_cursor(prompt.cursor());
+    let request = prompt.begin_paste_read(anchor);
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    assert!(prompt.can_undo(), "占位插入是可撤销一步");
+    assert!(prompt.paste_cancel());
+    assert_eq!(prompt.text(), "keep ", "取消回滚占位插入");
+    assert!(!prompt.can_undo(), "回滚不留下多余撤销步");
+    assert!(prompt.paste_panel().is_none());
+    assert!(prompt.is_saved(), "回滚恢复保存态");
+    assert_eq!(prompt.revision(), revision, "回滚恢复修订号");
+}
+
+#[test]
+fn paste_escape_reverts_placeholder() {
+    let mut prompt = prompt(60, 8);
+    let anchor = PasteAnchor::at_cursor(0);
+    let request = prompt.begin_paste_read(anchor);
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    assert!(prompt.paste_escape());
+    assert_eq!(prompt.text(), "");
+    assert!(!prompt.can_undo());
 }
 
 #[test]
@@ -2311,7 +2279,7 @@ fn paste_panel_dirs_keep_reference_enabled() {
         file_candidate("/tmp/a.txt"),
         PasteCandidate::external(PathBuf::from("/tmp/dir"), PasteCandidateKind::Folder),
     ];
-    assert!(prompt.paste_complete(request, anchor, candidates));
+    assert!(prompt.paste_stage(request, candidates));
     let panel = prompt.paste_panel().expect("panel");
     assert!(panel.reference_enabled(), "目录可引用为 [refer-folder]");
     assert_eq!(
@@ -2324,6 +2292,11 @@ fn paste_panel_dirs_keep_reference_enabled() {
         prompt.paste_panel().expect("panel").active_action(),
         Some(PasteAction::Path)
     );
+    assert!(prompt.paste_confirm(PasteAction::Reference));
+    assert_eq!(
+        prompt.text(),
+        "@[refer-file](/tmp/a.txt) @[refer-folder](/tmp/dir) "
+    );
 }
 
 #[test]
@@ -2335,7 +2308,7 @@ fn paste_panel_disables_reference_for_unrepresentable_path() {
         PathBuf::from("/tmp/a\nb.txt"),
         PasteCandidateKind::File,
     )];
-    assert!(prompt.paste_complete(request, anchor, candidates));
+    assert!(prompt.paste_stage(request, candidates));
     let panel = prompt.paste_panel().expect("panel");
     assert!(!panel.reference_enabled(), "含换行路径无法引用");
     assert_eq!(
@@ -2351,80 +2324,74 @@ fn paste_panel_disables_reference_for_unrepresentable_path() {
 }
 
 #[test]
-fn paste_complete_rejects_stale_request_revision_and_anchor() {
+fn paste_stage_rejects_stale_request_and_revision() {
     let mut prompt = prompt(60, 8);
     let anchor = PasteAnchor::at_cursor(0);
     let request = prompt.begin_paste_read(anchor);
-    assert!(!prompt.paste_complete(request + 1, anchor, vec![file_candidate("/tmp/a.txt")]));
+    assert!(!prompt.paste_stage(request + 1, vec![file_candidate("/tmp/a.txt")]));
+    assert_eq!(prompt.text(), "", "代号不符不写入");
     // 修订变化（编辑过）后旧请求失效。
     let stale = prompt.begin_paste_read(anchor);
     prompt.insert_str("x");
-    assert!(!prompt.paste_complete(stale, anchor, vec![file_candidate("/tmp/a.txt")]));
-    // 锚点变化（光标移动）后旧请求失效。
-    let moved = PasteAnchor::at_cursor(1);
-    let request = prompt.begin_paste_read(moved);
-    assert!(!prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
+    assert!(!prompt.paste_stage(stale, vec![file_candidate("/tmp/a.txt")]));
+    assert_eq!(prompt.text(), "x");
 }
 
 #[test]
-fn paste_open_captures_refer_panel() {
+fn paste_stage_captures_refer_panel() {
     let mut prompt = prompt(60, 8);
     prompt.insert_str("@abc 备注\nac");
     assert!(prompt.refer_panel().is_some());
     let anchor = PasteAnchor::at_cursor(prompt.cursor());
     let request = prompt.begin_paste_read(anchor);
-    assert!(prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
-    assert!(
-        prompt.refer_panel().is_none(),
-        "粘贴面板打开时捕获其他互斥面板"
-    );
+    assert!(prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]));
+    assert!(prompt.refer_panel().is_none(), "占位插入后清空其他互斥面板");
 }
 
 #[test]
-fn paste_cancel_requests_managed_cleanup() {
-    let mut prompt = prompt(60, 8);
-    let anchor = PasteAnchor::at_cursor(0);
-    let request = prompt.begin_paste_read(anchor);
-    let managed = PasteCandidate::managed(
-        PathBuf::from("/tmp/attachments/00112233445566778899aabbccddeeff.png"),
-        "00112233445566778899aabbccddeeff".to_string(),
-    );
-    assert!(prompt.paste_complete(request, anchor, vec![managed]));
-    assert!(prompt.paste_cancel());
-    assert!(prompt.take_paste_cleanup(), "取消登记待处理截图清理");
-    assert!(!prompt.take_paste_cleanup(), "标记取走不重复");
-}
-
-#[test]
-fn paste_confirm_refuses_protected_template_lines() {
+fn paste_stage_refuses_protected_template_lines() {
     let mut prompt = prompt(80, 12);
-    prompt.set_document(
-        "&&& x --start\nbody\n\n{wt:main}\n&&& x --end\n",
-        Vec::new(),
-    );
+    prompt.set_text("&&& x --start\nbody\n\n{wt:main}\n&&& x --end\n");
     let end = prompt.text().find("{wt:main}").expect("marker") + "{wt:main}".len();
     prompt.set_cursor_offset_for_test(end);
     let anchor = PasteAnchor::at_cursor(end);
     let request = prompt.begin_paste_read(anchor);
-    assert!(prompt.paste_complete(request, anchor, vec![file_candidate("/tmp/a.txt")]));
     assert!(
-        !prompt.paste_confirm(PasteAction::Path),
+        !prompt.paste_stage(request, vec![file_candidate("/tmp/a.txt")]),
         "受保护绑定行拒绝写入"
     );
+    assert!(prompt.paste_panel().is_none(), "拒绝时不打开面板");
     assert!(prompt.text().contains("{wt:main}"));
-    assert!(prompt.paste_panel().is_some(), "拒绝后保持面板");
 }
 
 #[test]
-fn attachment_availability_marks_missing_without_removing_metadata() {
+fn insert_reference_is_single_undo_step() {
     let mut prompt = prompt(60, 8);
-    prompt.add_attachments(&[file_candidate("/tmp/definitely-missing-lx-tui.txt")]);
-    let id = prompt.attachments()[0].id.clone();
-    assert!(prompt.attachment_available(&id));
-    assert!(prompt.set_unavailable_attachments(vec![id.clone()]));
-    assert!(!prompt.attachment_available(&id));
-    assert_eq!(prompt.attachments().len(), 1, "元数据保留");
-    assert!(!prompt.set_unavailable_attachments(vec![id]));
+    prompt.insert_str("shot ");
+    let anchor = PasteAnchor::at_cursor(prompt.cursor());
+    assert!(prompt.insert_reference(
+        &anchor,
+        crate::app::markdown::ReferKind::Image,
+        std::path::Path::new("/tmp/attachments/00112233445566778899aabbccddeeff.png")
+    ));
+    assert_eq!(
+        prompt.text(),
+        "shot @[refer-image](/tmp/attachments/00112233445566778899aabbccddeeff.png) "
+    );
+    prompt.undo();
+    assert_eq!(prompt.text(), "shot ");
+}
+
+#[test]
+fn insert_reference_refuses_control_characters() {
+    let mut prompt = prompt(60, 8);
+    let anchor = PasteAnchor::at_cursor(0);
+    assert!(!prompt.insert_reference(
+        &anchor,
+        crate::app::markdown::ReferKind::Image,
+        std::path::Path::new("/tmp/a\nb.png")
+    ));
+    assert_eq!(prompt.text(), "");
 }
 
 // ===== 字母快捷面板 =====
@@ -2446,10 +2413,7 @@ fn refer_shortcut_triggers_on_existing_mention_and_undoes_as_one_step() {
 #[test]
 fn refer_shortcut_isolates_template_blocks() {
     let mut prompt = prompt(60, 12);
-    prompt.set_document(
-        "&&& a\n@one\n&&& a --end\n&&& b\n@two\n&&& b --end",
-        Vec::new(),
-    );
+    prompt.set_text("&&& a\n@one\n&&& a --end\n&&& b\n@two\n&&& b --end");
     let cursor = prompt.text().find("@two").expect("anchor") + "@two".len();
     prompt.set_cursor_offset_for_test(cursor);
     prompt.insert_str("\ntw");
@@ -2476,8 +2440,8 @@ fn refer_shortcut_escape_closes_until_next_edit() {
 #[test]
 fn refer_shortcut_reference_candidates_keep_full_marker() {
     let mut prompt = prompt(80, 8);
-    prompt.set_document("@[refer-image](/tmp/shot.png) 日志\nsh", Vec::new());
-    // set_document 不触发面板重算：模拟一次光标移动。
+    prompt.set_text("@[refer-image](/tmp/shot.png) 日志\nsh");
+    // set_text 不触发面板重算：模拟一次光标移动。
     prompt.move_right();
     let panel = prompt.refer_panel().expect("panel");
     assert_eq!(panel.items()[0].text, "@[refer-image](/tmp/shot.png)");

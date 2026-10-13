@@ -1104,58 +1104,7 @@ fn template_status_button_label_follows_block_status() {
     assert!(row.contains(text::TEMPLATE_BUTTON_RUN), "{row}");
 }
 
-// ===== 附件条与粘贴/字母快捷面板 =====
-
-#[test]
-fn attachment_hits_map_rows_and_remove_zones() {
-    let mut prompt = prompt(30, 10, "");
-    let candidates = vec![
-        crate::app::prompt::PasteCandidate::external(
-            std::path::PathBuf::from("/tmp/a.txt"),
-            crate::app::prompt::PasteCandidateKind::File,
-        ),
-        crate::app::prompt::PasteCandidate::external(
-            std::path::PathBuf::from("/tmp/b.png"),
-            crate::app::prompt::PasteCandidateKind::Image,
-        ),
-    ];
-    assert!(prompt.add_attachments(&candidates));
-    let panel = Rect::new(0, 0, 30, 10);
-    let bar = attachment_bar_rect(&prompt, panel).expect("bar visible");
-    let hits = attachment_hits(&prompt, panel, 0);
-    assert_eq!(hits.len(), 2);
-    assert_eq!(hits[0].row.y, bar.y);
-    assert_eq!(hits[1].row.y, bar.y + 1);
-    assert_eq!(hits[0].remove.width, 3);
-    assert_eq!(hits[0].remove.right(), bar.right());
-    assert_eq!(hits[0].id, prompt.attachments()[0].id);
-
-    // 滚动视口索引钳制在末尾可见窗口。
-    let scrolled = attachment_hits(&prompt, panel, 99);
-    assert_eq!(scrolled.len(), 2, "少于最大行数时整体可见");
-}
-
-#[test]
-fn attachment_bar_render_paints_tag_name_and_remove_button() {
-    let mut prompt = prompt(30, 10, "");
-    assert!(
-        prompt.add_attachments(&[crate::app::prompt::PasteCandidate::external(
-            std::path::PathBuf::from("/tmp/report.png"),
-            crate::app::prompt::PasteCandidateKind::Image,
-        )])
-    );
-    let panel = Rect::new(0, 0, 30, 10);
-    let bar = attachment_bar_rect(&prompt, panel).expect("bar");
-    let area = Rect::new(0, 0, 30, 10);
-    let mut buf = Buffer::empty(area);
-    render_attachments(panel, &mut buf, &prompt, 0);
-    let row: String = (bar.x..bar.right())
-        .map(|x| buf[(x, bar.y)].symbol().to_string())
-        .collect();
-    assert!(row.contains("[img]"), "类型标签: {row}");
-    assert!(row.contains("report.png"), "文件名: {row}");
-    assert!(row.contains("[x]"), "移除按钮: {row}");
-}
+// ===== 粘贴/字母快捷面板 =====
 
 #[test]
 fn paste_panel_hit_and_layout_rows() {
@@ -1172,7 +1121,7 @@ fn paste_panel_hit_and_layout_rows() {
             crate::app::prompt::PasteCandidateKind::Folder,
         ),
     ];
-    assert!(prompt.paste_complete(request, anchor, candidates));
+    assert!(prompt.paste_stage(request, candidates));
     let area = Rect::new(0, 0, 40, 10);
     let layout = paste_layout(&prompt, area).expect("paste layout");
     assert_eq!(layout.visible, 2);

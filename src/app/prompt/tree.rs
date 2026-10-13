@@ -7,8 +7,6 @@ use crate::app::overlay::TextInput;
 use crate::db::{FolderRecord, PromptRecord};
 use crate::ui::text;
 
-use super::{AttachmentKind, AttachmentSource, PromptAttachment};
-
 /// 提示词条目状态；与 DB 稳定值 `todo` / `in_progress` / `completed` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PromptItemStatus {
@@ -63,8 +61,6 @@ pub struct PromptItem {
     pub name: String,
     pub content: String,
     pub status: PromptItemStatus,
-    /// 已保存附件列表（与正文一起提交入库）。
-    pub attachments: Vec<PromptAttachment>,
 }
 
 /// 临时提示词：仅存内存、不入库；列表展示名取内容首行摘要（空白项取占位名 `default`）。
@@ -72,8 +68,6 @@ pub struct PromptItem {
 pub struct TempPrompt {
     pub id: u64,
     pub content: String,
-    /// 临时草稿附件；保存为正式条目时随正文一起转移。
-    pub attachments: Vec<PromptAttachment>,
 }
 
 impl TempPrompt {
@@ -332,32 +326,12 @@ impl From<FolderRecord> for PromptFolder {
 
 impl From<PromptRecord> for PromptItem {
     fn from(record: PromptRecord) -> Self {
-        let attachments = record
-            .attachments
-            .into_iter()
-            .map(|attachment| {
-                let source = if attachment.managed_asset_id.is_some() {
-                    AttachmentSource::Managed
-                } else {
-                    AttachmentSource::External
-                };
-                PromptAttachment {
-                    id: attachment.id,
-                    path: attachment.path,
-                    kind: AttachmentKind::parse(&attachment.kind),
-                    name: attachment.name,
-                    source,
-                    managed_asset_id: attachment.managed_asset_id,
-                }
-            })
-            .collect();
         Self {
             id: record.id,
             folder_id: record.folder_id,
             name: record.name,
             content: record.content,
             status: PromptItemStatus::parse(&record.status),
-            attachments,
         }
     }
 }
@@ -420,7 +394,6 @@ impl PromptPanel {
             temps: vec![TempPrompt {
                 id: 0,
                 content: String::new(),
-                attachments: Vec::new(),
             }],
             next_temp_id: 1,
             tree_return: None,
@@ -488,7 +461,6 @@ impl PromptPanel {
         self.temps.push(TempPrompt {
             id,
             content: String::new(),
-            attachments: Vec::new(),
         });
         id
     }

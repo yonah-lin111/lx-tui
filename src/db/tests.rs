@@ -105,13 +105,13 @@ fn deleting_folder_cascades_subfolders_and_prompts() {
         .create_folder(&workspace, Some(root), "sub")
         .expect("sub folder");
     database
-        .create_prompt(&workspace, Some(root), "in root", "", &[])
+        .create_prompt(&workspace, Some(root), "in root", "")
         .expect("root prompt");
     database
-        .create_prompt(&workspace, Some(sub), "in sub", "", &[])
+        .create_prompt(&workspace, Some(sub), "in sub", "")
         .expect("sub prompt");
     database
-        .create_prompt(&workspace, None, "loose", "", &[])
+        .create_prompt(&workspace, None, "loose", "")
         .expect("loose prompt");
 
     database.delete_folder(root).expect("delete root");
@@ -136,14 +136,14 @@ fn prompt_crud_persists_and_isolates_workspaces() {
         .create_folder(&left, None, "folder")
         .expect("folder ok");
     let prompt = database
-        .create_prompt(&left, Some(left_folder), "draft", "", &[])
+        .create_prompt(&left, Some(left_folder), "draft", "")
         .expect("prompt ok");
     database
-        .create_prompt(&right, None, "other", "", &[])
+        .create_prompt(&right, None, "other", "")
         .expect("other prompt ok");
 
     database
-        .update_prompt_document(prompt, "hello\nworld", &[])
+        .update_prompt_document(prompt, "hello\nworld")
         .expect("content ok");
     database
         .update_prompt_status(prompt, "in_progress")
@@ -186,7 +186,7 @@ fn prompt_in_missing_folder_is_rejected() {
     let (database, _) = open_test_database("missing-folder");
     let workspace = workspace_path("missing-folder");
     let error = database
-        .create_prompt(&workspace, Some(999), "orphan", "", &[])
+        .create_prompt(&workspace, Some(999), "orphan", "")
         .expect_err("missing folder rejected");
     assert!(matches!(error, DbError::FolderMissing));
 }
@@ -215,29 +215,7 @@ fn database_dir_follows_environment_flag() {
     assert_eq!(database_path(false).expect("prod path"), prod.join("lx.db"));
 }
 
-// ===== v2：附件与 managed 资产 =====
-
-/// 简单文件附件写入参数。
-fn file_write(id: &str, path: &str) -> AttachmentWrite {
-    AttachmentWrite {
-        id: id.to_string(),
-        managed_asset_id: None,
-        external_path: Some(PathBuf::from(path)),
-        kind: "file".to_string(),
-        name: path.rsplit('/').next().unwrap_or(path).to_string(),
-    }
-}
-
-/// 简单 managed 截图写入参数。
-fn image_write(id: &str, asset_id: &str) -> AttachmentWrite {
-    AttachmentWrite {
-        id: id.to_string(),
-        managed_asset_id: Some(asset_id.to_string()),
-        external_path: None,
-        kind: "image".to_string(),
-        name: "shot.png".to_string(),
-    }
-}
+// ===== v2：managed 截图资产登记 =====
 
 #[test]
 fn foreign_keys_are_enabled_on_connection() {
@@ -250,7 +228,7 @@ fn foreign_keys_are_enabled_on_connection() {
 }
 
 #[test]
-fn migrates_v1_database_adding_attachment_tables() {
+fn migrates_v1_database_adding_managed_asset_table() {
     let path = temp_db_path("v1-upgrade");
     let workspace = workspace_path("v1-upgrade");
     std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
@@ -279,21 +257,18 @@ fn migrates_v1_database_adding_attachment_tables() {
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("version");
     assert_eq!(version, 2);
-    for table in ["managed_attachment_asset", "workspace_prompt_attachment"] {
-        let count: i64 = database
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                params![table],
-                |row| row.get(0),
-            )
-            .expect("schema query");
-        assert_eq!(count, 1, "table {table} exists");
-    }
+    let count: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'managed_asset'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("schema query");
+    assert_eq!(count, 1, "managed_asset table exists");
     let prompts = database.list_prompts(&workspace).expect("list");
     assert_eq!(prompts.len(), 1);
     assert_eq!(prompts[0].content, "legacy body", "旧正文不改写");
-    assert!(prompts[0].attachments.is_empty(), "旧记录读取为空附件");
     drop(database);
     // 再次打开不重复迁移。
     let reopened = Database::open(&path).expect("reopen ok");
@@ -321,158 +296,53 @@ fn rejects_database_newer_than_supported() {
 }
 
 #[test]
-fn create_and_list_prompts_preserve_attachment_order() {
-    let (database, _) = open_test_database("attach-order");
-    let workspace = workspace_path("attach-order");
-    let writes = vec![
-        file_write("att-1", "/tmp/a.txt"),
-        file_write("att-2", "/tmp/b.txt"),
-    ];
-    database
-        .create_prompt(&workspace, None, "p", "body", &writes)
-        .expect("create");
-    let prompts = database.list_prompts(&workspace).expect("list");
-    let ids: Vec<&str> = prompts[0]
-        .attachments
-        .iter()
-        .map(|attachment| attachment.id.as_str())
-        .collect();
-    assert_eq!(ids, vec!["att-1", "att-2"], "按 position 顺序恢复");
-    assert_eq!(prompts[0].attachments[0].kind, "file");
-    assert_eq!(prompts[0].attachments[0].path, PathBuf::from("/tmp/a.txt"));
-}
-
-#[test]
-fn update_prompt_document_replaces_attachments_and_rolls_back_on_failure() {
-    let (database, _) = open_test_database("attach-rollback");
-    let workspace = workspace_path("attach-rollback");
+fn update_prompt_document_writes_content_and_rejects_unknown_row() {
+    let (database, _) = open_test_database("document-update");
+    let workspace = workspace_path("document-update");
     let id = database
-        .create_prompt(
-            &workspace,
-            None,
-            "p",
-            "old",
-            &[file_write("att-1", "/tmp/a.txt")],
-        )
+        .create_prompt(&workspace, None, "p", "old")
         .expect("create");
     database
-        .update_prompt_document(id, "new", &[file_write("att-2", "/tmp/c.txt")])
-        .expect("update");
+        .update_prompt_document(id, "new")
+        .expect("update content");
     let prompts = database.list_prompts(&workspace).expect("list");
     assert_eq!(prompts[0].content, "new");
-    assert_eq!(prompts[0].attachments.len(), 1);
-    assert_eq!(prompts[0].attachments[0].id, "att-2");
-    // 重复 external_id 触发唯一约束：整笔事务回滚，正文与附件保持更新前状态。
-    let broken = vec![
-        file_write("att-3", "/tmp/d.txt"),
-        file_write("att-3", "/tmp/e.txt"),
-    ];
-    assert!(
-        database
-            .update_prompt_document(id, "broken", &broken)
-            .is_err()
-    );
-    let prompts = database.list_prompts(&workspace).expect("list");
-    assert_eq!(prompts[0].content, "new", "失败回滚保留旧正文");
-    assert_eq!(prompts[0].attachments.len(), 1);
-    assert_eq!(prompts[0].attachments[0].id, "att-2");
+    assert!(database.update_prompt_document(id + 999, "x").is_err());
 }
 
 #[test]
-fn deleting_folder_cascades_attachment_rows() {
-    let (database, _) = open_test_database("attach-cascade");
-    let workspace = workspace_path("attach-cascade");
+fn deleting_folder_cascades_prompts() {
+    let (database, _) = open_test_database("folder-cascade");
+    let workspace = workspace_path("folder-cascade");
     let folder = database
         .create_folder(&workspace, None, "root")
         .expect("folder");
-    let id = database
-        .create_prompt(
-            &workspace,
-            Some(folder),
-            "p",
-            "",
-            &[file_write("att-1", "/tmp/a.txt")],
-        )
+    database
+        .create_prompt(&workspace, Some(folder), "p", "")
         .expect("create");
-    let _ = id;
     database.delete_folder(folder).expect("delete folder");
     let count: i64 = database
         .conn
-        .query_row(
-            "SELECT COUNT(*) FROM workspace_prompt_attachment",
-            [],
-            |row| row.get(0),
-        )
+        .query_row("SELECT COUNT(*) FROM workspace_prompt", [], |row| {
+            row.get(0)
+        })
         .expect("count");
-    assert_eq!(count, 0, "级联删除附件记录");
+    assert_eq!(count, 0, "级联删除条目");
 }
 
 #[test]
-fn managed_assets_require_registration_and_block_delete_while_referenced() {
+fn managed_assets_register_list_and_delete() {
     let (database, _) = open_test_database("managed-asset");
-    let workspace = workspace_path("managed-asset");
     let asset_path = PathBuf::from("/tmp/lx-tui-assets/0123456789abcdef0123456789abcdef.png");
     database
         .register_managed_asset("0123456789abcdef0123456789abcdef", &asset_path)
         .expect("register");
-    let id = database
-        .create_prompt(
-            &workspace,
-            None,
-            "p",
-            "",
-            &[image_write("att-1", "0123456789abcdef0123456789abcdef")],
-        )
-        .expect("create");
-    let prompts = database.list_prompts(&workspace).expect("list");
-    assert_eq!(
-        prompts[0].attachments[0].path, asset_path,
-        "路径从资产表 JOIN"
-    );
-    assert_eq!(
-        database.managed_attachment_ids().expect("ids"),
-        vec!["0123456789abcdef0123456789abcdef".to_string()]
-    );
-    assert!(
-        database
-            .delete_managed_asset("0123456789abcdef0123456789abcdef")
-            .is_err(),
-        "仍被附件引用时拒绝删除资产行"
-    );
-    // 未登记资产写入被外键拒绝。
-    assert!(
-        database
-            .create_prompt(
-                &workspace,
-                None,
-                "q",
-                "",
-                &[image_write("att-2", "missing")]
-            )
-            .is_err()
-    );
-    database.delete_prompt(id).expect("delete prompt");
-    assert!(database.managed_attachment_ids().expect("ids").is_empty());
+    let assets = database.list_managed_assets().expect("assets");
+    assert_eq!(assets.len(), 1);
+    assert_eq!(assets[0].external_id, "0123456789abcdef0123456789abcdef");
+    assert_eq!(assets[0].path, asset_path);
     database
         .delete_managed_asset("0123456789abcdef0123456789abcdef")
-        .expect("delete asset after release");
+        .expect("delete");
     assert!(database.list_managed_assets().expect("assets").is_empty());
-}
-
-#[test]
-fn attachment_check_rejects_double_source() {
-    let (database, _) = open_test_database("attach-check");
-    let workspace = workspace_path("attach-check");
-    let broken = AttachmentWrite {
-        id: "att-1".to_string(),
-        managed_asset_id: Some("asset".to_string()),
-        external_path: Some(PathBuf::from("/tmp/a.txt")),
-        kind: "image".to_string(),
-        name: "a".to_string(),
-    };
-    assert!(
-        database
-            .create_prompt(&workspace, None, "p", "", &[broken])
-            .is_err()
-    );
 }

@@ -159,7 +159,7 @@ fn route_panel(state: &mut AppState, command: &EditorCommand) -> bool {
 
 /// 粘贴二级面板按键：上下移动、回车确认、Esc 取消；面板打开时其余命令吞掉。
 ///
-/// 确认时按高亮可用项执行（上传/引用/路径）；写入被受保护行拒绝时保持面板不改正文。
+/// 确认时按高亮可用项执行（引用改写占位文本 / 路径保持）；取消回滚占位插入。
 fn route_paste_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     if state.prompt.paste_panel().is_none() {
         return false;
@@ -318,7 +318,6 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt = Some(next);
     }
-    state.prompt_attachment_scroll = 0;
     restore_prompt_view(state, to);
     sync_mention_root(state);
 }
@@ -346,7 +345,6 @@ fn restore_prompt_view(state: &mut AppState, index: usize) {
         workspace.prompt_panel.editing = Some(PromptEditing::Temp(id));
     }
     state.prompt.set_text("");
-    state.prompt_attachment_scroll = 0;
 }
 
 /// 把激活工作区的挂起缓冲装入显示态（丢弃当前显示草稿）；槽位缺失时兜底新建。
@@ -363,7 +361,6 @@ fn load_displayed_draft(state: &mut AppState) {
         .unwrap_or_default();
     state.prompt = next.editor;
     state.prompt_root = next.root;
-    state.prompt_attachment_scroll = 0;
     restore_prompt_view(state, index);
     sync_mention_root(state);
 }
@@ -432,22 +429,6 @@ pub fn select_paste(state: &mut AppState, index: usize) {
     if let Some(action) = super::prompt::PasteAction::ALL.get(index).copied() {
         state.prompt.paste_confirm(action);
     }
-}
-
-/// 移除提示词附件；返回是否产生变更。
-pub fn remove_prompt_attachment(state: &mut AppState, id: &str) -> bool {
-    state.prompt.remove_attachment(id)
-}
-
-/// 滚轮滚动附件条视口；越界钳制；返回是否变化。
-pub fn scroll_prompt_attachments(state: &mut AppState, direction: isize) -> bool {
-    let count = state.prompt.attachments().len();
-    let max = count.saturating_sub(usize::from(layout::PROMPT_ATTACHMENT_BAR_ROWS));
-    let before = state.prompt_attachment_scroll.min(max);
-    let next = (before as isize + direction).clamp(0, max as isize) as usize;
-    let moved = next != before || next != state.prompt_attachment_scroll;
-    state.prompt_attachment_scroll = next;
-    moved
 }
 
 /// 鼠标点选提及条目：确认插入。
@@ -628,12 +609,7 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
 pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
     for (id, rect) in pane_rects {
         if *id == state.prompt.id() {
-            let attachment_rows = if prompt_tree_mode(state) {
-                0
-            } else {
-                layout::prompt_attachment_rows(state.prompt.attachments().len())
-            };
-            let (cols, rows) = layout::prompt_inner_size_with(*rect, attachment_rows);
+            let (cols, rows) = layout::prompt_inner_size(*rect);
             if state.prompt.size() != (cols, rows) {
                 clear_selection(state);
             }

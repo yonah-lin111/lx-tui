@@ -18,7 +18,6 @@ fn item(id: i64, folder_id: Option<i64>, name: &str) -> PromptItem {
         name: name.to_string(),
         content: format!("content {id}"),
         status: PromptItemStatus::Todo,
-        attachments: Vec::new(),
     }
 }
 
@@ -216,14 +215,12 @@ fn temp_summary_uses_first_non_empty_line() {
     let temp = TempPrompt {
         id: 0,
         content: "\n  代码审查专家  \n严格执行".into(),
-        attachments: Vec::new(),
     };
     assert_eq!(temp.summary(), "代码审查专家");
     assert!(!temp.is_blank());
     let blank = TempPrompt {
         id: 1,
         content: "  \n\t ".into(),
-        attachments: Vec::new(),
     };
     assert_eq!(blank.summary(), "");
     assert!(blank.is_blank());

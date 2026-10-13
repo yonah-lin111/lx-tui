@@ -252,7 +252,6 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
                 name: format!("item-{index:02}"),
                 content: String::new(),
                 status: PromptItemStatus::Todo,
-                attachments: Vec::new(),
             })
             .collect(),
     );
@@ -2072,7 +2071,6 @@ fn ctrl_s_saves_open_item_immediately() {
             name: "item".into(),
             content: "body".into(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
     );
     assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
@@ -2296,7 +2294,6 @@ fn mouse_double_click_prompt_item_row_opens_editor() {
             name: "item".into(),
             content: "item body".into(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
         PromptRowKind::Item,
     );
@@ -2353,7 +2350,6 @@ fn mouse_double_click_prompt_folder_toggles_once() {
             name: "item".into(),
             content: "item body".into(),
             status: PromptItemStatus::Todo,
-            attachments: Vec::new(),
         }],
         PromptRowKind::Folder,
     );
@@ -3069,7 +3065,7 @@ fn clipboard_read_stale_image_cleans_staged_file() {
 }
 
 #[test]
-fn clipboard_read_image_attaches_without_panel() {
+fn clipboard_read_image_inserts_reference_without_panel() {
     let service = paste_service("image-ok");
     let dir = paste_temp_dir("image-ok");
     let path = dir.join("fedcba9876543210fedcba9876543210.png");
@@ -3089,24 +3085,31 @@ fn clipboard_read_image_attaches_without_panel() {
         },
     );
     assert!(state.prompt.paste_panel().is_none(), "位图不进面板");
-    assert_eq!(state.prompt.attachments().len(), 1, "位图直接成为附件");
-    assert_eq!(state.prompt.attachments()[0].path, path);
+    assert_eq!(
+        state.prompt.text(),
+        format!("@[refer-image]({}) ", path.display()),
+        "位图直接写入引用"
+    );
     assert!(path.exists(), "登记后文件保留");
     assert_eq!(service.managed_asset_count_for_test(), 1);
+    state.prompt.undo();
+    assert_eq!(state.prompt.text(), "", "引用插入单步撤销");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn clipboard_read_image_duplicate_drops_registration_without_deleting_shared_file() {
-    let service = paste_service("image-duplicate");
-    let dir = paste_temp_dir("image-duplicate");
+fn clipboard_read_image_on_protected_line_drops_registration() {
+    let service = paste_service("image-protected");
+    let dir = paste_temp_dir("image-protected");
     let path = dir.join("00112233445566778899aabbccddeeff.png");
     std::fs::write(&path, b"png").expect("staged file");
     let mut state = AppState::demo();
-    let existing =
-        crate::app::prompt::PasteCandidate::external(path.clone(), PasteCandidateKind::Image);
-    assert!(state.prompt.add_attachments(&[existing]));
-    let anchor = crate::app::prompt::PasteAnchor::at_cursor(0);
+    state
+        .prompt
+        .set_text("&&& x --start\n\n{wt:main}\n&&& x --end\n");
+    let end = state.prompt.text().find("{wt:main}").expect("marker") + "{wt:main}".len();
+    state.prompt.set_cursor_offset_for_test(end);
+    let anchor = crate::app::prompt::PasteAnchor::at_cursor(end);
     let request = state.prompt.begin_paste_read(anchor);
     let prompt = state.prompt.id();
     paste::apply_clipboard_read(
@@ -3119,9 +3122,9 @@ fn clipboard_read_image_duplicate_drops_registration_without_deleting_shared_fil
             path: path.clone(),
         },
     );
-    assert_eq!(state.prompt.attachments().len(), 1, "同路径去重");
+    assert!(!path.exists(), "受保护行拒绝后删除刚落盘文件");
     assert_eq!(service.managed_asset_count_for_test(), 0, "撤销登记");
-    assert!(path.exists(), "已被附件引用的文件不删");
+    assert_eq!(service.managed_asset_count_for_test(), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -3155,42 +3158,5 @@ fn clipboard_read_text_paths_open_proposal_and_other_text_inserts() {
     );
     assert!(state.prompt.paste_panel().is_none());
     assert_eq!(state.prompt.text(), "/api/users 文档");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn refresh_attachment_availability_marks_missing_files() {
-    let dir = paste_temp_dir("availability");
-    let existing = dir.join("exists.txt");
-    std::fs::write(&existing, b"x").expect("file");
-    let mut state = AppState::demo();
-    let candidates = vec![
-        crate::app::prompt::PasteCandidate::external(existing.clone(), PasteCandidateKind::File),
-        crate::app::prompt::PasteCandidate::external(
-            dir.join("missing.txt"),
-            PasteCandidateKind::File,
-        ),
-    ];
-    assert!(state.prompt.add_attachments(&candidates));
-    assert!(paste::refresh_attachment_availability(&mut state));
-    let ids: Vec<(String, bool)> = state
-        .prompt
-        .attachments()
-        .iter()
-        .map(|attachment| {
-            (
-                attachment.name.clone(),
-                state.prompt.attachment_available(&attachment.id),
-            )
-        })
-        .collect();
-    assert!(
-        ids.iter()
-            .any(|(name, available)| name == "missing.txt" && !available)
-    );
-    assert!(
-        ids.iter()
-            .any(|(name, available)| name == "exists.txt" && *available)
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }

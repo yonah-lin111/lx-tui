@@ -1,10 +1,10 @@
 //! prompt 右栏编辑器：纯文本缓冲区、光标、软换行视口与选区取文，无 IO。
 
-mod attachment;
 mod list;
 mod mention;
-pub use attachment::*;
+mod paste;
 pub use mention::MentionRootChoice;
+pub use paste::*;
 mod panel;
 mod refer;
 mod template;
@@ -67,10 +67,6 @@ pub struct Prompt {
     worktree_available: bool,
     /// 文件提及面板状态；含扫描缓存与在途代号。
     mention: MentionState,
-    /// 当前编辑条目的附件列表；与正文一起提交入库或随草稿停泊。
-    attachments: Vec<PromptAttachment>,
-    /// 当前不可用的附件 ID（路径已不存在）；仅展示态，不进撤销快照。
-    unavailable: Vec<String>,
     /// 粘贴提案状态机：在途读取、二级面板与待清理标记。
     paste: PasteState,
     /// 字母快捷输入面板；由正文已出现的引用候选生成。
@@ -93,12 +89,11 @@ pub struct VisualRow {
     pub end: usize,
 }
 
-/// 历史快照：文本、光标位置与附件集合；附件增删与正文编辑同为一步可撤销操作。
+/// 历史快照：文本与光标位置。
 #[derive(Debug)]
 struct Snapshot {
     text: String,
     cursor: usize,
-    attachments: Vec<PromptAttachment>,
 }
 
 /// 编辑类别；Insert/Delete 连续执行时合并为一步，Other 独立成步。
@@ -127,8 +122,6 @@ impl Prompt {
             custom: Vec::new(),
             worktree_available: false,
             mention: MentionState::default(),
-            attachments: Vec::new(),
-            unavailable: Vec::new(),
             paste: PasteState::default(),
             refer: None,
             panel_suppressed: false,
@@ -224,8 +217,6 @@ impl Prompt {
     }
 
     /// 替换全文（载入提示词条目）：净化文本、清空历史与浮层并回到已保存态；光标落在文末。
-    ///
-    /// 附件与粘贴提案一并清空；需要加载附件时使用 `set_document`。
     pub fn set_text(&mut self, text: &str) {
         self.text = sanitize(text);
         self.cursor = self.text.len();
@@ -238,8 +229,6 @@ impl Prompt {
         self.mention.clear();
         self.refer = None;
         self.paste.close();
-        self.attachments.clear();
-        self.unavailable.clear();
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
@@ -813,7 +802,6 @@ impl Prompt {
         Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
-            attachments: self.attachments.clone(),
         }
     }
 
@@ -827,12 +815,6 @@ impl Prompt {
     fn restore(&mut self, snapshot: Snapshot) {
         self.text = snapshot.text;
         self.cursor = snapshot.cursor;
-        self.attachments = snapshot.attachments;
-        self.unavailable.retain(|id| {
-            self.attachments
-                .iter()
-                .any(|attachment| attachment.id == *id)
-        });
         self.last_edit = None;
         self.settle();
     }
