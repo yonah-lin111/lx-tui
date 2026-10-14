@@ -3941,3 +3941,43 @@ fn lx_undo_redo_roundtrip() {
     apply_lx_input(&mut state, LxInput::Redo);
     assert_eq!(state.active_pane().expect("pane").lx.input, "ab");
 }
+
+#[test]
+fn lx_shift_enter_continues_bullet_list() {
+    let mut state = AppState::demo();
+    for ch in "- item".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "- item\n- ");
+}
+
+#[test]
+fn lx_shift_enter_increments_ordered_list() {
+    let mut state = AppState::demo();
+    for ch in "1. a".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "1. a\n2. ");
+}
+
+#[test]
+fn lx_shift_enter_on_empty_list_item_exits_level() {
+    let mut state = AppState::demo();
+    for ch in "- ".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
+}
+
+#[test]
+fn lx_shift_enter_plain_line_is_plain_newline() {
+    let mut state = AppState::demo();
+    for ch in "hello".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "hello\n");
+}

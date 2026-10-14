@@ -1,6 +1,6 @@
 //! prompt 右栏编辑器：纯文本缓冲区、光标、软换行视口与选区取文，无 IO。
 
-mod list;
+pub(crate) mod list;
 mod mention;
 mod paste;
 pub use mention::MentionRootChoice;

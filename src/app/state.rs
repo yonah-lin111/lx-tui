@@ -13,6 +13,7 @@ use crate::terminal::Terminal;
 use super::effects::Effect;
 use super::markdown::BlockPanel;
 use super::overlay::Overlay;
+use super::prompt::list;
 use super::prompt::text;
 use super::prompt::{Prompt, PromptPanel};
 use super::selection::Selection;
@@ -369,8 +370,17 @@ impl Lx {
         self.refresh_panel();
     }
 
-    /// 在光标处换行。
+    /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
     pub fn newline(&mut self) {
+        if !list::in_fence(&self.input, self.cursor)
+            && let Some(edit) = list::list_continuation(&self.input, self.cursor)
+        {
+            self.snapshot();
+            self.input.replace_range(edit.range, &edit.replacement);
+            self.cursor = edit.cursor;
+            self.refresh_panel();
+            return;
+        }
         self.snapshot();
         self.input.insert(self.cursor, '\n');
         self.cursor += 1;
