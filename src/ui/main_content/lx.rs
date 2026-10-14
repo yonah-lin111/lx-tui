@@ -30,6 +30,8 @@ const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 3;
 const ENTRY_VGAP: u16 = 1;
 const SECTION_GAP: u16 = 1;
+/// 图标底边与 Tip 行之间的行距。
+const LOGO_GAP: u16 = 2;
 /// 输入框上下分割线字符。
 const RULE: char = '─';
 
@@ -247,7 +249,7 @@ struct Layout {
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
-    icon: Option<(u16, u16)>,
+    icon: Option<(u16, u16, u16)>,
     description: Option<TextRect>,
     /// 空间不足时退化为居中字标。
     fallback: bool,
@@ -333,9 +335,6 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     };
     let entries_fit = horizontal || max_label <= content_w;
 
-    // 品牌区：仅图标，靠左上。
-    let icon_fits = content_w >= LOGO_WIDTH;
-    let brand_h = LOGO_ROWS;
     let tip_h = ENTRY_HEIGHT;
 
     // 入口按钮行对齐窗格垂直中心（与主区/prompt 交换按钮同一行），且不与输入框重叠。
@@ -345,7 +344,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         .max(region_top);
     let entries_ok = entries_fit && entries_top.saturating_add(entries_h) <= input.y;
 
-    // Tip 行贴按钮上方；与图标重叠时省略。
+    // Tip 行贴按钮上方。
     let tip_top = if entries_ok {
         entries_top
             .checked_sub(SECTION_GAP + tip_h)
@@ -353,16 +352,25 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     } else {
         None
     };
-    // 图标不与 Tip / 按钮重叠。
-    let brand_limit = tip_top
-        .or(entries_ok.then_some(entries_top))
-        .unwrap_or(input.y);
-    let brand_top =
-        (icon_fits && region_top + brand_h + SECTION_GAP <= brand_limit).then_some(region_top);
 
-    // 图标水平居中、位于 Tip 上方。
-    let icon_x = content_x + content_w.saturating_sub(LOGO_WIDTH) / 2;
-    out.icon = brand_top.map(|y| (icon_x, y));
+    // 品牌区：像素图标水平居中、底边距 Tip 2 行；容器过矮（高 < 宽/2）时整数倍缩小。
+    let scale: u16 = if area.height.saturating_mul(2) < area.width {
+        2
+    } else {
+        1
+    };
+    let logo_cols = LOGO_WIDTH / scale;
+    let logo_rows = (LOGO_ROWS * 2 / scale).div_ceil(2);
+    if let Some(tip_y) = tip_top
+        && content_w >= logo_cols
+        && let Some(top) = tip_y
+            .checked_sub(LOGO_GAP + logo_rows)
+            .filter(|top| *top >= region_top)
+    {
+        let icon_x = content_x + content_w.saturating_sub(logo_cols) / 2;
+        out.icon = Some((icon_x, top, scale));
+    }
+
     if let Some(y) = tip_top {
         out.description = Some(TextRect {
             x: content_x,
@@ -439,8 +447,8 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         return (grid, None);
     }
 
-    if let Some((ix, iy)) = lay.icon {
-        draw_icon(&mut grid, ix, iy, lx.entry);
+    if let Some((ix, iy, scale)) = lay.icon {
+        draw_icon(&mut grid, ix, iy, lx.entry, scale);
     }
     if let Some(rect) = lay.description {
         draw_tip(&mut grid, rect, lx.entry);
@@ -651,24 +659,44 @@ fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
     }
 }
 
-/// 把像素图标画进以 `(x, y)` 为左上角的单元格区域（按入口配色微调）。
-fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry) {
-    for (row, pair) in ICON_LX.chunks(2).enumerate() {
-        let [top, bottom] = pair else {
-            break;
-        };
+/// 把像素图标画进以 `(x, y)` 为左上角的单元格区域；`scale` 为整数倍降档（1 原尺寸、2 半尺寸）。
+fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry, scale: u16) {
+    let scale = usize::from(scale.max(1));
+    let cols = usize::from(LOGO_WIDTH) / scale;
+    let pixel_rows = usize::from(LOGO_ROWS) * 2 / scale;
+    for row in 0..pixel_rows.div_ceil(2) {
         let cell_y = y + row as u16;
-        for column in 0..LOGO_WIDTH {
-            let top = icon_pixel(entry, top.chars().nth(usize::from(column)).unwrap_or('.'));
-            let bottom = icon_pixel(
-                entry,
-                bottom.chars().nth(usize::from(column)).unwrap_or('.'),
-            );
+        for column in 0..cols {
+            let top = block_pixel(entry, column * scale, row * 2 * scale, scale);
+            let bottom = block_pixel(entry, column * scale, (row * 2 + 1) * scale, scale);
             if let Some((ch, pixel_style)) = pixel_glyph(top, bottom) {
-                grid.set(x + column, cell_y, ch, pixel_style);
+                grid.set(x + column as u16, cell_y, ch, pixel_style);
             }
         }
     }
+}
+
+/// 取图标 `scale×scale` 块的代表像素（优先实体色、其次描边，全透明为 '.'），并按入口配色微调。
+fn block_pixel(entry: LxEntry, col0: usize, pixel_row0: usize, scale: usize) -> char {
+    let mut outline = '.';
+    for dp in 0..scale {
+        for dc in 0..scale {
+            match raw_pixel(col0 + dc, pixel_row0 + dp) {
+                '.' => {}
+                'k' => outline = 'k',
+                ch => return icon_pixel(entry, ch),
+            }
+        }
+    }
+    outline
+}
+
+/// 基准字标的原始像素（列、像素行）；越界为 '.'。
+fn raw_pixel(column: usize, pixel_row: usize) -> char {
+    ICON_LX
+        .get(pixel_row)
+        .and_then(|row| row.chars().nth(column))
+        .unwrap_or('.')
 }
 
 /// 直接把基准 LX 图标像素画进缓冲区（信任页品牌区复用；不走整页网格）。

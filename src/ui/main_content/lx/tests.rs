@@ -167,18 +167,46 @@ fn wide_page_renders_brand_entries_and_input() {
 
 #[test]
 fn icon_is_horizontally_centered() {
-    let area = Rect::new(0, 0, 100, 20);
-    let (icon_x, _) = layout(area, &Lx::new()).icon.expect("icon");
+    let area = Rect::new(0, 0, 100, 60);
+    let (icon_x, _, scale) = layout(area, &Lx::new()).icon.expect("icon");
+    assert_eq!(scale, 1);
     let content_x = area.x + MARGIN;
     let content_w = area.width - MARGIN * 2;
     assert_eq!(icon_x, content_x + (content_w - LOGO_WIDTH) / 2);
 }
 
 #[test]
+fn logo_sits_two_rows_above_tip() {
+    let area = Rect::new(0, 0, 100, 60);
+    let lay = layout(area, &Lx::new());
+    let (_, icon_y, scale) = lay.icon.expect("icon");
+    let tip = lay.description.expect("tip");
+    assert_eq!(scale, 1);
+    assert_eq!(
+        tip.y - (icon_y + LOGO_ROWS),
+        LOGO_GAP,
+        "logo 底边距 Tip 2 行"
+    );
+}
+
+#[test]
+fn logo_shrinks_when_container_is_short() {
+    let tall = Rect::new(0, 0, 100, 60);
+    let short = Rect::new(0, 0, 100, 20);
+    assert_eq!(
+        layout(tall, &Lx::new()).icon.expect("icon").2,
+        1,
+        "高屏原尺寸"
+    );
+    let (_, _, scale) = layout(short, &Lx::new()).icon.expect("icon");
+    assert_eq!(scale, 2, "矮屏半尺寸");
+}
+
+#[test]
 fn tip_sits_above_entries_below_icon() {
     let area = Rect::new(0, 0, 100, 20);
     let lay = layout(area, &Lx::new());
-    let (_, icon_y) = lay.icon.expect("icon");
+    let (_, icon_y, _) = lay.icon.expect("icon");
     let tip = lay.description.expect("tip");
     let entries_y = lay
         .entries
