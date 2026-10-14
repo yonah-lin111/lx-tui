@@ -27,6 +27,8 @@ const LOGO_COMPACT_WIDTH: u16 = 10;
 const MARGIN: u16 = 2;
 const MIN_INPUT_WIDTH: u16 = 8;
 const INPUT_MIN_BOX: u16 = 3;
+/// 输入框最大高度占内容区高度的百分比。
+const INPUT_MAX_PERCENT: u16 = 40;
 /// 入口区：单行高度、横排标签间距（含分隔符）、竖排行距与区块间距。
 const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 3;
@@ -335,9 +337,9 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         return Layout::empty(true);
     }
 
-    // 输入框：高度随内容行数增长，最多占内容区高度的一半。
+    // 输入框：高度随内容行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
     let lines = lx.input.split('\n').count().max(1);
-    let max_box = (area.height / 2).max(INPUT_MIN_BOX);
+    let max_box = (area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX);
     let cap = usize::from(max_box.saturating_sub(2)).max(1);
     let visible = lines.min(cap);
     let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
@@ -391,7 +393,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 入口按钮行对齐窗格垂直中心（与主区/prompt 交换按钮同一行），且不与输入框重叠。
     let center = area.y + area.height / 2;
     let entries_top = center
-        .min(input.y.saturating_sub(entries_h))
+        .min(input.y.saturating_sub(entries_h + UNDERLINE_ROWS))
         .max(region_top);
     let entries_ok = entries_fit
         && entries_top

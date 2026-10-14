@@ -145,10 +145,6 @@ pub fn lx_entry_description(entry: LxEntry) -> &'static str {
     }
 }
 
-/// lx 窗格顶边框标题：`lx`（入口名另绘于顶边框右侧）。
-pub fn lx_pane_title() -> &'static str {
-    LX_TITLE
-}
 /// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
 pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";

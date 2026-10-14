@@ -217,6 +217,42 @@ fn logo_uses_compact_tier_when_container_is_short() {
 }
 
 #[test]
+fn input_box_is_capped_at_forty_percent() {
+    let area = Rect::new(0, 0, 60, 40);
+    let mut lx = Lx::new();
+    for i in 0..30 {
+        if i > 0 {
+            lx.newline();
+        }
+        lx.insert_char('x');
+    }
+    let input = layout(area, &lx).input.expect("input");
+    assert_eq!(input.height, 40 * INPUT_MAX_PERCENT / 100, "封顶 40%");
+}
+
+#[test]
+fn tall_input_keeps_entries_above_it() {
+    let area = Rect::new(0, 0, 100, 40);
+    let mut lx = Lx::new();
+    for i in 0..30 {
+        if i > 0 {
+            lx.newline();
+        }
+        lx.insert_char('x');
+    }
+    let lay = layout(area, &lx);
+    let input = lay.input.expect("input");
+    assert!(!lay.entries.is_empty(), "输入框变高后按钮仍在");
+    let last = lay
+        .entries
+        .iter()
+        .map(|(_, rect)| rect.y)
+        .max()
+        .expect("entries");
+    assert!(last < input.y, "按钮在输入框上方");
+}
+
+#[test]
 fn tip_sits_above_entries_below_icon() {
     let area = Rect::new(0, 0, 100, 20);
     let lay = layout(area, &Lx::new());

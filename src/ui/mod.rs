@@ -31,7 +31,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::prompt::{PromptEditing, PromptMode};
-use crate::app::state::{AppState, Pane, PaneKind, PaneView};
+use crate::app::state::{AppState, LxEntry, Pane, PaneKind, PaneView};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
@@ -410,17 +410,23 @@ fn render_panes(
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && !state.prompt_focused;
         let mut title = match pane.view {
-            PaneView::Lx => text::lx_pane_title().to_string(),
+            PaneView::Lx => format!("lx - [{}]", text::lx_entry_label(pane.lx.entry)),
             PaneView::Terminal => pane_display_title(*id, pane),
         };
         if pane.exited {
             title.push_str(" (exited)");
         }
         // 边框标题统一淡蓝色（Cyan + dim）；焦点只由边框颜色区分，按钮除外。
+        // lx 页入口名按 logo 粉→蓝渐变着色，其余保持标题色。
+        let title_line = if pane.view == PaneView::Lx && !pane.exited {
+            lx_title_line(pane.lx.entry)
+        } else {
+            Line::from(Span::styled(format!(" {title} "), style::border_title()))
+        };
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(style::border(focused))
-            .title(Span::styled(format!(" {title} "), style::border_title()));
+            .title(title_line);
         let inner = block.inner(*rect);
         frame.render_widget(block, *rect);
         if inner.width == 0 || inner.height == 0 {
@@ -445,9 +451,6 @@ fn render_panes(
                 }
                 main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
                 render_pane_agent_label(frame, *rect, &title, pane, focused);
-                if pane.view == PaneView::Lx {
-                    render_pane_mode_label(frame, *rect, &title, pane, focused);
-                }
             }
             PaneKind::Placeholder => {}
         }
@@ -476,24 +479,19 @@ fn render_pane_agent_label(
     render_border_right_label(frame, rect, title, &spans);
 }
 
-/// lx 窗格顶边框右侧入口名（`lx` 标题留在左侧，入口名移至切换按钮左侧），按入口 logo 渐变着色。
-fn render_pane_mode_label(
-    frame: &mut Frame<'_>,
-    rect: Rect,
-    title: &str,
-    pane: &Pane,
-    focused: bool,
-) {
-    let label = text::lx_entry_label(pane.lx.entry);
+/// lx 窗格顶边框标题：` lx - [<入口名>] `，入口名按该 logo 粉→蓝渐变着色、其余用标题色。
+fn lx_title_line(entry: LxEntry) -> Line<'static> {
+    let label = text::lx_entry_label(entry);
     let length = label.chars().count();
-    let mut spans: Vec<(String, Style)> = vec![(" ".to_string(), style::muted())];
+    let mut spans = vec![Span::styled(" lx - [".to_string(), style::border_title())];
     for (position, ch) in label.chars().enumerate() {
-        spans.push((
+        spans.push(Span::styled(
             ch.to_string(),
-            style::lx_entry_label_style(pane.lx.entry, position, length, focused),
+            style::lx_entry_label_style(entry, position, length, false),
         ));
     }
-    render_border_right_label(frame, rect, title, &spans);
+    spans.push(Span::styled("] ".to_string(), style::border_title()));
+    Line::from(spans)
 }
 
 /// 在窗格顶边框右侧、切换按钮左侧绘制一段带样式文本；空间不足或会覆盖左侧标题时省略。
