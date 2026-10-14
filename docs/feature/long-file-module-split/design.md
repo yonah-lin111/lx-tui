@@ -1,6 +1,6 @@
 # 超长生产文件按职责拆分设计
 
-- 状态：待用户审核；本文与 `task.md` 获明确确认后才可修改生产代码。
+- 状态：已完成实施并通过全量回归测试。
 - 范围：`src/event/mod.rs`、`src/app/update.rs`、`src/app/state.rs`、`src/ui/overlay.rs`。
 - 性质：结构性重构；保持功能、交互、公开调用路径和模块依赖方向。
 - 依据：`docs/standards/project-directory-structure.md`、`docs/standards/code-writing-standards.md`、`docs/standards/tui-design-requirements.md`。
