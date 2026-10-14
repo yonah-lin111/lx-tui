@@ -699,8 +699,8 @@ fn paint_selection(buf: &mut Buffer, area: Rect, y: u16, row: u16, selection: &S
     }
 }
 
-/// token 语义到样式的映射。
-fn token_style(kind: TokenKind) -> Style {
+/// token 语义到样式的映射（prompt 与 lx 输入框共用）。
+pub(crate) fn token_style(kind: TokenKind) -> Style {
     match kind {
         TokenKind::Marker => style::markdown_marker(),
         TokenKind::Heading => style::markdown_heading(),

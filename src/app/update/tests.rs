@@ -3761,3 +3761,250 @@ fn refer_panel_routes_keys_before_slash_and_edits() {
     state.prompt.undo();
     assert!(state.prompt.text().ends_with("\nac"), "单步撤销回触发词");
 }
+
+#[test]
+fn lx_input_edits_focused_pane_buffer() {
+    let mut state = AppState::demo();
+    // demo 状态默认即为 lx 视图。
+    for ch in "hi".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Left);
+    apply_lx_input(&mut state, LxInput::Char('!'));
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "h!i");
+    assert_eq!(pane.lx.cursor, 2);
+    apply_lx_input(&mut state, LxInput::Home);
+    apply_lx_input(&mut state, LxInput::Delete);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "!i");
+    apply_lx_input(&mut state, LxInput::End);
+    apply_lx_input(&mut state, LxInput::Backspace);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "!");
+}
+
+#[test]
+fn lx_input_ignored_on_terminal_view() {
+    let mut state = demo_terminal();
+    apply_lx_input(&mut state, LxInput::Char('x'));
+    assert!(state.active_pane().expect("pane").lx.input.is_empty());
+}
+
+#[test]
+fn lx_entry_and_selection_roundtrip() {
+    use crate::app::state::LxEntry;
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_entry(&mut state, pane, LxEntry::Automation);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.entry,
+        LxEntry::Automation
+    );
+
+    begin_lx_selection(&mut state, pane, 1, 2);
+    drag_lx_selection(&mut state, pane, 3, 4);
+    let selection = take_lx_selection(&mut state).expect("selection");
+    assert_eq!(selection.pane(), pane);
+    assert_eq!(selection.range(), Some(((1, 2), (3, 4))));
+    assert!(state.lx_selection.is_none(), "取走后清空");
+
+    // 未拖动（空选区）范围为 None。
+    begin_lx_selection(&mut state, pane, 2, 2);
+    assert!(
+        take_lx_selection(&mut state)
+            .expect("selection")
+            .range()
+            .is_none()
+    );
+}
+
+#[test]
+fn clear_selection_clears_lx_selection() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    begin_lx_selection(&mut state, pane, 0, 0);
+    assert!(state.lx_selection.is_some());
+    clear_selection(&mut state);
+    assert!(state.lx_selection.is_none());
+}
+
+#[test]
+fn lx_newline_only_on_shift_enter_command() {
+    let mut state = AppState::demo();
+    for ch in "ab".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    apply_lx_input(&mut state, LxInput::Char('c'));
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "ab\nc");
+    assert_eq!(pane.lx.cursor, 4);
+}
+
+#[test]
+fn lx_vertical_movement_keeps_column() {
+    let mut state = AppState::demo();
+    for ch in "abcd".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    for ch in "ef".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Home);
+    apply_lx_input(&mut state, LxInput::Right);
+    apply_lx_input(&mut state, LxInput::Right);
+    // 第 2 行第 2 列 -> 上移回第 1 行第 2 列。
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 2);
+    apply_lx_input(&mut state, LxInput::Down);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 7);
+}
+
+#[test]
+fn lx_markdown_panel_navigates_and_accepts() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('#'));
+    assert!(state.active_pane().expect("pane").lx.panel.is_some());
+    // 下移高亮到 Heading 2，Tab 采纳。
+    apply_lx_input(&mut state, LxInput::Down);
+    apply_lx_input(&mut state, LxInput::Tab);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "## ");
+    assert_eq!(pane.lx.cursor, 3);
+}
+
+#[test]
+fn lx_markdown_panel_escape_closes() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('-'));
+    assert!(state.active_pane().expect("pane").lx.panel.is_some());
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert!(state.active_pane().expect("pane").lx.panel.is_none());
+}
+
+#[test]
+fn lx_panel_up_down_do_not_move_cursor() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('#'));
+    let before = state.active_pane().expect("pane").lx.cursor;
+    apply_lx_input(&mut state, LxInput::Up);
+    apply_lx_input(&mut state, LxInput::Down);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, before);
+}
+
+#[test]
+fn lx_enter_accepts_markdown_panel() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('#'));
+    assert!(state.active_pane().expect("pane").lx.panel.is_some());
+    apply_lx_input(&mut state, LxInput::Enter);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "# ", "Enter 采纳高亮候选并回显到输入框");
+    assert_eq!(pane.lx.cursor, 2);
+}
+
+#[test]
+fn lx_enter_without_panel_is_reserved() {
+    let mut state = AppState::demo();
+    for ch in "hi".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Enter);
+    assert_eq!(
+        state.active_pane().expect("pane").lx.input,
+        "hi",
+        "无面板时 Enter 不动作"
+    );
+}
+
+#[test]
+fn lx_word_and_line_shortcuts() {
+    let mut state = AppState::demo();
+    for ch in "hello world".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::WordLeft);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 6);
+    apply_lx_input(&mut state, LxInput::DeleteWordBackward);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "world");
+    apply_lx_input(&mut state, LxInput::DeleteToLineEnd);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
+}
+
+#[test]
+fn lx_undo_redo_roundtrip() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('a'));
+    apply_lx_input(&mut state, LxInput::Char('b'));
+    apply_lx_input(&mut state, LxInput::Undo);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "a");
+    apply_lx_input(&mut state, LxInput::Redo);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "ab");
+}
+
+#[test]
+fn lx_shift_enter_continues_bullet_list() {
+    let mut state = AppState::demo();
+    for ch in "- item".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "- item\n- ");
+}
+
+#[test]
+fn lx_shift_enter_increments_ordered_list() {
+    let mut state = AppState::demo();
+    for ch in "1. a".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "1. a\n2. ");
+}
+
+#[test]
+fn lx_shift_enter_on_empty_list_item_exits_level() {
+    let mut state = AppState::demo();
+    for ch in "- ".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
+}
+
+#[test]
+fn lx_shift_enter_plain_line_is_plain_newline() {
+    let mut state = AppState::demo();
+    for ch in "hello".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "hello\n");
+}
+
+#[test]
+fn lx_ctrl_u_deletes_newline_at_line_start() {
+    let mut state = AppState::demo();
+    for ch in "ab".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    apply_lx_input(&mut state, LxInput::DeleteToLineStart);
+    assert_eq!(
+        state.active_pane().expect("pane").lx.input,
+        "ab",
+        "行首 Ctrl+U 删除换行并合并上一行"
+    );
+}
+
+#[test]
+fn lx_ctrl_c_clears_input() {
+    let mut state = AppState::demo();
+    for ch in "hello".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Clear);
+    let pane = state.active_pane().expect("pane");
+    assert!(pane.lx.input.is_empty());
+    assert_eq!(pane.lx.cursor, 0);
+}

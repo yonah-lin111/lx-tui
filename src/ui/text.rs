@@ -3,7 +3,7 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};
-use crate::app::state::{AppState, PaneView};
+use crate::app::state::{AppState, LxEntry, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
@@ -104,21 +104,47 @@ pub const PROMPT_DEFAULT_NAME: &str = "New prompt";
 pub const PROMPT_FOLDER_DEFAULT_NAME: &str = "New folder";
 /// prompt 编辑器空内容时的输入说明占位。
 pub const PROMPT_PLACEHOLDER: &str = "Write your prompt…";
-/// 主内容 lx 页标题。
+/// 主内容 lx 页标题（窗格顶边框）。
 pub const LX_TITLE: &str = "lx";
 /// 视图切换按钮：显示点击后的目的地视图。
 pub const LX_TOGGLE_TERMINAL: &str = "[>_]";
 pub const LX_TOGGLE_LX: &str = "[lx]";
-/// lx 页底部输入框（当前为纯视觉占位）。
+/// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
-/// lx 页未来内容区的白色占位文案。
-pub const LX_CONTENT_PLACEHOLDER: &str = "placeholder";
+/// lx 页三个入口标签。
+pub const LX_ENTRY_NATIVE: &str = "Native Agent";
+pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
+pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
+/// lx 页横排入口标签之间的分隔符。
+pub const LX_ENTRY_SEPARATOR: &str = "·";
+/// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
+pub const LX_TIP_PREFIX: &str = "Tip:";
+/// lx 页入口 Tip 提示行：选中入口一句话描述。
+pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly";
+pub const LX_ENTRY_HYBRID_DESC: &str = "mixes native and external agents";
+pub const LX_ENTRY_AUTOMATION_DESC: &str = "runs your tasks automatically";
+/// lx 页 md 格式面板边框标题。
+pub const LX_BLOCK_PANEL_TITLE: &str = "Markdown";
 
-/// lx 页切换提示。
-pub fn lx_hint() -> String {
-    format!("click {} to open terminal", LX_TOGGLE_TERMINAL)
+/// lx 页入口标签：按选中入口取。
+pub fn lx_entry_label(entry: LxEntry) -> &'static str {
+    match entry {
+        LxEntry::Native => LX_ENTRY_NATIVE,
+        LxEntry::Hybrid => LX_ENTRY_HYBRID,
+        LxEntry::Automation => LX_ENTRY_AUTOMATION,
+    }
 }
+
+/// lx 页入口 Tip 提示行（一句话描述）。
+pub fn lx_entry_description(entry: LxEntry) -> &'static str {
+    match entry {
+        LxEntry::Native => LX_ENTRY_NATIVE_DESC,
+        LxEntry::Hybrid => LX_ENTRY_HYBRID_DESC,
+        LxEntry::Automation => LX_ENTRY_AUTOMATION_DESC,
+    }
+}
+
 /// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
 pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";

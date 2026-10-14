@@ -5,7 +5,7 @@ use crate::app::actions::Action;
 use crate::app::overlay::{
     ConfirmClose, Overlay, OverlayTarget, TextInput, WorktreeOpen, WorktreeOpenEntry,
 };
-use crate::app::state::{Workspace, WorkspaceGit};
+use crate::app::state::{LxEntry, Workspace, WorkspaceGit};
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
 use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip, TooltipTarget};
 use crate::app::update;
@@ -1920,9 +1920,24 @@ fn pane_title_and_toggle_label_follow_view() {
 
     let button = main_content::toggle_button(rect).expect("toggle button visible");
     let lines = render_lines(&state);
-    let title_area = Rect::new(rect.x + 1, rect.y, 4, 1);
-    assert_eq!(rendered_area(&lines, title_area), " lx ");
+    let title = format!(" lx-[{}] ", text::lx_entry_label(LxEntry::Native));
+    let title_area = Rect::new(rect.x + 1, rect.y, title.chars().count() as u16, 1);
+    assert_eq!(rendered_area(&lines, title_area), title);
     assert_eq!(rendered_area(&lines, button), text::LX_TOGGLE_TERMINAL);
+    // 入口名保留渐变着色，`lx-[` 用标题淡蓝。
+    let buffer = render_buffer(&state);
+    let label = text::lx_entry_label(LxEntry::Native);
+    let label_x = rect.x + 1 + " lx-[".chars().count() as u16;
+    let expected =
+        crate::ui::style::lx_entry_label_style(LxEntry::Native, 0, label.chars().count(), false)
+            .fg
+            .expect("gradient color");
+    assert_eq!(buffer[(label_x, rect.y)].fg, expected, "入口名渐变着色");
+    assert_ne!(
+        buffer[(label_x, rect.y)].fg,
+        ratatui::style::Color::Cyan,
+        "入口名不改成标题色"
+    );
 
     update::toggle_pane_view(&mut state, id);
     let lines = render_lines(&state);

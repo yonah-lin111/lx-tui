@@ -1478,7 +1478,7 @@ fn toggle_button_click_flips_view_without_stealing_focus() {
 }
 
 #[test]
-fn lx_view_swallows_keys_and_paste() {
+fn lx_view_edits_input_and_swallows_paste() {
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -1495,7 +1495,12 @@ fn lx_view_swallows_keys_and_paste() {
         &config,
         &mut dirty,
     );
-    assert!(!dirty, "lx 视图按键被吞掉");
+    assert!(dirty, "lx 输入产生重绘");
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "a",
+        "按键进入 lx 输入框"
+    );
     assert!(
         state
             .pane_anywhere(pane)
@@ -1506,6 +1511,7 @@ fn lx_view_swallows_keys_and_paste() {
         "按键不得吸回隐藏终端的滚动位置"
     );
 
+    dirty = false;
     handle_terminal_event(
         TerminalEvent::Paste("x".to_string()),
         &mut state,
@@ -1515,6 +1521,11 @@ fn lx_view_swallows_keys_and_paste() {
         &mut dirty,
     );
     assert!(!dirty, "lx 视图粘贴被吞掉");
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "a",
+        "粘贴不进入 lx 输入框"
+    );
     assert!(
         state
             .pane_anywhere(pane)
@@ -1538,7 +1549,7 @@ fn lx_view_swallows_keys_and_paste() {
 }
 
 #[test]
-fn lx_view_content_click_only_focuses() {
+fn lx_view_content_click_focuses_and_starts_selection() {
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -1559,7 +1570,11 @@ fn lx_view_content_click_only_focuses() {
     assert!(!state.prompt_focused);
     assert_eq!(state.active_tab().layout.focus(), pane);
     assert!(state.terminal_selection.is_none(), "lx 视图不启动终端选区");
-    assert!(state.selection.is_none());
+    assert!(state.selection.is_none(), "lx 视图不启动 prompt 选区");
+    assert!(
+        state.lx_selection.is_some(),
+        "lx 视图内容区按下开始整页选区"
+    );
 }
 
 #[test]
@@ -3676,4 +3691,42 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
         0,
         "点击留白不移动光标到不存在的文本行"
     );
+}
+
+#[test]
+fn lx_entry_click_switches_selection() {
+    use crate::app::state::LxEntry;
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 160, 40));
+    let pane = state.active_tab().layout.focus();
+    let area = pane_inner(&geo, pane);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let mut target = None;
+    for row in area.y..area.bottom() {
+        for col in area.x..area.right() {
+            if crate::ui::main_content::lx::entry_hit(area, lx, col, row)
+                == Some(LxEntry::Automation)
+            {
+                target = Some((col, row));
+            }
+        }
+    }
+    let (col, row) = target.expect("assistant entry button");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), col, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.entry,
+        LxEntry::Automation,
+        "点击入口切换选中"
+    );
+    assert!(state.lx_selection.is_none(), "入口点击不启动选区");
 }

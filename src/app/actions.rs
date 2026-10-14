@@ -28,6 +28,50 @@ pub enum OverlayKey {
     End,
 }
 
+/// lx 页输入命令；仅在焦点窗格显示 lx 页时产生。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxInput {
+    Char(char),
+    /// Shift+Enter / Ctrl+Enter：换行（Enter 预留给发送）。
+    Newline,
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Up,
+    Down,
+    Home,
+    End,
+    /// Ctrl+A：移到逻辑行首。
+    LineStart,
+    /// Ctrl+E：移到逻辑行尾。
+    LineEnd,
+    /// Ctrl+← / Alt+B：左移一个词。
+    WordLeft,
+    /// Ctrl+→ / Alt+F：右移一个词。
+    WordRight,
+    /// Ctrl+U：删除到逻辑行首。
+    DeleteToLineStart,
+    /// Ctrl+K：删除到逻辑行尾。
+    DeleteToLineEnd,
+    /// Ctrl+W / Ctrl+Backspace / Alt+Backspace：向前删词。
+    DeleteWordBackward,
+    /// Ctrl+Delete / Alt+D：向后删词。
+    DeleteWordForward,
+    /// Ctrl+Z：撤销。
+    Undo,
+    /// Ctrl+Y / Ctrl+Shift+Z：重做。
+    Redo,
+    /// Ctrl+C：清空输入框。
+    Clear,
+    /// Tab：md 面板打开时采纳高亮候选。
+    Tab,
+    /// Enter：md 面板打开时采纳高亮候选；否则预留给发送（当前不动作）。
+    Enter,
+    /// Esc：关闭 md 面板。
+    Escape,
+}
+
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorCommand {

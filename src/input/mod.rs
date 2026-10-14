@@ -6,7 +6,7 @@ pub mod encode;
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::actions::{Action, EditorCommand, LxInput, OverlayKey};
 use crate::app::overlay::OverlayKind;
 
 /// 路由结果。
@@ -24,6 +24,8 @@ pub enum Routed {
     SavePrompt,
     /// 复制光标所在模板块/补充块正文到系统剪贴板。
     CopyTemplateBlock,
+    /// lx 页单行输入命令。
+    Lx(LxInput),
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
 }
@@ -33,7 +35,7 @@ pub enum Routed {
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
 /// `Ctrl/Cmd+Shift+C` 复制光标所在模板块/补充块正文，未映射的按键被吞掉，绝不写入 PTY；
-/// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
+/// `pane_lx` 为真（活动窗格显示 lx 页）时按键进入 lx 单行输入框，未映射键吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,
     mode: TermMode,
@@ -78,9 +80,74 @@ pub fn route(
         };
     }
     if pane_lx {
-        return None;
+        return lx_input_key(key).map(Routed::Lx);
     }
     encode::encode_key(key, mode).map(Routed::Pane)
+}
+
+/// lx 页输入键映射：Shift+Enter 换行、单行编辑键、md 面板键；其余（含 Enter）吞掉。
+fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
+    let modifiers = key.modifiers;
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
+    if modifiers.contains(KeyModifiers::SUPER) {
+        return match key.code {
+            KeyCode::Char('z' | 'Z') if shift => Some(LxInput::Redo),
+            KeyCode::Char('z' | 'Z') => Some(LxInput::Undo),
+            KeyCode::Char('y' | 'Y') => Some(LxInput::Redo),
+            _ => None,
+        };
+    }
+    let mapped = match (ctrl, alt, key.code) {
+        (true, false, KeyCode::Enter) => Some(LxInput::Newline),
+        (true, false, KeyCode::Char(ch)) => match ch {
+            'u' | 'U' => Some(LxInput::DeleteToLineStart),
+            'k' | 'K' => Some(LxInput::DeleteToLineEnd),
+            'w' | 'W' => Some(LxInput::DeleteWordBackward),
+            'a' | 'A' => Some(LxInput::LineStart),
+            'e' | 'E' => Some(LxInput::LineEnd),
+            'd' | 'D' => Some(LxInput::Delete),
+            'c' | 'C' => Some(LxInput::Clear),
+            'z' | '-' => Some(LxInput::Undo),
+            'Z' | 'y' | 'Y' | '.' => Some(LxInput::Redo),
+            _ => None,
+        },
+        (true, false, KeyCode::Backspace) => Some(LxInput::DeleteWordBackward),
+        (true, false, KeyCode::Delete) => Some(LxInput::DeleteWordForward),
+        (true, false, KeyCode::Left) => Some(LxInput::WordLeft),
+        (true, false, KeyCode::Right) => Some(LxInput::WordRight),
+        (false, true, KeyCode::Char('b')) => Some(LxInput::WordLeft),
+        (false, true, KeyCode::Char('f')) => Some(LxInput::WordRight),
+        (false, true, KeyCode::Char('d')) => Some(LxInput::DeleteWordForward),
+        (false, true, KeyCode::Backspace) => Some(LxInput::DeleteWordBackward),
+        (false, true, KeyCode::Left) => Some(LxInput::WordLeft),
+        (false, true, KeyCode::Right) => Some(LxInput::WordRight),
+        _ => None,
+    };
+    if mapped.is_some() {
+        return mapped;
+    }
+    if ctrl || alt {
+        return None;
+    }
+    match key.code {
+        KeyCode::Enter if shift => Some(LxInput::Newline),
+        // Enter 无面板时预留给发送，交给 update 判定。
+        KeyCode::Enter => Some(LxInput::Enter),
+        KeyCode::Backspace => Some(LxInput::Backspace),
+        KeyCode::Delete => Some(LxInput::Delete),
+        KeyCode::Left => Some(LxInput::Left),
+        KeyCode::Right => Some(LxInput::Right),
+        KeyCode::Up => Some(LxInput::Up),
+        KeyCode::Down => Some(LxInput::Down),
+        KeyCode::Home => Some(LxInput::Home),
+        KeyCode::End => Some(LxInput::End),
+        KeyCode::Tab => Some(LxInput::Tab),
+        KeyCode::Esc => Some(LxInput::Escape),
+        KeyCode::Char(ch) => Some(LxInput::Char(ch)),
+        _ => None,
+    }
 }
 
 /// 页重命名输入键映射：Enter/Esc 结束、单行编辑键、Ctrl+C 清空；其余返回 None（吞掉）。

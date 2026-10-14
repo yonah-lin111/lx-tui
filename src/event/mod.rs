@@ -669,6 +669,10 @@ fn handle_terminal_event(
                     update::reset_pane_scroll(state, id);
                     *dirty = true;
                 }
+                Routed::Lx(command) => {
+                    update::apply_lx_input(state, command);
+                    *dirty = true;
+                }
             }
         }
         TerminalEvent::Paste(text) => {
@@ -1014,9 +1018,24 @@ fn handle_terminal_event(
                             .pane_anywhere(pane)
                             .is_some_and(|target| target.view == PaneView::Lx)
                         {
-                            // lx 页不接受终端交互：仅聚焦并清掉既有选区。
+                            // lx 页：命中入口按钮则切换选中，否则开始整页选区。
+                            let entry = state.pane_anywhere(pane).and_then(|target| {
+                                ui::main_content::lx::entry_hit(
+                                    inner,
+                                    &target.lx,
+                                    mouse.column,
+                                    mouse.row,
+                                )
+                            });
                             update::focus_pane(state, pane);
                             update::clear_selection(state);
+                            match entry {
+                                Some(entry) => {
+                                    update::set_lx_entry(state, pane, entry);
+                                    update::clear_lx_selection(state);
+                                }
+                                None => update::begin_lx_selection(state, pane, row, col),
+                            }
                             *dirty = true;
                         } else if handle_terminal_scrollbar_press(
                             state,
@@ -1172,9 +1191,27 @@ fn handle_terminal_event(
                 // 没有本地选区时，鼠标上报模式的应用自己处理拖拽（对齐 herdr）。
                 if state.terminal_selection.is_none()
                     && state.selection.is_none()
+                    && state.lx_selection.is_none()
                     && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
                     && forward_pane_mouse_event(state, sessions, pane, inner, &mouse)
                 {
+                    *dirty = true;
+                    return;
+                }
+                // lx 页选区拖拽：终点更新到鼠标位置的内容坐标。
+                if let Some(selection) = state.lx_selection {
+                    let pane = selection.pane();
+                    let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+                        return;
+                    };
+                    let inner =
+                        pane_content_inner(state, view, pane, layout::pane_inner_rect(*rect));
+                    if inner.width == 0 || inner.height == 0 {
+                        return;
+                    }
+                    let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                    let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                    update::drag_lx_selection(state, pane, row, col);
                     *dirty = true;
                     return;
                 }
@@ -1287,6 +1324,46 @@ fn handle_terminal_event(
                             )
                             .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                         );
+                    }
+                }
+                // lx 页选区松开：复制选中文本（空选区不复制）。
+                if let Some(selection) = update::take_lx_selection(state)
+                    && let Some(range) = selection.range()
+                {
+                    let pane = selection.pane();
+                    let area = rects
+                        .iter()
+                        .find(|(id, _)| *id == pane)
+                        .map(|(_, rect)| layout::pane_inner_rect(*rect));
+                    if let Some((area, target)) = area.zip(state.pane_anywhere(pane)) {
+                        let text = ui::main_content::lx::copy_text(area, &target.lx, range);
+                        if !text.trim().is_empty() {
+                            let now = Instant::now();
+                            if crate::platform::write_clipboard(&text) {
+                                update::show_toast(
+                                    state,
+                                    Toast::new(
+                                        ToastKind::Info,
+                                        ui::text::TOAST_COPIED,
+                                        Some(pane),
+                                        now,
+                                    )
+                                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                                );
+                            } else {
+                                tracing::warn!("clipboard write failed");
+                                update::show_toast(
+                                    state,
+                                    Toast::new(
+                                        ToastKind::Error,
+                                        ui::text::TOAST_COPY_FAILED,
+                                        Some(pane),
+                                        now,
+                                    )
+                                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                                );
+                            }
+                        }
                     }
                 }
                 update::clear_selection(state);

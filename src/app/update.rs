@@ -19,7 +19,7 @@ use ratatui::layout::{Direction, Rect};
 
 use crate::layout::{self, BoundaryHit, PaneId};
 
-use super::actions::{Action, EditorCommand, OverlayKey};
+use super::actions::{Action, EditorCommand, LxInput, OverlayKey};
 use super::effects::Effect;
 use super::markdown::MentionEntry;
 use super::overlay::{
@@ -613,6 +613,84 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.active_tab_mut().layout.focus_pane(id);
 }
 
+/// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
+///
+/// md 面板打开时 `↑`/`↓` 移动高亮、`Tab` 采纳、`Esc` 关闭；其余按键走编辑。
+pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
+    let Some(pane) = state.active_pane_mut() else {
+        return;
+    };
+    if pane.view != PaneView::Lx {
+        return;
+    }
+    let lx = &mut pane.lx;
+    let panel_open = lx.panel.is_some();
+    match command {
+        LxInput::Up if panel_open => lx.panel_move(-1),
+        LxInput::Down if panel_open => lx.panel_move(1),
+        LxInput::Tab if panel_open => {
+            lx.panel_accept();
+        }
+        LxInput::Enter if panel_open => {
+            lx.panel_accept();
+        }
+        LxInput::Escape if panel_open => lx.panel_close(),
+        LxInput::Char(ch) => lx.insert_char(ch),
+        LxInput::Newline => lx.newline(),
+        LxInput::Backspace => lx.backspace(),
+        LxInput::Delete => lx.delete(),
+        LxInput::Left => lx.move_left(),
+        LxInput::Right => lx.move_right(),
+        LxInput::Up => lx.move_up(),
+        LxInput::Down => lx.move_down(),
+        LxInput::Home | LxInput::LineStart => lx.home(),
+        LxInput::End | LxInput::LineEnd => lx.end(),
+        LxInput::WordLeft => lx.word_left(),
+        LxInput::WordRight => lx.word_right(),
+        LxInput::DeleteToLineStart => lx.delete_to_line_start(),
+        LxInput::DeleteToLineEnd => lx.delete_to_line_end(),
+        LxInput::DeleteWordBackward => lx.delete_word_backward(),
+        LxInput::DeleteWordForward => lx.delete_word_forward(),
+        LxInput::Undo => lx.undo(),
+        LxInput::Redo => lx.redo(),
+        LxInput::Clear => lx.clear(),
+        // 无面板时 Enter 预留给发送、Tab/Esc 吞掉。
+        LxInput::Enter | LxInput::Tab | LxInput::Escape => {}
+    }
+}
+
+/// 切换 lx 页选中入口（仅鼠标点击触发）。
+pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::LxEntry) {
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.entry = entry;
+    }
+}
+
+/// 在 lx 页开始一次文本选择（内容行、列相对内容区左上角）。
+pub fn begin_lx_selection(state: &mut AppState, id: PaneId, row: u16, col: u16) {
+    clear_selection(state);
+    state.lx_selection = Some(Selection::begin(id, i32::from(row), col));
+}
+
+/// 扩展 lx 页选区；窗格不一致时忽略。
+pub fn drag_lx_selection(state: &mut AppState, id: PaneId, row: u16, col: u16) {
+    if let Some(selection) = state.lx_selection.as_mut()
+        && selection.pane() == id
+    {
+        selection.drag(i32::from(row), col);
+    }
+}
+
+/// 取走 lx 页选区（结束拖动）；无选区返回 None。
+pub fn take_lx_selection(state: &mut AppState) -> Option<Selection> {
+    state.lx_selection.take()
+}
+
+/// 清除 lx 页选区。
+pub fn clear_lx_selection(state: &mut AppState) {
+    state.lx_selection = None;
+}
+
 /// 切换窗格主内容视图（lx 页 ↔ 终端）；返回是否变化。
 ///
 /// 切到 lx 时清掉该窗格上的终端选区与滚动条拖拽：隐藏终端不接受交互。
@@ -800,10 +878,11 @@ pub fn clear_terminal_selection(state: &mut AppState) {
     }
 }
 
-/// 清除 prompt 与终端选区。
+/// 清除 prompt、终端与 lx 选区。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
     state.selection_autoscroll = None;
+    state.lx_selection = None;
     clear_terminal_selection(state);
 }
 

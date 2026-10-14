@@ -31,7 +31,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::prompt::{PromptEditing, PromptMode};
-use crate::app::state::{AppState, Pane, PaneKind, PaneView};
+use crate::app::state::{AppState, LxEntry, Pane, PaneKind, PaneView};
 use crate::config::Config;
 use crate::layout::{COLLAPSED_STRIP, PaneId};
 
@@ -410,17 +410,23 @@ fn render_panes(
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && !state.prompt_focused;
         let mut title = match pane.view {
-            PaneView::Lx => text::LX_TITLE.to_string(),
+            PaneView::Lx => format!("lx-[{}]", text::lx_entry_label(pane.lx.entry)),
             PaneView::Terminal => pane_display_title(*id, pane),
         };
         if pane.exited {
             title.push_str(" (exited)");
         }
         // 边框标题统一淡蓝色（Cyan + dim）；焦点只由边框颜色区分，按钮除外。
+        // lx 页入口名按 logo 粉→蓝渐变着色，其余保持标题色。
+        let title_line = if pane.view == PaneView::Lx && !pane.exited {
+            lx_title_line(pane.lx.entry)
+        } else {
+            Line::from(Span::styled(format!(" {title} "), style::border_title()))
+        };
         let block = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(style::border(focused))
-            .title(Span::styled(format!(" {title} "), style::border_title()));
+            .title(title_line);
         let inner = block.inner(*rect);
         frame.render_widget(block, *rect);
         if inner.width == 0 || inner.height == 0 {
@@ -428,9 +434,16 @@ fn render_panes(
         }
         match pane.kind {
             PaneKind::Terminal => {
-                if let Some((row, col)) =
-                    main_content::render(inner, frame.buffer_mut(), pane, focused)
-                {
+                if let Some((row, col)) = main_content::render(
+                    inner,
+                    frame.buffer_mut(),
+                    pane,
+                    focused,
+                    state
+                        .lx_selection
+                        .as_ref()
+                        .filter(|selection| selection.pane() == *id),
+                ) {
                     cursor = Some((inner.x + col, inner.y + row));
                 }
                 if let Some(scrollbar) = main_content::scrollbar(inner, pane) {
@@ -457,15 +470,40 @@ fn render_pane_agent_label(
     let Some(agent) = pane.agent.as_ref() else {
         return;
     };
-    let Some(button) = main_content::toggle_button(rect) else {
-        return;
-    };
     let value_style = style::border_value(focused);
     let spans = [
         (" ".to_string(), style::muted()),
         (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
         (text::agent_label(agent.kind).to_string(), value_style),
     ];
+    render_border_right_label(frame, rect, title, &spans);
+}
+
+/// lx 窗格顶边框标题：` lx-[<入口名>] `，入口名按该 logo 粉→蓝渐变着色、其余用标题色。
+fn lx_title_line(entry: LxEntry) -> Line<'static> {
+    let label = text::lx_entry_label(entry);
+    let length = label.chars().count();
+    let mut spans = vec![Span::styled(" lx-[".to_string(), style::border_title())];
+    for (position, ch) in label.chars().enumerate() {
+        spans.push(Span::styled(
+            ch.to_string(),
+            style::lx_entry_label_style(entry, position, length, false),
+        ));
+    }
+    spans.push(Span::styled("] ".to_string(), style::border_title()));
+    Line::from(spans)
+}
+
+/// 在窗格顶边框右侧、切换按钮左侧绘制一段带样式文本；空间不足或会覆盖左侧标题时省略。
+fn render_border_right_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    title: &str,
+    spans: &[(String, Style)],
+) {
+    let Some(button) = main_content::toggle_button(rect) else {
+        return;
+    };
     let label_width: u16 = spans
         .iter()
         .map(|(content, _)| content.chars().count() as u16)
@@ -493,7 +531,7 @@ fn render_pane_agent_label(
             if let Some(cell) = buf.cell_mut((x, rect.y)) {
                 cell.reset();
                 cell.set_char(symbol);
-                cell.set_style(span_style);
+                cell.set_style(*span_style);
             }
             x = x.saturating_add(1);
         }

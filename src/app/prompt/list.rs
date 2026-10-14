@@ -162,52 +162,82 @@ fn bullet_marker(kind: ListKind) -> Option<char> {
 
 use super::Prompt;
 
+/// 列表续写编辑：把 `range` 替换为 `replacement`，并把光标落到 `cursor`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListEdit {
+    pub(crate) range: core::ops::Range<usize>,
+    pub(crate) replacement: String,
+    pub(crate) cursor: usize,
+}
+
+/// 列表项续写换行；非列表语义返回 None（调用方回退为普通换行）。
+///
+/// 空列表项退出层级（顶层清空标记、嵌套回退到上级前缀），非空项在光标处
+/// 插入换行 + 缩进 + 续写标记（有序序号 +1）。
+pub(crate) fn list_continuation(text: &str, cursor: usize) -> Option<ListEdit> {
+    let start = line_start(text, cursor);
+    let end = line_end(text, cursor);
+    let item = parse_list_item(&text[start..end])?;
+    if cursor - start < item.marker_end {
+        return None;
+    }
+    if text[start + item.marker_end..end].trim().is_empty() {
+        let replacement = if item.indent == 0 {
+            String::new()
+        } else {
+            outer_list_prefix(text, start, item.indent).unwrap_or_default()
+        };
+        let cursor = start + replacement.len();
+        return Some(ListEdit {
+            range: start..start + item.marker_end,
+            replacement,
+            cursor,
+        });
+    }
+    let insert = format!("\n{}{}", " ".repeat(item.indent), item.continuation());
+    let cursor = cursor + insert.len();
+    Some(ListEdit {
+        range: cursor - insert.len()..cursor - insert.len(),
+        replacement: insert,
+        cursor,
+    })
+}
+
+/// 沿上文找最近的低缩进列表项，返回其缩进 + 标记，用于空项退出层级。
+fn outer_list_prefix(text: &str, line_start_offset: usize, indent: usize) -> Option<String> {
+    text[..line_start_offset]
+        .split('\n')
+        .rev()
+        .find_map(|line| {
+            let item = parse_list_item(line)?;
+            (item.indent < indent)
+                .then(|| format!("{}{}", " ".repeat(item.indent), item.continuation()))
+        })
+}
+
+/// 光标所在行是否位于未闭合的围栏代码块内。
+pub(crate) fn in_fence(text: &str, cursor: usize) -> bool {
+    let start = line_start(text, cursor);
+    let mut fence = false;
+    for line in text[..start].split('\n') {
+        if is_fence(line) {
+            fence = !fence;
+        }
+    }
+    fence
+}
+
 impl Prompt {
     /// 列表项续写换行；返回是否已按列表语义处理。
     pub(super) fn continue_list(&mut self) -> bool {
-        let start = line_start(&self.text, self.cursor);
-        let end = line_end(&self.text, self.cursor);
-        let Some(item) = parse_list_item(&self.text[start..end]) else {
+        let Some(edit) = list_continuation(&self.text, self.cursor) else {
             return false;
         };
-        if self.cursor - start < item.marker_end {
-            return false;
-        }
-        if self.text[start + item.marker_end..end].trim().is_empty() {
-            let replacement = if item.indent == 0 {
-                String::new()
-            } else {
-                self.outer_list_prefix(start, item.indent)
-                    .unwrap_or_default()
-            };
-            self.record(EditKind::Other);
-            self.text
-                .replace_range(start..start + item.marker_end, &replacement);
-            self.cursor = start + replacement.len();
-            self.settle();
-            return true;
-        }
-        let insert = format!("\n{}{}", " ".repeat(item.indent), item.continuation());
         self.record(EditKind::Other);
-        self.text.insert_str(self.cursor, &insert);
-        self.cursor += insert.len();
+        self.text.replace_range(edit.range, &edit.replacement);
+        self.cursor = edit.cursor;
         self.settle();
         true
-    }
-    /// 沿上文找最近的低缩进列表项，返回其缩进+标记，用于空项退出层级。
-    pub(super) fn outer_list_prefix(
-        &self,
-        line_start_offset: usize,
-        indent: usize,
-    ) -> Option<String> {
-        self.text[..line_start_offset]
-            .split('\n')
-            .rev()
-            .find_map(|line| {
-                let item = parse_list_item(line)?;
-                (item.indent < indent)
-                    .then(|| format!("{}{}", " ".repeat(item.indent), item.continuation()))
-            })
     }
     /// Backspace 的列表标记删除；对齐 lx-agent（CodeMirror `deleteMarkupBackward`）。
     ///
@@ -258,13 +288,6 @@ impl Prompt {
     }
     /// 光标所在行是否位于未闭合的围栏代码块内。
     pub(super) fn in_fence(&self) -> bool {
-        let start = line_start(&self.text, self.cursor);
-        let mut fence = false;
-        for line in self.text[..start].split('\n') {
-            if is_fence(line) {
-                fence = !fence;
-            }
-        }
-        fence
+        in_fence(&self.text, self.cursor)
     }
 }

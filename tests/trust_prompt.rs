@@ -157,7 +157,7 @@ fn untrusted_startup_shows_console_trust_page_then_enters_on_yes() {
         app.wait_for("Yes, I trust this folder", WAIT),
         "信任页包含选项"
     );
-    assert!(!app.screen().contains("placeholder"), "未回答前不进入应用");
+    assert!(!app.screen().contains("Ask anything"), "未回答前不进入应用");
     // 行内显示：回答前不进入备用屏（未“打开应用”）。
     assert!(
         !app.raw().windows(8).any(|window| window == b"\x1b[?1049h"),
@@ -167,7 +167,7 @@ fn untrusted_startup_shows_console_trust_page_then_enters_on_yes() {
     // 输入 y：放行并进入应用。
     app.send(b"y\n");
     assert!(
-        app.wait_for("placeholder", WAIT),
+        app.wait_for("Ask anything", WAIT),
         "信任后进入应用渲染 lx 页"
     );
 }
@@ -186,7 +186,7 @@ fn untrusted_startup_declined_does_not_enter_app() {
         output.contains("workspace not trusted; exiting"),
         "输出拒绝提示: {output}"
     );
-    assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
+    assert!(!app.screen().contains("Ask anything"), "拒绝后不得进入应用");
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn enter_confirms_default_no() {
     // 默认选中 No：直接回车 → 拒绝退出。
     app.send(b"\r");
     assert!(app.wait_exit(WAIT), "默认 No 回车后进程退出");
-    assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
+    assert!(!app.screen().contains("Ask anything"), "拒绝后不得进入应用");
 }
 
 #[test]
@@ -209,7 +209,7 @@ fn arrow_keys_move_selection_to_yes() {
     assert!(app.wait_for("No, exit", WAIT), "信任页显示两个选项");
     // 默认选中 No：下移到 Yes 并回车 → 进入应用。
     app.send(b"\x1b[B\r");
-    assert!(app.wait_for("placeholder", WAIT), "选择 Yes 后进入应用");
+    assert!(app.wait_for("Ask anything", WAIT), "选择 Yes 后进入应用");
 }
 
 #[test]
@@ -226,7 +226,7 @@ fn mouse_click_no_exits() {
     let y = no.y + 1;
     app.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
     assert!(app.wait_exit(WAIT), "点击 No 后进程退出");
-    assert!(!app.screen().contains("placeholder"), "拒绝后不得进入应用");
+    assert!(!app.screen().contains("Ask anything"), "拒绝后不得进入应用");
 }
 
 #[test]
@@ -244,5 +244,5 @@ fn mouse_click_yes_enters_app() {
     let x = yes.x + 1;
     let y = yes.y + 1;
     app.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
-    assert!(app.wait_for("placeholder", WAIT), "点击 Yes 后进入应用");
+    assert!(app.wait_for("Ask anything", WAIT), "点击 Yes 后进入应用");
 }
