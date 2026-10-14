@@ -5,8 +5,10 @@ use crate::app::actions::Action;
 use crate::app::overlay::{
     ConfirmClose, Overlay, OverlayTarget, TextInput, WorktreeOpen, WorktreeOpenEntry,
 };
-use crate::app::state::{LxEntry, Workspace, WorkspaceGit};
+use crate::app::prompt::PromptMode;
+use crate::app::state::{LxEntry, PaneKind, PaneView, Workspace, WorkspaceGit};
 use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
+
 use crate::app::tooltip::{TOOLTIP_DELAY, Tooltip, TooltipTarget};
 use crate::app::update;
 use ratatui::Terminal as RatatuiTerminal;
@@ -2702,4 +2704,48 @@ fn prompt_view_data(state: &AppState) -> Vec<String> {
                 .collect()
         })
         .collect()
+}
+
+#[test]
+fn controls_and_prompt_frame_geometry_and_hit_tests() {
+    let state = AppState::demo();
+    let view = view_for(&state);
+
+    // 1. exit button
+    let exit = exit_button(&view).expect("exit button visible");
+    assert!(exit_button_at(&view, exit.x, exit.y));
+    assert!(!exit_button_at(&view, 0, 0));
+
+    // 2. swap button
+    let swap = swap_button(&view).expect("swap button visible");
+    assert!(swap_button_at(&view, swap.x, swap.y));
+    assert!(!swap_button_at(&view, 0, 0));
+
+    // 3. collapse buttons
+    let buttons = collapse_buttons(&view, false);
+    assert!(!buttons.is_empty());
+    let sidebar_btn = buttons
+        .iter()
+        .find(|b| b.target == CollapseTarget::Sidebar)
+        .expect("sidebar collapse button");
+    assert_eq!(
+        collapse_button_at(&view, false, sidebar_btn.area.x, sidebar_btn.area.y),
+        Some(CollapseTarget::Sidebar)
+    );
+
+    // 4. prompt scrollbar
+    let mut scrolled_state = AppState::demo();
+    for _ in 0..50 {
+        scrolled_state.prompt.insert_char('a');
+        scrolled_state.prompt.newline();
+    }
+
+    assert!(
+        prompt_scrollbar(&view, &scrolled_state).is_some(),
+        "文本超出视口时显示滚动条"
+    );
+    assert!(
+        prompt_scrollbar(&view, &state).is_none(),
+        "内容未超出时不显示滚动条"
+    );
 }

@@ -328,3 +328,31 @@ fn clamp_selection_snaps_off_section_rows() {
     short.clamp_selection(4);
     assert_eq!(short.selected, 2);
 }
+
+#[test]
+fn panel_search_filtering_matches_subfolders_and_ancestors() {
+    let mut panel = PromptPanel::new();
+    panel.tree = sample_tree();
+    // 搜索匹配 "in-sub"（在 sub 文件夹内，sub 在 root 内）
+    panel.search = crate::app::overlay::TextInput::new("in-sub");
+    let rows = panel.rows();
+
+    // 树行中应包含 root (0级), sub (1级), in-sub (2级)
+    let saved_rows: Vec<&PromptRow> = rows
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.kind,
+                PromptRowKind::Section(PromptSection::Saved)
+                    | PromptRowKind::Folder
+                    | PromptRowKind::Item
+            )
+        })
+        .collect();
+    let depths: Vec<usize> = saved_rows.iter().map(|r| r.depth).collect();
+    assert_eq!(
+        depths,
+        vec![0, 1, 2],
+        "搜索匹配命中条目时保留完整的祖先文件夹层级链"
+    );
+}
