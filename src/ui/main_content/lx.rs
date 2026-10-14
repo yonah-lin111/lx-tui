@@ -480,15 +480,21 @@ fn draw_tip(grid: &mut Grid, rect: TextRect, sentence: &str) {
     }
 }
 
-/// 标签页式入口：选中 accent、未选中 muted；横排用 `·` 分隔。
+/// 标签页式入口：标签按该入口 logo 粉→蓝渐变着色、选中加粗；横排用 `·` 分隔。
 fn draw_entries(grid: &mut Grid, selected: LxEntry, entries: &[(LxEntry, Rect)], horizontal: bool) {
     for (index, (entry, rect)) in entries.iter().enumerate() {
-        grid.put(
-            rect.x,
-            rect.y,
-            text::lx_entry_label(*entry),
-            style::lx_entry_label(*entry, *entry == selected),
-        );
+        let label = text::lx_entry_label(*entry);
+        let length = label.chars().count();
+        for (position, ch) in label.chars().enumerate() {
+            let cell_style =
+                style::lx_entry_label_style(*entry, position, length, *entry == selected);
+            grid.set(
+                rect.x.saturating_add(position as u16),
+                rect.y,
+                ch,
+                cell_style,
+            );
+        }
         if horizontal && let Some((_, next)) = entries.get(index + 1) {
             let gap = next.x.saturating_sub(rect.right());
             grid.put(

@@ -62,14 +62,28 @@ fn logo_palette_maps_logo_colors() {
 }
 
 #[test]
-fn entry_label_colors_are_distinct() {
-    let colors: Vec<Color> = LxEntry::ALL
+fn entry_label_gradients_are_distinct() {
+    let endpoints: Vec<(Color, Color)> = LxEntry::ALL
         .iter()
-        .map(|entry| style::lx_entry_label_color(*entry))
+        .map(|entry| style::lx_entry_gradient(*entry))
         .collect();
-    assert_ne!(colors[0], colors[1]);
-    assert_ne!(colors[1], colors[2]);
-    assert_ne!(colors[0], colors[2]);
+    assert_ne!(endpoints[0], endpoints[1]);
+    assert_ne!(endpoints[1], endpoints[2]);
+    assert_ne!(endpoints[0], endpoints[2]);
+}
+
+#[test]
+fn entry_label_spans_a_gradient() {
+    let length = 12;
+    let first = style::lx_entry_label_style(LxEntry::Native, 0, length, false);
+    let last = style::lx_entry_label_style(LxEntry::Native, length - 1, length, false);
+    assert_ne!(first.fg, last.fg, "渐变两端颜色不同");
+    let selected = style::lx_entry_label_style(LxEntry::Native, 0, length, true);
+    assert!(
+        selected
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
 }
 
 #[test]

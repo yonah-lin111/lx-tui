@@ -476,7 +476,7 @@ fn render_pane_agent_label(
     render_border_right_label(frame, rect, title, &spans);
 }
 
-/// lx 窗格顶边框右侧入口名（`lx` 标题留在左侧，入口名移至切换按钮左侧）。
+/// lx 窗格顶边框右侧入口名（`lx` 标题留在左侧，入口名移至切换按钮左侧），按入口 logo 渐变着色。
 fn render_pane_mode_label(
     frame: &mut Frame<'_>,
     rect: Rect,
@@ -484,13 +484,15 @@ fn render_pane_mode_label(
     pane: &Pane,
     focused: bool,
 ) {
-    let spans = [
-        (" ".to_string(), style::muted()),
-        (
-            text::lx_entry_label(pane.lx.entry).to_string(),
-            style::border_value(focused),
-        ),
-    ];
+    let label = text::lx_entry_label(pane.lx.entry);
+    let length = label.chars().count();
+    let mut spans: Vec<(String, Style)> = vec![(" ".to_string(), style::muted())];
+    for (position, ch) in label.chars().enumerate() {
+        spans.push((
+            ch.to_string(),
+            style::lx_entry_label_style(pane.lx.entry, position, length, focused),
+        ));
+    }
     render_border_right_label(frame, rect, title, &spans);
 }
 

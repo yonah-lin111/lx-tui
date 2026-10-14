@@ -329,26 +329,80 @@ pub fn lx_entry_border(selected: bool) -> Style {
     if selected { accent() } else { muted() }
 }
 
-/// lx 页入口按钮文字色：该入口 logo 粉/蓝主色的混合色（256 色 Indexed）。
-///
-/// 取该入口字标 L 侧（粉）与 X 侧（蓝）主色按 2:1 混合并归入 256 色板；
-/// 三入口因字标配色微调而互不相同（Native 偏紫、Hybrid 玫红、Automation 冷灰）。
-pub fn lx_entry_label_color(entry: LxEntry) -> Color {
+/// lx 页入口标签的渐变端点色（粉 → 蓝），取该入口 logo 的两主色（字标 L 侧粉、X 侧蓝）。
+pub fn lx_entry_gradient(entry: LxEntry) -> (Color, Color) {
     match entry {
-        LxEntry::Native => Color::Indexed(182),
-        LxEntry::Hybrid => Color::Indexed(175),
-        LxEntry::Automation => Color::Indexed(188),
+        LxEntry::Native => (Color::Indexed(218), Color::Indexed(117)),
+        LxEntry::Hybrid => (Color::Indexed(168), Color::Indexed(195)),
+        LxEntry::Automation => (Color::Indexed(195), Color::Indexed(168)),
     }
 }
 
-/// lx 页入口按钮内的标签：统一用该入口 logo 混合色，选中加粗。
-pub fn lx_entry_label(entry: LxEntry, selected: bool) -> Style {
-    let base = Style::default().fg(lx_entry_label_color(entry));
+/// lx 页入口标签第 `position` 个字符（共 `length` 个）的样式：粉→蓝渐变取色，选中加粗。
+pub fn lx_entry_label_style(
+    entry: LxEntry,
+    position: usize,
+    length: usize,
+    selected: bool,
+) -> Style {
+    let (from, to) = lx_entry_gradient(entry);
+    let t = if length <= 1 {
+        0.0
+    } else {
+        position as f32 / (length - 1) as f32
+    };
+    let base = Style::default().fg(lerp_indexed(from, to, t));
     if selected {
         base.add_modifier(Modifier::BOLD)
     } else {
         base
     }
+}
+
+/// 256 色 Indexed cube 段（16..=231）转 RGB；其它槽位返回 None。
+fn cube_rgb(index: u8) -> Option<(u8, u8, u8)> {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let value = index.checked_sub(16)?;
+    (value <= 215).then(|| {
+        (
+            LEVELS[usize::from(value / 36)],
+            LEVELS[usize::from((value % 36) / 6)],
+            LEVELS[usize::from(value % 6)],
+        )
+    })
+}
+
+/// RGB 归入最近的 256 色 cube 段（逐通道取最近色阶，平手取较暗者）。
+fn cube_index((r, g, b): (u8, u8, u8)) -> u8 {
+    const LEVELS: [u8; 6] = [0, 95, 135, 175, 215, 255];
+    let nearest = |value: u8| {
+        LEVELS
+            .iter()
+            .enumerate()
+            .min_by_key(|(_, level)| level.abs_diff(value))
+            .map_or(0, |(index, _)| index as u8)
+    };
+    16 + nearest(r) * 36 + nearest(g) * 6 + nearest(b)
+}
+
+/// 两个 256 色按 `t`∈[0,1] 线性插值，结果归入最近的 256 色。
+fn lerp_indexed(from: Color, to: Color, t: f32) -> Color {
+    let (Color::Indexed(a), Color::Indexed(b)) = (from, to) else {
+        return if t < 0.5 { from } else { to };
+    };
+    let (Some(rgb_a), Some(rgb_b)) = (cube_rgb(a), cube_rgb(b)) else {
+        return if t < 0.5 { from } else { to };
+    };
+    let mix = |x: u8, y: u8| {
+        (f32::from(x) + (f32::from(y) - f32::from(x)) * t)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Color::Indexed(cube_index((
+        mix(rgb_a.0, rgb_b.0),
+        mix(rgb_a.1, rgb_b.1),
+        mix(rgb_a.2, rgb_b.2),
+    )))
 }
 
 /// lx 页输入框的像素边框：常态次要信息（焦点不改变输入框外观）。
