@@ -106,33 +106,31 @@ pub const PROMPT_FOLDER_DEFAULT_NAME: &str = "New folder";
 pub const PROMPT_PLACEHOLDER: &str = "Write your prompt…";
 /// 主内容 lx 页标题（窗格顶边框）。
 pub const LX_TITLE: &str = "lx";
-/// 窗格标题分隔符：`lx - <入口名>`。
-pub const LX_TITLE_SEPARATOR: &str = " - ";
 /// 视图切换按钮：显示点击后的目的地视图。
 pub const LX_TOGGLE_TERMINAL: &str = "[>_]";
 pub const LX_TOGGLE_LX: &str = "[lx]";
-/// lx 页三个入口标签。
-pub const LX_ENTRY_NATIVE: &str = "Native Agent";
-pub const LX_ENTRY_COGNITIVE: &str = "Cognitive Orchestrator";
-pub const LX_ENTRY_ASSISTANT: &str = "Assistant Orchestrator";
-/// lx 页横排入口标签之间的分隔符。
-pub const LX_ENTRY_SEPARATOR: &str = "·";
-/// lx 页入口描述行与示例行（示例行仅在有示例时渲染）。
-pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly, no external agents involved";
-pub const LX_ENTRY_COGNITIVE_DESC: &str = "orchestrates all your coding agents in one place";
-pub const LX_ENTRY_ASSISTANT_DESC: &str = "orchestrates all your assistant agents in one place";
-pub const LX_ENTRY_COGNITIVE_EXAMPLES: &str = "examples: opencode · codex · claude · …";
-pub const LX_ENTRY_ASSISTANT_EXAMPLES: &str = "examples: openclaw · Hermes · …";
 /// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
+/// lx 页三个入口标签。
+pub const LX_ENTRY_NATIVE: &str = "Native Agent";
+pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
+pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
+/// lx 页横排入口标签之间的分隔符。
+pub const LX_ENTRY_SEPARATOR: &str = "·";
+/// lx 页入口描述行。
+pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly, no external agents involved";
+pub const LX_ENTRY_HYBRID_DESC: &str = "mixes native and external agents in a single flow";
+pub const LX_ENTRY_AUTOMATION_DESC: &str = "runs your tasks automatically in the background";
+/// lx 页 md 格式面板边框标题。
+pub const LX_BLOCK_PANEL_TITLE: &str = "Markdown";
 
 /// lx 页入口标签：按选中入口取。
 pub fn lx_entry_label(entry: LxEntry) -> &'static str {
     match entry {
         LxEntry::Native => LX_ENTRY_NATIVE,
-        LxEntry::Cognitive => LX_ENTRY_COGNITIVE,
-        LxEntry::Assistant => LX_ENTRY_ASSISTANT,
+        LxEntry::Hybrid => LX_ENTRY_HYBRID,
+        LxEntry::Automation => LX_ENTRY_AUTOMATION,
     }
 }
 
@@ -140,25 +138,15 @@ pub fn lx_entry_label(entry: LxEntry) -> &'static str {
 pub fn lx_entry_description(entry: LxEntry) -> &'static str {
     match entry {
         LxEntry::Native => LX_ENTRY_NATIVE_DESC,
-        LxEntry::Cognitive => LX_ENTRY_COGNITIVE_DESC,
-        LxEntry::Assistant => LX_ENTRY_ASSISTANT_DESC,
+        LxEntry::Hybrid => LX_ENTRY_HYBRID_DESC,
+        LxEntry::Automation => LX_ENTRY_AUTOMATION_DESC,
     }
 }
 
-/// lx 页入口示例行；无示例返回 None。
-pub fn lx_entry_examples(entry: LxEntry) -> Option<&'static str> {
-    match entry {
-        LxEntry::Native => None,
-        LxEntry::Cognitive => Some(LX_ENTRY_COGNITIVE_EXAMPLES),
-        LxEntry::Assistant => Some(LX_ENTRY_ASSISTANT_EXAMPLES),
-    }
+/// lx 窗格顶边框标题：`lx`（入口名另绘于顶边框右侧）。
+pub fn lx_pane_title() -> &'static str {
+    LX_TITLE
 }
-
-/// lx 窗格顶边框标题：`lx - <入口名>`。
-pub fn lx_pane_title(entry: LxEntry) -> String {
-    format!("{LX_TITLE}{LX_TITLE_SEPARATOR}{}", lx_entry_label(entry))
-}
-
 /// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
 pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";

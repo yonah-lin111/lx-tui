@@ -590,14 +590,29 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(key(KeyCode::Left), TermMode::empty(), false, None, true),
         Some(Routed::Lx(LxInput::Left))
     );
-    // 未映射键（Enter/Tab/Up）吞掉。
-    for code in [KeyCode::Enter, KeyCode::Tab, KeyCode::Up] {
-        assert_eq!(
-            super::route(key(code), TermMode::empty(), false, None, true),
-            None,
-            "{code:?} 应被 lx 页吞掉"
-        );
-    }
+    assert_eq!(
+        super::route(key(KeyCode::Up), TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::Up))
+    );
+    assert_eq!(
+        super::route(key(KeyCode::Tab), TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::Tab))
+    );
+    assert_eq!(
+        super::route(key(KeyCode::Esc), TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::Escape))
+    );
+    // Shift+Enter 换行；Enter 预留给发送，吞掉。
+    let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+    assert_eq!(
+        super::route(shift_enter, TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::Newline))
+    );
+    assert_eq!(
+        super::route(key(KeyCode::Enter), TermMode::empty(), false, None, true),
+        None,
+        "Enter 预留给发送"
+    );
     let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(
         super::route(quit, TermMode::empty(), false, None, true),

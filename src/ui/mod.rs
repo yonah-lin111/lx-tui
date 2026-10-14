@@ -410,7 +410,7 @@ fn render_panes(
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && !state.prompt_focused;
         let mut title = match pane.view {
-            PaneView::Lx => text::lx_pane_title(pane.lx.entry),
+            PaneView::Lx => text::lx_pane_title().to_string(),
             PaneView::Terminal => pane_display_title(*id, pane),
         };
         if pane.exited {
@@ -445,6 +445,9 @@ fn render_panes(
                 }
                 main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
                 render_pane_agent_label(frame, *rect, &title, pane, focused);
+                if pane.view == PaneView::Lx {
+                    render_pane_mode_label(frame, *rect, &title, pane, focused);
+                }
             }
             PaneKind::Placeholder => {}
         }
@@ -464,15 +467,43 @@ fn render_pane_agent_label(
     let Some(agent) = pane.agent.as_ref() else {
         return;
     };
-    let Some(button) = main_content::toggle_button(rect) else {
-        return;
-    };
     let value_style = style::border_value(focused);
     let spans = [
         (" ".to_string(), style::muted()),
         (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
         (text::agent_label(agent.kind).to_string(), value_style),
     ];
+    render_border_right_label(frame, rect, title, &spans);
+}
+
+/// lx 窗格顶边框右侧入口名（`lx` 标题留在左侧，入口名移至切换按钮左侧）。
+fn render_pane_mode_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    title: &str,
+    pane: &Pane,
+    focused: bool,
+) {
+    let spans = [
+        (" ".to_string(), style::muted()),
+        (
+            text::lx_entry_label(pane.lx.entry).to_string(),
+            style::border_value(focused),
+        ),
+    ];
+    render_border_right_label(frame, rect, title, &spans);
+}
+
+/// 在窗格顶边框右侧、切换按钮左侧绘制一段带样式文本；空间不足或会覆盖左侧标题时省略。
+fn render_border_right_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    title: &str,
+    spans: &[(String, Style)],
+) {
+    let Some(button) = main_content::toggle_button(rect) else {
+        return;
+    };
     let label_width: u16 = spans
         .iter()
         .map(|(content, _)| content.chars().count() as u16)
@@ -500,7 +531,7 @@ fn render_pane_agent_label(
             if let Some(cell) = buf.cell_mut((x, rect.y)) {
                 cell.reset();
                 cell.set_char(symbol);
-                cell.set_style(span_style);
+                cell.set_style(*span_style);
             }
             x = x.saturating_add(1);
         }

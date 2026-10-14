@@ -28,16 +28,24 @@ pub enum OverlayKey {
     End,
 }
 
-/// lx 页单行输入命令；仅在焦点窗格显示 lx 页时产生。
+/// lx 页输入命令；仅在焦点窗格显示 lx 页时产生。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LxInput {
     Char(char),
+    /// Shift+Enter：换行（Enter 预留给发送）。
+    Newline,
     Backspace,
     Delete,
     Left,
     Right,
+    Up,
+    Down,
     Home,
     End,
+    /// Tab：md 面板打开时采纳高亮候选。
+    Tab,
+    /// Esc：关闭 md 面板。
+    Escape,
 }
 
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。

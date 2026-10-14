@@ -11,6 +11,7 @@ use crate::layout::{BoundaryHit, PaneId, TileLayout};
 use crate::terminal::Terminal;
 
 use super::effects::Effect;
+use super::markdown::BlockPanel;
 use super::overlay::Overlay;
 use super::prompt::{Prompt, PromptPanel};
 use super::selection::Selection;
@@ -289,28 +290,30 @@ pub enum PaneView {
     Terminal,
 }
 
-/// lx 页三个入口：原生 agent、coding agent 编排、助手 agent 编排。
+/// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LxEntry {
     Native,
-    Cognitive,
-    Assistant,
+    Hybrid,
+    Automation,
 }
 
 impl LxEntry {
     /// 三个入口的显示顺序。
-    pub const ALL: [LxEntry; 3] = [LxEntry::Native, LxEntry::Cognitive, LxEntry::Assistant];
+    pub const ALL: [LxEntry; 3] = [LxEntry::Native, LxEntry::Hybrid, LxEntry::Automation];
 }
 
-/// lx 页交互状态：选中入口与单行输入缓冲；每个 lx 窗格各持一份。
+/// lx 页交互状态：选中入口、多行输入缓冲与 markdown 块命令面板；每个 lx 窗格各持一份。
 #[derive(Debug)]
 pub struct Lx {
     /// 当前选中入口；仅鼠标点击切换，重启复位为 Native。
     pub entry: LxEntry,
-    /// 单行输入内容。
+    /// 多行输入内容。
     pub input: String,
     /// 光标字节偏移；恒位于字符边界。
     pub cursor: usize,
+    /// markdown 块命令面板；光标处触发时打开。
+    pub panel: Option<BlockPanel>,
 }
 
 impl Default for Lx {
@@ -325,6 +328,7 @@ impl Lx {
             entry: LxEntry::Native,
             input: String::new(),
             cursor: 0,
+            panel: None,
         }
     }
 
@@ -332,6 +336,14 @@ impl Lx {
     pub fn insert_char(&mut self, ch: char) {
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
+        self.refresh_panel();
+    }
+
+    /// 在光标处换行。
+    pub fn newline(&mut self) {
+        self.input.insert(self.cursor, '\n');
+        self.cursor += 1;
+        self.refresh_panel();
     }
 
     /// 删除光标前一个字符。
@@ -339,6 +351,7 @@ impl Lx {
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.cursor -= prev.len_utf8();
             self.input.remove(self.cursor);
+            self.refresh_panel();
         }
     }
 
@@ -346,6 +359,7 @@ impl Lx {
     pub fn delete(&mut self) {
         if self.cursor < self.input.len() {
             self.input.remove(self.cursor);
+            self.refresh_panel();
         }
     }
 
@@ -353,6 +367,7 @@ impl Lx {
     pub fn move_left(&mut self) {
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.cursor -= prev.len_utf8();
+            self.refresh_panel();
         }
     }
 
@@ -360,17 +375,113 @@ impl Lx {
     pub fn move_right(&mut self) {
         if let Some(next) = self.input[self.cursor..].chars().next() {
             self.cursor += next.len_utf8();
+            self.refresh_panel();
         }
     }
 
     /// 光标移到行首。
     pub fn home(&mut self) {
-        self.cursor = 0;
+        self.cursor = self.line_start();
+        self.refresh_panel();
     }
 
     /// 光标移到行尾。
     pub fn end(&mut self) {
-        self.cursor = self.input.len();
+        self.cursor = self.line_end();
+        self.refresh_panel();
+    }
+
+    /// 光标上移一行（保持行内字节列，越界钳到行尾）。
+    pub fn move_up(&mut self) {
+        let start = self.line_start();
+        if start == 0 {
+            self.cursor = 0;
+        } else {
+            let column = self.cursor - start;
+            let previous_end = start - 1;
+            let previous_start = self.input[..previous_end]
+                .rfind('\n')
+                .map_or(0, |offset| offset + 1);
+            self.cursor =
+                self.clamp_boundary(previous_start + column.min(previous_end - previous_start));
+        }
+        self.refresh_panel();
+    }
+
+    /// 光标下移一行（保持行内字节列，越界钳到行尾）。
+    pub fn move_down(&mut self) {
+        let end = self.line_end();
+        if end >= self.input.len() {
+            self.cursor = self.input.len();
+        } else {
+            let start = self.line_start();
+            let column = self.cursor - start;
+            let next_start = end + 1;
+            let next_end = self.input[next_start..]
+                .find('\n')
+                .map_or(self.input.len(), |offset| next_start + offset);
+            self.cursor = self.clamp_boundary(next_start + column.min(next_end - next_start));
+        }
+        self.refresh_panel();
+    }
+
+    /// 重算 markdown 块命令面板：光标处命中触发标记时打开，否则关闭。
+    pub fn refresh_panel(&mut self) {
+        self.panel = super::markdown::block_trigger(&self.input, self.cursor).map(|trigger| {
+            let items = super::markdown::block_commands(trigger.kind);
+            BlockPanel::new(trigger, items, 0)
+        });
+    }
+
+    /// 面板高亮项循环移动。
+    pub fn panel_move(&mut self, delta: isize) {
+        if let Some(panel) = self.panel.as_mut() {
+            panel.move_active(delta);
+        }
+    }
+
+    /// 采纳面板高亮项：替换触发区间并落下光标；无面板返回 false。
+    pub fn panel_accept(&mut self) -> bool {
+        let Some(panel) = self.panel.take() else {
+            return false;
+        };
+        let Some(id) = panel.items().get(panel.active()).copied() else {
+            return false;
+        };
+        let trigger = panel.trigger();
+        let insertion = super::markdown::block_insertion(id);
+        self.input
+            .replace_range(trigger.from..trigger.to, &insertion.text);
+        self.cursor = trigger.from + insertion.cursor;
+        self.refresh_panel();
+        true
+    }
+
+    /// 关闭面板。
+    pub fn panel_close(&mut self) {
+        self.panel = None;
+    }
+
+    /// 光标所在逻辑行起始字节偏移。
+    fn line_start(&self) -> usize {
+        self.input[..self.cursor]
+            .rfind('\n')
+            .map_or(0, |offset| offset + 1)
+    }
+
+    /// 光标所在逻辑行结束字节偏移。
+    fn line_end(&self) -> usize {
+        self.input[self.cursor..]
+            .find('\n')
+            .map_or(self.input.len(), |offset| self.cursor + offset)
+    }
+
+    /// 把偏移回退到最近的字符边界。
+    fn clamp_boundary(&self, mut index: usize) -> usize {
+        while index > 0 && !self.input.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
     }
 }
 

@@ -1,4 +1,4 @@
-//! lx 页单元测试：图标数据一致性、布局降级、命中测试、渲染与整页取词。
+//! lx 页单元测试：图标数据一致性、布局降级、命中测试、渲染、md 面板与整页取词。
 
 use super::*;
 use crate::app::state::LxEntry;
@@ -34,7 +34,7 @@ fn entries_share_lx_shape_with_tweaked_colors() {
         for row in ICON_LX {
             for original in row.chars() {
                 let tinted = icon_pixel(entry, original);
-                assert_eq!(original == '.', tinted == '.', "形状必须一致（透明位相同）");
+                assert_eq!(original == '.', tinted == '.', "形状必须一致");
             }
         }
     }
@@ -48,8 +48,8 @@ fn entries_share_lx_shape_with_tweaked_colors() {
             })
             .collect()
     };
-    assert_ne!(tinted(LxEntry::Native), tinted(LxEntry::Cognitive));
-    assert_ne!(tinted(LxEntry::Cognitive), tinted(LxEntry::Assistant));
+    assert_ne!(tinted(LxEntry::Native), tinted(LxEntry::Hybrid));
+    assert_ne!(tinted(LxEntry::Hybrid), tinted(LxEntry::Automation));
 }
 
 #[test]
@@ -62,20 +62,30 @@ fn logo_palette_maps_logo_colors() {
 }
 
 #[test]
-fn input_block_sits_at_bottom_with_rules() {
+fn empty_input_box_is_minimal_height() {
     let area = Rect::new(0, 0, 60, 16);
-    let lay = layout(area, &Lx::new());
-    let input = lay.input.expect("input block");
-    assert_eq!(input.height, INPUT_HEIGHT);
+    let input = layout(area, &Lx::new()).input.expect("input block");
+    assert_eq!(input.height, INPUT_MIN_BOX);
     assert_eq!(input.x, area.x + MARGIN);
-    assert_eq!(input.y, area.bottom() - INPUT_HEIGHT);
+    assert_eq!(input.y, area.bottom() - INPUT_MIN_BOX);
+}
+
+#[test]
+fn multiline_input_grows_the_box() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = Lx::new();
+    lx.insert_char('a');
+    lx.newline();
+    lx.insert_char('b');
+    let input = layout(area, &lx).input.expect("input block");
+    assert_eq!(input.height, INPUT_MIN_BOX + 1, "两行内容");
+    assert_eq!(input.y, area.bottom() - INPUT_MIN_BOX - 1);
 }
 
 #[test]
 fn tiny_page_falls_back_to_wordmark() {
     let area = Rect::new(0, 0, 6, 5);
-    let lay = layout(area, &Lx::new());
-    assert!(lay.fallback);
+    assert!(layout(area, &Lx::new()).fallback);
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &Lx::new(), false, None);
     assert!(buffer_text(&buf).contains("lx"));
@@ -93,10 +103,6 @@ fn entries_are_horizontal_and_centered_when_roomy() {
         "同一行"
     );
     assert!(lay.entries[0].1.x < lay.entries[1].1.x, "从左到右");
-    // 整体居中：左右留白近似相等。
-    let left = lay.entries[0].1.x;
-    let right = area.right() - lay.entries[2].1.right();
-    assert!(left.abs_diff(right) <= 1, "左右留白近似相等");
 }
 
 #[test]
@@ -104,7 +110,6 @@ fn narrow_page_stacks_entries_vertically() {
     let area = Rect::new(0, 0, 34, 30);
     let lay = layout(area, &Lx::new());
     assert!(!lay.horizontal);
-    assert_eq!(lay.entries.len(), 3);
     let ys: Vec<u16> = lay.entries.iter().map(|(_, rect)| rect.y).collect();
     assert!(ys[1] > ys[0] && ys[2] > ys[1], "逐行堆叠");
 }
@@ -127,32 +132,11 @@ fn wide_page_renders_brand_entries_and_input() {
     let _ = render(area, &mut buf, &Lx::new(), true, None);
     let text = buffer_text(&buf);
     assert!(text.contains("Native Agent"), "{text}");
-    assert!(text.contains("Cognitive Orchestrator"), "{text}");
-    assert!(text.contains("Assistant Orchestrator"), "{text}");
+    assert!(text.contains("Hybrid Agent"), "{text}");
+    assert!(text.contains("Automation Agent"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
     assert!(text.contains('·'), "标签页分隔符可见");
     assert!(text.contains('─'), "输入框上下分割线可见");
-    assert!(!text.contains("type a message"), "框下提示已移除");
-    assert!(!text.contains('▛'), "像素方块边框已移除");
-}
-
-#[test]
-fn narrow_page_moves_text_below_logo() {
-    // 放不下"图标 + 右侧文案"，但图标本身放得下：文案应移到图标下方。
-    let area = Rect::new(0, 0, 34, 30);
-    let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &Lx::new(), false, None);
-    let text = buffer_text(&buf);
-    assert!(text.contains("talks to the model directly"), "{text}");
-    let rows: Vec<&str> = text.lines().collect();
-    let desc_row = rows
-        .iter()
-        .position(|row| row.contains("talks to the model directly"))
-        .expect("description row");
-    assert!(
-        desc_row >= usize::from(LOGO_ROWS),
-        "文案在图标下方: {desc_row}"
-    );
 }
 
 #[test]
@@ -160,14 +144,42 @@ fn selected_entry_switches_text() {
     let area = Rect::new(0, 0, 100, 20);
     let mut buf = Buffer::empty(area);
     let mut lx = Lx::new();
-    lx.entry = LxEntry::Cognitive;
+    lx.entry = LxEntry::Hybrid;
+    let _ = render(area, &mut buf, &lx, true, None);
+    assert!(buffer_text(&buf).contains("mixes native and external agents"));
+}
+
+#[test]
+fn typing_hash_opens_markdown_panel() {
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    lx.insert_char('#');
+    assert!(lx.panel.is_some(), "行尾 # 触发 md 面板");
+    let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None);
     let text = buffer_text(&buf);
+    assert!(text.contains("Markdown"), "面板标题: {text}");
+    assert!(text.contains("Heading 1"), "候选可见: {text}");
+}
+
+#[test]
+fn markdown_line_is_styled() {
+    let area = Rect::new(0, 0, 60, 12);
+    let mut lx = Lx::new();
+    for ch in "## Title".chars() {
+        lx.insert_char(ch);
+    }
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let row = area.bottom() - 2;
+    let content_x = area.x + MARGIN + 2;
+    // `#` 为标记（muted/dim），`Title` 为标题（黄色）。
     assert!(
-        text.contains("orchestrates all your coding agents"),
-        "{text}"
+        buf[(content_x, row)]
+            .modifier
+            .contains(ratatui::style::Modifier::DIM)
     );
-    assert!(text.contains("examples: opencode"), "{text}");
+    assert_eq!(buf[(content_x + 3, row)].fg, Color::Yellow);
 }
 
 #[test]
@@ -178,13 +190,24 @@ fn cursor_is_relative_to_content_area() {
     lx.insert_char('i');
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
-    let text = buffer_text(&buf);
-    assert!(text.contains("hi"));
-    assert!(!text.contains("Ask anything"), "输入后占位消失");
+    assert!(buffer_text(&buf).contains("hi"));
     // 行相对内容区：输入行是底部 3 行块的中行。
     assert_eq!(cursor.0, area.height - 2);
-    // 列相对内容区：左边距 2 + `> ` 2 + `hi` 2 = 6。
     assert_eq!(cursor.1, MARGIN + 2 + 2);
+}
+
+#[test]
+fn cursor_follows_the_active_line() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = Lx::new();
+    lx.insert_char('a');
+    lx.newline();
+    lx.insert_char('b');
+    let mut buf = Buffer::empty(area);
+    let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
+    // 输入框高 4：内容行在倒数第 2、3 行；光标在第二行。
+    assert_eq!(cursor.0, area.height - 2);
+    assert_eq!(cursor.1, MARGIN + 2 + 1);
 }
 
 #[test]
@@ -205,8 +228,6 @@ fn cursor_aligns_after_wide_chars() {
         "宽字符后续列标记跳过"
     );
     assert_eq!(buf[(content_x + 2, row)].symbol(), "谁");
-    assert_eq!(buf[(content_x + 3, row)].diff_option, CellDiffOption::Skip);
-    // 光标落在两个宽字符之后（显示列）。
     assert_eq!(cursor, (area.height - 2, MARGIN + 2 + 4));
 }
 

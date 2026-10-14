@@ -85,19 +85,27 @@ pub fn route(
     encode::encode_key(key, mode).map(Routed::Pane)
 }
 
-/// lx 页输入键映射：单行编辑键；Enter/Esc 与未映射键返回 None（吞掉）。
+/// lx 页输入键映射：Shift+Enter 换行、单行编辑键、md 面板键；其余（含 Enter）吞掉。
 fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
-    let plain = !key
+    let ctrl_or_alt = key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
+        KeyCode::Enter if shift => Some(LxInput::Newline),
+        // Enter 预留给发送消息，当前不动作。
+        KeyCode::Enter => None,
         KeyCode::Backspace => Some(LxInput::Backspace),
         KeyCode::Delete => Some(LxInput::Delete),
-        KeyCode::Left if plain => Some(LxInput::Left),
-        KeyCode::Right if plain => Some(LxInput::Right),
+        KeyCode::Left if !ctrl_or_alt => Some(LxInput::Left),
+        KeyCode::Right if !ctrl_or_alt => Some(LxInput::Right),
+        KeyCode::Up if !ctrl_or_alt => Some(LxInput::Up),
+        KeyCode::Down if !ctrl_or_alt => Some(LxInput::Down),
         KeyCode::Home => Some(LxInput::Home),
         KeyCode::End => Some(LxInput::End),
-        KeyCode::Char(ch) if plain => Some(LxInput::Char(ch)),
+        KeyCode::Tab => Some(LxInput::Tab),
+        KeyCode::Esc => Some(LxInput::Escape),
+        KeyCode::Char(ch) if !ctrl_or_alt => Some(LxInput::Char(ch)),
         _ => None,
     }
 }

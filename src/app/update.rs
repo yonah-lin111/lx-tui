@@ -613,7 +613,9 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.active_tab_mut().layout.focus_pane(id);
 }
 
-/// 应用 lx 页单行输入命令到焦点窗格；非 lx 视图忽略。
+/// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
+///
+/// md 面板打开时 `↑`/`↓` 移动高亮、`Tab` 采纳、`Esc` 关闭；其余按键走编辑。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     let Some(pane) = state.active_pane_mut() else {
         return;
@@ -621,14 +623,27 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     if pane.view != PaneView::Lx {
         return;
     }
+    let lx = &mut pane.lx;
+    let panel_open = lx.panel.is_some();
     match command {
-        LxInput::Char(ch) => pane.lx.insert_char(ch),
-        LxInput::Backspace => pane.lx.backspace(),
-        LxInput::Delete => pane.lx.delete(),
-        LxInput::Left => pane.lx.move_left(),
-        LxInput::Right => pane.lx.move_right(),
-        LxInput::Home => pane.lx.home(),
-        LxInput::End => pane.lx.end(),
+        LxInput::Up if panel_open => lx.panel_move(-1),
+        LxInput::Down if panel_open => lx.panel_move(1),
+        LxInput::Tab if panel_open => {
+            lx.panel_accept();
+        }
+        LxInput::Escape if panel_open => lx.panel_close(),
+        LxInput::Char(ch) => lx.insert_char(ch),
+        LxInput::Newline => lx.newline(),
+        LxInput::Backspace => lx.backspace(),
+        LxInput::Delete => lx.delete(),
+        LxInput::Left => lx.move_left(),
+        LxInput::Right => lx.move_right(),
+        LxInput::Up => lx.move_up(),
+        LxInput::Down => lx.move_down(),
+        LxInput::Home => lx.home(),
+        LxInput::End => lx.end(),
+        // 无面板时 Tab/Esc 吞掉。
+        LxInput::Tab | LxInput::Escape => {}
     }
 }
 

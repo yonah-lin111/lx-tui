@@ -1,4 +1,4 @@
-//! lx 欢迎页：顶部品牌区（像素图标 + 文案）、标签页式入口与底部输入框。
+//! lx 欢迎页：顶部品牌区（像素图标 + 文案）、标签页式入口与底部多行 markdown 输入框。
 //!
 //! 整页以单元格网格构建：同一份网格既用于绘制，也用于整页文本复制，
 //! 因此渲染与取词不会漂移。渲染只读状态、只写 Buffer。
@@ -8,8 +8,10 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::app::markdown::BlockPanel;
 use crate::app::selection::Selection;
 use crate::app::state::{Lx, LxEntry};
+use crate::ui::markdown::Token;
 use crate::ui::{style, text};
 
 /// 宽字符占位单元格的标记；不参与绘制与取词。
@@ -19,10 +21,10 @@ const CONTINUATION: char = '\0';
 pub(crate) const LOGO_WIDTH: u16 = 20;
 pub(crate) const LOGO_ROWS: u16 = 7;
 
-/// 底部输入框高度（上分割线 / 输入行 / 下分割线）、宽屏水平边距与最小宽度。
-const INPUT_HEIGHT: u16 = 3;
+/// 宽屏水平边距、输入框最小宽度与输入框最小高度（1 内容行 + 上下分割线）。
 const MARGIN: u16 = 2;
 const MIN_INPUT_WIDTH: u16 = 8;
+const INPUT_MIN_BOX: u16 = 3;
 /// 入口区：单行高度、横排标签间距（含分隔符）、竖排行距与区块间距。
 const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 3;
@@ -58,7 +60,7 @@ fn icon_pixel(entry: LxEntry, ch: char) -> char {
     match entry {
         LxEntry::Native => ch,
         // 粉/深粉 与 天蓝/冰蓝 互换。
-        LxEntry::Cognitive => match ch {
+        LxEntry::Hybrid => match ch {
             'p' => 'n',
             'n' => 'p',
             'b' => 'c',
@@ -66,7 +68,7 @@ fn icon_pixel(entry: LxEntry, ch: char) -> char {
             other => other,
         },
         // 粉系 与 蓝系 互换。
-        LxEntry::Assistant => match ch {
+        LxEntry::Automation => match ch {
             'p' => 'c',
             'c' => 'p',
             'b' => 'n',
@@ -241,11 +243,15 @@ struct TextRect {
 /// lx 页布局：所有组件矩形（绝对屏幕坐标）。
 struct Layout {
     input: Option<Rect>,
+    /// 输入框可见内容行的滚动起点（逻辑行索引）。
+    input_scroll: usize,
+    /// 输入框可见内容行数。
+    input_visible: usize,
+    panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
     icon: Option<(u16, u16)>,
     description: Option<TextRect>,
-    examples: Option<TextRect>,
     /// 空间不足时退化为居中字标。
     fallback: bool,
 }
@@ -254,11 +260,13 @@ impl Layout {
     fn empty(fallback: bool) -> Self {
         Self {
             input: None,
+            input_scroll: 0,
+            input_visible: 0,
+            panel: None,
             entries: Vec::new(),
             horizontal: true,
             icon: None,
             description: None,
-            examples: None,
             fallback,
         }
     }
@@ -273,21 +281,37 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
 
-    // 底部输入框；放不下时退化为居中字标。
-    if area.height < INPUT_HEIGHT + 1 || content_w < MIN_INPUT_WIDTH {
+    if area.height < INPUT_MIN_BOX + 1 || content_w < MIN_INPUT_WIDTH {
         return Layout::empty(true);
     }
-    let input = Rect::new(
-        content_x,
-        area.bottom() - INPUT_HEIGHT,
-        content_w,
-        INPUT_HEIGHT,
-    );
+
+    // 输入框：高度随内容行数增长，最多占内容区高度的一半。
+    let lines = lx.input.split('\n').count().max(1);
+    let max_box = (area.height / 2).max(INPUT_MIN_BOX);
+    let cap = usize::from(max_box.saturating_sub(2)).max(1);
+    let visible = lines.min(cap);
+    let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
+    let input = Rect::new(content_x, area.bottom() - box_h, content_w, box_h);
+    let cursor_line = lx.input[..lx.cursor].matches('\n').count();
+    let scroll = cursor_line.saturating_sub(visible.saturating_sub(1));
+
     let mut out = Layout::empty(false);
     out.input = Some(input);
+    out.input_scroll = scroll;
+    out.input_visible = visible;
+
+    // md 格式面板：贴输入框上方；放不下则省略。
+    if let Some(panel) = lx.panel.as_ref() {
+        let rows = panel.items().len();
+        let panel_h = u16::try_from(rows).unwrap_or(u16::MAX).saturating_add(2);
+        let panel_w = panel_width(panel, content_w);
+        if input.y >= area.y + panel_h + SECTION_GAP {
+            out.panel = Some(Rect::new(content_x, input.y - panel_h, panel_w, panel_h));
+        }
+    }
 
     let region_top = area.y;
-    let region_bottom = input.y;
+    let region_bottom = out.panel.map(|rect| rect.y).unwrap_or(input.y);
     let region_h = region_bottom.saturating_sub(region_top);
 
     // 入口区：标签页式单行，横排放不下则竖排。
@@ -315,7 +339,6 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_fit = horizontal || max_label <= content_w;
 
     // 品牌区：图标 + 文案。文案优先放图标右侧并垂直居中；放不下则移到图标下方居中。
-    let lines = 1 + u16::from(text::lx_entry_examples(lx.entry).is_some());
     let icon_fits = content_w >= LOGO_WIDTH;
     let text_fits = content_w >= LOGO_WIDTH + 2 + MIN_TEXT_WIDTH;
     let text_x = content_x + LOGO_WIDTH + 2;
@@ -323,9 +346,9 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let brand_h = if text_fits {
         LOGO_ROWS
     } else if icon_fits {
-        LOGO_ROWS + 1 + lines
+        LOGO_ROWS + 2
     } else {
-        lines
+        1
     };
 
     let mut brand_top: Option<u16> = None;
@@ -344,38 +367,20 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     if let Some(top) = brand_top {
         if text_fits {
             out.icon = Some((content_x, top));
-            let text_top = top + LOGO_ROWS.saturating_sub(lines) / 2;
             out.description = Some(TextRect {
                 x: text_x,
-                y: text_top,
+                y: top + LOGO_ROWS / 2,
                 width: text_w,
                 centered: false,
             });
-            if lines > 1 {
-                out.examples = Some(TextRect {
-                    x: text_x,
-                    y: text_top + 1,
-                    width: text_w,
-                    centered: false,
-                });
-            }
         } else if icon_fits {
             out.icon = Some((content_x, top));
-            let text_top = top + LOGO_ROWS + 1;
             out.description = Some(TextRect {
                 x: content_x,
-                y: text_top,
+                y: top + LOGO_ROWS + 1,
                 width: content_w,
                 centered: true,
             });
-            if lines > 1 {
-                out.examples = Some(TextRect {
-                    x: content_x,
-                    y: text_top + 1,
-                    width: content_w,
-                    centered: true,
-                });
-            }
         } else {
             out.description = Some(TextRect {
                 x: content_x,
@@ -383,14 +388,6 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
                 width: content_w,
                 centered: true,
             });
-            if lines > 1 {
-                out.examples = Some(TextRect {
-                    x: content_x,
-                    y: top + 1,
-                    width: content_w,
-                    centered: true,
-                });
-            }
         }
     }
 
@@ -406,6 +403,20 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         );
     }
     out
+}
+
+/// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
+fn panel_width(panel: &BlockPanel, content_w: u16) -> u16 {
+    let inner = panel
+        .items()
+        .iter()
+        .map(|id| {
+            let (label, preview) = text::block_command_text(*id);
+            label.width() + 2 + preview.width()
+        })
+        .max()
+        .unwrap_or(0);
+    u16::try_from(inner + 4).unwrap_or(u16::MAX).min(content_w)
 }
 
 /// 放置入口标签：横排整体居中、竖排逐行居中。
@@ -455,18 +466,23 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     if let Some(rect) = lay.description {
         draw_text(&mut grid, rect, text::lx_entry_description(lx.entry));
     }
-    if let Some(rect) = lay.examples
-        && let Some(examples) = text::lx_entry_examples(lx.entry)
-    {
-        draw_text(&mut grid, rect, examples);
-    }
 
     draw_entries(&mut grid, lx.entry, &lay.entries, lay.horizontal);
 
     let mut cursor = None;
     if let Some(input) = lay.input {
-        cursor = draw_input(&mut grid, input, lx, focused)
-            .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
+        cursor = draw_input(
+            &mut grid,
+            input,
+            lx,
+            focused,
+            lay.input_scroll,
+            lay.input_visible,
+        )
+        .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
+    }
+    if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
+        draw_panel(&mut grid, rect, panel);
     }
     (grid, cursor)
 }
@@ -502,35 +518,140 @@ fn draw_entries(grid: &mut Grid, selected: LxEntry, entries: &[(LxEntry, Rect)],
     }
 }
 
-/// 底部输入框：上下 `─` 分割线 + `> ` 前缀 + 输入内容/占位；返回光标绝对坐标。
-fn draw_input(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> Option<(u16, u16)> {
-    let text_row = rect.y + 1;
+/// 底部多行输入框：上下 `─` 分割线 + 首行 `> ` 前缀 + markdown 高亮；返回光标绝对坐标。
+fn draw_input(
+    grid: &mut Grid,
+    rect: Rect,
+    lx: &Lx,
+    focused: bool,
+    scroll: usize,
+    visible: usize,
+) -> Option<(u16, u16)> {
+    let text_top = rect.y + 1;
     let bottom_rule = rect.bottom() - 1;
     for x in rect.x..rect.right() {
         grid.set(x, rect.y, RULE, style::muted());
         grid.set(x, bottom_rule, RULE, style::muted());
     }
 
-    grid.put(rect.x, text_row, text::LX_INPUT_PROMPT, style::accent());
     let prefix = u16::try_from(text::LX_INPUT_PROMPT.width()).unwrap_or(1) + 1;
     let content_x = rect.x + prefix;
-    let content_w = usize::from(rect.width.saturating_sub(prefix));
-    if content_w == 0 {
-        return None;
+    let content_w = rect.width.saturating_sub(prefix);
+    let tokens = crate::ui::markdown::scan(&lx.input);
+    let lines: Vec<&str> = lx.input.split('\n').collect();
+    let cursor_line = lx.input[..lx.cursor].matches('\n').count();
+    let line_start = lx.input[..lx.cursor]
+        .rfind('\n')
+        .map_or(0, |offset| offset + 1);
+    let cursor_in_line = lx.cursor - line_start;
+
+    let mut cursor = None;
+    for i in 0..visible {
+        let Some(line_index) = scroll.checked_add(i) else {
+            break;
+        };
+        let Some(line) = lines.get(line_index) else {
+            break;
+        };
+        let y = text_top + i as u16;
+        if line_index == 0 {
+            grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
+        }
+        let line_tokens = tokens
+            .get(line_index)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        paint_markdown_line(grid, content_x, y, line, line_tokens, content_w);
+        if line_index == cursor_line && focused {
+            let col = content_x
+                + u16::try_from(display_width(&line[..cursor_in_line])).unwrap_or(u16::MAX);
+            cursor = Some((y, col));
+        }
     }
-    let cursor_cols = display_width(&lx.input[..lx.cursor]);
-    let skip = cursor_cols.saturating_sub(content_w.saturating_sub(1));
-    let visible = slice_by_width(&lx.input, skip, content_w);
+
     if lx.input.is_empty() {
-        let placeholder = text::truncate_to_width(text::LX_INPUT_PLACEHOLDER, content_w);
-        grid.put(content_x, text_row, &placeholder, style::muted());
-    } else {
-        grid.put(content_x, text_row, &visible, style::text());
+        let placeholder =
+            text::truncate_to_width(text::LX_INPUT_PLACEHOLDER, usize::from(content_w));
+        grid.put(content_x, text_top, &placeholder, style::muted());
     }
-    focused.then(|| {
-        let col = content_x + u16::try_from(cursor_cols - skip).unwrap_or(u16::MAX);
-        (text_row, col)
-    })
+    cursor
+}
+
+/// 按 token 高亮绘制一行 markdown；超宽截断。
+fn paint_markdown_line(grid: &mut Grid, x: u16, y: u16, line: &str, tokens: &[Token], max_w: u16) {
+    let mut cx = x;
+    let mut token_index = 0;
+    for (offset, ch) in line.char_indices() {
+        let width = ch.width().unwrap_or(0);
+        if width == 0 {
+            continue;
+        }
+        while tokens
+            .get(token_index)
+            .is_some_and(|token| token.range.end <= offset)
+        {
+            token_index += 1;
+        }
+        let cell_style = tokens
+            .get(token_index)
+            .filter(|token| token.range.contains(&offset))
+            .map_or_else(style::text, |token| {
+                crate::ui::prompt::token_style(token.kind)
+            });
+        if cx.saturating_add(width as u16) > x.saturating_add(max_w) {
+            break;
+        }
+        grid.set(cx, y, ch, cell_style);
+        for dx in 1..width as u16 {
+            grid.set(cx.saturating_add(dx), y, CONTINUATION, cell_style);
+        }
+        cx = cx.saturating_add(width as u16);
+    }
+}
+
+/// md 格式面板：圆角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
+fn draw_panel(grid: &mut Grid, rect: Rect, panel: &BlockPanel) {
+    draw_box(grid, rect, style::muted());
+    grid.put(
+        rect.x + 2,
+        rect.y,
+        text::LX_BLOCK_PANEL_TITLE,
+        style::muted(),
+    );
+    for (index, id) in panel.items().iter().enumerate() {
+        let y = rect.y + 1 + index as u16;
+        let (label, preview) = text::block_command_text(*id);
+        let active = index == panel.active();
+        let label_style = if active {
+            style::accent()
+        } else {
+            style::muted()
+        };
+        grid.put(rect.x + 2, y, &label, label_style);
+        let preview_x = rect.x + 2 + u16::try_from(label.width()).unwrap_or(0) + 2;
+        grid.put(preview_x, y, &preview, style::muted());
+    }
+}
+
+/// 圆角细线边框（md 面板用）。
+fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
+    if rect.width < 2 || rect.height < 2 {
+        return;
+    }
+    let right = rect.right() - 1;
+    let bottom = rect.bottom() - 1;
+    grid.set(rect.x, rect.y, '╭', border);
+    grid.set(right, rect.y, '╮', border);
+    grid.set(rect.x, bottom, '╰', border);
+    grid.set(right, bottom, '╯', border);
+    for x in rect.x + 1..right {
+        grid.set(x, rect.y, '─', border);
+        grid.set(x, bottom, '─', border);
+    }
+    for y in rect.y + 1..bottom {
+        grid.set(rect.x, y, '│', border);
+        grid.set(right, y, '│', border);
+    }
 }
 
 /// 把像素图标画进以 `(x, y)` 为左上角的单元格区域（按入口配色微调）。
@@ -589,26 +710,6 @@ fn pixel_glyph(top: char, bottom: char) -> Option<(char, Style)> {
 /// 文本显示宽度（宽字符按两列计）。
 fn display_width(content: &str) -> usize {
     content.chars().map(|ch| ch.width().unwrap_or(0)).sum()
-}
-
-/// 从显示列 `skip` 起取不超过 `max` 列的子串；宽字符不越界。
-fn slice_by_width(content: &str, skip: usize, max: usize) -> String {
-    let mut out = String::new();
-    let mut col = 0usize;
-    let mut width = 0usize;
-    for ch in content.chars() {
-        let char_width = ch.width().unwrap_or(0);
-        if col < skip {
-            col += char_width;
-            continue;
-        }
-        if width + char_width > max {
-            break;
-        }
-        out.push(ch);
-        width += char_width;
-    }
-    out
 }
 
 #[cfg(test)]

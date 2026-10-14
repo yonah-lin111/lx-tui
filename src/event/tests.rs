@@ -3706,7 +3706,7 @@ fn lx_entry_click_switches_selection() {
     for row in area.y..area.bottom() {
         for col in area.x..area.right() {
             if crate::ui::main_content::lx::entry_hit(area, lx, col, row)
-                == Some(LxEntry::Assistant)
+                == Some(LxEntry::Automation)
             {
                 target = Some((col, row));
             }
@@ -3725,7 +3725,7 @@ fn lx_entry_click_switches_selection() {
     );
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.entry,
-        LxEntry::Assistant,
+        LxEntry::Automation,
         "点击入口切换选中"
     );
     assert!(state.lx_selection.is_none(), "入口点击不启动选区");

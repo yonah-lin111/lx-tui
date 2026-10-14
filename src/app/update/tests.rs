@@ -3794,10 +3794,10 @@ fn lx_entry_and_selection_roundtrip() {
     use crate::app::state::LxEntry;
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
-    set_lx_entry(&mut state, pane, LxEntry::Assistant);
+    set_lx_entry(&mut state, pane, LxEntry::Automation);
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.entry,
-        LxEntry::Assistant
+        LxEntry::Automation
     );
 
     begin_lx_selection(&mut state, pane, 1, 2);
@@ -3825,4 +3825,69 @@ fn clear_selection_clears_lx_selection() {
     assert!(state.lx_selection.is_some());
     clear_selection(&mut state);
     assert!(state.lx_selection.is_none());
+}
+
+#[test]
+fn lx_newline_only_on_shift_enter_command() {
+    let mut state = AppState::demo();
+    for ch in "ab".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    apply_lx_input(&mut state, LxInput::Char('c'));
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "ab\nc");
+    assert_eq!(pane.lx.cursor, 4);
+}
+
+#[test]
+fn lx_vertical_movement_keeps_column() {
+    let mut state = AppState::demo();
+    for ch in "abcd".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    for ch in "ef".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Home);
+    apply_lx_input(&mut state, LxInput::Right);
+    apply_lx_input(&mut state, LxInput::Right);
+    // 第 2 行第 2 列 -> 上移回第 1 行第 2 列。
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 2);
+    apply_lx_input(&mut state, LxInput::Down);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 7);
+}
+
+#[test]
+fn lx_markdown_panel_navigates_and_accepts() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('#'));
+    assert!(state.active_pane().expect("pane").lx.panel.is_some());
+    // 下移高亮到 Heading 2，Tab 采纳。
+    apply_lx_input(&mut state, LxInput::Down);
+    apply_lx_input(&mut state, LxInput::Tab);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "## ");
+    assert_eq!(pane.lx.cursor, 3);
+}
+
+#[test]
+fn lx_markdown_panel_escape_closes() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('-'));
+    assert!(state.active_pane().expect("pane").lx.panel.is_some());
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert!(state.active_pane().expect("pane").lx.panel.is_none());
+}
+
+#[test]
+fn lx_panel_up_down_do_not_move_cursor() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('#'));
+    let before = state.active_pane().expect("pane").lx.cursor;
+    apply_lx_input(&mut state, LxInput::Up);
+    apply_lx_input(&mut state, LxInput::Down);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, before);
 }
