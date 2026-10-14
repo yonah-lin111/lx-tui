@@ -631,6 +631,9 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Tab if panel_open => {
             lx.panel_accept();
         }
+        LxInput::Enter if panel_open => {
+            lx.panel_accept();
+        }
         LxInput::Escape if panel_open => lx.panel_close(),
         LxInput::Char(ch) => lx.insert_char(ch),
         LxInput::Newline => lx.newline(),
@@ -640,10 +643,18 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Right => lx.move_right(),
         LxInput::Up => lx.move_up(),
         LxInput::Down => lx.move_down(),
-        LxInput::Home => lx.home(),
-        LxInput::End => lx.end(),
-        // 无面板时 Tab/Esc 吞掉。
-        LxInput::Tab | LxInput::Escape => {}
+        LxInput::Home | LxInput::LineStart => lx.home(),
+        LxInput::End | LxInput::LineEnd => lx.end(),
+        LxInput::WordLeft => lx.word_left(),
+        LxInput::WordRight => lx.word_right(),
+        LxInput::DeleteToLineStart => lx.delete_to_line_start(),
+        LxInput::DeleteToLineEnd => lx.delete_to_line_end(),
+        LxInput::DeleteWordBackward => lx.delete_word_backward(),
+        LxInput::DeleteWordForward => lx.delete_word_forward(),
+        LxInput::Undo => lx.undo(),
+        LxInput::Redo => lx.redo(),
+        // 无面板时 Enter 预留给发送、Tab/Esc 吞掉。
+        LxInput::Enter | LxInput::Tab | LxInput::Escape => {}
     }
 }
 

@@ -87,25 +87,64 @@ pub fn route(
 
 /// lx 页输入键映射：Shift+Enter 换行、单行编辑键、md 面板键；其余（含 Enter）吞掉。
 fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
-    let ctrl_or_alt = key
-        .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let modifiers = key.modifiers;
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    let alt = modifiers.contains(KeyModifiers::ALT);
+    let shift = modifiers.contains(KeyModifiers::SHIFT);
+    if modifiers.contains(KeyModifiers::SUPER) {
+        return match key.code {
+            KeyCode::Char('z' | 'Z') if shift => Some(LxInput::Redo),
+            KeyCode::Char('z' | 'Z') => Some(LxInput::Undo),
+            KeyCode::Char('y' | 'Y') => Some(LxInput::Redo),
+            _ => None,
+        };
+    }
+    let mapped = match (ctrl, alt, key.code) {
+        (true, false, KeyCode::Enter) => Some(LxInput::Newline),
+        (true, false, KeyCode::Char(ch)) => match ch {
+            'u' | 'U' => Some(LxInput::DeleteToLineStart),
+            'k' | 'K' => Some(LxInput::DeleteToLineEnd),
+            'w' | 'W' => Some(LxInput::DeleteWordBackward),
+            'a' | 'A' => Some(LxInput::LineStart),
+            'e' | 'E' => Some(LxInput::LineEnd),
+            'd' | 'D' => Some(LxInput::Delete),
+            'z' | '-' => Some(LxInput::Undo),
+            'Z' | 'y' | 'Y' | '.' => Some(LxInput::Redo),
+            _ => None,
+        },
+        (true, false, KeyCode::Backspace) => Some(LxInput::DeleteWordBackward),
+        (true, false, KeyCode::Delete) => Some(LxInput::DeleteWordForward),
+        (true, false, KeyCode::Left) => Some(LxInput::WordLeft),
+        (true, false, KeyCode::Right) => Some(LxInput::WordRight),
+        (false, true, KeyCode::Char('b')) => Some(LxInput::WordLeft),
+        (false, true, KeyCode::Char('f')) => Some(LxInput::WordRight),
+        (false, true, KeyCode::Char('d')) => Some(LxInput::DeleteWordForward),
+        (false, true, KeyCode::Backspace) => Some(LxInput::DeleteWordBackward),
+        (false, true, KeyCode::Left) => Some(LxInput::WordLeft),
+        (false, true, KeyCode::Right) => Some(LxInput::WordRight),
+        _ => None,
+    };
+    if mapped.is_some() {
+        return mapped;
+    }
+    if ctrl || alt {
+        return None;
+    }
     match key.code {
         KeyCode::Enter if shift => Some(LxInput::Newline),
-        // Enter 预留给发送消息，当前不动作。
-        KeyCode::Enter => None,
+        // Enter 无面板时预留给发送，交给 update 判定。
+        KeyCode::Enter => Some(LxInput::Enter),
         KeyCode::Backspace => Some(LxInput::Backspace),
         KeyCode::Delete => Some(LxInput::Delete),
-        KeyCode::Left if !ctrl_or_alt => Some(LxInput::Left),
-        KeyCode::Right if !ctrl_or_alt => Some(LxInput::Right),
-        KeyCode::Up if !ctrl_or_alt => Some(LxInput::Up),
-        KeyCode::Down if !ctrl_or_alt => Some(LxInput::Down),
+        KeyCode::Left => Some(LxInput::Left),
+        KeyCode::Right => Some(LxInput::Right),
+        KeyCode::Up => Some(LxInput::Up),
+        KeyCode::Down => Some(LxInput::Down),
         KeyCode::Home => Some(LxInput::Home),
         KeyCode::End => Some(LxInput::End),
         KeyCode::Tab => Some(LxInput::Tab),
         KeyCode::Esc => Some(LxInput::Escape),
-        KeyCode::Char(ch) if !ctrl_or_alt => Some(LxInput::Char(ch)),
+        KeyCode::Char(ch) => Some(LxInput::Char(ch)),
         _ => None,
     }
 }

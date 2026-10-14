@@ -17,7 +17,7 @@ pub use tree::{
     pages_template_counts,
 };
 
-mod text;
+pub(crate) mod text;
 mod viewport;
 
 use std::path::PathBuf;

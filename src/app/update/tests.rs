@@ -3891,3 +3891,53 @@ fn lx_panel_up_down_do_not_move_cursor() {
     apply_lx_input(&mut state, LxInput::Down);
     assert_eq!(state.active_pane().expect("pane").lx.cursor, before);
 }
+
+#[test]
+fn lx_enter_accepts_markdown_panel() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('#'));
+    assert!(state.active_pane().expect("pane").lx.panel.is_some());
+    apply_lx_input(&mut state, LxInput::Enter);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "# ", "Enter 采纳高亮候选并回显到输入框");
+    assert_eq!(pane.lx.cursor, 2);
+}
+
+#[test]
+fn lx_enter_without_panel_is_reserved() {
+    let mut state = AppState::demo();
+    for ch in "hi".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Enter);
+    assert_eq!(
+        state.active_pane().expect("pane").lx.input,
+        "hi",
+        "无面板时 Enter 不动作"
+    );
+}
+
+#[test]
+fn lx_word_and_line_shortcuts() {
+    let mut state = AppState::demo();
+    for ch in "hello world".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::WordLeft);
+    assert_eq!(state.active_pane().expect("pane").lx.cursor, 6);
+    apply_lx_input(&mut state, LxInput::DeleteWordBackward);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "world");
+    apply_lx_input(&mut state, LxInput::DeleteToLineEnd);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "");
+}
+
+#[test]
+fn lx_undo_redo_roundtrip() {
+    let mut state = AppState::demo();
+    apply_lx_input(&mut state, LxInput::Char('a'));
+    apply_lx_input(&mut state, LxInput::Char('b'));
+    apply_lx_input(&mut state, LxInput::Undo);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "a");
+    apply_lx_input(&mut state, LxInput::Redo);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "ab");
+}

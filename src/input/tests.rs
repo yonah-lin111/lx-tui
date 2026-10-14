@@ -602,7 +602,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(key(KeyCode::Esc), TermMode::empty(), false, None, true),
         Some(Routed::Lx(LxInput::Escape))
     );
-    // Shift+Enter 换行；Enter 预留给发送，吞掉。
+    // Shift+Enter 换行；Enter 无面板时交给 update 判定（有面板则采纳候选）。
     let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
     assert_eq!(
         super::route(shift_enter, TermMode::empty(), false, None, true),
@@ -610,8 +610,29 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
     );
     assert_eq!(
         super::route(key(KeyCode::Enter), TermMode::empty(), false, None, true),
-        None,
-        "Enter 预留给发送"
+        Some(Routed::Lx(LxInput::Enter))
+    );
+    // Ctrl+A/E/U/K/W/D 等编辑快捷键映射到 lx 输入命令。
+    let ctrl = |ch| {
+        super::route(
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+        )
+    };
+    assert_eq!(ctrl('a'), Some(Routed::Lx(LxInput::LineStart)));
+    assert_eq!(ctrl('e'), Some(Routed::Lx(LxInput::LineEnd)));
+    assert_eq!(ctrl('u'), Some(Routed::Lx(LxInput::DeleteToLineStart)));
+    assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
+    assert_eq!(ctrl('w'), Some(Routed::Lx(LxInput::DeleteWordBackward)));
+    assert_eq!(ctrl('z'), Some(Routed::Lx(LxInput::Undo)));
+    assert_eq!(ctrl('y'), Some(Routed::Lx(LxInput::Redo)));
+    let ctrl_left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
+    assert_eq!(
+        super::route(ctrl_left, TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::WordLeft))
     );
     let quit = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
     assert_eq!(

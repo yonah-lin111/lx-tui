@@ -8,15 +8,49 @@ pub(super) fn is_word_char(ch: char) -> bool {
 }
 
 /// 所在逻辑行的起始字节偏移（上一个换行之后）。
-pub(super) fn line_start(text: &str, index: usize) -> usize {
+pub(crate) fn line_start(text: &str, index: usize) -> usize {
     text[..index].rfind('\n').map_or(0, |offset| offset + 1)
 }
 
 /// 所在逻辑行的结束字节偏移（下一个换行之前或文末）。
-pub(super) fn line_end(text: &str, index: usize) -> usize {
+pub(crate) fn line_end(text: &str, index: usize) -> usize {
     text[index..]
         .find('\n')
         .map_or(text.len(), |offset| index + offset)
+}
+
+/// 光标前一个词（含尾随分隔符）的起点。
+pub(crate) fn word_start_before(text: &str, index: usize) -> usize {
+    let mut boundary = 0;
+    let mut in_word = false;
+    let mut seen = false;
+    for (offset, ch) in text[..index].char_indices().rev() {
+        seen = true;
+        if is_word_char(ch) {
+            in_word = true;
+            boundary = offset;
+        } else if in_word {
+            break;
+        } else {
+            boundary = offset;
+        }
+    }
+    if seen { boundary } else { 0 }
+}
+
+/// 光标所在或下一个词的词尾（跳过前导分隔符）。
+pub(crate) fn word_end_after(text: &str, index: usize) -> usize {
+    let mut end = index;
+    let mut in_word = false;
+    for (offset, ch) in text[index..].char_indices() {
+        if is_word_char(ch) {
+            in_word = true;
+            end = index + offset + ch.len_utf8();
+        } else if in_word {
+            break;
+        }
+    }
+    end
 }
 
 /// 维护上限的快照入栈；超限时丢弃最旧一条。
@@ -100,34 +134,10 @@ use super::{HISTORY_LIMIT, Prompt, Snapshot, TAB_STOP};
 impl Prompt {
     /// 光标前一个词（含尾随分隔符）的起点。
     pub(super) fn word_start_before(&self, index: usize) -> usize {
-        let mut boundary = 0;
-        let mut in_word = false;
-        let mut seen = false;
-        for (offset, ch) in self.text[..index].char_indices().rev() {
-            seen = true;
-            if is_word_char(ch) {
-                in_word = true;
-                boundary = offset;
-            } else if in_word {
-                break;
-            } else {
-                boundary = offset;
-            }
-        }
-        if seen { boundary } else { 0 }
+        word_start_before(&self.text, index)
     }
     /// 光标所在或下一个词的词尾（跳过前导分隔符）。
     pub(super) fn word_end_after(&self, index: usize) -> usize {
-        let mut end = index;
-        let mut in_word = false;
-        for (offset, ch) in self.text[index..].char_indices() {
-            if is_word_char(ch) {
-                in_word = true;
-                end = index + offset + ch.len_utf8();
-            } else if in_word {
-                break;
-            }
-        }
-        end
+        word_end_after(&self.text, index)
     }
 }

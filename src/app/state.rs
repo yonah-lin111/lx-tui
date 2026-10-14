@@ -13,6 +13,7 @@ use crate::terminal::Terminal;
 use super::effects::Effect;
 use super::markdown::BlockPanel;
 use super::overlay::Overlay;
+use super::prompt::text;
 use super::prompt::{Prompt, PromptPanel};
 use super::selection::Selection;
 use super::toast::Toast;
@@ -314,7 +315,21 @@ pub struct Lx {
     pub cursor: usize,
     /// markdown 块命令面板；光标处触发时打开。
     pub panel: Option<BlockPanel>,
+    /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
+    undo: Vec<LxSnapshot>,
+    /// 重做历史。
+    redo: Vec<LxSnapshot>,
 }
+
+/// lx 输入缓冲的一份快照（文本 + 光标），供撤销/重做。
+#[derive(Debug, Clone)]
+struct LxSnapshot {
+    text: String,
+    cursor: usize,
+}
+
+/// 撤销历史上限。
+const LX_HISTORY_LIMIT: usize = 200;
 
 impl Default for Lx {
     fn default() -> Self {
@@ -329,11 +344,26 @@ impl Lx {
             input: String::new(),
             cursor: 0,
             panel: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
         }
+    }
+
+    /// 记录一次编辑前的快照，并清空重做栈。
+    fn snapshot(&mut self) {
+        if self.undo.len() == LX_HISTORY_LIMIT {
+            self.undo.remove(0);
+        }
+        self.undo.push(LxSnapshot {
+            text: self.input.clone(),
+            cursor: self.cursor,
+        });
+        self.redo.clear();
     }
 
     /// 在光标处插入一个字符。
     pub fn insert_char(&mut self, ch: char) {
+        self.snapshot();
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
         self.refresh_panel();
@@ -341,6 +371,7 @@ impl Lx {
 
     /// 在光标处换行。
     pub fn newline(&mut self) {
+        self.snapshot();
         self.input.insert(self.cursor, '\n');
         self.cursor += 1;
         self.refresh_panel();
@@ -349,6 +380,7 @@ impl Lx {
     /// 删除光标前一个字符。
     pub fn backspace(&mut self) {
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
+            self.snapshot();
             self.cursor -= prev.len_utf8();
             self.input.remove(self.cursor);
             self.refresh_panel();
@@ -358,6 +390,7 @@ impl Lx {
     /// 删除光标处字符。
     pub fn delete(&mut self) {
         if self.cursor < self.input.len() {
+            self.snapshot();
             self.input.remove(self.cursor);
             self.refresh_panel();
         }
@@ -423,6 +456,86 @@ impl Lx {
             self.cursor = self.clamp_boundary(next_start + column.min(next_end - next_start));
         }
         self.refresh_panel();
+    }
+
+    /// 光标左移一个词。
+    pub fn word_left(&mut self) {
+        self.cursor = text::word_start_before(&self.input, self.cursor);
+        self.refresh_panel();
+    }
+
+    /// 光标右移一个词。
+    pub fn word_right(&mut self) {
+        self.cursor = text::word_end_after(&self.input, self.cursor);
+        self.refresh_panel();
+    }
+
+    /// 删除光标到逻辑行首。
+    pub fn delete_to_line_start(&mut self) {
+        let start = text::line_start(&self.input, self.cursor);
+        if start < self.cursor {
+            self.snapshot();
+            self.input.replace_range(start..self.cursor, "");
+            self.cursor = start;
+            self.refresh_panel();
+        }
+    }
+
+    /// 删除光标到逻辑行尾。
+    pub fn delete_to_line_end(&mut self) {
+        let end = text::line_end(&self.input, self.cursor);
+        if self.cursor < end {
+            self.snapshot();
+            self.input.replace_range(self.cursor..end, "");
+            self.refresh_panel();
+        }
+    }
+
+    /// 向前删除一个词。
+    pub fn delete_word_backward(&mut self) {
+        let start = text::word_start_before(&self.input, self.cursor);
+        if start < self.cursor {
+            self.snapshot();
+            self.input.replace_range(start..self.cursor, "");
+            self.cursor = start;
+            self.refresh_panel();
+        }
+    }
+
+    /// 向后删除一个词。
+    pub fn delete_word_forward(&mut self) {
+        let end = text::word_end_after(&self.input, self.cursor);
+        if self.cursor < end {
+            self.snapshot();
+            self.input.replace_range(self.cursor..end, "");
+            self.refresh_panel();
+        }
+    }
+
+    /// 撤销一步。
+    pub fn undo(&mut self) {
+        if let Some(snapshot) = self.undo.pop() {
+            let current = LxSnapshot {
+                text: std::mem::replace(&mut self.input, snapshot.text),
+                cursor: self.cursor,
+            };
+            self.redo.push(current);
+            self.cursor = snapshot.cursor;
+            self.refresh_panel();
+        }
+    }
+
+    /// 重做一步。
+    pub fn redo(&mut self) {
+        if let Some(snapshot) = self.redo.pop() {
+            let current = LxSnapshot {
+                text: std::mem::replace(&mut self.input, snapshot.text),
+                cursor: self.cursor,
+            };
+            self.undo.push(current);
+            self.cursor = snapshot.cursor;
+            self.refresh_panel();
+        }
     }
 
     /// 重算 markdown 块命令面板：光标处命中触发标记时打开，否则关闭。
