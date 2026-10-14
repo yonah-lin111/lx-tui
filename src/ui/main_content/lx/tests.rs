@@ -5,7 +5,7 @@ use crate::app::state::LxEntry;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 
-/// 图标像素图：行数 = 单元格行 × 2、每行宽度一致、只含调色板字符。
+/// 像素字标：行数 = 单元格行 × 2、每行宽度一致、只含调色板字符。
 fn assert_icon(art: &[&str]) {
     assert_eq!(art.len(), usize::from(LOGO_ROWS) * 2, "行数 = 单元格行 × 2");
     for row in art {
@@ -24,19 +24,37 @@ fn assert_icon(art: &[&str]) {
 }
 
 #[test]
-fn icons_are_consistent() {
-    assert_icon(ICON_NATIVE);
-    assert_icon(ICON_COGNITIVE);
-    assert_icon(ICON_ASSISTANT);
+fn logo_art_is_consistent() {
+    assert_icon(ICON_LX);
 }
 
 #[test]
-fn new_icons_are_distinct_and_show_lx() {
-    assert_ne!(ICON_NATIVE, ICON_COGNITIVE, "Cognitive 区别于 Native");
-    assert_ne!(ICON_COGNITIVE, ICON_ASSISTANT, "两个新图标互不相同");
-    for art in [ICON_COGNITIVE, ICON_ASSISTANT] {
-        assert!(art.iter().any(|row| row.contains('w')), "新图标含 lx 字标");
+fn entries_share_lx_shape_with_tweaked_colors() {
+    // 三个入口形状一致（非透明像素位置相同），仅配色不同。
+    for entry in LxEntry::ALL {
+        let mapped: Vec<String> = ICON_LX
+            .iter()
+            .map(|row| row.chars().map(|ch| icon_pixel(entry, ch)).collect())
+            .collect();
+        for (row, mapped_row) in ICON_LX.iter().zip(&mapped) {
+            for (original, tinted) in row.chars().zip(mapped_row.chars()) {
+                assert_eq!(original == '.', tinted == '.', "形状必须一致（透明位相同）");
+            }
+        }
     }
+    // 配色确实不同：至少一个非透明像素被改写。
+    let tinted = |entry| -> String {
+        ICON_LX
+            .iter()
+            .map(|row| {
+                row.chars()
+                    .map(|ch| icon_pixel(entry, ch))
+                    .collect::<String>()
+            })
+            .collect()
+    };
+    assert_ne!(tinted(LxEntry::Native), tinted(LxEntry::Cognitive));
+    assert_ne!(tinted(LxEntry::Cognitive), tinted(LxEntry::Assistant));
 }
 
 #[test]
@@ -49,19 +67,18 @@ fn logo_palette_maps_logo_colors() {
 }
 
 #[test]
-fn input_box_sits_at_bottom_with_hint() {
+fn input_sits_on_bottom_row_with_margin() {
     let area = Rect::new(0, 0, 60, 16);
     let lay = layout(area, &Lx::new());
-    let input = lay.input.expect("input box");
+    let input = lay.input.expect("input row");
     assert_eq!(input.height, INPUT_HEIGHT);
     assert_eq!(input.x, area.x + MARGIN);
-    assert_eq!(input.bottom(), area.bottom() - 1, "底部留一行提示");
-    assert_eq!(lay.hint.expect("hint").y, area.bottom() - 1);
+    assert_eq!(input.y, area.bottom() - 1);
 }
 
 #[test]
 fn tiny_page_falls_back_to_wordmark() {
-    let area = Rect::new(0, 0, 8, 2);
+    let area = Rect::new(0, 0, 6, 5);
     let lay = layout(area, &Lx::new());
     assert!(lay.fallback);
     let mut buf = Buffer::empty(area);
@@ -70,7 +87,7 @@ fn tiny_page_falls_back_to_wordmark() {
 }
 
 #[test]
-fn wide_page_places_three_entries_horizontally() {
+fn entries_are_equal_width_and_horizontal_when_roomy() {
     let area = Rect::new(0, 0, 100, 20);
     let lay = layout(area, &Lx::new());
     assert_eq!(lay.entries.len(), 3);
@@ -79,9 +96,9 @@ fn wide_page_places_three_entries_horizontally() {
         lay.entries.iter().all(|(_, rect)| rect.y == first_y),
         "同一行"
     );
+    let widths: Vec<u16> = lay.entries.iter().map(|(_, rect)| rect.width).collect();
+    assert!(widths.iter().all(|w| *w == widths[0]), "三按钮等宽");
     assert!(lay.entries[0].1.x < lay.entries[1].1.x, "从左到右");
-    assert!(lay.icon.is_some(), "图标可见");
-    assert!(lay.description.is_some(), "描述可见");
 }
 
 #[test]
@@ -99,7 +116,7 @@ fn entry_hit_matches_buttons_and_ignores_blank() {
     let lx = Lx::new();
     let lay = layout(area, &lx);
     for (entry, rect) in &lay.entries {
-        assert_eq!(entry_hit(area, &lx, rect.x + 1, rect.y + 1), Some(*entry));
+        assert_eq!(entry_hit(area, &lx, rect.x + 1, rect.y), Some(*entry));
     }
     assert_eq!(entry_hit(area, &lx, area.x, area.y), None);
 }
@@ -114,11 +131,10 @@ fn wide_page_renders_brand_entries_and_input() {
     assert!(text.contains("Cognitive Orchestrator"), "{text}");
     assert!(text.contains("Assistant Orchestrator"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
-    assert!(text.contains("type a message"), "{text}");
-    assert!(text.contains('❯'), "默认选中标记可见");
-    assert!(text.contains('▛'), "像素边框可见");
+    assert!(text.contains('[') && text.contains(']'), "极简方括号按钮");
+    assert!(!text.contains("type a message"), "框下提示已移除");
+    assert!(!text.contains('▛'), "像素方块边框已移除");
     assert!(!text.contains("placeholder"), "白色占位面板已移除");
-    assert!(!text.contains("click [>_]"), "切换提示已移除");
 }
 
 #[test]
@@ -137,8 +153,8 @@ fn selected_entry_switches_icon_and_text() {
 }
 
 #[test]
-fn typing_updates_input_and_cursor() {
-    let area = Rect::new(0, 0, 100, 20);
+fn cursor_is_relative_to_content_area() {
+    let area = Rect::new(5, 3, 100, 20);
     let mut lx = Lx::new();
     lx.insert_char('h');
     lx.insert_char('i');
@@ -147,9 +163,10 @@ fn typing_updates_input_and_cursor() {
     let text = buffer_text(&buf);
     assert!(text.contains("hi"));
     assert!(!text.contains("Ask anything"), "输入后占位消失");
-    let input = layout(area, &lx).input.expect("input box");
-    assert_eq!(cursor.1, input.x + 4 + 2, "光标在 `hi` 之后");
-    assert_eq!(cursor.0, input.y + 1);
+    // 行相对内容区（不是绝对坐标）：输入在最后一行。
+    assert_eq!(cursor.0, area.height - 1);
+    // 列相对内容区：左边距 2 + `> ` 2 + `hi` 2 = 6。
+    assert_eq!(cursor.1, MARGIN + 2 + 2);
 }
 
 #[test]
@@ -169,9 +186,10 @@ fn copy_text_blank_selection_is_empty() {
 
 /// 把缓冲区按行拼成文本，便于断言内容。
 fn buffer_text(buf: &Buffer) -> String {
-    (0..buf.area.height)
+    let area = buf.area;
+    (area.y..area.bottom())
         .map(|y| {
-            (0..buf.area.width)
+            (area.x..area.right())
                 .map(|x| buf[(x, y)].symbol())
                 .collect::<String>()
         })

@@ -121,10 +121,9 @@ pub const LX_ENTRY_COGNITIVE_DESC: &str = "orchestrates all your coding agents i
 pub const LX_ENTRY_ASSISTANT_DESC: &str = "orchestrates all your assistant agents in one place";
 pub const LX_ENTRY_COGNITIVE_EXAMPLES: &str = "examples: opencode · codex · claude · …";
 pub const LX_ENTRY_ASSISTANT_EXAMPLES: &str = "examples: openclaw · Hermes · …";
-/// lx 页底部输入框：`>` 前缀、占位与框下提示。
+/// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
-pub const LX_INPUT_HINT: &str = "type a message";
 
 /// lx 页入口标签：按选中入口取。
 pub fn lx_entry_label(entry: LxEntry) -> &'static str {

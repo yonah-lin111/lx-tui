@@ -1,4 +1,4 @@
-//! lx 欢迎页：顶部品牌区（像素图标 + 文案）、像素入口按钮与底部像素输入框。
+//! lx 欢迎页：顶部品牌区（像素图标 + 文案）、极简入口按钮与底部单行输入框。
 //!
 //! 整页以单元格网格构建：同一份网格既用于绘制，也用于整页文本复制，
 //! 因此渲染与取词不会漂移。渲染只读状态、只写 Buffer。
@@ -16,29 +16,20 @@ use crate::ui::{style, text};
 pub(crate) const LOGO_WIDTH: u16 = 20;
 pub(crate) const LOGO_ROWS: u16 = 7;
 
-/// 底部输入框（像素边框）高度、提示行高度与宽屏水平边距。
-const INPUT_HEIGHT: u16 = 3;
-const HINT_HEIGHT: u16 = 1;
+/// 底部单行输入框高度、宽屏水平边距与最小宽度。
+const INPUT_HEIGHT: u16 = 1;
 const MARGIN: u16 = 2;
-const MIN_INPUT_WIDTH: u16 = 12;
-/// 入口按钮高度、按钮间距、区块间距与图标右侧文案最小宽度。
-const ENTRY_HEIGHT: u16 = 3;
+const MIN_INPUT_WIDTH: u16 = 8;
+/// 入口按钮高度（单行）、按钮间距、区块间距与图标右侧文案最小宽度。
+const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 2;
 const SECTION_GAP: u16 = 1;
 const MIN_TEXT_WIDTH: u16 = 12;
 
-/// 像素边框字符（1 格厚的实心方块框，区别于普通细线/圆角按钮）。
-const PX_TL: char = '▛';
-const PX_TOP: char = '▀';
-const PX_TR: char = '▜';
-const PX_LEFT: char = '▌';
-const PX_RIGHT: char = '▐';
-const PX_BL: char = '▙';
-const PX_BOTTOM: char = '▄';
-const PX_BR: char = '▟';
-
-/// Native Agent 图标：沿用原有 LX 像素字标。
-const ICON_NATIVE: &[&str] = &[
+/// 基准 LX 像素字标（20 列 × 14 像素行）；'.' 透明，其余字符取 `style::logo_pixel` 调色板。
+///
+/// 三个入口共用同一形状，仅按入口做配色微调，保证 `LX` 形象一致。
+const ICON_LX: &[&str] = &[
     ".kkk...kkkkk....kkkk",
     "kppbk..kccck...kpppk",
     "kppbk..kbbbk...kppnk",
@@ -55,52 +46,30 @@ const ICON_NATIVE: &[&str] = &[
     "kkkkkkkkkkk.....kkkk",
 ];
 
-/// Cognitive Orchestrator 图标：节点网络（编排多个 coding agent）+ 底部 `lx` 字标。
-const ICON_COGNITIVE: &[&str] = &[
-    "....................",
-    "........cccc........",
-    "........c..c........",
-    "........c..c........",
-    "........cccc........",
-    ".......b....b.......",
-    "......b......b......",
-    ".....b........b.....",
-    "....b..........b....",
-    "...cc..........cc...",
-    "...cc..........cc...",
-    "......ww.w...w......",
-    "......ww..w.w.......",
-    "......ww.w...w......",
-];
-
-/// Assistant Orchestrator 图标：对话气泡（编排助手 agent）+ 底部 `lx` 字标。
-const ICON_ASSISTANT: &[&str] = &[
-    "....................",
-    "...ccccccccccccc....",
-    "..c.............c...",
-    "..c.............c...",
-    "..c.............c...",
-    "..c.............c...",
-    "..c.............c...",
-    "..ccccccccccccccc...",
-    "...c................",
-    "..c.................",
-    "....................",
-    "......ww.w...w......",
-    "......ww..w.w.......",
-    "......ww.w...w......",
-];
-
-/// 按入口取图标像素画。
-fn icon_art(entry: LxEntry) -> &'static [&'static str] {
+/// 按入口对基准字标做配色微调：形状不变、只换调色板槽位。
+fn icon_pixel(entry: LxEntry, ch: char) -> char {
     match entry {
-        LxEntry::Native => ICON_NATIVE,
-        LxEntry::Cognitive => ICON_COGNITIVE,
-        LxEntry::Assistant => ICON_ASSISTANT,
+        LxEntry::Native => ch,
+        // 粉/深粉 与 天蓝/冰蓝 互换。
+        LxEntry::Cognitive => match ch {
+            'p' => 'n',
+            'n' => 'p',
+            'b' => 'c',
+            'c' => 'b',
+            other => other,
+        },
+        // 粉系 与 蓝系 互换。
+        LxEntry::Assistant => match ch {
+            'p' => 'c',
+            'c' => 'p',
+            'b' => 'n',
+            'n' => 'b',
+            other => other,
+        },
     }
 }
 
-/// 渲染 lx 页；返回聚焦时输入光标的相对坐标（行、列）。
+/// 渲染 lx 页；返回聚焦时输入光标的相对坐标（行、列，相对内容区左上角）。
 ///
 /// `selection` 为当前 lx 选区（内容行、列，相对内容区左上角），用于反显高亮。
 pub fn render(
@@ -243,8 +212,11 @@ impl Grid {
 /// lx 页布局：所有组件矩形（绝对屏幕坐标）。
 struct Layout {
     input: Option<Rect>,
-    hint: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
+    /// 入口按钮统一宽度（三按钮等宽）。
+    button_width: u16,
+    /// 最长入口标签宽度（按钮内左右填充用）。
+    max_label: u16,
     icon: Option<(u16, u16)>,
     description: Option<Rect>,
     examples: Option<Rect>,
@@ -256,19 +228,15 @@ impl Layout {
     fn empty(fallback: bool) -> Self {
         Self {
             input: None,
-            hint: None,
             entries: Vec::new(),
+            button_width: 0,
+            max_label: 0,
             icon: None,
             description: None,
             examples: None,
             fallback,
         }
     }
-}
-
-/// 入口按钮宽度：`▌` + ` ` + 标记(2) + 标签 + ` ` + `▐`。
-fn entry_width(label: &str) -> u16 {
-    u16::try_from(label.chars().count()).unwrap_or(u16::MAX) + 6
 }
 
 /// 计算整页布局。
@@ -280,31 +248,35 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let content_x = area.x + margin;
     let content_w = area.width.saturating_sub(margin.saturating_mul(2));
 
-    // 底部输入框 + 提示行；放不下时退化为居中字标。
-    if area.height < INPUT_HEIGHT + HINT_HEIGHT || content_w < MIN_INPUT_WIDTH {
+    // 底部单行输入框；放不下时退化为居中字标。
+    if area.height < 2 || content_w < MIN_INPUT_WIDTH {
         return Layout::empty(true);
     }
-    let hint_y = area.bottom() - 1;
-    let input = Rect::new(content_x, hint_y - INPUT_HEIGHT, content_w, INPUT_HEIGHT);
+    let input = Rect::new(content_x, area.bottom() - 1, content_w, INPUT_HEIGHT);
     let mut out = Layout::empty(false);
     out.input = Some(input);
-    out.hint = Some(Rect::new(content_x, hint_y, content_w, HINT_HEIGHT));
 
     let region_top = area.y;
     let region_bottom = input.y;
     let region_h = region_bottom.saturating_sub(region_top);
 
-    // 入口区：三个横排放不下则竖排；竖排单个也放不下则省略。
+    // 入口区：三按钮等宽（标签左右空格填充），横排放不下则竖排。
     let labels: Vec<(LxEntry, &str)> = LxEntry::ALL
         .iter()
         .map(|entry| (*entry, text::lx_entry_label(*entry)))
         .collect();
-    let widths: Vec<u16> = labels.iter().map(|(_, label)| entry_width(label)).collect();
-    let horizontal = widths
+    let max_label = labels
         .iter()
-        .fold(0u16, |sum, width| sum.saturating_add(*width))
-        .saturating_add(ENTRY_GAP.saturating_mul(2))
-        <= content_w;
+        .map(|(_, label)| u16::try_from(label.chars().count()).unwrap_or(u16::MAX))
+        .max()
+        .unwrap_or(0);
+    let button_w = max_label.saturating_add(2);
+    out.button_width = button_w;
+    out.max_label = max_label;
+    let horizontal_total = button_w
+        .saturating_mul(3)
+        .saturating_add(ENTRY_GAP.saturating_mul(2));
+    let horizontal = horizontal_total <= content_w;
     let entries_h = if horizontal {
         ENTRY_HEIGHT
     } else {
@@ -312,17 +284,12 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
             .saturating_mul(3)
             .saturating_add(ENTRY_GAP.saturating_mul(2))
     };
-    let entries_fit = if horizontal {
-        true
-    } else {
-        widths.iter().all(|width| *width <= content_w)
-    };
+    let entries_fit = horizontal || button_w <= content_w;
 
     // 品牌区：图标 + 右侧文案。
     let icon_fits = content_w >= LOGO_WIDTH;
     let text_x = content_x + LOGO_WIDTH + 2;
-    let text_right = area.x + area.width - margin;
-    let text_w = text_right.saturating_sub(text_x);
+    let text_w = (area.right() - margin).saturating_sub(text_x);
     let text_fits = text_w >= MIN_TEXT_WIDTH;
 
     let mut brand_top: Option<u16> = None;
@@ -350,15 +317,15 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     }
 
     if let Some(top) = entries_top {
-        out.entries = place_entries(&labels, &widths, horizontal, content_x, content_w, top);
+        out.entries = place_entries(&labels, button_w, horizontal, content_x, content_w, top);
     }
     out
 }
 
-/// 按排布方向放置入口按钮：横排整体居中，竖排逐行居中。
+/// 按排布方向放置入口按钮：横排整体居中，竖排逐行居中；三按钮等宽。
 fn place_entries(
     labels: &[(LxEntry, &str)],
-    widths: &[u16],
+    button_w: u16,
     horizontal: bool,
     x0: u16,
     width: u16,
@@ -366,20 +333,19 @@ fn place_entries(
 ) -> Vec<(LxEntry, Rect)> {
     let mut out = Vec::with_capacity(labels.len());
     if horizontal {
-        let total = widths
-            .iter()
-            .fold(0u16, |sum, entry| sum.saturating_add(*entry))
+        let total = button_w
+            .saturating_mul(3)
             .saturating_add(ENTRY_GAP.saturating_mul(2));
         let mut x = x0 + width.saturating_sub(total) / 2;
-        for ((entry, _), entry_w) in labels.iter().zip(widths) {
-            out.push((*entry, Rect::new(x, top, *entry_w, ENTRY_HEIGHT)));
-            x = x.saturating_add(*entry_w).saturating_add(ENTRY_GAP);
+        for (entry, _) in labels {
+            out.push((*entry, Rect::new(x, top, button_w, ENTRY_HEIGHT)));
+            x = x.saturating_add(button_w).saturating_add(ENTRY_GAP);
         }
     } else {
         let mut y = top;
-        for ((entry, _), entry_w) in labels.iter().zip(widths) {
-            let x = x0 + width.saturating_sub(*entry_w) / 2;
-            out.push((*entry, Rect::new(x, y, *entry_w, ENTRY_HEIGHT)));
+        for (entry, _) in labels {
+            let x = x0 + width.saturating_sub(button_w) / 2;
+            out.push((*entry, Rect::new(x, y, button_w, ENTRY_HEIGHT)));
             y = y.saturating_add(ENTRY_HEIGHT).saturating_add(ENTRY_GAP);
         }
     }
@@ -397,7 +363,7 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     }
 
     if let Some((ix, iy)) = lay.icon {
-        draw_icon(&mut grid, ix, iy, icon_art(lx.entry));
+        draw_icon(&mut grid, ix, iy, lx.entry);
     }
     if let Some(rect) = lay.description {
         let content = text::truncate_to_width(
@@ -414,67 +380,45 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     }
 
     for (entry, rect) in &lay.entries {
-        draw_pixel_button(
+        draw_button(
             &mut grid,
             *rect,
             text::lx_entry_label(*entry),
+            lay.max_label,
             *entry == lx.entry,
         );
     }
 
     let mut cursor = None;
     if let Some(input) = lay.input {
-        cursor = draw_input(&mut grid, input, lx, focused);
-    }
-    if let Some(rect) = lay.hint {
-        grid.put(rect.x + 1, rect.y, text::LX_INPUT_HINT, style::muted());
+        cursor = draw_input(&mut grid, input, lx, focused)
+            .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     }
     (grid, cursor)
 }
 
-/// 像素方块边框：1 格厚实心框。
-fn draw_frame(grid: &mut Grid, rect: Rect, border: Style) {
-    if rect.width < 2 || rect.height < 2 {
-        return;
-    }
-    let right = rect.right() - 1;
-    let bottom = rect.bottom() - 1;
-    grid.set(rect.x, rect.y, PX_TL, border);
-    grid.set(right, rect.y, PX_TR, border);
-    grid.set(rect.x, bottom, PX_BL, border);
-    grid.set(right, bottom, PX_BR, border);
-    for x in rect.x + 1..right {
-        grid.set(x, rect.y, PX_TOP, border);
-        grid.set(x, bottom, PX_BOTTOM, border);
-    }
-    for y in rect.y + 1..bottom {
-        grid.set(rect.x, y, PX_LEFT, border);
-        grid.set(right, y, PX_RIGHT, border);
-    }
-}
-
-/// 像素入口按钮：3 行高，选中态加粗强调并前置 `❯` 标记。
-fn draw_pixel_button(grid: &mut Grid, rect: Rect, label: &str, selected: bool) {
-    draw_frame(grid, rect, style::lx_entry_border(selected));
-    let marker = if selected { "❯ " } else { "  " };
-    let content = format!(" {marker}{label} ");
-    grid.put(
-        rect.x + 1,
-        rect.y + 1,
-        &content,
-        style::lx_entry_label(selected),
+/// 极简入口按钮：`[` + 左右空格填充至等宽 + `]`；选中用强调色。
+fn draw_button(grid: &mut Grid, rect: Rect, label: &str, max_label: u16, selected: bool) {
+    let label_w = u16::try_from(label.chars().count()).unwrap_or(u16::MAX);
+    let pad = max_label.saturating_sub(label_w);
+    let left = pad / 2;
+    let right = pad - left;
+    let content = format!(
+        "[{}{}{}]",
+        " ".repeat(usize::from(left)),
+        label,
+        " ".repeat(usize::from(right))
     );
+    grid.put(rect.x, rect.y, &content, style::lx_entry_label(selected));
 }
 
-/// 底部输入框：像素边框 + `>` 前缀 + 输入内容/占位；返回光标相对坐标。
+/// 极简单行输入框：`> ` 前缀 + 输入内容/占位；返回光标相对坐标。
 fn draw_input(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> Option<(u16, u16)> {
-    draw_frame(grid, rect, style::lx_input_border());
-    let row = rect.y + 1;
-    grid.set(rect.x + 2, row, '>', style::accent());
-
-    // 内容区：`▌ > ` 之后到 `▐` 之前。
-    let content_x = rect.x + 4;
-    let content_w = usize::from(rect.width.saturating_sub(5));
+    let row = rect.y;
+    grid.put(rect.x, row, text::LX_INPUT_PROMPT, style::accent());
+    let prefix = u16::try_from(text::LX_INPUT_PROMPT.chars().count()).unwrap_or(1) + 1;
+    let content_x = rect.x + prefix;
+    let content_w = usize::from(rect.width.saturating_sub(prefix));
     if content_w == 0 {
         return None;
     }
@@ -493,16 +437,19 @@ fn draw_input(grid: &mut Grid, rect: Rect, lx: &Lx, focused: bool) -> Option<(u1
     })
 }
 
-/// 把静态像素图标画进以 `(x, y)` 为左上角的单元格区域。
-fn draw_icon(grid: &mut Grid, x: u16, y: u16, art: &[&str]) {
-    for (row, pair) in art.chunks(2).enumerate() {
+/// 把像素图标画进以 `(x, y)` 为左上角的单元格区域（按入口配色微调）。
+fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry) {
+    for (row, pair) in ICON_LX.chunks(2).enumerate() {
         let [top, bottom] = pair else {
             break;
         };
         let cell_y = y + row as u16;
         for column in 0..LOGO_WIDTH {
-            let top = top.chars().nth(usize::from(column)).unwrap_or('.');
-            let bottom = bottom.chars().nth(usize::from(column)).unwrap_or('.');
+            let top = icon_pixel(entry, top.chars().nth(usize::from(column)).unwrap_or('.'));
+            let bottom = icon_pixel(
+                entry,
+                bottom.chars().nth(usize::from(column)).unwrap_or('.'),
+            );
             if let Some((ch, pixel_style)) = pixel_glyph(top, bottom) {
                 grid.set(x + column, cell_y, ch, pixel_style);
             }
@@ -510,9 +457,9 @@ fn draw_icon(grid: &mut Grid, x: u16, y: u16, art: &[&str]) {
     }
 }
 
-/// 直接把 Native 图标像素画进缓冲区（信任页品牌区复用；不走整页网格）。
+/// 直接把基准 LX 图标像素画进缓冲区（信任页品牌区复用；不走整页网格）。
 pub(crate) fn draw_art(buf: &mut Buffer, x: u16, y: u16) {
-    for (row, pair) in ICON_NATIVE.chunks(2).enumerate() {
+    for (row, pair) in ICON_LX.chunks(2).enumerate() {
         let [top, bottom] = pair else {
             break;
         };
