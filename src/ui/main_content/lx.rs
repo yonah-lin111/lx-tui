@@ -308,8 +308,6 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     }
 
     let region_top = area.y;
-    let region_bottom = out.panel.map(|rect| rect.y).unwrap_or(input.y);
-    let region_h = region_bottom.saturating_sub(region_top);
 
     // 入口区：标签页式单行，横排放不下则竖排。
     let labels: Vec<(LxEntry, &str)> = LxEntry::ALL
@@ -335,35 +333,42 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     };
     let entries_fit = horizontal || max_label <= content_w;
 
-    // 品牌区：仅图标，靠左上。入口区与其上方的 Tip 行作为一个整体。
+    // 品牌区：仅图标，靠左上。
     let icon_fits = content_w >= LOGO_WIDTH;
     let brand_h = LOGO_ROWS;
     let tip_h = ENTRY_HEIGHT;
-    let group_h = tip_h + SECTION_GAP + entries_h;
 
-    let mut brand_top: Option<u16> = None;
-    let mut group_top: Option<u16> = None;
-    if entries_fit && icon_fits && region_h >= brand_h + SECTION_GAP + group_h {
-        brand_top = Some(region_top);
-        let top = region_top + brand_h + SECTION_GAP;
-        let avail = region_h - brand_h - SECTION_GAP;
-        group_top = Some(top + (avail - group_h) / 2);
-    } else if entries_fit && region_h >= group_h {
-        group_top = Some(region_top + (region_h - group_h) / 2);
-    } else if icon_fits && region_h >= brand_h {
-        brand_top = Some(region_top);
-    }
+    // 入口按钮行对齐窗格垂直中心（与主区/prompt 交换按钮同一行），且不与输入框重叠。
+    let center = area.y + area.height / 2;
+    let entries_top = center
+        .min(input.y.saturating_sub(entries_h))
+        .max(region_top);
+    let entries_ok = entries_fit && entries_top.saturating_add(entries_h) <= input.y;
 
-    if let Some(top) = brand_top {
-        out.icon = Some((content_x, top));
-    }
+    // Tip 行贴按钮上方；与图标重叠时省略。
+    let tip_top = if entries_ok {
+        entries_top
+            .checked_sub(SECTION_GAP + tip_h)
+            .filter(|y| *y >= region_top)
+    } else {
+        None
+    };
+    // 图标不与 Tip / 按钮重叠。
+    let brand_limit = tip_top
+        .or(entries_ok.then_some(entries_top))
+        .unwrap_or(input.y);
+    let brand_top =
+        (icon_fits && region_top + brand_h + SECTION_GAP <= brand_limit).then_some(region_top);
 
-    if let Some(top) = group_top {
+    out.icon = brand_top.map(|y| (content_x, y));
+    if let Some(y) = tip_top {
         out.description = Some(TextRect {
             x: content_x,
-            y: top,
+            y,
             width: content_w,
         });
+    }
+    if entries_ok {
         out.horizontal = horizontal;
         out.entries = place_entries(
             &labels,
@@ -371,7 +376,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
             horizontal,
             content_x,
             content_w,
-            top + tip_h + SECTION_GAP,
+            entries_top,
         );
     }
     out
@@ -482,7 +487,7 @@ fn draw_entries(grid: &mut Grid, selected: LxEntry, entries: &[(LxEntry, Rect)],
             rect.x,
             rect.y,
             text::lx_entry_label(*entry),
-            style::lx_entry_label(*entry == selected),
+            style::lx_entry_label(*entry, *entry == selected),
         );
         if horizontal && let Some((_, next)) = entries.get(index + 1) {
             let gap = next.x.saturating_sub(rect.right());

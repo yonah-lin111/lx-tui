@@ -7,6 +7,7 @@
 use ratatui::style::{Color, Modifier, Style};
 
 use crate::app::markdown::{SlashCommandId, TemplateStatus};
+use crate::app::state::LxEntry;
 use crate::detect::AgentState;
 
 /// 正文。
@@ -328,9 +329,26 @@ pub fn lx_entry_border(selected: bool) -> Style {
     if selected { accent() } else { muted() }
 }
 
-/// lx 页入口按钮内的标签：选中加粗强调、未选中次要信息。
-pub fn lx_entry_label(selected: bool) -> Style {
-    if selected { accent() } else { muted() }
+/// lx 页入口按钮文字色：该入口 logo 粉/蓝主色的混合色（256 色 Indexed）。
+///
+/// 取该入口字标 L 侧（粉）与 X 侧（蓝）主色按 2:1 混合并归入 256 色板；
+/// 三入口因字标配色微调而互不相同（Native 偏紫、Hybrid 玫红、Automation 冷灰）。
+pub fn lx_entry_label_color(entry: LxEntry) -> Color {
+    match entry {
+        LxEntry::Native => Color::Indexed(182),
+        LxEntry::Hybrid => Color::Indexed(175),
+        LxEntry::Automation => Color::Indexed(188),
+    }
+}
+
+/// lx 页入口按钮内的标签：统一用该入口 logo 混合色，选中加粗。
+pub fn lx_entry_label(entry: LxEntry, selected: bool) -> Style {
+    let base = Style::default().fg(lx_entry_label_color(entry));
+    if selected {
+        base.add_modifier(Modifier::BOLD)
+    } else {
+        base
+    }
 }
 
 /// lx 页输入框的像素边框：常态次要信息（焦点不改变输入框外观）。

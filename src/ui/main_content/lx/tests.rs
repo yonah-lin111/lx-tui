@@ -62,6 +62,17 @@ fn logo_palette_maps_logo_colors() {
 }
 
 #[test]
+fn entry_label_colors_are_distinct() {
+    let colors: Vec<Color> = LxEntry::ALL
+        .iter()
+        .map(|entry| style::lx_entry_label_color(*entry))
+        .collect();
+    assert_ne!(colors[0], colors[1]);
+    assert_ne!(colors[1], colors[2]);
+    assert_ne!(colors[0], colors[2]);
+}
+
+#[test]
 fn empty_input_box_is_minimal_height() {
     let area = Rect::new(0, 0, 60, 16);
     let input = layout(area, &Lx::new()).input.expect("input block");
