@@ -20,8 +20,6 @@ const CONTINUATION: char = '\0';
 /// 图标像素画尺寸（列 × 像素行 = 单元格行 × 2）。
 pub(crate) const LOGO_WIDTH: u16 = 20;
 pub(crate) const LOGO_ROWS: u16 = 7;
-/// 紧凑档图标宽度（宽高同时减半）。
-const LOGO_COMPACT_WIDTH: u16 = 10;
 
 /// 宽屏水平边距、输入框最小宽度与输入框最小高度（1 内容行 + 上下分割线）。
 const MARGIN: u16 = 2;
@@ -61,52 +59,6 @@ const ICON_LX: &[&str] = &[
     "kbbbbbkpnnkk...knnnk",
     "kkkkkkkkkkk.....kkkk",
 ];
-
-/// 紧凑 LX 字标（10 列 × 7 像素行）：基准按 2× 采样（取每 2×2 块左上像素），保留原轮廓。
-///
-/// 仅用于容器过矮时（`Logo::Compact`），宽高同时减半。
-const ICON_LX_COMPACT: &[&str] = &[
-    ".k..kk..kk",
-    "kpk.bb..pn",
-    "kpk.kbbpnk",
-    "kpk..bpnk.",
-    "kpk..pnkp.",
-    "kpk.pnknnk",
-    "kbbknk..nn",
-];
-
-/// 图标档位：原尺寸，或容器过矮时的紧凑尺寸（宽高同时减半）。
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Logo {
-    Full,
-    Compact,
-}
-
-impl Logo {
-    /// 依次尝试的档位（先原尺寸、放不下再紧凑）。
-    const TIERS: [Self; 2] = [Self::Full, Self::Compact];
-
-    /// 该档位的像素行。
-    fn art(self) -> &'static [&'static str] {
-        match self {
-            Self::Full => ICON_LX,
-            Self::Compact => ICON_LX_COMPACT,
-        }
-    }
-
-    /// 该档位的像素列宽。
-    fn width(self) -> u16 {
-        match self {
-            Self::Full => LOGO_WIDTH,
-            Self::Compact => LOGO_COMPACT_WIDTH,
-        }
-    }
-
-    /// 该档位占用的单元格行数。
-    fn cell_rows(self) -> u16 {
-        (self.art().len() as u16).div_ceil(2)
-    }
-}
 
 /// 按入口对基准字标做配色微调：形状不变、只换调色板槽位。
 fn icon_pixel(entry: LxEntry, ch: char) -> char {
@@ -302,7 +254,7 @@ struct Layout {
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
-    icon: Option<(u16, u16, Logo)>,
+    icon: Option<(u16, u16)>,
     description: Option<TextRect>,
     /// 空间不足时退化为居中字标。
     fallback: bool,
@@ -434,28 +386,16 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     out
 }
 
-/// 选择图标档位：优先原尺寸，放不下则紧凑尺寸，仍放不下返回 None。
-fn place_icon(
-    tip_y: u16,
-    region_top: u16,
-    content_x: u16,
-    content_w: u16,
-) -> Option<(u16, u16, Logo)> {
-    let bottom = tip_y.checked_sub(LOGO_GAP)?;
-    for logo in Logo::TIERS {
-        if content_w < logo.width() {
-            continue;
-        }
-        let Some(top) = bottom
-            .checked_sub(logo.cell_rows())
-            .filter(|top| *top >= region_top)
-        else {
-            continue;
-        };
-        let x = content_x + content_w.saturating_sub(logo.width()) / 2;
-        return Some((x, top, logo));
+/// 放置图标：水平居中、底边距 Tip `LOGO_GAP` 行；放不下（宽度不足或越过内容区顶部）返回 None。
+fn place_icon(tip_y: u16, region_top: u16, content_x: u16, content_w: u16) -> Option<(u16, u16)> {
+    if content_w < LOGO_WIDTH {
+        return None;
     }
-    None
+    let top = tip_y
+        .checked_sub(LOGO_GAP + LOGO_ROWS)
+        .filter(|top| *top >= region_top)?;
+    let x = content_x + content_w.saturating_sub(LOGO_WIDTH) / 2;
+    Some((x, top))
 }
 
 /// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
@@ -513,8 +453,8 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         return (grid, None);
     }
 
-    if let Some((ix, iy, logo)) = lay.icon {
-        draw_icon(&mut grid, ix, iy, lx.entry, logo);
+    if let Some((ix, iy)) = lay.icon {
+        draw_icon(&mut grid, ix, iy, lx.entry);
     }
     if let Some(rect) = lay.description {
         draw_tip(&mut grid, rect, lx.entry);
@@ -734,12 +674,13 @@ fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
 }
 
 /// 把像素图标画进以 `(x, y)` 为左上角的单元格区域（按入口配色微调）。
-fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry, logo: Logo) {
-    for (row, pair) in logo.art().chunks(2).enumerate() {
-        let top = pair.first().copied().unwrap_or("");
-        let bottom = pair.get(1).copied().unwrap_or("");
+fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry) {
+    for (row, pair) in ICON_LX.chunks(2).enumerate() {
+        let [top, bottom] = pair else {
+            break;
+        };
         let cell_y = y + row as u16;
-        for column in 0..logo.width() {
+        for column in 0..LOGO_WIDTH {
             let top = icon_pixel(entry, top.chars().nth(usize::from(column)).unwrap_or('.'));
             let bottom = icon_pixel(
                 entry,

@@ -25,19 +25,6 @@ fn logo_art_is_consistent() {
 }
 
 #[test]
-fn compact_logo_art_is_consistent() {
-    assert_icon(
-        ICON_LX_COMPACT,
-        LOGO_COMPACT_WIDTH,
-        Logo::Compact.art().len(),
-    );
-    assert_eq!(Logo::Full.width(), LOGO_WIDTH);
-    assert_eq!(Logo::Compact.width(), LOGO_COMPACT_WIDTH);
-    assert_eq!(Logo::Full.cell_rows(), LOGO_ROWS);
-    assert_eq!(Logo::Compact.cell_rows(), 4);
-}
-
-#[test]
 fn entries_share_lx_shape_with_tweaked_colors() {
     for entry in LxEntry::ALL {
         for row in ICON_LX {
@@ -177,8 +164,7 @@ fn wide_page_renders_brand_entries_and_input() {
 #[test]
 fn icon_is_horizontally_centered() {
     let area = Rect::new(0, 0, 100, 60);
-    let (icon_x, _, logo) = layout(area, &Lx::new()).icon.expect("icon");
-    assert_eq!(logo, Logo::Full);
+    let (icon_x, _) = layout(area, &Lx::new()).icon.expect("icon");
     let content_x = area.x + MARGIN;
     let content_w = area.width - MARGIN * 2;
     assert_eq!(icon_x, content_x + (content_w - LOGO_WIDTH) / 2);
@@ -188,9 +174,8 @@ fn icon_is_horizontally_centered() {
 fn logo_sits_two_rows_above_tip() {
     let area = Rect::new(0, 0, 100, 60);
     let lay = layout(area, &Lx::new());
-    let (_, icon_y, logo) = lay.icon.expect("icon");
+    let (_, icon_y) = lay.icon.expect("icon");
     let tip = lay.description.expect("tip");
-    assert_eq!(logo, Logo::Full);
     assert_eq!(
         tip.y - (icon_y + LOGO_ROWS),
         LOGO_GAP,
@@ -199,21 +184,14 @@ fn logo_sits_two_rows_above_tip() {
 }
 
 #[test]
-fn logo_uses_compact_tier_when_container_is_short() {
+fn logo_hidden_when_container_is_short_but_tip_and_entries_remain() {
     let tall = Rect::new(0, 0, 100, 60);
-    let tall_narrow = Rect::new(0, 0, 40, 60);
-    assert_eq!(layout(tall, &Lx::new()).icon.expect("icon").2, Logo::Full);
-    assert_eq!(
-        layout(tall_narrow, &Lx::new()).icon.expect("icon").2,
-        Logo::Full,
-        "宽度不影响档位"
-    );
     let short = Rect::new(0, 0, 100, 20);
-    assert_eq!(
-        layout(short, &Lx::new()).icon.expect("icon").2,
-        Logo::Compact,
-        "矮屏用紧凑档"
-    );
+    assert!(layout(tall, &Lx::new()).icon.is_some(), "高屏显示 logo");
+    let lay = layout(short, &Lx::new());
+    assert!(lay.icon.is_none(), "矮屏隐藏 logo");
+    assert!(lay.description.is_some(), "Tip 仍显示");
+    assert!(!lay.entries.is_empty(), "按钮仍显示");
 }
 
 #[test]
@@ -254,9 +232,9 @@ fn tall_input_keeps_entries_above_it() {
 
 #[test]
 fn tip_sits_above_entries_below_icon() {
-    let area = Rect::new(0, 0, 100, 20);
+    let area = Rect::new(0, 0, 100, 60);
     let lay = layout(area, &Lx::new());
-    let (_, icon_y, _) = lay.icon.expect("icon");
+    let (_, icon_y) = lay.icon.expect("icon");
     let tip = lay.description.expect("tip");
     let entries_y = lay
         .entries
