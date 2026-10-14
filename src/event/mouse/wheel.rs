@@ -165,6 +165,31 @@ pub(crate) fn handle_mouse_wheel(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && let Some(crate::app::overlay::Overlay::ReferencedFolderSearch(search)) =
+            state.overlay.as_ref()
+        && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
+        && layout.area.contains((mouse.column, mouse.row).into())
+    {
+        // 弹窗内滚轮滚动列表视口（高亮不动、越界钳制），不穿透到底层。
+        if update::scroll_referenced_search(state, direction, layout.start, layout.visible) {
+            *dirty = true;
+        }
+        return;
+    }
+    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && let Some(crate::app::overlay::Overlay::ReferencedFolderMenu(menu)) =
+            state.overlay.as_ref()
+        && ui::overlay::referenced_menu_layout(geometry.screen, menu)
+            .area
+            .contains((mouse.column, mouse.row).into())
+    {
+        // 滚轮在菜单上移动高亮（与上下键一致）；列表总数不因视口受限。
+        if update::move_referenced_menu_selection(state, direction) {
+            *dirty = true;
+        }
+        return;
+    }
     if state.overlay.is_some() {
         return;
     }

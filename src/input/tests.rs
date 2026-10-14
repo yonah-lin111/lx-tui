@@ -456,6 +456,141 @@ fn menu_overlay_routes_navigation_keys_only() {
 }
 
 #[test]
+fn referenced_menu_routes_navigation_keys_only() {
+    let route_menu = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::ReferencedFolderMenu),
+            false,
+        )
+    };
+    for (code, expected) in [
+        (KeyCode::Esc, OverlayKey::Esc),
+        (KeyCode::Up, OverlayKey::Up),
+        (KeyCode::Down, OverlayKey::Down),
+        (KeyCode::Enter, OverlayKey::Enter),
+    ] {
+        assert_eq!(
+            route_menu(code, KeyModifiers::NONE),
+            Some(Routed::Overlay(expected)),
+            "{code:?}"
+        );
+    }
+    assert_eq!(route_menu(KeyCode::Char('x'), KeyModifiers::NONE), None);
+}
+
+#[test]
+fn referenced_input_routes_single_line_editing() {
+    let route_input = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::ReferencedFolderInput),
+            false,
+        )
+    };
+    assert_eq!(
+        route_input(KeyCode::Char('a'), KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Char('a')))
+    );
+    assert_eq!(
+        route_input(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Clear))
+    );
+    assert_eq!(
+        route_input(KeyCode::Backspace, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Backspace))
+    );
+    assert_eq!(
+        route_input(KeyCode::Enter, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_input(KeyCode::Esc, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    // 上下键不映射（输入框无导航语义）。
+    assert_eq!(route_input(KeyCode::Up, KeyModifiers::NONE), None);
+}
+
+#[test]
+fn referenced_search_routes_enter_folder_and_back() {
+    let route_search = |code, modifiers| {
+        super::route(
+            KeyEvent::new(code, modifiers),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::ReferencedFolderSearch),
+            false,
+        )
+    };
+    assert_eq!(
+        route_search(KeyCode::Enter, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_search(KeyCode::Enter, KeyModifiers::SHIFT),
+        Some(Routed::Overlay(OverlayKey::EnterFolder))
+    );
+    assert_eq!(
+        route_search(KeyCode::Char('z'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Back))
+    );
+    assert_eq!(
+        route_search(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Copy))
+    );
+    assert_eq!(
+        route_search(KeyCode::Up, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Up))
+    );
+    assert_eq!(
+        route_search(KeyCode::Char('a'), KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Char('a')))
+    );
+    assert_eq!(
+        route_search(KeyCode::Esc, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    // Ctrl+Q 优先于浮层（全局退出）。
+    assert_eq!(
+        super::route(
+            KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::ReferencedFolderSearch),
+            false,
+        ),
+        Some(Routed::Action(crate::app::actions::Action::Quit))
+    );
+}
+
+#[test]
+fn referenced_delete_routes_enter_and_esc_only() {
+    let route_delete = |code| {
+        super::route(
+            key(code),
+            TermMode::empty(),
+            false,
+            Some(OverlayKind::ReferencedFolderDelete),
+            false,
+        )
+    };
+    assert_eq!(
+        route_delete(KeyCode::Enter),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_delete(KeyCode::Esc),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(route_delete(KeyCode::Char('a')), None);
+}
+
+#[test]
 fn confirm_overlay_routes_enter_and_esc_only() {
     let route_confirm = |code| {
         super::route(

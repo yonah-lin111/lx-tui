@@ -2306,6 +2306,68 @@ fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
 }
 
 #[test]
+fn mouse_click_folders_button_opens_referenced_menu() {
+    let mut state = demo_terminal();
+    state.active_workspace_mut().cwd = Some(std::path::PathBuf::from("/tmp/lx-event-ref"));
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let folders = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders button visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            folders.x,
+            folders.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::ReferencedFolderMenu(_))
+    ));
+    assert!(dirty);
+}
+
+#[test]
+fn folders_button_no_op_without_project_key() {
+    let mut state = demo_terminal();
+    state.active_workspace_mut().cwd = None;
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let folders = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders button visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            folders.x,
+            folders.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "无项目键不打开菜单");
+}
+
+#[test]
 fn mouse_click_prompt_pin_toggles_pin() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);

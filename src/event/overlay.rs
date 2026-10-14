@@ -256,6 +256,107 @@ pub(crate) fn handle_overlay_click(
                 None => None,
             }
         }
+        Some(Overlay::ReferencedFolderMenu(menu)) => {
+            let layout = ui::overlay::referenced_menu_layout(screen, menu);
+            let hit = ui::overlay::referenced_menu_hit_at(screen, menu, column, row);
+            match hit {
+                Some(ui::overlay::ReferencedMenuAction::Add) => {
+                    update::open_referenced_folder_input(state, (layout.area.x, layout.area.y));
+                }
+                Some(ui::overlay::ReferencedMenuAction::Open(index)) => {
+                    update::set_referenced_menu_selection(state, index);
+                    update::activate_referenced_menu_row(state);
+                }
+                Some(ui::overlay::ReferencedMenuAction::Copy(index)) => {
+                    if let Some((id, _)) = referenced_menu_folder(menu, index) {
+                        update::set_referenced_menu_selection(state, index);
+                        update::copy_referenced_menu_folder(state, id);
+                    }
+                }
+                Some(ui::overlay::ReferencedMenuAction::Delete(index)) => {
+                    if let Some((id, path)) = referenced_menu_folder(menu, index) {
+                        update::open_referenced_delete(state, id, path);
+                    }
+                }
+                // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
+                None => {
+                    if !layout.area.contains((column, row).into()) {
+                        update::close_overlay(state);
+                    }
+                }
+            }
+            None
+        }
+        Some(Overlay::ReferencedFolderInput(_)) => {
+            let Some(shell) = ui::overlay::referenced_input_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::referenced_input_button_at(&shell, column, row) {
+                Some(ui::overlay::ReferencedInputButton::Create) => {
+                    update::submit_referenced_folder_input(state);
+                }
+                Some(ui::overlay::ReferencedInputButton::Clear) => {
+                    update::clear_referenced_input(state);
+                }
+                Some(ui::overlay::ReferencedInputButton::Cancel) => {
+                    update::close_overlay(state);
+                }
+                // 内部空白：保持打开。
+                None => {}
+            }
+            None
+        }
+        Some(Overlay::ReferencedFolderSearch(search)) => {
+            if ui::overlay::referenced_search_copy_at(screen, search, column, row) {
+                update::copy_referenced_root_path(state);
+                return None;
+            }
+            if let Some(index) = ui::overlay::referenced_search_item_at(screen, search, column, row)
+            {
+                update::set_referenced_search_selection(state, index);
+                update::copy_referenced_entry_reference(state);
+                return None;
+            }
+            // 点击弹窗内部空白保持打开；仅点击弹窗之外关闭并回目录菜单。
+            if ui::overlay::referenced_search_layout(screen, search)
+                .is_some_and(|layout| !layout.area.contains((column, row).into()))
+            {
+                update::referenced_search_escape(state);
+            }
+            None
+        }
+        Some(Overlay::ReferencedFolderDelete(delete)) => {
+            let path = delete.path.display().to_string();
+            let name = delete
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or(path);
+            let question = ui::text::referenced_delete_question(&name);
+            let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
+                Some(ui::overlay::ConfirmButton::Confirm) => {
+                    update::apply_overlay_key(state, crate::app::actions::OverlayKey::Enter)
+                }
+                Some(ui::overlay::ConfirmButton::Cancel) => {
+                    update::close_overlay(state);
+                    None
+                }
+                None => None,
+            }
+        }
         Some(Overlay::TrustWorkspace(_)) => {
             let Some(shell) = ui::overlay::trust_shell(screen) else {
                 update::apply_trust_decision(state, false);
@@ -278,6 +379,19 @@ pub(crate) fn handle_overlay_click(
             None
         }
         None => None,
+    }
+}
+
+/// 目录菜单某行对应的记录 id 与路径；空状态或 `[add]` 行返回 None。
+fn referenced_menu_folder(
+    menu: &crate::app::overlay::ReferencedFolderMenu,
+    index: usize,
+) -> Option<(i64, std::path::PathBuf)> {
+    match menu.rows.get(index) {
+        Some(crate::app::overlay::ReferencedFolderMenuRow::Folder { id, path }) => {
+            Some((*id, path.clone()))
+        }
+        _ => None,
     }
 }
 

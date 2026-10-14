@@ -46,6 +46,23 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
     }
     if state.overlay.is_some() {
+        // 引用文件夹搜索弹窗的滚动条独立于模态点击：命中轨道/thumb 时滚动视口后再走浮层点击。
+        if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
+            && let Some(layout) = ui::overlay::referenced_search_layout(*screen, search)
+            && let Some(bar) = layout.scrollbar
+            && bar.track.contains((mouse.column, mouse.row).into())
+        {
+            match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                Some(grab) => state.referenced_search_scroll_drag = Some(grab),
+                None => {
+                    let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                    if update::set_referenced_search_viewport(state, offset, layout.visible) {
+                        *dirty = true;
+                    }
+                }
+            }
+            return;
+        }
         let was_confirm = matches!(
             state.overlay,
             Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))
@@ -239,6 +256,9 @@ pub(crate) fn handle_mouse_down_left(
             }
             layout::PromptToolbarButton::TempPrompt => {
                 update::open_temp_prompt(state);
+            }
+            layout::PromptToolbarButton::Folders => {
+                update::open_referenced_folder_menu(state, (mouse.column, mouse.row));
             }
             layout::PromptToolbarButton::Pin => {
                 update::toggle_prompt_pin(state);

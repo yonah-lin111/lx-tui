@@ -6,6 +6,7 @@ use std::time::Instant;
 use crossterm::event::MouseEvent;
 use ratatui::layout::Direction;
 
+use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
@@ -28,6 +29,18 @@ pub(crate) fn handle_mouse_drag(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
+    if let Some(grab) = state.referenced_search_scroll_drag {
+        if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
+            && let Some(layout) = ui::overlay::referenced_search_layout(geometry.screen, search)
+            && let Some(bar) = layout.scrollbar
+        {
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_referenced_search_viewport(state, offset, layout.visible) {
+                *dirty = true;
+            }
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_scroll_drag {
         let Some(bar) = ui::prompt_scrollbar(view, state) else {
             return;
@@ -216,6 +229,10 @@ pub(crate) fn handle_mouse_up_left(
     dirty: &mut bool,
 ) {
     let Geometry { rects, .. } = geometry;
+    if state.referenced_search_scroll_drag.take().is_some() {
+        *dirty = true;
+        return;
+    }
     if state.overlay.is_some() {
         return;
     }

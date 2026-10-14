@@ -177,7 +177,11 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
                 _ => {}
             }
         }
-        OverlayKey::Up | OverlayKey::Down => {}
+        OverlayKey::Up
+        | OverlayKey::Down
+        | OverlayKey::EnterFolder
+        | OverlayKey::Back
+        | OverlayKey::Copy => {}
     }
 }
 
@@ -200,6 +204,7 @@ pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Right
         | OverlayKey::Home
         | OverlayKey::End => edit_save_draft_input(state, key),
+        OverlayKey::EnterFolder | OverlayKey::Back | OverlayKey::Copy => {}
     }
 }
 

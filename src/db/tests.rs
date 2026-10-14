@@ -229,6 +229,139 @@ fn prompt_in_missing_folder_is_rejected() {
 }
 
 #[test]
+fn referenced_folders_are_scoped_persisted_and_deduplicated() {
+    let (database, path) = open_test_database("referenced-folders");
+    let left = workspace_path("referenced-left");
+    let right = workspace_path("referenced-right");
+    assert!(
+        database
+            .list_referenced_folders(&left)
+            .expect("list ok")
+            .is_empty(),
+        "空列表"
+    );
+    let first = database
+        .add_referenced_folder(&left, "/tmp/one")
+        .expect("add ok");
+    let second = database
+        .add_referenced_folder(&left, "/tmp/two")
+        .expect("add ok");
+    assert_ne!(first, second);
+    let again = database
+        .add_referenced_folder(&left, "/tmp/one")
+        .expect("duplicate ok");
+    assert_eq!(again, first, "重复添加幂等且返回既有 id");
+    let list = database.list_referenced_folders(&left).expect("list ok");
+    assert_eq!(list.len(), 2, "重复路径不生成第二项");
+    assert_eq!(list[0].id, first);
+    assert_eq!(list[0].path, "/tmp/one");
+    assert_eq!(list[1].path, "/tmp/two", "按添加顺序稳定");
+    assert!(
+        database
+            .list_referenced_folders(&right)
+            .expect("list ok")
+            .is_empty(),
+        "跨项目隔离"
+    );
+
+    database
+        .delete_referenced_folder(&right, first)
+        .expect("cross-project delete ignored");
+    assert_eq!(
+        database
+            .list_referenced_folders(&left)
+            .expect("list ok")
+            .len(),
+        2,
+        "错误归属的删除不影响原项目"
+    );
+    database
+        .delete_referenced_folder(&left, first)
+        .expect("delete ok");
+    let list = database.list_referenced_folders(&left).expect("list ok");
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].path, "/tmp/two");
+    // 磁盘不存在时记录保留（不自动清理）。
+    database
+        .add_referenced_folder(&left, "/tmp/missing-does-not-matter")
+        .expect("add stale path ok");
+    assert_eq!(
+        database
+            .list_referenced_folders(&left)
+            .expect("list ok")
+            .len(),
+        2
+    );
+
+    drop(database);
+    let reopened = Database::open(&path).expect("reopen ok");
+    let list = reopened.list_referenced_folders(&left).expect("list ok");
+    assert_eq!(list.len(), 2, "重启后列表仍在");
+    assert_eq!(list[0].path, "/tmp/two", "顺序保持");
+}
+
+#[test]
+fn deleting_workspace_row_cascades_referenced_folders() {
+    let (database, _) = open_test_database("referenced-cascade");
+    let workspace = workspace_path("referenced-cascade");
+    database
+        .add_referenced_folder(&workspace, "/tmp/cascade")
+        .expect("add ok");
+    database
+        .conn
+        .execute(
+            "DELETE FROM workspace WHERE path = ?1",
+            params![path_string(&workspace)],
+        )
+        .expect("delete workspace row");
+    // 工作区行删除后，新登记的工作区是另一行；旧记录已随外键级联删除。
+    let total: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM workspace_referenced_folder",
+            [],
+            |row| row.get(0),
+        )
+        .expect("count");
+    assert_eq!(total, 0, "外键级联删除引用记录");
+}
+
+#[test]
+fn v5_database_upgrades_to_v6_with_referenced_folder_table() {
+    let workspace = workspace_path("v5-referenced-upgrade");
+    let path = seed_v4_database("v5-referenced-upgrade", &workspace);
+    let database = Database::open(&path).expect("v4 upgrades to v6");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let count: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workspace_referenced_folder'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("schema query");
+    assert_eq!(count, 1, "新表随迁移建立");
+    // 旧正文保持原样，且新表可写。
+    assert_eq!(
+        database.list_prompts(&workspace).expect("list")[0].content,
+        "page body"
+    );
+    database
+        .add_referenced_folder(&workspace, "/tmp/upgraded")
+        .expect("add after upgrade ok");
+    drop(database);
+    let reopened = Database::open(&path).expect("reopen ok");
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
+    assert_eq!(
+        reopened
+            .list_referenced_folders(&workspace)
+            .expect("list ok")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn dev_environment_detection_prioritizes_explicit_value() {
     assert!(dev_environment(Some("dev")));
     assert!(dev_environment(Some("DEV")));

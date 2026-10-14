@@ -53,6 +53,12 @@ const PROMPT_PIN_MIN_WIDTH_EDITOR: u16 =
     PROMPT_SELECT_ALL_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
 const PROMPT_PIN_MIN_WIDTH_TREE: u16 =
     PROMPT_TEMP_PROMPT_MIN_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_PIN_WIDTH;
+/// 引用文件夹按钮（`[dir]`）宽度（列）；仅编辑视图显示、位于钉住按钮左侧。
+pub const PROMPT_FOLDERS_WIDTH: u16 = 5;
+/// 显示引用文件夹按钮所需的最小内容区宽度（列）：在钉住按钮左侧再让出宽度与间距，
+/// 不足时随钉住按钮与右侧按钮组一并隐藏，避免与左侧按钮组重叠或裁半个图标。
+const PROMPT_FOLDERS_MIN_WIDTH_EDITOR: u16 =
+    PROMPT_PIN_MIN_WIDTH_EDITOR + PROMPT_TOOLBAR_BUTTON_GAP + PROMPT_FOLDERS_WIDTH;
 
 /// prompt 工具栏按钮。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +69,8 @@ pub enum PromptToolbarButton {
     Pin,
     /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅树视图显示、不入库）。
     TempPrompt,
+    /// 编辑视图 `[dir]`：打开引用文件夹菜单（仅编辑视图显示，位于钉住按钮左侧）。
+    Folders,
     Undo,
     Redo,
     SelectAll,
@@ -829,6 +837,20 @@ pub fn prompt_toolbar_button_rect(
                 1,
             )
         }
+        PromptToolbarButton::Folders => {
+            if tree || inner.width < PROMPT_FOLDERS_MIN_WIDTH_EDITOR {
+                return None;
+            }
+            let anchor = prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, tree)?;
+            Rect::new(
+                anchor
+                    .x
+                    .saturating_sub(PROMPT_FOLDERS_WIDTH + PROMPT_TOOLBAR_BUTTON_GAP),
+                bar.y,
+                PROMPT_FOLDERS_WIDTH,
+                1,
+            )
+        }
         PromptToolbarButton::Undo => {
             if tree {
                 return None;
@@ -876,6 +898,7 @@ pub fn prompt_toolbar_button_at(
     }
     [
         PromptToolbarButton::Mode,
+        PromptToolbarButton::Folders,
         PromptToolbarButton::Pin,
         PromptToolbarButton::TempPrompt,
         PromptToolbarButton::Undo,

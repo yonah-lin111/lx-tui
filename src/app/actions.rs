@@ -26,6 +26,12 @@ pub enum OverlayKey {
     Right,
     Home,
     End,
+    /// Shift+Enter：引用文件夹内容弹窗进入高亮目录（沿用 @ 面板语义）。
+    EnterFolder,
+    /// Ctrl+Z：引用文件夹内容弹窗回退上层搜索范围。
+    Back,
+    /// Ctrl+C：引用文件夹内容弹窗复制高亮项引用（沿用参考面板的高亮项复制快捷键）。
+    Copy,
 }
 
 /// lx 页输入命令；仅在焦点窗格显示 lx 页时产生。

@@ -10,6 +10,7 @@ use crate::layout::{BoundaryHit, PaneId};
 use super::effects::Effect;
 use super::overlay::Overlay;
 use super::prompt::{Prompt, PromptPanel};
+use super::referenced::ReferencedFolders;
 use super::selection::Selection;
 use super::toast::Toast;
 use super::tooltip::Tooltip;
@@ -119,6 +120,8 @@ pub struct AppState {
     pub prompt_scroll_drag: Option<u16>,
     /// prompt 树行最近一次左键点击（可见行索引、时刻）；双击判定用。
     pub prompt_row_click: Option<(usize, Instant)>,
+    /// 拖拽引用文件夹搜索弹窗滚动条 thumb 时相对顶部的抓取偏移。
+    pub referenced_search_scroll_drag: Option<u16>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 lx 输入框滚动条 thumb：窗格与相对顶部的抓取偏移。
@@ -141,6 +144,12 @@ pub struct AppState {
     pub git_requests: Vec<PathBuf>,
     /// 待解析仓库根的信任检查请求；事件层取走并在后台解析后回投。
     pub trust_resolutions: Vec<TrustResolution>,
+    /// 显示中项目的引用文件夹快照（按 prompt 键归属；钉住时取被钉住工作区）。
+    pub referenced: ReferencedFolders,
+    /// 待执行的后台文件系统请求（扫描与新增路径校验）；事件层取走执行。
+    pub referenced_requests: Vec<super::referenced::ReferencedRequest>,
+    /// 引用文件夹请求代号生成器；每次打开/换目录/校验递增。
+    pub referenced_generation: u64,
     /// 已折叠的工作区分组（仓库根路径）；仅存内存，重启恢复展开。
     pub collapsed_groups: Vec<PathBuf>,
     /// 本地设置 Web 服务是否可用；决定底边框设置按钮的可用态。
@@ -201,6 +210,7 @@ impl AppState {
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
             prompt_row_click: None,
+            referenced_search_scroll_drag: None,
             terminal_scroll_drag: None,
             lx_scroll_drag: None,
             agent_hover: None,
@@ -212,6 +222,9 @@ impl AppState {
             effects: Vec::new(),
             git_requests: Vec::new(),
             trust_resolutions: Vec::new(),
+            referenced: ReferencedFolders::default(),
+            referenced_requests: Vec::new(),
+            referenced_generation: 0,
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,
@@ -236,6 +249,15 @@ impl AppState {
     /// 显示中 prompt 所属工作区；索引由构造与切换路径维持有效。
     pub fn prompt_owner(&self) -> &Workspace {
         &self.workspaces[self.prompt_workspace()]
+    }
+
+    /// 引用文件夹的归属键：显示中 prompt 所属工作区的 prompt 键；
+    /// 钉住时取被钉住工作区，切换侧栏活动工作区不改变归属。
+    pub fn referenced_key(&self) -> Option<PathBuf> {
+        self.workspaces
+            .get(self.prompt_workspace())
+            .and_then(|workspace| workspace.prompt_key())
+            .map(PathBuf::from)
     }
 
     /// 当前标签。

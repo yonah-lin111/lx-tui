@@ -179,12 +179,57 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     let plain = !key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match kind {
-        OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
+        OverlayKind::Menu | OverlayKind::PageMenu | OverlayKind::ReferencedFolderMenu => {
+            match key.code {
+                KeyCode::Esc => Some(OverlayKey::Esc),
+                KeyCode::Up => Some(OverlayKey::Up),
+                KeyCode::Down => Some(OverlayKey::Down),
+                KeyCode::Enter => Some(OverlayKey::Enter),
+                _ => None,
+            }
+        }
+        OverlayKind::ReferencedFolderDelete => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        OverlayKind::ReferencedFolderInput => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+            _ => None,
+        },
+        OverlayKind::ReferencedFolderSearch => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter if shift => Some(OverlayKey::EnterFolder),
+            KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('z' | 'Z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Back)
+            }
+            // Ctrl+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Copy)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
             _ => None,
         },
         OverlayKind::ConfirmClose

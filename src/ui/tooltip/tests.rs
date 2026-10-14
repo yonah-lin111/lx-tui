@@ -222,6 +222,80 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
 }
 
 #[test]
+fn referenced_menu_and_search_border_buttons_arm_tooltips() {
+    use crate::app::overlay::TextInput;
+    use crate::app::overlay::{
+        Overlay, ReferencedFolderMenu, ReferencedFolderMenuRow, ReferencedFolderSearch,
+    };
+    use std::path::PathBuf;
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderMenu(ReferencedFolderMenu {
+        anchor: (10, 4),
+        key: Some(PathBuf::from("/repo")),
+        rows: vec![
+            ReferencedFolderMenuRow::Folder {
+                id: 1,
+                path: PathBuf::from("/tmp/alpha"),
+            },
+            ReferencedFolderMenuRow::Add,
+        ],
+        selected: 0,
+    }));
+    let menu = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu,
+        _ => panic!("menu"),
+    };
+    let layout = ui::overlay::referenced_menu_layout(SCREEN, menu);
+    assert_eq!(
+        target_at(
+            &view_for(&state),
+            &state,
+            &[],
+            SCREEN,
+            layout.add_rect.x,
+            layout.add_rect.y
+        ),
+        Some(TooltipTarget::ReferencedMenuAdd)
+    );
+
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderSearch(ReferencedFolderSearch {
+        anchor: (0, 0),
+        folder: 1,
+        key: Some(PathBuf::from("/repo")),
+        root: PathBuf::from("/tmp/alpha"),
+        initial_root: PathBuf::from("/tmp/alpha"),
+        stack: Vec::new(),
+        query: TextInput::new(""),
+        entries: Vec::new(),
+        items: Vec::new(),
+        scan_truncated: false,
+        truncated: false,
+        selected: 0,
+        viewport: None,
+        loading: false,
+        failed: false,
+        request: Some(1),
+    }));
+    let search = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderSearch(search)) => search,
+        _ => panic!("search"),
+    };
+    let layout = ui::overlay::referenced_search_layout(SCREEN, search).expect("layout");
+    assert_eq!(
+        target_at(
+            &view_for(&state),
+            &state,
+            &[],
+            SCREEN,
+            layout.copy_path.x,
+            layout.copy_path.y
+        ),
+        Some(TooltipTarget::ReferencedSearchCopyPath)
+    );
+}
+
+#[test]
 fn page_menu_border_chips_arm_and_render_tooltips() {
     let mut state = AppState::demo();
     assert!(crate::app::update::open_temp_prompt(&mut state));

@@ -812,6 +812,54 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
 }
 
 #[test]
+fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let folders = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders visible");
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        None,
+        false,
+        false,
+        None,
+    );
+    let label: String = (folders.x..folders.right())
+        .map(|x| buf[(x, folders.y)].symbol())
+        .collect();
+    assert_eq!(label, text::PROMPT_FOLDERS_LABEL);
+
+    // 树视图不显示引用文件夹按钮。
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Tree,
+        None,
+        false,
+        false,
+        None,
+    );
+    let tree_folders = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Folders,
+        true,
+    );
+    assert!(tree_folders.is_none());
+}
+
+#[test]
 fn divider_follows_prompt_focus_style() {
     let panel = toolbar_panel();
     let editor = Prompt::new(PaneId::from_raw_for_test(1));

@@ -32,6 +32,90 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_worktree_open_key(state, key);
         return None;
     }
+    // 引用文件夹菜单：上下移动、回车激活、Esc 关闭。
+    if matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))) {
+        match key {
+            OverlayKey::Esc => {
+                close_overlay(state);
+            }
+            OverlayKey::Up => {
+                super::move_referenced_menu_selection(state, -1);
+            }
+            OverlayKey::Down => {
+                super::move_referenced_menu_selection(state, 1);
+            }
+            OverlayKey::Enter => {
+                super::activate_referenced_menu_row(state);
+            }
+            _ => {}
+        }
+        return None;
+    }
+    // 引用文件夹路径输入：Enter 提交后台校验（校验中禁用）、Esc 取消、其余为单行编辑。
+    if matches!(state.overlay, Some(Overlay::ReferencedFolderInput(_))) {
+        match key {
+            OverlayKey::Esc => super::close_overlay(state),
+            OverlayKey::Enter => super::submit_referenced_folder_input(state),
+            OverlayKey::Clear => super::clear_referenced_input(state),
+            OverlayKey::Char(_)
+            | OverlayKey::Backspace
+            | OverlayKey::Delete
+            | OverlayKey::Left
+            | OverlayKey::Right
+            | OverlayKey::Home
+            | OverlayKey::End => super::edit_referenced_input(state, key),
+            _ => {}
+        }
+        return None;
+    }
+    // 引用文件夹内容搜索：上下移动、回车复制引用、Shift+Enter 进入目录、Ctrl+Z 回退、Esc 关闭；
+    // 其余可映射按键进入搜索框。
+    if matches!(state.overlay, Some(Overlay::ReferencedFolderSearch(_))) {
+        match key {
+            OverlayKey::Esc => {
+                super::referenced_search_escape(state);
+            }
+            OverlayKey::Up => {
+                super::move_referenced_search_selection(state, -1);
+            }
+            OverlayKey::Down => {
+                super::move_referenced_search_selection(state, 1);
+            }
+            OverlayKey::Enter | OverlayKey::Copy => {
+                super::copy_referenced_entry_reference(state);
+            }
+            OverlayKey::EnterFolder => {
+                super::referenced_search_enter(state);
+            }
+            OverlayKey::Back => {
+                super::referenced_search_back(state);
+            }
+            OverlayKey::Char(_)
+            | OverlayKey::Clear
+            | OverlayKey::Backspace
+            | OverlayKey::Delete
+            | OverlayKey::Left
+            | OverlayKey::Right
+            | OverlayKey::Home
+            | OverlayKey::End => {
+                super::edit_referenced_search(state, key);
+            }
+        }
+        return None;
+    }
+    // 引用文件夹删除确认：Enter 确认、Esc 取消。
+    if matches!(state.overlay, Some(Overlay::ReferencedFolderDelete(_))) {
+        match key {
+            OverlayKey::Enter => {
+                super::confirm_referenced_delete(state);
+            }
+            OverlayKey::Esc => {
+                close_overlay(state);
+            }
+            _ => {}
+        }
+        return None;
+    }
     // 信任浮层：Enter 信任并续作，Esc 拒绝并回退；其余按键吞掉。
     if matches!(state.overlay, Some(Overlay::TrustWorkspace(_))) {
         match key {
@@ -90,10 +174,16 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 confirm_sync_workspace_cwd(state);
                 None
             }
-            Some(OverlayKind::WorktreeOpen)
-            | Some(OverlayKind::TrustWorkspace)
-            | Some(OverlayKind::NewNode)
-            | Some(OverlayKind::SaveDraft)
+            Some(
+                OverlayKind::WorktreeOpen
+                | OverlayKind::TrustWorkspace
+                | OverlayKind::NewNode
+                | OverlayKind::SaveDraft
+                | OverlayKind::ReferencedFolderMenu
+                | OverlayKind::ReferencedFolderInput
+                | OverlayKind::ReferencedFolderSearch
+                | OverlayKind::ReferencedFolderDelete,
+            )
             | None => None,
         },
         OverlayKey::Char(ch) => {
@@ -128,6 +218,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             edit_text_input(state, TextInput::move_end);
             None
         }
+        // 引用文件夹浮层已在上方分支消费；此处不会到达。
+        OverlayKey::EnterFolder | OverlayKey::Back | OverlayKey::Copy => None,
     }
 }
 
