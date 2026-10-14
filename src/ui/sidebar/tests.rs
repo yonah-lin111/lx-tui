@@ -275,6 +275,32 @@ fn focused_pane_agent_row_has_no_selected_background() {
 }
 
 #[test]
+fn agent_hover_keeps_status_dot_color() {
+    let mut state = AppState::demo();
+    add_agent(&mut state, AgentKind::Claude, AgentState::Working);
+    state.agent_hover = Some(0);
+    let buffer = render_buffer(&state);
+    let view = view_for(&state);
+    let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
+    // 行首 `❯ ` 标记之后是状态圆点格：状态色保留，仅叠加 hover 背景。
+    let dot_x = sections.agents.x + text::AGENT_SELECTED_MARKER.chars().count() as u16 + 1;
+    let cell = &buffer[(dot_x, sections.agents.y)];
+    assert_eq!(cell.symbol(), text::AGENT_STATUS_DOT);
+    assert_eq!(
+        cell.fg,
+        style::agent_status(AgentState::Working)
+            .fg
+            .expect("working fg"),
+        "hover 不覆盖运行中状态色"
+    );
+    assert_eq!(
+        cell.bg,
+        style::selection().bg.expect("selection bg"),
+        "hover 背景叠加在状态色之下"
+    );
+}
+
+#[test]
 fn hover_row_gets_selection_background() {
     let mut state = AppState::demo();
     add_agent(&mut state, AgentKind::Gemini, AgentState::Working);

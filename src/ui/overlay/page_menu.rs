@@ -10,7 +10,7 @@ use ratatui::style::Style;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::markdown::{TemplateCounts, TemplateStatus};
+use crate::app::markdown::TemplateStatus;
 use crate::app::overlay::{PageMenu, PageMenuRow};
 use crate::app::prompt::{PromptEditing, PromptPageId};
 use crate::app::state::AppState;
@@ -80,34 +80,11 @@ fn page_labels(state: &AppState, menu: &PageMenu) -> Vec<PageLabel> {
         .filter_map(|row| match row {
             PageMenuRow::Page { page, counts, .. } => Some(PageLabel {
                 name: page_name(state, menu, *page).unwrap_or_default(),
-                counts: count_segments(counts),
+                counts: text::template_count_segments(counts),
             }),
             _ => None,
         })
         .collect()
-}
-
-/// 计数段：`n|m|x`（todo / run / done 顺序），数字逐段带状态色；
-/// 整页无模板块时不显示。
-fn count_segments(counts: &TemplateCounts) -> Vec<(String, Option<TemplateStatus>)> {
-    if counts.todo + counts.in_progress + counts.done == 0 {
-        return Vec::new();
-    }
-    let mut segments = Vec::with_capacity(5);
-    for (index, (count, status)) in [
-        (counts.todo, TemplateStatus::Todo),
-        (counts.in_progress, TemplateStatus::InProgress),
-        (counts.done, TemplateStatus::Done),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        if index > 0 {
-            segments.push((text::PAGE_COUNT_SEPARATOR.to_string(), None));
-        }
-        segments.push((count.to_string(), Some(status)));
-    }
-    segments
 }
 
 /// 页码菜单可视页数（扣除上下边框，每页一行）。

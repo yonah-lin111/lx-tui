@@ -102,8 +102,10 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             "  ".to_string()
         };
         let item_style = style::text().patch(highlight);
+        // 特殊文字（分组箭头强调色）叠在行底之上：前景/修饰符取自身样式，
+        // 只借用 hover 的背景，避免被 hover 的白字覆盖。
         let prefix_style = if row.parent {
-            style::accent().patch(highlight)
+            highlight.patch(style::accent())
         } else {
             item_style
         };
@@ -592,7 +594,8 @@ fn agent_list_items<'a>(
         );
         let padding = width.saturating_sub(fixed + name.chars().count());
         let marker_style = style::strong().patch(highlight);
-        let dot_style = style::agent_status(snapshot.state).patch(highlight);
+        // 状态圆点特殊色叠在行底之上：hover 只提供背景，不覆盖运行/阻塞状态色。
+        let dot_style = highlight.patch(style::agent_status(snapshot.state));
         let spans = vec![
             Span::styled(marker, marker_style),
             Span::styled(dot, dot_style),

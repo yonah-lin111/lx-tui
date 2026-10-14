@@ -2,7 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::markdown::{BlockCommandId, TemplateStatus};
+use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};
 use crate::app::state::{AppState, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
@@ -206,17 +206,33 @@ pub fn default_page_name(index: usize) -> String {
 pub const MENU_PAGE_NEW: &str = "[add]";
 pub const MENU_PAGE_DELETE: &str = "[del]";
 pub const MENU_TITLE_PAGES: &str = "pages";
-/// 页码菜单每页状态计数分隔符：`n|m|x`。
-pub const PAGE_COUNT_SEPARATOR: &str = "|";
 
-/// 页内模板块状态计数标签（仅统计闭合顶层 `&&&`）。
-pub fn template_count_label(status: TemplateStatus, count: usize) -> String {
-    let name = match status {
-        TemplateStatus::Todo => "todo",
-        TemplateStatus::InProgress => "run",
-        TemplateStatus::Done => "done",
-    };
-    format!("[{name} {count}]")
+/// 模板块状态计数分隔符：`n|m|x`。
+const TEMPLATE_COUNT_SEPARATOR: &str = "|";
+
+/// 模板块状态计数段：`n|m|x`（todo / run / done 顺序，仅统计闭合顶层 `&&&`）。
+///
+/// 数字段带对应状态（用于分色），分隔符段为 None（用于弱化）；
+/// 三态合计为 0 时返回空，调用方据此整组省略。页码菜单与提示词列表共用。
+pub fn template_count_segments(counts: &TemplateCounts) -> Vec<(String, Option<TemplateStatus>)> {
+    if counts.todo + counts.in_progress + counts.done == 0 {
+        return Vec::new();
+    }
+    let mut segments = Vec::with_capacity(5);
+    for (index, (count, status)) in [
+        (counts.todo, TemplateStatus::Todo),
+        (counts.in_progress, TemplateStatus::InProgress),
+        (counts.done, TemplateStatus::Done),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            segments.push((TEMPLATE_COUNT_SEPARATOR.to_string(), None));
+        }
+        segments.push((count.to_string(), Some(status)));
+    }
+    segments
 }
 
 /// 删除非空页的二次确认标题。

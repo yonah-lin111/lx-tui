@@ -1001,7 +1001,7 @@ fn workspace_rows_mark_selected_and_fill_hover_backgrounds() {
 }
 
 #[test]
-fn hovered_parent_workspace_item_uses_uniform_selection_style() {
+fn hovered_parent_workspace_item_uses_selection_background() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "repo".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
@@ -1042,7 +1042,8 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
             .contains(ratatui::style::Modifier::REVERSED)
     );
 
-    // 2. 悬停态：父项整行统一深色高亮背景（Indexed 240），箭头为 Indexed 255 前景。
+    // 2. 悬停态：父项整行统一深色高亮背景（Indexed 240）；折叠箭头是特殊文字，
+    //    保留 accent 强调色，不被 hover 的 Indexed 255 前景覆盖。
     state.workspace_hover = Some(0);
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
         panic!("draw failed: {error}");
@@ -1055,8 +1056,13 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     );
     assert_eq!(
         buffer[(arrow_x, y)].fg,
-        ratatui::style::Color::Indexed(255),
-        "悬停时箭头前景为 Indexed 255"
+        ratatui::style::Color::Cyan,
+        "悬停不覆盖分组箭头强调色"
+    );
+    assert!(
+        buffer[(arrow_x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
     );
     assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Indexed(240));
     assert!(

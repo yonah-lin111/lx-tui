@@ -241,27 +241,29 @@ fn paint_row(
             };
             x = paint_text(buf, x, y, text::PROMPT_TREE_ITEM_ICON, muted, area.right());
             x = paint_text(buf, x, y, " ", base, area.right());
-            // 右侧段：各页模板块计数合计（零数量省略）；
-            // 物理宽度不足时从尾部逐个省略完整计数标签，名称最后截断。
-            let mut segments: Vec<(String, ratatui::style::Style)> = Vec::new();
-            let counts = item.template_counts();
-            for (status, count) in [
-                (crate::app::markdown::TemplateStatus::Todo, counts.todo),
-                (
-                    crate::app::markdown::TemplateStatus::InProgress,
-                    counts.in_progress,
-                ),
-                (crate::app::markdown::TemplateStatus::Done, counts.done),
-            ] {
-                if count == 0 {
-                    continue;
+            // 右侧段：各页模板块计数合计 `n|m|x`（数字按状态分色、分隔符弱化、
+            // 三态全零整组省略）；放不下整组时整体省略，名称最后截断。
+            let segments = text::template_count_segments(&item.template_counts());
+            let group_width = segments
+                .iter()
+                .map(|(label, _)| width_of(label))
+                .sum::<usize>();
+            let group_x = area
+                .right()
+                .saturating_sub(u16::try_from(group_width).unwrap_or(u16::MAX));
+            let used = if !segments.is_empty() && group_x > x {
+                let mut cursor = group_x;
+                for (label, status) in &segments {
+                    let label_style = match status {
+                        Some(status) => base.patch(style::template_status(*status)),
+                        None => base.patch(style::muted()),
+                    };
+                    cursor = paint_text(buf, cursor, y, label, label_style, area.right());
                 }
-                segments.push((
-                    text::template_count_label(status, count),
-                    style::template_status(status).patch(highlight),
-                ));
-            }
-            let used = paint_right_segments(buf, area, y, &mut segments, x);
+                group_x
+            } else {
+                area.right()
+            };
             let max = usize::from(used.saturating_sub(x).saturating_sub(1));
             paint_name(buf, x, y, &item.name, base, max, area.right());
         }
@@ -293,38 +295,6 @@ fn fill_row(buf: &mut Buffer, area: Rect, y: u16) {
             cell.set_style(style::selection());
         }
     }
-}
-
-/// 右对齐绘制状态/计数段（从右向左排布）；宽度不足时从尾部逐个省略完整标签；
-/// 返回最左绘制段之后的 x（名称区右界，名称与前一段留 1 列空档）。
-fn paint_right_segments(
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    segments: &mut Vec<(String, ratatui::style::Style)>,
-    left_limit: u16,
-) -> u16 {
-    loop {
-        let total: usize = segments
-            .iter()
-            .map(|(label, _)| width_of(label))
-            .sum::<usize>()
-            + segments.len().saturating_sub(1);
-        if segments.is_empty() || total <= usize::from(area.right().saturating_sub(left_limit)) {
-            break;
-        }
-        segments.pop();
-    }
-    let mut x = area.right();
-    for (index, (label, label_style)) in segments.iter().enumerate().rev() {
-        let width = width_of(label) as u16;
-        x = x.saturating_sub(width);
-        paint_text(buf, x, y, label, *label_style, area.right());
-        if index > 0 {
-            x = x.saturating_sub(1);
-        }
-    }
-    x
 }
 
 /// 绘制文本直到右界；超出右界的字符整体丢弃。

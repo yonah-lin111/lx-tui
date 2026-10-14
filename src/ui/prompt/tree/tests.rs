@@ -360,20 +360,38 @@ fn item_row_summarizes_template_counts_across_pages() {
     render(area, &mut buf, &panel, false, None);
     // 行序（绝对行 = 搜索行 0 + 分割线 1 + 列表行）：tmp:、default、saved:、item。
     let row = row_text(&buf, area, 5);
-    assert!(row.contains("[todo 1]"), "第一页 todo 计数: {row}");
-    assert!(row.contains("[run 1]"), "第二页 run 计数: {row}");
+    // 跨页合计 `n|m|x`（todo/run/done），与页码菜单同格式。
+    assert!(row.contains("1|1|0"), "跨页计数: {row}");
+    assert!(!row.contains("[todo"), "不再使用旧计数标签: {row}");
     assert!(row.starts_with("  • alpha"), "{row}");
+    // 数字按状态分色：run 黄、done 绿，分隔符弱化。
+    let end = area.right();
+    assert_eq!(buf[(end - 1, 5)].symbol(), "0");
+    assert_eq!(
+        buf[(end - 1, 5)].fg,
+        ratatui::style::Color::Green,
+        "done 计数绿"
+    );
+    assert_eq!(buf[(end - 2, 5)].symbol(), "|");
+    assert_eq!(buf[(end - 3, 5)].symbol(), "1");
+    assert_eq!(
+        buf[(end - 3, 5)].fg,
+        ratatui::style::Color::Yellow,
+        "run 计数黄"
+    );
+    assert_eq!(buf[(end - 4, 5)].symbol(), "|");
+    assert_eq!(buf[(end - 5, 5)].symbol(), "1", "todo 计数在组首");
 }
 
 #[test]
-fn item_row_omits_whole_count_labels_when_narrow() {
+fn item_row_omits_whole_count_group_when_narrow() {
     let mut panel = PromptPanel::new();
     panel.tree.replace(vec![], vec![paged_item()]);
-    let area = Rect::new(0, 0, 18, 6);
+    let area = Rect::new(0, 0, 9, 6);
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &panel, false, None);
     let row = row_text(&buf, area, 5);
-    // 尾部计数标签要么完整保留、要么整体省略，不画半个标签。
-    assert!(row.contains("[todo 1]"), "{row}");
-    assert!(!row.contains("run"), "尾部计数标签完整省略: {row}");
+    // 计数组要么整体保留、要么整体省略，不画半个 `n|m|x`。
+    assert!(!row.contains('|'), "计数组整体省略: {row}");
+    assert!(!row.contains('0'), "{row}");
 }
