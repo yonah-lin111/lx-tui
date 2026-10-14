@@ -1,0 +1,271 @@
+//! 鼠标滚轮分派：二级面板、选区滚动、窗格与侧栏滚动。
+
+use std::collections::HashMap;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
+
+use crate::app::state::{AppState, PaneKind, PaneView};
+use crate::app::update;
+use crate::input;
+use crate::layout::{self, PaneId};
+use crate::pty::PtySession;
+use crate::terminal::WheelRouting;
+use crate::ui;
+use alacritty_terminal::term::TermMode;
+
+use super::super::session::{Geometry, write_to_pane};
+use super::hit::{
+    block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, slash_panel_layout,
+};
+
+/// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
+pub(crate) fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
+    match kind {
+        MouseEventKind::ScrollUp => Some(-1),
+        MouseEventKind::ScrollDown => Some(1),
+        _ => None,
+    }
+}
+
+/// 拖拽选择中滚轮：滚动选区所在窗格，并把选区光标延伸到鼠标位置（钳在窗格内）。
+///
+/// 纵向滚轮消费事件（对齐 herdr：选区进行中优先于鼠标上报）；横向返回 false 交回常规路径。
+pub(crate) fn scroll_selection_wheel(
+    state: &mut AppState,
+    pane: PaneId,
+    rects: &[(PaneId, Rect)],
+    mouse: &MouseEvent,
+) -> bool {
+    let Some(direction) = vertical_wheel_direction(mouse.kind) else {
+        return false;
+    };
+    let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+        return true;
+    };
+    let inner = layout::pane_inner_rect(*rect);
+    if inner.width == 0 || inner.height == 0 {
+        return true;
+    }
+    update::scroll_pane(state, pane, direction);
+    let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+    let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+    update::drag_terminal_selection(state, pane, row, col);
+    true
+}
+
+/// 按终端模式把滚轮交给窗格：转发鼠标上报、备用屏方向键或本地回滚。
+///
+/// 前两种由应用接管滚动，本地视口吸回底部；返回事件是否被消费（需要重绘）。
+pub(crate) fn handle_pane_wheel(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    pane: PaneId,
+    inner: Rect,
+    mouse: &MouseEvent,
+) -> bool {
+    let Some((routing, mode)) = state
+        .pane_anywhere(pane)
+        .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
+    else {
+        return false;
+    };
+    match routing {
+        WheelRouting::HostScroll => {
+            let Some(direction) = vertical_wheel_direction(mouse.kind) else {
+                return false;
+            };
+            update::scroll_pane(state, pane, direction)
+        }
+        WheelRouting::MouseReport => {
+            let column = mouse.column.saturating_sub(inner.x);
+            let row = mouse.row.saturating_sub(inner.y);
+            let Some(bytes) =
+                input::encode::encode_mouse_wheel(mouse.kind, column, row, mouse.modifiers, mode)
+            else {
+                return false;
+            };
+            update::reset_pane_scroll(state, pane);
+            write_to_pane(sessions, pane, &bytes);
+            true
+        }
+        WheelRouting::AlternateScroll => {
+            let code = match mouse.kind {
+                MouseEventKind::ScrollUp => KeyCode::Up,
+                MouseEventKind::ScrollDown => KeyCode::Down,
+                _ => return false,
+            };
+            let Some(bytes) =
+                input::encode::encode_key(KeyEvent::new(code, KeyModifiers::NONE), mode)
+            else {
+                return false;
+            };
+            update::reset_pane_scroll(state, pane);
+            write_to_pane(sessions, pane, &bytes);
+            true
+        }
+    }
+}
+
+/// 把鼠标按键、拖拽或移动按应用声明的协议转发给窗格；非鼠标上报模式返回 false 交回本地选区。
+///
+/// 对齐 herdr：应用接管鼠标时 lx-tui 不做本地选区，滚动与选择都由应用自己实现；
+/// 拖拽与无按键移动还需应用分别开启 1002/1003 才上报，避免多发未订阅的事件。
+pub(crate) fn forward_pane_mouse_event(
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    pane: PaneId,
+    inner: Rect,
+    mouse: &MouseEvent,
+) -> bool {
+    // lx 视图不向隐藏终端转发任何鼠标事件。
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.view == PaneView::Lx)
+    {
+        return false;
+    }
+    let Some((routing, mode)) = state
+        .pane_anywhere(pane)
+        .map(|target| (target.terminal.wheel_routing(), target.terminal.mode()))
+    else {
+        return false;
+    };
+    let reportable = routing == WheelRouting::MouseReport
+        && match mouse.kind {
+            MouseEventKind::Drag(_) => {
+                mode.intersects(TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION)
+            }
+            MouseEventKind::Moved => mode.contains(TermMode::MOUSE_MOTION),
+            _ => true,
+        };
+    if !reportable {
+        return false;
+    }
+    let column = mouse.column.saturating_sub(inner.x);
+    let row = mouse.row.saturating_sub(inner.y);
+    let Some(bytes) =
+        input::encode::encode_mouse_button(mouse.kind, column, row, mouse.modifiers, mode)
+    else {
+        return false;
+    };
+    if !matches!(mouse.kind, MouseEventKind::Moved) {
+        update::reset_pane_scroll(state, pane);
+    }
+    write_to_pane(sessions, pane, &bytes);
+    true
+}
+
+/// 滚轮事件统一处理。
+pub(crate) fn handle_mouse_wheel(
+    mouse: &MouseEvent,
+    state: &mut AppState,
+    sessions: &mut HashMap<PaneId, PtySession>,
+    geometry: &Geometry,
+    dirty: &mut bool,
+) {
+    let Geometry { rects, view, .. } = geometry;
+    if state.overlay.is_some() {
+        return;
+    }
+    if state.resizing_prompt || state.resizing_pane.is_some() {
+        return;
+    }
+    // @ 提及面板打开且指针在其上：滚轮滚动面板视口（高亮不动），不穿透到 prompt 与窗格。
+    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && let Some(panel) = mention_panel_layout(state, view)
+        && panel.rect.contains((mouse.column, mouse.row).into())
+    {
+        update::scroll_mention(state, direction, panel.start);
+        *dirty = true;
+        return;
+    }
+    // 斜杠命令面板同上：滚轮滚动视口，到底/顶后钳制不循环。
+    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && let Some(panel) = slash_panel_layout(state, view)
+        && panel.rect.contains((mouse.column, mouse.row).into())
+    {
+        update::scroll_slash(state, direction, panel.start);
+        *dirty = true;
+        return;
+    }
+    // 块命令面板同上。
+    if let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && let Some(panel) = block_panel_layout(state, view)
+        && panel.rect.contains((mouse.column, mouse.row).into())
+    {
+        update::scroll_panel(state, direction, panel.start);
+        *dirty = true;
+        return;
+    }
+    // prompt 拖拽选区：滚轮滚动视口，锚点钉在文本上，终点跟到鼠标。
+    if let Some(selection) = state.selection
+        && selection.is_dragging()
+    {
+        if let Some(direction) = vertical_wheel_direction(mouse.kind)
+            && let Some((_, rect)) = rects.iter().find(|(id, _)| *id == selection.pane())
+        {
+            let inner = pane_content_inner(
+                state,
+                view,
+                selection.pane(),
+                layout::pane_inner_rect(*rect),
+            );
+            if inner.width > 0 && inner.height > 0 {
+                let row = mouse.row.clamp(inner.y, inner.bottom() - 1) - inner.y;
+                let col = mouse.column.clamp(inner.x, inner.right() - 1) - inner.x;
+                if update::wheel_prompt_selection(state, direction, row, col) {
+                    *dirty = true;
+                }
+            }
+        }
+        return;
+    }
+    // 终端拖拽选区优先于鼠标上报：滚动选区所在窗格并延伸选区。
+    if let Some(pane) = state.terminal_selection
+        && scroll_selection_wheel(state, pane, rects, mouse)
+    {
+        *dirty = true;
+        return;
+    }
+    if let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row) {
+        if pane == state.prompt.id() {
+            update::clear_selection(state);
+            if let Some(direction) = vertical_wheel_direction(mouse.kind) {
+                if update::prompt_tree_mode(state) {
+                    // 树视图滚轮按行滚动，光标/选中不动。
+                    let visible = update::prompt_tree_visible_rows(state);
+                    if update::scroll_prompt_tree(state, direction, visible) {
+                        *dirty = true;
+                    }
+                } else {
+                    update::scroll_prompt(state, direction);
+                    *dirty = true;
+                }
+            }
+        } else if state.pane_anywhere(pane).is_some_and(|target| {
+            target.kind == PaneKind::Terminal && target.view == PaneView::Terminal
+        }) && handle_pane_wheel(state, sessions, pane, inner, mouse)
+        {
+            *dirty = true;
+        }
+    } else if ui::workspace_section_at(view, state, mouse.column, mouse.row)
+        && let Some(rows) = ui::workspace_list_rows(view, state)
+        && let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && update::scroll_workspace_list(state, direction, rows)
+    {
+        // 列表滚动后指针下的工作区可能已换行：按新偏移重算悬停。
+        let hover = ui::workspace_item_at(view, state, mouse.column, mouse.row);
+        update::set_workspace_hover(state, hover);
+        *dirty = true;
+    } else if ui::agents_section_at(view, state, mouse.column, mouse.row)
+        && let Some(rows) = ui::agent_list_rows(view, state)
+        && let Some(direction) = vertical_wheel_direction(mouse.kind)
+        && update::scroll_agent_list(state, direction, rows)
+    {
+        // 列表滚动后指针下的条目可能已换行：按新偏移重算悬停。
+        let hover = ui::agent_item_index_at(view, state, mouse.column, mouse.row);
+        update::set_agent_hover(state, hover);
+        *dirty = true;
+    }
+}

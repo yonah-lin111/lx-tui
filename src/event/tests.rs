@@ -1,11 +1,12 @@
-//! 单元测试；仅测试构建编译。
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
-
-use crate::app::overlay::ConfirmSwitchCwd;
+use crate::app::overlay::{ConfirmSwitchCwd, Overlay};
+use crate::app::prompt::{PasteCandidateKind, PromptRowKind};
+use crate::app::state::PaneView;
+use crate::app::toast::{Toast, ToastKind};
+use crate::layout;
 
 use super::*;
-use crate::app::prompt::PasteCandidateKind;
 
 fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
     let view = ui::layout::compute(
@@ -3729,4 +3730,43 @@ fn lx_entry_click_switches_selection() {
         "点击入口切换选中"
     );
     assert!(state.lx_selection.is_none(), "入口点击不启动选区");
+}
+
+#[test]
+fn event_input_paste_overlay_and_prompt_routing() {
+    let mut state = demo_terminal();
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 80, 24));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    // 1. 浮层打开时：粘贴被吞掉，dirty 保持 false。
+    state.overlay = Some(Overlay::ConfirmClose(crate::app::overlay::ConfirmClose {
+        target: crate::app::overlay::OverlayTarget::Workspace(0),
+    }));
+
+    handle_terminal_event(
+        TerminalEvent::Paste("echo test".to_string()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(!dirty, "浮层激活时粘贴被吞掉");
+
+    // 2. prompt 聚焦时：粘贴进入 prompt 编辑器，dirty 置为 true。
+    state.overlay = None;
+    state.prompt_focused = true;
+    dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Paste("hello prompt".to_string()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(dirty, "prompt 聚焦时粘贴使画面变脏");
+    assert!(state.prompt.text().contains("hello prompt"));
 }

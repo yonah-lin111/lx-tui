@@ -497,3 +497,44 @@ fn status_branch_prefers_main_checkout_branch_for_linked() {
     fallback.main_branch = None;
     assert_eq!(fallback.status_branch(), Some("feat/x"));
 }
+
+#[test]
+fn lx_editing_undo_redo_and_wide_chars() {
+    let mut lx = Lx::new();
+    assert_eq!(lx.entry, LxEntry::Native);
+    assert_eq!(lx.input, "");
+
+    // 宽字符插入与光标
+    lx.insert_char('你');
+    lx.insert_char('好');
+    assert_eq!(lx.input, "你好");
+    assert_eq!(lx.cursor, 6); // 2 个 3 字节 UTF-8 字符
+
+    // 移动光标
+    lx.move_left();
+    assert_eq!(lx.cursor, 3);
+    lx.insert_char('，');
+    assert_eq!(lx.input, "你，好");
+    assert_eq!(lx.cursor, 6);
+
+    // 撤销一次
+    lx.undo();
+    assert_eq!(lx.input, "你好");
+    assert_eq!(lx.cursor, 3);
+
+    // 重做一次
+    lx.redo();
+    assert_eq!(lx.input, "你，好");
+    assert_eq!(lx.cursor, 6);
+
+    // 删除与行移动
+    lx.home();
+    assert_eq!(lx.cursor, 0);
+    lx.end();
+    assert_eq!(lx.cursor, 9);
+    lx.clear();
+    assert_eq!(lx.input, "");
+    assert_eq!(lx.cursor, 0);
+    lx.undo();
+    assert_eq!(lx.input, "你，好");
+}

@@ -1,13 +1,18 @@
-//! 单元测试；仅测试构建编译。
-
 use super::*;
-use crate::app::overlay::WorktreeStatus;
-use crate::app::state::{WorkspaceGit, workspace_name};
-use crate::app::toast::{TOAST_DURATION, ToastKind};
-use crate::app::tooltip::TOOLTIP_DELAY;
+use crate::app::actions::*;
+use crate::app::effects::Effect;
+use crate::app::markdown::MentionEntry;
+use crate::app::overlay::*;
+use crate::app::prompt::PromptMode;
+use crate::app::state::*;
+use crate::app::toast::{TOAST_DURATION, Toast, ToastKind};
+use crate::app::tooltip::{TOOLTIP_DELAY, TooltipTarget};
+use crate::detect::PaneAgentSnapshot;
+use crate::layout::PaneId;
 use crate::terminal::GridSize;
+use ratatui::layout::{Direction, Rect};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// demo 状态并把活动窗格置为终端视图。
 fn demo_terminal() -> AppState {

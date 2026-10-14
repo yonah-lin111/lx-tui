@@ -8,10 +8,21 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use super::{
-    BUTTON_GAP, WORKTREE_DIALOG_BUTTONS, WORKTREE_DIALOG_MAX_HEIGHT, WORKTREE_DIALOG_MIN_HEIGHT,
-    WORKTREE_DIALOG_WIDTH, WorktreeDialogButton, render_buttons, render_input,
-};
+use super::dialog::{BUTTON_GAP, render_buttons, render_input};
+
+/// worktree 对话框宽度与高度范围（行）：条目两行一条 + 搜索/分隔/按钮与外框。
+const WORKTREE_DIALOG_WIDTH: u16 = 56;
+const WORKTREE_DIALOG_MIN_HEIGHT: u16 = 10;
+const WORKTREE_DIALOG_MAX_HEIGHT: u16 = 20;
+const WORKTREE_DIALOG_BUTTONS: [&str; 2] = [text::BUTTON_OPEN, text::BUTTON_CANCEL];
+
+/// worktree 对话框按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorktreeDialogButton {
+    Open,
+    Cancel,
+}
+
 /// worktree 对话框几何；条目两行一条，高度随条目数夹取。
 pub fn worktree_dialog_shell(
     screen: Rect,

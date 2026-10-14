@@ -1,7 +1,16 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::overlay::{OverlayTarget, RenameTarget, TextInput};
+use crate::app::overlay::{
+    ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewNode,
+    NewNodeKind, NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft,
+    SaveDraftEntry, TextInput,
+};
+use crate::app::trust::TrustWorkspace;
+use crate::ui::style;
+use crate::ui::text;
+use crate::ui::widgets;
+
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::{Color, Modifier};
@@ -1117,4 +1126,26 @@ fn page_menu_windows_around_selected_row_when_tall() {
         Some(pages),
         "末页可命中"
     );
+}
+
+#[test]
+fn save_draft_empty_or_overflow_behavior() {
+    let dialog = SaveDraft {
+        workspace: 0,
+        name: TextInput::new("test"),
+        entries: Vec::new(),
+        selected: 0,
+    };
+
+    let shell = save_draft_shell(SCREEN, 0).expect("shell exists for 0 entries");
+    assert!(shell.inner.height >= 5);
+    let max_rows = save_draft_max_rows(&shell);
+    assert_eq!(save_draft_visible_start(&dialog, max_rows), 0);
+    assert_eq!(
+        save_draft_entry_at(&shell, &dialog, shell.inner.x, shell.inner.y + 2),
+        None
+    );
+
+    let too_small = Rect::new(0, 0, 3, 2);
+    assert!(save_draft_shell(too_small, 5).is_none());
 }
