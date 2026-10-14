@@ -28,6 +28,18 @@ pub enum OverlayKey {
     End,
 }
 
+/// lx 页单行输入命令；仅在焦点窗格显示 lx 页时产生。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxInput {
+    Char(char),
+    Backspace,
+    Delete,
+    Left,
+    Right,
+    Home,
+    End,
+}
+
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EditorCommand {

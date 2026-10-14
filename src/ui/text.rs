@@ -3,7 +3,7 @@
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};
-use crate::app::state::{AppState, PaneView};
+use crate::app::state::{AppState, LxEntry, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
@@ -104,21 +104,60 @@ pub const PROMPT_DEFAULT_NAME: &str = "New prompt";
 pub const PROMPT_FOLDER_DEFAULT_NAME: &str = "New folder";
 /// prompt 编辑器空内容时的输入说明占位。
 pub const PROMPT_PLACEHOLDER: &str = "Write your prompt…";
-/// 主内容 lx 页标题。
+/// 主内容 lx 页标题（窗格顶边框）。
 pub const LX_TITLE: &str = "lx";
+/// 窗格标题分隔符：`lx - <入口名>`。
+pub const LX_TITLE_SEPARATOR: &str = " - ";
 /// 视图切换按钮：显示点击后的目的地视图。
 pub const LX_TOGGLE_TERMINAL: &str = "[>_]";
 pub const LX_TOGGLE_LX: &str = "[lx]";
-/// lx 页底部输入框（当前为纯视觉占位）。
+/// lx 页三个入口标签。
+pub const LX_ENTRY_NATIVE: &str = "Native Agent";
+pub const LX_ENTRY_COGNITIVE: &str = "Cognitive Orchestrator";
+pub const LX_ENTRY_ASSISTANT: &str = "Assistant Orchestrator";
+/// lx 页入口描述行与示例行（示例行仅在有示例时渲染）。
+pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly, no external agents involved";
+pub const LX_ENTRY_COGNITIVE_DESC: &str = "orchestrates all your coding agents in one place";
+pub const LX_ENTRY_ASSISTANT_DESC: &str = "orchestrates all your assistant agents in one place";
+pub const LX_ENTRY_COGNITIVE_EXAMPLES: &str = "examples: opencode · codex · claude · …";
+pub const LX_ENTRY_ASSISTANT_EXAMPLES: &str = "examples: openclaw · Hermes · …";
+/// lx 页底部输入框：`>` 前缀、占位与框下提示。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
-/// lx 页未来内容区的白色占位文案。
-pub const LX_CONTENT_PLACEHOLDER: &str = "placeholder";
+pub const LX_INPUT_HINT: &str = "type a message";
 
-/// lx 页切换提示。
-pub fn lx_hint() -> String {
-    format!("click {} to open terminal", LX_TOGGLE_TERMINAL)
+/// lx 页入口标签：按选中入口取。
+pub fn lx_entry_label(entry: LxEntry) -> &'static str {
+    match entry {
+        LxEntry::Native => LX_ENTRY_NATIVE,
+        LxEntry::Cognitive => LX_ENTRY_COGNITIVE,
+        LxEntry::Assistant => LX_ENTRY_ASSISTANT,
+    }
 }
+
+/// lx 页入口描述行。
+pub fn lx_entry_description(entry: LxEntry) -> &'static str {
+    match entry {
+        LxEntry::Native => LX_ENTRY_NATIVE_DESC,
+        LxEntry::Cognitive => LX_ENTRY_COGNITIVE_DESC,
+        LxEntry::Assistant => LX_ENTRY_ASSISTANT_DESC,
+    }
+}
+
+/// lx 页入口示例行；无示例返回 None。
+pub fn lx_entry_examples(entry: LxEntry) -> Option<&'static str> {
+    match entry {
+        LxEntry::Native => None,
+        LxEntry::Cognitive => Some(LX_ENTRY_COGNITIVE_EXAMPLES),
+        LxEntry::Assistant => Some(LX_ENTRY_ASSISTANT_EXAMPLES),
+    }
+}
+
+/// lx 窗格顶边框标题：`lx - <入口名>`。
+pub fn lx_pane_title(entry: LxEntry) -> String {
+    format!("{LX_TITLE}{LX_TITLE_SEPARATOR}{}", lx_entry_label(entry))
+}
+
 /// 折叠按钮：按面板所在侧镜像，箭头指向点击后移动的方向。
 pub const SIDEBAR_COLLAPSE_LABEL: &str = "[◀]";
 pub const SIDEBAR_EXPAND_LABEL: &str = "[▶]";

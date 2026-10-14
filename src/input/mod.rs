@@ -6,7 +6,7 @@ pub mod encode;
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::actions::{Action, EditorCommand, OverlayKey};
+use crate::app::actions::{Action, EditorCommand, LxInput, OverlayKey};
 use crate::app::overlay::OverlayKind;
 
 /// 路由结果。
@@ -24,6 +24,8 @@ pub enum Routed {
     SavePrompt,
     /// 复制光标所在模板块/补充块正文到系统剪贴板。
     CopyTemplateBlock,
+    /// lx 页单行输入命令。
+    Lx(LxInput),
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
 }
@@ -33,7 +35,7 @@ pub enum Routed {
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
 /// `Ctrl/Cmd+Shift+C` 复制光标所在模板块/补充块正文，未映射的按键被吞掉，绝不写入 PTY；
-/// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
+/// `pane_lx` 为真（活动窗格显示 lx 页）时按键进入 lx 单行输入框，未映射键吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,
     mode: TermMode,
@@ -78,9 +80,26 @@ pub fn route(
         };
     }
     if pane_lx {
-        return None;
+        return lx_input_key(key).map(Routed::Lx);
     }
     encode::encode_key(key, mode).map(Routed::Pane)
+}
+
+/// lx 页输入键映射：单行编辑键；Enter/Esc 与未映射键返回 None（吞掉）。
+fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Backspace => Some(LxInput::Backspace),
+        KeyCode::Delete => Some(LxInput::Delete),
+        KeyCode::Left if plain => Some(LxInput::Left),
+        KeyCode::Right if plain => Some(LxInput::Right),
+        KeyCode::Home => Some(LxInput::Home),
+        KeyCode::End => Some(LxInput::End),
+        KeyCode::Char(ch) if plain => Some(LxInput::Char(ch)),
+        _ => None,
+    }
 }
 
 /// 页重命名输入键映射：Enter/Esc 结束、单行编辑键、Ctrl+C 清空；其余返回 None（吞掉）。

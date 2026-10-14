@@ -565,14 +565,33 @@ fn overlay_does_not_swallow_ctrl_q() {
 }
 
 #[test]
-fn lx_view_swallows_keys_except_ctrl_q() {
-    for code in [
-        KeyCode::Char('l'),
-        KeyCode::Enter,
-        KeyCode::Tab,
-        KeyCode::Up,
-        KeyCode::Backspace,
-    ] {
+fn lx_view_routes_editing_keys_and_swallows_others() {
+    assert_eq!(
+        super::route(
+            key(KeyCode::Char('l')),
+            TermMode::empty(),
+            false,
+            None,
+            true
+        ),
+        Some(Routed::Lx(LxInput::Char('l')))
+    );
+    assert_eq!(
+        super::route(
+            key(KeyCode::Backspace),
+            TermMode::empty(),
+            false,
+            None,
+            true
+        ),
+        Some(Routed::Lx(LxInput::Backspace))
+    );
+    assert_eq!(
+        super::route(key(KeyCode::Left), TermMode::empty(), false, None, true),
+        Some(Routed::Lx(LxInput::Left))
+    );
+    // 未映射键（Enter/Tab/Up）吞掉。
+    for code in [KeyCode::Enter, KeyCode::Tab, KeyCode::Up] {
         assert_eq!(
             super::route(key(code), TermMode::empty(), false, None, true),
             None,
@@ -584,7 +603,7 @@ fn lx_view_swallows_keys_except_ctrl_q() {
         super::route(quit, TermMode::empty(), false, None, true),
         Some(Routed::Action(Action::Quit))
     );
-    // prompt 聚焦优先于 lx 吞键：按键仍进入编辑器。
+    // prompt 聚焦优先于 lx 输入：按键仍进入编辑器。
     assert_eq!(
         super::route(key(KeyCode::Char('a')), TermMode::empty(), true, None, true),
         Some(Routed::Editor(EditorCommand::InsertChar('a')))

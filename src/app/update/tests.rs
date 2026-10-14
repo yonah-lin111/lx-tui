@@ -3761,3 +3761,68 @@ fn refer_panel_routes_keys_before_slash_and_edits() {
     state.prompt.undo();
     assert!(state.prompt.text().ends_with("\nac"), "单步撤销回触发词");
 }
+
+#[test]
+fn lx_input_edits_focused_pane_buffer() {
+    let mut state = AppState::demo();
+    // demo 状态默认即为 lx 视图。
+    for ch in "hi".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Left);
+    apply_lx_input(&mut state, LxInput::Char('!'));
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "h!i");
+    assert_eq!(pane.lx.cursor, 2);
+    apply_lx_input(&mut state, LxInput::Home);
+    apply_lx_input(&mut state, LxInput::Delete);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "!i");
+    apply_lx_input(&mut state, LxInput::End);
+    apply_lx_input(&mut state, LxInput::Backspace);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "!");
+}
+
+#[test]
+fn lx_input_ignored_on_terminal_view() {
+    let mut state = demo_terminal();
+    apply_lx_input(&mut state, LxInput::Char('x'));
+    assert!(state.active_pane().expect("pane").lx.input.is_empty());
+}
+
+#[test]
+fn lx_entry_and_selection_roundtrip() {
+    use crate::app::state::LxEntry;
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_lx_entry(&mut state, pane, LxEntry::Assistant);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.entry,
+        LxEntry::Assistant
+    );
+
+    begin_lx_selection(&mut state, pane, 1, 2);
+    drag_lx_selection(&mut state, pane, 3, 4);
+    let selection = take_lx_selection(&mut state).expect("selection");
+    assert_eq!(selection.pane(), pane);
+    assert_eq!(selection.range(), Some(((1, 2), (3, 4))));
+    assert!(state.lx_selection.is_none(), "取走后清空");
+
+    // 未拖动（空选区）范围为 None。
+    begin_lx_selection(&mut state, pane, 2, 2);
+    assert!(
+        take_lx_selection(&mut state)
+            .expect("selection")
+            .range()
+            .is_none()
+    );
+}
+
+#[test]
+fn clear_selection_clears_lx_selection() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    begin_lx_selection(&mut state, pane, 0, 0);
+    assert!(state.lx_selection.is_some());
+    clear_selection(&mut state);
+    assert!(state.lx_selection.is_none());
+}

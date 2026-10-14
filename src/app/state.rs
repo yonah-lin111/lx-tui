@@ -73,6 +73,8 @@ pub struct AppState {
     pub selection: Option<Selection>,
     /// 正在拖拽选择的终端窗格；选中内容存于仿真器内部（内容坐标）。
     pub terminal_selection: Option<PaneId>,
+    /// lx 页文本选区（内容坐标）；松开鼠标时复制并清除。
+    pub lx_selection: Option<Selection>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub resizing_prompt: bool,
@@ -287,12 +289,99 @@ pub enum PaneView {
     Terminal,
 }
 
+/// lx 页三个入口：原生 agent、coding agent 编排、助手 agent 编排。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxEntry {
+    Native,
+    Cognitive,
+    Assistant,
+}
+
+impl LxEntry {
+    /// 三个入口的显示顺序。
+    pub const ALL: [LxEntry; 3] = [LxEntry::Native, LxEntry::Cognitive, LxEntry::Assistant];
+}
+
+/// lx 页交互状态：选中入口与单行输入缓冲；每个 lx 窗格各持一份。
+#[derive(Debug)]
+pub struct Lx {
+    /// 当前选中入口；仅鼠标点击切换，重启复位为 Native。
+    pub entry: LxEntry,
+    /// 单行输入内容。
+    pub input: String,
+    /// 光标字节偏移；恒位于字符边界。
+    pub cursor: usize,
+}
+
+impl Default for Lx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Lx {
+    pub fn new() -> Self {
+        Self {
+            entry: LxEntry::Native,
+            input: String::new(),
+            cursor: 0,
+        }
+    }
+
+    /// 在光标处插入一个字符。
+    pub fn insert_char(&mut self, ch: char) {
+        self.input.insert(self.cursor, ch);
+        self.cursor += ch.len_utf8();
+    }
+
+    /// 删除光标前一个字符。
+    pub fn backspace(&mut self) {
+        if let Some(prev) = self.input[..self.cursor].chars().next_back() {
+            self.cursor -= prev.len_utf8();
+            self.input.remove(self.cursor);
+        }
+    }
+
+    /// 删除光标处字符。
+    pub fn delete(&mut self) {
+        if self.cursor < self.input.len() {
+            self.input.remove(self.cursor);
+        }
+    }
+
+    /// 光标左移一个字符。
+    pub fn move_left(&mut self) {
+        if let Some(prev) = self.input[..self.cursor].chars().next_back() {
+            self.cursor -= prev.len_utf8();
+        }
+    }
+
+    /// 光标右移一个字符。
+    pub fn move_right(&mut self) {
+        if let Some(next) = self.input[self.cursor..].chars().next() {
+            self.cursor += next.len_utf8();
+        }
+    }
+
+    /// 光标移到行首。
+    pub fn home(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// 光标移到行尾。
+    pub fn end(&mut self) {
+        self.cursor = self.input.len();
+    }
+}
+
 /// 窗格载荷：种类、主内容视图、终端仿真状态与退出标记。
 #[derive(Debug)]
 pub struct Pane {
     pub kind: PaneKind,
     pub view: PaneView,
     pub terminal: Terminal,
+    /// lx 视图的交互状态（选中入口与输入缓冲）。
+    pub lx: Lx,
     pub exited: bool,
     /// 窗格 shell 进程 cwd 的显示标签；标题无 OSC 时回退展示。
     pub cwd_label: Option<String>,
@@ -365,6 +454,7 @@ impl Pane {
             kind: PaneKind::Terminal,
             view: PaneView::Lx,
             terminal: Terminal::new(DEFAULT_COLS, DEFAULT_ROWS),
+            lx: Lx::new(),
             exited: false,
             cwd_label: None,
             cwd: None,
@@ -457,6 +547,7 @@ impl AppState {
             tooltip: None,
             selection: None,
             terminal_selection: None,
+            lx_selection: None,
             selection_autoscroll: None,
             resizing_prompt: false,
             prompt_hover: false,
@@ -541,6 +632,12 @@ impl AppState {
     pub fn active_pane(&self) -> Option<&Pane> {
         let tab = self.active_tab();
         tab.pane(tab.layout.focus())
+    }
+
+    /// 当前焦点窗格（可变）；lx 输入按此写入。
+    pub fn active_pane_mut(&mut self) -> Option<&mut Pane> {
+        let focus = self.active_tab().layout.focus();
+        self.active_tab_mut().pane_mut(focus)
     }
 
     /// 任意工作区/标签中的窗格；PTY 装配与只读查询使用。

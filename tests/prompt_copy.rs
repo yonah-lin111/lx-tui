@@ -123,7 +123,7 @@ impl App {
             writer,
             emulator,
         };
-        assert!(app.wait_for("placeholder", Duration::from_secs(10)));
+        assert!(app.wait_for("Ask anything", Duration::from_secs(10)));
         app
     }
 

@@ -323,9 +323,19 @@ pub fn logo_pixel(ch: char) -> Option<Color> {
     }
 }
 
-/// lx 页占位元素（白）：未来内容面板的边框与文案。
-pub fn lx_placeholder() -> Style {
-    Style::default().fg(Color::Indexed(231))
+/// lx 页入口按钮的像素边框：选中用强调色、未选中用次要信息。
+pub fn lx_entry_border(selected: bool) -> Style {
+    if selected { accent() } else { muted() }
+}
+
+/// lx 页入口按钮内的标签：选中加粗强调、未选中次要信息。
+pub fn lx_entry_label(selected: bool) -> Style {
+    if selected { accent() } else { muted() }
+}
+
+/// lx 页输入框的像素边框：常态次要信息（焦点不改变输入框外观）。
+pub fn lx_input_border() -> Style {
+    muted()
 }
 
 #[cfg(test)]

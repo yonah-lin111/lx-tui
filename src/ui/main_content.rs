@@ -10,6 +10,7 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
+use crate::app::selection::Selection;
 use crate::app::state::{Pane, PaneView};
 use crate::layout::PaneId;
 use crate::terminal::{Terminal, WheelRouting};
@@ -19,13 +20,16 @@ use crate::ui::{style, text};
 /// 切换按钮距窗格右角的留白列数。
 const TOGGLE_MARGIN: u16 = 1;
 
-/// 渲染窗格主内容；终端视图返回聚焦光标位置，lx 视图无硬件光标。
-pub fn render(area: Rect, buf: &mut Buffer, pane: &Pane, focused: bool) -> Option<(u16, u16)> {
+/// 渲染窗格主内容；终端视图返回聚焦光标位置，lx 视图返回输入光标位置。
+pub fn render(
+    area: Rect,
+    buf: &mut Buffer,
+    pane: &Pane,
+    focused: bool,
+    selection: Option<&Selection>,
+) -> Option<(u16, u16)> {
     match pane.view {
-        PaneView::Lx => {
-            lx::render(area, buf);
-            None
-        }
+        PaneView::Lx => lx::render(area, buf, &pane.lx, focused, selection),
         PaneView::Terminal => render_terminal(area, buf, &pane.terminal, focused),
     }
 }

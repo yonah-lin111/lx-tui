@@ -67,7 +67,7 @@ impl App {
         });
 
         assert!(
-            wait_for(&emulator, "placeholder", WAIT),
+            wait_for(&emulator, "Ask anything", WAIT),
             "app must render the lx page"
         );
         Self { child, writer, raw }

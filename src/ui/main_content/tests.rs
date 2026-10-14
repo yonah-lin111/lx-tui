@@ -1,7 +1,7 @@
 //! 单元测试；仅测试构建编译。
 
 use super::*;
-use crate::app::state::{PaneKind, PaneView};
+use crate::app::state::{Lx, PaneKind, PaneView};
 
 #[test]
 fn renders_text_and_skips_wide_spacers() {
@@ -102,6 +102,7 @@ fn pane_with(view: PaneView, terminal: Terminal) -> Pane {
         kind: PaneKind::Terminal,
         view,
         terminal,
+        lx: Lx::new(),
         exited: false,
         cwd_label: None,
         cwd: None,
@@ -122,14 +123,16 @@ fn buffer_text(buf: &Buffer) -> String {
 }
 
 #[test]
-fn lx_view_renders_page_without_cursor() {
-    let pane = pane_with(PaneView::Lx, Terminal::new(60, 12));
-    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 12));
-    let cursor = render(Rect::new(0, 0, 60, 12), &mut buf, &pane, true);
-    assert_eq!(cursor, None, "lx 页不产生硬件光标");
+fn lx_view_renders_page_with_input_cursor() {
+    let pane = pane_with(PaneView::Lx, Terminal::new(100, 20));
+    let area = Rect::new(0, 0, 100, 20);
+    let mut buf = Buffer::empty(area);
+    let cursor = render(area, &mut buf, &pane, true, None);
+    assert!(cursor.is_some(), "聚焦时输入框产生硬件光标");
     let text = buffer_text(&buf);
-    assert!(text.contains("click [>_] to open terminal"), "提示可见");
-    assert!(text.contains('▀') || text.contains('█'), "像素画可见");
+    assert!(text.contains("Native Agent"), "入口标签可见");
+    assert!(text.contains("Ask anything"), "输入框占位可见");
+    assert!(!text.contains("click [>_]"), "旧的切换提示已移除");
 }
 
 #[test]
@@ -138,7 +141,7 @@ fn terminal_view_dispatches_to_grid() {
     terminal.feed(b"ab");
     let pane = pane_with(PaneView::Terminal, terminal);
     let mut buf = Buffer::empty(Rect::new(0, 0, 10, 2));
-    let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &pane, true);
+    let cursor = render(Rect::new(0, 0, 10, 2), &mut buf, &pane, true, None);
     assert_eq!(cursor, Some((0, 2)));
     assert_eq!(buf[(0, 0)].symbol(), "a");
     assert_eq!(buf[(1, 0)].symbol(), "b");

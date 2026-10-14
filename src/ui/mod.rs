@@ -410,7 +410,7 @@ fn render_panes(
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && !state.prompt_focused;
         let mut title = match pane.view {
-            PaneView::Lx => text::LX_TITLE.to_string(),
+            PaneView::Lx => text::lx_pane_title(pane.lx.entry),
             PaneView::Terminal => pane_display_title(*id, pane),
         };
         if pane.exited {
@@ -428,9 +428,16 @@ fn render_panes(
         }
         match pane.kind {
             PaneKind::Terminal => {
-                if let Some((row, col)) =
-                    main_content::render(inner, frame.buffer_mut(), pane, focused)
-                {
+                if let Some((row, col)) = main_content::render(
+                    inner,
+                    frame.buffer_mut(),
+                    pane,
+                    focused,
+                    state
+                        .lx_selection
+                        .as_ref()
+                        .filter(|selection| selection.pane() == *id),
+                ) {
                     cursor = Some((inner.x + col, inner.y + row));
                 }
                 if let Some(scrollbar) = main_content::scrollbar(inner, pane) {
