@@ -848,7 +848,7 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
 }
 
 #[test]
-fn initial_workspace_marker_uses_row_text_style() {
+fn initial_workspace_marker_uses_accent_style() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     // 显式短名保证列表不截断，标记断言与工作目录名无关。
@@ -879,15 +879,11 @@ fn initial_workspace_marker_uses_row_text_style() {
         .iter()
         .position(|symbol| *symbol == '*')
         .expect("marker is rendered");
-    // `*` 不再有独立颜色，跟随行内正文样式。
-    assert_eq!(
-        buffer[(marker_x as u16, marker_line as u16)].fg,
-        ratatui::style::Color::Reset
-    );
-    assert_eq!(
-        buffer[(marker_x as u16, marker_line as u16)].bg,
-        ratatui::style::Color::Reset
-    );
+    // `*` 用强调色标识（与去重序号同色，不再跟随正文样式）。
+    let cell = &buffer[(marker_x as u16, marker_line as u16)];
+    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(cell.bg, ratatui::style::Color::Reset);
 }
 
 #[test]
@@ -2187,12 +2183,31 @@ fn sidebar_renders_duplicate_child_index_before_initial_marker() {
         lines.iter().any(|line| line.contains("  ├─ ⑂ feature/x")),
         "first duplicate keeps clean label: {lines:?}"
     );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("  └─ ⑂ feature/x 2 *")),
-        "second duplicate gets index before marker: {lines:?}"
-    );
+    let row_index = lines
+        .iter()
+        .position(|line| line.contains("  └─ ⑂ feature/x 2 *"))
+        .unwrap_or_else(|| panic!("second duplicate gets index before marker: {lines:?}"));
+
+    // `*` 与去重序号用强调色标识，hover 时前景不被覆盖（只加 hover 背景）。
+    let sidebar_width = usize::from(view_for(&state).sidebar.width);
+    let sidebar_line: String = lines[row_index].chars().take(sidebar_width).collect();
+    let anchor = sidebar_line.find(" 2 *").expect("index + initial marker");
+    let index_x = sidebar_line[..anchor].chars().count() + 1;
+    for hover in [None, Some(2)] {
+        state.workspace_hover = hover;
+        let buffer = render_buffer(&state);
+        for (offset, symbol) in [(0usize, "2"), (2usize, "*")] {
+            let cell = &buffer[((index_x + offset) as u16, row_index as u16)];
+            assert_eq!(cell.symbol(), symbol, "hover={hover:?}");
+            assert_eq!(
+                cell.fg,
+                ratatui::style::Color::Cyan,
+                "{symbol} 使用强调色 (hover={hover:?})"
+            );
+            assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        }
+    }
+    state.workspace_hover = None;
 }
 
 #[test]

@@ -127,6 +127,30 @@ fn renders_folder_and_item_rows_with_tree_prefix() {
 }
 
 #[test]
+fn folder_fold_icon_keeps_accent_under_hover() {
+    let panel = panel_with(vec![folder(1, None, "ideas")], vec![]);
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &panel, false, Some(0));
+    // 折叠三角是特殊图标：hover 时仍为 accent 色（前景/修饰符不变，只加 hover 背景）。
+    let row = row_text(&buf, area, 2);
+    let byte = row.find(text::PROMPT_TREE_EXPANDED).expect("fold icon");
+    let x = u16::try_from(row[..byte].chars().count()).expect("col fits");
+    let cell = &buf[(x, 2)];
+    assert_eq!(cell.symbol(), text::PROMPT_TREE_EXPANDED);
+    assert_eq!(
+        cell.fg,
+        crate::ui::style::accent().fg.expect("accent fg"),
+        "hover 不改变折叠图标颜色"
+    );
+    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(
+        cell.bg,
+        crate::ui::style::selection().bg.expect("selection bg")
+    );
+}
+
+#[test]
 fn nested_items_keep_vertical_line_when_subfolder_has_later_siblings() {
     let panel = panel_with(
         vec![folder(1, None, "solo"), folder(2, Some(1), "deep")],

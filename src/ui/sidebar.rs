@@ -130,6 +130,8 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         } else {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
+        // 特殊标记（`*` 表示最初路径、去重序号）用强调色标识，hover 只提供背景。
+        let mark_style = highlight.patch(style::accent());
         let prefix = format!("{marker}{group_prefix}");
         let icon = if workspace.git.is_some() {
             text::WORKSPACE_GIT_ICON
@@ -163,10 +165,10 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             item_style,
         ));
         if !index_text.is_empty() {
-            spans.push(Span::styled(index_text, item_style));
+            spans.push(Span::styled(index_text, mark_style));
         }
         if workspace.is_initial {
-            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, item_style));
+            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, mark_style));
         }
         items.push(ListItem::new(Line::from(spans)).style(highlight));
     }

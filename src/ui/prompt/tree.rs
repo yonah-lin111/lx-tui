@@ -205,7 +205,8 @@ fn paint_row(
     }
     let base = style::text().patch(highlight);
     let sub = style::muted().patch(highlight);
-    let accent = style::accent().patch(highlight);
+    // 折叠三角是特殊图标：保持 accent 色，hover 只提供背景，避免图标颜色随 hover 变化。
+    let accent = highlight.patch(style::accent());
     let muted = style::muted().patch(highlight);
     let mut x = area.x;
     // 分区标签不可选中：不占标记列，标签贴左缘。
