@@ -627,6 +627,7 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
     assert_eq!(ctrl('u'), Some(Routed::Lx(LxInput::DeleteToLineStart)));
     assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
     assert_eq!(ctrl('w'), Some(Routed::Lx(LxInput::DeleteWordBackward)));
+    assert_eq!(ctrl('c'), Some(Routed::Lx(LxInput::Clear)));
     assert_eq!(ctrl('z'), Some(Routed::Lx(LxInput::Undo)));
     assert_eq!(ctrl('y'), Some(Routed::Lx(LxInput::Redo)));
     let ctrl_left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);

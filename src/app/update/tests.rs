@@ -3981,3 +3981,30 @@ fn lx_shift_enter_plain_line_is_plain_newline() {
     apply_lx_input(&mut state, LxInput::Newline);
     assert_eq!(state.active_pane().expect("pane").lx.input, "hello\n");
 }
+
+#[test]
+fn lx_ctrl_u_deletes_newline_at_line_start() {
+    let mut state = AppState::demo();
+    for ch in "ab".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Newline);
+    apply_lx_input(&mut state, LxInput::DeleteToLineStart);
+    assert_eq!(
+        state.active_pane().expect("pane").lx.input,
+        "ab",
+        "行首 Ctrl+U 删除换行并合并上一行"
+    );
+}
+
+#[test]
+fn lx_ctrl_c_clears_input() {
+    let mut state = AppState::demo();
+    for ch in "hello".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Clear);
+    let pane = state.active_pane().expect("pane");
+    assert!(pane.lx.input.is_empty());
+    assert_eq!(pane.lx.cursor, 0);
+}

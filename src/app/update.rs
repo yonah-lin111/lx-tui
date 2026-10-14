@@ -653,6 +653,7 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::DeleteWordForward => lx.delete_word_forward(),
         LxInput::Undo => lx.undo(),
         LxInput::Redo => lx.redo(),
+        LxInput::Clear => lx.clear(),
         // 无面板时 Enter 预留给发送、Tab/Esc 吞掉。
         LxInput::Enter | LxInput::Tab | LxInput::Escape => {}
     }

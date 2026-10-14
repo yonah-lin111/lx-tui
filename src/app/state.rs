@@ -480,15 +480,22 @@ impl Lx {
         self.refresh_panel();
     }
 
-    /// 删除光标到逻辑行首。
+    /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（与上一行合并）。
     pub fn delete_to_line_start(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
         let start = text::line_start(&self.input, self.cursor);
+        self.snapshot();
         if start < self.cursor {
-            self.snapshot();
             self.input.replace_range(start..self.cursor, "");
             self.cursor = start;
-            self.refresh_panel();
+        } else {
+            let previous = text::prev_boundary(&self.input, self.cursor);
+            self.input.replace_range(previous..self.cursor, "");
+            self.cursor = previous;
         }
+        self.refresh_panel();
     }
 
     /// 删除光标到逻辑行尾。
@@ -520,6 +527,17 @@ impl Lx {
             self.input.replace_range(self.cursor..end, "");
             self.refresh_panel();
         }
+    }
+
+    /// 清空输入框内容。
+    pub fn clear(&mut self) {
+        if self.input.is_empty() {
+            return;
+        }
+        self.snapshot();
+        self.input.clear();
+        self.cursor = 0;
+        self.refresh_panel();
     }
 
     /// 撤销一步。

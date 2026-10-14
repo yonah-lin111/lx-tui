@@ -78,7 +78,7 @@ pub(super) fn display_width(text: &str) -> usize {
 }
 
 /// 前一个字符的字节边界。
-pub(super) fn prev_boundary(text: &str, index: usize) -> usize {
+pub(crate) fn prev_boundary(text: &str, index: usize) -> usize {
     text[..index]
         .char_indices()
         .next_back()

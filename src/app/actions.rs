@@ -62,6 +62,8 @@ pub enum LxInput {
     Undo,
     /// Ctrl+Y / Ctrl+Shift+Z：重做。
     Redo,
+    /// Ctrl+C：清空输入框。
+    Clear,
     /// Tab：md 面板打开时采纳高亮候选。
     Tab,
     /// Enter：md 面板打开时采纳高亮候选；否则预留给发送（当前不动作）。
