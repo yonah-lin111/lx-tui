@@ -171,6 +171,8 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = layout::pane_inner_size(*rect);
             pane.terminal.resize(cols, rows);
+            let (lx_cols, _) = layout::lx_input_size(*rect);
+            pane.lx.resize(lx_cols);
         }
     }
 }

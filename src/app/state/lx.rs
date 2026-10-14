@@ -26,6 +26,8 @@ pub struct Lx {
     pub input: String,
     /// 光标字节偏移；恒位于字符边界。
     pub cursor: usize,
+    /// 输入框内容宽度（列）；按几何同步，用于软换行与视觉行移动。未同步前视为不换行。
+    width: u16,
     /// markdown 块命令面板；光标处触发时打开。
     pub panel: Option<BlockPanel>,
     /// 路径粘贴参照面板；与 `panel` 互斥，同一时刻至多一个打开。
@@ -34,6 +36,13 @@ pub struct Lx {
     undo: Vec<LxSnapshot>,
     /// 重做历史。
     redo: Vec<LxSnapshot>,
+}
+
+/// 软换行后的一个视觉行：输入缓冲中的字节区间 `[start, end)`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LxRow {
+    pub start: usize,
+    pub end: usize,
 }
 
 /// 在途路径粘贴：参照面板与占位插入现场。
@@ -66,11 +75,76 @@ impl Lx {
             entry: LxEntry::Native,
             input: String::new(),
             cursor: 0,
+            width: u16::MAX,
             panel: None,
             paste: None,
             undo: Vec::new(),
             redo: Vec::new(),
         }
+    }
+
+    /// 同步输入框内容宽度（列）；用于软换行与视觉行移动。
+    pub fn resize(&mut self, width: u16) {
+        self.width = width.max(1);
+    }
+
+    /// 按内容宽度软换行得到的视觉行。
+    pub fn visual_rows(&self) -> Vec<LxRow> {
+        let width = usize::from(self.width.max(1));
+        let mut rows = Vec::new();
+        let mut line_start = 0;
+        for segment in self.input.split('\n') {
+            let line_end = line_start + segment.len();
+            let mut row_start = line_start;
+            let mut col = 0;
+            for (offset, ch) in segment.char_indices() {
+                let absolute = line_start + offset;
+                let cell = text::char_width(ch);
+                if col > 0 && col + cell > width {
+                    rows.push(LxRow {
+                        start: row_start,
+                        end: absolute,
+                    });
+                    row_start = absolute;
+                    col = 0;
+                }
+                col += cell;
+            }
+            rows.push(LxRow {
+                start: row_start,
+                end: line_end,
+            });
+            line_start = line_end + 1;
+        }
+        rows
+    }
+
+    /// 光标在视觉行中的索引与显示列（跨折行边界归入下一视觉行）。
+    pub fn cursor_visual(&self) -> (usize, usize) {
+        let rows = self.visual_rows();
+        self.cursor_visual_in(&rows)
+    }
+
+    fn cursor_visual_in(&self, rows: &[LxRow]) -> (usize, usize) {
+        for (index, row) in rows.iter().enumerate() {
+            if self.cursor < row.end {
+                return (
+                    index,
+                    text::display_width(&self.input[row.start..self.cursor]),
+                );
+            }
+            if self.cursor == row.end {
+                let continues = rows
+                    .get(index + 1)
+                    .is_some_and(|next| next.start == row.end);
+                if !continues {
+                    return (index, text::display_width(&self.input[row.start..row.end]));
+                }
+            }
+        }
+        let index = rows.len().saturating_sub(1);
+        let row = rows[index];
+        (index, text::display_width(&self.input[row.start..row.end]))
     }
 
     /// 记录一次编辑前的快照，并清空重做栈。
@@ -160,48 +234,46 @@ impl Lx {
         }
     }
 
-    /// 光标移到行首。
+    /// 光标移到当前视觉行行首。
     pub fn home(&mut self) {
-        self.cursor = self.line_start();
+        let rows = self.visual_rows();
+        let (index, _) = self.cursor_visual_in(&rows);
+        self.cursor = rows[index].start;
         self.refresh_panel();
     }
 
-    /// 光标移到行尾。
+    /// 光标移到当前视觉行行尾。
     pub fn end(&mut self) {
-        self.cursor = self.line_end();
+        let rows = self.visual_rows();
+        let (index, _) = self.cursor_visual_in(&rows);
+        self.cursor = rows[index].end;
         self.refresh_panel();
     }
 
-    /// 光标上移一行（保持行内字节列，越界钳到行尾）。
+    /// 光标上移一个视觉行（保持显示列，越界钳到行尾）。
     pub fn move_up(&mut self) {
-        let start = self.line_start();
-        if start == 0 {
-            self.cursor = 0;
+        let rows = self.visual_rows();
+        let (index, col) = self.cursor_visual_in(&rows);
+        if index == 0 {
+            self.cursor = rows[0].start;
         } else {
-            let column = self.cursor - start;
-            let previous_end = start - 1;
-            let previous_start = self.input[..previous_end]
-                .rfind('\n')
-                .map_or(0, |offset| offset + 1);
+            let target = rows[index - 1];
             self.cursor =
-                self.clamp_boundary(previous_start + column.min(previous_end - previous_start));
+                target.start + text::offset_at_col(&self.input[target.start..target.end], col);
         }
         self.refresh_panel();
     }
 
-    /// 光标下移一行（保持行内字节列，越界钳到行尾）。
+    /// 光标下移一个视觉行（保持显示列，越界钳到行尾）。
     pub fn move_down(&mut self) {
-        let end = self.line_end();
-        if end >= self.input.len() {
-            self.cursor = self.input.len();
+        let rows = self.visual_rows();
+        let (index, col) = self.cursor_visual_in(&rows);
+        if index + 1 >= rows.len() {
+            self.cursor = rows[rows.len() - 1].end;
         } else {
-            let start = self.line_start();
-            let column = self.cursor - start;
-            let next_start = end + 1;
-            let next_end = self.input[next_start..]
-                .find('\n')
-                .map_or(self.input.len(), |offset| next_start + offset);
-            self.cursor = self.clamp_boundary(next_start + column.min(next_end - next_start));
+            let target = rows[index + 1];
+            self.cursor =
+                target.start + text::offset_at_col(&self.input[target.start..target.end], col);
         }
         self.refresh_panel();
     }
@@ -431,28 +503,6 @@ impl Lx {
         }
         insert.push(' ');
         insert
-    }
-
-    /// 光标所在逻辑行起始字节偏移。
-    fn line_start(&self) -> usize {
-        self.input[..self.cursor]
-            .rfind('\n')
-            .map_or(0, |offset| offset + 1)
-    }
-
-    /// 光标所在逻辑行结束字节偏移。
-    fn line_end(&self) -> usize {
-        self.input[self.cursor..]
-            .find('\n')
-            .map_or(self.input.len(), |offset| self.cursor + offset)
-    }
-
-    /// 把偏移回退到最近的字符边界。
-    fn clamp_boundary(&self, mut index: usize) -> usize {
-        while index > 0 && !self.input.is_char_boundary(index) {
-            index -= 1;
-        }
-        index
     }
 }
 

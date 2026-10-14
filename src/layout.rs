@@ -679,6 +679,31 @@ pub fn pane_inner_size(rect: Rect) -> (u16, u16) {
     (inner.width.max(1), inner.height.max(1))
 }
 
+/// lx 输入框横向外边距（内容区足够宽时）、`> ` 前缀列数与滚动条预留列数。
+pub const LX_INPUT_MARGIN: u16 = 2;
+pub const LX_INPUT_PREFIX: u16 = 2;
+pub const LX_INPUT_SCROLLBAR: u16 = 1;
+/// lx 输入框高度占内容区高度的百分比上限与最小盒高（含上下分割线）。
+pub const LX_INPUT_HEIGHT_PERCENT: u16 = 40;
+pub const LX_INPUT_MIN_BOX: u16 = 3;
+
+/// lx 输入框内容尺寸：软换行宽度（列）与最大可见内容行数。
+///
+/// 与 `ui::main_content::lx` 共用同一套扣减（外边距、前缀、滚动条槽），
+/// 保证状态层折行与渲染宽度一致。
+pub fn lx_input_size(rect: Rect) -> (u16, u16) {
+    let (cols, rows) = pane_inner_size(rect);
+    let margin = if cols >= 24 { LX_INPUT_MARGIN } else { 0 };
+    let width = cols
+        .saturating_sub(margin.saturating_mul(2))
+        .saturating_sub(LX_INPUT_PREFIX)
+        .saturating_sub(LX_INPUT_SCROLLBAR)
+        .max(1);
+    let max_box = (rows.saturating_mul(LX_INPUT_HEIGHT_PERCENT) / 100).max(LX_INPUT_MIN_BOX);
+    let visible = max_box.saturating_sub(2).max(1);
+    (width, visible)
+}
+
 /// prompt 文本区矩形：扣除顶部工具栏表头，最右一列固定预留给滚动条槽（内容区宽度 >= 2 时）。
 pub fn prompt_text_rect(panel: Rect) -> Rect {
     let inner = prompt_body_rect(pane_inner_rect(panel));

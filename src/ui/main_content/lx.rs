@@ -14,6 +14,7 @@ use crate::app::selection::Selection;
 use crate::app::state::{Lx, LxEntry};
 use crate::ui::markdown::Token;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
+use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
 /// 宽字符占位单元格的标记；不参与绘制与取词。
@@ -23,12 +24,16 @@ const CONTINUATION: char = '\0';
 pub(crate) const LOGO_WIDTH: u16 = 20;
 pub(crate) const LOGO_ROWS: u16 = 7;
 
-/// 宽屏水平边距、输入框最小宽度与输入框最小高度（1 内容行 + 上下分割线）。
-const MARGIN: u16 = 2;
+/// 输入框水平外边距、最小宽度与最小高度（1 内容行 + 上下分割线）；
+/// 边距、高度比例、前缀与滚动条槽与状态层折行宽度共用同一组 `layout` 常量。
+const MARGIN: u16 = crate::layout::LX_INPUT_MARGIN;
 const MIN_INPUT_WIDTH: u16 = 8;
-const INPUT_MIN_BOX: u16 = 3;
+const INPUT_MIN_BOX: u16 = crate::layout::LX_INPUT_MIN_BOX;
 /// 输入框最大高度占内容区高度的百分比。
-const INPUT_MAX_PERCENT: u16 = 40;
+const INPUT_MAX_PERCENT: u16 = crate::layout::LX_INPUT_HEIGHT_PERCENT;
+/// 输入框 `> ` 前缀列数与右侧滚动条预留列数。
+const INPUT_PREFIX: u16 = crate::layout::LX_INPUT_PREFIX;
+const INPUT_SCROLLBAR: u16 = crate::layout::LX_INPUT_SCROLLBAR;
 /// 入口区：单行高度、横排标签间距（含分隔符）、竖排行距与区块间距。
 const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 3;
@@ -118,8 +123,34 @@ pub fn render(
             }
         }
     }
+    render_input_scrollbar(area, buf, lx);
     render_paste_panel(area, buf, lx);
     cursor
+}
+
+/// 绘制输入框滚动条：软换行后的视觉行溢出可视高度时，覆盖在最右预留列。
+fn render_input_scrollbar(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    if lx.input.is_empty() {
+        return;
+    }
+    let lay = layout(area, lx);
+    let Some(input) = lay.input else {
+        return;
+    };
+    let visible = lay.input_visible;
+    if visible == 0 {
+        return;
+    }
+    let track = Rect::new(
+        input.x,
+        input.y + 1,
+        input.width,
+        u16::try_from(visible).unwrap_or(u16::MAX),
+    );
+    let total = lx.visual_rows().len();
+    if let Some(bar) = scrollbar::layout(track, total, visible, lay.input_scroll) {
+        scrollbar::render_buffer(buf, &bar);
+    }
 }
 
 /// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
@@ -345,15 +376,16 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         return Layout::empty(true);
     }
 
-    // 输入框：高度随内容行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
-    let lines = lx.input.split('\n').count().max(1);
+    // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
+    let rows = lx.visual_rows();
+    let total = rows.len().max(1);
     let max_box = (area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX);
     let cap = usize::from(max_box.saturating_sub(2)).max(1);
-    let visible = lines.min(cap);
+    let visible = total.min(cap);
     let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
     let input = Rect::new(content_x, area.bottom() - box_h, content_w, box_h);
-    let cursor_line = lx.input[..lx.cursor].matches('\n').count();
-    let scroll = cursor_line.saturating_sub(visible.saturating_sub(1));
+    let (cursor_row, _) = lx.cursor_visual();
+    let scroll = cursor_row.saturating_sub(visible.saturating_sub(1));
 
     let mut out = Layout::empty(false);
     out.input = Some(input);
@@ -609,37 +641,52 @@ fn draw_input(
         grid.set(x, bottom_rule, RULE, style::muted());
     }
 
-    let prefix = u16::try_from(text::LX_INPUT_PROMPT.width()).unwrap_or(1) + 1;
-    let content_x = rect.x + prefix;
-    let content_w = rect.width.saturating_sub(prefix);
+    let content_x = rect.x + INPUT_PREFIX;
+    let content_w = rect
+        .width
+        .saturating_sub(INPUT_PREFIX)
+        .saturating_sub(INPUT_SCROLLBAR);
+    let rows = lx.visual_rows();
     let tokens = crate::ui::markdown::scan(&lx.input);
     let lines: Vec<&str> = lx.input.split('\n').collect();
-    let cursor_line = lx.input[..lx.cursor].matches('\n').count();
-    let line_start = lx.input[..lx.cursor]
-        .rfind('\n')
-        .map_or(0, |offset| offset + 1);
-    let cursor_in_line = lx.cursor - line_start;
+    let (cursor_row, _) = lx.cursor_visual();
 
     let mut cursor = None;
     for i in 0..visible {
-        let Some(line_index) = scroll.checked_add(i) else {
+        let Some(row_index) = scroll.checked_add(i) else {
             break;
         };
-        let Some(line) = lines.get(line_index) else {
+        let Some(row) = rows.get(row_index) else {
             break;
         };
         let y = text_top + i as u16;
-        if line_index == 0 {
+        let line_index = lx.input[..row.start].matches('\n').count();
+        let Some(line) = lines.get(line_index) else {
+            break;
+        };
+        let line_start = lx.input[..row.start]
+            .rfind('\n')
+            .map_or(0, |offset| offset + 1);
+        if row_index == 0 {
             grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
         }
         let line_tokens = tokens
             .get(line_index)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        paint_markdown_line(grid, content_x, y, line, line_tokens, content_w);
-        if line_index == cursor_line && focused {
+        paint_markdown_line(
+            grid,
+            content_x,
+            y,
+            line,
+            line_tokens,
+            row.start - line_start,
+            row.end - line_start,
+            content_w,
+        );
+        if row_index == cursor_row && focused {
             let col = content_x
-                + u16::try_from(display_width(&line[..cursor_in_line])).unwrap_or(u16::MAX);
+                + u16::try_from(display_width(&lx.input[row.start..lx.cursor])).unwrap_or(u16::MAX);
             cursor = Some((y, col));
         }
     }
@@ -652,11 +699,26 @@ fn draw_input(
     cursor
 }
 
-/// 按 token 高亮绘制一行 markdown；超宽截断。
-fn paint_markdown_line(grid: &mut Grid, x: u16, y: u16, line: &str, tokens: &[Token], max_w: u16) {
+/// 按 token 高亮绘制一行 markdown 的 `[row_start, row_end)` 字节区间；超宽截断。
+fn paint_markdown_line(
+    grid: &mut Grid,
+    x: u16,
+    y: u16,
+    line: &str,
+    tokens: &[Token],
+    row_start: usize,
+    row_end: usize,
+    max_w: u16,
+) {
     let mut cx = x;
     let mut token_index = 0;
     for (offset, ch) in line.char_indices() {
+        if offset < row_start {
+            continue;
+        }
+        if offset >= row_end {
+            break;
+        }
         let width = ch.width().unwrap_or(0);
         if width == 0 {
             continue;

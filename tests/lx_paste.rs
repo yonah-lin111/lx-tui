@@ -148,3 +148,15 @@ fn bracketed_paste_of_path_opens_reference_panel() {
         screen_text(&app.emulator.lock().unwrap())
     );
 }
+
+#[test]
+fn long_paste_wraps_and_shows_input_scrollbar() {
+    let app = App::spawn();
+    let long = "L".repeat(20000);
+    app.send(&bracketed_paste(&long));
+    assert!(
+        app.wait_for("▕"),
+        "输入框内容溢出时必须显示滚动条:\n{}",
+        screen_text(&app.emulator.lock().unwrap())
+    );
+}

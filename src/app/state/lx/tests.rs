@@ -126,3 +126,56 @@ fn paste_cancel_without_panel_is_false() {
     let mut lx = Lx::new();
     assert!(!lx.paste_cancel());
 }
+
+#[test]
+fn visual_rows_wrap_at_content_width() {
+    let mut lx = Lx::new();
+    lx.resize(4);
+    lx.insert_str("abcdef");
+    let rows = lx.visual_rows();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(&lx.input[rows[0].start..rows[0].end], "abcd");
+    assert_eq!(&lx.input[rows[1].start..rows[1].end], "ef");
+}
+
+#[test]
+fn default_width_does_not_wrap() {
+    let mut lx = Lx::new();
+    lx.insert_str("a very long single line that should stay on one row");
+    assert_eq!(lx.visual_rows().len(), 1);
+}
+
+#[test]
+fn move_up_down_cross_wrapped_rows() {
+    let mut lx = Lx::new();
+    lx.resize(2);
+    lx.insert_str("abcd");
+    assert_eq!(lx.cursor_visual(), (1, 2));
+    lx.move_up();
+    assert_eq!(lx.cursor, 2, "上移到第一折行行尾");
+    lx.move_down();
+    assert_eq!(lx.cursor, 4, "下移回末折行行尾");
+}
+
+#[test]
+fn home_end_use_visual_rows() {
+    let mut lx = Lx::new();
+    lx.resize(2);
+    lx.insert_str("abcd");
+    lx.home();
+    assert_eq!(lx.cursor, 2, "当前视觉行行首为第二折行起点");
+    lx.end();
+    assert_eq!(lx.cursor, 4, "当前视觉行行尾");
+}
+
+#[test]
+fn cursor_visual_keeps_display_column_across_wrap() {
+    let mut lx = Lx::new();
+    lx.resize(3);
+    lx.insert_str("ab你谁");
+    // 宽字符按 2 列计：视觉行为 "ab"(0..2)、"你"(2..5)、"谁"(5..8)。
+    let rows = lx.visual_rows();
+    assert_eq!(&lx.input[rows[1].start..rows[1].end], "你");
+    lx.cursor = rows[1].start;
+    assert_eq!(lx.cursor_visual(), (1, 0));
+}
