@@ -84,7 +84,7 @@ fn write(method: &str, path: &str, body: &str, origin: Option<&str>) -> String {
 }
 
 #[tokio::test]
-async fn page_requires_token_and_serves_self_contained_html() {
+async fn page_requires_token_and_serves_self_contained_assets() {
     let (service, _events, _dir) = start("page").await;
     let port = service.port();
     let token = service.token().to_string();
@@ -97,64 +97,97 @@ async fn page_requires_token_and_serves_self_contained_html() {
     let html = body(&ok);
     assert!(html.contains("General"), "tabs present");
     assert!(html.contains("Commands"), "commands tab present");
-    assert!(!html.contains("https://"), "no external resources: {html}");
-    assert!(!html.contains("http://"), "no external resources: {html}");
-    assert!(html.contains("color-scheme: dark"), "dark theme");
-    assert!(
-        html.contains("commands-grid"),
-        "commands list/editor layout"
-    );
-    assert!(!html.contains("cmd-preview"), "no preview pane");
     assert!(html.contains("editor-empty"), "empty placeholder container");
+    assert!(html.contains("/settings.css"), "styles linked");
+    assert!(html.contains("/settings.js"), "script linked");
+    assert!(!html.contains("cmd-preview"), "no preview pane");
+
+    // 静态资源以裸路径提供（浏览器 link/script 不携带 token），且带正确 MIME。
+    let css = request(port, &get("/settings.css")).await;
+    assert_eq!(status(&css), 200);
+    assert!(css.contains("text/css"), "css content type");
+    assert!(body(&css).contains("color-scheme: dark"), "dark theme");
+
+    let js = request(port, &get("/settings.js")).await;
+    assert_eq!(status(&js), 200);
+    assert!(js.contains("javascript"), "js content type");
+
+    // 三份资源均无外部引用。
+    for (name, text) in [("html", html), ("css", body(&css)), ("js", body(&js))] {
+        assert!(
+            !text.contains("https://"),
+            "{name} has no external resources"
+        );
+        assert!(
+            !text.contains("http://"),
+            "{name} has no external resources"
+        );
+    }
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn unknown_asset_is_not_found() {
+    let (service, _events, _dir) = start("asset-404").await;
+    let token = service.token().to_string();
+    // 非白名单路径不享受静态放行：无 token 先被拒绝。
+    let denied = request(service.port(), &get("/settings.map")).await;
+    assert_eq!(status(&denied), 403);
+    // 带 token 时落到正常路由，未知路径回 404。
+    let response = request(
+        service.port(),
+        &get(&format!("/settings.map?token={token}")),
+    )
+    .await;
+    assert_eq!(status(&response), 404);
     service.shutdown();
 }
 
 #[tokio::test]
 async fn page_locks_viewport_and_avoids_extra_scrollbars() {
     let (service, _events, _dir) = start("page-layout").await;
-    let token = service.token().to_string();
-    let response = request(service.port(), &get(&format!("/?token={token}"))).await;
+    let response = request(service.port(), &get("/settings.css")).await;
     assert_eq!(status(&response), 200);
-    let html = body(&response);
+    let css = body(&response);
 
     // 根容器锁定视口高度，永不出现根滚动条。
     assert!(
-        html.contains("html, body { height: 100%; }"),
+        css.contains("html, body { height: 100%; }"),
         "viewport height locked"
     );
     assert!(
-        html.contains("display: flex; overflow: hidden;"),
+        css.contains("display: flex; overflow: hidden;"),
         "body overflow hidden"
     );
     // 宽屏时命令网格的行高被视口约束，滚动只发生在栏内。
     assert!(
-        html.contains("grid-template-rows: minmax(0, 1fr)"),
+        css.contains("grid-template-rows: minmax(0, 1fr)"),
         "wide grid rows bounded by viewport"
     );
     assert!(
-        html.contains("grid-template-rows: max-content max-content"),
+        css.contains("grid-template-rows: max-content max-content"),
         "narrow stacked grid sizes rows to content and scrolls inside"
     );
     // 左栏列表独立滚动但隐藏滚动条；右栏卡片依赖细滚动条兜底。
     assert!(
-        html.contains(".command-list::-webkit-scrollbar { display: none; }"),
+        css.contains(".command-list::-webkit-scrollbar { display: none; }"),
         "left list scrollbar hidden"
     );
     assert!(
-        html.contains(".editor-body::-webkit-scrollbar { width: 8px; }"),
+        css.contains(".editor-body::-webkit-scrollbar { width: 8px; }"),
         "editor fallback scrollbar styled"
     );
     // 左栏条目两行排版：第一行斜杠+名称，第二行 tag 与名称左对齐。
     assert!(
-        html.contains(".nav-item { display: grid; grid-template-columns: auto minmax(0, 1fr);"),
+        css.contains(".nav-item { display: grid; grid-template-columns: auto minmax(0, 1fr);"),
         "command items stack name over tag"
     );
     assert!(
-        html.contains(".nav-item .tag { grid-column: 2; grid-row: 2;"),
+        css.contains(".nav-item .tag { grid-column: 2; grid-row: 2;"),
         "tag on second line aligned to name"
     );
     assert!(
-        html.contains("scrollbar-width: thin"),
+        css.contains("scrollbar-width: thin"),
         "editor fallback scrollbar thin"
     );
     service.shutdown();
@@ -163,10 +196,11 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
 #[tokio::test]
 async fn page_header_actions_fill_width_and_resizers() {
     let (service, _events, _dir) = start("page-resize").await;
+    let port = service.port();
     let token = service.token().to_string();
-    let response = request(service.port(), &get(&format!("/?token={token}"))).await;
-    assert_eq!(status(&response), 200);
-    let html = body(&response);
+    let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let js = body(&request(port, &get("/settings.js")).await).to_string();
 
     // 操作行与 Edit 标题同行：Save 出现在第一个字段之前。
     let legend = html.find("id=\"editor-legend\"").expect("legend present");
@@ -181,7 +215,7 @@ async fn page_header_actions_fill_width_and_resizers() {
 
     // 内容撑满：不再有 max-width 上限。
     assert!(
-        !html.contains("max-width: 1440px"),
+        !css.contains("max-width: 1440px"),
         "main fills available width"
     );
 
@@ -194,26 +228,26 @@ async fn page_header_actions_fill_width_and_resizers() {
         html.contains("id=\"cmd-resizer\""),
         "command list resizer present"
     );
-    assert!(html.contains("cursor: col-resize"), "resize cursor styled");
+    assert!(css.contains("cursor: col-resize"), "resize cursor styled");
     assert!(
-        html.contains("--cmd-list-width, 220px"),
+        css.contains("--cmd-list-width, 220px"),
         "command list width variable wired"
     );
     assert!(
-        html.contains("pointerdown"),
+        js.contains("pointerdown"),
         "drag handled via pointer events"
     );
     assert!(
-        html.contains("LIST_MAX_WIDTH = 560"),
+        js.contains("LIST_MAX_WIDTH = 560"),
         "list width clamp present"
     );
     // 编辑器字段两列排布，窄屏回落单列。
     assert!(
-        html.contains("grid-template-columns: repeat(2, minmax(0, 1fr))"),
+        css.contains("grid-template-columns: repeat(2, minmax(0, 1fr))"),
         "editor fields two per row"
     );
     assert!(
-        html.contains(".field-grid { grid-template-columns: 1fr; }"),
+        css.contains(".field-grid { grid-template-columns: 1fr; }"),
         "editor fields collapse to one column when narrow"
     );
     service.shutdown();
@@ -228,11 +262,14 @@ async fn page_editor_supports_rename_flow() {
     // HTML/JS 层：Name 输入不再被禁用；保存时先调 rename 再 PUT。
     let page = request(port, &get(&format!("/?token={token}"))).await;
     assert_eq!(status(&page), 200);
-    let html = body(&page);
-    assert!(!html.contains(".disabled"), "name input never disabled");
-    assert!(html.contains("'/rename'"), "rename endpoint wired");
+    let html = body(&page).to_string();
+    let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let js = body(&request(port, &get("/settings.js")).await).to_string();
+    assert!(!html.contains("disabled"), "name input never disabled");
+    assert!(!css.contains(".disabled"), "no disabled styling");
+    assert!(js.contains("'/rename'"), "rename endpoint wired");
     assert!(
-        html.contains("JSON.stringify({to: name})"),
+        js.contains("JSON.stringify({to: name})"),
         "rename payload wired"
     );
 

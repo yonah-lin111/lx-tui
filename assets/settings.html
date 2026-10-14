@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lx-tui settings</title>
+<link rel="stylesheet" href="/settings.css">
+</head>
+<body>
+<nav class="side">
+  <h1>lx-tui</h1>
+  <button id="tab-general" class="active" onclick="showTab('general')">General</button>
+  <button id="tab-commands" onclick="showTab('commands')">Commands</button>
+</nav>
+<div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
+<main>
+  <section id="view-general" class="view">
+    <h2>General</h2>
+    <p class="status" id="general-status">Loading…</p>
+    <fieldset>
+      <legend>Layout</legend>
+      <div class="grid">
+        <div><label for="sidebar_width">Sidebar width</label><input id="sidebar_width" type="number" min="1" max="200"></div>
+        <div><label for="sidebar_min_width">Sidebar min width</label><input id="sidebar_min_width" type="number" min="1" max="200"></div>
+        <div><label for="sidebar_max_width">Sidebar max width</label><input id="sidebar_max_width" type="number" min="1" max="200"></div>
+        <div><label for="narrow_width">Narrow width</label><input id="narrow_width" type="number" min="1" max="500"></div>
+        <div><label for="min_width">Min screen width</label><input id="min_width" type="number" min="1" max="500"></div>
+        <div><label for="min_height">Min screen height</label><input id="min_height" type="number" min="1" max="500"></div>
+        <div><label for="min_pane_width">Min pane width</label><input id="min_pane_width" type="number" min="1" max="500"></div>
+        <div><label for="min_pane_height">Min pane height</label><input id="min_pane_height" type="number" min="1" max="500"></div>
+      </div>
+    </fieldset>
+    <div class="actions">
+      <button class="primary" onclick="saveConfig()">Save</button>
+      <button class="ghost" onclick="loadState()">Reload</button>
+      <span class="status" id="config-state"></span>
+    </div>
+  </section>
+
+  <section id="view-commands" class="view hidden">
+    <h2>Commands</h2>
+    <div class="commands-toolbar">
+      <label for="cmd-filter">Type</label>
+      <select id="cmd-filter" onchange="renderCommands()">
+        <option value="all">All</option>
+        <option value="agentMD">Markdown insertion</option>
+        <option value="agentBlock">Template block</option>
+      </select>
+      <button class="ghost" onclick="loadState()">Reload</button>
+      <span class="status" id="commands-status">Loading…</span>
+    </div>
+    <div class="commands-grid">
+      <nav class="commands-nav" aria-label="Custom commands">
+        <div id="command-list" class="command-list"></div>
+        <button id="new-command-row" type="button" class="nav-item new" onclick="newCommand()">
+          <span class="nav-slash">+</span>
+          <span class="nav-name">New command</span>
+        </button>
+      </nav>
+      <div class="cmd-resizer" id="cmd-resizer" role="separator" aria-orientation="vertical" aria-label="Resize command list"></div>
+
+      <section class="editor-card">
+        <div id="editor-empty" class="editor-empty">
+          <p id="editor-empty-text">Select a command to edit.</p>
+          <button class="primary" onclick="newCommand()">New command</button>
+        </div>
+
+        <div id="editor" class="hidden">
+          <div class="editor-head">
+            <h3 id="editor-legend">Edit command</h3>
+            <div class="actions">
+              <button class="primary" onclick="saveCommand()">Save</button>
+              <button class="ghost" onclick="hideEditor()">Cancel</button>
+              <button class="danger" onclick="deleteCommand()">Delete</button>
+              <span class="status" id="editor-status"></span>
+            </div>
+          </div>
+          <div class="editor-body">
+            <fieldset>
+              <div class="field-grid">
+                <div>
+                  <label for="cmd-name">Name</label>
+                  <input id="cmd-name" type="text" placeholder="my-command">
+                </div>
+                <div>
+                  <label for="cmd-scope">Scope</label>
+                  <select id="cmd-scope">
+                    <option value="user">User</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-kind">Type</label>
+                  <select id="cmd-kind">
+                    <option value="agentMD">Markdown insertion</option>
+                    <option value="agentBlock">Agent block</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-md-scope">Visibility</label>
+                  <select id="cmd-md-scope">
+                    <option value="global">Global (everywhere)</option>
+                    <option value="template">Template only</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-block-type">Block type (agent block only)</label>
+                  <select id="cmd-block-type">
+                    <option value="template">Task block (&&&amp;&amp;&amp;)</option>
+                    <option value="supple">Supplement block (+++)</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="cmd-title">Block title (agent block only)</label>
+                  <input id="cmd-title" type="text" placeholder="title">
+                </div>
+                <div>
+                  <label for="cmd-description">Description</label>
+                  <input id="cmd-description" type="text">
+                </div>
+              </div>
+            </fieldset>
+            <fieldset class="editor-markdown">
+              <legend>Markdown body</legend>
+              <textarea id="cmd-body"></textarea>
+            </fieldset>
+          </div>
+        </div>
+      </section>
+    </div>
+  </section>
+</main>
+<script src="/settings.js"></script>
+</body>
+</html>

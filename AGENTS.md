@@ -5,6 +5,7 @@
 - `docs/standards/project-directory-structure.md`
 - `docs/standards/code-writing-standards.md`
 - `docs/standards/tui-design-requirements.md`
+- `docs/standards/html-assets.md`
 
 ## Agent 执行规则
 
@@ -13,6 +14,7 @@
 - 优先最小修改，不为未来假设创建空目录、空文件或抽象层。
 - 新增、移动或拆分代码前，确认模块归属、依赖方向及已有可复用能力。
 - 单文件行数上限 1000，超限必须按职责拆分，拆分后子文件控制在 500 行左右。
+- 浏览器前端资源（如设置页）放在 `assets/*.{html,css,js}`，HTML/CSS/JS 分文件，经 `include_str!` 编译进二进制并按独立路由（`/settings.css`、`/settings.js`）提供；禁止把 HTML/CSS/JS 重新内联进 `.rs`，禁止引入 Tailwind 等需构建步骤的样式方案，遵循 `docs/standards/html-assets.md`。
 - 生产代码禁止 `unwrap()` / `expect()`；错误使用 `Result` 与 `?` 传播。
 - 日志统一使用 `tracing`；禁止用 `println!` / `eprintln!` 输出调试信息，禁止绕过 ratatui 直接写 stdout。
 - OS 专属代码只允许出现在 `src/platform/`，并按 `#[cfg(...)]` 门控。

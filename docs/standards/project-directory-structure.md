@@ -45,10 +45,16 @@ lx-tui/
       service.rs                同步持久化服务：执行 app 层效应出箱、按需载入提示词树
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd）
+    settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
+      commands.rs               自定义命令 Markdown 文件的读写
+      service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递
+    platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
-  assets/                       静态资源，按需创建
+  assets/                       浏览器前端资源（HTML/CSS/JS），经 include_str! 嵌入二进制
+    settings.html               设置页结构
+    settings.css                设置页样式
+    settings.js                 设置页脚本
 ```
 
 以上为目标结构。未实现的能力不提前创建目录或空文件，`按需创建` 的目录同理。
@@ -66,20 +72,23 @@ lx-tui/
 9. `db/`：唯一使用 rusqlite 的模块：SQLite 初始化与 `PRAGMA user_version` 迁移、工作区信任读写、提示词与文件夹 CRUD（含 2 层嵌套约束与级联删除）；`service.rs` 是事件循环持有的同步受控服务，执行 app 层 `Effect` 出箱并惰性载入提示词树；app 层保持纯内存，禁止直接触碰 rusqlite。
 10. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
 11. `config/`：配置结构、默认值与校验；配置变更不直接改运行时状态，交由 `app` 行为处理。
-12. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控；核心模块不得出现裸 OS 分支。
-13. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
+12. `settings/`：设置与命令文件持久化（`settings.json`、自定义命令 Markdown 文件）及本地回环设置 Web 服务；`service.rs` 只监听 `127.0.0.1` 并带每次运行随机 token，静态资源（`page.rs` 以 `include_str!` 加载 `assets/`，经独立路由提供）与 JSON API 共用一套存储函数，状态变更经事件投递回 `event` 循环。
+13. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控；核心模块不得出现裸 OS 分支。
+14. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
+15. `assets/`：浏览器前端资源，HTML/CSS/JS 分文件维护，经 `include_str!` 编译进二进制并按独立路由提供，遵循 `html-assets.md`。
 
 ## 依赖方向
 
 ```text
 main -> 所有模块（只装配，不写业务）
-event -> input, app, ui, tui, pty, terminal, git, db
+event -> input, app, ui, tui, pty, terminal, git, db, settings
 ui -> app（只读状态）, layout（窗格几何）, terminal（只读网格）
 input -> app（行为定义）, layout（方向导航）
 app -> layout（平铺模型）, terminal（仿真状态）, config, db（仅记录类型转换，无 IO）
 pty -> layout（PaneId）
 git -> 仅标准库
 db -> 仅 rusqlite 与标准库
+settings -> config, commands 存储与标准库 / tokio（不含 app、ui、event 实现）
 terminal -> 仅 alacritty_terminal / vte 与标准库（纯，无 IO）
 tui -> 仅 crossterm / ratatui
 layout -> 仅 ratatui 几何类型与标准库

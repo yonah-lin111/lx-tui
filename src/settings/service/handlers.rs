@@ -205,6 +205,17 @@ pub fn route(request: &Request, state: &ServiceState) -> Response {
         let status = status.parse().unwrap_or(400);
         return Response::error(status, "request too large");
     }
+    // 静态资源（CSS/JS）不含敏感内容，且浏览器以无 token 的裸路径请求，
+    // 故在 token 校验之前放行；页面与 JSON API 仍逐请求校验。
+    if request.method == "GET"
+        && let Some((content_type, body)) = page::asset(&request.path)
+    {
+        return Response {
+            status: 200,
+            content_type,
+            body: body.to_string(),
+        };
+    }
     if !token_ok(request, state) {
         return Response::error(403, "invalid token");
     }
