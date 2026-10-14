@@ -4,6 +4,7 @@ pub mod actions;
 pub mod effects;
 pub mod markdown;
 pub mod overlay;
+pub mod paste;
 pub mod prompt;
 pub mod selection;
 pub mod state;

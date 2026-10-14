@@ -243,6 +243,16 @@ pub(crate) fn handle_mouse_wheel(
                     *dirty = true;
                 }
             }
+        } else if state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.view == PaneView::Lx)
+        {
+            // lx 页唯一可滚动的是输入缓冲区：滚轮滚动其视口，不穿透到隐藏终端。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && update::scroll_lx_input(state, pane, direction)
+            {
+                *dirty = true;
+            }
         } else if state.pane_anywhere(pane).is_some_and(|target| {
             target.kind == PaneKind::Terminal && target.view == PaneView::Terminal
         }) && handle_pane_wheel(state, sessions, pane, inner, mouse)

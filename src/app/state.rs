@@ -79,6 +79,8 @@ pub struct AppState {
     pub terminal_selection: Option<PaneId>,
     /// lx 页文本选区（内容坐标）；松开鼠标时复制并清除。
     pub lx_selection: Option<Selection>,
+    /// 正在拖拽选择的 lx 输入框所在窗格；选区锚点存于该窗格的 `Lx` 内。
+    pub lx_input_drag: Option<PaneId>,
     /// 选区拖拽边缘自动滚动计划；None 表示未激活。
     pub selection_autoscroll: Option<SelectionAutoscroll>,
     pub resizing_prompt: bool,
@@ -119,6 +121,8 @@ pub struct AppState {
     pub prompt_row_click: Option<(usize, Instant)>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
+    /// 拖拽 lx 输入框滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub lx_scroll_drag: Option<(PaneId, u16)>,
     /// 鼠标悬停的侧栏 Agents 条目槽位索引（含滚动偏移）；None 表示未悬停。
     pub agent_hover: Option<usize>,
     /// 侧栏 Agents 列表滚动偏移（顶部条目索引）。
@@ -164,6 +168,7 @@ impl AppState {
             selection: None,
             terminal_selection: None,
             lx_selection: None,
+            lx_input_drag: None,
             selection_autoscroll: None,
             resizing_prompt: false,
             prompt_hover: false,
@@ -197,6 +202,7 @@ impl AppState {
             prompt_scroll_drag: None,
             prompt_row_click: None,
             terminal_scroll_drag: None,
+            lx_scroll_drag: None,
             agent_hover: None,
             agent_scroll: 0,
             agent_scroll_drag: None,

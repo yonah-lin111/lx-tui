@@ -1479,7 +1479,7 @@ fn toggle_button_click_flips_view_without_stealing_focus() {
 }
 
 #[test]
-fn lx_view_edits_input_and_swallows_paste() {
+fn lx_view_edits_input_and_pastes_text() {
     let config = Config::default();
     let mut state = AppState::demo();
     let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
@@ -1512,20 +1512,21 @@ fn lx_view_edits_input_and_swallows_paste() {
         "按键不得吸回隐藏终端的滚动位置"
     );
 
+    // 普通文本粘贴进入 lx 输入框，不写入隐藏终端。
     dirty = false;
     handle_terminal_event(
-        TerminalEvent::Paste("x".to_string()),
+        TerminalEvent::Paste("bc".to_string()),
         &mut state,
         &mut sessions,
         &geo,
         &config,
         &mut dirty,
     );
-    assert!(!dirty, "lx 视图粘贴被吞掉");
+    assert!(dirty, "lx 视图粘贴产生重绘");
     assert_eq!(
         state.pane_anywhere(pane).expect("pane").lx.input,
-        "a",
-        "粘贴不进入 lx 输入框"
+        "abc",
+        "粘贴进入 lx 输入框"
     );
     assert!(
         state
@@ -1547,6 +1548,43 @@ fn lx_view_edits_input_and_swallows_paste() {
         &mut dirty,
     );
     assert!(state.should_quit);
+}
+
+#[test]
+fn lx_view_path_paste_opens_reference_panel() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let dir = env!("CARGO_MANIFEST_DIR").to_string();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        TerminalEvent::Paste(dir.clone()),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(dirty, "路径粘贴产生重绘");
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.paste_panel().is_some(), "路径粘贴打开参照面板");
+    assert!(lx.input.contains(&dir), "占位路径写入 lx 输入框");
+
+    // Enter 采纳默认高亮项（引用），面板关闭且占位被改写。
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.paste_panel().is_none(), "确认后关闭面板");
+    assert!(lx.input.contains("@[refer-folder]"), "改写为引用格式");
 }
 
 #[test]
@@ -1576,6 +1614,42 @@ fn lx_view_content_click_focuses_and_starts_selection() {
         state.lx_selection.is_some(),
         "lx 视图内容区按下开始整页选区"
     );
+}
+
+#[test]
+fn lx_input_click_places_cursor_and_starts_text_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        for ch in "hello".chars() {
+            lx.insert_char(ch);
+        }
+    }
+    let inner = pane_inner(&geo, pane);
+    let (x, y) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::main_content::lx::input_geom(inner, &target.lx))
+        .map(|geom| geom.text_origin())
+        .expect("input geom");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), x + 2, y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.cursor, 2, "点击把光标定位到单元格");
+    assert!(lx.has_text_selection(), "输入框内开始文本拖拽");
+    assert!(state.lx_input_drag.is_some());
+    assert!(state.lx_selection.is_none(), "输入框内不再启动整页选区");
 }
 
 #[test]

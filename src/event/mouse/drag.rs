@@ -73,6 +73,25 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some((pane, grab)) = state.lx_scroll_drag {
+        let bar = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .and_then(|(_, rect)| {
+                let inner = layout::pane_inner_rect(*rect);
+                state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::input_scrollbar(inner, &target.lx))
+            });
+        let Some(bar) = bar else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_lx_scroll(state, pane, offset) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(hit) = state.resizing_pane {
         let pos = match hit.direction {
             Direction::Horizontal => mouse.column,
@@ -114,10 +133,27 @@ pub(crate) fn handle_mouse_drag(
     if state.terminal_selection.is_none()
         && state.selection.is_none()
         && state.lx_selection.is_none()
+        && state.lx_input_drag.is_none()
         && let Some((pane, inner)) = pane_at(rects, mouse.column, mouse.row)
         && forward_pane_mouse_event(state, sessions, pane, inner, mouse)
     {
         *dirty = true;
+        return;
+    }
+    // lx 输入框文本拖拽：焦点跟到鼠标所在单元格（超出则钳到输入内容区）。
+    if let Some(pane) = state.lx_input_drag {
+        let Some((_, rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+            return;
+        };
+        let inner = layout::pane_inner_rect(*rect);
+        if let Some(geom) = state
+            .pane_anywhere(pane)
+            .and_then(|target| ui::main_content::lx::input_geom(inner, &target.lx))
+        {
+            let (visual_row, col) = geom.cell(mouse.column, mouse.row);
+            update::drag_lx_input_selection(state, pane, visual_row, col);
+            *dirty = true;
+        }
         return;
     }
     // lx 页选区拖拽：终点更新到鼠标位置的内容坐标。
@@ -195,6 +231,9 @@ pub(crate) fn handle_mouse_up_left(
     if state.terminal_scroll_drag.take().is_some() {
         return;
     }
+    if state.lx_scroll_drag.take().is_some() {
+        return;
+    }
     if state.resizing_pane.is_some() {
         update::end_pane_resize(state);
         *dirty = true;
@@ -255,6 +294,33 @@ pub(crate) fn handle_mouse_up_left(
                 .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
             );
         }
+    }
+    // lx 输入框选区松开：复制选中文本（空选区不复制）。
+    if let Some((pane, text)) = update::take_lx_input_selection(state) {
+        if !text.trim().is_empty() {
+            let now = Instant::now();
+            if crate::platform::write_clipboard(&text) {
+                update::show_toast(
+                    state,
+                    Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now)
+                        .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                );
+            } else {
+                tracing::warn!("clipboard write failed");
+                update::show_toast(
+                    state,
+                    Toast::new(
+                        ToastKind::Error,
+                        ui::text::TOAST_COPY_FAILED,
+                        Some(pane),
+                        now,
+                    )
+                    .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
+                );
+            }
+        }
+        *dirty = true;
+        return;
     }
     // lx 页选区松开：复制选中文本（空选区不复制）。
     if let Some(selection) = update::take_lx_selection(state)

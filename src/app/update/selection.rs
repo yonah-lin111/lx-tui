@@ -42,6 +42,34 @@ pub fn clear_lx_selection(state: &mut AppState) {
     state.lx_selection = None;
 }
 
+/// 在 lx 输入框内开始文本选择（视觉行、内容列）；光标落到该单元格。
+pub fn begin_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col: u16) {
+    clear_selection(state);
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.begin_text_selection(row, col);
+        state.lx_input_drag = Some(id);
+    }
+}
+
+/// 拖拽扩展 lx 输入框选区；窗格不一致时忽略。
+pub fn drag_lx_input_selection(state: &mut AppState, id: PaneId, row: usize, col: u16) {
+    if state.lx_input_drag != Some(id) {
+        return;
+    }
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.drag_text_selection(row, col);
+    }
+}
+
+/// 结束 lx 输入框选区并取走选中文本；空选区或未拖拽返回 None，锚点总是清除。
+pub fn take_lx_input_selection(state: &mut AppState) -> Option<(PaneId, String)> {
+    let id = state.lx_input_drag.take()?;
+    let pane = state.pane_mut_anywhere(id)?;
+    let text = pane.lx.selected_text();
+    pane.lx.clear_text_selection();
+    text.map(|text| (id, text))
+}
+
 /// 在 prompt 开始一次文本选择；与右栏拖拽、终端选区互斥。
 pub fn begin_selection(state: &mut AppState, pane: PaneId, row: u16, col: u16) {
     state.resizing_prompt = false;
@@ -119,11 +147,17 @@ pub fn clear_terminal_selection(state: &mut AppState) {
     }
 }
 
-/// 清除 prompt、终端与 lx 选区。
+/// 清除 prompt、终端、lx 页与 lx 输入框选区以及输入框滚动条拖拽。
 pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
     state.selection_autoscroll = None;
     state.lx_selection = None;
+    state.lx_scroll_drag = None;
+    if let Some(pane) = state.lx_input_drag.take()
+        && let Some(target) = state.pane_mut_anywhere(pane)
+    {
+        target.lx.clear_text_selection();
+    }
     clear_terminal_selection(state);
 }
 

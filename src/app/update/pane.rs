@@ -42,6 +42,27 @@ pub fn reset_pane_scroll(state: &mut AppState, id: PaneId) -> bool {
         .is_some_and(|pane| pane.kind == PaneKind::Terminal && pane.terminal.scroll_to_bottom())
 }
 
+/// 滚轮滚动 lx 输入框视口（一格放大为 `WHEEL_LINES` 行）；返回视口是否移动。
+pub fn scroll_lx_input(state: &mut AppState, id: PaneId, direction: isize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if pane.view != PaneView::Lx {
+        return false;
+    }
+    pane.lx.scroll_by(direction.saturating_mul(WHEEL_LINES))
+}
+
+/// 设置 lx 输入框滚动条视口偏移（滚动条点击/拖拽）；返回视口是否移动。
+pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    let before = pane.lx.scroll();
+    pane.lx.scroll_to(offset);
+    pane.lx.scroll() != before
+}
+
 /// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
@@ -61,6 +82,30 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         return;
     }
     let lx = &mut pane.lx;
+    // 路径粘贴参照面板优先：与 md 块面板互斥；面板打开时其余按键按面板策略吞掉。
+    if lx.paste_panel().is_some() {
+        match command {
+            LxInput::Up => {
+                lx.paste_move(-1);
+            }
+            LxInput::Down => {
+                lx.paste_move(1);
+            }
+            LxInput::Enter => match lx.paste_panel().and_then(|panel| panel.active_action()) {
+                Some(action) => {
+                    lx.paste_confirm(action);
+                }
+                None => {
+                    lx.paste_cancel();
+                }
+            },
+            LxInput::Escape => {
+                lx.paste_cancel();
+            }
+            _ => {}
+        }
+        return;
+    }
     let panel_open = lx.panel.is_some();
     match command {
         LxInput::Up if panel_open => lx.panel_move(-1),
@@ -96,9 +141,10 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     }
 }
 
-/// 切换 lx 页选中入口（仅鼠标点击触发）。
+/// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。
 pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::LxEntry) {
     if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.paste_cancel();
         pane.lx.entry = entry;
     }
 }
@@ -112,6 +158,8 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
             PaneView::Lx => PaneView::Terminal,
             PaneView::Terminal => PaneView::Lx,
         };
+        // 切换视图时取消在途粘贴面板：隐藏的 lx 页不再持有悬空面板。
+        pane.lx.paste_cancel();
         pane.view
     }) else {
         return false;
@@ -144,6 +192,8 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = layout::pane_inner_size(*rect);
             pane.terminal.resize(cols, rows);
+            let (lx_cols, lx_rows) = layout::lx_input_size(*rect);
+            pane.lx.resize(lx_cols, lx_rows);
         }
     }
 }

@@ -68,12 +68,12 @@ pub(super) fn is_fence(line: &str) -> bool {
 }
 
 /// 字符显示宽度；零宽与不可打印字符按 0 处理。
-pub(super) fn char_width(ch: char) -> usize {
+pub(crate) fn char_width(ch: char) -> usize {
     ch.width().unwrap_or(0)
 }
 
 /// 文本显示宽度（列）。
-pub(super) fn display_width(text: &str) -> usize {
+pub(crate) fn display_width(text: &str) -> usize {
     text.chars().map(char_width).sum()
 }
 
@@ -96,7 +96,7 @@ pub(super) fn next_boundary(text: &str, index: usize) -> usize {
 }
 
 /// 行内显示列对应的字节偏移；落在宽字符中间或超出时钳到对应边界。
-pub(super) fn offset_at_col(slice: &str, col: usize) -> usize {
+pub(crate) fn offset_at_col(slice: &str, col: usize) -> usize {
     let mut cell = 0;
     for (offset, ch) in slice.char_indices() {
         let width = char_width(ch);
@@ -109,7 +109,7 @@ pub(super) fn offset_at_col(slice: &str, col: usize) -> usize {
 }
 
 /// 粘贴文本净化：换行归一、制表符展开、其余控制字符丢弃。
-pub(super) fn sanitize(text: &str) -> String {
+pub(crate) fn sanitize(text: &str) -> String {
     let mut sanitized = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {

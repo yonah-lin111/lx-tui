@@ -404,3 +404,70 @@ fn buffer_text(buf: &Buffer) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[test]
+fn path_paste_panel_renders_above_input() {
+    use crate::app::paste::{PasteCandidate, PasteCandidateKind};
+    use std::path::PathBuf;
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    assert!(lx.paste_open(vec![PasteCandidate::external(
+        PathBuf::from("/tmp/dir"),
+        PasteCandidateKind::Folder,
+    )]));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("Paste"), "参照面板标题: {text}");
+    assert!(text.contains("Insert reference"), "引用项: {text}");
+    assert!(text.contains("Insert path"), "路径项: {text}");
+}
+
+#[test]
+fn input_geom_hit_and_scrollbar() {
+    let area = Rect::new(0, 0, 40, 20);
+    let mut lx = Lx::new();
+    let width = area.width - 2 * MARGIN - INPUT_PREFIX - INPUT_SCROLLBAR;
+    lx.resize(width, 6);
+    lx.insert_str(&"x".repeat(usize::from(width) * 7));
+    let geom = input_geom(area, &lx).expect("input geom");
+    let (x, y) = geom.text_origin();
+    assert!(geom.contains(x, y), "文本区左上角在内");
+    assert!(!geom.contains(x.saturating_sub(1), y), "前缀列不在文本区");
+    assert!(!geom.contains(x, y.saturating_sub(1)), "上分割线不在文本区");
+    assert_eq!(geom.cell(x + 2, y).1, 2, "列映射");
+    assert!(input_scrollbar(area, &lx).is_some(), "溢出时有滚动条几何");
+}
+#[test]
+fn long_line_wraps_into_visible_rows() {
+    let area = Rect::new(0, 0, 40, 20);
+    let mut lx = Lx::new();
+    let width = area.width - 2 * MARGIN - INPUT_PREFIX - INPUT_SCROLLBAR;
+    lx.resize(width, 100);
+    lx.insert_str(&"a".repeat(usize::from(width)));
+    lx.insert_str("ZZ");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("ZZ"), "折行后的第二视觉行可见: {text}");
+}
+
+#[test]
+fn wrapped_input_caps_height_and_shows_scrollbar() {
+    let area = Rect::new(0, 0, 40, 20);
+    let mut lx = Lx::new();
+    let width = area.width - 2 * MARGIN - INPUT_PREFIX - INPUT_SCROLLBAR;
+    lx.resize(width, 100);
+    let cap = usize::from((area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX) - 2).max(1);
+    lx.insert_str(&"x".repeat(usize::from(width) * (cap + 3)));
+    assert!(lx.visual_rows().len() > cap, "视觉行超过可视上限");
+    assert_eq!(layout(area, &lx).input_visible, cap, "输入框高度封顶");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains('▐') || text.contains('▕'),
+        "溢出时滚动条可见: {text}"
+    );
+}
