@@ -6,14 +6,10 @@ use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::style::Color;
 
 /// 像素字标：行数符合预期、每行宽度一致、只含调色板字符。
-fn assert_icon(art: &[&str], rows: usize) {
+fn assert_icon(art: &[&str], width: u16, rows: usize) {
     assert_eq!(art.len(), rows, "像素行数");
     for row in art {
-        assert_eq!(
-            row.chars().count(),
-            usize::from(LOGO_WIDTH),
-            "像素行宽度一致"
-        );
+        assert_eq!(row.chars().count(), usize::from(width), "像素行宽度一致");
         for ch in row.chars() {
             assert!(
                 matches!(ch, '.' | 'k' | 'p' | 'n' | 'b' | 'c' | 'w'),
@@ -25,12 +21,18 @@ fn assert_icon(art: &[&str], rows: usize) {
 
 #[test]
 fn logo_art_is_consistent() {
-    assert_icon(ICON_LX, usize::from(LOGO_ROWS) * 2);
+    assert_icon(ICON_LX, LOGO_WIDTH, usize::from(LOGO_ROWS) * 2);
 }
 
 #[test]
 fn compact_logo_art_is_consistent() {
-    assert_icon(ICON_LX_COMPACT, Logo::Compact.art().len());
+    assert_icon(
+        ICON_LX_COMPACT,
+        LOGO_COMPACT_WIDTH,
+        Logo::Compact.art().len(),
+    );
+    assert_eq!(Logo::Full.width(), LOGO_WIDTH);
+    assert_eq!(Logo::Compact.width(), LOGO_COMPACT_WIDTH);
     assert_eq!(Logo::Full.cell_rows(), LOGO_ROWS);
     assert_eq!(Logo::Compact.cell_rows(), 4);
 }

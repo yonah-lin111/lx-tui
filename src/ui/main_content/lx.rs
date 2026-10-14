@@ -20,6 +20,8 @@ const CONTINUATION: char = '\0';
 /// 图标像素画尺寸（列 × 像素行 = 单元格行 × 2）。
 pub(crate) const LOGO_WIDTH: u16 = 20;
 pub(crate) const LOGO_ROWS: u16 = 7;
+/// 紧凑档图标宽度（宽高同时减半）。
+const LOGO_COMPACT_WIDTH: u16 = 10;
 
 /// 宽屏水平边距、输入框最小宽度与输入框最小高度（1 内容行 + 上下分割线）。
 const MARGIN: u16 = 2;
@@ -58,21 +60,20 @@ const ICON_LX: &[&str] = &[
     "kkkkkkkkkkk.....kkkk",
 ];
 
-/// 紧凑 LX 字标（20 列 × 8 像素行）：由基准纵向半高降采样，保持与原字标同一轮廓。
+/// 紧凑 LX 字标（10 列 × 7 像素行）：基准按 2× 采样（取每 2×2 块左上像素），保留原轮廓。
 ///
-/// 取自基准的像素行 0/2/4/6/8/10/12/13，仅用于容器过矮时（`Logo::Compact`）。
+/// 仅用于容器过矮时（`Logo::Compact`），宽高同时减半。
 const ICON_LX_COMPACT: &[&str] = &[
-    ".kkk...kkkkk....kkkk",
-    "kppbk..kbbbk...kppnk",
-    "kppbk..kkbbbbkppnnk.",
-    "kppbk....kbkppnnk...",
-    "kppbk....kppnnknpk..",
-    "kppbk..kppnnknnnnpk.",
-    "kbbbbbkpnnkk...knnnk",
-    "kkkkkkkkkkk.....kkkk",
+    ".k..kk..kk",
+    "kpk.bb..pn",
+    "kpk.kbbpnk",
+    "kpk..bpnk.",
+    "kpk..pnkp.",
+    "kpk.pnknnk",
+    "kbbknk..nn",
 ];
 
-/// 图标档位：原尺寸，或容器过矮时的紧凑尺寸（同宽、半高）。
+/// 图标档位：原尺寸，或容器过矮时的紧凑尺寸（宽高同时减半）。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Logo {
     Full,
@@ -88,6 +89,14 @@ impl Logo {
         match self {
             Self::Full => ICON_LX,
             Self::Compact => ICON_LX_COMPACT,
+        }
+    }
+
+    /// 该档位的像素列宽。
+    fn width(self) -> u16 {
+        match self {
+            Self::Full => LOGO_WIDTH,
+            Self::Compact => LOGO_COMPACT_WIDTH,
         }
     }
 
@@ -430,17 +439,21 @@ fn place_icon(
     content_x: u16,
     content_w: u16,
 ) -> Option<(u16, u16, Logo)> {
-    if content_w < LOGO_WIDTH {
-        return None;
-    }
     let bottom = tip_y.checked_sub(LOGO_GAP)?;
-    let x = content_x + content_w.saturating_sub(LOGO_WIDTH) / 2;
-    Logo::TIERS.into_iter().find_map(|logo| {
-        bottom
+    for logo in Logo::TIERS {
+        if content_w < logo.width() {
+            continue;
+        }
+        let Some(top) = bottom
             .checked_sub(logo.cell_rows())
             .filter(|top| *top >= region_top)
-            .map(|top| (x, top, logo))
-    })
+        else {
+            continue;
+        };
+        let x = content_x + content_w.saturating_sub(logo.width()) / 2;
+        return Some((x, top, logo));
+    }
+    None
 }
 
 /// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
@@ -721,11 +734,10 @@ fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
 /// 把像素图标画进以 `(x, y)` 为左上角的单元格区域（按入口配色微调）。
 fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry, logo: Logo) {
     for (row, pair) in logo.art().chunks(2).enumerate() {
-        let [top, bottom] = pair else {
-            break;
-        };
+        let top = pair.first().copied().unwrap_or("");
+        let bottom = pair.get(1).copied().unwrap_or("");
         let cell_y = y + row as u16;
-        for column in 0..LOGO_WIDTH {
+        for column in 0..logo.width() {
             let top = icon_pixel(entry, top.chars().nth(usize::from(column)).unwrap_or('.'));
             let bottom = icon_pixel(
                 entry,
