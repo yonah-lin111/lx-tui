@@ -2622,6 +2622,69 @@ fn mouse_double_click_prompt_item_row_opens_editor() {
 }
 
 #[test]
+fn mouse_right_click_prompt_item_keeps_selection() {
+    use crate::app::prompt::PromptItem;
+    let mut state = demo_terminal();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let item_row = prompt_tree_click(
+        &mut state,
+        &geo,
+        vec![],
+        vec![
+            PromptItem::single(7, None, "one", "first body"),
+            PromptItem::single(8, None, "two", "second body"),
+        ],
+        PromptRowKind::Item,
+    );
+    // 选中停在第二个条目上，右键落在第一个条目行。
+    assert!(crate::app::update::select_prompt_item(&mut state, 0, 8));
+    let selected_before = state.workspaces[0].prompt_panel.selected;
+    let other = state.workspaces[0]
+        .prompt_panel
+        .rows()
+        .into_iter()
+        .position(|row| {
+            state.workspaces[0]
+                .prompt_panel
+                .tree
+                .item_of_row(row)
+                .is_some_and(|item| item.id == 7)
+        })
+        .expect("item 7 row");
+    assert_ne!(selected_before, other, "右键目标行与选中行不同");
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Right),
+            item_row.0,
+            item_row.1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("prompt item menu expected");
+    };
+    assert_eq!(
+        menu.target,
+        crate::app::overlay::OverlayTarget::PromptItem {
+            workspace: 0,
+            item_id: 7
+        }
+    );
+    assert_eq!(
+        state.workspaces[0].prompt_panel.selected, selected_before,
+        "右键只挂菜单：不改动列表选中行"
+    );
+}
+
+#[test]
 fn mouse_double_click_prompt_temp_row_opens_editor() {
     use crate::app::prompt::{PromptEditing, PromptMode};
     let mut state = demo_terminal();

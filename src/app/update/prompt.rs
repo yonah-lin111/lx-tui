@@ -555,7 +555,10 @@ pub fn reset_prompt_autosave(state: &mut AppState, prompt: crate::layout::PaneId
     false
 }
 
-/// 打开提示词条目右键菜单：编辑、状态切换、重命名、复制与删除。
+/// 打开提示词条目右键菜单：编辑、重命名、复制与删除。
+///
+/// 右键不改动列表选中行（对齐工作区列表：右键只挂菜单，不切换当前项）；
+/// 菜单命令按 target 里的 item_id 生效。
 pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
     if state
@@ -572,7 +575,6 @@ pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u
         MenuCommand::CopyPromptContent,
         MenuCommand::DeletePrompt,
     ];
-    select_prompt_item(state, workspace, item_id);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::PromptItem { workspace, item_id },
@@ -582,6 +584,8 @@ pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u
 }
 
 /// 打开临时提示词右键菜单：编辑、复制与删除（删除仅内存、立即生效，无确认浮层）。
+///
+/// 同条目菜单：右键不改动列表选中行。
 pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
     let known = state
@@ -591,7 +595,6 @@ pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u
     if !known {
         return;
     }
-    select_prompt_temp(state, workspace, temp_id);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::TempPrompt { workspace, temp_id },
@@ -620,7 +623,6 @@ pub fn open_prompt_folder_menu(state: &mut AppState, folder_id: i64, anchor: (u1
     }
     commands.push(MenuCommand::RenameFolder);
     commands.push(MenuCommand::DeleteFolder);
-    select_prompt_folder(state, workspace, folder_id);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::PromptFolder {

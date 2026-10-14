@@ -286,6 +286,7 @@ fn editing_item_persists_on_commit_and_action_quit() {
 fn item_menu_lists_commands_and_dispatches_copy_delete() {
     let mut state = demo_state();
     enter_tree(&mut state);
+    let selected_before = state.workspaces[0].prompt_panel.selected;
     open_prompt_item_menu(&mut state, 12, (5, 5));
     let Some(Overlay::Menu(menu)) = &state.overlay else {
         panic!("menu open");
@@ -303,7 +304,21 @@ fn item_menu_lists_commands_and_dispatches_copy_delete() {
         menu.target,
         OverlayTarget::PromptItem { item_id: 12, .. }
     ));
-    assert_eq!(state.workspaces[0].prompt_panel.selected, 5);
+    // 右键不改动列表选中行（对齐工作区列表：只挂菜单，不切换当前项）。
+    assert_eq!(state.workspaces[0].prompt_panel.selected, selected_before);
+    let row_at_12 = state.workspaces[0]
+        .prompt_panel
+        .rows()
+        .into_iter()
+        .position(|row| {
+            state.workspaces[0]
+                .prompt_panel
+                .tree
+                .item_of_row(row)
+                .is_some_and(|item| item.id == 12)
+        })
+        .expect("item 12 row");
+    assert_ne!(selected_before, row_at_12, "菜单目标行不是当前选中行");
 
     // 复制命令 → 剪贴板效应。
     state.overlay = Some(Overlay::Menu(crate::app::overlay::Menu {
