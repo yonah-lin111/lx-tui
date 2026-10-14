@@ -5,9 +5,9 @@ use crate::app::state::LxEntry;
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::style::Color;
 
-/// 像素字标：行数 = 单元格行 × 2、每行宽度一致、只含调色板字符。
-fn assert_icon(art: &[&str]) {
-    assert_eq!(art.len(), usize::from(LOGO_ROWS) * 2, "行数 = 单元格行 × 2");
+/// 像素字标：行数符合预期、每行宽度一致、只含调色板字符。
+fn assert_icon(art: &[&str], rows: usize) {
+    assert_eq!(art.len(), rows, "像素行数");
     for row in art {
         assert_eq!(
             row.chars().count(),
@@ -25,7 +25,14 @@ fn assert_icon(art: &[&str]) {
 
 #[test]
 fn logo_art_is_consistent() {
-    assert_icon(ICON_LX);
+    assert_icon(ICON_LX, usize::from(LOGO_ROWS) * 2);
+}
+
+#[test]
+fn compact_logo_art_is_consistent() {
+    assert_icon(ICON_LX_COMPACT, Logo::Compact.art().len());
+    assert_eq!(Logo::Full.cell_rows(), LOGO_ROWS);
+    assert_eq!(Logo::Compact.cell_rows(), 4);
 }
 
 #[test]
@@ -168,8 +175,8 @@ fn wide_page_renders_brand_entries_and_input() {
 #[test]
 fn icon_is_horizontally_centered() {
     let area = Rect::new(0, 0, 100, 60);
-    let (icon_x, _, scale) = layout(area, &Lx::new()).icon.expect("icon");
-    assert_eq!(scale, 1);
+    let (icon_x, _, logo) = layout(area, &Lx::new()).icon.expect("icon");
+    assert_eq!(logo, Logo::Full);
     let content_x = area.x + MARGIN;
     let content_w = area.width - MARGIN * 2;
     assert_eq!(icon_x, content_x + (content_w - LOGO_WIDTH) / 2);
@@ -179,9 +186,9 @@ fn icon_is_horizontally_centered() {
 fn logo_sits_two_rows_above_tip() {
     let area = Rect::new(0, 0, 100, 60);
     let lay = layout(area, &Lx::new());
-    let (_, icon_y, scale) = lay.icon.expect("icon");
+    let (_, icon_y, logo) = lay.icon.expect("icon");
     let tip = lay.description.expect("tip");
-    assert_eq!(scale, 1);
+    assert_eq!(logo, Logo::Full);
     assert_eq!(
         tip.y - (icon_y + LOGO_ROWS),
         LOGO_GAP,
@@ -190,24 +197,20 @@ fn logo_sits_two_rows_above_tip() {
 }
 
 #[test]
-fn logo_scale_depends_on_height_not_width() {
+fn logo_uses_compact_tier_when_container_is_short() {
     let tall = Rect::new(0, 0, 100, 60);
     let tall_narrow = Rect::new(0, 0, 40, 60);
-    assert_eq!(
-        layout(tall, &Lx::new()).icon.expect("icon").2,
-        1,
-        "高屏原尺寸"
-    );
+    assert_eq!(layout(tall, &Lx::new()).icon.expect("icon").2, Logo::Full);
     assert_eq!(
         layout(tall_narrow, &Lx::new()).icon.expect("icon").2,
-        1,
+        Logo::Full,
         "宽度不影响档位"
     );
     let short = Rect::new(0, 0, 100, 20);
     assert_eq!(
         layout(short, &Lx::new()).icon.expect("icon").2,
-        2,
-        "矮屏半尺寸"
+        Logo::Compact,
+        "矮屏用紧凑档"
     );
 }
 
@@ -235,6 +238,33 @@ fn selected_entry_switches_text() {
     lx.entry = LxEntry::Hybrid;
     let _ = render(area, &mut buf, &lx, true, None);
     assert!(buffer_text(&buf).contains("mixes native and external agents"));
+}
+
+#[test]
+fn selected_entry_has_underline_below() {
+    let area = Rect::new(0, 0, 100, 60);
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &Lx::new(), true, None);
+    let lay = layout(area, &Lx::new());
+    let find = |entry| {
+        lay.entries
+            .iter()
+            .find(|(e, _)| *e == entry)
+            .map(|(_, rect)| *rect)
+            .expect("entry")
+    };
+    let native = find(LxEntry::Native);
+    assert_eq!(
+        buf[(native.x, native.y + 1)].symbol(),
+        "─",
+        "选中项下方有下划线"
+    );
+    let hybrid = find(LxEntry::Hybrid);
+    assert_ne!(
+        buf[(hybrid.x, hybrid.y + 1)].symbol(),
+        "─",
+        "未选中项无下划线"
+    );
 }
 
 #[test]

@@ -32,6 +32,9 @@ const ENTRY_VGAP: u16 = 1;
 const SECTION_GAP: u16 = 1;
 /// 图标底边与 Tip 行之间的行距。
 const LOGO_GAP: u16 = 2;
+/// 选中入口下方的下划线行（字符与占用行数）。
+const ENTRY_UNDERLINE: char = '─';
+const UNDERLINE_ROWS: u16 = 1;
 /// 输入框上下分割线字符。
 const RULE: char = '─';
 
@@ -54,6 +57,45 @@ const ICON_LX: &[&str] = &[
     "kbbbbbkpnnkk...knnnk",
     "kkkkkkkkkkk.....kkkk",
 ];
+
+/// 紧凑 LX 字标（20 列 × 8 像素行）：由基准纵向半高降采样，保持与原字标同一轮廓。
+///
+/// 取自基准的像素行 0/2/4/6/8/10/12/13，仅用于容器过矮时（`Logo::Compact`）。
+const ICON_LX_COMPACT: &[&str] = &[
+    ".kkk...kkkkk....kkkk",
+    "kppbk..kbbbk...kppnk",
+    "kppbk..kkbbbbkppnnk.",
+    "kppbk....kbkppnnk...",
+    "kppbk....kppnnknpk..",
+    "kppbk..kppnnknnnnpk.",
+    "kbbbbbkpnnkk...knnnk",
+    "kkkkkkkkkkk.....kkkk",
+];
+
+/// 图标档位：原尺寸，或容器过矮时的紧凑尺寸（同宽、半高）。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Logo {
+    Full,
+    Compact,
+}
+
+impl Logo {
+    /// 依次尝试的档位（先原尺寸、放不下再紧凑）。
+    const TIERS: [Self; 2] = [Self::Full, Self::Compact];
+
+    /// 该档位的像素行。
+    fn art(self) -> &'static [&'static str] {
+        match self {
+            Self::Full => ICON_LX,
+            Self::Compact => ICON_LX_COMPACT,
+        }
+    }
+
+    /// 该档位占用的单元格行数。
+    fn cell_rows(self) -> u16 {
+        (self.art().len() as u16).div_ceil(2)
+    }
+}
 
 /// 按入口对基准字标做配色微调：形状不变、只换调色板槽位。
 fn icon_pixel(entry: LxEntry, ch: char) -> char {
@@ -249,7 +291,7 @@ struct Layout {
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
-    icon: Option<(u16, u16, u16)>,
+    icon: Option<(u16, u16, Logo)>,
     description: Option<TextRect>,
     /// 空间不足时退化为居中字标。
     fallback: bool,
@@ -342,7 +384,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_top = center
         .min(input.y.saturating_sub(entries_h))
         .max(region_top);
-    let entries_ok = entries_fit && entries_top.saturating_add(entries_h) <= input.y;
+    let entries_ok = entries_fit
+        && entries_top
+            .saturating_add(entries_h)
+            .saturating_add(UNDERLINE_ROWS)
+            <= input.y;
 
     // Tip 行贴按钮上方。
     let tip_top = if entries_ok {
@@ -377,25 +423,24 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     out
 }
 
-/// 选择图标档位：优先原尺寸，放不下则半尺寸，仍放不下返回 None。
+/// 选择图标档位：优先原尺寸，放不下则紧凑尺寸，仍放不下返回 None。
 fn place_icon(
     tip_y: u16,
     region_top: u16,
     content_x: u16,
     content_w: u16,
-) -> Option<(u16, u16, u16)> {
-    let bottom = tip_y.checked_sub(LOGO_GAP)?;
-    for scale in [1u16, 2] {
-        let cols = LOGO_WIDTH / scale;
-        let rows = (LOGO_ROWS * 2 / scale).div_ceil(2);
-        if content_w >= cols
-            && let Some(top) = bottom.checked_sub(rows).filter(|top| *top >= region_top)
-        {
-            let x = content_x + content_w.saturating_sub(cols) / 2;
-            return Some((x, top, scale));
-        }
+) -> Option<(u16, u16, Logo)> {
+    if content_w < LOGO_WIDTH {
+        return None;
     }
-    None
+    let bottom = tip_y.checked_sub(LOGO_GAP)?;
+    let x = content_x + content_w.saturating_sub(LOGO_WIDTH) / 2;
+    Logo::TIERS.into_iter().find_map(|logo| {
+        bottom
+            .checked_sub(logo.cell_rows())
+            .filter(|top| *top >= region_top)
+            .map(|top| (x, top, logo))
+    })
 }
 
 /// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
@@ -453,8 +498,8 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         return (grid, None);
     }
 
-    if let Some((ix, iy, scale)) = lay.icon {
-        draw_icon(&mut grid, ix, iy, lx.entry, scale);
+    if let Some((ix, iy, logo)) = lay.icon {
+        draw_icon(&mut grid, ix, iy, lx.entry, logo);
     }
     if let Some(rect) = lay.description {
         draw_tip(&mut grid, rect, lx.entry);
@@ -480,10 +525,13 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     (grid, cursor)
 }
 
-/// 绘制 Tip 提示行：`Tip:` 前缀强调色、其后句子按该入口 logo 粉→蓝渐变着色；整体居中、超宽截断。
+/// 绘制 Tip 提示行：`Tip:` 前缀强调色、其后句子次要信息；整体居中、超宽截断。
 fn draw_tip(grid: &mut Grid, rect: TextRect, entry: LxEntry) {
-    let sentence = text::lx_entry_description(entry);
-    let full = format!("{} {}", text::LX_TIP_PREFIX, sentence);
+    let full = format!(
+        "{} {}",
+        text::LX_TIP_PREFIX,
+        text::lx_entry_description(entry)
+    );
     let full = text::truncate_to_width(&full, usize::from(rect.width));
     let full_w = u16::try_from(full.width()).unwrap_or(u16::MAX);
     let start = rect.x + rect.width.saturating_sub(full_w) / 2;
@@ -493,13 +541,7 @@ fn draw_tip(grid: &mut Grid, rect: TextRect, entry: LxEntry) {
     };
     grid.put(start, rect.y, text::LX_TIP_PREFIX, style::accent());
     let prefix_w = u16::try_from(text::LX_TIP_PREFIX.width()).unwrap_or(0);
-    let length = rest.chars().count();
-    let mut cx = start + prefix_w;
-    for (position, ch) in rest.chars().enumerate() {
-        let cell_style = style::lx_entry_label_style(entry, position, length, false);
-        grid.set(cx, rect.y, ch, cell_style);
-        cx = cx.saturating_add(u16::try_from(ch.width().unwrap_or(1)).unwrap_or(1).max(1));
-    }
+    grid.put(start + prefix_w, rect.y, rest, style::muted());
 }
 
 /// 标签页式入口：标签按该入口 logo 粉→蓝渐变着色、选中加粗；横排用 `·` 分隔。
@@ -516,6 +558,17 @@ fn draw_entries(grid: &mut Grid, selected: LxEntry, entries: &[(LxEntry, Rect)],
                 ch,
                 cell_style,
             );
+        }
+        if *entry == selected {
+            for position in 0..length {
+                let cell_style = style::lx_entry_label_style(*entry, position, length, false);
+                grid.set(
+                    rect.x.saturating_add(position as u16),
+                    rect.y + UNDERLINE_ROWS,
+                    ENTRY_UNDERLINE,
+                    cell_style,
+                );
+            }
         }
         if horizontal && let Some((_, next)) = entries.get(index + 1) {
             let gap = next.x.saturating_sub(rect.right());
@@ -665,44 +718,24 @@ fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
     }
 }
 
-/// 把像素图标画进以 `(x, y)` 为左上角的单元格区域；`scale` 为整数倍降档（1 原尺寸、2 半尺寸）。
-fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry, scale: u16) {
-    let scale = usize::from(scale.max(1));
-    let cols = usize::from(LOGO_WIDTH) / scale;
-    let pixel_rows = usize::from(LOGO_ROWS) * 2 / scale;
-    for row in 0..pixel_rows.div_ceil(2) {
+/// 把像素图标画进以 `(x, y)` 为左上角的单元格区域（按入口配色微调）。
+fn draw_icon(grid: &mut Grid, x: u16, y: u16, entry: LxEntry, logo: Logo) {
+    for (row, pair) in logo.art().chunks(2).enumerate() {
+        let [top, bottom] = pair else {
+            break;
+        };
         let cell_y = y + row as u16;
-        for column in 0..cols {
-            let top = block_pixel(entry, column * scale, row * 2 * scale, scale);
-            let bottom = block_pixel(entry, column * scale, (row * 2 + 1) * scale, scale);
+        for column in 0..LOGO_WIDTH {
+            let top = icon_pixel(entry, top.chars().nth(usize::from(column)).unwrap_or('.'));
+            let bottom = icon_pixel(
+                entry,
+                bottom.chars().nth(usize::from(column)).unwrap_or('.'),
+            );
             if let Some((ch, pixel_style)) = pixel_glyph(top, bottom) {
-                grid.set(x + column as u16, cell_y, ch, pixel_style);
+                grid.set(x + column, cell_y, ch, pixel_style);
             }
         }
     }
-}
-
-/// 取图标 `scale×scale` 块的代表像素（优先实体色、其次描边，全透明为 '.'），并按入口配色微调。
-fn block_pixel(entry: LxEntry, col0: usize, pixel_row0: usize, scale: usize) -> char {
-    let mut outline = '.';
-    for dp in 0..scale {
-        for dc in 0..scale {
-            match raw_pixel(col0 + dc, pixel_row0 + dp) {
-                '.' => {}
-                'k' => outline = 'k',
-                ch => return icon_pixel(entry, ch),
-            }
-        }
-    }
-    outline
-}
-
-/// 基准字标的原始像素（列、像素行）；越界为 '.'。
-fn raw_pixel(column: usize, pixel_row: usize) -> char {
-    ICON_LX
-        .get(pixel_row)
-        .and_then(|row| row.chars().nth(column))
-        .unwrap_or('.')
 }
 
 /// 直接把基准 LX 图标像素画进缓冲区（信任页品牌区复用；不走整页网格）。
