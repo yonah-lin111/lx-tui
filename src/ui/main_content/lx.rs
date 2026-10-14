@@ -30,8 +30,6 @@ const ENTRY_HEIGHT: u16 = 1;
 const ENTRY_GAP: u16 = 3;
 const ENTRY_VGAP: u16 = 1;
 const SECTION_GAP: u16 = 1;
-/// 图标右侧文案最小宽度。
-const MIN_TEXT_WIDTH: u16 = 12;
 /// 输入框上下分割线字符。
 const RULE: char = '─';
 
@@ -231,13 +229,12 @@ impl Grid {
     }
 }
 
-/// 一段文案的落位；`centered` 为真时在 `width` 内水平居中。
+/// 一段文案的落位；水平居中于 `width`。
 #[derive(Clone, Copy)]
 struct TextRect {
     x: u16,
     y: u16,
     width: u16,
-    centered: bool,
 }
 
 /// lx 页布局：所有组件矩形（绝对屏幕坐标）。
@@ -338,60 +335,35 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     };
     let entries_fit = horizontal || max_label <= content_w;
 
-    // 品牌区：图标 + 文案。文案优先放图标右侧并垂直居中；放不下则移到图标下方居中。
+    // 品牌区：仅图标，靠左上。入口区与其上方的 Tip 行作为一个整体。
     let icon_fits = content_w >= LOGO_WIDTH;
-    let text_fits = content_w >= LOGO_WIDTH + 2 + MIN_TEXT_WIDTH;
-    let text_x = content_x + LOGO_WIDTH + 2;
-    let text_w = (area.right() - margin).saturating_sub(text_x);
-    let brand_h = if text_fits {
-        LOGO_ROWS
-    } else if icon_fits {
-        LOGO_ROWS + 2
-    } else {
-        1
-    };
+    let brand_h = LOGO_ROWS;
+    let tip_h = ENTRY_HEIGHT;
+    let group_h = tip_h + SECTION_GAP + entries_h;
 
     let mut brand_top: Option<u16> = None;
-    let mut entries_top: Option<u16> = None;
-    if entries_fit && region_h >= brand_h + SECTION_GAP + entries_h {
+    let mut group_top: Option<u16> = None;
+    if entries_fit && icon_fits && region_h >= brand_h + SECTION_GAP + group_h {
         brand_top = Some(region_top);
         let top = region_top + brand_h + SECTION_GAP;
         let avail = region_h - brand_h - SECTION_GAP;
-        entries_top = Some(top + (avail - entries_h) / 2);
-    } else if entries_fit && region_h >= entries_h {
-        entries_top = Some(region_top + (region_h - entries_h) / 2);
-    } else if region_h >= brand_h {
+        group_top = Some(top + (avail - group_h) / 2);
+    } else if entries_fit && region_h >= group_h {
+        group_top = Some(region_top + (region_h - group_h) / 2);
+    } else if icon_fits && region_h >= brand_h {
         brand_top = Some(region_top);
     }
 
     if let Some(top) = brand_top {
-        if text_fits {
-            out.icon = Some((content_x, top));
-            out.description = Some(TextRect {
-                x: text_x,
-                y: top + LOGO_ROWS / 2,
-                width: text_w,
-                centered: false,
-            });
-        } else if icon_fits {
-            out.icon = Some((content_x, top));
-            out.description = Some(TextRect {
-                x: content_x,
-                y: top + LOGO_ROWS + 1,
-                width: content_w,
-                centered: true,
-            });
-        } else {
-            out.description = Some(TextRect {
-                x: content_x,
-                y: top,
-                width: content_w,
-                centered: true,
-            });
-        }
+        out.icon = Some((content_x, top));
     }
 
-    if let Some(top) = entries_top {
+    if let Some(top) = group_top {
+        out.description = Some(TextRect {
+            x: content_x,
+            y: top,
+            width: content_w,
+        });
         out.horizontal = horizontal;
         out.entries = place_entries(
             &labels,
@@ -399,7 +371,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
             horizontal,
             content_x,
             content_w,
-            top,
+            top + tip_h + SECTION_GAP,
         );
     }
     out
@@ -464,7 +436,7 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         draw_icon(&mut grid, ix, iy, lx.entry);
     }
     if let Some(rect) = lay.description {
-        draw_text(&mut grid, rect, text::lx_entry_description(lx.entry));
+        draw_tip(&mut grid, rect, text::lx_entry_description(lx.entry));
     }
 
     draw_entries(&mut grid, lx.entry, &lay.entries, lay.horizontal);
@@ -487,13 +459,19 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     (grid, cursor)
 }
 
-/// 绘制一段文案：居中或左对齐，超宽截断。
-fn draw_text(grid: &mut Grid, rect: TextRect, content: &str) {
-    let text = text::truncate_to_width(content, usize::from(rect.width));
-    if rect.centered {
-        grid.put_centered(rect.x, rect.width, rect.y, &text, style::muted());
-    } else {
-        grid.put(rect.x, rect.y, &text, style::muted());
+/// 绘制 Tip 提示行：`Tip:` 前缀强调色、句子 muted，整体在 `rect` 内居中、超宽截断。
+fn draw_tip(grid: &mut Grid, rect: TextRect, sentence: &str) {
+    let full = format!("{} {}", text::LX_TIP_PREFIX, sentence);
+    let full = text::truncate_to_width(&full, usize::from(rect.width));
+    let full_w = u16::try_from(full.width()).unwrap_or(u16::MAX);
+    let start = rect.x + rect.width.saturating_sub(full_w) / 2;
+    match full.strip_prefix(text::LX_TIP_PREFIX) {
+        Some(rest) => {
+            grid.put(start, rect.y, text::LX_TIP_PREFIX, style::accent());
+            let prefix_w = u16::try_from(text::LX_TIP_PREFIX.width()).unwrap_or(0);
+            grid.put(start + prefix_w, rect.y, rest, style::muted());
+        }
+        None => grid.put(start, rect.y, &full, style::muted()),
     }
 }
 

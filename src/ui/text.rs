@@ -118,10 +118,12 @@ pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
 pub const LX_ENTRY_AUTOMATION: &str = "Automation Agent";
 /// lx 页横排入口标签之间的分隔符。
 pub const LX_ENTRY_SEPARATOR: &str = "·";
-/// lx 页入口描述行。
-pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly, no external agents involved";
-pub const LX_ENTRY_HYBRID_DESC: &str = "mixes native and external agents in a single flow";
-pub const LX_ENTRY_AUTOMATION_DESC: &str = "runs your tasks automatically in the background";
+/// lx 页入口 Tip 提示前缀；前缀强调色、句子 muted。
+pub const LX_TIP_PREFIX: &str = "Tip:";
+/// lx 页入口 Tip 提示行：选中入口一句话描述。
+pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly";
+pub const LX_ENTRY_HYBRID_DESC: &str = "mixes native and external agents";
+pub const LX_ENTRY_AUTOMATION_DESC: &str = "runs your tasks automatically";
 /// lx 页 md 格式面板边框标题。
 pub const LX_BLOCK_PANEL_TITLE: &str = "Markdown";
 
@@ -134,7 +136,7 @@ pub fn lx_entry_label(entry: LxEntry) -> &'static str {
     }
 }
 
-/// lx 页入口描述行。
+/// lx 页入口 Tip 提示行（一句话描述）。
 pub fn lx_entry_description(entry: LxEntry) -> &'static str {
     match entry {
         LxEntry::Native => LX_ENTRY_NATIVE_DESC,

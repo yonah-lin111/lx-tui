@@ -135,8 +135,25 @@ fn wide_page_renders_brand_entries_and_input() {
     assert!(text.contains("Hybrid Agent"), "{text}");
     assert!(text.contains("Automation Agent"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
+    assert!(text.contains("Tip:"), "Tip 前缀可见");
     assert!(text.contains('·'), "标签页分隔符可见");
     assert!(text.contains('─'), "输入框上下分割线可见");
+}
+
+#[test]
+fn tip_sits_above_entries_below_icon() {
+    let area = Rect::new(0, 0, 100, 20);
+    let lay = layout(area, &Lx::new());
+    let (_, icon_y) = lay.icon.expect("icon");
+    let tip = lay.description.expect("tip");
+    let entries_y = lay
+        .entries
+        .iter()
+        .map(|(_, rect)| rect.y)
+        .min()
+        .expect("entries");
+    assert!(icon_y < tip.y, "图标在 Tip 上方");
+    assert!(tip.y < entries_y, "Tip 在按钮上方");
 }
 
 #[test]
