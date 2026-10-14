@@ -109,7 +109,7 @@ pub(super) fn offset_at_col(slice: &str, col: usize) -> usize {
 }
 
 /// 粘贴文本净化：换行归一、制表符展开、其余控制字符丢弃。
-pub(super) fn sanitize(text: &str) -> String {
+pub(crate) fn sanitize(text: &str) -> String {
     let mut sanitized = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {

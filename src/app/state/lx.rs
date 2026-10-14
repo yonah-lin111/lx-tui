@@ -1,6 +1,7 @@
 //! lx 页状态与多行文本输入编辑模型。
 
 use crate::app::markdown::{BlockPanel, block_commands, block_insertion, block_trigger};
+use crate::app::paste::{PasteAction, PasteCandidate, PastePanel};
 use crate::app::prompt::{list, text};
 
 /// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
@@ -27,9 +28,19 @@ pub struct Lx {
     pub cursor: usize,
     /// markdown 块命令面板；光标处触发时打开。
     pub panel: Option<BlockPanel>,
+    /// 路径粘贴参照面板；与 `panel` 互斥，同一时刻至多一个打开。
+    paste: Option<LxPaste>,
     /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
     undo: Vec<LxSnapshot>,
     /// 重做历史。
+    redo: Vec<LxSnapshot>,
+}
+
+/// 在途路径粘贴：参照面板与占位插入现场。
+#[derive(Debug)]
+struct LxPaste {
+    panel: PastePanel,
+    /// 占位插入前的重做栈；`snapshot` 会清空它，取消必须原样还回。
     redo: Vec<LxSnapshot>,
 }
 
@@ -56,6 +67,7 @@ impl Lx {
             input: String::new(),
             cursor: 0,
             panel: None,
+            paste: None,
             undo: Vec::new(),
             redo: Vec::new(),
         }
@@ -79,6 +91,21 @@ impl Lx {
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
         self.refresh_panel();
+    }
+
+    /// 在光标处插入一段文本；净化规则同 prompt 编辑器（换行归一、Tab 展开、丢弃控制字符）。
+    ///
+    /// 整段粘贴作为一步撤销。粘贴不是“正在输入”：不刷新 md 块面板，避免粘贴文本
+    /// 尾部的触发标记紧接着弹出面板、被下一次 Enter 误采纳（对齐 prompt 的粘贴语义）。
+    pub fn insert_str(&mut self, text: &str) {
+        let sanitized = text::sanitize(text);
+        if sanitized.is_empty() {
+            return;
+        }
+        self.snapshot();
+        self.input.insert_str(self.cursor, &sanitized);
+        self.cursor += sanitized.len();
+        self.panel = None;
     }
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
@@ -313,6 +340,99 @@ impl Lx {
         self.panel = None;
     }
 
+    /// 当前路径粘贴参照面板。
+    pub fn paste_panel(&self) -> Option<&PastePanel> {
+        self.paste.as_ref().map(|paste| &paste.panel)
+    }
+
+    /// 打开路径粘贴参照面板：在光标处插入纯路径占位文本并把高亮落在首个可用项。
+    ///
+    /// 占位插入与后续引用改写同属一步撤销；打开时关闭 md 块面板（互斥）。
+    /// 候选为空返回 false 且不改动缓冲区。
+    pub fn paste_open(&mut self, candidates: Vec<PasteCandidate>) -> bool {
+        if candidates.is_empty() {
+            return false;
+        }
+        let plain: Vec<String> = candidates
+            .iter()
+            .map(|candidate| candidate.path.to_string_lossy().into_owned())
+            .collect();
+        let reference = candidates
+            .iter()
+            .map(PasteCandidate::reference)
+            .collect::<Option<Vec<_>>>()
+            .map(|references| self.paste_insertion(&references))
+            .filter(|reference| !reference.is_empty());
+        let insertion = self.paste_insertion(&plain);
+        let redo = std::mem::take(&mut self.redo);
+        self.snapshot();
+        let start = self.cursor;
+        self.input.insert_str(start, &insertion);
+        self.cursor = start + insertion.len();
+        self.panel = None;
+        self.paste = Some(LxPaste {
+            panel: PastePanel::new(0, candidates, start..start + insertion.len(), reference),
+            redo,
+        });
+        true
+    }
+
+    /// 键盘移动粘贴面板高亮；返回是否消费。
+    pub fn paste_move(&mut self, delta: isize) -> bool {
+        self.paste
+            .as_mut()
+            .is_some_and(|paste| paste.panel.move_active(delta))
+    }
+
+    /// 确认粘贴面板：引用改写占位文本，路径保持原样；两者都结束面板。
+    pub fn paste_confirm(&mut self, action: PasteAction) -> bool {
+        let Some(paste) = self.paste.as_ref() else {
+            return false;
+        };
+        if !paste.panel.enabled(action) {
+            return false;
+        }
+        if action == PasteAction::Reference {
+            let Some(reference) = paste.panel.reference.clone() else {
+                return false;
+            };
+            let range = paste.panel.inserted.clone();
+            self.input.replace_range(range.clone(), &reference);
+            self.cursor = range.start + reference.len();
+        }
+        self.paste = None;
+        self.panel = None;
+        true
+    }
+
+    /// 取消粘贴面板：回滚占位插入，不残留撤销步；返回是否消费。
+    pub fn paste_cancel(&mut self) -> bool {
+        let Some(paste) = self.paste.take() else {
+            return false;
+        };
+        if let Some(snapshot) = self.undo.pop() {
+            self.input = snapshot.text;
+            self.cursor = snapshot.cursor;
+        }
+        self.redo = paste.redo;
+        self.panel = None;
+        true
+    }
+
+    /// 构造粘贴插入文本：左邻非空白先补空格，末尾补空格。
+    fn paste_insertion(&self, parts: &[String]) -> String {
+        let mut insert = parts.join(" ");
+        let left_blank = self.input[..self.cursor]
+            .chars()
+            .next_back()
+            .is_none_or(char::is_whitespace);
+        if !left_blank {
+            insert.insert(0, ' ');
+        }
+        insert.push(' ');
+        insert
+    }
+
     /// 光标所在逻辑行起始字节偏移。
     fn line_start(&self) -> usize {
         self.input[..self.cursor]
@@ -335,3 +455,6 @@ impl Lx {
         index
     }
 }
+
+#[cfg(test)]
+mod tests;

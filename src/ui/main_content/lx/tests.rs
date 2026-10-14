@@ -404,3 +404,22 @@ fn buffer_text(buf: &Buffer) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[test]
+fn path_paste_panel_renders_above_input() {
+    use crate::app::paste::{PasteCandidate, PasteCandidateKind};
+    use std::path::PathBuf;
+
+    let area = Rect::new(0, 0, 100, 24);
+    let mut lx = Lx::new();
+    assert!(lx.paste_open(vec![PasteCandidate::external(
+        PathBuf::from("/tmp/dir"),
+        PasteCandidateKind::Folder,
+    )]));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("Paste"), "参照面板标题: {text}");
+    assert!(text.contains("Insert reference"), "引用项: {text}");
+    assert!(text.contains("Insert path"), "路径项: {text}");
+}

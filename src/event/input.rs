@@ -131,11 +131,14 @@ pub(crate) fn handle_paste_event(
         *dirty = true;
         return;
     }
-    // lx 视图不接收输入：粘贴同样吞掉，不写入隐藏终端。
+    // lx 视图：粘贴进入 lx 输入框（路径识别 + 参照面板，或纯文本），不写入隐藏终端。
     if state
         .active_pane()
         .is_some_and(|pane| pane.view == PaneView::Lx)
     {
+        if paste::handle_lx_paste(state, text) {
+            *dirty = true;
+        }
         return;
     }
     let id = state.active_tab().layout.focus();

@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::app::actions::EditorCommand;
 use crate::app::prompt::{PasteAnchor, PasteCandidate, PasteCandidateKind};
-use crate::app::state::AppState;
+use crate::app::state::{AppState, PaneView};
 use crate::app::update;
 use crate::layout;
 use crate::ui;
@@ -36,6 +36,28 @@ pub(super) fn handle_terminal_paste(state: &mut AppState, text: String) {
     }
     // 普通文本：粘贴后压制补全面板，避免紧跟的 Enter 把尾部当触发词替换成候选原文。
     update::apply_pasted_text(state, text);
+}
+
+/// lx 输入框粘贴：整段是存在的路径集合时打开参照面板，否则按普通文本插入。
+///
+/// 返回是否产生状态变化；空文本或非 lx 视图返回 false。
+pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    let Some(pane) = state.active_pane_mut() else {
+        return false;
+    };
+    if pane.view != PaneView::Lx {
+        return false;
+    }
+    if let Some(paths) = crate::platform::parse_path_text(&text)
+        && let Some(candidates) = candidates_from_paths(&paths)
+    {
+        return pane.lx.paste_open(candidates);
+    }
+    pane.lx.insert_str(&text);
+    true
 }
 
 /// 路径集合 → 已存在候选；任一项不存在返回 None（调用方回退普通文本）。

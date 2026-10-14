@@ -9,9 +9,11 @@ use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::BlockPanel;
+use crate::app::paste::PasteAction;
 use crate::app::selection::Selection;
 use crate::app::state::{Lx, LxEntry};
 use crate::ui::markdown::Token;
+use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
 use crate::ui::{style, text};
 
 /// 宽字符占位单元格的标记；不参与绘制与取词。
@@ -116,7 +118,61 @@ pub fn render(
             }
         }
     }
+    render_paste_panel(area, buf, lx);
     cursor
+}
+
+/// 绘制路径粘贴参照面板：锚定输入框上沿、复用命令面板渲染（只读状态）。
+fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    let Some(panel) = lx.paste_panel() else {
+        return;
+    };
+    let Some(input) = layout(area, lx).input else {
+        return;
+    };
+    let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
+    let content_x = area.x + margin;
+    let content_w = area.width.saturating_sub(margin.saturating_mul(2));
+    let region_h = input.y.saturating_sub(area.y);
+    if region_h < 3 {
+        return;
+    }
+    let count = text::paste_item_count(panel.candidates.len());
+    let rows: Vec<(String, String)> = PasteAction::ALL
+        .iter()
+        .map(|action| match action {
+            PasteAction::Reference => (
+                text::PASTE_ACTION_REFERENCE.to_string(),
+                if panel.reference_enabled() {
+                    count.clone()
+                } else {
+                    text::PASTE_REFERENCE_UNSUPPORTED.to_string()
+                },
+            ),
+            PasteAction::Path => (text::PASTE_ACTION_PATH.to_string(), count.clone()),
+        })
+        .collect();
+    let items: Vec<CommandItem<'_>> = rows
+        .iter()
+        .map(|(label, preview)| CommandItem::Inline {
+            label,
+            preview,
+            tag: "",
+        })
+        .collect();
+    let view = CommandPanelView {
+        items: &items,
+        active: panel.active(),
+        window_anchor: Some(panel.active()),
+        window_start: None,
+        anchor_row: region_h,
+        max_height: None,
+        title: Some(text::PASTE_PANEL_TITLE),
+        right_title: None,
+        footer: None,
+    };
+    let panel_area = Rect::new(content_x, area.y, content_w, region_h);
+    command_panel::render(panel_area, buf, &view);
 }
 
 /// 提取选区文本（内容行、列相对内容区左上角）；空选区返回空串。
