@@ -410,7 +410,7 @@ fn render_panes(
         // prompt 持有键盘焦点时窗格让出焦点表现，避免双焦点指示。
         let focused = *id == focus && !state.prompt_focused;
         let mut title = match pane.view {
-            PaneView::Lx => format!("lx - [{}]", text::lx_entry_label(pane.lx.entry)),
+            PaneView::Lx => format!("lx-[{}]", text::lx_entry_label(pane.lx.entry)),
             PaneView::Terminal => pane_display_title(*id, pane),
         };
         if pane.exited {
@@ -479,11 +479,11 @@ fn render_pane_agent_label(
     render_border_right_label(frame, rect, title, &spans);
 }
 
-/// lx 窗格顶边框标题：` lx - [<入口名>] `，入口名按该 logo 粉→蓝渐变着色、其余用标题色。
+/// lx 窗格顶边框标题：` lx-[<入口名>] `，入口名按该 logo 粉→蓝渐变着色、其余用标题色。
 fn lx_title_line(entry: LxEntry) -> Line<'static> {
     let label = text::lx_entry_label(entry);
     let length = label.chars().count();
-    let mut spans = vec![Span::styled(" lx - [".to_string(), style::border_title())];
+    let mut spans = vec![Span::styled(" lx-[".to_string(), style::border_title())];
     for (position, ch) in label.chars().enumerate() {
         spans.push(Span::styled(
             ch.to_string(),
