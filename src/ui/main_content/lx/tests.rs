@@ -166,6 +166,15 @@ fn wide_page_renders_brand_entries_and_input() {
 }
 
 #[test]
+fn icon_is_horizontally_centered() {
+    let area = Rect::new(0, 0, 100, 20);
+    let (icon_x, _) = layout(area, &Lx::new()).icon.expect("icon");
+    let content_x = area.x + MARGIN;
+    let content_w = area.width - MARGIN * 2;
+    assert_eq!(icon_x, content_x + (content_w - LOGO_WIDTH) / 2);
+}
+
+#[test]
 fn tip_sits_above_entries_below_icon() {
     let area = Rect::new(0, 0, 100, 20);
     let lay = layout(area, &Lx::new());

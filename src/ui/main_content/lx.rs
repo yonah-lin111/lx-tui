@@ -360,7 +360,9 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let brand_top =
         (icon_fits && region_top + brand_h + SECTION_GAP <= brand_limit).then_some(region_top);
 
-    out.icon = brand_top.map(|y| (content_x, y));
+    // 图标水平居中、位于 Tip 上方。
+    let icon_x = content_x + content_w.saturating_sub(LOGO_WIDTH) / 2;
+    out.icon = brand_top.map(|y| (icon_x, y));
     if let Some(y) = tip_top {
         out.description = Some(TextRect {
             x: content_x,
@@ -441,7 +443,7 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         draw_icon(&mut grid, ix, iy, lx.entry);
     }
     if let Some(rect) = lay.description {
-        draw_tip(&mut grid, rect, text::lx_entry_description(lx.entry));
+        draw_tip(&mut grid, rect, lx.entry);
     }
 
     draw_entries(&mut grid, lx.entry, &lay.entries, lay.horizontal);
@@ -464,19 +466,25 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     (grid, cursor)
 }
 
-/// 绘制 Tip 提示行：`Tip:` 前缀强调色、句子 muted，整体在 `rect` 内居中、超宽截断。
-fn draw_tip(grid: &mut Grid, rect: TextRect, sentence: &str) {
+/// 绘制 Tip 提示行：`Tip:` 前缀强调色、其后句子按该入口 logo 粉→蓝渐变着色；整体居中、超宽截断。
+fn draw_tip(grid: &mut Grid, rect: TextRect, entry: LxEntry) {
+    let sentence = text::lx_entry_description(entry);
     let full = format!("{} {}", text::LX_TIP_PREFIX, sentence);
     let full = text::truncate_to_width(&full, usize::from(rect.width));
     let full_w = u16::try_from(full.width()).unwrap_or(u16::MAX);
     let start = rect.x + rect.width.saturating_sub(full_w) / 2;
-    match full.strip_prefix(text::LX_TIP_PREFIX) {
-        Some(rest) => {
-            grid.put(start, rect.y, text::LX_TIP_PREFIX, style::accent());
-            let prefix_w = u16::try_from(text::LX_TIP_PREFIX.width()).unwrap_or(0);
-            grid.put(start + prefix_w, rect.y, rest, style::muted());
-        }
-        None => grid.put(start, rect.y, &full, style::muted()),
+    let Some(rest) = full.strip_prefix(text::LX_TIP_PREFIX) else {
+        grid.put(start, rect.y, &full, style::muted());
+        return;
+    };
+    grid.put(start, rect.y, text::LX_TIP_PREFIX, style::accent());
+    let prefix_w = u16::try_from(text::LX_TIP_PREFIX.width()).unwrap_or(0);
+    let length = rest.chars().count();
+    let mut cx = start + prefix_w;
+    for (position, ch) in rest.chars().enumerate() {
+        let cell_style = style::lx_entry_label_style(entry, position, length, false);
+        grid.set(cx, rect.y, ch, cell_style);
+        cx = cx.saturating_add(u16::try_from(ch.width().unwrap_or(1)).unwrap_or(1).max(1));
     }
 }
 
