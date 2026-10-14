@@ -160,3 +160,24 @@ fn long_paste_wraps_and_shows_input_scrollbar() {
         screen_text(&app.emulator.lock().unwrap())
     );
 }
+
+#[test]
+fn wheel_scrolls_lx_input_viewport() {
+    let app = App::spawn();
+    let body = format!("HEADMARK{}", "L".repeat(20000));
+    app.send(&bracketed_paste(&body));
+    assert!(app.wait_for("▕"), "溢出时显示滚动条");
+    assert!(
+        !screen_text(&app.emulator.lock().unwrap()).contains("HEADMARK"),
+        "初始视口贴底，看不到输入开头"
+    );
+    // 指针停在窗格内（SGR 滚轮上滚）；滚轮路径按窗格滚动 lx 输入视口。
+    for _ in 0..300 {
+        app.send(b"\x1b[<64;60;20M");
+    }
+    assert!(
+        app.wait_for("HEADMARK"),
+        "滚轮上滚后应看到输入开头:\n{}",
+        screen_text(&app.emulator.lock().unwrap())
+    );
+}

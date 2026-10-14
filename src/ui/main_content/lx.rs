@@ -384,8 +384,8 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let visible = total.min(cap);
     let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
     let input = Rect::new(content_x, area.bottom() - box_h, content_w, box_h);
-    let (cursor_row, _) = lx.cursor_visual();
-    let scroll = cursor_row.saturating_sub(visible.saturating_sub(1));
+    let max_scroll = total.saturating_sub(visible);
+    let scroll = lx.scroll().min(max_scroll);
 
     let mut out = Layout::empty(false);
     out.input = Some(input);

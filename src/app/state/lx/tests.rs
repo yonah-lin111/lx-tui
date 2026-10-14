@@ -130,7 +130,7 @@ fn paste_cancel_without_panel_is_false() {
 #[test]
 fn visual_rows_wrap_at_content_width() {
     let mut lx = Lx::new();
-    lx.resize(4);
+    lx.resize(4, 100);
     lx.insert_str("abcdef");
     let rows = lx.visual_rows();
     assert_eq!(rows.len(), 2);
@@ -148,7 +148,7 @@ fn default_width_does_not_wrap() {
 #[test]
 fn move_up_down_cross_wrapped_rows() {
     let mut lx = Lx::new();
-    lx.resize(2);
+    lx.resize(2, 100);
     lx.insert_str("abcd");
     assert_eq!(lx.cursor_visual(), (1, 2));
     lx.move_up();
@@ -160,7 +160,7 @@ fn move_up_down_cross_wrapped_rows() {
 #[test]
 fn home_end_use_visual_rows() {
     let mut lx = Lx::new();
-    lx.resize(2);
+    lx.resize(2, 100);
     lx.insert_str("abcd");
     lx.home();
     assert_eq!(lx.cursor, 2, "当前视觉行行首为第二折行起点");
@@ -171,11 +171,35 @@ fn home_end_use_visual_rows() {
 #[test]
 fn cursor_visual_keeps_display_column_across_wrap() {
     let mut lx = Lx::new();
-    lx.resize(3);
+    lx.resize(3, 100);
     lx.insert_str("ab你谁");
     // 宽字符按 2 列计：视觉行为 "ab"(0..2)、"你"(2..5)、"谁"(5..8)。
     let rows = lx.visual_rows();
     assert_eq!(&lx.input[rows[1].start..rows[1].end], "你");
     lx.cursor = rows[1].start;
     assert_eq!(lx.cursor_visual(), (1, 0));
+}
+
+#[test]
+fn scroll_by_clamps_to_content() {
+    let mut lx = Lx::new();
+    lx.resize(2, 2);
+    lx.insert_str("abcdef");
+    // 三视觉行、可视两行：光标在末尾使视口贴底。
+    assert_eq!(lx.visual_rows().len(), 3);
+    assert_eq!(lx.scroll(), 1);
+    assert!(!lx.scroll_by(1), "已在底部，向下不移动");
+    assert!(lx.scroll_by(-1));
+    assert_eq!(lx.scroll(), 0);
+    assert!(!lx.scroll_by(-1), "已在顶部，向上不移动");
+}
+
+#[test]
+fn resize_clamps_scroll_back_into_view() {
+    let mut lx = Lx::new();
+    lx.resize(2, 1);
+    lx.insert_str("abcd");
+    assert_eq!(lx.scroll(), 1, "单行可视为滚动到第二折行");
+    lx.resize(2, 10);
+    assert_eq!(lx.scroll(), 0, "视口变高后回钳到顶部");
 }

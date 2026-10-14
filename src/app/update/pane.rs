@@ -42,6 +42,17 @@ pub fn reset_pane_scroll(state: &mut AppState, id: PaneId) -> bool {
         .is_some_and(|pane| pane.kind == PaneKind::Terminal && pane.terminal.scroll_to_bottom())
 }
 
+/// 滚轮滚动 lx 输入框视口（一格放大为 `WHEEL_LINES` 行）；返回视口是否移动。
+pub fn scroll_lx_input(state: &mut AppState, id: PaneId, direction: isize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if pane.view != PaneView::Lx {
+        return false;
+    }
+    pane.lx.scroll_by(direction.saturating_mul(WHEEL_LINES))
+}
+
 /// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
@@ -171,8 +182,8 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
         } else if let Some(pane) = state.pane_mut_anywhere(*id) {
             let (cols, rows) = layout::pane_inner_size(*rect);
             pane.terminal.resize(cols, rows);
-            let (lx_cols, _) = layout::lx_input_size(*rect);
-            pane.lx.resize(lx_cols);
+            let (lx_cols, lx_rows) = layout::lx_input_size(*rect);
+            pane.lx.resize(lx_cols, lx_rows);
         }
     }
 }

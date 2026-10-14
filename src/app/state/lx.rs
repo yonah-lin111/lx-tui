@@ -28,6 +28,10 @@ pub struct Lx {
     pub cursor: usize,
     /// 输入框内容宽度（列）；按几何同步，用于软换行与视觉行移动。未同步前视为不换行。
     width: u16,
+    /// 输入框可视高度（内容行）；按几何同步，用于滚动钳制。
+    height: usize,
+    /// 视口首视觉行索引；滚轮与光标跟随共同维护。
+    scroll: usize,
     /// markdown 块命令面板；光标处触发时打开。
     pub panel: Option<BlockPanel>,
     /// 路径粘贴参照面板；与 `panel` 互斥，同一时刻至多一个打开。
@@ -76,6 +80,8 @@ impl Lx {
             input: String::new(),
             cursor: 0,
             width: u16::MAX,
+            height: usize::MAX,
+            scroll: 0,
             panel: None,
             paste: None,
             undo: Vec::new(),
@@ -83,9 +89,44 @@ impl Lx {
         }
     }
 
-    /// 同步输入框内容宽度（列）；用于软换行与视觉行移动。
-    pub fn resize(&mut self, width: u16) {
+    /// 同步输入框内容宽度（列）与可视高度（内容行）；用于软换行、视觉行移动与滚动。
+    pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width.max(1);
+        self.height = usize::from(height.max(1));
+        self.scroll_cursor_into_view();
+    }
+
+    /// 输入框视口首视觉行索引。
+    pub fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    /// 滚轮滚动输入框视口（正数向下）；返回视口是否移动。
+    pub fn scroll_by(&mut self, delta: isize) -> bool {
+        let max = self.max_scroll();
+        let next = (self.scroll.min(max) as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize) as usize;
+        let moved = next != self.scroll;
+        self.scroll = next;
+        moved
+    }
+
+    /// 真实内容的最大滚动偏移。
+    fn max_scroll(&self) -> usize {
+        self.visual_rows().len().saturating_sub(self.height.max(1))
+    }
+
+    /// 调整滚动量，保证光标所在视觉行可见。
+    fn scroll_cursor_into_view(&mut self) {
+        let (row, _) = self.cursor_visual();
+        let height = self.height.max(1);
+        if row < self.scroll {
+            self.scroll = row;
+        } else if row >= self.scroll.saturating_add(height) {
+            self.scroll = row + 1 - height;
+        }
+        self.scroll = self.scroll.min(self.max_scroll());
     }
 
     /// 按内容宽度软换行得到的视觉行。
@@ -180,6 +221,7 @@ impl Lx {
         self.input.insert_str(self.cursor, &sanitized);
         self.cursor += sanitized.len();
         self.panel = None;
+        self.scroll_cursor_into_view();
     }
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
@@ -381,6 +423,7 @@ impl Lx {
             let items = block_commands(trigger.kind);
             BlockPanel::new(trigger, items, 0)
         });
+        self.scroll_cursor_into_view();
     }
 
     /// 面板高亮项循环移动。
@@ -446,6 +489,7 @@ impl Lx {
             panel: PastePanel::new(0, candidates, start..start + insertion.len(), reference),
             redo,
         });
+        self.scroll_cursor_into_view();
         true
     }
 
@@ -474,6 +518,7 @@ impl Lx {
         }
         self.paste = None;
         self.panel = None;
+        self.scroll_cursor_into_view();
         true
     }
 
@@ -488,6 +533,7 @@ impl Lx {
         }
         self.redo = paste.redo;
         self.panel = None;
+        self.scroll_cursor_into_view();
         true
     }
 

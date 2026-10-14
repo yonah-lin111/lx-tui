@@ -3866,6 +3866,28 @@ fn lx_vertical_movement_keeps_column() {
 }
 
 #[test]
+fn lx_wheel_scrolls_input_viewport() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        lx.resize(2, 2);
+        lx.insert_str("abcdef");
+    }
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.scroll(), 1);
+    assert!(
+        scroll_lx_input(&mut state, pane, -1),
+        "向上滚轮移动输入框视口"
+    );
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.scroll(), 0);
+    assert!(
+        scroll_lx_input(&mut state, pane, 1),
+        "向下滚轮移动输入框视口"
+    );
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.scroll(), 1);
+}
+
+#[test]
 fn lx_markdown_panel_navigates_and_accepts() {
     let mut state = AppState::demo();
     apply_lx_input(&mut state, LxInput::Char('#'));
