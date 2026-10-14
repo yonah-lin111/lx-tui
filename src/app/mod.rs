@@ -11,4 +11,5 @@ pub mod state;
 pub mod toast;
 pub mod tooltip;
 pub mod trust;
+pub mod ui_gallery;
 pub mod update;

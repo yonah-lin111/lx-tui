@@ -3844,3 +3844,86 @@ fn event_input_paste_overlay_and_prompt_routing() {
     assert!(dirty, "prompt 聚焦时粘贴使画面变脏");
     assert!(state.prompt.text().contains("hello prompt"));
 }
+
+#[test]
+fn mouse_click_ui_gallery_button_opens_overlay() {
+    let mut state = demo_terminal();
+    state.settings_available = true;
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let button = ui::ui_gallery_button(&geo.view, &state).expect("gallery button visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::UiGallery(_))),
+        "点击 [UI] 打开组件查看弹窗"
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn ui_gallery_overlay_click_selects_row_and_outside_closes() {
+    let mut state = demo_terminal();
+    state.settings_available = false;
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let button = ui::ui_gallery_button(&geo.view, &state).expect("gallery button visible");
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(matches!(state.overlay, Some(Overlay::UiGallery(_))));
+
+    // 点击左侧树第一行：选中 global 文件夹行。
+    let screen = Rect::new(0, 0, 120, 30);
+    let layout = ui::overlay::ui_gallery_layout(screen).expect("layout fits");
+    handle_overlay_click(&mut state, screen, layout.left.x, layout.left.y);
+    let Some(Overlay::UiGallery(gallery)) = state.overlay.as_ref() else {
+        panic!("gallery open");
+    };
+    assert_eq!(gallery.selected(), 0);
+    assert!(
+        gallery.is_collapsed(crate::app::ui_gallery::UiGalleryFolderId::Global),
+        "点击文件夹行切换折叠"
+    );
+
+    // 点击弹窗之外：关闭。
+    handle_overlay_click(&mut state, screen, 0, 0);
+    assert!(state.overlay.is_none(), "浮层之外点击关闭");
+}
+
+#[test]
+fn ui_gallery_escape_key_closes_overlay() {
+    let mut state = demo_terminal();
+    let config = Config::default();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    state.overlay = Some(Overlay::UiGallery(crate::app::ui_gallery::UiGallery::new()));
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "Esc 关闭组件查看弹窗");
+}

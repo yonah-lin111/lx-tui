@@ -8,6 +8,7 @@ mod pane;
 mod prompt;
 mod selection;
 mod trust;
+mod ui_gallery;
 mod workspace;
 mod workspace_list;
 mod worktree;
@@ -20,6 +21,9 @@ pub use pane::*;
 pub use prompt::*;
 pub use selection::*;
 pub use trust::*;
+pub use ui_gallery::{
+    activate_ui_gallery_row, apply_ui_gallery_key, open_ui_gallery, set_ui_gallery_selection,
+};
 pub use workspace::*;
 pub use workspace_list::*;
 pub use worktree::{

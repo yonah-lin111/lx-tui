@@ -277,6 +277,25 @@ pub(crate) fn handle_overlay_click(
             }
             None
         }
+        Some(Overlay::UiGallery(_)) => {
+            let Some(layout) = ui::overlay::ui_gallery_layout(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &layout.shell, column, row) {
+                return None;
+            }
+            let Some(Overlay::UiGallery(gallery)) = state.overlay.as_ref() else {
+                return None;
+            };
+            let rows = gallery.rows().len();
+            if let Some(index) = ui::overlay::ui_gallery_row_at(&layout, rows, column, row) {
+                update::set_ui_gallery_selection(state, index);
+                update::activate_ui_gallery_row(state);
+            }
+            // 分隔线、预览区或底部提示行：保持打开。
+            None
+        }
         None => None,
     }
 }

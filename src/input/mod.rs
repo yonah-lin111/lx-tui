@@ -187,6 +187,16 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
         },
+        // UI 组件查看弹窗：上下移动高亮、左右折叠展开、回车切换、Esc 关闭。
+        OverlayKind::UiGallery => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
         OverlayKind::ConfirmClose
         | OverlayKind::ConfirmSwitchCwd
         | OverlayKind::ConfirmSyncWorkspaceCwd

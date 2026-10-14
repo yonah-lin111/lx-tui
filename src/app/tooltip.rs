@@ -52,6 +52,8 @@ pub enum TooltipTarget {
     PromptPin,
     /// 侧栏底边框左侧设置按钮。
     SidebarSettings,
+    /// 侧栏底边框设置按钮右侧的 UI 组件查看按钮。
+    SidebarUiGallery,
     /// 页码菜单顶部边框的新建按钮。
     PageMenuAdd,
     /// 页码菜单顶部边框的删除按钮。

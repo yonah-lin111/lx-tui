@@ -7,6 +7,7 @@ use crate::layout::PaneId;
 use super::markdown::TemplateCounts;
 use super::prompt::{PromptEditing, PromptPageId};
 use super::trust::TrustWorkspace;
+use super::ui_gallery::UiGallery;
 
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +23,7 @@ pub enum OverlayKind {
     NewNode,
     SaveDraft,
     PageMenu,
+    UiGallery,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -38,6 +40,7 @@ pub enum Overlay {
     NewNode(NewNode),
     SaveDraft(SaveDraft),
     PageMenu(PageMenu),
+    UiGallery(UiGallery),
 }
 
 impl Overlay {
@@ -55,6 +58,7 @@ impl Overlay {
             Self::NewNode(_) => OverlayKind::NewNode,
             Self::SaveDraft(_) => OverlayKind::SaveDraft,
             Self::PageMenu(_) => OverlayKind::PageMenu,
+            Self::UiGallery(_) => OverlayKind::UiGallery,
         }
     }
 }

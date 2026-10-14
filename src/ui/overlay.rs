@@ -4,12 +4,14 @@ pub mod dialog;
 pub mod menu;
 mod page_menu;
 pub mod save_draft;
+mod ui_gallery;
 mod worktree;
 
 pub use dialog::*;
 pub use menu::*;
 pub use page_menu::{PageMenuLayout, page_menu_item_at, page_menu_layout, page_menu_visible_pages};
 pub use save_draft::*;
+pub use ui_gallery::{UiGalleryLayout, ui_gallery_layout, ui_gallery_row_at, ui_gallery_shell};
 pub use worktree::{
     WorktreeDialogButton, worktree_dialog_button_at, worktree_dialog_entry_at,
     worktree_dialog_max_rows, worktree_dialog_shell, worktree_dialog_visible_start,
@@ -24,6 +26,7 @@ pub(crate) use dialog::{
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 
 use page_menu::render_page_menu;
+use ui_gallery::render_ui_gallery;
 use worktree::render_worktree_open;
 
 use ratatui::Frame;
@@ -67,6 +70,10 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         Overlay::SaveDraft(dialog) => save_draft::render_save_draft(frame, screen, dialog),
         Overlay::PageMenu(menu) => {
             render_page_menu(frame, screen, state, menu);
+            None
+        }
+        Overlay::UiGallery(gallery) => {
+            render_ui_gallery(frame, screen, gallery);
             None
         }
     }

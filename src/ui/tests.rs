@@ -2666,6 +2666,77 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
 }
 
 #[test]
+fn ui_gallery_button_sits_right_of_settings_and_renders() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = false;
+    state.settings_available = true;
+    let view = view_for(&state);
+    let settings = settings_button(&view, &state).expect("settings fits");
+    let gallery = ui_gallery_button(&view, &state).expect("gallery button fits");
+    assert_eq!(gallery.y, settings.y);
+    assert_eq!(gallery.x, settings.right() + 1, "紧邻右侧隔 1 列");
+    assert_eq!(gallery.width, text::UI_GALLERY_LABEL.len() as u16);
+    assert!(ui_gallery_button_at(&view, &state, gallery.x, gallery.y));
+    assert!(!ui_gallery_button_at(
+        &view,
+        &state,
+        gallery.x,
+        gallery.y.saturating_sub(1)
+    ));
+
+    let lines = render_lines(&state);
+    let bottom: String = lines[gallery.y as usize]
+        .chars()
+        .skip(usize::from(view.sidebar.x))
+        .take(usize::from(view.sidebar.width))
+        .collect();
+    assert!(bottom.contains(text::UI_GALLERY_LABEL), "{bottom}");
+    assert!(bottom.contains(text::SETTINGS_LABEL), "{bottom}");
+}
+
+#[test]
+fn ui_gallery_button_independent_of_settings_service() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = false;
+    state.settings_available = false;
+    let view = view_for(&state);
+    // [SET] 因服务不可用隐藏，但 [UI] 仍在其固定槽位显示。
+    assert!(settings_button(&view, &state).is_none());
+    let gallery = ui_gallery_button(&view, &state).expect("gallery independent of service");
+    assert_eq!(
+        gallery.x,
+        view.sidebar.x + 1 + text::SETTINGS_LABEL.len() as u16 + 1
+    );
+}
+
+#[test]
+fn ui_gallery_button_hidden_when_sidebar_collapsed() {
+    let mut state = AppState::demo();
+    state.settings_available = true;
+    state.sidebar_collapsed = true;
+    let view = view_for(&state);
+    assert!(ui_gallery_button(&view, &state).is_none());
+}
+
+#[test]
+fn ui_gallery_button_hidden_when_sidebar_too_narrow() {
+    let mut state = AppState::demo();
+    state.settings_available = true;
+    state.sidebar_collapsed = false;
+    // 直接构造窄侧栏：展开宽度 13，恰好容纳 [SET]（含余量）但放不下 [UI]。
+    let view = layout::ViewLayout {
+        sidebar: Rect::new(0, 0, 13, 24),
+        tab_bar: Rect::new(13, 0, 87, 1),
+        panes: Rect::new(13, 1, 87, 22),
+        prompt: Rect::new(60, 1, 40, 22),
+        prompt_left: false,
+    };
+    // 侧栏过窄时优先保留 [SET]、隐藏 [UI]。
+    assert!(settings_button(&view, &state).is_some());
+    assert!(ui_gallery_button(&view, &state).is_none());
+}
+
+#[test]
 fn slash_rows_show_source_tags_and_worktree_selector_title() {
     let mut state = AppState::demo();
     state.prompt_focused = true;

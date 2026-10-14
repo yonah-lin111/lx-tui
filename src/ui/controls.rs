@@ -320,6 +320,61 @@ const SETTINGS_BUTTON_MARGIN: u16 = 1;
 /// 显示设置按钮所需的最小侧栏宽度：按钮 + 右端折叠按钮与其边距的安全余量。
 const SETTINGS_BUTTON_MIN_WIDTH: u16 = SETTINGS_BUTTON_WIDTH + 3 + 1 + 2;
 
+/// `[SET]` 右侧的 `[UI]` 按钮宽度（取自文案）。
+const UI_GALLERY_BUTTON_WIDTH: u16 = text::UI_GALLERY_LABEL.len() as u16;
+/// `[SET]` 与 `[UI]` 之间的空档（列）。
+const UI_GALLERY_BUTTON_GAP: u16 = 1;
+/// 显示 `[UI]` 所需的最小侧栏宽度：设置按钮本身、空档与 UI 按钮，外加右端折叠按钮余量；
+/// 不足时只隐藏 `[UI]`、保留 `[SET]`。
+const UI_GALLERY_BUTTON_MIN_WIDTH: u16 =
+    SETTINGS_BUTTON_MIN_WIDTH + UI_GALLERY_BUTTON_GAP + UI_GALLERY_BUTTON_WIDTH;
+
+/// 侧栏底边框左侧 `[SET]` 右侧的 `[UI]` 按钮几何：仅侧栏展开、宽度足够时显示。
+///
+/// 不依赖设置服务可用性；位置固定为 `[SET]` 槽位右侧隔 1 列，即使 `[SET]` 因服务
+/// 不可用而未绘制也保持同一列，避免按钮随服务状态跳动。侧栏折叠或过窄时返回 None。
+pub fn ui_gallery_button(view: &layout::ViewLayout, state: &AppState) -> Option<Rect> {
+    let area = view.sidebar;
+    if state.sidebar_collapsed || area.width < UI_GALLERY_BUTTON_MIN_WIDTH || area.height < 2 {
+        return None;
+    }
+    Some(Rect::new(
+        area.x + SETTINGS_BUTTON_MARGIN + SETTINGS_BUTTON_WIDTH + UI_GALLERY_BUTTON_GAP,
+        area.bottom().saturating_sub(1),
+        UI_GALLERY_BUTTON_WIDTH,
+        1,
+    ))
+}
+
+/// 命中侧栏底边框 `[UI]` 按钮。
+pub fn ui_gallery_button_at(
+    view: &layout::ViewLayout,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    ui_gallery_button(view, state).is_some_and(|area| area.contains((column, row).into()))
+}
+
+/// 绘制侧栏底边框左侧 `[UI]` 按钮：逐格 reset + 强调色，与 `[SET]` 绘制方式一致。
+pub(crate) fn render_ui_gallery_button(
+    frame: &mut Frame<'_>,
+    view: &layout::ViewLayout,
+    state: &AppState,
+) {
+    let Some(area) = ui_gallery_button(view, state) else {
+        return;
+    };
+    for (offset, symbol) in text::UI_GALLERY_LABEL.chars().enumerate() {
+        let x = area.x + offset as u16;
+        if let Some(cell) = frame.buffer_mut().cell_mut((x, area.y)) {
+            cell.reset();
+            cell.set_char(symbol);
+            cell.set_style(style::accent());
+        }
+    }
+}
+
 /// 绘制侧栏底边框左侧设置按钮：逐格 reset + 强调色，与折叠按钮绘制方式一致。
 pub(crate) fn render_settings_button(
     frame: &mut Frame<'_>,
