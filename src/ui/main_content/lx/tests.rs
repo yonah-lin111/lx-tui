@@ -190,16 +190,25 @@ fn logo_sits_two_rows_above_tip() {
 }
 
 #[test]
-fn logo_shrinks_when_container_is_short() {
+fn logo_scale_depends_on_height_not_width() {
     let tall = Rect::new(0, 0, 100, 60);
-    let short = Rect::new(0, 0, 100, 20);
+    let tall_narrow = Rect::new(0, 0, 40, 60);
     assert_eq!(
         layout(tall, &Lx::new()).icon.expect("icon").2,
         1,
         "高屏原尺寸"
     );
-    let (_, _, scale) = layout(short, &Lx::new()).icon.expect("icon");
-    assert_eq!(scale, 2, "矮屏半尺寸");
+    assert_eq!(
+        layout(tall_narrow, &Lx::new()).icon.expect("icon").2,
+        1,
+        "宽度不影响档位"
+    );
+    let short = Rect::new(0, 0, 100, 20);
+    assert_eq!(
+        layout(short, &Lx::new()).icon.expect("icon").2,
+        2,
+        "矮屏半尺寸"
+    );
 }
 
 #[test]

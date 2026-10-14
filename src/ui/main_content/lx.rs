@@ -353,23 +353,8 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         None
     };
 
-    // 品牌区：像素图标水平居中、底边距 Tip 2 行；容器过矮（高 < 宽/2）时整数倍缩小。
-    let scale: u16 = if area.height.saturating_mul(2) < area.width {
-        2
-    } else {
-        1
-    };
-    let logo_cols = LOGO_WIDTH / scale;
-    let logo_rows = (LOGO_ROWS * 2 / scale).div_ceil(2);
-    if let Some(tip_y) = tip_top
-        && content_w >= logo_cols
-        && let Some(top) = tip_y
-            .checked_sub(LOGO_GAP + logo_rows)
-            .filter(|top| *top >= region_top)
-    {
-        let icon_x = content_x + content_w.saturating_sub(logo_cols) / 2;
-        out.icon = Some((icon_x, top, scale));
-    }
+    // 品牌区：像素图标水平居中、底边距 Tip 2 行；放不下则整数倍缩小，仍放不下则隐藏。
+    out.icon = tip_top.and_then(|tip_y| place_icon(tip_y, region_top, content_x, content_w));
 
     if let Some(y) = tip_top {
         out.description = Some(TextRect {
@@ -390,6 +375,27 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         );
     }
     out
+}
+
+/// 选择图标档位：优先原尺寸，放不下则半尺寸，仍放不下返回 None。
+fn place_icon(
+    tip_y: u16,
+    region_top: u16,
+    content_x: u16,
+    content_w: u16,
+) -> Option<(u16, u16, u16)> {
+    let bottom = tip_y.checked_sub(LOGO_GAP)?;
+    for scale in [1u16, 2] {
+        let cols = LOGO_WIDTH / scale;
+        let rows = (LOGO_ROWS * 2 / scale).div_ceil(2);
+        if content_w >= cols
+            && let Some(top) = bottom.checked_sub(rows).filter(|top| *top >= region_top)
+        {
+            let x = content_x + content_w.saturating_sub(cols) / 2;
+            return Some((x, top, scale));
+        }
+    }
+    None
 }
 
 /// md 面板宽度：最宽条目（标签 + 预览）+ 边框与内边距，夹取到内容区宽度。
