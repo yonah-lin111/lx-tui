@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::*;
-use crate::app::effects::Effect;
+use crate::app::effects::{Effect, PromptPageDraft};
 use crate::app::prompt::PromptEditing;
 
 /// 独立临时库路径。
@@ -262,17 +262,17 @@ fn save_and_status_effects_persist() {
     });
     service.pump(&mut state);
     let id = state.workspaces[0].prompt_panel.tree.items()[0].id;
+    let page_id = state.workspaces[0].prompt_panel.tree.items()[0]
+        .active_page
+        .saved()
+        .expect("page id");
     state.effects.push(Effect::SavePromptContent {
         workspace: cwd.clone(),
         id,
+        page_id,
         content: "hello".into(),
         prompt: state.prompt.id(),
         revision: state.prompt.revision(),
-    });
-    state.effects.push(Effect::SetPromptStatus {
-        workspace: cwd.clone(),
-        id,
-        status: crate::app::prompt::PromptItemStatus::Completed,
     });
     service.pump(&mut state);
     let records = service
@@ -283,7 +283,6 @@ fn save_and_status_effects_persist() {
         .expect("list");
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].content, "hello");
-    assert_eq!(records[0].status, "completed");
 }
 
 #[test]
@@ -354,7 +353,7 @@ fn tree_loads_on_demand_for_displayed_workspace() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "existing", "")
+        .create_prompt(&cwd, None, "existing", &[])
         .expect("seed");
     assert!(!state.workspaces[0].prompt_panel.loaded);
     service.pump(&mut state);
@@ -372,18 +371,24 @@ fn save_draft_effect_persists_content_binds_editor_and_removes_temp() {
         .prompt_panel
         .temp_mut(temp_id)
         .expect("temp exists")
+        .active_page_mut()
+        .expect("temp has page")
         .content = "draft body".into();
     state.effects.push(Effect::SaveDraft {
         workspace: cwd.clone(),
         folder_id: None,
         name: "New prompt".into(),
-        content: "draft body".into(),
+        pages: vec![PromptPageDraft {
+            name: "Page 1".into(),
+            content: "draft body".into(),
+        }],
+        active: 0,
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
     assert!(panel.temp(temp_id).is_none(), "保存成功后移除已升格的 temp");
     let item = &panel.tree.items()[0];
-    assert_eq!(item.content, "draft body");
+    assert_eq!(item.active_content(), "draft body");
     assert_eq!(item.folder_id, None);
     assert_eq!(panel.editing, Some(PromptEditing::Item(item.id)));
     drop(service);
@@ -404,6 +409,8 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
         .prompt_panel
         .temp_mut(temp_id)
         .expect("temp exists")
+        .active_page_mut()
+        .expect("temp has page")
         .content = "body".into();
     // 选择器打开时建文件夹：服务刷新条目并选中新文件夹。
     crate::app::update::open_save_draft(&mut state);
@@ -427,14 +434,18 @@ fn create_folder_from_picker_refreshes_entries_and_save_draft_uses_it() {
         workspace: cwd.clone(),
         folder_id: Some(folder_id),
         name: "New prompt".into(),
-        content: "body".into(),
+        pages: vec![PromptPageDraft {
+            name: "Page 1".into(),
+            content: "body".into(),
+        }],
+        active: 0,
     });
     assert!(service.pump(&mut state));
     let panel = &state.workspaces[0].prompt_panel;
     assert_eq!(panel.tree.folders().len(), 1);
     let item = &panel.tree.items()[0];
     assert_eq!(item.folder_id, Some(folder_id));
-    assert_eq!(item.content, "body");
+    assert_eq!(item.active_content(), "body");
     assert!(panel.temp(temp_id).is_none());
 }
 
@@ -449,17 +460,21 @@ fn save_draft_effect_moves_temp_into_tree() {
             .prompt_panel
             .temp_mut(temp_id)
             .expect("temp exists");
-        temp.content = "draft body".into();
+        temp.active_page_mut().expect("temp has page").content = "draft body".into();
     }
     state.effects.push(Effect::SaveDraft {
         workspace: cwd.clone(),
         folder_id: None,
         name: "New prompt".into(),
-        content: "draft body".into(),
+        pages: vec![PromptPageDraft {
+            name: "Page 1".into(),
+            content: "draft body".into(),
+        }],
+        active: 0,
     });
     assert!(service.pump(&mut state));
     let item = &state.workspaces[0].prompt_panel.tree.items()[0];
-    assert_eq!(item.content, "draft body");
+    assert_eq!(item.active_content(), "draft body");
     let prompts = service
         .db
         .as_ref()
@@ -476,7 +491,7 @@ fn save_prompt_content_confirms_revision_and_clears_pending() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&cwd, None, "p", "old")
+        .create_prompt(&cwd, None, "p", &[("Page 1".into(), "old".into())])
         .expect("seed");
     service.pump(&mut state);
     let id = state.workspaces[0].prompt_panel.tree.items()[0].id;
@@ -484,16 +499,21 @@ fn save_prompt_content_confirms_revision_and_clears_pending() {
     state.prompt.insert_str(" edited");
     let revision = state.prompt.revision();
     let prompt = state.prompt.id();
+    let page_id = state.workspaces[0].prompt_panel.tree.items()[0]
+        .active_page
+        .saved()
+        .expect("page id");
     state.effects.push(Effect::SavePromptContent {
         workspace: cwd.clone(),
         id,
+        page_id,
         content: "old edited".into(),
         prompt,
         revision,
     });
     assert!(service.pump(&mut state));
     assert!(state.prompt.is_saved(), "成功回执确认对应修订");
-    assert!(!state.workspaces[0].prompt_panel.item_pending(id));
+    assert!(!state.workspaces[0].prompt_panel.page_pending(id, page_id));
     let prompts = service
         .db
         .as_ref()
@@ -514,6 +534,7 @@ fn save_prompt_content_failure_keeps_dirty_and_pending() {
     state.effects.push(Effect::SavePromptContent {
         workspace: cwd.clone(),
         id: 999,
+        page_id: 999,
         content: "body".into(),
         prompt,
         revision,
@@ -612,9 +633,14 @@ fn save_prompt_content_syncs_all_sharing_panels() {
     });
     service.pump(&mut state);
     let id = state.workspaces[1].prompt_panel.tree.items()[0].id;
+    let page_id = state.workspaces[1].prompt_panel.tree.items()[0]
+        .active_page
+        .saved()
+        .expect("page id");
     state.effects.push(Effect::SavePromptContent {
         workspace: worktree.clone(),
         id,
+        page_id,
         content: "typed".into(),
         prompt: crate::layout::PaneId::alloc(),
         revision: 1,
@@ -627,7 +653,7 @@ fn save_prompt_content_syncs_all_sharing_panels() {
                 .tree
                 .item(id)
                 .expect("item in every sharing panel")
-                .content,
+                .active_content(),
             "typed"
         );
     }
@@ -647,7 +673,7 @@ fn ensure_tree_loaded_reloads_when_git_metadata_switches_key() {
         .db
         .as_ref()
         .expect("db")
-        .create_prompt(&repo_root, None, "existing", "")
+        .create_prompt(&repo_root, None, "existing", &[])
         .expect("seed");
     state.active_workspace_mut().git = Some(linked_git(&repo_root, &worktree));
     service.pump(&mut state);
@@ -656,4 +682,250 @@ fn ensure_tree_loaded_reloads_when_git_metadata_switches_key() {
         state.workspaces[0].prompt_panel.loaded_key.as_deref(),
         Some(repo_root.as_path())
     );
+}
+
+// ===== 分页：当前页持久化、共享面板同步与逐页保存回报 =====
+
+/// 预置一个两页正式条目并载入共享两侧面板。
+fn seed_paged_prompt(
+    service: &mut Persistence,
+    state: &mut AppState,
+    repo_root: &std::path::Path,
+    worktree: &std::path::Path,
+) -> i64 {
+    state.active_workspace_mut().git = Some(main_git(repo_root));
+    push_linked(state, repo_root, worktree);
+    let id = service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(
+            repo_root,
+            None,
+            "paged",
+            &[
+                ("Page 1".into(), "alpha".into()),
+                ("Page 2".into(), "beta".into()),
+            ],
+        )
+        .expect("seed prompt");
+    service.pump(state);
+    id
+}
+
+#[test]
+fn page_switch_effect_persists_active_and_syncs_shared_panels() {
+    let (mut service, mut state, repo_root, _) = trusted_service("page-switch");
+    let worktree = workspace_path("page-switch-wt");
+    let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
+    let pages: Vec<_> = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(id)
+        .expect("item")
+        .pages
+        .iter()
+        .map(|page| page.id)
+        .collect();
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    assert_eq!(state.prompt.text(), "alpha");
+    assert!(crate::app::update::select_prompt_page(&mut state, pages[1]));
+    assert_eq!(state.prompt.text(), "beta", "切页立即载入目标正文");
+    service.pump(&mut state);
+    let record = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&repo_root)
+        .expect("list")
+        .remove(0);
+    assert_eq!(record.active_page_id, pages[1].saved(), "当前页落库");
+    for workspace in &state.workspaces {
+        let item = workspace.prompt_panel.tree.item(id).expect("shared item");
+        assert_eq!(item.active_page, pages[1], "共享面板同步当前页");
+        assert_eq!(item.active_content(), "beta");
+    }
+    assert_eq!(state.prompt.text(), "beta", "重载后编辑缓冲保持目标页");
+}
+
+#[test]
+fn create_page_effect_appends_activates_and_starts_rename() {
+    let (mut service, mut state, repo_root, _) = trusted_service("page-create-effect");
+    let worktree = workspace_path("page-create-effect-wt");
+    let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    // 打开页码菜单并选择首行 `New page`。
+    assert!(crate::app::update::open_prompt_page_menu(
+        &mut state,
+        (5, 5)
+    ));
+    assert!(crate::app::update::set_page_menu_selection(&mut state, 0));
+    assert!(crate::app::update::activate_page_menu_row(&mut state));
+    service.pump(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    let item = panel.tree.item(id).expect("item");
+    assert_eq!(item.pages.len(), 3, "新页追加末尾");
+    assert_eq!(item.pages[2].name, "Page 3", "下一个未使用的默认页名");
+    assert_eq!(item.active_page, item.pages[2].id, "新页立即成为当前页");
+    assert_eq!(state.prompt.text(), "", "新页正文为空");
+    let rename = panel.page_rename().expect("进入默认名编辑");
+    assert_eq!(rename.input.text(), "Page 3");
+    let record = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&repo_root)
+        .expect("list")
+        .remove(0);
+    assert_eq!(record.pages.len(), 3);
+    assert_eq!(record.active_page_id, item.pages[2].id.saved());
+}
+
+#[test]
+fn delete_page_effect_rebinds_editor_to_next_page() {
+    let (mut service, mut state, repo_root, _) = trusted_service("page-delete-effect");
+    let worktree = workspace_path("page-delete-effect-wt");
+    let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    // 非空页删除先二次确认；确认后服务落库并重绑原下一页。
+    assert!(crate::app::update::delete_current_page(&mut state));
+    assert!(matches!(state.overlay, Some(Overlay::ConfirmClose(_))));
+    crate::app::update::apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    service.pump(&mut state);
+    let panel = &state.workspaces[0].prompt_panel;
+    let item = panel.tree.item(id).expect("item");
+    assert_eq!(item.pages.len(), 1);
+    assert_eq!(item.pages[0].name, "Page 2");
+    assert_eq!(state.prompt.text(), "beta", "删除当前页后显示原下一页");
+    let record = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&repo_root)
+        .expect("list")
+        .remove(0);
+    assert_eq!(record.pages.len(), 1);
+    assert_eq!(record.pages[0].name, "Page 2");
+}
+
+#[test]
+fn page_save_ack_only_confirms_matching_page_and_revision() {
+    let (mut service, mut state, repo_root, _) = trusted_service("page-ack");
+    let worktree = workspace_path("page-ack-wt");
+    let id = seed_paged_prompt(&mut service, &mut state, &repo_root, &worktree);
+    let pages: Vec<_> = state.workspaces[0]
+        .prompt_panel
+        .tree
+        .item(id)
+        .expect("item")
+        .pages
+        .iter()
+        .map(|page| page.id)
+        .collect();
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    // 第一页编辑后切到第二页：旧页保存与当前页效应一并执行。
+    state.prompt.insert_str("!");
+    assert!(crate::app::update::select_prompt_page(&mut state, pages[1]));
+    service.pump(&mut state);
+    assert_eq!(state.prompt.text(), "beta");
+    // 第二页继续编辑：旧页的迟到回报不得把新页保存点误标为已保存。
+    state.prompt.insert_str("?");
+    assert!(!state.prompt.is_saved());
+    let page_id = pages[0].saved().expect("saved page");
+    state.effects.push(Effect::SavePromptContent {
+        workspace: repo_root.clone(),
+        id,
+        page_id,
+        content: "alpha!".into(),
+        prompt: state.prompt.id(),
+        revision: state.prompt.revision(),
+    });
+    service.pump(&mut state);
+    assert!(!state.prompt.is_saved(), "旧页回报不确认新页保存点");
+    assert_eq!(state.prompt.text(), "beta?", "新页缓冲不受旧页回报影响");
+    assert!(!state.workspaces[0].prompt_panel.page_pending(id, page_id));
+    assert_eq!(
+        state.workspaces[0]
+            .prompt_panel
+            .tree
+            .item(id)
+            .expect("item")
+            .page(pages[0])
+            .expect("page")
+            .content,
+        "alpha!",
+        "旧页正文仍按回报落内存"
+    );
+}
+
+#[test]
+fn save_draft_carries_all_temp_pages_to_formal_item() {
+    let (mut service, mut state, repo_root, _) = trusted_service("draft-pages");
+    state.prompt.insert_str("first");
+    assert!(crate::app::update::open_prompt_page_menu(
+        &mut state,
+        (5, 5)
+    ));
+    assert!(crate::app::update::set_page_menu_selection(&mut state, 0));
+    assert!(crate::app::update::activate_page_menu_row(&mut state));
+    state.prompt.insert_str("second");
+    crate::app::update::apply_page_rename_key(&mut state, crate::app::actions::OverlayKey::Esc);
+    crate::app::update::save_prompt_now(&mut state);
+    crate::app::update::apply_overlay_key(&mut state, crate::app::actions::OverlayKey::Enter);
+    service.pump(&mut state);
+    let record = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&repo_root)
+        .expect("list")
+        .remove(0);
+    assert_eq!(record.pages.len(), 2, "临时两页一并入库");
+    assert_eq!(record.pages[0].content, "first");
+    assert_eq!(record.pages[1].content, "second");
+    assert_eq!(
+        record.active_page_id,
+        Some(record.pages[1].id),
+        "当前页随保存带入正式条目"
+    );
+    assert_eq!(state.prompt.text(), "second", "绑定视图显示保存时页");
+}
+
+#[test]
+fn key_change_settles_current_page_before_reload() {
+    let (mut service, mut state, cwd, _) = trusted_service("key-settle");
+    let repo_root = workspace_path("key-settle-repo");
+    let id = service
+        .db
+        .as_ref()
+        .expect("db")
+        .create_prompt(&cwd, None, "local", &[("Page 1".into(), "body".into())])
+        .expect("seed");
+    service.pump(&mut state);
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, id));
+    state.prompt.insert_str(" edited");
+    state.effects.clear();
+    // git 元数据晚到：归属键从 cwd 切到仓库根，重载前先结算旧树的当前页。
+    state.active_workspace_mut().git = Some(main_git(&repo_root));
+    service.pump(&mut state);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SavePromptContent { id: effect_id, content, .. }
+                if *effect_id == id && content == "body edited"
+        )),
+        "归属键变化前先结算旧页: {:?}",
+        state.effects
+    );
+    service.pump(&mut state);
+    let record = service
+        .db
+        .as_ref()
+        .expect("db")
+        .list_prompts(&cwd)
+        .expect("list")
+        .into_iter()
+        .find(|record| record.id == id)
+        .expect("record");
+    assert_eq!(record.pages[0].content, "body edited");
 }

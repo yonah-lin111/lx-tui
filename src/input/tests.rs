@@ -686,3 +686,71 @@ fn save_draft_overlay_routes_navigation_only() {
         Some(Routed::Overlay(OverlayKey::Left))
     );
 }
+
+// ===== 分页：页码菜单与页重命名输入路由 =====
+
+#[test]
+fn page_menu_overlay_routes_navigation_keys_only() {
+    let overlay = Some(OverlayKind::PageMenu);
+    assert_eq!(
+        super::route(key(KeyCode::Esc), TermMode::empty(), false, overlay, false),
+        Some(Routed::Overlay(OverlayKey::Esc))
+    );
+    assert_eq!(
+        super::route(key(KeyCode::Down), TermMode::empty(), false, overlay, false),
+        Some(Routed::Overlay(OverlayKey::Down))
+    );
+    assert_eq!(
+        super::route(key(KeyCode::Up), TermMode::empty(), false, overlay, false),
+        Some(Routed::Overlay(OverlayKey::Up))
+    );
+    assert_eq!(
+        super::route(
+            key(KeyCode::Enter),
+            TermMode::empty(),
+            false,
+            overlay,
+            false
+        ),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        super::route(
+            key(KeyCode::Char('x')),
+            TermMode::empty(),
+            false,
+            overlay,
+            false
+        ),
+        None,
+        "其余按键吞掉"
+    );
+}
+
+#[test]
+fn page_rename_key_maps_single_line_input_semantics() {
+    assert_eq!(
+        page_rename_key(key(KeyCode::Enter)),
+        Some(OverlayKey::Enter)
+    );
+    assert_eq!(page_rename_key(key(KeyCode::Esc)), Some(OverlayKey::Esc));
+    assert_eq!(
+        page_rename_key(key(KeyCode::Char('a'))),
+        Some(OverlayKey::Char('a'))
+    );
+    assert_eq!(
+        page_rename_key(key(KeyCode::Backspace)),
+        Some(OverlayKey::Backspace)
+    );
+    assert_eq!(page_rename_key(key(KeyCode::Left)), Some(OverlayKey::Left));
+    assert_eq!(
+        page_rename_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        Some(OverlayKey::Clear)
+    );
+    assert_eq!(
+        page_rename_key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL)),
+        None,
+        "Ctrl 组合不进入输入（Ctrl+Q 由上层退出）"
+    );
+    assert_eq!(page_rename_key(key(KeyCode::Tab)), None);
+}

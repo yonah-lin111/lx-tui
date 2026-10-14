@@ -4,8 +4,14 @@
 
 use std::path::PathBuf;
 
-use super::prompt::PromptItemStatus;
 use super::trust::TrustTrigger;
+
+/// 临时提示词升格为正式条目时携带的一页（名称与正文）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptPageDraft {
+    pub name: String,
+    pub content: String,
+}
 
 /// 一次待执行的副作用。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,18 +33,21 @@ pub enum Effect {
         parent_id: Option<i64>,
         name: String,
     },
-    /// 新建提示词；`folder_id` 为 None 时挂根层。
+    /// 新建提示词（建立单一空 `Page 1`）；`folder_id` 为 None 时挂根层。
     CreatePrompt {
         workspace: PathBuf,
         folder_id: Option<i64>,
         name: String,
     },
-    /// 保存临时草稿为正式条目（写入指定文件夹）；成功后清空草稿槽位。
+    /// 保存临时草稿为正式条目（连页写入指定文件夹）；成功后移除临时对象。
     SaveDraft {
         workspace: PathBuf,
         folder_id: Option<i64>,
         name: String,
-        content: String,
+        /// 临时提示词的全部页（名称、正文）。
+        pages: Vec<PromptPageDraft>,
+        /// 保存后应显示的页索引（临时对象当前页）。
+        active: usize,
     },
     /// 重命名文件夹。
     RenameFolder {
@@ -56,20 +65,40 @@ pub enum Effect {
     },
     /// 删除提示词。
     DeletePrompt { workspace: PathBuf, id: i64 },
-    /// 保存提示词正文；回执携带修订号，成功后只确认对应修订。
+    /// 保存提示词页正文；回执携带页 id 与修订号，成功后只确认对应页。
     SavePromptContent {
         workspace: PathBuf,
         id: i64,
+        /// 数据库页 id。
+        page_id: i64,
         content: String,
         /// 发起保存时的 prompt 编辑器标识与内容修订号。
         prompt: crate::layout::PaneId,
         revision: u64,
     },
-    /// 更新提示词状态。
-    SetPromptStatus {
+    /// 追加一页到末尾并设为当前页（新页立即进入命名编辑）。
+    CreatePage {
         workspace: PathBuf,
         id: i64,
-        status: PromptItemStatus,
+        name: String,
+    },
+    /// 重命名一页。
+    RenamePage {
+        workspace: PathBuf,
+        page_id: i64,
+        name: String,
+    },
+    /// 删除一页（最后一页不可删除由应用层阻止）。
+    DeletePage {
+        workspace: PathBuf,
+        id: i64,
+        page_id: i64,
+    },
+    /// 记录提示词的当前页（跨面板同步“上次打开的页”）。
+    SetActivePage {
+        workspace: PathBuf,
+        id: i64,
+        page_id: i64,
     },
     /// 复制文本到系统剪贴板并弹出反馈 toast。
     CopyToClipboard(String),

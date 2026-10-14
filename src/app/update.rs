@@ -53,6 +53,7 @@ pub fn apply(action: Action, state: &mut AppState) {
                 state.prompt_focused = false;
                 clear_selection(state);
                 state.prompt.clear_panel();
+                cancel_page_rename(state);
             }
         }
         Action::TogglePanes => state.panes_collapsed = !state.panes_collapsed,
@@ -322,6 +323,7 @@ fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) {
     commit_prompt_buffer(state, from);
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt_panel.drop_blank_temp_binding();
+        workspace.prompt_panel.cancel_page_rename();
     }
     state.prompt.mark_saved();
     let mut next = state
@@ -496,7 +498,15 @@ pub fn copy_template_block(state: &mut AppState, start_line: usize) -> Option<St
         .map(|body| super::markdown::copy_template_content(&body))
 }
 
-/// 复制光标所在模板块正文（Cmd/Ctrl+Shift+C）；不在模板块内返回 None。
+/// 复制补充块正文（同模板块复制语义）；返回待写入剪贴板的文本。
+pub fn copy_supple_block(state: &mut AppState, start_line: usize) -> Option<String> {
+    state
+        .prompt
+        .supple_block_body(start_line)
+        .map(|body| super::markdown::copy_template_content(&body))
+}
+
+/// 复制光标所在模板块或补充块正文（Cmd/Ctrl+Shift+C）；不在任何块内返回 None。
 pub fn copy_template_block_at_cursor(state: &mut AppState) -> Option<String> {
     state.prompt.copy_text_at_cursor()
 }
@@ -595,10 +605,11 @@ pub fn focus_prompt(state: &mut AppState) {
     state.prompt_focused = true;
 }
 
-/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板。
+/// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
     state.prompt.clear_panel();
+    cancel_page_rename(state);
     state.active_tab_mut().layout.focus_pane(id);
 }
 
@@ -912,7 +923,17 @@ fn autoscroll_step(
     let moved = if terminal {
         scroll_pane_lines(state, pane, step, lines)
     } else {
-        scroll_prompt_selection(state, step, lines)
+        // 拖选自动滚动到真实正文边界即停，不进入底部虚拟留白。
+        let cap = state.prompt.text_max_scroll();
+        if state.prompt.scroll() >= cap {
+            false
+        } else {
+            scroll_prompt_selection(state, step, lines);
+            if state.prompt.scroll() > cap {
+                state.prompt.scroll_to(cap);
+            }
+            true
+        }
     };
     if !moved {
         return false;
@@ -1097,6 +1118,15 @@ pub fn set_tab_hover(state: &mut AppState, hover: Option<usize>) -> bool {
         return false;
     }
     state.tab_hover = hover;
+    true
+}
+
+/// 更新提示词列表悬停行；返回是否发生变化。
+pub fn set_prompt_tree_hover(state: &mut AppState, hover: Option<usize>) -> bool {
+    if state.prompt_tree_hover == hover {
+        return false;
+    }
+    state.prompt_tree_hover = hover;
     true
 }
 
@@ -1645,8 +1675,12 @@ pub fn close_overlay(state: &mut AppState) {
     state.overlay = None;
 }
 
-/// 菜单高亮按步长循环移动。
+/// 菜单高亮按步长循环移动；页码菜单按列表语义钳制移动。
 pub fn move_menu_selection(state: &mut AppState, step: isize) {
+    if matches!(state.overlay, Some(Overlay::PageMenu(_))) {
+        move_page_menu_selection(state, step);
+        return;
+    }
     let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
         return;
     };
@@ -1655,6 +1689,8 @@ pub fn move_menu_selection(state: &mut AppState, step: isize) {
     }
     let len = menu.commands.len() as isize;
     menu.selected = (menu.selected as isize + step).rem_euclid(len) as usize;
+    // 键盘移动同样显示高亮反馈。
+    state.menu_hover = true;
 }
 
 /// 菜单悬停高亮；索引越界忽略；返回是否变化。
@@ -1662,10 +1698,21 @@ pub fn set_menu_selection(state: &mut AppState, index: usize) -> bool {
     let Some(Overlay::Menu(menu)) = state.overlay.as_mut() else {
         return false;
     };
-    if index >= menu.commands.len() || menu.selected == index {
+    if index >= menu.commands.len() {
         return false;
     }
+    let changed = menu.selected != index || !state.menu_hover;
     menu.selected = index;
+    state.menu_hover = true;
+    changed
+}
+
+/// 指针离开菜单容器：移除悬停高亮反馈；返回是否变化。
+pub fn clear_menu_hover(state: &mut AppState) -> bool {
+    if !state.menu_hover {
+        return false;
+    }
+    state.menu_hover = false;
     true
 }
 
@@ -1825,12 +1872,6 @@ pub fn activate_menu(state: &mut AppState) {
         (Some(MenuCommand::EditPrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
             edit_prompt_item(state, workspace, item_id);
         }
-        (
-            Some(MenuCommand::ChangePromptStatus(status)),
-            OverlayTarget::PromptItem { workspace, item_id },
-        ) => {
-            change_prompt_status(state, workspace, item_id, *status);
-        }
         (Some(MenuCommand::RenamePrompt), OverlayTarget::PromptItem { workspace, item_id }) => {
             open_prompt_rename(state, RenameTarget::PromptItem { workspace, item_id });
         }
@@ -1935,6 +1976,10 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             }
             Some(OverlayKind::ConfirmClose) => {
                 confirm_close(state);
+                None
+            }
+            Some(OverlayKind::PageMenu) => {
+                activate_page_menu_row(state);
                 None
             }
             Some(OverlayKind::ConfirmSwitchCwd) => confirm_switch_cwd(state),
@@ -2083,6 +2128,13 @@ fn confirm_close(state: &mut AppState) {
         } => delete_prompt_folder(state, workspace, folder_id),
         OverlayTarget::PromptItem { workspace, item_id } => {
             delete_prompt_item(state, workspace, item_id);
+        }
+        OverlayTarget::PromptPage {
+            workspace,
+            owner,
+            page,
+        } => {
+            confirm_delete_page(state, workspace, owner, page);
         }
         OverlayTarget::TempPrompt { .. } => {}
         OverlayTarget::PromptTree { .. } => {}

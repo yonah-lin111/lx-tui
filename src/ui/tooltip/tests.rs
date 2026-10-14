@@ -10,9 +10,12 @@ use super::*;
 use crate::app::tooltip::{BlockButtonKind, TOOLTIP_DELAY, TemplateButtonKind, Tooltip};
 use crate::config::Config;
 
+/// 测试屏幕矩形（与 `view_for` 一致）。
+const SCREEN: Rect = Rect::new(0, 0, 100, 24);
+
 fn view_for(state: &AppState) -> ViewLayout {
     crate::ui::layout::compute(
-        Rect::new(0, 0, 100, 24),
+        SCREEN,
         &Config::default(),
         state.sidebar_collapsed,
         state.sidebar_width,
@@ -58,12 +61,12 @@ fn hits_collapse_buttons_and_misses_content() {
     let rects = pane_rects(&state, &view);
     let area = collapse_area(&view, ui::CollapseTarget::Sidebar);
     assert_eq!(
-        target_at(&view, &state, &rects, area.x + 1, area.y),
+        target_at(&view, &state, &rects, SCREEN, area.x + 1, area.y),
         Some(TooltipTarget::CollapseSidebar)
     );
     let pane_point = (view.panes.x + 2, view.panes.y + 2);
     assert_eq!(
-        target_at(&view, &state, &rects, pane_point.0, pane_point.1),
+        target_at(&view, &state, &rects, SCREEN, pane_point.0, pane_point.1),
         None
     );
 }
@@ -75,7 +78,7 @@ fn hits_swap_prompt_button() {
     let rects = pane_rects(&state, &view);
     let button = ui::swap_button(&view).expect("swap button visible");
     assert_eq!(
-        target_at(&view, &state, &rects, button.x, button.y),
+        target_at(&view, &state, &rects, SCREEN, button.x, button.y),
         Some(TooltipTarget::SwapPromptSide)
     );
 }
@@ -95,25 +98,32 @@ fn hits_pane_toggle_add_workspace_tab_bar_and_exit() {
     )
     .expect("toggle button visible");
     assert_eq!(
-        target_at(&view, &state, &rects, toggle.x, toggle.y),
+        target_at(&view, &state, &rects, SCREEN, toggle.x, toggle.y),
         Some(TooltipTarget::PaneToggle(pane))
     );
 
     let add_workspace = sidebar::add_workspace_button(&view).expect("add workspace visible");
     assert_eq!(
-        target_at(&view, &state, &rects, add_workspace.x + 1, add_workspace.y),
+        target_at(
+            &view,
+            &state,
+            &rects,
+            SCREEN,
+            add_workspace.x + 1,
+            add_workspace.y
+        ),
         Some(TooltipTarget::AddWorkspace)
     );
 
     let bar = tab_bar::layout(&view, state.active_workspace(), state.tab_scroll);
     let add = bar.add.expect("add tab visible");
     assert_eq!(
-        target_at(&view, &state, &rects, add.x, add.y),
+        target_at(&view, &state, &rects, SCREEN, add.x, add.y),
         Some(TooltipTarget::AddTab)
     );
     let exit = ui::exit_button(&view).expect("exit visible");
     assert_eq!(
-        target_at(&view, &state, &rects, exit.x + 1, exit.y),
+        target_at(&view, &state, &rects, SCREEN, exit.x + 1, exit.y),
         Some(TooltipTarget::Exit)
     );
 }
@@ -127,14 +137,14 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
         layout::prompt_toolbar_button_rect(view.prompt, layout::PromptToolbarButton::Undo, false)
             .expect("undo button visible");
     assert_eq!(
-        target_at(&view, &state, &rects, undo.x, undo.y),
+        target_at(&view, &state, &rects, SCREEN, undo.x, undo.y),
         Some(TooltipTarget::PromptUndo)
     );
     let pin =
         layout::prompt_toolbar_button_rect(view.prompt, layout::PromptToolbarButton::Pin, false)
             .expect("pin button visible");
     assert_eq!(
-        target_at(&view, &state, &rects, pin.x, pin.y),
+        target_at(&view, &state, &rects, SCREEN, pin.x, pin.y),
         Some(TooltipTarget::PromptPin)
     );
 
@@ -142,7 +152,7 @@ fn hits_prompt_toolbar_and_pin_but_not_when_collapsed() {
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
     assert!(
-        targets(&view, &state, &rects)
+        targets(&view, &state, &rects, SCREEN)
             .iter()
             .all(|(target, _)| !matches!(
                 target,
@@ -209,6 +219,54 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
         .map(|x| buffer[(x, area.y + 1)].symbol())
         .collect();
     assert!(row.contains(hint), "正文包含提示文案：{row:?}");
+}
+
+#[test]
+fn page_menu_border_chips_arm_and_render_tooltips() {
+    let mut state = AppState::demo();
+    assert!(crate::app::update::open_temp_prompt(&mut state));
+    assert!(crate::app::update::open_prompt_page_menu(
+        &mut state,
+        (10, 4)
+    ));
+    let Some(crate::app::overlay::Overlay::PageMenu(menu)) = &state.overlay else {
+        panic!("page menu open");
+    };
+    let layout = ui::overlay::page_menu_layout(&state, SCREEN, menu);
+    // 命中：边框按钮映射到专属提示目标。
+    assert_eq!(
+        target_at(
+            &view_for(&state),
+            &state,
+            &[],
+            SCREEN,
+            layout.new_rect.x,
+            layout.new_rect.y
+        ),
+        Some(TooltipTarget::PageMenuAdd)
+    );
+    assert_eq!(
+        target_at(
+            &view_for(&state),
+            &state,
+            &[],
+            SCREEN,
+            layout.delete_rect.x,
+            layout.delete_rect.y
+        ),
+        Some(TooltipTarget::PageMenuDelete)
+    );
+    // 渲染：浮层打开时仍绘制在菜单之上。
+    let now = Instant::now();
+    state.tooltip = Some(Tooltip::new(TooltipTarget::PageMenuAdd, now));
+    assert!(crate::app::update::tick(&mut state, now + TOOLTIP_DELAY));
+    let buffer = render_buffer(&state);
+    let hint = text::tooltip_hint(TooltipTarget::PageMenuAdd, &state);
+    let area = rect(SCREEN, layout.new_rect, text::TOOLTIP_TITLE, hint).expect("rect resolves");
+    let row: String = (area.x + 1..area.right() - 1)
+        .map(|x| buffer[(x, area.y + 1)].symbol())
+        .collect();
+    assert!(row.contains(hint), "页码菜单按钮提示: {row:?}");
 }
 
 #[test]
@@ -288,19 +346,24 @@ fn hits_template_block_buttons_via_prompt_text_area() {
         .find(|hit| hit.button == ui::prompt::TemplateBlockButton::Copy)
         .expect("copy button visible");
     assert_eq!(
-        target_at(&view, &state, &rects, copy.rect.x, copy.rect.y),
+        target_at(&view, &state, &rects, SCREEN, copy.rect.x, copy.rect.y),
         Some(TooltipTarget::TemplateButton {
             line: copy.line,
             button: TemplateButtonKind::Copy,
         })
     );
-    assert_eq!(target_at(&view, &state, &rects, 0, 0), None, "边框角不命中");
+    assert_eq!(
+        target_at(&view, &state, &rects, SCREEN, 0, 0),
+        None,
+        "边框角不命中"
+    );
 }
 
 #[test]
 fn block_button_tooltips_have_hints() {
     let state = AppState::demo();
     for (button, hint) in [
+        (BlockButtonKind::Copy, "copy block"),
         (BlockButtonKind::Clean, "clean block"),
         (BlockButtonKind::Delete, "delete block"),
     ] {
@@ -322,13 +385,13 @@ fn hits_block_buttons_via_prompt_text_area() {
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);
     let hits = ui::prompt::block_buttons(&state.prompt, area);
-    assert_eq!(hits.len(), 2, "清理、删除按钮可见");
+    assert_eq!(hits.len(), 3, "复制、清理、删除按钮可见");
     let clean = hits
         .iter()
         .find(|hit| hit.button == ui::prompt::BlockButton::Clean)
         .expect("clean button visible");
     assert_eq!(
-        target_at(&view, &state, &rects, clean.rect.x, clean.rect.y),
+        target_at(&view, &state, &rects, SCREEN, clean.rect.x, clean.rect.y),
         Some(TooltipTarget::BlockButton {
             line: clean.line,
             button: BlockButtonKind::Clean,

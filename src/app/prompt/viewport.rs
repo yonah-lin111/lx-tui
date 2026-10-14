@@ -75,11 +75,25 @@ impl Prompt {
     pub fn scroll_to(&mut self, offset: usize) {
         self.scroll = offset.min(self.max_scroll());
     }
-    /// 最大可滚动偏移：视觉行数减视口高度。
-    fn max_scroll(&self) -> usize {
+    /// 底部虚拟空占位行数：当前编辑视口高度的一半（向下取整）。
+    ///
+    /// 只计入最大滚动值与滚动条几何，不写入正文、不参与光标/点击/选区映射。
+    pub fn bottom_padding(&self) -> usize {
+        usize::from(self.height) / 2
+    }
+    /// 视口内的行是否落在正文之后的底部留白（含空文档时的占位区）。
+    pub fn row_in_padding(&self, viewport_row: u16) -> bool {
+        self.scroll.saturating_add(usize::from(viewport_row)) >= self.visual_rows().len()
+    }
+    /// 真实文本的最大滚动偏移（视觉行数减视口高度，不含底部留白）。
+    pub fn text_max_scroll(&self) -> usize {
         self.visual_rows()
             .len()
             .saturating_sub(usize::from(self.height.max(1)))
+    }
+    /// 最大可滚动偏移：真实文本上限加底部虚拟空占位。
+    fn max_scroll(&self) -> usize {
+        self.text_max_scroll() + self.bottom_padding()
     }
     /// 将视口单元格坐标映射为光标位置；超出文本时钳到最近行行尾。
     pub fn set_cursor_from_cell(&mut self, row: u16, col: u16) {
@@ -163,7 +177,7 @@ impl Prompt {
             0
         }
     }
-    /// 调整滚动量，保证光标所在视觉行可见。
+    /// 调整滚动量，保证光标所在视觉行可见；已在底部留白内滚动时不回拉。
     pub(super) fn scroll_cursor_into_view(&mut self) {
         let rows = self.visual_rows();
         let height = usize::from(self.height.max(1));
@@ -173,6 +187,6 @@ impl Prompt {
         } else if row >= self.scroll + height {
             self.scroll = row + 1 - height;
         }
-        self.scroll = self.scroll.min(rows.len().saturating_sub(height));
+        self.scroll = self.scroll.min(self.max_scroll());
     }
 }

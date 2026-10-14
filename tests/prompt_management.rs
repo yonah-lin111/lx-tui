@@ -282,7 +282,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
             .prompt_panel
             .tree
             .item(prompt_id)
-            .map(|item| item.content.as_str()),
+            .map(|item| item.active_content()),
         Some("hello world")
     );
 
@@ -300,7 +300,7 @@ fn in_app_trust_dialog_folder_nesting_persistence_and_workspace_isolation() {
     service.pump(&mut reloaded);
     let items = reloaded.active_workspace().prompt_panel.tree.items();
     assert_eq!(items.len(), 1, "重启后提示词持久化");
-    assert_eq!(items[0].content, "hello world");
+    assert_eq!(items[0].active_content(), "hello world");
     // 工作区 b 的树也独立持久化（一条新建的默认名提示词）。
     assert_eq!(
         reader.list_prompts(&workspace_b).expect("list b").len(),
@@ -344,7 +344,7 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     update::show_prompt_tree(&mut state);
     let panel = &state.active_workspace().prompt_panel;
     assert_eq!(
-        panel.temp(temp_id).map(|temp| temp.content.as_str()),
+        panel.temp(temp_id).map(|temp| temp.active_content()),
         Some("draft body")
     );
     assert!(
@@ -404,7 +404,7 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     assert_eq!(folder.name, "docs");
     let item = &panel.tree.items()[0];
     assert_eq!(item.folder_id, Some(folder.id));
-    assert_eq!(item.content, "draft body");
+    assert_eq!(item.active_content(), "draft body");
     assert_eq!(panel.editing, Some(PromptEditing::Item(item.id)));
 
     // 重启后草稿保存的文件夹与条目仍在。
@@ -416,5 +416,5 @@ fn draft_prompt_saved_to_new_folder_end_to_end() {
     service.pump(&mut reloaded);
     let panel = &reloaded.active_workspace().prompt_panel;
     assert_eq!(panel.tree.folders().len(), 1);
-    assert_eq!(panel.tree.items()[0].content, "draft body");
+    assert_eq!(panel.tree.items()[0].active_content(), "draft body");
 }

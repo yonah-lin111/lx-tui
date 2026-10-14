@@ -4,7 +4,8 @@ use std::path::PathBuf;
 
 use crate::layout::PaneId;
 
-use super::prompt::PromptItemStatus;
+use super::markdown::TemplateCounts;
+use super::prompt::{PromptEditing, PromptPageId};
 use super::trust::TrustWorkspace;
 
 /// 浮层种类：按键路由与渲染按种类分派。
@@ -20,6 +21,7 @@ pub enum OverlayKind {
     TrustWorkspace,
     NewNode,
     SaveDraft,
+    PageMenu,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -35,6 +37,7 @@ pub enum Overlay {
     TrustWorkspace(TrustWorkspace),
     NewNode(NewNode),
     SaveDraft(SaveDraft),
+    PageMenu(PageMenu),
 }
 
 impl Overlay {
@@ -51,8 +54,39 @@ impl Overlay {
             Self::TrustWorkspace(_) => OverlayKind::TrustWorkspace,
             Self::NewNode(_) => OverlayKind::NewNode,
             Self::SaveDraft(_) => OverlayKind::SaveDraft,
+            Self::PageMenu(_) => OverlayKind::PageMenu,
         }
     }
+}
+
+/// 页码菜单：锚点、作用目标、行快照与高亮项。
+///
+/// 行快照在打开时结算当前页后生成；当前页行首 `❯` 标记（Prompt 列表选中语义），
+/// 菜单打开期间为模态，行集合不会再变化。
+#[derive(Debug)]
+pub struct PageMenu {
+    pub anchor: (u16, u16),
+    pub workspace: usize,
+    /// 作用目标：正式条目或临时提示词。
+    pub target: PromptEditing,
+    pub rows: Vec<PageMenuRow>,
+    pub selected: usize,
+}
+
+/// 页码菜单行：新建动作、页行或删除动作。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PageMenuRow {
+    NewPage,
+    Page {
+        page: PromptPageId,
+        current: bool,
+        /// 正文去空白后为空（渲染为占位名/空白页语义）。
+        empty: bool,
+        counts: TemplateCounts,
+    },
+    DeletePage {
+        enabled: bool,
+    },
 }
 
 /// 新建节点命名浮层：文件夹或提示词条目；名称输入与来源选择器。
@@ -141,6 +175,12 @@ pub enum OverlayTarget {
     PromptTree {
         workspace: usize,
     },
+    /// 提示词页（删除确认作用目标）：owner 为条目或临时提示词。
+    PromptPage {
+        workspace: usize,
+        owner: PromptEditing,
+        page: PromptPageId,
+    },
 }
 
 /// 菜单命令；文案由 `ui/text.rs` 按命令映射，app 层不持有用户可见字符串。
@@ -173,8 +213,6 @@ pub enum MenuCommand {
     DeleteTemp,
     EditPrompt,
     CopyPromptContent,
-    /// 把提示词切到下一个状态（todo → in_progress → completed → todo）。
-    ChangePromptStatus(PromptItemStatus),
 }
 
 /// 重命名作用目标：工作区、标签或提示词树节点；窗格不可重命名，因此不在此枚举内。

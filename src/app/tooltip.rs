@@ -21,6 +21,7 @@ pub enum TemplateButtonKind {
 /// 补充块按钮种类；与 ui 侧 `BlockButton` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockButtonKind {
+    Copy,
     Clean,
     Delete,
 }
@@ -51,6 +52,10 @@ pub enum TooltipTarget {
     PromptPin,
     /// 侧栏底边框左侧设置按钮。
     SidebarSettings,
+    /// 页码菜单顶部边框的新建按钮。
+    PageMenuAdd,
+    /// 页码菜单顶部边框的删除按钮。
+    PageMenuDelete,
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
     TemplateButton {
         line: usize,

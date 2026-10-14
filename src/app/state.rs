@@ -97,6 +97,10 @@ pub struct AppState {
     pub tab_scroll: usize,
     /// 鼠标悬停的可见标签索引；None 表示未悬停任何标签。
     pub tab_hover: Option<usize>,
+    /// 鼠标悬停的提示词列表行索引（树视图可见行）；None 表示未悬停。
+    pub prompt_tree_hover: Option<usize>,
+    /// 鼠标是否停留在当前右键菜单/页码菜单容器内；离开容器清除选中高亮反馈。
+    pub menu_hover: bool,
     /// 工作区列表滚动偏移（顶部项索引）。
     pub workspace_scroll: usize,
     /// 鼠标悬停的工作区索引（仅可见行）；None 表示未悬停任何行。
@@ -478,6 +482,8 @@ impl AppState {
             active_workspace: 0,
             tab_scroll: 0,
             tab_hover: None,
+            prompt_tree_hover: None,
+            menu_hover: false,
             workspace_scroll: 0,
             workspace_hover: None,
             workspace_scroll_drag: None,

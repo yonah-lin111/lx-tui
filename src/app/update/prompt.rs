@@ -1,45 +1,35 @@
 //! 提示词树行为：视图模式切换、选中导航、右键菜单与编辑提交。
 //!
 //! DB 读写不在此层执行：变更登记为 `Effect` 出箱，由持久化服务执行并回报。
+//! 分页行为见 `prompt::pages`，草稿保存与新建节点浮层见 `prompt::draft`。
+
+mod draft;
+mod pages;
+mod tree_view;
+
+pub use draft::*;
+pub use pages::*;
+pub use tree_view::*;
 
 use std::path::Path;
-use std::time::{Duration, Instant};
 
-use crate::app::actions::{EditorCommand, OverlayKey};
 use crate::app::effects::Effect;
 use crate::app::overlay::{
-    Menu, MenuCommand, NewNode, NewNodeKind, Overlay, OverlayTarget, Rename, RenameTarget,
-    SaveDraft, SaveDraftEntry, TextInput,
+    Menu, MenuCommand, Overlay, OverlayTarget, Rename, RenameTarget, TextInput,
 };
 use crate::app::prompt::{
-    PromptEditing, PromptFolder, PromptItem, PromptItemStatus, PromptMode, PromptRow,
-    PromptRowKind, PromptTree,
+    PromptEditing, PromptFolder, PromptItem, PromptMode, PromptPageId, PromptRow,
 };
 use crate::app::state::AppState;
 use crate::db::{FolderRecord, PromptRecord};
-use crate::ui::text;
-
-/// 提示词树内容区可见行数；取编辑器的同步尺寸（同一面板几何），扣除搜索框与分割线行。
-pub fn prompt_tree_visible_rows(state: &AppState) -> usize {
-    usize::from(
-        state
-            .prompt
-            .size()
-            .1
-            .saturating_sub(crate::layout::PROMPT_TREE_HEADER_HEIGHT)
-            .max(1),
-    )
-}
-
-/// 显示中的工作区是否处于提示词树视图。
-pub fn prompt_tree_mode(state: &AppState) -> bool {
-    state
-        .workspaces
-        .get(state.prompt_workspace())
-        .is_some_and(|workspace| workspace.prompt_panel.mode == PromptMode::Tree)
-}
 
 /// 用 DB 记录整体替换指定工作区的树（`key` 为该树对应的 prompt 键）；保持已有折叠状态。
+///
+/// 重载以数据库为正文真源，但不覆盖未确认页：内存中该页仍有待保存标记时保留内存正文，
+/// 待保存回报后再确认；页已被别处删除的待保存标记一并清除（无法再重试）。
+///
+/// 同键另一面板改了“上次打开的页”时，本面板编辑缓冲先结算到旧页再重绑目标页，
+/// 避免把旧页正文写进新页或把新页显示成旧内容。
 pub fn apply_prompt_tree(
     state: &mut AppState,
     workspace: usize,
@@ -48,14 +38,89 @@ pub fn apply_prompt_tree(
     prompts: Vec<PromptRecord>,
 ) -> bool {
     let visible = prompt_tree_visible_rows(state);
+    let recorded: Vec<(i64, Option<i64>)> = prompts
+        .iter()
+        .map(|record| (record.id, record.active_page_id))
+        .collect();
+    let folders: Vec<PromptFolder> = folders.into_iter().map(PromptFolder::from).collect();
+    let mut prompts: Vec<PromptItem> = prompts.into_iter().map(PromptItem::from).collect();
+    let displayed = workspace == state.prompt_workspace();
+    // 归属键变化（git 元数据晚到/工作区改路径）也走结算：旧树正文先落旧键。
+    let key_changed = state
+        .workspaces
+        .get(workspace)
+        .is_some_and(|workspace| workspace.prompt_panel.loaded_key.as_deref() != Some(key));
+    let editing = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.prompt_panel.editing);
+    let old_active = editing.and_then(|editing| match editing {
+        PromptEditing::Item(id) => state
+            .workspaces
+            .get(workspace)
+            .and_then(|workspace| workspace.prompt_panel.tree.item(id))
+            .map(|item| item.active_page),
+        PromptEditing::Temp(_) => None,
+    });
+    let incoming_active = match editing {
+        Some(PromptEditing::Item(id)) => prompts
+            .iter()
+            .find(|item| item.id == id)
+            .map(|item| item.active_page),
+        _ => None,
+    };
+    let page_switched = old_active.is_some() && old_active != incoming_active;
+    if displayed && (page_switched || key_changed) {
+        commit_prompt_buffer(state, workspace);
+    }
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return false;
     };
-    let folders: Vec<PromptFolder> = folders.into_iter().map(PromptFolder::from).collect();
-    let prompts: Vec<PromptItem> = prompts.into_iter().map(PromptItem::from).collect();
+    {
+        let panel = &workspace_state.prompt_panel;
+        let valid: Vec<(i64, i64)> = panel
+            .pending_saves()
+            .iter()
+            .copied()
+            .filter(|(item_id, page_id)| {
+                panel
+                    .tree
+                    .item(*item_id)
+                    .is_some_and(|item| item.page(PromptPageId::Saved(*page_id)).is_some())
+            })
+            .collect();
+        for item in &mut prompts {
+            let Some(old) = panel.tree.item(item.id) else {
+                continue;
+            };
+            for page in &mut item.pages {
+                let Some(page_id) = page.id.saved() else {
+                    continue;
+                };
+                if !valid.contains(&(item.id, page_id)) {
+                    continue;
+                }
+                if let Some(pending) = old.page(page.id) {
+                    page.content.clone_from(&pending.content);
+                }
+            }
+        }
+    }
     workspace_state.prompt_panel.tree.replace(folders, prompts);
-    // 重载后的条目内容即数据库状态，未确认标记全部失效。
-    workspace_state.prompt_panel.clear_pending_saves();
+    let keep: Vec<(i64, i64)> = workspace_state
+        .prompt_panel
+        .pending_saves()
+        .iter()
+        .copied()
+        .filter(|(item, page)| {
+            workspace_state
+                .prompt_panel
+                .tree
+                .item(*item)
+                .is_some_and(|item| item.page(PromptPageId::Saved(*page)).is_some())
+        })
+        .collect();
+    workspace_state.prompt_panel.retain_pending(&keep);
     workspace_state.prompt_panel.loaded = true;
     workspace_state.prompt_panel.loaded_key = Some(key.to_path_buf());
     // 编辑绑定的条目被同键面板删除时解除绑定，避免悬挂在已不存在的条目上。
@@ -64,8 +129,39 @@ pub fn apply_prompt_tree(
     {
         workspace_state.prompt_panel.editing = None;
         workspace_state.prompt_panel.mode = PromptMode::Tree;
+        workspace_state.prompt_panel.cancel_page_rename();
     }
     workspace_state.prompt_panel.clamp_selection(visible);
+    // 记录的当前页 id 失效时回退第一页并修复持久化（不依赖打开动作）。
+    let mut repairs: Vec<(i64, i64)> = Vec::new();
+    for (id, active) in recorded {
+        let Some(item) = workspace_state.prompt_panel.tree.item(id) else {
+            continue;
+        };
+        if active != item.active_page.saved()
+            && let Some(first) = item.pages.first().and_then(|page| page.id.saved())
+        {
+            repairs.push((id, first));
+        }
+    }
+    if displayed && page_switched {
+        state.prompt.clear_panel();
+        state.selection = None;
+        reload_editor_from_active_page(state, workspace);
+    }
+    if let Some(cwd) = state
+        .workspaces
+        .get(workspace)
+        .and_then(|workspace| workspace.cwd.clone())
+    {
+        for (id, page_id) in repairs {
+            state.effects.push(Effect::SetActivePage {
+                workspace: cwd.clone(),
+                id,
+                page_id,
+            });
+        }
+    }
     true
 }
 
@@ -74,6 +170,7 @@ pub fn apply_prompt_tree(
 /// （条目或临时提示词），无有效绑定时高亮 default temp。
 pub fn show_prompt_tree(state: &mut AppState) {
     commit_editing_prompt(state);
+    cancel_page_rename(state);
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
     if let Some(workspace) = state.workspaces.get_mut(index) {
@@ -151,6 +248,9 @@ pub fn commit_editing_prompt(state: &mut AppState) {
 
 /// 提交指定工作区的编辑器缓冲（其为显示态时缓冲位于 `state.prompt`）。
 ///
+/// 提交写入编辑目标的当前页；正式条目按（条目 id、页 id）粒度标记待保存并登记
+/// 携带页 id 与修订号的保存效应。空白页正文同样落库（区分空白页与未编辑页）。
+///
 /// 粘贴提案未收束时先取消提案回滚占位：占位只是待改写的中转态，取消无法逆向写库，
 /// 因此占位文本绝不落库；随后的提交只落粘贴前的正文，切换编辑目标/退出不丢编辑。
 pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
@@ -167,10 +267,15 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
     let revision = state.prompt.revision();
     match target {
         PromptEditing::Temp(id) => {
-            if let Some(workspace_state) = state.workspaces.get_mut(workspace)
-                && let Some(temp) = workspace_state.prompt_panel.temp_mut(id)
-            {
-                temp.content = content;
+            let Some(temp) = state
+                .workspaces
+                .get_mut(workspace)
+                .and_then(|workspace| workspace.prompt_panel.temp_mut(id))
+            else {
+                return;
+            };
+            if let Some(page) = temp.active_page_mut() {
+                page.content.clone_from(&content);
             }
         }
         PromptEditing::Item(id) => {
@@ -181,31 +286,42 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
             else {
                 return;
             };
+            let Some(page_id) = state
+                .workspaces
+                .get(workspace)
+                .and_then(|workspace| workspace.prompt_panel.tree.item(id))
+                .map(|item| item.active_page)
+                .and_then(PromptPageId::saved)
+            else {
+                return;
+            };
             let pending = state
                 .workspaces
                 .get(workspace)
-                .is_some_and(|workspace| workspace.prompt_panel.item_pending(id));
+                .is_some_and(|workspace| workspace.prompt_panel.page_pending(id, page_id));
             {
-                let Some(item) = state
+                let Some(page) = state
                     .workspaces
                     .get_mut(workspace)
                     .and_then(|workspace| workspace.prompt_panel.tree.item_mut(id))
+                    .and_then(|item| item.page_mut(PromptPageId::Saved(page_id)))
                 else {
                     return;
                 };
-                if item.content == content && !pending {
+                if page.content == content && !pending {
                     // 内容与库中一致且无未确认保存：直接确认对应修订，避免空转自动保存。
                     state.prompt.confirm_saved(revision);
                     return;
                 }
-                item.content.clone_from(&content);
+                page.content.clone_from(&content);
             }
             if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
-                workspace_state.prompt_panel.mark_item_pending(id);
+                workspace_state.prompt_panel.mark_page_pending(id, page_id);
             }
             state.effects.push(Effect::SavePromptContent {
                 workspace: cwd,
                 id,
+                page_id,
                 content,
                 prompt,
                 revision,
@@ -214,181 +330,72 @@ pub fn commit_prompt_buffer(state: &mut AppState, workspace: usize) {
     }
 }
 
-/// 树上移/下移选中行：按方向逐格跳过分区标签行；`visible` 为可见行数，选中始终保持在视口内。
-pub fn move_prompt_selection(state: &mut AppState, delta: isize, visible: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let rows = workspace.prompt_panel.rows();
-    if rows.is_empty() {
-        return false;
-    }
-    let step: isize = if delta >= 0 { 1 } else { -1 };
-    let mut selected = workspace.prompt_panel.selected.min(rows.len() - 1);
-    let mut moved = false;
-    for _ in 0..delta.unsigned_abs() {
-        let mut candidate = selected as isize + step;
-        let mut next = None;
-        while candidate >= 0 && (candidate as usize) < rows.len() {
-            if rows[candidate as usize].kind.selectable() {
-                next = Some(candidate as usize);
-                break;
-            }
-            candidate += step;
-        }
-        let Some(next) = next else {
-            break;
-        };
-        selected = next;
-        moved = true;
-    }
-    if !moved {
-        return false;
-    }
-    workspace.prompt_panel.selected = selected;
-    workspace.prompt_panel.mark_tree_selection();
-    scroll_selection_into_view(&mut workspace.prompt_panel, visible);
-    true
-}
-
-/// 选中指定可见行（鼠标命中）；索引越界忽略。
-pub fn select_prompt_row(state: &mut AppState, row: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    if row >= workspace.prompt_panel.rows().len() || workspace.prompt_panel.selected == row {
-        return false;
-    }
-    workspace.prompt_panel.selected = row;
-    workspace.prompt_panel.mark_tree_selection();
-    true
-}
-
-/// 激活选中行：文件夹切换折叠，条目/临时提示词进入编辑视图。
-pub fn activate_prompt_row(state: &mut AppState) -> bool {
-    let index = state.prompt_workspace();
-    let Some(row) = selected_row(state, index) else {
-        return false;
-    };
-    match row.kind {
-        PromptRowKind::Folder => toggle_prompt_folder(state, index, row),
-        PromptRowKind::Item => edit_prompt_row(state, index, row),
-        PromptRowKind::Temp => edit_prompt_temp_row(state, index, row),
-        PromptRowKind::Section(_) => false,
-    }
-}
-
-/// 折叠选中文件夹（Left）；选中条目或已折叠时 no-op。
-pub fn collapse_prompt_row(state: &mut AppState) -> bool {
-    set_selected_folder_collapsed(state, true)
-}
-
-/// 展开选中文件夹（Right）；选中条目或已展开时 no-op。
-pub fn expand_prompt_row(state: &mut AppState) -> bool {
-    set_selected_folder_collapsed(state, false)
-}
-
-/// 鼠标点击行：选中；文件夹行同时切换折叠；分区标签行不可交互。
-pub fn click_prompt_row(state: &mut AppState, row: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(row_data) = state
-        .workspaces
-        .get(index)
-        .and_then(|workspace| workspace.prompt_panel.rows().get(row).copied())
-    else {
-        return false;
-    };
-    if !row_data.kind.selectable() {
-        return false;
-    }
-    let changed = select_prompt_row(state, row);
-    match row_data.kind {
-        PromptRowKind::Folder => toggle_prompt_folder(state, index, row_data) || changed,
-        PromptRowKind::Item | PromptRowKind::Temp => changed,
-        PromptRowKind::Section(_) => false,
-    }
-}
-
-/// prompt 树行双击判定窗口：同一可见行的两次左键按下间隔不超过该时长视为双击。
-const PROMPT_DOUBLE_CLICK_WINDOW: Duration = Duration::from_millis(400);
-
-/// 登记本次左键行点击并判定是否构成双击；双击后点击序列复位。
-pub fn prompt_row_double_click(state: &mut AppState, row: usize, now: Instant) -> bool {
-    let double = state.prompt_row_click.is_some_and(|(last_row, at)| {
-        last_row == row && now.saturating_duration_since(at) <= PROMPT_DOUBLE_CLICK_WINDOW
-    });
-    state.prompt_row_click = (!double).then_some((row, now));
-    double
-}
-
-/// 双击可见行：条目与临时提示词进入编辑视图；文件夹与分区标签行不响应
-/// （文件夹的单击已完成折叠/展开，双击不再叠加动作）。
-pub fn open_prompt_row(state: &mut AppState, row: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(row_data) = state
-        .workspaces
-        .get(index)
-        .and_then(|workspace| workspace.prompt_panel.rows().get(row).copied())
-    else {
-        return false;
-    };
-    match row_data.kind {
-        PromptRowKind::Item => edit_prompt_row(state, index, row_data),
-        PromptRowKind::Temp => edit_prompt_temp_row(state, index, row_data),
-        PromptRowKind::Folder | PromptRowKind::Section(_) => false,
-    }
-}
-
-/// 从指定工作区树中按 id 选中文件夹（新建后由服务调用）。
-pub fn select_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i64) -> bool {
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return false;
-    };
-    let rows = workspace_state.prompt_panel.rows();
-    let position = rows.iter().position(|row| {
-        row.kind == PromptRowKind::Folder
-            && workspace_state
-                .prompt_panel
-                .tree
-                .folder_of_row(*row)
-                .is_some_and(|folder| folder.id == folder_id)
-    });
-    let Some(position) = position else {
-        return false;
-    };
-    workspace_state.prompt_panel.selected = position;
-    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
-    true
-}
-
 /// 进入指定条目的编辑视图并聚焦面板（服务在新建后调用；工作区须为显示中）。
+///
+/// 打开上次所在的页；记录页 id 失效时回退并修复为第一页（登记持久化效应）。
 pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) -> bool {
     if workspace != state.prompt_workspace() || !select_prompt_item(state, workspace, item_id) {
         return false;
     }
-    let Some(content) = state
+    let Some((content, repaired)) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
-        .map(|item| item.content.clone())
+        .map(|item| {
+            let index = item.active_index();
+            let repaired = item.pages.get(index).map(|page| page.id) != Some(item.active_page);
+            (
+                item.pages.get(index).map(|page| page.content.clone()),
+                repaired,
+            )
+        })
     else {
         return false;
     };
+    let Some(content) = content else {
+        return false;
+    };
+    if repaired {
+        let Some(page_id) = state
+            .workspaces
+            .get(workspace)
+            .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
+            .and_then(|item| item.pages.first())
+            .and_then(|page| page.id.saved())
+        else {
+            return false;
+        };
+        if let Some(workspace_state) = state.workspaces.get_mut(workspace)
+            && let Some(item) = workspace_state.prompt_panel.tree.item_mut(item_id)
+            && let Some(page) = item.pages.first()
+        {
+            item.active_page = page.id;
+        }
+        if let Some(cwd) = state
+            .workspaces
+            .get(workspace)
+            .and_then(|workspace| workspace.cwd.clone())
+        {
+            state.effects.push(Effect::SetActivePage {
+                workspace: cwd,
+                id: item_id,
+                page_id,
+            });
+        }
+    }
     let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
         return false;
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Item(item_id));
+    workspace_state.prompt_panel.cancel_page_rename();
     state.prompt.set_text(&content);
     state.prompt_collapsed = false;
     super::focus_prompt(state);
     true
 }
 
-/// 打开指定临时提示词的编辑视图并聚焦面板；内容只存内存。
+/// 打开指定临时提示词的编辑视图并聚焦面板；内容只存内存，恢复该临时提示词的当前页。
 pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) -> bool {
     if workspace != state.prompt_workspace() {
         return false;
@@ -397,7 +404,8 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
-        .map(|temp| temp.content.clone())
+        .and_then(|temp| temp.active_page())
+        .map(|page| page.content.clone())
     else {
         return false;
     };
@@ -406,6 +414,7 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     };
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(temp_id));
+    workspace_state.prompt_panel.cancel_page_rename();
     state.prompt.set_text(&content);
     state.prompt_collapsed = false;
     super::focus_prompt(state);
@@ -423,58 +432,6 @@ fn edit_prompt_temp_row(state: &mut AppState, workspace: usize, row: PromptRow) 
         return false;
     };
     edit_prompt_temp(state, workspace, temp_id)
-}
-
-/// 打开选中条目的编辑视图（`[✎]` 按钮 / 树视图回车）；
-/// 选中行非条目时新建临时提示词并进入编辑，保证 `[✎]` 永不无响应。
-pub fn edit_selected_prompt(state: &mut AppState) -> bool {
-    let index = state.prompt_workspace();
-    let Some(item_id) = state
-        .workspaces
-        .get(index)
-        .and_then(|workspace| workspace.prompt_panel.selected_prompt_id())
-    else {
-        return open_temp_prompt(state);
-    };
-    edit_prompt_item(state, index, item_id)
-}
-
-/// 树视图搜索框编辑：按单行输入语义执行命令（字符/移动/删除/清空）；
-/// 过滤词变化后选中落到首个结果，清空后钳制；返回是否被搜索框消费。
-pub fn apply_prompt_search(state: &mut AppState, command: &EditorCommand) -> bool {
-    let index = state.prompt_workspace();
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let panel = &mut workspace_state.prompt_panel;
-    let before = panel.search.text().to_string();
-    match command {
-        EditorCommand::InsertChar(ch) => panel.search.insert_char(*ch),
-        EditorCommand::Backspace => panel.search.backspace(),
-        EditorCommand::Delete => panel.search.delete(),
-        EditorCommand::Left => panel.search.move_left(),
-        EditorCommand::Right => panel.search.move_right(),
-        EditorCommand::Home => panel.search.move_home(),
-        EditorCommand::End => panel.search.move_end(),
-        EditorCommand::Escape => panel.search.clear(),
-        _ => return false,
-    }
-    if panel.search.text() != before {
-        if panel.search.text().trim().is_empty() {
-            panel.clamp_selection(visible);
-        } else {
-            panel.selected = 0;
-            panel.clamp_selection(visible);
-            scroll_selection_into_view(panel, visible);
-        }
-    }
-    true
-}
-
-/// 清空显示中树视图的搜索词（Ctrl+C 清空语义）；返回是否被消费。
-pub fn clear_prompt_search(state: &mut AppState) -> bool {
-    apply_prompt_search(state, &EditorCommand::Escape)
 }
 
 /// 立即保存（工具栏圆点）：条目提交落库；临时提示词提交缓冲后打开保存到文件夹选择器。
@@ -510,6 +467,7 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     };
     // 不变量兜底：空白项至多一条，残留空白项先回收（default temp 由新建项接替）。
     workspace_state.prompt_panel.remove_blank_temps();
+    workspace_state.prompt_panel.cancel_page_rename();
     let id = workspace_state.prompt_panel.new_temp();
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));
@@ -519,342 +477,62 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     true
 }
 
-/// 打开草稿保存的文件夹选择浮层；文件夹按树层级顺序列出（忽略折叠）；
-/// 名称预填默认名，列表末尾为“新建文件夹”动作行。
-pub fn open_save_draft(state: &mut AppState) {
-    let workspace = state.prompt_workspace();
-    let Some(workspace_state) = state.workspaces.get(workspace) else {
-        return;
-    };
-    let entries = save_draft_entries(&workspace_state.prompt_panel.tree);
-    state.overlay = Some(Overlay::SaveDraft(SaveDraft {
-        workspace,
-        name: TextInput::new(text::PROMPT_DEFAULT_NAME),
-        entries,
-        selected: 0,
-    }));
-}
-
-/// 选择器条目：根层 `/` + 文件夹树形展示（根层与子层）+ 末尾动作行。
-fn save_draft_entries(tree: &PromptTree) -> Vec<SaveDraftEntry> {
-    let folders = tree.folders();
-    let mut entries = vec![SaveDraftEntry::Root];
-    for root in folders.iter().filter(|folder| folder.parent_id.is_none()) {
-        entries.push(SaveDraftEntry::Folder {
-            id: root.id,
-            depth: 0,
-            name: root.name.clone(),
-        });
-        for sub in folders
-            .iter()
-            .filter(|folder| folder.parent_id == Some(root.id))
-        {
-            entries.push(SaveDraftEntry::Folder {
-                id: sub.id,
-                depth: 1,
-                name: sub.name.clone(),
-            });
-        }
-    }
-    entries.push(SaveDraftEntry::AddFolder);
-    entries
-}
-
-/// 选择器条目刷新：新建文件夹成功后由服务调用；重建条目并选中新文件夹。
-pub fn refresh_save_draft(state: &mut AppState, folder_id: i64) {
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_ref() else {
-        return;
-    };
-    let workspace = dialog.workspace;
-    let Some(workspace_state) = state.workspaces.get(workspace) else {
-        return;
-    };
-    let entries = save_draft_entries(&workspace_state.prompt_panel.tree);
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
-        return;
-    };
-    if let Some(position) = entries
-        .iter()
-        .position(|entry| matches!(entry, SaveDraftEntry::Folder { id, .. } if *id == folder_id))
-    {
-        dialog.selected = position;
-    }
-    dialog.entries = entries;
-}
-
-/// 打开新建文件夹命名浮层；父级为根层（None）或指定文件夹；输入不预填。
-pub fn open_new_folder(state: &mut AppState, parent_id: Option<i64>) {
-    state.overlay = Some(Overlay::NewNode(NewNode {
-        kind: NewNodeKind::Folder { parent_id },
-        name: TextInput::new(""),
-        resume: None,
-    }));
-}
-
-/// 打开新建提示词命名浮层；输入不预填；确认创建后选中条目不进入编辑视图。
-pub fn open_new_prompt(state: &mut AppState, folder_id: Option<i64>) {
-    state.overlay = Some(Overlay::NewNode(NewNode {
-        kind: NewNodeKind::Prompt { folder_id },
-        name: TextInput::new(""),
-        resume: None,
-    }));
-}
-
-/// 从草稿保存选择器打开新建文件夹浮层：取消或确认后恢复选择器。
-pub fn open_new_folder_from_draft(state: &mut AppState) {
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.take() else {
-        return;
-    };
-    state.overlay = Some(Overlay::NewNode(NewNode {
-        kind: NewNodeKind::Folder { parent_id: None },
-        name: TextInput::new(""),
-        resume: Some(Box::new(dialog)),
-    }));
-}
-
-/// 取消新建节点：来自选择器时恢复选择器，否则直接关闭。
-pub fn cancel_new_node(state: &mut AppState) {
-    let Some(Overlay::NewNode(dialog)) = state.overlay.take() else {
-        return;
-    };
-    state.overlay = dialog.resume.map(|dialog| Overlay::SaveDraft(*dialog));
-}
-
-/// 确认新建节点：名称去空白后为空则拒绝；来自选择器时先恢复选择器再登记创建
-/// （服务创建成功后刷新条目并选中新节点）。
-pub fn commit_new_node(state: &mut AppState) {
-    let Some(Overlay::NewNode(dialog)) = state.overlay.as_ref() else {
-        return;
-    };
-    let name = dialog.name.text().trim().to_string();
-    if name.is_empty() {
-        return;
-    }
-    let kind = dialog.kind;
-    let Some(Overlay::NewNode(dialog)) = state.overlay.take() else {
-        return;
-    };
-    state.overlay = dialog.resume.map(|dialog| Overlay::SaveDraft(*dialog));
-    let Some(cwd) = displayed_workspace_cwd(state) else {
-        return;
-    };
-    match kind {
-        NewNodeKind::Folder { parent_id } => {
-            state.effects.push(Effect::CreateFolder {
-                workspace: cwd,
-                parent_id,
-                name,
-            });
-        }
-        NewNodeKind::Prompt { folder_id } => {
-            // 新条目须在未过滤列表中可见：先清搜索，保证服务端选中成功。
-            clear_search_for(state, state.prompt_workspace());
-            state.effects.push(Effect::CreatePrompt {
-                workspace: cwd,
-                folder_id,
-                name,
-            });
-        }
-    }
-}
-
-/// 新建节点浮层按键：回车确认、Esc 取消、其余为名称输入编辑。
-pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
-    match key {
-        OverlayKey::Esc => cancel_new_node(state),
-        OverlayKey::Enter => commit_new_node(state),
-        OverlayKey::Char(_)
-        | OverlayKey::Clear
-        | OverlayKey::Backspace
-        | OverlayKey::Delete
-        | OverlayKey::Left
-        | OverlayKey::Right
-        | OverlayKey::Home
-        | OverlayKey::End => {
-            let Some(Overlay::NewNode(dialog)) = state.overlay.as_mut() else {
-                return;
-            };
-            let input = &mut dialog.name;
-            match key {
-                OverlayKey::Char(ch) => input.insert_char(ch),
-                OverlayKey::Clear => input.clear(),
-                OverlayKey::Backspace => input.backspace(),
-                OverlayKey::Delete => input.delete(),
-                OverlayKey::Left => input.move_left(),
-                OverlayKey::Right => input.move_right(),
-                OverlayKey::Home => input.move_home(),
-                OverlayKey::End => input.move_end(),
-                _ => {}
-            }
-        }
-        OverlayKey::Up | OverlayKey::Down => {}
-    }
-}
-
-/// 草稿保存选择器按键：上下移动、回车确认、Esc 关闭；字符输入归属顶部提示词名称。
-pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
-    match key {
-        OverlayKey::Esc => state.overlay = None,
-        OverlayKey::Up => {
-            move_save_draft_selection(state, -1);
-        }
-        OverlayKey::Down => {
-            move_save_draft_selection(state, 1);
-        }
-        OverlayKey::Enter => commit_save_draft(state),
-        OverlayKey::Char(_)
-        | OverlayKey::Clear
-        | OverlayKey::Backspace
-        | OverlayKey::Delete
-        | OverlayKey::Left
-        | OverlayKey::Right
-        | OverlayKey::Home
-        | OverlayKey::End => edit_save_draft_input(state, key),
-    }
-}
-
-/// 选择器字符输入：编辑顶部提示词名称。
-fn edit_save_draft_input(state: &mut AppState, key: OverlayKey) {
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
-        return;
-    };
-    let input = &mut dialog.name;
-    match key {
-        OverlayKey::Char(ch) => input.insert_char(ch),
-        OverlayKey::Clear => input.clear(),
-        OverlayKey::Backspace => input.backspace(),
-        OverlayKey::Delete => input.delete(),
-        OverlayKey::Left => input.move_left(),
-        OverlayKey::Right => input.move_right(),
-        OverlayKey::Home => input.move_home(),
-        OverlayKey::End => input.move_end(),
-        _ => {}
-    }
-}
-
-/// 移动草稿保存选择器高亮；返回是否有变化。
-pub fn move_save_draft_selection(state: &mut AppState, delta: isize) -> bool {
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
-        return false;
-    };
-    let len = dialog.entries.len();
-    if len == 0 {
-        return false;
-    }
-    let next = (dialog.selected as isize + delta).clamp(0, len as isize - 1) as usize;
-    if next == dialog.selected {
-        return false;
-    }
-    dialog.selected = next;
-    true
-}
-
-/// 悬停/点击选中草稿保存目标；越界忽略；返回是否变化。
-pub fn set_save_draft_selection(state: &mut AppState, index: usize) -> bool {
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_mut() else {
-        return false;
-    };
-    if index >= dialog.entries.len() || dialog.selected == index {
-        return false;
-    }
-    dialog.selected = index;
-    true
-}
-
-/// 确认保存（[save enter] 按钮 / Enter）：名称去空白后为空则拒绝；
-/// 选中动作行时打开新建文件夹浮层；否则按选中目标登记保存。
-pub fn commit_save_draft(state: &mut AppState) {
-    let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_ref() else {
-        return;
-    };
-    let workspace = dialog.workspace;
-    let prompt_name = dialog.name.text().trim().to_string();
-    if prompt_name.is_empty() {
-        return;
-    }
-    let Some(entry) = dialog.entries.get(dialog.selected) else {
-        return;
-    };
-    match entry {
-        SaveDraftEntry::AddFolder => open_new_folder_from_draft(state),
-        SaveDraftEntry::Root => {
-            save_draft(state, workspace, None, prompt_name);
-        }
-        SaveDraftEntry::Folder { id, .. } => {
-            save_draft(state, workspace, Some(*id), prompt_name);
-        }
-    }
-}
-
-/// 把临时提示词登记为正式条目（写入指定文件夹）；成功后由服务移除该 temp。
-fn save_draft(state: &mut AppState, workspace: usize, folder_id: Option<i64>, name: String) {
-    let Some(cwd) = workspace_cwd(state, workspace) else {
-        return;
-    };
-    let content = state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| match workspace.prompt_panel.editing {
-            Some(PromptEditing::Temp(id)) => workspace.prompt_panel.temp(id),
-            _ => None,
-        })
-        .map(|temp| temp.content.clone())
-        .unwrap_or_default();
-    state.effects.push(Effect::SaveDraft {
-        workspace: cwd,
-        folder_id,
-        name,
-        content,
-    });
-    state.overlay = None;
-    clear_search_for(state, workspace);
-}
-
-/// 临时提示词保存成功后的收尾：移除已升格为条目的 temp 并清空过滤词
-/// （新条目须在未过滤列表中可见）。
-pub fn finish_draft_save(state: &mut AppState, workspace: usize) {
-    if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
-        if let Some(PromptEditing::Temp(id)) = workspace_state.prompt_panel.editing {
-            workspace_state.prompt_panel.remove_temp(id);
-        }
-        workspace_state.prompt_panel.search.clear();
-    }
-}
-
 /// 清空指定工作区树视图的搜索词（不影响其余状态）。
-fn clear_search_for(state: &mut AppState, workspace: usize) {
+pub(super) fn clear_search_for(state: &mut AppState, workspace: usize) {
     if let Some(workspace_state) = state.workspaces.get_mut(workspace) {
         workspace_state.prompt_panel.search.clear();
     }
 }
 
-/// 保存成功回执：按编辑器标识把对应修订标记为已保存（显示中或挂起草稿）。
-pub fn mark_prompt_saved(
+/// 保存成功回执：仅当编辑器仍显示对应（条目、页）时按修订确认保存点。
+///
+/// 旧页保存完成不得把新页的保存点误标为已保存；页内容与待确认标记照常清除。
+pub fn mark_prompt_page_persisted(
     state: &mut AppState,
+    id: i64,
+    page_id: i64,
+    content: &str,
     prompt: crate::layout::PaneId,
     revision: u64,
 ) -> bool {
-    if state.prompt.id() == prompt {
-        return state.prompt.confirm_saved(revision);
-    }
-    for workspace in &mut state.workspaces {
-        if let Some(draft) = workspace.prompt.as_mut()
-            && draft.editor.id() == prompt
-        {
-            return draft.editor.confirm_saved(revision);
-        }
-    }
-    false
-}
-
-/// 保存成功：内容同步到所有持有该条目的面板（同仓库条目共享一棵树）并清除待确认标记。
-pub fn mark_prompt_item_persisted(state: &mut AppState, id: i64, content: &str) -> bool {
     let mut found = false;
     for workspace in &mut state.workspaces {
-        if let Some(item) = workspace.prompt_panel.tree.item_mut(id) {
-            item.content = content.to_string();
-            workspace.prompt_panel.clear_item_pending(id);
+        if let Some(page) = workspace
+            .prompt_panel
+            .tree
+            .item_mut(id)
+            .and_then(|item| item.page_mut(PromptPageId::Saved(page_id)))
+        {
+            page.content = content.to_string();
             found = true;
+        }
+        workspace.prompt_panel.clear_page_pending(id, page_id);
+    }
+    let editing_page = |workspace: &crate::app::state::Workspace| {
+        workspace.prompt_panel.editing == Some(PromptEditing::Item(id))
+            && workspace
+                .prompt_panel
+                .tree
+                .item(id)
+                .is_some_and(|item| item.active_page == PromptPageId::Saved(page_id))
+    };
+    if state.prompt.id() == prompt {
+        let index = state.prompt_workspace();
+        if state.workspaces.get(index).is_some_and(editing_page) {
+            state.prompt.confirm_saved(revision);
+        }
+    } else {
+        for workspace in &mut state.workspaces {
+            let editor_matches = workspace
+                .prompt
+                .as_ref()
+                .is_some_and(|draft| draft.editor.id() == prompt);
+            if editor_matches
+                && editing_page(workspace)
+                && let Some(draft) = workspace.prompt.as_mut()
+            {
+                draft.editor.confirm_saved(revision);
+            }
         }
     }
     found
@@ -877,80 +555,26 @@ pub fn reset_prompt_autosave(state: &mut AppState, prompt: crate::layout::PaneId
     false
 }
 
-/// 滚动树视口；越界钳制；返回是否变化。
-pub fn scroll_prompt_tree(state: &mut AppState, direction: isize, visible: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let max = workspace
-        .prompt_panel
-        .rows()
-        .len()
-        .saturating_sub(visible.max(1));
-    let target = (workspace.prompt_panel.scroll.min(max) as isize).saturating_add(direction);
-    let offset = target.clamp(0, max as isize) as usize;
-    if offset == workspace.prompt_panel.scroll {
-        return false;
-    }
-    workspace.prompt_panel.scroll = offset;
-    true
-}
-
-/// 直接设置树滚动的视口偏移（滚动条点击/拖拽）；越界钳制；返回是否变化。
-pub fn set_prompt_tree_scroll(state: &mut AppState, offset: usize, visible: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let max = workspace
-        .prompt_panel
-        .rows()
-        .len()
-        .saturating_sub(visible.max(1));
-    let offset = offset.min(max);
-    if offset == workspace.prompt_panel.scroll {
-        return false;
-    }
-    workspace.prompt_panel.scroll = offset;
-    true
-}
-
-/// 几何变化后钳制树选中的可见性；返回是否变化。
-pub fn clamp_prompt_tree_scroll(state: &mut AppState, visible: usize) -> bool {
-    let index = state.prompt_workspace();
-    let Some(workspace) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let before = (
-        workspace.prompt_panel.selected,
-        workspace.prompt_panel.scroll,
-    );
-    scroll_selection_into_view(&mut workspace.prompt_panel, visible);
-    (
-        workspace.prompt_panel.selected,
-        workspace.prompt_panel.scroll,
-    ) != before
-}
-
-/// 打开提示词条目右键菜单：编辑、状态切换、重命名、复制与删除。
+/// 打开提示词条目右键菜单：编辑、重命名、复制与删除。
+///
+/// 右键不改动列表选中行（对齐工作区列表：右键只挂菜单，不切换当前项）；
+/// 菜单命令按 target 里的 item_id 生效。
 pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
-    let Some(item) = state
+    if state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
-    else {
+        .is_none()
+    {
         return;
-    };
+    }
     let commands = vec![
         MenuCommand::EditPrompt,
-        MenuCommand::ChangePromptStatus(item.status.next()),
         MenuCommand::RenamePrompt,
         MenuCommand::CopyPromptContent,
         MenuCommand::DeletePrompt,
     ];
-    select_prompt_item(state, workspace, item_id);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::PromptItem { workspace, item_id },
@@ -960,6 +584,8 @@ pub fn open_prompt_item_menu(state: &mut AppState, item_id: i64, anchor: (u16, u
 }
 
 /// 打开临时提示词右键菜单：编辑、复制与删除（删除仅内存、立即生效，无确认浮层）。
+///
+/// 同条目菜单：右键不改动列表选中行。
 pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u16)) {
     let workspace = state.prompt_workspace();
     let known = state
@@ -969,7 +595,6 @@ pub fn open_prompt_temp_menu(state: &mut AppState, temp_id: u64, anchor: (u16, u
     if !known {
         return;
     }
-    select_prompt_temp(state, workspace, temp_id);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::TempPrompt { workspace, temp_id },
@@ -998,7 +623,6 @@ pub fn open_prompt_folder_menu(state: &mut AppState, folder_id: i64, anchor: (u1
     }
     commands.push(MenuCommand::RenameFolder);
     commands.push(MenuCommand::DeleteFolder);
-    select_prompt_folder(state, workspace, folder_id);
     state.overlay = Some(Overlay::Menu(Menu {
         anchor,
         target: OverlayTarget::PromptFolder {
@@ -1154,7 +778,7 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
                 .tree
                 .item(id)
                 .is_none_or(|item| {
-                    removed_with_folder(
+                    tree_view::removed_with_folder(
                         &workspace_state.prompt_panel.tree,
                         folder_id,
                         item.folder_id,
@@ -1176,59 +800,28 @@ pub fn delete_prompt_folder(state: &mut AppState, workspace: usize, folder_id: i
     });
 }
 
-/// 切换提示词状态，登记状态更新。
-pub fn change_prompt_status(
-    state: &mut AppState,
-    workspace: usize,
-    item_id: i64,
-    status: PromptItemStatus,
-) {
-    let Some(cwd) = workspace_cwd(state, workspace) else {
-        return;
-    };
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return;
-    };
-    let Some(item) = workspace_state.prompt_panel.tree.item_mut(item_id) else {
-        return;
-    };
-    if item.status == status {
-        return;
-    }
-    item.status = status;
-    // 同仓库条目共享一棵树：状态同步到所有持有该条目的面板。
-    for workspace_state in &mut state.workspaces {
-        if let Some(item) = workspace_state.prompt_panel.tree.item_mut(item_id) {
-            item.status = status;
-        }
-    }
-    state.effects.push(Effect::SetPromptStatus {
-        workspace: cwd,
-        id: item_id,
-        status,
-    });
-}
-
-/// 复制提示词正文到剪贴板（经效应出箱由事件层写入系统剪贴板）。
+/// 复制提示词当前页正文到剪贴板（经效应出箱由事件层写入系统剪贴板）。
 pub fn copy_prompt_content(state: &mut AppState, workspace: usize, item_id: i64) {
     let Some(content) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.tree.item(item_id))
-        .map(|item| item.content.clone())
+        .and_then(|item| item.active_page())
+        .map(|page| page.content.clone())
     else {
         return;
     };
     state.effects.push(Effect::CopyToClipboard(content));
 }
 
-/// 复制临时提示词正文到剪贴板；不入库、无确认。
+/// 复制临时提示词当前页正文到剪贴板；不入库、无确认。
 pub fn copy_prompt_temp_content(state: &mut AppState, workspace: usize, temp_id: u64) {
     let Some(content) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
-        .map(|temp| temp.content.clone())
+        .and_then(|temp| temp.active_page())
+        .map(|page| page.content.clone())
     else {
         return;
     };
@@ -1248,149 +841,17 @@ pub fn delete_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) 
     true
 }
 
-/// 选中指定工作区中指定临时提示词行（服务/菜单在打开前调用）。
-pub fn select_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) -> bool {
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return false;
-    };
-    let rows = workspace_state.prompt_panel.rows();
-    let position = rows.iter().position(|row| {
-        workspace_state
-            .prompt_panel
-            .temp_of_row(*row)
-            .is_some_and(|temp| temp.id == temp_id)
-    });
-    let Some(position) = position else {
-        return false;
-    };
-    workspace_state.prompt_panel.selected = position;
-    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
-    true
-}
-
 /// 显示中工作区的 cwd。
-fn displayed_workspace_cwd(state: &AppState) -> Option<std::path::PathBuf> {
+pub(super) fn displayed_workspace_cwd(state: &AppState) -> Option<std::path::PathBuf> {
     workspace_cwd(state, state.prompt_workspace())
 }
 
-fn workspace_cwd(state: &AppState, workspace: usize) -> Option<std::path::PathBuf> {
+/// 指定工作区的 cwd。
+pub(super) fn workspace_cwd(state: &AppState, workspace: usize) -> Option<std::path::PathBuf> {
     state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.cwd.clone())
-}
-
-/// 指定工作区的选中行。
-fn selected_row(state: &AppState, workspace: usize) -> Option<PromptRow> {
-    state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| workspace.prompt_panel.selected_row())
-}
-
-/// 选中指定工作区树中的条目行（服务在新建后调用）。
-pub fn select_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) -> bool {
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return false;
-    };
-    let rows = workspace_state.prompt_panel.rows();
-    let position = rows.iter().position(|row| {
-        row.kind == PromptRowKind::Item
-            && workspace_state
-                .prompt_panel
-                .tree
-                .item_of_row(*row)
-                .is_some_and(|item| item.id == item_id)
-    });
-    let Some(position) = position else {
-        return false;
-    };
-    workspace_state.prompt_panel.selected = position;
-    scroll_selection_into_view(&mut workspace_state.prompt_panel, visible);
-    true
-}
-
-/// 切换指定可见行文件夹的折叠状态。
-fn toggle_prompt_folder(state: &mut AppState, workspace: usize, row: PromptRow) -> bool {
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(workspace) else {
-        return false;
-    };
-    let Some(folder) = workspace_state.prompt_panel.tree.folder_of_row(row) else {
-        return false;
-    };
-    let id = folder.id;
-    workspace_state.prompt_panel.tree.toggle_folder(id);
-    workspace_state.prompt_panel.clamp_selection(visible.max(1));
-    true
-}
-
-/// 进入选中条目编辑视图。
-fn edit_prompt_row(state: &mut AppState, workspace: usize, row: PromptRow) -> bool {
-    let Some(item_id) = state
-        .workspaces
-        .get(workspace)
-        .and_then(|workspace| workspace.prompt_panel.tree.item_of_row(row))
-        .map(|item| item.id)
-    else {
-        return false;
-    };
-    edit_prompt_item(state, workspace, item_id)
-}
-
-/// 设置选中文件夹行的折叠态；行非文件夹或状态未变返回 false。
-fn set_selected_folder_collapsed(state: &mut AppState, collapsed: bool) -> bool {
-    let index = state.prompt_workspace();
-    let Some(row) = selected_row(state, index) else {
-        return false;
-    };
-    if row.kind != PromptRowKind::Folder {
-        return false;
-    }
-    let visible = prompt_tree_visible_rows(state);
-    let Some(workspace_state) = state.workspaces.get_mut(index) else {
-        return false;
-    };
-    let Some(folder) = workspace_state.prompt_panel.tree.folder_of_row(row) else {
-        return false;
-    };
-    if folder.collapsed == collapsed {
-        return false;
-    }
-    let id = folder.id;
-    workspace_state.prompt_panel.tree.toggle_folder(id);
-    workspace_state.prompt_panel.clamp_selection(visible.max(1));
-    true
-}
-
-/// 条目是否处于被删除文件夹的子树内。
-fn removed_with_folder(tree: &PromptTree, folder_id: i64, item_folder: Option<i64>) -> bool {
-    let mut current = item_folder;
-    while let Some(id) = current {
-        if id == folder_id {
-            return true;
-        }
-        current = tree.folder(id).and_then(|folder| folder.parent_id);
-    }
-    false
-}
-
-/// 保证选中行在可见范围内。
-fn scroll_selection_into_view(panel: &mut crate::app::prompt::PromptPanel, visible: usize) {
-    let visible = visible.max(1);
-    let rows = panel.rows().len();
-    let selected = panel.selected.min(rows.saturating_sub(1));
-    panel.selected = selected;
-    let max = rows.saturating_sub(visible);
-    let mut scroll = panel.scroll.min(max);
-    if selected < scroll {
-        scroll = selected;
-    } else if selected >= scroll + visible {
-        scroll = selected + 1 - visible;
-    }
-    panel.scroll = scroll.min(max);
 }
 
 #[cfg(test)]

@@ -85,9 +85,19 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     render_swap_button(frame, &view);
     render_panel_buttons(frame, &view, state);
     render_resize_hint(frame, &view, state);
-    let tooltip_area = tooltip::render(frame, area, state, &view, &pane_rects);
+    // 页码菜单打开时其边框按钮 tooltip 需绘制在菜单之上（常规 tooltip 早于浮层绘制会被盖住）。
+    let page_menu_open = matches!(
+        state.overlay,
+        Some(crate::app::overlay::Overlay::PageMenu(_))
+    );
+    let tooltip_area = (!page_menu_open)
+        .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
+        .flatten();
     let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
+    let menu_tooltip_area = page_menu_open
+        .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
+        .flatten();
     // 浮层是模态：重命名浮层接管硬件光标，其余浮层不显示光标。
     // 非模态时若光标位置被 tooltip/toast 盒覆盖（后绘制），一并隐藏，避免覆盖浮层。
     let cursor = match state.overlay {
@@ -95,6 +105,7 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         None => prompt_cursor.filter(|position| {
             !tooltip_area
                 .into_iter()
+                .chain(menu_tooltip_area)
                 .chain(toast_area)
                 .any(|box_area| box_area.contains((*position).into()))
         }),
@@ -489,6 +500,87 @@ fn render_pane_agent_label(
     }
 }
 
+/// 显示中编辑目标的页信息：当前序号（1 起）、总页数、页名与重命名现场。
+struct PromptPageHeader {
+    current: usize,
+    total: usize,
+    name: String,
+    rename: Option<(String, usize)>,
+}
+
+/// 读显示中编辑目标的页信息；非编辑视图或未绑定目标时为 None。
+fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
+    let panel = &state.workspaces.get(state.prompt_workspace())?.prompt_panel;
+    if panel.mode != PromptMode::Editor {
+        return None;
+    }
+    let (pages, active) = match panel.editing? {
+        PromptEditing::Item(id) => {
+            let item = panel.tree.item(id)?;
+            (item.pages.as_slice(), item.active_page)
+        }
+        PromptEditing::Temp(id) => {
+            let temp = panel.temp(id)?;
+            (temp.pages.as_slice(), temp.active_page)
+        }
+    };
+    let index = pages.iter().position(|page| page.id == active).unwrap_or(0);
+    let name = pages
+        .get(index)
+        .map(|page| page.name.clone())
+        .unwrap_or_default();
+    let rename = panel
+        .page_rename()
+        .map(|rename| (rename.input.text().to_string(), rename.input.cursor()));
+    Some(PromptPageHeader {
+        current: index + 1,
+        total: pages.len(),
+        name,
+        rename,
+    })
+}
+
+/// 命中 prompt 标题行页控件（编辑视图）；
+/// 页重命名输入期间名称区不命中（改由键盘输入消费）。
+pub fn prompt_page_control_at(
+    panel: Rect,
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<prompt::PageControl> {
+    if state.prompt_collapsed {
+        return None;
+    }
+    let header = crate::layout::prompt_header_rect(panel)?;
+    let page = prompt_page_header(state)?;
+    let title = prompt_edit_title(state)?;
+    let data = prompt::PageHeaderData {
+        current: page.current,
+        total: page.total,
+        name: &page.name,
+        rename: page
+            .rename
+            .as_ref()
+            .map(|(input, cursor)| (input.as_str(), *cursor)),
+    };
+    if page.rename.is_some() {
+        let controls = prompt::page_controls(header, &text::page_counter(page.current, page.total));
+        if let Some(controls) = controls.as_ref() {
+            for (rect, control) in [
+                (controls.prev, prompt::PageControl::Prev),
+                (controls.counter, prompt::PageControl::Counter),
+                (controls.next, prompt::PageControl::Next),
+            ] {
+                if rect.contains((column, row).into()) {
+                    return Some(control);
+                }
+            }
+        }
+        return None;
+    }
+    prompt::header_page_control_at(header, &title, &data, column, row)
+}
+
 /// 右栏 prompt：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
 /// 树视图渲染提示词管理器；折叠时渲染为窄条。
 ///
@@ -537,18 +629,31 @@ fn render_prompt(
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
+    let title = prompt_edit_title(state);
+    let draft = matches!(
+        state.prompt_owner().prompt_panel.editing,
+        Some(PromptEditing::Temp(_))
+    );
+    let page = prompt_page_header(state);
+    let page_data = page.as_ref().map(|page| prompt::PageHeaderData {
+        current: page.current,
+        total: page.total,
+        name: &page.name,
+        rename: page
+            .rename
+            .as_ref()
+            .map(|(input, cursor)| (input.as_str(), *cursor)),
+    });
     prompt::render_header(
         area,
         frame.buffer_mut(),
         &state.prompt,
         focused,
         mode,
-        prompt_edit_title(state).as_deref(),
-        matches!(
-            state.prompt_owner().prompt_panel.editing,
-            Some(PromptEditing::Temp(_))
-        ),
+        title.as_deref(),
+        draft,
         state.prompt_pinned.is_some(),
+        page_data,
     );
     render_prompt_branch_status(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
@@ -558,6 +663,7 @@ fn render_prompt(
             frame.buffer_mut(),
             &state.prompt_owner().prompt_panel,
             focused,
+            state.prompt_tree_hover,
         ),
         PromptMode::Editor => {
             prompt::render(
@@ -575,6 +681,24 @@ fn render_prompt(
     if mode == PromptMode::Tree {
         // 树视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
         return focused.then_some(tree_cursor).flatten();
+    }
+    if let Some(header) = crate::layout::prompt_header_rect(area)
+        && let Some(page) = page.as_ref()
+        && page.rename.is_some()
+    {
+        let title = title.as_deref().unwrap_or("");
+        let data = prompt::PageHeaderData {
+            current: page.current,
+            total: page.total,
+            name: &page.name,
+            rename: page
+                .rename
+                .as_ref()
+                .map(|(input, cursor)| (input.as_str(), *cursor)),
+        };
+        return focused
+            .then(|| prompt::header_rename_cursor(header, title, &data))
+            .flatten();
     }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
     Some((
@@ -633,7 +757,7 @@ fn prompt_scrollbar_for(
         ),
         PromptMode::Editor => (
             crate::layout::prompt_scrollbar_rect(panel)?,
-            state.prompt.visual_rows().len(),
+            state.prompt.visual_rows().len() + state.prompt.bottom_padding(),
             state.prompt.scroll(),
         ),
     };

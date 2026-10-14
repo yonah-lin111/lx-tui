@@ -1500,3 +1500,46 @@ fn slash_filter_offers_worktree_in_supple_context_only() {
         vec!["gitWorkTree"]
     );
 }
+
+// ===== 模板块状态计数（分页统计） =====
+
+#[test]
+fn template_counts_only_closed_top_level_templates() {
+    let text = "\
+&&& addTemplate --start
+&&& addTemplate --end
+&&& bugTemplate --start
++++ noteSupple --start
++++ noteSupple --end
+&&& bugTemplate --end in_progress
+&&& refactorTemplate --start
+plain tail
+&&& refactorTemplate --end done
+```
+&&& commonTemplate --start
+&&& commonTemplate --end
+```";
+    let counts = template_counts(text);
+    assert_eq!(counts.todo, 1, "只统计闭合顶层 &&&，+++ 与围栏不计数");
+    assert_eq!(counts.in_progress, 1);
+    assert_eq!(counts.done, 1);
+}
+
+#[test]
+fn template_counts_exclude_unclosed_blocks() {
+    let counts = template_counts("&&& addTemplate --start\nbody without end");
+    assert!(counts.is_empty(), "未闭合块不纳入完成情况");
+    let mixed =
+        template_counts("&&& addTemplate --start\n&&& addTemplate --end\n&&& bugTemplate --start");
+    assert_eq!(mixed.todo, 1, "闭合块计一次；未闭合块忽略");
+}
+
+#[test]
+fn template_counts_merge_sums_pages() {
+    let left = template_counts("&&& addTemplate --start\n&&& addTemplate --end");
+    let right = template_counts("&&& bugTemplate --start\n&&& bugTemplate --end done");
+    let merged = left.merge(right);
+    assert_eq!(merged.todo, 1);
+    assert_eq!(merged.done, 1);
+    assert!(!merged.is_empty());
+}

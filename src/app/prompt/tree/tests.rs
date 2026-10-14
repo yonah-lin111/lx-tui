@@ -12,13 +12,7 @@ fn folder(id: i64, parent_id: Option<i64>, name: &str) -> PromptFolder {
 }
 
 fn item(id: i64, folder_id: Option<i64>, name: &str) -> PromptItem {
-    PromptItem {
-        id,
-        folder_id,
-        name: name.to_string(),
-        content: format!("content {id}"),
-        status: PromptItemStatus::Todo,
-    }
+    PromptItem::single(id, folder_id, name, format!("content {id}"))
 }
 
 fn sample_tree() -> PromptTree {
@@ -123,20 +117,6 @@ fn replace_keeps_collapsed_state_and_sorts_by_id() {
 }
 
 #[test]
-fn status_roundtrip_and_cycle() {
-    for status in [
-        PromptItemStatus::Todo,
-        PromptItemStatus::InProgress,
-        PromptItemStatus::Completed,
-    ] {
-        assert_eq!(PromptItemStatus::parse(status.as_str()), status);
-    }
-    assert_eq!(PromptItemStatus::parse("unknown"), PromptItemStatus::Todo);
-    assert_eq!(PromptItemStatus::Todo.next(), PromptItemStatus::InProgress);
-    assert_eq!(PromptItemStatus::Completed.next(), PromptItemStatus::Todo);
-}
-
-#[test]
 fn panel_selection_clamps_and_locates_prompt() {
     let mut panel = PromptPanel::new();
     panel.tree = sample_tree();
@@ -212,16 +192,10 @@ fn search_ignores_collapsed_state() {
 
 #[test]
 fn temp_summary_uses_first_non_empty_line() {
-    let temp = TempPrompt {
-        id: 0,
-        content: "\n  代码审查专家  \n严格执行".into(),
-    };
+    let temp = TempPrompt::single_page(0, "\n  代码审查专家  \n严格执行");
     assert_eq!(temp.summary(), "代码审查专家");
     assert!(!temp.is_blank());
-    let blank = TempPrompt {
-        id: 1,
-        content: "  \n\t ".into(),
-    };
+    let blank = TempPrompt::single_page(1, "  \n\t ");
     assert_eq!(blank.summary(), "");
     assert!(blank.is_blank());
 }
@@ -229,7 +203,12 @@ fn temp_summary_uses_first_non_empty_line() {
 /// 追加一个内容非空的临时提示词并返回 id。
 fn push_temp(panel: &mut PromptPanel, content: &str) -> u64 {
     let id = panel.new_temp();
-    panel.temp_mut(id).expect("new temp exists").content = content.to_string();
+    panel
+        .temp_mut(id)
+        .expect("new temp exists")
+        .active_page_mut()
+        .expect("temp has page")
+        .content = content.to_string();
     id
 }
 

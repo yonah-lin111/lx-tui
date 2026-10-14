@@ -142,7 +142,7 @@ impl Persistence {
                 name,
             } => {
                 let key = prompt_key_for(state, &workspace);
-                let Some(id) = self.with_db(|db| db.create_prompt(&key, folder_id, &name, ""))
+                let Some(id) = self.with_db(|db| db.create_prompt(&key, folder_id, &name, &[]))
                 else {
                     return false;
                 };
@@ -155,11 +155,16 @@ impl Persistence {
                 workspace,
                 folder_id,
                 name,
-                content,
+                pages,
+                active,
             } => {
                 let key = prompt_key_for(state, &workspace);
+                let page_values: Vec<(String, String)> = pages
+                    .iter()
+                    .map(|page| (page.name.clone(), page.content.clone()))
+                    .collect();
                 let Some(id) =
-                    self.with_db(|db| db.create_prompt(&key, folder_id, &name, &content))
+                    self.with_db(|db| db.create_prompt(&key, folder_id, &name, &page_values))
                 else {
                     // 失败：TempPrompt 仍在，保存选择器可重试。
                     return false;
@@ -169,7 +174,7 @@ impl Persistence {
                     return changed;
                 };
                 update::finish_draft_save(state, index);
-                let bound = update::edit_prompt_item(state, index, id);
+                let bound = update::open_saved_draft(state, index, id, active);
                 changed || bound
             }
             Effect::RenameFolder {
@@ -198,15 +203,17 @@ impl Persistence {
             }
             Effect::SavePromptContent {
                 id,
+                page_id,
                 content,
                 prompt,
                 revision,
                 ..
             } => {
-                let saved = self.with_db(|db| db.update_prompt_document(id, &content));
+                let saved = self.with_db(|db| db.update_page_content(page_id, &content));
                 if saved.is_some() {
-                    update::mark_prompt_item_persisted(state, id, &content);
-                    update::mark_prompt_saved(state, prompt, revision);
+                    update::mark_prompt_page_persisted(
+                        state, id, page_id, &content, prompt, revision,
+                    );
                     true
                 } else {
                     // 失败：保留脏状态与待保存内容，下一轮静置重试并给出可见反馈。
@@ -223,9 +230,50 @@ impl Persistence {
                     true
                 }
             }
-            Effect::SetPromptStatus { id, status, .. } => {
-                self.with_db(|db| db.update_prompt_status(id, status.as_str()));
-                false
+            Effect::CreatePage {
+                workspace,
+                id,
+                name,
+            } => {
+                let key = prompt_key_for(state, &workspace);
+                let Some(page_id) = self.with_db(|db| db.create_prompt_page(id, &name)) else {
+                    return false;
+                };
+                let changed = self.reload_tree(state, &key);
+                let activated = workspace_index(state, &workspace).is_some_and(|index| {
+                    update::open_created_page(state, index, id, page_id, &name)
+                });
+                changed || activated
+            }
+            Effect::RenamePage {
+                workspace,
+                page_id,
+                name,
+            } => {
+                self.with_db(|db| db.rename_prompt_page(page_id, &name));
+                self.reload_tree(state, &prompt_key_for(state, &workspace))
+            }
+            Effect::DeletePage {
+                workspace,
+                id,
+                page_id,
+            } => {
+                let deleted = self.with_db(|db| db.delete_prompt_page(page_id));
+                if deleted.is_none() {
+                    return false;
+                }
+                let changed = self.reload_tree(state, &prompt_key_for(state, &workspace));
+                let rebound = workspace_index(state, &workspace)
+                    .is_some_and(|index| update::rebind_after_page_delete(state, index, id));
+                changed || rebound
+            }
+            Effect::SetActivePage {
+                workspace,
+                id,
+                page_id,
+            } => {
+                self.with_db(|db| db.set_prompt_active_page(id, page_id));
+                self.reload_tree(state, &prompt_key_for(state, &workspace))
             }
             Effect::CopyToClipboard(text) => {
                 let now = Instant::now();

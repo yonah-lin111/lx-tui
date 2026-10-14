@@ -162,8 +162,16 @@ fn scroll_prompt_moves_viewport_only() {
     assert_eq!(state.prompt.scroll(), 0);
     assert_eq!(state.prompt.cursor_cell(), None);
     scroll_prompt(&mut state, 1);
-    assert_eq!(state.prompt.scroll(), 2);
-    assert!(state.prompt.cursor_cell().is_some());
+    assert_eq!(state.prompt.scroll(), 3, "滚轮 3 行 + 底部留白 1 行到上限");
+    assert_eq!(
+        state.prompt.cursor_cell(),
+        Some((0, 1)),
+        "滚入留白不改变光标"
+    );
+    // 向上滚回：滚轮只移动视口，光标原地（仍在视口下方）。
+    scroll_prompt(&mut state, -1);
+    assert_eq!(state.prompt.scroll(), 0);
+    assert_eq!(state.prompt.cursor_cell(), None);
 }
 
 #[test]
@@ -1130,7 +1138,7 @@ fn switch_workspace_swaps_prompt_drafts() {
 
 #[test]
 fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
-    use crate::app::prompt::{PromptEditing, PromptItem, PromptItemStatus};
+    use crate::app::prompt::{PromptEditing, PromptItem};
     let mut state = AppState::demo();
     // 初始工作区默认绑定空临时提示词。
     assert!(
@@ -1143,13 +1151,7 @@ fn switch_workspace_defaults_to_temp_and_preserves_open_item() {
     // 工作区 0 打开条目 10。
     state.workspaces[0].prompt_panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 10,
-            folder_id: None,
-            name: "item".into(),
-            content: "item body".into(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(10, None, "item", "item body")],
     );
     assert!(edit_prompt_item(&mut state, 0, 10));
     assert_eq!(state.prompt.text(), "item body");
@@ -1218,7 +1220,7 @@ fn switch_workspace_parks_temp_and_keeps_blank_default() {
         state.workspaces[0]
             .prompt_panel
             .temp(second)
-            .map(|temp| temp.content.as_str()),
+            .map(|temp| temp.active_content()),
         Some("parked"),
         "切走即提交到 temp"
     );

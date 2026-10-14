@@ -848,7 +848,7 @@ fn workspace_item_at_follows_scroll_offset_and_excludes_scrollbar() {
 }
 
 #[test]
-fn initial_workspace_marker_uses_row_text_style() {
+fn initial_workspace_marker_uses_accent_style() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     // 显式短名保证列表不截断，标记断言与工作目录名无关。
@@ -879,15 +879,11 @@ fn initial_workspace_marker_uses_row_text_style() {
         .iter()
         .position(|symbol| *symbol == '*')
         .expect("marker is rendered");
-    // `*` 不再有独立颜色，跟随行内正文样式。
-    assert_eq!(
-        buffer[(marker_x as u16, marker_line as u16)].fg,
-        ratatui::style::Color::Reset
-    );
-    assert_eq!(
-        buffer[(marker_x as u16, marker_line as u16)].bg,
-        ratatui::style::Color::Reset
-    );
+    // `*` 用强调色标识（与去重序号同色，不再跟随正文样式）。
+    let cell = &buffer[(marker_x as u16, marker_line as u16)];
+    assert_eq!(cell.fg, ratatui::style::Color::Cyan);
+    assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(cell.bg, ratatui::style::Color::Reset);
 }
 
 #[test]
@@ -959,7 +955,7 @@ fn workspace_drop_index_maps_rows_with_scroll_and_clamps() {
 }
 
 #[test]
-fn workspace_rows_fill_selected_and_hover_backgrounds() {
+fn workspace_rows_mark_selected_and_fill_hover_backgrounds() {
     let mut state = AppState::demo();
     update::create_workspace(&mut state);
     update::create_workspace(&mut state);
@@ -978,13 +974,13 @@ fn workspace_rows_fill_selected_and_hover_backgrounds() {
     let y = sections.workspaces.y;
     let right = sections.workspaces.right() - 1;
 
-    // 激活项（create_workspace 激活末项）青底黑字，整行铺满。
-    assert_eq!(buffer[(x, y + 2)].bg, ratatui::style::Color::Cyan);
-    assert_eq!(buffer[(x, y + 2)].fg, ratatui::style::Color::Black);
+    // 激活项（create_workspace 激活末项）行首 `❯` 标记，不铺背景。
+    assert_eq!(buffer[(x, y + 2)].symbol(), text::AGENT_SELECTED_MARKER);
+    assert_eq!(buffer[(x, y + 2)].bg, ratatui::style::Color::Reset);
     assert_eq!(
         buffer[(right, y + 2)].bg,
-        ratatui::style::Color::Cyan,
-        "行尾空白同样铺背景"
+        ratatui::style::Color::Reset,
+        "行尾空白无底色"
     );
 
     // 悬停项使用显式深色背景（selection）。
@@ -1001,7 +997,7 @@ fn workspace_rows_fill_selected_and_hover_backgrounds() {
 }
 
 #[test]
-fn hovered_parent_workspace_item_uses_uniform_selection_style() {
+fn hovered_parent_workspace_item_uses_selection_background() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "repo".to_string();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
@@ -1018,7 +1014,7 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     let mut terminal =
         RatatuiTerminal::new(TestBackend::new(100, 24)).expect("test backend is infallible");
 
-    // 1. 未交互态：父项折叠箭头为 Cyan 强调色，无反显与背景。
+    // 1. 未交互态：父项行首标记列为空、折叠箭头为 Cyan 强调色，无反显与背景。
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
         panic!("draw failed: {error}");
     }
@@ -1027,37 +1023,51 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     let sections = layout::sidebar_sections(view.sidebar, false).expect("sections are visible");
     let x = sections.workspaces.x;
     let y = sections.workspaces.y;
+    let arrow_x = x + 2;
 
-    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
-    assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Cyan);
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Reset);
+    assert_eq!(buffer[(x, y)].symbol(), " ");
+    assert_eq!(
+        buffer[(arrow_x, y)].symbol(),
+        text::WORKSPACE_GROUP_EXPANDED
+    );
+    assert_eq!(buffer[(arrow_x, y)].fg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Reset);
     assert!(
-        !buffer[(x, y)]
+        !buffer[(arrow_x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
 
-    // 2. 悬停态：父项整行统一深色高亮背景（Indexed 240），箭头为 Indexed 255 前景。
+    // 2. 悬停态：父项整行统一深色高亮背景（Indexed 240）；折叠箭头是特殊文字，
+    //    保留 accent 强调色，不被 hover 的 Indexed 255 前景覆盖。
     state.workspace_hover = Some(0);
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
 
-    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
     assert_eq!(
-        buffer[(x, y)].fg,
-        ratatui::style::Color::Indexed(255),
-        "悬停时箭头前景为 Indexed 255"
+        buffer[(arrow_x, y)].symbol(),
+        text::WORKSPACE_GROUP_EXPANDED
     );
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Indexed(240));
+    assert_eq!(
+        buffer[(arrow_x, y)].fg,
+        ratatui::style::Color::Cyan,
+        "悬停不覆盖分组箭头强调色"
+    );
     assert!(
-        !buffer[(x, y)]
+        buffer[(arrow_x, y)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Indexed(240));
+    assert!(
+        !buffer[(arrow_x, y)]
             .modifier
             .contains(ratatui::style::Modifier::REVERSED)
     );
 
-    // 3. 激活态：父项与子项保持一致的青底黑字整行填充。
+    // 3. 激活态：父项行首 `❯` 标记，箭头保留强调色、无填充背景。
     state.workspace_hover = None;
     state.active_workspace = 0;
     if let Err(error) = terminal.draw(|frame| render(frame, &state, &config)) {
@@ -1065,9 +1075,13 @@ fn hovered_parent_workspace_item_uses_uniform_selection_style() {
     }
     let buffer = terminal.backend().buffer().clone();
 
-    assert_eq!(buffer[(x, y)].symbol(), text::WORKSPACE_GROUP_EXPANDED);
-    assert_eq!(buffer[(x, y)].fg, ratatui::style::Color::Black);
-    assert_eq!(buffer[(x, y)].bg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(x, y)].symbol(), text::AGENT_SELECTED_MARKER);
+    assert_eq!(
+        buffer[(arrow_x, y)].symbol(),
+        text::WORKSPACE_GROUP_EXPANDED
+    );
+    assert_eq!(buffer[(arrow_x, y)].fg, ratatui::style::Color::Cyan);
+    assert_eq!(buffer[(arrow_x, y)].bg, ratatui::style::Color::Reset);
 }
 
 #[test]
@@ -1141,11 +1155,11 @@ fn drag_highlight_marks_group_only_after_pointer_move() {
         )
     };
 
-    // 按下未移动：直接整行选中态（青底），不做拖动反显，一次性完成切换。
+    // 按下未移动：激活项以行首标记表示，不做拖动反显。
     assert_eq!(
         observe(&state),
-        ([false, false], ratatui::style::Color::Cyan),
-        "按下未移动显示选中态"
+        ([false, false], ratatui::style::Color::Reset),
+        "按下未移动无拖动反显"
     );
     state.workspace_dragging = true;
     assert_eq!(
@@ -1299,20 +1313,14 @@ fn overflow_prompt(state: &mut AppState, view: &layout::ViewLayout) {
 
 #[test]
 fn prompt_tree_renders_divider_and_scrollbar_below_search() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let mut state = AppState::demo();
     update::show_prompt_tree(&mut state);
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
         (0..30)
-            .map(|index| PromptItem {
-                id: index,
-                folder_id: None,
-                name: format!("item-{index:02}"),
-                content: String::new(),
-                status: PromptItemStatus::Todo,
-            })
+            .map(|index| PromptItem::single(index, None, format!("item-{index:02}"), String::new()))
             .collect(),
     );
     let view = view_for(&state);
@@ -1338,19 +1346,13 @@ fn prompt_tree_renders_divider_and_scrollbar_below_search() {
 
 #[test]
 fn prompt_editor_divider_shows_editing_title() {
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let mut state = AppState::demo();
     state.prompt_width = 40;
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 1,
-            folder_id: None,
-            name: "named prompt".into(),
-            content: String::new(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(1, None, "named prompt", String::new())],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let view = view_for(&state);
@@ -1362,22 +1364,37 @@ fn prompt_editor_divider_shows_editing_title() {
         inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
     );
     assert!(divider.contains(" named prompt "), "{divider}");
-    assert!(
-        !divider.contains(text::PROMPT_TEMP_BADGE),
-        "条目不带 tmp 标识: {divider}"
-    );
+    assert!(!divider.contains("[tmp]"), "条目不带 tmp 标识: {divider}");
 
-    // 临时提示词显示固定标题与 accent `[tmp]` 标识。
+    // 临时提示词显示固定标题（无 `[tmp]` 标识），标题为未聚焦灰。
+    state.prompt_width = 56;
+    let view = view_for(&state);
     update::show_prompt_tree(&mut state);
     assert!(update::open_temp_prompt(&mut state));
     let lines = render_lines(&state);
+    let inner = crate::layout::pane_inner_rect(view.prompt);
     let divider = prompt_line(
         &lines,
         &view,
         inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
     );
     assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
-    assert!(divider.contains(text::PROMPT_TEMP_BADGE), "{divider}");
+    assert!(!divider.contains("[tmp]"), "标题不带 tmp 标识: {divider}");
+    assert!(divider.contains("Page 1"), "内嵌当前页名: {divider}");
+    assert!(divider.contains('‹') && divider.contains('›'), "{divider}");
+    assert!(divider.contains("1/1"), "{divider}");
+    // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
+    let buffer = render_buffer(&state);
+    let y = inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
+    let title_byte = divider.find(text::PROMPT_DRAFT_TITLE).expect("title col");
+    let title_col = u16::try_from(divider[..title_byte].chars().count()).expect("col fits");
+    let cell = &buffer[(view.prompt.x + title_col, y)];
+    let debug_row: String = (view.prompt.x..view.prompt.right())
+        .map(|x| buffer[(x, y)].symbol())
+        .collect();
+    assert_eq!(cell.symbol(), "t", "标题起点单元格: {debug_row:?}");
+    assert_eq!(cell.fg, ratatui::style::Color::Reset, "标题前景为默认灰");
+    assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
 }
 
 #[test]
@@ -1392,7 +1409,11 @@ fn prompt_scrollbar_appears_only_on_overflow() {
     let gutter = crate::layout::prompt_scrollbar_rect(view.prompt).expect("gutter is reserved");
     assert_eq!(bar.track, gutter);
     assert_eq!(bar.visible, usize::from(gutter.height));
-    assert_eq!(bar.total, state.prompt.visual_rows().len());
+    assert_eq!(
+        bar.total,
+        state.prompt.visual_rows().len() + state.prompt.bottom_padding(),
+        "滚动条总长含底部虚拟空占位"
+    );
     assert!(bar.total > bar.visible);
 }
 
@@ -1432,8 +1453,8 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
 #[test]
 fn prompt_renders_toolbar_and_divider_rows() {
     let mut state = AppState::demo();
-    // 足够宽以容纳模式/undo/redo 与右对齐的 select all。
-    state.prompt_width = 40;
+    // 足够宽以容纳模式/undo/redo、右对齐的 select all 与标题行页控件。
+    state.prompt_width = 56;
     state.prompt.insert_str("hello");
     let view = view_for(&state);
     let lines = render_lines(&state);
@@ -1766,17 +1787,11 @@ fn prompt_toolbar_styles_reflect_undo_and_save_state() {
     );
 
     // 绑定条目：已保存绿点、编辑后黄点。
-    use crate::app::prompt::{PromptItem, PromptItemStatus};
+    use crate::app::prompt::PromptItem;
     let panel = &mut state.workspaces[0].prompt_panel;
     panel.tree.replace(
         vec![],
-        vec![PromptItem {
-            id: 1,
-            folder_id: None,
-            name: "named".into(),
-            content: String::new(),
-            status: PromptItemStatus::Todo,
-        }],
+        vec![PromptItem::single(1, None, "named", String::new())],
     );
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let buffer = render_buffer(&state);
@@ -2168,12 +2183,31 @@ fn sidebar_renders_duplicate_child_index_before_initial_marker() {
         lines.iter().any(|line| line.contains("  ├─ ⑂ feature/x")),
         "first duplicate keeps clean label: {lines:?}"
     );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("  └─ ⑂ feature/x 2 *")),
-        "second duplicate gets index before marker: {lines:?}"
-    );
+    let row_index = lines
+        .iter()
+        .position(|line| line.contains("  └─ ⑂ feature/x 2 *"))
+        .unwrap_or_else(|| panic!("second duplicate gets index before marker: {lines:?}"));
+
+    // `*` 与去重序号用强调色标识，hover 时前景不被覆盖（只加 hover 背景）。
+    let sidebar_width = usize::from(view_for(&state).sidebar.width);
+    let sidebar_line: String = lines[row_index].chars().take(sidebar_width).collect();
+    let anchor = sidebar_line.find(" 2 *").expect("index + initial marker");
+    let index_x = sidebar_line[..anchor].chars().count() + 1;
+    for hover in [None, Some(2)] {
+        state.workspace_hover = hover;
+        let buffer = render_buffer(&state);
+        for (offset, symbol) in [(0usize, "2"), (2usize, "*")] {
+            let cell = &buffer[((index_x + offset) as u16, row_index as u16)];
+            assert_eq!(cell.symbol(), symbol, "hover={hover:?}");
+            assert_eq!(
+                cell.fg,
+                ratatui::style::Color::Cyan,
+                "{symbol} 使用强调色 (hover={hover:?})"
+            );
+            assert!(cell.modifier.contains(ratatui::style::Modifier::BOLD));
+        }
+    }
+    state.workspace_hover = None;
 }
 
 #[test]

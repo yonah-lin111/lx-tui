@@ -22,7 +22,7 @@ pub enum Routed {
     Copy,
     /// 立即保存 prompt（Ctrl/Cmd+S）：条目落库；临时提示词走保存选择器。
     SavePrompt,
-    /// 复制光标所在模板块正文到系统剪贴板。
+    /// 复制光标所在模板块/补充块正文到系统剪贴板。
     CopyTemplateBlock,
     /// 原样写入焦点窗格的字节。
     Pane(Vec<u8>),
@@ -32,7 +32,7 @@ pub enum Routed {
 ///
 /// `Ctrl+Q` 始终优先；浮层打开时只放行该浮层支持的键，其余吞掉；
 /// `prompt_focused` 为真时按键只进入编辑器：`Ctrl/Cmd+C` 复制选区（无选区全文）、
-/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块正文，未映射的按键被吞掉，绝不写入 PTY；
+/// `Ctrl/Cmd+Shift+C` 复制光标所在模板块/补充块正文，未映射的按键被吞掉，绝不写入 PTY；
 /// `pane_lx` 为真（活动窗格显示 lx 页）时除 `Ctrl+Q` 外的按键一并吞掉，不写入隐藏终端。
 pub fn route(
     key: KeyEvent,
@@ -83,13 +83,37 @@ pub fn route(
     encode::encode_key(key, mode).map(Routed::Pane)
 }
 
+/// 页重命名输入键映射：Enter/Esc 结束、单行编辑键、Ctrl+C 清空；其余返回 None（吞掉）。
+///
+/// 与重命名浮层同一套语义，但不依赖 `Overlay`（页重命名是标题行内联输入）。
+pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
+    let plain = !key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+    match key.code {
+        KeyCode::Esc => Some(OverlayKey::Esc),
+        KeyCode::Enter => Some(OverlayKey::Enter),
+        KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(OverlayKey::Clear)
+        }
+        KeyCode::Backspace => Some(OverlayKey::Backspace),
+        KeyCode::Delete => Some(OverlayKey::Delete),
+        KeyCode::Left if plain => Some(OverlayKey::Left),
+        KeyCode::Right if plain => Some(OverlayKey::Right),
+        KeyCode::Home => Some(OverlayKey::Home),
+        KeyCode::End => Some(OverlayKey::End),
+        KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+        _ => None,
+    }
+}
+
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
 fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
     let plain = !key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
     match kind {
-        OverlayKind::Menu => match key.code {
+        OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),

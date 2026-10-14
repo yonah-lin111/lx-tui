@@ -63,12 +63,14 @@ pub fn render(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     render_agents(frame, sections.agents, state);
 }
 
-/// 工作区列表项：激活项强调色填充（青底黑字）、鼠标悬停项终端反显（同右键菜单选中项）；
-/// 拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。悬停与选中互斥，拖动反显优先。
+/// 工作区列表项：激活项行首 `❯` 标记（同 Agents 条目，不独立着色）；
+/// 鼠标悬停项终端反显、拖动排序中的项反显；启动工作区在名字后追加不可移除的 `*` 标记。
+/// 悬停与标记互不冲突，拖动反显优先。
 ///
-/// 顶层项统一缩进 2 列：组父项行在左缘显示折叠箭头（accent 色，占 2 列），其名字与
-/// 分组子项的连接符同列；子项连接符（`├─ `/`└─ `，末位按可见子项判定）之后是名字。
-/// 非 git / 未分组项与父项名字同列。折叠组只渲染父项与当前激活子项。
+/// 顶层项统一缩进 2 列：行首为标记列（`❯ ` 或空），组父项行随后显示折叠箭头
+/// （accent 色，占 2 列），其名字与分组子项的连接符同列；子项连接符（`├─ `/`└─ `，
+/// 末位按可见子项判定）之后是名字。非 git / 未分组项与父项名字同列。
+/// 折叠组只渲染父项与当前激活子项。
 /// 行由 `AppState::workspace_rows` 给出，渲染与命中一一对应。
 /// 标记项为标记预留 2 列，名字超宽先截断，保证 `*` 不被裁剪。
 fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
@@ -84,31 +86,30 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             items.push(ListItem::new(Line::default()));
             continue;
         };
-        // 拖动反显只在指针真正移动后生效；按下未移动直接显示选中态，避免文字先亮、空白后补的两段式高亮。
+        // 拖动反显只在指针真正移动后生效；按下未移动直接显示标记态，避免文字先亮、空白后补的两段式高亮。
         let dragging = state.workspace_dragging && drag_block.contains(&row.index);
-        // 选中背景整行铺满；拖动块整行反显；hover 复用终端原生反显（同右键菜单）。
-        let highlight = if dragging {
-            Some(style::selection())
-        } else if row.index == state.active_workspace {
-            Some(style::selected_item())
-        } else if state.workspace_hover == Some(row.index) {
+        // 激活项行首标记；拖动块整行反显；hover 复用终端原生反显（同右键菜单）。
+        let highlight = if dragging || state.workspace_hover == Some(row.index) {
             Some(style::selection())
         } else {
             None
-        };
-        let item_style = if row.index == state.active_workspace {
-            style::accent()
-        } else {
-            style::text()
         }
-        .patch(highlight.unwrap_or_default());
-        let prefix_style = if row.parent && highlight.is_none() {
-            style::accent()
+        .unwrap_or_default();
+        let active = row.index == state.active_workspace;
+        let marker = if active {
+            format!("{} ", text::AGENT_SELECTED_MARKER)
+        } else {
+            "  ".to_string()
+        };
+        let item_style = style::text().patch(highlight);
+        // 特殊文字（分组箭头强调色）叠在行底之上：前景/修饰符取自身样式，
+        // 只借用 hover 的背景，避免被 hover 的白字覆盖。
+        let prefix_style = if row.parent {
+            highlight.patch(style::accent())
         } else {
             item_style
         };
-        let highlight = highlight.unwrap_or_default();
-        let prefix = if row.parent {
+        let group_prefix = if row.parent {
             let arrow = if row.collapsed {
                 text::WORKSPACE_GROUP_COLLAPSED
             } else {
@@ -129,17 +130,16 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
         } else {
             " ".repeat(WORKSPACE_ITEM_INDENT)
         };
+        // 特殊标记（`*` 表示最初路径、去重序号）用强调色标识，hover 只提供背景。
+        let mark_style = highlight.patch(style::accent());
+        let prefix = format!("{marker}{group_prefix}");
         let icon = if workspace.git.is_some() {
             text::WORKSPACE_GIT_ICON
         } else {
             text::WORKSPACE_NON_GIT_ICON
         };
         let icon_prefix = format!("{icon} ");
-        let icon_style = if row.index == state.active_workspace {
-            item_style
-        } else {
-            style::muted().patch(highlight)
-        };
+        let icon_style = style::muted().patch(highlight);
         let label = workspace_item_label(workspace, row.child);
         let index_text = row
             .child_index
@@ -155,8 +155,9 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
                 0
             });
         let mut spans = Vec::new();
-        if !prefix.is_empty() {
-            spans.push(Span::styled(prefix, prefix_style));
+        spans.push(Span::styled(marker, item_style));
+        if !group_prefix.is_empty() {
+            spans.push(Span::styled(group_prefix, prefix_style));
         }
         spans.push(Span::styled(icon_prefix, icon_style));
         spans.push(Span::styled(
@@ -164,10 +165,10 @@ fn workspace_items(state: &AppState, width: usize) -> Vec<ListItem<'_>> {
             item_style,
         ));
         if !index_text.is_empty() {
-            spans.push(Span::styled(index_text, item_style));
+            spans.push(Span::styled(index_text, mark_style));
         }
         if workspace.is_initial {
-            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, item_style));
+            spans.push(Span::styled(text::INITIAL_WORKSPACE_MARKER, mark_style));
         }
         items.push(ListItem::new(Line::from(spans)).style(highlight));
     }
@@ -595,7 +596,8 @@ fn agent_list_items<'a>(
         );
         let padding = width.saturating_sub(fixed + name.chars().count());
         let marker_style = style::strong().patch(highlight);
-        let dot_style = style::agent_status(snapshot.state).patch(highlight);
+        // 状态圆点特殊色叠在行底之上：hover 只提供背景，不覆盖运行/阻塞状态色。
+        let dot_style = highlight.patch(style::agent_status(snapshot.state));
         let spans = vec![
             Span::styled(marker, marker_style),
             Span::styled(dot, dot_style),

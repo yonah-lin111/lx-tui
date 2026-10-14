@@ -29,6 +29,46 @@ fn workspace_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("lx-tui-ws-{label}"))
 }
 
+/// v5 之前的旧库 Schema（提示词表含状态列）；迁移测试构造旧库用。
+const LEGACY_SCHEMA: &str = r#"
+CREATE TABLE workspace (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'filesystem',
+    path TEXT UNIQUE,
+    is_trusted INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE workspace_folder (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    parent_folder_id TEXT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
+);
+
+CREATE TABLE workspace_prompt (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL,
+    folder_id TEXT,
+    name TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'completed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
+    FOREIGN KEY (folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
+);
+"#;
+
 #[test]
 fn migration_creates_schema_and_is_idempotent() {
     let (database, path) = open_test_database("migrate");
@@ -105,13 +145,13 @@ fn deleting_folder_cascades_subfolders_and_prompts() {
         .create_folder(&workspace, Some(root), "sub")
         .expect("sub folder");
     database
-        .create_prompt(&workspace, Some(root), "in root", "")
+        .create_prompt(&workspace, Some(root), "in root", &[])
         .expect("root prompt");
     database
-        .create_prompt(&workspace, Some(sub), "in sub", "")
+        .create_prompt(&workspace, Some(sub), "in sub", &[])
         .expect("sub prompt");
     database
-        .create_prompt(&workspace, None, "loose", "")
+        .create_prompt(&workspace, None, "loose", &[])
         .expect("loose prompt");
 
     database.delete_folder(root).expect("delete root");
@@ -136,18 +176,17 @@ fn prompt_crud_persists_and_isolates_workspaces() {
         .create_folder(&left, None, "folder")
         .expect("folder ok");
     let prompt = database
-        .create_prompt(&left, Some(left_folder), "draft", "")
+        .create_prompt(&left, Some(left_folder), "draft", &[])
         .expect("prompt ok");
     database
-        .create_prompt(&right, None, "other", "")
+        .create_prompt(&right, None, "other", &[])
         .expect("other prompt ok");
 
+    let pages = database.list_prompts(&left).expect("list ok");
+    let page_id = pages[0].pages[0].id;
     database
-        .update_prompt_document(prompt, "hello\nworld")
+        .update_page_content(page_id, "hello\nworld")
         .expect("content ok");
-    database
-        .update_prompt_status(prompt, "in_progress")
-        .expect("status ok");
     database
         .rename_prompt(prompt, "renamed")
         .expect("rename ok");
@@ -156,13 +195,11 @@ fn prompt_crud_persists_and_isolates_workspaces() {
     assert_eq!(left_prompts.len(), 1);
     assert_eq!(left_prompts[0].name, "renamed");
     assert_eq!(left_prompts[0].content, "hello\nworld");
-    assert_eq!(left_prompts[0].status, "in_progress");
     assert_eq!(left_prompts[0].folder_id, Some(left_folder));
 
     let right_prompts = database.list_prompts(&right).expect("list ok");
     assert_eq!(right_prompts.len(), 1, "workspace isolation");
     assert_eq!(right_prompts[0].name, "other");
-    assert_eq!(right_prompts[0].status, "todo");
 
     database.delete_prompt(prompt).expect("delete ok");
     assert!(database.list_prompts(&left).expect("list ok").is_empty());
@@ -186,7 +223,7 @@ fn prompt_in_missing_folder_is_rejected() {
     let (database, _) = open_test_database("missing-folder");
     let workspace = workspace_path("missing-folder");
     let error = database
-        .create_prompt(&workspace, Some(999), "orphan", "")
+        .create_prompt(&workspace, Some(999), "orphan", &[])
         .expect_err("missing folder rejected");
     assert!(matches!(error, DbError::FolderMissing));
 }
@@ -235,7 +272,7 @@ fn migrates_v1_database_to_current_schema() {
     {
         let conn = Connection::open(&path).expect("open");
         conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
-        conn.execute_batch(SCHEMA).expect("v1 schema");
+        conn.execute_batch(LEGACY_SCHEMA).expect("v1 schema");
         conn.execute_batch("PRAGMA user_version = 1;")
             .expect("version");
         conn.execute(
@@ -271,7 +308,7 @@ fn migrates_development_v2_database_keeping_data() {
     std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
     {
         let conn = Connection::open(&path).expect("open");
-        conn.execute_batch(SCHEMA).expect("v1 schema");
+        conn.execute_batch(LEGACY_SCHEMA).expect("v1 schema");
         conn.execute_batch(
             "CREATE TABLE managed_attachment_asset (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -360,18 +397,20 @@ fn rejects_database_newer_than_supported() {
 }
 
 #[test]
-fn update_prompt_document_writes_content_and_rejects_unknown_row() {
+fn update_page_content_writes_content_and_rejects_unknown_row() {
     let (database, _) = open_test_database("document-update");
     let workspace = workspace_path("document-update");
     let id = database
-        .create_prompt(&workspace, None, "p", "old")
+        .create_prompt(&workspace, None, "p", &[("Page 1".into(), "old".into())])
         .expect("create");
+    let page_id = database.list_prompts(&workspace).expect("list")[0].pages[0].id;
     database
-        .update_prompt_document(id, "new")
+        .update_page_content(page_id, "new")
         .expect("update content");
     let prompts = database.list_prompts(&workspace).expect("list");
-    assert_eq!(prompts[0].content, "new");
-    assert!(database.update_prompt_document(id + 999, "x").is_err());
+    assert_eq!(prompts[0].content, "new", "第一页镜像同步");
+    assert_eq!(prompts[0].pages[0].content, "new");
+    assert!(database.update_page_content(id + 999, "x").is_err());
 }
 
 #[test]
@@ -382,7 +421,7 @@ fn deleting_folder_cascades_prompts() {
         .create_folder(&workspace, None, "root")
         .expect("folder");
     database
-        .create_prompt(&workspace, Some(folder), "p", "")
+        .create_prompt(&workspace, Some(folder), "p", &[])
         .expect("create");
     database.delete_folder(folder).expect("delete folder");
     let count: i64 = database
@@ -392,4 +431,345 @@ fn deleting_folder_cascades_prompts() {
         })
         .expect("count");
     assert_eq!(count, 0, "级联删除条目");
+}
+
+// ===== v4 分页迁移与页 CRUD =====
+
+/// 构造 v3 库：当前基础表 + 旧式提示词行（无页表、无 active_page_id 列）。
+fn seed_v3_database(label: &str, workspace: &Path, content: &str) -> PathBuf {
+    let path = temp_db_path(label);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    let conn = Connection::open(&path).expect("open");
+    conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
+    conn.execute_batch(
+        r#"
+        CREATE TABLE workspace (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            "type" TEXT NOT NULL DEFAULT 'filesystem',
+            path TEXT UNIQUE,
+            is_trusted INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE workspace_prompt (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            external_id TEXT NOT NULL UNIQUE,
+            workspace_id TEXT NOT NULL,
+            folder_id TEXT,
+            name TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'in_progress', 'completed')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .expect("v3 schema");
+    conn.execute(
+        "INSERT INTO workspace (external_id, name, \"type\", path, is_trusted, created_at, updated_at) \
+         VALUES ('ws-v3', 'w', 'filesystem', ?1, 1, datetime('now'), datetime('now'))",
+        params![path_string(workspace)],
+    )
+    .expect("workspace row");
+    conn.execute(
+        "INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, created_at, updated_at) \
+         VALUES ('p-v3', 'ws-v3', NULL, 'old', ?1, 'todo', datetime('now'), datetime('now'))",
+        params![content],
+    )
+    .expect("prompt row");
+    conn.execute_batch("PRAGMA user_version = 3;")
+        .expect("version");
+    drop(conn);
+    path
+}
+
+#[test]
+fn v5_migration_drops_status_column_and_keeps_pages() {
+    let workspace = workspace_path("v5-drop-status");
+    let path = seed_v4_database("v5-drop-status", &workspace);
+    let database = Database::open(&path).expect("v4 upgrades");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let status_columns: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('workspace_prompt') WHERE name = 'status'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("table info");
+    assert_eq!(status_columns, 0, "v5 重建移除状态列");
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].name, "paged");
+    assert_eq!(prompts[0].pages.len(), 1, "重建不丢页表数据");
+    assert_eq!(prompts[0].pages[0].content, "page body");
+    assert_eq!(prompts[0].active_page_id, Some(prompts[0].pages[0].id));
+    drop(database);
+    // 重复打开幂等：不再重建，版本保持当前值。
+    let reopened = Database::open(&path).expect("reopen ok");
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
+    assert_eq!(
+        reopened.list_prompts(&workspace).expect("list")[0]
+            .pages
+            .len(),
+        1
+    );
+}
+
+/// 构造 v4 库：旧基础表（含状态列）+ `active_page_id` 列与页表 + 一条两页数据。
+fn seed_v4_database(label: &str, workspace: &Path) -> PathBuf {
+    let path = temp_db_path(label);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    let conn = Connection::open(&path).expect("open");
+    conn.execute_batch("PRAGMA foreign_keys = ON;").expect("fk");
+    conn.execute_batch(LEGACY_SCHEMA).expect("legacy schema");
+    conn.execute_batch(
+        r#"
+        ALTER TABLE workspace_prompt ADD COLUMN active_page_id INTEGER;
+        CREATE TABLE workspace_prompt_page (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            prompt_id INTEGER NOT NULL,
+            position INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            content TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (prompt_id, position),
+            FOREIGN KEY (prompt_id) REFERENCES workspace_prompt(id) ON DELETE CASCADE
+        );
+        "#,
+    )
+    .expect("v4 schema");
+    conn.execute(
+        "INSERT INTO workspace (external_id, name, \"type\", path, is_trusted, created_at, updated_at) \
+         VALUES ('ws-v4', 'w', 'filesystem', ?1, 1, datetime('now'), datetime('now'))",
+        params![path_string(workspace)],
+    )
+    .expect("workspace row");
+    conn.execute(
+        "INSERT INTO workspace_prompt (external_id, workspace_id, folder_id, name, content, status, active_page_id, created_at, updated_at) \
+         VALUES ('p-v4', 'ws-v4', NULL, 'paged', 'page body', 'in_progress', 1, datetime('now'), datetime('now'))",
+        [],
+    )
+    .expect("prompt row");
+    conn.execute(
+        "INSERT INTO workspace_prompt_page (id, prompt_id, position, name, content, created_at, updated_at) \
+         VALUES (1, 1, 0, 'Page 1', 'page body', datetime('now'), datetime('now'))",
+        [],
+    )
+    .expect("page row");
+    conn.execute_batch("PRAGMA user_version = 4;")
+        .expect("version");
+    drop(conn);
+    path
+}
+
+#[test]
+fn v4_migration_backfills_single_first_page_idempotently() {
+    let workspace = workspace_path("v4-backfill");
+    let path = seed_v3_database("v4-backfill", &workspace, "legacy\nbody");
+    let database = Database::open(&path).expect("v3 upgrades");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].content, "legacy\nbody", "镜像正文逐字不变");
+    assert_eq!(prompts[0].pages.len(), 1, "旧正文成为唯一 Page 1");
+    assert_eq!(prompts[0].pages[0].name, FIRST_PAGE_NAME);
+    assert_eq!(prompts[0].pages[0].content, "legacy\nbody");
+    assert_eq!(prompts[0].active_page_id, Some(prompts[0].pages[0].id));
+    drop(database);
+    // 重复打开不重复生成页。
+    let reopened = Database::open(&path).expect("reopen ok");
+    let prompts = reopened.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts[0].pages.len(), 1);
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
+}
+
+#[test]
+fn v4_migration_failure_rolls_back_and_keeps_old_data() {
+    let workspace = workspace_path("v4-rollback");
+    let path = seed_v3_database("v4-rollback", &workspace, "keep me");
+    // 用同名视图占据页表名，令 v4 迁移建表失败。
+    {
+        let conn = Connection::open(&path).expect("open");
+        conn.execute_batch("CREATE VIEW workspace_prompt_page AS SELECT 1 AS id;")
+            .expect("blocking view");
+        drop(conn);
+    }
+    let error = match Database::open(&path) {
+        Ok(_) => panic!("migration must fail"),
+        Err(error) => error,
+    };
+    assert!(matches!(error, DbError::Sqlite(_)), "{error:?}");
+    // 版本与旧正文保持原样，迁移未部分生效。
+    let conn = Connection::open(&path).expect("reopen raw");
+    let version: i64 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, 3, "失败整体回滚，版本不推进");
+    let content: String = conn
+        .query_row(
+            "SELECT content FROM workspace_prompt WHERE external_id = 'p-v3'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("old content readable");
+    assert_eq!(content, "keep me");
+}
+
+#[test]
+fn page_crud_appends_renames_and_deletes_with_next_page_fallback() {
+    let (database, _) = open_test_database("page-crud");
+    let workspace = workspace_path("page-crud");
+    let prompt = database
+        .create_prompt(
+            &workspace,
+            None,
+            "paged",
+            &[
+                ("Page 1".into(), "one".into()),
+                ("Page 2".into(), "two".into()),
+            ],
+        )
+        .expect("create");
+    let pages = database.list_prompts(&workspace).expect("list")[0]
+        .pages
+        .clone();
+    assert_eq!(pages.len(), 2);
+    assert_eq!(pages[0].content, "one");
+    assert_eq!(pages[1].content, "two");
+    let first_page = pages[0].id;
+
+    // 第一页正文写入镜像；第二页不动镜像。
+    database
+        .update_page_content(first_page, "one!")
+        .expect("update first");
+    database
+        .update_page_content(pages[1].id, "two!")
+        .expect("update second");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert_eq!(record.content, "one!", "镜像跟随第一页");
+    assert_eq!(record.pages[1].content, "two!");
+
+    // 追加页：position 取最大加一，并设为当前页。
+    let appended = database
+        .create_prompt_page(prompt, "Page 3")
+        .expect("append");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert_eq!(record.pages.len(), 3);
+    assert_eq!(record.pages[2].id, appended);
+    assert_eq!(record.active_page_id, Some(appended), "新页立即成为当前页");
+
+    // 重命名；空名由应用层拒绝，数据库只要求非空字符串。
+    database
+        .rename_prompt_page(appended, "Notes")
+        .expect("rename");
+    assert_eq!(
+        database.list_prompts(&workspace).expect("list")[0].pages[2].name,
+        "Notes"
+    );
+
+    // 删除当前页（末页）：回退前一页。
+    let fallback = database.delete_prompt_page(appended).expect("delete");
+    assert_eq!(fallback, Some(pages[1].id), "末页删除后回退前一页");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert_eq!(record.pages.len(), 2);
+    assert_eq!(record.active_page_id, Some(pages[1].id));
+
+    // 删除当前页（首页）：优先下一页。
+    database
+        .set_prompt_active_page(prompt, first_page)
+        .expect("focus first");
+    let fallback = database.delete_prompt_page(first_page).expect("delete");
+    assert_eq!(fallback, Some(pages[1].id), "优先显示原下一页");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert_eq!(record.active_page_id, Some(pages[1].id));
+    assert_eq!(record.pages.len(), 1, "最后一页保留");
+
+    // 删除不存在的页报错；库层允许删空（应用层阻止最后一页删除）。
+    assert!(matches!(
+        database.delete_prompt_page(9999),
+        Err(DbError::PageMissing)
+    ));
+    let fallback = database.delete_prompt_page(pages[1].id).expect("delete");
+    assert_eq!(fallback, None, "无可回退页时返回 None");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert!(record.pages.is_empty());
+    assert_eq!(record.active_page_id, None);
+}
+
+#[test]
+fn set_active_page_rejects_foreign_page_and_prompt_delete_cascades_pages() {
+    let (database, _) = open_test_database("page-active");
+    let left = workspace_path("page-active-left");
+    let right = workspace_path("page-active-right");
+    let first = database
+        .create_prompt(&left, None, "a", &[])
+        .expect("prompt a");
+    let second = database
+        .create_prompt(&left, None, "b", &[])
+        .expect("prompt b");
+    let foreign = database.list_prompts(&left).expect("list")[1].pages[0].id;
+    assert!(matches!(
+        database.set_prompt_active_page(first, foreign),
+        Err(DbError::PageMissing)
+    ));
+    database
+        .set_prompt_active_page(second, foreign)
+        .expect("own page accepted");
+    assert_eq!(
+        database.list_prompts(&left).expect("list")[1].active_page_id,
+        Some(foreign)
+    );
+
+    database.delete_prompt(first).expect("delete prompt");
+    let pages: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM workspace_prompt_page WHERE prompt_id = ?1",
+            params![first],
+            |row| row.get(0),
+        )
+        .expect("count pages");
+    assert_eq!(pages, 0, "删除条目级联删除页");
+    assert!(database.list_prompts(&right).expect("list").is_empty());
+}
+
+#[test]
+fn create_prompt_with_pages_is_atomic_and_mirrors_first_page() {
+    let (database, _) = open_test_database("page-create");
+    let workspace = workspace_path("page-create");
+    let id = database
+        .create_prompt(
+            &workspace,
+            None,
+            "multi",
+            &[
+                ("Intro".into(), "alpha".into()),
+                ("Body".into(), "beta".into()),
+            ],
+        )
+        .expect("create");
+    let record = &database.list_prompts(&workspace).expect("list")[0];
+    assert_eq!(record.id, id);
+    assert_eq!(record.content, "alpha", "镜像取第一页正文");
+    assert_eq!(record.pages.len(), 2);
+    assert_eq!(record.pages[1].name, "Body");
+    assert_eq!(record.active_page_id, Some(record.pages[0].id));
+
+    // 空页集合兜底为唯一空 Page 1。
+    let plain = database
+        .create_prompt(&workspace, None, "plain", &[])
+        .expect("create plain");
+    let record = database
+        .list_prompts(&workspace)
+        .expect("list")
+        .into_iter()
+        .find(|record| record.id == plain)
+        .expect("record");
+    assert_eq!(record.pages.len(), 1);
+    assert_eq!(record.pages[0].content, "");
 }

@@ -1,7 +1,10 @@
 //! prompt 编辑器渲染：文本、markdown 高亮与选区，只读状态。
 
+mod header;
 mod panels;
 pub mod tree;
+
+pub use header::*;
 
 use self::panels::render_panels;
 pub use self::panels::{
@@ -22,61 +25,6 @@ use crate::layout::{self, PromptToolbarButton};
 use crate::ui::markdown::{self, Token, TokenKind};
 use crate::ui::style;
 use crate::ui::text;
-
-/// 绘制 prompt 顶部工具栏与固定分割线；内容区过矮时不绘制；
-/// 编辑视图在分割线行内嵌编辑目标 title（`├─ <title> ────┤`），
-/// 绑定临时提示词时 title 右端追加 accent `[tmp]` 标识；
-/// `draft` 表示当前绑定临时提示词：保存点恒灰（不参与自动保存）；
-/// `pinned` 决定工具栏钉住按钮 `[◉]` / `[○]`。
-pub fn render_header(
-    panel: Rect,
-    buf: &mut Buffer,
-    prompt: &Prompt,
-    focused: bool,
-    mode: PromptMode,
-    title: Option<&str>,
-    draft: bool,
-    pinned: bool,
-) {
-    let Some(header) = layout::prompt_header_rect(panel) else {
-        return;
-    };
-    render_divider(panel, header, buf, focused);
-    if mode == PromptMode::Editor
-        && let Some(title) = title
-    {
-        paint_header_title(header, buf, title, draft);
-    }
-    render_toolbar(panel, buf, prompt, mode, draft, pinned);
-}
-
-/// 分割线行内嵌 title：起于左衔接符之后，超宽以 `…` 截断，不覆盖右衔接符；
-/// 绑定临时提示词时在右端追加 accent 的 `[tmp]` 标识（与列表一致）。
-fn paint_header_title(header: Rect, buf: &mut Buffer, title: &str, draft: bool) {
-    let start = header.x.saturating_add(1);
-    let end = header.right().saturating_sub(1);
-    let available = usize::from(end.saturating_sub(start));
-    if available < 4 {
-        return;
-    }
-    let y = header.y.saturating_add(layout::PROMPT_TOOLBAR_HEIGHT);
-    let badge = if draft {
-        format!(" {}", text::PROMPT_TEMP_BADGE)
-    } else {
-        String::new()
-    };
-    let badge_width = badge.width();
-    let badge_width = if badge_width + 4 <= available {
-        let x = end.saturating_sub(badge_width as u16);
-        buf.set_stringn(x, y, &badge, badge_width, style::accent());
-        badge_width
-    } else {
-        0
-    };
-    let title_available = available.saturating_sub(badge_width);
-    let label = text::ellipsize(&format!(" {title} "), title_available);
-    buf.set_stringn(start, y, &label, title_available, style::muted());
-}
 
 /// 分割线整行 `─`（位于按钮行下一行，不穿过功能按钮），
 /// 两端以 `├` / `┤` 衔接外层边框；样式跟随边框焦点态。
@@ -304,6 +252,7 @@ pub struct TemplateButtonHit {
 /// 补充块操作按钮种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockButton {
+    Copy,
     Clean,
     Delete,
 }
@@ -325,8 +274,9 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
     TemplateBlockButton::Delete,
 ];
 
-/// 补充块按钮组顺序：清理、删除。
-const SUPPLE_BUTTONS: [BlockButton; 2] = [BlockButton::Clean, BlockButton::Delete];
+/// 补充块按钮组顺序：复制、清理、删除。
+const SUPPLE_BUTTONS: [BlockButton; 3] =
+    [BlockButton::Copy, BlockButton::Clean, BlockButton::Delete];
 
 /// 块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
 fn block_gutter(block: bool) -> u16 {
@@ -357,8 +307,9 @@ fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
         BlockKind::Supple => SUPPLE_BUTTONS
             .iter()
             .map(|button| match button {
+                BlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
                 BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
-                _ => text::SUPPLE_BUTTON_DEL,
+                BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
             })
             .collect(),
     }
@@ -521,6 +472,7 @@ fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) ->
 /// 补充块按钮文案。
 fn block_button_label(button: BlockButton) -> &'static str {
     match button {
+        BlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
         BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
         BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
     }

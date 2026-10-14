@@ -5,43 +5,52 @@
 
 use std::path::PathBuf;
 
+use crate::app::markdown::TemplateCounts;
 use crate::app::overlay::TextInput;
-use crate::db::{FolderRecord, PromptRecord};
+use crate::db::{FolderRecord, PromptPageRecord, PromptRecord};
 use crate::ui::text;
 
-/// 提示词条目状态；与 DB 稳定值 `todo` / `in_progress` / `completed` 一一对应。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptItemStatus {
-    Todo,
-    InProgress,
-    Completed,
+/// 页 id：正式页来自数据库、临时页由面板内存分配；两者互不混用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PromptPageId {
+    Saved(i64),
+    Temp(u64),
 }
 
-impl PromptItemStatus {
-    /// DB 稳定值。
-    pub fn as_str(self) -> &'static str {
+impl PromptPageId {
+    /// 数据库页 id；临时页为 None。
+    pub fn saved(self) -> Option<i64> {
         match self {
-            Self::Todo => "todo",
-            Self::InProgress => "in_progress",
-            Self::Completed => "completed",
+            Self::Saved(id) => Some(id),
+            Self::Temp(_) => None,
+        }
+    }
+}
+
+/// 提示词页：稳定 id、名称与正文。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptPage {
+    pub id: PromptPageId,
+    pub name: String,
+    pub content: String,
+}
+
+impl PromptPage {
+    /// 正式页（id 来自数据库）。
+    pub fn saved(id: i64, name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            id: PromptPageId::Saved(id),
+            name: name.into(),
+            content: content.into(),
         }
     }
 
-    /// 从 DB 稳定值解析；未知值回退 `todo`。
-    pub fn parse(value: &str) -> Self {
-        match value {
-            "in_progress" => Self::InProgress,
-            "completed" => Self::Completed,
-            _ => Self::Todo,
-        }
-    }
-
-    /// 状态循环：todo → in_progress → completed → todo。
-    pub fn next(self) -> Self {
-        match self {
-            Self::Todo => Self::InProgress,
-            Self::InProgress => Self::Completed,
-            Self::Completed => Self::Todo,
+    /// 临时页（id 由面板内存分配）。
+    pub fn temp(id: u64, name: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            id: PromptPageId::Temp(id),
+            name: name.into(),
+            content: content.into(),
         }
     }
 }
@@ -61,30 +70,125 @@ pub struct PromptItem {
     pub id: i64,
     pub folder_id: Option<i64>,
     pub name: String,
-    pub content: String,
-    pub status: PromptItemStatus,
+    /// 全部页（按创建顺序，恒非空）。
+    pub pages: Vec<PromptPage>,
+    /// 上次打开的页 id；失效时回退第一页。
+    pub active_page: PromptPageId,
 }
 
-/// 临时提示词：仅存内存、不入库；列表展示名取内容首行摘要（空白项取占位名 `default`）。
+impl PromptItem {
+    /// 单页条目：正文进入以条目 id 为页 id 的唯一 `Page 1`（测试与直插数据辅助）。
+    pub fn single(
+        id: i64,
+        folder_id: Option<i64>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        let page = PromptPage::saved(id, text::default_page_name(1), content);
+        Self {
+            id,
+            folder_id,
+            name: name.into(),
+            active_page: page.id,
+            pages: vec![page],
+        }
+    }
+
+    /// 当前页正文。
+    pub fn active_content(&self) -> &str {
+        self.active_page()
+            .map(|page| page.content.as_str())
+            .unwrap_or("")
+    }
+
+    /// 页在集合中的索引；不存在为 None。
+    pub fn page_index(&self, id: PromptPageId) -> Option<usize> {
+        self.pages.iter().position(|page| page.id == id)
+    }
+
+    /// 当前页索引；失效 id 回退第一页。
+    pub fn active_index(&self) -> usize {
+        self.page_index(self.active_page).unwrap_or(0)
+    }
+
+    /// 当前页。
+    pub fn active_page(&self) -> Option<&PromptPage> {
+        self.pages.get(self.active_index())
+    }
+
+    /// 按 id 取页。
+    pub fn page(&self, id: PromptPageId) -> Option<&PromptPage> {
+        self.pages.iter().find(|page| page.id == id)
+    }
+
+    /// 按 id 取页（可变）。
+    pub fn page_mut(&mut self, id: PromptPageId) -> Option<&mut PromptPage> {
+        self.pages.iter_mut().find(|page| page.id == id)
+    }
+
+    /// 当前页（可变）。
+    pub fn active_page_mut(&mut self) -> Option<&mut PromptPage> {
+        let index = self.active_index();
+        self.pages.get_mut(index)
+    }
+
+    /// 全部页的模板块状态合计。
+    pub fn template_counts(&self) -> TemplateCounts {
+        pages_template_counts(&self.pages)
+    }
+}
+
+/// 临时提示词：仅存内存、不入库；列表展示名取各页首个非空行。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TempPrompt {
     pub id: u64,
-    pub content: String,
+    /// 全部页（按创建顺序，恒非空）。
+    pub pages: Vec<PromptPage>,
+    /// 当前页 id；失效时回退第一页。
+    pub active_page: PromptPageId,
 }
 
 impl TempPrompt {
-    /// 列表展示名：首个非空行（trim）；内容全空白时为空串。
+    /// 单页临时提示词（页 id 取提示词 id；测试与新建默认形态辅助）。
+    pub fn single_page(id: u64, content: impl Into<String>) -> Self {
+        Self::single(id, id, text::default_page_name(1), content)
+    }
+
+    /// 单页临时提示词。
+    pub fn single(
+        id: u64,
+        page_id: u64,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        let page = PromptPage::temp(page_id, name, content);
+        Self {
+            id,
+            active_page: page.id,
+            pages: vec![page],
+        }
+    }
+
+    /// 当前页正文。
+    pub fn active_content(&self) -> &str {
+        self.active_page()
+            .map(|page| page.content.as_str())
+            .unwrap_or("")
+    }
+
+    /// 列表展示名：各页按顺序的首个非空行（trim）；全部空白时为空串。
     pub fn summary(&self) -> &str {
-        self.content
-            .lines()
+        self.pages
+            .iter()
+            .flat_map(|page| page.content.lines())
             .map(str::trim)
             .find(|line| !line.is_empty())
             .unwrap_or("")
     }
 
-    /// 内容去空白后是否为空（空白 temp 即工作区恒保留的 default temp）。
+    /// 全部页内容去空白后是否为空（空白 temp 即工作区恒保留的 default temp）。
     pub fn is_blank(&self) -> bool {
-        self.content.trim().is_empty()
+        self.pages.iter().all(|page| page.content.trim().is_empty())
     }
 
     /// 列表展示名：非空内容取首行摘要；空白（default temp）取占位名。
@@ -95,6 +199,43 @@ impl TempPrompt {
             self.summary()
         }
     }
+
+    /// 当前页索引；失效 id 回退第一页。
+    pub fn active_index(&self) -> usize {
+        self.pages
+            .iter()
+            .position(|page| page.id == self.active_page)
+            .unwrap_or(0)
+    }
+
+    /// 当前页。
+    pub fn active_page(&self) -> Option<&PromptPage> {
+        self.pages.get(self.active_index())
+    }
+
+    /// 当前页（可变）。
+    pub fn active_page_mut(&mut self) -> Option<&mut PromptPage> {
+        let index = self.active_index();
+        self.pages.get_mut(index)
+    }
+
+    /// 按 id 取页（可变）。
+    pub fn page_mut(&mut self, id: PromptPageId) -> Option<&mut PromptPage> {
+        self.pages.iter_mut().find(|page| page.id == id)
+    }
+
+    /// 全部页的模板块状态合计。
+    pub fn template_counts(&self) -> TemplateCounts {
+        pages_template_counts(&self.pages)
+    }
+}
+
+/// 页集合的模板块状态合计。
+pub fn pages_template_counts(pages: &[PromptPage]) -> TemplateCounts {
+    pages
+        .iter()
+        .map(|page| crate::app::markdown::template_counts(&page.content))
+        .fold(TemplateCounts::default(), TemplateCounts::merge)
 }
 
 /// 分区标签种类：临时区与已入库区。
@@ -328,13 +469,37 @@ impl From<FolderRecord> for PromptFolder {
 
 impl From<PromptRecord> for PromptItem {
     fn from(record: PromptRecord) -> Self {
+        let mut pages: Vec<PromptPage> = record
+            .pages
+            .into_iter()
+            .map(|page| PromptPage::saved(page.id, page.name, page.content))
+            .collect();
+        // 迁移后恒有页；直插旧数据兜底为第一页镜像（id 0 不会命中保存）。
+        if pages.is_empty() {
+            pages.push(PromptPage::saved(
+                0,
+                text::default_page_name(1),
+                record.content,
+            ));
+        }
+        let active_page = record
+            .active_page_id
+            .map(PromptPageId::Saved)
+            .filter(|id| pages.iter().any(|page| page.id == *id))
+            .unwrap_or(pages[0].id);
         Self {
             id: record.id,
             folder_id: record.folder_id,
             name: record.name,
-            content: record.content,
-            status: PromptItemStatus::parse(&record.status),
+            pages,
+            active_page,
         }
+    }
+}
+
+impl From<PromptPageRecord> for PromptPage {
+    fn from(record: PromptPageRecord) -> Self {
+        Self::saved(record.id, record.name, record.content)
     }
 }
 
@@ -353,6 +518,13 @@ pub enum PromptEditing {
     Item(i64),
     /// 临时提示词：内容只存内存（`PromptPanel::temps`），不入库。
     Temp(u64),
+}
+
+/// 页重命名输入现场：目标页与单行输入（名称预填，Esc 保留旧名）。
+#[derive(Debug)]
+pub struct PageRename {
+    pub page: PromptPageId,
+    pub input: TextInput,
 }
 
 /// 工作区提示词面板状态：树、视图模式、选中行、编辑目标、临时提示词与滚动偏移。
@@ -376,14 +548,18 @@ pub struct PromptPanel {
     temps: Vec<TempPrompt>,
     /// 下一个临时提示词 id（单调递增，不复用）。
     next_temp_id: u64,
+    /// 下一个临时页 id（单调递增，不复用）。
+    next_temp_page_id: u64,
     /// 进入树视图时暂存的编辑绑定；返回编辑且用户未改过选中时恢复。
     tree_return: Option<PromptEditing>,
     /// 本次树视图中用户是否显式改过选中（点击行 / 方向键）。
     tree_selection_touched: bool,
     /// 树视图搜索过滤词（单行输入语义：光标可移动编辑）；空串为不过滤。
     pub search: TextInput,
-    /// 已更新内存但数据库尚未确认的条目 ID（自动保存重试判定）。
-    pending_saves: Vec<i64>,
+    /// 页标题行的重命名输入现场；None 表示未在重命名。
+    page_rename: Option<PageRename>,
+    /// 已更新内存但数据库尚未确认的页（条目 id、页 id）。
+    pending_saves: Vec<(i64, i64)>,
 }
 
 impl PromptPanel {
@@ -397,38 +573,81 @@ impl PromptPanel {
             selected: 0,
             editing: Some(PromptEditing::Temp(0)),
             scroll: 0,
-            temps: vec![TempPrompt {
-                id: 0,
-                content: String::new(),
-            }],
+            temps: vec![TempPrompt::single(
+                0,
+                0,
+                text::default_page_name(1),
+                String::new(),
+            )],
             next_temp_id: 1,
+            next_temp_page_id: 1,
             tree_return: None,
             tree_selection_touched: false,
             search: TextInput::new(""),
+            page_rename: None,
             pending_saves: Vec::new(),
         }
     }
 
-    /// 标记条目已写入内存、等待数据库确认。
-    pub fn mark_item_pending(&mut self, id: i64) {
-        if !self.pending_saves.contains(&id) {
-            self.pending_saves.push(id);
+    /// 标记条目页已写入内存、等待数据库确认。
+    pub fn mark_page_pending(&mut self, item: i64, page: i64) {
+        if !self.pending_saves.contains(&(item, page)) {
+            self.pending_saves.push((item, page));
         }
     }
 
-    /// 清除条目的待确认标记（保存成功或树从数据库重载后）。
-    pub fn clear_item_pending(&mut self, id: i64) {
-        self.pending_saves.retain(|pending| *pending != id);
+    /// 清除条目页的待确认标记（保存成功或页已被删除）。
+    pub fn clear_page_pending(&mut self, item: i64, page: i64) {
+        self.pending_saves
+            .retain(|pending| *pending != (item, page));
     }
 
-    /// 条目是否有未确认的保存。
-    pub fn item_pending(&self, id: i64) -> bool {
-        self.pending_saves.contains(&id)
+    /// 条目页是否有未确认的保存。
+    pub fn page_pending(&self, item: i64, page: i64) -> bool {
+        self.pending_saves.contains(&(item, page))
     }
 
-    /// 清除全部待确认标记（树重载：条目内容即数据库状态）。
+    /// 待确认条目页列表（重载合并与清理用）。
+    pub fn pending_saves(&self) -> &[(i64, i64)] {
+        &self.pending_saves
+    }
+
+    /// 仅保留仍有效的待确认标记（取消失效条目/页的重试）。
+    pub fn retain_pending(&mut self, keep: &[(i64, i64)]) {
+        self.pending_saves.retain(|pair| keep.contains(pair));
+    }
+
+    /// 清除全部待确认标记（树重载：无有效页时）。
     pub fn clear_pending_saves(&mut self) {
         self.pending_saves.clear();
+    }
+
+    /// 页重命名现场（只读）。
+    pub fn page_rename(&self) -> Option<&PageRename> {
+        self.page_rename.as_ref()
+    }
+
+    /// 页重命名现场（可变，供输入编辑）。
+    pub fn page_rename_mut(&mut self) -> Option<&mut PageRename> {
+        self.page_rename.as_mut()
+    }
+
+    /// 进入页重命名输入态（预填页名）。
+    pub fn start_page_rename(&mut self, page: PromptPageId, name: &str) {
+        self.page_rename = Some(PageRename {
+            page,
+            input: TextInput::new(name),
+        });
+    }
+
+    /// 结束页重命名输入态，返回现场。
+    pub fn take_page_rename(&mut self) -> Option<PageRename> {
+        self.page_rename.take()
+    }
+
+    /// 丢弃页重命名输入态（保留旧名）。
+    pub fn cancel_page_rename(&mut self) {
+        self.page_rename = None;
     }
 
     /// 进入树视图：暂存当前编辑绑定并复位"用户改过选中"标记（须在空白绑定清除之后调用）。
@@ -464,10 +683,20 @@ impl PromptPanel {
     pub fn new_temp(&mut self) -> u64 {
         let id = self.next_temp_id;
         self.next_temp_id = self.next_temp_id.saturating_add(1);
-        self.temps.push(TempPrompt {
+        let page_id = self.alloc_temp_page_id();
+        self.temps.push(TempPrompt::single(
             id,
-            content: String::new(),
-        });
+            page_id,
+            text::default_page_name(1),
+            String::new(),
+        ));
+        id
+    }
+
+    /// 分配临时页 id（单调递增、不复用）。
+    pub fn alloc_temp_page_id(&mut self) -> u64 {
+        let id = self.next_temp_page_id;
+        self.next_temp_page_id = self.next_temp_page_id.saturating_add(1);
         id
     }
 

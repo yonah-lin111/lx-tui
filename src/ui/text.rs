@@ -2,8 +2,7 @@
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::markdown::{BlockCommandId, TemplateStatus};
-use crate::app::prompt::PromptItemStatus;
+use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};
 use crate::app::state::{AppState, PaneView};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
@@ -16,7 +15,7 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 
 /// Agents 分区空状态。
 pub const AGENTS_EMPTY: &str = "no agents running";
-/// Agents 条目当前选中标记（跟随行内正文样式，不独立着色）。
+/// 列表当前项标记：Agents 条目、工作区列表、提示词列表与页码菜单共用（不独立着色）。
 pub const AGENT_SELECTED_MARKER: &str = "❯";
 /// Agent 状态圆点：运行/阻塞实心、空闲空心。
 pub const AGENT_STATUS_DOT: &str = "●";
@@ -84,8 +83,6 @@ pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
 /// 提示词树分区标签：临时区与已入库区（仅两侧都有内容时成对出现）。
 pub const PROMPT_SECTION_TMP: &str = "tmp:";
 pub const PROMPT_SECTION_SAVED: &str = "saved:";
-/// 临时提示词行的右对齐标注（替代条目状态词位置）。
-pub const PROMPT_TEMP_BADGE: &str = "[tmp]";
 /// 空白 default temp 在列表中的占位展示名（每个工作区恒保留一条）。
 pub const PROMPT_TEMP_DEFAULT_NAME: &str = "default";
 /// 临时提示词在编辑视图分割线行的标题。
@@ -193,27 +190,53 @@ pub const MENU_PROMPT_EDIT: &str = "Edit";
 pub const MENU_PROMPT_RENAME: &str = "Rename";
 pub const MENU_PROMPT_COPY: &str = "Copy content";
 pub const MENU_PROMPT_DELETE: &str = "Delete";
-pub const MENU_PROMPT_MARK_TODO: &str = "Mark todo";
-pub const MENU_PROMPT_MARK_RUN: &str = "Mark run";
-pub const MENU_PROMPT_MARK_DONE: &str = "Mark done";
-
-/// 状态切换菜单项：按目标状态取标签。
-pub fn prompt_status_menu_label(status: PromptItemStatus) -> &'static str {
-    match status {
-        PromptItemStatus::Todo => MENU_PROMPT_MARK_TODO,
-        PromptItemStatus::InProgress => MENU_PROMPT_MARK_RUN,
-        PromptItemStatus::Completed => MENU_PROMPT_MARK_DONE,
-    }
+/// 标题行的页切换箭头（区别于折叠 `◀`/`▶` 与撤销/重做 `←`/`→`）。
+pub const PROMPT_PAGE_PREV: &str = "‹";
+pub const PROMPT_PAGE_NEXT: &str = "›";
+/// 页码文本 `2/4`（当前页 / 总页数）。
+pub fn page_counter(current: usize, total: usize) -> String {
+    format!("{current}/{total}")
+}
+/// 默认页名 `Page N`；`index` 从 1 起。
+pub fn default_page_name(index: usize) -> String {
+    format!("Page {index}")
 }
 
-/// 提示词条目状态标签（与模板块状态按钮同文案）。
-pub fn prompt_status_label(status: PromptItemStatus) -> &'static str {
-    match status {
-        PromptItemStatus::Todo => TEMPLATE_BUTTON_TODO,
-        PromptItemStatus::InProgress => TEMPLATE_BUTTON_RUN,
-        PromptItemStatus::Completed => TEMPLATE_BUTTON_DONE,
+/// 页菜单动作项与标题。
+pub const MENU_PAGE_NEW: &str = "[add]";
+pub const MENU_PAGE_DELETE: &str = "[del]";
+pub const MENU_TITLE_PAGES: &str = "pages";
+
+/// 模板块状态计数分隔符：`n|m|x`。
+const TEMPLATE_COUNT_SEPARATOR: &str = "|";
+
+/// 模板块状态计数段：`n|m|x`（todo / run / done 顺序，仅统计闭合顶层 `&&&`）。
+///
+/// 数字段带对应状态（用于分色），分隔符段为 None（用于弱化）；
+/// 三态合计为 0 时返回空，调用方据此整组省略。页码菜单与提示词列表共用。
+pub fn template_count_segments(counts: &TemplateCounts) -> Vec<(String, Option<TemplateStatus>)> {
+    if counts.todo + counts.in_progress + counts.done == 0 {
+        return Vec::new();
     }
+    let mut segments = Vec::with_capacity(5);
+    for (index, (count, status)) in [
+        (counts.todo, TemplateStatus::Todo),
+        (counts.in_progress, TemplateStatus::InProgress),
+        (counts.done, TemplateStatus::Done),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if index > 0 {
+            segments.push((TEMPLATE_COUNT_SEPARATOR.to_string(), None));
+        }
+        segments.push((count.to_string(), Some(status)));
+    }
+    segments
 }
+
+/// 删除非空页的二次确认标题。
+pub const CONFIRM_DELETE_PAGE_TITLE: &str = "delete page";
 
 /// 重命名与关闭确认浮层标题。
 pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
@@ -293,6 +316,11 @@ pub fn confirm_delete_question(name: &str) -> String {
 /// 删除文件夹确认问题文案：提示级联影响范围。
 pub fn confirm_delete_folder_question(name: &str) -> String {
     format!("delete folder \"{name}\" and its contents?")
+}
+
+/// 删除提示词页确认问题文案。
+pub fn confirm_delete_page_question(name: &str) -> String {
+    format!("delete page \"{name}\"?")
 }
 
 /// 切换工作区路径确认问题文案。
@@ -444,7 +472,10 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             TemplateButtonKind::Clean => "clean block",
             TemplateButtonKind::Delete => "delete block",
         },
+        TooltipTarget::PageMenuAdd => "add page",
+        TooltipTarget::PageMenuDelete => "delete page",
         TooltipTarget::BlockButton { button, .. } => match button {
+            BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
         },
