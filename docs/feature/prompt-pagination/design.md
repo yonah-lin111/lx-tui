@@ -1,6 +1,6 @@
 # Prompt 分页与底部空占位设计
 
-- 状态：需求边界已逐项确认；设计待用户审核，审核前不改生产代码。
+- 状态：**已实施并合并至 `dev`**（分页主功能 `c04c37c`，后续需求批次 `40982d6`、`9ebddd5`、`61c0862`、`a5ce735`、`3b67253`、`370ab0b`，合并提交 `0c6b22e`）；与本文设计的差异见第 9 节。
 - 参考实现：`/Users/yonah/projects/agent/lx-agent/src/renderer/src/features/markdown/` 下的 `hooks/useMarkdownPages.ts`、`components/MarkdownEditorToolbar.tsx` 和 `extensions/editorTheme.ts`。
 - 适用范围：Prompt 编辑视图、Prompt 列表、正式提示词持久化、临时提示词内存状态。保持 ratatui + crossterm、`app/` 纯状态、`ui/` 纯渲染与 `db/` 独占 SQLite 的现有边界。
 
@@ -8,11 +8,13 @@
 
 一个提示词可以拥有多页，每页有独立名称和 Markdown 正文。编辑视图能用左右箭头或页码菜单切页，列表能看到全部页的模板块状态汇总。文末额外留出约半个视口的可滚动空白，但不向正文插入字符。
 
-当前 `Prompt` 是单正文编辑器，承担光标、选区、滚动和撤销；`PromptItem`、`TempPrompt` 与 `PromptRecord` 都只有单个 `content`。`commit_prompt_buffer` 把编辑器文本写回条目或临时提示词，正式条目的 `SavePromptContent` 效应只以条目 id 标识保存目标。`SCHEMA_VERSION` 为 3，现有 `workspace_prompt.content` 保存整份正文。分页实施必须给保存目标增加页身份，防止快速切页后旧页保存回调误确认新页。
+当前 `Prompt` 是单正文编辑器，承担光标、选区、滚动和撤销；`PromptItem`、`TempPrompt` 与 `PromptRecord` 都只有单个 `content`。`commit_prompt_buffer` 把编辑器文本写回条目或临时提示词，正式条目的 `SavePromptContent` 效应只以条目 id 标识保存目标。事件循环的 `Persistence::execute` 按顺序执行数据库效应，再向 app 层回报修订；它不是独立的异步写入线程，但切页与保存回执仍须按页隔离。`SCHEMA_VERSION` 为 3，现有 `workspace_prompt.content` 保存整份正文。
 
-工作区的提示词树按 `Workspace::prompt_key()` 归属：同一 Git 仓库的主 checkout 与 linked worktree 共用一棵树。页和“上次打开的页”跟随提示词记录，而非跟随 TUI 窗格或 checkout 标签。临时提示词随工作区面板保存在内存中，不写数据库。
+工作区的提示词树按 `Workspace::prompt_key()` 归属：同一 Git 仓库的主 checkout 与 linked worktree 共用一棵树。每个面板还有 `loaded_key`，`ensure_tree_loaded` 在归属键变化时重新加载；`reload_tree` 一次更新所有共享该键的面板。页和“上次打开的页”跟随提示词记录，而非跟随 TUI 窗格或 checkout 标签。临时提示词随工作区面板保存在内存中，不写数据库。
 
 lx-agent 的页模型为独立 `id/name/content`；其切页隔离撤销历史，页列表逐页计算模板块状态；编辑器底部留白通过约半个容器高度的 padding 实现。TUI 只借用这些行为，不复制浏览器组件或拖拽排序。
+
+新分支已合入 `+++` 补充子块和统一的 `app/markdown/blocks.rs::block_scan`。合法补充块只在 `&&&` 模板块内，拥有独立样式，但没有模板任务状态；原先计划中的 `$$$` 变量块已移除。分页统计必须以顶层 `&&&` 模板块为计数单位。
 
 ## 2. 已确认的产品决定
 
@@ -51,7 +53,7 @@ lx-agent 的页模型为独立 `id/name/content`；其切页隔离撤销历史�
 
 正式条目自身状态和模板块统计是不同维度：例如 `[run] [todo 2]` 表示条目状态为运行中，而全部页合计有两个待办模板块。正式条目始终保留原状态标记；临时条目保留 `[tmp]`，但该标记改用默认文字色，不再用主题蓝色 accent。被选中时遵循列表整行选中样式，保证可读。
 
-每个页的统计从其 Markdown 正文解析模板块，`todo`、`in_progress`、`done` 分别显示为 `todo`、`run`、`done`。一块只计一次；普通文字中的状态词不计入，未闭合或不能明确解析状态的块不得被错误计入完成数。优先复用 `app/markdown/template.rs` 的模板起止标记解析，提供纯函数返回三个计数，不在 `ui/` 重新写一份正则解析。列表将一条提示词的各页计数求和，菜单取单页计数；当前页编辑尚未写库时也必须使用内存最新正文即时更新。
+每个页的统计从其 Markdown 正文解析模板块，`todo`、`in_progress`、`done` 分别显示为 `todo`、`run`、`done`。复用 `app/markdown/blocks.rs::block_spans` / `block_scan`：只统计 `kind == BlockKind::Template && closed` 的顶层 `&&&`，每个 span 计一次；内嵌的 `BlockKind::Supple` / `+++` 不另计，代码围栏、块外 `+++`、旧记录块和已移除的 `$$$` 语法也不能产生模板计数。未闭合模板块不纳入完成情况，不能借其默认 `Todo` 状态误计为一个 todo。提供 app 层纯函数聚合三个状态，不在 `ui/` 重新写正则。列表将一条提示词各页的计数求和，菜单取单页计数；当前页编辑尚未写库时也必须使用内存最新正文即时更新。
 
 零数量标签省略。窄列表先为右侧既有条目状态或 `[tmp]` 保留空间，再保留能完整放下的模板计数，最后截断名称；需要明确测试极窄宽度，不让名称与计数重叠。若全部计数放不下，可省略后续完整标签；不能伪造合计数。列表搜索仍按既有提示词标题/临时摘要工作，分页名称不改变树节点身份。
 
@@ -59,7 +61,7 @@ Prompt 列表的 `Copy content`、临时条目的同类复制命令取各自记�
 
 ## 5. 底部虚拟空占位
 
-`Prompt::visual_rows()` 继续只表示实际文本的视觉行；空占位不能混入 `VisualRow`，否则光标、点击、模板块和选区可能把空行当正文。将可额外滚动的行数设为当前编辑视口高度除以 2（向下取整），只用于最大滚动值和滚动条几何。例：编辑视口 20 行可留约 10 行，10 行可留约 5 行；高度变化时重算并钳制滚动偏移。
+`Prompt::visual_rows()` 继续只表示实际文本的视觉行；空占位不能混入 `VisualRow`，否则光标、点击、模板块和选区可能把空行当正文。合并后的视觉行计算已经通过 `block_line_infos()` 同时考虑 `&&&` 与 `+++` 的块边距，分页留白不得退回旧的仅模板行计算。将可额外滚动的行数设为当前编辑视口高度除以 2（向下取整），只用于最大滚动值和滚动条几何。例：编辑视口 20 行可留约 10 行，10 行可留约 5 行；高度变化时重算并钳制滚动偏移。
 
 短正文初次打开时仍从顶部显示，不自动滚到占位。滚轮与滚动条可以进入文末留白；点击留白只聚焦编辑器，不移动光标到不存在的文本行。方向键和编辑命令始终限于真实正文。执行编辑并让光标重新进入视口时，可按现有光标跟随规则收回手动滚出的留白。占位不参与保存、撤销、复制、Markdown 解析、状态计数或空文档判断。
 
@@ -69,7 +71,9 @@ Prompt 列表的 `Copy content`、临时条目的同类复制命令取各自记�
 
 建议引入稳定的 `PromptPage { id, name, content, position }`。正式页 id 来自数据库，临时页 id 在所属内存提示词中生成；如用同一类型表示，应显式区分 id 来源。正式/临时提示词各持非空页集合与当前页 id。`Prompt` 仍是当前页的编辑缓冲，`PromptPanel` 负责把页集合与编辑目标绑定，避免再造第二套可编辑正文状态。
 
-所有会离开当前正文的路径都先调用同一结算逻辑：切页、进入树视图、切提示词、切工作区、钉住目标变化、关闭应用和保存临时提示词。当前 `commit_prompt_buffer` 只针对条目 id 的待保存标记须变成“条目 id + 页 id + 修订”粒度。保存效应至少携带 workspace/prompt/page 身份与正文快照。数据库成功回调仅确认仍匹配该页和修订的编辑器状态；旧页保存完成不得将新页的保存点误标为已保存。数据库失败保留待保存标记并允许现有重试路径继续工作。共享同一仓库提示词树的工作区需要同步同一页更新，不能用 checkout 路径分叉数据。
+所有会离开当前正文的路径都先调用同一结算逻辑：切页、进入树视图、切提示词、切工作区、钉住目标变化、归属键变化、关闭应用和保存临时提示词。当前 `commit_prompt_buffer` 只针对条目 id 的待保存标记须变成“条目 id + 页 id + 修订”粒度；`Effect::SaveDraft` 当前只携带一份 `content`，须改为携带完整页集合与当前页身份。`SavePromptContent` 至少携带提示词归属键、条目 id、页 id、正文快照和修订。数据库成功回报仅确认仍匹配该页和修订的编辑器状态；旧页保存完成不得将新页的保存点误标为已保存。数据库失败保留待保存标记并允许现有重试路径继续工作。
+
+`loaded_key` 变化与同键面板刷新都要保护尚未落库的页：先结算显示中的编辑缓冲，再按归属键装载或重载；重载后的正式页集合、当前页 id 和各页内容必须同步到所有共享该键的面板。现有 `apply_prompt_tree` 会替换树并清空条目级 pending 标记，实施时必须重新审视这一顺序，不能让某面板的旧快照覆盖新页或让重载误清掉未确认页保存。条目被共享面板删除时，失效编辑绑定和当前页菜单必须一同关闭。临时页仍属于各工作区面板，不随共享树重载被删除。
 
 ### 6.2 SQLite 迁移
 
@@ -81,9 +85,9 @@ Prompt 列表的 `Copy content`、临时条目的同类复制命令取各自记�
 
 ## 7. 模块边界和实施顺序
 
-`input/` 与 `event/` 把键鼠命中变成 `app::Action`；`app/` 保存页集合、菜单/重命名状态并执行纯状态更新；`db/service.rs` 执行持久化效应；`ui/prompt.rs` 绘制标题与页控件；`ui/overlay.rs` 复用菜单与确认外观；`ui/prompt/tree.rs` 绘制列表统计。用户可见文案放 `ui/text.rs`，颜色走 `ui/style.rs`。渲染只读状态，不执行 IO，也不通过渲染回填计数。
+`input/` 与 `event/` 把键鼠命中变成 `app::Action`；`app/` 保存页集合、菜单/重命名状态并执行纯状态更新；`db/service.rs` 执行持久化效应并按归属键刷新共享面板；`app/markdown/blocks.rs` 作为模板与补充块的解析入口；`ui/prompt.rs` 绘制标题与页控件；`ui/overlay.rs` 复用菜单与确认外观；`ui/prompt/tree.rs` 绘制列表统计。用户可见文案放 `ui/text.rs`，颜色走 `ui/style.rs`。渲染只读状态，不执行 IO，也不通过渲染回填计数。
 
-预计触及 `src/app/prompt/tree.rs`、`src/app/prompt/viewport.rs`、`src/app/actions.rs`、`src/app/update/prompt.rs`、`src/app/overlay.rs`、`src/db/mod.rs`、`src/db/service.rs`、`src/input/`、`src/event/`、`src/ui/prompt.rs`、`src/ui/prompt/tree.rs`、`src/ui/overlay.rs`、`src/ui/style.rs`、`src/ui/text.rs`。这只是影响面，具体文件以实施前检索为准；当前 `src/app/update/prompt.rs` 已较长，新职责要按现有模块归属拆分，遵守生产文件 1000 行上限。
+预计触及 `src/app/prompt/tree.rs`、`src/app/prompt/viewport.rs`、`src/app/actions.rs`、`src/app/effects.rs`、`src/app/update/prompt.rs`、`src/app/overlay.rs`、`src/app/markdown/blocks.rs`（仅在需要计数 helper 时）、`src/db/mod.rs`、`src/db/service.rs`、`src/input/`、`src/event/`、`src/ui/prompt.rs`、`src/ui/prompt/tree.rs`、`src/ui/overlay.rs`、`src/ui/style.rs`、`src/ui/text.rs`。这只是影响面，具体文件以实施前检索为准；当前 `src/app/update/prompt.rs` 约 1397 行，已超过规范上限，新增分页职责时应按现有 app 边界拆分，避免继续膨胀。`src/ui/prompt.rs` 约 776 行，同样要控制新增代码量。
 
 建议顺序：先建立可迁移且非空的页模型和 DB 读写；再使切页与现有保存、临时转正式、共享工作区流程闭合；然后接输入与菜单、列表统计；最后接滚动占位和渲染边界。每阶段只验证受影响模块，末阶段按项目规范执行 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。TUI 实际外观和鼠标操作由用户运行 `cargo run` 验收。
 
@@ -94,11 +98,28 @@ Prompt 列表的 `Copy content`、临时条目的同类复制命令取各自记�
 | 旧库升级 | 原提示词变为 `1/1` 的 `Page 1`，正文逐字不变；重复启动页数不增加。 |
 | 分页编辑 | 新页追加末尾并进入命名；左右箭头只切相邻页；切回旧页可见刚才内容，撤销不跨页。 |
 | 删除与恢复 | 非空页先确认；空页直接删；最后一页不可删；重启恢复上次页，失效时回第一页。 |
-| 保存竞态 | 快速编辑、切页、切工作区时没有串页；旧页保存回调不改变新页保存状态；失败后仍能重试。 |
-| 统计 | 菜单逐页显示彩色 `[todo n] [run m] [done x]`；列表保留原状态并汇总全部页。 |
+| 保存与共享刷新 | 快速编辑、切页、切工作区及 repo-root 归属变化时没有串页；旧页保存回报不改变新页保存状态；失败后仍能重试；共享面板重载不清除未确认页。 |
+| 统计 | 菜单逐页显示彩色 `[todo n] [run m] [done x]`；列表保留原状态并汇总全部页；嵌套 `+++` 与未闭合 `&&&` 不误计。 |
 | 临时提示词 | 可多页编辑；保存后名称、顺序、正文和当前页一同进入正式条目；失败不丢临时内容。 |
 | 复制 | 列表只复制上次打开页；编辑器全选只选当前页。 |
 | 底部空位 | 长正文文末可多滚约半屏，空位不改变文本长度、保存、复制、光标或模板计数。 |
 | 窄终端 | 页控件、标题、计数、原状态不重叠，不绘制半个宽字符；菜单可关闭并可访问全部页。 |
 
-主要风险是既有单正文读写路径、共享提示词树与异步保存确认。验证应围绕这些真实路径，不能只测试新建页的纯数据方法。此设计仍待用户审核；审核通过后才进入实施。
+主要风险是既有单正文读写路径、`loaded_key` 变化、共享提示词树刷新和逐页保存回报。验证应围绕这些真实路径，不能只测试新建页的纯数据方法。
+
+## 9. 实施记录（与设计的差异）
+
+实施分支 `feat/prompt-pagination`（工作区 `.worktrees/prompt-pagination`）；合并前 `dev` 已含 `3b671f6`（模板块正文与结束行之间的底部结构空行），自动合并无冲突，合并后 `cargo fmt`、`cargo clippy --all-targets -- -D warnings` 与全量 `cargo test`（1245 项 lib 测试 + 全部集成套件）通过。
+
+与设计初稿的差异（按用户后续需求确认）：
+
+1. **schema 版本为 5 而非 4**：v4 完成分页迁移（新增 `active_page_id`、旧正文进 `Page 1`）；随后按用户要求移除“条目状态（todo/run/done）”功能，v5 通过重建 `workspace_prompt` 表删除 `status` 列（重建须在事务外用 `PRAGMA foreign_keys = OFF` 执行并做 `foreign_key_check`，否则删表会级联删除页）。
+2. **列表与菜单的计数格式**：不再显示 `[todo n] [run m] [done x]`，统一改为 `n|m|x`（数字按 todo/run/done 状态分色、分隔符弱化，三态全零整组省略），由 `ui/text.rs::template_count_segments` 提供，页码菜单与提示词列表共用；列表侧为整组右对齐、放不下整组时整体省略（替代初稿的“逐个省略完整标签”）。计数复用 `app/markdown/blocks.rs::block_spans`，只统计闭合顶层 `&&&`。
+3. **页菜单形态**：`[add]` / `[del]` 不再占内容行，而是内嵌在菜单顶部边框右端（带 tooltip，悬停不铺高亮底色，删除不可用时置灰）；每页由两行改为一行（`❯` 标记 + 页名 + 右对齐计数），可视页数由 `(h-2)/2` 改为 `h-2`。
+4. **选中与悬停反馈**：工作区列表、提示词列表与页菜单当前页的选中标记统一为 `❯`，取消整行颜色填充选中；鼠标悬停整行铺 `selection` 底色（侧栏工作区列表新增悬停、提示词列表新增悬停、右键菜单与页菜单在指针离开容器时移除高亮）；行内特殊文字（分组箭头、agents 状态圆点、`*` 与去重序号、折叠三角、状态计数）保留自身前景，悬停只叠加底色。
+5. **`*` 与去重序号改为 accent 标识**（原“随行内正文样式、不做独立着色”作废）；提示词编辑 title 去掉内联 `[tmp]` 并改为未聚焦灰（显式默认前景 + dim，避免被聚焦分割线的青色继承）。
+6. **右键不改动列表选中行**：条目/临时提示词/文件夹右键菜单只挂菜单与 target，不再迁移 `prompt_panel.selected`（对齐工作区列表语义）。
+7. **底部虚拟空位修正**：`scroll_cursor_into_view` 钳制到含留白的 `max_scroll`（编辑时不再把留白立即收回）。
+8. **`+++` 补充子块副本**：补充块起始行新增复制按钮 `[❐]`（tooltip `copy block`）；`Ctrl/Cmd+Shift+C` 由只支持 `&&&` 扩展为光标在 `+++` 子块内时优先复制该子块、否则回退模板块（`copy_text_at_cursor` 先取补充子块）。
+9. **文件拆分**：`app/update/prompt/{draft,pages,tree_view}.rs`、`ui/prompt/header.rs`、`ui/overlay/{page_menu,worktree}.rs` 从原大文件拆出，生产文件均 ≤1000 行。
+10. **测试基础设施**：`tests/prompt_panel_interaction.rs` 改为每 App 独立 DB 路径，替代全局 `DB_PATH: OnceLock`。
