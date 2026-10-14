@@ -32,6 +32,8 @@ pub struct Lx {
     height: usize,
     /// 视口首视觉行索引；滚轮与光标跟随共同维护。
     scroll: usize,
+    /// 输入框文本选择锚点（字节偏移）；拖拽选择期间为 Some。
+    text_anchor: Option<usize>,
     /// markdown 块命令面板；光标处触发时打开。
     pub panel: Option<BlockPanel>,
     /// 路径粘贴参照面板；与 `panel` 互斥，同一时刻至多一个打开。
@@ -82,6 +84,7 @@ impl Lx {
             width: u16::MAX,
             height: usize::MAX,
             scroll: 0,
+            text_anchor: None,
             panel: None,
             paste: None,
             undo: Vec::new(),
@@ -127,6 +130,72 @@ impl Lx {
             self.scroll = row + 1 - height;
         }
         self.scroll = self.scroll.min(self.max_scroll());
+    }
+
+    /// 直接设置视口滚动偏移（滚动条点击/拖拽）；越界钳到可滚动范围。
+    pub fn scroll_to(&mut self, offset: usize) {
+        self.scroll = offset.min(self.max_scroll());
+    }
+
+    /// 在指定视觉行/内容列开始输入框文本选择：光标落到该单元格并登记锚点。
+    pub fn begin_text_selection(&mut self, row: usize, col: u16) {
+        let offset = self.offset_at_cell(row, col);
+        self.cursor = offset;
+        self.text_anchor = Some(offset);
+        self.panel = None;
+        self.scroll_cursor_into_view();
+    }
+
+    /// 拖拽扩展输入框选区：光标跟到单元格、锚点不动。
+    pub fn drag_text_selection(&mut self, row: usize, col: u16) {
+        if self.text_anchor.is_none() {
+            return;
+        }
+        self.cursor = self.offset_at_cell(row, col);
+        self.scroll_cursor_into_view();
+    }
+
+    /// 清除输入框文本选区。
+    pub fn clear_text_selection(&mut self) {
+        self.text_anchor = None;
+    }
+
+    /// 是否存在输入框文本选区锚点。
+    pub fn has_text_selection(&self) -> bool {
+        self.text_anchor.is_some()
+    }
+
+    /// 输入框选区字节范围 `[start, end)`；空选区返回 None。
+    pub fn text_selection_range(&self) -> Option<(usize, usize)> {
+        let anchor = self.text_anchor?;
+        let (start, end) = if anchor <= self.cursor {
+            (anchor, self.cursor)
+        } else {
+            (self.cursor, anchor)
+        };
+        (start < end).then_some((start, end))
+    }
+
+    /// 取输入框选中文本；空选区返回 None。
+    pub fn selected_text(&self) -> Option<String> {
+        self.text_selection_range()
+            .map(|(start, end)| self.input[start..end].to_string())
+    }
+
+    /// 视口单元格（视觉行、内容列）→ 输入缓冲字节偏移；越界钳到最近位置。
+    pub fn offset_at_cell(&self, row: usize, col: u16) -> usize {
+        let rows = self.visual_rows();
+        let index = row.min(rows.len().saturating_sub(1));
+        let visual = rows[index];
+        let mut cell = 0;
+        for (offset, ch) in self.input[visual.start..visual.end].char_indices() {
+            let width = text::char_width(ch);
+            if usize::from(col) < cell + width {
+                return visual.start + offset;
+            }
+            cell += width;
+        }
+        visual.end
     }
 
     /// 按内容宽度软换行得到的视觉行。
@@ -190,6 +259,7 @@ impl Lx {
 
     /// 记录一次编辑前的快照，并清空重做栈。
     fn snapshot(&mut self) {
+        self.text_anchor = None;
         if self.undo.len() == LX_HISTORY_LIMIT {
             self.undo.remove(0);
         }

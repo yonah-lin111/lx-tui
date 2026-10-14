@@ -3888,6 +3888,42 @@ fn lx_wheel_scrolls_input_viewport() {
 }
 
 #[test]
+fn lx_input_selection_roundtrip() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        lx.resize(10, 5);
+        for ch in "hello".chars() {
+            lx.insert_char(ch);
+        }
+    }
+    begin_lx_input_selection(&mut state, pane, 0, 1);
+    drag_lx_input_selection(&mut state, pane, 0, 4);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .selected_text()
+            .as_deref(),
+        Some("ell")
+    );
+    assert_eq!(
+        take_lx_input_selection(&mut state).map(|(_, text)| text),
+        Some("ell".to_string())
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .has_text_selection()
+    );
+    assert!(state.lx_input_drag.is_none());
+}
+
+#[test]
 fn lx_markdown_panel_navigates_and_accepts() {
     let mut state = AppState::demo();
     apply_lx_input(&mut state, LxInput::Char('#'));

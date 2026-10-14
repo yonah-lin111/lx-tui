@@ -181,6 +181,22 @@ fn cursor_visual_keeps_display_column_across_wrap() {
 }
 
 #[test]
+fn text_selection_range_and_offset_mapping() {
+    let mut lx = Lx::new();
+    lx.resize(10, 5);
+    lx.insert_str("hello");
+    assert_eq!(lx.offset_at_cell(0, 2), 2);
+    lx.begin_text_selection(0, 1);
+    assert_eq!(lx.cursor, 1);
+    lx.drag_text_selection(0, 4);
+    assert_eq!(lx.text_selection_range(), Some((1, 4)));
+    assert_eq!(lx.selected_text().as_deref(), Some("ell"));
+    assert!(lx.has_text_selection());
+    lx.clear_text_selection();
+    assert!(!lx.has_text_selection());
+}
+
+#[test]
 fn scroll_by_clamps_to_content() {
     let mut lx = Lx::new();
     lx.resize(2, 2);

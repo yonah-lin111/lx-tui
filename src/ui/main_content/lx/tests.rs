@@ -425,6 +425,21 @@ fn path_paste_panel_renders_above_input() {
 }
 
 #[test]
+fn input_geom_hit_and_scrollbar() {
+    let area = Rect::new(0, 0, 40, 20);
+    let mut lx = Lx::new();
+    let width = area.width - 2 * MARGIN - INPUT_PREFIX - INPUT_SCROLLBAR;
+    lx.resize(width, 6);
+    lx.insert_str(&"x".repeat(usize::from(width) * 7));
+    let geom = input_geom(area, &lx).expect("input geom");
+    let (x, y) = geom.text_origin();
+    assert!(geom.contains(x, y), "文本区左上角在内");
+    assert!(!geom.contains(x.saturating_sub(1), y), "前缀列不在文本区");
+    assert!(!geom.contains(x, y.saturating_sub(1)), "上分割线不在文本区");
+    assert_eq!(geom.cell(x + 2, y).1, 2, "列映射");
+    assert!(input_scrollbar(area, &lx).is_some(), "溢出时有滚动条几何");
+}
+#[test]
 fn long_line_wraps_into_visible_rows() {
     let area = Rect::new(0, 0, 40, 20);
     let mut lx = Lx::new();

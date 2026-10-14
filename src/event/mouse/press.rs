@@ -20,10 +20,10 @@ use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
     apply_block_button, apply_template_button, block_button_at, handle_agent_scrollbar_press,
-    handle_prompt_scrollbar_press, handle_terminal_scrollbar_press,
-    handle_workspace_scrollbar_press, mention_item_at, pane_at, pane_boundary_draggable,
-    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
-    prompt_header_at, slash_item_at, template_button_at,
+    handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
+    handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, mention_item_at, pane_at,
+    pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
+    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -338,18 +338,32 @@ pub(crate) fn handle_mouse_down_left(
                 .pane_anywhere(pane)
                 .is_some_and(|target| target.view == PaneView::Lx)
             {
-                // lx 页：命中入口按钮则切换选中，否则开始整页选区。
+                // lx 页：入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
                 let entry = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::entry_hit(inner, &target.lx, mouse.column, mouse.row)
                 });
                 update::focus_pane(state, pane);
                 update::clear_selection(state);
-                match entry {
-                    Some(entry) => {
-                        update::set_lx_entry(state, pane, entry);
-                        update::clear_lx_selection(state);
-                    }
-                    None => update::begin_lx_selection(state, pane, row, col),
+                if let Some(entry) = entry {
+                    update::set_lx_entry(state, pane, entry);
+                    update::clear_lx_selection(state);
+                } else if let Some((visual_row, col)) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::input_geom(inner, &target.lx))
+                    .filter(|geom| geom.contains(mouse.column, mouse.row))
+                    .map(|geom| geom.cell(mouse.column, mouse.row))
+                {
+                    update::begin_lx_input_selection(state, pane, visual_row, col);
+                } else if handle_lx_input_scrollbar_press(
+                    state,
+                    pane,
+                    inner,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    // 滚动条按下：已处理。
+                } else {
+                    update::begin_lx_selection(state, pane, row, col);
                 }
                 *dirty = true;
             } else if handle_terminal_scrollbar_press(state, pane, inner, mouse.column, mouse.row) {

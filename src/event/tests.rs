@@ -1617,6 +1617,42 @@ fn lx_view_content_click_focuses_and_starts_selection() {
 }
 
 #[test]
+fn lx_input_click_places_cursor_and_starts_text_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        for ch in "hello".chars() {
+            lx.insert_char(ch);
+        }
+    }
+    let inner = pane_inner(&geo, pane);
+    let (x, y) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::main_content::lx::input_geom(inner, &target.lx))
+        .map(|geom| geom.text_origin())
+        .expect("input geom");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), x + 2, y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.cursor, 2, "点击把光标定位到单元格");
+    assert!(lx.has_text_selection(), "输入框内开始文本拖拽");
+    assert!(state.lx_input_drag.is_some());
+    assert!(state.lx_selection.is_none(), "输入框内不再启动整页选区");
+}
+
+#[test]
 fn lx_view_ignores_wheel_and_mouse_report() {
     let config = Config::default();
     let mut state = AppState::demo();

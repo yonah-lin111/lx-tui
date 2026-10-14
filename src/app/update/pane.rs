@@ -53,6 +53,16 @@ pub fn scroll_lx_input(state: &mut AppState, id: PaneId, direction: isize) -> bo
     pane.lx.scroll_by(direction.saturating_mul(WHEEL_LINES))
 }
 
+/// 设置 lx 输入框滚动条视口偏移（滚动条点击/拖拽）；返回视口是否移动。
+pub fn set_lx_scroll(state: &mut AppState, id: PaneId, offset: usize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    let before = pane.lx.scroll();
+    pane.lx.scroll_to(offset);
+    pane.lx.scroll() != before
+}
+
 /// 点击终端窗格：焦点回到窗格，prompt 失焦并关闭块命令面板与页重命名输入。
 pub fn focus_pane(state: &mut AppState, id: PaneId) {
     state.prompt_focused = false;
