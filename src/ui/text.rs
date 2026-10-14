@@ -115,6 +115,8 @@ pub const LX_TOGGLE_LX: &str = "[lx]";
 pub const LX_ENTRY_NATIVE: &str = "Native Agent";
 pub const LX_ENTRY_COGNITIVE: &str = "Cognitive Orchestrator";
 pub const LX_ENTRY_ASSISTANT: &str = "Assistant Orchestrator";
+/// lx 页横排入口标签之间的分隔符。
+pub const LX_ENTRY_SEPARATOR: &str = "·";
 /// lx 页入口描述行与示例行（示例行仅在有示例时渲染）。
 pub const LX_ENTRY_NATIVE_DESC: &str = "talks to the model directly, no external agents involved";
 pub const LX_ENTRY_COGNITIVE_DESC: &str = "orchestrates all your coding agents in one place";

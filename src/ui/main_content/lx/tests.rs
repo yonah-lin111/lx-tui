@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::state::LxEntry;
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::style::Color;
 
 /// 像素字标：行数 = 单元格行 × 2、每行宽度一致、只含调色板字符。
@@ -30,19 +30,14 @@ fn logo_art_is_consistent() {
 
 #[test]
 fn entries_share_lx_shape_with_tweaked_colors() {
-    // 三个入口形状一致（非透明像素位置相同），仅配色不同。
     for entry in LxEntry::ALL {
-        let mapped: Vec<String> = ICON_LX
-            .iter()
-            .map(|row| row.chars().map(|ch| icon_pixel(entry, ch)).collect())
-            .collect();
-        for (row, mapped_row) in ICON_LX.iter().zip(&mapped) {
-            for (original, tinted) in row.chars().zip(mapped_row.chars()) {
+        for row in ICON_LX {
+            for original in row.chars() {
+                let tinted = icon_pixel(entry, original);
                 assert_eq!(original == '.', tinted == '.', "形状必须一致（透明位相同）");
             }
         }
     }
-    // 配色确实不同：至少一个非透明像素被改写。
     let tinted = |entry| -> String {
         ICON_LX
             .iter()
@@ -67,13 +62,13 @@ fn logo_palette_maps_logo_colors() {
 }
 
 #[test]
-fn input_sits_on_bottom_row_with_margin() {
+fn input_block_sits_at_bottom_with_rules() {
     let area = Rect::new(0, 0, 60, 16);
     let lay = layout(area, &Lx::new());
-    let input = lay.input.expect("input row");
+    let input = lay.input.expect("input block");
     assert_eq!(input.height, INPUT_HEIGHT);
     assert_eq!(input.x, area.x + MARGIN);
-    assert_eq!(input.y, area.bottom() - 1);
+    assert_eq!(input.y, area.bottom() - INPUT_HEIGHT);
 }
 
 #[test]
@@ -87,31 +82,35 @@ fn tiny_page_falls_back_to_wordmark() {
 }
 
 #[test]
-fn entries_are_equal_width_and_horizontal_when_roomy() {
+fn entries_are_horizontal_and_centered_when_roomy() {
     let area = Rect::new(0, 0, 100, 20);
     let lay = layout(area, &Lx::new());
+    assert!(lay.horizontal);
     assert_eq!(lay.entries.len(), 3);
     let first_y = lay.entries[0].1.y;
     assert!(
         lay.entries.iter().all(|(_, rect)| rect.y == first_y),
         "同一行"
     );
-    let widths: Vec<u16> = lay.entries.iter().map(|(_, rect)| rect.width).collect();
-    assert!(widths.iter().all(|w| *w == widths[0]), "三按钮等宽");
     assert!(lay.entries[0].1.x < lay.entries[1].1.x, "从左到右");
+    // 整体居中：左右留白近似相等。
+    let left = lay.entries[0].1.x;
+    let right = area.right() - lay.entries[2].1.right();
+    assert!(left.abs_diff(right) <= 1, "左右留白近似相等");
 }
 
 #[test]
 fn narrow_page_stacks_entries_vertically() {
     let area = Rect::new(0, 0, 34, 30);
     let lay = layout(area, &Lx::new());
+    assert!(!lay.horizontal);
     assert_eq!(lay.entries.len(), 3);
     let ys: Vec<u16> = lay.entries.iter().map(|(_, rect)| rect.y).collect();
     assert!(ys[1] > ys[0] && ys[2] > ys[1], "逐行堆叠");
 }
 
 #[test]
-fn entry_hit_matches_buttons_and_ignores_blank() {
+fn entry_hit_matches_labels_and_ignores_blank() {
     let area = Rect::new(0, 0, 100, 20);
     let lx = Lx::new();
     let lay = layout(area, &lx);
@@ -131,14 +130,33 @@ fn wide_page_renders_brand_entries_and_input() {
     assert!(text.contains("Cognitive Orchestrator"), "{text}");
     assert!(text.contains("Assistant Orchestrator"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
-    assert!(text.contains('[') && text.contains(']'), "极简方括号按钮");
+    assert!(text.contains('·'), "标签页分隔符可见");
+    assert!(text.contains('─'), "输入框上下分割线可见");
     assert!(!text.contains("type a message"), "框下提示已移除");
     assert!(!text.contains('▛'), "像素方块边框已移除");
-    assert!(!text.contains("placeholder"), "白色占位面板已移除");
 }
 
 #[test]
-fn selected_entry_switches_icon_and_text() {
+fn narrow_page_moves_text_below_logo() {
+    // 放不下"图标 + 右侧文案"，但图标本身放得下：文案应移到图标下方。
+    let area = Rect::new(0, 0, 34, 30);
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &Lx::new(), false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("talks to the model directly"), "{text}");
+    let rows: Vec<&str> = text.lines().collect();
+    let desc_row = rows
+        .iter()
+        .position(|row| row.contains("talks to the model directly"))
+        .expect("description row");
+    assert!(
+        desc_row >= usize::from(LOGO_ROWS),
+        "文案在图标下方: {desc_row}"
+    );
+}
+
+#[test]
+fn selected_entry_switches_text() {
     let area = Rect::new(0, 0, 100, 20);
     let mut buf = Buffer::empty(area);
     let mut lx = Lx::new();
@@ -163,10 +181,33 @@ fn cursor_is_relative_to_content_area() {
     let text = buffer_text(&buf);
     assert!(text.contains("hi"));
     assert!(!text.contains("Ask anything"), "输入后占位消失");
-    // 行相对内容区（不是绝对坐标）：输入在最后一行。
-    assert_eq!(cursor.0, area.height - 1);
+    // 行相对内容区：输入行是底部 3 行块的中行。
+    assert_eq!(cursor.0, area.height - 2);
     // 列相对内容区：左边距 2 + `> ` 2 + `hi` 2 = 6。
     assert_eq!(cursor.1, MARGIN + 2 + 2);
+}
+
+#[test]
+fn cursor_aligns_after_wide_chars() {
+    let area = Rect::new(0, 0, 60, 12);
+    let mut lx = Lx::new();
+    for ch in "你谁".chars() {
+        lx.insert_char(ch);
+    }
+    let mut buf = Buffer::empty(area);
+    let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
+    let row = area.bottom() - 2;
+    let content_x = area.x + MARGIN + 2;
+    assert_eq!(buf[(content_x, row)].symbol(), "你");
+    assert_eq!(
+        buf[(content_x + 1, row)].diff_option,
+        CellDiffOption::Skip,
+        "宽字符后续列标记跳过"
+    );
+    assert_eq!(buf[(content_x + 2, row)].symbol(), "谁");
+    assert_eq!(buf[(content_x + 3, row)].diff_option, CellDiffOption::Skip);
+    // 光标落在两个宽字符之后（显示列）。
+    assert_eq!(cursor, (area.height - 2, MARGIN + 2 + 4));
 }
 
 #[test]
@@ -176,6 +217,18 @@ fn copy_text_extracts_selected_rows() {
     let text = copy_text(area, &lx, ((0, 0), (19, 99)));
     assert!(text.contains("Native Agent"), "{text}");
     assert!(text.contains("Ask anything"), "{text}");
+}
+
+#[test]
+fn copy_text_keeps_wide_chars_once() {
+    let area = Rect::new(0, 0, 60, 12);
+    let mut lx = Lx::new();
+    for ch in "你谁".chars() {
+        lx.insert_char(ch);
+    }
+    let row = i32::from(area.height - 2);
+    let text = copy_text(area, &lx, ((row, MARGIN), (row, area.width - 1)));
+    assert_eq!(text, "> 你谁");
 }
 
 #[test]
