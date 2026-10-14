@@ -206,6 +206,8 @@ pub fn default_page_name(index: usize) -> String {
 pub const MENU_PAGE_NEW: &str = "[add]";
 pub const MENU_PAGE_DELETE: &str = "[del]";
 pub const MENU_TITLE_PAGES: &str = "pages";
+/// 页码菜单每页状态计数分隔符：`n|m|x`。
+pub const PAGE_COUNT_SEPARATOR: &str = "|";
 
 /// 页内模板块状态计数标签（仅统计闭合顶层 `&&&`）。
 pub fn template_count_label(status: TemplateStatus, count: usize) -> String {

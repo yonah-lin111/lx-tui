@@ -891,7 +891,7 @@ fn draw_overlay_buffer(state: &AppState) -> ratatui::buffer::Buffer {
 }
 
 #[test]
-fn page_menu_renders_border_chips_two_line_pages_and_current_marker() {
+fn page_menu_renders_border_chips_single_line_pages_and_current_marker() {
     use crate::app::prompt::{PromptItem, PromptPage};
     let mut state = AppState::demo();
     let mut item = PromptItem::single(7, None, "paged", "");
@@ -918,8 +918,10 @@ fn page_menu_renders_border_chips_two_line_pages_and_current_marker() {
     assert!(body.contains(text::MENU_TITLE_PAGES), "{body}");
     assert!(body.contains("Page 1"), "{body}");
     assert!(body.contains("Notes"), "{body}");
-    assert!(body.contains("[todo 1]"), "逐页 todo 计数: {body}");
-    assert!(body.contains("[done 1]"), "逐页 done 计数: {body}");
+    // 单行页项：名称与 `n|m|x` 计数同行，数字带状态色。
+    assert!(body.contains("1|0|0"), "逐页 todo 计数: {body}");
+    assert!(body.contains("0|0|1"), "逐页 done 计数: {body}");
+    assert!(!body.contains("todo 1"), "不再使用旧计数标签: {body}");
 
     let Some(Overlay::PageMenu(menu)) = &state.overlay else {
         panic!("page menu open");
@@ -951,7 +953,24 @@ fn page_menu_renders_border_chips_two_line_pages_and_current_marker() {
         Some(menu.rows.len() - 1)
     );
 
-    // 当前页首行带 `❯` 标记；指针离开容器后整菜单无悬停底色。
+    // 每项一行：相邻页行 y 差 1，单行内可命中。
+    let page = layout.page_rects[0];
+    assert_eq!(page.height, 1);
+    assert_eq!(layout.page_rects[1].y, page.y + 1);
+    assert_eq!(
+        page_menu_item_at(&state, SCREEN, menu, page.x + 1, page.y),
+        Some(menu.selected)
+    );
+
+    // 计数数字用对应模板块状态色（非选中行：todo dim、run 黄、done 绿）。
+    let notes = layout.page_rects[1];
+    let counts_x = notes.right() - 5;
+    let done_digit = &buffer[(counts_x + 4, notes.y)];
+    assert_eq!(done_digit.symbol(), "1");
+    assert_eq!(done_digit.fg, ratatui::style::Color::Green, "done 计数绿色");
+    assert_eq!(buffer[(counts_x + 1, notes.y)].symbol(), "|", "计数分隔符");
+
+    // 当前页行带 `❯` 标记；指针离开容器后整菜单无悬停底色。
     let current = layout.page_rects[menu.selected - 1];
     let row: String = (current.x..current.right())
         .map(|x| buffer[(x, current.y)].symbol())
@@ -971,15 +990,49 @@ fn page_menu_renders_border_chips_two_line_pages_and_current_marker() {
         .map(|x| buffer[(x, current.y)].symbol())
         .collect();
     assert!(row.starts_with(text::AGENT_SELECTED_MARKER), "{row:?}");
-    // 两行页项：两行都可命中同一行快照。
-    let page = layout.page_rects[0];
+}
+
+#[test]
+fn page_menu_border_chips_never_highlight_and_gray_when_disabled() {
+    use crate::app::prompt::PromptItem;
+    let mut state = AppState::demo();
+    let item = PromptItem::single(7, None, "single", "body");
+    state.workspaces[0]
+        .prompt_panel
+        .tree
+        .replace(vec![], vec![item]);
+    assert!(crate::app::update::edit_prompt_item(&mut state, 0, 7));
+    assert!(crate::app::update::open_prompt_page_menu(
+        &mut state,
+        (10, 4)
+    ));
+    // 悬停新建按钮、键盘光标也在其上：按钮不铺 hover 底色。
+    state.menu_hover = true;
+    let buffer = draw_overlay_buffer(&state);
+    let Some(Overlay::PageMenu(menu)) = &state.overlay else {
+        panic!("page menu open");
+    };
+    let layout = page_menu_layout(&state, SCREEN, menu);
+    for rect in [layout.new_rect, layout.delete_rect] {
+        assert_eq!(
+            Some(buffer[(rect.x, rect.y)].bg),
+            style::overlay_panel().bg,
+            "边框按钮无 hover 底色"
+        );
+    }
+    // 单页时删除按钮不可用：默认灰（前景 252 + dim），与工具栏撤销/重做一致。
+    let disabled = &buffer[(layout.delete_rect.x, layout.delete_rect.y)];
     assert_eq!(
-        page_menu_item_at(&state, SCREEN, menu, page.x + 1, page.y),
-        Some(menu.selected)
+        disabled.fg,
+        style::overlay_panel().fg.expect("panel fg"),
+        "禁用按钮灰前景"
     );
+    assert!(disabled.modifier.contains(ratatui::style::Modifier::DIM));
+    let enabled = &buffer[(layout.new_rect.x, layout.new_rect.y)];
     assert_eq!(
-        page_menu_item_at(&state, SCREEN, menu, page.x + 1, page.y + 1),
-        Some(menu.selected)
+        enabled.fg,
+        style::accent().fg.expect("accent fg"),
+        "可用按钮强调色"
     );
 }
 
@@ -1039,7 +1092,7 @@ fn page_menu_windows_around_selected_row_when_tall() {
     assert_eq!(layout.page_rects.len(), visible);
     assert_eq!(
         layout.area.height,
-        u16::try_from(2 + visible * 2).expect("height"),
+        u16::try_from(2 + visible).expect("height"),
         "菜单高度钳到屏幕内"
     );
     let selected_rect = layout.page_rects[target - layout.start - 1];
@@ -1060,8 +1113,8 @@ fn page_menu_windows_around_selected_row_when_tall() {
     assert_eq!(layout.start, pages - visible, "窗口滚到尾部：最后一页可见");
     let bottom = layout.page_rects[visible - 1];
     assert_eq!(
-        page_menu_item_at(&state, SCREEN, menu, bottom.x, bottom.y + 1),
+        page_menu_item_at(&state, SCREEN, menu, bottom.x, bottom.y),
         Some(pages),
-        "末页（两行）可命中"
+        "末页可命中"
     );
 }

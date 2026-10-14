@@ -1,11 +1,12 @@
 //! 页码菜单：行文案、几何、命中与渲染。
 //!
-//! 顶部边框右端内嵌 `[add]` / `[del]` 两个按钮（带 tooltip），其下每页占两行：
-//! 首行 `❯` 标记与页名、次行彩色模板块计数；页数超出屏幕时窗口跟随光标滚动。
+//! 顶部边框右端内嵌 `[add]` / `[del]` 两个按钮（带 tooltip、悬停不铺底色），
+//! 其下每页占一行：`❯` 标记与页名，右端状态计数 `n|m|x` 按 todo/run/done 分色；
+//! 页数超出屏幕时窗口跟随光标滚动。
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Style;
 use ratatui::text::Span;
 use unicode_width::UnicodeWidthStr;
 
@@ -15,7 +16,7 @@ use crate::app::prompt::{PromptEditing, PromptPageId};
 use crate::app::state::AppState;
 use crate::ui::{style, text};
 
-/// 页码菜单几何：整体区域、边框按钮与可见页行（每项两行）。
+/// 页码菜单几何：整体区域、边框按钮与可见页行（每项一行）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageMenuLayout {
     pub area: Rect,
@@ -23,7 +24,7 @@ pub struct PageMenuLayout {
     pub new_rect: Rect,
     /// 顶部边框右端的删除按钮。
     pub delete_rect: Rect,
-    /// 可见页行矩形（顺序对应窗口内页，每项高 2 行）。
+    /// 可见页行矩形（顺序对应窗口内页，每项高 1 行）。
     pub page_rects: Vec<Rect>,
     /// 窗口内第一页的页序号（0 起；行快照下标为其加一）。
     pub start: usize,
@@ -31,10 +32,10 @@ pub struct PageMenuLayout {
     pub pages: usize,
 }
 
-/// 一页的菜单文案：名称与彩色计数段。
+/// 一页的菜单文案：名称与状态计数段（数字、`|` 分隔符；分隔符无状态）。
 struct PageLabel {
     name: String,
-    counts: Vec<(String, TemplateStatus)>,
+    counts: Vec<(String, Option<TemplateStatus>)>,
 }
 
 impl PageLabel {
@@ -43,13 +44,19 @@ impl PageLabel {
         self.name.width() + 2
     }
 
-    /// 计数段显示宽度（含 1 列间隔）；无计数为 0。
+    /// 计数段显示宽度；无计数为 0。
     fn counts_width(&self) -> usize {
-        self.counts
-            .iter()
-            .map(|(label, _)| label.width())
-            .sum::<usize>()
-            + self.counts.len().saturating_sub(1)
+        self.counts.iter().map(|(label, _)| label.width()).sum()
+    }
+
+    /// 整行显示宽度：名称与计数之间留 1 列间隔。
+    fn row_width(&self) -> usize {
+        let counts = self.counts_width();
+        if counts == 0 {
+            self.name_width()
+        } else {
+            self.name_width() + 1 + counts
+        }
     }
 }
 
@@ -80,22 +87,32 @@ fn page_labels(state: &AppState, menu: &PageMenu) -> Vec<PageLabel> {
         .collect()
 }
 
-/// 计数段：零数量省略；按 todo / run / done 顺序。
-fn count_segments(counts: &TemplateCounts) -> Vec<(String, TemplateStatus)> {
-    [
-        (TemplateStatus::Todo, counts.todo),
-        (TemplateStatus::InProgress, counts.in_progress),
-        (TemplateStatus::Done, counts.done),
+/// 计数段：`n|m|x`（todo / run / done 顺序），数字逐段带状态色；
+/// 整页无模板块时不显示。
+fn count_segments(counts: &TemplateCounts) -> Vec<(String, Option<TemplateStatus>)> {
+    if counts.todo + counts.in_progress + counts.done == 0 {
+        return Vec::new();
+    }
+    let mut segments = Vec::with_capacity(5);
+    for (index, (count, status)) in [
+        (counts.todo, TemplateStatus::Todo),
+        (counts.in_progress, TemplateStatus::InProgress),
+        (counts.done, TemplateStatus::Done),
     ]
     .into_iter()
-    .filter(|(_, count)| *count > 0)
-    .map(|(status, count)| (text::template_count_label(status, count), status))
-    .collect()
+    .enumerate()
+    {
+        if index > 0 {
+            segments.push((text::PAGE_COUNT_SEPARATOR.to_string(), None));
+        }
+        segments.push((count.to_string(), Some(status)));
+    }
+    segments
 }
 
-/// 页码菜单可视页数（扣除上下边框，每页两行）。
+/// 页码菜单可视页数（扣除上下边框，每页一行）。
 pub fn page_menu_visible_pages(screen: Rect) -> usize {
-    usize::from(screen.height.saturating_sub(2) / 2)
+    usize::from(screen.height.saturating_sub(2))
 }
 
 /// 页窗口起点：光标停在页行时保持该页可见（靠底部对齐）；按钮行光标贴两端。
@@ -123,7 +140,7 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
     let end = (start + visible).min(pages);
     let page_width = labels[start..end]
         .iter()
-        .map(|label| label.name_width().max(label.counts_width()))
+        .map(PageLabel::row_width)
         .max()
         .unwrap_or_default();
     // 顶部边框：左对齐标题 + 右端两个按钮，最小宽度保证不重叠。
@@ -133,7 +150,7 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
     let interior = desired.min(screen.width.saturating_sub(2));
     let width = interior + 2;
     let shown = end - start;
-    let height = u16::try_from(2 + shown * 2)
+    let height = u16::try_from(2 + shown)
         .unwrap_or(u16::MAX)
         .min(screen.height);
     let x = menu
@@ -160,7 +177,7 @@ pub fn page_menu_layout(state: &AppState, screen: Rect, menu: &PageMenu) -> Page
         1,
     );
     let page_rects = (0..shown)
-        .map(|index| Rect::new(area.x + 1, area.y + 1 + (index as u16) * 2, interior, 2))
+        .map(|index| Rect::new(area.x + 1, area.y + 1 + index as u16, interior, 1))
         .collect();
     PageMenuLayout {
         area,
@@ -194,7 +211,7 @@ pub fn page_menu_item_at(
         .map(|index| layout.start + index + 1)
 }
 
-/// 渲染页码菜单：顶部边框按钮、两行页项、当前页 `❯` 标记与彩色计数。
+/// 渲染页码菜单：顶部边框按钮、单行页项、当前页 `❯` 标记与状态分色计数。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn render_page_menu(
     frame: &mut Frame<'_>,
@@ -220,18 +237,11 @@ pub(super) fn render_page_menu(
         menu.rows.get(last),
         Some(PageMenuRow::DeletePage { enabled: true })
     );
-    render_chip(
-        frame,
-        layout.new_rect,
-        text::MENU_PAGE_NEW,
-        state.menu_hover && menu.selected == 0,
-        false,
-    );
+    render_chip(frame, layout.new_rect, text::MENU_PAGE_NEW, false);
     render_chip(
         frame,
         layout.delete_rect,
         text::MENU_PAGE_DELETE,
-        state.menu_hover && menu.selected == last,
         !delete_enabled,
     );
     for (index, rect) in layout.page_rects.iter().enumerate() {
@@ -257,49 +267,37 @@ pub(super) fn render_page_menu(
                 base,
             );
         }
-        paint_text(
-            frame,
-            Rect {
-                x: rect.x + 2,
-                ..*rect
-            },
-            &label.name,
-            base,
-        );
-        let mut x = rect.x + 2;
-        for (index, (segment, status)) in label.counts.iter().enumerate() {
-            if index > 0 {
-                x += 1;
-            }
-            let segment_style = style::template_status(*status).patch(base);
-            paint_text(
-                frame,
-                Rect {
-                    x,
-                    y: rect.y + 1,
-                    ..*rect
-                },
-                segment,
-                segment_style,
-            );
-            x += segment.width() as u16;
+        paint_text(frame, sub_rect(*rect, rect.x + 2), &label.name, base);
+        // 计数贴行右端右对齐；数字用状态色、分隔符弱化，底色沿用当前行。
+        let counts_x = rect
+            .right()
+            .saturating_sub(u16::try_from(label.counts_width()).unwrap_or(u16::MAX));
+        let mut x = counts_x;
+        for (segment, status) in &label.counts {
+            let segment_style = match status {
+                Some(status) => base.patch(style::template_status(*status)),
+                None => base.patch(style::muted()),
+            };
+            paint_text(frame, sub_rect(*rect, x), segment, segment_style);
+            x = x.saturating_add(segment.width() as u16);
         }
     }
 }
 
-/// 边框按钮：文字覆盖在顶部边框上、贴右端；选中反显、禁用置灰。
-fn render_chip(frame: &mut Frame<'_>, rect: Rect, label: &str, selected: bool, disabled: bool) {
-    let base = if selected {
-        style::overlay_selection()
+/// 边框按钮：文字覆盖在顶部边框上、贴右端；不可用时置灰（同工具栏撤销/重做），
+/// 悬停不铺底色，仅由 tooltip 提示。
+fn render_chip(frame: &mut Frame<'_>, rect: Rect, label: &str, disabled: bool) {
+    let text_style = style::overlay_panel().patch(if disabled {
+        style::muted()
     } else {
         style::accent()
-    };
-    let text_style = if disabled {
-        base.add_modifier(Modifier::DIM)
-    } else {
-        base
-    };
+    });
     paint_text(frame, rect, label, text_style);
+}
+
+/// 行内子矩形：从 `x` 起、右界保持父行右界，避免文本溢出覆盖边框。
+fn sub_rect(row: Rect, x: u16) -> Rect {
+    Rect::new(x, row.y, row.right().saturating_sub(x), row.height)
 }
 
 /// 整行底色：选中/悬停行铺满，保证反馈跨满行宽。
