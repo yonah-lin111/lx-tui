@@ -17,7 +17,7 @@ use super::super::markdown::{
 #[derive(Debug, Default)]
 pub struct MentionState {
     panel: Option<MentionPanel>,
-    /// 显式绑定根（prompt 顶栏 `ws:` 或工作区 cwd）；未绑定时 None。
+    /// 显式绑定根（prompt 底栏 `ws:` 或工作区 cwd）；未绑定时 None。
     root: Option<PathBuf>,
     cache: Option<Vec<MentionEntry>>,
     generation: u64,

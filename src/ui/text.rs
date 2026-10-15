@@ -51,11 +51,11 @@ pub fn agent_location(tab_index: usize) -> String {
     format!("[tab {}]", tab_index.saturating_add(1))
 }
 
-/// prompt 面板边框标题；路径末段名以 `ws:` 前缀渲染在顶边框右侧。
+/// prompt 面板边框标题；路径末段名以 `ws:` 前缀渲染在底边框右侧（折叠按钮左侧）。
 pub const PROMPT_TITLE: &str = "Prompt Manager";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
-/// prompt 顶边框右侧的工作区路径名前缀。
+/// prompt 底边框右侧的工作区路径名前缀。
 pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
 /// prompt 底边框 linked worktree 标记前缀。
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";

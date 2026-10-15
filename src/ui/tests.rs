@@ -524,11 +524,7 @@ fn status_bar_is_removed() {
     let state = AppState::demo();
     let lines = render_lines(&state);
     let last = lines.last().map(String::as_str).unwrap_or_default();
-    // 工作区名可能合法等于应用名，这里只校验末行不再是状态栏。
-    assert!(
-        !last.contains("lx-tui"),
-        "last row should not be a status bar"
-    );
+    // 末行为面板底边框（含 `╰`），不再有独立状态栏；`ws:` 路径名合法落在 prompt 底边框。
     assert!(last.contains('╰'), "last row should be pane border");
 }
 
@@ -1526,34 +1522,42 @@ fn prompt_bottom_shows_branch_and_worktree_only() {
 }
 
 #[test]
-fn prompt_title_moves_path_name_to_top_right() {
+fn prompt_title_moves_path_name_to_bottom_right() {
     let mut state = AppState::demo();
     state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
     let view = view_for(&state);
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
+    let lines = render_lines(&state);
+    let top = prompt_line(&lines, &view, view.prompt.y);
     assert!(top.contains(text::PROMPT_TITLE), "{top}");
-    assert!(top.contains("ws:lx-tui"), "{top}");
-    assert!(!top.contains(" - "), "路径名不再跟在标题后: {top}");
-    let chars: Vec<char> = top.chars().collect();
+    assert!(!top.contains("ws:"), "顶边框不再显示 ws 路径名: {top}");
+
+    // `ws:` 落在底边框右侧、折叠按钮左侧隔 1 列。
+    let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    let collapse = button_for(&view, CollapseTarget::Prompt);
+    let chars: Vec<char> = bottom.chars().collect();
     let label: Vec<char> = "ws:lx-tui".chars().collect();
     let label_start = chars
         .windows(label.len())
         .position(|window| window == label.as_slice())
         .expect("ws 标签已渲染");
+    let label_end = view.prompt.x + label_start as u16 + label.len() as u16;
+    assert_eq!(label_end, collapse.area.x - 1, "ws 右端与折叠按钮隔 1 列");
     assert_eq!(
-        chars.len() - label_start - label.len(),
-        2,
-        "ws 标签贴右上角（后接空格与右边框）: {top}"
+        collapse.area.x - label_end,
+        1,
+        "ws 与折叠按钮之间有且仅有 1 列空档: {bottom}"
     );
-    // 高亮与底边框 `b:` 一致：前缀强调色、值 muted。
+
+    // 高亮与 `b:` 一致：前缀强调色、值 muted。
     let buffer = render_buffer(&state);
-    let prefix = &buffer[(view.prompt.x + label_start as u16, view.prompt.y)];
+    let row = view.prompt.bottom() - 1;
+    let prefix = &buffer[(view.prompt.x + label_start as u16, row)];
     assert_eq!(prefix.symbol(), "w");
     assert_eq!(prefix.fg, ratatui::style::Color::Cyan);
     assert!(prefix.modifier.contains(ratatui::style::Modifier::BOLD));
     let value = &buffer[(
         view.prompt.x + label_start as u16 + text::PROMPT_WORKSPACE_PREFIX.len() as u16,
-        view.prompt.y,
+        row,
     )];
     assert_eq!(value.symbol(), "l");
     assert!(value.modifier.contains(ratatui::style::Modifier::DIM));
@@ -1568,23 +1572,35 @@ fn prompt_title_moves_path_name_to_top_right() {
         main_branch: Some("main".to_string()),
     });
     state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/work/src"));
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("ws:work"), "{top}");
+    // 放宽面板，避免 `b:`/`wt:` 挤压导致 `ws:` 截断，从而验证取 checkout 末段而非 cwd 子目录。
+    state.prompt_width = 60;
+    let wide_view = view_for(&state);
+    let bottom = prompt_line(
+        &render_lines(&state),
+        &wide_view,
+        wide_view.prompt.bottom() - 1,
+    );
+    assert!(bottom.contains("ws:work"), "{bottom}");
+    assert!(
+        !bottom.contains("ws:src"),
+        "不取工作区 cwd 子目录: {bottom}"
+    );
 
     // 非 git 回退工作区 cwd；无路径时无 `ws:` 片段。
     state.workspaces[0].git = None;
     state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("ws:plain"), "{top}");
+    let view = view_for(&state);
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("ws:plain"), "{bottom}");
 
     state.workspaces[0].cwd = None;
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains(text::PROMPT_TITLE), "{top}");
-    assert!(!top.contains("ws:"), "{top}");
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains('╰'), "{bottom}");
+    assert!(!bottom.contains("ws:"), "{bottom}");
 }
 
 #[test]
-fn prompt_top_bar_prefers_bound_prompt_root() {
+fn prompt_bottom_bar_prefers_bound_prompt_root() {
     let mut state = AppState::demo();
     // 标题文案变长后，默认宽度容不下长路径名与标题共存；本用例只验证路径优先级。
     state.prompt_width = 40;
@@ -1593,19 +1609,55 @@ fn prompt_top_bar_prefers_bound_prompt_root() {
 
     // 显式绑定根路径优先于工作区路径。
     state.prompt_root = Some(PathBuf::from("/elsewhere/bound-root"));
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("ws:bound-root"), "{top}");
-    assert!(!top.contains("ws:lx-tui"), "{top}");
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("ws:bound-root"), "{bottom}");
+    assert!(!bottom.contains("ws:lx-tui"), "{bottom}");
 
     // 绑定路径无末段时回退工作区路径。
     state.prompt_root = Some(PathBuf::from("/"));
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("ws:lx-tui"), "{top}");
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("ws:lx-tui"), "{bottom}");
 
     // 未绑定时仍显示工作区路径。
     state.prompt_root = None;
-    let top = prompt_line(&render_lines(&state), &view, view.prompt.y);
-    assert!(top.contains("ws:lx-tui"), "{top}");
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("ws:lx-tui"), "{bottom}");
+}
+
+#[test]
+fn prompt_bottom_ws_label_truncates_tail_keeping_prefix() {
+    let mut state = AppState::demo();
+    let long = "ws-very-long-project-directory-name";
+    let checkout = format!("/repo/{long}");
+    state.workspaces[0].git = Some(git_info("/repo", &checkout, false, Some("main")));
+    state.prompt_width = 40;
+    let view = view_for(&state);
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("ws:"), "{bottom}");
+    assert!(bottom.contains('…'), "超长名截断以省略号收尾: {bottom}");
+    // 保留开头：截断后紧跟的前缀是路径名开头，而非结尾。
+    let after = &bottom[bottom.find("ws:").unwrap() + 3..];
+    assert!(after.starts_with("ws-very"), "保留名字开头、砍尾: {bottom}");
+    // `ws:` 左界严格晚于 `b:` 状态右端（两者至少空 1 列，不重叠）。
+    let b_end = bottom.find("b:main").expect("branch status") + "b:main".len();
+    let ws_pos = bottom.find("ws:").expect("ws label");
+    assert!(ws_pos > b_end, "ws 需与 b: 内容保持间隔: {bottom}");
+}
+
+#[test]
+fn prompt_bottom_ws_label_hides_when_too_narrow() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    state.prompt_width = 14;
+    let view = view_for(&state);
+    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(!bottom.contains("ws:"), "过窄时整体隐藏 ws 片段: {bottom}");
+    assert!(
+        bottom.contains("b:"),
+        "b: 分支状态优先级最高、保留: {bottom}"
+    );
+    // 折叠按钮仍在。
+    assert!(bottom.contains(text::RIGHT_COLLAPSE_LABEL), "{bottom}");
 }
 
 #[test]
@@ -1728,9 +1780,11 @@ fn prompt_status_follows_pinned_workspace() {
     assert_eq!(state.active_workspace, 1);
     let view = view_for(&state);
     let lines = render_lines(&state);
-    let top = prompt_line(&lines, &view, view.prompt.y);
     let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
-    assert!(top.contains("ws:one"), "钉住时顶栏取显示中工作区: {top}");
+    assert!(
+        bottom.contains("ws:one"),
+        "钉住时底栏取显示中工作区: {bottom}"
+    );
     assert!(
         bottom.contains("b:main"),
         "钉住时底边取显示中工作区: {bottom}"
@@ -1738,9 +1792,11 @@ fn prompt_status_follows_pinned_workspace() {
 
     update::release_prompt_pin(&mut state);
     let lines = render_lines(&state);
-    let top = prompt_line(&lines, &view, view.prompt.y);
     let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
-    assert!(top.contains("ws:two"), "释放后顶栏回到激活工作区: {top}");
+    assert!(
+        bottom.contains("ws:two"),
+        "释放后底栏回到激活工作区: {bottom}"
+    );
     assert!(
         bottom.contains("b:dev"),
         "释放后底边回到激活工作区: {bottom}"
