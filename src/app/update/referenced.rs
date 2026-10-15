@@ -39,6 +39,7 @@ pub fn open_referenced_folder_menu(state: &mut AppState, anchor: (u16, u16)) -> 
         key: Some(key),
         rows,
         selected,
+        hover: None,
         viewport: None,
     }));
     true
@@ -207,7 +208,7 @@ fn edit_text_input(input: &mut TextInput, key: crate::app::actions::OverlayKey) 
     }
 }
 
-/// 引用文件夹菜单键盘/鼠标选中项。
+/// 引用文件夹菜单点击/键盘选中项：移动 `❯` 选中标记；越界忽略；返回是否变化。
 pub fn set_referenced_menu_selection(state: &mut AppState, index: usize) -> bool {
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
         return false;
@@ -219,6 +220,21 @@ pub fn set_referenced_menu_selection(state: &mut AppState, index: usize) -> bool
     menu.selected = index;
     state.menu_hover = true;
     changed
+}
+
+/// 引用文件夹菜单指针悬停行：仅记录悬停行（铺悬停底色），不移动 `❯` 选中标记；返回是否变化。
+///
+/// 与 prompt 树列表一致：hover 只提供背景反馈，`❯` 只在点击/键盘操作时移动。
+pub fn hover_referenced_menu(state: &mut AppState, hover: Option<usize>) -> bool {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let hover = hover.filter(|index| *index < menu.rows.len());
+    if menu.hover == hover {
+        return false;
+    }
+    menu.hover = hover;
+    true
 }
 
 /// 引用文件夹菜单上下移动高亮；越界钳制不循环；键盘移动清空显式视口，窗口重新跟随高亮。

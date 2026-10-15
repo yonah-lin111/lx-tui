@@ -240,6 +240,7 @@ fn referenced_menu_has_no_tooltip_targets_and_search_copy_path_arms() {
             ReferencedFolderMenuRow::Add,
         ],
         selected: 0,
+        hover: None,
         viewport: None,
     }));
     let menu = match state.overlay.as_ref() {

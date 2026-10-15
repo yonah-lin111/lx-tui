@@ -91,6 +91,8 @@ pub struct ReferencedFolderMenu {
     /// 空状态、`[add]` 或某条记录。
     pub rows: Vec<ReferencedFolderMenuRow>,
     pub selected: usize,
+    /// 指针悬停行：仅铺悬停底色，不移动 `❯` 选中标记；`None` 表示指针不在行上。
+    pub hover: Option<usize>,
     /// 滚轮/滚动条滚动后的显式窗口起点；键盘移动后清空，窗口重新跟随高亮。
     pub viewport: Option<usize>,
 }

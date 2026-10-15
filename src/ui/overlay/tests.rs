@@ -674,6 +674,7 @@ fn referenced_menu_state(rows: Vec<ReferencedFolderMenuRow>, selected: usize) ->
             key: Some(PathBuf::from("/repo")),
             rows,
             selected,
+            hover: None,
             viewport: None,
         },
     ));
@@ -940,6 +941,56 @@ fn referenced_search_paints_solid_panel_background() {
         buf[(layout.list.x + 2, layout.list.y + 1)].bg,
         Color::Indexed(240),
         "选中候选地址行底色"
+    );
+}
+
+#[test]
+fn referenced_menu_hover_backgrounds_row_without_marker() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let rows = vec![
+        ReferencedFolderMenuRow::Folder {
+            id: 1,
+            path: PathBuf::from("/tmp/alpha"),
+        },
+        ReferencedFolderMenuRow::Folder {
+            id: 2,
+            path: PathBuf::from("/tmp/beta"),
+        },
+        ReferencedFolderMenuRow::Add,
+    ];
+    let mut state = referenced_menu_state(rows, 0);
+    // 悬停第 2 行：只记录悬停行，选中标记不动（对齐 prompt 树列表）。
+    crate::app::update::hover_referenced_menu(&mut state, Some(1));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    let layout = referenced_menu_layout(SCREEN, menu);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+    terminal
+        .draw(|frame| {
+            render(frame, frame.area(), &state);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    // 悬停行：整行铺悬停底色，行首无 `❯` 标记。
+    let hovered = layout.rows[1];
+    assert_eq!(buffer[(hovered.x, hovered.y)].symbol(), " ", "悬停行无标记");
+    assert_eq!(
+        buffer[(hovered.x, hovered.y)].bg,
+        Color::Indexed(240),
+        "悬停行铺选中底色"
+    );
+    // 选中行（未悬停）：只有 `❯` 标记，不铺底色（背景保持面板本色）。
+    let selected = layout.rows[0];
+    assert_eq!(
+        buffer[(selected.x, selected.y)].symbol(),
+        text::AGENT_SELECTED_MARKER,
+        "选中行显示标记"
+    );
+    assert_eq!(
+        buffer[(selected.x, selected.y)].bg,
+        Color::Indexed(236),
+        "选中行不铺底色"
     );
 }
 

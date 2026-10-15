@@ -512,6 +512,36 @@ fn menu_double_click_detects_same_row_within_window() {
 }
 
 #[test]
+fn hover_moves_background_not_selection_marker() {
+    let mut state = state_with_folders();
+    open_referenced_folder_menu(&mut state, (0, 0));
+    let selected = menu_selected(&state);
+    // 悬停只记录悬停行（铺底色），不移动 `❯` 选中标记。
+    assert!(hover_referenced_menu(&mut state, Some(1)));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.hover, Some(1));
+    assert_eq!(menu.selected, selected, "悬停不移动选中标记");
+    // 重复悬停同一行无变化；离开行清空；越界悬停忽略（规范化为 None 且无变化）。
+    assert!(!hover_referenced_menu(&mut state, Some(1)));
+    assert!(hover_referenced_menu(&mut state, None));
+    assert!(!hover_referenced_menu(&mut state, Some(999)));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.hover, None, "越界悬停忽略");
+}
+
+/// 菜单当前 `❯` 选中标记行。
+fn menu_selected(state: &AppState) -> usize {
+    match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu.selected,
+        _ => panic!("menu"),
+    }
+}
+
+#[test]
 fn menu_copy_uses_refer_folder_syntax() {
     let mut state = state_with_folders();
     let beta = folder_path(&state, 2);

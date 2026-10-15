@@ -129,15 +129,19 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
         let Some(row) = menu.rows.get(layout.start + offset) else {
             continue;
         };
+        let index = layout.start + offset;
+        // 空状态/不可用行非可选：不显示标记，也不铺悬停底色（对齐 prompt 树的分区标签行）。
         let selectable = !matches!(
             row,
             ReferencedFolderMenuRow::Empty | ReferencedFolderMenuRow::Unavailable
         );
+        let hovered = selectable && menu.hover == Some(index);
         render_menu_row(
             frame,
             *rect,
             row,
-            selectable && menu.selected == layout.start + offset,
+            selectable && menu.selected == index,
+            hovered,
         );
     }
     // 列表溢出时在最右一列绘制滚动条（轨道 muted、thumb 亮色）。
@@ -162,15 +166,20 @@ pub fn render_referenced_menu_footer(
     );
 }
 
-/// 单行：整行铺底色；空状态/不可用为 muted 提示，目录记录为
+/// 单行：悬停时整行铺选中底色；空状态/不可用为 muted 提示，目录记录为
 /// `❯` 标记 + 三角图标 + 名称（右端 muted 绝对路径），新建行为强调色动作项。
+///
+/// `selected` 只决定 `❯` 标记（仅点击/键盘移动），**不铺底色**；`hovered` 只叠加悬停底色、
+/// 不显示标记（完全对齐 prompt 树列表）。
 fn render_menu_row(
     frame: &mut Frame<'_>,
     rect: Rect,
     row: &ReferencedFolderMenuRow,
     selected: bool,
+    hovered: bool,
 ) {
-    let base = if selected {
+    // 背景颜色只在悬停时出现；选中行仅显示 `❯` 标记，底色保持面板本色。
+    let base = if hovered {
         style::overlay_selection()
     } else {
         style::overlay_panel()
