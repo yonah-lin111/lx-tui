@@ -17,6 +17,8 @@ pub enum UiGalleryComponentId {
     PromptEditor,
     PromptList,
     PromptToolbar,
+    ReferencedFolders,
+    FolderSearch,
 }
 
 impl UiGalleryComponentId {
@@ -32,6 +34,8 @@ impl UiGalleryComponentId {
             Self::PromptEditor => text::UI_GALLERY_PROMPT_EDITOR,
             Self::PromptList => text::UI_GALLERY_PROMPT_LIST,
             Self::PromptToolbar => text::UI_GALLERY_PROMPT_TOOLBAR,
+            Self::ReferencedFolders => text::UI_GALLERY_FOLDERS,
+            Self::FolderSearch => text::UI_GALLERY_FOLDER_SEARCH,
         }
     }
 }
@@ -97,7 +101,7 @@ pub const GLOBAL_COMPONENTS: [UiGalleryComponent; 6] = [
 ];
 
 /// `prompt` 文件夹下的组件。
-pub const PROMPT_COMPONENTS: [UiGalleryComponent; 3] = [
+pub const PROMPT_COMPONENTS: [UiGalleryComponent; 5] = [
     UiGalleryComponent {
         id: UiGalleryComponentId::PromptEditor,
         description: text::UI_GALLERY_PROMPT_EDITOR_DESC,
@@ -109,6 +113,14 @@ pub const PROMPT_COMPONENTS: [UiGalleryComponent; 3] = [
     UiGalleryComponent {
         id: UiGalleryComponentId::PromptToolbar,
         description: text::UI_GALLERY_PROMPT_TOOLBAR_DESC,
+    },
+    UiGalleryComponent {
+        id: UiGalleryComponentId::ReferencedFolders,
+        description: text::UI_GALLERY_FOLDERS_DESC,
+    },
+    UiGalleryComponent {
+        id: UiGalleryComponentId::FolderSearch,
+        description: text::UI_GALLERY_FOLDER_SEARCH_DESC,
     },
 ];
 

@@ -213,6 +213,8 @@ fn appearance_size(id: UiGalleryComponentId, available: Rect) -> (u16, u16) {
                 + 6,
             1,
         ),
+        UiGalleryComponentId::ReferencedFolders => (48, 7),
+        UiGalleryComponentId::FolderSearch => (48, 9),
     };
     (width.min(available.width), height.min(available.height))
 }
@@ -233,6 +235,8 @@ fn render_appearance(frame: &mut Frame<'_>, rect: Rect, id: UiGalleryComponentId
         UiGalleryComponentId::PromptEditor => render_prompt_editor_like(frame, rect),
         UiGalleryComponentId::PromptList => render_prompt_list_like(frame, rect),
         UiGalleryComponentId::PromptToolbar => render_prompt_toolbar_like(frame, rect),
+        UiGalleryComponentId::ReferencedFolders => render_referenced_folders_like(frame, rect),
+        UiGalleryComponentId::FolderSearch => render_folder_search_like(frame, rect),
     }
 }
 
@@ -475,6 +479,144 @@ fn render_prompt_toolbar_like(frame: &mut Frame<'_>, rect: Rect) {
             style::accent(),
             rect.right(),
         );
+    }
+}
+
+/// 引用文件夹目录菜单：蓝色圆角边框 + 标题 `Folders` + prompt 列表式行 + 底边快捷键提示。
+fn render_referenced_folders_like(frame: &mut Frame<'_>, rect: Rect) {
+    if rect.width < 4 || rect.height < 4 {
+        return;
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(style::accent())
+        .style(style::overlay_panel())
+        .title_top(Span::styled(
+            format!(" {} ", text::MENU_TITLE_REFERENCED_FOLDERS),
+            style::border_title(),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(" {} ", text::REFERENCED_MENU_FOOTER),
+                style::muted_on_border(),
+            ))
+            .alignment(Alignment::Left),
+        );
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.height == 0 {
+        return;
+    }
+    let names = text::UI_GALLERY_FOLDERS_SAMPLE;
+    let mut y = inner.y;
+    // 选中项：整行 overlay_selection 底色 + `❯` 标记。
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!("❯ ▸ {}", names[0]),
+            style::text(),
+        )))
+        .style(style::overlay_selection()),
+        Rect::new(inner.x, y, inner.width, 1),
+    );
+    y = y.saturating_add(1);
+    // 其余目录项。
+    for name in names.iter().skip(1) {
+        if y >= inner.bottom() {
+            return;
+        }
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("  ▸ {name}"),
+                style::text(),
+            )))
+            .style(style::overlay_panel()),
+            Rect::new(inner.x, y, inner.width, 1),
+        );
+        y = y.saturating_add(1);
+    }
+    // 末尾动作行：强调色 `+ add folder…`。
+    if y < inner.bottom() {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                text::REFERENCED_MENU_ADD_ROW,
+                style::accent(),
+            ))),
+            Rect::new(inner.x, y, inner.width, 1),
+        );
+    }
+}
+
+/// 引用文件夹内容搜索：蓝色圆角边框 + 标题 `folder contents` + 右上角复制 + 搜索框 + 双行候选 + 底边提示。
+fn render_folder_search_like(frame: &mut Frame<'_>, rect: Rect) {
+    if rect.width < 4 || rect.height < 6 {
+        return;
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(style::accent())
+        .style(style::overlay_panel())
+        .title_top(Span::styled(
+            format!(" {} ", text::REFERENCED_SEARCH_TITLE),
+            style::border_title(),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(" {} ", text::REFERENCED_SEARCH_FOOTER),
+                style::muted_on_border(),
+            ))
+            .alignment(Alignment::Left),
+        );
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+    if inner.height < 3 {
+        return;
+    }
+    // 顶部范围行：右端复制原始路径按钮。
+    let copy_x = inner
+        .right()
+        .saturating_sub(text::TEMPLATE_BUTTON_COPY.chars().count() as u16);
+    put_text(
+        frame.buffer_mut(),
+        copy_x,
+        inner.y,
+        text::TEMPLATE_BUTTON_COPY,
+        style::accent(),
+        inner.right(),
+    );
+    // 搜索框行与分割线。
+    put_text(
+        frame.buffer_mut(),
+        inner.x,
+        inner.y + 1,
+        text::UI_GALLERY_FOLDER_SEARCH_QUERY,
+        style::muted(),
+        inner.right(),
+    );
+    paint_hline(frame, inner.x, inner.y + 2, inner.right());
+    // 双行候选：图标 + 名称，次行 `└─ 父目录`。
+    let mut y = inner.y.saturating_add(3);
+    for (icon, name, parent) in text::UI_GALLERY_FOLDER_SEARCH_ROWS {
+        if y + 1 >= inner.bottom() {
+            break;
+        }
+        let buf = frame.buffer_mut();
+        put_text(
+            buf,
+            inner.x,
+            y,
+            &format!("{icon} {name}"),
+            style::text(),
+            inner.right(),
+        );
+        put_text(
+            buf,
+            inner.x,
+            y + 1,
+            &format!("└─ {parent}"),
+            style::muted(),
+            inner.right(),
+        );
+        y = y.saturating_add(2);
     }
 }
 

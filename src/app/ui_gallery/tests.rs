@@ -28,6 +28,8 @@ fn default_rows_list_folders_then_components() {
             component_row(UiGalleryComponentId::PromptEditor),
             component_row(UiGalleryComponentId::PromptList),
             component_row(UiGalleryComponentId::PromptToolbar),
+            component_row(UiGalleryComponentId::ReferencedFolders),
+            component_row(UiGalleryComponentId::FolderSearch),
         ]
     );
     assert_eq!(gallery.selected(), 0);
@@ -61,6 +63,8 @@ fn collapsing_folder_hides_its_components() {
             component_row(UiGalleryComponentId::PromptEditor),
             component_row(UiGalleryComponentId::PromptList),
             component_row(UiGalleryComponentId::PromptToolbar),
+            component_row(UiGalleryComponentId::ReferencedFolders),
+            component_row(UiGalleryComponentId::FolderSearch),
         ]
     );
     assert!(gallery.is_collapsed(UiGalleryFolderId::Global));
@@ -185,7 +189,7 @@ fn folder_and_component_lookup_by_id() {
         gallery
             .folder(UiGalleryFolderId::Prompt)
             .map(|f| f.components.len()),
-        Some(3)
+        Some(5)
     );
     assert_eq!(
         gallery

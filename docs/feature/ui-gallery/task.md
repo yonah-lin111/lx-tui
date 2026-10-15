@@ -13,7 +13,7 @@
 ## 1. 纯数据模型（`src/app/ui_gallery.rs`）
 
 - [x] 定义 `UiGalleryNode` / `UiGalleryComponent` / `UiGalleryFolder` 与静态常量 `GALLERY_FOLDERS`。
-- [x] `global`：`toast` / `modal` / `tooltip` / `button` / `menu` / `fullscreen`；`prompt`：`editor` / `list` / `toolbar`。
+- [x] `global`：`toast` / `modal` / `tooltip` / `button` / `menu` / `fullscreen`；`prompt`：`editor` / `list` / `toolbar` / `folders` / `folder search`。
 - [x] `UiGallery` 状态：`collapsed` 集合与 `selected` 可见行；默认全部展开。
 - [x] `rows()` 生成文件夹行 + 展开的组件行；`selected_folder/component`、`move_selection`、`toggle_folder`、`activate`、`left/right`。
 - [x] 精确测试：行序列、折叠隐藏后代、选择钳制、左右移动、回车切换折叠。

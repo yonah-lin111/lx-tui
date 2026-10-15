@@ -618,6 +618,8 @@ pub const UI_GALLERY_FULLSCREEN: &str = "fullscreen";
 pub const UI_GALLERY_PROMPT_EDITOR: &str = "editor";
 pub const UI_GALLERY_PROMPT_LIST: &str = "list";
 pub const UI_GALLERY_PROMPT_TOOLBAR: &str = "toolbar";
+pub const UI_GALLERY_FOLDERS: &str = "folders";
+pub const UI_GALLERY_FOLDER_SEARCH: &str = "folder search";
 
 /// UI 组件查看弹窗右侧：预览提示与用途说明（不再使用 `Preview` 标题）。
 pub const UI_GALLERY_PREVIEW_HINT: &str = "select a component on the left";
@@ -639,6 +641,14 @@ pub const UI_GALLERY_PROMPT_LIST_SAMPLE: &str = "> search prompts…";
 pub const UI_GALLERY_PROMPT_LIST_BODY: [&str; 5] = ["tmp:", "> default", "", "saved:", "▾ notes"];
 pub const UI_GALLERY_PROMPT_TOOLBAR_LEFT: &str = "[≡] [←] [→]";
 pub const UI_GALLERY_PROMPT_TOOLBAR_RIGHT: &str = "[◉] [*] ●";
+/// 引用文件夹目录菜单预览样例（选中项、普通项与「+ add folder…」动作行）。
+pub const UI_GALLERY_FOLDERS_SAMPLE: [&str; 2] = ["my-project", "lx-tui"];
+/// 引用文件夹内容搜索预览样例（图标、名称、父目录）。
+pub const UI_GALLERY_FOLDER_SEARCH_QUERY: &str = "> search files…";
+pub const UI_GALLERY_FOLDER_SEARCH_ROWS: [(&str, &str, &str); 2] = [
+    ("▸", "src/", "~/projects/my-project"),
+    ("•", "main.rs", "~/projects/my-project/src"),
+];
 
 pub const UI_GALLERY_TOAST_DESC: &[&str] = &[
     "Non-modal feedback anchored below the container top border.",
@@ -677,6 +687,14 @@ pub const UI_GALLERY_PROMPT_LIST_DESC: &[&str] = &[
 pub const UI_GALLERY_PROMPT_TOOLBAR_DESC: &[&str] = &[
     "Editor toolbar row: mode, undo/redo, pin,",
     "select all and the save dot.",
+];
+pub const UI_GALLERY_FOLDERS_DESC: &[&str] = &[
+    "Referenced folders menu opened from the prompt toolbar;",
+    "lists project directories and opens a content search.",
+];
+pub const UI_GALLERY_FOLDER_SEARCH_DESC: &[&str] = &[
+    "Searches a referenced folder's contents and copies",
+    "file or folder markdown references.",
 ];
 
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。

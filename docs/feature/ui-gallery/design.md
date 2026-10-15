@@ -7,7 +7,7 @@
 
 在左侧栏底边框的 `[SET]` 按钮右侧新增一个按钮 `[UI]`。点击后用**全屏覆盖**（不是模态弹窗）展示组件目录：整屏覆盖、最外层一条蓝色边框、无自绘背景色，内部划分为左右两区：
 
-- 左侧为组件树：顶层文件夹 `global` 与 `prompt`，文件夹可折叠展开；`global` 下含 `toast`、`modal`、`tooltip`、`button`、`menu`、`fullscreen`（本全屏覆盖组件本身），`prompt` 下含 `editor`、`list`、`toolbar`。
+- 左侧为组件树：顶层文件夹 `global` 与 `prompt`，文件夹可折叠展开；`global` 下含 `toast`、`modal`、`tooltip`、`button`、`menu`、`fullscreen`（本全屏覆盖组件本身），`prompt` 下含 `editor`、`list`、`toolbar`、`folders`、`folder search`。
 - 右侧为选中组件的真实外观预览：直接按组件自身样式与尺寸渲染（不额外包裹样例框）并**水平居中**，其下留 1 行空白后渲染 muted 用途说明（每行同样水平居中）。
 
 查看器只做“查看”，不驱动真实业务逻辑；关闭后不影响任何现有面板状态。
@@ -16,7 +16,7 @@
 
 | # | 决策项 | 结论 |
 |---|--------|------|
-| 1 | 左侧树结构 | 顶层两个文件夹。`global` 下含 `toast / modal / tooltip / button / menu / fullscreen`；`prompt` 下含 `editor / list / toolbar`。文件夹可折叠展开。 |
+| 1 | 左侧树结构 | 顶层两个文件夹。`global` 下含 `toast / modal / tooltip / button / menu / fullscreen`；`prompt` 下含 `editor / list / toolbar / folders / folder search`（后两者随 `prompt-referenced-folders` 合并补充）。文件夹可折叠展开。 |
 | 2 | `prompt` 子项归属 | 右键菜单归 `global`（`menu`）；编辑器/树列表/工具栏归 `prompt`。 |
 | 3 | 展示形态（增补） | **不使用模态弹窗**：抽成无边框、无背景色的**全屏覆盖公共组件**（`ui/widgets/fullscreen.rs`），直接整屏覆盖；原模态内容迁入。 |
 | 4 | 右侧预览（增补） | 按组件**真实外观**渲染，**不加统一包裹框**（原 `Preview` 标题与拉满宽度的大边框去掉）；组件自带边框时贴合真实尺寸，无边框组件（如 `button`）即纯标签。 |
@@ -99,6 +99,7 @@ pub struct UiGalleryFolder {
   - `fullscreen`：本全屏覆盖组件自身——蓝色圆角边框 + 标题/提示内嵌边框线 + 右上角 `[✕]`。
   - `prompt editor` / `prompt list`：复用真实 prompt 面板外观——圆角边框 + `Prompt Manager` 标题 + 工具栏/搜索行 + 分割线 + 内容行。
   - `prompt toolbar`：真实工具栏行——强调色按钮 + 右对齐 `[◉] [*] ●`。
+  - `folders` / `folder search`：引用文件夹目录菜单与内容搜索弹窗的真实外观（蓝色圆角边框 + 边框内嵌标题与快捷键提示 + 列表行）。
 - 预览只使用 `ui/style.rs` 的语义样式与 `ui/text.rs` 的文案常量，不读 `AppState` 领域数据。
 
 ## 7. 事件、依赖方向与失败语义
@@ -115,7 +116,7 @@ pub struct UiGalleryFolder {
 
 1. 侧栏展开且够宽时，`[SET]` 右侧显示 `[UI]`；点击后**整屏覆盖**（最外层蓝色边框、无四周留白、无背景色）；侧栏折叠或过窄时 `[UI]` 隐藏、`[SET]` 保留。
 2. 覆盖内部左侧固定 24 列、右侧占剩余，中间一条竖直分隔线；顶栏标题 + `[✕]`、底栏快捷键提示。
-3. 左侧默认展开 `global`、`prompt`；`global` 含 `toast/modal/tooltip/button/menu/fullscreen`，`prompt` 含 `editor/list/toolbar`。
+3. 左侧默认展开 `global`、`prompt`；`global` 含 `toast/modal/tooltip/button/menu/fullscreen`，`prompt` 含 `editor/list/toolbar/folders/folder search`。
 4. 鼠标点击或 `↑/↓` 移动高亮；文件夹行回车/点击切换折叠；点组件行切换右侧预览。
 5. 右侧显示对应组件的**真实外观**（无统一包裹大框）并**水平居中**，其下为逐行水平居中的说明文字，不触发真实业务行为；高亮在文件夹行（未选中组件）时提示文字在右区**水平 + 竖直居中**。
 6. `Esc` 或 `[✕]` 关闭；关闭后底层布局与状态不变。

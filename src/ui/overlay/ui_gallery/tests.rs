@@ -180,7 +180,7 @@ fn collapsed_folder_hides_component_rows_in_render() {
 
 #[test]
 fn render_does_not_panic_on_each_component() {
-    for index in 0..12 {
+    for index in 0..14 {
         let mut state = gallery_state();
         if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
             gallery.set_selected(index);
