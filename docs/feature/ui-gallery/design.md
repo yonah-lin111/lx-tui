@@ -37,7 +37,7 @@
 | --- | --- |
 | `src/ui/controls.rs` | `settings_button` / `settings_button_at` / `render_settings_button`：侧栏底边框左端 `[SET]` 的几何、命中与逐格绘制，`[UI]` 完全对齐这一套并放在其右侧。 |
 | `src/event/mouse/press.rs:122` | `[SET]` 的左键命中分支；`[UI]` 在其后追加同款分支。 |
-| `src/ui/widgets/fullscreen.rs`（新增） | **全屏覆盖公共组件**：最外层蓝色圆角边框、无底色，`Clear` 清为默认底；边框内为顶栏标题 + 右上角 `[✕]`、底栏提示、中间内容区。几何/清底/命中与文案由调用方提供，无业务语义。 |
+| `src/ui/widgets/fullscreen.rs`（新增） | **全屏覆盖公共组件**：最外层蓝色圆角边框、无底色，`Clear` 清为默认底；标题内嵌顶边框左侧、提示内嵌底边框左侧（同 prompt 面板 `Prompt` / `b:` 的做法）、右上角 `[✕]` 覆盖在顶边框右端；边框内整块为内容区。几何/清底/命中与文案由调用方提供，无业务语义。 |
 | `src/ui/widgets/modal.rs` | 模态容器（保留给既有浮层）：`close_button_rect` 被 toast/modal 预览复用，保证样例关闭按钮几何与真实组件一致。 |
 | `src/ui/toast.rs` | 真实 toast：圆角边框、内容自适应宽度、右上角 `[✕]`；预览按其外观与尺寸重建。 |
 | `src/app/overlay.rs` | `Overlay` 枚举与 `OverlayKind`；新增 `Overlay::UiGallery` 与 `OverlayKind::UiGallery`。 |
@@ -81,8 +81,8 @@ pub struct UiGalleryFolder {
 
 ## 5. 全屏覆盖与分区（`src/ui/widgets/fullscreen.rs` + `src/ui/overlay/ui_gallery.rs`）
 
-- 全屏覆盖 `area` 即整个 `screen`（无四周留白）；最外层绘制一条蓝色圆角边框（`style::accent()`）。`fullscreen::layout` 在宽 < 10 或高 < 5 时返回 `None`，此时不进入 `UiGallery` 状态（`ui_gallery_layout` 返回 `None`）。
-- 边框内区 `inner`：顶栏 1 行（标题 `UI` + 右上角 `[✕]`）、底栏 1 行（`[↑/↓] select  [enter] fold  [esc] close`），中间为内容区。
+- 全屏覆盖 `area` 即整个 `screen`（无四周留白）；最外层绘制一条蓝色圆角边框（`style::accent()`）。`fullscreen::layout` 在宽 < 10 或高 < 3 时返回 `None`，此时不进入 `UiGallery` 状态（`ui_gallery_layout` 返回 `None`）。
+- 标题与提示**内嵌在边框线上**（不额外占用内容行）：标题 `UI` 在顶边框左侧（`border_title` 淡蓝）、提示 `[↑/↓] select  [enter] fold  [esc] close` 在底边框左侧（muted）、`[✕]` 覆盖在顶边框右端（accent）。边框内区 `content` 整块为内容区。
 - 左侧宽度 `left = 24.min(content.width - 2)`，保证右侧至少 1 列；`content.width < 3` 时不可用。
 - 竖直分隔线：左区右边界列绘制 `│`，样式 `style::border(false)`；无水平分隔线（保持整洁）。
 - `Clear` 整屏重置为终端默认底色，**不铺** `overlay_panel` 底色，透明终端下不出现背景块。
@@ -118,7 +118,8 @@ pub struct UiGalleryFolder {
 4. 鼠标点击或 `↑/↓` 移动高亮；文件夹行回车/点击切换折叠；点组件行切换右侧预览。
 5. 右侧显示对应组件的**真实外观**（无统一包裹大框）并**水平居中**，其下为左对齐说明文字，不触发真实业务行为。
 6. `Esc` 或 `[✕]` 关闭；关闭后底层布局与状态不变。
-7. `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 通过；TUI 外观与交互由用户 `cargo run` 验收。
+7. 标题 `UI` 与快捷键提示分别内嵌在顶边框左侧与底边框左侧（参考 prompt 面板 `ws:` / `b:` 的边框内嵌做法）。
+8. `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 通过；TUI 外观与交互由用户 `cargo run` 验收。
 
 ## 9. 实施影响
 

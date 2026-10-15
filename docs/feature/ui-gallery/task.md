@@ -38,7 +38,7 @@
 
 ## 4. 全屏覆盖与渲染（`src/ui/widgets/fullscreen.rs` + `src/ui/overlay/ui_gallery.rs`）
 
-- [x] 新增公共全屏覆盖组件（最外层蓝色圆角边框、无底色）：`fullscreen::layout/render/close_button_rect/close_button_at`。
+- [x] 新增公共全屏覆盖组件（最外层蓝色圆角边框、无底色；标题/提示内嵌边框线）：`fullscreen::layout/render/close_button_rect/close_button_at`。
 - [x] `ui_gallery_shell(screen)`：整屏覆盖；左侧 24 列、右侧占剩余、中间竖直分隔线。
 - [x] 左区行渲染：文件夹 `▾/▸`、子项 `•`、缩进 2 列、高亮 `❯`。
 - [x] 右区按组件 id 分派 `appearance_size` + `render_appearance`：8 个组件各自的**真实外观**，**水平居中**于右区 + 左对齐说明（去 Preview 标题、无统一包裹框）。

@@ -40,11 +40,8 @@ fn shell_covers_the_whole_screen_with_a_border() {
     let screen = Rect::new(0, 0, 100, 30);
     let shell = ui_gallery_shell(screen).expect("gallery fits");
     assert_eq!(shell.area, screen, "全屏覆盖无四周留白");
-    // 最外层边框内区收缩一圈。
-    assert_eq!(shell.inner, Rect::new(1, 1, 98, 28));
-    assert_eq!(shell.header, Rect::new(1, 1, 98, 1));
-    assert_eq!(shell.footer, Rect::new(1, 28, 98, 1));
-    assert_eq!(shell.content, Rect::new(1, 2, 98, 26));
+    // 最外层边框内区即内容区（标题/提示内嵌边框线上，不占内容行）。
+    assert_eq!(shell.content, Rect::new(1, 1, 98, 28));
 }
 
 #[test]
