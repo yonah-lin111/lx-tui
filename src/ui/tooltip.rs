@@ -3,13 +3,14 @@
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneKind};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::layout::{self, PaneId};
 use crate::ui::layout::ViewLayout;
+use crate::ui::widgets::clear;
 use crate::ui::{self, main_content, sidebar, style, tab_bar, text};
 
 /// 命中全局按钮 tooltip 目标；目标互不重叠，按固定顺序取首个命中。
@@ -56,7 +57,7 @@ pub fn render(
     let title = text::TOOLTIP_TITLE;
     let hint = text::tooltip_hint(tooltip.target, state);
     let area = rect(screen, anchor, title, hint)?;
-    frame.render_widget(Clear, area);
+    clear::render(frame, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::muted())

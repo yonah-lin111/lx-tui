@@ -8,11 +8,12 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Clear};
+use ratatui::widgets::{Block, BorderType};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{ReferencedFolderMenu, ReferencedFolderMenuRow};
 use crate::app::referenced::menu_window_start;
+use crate::ui::widgets::clear;
 use crate::ui::{style, text};
 
 use super::{fill_row, paint_text};
@@ -82,7 +83,7 @@ pub fn referenced_menu_row_at(
 /// 渲染目录弹窗：边框标题与 prompt 列表式行（底边提示由调用方叠加）。
 pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &ReferencedFolderMenu) {
     let layout = referenced_menu_layout(screen, menu);
-    frame.render_widget(Clear, layout.area);
+    clear::render(frame, layout.area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())

@@ -4,10 +4,11 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Position, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Widget};
+use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
+use crate::ui::widgets::clear;
 use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 
 /// 面板最小可用尺寸（含边框）。
@@ -184,7 +185,7 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
 /// 在内容区内绘制命令面板；返回实际绘制矩形，空间不足时返回 None。
 pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Option<Rect> {
     let layout = layout(area, view)?;
-    Clear.render(layout.rect, buf);
+    clear::render_buffer(buf, layout.rect);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::muted())

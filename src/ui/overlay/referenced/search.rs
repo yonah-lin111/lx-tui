@@ -7,7 +7,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::ReferencedFolderSearch;
@@ -163,7 +163,7 @@ pub fn render_referenced_search(
     search: &ReferencedFolderSearch,
 ) -> Option<(u16, u16)> {
     let layout = referenced_search_layout(screen, search)?;
-    frame.render_widget(Clear, layout.area);
+    widgets::clear::render(frame, layout.area);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())

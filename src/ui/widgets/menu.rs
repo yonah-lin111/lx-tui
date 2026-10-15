@@ -3,9 +3,10 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
+use crate::ui::widgets::clear;
 use crate::ui::{style, text};
 
 /// 菜单最小宽度（列，含边框）。
@@ -75,7 +76,7 @@ pub fn render(
     labels: &[&str],
     selected: Option<usize>,
 ) {
-    frame.render_widget(Clear, layout.area);
+    clear::render(frame, layout.area);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())

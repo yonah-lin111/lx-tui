@@ -9,8 +9,9 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
+use crate::ui::widgets::clear;
 use crate::ui::{style, text};
 
 /// 全屏覆盖几何：整屏（含最外层边框）与边框内内容区。
@@ -59,7 +60,7 @@ pub fn close_button_at(shell: &FullscreenShell, column: u16, row: u16) -> bool {
 
 /// 绘制全屏覆盖：蓝色圆角边框、清底，标题内嵌顶边框左侧、提示内嵌底边框左侧、右上角 `[✕]`。
 pub fn render(frame: &mut Frame<'_>, shell: &FullscreenShell, title: &str, hint: &str) {
-    frame.render_widget(Clear, shell.area);
+    clear::render(frame, shell.area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())

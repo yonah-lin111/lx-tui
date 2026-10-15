@@ -4,13 +4,14 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
 use crate::app::state::AppState;
 use crate::app::toast::{Toast, ToastKind};
 use crate::config::Config;
 use crate::layout::PaneId;
 use crate::ui::layout::ViewLayout;
+use crate::ui::widgets::clear;
 use crate::ui::{style, text};
 
 /// toast 覆盖层矩形；渲染与鼠标命中共用，保证所见即所点。
@@ -68,7 +69,7 @@ pub fn render(
 ) -> Option<Rect> {
     let area = rect(state, view, pane_rects, screen, config)?;
     let toast = state.toast.as_ref()?;
-    frame.render_widget(Clear, area);
+    clear::render(frame, area);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(border_style(toast.kind))

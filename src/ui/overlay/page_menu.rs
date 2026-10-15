@@ -198,7 +198,7 @@ pub(super) fn render_page_menu(
 ) {
     let labels = page_labels(state, menu);
     let layout = page_menu_layout(state, screen, menu);
-    frame.render_widget(ratatui::widgets::Clear, layout.area);
+    crate::ui::widgets::clear::render(frame, layout.area);
     let block = ratatui::widgets::Block::bordered()
         .border_type(ratatui::widgets::BorderType::Rounded)
         .border_style(style::accent())

@@ -3,8 +3,9 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::Span;
-use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
+use ratatui::widgets::{Block, BorderType, Paragraph};
 
+use crate::ui::widgets::clear;
 use crate::ui::{style, text};
 
 /// 模态几何：整体区域与内容区。
@@ -33,7 +34,7 @@ pub fn layout(screen: Rect, width: u16, height: u16) -> Option<ModalShell> {
 
 /// 渲染清底、强调色边框、标题与右上角关闭按钮；内容由调用方绘制在 `shell.inner`。
 pub fn render(frame: &mut Frame<'_>, shell: &ModalShell, title: &str) {
-    frame.render_widget(Clear, shell.area);
+    clear::render(frame, shell.area);
     // 标题为关闭按钮预留右上角空间，避免重叠。
     let title = text::ellipsize(title, usize::from(shell.area.width.saturating_sub(7)));
     let block = Block::bordered()
