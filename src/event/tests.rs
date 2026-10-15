@@ -2367,6 +2367,90 @@ fn folders_button_no_op_without_project_key() {
     assert!(state.overlay.is_none(), "无项目键不打开菜单");
 }
 
+/// 构造已进入子目录的引用文件夹搜索弹窗（Ctrl/Cmd+Z 回退的前置）。
+fn referenced_search_entered_state() -> AppState {
+    let mut state = demo_terminal();
+    let root = std::path::PathBuf::from("/tmp/lx-ref-z/root");
+    let sub = root.join("docs");
+    state.overlay = Some(Overlay::ReferencedFolderSearch(
+        crate::app::overlay::ReferencedFolderSearch {
+            anchor: (0, 0),
+            folder: 1,
+            key: Some(std::path::PathBuf::from("/tmp/lx-ref-z")),
+            root: sub,
+            initial_root: root.clone(),
+            stack: vec![root],
+            query: crate::app::overlay::TextInput::new(""),
+            entries: Vec::new(),
+            items: Vec::new(),
+            scan_truncated: false,
+            truncated: false,
+            selected: 0,
+            viewport: None,
+            loading: false,
+            failed: false,
+            request: Some(1),
+        },
+    ));
+    state
+}
+
+#[test]
+fn referenced_search_ctrl_or_cmd_z_returns_to_parent_scope() {
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        let mut state = referenced_search_entered_state();
+        let (config, geo) = toolbar_geometry(&mut state);
+        let mut sessions = HashMap::new();
+        let mut dirty = false;
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('z'), modifiers)),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut dirty,
+        );
+        let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+            panic!("search stays open: {modifiers:?}");
+        };
+        assert_eq!(
+            search.root,
+            std::path::PathBuf::from("/tmp/lx-ref-z/root"),
+            "回退到父搜索范围: {modifiers:?}"
+        );
+        assert!(search.stack.is_empty(), "{modifiers:?}");
+        assert!(search.request.is_some(), "回退后登记新扫描: {modifiers:?}");
+        assert!(dirty, "{modifiers:?}");
+    }
+}
+
+#[test]
+fn referenced_search_ctrl_z_at_root_is_noop() {
+    let mut state = referenced_search_entered_state();
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.stack.clear();
+    }
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+        panic!("search stays open");
+    };
+    assert!(
+        search.root.ends_with("docs"),
+        "初始根不再回退: {:?}",
+        search.root
+    );
+}
+
 #[test]
 fn mouse_click_prompt_pin_toggles_pin() {
     let mut state = demo_terminal();

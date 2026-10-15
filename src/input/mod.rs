@@ -176,9 +176,10 @@ pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
 
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
 fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
+    // Super/Cmd 组合同样视为非纯文本输入（终端支持 kitty 协议时可达）。
     let plain = !key
         .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match kind {
         OverlayKind::Menu | OverlayKind::PageMenu | OverlayKind::ReferencedFolderMenu => {
@@ -216,11 +217,20 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Char('z' | 'Z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl/Cmd+Z：回退上层搜索范围（终端支持 kitty 协议时 Cmd 组合可达）。
+            KeyCode::Char('z' | 'Z')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
                 Some(OverlayKey::Back)
             }
-            // Ctrl+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
-            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Ctrl/Cmd+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
+            KeyCode::Char('c' | 'C')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
                 Some(OverlayKey::Copy)
             }
             KeyCode::Backspace => Some(OverlayKey::Backspace),

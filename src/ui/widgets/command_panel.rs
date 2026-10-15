@@ -24,6 +24,7 @@ const TAG_GAP: usize = 2;
 ///
 /// 单行条目的 `tag` 为右对齐来源标签（如 `[User]`），空串表示无标签；
 /// 超宽时优先保留名称与标签，预览先截断、再整体省略。
+/// 双行条目的 `icon_style` / `label_style` 由调用方按语义传入（如目录与文件分色）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandItem<'a> {
     Inline {
@@ -33,7 +34,9 @@ pub enum CommandItem<'a> {
     },
     Stacked {
         icon: Option<&'a str>,
+        icon_style: Style,
         label: &'a str,
+        label_style: Style,
         detail: &'a str,
     },
 }
@@ -182,7 +185,8 @@ pub fn render(area: Rect, buf: &mut Buffer, view: &CommandPanelView<'_>) -> Opti
     block.render(layout.rect, buf);
     render_items(buf, &layout, view);
     if let Some(scrollbar) = layout.scrollbar.as_ref() {
-        scrollbar::render_buffer(buf, scrollbar);
+        // 命令面板是浮层：滚动条沿用面板底色，不透明。
+        scrollbar::render_buffer_with_base(buf, scrollbar, style::overlay_panel());
     }
     Some(layout.rect)
 }
@@ -414,15 +418,17 @@ fn render_item(
         }
         CommandItem::Stacked {
             icon,
+            icon_style,
             label,
+            label_style,
             detail,
         } => {
             let mut spans = vec![Span::raw(" ")];
             if let Some(icon) = icon {
-                spans.push(Span::styled(*icon, style::muted()));
+                spans.push(Span::styled(*icon, *icon_style));
                 spans.push(Span::raw(" "));
             }
-            spans.push(Span::styled(*label, style::text()));
+            spans.push(Span::styled(*label, *label_style));
             let mut lines = vec![Line::from(spans)];
             if !detail.is_empty() {
                 lines.push(Line::from(vec![

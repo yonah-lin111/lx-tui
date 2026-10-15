@@ -21,6 +21,7 @@ pub use search::{
 };
 
 use ratatui::Frame;
+use ratatui::buffer::CellDiffOption;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthChar;
@@ -39,6 +40,9 @@ pub(super) fn fill_row(frame: &mut Frame<'_>, rect: Rect, row_style: Style) {
 }
 
 /// 行内文本绘制：超出右界整体丢弃（不裁半个宽字符）。
+///
+/// 只覆盖前景与修饰符，保留单元格既有底色：浮层先铺 `overlay_panel` 底，
+/// 逐字符绘制不会在文字处透出底层（背景颜色保持一致）。
 pub(super) fn paint_text(frame: &mut Frame<'_>, rect: Rect, content: &str, cell_style: Style) {
     let mut x = rect.x;
     for ch in content.chars() {
@@ -47,9 +51,14 @@ pub(super) fn paint_text(frame: &mut Frame<'_>, rect: Rect, content: &str, cell_
             break;
         }
         if let Some(cell) = frame.buffer_mut().cell_mut((x, rect.y)) {
-            cell.reset();
             cell.set_char(ch);
             cell.set_style(cell_style);
+            cell.set_diff_option(CellDiffOption::None);
+        }
+        for dx in 1..width {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x + dx, rect.y)) {
+                cell.set_diff_option(CellDiffOption::Skip);
+            }
         }
         x = x.saturating_add(width);
     }

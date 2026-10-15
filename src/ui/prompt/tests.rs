@@ -457,6 +457,16 @@ fn mention_panel_marks_directory_and_file_icons() {
     assert!(file_row.contains(text::MENTION_FILE_ICON), "{file_row}");
     assert!(file_row.contains("app.rs"), "{file_row}");
     assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
+    // 目录条目按目录色（强调色加粗）着色，文件条目保持默认前景。
+    assert_eq!(buf[(3, 2)].fg, Color::Cyan, "目录图标用目录色");
+    assert!(buf[(3, 2)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(5, 2)].fg, Color::Cyan, "目录名称用目录色");
+    assert_eq!(
+        buf[(5, 3)].fg,
+        Color::Indexed(252),
+        "文件名称沿用浮层默认前景"
+    );
+    assert!(!buf[(5, 3)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]

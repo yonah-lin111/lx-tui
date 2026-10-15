@@ -56,7 +56,7 @@ pub(crate) fn handle_mouse_down_left(
                 Some(grab) => state.referenced_search_scroll_drag = Some(grab),
                 None => {
                     let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
-                    if update::set_referenced_search_viewport(state, offset, layout.visible) {
+                    if update::set_referenced_search_viewport(state, offset, layout.visible()) {
                         *dirty = true;
                     }
                 }

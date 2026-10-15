@@ -1,24 +1,30 @@
 //! 引用文件夹内容搜索弹窗：几何、命中与渲染。
+//!
+//! 顶部范围路径行（右端复制原始路径）、单行搜索框与双行候选列表（首行图标 + 名称、
+//! 次行 `└─ ` 父目录地址）；进入子目录后顶边右端显示当前文件夹；底边为快捷键提示。
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
-use ratatui::text::Span;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::ReferencedFolderSearch;
-use crate::app::referenced::menu_window_start;
+use crate::app::referenced::{ReferencedEntry, menu_window_start};
 use crate::ui::widgets;
 use crate::ui::{style, text};
 
 use super::{fill_row, paint_text};
 
-/// 内容搜索弹窗标题行外的可视列表最小行数。
+/// 内容搜索弹窗可视列表最大行数。
 const SEARCH_MAX_HEIGHT: u16 = 20;
 /// 内容搜索弹窗宽度（列）。
 const SEARCH_WIDTH: u16 = 60;
+/// 每条候选占用的行数（名称行 + 地址行）。
+const ROW_HEIGHT: u16 = 2;
 
-/// 内容搜索弹窗几何：顶部范围行、搜索框、列表与底边提示。
+/// 内容搜索弹窗几何：顶部范围行、搜索框、双行列表与滚动条。
 pub struct ReferencedSearchLayout {
     pub area: Rect,
     pub inner: Rect,
@@ -32,10 +38,24 @@ pub struct ReferencedSearchLayout {
     pub list: Rect,
     /// 列表滚动条；不溢出时为 None。
     pub scrollbar: Option<widgets::scrollbar::ScrollbarLayout>,
-    /// 列表可视行数。
-    pub visible: usize,
+    /// 可见候选及其两行矩形。
+    pub rows: Vec<ReferencedSearchRow>,
     /// 窗口内首个候选索引。
     pub start: usize,
+}
+
+/// 一条可见候选：索引与两行矩形。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReferencedSearchRow {
+    pub index: usize,
+    pub row: Rect,
+}
+
+impl ReferencedSearchLayout {
+    /// 列表可见候选数。
+    pub fn visible(&self) -> usize {
+        self.rows.len()
+    }
 }
 
 /// 内容搜索弹窗几何；屏幕放不下时返回 None。
@@ -44,13 +64,14 @@ pub fn referenced_search_layout(
     search: &ReferencedFolderSearch,
 ) -> Option<ReferencedSearchLayout> {
     let width = SEARCH_WIDTH.min(screen.width);
-    // 高度随候选增长（顶部范围行 + 搜索行 + 列表 + 底边），最小保证数行列表可用。
-    let height = (u16::try_from(search.items.len())
-        .unwrap_or(u16::MAX)
-        .saturating_add(4))
-    .clamp(8, SEARCH_MAX_HEIGHT)
-    .min(screen.height);
-    if width < 8 || height < 5 {
+    // 高度随候选增长（双行候选 + 顶部范围行 + 搜索行 + 上下边框），最小保证数条候选可用。
+    let rows_height = u16::try_from(search.items.len().saturating_mul(usize::from(ROW_HEIGHT)))
+        .unwrap_or(u16::MAX);
+    let height = rows_height
+        .saturating_add(4)
+        .clamp(10, SEARCH_MAX_HEIGHT)
+        .min(screen.height);
+    if width < 8 || height < 6 {
         return None;
     }
     let x = screen.x + (screen.width - width) / 2;
@@ -70,14 +91,27 @@ pub fn referenced_search_layout(
     );
     let query = Rect::new(inner.x, inner.y.saturating_add(1), inner.width, 1);
     let list_y = inner.y.saturating_add(2);
-    let list_height = inner.height.saturating_sub(3);
+    let list_height = inner.height.saturating_sub(2);
     let list = Rect::new(inner.x, list_y, inner.width.saturating_sub(1), list_height);
-    let visible = usize::from(list_height);
+    let visible = usize::from(list_height / ROW_HEIGHT);
     // 显式视口优先（滚轮滚动，高亮允许不在窗口内）；否则窗口跟随高亮。
+    let max_start = search.items.len().saturating_sub(visible);
     let start = search
         .viewport
-        .map(|offset| offset.min(search.items.len().saturating_sub(visible)))
+        .map(|offset| offset.min(max_start))
         .unwrap_or_else(|| menu_window_start(search.selected, visible, search.items.len()));
+    let shown = visible.min(search.items.len().saturating_sub(start));
+    let rows = (0..shown)
+        .map(|offset| ReferencedSearchRow {
+            index: start + offset,
+            row: Rect::new(
+                list.x,
+                list.y + (offset as u16).saturating_mul(ROW_HEIGHT),
+                list.width,
+                ROW_HEIGHT,
+            ),
+        })
+        .collect();
     // 列表溢出时在最右一列显示滚动条。
     let scrollbar = widgets::scrollbar::layout(
         Rect {
@@ -85,7 +119,7 @@ pub fn referenced_search_layout(
             ..list
         },
         search.items.len(),
-        visible,
+        visible.max(1),
         start,
     );
     Some(ReferencedSearchLayout {
@@ -96,7 +130,7 @@ pub fn referenced_search_layout(
         query,
         list,
         scrollbar,
-        visible,
+        rows,
         start,
     })
 }
@@ -120,15 +154,11 @@ pub fn referenced_search_item_at(
     row: u16,
 ) -> Option<usize> {
     let layout = referenced_search_layout(screen, search)?;
-    if !layout.list.contains((column, row).into()) {
-        return None;
-    }
-    let offset = usize::from(row - layout.list.y);
-    if offset >= layout.visible {
-        return None;
-    }
-    let index = layout.start + offset;
-    (index < search.items.len()).then_some(index)
+    layout
+        .rows
+        .iter()
+        .find(|line| line.row.contains((column, row).into()))
+        .map(|line| line.index)
 }
 
 /// 渲染内容搜索弹窗；返回搜索框硬件光标位置（不聚焦时 None）。
@@ -139,7 +169,7 @@ pub fn render_referenced_search(
 ) -> Option<(u16, u16)> {
     let layout = referenced_search_layout(screen, search)?;
     frame.render_widget(Clear, layout.area);
-    let block = Block::bordered()
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(style::accent())
         .style(style::overlay_panel())
@@ -147,21 +177,54 @@ pub fn render_referenced_search(
             format!(" {} ", text::REFERENCED_SEARCH_TITLE),
             style::border_title(),
         ));
+    // 进入子目录后顶边右端显示当前文件夹名。
+    if let Some(scope) = search_scope_name(search) {
+        let available = usize::from(layout.area.width.saturating_sub(2))
+            .saturating_sub(text::REFERENCED_SEARCH_TITLE.width() + 4);
+        block = block.title_top(
+            Line::from(Span::styled(
+                format!(" {} ", text::truncate_to_width(&scope, available)),
+                style::border_title(),
+            ))
+            .alignment(Alignment::Right),
+        );
+    }
     frame.render_widget(block, layout.area);
-    // 顶部范围路径 + 右端原始路径复制按钮。
-    let scope = text::ellipsize_middle(
+    // 顶部范围路径 + 右端原始路径复制按钮；截断提示紧贴复制按钮左侧（始终可见）。
+    let truncated = search
+        .truncated
+        .then_some(text::REFERENCED_SEARCH_TRUNCATED);
+    let reserved = layout
+        .copy_path
+        .width
+        .saturating_add(u16::try_from(truncated.map_or(0, |label| label.width() + 1)).unwrap_or(0));
+    let scope_path = text::ellipsize_middle(
         &search.root.display().to_string(),
-        usize::from(layout.title.width).saturating_sub(usize::from(layout.copy_path.width)),
+        usize::from(layout.title.width).saturating_sub(usize::from(reserved)),
     );
-    paint_text(frame, layout.title, &scope, style::accent());
+    paint_text(frame, layout.title, &scope_path, style::accent());
+    if let Some(label) = truncated {
+        let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
+        paint_text(
+            frame,
+            Rect::new(
+                layout.copy_path.x.saturating_sub(1 + width),
+                layout.title.y,
+                width,
+                1,
+            ),
+            label,
+            style::muted(),
+        );
+    }
     paint_text(
         frame,
         layout.copy_path,
         text::TEMPLATE_BUTTON_COPY,
         style::accent(),
     );
-    // 搜索框。
-    let cursor = crate::ui::widgets::input::render(
+    // 搜索框（模态单行输入统一样式：`>` 前缀 + 视口）。
+    let cursor = super::super::dialog::render_input(
         frame,
         layout.query,
         search.query.text(),
@@ -169,7 +232,7 @@ pub fn render_referenced_search(
         Some(text::REFERENCED_SEARCH_PLACEHOLDER),
     );
     // 列表或状态提示。
-    let status = if search.loading && search.entries.is_empty() {
+    let status = if search.loading && search.items.is_empty() {
         Some(text::REFERENCED_SEARCH_LOADING)
     } else if search.failed {
         Some(text::REFERENCED_SEARCH_FAILED)
@@ -180,7 +243,8 @@ pub fn render_referenced_search(
     };
     if let Some(status) = status {
         frame.render_widget(
-            Paragraph::new(Span::styled(format!(" {status}"), style::muted())),
+            Paragraph::new(Span::styled(format!(" {status}"), style::muted()))
+                .style(style::overlay_panel()),
             Rect {
                 height: 1,
                 ..layout.list
@@ -189,65 +253,105 @@ pub fn render_referenced_search(
     } else {
         render_search_rows(frame, &layout, search);
         if let Some(scrollbar) = layout.scrollbar {
-            widgets::scrollbar::render(frame, &scrollbar);
+            widgets::scrollbar::render_with_base(frame, &scrollbar, style::overlay_panel());
         }
-    }
-    // 截断提示贴底边右端（底边左端留给快捷键提示，二者不重叠）。
-    if search.truncated {
-        let y = layout.area.bottom().saturating_sub(1);
-        let width = u16::try_from(text::REFERENCED_SEARCH_TRUNCATED.width())
-            .unwrap_or(u16::MAX)
-            .min(layout.area.width.saturating_sub(4));
-        let x = layout.area.right().saturating_sub(2 + width);
-        paint_text(
-            frame,
-            Rect::new(x, y, width, 1),
-            text::REFERENCED_SEARCH_TRUNCATED,
-            style::muted(),
-        );
     }
     cursor
 }
 
-/// 渲染可见候选行：图标 + 名称、缩进的父目录、选中底色。
+/// 可见候选行：首行图标 + 名称（目录带 `/`），次行 `└─ ` 父目录地址；选中行铺底色。
 fn render_search_rows(
     frame: &mut Frame<'_>,
     layout: &ReferencedSearchLayout,
     search: &ReferencedFolderSearch,
 ) {
-    for (offset, index) in (layout.start..search.items.len())
-        .take(layout.visible)
-        .enumerate()
-    {
-        let Some(entry) = search.items.get(index) else {
+    for line in &layout.rows {
+        let Some(entry) = search.items.get(line.index) else {
             continue;
         };
-        let y = layout.list.y + offset as u16;
-        let row_area = Rect::new(layout.list.x, y, layout.list.width, 1);
-        let base = if index == search.selected {
+        let base = if line.index == search.selected {
             style::overlay_selection()
         } else {
             style::overlay_panel()
         };
-        fill_row(frame, row_area, base);
-        let icon = if entry.is_directory {
-            text::REFERENCED_DIR_ICON
-        } else {
-            text::REFERENCED_FILE_ICON
-        };
-        let suffix = if entry.is_directory { "/" } else { "" };
-        let label = format!("{icon} {}{suffix}", entry.name);
-        paint_text(
-            frame,
-            row_area,
-            &text::truncate_to_width(&label, usize::from(row_area.width)),
-            base.patch(if entry.is_directory {
-                style::accent()
-            } else {
-                style::text()
-            }),
-        );
+        fill_row(frame, line.row, base);
+        render_entry_row(frame, line.row, entry, base);
     }
+}
+
+/// 单条候选的两行绘制；底色沿用 `base`。
+fn render_entry_row(frame: &mut Frame<'_>, row: Rect, entry: &ReferencedEntry, base: Style) {
+    if row.width < 3 {
+        return;
+    }
+    let (icon, icon_style, label_style) = if entry.is_directory {
+        (
+            text::REFERENCED_DIR_ICON,
+            style::directory(),
+            style::directory(),
+        )
+    } else {
+        (text::REFERENCED_FILE_ICON, style::muted(), style::text())
+    };
+    let suffix = if entry.is_directory { "/" } else { "" };
+    let name_row = Rect { height: 1, ..row };
+    paint_text(frame, name_row, icon, base.patch(icon_style));
+    let name_area = Rect {
+        x: row.x.saturating_add(2),
+        width: row.width.saturating_sub(2),
+        ..name_row
+    };
+    paint_text(
+        frame,
+        name_area,
+        &text::truncate_to_width(
+            &format!("{}{suffix}", entry.name),
+            usize::from(name_area.width),
+        ),
+        base.patch(label_style),
+    );
+    // 次行：地址（父目录绝对路径，按显示列中间截断）。
+    let detail_row = Rect {
+        y: row.y.saturating_add(1),
+        height: 1,
+        ..row
+    };
+    let address = referenced_entry_address(entry, usize::from(detail_row.width.saturating_sub(2)));
+    paint_text(
+        frame,
+        Rect {
+            x: detail_row.x.saturating_add(2),
+            width: detail_row.width.saturating_sub(2),
+            ..detail_row
+        },
+        &address,
+        base.patch(style::muted()),
+    );
+}
+
+/// 当前进入的文件夹名（末段）；仍在初始根时 None。
+fn search_scope_name(search: &ReferencedFolderSearch) -> Option<String> {
+    if search.stack.is_empty() {
+        return None;
+    }
+    search
+        .root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+}
+
+/// 候选地址行：`└─ ` 前缀 + 父目录绝对路径（中间截断）。
+fn referenced_entry_address(entry: &ReferencedEntry, width: usize) -> String {
+    let parent = entry
+        .path
+        .parent()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let prefix = format!("{} ", text::WORKSPACE_TREE_LAST);
+    let available = width.saturating_sub(prefix.width());
+    format!("{prefix}{}", text::ellipsize_middle(&parent, available))
 }
 
 /// 渲染内容搜索弹窗底边快捷键提示（贴底边，覆盖边框上）。
@@ -264,6 +368,6 @@ pub fn render_referenced_search_footer(
         frame,
         Rect::new(layout.area.x + 2, y, layout.area.width.saturating_sub(4), 1),
         text::REFERENCED_SEARCH_FOOTER,
-        style::muted(),
+        style::muted_on_border(),
     );
 }

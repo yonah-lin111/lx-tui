@@ -172,7 +172,7 @@ pub(crate) fn handle_mouse_wheel(
         && layout.area.contains((mouse.column, mouse.row).into())
     {
         // 弹窗内滚轮滚动列表视口（高亮不动、越界钳制），不穿透到底层。
-        if update::scroll_referenced_search(state, direction, layout.start, layout.visible) {
+        if update::scroll_referenced_search(state, direction, layout.start, layout.visible()) {
             *dirty = true;
         }
         return;

@@ -798,14 +798,14 @@ fn referenced_search_state(items: Vec<ReferencedEntry>, selected: usize) -> AppS
 fn referenced_search_renders_scope_query_items_and_footer() {
     let items = vec![
         ReferencedEntry {
-            path: PathBuf::from("/tmp/alpha/src"),
-            relative: "src".into(),
+            path: PathBuf::from("/tmp/alpha/docs/src"),
+            relative: "docs/src".into(),
             name: "src".into(),
             is_directory: true,
         },
         ReferencedEntry {
-            path: PathBuf::from("/tmp/alpha/file.rs"),
-            relative: "file.rs".into(),
+            path: PathBuf::from("/tmp/alpha/docs/file.rs"),
+            relative: "docs/file.rs".into(),
             name: "file.rs".into(),
             is_directory: false,
         },
@@ -817,6 +817,12 @@ fn referenced_search_renders_scope_query_items_and_footer() {
     assert!(joined.contains("/tmp/alpha"), "范围路径: {joined}");
     assert!(joined.contains("src/"), "目录行带尾斜杠: {joined}");
     assert!(joined.contains("file.rs"), "{joined}");
+    // 两条候选在下一行显示地址（父目录绝对路径）。
+    assert!(joined.contains("/tmp/alpha/docs"), "候选地址行: {joined}");
+    assert!(
+        joined.contains(text::WORKSPACE_TREE_LAST),
+        "地址行带 └─ 前缀: {joined}"
+    );
     assert!(
         joined.contains(text::REFERENCED_SEARCH_FOOTER),
         "底边快捷键: {joined}"
@@ -826,13 +832,101 @@ fn referenced_search_renders_scope_query_items_and_footer() {
 }
 
 #[test]
-fn referenced_search_hit_tests_copy_and_items() {
+fn referenced_search_shows_entered_folder_top_right() {
     let items = vec![ReferencedEntry {
-        path: PathBuf::from("/tmp/alpha/file.rs"),
-        relative: "file.rs".into(),
+        path: PathBuf::from("/tmp/alpha/docs/file.rs"),
+        relative: "docs/file.rs".into(),
         name: "file.rs".into(),
         is_directory: false,
     }];
+    let mut state = referenced_search_state(items, 0);
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.root = PathBuf::from("/tmp/alpha/docs");
+        search.stack = vec![PathBuf::from("/tmp/alpha")];
+    }
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains("docs"), "顶边右端显示当前文件夹: {joined}");
+
+    // 仍在初始根时不显示目录名后缀。
+    let mut state = referenced_search_state(Vec::new(), 0);
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.initial_root = PathBuf::from("/tmp/alpha");
+        search.root = PathBuf::from("/tmp/alpha");
+    }
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::REFERENCED_SEARCH_TITLE));
+}
+
+#[test]
+fn referenced_search_paints_solid_panel_background() {
+    let items: Vec<ReferencedEntry> = (0..10)
+        .map(|index| ReferencedEntry {
+            path: PathBuf::from(format!("/tmp/alpha/docs/file{index}.rs")),
+            relative: format!("docs/file{index}.rs"),
+            name: format!("file{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    let state = referenced_search_state(items, 0);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+    if let Err(error) = terminal.draw(|frame| {
+        render(frame, frame.area(), &state);
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buf = terminal.backend().buffer().clone();
+    let search = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderSearch(search)) => search,
+        _ => panic!("search"),
+    };
+    let layout = referenced_search_layout(SCREEN, search).expect("layout");
+    let scrollbar = layout.scrollbar.expect("list overflows");
+    // 范围路径文字、搜索框、非选中候选与滚动条都保持浮层底色，不透明。
+    for (label, x, y) in [
+        ("范围路径", layout.title.x, layout.title.y),
+        ("范围路径第二个字符", layout.title.x + 1, layout.title.y),
+        ("搜索框", layout.query.x, layout.query.y),
+        ("非选中候选首行", layout.list.x, layout.list.y + 2),
+        ("非选中候选地址行", layout.list.x + 2, layout.list.y + 3),
+        ("滚动条轨道", scrollbar.track.x, scrollbar.track.y),
+        ("滚动条 thumb", scrollbar.thumb.x, scrollbar.thumb.y),
+    ] {
+        assert_eq!(
+            buf[(x, y)].bg,
+            Color::Indexed(236),
+            "{label} 应保持浮层底色"
+        );
+    }
+    assert_eq!(
+        buf[(layout.list.x, layout.list.y)].bg,
+        Color::Indexed(240),
+        "选中候选底色"
+    );
+    assert_eq!(
+        buf[(layout.list.x + 2, layout.list.y + 1)].bg,
+        Color::Indexed(240),
+        "选中候选地址行底色"
+    );
+}
+
+#[test]
+fn referenced_search_hit_tests_copy_and_items() {
+    let items = vec![
+        ReferencedEntry {
+            path: PathBuf::from("/tmp/alpha/file.rs"),
+            relative: "file.rs".into(),
+            name: "file.rs".into(),
+            is_directory: false,
+        },
+        ReferencedEntry {
+            path: PathBuf::from("/tmp/alpha/other.rs"),
+            relative: "other.rs".into(),
+            name: "other.rs".into(),
+            is_directory: false,
+        },
+    ];
     let state = referenced_search_state(items, 0);
     let search = match state.overlay.as_ref() {
         Some(Overlay::ReferencedFolderSearch(search)) => search,
@@ -845,12 +939,21 @@ fn referenced_search_hit_tests_copy_and_items() {
         layout.copy_path.x,
         layout.copy_path.y
     ));
+    // 每条候选占两行：首行与地址行都命中同一候选。
     assert_eq!(
         referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.y),
         Some(0)
     );
     assert_eq!(
-        referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.bottom()),
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.y + 1),
+        Some(0)
+    );
+    assert_eq!(
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.y + 2),
+        Some(1)
+    );
+    assert_eq!(
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.area.bottom()),
         None
     );
 }

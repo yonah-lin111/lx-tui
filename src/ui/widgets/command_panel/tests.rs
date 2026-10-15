@@ -21,7 +21,9 @@ fn stacked<'a>(pairs: &[(&'a str, &'a str)]) -> Vec<CommandItem<'a>> {
         .iter()
         .map(|&(label, detail)| CommandItem::Stacked {
             icon: None,
+            icon_style: crate::ui::style::muted(),
             label,
+            label_style: crate::ui::style::text(),
             detail,
         })
         .collect()
@@ -33,7 +35,9 @@ fn stacked_icons<'a>(triples: &[(&'a str, &'a str, &'a str)]) -> Vec<CommandItem
         .iter()
         .map(|&(icon, label, detail)| CommandItem::Stacked {
             icon: Some(icon),
+            icon_style: crate::ui::style::muted(),
             label,
+            label_style: crate::ui::style::text(),
             detail,
         })
         .collect()
@@ -128,6 +132,36 @@ fn renders_below_anchor_without_covering_it() {
     let label_at = row.find("Heading 1").expect("label first");
     let format_at = row.find('#').expect("preview after");
     assert!(label_at < format_at);
+}
+
+#[test]
+fn scrollbar_keeps_panel_background_inside_command_panel() {
+    let area = Rect::new(0, 0, 24, 8);
+    let mut buf = Buffer::empty(area);
+    let labels: Vec<(String, String)> = (0..10)
+        .map(|index| (format!("file{index}.rs"), "src".to_string()))
+        .collect();
+    let items: Vec<CommandItem<'_>> = labels
+        .iter()
+        .map(|(label, detail)| CommandItem::Stacked {
+            icon: None,
+            icon_style: style::muted(),
+            label,
+            label_style: style::text(),
+            detail,
+        })
+        .collect();
+    let view = view(&items, 0, 0, None);
+    let layout = layout(area, &view).expect("panel layout");
+    render(area, &mut buf, &view).expect("panel renders");
+    let bar = layout.scrollbar.expect("list overflows");
+    // 命令面板是浮层：滚动条轨道/thumb 保持面板底色，不透明。
+    assert_eq!(buf[(bar.track.x, bar.track.y)].bg, Color::Indexed(236));
+    assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].bg, Color::Indexed(236));
+    // 非浮层滚动条保持透明底。
+    let mut plain = Buffer::empty(area);
+    scrollbar::render_buffer(&mut plain, &bar);
+    assert_eq!(plain[(bar.track.x, bar.track.y)].bg, Color::Reset);
 }
 
 #[test]
@@ -260,7 +294,9 @@ fn caps_panel_height_and_follows_active() {
         .iter()
         .map(|(label, detail)| CommandItem::Stacked {
             icon: None,
+            icon_style: crate::ui::style::muted(),
             label,
+            label_style: crate::ui::style::text(),
             detail,
         })
         .collect();
@@ -350,7 +386,9 @@ fn explicit_window_start_ignores_active_highlight() {
         .iter()
         .map(|(label, detail)| CommandItem::Stacked {
             icon: None,
+            icon_style: crate::ui::style::muted(),
             label,
+            label_style: crate::ui::style::text(),
             detail,
         })
         .collect();

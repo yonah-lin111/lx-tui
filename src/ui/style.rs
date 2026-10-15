@@ -129,6 +129,11 @@ pub fn overlay_panel() -> Style {
         .bg(Color::Indexed(236))
 }
 
+/// 目录条目（`@` 提及面板与引用文件夹内容弹窗）：强调色，与文件条目一眼区分。
+pub fn directory() -> Style {
+    accent()
+}
+
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：次要信息。
 pub fn markdown_marker() -> Style {
     muted()
