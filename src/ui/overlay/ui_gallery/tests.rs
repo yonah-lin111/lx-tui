@@ -208,4 +208,15 @@ fn preview_component_is_horizontally_centered() {
         '╭',
         "组件左上角应位于居中列 {expected_x}"
     );
+
+    // 说明文字每行同样水平居中。
+    let desc_row = lines
+        .iter()
+        .find(|line| line.contains("Non-modal feedback"))
+        .expect("description rendered");
+    let region: Vec<char> = desc_row.chars().skip(usize::from(layout.right.x)).collect();
+    let offset = region.iter().position(|ch| *ch != ' ').expect("non-space") as u16;
+    let line_width = text::UI_GALLERY_TOAST_DESC[0].chars().count() as u16;
+    let expected_desc_x = layout.right.width.saturating_sub(line_width) / 2;
+    assert_eq!(offset, expected_desc_x, "说明文字应水平居中");
 }

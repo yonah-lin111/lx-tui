@@ -173,6 +173,7 @@ fn render_preview(frame: &mut Frame<'_>, layout: &UiGalleryLayout, gallery: &UiG
     let x = right.x + right.width.saturating_sub(width) / 2;
     let rect = Rect::new(x, right.y, width, height);
     render_appearance(frame, rect, component.id);
+    // 说明文字：组件下方空 1 行，每行在右区水平居中。
     let desc_y = right.y.saturating_add(height).saturating_add(1);
     let buf = frame.buffer_mut();
     for (offset, line) in component.description.iter().enumerate() {
@@ -180,7 +181,9 @@ fn render_preview(frame: &mut Frame<'_>, layout: &UiGalleryLayout, gallery: &UiG
         if y >= right.bottom() {
             break;
         }
-        put_text(buf, right.x, y, line, style::muted(), right.right());
+        let line_width = (line.chars().count() as u16).min(right.width);
+        let desc_x = right.x + right.width.saturating_sub(line_width) / 2;
+        put_text(buf, desc_x, y, line, style::muted(), right.right());
     }
 }
 
