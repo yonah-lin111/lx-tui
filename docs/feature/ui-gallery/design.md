@@ -5,12 +5,12 @@
 
 ## 1. 目标与范围
 
-在左侧栏底边框的 `[SET]` 按钮右侧新增一个按钮 `[UI]`。点击后打开一个尽可能大的居中模态弹窗，弹窗内部划分为左右两区：
+在左侧栏底边框的 `[SET]` 按钮右侧新增一个按钮 `[UI]`。点击后用**全屏覆盖**（不是模态弹窗）展示组件目录：整屏覆盖、最外层一条蓝色边框、无自绘背景色，内部划分为左右两区：
 
 - 左侧为组件树：顶层文件夹 `global` 与 `prompt`，文件夹可折叠展开；`global` 下含 `toast`、`modal`、`tooltip`、`button`、`menu`，`prompt` 下含 `editor`、`list`、`toolbar`。
-- 右侧为选中组件的事例：以只读静态预览绘制该组件的外观样例，并在下方给出若干行用途/触发方式说明。
+- 右侧为选中组件的真实外观预览：直接按组件自身样式与尺寸渲染（不额外包裹样例框）并**水平居中**，其下留 1 行空白后渲染 muted 用途说明。
 
-弹窗只做“查看”，不驱动真实业务逻辑；关闭后不影响任何现有面板状态。
+查看器只做“查看”，不驱动真实业务逻辑；关闭后不影响任何现有面板状态。
 
 ## 2. 已确认决策（Grill Me 盘问结论）
 
@@ -18,15 +18,18 @@
 |---|--------|------|
 | 1 | 左侧树结构 | 顶层两个文件夹。`global` 下含 `toast / modal / tooltip / button / menu`；`prompt` 下含 `editor / list / toolbar`。文件夹可折叠展开。 |
 | 2 | `prompt` 子项归属 | 右键菜单归 `global`（`menu`）；编辑器/树列表/工具栏归 `prompt`。 |
-| 3 | 右侧事例形态 | **静态预览 + 文字说明**：只读绘制外观样例 + 几行用途说明；样例不可交互，不与真实组件状态耦合。 |
-| 4 | 弹窗四周留白 | 四周各留 **2 列 / 2 行**（即占屏幕宽、高各减 4），居中。 |
-| 5 | 左侧切换方式 | 左侧为竖排 tab/树列表；鼠标点击切换，键盘 `↑/↓` 移动高亮，`Esc` 关闭弹窗；`→` 展开文件夹、`←` 折叠文件夹（或移到父级）。不做 `Ctrl+数字` 等额外快捷键。 |
-| 6 | 文件夹折叠 | 可折叠展开；文件夹行左侧 `▾`（展开）/`▸`（折叠）三角，回车或点击切换；默认全部展开。 |
-| 7 | 分栏与左侧宽度 | 左侧固定 **24 列**，右侧占剩余全部宽度；弹窗过窄时按比例压缩左侧（保证右侧至少 1 列）。 |
-| 8 | 左右分隔视觉 | 左右之间画一条竖直边框线 `│`，样式跟随弹窗边框（muted）。 |
-| 9 | 命名与图标 | 全英文命名；文件夹行 `▾`/`▸` 三角（accent），子项行 `•` 图标，子项缩进 2 列，与 prompt list 树视图风格一致。 |
-| 10 | `[UI]` 可见性 | 不依赖设置服务；侧栏展开且宽度足够时显示，侧栏折叠或过窄时隐藏。 |
-| 11 | 按钮间距与降级 | `[UI]` 紧跟 `[SET]` 右侧隔 1 列；宽度不足时先隐藏 `[UI]`、保留 `[SET]`。 |
+| 3 | 展示形态（增补） | **不使用模态弹窗**：抽成无边框、无背景色的**全屏覆盖公共组件**（`ui/widgets/fullscreen.rs`），直接整屏覆盖；原模态内容迁入。 |
+| 4 | 右侧预览（增补） | 按组件**真实外观**渲染，**不加统一包裹框**（原 `Preview` 标题与拉满宽度的大边框去掉）；组件自带边框时贴合真实尺寸，无边框组件（如 `button`）即纯标签。 |
+| 5 | 右侧标题与说明（增补） | 去掉 `Preview` 标题；先渲染组件真实外观，其下空 1 行后渲染 muted 说明文字。 |
+| 6 | 左侧切换方式 | 左侧为竖排树；鼠标点击切换，键盘 `↑/↓` 移动高亮，`→` 展开、`←` 折叠/回父级，`Esc` 关闭。 |
+| 7 | 文件夹折叠 | 可折叠展开；文件夹行左侧 `▾`（展开）/`▸`（折叠）三角，回车或点击切换；默认全部展开。 |
+| 8 | 分栏与左侧宽度 | 左侧固定 **24 列**，右侧占剩余宽度；整屏过窄时按比例压缩左侧（保证右侧至少 1 列）。 |
+| 9 | 左右分隔视觉 | 左右之间画一条竖直边框线 `│`，样式跟随失焦态边框色。 |
+| 10 | 命名与图标 | 全英文命名；文件夹行 `▾`/`▸` 三角（accent），子项行 `•` 图标，子项缩进 2 列，与 prompt list 树视图风格一致。 |
+| 11 | `[UI]` 可见性 | 不依赖设置服务；侧栏展开且宽度足够时显示，侧栏折叠或过窄时隐藏。 |
+| 12 | 按钮间距与降级 | `[UI]` 紧跟 `[SET]` 右侧隔 1 列；宽度不足时先隐藏 `[UI]`、保留 `[SET]`。 |
+| 13 | 外框（增补） | 全屏覆盖组件最外层加一条**蓝色边框**（`style::accent()`，Cyan 圆角），仍不铺底色。 |
+| 14 | 右侧对齐（增补） | 右侧预览的组件**水平居中**于右区；说明文字仍左对齐。 |
 
 ## 3. 已核实的实现基线
 
@@ -34,79 +37,89 @@
 | --- | --- |
 | `src/ui/controls.rs` | `settings_button` / `settings_button_at` / `render_settings_button`：侧栏底边框左端 `[SET]` 的几何、命中与逐格绘制，`[UI]` 完全对齐这一套并放在其右侧。 |
 | `src/event/mouse/press.rs:122` | `[SET]` 的左键命中分支；`[UI]` 在其后追加同款分支。 |
-| `src/ui/widgets/modal.rs` | 模态容器：居中、`Clear` 清底、圆角边框、标题与右上角 `[✕]`；`layout(screen, w, h)` 负责居中几何，`close_button_at` 负责关闭命中。 |
+| `src/ui/widgets/fullscreen.rs`（新增） | **全屏覆盖公共组件**：最外层蓝色圆角边框、无底色，`Clear` 清为默认底；边框内为顶栏标题 + 右上角 `[✕]`、底栏提示、中间内容区。几何/清底/命中与文案由调用方提供，无业务语义。 |
+| `src/ui/widgets/modal.rs` | 模态容器（保留给既有浮层）：`close_button_rect` 被 toast/modal 预览复用，保证样例关闭按钮几何与真实组件一致。 |
+| `src/ui/toast.rs` | 真实 toast：圆角边框、内容自适应宽度、右上角 `[✕]`；预览按其外观与尺寸重建。 |
 | `src/app/overlay.rs` | `Overlay` 枚举与 `OverlayKind`；新增 `Overlay::UiGallery` 与 `OverlayKind::UiGallery`。 |
 | `src/ui/overlay.rs` | 浮层渲染分派；新增 `ui_gallery` 子模块与分支。 |
-| `src/event/overlay.rs` | `handle_overlay_click` 的浮层点击分派；新增 `UiGallery` 分支（点条目切换/折叠、点外部或 `[✕]` 关闭）。 |
-| `src/app/update/dialog.rs` | `apply_overlay_key` 的按键分派；新增 `ui_gallery` 键处理。 |
+| `src/event/overlay.rs` | `handle_overlay_click` 的浮层点击分派；新增 `UiGallery` 分支（点条目切换/折叠、点 `[✕]` 关闭；全屏覆盖无“浮层之外”）。 |
+| `src/app/update/{dialog,ui_gallery}.rs` | `apply_overlay_key` 分派到 `apply_ui_gallery_key`。 |
 | `src/input/mod.rs` | `overlay_key` 按 `OverlayKind` 过滤按键；新增 `UiGallery` 分支（`Esc/Up/Down/Left/Right/Enter`）。 |
 | `src/app/prompt/tree.rs` | 文件夹/条目的“扁平存储 + 可见行 + 折叠”模型，是左侧树的直接参照（但 UI 画廊数据为静态常量，不进 DB）。 |
-| `src/ui/prompt/tree.rs` | 树行渲染：折叠三角、`├─`/`└─` 连接符、`•` 图标、缩进，右侧预览沿用其绘制手法。 |
-| `src/app/tooltip.rs`、`src/ui/tooltip.rs`、`src/ui/text.rs` | `TooltipTarget` 枚举、`targets()` 注册与 `tooltip_hint` 映射；新增 `SidebarUi` 目标与 `open ui gallery` 提示。 |
+| `src/ui/prompt/tree.rs` | 树行渲染：折叠三角、`├─`/`└─` 连接符、`•` 图标、缩进，左侧树沿用其绘制手法。 |
+| `src/app/tooltip.rs`、`src/ui/tooltip.rs`、`src/ui/text.rs` | `TooltipTarget` 枚举、`targets()` 注册与 `tooltip_hint` 映射；新增 `SidebarUiGallery` 目标与 `open ui gallery` 提示。 |
 
 ## 4. 数据模型（`src/app/ui_gallery.rs`，纯数据）
 
 UI 画廊内容为编译期静态定义，不写数据库、不依赖工作区；唯一状态是“当前高亮行”与“文件夹折叠集合”。
 
 ```rust
-/// 组件树的静态节点种类。
-pub enum UiGalleryNode { Folder, Component }
+/// 组件树的可见行种类。
+pub enum UiGalleryNode { Folder(UiGalleryFolderId), Component(UiGalleryComponentId) }
 
-/// 一个组件（叶子）：稳定 id、展示名与右侧说明。
+/// 一个组件（叶子）：种类标识与右侧说明段落。
 pub struct UiGalleryComponent {
     pub id: UiGalleryComponentId,
-    pub label: &'static str,
     pub description: &'static [&'static str],
 }
 
-/// 顶层文件夹：稳定 id、展示名与下属组件。
+/// 顶层文件夹：种类标识与下属组件。
 pub struct UiGalleryFolder {
     pub id: UiGalleryFolderId,
-    pub label: &'static str,
     pub components: &'static [UiGalleryComponent],
 }
 ```
 
 - `UiGallery` 持有 `folders: &'static [UiGalleryFolder]`（当前为常量 `GALLERY_FOLDERS`）、`collapsed: Vec<UiGalleryFolderId>`、`selected: usize`。
 - `UiGallery::rows(&self) -> Vec<UiGalleryRow>`：先文件夹行后其展开的组件行，折叠时隐藏后代；与 `PromptTree::rows` 同构，`selected` 为可见行下标。
-- `selected_row` / `selected_folder` / `selected_component`：把可见行映射回节点。
-- `move_selection(delta)`：在可见行间钳制移动（不循环）。
-- `toggle_folder(id)` / `activate()`（回车）：高亮在文件夹行时切换折叠、在组件行时无动作；鼠标点击文件夹行切换折叠、点击组件行仅选中。
-- `left()`：高亮在组件行或折叠/顶层文件夹时移到其文件夹行；`right()`：高亮在文件夹行时展开。
-- 组件内容（`label`、`description`）是用户可见文案，但作为组件“数据”保留在常量表中；右侧预览的固定文案（如样例的标题）放 `ui/text.rs`。
+- `selected_node` / `selected_component`：把可见行映射回节点/组件。
+- `move_selection(delta)`：在可见行间钳制移动（不循环）；`set_selected(index)` 供鼠标点击。
+- `toggle_folder(id)`：切换折叠；折叠若隐藏高亮所在的后代组件，则高亮回落到该文件夹行。
+- `activate()`（回车/点击）：文件夹行切换折叠，组件行无动作。
+- `move_left()`：组件行或折叠/顶层文件夹行移到所属文件夹行，已展开文件夹则折叠；`move_right()`：展开当前折叠文件夹。
+- 组件展示名（`UiGalleryComponentId::label` / `UiGalleryFolderId::label`）与说明段落均取自 `ui/text.rs`（用户可见文案集中处）。
 
-## 5. 左侧宽度与降级（`src/app/ui_gallery.rs` 纯函数 + `src/ui/overlay/ui_gallery.rs` 几何）
+## 5. 全屏覆盖与分区（`src/ui/widgets/fullscreen.rs` + `src/ui/overlay/ui_gallery.rs`）
 
-- 弹窗 `area`：`widgets::modal::layout(screen, screen.width - 4, screen.height - 4)`，放不下时该函数返回 `None`，此时浮层打开请求直接忽略（不进入 `UiGallery` 状态）。
-- 左侧宽度：`left = 24.min(inner.width.saturating_sub(1))`，保证至少给右侧留 1 列；`inner.width <= 1` 时整体不可用（`shell` 为 `None`）。
-- 竖直分隔线：左区右边界即 `inner.x + left` 列绘制 `│`，样式 `style::border(...)`（与弹窗边框一致，用 muted）。
+- 全屏覆盖 `area` 即整个 `screen`（无四周留白）；最外层绘制一条蓝色圆角边框（`style::accent()`）。`fullscreen::layout` 在宽 < 10 或高 < 5 时返回 `None`，此时不进入 `UiGallery` 状态（`ui_gallery_layout` 返回 `None`）。
+- 边框内区 `inner`：顶栏 1 行（标题 `UI` + 右上角 `[✕]`）、底栏 1 行（`[↑/↓] select  [enter] fold  [esc] close`），中间为内容区。
+- 左侧宽度 `left = 24.min(content.width - 2)`，保证右侧至少 1 列；`content.width < 3` 时不可用。
+- 竖直分隔线：左区右边界列绘制 `│`，样式 `style::border(false)`；无水平分隔线（保持整洁）。
+- `Clear` 整屏重置为终端默认底色，**不铺** `overlay_panel` 底色，透明终端下不出现背景块。
 
 ## 6. 渲染（`src/ui/overlay/ui_gallery.rs`）
 
-- 复用 `widgets::modal::render` 画外框、标题 `UI` 与右上角 `[✕]`。
-- 左区：逐行绘制文件夹/组件行；高亮行以行首 `❯` 标记（同 Agents/树列表语义），鼠标悬停沿用 `selection`？——本期只做高亮 `❯` 标记（键盘/点击选中），不加悬停底色，避免与“静态预览”定位冲突。
-- 右区：按选中组件的 `id` 分派到 `render_preview`，用只读段落/边框画出样例，下方渲染 `description` 行。预览只使用 `ui/style.rs` 的语义样式与 `ui/text.rs` 的文案常量，不读 `AppState` 领域数据。
-- 底边框提示：左区末尾或弹窗底边显示 `[↑/↓] select  [enter] fold  [esc] close`。
+- 调 `fullscreen::render` 画顶栏标题、`[✕]` 与底栏提示。
+- 左区：逐行绘制文件夹/组件行；高亮行以行首 `❯` 标记（同 Agents/树列表语义）。
+- 右区：按选中组件 `id` 先算自然尺寸 `appearance_size`，再在右区**水平居中**；`render_appearance` **按真实外观**绘制（复用组件自身样式与尺寸），不额外包裹样例框；其下空 1 行后渲染左对齐的 `description`（muted）。各组件样例：
+  - `toast` / `tooltip`：圆角边框 + 面板底色 + 右上角 `[✕]`，宽度贴合正文（正文最长行 + 4）、高度 3 行。
+  - `modal`：圆角强调色边框 + 标题 + `[✕]` + 问题行 + 底部按钮行（复用 `modal::button_row`）。
+  - `menu`：圆角强调色边框 + 标题 + 条目行，首项 `overlay_selection` 高亮。
+  - `button`：纯强调色标签行，**无边框、无底色**（组件本身就是标签）。
+  - `prompt editor` / `prompt list`：复用真实 prompt 面板外观——圆角边框 + `Prompt Manager` 标题 + 工具栏/搜索行 + 分割线 + 内容行。
+  - `prompt toolbar`：真实工具栏行——强调色按钮 + 右对齐 `[◉] [*] ●`。
+- 预览只使用 `ui/style.rs` 的语义样式与 `ui/text.rs` 的文案常量，不读 `AppState` 领域数据。
 
 ## 7. 事件、依赖方向与失败语义
 
-数据流：`[UI]` 命中（`ui/controls.rs` 几何）→ 鼠标路由（`event/mouse/press.rs`）→ `update::open_ui_gallery` 构造 `Overlay::UiGallery` → 浮层键盘/点击路由更新高亮与折叠 → `ui/overlay/ui_gallery.rs` 只读渲染。
+数据流：`[UI]` 命中（`ui/controls.rs` 几何）→ 鼠标路由（`event/mouse/press.rs`）→ `update::open_ui_gallery` 构造 `Overlay::UiGallery` → 覆盖键盘/点击路由更新高亮与折叠 → `ui/overlay/ui_gallery.rs` 只读渲染。
 
-- `app/` 不依赖 `ui/`：预览所需的“静态外观”由 `ui/` 侧按组件 id 绘制，`app/` 只保存 id 与选中/折叠状态。
-- 弹窗打开期间底层点击不穿透（`handle_mouse_down_left` 在 `state.overlay.is_some()` 时早返回）。
-- 失败语义：屏幕放不下弹窗（`modal::layout` 返回 `None`）时不进入浮层；`Esc`/`[✕]`/点击弹窗外关闭；无 IO、无 DB、无后台任务、无 panic 路径。
+- `app/` 不依赖 `ui/`：真实外观由 `ui/` 侧按组件 id 绘制，`app/` 只保存 id 与选中/折叠状态。
+- 打开期间底层点击不穿透（`handle_mouse_down_left` 在 `state.overlay.is_some()` 时早返回）。
+- 关闭：`Esc` 或右上角 `[✕]`（全屏覆盖没有“浮层之外”，点击覆盖内部空白不关闭）。
+- 失败语义：屏幕过小（`fullscreen::layout` 返回 `None`）时不进入覆盖；无 IO、无 DB、无后台任务、无 panic 路径。
 - 不在渲染中修改状态、不执行 IO。
 
 ## 8. 验收标准
 
-1. 侧栏展开且够宽时，`[SET]` 右侧显示 `[UI]`；点击打开大弹窗，四周留 2 列/2 行空白；侧栏折叠或过窄时 `[UI]` 隐藏、`[SET]` 保留。
-2. 弹窗左侧固定 24 列、右侧占剩余，中间一条竖直分隔线。
+1. 侧栏展开且够宽时，`[SET]` 右侧显示 `[UI]`；点击后**整屏覆盖**（最外层蓝色边框、无四周留白、无背景色）；侧栏折叠或过窄时 `[UI]` 隐藏、`[SET]` 保留。
+2. 覆盖内部左侧固定 24 列、右侧占剩余，中间一条竖直分隔线；顶栏标题 + `[✕]`、底栏快捷键提示。
 3. 左侧默认展开 `global`、`prompt`；`global` 含 `toast/modal/tooltip/button/menu`，`prompt` 含 `editor/list/toolbar`。
 4. 鼠标点击或 `↑/↓` 移动高亮；文件夹行回车/点击切换折叠；点组件行切换右侧预览。
-5. 右侧显示对应组件的静态外观样例与说明文字，不触发真实业务行为。
-6. `Esc`、`[✕]` 或点击弹窗外关闭；关闭后底层布局与状态不变。
+5. 右侧显示对应组件的**真实外观**（无统一包裹大框）并**水平居中**，其下为左对齐说明文字，不触发真实业务行为。
+6. `Esc` 或 `[✕]` 关闭；关闭后底层布局与状态不变。
 7. `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 通过；TUI 外观与交互由用户 `cargo run` 验收。
 
 ## 9. 实施影响
 
-预计新增 `src/app/ui_gallery.rs`（+`src/app/ui_gallery/tests.rs`）与 `src/ui/overlay/ui_gallery.rs`（+`src/ui/overlay/ui_gallery/tests.rs`）；修改 `src/app/overlay.rs`、`src/app/update/{dialog.rs,menu.rs}`、`src/input/mod.rs`、`src/ui/{controls.rs,overlay.rs,text.rs,tooltip.rs}`、`src/app/tooltip.rs`、`src/event/{mouse/press.rs,overlay.rs}` 及对应 `tests.rs`。无新外部依赖、无浏览器资源、无 DB 迁移。
+新增 `src/ui/widgets/fullscreen.rs`（+`tests.rs`）、`src/app/ui_gallery.rs`（+`tests.rs`）与 `src/ui/overlay/ui_gallery.rs`（+`tests.rs`）；修改 `src/app/{overlay.rs,mod.rs,tooltip.rs}`、`src/app/update/{dialog.rs,update.rs,ui_gallery.rs}`、`src/input/mod.rs`、`src/ui/{controls.rs,mod.rs,overlay.rs,text.rs,tooltip.rs,widgets/mod.rs}`、`src/event/{mouse/press.rs,overlay.rs}` 及对应 `tests.rs`。无新外部依赖、无浏览器资源、无 DB 迁移。

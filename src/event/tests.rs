@@ -3871,7 +3871,7 @@ fn mouse_click_ui_gallery_button_opens_overlay() {
 }
 
 #[test]
-fn ui_gallery_overlay_click_selects_row_and_outside_closes() {
+fn ui_gallery_overlay_click_selects_row_and_close_button_closes() {
     let mut state = demo_terminal();
     state.settings_available = false;
     let config = Config::default();
@@ -3890,7 +3890,7 @@ fn ui_gallery_overlay_click_selects_row_and_outside_closes() {
     );
     assert!(matches!(state.overlay, Some(Overlay::UiGallery(_))));
 
-    // 点击左侧树第一行：选中 global 文件夹行。
+    // 点击左侧树第一行：选中 global 文件夹行并切换折叠。
     let screen = Rect::new(0, 0, 120, 30);
     let layout = ui::overlay::ui_gallery_layout(screen).expect("layout fits");
     handle_overlay_click(&mut state, screen, layout.left.x, layout.left.y);
@@ -3903,9 +3903,14 @@ fn ui_gallery_overlay_click_selects_row_and_outside_closes() {
         "点击文件夹行切换折叠"
     );
 
-    // 点击弹窗之外：关闭。
-    handle_overlay_click(&mut state, screen, 0, 0);
-    assert!(state.overlay.is_none(), "浮层之外点击关闭");
+    // 全屏覆盖没有“浮层之外”：点击分隔线位置保持打开。
+    handle_overlay_click(&mut state, screen, layout.left.right(), layout.left.y);
+    assert!(state.overlay.is_some(), "点击覆盖内部空白不关闭");
+
+    // 右上角 [✕]：关闭。
+    let close = ui::widgets::fullscreen::close_button_rect(&layout.shell).expect("close button");
+    handle_overlay_click(&mut state, screen, close.x, close.y);
+    assert!(state.overlay.is_none(), "[✕] 关闭全屏覆盖");
 }
 
 #[test]

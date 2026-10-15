@@ -1,9 +1,10 @@
-//! 单元测试：弹窗几何、分区、行命中与预览渲染。
+//! 单元测试：全屏覆盖几何、分区、行命中与真实外观渲染。
 
 use super::*;
 
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
+use ratatui::style::Color;
 
 use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
@@ -35,15 +36,15 @@ fn gallery_state() -> AppState {
 }
 
 #[test]
-fn shell_leaves_two_columns_and_rows_on_every_side() {
+fn shell_covers_the_whole_screen_with_a_border() {
     let screen = Rect::new(0, 0, 100, 30);
     let shell = ui_gallery_shell(screen).expect("gallery fits");
-    assert_eq!(shell.area.x, 2);
-    assert_eq!(shell.area.y, 2);
-    assert_eq!(shell.area.width, 96);
-    assert_eq!(shell.area.height, 26);
-    assert_eq!(shell.area.right(), 98);
-    assert_eq!(shell.area.bottom(), 28);
+    assert_eq!(shell.area, screen, "全屏覆盖无四周留白");
+    // 最外层边框内区收缩一圈。
+    assert_eq!(shell.inner, Rect::new(1, 1, 98, 28));
+    assert_eq!(shell.header, Rect::new(1, 1, 98, 1));
+    assert_eq!(shell.footer, Rect::new(1, 28, 98, 1));
+    assert_eq!(shell.content, Rect::new(1, 2, 98, 26));
 }
 
 #[test]
@@ -56,18 +57,19 @@ fn layout_splits_left_fixed_width_and_right_remainder() {
     let screen = Rect::new(0, 0, 100, 30);
     let layout = ui_gallery_layout(screen).expect("gallery fits");
     assert_eq!(layout.left.width, 24);
-    assert_eq!(layout.left.x, layout.shell.inner.x);
+    assert_eq!(layout.left.x, layout.shell.content.x);
     assert_eq!(
         layout.left.right() + 1,
         layout.right.x,
         "中间保留 1 列分隔线"
     );
-    assert_eq!(layout.right.right(), layout.shell.inner.right());
+    assert_eq!(layout.right.right(), layout.shell.content.right());
 }
 
 #[test]
 fn narrow_screen_compresses_left_and_keeps_right_nonempty() {
-    let screen = Rect::new(0, 0, 20, 12);
+    // 内容区宽度 24 < 左侧固定 24 + 分隔 1，左侧被压缩。
+    let screen = Rect::new(0, 0, 24, 12);
     let layout = ui_gallery_layout(screen).expect("gallery fits");
     assert!(layout.left.width < 24);
     assert!(layout.right.width >= 1);
@@ -90,22 +92,30 @@ fn row_hit_returns_visible_index_and_rejects_outside() {
         ui_gallery_row_at(&layout, rows, layout.right.x, layout.right.y),
         None
     );
-    // 末行（快捷键提示）不命中。
-    let hint_y = layout.left.bottom().saturating_sub(1);
-    assert_eq!(
-        ui_gallery_row_at(&layout, rows, layout.left.x, hint_y),
-        None
-    );
 }
 
 #[test]
 fn row_hit_rejects_index_beyond_rows() {
     let layout = ui_gallery_layout(Rect::new(0, 0, 100, 30)).expect("gallery fits");
-    // 只有 2 行可见时，索引 5 不命中。
     assert_eq!(
         ui_gallery_row_at(&layout, 2, layout.left.x, layout.left.y + 5),
         None
     );
+}
+
+#[test]
+fn render_is_fullscreen_without_panel_background() {
+    let state = gallery_state();
+    let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("test backend");
+    terminal
+        .draw(|frame| {
+            crate::ui::render(frame, &state, &crate::config::Config::default());
+        })
+        .expect("draw succeeds");
+    let buffer = terminal.backend().buffer().clone();
+    // 全屏覆盖不铺自包含面板底色（overlay_panel 为 Indexed 236）。
+    assert_ne!(buffer[(2, 2)].bg, Color::Indexed(236));
+    assert_ne!(buffer[(50, 15)].bg, Color::Indexed(236));
 }
 
 #[test]
@@ -118,22 +128,36 @@ fn render_shows_title_tree_and_hint() {
     assert!(all.contains(UiGalleryFolderId::Prompt.label()));
     assert!(all.contains(UiGalleryComponentId::Toast.label()));
     assert!(all.contains(text::UI_GALLERY_HINT));
-    // 首行高亮标记与默认选中（global 文件夹）对应。
     assert!(all.contains(text::AGENT_SELECTED_MARKER));
 }
 
 #[test]
-fn render_preview_switches_with_selection() {
+fn render_preview_shows_real_toast_without_wrapper_title() {
     let mut state = gallery_state();
-    // 高亮第一个组件（toast）：右侧应出现其说明文字前缀。
+    // 高亮第一个组件（toast）。
     if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
         gallery.set_selected(1);
     }
-    let lines = render_lines(&state, 100, 30);
-    let all: String = lines.join("\n");
+    let width = 100u16;
+    let lines = render_lines(&state, width, 30);
+    let layout = ui_gallery_layout(Rect::new(0, 0, width, 30)).expect("gallery fits");
+    // 只取右侧预览区的文本。
+    let preview: String = lines
+        .iter()
+        .map(|line| {
+            line.chars()
+                .skip(usize::from(layout.right.x))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    // 真实 toast 文案与说明文字出现。
+    assert!(preview.contains(text::UI_GALLERY_TOAST_SAMPLE));
+    assert!(preview.contains("Non-modal feedback"));
+    // 不再有拉满宽度的样例包裹标题（组件名作为边框标题）。
     assert!(
-        all.contains("Non-modal feedback"),
-        "toast description should render"
+        !preview.contains(&format!(" {} ", UiGalleryComponentId::Toast.label())),
+        "toast 不应被统一的样例大框包裹: {preview}"
     );
 }
 
@@ -148,7 +172,6 @@ fn collapsed_folder_hides_component_rows_in_render() {
         .iter()
         .filter(|line| line.contains(UiGalleryFolderId::Global.label()))
         .collect();
-    // global 行仍在，但其下的 toast 组件行不再出现。
     assert!(!header_rows.is_empty());
     let tree_text: String = lines
         .iter()
@@ -167,4 +190,25 @@ fn render_does_not_panic_on_each_component() {
         }
         let _ = render_lines(&state, 100, 30);
     }
+}
+
+#[test]
+fn preview_component_is_horizontally_centered() {
+    let mut state = gallery_state();
+    if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
+        gallery.set_selected(1); // toast
+    }
+    let width = 100u16;
+    let lines = render_lines(&state, width, 30);
+    let layout = ui_gallery_layout(Rect::new(0, 0, width, 30)).expect("fits");
+    let (component_width, _) = appearance_size(UiGalleryComponentId::Toast, layout.right);
+    let expected_x = layout.right.x + layout.right.width.saturating_sub(component_width) / 2;
+    // 组件不是贴左渲染，且顶部圆角出现在水平居中位置。
+    assert!(expected_x > layout.right.x, "组件应水平居中而非贴左");
+    let row: Vec<char> = lines[layout.right.y as usize].chars().collect();
+    assert_eq!(
+        row[usize::from(expected_x)],
+        '╭',
+        "组件左上角应位于居中列 {expected_x}"
+    );
 }

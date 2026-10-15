@@ -21,6 +21,7 @@
 ## 2. 浮层接线
 
 - [x] `OverlayKind::UiGallery` + `Overlay::UiGallery(UiGallery)` 与 `kind()` 映射。
+- [x] `ui/overlay.rs` 渲染分支改为调 `fullscreen::render`（不再用 `widgets::modal::render`）。
 - [x] `update::open_ui_gallery`、`set_ui_gallery_selection`、`activate_ui_gallery_row` 与关闭复用 `close_overlay`。
 - [x] `input::overlay_key` 新增 `UiGallery`：`Esc/Up/Down/Left/Right/Enter`。
 - [x] `app::update::dialog::apply_overlay_key` 分派到 `apply_ui_gallery_key`。
@@ -35,13 +36,14 @@
 - [x] `TooltipTarget::SidebarUiGallery` + `targets()` 注册 + `tooltip_hint` 文案。
 - [x] 精确测试：相邻关系、宽度降级、命中、渲染文案、服务无关性、折叠隐藏。
 
-## 4. 弹窗渲染（`src/ui/overlay/ui_gallery.rs`）
+## 4. 全屏覆盖与渲染（`src/ui/widgets/fullscreen.rs` + `src/ui/overlay/ui_gallery.rs`）
 
-- [x] `ui_gallery_shell(screen)`：`screen - 4` 居中；左侧 24 列、右侧占剩余、中间竖直分隔线。
+- [x] 新增公共全屏覆盖组件（最外层蓝色圆角边框、无底色）：`fullscreen::layout/render/close_button_rect/close_button_at`。
+- [x] `ui_gallery_shell(screen)`：整屏覆盖；左侧 24 列、右侧占剩余、中间竖直分隔线。
 - [x] 左区行渲染：文件夹 `▾/▸`、子项 `•`、缩进 2 列、高亮 `❯`。
-- [x] 右区按组件 id 分派 `render_component_preview`：8 个组件各自的静态样例 + 说明。
-- [x] 点击命中：`ui_gallery_row_at` 映射到可见行并切换选中/折叠；弹窗外或 `[✕]` 关闭。
-- [x] 精确测试：几何、行命中、预览分派不 panic、窄屏降级、渲染文本。
+- [x] 右区按组件 id 分派 `appearance_size` + `render_appearance`：8 个组件各自的**真实外观**，**水平居中**于右区 + 左对齐说明（去 Preview 标题、无统一包裹框）。
+- [x] 点击命中：`ui_gallery_row_at` 映射到可见行并切换选中/折叠；`[✕]` 或 `Esc` 关闭。
+- [x] 精确测试：全屏几何、清底无背景、行命中、预览分派不 panic、窄屏降级、渲染文本。
 
 ## 5. 收尾验证与交付
 
@@ -57,6 +59,8 @@
 | --- | --- |
 | 文档审核 | 已确认（Grill Me 11 点） |
 | `[UI]` 按钮几何与降级 | 已实现 + 单元测试 |
+| 全屏覆盖公共组件（蓝色外框） | 已实现 + 单元测试 |
+| 右侧真实外观预览（水平居中） | 已实现 + 单元测试 |
 | 左侧树与折叠 | 已实现 + 单元测试 |
 | 右侧静态预览 | 已实现 + 单元测试 |
 | 键鼠交互与关闭 | 已实现 + 单元测试 |

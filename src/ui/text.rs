@@ -558,9 +558,24 @@ pub const UI_GALLERY_PROMPT_EDITOR: &str = "editor";
 pub const UI_GALLERY_PROMPT_LIST: &str = "list";
 pub const UI_GALLERY_PROMPT_TOOLBAR: &str = "toolbar";
 
-/// UI 组件查看弹窗右侧：预览区标题与用途说明。
-pub const UI_GALLERY_PREVIEW_TITLE: &str = "Preview";
+/// UI 组件查看弹窗右侧：预览提示与用途说明（不再使用 `Preview` 标题）。
 pub const UI_GALLERY_PREVIEW_HINT: &str = "select a component on the left";
+
+/// 右侧真实外观预览的样例文案（复用真实组件布局与样式绘制）。
+pub const UI_GALLERY_TOAST_SAMPLE: &str = "Copied to clipboard";
+pub const UI_GALLERY_TOOLTIP_SAMPLE: &str = "undo (ctrl+z)";
+pub const UI_GALLERY_MODAL_SAMPLE_TITLE: &str = "close workspace";
+pub const UI_GALLERY_MODAL_SAMPLE_BODY: &str = "Close this workspace?";
+pub const UI_GALLERY_MENU_SAMPLE_TITLE: &str = "demo";
+pub const UI_GALLERY_MENU_SAMPLE: [&str; 4] = ["New terminal", "Open prompt", "Rename", "Close"];
+pub const UI_GALLERY_BUTTON_SAMPLE: &str = "[SET]  [UI]  [EXIT]  [≡]  [◉]";
+pub const UI_GALLERY_PROMPT_EDITOR_SAMPLE: &str = "[≡] [←] [→]              [◉] ●";
+pub const UI_GALLERY_PROMPT_EDITOR_BODY: [&str; 4] =
+    ["# Prompt", "", "- first item", "- second item"];
+pub const UI_GALLERY_PROMPT_LIST_SAMPLE: &str = "> search prompts…";
+pub const UI_GALLERY_PROMPT_LIST_BODY: [&str; 5] = ["tmp:", "> default", "", "saved:", "▾ notes"];
+pub const UI_GALLERY_PROMPT_TOOLBAR_LEFT: &str = "[≡] [←] [→]";
+pub const UI_GALLERY_PROMPT_TOOLBAR_RIGHT: &str = "[◉] [*] ●";
 
 pub const UI_GALLERY_TOAST_DESC: &[&str] = &[
     "Non-modal feedback anchored below the container top border.",
@@ -585,8 +600,8 @@ pub const UI_GALLERY_MENU_DESC: &[&str] = &[
     "Up/Down moves the highlight, Enter runs the item.",
 ];
 pub const UI_GALLERY_PROMPT_EDITOR_DESC: &[&str] = &[
-    "Markdown editor: typing, undo/redo, selection,",
-    "@ mentions and template blocks.",
+    "Markdown editor with a top toolbar row: typing,",
+    "undo/redo, selection, @ mentions and template blocks.",
 ];
 pub const UI_GALLERY_PROMPT_LIST_DESC: &[&str] = &[
     "Tree view: search box, tmp:/saved: sections,",

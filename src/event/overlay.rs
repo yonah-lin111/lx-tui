@@ -282,7 +282,9 @@ pub(crate) fn handle_overlay_click(
                 update::close_overlay(state);
                 return None;
             };
-            if modal_dismissed(state, &layout.shell, column, row) {
+            // 全屏覆盖铺满整屏，没有“浮层之外”；仅右上角 [✕] 关闭。
+            if ui::widgets::fullscreen::close_button_at(&layout.shell, column, row) {
+                update::close_overlay(state);
                 return None;
             }
             let Some(Overlay::UiGallery(gallery)) = state.overlay.as_ref() else {
@@ -293,7 +295,7 @@ pub(crate) fn handle_overlay_click(
                 update::set_ui_gallery_selection(state, index);
                 update::activate_ui_gallery_row(state);
             }
-            // 分隔线、预览区或底部提示行：保持打开。
+            // 分隔线或预览区：保持打开。
             None
         }
         None => None,
