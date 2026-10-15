@@ -722,7 +722,7 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
 
 /// lx 输入框 `@` 提及面板：标题与状态行文案（与 prompt 面板同一套外观）。
-pub const LX_MENTION_PANEL_TITLE: &str = "Files";
+pub const LX_MENTION_PANEL_TITLE: &str = "@Command";
 pub const LX_MENTION_LOADING: &str = "scanning…";
 pub const LX_MENTION_EMPTY: &str = "no matches";
 

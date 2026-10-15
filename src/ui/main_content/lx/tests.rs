@@ -589,7 +589,7 @@ fn mention_panel_renders_title_and_directory_rows() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None);
     let text = buffer_text(&buf);
-    assert!(text.contains("Files"), "面板标题可见: {text}");
+    assert!(text.contains("@Command"), "面板标题可见: {text}");
     assert!(text.contains("src/"), "目录以 / 结尾展示: {text}");
     assert!(text.contains("main.rs"), "文件候选可见: {text}");
 }
