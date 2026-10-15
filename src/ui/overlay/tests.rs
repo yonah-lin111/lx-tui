@@ -860,6 +860,30 @@ fn referenced_search_shows_entered_folder_top_right() {
 }
 
 #[test]
+fn referenced_search_keeps_fixed_size_regardless_of_items() {
+    let entry = |index: usize| ReferencedEntry {
+        path: PathBuf::from(format!("/tmp/alpha/docs/file{index}.rs")),
+        relative: format!("docs/file{index}.rs"),
+        name: format!("file{index}.rs"),
+        is_directory: false,
+    };
+    let layout_for = |count: usize| {
+        let state = referenced_search_state((0..count).map(entry).collect(), 0);
+        let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+            panic!("search");
+        };
+        referenced_search_layout(SCREEN, search).expect("layout")
+    };
+    let few = layout_for(1);
+    let many = layout_for(60);
+    assert_eq!(few.area, many.area, "弹窗几何不随候选数量变化");
+    assert_eq!(few.visible(), 1);
+    assert!(many.visible() > few.visible(), "候选多时窗口内条目更多");
+    assert!(few.area.x > SCREEN.x && few.area.right() < SCREEN.right());
+    assert!(few.area.y > SCREEN.y && few.area.bottom() < SCREEN.bottom());
+}
+
+#[test]
 fn referenced_search_paints_solid_panel_background() {
     let items: Vec<ReferencedEntry> = (0..10)
         .map(|index| ReferencedEntry {
@@ -1026,6 +1050,25 @@ fn referenced_input_buttons_hit_their_cells() {
         referenced_input_button_at(&shell, shell.inner.x, shell.inner.y),
         None
     );
+}
+
+#[test]
+fn referenced_input_renders_long_absolute_path_in_full() {
+    let path = "/Users/yonah/projects/agent/lx-agent/src/ui/overlay/referenced";
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderInput(
+        crate::app::overlay::ReferencedFolderInput {
+            anchor: (0, 0),
+            input: TextInput::new(path),
+            key: Some(PathBuf::from("/repo")),
+            validating: false,
+            error: None,
+            request: None,
+        },
+    ));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(path), "长路径不被截断: {joined}");
 }
 
 #[test]

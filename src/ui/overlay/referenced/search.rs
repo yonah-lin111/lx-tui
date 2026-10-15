@@ -17,10 +17,10 @@ use crate::ui::{style, text};
 
 use super::{fill_row, paint_text};
 
-/// 内容搜索弹窗可视列表最大行数。
-const SEARCH_MAX_HEIGHT: u16 = 20;
 /// 内容搜索弹窗宽度（列）。
-const SEARCH_WIDTH: u16 = 60;
+const SEARCH_WIDTH: u16 = 72;
+/// 内容搜索弹窗高度（行）；固定高度，不随候选数量变化。
+const SEARCH_HEIGHT: u16 = 18;
 /// 每条候选占用的行数（名称行 + 地址行）。
 const ROW_HEIGHT: u16 = 2;
 
@@ -64,13 +64,8 @@ pub fn referenced_search_layout(
     search: &ReferencedFolderSearch,
 ) -> Option<ReferencedSearchLayout> {
     let width = SEARCH_WIDTH.min(screen.width);
-    // 高度随候选增长（双行候选 + 顶部范围行 + 搜索行 + 上下边框），最小保证数条候选可用。
-    let rows_height = u16::try_from(search.items.len().saturating_mul(usize::from(ROW_HEIGHT)))
-        .unwrap_or(u16::MAX);
-    let height = rows_height
-        .saturating_add(4)
-        .clamp(10, SEARCH_MAX_HEIGHT)
-        .min(screen.height);
+    // 高度固定（顶部范围行 + 搜索行 + 双行候选列表 + 上下边框），不随候选数量伸缩。
+    let height = SEARCH_HEIGHT.min(screen.height);
     if width < 8 || height < 6 {
         return None;
     }

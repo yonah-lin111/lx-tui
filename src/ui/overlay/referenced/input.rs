@@ -10,9 +10,14 @@ use crate::ui::{style, text};
 use super::super::dialog::{BUTTON_GAP, render_buttons, render_input};
 use super::paint_text;
 
+/// 路径输入弹窗宽度（列）；容纳长绝对路径。
+const INPUT_WIDTH: u16 = 72;
+/// 路径输入弹窗高度（行）：输入行、校验/错误行与底部按钮。
+const INPUT_HEIGHT: u16 = 8;
+
 /// 路径输入弹窗按钮几何；不可用时 None（屏幕放不下）。
 pub fn referenced_input_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
-    widgets::modal::layout(screen, 44, 6)
+    widgets::modal::layout(screen, INPUT_WIDTH, INPUT_HEIGHT)
 }
 
 /// 路径输入弹窗按钮。
@@ -49,7 +54,7 @@ pub fn render_referenced_input(
     screen: Rect,
     input: &ReferencedFolderInput,
 ) -> Option<(u16, u16)> {
-    let shell = widgets::modal::layout(screen, 44, 6)?;
+    let shell = referenced_input_shell(screen)?;
     widgets::modal::render(frame, &shell, text::REFERENCED_INPUT_TITLE);
     if shell.inner.width == 0 || shell.inner.height == 0 {
         return None;
