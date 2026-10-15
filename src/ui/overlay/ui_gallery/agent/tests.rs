@@ -1,4 +1,4 @@
-//! 单元测试：token 格式化、样例行展开、尺寸与四套样式渲染。
+//! 单元测试：token 格式化、样例行展开、尺寸与单套（lx）样式渲染。
 
 use super::*;
 
@@ -68,77 +68,62 @@ fn token_footer_uses_separator_between_segments() {
 }
 
 #[test]
-fn every_step_has_four_variants_and_a_token_footer() {
+fn every_step_has_header_and_a_token_footer() {
     for step in AgentStepId::ALL {
-        for variant in 0..4 {
-            let lines = variant_lines(step, variant);
-            assert!(
-                lines.len() >= 2,
-                "步骤 {step:?} 套 {variant} 至少含头部与 token 页脚"
-            );
-            if step == AgentStepId::Tokens {
-                continue; // 聚合 item 用汇总条，下面单独断言。
-            }
-            let footer = line_text(lines.last().expect("non-empty"));
-            assert!(
-                footer.contains(text::agent::TOKEN_IN),
-                "步骤 {step:?} 套 {variant} 末行应为 token 页脚：{footer}"
-            );
+        let lines = step_lines(step);
+        assert!(lines.len() >= 2, "步骤 {step:?} 至少含头部与 token 页脚");
+        if step == AgentStepId::Tokens {
+            continue; // 聚合 item 用汇总条，下面单独断言。
         }
+        let footer = line_text(lines.last().expect("non-empty"));
+        assert!(
+            footer.contains(text::agent::TOKEN_IN),
+            "步骤 {step:?} 末行应为 token 页脚：{footer}"
+        );
     }
 }
 
 #[test]
 fn tokens_item_shows_turn_summary_and_context_pills() {
-    // lx 套（variant 3）：汇总条含 IN/OUT/CACHE，且三枚 pill（42/78/92）。
-    let lines = variant_lines(AgentStepId::Tokens, 3);
+    let lines = step_lines(AgentStepId::Tokens);
     let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-    assert!(joined.contains(text::agent::TOKENS_BAR_D_LEAD));
+    assert!(joined.contains(text::agent::TOKENS_BAR_LEAD));
     assert!(joined.contains(text::agent::TOKEN_IN));
     assert!(joined.contains("42%"));
     assert!(joined.contains("78%"));
     assert!(joined.contains("92%"));
-
-    // 四套聚合条都非空。
-    for variant in 0..4 {
-        assert!(!variant_lines(AgentStepId::Tokens, variant).is_empty());
-    }
 }
 
 #[test]
 fn subagent_shows_single_in_progress_row_and_one_total_token_line() {
-    for variant in 0..4 {
-        let lines = variant_lines(AgentStepId::Subagent, variant);
-        let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-        // 只显示“进行中”的那一条子任务。
-        assert!(
-            joined.contains(text::agent::SUBAGENT_IN_PROGRESS),
-            "候选 {variant} 应显示进行中的子任务"
-        );
-        // token 只出现一行（底部总计）。
-        let with_in = lines
-            .iter()
-            .filter(|line| line_text(line).contains(text::agent::TOKEN_IN))
-            .count();
-        assert_eq!(with_in, 1, "候选 {variant} 只应有一行 token 页脚");
-    }
+    let lines = step_lines(AgentStepId::Subagent);
+    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    // 只显示“进行中”的那一条子任务。
+    assert!(
+        joined.contains(text::agent::SUBAGENT_IN_PROGRESS),
+        "应显示进行中的子任务"
+    );
+    // token 只出现一行（底部总计）。
+    let with_in = lines
+        .iter()
+        .filter(|line| line_text(line).contains(text::agent::TOKEN_IN))
+        .count();
+    assert_eq!(with_in, 1, "只应有一行 token 页脚");
 }
 
 #[test]
 fn error_title_is_red_and_bold() {
-    for variant in 0..4 {
-        let header = header_line(AgentStepId::Error, variant);
-        let red = style::agent_fail();
-        // 标题分段（除标记/图标外）应为失败红；标记/图标也用同色。
-        let title = header.spans.last().expect("title span");
-        assert_eq!(
-            title.1, red,
-            "候选 {variant} 的 error 标题应红+加粗：{title:?}"
-        );
-        assert!(header.spans.iter().any(|(_, style)| *style == red));
-    }
-    // 非 error 步骤的标题不是失败红。
-    let ok = header_line(AgentStepId::Exec, 3);
+    let header = header_line(AgentStepId::Error);
+    let red = style::agent_fail();
+    // 标题各段（图标、动词、参数）应全为失败红。
+    assert!(!header.spans.is_empty());
+    assert!(
+        header.spans.iter().all(|(_, style)| *style == red),
+        "error 标题应整行红+加粗：{:?}",
+        header.spans
+    );
+    // 非 error 步骤的标题不用失败红。
+    let ok = header_line(AgentStepId::Exec);
     assert!(
         ok.spans
             .iter()
@@ -147,24 +132,50 @@ fn error_title_is_red_and_bold() {
 }
 
 #[test]
-fn todo_variant_uses_three_state_checkboxes() {
-    let joined: String = variant_lines(AgentStepId::Todo, 3)
+fn header_colors_icon_verb_and_param_distinctly() {
+    let header = header_line(AgentStepId::Exec);
+    // 图标品牌粉、动词天蓝、参数冰蓝+下划线：三者互不相同。
+    assert_eq!(header.spans[0].1, style::agent_icon());
+    assert_eq!(header.spans[1].1, style::agent_verb());
+    assert_eq!(header.spans[2].1, style::agent_param());
+    assert!(
+        header.spans[2]
+            .1
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "可变参数应带下划线"
+    );
+    // 三者前景色两两不同。
+    let fg = |s: &Style| s.fg;
+    let colors = [
+        fg(&header.spans[0].1),
+        fg(&header.spans[1].1),
+        fg(&header.spans[2].1),
+    ];
+    assert_ne!(colors[0], colors[1]);
+    assert_ne!(colors[1], colors[2]);
+    assert_ne!(colors[0], colors[2]);
+}
+
+#[test]
+fn todo_uses_claude_checkbox_trio() {
+    let joined: String = step_lines(AgentStepId::Todo)
         .iter()
         .map(line_text)
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(joined.contains(text::agent::TODO_DONE_BRACKET));
-    assert!(joined.contains(text::agent::TODO_INPROG_BRACKET));
-    assert!(joined.contains(text::agent::TODO_PENDING_BRACKET));
+    assert!(joined.contains(text::agent::TODO_DONE));
+    assert!(joined.contains(text::agent::TODO_IN_PROGRESS));
+    assert!(joined.contains(text::agent::TODO_PENDING));
 }
 
 #[test]
-fn appearance_size_fits_four_variants_and_clamps_to_available() {
+fn appearance_size_fits_content_and_clamps_to_available() {
     let available = Rect::new(0, 0, 80, 60);
     for step in AgentStepId::ALL {
         let (width, height) = agent_appearance_size(step, available);
         assert!((6..=available.width).contains(&width));
-        let expected: u16 = (0..4).map(|v| variant_line_count(step, v) as u16).sum();
+        let expected = step_lines(step).len() as u16;
         assert_eq!(height, expected.min(available.height));
     }
     let tiny = Rect::new(0, 0, 80, 3);
@@ -173,17 +184,14 @@ fn appearance_size_fits_four_variants_and_clamps_to_available() {
 }
 
 #[test]
-fn render_draws_four_variant_labels() {
+fn render_draws_icon_verb_param_and_token_footer() {
     let all = render_step(AgentStepId::Exec, 60, 50);
-    assert!(all.contains(text::agent::VARIANT_A));
-    assert!(all.contains(text::agent::VARIANT_B));
-    assert!(all.contains(text::agent::VARIANT_C));
-    assert!(all.contains(text::agent::VARIANT_D));
-    // lx 套图标与 codex 圆点都出现。
+    // lx 图标、直角连接符与 token 页脚都出现。
     assert!(all.contains(text::agent::ICON_EXEC));
-    assert!(all.contains(text::agent::MARKER_BULLET));
-    // token 页脚出现。
+    assert!(all.contains(text::agent::MARKER_TREE_LEAF));
     assert!(all.contains(text::agent::TOKEN_IN));
+    // 单套：不再有 a/b/c/d 候选标签。
+    assert!(!all.contains("codex bullet tree"));
 }
 
 #[test]
@@ -259,12 +267,11 @@ fn icons_are_single_or_double_display_width() {
         a::ICON_ERROR,
         a::ICON_QUESTION,
         a::ICON_TOKENS,
-        a::MARKER_BULLET,
-        a::MARKER_CLAUDE_DOT,
+        a::MARKER_DOT,
         a::MARKER_TREE_LEAF,
-        a::MARKER_TREE_TEE,
-        a::MARKER_TREE_BRANCH,
-        a::MARKER_DETAIL,
+        a::TODO_DONE,
+        a::TODO_IN_PROGRESS,
+        a::TODO_PENDING,
     ];
     for icon in icons {
         assert!(!icon.is_empty());

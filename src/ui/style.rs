@@ -131,12 +131,39 @@ pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
-/// Agent 步骤工具名/参数标识：强调色，与正文一眼区分（对齐三家参考）。
-pub fn agent_step_name() -> Style {
-    accent()
+/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗，让图标从标题里跳出。
+///
+/// 失败步骤例外——整行走 [`agent_fail`] 变红，不用品牌粉。
+pub fn agent_icon() -> Style {
+    Style::default()
+        .fg(Color::Indexed(218))
+        .add_modifier(Modifier::BOLD)
 }
 
-/// Agent 步骤子细节/输出：次要信息（codex/opencode 的 dim 输出）。
+/// Agent 步骤标题的固定动词（`Ran` / `Read` / `Edited`…）：lx 品牌天蓝（Indexed 117）。
+///
+/// 与可变参数、正文区分，且避开边框青（[`accent`]）与品牌粉（[`agent_icon`]）。
+pub fn agent_verb() -> Style {
+    Style::default().fg(Color::Indexed(117))
+}
+
+/// Agent 步骤标题的可变参数（命令、路径、查询串…）：lx 品牌冰蓝（Indexed 195）加下划线。
+///
+/// 下划线提示“此处是每次调用都会变的值”，与固定动词的天蓝区分。
+pub fn agent_param() -> Style {
+    Style::default()
+        .fg(Color::Indexed(195))
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// Agent 步骤子行的直角连接符（`└─`）：品牌天蓝压暗，作结构引导而非内容。
+pub fn agent_connector() -> Style {
+    Style::default()
+        .fg(Color::Indexed(117))
+        .add_modifier(Modifier::DIM)
+}
+
+/// Agent 步骤子细节/输出：次要信息（dim 输出）。
 pub fn agent_step_detail() -> Style {
     muted()
 }

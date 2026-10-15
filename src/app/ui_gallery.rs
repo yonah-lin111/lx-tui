@@ -19,7 +19,7 @@ pub enum UiGalleryComponentId {
     PromptToolbar,
     ReferencedFolders,
     FolderSearch,
-    /// `agent` 分组的步骤调用（携带步骤种类，右侧叠放四套候选样式）。
+    /// `agent` 分组的步骤调用（携带步骤种类，右侧渲染 lx 直角风格样例）。
     Agent(AgentStepId),
 }
 
@@ -43,7 +43,7 @@ impl UiGalleryComponentId {
     }
 }
 
-/// `agent` 分组的步骤种类标识：右侧预览对该步骤叠放四套候选样式。
+/// `agent` 分组的步骤种类标识：右侧预览渲染该步骤的 lx 直角风格样例。
 ///
 /// 与 `UiGalleryComponentId` 分开定义，避免把 16 个步骤平铺进主枚举；
 /// 步骤的 token 数值由 `ui/overlay/ui_gallery/agent.rs` 提供，本层只存标识。
@@ -202,7 +202,7 @@ pub const PROMPT_COMPONENTS: [UiGalleryComponent; 5] = [
     },
 ];
 
-/// `agent` 文件夹下的组件：每个步骤一项，右侧叠放四套候选样式。
+/// `agent` 文件夹下的组件：每个步骤一项，右侧渲染 lx 直角风格样例。
 pub const AGENT_COMPONENTS: [UiGalleryComponent; 17] = [
     agent_component(AgentStepId::Exec),
     agent_component(AgentStepId::Read),

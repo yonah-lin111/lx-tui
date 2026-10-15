@@ -7,9 +7,8 @@
 //! 引用、围栏/缩进代码块、表格（对齐）、水平线、图片，以及行内
 //! 粗体/斜体/粗斜体/删除线/行内代码/链接/自动链接/裸 URL。
 //!
-//! 四套候选（`a` codex / `b` claude / `c` opencode / `d` lx）覆盖同一份样例，
-//! 差异体现在：标题是否保留 `#`、列表项目符号、引用前缀、代码块是否带直角竖条、
-//! 表格是方框网格还是无框分隔线。
+//! 采用 lx 直角风格：标题隐藏 `#`、列表用 `•`、引用与代码块带直角竖条 `│`、
+//! 表格用方框网格；任务列表复用 claude 一组复选框（`[x]`/`[ ]`）。
 
 use ratatui::style::Style;
 
@@ -18,9 +17,7 @@ use crate::ui::{style, text};
 use super::SampleLine;
 
 /// 渲染整个样例文档为若干行（含末尾 token 页脚）。
-///
-/// `variant`：0 codex / 1 claude / 2 opencode / 3 lx；四套只是“摆盘”差异。
-pub(super) fn markdown_lines(variant: usize, tokens: super::Tokens) -> Vec<SampleLine> {
+pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
     let mut lines = Vec::new();
     let source_lines: Vec<&str> = text::agent::MD_SAMPLE.split('\n').collect();
     let mut index = 0;
@@ -32,15 +29,15 @@ pub(super) fn markdown_lines(variant: usize, tokens: super::Tokens) -> Vec<Sampl
             continue;
         }
         if trimmed.trim_start().starts_with("```") {
-            index = fenced_code(&source_lines, index, variant, &mut lines);
+            index = fenced_code(&source_lines, index, &mut lines);
             continue;
         }
         if is_indented_code(line) {
-            index = indented_code(&source_lines, index, variant, &mut lines);
+            index = indented_code(&source_lines, index, &mut lines);
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
-            lines.push(heading_line(level, body, variant));
+            lines.push(heading_line(level, body));
             index += 1;
             continue;
         }
@@ -54,15 +51,15 @@ pub(super) fn markdown_lines(variant: usize, tokens: super::Tokens) -> Vec<Sampl
             continue;
         }
         if trimmed.trim_start().starts_with('|') {
-            index = table(&source_lines, index, variant, &mut lines);
+            index = table(&source_lines, index, &mut lines);
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
-            index = blockquote(&source_lines, index, variant, &mut lines);
+            index = blockquote(&source_lines, index, &mut lines);
             continue;
         }
         if let Some(item) = list_item(line) {
-            lines.push(item.render(variant));
+            lines.push(item.render());
             index += 1;
             continue;
         }
@@ -93,9 +90,7 @@ pub(super) fn markdown_lines(variant: usize, tokens: super::Tokens) -> Vec<Sampl
 
 /// 水平线字符。
 const RULE: &str = "─";
-/// 引用竖条（claude 套）。
-const QUOTE_BAR_CLAUDE: &str = "▎";
-/// 引用 / 代码竖条（lx 套，直角）。
+/// 引用 / 代码竖条（直角）。
 const BAR_MARKER: &str = "│";
 
 /// ATX 标题：`#{1,6}` 加后随空白；返回（级别、正文）。
@@ -109,24 +104,9 @@ fn heading(line: &str) -> Option<(u8, &str)> {
     (spaces > 0).then(|| (hashes as u8, rest[spaces..].trim_end()))
 }
 
-/// 渲染一行标题：codex 保留 `#`，其余三级隐藏标记。
-fn heading_line(level: u8, body: &str, variant: usize) -> SampleLine {
-    let heading_style = style::markdown_heading_level(level);
-    if variant == 0 {
-        // codex：`#` 标记保留，正文用分级样式。
-        SampleLine::spans(
-            0,
-            vec![
-                (
-                    format!("{} ", "#".repeat(usize::from(level))),
-                    style::markdown_marker(),
-                ),
-                (body.to_string(), heading_style),
-            ],
-        )
-    } else {
-        SampleLine::plain(0, body, heading_style)
-    }
+/// 渲染一行标题：隐藏 `#` 标记，正文用分级样式。
+fn heading_line(level: u8, body: &str) -> SampleLine {
+    SampleLine::plain(0, body, style::markdown_heading_level(level))
 }
 
 /// 水平线：仅由同一种 `-`/`*`/`_` 组成且至少 3 个。
@@ -165,14 +145,8 @@ fn image(line: &str) -> Option<(&str, &str)> {
     Some((&rest[..alt_close], &after[..url_close]))
 }
 
-/// 围栏代码块：从起始 ``` 行读到闭合 ```；codex/claude/opencode 隐藏围栏与语言，
-/// lx 套在每行前置直角竖条并显示语言。
-fn fenced_code(
-    source: &[&str],
-    start: usize,
-    variant: usize,
-    lines: &mut Vec<SampleLine>,
-) -> usize {
+/// 围栏代码块：从起始 ``` 行读到闭合 ```；隐藏围栏，显示语言标记。
+fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
     let fence = source[start].trim();
     let lang = fence.trim_start_matches('`').trim();
     let mut index = start + 1;
@@ -185,17 +159,12 @@ fn fenced_code(
         body.push(source[index]);
         index += 1;
     }
-    render_code(&body, (!lang.is_empty()).then_some(lang), variant, lines);
+    render_code(&body, (!lang.is_empty()).then_some(lang), lines);
     index
 }
 
 /// 缩进代码块：收集连续 4 空格缩进行。
-fn indented_code(
-    source: &[&str],
-    start: usize,
-    variant: usize,
-    lines: &mut Vec<SampleLine>,
-) -> usize {
+fn indented_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
     let mut index = start;
     let mut body = Vec::new();
     while index < source.len()
@@ -214,44 +183,34 @@ fn indented_code(
         body.push(source[index].strip_prefix("    ").unwrap_or(source[index]));
         index += 1;
     }
-    render_code(&body, None, variant, lines);
+    render_code(&body, None, lines);
     index
 }
 
-/// 渲染代码块：非 lx 套缩进 2 列；lx 套每行前置直角竖条，语言作为 muted 首行。
-fn render_code(body: &[&str], lang: Option<&str>, variant: usize, lines: &mut Vec<SampleLine>) {
-    if variant == 3 {
-        if let Some(lang) = lang {
-            lines.push(SampleLine::spans(
-                0,
-                vec![
-                    (format!("{BAR_MARKER} "), style::markdown_rule()),
-                    (lang.to_string(), style::markdown_code_lang()),
-                ],
-            ));
-        }
-        for line in body {
-            lines.push(SampleLine::spans(
-                0,
-                vec![
-                    (format!("{BAR_MARKER} "), style::markdown_rule()),
-                    ((*line).to_string(), style::markdown_code_block()),
-                ],
-            ));
-        }
-    } else {
-        for line in body {
-            lines.push(SampleLine::plain(
-                2,
-                (*line).to_string(),
-                style::markdown_code_block(),
-            ));
-        }
+/// 渲染代码块：每行前置直角竖条，语言作为 muted 首行。
+fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<SampleLine>) {
+    if let Some(lang) = lang {
+        lines.push(SampleLine::spans(
+            0,
+            vec![
+                (format!("{BAR_MARKER} "), style::markdown_rule()),
+                (lang.to_string(), style::markdown_code_lang()),
+            ],
+        ));
+    }
+    for line in body {
+        lines.push(SampleLine::spans(
+            0,
+            vec![
+                (format!("{BAR_MARKER} "), style::markdown_rule()),
+                ((*line).to_string(), style::markdown_code_block()),
+            ],
+        ));
     }
 }
 
-/// 引用块：收集连续 `>` 行；codex/opencode 显示 `>`、claude 用 `▎`、lx 用 `│`。
-fn blockquote(source: &[&str], start: usize, variant: usize, lines: &mut Vec<SampleLine>) -> usize {
+/// 引用块：收集连续 `>` 行，用直角竖条作前缀。
+fn blockquote(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
     let mut index = start;
     while index < source.len() {
         let trimmed = source[index].trim_start();
@@ -259,15 +218,10 @@ fn blockquote(source: &[&str], start: usize, variant: usize, lines: &mut Vec<Sam
             break;
         };
         let body = rest.strip_prefix(' ').unwrap_or(rest);
-        let marker = match variant {
-            1 => QUOTE_BAR_CLAUDE,
-            3 => BAR_MARKER,
-            _ => ">",
-        };
         lines.push(SampleLine::spans(
             0,
             vec![
-                (format!("{marker} "), style::markdown_marker()),
+                (format!("{BAR_MARKER} "), style::markdown_marker()),
                 (body.to_string(), style::markdown_quote()),
             ],
         ));
@@ -296,20 +250,16 @@ enum ListItem<'a> {
 }
 
 impl ListItem<'_> {
-    /// 按候选风格渲染一行列表项。
-    fn render(&self, variant: usize) -> SampleLine {
+    /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）。
+    fn render(&self) -> SampleLine {
         match *self {
-            Self::Bullet { depth, text: body } => {
-                // codex/lx 用 `•`，claude/opencode 用 `-`。
-                let marker = if matches!(variant, 0 | 3) { "•" } else { "-" };
-                SampleLine::spans(
-                    indent(depth),
-                    vec![
-                        (format!("{marker} "), style::markdown_bullet()),
-                        (body.to_string(), style::text()),
-                    ],
-                )
-            }
+            Self::Bullet { depth, text: body } => SampleLine::spans(
+                indent(depth),
+                vec![
+                    ("• ".to_string(), style::markdown_bullet()),
+                    (body.to_string(), style::text()),
+                ],
+            ),
             Self::Ordered {
                 depth,
                 number,
@@ -326,17 +276,10 @@ impl ListItem<'_> {
                 done,
                 text: body,
             } => {
-                // codex 用 `✔`/`□`，其余用 `[x]`/`[ ]`。
                 let (marker, body_style) = if done {
-                    (
-                        if variant == 0 { "✔" } else { "[x]" },
-                        style::markdown_task_done(),
-                    )
+                    ("[x]", style::markdown_task_done())
                 } else {
-                    (
-                        if variant == 0 { "□" } else { "[ ]" },
-                        style::markdown_task_open(),
-                    )
+                    ("[ ]", style::markdown_task_open())
                 };
                 SampleLine::spans(
                     indent(depth),
@@ -394,8 +337,8 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
     None
 }
 
-/// 表格：表头 + 对齐行 + 数据行；codex 无框分隔线，其余方框网格。
-fn table(source: &[&str], start: usize, variant: usize, lines: &mut Vec<SampleLine>) -> usize {
+/// 表格：表头 + 对齐行 + 数据行，用方框网格。
+fn table(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
     let mut rows = Vec::new();
     let mut index = start;
     while index < source.len() && source[index].trim_start().starts_with('|') {
@@ -426,12 +369,22 @@ fn table(source: &[&str], start: usize, variant: usize, lines: &mut Vec<SampleLi
             }
         }
     }
-    if variant == 0 {
-        codex_table(&header, &body, &widths, &align, lines);
-    } else {
-        grid_table(&header, &body, &widths, &align, lines);
-    }
+    // 行尾若有数据行但其列数不足，补齐到表头列数。
+    let header = pad_row(header, columns);
+    let body = body
+        .into_iter()
+        .map(|row| pad_row(row, columns))
+        .collect::<Vec<_>>();
+    grid_table(&header, &body, &widths, &align, lines);
     index
+}
+
+/// 把一行单元格补齐到 `columns` 列（不足补空串）。
+fn pad_row(mut cells: Vec<String>, columns: usize) -> Vec<String> {
+    while cells.len() < columns {
+        cells.push(String::new());
+    }
+    cells
 }
 
 /// 解析一行表格为单元格（去掉首尾 `|` 与空白）。
@@ -472,31 +425,6 @@ fn pad(cell: &str, width: usize, align: Align) -> String {
         Align::Center => (pad / 2, pad - pad / 2),
     };
     format!("{}{}{}", " ".repeat(before), cell, " ".repeat(after))
-}
-
-/// codex 无框表格：表头 + 粗分隔线 + 数据行（列间 2 空格）。
-fn codex_table(
-    header: &[String],
-    body: &[Vec<String>],
-    widths: &[usize],
-    align: &[Align],
-    lines: &mut Vec<SampleLine>,
-) {
-    let header_spans: Vec<(String, Style)> =
-        join_cells(header, widths, align, style::markdown_strong());
-    lines.push(SampleLine::spans(0, header_spans));
-    let rule = widths
-        .iter()
-        .map(|width| "━".repeat(*width))
-        .collect::<Vec<_>>()
-        .join("  ");
-    lines.push(SampleLine::plain(0, rule, style::markdown_rule()));
-    for row in body {
-        lines.push(SampleLine::spans(
-            0,
-            join_cells(row, widths, align, style::text()),
-        ));
-    }
 }
 
 /// 方框网格表格：`┌─┬─┐` / `│ x │` / `├─┼─┤` / `└─┴─┘`。
@@ -552,30 +480,6 @@ fn grid_table(
         border("└", "─", "┴", "┘"),
         style::markdown_rule(),
     ));
-}
-
-/// 列间以 2 空格拼接单元格（无框表格）。
-fn join_cells(
-    cells: &[String],
-    widths: &[usize],
-    align: &[Align],
-    value_style: Style,
-) -> Vec<(String, Style)> {
-    let mut spans = Vec::new();
-    for (column, width) in widths.iter().enumerate() {
-        if column > 0 {
-            spans.push(("  ".to_string(), style::text()));
-        }
-        let empty = String::new();
-        let cell = cells.get(column).unwrap_or(&empty);
-        let aligned = pad(
-            cell,
-            *width,
-            align.get(column).copied().unwrap_or(Align::Left),
-        );
-        spans.push((aligned, value_style));
-    }
-    spans
 }
 
 /// 行内渲染：吃掉粗体/斜体/粗斜体/删除线/行内代码标记；链接显示 `文字 (url)`。

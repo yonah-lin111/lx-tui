@@ -4638,7 +4638,7 @@ fn ui_gallery_select_markdown(state: &mut AppState) {
 fn ui_gallery_page_down_scrolls_preview_and_esc_still_closes() {
     let mut state = demo_terminal();
     let config = Config::default();
-    let screen = Rect::new(0, 0, 120, 30);
+    let screen = Rect::new(0, 0, 120, 16);
     let geo = geometry(&state, &config, screen);
     let mut sessions = HashMap::new();
     let mut dirty = false;
@@ -4664,7 +4664,7 @@ fn ui_gallery_page_down_scrolls_preview_and_esc_still_closes() {
 fn ui_gallery_wheel_on_preview_scrolls_but_not_on_tree() {
     let mut state = demo_terminal();
     let config = Config::default();
-    let screen = Rect::new(0, 0, 120, 30);
+    let screen = Rect::new(0, 0, 120, 16);
     let geo = geometry(&state, &config, screen);
     let mut sessions = HashMap::new();
     let mut dirty = false;

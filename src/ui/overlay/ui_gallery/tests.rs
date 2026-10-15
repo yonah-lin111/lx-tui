@@ -130,7 +130,7 @@ fn render_shows_title_tree_and_hint() {
 }
 
 #[test]
-fn selecting_an_agent_step_renders_four_variants_with_tokens() {
+fn selecting_an_agent_step_renders_lx_style_with_tokens() {
     let mut state = gallery_state();
     let step = AgentStepId::Exec;
     let index = {
@@ -163,10 +163,8 @@ fn selecting_an_agent_step_renders_four_variants_with_tokens() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(preview.contains(text::agent::VARIANT_A));
-    assert!(preview.contains(text::agent::VARIANT_B));
-    assert!(preview.contains(text::agent::VARIANT_C));
-    assert!(preview.contains(text::agent::VARIANT_D));
+    assert!(preview.contains(text::agent::ICON_EXEC));
+    assert!(preview.contains(text::agent::MARKER_TREE_LEAF));
     assert!(
         preview.contains(text::agent::TOKEN_IN),
         "每步应带 token 页脚"
@@ -339,7 +337,7 @@ fn selecting_the_markdown_step_yields_scrollable_content() {
     if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
         gallery.set_selected(index);
     }
-    let screen = Rect::new(0, 0, 100, 30);
+    let screen = Rect::new(0, 0, 100, 16);
     let gallery = match state.overlay.as_ref() {
         Some(Overlay::UiGallery(gallery)) => gallery,
         _ => panic!("gallery overlay"),
@@ -371,7 +369,7 @@ fn preview_scroll_renders_different_rows_and_shows_scrollbar() {
         gallery.set_selected(index);
     }
     let width = 100u16;
-    let height = 30u16;
+    let height = 16u16;
     let top = render_lines(&state, width, height);
     let layout = ui_gallery_layout(Rect::new(0, 0, width, height)).expect("fits");
     let right_text = |lines: &[String]| -> String {

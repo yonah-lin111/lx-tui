@@ -1,4 +1,4 @@
-//! 单元测试：markdown 渲染器覆盖全部格式、四套候选差异与不 panic。
+//! 单元测试：markdown 渲染器覆盖全部格式、标记折叠与不 panic。
 
 use super::*;
 
@@ -58,77 +58,60 @@ fn sample_document_covers_every_block_and_inline_format() {
 }
 
 #[test]
-fn every_variant_renders_the_full_sample_without_leaking_markers() {
-    for variant in 0..4 {
-        let lines = markdown_lines(variant, (12_400, 1_200, 8_100));
-        let joined = lines_text(&lines);
-        // 六级标题正文都在。
-        for title in [
-            "Heading 1",
-            "Heading 2",
-            "Heading 3",
-            "Heading 4",
-            "Heading 5",
-            "Heading 6",
-        ] {
-            assert!(joined.contains(title), "候选 {variant} 缺标题 {title}");
-        }
-        // 行内标记被吃掉（不出现 `**`、`~~`、`***`），但正文在。
-        assert!(!joined.contains("**"), "候选 {variant} 泄漏 ** : {joined}");
-        assert!(!joined.contains("~~"), "候选 {variant} 泄漏 ~~ : {joined}");
-        assert!(
-            !joined.contains("***"),
-            "候选 {variant} 泄漏 *** : {joined}"
-        );
-        assert!(joined.contains("bold") && joined.contains("strike"));
-        // 围栏被吃掉。
-        assert!(!joined.contains("```"), "候选 {variant} 泄漏围栏");
-        // 代码正文在。
-        assert!(joined.contains("fn main() {}"));
-        // 表格内容在。
-        assert!(joined.contains("Left") && joined.contains("Center") && joined.contains("Right"));
-        // 链接文字与 URL 都在。
-        assert!(joined.contains("OpenAI"));
-        assert!(joined.contains("https://openai.com"));
-        // 图片 alt 在。
-        assert!(joined.contains("logo"));
-        // 最后一行是 token 页脚。
-        let footer = lines_text(&lines[lines.len() - 1..]);
-        assert!(footer.contains(text::agent::TOKEN_IN), "{footer}");
+fn sample_renders_full_document_without_leaking_markers() {
+    let lines = markdown_lines((12_400, 1_200, 8_100));
+    let joined = lines_text(&lines);
+    // 六级标题正文都在。
+    for title in [
+        "Heading 1",
+        "Heading 2",
+        "Heading 3",
+        "Heading 4",
+        "Heading 5",
+        "Heading 6",
+    ] {
+        assert!(joined.contains(title), "缺标题 {title}");
     }
+    // 行内标记被吃掉（不出现 `**`、`~~`、`***`），但正文在。
+    assert!(!joined.contains("**"), "泄漏 ** : {joined}");
+    assert!(!joined.contains("~~"), "泄漏 ~~ : {joined}");
+    assert!(!joined.contains("***"), "泄漏 *** : {joined}");
+    assert!(joined.contains("bold") && joined.contains("strike"));
+    // 围栏被吃掉。
+    assert!(!joined.contains("```"), "泄漏围栏");
+    // 代码正文在。
+    assert!(joined.contains("fn main() {}"));
+    // 表格内容在。
+    assert!(joined.contains("Left") && joined.contains("Center") && joined.contains("Right"));
+    // 链接文字与 URL 都在。
+    assert!(joined.contains("OpenAI"));
+    assert!(joined.contains("https://openai.com"));
+    // 图片 alt 在。
+    assert!(joined.contains("logo"));
+    // 最后一行是 token 页脚。
+    let footer = lines_text(&lines[lines.len() - 1..]);
+    assert!(footer.contains(text::agent::TOKEN_IN), "{footer}");
 }
 
 #[test]
-fn only_codex_keeps_heading_hashes() {
-    let codex = lines_text(&markdown_lines(0, (1, 1, 1)));
-    assert!(codex.contains("# Heading 1"), "codex 应保留 `#`");
-    for variant in 1..4 {
-        let joined = lines_text(&markdown_lines(variant, (1, 1, 1)));
-        assert!(!joined.contains("# Heading 1"), "候选 {variant} 应隐藏 `#`");
-        assert!(joined.contains("Heading 1"));
-    }
+fn headings_hide_hashes() {
+    let joined = lines_text(&markdown_lines((1, 1, 1)));
+    assert!(!joined.contains("# Heading 1"), "应隐藏 `#`");
+    assert!(joined.contains("Heading 1"));
 }
 
 #[test]
-fn table_is_bordered_except_codex() {
-    let codex = lines_text(&markdown_lines(0, (1, 1, 1)));
-    assert!(!codex.contains('┌'), "codex 表格应无边框");
-    assert!(codex.contains('━'), "codex 表格应用粗分隔线");
-    for variant in 1..4 {
-        let joined = lines_text(&markdown_lines(variant, (1, 1, 1)));
-        assert!(joined.contains('┌'), "候选 {variant} 表格应有方框");
-        assert!(joined.contains('┘'));
-    }
+fn table_is_bordered() {
+    let joined = lines_text(&markdown_lines((1, 1, 1)));
+    assert!(joined.contains('┌'), "表格应有方框");
+    assert!(joined.contains('┘'));
 }
 
 #[test]
-fn lx_variant_wraps_code_block_in_a_bar_and_shows_language() {
-    let joined = lines_text(&markdown_lines(3, (1, 1, 1)));
-    assert!(
-        joined.contains(text::agent::MD_LANG),
-        "lx 应显示代码语言标记"
-    );
-    assert!(joined.contains('│'), "lx 代码块应带直角竖条");
+fn code_block_wraps_in_a_bar_and_shows_language() {
+    let joined = lines_text(&markdown_lines((1, 1, 1)));
+    assert!(joined.contains(text::agent::MD_LANG), "应显示代码语言标记");
+    assert!(joined.contains('│'), "代码块应带直角竖条");
 }
 
 #[test]
