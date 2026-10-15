@@ -539,6 +539,38 @@ fn prompt_toolbar_pin_sits_left_of_select_all_and_hides_when_narrow() {
 }
 
 #[test]
+fn prompt_toolbar_folders_sits_left_of_pin_in_editor_only() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let bar = prompt_toolbar_rect(panel).expect("toolbar visible");
+    let folders = prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, false)
+        .expect("folders visible");
+    let pin =
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Pin, false).expect("pin visible");
+    assert_eq!(folders.y, bar.y);
+    assert_eq!(folders.width, 5);
+    assert_eq!(pin.x - folders.right(), 1, "紧邻钉住按钮左侧、间隔 1 列");
+    assert_eq!(
+        prompt_toolbar_button_at(panel, folders.x, bar.y, false),
+        Some(PromptToolbarButton::Folders)
+    );
+    // 树视图不显示引用文件夹按钮。
+    assert_eq!(
+        prompt_toolbar_button_rect(panel, PromptToolbarButton::Folders, true),
+        None
+    );
+    // 内容区过窄（无法在左侧按钮组与右侧 Pin 之间放下）时隐藏。
+    let narrow = Rect::new(0, 0, 26, 8);
+    assert_eq!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Folders, false),
+        None
+    );
+    assert!(
+        prompt_toolbar_button_rect(narrow, PromptToolbarButton::Pin, false).is_some(),
+        "窄屏时钉住按钮仍在"
+    );
+}
+
+#[test]
 fn prompt_toolbar_tree_pin_sits_left_of_temp_prompt() {
     let panel = Rect::new(0, 0, 40, 8);
     let bar = prompt_toolbar_rect(panel).expect("toolbar visible");

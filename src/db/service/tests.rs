@@ -362,6 +362,108 @@ fn tree_loads_on_demand_for_displayed_workspace() {
 }
 
 #[test]
+fn referenced_folders_load_on_demand_and_survive_reload() {
+    let (mut service, mut state, cwd, db_path) = trusted_service("referenced-load");
+    // 预置两条记录但不给快照加载标记。
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .add_referenced_folder(&cwd, "/tmp/one")
+        .expect("seed");
+    service
+        .db
+        .as_ref()
+        .expect("db")
+        .add_referenced_folder(&cwd, "/tmp/two")
+        .expect("seed");
+    assert!(!state.referenced.loaded);
+    service.pump(&mut state);
+    assert!(state.referenced.loaded);
+    assert!(!state.referenced.failed);
+    let paths: Vec<&str> = state
+        .referenced
+        .folders
+        .iter()
+        .map(|folder| folder.path.to_str().expect("utf8"))
+        .collect();
+    assert_eq!(paths, vec!["/tmp/one", "/tmp/two"], "按添加顺序");
+
+    drop(service);
+    let reader = Database::open(&db_path).expect("reader opens");
+    assert_eq!(reader.list_referenced_folders(&cwd).expect("list").len(), 2);
+}
+
+#[test]
+fn add_referenced_folder_effect_persists_and_refreshes_menu() {
+    let (mut service, mut state, cwd, db_path) = trusted_service("referenced-add");
+    // 打开输入弹窗并提交一个真实存在的目录（写库前无需扫描）。
+    let dir = workspace_path("referenced-add-dir");
+    std::fs::create_dir_all(&dir).expect("dir");
+    assert!(crate::app::update::open_referenced_folder_input(
+        &mut state,
+        (3, 4)
+    ));
+    state.effects.push(Effect::AddReferencedFolder {
+        workspace: cwd.clone(),
+        path: dir.to_string_lossy().into_owned(),
+        anchor: (3, 4),
+    });
+    assert!(service.pump(&mut state));
+    assert_eq!(state.referenced.folders.len(), 1);
+    assert!(
+        matches!(
+            state.overlay,
+            Some(crate::app::overlay::Overlay::ReferencedFolderMenu(_))
+        ),
+        "写成功后重开菜单"
+    );
+    drop(service);
+    let reader = Database::open(&db_path).expect("reader opens");
+    let records = reader.list_referenced_folders(&cwd).expect("list");
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].path, dir.to_string_lossy());
+}
+
+#[test]
+fn delete_referenced_folder_effect_removes_record_only() {
+    let (mut service, mut state, cwd, db_path) = trusted_service("referenced-delete");
+    let id = service
+        .db
+        .as_ref()
+        .expect("db")
+        .add_referenced_folder(&cwd, "/tmp/keep-me")
+        .expect("seed");
+    service.pump(&mut state);
+    assert_eq!(state.referenced.folders.len(), 1);
+    state.effects.push(Effect::DeleteReferencedFolder {
+        workspace: cwd.clone(),
+        id,
+    });
+    assert!(service.pump(&mut state));
+    assert!(state.referenced.folders.is_empty());
+    drop(service);
+    let reader = Database::open(&db_path).expect("reader opens");
+    assert!(
+        reader
+            .list_referenced_folders(&cwd)
+            .expect("list")
+            .is_empty()
+    );
+}
+
+#[test]
+fn referenced_snapshot_tracks_prompt_key_and_marks_unavailable_without_db() {
+    let mut state = AppState::demo();
+    state.active_workspace_mut().cwd = Some(workspace_path("referenced-nodb"));
+    // 无数据库：标记不可用（不伪装成空表已持久化）。
+    let mut service = Persistence { db: None };
+    assert!(service.pump(&mut state));
+    assert!(state.referenced.loaded);
+    assert!(state.referenced.failed);
+}
+
+#[test]
 fn save_draft_effect_persists_content_binds_editor_and_removes_temp() {
     let (mut service, mut state, cwd, db_path) = trusted_service("save-draft");
     let Some(PromptEditing::Temp(temp_id)) = state.workspaces[0].prompt_panel.editing else {

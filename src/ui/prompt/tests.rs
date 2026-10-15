@@ -457,6 +457,16 @@ fn mention_panel_marks_directory_and_file_icons() {
     assert!(file_row.contains(text::MENTION_FILE_ICON), "{file_row}");
     assert!(file_row.contains("app.rs"), "{file_row}");
     assert_ne!(text::MENTION_DIR_ICON, text::MENTION_FILE_ICON);
+    // 目录条目按目录色（强调色加粗）着色，文件条目保持默认前景。
+    assert_eq!(buf[(3, 2)].fg, Color::Cyan, "目录图标用目录色");
+    assert!(buf[(3, 2)].modifier.contains(Modifier::BOLD));
+    assert_eq!(buf[(5, 2)].fg, Color::Cyan, "目录名称用目录色");
+    assert_eq!(
+        buf[(5, 3)].fg,
+        Color::Indexed(252),
+        "文件名称沿用浮层默认前景"
+    );
+    assert!(!buf[(5, 3)].modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -809,6 +819,54 @@ fn toolbar_pin_renders_hollow_then_filled_left_of_select_all() {
         None,
     );
     assert_eq!(render_label(&buf, pin), text::PROMPT_PINNED_LABEL);
+}
+
+#[test]
+fn toolbar_folders_button_renders_left_of_pin_and_hides_in_tree() {
+    let panel = toolbar_panel();
+    let editor = Prompt::new(PaneId::from_raw_for_test(1));
+    let folders = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders visible");
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Editor,
+        None,
+        false,
+        false,
+        None,
+    );
+    let label: String = (folders.x..folders.right())
+        .map(|x| buf[(x, folders.y)].symbol())
+        .collect();
+    assert_eq!(label, text::PROMPT_FOLDERS_LABEL);
+
+    // 树视图不显示引用文件夹按钮。
+    let mut buf = Buffer::empty(panel);
+    render_header(
+        panel,
+        &mut buf,
+        &editor,
+        false,
+        PromptMode::Tree,
+        None,
+        false,
+        false,
+        None,
+    );
+    let tree_folders = crate::layout::prompt_toolbar_button_rect(
+        panel,
+        crate::layout::PromptToolbarButton::Folders,
+        true,
+    );
+    assert!(tree_folders.is_none());
 }
 
 #[test]

@@ -80,6 +80,64 @@ pub const INPUT_PREFIX_ICON: &str = ">";
 pub const PROMPT_TREE_SEARCH_PLACEHOLDER: &str = "search prompts…";
 /// 树视图 `[tmp]`：新建临时提示词编辑视图（仅内存、不入库）。
 pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
+/// 编辑视图引用文件夹按钮：打开引用文件夹菜单。
+pub const PROMPT_FOLDERS_LABEL: &str = "[dir]";
+
+/// 引用文件夹弹窗文案。
+pub const MENU_TITLE_REFERENCED_FOLDERS: &str = "Folders";
+/// 引用文件夹弹窗空状态提示（不可选）。
+pub const REFERENCED_MENU_EMPTY: &str = "no folders referenced";
+/// 引用文件夹弹窗末行的新建动作项。
+pub const REFERENCED_MENU_ADD_ROW: &str = "+ add folder…";
+/// 引用文件夹弹窗底边快捷键提示。
+pub const REFERENCED_MENU_FOOTER: &str = "[open ↵] [copy ^c] [del ^d] [close esc]";
+/// 引用文件夹路径输入弹窗标题与占位。
+pub const REFERENCED_INPUT_TITLE: &str = "add folder";
+pub const REFERENCED_INPUT_PLACEHOLDER: &str = "path to directory";
+/// 引用文件夹删除确认浮层标题。
+pub const REFERENCED_DELETE_TITLE: &str = "remove folder";
+pub fn referenced_delete_question(name: &str) -> String {
+    format!("remove \"{name}\" from referenced folders?")
+}
+/// 引用文件夹内容搜索弹窗标题与占位、状态与底边快捷键提示。
+pub const REFERENCED_SEARCH_TITLE: &str = "folder contents";
+pub const REFERENCED_SEARCH_PLACEHOLDER: &str = "search files…";
+pub const REFERENCED_SEARCH_LOADING: &str = "scanning…";
+pub const REFERENCED_SEARCH_FAILED: &str = "folder is not accessible";
+pub const REFERENCED_SEARCH_EMPTY: &str = "no matching files";
+pub const REFERENCED_SEARCH_TRUNCATED: &str = "results truncated";
+pub const REFERENCED_SEARCH_FOOTER: &str = "[copy ↵/^c] [open ⇧↵] [back ^z] [close esc]";
+/// 引用文件夹搜索结果行图标：目录 / 文件。
+pub const REFERENCED_DIR_ICON: &str = "▸";
+pub const REFERENCED_FILE_ICON: &str = "•";
+
+pub const REFERENCED_ERROR_EMPTY: &str = "Path is empty";
+pub const REFERENCED_ERROR_NOT_ABSOLUTE: &str = "Path must be absolute";
+pub const REFERENCED_ERROR_NOT_FOUND: &str = "Directory does not exist";
+pub const REFERENCED_ERROR_NOT_DIR: &str = "Path is not a directory";
+pub const REFERENCED_ERROR_NOT_REPRESENTABLE: &str = "Path cannot be referenced";
+pub const REFERENCED_ERROR_DUPLICATE: &str = "Folder already referenced";
+/// 引用文件夹保存/加载失败提示（数据库不可用）。
+pub const REFERENCED_DB_UNAVAILABLE: &str = "cannot load or save referenced folders";
+/// 引用文件夹写库/删除失败 toast。
+pub const TOAST_REFERENCED_SAVE_FAILED: &str = "Failed to save referenced folder";
+pub const TOAST_REFERENCED_DELETE_FAILED: &str = "Failed to remove referenced folder";
+
+/// 引用文件夹路径校验错误文案；`Ok`（无错误）返回 None，其余返回对应原因。
+pub fn referenced_path_error(
+    error: &crate::app::referenced::PathValidation,
+) -> Option<&'static str> {
+    use crate::app::referenced::PathValidation;
+    match error {
+        PathValidation::Ok { .. } => None,
+        PathValidation::Empty => Some(REFERENCED_ERROR_EMPTY),
+        PathValidation::NotAbsolute => Some(REFERENCED_ERROR_NOT_ABSOLUTE),
+        PathValidation::NotFound => Some(REFERENCED_ERROR_NOT_FOUND),
+        PathValidation::NotDirectory => Some(REFERENCED_ERROR_NOT_DIR),
+        PathValidation::NotRepresentable => Some(REFERENCED_ERROR_NOT_REPRESENTABLE),
+        PathValidation::Duplicate => Some(REFERENCED_ERROR_DUPLICATE),
+    }
+}
 /// 提示词树分区标签：临时区与已入库区（仅两侧都有内容时成对出现）。
 pub const PROMPT_SECTION_TMP: &str = "tmp:";
 pub const PROMPT_SECTION_SAVED: &str = "saved:";
@@ -501,6 +559,8 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         },
         TooltipTarget::PageMenuAdd => "add page",
         TooltipTarget::PageMenuDelete => "delete page",
+        TooltipTarget::PromptFolders => "referenced folders",
+        TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {
             BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",

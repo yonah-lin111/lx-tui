@@ -3,6 +3,7 @@
 pub mod dialog;
 pub mod menu;
 mod page_menu;
+mod referenced;
 pub mod save_draft;
 mod ui_gallery;
 mod worktree;
@@ -10,6 +11,12 @@ mod worktree;
 pub use dialog::*;
 pub use menu::*;
 pub use page_menu::{PageMenuLayout, page_menu_item_at, page_menu_layout, page_menu_visible_pages};
+pub use referenced::{
+    ReferencedInputButton, ReferencedMenuLayout, ReferencedSearchLayout,
+    referenced_input_button_at, referenced_input_shell, referenced_menu_layout,
+    referenced_menu_row_at, referenced_search_copy_at, referenced_search_item_at,
+    referenced_search_layout,
+};
 pub use save_draft::*;
 pub use ui_gallery::{UiGalleryLayout, ui_gallery_layout, ui_gallery_row_at, ui_gallery_shell};
 pub use worktree::{
@@ -26,6 +33,10 @@ pub(crate) use dialog::{
 pub(crate) use save_draft::SAVE_DRAFT_BUTTONS;
 
 use page_menu::render_page_menu;
+use referenced::{
+    render_referenced_input, render_referenced_menu, render_referenced_menu_footer,
+    render_referenced_search, render_referenced_search_footer,
+};
 use ui_gallery::render_ui_gallery;
 use worktree::render_worktree_open;
 
@@ -70,6 +81,21 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         Overlay::SaveDraft(dialog) => save_draft::render_save_draft(frame, screen, dialog),
         Overlay::PageMenu(menu) => {
             render_page_menu(frame, screen, state, menu);
+            None
+        }
+        Overlay::ReferencedFolderMenu(menu) => {
+            render_referenced_menu(frame, screen, menu);
+            render_referenced_menu_footer(frame, screen, menu);
+            None
+        }
+        Overlay::ReferencedFolderInput(input) => render_referenced_input(frame, screen, input),
+        Overlay::ReferencedFolderSearch(search) => {
+            let cursor = render_referenced_search(frame, screen, search);
+            render_referenced_search_footer(frame, screen, search);
+            cursor
+        }
+        Overlay::ReferencedFolderDelete(delete) => {
+            dialog::render_referenced_delete(frame, screen, delete);
             None
         }
         Overlay::UiGallery(gallery) => {

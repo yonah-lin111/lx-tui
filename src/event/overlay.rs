@@ -1,5 +1,7 @@
 //! 浮层对话框点击交互与全局右键上下文菜单激活。
 
+use std::time::Instant;
+
 use ratatui::layout::Rect;
 
 use crate::app::actions::OverlayKey;
@@ -253,6 +255,102 @@ pub(crate) fn handle_overlay_click(
                     None
                 }
                 // 内部空白：保持打开。
+                None => None,
+            }
+        }
+        Some(Overlay::ReferencedFolderMenu(menu)) => {
+            let layout = ui::overlay::referenced_menu_layout(screen, menu);
+            // 与 prompt 列表一致：记录行单击只选中、双击打开；新建行动作项单击即打开。
+            let hit = ui::overlay::referenced_menu_row_at(screen, menu, column, row).map(|index| {
+                (
+                    index,
+                    matches!(
+                        menu.rows.get(index),
+                        Some(crate::app::overlay::ReferencedFolderMenuRow::Add)
+                    ),
+                )
+            });
+            if let Some((index, is_add)) = hit {
+                let double = update::referenced_menu_double_click(state, index, Instant::now());
+                update::set_referenced_menu_selection(state, index);
+                if is_add || double {
+                    update::activate_referenced_menu_row(state);
+                }
+                return None;
+            }
+            // 点击弹窗内部空白保持打开；仅点击弹窗之外关闭。
+            if !layout.area.contains((column, row).into()) {
+                update::close_overlay(state);
+            }
+            None
+        }
+        Some(Overlay::ReferencedFolderInput(_)) => {
+            let Some(shell) = ui::overlay::referenced_input_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::referenced_input_button_at(&shell, column, row) {
+                Some(ui::overlay::ReferencedInputButton::Create) => {
+                    update::submit_referenced_folder_input(state);
+                }
+                Some(ui::overlay::ReferencedInputButton::Clear) => {
+                    update::clear_referenced_input(state);
+                }
+                Some(ui::overlay::ReferencedInputButton::Cancel) => {
+                    update::close_overlay(state);
+                }
+                // 内部空白：保持打开。
+                None => {}
+            }
+            None
+        }
+        Some(Overlay::ReferencedFolderSearch(search)) => {
+            if ui::overlay::referenced_search_copy_at(screen, search, column, row) {
+                update::copy_referenced_root_path(state);
+                return None;
+            }
+            if let Some(index) = ui::overlay::referenced_search_item_at(screen, search, column, row)
+            {
+                update::set_referenced_search_selection(state, index);
+                update::copy_referenced_entry_reference(state);
+                return None;
+            }
+            // 点击弹窗内部空白保持打开；仅点击弹窗之外关闭并回目录弹窗。
+            if ui::overlay::referenced_search_layout(screen, search)
+                .is_some_and(|layout| !layout.area.contains((column, row).into()))
+            {
+                update::referenced_search_escape(state);
+            }
+            None
+        }
+        Some(Overlay::ReferencedFolderDelete(delete)) => {
+            let path = delete.path.display().to_string();
+            let name = delete
+                .path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or(path);
+            let question = ui::text::referenced_delete_question(&name);
+            let Some(shell) = ui::overlay::confirm_shell(screen, &question) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::confirm_button_at(&shell, column, row) {
+                Some(ui::overlay::ConfirmButton::Confirm) => {
+                    update::apply_overlay_key(state, crate::app::actions::OverlayKey::Enter)
+                }
+                Some(ui::overlay::ConfirmButton::Cancel) => {
+                    update::close_overlay(state);
+                    None
+                }
                 None => None,
             }
         }

@@ -67,6 +67,11 @@ fn render_toolbar(
     let mut buttons = vec![
         (PromptToolbarButton::Mode, mode_label, style::accent()),
         (
+            PromptToolbarButton::Folders,
+            text::PROMPT_FOLDERS_LABEL,
+            style::accent(),
+        ),
+        (
             PromptToolbarButton::Pin,
             if pinned {
                 text::PROMPT_PINNED_LABEL

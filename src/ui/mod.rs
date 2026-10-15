@@ -84,17 +84,21 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
     controls::render_swap_button(frame, &view);
     controls::render_panel_buttons(frame, &view, state);
     controls::render_resize_hint(frame, &view, state);
-    // 页码菜单打开时其边框按钮 tooltip 需绘制在菜单之上（常规 tooltip 早于浮层绘制会被盖住）。
-    let page_menu_open = matches!(
+    // 页码菜单/引用文件夹浮层的边框按钮 tooltip 需绘制在浮层之上（常规 tooltip 早于浮层绘制会被盖住）。
+    let border_tooltip_open = matches!(
         state.overlay,
-        Some(crate::app::overlay::Overlay::PageMenu(_))
+        Some(
+            crate::app::overlay::Overlay::PageMenu(_)
+                | crate::app::overlay::Overlay::ReferencedFolderMenu(_)
+                | crate::app::overlay::Overlay::ReferencedFolderSearch(_)
+        )
     );
-    let tooltip_area = (!page_menu_open)
+    let tooltip_area = (!border_tooltip_open)
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
     let toast_area = toast::render(frame, area, state, &view, &pane_rects, config);
     let overlay_cursor = overlay::render(frame, area, state);
-    let menu_tooltip_area = page_menu_open
+    let menu_tooltip_area = border_tooltip_open
         .then(|| tooltip::render(frame, area, state, &view, &pane_rects))
         .flatten();
 

@@ -38,9 +38,12 @@ pub fn render(
     let command_panel_open = state.prompt.mention().is_some()
         || state.prompt.slash_panel().is_some()
         || state.prompt.panel().is_some();
-    // 页码菜单的边框按钮提示例外：由调用方在浮层之后渲染（覆盖在菜单上）。
-    let page_menu_open = matches!(state.overlay, Some(Overlay::PageMenu(_)));
-    if command_panel_open || (state.overlay.is_some() && !page_menu_open) {
+    // 边框按钮提示例外（页码菜单、引用文件夹内容弹窗）：由调用方在浮层之后渲染（覆盖浮层）。
+    let border_tooltip_open = matches!(
+        state.overlay,
+        Some(Overlay::PageMenu(_) | Overlay::ReferencedFolderSearch(_))
+    );
+    if command_panel_open || (state.overlay.is_some() && !border_tooltip_open) {
         return None;
     }
     let tooltip = state
@@ -97,6 +100,12 @@ fn targets(
             (TooltipTarget::PageMenuDelete, layout.delete_rect),
         ];
     }
+    if let Some(Overlay::ReferencedFolderSearch(search)) = &state.overlay {
+        let Some(layout) = ui::overlay::referenced_search_layout(screen, search) else {
+            return Vec::new();
+        };
+        return vec![(TooltipTarget::ReferencedSearchCopyPath, layout.copy_path)];
+    }
     let mut targets = Vec::new();
     for button in ui::collapse_buttons(view, state.agents_collapsed) {
         let target = match button.target {
@@ -148,6 +157,10 @@ fn targets(
         let tree = state.prompt_owner().prompt_panel.mode == crate::app::prompt::PromptMode::Tree;
         for (button, target) in [
             (layout::PromptToolbarButton::Mode, TooltipTarget::PromptMode),
+            (
+                layout::PromptToolbarButton::Folders,
+                TooltipTarget::PromptFolders,
+            ),
             (layout::PromptToolbarButton::Pin, TooltipTarget::PromptPin),
             (
                 layout::PromptToolbarButton::TempPrompt,

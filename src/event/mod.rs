@@ -73,6 +73,16 @@ pub enum AppEvent {
         candidates: Vec<crate::app::markdown::WorktreeCandidate>,
         failed: bool,
     },
+    /// 引用文件夹内容扫描结果。
+    ReferencedScanned {
+        id: u64,
+        outcome: Result<crate::app::referenced::ReferencedScanOutcome, ()>,
+    },
+    /// 引用文件夹新增路径后台校验结果：规范化绝对路径或失败原因（含重复）。
+    ReferencedValidated {
+        id: u64,
+        outcome: Result<PathBuf, crate::app::referenced::PathValidation>,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -238,6 +248,7 @@ async fn run_loop(
                     pump_mention_scan(state, &sender);
                     pump_prompt_worktree(state, &sender, &mut git_inflight);
                     git::pump_git_queries(state, &sender, &mut git_inflight);
+                    pump_referenced_requests(state, &sender);
                 }
                 Some(Err(error)) => return Err(error),
                 None => break,
@@ -344,6 +355,22 @@ fn handle_app_event(
             git_inflight.remove(&repo_root);
             update::apply_worktree_list(state, &repo_root, entries, failed);
         }
+        AppEvent::ReferencedScanned { id, outcome } => match outcome {
+            Ok(outcome) => {
+                update::apply_referenced_scan(state, id, outcome);
+            }
+            Err(()) => {
+                update::apply_referenced_scan_failure(state, id);
+            }
+        },
+        AppEvent::ReferencedValidated { id, outcome } => match outcome {
+            Ok(canonical) => {
+                update::apply_referenced_validation(state, id, canonical);
+            }
+            Err(error) => {
+                update::apply_referenced_validation_error(state, id, error);
+            }
+        },
         AppEvent::PromptWorktreeListed {
             repo_root,
             candidates,
@@ -424,6 +451,79 @@ fn pump_prompt_worktree(
             failed,
         });
     });
+}
+
+/// 引用文件夹后台请求：扫描目录内容或校验新增路径；结果按请求代号投递回主循环。
+///
+/// 请求由 `app` 层登记（打开弹窗/进入目录/提交输入），此处取走并在阻塞线程执行，
+/// 绝不在事件循环或渲染路径同步遍历目录。路径校验需要判重，故读取当时的项目快照。
+fn pump_referenced_requests(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
+    if state.referenced_requests.is_empty() {
+        return;
+    }
+    let requests = std::mem::take(&mut state.referenced_requests);
+    let known: Vec<PathBuf> = state
+        .referenced
+        .folders
+        .iter()
+        .map(|folder| folder.path.clone())
+        .collect();
+    for request in requests {
+        let sender = sender.clone();
+        let known = known.clone();
+        match request {
+            crate::app::referenced::ReferencedRequest::Scan { id, root, .. } => {
+                tokio::task::spawn_blocking(move || {
+                    let outcome = crate::files::scan_referenced(&root).map_err(|_| ());
+                    let _ = sender.send(AppEvent::ReferencedScanned { id, outcome });
+                });
+            }
+            crate::app::referenced::ReferencedRequest::ValidateAdd { id, input } => {
+                tokio::task::spawn_blocking(move || {
+                    let outcome = validate_referenced_path(&input, &known);
+                    let _ = sender.send(AppEvent::ReferencedValidated { id, outcome });
+                });
+            }
+        }
+    }
+}
+
+/// 后台校验新增路径：绝对路径、存在、目录类型、引用可表达性与规范化去重。
+///
+/// 返回规范化路径或明确的失败原因；规范化后与快照重复时以 `Duplicate` 报告
+/// （调用方回投时携带 duplicate 标记，避免在同一响应里既给成功又给重复）。
+fn validate_referenced_path(
+    input: &str,
+    known: &[PathBuf],
+) -> Result<PathBuf, crate::app::referenced::PathValidation> {
+    use crate::app::referenced::PathValidation;
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(PathValidation::Empty);
+    }
+    let path = std::path::Path::new(trimmed);
+    if !path.is_absolute() {
+        return Err(PathValidation::NotAbsolute);
+    }
+    if !path.exists() {
+        return Err(PathValidation::NotFound);
+    }
+    if !path.is_dir() {
+        return Err(PathValidation::NotDirectory);
+    }
+    if path.to_str().is_none() {
+        return Err(PathValidation::NotRepresentable);
+    }
+    let Some(canonical) = std::fs::canonicalize(path).ok() else {
+        return Err(PathValidation::NotFound);
+    };
+    if !crate::app::markdown::reference_representable(&canonical.to_string_lossy()) {
+        return Err(PathValidation::NotRepresentable);
+    }
+    if known.contains(&canonical) {
+        return Err(PathValidation::Duplicate);
+    }
+    Ok(canonical)
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ pub mod markdown;
 pub mod overlay;
 pub mod paste;
 pub mod prompt;
+pub mod referenced;
 pub mod selection;
 pub mod state;
 pub mod toast;

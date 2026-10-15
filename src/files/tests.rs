@@ -108,6 +108,66 @@ fn stops_at_entry_limit() {
     let _ = fs::remove_dir_all(&root);
 }
 
+#[test]
+fn referenced_scan_reports_absolute_paths_and_rejects_missing_root() {
+    let root = fixture("referenced");
+    write(&root, "src/app.rs", "fn main() {}");
+    write(&root, "node_modules/pkg/index.js", "module");
+    let outcome = scan_referenced(&root).expect("scan ok");
+    assert!(!outcome.truncated);
+    let relative: Vec<&str> = outcome
+        .entries
+        .iter()
+        .map(|entry| entry.relative.as_str())
+        .collect();
+    assert!(relative.contains(&"src/app.rs"));
+    assert!(!relative.contains(&"node_modules"));
+    let file = outcome
+        .entries
+        .iter()
+        .find(|entry| entry.relative == "src/app.rs")
+        .expect("file entry");
+    assert_eq!(file.name, "app.rs");
+    assert!(!file.is_directory);
+    assert!(file.path.is_absolute());
+    assert!(file.path.ends_with("src/app.rs"));
+    let dir = outcome
+        .entries
+        .iter()
+        .find(|entry| entry.relative == "src")
+        .expect("dir entry");
+    assert!(dir.is_directory);
+
+    assert!(
+        scan_referenced(&root.join("missing")).is_err(),
+        "缺失根目录报错"
+    );
+    assert!(
+        scan_referenced(&root.join("src/app.rs")).is_err(),
+        "非目录报错"
+    );
+
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn referenced_scan_respects_gitignore_and_flags_truncation() {
+    let root = fixture("referenced-truncate");
+    write(&root, ".gitignore", "ignored/\n");
+    write(&root, "ignored/x.rs", "");
+    write(&root, "keep.rs", "");
+    let outcome = scan_referenced(&root).expect("scan ok");
+    let relative: Vec<&str> = outcome
+        .entries
+        .iter()
+        .map(|entry| entry.relative.as_str())
+        .collect();
+    assert!(relative.contains(&"keep.rs"));
+    assert!(!relative.contains(&"ignored"));
+
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[cfg(unix)]
 #[test]
 fn skips_symbolic_links() {

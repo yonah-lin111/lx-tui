@@ -290,7 +290,7 @@ fn fill_row(frame: &mut Frame<'_>, rect: Rect, row_style: Style) {
     }
 }
 
-/// 行内文本绘制：超出右界整体丢弃。
+/// 行内文本绘制：超出右界整体丢弃；保留单元格既有底色（浮层整块不透明）。
 fn paint_text(frame: &mut Frame<'_>, rect: Rect, content: &str, cell_style: Style) {
     let mut x = rect.x;
     for ch in content.chars() {
@@ -299,9 +299,14 @@ fn paint_text(frame: &mut Frame<'_>, rect: Rect, content: &str, cell_style: Styl
             break;
         }
         if let Some(cell) = frame.buffer_mut().cell_mut((x, rect.y)) {
-            cell.reset();
             cell.set_char(ch);
             cell.set_style(cell_style);
+            cell.set_diff_option(ratatui::buffer::CellDiffOption::None);
+        }
+        for dx in 1..width {
+            if let Some(cell) = frame.buffer_mut().cell_mut((x + dx, rect.y)) {
+                cell.set_diff_option(ratatui::buffer::CellDiffOption::Skip);
+            }
         }
         x = x.saturating_add(width);
     }

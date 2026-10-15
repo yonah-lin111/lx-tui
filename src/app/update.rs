@@ -6,6 +6,7 @@ mod interaction;
 mod menu;
 mod pane;
 mod prompt;
+mod referenced;
 mod selection;
 mod trust;
 mod ui_gallery;
@@ -19,6 +20,7 @@ pub use interaction::*;
 pub use menu::*;
 pub use pane::*;
 pub use prompt::*;
+pub use referenced::*;
 pub use selection::*;
 pub use trust::*;
 pub use ui_gallery::{

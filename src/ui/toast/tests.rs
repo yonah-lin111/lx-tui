@@ -108,6 +108,16 @@ fn toast_paints_overlay_panel_background() {
         buffer[(area.x + 1, area.y + 1)].bg,
         ratatui::style::Color::Indexed(236)
     );
+    // 整块面板不透明：边框、正文与关闭按钮的所有单元格都铺浮层底色。
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            assert_eq!(
+                buffer[(x, y)].bg,
+                ratatui::style::Color::Indexed(236),
+                "toast 单元格 ({x},{y}) 透出底层"
+            );
+        }
+    }
 }
 
 #[test]

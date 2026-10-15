@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// 旧正文迁移为唯一第一页时使用的默认页名。
 const FIRST_PAGE_NAME: &str = "Page 1";
@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS workspace_prompt (
 
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_workspace_id ON workspace_prompt(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(folder_id);
+
+CREATE TABLE IF NOT EXISTS workspace_referenced_folder (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
+    UNIQUE (workspace_id, path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_referenced_folder_workspace_id
+    ON workspace_referenced_folder(workspace_id);
 "#;
 
 /// v4 分页建表语句：页表以 `(prompt_id, position)` 唯一约束保证创建顺序；
@@ -189,6 +201,14 @@ pub struct PromptPageRecord {
     pub position: i64,
     pub name: String,
     pub content: String,
+}
+
+/// 引用文件夹记录：项目级共享的磁盘目录引用；删除只移除记录、不动磁盘内容。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferencedFolderRecord {
+    pub id: i64,
+    /// 规范化后的绝对路径；稳定身份与复制值。
+    pub path: String,
 }
 
 /// 提示词记录。
@@ -451,6 +471,65 @@ impl Database {
             prompt.pages = pages.remove(&prompt.id).unwrap_or_default();
         }
         Ok(prompts)
+    }
+
+    /// 项目内全部引用文件夹（按添加顺序 `id ASC`）；工作区未登记时返回空表。
+    pub fn list_referenced_folders(&self, workspace: &Path) -> Result<Vec<ReferencedFolderRecord>> {
+        let Some(external) = self.workspace_external_id(workspace)? else {
+            return Ok(Vec::new());
+        };
+        let mut statement = self.conn.prepare(
+            r#"SELECT id, path FROM workspace_referenced_folder
+               WHERE workspace_id = ?1
+               ORDER BY id"#,
+        )?;
+        let rows = statement.query_map(params![external], |row| {
+            Ok(ReferencedFolderRecord {
+                id: row.get(0)?,
+                path: row.get(1)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(DbError::from)
+    }
+
+    /// 添加引用文件夹（路径须为调用方规范化后的绝对路径）。
+    ///
+    /// 唯一约束 `(workspace_id, path)` 使重复添加幂等：命中已有记录时返回既有 id。
+    pub fn add_referenced_folder(&self, workspace: &Path, path: &str) -> Result<i64> {
+        self.ensure_workspace(workspace)?;
+        let external = self
+            .workspace_external_id(workspace)?
+            .ok_or(DbError::WorkspaceMissing)?;
+        let existing: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT id FROM workspace_referenced_folder WHERE workspace_id = ?1 AND path = ?2",
+                params![external, path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(id) = existing {
+            return Ok(id);
+        }
+        self.conn.execute(
+            r#"INSERT INTO workspace_referenced_folder (workspace_id, path, created_at)
+               VALUES (?1, ?2, datetime('now'))"#,
+            params![external, path],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    /// 删除引用文件夹记录；以记录 id 与项目键双条件约束，避免跨项目误删。
+    pub fn delete_referenced_folder(&self, workspace: &Path, id: i64) -> Result<()> {
+        let Some(external) = self.workspace_external_id(workspace)? else {
+            return Ok(());
+        };
+        self.conn.execute(
+            "DELETE FROM workspace_referenced_folder WHERE id = ?1 AND workspace_id = ?2",
+            params![id, external],
+        )?;
+        Ok(())
     }
 
     /// 新建文件夹；`parent_id` 必须为根层文件夹（目录嵌套最多 2 层）。

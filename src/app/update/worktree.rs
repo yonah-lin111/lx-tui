@@ -206,7 +206,12 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
                 OverlayKey::Right => dialog.query.move_right(),
                 OverlayKey::Home => dialog.query.move_home(),
                 OverlayKey::End => dialog.query.move_end(),
-                OverlayKey::Esc | OverlayKey::Enter => {}
+                OverlayKey::Esc
+                | OverlayKey::Enter
+                | OverlayKey::EnterFolder
+                | OverlayKey::Back
+                | OverlayKey::Copy
+                | OverlayKey::Remove => {}
             }
         }
     }

@@ -122,6 +122,24 @@ pub(crate) fn handle_paste_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     dirty: &mut bool,
 ) {
+    // 引用文件夹输入/搜索弹窗：粘贴进入对应单行输入框，不穿透到底层。
+    if let Some(overlay) = state.overlay.as_mut() {
+        match overlay {
+            Overlay::ReferencedFolderInput(input) => {
+                input.input.insert_str(&text);
+                *dirty = true;
+                return;
+            }
+            Overlay::ReferencedFolderSearch(search) => {
+                if search.query.insert_str(&text) {
+                    update::refresh_referenced_search(state);
+                    *dirty = true;
+                }
+                return;
+            }
+            _ => {}
+        }
+    }
     // 浮层打开时粘贴吞掉，不穿透到底层终端（与键盘过滤一致）。
     if state.overlay.is_some() {
         return;

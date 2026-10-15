@@ -2306,6 +2306,327 @@ fn toolbar_button(geo: &Geometry, button: layout::PromptToolbarButton) -> Rect {
 }
 
 #[test]
+fn mouse_click_folders_button_opens_referenced_menu() {
+    let mut state = demo_terminal();
+    state.active_workspace_mut().cwd = Some(std::path::PathBuf::from("/tmp/lx-event-ref"));
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let folders = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders button visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            folders.x,
+            folders.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::ReferencedFolderMenu(_))
+    ));
+    assert!(dirty);
+}
+
+#[test]
+fn folders_button_no_op_without_project_key() {
+    let mut state = demo_terminal();
+    state.active_workspace_mut().cwd = None;
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    let folders = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders button visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            folders.x,
+            folders.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "无项目键不打开菜单");
+}
+
+/// 构造已进入子目录的引用文件夹搜索弹窗（Ctrl/Cmd+Z 回退的前置）。
+fn referenced_search_entered_state() -> AppState {
+    let mut state = demo_terminal();
+    let root = std::path::PathBuf::from("/tmp/lx-ref-z/root");
+    let sub = root.join("docs");
+    state.overlay = Some(Overlay::ReferencedFolderSearch(
+        crate::app::overlay::ReferencedFolderSearch {
+            anchor: (0, 0),
+            folder: 1,
+            key: Some(std::path::PathBuf::from("/tmp/lx-ref-z")),
+            root: sub,
+            initial_root: root.clone(),
+            stack: vec![root],
+            query: crate::app::overlay::TextInput::new(""),
+            entries: Vec::new(),
+            items: Vec::new(),
+            scan_truncated: false,
+            truncated: false,
+            selected: 0,
+            viewport: None,
+            loading: false,
+            failed: false,
+            request: Some(1),
+        },
+    ));
+    state
+}
+
+#[test]
+fn referenced_search_ctrl_or_cmd_z_returns_to_parent_scope() {
+    for modifiers in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        let mut state = referenced_search_entered_state();
+        let (config, geo) = toolbar_geometry(&mut state);
+        let mut sessions = HashMap::new();
+        let mut dirty = false;
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(KeyCode::Char('z'), modifiers)),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut dirty,
+        );
+        let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+            panic!("search stays open: {modifiers:?}");
+        };
+        assert_eq!(
+            search.root,
+            std::path::PathBuf::from("/tmp/lx-ref-z/root"),
+            "回退到父搜索范围: {modifiers:?}"
+        );
+        assert!(search.stack.is_empty(), "{modifiers:?}");
+        assert!(search.request.is_some(), "回退后登记新扫描: {modifiers:?}");
+        assert!(dirty, "{modifiers:?}");
+    }
+}
+
+#[test]
+fn referenced_search_ctrl_z_at_root_is_noop() {
+    let mut state = referenced_search_entered_state();
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.stack.clear();
+    }
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+        panic!("search stays open");
+    };
+    assert!(
+        search.root.ends_with("docs"),
+        "初始根不再回退: {:?}",
+        search.root
+    );
+}
+
+/// 打开引用文件夹目录弹窗并放入两条记录。
+fn referenced_menu_state() -> AppState {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let mut state = demo_terminal();
+    state.overlay = Some(Overlay::ReferencedFolderMenu(
+        crate::app::overlay::ReferencedFolderMenu {
+            anchor: (0, 0),
+            key: Some(std::path::PathBuf::from("/tmp/lx-ref-menu")),
+            rows: vec![
+                ReferencedFolderMenuRow::Folder {
+                    id: 1,
+                    path: std::path::PathBuf::from("/tmp/lx-ref-menu/alpha"),
+                },
+                ReferencedFolderMenuRow::Folder {
+                    id: 2,
+                    path: std::path::PathBuf::from("/tmp/lx-ref-menu/beta"),
+                },
+                ReferencedFolderMenuRow::Add,
+            ],
+            selected: 0,
+        },
+    ));
+    state
+}
+
+/// 弹窗几何（事件层与渲染层共用同一 layout）；`screen` 必须与事件几何一致。
+fn referenced_menu_layout(
+    state: &AppState,
+    geo: &Geometry,
+) -> crate::ui::overlay::ReferencedMenuLayout {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu open");
+    };
+    crate::ui::overlay::referenced_menu_layout(geo.screen, menu)
+}
+
+#[test]
+fn mouse_click_referenced_menu_row_selects_then_double_click_opens_search() {
+    let mut state = referenced_menu_state();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let row = referenced_menu_layout(&state, &geo).rows[1];
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), row.x, row.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    // 单击只选中（与 prompt 列表一致）。
+    assert!(
+        matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))),
+        "单击不打开内容弹窗"
+    );
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu open");
+    };
+    assert_eq!(menu.selected, 1, "单击选中该行");
+    // 双击同一行才打开内容弹窗。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), row.x, row.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+        panic!("双击打开搜索");
+    };
+    assert_eq!(search.folder, 2, "双击行对应的记录被打开");
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_click_referenced_menu_add_row_opens_input() {
+    let mut state = referenced_menu_state();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let rows = referenced_menu_layout(&state, &geo).rows;
+    let add = rows.last().copied().expect("add row");
+    // 动作项单击即打开路径输入（与草稿保存选择器一致）。
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), add.x, add.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::ReferencedFolderInput(_))),
+        "新建行打开路径输入"
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_click_referenced_menu_blank_keeps_open_and_outside_closes() {
+    let mut state = referenced_menu_state();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let layout = referenced_menu_layout(&state, &geo);
+    let rows_bottom = layout.rows.last().expect("rows").y;
+    let blank = Rect::new(layout.area.x + 2, rows_bottom + 2, 1, 1);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), blank.x, blank.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))),
+        "弹窗内空白保持打开"
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), 0, 0),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.overlay.is_none(), "弹窗之外关闭");
+}
+
+#[test]
+fn referenced_menu_ctrl_c_copies_and_ctrl_d_or_del_removes() {
+    for code in [KeyCode::Char('d'), KeyCode::Delete] {
+        let mut state = referenced_menu_state();
+        let (config, geo) = toolbar_geometry(&mut state);
+        let mut sessions = HashMap::new();
+        let mut dirty = false;
+        handle_terminal_event(
+            TerminalEvent::Key(KeyEvent::new(code, KeyModifiers::CONTROL)),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut dirty,
+        );
+        assert!(
+            matches!(state.overlay, Some(Overlay::ReferencedFolderDelete(_))),
+            "移除键打开删除确认: {code:?}"
+        );
+    }
+    let mut state = referenced_menu_state();
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))),
+        "复制不关弹窗"
+    );
+    assert!(matches!(
+        state.effects.as_slice(),
+        [crate::app::effects::Effect::CopyToClipboard(text)]
+            if text.contains("lx-ref-menu/alpha")
+    ));
+}
+
+#[test]
 fn mouse_click_prompt_pin_toggles_pin() {
     let mut state = demo_terminal();
     let (config, geo) = toolbar_geometry(&mut state);
