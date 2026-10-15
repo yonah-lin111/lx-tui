@@ -485,16 +485,84 @@ fn scan_request(state: &AppState) -> u64 {
 }
 
 #[test]
+fn menu_double_click_detects_same_row_within_window() {
+    let mut state = state_with_folders();
+    let t0 = std::time::Instant::now();
+    assert!(!referenced_menu_double_click(&mut state, 1, t0));
+    assert!(!referenced_menu_double_click(
+        &mut state,
+        2,
+        t0 + std::time::Duration::from_millis(50)
+    ));
+    assert!(referenced_menu_double_click(
+        &mut state,
+        2,
+        t0 + std::time::Duration::from_millis(100)
+    ));
+    assert!(
+        !referenced_menu_double_click(
+            &mut state,
+            2,
+            t0 + std::time::Duration::from_millis(100)
+                + crate::app::update::PROMPT_DOUBLE_CLICK_WINDOW
+                + std::time::Duration::from_millis(1)
+        ),
+        "超出双击窗口不算双击"
+    );
+}
+
+#[test]
 fn menu_copy_uses_refer_folder_syntax() {
     let mut state = state_with_folders();
     let beta = folder_path(&state, 2);
     open_referenced_folder_menu(&mut state, (0, 0));
-    assert!(copy_referenced_menu_folder(&mut state, 2));
+    let index = menu_row_index(&state, 2);
+    assert!(set_referenced_menu_selection(&mut state, index));
+    assert!(copy_referenced_menu_selected(&mut state));
     let expected = format!("@[refer-folder]({})", beta.display());
     assert!(matches!(
         state.effects.as_slice(),
         [Effect::CopyToClipboard(text)] if *text == expected
     ));
+}
+
+#[test]
+fn menu_remove_opens_confirmation_only_for_folder_rows() {
+    let mut state = state_with_folders();
+    let alpha = folder_path(&state, 1);
+    open_referenced_folder_menu(&mut state, (0, 0));
+    let index = menu_row_index(&state, 1);
+    assert!(set_referenced_menu_selection(&mut state, index));
+    assert!(remove_referenced_menu_selected(&mut state));
+    assert!(matches!(
+        state.overlay,
+        Some(Overlay::ReferencedFolderDelete(delete)) if delete.id == 1 && delete.path == alpha
+    ));
+}
+
+#[test]
+fn menu_copy_and_remove_ignore_state_and_add_rows() {
+    let mut state = AppState::demo();
+    open_referenced_folder_menu(&mut state, (0, 0));
+    // 空状态行与 `+ add folder…` 行都不产生复制/删除。
+    assert!(set_referenced_menu_selection(&mut state, 0));
+    assert!(!copy_referenced_menu_selected(&mut state));
+    assert!(!remove_referenced_menu_selected(&mut state));
+    let add_index = menu_row_index(&state, 0);
+    assert!(set_referenced_menu_selection(&mut state, add_index));
+    assert!(!copy_referenced_menu_selected(&mut state));
+    assert!(!remove_referenced_menu_selected(&mut state));
+}
+
+/// 目录弹窗中指定记录 id 所在行下标；未找到时回退 `[add]` 行（末行）。
+fn menu_row_index(state: &AppState, id: i64) -> usize {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu open");
+    };
+    menu.rows
+        .iter()
+        .position(|row| matches!(row, ReferencedFolderMenuRow::Folder { id: row_id, .. } if *row_id == id))
+        .unwrap_or_else(|| menu.rows.len().saturating_sub(1))
 }
 
 #[test]

@@ -22,7 +22,7 @@ pub enum OverlayKind {
     NewNode,
     SaveDraft,
     PageMenu,
-    /// 引用文件夹菜单（编辑视图工具栏文件夹按钮）。
+    /// 引用文件夹目录弹窗（编辑视图工具栏文件夹按钮）。
     ReferencedFolderMenu,
     /// 引用文件夹路径输入弹窗。
     ReferencedFolderInput,
@@ -75,21 +75,21 @@ impl Overlay {
     }
 }
 
-/// 引用文件夹菜单：锚点、行快照与高亮项。
+/// 引用文件夹目录弹窗：锚点、行快照与高亮项。
 ///
-/// 行快照在打开时按项目快照生成；菜单为模态，行集合在打开期间不再变化。
+/// 行快照在打开时按项目快照生成；弹窗为模态，行集合在打开期间不再变化。
 /// 归属的 prompt 键与项目身份随菜单固定，避免切换工作区后误用旧结果。
 #[derive(Debug)]
 pub struct ReferencedFolderMenu {
     pub anchor: (u16, u16),
-    /// 菜单归属的 prompt 键（显示中工作区）。
+    /// 弹窗归属的 prompt 键（显示中工作区）。
     pub key: Option<PathBuf>,
     /// 空状态、`[add]` 或某条记录。
     pub rows: Vec<ReferencedFolderMenuRow>,
     pub selected: usize,
 }
 
-/// 引用文件夹菜单行：空状态、数据库不可用、新建动作或一条记录。
+/// 引用文件夹目录弹窗行：空状态、数据库不可用、新建动作或一条记录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReferencedFolderMenuRow {
     /// 无记录（可选新增）。

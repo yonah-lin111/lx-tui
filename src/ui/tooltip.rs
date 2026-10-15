@@ -38,14 +38,10 @@ pub fn render(
     let command_panel_open = state.prompt.mention().is_some()
         || state.prompt.slash_panel().is_some()
         || state.prompt.panel().is_some();
-    // 边框按钮提示例外（页码菜单、引用文件夹菜单/搜索弹窗）：由调用方在浮层之后渲染（覆盖浮层）。
+    // 边框按钮提示例外（页码菜单、引用文件夹内容弹窗）：由调用方在浮层之后渲染（覆盖浮层）。
     let border_tooltip_open = matches!(
         state.overlay,
-        Some(
-            Overlay::PageMenu(_)
-                | Overlay::ReferencedFolderMenu(_)
-                | Overlay::ReferencedFolderSearch(_)
-        )
+        Some(Overlay::PageMenu(_) | Overlay::ReferencedFolderSearch(_))
     );
     if command_panel_open || (state.overlay.is_some() && !border_tooltip_open) {
         return None;
@@ -103,10 +99,6 @@ fn targets(
             (TooltipTarget::PageMenuAdd, layout.new_rect),
             (TooltipTarget::PageMenuDelete, layout.delete_rect),
         ];
-    }
-    if let Some(Overlay::ReferencedFolderMenu(menu)) = &state.overlay {
-        let layout = ui::overlay::referenced_menu_layout(screen, menu);
-        return vec![(TooltipTarget::ReferencedMenuAdd, layout.add_rect)];
     }
     if let Some(Overlay::ReferencedFolderSearch(search)) = &state.overlay {
         let Some(layout) = ui::overlay::referenced_search_layout(screen, search) else {

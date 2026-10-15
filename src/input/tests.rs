@@ -456,7 +456,7 @@ fn menu_overlay_routes_navigation_keys_only() {
 }
 
 #[test]
-fn referenced_menu_routes_navigation_keys_only() {
+fn referenced_menu_routes_navigation_copy_and_remove_keys() {
     let route_menu = |code, modifiers| {
         super::route(
             KeyEvent::new(code, modifiers),
@@ -478,7 +478,25 @@ fn referenced_menu_routes_navigation_keys_only() {
             "{code:?}"
         );
     }
+    // Ctrl/Cmd+C 复制引用、Ctrl/Cmd+D 或 Del 移除记录；纯文本键仍不映射。
+    assert_eq!(
+        route_menu(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Copy))
+    );
+    assert_eq!(
+        route_menu(KeyCode::Char('c'), KeyModifiers::SUPER),
+        Some(Routed::Overlay(OverlayKey::Copy))
+    );
+    assert_eq!(
+        route_menu(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        Some(Routed::Overlay(OverlayKey::Remove))
+    );
+    assert_eq!(
+        route_menu(KeyCode::Delete, KeyModifiers::NONE),
+        Some(Routed::Overlay(OverlayKey::Remove))
+    );
     assert_eq!(route_menu(KeyCode::Char('x'), KeyModifiers::NONE), None);
+    assert_eq!(route_menu(KeyCode::Char('d'), KeyModifiers::NONE), None);
 }
 
 #[test]

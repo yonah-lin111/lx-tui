@@ -1,5 +1,7 @@
 //! 浮层对话框点击交互与全局右键上下文菜单激活。
 
+use std::time::Instant;
+
 use ratatui::layout::Rect;
 
 use crate::app::actions::OverlayKey;
@@ -258,32 +260,27 @@ pub(crate) fn handle_overlay_click(
         }
         Some(Overlay::ReferencedFolderMenu(menu)) => {
             let layout = ui::overlay::referenced_menu_layout(screen, menu);
-            let hit = ui::overlay::referenced_menu_hit_at(screen, menu, column, row);
-            match hit {
-                Some(ui::overlay::ReferencedMenuAction::Add) => {
-                    update::open_referenced_folder_input(state, (layout.area.x, layout.area.y));
-                }
-                Some(ui::overlay::ReferencedMenuAction::Open(index)) => {
-                    update::set_referenced_menu_selection(state, index);
+            // 与 prompt 列表一致：记录行单击只选中、双击打开；新建行动作项单击即打开。
+            let hit = ui::overlay::referenced_menu_row_at(screen, menu, column, row).map(|index| {
+                (
+                    index,
+                    matches!(
+                        menu.rows.get(index),
+                        Some(crate::app::overlay::ReferencedFolderMenuRow::Add)
+                    ),
+                )
+            });
+            if let Some((index, is_add)) = hit {
+                let double = update::referenced_menu_double_click(state, index, Instant::now());
+                update::set_referenced_menu_selection(state, index);
+                if is_add || double {
                     update::activate_referenced_menu_row(state);
                 }
-                Some(ui::overlay::ReferencedMenuAction::Copy(index)) => {
-                    if let Some((id, _)) = referenced_menu_folder(menu, index) {
-                        update::set_referenced_menu_selection(state, index);
-                        update::copy_referenced_menu_folder(state, id);
-                    }
-                }
-                Some(ui::overlay::ReferencedMenuAction::Delete(index)) => {
-                    if let Some((id, path)) = referenced_menu_folder(menu, index) {
-                        update::open_referenced_delete(state, id, path);
-                    }
-                }
-                // 点击菜单内部空白保持打开；仅点击菜单之外关闭。
-                None => {
-                    if !layout.area.contains((column, row).into()) {
-                        update::close_overlay(state);
-                    }
-                }
+                return None;
+            }
+            // 点击弹窗内部空白保持打开；仅点击弹窗之外关闭。
+            if !layout.area.contains((column, row).into()) {
+                update::close_overlay(state);
             }
             None
         }
@@ -321,7 +318,7 @@ pub(crate) fn handle_overlay_click(
                 update::copy_referenced_entry_reference(state);
                 return None;
             }
-            // 点击弹窗内部空白保持打开；仅点击弹窗之外关闭并回目录菜单。
+            // 点击弹窗内部空白保持打开；仅点击弹窗之外关闭并回目录弹窗。
             if ui::overlay::referenced_search_layout(screen, search)
                 .is_some_and(|layout| !layout.area.contains((column, row).into()))
             {
@@ -379,19 +376,6 @@ pub(crate) fn handle_overlay_click(
             None
         }
         None => None,
-    }
-}
-
-/// 目录菜单某行对应的记录 id 与路径；空状态或 `[add]` 行返回 None。
-fn referenced_menu_folder(
-    menu: &crate::app::overlay::ReferencedFolderMenu,
-    index: usize,
-) -> Option<(i64, std::path::PathBuf)> {
-    match menu.rows.get(index) {
-        Some(crate::app::overlay::ReferencedFolderMenuRow::Folder { id, path }) => {
-            Some((*id, path.clone()))
-        }
-        _ => None,
     }
 }
 

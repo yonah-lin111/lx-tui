@@ -298,7 +298,7 @@ pub fn edit_referenced_search(state: &mut AppState, key: crate::app::actions::Ov
     true
 }
 
-/// 关闭搜索弹窗并回目录菜单（保留记录与磁盘内容）。
+/// 关闭搜索弹窗并回目录弹窗（保留记录与磁盘内容）。
 pub fn referenced_search_escape(state: &mut AppState) -> bool {
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
         return false;

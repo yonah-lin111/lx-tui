@@ -222,7 +222,7 @@ fn render_skips_until_visible_then_paints_panel_and_hint() {
 }
 
 #[test]
-fn referenced_menu_and_search_border_buttons_arm_tooltips() {
+fn referenced_menu_has_no_tooltip_targets_and_search_copy_path_arms() {
     use crate::app::overlay::TextInput;
     use crate::app::overlay::{
         Overlay, ReferencedFolderMenu, ReferencedFolderMenuRow, ReferencedFolderSearch,
@@ -245,17 +245,12 @@ fn referenced_menu_and_search_border_buttons_arm_tooltips() {
         Some(Overlay::ReferencedFolderMenu(menu)) => menu,
         _ => panic!("menu"),
     };
+    // 目录弹窗已无边框按钮：行上不再提示。
     let layout = ui::overlay::referenced_menu_layout(SCREEN, menu);
+    let row = layout.rows[0];
     assert_eq!(
-        target_at(
-            &view_for(&state),
-            &state,
-            &[],
-            SCREEN,
-            layout.add_rect.x,
-            layout.add_rect.y
-        ),
-        Some(TooltipTarget::ReferencedMenuAdd)
+        target_at(&view_for(&state), &state, &[], SCREEN, row.x, row.y),
+        None
     );
 
     let mut state = AppState::demo();

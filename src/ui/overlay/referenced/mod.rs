@@ -1,6 +1,6 @@
-//! 引用文件夹浮层：目录菜单、路径输入弹窗与内容搜索弹窗的几何、命中与渲染。
+//! 引用文件夹浮层：目录弹窗、路径输入弹窗与内容搜索弹窗的几何、命中与渲染。
 //!
-//! 菜单几何与行渲染见 `menu`，路径输入弹窗见 `input`，内容搜索弹窗见 `search`；
+//! 目录弹窗几何与行渲染见 `menu`，路径输入弹窗见 `input`，内容搜索弹窗见 `search`；
 //! 共性绘制（整行底色、行内文本）在本模块收口。
 
 mod input;
@@ -12,8 +12,8 @@ pub use input::{
     render_referenced_input,
 };
 pub use menu::{
-    ReferencedMenuAction, ReferencedMenuLayout, ReferencedMenuRowLayout, referenced_menu_hit_at,
-    referenced_menu_layout, render_referenced_menu,
+    ReferencedMenuLayout, referenced_menu_layout, referenced_menu_row_at, render_referenced_menu,
+    render_referenced_menu_footer,
 };
 pub use search::{
     ReferencedSearchLayout, referenced_search_copy_at, referenced_search_item_at,

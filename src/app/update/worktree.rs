@@ -210,7 +210,8 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
                 | OverlayKey::Enter
                 | OverlayKey::EnterFolder
                 | OverlayKey::Back
-                | OverlayKey::Copy => {}
+                | OverlayKey::Copy
+                | OverlayKey::Remove => {}
             }
         }
     }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use crossterm::event::MouseEvent;
-use ratatui::layout::{Direction, Rect};
+use ratatui::layout::Direction;
 
 use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
@@ -33,23 +33,6 @@ pub(crate) fn set_pointer_shape(shape: PointerShape) {
 /// 恢复默认鼠标指针形状。
 pub(crate) fn reset_pointer_shape() {
     set_pointer_shape(PointerShape::Default);
-}
-
-/// 引用文件夹菜单中鼠标所在行快照下标；`[add]` 或空白返回 None。
-fn referenced_menu_row_at(
-    screen: Rect,
-    menu: &crate::app::overlay::ReferencedFolderMenu,
-    column: u16,
-    row: u16,
-) -> Option<usize> {
-    match ui::overlay::referenced_menu_hit_at(screen, menu, column, row) {
-        Some(
-            ui::overlay::ReferencedMenuAction::Open(index)
-            | ui::overlay::ReferencedMenuAction::Copy(index)
-            | ui::overlay::ReferencedMenuAction::Delete(index),
-        ) => Some(index),
-        _ => None,
-    }
 }
 
 /// 鼠标移动悬停事件处理。
@@ -96,7 +79,9 @@ pub(crate) fn handle_mouse_moved(
         }
         if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
             let layout = ui::overlay::referenced_menu_layout(*screen, menu);
-            if let Some(index) = referenced_menu_row_at(*screen, menu, mouse.column, mouse.row) {
+            if let Some(index) =
+                ui::overlay::referenced_menu_row_at(*screen, menu, mouse.column, mouse.row)
+            {
                 if update::set_referenced_menu_selection(state, index) {
                     *dirty = true;
                 }
@@ -116,14 +101,10 @@ pub(crate) fn handle_mouse_moved(
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }
-        // 页码菜单与引用文件夹浮层的边框按钮可提示；其余浮层抑制 tooltip。
+        // 页码菜单与引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
         let tooltip_target = if matches!(
             state.overlay,
-            Some(
-                Overlay::PageMenu(_)
-                    | Overlay::ReferencedFolderMenu(_)
-                    | Overlay::ReferencedFolderSearch(_)
-            )
+            Some(Overlay::PageMenu(_) | Overlay::ReferencedFolderSearch(_))
         ) {
             ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
         } else {

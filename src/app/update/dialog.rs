@@ -32,7 +32,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_worktree_open_key(state, key);
         return None;
     }
-    // 引用文件夹菜单：上下移动、回车激活、Esc 关闭。
+    // 引用文件夹目录弹窗：上下移动、回车打开、Ctrl+C 复制引用、Ctrl+D/Del 移除、Esc 关闭。
     if matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))) {
         match key {
             OverlayKey::Esc => {
@@ -46,6 +46,12 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             }
             OverlayKey::Enter => {
                 super::activate_referenced_menu_row(state);
+            }
+            OverlayKey::Copy => {
+                super::copy_referenced_menu_selected(state);
+            }
+            OverlayKey::Remove => {
+                super::remove_referenced_menu_selected(state);
             }
             _ => {}
         }
@@ -100,6 +106,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             | OverlayKey::End => {
                 super::edit_referenced_search(state, key);
             }
+            OverlayKey::Remove => {}
         }
         return None;
     }
@@ -219,7 +226,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             None
         }
         // 引用文件夹浮层已在上方分支消费；此处不会到达。
-        OverlayKey::EnterFolder | OverlayKey::Back | OverlayKey::Copy => None,
+        OverlayKey::EnterFolder | OverlayKey::Back | OverlayKey::Copy | OverlayKey::Remove => None,
     }
 }
 

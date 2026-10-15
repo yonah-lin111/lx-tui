@@ -182,15 +182,37 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match kind {
-        OverlayKind::Menu | OverlayKind::PageMenu | OverlayKind::ReferencedFolderMenu => {
-            match key.code {
-                KeyCode::Esc => Some(OverlayKey::Esc),
-                KeyCode::Up => Some(OverlayKey::Up),
-                KeyCode::Down => Some(OverlayKey::Down),
-                KeyCode::Enter => Some(OverlayKey::Enter),
-                _ => None,
+        OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        // 引用文件夹目录弹窗：上下移动、回车打开；Ctrl/Cmd+C 复制引用、
+        // Ctrl/Cmd+D 或 Del 移除记录（沿用弹窗内快捷键语义，行内不再放动作按钮）。
+        OverlayKind::ReferencedFolderMenu => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Delete => Some(OverlayKey::Remove),
+            KeyCode::Char('c' | 'C')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Copy)
             }
-        }
+            KeyCode::Char('d' | 'D')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Remove)
+            }
+            _ => None,
+        },
         OverlayKind::ReferencedFolderDelete => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),

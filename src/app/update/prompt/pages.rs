@@ -431,7 +431,8 @@ pub fn apply_page_rename_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Down
         | OverlayKey::EnterFolder
         | OverlayKey::Back
-        | OverlayKey::Copy => {}
+        | OverlayKey::Copy
+        | OverlayKey::Remove => {}
     }
 }
 

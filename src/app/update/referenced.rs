@@ -1,4 +1,4 @@
-//! 引用文件夹行为：工具栏菜单、`[add]` 路径输入、内容搜索弹窗与删除确认。
+//! 引用文件夹行为：目录弹窗、路径输入、内容搜索弹窗与删除确认。
 //!
 //! DB 读写不在本层执行：变更登记为 `Effect` 出箱，由持久化服务执行并回报；
 //! 文件系统扫描与路径校验登记为 `ReferencedRequest`，由事件层后台执行后回投。
@@ -9,6 +9,7 @@ mod search;
 pub use search::*;
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use crate::app::effects::Effect;
 use crate::app::markdown::ReferKind;
@@ -20,7 +21,7 @@ use crate::app::referenced::{PathValidation, ReferencedFolder, ReferencedRequest
 use crate::app::state::AppState;
 use crate::ui::text;
 
-/// 打开引用文件夹菜单：以显示中工作区的 prompt 键归属。
+/// 打开引用文件夹目录弹窗：以显示中工作区的 prompt 键归属。
 ///
 /// 无有效项目键、当前处于树视图或右栏折叠时返回 false（不打开）。
 /// 打开时高亮最后一条记录（新增后滚动到新项）。
@@ -42,7 +43,7 @@ pub fn open_referenced_folder_menu(state: &mut AppState, anchor: (u16, u16)) -> 
     true
 }
 
-/// 按当前快照构建菜单行：数据库不可用、空状态或全部记录，末尾恒为 `[add]`。
+/// 按当前快照构建目录弹窗行：数据库不可用、空状态或全部记录，末尾恒为新建行。
 fn reference_menu_rows(state: &AppState) -> Vec<ReferencedFolderMenuRow> {
     let mut rows = Vec::new();
     if state.referenced.failed {
@@ -148,7 +149,7 @@ pub fn apply_referenced_add_failure(state: &mut AppState) {
     set_referenced_input_error_message(state, Some(text::TOAST_REFERENCED_SAVE_FAILED));
 }
 
-/// 添加写成功：关闭输入弹窗并重开目录菜单（新增项已滚入可见范围）。
+/// 添加写成功：关闭输入弹窗并重开目录弹窗（新增项已滚入可见范围）。
 pub fn finish_referenced_add(state: &mut AppState, anchor: (u16, u16)) -> bool {
     if let Some(Overlay::ReferencedFolderInput(_)) = state.overlay.as_ref() {
         state.overlay = None;
@@ -237,6 +238,18 @@ pub fn move_referenced_menu_selection(state: &mut AppState, delta: isize) -> boo
     true
 }
 
+/// 登记本次目录弹窗左键行点击并判定是否构成双击；双击后点击序列复位。
+///
+/// 与 prompt 列表一致：单击只选中，双击才打开（行内不再放动作按钮）。
+pub fn referenced_menu_double_click(state: &mut AppState, index: usize, now: Instant) -> bool {
+    let double = state.referenced_menu_click.is_some_and(|(last, at)| {
+        last == index
+            && now.saturating_duration_since(at) <= crate::app::update::PROMPT_DOUBLE_CLICK_WINDOW
+    });
+    state.referenced_menu_click = (!double).then_some((index, now));
+    double
+}
+
 /// 激活引用文件夹菜单当前行：空状态不动作；`[add]` 打开输入弹窗；记录行打开搜索弹窗。
 pub fn activate_referenced_menu_row(state: &mut AppState) -> bool {
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
@@ -259,22 +272,30 @@ pub fn activate_referenced_menu_row(state: &mut AppState) -> bool {
     }
 }
 
-/// 复制某条菜单记录的 Markdown 目录引用。
-pub fn copy_referenced_menu_folder(state: &mut AppState, id: i64) -> bool {
+/// 复制目录弹窗高亮记录的 Markdown 目录引用。
+pub fn copy_referenced_menu_selected(state: &mut AppState) -> bool {
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
         return false;
     };
-    let Some(path) = menu.rows.iter().find_map(|row| match row {
-        ReferencedFolderMenuRow::Folder { id: row_id, path } if *row_id == id => Some(path.clone()),
-        _ => None,
-    }) else {
+    let Some(ReferencedFolderMenuRow::Folder { path, .. }) = menu.rows.get(menu.selected) else {
         return false;
     };
-    let Some(text_value) = crate::app::markdown::format_reference(ReferKind::Folder, &path) else {
+    let Some(text_value) = crate::app::markdown::format_reference(ReferKind::Folder, path) else {
         return false;
     };
     state.effects.push(Effect::CopyToClipboard(text_value));
     true
+}
+
+/// 打开目录弹窗高亮记录的删除确认浮层（仅移除记录，不删磁盘内容）。
+pub fn remove_referenced_menu_selected(state: &mut AppState) -> bool {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        return false;
+    };
+    let Some(ReferencedFolderMenuRow::Folder { id, path }) = menu.rows.get(menu.selected) else {
+        return false;
+    };
+    open_referenced_delete(state, *id, path.clone())
 }
 
 /// 打开删除确认浮层（仅移除记录，不删磁盘内容）。

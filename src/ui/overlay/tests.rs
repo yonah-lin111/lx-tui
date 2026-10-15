@@ -680,7 +680,7 @@ fn referenced_menu_state(rows: Vec<ReferencedFolderMenuRow>, selected: usize) ->
 }
 
 #[test]
-fn referenced_menu_renders_title_add_and_actions() {
+fn referenced_menu_renders_modal_rows_addresses_and_footer() {
     use crate::app::overlay::ReferencedFolderMenuRow;
     let rows = vec![
         ReferencedFolderMenuRow::Folder {
@@ -689,7 +689,7 @@ fn referenced_menu_renders_title_add_and_actions() {
         },
         ReferencedFolderMenuRow::Folder {
             id: 2,
-            path: PathBuf::from("/tmp/beta"),
+            path: PathBuf::from("/tmp/work/beta"),
         },
         ReferencedFolderMenuRow::Add,
     ];
@@ -700,46 +700,51 @@ fn referenced_menu_renders_title_add_and_actions() {
         joined.contains(text::MENU_TITLE_REFERENCED_FOLDERS),
         "{joined}"
     );
-    assert!(joined.contains(text::REFERENCED_MENU_ADD), "{joined}");
+    assert!(joined.contains(text::REFERENCED_MENU_ADD_ROW), "{joined}");
+    assert!(joined.contains(text::REFERENCED_MENU_FOOTER), "{joined}");
     assert!(joined.contains("alpha"), "{joined}");
     assert!(joined.contains("beta"), "{joined}");
-    assert!(joined.contains(text::TEMPLATE_BUTTON_COPY), "{joined}");
-    assert!(joined.contains(text::TEMPLATE_BUTTON_DEL), "{joined}");
+    // 记录行右端显示绝对路径（prompt 列表式右对齐地址）。
+    assert!(joined.contains("/tmp/work"), "{joined}");
 }
 
 #[test]
-fn referenced_menu_empty_state_and_hit_regions() {
+fn referenced_menu_keeps_fixed_size_and_centers() {
     use crate::app::overlay::ReferencedFolderMenuRow;
-    let rows = vec![ReferencedFolderMenuRow::Empty, ReferencedFolderMenuRow::Add];
-    let state = referenced_menu_state(rows, 0);
-    let (lines, _) = draw_overlay(&state);
-    let joined = lines.join("\n");
-    assert!(joined.contains(text::REFERENCED_MENU_EMPTY), "{joined}");
-
-    let menu = match state.overlay.as_ref() {
-        Some(Overlay::ReferencedFolderMenu(menu)) => menu,
-        _ => panic!("menu"),
+    let rows = vec![
+        ReferencedFolderMenuRow::Folder {
+            id: 1,
+            path: PathBuf::from("/tmp/alpha"),
+        },
+        ReferencedFolderMenuRow::Add,
+    ];
+    let few = referenced_menu_state(rows.clone(), 0);
+    let many_rows: Vec<ReferencedFolderMenuRow> = (0..40)
+        .map(|id| ReferencedFolderMenuRow::Folder {
+            id,
+            path: PathBuf::from(format!("/tmp/alpha-{id}")),
+        })
+        .chain(std::iter::once(ReferencedFolderMenuRow::Add))
+        .collect();
+    let many = referenced_menu_state(many_rows, 0);
+    let layout_for = |state: &AppState| {
+        let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+            panic!("menu");
+        };
+        referenced_menu_layout(SCREEN, menu)
     };
-    let layout = referenced_menu_layout(SCREEN, menu);
-    // `[add]` 命中。
-    assert_eq!(
-        referenced_menu_hit_at(SCREEN, menu, layout.add_rect.x, layout.add_rect.y),
-        Some(ReferencedMenuAction::Add)
-    );
-    // 空状态行主区域命中（打开搜索也被视为 Open，由 update 层判定空状态 no-op）。
-    let line = layout.rows[0];
-    assert_eq!(
-        referenced_menu_hit_at(SCREEN, menu, line.copy.x, line.copy.y),
-        Some(ReferencedMenuAction::Copy(0))
-    );
-    assert_eq!(
-        referenced_menu_hit_at(SCREEN, menu, line.delete.x, line.delete.y),
-        Some(ReferencedMenuAction::Delete(0))
-    );
+    let few = layout_for(&few);
+    let many = layout_for(&many);
+    assert_eq!(few.area, many.area, "弹窗几何不随记录数变化");
+    assert!(few.area.x > SCREEN.x && few.area.right() < SCREEN.right());
+    assert!(few.area.y > SCREEN.y && few.area.bottom() < SCREEN.bottom());
+    assert_eq!(few.total, 2);
+    assert_eq!(few.rows.len(), 2);
+    assert_eq!(many.rows.len(), 16, "满窗口显示（扣除上下边框）");
 }
 
 #[test]
-fn referenced_menu_row_hit_distinguishes_main_copy_delete() {
+fn referenced_menu_row_hit_maps_rows_and_outside() {
     use crate::app::overlay::ReferencedFolderMenuRow;
     let rows = vec![
         ReferencedFolderMenuRow::Folder {
@@ -754,19 +759,21 @@ fn referenced_menu_row_hit_distinguishes_main_copy_delete() {
         _ => panic!("menu"),
     };
     let layout = referenced_menu_layout(SCREEN, menu);
-    let line = layout.rows[0];
+    let first = layout.rows[0];
     assert_eq!(
-        referenced_menu_hit_at(SCREEN, menu, line.main.x, line.main.y),
-        Some(ReferencedMenuAction::Open(0))
+        referenced_menu_row_at(SCREEN, menu, first.x, first.y),
+        Some(0)
     );
     assert_eq!(
-        referenced_menu_hit_at(SCREEN, menu, line.copy.x, line.copy.y),
-        Some(ReferencedMenuAction::Copy(0))
+        referenced_menu_row_at(SCREEN, menu, first.right() - 1, first.y),
+        Some(0)
     );
-    assert_eq!(
-        referenced_menu_hit_at(SCREEN, menu, line.delete.x, line.delete.y),
-        Some(ReferencedMenuAction::Delete(0))
-    );
+    let add = layout.rows[1];
+    assert_eq!(referenced_menu_row_at(SCREEN, menu, add.x, add.y), Some(1));
+    // 列表下方空白与弹窗之外都不命中。
+    let blank = Rect::new(first.x, add.y + 1, first.width, 1);
+    assert_eq!(referenced_menu_row_at(SCREEN, menu, blank.x, blank.y), None);
+    assert_eq!(referenced_menu_row_at(SCREEN, menu, 0, 0), None);
 }
 
 fn referenced_search_state(items: Vec<ReferencedEntry>, selected: usize) -> AppState {

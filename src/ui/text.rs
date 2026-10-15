@@ -83,12 +83,14 @@ pub const PROMPT_TEMP_PROMPT_LABEL: &str = "[tmp]";
 /// 编辑视图引用文件夹按钮：打开引用文件夹菜单。
 pub const PROMPT_FOLDERS_LABEL: &str = "[dir]";
 
-/// 引用文件夹菜单与弹窗文案。
+/// 引用文件夹弹窗文案。
 pub const MENU_TITLE_REFERENCED_FOLDERS: &str = "Folders";
-/// 引用文件夹菜单空状态提示（不可选）。
+/// 引用文件夹弹窗空状态提示（不可选）。
 pub const REFERENCED_MENU_EMPTY: &str = "no folders referenced";
-/// 引用文件夹菜单右上角新建按钮。
-pub const REFERENCED_MENU_ADD: &str = "[add]";
+/// 引用文件夹弹窗末行的新建动作项。
+pub const REFERENCED_MENU_ADD_ROW: &str = "+ add folder…";
+/// 引用文件夹弹窗底边快捷键提示。
+pub const REFERENCED_MENU_FOOTER: &str = "[open ↵] [copy ^c] [del ^d] [close esc]";
 /// 引用文件夹路径输入弹窗标题与占位。
 pub const REFERENCED_INPUT_TITLE: &str = "add folder";
 pub const REFERENCED_INPUT_PLACEHOLDER: &str = "path to directory";
@@ -557,7 +559,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PageMenuAdd => "add page",
         TooltipTarget::PageMenuDelete => "delete page",
         TooltipTarget::PromptFolders => "referenced folders",
-        TooltipTarget::ReferencedMenuAdd => "add folder",
         TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {
             BlockButtonKind::Copy => "copy block",
