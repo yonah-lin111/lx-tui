@@ -18,6 +18,8 @@ use ratatui::style::Style;
 use crate::app::ui_gallery::{AgentStepId, UiGalleryComponentId};
 use crate::ui::{style, text};
 
+mod markdown;
+
 /// 单个步骤样例的 token 用量（input、output、cache read）。
 ///
 /// 与 lx-agent 一致用**数值 + [`format_tokens`]** 生成字符串；同一组数值会同时喂给
@@ -84,6 +86,9 @@ fn variant_line_count(step: AgentStepId, variant: usize) -> usize {
 fn variant_lines(step: AgentStepId, variant: usize) -> Vec<SampleLine> {
     if step == AgentStepId::Tokens {
         return tokens_variant_lines(variant);
+    }
+    if step == AgentStepId::Markdown {
+        return markdown::markdown_lines(variant, step_tokens(step));
     }
     let tokens = step_tokens(step);
     let mut lines = vec![header_line(step, variant)];
@@ -411,6 +416,7 @@ fn step_tokens(step: AgentStepId) -> Tokens {
         AgentStepId::Compact => (12_400, 0, 8_100),
         AgentStepId::Mode => (0, 0, 0),
         AgentStepId::Final => (5_200, 640, 3_300),
+        AgentStepId::Markdown => (12_400, 1_200, 8_100),
         AgentStepId::Error => (1_460, 40, 700),
         AgentStepId::Question => (900, 60, 300),
         AgentStepId::Tokens => (12_400, 312, 8_100),
@@ -487,6 +493,7 @@ fn verb(step: AgentStepId) -> &'static str {
         AgentStepId::Compact => agent::VERB_COMPACT,
         AgentStepId::Mode => agent::VERB_MODE,
         AgentStepId::Final => agent::VERB_FINAL,
+        AgentStepId::Markdown => agent::VERB_FINAL,
         AgentStepId::Error => agent::VERB_ERROR,
         AgentStepId::Question => agent::VERB_QUESTION,
         AgentStepId::Tokens => agent::VERB_FINAL,
@@ -510,6 +517,7 @@ fn detail(step: AgentStepId) -> &'static str {
         AgentStepId::Compact => agent::DETAIL_COMPACT,
         AgentStepId::Mode => agent::DETAIL_MODE,
         AgentStepId::Final => agent::DETAIL_FINAL,
+        AgentStepId::Markdown => agent::DETAIL_FINAL,
         AgentStepId::Error => agent::DETAIL_ERROR,
         AgentStepId::Question => agent::DETAIL_QUESTION,
         AgentStepId::Tokens => agent::DETAIL_FINAL,
@@ -533,6 +541,7 @@ fn claude_name(step: AgentStepId) -> &'static str {
         AgentStepId::Compact => agent::NAME_COMPACT,
         AgentStepId::Mode => agent::NAME_MODE,
         AgentStepId::Final => agent::NAME_FINAL,
+        AgentStepId::Markdown => agent::NAME_FINAL,
         AgentStepId::Error => agent::NAME_ERROR,
         AgentStepId::Question => agent::NAME_QUESTION,
         AgentStepId::Tokens => agent::NAME_FINAL,
@@ -556,6 +565,7 @@ fn lx_icon(step: AgentStepId) -> &'static str {
         AgentStepId::Compact => agent::ICON_COMPACT,
         AgentStepId::Mode => agent::ICON_MODE,
         AgentStepId::Final => agent::ICON_FINAL,
+        AgentStepId::Markdown => agent::ICON_FINAL,
         AgentStepId::Error => agent::ICON_ERROR,
         AgentStepId::Question => agent::ICON_QUESTION,
         AgentStepId::Tokens => agent::ICON_TOKENS,
@@ -588,6 +598,7 @@ fn opencode_icon(step: AgentStepId) -> &'static str {
         AgentStepId::Compact => agent::OPEN_ICON_COMPACT,
         AgentStepId::Mode => agent::OPEN_ICON_MODE,
         AgentStepId::Final => agent::OPEN_ICON_FINAL,
+        AgentStepId::Markdown => agent::OPEN_ICON_FINAL,
         AgentStepId::Error => agent::OPEN_ICON_ERROR,
         AgentStepId::Question => agent::OPEN_ICON_QUESTION,
         AgentStepId::Tokens => agent::OPEN_ICON_FINAL,
@@ -609,11 +620,13 @@ fn body_lines(step: AgentStepId) -> &'static [&'static str] {
         AgentStepId::Final => agent::BODY_FINAL,
         AgentStepId::Error => agent::BODY_ERROR,
         AgentStepId::Question => agent::BODY_QUESTION,
-        // subagent 的子任务在 `variant_lines` 里单独展开（每子任务各带 token 行）。
+        // 这些步骤在 `variant_lines` 里单独展开：
+        // subagent 的子任务各带 token 行；todo/tokens 用自定义渲染；markdown 走渲染器。
         AgentStepId::Subagent
         | AgentStepId::Todo
         | AgentStepId::Compact
         | AgentStepId::Mode
+        | AgentStepId::Markdown
         | AgentStepId::Tokens => &[],
     }
 }

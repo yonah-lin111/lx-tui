@@ -62,6 +62,8 @@ pub enum AgentStepId {
     Compact,
     Mode,
     Final,
+    /// agent 最终回答的 markdown 渲染（覆盖全部 markdown 格式）。
+    Markdown,
     Error,
     Question,
     Tokens,
@@ -85,6 +87,7 @@ impl AgentStepId {
             Self::Compact => agent::COMPACT,
             Self::Mode => agent::MODE,
             Self::Final => agent::FINAL,
+            Self::Markdown => agent::MARKDOWN,
             Self::Error => agent::ERROR,
             Self::Question => agent::QUESTION,
             Self::Tokens => agent::TOKENS,
@@ -92,7 +95,7 @@ impl AgentStepId {
     }
 
     /// `agent` 分组内全部步骤（固定展示顺序）。
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::Exec,
         Self::Read,
         Self::Edit,
@@ -106,6 +109,7 @@ impl AgentStepId {
         Self::Compact,
         Self::Mode,
         Self::Final,
+        Self::Markdown,
         Self::Error,
         Self::Question,
         Self::Tokens,
@@ -199,7 +203,7 @@ pub const PROMPT_COMPONENTS: [UiGalleryComponent; 5] = [
 ];
 
 /// `agent` 文件夹下的组件：每个步骤一项，右侧叠放四套候选样式。
-pub const AGENT_COMPONENTS: [UiGalleryComponent; 16] = [
+pub const AGENT_COMPONENTS: [UiGalleryComponent; 17] = [
     agent_component(AgentStepId::Exec),
     agent_component(AgentStepId::Read),
     agent_component(AgentStepId::Edit),
@@ -213,6 +217,7 @@ pub const AGENT_COMPONENTS: [UiGalleryComponent; 16] = [
     agent_component(AgentStepId::Compact),
     agent_component(AgentStepId::Mode),
     agent_component(AgentStepId::Final),
+    agent_component(AgentStepId::Markdown),
     agent_component(AgentStepId::Error),
     agent_component(AgentStepId::Question),
     agent_component(AgentStepId::Tokens),
@@ -243,6 +248,7 @@ const fn agent_step_description(step: AgentStepId) -> &'static [&'static str] {
         AgentStepId::Compact => agent::COMPACT_DESC,
         AgentStepId::Mode => agent::MODE_DESC,
         AgentStepId::Final => agent::FINAL_DESC,
+        AgentStepId::Markdown => agent::MARKDOWN_DESC,
         AgentStepId::Error => agent::ERROR_DESC,
         AgentStepId::Question => agent::QUESTION_DESC,
         AgentStepId::Tokens => agent::TOKENS_DESC,

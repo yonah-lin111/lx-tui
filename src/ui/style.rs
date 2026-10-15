@@ -131,11 +131,6 @@ pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
-/// Agent 步骤进行中标记（次要信息）。
-pub fn agent_pending() -> Style {
-    muted()
-}
-
 /// Agent 步骤工具名/参数标识：强调色，与正文一眼区分（对齐三家参考）。
 pub fn agent_step_name() -> Style {
     accent()
@@ -144,11 +139,6 @@ pub fn agent_step_name() -> Style {
 /// Agent 步骤子细节/输出：次要信息（codex/opencode 的 dim 输出）。
 pub fn agent_step_detail() -> Style {
     muted()
-}
-
-/// Agent 思考/推理正文：次要信息 + 斜体（对齐 codex 的 reasoning 呈现）。
-pub fn agent_reasoning() -> Style {
-    Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC)
 }
 
 /// diff 新增行计数与前缀：Green。
@@ -205,6 +195,28 @@ pub fn markdown_heading() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// markdown 六级标题的样式：h1 加粗+下划线、h2 加粗、h3 加粗+斜体、h4–h6 斜体（对齐 codex）。
+pub fn markdown_heading_level(level: u8) -> Style {
+    let base = Color::Yellow;
+    match level {
+        1 => Style::default()
+            .fg(base)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        2 => Style::default().fg(base).add_modifier(Modifier::BOLD),
+        3 => Style::default()
+            .fg(base)
+            .add_modifier(Modifier::BOLD | Modifier::ITALIC),
+        _ => Style::default().fg(base).add_modifier(Modifier::ITALIC),
+    }
+}
+
+/// markdown 粗斜体（`***…***`）：Yellow 加粗+斜体。
+pub fn markdown_strong_emphasis() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD | Modifier::ITALIC)
+}
+
 /// markdown 粗体文字。
 pub fn markdown_strong() -> Style {
     Style::default()
@@ -253,6 +265,43 @@ pub fn markdown_link_text() -> Style {
 /// markdown URL。
 pub fn markdown_url() -> Style {
     Style::default().fg(Color::Cyan)
+}
+
+/// markdown 无序列表项目符号：次要信息。
+pub fn markdown_bullet() -> Style {
+    muted()
+}
+
+/// markdown 有序列表序号（对齐 codex 的 light_blue）。
+pub fn markdown_ordered() -> Style {
+    Style::default().fg(Color::LightBlue)
+}
+
+/// markdown 任务列表已完成项（Green + 删除线）。
+pub fn markdown_task_done() -> Style {
+    Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::CROSSED_OUT)
+}
+
+/// markdown 任务列表未完成项：次要信息。
+pub fn markdown_task_open() -> Style {
+    muted()
+}
+
+/// markdown 水平线 / 表格边框：次要信息。
+pub fn markdown_rule() -> Style {
+    muted()
+}
+
+/// markdown 代码块语言标记：次要信息。
+pub fn markdown_code_lang() -> Style {
+    muted()
+}
+
+/// markdown 图片说明（alt / url）：次要信息。
+pub fn markdown_image() -> Style {
+    muted()
 }
 
 /// 模板块结构标记（`&&&`、`--start`/`--end`、状态与元数据）：次要信息。

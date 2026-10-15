@@ -206,7 +206,7 @@ fn folder_and_component_lookup_by_id() {
         gallery
             .folder(UiGalleryFolderId::Agent)
             .map(|f| f.components.len()),
-        Some(16)
+        Some(17)
     );
     assert_eq!(
         gallery

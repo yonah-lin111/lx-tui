@@ -20,6 +20,7 @@ pub const MCP: &str = "mcp";
 pub const COMPACT: &str = "compact";
 pub const MODE: &str = "mode";
 pub const FINAL: &str = "final";
+pub const MARKDOWN: &str = "markdown";
 pub const ERROR: &str = "error";
 pub const QUESTION: &str = "question";
 pub const TOKENS: &str = "tokens";
@@ -248,3 +249,42 @@ pub const TOKENS_DESC: &[&str] = &[
     "Token usage: per-step footers plus the turn summary",
     "bar and the context-usage pill.",
 ];
+
+/// `markdown` item：agent 最终回答的 markdown 渲染说明。
+pub const MARKDOWN_DESC: &[&str] = &[
+    "Markdown answer rendering: headings, lists, tasks,",
+    "quotes, code, tables, rules, images and inline styles.",
+];
+
+/// `markdown` item 的渲染器每套候选的语言标记（代码块右上角的语言名）。
+pub const MD_LANG: &str = "rust";
+
+/// `markdown` item：一份覆盖全部 markdown 格式的样例文档。
+///
+/// 用真实 markdown 源码写出，渲染器负责把标记“吃掉”并按主流 coding agent
+/// 的做法重排；同一份文档喂给四套候选，便于横向对比渲染差异。
+pub const MD_SAMPLE: &str = "\
+# Heading 1
+## Heading 2
+### Heading 3
+#### Heading 4
+##### Heading 5
+###### Heading 6
+**bold** *italic* ***both*** ~~strike~~ `code`
+- bullet one
+  - nested bullet
+1. ordered one
+- [x] done task
+- [ ] open task
+> quoted line one
+```rust
+fn main() {}
+```
+    indented code
+| Left | Center | Right |
+|:-----|:------:|------:|
+| a    | b      | c     |
+---
+[OpenAI](https://openai.com) <https://example.com>
+![logo](https://example.com/logo.png)
+";
