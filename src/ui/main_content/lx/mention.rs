@@ -13,6 +13,11 @@ use crate::ui::widgets::command_panel::{
     self, CommandItem, CommandPanelView, PanelLayout, PanelPlacement,
 };
 
+/// 面板最多显示的内容行数；对齐 codex `MAX_POPUP_ROWS`（8），保证浮层观感统一。
+pub(crate) const MAX_POPUP_ROWS: u16 = 8;
+/// 面板边框行数（上下各一行）。
+const PANEL_BORDER_ROWS: u16 = 2;
+
 /// 提及面板条目文本：候选文件/目录（双行）或状态行（单行）。
 enum PanelRow {
     File(mention::MentionRow),
@@ -134,6 +139,9 @@ fn panel_data(lx: &Lx, width: u16) -> Option<PanelData> {
 }
 
 /// 面板视图：强制与输入框等宽、紧贴输入框上方、视口优先于窗口锚点。
+///
+/// 高度对齐 codex 的两步口径：内容行先夹到 `MAX_POPUP_ROWS`（再加边框），
+/// 再与输入框上方可用行数取小；空间不足时不挤压输入框。
 fn view<'a>(
     items: &'a [CommandItem<'a>],
     data: &'a PanelData,
@@ -141,13 +149,14 @@ fn view<'a>(
     area: Rect,
 ) -> CommandPanelView<'a> {
     let above = input.y.saturating_sub(area.y);
+    let cap = above.min(MAX_POPUP_ROWS.saturating_add(PANEL_BORDER_ROWS));
     CommandPanelView {
         items,
         active: data.active,
         window_anchor: data.anchor,
         window_start: data.viewport,
         anchor_row: above,
-        max_height: Some(above),
+        max_height: Some(cap),
         title: Some(text::LX_MENTION_PANEL_TITLE),
         right_title: data.scope.as_deref(),
         footer: data.interactive.then_some(text::MENTION_PANEL_FOOTER),

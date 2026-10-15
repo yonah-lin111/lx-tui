@@ -321,7 +321,23 @@ impl Lx {
     }
 
     /// 删除光标前一个字符。
+    ///
+    /// 光标紧跟 `@路径 ` 提及之后的空白、且提及面板未打开时，一次删净整块提及
+    /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
     pub fn backspace(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        if !self.mention.is_open()
+            && let Some(range) =
+                crate::app::markdown::mention_deletion_range(&self.input, self.cursor)
+        {
+            self.snapshot();
+            self.cursor = range.start;
+            self.input.replace_range(range, "");
+            self.refresh_panel();
+            return;
+        }
         if let Some(prev) = self.input[..self.cursor].chars().next_back() {
             self.snapshot();
             self.cursor -= prev.len_utf8();

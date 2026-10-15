@@ -321,3 +321,34 @@ fn refresh_after_edit_keeps_highlight_within_scope() {
     // 高亮被钳到新列表范围内且仍有效。
     assert!(panel.active() < panel.items().len());
 }
+
+#[test]
+fn backspace_after_mention_space_deletes_whole_mention() {
+    let mut lx = ready("@main", entries());
+    assert!(lx.mention_confirm());
+    assert_eq!(lx.input, "@main.rs ");
+    // 光标紧跟尾随空格：一次退格删净整块提及。
+    lx.backspace();
+    assert_eq!(lx.input, "", "整块删除 @提及 ");
+    lx.undo();
+    assert_eq!(lx.input, "@main.rs ", "整块删除是一步撤销");
+}
+
+#[test]
+fn backspace_without_trailing_space_deletes_one_char() {
+    let mut lx = ready("@main", entries());
+    assert!(lx.mention_confirm());
+    // 光标移到尾随空格之前：退格只删一个字符。
+    lx.move_left();
+    lx.backspace();
+    assert_eq!(lx.input, "@main.r ", "非空白处普通退格");
+}
+
+#[test]
+fn backspace_while_panel_open_edits_query() {
+    // 面板打开（@查询未闭合）时退格按普通编辑删除查询字符，不整块删除。
+    let mut lx = ready("@main", entries());
+    assert!(lx.mention_open());
+    lx.backspace();
+    assert_eq!(lx.input, "@mai", "面板打开时退格编辑查询");
+}

@@ -646,3 +646,57 @@ fn mention_panel_renders_cjk_candidate_without_overflow() {
     let input = layout(area, &lx).input.expect("input");
     assert_eq!(panel.rect.right(), input.right());
 }
+
+#[test]
+fn mention_panel_height_capped_at_max_popup_rows() {
+    // 内容区很高：候选很多，面板内容行仍夹到 MAX_POPUP_ROWS（8）+ 边框 2 行。
+    let area = Rect::new(0, 0, 60, 60);
+    let entries: Vec<MentionEntry> = (0..100)
+        .map(|index| MentionEntry {
+            path: format!("file{index:03}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    let lx = mention_lx(entries);
+    let panel = mention::layout(area, &lx).expect("panel");
+    assert_eq!(
+        panel.rect.height,
+        mention::MAX_POPUP_ROWS + 2,
+        "高度对齐 codex 的 MAX_POPUP_ROWS + 边框"
+    );
+    assert!(panel.scrollbar.is_some(), "超出上限时出现滚动条");
+}
+
+#[test]
+fn mention_panel_height_follows_content_when_few_rows() {
+    // 候选少：面板按内容收缩，不撑到上限。
+    let area = Rect::new(0, 0, 60, 60);
+    let entries = vec![MentionEntry {
+        path: "only.rs".into(),
+        is_directory: false,
+    }];
+    let lx = mention_lx(entries);
+    let panel = mention::layout(area, &lx).expect("panel");
+    assert!(
+        panel.rect.height < mention::MAX_POPUP_ROWS + 2,
+        "少量候选按内容高度收缩: {}",
+        panel.rect.height
+    );
+}
+
+#[test]
+fn mention_panel_height_limited_by_space_above_input() {
+    // 输入框贴顶：可用行数小于上限时，面板高度受可用空间约束。
+    let area = Rect::new(0, 0, 60, 8);
+    let entries: Vec<MentionEntry> = (0..100)
+        .map(|index| MentionEntry {
+            path: format!("file{index:03}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    let lx = mention_lx(entries);
+    let input = layout(area, &lx).input.expect("input");
+    let panel = mention::layout(area, &lx).expect("panel");
+    assert!(panel.rect.height <= input.y, "面板不超过输入框上方空间");
+    assert_eq!(panel.rect.bottom(), input.y, "面板紧贴输入框上沿");
+}
