@@ -22,6 +22,14 @@ pub enum OverlayKind {
     NewNode,
     SaveDraft,
     PageMenu,
+    /// 引用文件夹目录弹窗（编辑视图工具栏文件夹按钮）。
+    ReferencedFolderMenu,
+    /// 引用文件夹路径输入弹窗。
+    ReferencedFolderInput,
+    /// 引用文件夹内容搜索弹窗。
+    ReferencedFolderSearch,
+    /// 引用文件夹删除确认浮层。
+    ReferencedFolderDelete,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -38,6 +46,10 @@ pub enum Overlay {
     NewNode(NewNode),
     SaveDraft(SaveDraft),
     PageMenu(PageMenu),
+    ReferencedFolderMenu(ReferencedFolderMenu),
+    ReferencedFolderInput(ReferencedFolderInput),
+    ReferencedFolderSearch(ReferencedFolderSearch),
+    ReferencedFolderDelete(ReferencedFolderDelete),
 }
 
 impl Overlay {
@@ -55,8 +67,99 @@ impl Overlay {
             Self::NewNode(_) => OverlayKind::NewNode,
             Self::SaveDraft(_) => OverlayKind::SaveDraft,
             Self::PageMenu(_) => OverlayKind::PageMenu,
+            Self::ReferencedFolderMenu(_) => OverlayKind::ReferencedFolderMenu,
+            Self::ReferencedFolderInput(_) => OverlayKind::ReferencedFolderInput,
+            Self::ReferencedFolderSearch(_) => OverlayKind::ReferencedFolderSearch,
+            Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
         }
     }
+}
+
+/// 引用文件夹目录弹窗：锚点、行快照与高亮项。
+///
+/// 行快照在打开时按项目快照生成；弹窗为模态，行集合在打开期间不再变化。
+/// 归属的 prompt 键与项目身份随菜单固定，避免切换工作区后误用旧结果。
+#[derive(Debug)]
+pub struct ReferencedFolderMenu {
+    pub anchor: (u16, u16),
+    /// 弹窗归属的 prompt 键（显示中工作区）。
+    pub key: Option<PathBuf>,
+    /// 空状态、`[add]` 或某条记录。
+    pub rows: Vec<ReferencedFolderMenuRow>,
+    pub selected: usize,
+}
+
+/// 引用文件夹目录弹窗行：空状态、数据库不可用、新建动作或一条记录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferencedFolderMenuRow {
+    /// 无记录（可选新增）。
+    Empty,
+    /// 数据库不可用：无法加载/保存（不伪装成空表）。
+    Unavailable,
+    Add,
+    Folder {
+        id: i64,
+        path: PathBuf,
+    },
+}
+
+/// 引用文件夹路径输入弹窗：单行输入与校验状态。
+#[derive(Debug)]
+pub struct ReferencedFolderInput {
+    /// 来源菜单的锚点；成功后重开菜单沿用同一锚点。
+    pub anchor: (u16, u16),
+    pub input: TextInput,
+    /// 归属的 prompt 键（打开时的显示中工作区）；键变化时弹窗作废。
+    pub key: Option<PathBuf>,
+    /// 校验中（阻止重复提交）。
+    pub validating: bool,
+    /// 校验产生的错误提示；None 表示无错误。
+    pub error: Option<&'static str>,
+    /// 在途校验的请求代号。
+    pub request: Option<u64>,
+}
+
+/// 引用文件夹内容搜索弹窗：搜索根、过滤输入、候选与请求代号。
+#[derive(Debug)]
+pub struct ReferencedFolderSearch {
+    /// 来源菜单锚点；`Esc` 关闭时据此重开菜单。
+    pub anchor: (u16, u16),
+    /// 所属项目记录的 id（删除后弹窗须失效）。
+    pub folder: i64,
+    /// 归属的 prompt 键。
+    pub key: Option<PathBuf>,
+    /// 当前搜索范围根（进入子目录后收窄）。
+    pub root: PathBuf,
+    /// 初始根（`Ctrl+Z` 回退到此即停）。
+    pub initial_root: PathBuf,
+    /// 搜索范围栈（`Ctrl+Z` 逐级回退）。
+    pub stack: Vec<PathBuf>,
+    pub query: TextInput,
+    /// 扫描到的全部候选（未筛选）。
+    pub entries: Vec<crate::app::referenced::ReferencedEntry>,
+    /// 待展示的候选（已按输入筛选）。
+    pub items: Vec<crate::app::referenced::ReferencedEntry>,
+    /// 扫描本身命中条目上限（结果被截断）。
+    pub scan_truncated: bool,
+    /// 展示候选命中展示上限（结果被截断）。
+    pub truncated: bool,
+    pub selected: usize,
+    /// 滚轮滚动后的显式窗口起点；键盘移动/筛选后清空，窗口重新跟随高亮。
+    pub viewport: Option<usize>,
+    /// 后台扫描尚未返回。
+    pub loading: bool,
+    /// 扫描根不可访问。
+    pub failed: bool,
+    /// 在途扫描请求代号；结果代号不匹配即丢弃。
+    pub request: Option<u64>,
+}
+
+/// 引用文件夹删除确认浮层：归属键与待删记录。
+#[derive(Debug)]
+pub struct ReferencedFolderDelete {
+    pub key: Option<PathBuf>,
+    pub id: i64,
+    pub path: PathBuf,
 }
 
 /// 页码菜单：锚点、作用目标、行快照与高亮项。
@@ -431,6 +534,29 @@ impl TextInput {
         let at = self.byte_offset(self.cursor);
         self.text.insert(at, ch);
         self.cursor += 1;
+    }
+
+    /// 在光标处插入一段文本（单行语义：换行与制表符替换为空格）；
+    /// 返回是否实际插入。
+    pub fn insert_str(&mut self, value: &str) -> bool {
+        let cleaned: String = value
+            .chars()
+            .map(|ch| {
+                if matches!(ch, '\n' | '\r' | '\t') {
+                    ' '
+                } else {
+                    ch
+                }
+            })
+            .filter(|ch| !ch.is_control())
+            .collect();
+        if cleaned.is_empty() {
+            return false;
+        }
+        let at = self.byte_offset(self.cursor);
+        self.text.insert_str(at, &cleaned);
+        self.cursor += cleaned.chars().count();
+        true
     }
 
     /// 清空文本并把光标移到开头。

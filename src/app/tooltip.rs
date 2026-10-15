@@ -45,6 +45,8 @@ pub enum TooltipTarget {
     SwapPromptSide,
     PromptMode,
     PromptTempPrompt,
+    /// 编辑视图工具栏的引用文件夹按钮。
+    PromptFolders,
     PromptUndo,
     PromptRedo,
     PromptSelectAll,
@@ -56,6 +58,8 @@ pub enum TooltipTarget {
     PageMenuAdd,
     /// 页码菜单顶部边框的删除按钮。
     PageMenuDelete,
+    /// 引用文件夹内容搜索弹窗标题行的原始路径复制按钮。
+    ReferencedSearchCopyPath,
     /// prompt 文本区内的模板块按钮；`line` 为块起始逻辑行。
     TemplateButton {
         line: usize,

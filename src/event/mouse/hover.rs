@@ -77,11 +77,35 @@ pub(crate) fn handle_mouse_moved(
                 *dirty = true;
             }
         }
+        if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
+            let layout = ui::overlay::referenced_menu_layout(*screen, menu);
+            if let Some(index) =
+                ui::overlay::referenced_menu_row_at(*screen, menu, mouse.column, mouse.row)
+            {
+                if update::set_referenced_menu_selection(state, index) {
+                    *dirty = true;
+                }
+            } else if !layout.area.contains((mouse.column, mouse.row).into())
+                && update::clear_menu_hover(state)
+            {
+                *dirty = true;
+            }
+        }
+        if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref()
+            && let Some(index) =
+                ui::overlay::referenced_search_item_at(*screen, search, mouse.column, mouse.row)
+            && update::set_referenced_search_selection(state, index)
+        {
+            *dirty = true;
+        }
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }
-        // 页码菜单的边框按钮可提示；其余浮层抑制 tooltip。
-        let tooltip_target = if matches!(state.overlay, Some(Overlay::PageMenu(_))) {
+        // 页码菜单与引用文件夹内容弹窗的边框按钮可提示；其余浮层抑制 tooltip。
+        let tooltip_target = if matches!(
+            state.overlay,
+            Some(Overlay::PageMenu(_) | Overlay::ReferencedFolderSearch(_))
+        ) {
             ui::tooltip::target_at(view, state, rects, *screen, mouse.column, mouse.row)
         } else {
             None

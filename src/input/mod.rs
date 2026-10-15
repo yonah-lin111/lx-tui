@@ -176,15 +176,92 @@ pub fn page_rename_key(key: KeyEvent) -> Option<OverlayKey> {
 
 /// 浮层按键映射：只放行该浮层支持的键，其余返回 None（吞掉）。
 fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
+    // Super/Cmd 组合同样视为非纯文本输入（终端支持 kitty 协议时可达）。
     let plain = !key
         .modifiers
-        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match kind {
         OverlayKind::Menu | OverlayKind::PageMenu => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Up => Some(OverlayKey::Up),
             KeyCode::Down => Some(OverlayKey::Down),
             KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        // 引用文件夹目录弹窗：上下移动、回车打开；Ctrl/Cmd+C 复制引用、
+        // Ctrl/Cmd+D 或 Del 移除记录（沿用弹窗内快捷键语义，行内不再放动作按钮）。
+        OverlayKind::ReferencedFolderMenu => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Delete => Some(OverlayKey::Remove),
+            KeyCode::Char('c' | 'C')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Copy)
+            }
+            KeyCode::Char('d' | 'D')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Remove)
+            }
+            _ => None,
+        },
+        OverlayKind::ReferencedFolderDelete => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            _ => None,
+        },
+        OverlayKind::ReferencedFolderInput => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Clear)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
+            _ => None,
+        },
+        OverlayKind::ReferencedFolderSearch => match key.code {
+            KeyCode::Esc => Some(OverlayKey::Esc),
+            KeyCode::Enter if shift => Some(OverlayKey::EnterFolder),
+            KeyCode::Enter => Some(OverlayKey::Enter),
+            KeyCode::Up => Some(OverlayKey::Up),
+            KeyCode::Down => Some(OverlayKey::Down),
+            // Ctrl/Cmd+Z：回退上层搜索范围（终端支持 kitty 协议时 Cmd 组合可达）。
+            KeyCode::Char('z' | 'Z')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Back)
+            }
+            // Ctrl/Cmd+C：沿用参考面板语义复制高亮项引用（单行搜索框不另设选区模型）。
+            KeyCode::Char('c' | 'C')
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
+            {
+                Some(OverlayKey::Copy)
+            }
+            KeyCode::Backspace => Some(OverlayKey::Backspace),
+            KeyCode::Delete => Some(OverlayKey::Delete),
+            KeyCode::Left if plain => Some(OverlayKey::Left),
+            KeyCode::Right if plain => Some(OverlayKey::Right),
+            KeyCode::Home => Some(OverlayKey::Home),
+            KeyCode::End => Some(OverlayKey::End),
+            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
             _ => None,
         },
         OverlayKind::ConfirmClose

@@ -3,6 +3,7 @@
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 
 use crate::ui::style;
 
@@ -93,24 +94,36 @@ fn offset_for_thumb_top(layout: &ScrollbarLayout, thumb_top: usize) -> usize {
 }
 
 /// 渲染滚动条：轨道 muted、thumb text（终端原生前景色，避免半块字符反显产生黑边）。
+///
+/// 非浮层区域保持透明底；浮层（弹窗、命令面板等）用 [`render_with_base`] 传入面板底色。
 pub fn render(frame: &mut Frame<'_>, layout: &ScrollbarLayout) {
-    render_buffer(frame.buffer_mut(), layout);
+    render_with_base(frame, layout, Style::default());
 }
 
-/// 在缓冲区内渲染滚动条：轨道 muted、thumb text（终端原生前景色，避免半块字符反显产生黑边）。
+/// 在缓冲区内渲染滚动条（透明底）。
 pub fn render_buffer(buf: &mut Buffer, layout: &ScrollbarLayout) {
+    render_buffer_with_base(buf, layout, Style::default());
+}
+
+/// 渲染滚动条并叠加面板底色：轨道/thumb 保留各自前景与修饰符，背景沿用 `base`。
+pub fn render_with_base(frame: &mut Frame<'_>, layout: &ScrollbarLayout, base: Style) {
+    render_buffer_with_base(frame.buffer_mut(), layout, base);
+}
+
+/// 在缓冲区内渲染滚动条并叠加面板底色；`base` 通常为 `style::overlay_panel()`。
+pub fn render_buffer_with_base(buf: &mut Buffer, layout: &ScrollbarLayout, base: Style) {
     for y in layout.track.y..layout.track.bottom() {
         if let Some(cell) = buf.cell_mut((layout.track.x, y)) {
             cell.reset();
             cell.set_symbol(TRACK_SYMBOL);
-            cell.set_style(style::muted());
+            cell.set_style(base.patch(style::muted()));
         }
     }
     for y in layout.thumb.y..layout.thumb.bottom() {
         if let Some(cell) = buf.cell_mut((layout.thumb.x, y)) {
             cell.reset();
             cell.set_symbol(THUMB_SYMBOL);
-            cell.set_style(style::text());
+            cell.set_style(base.patch(style::text()));
         }
     }
 }

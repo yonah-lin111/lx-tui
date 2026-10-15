@@ -100,6 +100,16 @@ pub enum Effect {
         id: i64,
         page_id: i64,
     },
+    /// 添加引用文件夹记录（路径已由后台校验与规范化）。
+    ///
+    /// `anchor` 为来源菜单锚点；写成功后据此重开菜单并把新增项滚入可见范围。
+    AddReferencedFolder {
+        workspace: PathBuf,
+        path: String,
+        anchor: (u16, u16),
+    },
+    /// 删除引用文件夹记录（仅移除记录，不动磁盘内容）。
+    DeleteReferencedFolder { workspace: PathBuf, id: i64 },
     /// 复制文本到系统剪贴板并弹出反馈 toast。
     CopyToClipboard(String),
 }

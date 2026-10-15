@@ -3,9 +3,10 @@
 use super::*;
 use crate::app::overlay::{
     ConfirmClose, ConfirmSwitchCwd, ConfirmSyncWorkspaceCwd, Menu, MenuCommand, NewNode,
-    NewNodeKind, NewWorkspace, Overlay, OverlayTarget, Rename, RenameTarget, SaveDraft,
-    SaveDraftEntry, TextInput,
+    NewNodeKind, NewWorkspace, Overlay, OverlayTarget, ReferencedFolderMenuRow, Rename,
+    RenameTarget, SaveDraft, SaveDraftEntry, TextInput,
 };
+use crate::app::referenced::ReferencedEntry;
 use crate::app::trust::TrustWorkspace;
 use crate::ui::style;
 use crate::ui::text;
@@ -663,6 +664,436 @@ fn new_workspace_buttons_hit_their_cells() {
         new_workspace_button_at(&shell, buttons[2].x, buttons[2].y),
         Some(NewWorkspaceButton::Cancel)
     );
+}
+
+fn referenced_menu_state(rows: Vec<ReferencedFolderMenuRow>, selected: usize) -> AppState {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderMenu(
+        crate::app::overlay::ReferencedFolderMenu {
+            anchor: (4, 3),
+            key: Some(PathBuf::from("/repo")),
+            rows,
+            selected,
+        },
+    ));
+    state
+}
+
+#[test]
+fn referenced_menu_renders_modal_rows_addresses_and_footer() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let rows = vec![
+        ReferencedFolderMenuRow::Folder {
+            id: 1,
+            path: PathBuf::from("/tmp/alpha"),
+        },
+        ReferencedFolderMenuRow::Folder {
+            id: 2,
+            path: PathBuf::from("/tmp/work/beta"),
+        },
+        ReferencedFolderMenuRow::Add,
+    ];
+    let state = referenced_menu_state(rows, 0);
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(
+        joined.contains(text::MENU_TITLE_REFERENCED_FOLDERS),
+        "{joined}"
+    );
+    assert!(joined.contains(text::REFERENCED_MENU_ADD_ROW), "{joined}");
+    assert!(joined.contains(text::REFERENCED_MENU_FOOTER), "{joined}");
+    assert!(joined.contains("alpha"), "{joined}");
+    assert!(joined.contains("beta"), "{joined}");
+    // 记录行右端显示绝对路径（prompt 列表式右对齐地址）。
+    assert!(joined.contains("/tmp/work"), "{joined}");
+}
+
+#[test]
+fn referenced_menu_keeps_fixed_size_and_centers() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let rows = vec![
+        ReferencedFolderMenuRow::Folder {
+            id: 1,
+            path: PathBuf::from("/tmp/alpha"),
+        },
+        ReferencedFolderMenuRow::Add,
+    ];
+    let few = referenced_menu_state(rows.clone(), 0);
+    let many_rows: Vec<ReferencedFolderMenuRow> = (0..40)
+        .map(|id| ReferencedFolderMenuRow::Folder {
+            id,
+            path: PathBuf::from(format!("/tmp/alpha-{id}")),
+        })
+        .chain(std::iter::once(ReferencedFolderMenuRow::Add))
+        .collect();
+    let many = referenced_menu_state(many_rows, 0);
+    let layout_for = |state: &AppState| {
+        let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+            panic!("menu");
+        };
+        referenced_menu_layout(SCREEN, menu)
+    };
+    let few = layout_for(&few);
+    let many = layout_for(&many);
+    assert_eq!(few.area, many.area, "弹窗几何不随记录数变化");
+    assert!(few.area.x > SCREEN.x && few.area.right() < SCREEN.right());
+    assert!(few.area.y > SCREEN.y && few.area.bottom() < SCREEN.bottom());
+    assert_eq!(few.total, 2);
+    assert_eq!(few.rows.len(), 2);
+    assert_eq!(many.rows.len(), 16, "满窗口显示（扣除上下边框）");
+}
+
+#[test]
+fn referenced_menu_row_hit_maps_rows_and_outside() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let rows = vec![
+        ReferencedFolderMenuRow::Folder {
+            id: 7,
+            path: PathBuf::from("/tmp/alpha"),
+        },
+        ReferencedFolderMenuRow::Add,
+    ];
+    let state = referenced_menu_state(rows, 0);
+    let menu = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu,
+        _ => panic!("menu"),
+    };
+    let layout = referenced_menu_layout(SCREEN, menu);
+    let first = layout.rows[0];
+    assert_eq!(
+        referenced_menu_row_at(SCREEN, menu, first.x, first.y),
+        Some(0)
+    );
+    assert_eq!(
+        referenced_menu_row_at(SCREEN, menu, first.right() - 1, first.y),
+        Some(0)
+    );
+    let add = layout.rows[1];
+    assert_eq!(referenced_menu_row_at(SCREEN, menu, add.x, add.y), Some(1));
+    // 列表下方空白与弹窗之外都不命中。
+    let blank = Rect::new(first.x, add.y + 1, first.width, 1);
+    assert_eq!(referenced_menu_row_at(SCREEN, menu, blank.x, blank.y), None);
+    assert_eq!(referenced_menu_row_at(SCREEN, menu, 0, 0), None);
+}
+
+fn referenced_search_state(items: Vec<ReferencedEntry>, selected: usize) -> AppState {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderSearch(
+        crate::app::overlay::ReferencedFolderSearch {
+            anchor: (0, 0),
+            folder: 1,
+            key: Some(PathBuf::from("/repo")),
+            root: PathBuf::from("/tmp/alpha"),
+            initial_root: PathBuf::from("/tmp/alpha"),
+            stack: Vec::new(),
+            query: TextInput::new(String::new()),
+            entries: items.clone(),
+            items,
+            scan_truncated: false,
+            truncated: false,
+            selected,
+            viewport: None,
+            loading: false,
+            failed: false,
+            request: Some(1),
+        },
+    ));
+    state
+}
+
+#[test]
+fn referenced_search_renders_scope_query_items_and_footer() {
+    let items = vec![
+        ReferencedEntry {
+            path: PathBuf::from("/tmp/alpha/docs/src"),
+            relative: "docs/src".into(),
+            name: "src".into(),
+            is_directory: true,
+        },
+        ReferencedEntry {
+            path: PathBuf::from("/tmp/alpha/docs/file.rs"),
+            relative: "docs/file.rs".into(),
+            name: "file.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let state = referenced_search_state(items, 1);
+    let (lines, cursor) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::REFERENCED_SEARCH_TITLE), "{joined}");
+    assert!(joined.contains("/tmp/alpha"), "范围路径: {joined}");
+    assert!(joined.contains("src/"), "目录行带尾斜杠: {joined}");
+    assert!(joined.contains("file.rs"), "{joined}");
+    // 两条候选在下一行显示地址（父目录绝对路径）。
+    assert!(joined.contains("/tmp/alpha/docs"), "候选地址行: {joined}");
+    assert!(
+        joined.contains(text::WORKSPACE_TREE_LAST),
+        "地址行带 └─ 前缀: {joined}"
+    );
+    assert!(
+        joined.contains(text::REFERENCED_SEARCH_FOOTER),
+        "底边快捷键: {joined}"
+    );
+    // 搜索框硬件光标可见。
+    assert!(cursor.is_some());
+}
+
+#[test]
+fn referenced_search_shows_entered_folder_top_right() {
+    let items = vec![ReferencedEntry {
+        path: PathBuf::from("/tmp/alpha/docs/file.rs"),
+        relative: "docs/file.rs".into(),
+        name: "file.rs".into(),
+        is_directory: false,
+    }];
+    let mut state = referenced_search_state(items, 0);
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.root = PathBuf::from("/tmp/alpha/docs");
+        search.stack = vec![PathBuf::from("/tmp/alpha")];
+    }
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains("docs"), "顶边右端显示当前文件夹: {joined}");
+
+    // 仍在初始根时不显示目录名后缀。
+    let mut state = referenced_search_state(Vec::new(), 0);
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.initial_root = PathBuf::from("/tmp/alpha");
+        search.root = PathBuf::from("/tmp/alpha");
+    }
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::REFERENCED_SEARCH_TITLE));
+}
+
+#[test]
+fn referenced_search_keeps_fixed_size_regardless_of_items() {
+    let entry = |index: usize| ReferencedEntry {
+        path: PathBuf::from(format!("/tmp/alpha/docs/file{index}.rs")),
+        relative: format!("docs/file{index}.rs"),
+        name: format!("file{index}.rs"),
+        is_directory: false,
+    };
+    let layout_for = |count: usize| {
+        let state = referenced_search_state((0..count).map(entry).collect(), 0);
+        let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
+            panic!("search");
+        };
+        referenced_search_layout(SCREEN, search).expect("layout")
+    };
+    let few = layout_for(1);
+    let many = layout_for(60);
+    assert_eq!(few.area, many.area, "弹窗几何不随候选数量变化");
+    assert_eq!(few.visible(), 1);
+    assert!(many.visible() > few.visible(), "候选多时窗口内条目更多");
+    assert!(few.area.x > SCREEN.x && few.area.right() < SCREEN.right());
+    assert!(few.area.y > SCREEN.y && few.area.bottom() < SCREEN.bottom());
+}
+
+#[test]
+fn referenced_search_paints_solid_panel_background() {
+    let items: Vec<ReferencedEntry> = (0..10)
+        .map(|index| ReferencedEntry {
+            path: PathBuf::from(format!("/tmp/alpha/docs/file{index}.rs")),
+            relative: format!("docs/file{index}.rs"),
+            name: format!("file{index}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    let state = referenced_search_state(items, 0);
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("backend");
+    if let Err(error) = terminal.draw(|frame| {
+        render(frame, frame.area(), &state);
+    }) {
+        panic!("draw failed: {error}");
+    }
+    let buf = terminal.backend().buffer().clone();
+    let search = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderSearch(search)) => search,
+        _ => panic!("search"),
+    };
+    let layout = referenced_search_layout(SCREEN, search).expect("layout");
+    let scrollbar = layout.scrollbar.expect("list overflows");
+    // 范围路径文字、搜索框、非选中候选与滚动条都保持浮层底色，不透明。
+    for (label, x, y) in [
+        ("范围路径", layout.title.x, layout.title.y),
+        ("范围路径第二个字符", layout.title.x + 1, layout.title.y),
+        ("搜索框", layout.query.x, layout.query.y),
+        ("非选中候选首行", layout.list.x, layout.list.y + 2),
+        ("非选中候选地址行", layout.list.x + 2, layout.list.y + 3),
+        ("滚动条轨道", scrollbar.track.x, scrollbar.track.y),
+        ("滚动条 thumb", scrollbar.thumb.x, scrollbar.thumb.y),
+    ] {
+        assert_eq!(
+            buf[(x, y)].bg,
+            Color::Indexed(236),
+            "{label} 应保持浮层底色"
+        );
+    }
+    assert_eq!(
+        buf[(layout.list.x, layout.list.y)].bg,
+        Color::Indexed(240),
+        "选中候选底色"
+    );
+    assert_eq!(
+        buf[(layout.list.x + 2, layout.list.y + 1)].bg,
+        Color::Indexed(240),
+        "选中候选地址行底色"
+    );
+}
+
+#[test]
+fn referenced_search_hit_tests_copy_and_items() {
+    let items = vec![
+        ReferencedEntry {
+            path: PathBuf::from("/tmp/alpha/file.rs"),
+            relative: "file.rs".into(),
+            name: "file.rs".into(),
+            is_directory: false,
+        },
+        ReferencedEntry {
+            path: PathBuf::from("/tmp/alpha/other.rs"),
+            relative: "other.rs".into(),
+            name: "other.rs".into(),
+            is_directory: false,
+        },
+    ];
+    let state = referenced_search_state(items, 0);
+    let search = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderSearch(search)) => search,
+        _ => panic!("search"),
+    };
+    let layout = referenced_search_layout(SCREEN, search).expect("layout");
+    assert!(referenced_search_copy_at(
+        SCREEN,
+        search,
+        layout.copy_path.x,
+        layout.copy_path.y
+    ));
+    // 每条候选占两行：首行与地址行都命中同一候选。
+    assert_eq!(
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.y),
+        Some(0)
+    );
+    assert_eq!(
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.y + 1),
+        Some(0)
+    );
+    assert_eq!(
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.list.y + 2),
+        Some(1)
+    );
+    assert_eq!(
+        referenced_search_item_at(SCREEN, search, layout.list.x, layout.area.bottom()),
+        None
+    );
+}
+
+#[test]
+fn referenced_search_failed_and_empty_states_render_messages() {
+    let mut state = referenced_search_state(Vec::new(), 0);
+    if let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_mut() {
+        search.failed = true;
+    }
+    let (lines, _) = draw_overlay(&state);
+    assert!(
+        lines.join("\n").contains(text::REFERENCED_SEARCH_FAILED),
+        "不可访问提示"
+    );
+
+    let state = referenced_search_state(Vec::new(), 0);
+    let (lines, _) = draw_overlay(&state);
+    assert!(lines.join("\n").contains(text::REFERENCED_SEARCH_EMPTY));
+}
+
+#[test]
+fn referenced_input_renders_placeholder_and_error() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderInput(
+        crate::app::overlay::ReferencedFolderInput {
+            anchor: (0, 0),
+            input: TextInput::new(""),
+            key: Some(PathBuf::from("/repo")),
+            validating: false,
+            error: Some(text::REFERENCED_ERROR_DUPLICATE),
+            request: None,
+        },
+    ));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::REFERENCED_INPUT_TITLE), "{joined}");
+    assert!(
+        joined.contains(text::REFERENCED_INPUT_PLACEHOLDER),
+        "{joined}"
+    );
+    assert!(
+        joined.contains(text::REFERENCED_ERROR_DUPLICATE),
+        "{joined}"
+    );
+}
+
+#[test]
+fn referenced_input_buttons_hit_their_cells() {
+    let shell = referenced_input_shell(SCREEN).expect("input shell fits");
+    let buttons = widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL],
+        BUTTON_GAP,
+        shell.inner.height.saturating_sub(1),
+    );
+    assert_eq!(
+        referenced_input_button_at(&shell, buttons[0].x, buttons[0].y),
+        Some(ReferencedInputButton::Create)
+    );
+    assert_eq!(
+        referenced_input_button_at(&shell, buttons[1].x, buttons[1].y),
+        Some(ReferencedInputButton::Clear)
+    );
+    assert_eq!(
+        referenced_input_button_at(&shell, buttons[2].x, buttons[2].y),
+        Some(ReferencedInputButton::Cancel)
+    );
+    assert_eq!(
+        referenced_input_button_at(&shell, shell.inner.x, shell.inner.y),
+        None
+    );
+}
+
+#[test]
+fn referenced_input_renders_long_absolute_path_in_full() {
+    let path = "/Users/yonah/projects/agent/lx-agent/src/ui/overlay/referenced";
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderInput(
+        crate::app::overlay::ReferencedFolderInput {
+            anchor: (0, 0),
+            input: TextInput::new(path),
+            key: Some(PathBuf::from("/repo")),
+            validating: false,
+            error: None,
+            request: None,
+        },
+    ));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(path), "长路径不被截断: {joined}");
+}
+
+#[test]
+fn referenced_delete_dialog_renders_question_and_buttons() {
+    let mut state = AppState::demo();
+    state.overlay = Some(Overlay::ReferencedFolderDelete(
+        crate::app::overlay::ReferencedFolderDelete {
+            key: Some(PathBuf::from("/repo")),
+            id: 1,
+            path: PathBuf::from("/tmp/alpha"),
+        },
+    ));
+    let (lines, _) = draw_overlay(&state);
+    let joined = lines.join("\n");
+    assert!(joined.contains(text::REFERENCED_DELETE_TITLE), "{joined}");
+    assert!(joined.contains("alpha"), "{joined}");
+    assert!(joined.contains(text::BUTTON_CONFIRM), "{joined}");
+    assert!(joined.contains(text::BUTTON_CANCEL), "{joined}");
 }
 
 fn save_draft_state(entries: Vec<SaveDraftEntry>, selected: usize) -> AppState {

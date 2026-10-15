@@ -61,6 +61,7 @@ impl Persistence {
             }
         }
         changed |= self.ensure_tree_loaded(state);
+        changed |= self.ensure_referenced_loaded(state);
         changed
     }
 
@@ -275,6 +276,50 @@ impl Persistence {
                 self.with_db(|db| db.set_prompt_active_page(id, page_id));
                 self.reload_tree(state, &prompt_key_for(state, &workspace))
             }
+            Effect::AddReferencedFolder {
+                workspace,
+                path,
+                anchor,
+            } => {
+                let key = prompt_key_for(state, &workspace);
+                let added = self.with_db(|db| db.add_referenced_folder(&key, &path));
+                if added.is_none() {
+                    // 写失败：不制造“已保存”假象，在输入弹窗上显示错误并保留输入重试。
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Error,
+                            text::TOAST_REFERENCED_SAVE_FAILED,
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    update::apply_referenced_add_failure(state);
+                    return false;
+                }
+                let mut changed = self.reload_referenced(state, &key);
+                changed |= update::finish_referenced_add(state, anchor);
+                changed
+            }
+            Effect::DeleteReferencedFolder { workspace, id } => {
+                let key = prompt_key_for(state, &workspace);
+                let deleted = self.with_db(|db| db.delete_referenced_folder(&key, id));
+                if deleted.is_none() {
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Error,
+                            text::TOAST_REFERENCED_DELETE_FAILED,
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    return false;
+                }
+                let mut changed = update::invalidate_referenced_search(state, id);
+                changed |= self.reload_referenced(state, &key);
+                changed
+            }
             Effect::CopyToClipboard(text) => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
@@ -362,6 +407,54 @@ impl Persistence {
             Some(key) => self.reload_tree(state, &key),
             None => {
                 mark_panel_loaded(state, index, None);
+                true
+            }
+        }
+    }
+
+    /// 重载引用文件夹快照：按显示中 prompt 键读取；键变化或尚未载入时整体刷新。
+    ///
+    /// 数据库不可用时标记 `failed`（菜单展示不可用状态），不伪装成空表已持久化。
+    fn ensure_referenced_loaded(&self, state: &mut AppState) -> bool {
+        let key = state.referenced_key();
+        if state.referenced.loaded && state.referenced.key == key {
+            return false;
+        }
+        // 归属键变化：作废旧菜单/弹窗与在途扫描结果，避免归给新项目。
+        state.referenced_requests.clear();
+        let mut changed = update::invalidate_referenced_overlays(state);
+        match key {
+            Some(key) => changed |= self.reload_referenced(state, &key),
+            None => {
+                // 无归属键：记录空快照并标记已载入，避免每个 pump 周期重复触发重绘。
+                let had_data =
+                    state.referenced.key.is_some() || !state.referenced.folders.is_empty();
+                state.referenced.reset(None);
+                state.referenced.loaded = true;
+                changed |= had_data;
+            }
+        }
+        changed
+    }
+
+    /// 按项目键重载引用文件夹快照；写失败标记不可用状态。
+    fn reload_referenced(&self, state: &mut AppState, key: &Path) -> bool {
+        let Some(db) = &self.db else {
+            state.referenced.apply(key.to_path_buf(), Vec::new(), true);
+            return true;
+        };
+        match db.list_referenced_folders(key) {
+            Ok(records) => {
+                let folders = records
+                    .into_iter()
+                    .map(update::referenced_folder_from_record)
+                    .collect();
+                state.referenced.apply(key.to_path_buf(), folders, false);
+                true
+            }
+            Err(error) => {
+                tracing::warn!(%error, "referenced folder load failed");
+                state.referenced.apply(key.to_path_buf(), Vec::new(), true);
                 true
             }
         }

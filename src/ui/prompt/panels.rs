@@ -401,6 +401,8 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
 enum MentionRowText {
     File {
         icon: &'static str,
+        /// 目录条目：图标与名称按目录色区分文件。
+        is_directory: bool,
         label: String,
         detail: String,
     },
@@ -410,18 +412,29 @@ enum MentionRowText {
 }
 
 impl MentionRowText {
-    /// 组装条目视图：文件双行展示，取根选择单行。
+    /// 组装条目视图：文件双行展示（目录按目录色），取根选择单行。
     fn item(&self) -> CommandItem<'_> {
         match self {
             Self::File {
                 icon,
+                is_directory,
                 label,
                 detail,
-            } => CommandItem::Stacked {
-                icon: Some(icon),
-                label,
-                detail,
-            },
+            } => {
+                let (icon_style, label_style) = if *is_directory {
+                    let directory = crate::ui::style::directory();
+                    (directory, directory)
+                } else {
+                    (crate::ui::style::muted(), crate::ui::style::text())
+                };
+                CommandItem::Stacked {
+                    icon: Some(icon),
+                    icon_style,
+                    label,
+                    label_style,
+                    detail,
+                }
+            }
             Self::Choice { label } => CommandItem::Inline {
                 label,
                 preview: "",
@@ -547,6 +560,7 @@ fn mention_row_text(entry: &MentionEntry, detail_width: usize) -> MentionRowText
     };
     MentionRowText::File {
         icon,
+        is_directory: entry.is_directory,
         label,
         detail,
     }

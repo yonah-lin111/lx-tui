@@ -468,6 +468,26 @@ pub(crate) fn render_confirm_sync_workspace_cwd(
     render_confirm_dialog(frame, &shell, text::CONFIRM_SYNC_WS_CWD_TITLE, &question);
 }
 
+/// 引用文件夹删除确认浮层：展示待删目录名与底部按钮。
+pub(crate) fn render_referenced_delete(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    delete: &crate::app::overlay::ReferencedFolderDelete,
+) {
+    let name = delete
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| delete.path.display().to_string());
+    let question = text::referenced_delete_question(&name);
+    let Some(shell) = confirm_shell(screen, &question) else {
+        return;
+    };
+    render_confirm_dialog(frame, &shell, text::REFERENCED_DELETE_TITLE, &question);
+}
+
 /// 渲染信任浮层：问题、路径高亮与底部按钮。
 pub(crate) fn render_trust(frame: &mut Frame<'_>, screen: Rect, trust: &TrustWorkspace) {
     let Some(shell) = trust_shell(screen) else {
