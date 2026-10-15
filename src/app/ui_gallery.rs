@@ -13,6 +13,7 @@ pub enum UiGalleryComponentId {
     Tooltip,
     Button,
     Menu,
+    Fullscreen,
     PromptEditor,
     PromptList,
     PromptToolbar,
@@ -27,6 +28,7 @@ impl UiGalleryComponentId {
             Self::Tooltip => text::UI_GALLERY_TOOLTIP,
             Self::Button => text::UI_GALLERY_BUTTON,
             Self::Menu => text::UI_GALLERY_MENU,
+            Self::Fullscreen => text::UI_GALLERY_FULLSCREEN,
             Self::PromptEditor => text::UI_GALLERY_PROMPT_EDITOR,
             Self::PromptList => text::UI_GALLERY_PROMPT_LIST,
             Self::PromptToolbar => text::UI_GALLERY_PROMPT_TOOLBAR,
@@ -67,7 +69,7 @@ pub struct UiGalleryFolder {
 }
 
 /// `global` 文件夹下的组件。
-pub const GLOBAL_COMPONENTS: [UiGalleryComponent; 5] = [
+pub const GLOBAL_COMPONENTS: [UiGalleryComponent; 6] = [
     UiGalleryComponent {
         id: UiGalleryComponentId::Toast,
         description: text::UI_GALLERY_TOAST_DESC,
@@ -87,6 +89,10 @@ pub const GLOBAL_COMPONENTS: [UiGalleryComponent; 5] = [
     UiGalleryComponent {
         id: UiGalleryComponentId::Menu,
         description: text::UI_GALLERY_MENU_DESC,
+    },
+    UiGalleryComponent {
+        id: UiGalleryComponentId::Fullscreen,
+        description: text::UI_GALLERY_FULLSCREEN_DESC,
     },
 ];
 

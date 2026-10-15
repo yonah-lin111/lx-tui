@@ -554,6 +554,7 @@ pub const UI_GALLERY_MODAL: &str = "modal";
 pub const UI_GALLERY_TOOLTIP: &str = "tooltip";
 pub const UI_GALLERY_BUTTON: &str = "button";
 pub const UI_GALLERY_MENU: &str = "menu";
+pub const UI_GALLERY_FULLSCREEN: &str = "fullscreen";
 pub const UI_GALLERY_PROMPT_EDITOR: &str = "editor";
 pub const UI_GALLERY_PROMPT_LIST: &str = "list";
 pub const UI_GALLERY_PROMPT_TOOLBAR: &str = "toolbar";
@@ -569,6 +570,8 @@ pub const UI_GALLERY_MODAL_SAMPLE_BODY: &str = "Close this workspace?";
 pub const UI_GALLERY_MENU_SAMPLE_TITLE: &str = "demo";
 pub const UI_GALLERY_MENU_SAMPLE: [&str; 4] = ["New terminal", "Open prompt", "Rename", "Close"];
 pub const UI_GALLERY_BUTTON_SAMPLE: &str = "[SET]  [UI]  [EXIT]  [≡]  [◉]";
+pub const UI_GALLERY_FULLSCREEN_SAMPLE_TITLE: &str = "UI";
+pub const UI_GALLERY_FULLSCREEN_SAMPLE_HINT: &str = "[esc] close";
 pub const UI_GALLERY_PROMPT_EDITOR_SAMPLE: &str = "[≡] [←] [→]              [◉] ●";
 pub const UI_GALLERY_PROMPT_EDITOR_BODY: [&str; 4] =
     ["# Prompt", "", "- first item", "- second item"];
@@ -598,6 +601,10 @@ pub const UI_GALLERY_BUTTON_DESC: &[&str] = &[
 pub const UI_GALLERY_MENU_DESC: &[&str] = &[
     "Right-click context menu anchored at the pointer.",
     "Up/Down moves the highlight, Enter runs the item.",
+];
+pub const UI_GALLERY_FULLSCREEN_DESC: &[&str] = &[
+    "Fullscreen overlay: an outer accent border with the title and",
+    "hint embedded in the border line, plus a top-right [✕].",
 ];
 pub const UI_GALLERY_PROMPT_EDITOR_DESC: &[&str] = &[
     "Markdown editor with a top toolbar row: typing,",

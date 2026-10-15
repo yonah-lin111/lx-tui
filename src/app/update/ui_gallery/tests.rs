@@ -57,7 +57,7 @@ fn enter_toggles_folder_collapse() {
 #[test]
 fn click_selects_row_and_activates_folder() {
     let mut state = open();
-    set_ui_gallery_selection(&mut state, 6);
+    set_ui_gallery_selection(&mut state, 7);
     assert_eq!(
         gallery(&state).selected_node(),
         UiGalleryNode::Folder(UiGalleryFolderId::Prompt)

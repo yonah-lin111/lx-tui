@@ -203,6 +203,7 @@ fn appearance_size(id: UiGalleryComponentId, available: Rect) -> (u16, u16) {
             )
         }
         UiGalleryComponentId::Button => (text_width(text::UI_GALLERY_BUTTON_SAMPLE), 1),
+        UiGalleryComponentId::Fullscreen => (40, 8),
         UiGalleryComponentId::PromptEditor => (46, 8),
         UiGalleryComponentId::PromptList => (34, 8),
         UiGalleryComponentId::PromptToolbar => (
@@ -227,6 +228,7 @@ fn render_appearance(frame: &mut Frame<'_>, rect: Rect, id: UiGalleryComponentId
         UiGalleryComponentId::Modal => render_modal_like(frame, rect),
         UiGalleryComponentId::Menu => render_menu_like(frame, rect),
         UiGalleryComponentId::Button => render_button_like(frame, rect),
+        UiGalleryComponentId::Fullscreen => render_fullscreen_like(frame, rect),
         UiGalleryComponentId::PromptEditor => render_prompt_editor_like(frame, rect),
         UiGalleryComponentId::PromptList => render_prompt_list_like(frame, rect),
         UiGalleryComponentId::PromptToolbar => render_prompt_toolbar_like(frame, rect),
@@ -349,6 +351,37 @@ fn render_button_like(frame: &mut Frame<'_>, rect: Rect) {
         style::accent(),
         rect.right(),
     );
+}
+
+/// fullscreen：真实全屏覆盖外观——蓝色圆角边框 + 标题/提示内嵌边框线 + 右上角 `[✕]`。
+fn render_fullscreen_like(frame: &mut Frame<'_>, rect: Rect) {
+    if rect.width < 4 || rect.height < 3 {
+        return;
+    }
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(style::accent())
+        .title_top(
+            Line::from(Span::styled(
+                format!(" {} ", text::UI_GALLERY_FULLSCREEN_SAMPLE_TITLE),
+                style::border_title(),
+            ))
+            .alignment(Alignment::Left),
+        )
+        .title_bottom(
+            Line::from(Span::styled(
+                format!(" {} ", text::UI_GALLERY_FULLSCREEN_SAMPLE_HINT),
+                style::muted(),
+            ))
+            .alignment(Alignment::Left),
+        );
+    frame.render_widget(block, rect);
+    if let Some(close) = modal::close_button_rect(rect) {
+        frame.render_widget(
+            Paragraph::new(Span::styled(text::MODAL_CLOSE, style::accent())),
+            close,
+        );
+    }
 }
 
 /// prompt editor：真实 prompt 面板外观——圆角边框 + `Prompt Manager` 标题 + 工具栏行 + 分割线 + 文本行。

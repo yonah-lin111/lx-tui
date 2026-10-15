@@ -23,6 +23,7 @@ fn default_rows_list_folders_then_components() {
             component_row(UiGalleryComponentId::Tooltip),
             component_row(UiGalleryComponentId::Button),
             component_row(UiGalleryComponentId::Menu),
+            component_row(UiGalleryComponentId::Fullscreen),
             folder_row(UiGalleryFolderId::Prompt),
             component_row(UiGalleryComponentId::PromptEditor),
             component_row(UiGalleryComponentId::PromptList),
@@ -69,11 +70,11 @@ fn collapsing_folder_hides_its_components() {
 #[test]
 fn collapse_moves_selection_to_the_folder_row() {
     let mut gallery = UiGallery::new();
-    // 高亮移到 global 的末项 menu（行 5）。
-    gallery.set_selected(5);
+    // 高亮移到 global 的末项 fullscreen（行 6）。
+    gallery.set_selected(6);
     assert_eq!(
         gallery.selected_node(),
-        component_row(UiGalleryComponentId::Menu)
+        component_row(UiGalleryComponentId::Fullscreen)
     );
     // 折叠 global 后其组件行消失，高亮回到 global 文件夹行。
     gallery.toggle_folder(UiGalleryFolderId::Global);
@@ -126,7 +127,7 @@ fn activate_toggles_only_folder_rows() {
 #[test]
 fn left_from_component_moves_to_owner_folder() {
     let mut gallery = UiGallery::new();
-    gallery.set_selected(8);
+    gallery.set_selected(9);
     assert_eq!(
         gallery.selected_node(),
         component_row(UiGalleryComponentId::PromptList)
@@ -178,7 +179,7 @@ fn folder_and_component_lookup_by_id() {
         gallery
             .folder(UiGalleryFolderId::Global)
             .map(|f| f.components.len()),
-        Some(5)
+        Some(6)
     );
     assert_eq!(
         gallery
