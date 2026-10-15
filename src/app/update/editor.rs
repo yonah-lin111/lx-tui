@@ -278,6 +278,11 @@ pub(crate) fn swap_display_prompt(state: &mut AppState, from: usize, to: usize) 
     if let Some(workspace) = state.workspaces.get_mut(from) {
         workspace.prompt_panel.drop_blank_temp_binding();
         workspace.prompt_panel.cancel_page_rename();
+        // 跨越工作区的切换丢弃编辑状态暂存：列表往返的历史不再适用于返回目标。
+        workspace.prompt_panel.clear_editor_stash();
+    }
+    if let Some(workspace) = state.workspaces.get_mut(to) {
+        workspace.prompt_panel.clear_editor_stash();
     }
     state.prompt.mark_saved();
     let mut next = state

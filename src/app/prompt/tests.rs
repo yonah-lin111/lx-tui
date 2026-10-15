@@ -1255,6 +1255,35 @@ fn can_undo_and_can_redo_follow_history() {
     assert!(prompt.can_undo() && !prompt.can_redo());
 }
 
+#[test]
+fn history_roundtrip_preserves_undo_redo_and_cursor() {
+    let mut prompt = prompt(20, 3);
+    prompt.insert_str("abc");
+    prompt.move_left();
+    prompt.move_left();
+    let cursor = prompt.cursor();
+    let history = prompt.history();
+    assert!(history.can_undo());
+    assert_eq!(history.text(), "abc");
+    assert_eq!(history.cursor(), cursor);
+
+    // 模拟离开编辑视图：编辑器被重建为新内容（历史清空）。
+    prompt.set_text("reset");
+    assert!(!prompt.can_undo());
+    assert_eq!(prompt.text(), "reset");
+
+    // 恢复暂存：文本、光标与撤销/重做栈整体换回。
+    prompt.restore_history(history);
+    assert_eq!(prompt.text(), "abc");
+    assert_eq!(prompt.cursor(), cursor);
+    assert!(prompt.can_undo(), "恢复后可撤销");
+    prompt.undo();
+    assert_eq!(prompt.text(), "");
+    assert!(prompt.can_redo(), "恢复后可重做");
+    prompt.redo();
+    assert_eq!(prompt.text(), "abc");
+}
+
 // ---- 斜杠模板命令面板与模板块操作 ----
 
 /// 插入文本并触发 settle 的辅助：逐字符走 insert_char（与真实键盘输入一致）。

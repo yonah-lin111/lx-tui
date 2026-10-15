@@ -8,7 +8,8 @@ use crate::app::overlay::{
 use crate::app::prompt::{PromptPage, PromptPageId, PromptRowKind, PromptSection};
 use crate::app::state::AppState;
 use crate::app::update::{
-    apply, apply_editor, apply_overlay_key, create_workspace, tick, toggle_prompt_pin,
+    apply, apply_editor, apply_overlay_key, create_workspace, create_workspace_with_cwd,
+    switch_workspace, tick, toggle_prompt_pin,
 };
 use crate::db::{FolderRecord, PromptPageRecord, PromptRecord};
 use crate::ui::text;
@@ -568,6 +569,129 @@ fn mode_roundtrip_falls_back_to_temp_when_return_target_deleted() {
         state.workspaces[0].prompt_panel.editing,
         Some(PromptEditing::Temp(_))
     ));
+}
+
+#[test]
+fn mode_roundtrip_keeps_undo_redo_and_cursor_for_same_item() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    apply_editor(&mut state, EditorCommand::InsertText("XYZ".into()));
+    // 在中间留一个可验证的光标位置：左移两次后往返。
+    apply_editor(&mut state, EditorCommand::Left);
+    apply_editor(&mut state, EditorCommand::Left);
+    let cursor = state.prompt.cursor();
+    assert!(state.prompt.can_undo());
+
+    show_prompt_tree(&mut state);
+    toggle_prompt_panel_mode(&mut state);
+
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Item(10)),
+        "返回同一目标"
+    );
+    assert_eq!(state.prompt.text(), "loose contentXYZ");
+    assert!(
+        state.prompt.can_undo(),
+        "返回同一目标保留撤销记录，不因视图往返清空"
+    );
+    assert_eq!(state.prompt.cursor(), cursor, "光标停在离开前位置");
+    // 撤销仍可回到编辑前正文。
+    apply_editor(&mut state, EditorCommand::Undo);
+    assert_eq!(state.prompt.text(), "loose content");
+    assert!(state.prompt.can_redo(), "撤销后可重做");
+}
+
+#[test]
+fn mode_roundtrip_keeps_history_for_same_temp() {
+    let mut state = demo_state();
+    enter_tree(&mut state);
+    assert!(open_temp_prompt(&mut state));
+    let temp_id = match state.workspaces[0].prompt_panel.editing {
+        Some(PromptEditing::Temp(id)) => id,
+        other => panic!("temp bound: {other:?}"),
+    };
+    apply_editor(&mut state, EditorCommand::InsertText("draft".into()));
+    assert!(state.prompt.can_undo());
+
+    show_prompt_tree(&mut state);
+    // 未改选中：返回原临时提示词。
+    toggle_prompt_panel_mode(&mut state);
+    assert_eq!(
+        state.workspaces[0].prompt_panel.editing,
+        Some(PromptEditing::Temp(temp_id))
+    );
+    assert_eq!(state.prompt.text(), "draft");
+    assert!(state.prompt.can_undo(), "同一 temp 保留撤销记录");
+}
+
+#[test]
+fn reload_between_list_roundtrip_discards_stash() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    apply_editor(&mut state, EditorCommand::InsertText(" edited".into()));
+    show_prompt_tree(&mut state);
+    assert!(
+        state.workspaces[0].prompt_panel.editor_stash().is_some(),
+        "切列表后暂存编辑状态"
+    );
+    // 同键面板在背后把条目 10 的正文改成别的（模拟外部改写/重载）：
+    // 先清除待确认标记（模拟本地保存已落库），再收到不同正文的重载。
+    state.workspaces[0].prompt_panel.clear_page_pending(10, 10);
+    apply_prompt_tree(
+        &mut state,
+        0,
+        std::path::Path::new("/ws"),
+        vec![],
+        reload_records(Some(10), "changed elsewhere", false),
+    );
+    // 返回条目 10：暂存正文与当前页正文不一致，按新正文重建、历史清空。
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert_eq!(state.prompt.text(), "changed elsewhere");
+    assert!(!state.prompt.can_undo(), "正文被别处改写后不恢复旧历史");
+}
+
+#[test]
+fn opening_other_item_discards_stash_then_returns_clean() {
+    let mut state = demo_state();
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    apply_editor(&mut state, EditorCommand::InsertText(" edited".into()));
+    show_prompt_tree(&mut state);
+    // 打开另一个条目：丢弃 A 的暂存。
+    assert!(edit_prompt_item(&mut state, 0, 12));
+    show_prompt_tree(&mut state);
+    // 回到 A：历史已在打开 B 时丢弃。
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert_eq!(state.prompt.text(), "loose content edited");
+    assert!(
+        !state.prompt.can_undo(),
+        "中途打开别的条目后，旧目标的撤销历史不再恢复"
+    );
+}
+
+#[test]
+fn workspace_switch_discards_list_roundtrip_stash() {
+    let mut state = demo_state();
+    create_workspace_with_cwd(&mut state, Some(std::path::PathBuf::from("/ws2")));
+    switch_workspace(&mut state, 0);
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    apply_editor(&mut state, EditorCommand::InsertText(" edited".into()));
+    show_prompt_tree(&mut state);
+    assert!(
+        state.workspaces[0].prompt_panel.editor_stash().is_some(),
+        "切列表后暂存编辑状态"
+    );
+    // 切到别的工作区再切回：跨越工作区的切换丢弃暂存。
+    switch_workspace(&mut state, 1);
+    switch_workspace(&mut state, 0);
+    assert!(
+        state.workspaces[0].prompt_panel.editor_stash().is_none(),
+        "跨工作区切换丢弃暂存"
+    );
+    // 回到条目 10：历史已丢弃，按新目标重建（正文取库，撤销栈为空）。
+    assert!(edit_prompt_item(&mut state, 0, 10));
+    assert_eq!(state.prompt.text(), "loose content edited");
+    assert!(!state.prompt.can_undo(), "跨工作区往返后不恢复旧历史");
 }
 
 #[test]

@@ -173,6 +173,8 @@ pub fn show_prompt_tree(state: &mut AppState) {
     cancel_page_rename(state);
     let index = state.prompt_workspace();
     let visible = prompt_tree_visible_rows(state);
+    // 提交后再捕获编辑状态：正文此时与页一致，返回同一目标时据此保留撤销/重做与光标。
+    stash_editing_prompt(state, index);
     if let Some(workspace) = state.workspaces.get_mut(index) {
         workspace.prompt_panel.drop_blank_temp_binding();
         workspace.prompt_panel.enter_tree_view();
@@ -185,6 +187,28 @@ pub fn show_prompt_tree(state: &mut AppState) {
     state.prompt.clear_panel();
     state.selection = None;
     select_tree_entry_row(state, index);
+}
+
+/// 离开编辑视图前暂存编辑状态：绑定目标、当前页与当前编辑器历史。
+///
+/// 须在提交缓冲之后调用，使暂存正文与页正文一致（返回时逐字比较成立）；
+/// 无编辑绑定时不动作。
+fn stash_editing_prompt(state: &mut AppState, index: usize) {
+    let Some((editing, page)) = state.workspaces.get(index).and_then(|workspace| {
+        let panel = &workspace.prompt_panel;
+        let editing = panel.editing?;
+        let page = match editing {
+            PromptEditing::Item(id) => panel.tree.item(id)?.active_page,
+            PromptEditing::Temp(id) => panel.temp(id)?.active_page,
+        };
+        Some((editing, page))
+    }) else {
+        return;
+    };
+    let history = state.prompt.history();
+    if let Some(workspace) = state.workspaces.get_mut(index) {
+        workspace.prompt_panel.stash_editor(editing, page, history);
+    }
 }
 
 /// 进入列表后的默认高亮：优先当前编辑目标（暂存绑定仍有效时），否则 default temp。
@@ -389,9 +413,18 @@ pub fn edit_prompt_item(state: &mut AppState, workspace: usize, item_id: i64) ->
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Item(item_id));
     workspace_state.prompt_panel.cancel_page_rename();
-    state.prompt.set_text(&content);
-    state.prompt_collapsed = false;
-    super::focus_prompt(state);
+    let page = workspace_state
+        .prompt_panel
+        .tree
+        .item(item_id)
+        .map(|item| item.active_page);
+    load_editor_target(
+        state,
+        workspace,
+        PromptEditing::Item(item_id),
+        page,
+        &content,
+    );
     true
 }
 
@@ -400,12 +433,14 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     if workspace != state.prompt_workspace() {
         return false;
     }
-    let Some(content) = state
+    let Some((content, page)) = state
         .workspaces
         .get(workspace)
         .and_then(|workspace| workspace.prompt_panel.temp(temp_id))
-        .and_then(|temp| temp.active_page())
-        .map(|page| page.content.clone())
+        .and_then(|temp| {
+            temp.active_page()
+                .map(|page| (page.content.clone(), page.id))
+        })
     else {
         return false;
     };
@@ -415,10 +450,39 @@ pub fn edit_prompt_temp(state: &mut AppState, workspace: usize, temp_id: u64) ->
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(temp_id));
     workspace_state.prompt_panel.cancel_page_rename();
-    state.prompt.set_text(&content);
+    load_editor_target(
+        state,
+        workspace,
+        PromptEditing::Temp(temp_id),
+        Some(page),
+        &content,
+    );
+    true
+}
+
+/// 载入编辑目标正文到编辑器缓冲：暂存的目标、页与正文均一致时恢复完整历史与光标，
+/// 否则按正文重建（历史清空）。无论是否恢复都消费暂存，避免陈旧历史误用于新目标。
+fn load_editor_target(
+    state: &mut AppState,
+    workspace: usize,
+    editing: PromptEditing,
+    page: Option<PromptPageId>,
+    content: &str,
+) {
+    let restored = state
+        .workspaces
+        .get_mut(workspace)
+        .and_then(|workspace| workspace.prompt_panel.take_editor_stash())
+        .filter(|stash| {
+            Some(stash.page) == page && stash.editing == editing && stash.history.text() == content
+        })
+        .map(|stash| stash.history);
+    match restored {
+        Some(history) => state.prompt.restore_history(history),
+        None => state.prompt.set_text(content),
+    }
     state.prompt_collapsed = false;
     super::focus_prompt(state);
-    true
 }
 
 /// 打开选中临时提示词行的编辑视图。
@@ -468,6 +532,8 @@ pub fn open_temp_prompt(state: &mut AppState) -> bool {
     // 不变量兜底：空白项至多一条，残留空白项先回收（default temp 由新建项接替）。
     workspace_state.prompt_panel.remove_blank_temps();
     workspace_state.prompt_panel.cancel_page_rename();
+    // 新建目标与旧暂存无关：丢弃，避免陈旧历史被同名目标误恢复。
+    workspace_state.prompt_panel.clear_editor_stash();
     let id = workspace_state.prompt_panel.new_temp();
     workspace_state.prompt_panel.mode = PromptMode::Editor;
     workspace_state.prompt_panel.editing = Some(PromptEditing::Temp(id));

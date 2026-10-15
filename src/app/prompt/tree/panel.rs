@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use crate::app::overlay::TextInput;
+use crate::app::prompt::PromptHistory;
 use crate::ui::text;
 
 use super::{
@@ -31,6 +32,20 @@ pub enum PromptEditing {
 pub struct PageRename {
     pub page: PromptPageId,
     pub input: TextInput,
+}
+
+/// 离开编辑视图时的编辑状态暂存：绑定目标、当前页与完整历史。
+///
+/// 仅当返回编辑时目标身份、当前页与暂存正文均与实时值一致时整体恢复，
+/// 否则按新目标重建（`set_text`）并丢弃暂存。
+#[derive(Debug)]
+pub struct EditorStash {
+    /// 离开时的编辑绑定。
+    pub editing: PromptEditing,
+    /// 离开时的当前页 id（正式页或临时页）。
+    pub page: PromptPageId,
+    /// 完整编辑器历史（文本、光标与撤销/重做栈）。
+    pub history: PromptHistory,
 }
 
 /// 工作区提示词面板状态：树、视图模式、选中行、编辑目标、临时提示词与滚动偏移。
@@ -66,6 +81,8 @@ pub struct PromptPanel {
     page_rename: Option<PageRename>,
     /// 已更新内存但数据库尚未确认的页（条目 id、页 id）。
     pending_saves: Vec<(i64, i64)>,
+    /// 离开编辑视图时的编辑状态暂存（切到列表时写入）；返回同一目标时恢复。
+    editor_stash: Option<EditorStash>,
 }
 
 impl PromptPanel {
@@ -92,6 +109,7 @@ impl PromptPanel {
             search: TextInput::new(""),
             page_rename: None,
             pending_saves: Vec::new(),
+            editor_stash: None,
         }
     }
 
@@ -160,6 +178,35 @@ impl PromptPanel {
     pub fn enter_tree_view(&mut self) {
         self.tree_return = self.editing;
         self.tree_selection_touched = false;
+    }
+
+    /// 暂存离开编辑视图时的完整历史状态（绑定目标 + 当前页 + 编辑器历史）。
+    pub fn stash_editor(
+        &mut self,
+        editing: PromptEditing,
+        page: PromptPageId,
+        history: PromptHistory,
+    ) {
+        self.editor_stash = Some(EditorStash {
+            editing,
+            page,
+            history,
+        });
+    }
+
+    /// 编辑状态暂存（只读）；返回编辑时据此判定能否恢复历史。
+    pub fn editor_stash(&self) -> Option<&EditorStash> {
+        self.editor_stash.as_ref()
+    }
+
+    /// 取走编辑状态暂存（返回编辑时消费；无论是否恢复都清空）。
+    pub fn take_editor_stash(&mut self) -> Option<EditorStash> {
+        self.editor_stash.take()
+    }
+
+    /// 丢弃编辑状态暂存（打开别的目标或切换工作区等，历史不再适用于返回目标）。
+    pub fn clear_editor_stash(&mut self) {
+        self.editor_stash = None;
     }
 
     /// 记录用户显式改过选中（点击行 / 方向键）。
