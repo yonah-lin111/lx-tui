@@ -162,9 +162,8 @@ pub const BODY_SEARCH: &[&str] = &[
 ];
 pub const BODY_WEB: &[&str] = &["ratatui 0.30 released", "docs.rs/ratatui/0.30"];
 pub const BODY_THINKING: &[&str] = &["Plan the module split, then verify with tests."];
-/// subagent 子任务（每个子任务各自另带一行 token，由渲染层生成）。
-pub const SUBAGENT_CHILD_A: &str = "read src/ui/style.rs";
-pub const SUBAGENT_CHILD_B: &str = "grep \"fn render\"";
+/// subagent 子任务：只显示“进行中”的那一步（一个直角 icon 右侧一条）。
+pub const SUBAGENT_IN_PROGRESS: &str = "read src/ui/style.rs";
 pub const BODY_MCP: &[&str] = &["filesystem · read_file", "ok · 128 lines"];
 pub const BODY_FINAL: &[&str] = &["Added the agent gallery folder and its variants."];
 pub const BODY_ERROR: &[&str] = &["exit code 1 · 2 failures"];

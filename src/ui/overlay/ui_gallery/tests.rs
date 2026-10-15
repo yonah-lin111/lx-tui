@@ -316,3 +316,87 @@ fn preview_component_is_horizontally_centered() {
     let expected_desc_x = layout.right.width.saturating_sub(line_width) / 2;
     assert_eq!(offset, expected_desc_x, "说明文字应水平居中");
 }
+
+#[test]
+fn selecting_the_markdown_step_yields_scrollable_content() {
+    // markdown item 的右侧内容高于可视区：最大滚动偏移 > 0。
+    let mut state = gallery_state();
+    let index = {
+        let Some(Overlay::UiGallery(gallery)) = state.overlay.as_ref() else {
+            panic!("gallery overlay open");
+        };
+        gallery
+            .rows()
+            .iter()
+            .position(|row| {
+                row.node
+                    == crate::app::ui_gallery::UiGalleryNode::Component(
+                        UiGalleryComponentId::Agent(AgentStepId::Markdown),
+                    )
+            })
+            .expect("markdown row")
+    };
+    if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
+        gallery.set_selected(index);
+    }
+    let screen = Rect::new(0, 0, 100, 30);
+    let gallery = match state.overlay.as_ref() {
+        Some(Overlay::UiGallery(gallery)) => gallery,
+        _ => panic!("gallery overlay"),
+    };
+    let max = ui_gallery_max_scroll(screen, gallery);
+    assert!(max > 0, "markdown 内容应可滚动");
+}
+
+#[test]
+fn preview_scroll_renders_different_rows_and_shows_scrollbar() {
+    // 未滚动与滚动后，右区文本不同；且滚动时右缘出现滚动条 thumb `▐`。
+    let mut state = gallery_state();
+    let index = {
+        let Some(Overlay::UiGallery(gallery)) = state.overlay.as_ref() else {
+            panic!("gallery overlay open");
+        };
+        gallery
+            .rows()
+            .iter()
+            .position(|row| {
+                row.node
+                    == crate::app::ui_gallery::UiGalleryNode::Component(
+                        UiGalleryComponentId::Agent(AgentStepId::Markdown),
+                    )
+            })
+            .expect("markdown row")
+    };
+    if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
+        gallery.set_selected(index);
+    }
+    let width = 100u16;
+    let height = 30u16;
+    let top = render_lines(&state, width, height);
+    let layout = ui_gallery_layout(Rect::new(0, 0, width, height)).expect("fits");
+    let right_text = |lines: &[String]| -> String {
+        lines
+            .iter()
+            .map(|line| {
+                line.chars()
+                    .skip(usize::from(layout.right.x))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let top_text = right_text(&top);
+
+    // 向下滚动后右区文本应变化。
+    if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
+        gallery.set_scroll(5, usize::MAX);
+    }
+    let scrolled = render_lines(&state, width, height);
+    let scrolled_text = right_text(&scrolled);
+    assert_ne!(top_text, scrolled_text, "滚动后右区内容应变化");
+    // 右缘应出现滚动条 thumb。
+    let has_thumb = scrolled
+        .iter()
+        .any(|line| line.chars().nth(usize::from(layout.right.right() - 1)) == Some('▐'));
+    assert!(has_thumb, "内容超出时应显示滚动条");
+}

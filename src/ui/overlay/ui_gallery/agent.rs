@@ -55,9 +55,6 @@ const VARIANT_LABELS: [(&str, &str); 4] = [
     ("d", text::agent::VARIANT_D),
 ];
 
-/// 子任务各自的一行 token（subagent 的子任务也各带一行 token）。
-const SUBAGENT_CHILD_TOKENS: [Tokens; 2] = [(1_500, 110, 800), (1_600, 110, 1_200)];
-
 /// 组件 id 是否为 agent 步骤；是则返回步骤种类。
 pub fn agent_step_of(id: UiGalleryComponentId) -> Option<AgentStepId> {
     match id {
@@ -102,18 +99,11 @@ fn variant_lines(step: AgentStepId, variant: usize) -> Vec<SampleLine> {
             lines.push(detail_line(variant, body));
         }
     }
-    // subagent：每个子任务各自带一行 token。
+    // subagent：只显示“进行中”的那一步（一个直角 icon）；token 仅底部一行总计。
     if step == AgentStepId::Subagent {
-        for (child, child_tokens) in subagent_children() {
-            lines.push(detail_line(variant, child));
-            lines.push(SampleLine::plain(
-                5,
-                format_tokens_line(child_tokens),
-                style::agent_tokens(),
-            ));
-        }
+        lines.push(detail_line(variant, text::agent::SUBAGENT_IN_PROGRESS));
     }
-    // 每一步都带 token 页脚。
+    // 每一步都带 token 页脚（subagent 即该子任务的总用量）。
     lines.push(SampleLine::plain(
         2,
         format_tokens_line(tokens),
@@ -122,37 +112,40 @@ fn variant_lines(step: AgentStepId, variant: usize) -> Vec<SampleLine> {
     lines
 }
 
-/// 头部行：四套各自的风格化头部。
+/// 头部行：四套各自的风格化头部；error 的标题整行红 + 加粗。
 fn header_line(step: AgentStepId, variant: usize) -> SampleLine {
     let marker_style = status_style(step);
+    // error：标题（动词与参数）红 + 加粗；其余用该套的常规标题样式。
+    let title_style = if step == AgentStepId::Error {
+        style::agent_fail()
+    } else {
+        match variant {
+            0 | 1 => style::agent_step_detail(),
+            _ => style::agent_step_name(),
+        }
+    };
     let detail = detail(step);
     let mut spans: Vec<(String, Style)> = Vec::new();
     match variant {
         0 => {
             // codex：`• Verb detail`
             spans.push((format!("{} ", text::agent::MARKER_BULLET), marker_style));
-            spans.push((
-                format!("{} {detail}", verb(step)),
-                style::agent_step_detail(),
-            ));
+            spans.push((format!("{} {detail}", verb(step)), title_style));
         }
         1 => {
             // claude：`⏺ Name(detail)`
             spans.push((format!("{} ", text::agent::MARKER_CLAUDE_DOT), marker_style));
-            spans.push((
-                format!("{}({detail})", claude_name(step)),
-                style::agent_step_detail(),
-            ));
+            spans.push((format!("{}({detail})", claude_name(step)), title_style));
         }
         2 => {
             // opencode：`<icon> Verb detail`
             spans.push((format!("{} ", opencode_icon(step)), marker_style));
-            spans.push((format!("{} {detail}", verb(step)), style::agent_step_name()));
+            spans.push((format!("{} {detail}", verb(step)), title_style));
         }
         _ => {
             // lx：`<icon> Verb detail`
             spans.push((format!("{} ", lx_icon(step)), lx_icon_style(step)));
-            spans.push((format!("{} {detail}", verb(step)), style::agent_step_name()));
+            spans.push((format!("{} {detail}", verb(step)), title_style));
         }
     }
     SampleLine::spans(0, spans)
@@ -421,14 +414,6 @@ fn step_tokens(step: AgentStepId) -> Tokens {
         AgentStepId::Question => (900, 60, 300),
         AgentStepId::Tokens => (12_400, 312, 8_100),
     }
-}
-
-/// subagent 的两条子任务（文案 + 各自 token）。
-fn subagent_children() -> [(&'static str, Tokens); 2] {
-    [
-        (text::agent::SUBAGENT_CHILD_A, SUBAGENT_CHILD_TOKENS[0]),
-        (text::agent::SUBAGENT_CHILD_B, SUBAGENT_CHILD_TOKENS[1]),
-    ]
 }
 
 /// token 页脚字符串（对齐 lx-agent）：`IN <in> · OUT <out> · CACHE <cache>`。

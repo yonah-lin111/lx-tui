@@ -98,3 +98,39 @@ fn apply_key_noop_without_gallery_overlay() {
     apply_ui_gallery_key(&mut state, OverlayKey::Down);
     assert!(state.overlay.is_none());
 }
+
+#[test]
+fn scroll_by_page_clamps_at_zero_and_max() {
+    let mut state = open();
+    // 顶部继续上翻：钳在 0。
+    assert!(!scroll_ui_gallery(&mut state, -UI_GALLERY_PAGE, usize::MAX));
+    assert_eq!(gallery(&state).scroll(), 0);
+    // 下翻一页/两页。
+    assert!(scroll_ui_gallery(&mut state, UI_GALLERY_PAGE, usize::MAX));
+    assert_eq!(gallery(&state).scroll(), UI_GALLERY_PAGE as usize);
+    // 给定最大偏移后钳制。
+    assert!(scroll_ui_gallery(&mut state, 100, 7));
+    assert_eq!(gallery(&state).scroll(), 7);
+    assert!(!scroll_ui_gallery(&mut state, 100, 7));
+    assert!(set_ui_gallery_scroll(&mut state, 3, 7));
+    assert_eq!(gallery(&state).scroll(), 3);
+    // 上翻回顶。
+    assert!(scroll_ui_gallery(&mut state, -UI_GALLERY_PAGE, 7));
+    assert_eq!(gallery(&state).scroll(), 0);
+}
+
+#[test]
+fn changing_selection_resets_preview_scroll() {
+    let mut state = open();
+    scroll_ui_gallery(&mut state, UI_GALLERY_PAGE, usize::MAX);
+    assert!(gallery(&state).scroll() > 0);
+    apply_ui_gallery_key(&mut state, OverlayKey::Down);
+    assert_eq!(gallery(&state).scroll(), 0, "换 item 后滚动应回顶部");
+}
+
+#[test]
+fn scroll_functions_are_noop_without_gallery() {
+    let mut state = AppState::demo();
+    assert!(!scroll_ui_gallery(&mut state, 1, 10));
+    assert!(!set_ui_gallery_scroll(&mut state, 1, 10));
+}

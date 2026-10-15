@@ -18,7 +18,9 @@ pub use referenced::{
     referenced_search_layout,
 };
 pub use save_draft::*;
-pub use ui_gallery::{UiGalleryLayout, ui_gallery_layout, ui_gallery_row_at, ui_gallery_shell};
+pub use ui_gallery::{
+    UiGalleryLayout, ui_gallery_layout, ui_gallery_max_scroll, ui_gallery_row_at, ui_gallery_shell,
+};
 pub use worktree::{
     WorktreeDialogButton, worktree_dialog_button_at, worktree_dialog_entry_at,
     worktree_dialog_max_rows, worktree_dialog_shell, worktree_dialog_visible_start,

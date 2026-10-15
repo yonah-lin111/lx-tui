@@ -24,7 +24,8 @@ pub use referenced::*;
 pub use selection::*;
 pub use trust::*;
 pub use ui_gallery::{
-    activate_ui_gallery_row, apply_ui_gallery_key, open_ui_gallery, set_ui_gallery_selection,
+    UI_GALLERY_PAGE, activate_ui_gallery_row, apply_ui_gallery_key, open_ui_gallery,
+    scroll_ui_gallery, set_ui_gallery_scroll, set_ui_gallery_selection,
 };
 pub use workspace::*;
 pub use workspace_list::*;

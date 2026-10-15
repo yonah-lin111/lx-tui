@@ -287,12 +287,14 @@ pub struct UiGalleryRow {
     pub depth: usize,
 }
 
-/// UI 组件查看弹窗状态：折叠集合与高亮可见行。
+/// UI 组件查看弹窗状态：折叠集合、高亮可见行与右侧预览滚动偏移。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiGallery {
     folders: &'static [UiGalleryFolder],
     collapsed: Vec<UiGalleryFolderId>,
     selected: usize,
+    /// 右侧预览的滚动偏移（顶端行下标）；切换 item/文件夹时归零。
+    scroll: usize,
 }
 
 impl Default for UiGallery {
@@ -302,13 +304,46 @@ impl Default for UiGallery {
 }
 
 impl UiGallery {
-    /// 默认状态：全部展开、高亮首行。
+    /// 默认状态：全部展开、高亮首行、右侧滚动在顶部。
     pub fn new() -> Self {
         Self {
             folders: &GALLERY_FOLDERS,
             collapsed: Vec::new(),
             selected: 0,
+            scroll: 0,
         }
+    }
+
+    /// 右侧预览的滚动偏移。
+    pub fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    /// 设置右侧预览滚动偏移；越界按 `max` 夹取，返回是否变化。
+    pub fn set_scroll(&mut self, offset: usize, max: usize) -> bool {
+        let next = offset.min(max);
+        if next == self.scroll {
+            return false;
+        }
+        self.scroll = next;
+        true
+    }
+
+    /// 按步长滚动右侧预览；`max` 为最大偏移（`usize::MAX` 表示不夹取），
+    /// 越界钳制不循环（下界恒为 0）；返回是否变化。
+    pub fn scroll_by(&mut self, delta: isize, max: usize) -> bool {
+        let current = self.scroll.min(isize::MAX as usize) as isize;
+        let upper = if max == usize::MAX {
+            isize::MAX
+        } else {
+            max.min(isize::MAX as usize) as isize
+        };
+        let next = current.saturating_add(delta).clamp(0, upper) as usize;
+        if next == self.scroll {
+            return false;
+        }
+        self.scroll = next;
+        true
     }
 
     /// 全部文件夹。
@@ -394,6 +429,8 @@ impl UiGallery {
             return false;
         }
         self.selected = next;
+        // 预览换了 item：右侧滚动回顶部。
+        self.scroll = 0;
         true
     }
 
@@ -404,6 +441,8 @@ impl UiGallery {
             return false;
         }
         self.selected = index;
+        // 预览换了 item：右侧滚动回顶部。
+        self.scroll = 0;
         true
     }
 
@@ -432,6 +471,8 @@ impl UiGallery {
             self.selected = selected;
         }
         self.clamp();
+        // 折叠/展开可能改变右区内容高度：滚动回顶部。
+        self.scroll = 0;
         true
     }
 

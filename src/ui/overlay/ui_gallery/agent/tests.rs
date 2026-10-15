@@ -106,14 +106,44 @@ fn tokens_item_shows_turn_summary_and_context_pills() {
 }
 
 #[test]
-fn subagent_children_each_carry_a_token_line() {
-    let lines = variant_lines(AgentStepId::Subagent, 0);
-    let with_in = lines
-        .iter()
-        .filter(|line| line_text(line).contains(text::agent::TOKEN_IN))
-        .count();
-    // 两个子任务各一行 + 顶层页脚一行 = 3 行含 token。
-    assert_eq!(with_in, 3, "子任务 token 行应为 3（含顶层页脚）");
+fn subagent_shows_single_in_progress_row_and_one_total_token_line() {
+    for variant in 0..4 {
+        let lines = variant_lines(AgentStepId::Subagent, variant);
+        let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+        // 只显示“进行中”的那一条子任务。
+        assert!(
+            joined.contains(text::agent::SUBAGENT_IN_PROGRESS),
+            "候选 {variant} 应显示进行中的子任务"
+        );
+        // token 只出现一行（底部总计）。
+        let with_in = lines
+            .iter()
+            .filter(|line| line_text(line).contains(text::agent::TOKEN_IN))
+            .count();
+        assert_eq!(with_in, 1, "候选 {variant} 只应有一行 token 页脚");
+    }
+}
+
+#[test]
+fn error_title_is_red_and_bold() {
+    for variant in 0..4 {
+        let header = header_line(AgentStepId::Error, variant);
+        let red = style::agent_fail();
+        // 标题分段（除标记/图标外）应为失败红；标记/图标也用同色。
+        let title = header.spans.last().expect("title span");
+        assert_eq!(
+            title.1, red,
+            "候选 {variant} 的 error 标题应红+加粗：{title:?}"
+        );
+        assert!(header.spans.iter().any(|(_, style)| *style == red));
+    }
+    // 非 error 步骤的标题不是失败红。
+    let ok = header_line(AgentStepId::Exec, 3);
+    assert!(
+        ok.spans
+            .iter()
+            .all(|(_, style)| *style != style::agent_fail())
+    );
 }
 
 #[test]
