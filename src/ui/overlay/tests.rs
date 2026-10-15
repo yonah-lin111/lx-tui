@@ -674,6 +674,7 @@ fn referenced_menu_state(rows: Vec<ReferencedFolderMenuRow>, selected: usize) ->
             key: Some(PathBuf::from("/repo")),
             rows,
             selected,
+            viewport: None,
         },
     ));
     state
@@ -940,6 +941,109 @@ fn referenced_search_paints_solid_panel_background() {
         Color::Indexed(240),
         "选中候选地址行底色"
     );
+}
+
+#[test]
+fn referenced_menu_scrollbar_only_on_overflow_and_reserves_gutter() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let few = referenced_menu_state(vec![ReferencedFolderMenuRow::Add], 0);
+    let many = referenced_menu_state(
+        (0..40)
+            .map(|id| ReferencedFolderMenuRow::Folder {
+                id,
+                path: PathBuf::from(format!("/tmp/alpha-{id}")),
+            })
+            .chain(std::iter::once(ReferencedFolderMenuRow::Add))
+            .collect(),
+        0,
+    );
+    let layout_of = |state: &AppState| {
+        let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+            panic!("menu");
+        };
+        referenced_menu_layout(SCREEN, menu)
+    };
+    let few = layout_of(&few);
+    let many = layout_of(&many);
+    assert!(few.scrollbar.is_none(), "不溢出时无滚动条");
+    let bar = many.scrollbar.expect("溢出时出现滚动条");
+    // 列表行固定为内容区扣掉右缘 1 列滚动条槽（与 prompt 列表一致）。
+    let inner = ratatui::widgets::Block::bordered().inner(few.area);
+    assert_eq!(few.rows[0].width, inner.width - 1, "右缘 1 列恒预留");
+    assert_eq!(few.rows[0].right(), many.rows[0].right());
+    assert_eq!(bar.track.x, inner.right() - 1, "轨道贴内容区右缘");
+    assert_eq!(bar.track.height, inner.height, "轨道覆盖整列可见区");
+    // 行文本始终让出滚动条列，不与轨道重叠。
+    assert!(many.rows.iter().all(|row| row.right() <= bar.track.x));
+}
+
+#[test]
+fn referenced_menu_viewport_decouples_window_from_highlight() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let rows: Vec<ReferencedFolderMenuRow> = (0..30)
+        .map(|id| ReferencedFolderMenuRow::Folder {
+            id,
+            path: PathBuf::from(format!("/tmp/alpha-{id}")),
+        })
+        .chain(std::iter::once(ReferencedFolderMenuRow::Add))
+        .collect();
+    let mut state = referenced_menu_state(rows, 0);
+    let layout_of = |state: &AppState| {
+        let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+            panic!("menu");
+        };
+        referenced_menu_layout(SCREEN, menu)
+    };
+    // 高亮在第 0 行、无显式视口：窗口跟随高亮从 0 起。
+    assert_eq!(layout_of(&state).start, 0);
+    // 滚轮滚开显式视口：窗口离开高亮，高亮允许不在窗口内。
+    let visible = layout_of(&state).visible();
+    assert!(crate::app::update::set_referenced_menu_viewport(
+        &mut state, 10, visible
+    ));
+    let layout = layout_of(&state);
+    assert_eq!(layout.start, 10, "窗口取显式视口");
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.selected, 0, "高亮不动");
+    // 键盘移动高亮：清空视口，窗口重新跟随高亮。
+    crate::app::update::move_referenced_menu_selection(&mut state, 1);
+    assert_eq!(layout_of(&state).start, 0, "键盘移动后窗口吸回高亮");
+}
+
+#[test]
+fn referenced_menu_renders_scrollbar_track_and_thumb() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let rows: Vec<ReferencedFolderMenuRow> = (0..30)
+        .map(|id| ReferencedFolderMenuRow::Folder {
+            id,
+            path: PathBuf::from(format!("/tmp/alpha-{id}")),
+        })
+        .chain(std::iter::once(ReferencedFolderMenuRow::Add))
+        .collect();
+    let mut state = referenced_menu_state(rows, 0);
+    let visible = {
+        let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+            panic!("menu");
+        };
+        referenced_menu_layout(SCREEN, menu).visible()
+    };
+    assert!(crate::app::update::set_referenced_menu_viewport(
+        &mut state, 10, visible
+    ));
+    let (lines, _) = draw_overlay(&state);
+    let menu = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu,
+        _ => panic!("menu"),
+    };
+    let layout = referenced_menu_layout(SCREEN, menu);
+    let bar = layout.scrollbar.expect("overflows");
+    let thumb_row: Vec<char> = lines[bar.thumb.y as usize].chars().collect();
+    assert_eq!(thumb_row[usize::from(bar.thumb.x)], '▐', "thumb 在最右一列");
+    let last = usize::from(bar.track.bottom()) - 1;
+    let last_row: Vec<char> = lines[last].chars().collect();
+    assert_eq!(last_row[usize::from(bar.track.x)], '▕', "轨道铺到最后一行");
 }
 
 #[test]

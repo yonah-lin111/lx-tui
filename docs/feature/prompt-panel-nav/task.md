@@ -28,7 +28,7 @@
 ### 4. 渲染层（`ui/`）
 
 - [x] `command_panel` 视图 `title` / `right_title` / `footer` 与宽度计算
-- [x] `ui/prompt.rs` 接线：`Commands` / `Files` / 目录名 / `[open ⇧↵] [back ^z]`
+- [x] `ui/prompt.rs` 接线：`Commands` / `Files` / 目录名 / `[open ⇧↵] [back ^z]`（@ 面板标题后统一为 `@Command`）
 - [x] `ui/text.rs` 文案常量与符号兼容测试（单宽、非 PUA）
 - [x] 单元测试：`ui/widgets/command_panel/tests.rs`、`ui/prompt/tests.rs`、`ui/text/tests.rs`
 

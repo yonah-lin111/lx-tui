@@ -398,7 +398,10 @@ fn mention_panel_asks_root_choice_then_titles_with_choice() {
     render(area, &mut buf, &editor, None);
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert!(painted.contains("app.rs"), "{painted}");
-    assert!(painted.contains("Files-[wt]"), "标题带取根标识: {painted}");
+    assert!(
+        painted.contains("@Command-[wt]"),
+        "标题带取根标识: {painted}"
+    );
 
     // 未绑定的块：直接列出显式根候选，标题无后缀。
     let mut plain = Prompt::new(PaneId::from_raw_for_test(2));
@@ -422,8 +425,11 @@ fn mention_panel_asks_root_choice_then_titles_with_choice() {
     render(area, &mut buf, &plain, None);
     let painted: String = buf.content.iter().map(|cell| cell.symbol()).collect();
     assert!(painted.contains("app.rs"), "{painted}");
-    assert!(painted.contains("Files"), "{painted}");
-    assert!(!painted.contains("Files-["), "未绑定无标题后缀: {painted}");
+    assert!(painted.contains("@Command"), "{painted}");
+    assert!(
+        !painted.contains("@Command-["),
+        "未绑定无标题后缀: {painted}"
+    );
 }
 
 #[test]

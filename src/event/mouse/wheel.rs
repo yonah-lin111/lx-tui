@@ -180,15 +180,15 @@ pub(crate) fn handle_mouse_wheel(
     if let Some(direction) = vertical_wheel_direction(mouse.kind)
         && let Some(crate::app::overlay::Overlay::ReferencedFolderMenu(menu)) =
             state.overlay.as_ref()
-        && ui::overlay::referenced_menu_layout(geometry.screen, menu)
-            .area
-            .contains((mouse.column, mouse.row).into())
     {
-        // 滚轮在菜单上移动高亮（与上下键一致）；列表总数不因视口受限。
-        if update::move_referenced_menu_selection(state, direction) {
-            *dirty = true;
+        // 弹窗内滚轮滚动列表视口（高亮不动、越界钳制），不穿透到底层；与 prompt 的 @ 面板一致。
+        let layout = ui::overlay::referenced_menu_layout(geometry.screen, menu);
+        if layout.area.contains((mouse.column, mouse.row).into()) {
+            if update::scroll_referenced_menu(state, direction, layout.start, layout.visible()) {
+                *dirty = true;
+            }
+            return;
         }
-        return;
     }
     if state.overlay.is_some() {
         return;

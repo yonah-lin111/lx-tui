@@ -580,8 +580,8 @@ pub const MENU_TITLE_PROMPT_TREE: &str = "prompts";
 
 /// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠命令 / worktree 选择器。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";
-pub const MENTION_PANEL_TITLE: &str = "Files";
-pub const SLASH_PANEL_TITLE: &str = "Templates";
+pub const MENTION_PANEL_TITLE: &str = "@Command";
+pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
 /// 斜杠命令面板右侧来源标签（不含方括号）。

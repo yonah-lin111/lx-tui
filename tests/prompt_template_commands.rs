@@ -89,7 +89,7 @@ fn slash_command_inserts_template_with_highlight_and_buttons() {
     );
     let terminal = draw(&state, &config);
     assert!(
-        line_text(&terminal, panel.rect.y).contains("Templates"),
+        line_text(&terminal, panel.rect.y).contains("/Command"),
         "面板标题"
     );
 

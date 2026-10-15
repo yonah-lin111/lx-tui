@@ -91,6 +91,8 @@ pub struct ReferencedFolderMenu {
     /// 空状态、`[add]` 或某条记录。
     pub rows: Vec<ReferencedFolderMenuRow>,
     pub selected: usize,
+    /// 滚轮/滚动条滚动后的显式窗口起点；键盘移动后清空，窗口重新跟随高亮。
+    pub viewport: Option<usize>,
 }
 
 /// 引用文件夹目录弹窗行：空状态、数据库不可用、新建动作或一条记录。

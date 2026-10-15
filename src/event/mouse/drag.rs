@@ -41,6 +41,18 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.referenced_menu_scroll_drag {
+        if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
+            let layout = ui::overlay::referenced_menu_layout(geometry.screen, menu);
+            if let Some(bar) = layout.scrollbar {
+                let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+                if update::set_referenced_menu_viewport(state, offset, layout.visible()) {
+                    *dirty = true;
+                }
+            }
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_scroll_drag {
         let Some(bar) = ui::prompt_scrollbar(view, state) else {
             return;
@@ -230,6 +242,10 @@ pub(crate) fn handle_mouse_up_left(
 ) {
     let Geometry { rects, .. } = geometry;
     if state.referenced_search_scroll_drag.take().is_some() {
+        *dirty = true;
+        return;
+    }
+    if state.referenced_menu_scroll_drag.take().is_some() {
         *dirty = true;
         return;
     }

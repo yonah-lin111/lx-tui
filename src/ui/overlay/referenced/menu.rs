@@ -13,7 +13,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::app::overlay::{ReferencedFolderMenu, ReferencedFolderMenuRow};
 use crate::app::referenced::menu_window_start;
-use crate::ui::{style, text};
+use crate::ui::{style, text, widgets};
 
 use super::{fill_row, paint_text};
 
@@ -38,6 +38,8 @@ pub struct ReferencedMenuLayout {
     pub start: usize,
     /// 行总数。
     pub total: usize,
+    /// 列表滚动条；不溢出时为 None。
+    pub scrollbar: Option<widgets::scrollbar::ScrollbarLayout>,
 }
 
 /// 目录弹窗几何；渲染与鼠标命中共用。
@@ -50,17 +52,47 @@ pub fn referenced_menu_layout(screen: Rect, menu: &ReferencedFolderMenu) -> Refe
     let inner = Block::bordered().inner(area);
     let total = menu.rows.len();
     let visible = usize::from(inner.height);
+    // 列表区固定预留右缘 1 列为滚动条槽（与 prompt 列表一致）。
+    let list = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width.saturating_sub(1),
+        inner.height,
+    );
+    // 显式视口优先（滚轮滚动，高亮允许不在窗口内）；否则窗口跟随高亮。
+    let max_start = total.saturating_sub(visible);
     let selected = menu.selected.min(total.saturating_sub(1));
-    let start = menu_window_start(selected, visible, total);
-    let rows = (0..visible)
-        .filter(|offset| start + offset < total)
-        .map(|offset| Rect::new(inner.x, inner.y + offset as u16, inner.width, 1))
+    let start = menu
+        .viewport
+        .map(|offset| offset.min(max_start))
+        .unwrap_or_else(|| menu_window_start(selected, visible, total));
+    let shown = visible.min(total.saturating_sub(start));
+    let rows = (0..shown)
+        .map(|offset| Rect::new(list.x, list.y + offset as u16, list.width, 1))
         .collect();
+    // 列表溢出时在最右一列显示滚动条（轨道贴内容区右缘；行文本已为其让出该列）。
+    let scrollbar = widgets::scrollbar::layout(
+        Rect {
+            width: inner.width,
+            ..list
+        },
+        total,
+        visible.max(1),
+        start,
+    );
     ReferencedMenuLayout {
         area,
         rows,
         start,
         total,
+        scrollbar,
+    }
+}
+
+impl ReferencedMenuLayout {
+    /// 列表可见行数。
+    pub fn visible(&self) -> usize {
+        self.rows.len()
     }
 }
 
@@ -107,6 +139,10 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
             row,
             selectable && menu.selected == layout.start + offset,
         );
+    }
+    // 列表溢出时在最右一列绘制滚动条（轨道 muted、thumb 亮色）。
+    if let Some(scrollbar) = layout.scrollbar {
+        widgets::scrollbar::render_with_base(frame, &scrollbar, style::overlay_panel());
     }
 }
 
