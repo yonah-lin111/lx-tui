@@ -1,6 +1,6 @@
 # lx 输入框 `@` 文件命令面板设计
 
-状态：待用户审核。本文和同目录 `task.md` 获明确批准前，不修改功能代码。
+状态：已实现（合入 `dev`）。本文与同目录 `task.md` 为定稿记录；行为以本文件为准，实现细节见 `src/app/state/lx/mention.rs`、`src/ui/main_content/lx/mention.rs`。
 
 ## 1. 目标与验收口径
 
@@ -15,12 +15,18 @@
 | D1 | 候选写入 | 选择文件或文件夹写入相对扫描根的 `@路径`，使用现有 prompt 的提及插入规则；确认后关闭面板。例：`/work/demo` 下选 `src/main.rs` 得 `@src/main.rs `。 |
 | D2 | 路径来源 | `pane.cwd` 优先；尚未轮询到时用该 pane 所属 `workspace.cwd`；轮询失败保留最后一次有效 `pane.cwd`。两者均无时无扫描根。 |
 | D3 | 空查询 | 输入有效的 `@` 后立即列出当前目录候选，继续输入只过滤候选。 |
-| D4 | 文件夹键位 | `Enter` 采纳文件夹并关闭；`Shift+Enter` 对有子项的文件夹进入该目录，写回 `@目录/` 并保持面板。面板关闭时 `Shift+Enter` 继续换行。 |
+| D4 | 文件夹键位 | `Enter` 采纳文件夹并关闭；`Shift+Enter` 对有子项的文件夹进入该目录，写回 `@目录/` 并保持面板。面板不可见时 `Shift+Enter` 继续换行；面板可见（含扫描中/无匹配状态行）时吞键不换行。 |
 | D5 | 底边路径 | 只在 pane 的 lx 视图显示；完整路径放不下改最后目录名；最后目录名仍放不下时按终端列宽截断并加 `…`。不覆盖左右角。 |
 | D6 | 路径切换 | 有效扫描根变更立即作废旧候选与在途结果；若光标仍在有效 `@` 查询中，保留查询文本并按新根重扫。 |
 | D7 | 鼠标 | 点击候选等同 `Enter`；鼠标滚轮在面板内只滚动候选，不滚动 lx 输入框。 |
 
-`@` 语法、候选排序、扫描忽略策略和相对路径插入格式优先复用 lx 现有 prompt 的能力；只借鉴 codex-main 的上方浮层位置与输入框等宽原则。codex-main 当前 `FileSearchPopup` 对单独 `@` 显示提示，且候选主要是文件；D3/D4 明确要求 lx 在这里采用本项目 prompt 的文件/目录行为。
+补充定稿（实现后确认）：
+
+- **面板标题**：lx `@` 面板顶边左侧为 `@Command`（`text::LX_MENTION_PANEL_TITLE`），与 prompt 提及面板的 `Files` 区分；进入目录后顶边右侧显示该目录末段名。
+- **面板高度**：对齐 codex — 内容行先夹到 `MAX_POPUP_ROWS`(8)、再加边框 2 行，并与输入框上方可用行数取小；空间不足时不挤压输入框。扫描中/无匹配用固定尺寸状态行（`scanning…` / `no matches`）。
+- **快捷删除**：光标紧跟 `@路径 ` 尾随空白且面板未打开时，`Backspace` 一次删净整段提及（复用 `markdown::mention_deletion_range`，与 prompt 同语义、一步可撤销）；面板打开时按普通退格编辑查询。
+
+`@` 语法、候选排序、扫描忽略策略和相对路径插入格式优先复用 lx 现有 prompt 的能力；面板位置、输入框等宽与高度上限借鉴 codex-main。codex-main 当前 `FileSearchPopup` 对单独 `@` 显示提示，且候选主要是文件；D3/D4 明确要求 lx 在这里采用本项目 prompt 的文件/目录行为。
 
 ## 3. 现状与依据
 
@@ -43,7 +49,7 @@
 
 ### 3.3 检索与服务状态
 
-已使用 codegraph 查询 lx 的 pane/Lx/输入/渲染依赖，并对 codex-main 建立 codegraph 索引（6,332 个文件），随后查询其面板与 composer 的关系。已尝试 codebase memory 的 `list_projects`、`index_repository`、`index_status`、`search_graph`，服务均返回 `Transport closed`；因此其图关系目前无法取得。实施前重试；若服务仍不可用，以 codegraph 与源码/测试核对，不伪称完成 codebase memory 分析。
+已使用 codegraph 查询 lx 的 pane/Lx/输入/渲染依赖，并对 codex-main 建立 codegraph 索引（6,332 个文件），随后查询其面板与 composer 的关系。codebase memory 已恢复：用 `list_projects`、`search_graph`、`index_status`、`query_graph` 核对 lx 与 codex-main 的关键符号、调用链与索引覆盖。面板高度参考 codex `bottom_pane/popup_consts.rs` 的 `MAX_POPUP_ROWS = 8` 与 `FileSearchPopup::calculate_required_height` / `chat_composer` 的「内容行夹上限 + 与上方可用空间取小」口径。
 
 ## 4. 数据模型和不变量
 
@@ -122,6 +128,6 @@
 
 Agent 无法交互式确认 TUI 的实际外观与终端对 `Shift+Enter` 的键码支持；用户审核文档并允许实施后，最终仍需用户运行 `cargo run` 在自己的终端检查面板位置、路径底边和鼠标行为。若终端不区分 `Shift+Enter`，该终端无法提供目录进入键位；保留键盘其它操作和鼠标点击，不把普通 `Enter` 改成目录进入。
 
-## 10. 实施许可
+## 10. 实施状态
 
-本文与 `task.md` 是供审核的具体方案。收到用户对两份文件的明确批准后，才进入生产代码修改、测试与界面验收阶段。审核期间只修订文档与继续只读核验。
+本文与 `task.md` 为定稿记录。实现已完成、自动门禁通过并合入 `dev`；交互外观与终端键码差异仍由用户运行 `cargo run` 自行确认。
