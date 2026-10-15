@@ -18,7 +18,7 @@
 |---|--------|------|
 | 1 | 左栏工作区“添加当前路径的终端”新建的窗口形态 | **在目标工作区追加独立 Tab**：初始 cwd 为该工作区固定根路径，直接进入 `PaneView::Terminal`，并自动切换激活目标工作区与新标签页 |
 | 2 | 主内容“切换到当前 workspace 路径”的技术实现机制 | **向 PTY 会话注入 `cd "<workspace_path>"\n`**；二次确认浮层展示目标路径，确认后发送命令，保留用户 Shell 环境变量与历史 |
-| 3 | 菜单与二次确认文案语言与风格 | **保持统一英文风格，工作区简写为 ws**：左栏菜单 `New terminal`、主内容菜单 `Switch to ws path`、确认浮层标题 `switch to ws path`、提问 `switch cwd to "<path>"?` |
+| 3 | 菜单与二次确认文案语言与风格 | **保持统一英文风格，工作区简写为 ws**：左栏菜单 `New terminal`、主内容菜单 `Switch to ws path`、确认浮层标题 `Switch to ws path`、提问 `switch cwd to "<path>"?` |
 | 4 | 菜单内容完整显示与宽度计算 | 采用真实终端列宽（`UnicodeWidthStr::width`）动态适配最长项，正常窗口杜绝截断与省略；在终端物理宽度极端不足时安全夹取至屏幕宽度 |
 | 5 | 右键“打开当前 prompt”的状态联动与路径绑定 | 两处均命名为 `Open prompt`；若 Prompt 折叠则自动展开并聚焦；左栏触发同步切换激活目标工作区并将 Prompt 根路径切至工作区路径；主内容触发保持当前工作区并将 Prompt 根路径切至该窗格当前 cwd |
 
@@ -62,7 +62,7 @@
     - `MENU_NEW_TERMINAL = "New terminal"`
     - `MENU_OPEN_PROMPT = "Open prompt"`
     - `MENU_SWITCH_TO_WORKSPACE_CWD = "Switch to ws path"`
-    - `CONFIRM_SWITCH_CWD_TITLE = "switch to ws path"`
+    - `CONFIRM_SWITCH_CWD_TITLE = "Switch to ws path"`
   - 新增函数：
     - `confirm_switch_cwd_question(path: &str) -> String`（输出 `switch cwd to "{path}"?`）
 

@@ -43,7 +43,7 @@ fn layout_rejects_screen_too_small() {
 fn render_draws_border_and_title() {
     let shell = layout(SCREEN, 40, 3).expect("modal fits");
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
-    if let Err(error) = terminal.draw(|frame| render(frame, &shell, "rename workspace")) {
+    if let Err(error) = terminal.draw(|frame| render(frame, &shell, "Rename workspace")) {
         panic!("draw failed: {error}");
     }
     let buffer = terminal.backend().buffer().clone();
@@ -55,7 +55,7 @@ fn render_draws_border_and_title() {
     let title_row: String = (shell.area.x..shell.area.right())
         .map(|x| buffer[(x, shell.area.y)].symbol())
         .collect();
-    assert!(title_row.contains(" rename workspace "));
+    assert!(title_row.contains(" Rename workspace "));
 }
 
 #[test]
@@ -119,7 +119,7 @@ fn render_draws_close_button_and_hit_test() {
 
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).expect("test backend is infallible");
     terminal
-        .draw(|frame| render(frame, &shell, "rename workspace"))
+        .draw(|frame| render(frame, &shell, "Rename workspace"))
         .expect("draw succeeds");
     let buffer = terminal.backend().buffer();
     let label: String = (close.x..close.right())

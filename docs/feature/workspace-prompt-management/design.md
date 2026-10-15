@@ -119,7 +119,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
      `workspace not trusted; exiting`、exit 0，**不进入应用**；
    - 数据库不可用降级放行（不阻断应用）。
 2. **应用内信任浮层（新建工作区 / 终端同步触发）**：
-   - `Overlay::TrustWorkspace(TrustWorkspace)`：标题 `trust workspace`，问题 `Do you trust the files in this folder?`，
+   - `Overlay::TrustWorkspace(TrustWorkspace)`：标题 `Trust workspace`，问题 `Do you trust the files in this folder?`，
      路径高亮（中间省略）与按钮 `[trust & open enter]` / `[don't trust esc]`；
    - `Enter` 信任并录入 DB 后续作；`Esc`/点击按钮之外拒绝。
 3. **回退行为**：
@@ -132,7 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(fo
 1. **列表模型**：树视图展示行 = 过滤后的树行；工具栏（树视图）右端常显
    `[temp prompt]` 按钮（右对齐）：点击提交当前编辑并打开临时草稿编辑视图；`[edit]` 在选中行非条目
    （含空树）时回退打开草稿编辑视图（修复“点了没反应”的死按钮）。`New prompt`/`New folder`/
-   `New subfolder` 统一打开命名浮层（标题 `new prompt`/`new folder`，输入框不预填、占位提示默认名）：
+   `New subfolder` 统一打开命名浮层（标题 `New prompt`/`New folder`，输入框不预填、占位提示默认名）：
    确认后创建并选中新节点，**新建提示词不再自动进入编辑视图**（停留在树视图，显式 `[edit]`/回车才编辑）。
    编辑视图分割线行内嵌当前编辑目标 title（条目名 / 临时草稿 `temp prompt`），超宽截断。
 2. **临时草稿**：入口为工具栏 `[temp prompt]`；正文只存内存（`PromptPanel::draft`，随工作区
