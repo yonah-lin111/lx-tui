@@ -4071,3 +4071,406 @@ fn lx_ctrl_c_clears_input() {
     assert!(pane.lx.input.is_empty());
     assert_eq!(pane.lx.cursor, 0);
 }
+
+// ===== lx `@` 提及面板 =====
+
+/// 为窗格设置 cwd（同步有效根的前置）。
+fn set_pane_cwd(state: &mut AppState, id: PaneId, path: &str) {
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.cwd = Some(PathBuf::from(path));
+    }
+}
+
+/// 键入 `@` 查询并写入缓存候选：同步根 → 发起扫描 → 采纳结果。
+fn seed_lx_mention(state: &mut AppState, id: PaneId, query: &str, entries: Vec<MentionEntry>) {
+    sync_lx_mention_root(state, id);
+    for ch in query.chars() {
+        if let Some(pane) = state.pane_mut_anywhere(id) {
+            pane.lx.insert_char(ch);
+        }
+    }
+    let (generation, root) = state
+        .pane_mut_anywhere(id)
+        .and_then(|pane| pane.lx.take_mention_scan_request())
+        .expect("scan request");
+    apply_lx_mention_entries(state, id, generation, &root, entries);
+}
+
+#[test]
+fn lx_mention_root_prefers_pane_cwd_then_workspace() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.workspaces[0].cwd = Some(PathBuf::from("/ws"));
+    assert_eq!(
+        lx_mention_root_for_pane(&state, pane),
+        Some(PathBuf::from("/ws")),
+        "pane cwd 为空回退工作区 cwd"
+    );
+    set_pane_cwd(&mut state, pane, "/pane");
+    assert_eq!(
+        lx_mention_root_for_pane(&state, pane),
+        Some(PathBuf::from("/pane")),
+        "pane cwd 优先"
+    );
+}
+
+#[test]
+fn lx_mention_scan_request_only_when_visible_and_triggered() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    sync_lx_mention_root(&mut state, pane);
+    // 无 @ 触发：不发起。
+    assert!(take_lx_mention_scan_requests(&mut state).is_empty());
+    // 键入 @：发起请求，带窗格、代号与根。
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    let requests = take_lx_mention_scan_requests(&mut state);
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].0, pane);
+    assert_eq!(requests[0].2, PathBuf::from("/root"));
+    // 在途（未回执）时不再重复发起。
+    assert!(take_lx_mention_scan_requests(&mut state).is_empty());
+    // 切到终端视图不发起。
+    toggle_pane_view(&mut state, pane);
+    assert!(take_lx_mention_scan_requests(&mut state).is_empty());
+}
+
+#[test]
+fn lx_mention_root_change_invalidates_inflight_result() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/a");
+    sync_lx_mention_root(&mut state, pane);
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    let (_, stale_generation, old_root) = take_lx_mention_scan_requests(&mut state).remove(0);
+    // 根在结果到达前变化：新根产生新代号。
+    set_pane_cwd(&mut state, pane, "/b");
+    assert!(sync_lx_mention_root(&mut state, pane));
+    let (new_generation, new_root) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|p| p.lx.take_mention_scan_request())
+        .expect("rescan");
+    assert_eq!(new_root, PathBuf::from("/b"));
+    // 旧代号的回执被丢弃。
+    apply_lx_mention_entries(
+        &mut state,
+        pane,
+        stale_generation,
+        &old_root,
+        vec![MentionEntry {
+            path: "stale.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.mention_open());
+    // 新代号 + 新根的回执采纳。
+    apply_lx_mention_entries(
+        &mut state,
+        pane,
+        new_generation,
+        &new_root,
+        vec![MentionEntry {
+            path: "fresh.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.mention_open());
+}
+
+#[test]
+fn lx_mention_results_are_isolated_per_pane() {
+    let (mut state, first, second) = demo_two_panes();
+    set_pane_cwd(&mut state, first, "/one");
+    set_pane_cwd(&mut state, second, "/two");
+    sync_lx_mention_root(&mut state, first);
+    sync_lx_mention_root(&mut state, second);
+    // 第二个窗格（焦点）键入 @。
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    let (_, generation, root) = take_lx_mention_scan_requests(&mut state).remove(0);
+    assert_eq!(root, PathBuf::from("/two"));
+    apply_lx_mention_entries(
+        &mut state,
+        second,
+        generation,
+        &root,
+        vec![MentionEntry {
+            path: "two.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.pane_anywhere(second).expect("pane").lx.mention_open());
+    assert!(
+        !state.pane_anywhere(first).expect("pane").lx.mention_open(),
+        "结果不写入未发起的窗格"
+    );
+}
+
+#[test]
+fn lx_mention_scan_ignored_after_pane_removed() {
+    let (mut state, _, second) = demo_two_panes();
+    set_pane_cwd(&mut state, second, "/two");
+    sync_lx_mention_root(&mut state, second);
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    let (_, generation, root) = take_lx_mention_scan_requests(&mut state).remove(0);
+    state.active_tab_mut().remove_pane(second);
+    // 删除窗格后回执应被静默丢弃（无 panic 即通过）。
+    apply_lx_mention_entries(
+        &mut state,
+        second,
+        generation,
+        &root,
+        vec![MentionEntry {
+            path: "x.rs".into(),
+            is_directory: false,
+        }],
+    );
+}
+
+#[test]
+fn lx_mention_no_root_yields_no_candidates() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.workspaces[0].cwd = None;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.cwd = None;
+    }
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    assert!(
+        take_lx_mention_scan_requests(&mut state).is_empty(),
+        "无根不发起扫描"
+    );
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.mention_open());
+}
+
+#[test]
+fn lx_shift_enter_enters_folder_when_panel_open_else_newline() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    // 面板未打开：Shift+Enter 换行。
+    apply_lx_input(&mut state, LxInput::Char('a'));
+    apply_lx_input(&mut state, LxInput::EnterFolder);
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "a\n");
+
+    // 清空后准备面板：@ 查询高亮目录。
+    apply_lx_input(&mut state, LxInput::Clear);
+    seed_lx_mention(
+        &mut state,
+        pane,
+        "@sr",
+        vec![
+            MentionEntry {
+                path: "src".into(),
+                is_directory: true,
+            },
+            MentionEntry {
+                path: "src/main.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.mention_open());
+    apply_lx_input(&mut state, LxInput::EnterFolder);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "@src/", "Shift+Enter 进入高亮目录");
+    assert!(lx.mention_open(), "进入目录后面板保持");
+}
+
+#[test]
+fn lx_enter_accepts_mention_and_leaves_trailing_space() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    seed_lx_mention(
+        &mut state,
+        pane,
+        "@main",
+        vec![MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+    apply_lx_input(&mut state, LxInput::Enter);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "@main.rs "
+    );
+}
+
+#[test]
+fn lx_mention_escape_keeps_query_and_does_not_insert_newline() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    seed_lx_mention(
+        &mut state,
+        pane,
+        "@main",
+        vec![MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+    apply_lx_input(&mut state, LxInput::Escape);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, "@main", "Esc 保留 @ 查询");
+    assert!(!lx.mention_open());
+}
+
+#[test]
+fn lx_mention_wheel_scrolls_viewport_not_input() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    let entries: Vec<MentionEntry> = (0..10)
+        .map(|i| MentionEntry {
+            path: format!("f{i}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    seed_lx_mention(&mut state, pane, "@", entries);
+    assert!(
+        scroll_lx_mention(&mut state, pane, 1, 0),
+        "滚轮移动候选视口"
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .mention()
+            .panel()
+            .expect("panel")
+            .viewport(),
+        Some(1)
+    );
+}
+
+#[test]
+fn lx_mention_mouse_select_accepts_candidate() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    seed_lx_mention(
+        &mut state,
+        pane,
+        "@",
+        vec![
+            MentionEntry {
+                path: "a.rs".into(),
+                is_directory: false,
+            },
+            MentionEntry {
+                path: "b.rs".into(),
+                is_directory: false,
+            },
+        ],
+    );
+    assert!(select_lx_mention(&mut state, pane, 1));
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "@b.rs ");
+}
+
+#[test]
+fn lx_mention_rejects_stale_select_without_panel() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    // 无面板时点选不应改写输入。
+    assert!(!select_lx_mention(&mut state, pane, 0));
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "");
+}
+
+#[test]
+fn lx_paste_panel_keeps_priority_over_mention() {
+    use crate::app::paste::{PasteCandidate, PasteCandidateKind};
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    seed_lx_mention(
+        &mut state,
+        pane,
+        "@main",
+        vec![MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.mention_open());
+    // 打开粘贴面板：二者互斥，粘贴优先。
+    {
+        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
+        assert!(lx.paste_open(vec![PasteCandidate::external(
+            PathBuf::from("/tmp/dir"),
+            PasteCandidateKind::Folder,
+        )]));
+    }
+    assert!(!state.pane_anywhere(pane).expect("pane").lx.mention_open());
+    // 粘贴面板打开时 Enter 走粘贴确认，不触发提及采纳。
+    apply_lx_input(&mut state, LxInput::Enter);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .paste_panel()
+            .is_none()
+    );
+}
+
+#[test]
+fn lx_shift_enter_does_not_newline_when_mention_panel_visible() {
+    // 扫描中（缓存未到）：状态行可见即吞键。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    set_pane_cwd(&mut state, pane, "/root");
+    sync_lx_mention_root(&mut state, pane);
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .mention_visible()
+    );
+    apply_lx_input(&mut state, LxInput::EnterFolder);
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "@",
+        "扫描中面板可见时 Shift+Enter 不换行"
+    );
+
+    // 空结果状态行同样吞键。
+    let mut empty = AppState::demo();
+    let pane = empty.active_tab().layout.focus();
+    set_pane_cwd(&mut empty, pane, "/root");
+    seed_lx_mention(&mut empty, pane, "@", Vec::new());
+    assert!(
+        empty
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .mention_visible()
+    );
+    apply_lx_input(&mut empty, LxInput::EnterFolder);
+    assert_eq!(empty.pane_anywhere(pane).expect("pane").lx.input, "@");
+
+    // 高亮文件：Shift+Enter 不误换行。
+    let mut file_state = AppState::demo();
+    let pane = file_state.active_tab().layout.focus();
+    set_pane_cwd(&mut file_state, pane, "/root");
+    seed_lx_mention(
+        &mut file_state,
+        pane,
+        "@main",
+        vec![MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+    apply_lx_input(&mut file_state, LxInput::EnterFolder);
+    assert_eq!(
+        file_state.pane_anywhere(pane).expect("pane").lx.input,
+        "@main",
+        "文件高亮时 Shift+Enter 不换行"
+    );
+}

@@ -1963,6 +1963,62 @@ fn rendered_area(lines: &[String], area: Rect) -> String {
 }
 
 #[test]
+fn lx_pane_bottom_border_shows_cwd_path() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    // pane cwd 优先于工作区 cwd。
+    update::update_pane_cwd(&mut state, pane, Path::new("/work/demo"), "demo".into());
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects[0];
+    let lines = render_lines(&state);
+    let bottom: String = lines[usize::from(rect.bottom() - 1)]
+        .chars()
+        .skip(usize::from(rect.x) + 2)
+        .take("/work/demo".chars().count())
+        .collect();
+    assert_eq!(bottom, "/work/demo", "lx pane 底边左侧显示有效路径");
+
+    // 切到终端视图不显示路径。
+    update::toggle_pane_view(&mut state, pane);
+    let lines = render_lines(&state);
+    let bottom: String = lines[usize::from(rect.bottom() - 1)]
+        .chars()
+        .skip(usize::from(rect.x) + 2)
+        .take("work/demo".chars().count())
+        .collect();
+    assert_ne!(bottom, "/work/demo", "终端视图不显示 lx 路径");
+}
+
+#[test]
+fn lx_pane_bottom_border_keeps_corners_and_narrow_path() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects[0];
+    // 超长路径：底边仍保留左右角字符与两侧一格。
+    let long = format!("/very/long/{}", "x".repeat(200));
+    update::update_pane_cwd(&mut state, pane, Path::new(&long), "x".into());
+    let lines = render_lines(&state);
+    let bottom: Vec<char> = lines[usize::from(rect.bottom() - 1)].chars().collect();
+    assert_eq!(bottom[usize::from(rect.x)], '╰', "保留左下角");
+    assert_eq!(bottom[usize::from(rect.right() - 1)], '╯', "保留右下角");
+}
+
+#[test]
 fn pane_title_and_toggle_label_follow_view() {
     let mut state = AppState::demo();
     let config = Config::default();

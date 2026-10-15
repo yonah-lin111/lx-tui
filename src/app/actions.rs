@@ -42,6 +42,8 @@ pub enum LxInput {
     Char(char),
     /// Shift+Enter / Ctrl+Enter：换行（Enter 预留给发送）。
     Newline,
+    /// Shift+Enter：`@` 提及面板高亮目录可进入时进入该目录；未消费时同 `Newline`。
+    EnterFolder,
     Backspace,
     Delete,
     Left,

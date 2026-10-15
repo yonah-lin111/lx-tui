@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::{main_content, style, text, widgets};
 use crate::app::state::{AppState, LxEntry, Pane, PaneKind, PaneView};
@@ -51,6 +51,14 @@ pub(crate) fn render_panes(
             .title(title_line);
         let inner = block.inner(*rect);
         frame.render_widget(block, *rect);
+        // lx pane 底边左侧显示有效 cwd；只读渲染，不修改窗格状态。
+        if pane.view == PaneView::Lx {
+            let path = pane
+                .cwd
+                .clone()
+                .or_else(|| state.workspace_cwd_for_pane(*id));
+            render_pane_bottom_path(frame, *rect, path.as_deref());
+        }
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -163,4 +171,47 @@ fn render_border_right_label(
 /// 窗格标题：空占位与终端走通用标题规则。
 fn pane_display_title(id: PaneId, pane: &Pane) -> String {
     text::pane_title(id, pane.terminal.title(), pane.cwd_label.as_deref())
+}
+
+/// lx pane 底边框左侧绘制有效 cwd：保留左右角与两侧一格间距。
+///
+/// 完整路径放不下改末段；末段仍放不下按终端列宽截断加 `…`；放不下省略号则不绘制。
+/// 覆盖底边内段 `─`，不改写角字符；使用与边框标题一致的颜色。
+fn render_pane_bottom_path(frame: &mut Frame<'_>, rect: Rect, path: Option<&std::path::Path>) {
+    if rect.height < 2 || rect.width < 4 {
+        return;
+    }
+    let Some(path) = path else {
+        return;
+    };
+    // 两侧角各留 1 列，内段两侧再各留 1 列空白。
+    let available = usize::from(rect.width.saturating_sub(4));
+    let Some(label) = text::pane_bottom_path(path, available) else {
+        return;
+    };
+    let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
+    if width == 0 {
+        return;
+    }
+    let y = rect.bottom() - 1;
+    let x = rect.x + 2;
+    let buf = frame.buffer_mut();
+    let mut cx = x;
+    for ch in label.chars() {
+        let cell_width = ch.width().unwrap_or(1).max(1);
+        if let Some(cell) = buf.cell_mut((cx, y)) {
+            cell.reset();
+            cell.set_char(ch);
+            cell.set_style(style::border_title());
+        }
+        // 宽字符占位：后续列清成空白，覆盖底边 `─` 与半个字符。
+        for offset in 1..cell_width {
+            if let Some(cell) = buf.cell_mut((cx.saturating_add(offset as u16), y)) {
+                cell.reset();
+                cell.set_char(' ');
+                cell.set_style(style::border_title());
+            }
+        }
+        cx = cx.saturating_add(cell_width as u16);
+    }
 }

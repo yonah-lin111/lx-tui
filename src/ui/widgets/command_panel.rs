@@ -41,6 +41,16 @@ pub enum CommandItem<'a> {
     },
 }
 
+/// 面板相对锚点行的放置偏好。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelPlacement {
+    /// 按锚点行上下的可用空间择优。
+    #[default]
+    Auto,
+    /// 始终绘制在锚点行上方（空间不足时缩高，绝不覆盖锚点行）。
+    Above,
+}
+
 /// 面板视图：条目、高亮索引、窗口锚点/显式视口、锚点行与最大高度。
 ///
 /// `anchor_row` 为内容区内的视觉行；面板绘制在其上方或下方，不覆盖该行。
@@ -51,6 +61,10 @@ pub enum CommandItem<'a> {
 ///
 /// `title` / `right_title` 绘制在顶边左右两端，`footer` 绘制在底边左端；
 /// 三者均参与面板宽度计算，可用宽度不足时由 Block 自然截断。
+///
+/// `width` 强制面板宽度（含边框），用于需要与锚定控件等宽的面板；None 时按内容收缩。
+/// `placement` 控制相对锚点行的放置；`Above` 用于必须紧贴锚点行上方的面板。
+#[derive(Default)]
 pub struct CommandPanelView<'a> {
     pub items: &'a [CommandItem<'a>],
     pub active: usize,
@@ -65,6 +79,10 @@ pub struct CommandPanelView<'a> {
     pub right_title: Option<&'a str>,
     /// 底边左侧快捷键提示。
     pub footer: Option<&'a str>,
+    /// 强制面板宽度（含边框）；None 表示按内容收缩。
+    pub width: Option<u16>,
+    /// 相对锚点行的放置偏好。
+    pub placement: PanelPlacement,
 }
 
 /// 面板布局：面板矩形、条目内容区、滚动条、首个可见条目与可见条目数。
@@ -93,7 +111,11 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         .height
         .saturating_sub(view.anchor_row.saturating_add(1));
     let above = view.anchor_row;
-    let place_below = below >= needed || below >= above;
+    let place_below = match view.placement {
+        PanelPlacement::Auto => below >= needed || below >= above,
+        // 强制上方：绝不覆盖锚点行；空间不足时缩高（可能小于正式高度而放弃）。
+        PanelPlacement::Above => false,
+    };
     let space = if place_below { below } else { above };
     let height = needed.min(space);
     if height < MIN_HEIGHT {
@@ -127,9 +149,12 @@ pub fn layout(area: Rect, view: &CommandPanelView<'_>) -> Option<PanelLayout> {
         return None;
     }
     let overflow = view.items.len() > visible;
-    let width = panel_width(area.width, view)
-        .saturating_add(u16::from(overflow))
-        .min(area.width);
+    let width = match view.width {
+        Some(width) => width.min(area.width).max(MIN_WIDTH),
+        None => panel_width(area.width, view)
+            .saturating_add(u16::from(overflow))
+            .min(area.width),
+    };
     let rect = Rect::new(area.x, y, width, height);
     let inner = inner_rect(rect);
     let scrollbar = if overflow {

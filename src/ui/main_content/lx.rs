@@ -17,6 +17,10 @@ use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
+mod mention;
+
+pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
+
 /// 宽字符占位单元格的标记；不参与绘制与取词。
 const CONTINUATION: char = '\0';
 
@@ -124,6 +128,8 @@ pub fn render(
         }
     }
     render_input_scrollbar(area, buf, lx);
+    // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
+    mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
     cursor
 }
@@ -181,6 +187,11 @@ impl InputGeom {
         let col = column.clamp(self.content_x, right) - self.content_x;
         (visual_row, col)
     }
+}
+
+/// lx 输入框几何（含边框）；（绝对屏幕坐标）；供提及面板贴附计算。
+pub(crate) fn input_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    layout(area, lx).input
 }
 
 /// lx 输入框文本区几何；`area` 为窗格内容区。
@@ -271,6 +282,7 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
         footer: None,
+        ..Default::default()
     };
     let panel_area = Rect::new(content_x, area.y, content_w, region_h);
     command_panel::render(panel_area, buf, &view);

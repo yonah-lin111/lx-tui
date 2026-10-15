@@ -272,7 +272,19 @@ pub(crate) fn handle_mouse_wheel(
             .pane_anywhere(pane)
             .is_some_and(|target| target.view == PaneView::Lx)
         {
-            // lx 页唯一可滚动的是输入缓冲区：滚轮滚动其视口，不穿透到隐藏终端。
+            // lx 页：提及面板候选视口优先于输入框滚动；面板内滚轮不穿透到输入框。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(bar) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::mention_layout(inner, &target.lx))
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_lx_mention(state, pane, direction, bar.start) {
+                    *dirty = true;
+                }
+                return;
+            }
+            // 提及面板外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && update::scroll_lx_input(state, pane, direction)
             {
