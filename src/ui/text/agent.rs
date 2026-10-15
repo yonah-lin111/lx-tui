@@ -1,0 +1,250 @@
+//! `agent` 步骤调用样例册的用户可见文案（`[UI]` 查看器 `agent` 分组）。
+//!
+//! 文案仍集中在 `text` 模块；拆到此子模块只为把 `text.rs` 控制在单文件行数上限内。
+//! 结构（图标、状态、token 数值）由 `ui/overlay/ui_gallery/agent.rs` 提供，本模块只放字符串。
+
+/// `agent` 分组文件夹展示名。
+pub const FOLDER: &str = "agent";
+
+/// 步骤 item 展示名。
+pub const EXEC: &str = "exec";
+pub const READ: &str = "read";
+pub const EDIT: &str = "edit";
+pub const WRITE: &str = "write";
+pub const SEARCH: &str = "search";
+pub const WEB: &str = "web";
+pub const THINKING: &str = "thinking";
+pub const SUBAGENT: &str = "subagent";
+pub const TODO: &str = "todo";
+pub const MCP: &str = "mcp";
+pub const COMPACT: &str = "compact";
+pub const MODE: &str = "mode";
+pub const FINAL: &str = "final";
+pub const ERROR: &str = "error";
+pub const QUESTION: &str = "question";
+pub const TOKENS: &str = "tokens";
+
+/// 四套候选样式的一行标签（`a`/`b`/`c`/`d` 与风格短名）。
+pub const VARIANT_A: &str = "codex bullet tree";
+pub const VARIANT_B: &str = "claude dot tree";
+pub const VARIANT_C: &str = "opencode glyph";
+pub const VARIANT_D: &str = "lx right-angle";
+
+/// 步骤图标（全部为单一显示宽度、跨平台可打印字符；`lx` 套使用，其余风格各自套用原生标记）。
+///
+/// 避免 emoji 与东亚宽字符（如 `☰`），防止在部分终端占两列破坏对齐；偏向直角与几何符号。
+pub const ICON_EXEC: &str = "$";
+pub const ICON_READ: &str = "∟";
+pub const ICON_WRITE: &str = "¬";
+pub const ICON_EDIT: &str = "±";
+pub const ICON_SEARCH: &str = "⌕";
+pub const ICON_WEB: &str = "⌘";
+pub const ICON_THINKING: &str = "~";
+pub const ICON_SUBAGENT: &str = "∞";
+pub const ICON_TODO: &str = "≡";
+pub const ICON_MCP: &str = "⇄";
+pub const ICON_COMPACT: &str = "⋯";
+pub const ICON_MODE: &str = "⇆";
+pub const ICON_FINAL: &str = "●";
+pub const ICON_ERROR: &str = "!";
+pub const ICON_QUESTION: &str = "?";
+pub const ICON_TOKENS: &str = "%";
+
+/// opencode 原生工具图标（`c` 套使用；均为单宽）。
+pub const OPEN_ICON_EXEC: &str = "$";
+pub const OPEN_ICON_READ: &str = "→";
+pub const OPEN_ICON_WRITE: &str = "←";
+pub const OPEN_ICON_EDIT: &str = "←";
+pub const OPEN_ICON_SEARCH: &str = "✱";
+pub const OPEN_ICON_WEB: &str = "◈";
+pub const OPEN_ICON_THINKING: &str = "~";
+pub const OPEN_ICON_SUBAGENT: &str = "✓";
+pub const OPEN_ICON_TODO: &str = "⚙";
+pub const OPEN_ICON_MCP: &str = "⚙";
+pub const OPEN_ICON_COMPACT: &str = "-";
+pub const OPEN_ICON_MODE: &str = ">";
+pub const OPEN_ICON_FINAL: &str = "▣";
+pub const OPEN_ICON_ERROR: &str = "✗";
+pub const OPEN_ICON_QUESTION: &str = "→";
+
+/// 结构标记（可见符号集中处；均为单宽、跨平台）。
+pub const MARKER_BULLET: &str = "•";
+/// claude code 的工具调用圆点（与项目状态圆点区分）。
+pub const MARKER_CLAUDE_DOT: &str = "⏺";
+pub const MARKER_DOT: &str = "●";
+pub const MARKER_TREE_LEAF: &str = "└─";
+pub const MARKER_TREE_TEE: &str = "├─";
+pub const MARKER_TREE_BRANCH: &str = "│";
+pub const MARKER_DETAIL: &str = "↳";
+/// todo 三态标记（各套样式；索引 0=d。此常量仅占位，实际按风格在渲染层取用）。
+pub const TODO_DONE_CODEX: &str = "✔";
+pub const TODO_PENDING_CODEX: &str = "□";
+pub const TODO_DONE_CLAUDE: &str = "✔";
+pub const TODO_INPROG_CLAUDE: &str = "◼";
+pub const TODO_PENDING_CLAUDE: &str = "◻";
+pub const TODO_DONE_BRACKET: &str = "[✓]";
+pub const TODO_INPROG_BRACKET: &str = "[•]";
+pub const TODO_PENDING_BRACKET: &str = "[ ]";
+
+/// token 页脚的标签与分隔符（对齐 lx-agent 的 `IN · OUT · CACHE`）。
+pub const TOKEN_IN: &str = "IN";
+pub const TOKEN_OUT: &str = "OUT";
+pub const TOKEN_CACHE: &str = "CACHE";
+pub const SEPARATOR: &str = " · ";
+
+/// claude 套的工具名（`Name(args)` 头部）。
+pub const NAME_EXEC: &str = "Bash";
+pub const NAME_READ: &str = "Read";
+pub const NAME_EDIT: &str = "Edit";
+pub const NAME_WRITE: &str = "Write";
+pub const NAME_SEARCH: &str = "Grep";
+pub const NAME_WEB: &str = "WebSearch";
+pub const NAME_THINKING: &str = "Thinking";
+pub const NAME_SUBAGENT: &str = "Task";
+pub const NAME_TODO: &str = "TodoWrite";
+pub const NAME_MCP: &str = "Mcp";
+pub const NAME_COMPACT: &str = "Compact";
+pub const NAME_MODE: &str = "Mode";
+pub const NAME_FINAL: &str = "Assistant";
+pub const NAME_ERROR: &str = "Bash";
+pub const NAME_QUESTION: &str = "Question";
+
+/// 步骤动词（codex / claude / lx 套头部使用）。
+pub const VERB_EXEC: &str = "Ran";
+pub const VERB_READ: &str = "Read";
+pub const VERB_EDIT: &str = "Edited";
+pub const VERB_WRITE: &str = "Wrote";
+pub const VERB_SEARCH: &str = "Searched";
+pub const VERB_WEB: &str = "Searched web";
+pub const VERB_THINKING: &str = "Thought";
+pub const VERB_SUBAGENT: &str = "Spawned";
+pub const VERB_TODO: &str = "Updated plan";
+pub const VERB_MCP: &str = "Called";
+pub const VERB_COMPACT: &str = "Compacted";
+pub const VERB_MODE: &str = "Switched";
+pub const VERB_FINAL: &str = "Replied";
+pub const VERB_ERROR: &str = "Failed";
+pub const VERB_QUESTION: &str = "Asked";
+
+/// 步骤主参数（紧跟动词后的细节串）。
+pub const DETAIL_EXEC: &str = "git status";
+pub const DETAIL_READ: &str = "src/ui/style.rs";
+pub const DETAIL_EDIT: &str = "src/app/state.rs";
+pub const DETAIL_WRITE: &str = "docs/notes.md";
+pub const DETAIL_SEARCH: &str = "\"fn render\" in src/";
+pub const DETAIL_WEB: &str = "\"ratatui 0.30\"";
+pub const DETAIL_THINKING: &str = "for 2.4s";
+pub const DETAIL_SUBAGENT: &str = "explorer";
+pub const DETAIL_TODO: &str = "3 steps";
+pub const DETAIL_MCP: &str = "filesystem · read_file";
+pub const DETAIL_COMPACT: &str = "12.4k → 3.1k tokens";
+pub const DETAIL_MODE: &str = "default → plan";
+pub const DETAIL_FINAL: &str = "1 paragraph";
+pub const DETAIL_ERROR: &str = "cargo test";
+pub const DETAIL_QUESTION: &str = "Overwrite the existing file?";
+
+/// 步骤子行（直角树连接下的细节）。
+pub const BODY_EXEC: &[&str] = &["On branch dev", "nothing to commit, working tree clean"];
+pub const BODY_READ: &[&str] = &[
+    "1  //! semantic style tokens",
+    "2  pub fn text() -> Style {",
+];
+/// edit 的 diff 计数行（`+`/`-` 分色）与紧随的正文行。
+pub const EDIT_DIFF_ADD: &str = "+12";
+pub const EDIT_DIFF_DEL: &str = "-4";
+pub const EDIT_DIFF_PATH: &str = "src/app/state.rs";
+pub const EDIT_BODY: &[&str] = &["2  pub struct AppState {"];
+pub const BODY_WRITE: &[&str] = &["docs/notes.md (+18 lines)"];
+pub const BODY_SEARCH: &[&str] = &[
+    "src/ui/style.rs:14  pub fn text()",
+    "src/ui/style.rs:19  pub fn muted()",
+];
+pub const BODY_WEB: &[&str] = &["ratatui 0.30 released", "docs.rs/ratatui/0.30"];
+pub const BODY_THINKING: &[&str] = &["Plan the module split, then verify with tests."];
+/// subagent 子任务（每个子任务各自另带一行 token，由渲染层生成）。
+pub const SUBAGENT_CHILD_A: &str = "read src/ui/style.rs";
+pub const SUBAGENT_CHILD_B: &str = "grep \"fn render\"";
+pub const BODY_MCP: &[&str] = &["filesystem · read_file", "ok · 128 lines"];
+pub const BODY_FINAL: &[&str] = &["Added the agent gallery folder and its variants."];
+pub const BODY_ERROR: &[&str] = &["exit code 1 · 2 failures"];
+pub const BODY_QUESTION: &[&str] = &["Overwrite the existing file?", "[yes] [no]"];
+
+/// `tokens` 聚合 item：回合汇总条与上下文占用 pill 的样例片段。
+///
+/// 每条汇总条的 `IN/OUT/CACHE` 明细由渲染层用 `format_tokens` 生成，
+/// 这里只放各风格特有的前后缀文案。
+pub const TOKENS_BAR_A: &str = "3 tools · 12k tokens";
+pub const TOKENS_BAR_B: &str = "3 tool uses · 12.4k tokens";
+pub const TOKENS_BAR_B_SUB: &str = "(↓ · 1.0k tokens) · took 4.5s";
+pub const TOKENS_BAR_C: &str = "3 calls · 12,400 tokens · 42% used";
+pub const TOKENS_BAR_C_SUB: &str = "context · 42% used · $0.12";
+/// `d`（lx）汇总条前缀：`3 calls · ` 后接格式化 token 明细。
+pub const TOKENS_BAR_D_LEAD: &str = "3 calls · ";
+pub const TOKENS_PILL_LABEL: &str = "context";
+/// 上下文 pill 的三个占用阈值样例（绿 / 黄 / 红）与占用百分比。
+pub const TOKENS_PILL_GREEN: u8 = 42;
+pub const TOKENS_PILL_YELLOW: u8 = 78;
+pub const TOKENS_PILL_RED: u8 = 92;
+
+/// 右侧用途说明（逐行 muted 渲染）。
+pub const EXEC_DESC: &[&str] = &[
+    "Shell command call: verb, command and its output",
+    "under a right-angle connector; token footer below.",
+];
+pub const READ_DESC: &[&str] = &[
+    "File / directory read: path plus the first lines,",
+    "with the same token footer as every other step.",
+];
+pub const EDIT_DESC: &[&str] = &[
+    "File edit: path, +/- line counts and a small diff,",
+    "then the step token footer.",
+];
+pub const WRITE_DESC: &[&str] = &[
+    "New or overwritten file: path and added line count,",
+    "then the step token footer.",
+];
+pub const SEARCH_DESC: &[&str] = &[
+    "Content / glob search: pattern, scope and matches,",
+    "then the step token footer.",
+];
+pub const WEB_DESC: &[&str] = &[
+    "Web search or fetch: query / URL and the result,",
+    "then the step token footer.",
+];
+pub const THINKING_DESC: &[&str] = &[
+    "Reasoning step: a muted, collapsed summary line",
+    "with the step token footer.",
+];
+pub const SUBAGENT_DESC: &[&str] = &[
+    "Sub-agent (Task) spawn: a child tree where every",
+    "child also carries its own token line.",
+];
+pub const TODO_DESC: &[&str] = &[
+    "Plan / todo update: checkbox list ([x] [•] [ ]),",
+    "then the step token footer.",
+];
+pub const MCP_DESC: &[&str] = &[
+    "MCP tool call: server and method, then the result,",
+    "with the step token footer.",
+];
+pub const COMPACT_DESC: &[&str] = &[
+    "Context compaction divider: tokens before and after",
+    "the compaction.",
+];
+pub const MODE_DESC: &[&str] = &["Mode / model switch divider: from and to values."];
+pub const FINAL_DESC: &[&str] = &[
+    "Final assistant reply: the answer text followed by",
+    "the step token footer.",
+];
+pub const ERROR_DESC: &[&str] = &[
+    "Failed or interrupted call: failure marker (red)",
+    "with the error detail and step token footer.",
+];
+pub const QUESTION_DESC: &[&str] = &[
+    "Ask-the-user step: the question and its options,",
+    "then the step token footer.",
+];
+pub const TOKENS_DESC: &[&str] = &[
+    "Token usage: per-step footers plus the turn summary",
+    "bar and the context-usage pill.",
+];

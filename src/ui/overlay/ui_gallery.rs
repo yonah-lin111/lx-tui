@@ -3,6 +3,11 @@
 //! 全屏覆盖（蓝色外框、无底色）内部左区固定 24 列展示组件树，右区占剩余宽度，
 //! 按选中组件渲染其**真实外观**（复用组件自身样式与尺寸，不额外包裹样例框），
 //! 并在右区**水平居中**。
+//!
+//! `agent` 分组的组件由子模块 [`agent`] 渲染：每个步骤叠放四套候选样式，
+//! 且每套各带 token 页脚。
+
+mod agent;
 
 use ratatui::Frame;
 use ratatui::buffer::Buffer;
@@ -187,6 +192,9 @@ fn render_preview(frame: &mut Frame<'_>, layout: &UiGalleryLayout, gallery: &UiG
 
 /// 组件的自然尺寸（宽、高），按可用区域夹取。
 fn appearance_size(id: UiGalleryComponentId, available: Rect) -> (u16, u16) {
+    if let Some(step) = agent::agent_step_of(id) {
+        return agent::agent_appearance_size(step, available);
+    }
     let text_width = |s: &str| s.chars().count() as u16;
     let (width, height) = match id {
         UiGalleryComponentId::Toast => (text_width(text::UI_GALLERY_TOAST_SAMPLE) + 4, 3),
@@ -215,12 +223,18 @@ fn appearance_size(id: UiGalleryComponentId, available: Rect) -> (u16, u16) {
         ),
         UiGalleryComponentId::ReferencedFolders => (48, 7),
         UiGalleryComponentId::FolderSearch => (48, 9),
+        // `agent` 分组在函数开头提前返回。
+        UiGalleryComponentId::Agent(_) => (48, 8),
     };
     (width.min(available.width), height.min(available.height))
 }
 
 /// 在已定尺寸的 `rect` 内渲染组件真实外观。
 fn render_appearance(frame: &mut Frame<'_>, rect: Rect, id: UiGalleryComponentId) {
+    if let Some(step) = agent::agent_step_of(id) {
+        agent::render_agent_appearance(frame.buffer_mut(), rect, step);
+        return;
+    }
     match id {
         UiGalleryComponentId::Toast => {
             render_toast_like(frame, rect, text::UI_GALLERY_TOAST_SAMPLE)
@@ -237,6 +251,7 @@ fn render_appearance(frame: &mut Frame<'_>, rect: Rect, id: UiGalleryComponentId
         UiGalleryComponentId::PromptToolbar => render_prompt_toolbar_like(frame, rect),
         UiGalleryComponentId::ReferencedFolders => render_referenced_folders_like(frame, rect),
         UiGalleryComponentId::FolderSearch => render_folder_search_like(frame, rect),
+        UiGalleryComponentId::Agent(_) => {}
     }
 }
 

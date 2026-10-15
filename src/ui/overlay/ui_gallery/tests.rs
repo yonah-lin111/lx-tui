@@ -8,7 +8,7 @@ use ratatui::style::Color;
 
 use crate::app::overlay::Overlay;
 use crate::app::state::AppState;
-use crate::app::ui_gallery::{UiGallery, UiGalleryComponentId, UiGalleryFolderId};
+use crate::app::ui_gallery::{AgentStepId, UiGallery, UiGalleryComponentId, UiGalleryFolderId};
 
 /// 渲染整屏并返回文本行。
 fn render_lines(state: &AppState, width: u16, height: u16) -> Vec<String> {
@@ -123,9 +123,70 @@ fn render_shows_title_tree_and_hint() {
     assert!(all.contains(text::UI_GALLERY_TITLE));
     assert!(all.contains(UiGalleryFolderId::Global.label()));
     assert!(all.contains(UiGalleryFolderId::Prompt.label()));
+    assert!(all.contains(UiGalleryFolderId::Agent.label()));
     assert!(all.contains(UiGalleryComponentId::Toast.label()));
     assert!(all.contains(text::UI_GALLERY_HINT));
     assert!(all.contains(text::AGENT_SELECTED_MARKER));
+}
+
+#[test]
+fn selecting_an_agent_step_renders_four_variants_with_tokens() {
+    let mut state = gallery_state();
+    let step = AgentStepId::Exec;
+    let index = {
+        let Some(Overlay::UiGallery(gallery)) = state.overlay.as_ref() else {
+            panic!("gallery overlay open");
+        };
+        gallery
+            .rows()
+            .iter()
+            .position(|row| {
+                row.node
+                    == crate::app::ui_gallery::UiGalleryNode::Component(
+                        UiGalleryComponentId::Agent(step),
+                    )
+            })
+            .expect("agent exec row")
+    };
+    if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
+        gallery.set_selected(index);
+    }
+    let lines = render_lines(&state, 100, 44);
+    let layout = ui_gallery_layout(Rect::new(0, 0, 100, 44)).expect("gallery fits");
+    // 只取右侧预览区。
+    let preview: String = lines
+        .iter()
+        .map(|line| {
+            line.chars()
+                .skip(usize::from(layout.right.x))
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(preview.contains(text::agent::VARIANT_A));
+    assert!(preview.contains(text::agent::VARIANT_B));
+    assert!(preview.contains(text::agent::VARIANT_C));
+    assert!(preview.contains(text::agent::VARIANT_D));
+    assert!(
+        preview.contains(text::agent::TOKEN_IN),
+        "每步应带 token 页脚"
+    );
+}
+
+#[test]
+fn collapsed_agent_folder_hides_its_steps_in_render() {
+    let mut state = gallery_state();
+    if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
+        gallery.toggle_folder(UiGalleryFolderId::Agent);
+    }
+    let lines = render_lines(&state, 100, 30);
+    let tree_text: String = lines
+        .iter()
+        .map(|line| line.chars().take(24).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(tree_text.contains(UiGalleryFolderId::Agent.label()));
+    assert!(!tree_text.contains(AgentStepId::Exec.label()));
 }
 
 #[test]
@@ -180,12 +241,20 @@ fn collapsed_folder_hides_component_rows_in_render() {
 
 #[test]
 fn render_does_not_panic_on_each_component() {
-    for index in 0..14 {
+    let row_count = gallery_state()
+        .overlay
+        .as_ref()
+        .and_then(|overlay| match overlay {
+            Overlay::UiGallery(gallery) => Some(gallery.rows().len()),
+            _ => None,
+        })
+        .expect("gallery overlay");
+    for index in 0..row_count {
         let mut state = gallery_state();
         if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
             gallery.set_selected(index);
         }
-        let _ = render_lines(&state, 100, 30);
+        let _ = render_lines(&state, 100, 40);
     }
 }
 

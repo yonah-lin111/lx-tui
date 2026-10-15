@@ -119,6 +119,65 @@ pub fn agent_status(state: AgentState) -> Style {
     }
 }
 
+/// Agent 步骤状态标记：成功绿实心、失败/中断红实心、进行中次要信息（与 `agent_status` 同色系）。
+pub fn agent_ok() -> Style {
+    Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Agent 步骤失败/中断标记（Red 加粗）。
+pub fn agent_fail() -> Style {
+    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+}
+
+/// Agent 步骤进行中标记（次要信息）。
+pub fn agent_pending() -> Style {
+    muted()
+}
+
+/// Agent 步骤工具名/参数标识：强调色，与正文一眼区分（对齐三家参考）。
+pub fn agent_step_name() -> Style {
+    accent()
+}
+
+/// Agent 步骤子细节/输出：次要信息（codex/opencode 的 dim 输出）。
+pub fn agent_step_detail() -> Style {
+    muted()
+}
+
+/// Agent 思考/推理正文：次要信息 + 斜体（对齐 codex 的 reasoning 呈现）。
+pub fn agent_reasoning() -> Style {
+    Style::default().add_modifier(Modifier::DIM | Modifier::ITALIC)
+}
+
+/// diff 新增行计数与前缀：Green。
+pub fn agent_added() -> Style {
+    Style::default().fg(Color::Green)
+}
+
+/// diff 删除行计数与前缀：Red。
+pub fn agent_removed() -> Style {
+    Style::default().fg(Color::Red)
+}
+
+/// token 页脚整行（lx-agent 的 `IN · OUT · CACHE`）：次要信息，不抢工具主体注意力。
+pub fn agent_tokens() -> Style {
+    muted()
+}
+
+/// 上下文占用 pill 的状态点：占用 ≥ 90% 红、≥ 75% 黄、否则绿（对齐 lx-agent）。
+pub fn agent_context_dot(percent: u8) -> Style {
+    let color = if percent >= 90 {
+        Color::Red
+    } else if percent >= 75 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
 /// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
 ///
 /// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、
