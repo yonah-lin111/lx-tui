@@ -158,15 +158,13 @@ fn render_preview(frame: &mut Frame<'_>, layout: &UiGalleryLayout, gallery: &UiG
         return;
     }
     let Some(component) = gallery.selected_component() else {
+        // 未选中组件（高亮在文件夹行）：提示在右区水平 + 竖直居中。
+        let hint = text::UI_GALLERY_PREVIEW_HINT;
+        let hint_width = (hint.chars().count() as u16).min(right.width);
+        let x = right.x + right.width.saturating_sub(hint_width) / 2;
+        let y = right.y + right.height.saturating_sub(1) / 2;
         let buf = frame.buffer_mut();
-        put_text(
-            buf,
-            right.x,
-            right.y,
-            text::UI_GALLERY_PREVIEW_HINT,
-            style::muted(),
-            right.right(),
-        );
+        put_text(buf, x, y, hint, style::muted(), right.right());
         return;
     };
     let (width, height) = appearance_size(component.id, right);

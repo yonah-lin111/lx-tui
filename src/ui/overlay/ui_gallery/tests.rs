@@ -190,6 +190,33 @@ fn render_does_not_panic_on_each_component() {
 }
 
 #[test]
+fn hint_is_centered_both_ways_without_a_selected_component() {
+    let state = gallery_state(); // 默认高亮 global 文件夹行，无选中组件。
+    let width = 100u16;
+    let height = 30u16;
+    let lines = render_lines(&state, width, height);
+    let layout = ui_gallery_layout(Rect::new(0, 0, width, height)).expect("fits");
+    let hint = text::UI_GALLERY_PREVIEW_HINT;
+    // 找到含提示文字的行。
+    let row = lines
+        .iter()
+        .position(|line| line.contains(hint))
+        .expect("hint rendered");
+    // 竖直居中：行号约在右区中点。
+    let expected_y = layout.right.y + layout.right.height.saturating_sub(1) / 2;
+    assert_eq!(row as u16, expected_y, "提示应竖直居中");
+    // 水平居中：右区内的起始列。
+    let region: Vec<char> = lines[row]
+        .chars()
+        .skip(usize::from(layout.right.x))
+        .collect();
+    let offset = region.iter().position(|ch| *ch != ' ').expect("non-space") as u16;
+    let hint_width = hint.chars().count() as u16;
+    let expected_x = layout.right.width.saturating_sub(hint_width) / 2;
+    assert_eq!(offset, expected_x, "提示应水平居中");
+}
+
+#[test]
 fn preview_component_is_horizontally_centered() {
     let mut state = gallery_state();
     if let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() {
