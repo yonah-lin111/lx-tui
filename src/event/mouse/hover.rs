@@ -78,16 +78,9 @@ pub(crate) fn handle_mouse_moved(
             }
         }
         if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
-            let layout = ui::overlay::referenced_menu_layout(*screen, menu);
-            if let Some(index) =
-                ui::overlay::referenced_menu_row_at(*screen, menu, mouse.column, mouse.row)
-            {
-                if update::set_referenced_menu_selection(state, index) {
-                    *dirty = true;
-                }
-            } else if !layout.area.contains((mouse.column, mouse.row).into())
-                && update::clear_menu_hover(state)
-            {
+            // 悬停只铺悬停底色，不移动 `❯` 选中标记（对齐 prompt 树列表）；离开弹窗清空。
+            let hover = ui::overlay::referenced_menu_row_at(*screen, menu, mouse.column, mouse.row);
+            if update::hover_referenced_menu(state, hover) {
                 *dirty = true;
             }
         }

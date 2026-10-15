@@ -167,7 +167,7 @@ impl App {
         let rows: Vec<&str> = screen.lines().collect();
         let start = rows
             .iter()
-            .position(|line| line.contains("save prompt to folder"))
+            .position(|line| line.contains("Save prompt to folder"))
             .unwrap_or(0);
         for (row, line) in rows.iter().enumerate().skip(start) {
             if line.contains("1/1") || !line.contains('/') {
@@ -306,7 +306,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     assert!(app.wait_for("hello draft"), "draft typed");
     app.click_after(text::PROMPT_SELECT_ALL_LABEL, text::PROMPT_DRAFT_DOT);
     assert!(
-        app.wait_for("save prompt to folder"),
+        app.wait_for("Save prompt to folder"),
         "picker: \n{}",
         app.screen()
     );
@@ -319,14 +319,14 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     app.click_save_draft_root();
     app.settle();
     assert!(
-        app.screen().contains("save prompt to folder"),
+        app.screen().contains("Save prompt to folder"),
         "click selects only: \n{}",
         app.screen()
     );
     // 点击 [save enter] 才执行保存。
     app.click("[save enter]");
     assert!(
-        app.wait_gone("save prompt to folder"),
+        app.wait_gone("Save prompt to folder"),
         "picker closed after confirm: \n{}",
         app.screen()
     );
@@ -371,7 +371,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     app.right_click(col, row);
     assert!(app.wait_for("Rename"), "item menu: \n{}", app.screen());
     app.click("Rename");
-    assert!(app.wait_for("rename prompt"), "rename overlay");
+    assert!(app.wait_for("Rename prompt"), "rename overlay");
     app.send(b"X\r");
     assert!(
         app.wait_for("New promptX"),
@@ -393,7 +393,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     // 点击动作行 → 命名浮层；清空预填名后输入 notes，回车建库并恢复选择器（选中新文件夹）。
     app.click("+ New folder");
     assert!(
-        app.wait_for("new folder"),
+        app.wait_for("New folder"),
         "naming dialog: \n{}",
         app.screen()
     );
@@ -402,13 +402,13 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
     assert!(app.wait_for("notes"), "folder name typed");
     app.send(b"\r");
     assert!(
-        app.wait_for("save prompt to folder"),
+        app.wait_for("Save prompt to folder"),
         "picker restored: \n{}",
         app.screen()
     );
     app.click("[save enter]");
     assert!(
-        app.wait_gone("save prompt to folder"),
+        app.wait_gone("Save prompt to folder"),
         "draft saved into new folder: \n{}",
         app.screen()
     );

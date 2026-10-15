@@ -12,7 +12,7 @@ prompt 右栏的两个浮层命令面板（`ui/widgets/command_panel.rs` 渲染�
 
 目标（右栏 prompt 内）：
 
-1. 两个面板顶边左侧都加标题：块命令面板 `Commands`，@ 面板 `Files`。
+1. 两个面板顶边左侧都加标题：块命令面板 `Commands`，@ 面板 `Files`（后续统一改名：@ 面板标题改为 `@Command`，见 `docs/standards/tui-design-requirements.md`）。
 2. @ 面板支持 Shift+Enter 进入高亮文件夹、Ctrl/Cmd+Z 撤销回退上一级；
    进入后顶边右侧显示当前目录末段名，底边显示两个快捷键。
 
@@ -24,7 +24,7 @@ prompt 右栏的两个浮层命令面板（`ui/widgets/command_panel.rs` 渲染�
 | 2 | 进入后列什么 | 空过滤词只列**直接子项**；继续输入在**该子树内递归模糊匹配**；扫描缓存中无后代的目录不可进入（no-op） |
 | 3 | 回退语义 | 走编辑器撤销（`Ctrl+Z` / `Cmd+Z`）：进入目录是独立可撤销编辑，撤销一次回到上一级（`@src/ui/` → `@src/` → `@`）；不新增专用回退命令 |
 | 4 | 回退物理键 | 无专用键：`Shift+Backspace` 在部分终端不可达，统一用 `Ctrl/Cmd+Z` 撤销回退；`Shift+Delete` 保持普通前删 |
-| 5 | 顶左 title | `Commands` / `Files`（英文，与现有 UI 文案一致） |
+| 5 | 顶左 title | `Commands` / `Files`（英文，与现有 UI 文案一致；@ 面板标题后统一为 `@Command`） |
 | 6 | 顶右目录名 | 当前目录末段名（`ui`），回根不显示；不引入文件夹图标 |
 | 7 | 底边提示 | `[open ⇧↵] [back ^z]`（`^z` 沿用 `[clear ^c]` 记法），底边左对齐、@ 面板常显、计入面板宽度；块面板无底栏 |
 | 8 | 高亮文件时 Shift+Enter | 吞掉 no-op；面板未打开时保持原 `NewlineBelow` |

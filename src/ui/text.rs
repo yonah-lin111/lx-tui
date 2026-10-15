@@ -92,15 +92,15 @@ pub const REFERENCED_MENU_ADD_ROW: &str = "+ add folder…";
 /// 引用文件夹弹窗底边快捷键提示。
 pub const REFERENCED_MENU_FOOTER: &str = "[open ↵] [copy ^c] [del ^d] [close esc]";
 /// 引用文件夹路径输入弹窗标题与占位。
-pub const REFERENCED_INPUT_TITLE: &str = "add folder";
+pub const REFERENCED_INPUT_TITLE: &str = "Add folder";
 pub const REFERENCED_INPUT_PLACEHOLDER: &str = "path to directory";
 /// 引用文件夹删除确认浮层标题。
-pub const REFERENCED_DELETE_TITLE: &str = "remove folder";
+pub const REFERENCED_DELETE_TITLE: &str = "Remove folder";
 pub fn referenced_delete_question(name: &str) -> String {
     format!("remove \"{name}\" from referenced folders?")
 }
 /// 引用文件夹内容搜索弹窗标题与占位、状态与底边快捷键提示。
-pub const REFERENCED_SEARCH_TITLE: &str = "folder contents";
+pub const REFERENCED_SEARCH_TITLE: &str = "Folder contents";
 pub const REFERENCED_SEARCH_PLACEHOLDER: &str = "search files…";
 pub const REFERENCED_SEARCH_LOADING: &str = "scanning…";
 pub const REFERENCED_SEARCH_FAILED: &str = "folder is not accessible";
@@ -144,7 +144,7 @@ pub const PROMPT_SECTION_SAVED: &str = "saved:";
 /// 空白 default temp 在列表中的占位展示名（每个工作区恒保留一条）。
 pub const PROMPT_TEMP_DEFAULT_NAME: &str = "default";
 /// 临时提示词在编辑视图分割线行的标题。
-pub const PROMPT_DRAFT_TITLE: &str = "temp prompt";
+pub const PROMPT_DRAFT_TITLE: &str = "Temp prompt";
 pub const PROMPT_TREE_EXPANDED: &str = "▾";
 pub const PROMPT_TREE_COLLAPSED: &str = "▸";
 pub const PROMPT_TREE_ITEM_ICON: &str = "•";
@@ -154,7 +154,7 @@ pub const PROMPT_TREE_MIDDLE: &str = "├─";
 pub const PROMPT_TREE_EMPTY: &str = "no prompts yet";
 pub const PROMPT_TREE_NO_MATCHES: &str = "no matching prompts";
 /// 临时草稿保存选择器：标题、根层项与新建文件夹动作项。
-pub const SAVE_DRAFT_TITLE: &str = "save prompt to folder";
+pub const SAVE_DRAFT_TITLE: &str = "Save prompt to folder";
 pub const SAVE_DRAFT_ROOT: &str = "/";
 pub const SAVE_DRAFT_NEW_FOLDER: &str = "+ New folder";
 /// 新建提示词与文件夹的默认名（可随后重命名）。
@@ -289,7 +289,7 @@ pub fn default_page_name(index: usize) -> String {
 /// 页菜单动作项与标题。
 pub const MENU_PAGE_NEW: &str = "[add]";
 pub const MENU_PAGE_DELETE: &str = "[del]";
-pub const MENU_TITLE_PAGES: &str = "pages";
+pub const MENU_TITLE_PAGES: &str = "Pages";
 
 /// 模板块状态计数分隔符：`n|m|x`。
 const TEMPLATE_COUNT_SEPARATOR: &str = "|";
@@ -320,30 +320,30 @@ pub fn template_count_segments(counts: &TemplateCounts) -> Vec<(String, Option<T
 }
 
 /// 删除非空页的二次确认标题。
-pub const CONFIRM_DELETE_PAGE_TITLE: &str = "delete page";
+pub const CONFIRM_DELETE_PAGE_TITLE: &str = "Delete page";
 
 /// 重命名与关闭确认浮层标题。
-pub const RENAME_WORKSPACE_TITLE: &str = "rename workspace";
-pub const NEW_WORKSPACE_TITLE: &str = "new workspace";
-pub const RENAME_PROMPT_TITLE: &str = "rename prompt";
-pub const RENAME_FOLDER_TITLE: &str = "rename folder";
-pub const NEW_FOLDER_TITLE: &str = "new folder";
-pub const NEW_PROMPT_TITLE: &str = "new prompt";
+pub const RENAME_WORKSPACE_TITLE: &str = "Rename workspace";
+pub const NEW_WORKSPACE_TITLE: &str = "New workspace";
+pub const RENAME_PROMPT_TITLE: &str = "Rename prompt";
+pub const RENAME_FOLDER_TITLE: &str = "Rename folder";
+pub const NEW_FOLDER_TITLE: &str = "New folder";
+pub const NEW_PROMPT_TITLE: &str = "New prompt";
 /// rename 浮层输入为空时的输入说明占位（工作区与标签共用）。
 pub const RENAME_PLACEHOLDER: &str = "new name";
 /// new workspace 路径输入为空时的输入说明占位。
 pub const NEW_WORKSPACE_PLACEHOLDER: &str = "path to directory";
-pub const RENAME_TAB_TITLE: &str = "rename tab";
-pub const CONFIRM_CLOSE_TITLE: &str = "close workspace";
-pub const CONFIRM_CLOSE_TAB_TITLE: &str = "close tab";
-pub const CONFIRM_CLOSE_PANE_TITLE: &str = "close pane";
-pub const CONFIRM_DELETE_PROMPT_TITLE: &str = "delete prompt";
-pub const CONFIRM_DELETE_FOLDER_TITLE: &str = "delete folder";
-pub const CONFIRM_SWITCH_CWD_TITLE: &str = "switch to ws path";
-pub const CONFIRM_SYNC_WS_CWD_TITLE: &str = "sync ws to terminal path";
+pub const RENAME_TAB_TITLE: &str = "Rename tab";
+pub const CONFIRM_CLOSE_TITLE: &str = "Close workspace";
+pub const CONFIRM_CLOSE_TAB_TITLE: &str = "Close tab";
+pub const CONFIRM_CLOSE_PANE_TITLE: &str = "Close pane";
+pub const CONFIRM_DELETE_PROMPT_TITLE: &str = "Delete prompt";
+pub const CONFIRM_DELETE_FOLDER_TITLE: &str = "Delete folder";
+pub const CONFIRM_SWITCH_CWD_TITLE: &str = "Switch to ws path";
+pub const CONFIRM_SYNC_WS_CWD_TITLE: &str = "Sync ws to terminal path";
 
 /// 信任工作区模态：标题、问题与按钮。
-pub const TRUST_WORKSPACE_TITLE: &str = "trust workspace";
+pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";
 pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
 pub const BUTTON_TRUST: &str = "[trust & open enter]";
 pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
@@ -366,7 +366,7 @@ pub const TRUST_CONSOLE_FOOTER: &str = "[↑/↓] select  [enter] confirm  [esc]
 pub const TRUST_REFUSED_MESSAGE: &str = "workspace not trusted; exiting";
 
 /// worktree 对话框：标题、搜索占位、状态行与条目标记。
-pub const WORKTREE_OPEN_TITLE: &str = "open worktree";
+pub const WORKTREE_OPEN_TITLE: &str = "Open worktree";
 pub const WORKTREE_OPEN_FILTER: &str = "filter worktrees";
 pub const WORKTREE_OPEN_LOADING: &str = "loading…";
 pub const WORKTREE_OPEN_FAILED: &str = "failed to list worktrees";
@@ -570,18 +570,18 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
 }
 
 /// 右键菜单边框标题：目标名缺失时按种类回退。
-pub const MENU_TITLE_WORKSPACE: &str = "workspace";
-pub const MENU_TITLE_WORKSPACES: &str = "workspaces";
-pub const MENU_TITLE_TAB: &str = "tab";
-pub const MENU_TITLE_PANE: &str = "pane";
-pub const MENU_TITLE_PROMPT: &str = "prompt";
-pub const MENU_TITLE_FOLDER: &str = "folder";
-pub const MENU_TITLE_PROMPT_TREE: &str = "prompts";
+pub const MENU_TITLE_WORKSPACE: &str = "Workspace";
+pub const MENU_TITLE_WORKSPACES: &str = "Workspaces";
+pub const MENU_TITLE_TAB: &str = "Tab";
+pub const MENU_TITLE_PANE: &str = "Pane";
+pub const MENU_TITLE_PROMPT: &str = "Prompt";
+pub const MENU_TITLE_FOLDER: &str = "Folder";
+pub const MENU_TITLE_PROMPT_TREE: &str = "Prompts";
 
 /// 浮层命令面板顶边左侧标题：markdown 块命令 / 文件提及 / 斜杠命令 / worktree 选择器。
 pub const BLOCK_PANEL_TITLE: &str = "Commands";
-pub const MENTION_PANEL_TITLE: &str = "Files";
-pub const SLASH_PANEL_TITLE: &str = "Templates";
+pub const MENTION_PANEL_TITLE: &str = "@Command";
+pub const SLASH_PANEL_TITLE: &str = "/Command";
 pub const WORKTREE_PANEL_TITLE: &str = "Worktrees";
 
 /// 斜杠命令面板右侧来源标签（不含方括号）。
@@ -627,7 +627,7 @@ pub const UI_GALLERY_PREVIEW_HINT: &str = "select a component on the left";
 /// 右侧真实外观预览的样例文案（复用真实组件布局与样式绘制）。
 pub const UI_GALLERY_TOAST_SAMPLE: &str = "Copied to clipboard";
 pub const UI_GALLERY_TOOLTIP_SAMPLE: &str = "undo (ctrl+z)";
-pub const UI_GALLERY_MODAL_SAMPLE_TITLE: &str = "close workspace";
+pub const UI_GALLERY_MODAL_SAMPLE_TITLE: &str = "Close workspace";
 pub const UI_GALLERY_MODAL_SAMPLE_BODY: &str = "Close this workspace?";
 pub const UI_GALLERY_MENU_SAMPLE_TITLE: &str = "demo";
 pub const UI_GALLERY_MENU_SAMPLE: [&str; 4] = ["New terminal", "Open prompt", "Rename", "Close"];

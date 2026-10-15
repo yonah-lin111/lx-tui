@@ -63,6 +63,24 @@ pub(crate) fn handle_mouse_down_left(
             }
             return;
         }
+        // 引用文件夹目录弹窗滚动条同上：命中轨道/thumb 时滚动视口后再走浮层点击。
+        if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() {
+            let layout = ui::overlay::referenced_menu_layout(*screen, menu);
+            if let Some(bar) = layout.scrollbar
+                && bar.track.contains((mouse.column, mouse.row).into())
+            {
+                match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                    Some(grab) => state.referenced_menu_scroll_drag = Some(grab),
+                    None => {
+                        let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                        if update::set_referenced_menu_viewport(state, offset, layout.visible()) {
+                            *dirty = true;
+                        }
+                    }
+                }
+                return;
+            }
+        }
         let was_confirm = matches!(
             state.overlay,
             Some(Overlay::ConfirmClose(_) | Overlay::ConfirmSyncWorkspaceCwd(_))

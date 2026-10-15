@@ -110,7 +110,7 @@
 
 ### 3.5 渲染层（`src/ui/prompt.rs` 与 `src/ui/text.rs`）
 
-- 复用 `ui/widgets/command_panel.rs` 渲染斜杠命令面板，标题为 `Templates`；
+- 复用 `ui/widgets/command_panel.rs` 渲染斜杠命令面板，标题为 `Templates`（后续统一改名：`/Command`）；
 - 渲染模板开始行时，在行末右侧计算并绘制 `[todo]/[run]/[done] [copy] [clean] [del]` 操作按钮；
 - 用户可见文案（命令描述、按钮文字、提示语）集中收敛至 `src/ui/text.rs`。
 

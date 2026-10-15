@@ -105,6 +105,8 @@ fn referenced_menu_overlay() -> Overlay {
             ReferencedFolderMenuRow::Add,
         ],
         selected: 0,
+        hover: None,
+        viewport: None,
     })
 }
 

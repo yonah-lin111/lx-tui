@@ -39,6 +39,8 @@ pub fn open_referenced_folder_menu(state: &mut AppState, anchor: (u16, u16)) -> 
         key: Some(key),
         rows,
         selected,
+        hover: None,
+        viewport: None,
     }));
     true
 }
@@ -206,7 +208,7 @@ fn edit_text_input(input: &mut TextInput, key: crate::app::actions::OverlayKey) 
     }
 }
 
-/// 引用文件夹菜单键盘/鼠标选中项。
+/// 引用文件夹菜单点击/键盘选中项：移动 `❯` 选中标记；越界忽略；返回是否变化。
 pub fn set_referenced_menu_selection(state: &mut AppState, index: usize) -> bool {
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
         return false;
@@ -220,7 +222,22 @@ pub fn set_referenced_menu_selection(state: &mut AppState, index: usize) -> bool
     changed
 }
 
-/// 引用文件夹菜单上下移动高亮；越界钳制。
+/// 引用文件夹菜单指针悬停行：仅记录悬停行（铺悬停底色），不移动 `❯` 选中标记；返回是否变化。
+///
+/// 与 prompt 树列表一致：hover 只提供背景反馈，`❯` 只在点击/键盘操作时移动。
+pub fn hover_referenced_menu(state: &mut AppState, hover: Option<usize>) -> bool {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let hover = hover.filter(|index| *index < menu.rows.len());
+    if menu.hover == hover {
+        return false;
+    }
+    menu.hover = hover;
+    true
+}
+
+/// 引用文件夹菜单上下移动高亮；越界钳制不循环；键盘移动清空显式视口，窗口重新跟随高亮。
 pub fn move_referenced_menu_selection(state: &mut AppState, delta: isize) -> bool {
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
         return false;
@@ -230,11 +247,50 @@ pub fn move_referenced_menu_selection(state: &mut AppState, delta: isize) -> boo
         return false;
     }
     let next = (menu.selected as isize + delta).clamp(0, len as isize - 1) as usize;
-    if next == menu.selected && state.menu_hover {
+    // 高亮未移动（已到顶/底）但窗口被滚轮滚开时，仍须把窗口吸回高亮。
+    let moved = next != menu.selected || !state.menu_hover;
+    let snapped = menu.viewport.take().is_some();
+    if !moved && !snapped {
         return false;
     }
     menu.selected = next;
     state.menu_hover = true;
+    true
+}
+
+/// 引用文件夹菜单滚轮滚动视口：显式视口从当前窗口起偏移、越界钳制不循环；高亮不动。
+///
+/// `base` 为当前窗口起点、`visible` 为可视行数；返回视口是否移动。
+pub fn scroll_referenced_menu(
+    state: &mut AppState,
+    delta: isize,
+    base: usize,
+    visible: usize,
+) -> bool {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let max_offset = menu.rows.len().saturating_sub(visible);
+    let current = menu.viewport.unwrap_or(base).min(max_offset);
+    let next = (current as isize + delta).clamp(0, max_offset as isize) as usize;
+    if next == current && menu.viewport.is_some() {
+        return false;
+    }
+    menu.viewport = Some(next);
+    true
+}
+
+/// 设置引用文件夹菜单列表的显式视口起点（滚动条轨道/拖拽）；越界钳制；返回是否变化。
+pub fn set_referenced_menu_viewport(state: &mut AppState, offset: usize, visible: usize) -> bool {
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() else {
+        return false;
+    };
+    let max_offset = menu.rows.len().saturating_sub(visible);
+    let next = offset.min(max_offset);
+    if menu.viewport == Some(next) {
+        return false;
+    }
+    menu.viewport = Some(next);
     true
 }
 

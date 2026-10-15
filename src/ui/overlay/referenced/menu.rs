@@ -14,7 +14,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::overlay::{ReferencedFolderMenu, ReferencedFolderMenuRow};
 use crate::app::referenced::menu_window_start;
 use crate::ui::widgets::clear;
-use crate::ui::{style, text};
+use crate::ui::{style, text, widgets};
 
 use super::{fill_row, paint_text};
 
@@ -39,6 +39,8 @@ pub struct ReferencedMenuLayout {
     pub start: usize,
     /// 行总数。
     pub total: usize,
+    /// 列表滚动条；不溢出时为 None。
+    pub scrollbar: Option<widgets::scrollbar::ScrollbarLayout>,
 }
 
 /// 目录弹窗几何；渲染与鼠标命中共用。
@@ -51,17 +53,47 @@ pub fn referenced_menu_layout(screen: Rect, menu: &ReferencedFolderMenu) -> Refe
     let inner = Block::bordered().inner(area);
     let total = menu.rows.len();
     let visible = usize::from(inner.height);
+    // 列表区固定预留右缘 1 列为滚动条槽（与 prompt 列表一致）。
+    let list = Rect::new(
+        inner.x,
+        inner.y,
+        inner.width.saturating_sub(1),
+        inner.height,
+    );
+    // 显式视口优先（滚轮滚动，高亮允许不在窗口内）；否则窗口跟随高亮。
+    let max_start = total.saturating_sub(visible);
     let selected = menu.selected.min(total.saturating_sub(1));
-    let start = menu_window_start(selected, visible, total);
-    let rows = (0..visible)
-        .filter(|offset| start + offset < total)
-        .map(|offset| Rect::new(inner.x, inner.y + offset as u16, inner.width, 1))
+    let start = menu
+        .viewport
+        .map(|offset| offset.min(max_start))
+        .unwrap_or_else(|| menu_window_start(selected, visible, total));
+    let shown = visible.min(total.saturating_sub(start));
+    let rows = (0..shown)
+        .map(|offset| Rect::new(list.x, list.y + offset as u16, list.width, 1))
         .collect();
+    // 列表溢出时在最右一列显示滚动条（轨道贴内容区右缘；行文本已为其让出该列）。
+    let scrollbar = widgets::scrollbar::layout(
+        Rect {
+            width: inner.width,
+            ..list
+        },
+        total,
+        visible.max(1),
+        start,
+    );
     ReferencedMenuLayout {
         area,
         rows,
         start,
         total,
+        scrollbar,
+    }
+}
+
+impl ReferencedMenuLayout {
+    /// 列表可见行数。
+    pub fn visible(&self) -> usize {
+        self.rows.len()
     }
 }
 
@@ -98,16 +130,24 @@ pub fn render_referenced_menu(frame: &mut Frame<'_>, screen: Rect, menu: &Refere
         let Some(row) = menu.rows.get(layout.start + offset) else {
             continue;
         };
+        let index = layout.start + offset;
+        // 空状态/不可用行非可选：不显示标记，也不铺悬停底色（对齐 prompt 树的分区标签行）。
         let selectable = !matches!(
             row,
             ReferencedFolderMenuRow::Empty | ReferencedFolderMenuRow::Unavailable
         );
+        let hovered = selectable && menu.hover == Some(index);
         render_menu_row(
             frame,
             *rect,
             row,
-            selectable && menu.selected == layout.start + offset,
+            selectable && menu.selected == index,
+            hovered,
         );
+    }
+    // 列表溢出时在最右一列绘制滚动条（轨道 muted、thumb 亮色）。
+    if let Some(scrollbar) = layout.scrollbar {
+        widgets::scrollbar::render_with_base(frame, &scrollbar, style::overlay_panel());
     }
 }
 
@@ -127,15 +167,20 @@ pub fn render_referenced_menu_footer(
     );
 }
 
-/// 单行：整行铺底色；空状态/不可用为 muted 提示，目录记录为
+/// 单行：悬停时整行铺选中底色；空状态/不可用为 muted 提示，目录记录为
 /// `❯` 标记 + 三角图标 + 名称（右端 muted 绝对路径），新建行为强调色动作项。
+///
+/// `selected` 只决定 `❯` 标记（仅点击/键盘移动），**不铺底色**；`hovered` 只叠加悬停底色、
+/// 不显示标记（完全对齐 prompt 树列表）。
 fn render_menu_row(
     frame: &mut Frame<'_>,
     rect: Rect,
     row: &ReferencedFolderMenuRow,
     selected: bool,
+    hovered: bool,
 ) {
-    let base = if selected {
+    // 背景颜色只在悬停时出现；选中行仅显示 `❯` 标记，底色保持面板本色。
+    let base = if hovered {
         style::overlay_selection()
     } else {
         style::overlay_panel()

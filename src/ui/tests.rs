@@ -1390,7 +1390,7 @@ fn prompt_editor_divider_shows_editing_title() {
     let debug_row: String = (view.prompt.x..view.prompt.right())
         .map(|x| buffer[(x, y)].symbol())
         .collect();
-    assert_eq!(cell.symbol(), "t", "标题起点单元格: {debug_row:?}");
+    assert_eq!(cell.symbol(), "T", "标题起点单元格: {debug_row:?}");
     assert_eq!(cell.fg, ratatui::style::Color::Reset, "标题前景为默认灰");
     assert!(cell.modifier.contains(ratatui::style::Modifier::DIM));
 }

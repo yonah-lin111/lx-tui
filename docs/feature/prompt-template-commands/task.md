@@ -34,7 +34,7 @@
 
 ### 5. 渲染与文案层（`src/ui/prompt.rs` 与 `src/ui/text.rs`）
 - [x] `src/ui/text.rs`：定义斜杠命令展示文案、描述、按钮文本（`[copy]`, `[clean]`, `[del]`）
-- [x] `src/ui/prompt.rs`：接入 `command_panel::render` 渲染斜杠命令浮层（标题 `Templates`）
+- [x] `src/ui/prompt.rs`：接入 `command_panel::render` 渲染斜杠命令浮层（标题 `Templates`，后续统一为 `/Command`）
 - [x] `src/ui/prompt.rs`：在模板起始行右缘渲染操作按钮组，实现窄屏避让逻辑
 - [x] 单元测试：`src/ui/prompt/tests.rs` 与 `src/ui/text/tests.rs`
 

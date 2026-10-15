@@ -58,7 +58,7 @@
 
 - [x] 快捷删除：光标紧跟 `@路径 ` 尾随空白且面板未打开时，`Backspace` 一次删净整段提及（复用 `markdown::mention_deletion_range`，与 prompt 同语义、一步可撤销）。
 - [x] 面板高度对齐 codex：内容行夹到 `MAX_POPUP_ROWS`(8) 再加边框 2 行，并与输入框上方可用空间取小；空间不足时不挤压输入框。
-- [x] 面板左侧标题改为 `@Command`（lx 专属；prompt 提及面板保持 `Files`）。
+- [x] 面板左侧标题改为 `@Command`（对齐 prompt 提及面板，后者随后也改为 `@Command`）。
 - [x] 合并入 `dev`（`--no-ff`），删除临时工作区 `.worktrees/lx-at-mention` 与分支 `feature/lx-at-mention`。
 
 完成条件：设计 D1–D7 全部落地；不同 pane 路径和候选严格隔离；旧扫描结果不能被采纳；可见布局与输入框对齐；自动门禁通过；用户已获得交互验收说明。任何一项不满足不得把任务标成已完成。

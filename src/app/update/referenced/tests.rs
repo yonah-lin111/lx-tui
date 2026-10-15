@@ -512,6 +512,36 @@ fn menu_double_click_detects_same_row_within_window() {
 }
 
 #[test]
+fn hover_moves_background_not_selection_marker() {
+    let mut state = state_with_folders();
+    open_referenced_folder_menu(&mut state, (0, 0));
+    let selected = menu_selected(&state);
+    // 悬停只记录悬停行（铺底色），不移动 `❯` 选中标记。
+    assert!(hover_referenced_menu(&mut state, Some(1)));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.hover, Some(1));
+    assert_eq!(menu.selected, selected, "悬停不移动选中标记");
+    // 重复悬停同一行无变化；离开行清空；越界悬停忽略（规范化为 None 且无变化）。
+    assert!(!hover_referenced_menu(&mut state, Some(1)));
+    assert!(hover_referenced_menu(&mut state, None));
+    assert!(!hover_referenced_menu(&mut state, Some(999)));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.hover, None, "越界悬停忽略");
+}
+
+/// 菜单当前 `❯` 选中标记行。
+fn menu_selected(state: &AppState) -> usize {
+    match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu.selected,
+        _ => panic!("menu"),
+    }
+}
+
+#[test]
 fn menu_copy_uses_refer_folder_syntax() {
     let mut state = state_with_folders();
     let beta = folder_path(&state, 2);
@@ -663,6 +693,67 @@ fn scroll_search_viewport_clamps_and_keeps_selection() {
     };
     assert_eq!(search.selected, selected, "滚轮不动高亮");
     assert!(search.viewport.is_some());
+}
+
+#[test]
+fn scroll_menu_viewport_clamps_and_keeps_selection() {
+    let mut state = state_with_folders();
+    open_referenced_folder_menu(&mut state, (0, 0));
+    let selected = match state.overlay.as_ref() {
+        Some(Overlay::ReferencedFolderMenu(menu)) => menu.selected,
+        _ => panic!("menu"),
+    };
+    // 两条记录 + 新建行：可视窗口 2 行时列表溢出。
+    assert!(scroll_referenced_menu(&mut state, 1, 0, 2));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.selected, selected, "滚轮不动高亮");
+    assert_eq!(menu.viewport, Some(1));
+    // 越界钳制不循环：到底后再滚不移动、返回 false。
+    assert!(!scroll_referenced_menu(&mut state, 1, 1, 2));
+    assert!(scroll_referenced_menu(&mut state, -1, 1, 2));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.viewport, Some(0));
+    assert!(!scroll_referenced_menu(&mut state, -1, 0, 2));
+}
+
+#[test]
+fn menu_keyboard_move_clears_viewport_and_snaps_window() {
+    let mut state = state_with_folders();
+    open_referenced_folder_menu(&mut state, (0, 0));
+    assert!(scroll_referenced_menu(&mut state, 1, 0, 2));
+    // 键盘移动高亮：清空显式视口，窗口重新跟随高亮。
+    assert!(move_referenced_menu_selection(&mut state, -1));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.viewport, None, "键盘移动后窗口跟随高亮");
+    // 已到顶且高亮未动：仍须吸收滚轮滚开的窗口（一次性吸回并返回 true）。
+    assert!(scroll_referenced_menu(&mut state, 1, 0, 2));
+    assert!(move_referenced_menu_selection(&mut state, -1));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.viewport, None);
+    assert_eq!(menu.selected, 0, "已在首项，高亮不动但窗口吸回");
+}
+
+#[test]
+fn set_menu_viewport_clamps_and_reports_change() {
+    let mut state = state_with_folders();
+    open_referenced_folder_menu(&mut state, (0, 0));
+    assert!(set_referenced_menu_viewport(&mut state, 99, 2));
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.viewport, Some(1), "越界钳到末窗口");
+    assert!(
+        !set_referenced_menu_viewport(&mut state, 1, 2),
+        "相同值不重复"
+    );
 }
 
 #[test]

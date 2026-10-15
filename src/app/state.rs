@@ -124,6 +124,8 @@ pub struct AppState {
     pub referenced_menu_click: Option<(usize, Instant)>,
     /// 拖拽引用文件夹搜索弹窗滚动条 thumb 时相对顶部的抓取偏移。
     pub referenced_search_scroll_drag: Option<u16>,
+    /// 拖拽引用文件夹目录弹窗滚动条 thumb 时相对顶部的抓取偏移。
+    pub referenced_menu_scroll_drag: Option<u16>,
     /// 拖拽终端窗格滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 lx 输入框滚动条 thumb：窗格与相对顶部的抓取偏移。
@@ -214,6 +216,7 @@ impl AppState {
             prompt_row_click: None,
             referenced_menu_click: None,
             referenced_search_scroll_drag: None,
+            referenced_menu_scroll_drag: None,
             terminal_scroll_drag: None,
             lx_scroll_drag: None,
             agent_hover: None,

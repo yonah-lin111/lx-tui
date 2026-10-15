@@ -2471,6 +2471,8 @@ fn referenced_menu_state() -> AppState {
                 ReferencedFolderMenuRow::Add,
             ],
             selected: 0,
+            hover: None,
+            viewport: None,
         },
     ));
     state
@@ -2624,6 +2626,363 @@ fn referenced_menu_ctrl_c_copies_and_ctrl_d_or_del_removes() {
         [crate::app::effects::Effect::CopyToClipboard(text)]
             if text.contains("lx-ref-menu/alpha")
     ));
+}
+
+/// 打开引用文件夹目录弹窗并放入 `count` 条记录（末尾恒为新建行），用于溢出滚动测试。
+fn referenced_menu_overflow_state(count: usize) -> AppState {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let mut state = demo_terminal();
+    let mut rows: Vec<ReferencedFolderMenuRow> = (0..count)
+        .map(|id| ReferencedFolderMenuRow::Folder {
+            id: id as i64,
+            path: std::path::PathBuf::from(format!("/tmp/lx-ref-menu/f{id:02}")),
+        })
+        .collect();
+    rows.push(ReferencedFolderMenuRow::Add);
+    state.overlay = Some(Overlay::ReferencedFolderMenu(
+        crate::app::overlay::ReferencedFolderMenu {
+            anchor: (0, 0),
+            key: Some(std::path::PathBuf::from("/tmp/lx-ref-menu")),
+            rows,
+            selected: 0,
+            hover: None,
+            viewport: None,
+        },
+    ));
+    state
+}
+
+#[test]
+fn mouse_hover_over_referenced_menu_backgrounds_row_without_moving_highlight() {
+    let mut state = referenced_menu_overflow_state(30);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let layout = referenced_menu_layout(&state, &geo);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    // 悬停第 4 个可见行：只记录悬停行（铺悬停底色），不动 `❯` 选中标记，不动显式视口。
+    let target = layout.rows[3];
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, target.x + 1, target.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.hover, Some(3), "悬停记录悬停行");
+    assert_eq!(menu.selected, 0, "悬停不移动 `❯` 选中标记");
+    assert_eq!(menu.viewport, None, "悬停不动显式视口");
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_hover_over_referenced_menu_after_wheel_keeps_viewport() {
+    let mut state = referenced_menu_overflow_state(30);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let layout = referenced_menu_layout(&state, &geo);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    // 先滚轮滚开视口。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            layout.rows[0].x + 1,
+            layout.rows[0].y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    // 再悬停窗口内某行：只记录悬停行，显式视口保持不变（窗口不跳）。
+    let layout = referenced_menu_layout(&state, &geo);
+    let target = layout.rows[2];
+    let row_index = layout.start + 2;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, target.x + 1, target.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.hover, Some(row_index), "悬停按可见行命中");
+    assert_eq!(menu.selected, 0, "悬停不移动 `❯` 选中标记");
+    assert_eq!(menu.viewport, Some(1), "悬停不改变已滚开的视口");
+}
+
+#[test]
+fn mouse_hover_over_referenced_menu_paints_background_without_marker() {
+    let mut state = referenced_menu_overflow_state(30);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let layout = referenced_menu_layout(&state, &geo);
+    let target = layout.rows[3];
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, target.x + 1, target.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        geo.screen.width,
+        geo.screen.height,
+    ))
+    .expect("backend");
+    terminal
+        .draw(|frame| {
+            crate::ui::render(frame, &state, &config);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    // 悬停行：左侧无 `❯` 标记、整行铺悬停底色。
+    assert_eq!(
+        buffer[(target.x, target.y)].symbol(),
+        " ",
+        "悬停行左侧无 ❯ 标记"
+    );
+    assert_eq!(
+        buffer[(target.x, target.y)].bg,
+        ratatui::style::Color::Indexed(240),
+        "悬停行铺悬停底色"
+    );
+    // 选中行（未悬停）只有 `❯` 标记、不铺底色。
+    let selected = layout.rows[0];
+    assert_eq!(
+        buffer[(selected.x, selected.y)].symbol(),
+        "❯",
+        "选中行保留 ❯ 标记"
+    );
+    assert_eq!(
+        buffer[(selected.x, selected.y)].bg,
+        ratatui::style::Color::Indexed(236),
+        "选中行不铺底色"
+    );
+}
+
+#[test]
+fn mouse_hover_after_opening_referenced_menu_backgrounds_row_without_marker() {
+    use crate::app::overlay::ReferencedFolderMenuRow;
+    let mut state = demo_terminal();
+    state.active_workspace_mut().cwd = Some(std::path::PathBuf::from("/tmp/lx-event-hover"));
+    let (config, geo) = toolbar_geometry(&mut state);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    // 通过工具栏 [dir] 按钮真实打开弹窗。
+    let folders = layout::prompt_toolbar_button_rect(
+        geo.view.prompt,
+        layout::PromptToolbarButton::Folders,
+        false,
+    )
+    .expect("folders button visible");
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            folders.x,
+            folders.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() {
+        menu.rows = (0..8)
+            .map(|id| ReferencedFolderMenuRow::Folder {
+                id,
+                path: std::path::PathBuf::from(format!("/tmp/lx-event-hover/f{id}")),
+            })
+            .chain(std::iter::once(ReferencedFolderMenuRow::Add))
+            .collect();
+        menu.selected = 0;
+        menu.hover = None;
+        menu.viewport = None;
+    }
+    let layout = referenced_menu_layout(&state, &geo);
+    let target = layout.rows[3];
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, target.x + 1, target.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+        geo.screen.width,
+        geo.screen.height,
+    ))
+    .expect("backend");
+    terminal
+        .draw(|frame| {
+            crate::ui::render(frame, &state, &config);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    // 悬停后：悬停行只铺底色、无 `❯`；选中行（第 0 行）保留 `❯` 且无底色。
+    assert_eq!(
+        buffer[(target.x, target.y)].symbol(),
+        " ",
+        "悬停行左侧无 ❯ 标记"
+    );
+    assert_eq!(
+        buffer[(target.x, target.y)].bg,
+        ratatui::style::Color::Indexed(240),
+        "悬停行铺悬停底色"
+    );
+    assert_eq!(
+        buffer[(layout.rows[0].x, layout.rows[0].y)].symbol(),
+        "❯",
+        "选中行保留 ❯ 标记"
+    );
+    assert_eq!(
+        buffer[(layout.rows[0].x, layout.rows[0].y)].bg,
+        ratatui::style::Color::Indexed(236),
+        "选中行不铺底色"
+    );
+}
+
+#[test]
+fn mouse_wheel_over_referenced_menu_scrolls_viewport_not_highlight() {
+    let mut state = referenced_menu_overflow_state(30);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let layout = referenced_menu_layout(&state, &geo);
+    assert!(layout.scrollbar.is_some(), "记录溢出时出现滚动条");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let prompt_scroll = state.prompt.scroll();
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            layout.rows[0].x + 1,
+            layout.rows[0].y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.viewport, Some(1), "滚轮下移视口一项");
+    assert_eq!(menu.selected, 0, "滚轮不动高亮");
+    assert_eq!(
+        state.prompt.scroll(),
+        prompt_scroll,
+        "弹窗内滚轮不滚动 prompt"
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_click_referenced_menu_scrollbar_track_jumps_viewport() {
+    let mut state = referenced_menu_overflow_state(30);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let layout = referenced_menu_layout(&state, &geo);
+    let bar = layout.scrollbar.expect("list overflows");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert!(
+        menu.viewport.is_some_and(|offset| offset > 0),
+        "轨道点击跳转视口"
+    );
+    assert_eq!(menu.selected, 0, "滚动条不动高亮");
+    assert!(
+        state.referenced_menu_scroll_drag.is_none(),
+        "非 thumb 不进入拖拽"
+    );
+    assert!(dirty);
+}
+
+#[test]
+fn mouse_drag_referenced_menu_scrollbar_thumb_scrolls_viewport() {
+    let mut state = referenced_menu_overflow_state(30);
+    let (config, geo) = toolbar_geometry(&mut state);
+    let layout = referenced_menu_layout(&state, &geo);
+    let bar = layout.scrollbar.expect("list overflows");
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            bar.thumb.x,
+            bar.thumb.y,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.referenced_menu_scroll_drag,
+        Some(0),
+        "按住 thumb 进入拖拽"
+    );
+
+    let max = ui::widgets::scrollbar::offset_from_drag_row(&bar, bar.track.bottom() - 1, 0);
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
+        panic!("menu");
+    };
+    assert_eq!(menu.viewport, Some(max), "拖拽视口到末窗口");
+    assert_eq!(menu.selected, 0, "拖拽不动高亮");
+
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            bar.track.x,
+            bar.track.bottom() - 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(state.referenced_menu_scroll_drag.is_none(), "松开清除拖拽");
 }
 
 #[test]
