@@ -4,7 +4,6 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::markdown::MentionEntry;
 use crate::app::prompt::{PasteAction, Prompt};
@@ -68,6 +67,7 @@ fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> Comman
         title: Some(text::PASTE_PANEL_TITLE),
         right_title: None,
         footer: None,
+        ..Default::default()
     }
 }
 
@@ -129,6 +129,7 @@ fn refer_view<'a>(items: &'a [CommandItem<'a>], data: &ReferPanelData) -> Comman
         title: Some(text::REFER_PANEL_TITLE),
         right_title: None,
         footer: None,
+        ..Default::default()
     }
 }
 
@@ -153,7 +154,7 @@ pub fn refer_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
 }
 
 /// 提及条目父路径可用宽度：面板最宽占满文本区，扣除两侧边框、滚动条列与行内前导空格。
-const MENTION_DETAIL_MARGIN: usize = 5;
+const MENTION_DETAIL_MARGIN: usize = crate::ui::mention::MENTION_DETAIL_MARGIN;
 
 /// 绘制浮层面板：粘贴选择优先，其次文件提及、字母快捷、斜杠命令，最后块命令；
 /// 状态由 app 层维护，这里只做只读映射。
@@ -235,6 +236,7 @@ fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> Comman
         title: Some(text::BLOCK_PANEL_TITLE),
         right_title: None,
         footer: None,
+        ..Default::default()
     }
 }
 
@@ -354,6 +356,7 @@ fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> Com
         }),
         right_title: None,
         footer: None,
+        ..Default::default()
     }
 }
 
@@ -399,42 +402,15 @@ pub fn mention_panel_rect(prompt: &Prompt, area: Rect) -> Option<Rect> {
 
 /// 提及面板条目：文件候选（图标 + 文件名 + 父目录明细）或取根选择（单行）。
 enum MentionRowText {
-    File {
-        icon: &'static str,
-        /// 目录条目：图标与名称按目录色区分文件。
-        is_directory: bool,
-        label: String,
-        detail: String,
-    },
-    Choice {
-        label: &'static str,
-    },
+    File(crate::ui::mention::MentionRow),
+    Choice { label: &'static str },
 }
 
 impl MentionRowText {
     /// 组装条目视图：文件双行展示（目录按目录色），取根选择单行。
     fn item(&self) -> CommandItem<'_> {
         match self {
-            Self::File {
-                icon,
-                is_directory,
-                label,
-                detail,
-            } => {
-                let (icon_style, label_style) = if *is_directory {
-                    let directory = crate::ui::style::directory();
-                    (directory, directory)
-                } else {
-                    (crate::ui::style::muted(), crate::ui::style::text())
-                };
-                CommandItem::Stacked {
-                    icon: Some(icon),
-                    icon_style,
-                    label,
-                    label_style,
-                    detail,
-                }
-            }
+            Self::File(row) => row.item(),
             Self::Choice { label } => CommandItem::Inline {
                 label,
                 preview: "",
@@ -530,6 +506,7 @@ fn mention_view<'a>(
         title: Some(data.title.as_str()),
         right_title: data.scope.as_deref(),
         footer: (!data.chooser).then_some(text::MENTION_PANEL_FOOTER),
+        ..Default::default()
     }
 }
 
@@ -537,31 +514,5 @@ fn mention_view<'a>(
 ///
 /// 父目录超出可用宽度时按显示列中间截断（保留路径首尾），对齐 opencode 的路径省略逻辑。
 fn mention_row_text(entry: &MentionEntry, detail_width: usize) -> MentionRowText {
-    let (directory, name) = entry
-        .path
-        .rsplit_once('/')
-        .unwrap_or(("", entry.path.as_str()));
-    let label = if entry.is_directory {
-        format!("{name}/")
-    } else {
-        name.to_string()
-    };
-    let detail = if directory.is_empty() {
-        String::new()
-    } else {
-        let prefix = format!("{} ", text::WORKSPACE_TREE_LAST);
-        let path_width = detail_width.saturating_sub(prefix.width());
-        format!("{prefix}{}", text::ellipsize_middle(directory, path_width))
-    };
-    let icon = if entry.is_directory {
-        text::MENTION_DIR_ICON
-    } else {
-        text::MENTION_FILE_ICON
-    };
-    MentionRowText::File {
-        icon,
-        is_directory: entry.is_directory,
-        label,
-        detail,
-    }
+    MentionRowText::File(crate::ui::mention::file_row(entry, detail_width))
 }

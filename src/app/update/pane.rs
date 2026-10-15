@@ -73,7 +73,8 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
 ///
-/// md 面板打开时 `↑`/`↓` 移动高亮、`Tab` 采纳、`Esc` 关闭；其余按键走编辑。
+/// 面板优先级：粘贴参照 > `@` 提及 > md 块命令；面板打开时其余按键吞掉。
+/// 提及面板打开时 `↑`/`↓` 移动高亮、`Tab`/`Enter` 采纳、`Shift+Enter` 进入目录、`Esc` 关闭。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     let Some(pane) = state.active_pane_mut() else {
         return;
@@ -106,6 +107,38 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         }
         return;
     }
+    // `@` 提及面板次优先：仅接管导航、采纳、进入目录与关闭；其它编辑键继续走编辑并重算触发。
+    let mention_visible = lx.mention_visible();
+    if lx.mention_open() {
+        match command {
+            LxInput::Up => {
+                lx.mention_move(-1);
+                return;
+            }
+            LxInput::Down => {
+                lx.mention_move(1);
+                return;
+            }
+            LxInput::Tab | LxInput::Enter => {
+                lx.mention_confirm();
+                return;
+            }
+            LxInput::Escape => {
+                lx.mention_escape();
+                return;
+            }
+            // Shift+Enter 由下方 mention_visible 分支统一处理。
+            LxInput::EnterFolder => {
+                lx.mention_enter_folder();
+                return;
+            }
+            _ => {}
+        }
+    }
+    // 面板可见（含扫描中/无匹配）时 Shift+Enter 吞键：不进入目录也不换行。
+    if mention_visible && command == LxInput::EnterFolder {
+        return;
+    }
     let panel_open = lx.panel.is_some();
     match command {
         LxInput::Up if panel_open => lx.panel_move(-1),
@@ -118,7 +151,8 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         }
         LxInput::Escape if panel_open => lx.panel_close(),
         LxInput::Char(ch) => lx.insert_char(ch),
-        LxInput::Newline => lx.newline(),
+        // 提及面板未打开时 Shift+Enter 回落为换行。
+        LxInput::Newline | LxInput::EnterFolder => lx.newline(),
         LxInput::Backspace => lx.backspace(),
         LxInput::Delete => lx.delete(),
         LxInput::Left => lx.move_left(),
@@ -149,6 +183,92 @@ pub fn set_lx_entry(state: &mut AppState, id: PaneId, entry: crate::app::state::
     }
 }
 
+/// 单一窗格的有效 `@` 扫描根：`pane.cwd` 优先，回退所属工作区 cwd；两者皆无时 None。
+///
+/// 不使用当前进程 cwd、右侧 prompt 根或其它 pane 的 cwd。
+pub fn lx_mention_root_for_pane(state: &AppState, id: PaneId) -> Option<std::path::PathBuf> {
+    let pane = state.pane_anywhere(id)?;
+    pane.cwd
+        .clone()
+        .or_else(|| state.workspace_cwd_for_pane(id))
+}
+
+/// 为指定窗格同步 `@` 提及扫描根；根变化返回 true（供置脏）。
+pub fn sync_lx_mention_root(state: &mut AppState, id: PaneId) -> bool {
+    let root = lx_mention_root_for_pane(state, id);
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.set_mention_root(root))
+}
+
+/// 为全部 lx 视图窗格同步 `@` 提及扫描根；任一根变化返回 true。
+pub fn sync_all_lx_mention_roots(state: &mut AppState) -> bool {
+    let mut changed = false;
+    for id in state.all_pane_ids() {
+        if state
+            .pane_anywhere(id)
+            .is_some_and(|pane| pane.view == PaneView::Lx)
+        {
+            changed |= sync_lx_mention_root(state, id);
+        }
+    }
+    changed
+}
+
+/// 取走当前可见窗格待发起的提及扫描请求（窗格、代号、根）；仅事件层调用。
+///
+/// 只对当前标签（可见）中处于 lx 视图、有有效 `@` 触发器且无在途/缓存的窗格发起；
+/// 不可见窗格的根仍会被同步，恢复可见时再发起扫描。
+pub fn take_lx_mention_scan_requests(
+    state: &mut AppState,
+) -> Vec<(PaneId, u64, std::path::PathBuf)> {
+    let visible = state.active_tab().layout.pane_ids();
+    let mut requests = Vec::new();
+    for id in visible {
+        let Some(pane) = state.pane_mut_anywhere(id) else {
+            continue;
+        };
+        if pane.view != PaneView::Lx {
+            continue;
+        }
+        if let Some((generation, root)) = pane.lx.take_mention_scan_request() {
+            requests.push((id, generation, root));
+        }
+    }
+    requests
+}
+
+/// 写入指定窗格的提及扫描结果；窗格已删除或结果过期时丢弃。
+pub fn apply_lx_mention_entries(
+    state: &mut AppState,
+    id: PaneId,
+    generation: u64,
+    root: &std::path::Path,
+    entries: Vec<crate::app::markdown::MentionEntry>,
+) {
+    if let Some(pane) = state.pane_mut_anywhere(id) {
+        pane.lx.apply_mention_entries(generation, root, entries);
+    }
+}
+
+/// 鼠标点选 `@` 提及候选：设置高亮并按 `Enter` 规则采纳；返回是否消费。
+pub fn select_lx_mention(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    let Some(pane) = state.pane_mut_anywhere(id) else {
+        return false;
+    };
+    if !pane.lx.mention_set_active(index) && !pane.lx.mention_open() {
+        return false;
+    }
+    pane.lx.mention_confirm()
+}
+
+/// 滚轮在 `@` 提及面板上滚动候选视口；`base` 为当前窗口起点，高亮不动。
+pub fn scroll_lx_mention(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.mention_scroll(delta, base))
+}
+
 /// 切换窗格主内容视图（lx 页 ↔ 终端）；返回是否变化。
 ///
 /// 切到 lx 时清掉该窗格上的终端选区与滚动条拖拽：隐藏终端不接受交互。
@@ -160,6 +280,8 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
         };
         // 切换视图时取消在途粘贴面板：隐藏的 lx 页不再持有悬空面板。
         pane.lx.paste_cancel();
+        // 隐藏的 lx 页不得保留可点击的提及面板。
+        pane.lx.mention_escape();
         pane.view
     }) else {
         return false;
@@ -173,6 +295,11 @@ pub fn toggle_pane_view(state: &mut AppState, id: PaneId) -> bool {
             .is_some_and(|(pane, _)| pane == id)
         {
             state.terminal_scroll_drag = None;
+        }
+        // 恢复 lx 视图：按当前根与输入重新评估提及面板（在途结果已写入缓存）。
+        sync_lx_mention_root(state, id);
+        if let Some(pane) = state.pane_mut_anywhere(id) {
+            pane.lx.refresh_panel();
         }
     }
     true

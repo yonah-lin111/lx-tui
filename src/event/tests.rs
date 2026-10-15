@@ -4253,3 +4253,114 @@ fn ui_gallery_escape_key_closes_overlay() {
     );
     assert!(state.overlay.is_none(), "Esc 关闭组件查看弹窗");
 }
+
+// ===== lx `@` 提及面板鼠标路由 =====
+
+/// 为焦点 lx 窗格准备提及面板：设根、键入 @、写入缓存。
+fn seed_lx_mention(
+    state: &mut AppState,
+    query: &str,
+    entries: Vec<crate::app::markdown::MentionEntry>,
+) {
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.cwd = Some(std::path::PathBuf::from("/work/demo"));
+    }
+    update::sync_lx_mention_root(state, pane);
+    for ch in query.chars() {
+        update::apply_lx_input(state, crate::app::actions::LxInput::Char(ch));
+    }
+    let (generation, root) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|p| p.lx.take_mention_scan_request())
+        .expect("scan request");
+    update::apply_lx_mention_entries(state, pane, generation, &root, entries);
+}
+
+#[test]
+fn lx_mention_panel_click_accepts_candidate_before_page_selection() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    seed_lx_mention(
+        &mut state,
+        "@ma",
+        vec![crate::app::markdown::MentionEntry {
+            path: "main.rs".into(),
+            is_directory: false,
+        }],
+    );
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let pane = state.active_tab().layout.focus();
+    let (_, rect) = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .copied()
+        .expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let panel = ui::main_content::lx::mention_layout(inner, lx).expect("mention panel");
+    let (x, y) = (panel.content.x, panel.content.y);
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), x, y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "@main.rs ",
+        "点击候选按 Enter 规则采纳"
+    );
+    assert!(state.lx_selection.is_none(), "命中提及面板不启动整页选区");
+}
+
+#[test]
+fn lx_mention_wheel_scrolls_panel_not_input() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let entries: Vec<crate::app::markdown::MentionEntry> = (0..10)
+        .map(|i| crate::app::markdown::MentionEntry {
+            path: format!("f{i}.rs"),
+            is_directory: false,
+        })
+        .collect();
+    seed_lx_mention(&mut state, "@", entries);
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    let pane = state.active_tab().layout.focus();
+    let (_, rect) = geo
+        .rects
+        .iter()
+        .find(|(id, _)| *id == pane)
+        .copied()
+        .expect("pane rect");
+    let inner = crate::layout::pane_inner_rect(rect);
+    let input_scroll_before = state.pane_anywhere(pane).expect("pane").lx.scroll();
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    let panel = ui::main_content::lx::mention_layout(inner, lx).expect("mention panel");
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, panel.content.x, panel.content.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let target = state.pane_anywhere(pane).expect("pane").lx.mention();
+    assert_eq!(
+        target.panel().expect("panel").viewport(),
+        Some(1),
+        "面板内滚轮滚动候选视口"
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.scroll(),
+        input_scroll_before,
+        "候选面板内滚轮不滚动输入框"
+    );
+}

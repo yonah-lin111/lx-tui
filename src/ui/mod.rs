@@ -4,6 +4,7 @@ pub mod controls;
 pub mod layout;
 pub mod main_content;
 pub mod markdown;
+pub mod mention;
 pub mod overlay;
 mod panes;
 pub mod prompt;

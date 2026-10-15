@@ -363,11 +363,24 @@ pub(crate) fn handle_mouse_down_left(
                 .pane_anywhere(pane)
                 .is_some_and(|target| target.view == PaneView::Lx)
             {
-                // lx 页：入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
+                // lx 页：提及面板候选 > 入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
+                update::focus_pane(state, pane);
+                let mention_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::mention_item_at(
+                        inner,
+                        &target.lx,
+                        mouse.column,
+                        mouse.row,
+                    )
+                });
+                if let Some(index) = mention_hit {
+                    update::select_lx_mention(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
                 let entry = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::entry_hit(inner, &target.lx, mouse.column, mouse.row)
                 });
-                update::focus_pane(state, pane);
                 update::clear_selection(state);
                 if let Some(entry) = entry {
                     update::set_lx_entry(state, pane, entry);

@@ -721,6 +721,11 @@ pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
 /// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";
 
+/// lx 输入框 `@` 提及面板：标题与状态行文案（与 prompt 面板同一套外观）。
+pub const LX_MENTION_PANEL_TITLE: &str = "Files";
+pub const LX_MENTION_LOADING: &str = "scanning…";
+pub const LX_MENTION_EMPTY: &str = "no matches";
+
 /// markdown 块命令面板条目标签。
 pub const BLOCK_HEADING_LABEL: &str = "Heading";
 pub const BLOCK_UNORDERED_LABEL: &str = "Bullet List";
@@ -849,6 +854,29 @@ pub fn pane_title(id: PaneId, osc_title: Option<&str>, cwd_label: Option<&str>) 
             _ => format!("pane {}", id.raw()),
         },
     }
+}
+
+/// lx pane 底边左侧的 cwd 显示文本：完整路径放得下则整段；否则取末段；末段仍超宽则按
+/// 终端显示列截断并加 `…`。可用宽度连省略号也放不下时返回 None（不绘制）。
+pub fn pane_bottom_path(path: &std::path::Path, available: usize) -> Option<String> {
+    if available == 0 {
+        return None;
+    }
+    let full = path.to_string_lossy();
+    if full.width() <= available {
+        return Some(full.into_owned());
+    }
+    let segment = path
+        .file_name()
+        .map(|name| name.to_string_lossy())
+        .filter(|name| !name.is_empty());
+    if let Some(segment) = segment {
+        if segment.width() <= available {
+            return Some(segment.into_owned());
+        }
+        return (available >= 2).then(|| ellipsize_middle(&segment, available));
+    }
+    (available >= 2).then(|| ellipsize_middle(&full, available))
 }
 
 #[cfg(test)]

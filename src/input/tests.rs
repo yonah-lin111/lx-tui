@@ -755,11 +755,12 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
         super::route(key(KeyCode::Esc), TermMode::empty(), false, None, true),
         Some(Routed::Lx(LxInput::Escape))
     );
-    // Shift+Enter 换行；Enter 无面板时交给 update 判定（有面板则采纳候选）。
+    // Shift+Enter 在应用层区分：提及面板打开时进入高亮目录，否则回落为换行；
+    // Enter 无面板时交给 update 判定（有面板则采纳候选）。
     let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
     assert_eq!(
         super::route(shift_enter, TermMode::empty(), false, None, true),
-        Some(Routed::Lx(LxInput::Newline))
+        Some(Routed::Lx(LxInput::EnterFolder))
     );
     assert_eq!(
         super::route(key(KeyCode::Enter), TermMode::empty(), false, None, true),

@@ -83,6 +83,7 @@ fn view_window<'a>(
         title: None,
         right_title: None,
         footer: None,
+        ..Default::default()
     }
 }
 

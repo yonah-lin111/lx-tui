@@ -318,3 +318,42 @@ fn mention_panel_footer_symbols_are_single_width_and_non_pua() {
         "回退提示沿用 [clear ^c] 的 ^z 记法"
     );
 }
+
+#[test]
+fn pane_bottom_path_degrades_full_to_segment_to_ellipsis() {
+    use std::path::Path;
+    let path = Path::new("/work/demo/src/main.rs");
+    // 完整路径放得下：整段。
+    assert_eq!(
+        pane_bottom_path(path, 40).as_deref(),
+        Some("/work/demo/src/main.rs")
+    );
+    // 放不下完整路径但放得下末段：取末段。
+    assert_eq!(pane_bottom_path(path, 12).as_deref(), Some("main.rs"));
+    // 末段仍超宽：按列宽截断并加省略号（沿用中间省略，保留首尾，保持字符边界）。
+    let short = pane_bottom_path(path, 5).expect("ellipsized");
+    assert!(short.contains('…'), "超宽截断带省略号: {short:?}");
+    assert!(short.width() <= 5);
+    // 连省略号也放不下（可用宽度 < 2）：不绘制。
+    assert_eq!(pane_bottom_path(path, 1), None);
+    assert_eq!(pane_bottom_path(path, 0), None);
+}
+
+#[test]
+fn pane_bottom_path_uses_terminal_columns_for_cjk() {
+    use std::path::Path;
+    // 末段含 CJK：宽度按终端列计（每字 2 列）。
+    let path = Path::new("/work/文档");
+    assert_eq!(pane_bottom_path(path, 4).as_deref(), Some("文档"));
+    let clipped = pane_bottom_path(path, 3).expect("clipped");
+    assert!(clipped.width() <= 3, "宽度按列计算: {clipped:?}");
+    assert!(clipped.contains('…'));
+}
+
+#[test]
+fn pane_bottom_path_falls_back_to_full_when_no_segment() {
+    use std::path::Path;
+    // 根路径无末段：回退完整路径显示。
+    let root = Path::new("/");
+    assert_eq!(pane_bottom_path(root, 8).as_deref(), Some("/"));
+}

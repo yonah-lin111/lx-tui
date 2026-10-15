@@ -132,7 +132,8 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         return None;
     }
     match key.code {
-        KeyCode::Enter if shift => Some(LxInput::Newline),
+        // Shift+Enter：提及面板高亮目录时进入；未消费时在 update 层回落为换行。
+        KeyCode::Enter if shift => Some(LxInput::EnterFolder),
         // Enter 无面板时预留给发送，交给 update 判定。
         KeyCode::Enter => Some(LxInput::Enter),
         KeyCode::Backspace => Some(LxInput::Backspace),

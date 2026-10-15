@@ -50,6 +50,13 @@ pub enum AppEvent {
         generation: u64,
         entries: Vec<MentionEntry>,
     },
+    /// lx 输入框 `@` 面板的目录扫描结果；按窗格、代号与根路由。
+    LxMentionScanned {
+        pane: PaneId,
+        generation: u64,
+        root: PathBuf,
+        entries: Vec<MentionEntry>,
+    },
     /// 工作区 git 元数据查询结果。
     GitRefreshed {
         cwd: PathBuf,
@@ -194,6 +201,11 @@ async fn run_loop(
                 dirty = true;
             }
         }
+        // lx `@` 面板有效根随窗格 cwd、pane 生命周期与工作区切换同步；变化即重算面板。
+        if update::sync_all_lx_mention_roots(state) {
+            dirty = true;
+        }
+        pump_lx_mention_scan(state, &sender);
         git::pump_git_queries(state, &sender, &mut git_inflight);
         let geometry = session::current_geometry(tui, state, &config)?;
         if let Some(rows) = ui::agent_list_rows(&geometry.view, state)
@@ -246,6 +258,7 @@ async fn run_loop(
                 Some(Ok(event)) => {
                     handle_terminal_event(event, state, &mut sessions, &geometry, &config, &mut dirty);
                     pump_mention_scan(state, &sender);
+                    pump_lx_mention_scan(state, &sender);
                     pump_prompt_worktree(state, &sender, &mut git_inflight);
                     git::pump_git_queries(state, &sender, &mut git_inflight);
                     pump_referenced_requests(state, &sender);
@@ -335,6 +348,12 @@ fn handle_app_event(
             generation,
             entries,
         } => update::apply_mention_entries(state, prompt, generation, entries),
+        AppEvent::LxMentionScanned {
+            pane,
+            generation,
+            root,
+            entries,
+        } => update::apply_lx_mention_entries(state, pane, generation, &root, entries),
         AppEvent::GitRefreshed { cwd, checkout } => {
             update::apply_git_refresh(state, &cwd, checkout)
         }
@@ -416,8 +435,26 @@ fn pump_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEve
     });
 }
 
-/// prompt 模板块的 worktree 绑定：选择器打开或块内绑定未解析时发起后台查询。
+/// lx `@` 面板需要扫描的窗格：取走请求并在后台按根扫描，结果携窗格、代号与根回投。
 ///
+/// 只为当前处于 lx 视图、有有效 `@` 触发且无缓存/在途的窗格发起；同一根在 pane 内缓存。
+fn pump_lx_mention_scan(state: &mut AppState, sender: &mpsc::UnboundedSender<AppEvent>) {
+    for (pane, generation, root) in update::take_lx_mention_scan_requests(state) {
+        let sender = sender.clone();
+        let scan_root = root.clone();
+        tokio::task::spawn_blocking(move || {
+            let entries = crate::files::scan(&scan_root);
+            let _ = sender.send(AppEvent::LxMentionScanned {
+                pane,
+                generation,
+                root,
+                entries,
+            });
+        });
+    }
+}
+
+/// prompt 模板块的 worktree 绑定：选择器打开或块内绑定未解析时发起后台查询。
 /// `inflight` 记录在途仓库根，避免同一仓库重复发起。
 fn pump_prompt_worktree(
     state: &mut AppState,
