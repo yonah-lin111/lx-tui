@@ -49,7 +49,7 @@ lx-tui/
       service.rs                同步持久化服务：执行 app 层效应出箱、按需载入提示词树
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
-      ai.rs                     模型配置（config/ai.json）：类型、校验、原子保存与 lx-agent 一次导入
+      ai.rs                     模型配置（config/ai.json）：类型、校验与原子保存
     chat/                       流式聊天协议适配：统一事件、SSE 帧解析、thinking 标签、五种 transport、请求执行与上下文装配
       events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason）
       sse.rs                    可增量喂入的 SSE 帧解析器
@@ -84,7 +84,7 @@ lx-tui/
 8. `git/`：唯一执行 git 命令的模块（`git worktree list --porcelain` 的查询与解析）；由事件层在后台线程调用，app 只接收转换后的纯数据。
 9. `db/`：唯一使用 rusqlite 的模块：SQLite 初始化与 `PRAGMA user_version` 迁移、工作区信任读写、提示词与文件夹 CRUD（含 2 层嵌套约束与级联删除）、聊天会话/消息/内容块 CRUD（`chat.rs`，含 v7 五表迁移）；`service.rs` 是事件循环持有的同步受控服务，执行 app 层 `Effect` 出箱并惰性载入提示词树；app 层保持纯内存，禁止直接触碰 rusqlite。
 10. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
-11. `config/`：配置结构、默认值与校验；`ai.rs` 承载模型配置（`config/ai.json`）的类型、校验、原子保存与从 lx-agent 的一次性导入；配置变更不直接改运行时状态，交由 `app` 行为处理。
+11. `config/`：配置结构、默认值与校验；`ai.rs` 承载模型配置（`config/ai.json`）的类型、校验与原子保存；配置只读写本项目数据根（`~/.lx-t[-dev]/config/ai.json`），不读取 lx-agent 的 `~/.lx`；配置变更不直接改运行时状态，交由 `app` 行为处理。
 12. `settings/`：设置与命令文件持久化（`settings.json`、自定义命令 Markdown 文件）及本地回环设置 Web 服务；`service.rs` 只监听 `127.0.0.1` 并带每次运行随机 token，静态资源（`page.rs` 以 `include_str!` 加载 `assets/`，经独立路由提供）与 JSON API 共用一套存储函数；`service/models.rs` 提供模型设置的脱敏 GET、原子 PUT 与远端发现 POST，状态变更经事件投递回 `event` 循环。
 13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、五种 transport 的请求/解码（`transport/`）、请求执行与取消（`client.rs`）与上下文装配（`context.rs`）；不依赖 `app`/`ui`，DB 依赖仅限记录类型转换。
 14. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控（含文件/目录权限收紧）；核心模块不得出现裸 OS 分支。

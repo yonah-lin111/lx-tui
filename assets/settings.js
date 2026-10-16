@@ -528,17 +528,20 @@ function buildProviderPayload() {
     name: document.getElementById('prov-name').value.trim() || providerDraft.id,
     baseUrl: document.getElementById('prov-base-url').value.trim(),
     enabled: document.getElementById('prov-enabled').value === 'true',
-    models: providerDraft.models.map((model) => ({
-      key: model.key,
-      id: model.id,
-      name: model.name,
-      transport: model.transport || null,
-      limit: model.context !== '' && model.output !== ''
-        ? {context: Number(model.context), output: Number(model.output)}
-        : null,
-      variant: model.variant || null,
-      variants: model.variants && model.variants.length ? Object.fromEntries(model.variants.map((v) => [v, {}])) : {}
-    }))
+    models: providerDraft.models
+      // 记录键与模型 ID 一致（与 lx-agent 语义相同）：ID 即发往供应商的模型名。
+      .filter((model) => (model.id || '').trim() !== '')
+      .map((model) => ({
+        key: model.id.trim(),
+        id: model.id.trim(),
+        name: (model.name || '').trim() || model.id.trim(),
+        transport: model.transport || null,
+        limit: model.context !== '' && model.output !== ''
+          ? {context: Number(model.context), output: Number(model.output)}
+          : null,
+        variant: model.variant || null,
+        variants: model.variants && model.variants.length ? Object.fromEntries(model.variants.map((v) => [v, {}])) : {}
+      }))
   };
   const keyInput = document.getElementById('prov-api-key').value;
   if (document.getElementById('prov-clear-key').checked) {

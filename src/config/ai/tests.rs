@@ -191,36 +191,20 @@ fn load_ai_reports_missing_and_corrupt() {
     assert!(load_ai(&path).is_err());
 }
 
+/// 回归：lx-tui 不读取、不导入 `~/.lx/config`（lx-agent 配置与本项目无关）。
+///
+/// 设一个含配置的隔离 HOME：本项目必须仍以缺失文件为准，绝不读取该目录。
 #[test]
-fn import_skips_when_target_exists() {
-    let dir = temp_dir("import-exists");
-    let target = dir.join("ai.json");
-    // 预先写入空对象作为"用户手动创建"的目标。
-    std::fs::write(
-        &target,
-        "{\"ai\":{\"enabled_providers\":[],\"providers\":{}}}",
-    )
-    .expect("seed");
-    let before = std::fs::read_to_string(&target).expect("read");
-    let imported = import_from_lx_agent(&target).expect("import");
-    assert!(!imported, "目标已存在时跳过导入");
-    assert_eq!(std::fs::read_to_string(&target).expect("re-read"), before);
-}
-
-#[test]
-fn import_from_lx_agent_reads_source_and_merges_builtin() {
-    // 隔离 HOME：源目录只包含假 Key 的 lx-agent 配置，不触碰真实凭据。
-    let dir = temp_dir("import-full");
+fn never_reads_lx_agent_config() {
+    let dir = temp_dir("no-lx-import");
     let home = dir.join("home");
     let lx_config = home.join(".lx").join("config");
     std::fs::create_dir_all(&lx_config).expect("lx config");
-    // 源缺 defaultModel 的 enabled 供应商：导入回落默认选择。
     std::fs::write(
         lx_config.join("ai.json"),
         format!(
             r#"{{"ai":{{
                 "enabled_providers": ["userprov"],
-                "titleSummary": {{"provider": "userprov", "model": "m1"}},
                 "providers": {{
                     "userprov": {{
                         "id": "userprov", "type": "openai-compatible", "name": "User",
@@ -232,25 +216,14 @@ fn import_from_lx_agent_reads_source_and_merges_builtin() {
         ),
     )
     .expect("source");
-    // builtin-providers.json 提供一个预置供应商（不带 Key，导入后默认禁用）。
-    std::fs::write(
-        lx_config.join("builtin-providers.json"),
-        r#"{"builtinProviders":{
-            "builtin-prov": {
-                "id": "builtin-prov", "type": "openai-compatible", "name": "Builtin",
-                "options": {"apiKey": "builtin-key-not-real", "baseURL": "https://api.builtin.invalid/v1"},
-                "models": {"bm": {"id": "bm", "name": "BM"}}
-            }
-        }}"#,
-    )
-    .expect("builtin");
-    let target = dir.join("config").join("ai.json");
+    // 本项目配置用独立路径（不在 HOME 下的 ~/.lx），确保与源无关。
+    let target = dir.join("own-config").join("ai.json");
 
-    // 保存并恢复 HOME；该测试不与其他读 HOME 的测试并行冲突时使用锁保护。
     let guard = HOME_LOCK.lock();
     let previous = std::env::var_os("HOME");
     unsafe { std::env::set_var("HOME", &home) };
-    let imported = import_from_lx_agent(&target).expect("import");
+    // 本项目直接以自身路径读取：源存在不影响，缺失文件就是 None（空配置）。
+    let loaded = load_ai(&target).expect("load");
     unsafe {
         if let Some(previous) = previous {
             std::env::set_var("HOME", previous);
@@ -260,101 +233,12 @@ fn import_from_lx_agent_reads_source_and_merges_builtin() {
     }
     drop(guard);
 
-    assert!(imported, "首次导入执行");
-    let loaded = load_ai(&target).expect("load").expect("exists");
-    assert_eq!(loaded.providers.len(), 2, "用户 + builtin 供应商");
-    assert!(loaded.providers.contains_key("userprov"));
-    assert!(
-        loaded.providers.contains_key("builtin-prov"),
-        "builtin 并入"
-    );
-    assert_eq!(
-        loaded.default_model.as_ref().expect("selection").provider,
-        "userprov",
-        "默认选择回落到已启用供应商"
-    );
-    assert!(loaded.extra.is_empty(), "lx-agent 独立设置节点不导入");
-
-    // 第二次导入：目标已存在，跳过。
-    let again = import_from_lx_agent(&target).expect("again");
-    assert!(!again);
+    assert!(loaded.is_none(), "只以自身路径为准，不读取 ~/.lx");
+    assert!(!target.exists(), "不因导入而创建自身配置文件");
 }
 
 /// HOME 环境变量互斥锁：串行化读 HOME 的测试。
 static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[test]
-fn import_from_missing_source_creates_empty_config() {
-    // 隔离 HOME 到空目录：源缺失走空配置，UI 指向添加供应商。
-    let dir = temp_dir("import-empty-source");
-    let home = dir.join("empty-home");
-    std::fs::create_dir_all(&home).expect("home");
-    let target = dir.join("config").join("ai.json");
-
-    let guard = HOME_LOCK.lock();
-    let previous = std::env::var_os("HOME");
-    unsafe { std::env::set_var("HOME", &home) };
-    let imported = import_from_lx_agent(&target).expect("import");
-    unsafe {
-        if let Some(previous) = previous {
-            std::env::set_var("HOME", previous);
-        } else {
-            std::env::remove_var("HOME");
-        }
-    }
-    drop(guard);
-
-    assert!(imported, "首次导入执行（空配置）");
-    let loaded = load_ai(&target).expect("load").expect("exists");
-    assert!(loaded.providers.is_empty());
-    assert!(loaded.default_model.is_none(), "不凭空出现默认模型");
-}
-
-#[test]
-fn import_from_corrupt_source_keeps_target_absent_and_retryable() {
-    // 隔离 HOME：源损坏返回错误且不创建目标文件。
-    let dir = temp_dir("import-corrupt");
-    let home = dir.join("home");
-    let lx_config = home.join(".lx").join("config");
-    std::fs::create_dir_all(&lx_config).expect("lx config");
-    std::fs::write(lx_config.join("ai.json"), "not json at all").expect("corrupt source");
-    let target = dir.join("config").join("ai.json");
-
-    let guard = HOME_LOCK.lock();
-    let previous = std::env::var_os("HOME");
-    unsafe { std::env::set_var("HOME", &home) };
-    let result = import_from_lx_agent(&target);
-    unsafe {
-        if let Some(previous) = previous {
-            std::env::set_var("HOME", previous);
-        } else {
-            std::env::remove_var("HOME");
-        }
-    }
-    drop(guard);
-
-    assert!(result.is_err(), "损坏源报错");
-    assert!(!target.exists(), "不创建目标文件");
-    // 修复源后重试成功。
-    std::fs::write(
-        lx_config.join("ai.json"),
-        r#"{"ai":{"enabled_providers": [], "providers": {}}}"#,
-    )
-    .expect("fixed source");
-    let guard = HOME_LOCK.lock();
-    let previous = std::env::var_os("HOME");
-    unsafe { std::env::set_var("HOME", &home) };
-    let imported = import_from_lx_agent(&target).expect("retry import");
-    unsafe {
-        if let Some(previous) = previous {
-            std::env::set_var("HOME", previous);
-        } else {
-            std::env::remove_var("HOME");
-        }
-    }
-    drop(guard);
-    assert!(imported, "修复后可重试");
-}
 
 #[test]
 fn model_transport_overrides_and_parse() {
@@ -380,42 +264,6 @@ fn model_transport_overrides_and_parse() {
     assert_eq!(value, serde_json::json!("openai-responses"));
     let value = serde_json::to_value(ProviderTransport::OpenaiCompatible).expect("json");
     assert_eq!(value, serde_json::json!("openai-compatible"));
-}
-
-#[test]
-fn first_enabled_model_falls_back_to_enabled_provider() {
-    let mut settings = AiSettings::empty();
-    assert!(settings.first_enabled_model().is_none());
-    settings.enabled_providers.push("p".into());
-    assert!(
-        settings.first_enabled_model().is_none(),
-        "无 provider 时 None"
-    );
-    let mut provider = sample_settings().providers["example"].clone();
-    provider.id = "p".into();
-    settings.providers.insert("p".into(), provider);
-    let selection = settings.first_enabled_model().expect("falls back");
-    assert_eq!(selection.provider, "p");
-    assert_eq!(selection.model, "example-chat");
-    assert_eq!(
-        selection.variant.as_deref(),
-        Some("high"),
-        "继承模型默认 variant"
-    );
-}
-
-#[test]
-fn normalize_import_clears_unrelated_settings_and_dangling_refs() {
-    let mut settings = sample_settings();
-    // 模拟 lx-agent 的独立设置节点与悬空引用。
-    settings
-        .extra
-        .insert("titleSummary".into(), serde_json::json!({"provider": "x"}));
-    settings.enabled_providers.push("ghost".into());
-    normalize_import(&mut settings);
-    assert!(settings.extra.is_empty(), "lx-agent 独立设置不导入");
-    assert!(!settings.enabled_providers.contains(&"ghost".to_string()));
-    assert!(settings.validate().is_ok());
 }
 
 #[test]

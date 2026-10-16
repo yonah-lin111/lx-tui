@@ -279,22 +279,6 @@ impl AiSettings {
         }
         Ok(())
     }
-
-    /// 首个已启用且有模型的供应商与模型（导入时缺省默认选择回落）。
-    pub fn first_enabled_model(&self) -> Option<ModelSelection> {
-        for id in &self.enabled_providers {
-            if let Some(provider) = self.providers.get(id)
-                && let Some((model_key, model)) = provider.models.iter().next()
-            {
-                return Some(ModelSelection {
-                    provider: id.clone(),
-                    model: model_key.clone(),
-                    variant: model.variant.clone(),
-                });
-            }
-        }
-        None
-    }
 }
 
 impl Default for AiSettings {
@@ -345,28 +329,6 @@ impl From<ConfigError> for AiConfigError {
 /// `config/ai.json` 路径：开发 `~/.lx-t-dev/config/ai.json`，生产 `~/.lx-t/config/ai.json`。
 pub fn ai_config_path() -> Result<PathBuf, AiConfigError> {
     Ok(user_data_root()?.join("config").join("ai.json"))
-}
-
-/// lx-agent 源配置路径：`~/.lx/config/ai.json`（只读导入，永不回写）。
-fn lx_agent_ai_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(
-        PathBuf::from(home)
-            .join(".lx")
-            .join("config")
-            .join("ai.json"),
-    )
-}
-
-/// lx-agent 内置供应商路径：`~/.lx/config/builtin-providers.json`。
-fn lx_agent_builtin_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|home| !home.is_empty())?;
-    Some(
-        PathBuf::from(home)
-            .join(".lx")
-            .join("config")
-            .join("builtin-providers.json"),
-    )
 }
 
 /// 读取并校验模型配置；文件不存在返回 None，损坏返回错误（不静默覆盖）。
@@ -426,90 +388,6 @@ pub fn create_private_dir(dir: &Path) -> Result<(), AiConfigError> {
     }
     crate::platform::restrict_dir_permissions(dir)?;
     Ok(())
-}
-
-/// 一次性导入：目标文件不存在时读取 lx-agent `ai.json`（必要时合并
-/// `builtin-providers.json` 的有效预置项）并写入本项目。
-///
-/// - 目标已存在：跳过导入（文件存在即幂等标记）。
-/// - 源不存在：写入空配置（UI 指向添加供应商）。
-/// - 源损坏：返回错误且不创建目标文件，可修复后重试。
-/// - 只导入模型相关字段与 API Key；不导入 lx-agent 的其它设置。
-pub fn import_from_lx_agent(target: &Path) -> Result<bool, AiConfigError> {
-    if target.exists() {
-        return Ok(false);
-    }
-    let source_text: Option<String> = match lx_agent_ai_path() {
-        Some(path) => match std::fs::read_to_string(path) {
-            Ok(text) => Some(text),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-            Err(error) => return Err(AiConfigError::Io(error)),
-        },
-        None => None,
-    };
-    let mut settings = match source_text {
-        None => AiSettings::empty(),
-        Some(text) => parse_ai(&text)?,
-    };
-    // builtin-providers.json 补充有效预置供应商（lx-agent 同语义）。
-    if let Some(builtin_path) = lx_agent_builtin_path()
-        && let Ok(builtin_text) = std::fs::read_to_string(&builtin_path)
-    {
-        merge_builtin_providers(&mut settings, &builtin_text);
-    }
-    normalize_import(&mut settings);
-    settings.validate()?;
-    save_ai(target, &settings)?;
-    Ok(true)
-}
-
-/// 解析 builtin-providers.json 并把缺失的预置供应商并入配置。
-fn merge_builtin_providers(settings: &mut AiSettings, text: &str) {
-    #[derive(Deserialize)]
-    struct BuiltinRoot {
-        #[serde(default, rename = "builtinProviders")]
-        builtin_providers: BTreeMap<String, ProviderConfig>,
-    }
-    let Ok(root) = serde_json::from_str::<BuiltinRoot>(text) else {
-        return;
-    };
-    for (id, provider) in root.builtin_providers {
-        settings.providers.entry(id).or_insert(provider);
-    }
-}
-
-/// 归一化导入结果：剔除未定义的 enabled 项、修正悬空默认选择。
-fn normalize_import(settings: &mut AiSettings) {
-    settings
-        .enabled_providers
-        .retain(|id| settings.providers.contains_key(id));
-    // 默认选择无效时回落到首个已启用且有模型的供应商；再无则清除。
-    let selection_valid = settings
-        .default_model
-        .as_ref()
-        .and_then(|selection| {
-            let provider = settings.providers.get(&selection.provider)?;
-            let model = provider.models.get(&selection.model)?;
-            let variant_ok = selection
-                .variant
-                .as_ref()
-                .is_none_or(|variant| model.variants.contains_key(variant));
-            variant_ok.then_some(())
-        })
-        .is_some();
-    if !selection_valid {
-        settings.default_model = settings.first_enabled_model();
-    } else if let Some(selection) = settings.default_model.as_mut()
-        && let Some(provider) = settings.providers.get(&selection.provider)
-        && let Some(model) = provider.models.get(&selection.model)
-    {
-        // 默认 variant 缺失时回落到模型默认 variant。
-        if selection.variant.is_none() {
-            selection.variant = model.variant.clone();
-        }
-    }
-    // 丢弃 lx-agent 独立设置节点（titleSummary 等），只保留本项目管理的字段。
-    settings.extra.clear();
 }
 
 /// 校验 base URL：http/https 方案、非空主机、无控制字符。

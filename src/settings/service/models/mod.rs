@@ -192,20 +192,21 @@ fn merge_settings(
         let mut models = std::collections::BTreeMap::new();
         if let Some(models_value) = item.get("models").and_then(Value::as_array) {
             for model_item in models_value {
-                let model_key = model_item
-                    .get("key")
-                    .or_else(|| model_item.get("id"))
-                    .and_then(Value::as_str)
-                    .ok_or("model key is required")?
-                    .to_string();
+                // 记录键以模型 id 为准（lx-agent 语义：`selection.model` 就是发给
+                // 供应商的模型 id）。前端可能派生一个独立的显示键，这里忽略它，
+                // 直接按 id 存储，避免“键与 id 不一致”这类无意义冲突。
                 let model_id = model_item
                     .get("id")
                     .and_then(Value::as_str)
-                    .unwrap_or(&model_key)
+                    .or_else(|| model_item.get("key").and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .ok_or("model id is required")?
                     .to_string();
                 let model_name = model_item
                     .get("name")
                     .and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
                     .unwrap_or(&model_id)
                     .to_string();
                 let transport = model_item
@@ -233,13 +234,13 @@ fn merge_settings(
                     && !variants.contains_key(variant)
                 {
                     return Err(format!(
-                        "model '{model_key}' variant '{variant}' is not in variants"
+                        "model '{model_id}' variant '{variant}' is not in variants"
                     ));
                 }
                 models.insert(
-                    model_key.clone(),
+                    model_id.clone(),
                     ModelConfig {
-                        id: model_id,
+                        id: model_id.clone(),
                         name: model_name,
                         transport,
                         limit,
@@ -247,7 +248,7 @@ fn merge_settings(
                         variants,
                         variant,
                         pricing: existing
-                            .and_then(|existing| existing.models.get(&model_key))
+                            .and_then(|existing| existing.models.get(&model_id))
                             .and_then(|model| model.pricing.clone()),
                         extra: serde_json::Map::new(),
                     },

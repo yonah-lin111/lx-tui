@@ -207,6 +207,53 @@ async fn put_stale_revision_conflicts_with_409() {
 }
 
 #[tokio::test]
+async fn model_record_key_follows_model_id() {
+    // 回归：前端可能为模型派生独立的显示键；后端必须按模型 id 存储记录键，
+    // 不得因“键与 id 不一致”报 422（截图中的报错即此）。
+    let (service, _events, _dir) = start_models("models-key-id").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let payload = r#"{
+        "providers": [{
+            "key": "9router-lx", "id": "9router-lx", "type": "openai-compatible",
+            "name": "9router", "baseUrl": "http://localhost:20128/v1", "apiKey": "test-key-not-real",
+            "models": [{
+                "key": "model-al4yqe", "id": "cbn/deepseek-v4.1-flash",
+                "name": "deepseek-v4.1-flash",
+                "limit": {"context": 1000000, "output": 65527}
+            }]
+        }],
+        "enabledProviders": ["9router-lx"],
+        "defaultModel": {"provider": "9router-lx", "model": "cbn/deepseek-v4.1-flash"},
+        "revision": ""
+    }"#;
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "按 id 存储: {}", body(&saved));
+
+    // 落盘记录键 == 模型 id；GET 回传的 key/id 一致。
+    let got = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let value: serde_json::Value = serde_json::from_str(body(&got)).expect("json");
+    let model = &value["providers"][0]["models"][0];
+    assert_eq!(model["key"], serde_json::json!("cbn/deepseek-v4.1-flash"));
+    assert_eq!(model["id"], serde_json::json!("cbn/deepseek-v4.1-flash"));
+    assert_eq!(
+        value["defaultModel"]["model"],
+        serde_json::json!("cbn/deepseek-v4.1-flash")
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn put_broadcasts_models_changed_event() {
     let (service, mut events, _dir) = start_models("models-event").await;
     let port = service.port();
