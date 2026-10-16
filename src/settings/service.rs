@@ -25,7 +25,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::Config;
 
-pub use handlers::{CommandView, Response};
+pub use handlers::{CommandView, Request, Response};
 
 /// Web 设置页产生的事件：由事件循环消费。
 #[derive(Debug)]
@@ -201,7 +201,7 @@ impl SettingsService {
     }
 }
 
-/// 接受循环：超时轮询 accept，逐连接并发处理（上限由连接超时兜底）。
+/// 接受循环：超时轮询 accept，逐连接并发处理（读超时由 `serve` 内部兜底）。
 async fn accept_loop(listener: TcpListener, state: Arc<ServiceState>) {
     loop {
         if state.shutdown.load(Ordering::SeqCst) {
@@ -211,8 +211,7 @@ async fn accept_loop(listener: TcpListener, state: Arc<ServiceState>) {
             Ok(Ok((stream, _))) => {
                 let connection = state.clone();
                 tokio::spawn(async move {
-                    let _ =
-                        tokio::time::timeout(CONNECTION_TIMEOUT, serve(stream, connection)).await;
+                    let _ = serve(stream, connection).await;
                 });
             }
             // accept 失败不致命：短暂退避后继续。
@@ -223,40 +222,27 @@ async fn accept_loop(listener: TcpListener, state: Arc<ServiceState>) {
 }
 
 /// 单连接处理：读满请求（header + Content-Length body）、路由、写回响应。
+///
+/// 读请求受 `CONNECTION_TIMEOUT` 约束（防慢连接）；路由/写回不套该短超时，
+/// 因为模型发现是显式用户动作且自带 10s 连接 / 30s 总超时。
 async fn serve(mut stream: TcpStream, state: Arc<ServiceState>) -> std::io::Result<()> {
-    let mut buffer = Vec::new();
-    let mut chunk = [0_u8; 4096];
-    let request = loop {
-        if let Some(request) = handlers::parse_request(&buffer)? {
-            break Some(request);
-        }
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 {
-            break None;
-        }
-        buffer.extend_from_slice(&chunk[..read]);
-        if buffer.len() > MAX_HEADER_BYTES.saturating_add(MAX_BODY_BYTES) {
+    let request = match tokio::time::timeout(CONNECTION_TIMEOUT, read_request(&mut stream)).await {
+        Ok(Ok(Some(request))) => request,
+        Ok(Ok(None)) => {
             write_response(
                 &mut stream,
-                413,
+                400,
                 "application/json",
-                "{\"error\":\"request too large\"}",
+                "{\"error\":\"bad request\"}",
             )
             .await?;
             return Ok(());
         }
+        Ok(Err(error)) => return Err(error),
+        // 读超时（慢连接）：直接放弃，不写响应。
+        Err(_) => return Ok(()),
     };
-    let Some(request) = request else {
-        write_response(
-            &mut stream,
-            400,
-            "application/json",
-            "{\"error\":\"bad request\"}",
-        )
-        .await?;
-        return Ok(());
-    };
-    let response = handlers::route(&request, &state);
+    let response = handlers::route(&request, &state).await;
     write_response(
         &mut stream,
         response.status,
@@ -264,6 +250,25 @@ async fn serve(mut stream: TcpStream, state: Arc<ServiceState>) -> std::io::Resu
         &response.body,
     )
     .await
+}
+
+/// 读满一个完整请求；数据不完整返回 None（EOF），超过上限返回 413 占位请求。
+async fn read_request(stream: &mut TcpStream) -> std::io::Result<Option<Request>> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    loop {
+        if let Some(request) = handlers::parse_request(&buffer)? {
+            return Ok(Some(request));
+        }
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            return Ok(None);
+        }
+        buffer.extend_from_slice(&chunk[..read]);
+        if buffer.len() > MAX_HEADER_BYTES.saturating_add(MAX_BODY_BYTES) {
+            return Ok(Some(handlers::oversized_request()));
+        }
+    }
 }
 
 /// 写回 HTTP/1.1 响应并关闭连接。

@@ -142,6 +142,11 @@ fn malformed() -> Request {
     }
 }
 
+/// 超过请求体上限的占位请求：路由层回 413。
+pub fn oversized_request() -> Request {
+    request_with_status(malformed(), 413)
+}
+
 /// 把错误状态写进占位请求（利用空 method 无法匹配路由的特性，由 status 字段承载）。
 fn request_with_status(mut request: Request, status: u16) -> Request {
     request.method = format!("#{status}");
@@ -198,7 +203,7 @@ fn find_header_end(buffer: &[u8]) -> Option<usize> {
 }
 
 /// 路由分派；所有写操作要求 token + 同源。
-pub fn route(request: &Request, state: &ServiceState) -> Response {
+pub async fn route(request: &Request, state: &ServiceState) -> Response {
     if request.method.is_empty() {
         return Response::error(400, "malformed request");
     }
@@ -236,7 +241,7 @@ pub fn route(request: &Request, state: &ServiceState) -> Response {
             command_request(request, path, state)
         }
         ("GET", "/api/commands") => commands_json(state),
-        (_, path) if path.starts_with("/api/models/") => models::route(request, state),
+        (_, path) if path.starts_with("/api/models/") => models::route(request, state).await,
         _ => Response::error(404, "not found"),
     }
 }

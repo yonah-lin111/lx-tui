@@ -30,7 +30,20 @@ impl Persistence {
     /// 不做启动信任门，由入口在进入 TUI 前处理（见 `untrusted_startup_path`）。
     pub fn start() -> Self {
         match Database::open_default() {
-            Ok(db) => Self { db: Some(db) },
+            Ok(db) => {
+                // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行；启动时
+                // 统一标记为 `interrupted`，否则恢复会话时该行永远显示 `[streaming]`。
+                match db.recover_interrupted_streams() {
+                    Ok(0) => {}
+                    Ok(recovered) => {
+                        tracing::info!(recovered, "recovered interrupted chat streams");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "recovering interrupted chat streams failed");
+                    }
+                }
+                Self { db: Some(db) }
+            }
             Err(error) => {
                 tracing::warn!(%error, "database unavailable; persistence disabled");
                 Self { db: None }

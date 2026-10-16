@@ -140,20 +140,10 @@ fn start_stream(
         return true;
     };
     // 上下文：从窗格内存中的完整轮次装配（DB 历史与内存一致；partial 排除）。
-    let draft = pane
-        .lx
-        .chat
-        .messages
-        .last()
-        .filter(|message| message.role == "user")
-        .map(|message| {
-            message
-                .parts
-                .iter()
-                .map(|part| part.content.as_str())
-                .collect::<String>()
-        })
-        .unwrap_or_default();
+    // 本轮草稿取**最近一条 user 消息**——`on_turn_committed` 已在其后追加了
+    // streaming 的 assistant 占位，故不能取 `messages.last()`（那会得到占位、
+    // 过滤 user 后变空串，导致请求携带空 user 消息被供应商拒绝）。
+    let draft = latest_user_draft(&pane.lx.chat.messages);
     let db_messages: Vec<crate::db::chat::ChatMessage> =
         chat_part_views_to_db(&pane.lx.chat.messages);
     let assembly = context::assemble(&AssemblyInput {
@@ -205,6 +195,26 @@ fn start_stream(
         report_outcome(net_sender, stream_key, outcome);
     });
     true
+}
+
+/// 本轮用户草稿：取**最近一条 user 消息**的正文 part 拼接。
+///
+/// 发送时该轮 assistant 占位已追加在末尾，故不能用 `messages.last()`；
+/// 必须按 role 反向查找 user 消息，否则得到空串（请求携带空 user 消息被拒）。
+fn latest_user_draft(messages: &[crate::app::state::ChatMessageView]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|message| message.role == "user")
+        .map(|message| {
+            message
+                .parts
+                .iter()
+                .filter(|part| part.kind == crate::chat::events::PartKind::Text)
+                .map(|part| part.content.as_str())
+                .collect::<String>()
+        })
+        .unwrap_or_default()
 }
 
 /// 把流结果拆分回投：内容 delta 先行，Finished 最后。
@@ -332,4 +342,63 @@ fn chat_part_views_to_db(
             parts: chat_part_views(&message.parts),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::state::{ChatMessageView, ChatPartView};
+    use crate::chat::events::PartKind;
+
+    fn message(id: &str, role: &str, text: &str, reasoning: Option<&str>) -> ChatMessageView {
+        let mut parts = Vec::new();
+        if let Some(reasoning) = reasoning {
+            parts.push(ChatPartView {
+                kind: PartKind::Reasoning,
+                content: reasoning.to_string(),
+                provider_metadata_json: None,
+            });
+        }
+        parts.push(ChatPartView {
+            kind: PartKind::Text,
+            content: text.to_string(),
+            provider_metadata_json: None,
+        });
+        ChatMessageView {
+            id: id.to_string(),
+            role: role.to_string(),
+            status: "complete".into(),
+            turn_index: 0,
+            parts,
+            model_label: None,
+            error_code: None,
+        }
+    }
+
+    /// 回归：assistant 占位已追加在末尾时，草稿必须取最近一条 **user** 消息，
+    /// 而不是空串——空 user 消息会被供应商以 400/503 拒绝（param: messages）。
+    #[test]
+    fn draft_uses_latest_user_message_not_trailing_assistant_placeholder() {
+        let messages = vec![
+            message("u0", "user", "第一问", None),
+            message("a0", "assistant", "第一答", None),
+            message("u1", "user", "第二问", None),
+            message("a1", "assistant", "", None), // streaming 占位
+        ];
+        assert_eq!(latest_user_draft(&messages), "第二问");
+    }
+
+    /// 仅取正文 part：thinking 元数据不拼入用户消息正文。
+    #[test]
+    fn draft_excludes_reasoning_parts() {
+        let messages = vec![message("u0", "user", "正文", Some("思绪"))];
+        assert_eq!(latest_user_draft(&messages), "正文");
+    }
+
+    /// 无 user 消息时为空串（兜底；正常发送路径不会走到）。
+    #[test]
+    fn draft_is_empty_without_user_message() {
+        let messages = vec![message("a0", "assistant", "答", None)];
+        assert_eq!(latest_user_draft(&messages), "");
+    }
 }

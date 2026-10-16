@@ -23,11 +23,11 @@ fn ai_path(state: &ServiceState) -> std::path::PathBuf {
 }
 
 /// `/api/models` 系列入口。
-pub fn route(request: &Request, state: &ServiceState) -> Response {
+pub async fn route(request: &Request, state: &ServiceState) -> Response {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/api/models/settings") => get_settings(state),
         ("PUT", "/api/models/settings") => put_settings(request, state),
-        ("POST", "/api/models/fetch") => fetch_models(request, state),
+        ("POST", "/api/models/fetch") => fetch_models(request, state).await,
         _ => Response::error(404, "not found"),
     }
 }
@@ -340,8 +340,9 @@ fn merge_api_key(
 /// POST fetch：远端模型发现（仅 openai-compatible 的 `/v1/models` 语义）。
 ///
 /// 使用请求 body 里的 `{type, baseUrl, apiKey}`（页面当前编辑值）；未带 Key
-/// 时回落服务端已保存 Key。后台异步请求，不阻塞本地连接。
-fn fetch_models(request: &Request, state: &ServiceState) -> Response {
+/// 时回落服务端已保存 Key。在事件循环的 Tokio 运行时内直接 await（连接超时短），
+/// 绝不在运行时内再建运行时。
+async fn fetch_models(request: &Request, state: &ServiceState) -> Response {
     let body: Value = match serde_json::from_str(&request.body) {
         Ok(value) => value,
         Err(error) => return Response::error(422, &format!("invalid json: {error}")),
@@ -403,9 +404,9 @@ fn fetch_models(request: &Request, state: &ServiceState) -> Response {
             "model discovery is not supported for this provider type",
         );
     }
-    // 同步执行（连接超时短）；fetch 是显式用户动作，短阻塞可接受。
-    let result = fetch_remote_models_blocking(&base_url, &api_key);
-    match result {
+    // 直接 await 远端发现（连接/整体超时在 fetch 内设定）；事件循环是 Tokio 运行时，
+    // 不能在运行时中再 `block_on`（会 panic）。
+    match fetch_remote_models(&base_url, &api_key).await {
         Ok(models) => {
             let models_json: Vec<Value> = models
                 .iter()
@@ -418,18 +419,6 @@ fn fetch_models(request: &Request, state: &ServiceState) -> Response {
         }
         Err(code) => Response::error(502, &code),
     }
-}
-
-/// 远端模型列表获取：`/v1/models` 语义，超时、尺寸与重定向限制。
-fn fetch_remote_models_blocking(
-    base_url: &str,
-    api_key: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("runtime: {error}"))?;
-    runtime.block_on(async move { fetch_remote_models(base_url, api_key).await })
 }
 
 /// 异步执行一次发现请求。

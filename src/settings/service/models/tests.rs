@@ -491,6 +491,76 @@ async fn unknown_models_route_is_404() {
     service.shutdown();
 }
 
+/// 回归：fetch 端点在事件循环的 Tokio 运行时内执行，绝不能再建运行时
+/// （`block_on` 会 panic "Cannot start a runtime from within a runtime"）。
+/// 本测试在 `#[tokio::test]` 运行时里走 POST /api/models/fetch 到本地 mock，
+/// 成功即证明路径不再嵌套运行时。
+#[tokio::test]
+async fn fetch_returns_models_from_local_mock_without_nested_runtime() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .expect("bind mock");
+    let model_port = listener.local_addr().expect("addr").port();
+    let mock = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buffer = Vec::new();
+        let mut chunk = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut chunk).await.expect("read");
+            if read == 0 {
+                break;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let payload = r#"{"data":[{"id":"m2","owned_by":"b"},{"id":"m1","owned_by":"a"}]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.shutdown().await;
+        // 记录请求行，断言命中的是 /v1/models。
+        String::from_utf8_lossy(&buffer).into_owned()
+    });
+
+    let (service, _events, _dir) = start_models("models-fetch-ok").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let payload = format!(
+        r#"{{"type":"openai-compatible","baseUrl":"http://127.0.0.1:{model_port}/v1","apiKey":"k"}}"#
+    );
+    let response = request(
+        port,
+        &write(
+            "POST",
+            &format!("/api/models/fetch?token={token}"),
+            &payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&response), 200, "fetch 成功: {}", body(&response));
+    let parsed: serde_json::Value = serde_json::from_str(body(&response)).expect("json");
+    let models = parsed["models"].as_array().expect("models array");
+    assert_eq!(models.len(), 2, "去重并按 id 排序后两条");
+    assert_eq!(models[0]["id"], serde_json::json!("m1"));
+    assert_eq!(models[1]["id"], serde_json::json!("m2"));
+
+    let recorded = mock.await.expect("mock join");
+    assert!(
+        recorded.contains("GET /v1/models"),
+        "命中 /v1/models：{recorded}"
+    );
+    service.shutdown();
+}
+
 /// 服务注入的用户数据根（模型配置文件位于其 config/ai.json）。
 fn state_user_root(service: &SettingsService) -> PathBuf {
     service.user_root_for_tests()

@@ -59,8 +59,8 @@ lx-tui/
       context.rs                上下文装配（完整轮次、窗口裁剪）
     settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
       commands.rs               自定义命令 Markdown 文件的读写
-      service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递
-      service/models.rs         模型设置 API：GET 脱敏 / PUT 原子保存 / POST 远端发现
+      service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）
+      service/models.rs         模型设置 API：GET 脱敏 / PUT 原子保存 / POST 远端发现（发现直接 await，不 block_on）
     platform/                   OS 专属实现（剪贴板、鼠标捕获与指针形状、默认 shell、进程 cwd、打开浏览器、文件/目录权限）
   tests/                        集成测试
   scripts/                      开发与维护脚本，按需创建
