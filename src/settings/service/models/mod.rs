@@ -503,3 +503,6 @@ fn join_models_url(base_url: &str) -> String {
     }
     format!("{base}/{path}")
 }
+
+#[cfg(test)]
+mod tests;

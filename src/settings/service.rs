@@ -10,6 +10,8 @@ mod page;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_helpers;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -170,6 +172,15 @@ impl SettingsService {
     /// 浏览器访问 URL：`http://127.0.0.1:<port>/?token=<token>`。
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}/?token={}", self.port, self.token())
+    }
+
+    /// 测试注入的用户数据根（生产为 None，走环境推导）。
+    #[cfg(test)]
+    pub(crate) fn user_root_for_tests(&self) -> PathBuf {
+        self.state
+            .user_root()
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("."))
     }
 
     /// 刷新服务端的命令列表快照（TUI 在命令变化后调用）。
