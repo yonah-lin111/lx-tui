@@ -59,6 +59,11 @@ pub trait StreamDecoder {
     fn finish(&mut self) -> Vec<ChatDelta>;
     /// 协议是否已显式收到完成信号（client 在 EOF 无信号时报中断错误）。
     fn has_completion(&self) -> bool;
+    /// 收到协议级结束标记（OpenAI 兼容的 `[DONE]`）。
+    ///
+    /// 默认忽略：仅对 `[DONE]` 有语义的解码器（Chat Completions）覆写为置完成位；
+    /// 其余协议（Anthropic/Google/Responses）由本协议事件判定完成。
+    fn mark_done(&mut self) {}
 }
 
 /// 按 transport 构造解码器。

@@ -284,3 +284,62 @@ fn usage_missing_stays_none() {
             .any(|delta| matches!(delta, ChatDelta::Usage(_)))
     );
 }
+
+#[test]
+fn completion_and_usage_in_same_frame_still_marks_finished() {
+    // 回归：部分 OpenAI 兼容端点把 finish_reason 与 usage 放在同一帧。
+    // 此前 usage 命中即提前返回，finish_reason 被跳过 → 误报 “stream ended
+    // without completion”，真实内容被标成 failed。
+    let mut decoder = Decoder::default();
+    let deltas = decode_all(
+        &mut decoder,
+        &[
+            r#"{"choices":[{"delta":{"content":"你好"}}]}"#,
+            r#"{"choices":[{"delta":{"role":"assistant","content":""},"finish_reason":"stop"}],
+                "usage":{"prompt_tokens":2005,"completion_tokens":174}}"#,
+        ],
+    );
+    assert!(
+        deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::Finished { .. })),
+        "同帧的 finish_reason 必须仍产出完成信号"
+    );
+    assert!(
+        deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::Usage(u) if u.input == Some(2005))),
+        "usage 仍被提取"
+    );
+    assert!(decoder.has_completion(), "同帧 completion+usage 置完成位");
+}
+
+#[test]
+fn empty_reasoning_content_produces_no_part() {
+    // 端点常在每帧回 `reasoning_content:""`：不得产出空 reasoning part。
+    let mut decoder = Decoder::default();
+    let deltas = decode_all(
+        &mut decoder,
+        &[
+            r#"{"choices":[{"delta":{"content":"hi","reasoning_content":""}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+            r#"{"choices":[{"delta":{},"reasoning_content":"","finish_reason":"stop"}]}"#,
+        ],
+    );
+    assert!(
+        !deltas.iter().any(|delta| matches!(
+            delta,
+            ChatDelta::Part(part) if part.kind == PartKind::Reasoning
+        )),
+        "空 reasoning_content 不产生 reasoning part"
+    );
+}
+
+#[test]
+fn done_marker_marks_completion() {
+    let mut decoder = Decoder::default();
+    // `[DONE]` 由 client 层调用 mark_done（此处直接验证解码器语义）。
+    assert!(!decoder.has_completion());
+    decoder.mark_done();
+    assert!(decoder.has_completion(), "[DONE] 视为完成");
+}

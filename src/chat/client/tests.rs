@@ -582,3 +582,37 @@ async fn transient_503_is_retried_then_succeeds() {
         "两次 503 各触发一次重试（共 3 次请求）"
     );
 }
+
+/// 回归：真实端点把 finish_reason 与 usage 同帧、并以 `[DONE]` 结束；
+/// 这样的流必须判为完成，而不是 “stream ended without completion”。
+#[tokio::test]
+async fn finish_with_usage_same_frame_and_done_completes() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"你好\",\"reasoning_content\":\"\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":2005,\"completion_tokens\":174}}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _server) = spawn_mock("200 OK", body).await;
+    let (_sender, receiver) = no_cancel();
+    let outcome = run_stream(
+        "openai-compatible",
+        &format!("{base}/v1"),
+        Some("k"),
+        Duration::from_secs(5),
+        request(),
+        receiver,
+    )
+    .await;
+    assert_eq!(
+        outcome.stop,
+        StopReason::Complete,
+        "同帧 usage+finish_reason 判为完成"
+    );
+    assert!(
+        outcome
+            .deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::Usage(u) if u.input == Some(2005))),
+        "usage 被提取"
+    );
+}

@@ -86,13 +86,13 @@ impl StreamDecoder for Decoder {
         {
             return Err(format!("api error: {}", truncate_code(message)));
         }
+        // usage：可选字段，可能与 finish_reason 同帧（部分 OpenAI 兼容端点如此），
+        // 因此必须先记录、但不提前返回，继续解析 choices 与 finish_reason。
         if let Some(usage) = openai_usage(&value) {
             if let ChatDelta::Usage(usage_value) = &usage {
                 self.usage = Some(*usage_value);
             }
-            // usage 帧通常无内容；随帧产出并跳过 choices 解析。
             out.push(usage);
-            return Ok(out);
         }
         let Some(choices) = value.get("choices").and_then(Value::as_array) else {
             return Ok(out);
@@ -101,8 +101,9 @@ impl StreamDecoder for Decoder {
             let delta = choice.get("delta");
             if let Some(delta) = delta {
                 // 原生推理字段：独立 reasoning part（不进标签状态机）。
+                // 空串（端点常在每帧回 `reasoning_content:""`）不产出空 part。
                 for key in ["reasoning_content", "reasoning"] {
-                    if let Some(text) = json_str(delta, key) {
+                    if let Some(text) = json_str(delta, key).filter(|text| !text.is_empty()) {
                         out.push(reasoning_delta(text));
                     }
                 }
@@ -111,12 +112,20 @@ impl StreamDecoder for Decoder {
                     out.extend(segments_to_deltas(self.splitter.feed(text)));
                 }
             }
-            if let Some(reason) = json_str(choice, "finish_reason") {
+            // finish_reason 可能为 null（进行中）或空串；仅非空值视为完成信号。
+            if let Some(reason) = choice
+                .get("finish_reason")
+                .and_then(Value::as_str)
+                .filter(|reason| !reason.is_empty())
+            {
+                // tool_calls 之类的结束原因本期不支持，避免误判为完成。
+                if reason != "stop" && reason != "length" {
+                    return Err(format!("unsupported finish_reason: {reason}"));
+                }
                 self.finished = true;
                 out.push(ChatDelta::Finished {
                     reason: StopReason::Complete,
                 });
-                let _ = reason;
             }
             // 意外 tool call：不支持工具，本轮以不支持错误结束。
             if let Some(calls) = delta
@@ -139,6 +148,11 @@ impl StreamDecoder for Decoder {
         // Chat Completions：finish_reason 或 [DONE] 后正常 EOF 均视为完成；
         // 无完成信号且流截断由 client 判定。
         self.finished
+    }
+
+    fn mark_done(&mut self) {
+        // `[DONE]` 是 OpenAI 兼容流的正常结束标记。
+        self.finished = true;
     }
 }
 

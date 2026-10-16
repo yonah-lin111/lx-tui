@@ -222,8 +222,10 @@ fn decode_frame(
     deltas: &mut Vec<ChatDelta>,
     total_text: &mut usize,
 ) -> Result<(), String> {
-    // [DONE] 标记：跳过 JSON 解析。
+    // [DONE] 标记：OpenAI 兼容流的正常结束信号，等价于完成（EOF 后据此判定完成，
+    // 不再误报 "stream ended without completion"）。跳过 JSON 解析。
     if frame.data.trim() == "[DONE]" {
+        decoder.mark_done();
         return Ok(());
     }
     let produced = decoder.decode_frame(&frame.data)?;
