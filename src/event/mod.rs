@@ -1,5 +1,6 @@
 //! 唯一事件循环：tokio select 收敛键盘、PTY 输出与渲染调度。
 
+pub(crate) mod chat;
 pub(crate) mod commands;
 mod git;
 pub(crate) mod input;
@@ -90,6 +91,8 @@ pub enum AppEvent {
         id: u64,
         outcome: Result<PathBuf, crate::app::referenced::PathValidation>,
     },
+    /// lx 聊天网络流事件（delta / finished）；按 request key 过滤。
+    ChatNet(chat::ChatNetEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -144,6 +147,8 @@ async fn run_loop(
     let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
+    // lx 聊天在途流的取消句柄。
+    let mut chat_streams = chat::ChatStreams::default();
     commands::seed_git_requests(state);
 
     while !state.should_quit {
@@ -154,6 +159,11 @@ async fn run_loop(
             match event {
                 SettingsEvent::ConfigChanged(updated) => config = updated,
                 SettingsEvent::CommandsChanged => commands_reload = true,
+                SettingsEvent::ModelsChanged(settings) => {
+                    // 模型配置已落盘：更新快照；在途请求继续持有旧快照到结束，
+                    // 下一轮发送才用新配置。
+                    update::apply_models_changed(state, &settings);
+                }
             }
             dirty = true;
         }
@@ -187,6 +197,10 @@ async fn run_loop(
         commands_reload = false;
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
+            dirty = true;
+        }
+        // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
+        if chat::pump_chat_streams(state, &mut chat_streams, &sender) {
             dirty = true;
         }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
@@ -268,9 +282,21 @@ async fn run_loop(
             },
             message = receiver.recv() => {
                 if let Some(message) = message {
-                    handle_app_event(message, state, &mut sessions, &mut git_inflight);
+                    handle_app_event(
+                        message,
+                        state,
+                        &mut sessions,
+                        &mut git_inflight,
+                        &mut chat_streams,
+                    );
                     while let Ok(message) = receiver.try_recv() {
-                        handle_app_event(message, state, &mut sessions, &mut git_inflight);
+                        handle_app_event(
+                            message,
+                            state,
+                            &mut sessions,
+                            &mut git_inflight,
+                            &mut chat_streams,
+                        );
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
                     cwd_check.get_or_insert_with(|| Instant::now() + session::CWD_CHECK_DELAY);
@@ -334,6 +360,7 @@ fn handle_app_event(
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
     git_inflight: &mut HashSet<PathBuf>,
+    chat_streams: &mut chat::ChatStreams,
 ) {
     match message {
         AppEvent::PaneOutput(id, bytes) => {
@@ -390,6 +417,10 @@ fn handle_app_event(
                 update::apply_referenced_validation_error(state, id, error);
             }
         },
+        AppEvent::ChatNet(event) => {
+            // 网络事件按 key 过滤后转 update；调用方随后统一置脏。
+            chat::handle_net_event(state, chat_streams, event);
+        }
         AppEvent::PromptWorktreeListed {
             repo_root,
             candidates,

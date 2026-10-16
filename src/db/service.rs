@@ -49,6 +49,10 @@ impl Persistence {
     }
 
     /// 执行全部待办效应并惰性载入显示中工作区的提示词树；返回状态是否有变化。
+    ///
+    /// 聊天的网络效应（StartChatStream/CancelChatStream）不在此执行——
+    /// 事件层 `pump_chat_streams` 取走后到 Tokio 任务运行；本函数把它们
+    /// 原样放回队列尾部。
     pub fn pump(&mut self, state: &mut AppState) -> bool {
         let mut changed = false;
         for _ in 0..MAX_EFFECT_ROUNDS {
@@ -56,9 +60,25 @@ impl Persistence {
                 break;
             }
             let effects = std::mem::take(&mut state.effects);
+            let mut deferred: Vec<Effect> = Vec::new();
             for effect in effects {
+                if is_network_effect(&effect) {
+                    deferred.push(effect);
+                    continue;
+                }
                 changed |= self.execute(state, effect);
             }
+            if deferred.is_empty() {
+                if state.effects.is_empty() {
+                    break;
+                }
+                continue;
+            }
+            // 网络效应放回队首：事件层 pump_chat_streams 尽快取走。
+            let rest = std::mem::take(&mut state.effects);
+            deferred.extend(rest);
+            state.effects = deferred;
+            break;
         }
         changed |= self.ensure_tree_loaded(state);
         changed |= self.ensure_referenced_loaded(state);
@@ -334,6 +354,143 @@ impl Persistence {
                 );
                 true
             }
+            // ===== lx 聊天（DB 效应；网络效应由事件层执行） =====
+            Effect::BeginChatTurn {
+                pane,
+                generation,
+                workspace,
+                session_id,
+                draft,
+                model,
+            } => {
+                let committed = self
+                    .with_db(|db| db.begin_turn(&workspace, session_id.as_deref(), &draft, &model));
+                match committed {
+                    Some(committed) => {
+                        update::on_turn_committed(state, pane, generation, &committed)
+                    }
+                    None => update::on_turn_failed(state, pane, generation),
+                }
+            }
+            Effect::CancelChatCommit { pane, generation } => {
+                // Committing 阶段取消：DB ack 已在队列中由 BeginChatTurn 处理，
+                // 此处仅记录（ack 到达后直接落 interrupted、不发 HTTP）。
+                let _ = (pane, generation);
+                false
+            }
+            Effect::FinishChatTurn {
+                key,
+                assistant_id,
+                parts,
+                outcome,
+                usage,
+            } => {
+                // workspace 按窗格当前归属解析（关闭窗格后仍按原 workspace 完成写入）。
+                let workspace = state
+                    .workspace_cwd_for_pane(key.pane)
+                    .unwrap_or_else(|| PathBuf::from(""));
+                let success = self
+                    .with_db(|db| db.finish(&workspace, &assistant_id, &parts, &outcome, usage));
+                update::on_finish_ack(state, &key, success.is_some())
+            }
+            Effect::ListChatSessions { pane } => {
+                let workspace = state
+                    .workspace_cwd_for_pane(pane)
+                    .map(|path| path.to_path_buf());
+                let Some(workspace) = workspace else {
+                    return false;
+                };
+                let entries = self.with_db(|db| {
+                    db.list_chat_sessions(&workspace, 0, crate::db::chat::SESSION_PAGE_SIZE)
+                });
+                let Some(entries) = entries else {
+                    return false;
+                };
+                let views: Vec<crate::app::state::HistoryEntry> = entries
+                    .into_iter()
+                    .map(|summary| crate::app::state::HistoryEntry {
+                        session_id: summary.external_id,
+                        title: summary.title,
+                        status: summary.status,
+                        updated_at_ms: summary.updated_at_ms,
+                    })
+                    .collect();
+                update::on_history_listed(state, pane, views)
+            }
+            Effect::LoadChatSession { pane, session_id } => {
+                let workspace = state
+                    .workspace_cwd_for_pane(pane)
+                    .map(|path| path.to_path_buf());
+                let Some(workspace) = workspace else {
+                    return false;
+                };
+                let loaded: Option<(
+                    Option<Vec<crate::db::chat::ChatMessage>>,
+                    Option<crate::db::chat::ModelSnapshot>,
+                )> = self.with_db(|db| {
+                    let messages = db.load_chat_session(&workspace, &session_id)?;
+                    let model = db.chat_session_model(&workspace, &session_id)?;
+                    Ok((messages, model))
+                });
+                let Some((Some(messages), model)) = loaded else {
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Error,
+                            text::LX_CHAT_SESSION_BUSY,
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    return true;
+                };
+                // DB 的模型快照三列 → 窗格选择（恢复后 `/resume` 保留最后保存的选择）。
+                let selection = model.map(|snapshot| crate::config::ai::ModelSelection {
+                    provider: snapshot.provider,
+                    model: snapshot.model,
+                    variant: snapshot.variant,
+                });
+                update::on_session_loaded(state, pane, &session_id, &messages, selection)
+            }
+            Effect::RenameChatSession {
+                workspace,
+                session_id,
+                title,
+            } => {
+                // 重命名成功后刷新该窗格的历史面板（若打开）。
+                let renamed =
+                    self.with_db(|db| db.rename_chat_session(&workspace, &session_id, &title));
+                renamed.is_some()
+            }
+            Effect::DeleteChatSession {
+                workspace,
+                session_id,
+            } => {
+                let deleted = self.with_db(|db| db.delete_chat_session(&workspace, &session_id));
+                // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有）。
+                if deleted.is_some() {
+                    let mut changed = false;
+                    let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
+                    for pane in panes {
+                        changed |= update::on_session_deleted(state, pane, &session_id);
+                    }
+                    return changed;
+                }
+                false
+            }
+            Effect::SetChatSessionModel {
+                workspace,
+                session_id,
+                model,
+            } => {
+                self.with_db(|db| db.set_chat_session_model(&workspace, &session_id, &model));
+                false
+            }
+            // 网络效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
+            Effect::StartChatStream { .. } | Effect::CancelChatStream { .. } => {
+                tracing::warn!("chat network effect reached persistence pump");
+                false
+            }
         }
     }
 
@@ -459,6 +616,14 @@ impl Persistence {
             }
         }
     }
+}
+
+/// 是否为聊天网络效应（由事件层 Tokio 任务执行，非同步 DB 写）。
+fn is_network_effect(effect: &Effect) -> bool {
+    matches!(
+        effect,
+        Effect::StartChatStream { .. } | Effect::CancelChatStream { .. }
+    )
 }
 
 /// 标记面板已载入（无持久化或查询失败时的空树；键为 None 表示工作区无路径）。

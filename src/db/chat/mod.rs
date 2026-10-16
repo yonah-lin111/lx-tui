@@ -646,5 +646,19 @@ fn single_line_preview(text: &str, max_chars: usize) -> String {
     out.trim().to_string()
 }
 
+/// app 层聊天视图 parts → 存储记录 parts（position 按枚举顺序写 0..n）。
+pub fn chat_part_views(parts: &[crate::app::state::ChatPartView]) -> Vec<ChatPart> {
+    parts
+        .iter()
+        .enumerate()
+        .map(|(position, part)| ChatPart {
+            position: position as i64,
+            kind: part.kind_str().to_string(),
+            content: part.content.clone(),
+            provider_metadata_json: part.provider_metadata_json.clone(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

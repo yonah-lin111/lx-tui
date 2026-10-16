@@ -486,6 +486,35 @@ pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 /// 提示词保存失败：内容保留脏状态，自动保存将重试。
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
 
+/// lx 聊天相关提示与状态文案。
+pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Chat is available in Native Agent only";
+pub const LX_CHAT_NO_MODEL: &str = "No model available; configure providers in settings";
+pub const LX_CHAT_NO_WORKSPACE: &str = "Workspace path unavailable";
+pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
+pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
+pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
+pub const LX_CHAT_STOP_HINT: &str = "stop";
+/// 状态行：未知 token 的占位。
+pub const LX_CHAT_TOKENS_UNKNOWN: &str = "--";
+/// 状态行：`实际输入 token / 上限` 分隔。
+pub const LX_CHAT_STATUS_SEPARATOR: &str = "/";
+/// thinking 折叠行前缀与展开提示。
+pub const LX_CHAT_THINKING_LABEL: &str = "thinking";
+pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ thinking";
+pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ thinking";
+/// `/` 命令面板标题。
+pub const LX_SLASH_PANEL_TITLE: &str = "Commands";
+/// `/resume` 历史面板标题与空态。
+pub const LX_HISTORY_PANEL_TITLE: &str = "Sessions";
+pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
+/// `/model` 面板标题。
+pub const LX_MODEL_PANEL_TITLE: &str = "Model";
+pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
+/// 消息中断/失败标记。
+pub const LX_CHAT_INTERRUPTED_LABEL: &str = "interrupted";
+pub const LX_CHAT_FAILED_LABEL: &str = "failed";
+pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
+
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
 pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";

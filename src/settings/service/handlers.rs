@@ -1,5 +1,6 @@
 //! 设置服务路由与处理器：请求解析、token/同源校验、配置与命令 CRUD。
 
+use super::models;
 use super::{MAX_BODY_BYTES, MAX_HEADER_BYTES, ServiceState, SettingsEvent, page};
 use std::collections::HashMap;
 
@@ -235,6 +236,7 @@ pub fn route(request: &Request, state: &ServiceState) -> Response {
             command_request(request, path, state)
         }
         ("GET", "/api/commands") => commands_json(state),
+        (_, path) if path.starts_with("/api/models/") => models::route(request, state),
         _ => Response::error(404, "not found"),
     }
 }

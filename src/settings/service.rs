@@ -5,6 +5,7 @@
 //! 与 `config` 的存储函数。浏览器启动由 `src/platform/` 负责。
 
 mod handlers;
+mod models;
 mod page;
 
 #[cfg(test)]
@@ -31,6 +32,8 @@ pub enum SettingsEvent {
     ConfigChanged(Config),
     /// 命令文件发生增删改，TUI 应重载自定义命令。
     CommandsChanged,
+    /// 模型配置已保存；携带合并后的新配置快照。
+    ModelsChanged(Box<crate::config::ai::AiSettings>),
 }
 
 /// 服务共享状态：token、事件发送端、命令快照与关闭标记。

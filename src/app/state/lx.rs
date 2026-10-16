@@ -4,9 +4,17 @@ use crate::app::markdown::{BlockPanel, block_commands, block_insertion, block_tr
 use crate::app::paste::{PasteAction, PasteCandidate, PastePanel};
 use crate::app::prompt::{list, text};
 
+pub mod chat;
 pub mod mention;
+pub mod slash;
 
+pub use chat::{
+    ChatMessageView, ChatPartView, FrozenModel, LxChat, ModelsSnapshot, RequestKey, RequestState,
+};
 pub use mention::{LxMention, LxMentionView};
+pub use slash::{
+    HistoryEntry, HistoryPanel, ModelPicker, ModelPickerStage, SlashCommand, SlashPanel,
+};
 
 /// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +52,10 @@ pub struct Lx {
     paste: Option<LxPaste>,
     /// `@` 文件提及面板：扫描根、缓存与候选；与块面板/粘贴面板互斥。
     mention: LxMention,
+    /// `/` 命令面板（model/resume/new）；与块面板/粘贴/提及面板互斥。
+    pub slash: Option<super::lx::SlashPanel>,
+    /// 聊天会话状态：会话引用、历史视图与请求状态机。
+    pub chat: LxChat,
     /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
     undo: Vec<LxSnapshot>,
     /// 重做历史。
@@ -94,6 +106,8 @@ impl Lx {
             panel: None,
             paste: None,
             mention: LxMention::default(),
+            slash: None,
+            chat: LxChat::new(),
             undo: Vec::new(),
             redo: Vec::new(),
         }

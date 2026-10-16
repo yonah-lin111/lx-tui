@@ -297,6 +297,12 @@ impl AiSettings {
     }
 }
 
+impl Default for AiSettings {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 /// 模型配置错误。
 #[derive(Debug)]
 pub enum AiConfigError {

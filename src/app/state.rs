@@ -20,7 +20,11 @@ pub mod lx;
 pub mod pane;
 pub mod workspace;
 
-pub use lx::{Lx, LxEntry};
+pub use lx::{
+    ChatMessageView, ChatPartView, FrozenModel, HistoryEntry, HistoryPanel, Lx, LxChat, LxEntry,
+    ModelPicker, ModelPickerStage, ModelsSnapshot, RequestKey, RequestState, SlashCommand,
+    SlashPanel,
+};
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceRow, current_workspace_identity, home_dir,
@@ -160,6 +164,8 @@ pub struct AppState {
     pub settings_available: bool,
     /// 设置按钮点击请求：事件层取走后打开浏览器。
     pub settings_open_requested: bool,
+    /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
+    pub models: ModelsSnapshot,
 }
 
 impl AppState {
@@ -234,6 +240,7 @@ impl AppState {
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,
+            models: ModelsSnapshot::default(),
         }
     }
 
