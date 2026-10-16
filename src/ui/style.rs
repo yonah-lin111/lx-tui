@@ -53,7 +53,7 @@ pub fn border_title() -> Style {
         .remove_modifier(Modifier::BOLD)
 }
 
-/// 选中项：主题强调色填充（Cyan 底、黑字、加粗）；激活标签使用。
+/// 主题强调色填充（Cyan 底、黑字、加粗）；激活标签使用。
 pub fn selected_item() -> Style {
     Style::default()
         .fg(Color::Black)
@@ -461,6 +461,16 @@ pub fn template_block_bg(status: TemplateStatus) -> Style {
 /// 补充块 `+++` 结构标记：次要信息。
 pub fn supple_marker() -> Style {
     muted()
+}
+
+/// 用户聊天消息整块底色（低饱和暗蓝，Indexed）：跨行一致、不抢正文。
+pub fn chat_user_bg() -> Style {
+    Style::default().bg(Color::Indexed(236))
+}
+
+/// 状态行「上下文占用」圆点：≥90% 红、≥75% 黄、否则绿（对齐 lx-agent / agent 步骤）。
+pub fn chat_context_dot(percent: u8) -> Style {
+    agent_context_dot(percent)
 }
 
 /// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。

@@ -33,6 +33,8 @@ lx-tui/
       layout.rs                 屏幕区域划分（侧栏/标签栏/主区/右栏）
       style.rs                  语义化样式 Token（codex 风格 ANSI 配色）
       text.rs                   全部用户可见文案
+      markdown.rs               编辑器 markdown 高亮（保留标记上色）
+      markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记；UI 页 agent 回答与 lx 聊天共用）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
       main_content/lx/          lx 页渲染：欢迎页、历史（history.rs）、状态行（status.rs）、提及面板
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建

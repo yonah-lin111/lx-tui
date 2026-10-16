@@ -4474,3 +4474,47 @@ fn lx_shift_enter_does_not_newline_when_mention_panel_visible() {
         "文件高亮时 Shift+Enter 不换行"
     );
 }
+
+#[test]
+fn lx_slash_panel_opens_filters_and_closes_on_slash_delete() {
+    let mut state = AppState::demo();
+    for ch in "/".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    let pane = state.active_pane().expect("pane");
+    assert!(pane.lx.slash.is_some(), "输入 `/` 打开命令面板");
+    // 继续输入做模糊过滤（`md` 命中 /model）。
+    for ch in "md".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    let pane = state.active_pane().expect("pane");
+    match pane.lx.slash.as_ref() {
+        Some(SlashPanel::Commands { items, .. }) => {
+            assert_eq!(items, &vec![SlashCommand::Model], "模糊过滤命中 /model");
+        }
+        other => panic!("expected commands panel, got {other:?}"),
+    }
+    // 退回 `/`，再删除 `/`：面板关闭（与 `@` 面板一致，编辑键不再被吞）。
+    apply_lx_input(&mut state, LxInput::Backspace);
+    apply_lx_input(&mut state, LxInput::Backspace);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "/");
+    apply_lx_input(&mut state, LxInput::Backspace);
+    let pane = state.active_pane().expect("pane");
+    assert!(pane.lx.input.is_empty());
+    assert!(pane.lx.slash.is_none(), "删除 `/` 后面板关闭");
+}
+
+#[test]
+fn lx_slash_fuzzy_matches_subsequence() {
+    // `nw` 命中 /new（子序列），`h` 命中 /history。
+    let names: Vec<&str> = SlashPanel::commands_matching("/nw")
+        .into_iter()
+        .map(SlashCommand::name)
+        .collect();
+    assert!(names.contains(&"new"), "子序列命中：{names:?}");
+    let names: Vec<&str> = SlashPanel::commands_matching("/h")
+        .into_iter()
+        .map(SlashCommand::name)
+        .collect();
+    assert_eq!(names, vec!["history"], "前缀命中 /history");
+}

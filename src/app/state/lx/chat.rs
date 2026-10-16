@@ -229,14 +229,16 @@ impl RequestState {
 /// 状态行展示数据：由 app 层按当前选择/usage 刷新，`ui/` 只读。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatStatus {
-    /// `provider / model` 展示标签。
-    pub model_label: Option<String>,
-    /// 思考等级标签。
-    pub variant_label: Option<String>,
+    /// 模型展示名（模型 `name`，缺失回退模型 id）。
+    pub model_name: Option<String>,
+    /// 供应商展示名。
+    pub provider_name: Option<String>,
     /// 当前模型上下文上限（未知为 None → `--`）。
     pub context_limit: Option<u64>,
     /// 最近一次同模型成功请求的真实输入 token（未知为 None → `--`）。
     pub input_tokens: Option<u64>,
+    /// 上下文占用百分比（真实输入 token / 上限，夹到 0..=100）；两者任一未知为 None。
+    pub context_percent: Option<u8>,
     /// 是否正在生成（显示停止控件）。
     pub streaming: bool,
     /// 上下文裁剪省略提示（一次性）。
@@ -312,11 +314,11 @@ impl LxChat {
         }
     }
 
-    /// 重算状态行展示数据：模型标签/等级/上限来自当前选择（或默认），
-    /// 输入 token 只在仍属同一模型时保留（切模型清空分子）。
+    /// 重算状态行展示数据：模型/供应商展示名、上限、用量与上下文百分比来自当前选择
+    /// （或默认）；输入 token 只在仍属同一模型时保留（切模型清空分子）。
     pub fn refresh_status(&mut self, models: &ModelsSnapshot) {
         let selection = self.effective_selection(models);
-        let (model_label, variant_label, context_limit) = match &selection {
+        let (model_name, provider_name, context_limit) = match &selection {
             Some(selection) => {
                 let provider = models.settings.providers.get(&selection.provider);
                 let model = provider.and_then(|provider| provider.models.get(&selection.model));
@@ -324,13 +326,8 @@ impl LxChat {
                 let model_name = model
                     .map(|model| model.name.clone())
                     .or_else(|| Some(selection.model.clone()));
-                let label = match (provider_name, model_name) {
-                    (Some(provider), Some(model)) => Some(format!("{provider} / {model}")),
-                    _ => Some(selection.model.clone()),
-                };
-                let variant = selection.variant.clone();
                 let limit = model.and_then(|model| model.limit.map(|limit| limit.context));
-                (label, variant, limit)
+                (model_name, provider_name, limit)
             }
             None => (None, None, None),
         };
@@ -344,11 +341,13 @@ impl LxChat {
             self.input_tokens_reset();
         }
         self.last_tokens_model = token_key;
+        let context_percent = context_percent(self.last_input_tokens, context_limit);
         self.status = ChatStatus {
-            model_label,
-            variant_label,
+            model_name,
+            provider_name,
             context_limit,
             input_tokens: self.last_input_tokens,
+            context_percent,
             streaming: self.request.is_busy(),
             omitted_turns: self.omitted_turns_notice.take(),
         };
@@ -441,4 +440,12 @@ impl LxChat {
             })
             .sum()
     }
+}
+
+/// 上下文占用百分比：真实输入 token / 上限，夹到 `0..=100`；两者任一未知为 None。
+pub fn context_percent(input_tokens: Option<u64>, context_limit: Option<u64>) -> Option<u8> {
+    let input = input_tokens?;
+    let limit = context_limit.filter(|limit| *limit > 0)?;
+    let percent = input.saturating_mul(100) / limit;
+    Some(percent.min(100) as u8)
 }

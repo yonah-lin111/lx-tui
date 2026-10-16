@@ -1,29 +1,26 @@
-//! 单元测试：markdown 渲染器覆盖全部格式、标记折叠与不 panic。
+//! 单元测试：markdown 渲染器覆盖全部格式、标记折叠与任意来源。
 
 use super::*;
 
-use crate::app::ui_gallery::AgentStepId;
-use crate::ui::overlay::ui_gallery::agent::{
-    SampleLine, agent_appearance_size, render_agent_appearance,
-};
+use crate::ui::text;
 
 /// 把一组渲染行拼成纯文本（用于断言可见内容）。
-fn lines_text(lines: &[SampleLine]) -> String {
+fn lines_text(lines: &[MdLine]) -> String {
     lines
         .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|(value, _)| value.as_str())
-                .collect::<String>()
-        })
+        .map(MdLine::text)
         .collect::<Vec<_>>()
         .join("\n")
 }
 
+/// 样例文档（与 UI 查看器共用）。
+fn sample() -> &'static str {
+    text::agent::MD_SAMPLE
+}
+
 #[test]
 fn sample_document_covers_every_block_and_inline_format() {
-    let sample = text::agent::MD_SAMPLE;
+    let sample = sample();
     // 六级标题。
     for hashes in 1..=6 {
         assert!(
@@ -59,7 +56,7 @@ fn sample_document_covers_every_block_and_inline_format() {
 
 #[test]
 fn sample_renders_full_document_without_leaking_markers() {
-    let lines = markdown_lines((12_400, 1_200, 8_100));
+    let lines = render(sample());
     let joined = lines_text(&lines);
     // 六级标题正文都在。
     for title in [
@@ -89,44 +86,41 @@ fn sample_renders_full_document_without_leaking_markers() {
     assert!(joined.contains("https://openai.com"));
     // 图片 alt 在。
     assert!(joined.contains("logo"));
-    // 最后一行是 token 页脚。
-    let footer = lines_text(&lines[lines.len() - 1..]);
-    assert!(footer.contains(text::agent::TOKEN_IN), "{footer}");
 }
 
 #[test]
 fn headings_hide_hashes() {
-    let joined = lines_text(&markdown_lines((1, 1, 1)));
+    let joined = lines_text(&render(sample()));
     assert!(!joined.contains("# Heading 1"), "应隐藏 `#`");
     assert!(joined.contains("Heading 1"));
 }
 
 #[test]
 fn table_is_bordered() {
-    let joined = lines_text(&markdown_lines((1, 1, 1)));
+    let joined = lines_text(&render(sample()));
     assert!(joined.contains('┌'), "表格应有方框");
     assert!(joined.contains('┘'));
 }
 
 #[test]
 fn code_block_shows_language_and_syntax_colors() {
-    let lines = markdown_lines((1, 1, 1));
+    let lines = render(sample());
     let joined = lines_text(&lines);
     assert!(joined.contains(text::agent::MD_LANG), "应显示代码语言标记");
     // 代码块内的关键字/字符串做了分色（至少出现关键字样式）。
-    let code_spans: Vec<&(String, Style)> = lines
+    let code_spans: usize = lines
         .iter()
         .flat_map(|line| line.spans.iter())
-        .filter(|(_, style)| {
-            *style == style::code_keyword()
-                || *style == style::code_string()
-                || *style == style::code_number()
-                || *style == style::code_comment()
-                || *style == style::code_type()
+        .filter(|(_, span_style)| {
+            *span_style == style::code_keyword()
+                || *span_style == style::code_string()
+                || *span_style == style::code_number()
+                || *span_style == style::code_comment()
+                || *span_style == style::code_type()
         })
-        .collect();
+        .count();
     assert!(
-        !code_spans.is_empty(),
+        code_spans > 0,
         "代码块应做语法高亮（关键字/字符串/数字/注释/类型分色）"
     );
     // 正文文本仍完整保留（拼接即源码）。
@@ -135,16 +129,13 @@ fn code_block_shows_language_and_syntax_colors() {
 
 #[test]
 fn blockquote_uses_angle_prefix_not_left_bar() {
-    let lines = markdown_lines((1, 1, 1));
+    let lines = render(sample());
     let quote = lines
         .iter()
-        .find(|line| lines_text(std::slice::from_ref(line)).contains("quoted line one"))
+        .find(|line| line.text().contains("quoted line one"))
         .expect("quote line");
-    let text = lines_text(std::slice::from_ref(quote));
-    assert!(
-        text.starts_with(&format!("{} ", text::agent::MD_QUOTE_MARKER)),
-        "引用应以 `> ` 开头：{text}"
-    );
+    let text = quote.text();
+    assert!(text.starts_with("> "), "引用应以 `> ` 开头：{text}");
     assert!(!text.contains('│'), "引用不应使用左边框：{text}");
 }
 
@@ -166,23 +157,24 @@ fn heading_levels_parse_and_strip_marks() {
     assert_eq!(heading("####### too many"), None, "7 级不算标题");
 }
 
+/// 任意来源都能渲染：普通段落、空输入、裸文本不 panic。
 #[test]
-fn render_does_not_panic_for_markdown_step_on_all_sizes() {
-    for (width, height) in [(6, 4), (20, 6), (52, 90), (120, 60)] {
-        let mut buf =
-            ratatui::buffer::Buffer::empty(ratatui::layout::Rect::new(0, 0, width, height));
-        let area = buf.area;
-        render_agent_appearance(&mut buf, area, AgentStepId::Markdown);
-    }
+fn renders_arbitrary_source() {
+    assert!(render("").is_empty());
+    assert!(render("   \n\n  ").is_empty());
+    let lines = render("hello **world**");
+    assert_eq!(lines_text(&lines), "hello world");
+    // 行宽 = 缩进 + 各分段显示宽度。
+    let nested = render("- parent\n  - child");
+    assert!(nested.iter().any(|line| line.indent == 2), "嵌套缩进生效");
 }
 
+/// 代码块正文独立于样例：`render` 只吃传入源码。
 #[test]
-fn markdown_appearance_size_is_positive_and_clamped() {
-    let available = ratatui::layout::Rect::new(0, 0, 80, 60);
-    let (width, height) = agent_appearance_size(AgentStepId::Markdown, available);
-    assert!(width >= 6);
-    assert!(height > 0 && height <= available.height);
-    let tiny = ratatui::layout::Rect::new(0, 0, 80, 3);
-    let (_, height) = agent_appearance_size(AgentStepId::Markdown, tiny);
-    assert_eq!(height, 3);
+fn code_block_renders_arbitrary_fence() {
+    let lines = render("```python\ndef f():\n    return 1\n```");
+    let joined = lines_text(&lines);
+    assert!(joined.contains("python"), "语言标记：{joined}");
+    assert!(joined.contains("return 1"));
+    assert!(!joined.contains("```"));
 }

@@ -508,6 +508,28 @@ impl Persistence {
                 self.with_db(|db| db.set_chat_session_model(&workspace, &session_id, &model));
                 false
             }
+            // 把当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。
+            Effect::SaveDefaultModel { selection } => {
+                let path = match crate::config::ai::ai_config_path() {
+                    Ok(path) => path,
+                    Err(error) => {
+                        tracing::warn!(%error, "ai config path unavailable");
+                        return false;
+                    }
+                };
+                match crate::config::ai::load_ai(&path) {
+                    Ok(current) => {
+                        let mut settings =
+                            current.unwrap_or_else(crate::config::ai::AiSettings::empty);
+                        settings.default_model = Some(selection);
+                        if let Err(error) = crate::config::ai::save_ai(&path, &settings) {
+                            tracing::warn!(%error, "saving default model failed");
+                        }
+                    }
+                    Err(error) => tracing::warn!(%error, "ai config load failed"),
+                }
+                false
+            }
             // 网络效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
             Effect::StartChatStream { .. } | Effect::CancelChatStream { .. } => {
                 tracing::warn!("chat network effect reached persistence pump");

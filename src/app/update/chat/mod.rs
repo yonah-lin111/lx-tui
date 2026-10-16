@@ -402,20 +402,20 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// `/resume` 打开历史面板（事件层提供当前工作区分页列表）。
+/// `/history` 打开历史面板（事件层提供当前工作区分页列表）。
 pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     // 列表由事件层按需加载（Effect::ListChatSessions）；先打开面板骨架。
-    target.lx.slash = Some(SlashPanel::Resume(Box::default()));
+    target.lx.slash = Some(SlashPanel::History(Box::default()));
     state
         .effects
         .push(crate::app::effects::Effect::ListChatSessions { pane });
     true
 }
 
-/// 历史列表回投：填充 `/resume` 面板。
+/// 历史列表回投：填充 `/history` 面板。
 pub fn on_history_listed(
     state: &mut AppState,
     pane: PaneId,
@@ -424,7 +424,7 @@ pub fn on_history_listed(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    let Some(SlashPanel::Resume(panel)) = target.lx.slash.as_mut() else {
+    let Some(SlashPanel::History(panel)) = target.lx.slash.as_mut() else {
         return false;
     };
     panel.entries = entries;
@@ -568,7 +568,7 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
 /// - 命令候选 → 消费命令文本并执行（`/model`、`/resume`、`/new`）。
 /// - `/model` 第一级 → 有 variants 进入第二级，否则直接完成。
 /// - `/model` 第二级 → 以高亮 variant 完成选择（真正写入下一轮选择）。
-/// - `/resume` → 打开高亮会话。
+/// - `/history` → 打开高亮会话。
 pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
     let Some(panel) = state
         .pane_anywhere(pane)
@@ -609,7 +609,7 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                 true
             }
         },
-        SlashPanel::Resume(history) => {
+        SlashPanel::History(history) => {
             if let Some(entry) = history.entries.get(history.window.active) {
                 let session_id = entry.session_id.clone();
                 resume_session(state, pane, &session_id);
@@ -636,7 +636,7 @@ fn default_variant_index(
         .unwrap_or(0)
 }
 
-/// 选择完成后写入窗格选择；已保存 session 同步 DB 三列。
+/// 选择完成后写入窗格选择；已保存 session 同步 DB 三列；并写回配置默认（下次启动沿用）。
 fn finish_model_selection(state: &mut AppState, pane: PaneId, selection: ModelSelection) {
     if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.slash = None;
@@ -664,6 +664,8 @@ fn finish_model_selection(state: &mut AppState, pane: PaneId, selection: ModelSe
             }
         }
     }
+    // 持久化：写回 `ai.json` defaultModel（关闭重开仍是这个模型）。
+    persist_default_model(state, &selection);
     refresh_lx_status(state, pane);
 }
 
@@ -689,6 +691,23 @@ pub fn apply_models_changed(
     // 立即更新所有窗格的上限/标签（旧模型分子清理由 refresh 内部处理）。
     refresh_all_lx_status(state);
     changed
+}
+
+/// 把窗格当前选择的模型写回 `ai.json` 的 `defaultModel`（下次启动沿用）。
+///
+/// 只在选择变化或首次采用默认时入队，避免重复落盘。
+pub fn persist_default_model(state: &mut AppState, selection: &ModelSelection) -> bool {
+    if state.models.settings.default_model.as_ref() == Some(selection) {
+        return false;
+    }
+    state
+        .effects
+        .push(crate::app::effects::Effect::SaveDefaultModel {
+            selection: selection.clone(),
+        });
+    // 快照同步更新：内存立即生效，避免同一会话内再次入队。
+    state.models.settings.default_model = Some(selection.clone());
+    true
 }
 
 /// 刷新单窗格状态行展示数据（设置页保存、选择变更、usage 到达后调用）。
@@ -725,7 +744,7 @@ fn show_chat_toast(state: &mut AppState, kind: ToastKind, message: &'static str)
 pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCommand) -> bool {
     match command {
         SlashCommand::Model => open_model_picker(state, pane),
-        SlashCommand::Resume => open_history(state, pane),
+        SlashCommand::History => open_history(state, pane),
         SlashCommand::New => new_session(state, pane),
     }
 }

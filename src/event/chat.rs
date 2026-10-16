@@ -183,6 +183,9 @@ fn start_stream(
     let net_sender = sender.clone();
     let stream_key = key.clone();
     tokio::spawn(async move {
+        // 打字机：每个网络分块解析出的增量立即回投（先于终态）。
+        let live_sender = net_sender.clone();
+        let live_key = stream_key.clone();
         let outcome = crate::chat::client::run_stream(
             &transport,
             &base_url,
@@ -190,6 +193,12 @@ fn start_stream(
             idle_timeout,
             request,
             cancel,
+            move |deltas| {
+                let _ = live_sender.send(AppEvent::ChatNet(ChatNetEvent::Delta {
+                    key: live_key.clone(),
+                    deltas: deltas.to_vec(),
+                }));
+            },
         )
         .await;
         report_outcome(net_sender, stream_key, outcome);
@@ -217,19 +226,15 @@ fn latest_user_draft(messages: &[crate::app::state::ChatMessageView]) -> String 
         .unwrap_or_default()
 }
 
-/// 把流结果拆分回投：内容 delta 先行，Finished 最后。
+/// 流结束回投：内容增量已由 `run_stream` 的即时回调逐批投递（打字机效果），
+/// 此处只补一个终态；usage 从最终 deltas 提取（同批已随增量回投，此处用于收尾落库）。
 fn report_outcome(
     sender: mpsc::UnboundedSender<AppEvent>,
     key: RequestKey,
     outcome: StreamOutcome,
 ) {
     let StreamOutcome { deltas, stop } = outcome;
-    // 内容增量与 usage 合并为一批（移除非终态）。
-    let content: Vec<ChatDelta> = deltas
-        .into_iter()
-        .filter(|delta| !matches!(delta, ChatDelta::Finished { .. }))
-        .collect();
-    let usage = content
+    let usage = deltas
         .iter()
         .rev()
         .find_map(|delta| match delta {
@@ -237,12 +242,6 @@ fn report_outcome(
             _ => None,
         })
         .unwrap_or_default();
-    if !content.is_empty() {
-        let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Delta {
-            key: key.clone(),
-            deltas: content,
-        }));
-    }
     let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Finished {
         key,
         reason: stop,

@@ -858,7 +858,7 @@ fn slash_click_selects_row() {
     assert!(
         matches!(
             state.pane_anywhere(pane).unwrap().lx.slash,
-            Some(SlashPanel::Resume(_))
+            Some(SlashPanel::History(_))
         ),
         "点选 /resume 后打开历史面板"
     );
@@ -881,4 +881,40 @@ fn slash_window(state: &AppState, pane: PaneId) -> crate::app::state::lx::slash:
         .and_then(|p| p.lx.slash.as_ref())
         .map(|panel| panel.window())
         .expect("slash panel")
+}
+
+#[test]
+fn finish_model_selection_persists_default_model() {
+    let mut state = AppState::demo();
+    state.models = models_with(None);
+    state.models.settings.default_model = None;
+    let pane = state.active_tab().layout.focus();
+    let selection = ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    };
+    crate::app::update::chat::test_hooks::finish_model_selection(
+        &mut state,
+        pane,
+        selection.clone(),
+    );
+    // 窗格选择写入。
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.chat.selection,
+        Some(selection.clone())
+    );
+    // 入队写回 ai.json defaultModel。
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::SaveDefaultModel { selection: saved } if *saved == selection
+        )),
+        "入队持久化默认模型：{:?}",
+        state.effects
+    );
+    // 快照同步更新，重复选择不再入队。
+    let before = state.effects.len();
+    crate::app::update::chat::test_hooks::finish_model_selection(&mut state, pane, selection);
+    assert_eq!(state.effects.len(), before, "同选择不重复入队");
 }

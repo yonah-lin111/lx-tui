@@ -176,4 +176,8 @@ pub enum Effect {
         session_id: String,
         model: crate::db::chat::ModelSnapshot,
     },
+    /// 把当前选择的模型写回 `config/ai.json` 的 `defaultModel`（下次启动沿用）。
+    SaveDefaultModel {
+        selection: crate::config::ai::ModelSelection,
+    },
 }

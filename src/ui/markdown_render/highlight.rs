@@ -9,7 +9,7 @@ use ratatui::style::Style;
 use crate::ui::style;
 
 /// 高亮一行代码为若干分色分段（保持原字符顺序，拼接即原行）。
-pub(super) fn highlight_line(lang: Option<&str>, line: &str) -> Vec<(String, Style)> {
+pub(crate) fn highlight_line(lang: Option<&str>, line: &str) -> Vec<(String, Style)> {
     let keywords = keywords_for(lang);
     // `#` 注释只对脚本/配置语言成立；Rust/C 系的 `#` 是属性/预处理指令，不算注释。
     let hash_comment = matches!(lang_kind(lang), LangKind::Hash);

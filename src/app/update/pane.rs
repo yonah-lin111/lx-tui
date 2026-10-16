@@ -141,13 +141,16 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     if mention_visible && command == LxInput::EnterFolder {
         return;
     }
-    // `/` 命令面板（model/resume/history）：接管导航、采纳与关闭。
+    // `/` 命令面板：与 `@` 提及面板一致的交互——仅接管导航、采纳与关闭，
+    // 其余编辑键**继续走下方编辑分支并重算面板**，因此可以删除 `/`（触发消失即关闭）
+    // 或继续输入做模糊过滤。Model/Resume/History 二级面板仍吞掉编辑键（其内容不由草稿驱动）。
     if let Some(slash) = lx.slash.as_ref() {
         let move_panel = |lx: &mut super::super::state::Lx, delta: isize| {
             if let Some(panel) = lx.slash.as_mut() {
                 panel.move_active(delta);
             }
         };
+        let editable = matches!(slash, super::super::state::SlashPanel::Commands { .. });
         match command {
             LxInput::Up => {
                 move_panel(lx, -1);
@@ -178,11 +181,14 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 }
                 return;
             }
-            // 面板打开时其余按键吞掉（面板优先）。
+            // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板吞掉。
+            _ if editable => {}
             _ => return,
         }
-        super::chat::apply_slash_enter(state, pane_id);
-        return;
+        if command == LxInput::Enter || command == LxInput::Tab {
+            super::chat::apply_slash_enter(state, pane_id);
+            return;
+        }
     }
     let panel_open = lx.panel.is_some();
     match command {

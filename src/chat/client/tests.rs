@@ -142,6 +142,7 @@ async fn openai_compatible_stream_completes_with_usage() {
             Duration::from_secs(5),
             request(),
             cancel,
+            |_| {},
         ),
     )
     .await
@@ -194,6 +195,7 @@ async fn http_error_reports_status_with_body_snippet() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     let _ = server.await;
@@ -220,6 +222,7 @@ async fn oversized_error_body_is_truncated() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     let _ = server.await;
@@ -259,6 +262,7 @@ async fn anthropic_stream_binds_signature_and_usage() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     let recorded = server.await.expect("server");
@@ -318,6 +322,7 @@ async fn google_stream_decodes_thought_parts() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     let recorded = server.await.expect("server");
@@ -365,6 +370,7 @@ async fn responses_stream_decodes_summary_and_raw_reasoning() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     let recorded = server.await.expect("server");
@@ -421,6 +427,7 @@ async fn truncated_stream_reports_failure_and_keeps_partial() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     let _ = server.await;
@@ -465,6 +472,7 @@ async fn cancellation_preserves_partial_and_yields_single_terminal() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     assert_eq!(outcome.stop, StopReason::Cancelled);
@@ -490,6 +498,7 @@ async fn build_failure_yields_failed_without_network() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     assert!(matches!(outcome.stop, StopReason::Failed { .. }));
@@ -535,6 +544,7 @@ async fn unsupported_transport_fails_fast() {
         Duration::from_secs(5),
         request(),
         cancel,
+        |_| {},
     )
     .await;
     assert!(
@@ -602,6 +612,7 @@ async fn transient_503_is_retried_then_succeeds() {
         Duration::from_secs(5),
         request(),
         receiver,
+        |_| {},
     )
     .await;
     assert_eq!(outcome.stop, StopReason::Complete, "重试后完成");
@@ -630,6 +641,7 @@ async fn finish_with_usage_same_frame_and_done_completes() {
         Duration::from_secs(5),
         request(),
         receiver,
+        |_| {},
     )
     .await;
     assert_eq!(
@@ -644,4 +656,41 @@ async fn finish_with_usage_same_frame_and_done_completes() {
             .any(|delta| matches!(delta, ChatDelta::Usage(u) if u.input == Some(2005))),
         "usage 被提取"
     );
+}
+
+/// 打字机：增量批在流进行中即时回调（不等整段流结束），且与最终 deltas 一致。
+#[tokio::test]
+async fn incremental_deltas_are_streamed_via_callback() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"甲\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"乙\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"丙\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _server) = spawn_mock("200 OK", body).await;
+    let (_sender, receiver) = no_cancel();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let sink = seen.clone();
+    let outcome = run_stream(
+        "openai-compatible",
+        &format!("{base}/v1"),
+        Some("k"),
+        Duration::from_secs(5),
+        request(),
+        receiver,
+        |deltas| {
+            for delta in deltas {
+                if let ChatDelta::Part(part) = delta
+                    && part.kind == PartKind::Text
+                {
+                    sink.lock().expect("lock").push_str(&part.text);
+                }
+            }
+        },
+    )
+    .await;
+    assert_eq!(outcome.stop, StopReason::Complete);
+    // 回调累计 == 最终正文（按分块顺序拼接）。
+    assert_eq!(seen.lock().expect("lock").as_str(), "甲乙丙");
 }

@@ -408,9 +408,6 @@ pub(crate) fn handle_mouse_down_left(
                         ui::main_content::lx::LxChatHit::Stop => {
                             update::stop_stream(state, pane);
                         }
-                        ui::main_content::lx::LxChatHit::History => {
-                            update::open_history(state, pane);
-                        }
                     }
                     update::clear_lx_selection(state);
                     *dirty = true;

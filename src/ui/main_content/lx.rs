@@ -65,7 +65,7 @@ fn slash_items(panel: &crate::app::state::SlashPanel) -> Vec<CommandItem<'_>> {
                 })
                 .collect(),
         },
-        SlashPanel::Resume(history) => {
+        SlashPanel::History(history) => {
             if history.entries.is_empty() {
                 return vec![CommandItem::Inline {
                     label: text::LX_HISTORY_EMPTY,
@@ -104,7 +104,7 @@ fn slash_view<'a>(
             },
             picker.window,
         ),
-        SlashPanel::Resume(history) => (text::LX_HISTORY_PANEL_TITLE, history.window),
+        SlashPanel::History(history) => (text::LX_HISTORY_PANEL_TITLE, history.window),
     };
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
@@ -139,7 +139,7 @@ pub(crate) fn slash_item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Optio
     let panel = lx.slash.as_ref()?;
     // 空态占位行不可选。
     if matches!(panel, crate::app::state::SlashPanel::Model(p) if p.candidates.is_empty())
-        || matches!(panel, crate::app::state::SlashPanel::Resume(h) if h.entries.is_empty())
+        || matches!(panel, crate::app::state::SlashPanel::History(h) if h.entries.is_empty())
     {
         return None;
     }
@@ -577,6 +577,13 @@ impl Grid {
         }
     }
 
+    /// 把整段（`width` 列）铺成空格并套用 `style`（用户消息整块底色）。
+    pub(super) fn background_row(&mut self, x: u16, y: u16, width: u16, style: Style) {
+        for offset in 0..width {
+            self.set(x.saturating_add(offset), y, ' ', style);
+        }
+    }
+
     fn put_centered(&mut self, x0: u16, width: u16, y: u16, content: &str, style: Style) {
         let content_width = u16::try_from(content.width()).unwrap_or(u16::MAX);
         if content_width > width {
@@ -640,13 +647,31 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     }
 
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
+    // 聊天模式在输入框下方预留状态行（模型 · 供应商 · 上下文占用 + 停止控件）。
+    let status_rows = if lx.chat.messages.is_empty() {
+        0
+    } else {
+        status::rows(area, &lx.chat.status).min(area.height.saturating_sub(INPUT_MIN_BOX))
+    };
     let rows = lx.visual_rows();
     let total = rows.len().max(1);
-    let max_box = (area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX);
+    let max_box = (area
+        .height
+        .saturating_sub(status_rows)
+        .saturating_mul(INPUT_MAX_PERCENT)
+        / 100)
+        .max(INPUT_MIN_BOX);
     let cap = usize::from(max_box.saturating_sub(2)).max(1);
     let visible = total.min(cap);
     let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
-    let input = Rect::new(content_x, area.bottom() - box_h, content_w, box_h);
+    let input = Rect::new(
+        content_x,
+        area.bottom()
+            .saturating_sub(status_rows)
+            .saturating_sub(box_h),
+        content_w,
+        box_h,
+    );
     let max_scroll = total.saturating_sub(visible);
     let scroll = lx.scroll().min(max_scroll);
 
@@ -834,17 +859,26 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     (grid, cursor)
 }
 
-/// 聊天模式构建：历史区 + 状态行 + 输入框（内容区转可滚动历史）。
+/// 聊天模式构建：历史区 + 输入框 + 状态行（输入框下方）。
 fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option<(u16, u16)>) {
     let mut grid = Grid::new(area);
-    let input_top = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let input_bottom = lay.input.map(|input| input.bottom()).unwrap_or(area.y);
     let status_rows = if lay.input.is_some() {
-        status::rows(area, &lx.chat.status).min(input_top.saturating_sub(area.y))
+        status::rows(area, &lx.chat.status).min(area.bottom().saturating_sub(input_bottom))
     } else {
         0
     };
-    let status_y = input_top.saturating_sub(status_rows);
-    let history_rect = Rect::new(area.x, area.y, area.width, status_y.saturating_sub(area.y));
+    let history_bottom = if lay.input.is_some() {
+        lay.input.map(|input| input.y).unwrap_or(area.bottom())
+    } else {
+        area.bottom()
+    };
+    let history_rect = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        history_bottom.saturating_sub(area.y),
+    );
     // 历史滚动：跟随底部时取末尾窗口。
     let history_layout = history::layout(history_rect, lx);
     let scroll = if lx.chat.follow_bottom {
@@ -857,8 +891,6 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
             .min(history_layout.total_rows.saturating_sub(1))
     };
     history::render(&mut grid, history_rect, lx, scroll);
-    let status_rect = Rect::new(area.x, status_y, area.width, status_rows);
-    status::render(&mut grid, status_rect, lx);
 
     let mut cursor = None;
     if let Some(input) = lay.input
@@ -874,6 +906,11 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
         )
         .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     }
+    // 状态行在输入框下方。
+    if status_rows > 0 {
+        let status_rect = Rect::new(area.x, input_bottom, area.width, status_rows);
+        status::render(&mut grid, status_rect, lx);
+    }
     // 面板：块命令 / 粘贴 / 提及 / `/` 命令。
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
         draw_panel(&mut grid, rect, panel);
@@ -888,8 +925,6 @@ pub enum LxChatHit {
     Thinking(usize, usize),
     /// 点击停止按钮。
     Stop,
-    /// 点击历史入口按钮。
-    History,
 }
 
 /// 聊天历史区矩形（无消息返回 None）；滚轮/命中用。
@@ -898,39 +933,37 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     let lay = layout(area, lx);
-    let input_top = lay.input.map(|input| input.y).unwrap_or(area.bottom());
-    let status_rows = status::rows(area, &lx.chat.status).min(input_top.saturating_sub(area.y));
-    let status_y = input_top.saturating_sub(status_rows);
-    let height = status_y.saturating_sub(area.y);
+    let bottom = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let height = bottom.saturating_sub(area.y);
     (height > 0).then(|| Rect::new(area.x, area.y, area.width, height))
 }
 
-/// 聊天模式命中测试：thinking 头部 > 停止按钮 > 历史按钮。
+/// 聊天模式命中测试：thinking 头部 > 停止按钮。
 pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
     if lx.chat.messages.is_empty() {
         return None;
     }
     let lay = layout(area, lx);
-    let input_top = lay.input.map(|input| input.y).unwrap_or(area.bottom());
-    let status_rows = status::rows(area, &lx.chat.status).min(input_top.saturating_sub(area.y));
-    let status_y = input_top.saturating_sub(status_rows);
-    let status_rect = Rect::new(area.x, status_y, area.width, status_rows);
-    if status_rect.contains((column, row).into()) {
-        let status_lay = status::layout(status_rect, &lx.chat.status, status_rows);
-        if let Some(stop) = status_lay.stop
-            && stop.contains((column, row).into())
-        {
-            return Some(LxChatHit::Stop);
+    // 状态行位于输入框下方；输入框缺失（区域过小）时不渲染状态，也无命中。
+    if let Some(input) = lay.input {
+        let status_rows =
+            status::rows(area, &lx.chat.status).min(area.bottom().saturating_sub(input.bottom()));
+        if status_rows > 0 {
+            let status_rect = Rect::new(area.x, input.bottom(), area.width, status_rows);
+            if status_rect.contains((column, row).into()) {
+                let status_lay = status::layout(status_rect, &lx.chat.status, status_rows);
+                if let Some(stop) = status_lay.stop
+                    && stop.contains((column, row).into())
+                {
+                    return Some(LxChatHit::Stop);
+                }
+                return None;
+            }
         }
-        if let Some(history) = status_lay.history
-            && history.contains((column, row).into())
-        {
-            return Some(LxChatHit::History);
-        }
-        return None;
     }
     // thinking 头部命中（按当前滚动窗口换算屏幕坐标）。
-    let history_rect = Rect::new(area.x, area.y, area.width, status_y.saturating_sub(area.y));
+    let bottom = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let history_rect = Rect::new(area.x, area.y, area.width, bottom.saturating_sub(area.y));
     let history_layout = history::layout(history_rect, lx);
     let scroll = if lx.chat.follow_bottom {
         history_layout

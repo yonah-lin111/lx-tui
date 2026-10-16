@@ -36,6 +36,8 @@ const RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 ///
 /// `cancel` 关闭时请求立即中止，已收 partial 保留在返回值中。
 /// 事件层按 request key 过滤过期结果；本函数不触碰应用状态。
+/// 每个新产出的增量批经 `on_delta` 即时回调（打字机效果：内容随网络分块实时到达），
+/// 同时仍完整累计在返回值里供终态/usage 使用。
 /// 仅在**尚未产出任何内容**且错误可重试（429/5xx/网络）时重试（最多 10 次，指数退避
 /// 2s→10s，对齐 opencode），绝不重复半截流。
 pub async fn run_stream(
@@ -45,6 +47,7 @@ pub async fn run_stream(
     idle_timeout: Duration,
     request: ChatRequest,
     mut cancel: watch::Receiver<bool>,
+    mut on_delta: impl FnMut(&[ChatDelta]),
 ) -> StreamOutcome {
     let built = match transport::build_request(transport_kind, base_url, api_key, &request) {
         Ok(built) => built,
@@ -67,6 +70,7 @@ pub async fn run_stream(
             idle_timeout,
             &mut cancel,
             &mut deltas,
+            &mut on_delta,
         )
         .await;
         // 只在尚未产出内容时重试；已有 partial 说明请求已被接受，重试会导致重复内容。
@@ -131,12 +135,16 @@ fn sanitize_error_detail(body: &str) -> String {
 }
 
 /// 单次尝试执行流：返回结束原因（已收 partial 在 `deltas`）。
+///
+/// 每次解析出新增量后立即把**新增切片**交给 `on_delta`（打字机效果），
+/// 同时累计进 `deltas` 供终态与 usage 使用。
 async fn stream_once(
     built: &TransportRequest,
     transport_kind: &str,
     idle_timeout: Duration,
     cancel: &mut watch::Receiver<bool>,
     deltas: &mut Vec<ChatDelta>,
+    on_delta: &mut impl FnMut(&[ChatDelta]),
 ) -> StopReason {
     let client = match reqwest::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -195,14 +203,24 @@ async fn stream_once(
             chunk = stream.next() => match chunk {
                 Some(Ok(bytes)) => bytes,
                 Some(Err(error)) => {
-                    return finalize_partial(decoder.as_mut(), deltas, StopReason::Failed {
-                        code: request_error_code(&error),
-                    });
+                    return finalize_partial(
+                        decoder.as_mut(),
+                        deltas,
+                        StopReason::Failed {
+                            code: request_error_code(&error),
+                        },
+                        on_delta,
+                    );
                 }
                 None => break,
             },
             _ = cancel.changed() => {
-                return finalize_partial(decoder.as_mut(), deltas, StopReason::Cancelled);
+                return finalize_partial(
+                    decoder.as_mut(),
+                    deltas,
+                    StopReason::Cancelled,
+                    on_delta,
+                );
             }
         };
         if let Err(_too_large) = parser.feed(&chunk, MAX_FRAME_BYTES) {
@@ -212,24 +230,39 @@ async fn stream_once(
                 StopReason::Failed {
                     code: "frame exceeds size limit".into(),
                 },
+                on_delta,
             );
         }
         for frame in parser.take_frames() {
-            match decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text) {
+            match decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text, on_delta) {
                 Ok(()) => {}
                 Err(code) => {
-                    return finalize_partial(decoder.as_mut(), deltas, StopReason::Failed { code });
+                    return finalize_partial(
+                        decoder.as_mut(),
+                        deltas,
+                        StopReason::Failed { code },
+                        on_delta,
+                    );
                 }
             }
         }
     }
     // EOF：半帧 flush（协议层判定完成性）。
     if let Some(frame) = parser.flush()
-        && let Err(code) = decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text)
+        && let Err(code) = decode_frame(decoder.as_mut(), &frame, deltas, &mut total_text, on_delta)
     {
-        return finalize_partial(decoder.as_mut(), deltas, StopReason::Failed { code });
+        return finalize_partial(
+            decoder.as_mut(),
+            deltas,
+            StopReason::Failed { code },
+            on_delta,
+        );
     }
-    deltas.extend(decoder.finish());
+    let residual = decoder.finish();
+    if !residual.is_empty() {
+        on_delta(&residual);
+        deltas.extend(residual);
+    }
     // 已有协议终态（finish_reason / message_stop / response.completed 等）则沿用；
     // 缺完成信号按设计视为中断/协议错误，不擅自标记完成。
     if let Some(reason) = deltas.iter().rev().find_map(|delta| match delta {
@@ -247,12 +280,13 @@ async fn stream_once(
     }
 }
 
-/// 解码一帧并累计正文大小。
+/// 解码一帧并累计正文大小；新增量即时回调 `on_delta`（打字机效果）。
 fn decode_frame(
     decoder: &mut dyn transport::StreamDecoder,
     frame: &SseFrame,
     deltas: &mut Vec<ChatDelta>,
     total_text: &mut usize,
+    on_delta: &mut impl FnMut(&[ChatDelta]),
 ) -> Result<(), String> {
     // [DONE] 标记：OpenAI 兼容流的正常结束信号，等价于完成（EOF 后据此判定完成，
     // 不再误报 "stream ended without completion"）。跳过 JSON 解析。
@@ -261,14 +295,27 @@ fn decode_frame(
         return Ok(());
     }
     let produced = decoder.decode_frame(&frame.data)?;
+    let mut fresh: Vec<ChatDelta> = Vec::new();
     for delta in produced {
-        if let ChatDelta::Part(part) = &delta {
-            *total_text += part.text.len();
-            if *total_text > MAX_TOTAL_TEXT_BYTES {
-                return Err("response exceeds size limit".into());
+        let stream_it = match &delta {
+            ChatDelta::Part(part) => {
+                *total_text += part.text.len();
+                if *total_text > MAX_TOTAL_TEXT_BYTES {
+                    return Err("response exceeds size limit".into());
+                }
+                true
             }
+            ChatDelta::Usage(_) => true,
+            // 终态由 `Finished` 事件单独回投，不进增量批（避免重复/顺序歧义）。
+            ChatDelta::Finished { .. } => false,
+        };
+        if stream_it {
+            fresh.push(delta.clone());
         }
         deltas.push(delta);
+    }
+    if !fresh.is_empty() {
+        on_delta(&fresh);
     }
     Ok(())
 }
@@ -278,8 +325,13 @@ fn finalize_partial(
     decoder: &mut dyn transport::StreamDecoder,
     deltas: &mut Vec<ChatDelta>,
     stop: StopReason,
+    on_delta: &mut impl FnMut(&[ChatDelta]),
 ) -> StopReason {
-    deltas.extend(decoder.finish());
+    let residual = decoder.finish();
+    if !residual.is_empty() {
+        on_delta(&residual);
+        deltas.extend(residual);
+    }
     deltas.push(ChatDelta::Finished {
         reason: stop.clone(),
     });
@@ -317,6 +369,7 @@ pub fn spawn_stream(
             idle_timeout,
             request,
             cancel,
+            |_| {},
         )
         .await;
         let _ = sender.send(outcome);

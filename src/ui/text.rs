@@ -496,8 +496,8 @@ pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
 pub const LX_CHAT_STOP_HINT: &str = "stop";
 /// 状态行：未知 token 的占位。
 pub const LX_CHAT_TOKENS_UNKNOWN: &str = "--";
-/// 状态行：`实际输入 token / 上限` 分隔。
-pub const LX_CHAT_STATUS_SEPARATOR: &str = "/";
+/// 状态行：模型名与供应商名之间的分隔（` · `）。
+pub const LX_CHAT_MODEL_SEP: &str = " · ";
 /// thinking 折叠行前缀与展开提示。
 pub const LX_CHAT_THINKING_LABEL: &str = "thinking";
 pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ thinking";
@@ -506,8 +506,10 @@ pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ thinking";
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边提示（与 `@` 提及面板同款）。
 pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
-/// `/resume` 历史面板标题与空态。
-pub const LX_HISTORY_PANEL_TITLE: &str = "Sessions";
+/// 历史命令（`/history`）描述。
+pub const LX_HISTORY_COMMAND_DESC: &str = "Open chat history for this workspace";
+/// `/history` 历史面板标题与空态。
+pub const LX_HISTORY_PANEL_TITLE: &str = "History";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
@@ -521,7 +523,6 @@ pub const LX_CHAT_ASSISTANT_LABEL: &str = "assistant";
 pub const LX_CHAT_STREAMING_LABEL: &str = "streaming";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 状态行控件文案（逐格强调色绘制）。
-pub const LX_CHAT_HISTORY_BUTTON: &str = "[⌛]";
 pub const LX_CHAT_STOP_BUTTON: &str = "[■]";
 /// 上下文省略提示前缀。
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";

@@ -741,7 +741,7 @@ fn slash_model_lx() -> Lx {
 /// 构造带 `/resume` 空历史面板的 lx 状态。
 fn slash_resume_empty_lx() -> Lx {
     let mut lx = Lx::new();
-    lx.slash = Some(SlashPanel::Resume(Box::default()));
+    lx.slash = Some(SlashPanel::History(Box::default()));
     lx
 }
 

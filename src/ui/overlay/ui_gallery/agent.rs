@@ -22,34 +22,14 @@ use ratatui::style::Style;
 use crate::app::ui_gallery::{AgentStepId, UiGalleryComponentId};
 use crate::ui::{style, text};
 
-mod markdown;
-
 /// 单个步骤样例的 token 用量（input、output、cache read）。
 ///
 /// 与 lx-agent 一致用**数值 + [`format_tokens`]** 生成字符串；同一组数值会同时喂给
 /// 该步的 token 页脚与 `tokens` 聚合 item 的汇总条，显示天然一致。
 type Tokens = (u32, u32, u32);
 
-/// 一套样例中的一行：左缩进列 + 多色分段。
-pub(super) struct SampleLine {
-    indent: u16,
-    pub(super) spans: Vec<(String, Style)>,
-}
-
-impl SampleLine {
-    /// 单色单段行。
-    fn plain(indent: u16, value: impl Into<String>, style: Style) -> Self {
-        Self {
-            indent,
-            spans: vec![(value.into(), style)],
-        }
-    }
-
-    /// 多段行。
-    fn spans(indent: u16, spans: Vec<(String, Style)>) -> Self {
-        Self { indent, spans }
-    }
-}
+/// 一套样例中的一行：左缩进列 + 多色分段。复用共享阅读渲染器的行类型。
+pub(super) type SampleLine = crate::ui::markdown_render::MdLine;
 
 /// 组件 id 是否为 agent 步骤；是则返回步骤种类。
 pub fn agent_step_of(id: UiGalleryComponentId) -> Option<AgentStepId> {
@@ -72,7 +52,13 @@ fn step_lines(step: AgentStepId) -> Vec<SampleLine> {
         return tokens_lines();
     }
     if step == AgentStepId::Markdown {
-        return markdown::markdown_lines(step_tokens(step));
+        let mut lines = crate::ui::markdown_render::render(text::agent::MD_SAMPLE);
+        // 样例带末尾 token 页脚。
+        lines.push(SampleLine::spans(
+            2,
+            vec![(format_tokens_line(step_tokens(step)), style::agent_tokens())],
+        ));
+        return lines;
     }
     let tokens = step_tokens(step);
     let mut lines = vec![header_line(step)];

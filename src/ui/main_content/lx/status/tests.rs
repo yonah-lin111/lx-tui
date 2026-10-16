@@ -1,24 +1,25 @@
-//! 状态行测试：用量未知显示 `--`、大数缩写、窄窗格分行、停止/历史按钮几何。
+//! 状态行测试：未知上下文显示 `--`、模型 · 供应商截断、上下文组件、停止按钮几何。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
 use crate::app::state::Lx;
-use crate::app::state::lx::chat::ChatStatus;
+use crate::app::state::lx::chat::{ChatStatus, context_percent};
 
 fn status(
     model: Option<&str>,
-    variant: Option<&str>,
+    provider: Option<&str>,
     context: Option<u64>,
     input: Option<u64>,
     streaming: bool,
 ) -> ChatStatus {
     ChatStatus {
-        model_label: model.map(str::to_string),
-        variant_label: variant.map(str::to_string),
+        model_name: model.map(str::to_string),
+        provider_name: provider.map(str::to_string),
         context_limit: context,
         input_tokens: input,
+        context_percent: context_percent(input, context),
         streaming,
         omitted_turns: None,
     }
@@ -30,61 +31,72 @@ fn lx_with_status(status: ChatStatus) -> Lx {
     lx
 }
 
-#[test]
-fn unknown_tokens_show_dash_dash() {
-    let st = status(Some("P / M"), None, None, None, false);
-    assert_eq!(usage_text(&st), "--/--");
-    let st = status(Some("P / M"), Some("high"), Some(128_000), None, false);
-    assert_eq!(usage_text(&st), "--/128k");
-    let st = status(Some("P / M"), Some("high"), None, Some(42_000), false);
-    assert_eq!(usage_text(&st), "42k/--");
+/// 渲染状态行并返回该行文本（去掉行尾空格）。
+fn render_line(lx: &Lx, width: u16) -> String {
+    let area = Rect::new(0, 0, width, 1);
+    let mut grid = super::super::test_grid(area);
+    render(&mut grid, area, lx);
+    let mut buf = Buffer::empty(area);
+    super::super::blit_grid(area, &mut buf, &grid);
+    (0..width)
+        .map(|x| buf.cell((x, 0)).map(|cell| cell.symbol()).unwrap_or(" "))
+        .collect::<String>()
+        .trim_end()
+        .to_string()
 }
 
 #[test]
-fn format_tokens_abbreviates() {
-    assert_eq!(format_tokens(0), "0");
-    assert_eq!(format_tokens(999), "999");
-    assert_eq!(format_tokens(1_000), "1k");
-    assert_eq!(format_tokens(1_200), "1.2k");
-    assert_eq!(format_tokens(42_000), "42k");
-    assert_eq!(format_tokens(128_000), "128k");
-    assert_eq!(format_tokens(1_000_000), "1m");
+fn context_percent_is_ratio_clamped() {
+    assert_eq!(context_percent(None, Some(100)), None);
+    assert_eq!(context_percent(Some(10), None), None);
+    assert_eq!(context_percent(Some(10), Some(0)), None);
+    assert_eq!(context_percent(Some(0), Some(100)), Some(0));
+    assert_eq!(context_percent(Some(42), Some(100)), Some(42));
+    assert_eq!(context_percent(Some(200), Some(100)), Some(100));
 }
 
 #[test]
-fn wide_status_single_row_with_buttons() {
+fn unknown_context_shows_dash_dash() {
+    let st = status(Some("Model"), Some("Prov"), None, None, false);
+    assert_eq!(context_text(&st), "context --");
+    let st = status(Some("Model"), Some("Prov"), Some(128_000), None, false);
+    assert_eq!(context_text(&st), "context --");
+}
+
+#[test]
+fn wide_status_single_row_with_stop_button() {
     let lx = lx_with_status(status(
-        Some("Provider / Model"),
-        Some("high"),
-        Some(128_000),
-        Some(42_000),
+        Some("deepseek-v4.1-flash"),
+        Some("9router-lx-t"),
+        Some(1_000_000),
+        Some(2_000),
         true,
     ));
     let area = Rect::new(0, 0, 80, 1);
     let lay = layout(area, &lx.chat.status, rows(area, &lx.chat.status));
     assert_eq!(lay.area.height, 1);
     assert!(lay.stop.is_some(), "流中显示停止按钮");
-    assert!(lay.history.is_some(), "历史入口常驻");
-    // 按钮不重叠。
-    let stop = lay.stop.unwrap();
-    let history = lay.history.unwrap();
-    assert!(stop.right() <= history.x, "停止按钮在历史按钮左侧");
+    let line = render_line(&lx, 80);
+    assert!(
+        line.starts_with("deepseek-v4.1-flash · 9router-lx-t"),
+        "行首模型 · 供应商：{line}"
+    );
+    assert!(line.contains("context 0%"), "含上下文组件：{line}");
 }
 
 #[test]
 fn idle_status_hides_stop_button() {
-    let lx = lx_with_status(status(Some("P / M"), None, Some(1000), None, false));
+    let lx = lx_with_status(status(Some("M"), Some("P"), Some(1000), None, false));
     let area = Rect::new(0, 0, 80, 1);
     let lay = layout(area, &lx.chat.status, rows(area, &lx.chat.status));
     assert!(lay.stop.is_none(), "空闲不显示停止按钮");
-    assert!(lay.history.is_some());
 }
 
 #[test]
 fn narrow_status_uses_two_rows() {
     let lx = lx_with_status(status(
-        Some("Very Long Provider / Model"),
-        Some("high"),
+        Some("Very Long Model"),
+        Some("Very Long Provider"),
         Some(128_000),
         Some(42_000),
         false,
@@ -98,45 +110,22 @@ fn narrow_status_uses_two_rows() {
 
 #[test]
 fn zero_height_area_yields_no_status() {
-    let lx = lx_with_status(status(Some("P / M"), None, None, None, false));
+    let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
     let lay = layout(Rect::new(0, 0, 80, 0), &lx.chat.status, 0);
     assert_eq!(lay.area.height, 0);
-    assert!(lay.history.is_none());
     assert!(lay.stop.is_none());
 }
 
 #[test]
-fn render_writes_model_and_usage() {
+fn long_model_name_is_truncated_before_provider() {
     let lx = lx_with_status(status(
-        Some("X / Y"),
-        Some("low"),
-        Some(128_000),
-        Some(42_000),
+        Some("very-long-model-name-that-never-fits"),
+        Some("prov"),
+        None,
+        None,
         false,
     ));
-    let area = Rect::new(0, 0, 60, 1);
-    let mut grid = super::super::test_grid(area);
-    let used = render(&mut grid, area, &lx);
-    assert_eq!(used, 1);
-    let mut buf = Buffer::empty(area);
-    super::super::blit_grid(area, &mut buf, &grid);
-    let text = (0..area.width)
-        .filter_map(|x| buf.cell((x, 0)).map(|cell| cell.symbol().to_string()))
-        .collect::<String>();
-    assert!(text.contains("X / Y"), "显示模型：{text}");
-    assert!(
-        text.contains("high") || text.contains("low"),
-        "显示等级：{text}"
-    );
-    assert!(text.contains("42k/128k"), "显示用量：{text}");
-}
-
-#[test]
-fn omitted_notice_reserves_no_extra_row() {
-    let mut st = status(Some("P / M"), None, Some(1000), None, false);
-    st.omitted_turns = Some(3);
-    let lx = lx_with_status(st);
-    let area = Rect::new(0, 0, 80, 1);
-    // 省略提示不改变行数（贴模型行右侧）。
-    assert_eq!(rows(area, &lx.chat.status), 1);
+    let line = render_line(&lx, 30);
+    assert!(line.contains("prov"), "供应商保留：{line}");
+    assert!(line.contains('…'), "模型名截断：{line}");
 }

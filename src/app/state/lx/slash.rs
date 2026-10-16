@@ -71,22 +71,34 @@ impl Default for PanelWindow {
 pub enum SlashCommand {
     /// `/model`：先选模型，再选其 variants。
     Model,
-    /// `/resume`：当前工作区历史列表。
-    Resume,
+    /// `/history`：当前工作区历史列表。
+    History,
     /// `/new`：清当前窗格会话关联并回空白草稿。
     New,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 3] =
-        [SlashCommand::Model, SlashCommand::Resume, SlashCommand::New];
+    pub const ALL: [SlashCommand; 3] = [
+        SlashCommand::Model,
+        SlashCommand::History,
+        SlashCommand::New,
+    ];
+
+    /// 命令名（不含 `/`）。
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::History => "history",
+            Self::New => "new",
+        }
+    }
 
     /// 命令文本（含 `/`）。
     pub fn text(self) -> &'static str {
         match self {
             Self::Model => "/model",
-            Self::Resume => "/resume",
+            Self::History => "/history",
             Self::New => "/new",
         }
     }
@@ -95,7 +107,7 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             Self::Model => "Choose the model and reasoning level for the next turn",
-            Self::Resume => "Open chat history for this workspace",
+            Self::History => crate::ui::text::LX_HISTORY_COMMAND_DESC,
             Self::New => "Start a fresh blank session",
         }
     }
@@ -185,17 +197,25 @@ pub enum SlashPanel {
     },
     /// `/model` 两级选择。
     Model(Box<ModelPicker>),
-    /// `/resume` 历史列表。
-    Resume(Box<HistoryPanel>),
+    /// `/history` 历史列表。
+    History(Box<HistoryPanel>),
 }
 
 impl SlashPanel {
-    /// 命令候选的过滤：按前缀匹配命令文本。
+    /// 命令候选的过滤：模糊匹配命令名（对齐 `@` 提及的子串/子序列排序）。
+    ///
+    /// `query` 为 `/` 之后输入（可含前导 `/`）。空查询返回全部（保持固定顺序）。
     pub fn commands_matching(query: &str) -> Vec<SlashCommand> {
-        SlashCommand::ALL
+        let query = query.trim_start_matches('/').to_lowercase();
+        let mut scored: Vec<(u32, usize, SlashCommand)> = SlashCommand::ALL
             .into_iter()
-            .filter(|command| command.text().starts_with(query))
-            .collect()
+            .enumerate()
+            .filter_map(|(index, command)| {
+                command_score(command.name(), &query).map(|score| (score, index, command))
+            })
+            .collect();
+        scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+        scored.into_iter().map(|(_, _, command)| command).collect()
     }
 
     /// 当前视图的候选数量。
@@ -206,7 +226,7 @@ impl SlashPanel {
                 ModelPickerStage::Models => picker.candidates.len(),
                 ModelPickerStage::Variants { variants, .. } => variants.len(),
             },
-            Self::Resume(panel) => panel.entries.len(),
+            Self::History(panel) => panel.entries.len(),
         }
     }
 
@@ -215,7 +235,7 @@ impl SlashPanel {
         match self {
             Self::Commands { window, .. } => *window,
             Self::Model(picker) => picker.window,
-            Self::Resume(panel) => panel.window,
+            Self::History(panel) => panel.window,
         }
     }
 
@@ -226,7 +246,7 @@ impl SlashPanel {
                 window: current, ..
             } => *current = window,
             Self::Model(picker) => picker.window = window,
-            Self::Resume(panel) => panel.window = window,
+            Self::History(panel) => panel.window = window,
         }
     }
 
@@ -269,6 +289,35 @@ impl SlashPanel {
         self.set_window(window);
         moved
     }
+}
+
+/// 命令名模糊匹配打分（对齐 `@` 提及的层次：精确 > 前缀 > 子串 > 子序列）。
+///
+/// 返回 None 表示不匹配；分数越高越靠前。空查询给基础分（保持固定顺序）。
+fn command_score(name: &str, query: &str) -> Option<u32> {
+    if query.is_empty() {
+        return Some(100);
+    }
+    if name == query {
+        return Some(1000);
+    }
+    if name.starts_with(query) {
+        return Some(800);
+    }
+    if name.contains(query) {
+        return Some(600);
+    }
+    // 子序列：query 的字符按序出现在 name 中。
+    let mut chars = name.chars();
+    let mut matched = 0usize;
+    for needle in query.chars() {
+        if chars.by_ref().any(|ch| ch == needle) {
+            matched += 1;
+        } else {
+            return None;
+        }
+    }
+    (matched == query.chars().count()).then_some(400)
 }
 
 /// 行首命令位置判定：当前段落首个非空字符是 `/` 且光标不在围栏代码块内。
