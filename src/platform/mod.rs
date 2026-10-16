@@ -10,6 +10,55 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 mod paste_path;
 pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 
+/// 收紧文件权限到仅所有者可读写（Unix 0600；Windows no-op）。
+///
+/// 已有权限更严格时不放宽；失败返回错误由调用方决定是否致命。
+pub fn restrict_file_permissions(path: &Path) -> io::Result<()> {
+    restrict_file_permissions_impl(path)
+}
+
+/// 收紧目录权限到仅所有者可进入（Unix 0700；Windows no-op）。
+pub fn restrict_dir_permissions(path: &Path) -> io::Result<()> {
+    restrict_dir_permissions_impl(path)
+}
+
+#[cfg(unix)]
+fn restrict_file_permissions_impl(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path)?;
+    let mut permissions = metadata.permissions();
+    // 清除 group/other 位（0600）；已是 0000 之类更严格值时保持不动。
+    let mode = permissions.mode();
+    if mode & 0o077 != 0 {
+        permissions.set_mode(mode & 0o600);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn restrict_dir_permissions_impl(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let metadata = std::fs::metadata(path)?;
+    let mut permissions = metadata.permissions();
+    let mode = permissions.mode();
+    if mode & 0o077 != 0 {
+        permissions.set_mode(mode & 0o700);
+        std::fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_file_permissions_impl(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn restrict_dir_permissions_impl(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
 /// 原生复制命令的等待上限；超时终止，避免剪贴板被占用时无限阻塞。
 const NATIVE_COPY_TIMEOUT: Duration = Duration::from_secs(2);
 

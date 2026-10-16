@@ -3,6 +3,8 @@
 //! 数据根与数据库一致：生产 `~/.lx-t/`，开发 `~/.lx-t-dev/`；
 //! 缺失字段取默认值，未知键忽略，非法已知值由 `validate` 拒绝并返回错误。
 
+pub mod ai;
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 

@@ -21,6 +21,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_tracing()?;
     tracing::info!("lx-tui starting");
 
+    // 首次运行导入 lx-agent 模型配置（一次性；失败只记录，不阻断启动）。
+    import_model_config();
+
     let config = Config::default();
     let mut state = AppState::demo();
     let persistence = Persistence::start();
@@ -36,6 +39,28 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("lx-tui stopped");
     Ok(())
+}
+
+/// 首次运行把 lx-agent 的 `~/.lx/config/ai.json` 导入本项目 `config/ai.json`。
+///
+/// 目标已存在即跳过（文件存在为幂等标记）；源缺失写入空配置；
+/// 源损坏记录错误并留待修复后重试，绝不覆盖已有文件。
+fn import_model_config() {
+    use lx_tui::config::ai;
+    let path = match ai::ai_config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, "ai config path unavailable");
+            return;
+        }
+    };
+    match ai::import_from_lx_agent(&path) {
+        Ok(true) => tracing::info!(path = %path.display(), "imported model config"),
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(%error, path = %path.display(), "model config import failed")
+        }
+    }
 }
 
 /// 日志写入临时目录文件；TUI 运行期间 stdout 不可用。
