@@ -125,9 +125,6 @@ pub const TOKENS_PILL_GREEN: u8 = 42;
 pub const TOKENS_PILL_YELLOW: u8 = 78;
 pub const TOKENS_PILL_RED: u8 = 92;
 
-/// 上下文占用组件文案标签（`context`）。
-pub const TOKENS_PILL_LABEL_CTX: &str = "context";
-
 /// 右侧用途说明（逐行 muted 渲染）。
 pub const EXEC_DESC: &[&str] = &[
     "Shell command call: verb, command and its output",

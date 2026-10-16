@@ -502,10 +502,13 @@ pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
 pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
 pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
 pub const LX_CHAT_STOP_HINT: &str = "stop";
-/// 状态行：未知 token 的占位。
-pub const LX_CHAT_TOKENS_UNKNOWN: &str = "--";
 /// 状态行：模型名与供应商名之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
+/// 状态行：上下文进度条已用 / 空余字符（灰色空余、白色已用）。
+pub const LX_CHAT_CONTEXT_BAR_USED: char = '█';
+pub const LX_CHAT_CONTEXT_BAR_FREE: char = '░';
+/// 状态行：上下文占用百分比后缀（`%`）。
+pub const LX_CHAT_PERCENT_SUFFIX: &str = "%";
 /// thinking 折叠行前缀与展开提示。
 pub const LX_CHAT_THINKING_LABEL: &str = "thinking";
 pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ thinking";

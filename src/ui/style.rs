@@ -468,11 +468,6 @@ pub fn chat_user_bg() -> Style {
     Style::default().bg(Color::Indexed(236))
 }
 
-/// 状态行「上下文占用」圆点：≥90% 红、≥75% 黄、否则绿（对齐 lx-agent / agent 步骤）。
-pub fn chat_context_dot(percent: u8) -> Style {
-    agent_context_dot(percent)
-}
-
 /// 状态行模型名高亮：金色（Indexed 220）加粗，避开边框青/蓝。
 pub fn chat_model() -> Style {
     Style::default()
@@ -480,7 +475,17 @@ pub fn chat_model() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 状态行上下文占用文字：亮白（Indexed 252），与金色模型名、分档圆点区分。
+/// 状态行中性灰（上下文进度条空余段）：固定灰，不继承终端主题前景。
+pub fn chat_secondary() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
+
+/// 状态行供应商名：用 prompt 条目标题同款普通文字色（默认前景，不加粗/dim）。
+pub fn chat_provider() -> Style {
+    text()
+}
+
+/// 状态行上下文占用（进度条已用段与百分比文字）：亮白（Indexed 252），与金色模型名区分。
 pub fn chat_context_text() -> Style {
     Style::default().fg(Color::Indexed(252))
 }

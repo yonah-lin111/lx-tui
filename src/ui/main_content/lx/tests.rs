@@ -894,8 +894,8 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         model_name: Some("deepseek-v4.1-flash".into()),
         provider_name: Some("9router-lx-t".into()),
         context_limit: Some(1_000_000),
-        input_tokens: Some(2_000),
-        context_percent: Some(0),
+        input_tokens: Some(720_000),
+        context_percent: Some(72),
         streaming: false,
         omitted_turns: None,
     };
@@ -919,7 +919,14 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         border.contains("deepseek-v4.1-flash") && border.contains("9router-lx-t"),
         "底边框显示模型 · 供应商：{border}"
     );
-    assert!(border.contains("context"), "底边框显示上下文占用：{border}");
+    assert!(
+        border.contains('█'),
+        "底边框显示上下文进度条已用段：{border}"
+    );
+    assert!(
+        border.contains('░'),
+        "底边框显示上下文进度条空余段：{border}"
+    );
 }
 
 #[test]

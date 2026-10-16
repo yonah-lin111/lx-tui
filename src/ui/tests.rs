@@ -1994,9 +1994,27 @@ fn lx_pane_top_border_shows_workspace_path_tail() {
     assert_eq!(value.symbol(), "d");
     assert!(
         value.modifier.contains(ratatui::style::Modifier::DIM),
-        "值 muted"
+        "值带 dim"
     );
-    assert_ne!(value.fg, ratatui::style::Color::Cyan);
+    assert_eq!(
+        (value.fg, value.modifier),
+        (
+            ratatui::style::Color::Cyan,
+            ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM
+        ),
+        "聚焦窗格值高亮（accent + dim，与 prompt ws: 值一致）"
+    );
+
+    // 失焦（prompt 持有键盘焦点）：值回退 muted。
+    state.prompt_focused = true;
+    let buffer = render_buffer(&state);
+    let value = &buffer[(start as u16 + 3, rect.y)];
+    assert_eq!(
+        (value.fg, value.modifier),
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "失焦窗格值回退 muted"
+    );
+    state.prompt_focused = false;
 
     // 切到终端视图不显示路径。
     update::toggle_pane_view(&mut state, pane);
