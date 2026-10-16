@@ -134,7 +134,7 @@ fn error_title_is_red_and_bold() {
 #[test]
 fn header_colors_icon_verb_and_param_distinctly() {
     let header = header_line(AgentStepId::Exec);
-    // 图标品牌粉、动词天蓝、参数冰蓝+下划线：三者互不相同。
+    // 图标品牌粉、动词天蓝、参数金黄：三者互不相同。
     assert_eq!(header.spans[0].1, style::agent_icon());
     assert_eq!(header.spans[1].1, style::agent_verb());
     assert_eq!(header.spans[2].1, style::agent_param());
@@ -163,6 +163,86 @@ fn header_colors_icon_verb_and_param_distinctly() {
     assert_ne!(colors[0], colors[1]);
     assert_ne!(colors[1], colors[2]);
     assert_ne!(colors[0], colors[2]);
+}
+
+#[test]
+fn all_params_share_the_same_fixed_gold() {
+    // 除 read 行范围与 edit/write 计数外，各步的可变参数都用同一种固定金黄。
+    for step in [
+        AgentStepId::Exec,
+        AgentStepId::Search,
+        AgentStepId::Web,
+        AgentStepId::Subagent,
+        AgentStepId::Mcp,
+        AgentStepId::Compact,
+        AgentStepId::Mode,
+        AgentStepId::Todo,
+    ] {
+        let spans = detail_spans(step);
+        assert!(!spans.is_empty(), "{step:?} 应至少一段参数");
+        assert!(
+            spans
+                .iter()
+                .all(|(_, style)| *style == style::agent_param()),
+            "{step:?} 的可变参数应统一固定金黄：{spans:?}"
+        );
+    }
+}
+
+#[test]
+fn read_range_uses_its_own_color_without_underline() {
+    let spans = detail_spans(AgentStepId::Read);
+    // 文件名段金黄 + 下划线；行范围另色且无下划线，不被可变参数覆盖。
+    let file = spans
+        .iter()
+        .find(|(v, _)| v == text::agent::PARAM_READ_FILE)
+        .expect("file segment");
+    let range = spans
+        .iter()
+        .find(|(v, _)| v == text::agent::PARAM_READ_RANGE)
+        .expect("range segment");
+    assert_eq!(file.1, style::agent_param());
+    assert_eq!(range.1, style::agent_range());
+    assert_ne!(
+        style::agent_range().fg,
+        style::agent_param().fg,
+        "行范围颜色应不同"
+    );
+    assert!(
+        !range
+            .1
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "行范围不应带下划线"
+    );
+}
+
+#[test]
+fn edit_and_write_counts_trail_the_file_and_keep_diff_colors() {
+    let edit = detail_spans(AgentStepId::Edit);
+    assert_eq!(edit[0].0, text::agent::PARAM_EDIT_FILE);
+    assert_eq!(edit[0].1, style::agent_param(), "文件名用金黄");
+    assert!(
+        edit.iter()
+            .any(|(v, s)| v == text::agent::EDIT_DIFF_ADD && *s == style::agent_added()),
+        "edit 应紧跟绿色 +12：{edit:?}"
+    );
+    assert!(
+        edit.iter()
+            .any(|(v, s)| v == text::agent::EDIT_DIFF_DEL && *s == style::agent_removed()),
+        "edit 应带红色 -4：{edit:?}"
+    );
+
+    let write = detail_spans(AgentStepId::Write);
+    assert_eq!(write[0].0, text::agent::PARAM_WRITE_FILE);
+    assert!(
+        write
+            .iter()
+            .any(|(v, s)| v == text::agent::WRITE_ADD && *s == style::agent_added()),
+        "write 应紧跟绿色 +18：{write:?}"
+    );
+    // write 的 + 号与 edit 的 + 号同色（都走 agent_added）。
+    assert_eq!(style::agent_added(), style::agent_added());
 }
 
 #[test]
@@ -208,14 +288,36 @@ fn read_header_carries_line_range_and_no_body() {
 }
 
 #[test]
-fn edit_shows_diff_count_only_without_body() {
+fn edit_shows_diff_counts_in_header_without_body() {
     let lines = step_lines(AgentStepId::Edit);
-    // 头部 + diff 计数行 + token：无 diff 正文行。
-    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
-    assert_eq!(lines.len(), 3, "edit 应只保留 diff 计数行：{joined}");
-    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    // 头部 + token 两行：+/- 计数并入标题，底部不再有直角 icon 行。
+    assert_eq!(lines.len(), 2, "edit 应只有头部与 token 页脚");
+    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join(" ");
     assert!(joined.contains(text::agent::EDIT_DIFF_ADD));
-    assert!(joined.contains(text::agent::EDIT_DIFF_PATH));
+    assert!(joined.contains(text::agent::EDIT_DIFF_DEL));
+    assert!(joined.contains(text::agent::PARAM_EDIT_FILE));
+    assert!(
+        !joined.contains(text::agent::MARKER_TREE_LEAF),
+        "edit 不应再有底部直角 icon 行：{joined}"
+    );
+}
+
+#[test]
+fn write_shows_plus_in_header_without_body() {
+    let lines = step_lines(AgentStepId::Write);
+    // 头部 + token 两行：`+18` 并入标题、绿色，无底部直角 icon 行。
+    assert_eq!(lines.len(), 2, "write 应只有头部与 token 页脚");
+    let header = &lines[0];
+    let joined = line_text(header);
+    assert!(joined.contains(text::agent::PARAM_WRITE_FILE));
+    assert!(joined.contains(text::agent::WRITE_ADD));
+    assert!(
+        header
+            .spans
+            .iter()
+            .any(|(v, s)| v == text::agent::WRITE_ADD && *s == style::agent_added()),
+        "write 的 + 号应为绿色（与 edit 的 + 同色）"
+    );
 }
 
 #[test]
@@ -232,7 +334,7 @@ fn thinking_shows_title_only() {
     let lines = step_lines(AgentStepId::Thinking);
     assert_eq!(lines.len(), 2, "thinking 应只有标题与 token 页脚");
     let header = line_text(&lines[0]);
-    assert!(header.contains(text::agent::DETAIL_THINKING));
+    assert!(header.contains(text::agent::PARAM_THINKING_TITLE));
     assert!(
         !header.contains("Plan the module"),
         "不应展示思考正文：{header}"

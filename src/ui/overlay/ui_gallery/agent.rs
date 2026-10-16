@@ -6,7 +6,9 @@
 //!
 //! 配色取 lx 品牌 logo 像素调色板（见 [`crate::ui::style`] 的 `logo_pixel`）：
 //! 左侧图标用品牌粉 [`style::agent_icon`]、固定动词用品牌天蓝 [`style::agent_verb`]、
-//! 可变参数用品牌冰蓝外加下划线 [`style::agent_param`]；失败步骤整行红加粗。
+//! 可变参数统一用固定金黄 [`style::agent_param`]；read 的行范围另色无下划线
+//! （[`style::agent_range`]），edit/write 的增删计数用绿/红（[`style::agent_added`] /
+//! [`style::agent_removed`]），三者都不被金黄覆盖。失败步骤整行红加粗。
 //! 全部避开边框青，避免与分区边框混色。
 //!
 //! 所有宽度以显示列计算，越界即截断，窄屏不 panic。本模块纯渲染，不读
@@ -74,11 +76,9 @@ fn step_lines(step: AgentStepId) -> Vec<SampleLine> {
     }
     let tokens = step_tokens(step);
     let mut lines = vec![header_line(step)];
-    // 子行（todo 用三态复选框；edit 用分色 diff 计数；其余用直角连接符 + 文案）。
+    // 子行（todo 用三态复选框；其余用直角连接符 + 文案）。
     if step == AgentStepId::Todo {
         lines.extend(todo_lines());
-    } else if step == AgentStepId::Edit {
-        lines.push(edit_diff_line());
     } else {
         for body in body_lines(step) {
             lines.push(detail_line(body));
@@ -97,32 +97,27 @@ fn step_lines(step: AgentStepId) -> Vec<SampleLine> {
     lines
 }
 
-/// 头部行：`<icon> Verb detail`；失败步骤（error）整行红 + 加粗。
+/// 头部行：`<icon> Verb <param>`；失败步骤（error）整行红 + 加粗。
+///
+/// read 的文件名 + 行范围、edit/write 的文件名 + 增删计数各有专属颜色，**不被**
+/// 可变参数的金黄覆盖。
 fn header_line(step: AgentStepId) -> SampleLine {
-    let detail = detail(step);
+    let mut spans: Vec<(String, Style)> = Vec::new();
     if step == AgentStepId::Error {
         // error：图标、动词、参数统一红 + 加粗。
         let fail = style::agent_fail();
-        return SampleLine::spans(
-            0,
-            vec![
-                (format!("{} ", lx_icon(step)), fail),
-                (format!("{} ", verb(step)), fail),
-                (detail.to_string(), fail),
-            ],
-        );
+        spans.push((format!("{} ", lx_icon(step)), fail));
+        spans.push((format!("{} ", verb(step)), fail));
+        spans.extend(detail_spans(step).into_iter().map(|(v, _)| (v, fail)));
+        return SampleLine::spans(0, spans);
     }
-    SampleLine::spans(
-        0,
-        vec![
-            // 左侧图标：品牌粉高亮，让每步一眼可辨。
-            (format!("{} ", lx_icon(step)), style::agent_icon()),
-            // 固定动词：品牌天蓝。
-            (format!("{} ", verb(step)), style::agent_verb()),
-            // 可变参数：品牌冰蓝 + 下划线。
-            (detail.to_string(), style::agent_param()),
-        ],
-    )
+    // 图标：品牌粉高亮，让每步一眼可辨。
+    spans.push((format!("{} ", lx_icon(step)), style::agent_icon()));
+    // 固定动词：品牌天蓝。
+    spans.push((format!("{} ", verb(step)), style::agent_verb()));
+    // 可变参数：edit/write 带专属 diff 计数；read 的行范围另色；其余固定金黄。
+    spans.extend(detail_spans(step));
+    SampleLine::spans(0, spans)
 }
 
 /// 子行：直角连接符 + 文案。
@@ -135,30 +130,6 @@ fn detail_line(body: &str) -> SampleLine {
                 style::agent_connector(),
             ),
             (body.to_string(), style::text()),
-        ],
-    )
-}
-
-/// edit 的子行：直角连接符 + 分色的 `+N` / `-M` 计数 + 路径（不再展示 diff 正文）。
-fn edit_diff_line() -> SampleLine {
-    SampleLine::spans(
-        0,
-        vec![
-            (
-                format!("  {} ", text::agent::MARKER_TREE_LEAF),
-                style::agent_connector(),
-            ),
-            (text::agent::EDIT_DIFF_ADD.to_string(), style::agent_added()),
-            (" ".to_string(), style::agent_step_detail()),
-            (
-                text::agent::EDIT_DIFF_DEL.to_string(),
-                style::agent_removed(),
-            ),
-            ("  ".to_string(), style::agent_step_detail()),
-            (
-                text::agent::EDIT_DIFF_PATH.to_string(),
-                style::agent_step_detail(),
-            ),
         ],
     )
 }
@@ -329,28 +300,52 @@ fn verb(step: AgentStepId) -> &'static str {
     }
 }
 
-/// 步骤主参数（可变部分，标题用品牌冰蓝 + 下划线）。
-fn detail(step: AgentStepId) -> &'static str {
-    use text::agent;
+/// 步骤主参数的**分段**（文案 + 样式）：
+///
+/// - 一般可变参数（命令 / 路径 / 查询 / 数值…）统一用固定金黄 [`style::agent_param`]；
+/// - read 的文件名 + 行范围用专属色：文件名金黄、行范围另色且无下划线；
+/// - edit / write 在文件名后追加分色的增删计数（绿 / 红），不被金黄覆盖。
+fn detail_spans(step: AgentStepId) -> Vec<(String, Style)> {
+    use text::agent as t;
+    let param = style::agent_param;
+    let push = |spans: &mut Vec<(String, Style)>, value: &str, style: Style| {
+        spans.push((value.to_string(), style));
+    };
+    let mut spans: Vec<(String, Style)> = Vec::new();
     match step {
-        AgentStepId::Exec => agent::DETAIL_EXEC,
-        AgentStepId::Read => agent::DETAIL_READ,
-        AgentStepId::Edit => agent::DETAIL_EDIT,
-        AgentStepId::Write => agent::DETAIL_WRITE,
-        AgentStepId::Search => agent::DETAIL_SEARCH,
-        AgentStepId::Web => agent::DETAIL_WEB,
-        AgentStepId::Thinking => agent::DETAIL_THINKING,
-        AgentStepId::Subagent => agent::DETAIL_SUBAGENT,
-        AgentStepId::Todo => agent::DETAIL_TODO,
-        AgentStepId::Mcp => agent::DETAIL_MCP,
-        AgentStepId::Compact => agent::DETAIL_COMPACT,
-        AgentStepId::Mode => agent::DETAIL_MODE,
-        AgentStepId::Final => agent::DETAIL_FINAL,
-        AgentStepId::Markdown => agent::DETAIL_FINAL,
-        AgentStepId::Error => agent::DETAIL_ERROR,
-        AgentStepId::Question => agent::DETAIL_QUESTION,
-        AgentStepId::Tokens => agent::DETAIL_FINAL,
+        AgentStepId::Read => {
+            push(&mut spans, t::PARAM_READ_FILE, param());
+            spans.push((" ".to_string(), style::text()));
+            push(&mut spans, t::PARAM_READ_RANGE, style::agent_range());
+        }
+        AgentStepId::Edit => {
+            push(&mut spans, t::PARAM_EDIT_FILE, param());
+            spans.push((" ".to_string(), style::text()));
+            push(&mut spans, t::EDIT_DIFF_ADD, style::agent_added());
+            spans.push((" ".to_string(), style::text()));
+            push(&mut spans, t::EDIT_DIFF_DEL, style::agent_removed());
+        }
+        AgentStepId::Write => {
+            push(&mut spans, t::PARAM_WRITE_FILE, param());
+            spans.push((" ".to_string(), style::text()));
+            push(&mut spans, t::WRITE_ADD, style::agent_added());
+        }
+        AgentStepId::Exec => push(&mut spans, t::PARAM_EXEC_CMD, param()),
+        AgentStepId::Search => push(&mut spans, t::PARAM_SEARCH, param()),
+        AgentStepId::Web => push(&mut spans, t::PARAM_WEB_QUERY, param()),
+        AgentStepId::Thinking => push(&mut spans, t::PARAM_THINKING_TITLE, param()),
+        AgentStepId::Subagent => push(&mut spans, t::PARAM_SUBAGENT_AGENT, param()),
+        AgentStepId::Todo => push(&mut spans, t::PARAM_TODO_STEPS, param()),
+        AgentStepId::Mcp => push(&mut spans, t::PARAM_MCP, param()),
+        AgentStepId::Compact => push(&mut spans, t::PARAM_COMPACT, param()),
+        AgentStepId::Mode => push(&mut spans, t::PARAM_MODE, param()),
+        AgentStepId::Final | AgentStepId::Markdown | AgentStepId::Tokens => {
+            push(&mut spans, t::PARAM_FINAL_SUMMARY, param())
+        }
+        AgentStepId::Error => push(&mut spans, t::PARAM_ERROR_CMD, param()),
+        AgentStepId::Question => push(&mut spans, t::PARAM_QUESTION, param()),
     }
+    spans
 }
 
 /// 步骤图标（单宽跨平台，避免 emoji 与东亚宽字符）。
@@ -382,17 +377,17 @@ fn body_lines(step: AgentStepId) -> &'static [&'static str] {
     use text::agent;
     match step {
         AgentStepId::Exec => agent::BODY_EXEC,
-        AgentStepId::Write => agent::BODY_WRITE,
         AgentStepId::Web => agent::BODY_WEB,
         AgentStepId::Mcp => agent::BODY_MCP,
         AgentStepId::Final => agent::BODY_FINAL,
         AgentStepId::Error => agent::BODY_ERROR,
         AgentStepId::Question => agent::BODY_QUESTION,
         // 这些步骤不展示子行内容（read 只给行范围、search 不给命中、thinking 只给
-        // 标题、edit 用 diff 计数行），或在 `step_lines` 里单独展开
+        // 标题、edit/write 的计数并入标题），或在 `step_lines` 里单独展开
         // （subagent / todo / tokens 自定义，markdown 走渲染器）。
         AgentStepId::Read
         | AgentStepId::Edit
+        | AgentStepId::Write
         | AgentStepId::Search
         | AgentStepId::Thinking
         | AgentStepId::Subagent

@@ -147,13 +147,22 @@ pub fn agent_verb() -> Style {
     Style::default().fg(Color::Indexed(117))
 }
 
-/// Agent 步骤标题的可变参数（命令、路径、查询串…）：lx 品牌冰蓝（Indexed 195）加下划线。
+/// Agent 标题里可变参数的统一样式：固定金黄（Indexed 220）加下划线。
 ///
-/// 下划线提示“此处是每次调用都会变的值”，与固定动词的天蓝区分。
+/// 命令 / 文件 / 目录 / agent / 查询 / 数值等**全部**用这一固定色（不再按类型分色），
+/// 下划线提示“此处是每次调用都会变的值”。与图标（[`agent_icon`]）、动词
+/// （[`agent_verb`]）都区分得开，且避开边框青。
 pub fn agent_param() -> Style {
     Style::default()
-        .fg(Color::Indexed(195))
+        .fg(Color::Indexed(220))
         .add_modifier(Modifier::UNDERLINED)
+}
+
+/// Agent 标题里 read 的**行范围**（`(lines 1–2)`）：固定浅灰、无下划线。
+///
+/// 只读元信息，刻意与可变参数（金黄 + 下划线）区分：颜色不同、也不加下划线。
+pub fn agent_range() -> Style {
+    Style::default().fg(Color::Indexed(245))
 }
 
 /// Agent 步骤子行的直角连接符（`└─`）：品牌天蓝压暗，作结构引导而非内容。

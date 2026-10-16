@@ -76,32 +76,36 @@ pub const VERB_FINAL: &str = "Replied";
 pub const VERB_ERROR: &str = "Failed";
 pub const VERB_QUESTION: &str = "Asked";
 
-/// 步骤主参数（紧跟动词后的细节串）。
-pub const DETAIL_EXEC: &str = "git status";
-/// read 主参数：路径 + 读取的行范围（`path (lines 1–2)`）。
-pub const DETAIL_READ: &str = "src/ui/style.rs (lines 1–2)";
-pub const DETAIL_EDIT: &str = "src/app/state.rs";
-pub const DETAIL_WRITE: &str = "docs/notes.md";
-pub const DETAIL_SEARCH: &str = "\"fn render\" in src/";
-pub const DETAIL_WEB: &str = "\"ratatui 0.30\"";
-/// thinking 主参数：这次思考的标题（只显示标题，不展开思考内容）。
-pub const DETAIL_THINKING: &str = "split module then verify";
-pub const DETAIL_SUBAGENT: &str = "explorer";
-pub const DETAIL_TODO: &str = "3 steps";
-pub const DETAIL_MCP: &str = "filesystem · read_file";
-pub const DETAIL_COMPACT: &str = "12.4k → 3.1k tokens";
-pub const DETAIL_MODE: &str = "default → plan";
-pub const DETAIL_FINAL: &str = "1 paragraph";
-pub const DETAIL_ERROR: &str = "cargo test";
-pub const DETAIL_QUESTION: &str = "Overwrite the existing file?";
+/// 步骤主参数的各分段文案；渲染层组合成着色分段（见 `ui/overlay/ui_gallery/agent.rs`）。
+///
+/// 除 read 的行范围（另用 [`crate::ui::style::agent_range`]）与 edit/write 的
+/// 增删计数（另用绿/红）外，其余可变参数一律用固定金黄（[`crate::ui::style::agent_param`]）。
+pub const PARAM_EXEC_CMD: &str = "git status";
+/// read：文件路径 + 行范围（行范围用另色、无下划线）。
+pub const PARAM_READ_FILE: &str = "src/ui/style.rs";
+pub const PARAM_READ_RANGE: &str = "(lines 1–2)";
+pub const PARAM_EDIT_FILE: &str = "src/app/state.rs";
+pub const PARAM_WRITE_FILE: &str = "docs/notes.md";
+pub const PARAM_SEARCH: &str = "\"fn render\" in src/";
+pub const PARAM_WEB_QUERY: &str = "\"ratatui 0.30\"";
+/// thinking：这次思考的标题（只显示标题，不展开思考内容）。
+pub const PARAM_THINKING_TITLE: &str = "split module then verify";
+pub const PARAM_SUBAGENT_AGENT: &str = "explorer";
+pub const PARAM_TODO_STEPS: &str = "3 steps";
+pub const PARAM_MCP: &str = "filesystem · read_file";
+pub const PARAM_COMPACT: &str = "12.4k → 3.1k tokens";
+pub const PARAM_MODE: &str = "default → plan";
+pub const PARAM_FINAL_SUMMARY: &str = "1 paragraph";
+pub const PARAM_ERROR_CMD: &str = "cargo test";
+pub const PARAM_QUESTION: &str = "Overwrite the existing file?";
+
+/// edit / write 标题里的增删行计数（紧跟文件名后，分色、颜色不由可变参数覆盖）。
+pub const EDIT_DIFF_ADD: &str = "+12";
+pub const EDIT_DIFF_DEL: &str = "-4";
+pub const WRITE_ADD: &str = "+18";
 
 /// 步骤子行（直角树连接下的细节）。
 pub const BODY_EXEC: &[&str] = &["On branch dev", "nothing to commit, working tree clean"];
-/// edit 的 diff 计数行（`+`/`-` 分色）与紧随的正文行。
-pub const EDIT_DIFF_ADD: &str = "+12";
-pub const EDIT_DIFF_DEL: &str = "-4";
-pub const EDIT_DIFF_PATH: &str = "src/app/state.rs";
-pub const BODY_WRITE: &[&str] = &["docs/notes.md (+18 lines)"];
 pub const BODY_WEB: &[&str] = &["ratatui 0.30 released", "docs.rs/ratatui/0.30"];
 /// subagent 子任务：只显示“进行中”的那一步（一个直角 icon 右侧一条）。
 pub const SUBAGENT_IN_PROGRESS: &str = "read src/ui/style.rs";
@@ -131,12 +135,12 @@ pub const READ_DESC: &[&str] = &[
     "read, with the same token footer as every other step.",
 ];
 pub const EDIT_DESC: &[&str] = &[
-    "File edit: path plus the +/- line counts (no diff",
-    "body), then the step token footer.",
+    "File edit: the path followed by the +/- line counts",
+    "in the header, then the step token footer.",
 ];
 pub const WRITE_DESC: &[&str] = &[
-    "New or overwritten file: path and added line count,",
-    "then the step token footer.",
+    "New or overwritten file: the path followed by the",
+    "added line count in the header, then the token footer.",
 ];
 pub const SEARCH_DESC: &[&str] = &[
     "Content / glob search: only the query and scope,",
