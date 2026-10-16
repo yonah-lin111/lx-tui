@@ -233,14 +233,22 @@ fn grid_table(
     for spans in row_lines(header, style::text()) {
         lines.push(MdLine::spans(0, spans));
     }
+    // 表头之后、以及每一条数据行之后都补一条水平分割线（末尾与下边框合并）。
     lines.push(MdLine::plain(
         0,
         border("├", "─", "┼", "┤"),
         style::markdown_rule(),
     ));
-    for row in body {
+    for (index, row) in body.iter().enumerate() {
         for spans in row_lines(row, style::text()) {
             lines.push(MdLine::spans(0, spans));
+        }
+        if index + 1 < body.len() {
+            lines.push(MdLine::plain(
+                0,
+                border("├", "─", "┼", "┤"),
+                style::markdown_rule(),
+            ));
         }
     }
     lines.push(MdLine::plain(

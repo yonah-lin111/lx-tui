@@ -4505,16 +4505,61 @@ fn lx_slash_panel_opens_filters_and_closes_on_slash_delete() {
 }
 
 #[test]
-fn lx_slash_fuzzy_matches_subsequence() {
-    // `nw` 命中 /new（子序列），`h` 命中 /history。
+fn lx_slash_fuzzy_matches_subsequence_and_aliases() {
+    // `nw` 命中 /new（子序列），`r` 命中 /resume（前缀）。
     let names: Vec<&str> = SlashPanel::commands_matching("/nw")
         .into_iter()
         .map(SlashCommand::name)
         .collect();
     assert!(names.contains(&"new"), "子序列命中：{names:?}");
-    let names: Vec<&str> = SlashPanel::commands_matching("/h")
+    let names: Vec<&str> = SlashPanel::commands_matching("/r")
         .into_iter()
         .map(SlashCommand::name)
         .collect();
-    assert_eq!(names, vec!["history"], "前缀命中 /history");
+    assert_eq!(
+        names,
+        vec!["resume"],
+        "前缀命中 /resume（别名不做子序列匹配）"
+    );
+    // 别名：/clear → new，/session → resume。
+    let names: Vec<&str> = SlashPanel::commands_matching("/clear")
+        .into_iter()
+        .map(SlashCommand::name)
+        .collect();
+    assert_eq!(names, vec!["new"], "别名 /clear 命中 /new");
+    let names: Vec<&str> = SlashPanel::commands_matching("/session")
+        .into_iter()
+        .map(SlashCommand::name)
+        .collect();
+    assert_eq!(names, vec!["resume"], "别名 /session 命中 /resume");
+    // 别名不能命中其它命令（/clear 不应出现 /model）。
+    assert!(SlashCommand::Model.aliases().is_empty(), "model 无别名");
+}
+
+#[test]
+fn lx_slash_alias_opens_target_command() {
+    // 输入 `/session`（/resume 的别名）后回车：执行 resume（打开历史面板）。
+    let mut state = AppState::demo();
+    for ch in "/session".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    // 别名命中 /resume，命令候选面板里高亮项即 /resume。
+    let pane = state.active_pane().expect("pane");
+    match pane.lx.slash.as_ref() {
+        Some(SlashPanel::Commands { items, .. }) => {
+            assert_eq!(
+                items.first(),
+                Some(&SlashCommand::Resume),
+                "别名命中 /resume"
+            );
+        }
+        other => panic!("expected commands panel, got {other:?}"),
+    }
+    apply_lx_input(&mut state, LxInput::Enter);
+    let pane = state.active_pane().expect("pane");
+    assert!(
+        matches!(pane.lx.slash, Some(SlashPanel::History(_))),
+        "别名采纳后打开历史面板"
+    );
+    assert!(pane.lx.input.is_empty(), "命令文本已消费");
 }

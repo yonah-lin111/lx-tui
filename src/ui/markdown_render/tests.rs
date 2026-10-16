@@ -345,3 +345,44 @@ fn br_cell_width_uses_visible_text() {
     assert!(!joined.contains('<'), "无标记残留：{joined}");
     assert!(joined.contains("二二二"));
 }
+
+/// 表格：表头与每条数据行之间都有水平分割线（`├`），末行与下边框合并。
+#[test]
+fn table_rows_have_horizontal_separators() {
+    let src = "| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |";
+    let lines = render(src);
+    let text: Vec<String> = lines.iter().map(MdLine::text).collect();
+    // 期望：┌ / 表头 / ├ / 1 / ├ / 3 / ├ / 5 / └
+    let seps = text.iter().filter(|line| line.starts_with("├")).count();
+    assert_eq!(
+        seps, 3,
+        "表头后 + 每条数据行后（末行与 └ 合并）共 3 条分割线：{text:#?}"
+    );
+    assert!(text.iter().any(|line| line.starts_with('┌')));
+    assert!(text.iter().any(|line| line.starts_with('└')));
+    // 数据行数 = 3；分割线不紧邻（每行数据之间）。
+    let data_rows = text.iter().filter(|line| line.starts_with('│')).count();
+    assert_eq!(data_rows, 4, "表头 1 + 数据 3 = 4 条内容行");
+    // 相邻两条 `├` 之间必有一条数据行。
+    for window in text.windows(2) {
+        assert!(
+            !(window[0].starts_with('├') && window[1].starts_with('├')),
+            "不应出现相邻分割线：{text:#?}"
+        );
+    }
+}
+
+/// 单条数据行时：表头后一条分割线，末行与下边框合并（不重复分割）。
+#[test]
+fn single_body_row_keeps_one_separator() {
+    let text: Vec<String> = render("| A |\n| --- |\n| 1 |")
+        .iter()
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(text.iter().filter(|line| line.starts_with("├")).count(), 1);
+    assert_eq!(
+        text.last().map(|line| line.starts_with('└')),
+        Some(true),
+        "末行即下边框：{text:#?}"
+    );
+}

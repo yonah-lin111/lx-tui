@@ -387,7 +387,8 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
         .and_then(|target| target.lx.chat.selection.as_ref())
         .and_then(|selection| {
             candidates.iter().position(|candidate| {
-                candidate.provider == selection.provider && candidate.model == selection.model
+                candidate.selection.provider == selection.provider
+                    && candidate.selection.model == selection.model
             })
         })
         .unwrap_or(0);
@@ -402,7 +403,7 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// `/history` 打开历史面板（事件层提供当前工作区分页列表）。
+/// `/resume` 打开历史面板（事件层提供当前工作区分页列表）。
 pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -415,7 +416,7 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 历史列表回投：填充 `/history` 面板。
+/// 历史列表回投：填充 `/resume` 面板。
 pub fn on_history_listed(
     state: &mut AppState,
     pane: PaneId,
@@ -568,7 +569,7 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
 /// - 命令候选 → 消费命令文本并执行（`/model`、`/resume`、`/new`）。
 /// - `/model` 第一级 → 有 variants 进入第二级，否则直接完成。
 /// - `/model` 第二级 → 以高亮 variant 完成选择（真正写入下一轮选择）。
-/// - `/history` → 打开高亮会话。
+/// - `/resume` → 打开高亮会话。
 pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
     let Some(panel) = state
         .pane_anywhere(pane)
@@ -580,10 +581,11 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
         SlashPanel::Commands { .. } => super::pane::accept_slash_command(state, pane),
         SlashPanel::Model(picker) => match &picker.stage {
             ModelPickerStage::Models => {
-                let Some(selection) = picker.candidates.get(picker.window.active).cloned() else {
+                let Some(candidate) = picker.candidates.get(picker.window.active).cloned() else {
                     // 空态占位：吞掉 Enter，不误采纳。
                     return true;
                 };
+                let selection = candidate.selection;
                 let variants = variant_keys(state, &selection);
                 if variants.is_empty() {
                     finish_model_selection(state, pane, selection);
@@ -744,7 +746,7 @@ fn show_chat_toast(state: &mut AppState, kind: ToastKind, message: &'static str)
 pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCommand) -> bool {
     match command {
         SlashCommand::Model => open_model_picker(state, pane),
-        SlashCommand::History => open_history(state, pane),
+        SlashCommand::Resume => open_history(state, pane),
         SlashCommand::New => new_session(state, pane),
     }
 }

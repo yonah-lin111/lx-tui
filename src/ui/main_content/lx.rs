@@ -49,18 +49,18 @@ fn slash_items(panel: &crate::app::state::SlashPanel) -> Vec<CommandItem<'_>> {
                 picker
                     .candidates
                     .iter()
-                    .map(|selection| CommandItem::Inline {
-                        label: selection.model.as_str(),
-                        preview: selection.provider.as_str(),
+                    .map(|candidate| CommandItem::Inline {
+                        label: candidate.model_name.as_str(),
+                        preview: candidate.provider_name.as_str(),
                         tag: "",
                     })
                     .collect()
             }
-            ModelPickerStage::Variants { model, variants } => variants
+            ModelPickerStage::Variants { variants, .. } => variants
                 .iter()
                 .map(|variant| CommandItem::Inline {
                     label: variant.as_str(),
-                    preview: model.provider.as_str(),
+                    preview: "",
                     tag: "",
                 })
                 .collect(),

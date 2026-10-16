@@ -717,7 +717,7 @@ fn mention_panel_height_limited_by_space_above_input() {
 // ===== `/` 命令面板（与 `@` 面板同款几何/交互） =====
 
 use crate::app::state::lx::slash::{ModelPicker, PanelWindow};
-use crate::app::state::{ModelPickerStage, SlashCommand, SlashPanel};
+use crate::app::state::{ModelCandidate, ModelPickerStage, SlashCommand, SlashPanel};
 
 /// 构造带 `/` 命令候选面板的 lx 状态。
 fn slash_commands_lx(active: usize) -> Lx {
@@ -729,21 +729,29 @@ fn slash_commands_lx(active: usize) -> Lx {
     lx
 }
 
-/// 构造带 `/model` 第一级面板的 lx 状态（两个候选）。
+/// 构造带 `/model` 第一级面板的 lx 状态（两个候选，展示名与 id 不同）。
 fn slash_model_lx() -> Lx {
     let mut lx = Lx::new();
     lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
         stage: ModelPickerStage::Models,
         candidates: vec![
-            crate::config::ai::ModelSelection {
-                provider: "9router-lx".into(),
-                model: "cbcn/deepseek-v4.1-flash".into(),
-                variant: None,
+            ModelCandidate {
+                selection: crate::config::ai::ModelSelection {
+                    provider: "provider-alq374".into(),
+                    model: "cbcn/deepseek-v4.1-flash".into(),
+                    variant: None,
+                },
+                provider_name: "9router-lx-t".into(),
+                model_name: "deepseek-v4.1-flash".into(),
             },
-            crate::config::ai::ModelSelection {
-                provider: "9router-lx".into(),
-                model: "gpt-5.6-luna".into(),
-                variant: None,
+            ModelCandidate {
+                selection: crate::config::ai::ModelSelection {
+                    provider: "provider-alq374".into(),
+                    model: "gpt-5.6-luna".into(),
+                    variant: None,
+                },
+                provider_name: "9router-lx-t".into(),
+                model_name: "gpt-5.6-luna".into(),
             },
         ],
         window: PanelWindow::new(0),
@@ -969,4 +977,21 @@ fn overflowing_history_draws_scrollbar_glyphs() {
         text.contains('▐') || text.contains('▕'),
         "溢出时历史滚动条可见：{text}"
     );
+}
+
+#[test]
+fn model_panel_shows_provider_and_model_names_not_ids() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_model_lx();
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("deepseek-v4.1-flash"), "显示模型名：{text}");
+    assert!(text.contains("9router-lx-t"), "显示供应商名：{text}");
+    // 不能出现原始 id。
+    assert!(
+        !text.contains("provider-alq374"),
+        "不应显示供应商 id：{text}"
+    );
+    assert!(!text.contains("cbcn/"), "不应显示模型 id：{text}");
 }

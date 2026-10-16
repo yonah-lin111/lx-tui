@@ -506,10 +506,10 @@ pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ thinking";
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边提示（与 `@` 提及面板同款）。
 pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
-/// 历史命令（`/history`）描述。
-pub const LX_HISTORY_COMMAND_DESC: &str = "Open chat history for this workspace";
-/// `/history` 历史面板标题与空态。
-pub const LX_HISTORY_PANEL_TITLE: &str = "History";
+/// `/resume` 命令描述。
+pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
+/// `/resume` 历史面板标题与空态。
+pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";

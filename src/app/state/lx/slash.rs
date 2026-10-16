@@ -71,26 +71,32 @@ impl Default for PanelWindow {
 pub enum SlashCommand {
     /// `/model`：先选模型，再选其 variants。
     Model,
-    /// `/history`：当前工作区历史列表。
-    History,
+    /// `/resume`：当前工作区历史列表。
+    Resume,
     /// `/new`：清当前窗格会话关联并回空白草稿。
     New,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 3] = [
-        SlashCommand::Model,
-        SlashCommand::History,
-        SlashCommand::New,
-    ];
+    pub const ALL: [SlashCommand; 3] =
+        [SlashCommand::Model, SlashCommand::Resume, SlashCommand::New];
 
     /// 命令名（不含 `/`）。
     pub fn name(self) -> &'static str {
         match self {
             Self::Model => "model",
-            Self::History => "history",
+            Self::Resume => "resume",
             Self::New => "new",
+        }
+    }
+
+    /// 额外别名（不含 `/`）；用于命令面板的模糊匹配（`/session` 命中 `/resume`）。
+    pub fn aliases(self) -> &'static [&'static str] {
+        match self {
+            Self::Model => &[],
+            Self::Resume => &["session"],
+            Self::New => &["clear"],
         }
     }
 
@@ -98,7 +104,7 @@ impl SlashCommand {
     pub fn text(self) -> &'static str {
         match self {
             Self::Model => "/model",
-            Self::History => "/history",
+            Self::Resume => "/resume",
             Self::New => "/new",
         }
     }
@@ -107,7 +113,7 @@ impl SlashCommand {
     pub fn description(self) -> &'static str {
         match self {
             Self::Model => "Choose the model and reasoning level for the next turn",
-            Self::History => crate::ui::text::LX_HISTORY_COMMAND_DESC,
+            Self::Resume => crate::ui::text::LX_RESUME_COMMAND_DESC,
             Self::New => "Start a fresh blank session",
         }
     }
@@ -118,10 +124,21 @@ impl SlashCommand {
     }
 }
 
+/// `/model` 第一级候选：选择键 + 展示名（供应商名 / 模型名）。
+///
+/// 选择与发送用 `selection` 的稳定 id；面板展示用 `provider_name` / `model_name`
+/// （配置里的可读名），避免把 id 直接暴露给用户。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelCandidate {
+    pub selection: ModelSelection,
+    pub provider_name: String,
+    pub model_name: String,
+}
+
 /// `/model` 面板的两级视图。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelPickerStage {
-    /// 第一级：模型列表（provider / model 展示行）。
+    /// 第一级：模型列表（模型名 + 供应商名展示行）。
     Models,
     /// 第二级：所选模型的 variants；`variants` 为空时直接跳过（不进入本层）。
     Variants {
@@ -135,15 +152,15 @@ pub enum ModelPickerStage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelPicker {
     pub stage: ModelPickerStage,
-    /// 候选：启用的 provider × 其模型。
-    pub candidates: Vec<ModelSelection>,
+    /// 第一级候选：启用的 provider × 其模型（含展示名）。
+    pub candidates: Vec<ModelCandidate>,
     /// 窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
 }
 
 impl ModelPicker {
     /// 从配置构造第一级候选（只含已启用且有模型与 Key 的 provider）。
-    pub fn candidates(settings: &AiSettings) -> Vec<ModelSelection> {
+    pub fn candidates(settings: &AiSettings) -> Vec<ModelCandidate> {
         let mut out = Vec::new();
         for provider_id in &settings.enabled_providers {
             let Some(provider) = settings.providers.get(provider_id) else {
@@ -158,10 +175,14 @@ impl ModelPicker {
                 continue;
             }
             for (model_key, model) in &provider.models {
-                out.push(ModelSelection {
-                    provider: provider_id.clone(),
-                    model: model_key.clone(),
-                    variant: model.variant.clone(),
+                out.push(ModelCandidate {
+                    selection: ModelSelection {
+                        provider: provider_id.clone(),
+                        model: model_key.clone(),
+                        variant: model.variant.clone(),
+                    },
+                    provider_name: provider.name.clone(),
+                    model_name: model.name.clone(),
                 });
             }
         }
@@ -197,21 +218,35 @@ pub enum SlashPanel {
     },
     /// `/model` 两级选择。
     Model(Box<ModelPicker>),
-    /// `/history` 历史列表。
+    /// `/resume` 历史列表。
     History(Box<HistoryPanel>),
 }
 
 impl SlashPanel {
-    /// 命令候选的过滤：模糊匹配命令名（对齐 `@` 提及的子串/子序列排序）。
+    /// 命令候选的过滤：模糊匹配命令名与别名（对齐 `@` 提及的子串/子序列排序）。
     ///
     /// `query` 为 `/` 之后输入（可含前导 `/`）。空查询返回全部（保持固定顺序）。
+    /// 别名（如 `/session`→`resume`、`/clear`→`new`）按精确/前缀/子串命中同一命令
+    /// （不做子序列匹配，避免 `/r` 之类误命中）。
     pub fn commands_matching(query: &str) -> Vec<SlashCommand> {
         let query = query.trim_start_matches('/').to_lowercase();
         let mut scored: Vec<(u32, usize, SlashCommand)> = SlashCommand::ALL
             .into_iter()
             .enumerate()
             .filter_map(|(index, command)| {
-                command_score(command.name(), &query).map(|score| (score, index, command))
+                let name_score = command_score(command.name(), &query);
+                let alias_score = command
+                    .aliases()
+                    .iter()
+                    .filter_map(|alias| alias_prefix_score(alias, &query))
+                    // 别名略降权，同名命中优先。
+                    .map(|score| score.saturating_sub(1))
+                    .max();
+                name_score
+                    .into_iter()
+                    .chain(alias_score)
+                    .max()
+                    .map(|score| (score, index, command))
             })
             .collect();
         scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
@@ -318,6 +353,19 @@ fn command_score(name: &str, query: &str) -> Option<u32> {
         }
     }
     (matched == query.chars().count()).then_some(400)
+}
+
+/// 别名匹配打分：仅精确/前缀（不做子串/子序列，避免 `/r` 之类误命中别名）。
+///
+/// 别名是「用另一个名字访问同一命令」，按从头输入的名字匹配即可。
+fn alias_prefix_score(alias: &str, query: &str) -> Option<u32> {
+    if query.is_empty() {
+        return Some(100);
+    }
+    if alias == query {
+        return Some(1000);
+    }
+    alias.starts_with(query).then_some(800)
 }
 
 /// 行首命令位置判定：当前段落首个非空字符是 `/` 且光标不在围栏代码块内。

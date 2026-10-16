@@ -243,7 +243,7 @@ fn narrow_width_table_is_not_deformed() {
         crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
         // 每行不超过内容宽度（扣除滚动条预留列），且表格边界字符不会跨行断裂。
         let content_width = width - SCROLLBAR_COLUMNS;
-        for row in 0..12 {
+        for row in 0..area.height {
             let line = row_text(&buf, area, row);
             let drawn: usize = line
                 .chars()
@@ -255,7 +255,7 @@ fn narrow_width_table_is_not_deformed() {
             );
         }
         // 右下角边界与左上角边界都在（方框未被折断）。
-        let joined = (0..12)
+        let joined = (0..area.height)
             .map(|row| row_text(&buf, area, row))
             .collect::<Vec<_>>()
             .join("\n");

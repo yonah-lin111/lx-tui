@@ -22,8 +22,8 @@ pub mod workspace;
 
 pub use lx::{
     ChatMessageView, ChatPartView, FrozenModel, HistoryEntry, HistoryPanel, Lx, LxChat, LxEntry,
-    ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, RequestKey, RequestState,
-    SlashCommand, SlashPanel,
+    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, RequestKey,
+    RequestState, SlashCommand, SlashPanel,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use workspace::{

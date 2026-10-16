@@ -73,7 +73,7 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
 ///
-/// 面板优先级：粘贴参照 > `@` 提及 > `/` 命令（model/resume/history） > md 块命令；
+/// 面板优先级：粘贴参照 > `@` 提及 > `/` 命令（model/resume/new） > md 块命令；
 /// 面板打开时其余按键按面板策略吞掉。
 /// 提及面板打开时 `↑`/`↓` 移动高亮、`Tab`/`Enter` 采纳、`Shift+Enter` 进入目录、`Esc` 关闭。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
@@ -273,7 +273,7 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
         super::super::state::lx::slash::slash_trigger(&target.lx.input, target.lx.cursor)
     });
     let Some(query) = query else {
-        // 离开命令位置时关闭命令候选面板（model/resume/history 面板不受影响）。
+        // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
         if let Some(target) = state.pane_mut_anywhere(pane)
             && matches!(
                 target.lx.slash,
