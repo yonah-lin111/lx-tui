@@ -240,10 +240,10 @@ fn thinking_shows_title_only() {
 }
 
 #[test]
-fn mcp_uses_benzene_icon() {
-    assert_eq!(text::agent::ICON_MCP, "⌬");
+fn mcp_uses_hash_icon() {
+    assert_eq!(text::agent::ICON_MCP, "#");
     let header = line_text(&step_lines(AgentStepId::Mcp)[0]);
-    assert!(header.contains("⌬"), "mcp 标题应使用新图标：{header}");
+    assert!(header.contains('#'), "mcp 标题应使用 # 图标：{header}");
 }
 
 #[test]
