@@ -81,8 +81,10 @@ pub enum LxInput {
     Tab,
     /// Enter：md 面板打开时采纳高亮候选；否则预留给发送（当前不动作）。
     Enter,
-    /// Esc：关闭 md 面板。
+    /// Esc：关闭 md 面板；无面板且在流中时停止生成。
     Escape,
+    /// Ctrl+T：切换最近 thinking 块展开/折叠。
+    ToggleThinking,
 }
 
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。

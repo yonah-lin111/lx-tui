@@ -224,6 +224,23 @@ impl RequestState {
     }
 }
 
+/// 状态行展示数据：由 app 层按当前选择/usage 刷新，`ui/` 只读。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ChatStatus {
+    /// `provider / model` 展示标签。
+    pub model_label: Option<String>,
+    /// 思考等级标签。
+    pub variant_label: Option<String>,
+    /// 当前模型上下文上限（未知为 None → `--`）。
+    pub context_limit: Option<u64>,
+    /// 最近一次同模型成功请求的真实输入 token（未知为 None → `--`）。
+    pub input_tokens: Option<u64>,
+    /// 是否正在生成（显示停止控件）。
+    pub streaming: bool,
+    /// 上下文裁剪省略提示（一次性）。
+    pub omitted_turns: Option<usize>,
+}
+
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
 pub struct LxChat {
@@ -245,6 +262,12 @@ pub struct LxChat {
     pub omitted_turns_notice: Option<usize>,
     /// 窗格内请求代号计数器（单调递增）。
     pub generation_counter: u64,
+    /// 状态行展示数据。
+    pub status: ChatStatus,
+    /// 已展开的 thinking 块（消息索引, part 索引）。
+    pub expanded_thinking: Vec<(usize, usize)>,
+    /// 历史视图滚动偏移（跟随底部时忽略）。
+    pub history_scroll: usize,
 }
 
 impl Default for LxChat {
@@ -265,7 +288,74 @@ impl LxChat {
             last_tokens_model: None,
             omitted_turns_notice: None,
             generation_counter: 0,
+            status: ChatStatus::default(),
+            expanded_thinking: Vec::new(),
+            history_scroll: 0,
         }
+    }
+
+    /// thinking 块是否展开。
+    pub fn reasoning_expanded(&self, message_index: usize, part_index: usize) -> bool {
+        self.expanded_thinking
+            .contains(&(message_index, part_index))
+    }
+
+    /// 切换 thinking 块展开状态。
+    pub fn toggle_reasoning(&mut self, message_index: usize, part_index: usize) {
+        let key = (message_index, part_index);
+        if let Some(position) = self.expanded_thinking.iter().position(|item| *item == key) {
+            self.expanded_thinking.remove(position);
+        } else {
+            self.expanded_thinking.push(key);
+        }
+    }
+
+    /// 重算状态行展示数据：模型标签/等级/上限来自当前选择（或默认），
+    /// 输入 token 只在仍属同一模型时保留（切模型清空分子）。
+    pub fn refresh_status(&mut self, models: &ModelsSnapshot) {
+        let selection = self.effective_selection(models);
+        let (model_label, variant_label, context_limit) = match &selection {
+            Some(selection) => {
+                let provider = models.settings.providers.get(&selection.provider);
+                let model = provider.and_then(|provider| provider.models.get(&selection.model));
+                let provider_name = provider.map(|provider| provider.name.clone());
+                let model_name = model
+                    .map(|model| model.name.clone())
+                    .or_else(|| Some(selection.model.clone()));
+                let label = match (provider_name, model_name) {
+                    (Some(provider), Some(model)) => Some(format!("{provider} / {model}")),
+                    _ => Some(selection.model.clone()),
+                };
+                let variant = selection.variant.clone();
+                let limit = model.and_then(|model| model.limit.map(|limit| limit.context));
+                (label, variant, limit)
+            }
+            None => (None, None, None),
+        };
+        // 切模型清空分子：当前模型（provider/model 稳定键）与上次记录不一致时重置。
+        let token_key = selection
+            .as_ref()
+            .map(|selection| format!("{}/{}", selection.provider, selection.model));
+        if let Some(previous) = &self.last_tokens_model
+            && Some(previous) != token_key.as_ref()
+        {
+            self.input_tokens_reset();
+        }
+        self.last_tokens_model = token_key;
+        self.status = ChatStatus {
+            model_label,
+            variant_label,
+            context_limit,
+            input_tokens: self.last_input_tokens,
+            streaming: self.request.is_busy(),
+            omitted_turns: self.omitted_turns_notice.take(),
+        };
+    }
+
+    /// 清空输入 token 分子（切模型/新建会话）。
+    pub fn input_tokens_reset(&mut self) {
+        self.last_input_tokens = None;
+        self.last_tokens_model = None;
     }
 
     /// 当前选择；无窗格级选择时回落配置默认。

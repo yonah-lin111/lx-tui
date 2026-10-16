@@ -45,7 +45,11 @@ pub enum ModelPickerStage {
     /// 第一级：模型列表（provider / model 展示行）。
     Models,
     /// 第二级：所选模型的 variants；`variants` 为空时直接跳过（不进入本层）。
-    Variants { model: ModelSelection },
+    Variants {
+        model: ModelSelection,
+        /// 该模型的 variants 键（渲染候选）。
+        variants: Vec<String>,
+    },
 }
 
 /// `/model` 面板。
@@ -106,8 +110,11 @@ pub struct HistoryPanel {
 /// `/` 命令面板（互斥浮层；同一时刻至多一个视图）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum SlashPanel {
-    /// 命令候选列表（输入 `/` 后）。
-    Commands { active: usize },
+    /// 命令候选列表（输入 `/` 后过滤）。
+    Commands {
+        items: Vec<SlashCommand>,
+        active: usize,
+    },
     /// `/model` 两级选择。
     Model(Box<ModelPicker>),
     /// `/resume` 历史列表。

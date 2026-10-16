@@ -514,6 +514,15 @@ pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
 pub const LX_CHAT_INTERRUPTED_LABEL: &str = "interrupted";
 pub const LX_CHAT_FAILED_LABEL: &str = "failed";
 pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
+/// 状态行：未知 token 的占位与未知上限的占位。
+pub const LX_CHAT_ASSISTANT_LABEL: &str = "assistant";
+pub const LX_CHAT_STREAMING_LABEL: &str = "streaming";
+pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
+/// 状态行控件文案（逐格强调色绘制）。
+pub const LX_CHAT_HISTORY_BUTTON: &str = "[⌛]";
+pub const LX_CHAT_STOP_BUTTON: &str = "[■]";
+/// 上下文省略提示前缀。
+pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
 
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";

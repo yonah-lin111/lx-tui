@@ -235,7 +235,15 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Enter => {
             super::chat::try_send(state, pane_id);
         }
-        LxInput::Tab | LxInput::Escape => {}
+        // 无面板：Esc 在流中停止生成，否则吞掉。
+        LxInput::Escape => {
+            super::chat::stop_stream(state, pane_id);
+        }
+        // Ctrl+T：切换最近 thinking 块。
+        LxInput::ToggleThinking => {
+            super::chat::toggle_latest_thinking(state, pane_id);
+        }
+        LxInput::Tab => {}
     }
 }
 
@@ -269,12 +277,15 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
             return;
         }
         // 高亮保持或钳到范围。
-        let active = match target.lx.slash {
-            Some(super::super::state::SlashPanel::Commands { active }) => active,
+        let active = match &target.lx.slash {
+            Some(super::super::state::SlashPanel::Commands { active, .. }) => *active,
             _ => 0,
         }
         .min(matching.len() - 1);
-        target.lx.slash = Some(super::super::state::SlashPanel::Commands { active });
+        target.lx.slash = Some(super::super::state::SlashPanel::Commands {
+            items: matching,
+            active,
+        });
     }
 }
 
@@ -283,26 +294,19 @@ fn accept_slash_command(state: &mut AppState, pane: PaneId) {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return;
     };
-    // 只在命令候选面板时采纳。
-    if !matches!(
-        target.lx.slash,
-        Some(super::super::state::SlashPanel::Commands { .. })
-    ) {
+    // 只在命令候选面板时采纳高亮命令。
+    let Some(super::super::state::SlashPanel::Commands { items, active }) = target.lx.slash.clone()
+    else {
         return;
-    }
+    };
+    let Some(command) = items.get(active).copied() else {
+        target.lx.slash = None;
+        return;
+    };
     // 命令文本 = 当前行首 `/...`（含光标前的完整命令）。
     let input = target.lx.input.clone();
     let cursor = target.lx.cursor;
     let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
-    let command_text = input[line_start..cursor].trim().to_string();
-    let Some(command) = super::super::state::lx::slash::SlashCommand::ALL
-        .into_iter()
-        .find(|command| command.text() == command_text)
-    else {
-        // 未知命令：关闭面板、清空该命令行。
-        target.lx.slash = None;
-        return;
-    };
     // 消费整条命令：删除该行命令文本。
     target.lx.input.replace_range(line_start..cursor, "");
     target.lx.cursor = line_start;

@@ -131,6 +131,8 @@ async fn run_loop(
         }
     };
     state.settings_available = settings_service.is_some();
+    // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
+    load_models_snapshot(state);
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
     let mut last_prompt_workspace = state.prompt_workspace();
@@ -331,6 +333,23 @@ fn initialize_layout_widths(
     state.sidebar_width = config.sidebar_width;
     state.prompt_width = ui::layout::default_side_width(area, config, state.sidebar_collapsed);
     Ok(())
+}
+
+/// 启动加载模型配置快照；缺失或损坏时留空配置并刷新状态行。
+fn load_models_snapshot(state: &mut AppState) {
+    let path = match crate::config::ai::ai_config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, "ai config path unavailable");
+            return;
+        }
+    };
+    match crate::config::ai::load_ai(&path) {
+        Ok(Some(settings)) => state.models.settings = settings,
+        Ok(None) => {}
+        Err(error) => tracing::warn!(%error, "ai config load failed"),
+    }
+    update::refresh_all_lx_status(state);
 }
 
 fn handle_terminal_event(

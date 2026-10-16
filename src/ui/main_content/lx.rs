@@ -21,6 +21,9 @@ mod mention;
 
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
 
+pub(crate) mod history;
+pub(crate) mod status;
+
 /// 宽字符占位单元格的标记；不参与绘制与取词。
 const CONTINUATION: char = '\0';
 
@@ -131,7 +134,93 @@ pub fn render(
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
+    render_slash_panel(area, buf, lx);
     cursor
+}
+
+/// 绘制 `/` 命令面板：命令候选 / `/model` 两级 / `/resume` 历史列表。
+fn render_slash_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
+    use crate::app::state::{ModelPickerStage, SlashPanel};
+    let Some(panel) = lx.slash.as_ref() else {
+        return;
+    };
+    let Some(input) = layout(area, lx).input else {
+        return;
+    };
+    let margin: u16 = if area.width >= 24 { MARGIN } else { 0 };
+    let content_x = area.x + margin;
+    let content_w = area.width.saturating_sub(margin.saturating_mul(2));
+    let region_h = input.y.saturating_sub(area.y);
+    if region_h < 3 || content_w < 8 {
+        return;
+    }
+    let panel_area = Rect::new(content_x, area.y, content_w, region_h);
+    let items: Vec<CommandItem<'_>> = match panel {
+        SlashPanel::Commands { items, .. } => items
+            .iter()
+            .map(|command| CommandItem::Inline {
+                label: command.text(),
+                preview: command.description(),
+                tag: "",
+            })
+            .collect(),
+        SlashPanel::Model(picker) => match &picker.stage {
+            ModelPickerStage::Models => picker
+                .candidates
+                .iter()
+                .map(|selection| CommandItem::Inline {
+                    label: selection.model.as_str(),
+                    preview: selection.provider.as_str(),
+                    tag: "",
+                })
+                .collect(),
+            ModelPickerStage::Variants { model, variants } => variants
+                .iter()
+                .map(|variant| CommandItem::Inline {
+                    label: variant.as_str(),
+                    preview: model.provider.as_str(),
+                    tag: "",
+                })
+                .collect(),
+        },
+        SlashPanel::Resume(history) => history
+            .entries
+            .iter()
+            .map(|entry| CommandItem::Inline {
+                label: entry.title.as_str(),
+                preview: entry.session_id.as_str(),
+                tag: "",
+            })
+            .collect(),
+    };
+    if items.is_empty() {
+        return;
+    }
+    let (title, active) = match panel {
+        SlashPanel::Commands { active, .. } => (text::LX_SLASH_PANEL_TITLE, *active),
+        SlashPanel::Model(picker) => (
+            if matches!(picker.stage, ModelPickerStage::Models) {
+                text::LX_MODEL_PANEL_TITLE
+            } else {
+                text::LX_MODEL_VARIANT_PANEL_TITLE
+            },
+            picker.active,
+        ),
+        SlashPanel::Resume(history) => (text::LX_HISTORY_PANEL_TITLE, history.active),
+    };
+    let view = CommandPanelView {
+        items: &items,
+        active,
+        window_anchor: Some(active),
+        window_start: None,
+        anchor_row: region_h,
+        max_height: None,
+        title: Some(title),
+        right_title: None,
+        footer: None,
+        ..Default::default()
+    };
+    command_panel::render(panel_area, buf, &view);
 }
 
 /// 绘制输入框滚动条：软换行后的视觉行溢出可视高度时，覆盖在最右预留列。
@@ -348,13 +437,13 @@ impl Glyph {
 }
 
 /// 可写字符网格（坐标为绝对屏幕坐标）。
-struct Grid {
+pub(super) struct Grid {
     area: Rect,
     cells: Vec<Glyph>,
 }
 
 impl Grid {
-    fn new(area: Rect) -> Self {
+    pub(super) fn new(area: Rect) -> Self {
         Self {
             area,
             cells: vec![Glyph::blank(); usize::from(area.width) * usize::from(area.height)],
@@ -377,14 +466,14 @@ impl Grid {
             .unwrap_or_else(Glyph::blank)
     }
 
-    fn set(&mut self, x: u16, y: u16, ch: char, style: Style) {
+    pub(super) fn set(&mut self, x: u16, y: u16, ch: char, style: Style) {
         if let Some(index) = self.index(x, y) {
             self.cells[index] = Glyph { ch, style };
         }
     }
 
     /// 逐字符写入；宽字符按显示宽度占位，后续列为占位标记。
-    fn put(&mut self, x: u16, y: u16, content: &str, style: Style) {
+    pub(super) fn put(&mut self, x: u16, y: u16, content: &str, style: Style) {
         let mut cx = x;
         for ch in content.chars() {
             let width = ch.width().unwrap_or(1).max(1);
@@ -393,6 +482,35 @@ impl Grid {
                 self.set(cx.saturating_add(offset as u16), y, CONTINUATION, style);
             }
             cx = cx.saturating_add(width as u16);
+        }
+    }
+
+    /// 裁剪写入：超过 `width` 列的内容截断（宽字符不跨列半写）。
+    pub(super) fn put_clipped(&mut self, x: u16, y: u16, content: &str, style: Style, width: u16) {
+        let right = x.saturating_add(width);
+        let mut cx = x;
+        for ch in content.chars() {
+            let cell = ch.width().unwrap_or(0) as u16;
+            if cell == 0 {
+                continue;
+            }
+            if cx.saturating_add(cell) > right {
+                break;
+            }
+            self.set(cx, y, ch, style);
+            for offset in 1..cell {
+                self.set(cx.saturating_add(offset), y, CONTINUATION, style);
+            }
+            cx = cx.saturating_add(cell);
+        }
+    }
+
+    /// 单字符写入（越界忽略）。
+    pub(super) fn put_char(&mut self, x: u16, y: u16, ch: char, style: Style) {
+        let width = ch.width().unwrap_or(1).max(1);
+        self.set(x, y, ch, style);
+        for offset in 1..width {
+            self.set(x.saturating_add(offset as u16), y, CONTINUATION, style);
         }
     }
 
@@ -615,8 +733,11 @@ fn place_entries(
 
 /// 构建整页网格；返回网格与聚焦时的输入光标相对坐标。
 fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
-    let mut grid = Grid::new(area);
     let lay = layout(area, lx);
+    if !lx.chat.messages.is_empty() {
+        return build_chat(area, lx, focused, &lay);
+    }
+    let mut grid = Grid::new(area);
     if lay.fallback {
         let y = area.y + area.height.saturating_sub(1) / 2;
         grid.put_centered(area.x, area.width, y, text::LX_TITLE, style::strong());
@@ -648,6 +769,129 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         draw_panel(&mut grid, rect, panel);
     }
     (grid, cursor)
+}
+
+/// 聊天模式构建：历史区 + 状态行 + 输入框（内容区转可滚动历史）。
+fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option<(u16, u16)>) {
+    let mut grid = Grid::new(area);
+    let input_top = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let status_rows = if lay.input.is_some() {
+        status::rows(area, &lx.chat.status).min(input_top.saturating_sub(area.y))
+    } else {
+        0
+    };
+    let status_y = input_top.saturating_sub(status_rows);
+    let history_rect = Rect::new(area.x, area.y, area.width, status_y.saturating_sub(area.y));
+    // 历史滚动：跟随底部时取末尾窗口。
+    let history_layout = history::layout(history_rect, lx);
+    let scroll = if lx.chat.follow_bottom {
+        history_layout
+            .total_rows
+            .saturating_sub(usize::from(history_rect.height))
+    } else {
+        lx.chat
+            .history_scroll
+            .min(history_layout.total_rows.saturating_sub(1))
+    };
+    history::render(&mut grid, history_rect, lx, scroll);
+    let status_rect = Rect::new(area.x, status_y, area.width, status_rows);
+    status::render(&mut grid, status_rect, lx);
+
+    let mut cursor = None;
+    if let Some(input) = lay.input
+        && lay.input_visible > 0
+    {
+        cursor = draw_input(
+            &mut grid,
+            input,
+            lx,
+            focused,
+            lay.input_scroll,
+            lay.input_visible,
+        )
+        .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
+    }
+    // 面板：块命令 / 粘贴 / 提及 / `/` 命令。
+    if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
+        draw_panel(&mut grid, rect, panel);
+    }
+    (grid, cursor)
+}
+
+/// lx 页聊天命中结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LxChatHit {
+    /// 点击 thinking 折叠块头部（消息索引, part 索引）。
+    Thinking(usize, usize),
+    /// 点击停止按钮。
+    Stop,
+    /// 点击历史入口按钮。
+    History,
+}
+
+/// 聊天历史区矩形（无消息返回 None）；滚轮/命中用。
+pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    if lx.chat.messages.is_empty() {
+        return None;
+    }
+    let lay = layout(area, lx);
+    let input_top = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let status_rows = status::rows(area, &lx.chat.status).min(input_top.saturating_sub(area.y));
+    let status_y = input_top.saturating_sub(status_rows);
+    let height = status_y.saturating_sub(area.y);
+    (height > 0).then(|| Rect::new(area.x, area.y, area.width, height))
+}
+
+/// 聊天模式命中测试：thinking 头部 > 停止按钮 > 历史按钮。
+pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
+    if lx.chat.messages.is_empty() {
+        return None;
+    }
+    let lay = layout(area, lx);
+    let input_top = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let status_rows = status::rows(area, &lx.chat.status).min(input_top.saturating_sub(area.y));
+    let status_y = input_top.saturating_sub(status_rows);
+    let status_rect = Rect::new(area.x, status_y, area.width, status_rows);
+    if status_rect.contains((column, row).into()) {
+        let status_lay = status::layout(status_rect, &lx.chat.status, status_rows);
+        if let Some(stop) = status_lay.stop
+            && stop.contains((column, row).into())
+        {
+            return Some(LxChatHit::Stop);
+        }
+        if let Some(history) = status_lay.history
+            && history.contains((column, row).into())
+        {
+            return Some(LxChatHit::History);
+        }
+        return None;
+    }
+    // thinking 头部命中（按当前滚动窗口换算屏幕坐标）。
+    let history_rect = Rect::new(area.x, area.y, area.width, status_y.saturating_sub(area.y));
+    let history_layout = history::layout(history_rect, lx);
+    let scroll = if lx.chat.follow_bottom {
+        history_layout
+            .total_rows
+            .saturating_sub(usize::from(history_rect.height))
+    } else {
+        lx.chat
+            .history_scroll
+            .min(history_layout.total_rows.saturating_sub(1))
+    };
+    for (message_index, part_index, header) in history_layout.thinking {
+        let offset = header.y.saturating_sub(history_rect.y);
+        if (offset as usize) < scroll {
+            continue;
+        }
+        let screen_y = history_rect
+            .y
+            .saturating_add(u16::try_from(offset as usize - scroll).unwrap_or(u16::MAX));
+        let rect = Rect::new(history_rect.x, screen_y, history_rect.width, 1);
+        if rect.contains((column, row).into()) {
+            return Some(LxChatHit::Thinking(message_index, part_index));
+        }
+    }
+    None
 }
 
 /// 绘制 Tip 提示行：`Tip:` 前缀强调色、其后句子次要信息；整体居中、超宽截断。
@@ -940,6 +1184,52 @@ fn pixel_glyph(top: char, bottom: char) -> Option<(char, Style)> {
 /// 文本显示宽度（宽字符按两列计）。
 fn display_width(content: &str) -> usize {
     content.chars().map(|ch| ch.width().unwrap_or(0)).sum()
+}
+
+/// 测试辅助：仅构建聊天历史网格并 blit（不含输入框与面板）。
+#[cfg(test)]
+pub(crate) fn render_history_for_test(area: Rect, buf: &mut Buffer, lx: &Lx, scroll: usize) {
+    let mut grid = Grid::new(area);
+    history::render(&mut grid, area, lx, scroll);
+    for dy in 0..area.height {
+        for dx in 0..area.width {
+            let glyph = grid.cell(area.x + dx, area.y + dy);
+            if let Some(cell) = buf.cell_mut((area.x + dx, area.y + dy)) {
+                if glyph.ch == CONTINUATION {
+                    cell.set_diff_option(CellDiffOption::Skip);
+                    continue;
+                }
+                cell.set_char(glyph.ch);
+                cell.set_style(glyph.style);
+                cell.set_diff_option(CellDiffOption::None);
+            }
+        }
+    }
+}
+
+/// 测试辅助：构建空网格。
+#[cfg(test)]
+pub(super) fn test_grid(area: Rect) -> Grid {
+    Grid::new(area)
+}
+
+/// 测试辅助：把网格 blit 到缓冲区。
+#[cfg(test)]
+pub(super) fn blit_grid(area: Rect, buf: &mut Buffer, grid: &Grid) {
+    for dy in 0..area.height {
+        for dx in 0..area.width {
+            let glyph = grid.cell(area.x + dx, area.y + dy);
+            if let Some(cell) = buf.cell_mut((area.x + dx, area.y + dy)) {
+                if glyph.ch == CONTINUATION {
+                    cell.set_diff_option(CellDiffOption::Skip);
+                    continue;
+                }
+                cell.set_char(glyph.ch);
+                cell.set_style(glyph.style);
+                cell.set_diff_option(CellDiffOption::None);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

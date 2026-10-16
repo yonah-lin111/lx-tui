@@ -301,6 +301,17 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
+            // 聊天历史区滚轮：滚动历史视口（保留输入框滚轮给输入缓冲区）。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(history_rect) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::history_rect(inner, &target.lx))
+                && history_rect.contains((mouse.column, mouse.row).into())
+                && update::scroll_lx_history(state, pane, direction)
+            {
+                *dirty = true;
+                return;
+            }
             // 提及面板外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && update::scroll_lx_input(state, pane, direction)

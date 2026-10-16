@@ -198,11 +198,9 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
                 changed = true;
             }
             ChatDelta::Usage(usage) => {
-                // 真实输入 token：同模型口径，切模型时分子清空。
+                // 真实输入 token：同模型口径，切模型时分子清空（键由 refresh 维护）。
                 if let Some(input) = usage.input {
-                    let model = current_model_of(target);
                     target.lx.chat.last_input_tokens = Some(input as u64);
-                    target.lx.chat.last_tokens_model = model;
                 }
                 changed = true;
             }
@@ -211,6 +209,9 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
                 changed = true;
             }
         }
+    }
+    if changed {
+        refresh_lx_status(state, key.pane);
     }
     changed
 }
@@ -312,6 +313,7 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
         // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
         show_chat_toast(state, ToastKind::Error, text::LX_CHAT_SAVE_FAILED);
     }
+    refresh_lx_status(state, key.pane);
     true
 }
 
@@ -353,8 +355,9 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.chat.session_id = None;
     target.lx.chat.messages.clear();
     target.lx.chat.follow_bottom = true;
-    target.lx.chat.last_input_tokens = None;
-    target.lx.chat.last_tokens_model = None;
+    target.lx.chat.input_tokens_reset();
+    target.lx.chat.expanded_thinking.clear();
+    refresh_lx_status(state, pane);
     true
 }
 
@@ -494,6 +497,7 @@ pub fn on_session_loaded(
         })
         .collect();
     target.lx.chat.follow_bottom = true;
+    refresh_lx_status(state, pane);
     true
 }
 
@@ -603,7 +607,7 @@ pub fn apply_model_picker_key(
                 }
                 None => Decision::None,
             },
-            ModelPickerStage::Variants { model } => Decision::Complete { selection: model },
+            ModelPickerStage::Variants { model, .. } => Decision::Complete { selection: model },
         },
         crate::app::actions::OverlayKey::Esc => match picker.stage {
             ModelPickerStage::Variants { .. } => Decision::BackToModels,
@@ -646,12 +650,15 @@ pub fn apply_model_picker_key(
                 .and_then(|provider| provider.models.get(&selection.model))
                 .and_then(|model| model.variant.clone());
             let active = default_variant
-                .and_then(|variant| variants.into_iter().position(|item| item == variant))
+                .and_then(|variant| variants.iter().position(|item| *item == variant))
                 .unwrap_or(0);
             if let Some(target) = state.pane_mut_anywhere(pane)
                 && let Some(SlashPanel::Model(current)) = target.lx.slash.as_mut()
             {
-                current.stage = ModelPickerStage::Variants { model: selection };
+                current.stage = ModelPickerStage::Variants {
+                    model: selection,
+                    variants,
+                };
                 current.active = active;
             }
             true
@@ -691,6 +698,7 @@ fn finish_model_selection(state: &mut AppState, pane: PaneId, selection: ModelSe
             }
         }
     }
+    refresh_lx_status(state, pane);
 }
 
 /// 模型的 variants 键列表。
@@ -752,10 +760,26 @@ pub fn apply_models_changed(
     state: &mut AppState,
     settings: &crate::config::ai::AiSettings,
 ) -> bool {
-    let previous = &state.models.settings;
-    let changed = previous != settings;
+    let changed = state.models.settings != *settings;
     state.models.settings = settings.clone();
+    // 立即更新所有窗格的上限/标签（旧模型分子清理由 refresh 内部处理）。
+    refresh_all_lx_status(state);
     changed
+}
+
+/// 刷新单窗格状态行展示数据（设置页保存、选择变更、usage 到达后调用）。
+pub fn refresh_lx_status(state: &mut AppState, pane: PaneId) {
+    let models = state.models.clone();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.refresh_status(&models);
+    }
+}
+
+/// 启动/配置加载后刷新所有窗格状态行。
+pub fn refresh_all_lx_status(state: &mut AppState) {
+    for pane in state.all_pane_ids() {
+        refresh_lx_status(state, pane);
+    }
 }
 
 /// 窗格内下一个 generation（单调递增；从窗格计数器取）。
@@ -766,24 +790,6 @@ fn next_generation(state: &AppState, pane: PaneId) -> u64 {
         .map(|counter| counter.wrapping_add(1))
         .unwrap_or(1)
         .max(1)
-}
-
-/// 当前请求状态的模型标签（usage 归属判定用）。
-fn current_model_of(target: &crate::app::state::Pane) -> Option<String> {
-    target
-        .lx
-        .chat
-        .selection
-        .as_ref()
-        .map(|selection| format!("{}/{}", selection.provider, selection.model))
-        .or_else(|| {
-            target
-                .lx
-                .chat
-                .messages
-                .last()
-                .and_then(|message| message.model_label.clone())
-        })
 }
 
 /// 显示聊天相关 toast。
@@ -812,6 +818,60 @@ pub(crate) mod test_hooks {
     ) {
         super::finish_model_selection(state, pane, selection)
     }
+}
+
+/// 切换指定 thinking 块展开状态。
+pub fn toggle_thinking_at(
+    state: &mut AppState,
+    pane: PaneId,
+    message_index: usize,
+    part_index: usize,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.chat.toggle_reasoning(message_index, part_index);
+    target.lx.chat.follow_bottom = false;
+    true
+}
+
+/// 切换最近一条 assistant 消息里的最后一个 thinking 块（Ctrl+T）。
+pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let mut found = None;
+    'outer: for (message_index, message) in target.lx.chat.messages.iter().enumerate().rev() {
+        for (part_index, part) in message.parts.iter().enumerate().rev() {
+            if part.kind == PartKind::Reasoning {
+                found = Some((message_index, part_index));
+                break 'outer;
+            }
+        }
+    }
+    let Some((message_index, part_index)) = found else {
+        return false;
+    };
+    target.lx.chat.toggle_reasoning(message_index, part_index);
+    true
+}
+
+/// 滚动历史视图（正数向下）；返回是否移动。
+pub fn scroll_lx_history(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+        return false;
+    }
+    let total = target.lx.chat.history_height();
+    let current = target.lx.chat.history_scroll as isize;
+    let next = (current + delta).max(0) as usize;
+    // 到底时恢复跟随底部。
+    let next = next.min(total.saturating_sub(1));
+    target.lx.chat.history_scroll = next;
+    target.lx.chat.follow_bottom = next == 0 && delta < 0;
+    true
 }
 
 #[cfg(test)]
