@@ -448,3 +448,53 @@ async fn unknown_models_route_is_404() {
 fn state_user_root(service: &SettingsService) -> PathBuf {
     service.user_root_for_tests()
 }
+
+#[tokio::test]
+async fn first_save_on_fresh_install_accepts_get_revision() {
+    // 回归：ai.json 尚不存在时，GET 返回空配置的 revision；首次 PUT 携带该
+    // revision 必须成功（此前 GET 与 PUT 对“无文件”用了不同口径，首次保存必然 409）。
+    let (service, _events, _dir) = start_models("models-first-save").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    let got = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    assert_eq!(status(&got), 200, "GET: {}", body(&got));
+    let revision = revision_of(body(&got)).expect("GET 返回 revision");
+
+    let payload = put_body().replace(
+        "\"revision\": \"\"",
+        &format!("\"revision\": \"{revision}\""),
+    );
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &payload,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "首次保存失败: {}", body(&saved));
+    // 保存后 revision 变化；再次用新 revision 保存仍成功。
+    let next = revision_of(body(&saved)).expect("保存后返回新 revision");
+    assert_ne!(next, revision, "内容变更应产生新 revision");
+    let again = put_body().replace("\"revision\": \"\"", &format!("\"revision\": \"{next}\""));
+    let saved_two = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &again,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status(&saved_two),
+        200,
+        "二次保存失败: {}",
+        body(&saved_two)
+    );
+    service.shutdown();
+}

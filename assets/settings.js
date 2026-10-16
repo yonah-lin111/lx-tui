@@ -12,7 +12,9 @@ function api(path, options) {
     try { data = text ? JSON.parse(text) : null; } catch (error) { data = null; }
     if (!response.ok) {
       const message = data && data.error ? data.error : ('HTTP ' + response.status);
-      throw new Error(message);
+      const failure = new Error(message);
+      failure.status = response.status;
+      throw failure;
     }
     return data;
   });
@@ -558,6 +560,14 @@ function saveModels() {
     loadModels();
     void result;
   }).catch((error) => {
+    // 409：磁盘配置已被别处改动。自动拉取最新快照刷新 revision，保留当前编辑，
+    // 用户再次点击即可保存，无需整页重载。
+    if (error.status === 409) {
+      document.getElementById('provider-status').textContent = 'Configuration changed elsewhere; refreshed, click Save again';
+      document.getElementById('provider-status').className = 'status error';
+      loadModels();
+      return;
+    }
     document.getElementById('provider-status').textContent = error.message;
     document.getElementById('provider-status').className = 'status error';
   });

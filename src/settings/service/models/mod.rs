@@ -112,22 +112,20 @@ fn put_settings(request: &Request, state: &ServiceState) -> Response {
         Ok(value) => value,
         Err(error) => return Response::error(422, &format!("invalid json: {error}")),
     };
-    // revision 冲突检查：与磁盘当前内容比较。
+    // revision 冲突检查：与磁盘当前内容比较。文件缺失时用空配置的同一口径
+    // 计算 revision（与 GET 一致），否则首次保存必然误报 409。
     let path = ai_path(state);
     let current = match crate::config::ai::load_ai(&path) {
-        Ok(Some(settings)) => Some(settings),
-        Ok(None) => None,
+        Ok(Some(settings)) => settings,
+        Ok(None) => crate::config::ai::AiSettings::empty(),
         Err(error) => return Response::error(500, &error.to_string()),
     };
-    let current_revision = current
-        .as_ref()
-        .map(revision_of)
-        .unwrap_or_else(|| revision_hash(""));
+    let current_revision = revision_of(&current);
     let provided = body.get("revision").and_then(Value::as_str).unwrap_or("");
     if !provided.is_empty() && provided != current_revision {
         return Response::error(409, "configuration changed elsewhere; reload and retry");
     }
-    let merged = match merge_settings(current, &body) {
+    let merged = match merge_settings(Some(current), &body) {
         Ok(settings) => settings,
         Err(message) => return Response::error(422, &message),
     };
