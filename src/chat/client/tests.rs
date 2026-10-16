@@ -179,9 +179,13 @@ async fn openai_compatible_stream_completes_with_usage() {
 }
 
 #[tokio::test]
-async fn http_error_reports_status_without_body_leak() {
-    let (base, server) =
-        spawn_mock("401 Unauthorized", "unauthorized full body with secrets").await;
+async fn http_error_reports_status_with_body_snippet() {
+    // 错误码带状态码 + 截断脱敏后的原因说明（便于诊断），绝不回传密钥/超长原文。
+    let (base, server) = spawn_mock(
+        "401 Unauthorized",
+        "{\"error\":{\"message\":\"invalid api key\"}}",
+    )
+    .await;
     let (_cancel_sender, cancel) = no_cancel();
     let outcome = run_stream(
         "openai-compatible",
@@ -193,12 +197,37 @@ async fn http_error_reports_status_without_body_leak() {
     )
     .await;
     let _ = server.await;
-    assert!(
-        matches!(&outcome.stop, StopReason::Failed { code } if code == "http 401"),
-        "错误码只带状态码：{:?}",
-        outcome.stop
-    );
-    assert!(!format!("{:?}", outcome.stop).contains("secrets"));
+    let code = match &outcome.stop {
+        StopReason::Failed { code } => code.clone(),
+        other => panic!("expected Failed, got {other:?}"),
+    };
+    assert!(code.starts_with("http 401"), "错误码带状态码：{code}");
+    assert!(code.contains("invalid api key"), "带原因说明：{code}");
+    // 密钥（header 里的 test-key）绝不进错误码。
+    assert!(!code.contains("test-key"), "不泄露密钥：{code}");
+}
+
+#[tokio::test]
+async fn oversized_error_body_is_truncated() {
+    let long_body = "x".repeat(4096);
+    let body: &'static str = Box::leak(long_body.into_boxed_str());
+    let (base, server) = spawn_mock("400 Bad Request", body).await;
+    let (_cancel_sender, cancel) = no_cancel();
+    let outcome = run_stream(
+        "openai-compatible",
+        &format!("{base}/v1"),
+        Some("k"),
+        Duration::from_secs(5),
+        request(),
+        cancel,
+    )
+    .await;
+    let _ = server.await;
+    let code = match &outcome.stop {
+        StopReason::Failed { code } => code.clone(),
+        other => panic!("expected Failed, got {other:?}"),
+    };
+    assert!(code.len() < 256, "错误说明被截断：len={}", code.len());
 }
 
 #[tokio::test]

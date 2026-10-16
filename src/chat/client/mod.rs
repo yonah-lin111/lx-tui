@@ -26,16 +26,18 @@ pub struct StreamOutcome {
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 首字节超时（TTFB）。
 const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(60);
-/// 可重试错误的最大重试次数（对齐 lx-agent 所用 AI SDK 的默认 2 次）。
-const MAX_RETRIES: u32 = 2;
-/// 首次重试退避基数（指数退避：500ms、1s）。
-const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+/// 最大重试次数：对齐 opencode（`schedule.recurs(10)`）。
+const MAX_RETRIES: u32 = 10;
+/// 指数退避基线与单次间隔上限：对齐 opencode 的 `exponential(2s)` + `spaced(10s)`。
+const RETRY_BASE_DELAY: Duration = Duration::from_secs(2);
+const RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 
 /// 执行一次流式请求。
 ///
 /// `cancel` 关闭时请求立即中止，已收 partial 保留在返回值中。
 /// 事件层按 request key 过滤过期结果；本函数不触碰应用状态。
-/// 仅在**尚未产出任何内容**且错误可重试（429/5xx/网络）时重试，绝不重复半截流。
+/// 仅在**尚未产出任何内容**且错误可重试（429/5xx/网络）时重试（最多 10 次，指数退避
+/// 2s→10s，对齐 opencode），绝不重复半截流。
 pub async fn run_stream(
     transport_kind: &str,
     base_url: &str,
@@ -75,7 +77,10 @@ pub async fn run_stream(
             break reason;
         }
         attempt += 1;
-        let backoff = RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+        // 指数退避（2s、4s、8s，随后每次 10s），与 opencode 的节奏一致。
+        let backoff = RETRY_BASE_DELAY
+            .saturating_mul(1u32 << (attempt - 1).min(4))
+            .min(RETRY_MAX_DELAY);
         tokio::select! {
             _ = tokio::time::sleep(backoff) => {}
             _ = cancel.changed() => break StopReason::Cancelled,
@@ -98,12 +103,31 @@ fn is_transient(code: &str) -> bool {
     if code == "timeout" || code == "connection failed" {
         return true;
     }
+    // 错误码形如 `http 503` 或 `http 503 · <detail>`：取状态码前缀。
     if let Some(rest) = code.strip_prefix("http ")
-        && let Ok(status) = rest.trim().parse::<u16>()
+        && let Some(status) = rest
+            .split_whitespace()
+            .next()
+            .and_then(|token| token.parse::<u16>().ok())
     {
         return status == 429 || (500..=599).contains(&status);
     }
     false
+}
+
+/// 把 HTTP 错误体裁剪成一行、单行、限长的可读说明（脱敏后进入 UI/DB）。
+fn sanitize_error_detail(body: &str) -> String {
+    let single: String = body
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    single
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(160)
+        .collect()
 }
 
 /// 单次尝试执行流：返回结束原因（已收 partial 在 `deltas`）。
@@ -145,11 +169,19 @@ async fn stream_once(
     };
     let status = response.status();
     if !status.is_success() {
-        // 读取错误体（截断；不含密钥——Key 只在 header）。
-        // 消费错误体（连接复用）；错误码只携带状态码，不回传原文。
-        let _ = response.text().await.unwrap_or_default();
+        // 读取错误体用于诊断，但只取截断/脱敏后的一段说明（设计允许：错误体经裁剪
+        // 后可进入 UI/DB，且不得含密钥——Key 只在 header）。
+        let detail = response
+            .text()
+            .await
+            .ok()
+            .map(|body| sanitize_error_detail(&body))
+            .filter(|detail| !detail.is_empty());
         return StopReason::Failed {
-            code: format!("http {}", status.as_u16()),
+            code: match detail {
+                Some(detail) => format!("http {} · {detail}", status.as_u16()),
+                None => format!("http {}", status.as_u16()),
+            },
         };
     }
     // 逐 chunk 喂入 SSE 解析器。
