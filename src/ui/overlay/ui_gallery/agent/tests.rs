@@ -138,6 +138,14 @@ fn header_colors_icon_verb_and_param_distinctly() {
     assert_eq!(header.spans[0].1, style::agent_icon());
     assert_eq!(header.spans[1].1, style::agent_verb());
     assert_eq!(header.spans[2].1, style::agent_param());
+    // 图标刻意不加粗（几何字形加粗时可能触发字体回退、反而显小）。
+    assert!(
+        !header.spans[0]
+            .1
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "header 图标不应加粗"
+    );
     assert!(
         header.spans[2]
             .1

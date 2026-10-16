@@ -131,13 +131,15 @@ pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
-/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗，让图标从标题里跳出。
+/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）高亮，让图标从标题里跳出。
 ///
-/// 失败步骤例外——整行走 [`agent_fail`] 变红，不用品牌粉。
+/// 刻意**不加粗**：图标多为几何/技术符号（`≣`/`≡`/`⌕`/`⌘`…），不少等宽字体只在常规
+/// 字重里画这些字形，加粗时终端会回退到别的字体、反而显得更小。加粗留给红标题
+/// （[`agent_fail`]）与状态标记。
+///
+/// 失败步骤例外——整行走 [`agent_fail`] 变红。
 pub fn agent_icon() -> Style {
-    Style::default()
-        .fg(Color::Indexed(218))
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(Color::Indexed(218))
 }
 
 /// Agent 步骤标题的固定动词（`Ran` / `Read` / `Edited`…）：lx 品牌天蓝（Indexed 117）。
