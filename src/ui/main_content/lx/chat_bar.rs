@@ -1,7 +1,8 @@
-//! 输入框上方聊天栏：流中 loading 转轮 + 右端「回到底部」按钮。
+//! 输入框上方聊天栏：流中 loading 转轮 + 右端「回到底部」控件。
 //!
 //! 纯渲染 + 纯几何：布局、绘制与命中共享同一矩形口径；只读 `Lx`、只写 lx 页网格。
 //! 该行贴在输入框上沿、与输入框同宽；无流中且已跟随底部时整行不占位。
+//! 「回到底部」控件为箭头 + 右侧说明文字（`↓ jump to bottom`），整体右对齐。
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
@@ -13,8 +14,12 @@ use super::Grid;
 
 /// 聊天栏高度（一行）。
 pub(crate) const HEIGHT: u16 = 1;
+/// 右侧控件与栏右缘之间的空档（列）。
+const RIGHT_PAD: u16 = 1;
+/// 箭头与说明文字之间的空档（列）。
+const HINT_GAP: u16 = 1;
 
-/// 是否显示聊天栏：流中（loading 转轮）或上滚未跟随底部（回到底部按钮）。
+/// 是否显示聊天栏：流中（loading 转轮）或上滚未跟随底部（回到底部控件）。
 pub(super) fn visible(lx: &Lx) -> bool {
     if lx.chat.messages.is_empty() {
         return false;
@@ -28,27 +33,37 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
         .then(|| Rect::new(input.x, input.y - HEIGHT, input.width, HEIGHT))
 }
 
-/// 回到底部按钮矩形（未跟随底部且空间足够时）；供命中与测试。
+/// 回到底部控件矩形（未跟随底部且空间足够时）；供命中与测试。
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     if lx.chat.follow_bottom || lx.chat.messages.is_empty() {
         return None;
     }
     let input = super::input_rect(area, lx)?;
-    let bar = rect(area, input)?;
-    jump_rect(bar)
+    jump_rect(rect(area, input)?)
 }
 
-/// 栏内「回到底部」按钮矩形：右端留 1 列空档。
+/// 栏内「回到底部」控件矩形（整体右对齐）。
+///
+/// 优先「箭头 + 空档 + 说明」；宽度只够箭头时退回纯箭头；再窄返回 None。
 fn jump_rect(bar: Rect) -> Option<Rect> {
-    let width = u16::try_from(text::LX_JUMP_BOTTOM.width()).unwrap_or(u16::MAX);
-    (bar.width > width + 1)
-        .then(|| Rect::new(bar.right().saturating_sub(width + 1), bar.y, width, 1))
+    let arrow = u16::try_from(text::LX_JUMP_BOTTOM.width()).unwrap_or(u16::MAX);
+    let hint = u16::try_from(text::LX_JUMP_BOTTOM_HINT.width()).unwrap_or(u16::MAX);
+    let width = arrow
+        .saturating_add(HINT_GAP)
+        .saturating_add(hint)
+        .saturating_add(RIGHT_PAD);
+    if bar.width >= width {
+        let inner = arrow.saturating_add(HINT_GAP).saturating_add(hint);
+        return Some(Rect::new(bar.right() - RIGHT_PAD - inner, bar.y, inner, 1));
+    }
+    (bar.width > arrow + RIGHT_PAD)
+        .then(|| Rect::new(bar.right() - RIGHT_PAD - arrow, bar.y, arrow, 1))
 }
 
-/// 绘制聊天栏：左侧 loading 转轮 + 文案，右端回到底部按钮。
+/// 绘制聊天栏：左侧 loading 转轮 + 文案，右端「回到底部」控件。
 ///
 /// 流中显示 `⠋ Working`（旋转帧由 `loading_frame` 决定，仅一帧渲染）；
-/// 未跟随底部时右端显示 `↓`（悬停高亮）；两种状态可同时出现。
+/// 未跟随底部时右端显示 `↓ 说明`（悬停高亮）；两种状态可同时出现。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
         return;
@@ -57,17 +72,30 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
         return;
     }
     let mut right = bar.right();
-    // 回到底部按钮（仅未跟随底部时）。
+    // 回到底部控件（仅未跟随底部时）。
     if !lx.chat.follow_bottom
         && let Some(button) = jump_rect(bar)
     {
+        let jump_style = style::chat_jump_bottom(lx.chat.jump_bottom_hover);
         grid.put_clipped(
             button.x,
             button.y,
             text::LX_JUMP_BOTTOM,
-            style::chat_jump_bottom(lx.chat.jump_bottom_hover),
+            jump_style,
             button.width,
         );
+        // 说明文字在箭头右侧（宽度只够箭头时跳过）。
+        let arrow = u16::try_from(text::LX_JUMP_BOTTOM.width()).unwrap_or(u16::MAX);
+        let hint_x = button.x.saturating_add(arrow).saturating_add(HINT_GAP);
+        if hint_x < button.right() {
+            grid.put_clipped(
+                hint_x,
+                button.y,
+                text::LX_JUMP_BOTTOM_HINT,
+                jump_style,
+                button.right() - hint_x,
+            );
+        }
         right = button.x.saturating_sub(1);
     }
     if !lx.chat.status.streaming {
@@ -92,7 +120,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     }
 }
 
-/// 命中「回到底部」按钮的窗格；无按钮或未命中返回 None。
+/// 命中「回到底部」控件的窗格；无控件或未命中返回 None。
 pub fn jump_bottom_hit(
     rects: &[(crate::layout::PaneId, Rect)],
     state: &crate::app::state::AppState,

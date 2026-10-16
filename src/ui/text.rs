@@ -177,8 +177,9 @@ pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
 /// lx 页输入框上方 loading 行的转轮帧（braille，对齐 codex 的 10 帧）与文案。
 pub const LX_LOADING_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 pub const LX_LOADING_LABEL: &str = "Working";
-/// loading 行右端的回到底部按钮（单宽箭头）。
+/// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
 pub const LX_JUMP_BOTTOM: &str = "↓";
+pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
 /// lx 页三个入口标签。
 pub const LX_ENTRY_NATIVE: &str = "Native Agent";
 pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";

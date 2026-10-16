@@ -29,6 +29,7 @@ pub(crate) mod slash;
 pub(crate) mod status;
 
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
+pub(crate) use status::status_stop_at;
 
 use grid::{CONTINUATION, Grid};
 
@@ -88,6 +89,8 @@ pub fn render(
         }
     }
     render_input_scrollbar(area, buf, lx);
+    // 状态（模型 · 供应商 · 上下文占用 + 停止控件）覆盖绘制在窗格底边框上。
+    status::render(buf, area, lx);
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
@@ -95,12 +98,7 @@ pub fn render(
     cursor
 }
 
-/// 绘制 `/` 命令面板：命令候选 / `/model` 两级 / `/resume` 历史列表。
-///
-/// 与 `@` 提及面板同款几何：与输入框等宽、底边紧贴输入框上沿、条目区滚动、
-/// 顶边标题 + 底边快捷键提示、右端来源标签；`/model`、`/resume` 无候选时显示
-/// 空态占位。全部文案为 ASCII，避免双宽字符撑破面板。
-/// 绘制 `/` 命令面板：命令候选 / `/model` 两级 / `/resume` 历史列表。
+/// 绘制 `/` 命令面板（几何/条目见 `slash` 子模块）。
 fn render_slash_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
     if lx.slash.is_none() {
         return;
@@ -566,8 +564,6 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
             lay.input_visible,
         )
         .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
-        // 状态（模型 · 供应商 · 上下文占用 + 停止控件）绘制在输入框底边框上。
-        status::render(&mut grid, input_bottom_rule(input), lx);
     }
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
         draw_panel(&mut grid, rect, panel);
@@ -575,12 +571,7 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     (grid, cursor)
 }
 
-/// 输入框底边框行矩形（状态绘制基准）。
-fn input_bottom_rule(input: Rect) -> Rect {
-    Rect::new(input.x, input.bottom().saturating_sub(1), input.width, 1)
-}
-
-/// 聊天模式构建：历史区 + 输入框（状态在底边框）。
+/// 聊天模式构建：历史区 + 输入框（状态在**窗格底边框**上，由 `render` 覆盖绘制）。
 fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option<(u16, u16)>) {
     let mut grid = Grid::new(area);
     let history_bottom = if lay.input.is_some() {
@@ -626,8 +617,6 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
             lay.input_visible,
         )
         .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
-        // 状态（模型 · 供应商 · 上下文占用 + 停止控件）绘制在输入框底边框上。
-        status::render(&mut grid, input_bottom_rule(input), lx);
     }
     // 面板：块命令 / 粘贴 / 提及 / `/` 命令。
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
@@ -723,18 +712,13 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
     if lx.chat.messages.is_empty() {
         return None;
     }
-    let lay = layout(area, lx);
-    // 输入框底边框上的停止按钮；输入框缺失（区域过小）时不渲染状态，也无命中。
-    if let Some(input) = lay.input {
-        let border = input_bottom_rule(input);
-        let status_lay = status::layout(border, &lx.chat.status);
-        if let Some(stop) = status_lay.stop
-            && stop.contains((column, row).into())
-        {
-            return Some(LxChatHit::Stop);
-        }
+    // 窗格底边框上的停止控件（`area` 为内容区，底边框行 = `area.bottom()`）。
+    if let Some(stop) = status::stop_rect(area, lx)
+        && stop.contains((column, row).into())
+    {
+        return Some(LxChatHit::Stop);
     }
-    // 输入框上方聊天栏右端的「回到底部」按钮。
+    // 输入框上方聊天栏右端的「回到底部」控件。
     if let Some(rect) = chat_bar::jump_bottom_rect(area, lx)
         && rect.contains((column, row).into())
     {
@@ -760,7 +744,6 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
     None
 }
 
-/// 输入框上方聊天栏（loading 转轮 + 回到底部按钮）。
 /// 底部多行输入框：上下 `─` 分割线 + 首行 `> ` 前缀 + markdown 高亮；返回光标绝对坐标。
 fn draw_input(
     grid: &mut Grid,
@@ -962,12 +945,6 @@ pub(crate) fn render_history_for_test(area: Rect, buf: &mut Buffer, lx: &Lx, scr
             }
         }
     }
-}
-
-/// 测试辅助：构建空网格。
-#[cfg(test)]
-pub(super) fn test_grid(area: Rect) -> Grid {
-    Grid::new(area)
 }
 
 /// 测试辅助：把网格 blit 到缓冲区。

@@ -885,8 +885,10 @@ fn slash_panel_renders_ascii_only() {
 }
 
 #[test]
-fn initial_page_shows_status_on_input_bottom_border() {
-    let area = Rect::new(0, 0, 80, 24);
+fn initial_page_shows_status_on_pane_bottom_border() {
+    // 模拟窗格：内容区 `inner` + 底边框行（`inner.bottom()`，位于 inner 之外）。
+    let rect = Rect::new(0, 0, 80, 24);
+    let inner = crate::layout::pane_inner_rect(rect);
     let mut lx = Lx::new();
     lx.chat.status = crate::app::state::lx::chat::ChatStatus {
         model_name: Some("deepseek-v4.1-flash".into()),
@@ -897,18 +899,27 @@ fn initial_page_shows_status_on_input_bottom_border() {
         streaming: false,
         omitted_turns: None,
     };
-    let lay = layout(area, &lx);
+    let lay = layout(inner, &lx);
     let input = lay.input.expect("input");
-    // 输入框下沿贴窗格底部（状态绘制在底边框上，不再单独占行）。
-    assert_eq!(input.bottom(), area.bottom());
-    let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
-    let text = buffer_text(&buf);
+    // 输入框保留自己的上下分割线，下沿仍贴内容区底部（状态改画在窗格底边框上）。
+    assert_eq!(input.bottom(), inner.bottom());
+    // 底边框行预铺 `─`（保留两角）后渲染状态，检查覆盖效果。
+    let mut buf = Buffer::empty(rect);
+    let row = inner.bottom();
+    for x in rect.x..rect.right() {
+        if let Some(cell) = buf.cell_mut((x, row)) {
+            cell.set_char('─');
+        }
+    }
+    render(inner, &mut buf, &lx, false, None);
+    let border: String = (rect.x..rect.right())
+        .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
+        .collect();
     assert!(
-        text.contains("deepseek-v4.1-flash") && text.contains("9router-lx-t"),
-        "初始页面显示模型 · 供应商：{text}"
+        border.contains("deepseek-v4.1-flash") && border.contains("9router-lx-t"),
+        "底边框显示模型 · 供应商：{border}"
     );
-    assert!(text.contains("context"), "初始页面显示上下文占用：{text}");
+    assert!(border.contains("context"), "底边框显示上下文占用：{border}");
 }
 
 #[test]
@@ -1054,13 +1065,17 @@ fn idle_following_hides_chat_bar() {
 fn scrolled_up_shows_jump_bottom_button() {
     let area = Rect::new(0, 0, 60, 16);
     let lx = streaming_lx(false, false);
-    let rect = chat_bar::jump_bottom_rect(area, &lx).expect("上滚时显示回到底部按钮");
+    let rect = chat_bar::jump_bottom_rect(area, &lx).expect("上滚时显示回到底部控件");
     let bar = layout(area, &lx).chat_bar.expect("chat bar");
-    assert_eq!(rect.right(), bar.right() - 1, "按钮贴聊天栏右端（留 1 列）");
+    assert_eq!(rect.right(), bar.right() - 1, "控件贴聊天栏右端（留 1 列）");
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
-    assert!(text.contains(text::LX_JUMP_BOTTOM), "显示 ↓ 按钮：{text}");
+    assert!(text.contains(text::LX_JUMP_BOTTOM), "显示 ↓ 箭头：{text}");
+    assert!(
+        text.contains(text::LX_JUMP_BOTTOM_HINT),
+        "箭头右侧显示说明：{text}"
+    );
 }
 
 #[test]

@@ -216,6 +216,29 @@ pub(crate) fn lx_slash_item_at(
     ui::main_content::lx::slash_item_at(inner, &target.lx, column, row).map(|index| (pane, index))
 }
 
+/// 命中 lx 窗格**底边框**上的停止控件：返回窗格标识；未命中返回 None。
+///
+/// 停止控件绘制在窗格底边框（内容区之外），故这里按整块窗格矩形遍历、
+/// 用内容区底边框行为基准命中（与 `render_panes` 的 `inner` 口径一致）。
+pub(crate) fn lx_pane_stop_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<PaneId> {
+    rects.iter().find_map(|(id, rect)| {
+        let target = state
+            .pane_anywhere(*id)
+            .filter(|pane| pane.view == crate::app::state::PaneView::Lx)?;
+        let inner = layout::pane_inner_rect(*rect);
+        (inner.height > 0
+            && row == inner.bottom()
+            && inner.contains((column, inner.y).into())
+            && ui::main_content::lx::status_stop_at(inner, &target.lx, column, row))
+        .then_some(*id)
+    })
+}
+
 /// lx `/` 命令面板布局；用于滚轮命中与视口滚动。
 pub(crate) fn lx_slash_panel_layout(
     state: &AppState,
