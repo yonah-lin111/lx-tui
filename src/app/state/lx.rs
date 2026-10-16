@@ -13,7 +13,8 @@ pub use chat::{
 };
 pub use mention::{LxMention, LxMentionView};
 pub use slash::{
-    HistoryEntry, HistoryPanel, ModelPicker, ModelPickerStage, SlashCommand, SlashPanel,
+    HistoryEntry, HistoryPanel, ModelPicker, ModelPickerStage, PanelWindow, SlashCommand,
+    SlashPanel,
 };
 
 /// lx 页三个入口：原生 agent、混合 agent、自动化 agent。

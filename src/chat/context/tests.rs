@@ -21,6 +21,7 @@ fn message(
         model_id: (role == "assistant").then(|| "m".to_string()),
         variant: None,
         stop_reason: None,
+        error_code: None,
         input_tokens: None,
         output_tokens: None,
         created_at_ms: 0,

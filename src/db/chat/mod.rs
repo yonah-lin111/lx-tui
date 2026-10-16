@@ -42,6 +42,8 @@ pub struct ChatMessage {
     pub model_id: Option<String>,
     pub variant: Option<String>,
     pub stop_reason: Option<String>,
+    /// 失败原因码（如 `http 503`、`timeout`）；仅失败时有值。
+    pub error_code: Option<String>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
     pub created_at_ms: i64,
@@ -169,7 +171,7 @@ impl Database {
         }
         let mut statement = self.conn.prepare(
             r#"SELECT external_id, sequence, turn_index, role, status, model_provider, model_id,
-                      variant, stop_reason, input_tokens, output_tokens, created_at_ms
+                      variant, stop_reason, error_code, input_tokens, output_tokens, created_at_ms
                FROM agent_message WHERE session_id = ?1 ORDER BY sequence"#,
         )?;
         let mut messages: Vec<ChatMessage> = statement
@@ -184,9 +186,10 @@ impl Database {
                     model_id: row.get(6)?,
                     variant: row.get(7)?,
                     stop_reason: row.get(8)?,
-                    input_tokens: row.get(9)?,
-                    output_tokens: row.get(10)?,
-                    created_at_ms: row.get(11)?,
+                    error_code: row.get(9)?,
+                    input_tokens: row.get(10)?,
+                    output_tokens: row.get(11)?,
+                    created_at_ms: row.get(12)?,
                     parts: Vec::new(),
                 })
             })?

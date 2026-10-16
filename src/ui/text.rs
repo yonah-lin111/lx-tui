@@ -503,7 +503,9 @@ pub const LX_CHAT_THINKING_LABEL: &str = "thinking";
 pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ thinking";
 pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ thinking";
 /// `/` 命令面板标题。
-pub const LX_SLASH_PANEL_TITLE: &str = "Commands";
+pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
+/// `/` 命令面板底边提示（与 `@` 提及面板同款）。
+pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
 /// `/resume` 历史面板标题与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Sessions";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";

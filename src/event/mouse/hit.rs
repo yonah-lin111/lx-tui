@@ -163,6 +163,42 @@ pub(crate) fn mention_panel_layout(
     ui::prompt::mention_layout(&state.prompt, area)
 }
 
+/// 定位鼠标下的 lx 窗格及其内容区（仅 lx 视图）；用于 `/` 面板命中/悬停/滚轮。
+pub(crate) fn lx_pane_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, Rect)> {
+    let (pane, inner) = pane_at(rects, column, row)?;
+    state
+        .pane_anywhere(pane)
+        .filter(|target| target.view == crate::app::state::PaneView::Lx)
+        .map(|_| (pane, inner))
+}
+
+/// lx `/` 命令面板命中：返回 (窗格, 条目索引)；未命中返回 None。
+pub(crate) fn lx_slash_item_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, usize)> {
+    let (pane, inner) = lx_pane_at(state, rects, column, row)?;
+    let target = state.pane_anywhere(pane)?;
+    ui::main_content::lx::slash_item_at(inner, &target.lx, column, row).map(|index| (pane, index))
+}
+
+/// lx `/` 命令面板布局；用于滚轮命中与视口滚动。
+pub(crate) fn lx_slash_panel_layout(
+    state: &AppState,
+    pane: PaneId,
+    inner: Rect,
+) -> Option<ui::widgets::command_panel::PanelLayout> {
+    let target = state.pane_anywhere(pane)?;
+    ui::main_content::lx::slash_layout(inner, &target.lx)
+}
+
 /// 块命令面板命中：返回条目索引；面板未打开或未命中返回 None。
 pub(crate) fn panel_item_at(
     state: &AppState,

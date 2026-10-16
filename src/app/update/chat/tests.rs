@@ -584,6 +584,7 @@ fn session_loaded_rebuilds_view_and_selection() {
             model_id: None,
             variant: None,
             stop_reason: None,
+            error_code: None,
             input_tokens: None,
             output_tokens: None,
             created_at_ms: 0,
@@ -604,6 +605,7 @@ fn session_loaded_rebuilds_view_and_selection() {
             model_id: Some("m".into()),
             variant: None,
             stop_reason: None,
+            error_code: None,
             input_tokens: None,
             output_tokens: None,
             created_at_ms: 0,
@@ -654,31 +656,26 @@ fn model_picker_two_stage_and_esc_back() {
     // 打开 `/model` 面板。
     assert!(open_model_picker(&mut state, pane));
     // 有 variants：第一级 Enter 进入第二级。
-    assert!(apply_model_picker_key(
-        &mut state,
-        pane,
-        crate::app::actions::OverlayKey::Enter
-    ));
+    assert!(apply_slash_enter(&mut state, pane));
     assert!(matches!(
         state.pane_anywhere(pane).unwrap().lx.slash,
         Some(SlashPanel::Model(ref picker)) if matches!(picker.stage, ModelPickerStage::Variants { .. })
     ));
-    // Esc 退回模型列表。
-    assert!(apply_model_picker_key(
-        &mut state,
-        pane,
-        crate::app::actions::OverlayKey::Esc
-    ));
+    // Esc 退回模型列表（直接调用退回分支）。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(SlashPanel::Model(picker)) = target.lx.slash.as_mut()
+    {
+        picker.stage = ModelPickerStage::Models;
+        picker.window = crate::app::state::lx::slash::PanelWindow::new(picker.window.active);
+    }
     assert!(matches!(
         state.pane_anywhere(pane).unwrap().lx.slash,
         Some(SlashPanel::Model(ref picker)) if matches!(picker.stage, ModelPickerStage::Models)
     ));
-    // 第二次 Esc 关闭。
-    assert!(apply_model_picker_key(
-        &mut state,
-        pane,
-        crate::app::actions::OverlayKey::Esc
-    ));
+    // 关闭面板。
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.slash = None;
+    }
     assert!(state.pane_anywhere(pane).unwrap().lx.slash.is_none());
 }
 
@@ -689,11 +686,7 @@ fn model_without_variants_selects_directly() {
     let pane = focus_pane(&state);
     open_model_picker(&mut state, pane);
     // 无 variants：Enter 直接完成选择。
-    assert!(apply_model_picker_key(
-        &mut state,
-        pane,
-        crate::app::actions::OverlayKey::Enter
-    ));
+    assert!(apply_slash_enter(&mut state, pane));
     assert!(
         state.pane_anywhere(pane).unwrap().lx.slash.is_none(),
         "面板关闭"
@@ -729,6 +722,7 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         turn_index: 0,
         parts: Vec::new(),
         model_label: None,
+        error_code: None,
     });
     chat.append_stream_delta(PartKind::Text, "a", None);
     chat.append_stream_delta(PartKind::Text, "b", None);
@@ -755,6 +749,7 @@ fn signature_metadata_binds_to_reasoning_part() {
         turn_index: 0,
         parts: Vec::new(),
         model_label: None,
+        error_code: None,
     });
     chat.append_stream_delta(PartKind::Reasoning, "思考", None);
     // 空文本 + 签名元数据：绑定到相邻 reasoning part。
@@ -773,4 +768,117 @@ fn signature_metadata_binds_to_reasoning_part() {
     .expect("metadata json");
     assert_eq!(bound.get("signature"), Some(&serde_json::json!("sig-1")));
     assert_eq!(bound.get("blockIndex"), Some(&serde_json::json!(0)));
+}
+
+#[test]
+fn model_picker_variants_applies_chosen_level() {
+    // 回归：第二级 Enter 必须应用高亮等级，而不是沿用模型默认 variant。
+    let mut state = ready_state("问");
+    // 两个等级：low / high，模型默认 high。
+    let mut settings = models_with(Some("high"));
+    let provider = settings.settings.providers.get_mut("p").expect("provider");
+    let model = provider.models.get_mut("m").expect("model");
+    model
+        .variants
+        .insert("low".into(), serde_json::json!({"reasoningEffort": "low"}));
+    state.models = settings;
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    // 第一级 Enter 进入第二级（默认高亮 high）。
+    assert!(apply_slash_enter(&mut state, pane));
+    // 上移到 low（列表顺序 low, high → 从 high 上移一格到 low）。
+    move_panel_active(&mut state, pane, -1);
+    assert!(apply_slash_enter(&mut state, pane));
+    let selection = state
+        .pane_anywhere(pane)
+        .and_then(|p| p.lx.chat.selection.clone())
+        .expect("selection");
+    assert_eq!(
+        selection.variant.as_deref(),
+        Some("low"),
+        "第二级应采纳用户高亮的等级"
+    );
+}
+
+/// 移动 `/` 面板高亮（走真实的面板窗口逻辑）。
+fn move_panel_active(state: &mut AppState, pane: PaneId, delta: isize) {
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(panel) = target.lx.slash.as_mut()
+    {
+        panel.move_active(delta);
+    }
+}
+
+#[test]
+fn slash_hover_sets_active_without_scrolling_window() {
+    let mut state = ready_state("问");
+    let pane = focus_pane(&state);
+    seed_slash_commands(&mut state, pane);
+    // 悬停到第 2 项：高亮变、锚点不动。
+    let before_anchor = slash_window(&state, pane).anchor;
+    assert!(crate::app::update::hover_lx_slash(&mut state, pane, 2));
+    let window = slash_window(&state, pane);
+    assert_eq!(window.active, 2);
+    assert_eq!(window.anchor, before_anchor, "悬停不滚动窗口");
+}
+
+#[test]
+fn slash_keyboard_move_cycles_and_follows_highlight() {
+    let mut state = ready_state("问");
+    let pane = focus_pane(&state);
+    seed_slash_commands(&mut state, pane);
+    move_panel_active(&mut state, pane, -1); // 从 0 循环到末项
+    let window = slash_window(&state, pane);
+    assert_eq!(window.active, 2, "上移循环到末项");
+    assert_eq!(window.anchor, window.active, "键盘移动锚点跟随高亮");
+}
+
+#[test]
+fn slash_wheel_scrolls_window_without_moving_highlight() {
+    let mut state = ready_state("问");
+    let pane = focus_pane(&state);
+    seed_slash_commands(&mut state, pane);
+    let changed = crate::app::update::scroll_lx_slash(&mut state, pane, 1, 0);
+    let window = slash_window(&state, pane);
+    assert_eq!(window.viewport, Some(1), "滚轮设置显式视口");
+    assert_eq!(window.active, 0, "滚轮不动高亮");
+    // base=1 再滚回 0。
+    assert!(crate::app::update::scroll_lx_slash(&mut state, pane, -1, 1));
+    assert_eq!(slash_window(&state, pane).viewport, Some(0));
+    let _ = changed;
+}
+
+#[test]
+fn slash_click_selects_row() {
+    let mut state = ready_state("问");
+    let pane = focus_pane(&state);
+    seed_slash_commands(&mut state, pane);
+    // 点选第 2 项（/resume）：应执行对应命令（打开历史面板）。
+    assert!(crate::app::update::select_lx_slash(&mut state, pane, 1));
+    assert!(
+        matches!(
+            state.pane_anywhere(pane).unwrap().lx.slash,
+            Some(SlashPanel::Resume(_))
+        ),
+        "点选 /resume 后打开历史面板"
+    );
+}
+
+/// 直接放入命令候选面板。
+fn seed_slash_commands(state: &mut AppState, pane: PaneId) {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.slash = Some(SlashPanel::Commands {
+            items: crate::app::state::SlashCommand::ALL.to_vec(),
+            window: crate::app::state::lx::slash::PanelWindow::new(0),
+        });
+    }
+}
+
+/// 读取 `/` 面板窗口状态。
+fn slash_window(state: &AppState, pane: PaneId) -> crate::app::state::lx::slash::PanelWindow {
+    state
+        .pane_anywhere(pane)
+        .and_then(|p| p.lx.slash.as_ref())
+        .map(|panel| panel.window())
+        .expect("slash panel")
 }

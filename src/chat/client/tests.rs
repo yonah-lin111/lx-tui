@@ -512,3 +512,73 @@ async fn unsupported_transport_fails_fast() {
         matches!(&outcome.stop, StopReason::Failed { code } if code.contains("unsupported transport"))
     );
 }
+
+/// 启动一个先回 N 个可重试错误、再回 200 流的 mock server；返回 (base, 请求计数句柄)。
+async fn spawn_flaky_mock(
+    failures: usize,
+    success_body: &'static str,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let served = std::sync::Arc::new(AtomicUsize::new(0));
+    let counter = served.clone();
+    tokio::spawn(async move {
+        for index in 0..=failures {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let mut buffer = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).await.expect("read");
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+                if buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            counter.fetch_add(1, Ordering::SeqCst);
+            let response = if index < failures {
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    .to_string()
+            } else {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+                    success_body.len(),
+                    success_body
+                )
+            };
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), served)
+}
+
+/// 503 后重试成功：请求被重发且最终完成（验证临时故障自愈）。
+#[tokio::test]
+async fn transient_503_is_retried_then_succeeds() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, served) = spawn_flaky_mock(2, body).await;
+    let (_sender, receiver) = no_cancel();
+    let outcome = run_stream(
+        "openai-compatible",
+        &base,
+        Some("k"),
+        Duration::from_secs(5),
+        request(),
+        receiver,
+    )
+    .await;
+    assert_eq!(outcome.stop, StopReason::Complete, "重试后完成");
+    assert_eq!(
+        served.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "两次 503 各触发一次重试（共 3 次请求）"
+    );
+}

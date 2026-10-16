@@ -26,11 +26,16 @@ pub struct StreamOutcome {
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 首字节超时（TTFB）。
 const FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(60);
+/// 可重试错误的最大重试次数（对齐 lx-agent 所用 AI SDK 的默认 2 次）。
+const MAX_RETRIES: u32 = 2;
+/// 首次重试退避基数（指数退避：500ms、1s）。
+const RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
 
 /// 执行一次流式请求。
 ///
 /// `cancel` 关闭时请求立即中止，已收 partial 保留在返回值中。
 /// 事件层按 request key 过滤过期结果；本函数不触碰应用状态。
+/// 仅在**尚未产出任何内容**且错误可重试（429/5xx/网络）时重试，绝不重复半截流。
 pub async fn run_stream(
     transport_kind: &str,
     base_url: &str,
@@ -52,14 +57,30 @@ pub async fn run_stream(
         }
     };
     let mut deltas = Vec::new();
-    let stop = stream_once(
-        &built,
-        transport_kind,
-        idle_timeout,
-        &mut cancel,
-        &mut deltas,
-    )
-    .await;
+    let mut attempt = 0u32;
+    let stop = loop {
+        let reason = stream_once(
+            &built,
+            transport_kind,
+            idle_timeout,
+            &mut cancel,
+            &mut deltas,
+        )
+        .await;
+        // 只在尚未产出内容时重试；已有 partial 说明请求已被接受，重试会导致重复内容。
+        let retryable = deltas.is_empty()
+            && matches!(&reason, StopReason::Failed { code } if is_transient(code))
+            && attempt < MAX_RETRIES;
+        if !retryable {
+            break reason;
+        }
+        attempt += 1;
+        let backoff = RETRY_BASE_DELAY * 2u32.pow(attempt - 1);
+        tokio::select! {
+            _ = tokio::time::sleep(backoff) => {}
+            _ = cancel.changed() => break StopReason::Cancelled,
+        }
+    };
     // 保证 deltas 恰好含一个终态（stream_once 中途路径可能尚未追加）。
     if !deltas
         .iter()
@@ -70,6 +91,19 @@ pub async fn run_stream(
         });
     }
     StreamOutcome { deltas, stop }
+}
+
+/// 错误码是否属于可安全重试的临时故障（连接失败/超时/限流/5xx）。
+fn is_transient(code: &str) -> bool {
+    if code == "timeout" || code == "connection failed" {
+        return true;
+    }
+    if let Some(rest) = code.strip_prefix("http ")
+        && let Ok(status) = rest.trim().parse::<u16>()
+    {
+        return status == 429 || (500..=599).contains(&status);
+    }
+    false
 }
 
 /// 单次尝试执行流：返回结束原因（已收 partial 在 `deltas`）。

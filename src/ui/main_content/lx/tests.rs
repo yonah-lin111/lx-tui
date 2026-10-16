@@ -700,3 +700,173 @@ fn mention_panel_height_limited_by_space_above_input() {
     assert!(panel.rect.height <= input.y, "面板不超过输入框上方空间");
     assert_eq!(panel.rect.bottom(), input.y, "面板紧贴输入框上沿");
 }
+
+// ===== `/` 命令面板（与 `@` 面板同款几何/交互） =====
+
+use crate::app::state::lx::slash::{ModelPicker, PanelWindow};
+use crate::app::state::{ModelPickerStage, SlashCommand, SlashPanel};
+
+/// 构造带 `/` 命令候选面板的 lx 状态。
+fn slash_commands_lx(active: usize) -> Lx {
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Commands {
+        items: SlashCommand::ALL.to_vec(),
+        window: PanelWindow::new(active),
+    });
+    lx
+}
+
+/// 构造带 `/model` 第一级面板的 lx 状态（两个候选）。
+fn slash_model_lx() -> Lx {
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
+        stage: ModelPickerStage::Models,
+        candidates: vec![
+            crate::config::ai::ModelSelection {
+                provider: "9router-lx".into(),
+                model: "cbcn/deepseek-v4.1-flash".into(),
+                variant: None,
+            },
+            crate::config::ai::ModelSelection {
+                provider: "9router-lx".into(),
+                model: "gpt-5.6-luna".into(),
+                variant: None,
+            },
+        ],
+        window: PanelWindow::new(0),
+    })));
+    lx
+}
+
+/// 构造带 `/resume` 空历史面板的 lx 状态。
+fn slash_resume_empty_lx() -> Lx {
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Resume(Box::default()));
+    lx
+}
+
+#[test]
+fn slash_panel_is_same_width_as_input_and_adjacent() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_commands_lx(0);
+    let input = layout(area, &lx).input.expect("input");
+    let panel = slash_layout(area, &lx).expect("slash panel");
+    assert_eq!(panel.rect.x, input.x, "面板左边缘与输入框一致（充满）");
+    assert_eq!(panel.rect.width, input.width, "面板与输入框等宽");
+    assert_eq!(
+        panel.rect.bottom(),
+        input.y,
+        "面板底边紧贴输入框上沿（不覆盖输入框）"
+    );
+}
+
+#[test]
+fn slash_panel_width_stays_full_for_narrow_content() {
+    // 命令文本很短，面板仍须撑满输入框宽度。
+    let area = Rect::new(0, 0, 100, 30);
+    let lx = slash_commands_lx(0);
+    let input = layout(area, &lx).input.expect("input");
+    let panel = slash_layout(area, &lx).expect("slash panel");
+    assert_eq!(panel.rect.width, input.width);
+    assert!(panel.rect.width > 40, "远宽于内容自然宽度");
+}
+
+#[test]
+fn slash_panel_absent_without_panel() {
+    let area = Rect::new(0, 0, 80, 24);
+    assert!(slash_layout(area, &Lx::new()).is_none());
+}
+
+#[test]
+fn slash_model_and_resume_show_empty_placeholder_row() {
+    let area = Rect::new(0, 0, 80, 24);
+    let resume = slash_resume_empty_lx();
+    let layout = slash_layout(area, &resume).expect("empty panel still has a row");
+    assert!(layout.visible >= 1, "空态占位行可见");
+    // `/model` 无候选同样显示占位（而非整块消失）。
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
+        stage: ModelPickerStage::Models,
+        candidates: Vec::new(),
+        window: PanelWindow::new(0),
+    })));
+    assert!(slash_layout(area, &lx).is_some());
+}
+
+#[test]
+fn slash_item_hit_matches_visible_row() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_commands_lx(0);
+    let panel = slash_layout(area, &lx).expect("panel");
+    // 首个可见条目行 → 索引等于窗口起点。
+    assert_eq!(
+        slash_item_at(area, &lx, panel.content.x, panel.content.y),
+        Some(panel.start)
+    );
+    // 面板外不命中。
+    assert_eq!(slash_item_at(area, &lx, 0, 0), None);
+}
+
+#[test]
+fn slash_empty_placeholder_is_not_clickable() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_resume_empty_lx();
+    let panel = slash_layout(area, &lx).expect("panel");
+    assert_eq!(
+        slash_item_at(area, &lx, panel.content.x, panel.content.y),
+        None,
+        "空态占位不可选"
+    );
+}
+
+#[test]
+fn slash_model_panel_is_full_width_and_lists_models() {
+    // `/model` 第一级：候选为模型名，面板仍充满输入框宽度。
+    let area = Rect::new(0, 0, 90, 24);
+    let lx = slash_model_lx();
+    let input = layout(area, &lx).input.expect("input");
+    let panel = slash_layout(area, &lx).expect("model panel");
+    assert_eq!(panel.rect.width, input.width);
+    assert_eq!(panel.rect.bottom(), input.y);
+    assert_eq!(panel.visible, 2, "两个模型候选可见");
+}
+
+#[test]
+fn slash_panel_renders_ascii_only() {
+    // 面板（含标题/预览/来源标签/底边提示）不得出现双宽字符，否则中文会撑破布局。
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_commands_lx(0);
+    let mut buf = Buffer::empty(area);
+    let (built, _cursor) = build(area, &lx, true);
+    blit_grid(area, &mut buf, &built);
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let Some(cell) = buf.cell((x, y)) else {
+                continue;
+            };
+            for ch in cell.symbol().chars() {
+                let width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                assert!(width <= 1, "面板出现双宽字符 {ch:?} at ({x},{y})");
+            }
+        }
+    }
+    // 文案常量不得含双宽字符（含右对齐来源标签与底边提示）；命令描述须为纯 ASCII。
+    for text in [
+        crate::ui::text::LX_SLASH_PANEL_TITLE,
+        crate::ui::text::LX_SLASH_PANEL_FOOTER,
+        crate::ui::text::LX_MODEL_PANEL_TITLE,
+        crate::ui::text::LX_HISTORY_PANEL_TITLE,
+        crate::ui::text::LX_CHAT_NO_MODEL,
+        crate::ui::text::LX_HISTORY_EMPTY,
+    ] {
+        for ch in text.chars() {
+            let width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            assert!(width <= 1, "面板文案含双宽字符 {ch:?} in {text:?}");
+        }
+    }
+    for command in SlashCommand::ALL {
+        assert!(command.text().is_ascii(), "命令文本 ASCII");
+        assert!(command.description().is_ascii(), "命令描述不得含中文");
+        assert!(command.tag().is_ascii(), "来源标签 ASCII");
+    }
+}

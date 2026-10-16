@@ -128,6 +128,7 @@ pub fn on_turn_committed(
             provider_metadata_json: None,
         }],
         model_label: None,
+        error_code: None,
     });
     target.lx.chat.messages.push(ChatMessageView {
         id: committed.assistant_message_id.clone(),
@@ -136,6 +137,7 @@ pub fn on_turn_committed(
         turn_index: committed.turn_index,
         parts: Vec::new(),
         model_label: None,
+        error_code: None,
     });
     target.lx.chat.follow_bottom = true;
     let key = RequestKey {
@@ -267,6 +269,11 @@ pub fn on_stream_finished(
             StopReason::Cancelled => "interrupted".into(),
             StopReason::Failed { .. } => "failed".into(),
         };
+        // 失败原因（脱敏码）随消息保留，供历史行与提示显示。
+        message.error_code = match reason {
+            StopReason::Failed { code } => Some(code.clone()),
+            _ => None,
+        };
     }
     target.lx.chat.request = RequestState::Finishing {
         key: key.clone(),
@@ -390,7 +397,7 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
         stage: ModelPickerStage::Models,
         candidates,
-        active,
+        window: crate::app::state::lx::slash::PanelWindow::new(active),
     })));
     true
 }
@@ -421,7 +428,7 @@ pub fn on_history_listed(
         return false;
     };
     panel.entries = entries;
-    panel.active = 0;
+    panel.window = crate::app::state::lx::slash::PanelWindow::new(0);
     true
 }
 
@@ -494,6 +501,7 @@ pub fn on_session_loaded(
                 .as_deref()
                 .zip(message.model_id.as_deref())
                 .map(|(provider, model)| format!("{provider}/{model}")),
+            error_code: message.error_code.clone(),
         })
         .collect();
     target.lx.chat.follow_bottom = true;
@@ -555,119 +563,77 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
     false
 }
 
-/// `/model` 面板按键：↑/↓ 移动、Enter 采纳（两级）、Esc 退回。
+/// `/` 面板确认（Enter / Tab / 鼠标点击）：按当前视图与高亮项推进。
 ///
-/// 第二级的 variants 候选由 UI 层渲染；这里在 Enter 前把高亮 variant 写回
-/// picker 内部（以 `pending_variant` 携带），决策全部基于快照完成。
-pub fn apply_model_picker_key(
-    state: &mut AppState,
-    pane: PaneId,
-    key: crate::app::actions::OverlayKey,
-) -> bool {
-    // 先取面板快照（含候选与当前 stage）。
-    let snapshot = state
+/// - 命令候选 → 消费命令文本并执行（`/model`、`/resume`、`/new`）。
+/// - `/model` 第一级 → 有 variants 进入第二级，否则直接完成。
+/// - `/model` 第二级 → 以高亮 variant 完成选择（真正写入下一轮选择）。
+/// - `/resume` → 打开高亮会话。
+pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(panel) = state
         .pane_anywhere(pane)
-        .and_then(|target| match target.lx.slash.as_ref() {
-            Some(SlashPanel::Model(picker)) => Some(picker.clone()),
-            _ => None,
-        });
-    let Some(mut picker) = snapshot else {
+        .and_then(|target| target.lx.slash.clone())
+    else {
         return false;
     };
-    enum Decision {
-        None,
-        Close,
-        BackToModels,
-        Advance { selection: ModelSelection },
-        Complete { selection: ModelSelection },
-    }
-    let decision = match key {
-        crate::app::actions::OverlayKey::Up => {
-            if !picker.candidates.is_empty() {
-                picker.active =
-                    (picker.active + picker.candidates.len() - 1) % picker.candidates.len();
-            }
-            Decision::None
-        }
-        crate::app::actions::OverlayKey::Down => {
-            if !picker.candidates.is_empty() {
-                picker.active = (picker.active + 1) % picker.candidates.len();
-            }
-            Decision::None
-        }
-        crate::app::actions::OverlayKey::Enter => match picker.stage.clone() {
-            ModelPickerStage::Models => match picker.candidates.get(picker.active).cloned() {
-                Some(selection) => {
-                    let variants = variant_keys(state, &selection);
-                    if variants.is_empty() {
-                        Decision::Complete { selection }
-                    } else {
-                        Decision::Advance { selection }
+    match panel {
+        SlashPanel::Commands { .. } => super::pane::accept_slash_command(state, pane),
+        SlashPanel::Model(picker) => match &picker.stage {
+            ModelPickerStage::Models => {
+                let Some(selection) = picker.candidates.get(picker.window.active).cloned() else {
+                    // 空态占位：吞掉 Enter，不误采纳。
+                    return true;
+                };
+                let variants = variant_keys(state, &selection);
+                if variants.is_empty() {
+                    finish_model_selection(state, pane, selection);
+                } else {
+                    let active = default_variant_index(state, &selection, &variants);
+                    if let Some(target) = state.pane_mut_anywhere(pane)
+                        && let Some(SlashPanel::Model(current)) = target.lx.slash.as_mut()
+                    {
+                        current.stage = ModelPickerStage::Variants {
+                            model: selection,
+                            variants,
+                        };
+                        current.window = crate::app::state::lx::slash::PanelWindow::new(active);
                     }
                 }
-                None => Decision::None,
-            },
-            ModelPickerStage::Variants { model, .. } => Decision::Complete { selection: model },
+                true
+            }
+            ModelPickerStage::Variants { model, variants } => {
+                let mut selection = model.clone();
+                // 采纳高亮等级（此前只完成默认 variant，未应用用户选择）。
+                selection.variant = variants.get(picker.window.active).cloned();
+                finish_model_selection(state, pane, selection);
+                true
+            }
         },
-        crate::app::actions::OverlayKey::Esc => match picker.stage {
-            ModelPickerStage::Variants { .. } => Decision::BackToModels,
-            ModelPickerStage::Models => Decision::Close,
-        },
-        _ => Decision::None,
-    };
-    match decision {
-        Decision::None => {
-            // 写回移动后的高亮。
-            if let Some(target) = state.pane_mut_anywhere(pane)
-                && let Some(SlashPanel::Model(current)) = target.lx.slash.as_mut()
-            {
-                current.active = picker.active;
+        SlashPanel::Resume(history) => {
+            if let Some(entry) = history.entries.get(history.window.active) {
+                let session_id = entry.session_id.clone();
+                resume_session(state, pane, &session_id);
             }
-            true
-        }
-        Decision::BackToModels => {
-            if let Some(target) = state.pane_mut_anywhere(pane)
-                && let Some(SlashPanel::Model(current)) = target.lx.slash.as_mut()
-            {
-                current.stage = ModelPickerStage::Models;
-            }
-            true
-        }
-        Decision::Close => {
-            if let Some(target) = state.pane_mut_anywhere(pane) {
-                target.lx.slash = None;
-            }
-            true
-        }
-        Decision::Advance { selection } => {
-            // 有 variants：进入第二级，高亮对齐模型默认 variant。
-            let variants = variant_keys(state, &selection);
-            let default_variant = state
-                .models
-                .settings
-                .providers
-                .get(&selection.provider)
-                .and_then(|provider| provider.models.get(&selection.model))
-                .and_then(|model| model.variant.clone());
-            let active = default_variant
-                .and_then(|variant| variants.iter().position(|item| *item == variant))
-                .unwrap_or(0);
-            if let Some(target) = state.pane_mut_anywhere(pane)
-                && let Some(SlashPanel::Model(current)) = target.lx.slash.as_mut()
-            {
-                current.stage = ModelPickerStage::Variants {
-                    model: selection,
-                    variants,
-                };
-                current.active = active;
-            }
-            true
-        }
-        Decision::Complete { selection } => {
-            finish_model_selection(state, pane, selection);
             true
         }
     }
+}
+
+/// 模型默认 variant 在候选中的索引（缺失或不在列表则 0）。
+fn default_variant_index(
+    state: &AppState,
+    selection: &ModelSelection,
+    variants: &[String],
+) -> usize {
+    state
+        .models
+        .settings
+        .providers
+        .get(&selection.provider)
+        .and_then(|provider| provider.models.get(&selection.model))
+        .and_then(|model| model.variant.clone())
+        .and_then(|variant| variants.iter().position(|item| *item == variant))
+        .unwrap_or(0)
 }
 
 /// 选择完成后写入窗格选择；已保存 session 同步 DB 三列。
@@ -711,48 +677,6 @@ fn variant_keys(state: &AppState, selection: &ModelSelection) -> Vec<String> {
         .and_then(|provider| provider.models.get(&selection.model))
         .map(|model| model.variants.keys().cloned().collect())
         .unwrap_or_default()
-}
-
-/// 历史面板按键：↑/↓ 移动、Enter 打开、Esc 关闭。
-pub fn apply_history_key(
-    state: &mut AppState,
-    pane: PaneId,
-    key: crate::app::actions::OverlayKey,
-) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    let Some(SlashPanel::Resume(panel)) = target.lx.slash.as_mut() else {
-        return false;
-    };
-    match key {
-        crate::app::actions::OverlayKey::Up => {
-            if !panel.entries.is_empty() {
-                panel.active = (panel.active + panel.entries.len() - 1) % panel.entries.len();
-            }
-            true
-        }
-        crate::app::actions::OverlayKey::Down => {
-            if !panel.entries.is_empty() {
-                panel.active = (panel.active + 1) % panel.entries.len();
-            }
-            true
-        }
-        crate::app::actions::OverlayKey::Enter => {
-            if let Some(entry) = panel.entries.get(panel.active) {
-                let session_id = entry.session_id.clone();
-                resume_session(state, pane, &session_id);
-            }
-            true
-        }
-        crate::app::actions::OverlayKey::Esc => {
-            if let Some(target) = state.pane_mut_anywhere(pane) {
-                target.lx.slash = None;
-            }
-            true
-        }
-        _ => true,
-    }
 }
 
 /// 设置页模型配置保存后更新快照（在途请求继续持有旧快照到结束）。

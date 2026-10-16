@@ -4,6 +4,68 @@
 
 use crate::config::ai::{AiSettings, ModelSelection};
 
+/// 面板候选窗口状态：键盘/悬停/滚轮共用的高亮、锚点与显式视口。
+///
+/// 与 `@` 提及面板同一套语义：键盘移动高亮并让窗口锚点跟随；悬停只改高亮
+/// 不动锚点；滚轮只动显式视口（高亮可滚出视口）。`ui` 用 `anchor`/`viewport`
+/// 传给 `CommandPanelView`，达到「与 @ 面板一致」的滚动观感。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PanelWindow {
+    /// 高亮索引（0 基）。
+    pub active: usize,
+    /// 窗口底部锚点条目；跟随高亮时为高亮项。
+    pub anchor: usize,
+    /// 滚轮滚动后的显式视口起点；跟随高亮时为 None。
+    pub viewport: Option<usize>,
+}
+
+impl PanelWindow {
+    /// 以高亮项为锚点初始化。
+    pub fn new(active: usize) -> Self {
+        Self {
+            active,
+            anchor: active,
+            viewport: None,
+        }
+    }
+
+    /// 高亮项数变化后钳制三个索引，避免越界。
+    pub fn clamp(&mut self, len: usize) {
+        let last = len.saturating_sub(1);
+        self.active = self.active.min(last);
+        self.anchor = self.anchor.min(last);
+        self.viewport = self.viewport.map(|start| start.min(last));
+    }
+
+    /// 设置高亮（鼠标悬停）：越界钳到末项，锚点与视口不动。
+    pub fn set_active(&mut self, index: usize) {
+        self.active = index;
+    }
+
+    /// 键盘移动高亮（循环）：锚点跟随高亮并清除显式视口。
+    pub fn move_active(&mut self, delta: isize, len: usize) {
+        if len == 0 {
+            return;
+        }
+        self.active = (self.active as isize + delta).rem_euclid(len as isize) as usize;
+        self.anchor = self.active;
+        self.viewport = None;
+    }
+
+    /// 滚轮滚动窗口：显式视口从 `base` 起偏移并钳制（不循环），高亮与锚点不动。
+    pub fn scroll(&mut self, delta: isize, base: usize, len: usize) {
+        let max = len.saturating_sub(1) as isize;
+        let next = (base.min(max as usize) as isize + delta).clamp(0, max) as usize;
+        self.viewport = Some(next);
+    }
+}
+
+impl Default for PanelWindow {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 /// 保留命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SlashCommand {
@@ -32,10 +94,15 @@ impl SlashCommand {
     /// 一句话描述。
     pub fn description(self) -> &'static str {
         match self {
-            Self::Model => "选择下一轮使用的模型与思考等级",
-            Self::Resume => "打开当前工作区的会话历史",
-            Self::New => "开始新的空白会话",
+            Self::Model => "Choose the model and reasoning level for the next turn",
+            Self::Resume => "Open chat history for this workspace",
+            Self::New => "Start a fresh blank session",
         }
+    }
+
+    /// 面板右对齐来源标签（内置命令）。
+    pub fn tag(self) -> &'static str {
+        crate::ui::text::SLASH_TAG_BUILTIN
     }
 }
 
@@ -58,8 +125,8 @@ pub struct ModelPicker {
     pub stage: ModelPickerStage,
     /// 候选：启用的 provider × 其模型。
     pub candidates: Vec<ModelSelection>,
-    /// 高亮索引。
-    pub active: usize,
+    /// 窗口状态（高亮/锚点/显式视口）。
+    pub window: PanelWindow,
 }
 
 impl ModelPicker {
@@ -104,7 +171,8 @@ pub struct HistoryEntry {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryPanel {
     pub entries: Vec<HistoryEntry>,
-    pub active: usize,
+    /// 窗口状态（高亮/锚点/显式视口）。
+    pub window: PanelWindow,
 }
 
 /// `/` 命令面板（互斥浮层；同一时刻至多一个视图）。
@@ -113,7 +181,7 @@ pub enum SlashPanel {
     /// 命令候选列表（输入 `/` 后过滤）。
     Commands {
         items: Vec<SlashCommand>,
-        active: usize,
+        window: PanelWindow,
     },
     /// `/model` 两级选择。
     Model(Box<ModelPicker>),
@@ -128,6 +196,78 @@ impl SlashPanel {
             .into_iter()
             .filter(|command| command.text().starts_with(query))
             .collect()
+    }
+
+    /// 当前视图的候选数量。
+    pub fn item_count(&self) -> usize {
+        match self {
+            Self::Commands { items, .. } => items.len(),
+            Self::Model(picker) => match &picker.stage {
+                ModelPickerStage::Models => picker.candidates.len(),
+                ModelPickerStage::Variants { variants, .. } => variants.len(),
+            },
+            Self::Resume(panel) => panel.entries.len(),
+        }
+    }
+
+    /// 当前视图的窗口状态。
+    pub fn window(&self) -> PanelWindow {
+        match self {
+            Self::Commands { window, .. } => *window,
+            Self::Model(picker) => picker.window,
+            Self::Resume(panel) => panel.window,
+        }
+    }
+
+    /// 写回窗口状态（索引变化后）。
+    pub fn set_window(&mut self, window: PanelWindow) {
+        match self {
+            Self::Commands {
+                window: current, ..
+            } => *current = window,
+            Self::Model(picker) => picker.window = window,
+            Self::Resume(panel) => panel.window = window,
+        }
+    }
+
+    /// 键盘移动高亮；返回是否变化。
+    pub fn move_active(&mut self, delta: isize) -> bool {
+        let len = self.item_count();
+        if len == 0 {
+            return false;
+        }
+        let mut window = self.window();
+        window.move_active(delta, len);
+        self.set_window(window);
+        true
+    }
+
+    /// 鼠标悬停设置高亮；越界、未变化或面板无候选时返回 false。
+    pub fn set_active(&mut self, index: usize) -> bool {
+        let len = self.item_count();
+        if index >= len {
+            return false;
+        }
+        let mut window = self.window();
+        if window.active == index {
+            return false;
+        }
+        window.set_active(index);
+        self.set_window(window);
+        true
+    }
+
+    /// 滚轮滚动窗口；`base` 为当前窗口起点，高亮不动。返回是否移动。
+    pub fn scroll_viewport(&mut self, delta: isize, base: usize) -> bool {
+        let len = self.item_count();
+        if len == 0 {
+            return false;
+        }
+        let mut window = self.window();
+        window.scroll(delta, base.min(len - 1), len);
+        let moved = window.viewport != self.window().viewport;
+        self.set_window(window);
+        moved
     }
 }
 

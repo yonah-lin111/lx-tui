@@ -23,6 +23,7 @@ fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageVie
         turn_index: 0,
         parts,
         model_label: Some("P / M".into()),
+        error_code: None,
     }
 }
 

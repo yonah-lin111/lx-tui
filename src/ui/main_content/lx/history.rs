@@ -158,7 +158,7 @@ fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> {
     (screen_y < rect.bottom()).then_some(screen_y)
 }
 
-/// 消息标题：assistant 显示模型标签或状态后缀。
+/// 消息标题：assistant 显示模型标签或状态后缀（失败附脱敏原因码）。
 fn heading_for(message: &crate::app::state::ChatMessageView) -> String {
     if message.role == "user" {
         return String::new();
@@ -169,7 +169,14 @@ fn heading_for(message: &crate::app::state::ChatMessageView) -> String {
         .unwrap_or_else(|| text::LX_CHAT_ASSISTANT_LABEL.to_string());
     match message.status.as_str() {
         "interrupted" => format!("{base}  [{}]", text::LX_CHAT_INTERRUPTED_LABEL),
-        "failed" => format!("{base}  [{}]", text::LX_CHAT_FAILED_LABEL),
+        "failed" => match message
+            .error_code
+            .as_deref()
+            .filter(|code| !code.is_empty())
+        {
+            Some(code) => format!("{base}  [{}: {code}]", text::LX_CHAT_FAILED_LABEL),
+            None => format!("{base}  [{}]", text::LX_CHAT_FAILED_LABEL),
+        },
         "streaming" => format!("{base}  [{}]", text::LX_CHAT_STREAMING_LABEL),
         _ => base,
     }

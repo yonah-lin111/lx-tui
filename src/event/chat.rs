@@ -325,6 +325,7 @@ fn chat_part_views_to_db(
             model_id: None,
             variant: None,
             stop_reason: None,
+            error_code: message.error_code.clone(),
             input_tokens: None,
             output_tokens: None,
             created_at_ms: 0,

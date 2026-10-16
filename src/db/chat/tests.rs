@@ -583,3 +583,32 @@ fn provider_metadata_round_trips() {
         "签名原样往返"
     );
 }
+
+#[test]
+fn failed_outcome_persists_and_loads_error_code() {
+    let (database, workspace, _) = database_with_two_workspaces("failed-code");
+    let committed = database
+        .begin_turn(&workspace, None, "hi", &model())
+        .expect("begin");
+    database
+        .finish(
+            &workspace,
+            &committed.assistant_message_id,
+            &[],
+            &TurnOutcome::Failed {
+                error_code: "http 503".into(),
+            },
+            Usage::default(),
+        )
+        .expect("finish");
+    let messages = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    assert_eq!(messages[1].status, "failed");
+    assert_eq!(
+        messages[1].error_code.as_deref(),
+        Some("http 503"),
+        "失败原因码持久化并可回读（供历史行显示）"
+    );
+}

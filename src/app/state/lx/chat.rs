@@ -178,6 +178,8 @@ pub struct ChatMessageView {
     pub parts: Vec<ChatPartView>,
     /// 该轮实际模型（assistant 行）。
     pub model_label: Option<String>,
+    /// 失败原因码（如 `http 503`、`timeout`）；仅 `failed` 时有值，用于历史行提示。
+    pub error_code: Option<String>,
 }
 
 /// 请求状态机：Idle → Committing → Streaming → Finishing → Idle。

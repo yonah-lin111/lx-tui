@@ -416,6 +416,15 @@ pub(crate) fn handle_mouse_down_left(
                     *dirty = true;
                     return;
                 }
+                // `/` 命令面板候选：优先于点选输入框与整页选区（与 `@` 面板一致）。
+                let slash_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(index) = slash_hit {
+                    update::select_lx_slash(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
                 let entry = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::entry_hit(inner, &target.lx, mouse.column, mouse.row)
                 });
