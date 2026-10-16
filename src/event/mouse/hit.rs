@@ -143,6 +143,33 @@ pub(crate) fn handle_lx_input_scrollbar_press(
     true
 }
 
+/// lx 聊天历史滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
+pub(crate) fn handle_lx_history_scrollbar_press(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::main_content::lx::history_scrollbar(inner, &target.lx))
+    else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.lx_history_scroll_drag = Some((pane, grab)),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_lx_history_scroll(state, pane, offset, bar.total, bar.visible);
+        }
+    }
+    true
+}
+
 /// 提及面板命中：返回条目索引；面板未打开或未命中返回 None。
 pub(crate) fn mention_item_at(
     state: &AppState,

@@ -688,9 +688,11 @@ pub fn pane_inner_size(rect: Rect) -> (u16, u16) {
 }
 
 /// lx 输入框横向外边距（内容区足够宽时）、`> ` 前缀列数与滚动条预留列数。
-pub const LX_INPUT_MARGIN: u16 = 2;
+pub const LX_INPUT_MARGIN: u16 = 1;
 pub const LX_INPUT_PREFIX: u16 = 2;
 pub const LX_INPUT_SCROLLBAR: u16 = 1;
+/// lx 消息列表右侧滚动条预留列数（与输入框同宽对齐时扣减）。
+pub const LX_HISTORY_SCROLLBAR: u16 = 1;
 /// lx 输入框高度占内容区高度的百分比上限与最小盒高（含上下分割线）。
 pub const LX_INPUT_HEIGHT_PERCENT: u16 = 40;
 pub const LX_INPUT_MIN_BOX: u16 = 3;

@@ -799,22 +799,58 @@ pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 滚动历史视图（正数向下）；返回是否移动。
-pub fn scroll_lx_history(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
+/// 滚动历史视图（正数向下）；`total`/`visible` 为渲染行数与视口行数；返回是否移动。
+///
+/// 状态里的 `history_scroll` 是**顶部行索引**（0 = 最早）；`follow_bottom` 表示
+/// 视口钉在最新一屏（顶部行 = `total - visible`）。
+pub fn scroll_lx_history(
+    state: &mut AppState,
+    pane: PaneId,
+    delta: isize,
+    total: usize,
+    visible: usize,
+) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
         return false;
     }
-    let total = target.lx.chat.history_height();
-    let current = target.lx.chat.history_scroll as isize;
-    let next = (current + delta).max(0) as usize;
-    // 到底时恢复跟随底部。
-    let next = next.min(total.saturating_sub(1));
+    let max_top = total.saturating_sub(visible);
+    let current = if target.lx.chat.follow_bottom {
+        max_top
+    } else {
+        target.lx.chat.history_scroll.min(max_top)
+    };
+    let next = (current as isize + delta).clamp(0, max_top as isize) as usize;
+    let moved = next != current || target.lx.chat.follow_bottom;
     target.lx.chat.history_scroll = next;
-    target.lx.chat.follow_bottom = next == 0 && delta < 0;
-    true
+    target.lx.chat.follow_bottom = next >= max_top;
+    moved
+}
+
+/// 直接设置历史视口顶部行偏移（滚动条点击/拖拽）；`total`/`visible` 为渲染行数与视口行数。
+/// 顶部行 == `total - visible` 时视为钉底跟随；返回视口是否移动。
+pub fn set_lx_history_scroll(
+    state: &mut AppState,
+    pane: PaneId,
+    offset: usize,
+    total: usize,
+    visible: usize,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+        return false;
+    }
+    let max_top = total.saturating_sub(visible);
+    let clamped = offset.min(max_top);
+    let before = target.lx.chat.history_scroll;
+    let was_following = target.lx.chat.follow_bottom;
+    target.lx.chat.history_scroll = clamped;
+    target.lx.chat.follow_bottom = clamped >= max_top;
+    before != clamped || was_following != target.lx.chat.follow_bottom
 }
 
 #[cfg(test)]

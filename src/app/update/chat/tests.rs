@@ -918,3 +918,73 @@ fn finish_model_selection_persists_default_model() {
     crate::app::update::chat::test_hooks::finish_model_selection(&mut state, pane, selection);
     assert_eq!(state.effects.len(), before, "同选择不重复入队");
 }
+
+/// 构造带 `count` 条用户消息的 lx 窗格（每行一条），用于滚动语义测试。
+fn lx_with_messages(state: &mut AppState, count: usize) {
+    let pane = state.active_tab().layout.focus();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    for index in 0..count {
+        target.lx.chat.messages.push(ChatMessageView {
+            id: format!("m{index}"),
+            role: "user".into(),
+            status: "complete".into(),
+            turn_index: index as i64,
+            parts: vec![ChatPartView {
+                kind: PartKind::Text,
+                content: format!("消息 {index}"),
+                provider_metadata_json: None,
+            }],
+            model_label: None,
+            error_code: None,
+        });
+    }
+}
+
+#[test]
+fn history_scroll_clamps_and_tracks_follow_bottom() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 3);
+    let pane = state.active_tab().layout.focus();
+    // 总行数 3 条消息 + 3 个消息间空行 = 6；视口 2 行 → 最大顶部行 4。
+    assert!(scroll_lx_history(&mut state, pane, 999, 6, 2), "向下滚动");
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(chat.history_scroll, 4, "钳到最大顶部行");
+    assert!(chat.follow_bottom, "滚到底恢复跟随");
+    // 向上滚动离开底部。
+    assert!(scroll_lx_history(&mut state, pane, -1, 6, 2));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(chat.history_scroll, 3);
+    assert!(!chat.follow_bottom, "离开底部不再跟随");
+    // 再向上到顶。
+    assert!(scroll_lx_history(&mut state, pane, -999, 6, 2));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .history_scroll,
+        0
+    );
+}
+
+#[test]
+fn history_scrollbar_set_offset_marks_follow_at_bottom() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 5);
+    let pane = state.active_tab().layout.focus();
+    // 顶部行 2，视口 3 → 不跟随。
+    assert!(set_lx_history_scroll(&mut state, pane, 2, 10, 3));
+    {
+        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+        assert_eq!(chat.history_scroll, 2);
+        assert!(!chat.follow_bottom);
+    }
+    // 顶部行 = total - visible → 钉底跟随。
+    assert!(set_lx_history_scroll(&mut state, pane, 7, 10, 3));
+    {
+        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+        assert_eq!(chat.history_scroll, 7);
+        assert!(chat.follow_bottom);
+    }
+}

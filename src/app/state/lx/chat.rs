@@ -426,20 +426,6 @@ impl LxChat {
                 .map(|meta| serde_json::to_string(&meta).unwrap_or_default()),
         });
     }
-
-    /// 历史内容总行数估算（滚动/跟随判定用）。
-    pub fn history_height(&self) -> usize {
-        self.messages
-            .iter()
-            .map(|message| {
-                message
-                    .parts
-                    .iter()
-                    .map(|part| part.content.matches('\n').count() + 1)
-                    .sum::<usize>()
-            })
-            .sum()
-    }
 }
 
 /// 上下文占用百分比：真实输入 token / 上限，夹到 `0..=100`；两者任一未知为 None。

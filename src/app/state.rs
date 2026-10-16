@@ -134,6 +134,8 @@ pub struct AppState {
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 lx 输入框滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub lx_scroll_drag: Option<(PaneId, u16)>,
+    /// 拖拽 lx 聊天历史滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub lx_history_scroll_drag: Option<(PaneId, u16)>,
     /// 鼠标悬停的侧栏 Agents 条目槽位索引（含滚动偏移）；None 表示未悬停。
     pub agent_hover: Option<usize>,
     /// 侧栏 Agents 列表滚动偏移（顶部条目索引）。
@@ -225,6 +227,7 @@ impl AppState {
             referenced_menu_scroll_drag: None,
             terminal_scroll_drag: None,
             lx_scroll_drag: None,
+            lx_history_scroll_drag: None,
             agent_hover: None,
             agent_scroll: 0,
             agent_scroll_drag: None,

@@ -59,6 +59,25 @@ impl MdLine {
 ///
 /// 调用方负责换行与宽度裁剪；本函数只做块级结构还原与行内标记折叠。
 pub fn render(source: &str) -> Vec<MdLine> {
+    render_blocks(source, None)
+}
+
+/// 把 markdown 源码渲染成**恰好不超过 `width` 列**的行（块级：表格自适应宽度、其余软换行）。
+///
+/// 与 [`render`] 共用块级解析，但表格按可用宽度收缩列宽并在单元格内换行
+/// （对齐 opencode 的 markdown 表格），避免窄宽度下把方框网格硬折断成「变形」；
+/// 其余块（段落/列表/引用/代码）按词优先软换行，超长不可断的内容按字符切分。
+pub fn render_wrapped(source: &str, width: u16) -> Vec<MdLine> {
+    let width = usize::from(width.max(1));
+    let mut out = Vec::new();
+    for line in render_blocks(source, Some(width)) {
+        wrap_md_line(&line, width, &mut out);
+    }
+    out
+}
+
+/// 块级解析：`width` 为 Some 时表格按可用宽度收缩（其余块仍按自然宽度产出，由调用方换行）。
+fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
     let mut lines = Vec::new();
     let source_lines: Vec<&str> = source.split('\n').collect();
     let mut index = 0;
@@ -83,12 +102,17 @@ pub fn render(source: &str) -> Vec<MdLine> {
             continue;
         }
         if is_rule(trimmed) {
-            lines.push(MdLine::plain(0, RULE.repeat(40), style::markdown_rule()));
+            let rule_width = width.unwrap_or(40).max(1);
+            lines.push(MdLine::plain(
+                0,
+                RULE.repeat(rule_width),
+                style::markdown_rule(),
+            ));
             index += 1;
             continue;
         }
         if trimmed.trim_start().starts_with('|') {
-            index = table(&source_lines, index, &mut lines);
+            index = table(&source_lines, index, &mut lines, width);
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
@@ -368,7 +392,10 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
 }
 
 /// 表格：表头 + 对齐行 + 数据行，用方框网格。
-fn table(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
+///
+/// `width` 为 Some 时按可用宽度收缩列宽（超出部分在单元格内软换行），
+/// 保证方框网格不超宽、不被外层硬折断。
+fn table(source: &[&str], start: usize, lines: &mut Vec<MdLine>, width: Option<usize>) -> usize {
     let mut rows = Vec::new();
     let mut index = start;
     while index < source.len() && source[index].trim_start().starts_with('|') {
@@ -405,8 +432,83 @@ fn table(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
         .into_iter()
         .map(|row| pad_row(row, columns))
         .collect::<Vec<_>>();
+    if let Some(width) = width {
+        let floors: Vec<usize> = (0..columns)
+            .map(|column| {
+                std::iter::once(&header)
+                    .chain(body.iter())
+                    .filter_map(|row| row.get(column))
+                    .flat_map(|cell| cell.chars())
+                    .map(|ch| char_width(ch) as usize)
+                    .max()
+                    .unwrap_or(1)
+                    .max(1)
+            })
+            .collect();
+        shrink_widths(&mut widths, &floors, width);
+    }
     grid_table(&header, &body, &widths, &align, lines);
     index
+}
+
+/// 按可用宽度收缩列宽：总占宽（各列内容 + 每列装饰）超出 `width` 时按比例削减，
+/// 每列不低于其「最宽字符」宽度（保证至少放得下一个字符）；削减后由 `grid_table`
+/// 在单元格内换行。
+fn shrink_widths(widths: &mut [usize], floors: &[usize], width: usize) {
+    let columns = widths.len();
+    if columns == 0 {
+        return;
+    }
+    // 每列装饰：左右各 1 空格 + 1 个竖线；另有 `columns + 1` 条竖线（首尾 + 列间）。
+    let decorations = columns + 1 + columns * 2;
+    let available = width.saturating_sub(decorations);
+    let floor_total: usize = floors.iter().copied().sum();
+    if floor_total > available {
+        // 即使按最小列宽也放不下：只保证各列不低于最小字符宽（外层仍可能轻微超宽，
+        // 但不再出现「列宽小于单字」导致的错位）。
+        for (slot, floor) in widths.iter_mut().zip(floors) {
+            *slot = (*slot).max(*floor);
+        }
+        return;
+    }
+    let total: usize = widths.iter().sum();
+    if total <= available {
+        return;
+    }
+    // 按比例分配，再补齐/削减到 [floor, original] 区间。
+    let mut scaled = vec![0usize; columns];
+    for index in 0..columns {
+        let share = widths[index].saturating_mul(available) / total;
+        scaled[index] = share.clamp(floors[index], widths[index]);
+    }
+    let mut used: usize = scaled.iter().sum();
+    while used > available {
+        let Some((index, _)) = scaled
+            .iter()
+            .enumerate()
+            .filter(|(index, value)| **value > floors[*index])
+            .max_by_key(|(_, value)| **value)
+        else {
+            break;
+        };
+        scaled[index] -= 1;
+        used -= 1;
+    }
+    while used < available {
+        let Some((index, _)) = scaled
+            .iter()
+            .enumerate()
+            .filter(|(index, value)| **value < widths[*index])
+            .max_by_key(|(index, value)| widths[*index] - **value)
+        else {
+            break;
+        };
+        scaled[index] += 1;
+        used += 1;
+    }
+    for (slot, value) in widths.iter_mut().zip(scaled) {
+        *slot = value;
+    }
 }
 
 /// 把一行单元格补齐到 `columns` 列（不足补空串）。
@@ -458,6 +560,8 @@ fn pad(cell: &str, width: usize, align: Align) -> String {
 }
 
 /// 方框网格表格：`┌─┬─┐` / `│ x │` / `├─┼─┤` / `└─┴─┘`。
+///
+/// 单元格内容按列宽换行；单个逻辑行拆成多条物理行（同一行内各列的对应物理行并排）。
 fn grid_table(
     header: &[String],
     body: &[Vec<String>],
@@ -469,44 +573,102 @@ fn grid_table(
         let segments: Vec<String> = widths.iter().map(|width| fill.repeat(width + 2)).collect();
         format!("{left}{}{right}", segments.join(mid))
     };
-    // 单元格行：两端与列间用 `│`，内容左右各留 1 空格。
-    let row_line = |cells: &[String], value_style: Style| -> Vec<(String, Style)> {
+    // 单元格行：两端与列间用 `│`，内容左右各留 1 空格；内容超出列宽时换行成多物理行。
+    let row_lines = |cells: &[String], value_style: Style| -> Vec<Vec<(String, Style)>> {
         let rule = style::markdown_rule();
-        let mut spans = vec![("│".to_string(), rule)];
-        for (column, width) in widths.iter().enumerate() {
-            let empty = String::new();
-            let cell = cells.get(column).unwrap_or(&empty);
-            let aligned = pad(
-                cell,
-                *width,
-                align.get(column).copied().unwrap_or(Align::Left),
-            );
-            spans.push((" ".to_string(), rule));
-            spans.push((aligned, value_style));
-            spans.push((" ".to_string(), rule));
-            spans.push(("│".to_string(), rule));
+        let wrapped: Vec<Vec<String>> = widths
+            .iter()
+            .enumerate()
+            .map(|(column, width)| {
+                let empty = String::new();
+                let cell = cells.get(column).unwrap_or(&empty);
+                wrap_cell(
+                    cell,
+                    *width,
+                    align.get(column).copied().unwrap_or(Align::Left),
+                )
+            })
+            .collect();
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        let mut out = Vec::with_capacity(height);
+        for row in 0..height {
+            let mut spans = vec![("│".to_string(), rule)];
+            for (column, cell_lines) in wrapped.iter().enumerate() {
+                // 该列本物理行无内容时补足到列宽，保证方框列对齐。
+                let blank = " ".repeat(widths[column]);
+                let value = cell_lines.get(row).unwrap_or(&blank);
+                spans.push((" ".to_string(), rule));
+                spans.push((value.clone(), value_style));
+                spans.push((" ".to_string(), rule));
+                spans.push(("│".to_string(), rule));
+            }
+            out.push(spans);
         }
-        spans
+        out
     };
     lines.push(MdLine::plain(
         0,
         border("┌", "─", "┬", "┐"),
         style::markdown_rule(),
     ));
-    lines.push(MdLine::spans(0, row_line(header, style::markdown_strong())));
+    for spans in row_lines(header, style::markdown_strong()) {
+        lines.push(MdLine::spans(0, spans));
+    }
     lines.push(MdLine::plain(
         0,
         border("├", "─", "┼", "┤"),
         style::markdown_rule(),
     ));
     for row in body {
-        lines.push(MdLine::spans(0, row_line(row, style::text())));
+        for spans in row_lines(row, style::text()) {
+            lines.push(MdLine::spans(0, spans));
+        }
     }
     lines.push(MdLine::plain(
         0,
         border("└", "─", "┴", "┘"),
         style::markdown_rule(),
     ));
+}
+
+/// 单元格按列宽换行（优先在空白处断行，超长不可断内容按显示列硬切），每行按对齐补空格到列宽。
+fn wrap_cell(cell: &str, width: usize, align: Align) -> Vec<String> {
+    let width = width.max(1);
+    if display_width(cell) <= width {
+        return vec![pad(cell, width, align)];
+    }
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut col = 0usize;
+    // 以「词 + 尾随空白」为切分单位，中英文混排时中文逐字成词。
+    let mut segment = String::new();
+    let flush_segment =
+        |segment: &mut String, current: &mut String, col: &mut usize, out: &mut Vec<String>| {
+            for ch in segment.drain(..) {
+                let cell_w = char_width(ch) as usize;
+                if *col + cell_w > width {
+                    out.push(pad(current.as_str(), width, align));
+                    current.clear();
+                    *col = 0;
+                }
+                current.push(ch);
+                *col += cell_w;
+            }
+        };
+    for ch in cell.chars() {
+        segment.push(ch);
+        if ch.is_whitespace() {
+            flush_segment(&mut segment, &mut current, &mut col, &mut out);
+        }
+    }
+    flush_segment(&mut segment, &mut current, &mut col, &mut out);
+    if !current.is_empty() {
+        out.push(pad(&current, width, align));
+    }
+    if out.is_empty() {
+        out.push(pad("", width, align));
+    }
+    out
 }
 
 /// 行内渲染：吃掉粗体/斜体/粗斜体/删除线/行内代码标记；链接显示 `文字 (url)`。
@@ -630,6 +792,85 @@ fn link(rest: &str) -> Option<(&str, &str, usize)> {
 /// 字符串的显示宽度（按字符宽度求和）。
 pub fn display_width(value: &str) -> usize {
     value.chars().map(|ch| char_width(ch) as usize).sum()
+}
+
+/// 把一条渲染行按可用宽度软换行（保留缩进；续行缩进到内容起始列）。
+///
+/// 优先在空白/汉字边界断行（对齐 opencode/主流 agent 的 word wrap），
+/// 单个超宽字符单独成行；供表格外的段落/列表/引用/代码使用。
+fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
+    let indent = line.indent;
+    let avail = width.saturating_sub(usize::from(indent)).max(1);
+    let cells: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
+        .collect();
+    if cells.is_empty() {
+        out.push(MdLine::spans(indent, Vec::new()));
+        return;
+    }
+    let mut index = 0usize;
+    while index < cells.len() {
+        // 适应 `avail` 列的最大结束下标。
+        let mut col = 0usize;
+        let mut end = index;
+        while end < cells.len() {
+            let cell = char_width(cells[end].0) as usize;
+            if col + cell > avail {
+                break;
+            }
+            col += cell;
+            end += 1;
+        }
+        if end == index {
+            end = index + 1; // 单字符超宽：单独成行。
+        }
+        // 未到行尾时，回退到最近一个空白之后断行（词优先）。
+        let mut break_at = end;
+        if end < cells.len() {
+            for probe in (index..end).rev() {
+                if cells[probe].0.is_whitespace() {
+                    break_at = probe + 1;
+                    break;
+                }
+            }
+        }
+        let mut spans: Vec<(String, Style)> = Vec::new();
+        for (ch, span_style) in &cells[index..break_at] {
+            if let Some(last) = spans.last_mut()
+                && last.1 == *span_style
+            {
+                last.0.push(*ch);
+                continue;
+            }
+            spans.push((ch.to_string(), *span_style));
+        }
+        trim_trailing_whitespace(&mut spans);
+        out.push(MdLine::spans(indent, spans));
+        index = break_at;
+        // 跳过下一物理行的行首空白。
+        while index < cells.len() && cells[index].0 == ' ' {
+            index += 1;
+        }
+    }
+}
+
+/// 去掉行尾空白分段（软换行产生的悬挂空格）。
+fn trim_trailing_whitespace(spans: &mut Vec<(String, Style)>) {
+    while let Some((value, _)) = spans.last() {
+        let trimmed = value.trim_end();
+        if trimmed.len() == value.len() {
+            break;
+        }
+        if trimmed.is_empty() {
+            spans.pop();
+        } else {
+            let trimmed = trimmed.to_string();
+            spans.last_mut().expect("last").0 = trimmed;
+            break;
+        }
+    }
 }
 
 /// 单个字符的显示宽度。

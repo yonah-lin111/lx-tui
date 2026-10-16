@@ -178,3 +178,103 @@ fn code_block_renders_arbitrary_fence() {
     assert!(joined.contains("return 1"));
     assert!(!joined.contains("```"));
 }
+
+/// 窄宽度下表格：方框网格不超宽、每行等宽、含边界字符、内容不丢。
+#[test]
+fn wrapped_table_never_exceeds_width_and_stays_aligned() {
+    let src = "| 序号 | 名称 | 类别 | 特点 |\n| --- | --- | --- | --- |\n| 1 | DeepSeek | AI助手 | 免费、支持长上下文 |\n| 2 | Python | 编程语言 | 简洁、生态丰富 |\n| 3 | 番茄 | 蔬菜/水果 | 富含维生素C |";
+    for width in [24u16, 30, 34, 40, 50, 58, 70] {
+        let lines = render_wrapped(src, width);
+        assert!(!lines.is_empty(), "宽度 {width} 应有内容");
+        let rows: Vec<usize> = lines.iter().map(MdLine::width).collect();
+        for (index, row) in rows.iter().enumerate() {
+            assert!(
+                *row <= usize::from(width),
+                "宽度 {width} 第 {index} 行超宽：{row}（{:?}）",
+                lines[index].text()
+            );
+        }
+        // 所有表格物理行应等宽（方框列对齐）。
+        for (index, row) in rows.iter().enumerate() {
+            assert_eq!(
+                *row,
+                rows[0],
+                "宽度 {width} 第 {index} 行宽度与首行不一致：{:?}",
+                lines[index].text()
+            );
+        }
+        let joined: String = lines
+            .iter()
+            .map(MdLine::text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for ch in ['┌', '┬', '┐', '├', '┼', '┤', '└', '┴', '┘'] {
+            assert!(joined.contains(ch), "宽度 {width} 缺少边界字符 {ch}");
+        }
+        // 内容不丢：表格内所有字符（去空白与方框字符）构成的多重集等于源单元格。
+        let flat: String = lines.iter().map(MdLine::text).collect::<Vec<_>>().join("");
+        let mut present: std::collections::BTreeMap<char, usize> =
+            std::collections::BTreeMap::new();
+        for ch in flat
+            .chars()
+            .filter(|ch| !ch.is_whitespace() && !"─│┌┬┐├┼┤└┴┘".contains(*ch))
+        {
+            *present.entry(ch).or_default() += 1;
+        }
+        let mut expected: std::collections::BTreeMap<char, usize> =
+            std::collections::BTreeMap::new();
+        for cell in [
+            "序号",
+            "名称",
+            "类别",
+            "特点",
+            "1",
+            "DeepSeek",
+            "AI助手",
+            "免费、支持长上下文",
+            "2",
+            "Python",
+            "编程语言",
+            "简洁、生态丰富",
+            "3",
+            "番茄",
+            "蔬菜/水果",
+            "富含维生素C",
+        ] {
+            for ch in cell.chars() {
+                *expected.entry(ch).or_default() += 1;
+            }
+        }
+        assert_eq!(present, expected, "宽度 {width} 表格内容多重集不一致");
+    }
+}
+
+/// 窄宽度下段落按词边界软换行；每行不超过宽度；超长不可断内容按列硬切。
+#[test]
+fn wrapped_paragraph_breaks_at_word_boundaries() {
+    let src = "This is a long English sentence that should wrap at word boundaries.";
+    let lines = render_wrapped(src, 20);
+    for line in &lines {
+        assert!(line.width() <= 20, "超宽：{:?}", line.text());
+    }
+    let joined = lines_text(&lines);
+    // 逐词归一后应还原原句（不拆词、不丢词）。
+    let normalize = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(normalize(&joined), normalize(src), "换行不丢词/不拆词");
+    // 超长不可断（无空白）内容按宽度切分且不超宽。
+    let long = "x".repeat(37);
+    let lines = render_wrapped(&long, 10);
+    assert_eq!(lines.len(), 4, "37 列按 10 列切成 4 行");
+    assert!(lines.iter().all(|line| line.width() <= 10));
+}
+
+/// 缩进的多行内容续行保持缩进，且不丢字符。
+#[test]
+fn wrapped_indented_lines_keep_indent() {
+    let src = "- 一级项目内容较长需要换行显示\n  - 二级项目内容也较长需要换行显示";
+    let lines = render_wrapped(src, 16);
+    assert!(lines.iter().all(|line| line.width() <= 16));
+    let flat: String = lines.iter().map(MdLine::text).collect();
+    assert!(flat.contains("二级项目内容"));
+    assert!(lines.iter().any(|line| line.indent == 2), "二级缩进保留");
+}

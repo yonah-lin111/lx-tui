@@ -69,10 +69,10 @@ pub(super) fn layout(area: Rect, status: &ChatStatus, rows: u16) -> StatusLayout
     }
 }
 
-/// 渲染状态区；返回实际占用行数。
+/// 渲染状态区；返回实际占用行数。`area` 为已与输入框对齐的状态行矩形。
 pub(super) fn render(grid: &mut Grid, area: Rect, lx: &Lx) -> u16 {
     let status = &lx.chat.status;
-    let rows = rows(area, status);
+    let rows = area.height.min(rows(area, status));
     let lay = layout(area, status, rows);
     if lay.area.height == 0 {
         return 0;

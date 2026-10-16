@@ -133,8 +133,8 @@ fn user_message_has_prefix_and_background() {
     let line0 = row_text(&buf, area, 0);
     assert!(line0.starts_with("> "), "用户消息前缀：{line0}");
     assert!(line0.contains("你好"));
-    // 整行铺用户底色（末列也带背景）。
-    let cell = buf.cell((19, 0)).expect("cell");
+    // 整行铺用户底色（内容列末列带背景；最后一列为滚动条预留列）。
+    let cell = buf.cell((18, 0)).expect("cell");
     assert_eq!(cell.style().bg, style::chat_user_bg().bg, "整块底色");
 }
 
@@ -212,7 +212,7 @@ fn thinking_header_rect_tracks_row_position() {
     let (_, _, header) = layout.thinking[0];
     assert_eq!(header.y, 7);
     assert_eq!(header.x, 3);
-    assert_eq!(header.width, 40);
+    assert_eq!(header.width, 40 - super::SCROLLBAR_COLUMNS);
 }
 
 /// 读取缓冲区某行文本（跳过宽字符占位格）。
@@ -231,4 +231,48 @@ fn row_text(buf: &Buffer, area: Rect, row: u16) -> String {
         }
     }
     out.trim_end().to_string()
+}
+
+#[test]
+fn narrow_width_table_is_not_deformed() {
+    let src = "| 序号 | 名称 | 类别 | 特点 |\n| --- | --- | --- | --- |\n| 1 | DeepSeek | AI助手 | 免费、支持长上下文 |\n| 2 | Python | 编程语言 | 简洁、生态丰富 |";
+    let lx = lx_with(vec![message("assistant", "complete", vec![text_part(src)])]);
+    for width in [30u16, 40, 50] {
+        let area = Rect::new(0, 0, width, 20);
+        let mut buf = Buffer::empty(area);
+        crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+        // 每行不超过内容宽度（扣除滚动条预留列），且表格边界字符不会跨行断裂。
+        let content_width = width - SCROLLBAR_COLUMNS;
+        for row in 0..12 {
+            let line = row_text(&buf, area, row);
+            let drawn: usize = line
+                .chars()
+                .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                .sum();
+            assert!(
+                drawn <= usize::from(content_width),
+                "宽度 {width} 第 {row} 行超宽：{line}"
+            );
+        }
+        // 右下角边界与左上角边界都在（方框未被折断）。
+        let joined = (0..12)
+            .map(|row| row_text(&buf, area, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains('┌'), "宽度 {width} 缺左上边界");
+        assert!(joined.contains('┘'), "宽度 {width} 缺右下边界");
+    }
+}
+
+#[test]
+fn history_layout_reserves_scrollbar_column() {
+    let lx = lx_with(vec![message(
+        "user",
+        "complete",
+        vec![text_part("你好世界你好世界")],
+    )]);
+    let area = Rect::new(0, 0, 20, 10);
+    let _layout = layout(area, &lx);
+    // thinking 头宽度应扣除滚动条预留列。
+    assert_eq!(super::content_rect(area).width, 20 - SCROLLBAR_COLUMNS);
 }

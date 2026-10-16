@@ -20,10 +20,11 @@ use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
     apply_block_button, apply_template_button, block_button_at, handle_agent_scrollbar_press,
-    handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, mention_item_at, pane_at,
-    pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
-    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_lx_history_scrollbar_press, handle_lx_input_scrollbar_press,
+    handle_prompt_scrollbar_press, handle_terminal_scrollbar_press,
+    handle_workspace_scrollbar_press, mention_item_at, pane_at, pane_boundary_draggable,
+    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
+    prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -444,6 +445,14 @@ pub(crate) fn handle_mouse_down_left(
                     mouse.row,
                 ) {
                     // 滚动条按下：已处理。
+                } else if handle_lx_history_scrollbar_press(
+                    state,
+                    pane,
+                    inner,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    // 历史滚动条按下：已处理。
                 } else {
                     update::begin_lx_selection(state, pane, row, col);
                 }

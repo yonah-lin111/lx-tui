@@ -307,7 +307,10 @@ pub(crate) fn handle_mouse_wheel(
                     .pane_anywhere(pane)
                     .and_then(|target| ui::main_content::lx::history_rect(inner, &target.lx))
                 && history_rect.contains((mouse.column, mouse.row).into())
-                && update::scroll_lx_history(state, pane, direction)
+                && let Some((total, visible)) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::history_rows(inner, &target.lx))
+                && update::scroll_lx_history(state, pane, direction, total, visible)
             {
                 *dirty = true;
                 return;

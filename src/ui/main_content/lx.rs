@@ -296,6 +296,16 @@ fn render_input_scrollbar(area: Rect, buf: &mut Buffer, lx: &Lx) {
     }
 }
 
+/// 把历史滚动条渲染到网格（贴右缘一列；透明底）。
+fn render_history_scrollbar(grid: &mut Grid, bar: &scrollbar::ScrollbarLayout) {
+    for y in bar.track.y..bar.track.bottom() {
+        grid.set(bar.track.x, y, '▕', style::muted());
+    }
+    for y in bar.thumb.y..bar.thumb.bottom() {
+        grid.set(bar.thumb.x, y, '▐', style::text());
+    }
+}
+
 /// lx 输入框文本区几何（绝对屏幕坐标）；供鼠标命中与拖拽选择换算。
 pub(crate) struct InputGeom {
     text_top: u16,
@@ -647,12 +657,9 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     }
 
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
-    // 聊天模式在输入框下方预留状态行（模型 · 供应商 · 上下文占用 + 停止控件）。
-    let status_rows = if lx.chat.messages.is_empty() {
-        0
-    } else {
-        status::rows(area, &lx.chat.status).min(area.height.saturating_sub(INPUT_MIN_BOX))
-    };
+    // 输入框下方常驻状态行（模型 · 供应商 · 上下文占用 + 停止控件），初始页面与聊天模式一致。
+    let status_rows =
+        status::rows(area, &lx.chat.status).min(area.height.saturating_sub(INPUT_MIN_BOX));
     let rows = lx.visual_rows();
     let total = rows.len().max(1);
     let max_box = (area
@@ -853,6 +860,19 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
         )
         .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     }
+    // 初始页面同样在输入框下方显示模型 · 供应商 · 上下文占用（与聊天模式一致）。
+    let input_bottom = lay.input.map(|input| input.bottom()).unwrap_or(area.y);
+    let status_rows = if lay.input.is_some() {
+        status::rows(area, &lx.chat.status).min(area.bottom().saturating_sub(input_bottom))
+    } else {
+        0
+    };
+    if status_rows > 0
+        && let Some(input) = lay.input
+    {
+        let status_rect = Rect::new(input.x, input_bottom, input.width, status_rows);
+        status::render(&mut grid, status_rect, lx);
+    }
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
         draw_panel(&mut grid, rect, panel);
     }
@@ -873,24 +893,26 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
     } else {
         area.bottom()
     };
+    // 历史区与输入框同宽对齐（列 = 输入框列），高度到输入框上沿。
     let history_rect = Rect::new(
-        area.x,
+        lay.input.map(|input| input.x).unwrap_or(area.x),
         area.y,
-        area.width,
+        lay.input.map(|input| input.width).unwrap_or(area.width),
         history_bottom.saturating_sub(area.y),
     );
     // 历史滚动：跟随底部时取末尾窗口。
     let history_layout = history::layout(history_rect, lx);
-    let scroll = if lx.chat.follow_bottom {
-        history_layout
-            .total_rows
-            .saturating_sub(usize::from(history_rect.height))
-    } else {
-        lx.chat
-            .history_scroll
-            .min(history_layout.total_rows.saturating_sub(1))
-    };
+    let scroll = history_scroll(lx, history_rect, history_layout.total_rows);
     history::render(&mut grid, history_rect, lx, scroll);
+    // 历史滚动条贴右缘一列（内容溢出时）。
+    if let Some(bar) = history::scrollbar(
+        history_rect,
+        history_layout.total_rows,
+        usize::from(history_rect.height),
+        scroll,
+    ) {
+        render_history_scrollbar(&mut grid, &bar);
+    }
 
     let mut cursor = None;
     if let Some(input) = lay.input
@@ -906,9 +928,13 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
         )
         .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     }
-    // 状态行在输入框下方。
+    // 状态行在输入框下方，与输入框同宽对齐。
     if status_rows > 0 {
-        let status_rect = Rect::new(area.x, input_bottom, area.width, status_rows);
+        let (sx, sw) = lay
+            .input
+            .map(|input| (input.x, input.width))
+            .unwrap_or((area.x, area.width));
+        let status_rect = Rect::new(sx, input_bottom, sw, status_rows);
         status::render(&mut grid, status_rect, lx);
     }
     // 面板：块命令 / 粘贴 / 提及 / `/` 命令。
@@ -927,7 +953,7 @@ pub enum LxChatHit {
     Stop,
 }
 
-/// 聊天历史区矩形（无消息返回 None）；滚轮/命中用。
+/// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
 pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     if lx.chat.messages.is_empty() {
         return None;
@@ -935,7 +961,45 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     let lay = layout(area, lx);
     let bottom = lay.input.map(|input| input.y).unwrap_or(area.bottom());
     let height = bottom.saturating_sub(area.y);
-    (height > 0).then(|| Rect::new(area.x, area.y, area.width, height))
+    if height == 0 {
+        return None;
+    }
+    // 与输入框同宽对齐：x/width 取输入框列（扣掉两端外边距），右侧含滚动条预留列。
+    let (x, width) = match lay.input {
+        Some(input) => (input.x, input.width),
+        None => (area.x, area.width),
+    };
+    Some(Rect::new(x, area.y, width, height))
+}
+
+/// 聊天历史滚动偏移：跟随底部时取末尾窗口，否则用状态里的偏移（钳到范围）。
+pub(crate) fn history_scroll(lx: &Lx, history_rect: Rect, total_rows: usize) -> usize {
+    let max_top = total_rows.saturating_sub(usize::from(history_rect.height));
+    if lx.chat.follow_bottom {
+        max_top
+    } else {
+        lx.chat.history_scroll.min(max_top)
+    }
+}
+
+/// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。
+pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
+    let history_rect = history_rect(area, lx)?;
+    let history_layout = history::layout(history_rect, lx);
+    let scroll = history_scroll(lx, history_rect, history_layout.total_rows);
+    history::scrollbar(
+        history_rect,
+        history_layout.total_rows,
+        usize::from(history_rect.height),
+        scroll,
+    )
+}
+
+/// 聊天历史的（渲染行数, 视口行数）；无消息时为 None。滚轮滚动按此钳制。
+pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
+    let history_rect = history_rect(area, lx)?;
+    let total = history::layout(history_rect, lx).total_rows;
+    Some((total, usize::from(history_rect.height)))
 }
 
 /// 聊天模式命中测试：thinking 头部 > 停止按钮。
@@ -965,15 +1029,7 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
     let bottom = lay.input.map(|input| input.y).unwrap_or(area.bottom());
     let history_rect = Rect::new(area.x, area.y, area.width, bottom.saturating_sub(area.y));
     let history_layout = history::layout(history_rect, lx);
-    let scroll = if lx.chat.follow_bottom {
-        history_layout
-            .total_rows
-            .saturating_sub(usize::from(history_rect.height))
-    } else {
-        lx.chat
-            .history_scroll
-            .min(history_layout.total_rows.saturating_sub(1))
-    };
+    let scroll = history_scroll(lx, history_rect, history_layout.total_rows);
     for (message_index, part_index, header) in history_layout.thinking {
         let offset = header.y.saturating_sub(history_rect.y);
         if (offset as usize) < scroll {

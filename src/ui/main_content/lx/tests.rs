@@ -85,10 +85,14 @@ fn entry_label_spans_a_gradient() {
 #[test]
 fn empty_input_box_is_minimal_height() {
     let area = Rect::new(0, 0, 60, 16);
-    let input = layout(area, &Lx::new()).input.expect("input block");
+    let lx = Lx::new();
+    let lay = layout(area, &lx);
+    let status_rows = status::rows(area, &lx.chat.status);
+    let input = lay.input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX);
     assert_eq!(input.x, area.x + MARGIN);
-    assert_eq!(input.y, area.bottom() - INPUT_MIN_BOX);
+    // 输入框下方常驻状态行。
+    assert_eq!(input.y, area.bottom() - status_rows - INPUT_MIN_BOX);
 }
 
 #[test]
@@ -98,9 +102,10 @@ fn multiline_input_grows_the_box() {
     lx.insert_char('a');
     lx.newline();
     lx.insert_char('b');
+    let status_rows = status::rows(area, &lx.chat.status);
     let input = layout(area, &lx).input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX + 1, "两行内容");
-    assert_eq!(input.y, area.bottom() - INPUT_MIN_BOX - 1);
+    assert_eq!(input.y, area.bottom() - status_rows - INPUT_MIN_BOX - 1);
 }
 
 #[test]
@@ -205,7 +210,10 @@ fn input_box_is_capped_at_forty_percent() {
         lx.insert_char('x');
     }
     let input = layout(area, &lx).input.expect("input");
-    assert_eq!(input.height, 40 * INPUT_MAX_PERCENT / 100, "封顶 40%");
+    // 输入框高度上限=内容区高度减去状态行后取 40%。
+    let expected = ((area.height - status::rows(area, &lx.chat.status)) * INPUT_MAX_PERCENT / 100)
+        .max(INPUT_MIN_BOX);
+    assert_eq!(input.height, expected, "封顶 40%");
 }
 
 #[test]
@@ -305,7 +313,7 @@ fn markdown_line_is_styled() {
     }
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
-    let row = area.bottom() - 2;
+    let row = area.bottom() - 3;
     let content_x = area.x + MARGIN + 2;
     // `#` 为标记（muted/dim），`Title` 为标题（黄色）。
     assert!(
@@ -325,8 +333,8 @@ fn cursor_is_relative_to_content_area() {
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
     assert!(buffer_text(&buf).contains("hi"));
-    // 行相对内容区：输入行是底部 3 行块的中行。
-    assert_eq!(cursor.0, area.height - 2);
+    // 行相对内容区：状态行占据底部，输入框内容行即倒数第 3 行。
+    assert_eq!(cursor.0, area.height - 3);
     assert_eq!(cursor.1, MARGIN + 2 + 2);
 }
 
@@ -339,8 +347,8 @@ fn cursor_follows_the_active_line() {
     lx.insert_char('b');
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
-    // 输入框高 4：内容行在倒数第 2、3 行；光标在第二行。
-    assert_eq!(cursor.0, area.height - 2);
+    // 行相对内容区：输入框高 4，内容首行在倒数第 3 行（状态行占最后一行）。
+    assert_eq!(cursor.0, area.height - 3);
     assert_eq!(cursor.1, MARGIN + 2 + 1);
 }
 
@@ -353,7 +361,7 @@ fn cursor_aligns_after_wide_chars() {
     }
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
-    let row = area.bottom() - 2;
+    let row = area.bottom() - 3;
     let content_x = area.x + MARGIN + 2;
     assert_eq!(buf[(content_x, row)].symbol(), "你");
     assert_eq!(
@@ -362,7 +370,7 @@ fn cursor_aligns_after_wide_chars() {
         "宽字符后续列标记跳过"
     );
     assert_eq!(buf[(content_x + 2, row)].symbol(), "谁");
-    assert_eq!(cursor, (area.height - 2, MARGIN + 2 + 4));
+    assert_eq!(cursor, (area.height - 3, MARGIN + 2 + 4));
 }
 
 #[test]
@@ -381,7 +389,7 @@ fn copy_text_keeps_wide_chars_once() {
     for ch in "你谁".chars() {
         lx.insert_char(ch);
     }
-    let row = i32::from(area.height - 2);
+    let row = i32::from(area.height - 3);
     let text = copy_text(area, &lx, ((row, MARGIN), (row, area.width - 1)));
     assert_eq!(text, "> 你谁");
 }
@@ -459,7 +467,12 @@ fn wrapped_input_caps_height_and_shows_scrollbar() {
     let mut lx = Lx::new();
     let width = area.width - 2 * MARGIN - INPUT_PREFIX - INPUT_SCROLLBAR;
     lx.resize(width, 100);
-    let cap = usize::from((area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX) - 2).max(1);
+    let cap = usize::from(
+        ((area.height - status::rows(area, &lx.chat.status)) * INPUT_MAX_PERCENT / 100)
+            .max(INPUT_MIN_BOX)
+            - 2,
+    )
+    .max(1);
     lx.insert_str(&"x".repeat(usize::from(width) * (cap + 3)));
     assert!(lx.visual_rows().len() > cap, "视觉行超过可视上限");
     assert_eq!(layout(area, &lx).input_visible, cap, "输入框高度封顶");
@@ -869,4 +882,91 @@ fn slash_panel_renders_ascii_only() {
         assert!(command.description().is_ascii(), "命令描述不得含中文");
         assert!(command.tag().is_ascii(), "来源标签 ASCII");
     }
+}
+
+#[test]
+fn initial_page_shows_status_line_below_input() {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut lx = Lx::new();
+    lx.chat.status = crate::app::state::lx::chat::ChatStatus {
+        model_name: Some("deepseek-v4.1-flash".into()),
+        provider_name: Some("9router-lx-t".into()),
+        context_limit: Some(1_000_000),
+        input_tokens: Some(2_000),
+        context_percent: Some(0),
+        streaming: false,
+        omitted_turns: None,
+    };
+    let lay = layout(area, &lx);
+    let input = lay.input.expect("input");
+    // 输入框下方仍有一行状态（初始页面无消息也显示）。
+    assert!(input.bottom() < area.bottom(), "状态行占位");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains("deepseek-v4.1-flash") && text.contains("9router-lx-t"),
+        "初始页面显示模型 · 供应商：{text}"
+    );
+    assert!(text.contains("context"), "初始页面显示上下文占用：{text}");
+}
+
+#[test]
+fn chat_history_scrollbar_geometry_appears_when_overflowing() {
+    use crate::app::state::{ChatMessageView, ChatPartView, LxChat};
+    let area = Rect::new(0, 0, 40, 6);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    for index in 0..12 {
+        chat.messages.push(ChatMessageView {
+            id: format!("m{index}"),
+            role: "user".into(),
+            status: "complete".into(),
+            turn_index: index,
+            parts: vec![ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: format!("消息 {index}"),
+                provider_metadata_json: None,
+            }],
+            model_label: None,
+            error_code: None,
+        });
+    }
+    lx.chat = chat;
+    let bar = history_scrollbar(area, &lx).expect("溢出时有滚动条几何");
+    // 滚动条贴历史区（与输入框同宽）右缘一列。
+    let input = layout(area, &lx).input.expect("input");
+    assert_eq!(bar.track.x, input.right() - 1, "滚动条在输入框右缘内一列");
+    assert!(bar.total > bar.visible);
+}
+
+#[test]
+fn overflowing_history_draws_scrollbar_glyphs() {
+    use crate::app::state::{ChatMessageView, ChatPartView, LxChat};
+    let area = Rect::new(0, 0, 40, 10);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    for index in 0..12 {
+        chat.messages.push(ChatMessageView {
+            id: format!("m{index}"),
+            role: "user".into(),
+            status: "complete".into(),
+            turn_index: index,
+            parts: vec![ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: format!("消息 {index}"),
+                provider_metadata_json: None,
+            }],
+            model_label: None,
+            error_code: None,
+        });
+    }
+    lx.chat = chat;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains('▐') || text.contains('▕'),
+        "溢出时历史滚动条可见：{text}"
+    );
 }
