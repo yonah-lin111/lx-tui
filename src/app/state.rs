@@ -28,7 +28,7 @@ pub use lx::{
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceRow, current_workspace_identity, home_dir,
-    tab_label, unique_workspace_name, workspace_label, workspace_name,
+    path_tail_two, tab_label, unique_workspace_name, workspace_label, workspace_name,
 };
 
 /// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
@@ -356,6 +356,14 @@ impl AppState {
             .flat_map(|workspace| workspace.tabs.iter())
             .flat_map(|tab| tab.layout.pane_ids())
             .collect()
+    }
+
+    /// 是否存在正在生成（流中）的 lx 窗格；驱动 loading 转轮。
+    pub fn has_streaming_lx(&self) -> bool {
+        self.all_pane_ids().into_iter().any(|pane| {
+            self.pane_anywhere(pane)
+                .is_some_and(|target| target.lx.chat.status.streaming)
+        })
     }
 
     /// 当前激活工作区内全部窗格标识（按标签与树序）；Agent 探测扫描用。

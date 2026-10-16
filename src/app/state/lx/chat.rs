@@ -272,6 +272,10 @@ pub struct LxChat {
     pub expanded_thinking: Vec<(usize, usize)>,
     /// 历史视图滚动偏移（跟随底部时忽略）。
     pub history_scroll: usize,
+    /// loading 转轮帧序号（按时间推进，仅流中递增）。
+    pub loading_frame: usize,
+    /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
+    pub jump_bottom_hover: bool,
 }
 
 impl Default for LxChat {
@@ -295,6 +299,8 @@ impl LxChat {
             status: ChatStatus::default(),
             expanded_thinking: Vec::new(),
             history_scroll: 0,
+            loading_frame: 0,
+            jump_bottom_hover: false,
         }
     }
 

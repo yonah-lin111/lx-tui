@@ -303,9 +303,9 @@ pub(crate) fn handle_mouse_wheel(
             }
             // 聊天历史区滚轮：滚动历史视口（保留输入框滚轮给输入缓冲区）。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
-                && let Some(history_rect) = state
-                    .pane_anywhere(pane)
-                    .and_then(|target| ui::main_content::lx::history_rect(inner, &target.lx))
+                && let Some(history_rect) = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::history_wheel_region(inner, &target.lx)
+                })
                 && history_rect.contains((mouse.column, mouse.row).into())
                 && let Some((total, visible)) = state
                     .pane_anywhere(pane)

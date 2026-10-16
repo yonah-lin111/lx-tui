@@ -96,7 +96,8 @@ fn assistant_message_has_no_label_and_shows_body() {
 }
 
 #[test]
-fn streaming_status_marker_is_shown() {
+fn streaming_message_has_no_list_marker() {
+    // 流中不再在消息列表插入标记（改用输入框上方 loading 行）。
     let lx = lx_with(vec![message(
         "assistant",
         "streaming",
@@ -109,7 +110,8 @@ fn streaming_status_marker_is_shown() {
         .map(|row| row_text(&buf, area, row))
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(joined.contains("[streaming]"), "流中显示标记：{joined}");
+    assert!(!joined.contains("[streaming]"), "流中不显示标记：{joined}");
+    assert!(joined.contains("部分"), "正文仍绘制：{joined}");
 }
 
 #[test]

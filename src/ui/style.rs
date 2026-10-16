@@ -473,6 +473,39 @@ pub fn chat_context_dot(percent: u8) -> Style {
     agent_context_dot(percent)
 }
 
+/// 状态行模型名高亮：金色（Indexed 220）加粗，避开边框青/蓝。
+pub fn chat_model() -> Style {
+    Style::default()
+        .fg(Color::Indexed(220))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 状态行上下文占用文字：亮白（Indexed 252），与金色模型名、分档圆点区分。
+pub fn chat_context_text() -> Style {
+    Style::default().fg(Color::Indexed(252))
+}
+
+/// lx 输入框上方 loading 行：转轮用品牌天蓝（Indexed 117）加粗。
+pub fn chat_loading_spinner() -> Style {
+    Style::default()
+        .fg(Color::Indexed(117))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// lx 输入框上方 loading 行文案：次要信息。
+pub fn chat_loading_label() -> Style {
+    muted()
+}
+
+/// loading 行右端「回到底部」按钮：常态次要信息、悬停亮白。
+pub fn chat_jump_bottom(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(252))
+    } else {
+        muted()
+    }
+}
+
 /// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。
 pub fn supple_command() -> Style {
     Style::default()

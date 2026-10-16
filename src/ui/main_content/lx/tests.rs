@@ -87,12 +87,11 @@ fn empty_input_box_is_minimal_height() {
     let area = Rect::new(0, 0, 60, 16);
     let lx = Lx::new();
     let lay = layout(area, &lx);
-    let status_rows = status::rows(area, &lx.chat.status);
     let input = lay.input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX);
     assert_eq!(input.x, area.x + MARGIN);
-    // 输入框下方常驻状态行。
-    assert_eq!(input.y, area.bottom() - status_rows - INPUT_MIN_BOX);
+    // 输入框下沿贴窗格底部（状态绘制在底边框上，不再单独占行）。
+    assert_eq!(input.bottom(), area.bottom());
 }
 
 #[test]
@@ -102,10 +101,9 @@ fn multiline_input_grows_the_box() {
     lx.insert_char('a');
     lx.newline();
     lx.insert_char('b');
-    let status_rows = status::rows(area, &lx.chat.status);
     let input = layout(area, &lx).input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX + 1, "两行内容");
-    assert_eq!(input.y, area.bottom() - status_rows - INPUT_MIN_BOX - 1);
+    assert_eq!(input.bottom(), area.bottom());
 }
 
 #[test]
@@ -210,9 +208,8 @@ fn input_box_is_capped_at_forty_percent() {
         lx.insert_char('x');
     }
     let input = layout(area, &lx).input.expect("input");
-    // 输入框高度上限=内容区高度减去状态行后取 40%。
-    let expected = ((area.height - status::rows(area, &lx.chat.status)) * INPUT_MAX_PERCENT / 100)
-        .max(INPUT_MIN_BOX);
+    // 输入框高度上限=内容区高度取 40%。
+    let expected = (area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX);
     assert_eq!(input.height, expected, "封顶 40%");
 }
 
@@ -313,7 +310,7 @@ fn markdown_line_is_styled() {
     }
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
-    let row = area.bottom() - 3;
+    let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
     // `#` 为标记（muted/dim），`Title` 为标题（黄色）。
     assert!(
@@ -333,8 +330,8 @@ fn cursor_is_relative_to_content_area() {
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
     assert!(buffer_text(&buf).contains("hi"));
-    // 行相对内容区：状态行占据底部，输入框内容行即倒数第 3 行。
-    assert_eq!(cursor.0, area.height - 3);
+    // 行相对内容区：输入框下沿贴底，内容行即倒数第 2 行（底边框为最后一行）。
+    assert_eq!(cursor.0, area.height - 2);
     assert_eq!(cursor.1, MARGIN + 2 + 2);
 }
 
@@ -347,8 +344,8 @@ fn cursor_follows_the_active_line() {
     lx.insert_char('b');
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
-    // 行相对内容区：输入框高 4，内容首行在倒数第 3 行（状态行占最后一行）。
-    assert_eq!(cursor.0, area.height - 3);
+    // 行相对内容区：输入框高 4，末行内容在倒数第 2 行（最后一行是底边框）。
+    assert_eq!(cursor.0, area.height - 2);
     assert_eq!(cursor.1, MARGIN + 2 + 1);
 }
 
@@ -361,7 +358,7 @@ fn cursor_aligns_after_wide_chars() {
     }
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
-    let row = area.bottom() - 3;
+    let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
     assert_eq!(buf[(content_x, row)].symbol(), "你");
     assert_eq!(
@@ -370,7 +367,7 @@ fn cursor_aligns_after_wide_chars() {
         "宽字符后续列标记跳过"
     );
     assert_eq!(buf[(content_x + 2, row)].symbol(), "谁");
-    assert_eq!(cursor, (area.height - 3, MARGIN + 2 + 4));
+    assert_eq!(cursor, (area.height - 2, MARGIN + 2 + 4));
 }
 
 #[test]
@@ -389,7 +386,7 @@ fn copy_text_keeps_wide_chars_once() {
     for ch in "你谁".chars() {
         lx.insert_char(ch);
     }
-    let row = i32::from(area.height - 3);
+    let row = i32::from(area.height - 2);
     let text = copy_text(area, &lx, ((row, MARGIN), (row, area.width - 1)));
     assert_eq!(text, "> 你谁");
 }
@@ -467,12 +464,7 @@ fn wrapped_input_caps_height_and_shows_scrollbar() {
     let mut lx = Lx::new();
     let width = area.width - 2 * MARGIN - INPUT_PREFIX - INPUT_SCROLLBAR;
     lx.resize(width, 100);
-    let cap = usize::from(
-        ((area.height - status::rows(area, &lx.chat.status)) * INPUT_MAX_PERCENT / 100)
-            .max(INPUT_MIN_BOX)
-            - 2,
-    )
-    .max(1);
+    let cap = usize::from((area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX) - 2).max(1);
     lx.insert_str(&"x".repeat(usize::from(width) * (cap + 3)));
     assert!(lx.visual_rows().len() > cap, "视觉行超过可视上限");
     assert_eq!(layout(area, &lx).input_visible, cap, "输入框高度封顶");
@@ -893,7 +885,7 @@ fn slash_panel_renders_ascii_only() {
 }
 
 #[test]
-fn initial_page_shows_status_line_below_input() {
+fn initial_page_shows_status_on_input_bottom_border() {
     let area = Rect::new(0, 0, 80, 24);
     let mut lx = Lx::new();
     lx.chat.status = crate::app::state::lx::chat::ChatStatus {
@@ -907,8 +899,8 @@ fn initial_page_shows_status_line_below_input() {
     };
     let lay = layout(area, &lx);
     let input = lay.input.expect("input");
-    // 输入框下方仍有一行状态（初始页面无消息也显示）。
-    assert!(input.bottom() < area.bottom(), "状态行占位");
+    // 输入框下沿贴窗格底部（状态绘制在底边框上，不再单独占行）。
+    assert_eq!(input.bottom(), area.bottom());
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
@@ -994,4 +986,106 @@ fn model_panel_shows_provider_and_model_names_not_ids() {
         "不应显示供应商 id：{text}"
     );
     assert!(!text.contains("cbcn/"), "不应显示模型 id：{text}");
+}
+
+// ===== 输入框上方聊天栏（loading 转轮 + 回到底部按钮）=====
+
+use crate::app::state::{ChatMessageView, ChatPartView, LxChat};
+
+/// 构造带一条 assistant 流中消息的 lx 状态。
+fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "m0".into(),
+        role: "assistant".into(),
+        status: if streaming { "streaming" } else { "complete" }.into(),
+        turn_index: 0,
+        parts: vec![ChatPartView {
+            kind: crate::chat::events::PartKind::Text,
+            content: "答".into(),
+            provider_metadata_json: None,
+        }],
+        model_label: None,
+        error_code: None,
+    });
+    chat.follow_bottom = follow_bottom;
+    chat.status.streaming = streaming;
+    chat.loading_frame = 0;
+    lx.chat = chat;
+    lx
+}
+
+#[test]
+fn streaming_shows_loading_bar_above_input() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(true, true);
+    let lay = layout(area, &lx);
+    let input = lay.input.expect("input");
+    let bar = lay.chat_bar.expect("流中显示聊天栏");
+    assert_eq!(bar.bottom(), input.y, "聊天栏紧贴输入框上沿");
+    assert_eq!(bar.height, 1);
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains(text::LX_LOADING_LABEL),
+        "显示 loading 文案：{text}"
+    );
+    assert!(
+        text::LX_LOADING_FRAMES
+            .iter()
+            .any(|frame| text.contains(*frame)),
+        "显示转轮帧：{text}"
+    );
+}
+
+#[test]
+fn idle_following_hides_chat_bar() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(false, true);
+    assert!(
+        layout(area, &lx).chat_bar.is_none(),
+        "空闲且跟随底部：无聊天栏"
+    );
+}
+
+#[test]
+fn scrolled_up_shows_jump_bottom_button() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(false, false);
+    let rect = chat_bar::jump_bottom_rect(area, &lx).expect("上滚时显示回到底部按钮");
+    let bar = layout(area, &lx).chat_bar.expect("chat bar");
+    assert_eq!(rect.right(), bar.right() - 1, "按钮贴聊天栏右端（留 1 列）");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains(text::LX_JUMP_BOTTOM), "显示 ↓ 按钮：{text}");
+}
+
+#[test]
+fn jump_bottom_hit_matches_button_rect() {
+    use crate::app::state::AppState;
+    let area = Rect::new(0, 0, 60, 16);
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx = streaming_lx(false, false);
+    }
+    // 直接构造窗格矩形（内缩 1 边框），命中按钮内部一格。
+    let rects = [(pane, Rect::new(0, 0, 62, 18))];
+    let inner = crate::layout::pane_inner_rect(rects[0].1);
+    let button =
+        chat_bar::jump_bottom_rect(inner, &state.pane_anywhere(pane).unwrap().lx).expect("button");
+    assert_eq!(
+        chat_bar::jump_bottom_hit(&rects, &state, button.x, button.y),
+        Some(pane),
+        "命中回到底部按钮"
+    );
+    assert_eq!(
+        chat_bar::jump_bottom_hit(&rects, &state, 0, 0),
+        None,
+        "未命中"
+    );
+    let _ = area;
 }

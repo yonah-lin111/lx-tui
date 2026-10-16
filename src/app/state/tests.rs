@@ -24,6 +24,14 @@ fn workspace_label_takes_last_segment_and_home() {
 }
 
 #[test]
+fn path_tail_two_keeps_last_two_segments_with_fallbacks() {
+    assert_eq!(path_tail_two(Path::new("/a/b/lx-tui")), "b/lx-tui");
+    assert_eq!(path_tail_two(Path::new("/lx-tui")), "lx-tui", "单段用全部");
+    assert_eq!(path_tail_two(Path::new("/a/b/c/d")), "c/d", "只取末两段");
+    assert_eq!(path_tail_two(Path::new("/")), "/", "无段回退完整路径");
+}
+
+#[test]
 fn tab_label_uses_custom_name_or_position() {
     assert_eq!(tab_label(0, None), "tab 1");
     assert_eq!(tab_label(4, None), "tab 5");

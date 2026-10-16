@@ -988,3 +988,78 @@ fn history_scrollbar_set_offset_marks_follow_at_bottom() {
         assert!(chat.follow_bottom);
     }
 }
+
+#[test]
+fn jump_lx_history_bottom_rearms_follow() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 6);
+    let pane = state.active_tab().layout.focus();
+    set_lx_history_scroll(&mut state, pane, 0, 12, 3);
+    {
+        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+        assert!(!chat.follow_bottom, "上滚后不跟随");
+    }
+    assert!(jump_lx_history_bottom(&mut state, pane));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert!(chat.follow_bottom, "回到底部恢复跟随");
+    assert!(!jump_lx_history_bottom(&mut state, pane), "已在底部无变化");
+}
+
+#[test]
+fn hover_lx_jump_bottom_tracks_state() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 1);
+    let pane = state.active_tab().layout.focus();
+    assert!(hover_lx_jump_bottom(&mut state, pane, true));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .jump_bottom_hover,
+        "悬停置位"
+    );
+    assert!(
+        !hover_lx_jump_bottom(&mut state, pane, true),
+        "重复置位无变化"
+    );
+    assert!(hover_lx_jump_bottom(&mut state, pane, false));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .jump_bottom_hover,
+        "离开清空"
+    );
+}
+
+#[test]
+fn advance_lx_loading_only_when_streaming() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 1);
+    let pane = state.active_tab().layout.focus();
+    // 空闲：不推进。
+    assert!(!advance_lx_loading(&mut state));
+    // 流中：推进帧号。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .status
+        .streaming = true;
+    assert!(state.has_streaming_lx());
+    assert!(advance_lx_loading(&mut state));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .loading_frame,
+        1
+    );
+}

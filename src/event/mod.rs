@@ -100,6 +100,9 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// 空闲等待：只由输入或 PTY 输出唤醒。
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
 
+/// lx loading 转轮每帧间隔（对齐 codex motion.rs 的 100ms）。
+const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
+
 /// 同步入口：构造 tokio 运行时并阻塞到主循环结束；持久化服务由入口构造并移交。
 pub fn run(
     tui: &mut Tui,
@@ -142,6 +145,8 @@ async fn run_loop(
     let mut events = EventStream::new();
     let mut dirty = true;
     let mut last_draw = Instant::now();
+    // lx loading 转轮的下一帧时刻；无流中窗格时为 None（空闲不轮询）。
+    let mut spinner_at: Option<Instant> = None;
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
     let mut cwd_check: Option<Instant> = None;
@@ -246,6 +251,19 @@ async fn run_loop(
         if update::tick(state, Instant::now()) {
             dirty = true;
         }
+        // lx loading 转轮：流中每 `LX_LOADING_FRAME_MS` 推进一帧（无流时不计时）。
+        let streaming = state.has_streaming_lx();
+        if streaming {
+            let at = spinner_at.get_or_insert_with(|| Instant::now() + LOADING_FRAME_INTERVAL);
+            if Instant::now() >= *at {
+                spinner_at = Some(*at + LOADING_FRAME_INTERVAL);
+                if update::advance_lx_loading(state) {
+                    dirty = true;
+                }
+            }
+        } else {
+            spinner_at = None;
+        }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             tui.draw(|frame| ui::render(frame, state, &config))?;
@@ -261,6 +279,9 @@ async fn run_loop(
         };
         if let Some(deadline) = update::next_deadline(state) {
             wait = wait.min(deadline.saturating_duration_since(Instant::now()));
+        }
+        if let Some(at) = spinner_at {
+            wait = wait.min(at.saturating_duration_since(Instant::now()));
         }
         if let Some(at) = cwd_check {
             wait = wait.min(at.saturating_duration_since(Instant::now()));

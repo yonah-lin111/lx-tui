@@ -409,6 +409,9 @@ pub(crate) fn handle_mouse_down_left(
                         ui::main_content::lx::LxChatHit::Stop => {
                             update::stop_stream(state, pane);
                         }
+                        ui::main_content::lx::LxChatHit::JumpBottom => {
+                            update::jump_lx_history_bottom(state, pane);
+                        }
                     }
                     update::clear_lx_selection(state);
                     *dirty = true;

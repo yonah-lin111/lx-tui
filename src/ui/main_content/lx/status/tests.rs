@@ -1,4 +1,4 @@
-//! 状态行测试：未知上下文显示 `--`、模型 · 供应商截断、上下文组件、停止按钮几何。
+//! 状态测试：未知上下文显示 `--`、模型 · 供应商截断、上下文组件、停止控件几何。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -31,7 +31,7 @@ fn lx_with_status(status: ChatStatus) -> Lx {
     lx
 }
 
-/// 渲染状态行并返回该行文本（去掉行尾空格）。
+/// 渲染状态到输入框底边框行并返回该行文本（去掉行尾空格）。
 fn render_line(lx: &Lx, width: u16) -> String {
     let area = Rect::new(0, 0, width, 1);
     let mut grid = super::super::test_grid(area);
@@ -72,46 +72,64 @@ fn wide_status_single_row_with_stop_button() {
         Some(2_000),
         true,
     ));
-    let area = Rect::new(0, 0, 80, 1);
-    let lay = layout(area, &lx.chat.status, rows(area, &lx.chat.status));
+    let border = Rect::new(0, 0, 80, 1);
+    let lay = layout(border, &lx.chat.status);
     assert_eq!(lay.area.height, 1);
     assert!(lay.stop.is_some(), "流中显示停止按钮");
     let line = render_line(&lx, 80);
     assert!(
-        line.starts_with("deepseek-v4.1-flash · 9router-lx-t"),
-        "行首模型 · 供应商：{line}"
+        line.starts_with(" deepseek-v4.1-flash · 9router-lx-t"),
+        "行首模型 · 供应商（前导空格）：{line}"
     );
-    assert!(line.contains("context 0%"), "含上下文组件：{line}");
+    assert!(line.ends_with("[■]"), "停止控件贴右端：{line}");
+    assert!(line.contains("● context 0%"), "含上下文组件：{line}");
 }
 
 #[test]
 fn idle_status_hides_stop_button() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(1000), None, false));
-    let area = Rect::new(0, 0, 80, 1);
-    let lay = layout(area, &lx.chat.status, rows(area, &lx.chat.status));
+    let border = Rect::new(0, 0, 80, 1);
+    let lay = layout(border, &lx.chat.status);
     assert!(lay.stop.is_none(), "空闲不显示停止按钮");
 }
 
 #[test]
-fn narrow_status_uses_two_rows() {
+fn narrow_border_hides_stop_but_keeps_context() {
     let lx = lx_with_status(status(
         Some("Very Long Model"),
         Some("Very Long Provider"),
         Some(128_000),
         Some(42_000),
-        false,
+        true,
     ));
-    let area = Rect::new(0, 0, 30, 2);
-    assert_eq!(rows(area, &lx.chat.status), 2, "窄窗格两行");
-    let lay = layout(area, &lx.chat.status, 2);
-    assert_eq!(lay.area.height, 2);
-    assert_eq!(lay.label.height, 2);
+    // 宽度不足以容纳停止控件（`> STOP_WIDTH + 5`）时不给停止控件。
+    let border = Rect::new(0, 0, 9, 1);
+    let lay = layout(border, &lx.chat.status);
+    assert_eq!(lay.area.height, 1, "状态恒占底边框一行");
+    assert!(lay.stop.is_none(), "窄边框不给停止控件");
 }
 
 #[test]
-fn zero_height_area_yields_no_status() {
+fn medium_border_keeps_context_and_stop() {
+    let lx = lx_with_status(status(
+        Some("Very Long Model"),
+        Some("Very Long Provider"),
+        Some(128_000),
+        Some(42_000),
+        true,
+    ));
+    let border = Rect::new(0, 0, 30, 1);
+    let lay = layout(border, &lx.chat.status);
+    assert!(lay.stop.is_some(), "中等宽度给停止控件");
+    assert!(lay.pill.width > 0, "上下文组件仍占位");
+    let line = render_line(&lx, 30);
+    assert!(line.contains("● context 32%"), "含上下文组件：{line}");
+}
+
+#[test]
+fn zero_height_border_yields_no_status() {
     let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
-    let lay = layout(Rect::new(0, 0, 80, 0), &lx.chat.status, 0);
+    let lay = layout(Rect::new(0, 0, 80, 0), &lx.chat.status);
     assert_eq!(lay.area.height, 0);
     assert!(lay.stop.is_none());
 }
@@ -125,7 +143,10 @@ fn long_model_name_is_truncated_before_provider() {
         None,
         false,
     ));
-    let line = render_line(&lx, 30);
+    let line = render_line(&lx, 34);
     assert!(line.contains("prov"), "供应商保留：{line}");
-    assert!(line.contains('…'), "模型名截断：{line}");
+    assert!(
+        !line.contains("very-long-model-name-that-never-fits"),
+        "模型名被裁剪：{line}"
+    );
 }

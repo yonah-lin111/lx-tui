@@ -855,5 +855,46 @@ pub fn set_lx_history_scroll(
     before != clamped || was_following != target.lx.chat.follow_bottom
 }
 
+/// 回到底部：把历史视口钉到最新一屏（跟随底部）并清除悬停态；返回是否发生变化。
+pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+        return false;
+    }
+    let changed = !target.lx.chat.follow_bottom || target.lx.chat.jump_bottom_hover;
+    target.lx.chat.follow_bottom = true;
+    target.lx.chat.jump_bottom_hover = false;
+    changed
+}
+
+/// 设置「回到底部」按钮悬停态；返回是否变化。
+pub fn hover_lx_jump_bottom(state: &mut AppState, pane: PaneId, hovered: bool) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.chat.jump_bottom_hover == hovered {
+        return false;
+    }
+    target.lx.chat.jump_bottom_hover = hovered;
+    true
+}
+
+/// 推进流中窗格的 loading 转轮帧；返回是否需要重绘（仅在有流中的 lx 窗格时）。
+pub fn advance_lx_loading(state: &mut AppState) -> bool {
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        if let Some(target) = state.pane_mut_anywhere(pane)
+            && target.view == crate::app::state::PaneView::Lx
+            && target.lx.chat.status.streaming
+        {
+            target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
+            changed = true;
+        }
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests;

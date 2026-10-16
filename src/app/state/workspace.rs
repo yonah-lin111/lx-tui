@@ -155,6 +155,25 @@ pub fn workspace_name() -> String {
     current_workspace_identity().1
 }
 
+/// 路径末两段（`a/b`），用于 lx 窗格顶边框右侧 `ws:` 值。
+///
+/// 不足两段时用现有的全部段；无可用段（根路径等）时回退完整路径显示。
+pub fn path_tail_two(path: &Path) -> String {
+    let mut segments: Vec<&str> = path
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        })
+        .filter(|name| !name.is_empty())
+        .collect();
+    let tail = segments.split_off(segments.len().saturating_sub(2));
+    if tail.is_empty() {
+        return path.display().to_string();
+    }
+    tail.join("/")
+}
+
 /// 当前进程 cwd 与其自动工作区名；读不到 cwd 时 cwd 为 None。
 pub fn current_workspace_identity() -> (Option<PathBuf>, String) {
     match std::env::current_dir() {

@@ -242,7 +242,8 @@ fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> {
     (screen_y < rect.bottom()).then_some(screen_y)
 }
 
-/// assistant 状态标记行：仅失败/中断/流中显示；完成态不显示（移除 `assistant` 标签）。
+/// assistant 状态标记行：仅失败/中断显示；完成态与流中不显示（流中改用输入框上方
+/// loading 行，移除消息列表里的 `assistant`/`streaming` 提示）。
 fn status_marker(message: &crate::app::state::ChatMessageView) -> Option<String> {
     if message.role == "user" {
         return None;
@@ -259,7 +260,6 @@ fn status_marker(message: &crate::app::state::ChatMessageView) -> Option<String>
                 None => format!("[{}]", text::LX_CHAT_FAILED_LABEL),
             },
         ),
-        "streaming" => Some(format!("[{}]", text::LX_CHAT_STREAMING_LABEL)),
         _ => None,
     }
 }

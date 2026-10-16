@@ -57,8 +57,10 @@ pub fn agent_location(tab_index: usize) -> String {
 pub const PROMPT_TITLE: &str = "Prompt Manager";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
+/// 工作区路径标记前缀；prompt 底边框与 lx 窗格顶边框共用（前缀强调色、值 muted）。
+pub const WORKSPACE_PREFIX: &str = "ws:";
 /// prompt 底边框右侧的工作区路径名前缀。
-pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
+pub const PROMPT_WORKSPACE_PREFIX: &str = WORKSPACE_PREFIX;
 /// prompt 底边框 linked worktree 标记前缀。
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
@@ -172,6 +174,11 @@ pub const LX_TOGGLE_LX: &str = "[lx]";
 /// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
+/// lx 页输入框上方 loading 行的转轮帧（braille，对齐 codex 的 10 帧）与文案。
+pub const LX_LOADING_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+pub const LX_LOADING_LABEL: &str = "Working";
+/// loading 行右端的回到底部按钮（单宽箭头）。
+pub const LX_JUMP_BOTTOM: &str = "↓";
 /// lx 页三个入口标签。
 pub const LX_ENTRY_NATIVE: &str = "Native Agent";
 pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
@@ -514,13 +521,10 @@ pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
-/// 消息中断/失败标记。
+/// 消息中断/失败标记（流中改用输入框上方 loading 行，不再有列表内提示）。
 pub const LX_CHAT_INTERRUPTED_LABEL: &str = "interrupted";
 pub const LX_CHAT_FAILED_LABEL: &str = "failed";
 pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
-/// 状态行：未知 token 的占位与未知上限的占位。
-pub const LX_CHAT_ASSISTANT_LABEL: &str = "assistant";
-pub const LX_CHAT_STREAMING_LABEL: &str = "streaming";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 状态行控件文案（逐格强调色绘制）。
 pub const LX_CHAT_STOP_BUTTON: &str = "[■]";
@@ -899,27 +903,20 @@ pub fn pane_title(id: PaneId, osc_title: Option<&str>, cwd_label: Option<&str>) 
     }
 }
 
-/// lx pane 底边左侧的 cwd 显示文本：完整路径放得下则整段；否则取末段；末段仍超宽则按
-/// 终端显示列截断并加 `…`。可用宽度连省略号也放不下时返回 None（不绘制）。
-pub fn pane_bottom_path(path: &std::path::Path, available: usize) -> Option<String> {
+/// lx 窗格顶边框右侧 `ws:` 值：路径末两段（`a/b`）；不足两段用现有全部段，
+/// 无可用段回退完整路径；超出可用宽度按列宽中间省略。可用宽度连省略号也放不下时返回 None。
+pub fn workspace_path_label(path: &std::path::Path, available: usize) -> Option<String> {
     if available == 0 {
         return None;
     }
-    let full = path.to_string_lossy();
-    if full.width() <= available {
-        return Some(full.into_owned());
+    let label = crate::app::state::path_tail_two(path);
+    if label.is_empty() {
+        return None;
     }
-    let segment = path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .filter(|name| !name.is_empty());
-    if let Some(segment) = segment {
-        if segment.width() <= available {
-            return Some(segment.into_owned());
-        }
-        return (available >= 2).then(|| ellipsize_middle(&segment, available));
+    if label.width() <= available {
+        return Some(label);
     }
-    (available >= 2).then(|| ellipsize_middle(&full, available))
+    (available >= 2).then(|| ellipsize_middle(&label, available))
 }
 
 #[cfg(test)]

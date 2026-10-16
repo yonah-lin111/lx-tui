@@ -182,6 +182,17 @@ pub(crate) fn handle_mouse_moved(
     if update::set_toast_hover(state, hovering_toast) {
         *dirty = true;
     }
+    // lx 输入框上方「回到底部」按钮悬停高亮：不在按钮上即清空（含离开窗格）。
+    let jump_hover = if hovering_toast {
+        None
+    } else {
+        ui::main_content::lx::chat_bar::jump_bottom_hit(rects, state, mouse.column, mouse.row)
+    };
+    for (id, _) in rects {
+        if update::hover_lx_jump_bottom(state, *id, jump_hover == Some(*id)) {
+            *dirty = true;
+        }
+    }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
     let tree_hover = if hovering_toast || state.prompt_collapsed || !update::prompt_tree_mode(state)
     {
