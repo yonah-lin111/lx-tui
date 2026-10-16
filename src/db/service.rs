@@ -393,6 +393,15 @@ impl Persistence {
                     .with_db(|db| db.finish(&workspace, &assistant_id, &parts, &outcome, usage));
                 update::on_finish_ack(state, &key, success.is_some())
             }
+            Effect::CheckpointChatTurn {
+                workspace,
+                assistant_id,
+                parts,
+            } => {
+                // 幂等覆盖；失败静默（终态 finish 仍会写最终内容）。
+                self.with_db(|db| db.checkpoint(&workspace, &assistant_id, &parts));
+                false
+            }
             Effect::ListChatSessions { pane } => {
                 let workspace = state
                     .workspace_cwd_for_pane(pane)

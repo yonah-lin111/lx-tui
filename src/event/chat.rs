@@ -23,7 +23,13 @@ use crate::event::AppEvent;
 pub struct ChatStreams {
     /// 取消信号发送端。
     cancels: HashMap<RequestKey, watch::Sender<bool>>,
+    /// checkpoint 合并状态：最近一次落盘时刻 + 累计字节。
+    checkpoints: HashMap<RequestKey, (std::time::Instant, usize)>,
 }
+
+/// checkpoint 落盘间隔与累计字节阈值（设计 5.3）。
+const CHECKPOINT_INTERVAL: Duration = Duration::from_millis(500);
+const CHECKPOINT_BYTES: usize = 4 * 1024;
 
 /// 网络回投事件。
 #[derive(Debug)]
@@ -241,14 +247,66 @@ pub fn handle_net_event(
     event: ChatNetEvent,
 ) -> bool {
     match event {
-        ChatNetEvent::Delta { key, deltas } => update::on_stream_delta(state, &key, &deltas),
+        ChatNetEvent::Delta { key, deltas } => {
+            // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
+            let bytes: usize = deltas
+                .iter()
+                .filter_map(|delta| match delta {
+                    ChatDelta::Part(part) => Some(part.text.len()),
+                    _ => None,
+                })
+                .sum();
+            let entry = streams
+                .checkpoints
+                .entry(key.clone())
+                .or_insert_with(|| (std::time::Instant::now(), 0));
+            entry.1 += bytes;
+            let due = entry.1 >= CHECKPOINT_BYTES || entry.0.elapsed() >= CHECKPOINT_INTERVAL;
+            if due {
+                *entry = (std::time::Instant::now(), 0);
+                schedule_checkpoint(state, &key);
+            }
+            update::on_stream_delta(state, &key, &deltas)
+        }
         ChatNetEvent::Finished { key, reason, usage } => {
-            // 清除在途取消句柄。
+            // 清除在途取消句柄与 checkpoint 状态。
             streams.cancels.remove(&key);
-            // 终态前把最后一批 delta 已在 Delta 事件消费；此处只走收尾。
+            streams.checkpoints.remove(&key);
             update::on_stream_finished(state, &key, &reason, usage)
         }
     }
+}
+
+/// 入队一次 checkpoint：把窗格当前内存 parts 快照交给持久化层。
+fn schedule_checkpoint(state: &mut AppState, key: &RequestKey) {
+    let Some(target) = state.pane_anywhere(key.pane) else {
+        return;
+    };
+    let assistant_id = match &target.lx.chat.request {
+        crate::app::state::RequestState::Streaming {
+            key: active,
+            assistant_id,
+        } if active == key => assistant_id.clone(),
+        _ => return,
+    };
+    let parts = target
+        .lx
+        .chat
+        .messages
+        .last()
+        .filter(|message| message.id == assistant_id)
+        .map(|message| crate::db::chat::chat_part_views(&message.parts))
+        .unwrap_or_default();
+    let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
+        return;
+    };
+    state
+        .effects
+        .push(crate::app::effects::Effect::CheckpointChatTurn {
+            workspace,
+            assistant_id,
+            parts,
+        });
 }
 
 /// 窗格聊天视图 → DB 消息记录（上下文装配输入）。

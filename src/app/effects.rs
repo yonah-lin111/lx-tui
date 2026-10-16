@@ -146,6 +146,12 @@ pub enum Effect {
         outcome: crate::db::chat::TurnOutcome,
         usage: crate::db::chat::Usage,
     },
+    /// 流中 checkpoint：完整 parts 快照幂等覆盖 streaming 行（≤500ms/4KiB 合并）。
+    CheckpointChatTurn {
+        workspace: PathBuf,
+        assistant_id: String,
+        parts: Vec<crate::db::chat::ChatPart>,
+    },
     /// 读取当前工作区会话列表（`/resume` 首页）。
     ListChatSessions { pane: crate::layout::PaneId },
     /// 加载单个会话及有序消息（恢复旧会话）。
