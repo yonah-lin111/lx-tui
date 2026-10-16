@@ -386,3 +386,41 @@ fn single_body_row_keeps_one_separator() {
         "末行即下边框：{text:#?}"
     );
 }
+
+/// 空首列的续行不画分割线：同组多行视觉合并为一块（对齐 markdown「同组多行、首列留空」写法）。
+#[test]
+fn continuation_rows_merge_into_one_block() {
+    let src = "| 类别 | 项 |\n| --- | --- |\n| A | 1 |\n|  | 2 |\n|  | 3 |\n| B | 4 |";
+    let text: Vec<String> = render(src).iter().map(MdLine::text).collect();
+    // 分割线：表头后 1 条 + A 组后 1 条 = 2 条（B 组只有一项，末行与下边框合并）。
+    let seps = text.iter().filter(|line| line.starts_with("├")).count();
+    assert_eq!(seps, 2, "续行不产生分割线：{text:#?}");
+    // 承接行之间没有分割线：A 组三行紧邻。
+    let a_first = text
+        .iter()
+        .position(|line| line.contains("A"))
+        .expect("A 行");
+    let b_last = text
+        .iter()
+        .position(|line| line.contains('3'))
+        .expect("3 行");
+    for line in &text[a_first..=b_last] {
+        assert!(
+            !line.starts_with("├"),
+            "同组续行之间不应有分割线：{text:#?}"
+        );
+    }
+    // 内容仍完整。
+    assert!(text.iter().any(|line| line.contains('1')));
+    assert!(text.iter().any(|line| line.contains('3')));
+    assert!(text.iter().any(|line| line.contains('B')));
+}
+
+/// 每行首列都非空时：每条数据行之间都有分割线（保持上一版行为）。
+#[test]
+fn non_continuation_rows_keep_separators() {
+    let src = "| A | B |\n| --- | --- |\n| 1 | x |\n| 2 | y |\n| 3 | z |";
+    let text: Vec<String> = render(src).iter().map(MdLine::text).collect();
+    let seps = text.iter().filter(|line| line.starts_with("├")).count();
+    assert_eq!(seps, 3, "表头后 + 每行间共 3 条：{text:#?}");
+}

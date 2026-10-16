@@ -234,16 +234,21 @@ fn grid_table(
         lines.push(MdLine::spans(0, spans));
     }
     // 表头之后、以及每一条数据行之后都补一条水平分割线（末尾与下边框合并）。
+    // 第一列为空的行视为上一条目的**续行**（对齐 markdown 里「同组多行、首列留空」的写法）：
+    // 其上方不画分割线，使同组内容视觉合并为一块。
     lines.push(MdLine::plain(
         0,
         border("├", "─", "┼", "┤"),
         style::markdown_rule(),
     ));
-    for (index, row) in body.iter().enumerate() {
-        for spans in row_lines(row, style::text()) {
+    for index in 0..body.len() {
+        for spans in row_lines(&body[index], style::text()) {
             lines.push(MdLine::spans(0, spans));
         }
-        if index + 1 < body.len() {
+        let next_is_continuation = body
+            .get(index + 1)
+            .is_none_or(|next| is_continuation_row(next));
+        if index + 1 < body.len() && !next_is_continuation {
             lines.push(MdLine::plain(
                 0,
                 border("├", "─", "┼", "┤"),
@@ -256,6 +261,11 @@ fn grid_table(
         border("└", "─", "┴", "┘"),
         style::markdown_rule(),
     ));
+}
+
+/// 续行判定：逻辑行第一列为空（首列留空即视为上一条目的续行，不单独画分割线）。
+fn is_continuation_row(row: &[String]) -> bool {
+    row.first().is_none_or(|cell| cell.trim().is_empty())
 }
 
 /// 单元格自然宽度：折叠行内标记后取最宽行（`<br>` 分行）。
