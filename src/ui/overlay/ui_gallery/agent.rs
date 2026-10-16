@@ -227,8 +227,12 @@ fn tokens_lines() -> Vec<SampleLine> {
 }
 
 /// 在 `rect` 内渲染 agent 步骤的 lx 直角风格样例。
+///
+/// 单套样例的高度随步骤而变（`mode`/`compact` 仅头部 + token 两行），故只要求
+/// 有可用行（`height >= 1`）即可绘制，不能像四套叠放时那样要求最小高度，否则
+/// 矮步骤会被整体吞掉。
 pub fn render_agent_appearance(buf: &mut Buffer, rect: Rect, step: AgentStepId) {
-    if rect.width < 6 || rect.height < 4 {
+    if rect.width < 6 || rect.height == 0 {
         return;
     }
     let mut y = rect.y;

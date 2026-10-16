@@ -204,6 +204,23 @@ fn render_does_not_panic_on_every_step_and_size() {
 }
 
 #[test]
+fn every_step_renders_at_its_natural_height() {
+    // 回归：单套样例的矮步骤（write/compact/mode 仅 2–3 行）曾因 `height < 4`
+    // 的守卫被整体吞掉。这里用真实 `appearance_size` 给出的高度渲染，断言首行文本
+    // （图标 + 动词）确实画出。
+    let available = Rect::new(0, 0, 80, 200);
+    for step in AgentStepId::ALL {
+        let (width, height) = agent_appearance_size(step, available);
+        let all = render_step(step, width, height);
+        let first = step_lines(step).first().map(line_text).unwrap_or_default();
+        assert!(
+            !first.is_empty() && all.contains(&first),
+            "步骤 {step:?}（宽 {width} 高 {height}）自然高度下未画出首行 {first:?}：\n{all}"
+        );
+    }
+}
+
+#[test]
 fn render_is_borderless_and_does_not_use_panel_background() {
     // 无边框：不出现圆角/直线边框字符，且不铺浮层面板底色。
     let mut buf = Buffer::empty(Rect::new(0, 0, 60, 50));
