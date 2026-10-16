@@ -138,13 +138,13 @@ fn header_colors_icon_verb_and_param_distinctly() {
     assert_eq!(header.spans[0].1, style::agent_icon());
     assert_eq!(header.spans[1].1, style::agent_verb());
     assert_eq!(header.spans[2].1, style::agent_param());
-    // 图标刻意不加粗（几何字形加粗时可能触发字体回退、反而显小）。
+    // 图标品牌粉且加粗（从标题里跳出）。
     assert!(
-        !header.spans[0]
+        header.spans[0]
             .1
             .add_modifier
             .contains(ratatui::style::Modifier::BOLD),
-        "header 图标不应加粗"
+        "header 图标应加粗"
     );
     assert!(
         header.spans[2]
@@ -175,6 +175,75 @@ fn todo_uses_claude_checkbox_trio() {
     assert!(joined.contains(text::agent::TODO_DONE));
     assert!(joined.contains(text::agent::TODO_IN_PROGRESS));
     assert!(joined.contains(text::agent::TODO_PENDING));
+}
+
+#[test]
+fn completed_todo_line_is_fully_crossed_out() {
+    // done 行的标记与文本都应带删除线（整行划线，而非只划文本）。
+    let done = step_lines(AgentStepId::Todo)
+        .into_iter()
+        .find(|line| line_text(line).contains("add agent folder"))
+        .expect("done line");
+    let crossed = |s: &Style| {
+        s.add_modifier
+            .contains(ratatui::style::Modifier::CROSSED_OUT)
+    };
+    assert!(
+        done.spans
+            .iter()
+            .all(|(value, style)| value.trim().is_empty() || crossed(style)),
+        "完成项整行（标记 + 文本）应删除线：{:?}",
+        done.spans
+    );
+}
+
+#[test]
+fn read_header_carries_line_range_and_no_body() {
+    let lines = step_lines(AgentStepId::Read);
+    // 只有头部 + token 两行：不展示读取到的内容。
+    assert_eq!(lines.len(), 2, "read 应只有头部与 token 页脚");
+    let header = line_text(&lines[0]);
+    assert!(header.contains("(lines "), "read 标题应含行范围：{header}");
+    assert!(header.contains('–'), "行范围应形如 `(lines 1–2)`：{header}");
+}
+
+#[test]
+fn edit_shows_diff_count_only_without_body() {
+    let lines = step_lines(AgentStepId::Edit);
+    // 头部 + diff 计数行 + token：无 diff 正文行。
+    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert_eq!(lines.len(), 3, "edit 应只保留 diff 计数行：{joined}");
+    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(joined.contains(text::agent::EDIT_DIFF_ADD));
+    assert!(joined.contains(text::agent::EDIT_DIFF_PATH));
+}
+
+#[test]
+fn search_hides_matches() {
+    let lines = step_lines(AgentStepId::Search);
+    // 只有头部 + token：不展示搜索命中的内容。
+    assert_eq!(lines.len(), 2, "search 应只有头部与 token 页脚");
+    let joined: String = lines.iter().map(line_text).collect::<Vec<_>>().join("\n");
+    assert!(!joined.contains("pub fn text()"), "不应展示命中内容");
+}
+
+#[test]
+fn thinking_shows_title_only() {
+    let lines = step_lines(AgentStepId::Thinking);
+    assert_eq!(lines.len(), 2, "thinking 应只有标题与 token 页脚");
+    let header = line_text(&lines[0]);
+    assert!(header.contains(text::agent::DETAIL_THINKING));
+    assert!(
+        !header.contains("Plan the module"),
+        "不应展示思考正文：{header}"
+    );
+}
+
+#[test]
+fn mcp_uses_benzene_icon() {
+    assert_eq!(text::agent::ICON_MCP, "⌬");
+    let header = line_text(&step_lines(AgentStepId::Mcp)[0]);
+    assert!(header.contains("⌬"), "mcp 标题应使用新图标：{header}");
 }
 
 #[test]

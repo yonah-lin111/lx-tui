@@ -37,7 +37,7 @@ pub const ICON_WEB: &str = "⌘";
 pub const ICON_THINKING: &str = "~";
 pub const ICON_SUBAGENT: &str = "∞";
 pub const ICON_TODO: &str = "≡";
-pub const ICON_MCP: &str = "⇄";
+pub const ICON_MCP: &str = "⌬";
 pub const ICON_COMPACT: &str = "-";
 pub const ICON_MODE: &str = "⇆";
 pub const ICON_FINAL: &str = "●";
@@ -78,12 +78,14 @@ pub const VERB_QUESTION: &str = "Asked";
 
 /// 步骤主参数（紧跟动词后的细节串）。
 pub const DETAIL_EXEC: &str = "git status";
-pub const DETAIL_READ: &str = "src/ui/style.rs";
+/// read 主参数：路径 + 读取的行范围（`path (lines 1–2)`）。
+pub const DETAIL_READ: &str = "src/ui/style.rs (lines 1–2)";
 pub const DETAIL_EDIT: &str = "src/app/state.rs";
 pub const DETAIL_WRITE: &str = "docs/notes.md";
 pub const DETAIL_SEARCH: &str = "\"fn render\" in src/";
 pub const DETAIL_WEB: &str = "\"ratatui 0.30\"";
-pub const DETAIL_THINKING: &str = "for 2.4s";
+/// thinking 主参数：这次思考的标题（只显示标题，不展开思考内容）。
+pub const DETAIL_THINKING: &str = "split module then verify";
 pub const DETAIL_SUBAGENT: &str = "explorer";
 pub const DETAIL_TODO: &str = "3 steps";
 pub const DETAIL_MCP: &str = "filesystem · read_file";
@@ -95,22 +97,12 @@ pub const DETAIL_QUESTION: &str = "Overwrite the existing file?";
 
 /// 步骤子行（直角树连接下的细节）。
 pub const BODY_EXEC: &[&str] = &["On branch dev", "nothing to commit, working tree clean"];
-pub const BODY_READ: &[&str] = &[
-    "1  //! semantic style tokens",
-    "2  pub fn text() -> Style {",
-];
 /// edit 的 diff 计数行（`+`/`-` 分色）与紧随的正文行。
 pub const EDIT_DIFF_ADD: &str = "+12";
 pub const EDIT_DIFF_DEL: &str = "-4";
 pub const EDIT_DIFF_PATH: &str = "src/app/state.rs";
-pub const EDIT_BODY: &[&str] = &["2  pub struct AppState {"];
 pub const BODY_WRITE: &[&str] = &["docs/notes.md (+18 lines)"];
-pub const BODY_SEARCH: &[&str] = &[
-    "src/ui/style.rs:14  pub fn text()",
-    "src/ui/style.rs:19  pub fn muted()",
-];
 pub const BODY_WEB: &[&str] = &["ratatui 0.30 released", "docs.rs/ratatui/0.30"];
-pub const BODY_THINKING: &[&str] = &["Plan the module split, then verify with tests."];
 /// subagent 子任务：只显示“进行中”的那一步（一个直角 icon 右侧一条）。
 pub const SUBAGENT_IN_PROGRESS: &str = "read src/ui/style.rs";
 pub const BODY_MCP: &[&str] = &["filesystem · read_file", "ok · 128 lines"];
@@ -135,19 +127,19 @@ pub const EXEC_DESC: &[&str] = &[
     "under a right-angle connector; token footer below.",
 ];
 pub const READ_DESC: &[&str] = &[
-    "File / directory read: path plus the first lines,",
-    "with the same token footer as every other step.",
+    "File / directory read: the path and the line range",
+    "read, with the same token footer as every other step.",
 ];
 pub const EDIT_DESC: &[&str] = &[
-    "File edit: path, +/- line counts and a small diff,",
-    "then the step token footer.",
+    "File edit: path plus the +/- line counts (no diff",
+    "body), then the step token footer.",
 ];
 pub const WRITE_DESC: &[&str] = &[
     "New or overwritten file: path and added line count,",
     "then the step token footer.",
 ];
 pub const SEARCH_DESC: &[&str] = &[
-    "Content / glob search: pattern, scope and matches,",
+    "Content / glob search: only the query and scope,",
     "then the step token footer.",
 ];
 pub const WEB_DESC: &[&str] = &[
@@ -155,8 +147,8 @@ pub const WEB_DESC: &[&str] = &[
     "then the step token footer.",
 ];
 pub const THINKING_DESC: &[&str] = &[
-    "Reasoning step: a muted, collapsed summary line",
-    "with the step token footer.",
+    "Reasoning step: just the title, no reasoning body,",
+    "then the step token footer.",
 ];
 pub const SUBAGENT_DESC: &[&str] = &[
     "Sub-agent (Task) spawn: the single in-progress",
@@ -198,13 +190,16 @@ pub const MARKDOWN_DESC: &[&str] = &[
     "quotes, code, tables, rules, images and inline styles.",
 ];
 
-/// `markdown` item 的渲染器每套候选的语言标记（代码块右上角的语言名）。
+/// `markdown` item 的渲染器代码块的语言标记（代码块右上角的语言名）。
 pub const MD_LANG: &str = "rust";
+
+/// `markdown` item 引用块前缀（`>` 而非左边框）。
+pub const MD_QUOTE_MARKER: &str = ">";
 
 /// `markdown` item：一份覆盖全部 markdown 格式的样例文档。
 ///
 /// 用真实 markdown 源码写出，渲染器负责把标记“吃掉”并按主流 coding agent
-/// 的做法重排；同一份文档喂给四套候选，便于横向对比渲染差异。
+/// 的做法重排（含代码块的轻量语法高亮）。
 pub const MD_SAMPLE: &str = "\
 # Heading 1
 ## Heading 2
@@ -220,7 +215,11 @@ pub const MD_SAMPLE: &str = "\
 - [ ] open task
 > quoted line one
 ```rust
-fn main() {}
+// compute the greeting
+fn main() {
+    let name: String = \"world\".to_string();
+    println!(\"hello, {name} {42}\");
+}
 ```
     indented code
 | Left | Center | Right |

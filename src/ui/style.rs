@@ -131,15 +131,13 @@ pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
-/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）高亮，让图标从标题里跳出。
-///
-/// 刻意**不加粗**：图标多为几何/技术符号（`≣`/`≡`/`⌕`/`⌘`…），不少等宽字体只在常规
-/// 字重里画这些字形，加粗时终端会回退到别的字体、反而显得更小。加粗留给红标题
-/// （[`agent_fail`]）与状态标记。
+/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗高亮，让图标从标题里跳出。
 ///
 /// 失败步骤例外——整行走 [`agent_fail`] 变红。
 pub fn agent_icon() -> Style {
-    Style::default().fg(Color::Indexed(218))
+    Style::default()
+        .fg(Color::Indexed(218))
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Agent 步骤标题的固定动词（`Ran` / `Read` / `Edited`…）：lx 品牌天蓝（Indexed 117）。
@@ -275,6 +273,33 @@ pub fn markdown_inline_code() -> Style {
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
 pub fn markdown_code_block() -> Style {
     text()
+}
+
+/// 代码高亮：关键字（`fn`/`const`/`class`/`return`…）——品牌品红加粗，最抢眼。
+pub fn code_keyword() -> Style {
+    Style::default()
+        .fg(Color::Indexed(213))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 代码高亮：字符串与字符字面量——绿。
+pub fn code_string() -> Style {
+    Style::default().fg(Color::Indexed(114))
+}
+
+/// 代码高亮：数字字面量——橙。
+pub fn code_number() -> Style {
+    Style::default().fg(Color::Indexed(215))
+}
+
+/// 代码高亮：注释——次要信息（dim）。
+pub fn code_comment() -> Style {
+    muted()
+}
+
+/// 代码高亮：类型名（首字母大写的标识符）——品牌天蓝。
+pub fn code_type() -> Style {
+    Style::default().fg(Color::Indexed(117))
 }
 
 /// markdown 引用内容。

@@ -79,8 +79,9 @@ fn sample_renders_full_document_without_leaking_markers() {
     assert!(joined.contains("bold") && joined.contains("strike"));
     // 围栏被吃掉。
     assert!(!joined.contains("```"), "泄漏围栏");
-    // 代码正文在。
-    assert!(joined.contains("fn main() {}"));
+    // 代码正文在（含关键字）。
+    assert!(joined.contains("fn main()"));
+    assert!(joined.contains("hello"));
     // 表格内容在。
     assert!(joined.contains("Left") && joined.contains("Center") && joined.contains("Right"));
     // 链接文字与 URL 都在。
@@ -108,10 +109,43 @@ fn table_is_bordered() {
 }
 
 #[test]
-fn code_block_wraps_in_a_bar_and_shows_language() {
-    let joined = lines_text(&markdown_lines((1, 1, 1)));
+fn code_block_shows_language_and_syntax_colors() {
+    let lines = markdown_lines((1, 1, 1));
+    let joined = lines_text(&lines);
     assert!(joined.contains(text::agent::MD_LANG), "应显示代码语言标记");
-    assert!(joined.contains('│'), "代码块应带直角竖条");
+    // 代码块内的关键字/字符串做了分色（至少出现关键字样式）。
+    let code_spans: Vec<&(String, Style)> = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|(_, style)| {
+            *style == style::code_keyword()
+                || *style == style::code_string()
+                || *style == style::code_number()
+                || *style == style::code_comment()
+                || *style == style::code_type()
+        })
+        .collect();
+    assert!(
+        !code_spans.is_empty(),
+        "代码块应做语法高亮（关键字/字符串/数字/注释/类型分色）"
+    );
+    // 正文文本仍完整保留（拼接即源码）。
+    assert!(joined.contains("fn main()"), "代码正文应保留");
+}
+
+#[test]
+fn blockquote_uses_angle_prefix_not_left_bar() {
+    let lines = markdown_lines((1, 1, 1));
+    let quote = lines
+        .iter()
+        .find(|line| lines_text(std::slice::from_ref(line)).contains("quoted line one"))
+        .expect("quote line");
+    let text = lines_text(std::slice::from_ref(quote));
+    assert!(
+        text.starts_with(&format!("{} ", text::agent::MD_QUOTE_MARKER)),
+        "引用应以 `> ` 开头：{text}"
+    );
+    assert!(!text.contains('│'), "引用不应使用左边框：{text}");
 }
 
 #[test]

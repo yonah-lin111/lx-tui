@@ -78,7 +78,7 @@ fn step_lines(step: AgentStepId) -> Vec<SampleLine> {
     if step == AgentStepId::Todo {
         lines.extend(todo_lines());
     } else if step == AgentStepId::Edit {
-        lines.extend(edit_diff_line());
+        lines.push(edit_diff_line());
     } else {
         for body in body_lines(step) {
             lines.push(detail_line(body));
@@ -139,43 +139,37 @@ fn detail_line(body: &str) -> SampleLine {
     )
 }
 
-/// edit 的子行：直角连接符 + 分色的 `+N` / `-M` 计数 + 路径，再一行 diff 正文。
-fn edit_diff_line() -> Vec<SampleLine> {
-    vec![
-        SampleLine::spans(
-            0,
-            vec![
-                (
-                    format!("  {} ", text::agent::MARKER_TREE_LEAF),
-                    style::agent_connector(),
-                ),
-                (text::agent::EDIT_DIFF_ADD.to_string(), style::agent_added()),
-                (" ".to_string(), style::agent_step_detail()),
-                (
-                    text::agent::EDIT_DIFF_DEL.to_string(),
-                    style::agent_removed(),
-                ),
-                ("  ".to_string(), style::agent_step_detail()),
-                (
-                    text::agent::EDIT_DIFF_PATH.to_string(),
-                    style::agent_step_detail(),
-                ),
-            ],
-        ),
-        SampleLine::plain(4, text::agent::EDIT_BODY[0], style::text()),
-    ]
+/// edit 的子行：直角连接符 + 分色的 `+N` / `-M` 计数 + 路径（不再展示 diff 正文）。
+fn edit_diff_line() -> SampleLine {
+    SampleLine::spans(
+        0,
+        vec![
+            (
+                format!("  {} ", text::agent::MARKER_TREE_LEAF),
+                style::agent_connector(),
+            ),
+            (text::agent::EDIT_DIFF_ADD.to_string(), style::agent_added()),
+            (" ".to_string(), style::agent_step_detail()),
+            (
+                text::agent::EDIT_DIFF_DEL.to_string(),
+                style::agent_removed(),
+            ),
+            ("  ".to_string(), style::agent_step_detail()),
+            (
+                text::agent::EDIT_DIFF_PATH.to_string(),
+                style::agent_step_detail(),
+            ),
+        ],
+    )
 }
 
-/// todo 的三态复选框（取 claude 一组：`✔`/`◼`/`◻`；done 绿 + 删除线、进行中强调、
+/// todo 的三态复选框（取 claude 一组：`✔`/`◼`/`◻`；done 整行绿 + 删除线、进行中强调、
 /// 待办为次要信息）。
 fn todo_lines() -> Vec<SampleLine> {
-    let todo = |marker: &str, body: &str, marker_style: Style| -> SampleLine {
+    let todo = |marker: &str, body: &str, style: Style| -> SampleLine {
         SampleLine::spans(
             2,
-            vec![
-                (format!("{marker} "), marker_style),
-                (body.to_string(), style::agent_step_detail()),
-            ],
+            vec![(format!("{marker} "), style), (body.to_string(), style)],
         )
     };
     let done_style = style::agent_ok().add_modifier(ratatui::style::Modifier::CROSSED_OUT);
@@ -388,19 +382,20 @@ fn body_lines(step: AgentStepId) -> &'static [&'static str] {
     use text::agent;
     match step {
         AgentStepId::Exec => agent::BODY_EXEC,
-        AgentStepId::Read => agent::BODY_READ,
-        AgentStepId::Edit => agent::EDIT_BODY,
         AgentStepId::Write => agent::BODY_WRITE,
-        AgentStepId::Search => agent::BODY_SEARCH,
         AgentStepId::Web => agent::BODY_WEB,
-        AgentStepId::Thinking => agent::BODY_THINKING,
         AgentStepId::Mcp => agent::BODY_MCP,
         AgentStepId::Final => agent::BODY_FINAL,
         AgentStepId::Error => agent::BODY_ERROR,
         AgentStepId::Question => agent::BODY_QUESTION,
-        // 这些步骤在 `step_lines` 里单独展开：
-        // subagent 的子任务各带 token 行；todo/tokens 用自定义渲染；markdown 走渲染器。
-        AgentStepId::Subagent
+        // 这些步骤不展示子行内容（read 只给行范围、search 不给命中、thinking 只给
+        // 标题、edit 用 diff 计数行），或在 `step_lines` 里单独展开
+        // （subagent / todo / tokens 自定义，markdown 走渲染器）。
+        AgentStepId::Read
+        | AgentStepId::Edit
+        | AgentStepId::Search
+        | AgentStepId::Thinking
+        | AgentStepId::Subagent
         | AgentStepId::Todo
         | AgentStepId::Compact
         | AgentStepId::Mode

@@ -7,14 +7,17 @@
 //! 引用、围栏/缩进代码块、表格（对齐）、水平线、图片，以及行内
 //! 粗体/斜体/粗斜体/删除线/行内代码/链接/自动链接/裸 URL。
 //!
-//! 采用 lx 直角风格：标题隐藏 `#`、列表用 `•`、引用与代码块带直角竖条 `│`、
-//! 表格用方框网格；任务列表复用 claude 一组复选框（`[x]`/`[ ]`）。
+//! 采用 lx 直角风格：标题隐藏 `#`、列表用 `•`、引用用 `>`（不用左边框）、
+//! 代码块做轻量语法高亮；表格用方框网格；任务列表复用 claude 一组复选框
+//! （`[x]`/`[ ]`）。
 
 use ratatui::style::Style;
 
 use crate::ui::{style, text};
 
 use super::SampleLine;
+
+mod highlight;
 
 /// 渲染整个样例文档为若干行（含末尾 token 页脚）。
 pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
@@ -187,7 +190,7 @@ fn indented_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> 
     index
 }
 
-/// 渲染代码块：每行前置直角竖条，语言作为 muted 首行。
+/// 渲染代码块：每行前置直角竖条，语言作为 muted 首行；代码正文按语言做轻量语法高亮。
 fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<SampleLine>) {
     if let Some(lang) = lang {
         lines.push(SampleLine::spans(
@@ -199,17 +202,13 @@ fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<SampleLine>) {
         ));
     }
     for line in body {
-        lines.push(SampleLine::spans(
-            0,
-            vec![
-                (format!("{BAR_MARKER} "), style::markdown_rule()),
-                ((*line).to_string(), style::markdown_code_block()),
-            ],
-        ));
+        let mut spans = vec![(format!("{BAR_MARKER} "), style::markdown_rule())];
+        spans.extend(highlight::highlight_line(lang, line));
+        lines.push(SampleLine::spans(0, spans));
     }
 }
 
-/// 引用块：收集连续 `>` 行，用直角竖条作前缀。
+/// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框）。
 fn blockquote(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
     let mut index = start;
     while index < source.len() {
@@ -221,7 +220,10 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usi
         lines.push(SampleLine::spans(
             0,
             vec![
-                (format!("{BAR_MARKER} "), style::markdown_marker()),
+                (
+                    format!("{} ", text::agent::MD_QUOTE_MARKER),
+                    style::markdown_marker(),
+                ),
                 (body.to_string(), style::markdown_quote()),
             ],
         ));
