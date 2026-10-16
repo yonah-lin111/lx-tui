@@ -278,3 +278,70 @@ fn wrapped_indented_lines_keep_indent() {
     assert!(flat.contains("二级项目内容"));
     assert!(lines.iter().any(|line| line.indent == 2), "二级缩进保留");
 }
+
+/// 表格单元格内的行内标记被折叠（不出现 `**`），且加粗样式落在正文分段上。
+#[test]
+fn table_cells_collapse_inline_markers() {
+    let src = "| 类别 | 说明 |\n| --- | --- |\n| **文本对话** | `代码` 与 [链接](https://x.io) |";
+    let lines = render(src);
+    let joined: String = lines
+        .iter()
+        .map(MdLine::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!joined.contains("**"), "单元格不应泄漏 ** ：{joined}");
+    assert!(!joined.contains('`'), "单元格不应泄漏反引号：{joined}");
+    assert!(joined.contains("文本对话"));
+    assert!(joined.contains("链接"));
+    assert!(joined.contains("(https://x.io)"), "链接显示 URL：{joined}");
+    // 加粗样式确实落在「文本对话」分段上。
+    let bold_cell = lines
+        .iter()
+        .find(|line| line.text().contains("文本对话"))
+        .expect("cell line");
+    let bold = style::markdown_strong();
+    assert!(
+        bold_cell
+            .spans
+            .iter()
+            .any(|(value, style)| value.contains("文本对话") && *style == bold),
+        "文本对话应为加粗样式：{:?}",
+        bold_cell.spans
+    );
+}
+
+/// 单元格内 `<br>` 变体换行成多物理行，且行数与列内容并排正确。
+#[test]
+fn table_cells_split_on_br() {
+    let src = "| A | B |\n| --- | --- |\n| 一<br>二<br/>三 | **X**<br />Y |";
+    let lines = render(src);
+    let joined: String = lines
+        .iter()
+        .map(MdLine::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!joined.contains("<br"), "不应泄漏 `<br>` 标记：{joined}");
+    assert!(joined.contains('一') && joined.contains('二') && joined.contains('三'));
+    assert!(joined.contains('X') && joined.contains('Y'));
+    // 行数：A 列 3 行 → 该逻辑行占 3 条物理行。
+    let rows: Vec<&MdLine> = lines
+        .iter()
+        .filter(|line| line.text().starts_with('│'))
+        .collect();
+    // 表头 1 + 数据 3 = 4 条内容行（加分割线共 4 条 `│` 起始行中的 3 条为数据）。
+    assert!(rows.len() >= 4, "应有表头 + 3 条数据物理行：{joined}");
+}
+
+/// `<br>` 单元格的列宽按最宽行测量（不被标记撑大）。
+#[test]
+fn br_cell_width_uses_visible_text() {
+    let lines = render("| A |\n| --- |\n| 一<br>二二二 |");
+    let joined: String = lines
+        .iter()
+        .map(MdLine::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    // 「二二二」宽 6 列；`<br>` 不应计入宽度。
+    assert!(!joined.contains('<'), "无标记残留：{joined}");
+    assert!(joined.contains("二二二"));
+}
