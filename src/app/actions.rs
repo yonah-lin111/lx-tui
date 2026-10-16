@@ -26,6 +26,9 @@ pub enum OverlayKey {
     Right,
     Home,
     End,
+    /// PageUp / PageDown：UI 组件查看弹窗右侧预览翻页。
+    PageUp,
+    PageDown,
     /// Shift+Enter：引用文件夹内容弹窗进入高亮目录（沿用 @ 面板语义）。
     EnterFolder,
     /// Ctrl+Z：引用文件夹内容弹窗回退上层搜索范围。

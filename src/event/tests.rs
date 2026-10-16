@@ -4613,6 +4613,103 @@ fn ui_gallery_escape_key_closes_overlay() {
     assert!(state.overlay.is_none(), "Esc 关闭组件查看弹窗");
 }
 
+/// 把组件查看弹窗高亮移到 `markdown` item（内容高于可视区，可滚动）。
+fn ui_gallery_select_markdown(state: &mut AppState) {
+    state.overlay = Some(Overlay::UiGallery(crate::app::ui_gallery::UiGallery::new()));
+    let Some(Overlay::UiGallery(gallery)) = state.overlay.as_mut() else {
+        return;
+    };
+    let index = gallery
+        .rows()
+        .iter()
+        .position(|row| {
+            row.node
+                == crate::app::ui_gallery::UiGalleryNode::Component(
+                    crate::app::ui_gallery::UiGalleryComponentId::Agent(
+                        crate::app::ui_gallery::AgentStepId::Markdown,
+                    ),
+                )
+        })
+        .expect("markdown row");
+    gallery.set_selected(index);
+}
+
+#[test]
+fn ui_gallery_page_down_scrolls_preview_and_esc_still_closes() {
+    let mut state = demo_terminal();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 120, 16);
+    let geo = geometry(&state, &config, screen);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    ui_gallery_select_markdown(&mut state);
+
+    handle_terminal_event(
+        TerminalEvent::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let scroll = match state.overlay.as_ref() {
+        Some(Overlay::UiGallery(gallery)) => gallery.scroll(),
+        _ => panic!("gallery open"),
+    };
+    assert!(scroll > 0, "PageDown 应向下滚动右侧预览");
+    assert!(dirty);
+}
+
+#[test]
+fn ui_gallery_wheel_on_preview_scrolls_but_not_on_tree() {
+    let mut state = demo_terminal();
+    let config = Config::default();
+    let screen = Rect::new(0, 0, 120, 16);
+    let geo = geometry(&state, &config, screen);
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    ui_gallery_select_markdown(&mut state);
+    let layout = ui::overlay::ui_gallery_layout(screen).expect("layout fits");
+
+    // 滚轮落在左侧树：不滚动预览。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            layout.left.x + 1,
+            layout.left.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let scroll = match state.overlay.as_ref() {
+        Some(Overlay::UiGallery(gallery)) => gallery.scroll(),
+        _ => panic!("gallery open"),
+    };
+    assert_eq!(scroll, 0, "左树上的滚轮不滚动预览");
+
+    // 滚轮落在右侧预览：滚动。
+    handle_terminal_event(
+        mouse(
+            MouseEventKind::ScrollDown,
+            layout.right.x + 1,
+            layout.right.y + 1,
+        ),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    let scroll = match state.overlay.as_ref() {
+        Some(Overlay::UiGallery(gallery)) => gallery.scroll(),
+        _ => panic!("gallery open"),
+    };
+    assert!(scroll > 0, "预览区滚轮应滚动右侧");
+}
+
 // ===== lx `@` 提及面板鼠标路由 =====
 
 /// 为焦点 lx 窗格准备提及面板：设根、键入 @、写入缓存。

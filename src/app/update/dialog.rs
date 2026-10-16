@@ -107,7 +107,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             | OverlayKey::End => {
                 super::edit_referenced_search(state, key);
             }
-            OverlayKey::Remove => {}
+            OverlayKey::Remove | OverlayKey::PageUp | OverlayKey::PageDown => {}
         }
         return None;
     }
@@ -233,7 +233,12 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             None
         }
         // 引用文件夹浮层已在上方分支消费；此处不会到达。
-        OverlayKey::EnterFolder | OverlayKey::Back | OverlayKey::Copy | OverlayKey::Remove => None,
+        OverlayKey::EnterFolder
+        | OverlayKey::Back
+        | OverlayKey::Copy
+        | OverlayKey::Remove
+        | OverlayKey::PageUp
+        | OverlayKey::PageDown => None,
     }
 }
 

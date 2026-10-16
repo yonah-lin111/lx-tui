@@ -2,6 +2,8 @@
 
 use super::*;
 
+use crate::app::ui_gallery::AgentStepId;
+
 fn folder_row(id: UiGalleryFolderId) -> UiGalleryNode {
     UiGalleryNode::Folder(id)
 }
@@ -10,28 +12,36 @@ fn component_row(id: UiGalleryComponentId) -> UiGalleryNode {
     UiGalleryNode::Component(id)
 }
 
+/// `agent` 分组的全部步骤行（按固定顺序）。
+fn agent_rows() -> Vec<UiGalleryNode> {
+    AgentStepId::ALL
+        .iter()
+        .map(|step| component_row(UiGalleryComponentId::Agent(*step)))
+        .collect()
+}
+
 #[test]
 fn default_rows_list_folders_then_components() {
     let gallery = UiGallery::new();
     let nodes: Vec<UiGalleryNode> = gallery.rows().into_iter().map(|row| row.node).collect();
-    assert_eq!(
-        nodes,
-        vec![
-            folder_row(UiGalleryFolderId::Global),
-            component_row(UiGalleryComponentId::Toast),
-            component_row(UiGalleryComponentId::Modal),
-            component_row(UiGalleryComponentId::Tooltip),
-            component_row(UiGalleryComponentId::Button),
-            component_row(UiGalleryComponentId::Menu),
-            component_row(UiGalleryComponentId::Fullscreen),
-            folder_row(UiGalleryFolderId::Prompt),
-            component_row(UiGalleryComponentId::PromptEditor),
-            component_row(UiGalleryComponentId::PromptList),
-            component_row(UiGalleryComponentId::PromptToolbar),
-            component_row(UiGalleryComponentId::ReferencedFolders),
-            component_row(UiGalleryComponentId::FolderSearch),
-        ]
-    );
+    let mut expected = vec![
+        folder_row(UiGalleryFolderId::Global),
+        component_row(UiGalleryComponentId::Toast),
+        component_row(UiGalleryComponentId::Modal),
+        component_row(UiGalleryComponentId::Tooltip),
+        component_row(UiGalleryComponentId::Button),
+        component_row(UiGalleryComponentId::Menu),
+        component_row(UiGalleryComponentId::Fullscreen),
+        folder_row(UiGalleryFolderId::Prompt),
+        component_row(UiGalleryComponentId::PromptEditor),
+        component_row(UiGalleryComponentId::PromptList),
+        component_row(UiGalleryComponentId::PromptToolbar),
+        component_row(UiGalleryComponentId::ReferencedFolders),
+        component_row(UiGalleryComponentId::FolderSearch),
+        folder_row(UiGalleryFolderId::Agent),
+    ];
+    expected.extend(agent_rows());
+    assert_eq!(nodes, expected);
     assert_eq!(gallery.selected(), 0);
     assert_eq!(
         gallery.selected_node(),
@@ -55,20 +65,21 @@ fn collapsing_folder_hides_its_components() {
     let mut gallery = UiGallery::new();
     assert!(gallery.toggle_folder(UiGalleryFolderId::Global));
     let nodes: Vec<UiGalleryNode> = gallery.rows().into_iter().map(|row| row.node).collect();
-    assert_eq!(
-        nodes,
-        vec![
-            folder_row(UiGalleryFolderId::Global),
-            folder_row(UiGalleryFolderId::Prompt),
-            component_row(UiGalleryComponentId::PromptEditor),
-            component_row(UiGalleryComponentId::PromptList),
-            component_row(UiGalleryComponentId::PromptToolbar),
-            component_row(UiGalleryComponentId::ReferencedFolders),
-            component_row(UiGalleryComponentId::FolderSearch),
-        ]
-    );
+    let mut expected = vec![
+        folder_row(UiGalleryFolderId::Global),
+        folder_row(UiGalleryFolderId::Prompt),
+        component_row(UiGalleryComponentId::PromptEditor),
+        component_row(UiGalleryComponentId::PromptList),
+        component_row(UiGalleryComponentId::PromptToolbar),
+        component_row(UiGalleryComponentId::ReferencedFolders),
+        component_row(UiGalleryComponentId::FolderSearch),
+        folder_row(UiGalleryFolderId::Agent),
+    ];
+    expected.extend(agent_rows());
+    assert_eq!(nodes, expected);
     assert!(gallery.is_collapsed(UiGalleryFolderId::Global));
     assert!(!gallery.is_collapsed(UiGalleryFolderId::Prompt));
+    assert!(!gallery.is_collapsed(UiGalleryFolderId::Agent));
 }
 
 #[test]
@@ -178,7 +189,7 @@ fn selected_component_exposes_description() {
 #[test]
 fn folder_and_component_lookup_by_id() {
     let gallery = UiGallery::new();
-    assert_eq!(gallery.folders().len(), 2);
+    assert_eq!(gallery.folders().len(), 3);
     assert_eq!(
         gallery
             .folder(UiGalleryFolderId::Global)
@@ -193,6 +204,12 @@ fn folder_and_component_lookup_by_id() {
     );
     assert_eq!(
         gallery
+            .folder(UiGalleryFolderId::Agent)
+            .map(|f| f.components.len()),
+        Some(17)
+    );
+    assert_eq!(
+        gallery
             .component(UiGalleryComponentId::PromptToolbar)
             .map(|c| c.id),
         Some(UiGalleryComponentId::PromptToolbar)
@@ -202,4 +219,12 @@ fn folder_and_component_lookup_by_id() {
         text::UI_GALLERY_FOLDER_GLOBAL
     );
     assert_eq!(UiGalleryComponentId::Modal.label(), text::UI_GALLERY_MODAL);
+    assert_eq!(UiGalleryFolderId::Agent.label(), text::agent::FOLDER);
+    // 每个 agent 步骤都能按 id 查到，且指向同一 step。
+    for step in AgentStepId::ALL {
+        let id = UiGalleryComponentId::Agent(step);
+        assert_eq!(gallery.component(id).map(|c| c.id), Some(id));
+        assert_eq!(id.label(), step.label());
+        assert!(!gallery.component(id).unwrap().description.is_empty());
+    }
 }

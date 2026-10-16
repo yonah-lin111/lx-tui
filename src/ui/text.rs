@@ -1,5 +1,7 @@
 //! 全部用户可见文案；组件与逻辑禁止散落硬编码字符串。
 
+pub mod agent;
+
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};

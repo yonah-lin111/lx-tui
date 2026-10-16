@@ -211,7 +211,9 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
                 | OverlayKey::EnterFolder
                 | OverlayKey::Back
                 | OverlayKey::Copy
-                | OverlayKey::Remove => {}
+                | OverlayKey::Remove
+                | OverlayKey::PageUp
+                | OverlayKey::PageDown => {}
             }
         }
     }

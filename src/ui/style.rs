@@ -119,6 +119,91 @@ pub fn agent_status(state: AgentState) -> Style {
     }
 }
 
+/// Agent 步骤状态标记：成功绿实心、失败/中断红实心、进行中次要信息（与 `agent_status` 同色系）。
+pub fn agent_ok() -> Style {
+    Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Agent 步骤失败/中断标记（Red 加粗）。
+pub fn agent_fail() -> Style {
+    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+}
+
+/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗高亮，让图标从标题里跳出。
+///
+/// 失败步骤例外——整行走 [`agent_fail`] 变红。
+pub fn agent_icon() -> Style {
+    Style::default()
+        .fg(Color::Indexed(218))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// Agent 步骤标题的固定动词（`Ran` / `Read` / `Edited`…）：lx 品牌天蓝（Indexed 117）。
+///
+/// 与可变参数、正文区分，且避开边框青（[`accent`]）与品牌粉（[`agent_icon`]）。
+pub fn agent_verb() -> Style {
+    Style::default().fg(Color::Indexed(117))
+}
+
+/// Agent 标题里可变参数的统一样式：固定金黄（Indexed 220）加下划线。
+///
+/// 命令 / 文件 / 目录 / agent / 查询 / 数值等**全部**用这一固定色（不再按类型分色），
+/// 下划线提示“此处是每次调用都会变的值”。与图标（[`agent_icon`]）、动词
+/// （[`agent_verb`]）都区分得开，且避开边框青。
+pub fn agent_param() -> Style {
+    Style::default()
+        .fg(Color::Indexed(220))
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// Agent 标题里 read 的**行范围**（`(lines 1–2)`）：固定浅灰、无下划线。
+///
+/// 只读元信息，刻意与可变参数（金黄 + 下划线）区分：颜色不同、也不加下划线。
+pub fn agent_range() -> Style {
+    Style::default().fg(Color::Indexed(245))
+}
+
+/// Agent 步骤子行的直角连接符（`└─`）：品牌天蓝压暗，作结构引导而非内容。
+pub fn agent_connector() -> Style {
+    Style::default()
+        .fg(Color::Indexed(117))
+        .add_modifier(Modifier::DIM)
+}
+
+/// Agent 步骤子细节/输出：次要信息（dim 输出）。
+pub fn agent_step_detail() -> Style {
+    muted()
+}
+
+/// diff 新增行计数与前缀：Green。
+pub fn agent_added() -> Style {
+    Style::default().fg(Color::Green)
+}
+
+/// diff 删除行计数与前缀：Red。
+pub fn agent_removed() -> Style {
+    Style::default().fg(Color::Red)
+}
+
+/// token 页脚整行（lx-agent 的 `IN · OUT · CACHE`）：次要信息，不抢工具主体注意力。
+pub fn agent_tokens() -> Style {
+    muted()
+}
+
+/// 上下文占用 pill 的状态点：占用 ≥ 90% 红、≥ 75% 黄、否则绿（对齐 lx-agent）。
+pub fn agent_context_dot(percent: u8) -> Style {
+    let color = if percent >= 90 {
+        Color::Red
+    } else if percent >= 75 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+    Style::default().fg(color).add_modifier(Modifier::BOLD)
+}
+
 /// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
 ///
 /// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、
@@ -144,6 +229,28 @@ pub fn markdown_heading() -> Style {
     Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD)
+}
+
+/// markdown 六级标题的样式：h1 加粗+下划线、h2 加粗、h3 加粗+斜体、h4–h6 斜体（对齐 codex）。
+pub fn markdown_heading_level(level: u8) -> Style {
+    let base = Color::Yellow;
+    match level {
+        1 => Style::default()
+            .fg(base)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        2 => Style::default().fg(base).add_modifier(Modifier::BOLD),
+        3 => Style::default()
+            .fg(base)
+            .add_modifier(Modifier::BOLD | Modifier::ITALIC),
+        _ => Style::default().fg(base).add_modifier(Modifier::ITALIC),
+    }
+}
+
+/// markdown 粗斜体（`***…***`）：Yellow 加粗+斜体。
+pub fn markdown_strong_emphasis() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD | Modifier::ITALIC)
 }
 
 /// markdown 粗体文字。
@@ -177,6 +284,33 @@ pub fn markdown_code_block() -> Style {
     text()
 }
 
+/// 代码高亮：关键字（`fn`/`const`/`class`/`return`…）——品牌品红加粗，最抢眼。
+pub fn code_keyword() -> Style {
+    Style::default()
+        .fg(Color::Indexed(213))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 代码高亮：字符串与字符字面量——绿。
+pub fn code_string() -> Style {
+    Style::default().fg(Color::Indexed(114))
+}
+
+/// 代码高亮：数字字面量——橙。
+pub fn code_number() -> Style {
+    Style::default().fg(Color::Indexed(215))
+}
+
+/// 代码高亮：注释——次要信息（dim）。
+pub fn code_comment() -> Style {
+    muted()
+}
+
+/// 代码高亮：类型名（首字母大写的标识符）——品牌天蓝。
+pub fn code_type() -> Style {
+    Style::default().fg(Color::Indexed(117))
+}
+
 /// markdown 引用内容。
 pub fn markdown_quote() -> Style {
     Style::default()
@@ -194,6 +328,43 @@ pub fn markdown_link_text() -> Style {
 /// markdown URL。
 pub fn markdown_url() -> Style {
     Style::default().fg(Color::Cyan)
+}
+
+/// markdown 无序列表项目符号：次要信息。
+pub fn markdown_bullet() -> Style {
+    muted()
+}
+
+/// markdown 有序列表序号（对齐 codex 的 light_blue）。
+pub fn markdown_ordered() -> Style {
+    Style::default().fg(Color::LightBlue)
+}
+
+/// markdown 任务列表已完成项（Green + 删除线）。
+pub fn markdown_task_done() -> Style {
+    Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::CROSSED_OUT)
+}
+
+/// markdown 任务列表未完成项：次要信息。
+pub fn markdown_task_open() -> Style {
+    muted()
+}
+
+/// markdown 水平线 / 表格边框：次要信息。
+pub fn markdown_rule() -> Style {
+    muted()
+}
+
+/// markdown 代码块语言标记：次要信息。
+pub fn markdown_code_lang() -> Style {
+    muted()
+}
+
+/// markdown 图片说明（alt / url）：次要信息。
+pub fn markdown_image() -> Style {
+    muted()
 }
 
 /// 模板块结构标记（`&&&`、`--start`/`--end`、状态与元数据）：次要信息。

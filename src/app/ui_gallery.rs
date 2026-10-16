@@ -19,6 +19,8 @@ pub enum UiGalleryComponentId {
     PromptToolbar,
     ReferencedFolders,
     FolderSearch,
+    /// `agent` 分组的步骤调用（携带步骤种类，右侧渲染 lx 直角风格样例）。
+    Agent(AgentStepId),
 }
 
 impl UiGalleryComponentId {
@@ -36,8 +38,82 @@ impl UiGalleryComponentId {
             Self::PromptToolbar => text::UI_GALLERY_PROMPT_TOOLBAR,
             Self::ReferencedFolders => text::UI_GALLERY_FOLDERS,
             Self::FolderSearch => text::UI_GALLERY_FOLDER_SEARCH,
+            Self::Agent(step) => step.label(),
         }
     }
+}
+
+/// `agent` 分组的步骤种类标识：右侧预览渲染该步骤的 lx 直角风格样例。
+///
+/// 与 `UiGalleryComponentId` 分开定义，避免把 16 个步骤平铺进主枚举；
+/// 步骤的 token 数值由 `ui/overlay/ui_gallery/agent.rs` 提供，本层只存标识。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentStepId {
+    Exec,
+    Read,
+    Edit,
+    Write,
+    Search,
+    Web,
+    Thinking,
+    Subagent,
+    Todo,
+    Mcp,
+    Compact,
+    Mode,
+    Final,
+    /// agent 最终回答的 markdown 渲染（覆盖全部 markdown 格式）。
+    Markdown,
+    Error,
+    Question,
+    Tokens,
+}
+
+impl AgentStepId {
+    /// 左侧树的步骤展示名（英文小写，取 `text::agent`）。
+    pub fn label(self) -> &'static str {
+        use text::agent;
+        match self {
+            Self::Exec => agent::EXEC,
+            Self::Read => agent::READ,
+            Self::Edit => agent::EDIT,
+            Self::Write => agent::WRITE,
+            Self::Search => agent::SEARCH,
+            Self::Web => agent::WEB,
+            Self::Thinking => agent::THINKING,
+            Self::Subagent => agent::SUBAGENT,
+            Self::Todo => agent::TODO,
+            Self::Mcp => agent::MCP,
+            Self::Compact => agent::COMPACT,
+            Self::Mode => agent::MODE,
+            Self::Final => agent::FINAL,
+            Self::Markdown => agent::MARKDOWN,
+            Self::Error => agent::ERROR,
+            Self::Question => agent::QUESTION,
+            Self::Tokens => agent::TOKENS,
+        }
+    }
+
+    /// `agent` 分组内全部步骤（固定展示顺序）。
+    pub const ALL: [Self; 17] = [
+        Self::Exec,
+        Self::Read,
+        Self::Edit,
+        Self::Write,
+        Self::Search,
+        Self::Web,
+        Self::Thinking,
+        Self::Subagent,
+        Self::Todo,
+        Self::Mcp,
+        Self::Compact,
+        Self::Mode,
+        Self::Final,
+        Self::Markdown,
+        Self::Error,
+        Self::Question,
+        Self::Tokens,
+    ];
 }
 
 /// 顶层文件夹标识。
@@ -45,6 +121,7 @@ impl UiGalleryComponentId {
 pub enum UiGalleryFolderId {
     Global,
     Prompt,
+    Agent,
 }
 
 impl UiGalleryFolderId {
@@ -53,6 +130,7 @@ impl UiGalleryFolderId {
         match self {
             Self::Global => text::UI_GALLERY_FOLDER_GLOBAL,
             Self::Prompt => text::UI_GALLERY_FOLDER_PROMPT,
+            Self::Agent => text::agent::FOLDER,
         }
     }
 }
@@ -124,8 +202,61 @@ pub const PROMPT_COMPONENTS: [UiGalleryComponent; 5] = [
     },
 ];
 
+/// `agent` 文件夹下的组件：每个步骤一项，右侧渲染 lx 直角风格样例。
+pub const AGENT_COMPONENTS: [UiGalleryComponent; 17] = [
+    agent_component(AgentStepId::Exec),
+    agent_component(AgentStepId::Read),
+    agent_component(AgentStepId::Edit),
+    agent_component(AgentStepId::Write),
+    agent_component(AgentStepId::Search),
+    agent_component(AgentStepId::Web),
+    agent_component(AgentStepId::Thinking),
+    agent_component(AgentStepId::Subagent),
+    agent_component(AgentStepId::Todo),
+    agent_component(AgentStepId::Mcp),
+    agent_component(AgentStepId::Compact),
+    agent_component(AgentStepId::Mode),
+    agent_component(AgentStepId::Final),
+    agent_component(AgentStepId::Markdown),
+    agent_component(AgentStepId::Error),
+    agent_component(AgentStepId::Question),
+    agent_component(AgentStepId::Tokens),
+];
+
+/// 构造一个 agent 步骤叶子；说明文案由步骤种类决定。
+const fn agent_component(step: AgentStepId) -> UiGalleryComponent {
+    UiGalleryComponent {
+        id: UiGalleryComponentId::Agent(step),
+        description: agent_step_description(step),
+    }
+}
+
+/// agent 步骤的右侧说明段落（取自 `text::agent`）。
+const fn agent_step_description(step: AgentStepId) -> &'static [&'static str] {
+    use text::agent;
+    match step {
+        AgentStepId::Exec => agent::EXEC_DESC,
+        AgentStepId::Read => agent::READ_DESC,
+        AgentStepId::Edit => agent::EDIT_DESC,
+        AgentStepId::Write => agent::WRITE_DESC,
+        AgentStepId::Search => agent::SEARCH_DESC,
+        AgentStepId::Web => agent::WEB_DESC,
+        AgentStepId::Thinking => agent::THINKING_DESC,
+        AgentStepId::Subagent => agent::SUBAGENT_DESC,
+        AgentStepId::Todo => agent::TODO_DESC,
+        AgentStepId::Mcp => agent::MCP_DESC,
+        AgentStepId::Compact => agent::COMPACT_DESC,
+        AgentStepId::Mode => agent::MODE_DESC,
+        AgentStepId::Final => agent::FINAL_DESC,
+        AgentStepId::Markdown => agent::MARKDOWN_DESC,
+        AgentStepId::Error => agent::ERROR_DESC,
+        AgentStepId::Question => agent::QUESTION_DESC,
+        AgentStepId::Tokens => agent::TOKENS_DESC,
+    }
+}
+
 /// 组件树全部顶层文件夹（固定顺序）。
-pub const GALLERY_FOLDERS: [UiGalleryFolder; 2] = [
+pub const GALLERY_FOLDERS: [UiGalleryFolder; 3] = [
     UiGalleryFolder {
         id: UiGalleryFolderId::Global,
         components: &GLOBAL_COMPONENTS,
@@ -133,6 +264,10 @@ pub const GALLERY_FOLDERS: [UiGalleryFolder; 2] = [
     UiGalleryFolder {
         id: UiGalleryFolderId::Prompt,
         components: &PROMPT_COMPONENTS,
+    },
+    UiGalleryFolder {
+        id: UiGalleryFolderId::Agent,
+        components: &AGENT_COMPONENTS,
     },
 ];
 
@@ -152,12 +287,14 @@ pub struct UiGalleryRow {
     pub depth: usize,
 }
 
-/// UI 组件查看弹窗状态：折叠集合与高亮可见行。
+/// UI 组件查看弹窗状态：折叠集合、高亮可见行与右侧预览滚动偏移。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UiGallery {
     folders: &'static [UiGalleryFolder],
     collapsed: Vec<UiGalleryFolderId>,
     selected: usize,
+    /// 右侧预览的滚动偏移（顶端行下标）；切换 item/文件夹时归零。
+    scroll: usize,
 }
 
 impl Default for UiGallery {
@@ -167,13 +304,46 @@ impl Default for UiGallery {
 }
 
 impl UiGallery {
-    /// 默认状态：全部展开、高亮首行。
+    /// 默认状态：全部展开、高亮首行、右侧滚动在顶部。
     pub fn new() -> Self {
         Self {
             folders: &GALLERY_FOLDERS,
             collapsed: Vec::new(),
             selected: 0,
+            scroll: 0,
         }
+    }
+
+    /// 右侧预览的滚动偏移。
+    pub fn scroll(&self) -> usize {
+        self.scroll
+    }
+
+    /// 设置右侧预览滚动偏移；越界按 `max` 夹取，返回是否变化。
+    pub fn set_scroll(&mut self, offset: usize, max: usize) -> bool {
+        let next = offset.min(max);
+        if next == self.scroll {
+            return false;
+        }
+        self.scroll = next;
+        true
+    }
+
+    /// 按步长滚动右侧预览；`max` 为最大偏移（`usize::MAX` 表示不夹取），
+    /// 越界钳制不循环（下界恒为 0）；返回是否变化。
+    pub fn scroll_by(&mut self, delta: isize, max: usize) -> bool {
+        let current = self.scroll.min(isize::MAX as usize) as isize;
+        let upper = if max == usize::MAX {
+            isize::MAX
+        } else {
+            max.min(isize::MAX as usize) as isize
+        };
+        let next = current.saturating_add(delta).clamp(0, upper) as usize;
+        if next == self.scroll {
+            return false;
+        }
+        self.scroll = next;
+        true
     }
 
     /// 全部文件夹。
@@ -259,6 +429,8 @@ impl UiGallery {
             return false;
         }
         self.selected = next;
+        // 预览换了 item：右侧滚动回顶部。
+        self.scroll = 0;
         true
     }
 
@@ -269,6 +441,8 @@ impl UiGallery {
             return false;
         }
         self.selected = index;
+        // 预览换了 item：右侧滚动回顶部。
+        self.scroll = 0;
         true
     }
 
@@ -297,6 +471,8 @@ impl UiGallery {
             self.selected = selected;
         }
         self.clamp();
+        // 折叠/展开可能改变右区内容高度：滚动回顶部。
+        self.scroll = 0;
         true
     }
 
