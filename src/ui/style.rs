@@ -436,6 +436,17 @@ pub fn markdown_refer_image() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
+/// `@ref/末两段` 短引用：柔紫（Indexed 141）加粗、无下划线。
+///
+/// 与既有引用色（绿 / 橙 / 亮品红）和 `@` 提及黄都不重样；`&&&` 命令名与 `+++` 边框用的是
+/// 亮品红，141 明显更暗更柔，不会混淆。类型由形状表达（尾 `/` 文件夹、图片扩展名图片），
+/// 因此不再按类型分色。
+pub fn markdown_short_ref() -> Style {
+    Style::default()
+        .fg(Color::Indexed(141))
+        .add_modifier(Modifier::BOLD)
+}
+
 /// 模板块操作按钮：常态次要信息。
 pub fn template_button() -> Style {
     muted()

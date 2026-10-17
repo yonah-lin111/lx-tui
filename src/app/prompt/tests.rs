@@ -2540,7 +2540,11 @@ fn refer_shortcut_triggers_on_existing_mention_and_undoes_as_one_step() {
     assert_eq!(panel.items()[0].text, "@abc");
     assert_eq!(panel.items()[0].tag.label(), "file");
     assert!(prompt.refer_confirm());
-    assert!(prompt.text().ends_with("@abc "), "完整原文替换触发词");
+    assert!(
+        prompt.text().ends_with("@ref/abc "),
+        "插入 @ref/ 短格式: {}",
+        prompt.text()
+    );
     prompt.undo();
     assert!(prompt.text().ends_with("\nac"), "单步撤销回触发词");
 }
@@ -2573,7 +2577,7 @@ fn refer_shortcut_escape_closes_until_next_edit() {
 }
 
 #[test]
-fn refer_shortcut_reference_candidates_keep_full_marker() {
+fn refer_shortcut_reference_candidates_insert_short_ref() {
     let mut prompt = prompt(80, 8);
     prompt.set_text("@[refer-image](/tmp/shot.png) 日志\nsh");
     // set_text 不触发面板重算：模拟一次光标移动。
@@ -2582,7 +2586,58 @@ fn refer_shortcut_reference_candidates_keep_full_marker() {
     assert_eq!(panel.items()[0].text, "@[refer-image](/tmp/shot.png)");
     assert_eq!(panel.items()[0].tag.label(), "refer-image");
     assert!(prompt.refer_confirm());
-    assert!(prompt.text().ends_with("@[refer-image](/tmp/shot.png) "));
+    assert_eq!(
+        prompt.text(),
+        "@[refer-image](/tmp/shot.png) 日志\n@ref/tmp/shot.png ",
+        "确认后插入末两段短格式"
+    );
+}
+
+#[test]
+fn refer_shortcut_directory_candidate_keeps_trailing_slash() {
+    let mut prompt = prompt(80, 8);
+    prompt.set_text("@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\nagent");
+    prompt.move_right();
+    assert!(prompt.refer_panel().is_some(), "文件夹候选可匹配");
+    assert!(prompt.refer_confirm());
+    assert_eq!(
+        prompt.text(),
+        "@[refer-folder](/Users/yonah/projects/agent/lx-agent) 仓库\n@ref/agent/lx-agent/ ",
+        "文件夹短引用带尾斜杠"
+    );
+}
+
+#[test]
+fn refer_shortcut_finds_existing_short_ref_again() {
+    let mut prompt = prompt(80, 8);
+    prompt.set_text("@ref/lx-at-mention/design.md 需求\ndesign");
+    prompt.move_right();
+    let panel = prompt.refer_panel().expect("panel");
+    let texts: Vec<&str> = panel
+        .items()
+        .iter()
+        .map(|item| item.text.as_str())
+        .collect();
+    assert_eq!(
+        texts,
+        vec!["@ref/lx-at-mention/design.md"],
+        "短引用本身也是候选"
+    );
+    assert_eq!(panel.items()[0].tag.label(), "ref-file");
+    assert!(prompt.refer_confirm());
+    assert_eq!(
+        prompt.text(),
+        "@ref/lx-at-mention/design.md 需求\n@ref/lx-at-mention/design.md "
+    );
+}
+
+#[test]
+fn backspace_removes_short_ref_as_one_block() {
+    let mut prompt = prompt(80, 8);
+    prompt.set_text("see @ref/agent/lx-agent/ ");
+    prompt.set_cursor_offset_for_test(prompt.text().len());
+    prompt.backspace();
+    assert_eq!(prompt.text(), "see ", "整块删除含尾随空白");
 }
 
 // ---- 补充块 ----

@@ -228,15 +228,37 @@ fn panel_wraps_highlight() {
 }
 
 #[test]
-fn insertion_appends_trailing_space() {
+fn insertion_uses_short_ref_with_trailing_space() {
     let candidate = ReferCandidate {
         text: "@abc".to_string(),
         name: "abc".to_string(),
-        path: "abc".to_string(),
+        path: "a/b/abc.md".to_string(),
         tag: ReferTag::File,
         order: 0,
     };
-    assert_eq!(refer_insertion(&candidate), "@abc ");
+    assert_eq!(refer_insertion(&candidate), "@ref/b/abc.md ");
+
+    let folder = ReferCandidate {
+        text: "@[refer-folder](/x/y/z)".to_string(),
+        name: "z".to_string(),
+        path: "/x/y/z".to_string(),
+        tag: ReferTag::Refer(ReferKind::Folder),
+        order: 0,
+    };
+    assert_eq!(refer_insertion(&folder), "@ref/y/z/ ", "文件夹带尾斜杠");
+
+    let single = ReferCandidate {
+        text: "@main.rs".to_string(),
+        name: "main.rs".to_string(),
+        path: "main.rs".to_string(),
+        tag: ReferTag::File,
+        order: 0,
+    };
+    assert_eq!(
+        refer_insertion(&single),
+        "@ref/main.rs ",
+        "单段路径也能短化"
+    );
 }
 
 #[test]

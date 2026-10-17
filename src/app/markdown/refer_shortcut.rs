@@ -1,13 +1,14 @@
-//! 字母快捷输入：从正文已出现的 `@` 提及与 `@[refer-*]` 引用生成候选，纯函数无 IO。
+//! 字母快捷输入：从正文已出现的 `@ref/` 短引用、`@` 提及与 `@[refer-*]` 引用生成候选，
+//! 纯函数无 IO。
 //!
 //! 触发词为光标前至少 2 个路径字符；候选只来自光标所在分段（模板块正文或块外正文）已出现的
-//! 引用文本，不扫描文件系统、不产生新引用目标。
+//! 引用文本，不扫描文件系统、不产生新引用目标；确认时插入 `@ref/末两段` 短格式。
 
 use std::ops::Range;
 
 use super::{
     MentionEntry, ParsedReference, ReferKind, TemplateLineInfo, TemplateLineRole, parse_references,
-    parse_references_in, template_line_infos,
+    parse_references_in, short_ref_marker, short_ref_name, template_line_infos,
 };
 
 /// 候选展示条数上限。
@@ -20,12 +21,19 @@ pub struct ReferTrigger {
     pub query: String,
 }
 
-/// 候选类型（tag 语义）：`@` 提及按目录信息区分 file/folder，引用按标记类型。
+/// 候选类型（tag 语义）：`@` 提及按目录信息区分 file/folder，引用按标记类型，
+/// `@ref/` 短引用按形状推断的 file/folder/image。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferTag {
     File,
     Folder,
     Refer(ReferKind),
+    /// `@ref/` 短引用：文件。
+    ShortRef,
+    /// `@ref/` 短引用：文件夹（尾 `/`）。
+    ShortFolder,
+    /// `@ref/` 短引用：图片。
+    ShortImage,
 }
 
 impl ReferTag {
@@ -37,6 +45,9 @@ impl ReferTag {
             Self::Refer(ReferKind::File) => "refer-file",
             Self::Refer(ReferKind::Folder) => "refer-folder",
             Self::Refer(ReferKind::Image) => "refer-image",
+            Self::ShortRef => "ref-file",
+            Self::ShortFolder => "ref-folder",
+            Self::ShortImage => "ref-image",
         }
     }
 }
@@ -53,6 +64,17 @@ pub struct ReferCandidate {
     pub tag: ReferTag,
     /// 首次出现顺序；同分排序用。
     pub order: usize,
+}
+
+impl ReferCandidate {
+    /// 候选是否为文件夹：`@` 提及按目录信息（`ReferTag::Folder`），引用按标记类型，
+    /// `@ref/` 短引用按尾 `/` 判定。
+    pub fn is_directory(&self) -> bool {
+        matches!(
+            self.tag,
+            ReferTag::Folder | ReferTag::Refer(ReferKind::Folder) | ReferTag::ShortFolder
+        )
+    }
 }
 
 /// 快捷面板：触发区间、候选与高亮。
@@ -247,9 +269,9 @@ fn line_bounds(text: &str, line: usize) -> Option<(usize, usize)> {
     None
 }
 
-/// 收集作用域内已出现的候选：`@` 提及与 `@[refer-*]` 引用，按原文去重保序。
+/// 收集作用域内已出现的候选：`@ref/` 短引用、`@` 提及与 `@[refer-*]` 引用，按原文去重保序。
 ///
-/// 两类来源按原文位置合并后再去重（`order` 必须反映正文首次出现顺序，同分排序依赖它）。
+/// 三类来源按原文位置合并后再去重（`order` 必须反映正文首次出现顺序，同分排序依赖它）。
 /// 过滤触发词本身与 `@start` / `@end` 结构标记；重复原文只保留首次出现。
 pub fn refer_candidates(
     text: &str,
@@ -257,8 +279,9 @@ pub fn refer_candidates(
     trigger: &Range<usize>,
     entries: &[MentionEntry],
 ) -> Vec<ReferCandidate> {
-    /// 一条来源：`@` 提及的整段区间或完整的引用标记。
+    /// 一条来源：`@ref/` 短引用、`@` 提及的整段区间或完整的引用标记。
     enum Source<'a> {
+        Short(Range<usize>),
         Mention(Range<usize>),
         Reference(&'a ParsedReference),
     }
@@ -273,9 +296,20 @@ pub fn refer_candidates(
         .into_iter()
         .filter(|reference| in_scope(&reference.range))
         .collect();
+    let short_ranges: Vec<Range<usize>> = super::short_ref_ranges(text)
+        .into_iter()
+        .filter(|range| in_scope(range))
+        .collect();
+    // 短引用区间从提及区间里剔除，避免同一个 `@` 被算两次。
     let mut sources: Vec<(usize, Source<'_>)> = super::mention_token_ranges(text)
         .into_iter()
-        .filter(|range| in_scope(range) && !overlaps(range))
+        .filter(|range| {
+            in_scope(range)
+                && !overlaps(range)
+                && !short_ranges
+                    .iter()
+                    .any(|short| short.start <= range.start && range.end <= short.end)
+        })
         .map(|range| (range.start, Source::Mention(range)))
         .collect();
     sources.extend(
@@ -283,6 +317,12 @@ pub fn refer_candidates(
             .iter()
             .filter(|reference| !overlaps(&reference.range))
             .map(|reference| (reference.range.start, Source::Reference(reference))),
+    );
+    sources.extend(
+        short_ranges
+            .into_iter()
+            .filter(|range| !overlaps(range))
+            .map(|range| (range.start, Source::Short(range))),
     );
     sources.sort_by_key(|(at, _)| *at);
     let mut candidates: Vec<ReferCandidate> = Vec::new();
@@ -322,6 +362,27 @@ pub fn refer_candidates(
                     &reference.path,
                     ReferTag::Refer(reference.kind),
                 );
+            }
+            Source::Short(range) => {
+                let raw = &text[range];
+                let Some(body) = raw.strip_prefix(super::SHORT_REF_PREFIX) else {
+                    continue;
+                };
+                if !super::short_ref_matchable(body) {
+                    continue;
+                }
+                let name = body
+                    .trim_end_matches('/')
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(body)
+                    .to_string();
+                let tag = match super::short_ref_kind(body) {
+                    super::ShortRefKind::File => ReferTag::ShortRef,
+                    super::ShortRefKind::Folder => ReferTag::ShortFolder,
+                    super::ShortRefKind::Image => ReferTag::ShortImage,
+                };
+                push_unique(&mut candidates, raw, &name, body, tag);
             }
         }
     }
@@ -429,9 +490,22 @@ fn subsequence_span(haystack: &str, needle: &str) -> Option<u32> {
     None
 }
 
-/// 确认替换文本：候选完整原文加尾随空格，便于继续输入。
+/// 确认替换文本：候选短名加尾随空格，便于继续输入。
+///
+/// 插入的是 `@ref/末两段` 短格式（见 [`super::short_ref`]），不是候选完整原文——
+/// 完整路径在文档里已有登记，短名只是同一片段内的简称。短名无法生成时回退完整原文。
 pub fn refer_insertion(candidate: &ReferCandidate) -> String {
-    format!("{} ", candidate.text)
+    let insertion = short_ref_marker(
+        &short_ref_candidate_name(candidate),
+        candidate.is_directory(),
+    )
+    .unwrap_or_else(|| candidate.text.clone());
+    format!("{insertion} ")
+}
+
+/// 候选的短名：取路径末两段（引用与提及都按候选 `path` 计算）。
+fn short_ref_candidate_name(candidate: &ReferCandidate) -> String {
+    short_ref_name(&candidate.path).unwrap_or_else(|| candidate.name.clone())
 }
 
 #[cfg(test)]
