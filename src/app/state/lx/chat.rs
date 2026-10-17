@@ -2,9 +2,17 @@
 //!
 //! 仅存纯数据（DB connection/HTTP handle 不进 `AppState`）；
 //! 请求状态机按 `RequestState` 约束合法状态转换。
+//! 消息展示用**单一有序步骤时间线**（[`AssistantStepView`]），正文/思考/工具调用共用
+//! 同一 `position` 编号空间；流事件的状态转换见 [`stream`]。
 
-use crate::chat::events::PartKind;
 use crate::config::ai::{AiSettings, ModelSelection};
+
+mod steps;
+mod stream;
+
+pub use steps::{
+    AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
+};
 
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -182,50 +190,6 @@ impl FrozenModel {
     }
 }
 
-/// 一个展示用内容块（消息内的有序 part）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatPartView {
-    /// `text` / `reasoning`。
-    pub kind: PartKind,
-    pub content: String,
-    /// 供应商元数据 JSON（如 Anthropic signature）。
-    pub provider_metadata_json: Option<String>,
-    /// 该 part 首个增量到达时刻（毫秒）；本轮流式写入，历史加载时从 DB 恢复。
-    pub started_at_ms: Option<i64>,
-    /// 该 part 最后一个增量到达时刻（毫秒）；None 表示未知（思考耗时不显示）。
-    pub ended_at_ms: Option<i64>,
-    /// 该 part 独立完成时刻（毫秒）；仅 reasoning 使用，None 表示尚未完成或非思考块。
-    pub completed_at_ms: Option<i64>,
-}
-
-impl ChatPartView {
-    pub fn kind_str(&self) -> &'static str {
-        self.kind.as_str()
-    }
-}
-
-/// 一条展示用消息。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChatMessageView {
-    pub id: String,
-    /// `user` / `assistant`。
-    pub role: String,
-    /// `complete` / `streaming` / `interrupted` / `failed`。
-    pub status: String,
-    pub turn_index: i64,
-    pub parts: Vec<ChatPartView>,
-    /// 该轮实际模型展示名（assistant 行）。
-    pub model_label: Option<String>,
-    /// 失败原因码（如 `http 503`、`timeout`）；仅 `failed` 时有值，用于历史行提示。
-    pub error_code: Option<String>,
-    /// 该轮供应商报的输入 / 输出 / 缓存读取 token（未知为 None，不写 0 冒充）。
-    pub input_tokens: Option<i64>,
-    pub output_tokens: Option<i64>,
-    pub cache_read_tokens: Option<i64>,
-    /// 该轮耗时（毫秒；未完成或时间戳缺失为 None）。
-    pub duration_ms: Option<i64>,
-}
-
 /// 请求状态机：Idle → Committing → Streaming → Finishing → Idle。
 #[derive(Debug, Clone, PartialEq)]
 pub enum RequestState {
@@ -377,42 +341,47 @@ impl LxChat {
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或
     /// `Ctrl+T` 才展开；状态一直保留——生成结束不会强制展开或强制收起（对齐 opencode 的
     /// hide 模式：单击展开、再点收起）。
-    pub fn reasoning_expanded(&self, message_index: usize, part_index: usize) -> bool {
+    ///
+    /// `step_index` 是**时间线步骤下标**（含工具步骤），与 UI 命中几何同源。
+    pub fn reasoning_expanded(&self, message_index: usize, step_index: usize) -> bool {
         self.thinking_toggled
             .iter()
-            .find(|(message, part, _)| *message == message_index && *part == part_index)
+            .find(|(message, step, _)| *message == message_index && *step == step_index)
             .is_some_and(|(_, _, expanded)| *expanded)
     }
 
-    /// 该 thinking 块是否仍在生成：所属消息是最后一条且仍在流中，且它是其中最后一个
-    /// reasoning 块。
-    pub fn reasoning_streaming(&self, message_index: usize, part_index: usize) -> bool {
+    /// 该思考块是否仍在生成：该步骤是 Reasoning、其独立完成字段为空、且消息仍在流中。
+    ///
+    /// **不再**要求它是最后一个 reasoning 块或所属消息是最后一条：思考块自己的完成
+    /// 字段才是唯一依据（`reasoning -> text -> reasoning` 交错时同样正确）。
+    pub fn reasoning_streaming(&self, message_index: usize, step_index: usize) -> bool {
         let Some(message) = self.messages.get(message_index) else {
             return false;
         };
-        if message.status != "streaming" || message_index + 1 != self.messages.len() {
+        if message.status != "streaming" {
             return false;
         }
-        message
-            .parts
-            .iter()
-            .rposition(|part| part.kind == PartKind::Reasoning)
-            == Some(part_index)
+        matches!(
+            message.step_at(step_index),
+            Some(AssistantStepView::Part { part, .. }) if part.reasoning_open()
+        )
     }
 
     /// 切换 thinking 块展开状态（记录显式选择，覆盖流中自动展开）。
-    pub fn toggle_reasoning(&mut self, message_index: usize, part_index: usize) {
-        let next = !self.reasoning_expanded(message_index, part_index);
+    ///
+    /// `step_index` 为时间线步骤下标（与 [`Self::reasoning_expanded`] 同口径）。
+    pub fn toggle_reasoning(&mut self, message_index: usize, step_index: usize) {
+        let next = !self.reasoning_expanded(message_index, step_index);
         if let Some(existing) = self
             .thinking_toggled
             .iter_mut()
-            .find(|(message, part, _)| *message == message_index && *part == part_index)
+            .find(|(message, step, _)| *message == message_index && *step == step_index)
         {
             existing.2 = next;
             return;
         }
         self.thinking_toggled
-            .push((message_index, part_index, next));
+            .push((message_index, step_index, next));
     }
 
     /// 重算状态行展示数据：模型/供应商展示名、上限、用量与上下文百分比来自当前选择
@@ -478,52 +447,10 @@ impl LxChat {
             .map(|selection| models.normalize_selection(selection))
     }
 
-    /// 追加/合并一个流式 delta part 到最后一条 assistant 消息。
-    ///
-    /// 相邻同 kind 且元数据兼容的 delta 合并；类型切换或带元数据的空 delta
-    /// 新建 part，保持 text/reasoning 交错顺序。
-    pub fn append_stream_delta(
-        &mut self,
-        kind: PartKind,
-        text: &str,
-        metadata: Option<serde_json::Value>,
-    ) {
-        let Some(message) = self
-            .messages
+    /// 当前仍在流转的 assistant 消息（最后一条且 `streaming`）的可变引用。
+    pub(crate) fn streaming_message_mut(&mut self) -> Option<&mut ChatMessageView> {
+        self.messages
             .last_mut()
             .filter(|message| message.role == "assistant" && message.status == "streaming")
-        else {
-            return;
-        };
-        // 起止时刻：首个增量定起点、每个增量刷新终点（思考耗时 = 两者之差）。
-        let now = crate::db::now_ms();
-        // 签名元数据（text 为空）绑定到同 kind 的相邻 part。
-        if let Some(meta) = metadata.as_ref()
-            && text.is_empty()
-            && let Some(last) = message.parts.last_mut()
-            && last.kind == kind
-            && last.provider_metadata_json.is_none()
-        {
-            last.provider_metadata_json = Some(serde_json::to_string(meta).unwrap_or_default());
-            return;
-        }
-        if let Some(last) = message.parts.last_mut()
-            && last.kind == kind
-            && metadata.is_none()
-            && last.provider_metadata_json.is_none()
-        {
-            last.content.push_str(text);
-            last.ended_at_ms = Some(now);
-            return;
-        }
-        message.parts.push(ChatPartView {
-            kind,
-            content: text.to_string(),
-            provider_metadata_json: metadata
-                .map(|meta| serde_json::to_string(&meta).unwrap_or_default()),
-            started_at_ms: Some(now),
-            ended_at_ms: Some(now),
-            completed_at_ms: None,
-        });
     }
 }

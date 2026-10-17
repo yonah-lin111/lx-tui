@@ -764,5 +764,16 @@ pub fn chat_part_views<'a>(
         .collect()
 }
 
+/// 消息步骤时间线 → DB parts（使用步骤自带的真实 `position`，不重新编号）。
+///
+/// 工具步骤不是内容块：它们由 `agent_tool_call` 表承载（见 `chat/tools.rs`），
+/// 此处只取 `AssistantStepView::Part`。
+pub fn chat_message_part_views(message: &crate::app::state::ChatMessageView) -> Vec<ChatPart> {
+    chat_part_views(message.steps.iter().filter_map(|step| match step {
+        crate::app::state::AssistantStepView::Part { position, part } => Some((*position, part)),
+        crate::app::state::AssistantStepView::Tool { .. } => None,
+    }))
+}
+
 #[cfg(test)]
 mod tests;

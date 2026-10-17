@@ -5,7 +5,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::*;
-use crate::app::state::{ChatMessageView, ChatPartView, Lx, LxChat};
+use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, Lx, LxChat};
 use crate::chat::events::PartKind;
 
 fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
@@ -22,7 +22,14 @@ fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageVie
         role: role.into(),
         status: status.into(),
         turn_index: 0,
-        parts,
+        steps: parts
+            .into_iter()
+            .enumerate()
+            .map(|(index, part)| AssistantStepView::Part {
+                position: index as i64,
+                part,
+            })
+            .collect(),
         model_label: Some("P / M".into()),
         error_code: None,
         input_tokens: None,
@@ -60,6 +67,18 @@ fn reasoning_part(content: &str) -> ChatPartView {
         ended_at_ms: None,
         completed_at_ms: None,
     }
+}
+
+/// 用一组内容块替换消息的步骤（保持位置连续；测试构造用）。
+fn set_parts(message: &mut ChatMessageView, parts: Vec<ChatPartView>) {
+    message.steps = parts
+        .into_iter()
+        .enumerate()
+        .map(|(index, part)| AssistantStepView::Part {
+            position: index as i64,
+            part,
+        })
+        .collect();
 }
 
 #[test]
@@ -631,10 +650,10 @@ fn sticky_text_collapses_sanitizes_and_marks_empty() {
     );
     assert_eq!(sticky_text(&message).as_deref(), Some("第一 行 第二 行"));
     // 只有空白 → 不钉（None）。
-    message.parts = vec![text_part("   \n\t ")];
+    set_parts(&mut message, vec![text_part("   \n\t ")]);
     assert_eq!(sticky_text(&message), None);
     // 超长粘贴按 512 字符取样（限住每帧成本）。
-    message.parts = vec![text_part(&"字".repeat(1_000))];
+    set_parts(&mut message, vec![text_part(&"字".repeat(1_000))]);
     let text = sticky_text(&message).expect("摘要");
     assert_eq!(text.chars().count(), STICKY_SAMPLE_CHARS);
 }
@@ -675,7 +694,10 @@ fn sticky_row_is_painted_outside_the_grid() {
 #[test]
 fn sticky_text_is_truncated_with_ellipsis_to_width() {
     let mut lx = sticky_lx();
-    lx.chat.messages[0].parts = vec![text_part("很长很长很长很长很长很长很长的问题")];
+    set_parts(
+        &mut lx.chat.messages[0],
+        vec![text_part("很长很长很长很长很长很长很长的问题")],
+    );
     let area = sticky_area();
     let layout = layout(area, &lx);
     lx.chat.history_scroll = layout.messages[1].start;
@@ -693,4 +715,69 @@ fn sticky_text_is_truncated_with_ellipsis_to_width() {
     assert_eq!(truncate_with_ellipsis("abcdef", 4), "abc…");
     assert_eq!(truncate_with_ellipsis("中文中文", 5), "中文…");
     assert_eq!(truncate_with_ellipsis("abc", 3), "abc");
+}
+
+// ===== G2：工具步骤占位行（必须占行、不 panic、不与布局漂移）=====
+
+/// 构造工具步骤（占位渲染用）。
+fn tool_step(position: i64, call: ChatPartView) -> AssistantStepView {
+    let _ = call;
+    AssistantStepView::Tool {
+        position,
+        call: crate::app::state::ToolCallView {
+            call_id: format!("call-{position}"),
+            name: "read".into(),
+            position,
+            arguments_json: r#"{"path":"src/a.rs","offset":3,"limit":5}"#.into(),
+            status: crate::app::state::ToolStatus::Pending,
+            summary: Some(crate::app::state::ToolSummary {
+                path: Some("src/a.rs".into()),
+                range: Some((3, 7)),
+                ..Default::default()
+            }),
+            error: None,
+        },
+    }
+}
+
+/// 工具步骤占一行：布局行数与渲染行数一致，且文本可见（不吞掉、不错位）。
+#[test]
+fn tool_step_occupies_one_row_and_renders_summary() {
+    let mut message = message("assistant", "complete", vec![text_part("正文")]);
+    message.steps.push(tool_step(1, text_part("")));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 20);
+    let computed = layout(area, &lx);
+    // 正文 1 + 块间空行 1 + 工具行 1 + 消息间空行 1 = 4。
+    assert_eq!(computed.total_rows, 4);
+
+    let mut grid = Grid::new(area);
+    render(&mut grid, area, &lx, 0);
+    let mut rows: Vec<String> = Vec::new();
+    for y in 0..6u16 {
+        let mut row = String::new();
+        for x in 0..area.right() {
+            row.push(grid.cell(x, y).ch);
+        }
+        rows.push(row);
+    }
+    let painted = rows.join("\n");
+    let squeezed: String = painted
+        .chars()
+        .filter(|ch| !ch.is_whitespace() && *ch != '\0')
+        .collect();
+    assert!(squeezed.contains("正文"), "正文仍渲染：{painted}");
+    assert!(squeezed.contains("read"), "工具占位行可见：{painted}");
+    assert!(squeezed.contains("src/a.rs"), "路径摘要可见：{painted}");
+}
+
+/// 仅工具步骤的消息也占行（不会因“没有 text part”而整条消失）。
+#[test]
+fn tool_only_message_still_occupies_rows() {
+    let mut message = message("assistant", "complete", Vec::new());
+    message.steps.push(tool_step(0, text_part("")));
+    let lx = lx_with(vec![message]);
+    let computed = layout(Rect::new(0, 0, 40, 10), &lx);
+    // 工具行 1 + 消息间空行/呼吸行 1 = 2。
+    assert_eq!(computed.total_rows, 2);
 }

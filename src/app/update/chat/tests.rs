@@ -1,6 +1,11 @@
 //! lx 聊天状态机纯状态测试：首轮/续轮、重复 Enter、并发窗格、模型切换、
 //! 流终态、命令面板与过期结果过滤。
 
+mod history;
+mod session;
+mod stop;
+mod timeline;
+
 use super::*;
 use crate::app::state::{
     AppState, LxChat, ModelPickerStage, ModelsSnapshot, RequestKey, RequestState, SlashPanel,
@@ -198,7 +203,7 @@ fn stream_deltas_update_matching_key_only() {
     ];
     assert!(on_stream_delta(&mut state, &key, &deltas));
     let target = state.pane_anywhere(pane).unwrap();
-    let parts = &target.lx.chat.messages[1].parts;
+    let parts = target.lx.chat.messages[1].parts().collect::<Vec<_>>();
     assert_eq!(
         parts
             .iter()
@@ -651,7 +656,13 @@ fn session_loaded_rebuilds_view_and_selection() {
         target.lx.chat.messages[1].status, "interrupted",
         "失败/中断状态可识别"
     );
-    assert_eq!(target.lx.chat.messages[1].parts[0].kind_str(), "reasoning");
+    assert_eq!(
+        target.lx.chat.messages[1]
+            .parts()
+            .next()
+            .map(|part| part.kind_str()),
+        Some("reasoning")
+    );
     assert_eq!(
         target
             .lx
@@ -736,7 +747,7 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: 0,
-        parts: Vec::new(),
+        steps: Vec::new(),
         model_label: None,
         error_code: None,
         input_tokens: None,
@@ -750,8 +761,7 @@ fn append_stream_delta_merges_adjacent_same_kind() {
     chat.append_stream_delta(PartKind::Text, "c", None);
     assert_eq!(
         chat.messages[0]
-            .parts
-            .iter()
+            .parts()
             .map(|part| (part.kind_str(), part.content.as_str()))
             .collect::<Vec<_>>(),
         vec![("text", "ab"), ("reasoning", "r"), ("text", "c")],
@@ -767,7 +777,7 @@ fn signature_metadata_binds_to_reasoning_part() {
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: 0,
-        parts: Vec::new(),
+        steps: Vec::new(),
         model_label: None,
         error_code: None,
         input_tokens: None,
@@ -782,11 +792,12 @@ fn signature_metadata_binds_to_reasoning_part() {
         "",
         Some(serde_json::json!({"signature": "sig-1", "blockIndex": 0})),
     );
-    assert_eq!(chat.messages[0].parts.len(), 1, "不生成空 part");
+    assert_eq!(chat.messages[0].parts().count(), 1, "不生成空 part");
     let bound = serde_json::from_str::<serde_json::Value>(
-        chat.messages[0].parts[0]
-            .provider_metadata_json
-            .as_deref()
+        chat.messages[0]
+            .parts()
+            .next()
+            .and_then(|part| part.provider_metadata_json.as_deref())
             .unwrap_or_default(),
     )
     .expect("metadata json");
@@ -943,287 +954,6 @@ fn finish_model_selection_persists_default_model() {
     assert_eq!(state.effects.len(), before, "同选择不重复入队");
 }
 
-/// 构造带 `count` 条用户消息的 lx 窗格（每行一条），用于滚动语义测试。
-fn lx_with_messages(state: &mut AppState, count: usize) {
-    let pane = state.active_tab().layout.focus();
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    for index in 0..count {
-        target.lx.chat.messages.push(ChatMessageView {
-            id: format!("m{index}"),
-            role: "user".into(),
-            status: "complete".into(),
-            turn_index: index as i64,
-            parts: vec![ChatPartView {
-                kind: PartKind::Text,
-                content: format!("消息 {index}"),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            }],
-            model_label: None,
-            error_code: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            duration_ms: None,
-        });
-    }
-}
-
-#[test]
-fn history_scroll_clamps_and_tracks_follow_bottom() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 3);
-    let pane = state.active_tab().layout.focus();
-    // 总行数 3 条消息 + 3 个消息间空行 = 6；视口 2 行 → 最大顶部行 4。
-    assert!(scroll_lx_history(&mut state, pane, 999, 6, 2), "向下滚动");
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert_eq!(chat.history_scroll, 4, "钳到最大顶部行");
-    assert!(chat.follow_bottom, "滚到底恢复跟随");
-    // 向上滚动离开底部。
-    assert!(scroll_lx_history(&mut state, pane, -1, 6, 2));
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert_eq!(chat.history_scroll, 3);
-    assert!(!chat.follow_bottom, "离开底部不再跟随");
-    // 再向上到顶。
-    assert!(scroll_lx_history(&mut state, pane, -999, 6, 2));
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .history_scroll,
-        0
-    );
-}
-
-#[test]
-fn history_scrollbar_set_offset_marks_follow_at_bottom() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 5);
-    let pane = state.active_tab().layout.focus();
-    // 顶部行 2，视口 3 → 不跟随。
-    assert!(set_lx_history_scroll(&mut state, pane, 2, 10, 3));
-    {
-        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-        assert_eq!(chat.history_scroll, 2);
-        assert!(!chat.follow_bottom);
-    }
-    // 顶部行 = total - visible → 钉底跟随。
-    assert!(set_lx_history_scroll(&mut state, pane, 7, 10, 3));
-    {
-        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-        assert_eq!(chat.history_scroll, 7);
-        assert!(chat.follow_bottom);
-    }
-}
-
-#[test]
-fn jump_lx_history_bottom_rearms_follow() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 6);
-    let pane = state.active_tab().layout.focus();
-    set_lx_history_scroll(&mut state, pane, 0, 12, 3);
-    {
-        let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-        assert!(!chat.follow_bottom, "上滚后不跟随");
-    }
-    assert!(jump_lx_history_bottom(&mut state, pane));
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert!(chat.follow_bottom, "回到底部恢复跟随");
-    assert!(!jump_lx_history_bottom(&mut state, pane), "已在底部无变化");
-}
-
-#[test]
-fn hover_lx_jump_bottom_tracks_state() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 1);
-    let pane = state.active_tab().layout.focus();
-    assert!(hover_lx_jump_bottom(&mut state, pane, true));
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .jump_bottom_hover,
-        "悬停置位"
-    );
-    assert!(
-        !hover_lx_jump_bottom(&mut state, pane, true),
-        "重复置位无变化"
-    );
-    assert!(hover_lx_jump_bottom(&mut state, pane, false));
-    assert!(
-        !state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .jump_bottom_hover,
-        "离开清空"
-    );
-}
-
-#[test]
-fn advance_lx_loading_only_when_streaming() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 1);
-    let pane = state.active_tab().layout.focus();
-    // 空闲：不推进。
-    assert!(!advance_lx_loading(&mut state));
-    // 流中：推进帧号。
-    state
-        .pane_mut_anywhere(pane)
-        .expect("pane")
-        .lx
-        .chat
-        .status
-        .streaming = true;
-    assert!(state.has_streaming_lx());
-    assert!(advance_lx_loading(&mut state));
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .loading_frame,
-        1
-    );
-}
-
-/// 回归：打开历史会话时上下文占用不再为空——按 codex 口径从最近一条带用量的
-/// assistant 轮次恢复（输入 + 输出），并回填本轮统计（耗时/模型名）。
-#[test]
-fn session_loaded_restores_context_usage_and_stats() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
-    let messages = vec![
-        crate::db::chat::ChatMessage {
-            external_id: "u1".into(),
-            sequence: 0,
-            turn_index: 0,
-            role: "user".into(),
-            status: "complete".into(),
-            model_provider: None,
-            model_id: None,
-            variant: None,
-            stop_reason: None,
-            error_code: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            created_at_ms: 1_000,
-            completed_at_ms: None,
-            parts: vec![crate::db::chat::ChatPart {
-                position: 0,
-                kind: "text".into(),
-                content: "问".into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            }],
-            tools: Vec::new(),
-        },
-        crate::db::chat::ChatMessage {
-            external_id: "a1".into(),
-            sequence: 1,
-            turn_index: 0,
-            role: "assistant".into(),
-            status: "complete".into(),
-            model_provider: Some("p".into()),
-            model_id: Some("m".into()),
-            variant: None,
-            stop_reason: Some("complete".into()),
-            error_code: None,
-            input_tokens: Some(2_000),
-            output_tokens: Some(500),
-            cache_read_tokens: Some(1_500),
-            cache_write_tokens: None,
-            created_at_ms: 1_000,
-            completed_at_ms: Some(3_500),
-            parts: vec![crate::db::chat::ChatPart {
-                position: 0,
-                kind: "text".into(),
-                content: "答".into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            }],
-            tools: Vec::new(),
-        },
-    ];
-    assert!(on_session_loaded(
-        &mut state,
-        pane,
-        "sess-ctx",
-        &messages,
-        Some(ModelSelection {
-            provider: "p".into(),
-            model: "m".into(),
-            variant: Some("high".into()),
-        })
-    ));
-    let target = state.pane_anywhere(pane).unwrap();
-    let chat = &target.lx.chat;
-    assert_eq!(chat.context_tokens, Some(2_500), "上下文占用 = 输入 + 输出");
-    assert_eq!(chat.status.input_tokens, Some(2_500), "状态行分子同步恢复");
-    assert_eq!(
-        chat.status.context_limit,
-        Some(100_000),
-        "上下文上限同步恢复"
-    );
-    assert_eq!(
-        chat.messages[1].model_label.as_deref(),
-        Some("M"),
-        "模型展示名"
-    );
-    assert_eq!(chat.messages[1].input_tokens, Some(2_000));
-    assert_eq!(chat.messages[1].output_tokens, Some(500));
-    assert_eq!(chat.messages[1].cache_read_tokens, Some(1_500));
-    assert_eq!(chat.messages[1].duration_ms, Some(2_500), "本轮耗时");
-    assert!(
-        chat.thinking_toggled.is_empty(),
-        "历史加载清空显式 thinking 切换"
-    );
-}
-
-/// 模型配置了默认思考等级时，未显式选择的窗格选择也带上该等级（variant 参数）。
-#[test]
-fn effective_selection_applies_model_default_variant() {
-    let models = models_with(Some("high"));
-    let chat = LxChat::new();
-    let selection = chat
-        .effective_selection(&models)
-        .expect("default selection");
-    assert_eq!(
-        selection.variant.as_deref(),
-        Some("high"),
-        "回落模型默认等级"
-    );
-    // 端到端：规范化后的选择能取到思考参数（→ 请求体 `reasoning_effort`）。
-    assert_eq!(
-        models.variant_params_of(&selection),
-        Some(serde_json::json!({"reasoningEffort": "high"})),
-        "默认等级参数可用"
-    );
-    // 显式失效的 variant 也回落默认。
-    let mut chat = LxChat::new();
-    chat.selection = Some(ModelSelection {
-        provider: "p".into(),
-        model: "m".into(),
-        variant: Some("gone".into()),
-    });
-    let selection = chat.effective_selection(&models).expect("pane selection");
-    assert_eq!(selection.variant.as_deref(), Some("high"));
-}
-
 /// 建立「流中」状态：草稿 → Committing → ack → Streaming；返回 (状态, 窗格, 请求键)。
 fn streaming_state(session: &str) -> (AppState, PaneId, RequestKey) {
     let mut state = ready_state("问");
@@ -1252,260 +982,4 @@ fn expired_arm() -> std::time::Instant {
     std::time::Instant::now()
         .checked_sub(STOP_ARM_WINDOW + Duration::from_millis(1))
         .expect("monotonic clock")
-}
-
-#[test]
-fn escape_first_press_arms_second_press_stops() {
-    let (mut state, pane, key) = streaming_state("sess-esc");
-    state.effects.clear();
-    // 首次 Esc：只待命并提示，不取消请求。
-    assert!(escape_stop(&mut state, pane), "首次 Esc 生效（待命）");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_some(),
-        "记录待命时刻"
-    );
-    assert!(state.effects.is_empty(), "首次 Esc 不取消请求");
-    // 窗口内第二次 Esc：真正停止。
-    assert!(escape_stop(&mut state, pane), "二次 Esc 停止");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none(),
-        "停止后清除待命"
-    );
-    assert!(
-        state
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelChatStream { key: k } if *k == key)),
-        "发出取消流效应"
-    );
-}
-
-#[test]
-fn escape_is_swallowed_when_idle() {
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
-    assert!(!escape_stop(&mut state, pane), "空闲吞掉 Esc");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none()
-    );
-}
-
-#[test]
-fn escape_after_window_rearms_without_stopping() {
-    let (mut state, pane, _key) = streaming_state("sess-esc-window");
-    state.effects.clear();
-    // 待命已超窗口：再按只重新待命（不停止）。
-    state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(expired_arm());
-    assert!(escape_stop(&mut state, pane));
-    assert!(state.effects.is_empty(), "过期待命不停止");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_some(),
-        "重新待命"
-    );
-}
-
-#[test]
-fn expired_stop_arm_is_cleared_by_loading_tick() {
-    let (mut state, pane, _key) = streaming_state("sess-esc-expire");
-    state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(expired_arm());
-    assert!(advance_lx_loading(&mut state), "流中转轮推进");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none(),
-        "提示随窗口超时消失"
-    );
-}
-
-#[test]
-fn stop_stream_clears_armed_state() {
-    let (mut state, pane, _key) = streaming_state("sess-esc-clear");
-    state.pane_mut_anywhere(pane).unwrap().lx.chat.stop_armed_at = Some(std::time::Instant::now());
-    assert!(stop_stream(&mut state, pane));
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .unwrap()
-            .lx
-            .chat
-            .stop_armed_at
-            .is_none()
-    );
-}
-
-#[test]
-fn stream_parts_record_start_and_end_timestamps() {
-    let (mut state, pane, key) = streaming_state("sess-part-time");
-    on_stream_delta(
-        &mut state,
-        &key,
-        &[ChatDelta::Part(PartDelta {
-            kind: PartKind::Reasoning,
-            text: "思考".into(),
-            metadata: None,
-        })],
-    );
-    on_stream_delta(
-        &mut state,
-        &key,
-        &[ChatDelta::Part(PartDelta {
-            kind: PartKind::Reasoning,
-            text: "继续".into(),
-            metadata: None,
-        })],
-    );
-    let target = state.pane_anywhere(pane).unwrap();
-    let part = &target.lx.chat.messages[1].parts[0];
-    assert_eq!(part.content, "思考继续", "同 kind 合并");
-    let started = part.started_at_ms.expect("起点时刻");
-    let ended = part.ended_at_ms.expect("终点时刻");
-    assert!(started > 0, "毫秒时刻有效");
-    assert!(ended >= started, "终点不早于起点");
-}
-
-/// 造一条展示用消息（置顶行测试）。
-fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
-    ChatMessageView {
-        id: format!("{role}-{index}"),
-        role: role.into(),
-        status: "complete".into(),
-        turn_index: 0,
-        parts: vec![ChatPartView {
-            kind: PartKind::Text,
-            content: text.into(),
-            provider_metadata_json: None,
-            started_at_ms: None,
-            ended_at_ms: None,
-            completed_at_ms: None,
-        }],
-        model_label: None,
-        error_code: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        duration_ms: None,
-    }
-}
-
-/// 焦点窗格置为 lx，并塞入一段会溢出的历史（两轮问答，正文各若干行）。
-fn state_with_lx_history() -> (AppState, PaneId, ratatui::layout::Rect) {
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
-    let rect = ratatui::layout::Rect::new(0, 0, 24, 10);
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    target.view = crate::app::state::PaneView::Lx;
-    target.lx.chat.messages = vec![
-        lx_view_message("user", "第一轮的问题", 0),
-        lx_view_message("assistant", "A1\nA2\nA3\nA4", 1),
-        lx_view_message("user", "第二轮的问题", 2),
-        lx_view_message("assistant", "B1\nB2\nB3\nB4", 3),
-    ];
-    (state, pane, rect)
-}
-
-#[test]
-fn resolve_writes_sticky_suppression_memory_from_pure_view() {
-    let (mut state, pane, rect) = state_with_lx_history();
-    let rects = [(pane, rect)];
-    let inner = crate::layout::pane_inner_rect(rect);
-
-    // 场景 1：顶行落在第一轮回复里 → 让位后仍需要 → 不写记忆。
-    let target = state.pane_anywhere(pane).expect("pane");
-    let view = crate::ui::main_content::lx::history_view(inner, &target.lx).expect("view");
-    let answer_start = view.messages[1].start;
-    let boundary = view.messages[2].start.saturating_sub(1);
-    assert!(view.total_rows > boundary + 1, "内容确实溢出");
-    let target = state.pane_mut_anywhere(pane).expect("pane");
-    target.lx.chat.follow_bottom = false;
-    target.lx.chat.history_scroll = answer_start;
-    assert!(
-        !resolve_lx_sticky_prompt(&mut state, &rects),
-        "无需抑制：无变化"
-    );
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .suppressed_prompt_header,
-        None
-    );
-
-    // 场景 2：抑制只在"让位会改变顶行"时发生——跟随底部（顶行 = total - height）
-    // 才会；阅读态的顶行是绝对行号，不随让位变化。几何随面板尺寸变化，故搜索视口高度。
-    let mut scenario = None;
-    for height in 4..24u16 {
-        let probe_rect = ratatui::layout::Rect::new(0, 0, 24, height);
-        let probe_inner = crate::layout::pane_inner_rect(probe_rect);
-        {
-            let target = state.pane_mut_anywhere(pane).expect("pane");
-            target.lx.chat.follow_bottom = true;
-        }
-        let target = state.pane_anywhere(pane).expect("pane");
-        let probe =
-            crate::ui::main_content::lx::history_view(probe_inner, &target.lx).expect("view");
-        if probe.suppressed.is_some() {
-            scenario = Some((probe_rect, probe.suppressed));
-            break;
-        }
-    }
-    let (probe_rect, expected) = scenario.expect("存在跟随态下应抑制的视口尺寸");
-    let rects = [(pane, probe_rect)];
-    assert!(resolve_lx_sticky_prompt(&mut state, &rects), "写记忆即变化");
-    assert_eq!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .suppressed_prompt_header,
-        expected,
-        "记忆与纯函数结果一致"
-    );
-    assert!(
-        !resolve_lx_sticky_prompt(&mut state, &rects),
-        "重复 resolve 无变化"
-    );
-}
-
-#[test]
-fn jump_to_prompt_clears_follow_and_moves_viewport() {
-    let (mut state, pane, _rect) = state_with_lx_history();
-    assert!(jump_lx_history_to_prompt(&mut state, pane, 5));
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert_eq!(chat.history_scroll, 5, "跳到目标行");
-    assert!(!chat.follow_bottom, "进入阅读态（置顶行随让位规则收敛）");
-    assert!(
-        !jump_lx_history_to_prompt(&mut state, pane, 5),
-        "重复跳转无变化"
-    );
 }

@@ -44,12 +44,14 @@
 
 ## 3. 纯事件模型与 app 状态
 
-- [ ] 在 `src/chat/events.rs` 增加思考开始/结束、工具参数开始/增量/结束与“本次模型响应结束”纯数据语义；不要混淆响应结束和用户轮次结束。
-- [ ] 扩展 `ChatPartView` 思考完成状态，增加工具步骤视图，保持每轮只有一条 assistant 消息。
-- [ ] `app/update/chat` 以 `RequestKey` 过滤旧事件；文本、思考和工具按统一 position 入状态。切换 kind 或收到显式 end 时只关闭当前 reasoning 块一次。
-- [ ] 工具状态更新只经 app update；pending、running、终态对应纯状态与 DB Effect/ack，不在 update 中执行文件 IO。
-- [ ] 定义 call ID 重复、旧 generation、同 ID 参数重放、取消后的迟到结果处理规则，并覆盖纯状态测试。
-- [ ] 保持 `/new`、`/resume`、多窗格、切换模型和 Esc 双击停止的现有交互；生成中 Enter 仍不得提交新轮。
+- [x] 在 `src/chat/events.rs` 增加思考开始/结束、工具参数开始/增量/结束与“本次模型响应结束”纯数据语义；不要混淆响应结束和用户轮次结束。
+- [x] 扩展 `ChatPartView` 思考完成状态，增加工具步骤视图，保持每轮只有一条 assistant 消息。
+- [x] `app/update/chat` 以 `RequestKey` 过滤旧事件；文本、思考和工具按统一 position 入状态。切换 kind 或收到显式 end 时只关闭当前 reasoning 块一次。
+- [x] 工具状态更新只经 app update；pending、running、终态对应纯状态与 DB Effect/ack，不在 update 中执行文件 IO。
+- [x] 定义 call ID 重复、旧 generation、同 ID 参数重放、取消后的迟到结果处理规则，并覆盖纯状态测试。
+- [x] 保持 `/new`、`/resume`、多窗格、切换模型和 Esc 双击停止的现有交互；生成中 Enter 仍不得提交新轮。
+
+> G2 已实施：事件与常量见 `src/chat/events.rs`；步骤视图/状态机见 `src/app/state/lx/chat/{steps,stream}.rs`；DB→视图投影见 `src/app/update/chat/view.rs`；会话命令拆分到 `src/app/update/chat/session.rs`。差异与限制（item ID 只关闭尾部开放块、UI 工具行为单行占位）记录在 `design.md` §20.1。
 
 验收：无终端、无网络的状态测试证明一轮多步顺序、思考及时完成、工具状态正确、旧事件不污染新轮。
 

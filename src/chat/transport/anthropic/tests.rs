@@ -12,6 +12,7 @@ fn request() -> ChatRequest {
             text: "你好".into(),
             reasoning_metadata: None,
         }],
+        items: Vec::new(),
         model: crate::db::chat::ModelSnapshot {
             provider: "anthropic".into(),
             model: "claude".into(),

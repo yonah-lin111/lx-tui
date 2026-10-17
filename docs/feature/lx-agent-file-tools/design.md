@@ -582,3 +582,16 @@ lx 配置层有四类 provider transport；`src/chat/transport` 实际有五条�
 **取消与退出：** 不得在 `spawn_blocking` 开始后假设 `JoinHandle::abort` 已回滚文件写入；只有任务返回后才能记录真实结果。关闭 TUI 时不新增工具任务，已开始任务的收尾与进程强退之间有天然不确定性，DB 恢复只标 interrupted。不要为本任务改动 `src/tui/` 的鼠标上报/原始模式恢复顺序。
 
 **错误与日志：** `Result` 错误应区分协议、参数、文件系统、DB 四类。工具返回给模型的错误可含路径和有限的原因文本；`tracing` 只记 call ID、工具名、状态和耗时，不打印参数全文、文件内容、API Key。生产代码不使用 `unwrap/expect`，用户可见短文案集中 `src/ui/text.rs`。
+
+### 20.1 已实施（G2：统一纯事件模型 + 有序步骤时间线 + 思考独立完成态）
+
+实际落地与上文示意的差异（均为等价实现，不改变不变量）：
+
+- `ChatDelta` 在既有 `Part`/`Usage`/`Finished` 之上**最小扩展**：新增 `ReasoningEnded { item_id: Option<String> }`、`ToolInputStarted { call_id, name, ordinal }`、`ToolInputDelta { call_id, chunk }`、`ToolInputEnded { call_id, arguments_json }`、`ResponseFinished { stop: ModelStepStop }`，`ModelStepStop = Final | ToolCalls | Failed | Cancelled`。未引入独立的 `ReasoningStarted`：思考块由首个 reasoning `Part` delta 隐式开启（与现有解码器一致）。
+- `ChatDelta::is_incremental()` / `payload_bytes()` 作为客户端回投与 checkpoint 字节统计的统一口径：整轮终态 `Finished` 不进即时增量批，`ResponseFinished` 进。
+- 新增常量 `MAX_TOOL_ARGUMENTS_BYTES`（1 MiB，与 `db::chat::MAX_TOOL_ARGUMENT_BYTES` 由测试锁定一致）、`MAX_SUMMARY_CHARS`（256）与稳定错误码 `TOOL_ARGUMENTS_TOO_LARGE_CODE` / `TOOL_ARGUMENTS_INVALID_CODE`。
+- `ModelItem` 与 `ChatRequest::items` 已加入；当前各 transport 仍按 `turns` 编码，`items` 与 `turns` 在纯文本历史下等价（工具化编码在协议阶段接入）。
+- `AssistantStepView` / `ToolCallView` / `ToolStatus` / `ToolSummary` 落在 `app/state/lx/chat/steps.rs`；流事件转换在 `app/state/lx/chat/stream.rs`；DB→视图投影在 `app/update/chat/view.rs`（`ChatMessageView::steps` 是唯一顺序来源，`parts()`/`text_parts()`/`reasoning_parts()`/`tools()`/`step_at()` 为只读辅助）。
+- `reasoning_streaming(message, step)` 只看步骤是 Reasoning 且 `completed_at_ms` 为空、消息 `status == "streaming"`；不再要求它是最后一个 reasoning 块或最后一条消息。
+- **限制**：内存只保留“当前开放思考块”这一个状态，`ReasoningEnded { item_id: Some(..) }` 的 item ID 仅作诊断（`tracing::trace`），实际关闭尾部开放块；按 item ID 索引与并发多 item 结束留待后续阶段。
+- UI 本组只做编译所需最小改造：工具步骤以**单行摘要**占位（`工具名 · 状态 · 路径 · 行范围 · 计数`，带 `TODO(G4)` 注释），行数口径与渲染共享 `tool_rows()`，保证不 panic、不吞行、不与几何漂移；真实工具行由 G4 实现。

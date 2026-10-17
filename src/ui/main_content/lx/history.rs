@@ -18,7 +18,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::state::{ChatMessageView, Lx};
+use crate::app::state::{AssistantStepView, ChatMessageView, Lx};
 use crate::ui::markdown_render;
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
@@ -58,7 +58,7 @@ pub struct MessageRows {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryLayout {
     pub area: Rect,
-    /// （消息索引, 该消息内 part 索引, 头部矩形）。
+    /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
@@ -126,23 +126,26 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             rows += 1;
         }
         let start = rows;
-        // 消息内块（各内容块 / 通知 / 统计行）之间空一行。
+        // 消息内块（各内容块 / 工具行 / 通知 / 统计行）之间空一行。
         let mut first_block = true;
-        for (part_index, part) in message.parts.iter().enumerate() {
-            let (is_reasoning, part_rows) = match part.kind {
-                crate::chat::events::PartKind::Text => {
-                    (false, text_rows(message, &part.content, width))
-                }
-                crate::chat::events::PartKind::Reasoning => (
-                    true,
-                    1 + if lx.chat.reasoning_expanded(message_index, part_index) {
-                        thinking_rows(&part.content, width)
-                    } else {
-                        0
-                    },
-                ),
+        for (step_index, step) in message.steps.iter().enumerate() {
+            let (is_reasoning, step_rows) = match step {
+                AssistantStepView::Part { part, .. } => match part.kind {
+                    crate::chat::events::PartKind::Text => {
+                        (false, text_rows(message, &part.content, width))
+                    }
+                    crate::chat::events::PartKind::Reasoning => (
+                        true,
+                        1 + if lx.chat.reasoning_expanded(message_index, step_index) {
+                            thinking_rows(&part.content, width)
+                        } else {
+                            0
+                        },
+                    ),
+                },
+                AssistantStepView::Tool { call, .. } => (false, tool_rows(call, width)),
             };
-            if part_rows == 0 {
+            if step_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行。
             }
             if !first_block {
@@ -155,11 +158,11 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     .saturating_add(u16::try_from(rows).unwrap_or(u16::MAX));
                 thinking.push((
                     message_index,
-                    part_index,
+                    step_index,
                     Rect::new(area.x, header_y, width, 1),
                 ));
             }
-            rows += part_rows;
+            rows += step_rows;
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
@@ -293,10 +296,7 @@ fn sticky_candidate(
 /// 置顶行摘要：该用户消息首个正文块的前 512 字符 → 控制字符转空格 → 空白折叠为单行；
 /// 无正文或全空白返回 None（该条不钉）。
 fn sticky_text(message: &crate::app::state::ChatMessageView) -> Option<String> {
-    let part = message
-        .parts
-        .iter()
-        .find(|part| part.kind == crate::chat::events::PartKind::Text)?;
+    let part = message.text_parts().next()?;
     let sample: String = part.content.chars().take(STICKY_SAMPLE_CHARS).collect();
     let single: String = sample
         .chars()
@@ -420,19 +420,25 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
         // 消息内块（各内容块 / 通知 / 统计行）之间空一行（与 `layout` 同口径）。
         let mut first_block = true;
         let mut first_user_line = true;
-        for (part_index, part) in message.parts.iter().enumerate() {
-            let expanded = lx.chat.reasoning_expanded(message_index, part_index);
-            let block_rows = match part.kind {
-                crate::chat::events::PartKind::Text => {
-                    text_rows(message, &part.content, content.width)
+        for (step_index, step) in message.steps.iter().enumerate() {
+            let (block_rows, part_kind) = match step {
+                AssistantStepView::Part { part, .. } => {
+                    let expanded = lx.chat.reasoning_expanded(message_index, step_index);
+                    let rows = match part.kind {
+                        crate::chat::events::PartKind::Text => {
+                            text_rows(message, &part.content, content.width)
+                        }
+                        crate::chat::events::PartKind::Reasoning => {
+                            1 + if expanded {
+                                thinking_rows(&part.content, content.width)
+                            } else {
+                                0
+                            }
+                        }
+                    };
+                    (rows, Some((part, expanded)))
                 }
-                crate::chat::events::PartKind::Reasoning => {
-                    1 + if expanded {
-                        thinking_rows(&part.content, content.width)
-                    } else {
-                        0
-                    }
-                }
+                AssistantStepView::Tool { call, .. } => (tool_rows(call, content.width), None),
             };
             if block_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行（与 `layout` 同口径）。
@@ -441,6 +447,13 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                 row_index += 1;
             }
             first_block = false;
+            let Some((part, expanded)) = part_kind else {
+                // TODO(G4): 真实工具行（状态图标/动词/路径/计数）。
+                if let AssistantStepView::Tool { call, .. } = step {
+                    draw_tool_placeholder(grid, content, scroll, &mut row_index, call);
+                }
+                continue;
+            };
             match part.kind {
                 crate::chat::events::PartKind::Text => {
                     if is_user {
@@ -469,7 +482,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                     }
                 }
                 crate::chat::events::PartKind::Reasoning => {
-                    let streaming = lx.chat.reasoning_streaming(message_index, part_index);
+                    let streaming = lx.chat.reasoning_streaming(message_index, step_index);
                     if let Some(y) = visible_row(content, scroll, row_index) {
                         // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色；不带折叠标记）；
                         // 完成后：`▸ Thought · 6.3s` / `▾ Thought · 6.3s`（压暗一档的品牌蓝）。
@@ -556,6 +569,61 @@ fn text_rows(message: &crate::app::state::ChatMessageView, content: &str, width:
 /// assistant markdown 正文渲染成若干行（已按 `width` 自适应：表格收缩、其余软换行）。
 fn markdown_rows(content: &str, width: u16) -> usize {
     markdown_render::render_wrapped(content, width).len()
+}
+
+/// 工具步骤占位行数（**当前恒为 1 行单行摘要**）。
+///
+/// TODO(G4): G4 组实现真实工具行（状态图标/动词/路径/行范围/增删计数）后，
+/// 行数可能与内容/宽度相关；此处与渲染函数必须继续共用同一口径，
+/// 否则滚动条与鼠标命中会漂移。
+fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    // 单行摘要（超宽由渲染侧裁剪），保证工具步骤不吞行、不错位。
+    let _ = call;
+    1
+}
+
+/// 工具步骤单行摘要文本（占位实现；只装状态与路径等摘要，不铺文件内容）。
+fn tool_placeholder_text(call: &crate::app::state::ToolCallView) -> String {
+    let mut fields: Vec<String> = vec![
+        call.name.clone(),
+        text::tool_status_label(call.status).to_string(),
+    ];
+    if let Some(summary) = &call.summary {
+        if let Some(path) = &summary.path {
+            fields.push(path.clone());
+        }
+        if let Some((start, end)) = summary.range {
+            fields.push(format!("{start}-{end}"));
+        }
+        if let Some(added) = summary.added {
+            fields.push(format!("+{added}"));
+        }
+        if let Some(removed) = summary.removed {
+            fields.push(format!("-{removed}"));
+        }
+        if let Some(matches) = summary.matches {
+            fields.push(format!("{matches} matches"));
+        }
+    }
+    fields.join(text::LX_CHAT_TOOL_STATUS_SEP)
+}
+
+/// 绘制工具步骤占位行（TODO(G4)：替换为真实工具行渲染）。
+fn draw_tool_placeholder(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &crate::app::state::ToolCallView,
+) {
+    if let Some(y) = visible_row(rect, scroll, *row_index) {
+        let line = tool_placeholder_text(call);
+        grid.put_clipped(rect.x, y, &line, style::muted(), rect.width);
+    }
+    *row_index += 1;
 }
 
 /// 绘制一段 assistant markdown 正文（已按宽度自适应，无需再换行）。

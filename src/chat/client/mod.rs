@@ -297,19 +297,15 @@ fn decode_frame(
     let produced = decoder.decode_frame(&frame.data)?;
     let mut fresh: Vec<ChatDelta> = Vec::new();
     for delta in produced {
-        let stream_it = match &delta {
-            ChatDelta::Part(part) => {
-                *total_text += part.text.len();
-                if *total_text > MAX_TOTAL_TEXT_BYTES {
-                    return Err("response exceeds size limit".into());
-                }
-                true
+        if let ChatDelta::Part(part) = &delta {
+            *total_text += part.text.len();
+            if *total_text > MAX_TOTAL_TEXT_BYTES {
+                return Err("response exceeds size limit".into());
             }
-            ChatDelta::Usage(_) => true,
-            // 终态由 `Finished` 事件单独回投，不进增量批（避免重复/顺序歧义）。
-            ChatDelta::Finished { .. } => false,
-        };
-        if stream_it {
+        }
+        // 整轮终态由 `Finished` 事件单独回投，不进增量批（避免重复/顺序歧义）；
+        // 其余（含 `ResponseFinished`）都是状态层需要即时消费的增量。
+        if delta.is_incremental() {
             fresh.push(delta.clone());
         }
         deltas.push(delta);

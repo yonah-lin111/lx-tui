@@ -24,6 +24,7 @@ fn request() -> ChatRequest {
                 reasoning_metadata: None,
             },
         ],
+        items: Vec::new(),
         model: crate::db::chat::ModelSnapshot {
             provider: "gemini".into(),
             model: "gemini-flash".into(),

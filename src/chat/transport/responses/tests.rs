@@ -19,6 +19,7 @@ fn request() -> ChatRequest {
                 reasoning_metadata: None,
             },
         ],
+        items: Vec::new(),
         model: crate::db::chat::ModelSnapshot {
             provider: "example".into(),
             model: "grok".into(),

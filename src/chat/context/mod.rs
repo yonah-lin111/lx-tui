@@ -4,7 +4,7 @@
 //! 仅供展示。当前用户消息永远纳入。无上限时不假定具体窗口；
 //! 溢出时最多去掉最老完整轮重试一次，复用同一轮 DB 记录。
 
-use crate::chat::events::{ChatRequest, ChatTurn};
+use crate::chat::events::{ChatRequest, ChatTurn, ModelItem};
 use crate::db::chat::{ChatMessage, ModelSnapshot};
 
 /// 装配输入：已加载的消息与当前草稿。
@@ -87,20 +87,27 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     }
     kept.reverse();
     let omitted_turns = complete_turns.len() - kept.len();
+    // 结构化历史（工具化路径）：当前各 transport 仍按 `turns` 编码，本组只保证
+    // 纯文本历史下两者等价；成对 tool call/result 的装配由上下文重做阶段接入。
+    let mut items: Vec<ModelItem> = Vec::new();
     // 溢出重试候选：去掉最老一轮后的历史（供调用方在上游报错时收缩一次）。
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(kept.len() * 2 + 1);
     for (_, user, assistant) in &kept {
+        let user_text = user_text_of(user);
+        let assistant_text = assistant_text_of(assistant);
         turns.push(ChatTurn {
             role: "user".into(),
-            text: user_text_of(user),
+            text: user_text.clone(),
             reasoning_metadata: None,
         });
         // 跨 provider 的 reasoning 元数据不回传：只回传该轮已完成正文。
         turns.push(ChatTurn {
             role: "assistant".into(),
-            text: assistant_text_of(assistant),
+            text: assistant_text.clone(),
             reasoning_metadata: None,
         });
+        items.push(ModelItem::UserText(user_text));
+        items.push(ModelItem::AssistantText(assistant_text));
     }
     // 当前用户消息必须保留。
     let draft_exceeds = budget.is_some_and(|budget| draft_tokens as u64 > budget);
@@ -109,9 +116,11 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         text: input.draft.to_string(),
         reasoning_metadata: None,
     });
+    items.push(ModelItem::UserText(input.draft.to_string()));
     Assembly {
         request: ChatRequest {
             turns,
+            items,
             model: input.model.clone(),
             variant_params: input.variant_params.clone(),
         },

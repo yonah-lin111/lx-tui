@@ -579,6 +579,31 @@ pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 上下文省略提示前缀。
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
 
+/// 工具步骤占位摘要：工具名与状态之间的分隔（真实工具行由后续阶段重做）。
+pub const LX_CHAT_TOOL_STATUS_SEP: &str = " · ";
+/// 工具步骤状态文案（占位渲染用；真实工具行动词见后续阶段的 Gallery 样式）。
+pub const LX_CHAT_TOOL_INPUT_STREAMING: &str = "receiving input";
+pub const LX_CHAT_TOOL_PENDING: &str = "pending";
+pub const LX_CHAT_TOOL_RUNNING: &str = "running";
+pub const LX_CHAT_TOOL_COMPLETED: &str = "done";
+pub const LX_CHAT_TOOL_FAILED: &str = "failed";
+pub const LX_CHAT_TOOL_CANCELLED: &str = "cancelled";
+pub const LX_CHAT_TOOL_INTERRUPTED: &str = "interrupted";
+
+/// 工具状态 → 固定文案。
+pub fn tool_status_label(status: crate::app::state::ToolStatus) -> &'static str {
+    use crate::app::state::ToolStatus;
+    match status {
+        ToolStatus::InputStreaming => LX_CHAT_TOOL_INPUT_STREAMING,
+        ToolStatus::Pending => LX_CHAT_TOOL_PENDING,
+        ToolStatus::Running => LX_CHAT_TOOL_RUNNING,
+        ToolStatus::Completed => LX_CHAT_TOOL_COMPLETED,
+        ToolStatus::Failed => LX_CHAT_TOOL_FAILED,
+        ToolStatus::Cancelled => LX_CHAT_TOOL_CANCELLED,
+        ToolStatus::Interrupted => LX_CHAT_TOOL_INTERRUPTED,
+    }
+}
+
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
 pub const TOAST_SYNC_CANCELLED: &str = "Workspace sync cancelled";

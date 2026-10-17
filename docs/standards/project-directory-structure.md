@@ -26,8 +26,12 @@ lx-tui/
       overlay.rs                浮层模型（右键菜单、重命名输入与关闭确认）
       selection.rs              选区模型（终端窗格内文本选择）
       actions.rs                行为枚举
-      state/lx/                 lx 页状态：编辑器、聊天会话（chat.rs）、`/` 命令面板（slash.rs）
-      update/                   行为到状态的转换（含 update/chat：发送/流事件/终态/命令）
+      state/lx/                 lx 页状态：编辑器、聊天会话（chat.rs 会话/请求状态机）、
+                                聊天步骤时间线（chat/steps.rs：part/工具/status/摘要）、
+                                流事件→步骤状态转换（chat/stream.rs）、`/` 命令面板（slash.rs）
+      update/                   行为到状态的转换（含 update/chat：发送/流事件/终态；
+                                update/chat/session.rs：会话生命周期与 `/` 命令；
+                                update/chat/view.rs：DB 记录→步骤时间线投影）
     ui/                         渲染层，只读状态
       mod.rs
       layout.rs                 屏幕区域划分（侧栏/标签栏/主区/右栏）
@@ -79,7 +83,7 @@ lx-tui/
 
 ## 模块职责
 
-1. `app/`：唯一状态来源；`state.rs`/`state/` 只放数据结构（含窗格终端仿真状态与 lx 聊天会话状态），`update/` 只做状态转换；不得执行 IO、渲染或线程操作。`update/chat.rs` 实现 lx 聊天状态机（发送/流事件/终态/`/` 命令），只产生 `Effect` 与纯状态更新。
+1. `app/`：唯一状态来源；`state.rs`/`state/` 只放数据结构（含窗格终端仿真状态与 lx 聊天会话状态），`update/` 只做状态转换；不得执行 IO、渲染或线程操作。`update/chat/` 实现 lx 聊天状态机（发送/流事件/终态/`/` 命令），只产生 `Effect` 与纯状态更新；展示历史唯一顺序来源是 `ChatMessageView::steps`（part 与工具步骤共用同一 `position`），由 `update/chat/view.rs` 从 DB 的 parts 与 tools 按 position 合并。
 2. `layout.rs`（根级）：BSP 平铺模型与几何计算，`pane_rects` / `pane_inner_size` / 方向导航等均为纯函数，可直接用 `Rect` 单元测试。
 3. `ui/`：接收 `&AppState`（及其只读派生）绘制；`layout.rs` 负责屏幕区域划分，`main_content.rs` 按窗格视图分派 lx 页与终端网格并写入 `Buffer`，均为纯渲染；lx 页的聊天历史（`main_content/lx/history.rs`）、消息底部通知（`main_content/lx/notice.rs`）、状态（`main_content/lx/status.rs`，覆盖绘制在窗格底边框上）按职责拆分，命中几何与绘制共享纯布局函数。
 4. `event/`：唯一事件循环；tokio `select!` 收敛键盘、PTY 输出与定时事件为 `app` 行为调用与窗格写入，并做帧节流。

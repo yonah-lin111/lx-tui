@@ -157,6 +157,7 @@ fn start_stream(
     });
     let request = ChatRequest {
         turns: assembly.request.turns.clone(),
+        items: assembly.request.items.clone(),
         model: crate::db::chat::ModelSnapshot {
             provider: frozen.provider.clone(),
             model: frozen.model.clone(),
@@ -203,7 +204,7 @@ fn start_stream(
     true
 }
 
-/// 本轮用户草稿：取**最近一条 user 消息**的正文 part 拼接。
+/// 本轮用户草稿：取**最近一条 user 消息**的正文拼接。
 ///
 /// 发送时该轮 assistant 占位已追加在末尾，故不能用 `messages.last()`；
 /// 必须按 role 反向查找 user 消息，否则得到空串（请求携带空 user 消息被拒）。
@@ -212,14 +213,7 @@ fn latest_user_draft(messages: &[crate::app::state::ChatMessageView]) -> String 
         .iter()
         .rev()
         .find(|message| message.role == "user")
-        .map(|message| {
-            message
-                .parts
-                .iter()
-                .filter(|part| part.kind == crate::chat::events::PartKind::Text)
-                .map(|part| part.content.as_str())
-                .collect::<String>()
-        })
+        .map(|message| message.text())
         .unwrap_or_default()
 }
 
@@ -255,13 +249,7 @@ pub fn handle_net_event(
     match event {
         ChatNetEvent::Delta { key, deltas } => {
             // 累计字节：超过间隔或阈值时入队一次 checkpoint（合并写盘）。
-            let bytes: usize = deltas
-                .iter()
-                .filter_map(|delta| match delta {
-                    ChatDelta::Part(part) => Some(part.text.len()),
-                    _ => None,
-                })
-                .sum();
+            let bytes: usize = deltas.iter().map(ChatDelta::payload_bytes).sum();
             let entry = streams
                 .checkpoints
                 .entry(key.clone())
@@ -299,17 +287,10 @@ fn schedule_checkpoint(state: &mut AppState, key: &RequestKey) {
         .lx
         .chat
         .messages
-        .last()
-        .filter(|message| message.id == assistant_id)
-        .map(|message| {
-            crate::db::chat::chat_part_views(
-                message
-                    .parts
-                    .iter()
-                    .enumerate()
-                    .map(|(position, part)| (position as i64, part)),
-            )
-        })
+        .iter()
+        .rev()
+        .find(|message| message.id == assistant_id)
+        .map(crate::db::chat::chat_message_part_views)
         .unwrap_or_default();
     let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
         return;
@@ -346,13 +327,7 @@ fn chat_part_views_to_db(
             cache_write_tokens: None,
             created_at_ms: 0,
             completed_at_ms: None,
-            parts: crate::db::chat::chat_part_views(
-                message
-                    .parts
-                    .iter()
-                    .enumerate()
-                    .map(|(position, part)| (position as i64, part)),
-            ),
+            parts: crate::db::chat::chat_message_part_views(message),
             tools: Vec::new(),
         })
         .collect()
@@ -361,35 +336,41 @@ fn chat_part_views_to_db(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::state::{ChatMessageView, ChatPartView};
+    use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView};
     use crate::chat::events::PartKind;
 
     fn message(id: &str, role: &str, text: &str, reasoning: Option<&str>) -> ChatMessageView {
-        let mut parts = Vec::new();
+        let mut steps = Vec::new();
         if let Some(reasoning) = reasoning {
-            parts.push(ChatPartView {
-                kind: PartKind::Reasoning,
-                content: reasoning.to_string(),
+            steps.push(AssistantStepView::Part {
+                position: 0,
+                part: ChatPartView {
+                    kind: PartKind::Reasoning,
+                    content: reasoning.to_string(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            });
+        }
+        steps.push(AssistantStepView::Part {
+            position: steps.len() as i64,
+            part: ChatPartView {
+                kind: PartKind::Text,
+                content: text.to_string(),
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
                 completed_at_ms: None,
-            });
-        }
-        parts.push(ChatPartView {
-            kind: PartKind::Text,
-            content: text.to_string(),
-            provider_metadata_json: None,
-            started_at_ms: None,
-            ended_at_ms: None,
-            completed_at_ms: None,
+            },
         });
         ChatMessageView {
             id: id.to_string(),
             role: role.to_string(),
             status: "complete".into(),
             turn_index: 0,
-            parts,
+            steps,
             model_label: None,
             error_code: None,
             input_tokens: None,

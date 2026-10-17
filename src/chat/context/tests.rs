@@ -208,6 +208,7 @@ fn shrink_once_removes_oldest_turn() {
                 text: "only".into(),
                 reasoning_metadata: None,
             }],
+            items: Vec::new(),
             model: model(),
             variant_params: None,
         },

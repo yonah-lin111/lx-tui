@@ -12,4 +12,7 @@ pub mod thinking;
 pub mod transport;
 
 pub use context::{Assembly, AssemblyInput, assemble, shrink_once};
-pub use events::{ChatDelta, ChatRequest, ChatTurn, PartDelta, PartKind, StopReason};
+pub use events::{
+    ChatDelta, ChatRequest, ChatTurn, MAX_SUMMARY_CHARS, MAX_TOOL_ARGUMENTS_BYTES, ModelItem,
+    ModelStepStop, PartDelta, PartKind, StopReason,
+};
