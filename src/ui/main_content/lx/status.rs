@@ -3,8 +3,8 @@
 //! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
 //! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
 //! 左侧 ` 模型名 · 供应商名 `（模型名金色高亮、供应商用本轮统计行同款次要信息色），
-//! 右端 `context:NN%`（**未知用量或零消耗整段隐藏**；用量很小、四舍五入到 0% 时仍显示
-//! `context:0%`——有真实用量就是有上下文）。
+//! 右端 `context:当前用量/模型上限`（token 短格式，如 `context:45.2k/200k`；**未知用量、
+//! 未知上限或零消耗整段隐藏**）。
 //! 宽度不足时依次丢弃上下文占用 → 供应商，始终保留模型名；模型名按列硬切（不使用省略号）。
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
 //! 两端角字符保留，各控件矩形由同一布局函数派生。
@@ -173,17 +173,16 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     }
 }
 
-/// 上下文占用文字（`context:NN%`）；未知（无上限或无用量）与**零消耗**返回 None（整段隐藏）。
-///
-/// 注意：用量很小、百分比四舍五入到 0 时**仍然显示** `context:0%`——有真实用量就说明
-/// 有上下文（否则百万级上下限下历史会话会一直看起来「上下文为空」）。
+/// 上下文占用文字（`context:当前用量/模型上限`，token 短格式）；未知（无上限或无用量）
+/// 与**零消耗**返回 None（整段隐藏）。
 fn context_text(status: &ChatStatus) -> Option<String> {
-    status.input_tokens.filter(|tokens| *tokens > 0)?;
-    let percent = status.context_percent?;
+    let used = status.input_tokens.filter(|tokens| *tokens > 0)?;
+    let limit = status.context_limit.filter(|limit| *limit > 0)?;
     Some(format!(
-        "{}{percent}{}",
+        "{}{}/{}",
         text::LX_CHAT_CONTEXT_PREFIX,
-        text::LX_CHAT_PERCENT_SUFFIX
+        text::token_count(used),
+        text::token_count(limit)
     ))
 }
 

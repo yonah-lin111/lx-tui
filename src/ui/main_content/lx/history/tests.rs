@@ -187,6 +187,24 @@ fn failed_message_shows_error_notice_with_code_at_bottom() {
 }
 
 #[test]
+fn failed_message_without_code_uses_fallback_reason() {
+    let lx = lx_with(vec![message(
+        "assistant",
+        "failed",
+        vec![text_part("挂了")],
+    )]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    assert_eq!(rows[2], "! Failed");
+    assert_eq!(
+        rows[3], "  └─ no error details provided",
+        "无码时给一句话兜底"
+    );
+}
+
+#[test]
 fn interrupted_message_shows_info_notice_above_stats_line() {
     let mut message = message("assistant", "interrupted", vec![text_part("半截回答")]);
     message.input_tokens = Some(1_200);
@@ -196,13 +214,17 @@ fn interrupted_message_shows_info_notice_above_stats_line() {
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "通知与正文隔一行");
     assert_eq!(rows[2], "! Interrupted", "中断用提示级通知");
-    // 统计行紧贴通知下方（统计是本轮 footer，不再多一个空行）。
+    assert_eq!(
+        rows[3], "  └─ interrupted before completion",
+        "固定一句话原因"
+    );
+    assert_eq!(rows[4], "", "通知与统计行之间空一行");
     assert!(
-        rows[3].starts_with("P / M · 1.2k in · 300 out"),
+        rows[5].starts_with("P / M · 1.2k in · 300 out"),
         "统计行：{rows:?}"
     );
     assert!(
@@ -412,10 +434,10 @@ fn streaming_assistant_has_no_stats_line() {
 
 #[test]
 fn token_and_duration_formatting_matches_agent_conventions() {
-    assert_eq!(token_count(999), "999");
-    assert_eq!(token_count(1_200), "1.2k");
-    assert_eq!(token_count(12_345), "12k");
-    assert_eq!(token_count(1_250_000), "1.2M");
+    assert_eq!(text::token_count(999), "999");
+    assert_eq!(text::token_count(1_200), "1.2k");
+    assert_eq!(text::token_count(12_345), "12k");
+    assert_eq!(text::token_count(1_250_000), "1.2M");
     assert_eq!(format_duration(820), "820ms");
     assert_eq!(format_duration(4_200), "4.2s");
     assert_eq!(format_duration(38_400), "38s");

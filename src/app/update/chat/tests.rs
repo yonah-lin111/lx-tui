@@ -1165,7 +1165,11 @@ fn session_loaded_restores_context_usage_and_stats() {
     let chat = &target.lx.chat;
     assert_eq!(chat.context_tokens, Some(2_500), "上下文占用 = 输入 + 输出");
     assert_eq!(chat.status.input_tokens, Some(2_500), "状态行分子同步恢复");
-    assert_eq!(chat.status.context_percent, Some(2), "2_500 / 100_000 = 2%");
+    assert_eq!(
+        chat.status.context_limit,
+        Some(100_000),
+        "上下文上限同步恢复"
+    );
     assert_eq!(
         chat.messages[1].model_label.as_deref(),
         Some("M"),

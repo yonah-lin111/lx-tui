@@ -895,7 +895,6 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         provider_name: Some("9router-lx-t".into()),
         context_limit: Some(1_000_000),
         input_tokens: Some(720_000),
-        context_percent: Some(72),
         streaming: false,
         omitted_turns: None,
     };
@@ -920,8 +919,8 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         "底边框显示模型 · 供应商：{border}"
     );
     assert!(
-        border.contains("context:72%"),
-        "底边框显示上下文占用 `context:72%`：{border}"
+        border.contains("context:720k/1.0M"),
+        "底边框显示上下文占用 `context:720k/1.0M`：{border}"
     );
 }
 

@@ -508,11 +508,24 @@ pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "esc again: stop",
     "esc stop",
 ];
+/// token 短格式：`999` / `1.2k` / `12k` / `1.2M`（统计行与上下文占用共用）。
+pub fn token_count(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 10_000 {
+        return format!("{:.1}k", tokens as f64 / 1_000.0);
+    }
+    if tokens < 1_000_000 {
+        return format!("{}k", (tokens as f64 / 1_000.0).round() as i64);
+    }
+    format!("{:.1}M", tokens as f64 / 1_000_000.0)
+}
+
 /// 状态行：模型名与供应商名之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
-/// 状态行：上下文占用前缀与百分比后缀（`context:72%`；无消耗整段隐藏）。
+/// 状态行：上下文占用前缀（`context:45.2k/200k`；无消耗整段隐藏）。
 pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
-pub const LX_CHAT_PERCENT_SUFFIX: &str = "%";
 /// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
 /// （`Thought` 与 UI 页 agent 步骤的动词一致）。
 pub const LX_CHAT_THINKING_LABEL: &str = "Thinking";
@@ -535,9 +548,13 @@ pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
-/// 消息底部通知的标题（`! Failed` / `! Interrupted`，对齐 ui 页 agent error）。
+/// 消息底部通知的标题（固定枚举，对齐 ui 页 agent error；渲染为 `! <标题>`）。
 pub const LX_CHAT_NOTICE_FAILED: &str = "Failed";
 pub const LX_CHAT_NOTICE_INTERRUPTED: &str = "Interrupted";
+pub const LX_CHAT_NOTICE_WARNING: &str = "Warning";
+/// 通知原因（一句话；失败有原因码时用原因码）。
+pub const LX_CHAT_NOTICE_INTERRUPTED_REASON: &str = "interrupted before completion";
+pub const LX_CHAT_NOTICE_FAILED_REASON: &str = "no error details provided";
 pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 上下文省略提示前缀。

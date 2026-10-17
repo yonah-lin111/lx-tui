@@ -279,8 +279,6 @@ pub struct ChatStatus {
     pub context_limit: Option<u64>,
     /// 上下文占用分子：最近一次同模型请求的输入 + 输出 token（未知为 None）。
     pub input_tokens: Option<u64>,
-    /// 上下文占用百分比（真实输入 token / 上限，夹到 0..=100）；两者任一未知为 None。
-    pub context_percent: Option<u8>,
     /// 是否正在生成（决定 loading 行与 Esc 停止待命是否生效）。
     pub streaming: bool,
     /// 上下文裁剪省略提示（一次性）。
@@ -442,13 +440,11 @@ impl LxChat {
             self.input_tokens_reset();
         }
         self.last_tokens_model = token_key;
-        let context_percent = context_percent(self.context_tokens, context_limit);
         self.status = ChatStatus {
             model_name,
             provider_name,
             context_limit,
             input_tokens: self.context_tokens,
-            context_percent,
             streaming: self.request.is_busy(),
             omitted_turns: self.omitted_turns_notice.take(),
         };
@@ -527,12 +523,4 @@ impl LxChat {
             ended_at_ms: Some(now),
         });
     }
-}
-
-/// 上下文占用百分比：真实输入 token / 上限，夹到 `0..=100`；两者任一未知为 None。
-pub fn context_percent(input_tokens: Option<u64>, context_limit: Option<u64>) -> Option<u8> {
-    let input = input_tokens?;
-    let limit = context_limit.filter(|limit| *limit > 0)?;
-    let percent = input.saturating_mul(100) / limit;
-    Some(percent.min(100) as u8)
 }

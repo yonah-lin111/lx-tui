@@ -161,17 +161,16 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             }
             rows += part_rows;
         }
-        // 消息底部通知（失败/中断）；统计行紧贴其下（统计是本轮 footer）。
-        let notice = notice(message);
-        if let Some(notice) = &notice {
+        // 消息底部通知（失败/中断）。
+        if let Some(notice) = notice(message) {
             if !first_block {
                 rows += 1;
             }
             first_block = false;
-            rows += notice::rows(notice, width);
+            rows += notice::rows(&notice, width);
         }
         if let Some(line) = stats_line(message) {
-            if !first_block && notice.is_none() {
+            if !first_block {
                 rows += 1;
             }
             rows += wrap(&line, width).len();
@@ -513,17 +512,16 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                 }
             }
         }
-        // 消息底部通知（失败/中断）；统计行紧贴其下（与 `layout` 同口径）。
-        let notice = notice(message);
-        if let Some(notice) = &notice {
+        // 消息底部通知（失败/中断）。
+        if let Some(notice) = notice(message) {
             if !first_block {
                 row_index += 1;
             }
             first_block = false;
-            notice::draw(grid, notice, content, scroll, &mut row_index);
+            notice::draw(grid, &notice, content, scroll, &mut row_index);
         }
         if let Some(line) = stats_line(message) {
-            if !first_block && notice.is_none() {
+            if !first_block {
                 row_index += 1;
             }
             for row in wrap(&line, content.width) {
@@ -629,14 +627,14 @@ fn stats_line(message: &ChatMessageView) -> Option<String> {
     if let Some(input) = message.input_tokens.filter(|tokens| *tokens > 0) {
         fields.push(format!(
             "{}{}",
-            token_count(input),
+            text::token_count(u64::try_from(input).unwrap_or(0)),
             text::LX_CHAT_STATS_INPUT_SUFFIX
         ));
     }
     if let Some(output) = message.output_tokens.filter(|tokens| *tokens > 0) {
         fields.push(format!(
             "{}{}",
-            token_count(output),
+            text::token_count(u64::try_from(output).unwrap_or(0)),
             text::LX_CHAT_STATS_OUTPUT_SUFFIX
         ));
     }
@@ -679,19 +677,6 @@ fn stats_line(message: &ChatMessageView) -> Option<String> {
 }
 
 /// token 计数短格式（对齐 lx-agent）：`999`、`1.2k`、`123k`、`1.2M`。
-fn token_count(tokens: i64) -> String {
-    if tokens < 1_000 {
-        return tokens.to_string();
-    }
-    if tokens < 10_000 {
-        return format!("{:.1}k", tokens as f64 / 1_000.0);
-    }
-    if tokens < 1_000_000 {
-        return format!("{}k", (tokens as f64 / 1_000.0).round() as i64);
-    }
-    format!("{:.1}M", tokens as f64 / 1_000_000.0)
-}
-
 /// 耗时短格式（对齐 lx-agent）：`820ms`、`4.2s`、`38s`、`1m 12s`。
 fn format_duration(ms: i64) -> String {
     if ms < 1_000 {
@@ -720,17 +705,24 @@ pub(super) fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> 
     (screen_y < rect.bottom()).then_some(screen_y)
 }
 
-/// 消息底部通知：失败（错误 + 失败码）与中断（提示，无细节）；完成态与流中不显示。
+/// 消息底部通知：失败（错误 + 原因码）与中断（提示 + 固定原因）；完成态与流中不显示。
 fn notice(message: &ChatMessageView) -> Option<notice::Notice> {
     if message.role == "user" {
         return None;
     }
     match message.status.as_str() {
-        "failed" => Some(notice::Notice::error(
-            text::LX_CHAT_NOTICE_FAILED,
-            message.error_code.clone().filter(|code| !code.is_empty()),
+        "failed" => Some(notice::Notice::new(
+            notice::NoticeTitle::Failed,
+            message
+                .error_code
+                .clone()
+                .filter(|code| !code.is_empty())
+                .unwrap_or_else(|| text::LX_CHAT_NOTICE_FAILED_REASON.to_string()),
         )),
-        "interrupted" => Some(notice::Notice::info(text::LX_CHAT_NOTICE_INTERRUPTED)),
+        "interrupted" => Some(notice::Notice::new(
+            notice::NoticeTitle::Interrupted,
+            text::LX_CHAT_NOTICE_INTERRUPTED_REASON,
+        )),
         _ => None,
     }
 }
