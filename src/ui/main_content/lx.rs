@@ -25,6 +25,7 @@ pub(crate) mod brand;
 pub(crate) mod chat_bar;
 pub(crate) mod grid;
 pub(crate) mod history;
+pub(crate) mod notice;
 pub(crate) mod slash;
 pub(crate) mod status;
 

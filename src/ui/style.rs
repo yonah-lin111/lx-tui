@@ -131,6 +131,13 @@ pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
+/// Agent 通知的警告标记（Yellow 加粗）：非致命、但值得留意（模型问题/重试等）。
+pub fn agent_warn() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗高亮，让图标从标题里跳出。
 ///
 /// 失败步骤例外——整行走 [`agent_fail`] 变红。

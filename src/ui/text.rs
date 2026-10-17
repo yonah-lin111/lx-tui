@@ -535,9 +535,9 @@ pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
-/// 消息中断/失败标记（流中改用输入框上方 loading 行，不再有列表内提示）。
-pub const LX_CHAT_INTERRUPTED_LABEL: &str = "interrupted";
-pub const LX_CHAT_FAILED_LABEL: &str = "failed";
+/// 消息底部通知的标题（`! Failed` / `! Interrupted`，对齐 ui 页 agent error）。
+pub const LX_CHAT_NOTICE_FAILED: &str = "Failed";
+pub const LX_CHAT_NOTICE_INTERRUPTED: &str = "Interrupted";
 pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 上下文省略提示前缀。

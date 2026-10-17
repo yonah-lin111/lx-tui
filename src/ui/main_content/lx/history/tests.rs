@@ -167,15 +167,48 @@ fn streaming_message_has_no_list_marker() {
 }
 
 #[test]
-fn failed_message_shows_error_marker_with_code() {
-    let mut message = message("assistant", "failed", vec![text_part("")]);
+fn failed_message_shows_error_notice_with_code_at_bottom() {
+    let mut message = message("assistant", "failed", vec![text_part("出错了")]);
     message.error_code = Some("http 503".into());
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 10);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let line0 = row_text(&buf, area, 0);
-    assert!(line0.contains("[failed: http 503]"), "失败标记：{line0}");
+    // 正文 → 空行（块间）→ `! Failed` → `└─ 失败码`（旧 `[failed: …]` 标记不再出现在顶部）。
+    let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    assert!(rows[0].contains("出错了"), "正文：{rows:?}");
+    assert_eq!(rows[1], "", "与正文隔一行");
+    assert_eq!(rows[2], "! Failed");
+    assert_eq!(rows[3], "  └─ http 503");
+    assert!(
+        !rows.iter().any(|row| row.contains("[failed")),
+        "不再有方括号标记：{rows:?}"
+    );
+}
+
+#[test]
+fn interrupted_message_shows_info_notice_above_stats_line() {
+    let mut message = message("assistant", "interrupted", vec![text_part("半截回答")]);
+    message.input_tokens = Some(1_200);
+    message.output_tokens = Some(300);
+    message.duration_ms = Some(2_700);
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
+    assert_eq!(rows[1], "", "通知与正文隔一行");
+    assert_eq!(rows[2], "! Interrupted", "中断用提示级通知");
+    // 统计行紧贴通知下方（统计是本轮 footer，不再多一个空行）。
+    assert!(
+        rows[3].starts_with("P / M · 1.2k in · 300 out"),
+        "统计行：{rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("[interrupted]")),
+        "旧标记已移除：{rows:?}"
+    );
 }
 
 #[test]
@@ -592,8 +625,8 @@ fn sticky_row_is_painted_outside_the_grid() {
     let painted = row_text(&buf, area, 0);
     let squeezed = painted.replace(' ', "");
     assert!(
-        squeezed.starts_with("›第一轮的问题"),
-        "前缀与摘要：{painted}"
+        squeezed.starts_with(">第一轮的问题"),
+        "前缀与用户消息同款 `> `：{painted}"
     );
 
     let mut grid = Grid::new(area);

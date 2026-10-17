@@ -6,7 +6,8 @@
 //! - 用户消息：`> ` 前缀（占用整块底色，图标用输入框同款强调色）+ 整块浅底色
 //!   （`style::chat_user_bg`），正文按显示列软换行。
 //! - assistant 消息：正文用共享阅读渲染器（`ui::markdown_render`，与 UI 页 agent 回答
-//!   同款；表格按宽度收缩自适应），不显示标题行；失败/中断/流中在此上方插入一行状态标记。
+//!   同款；表格按宽度收缩自适应），不显示标题行；失败/中断在**消息底部**（统计行上方）
+//!   插入一条通知（见 `notice.rs`），流中不插入（改用输入框上方 loading 行）。
 //! - thinking：生成中的块自动展开（头部转轮 + 正文），完成后默认折叠；点击头部或
 //!   Ctrl+T 切换；正文同样走 markdown 渲染并整体压暗（对齐 opencode 的思考显示）。
 //! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
@@ -23,6 +24,7 @@ use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
 use super::Grid;
+use super::notice;
 
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
@@ -42,8 +44,6 @@ const STICKY_MIN_HEIGHT: u16 = 4;
 const STICKY_MIN_WIDTH: u16 = 16;
 /// 置顶行摘要的最大取样字符数（限住超长粘贴的每帧成本，对齐 codex 的 512）。
 const STICKY_SAMPLE_CHARS: usize = 512;
-/// 置顶行前缀：与真实用户消息的 `> ` 区分（投影不是消息）。
-const STICKY_PREFIX: &str = "› ";
 
 /// 一条消息在渲染行空间中的区间（`end` 不含；含它**前面**的空行，
 /// 末尾那条含收尾呼吸行）。
@@ -126,12 +126,8 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             rows += 1;
         }
         let start = rows;
-        // 消息内块（状态标记 / 各内容块 / 统计行）之间空一行。
+        // 消息内块（各内容块 / 通知 / 统计行）之间空一行。
         let mut first_block = true;
-        if let Some(marker) = status_marker(message) {
-            first_block = false;
-            rows += wrap(&marker, width).len();
-        }
         for (part_index, part) in message.parts.iter().enumerate() {
             let (is_reasoning, part_rows) = match part.kind {
                 crate::chat::events::PartKind::Text => {
@@ -165,8 +161,17 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             }
             rows += part_rows;
         }
-        if let Some(line) = stats_line(message) {
+        // 消息底部通知（失败/中断）；统计行紧贴其下（统计是本轮 footer）。
+        let notice = notice(message);
+        if let Some(notice) = &notice {
             if !first_block {
+                rows += 1;
+            }
+            first_block = false;
+            rows += notice::rows(notice, width);
+        }
+        if let Some(line) = stats_line(message) {
+            if !first_block && notice.is_none() {
                 rows += 1;
             }
             rows += wrap(&line, width).len();
@@ -333,7 +338,7 @@ pub(super) fn render_sticky_prompt(
         buf,
         content.x,
         row.rect.y,
-        STICKY_PREFIX,
+        USER_PREFIX,
         style::accent().patch(bg),
         content.right(),
     );
@@ -413,23 +418,8 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
     let mut row_index = 0usize;
     for (message_index, message) in lx.chat.messages.iter().enumerate() {
         let is_user = message.role == "user";
-        // 消息内块（状态标记 / 各内容块 / 统计行）之间空一行（与 `layout` 同口径）。
+        // 消息内块（各内容块 / 通知 / 统计行）之间空一行（与 `layout` 同口径）。
         let mut first_block = true;
-        // assistant 状态标记行（失败/中断/流中）；完成态无标记（移除 `assistant` 标签）。
-        if !is_user && let Some(marker) = status_marker(message) {
-            first_block = false;
-            let marker_style = if message.status == "failed" {
-                style::error()
-            } else {
-                style::muted()
-            };
-            for line in wrap(&marker, content.width) {
-                if let Some(y) = visible_row(content, scroll, row_index) {
-                    grid.put_clipped(content.x, y, &line, marker_style, content.width);
-                }
-                row_index += 1;
-            }
-        }
         let mut first_user_line = true;
         for (part_index, part) in message.parts.iter().enumerate() {
             let expanded = lx.chat.reasoning_expanded(message_index, part_index);
@@ -523,8 +513,17 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                 }
             }
         }
-        if let Some(line) = stats_line(message) {
+        // 消息底部通知（失败/中断）；统计行紧贴其下（与 `layout` 同口径）。
+        let notice = notice(message);
+        if let Some(notice) = &notice {
             if !first_block {
+                row_index += 1;
+            }
+            first_block = false;
+            notice::draw(grid, notice, content, scroll, &mut row_index);
+        }
+        if let Some(line) = stats_line(message) {
+            if !first_block && notice.is_none() {
                 row_index += 1;
             }
             for row in wrap(&line, content.width) {
@@ -712,7 +711,7 @@ fn format_duration(ms: i64) -> String {
 }
 
 /// 行可见时返回其屏幕 Y。
-fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> {
+pub(super) fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> {
     if row < scroll {
         return None;
     }
@@ -721,24 +720,17 @@ fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> {
     (screen_y < rect.bottom()).then_some(screen_y)
 }
 
-/// assistant 状态标记行：仅失败/中断显示；完成态与流中不显示（流中改用输入框上方
-/// loading 行，移除消息列表里的 `assistant`/`streaming` 提示）。
-fn status_marker(message: &crate::app::state::ChatMessageView) -> Option<String> {
+/// 消息底部通知：失败（错误 + 失败码）与中断（提示，无细节）；完成态与流中不显示。
+fn notice(message: &ChatMessageView) -> Option<notice::Notice> {
     if message.role == "user" {
         return None;
     }
     match message.status.as_str() {
-        "interrupted" => Some(format!("[{}]", text::LX_CHAT_INTERRUPTED_LABEL)),
-        "failed" => Some(
-            match message
-                .error_code
-                .as_deref()
-                .filter(|code| !code.is_empty())
-            {
-                Some(code) => format!("[{}: {code}]", text::LX_CHAT_FAILED_LABEL),
-                None => format!("[{}]", text::LX_CHAT_FAILED_LABEL),
-            },
-        ),
+        "failed" => Some(notice::Notice::error(
+            text::LX_CHAT_NOTICE_FAILED,
+            message.error_code.clone().filter(|code| !code.is_empty()),
+        )),
+        "interrupted" => Some(notice::Notice::info(text::LX_CHAT_NOTICE_INTERRUPTED)),
         _ => None,
     }
 }
