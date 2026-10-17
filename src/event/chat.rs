@@ -15,7 +15,7 @@ use crate::app::update;
 use crate::chat::client::StreamOutcome;
 use crate::chat::context::{self, AssemblyInput};
 use crate::chat::events::{ChatDelta, ChatRequest, StopReason};
-use crate::db::chat::{Usage, chat_part_views};
+use crate::db::chat::Usage;
 use crate::event::AppEvent;
 
 /// 在途流的取消句柄（按 request key 存放）。
@@ -301,7 +301,15 @@ fn schedule_checkpoint(state: &mut AppState, key: &RequestKey) {
         .messages
         .last()
         .filter(|message| message.id == assistant_id)
-        .map(|message| crate::db::chat::chat_part_views(&message.parts))
+        .map(|message| {
+            crate::db::chat::chat_part_views(
+                message
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .map(|(position, part)| (position as i64, part)),
+            )
+        })
         .unwrap_or_default();
     let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
         return;
@@ -338,7 +346,14 @@ fn chat_part_views_to_db(
             cache_write_tokens: None,
             created_at_ms: 0,
             completed_at_ms: None,
-            parts: chat_part_views(&message.parts),
+            parts: crate::db::chat::chat_part_views(
+                message
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .map(|(position, part)| (position as i64, part)),
+            ),
+            tools: Vec::new(),
         })
         .collect()
 }
@@ -358,6 +373,7 @@ mod tests {
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             });
         }
         parts.push(ChatPartView {
@@ -366,6 +382,7 @@ mod tests {
             provider_metadata_json: None,
             started_at_ms: None,
             ended_at_ms: None,
+            completed_at_ms: None,
         });
         ChatMessageView {
             id: id.to_string(),

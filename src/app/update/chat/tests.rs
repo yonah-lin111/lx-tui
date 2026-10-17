@@ -600,7 +600,9 @@ fn session_loaded_rebuilds_view_and_selection() {
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
+            tools: Vec::new(),
         },
         crate::db::chat::ChatMessage {
             external_id: "a1".into(),
@@ -626,7 +628,9 @@ fn session_loaded_rebuilds_view_and_selection() {
                 provider_metadata_json: Some(r#"{"signature":"s"}"#.into()),
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
+            tools: Vec::new(),
         },
     ];
     assert!(on_session_loaded(
@@ -955,6 +959,7 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
             model_label: None,
             error_code: None,
@@ -1121,7 +1126,9 @@ fn session_loaded_restores_context_usage_and_stats() {
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
+            tools: Vec::new(),
         },
         crate::db::chat::ChatMessage {
             external_id: "a1".into(),
@@ -1147,7 +1154,9 @@ fn session_loaded_restores_context_usage_and_stats() {
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
+            tools: Vec::new(),
         },
     ];
     assert!(on_session_loaded(
@@ -1395,6 +1404,7 @@ fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
             provider_metadata_json: None,
             started_at_ms: None,
             ended_at_ms: None,
+            completed_at_ms: None,
         }],
         model_label: None,
         error_code: None,

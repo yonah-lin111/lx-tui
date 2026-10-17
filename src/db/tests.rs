@@ -721,6 +721,7 @@ fn unique_sequence_and_position_constraints_hold() {
                 provider_metadata_json: None,
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
         )
         .expect("checkpoint");
@@ -761,8 +762,9 @@ fn chat_tool_and_subagent_tables_accept_valid_rows() {
         .conn
         .execute(
             r#"INSERT INTO agent_tool_call
-                   (external_id, session_id, message_id, call_id, name, status, started_at_ms)
-               VALUES ('tc-1', ?1, ?2, 'call-1', 'read', 'pending', 0)"#,
+                   (external_id, session_id, message_id, call_id, name, position, status,
+                    started_at_ms)
+               VALUES ('tc-1', ?1, ?2, 'call-1', 'read', 0, 'pending', 0)"#,
             params![committed.session_id, committed.assistant_message_id],
         )
         .expect("tool call row accepted");
@@ -1276,6 +1278,7 @@ fn v7_database_upgrades_to_v8_with_part_timing_columns() {
                 provider_metadata_json: None,
                 started_at_ms: Some(10),
                 ended_at_ms: Some(6_310),
+                completed_at_ms: None,
             }],
         )
         .expect("checkpoint");

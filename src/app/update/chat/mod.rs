@@ -139,6 +139,7 @@ pub fn on_turn_committed(
             provider_metadata_json: None,
             started_at_ms: None,
             ended_at_ms: None,
+            completed_at_ms: None,
         }],
         model_label: None,
         error_code: None,
@@ -261,25 +262,20 @@ pub fn on_stream_finished(
         } if active == key => assistant_id.clone(),
         _ => return false,
     };
-    // 快照当前 parts（最终 DB 写入的完整内容）。
+    // 快照当前 parts（最终 DB 写入的完整内容）；position 按时间线顺序给出。
     let parts: Vec<crate::db::chat::ChatPart> = target
         .lx
         .chat
         .messages
         .last()
         .map(|message| {
-            message
-                .parts
-                .iter()
-                .map(|part| crate::db::chat::ChatPart {
-                    position: 0, // 位置由消息内顺序决定，存储层按枚举顺序写入。
-                    kind: part.kind_str().into(),
-                    content: part.content.clone(),
-                    provider_metadata_json: part.provider_metadata_json.clone(),
-                    started_at_ms: part.started_at_ms,
-                    ended_at_ms: part.ended_at_ms,
-                })
-                .collect()
+            crate::db::chat::chat_part_views(
+                message
+                    .parts
+                    .iter()
+                    .enumerate()
+                    .map(|(position, part)| (position as i64, part)),
+            )
         })
         .unwrap_or_default();
     // 视图先行进入终态（DB ack 后确认；失败时保留内存 partial）。
@@ -567,6 +563,7 @@ pub fn on_session_loaded(
                     provider_metadata_json: part.provider_metadata_json.clone(),
                     started_at_ms: part.started_at_ms,
                     ended_at_ms: part.ended_at_ms,
+                    completed_at_ms: part.completed_at_ms,
                 })
                 .collect(),
             model_label: message

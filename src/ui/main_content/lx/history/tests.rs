@@ -39,6 +39,7 @@ fn text_part(content: &str) -> ChatPartView {
         provider_metadata_json: None,
         started_at_ms: None,
         ended_at_ms: None,
+        completed_at_ms: None,
     }
 }
 
@@ -57,6 +58,7 @@ fn reasoning_part(content: &str) -> ChatPartView {
         provider_metadata_json: None,
         started_at_ms: None,
         ended_at_ms: None,
+        completed_at_ms: None,
     }
 }
 

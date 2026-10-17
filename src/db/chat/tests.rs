@@ -40,6 +40,7 @@ fn part(position: i64, kind: &str, content: &str) -> ChatPart {
         provider_metadata_json: None,
         started_at_ms: None,
         ended_at_ms: None,
+        completed_at_ms: None,
     }
 }
 
@@ -574,6 +575,7 @@ fn provider_metadata_round_trips() {
                 provider_metadata_json: Some(r#"{"signature":"sig-abc"}"#.into()),
                 started_at_ms: None,
                 ended_at_ms: None,
+                completed_at_ms: None,
             }],
         )
         .expect("checkpoint");
@@ -632,6 +634,7 @@ fn part_timings_round_trip_for_thinking_duration() {
                 ChatPart {
                     started_at_ms: Some(1_000),
                     ended_at_ms: Some(7_300),
+                    completed_at_ms: None,
                     ..part(0, "reasoning", "思考中")
                 },
                 part(1, "text", "答"),
@@ -659,6 +662,7 @@ fn part_timings_round_trip_for_thinking_duration() {
                 ChatPart {
                     started_at_ms: Some(1_000),
                     ended_at_ms: Some(7_300),
+                    completed_at_ms: None,
                     ..part(0, "reasoning", "思考中")
                 },
                 part(1, "text", "答"),

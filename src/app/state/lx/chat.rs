@@ -194,6 +194,8 @@ pub struct ChatPartView {
     pub started_at_ms: Option<i64>,
     /// 该 part 最后一个增量到达时刻（毫秒）；None 表示未知（思考耗时不显示）。
     pub ended_at_ms: Option<i64>,
+    /// 该 part 独立完成时刻（毫秒）；仅 reasoning 使用，None 表示尚未完成或非思考块。
+    pub completed_at_ms: Option<i64>,
 }
 
 impl ChatPartView {
@@ -521,6 +523,7 @@ impl LxChat {
                 .map(|meta| serde_json::to_string(&meta).unwrap_or_default()),
             started_at_ms: Some(now),
             ended_at_ms: Some(now),
+            completed_at_ms: None,
         });
     }
 }

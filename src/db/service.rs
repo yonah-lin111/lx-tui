@@ -31,8 +31,8 @@ impl Persistence {
     pub fn start() -> Self {
         match Database::open_default() {
             Ok(db) => {
-                // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行；启动时
-                // 统一标记为 `interrupted`，否则恢复会话时该行永远显示 `[streaming]`。
+                // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行与 pending/running
+                // 工具行；启动时统一收口，否则恢复会话时这些行永远停在进行中。
                 match db.recover_interrupted_streams() {
                     Ok(0) => {}
                     Ok(recovered) => {
@@ -40,6 +40,16 @@ impl Persistence {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "recovering interrupted chat streams failed");
+                    }
+                }
+                // 不自动重跑任何工具：只把遗留调用标为 interrupted，结果字段不伪造成功。
+                match db.recover_interrupted_tool_calls() {
+                    Ok(0) => {}
+                    Ok(recovered) => {
+                        tracing::info!(recovered, "recovered interrupted tool calls");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "recovering interrupted tool calls failed");
                     }
                 }
                 Self { db: Some(db) }
