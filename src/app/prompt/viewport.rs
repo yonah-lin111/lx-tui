@@ -75,11 +75,12 @@ impl Prompt {
     pub fn scroll_to(&mut self, offset: usize) {
         self.scroll = offset.min(self.max_scroll());
     }
-    /// 底部虚拟空占位行数：当前编辑视口高度的一半（向下取整）。
+    /// 底部虚拟空占位行数：当前编辑视口高度的四分之一（向下取整）。
     ///
     /// 只计入最大滚动值与滚动条几何，不写入正文、不参与光标/点击/选区映射。
+    /// 高度不足 4 行时取整为 0（矮视口没有额外留白）。
     pub fn bottom_padding(&self) -> usize {
-        usize::from(self.height) / 2
+        usize::from(self.height) / 4
     }
     /// 视口内的行是否落在正文之后的底部留白（含空文档时的占位区）。
     pub fn row_in_padding(&self, viewport_row: u16) -> bool {

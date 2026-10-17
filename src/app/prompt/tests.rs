@@ -261,8 +261,8 @@ fn click_maps_viewport_cells_to_cursor() {
 
 #[test]
 fn scroll_by_moves_viewport_without_cursor_and_reattaches_on_edit() {
-    let mut prompt = prompt(10, 2);
-    prompt.insert_str("1\n2\n3\n4");
+    let mut prompt = prompt(10, 4);
+    prompt.insert_str("1\n2\n3\n4\n5\n6");
     assert_eq!(prompt.scroll(), 2);
     prompt.scroll_by(-1);
     assert_eq!(prompt.scroll(), 1);
@@ -275,7 +275,7 @@ fn scroll_by_moves_viewport_without_cursor_and_reattaches_on_edit() {
     assert_eq!(
         prompt.scroll(),
         3,
-        "底部虚拟空占位允许多滚半屏（高 2 → 1 行）"
+        "底部虚拟空占位允许多滚四分之一屏（高 4 → 1 行）"
     );
     prompt.insert_char('x');
     assert_eq!(
@@ -292,7 +292,7 @@ fn click_focus_keeps_bottom_padding_scroll() {
     prompt.insert_str("1\n2\n3\n4\n5\n6");
     prompt.scroll_to(99);
     let bottom = prompt.scroll();
-    assert_eq!(bottom, 4, "滚动可进入底部留白（6 行正文 + 2 行留白）");
+    assert_eq!(bottom, 3, "滚动可进入底部留白（6 行正文 + 1 行留白）");
     // 点击可见文本行聚焦：光标被放到该行，视口保持不动。
     prompt.set_cursor_from_cell(0, 1);
     assert_eq!(prompt.scroll(), bottom, "点击聚焦不回拉滚动条");
@@ -311,11 +311,35 @@ fn scroll_by_can_enter_bottom_padding_for_short_text() {
     prompt.scroll_by(3);
     assert_eq!(
         prompt.scroll(),
-        2,
-        "滚轮可进入底部半屏留白（5 / 2 向下取整）"
+        1,
+        "滚轮可进入底部四分之一屏留白（5 / 4 向下取整）"
     );
     prompt.scroll_to(99);
-    assert_eq!(prompt.scroll(), 2, "滚动条偏移同样钳到留白上限");
+    assert_eq!(prompt.scroll(), 1, "滚动条偏移同样钳到留白上限");
+}
+
+#[test]
+fn bottom_padding_is_quarter_of_viewport_height() {
+    for (height, expected) in [(1, 0), (3, 0), (4, 1), (5, 1), (8, 2), (20, 5)] {
+        let prompt = prompt(10, height);
+        assert_eq!(
+            prompt.bottom_padding(),
+            expected,
+            "视口高 {height} 行的底部留白应为 {expected} 行"
+        );
+    }
+}
+
+#[test]
+fn bottom_padding_does_not_extend_text_rows() {
+    let mut prompt = prompt(10, 8);
+    prompt.insert_str("1\n2");
+    let text_rows = prompt.visual_rows().len();
+    prompt.scroll_to(99);
+    assert_eq!(prompt.bottom_padding(), 2);
+    assert_eq!(prompt.visual_rows().len(), text_rows, "占位不混入视觉行");
+    assert_eq!(prompt.scroll(), 2, "留白全部计入可滚动上限");
+    assert!(prompt.row_in_padding(0), "滚到底后首行即留白区");
 }
 
 #[test]

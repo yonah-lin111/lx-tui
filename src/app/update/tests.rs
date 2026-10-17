@@ -160,8 +160,11 @@ fn shift_tab_cycles_template_status_inside_block_else_outdents() {
 #[test]
 fn scroll_prompt_moves_viewport_only() {
     let mut state = AppState::demo();
-    state.prompt.resize(10, 2);
-    apply_editor(&mut state, EditorCommand::InsertText("1\n2\n3\n4".into()));
+    state.prompt.resize(10, 4);
+    apply_editor(
+        &mut state,
+        EditorCommand::InsertText("1\n2\n3\n4\n5\n6".into()),
+    );
     assert_eq!(state.prompt.scroll(), 2);
     scroll_prompt(&mut state, -1);
     assert_eq!(state.prompt.scroll(), 0);
@@ -170,7 +173,7 @@ fn scroll_prompt_moves_viewport_only() {
     assert_eq!(state.prompt.scroll(), 3, "滚轮 3 行 + 底部留白 1 行到上限");
     assert_eq!(
         state.prompt.cursor_cell(),
-        Some((0, 1)),
+        Some((2, 1)),
         "滚入留白不改变光标"
     );
     // 向上滚回：滚轮只移动视口，光标原地（仍在视口下方）。
