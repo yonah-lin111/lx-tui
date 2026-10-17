@@ -157,6 +157,23 @@ fn context_uses_provider_color() {
 }
 
 #[test]
+fn model_name_uses_entry_label_gradient() {
+    let lx = lx_with_status(status(Some("model"), Some("prov"), None, None, false));
+    let rect = Rect::new(0, 0, 60, 5);
+    let inner = pane(rect);
+    let mut buf = Buffer::empty(rect);
+    render(&mut buf, inner, &lx);
+    let lay = layout(inner, &lx.chat.status);
+    let row = lay.label.y;
+    let first = &buf[(lay.label.x, row)];
+    assert_eq!(first.symbol(), "m");
+    assert_eq!(first.fg, Color::Indexed(218), "模型名首字符 = 品牌粉");
+    let last = &buf[(lay.label.x + 4, row)];
+    assert_eq!(last.symbol(), "l");
+    assert_eq!(last.fg, Color::Indexed(117), "模型名末字符 = 品牌蓝");
+}
+
+#[test]
 fn provider_uses_stats_line_style() {
     let lx = lx_with_status(status(
         Some("deepseek-v4.1-flash"),

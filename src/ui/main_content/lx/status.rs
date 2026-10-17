@@ -2,7 +2,8 @@
 //!
 //! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
 //! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
-//! 左侧 ` 模型名 · 供应商名 `（模型名金色高亮、供应商用本轮统计行同款次要信息色），
+//! 左侧 ` 模型名 · 供应商名 `（模型名用入口标签同款粉→蓝渐变、供应商用本轮统计行同款
+//! 次要信息色），
 //! 右端 `context:当前用量(百分比)`（token 短格式一位小数，如 `context:258.7k(26%)`；
 //! 用量取最近一次同模型请求的分子、百分比 = 用量 / 模型上限（四舍五入），夹到 100%；
 //! 用**供应商同款次要信息色**（与左侧供应商名一致）；**未知用量、未知上限或零消耗整段隐藏**）。
@@ -143,7 +144,7 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     let mut x = lay.label.x;
     let limit = lay.label.right();
     if !model.is_empty() && x < limit {
-        put(buf, x, y, &model, style::chat_model(), limit);
+        put_model(buf, x, y, &model, limit);
         x = x.saturating_add(u16::try_from(model.width()).unwrap_or(u16::MAX));
     }
     if let Some(provider) = provider.filter(|_| x < limit) {
@@ -187,6 +188,27 @@ fn context_text(status: &ChatStatus) -> Option<String> {
         text::token_count_precise(used),
         percent.min(100)
     ))
+}
+
+/// 逐字符覆盖写入模型名：粉→蓝渐变与入口标签同款（按**可见**标签长度取样，
+/// 硬切后的模型名同样跑完整渐变）。
+fn put_model(buf: &mut Buffer, mut x: u16, y: u16, model: &str, limit: u16) {
+    let length = model.chars().count();
+    for (position, ch) in model.chars().enumerate() {
+        let width = ch.width().unwrap_or(0) as u16;
+        if width == 0 {
+            continue;
+        }
+        if x.saturating_add(width) > limit {
+            break;
+        }
+        if let Some(cell) = buf.cell_mut((x, y)) {
+            cell.reset();
+            cell.set_char(ch);
+            cell.set_style(style::model_label_style(position, length));
+        }
+        x = x.saturating_add(width);
+    }
 }
 
 /// 逐字符覆盖写入（宽字符占两列、不跨 `limit` 半写）。

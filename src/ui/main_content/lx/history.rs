@@ -524,10 +524,13 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
             if !first_block {
                 row_index += 1;
             }
+            let model_chars = stats_model_chars(message);
+            let mut offset = 0usize;
             for row in wrap(&line, content.width) {
                 if let Some(y) = visible_row(content, scroll, row_index) {
-                    grid.put_clipped(content.x, y, &row, style::muted(), content.width);
+                    draw_stats_row(grid, content, y, &row, offset, model_chars);
                 }
+                offset += row.chars().count();
                 row_index += 1;
             }
         }
@@ -703,6 +706,46 @@ pub(super) fn visible_row(rect: Rect, scroll: usize, row: usize) -> Option<u16> 
     let offset = u16::try_from(row - scroll).unwrap_or(u16::MAX);
     let screen_y = rect.y.saturating_add(offset);
     (screen_y < rect.bottom()).then_some(screen_y)
+}
+
+/// 统计行开头的模型名字符数（统计行不存在或模型名为空时为 0）：渲染用它把粉→蓝渐变
+/// 只涂在模型名上（`stats_line` 以模型名开头，与 `layout` 同一行文本）。
+fn stats_model_chars(message: &ChatMessageView) -> usize {
+    if stats_line(message).is_none() {
+        return 0;
+    }
+    message
+        .model_label
+        .as_deref()
+        .filter(|model| !model.is_empty())
+        .map_or(0, |model| model.chars().count())
+}
+
+/// 绘制统计行的一行：开头 `model_chars` 个字符是模型名（渐变按整条标签取样，下标跨
+/// 软换行累计），其余字段用次要信息色。
+fn draw_stats_row(
+    grid: &mut Grid,
+    content: Rect,
+    y: u16,
+    row: &str,
+    offset: usize,
+    model_chars: usize,
+) {
+    let mut x = content.x;
+    for (index, ch) in row.chars().enumerate() {
+        let width = ch.width().unwrap_or(1).max(1) as u16;
+        if x.saturating_add(width) > content.right() {
+            break;
+        }
+        let position = offset.saturating_add(index);
+        let style = if position < model_chars {
+            style::model_label_style(position, model_chars)
+        } else {
+            style::muted()
+        };
+        grid.put_char(x, y, ch, style);
+        x = x.saturating_add(width);
+    }
 }
 
 /// 消息底部通知：失败（错误 + 原因码）与中断（提示 + 固定原因）；完成态与流中不显示。

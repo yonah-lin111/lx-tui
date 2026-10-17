@@ -428,6 +428,40 @@ fn stats_line_row_is_counted_in_layout() {
 }
 
 #[test]
+fn stats_line_model_name_uses_entry_label_gradient() {
+    use ratatui::style::Color;
+
+    let mut message = message("assistant", "complete", vec![text_part("回答")]);
+    message.input_tokens = Some(1_200);
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    // 统计行在第三行（正文、块间空行、统计行）。
+    let row = 2;
+    assert!(
+        row_text(&buf, area, row).starts_with("P / M · 1.2k in"),
+        "统计行：{}",
+        row_text(&buf, area, row)
+    );
+    assert_eq!(
+        buf[(0, row)].fg,
+        Color::Indexed(218),
+        "模型名首字符 = 品牌粉"
+    );
+    assert_eq!(
+        buf[(4, row)].fg,
+        Color::Indexed(117),
+        "模型名末字符 = 品牌蓝"
+    );
+    assert_eq!(
+        buf[(5, row)].fg,
+        Color::Reset,
+        "分隔与后续字段仍是次要信息色"
+    );
+}
+
+#[test]
 fn streaming_assistant_has_no_stats_line() {
     let mut streaming = message("assistant", "streaming", vec![text_part("部分")]);
     streaming.input_tokens = Some(10);
