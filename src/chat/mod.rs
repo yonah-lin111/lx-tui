@@ -9,6 +9,7 @@ pub mod context;
 pub mod events;
 pub mod sse;
 pub mod thinking;
+pub mod tools;
 pub mod transport;
 
 pub use context::{Assembly, AssemblyInput, assemble, shrink_once};

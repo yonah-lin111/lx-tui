@@ -18,6 +18,9 @@ unicode-width = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ignore = "0.4.33"
+# `search` 工具的正则匹配：已在依赖树中（globset/ignore 与 termwiz 间接引入），
+# 显式声明后可直接使用其 Unicode 感知与大小写不敏感匹配，不新增任何外部 crate。
+regex = "1.13"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 # 流式聊天 HTTPS 请求：rustls TLS，禁默认 native-tls，启用流式响应与 gzip。

@@ -193,3 +193,66 @@ fn parse_tpgid_handles_spaces_in_comm() {
     let stat = "123 (zsh) S 1 123 123 0 -1 4194560 0 0 0 0";
     assert_eq!(linux::parse_tpgid(stat), None);
 }
+
+/// 原子写入：覆盖既有文件、内容正确、不留临时文件。
+#[test]
+fn atomic_write_replaces_content_without_temp_leftovers() {
+    let dir = std::env::temp_dir().join(format!("lx-platform-atomic-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("fixture dir");
+    let path = dir.join("a.txt");
+    std::fs::write(&path, b"old").expect("seed file");
+
+    write_file_atomic(&path, b"new content").expect("atomic write");
+    assert_eq!(std::fs::read(&path).expect("read"), b"new content".to_vec());
+
+    let names: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read dir")
+        .map(|entry| {
+            entry
+                .expect("entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    assert_eq!(names, vec!["a.txt"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 原子写入会沿用既有文件的权限位（Unix）。
+#[cfg(unix)]
+#[test]
+fn atomic_write_preserves_existing_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!("lx-platform-perm-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("fixture dir");
+    let path = dir.join("mode.sh");
+    std::fs::write(&path, b"#!/bin/sh\n").expect("seed file");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    write_file_atomic(&path, b"#!/bin/sh\necho hi\n").expect("atomic write");
+    let mode = std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o755, "权限位应保留");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `rename_over` 覆盖目标；目标不存在时直接改名。
+#[test]
+fn rename_over_replaces_target() {
+    let dir = std::env::temp_dir().join(format!("lx-platform-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("fixture dir");
+    let from = dir.join("from.txt");
+    let to = dir.join("to.txt");
+    std::fs::write(&from, b"from").expect("seed from");
+    std::fs::write(&to, b"to").expect("seed to");
+    rename_over(&from, &to).expect("rename over");
+    assert_eq!(std::fs::read(&to).expect("read"), b"from".to_vec());
+    assert!(!from.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

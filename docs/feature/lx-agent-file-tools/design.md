@@ -595,3 +595,21 @@ lx 配置层有四类 provider transport；`src/chat/transport` 实际有五条�
 - `reasoning_streaming(message, step)` 只看步骤是 Reasoning 且 `completed_at_ms` 为空、消息 `status == "streaming"`；不再要求它是最后一个 reasoning 块或最后一条消息。
 - **限制**：内存只保留“当前开放思考块”这一个状态，`ReasoningEnded { item_id: Some(..) }` 的 item ID 仅作诊断（`tracing::trace`），实际关闭尾部开放块；按 item ID 索引与并发多 item 结束留待后续阶段。
 - UI 本组只做编译所需最小改造：工具步骤以**单行摘要**占位（`工具名 · 状态 · 路径 · 行范围 · 计数`，带 `TODO(G4)` 注释），行数口径与渲染共享 `tool_rows()`，保证不 panic、不吞行、不与几何漂移；真实工具行由 G4 实现。
+
+### 20.2 已实施（G3：`read` / `search` / `edit` / `write` 执行层）
+
+落地位置 `src/chat/tools/`（`mod.rs` 分发 + `types.rs` 契约 + `schema.rs` 规格 + `args.rs` 参数校验 + `path.rs` 路径解析 + `text.rs` 编解码 + `read.rs` / `search.rs` / `patch.rs` / `edit.rs` / `write.rs` / `lock.rs` / `output.rs`），原子写能力落 `src/platform/atomic_write.rs`。与 §9 / §16 / §20 设计一致的实现，及少量等价差异：
+
+- **契约**：`ToolExecutionResult` 在 §10.3 基础上补齐 `Read` 的 `kind`（文件/目录）、`start_line` / `end_line` / `total_lines` 与 `SearchMatch::line_truncated`，使 `format_for_model` 无需再回头解析参数。
+- **三口径**：模型文本、UI 摘要、DB 结果 JSON 全部由 `output.rs` 生成（`format_for_model` / `to_summary` / `to_result_json`）。`chat/tools` 不依赖 `app`，故摘要类型 `chat::tools::ToolSummary` 与 `app::state::ToolSummary` 字段对齐但独立存在，由事件层做一次字段映射，避免 `chat -> app` 反向依赖。
+- **补丁引擎**：在 lx 内实现 Codex 风格语法子集（`*** Begin Patch`/`*** End Patch`、`*** Add File`、`*** Update File` + `*** Move to` + `@@` 块、`*** Delete File`），未依赖 Codex crate。**不做项**：`*** Environment ID`、`*** End of File`、统一 diff 头（`---`/`+++`/`@@ -1,2 +1,3 @@` 行号形式）、模糊匹配（Codex 的 rstrip/trim/Unicode 标点归一化回退）。上下文一律**精确且唯一**匹配，多处或不匹配即 `PatchContextMismatch`。
+- **两阶段执行**：先解析补丁 + 解析全部路径 + 纯路径级检查（Add 目标不得已存在、Update/Delete 必须是已存在普通文件、Move 目标不得是目录），再逐个 hunk 读取并落盘。格式与路径问题在零副作用阶段返回；上下文失配发生在提交阶段，因此**前面已成功的文件会如实出现在 `Failed{changes}` 里**（与 §13 风险 3 的“多文件非原子”一致）。
+- **`partial` 语义**：`Edit.partial` 表示“本次补丁里有 hunk 应用后内容与原文相同（无实际变更）”。所有 hunk 都无变更时整体返回 `NoChanges`。`Delete` 的 `removed` 是被删除文件的原文本行数（二进制内容按 0 计）。
+- **落库 JSON**：成功结果是 `{"tool": <名字>, ...}`；失败结果是 `{"tool": "error", "code", "message", "changes"}`。`ToolExecutionResult::Failed` 按 §10.3 的契约不携带工具名，因此失败 JSON 用 `"error"` 标记；调用方（事件层/DB 层）本来就知道 name，需要时可按调用侧补齐。
+- **原子写与锁**：`platform::write_file_atomic` 为同目录临时文件（`.{name}.tmp.{pid}.{seq}`）+ `sync_all` + rename，沿用既有文件权限；Unix 用 `rename` 覆盖，非 Unix 退化为“删除目标再改名”（Windows 语义限制，已在注释与文档写明）。写操作按**规范化路径**加短时锁（`lock::with_path_lock`，锁表惰性建立、闭包内持有），不做全局串行。目标为符号链接时写入其解析后的真实文件（原子替换不能作用于链接本身）。
+- **编码保留**：`text::SourceText` 在读取时记录 BOM 与主要换行风格，写回时还原；`edit`/`write` 都不会把 CRLF 变 LF 或丢掉 BOM。新建文件统一 LF、无 BOM。
+- **`read`**：目录列表同样支持 1-based `offset`/`limit` 与 `next_offset`（条目按名排序，`[dir]`/`[file]` 前缀），使超大目录可分页。单行超过 `MAX_READ_LINE_CHARS`（4000 字符）时截断并置 `truncated`。
+- **`search`**：遍历复用 `ignore::WalkBuilder`（`git_ignore(true)`、`require_git(false)`、不跟随符号链接、`max_depth(32)`），`include` 用 `ignore::overrides` 的白名单语义且**相对搜索根**匹配；结果为 `(path, line)` 稳定排序。上限为 `MAX_SEARCH_RESULTS`(200)、`MAX_SEARCH_FILES`(20000)、`SEARCH_TIMEOUT`(10s)、单文件 `MAX_SEARCH_FILE_BYTES`(8 MiB)、单行 `MAX_SEARCH_LINE_CHARS`(400)；任一触发都置 `truncated`。二进制（含 NUL）与非 UTF-8 文件静默跳过。正则使用 `regex` crate；它在依赖树中已由 `globset`/`ignore`/`termwiz` 引入，本轮只是显式声明为直接依赖（`Cargo.lock` 仅新增一行，无新 crate）。
+- **参数校验**：`args.rs` 按字段白名单解析，未知字段/类型错误/0 或负整数一律 `InvalidArguments`，错误消息只含字段名与期望类型，不回显参数内容；参数体超过 1 MiB 直接 `TooLarge`。未知工具名回显名字截断到 64 字符。
+- **路径**：`path::resolve` 先校验 `ctx.cwd`（非空、绝对、存在且为目录），不满足即 `PathUnresolvable`；随后绝对路径原样、相对路径拼接。**未**做任何工作区边界限制（与 §9 一致）。
+- **日志**：工具执行层**不记录**参数与文件内容；唯一日志是 `platform::atomic_write` 的权限复制失败（`tracing::debug!`，只含错误与固定文案）。
