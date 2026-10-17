@@ -53,8 +53,8 @@ pub fn agent_location(tab_index: usize) -> String {
     format!("[tab {}]", tab_index.saturating_add(1))
 }
 
-/// prompt 面板边框标题；路径末段名以 `ws:` 前缀渲染在底边框右侧（折叠按钮左侧）。
-pub const PROMPT_TITLE: &str = "Prompt Manager";
+/// prompt 面板**树视图**顶边框标题（编辑视图改用绑定目标名，见 `ui::prompt::header`）。
+pub const PROMPT_TREE_BORDER_TITLE: &str = "Prompts";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
 /// 工作区路径标记前缀；prompt 底边框与 lx 窗格顶边框共用（前缀强调色、值 muted）。
@@ -292,6 +292,8 @@ pub const PROMPT_PAGE_NEXT: &str = "›";
 pub fn page_counter(current: usize, total: usize) -> String {
     format!("{current}/{total}")
 }
+/// 顶边框标题里页名段的前缀（`条目名 · 页名`）。
+pub const PROMPT_PAGE_NAME_PREFIX: &str = "·";
 /// 默认页名 `Page N`；`index` 从 1 起。
 pub fn default_page_name(index: usize) -> String {
     format!("Page {index}")
@@ -718,6 +720,11 @@ pub const UI_GALLERY_FOLDER_SEARCH: &str = "folder search";
 
 /// UI 组件查看弹窗右侧：预览提示与用途说明（不再使用 `Preview` 标题）。
 pub const UI_GALLERY_PREVIEW_HINT: &str = "select a component on the left";
+
+/// prompt 预览的顶边框内容：编辑视图 `条目名 · 页名` + 页控件，列表视图固定标题。
+pub const UI_GALLERY_PROMPT_EDITOR_TITLE: &str = "my prompt";
+pub const UI_GALLERY_PROMPT_EDITOR_PAGE: &str = "Page 1";
+pub const UI_GALLERY_PROMPT_EDITOR_PAGE_TOTAL: usize = 2;
 
 /// 右侧真实外观预览的样例文案（复用真实组件布局与样式绘制）。
 pub const UI_GALLERY_TOAST_SAMPLE: &str = "Copied to clipboard";

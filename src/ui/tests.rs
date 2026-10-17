@@ -160,7 +160,12 @@ fn prompt_sidebar_renders_content_and_collapse_button() {
     state.prompt.insert_str("## markdown");
     let lines = render_lines(&state);
     assert!(lines.iter().any(|line| line.contains("markdown")));
-    assert!(lines.iter().any(|line| line.contains(text::PROMPT_TITLE)));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains(text::PROMPT_DRAFT_TITLE)),
+        "编辑视图顶边框显示绑定目标名（默认临时提示词）"
+    );
     assert!(
         lines
             .iter()
@@ -1355,14 +1360,17 @@ fn prompt_editor_divider_shows_editing_title() {
     assert!(update::edit_prompt_item(&mut state, 0, 1));
     let view = view_for(&state);
     let lines = render_lines(&state);
+    let border = prompt_line(&lines, &view, view.prompt.y);
+    assert!(border.contains(" named prompt "), "{border}");
+    assert!(!border.contains("[tmp]"), "条目不带 tmp 标识: {border}");
+    // 分割线保持空行、不再承载文字。
     let inner = crate::layout::pane_inner_rect(view.prompt);
     let divider = prompt_line(
         &lines,
         &view,
-        inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
+        inner.y + crate::layout::PROMPT_TOOLBAR_HEIGHT,
     );
-    assert!(divider.contains(" named prompt "), "{divider}");
-    assert!(!divider.contains("[tmp]"), "条目不带 tmp 标识: {divider}");
+    assert!(!divider.contains(" named prompt "), "{divider}");
 
     // 临时提示词显示固定标题（无 `[tmp]` 标识），标题为未聚焦灰。
     state.prompt_width = 56;
@@ -1370,22 +1378,17 @@ fn prompt_editor_divider_shows_editing_title() {
     update::show_prompt_tree(&mut state);
     assert!(update::open_temp_prompt(&mut state));
     let lines = render_lines(&state);
-    let inner = crate::layout::pane_inner_rect(view.prompt);
-    let divider = prompt_line(
-        &lines,
-        &view,
-        inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT,
-    );
-    assert!(divider.contains(text::PROMPT_DRAFT_TITLE), "{divider}");
-    assert!(!divider.contains("[tmp]"), "标题不带 tmp 标识: {divider}");
-    assert!(divider.contains("Page 1"), "内嵌当前页名: {divider}");
-    assert!(divider.contains('‹') && divider.contains('›'), "{divider}");
-    assert!(divider.contains("1/1"), "{divider}");
+    let border = prompt_line(&lines, &view, view.prompt.y);
+    assert!(border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
+    assert!(!border.contains("[tmp]"), "标题不带 tmp 标识: {border}");
+    assert!(border.contains("Page 1"), "内嵌当前页名: {border}");
+    assert!(border.contains('‹') && border.contains('›'), "{border}");
+    assert!(border.contains("1/1"), "{border}");
     // 标题为未聚焦灰（muted）：前景默认、DIM，即使 prompt 持有焦点。
     let buffer = render_buffer(&state);
-    let y = inner.y + crate::layout::PROMPT_DIVIDER_HEIGHT;
-    let title_byte = divider.find(text::PROMPT_DRAFT_TITLE).expect("title col");
-    let title_col = u16::try_from(divider[..title_byte].chars().count()).expect("col fits");
+    let y = view.prompt.y;
+    let title_byte = border.find(text::PROMPT_DRAFT_TITLE).expect("title col");
+    let title_col = u16::try_from(border[..title_byte].chars().count()).expect("col fits");
     let cell = &buffer[(view.prompt.x + title_col, y)];
     let debug_row: String = (view.prompt.x..view.prompt.right())
         .map(|x| buffer[(x, y)].symbol())
@@ -1470,7 +1473,7 @@ fn prompt_renders_toolbar_and_divider_rows() {
         "分割线不穿过按钮行: {toolbar}"
     );
 
-    // 下一行为贯穿分割线（两端 `├` / `┤`），编辑视图内嵌目标 title。
+    // 下一行为贯穿分割线（两端 `├` / `┤`），不再内嵌 title。
     let divider = prompt_line(
         &lines,
         &view,
@@ -1480,9 +1483,14 @@ fn prompt_renders_toolbar_and_divider_rows() {
     assert!(divider.contains(text::DIVIDER_RIGHT_JOIN), "{divider}");
     assert!(divider.contains(text::DIVIDER_MID), "{divider}");
     assert!(
-        divider.contains(text::PROMPT_DRAFT_TITLE),
-        "草稿 title 内嵌分割线: {divider}"
+        !divider.contains(text::PROMPT_DRAFT_TITLE),
+        "草稿 title 已移到顶边框: {divider}"
     );
+    // 顶边框承载标题、页名与页控件。
+    let border = prompt_line(&lines, &view, view.prompt.y);
+    assert!(border.contains(text::PROMPT_DRAFT_TITLE), "{border}");
+    assert!(border.contains("Page 1"), "{border}");
+    assert!(border.contains("1/1"), "{border}");
 }
 
 #[test]
@@ -1528,7 +1536,7 @@ fn prompt_title_moves_path_name_to_bottom_right() {
     let view = view_for(&state);
     let lines = render_lines(&state);
     let top = prompt_line(&lines, &view, view.prompt.y);
-    assert!(top.contains(text::PROMPT_TITLE), "{top}");
+    assert!(top.contains(text::PROMPT_DRAFT_TITLE), "{top}");
     assert!(!top.contains("ws:"), "顶边框不再显示 ws 路径名: {top}");
 
     // `ws:` 落在底边框右侧、折叠按钮左侧隔 1 列。

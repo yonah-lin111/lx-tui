@@ -779,6 +779,13 @@ pub fn prompt_header_rect(panel: Rect) -> Option<Rect> {
     ))
 }
 
+/// prompt 面板顶边框行矩形（内嵌标题与页控件）；面板过窄时为 None。
+///
+/// 与边框同宽同列：标题与页控件直接覆盖边框线的 `─` 段（左边角 1 + 空档 1 起）。
+pub fn prompt_border_rect(panel: Rect) -> Option<Rect> {
+    (panel.width > 4 && panel.height > 0).then_some(Rect::new(panel.x, panel.y, panel.width, 1))
+}
+
 /// prompt 工具栏行矩形（表头首行）；表头隐藏时为 None。
 pub fn prompt_toolbar_rect(panel: Rect) -> Option<Rect> {
     prompt_header_rect(panel).map(|header| Rect {

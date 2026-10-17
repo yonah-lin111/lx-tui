@@ -497,20 +497,32 @@ fn render_fullscreen_like(buf: &mut Buffer, rect: Rect) {
     }
 }
 
-/// prompt editor：真实 prompt 面板外观——圆角边框 + `Prompt Manager` 标题 + 工具栏行 + 分割线 + 文本行。
+/// prompt editor：真实 prompt 面板外观——圆角边框 + 顶边框 `条目名 · 页名` 与页控件 + 工具栏行 + 分割线 + 文本行。
 fn render_prompt_editor_like(buf: &mut Buffer, rect: Rect) {
     if rect.width < 4 || rect.height < 4 {
         return;
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::border(false))
-        .title(Span::styled(
-            format!(" {} ", text::PROMPT_TITLE),
-            style::border_title(),
-        ));
+        .border_style(style::border(false));
     let inner = block.inner(rect);
     widget(buf, block, rect);
+    if let Some(border) = crate::layout::prompt_border_rect(rect) {
+        crate::ui::prompt::paint_border_title(
+            buf,
+            border,
+            &crate::ui::prompt::BorderTitleData {
+                title: Some(text::UI_GALLERY_PROMPT_EDITOR_TITLE),
+                draft: false,
+                page: Some(crate::ui::prompt::PageHeaderData {
+                    current: 1,
+                    total: text::UI_GALLERY_PROMPT_EDITOR_PAGE_TOTAL,
+                    name: text::UI_GALLERY_PROMPT_EDITOR_PAGE,
+                    rename: None,
+                }),
+            },
+        );
+    }
     if inner.height == 0 {
         return;
     }
@@ -534,20 +546,27 @@ fn render_prompt_editor_like(buf: &mut Buffer, rect: Rect) {
     }
 }
 
-/// prompt list：真实树视图外观——搜索框 + 分割线 + `tmp:` 分区与树行。
+/// prompt list：真实树视图外观——顶边框固定标题 + 搜索框 + 分割线 + `tmp:` 分区与树行。
 fn render_prompt_list_like(buf: &mut Buffer, rect: Rect) {
     if rect.width < 4 || rect.height < 4 {
         return;
     }
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::border(false))
-        .title(Span::styled(
-            format!(" {} ", text::PROMPT_TITLE),
-            style::border_title(),
-        ));
+        .border_style(style::border(false));
     let inner = block.inner(rect);
     widget(buf, block, rect);
+    if let Some(border) = crate::layout::prompt_border_rect(rect) {
+        crate::ui::prompt::paint_border_title(
+            buf,
+            border,
+            &crate::ui::prompt::BorderTitleData {
+                title: Some(text::PROMPT_TREE_BORDER_TITLE),
+                draft: false,
+                page: None,
+            },
+        );
+    }
     if inner.height == 0 {
         return;
     }

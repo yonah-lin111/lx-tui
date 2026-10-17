@@ -23,8 +23,8 @@ use super::hit::{
     handle_lx_history_scrollbar_press, handle_lx_input_scrollbar_press,
     handle_prompt_scrollbar_press, handle_terminal_scrollbar_press,
     handle_workspace_scrollbar_press, mention_item_at, pane_at, pane_boundary_draggable,
-    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
-    prompt_header_at, slash_item_at, template_button_at,
+    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_border_at,
+    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -314,7 +314,7 @@ pub(crate) fn handle_mouse_down_left(
         .then(|| ui::prompt_page_control_at(view.prompt, state, mouse.column, mouse.row))
         .flatten()
     {
-        // 标题行页控件是控件：不移动正文光标；命中后仍把焦点交给编辑器。
+        // 顶边框页控件是控件：不移动正文光标；命中后仍把焦点交给编辑器。
         update::focus_prompt(state);
         match control {
             ui::prompt::PageControl::Prev => {
@@ -330,6 +330,10 @@ pub(crate) fn handle_mouse_down_left(
                 update::begin_page_rename(state);
             }
         }
+        *dirty = true;
+    } else if !state.prompt_collapsed && prompt_border_at(view.prompt, mouse.column, mouse.row) {
+        // 顶边框是控件区：条目名与空白段点击只把焦点交给编辑器，不移动正文光标。
+        update::focus_prompt(state);
         *dirty = true;
     } else if !state.prompt_collapsed && prompt_header_at(view.prompt, mouse.column, mouse.row) {
         // 工具栏与分割线的空白区域吞掉点击：不聚焦文本视口、不移动文本光标。

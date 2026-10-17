@@ -596,3 +596,23 @@ fn prompt_toolbar_tree_pin_sits_left_of_temp_prompt() {
         "窄屏时 [+] 仍在"
     );
 }
+
+#[test]
+fn prompt_border_rect_covers_top_border_row() {
+    let panel = Rect::new(10, 5, 20, 8);
+    assert_eq!(
+        prompt_border_rect(panel),
+        Some(Rect::new(10, 5, 20, 1)),
+        "顶边框整行（含左右圆角）都是控件区"
+    );
+    assert_eq!(
+        prompt_border_rect(Rect::new(0, 0, 4, 8)),
+        None,
+        "过窄无边框行"
+    );
+    assert_eq!(
+        prompt_border_rect(Rect::new(0, 0, 20, 0)),
+        None,
+        "零高度无边框行"
+    );
+}
