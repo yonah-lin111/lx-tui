@@ -8,6 +8,9 @@ use super::*;
 use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, Lx, LxChat};
 use crate::chat::events::PartKind;
 
+/// 工具步骤的几何一致性测试（布局/渲染行数、滚动条、置顶行、thinking 命中）。
+mod tool_geometry;
+
 fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
@@ -717,11 +720,10 @@ fn sticky_text_is_truncated_with_ellipsis_to_width() {
     assert_eq!(truncate_with_ellipsis("abc", 3), "abc");
 }
 
-// ===== G2：工具步骤占位行（必须占行、不 panic、不与布局漂移）=====
+// ===== G7：真实工具步骤行（必须占行、不 panic、不与布局漂移）=====
 
-/// 构造工具步骤（占位渲染用）。
-fn tool_step(position: i64, call: ChatPartView) -> AssistantStepView {
-    let _ = call;
+/// 构造工具步骤（`read` / Pending，带路径与行范围摘要）。
+fn tool_step(position: i64) -> AssistantStepView {
     AssistantStepView::Tool {
         position,
         call: crate::app::state::ToolCallView {
@@ -745,7 +747,7 @@ fn tool_step(position: i64, call: ChatPartView) -> AssistantStepView {
 #[test]
 fn tool_step_occupies_one_row_and_renders_summary() {
     let mut message = message("assistant", "complete", vec![text_part("正文")]);
-    message.steps.push(tool_step(1, text_part("")));
+    message.steps.push(tool_step(1));
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 20);
     let computed = layout(area, &lx);
@@ -768,15 +770,25 @@ fn tool_step_occupies_one_row_and_renders_summary() {
         .filter(|ch| !ch.is_whitespace() && *ch != '\0')
         .collect();
     assert!(squeezed.contains("正文"), "正文仍渲染：{painted}");
-    assert!(squeezed.contains("read"), "工具占位行可见：{painted}");
+    assert!(
+        squeezed.contains(text::agent::VERB_TOOL_READ),
+        "工具行动词可见：{painted}"
+    );
     assert!(squeezed.contains("src/a.rs"), "路径摘要可见：{painted}");
+    assert!(
+        squeezed.contains(text::tool_status_label(
+            crate::app::state::ToolStatus::Pending
+        )),
+        "状态文字可见：{painted}"
+    );
+    assert!(squeezed.contains("3-7"), "行范围可见：{painted}");
 }
 
 /// 仅工具步骤的消息也占行（不会因“没有 text part”而整条消失）。
 #[test]
 fn tool_only_message_still_occupies_rows() {
     let mut message = message("assistant", "complete", Vec::new());
-    message.steps.push(tool_step(0, text_part("")));
+    message.steps.push(tool_step(0));
     let lx = lx_with(vec![message]);
     let computed = layout(Rect::new(0, 0, 40, 10), &lx);
     // 工具行 1 + 消息间空行/呼吸行 1 = 2。

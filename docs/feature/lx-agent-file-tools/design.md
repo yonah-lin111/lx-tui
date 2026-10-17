@@ -743,3 +743,79 @@ finish_tool ──FinishTool(ticket)──▶ ① Database::finish_tool_call（�
 2. 结果入库成功但 UI ack 丢失：DB 为真相，重启后 `/resume` 幂等加载；G6 只验证了“落库失败不重试”，没有构造“ack 通道丢失后仍成功”的注入（该路径依赖进程内 oneshot 语义，等价于杀进程 + 恢复，已由崩溃恢复测试覆盖）。
 3. 真实供应商与终端外观仍由用户 `cargo run` 人工验收。
 4. G6 的回放取舍：`failed` / `interrupted` 轮次整体不回放（正文与工具都不进请求），与旧「只取 complete 轮次」行为一致；`completed`/`failed` 但不带任何结果内容的调用整对跳过（不伪造空结果）。
+
+### 20.5 已实施（G7：TUI 工具步骤与思考完成态的真实渲染）
+
+落地位置：`src/ui/main_content/lx/history/tool.rs`（新文件，真实工具步骤行）、`src/ui/main_content/lx/history.rs`（`tool_rows` 转发 `tool::rows`、`render` 返回实际推进行数）、`src/ui/text/agent.rs`（工具图标/动词/计数标记常量）、`src/ui/text.rs`（状态文案，沿用 G2 的 `tool_status_label`）。
+
+**行结构（每类工具恒 1 行，全部为着色分段）**
+
+| 工具 | 分段（从头到尾） |
+| --- | --- |
+| `read` | `<行首> ` · `Read ` · `<path>`（金黄下划线）· `· 12-40`（`agent_range`）· [`· N matches`] · [`· …[truncated]`] · `· <状态>` |
+| `search` | `<行首> ` · `Search ` · `<搜索范围>` · `· 3 matches` · [`· …[truncated]`] · `· <状态>` |
+| `edit` | `<行首> ` · `Edit ` · `<path>` · `· +12`（绿）· `· -4`（红）· `· <状态>` |
+| `write` | `<行首> ` · `Write ` · `<path>` · `· +18`（绿）· `· -0`（红）· `· <状态>` |
+| 未知工具 | `<行首> ` · `<工具名>` · `<summary.path>` · `· <状态>` |
+
+- 行首符号（最窄档唯一保留的状态信号，五种状态互不相同）：`InputStreaming`/`Pending`/`Running` 用既有 `text::LX_LOADING_FRAMES[lx.chat.loading_frame % len]` 转轮（渲染只读帧序号、品牌蓝加粗）；`Completed` 用工具图标（品牌粉）；`Failed` 用 `!` + `agent_fail`（且**整行**红 + 粗）；`Interrupted` 用 `!` + `agent_warn`（黄，与失败红区分）；`Cancelled` 用 `text::agent::ICON_TOOL_CANCELLED`（`⊘`，次要信息色）。
+- 失败/中断另附 `error` 单行精简原因（`· <原因>`）；`error` / `summary` 为 `None` 时不产生空段（`tidy` 去掉分隔符前的悬空空格）。
+- `search` 结算后的摘要只带命中数（`to_summary` 不填 path），因此参数段回退到 `ToolSummary::from_arguments(&call.arguments_json)` 的 `path`（纯解析、无 IO），只显示搜索范围，绝不铺开模式或命中正文。
+
+**宽度自适应（严格按 §10：先截断路径，再隐藏次要计数）**
+
+1. 参数（路径 / 搜索范围）先按**显示列**中间省略（`text::ellipsize_middle`，宽字符按两列、不半写），下限 `MIN_PARAM_COLS = 6`；参数占不到最小列宽时宁愿丢一个次要字段腾地方，不直接抹掉路径；
+2. 次要字段按**优先级从低到高**丢：命中数 / `+N`/`-N`（`PRIORITY_COUNT`）→ 行范围（`PRIORITY_RANGE`）→ 截断提示（`PRIORITY_TRUNCATED`，必须显式告知用户故最后丢）；
+3. 仍不够时先丢失败/中断原因（原因预留 `MIN_REASON_COLS = 8` 列并尾部省略，比状态先让位）；
+4. 再整段省略参数（路径让位给状态），最后才放弃状态文字；极窄档只留行首符号 + 动词，写入时 `Grid::put_clipped` 按列裁剪兜底。
+
+**几何一致性**
+
+- `history::layout` 与 `history::render` 共用同一入口 `tool_rows` → `tool::rows`，工具行恒 1 行；`render` 现返回实际推进行数，测试逐一比对 `layout().total_rows`。
+- thinking 完成态沿用 G2：`reasoning_streaming` 只看 `completed_at_ms` 为空且消息 `streaming`，完成后不再画转轮；工具步骤自身的转轮与思考块的判定互不影响。
+- 极窄（1/2/4/8 列）与极矮（0..3 行）视口下 `layout`/`render`/`view`/`scrollbar`/`sticky_rect` 均不 panic、不越界写 buffer。
+
+**与 §10 的偏差（等价实现）**
+
+1. 动词用现在式（`Read` / `Search` / `Edit` / `Write`）而非 gallery 样例的过去式（`Edited` / `Wrote` / `Searched`）：历史行叙述**这次调用本身**，且设计 §10 表格即写 `Read`/`Search`/`Edit`/`Write`；`read` 两处同形，直接复用 `VERB_READ`。
+2. `search` 的次要计数（命中数）与 `read` 的行范围共用 `LX_CHAT_TOOL_STATUS_SEP` 前缀；`write` 的 `-0` 在 `removed == 0` 时仍显示（表示“整文件覆盖无删除”），与 `to_summary` 的 `Some(0)` 一致。
+3. 失败行的 `error` 只做**单行化 + 512 字符取样**（不透传完整错误体），与事件层 `failure_text` 的 512 字符上限同口径。
+
+**测试证据**（`cargo test` 全绿，共 2311 项）
+
+| 测试 | 断言 |
+| --- | --- |
+| `history::tool::tests::every_tool_and_open_status_shows_spinner_icon_verb_and_path` | 四工具 × `InputStreaming`/`Pending`/`Running`：行首转轮、状态文字、无失败标记 |
+| `history::tool::tests::completed_tool_has_no_spinner_and_shows_icon_verb_and_status` | 四工具 `Completed`：无任何 loading 帧、图标/动词/完成态文字齐备、图标品牌粉 |
+| `history::tool::tests::failed_tool_is_red_and_carries_trimmed_reason` | 四工具 `Failed`：`!` 行首、整行 `agent_fail` 前景、原因单行化 |
+| `history::tool::tests::cancelled_and_interrupted_are_distinguishable_from_failed` | `Cancelled` 用专属 `⊘` 行首符号（次要信息色）、`Interrupted` 用 `!` + `agent_warn` 黄且无空 error 段 |
+| `history::tool::tests::lead_marker_identifies_the_state_at_any_width` | 进行中/完成/失败/取消/中断五种状态的行首符号 + 颜色两两不同（极窄 1 列也不为空） |
+| `history::tool::tests::read_shows_line_range_in_range_color` | `12-40` 出现在 `agent_range` 色、无下划线 |
+| `history::tool::tests::search_shows_match_count_and_never_the_match_body` | 显示 `3 matches` / `1 match`，不出现任何命中正文；截断提示可见 |
+| `history::tool::tests::edit_and_write_show_added_and_removed_counts_in_diff_colors` | `+12`/`-4`/`-0` 分别用 `agent_added`/`agent_removed` |
+| `history::tool::tests::unknown_tool_shows_name_and_summary_only` | 未知工具显示工具名 + 摘要 + 通用图标 |
+| `history::tool::tests::optional_error_and_summary_leave_no_empty_segments` | 无摘要/无 error 时不出空括号、不留双空格 |
+| `history::tool::tests::narrow_widths_keep_state_and_never_overflow` | 1/2/3/4/6/8/12/20/40 列均不越界、状态符号可辨 |
+| `history::tool::tests::wide_characters_and_unbreakable_names_are_clipped_by_cell_width` | 中文宽字符路径与无空格长英文名按列裁剪、无半写宽字符 |
+| `history::tool::tests::path_is_truncated_before_secondary_counts_are_dropped` | 中窄宽度先省略路径保留计数/状态；极窄保留行首图标 |
+| `history::tool::tests::secondary_fields_are_dropped_by_priority_before_the_status` | 逐档收窄验证丢弃优先级：计数 → 行范围 → 截断提示 → 状态 |
+| `history::tool::tests::settled_search_falls_back_to_arguments_for_its_scope` | `search` 摘要缺 path 时从参数 JSON 取搜索范围，且不铺模式 |
+| `history::tool::tests::tool_row_count_is_always_one_for_any_content` | 七种状态 × 各宽度恒 1 行；宽度 0 不占行且渲染仍推进一致 |
+| `history::tool::tests::scrolled_out_rows_draw_nothing_but_still_advance` | 窗口外的工具行不写网格但仍推进行号 |
+| `history::tests::tool_geometry::layout_rows_equal_rendered_rows_with_tools_and_thinking` | 5 个宽度 × 展开/折叠：`render` 推进行数 == `layout().total_rows` |
+| `history::tests::tool_geometry::tool_steps_are_counted_inside_message_row_ranges` | 3 条消息 + 4 个工具：`messages` 区间首尾相接、末条含呼吸行 |
+| `history::tests::tool_geometry::thinking_header_hit_rect_matches_message_row_range_with_tools` | thinking 头部矩形落在所属消息行区间内、宽度扣滚动条列 |
+| `history::tests::tool_geometry::scrollbar_and_sticky_row_stay_consistent_with_tools` | 含工具时置顶行让位、滚动条 total/visible 与 `view` 同源、滚动后行数仍一致 |
+| `history::tests::tool_geometry::narrow_and_short_viewports_never_panic_with_tools` | 1/2/4/8 列 × 0..3 行：layout/render/view/scrollbar/sticky 均不 panic |
+| `history::tests::tool_geometry::tool_steps_with_all_statuses_stay_one_row_each` | 七种状态各占 1 行且布局=渲染 |
+| `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | `completed_at_ms` 有值后思考头不再有转轮，工具行保留自己的转轮 |
+| `history::tests::tool_step_occupies_one_row_and_renders_summary` / `tool_only_message_still_occupies_rows` | G2 占位测试升级为真实行断言（动词/路径/状态/行范围） |
+| `ui::text::tests::tool_verb_and_icon_constants_are_shared_with_agent_gallery` | 四工具图标单列宽、未知工具复用 `ICON_MCP`、`read` 动词与 gallery 同源 |
+| `ui::text::tests::tool_count_labels_use_shared_prefixes` | `added_label(12) == EDIT_DIFF_ADD` 等共享前缀、命中数单复数、截断提示 |
+| `ui::overlay::ui_gallery::agent::tests::*`（44 项） | 抽取共享常量后 gallery 样例断言全部仍通过 |
+
+**未自动验证项（需用户 `cargo run` 人工验收）**
+
+1. 真实终端配色与对比度：品牌粉图标（Indexed 218）/ 天蓝动词（117）/ 金黄参数（220）/ 浅灰行范围（245）/ 绿红增删计数在用户的明暗主题下是否清晰。
+2. 与 gallery 样例的视觉对齐（间距、下划线覆盖长度、转轮与文字的视觉居中）。
+3. 真实模型四类协议下工具行的实际观感（含 `/resume` 回放、Esc 取消、异常中断后的历史）与窄窗口滚动体验。

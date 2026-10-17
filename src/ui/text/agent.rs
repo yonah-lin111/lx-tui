@@ -1,4 +1,6 @@
-//! `agent` 步骤调用样例册的用户可见文案（`[UI]` 查看器 `agent` 分组）。
+//! agent 步骤的用户可见文案：`[UI]` 查看器 `agent` 分组的样例册，以及 lx 聊天历史里
+//! **真实工具步骤行**（`ui/main_content/lx/history/tool.rs`）与样例**共用**的图标 / 动词 /
+//! 计数标记（同一份常量，两处渲染不得各写一份字符串）。
 //!
 //! 文案仍集中在 `text` 模块；拆到此子模块只为把 `text.rs` 控制在单文件行数上限内。
 //! 结构（图标、状态、token 数值）由 `ui/overlay/ui_gallery/agent.rs` 提供，本模块只放字符串。
@@ -103,6 +105,62 @@ pub const PARAM_QUESTION: &str = "Overwrite the existing file?";
 pub const EDIT_DIFF_ADD: &str = "+12";
 pub const EDIT_DIFF_DEL: &str = "-4";
 pub const WRITE_ADD: &str = "+18";
+
+// ===== 真实工具步骤行（lx 聊天历史）与样例共用的图标 / 动词 / 计数标记 =====
+//
+// `ui/main_content/lx/history/tool.rs` 渲染真实工具调用时**只读**本组常量与上面的
+// `ICON_*` / `VERB_*`：图标、动词、计数标记不允许在渲染层再写一份字符串。
+
+/// 未知工具名（不在四工具表内）的行首图标；与 `mcp` 样例同一个泛化“调用工具”符号。
+pub const ICON_TOOL: &str = ICON_MCP;
+/// 工具被取消（未开始执行）的行首符号：斜杠圆环，与失败 `!`、完成工具图标都不同。
+pub const ICON_TOOL_CANCELLED: &str = "⊘";
+
+/// 真实工具步骤行的固定动词（设计 §10：`Read` / `Search` / `Edit` / `Write`）。
+///
+/// gallery 样例叙述已完成的调用（`Edited` / `Wrote` / `Searched`），实时历史行叙述
+/// **这次调用本身**，故用同一词根的现在式。`read` 两处同形，直接复用
+/// [`VERB_READ`]，不另写一份字符串。
+pub const VERB_TOOL_READ: &str = VERB_READ;
+pub const VERB_TOOL_SEARCH: &str = "Search";
+pub const VERB_TOOL_EDIT: &str = "Edit";
+pub const VERB_TOOL_WRITE: &str = "Write";
+
+/// 工具行 diff 计数的前缀（绿 `+N` / 红 `-N`，与样例 `+12` / `-4` 同色）。
+pub const TOOL_DIFF_ADD_PREFIX: &str = "+";
+pub const TOOL_DIFF_REMOVE_PREFIX: &str = "-";
+
+/// 内容被截断的显式提示（追加在计数末尾，不与计数同色）。
+pub const TOOL_TRUNCATED: &str = "…[truncated]";
+
+/// `search` 命中数后缀（单复数分开，避免 `1 matches` 这类错句）。
+pub const TOOL_MATCH_ONE: &str = "match";
+pub const TOOL_MATCH_MANY: &str = "matches";
+
+/// `read` 行范围：`12-40`（起止均为 1-based 闭区间）。
+pub fn range_label(start: usize, end: usize) -> String {
+    format!("{start}-{end}")
+}
+
+/// 命中 / 条目数：`3 matches`、`1 match`。
+pub fn matches_label(count: usize) -> String {
+    let suffix = if count == 1 {
+        TOOL_MATCH_ONE
+    } else {
+        TOOL_MATCH_MANY
+    };
+    format!("{count} {suffix}")
+}
+
+/// 新增行数：`+12`。
+pub fn added_label(count: usize) -> String {
+    format!("{TOOL_DIFF_ADD_PREFIX}{count}")
+}
+
+/// 删除行数：`-4`。
+pub fn removed_label(count: usize) -> String {
+    format!("{TOOL_DIFF_REMOVE_PREFIX}{count}")
+}
 
 /// 步骤子行（直角树连接下的细节）。
 pub const BODY_EXEC: &[&str] = &["On branch dev", "nothing to commit, working tree clean"];

@@ -115,11 +115,13 @@
 
 ## 8. TUI 展示
 
-- [ ] 将 Gallery agent 样例的样式 token 与行构造抽成真实历史可复用的纯渲染能力；不直接把假数据写进生产 UI。
-- [ ] 按工具状态显示 loading/running/completed/failed/interrupted；read 显示范围，search 显示摘要，edit/write 显示变更计数；工具全文不铺满历史。
-- [ ] 思考完成由块状态决定；显式折叠/展开、时长与终态保持一致。
-- [ ] `history::layout` 与 render 使用同一时间线和行数；置顶用户行、滚动条、鼠标命中及回到底部对工具步骤正确。
-- [ ] 新文案集中 `src/ui/text.rs`；宽/窄/极矮窗口、长路径、中文宽字符、多个工具和错误状态都做 buffer/geometry 测试。
+- [x] 将 Gallery agent 样例的样式 token 与行构造抽成真实历史可复用的纯渲染能力；不直接把假数据写进生产 UI。
+- [x] 按工具状态显示 loading/running/completed/failed/interrupted；read 显示范围，search 显示摘要，edit/write 显示变更计数；工具全文不铺满历史。
+- [x] 思考完成由块状态决定；显式折叠/展开、时长与终态保持一致。
+- [x] `history::layout` 与 render 使用同一时间线和行数；置顶用户行、滚动条、鼠标命中及回到底部对工具步骤正确。
+- [x] 新文案集中 `src/ui/text.rs`；宽/窄/极矮窗口、长路径、中文宽字符、多个工具和错误状态都做 buffer/geometry 测试。
+
+> G7 已实施：真实工具步骤行在 `src/ui/main_content/lx/history/tool.rs`（单行、复用 `ui/style.rs` 的 agent 色 token 与 `ui/text/agent.rs` 的图标/动词/计数常量）；几何口径与渲染共用 `tool::rows`（恒 1 行），`history::render` 返回实际推进行数供测试逐一比对；文案常量与偏差（动词现在式、`write` 的 `-0`、失败原因 512 字符单行化）见 `design.md` §20.5。
 
 验收：自动测试证明几何与状态正确；真实配色、对齐、滚动由用户 `cargo run` 人工验收。
 

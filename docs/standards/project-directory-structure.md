@@ -41,7 +41,7 @@ lx-tui/
       markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记；UI 页 agent 回答与 lx 聊天共用）
       markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染与 `<br>` 换行）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
-      main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、命令面板（slash.rs）、历史（history.rs，含置顶用户消息行）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，loading / Esc 待命提示 + 回到底部）、提及面板
+      main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、命令面板（slash.rs）、历史（history.rs，含置顶用户消息行；history/tool.rs 是真实工具步骤行：图标/动词/路径/行范围/增删计数与状态，与 ui 页 gallery 共用样式 token 与 text::agent 常量）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，loading / Esc 待命提示 + 回到底部）、提及面板
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）
@@ -107,7 +107,7 @@ lx-tui/
 
 1. `app/`：唯一状态来源；`state.rs`/`state/` 只放数据结构（含窗格终端仿真状态与 lx 聊天会话状态），`update/` 只做状态转换；不得执行 IO、渲染或线程操作。`update/chat/` 实现 lx 聊天状态机（发送/流事件/终态/`/` 命令），只产生 `Effect` 与纯状态更新；展示历史唯一顺序来源是 `ChatMessageView::steps`（part 与工具步骤共用同一 `position`），由 `update/chat/view.rs` 从 DB 的 parts 与 tools 按 position 合并。
 2. `layout.rs`（根级）：BSP 平铺模型与几何计算，`pane_rects` / `pane_inner_size` / 方向导航等均为纯函数，可直接用 `Rect` 单元测试。
-3. `ui/`：接收 `&AppState`（及其只读派生）绘制；`layout.rs` 负责屏幕区域划分，`main_content.rs` 按窗格视图分派 lx 页与终端网格并写入 `Buffer`，均为纯渲染；lx 页的聊天历史（`main_content/lx/history.rs`）、消息底部通知（`main_content/lx/notice.rs`）、状态（`main_content/lx/status.rs`，覆盖绘制在窗格底边框上）按职责拆分，命中几何与绘制共享纯布局函数。
+3. `ui/`：接收 `&AppState`（及其只读派生）绘制；`layout.rs` 负责屏幕区域划分，`main_content.rs` 按窗格视图分派 lx 页与终端网格并写入 `Buffer`，均为纯渲染；lx 页的聊天历史（`main_content/lx/history.rs`，工具步骤行在 `main_content/lx/history/tool.rs`，单行摘要、复用 gallery 的 agent 样式 token）、消息底部通知（`main_content/lx/notice.rs`）、状态（`main_content/lx/status.rs`，覆盖绘制在窗格底边框上）按职责拆分，命中几何与绘制共享纯布局函数（工具行数由同一 `tool::rows` 给出，恒 1 行）。
 4. `event/`：唯一事件循环；tokio `select!` 收敛键盘、PTY 输出与定时事件为 `app` 行为调用与窗格写入，并做帧节流。`event/chat/` 是 lx agent 轮次的唯一编排者：启动 agent turn、按 `RequestKey` 过滤过期事件、并处理工具调用的 BeginTool/FinishTool 握手（DB pending/running/结果落库 → 状态 → 回执）；可见窗格的 pending 只在该帧绘制完成后才推进 running 并回执 ticket。
 5. `input/`：终端事件到应用行为的映射与按键编码；`encode.rs` 为纯函数，按键判断不得散落在 `ui/` 组件中。
 6. `terminal/`：终端仿真状态机（alacritty_terminal 封装）；字节进、画面出，不触碰 IO、不依赖其他模块状态。

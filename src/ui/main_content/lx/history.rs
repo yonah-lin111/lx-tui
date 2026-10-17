@@ -26,6 +26,8 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
+mod tool;
+
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
@@ -409,9 +411,12 @@ fn truncate_with_ellipsis(value: &str, max: usize) -> String {
 
 /// 渲染历史内容；`scroll` 为顶部行偏移（0 表示从最早开始）。`rect` 为内容区
 /// （body，不含置顶行；含右侧滚动条列）。
-pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
+///
+/// 返回本次推进的内容行数：与 [`layout`] 的 `total_rows` **必须相等**
+/// （两者共用同一份步骤行数口径；测试逐一比对，防几何漂移）。
+pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usize {
     if rect.width == 0 || rect.height == 0 {
-        return;
+        return 0;
     }
     let content = content_rect(rect);
     let mut row_index = 0usize;
@@ -448,9 +453,15 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
             }
             first_block = false;
             let Some((part, expanded)) = part_kind else {
-                // TODO(G4): 真实工具行（状态图标/动词/路径/计数）。
                 if let AssistantStepView::Tool { call, .. } = step {
-                    draw_tool_placeholder(grid, content, scroll, &mut row_index, call);
+                    tool::draw(
+                        grid,
+                        content,
+                        scroll,
+                        &mut row_index,
+                        call,
+                        lx.chat.loading_frame,
+                    );
                 }
                 continue;
             };
@@ -546,6 +557,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
         }
         row_index += 1; // 消息间空行。
     }
+    row_index
 }
 
 /// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
@@ -571,59 +583,12 @@ fn markdown_rows(content: &str, width: u16) -> usize {
     markdown_render::render_wrapped(content, width).len()
 }
 
-/// 工具步骤占位行数（**当前恒为 1 行单行摘要**）。
+/// 工具步骤占用的渲染行数（**恒为 1 行单行工具行**）。
 ///
-/// TODO(G4): G4 组实现真实工具行（状态图标/动词/路径/行范围/增删计数）后，
-/// 行数可能与内容/宽度相关；此处与渲染函数必须继续共用同一口径，
-/// 否则滚动条与鼠标命中会漂移。
+/// `layout` 与 `render` 共用本入口（内部即 `tool::rows`）：工具行一旦换行，滚动条、
+/// 置顶用户行与 thinking 命中矩形都会漂移。
 fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
-    if width == 0 {
-        return 0;
-    }
-    // 单行摘要（超宽由渲染侧裁剪），保证工具步骤不吞行、不错位。
-    let _ = call;
-    1
-}
-
-/// 工具步骤单行摘要文本（占位实现；只装状态与路径等摘要，不铺文件内容）。
-fn tool_placeholder_text(call: &crate::app::state::ToolCallView) -> String {
-    let mut fields: Vec<String> = vec![
-        call.name.clone(),
-        text::tool_status_label(call.status).to_string(),
-    ];
-    if let Some(summary) = &call.summary {
-        if let Some(path) = &summary.path {
-            fields.push(path.clone());
-        }
-        if let Some((start, end)) = summary.range {
-            fields.push(format!("{start}-{end}"));
-        }
-        if let Some(added) = summary.added {
-            fields.push(format!("+{added}"));
-        }
-        if let Some(removed) = summary.removed {
-            fields.push(format!("-{removed}"));
-        }
-        if let Some(matches) = summary.matches {
-            fields.push(format!("{matches} matches"));
-        }
-    }
-    fields.join(text::LX_CHAT_TOOL_STATUS_SEP)
-}
-
-/// 绘制工具步骤占位行（TODO(G4)：替换为真实工具行渲染）。
-fn draw_tool_placeholder(
-    grid: &mut Grid,
-    rect: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-    call: &crate::app::state::ToolCallView,
-) {
-    if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let line = tool_placeholder_text(call);
-        grid.put_clipped(rect.x, y, &line, style::muted(), rect.width);
-    }
-    *row_index += 1;
+    tool::rows(call, width)
 }
 
 /// 绘制一段 assistant markdown 正文（已按宽度自适应，无需再换行）。
