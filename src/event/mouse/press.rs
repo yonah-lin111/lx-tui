@@ -403,6 +403,14 @@ pub(crate) fn handle_mouse_down_left(
                 });
                 if let Some(hit) = chat_hit {
                     match hit {
+                        ui::main_content::lx::LxChatHit::PromptHeader => {
+                            let target = state.pane_anywhere(pane).and_then(|target| {
+                                ui::main_content::lx::sticky_prompt_jump(inner, &target.lx)
+                            });
+                            if let Some(row) = target {
+                                update::jump_lx_history_to_prompt(state, pane, row);
+                            }
+                        }
                         ui::main_content::lx::LxChatHit::Thinking(message, part) => {
                             update::toggle_thinking_at(state, pane, message, part);
                         }

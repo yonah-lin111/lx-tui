@@ -951,6 +951,57 @@ pub fn set_lx_history_scroll(
     before != clamped || was_following != target.lx.chat.follow_bottom
 }
 
+/// 每轮把各 lx 窗格的置顶行**抑制记忆**落状态。
+///
+/// 渲染层只读、不写状态（AGENTS：渲染只读），而记忆是唯一的跨帧状态，故放在
+/// 事件循环里、`tui.draw` 之前由这里写；判定本身是
+/// `ui::main_content::lx::history_view` 的纯函数（渲染/命中各自现算，不存第二份真相）。
+/// 返回是否有窗格记忆变化。
+pub fn resolve_lx_sticky_prompt(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::layout::pane_inner_rect(*rect);
+        // 先只读地算出结论（借用结束后再写状态）。
+        let resolved = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .and_then(|target| crate::ui::main_content::lx::history_view(inner, &target.lx))
+            .map(|view| view.suppressed);
+        let Some(suppressed) = resolved else {
+            continue;
+        };
+        let Some(target) = state.pane_mut_anywhere(*pane) else {
+            continue;
+        };
+        if target.lx.chat.suppressed_prompt_header == suppressed {
+            continue;
+        }
+        target.lx.chat.suppressed_prompt_header = suppressed;
+        changed = true;
+    }
+    changed
+}
+
+/// 点击置顶行：跳到该 prompt（顶部对齐该消息起始行），并退出跟随底部。
+/// `target_row` 由 `ui::main_content::lx::sticky_prompt_jump` 按当前几何给出。
+pub fn jump_lx_history_to_prompt(state: &mut AppState, pane: PaneId, target_row: usize) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
+        return false;
+    }
+    let before = target.lx.chat.history_scroll;
+    let was_following = target.lx.chat.follow_bottom;
+    target.lx.chat.history_scroll = target_row;
+    // 明确进入阅读态：置顶行随之按规则让位（顶行成了那条用户消息自己）。
+    target.lx.chat.follow_bottom = false;
+    before != target_row || was_following
+}
+
 /// 回到底部：把历史视口钉到最新一屏（跟随底部）并清除悬停态；返回是否发生变化。
 pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {

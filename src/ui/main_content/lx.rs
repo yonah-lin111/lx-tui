@@ -67,7 +67,7 @@ pub fn render(
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    let (grid, cursor) = build(area, lx, focused);
+    let (grid, cursor, sticky) = build(area, lx, focused);
     for dy in 0..area.height {
         for dx in 0..area.width {
             let glyph = grid.cell(area.x + dx, area.y + dy);
@@ -88,6 +88,12 @@ pub fn render(
         }
     }
     render_input_scrollbar(area, buf, lx);
+    // 置顶用户消息行：表现层，blit 之后直写 Buffer（不进网格 → 不参与复制与选区）。
+    if let Some(row) = sticky
+        && let Some(message) = lx.chat.messages.get(row.message)
+    {
+        history::render_sticky_prompt(buf, row, message);
+    }
     // 状态（模型 · 供应商 · 上下文占用）覆盖绘制在窗格底边框上。
     status::render(buf, area, lx);
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
@@ -271,7 +277,7 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
 
 /// 提取选区文本（内容行、列相对内容区左上角）；空选区返回空串。
 pub fn copy_text(area: Rect, lx: &Lx, range: ((i32, u16), (i32, u16))) -> String {
-    let (grid, _) = build(area, lx, false);
+    let (grid, _, _) = build(area, lx, false);
     let ((start_row, start_col), (end_row, end_col)) = range;
     let mut lines: Vec<String> = Vec::new();
     for row in start_row.max(0)..=end_row.max(0) {
@@ -525,8 +531,12 @@ fn place_entries(
     out
 }
 
-/// 构建整页网格；返回网格与聚焦时的输入光标相对坐标。
-fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
+/// 构建整页网格；返回网格、聚焦时的输入光标相对坐标与置顶行绘制目标。
+fn build(
+    area: Rect,
+    lx: &Lx,
+    focused: bool,
+) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let lay = layout(area, lx);
     if !lx.chat.messages.is_empty() {
         return build_chat(area, lx, focused, &lay);
@@ -535,7 +545,7 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     if lay.fallback {
         let y = area.y + area.height.saturating_sub(1) / 2;
         grid.put_centered(area.x, area.width, y, text::LX_TITLE, style::strong());
-        return (grid, None);
+        return (grid, None, None);
     }
 
     if let Some((ix, iy)) = lay.icon {
@@ -567,11 +577,16 @@ fn build(area: Rect, lx: &Lx, focused: bool) -> (Grid, Option<(u16, u16)>) {
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
         draw_panel(&mut grid, rect, panel);
     }
-    (grid, cursor)
+    (grid, cursor, None)
 }
 
 /// 聊天模式构建：历史区 + 输入框（状态在**窗格底边框**上，由 `render` 覆盖绘制）。
-fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option<(u16, u16)>) {
+fn build_chat(
+    area: Rect,
+    lx: &Lx,
+    focused: bool,
+    lay: &Layout,
+) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let mut grid = Grid::new(area);
     let history_bottom = if lay.input.is_some() {
         lay.chat_bar.map_or_else(
@@ -588,19 +603,19 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
         lay.input.map(|input| input.width).unwrap_or(area.width),
         history_bottom.saturating_sub(area.y),
     );
-    // 历史滚动：跟随底部时取末尾窗口。
-    let history_layout = history::layout(history_rect, lx);
-    let scroll = history_scroll(lx, history_rect, history_layout.total_rows);
-    history::render(&mut grid, history_rect, lx, scroll);
-    // 历史滚动条贴右缘一列（内容溢出时）。
+    // 历史视图：滚动偏移 / body（置顶行让位）/ 置顶行结论，统一由纯函数给出。
+    let history_view = history::view(history_rect, lx);
+    history::render(&mut grid, history_view.body, lx, history_view.scroll);
+    // 历史滚动条贴右缘一列（内容溢出时；轨道只覆盖 body）。
     if let Some(bar) = history::scrollbar(
-        history_rect,
-        history_layout.total_rows,
-        usize::from(history_rect.height),
-        scroll,
+        history_view.body,
+        history_view.total_rows,
+        usize::from(history_view.body.height),
+        history_view.scroll,
     ) {
         render_history_scrollbar(&mut grid, &bar);
     }
+    let sticky = history::sticky_rect(&history_view);
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
@@ -621,12 +636,14 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
         draw_panel(&mut grid, rect, panel);
     }
-    (grid, cursor)
+    (grid, cursor, sticky)
 }
 
 /// lx 页聊天命中结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LxChatHit {
+    /// 点击置顶用户消息行（跳到该 prompt）。
+    PromptHeader,
     /// 点击 thinking 折叠块头部（消息索引, part 索引）。
     Thinking(usize, usize),
     /// 点击「回到底部」按钮。
@@ -674,37 +691,46 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
     (height > 0).then(|| Rect::new(x, area.y, width, height))
 }
 
-/// 聊天历史滚动偏移：跟随底部时取末尾窗口，否则用状态里的偏移（钳到范围）。
-pub(crate) fn history_scroll(lx: &Lx, history_rect: Rect, total_rows: usize) -> usize {
-    let max_top = total_rows.saturating_sub(usize::from(history_rect.height));
-    if lx.chat.follow_bottom {
-        max_top
-    } else {
-        lx.chat.history_scroll.min(max_top)
-    }
+/// 聊天历史视图（滚动偏移 / body / 置顶行结论）；无历史区时为 None。
+///
+/// 渲染、滚轮钳制、滚动条与命中**统一**走它，保证"可见行数"只有一个口径。
+pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> {
+    let history_rect = history_rect(area, lx)?;
+    Some(history::view(history_rect, lx))
 }
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。
 pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
-    let history_rect = history_rect(area, lx)?;
-    let history_layout = history::layout(history_rect, lx);
-    let scroll = history_scroll(lx, history_rect, history_layout.total_rows);
+    let view = history_view(area, lx)?;
     history::scrollbar(
-        history_rect,
-        history_layout.total_rows,
-        usize::from(history_rect.height),
-        scroll,
+        view.body,
+        view.total_rows,
+        usize::from(view.body.height),
+        view.scroll,
     )
 }
 
 /// 聊天历史的（渲染行数, 视口行数）；无消息时为 None。滚轮滚动按此钳制。
+///
+/// 视口行数取 **body**（置顶行让位后），与渲染同口径——否则滚不到最后一行。
 pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
-    let history_rect = history_rect(area, lx)?;
-    let total = history::layout(history_rect, lx).total_rows;
-    Some((total, usize::from(history_rect.height)))
+    let view = history_view(area, lx)?;
+    Some((view.total_rows, usize::from(view.body.height)))
 }
 
-/// 聊天模式命中测试：thinking 头部 > 停止按钮 > 回到底部按钮。
+/// 置顶用户消息行的"跳转目标"：该消息起始行（钳到 body 的滚动上限）；无置顶行返回 None。
+pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
+    let view = history_view(area, lx)?;
+    let message = view.sticky?;
+    let start = view.messages.get(message)?.start;
+    // 跳过去后置顶行会让位，按整块 body 钳制。
+    let max_top = view
+        .total_rows
+        .saturating_sub(usize::from(view.area.height));
+    Some(start.min(max_top))
+}
+
+/// 聊天模式命中测试：回到底部按钮 > 置顶行 > thinking 头部。
 pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
     if lx.chat.messages.is_empty() {
         return None;
@@ -715,19 +741,24 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
     {
         return Some(LxChatHit::JumpBottom);
     }
-    // thinking 头部命中（按当前滚动窗口换算屏幕坐标）；用与渲染一致的历史区矩形。
-    let history_rect = history_rect(area, lx)?;
-    let history_layout = history::layout(history_rect, lx);
-    let scroll = history_scroll(lx, history_rect, history_layout.total_rows);
-    for (message_index, part_index, header) in history_layout.thinking {
-        let offset = header.y.saturating_sub(history_rect.y);
-        if (offset as usize) < scroll {
+    let view = history_view(area, lx)?;
+    // 置顶行（表现层，整区第 0 行整宽）：点击跳回该 prompt。
+    if let Some(sticky) = history::sticky_rect(&view)
+        && sticky.rect.contains((column, row).into())
+    {
+        return Some(LxChatHit::PromptHeader);
+    }
+    // thinking 头部命中（按 body + 滚动窗口换算屏幕坐标）。
+    for (message_index, part_index, header) in history::layout(view.body, lx).thinking {
+        let offset = header.y.saturating_sub(view.body.y);
+        if (offset as usize) < view.scroll {
             continue;
         }
-        let screen_y = history_rect
+        let screen_y = view
+            .body
             .y
-            .saturating_add(u16::try_from(offset as usize - scroll).unwrap_or(u16::MAX));
-        let rect = Rect::new(history_rect.x, screen_y, history_rect.width, 1);
+            .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
+        let rect = Rect::new(view.body.x, screen_y, view.body.width, 1);
         if rect.contains((column, row).into()) {
             return Some(LxChatHit::Thinking(message_index, part_index));
         }

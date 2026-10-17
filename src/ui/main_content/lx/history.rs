@@ -12,8 +12,10 @@
 //! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
 //! - 右侧预留一列滚动条（内容溢出时显示），宽度与输入框对齐。
 
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthChar;
+use ratatui::style::Style;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{ChatMessageView, Lx};
 use crate::ui::markdown_render;
@@ -35,6 +37,22 @@ const THINKING_EXPANDED_MARK: &str = "▾ ";
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
 pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
+/// 置顶行的最小可用视口（高度 / 宽度，对齐 codex）。
+const STICKY_MIN_HEIGHT: u16 = 4;
+const STICKY_MIN_WIDTH: u16 = 16;
+/// 置顶行摘要的最大取样字符数（限住超长粘贴的每帧成本，对齐 codex 的 512）。
+const STICKY_SAMPLE_CHARS: usize = 512;
+/// 置顶行前缀：与真实用户消息的 `> ` 区分（投影不是消息）。
+const STICKY_PREFIX: &str = "› ";
+
+/// 一条消息在渲染行空间中的区间（`end` 不含；含它**前面**的空行，
+/// 末尾那条含收尾呼吸行）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MessageRows {
+    pub start: usize,
+    pub end: usize,
+    pub is_user: bool,
+}
 
 /// 历史区布局：内容矩形 + 每个 thinking 折叠块的头部矩形（命中用）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,8 +60,36 @@ pub struct HistoryLayout {
     pub area: Rect,
     /// （消息索引, 该消息内 part 索引, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
+    /// 每条消息的行区间（置顶行归属判定用）。
+    pub messages: Vec<MessageRows>,
     /// 渲染出的内容总行数（滚动上限用）。
     pub total_rows: usize,
+}
+
+/// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryView {
+    /// 历史整区（含置顶行与滚动条列）。
+    pub area: Rect,
+    /// 内容区：置顶行让位后比 `area` 少 1 行；不显示置顶行时等于 `area`。
+    pub body: Rect,
+    /// body 顶部行索引（0 = 最早）。
+    pub scroll: usize,
+    /// 渲染出的内容总行数（滚动上限用）。
+    pub total_rows: usize,
+    /// 每条消息的行区间。
+    pub messages: Vec<MessageRows>,
+    /// 要钉的用户消息索引（None = 不画置顶行）。
+    pub sticky: Option<usize>,
+    /// 本帧要写回状态的新记忆（[`crate::app::state::lx::chat::StickySuppression`]）。
+    pub suppressed: Option<crate::app::state::lx::chat::StickySuppression>,
+}
+
+/// 置顶行绘制目标：矩形 + 被钉的消息索引。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StickyRow {
+    pub rect: Rect,
+    pub message: usize,
 }
 
 /// 历史内容列（扣除右侧滚动条预留列）；宽度不足时退回整宽。
@@ -68,10 +114,18 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         return HistoryLayout {
             area,
             thinking,
+            messages: Vec::new(),
             total_rows: 0,
         };
     }
+    let mut messages_rows: Vec<MessageRows> = Vec::new();
     for (message_index, message) in lx.chat.messages.iter().enumerate() {
+        // 消息间空行归**后**一条消息（codex 的 leading spacer 口径）：顶行落在轮边界
+        // 空行上时算用户消息自己的行 → 用户消息自带上下文，不置顶。
+        if message_index > 0 {
+            rows += 1;
+        }
+        let start = rows;
         // 消息内块（状态标记 / 各内容块 / 统计行）之间空一行。
         let mut first_block = true;
         if let Some(marker) = status_marker(message) {
@@ -117,17 +171,240 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             }
             rows += wrap(&line, width).len();
         }
-        rows += 1; // 消息间空行。
+        messages_rows.push(MessageRows {
+            start,
+            end: rows,
+            is_user: message.role == "user",
+        });
+    }
+    // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息。
+    if !messages_rows.is_empty() {
+        rows += 1;
+        if let Some(last) = messages_rows.last_mut() {
+            last.end = rows;
+        }
     }
     HistoryLayout {
         area,
         thinking,
+        messages: messages_rows,
         total_rows: rows,
     }
 }
 
-/// 渲染历史内容；`scroll` 为顶部行偏移（0 表示从最早开始）。`rect` 为整个历史区
-/// （含右侧滚动条列）。
+/// 计算历史视图（纯函数，与渲染同源）：滚动偏移、body 矩形、置顶行结论与新记忆。
+///
+/// 置顶行判定（对齐 codex）：
+/// 1. 先按**整块** body 判一次：顶行落在用户消息自己的行上 → 不钉（用户消息自带上下文），
+///    否则向前找最近一条有正文的用户消息；
+/// 2. 需要钉才让位一行（body 高度 -1）并在让位后的 scroll 上**重判**；重判不再需要
+///    → 撤销让位、不画置顶行，并把"整块视口 + 顶行位置"记入记忆；
+/// 3. 非跟随时，若记忆与当前位置一致 → 直接跳过重判（沿用抑制，防让位/撤销抖动）。
+pub(super) fn view(area: Rect, lx: &Lx) -> HistoryView {
+    let layout = layout(area, lx);
+    let total = layout.total_rows;
+    let full_height = area.height;
+    let scroll_for = |height: u16| -> usize {
+        let max_top = total.saturating_sub(usize::from(height));
+        if lx.chat.follow_bottom {
+            max_top
+        } else {
+            lx.chat.history_scroll.min(max_top)
+        }
+    };
+    let mut view = HistoryView {
+        area,
+        body: area,
+        scroll: scroll_for(full_height),
+        total_rows: total,
+        messages: layout.messages,
+        sticky: None,
+        suppressed: None,
+    };
+    if total == 0 || full_height < STICKY_MIN_HEIGHT || area.width < STICKY_MIN_WIDTH {
+        return view;
+    }
+    let top = message_at(&view.messages, view.scroll);
+    let position = top.map(
+        |(message, row)| crate::app::state::lx::chat::StickySuppression {
+            viewport: area,
+            message,
+            row,
+        },
+    );
+    // 阅读态且位置未变：沿用抑制（本帧跳过重判）。
+    if !lx.chat.follow_bottom
+        && lx
+            .chat
+            .suppressed_prompt_header
+            .is_some_and(|remembered| Some(remembered) == position)
+    {
+        view.suppressed = lx.chat.suppressed_prompt_header;
+        return view;
+    }
+    let Some(candidate) = sticky_candidate(&lx.chat.messages, &view.messages, view.scroll) else {
+        return view;
+    };
+    // 让位一行后重判（body 下移 1 行，置顶行占历史整区第 0 行）。
+    let body = Rect {
+        y: area.y.saturating_add(1),
+        height: full_height - 1,
+        ..area
+    };
+    let scroll_body = scroll_for(body.height);
+    if sticky_candidate(&lx.chat.messages, &view.messages, scroll_body).is_none() {
+        view.suppressed = position;
+        return view;
+    }
+    view.body = body;
+    view.scroll = scroll_body;
+    view.sticky = Some(candidate);
+    view
+}
+
+/// 顶行所属消息与消息内行偏移；空历史返回 None。
+fn message_at(rows: &[MessageRows], scroll: usize) -> Option<(usize, usize)> {
+    rows.iter()
+        .enumerate()
+        .find(|(_, range)| scroll >= range.start && scroll < range.end)
+        .map(|(index, range)| (index, scroll - range.start))
+}
+
+/// 置顶候选：顶行落在用户消息自己的行上 → None（自带上下文）；
+/// 否则取它前面最近一条**有正文**的用户消息。
+fn sticky_candidate(
+    messages: &[crate::app::state::ChatMessageView],
+    rows: &[MessageRows],
+    scroll: usize,
+) -> Option<usize> {
+    let (index, _) = message_at(rows, scroll)?;
+    if rows.get(index)?.is_user {
+        return None;
+    }
+    (0..index)
+        .rev()
+        .find(|candidate| rows[*candidate].is_user && sticky_text(&messages[*candidate]).is_some())
+}
+
+/// 置顶行摘要：该用户消息首个正文块的前 512 字符 → 控制字符转空格 → 空白折叠为单行；
+/// 无正文或全空白返回 None（该条不钉）。
+fn sticky_text(message: &crate::app::state::ChatMessageView) -> Option<String> {
+    let part = message
+        .parts
+        .iter()
+        .find(|part| part.kind == crate::chat::events::PartKind::Text)?;
+    let sample: String = part.content.chars().take(STICKY_SAMPLE_CHARS).collect();
+    let single: String = sample
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    let collapsed = single.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!collapsed.is_empty()).then_some(collapsed)
+}
+
+/// 置顶行矩形（历史整区第 0 行整宽）；不显示时为 None。
+pub(super) fn sticky_rect(view: &HistoryView) -> Option<StickyRow> {
+    view.sticky.map(|message| StickyRow {
+        rect: Rect::new(view.area.x, view.area.y, view.area.width, 1),
+        message,
+    })
+}
+
+/// 绘制置顶行（**表现层**：直接写 `Buffer`、不进网格 → 不参与复制与选区）；
+/// 整宽 `style::chat_user_bg` 底 + `› ` 前缀（accent）+ 摘要（默认色，按列截断加 `…`）。
+pub(super) fn render_sticky_prompt(
+    buf: &mut Buffer,
+    row: StickyRow,
+    message: &crate::app::state::ChatMessageView,
+) {
+    let Some(text) = sticky_text(message) else {
+        return;
+    };
+    let bg = style::chat_user_bg();
+    let content = content_rect(row.rect);
+    for x in content.x..content.right() {
+        if let Some(cell) = buf.cell_mut((x, row.rect.y)) {
+            cell.reset();
+            cell.set_char(' ');
+            cell.set_style(bg);
+        }
+    }
+    let mut x = put_buffer_line(
+        buf,
+        content.x,
+        row.rect.y,
+        STICKY_PREFIX,
+        style::accent().patch(bg),
+        content.right(),
+    );
+    let remaining = usize::from(content.right().saturating_sub(x));
+    if remaining > 0 {
+        let text = truncate_with_ellipsis(&text, remaining);
+        x = put_buffer_line(buf, x, row.rect.y, &text, bg, content.right());
+    }
+    // 尾部留白仍铺底（整宽一致）。
+    for tail in x..content.right() {
+        if let Some(cell) = buf.cell_mut((tail, row.rect.y)) {
+            cell.reset();
+            cell.set_char(' ');
+            cell.set_style(bg);
+        }
+    }
+}
+
+/// 逐字符写 `Buffer`（宽字符占两列、不跨 `limit` 半写）；返回写入后的列。
+fn put_buffer_line(
+    buf: &mut Buffer,
+    mut x: u16,
+    y: u16,
+    content: &str,
+    style: Style,
+    limit: u16,
+) -> u16 {
+    for ch in content.chars() {
+        let width = ch.width().unwrap_or(0) as u16;
+        if width == 0 {
+            continue;
+        }
+        if x.saturating_add(width) > limit {
+            break;
+        }
+        for offset in 0..width.max(1) {
+            if let Some(cell) = buf.cell_mut((x.saturating_add(offset), y)) {
+                cell.reset();
+                cell.set_char(if offset == 0 { ch } else { ' ' });
+                cell.set_style(style);
+            }
+        }
+        x = x.saturating_add(width);
+    }
+    x
+}
+
+/// 按显示列截断，溢出以 `…` 收尾（宽字符按两列计）。
+fn truncate_with_ellipsis(value: &str, max: usize) -> String {
+    if value.width() <= max {
+        return value.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in value.chars() {
+        let cell = ch.width().unwrap_or(0);
+        if width + cell > max.saturating_sub(1) {
+            break;
+        }
+        out.push(ch);
+        width += cell;
+    }
+    out.push('…');
+    out
+}
+
+/// 渲染历史内容；`scroll` 为顶部行偏移（0 表示从最早开始）。`rect` 为内容区
+/// （body，不含置顶行；含右侧滚动条列）。
 pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
     if rect.width == 0 || rect.height == 0 {
         return;

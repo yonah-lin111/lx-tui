@@ -287,6 +287,20 @@ pub struct ChatStatus {
     pub omitted_turns: Option<usize>,
 }
 
+/// 置顶用户消息行的抑制记忆（对齐 codex `suppressed_prompt_header`）。
+///
+/// 非跟随时，若"视口 + 顶行位置"与记忆一致，则整帧跳过置顶行重判——避免
+/// "让位一行 → 重判不再需要 → 撤销让位" 的往返抖动。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StickySuppression {
+    /// 未让位时的历史整区（位置或尺寸一变记忆即失效）。
+    pub viewport: ratatui::layout::Rect,
+    /// 顶行所属消息索引。
+    pub message: usize,
+    /// 该消息内的行偏移。
+    pub row: usize,
+}
+
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
 pub struct LxChat {
@@ -325,6 +339,10 @@ pub struct LxChat {
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
+    /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
+    /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
+    /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
+    pub suppressed_prompt_header: Option<StickySuppression>,
 }
 
 impl Default for LxChat {
@@ -352,6 +370,7 @@ impl LxChat {
             loading_frame: 0,
             jump_bottom_hover: false,
             stop_armed_at: None,
+            suppressed_prompt_header: None,
         }
     }
 

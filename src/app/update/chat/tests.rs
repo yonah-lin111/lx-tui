@@ -1377,3 +1377,121 @@ fn stream_parts_record_start_and_end_timestamps() {
     assert!(started > 0, "毫秒时刻有效");
     assert!(ended >= started, "终点不早于起点");
 }
+
+/// 造一条展示用消息（置顶行测试）。
+fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
+    ChatMessageView {
+        id: format!("{role}-{index}"),
+        role: role.into(),
+        status: "complete".into(),
+        turn_index: 0,
+        parts: vec![ChatPartView {
+            kind: PartKind::Text,
+            content: text.into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }
+}
+
+/// 焦点窗格置为 lx，并塞入一段会溢出的历史（两轮问答，正文各若干行）。
+fn state_with_lx_history() -> (AppState, PaneId, ratatui::layout::Rect) {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    let rect = ratatui::layout::Rect::new(0, 0, 24, 10);
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.view = crate::app::state::PaneView::Lx;
+    target.lx.chat.messages = vec![
+        lx_view_message("user", "第一轮的问题", 0),
+        lx_view_message("assistant", "A1\nA2\nA3\nA4", 1),
+        lx_view_message("user", "第二轮的问题", 2),
+        lx_view_message("assistant", "B1\nB2\nB3\nB4", 3),
+    ];
+    (state, pane, rect)
+}
+
+#[test]
+fn resolve_writes_sticky_suppression_memory_from_pure_view() {
+    let (mut state, pane, rect) = state_with_lx_history();
+    let rects = [(pane, rect)];
+    let inner = crate::layout::pane_inner_rect(rect);
+
+    // 场景 1：顶行落在第一轮回复里 → 让位后仍需要 → 不写记忆。
+    let target = state.pane_anywhere(pane).expect("pane");
+    let view = crate::ui::main_content::lx::history_view(inner, &target.lx).expect("view");
+    let answer_start = view.messages[1].start;
+    let boundary = view.messages[2].start.saturating_sub(1);
+    assert!(view.total_rows > boundary + 1, "内容确实溢出");
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.chat.follow_bottom = false;
+    target.lx.chat.history_scroll = answer_start;
+    assert!(
+        !resolve_lx_sticky_prompt(&mut state, &rects),
+        "无需抑制：无变化"
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .suppressed_prompt_header,
+        None
+    );
+
+    // 场景 2：抑制只在"让位会改变顶行"时发生——跟随底部（顶行 = total - height）
+    // 才会；阅读态的顶行是绝对行号，不随让位变化。几何随面板尺寸变化，故搜索视口高度。
+    let mut scenario = None;
+    for height in 4..24u16 {
+        let probe_rect = ratatui::layout::Rect::new(0, 0, 24, height);
+        let probe_inner = crate::layout::pane_inner_rect(probe_rect);
+        {
+            let target = state.pane_mut_anywhere(pane).expect("pane");
+            target.lx.chat.follow_bottom = true;
+        }
+        let target = state.pane_anywhere(pane).expect("pane");
+        let probe =
+            crate::ui::main_content::lx::history_view(probe_inner, &target.lx).expect("view");
+        if probe.suppressed.is_some() {
+            scenario = Some((probe_rect, probe.suppressed));
+            break;
+        }
+    }
+    let (probe_rect, expected) = scenario.expect("存在跟随态下应抑制的视口尺寸");
+    let rects = [(pane, probe_rect)];
+    assert!(resolve_lx_sticky_prompt(&mut state, &rects), "写记忆即变化");
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .suppressed_prompt_header,
+        expected,
+        "记忆与纯函数结果一致"
+    );
+    assert!(
+        !resolve_lx_sticky_prompt(&mut state, &rects),
+        "重复 resolve 无变化"
+    );
+}
+
+#[test]
+fn jump_to_prompt_clears_follow_and_moves_viewport() {
+    let (mut state, pane, _rect) = state_with_lx_history();
+    assert!(jump_lx_history_to_prompt(&mut state, pane, 5));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    assert_eq!(chat.history_scroll, 5, "跳到目标行");
+    assert!(!chat.follow_bottom, "进入阅读态（置顶行随让位规则收敛）");
+    assert!(
+        !jump_lx_history_to_prompt(&mut state, pane, 5),
+        "重复跳转无变化"
+    );
+}

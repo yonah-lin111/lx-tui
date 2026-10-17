@@ -850,7 +850,7 @@ fn slash_panel_renders_ascii_only() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = slash_commands_lx(0);
     let mut buf = Buffer::empty(area);
-    let (built, _cursor) = build(area, &lx, true);
+    let (built, _cursor, _sticky) = build(area, &lx, true);
     blit_grid(area, &mut buf, &built);
     for y in 0..area.height {
         for x in 0..area.width {
@@ -1158,5 +1158,95 @@ fn esc_hint_shortens_on_narrow_bar() {
     assert!(
         !text.contains("Press esc again to stop"),
         "放不下时不画长短语：{text}"
+    );
+}
+
+// ===== 置顶用户消息行（命中与跳转目标）=====
+
+/// 构造溢出视口的历史：两轮问答，正文各若干行。
+fn sticky_history_lx() -> Lx {
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    let mut push = |role: &str, text: &str| {
+        chat.messages.push(ChatMessageView {
+            id: format!("{role}-{}", chat.messages.len()),
+            role: role.into(),
+            status: "complete".into(),
+            turn_index: 0,
+            parts: vec![ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: text.into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+    };
+    push("user", "第一轮的问题");
+    push("assistant", "A1\nA2\nA3\nA4\nA5");
+    push("user", "第二轮的问题");
+    push("assistant", "B1\nB2\nB3\nB4\nB5");
+    lx.chat = chat;
+    lx
+}
+
+#[test]
+fn sticky_prompt_row_is_clickable_and_jumps_to_the_prompt() {
+    let area = Rect::new(0, 0, 40, 16);
+    let mut lx = sticky_history_lx();
+    lx.chat.follow_bottom = false;
+    // 扫一个"顶行落在回复里"的滚动位置（几何随布局变化，不硬编码行号）。
+    let mut found = None;
+    for scroll in 0..32 {
+        lx.chat.history_scroll = scroll;
+        if let Some(view) = history_view(area, &lx)
+            && let Some(message) = view.sticky
+        {
+            found = Some((message, view.area.y, view.messages[message].start));
+            break;
+        }
+    }
+    let (message, row_y, start) = found.expect("存在置顶行");
+    assert_eq!(message, 0, "钉第一轮 prompt（顶行在第一轮回复里）");
+    assert_eq!(
+        chat_hit(area, &lx, area.x + 4, row_y),
+        Some(LxChatHit::PromptHeader),
+        "置顶行整宽可点"
+    );
+    assert_eq!(
+        sticky_prompt_jump(area, &lx),
+        Some(start),
+        "跳转目标 = 该消息起始行"
+    );
+    // 非置顶行不命中（body 第一行是正文）。
+    assert_eq!(chat_hit(area, &lx, area.x + 4, row_y + 1), None);
+}
+
+#[test]
+fn history_rows_uses_body_height_while_sticky_is_shown() {
+    let area = Rect::new(0, 0, 40, 16);
+    let mut lx = sticky_history_lx();
+    lx.chat.follow_bottom = false;
+    let mut with_sticky = None;
+    for scroll in 0..32 {
+        lx.chat.history_scroll = scroll;
+        if let Some(view) = history_view(area, &lx)
+            && view.sticky.is_some()
+        {
+            with_sticky = Some((view.body.height, view.total_rows));
+            break;
+        }
+    }
+    let (body_height, total) = with_sticky.expect("存在置顶行");
+    assert_eq!(
+        history_rows(area, &lx),
+        Some((total, usize::from(body_height))),
+        "滚轮钳制用 body 高度（否则滚不到最后一行）"
     );
 }
