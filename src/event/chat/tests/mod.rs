@@ -318,6 +318,47 @@ async fn drive_with_hook<E>(
 where
     E: ToolExecutor + 'static,
 {
+    drive_request(
+        fixture,
+        state,
+        key,
+        transport,
+        persistence,
+        streams,
+        cancel,
+        executor,
+        hooks,
+        ChatRequest {
+            turns: Vec::new(),
+            items: Vec::new(),
+            model: crate::db::chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+            variant_params: None,
+        },
+    )
+    .await
+}
+
+/// 用**显式装配好的请求**驱动一轮（`/resume` 后续轮、历史回放测试用）。
+#[allow(clippy::too_many_arguments)]
+async fn drive_request<E>(
+    fixture: &Fixture,
+    state: &mut AppState,
+    key: &RequestKey,
+    transport: &FakeTransport,
+    persistence: &Persistence,
+    streams: &mut ChatStreams,
+    cancel: watch::Receiver<bool>,
+    executor: E,
+    hooks: Hooks,
+    request: ChatRequest,
+) -> Driven
+where
+    E: ToolExecutor + 'static,
+{
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     transport.attach(sender.clone(), key.clone());
     // 事件层冻结工作区（生产由 `start_stream` 写入）。
@@ -333,19 +374,7 @@ where
         trace: trace.clone(),
         executed: executed.clone(),
     };
-    let prepared = prepare_turn(
-        ChatRequest {
-            turns: Vec::new(),
-            items: Vec::new(),
-            model: crate::db::chat::ModelSnapshot {
-                provider: "p".into(),
-                model: "m".into(),
-                variant: None,
-            },
-            variant_params: None,
-        },
-        fixture.workspace().to_path_buf(),
-    );
+    let prepared = prepare_turn(request, fixture.workspace().to_path_buf());
     let mut driver = Box::pin(host::drive_with(
         prepared.context,
         host::EventHost {
@@ -612,3 +641,4 @@ fn assistant_message<'a>(
 mod ack;
 mod flow;
 mod limits;
+mod resume;

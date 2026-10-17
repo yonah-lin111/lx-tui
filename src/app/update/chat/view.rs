@@ -77,6 +77,8 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
         status,
         summary: has_summary.then_some(summary),
         error: tool.error_text.clone(),
+        // 结果体只在历史加载时回填：上下文回放用它（UI 不铺开全文）。
+        result_json: tool.result_json.clone(),
     }
 }
 

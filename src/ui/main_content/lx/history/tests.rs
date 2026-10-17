@@ -736,6 +736,7 @@ fn tool_step(position: i64, call: ChatPartView) -> AssistantStepView {
                 ..Default::default()
             }),
             error: None,
+            result_json: None,
         },
     }
 }

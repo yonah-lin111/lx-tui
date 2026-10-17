@@ -775,5 +775,70 @@ pub fn chat_message_part_views(message: &crate::app::state::ChatMessageView) -> 
     }))
 }
 
+/// 消息步骤时间线 → DB 工具记录（装配输入用；不写入 DB）。
+///
+/// `position` 取步骤自身编号（与 parts 共用同一编号空间，不重新编号）；
+/// `result_json` 只在结算后存在，`error_text` 只在失败/中断时有值——都不伪造。
+pub fn chat_message_tool_views(
+    message: &crate::app::state::ChatMessageView,
+) -> Vec<ToolCallRecord> {
+    message
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            crate::app::state::AssistantStepView::Tool { position, call } => Some(ToolCallRecord {
+                call_id: call.call_id.clone(),
+                message_id: message.id.clone(),
+                name: call.name.clone(),
+                arguments_json: call.arguments_json.clone(),
+                position: *position,
+                status: call.status.as_str().to_string(),
+                result_json: call.result_json.clone(),
+                error_text: call.error.clone(),
+                started_at_ms: 0,
+                completed_at_ms: None,
+                duration_ms: None,
+            }),
+            crate::app::state::AssistantStepView::Part { .. } => None,
+        })
+        .collect()
+}
+
+/// 窗格聊天视图 → 装配用 DB 消息记录（parts 与 tools 同源映射）。
+///
+/// **选择**：`/resume` 后的下一轮装配走「窗格内存视图 → 记录 → `context::assemble`」，
+/// 不重新查库。理由：窗格视图已是「DB 历史 + 本轮增量」的唯一时间线
+/// （`on_session_loaded` 按 position 合并 parts 与 tools，`on_stream_delta` 追加本轮步骤），
+/// 再查库既拿不到本轮未完成步骤，也会与内存状态形成两份真相。
+/// 记录里的 `sequence` 用视图下标（装配按消息顺序分组，不使用该字段的绝对值）。
+pub fn chat_message_views_to_db(
+    messages: &[crate::app::state::ChatMessageView],
+) -> Vec<ChatMessage> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(sequence, message)| ChatMessage {
+            external_id: message.id.clone(),
+            sequence: sequence as i64,
+            turn_index: message.turn_index,
+            role: message.role.clone(),
+            status: message.status.clone(),
+            model_provider: None,
+            model_id: None,
+            variant: None,
+            stop_reason: None,
+            error_code: message.error_code.clone(),
+            input_tokens: message.input_tokens,
+            output_tokens: message.output_tokens,
+            cache_read_tokens: message.cache_read_tokens,
+            cache_write_tokens: None,
+            created_at_ms: 0,
+            completed_at_ms: None,
+            parts: chat_message_part_views(message),
+            tools: chat_message_tool_views(message),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests;

@@ -14,7 +14,10 @@ pub mod thinking;
 pub mod tools;
 pub mod transport;
 
-pub use context::{Assembly, AssemblyInput, assemble, shrink_once};
+pub use context::{
+    Assembly, AssemblyInput, MAX_TOOL_RESULT_REPLAY_BYTES, assemble, shrink_once,
+    truncate_result_for_replay,
+};
 pub use events::{
     ChatDelta, ChatRequest, ChatTurn, MAX_SUMMARY_CHARS, MAX_TOOL_ARGUMENTS_BYTES, ModelItem,
     ModelStepStop, PartDelta, PartKind, StopReason,

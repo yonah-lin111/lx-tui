@@ -487,6 +487,7 @@ pub fn on_tool_running(state: &mut AppState, key: &RequestKey, call_id: &str) ->
 /// agent loop 的 FinishTool ack 第 ② 步：把工具步骤结算为终态并写入摘要/错误码。
 ///
 /// 摘要已由事件层从 `chat::tools::to_summary` 映射成纯数据；本函数不执行 IO。
+/// `result_json` 是刚落库的规范化结果体（上下文回放用，UI 不铺开全文）。
 /// 迟到/重复结果（已终态）不覆盖真实结果。
 pub fn on_tool_settled(
     state: &mut AppState,
@@ -494,6 +495,7 @@ pub fn on_tool_settled(
     call_id: &str,
     status: ToolStatus,
     summary: Option<ToolSummary>,
+    result_json: Option<String>,
     error: Option<String>,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(key.pane) else {
@@ -508,7 +510,7 @@ pub fn on_tool_settled(
     let changed = target
         .lx
         .chat
-        .settle_tool_result(call_id, status, summary, error);
+        .settle_tool_result(call_id, status, summary, result_json, error);
     if changed {
         refresh_lx_status(state, key.pane);
     }

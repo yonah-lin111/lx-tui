@@ -722,10 +722,24 @@ finish_tool ──FinishTool(ticket)──▶ ① Database::finish_tool_call（�
 | `limits::multiple_calls_never_execute_concurrently` | begin/finish 严格交替；两文件内容正确 |
 | `limits::pending_row_committed_before_the_file_is_written` | 执行时 DB 行已是 running 且目标文件尚不存在 |
 | `limits::request_items_keep_call_result_pairing_across_steps` | 第三次请求中 call id 序列与 result call id 序列一致，且每条结果都在其调用之后 |
+| `context::tests::legacy::plain_text_history_matches_legacy_output_byte_for_byte` | 旧无工具会话的 `turns` 与 `items` 与旧行为逐字节等价 |
+| `context::tests::tools::text_call_result_text_preserves_timeline_order` | 一轮 text + 工具 + text 的 items 顺序为 text, call, result, text；reasoning 不出现 |
+| `context::tests::tools::failed_tool_replays_as_error_result` | `status=failed` + `error_text` → `is_error=true` 成对回放，错误原因作为结果内容 |
+| `context::tests::tools::non_terminal_and_unexecuted_tools_are_not_replayed` | pending/running/cancelled/interrupted 四种状态都不产生 call/result 项 |
+| `context::tests::tools::invalid_arguments_skip_only_that_pair` | 非对象/非法 JSON 参数只跳过该对，其余工具与正文正常 |
+| `context::tests::budget::trimming_drops_whole_oldest_turn_including_tools` | 被裁掉的最老轮次 call/result 一并消失（无 orphan） |
+| `context::tests::budget::shrink_once_removes_oldest_turn_in_both_views` | `shrink_once` 同时收缩 `turns` 与 `items`，两视图轮次边界一致 |
+| `context::tests::budget::token_estimate_includes_tool_arguments_and_results` | 同一轮加工具参数/结果后提前被裁（估算计入工具内容） |
+| `context::tests::budget::oversized_single_result_is_truncated_with_marker` | 单条结果 ≤ 64 KiB 且以 `…[truncated]` 结尾；UTF-8 边界安全 |
+| `context::tests::roundtrip::view_to_db_round_trip_keeps_tool_pairing_and_position` | 视图 → 记录 → 装配的 call/result 与 position 与视图一致 |
+| `agent_loop::tests::context::current_turn_keeps_history_pairs_and_appends_new_ones` | 当前轮累计保留历史成对项并追加本轮成对项，结果紧邻其调用 |
+| `agent_loop::tests::context::current_turn_truncates_oversized_tool_result` | 本轮结果进入下一次采样时同样受 64 KiB 回放上限约束 |
+| `resume::resume_then_continue_replays_completed_pairs_and_skips_interrupted` | `/resume` 后「继续」的实际请求含成对 call/result，interrupted 不在其中且无文件副作用 |
+| `resume::start_stream_fails_the_turn_when_draft_exceeds_context` | 当前用户消息超预算 → 稳定错误码失败，用户输入不被截断 |
 
 **已知未覆盖 / 留待后续**
 
-1. `src/chat/context/`（§7.3）仍是“只取完整轮次正文”，历史工具的 call/result 成对回放属 G7；本轮 loop 内的 call/result 已保留（见上表最后一行）。
-2. 网络断开且已执行工具时“不自动重试”由 G4 的重试闸门保证（`can_retry` 见到任何工具输入即永久关闭），本组未新增重复断言。
-3. 结果入库成功但 UI ack 丢失：DB 为真相，重启后 `/resume` 幂等加载；本组只验证了“落库失败不重试”，没有构造“ack 通道丢失后仍成功”的注入（该路径依赖进程内 oneshot 语义，等价于杀进程 + 恢复，已由崩溃恢复测试覆盖）。
-4. 真实供应商与终端外观仍由用户 `cargo run` 人工验收。
+1. 网络断开且已执行工具时“不自动重试”由 G4 的重试闸门保证（`can_retry` 见到任何工具输入即永久关闭），G6 未新增重复断言。
+2. 结果入库成功但 UI ack 丢失：DB 为真相，重启后 `/resume` 幂等加载；G6 只验证了“落库失败不重试”，没有构造“ack 通道丢失后仍成功”的注入（该路径依赖进程内 oneshot 语义，等价于杀进程 + 恢复，已由崩溃恢复测试覆盖）。
+3. 真实供应商与终端外观仍由用户 `cargo run` 人工验收。
+4. G6 的回放取舍：`failed` / `interrupted` 轮次整体不回放（正文与工具都不进请求），与旧「只取 complete 轮次」行为一致；`completed`/`failed` 但不带任何结果内容的调用整对跳过（不伪造空结果）。

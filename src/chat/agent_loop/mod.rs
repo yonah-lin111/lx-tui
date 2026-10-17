@@ -311,12 +311,20 @@ impl ModelContext {
 
     /// 追加一次模型响应：可见正文（若有）按出现顺序合并为一条 assistant 文本，
     /// 随后按 ordinal 顺序追加工具调用（结构必须保留，不能拼进文本）。
+    ///
+    /// 参数不是 JSON 对象时跳过该调用（`ready_calls` 已保证对象，这里只做防御）。
     fn push_response(&mut self, text: String, calls: &[ReadyToolCall]) {
         if !text.is_empty() {
             self.items.push(ModelItem::AssistantText(text));
         }
         for call in calls {
             let Ok(input) = serde_json::from_str::<serde_json::Value>(&call.arguments_json) else {
+                tracing::debug!(
+                    target: "lx::agent",
+                    call_id = %call.call_id,
+                    name = %call.name,
+                    "skip tool call in current turn: arguments are not valid JSON"
+                );
                 continue;
             };
             self.items.push(ModelItem::AssistantToolCall {
@@ -328,10 +336,13 @@ impl ModelContext {
     }
 
     /// 追加一条工具结果（与前面的调用成对；失败结果带 `is_error`）。
+    ///
+    /// 回放侧单条结果上限与历史装配同一口径（[`MAX_TOOL_RESULT_REPLAY_BYTES`]）：
+    /// 超限截断并显式标记，不静默省略；落库结果体本身不变。
     fn push_tool_result(&mut self, call_id: &str, content: String, is_error: bool) {
         self.items.push(ModelItem::ToolResult {
             call_id: call_id.to_string(),
-            content,
+            content: crate::chat::context::truncate_result_for_replay(&content),
             is_error,
         });
     }

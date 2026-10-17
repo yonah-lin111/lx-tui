@@ -85,6 +85,22 @@ impl ToolStatus {
     pub fn is_open(self) -> bool {
         !self.is_terminal()
     }
+
+    /// 存储用稳定值（与 DB `agent_tool_call.status` 同一口径）。
+    ///
+    /// `input_streaming` 只存在于内存（参数未完整、尚未入库），DB 不会出现该值；
+    /// 上下文回放只认 `completed` / `failed`，其余状态即使出现也不会伪造结果。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InputStreaming => "input_streaming",
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+            Self::Interrupted => "interrupted",
+        }
+    }
 }
 
 /// 工具步骤的 UI 摘要：只装路径/行范围/计数，**不装**完整文件内容。
@@ -169,6 +185,11 @@ pub struct ToolCallView {
     pub summary: Option<ToolSummary>,
     /// 失败/中断原因（稳定错误码）；仅 `Failed` / `Interrupted` 等有值。
     pub error: Option<String>,
+    /// 落库的结果体原文（规范化 JSON）；仅历史加载与结算后填充。
+    ///
+    /// 上下文回放需要它把「本轮已发生的调用/结果」与历史同源重建；UI 只按需读取摘要，
+    /// 绝不把本字段铺进历史正文。
+    pub result_json: Option<String>,
 }
 
 impl ToolCallView {
@@ -182,6 +203,7 @@ impl ToolCallView {
             status: ToolStatus::InputStreaming,
             summary: None,
             error: None,
+            result_json: None,
         }
     }
 

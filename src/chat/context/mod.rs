@@ -1,11 +1,40 @@
-//! 上下文装配：从完整轮次构造请求历史，处理上下文窗口裁剪。
+//! 上下文装配：把完整轮次装配成请求历史（纯文本视图 + 结构化视图）并按整轮裁剪。
 //!
-//! 只取完整轮次（complete user + complete assistant）；失败/中断 partial
-//! 仅供展示。当前用户消息永远纳入。无上限时不假定具体窗口；
-//! 溢出时最多去掉最老完整轮重试一次，复用同一轮 DB 记录。
+//! 两条视图必须同时成立：
+//!
+//! - `ChatRequest.turns`：旧纯文本形态（user 正文 + assistant 正文），只为旧 provider /
+//!   旧路径保留，行为与工具化之前逐字节一致；
+//! - `ChatRequest.items`：结构化有序步骤（正文与工具 call/result 按 `position` 合并），
+//!   供四类 transport 按各自协议编码。
+//!
+//! 不变量（对应 design §7.3 / §14.2 / §18）：
+//!
+//! 1. 只有 `user.status == "complete"` 且 `assistant.status == "complete"` 的轮次参与回放；
+//!    `failed` / `interrupted` 轮次既不回放正文也不回放工具（不伪造结果）。
+//! 2. 工具只回放 `completed` / `failed` 且有可用结果内容的一对；`pending` / `running` /
+//!    `cancelled` / `interrupted` 只在 UI 可见，绝不进入请求。
+//! 3. 每个 `ToolResult` 前面必须有同 `call_id` 的 `AssistantToolCall` 且**紧邻**；
+//!    参数不是 JSON 对象的调用整对跳过（不 panic）。
+//! 4. 预算裁剪以完整轮次为单位：丢弃某轮即丢弃该轮全部 items，绝不产生 orphan result。
+//! 5. reasoning 不回放（跨 provider 的思考原文与签名不注入历史）。
+//!
+//! 当前轮的多步上下文不经过本模块（由 [`crate::chat::agent_loop::ModelContext`] 累计），
+//! 装配只负责「DB/视图历史 + 末尾当前 user 消息」。
 
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem};
-use crate::db::chat::{ChatMessage, ModelSnapshot};
+use crate::db::chat::{ChatMessage, ModelSnapshot, ToolCallRecord};
+
+#[cfg(test)]
+mod tests;
+
+/// 单条工具结果**回放**上限（64 KiB）：超过即截断并显式标记 `…[truncated]`。
+///
+/// 与 G3 工具层的落库上限（1 MiB）不同口径：落库保留较完整结果，回放只有这一个上限，
+/// 避免一次请求被单条历史结果撑爆；截断必须显式告知模型，不得静默省略。
+pub const MAX_TOOL_RESULT_REPLAY_BYTES: usize = 64 * 1024;
+
+/// 结果被截断时追加的显式标记（与工具层 `…[truncated]` 同一形态）。
+const TRUNCATED_MARKER: &str = "\n…[truncated]";
 
 /// 装配输入：已加载的消息与当前草稿。
 pub struct AssemblyInput<'a> {
@@ -38,30 +67,25 @@ const CHARS_PER_TOKEN: usize = 4;
 /// 请求封装开销预留（消息结构、role 标记等）。
 const ENVELOPE_RESERVE_TOKENS: u64 = 256;
 
+/// 一个参与回放的完整轮次（已展开成有序 items）。
+struct PlannedTurn {
+    /// user 正文（text parts 依序拼接）。
+    user_text: String,
+    /// assistant 可见正文（旧纯文本视图用；reasoning 不计入）。
+    assistant_text: String,
+    /// assistant 的有序步骤：正文与成对 call/result（不含 reasoning）。
+    items: Vec<ModelItem>,
+    /// 该轮估算 token（user 正文 + 上述全部 items，含工具参数与结果）。
+    tokens: u64,
+}
+
 /// 装配上下文。
 ///
 /// - 按 `turn_index` 分组；只纳入 user/assistant 均 complete 的轮次。
 /// - 估算超过 `context - output_reserve - envelope_reserve` 时停止纳入更老轮。
 /// - 单条当前消息超限时 `draft_exceeds` 为真（调用方报错，不截断）。
 pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
-    // 按 turn_index 聚合完整轮次（保持原顺序）。
-    let mut complete_turns: Vec<(i64, &ChatMessage, &ChatMessage)> = Vec::new();
-    let mut index = 0;
-    while index + 1 < input.messages.len() {
-        let user = &input.messages[index];
-        let assistant = &input.messages[index + 1];
-        if user.turn_index == assistant.turn_index
-            && user.role == "user"
-            && assistant.role == "assistant"
-            && user.status == "complete"
-            && assistant.status == "complete"
-        {
-            complete_turns.push((user.turn_index, user, assistant));
-            index += 2;
-            continue;
-        }
-        index += 1;
-    }
+    let planned = plan_turns(input.messages);
     let draft_tokens = estimate_tokens(input.draft);
     let output_reserve = input.output_limit.unwrap_or(0).min(8192);
     let budget = input.context_limit.map(|context| {
@@ -69,47 +93,39 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
             .saturating_sub(output_reserve)
             .saturating_sub(ENVELOPE_RESERVE_TOKENS)
     });
-    // 从近到远纳入，直到预算耗尽；保持原顺序回传。
-    let mut kept: Vec<(i64, &ChatMessage, &ChatMessage)> = Vec::new();
+    // 从近到远纳入，直到预算耗尽；整轮为最小单位（丢一轮即丢该轮全部 items）。
+    let mut kept: Vec<&PlannedTurn> = Vec::new();
     let mut used = draft_tokens as u64;
-    for turn in complete_turns.iter().rev() {
-        let (user, assistant) = (turn.1, turn.2);
-        let user_text = user_text_of(user);
-        let assistant_text = assistant_text_of(assistant);
-        let tokens = (estimate_tokens(&user_text) + estimate_tokens(&assistant_text)) as u64;
+    for turn in planned.iter().rev() {
         if let Some(budget) = budget
-            && used + tokens > budget
+            && used.saturating_add(turn.tokens) > budget
         {
             break;
         }
-        used += tokens;
-        kept.push(*turn);
+        used = used.saturating_add(turn.tokens);
+        kept.push(turn);
     }
     kept.reverse();
-    let omitted_turns = complete_turns.len() - kept.len();
-    // 结构化历史（工具化路径）：当前各 transport 仍按 `turns` 编码，本组只保证
-    // 纯文本历史下两者等价；成对 tool call/result 的装配由上下文重做阶段接入。
-    let mut items: Vec<ModelItem> = Vec::new();
-    // 溢出重试候选：去掉最老一轮后的历史（供调用方在上游报错时收缩一次）。
+    let omitted_turns = planned.len() - kept.len();
+    // 两条视图同步装配：turns 保持旧纯文本形态，items 承载结构化步骤。
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(kept.len() * 2 + 1);
-    for (_, user, assistant) in &kept {
-        let user_text = user_text_of(user);
-        let assistant_text = assistant_text_of(assistant);
+    let mut items: Vec<ModelItem> = Vec::new();
+    for turn in &kept {
         turns.push(ChatTurn {
             role: "user".into(),
-            text: user_text.clone(),
+            text: turn.user_text.clone(),
             reasoning_metadata: None,
         });
         // 跨 provider 的 reasoning 元数据不回传：只回传该轮已完成正文。
         turns.push(ChatTurn {
             role: "assistant".into(),
-            text: assistant_text.clone(),
+            text: turn.assistant_text.clone(),
             reasoning_metadata: None,
         });
-        items.push(ModelItem::UserText(user_text));
-        items.push(ModelItem::AssistantText(assistant_text));
+        items.push(ModelItem::UserText(turn.user_text.clone()));
+        items.extend(turn.items.iter().cloned());
     }
-    // 当前用户消息必须保留。
+    // 当前用户消息必须保留（不因预算截断用户输入）。
     let draft_exceeds = budget.is_some_and(|budget| draft_tokens as u64 > budget);
     turns.push(ChatTurn {
         role: "user".into(),
@@ -129,21 +145,249 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     }
 }
 
-/// 去掉最老一轮后的收缩视图（溢出重试用；最多一次）。
+/// 去掉最老**完整轮次**后的收缩请求（溢出重试用；最多一次）。
 ///
-/// 返回收缩后的 turns；无可收缩轮时返回 None（调用方报错）。
-pub fn shrink_once(assembly: &Assembly) -> Option<Vec<ChatTurn>> {
-    // turns 结构：每完整轮 2 条 + 末尾当前 user 消息 1 条。
-    if assembly.request.turns.len() < 3 {
+/// 同时收缩 `turns` 与 `items` 两个视图：轮次边界在两者中一致（每轮 1 条 user turn、
+/// 1 条 assistant turn；items 以 `UserText` 起始），因此被删轮次的 call/result 一并消失，
+/// 不会留下 orphan result。只剩当前用户消息时返回 None（调用方报错）。
+pub fn shrink_once(assembly: &Assembly) -> Option<ChatRequest> {
+    let request = &assembly.request;
+    // 第一个 `UserText` 之后的第二个 `UserText` 是第一轮的结束边界；
+    // 末尾的 `UserText` 是当前草稿，永远不会被当作可删轮次。
+    let second_user = request
+        .items
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| matches!(item, ModelItem::UserText(_)))
+        .nth(1)
+        .map(|(index, _)| index)?;
+    // turns 视图：每完整轮恰 2 条，且末尾还有 1 条当前 user 消息。
+    if request.turns.len() < 3 {
         return None;
     }
-    let mut turns = assembly.request.turns.clone();
-    // 移除最老完整轮（前两条）。
-    let removed_user = turns.remove(0);
-    let removed_assistant = turns.remove(0);
-    debug_assert_eq!(removed_user.role, "user");
-    debug_assert_eq!(removed_assistant.role, "assistant");
-    Some(turns)
+    let mut turns = request.turns.clone();
+    let first_user = turns.remove(0);
+    let first_assistant = turns.remove(0);
+    if first_user.role != "user" || first_assistant.role != "assistant" {
+        // 视图不一致说明装配阶段已破坏不变量：宁可拒绝收缩，也不发出畸形历史。
+        tracing::warn!(
+            target: "lx::agent",
+            user_role = %first_user.role,
+            assistant_role = %first_assistant.role,
+            "refusing to shrink: unexpected turn layout"
+        );
+        return None;
+    }
+    let mut items = request.items.clone();
+    items.drain(..second_user);
+    Some(ChatRequest {
+        turns,
+        items,
+        model: request.model.clone(),
+        variant_params: request.variant_params.clone(),
+    })
+}
+
+/// 把单条工具结果截断到 [`MAX_TOOL_RESULT_REPLAY_BYTES`] 以内并显式标记。
+///
+/// 只用于**回放**（历史装配与本轮上下文累计）；不改工具层的落库结果体。
+/// 截断点按 UTF-8 字符边界回退，绝不产生非法 UTF-8。
+pub fn truncate_result_for_replay(content: &str) -> String {
+    if content.len() <= MAX_TOOL_RESULT_REPLAY_BYTES {
+        return content.to_string();
+    }
+    let budget = MAX_TOOL_RESULT_REPLAY_BYTES.saturating_sub(TRUNCATED_MARKER.len());
+    let mut end = content.len().min(budget);
+    while end > 0 && !content.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut truncated = content[..end].to_string();
+    truncated.push_str(TRUNCATED_MARKER);
+    truncated
+}
+
+/// 按 `turn_index` 把消息分组，仅保留 user 与 assistant 均 complete 的完整轮次。
+///
+/// 分组按消息顺序（`sequence` 升序）扫描；同轮多条消息取第一条 user 与第一条 assistant，
+/// 与旧「相邻完整对」行为等价（旧会话每轮恒为相邻两条）。
+fn plan_turns(messages: &[ChatMessage]) -> Vec<PlannedTurn> {
+    let mut planned = Vec::new();
+    let mut index = 0;
+    while index < messages.len() {
+        let turn_index = messages[index].turn_index;
+        let mut user: Option<&ChatMessage> = None;
+        let mut assistant: Option<&ChatMessage> = None;
+        while index < messages.len() && messages[index].turn_index == turn_index {
+            let message = &messages[index];
+            match message.role.as_str() {
+                "user" if user.is_none() => user = Some(message),
+                "assistant" if assistant.is_none() => assistant = Some(message),
+                _ => {}
+            }
+            index += 1;
+        }
+        let (Some(user), Some(assistant)) = (user, assistant) else {
+            continue;
+        };
+        // 失败/中断轮次整体排除：既不回放正文，也不回放其工具（避免伪造）。
+        if user.status != "complete" || assistant.status != "complete" {
+            continue;
+        }
+        planned.push(plan_turn(user, assistant));
+    }
+    planned
+}
+
+/// 展开单轮：user 正文 + assistant 有序步骤 + token 估算。
+fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
+    let user_text = message_text_of(user);
+    let assistant_text = message_text_of(assistant);
+    let items = assistant_items(assistant);
+    let mut tokens = estimate_tokens(&user_text) as u64;
+    for item in &items {
+        tokens = tokens.saturating_add(item_tokens(item));
+    }
+    PlannedTurn {
+        user_text,
+        assistant_text,
+        items,
+        tokens,
+    }
+}
+
+/// assistant 的有序模型项：把 `parts` 与 `tools` 按 `position` 合并成唯一时间线。
+///
+/// - `text` part → `AssistantText`（相邻正文合并成一条，保持顺序）；
+/// - `reasoning` part → 不回放；
+/// - 可回放的工具 → `AssistantToolCall` **紧随**同 `call_id` 的 `ToolResult`
+///   （失败结果 `is_error = true`）；一次工具对在四类协议里都能编码成
+///   「assistant tool_use/tool_calls」+「其后的 tool_result / tool / functionResponse」；
+/// - 其他工具状态（pending/running/cancelled/interrupted）→ 不产生任何 item。
+///
+/// 不变量：结果必须紧邻其调用，且任何文本都不得插进这一对之间（禁止 orphan result）。
+fn assistant_items(message: &ChatMessage) -> Vec<ModelItem> {
+    /// 合并后的时间线步骤（借用消息内的 part / tool）。
+    enum Step<'a> {
+        Part(&'a crate::db::chat::ChatPart),
+        Tool(&'a ToolCallRecord),
+    }
+    // position 在两条表内共用同一编号空间（DB 事务保证唯一），稳定排序即为真实顺序。
+    let mut steps: Vec<(i64, Step<'_>)> = message
+        .parts
+        .iter()
+        .map(|part| (part.position, Step::Part(part)))
+        .chain(
+            message
+                .tools
+                .iter()
+                .map(|tool| (tool.position, Step::Tool(tool))),
+        )
+        .collect();
+    steps.sort_by_key(|(position, _)| *position);
+    let mut items: Vec<ModelItem> = Vec::new();
+    let mut text = String::new();
+    for (_, step) in steps {
+        match step {
+            Step::Part(part) => {
+                if part.kind == "text" {
+                    text.push_str(&part.content);
+                }
+            }
+            Step::Tool(tool) => {
+                // 不可回放的调用跳过；文本缓冲先冲刷，保持「text, call, result, text」顺序。
+                let Some((call, result)) = replay_pair(tool) else {
+                    continue;
+                };
+                if !text.is_empty() {
+                    items.push(ModelItem::AssistantText(std::mem::take(&mut text)));
+                }
+                items.push(call);
+                items.push(result);
+            }
+        }
+    }
+    if !text.is_empty() {
+        items.push(ModelItem::AssistantText(text));
+    } else if items.is_empty() {
+        // 与旧纯文本装配逐字节等价：无正文的 assistant 轮次仍产生一条空正文项。
+        items.push(ModelItem::AssistantText(String::new()));
+    }
+    items
+}
+
+/// 单次工具调用 → 成对的 (call, result)；不可回放时返回 None 并记 debug 日志。
+///
+/// 只有 `completed` / `failed` 且参数为 JSON 对象、且有可判定结果内容的调用才回放；
+/// 其余状态（pending/running/cancelled/interrupted）与非法参数一律跳过，绝不伪造结果。
+fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
+    let is_error = match tool.status.as_str() {
+        "completed" => false,
+        "failed" => true,
+        _ => return None,
+    };
+    let input = match serde_json::from_str::<serde_json::Value>(&tool.arguments_json) {
+        Ok(value) if value.is_object() => value,
+        _ => {
+            tracing::debug!(
+                target: "lx::agent",
+                call_id = %tool.call_id,
+                name = %tool.name,
+                "skip tool replay: arguments are not a JSON object"
+            );
+            return None;
+        }
+    };
+    // 失败优先回放给模型看的精简原因；成功必须带结果体（否则无从判定，跳过）。
+    let content = match (
+        is_error,
+        tool.error_text.as_deref(),
+        tool.result_json.as_deref(),
+    ) {
+        (true, Some(error), _) if !error.is_empty() => error.to_string(),
+        (_, _, Some(result)) if !result.is_empty() => result.to_string(),
+        _ => {
+            tracing::debug!(
+                target: "lx::agent",
+                call_id = %tool.call_id,
+                name = %tool.name,
+                is_error,
+                "skip tool replay: call has no result body"
+            );
+            return None;
+        }
+    };
+    let call_id = tool.call_id.clone();
+    Some((
+        ModelItem::AssistantToolCall {
+            call_id: call_id.clone(),
+            name: tool.name.clone(),
+            input,
+        },
+        ModelItem::ToolResult {
+            call_id,
+            content: truncate_result_for_replay(&content),
+            is_error,
+        },
+    ))
+}
+
+/// 单条模型项的 token 估算（含工具参数与结果内容）。
+fn item_tokens(item: &ModelItem) -> u64 {
+    match item {
+        ModelItem::UserText(text) | ModelItem::AssistantText(text) => estimate_tokens(text) as u64,
+        ModelItem::AssistantToolCall {
+            call_id,
+            name,
+            input,
+        } => {
+            // `input` 已解析为 JSON 值；按序列化长度估算（与 wire 编码同量级）。
+            let arguments = input.to_string();
+            (estimate_tokens(call_id) + estimate_tokens(name) + estimate_tokens(&arguments)) as u64
+        }
+        ModelItem::ToolResult {
+            call_id, content, ..
+        } => (estimate_tokens(call_id) + estimate_tokens(content)) as u64,
+    }
 }
 
 /// 估算 token 数（保守：4 字符 = 1 token）。
@@ -151,8 +395,8 @@ fn estimate_tokens(text: &str) -> usize {
     text.chars().count().div_ceil(CHARS_PER_TOKEN)
 }
 
-/// user 消息的文本 part 内容。
-fn user_text_of(message: &ChatMessage) -> String {
+/// 一条消息的可见正文（text parts；reasoning 不回放或回传）。
+fn message_text_of(message: &ChatMessage) -> String {
     message
         .parts
         .iter()
@@ -161,17 +405,3 @@ fn user_text_of(message: &ChatMessage) -> String {
         .collect::<Vec<_>>()
         .join("")
 }
-
-/// assistant 消息的正文（text parts；reasoning 不回传）。
-fn assistant_text_of(message: &ChatMessage) -> String {
-    message
-        .parts
-        .iter()
-        .filter(|part| part.kind == "text")
-        .map(|part| part.content.as_str())
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-#[cfg(test)]
-mod tests;

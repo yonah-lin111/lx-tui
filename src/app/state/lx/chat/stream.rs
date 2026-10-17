@@ -249,18 +249,20 @@ impl LxChat {
         status: ToolStatus,
         error: Option<String>,
     ) -> bool {
-        self.settle_tool_result(call_id, status, None, error)
+        self.settle_tool_result(call_id, status, None, None, error)
     }
 
-    /// 结果落库后的终态结算：除状态与错误码外还写入**UI 摘要**（路径/行范围/增删计数）。
+    /// 结果落库后的终态结算：除状态与错误码外还写入**UI 摘要**与结果体原文。
     ///
     /// 摘要由 `chat::tools::to_summary` 生成、事件层做一次字段映射；摘要绝不含文件内容。
+    /// `result_json` 是刚落库的规范化结果（上下文回放需要，UI 不铺开全文）。
     /// 只接受从开放状态的转移，已终态时幂等返回 false（迟到结果不覆盖真实终态）。
     pub fn settle_tool_result(
         &mut self,
         call_id: &str,
         status: ToolStatus,
         summary: Option<ToolSummary>,
+        result_json: Option<String>,
         error: Option<String>,
     ) -> bool {
         if !status.is_terminal() {
@@ -278,6 +280,9 @@ impl LxChat {
         call.settle(status, error);
         if summary.is_some() {
             call.summary = summary;
+        }
+        if result_json.is_some() {
+            call.result_json = result_json;
         }
         true
     }

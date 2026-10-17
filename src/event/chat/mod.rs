@@ -195,6 +195,61 @@ pub(crate) fn active_assistant_id(state: &AppState, key: &RequestKey) -> Option<
     }
 }
 
+/// 由窗格消息视图装配本轮请求；返回（请求，省略的完整轮次数，草稿是否单独超限）。
+///
+/// 装配来源固定为**窗格内存视图**（经 [`chat_part_views_to_db`] 映射为记录），
+/// 因此 `/resume` 加载的历史与本轮新增步骤走同一条路径：
+///
+/// - 本轮草稿取**最近一条 user 消息**——`on_turn_committed` 已在其后追加了 streaming
+///   的 assistant 占位，故不能取 `messages.last()`（那会得到占位、过滤 user 后变空串，
+///   导致请求携带空 user 消息被供应商拒绝）。
+/// - 只有「user 与 assistant 均 complete」的轮次参与回放；当前轮 assistant 仍在
+///   streaming，不会被当作历史（其工具步骤由 `ModelContext` 在同一轮内累计）。
+/// - 工具步骤也一并映射（[`crate::db::chat::chat_message_views_to_db`]），使已完成轮次的
+///   call/result 能成对回放，interrupted/pending 调用不进入请求。
+pub(crate) fn assemble_turn_request(
+    messages: &[crate::app::state::ChatMessageView],
+    frozen: &crate::app::state::FrozenModel,
+) -> AssembledTurn {
+    let draft = latest_user_draft(messages);
+    let db_messages = chat_part_views_to_db(messages);
+    let model = crate::db::chat::ModelSnapshot {
+        provider: frozen.provider.clone(),
+        model: frozen.model.clone(),
+        variant: frozen.variant.clone(),
+    };
+    let assembly = context::assemble(&AssemblyInput {
+        messages: &db_messages,
+        draft: &draft,
+        model: &model,
+        context_limit: frozen.context_limit,
+        output_limit: frozen.output_limit,
+        variant_params: frozen.variant_params.clone(),
+    });
+    AssembledTurn {
+        request: ChatRequest {
+            turns: assembly.request.turns,
+            items: assembly.request.items,
+            model,
+            variant_params: frozen.variant_params.clone(),
+        },
+        omitted_turns: assembly.omitted_turns,
+        draft_exceeds: assembly.draft_exceeds,
+    }
+}
+
+/// 装配结果：请求 + 需要调用方处理的两种信号。
+pub(crate) struct AssembledTurn {
+    pub request: ChatRequest,
+    /// 省略的完整轮次数（一次性提示）。
+    pub omitted_turns: usize,
+    /// 当前用户消息单独超限：调用方报错，**不截断**用户输入。
+    pub draft_exceeds: bool,
+}
+
+/// 当前用户消息超出模型上下文预算时的稳定错误码（调用方报错，不截断输入）。
+pub const DRAFT_EXCEEDS_CONTEXT_CODE: &str = "message exceeds model context";
+
 /// 启动一轮：装配上下文、冻结模型与工作区并 spawn agent turn。
 fn start_stream(
     state: &mut AppState,
@@ -226,40 +281,19 @@ fn start_stream(
         return true;
     };
     // 上下文：从窗格内存中的完整轮次装配（DB 历史与内存一致；partial 排除）。
-    // 本轮草稿取**最近一条 user 消息**——`on_turn_committed` 已在其后追加了
-    // streaming 的 assistant 占位，故不能取 `messages.last()`（那会得到占位、
-    // 过滤 user 后变空串，导致请求携带空 user 消息被供应商拒绝）。
-    let draft = latest_user_draft(&pane.lx.chat.messages);
-    let db_messages: Vec<crate::db::chat::ChatMessage> =
-        chat_part_views_to_db(&pane.lx.chat.messages);
-    let assembly = context::assemble(&AssemblyInput {
-        messages: &db_messages,
-        draft: &draft,
-        model: &crate::db::chat::ModelSnapshot {
-            provider: frozen.provider.clone(),
-            model: frozen.model.clone(),
-            variant: frozen.variant.clone(),
-        },
-        context_limit: frozen.context_limit,
-        output_limit: frozen.output_limit,
-        variant_params: frozen.variant_params.clone(),
-    });
-    let request = ChatRequest {
-        turns: assembly.request.turns.clone(),
-        items: assembly.request.items.clone(),
-        model: crate::db::chat::ModelSnapshot {
-            provider: frozen.provider.clone(),
-            model: frozen.model.clone(),
-            variant: frozen.variant.clone(),
-        },
-        variant_params: frozen.variant_params.clone(),
-    };
+    let assembled = assemble_turn_request(&pane.lx.chat.messages, &frozen);
     // 省略提示（一次性显示）。
-    if assembly.omitted_turns > 0
+    if assembled.omitted_turns > 0
         && let Some(pane) = state.pane_mut_anywhere(key.pane)
     {
-        pane.lx.chat.omitted_turns_notice = Some(assembly.omitted_turns);
+        pane.lx.chat.omitted_turns_notice = Some(assembled.omitted_turns);
     }
+    // 当前用户消息单独超限：整轮失败并报错，绝不截断用户输入。
+    if assembled.draft_exceeds {
+        fail_turn(sender, key, DRAFT_EXCEEDS_CONTEXT_CODE);
+        return true;
+    }
+    let request = assembled.request;
     // 冻结工作区根：本轮所有工具的相对路径都以它为准（后续切换窗格不影响）。
     let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
         fail_turn(sender, key, "workspace path unavailable");
@@ -591,9 +625,16 @@ fn finish_tool(
     match persistence.finish_tool_call(&workspace, ticket, &result) {
         Ok(()) => {
             let (status, summary, error) = view_settlement(&outcome);
-            // ② 状态转终态并写摘要/错误（不伪造结果体）。
-            let changed =
-                update::on_tool_settled(state, &key, &ticket.call_id, status, summary, error);
+            // ② 状态转终态并写摘要/错误/结果体（不伪造结果：结果体来自刚落库的记录）。
+            let changed = update::on_tool_settled(
+                state,
+                &key,
+                &ticket.call_id,
+                status,
+                summary,
+                result.result_json.clone(),
+                error,
+            );
             tracing::debug!(
                 target: "lx::agent",
                 call_id = %ticket.call_id,
@@ -792,30 +833,11 @@ fn latest_user_draft(messages: &[crate::app::state::ChatMessageView]) -> String 
 }
 
 /// 窗格聊天视图 → DB 消息记录（上下文装配输入）。
+///
+/// 委托给 `db::chat::chat_message_views_to_db`：把 parts 与 tools 同时映射成记录，
+/// 使「当前轮内存视图」与「`/resume` 加载的历史」走同一条装配来源。
 fn chat_part_views_to_db(
     messages: &[crate::app::state::ChatMessageView],
 ) -> Vec<crate::db::chat::ChatMessage> {
-    messages
-        .iter()
-        .map(|message| crate::db::chat::ChatMessage {
-            external_id: message.id.clone(),
-            sequence: 0,
-            turn_index: message.turn_index,
-            role: message.role.clone(),
-            status: message.status.clone(),
-            model_provider: None,
-            model_id: None,
-            variant: None,
-            stop_reason: None,
-            error_code: message.error_code.clone(),
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            cache_write_tokens: None,
-            created_at_ms: 0,
-            completed_at_ms: None,
-            parts: crate::db::chat::chat_message_part_views(message),
-            tools: Vec::new(),
-        })
-        .collect()
+    crate::db::chat::chat_message_views_to_db(messages)
 }
