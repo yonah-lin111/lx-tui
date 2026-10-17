@@ -301,6 +301,32 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
+            // 聊天历史区滚轮：滚动历史视口（保留输入框滚轮给输入缓冲区）。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(history_rect) = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::history_wheel_region(inner, &target.lx)
+                })
+                && history_rect.contains((mouse.column, mouse.row).into())
+                && let Some((total, visible)) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::history_rows(inner, &target.lx))
+                && update::scroll_lx_history(state, pane, direction, total, visible)
+            {
+                *dirty = true;
+                return;
+            }
+            // `/` 命令面板滚轮：滚动候选窗口（不穿透到输入框）。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some((pane, inner)) =
+                    super::hit::lx_pane_at(state, rects, mouse.column, mouse.row)
+                && let Some(bar) = super::hit::lx_slash_panel_layout(state, pane, inner)
+                && bar.rect.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_lx_slash(state, pane, direction, bar.start) {
+                    *dirty = true;
+                }
+                return;
+            }
             // 提及面板外：滚轮滚动输入缓冲区视口，不穿透到隐藏终端。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && update::scroll_lx_input(state, pane, direction)

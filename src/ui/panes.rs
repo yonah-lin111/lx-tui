@@ -5,7 +5,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use super::{main_content, style, text, widgets};
 use crate::app::state::{AppState, LxEntry, Pane, PaneKind, PaneView};
@@ -51,13 +51,13 @@ pub(crate) fn render_panes(
             .title(title_line);
         let inner = block.inner(*rect);
         frame.render_widget(block, *rect);
-        // lx pane 底边左侧显示有效 cwd；只读渲染，不修改窗格状态。
+        // lx pane 顶边框右侧显示工作区路径 `ws:末两段`（切换按钮左侧）；只读渲染。
         if pane.view == PaneView::Lx {
             let path = pane
                 .cwd
                 .clone()
                 .or_else(|| state.workspace_cwd_for_pane(*id));
-            render_pane_bottom_path(frame, *rect, path.as_deref());
+            render_pane_workspace_label(frame, *rect, &title, path.as_deref(), focused);
         }
         if inner.width == 0 || inner.height == 0 {
             continue;
@@ -173,45 +173,45 @@ fn pane_display_title(id: PaneId, pane: &Pane) -> String {
     text::pane_title(id, pane.terminal.title(), pane.cwd_label.as_deref())
 }
 
-/// lx pane 底边框左侧绘制有效 cwd：保留左右角与两侧一格间距。
-///
-/// 完整路径放不下改末段；末段仍放不下按终端列宽截断加 `…`；放不下省略号则不绘制。
-/// 覆盖底边内段 `─`，不改写角字符；使用与边框标题一致的颜色。
-fn render_pane_bottom_path(frame: &mut Frame<'_>, rect: Rect, path: Option<&std::path::Path>) {
-    if rect.height < 2 || rect.width < 4 {
-        return;
-    }
+/// lx pane 顶边框右侧工作区路径标记 ` ws:末两段`（切换按钮左侧）：前缀强调色、
+/// 值 muted（与 prompt 底边框 `ws:` 一致），窗格聚焦时值改用强调色高亮；
+/// 放不下时按可用宽度中间省略，仍放不下则省略。
+fn render_pane_workspace_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    title: &str,
+    path: Option<&std::path::Path>,
+    focused: bool,
+) {
     let Some(path) = path else {
         return;
     };
-    // 两侧角各留 1 列，内段两侧再各留 1 列空白。
-    let available = usize::from(rect.width.saturating_sub(4));
-    let Some(label) = text::pane_bottom_path(path, available) else {
+    let Some(button) = main_content::toggle_button(rect) else {
         return;
     };
-    let width = u16::try_from(label.width()).unwrap_or(u16::MAX);
-    if width == 0 {
+    let Some(anchor) = button.x.checked_sub(2) else {
+        return;
+    };
+    // 值可用宽度：`ws:` 前缀 + 两侧各 1 列空档之外的余量（与 `render_border_right_label` 的
+    // 落位/覆盖判定一致，这里仅用于提前裁剪名字）。
+    let title_width = u16::try_from(title.width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let left = rect.x.saturating_add(title_width).saturating_add(1);
+    if anchor <= left {
         return;
     }
-    let y = rect.bottom() - 1;
-    let x = rect.x + 2;
-    let buf = frame.buffer_mut();
-    let mut cx = x;
-    for ch in label.chars() {
-        let cell_width = ch.width().unwrap_or(1).max(1);
-        if let Some(cell) = buf.cell_mut((cx, y)) {
-            cell.reset();
-            cell.set_char(ch);
-            cell.set_style(style::border_title());
-        }
-        // 宽字符占位：后续列清成空白，覆盖底边 `─` 与半个字符。
-        for offset in 1..cell_width {
-            if let Some(cell) = buf.cell_mut((cx.saturating_add(offset as u16), y)) {
-                cell.reset();
-                cell.set_char(' ');
-                cell.set_style(style::border_title());
-            }
-        }
-        cx = cx.saturating_add(cell_width as u16);
-    }
+    let prefix = text::WORKSPACE_PREFIX;
+    let prefix_width = u16::try_from(prefix.width()).unwrap_or(u16::MAX);
+    let value_room =
+        usize::from(anchor.saturating_sub(left)).saturating_sub(usize::from(prefix_width) + 2);
+    let Some(value) = text::workspace_path_label(path, value_room) else {
+        return;
+    };
+    let spans = [
+        (" ".to_string(), style::muted()),
+        (prefix.to_string(), style::accent()),
+        (value, style::border_value(focused)),
+    ];
+    render_border_right_label(frame, rect, title, &spans);
 }

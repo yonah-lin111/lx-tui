@@ -112,4 +112,72 @@ pub enum Effect {
     DeleteReferencedFolder { workspace: PathBuf, id: i64 },
     /// 复制文本到系统剪贴板并弹出反馈 toast。
     CopyToClipboard(String),
+    // ===== lx 聊天 =====
+    /// 开启一轮聊天：DB 写入 session(首轮)+user+streaming assistant。
+    ///
+    /// 成功回投 `ChatTurnCommitted`；失败回投 `ChatTurnFailed`（草稿保留可重试）。
+    BeginChatTurn {
+        pane: crate::layout::PaneId,
+        generation: u64,
+        workspace: PathBuf,
+        session_id: Option<String>,
+        draft: String,
+        model: crate::db::chat::ModelSnapshot,
+    },
+    /// 启动网络流：按冻结模型快照与装配上下文执行，结果按 key 回投。
+    StartChatStream {
+        key: crate::app::state::lx::RequestKey,
+        assistant_id: String,
+    },
+    /// 取消在途网络流（流取消后仍走 Finishing 收尾保存 partial）。
+    CancelChatStream {
+        key: crate::app::state::lx::RequestKey,
+    },
+    /// Committing 阶段取消：等 DB ack 后直接落 interrupted、不发 HTTP。
+    CancelChatCommit {
+        pane: crate::layout::PaneId,
+        generation: u64,
+    },
+    /// 终态写入：最后 parts、outcome 与 usage 同事务落库。
+    FinishChatTurn {
+        key: crate::app::state::lx::RequestKey,
+        assistant_id: String,
+        parts: Vec<crate::db::chat::ChatPart>,
+        outcome: crate::db::chat::TurnOutcome,
+        usage: crate::db::chat::Usage,
+    },
+    /// 流中 checkpoint：完整 parts 快照幂等覆盖 streaming 行（≤500ms/4KiB 合并）。
+    CheckpointChatTurn {
+        workspace: PathBuf,
+        assistant_id: String,
+        parts: Vec<crate::db::chat::ChatPart>,
+    },
+    /// 读取当前工作区会话列表（`/resume` 首页）。
+    ListChatSessions { pane: crate::layout::PaneId },
+    /// 加载单个会话及有序消息（恢复旧会话）。
+    LoadChatSession {
+        pane: crate::layout::PaneId,
+        session_id: String,
+    },
+    /// 重命名会话。
+    RenameChatSession {
+        workspace: PathBuf,
+        session_id: String,
+        title: String,
+    },
+    /// 删除会话（先取消在途、等最终写入，再事务级级联删除）。
+    DeleteChatSession {
+        workspace: PathBuf,
+        session_id: String,
+    },
+    /// 更新已保存会话的当前模型选择三列。
+    SetChatSessionModel {
+        workspace: PathBuf,
+        session_id: String,
+        model: crate::db::chat::ModelSnapshot,
+    },
+    /// 把当前选择的模型写回 `config/ai.json` 的 `defaultModel`（下次启动沿用）。
+    SaveDefaultModel {
+        selection: crate::config::ai::ModelSelection,
+    },
 }

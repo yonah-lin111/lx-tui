@@ -513,6 +513,296 @@ fn assert_no_asset_tables(database: &Database) {
     }
 }
 
+// ===== v7 聊天会话迁移 =====
+
+/// 构造 v6 库：迁移到 v6 后手工回退版本并去掉聊天表，模拟 v6 旧库。
+fn seed_v6_database(label: &str, workspace: &Path) -> PathBuf {
+    let path = temp_db_path(label);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let database = Database::open(&path).expect("open to v7");
+        database.trust_workspace(workspace, "ws").expect("trust");
+        // 制造 v6 现场：删掉 v7 聊天表并回退版本号。
+        database
+            .conn
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 DROP TABLE agent_subagent;
+                 DROP TABLE agent_tool_call;
+                 DROP TABLE agent_message_part;
+                 DROP TABLE agent_message;
+                 DROP TABLE agent_session;
+                 PRAGMA foreign_keys = ON;
+                 PRAGMA user_version = 6;",
+            )
+            .expect("back to v6");
+    }
+    path
+}
+
+#[test]
+fn v6_database_upgrades_to_v7_with_chat_tables() {
+    let workspace = workspace_path("v6-chat-upgrade");
+    let path = seed_v6_database("v6-chat-upgrade", &workspace);
+    let database = Database::open(&path).expect("v6 upgrades to v7");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    for table in [
+        "agent_session",
+        "agent_message",
+        "agent_message_part",
+        "agent_tool_call",
+        "agent_subagent",
+    ] {
+        let count: i64 = database
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                params![table],
+                |row| row.get(0),
+            )
+            .expect("schema query");
+        assert_eq!(count, 1, "{table} 随 v7 迁移建立");
+    }
+    // 迁移后外键检查干净。
+    let violations: i64 = database
+        .conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .expect("fk check");
+    assert_eq!(violations, 0);
+    // 迁移后聊天 CRUD 可用。
+    let committed = database
+        .begin_turn(&workspace, None, "hello", &v7_model_snapshot())
+        .expect("chat works after upgrade");
+    let messages = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    assert_eq!(messages.len(), 2);
+    drop(database);
+    // 重开幂等。
+    let reopened = Database::open(&path).expect("reopen ok");
+    assert_eq!(schema_version(&reopened), SCHEMA_VERSION);
+}
+
+/// v7 测试用模型快照。
+fn v7_model_snapshot() -> chat::ModelSnapshot {
+    chat::ModelSnapshot {
+        provider: "example".into(),
+        model: "example-chat".into(),
+        variant: Some("high".into()),
+    }
+}
+
+#[test]
+fn v6_upgrade_keeps_existing_prompt_and_trust_data() {
+    let workspace = workspace_path("v6-keeps-data");
+    let path = seed_v6_database("v6-keeps-data", &workspace);
+    {
+        let database = Database::open(&path).expect("open");
+        database
+            .create_folder(&workspace, None, "folder")
+            .expect("folder");
+        database
+            .create_prompt(
+                &workspace,
+                None,
+                "prompt",
+                &[("Page 1".into(), "body".into())],
+            )
+            .expect("prompt");
+    }
+    let database = Database::open(&path).expect("upgrade");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    assert!(database.is_trusted(&workspace).expect("trust kept"));
+    let prompts = database.list_prompts(&workspace).expect("list");
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].content, "body");
+    let folders = database.list_folders(&workspace).expect("folders");
+    assert_eq!(folders.len(), 1);
+}
+
+#[test]
+fn chat_tables_reject_foreign_key_and_check_violations() {
+    let (database, _) = open_test_database("chat-constraints");
+    let workspace = workspace_path("chat-constraints");
+    database.trust_workspace(&workspace, "ws").expect("trust");
+    // 未知 workspace 外键拒绝。
+    let result = database.conn.execute(
+        r#"INSERT INTO agent_session
+               (external_id, workspace_id, title, model_provider, model_id,
+                created_at_ms, updated_at_ms, last_message_at_ms)
+           VALUES ('sess-x', 'ws-missing', 't', 'p', 'm', 0, 0, 0)"#,
+        [],
+    );
+    assert!(result.is_err(), "外键拒绝");
+    let external: String = database
+        .conn
+        .query_row(
+            "SELECT external_id FROM workspace WHERE path = ?1",
+            params![path_string(&workspace)],
+            |row| row.get(0),
+        )
+        .optional()
+        .expect("workspace external")
+        .expect("workspace external id missing");
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_session
+                   (external_id, workspace_id, title, model_provider, model_id,
+                    created_at_ms, updated_at_ms, last_message_at_ms)
+               VALUES ('sess-c', ?1, 't', 'p', 'm', 0, 0, 0)"#,
+            params![external],
+        )
+        .expect("seed session");
+    // 非法 role 拒绝。
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_message
+                   (external_id, session_id, sequence, turn_index, role, status, created_at_ms)
+               VALUES ('msg-bad', 'sess-c', 0, 0, 'system', 'complete', 0)"#,
+            [],
+        )
+        .expect_err("非法 role 被 CHECK 拒绝");
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_message
+                   (external_id, session_id, sequence, turn_index, role, status, created_at_ms)
+               VALUES ('msg-ok', 'sess-c', 0, 0, 'user', 'complete', 0)"#,
+            [],
+        )
+        .expect("valid message");
+    // 自指 subagent 拒绝。
+    assert!(
+        database
+            .conn
+            .execute(
+                r#"INSERT INTO agent_subagent
+                       (parent_session_id, child_session_id, status, created_at_ms, updated_at_ms)
+                   VALUES ('sess-c', 'sess-c', 'pending', 0, 0)"#,
+                [],
+            )
+            .is_err(),
+        "自指子 Agent 被 CHECK 拒绝"
+    );
+}
+
+#[test]
+fn unique_sequence_and_position_constraints_hold() {
+    let (database, _) = open_test_database("chat-unique");
+    let workspace = workspace_path("chat-unique");
+    database.trust_workspace(&workspace, "ws").expect("trust");
+    let committed = database
+        .begin_turn(&workspace, None, "hi", &v7_model_snapshot())
+        .expect("begin");
+    // 同 session 同 sequence 拒绝。
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_message
+                   (external_id, session_id, sequence, turn_index, role, status, created_at_ms)
+               VALUES ('msg-dup', ?1, 0, 0, 'user', 'complete', 0)"#,
+            params![committed.session_id],
+        )
+        .expect_err("UNIQUE(session_id, sequence) 拒绝重复 sequence");
+    // 同 message 同 position 拒绝。
+    database
+        .checkpoint(
+            &workspace,
+            &committed.assistant_message_id,
+            &[chat::ChatPart {
+                position: 0,
+                kind: "text".into(),
+                content: "a".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+            }],
+        )
+        .expect("checkpoint");
+    let message_id = committed.assistant_message_id.clone();
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_message_part
+                   (external_id, message_id, position, kind, content, created_at_ms)
+               VALUES ('part-dup', ?1, 0, 'text', 'x', 0)"#,
+            params![message_id],
+        )
+        .expect_err("UNIQUE(message_id, position) 拒绝重复 position");
+}
+
+#[test]
+fn v0_empty_database_gets_full_v7_schema() {
+    let (database, _) = open_test_database("v0-full");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    // 新库与升级库结构一致：同一批表存在。
+    let workspace = workspace_path("v0-full");
+    database.trust_workspace(&workspace, "ws").expect("trust");
+    let committed = database
+        .begin_turn(&workspace, None, "hello", &v7_model_snapshot())
+        .expect("chat works on fresh db");
+    assert!(!committed.session_id.is_empty());
+}
+#[test]
+fn chat_tool_and_subagent_tables_accept_valid_rows() {
+    // 表结构本期不写行，但必须能接受符合约束的行（结构正确性验证）。
+    let (database, _) = open_test_database("chat-tool-schema");
+    let workspace = workspace_path("chat-tool-schema");
+    database.trust_workspace(&workspace, "ws").expect("trust");
+    let committed = database
+        .begin_turn(&workspace, None, "hi", &v7_model_snapshot())
+        .expect("begin");
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_tool_call
+                   (external_id, session_id, message_id, call_id, name, status, started_at_ms)
+               VALUES ('tc-1', ?1, ?2, 'call-1', 'read', 'pending', 0)"#,
+            params![committed.session_id, committed.assistant_message_id],
+        )
+        .expect("tool call row accepted");
+    // 创建第二个会话作为 child，验证 subagent 关系约束。
+    let child = database
+        .begin_turn(&workspace, None, "child turn", &v7_model_snapshot())
+        .expect("child session");
+    database
+        .conn
+        .execute(
+            r#"INSERT INTO agent_subagent
+                   (external_id, parent_session_id, child_session_id, spawn_message_id, status,
+                    created_at_ms, updated_at_ms)
+               VALUES ('sub-1', ?1, ?2, ?3, 'running', 0, 0)"#,
+            params![
+                committed.session_id,
+                child.session_id,
+                committed.assistant_message_id
+            ],
+        )
+        .expect("subagent row accepted");
+    // child 唯一性：同一 child 不能再挂另一个父。
+    let other = database
+        .begin_turn(&workspace, None, "other", &v7_model_snapshot())
+        .expect("other session");
+    assert!(
+        database
+            .conn
+            .execute(
+                r#"INSERT INTO agent_subagent
+                       (external_id, parent_session_id, child_session_id, status,
+                        created_at_ms, updated_at_ms)
+                   VALUES ('sub-2', ?1, ?2, 'pending', 0, 0)"#,
+                params![other.session_id, child.session_id],
+            )
+            .is_err(),
+        "child_session_id UNIQUE 拒绝二次挂载"
+    );
+}
+
 #[test]
 fn rejects_database_newer_than_supported() {
     let path = temp_db_path("newer-schema");
@@ -905,4 +1195,95 @@ fn create_prompt_with_pages_is_atomic_and_mirrors_first_page() {
         .expect("record");
     assert_eq!(record.pages.len(), 1);
     assert_eq!(record.pages[0].content, "");
+}
+
+// ===== v8 消息 part 起止时刻迁移 =====
+
+/// 构造 v7 现场：完整库建好后把 `agent_message_part` 换回无起止时刻的 v7 定义并回退版本号。
+fn seed_v7_database(label: &str, workspace: &Path) -> PathBuf {
+    let path = temp_db_path(label);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let database = Database::open(&path).expect("open to v8");
+        database.trust_workspace(workspace, "ws").expect("trust");
+        database
+            .conn
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 DROP TABLE agent_message_part;
+                 CREATE TABLE agent_message_part (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     external_id TEXT NOT NULL UNIQUE,
+                     message_id TEXT NOT NULL REFERENCES agent_message(external_id) ON DELETE CASCADE,
+                     position INTEGER NOT NULL CHECK (position >= 0),
+                     kind TEXT NOT NULL CHECK (kind IN ('text', 'reasoning')),
+                     content TEXT NOT NULL DEFAULT '',
+                     provider_metadata_json TEXT,
+                     created_at_ms INTEGER NOT NULL,
+                     UNIQUE(message_id, position)
+                 );
+                 PRAGMA foreign_keys = ON;
+                 PRAGMA user_version = 7;",
+            )
+            .expect("back to v7");
+    }
+    path
+}
+
+#[test]
+fn v7_database_upgrades_to_v8_with_part_timing_columns() {
+    let workspace = workspace_path("v7-part-timing");
+    let path = seed_v7_database("v7-part-timing", &workspace);
+    let database = Database::open(&path).expect("v7 upgrades to v8");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let columns: Vec<String> = {
+        let mut statement = database
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('agent_message_part')")
+            .expect("prepare");
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query");
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect")
+    };
+    assert!(
+        columns.contains(&"started_at_ms".to_string()),
+        "{columns:?}"
+    );
+    assert!(columns.contains(&"ended_at_ms".to_string()), "{columns:?}");
+    // 迁移后旧行（无时刻）仍可读；新写入带时刻。
+    let committed = database
+        .begin_turn(
+            &workspace,
+            None,
+            "问",
+            &chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        )
+        .expect("begin");
+    database
+        .checkpoint(
+            &workspace,
+            &committed.assistant_message_id,
+            &[chat::ChatPart {
+                position: 0,
+                kind: "reasoning".into(),
+                content: "思考".into(),
+                provider_metadata_json: None,
+                started_at_ms: Some(10),
+                ended_at_ms: Some(6_310),
+            }],
+        )
+        .expect("checkpoint");
+    let loaded = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    let assistant = loaded.last().expect("assistant");
+    assert_eq!(assistant.parts[0].started_at_ms, Some(10));
+    assert_eq!(assistant.parts[0].ended_at_ms, Some(6_310));
 }

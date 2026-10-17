@@ -1963,11 +1963,11 @@ fn rendered_area(lines: &[String], area: Rect) -> String {
 }
 
 #[test]
-fn lx_pane_bottom_border_shows_cwd_path() {
+fn lx_pane_top_border_shows_workspace_path_tail() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
-    // pane cwd 优先于工作区 cwd。
-    update::update_pane_cwd(&mut state, pane, Path::new("/work/demo"), "demo".into());
+    // pane cwd 优先于工作区 cwd；取末两段。
+    update::update_pane_cwd(&mut state, pane, Path::new("/work/demo/src"), "demo".into());
     let config = Config::default();
     let view = view_for(&state);
     let rects = crate::layout::pane_rects(
@@ -1978,26 +1978,53 @@ fn lx_pane_bottom_border_shows_cwd_path() {
     );
     let (_, rect) = rects[0];
     let lines = render_lines(&state);
-    let bottom: String = lines[usize::from(rect.bottom() - 1)]
-        .chars()
-        .skip(usize::from(rect.x) + 2)
-        .take("/work/demo".chars().count())
-        .collect();
-    assert_eq!(bottom, "/work/demo", "lx pane 底边左侧显示有效路径");
+    let top = &lines[usize::from(rect.y)];
+    assert!(top.contains("ws:demo/src"), "顶边框显示 ws:末两段: {top}");
+    // 前缀强调色、值 muted（与 prompt 底边框 ws: 一致）。
+    let buffer = render_buffer(&state);
+    let chars: Vec<char> = top.chars().collect();
+    let start = chars
+        .windows(3)
+        .position(|window| window == ['w', 's', ':'])
+        .expect("ws 前缀");
+    let prefix = &buffer[(start as u16, rect.y)];
+    assert_eq!(prefix.symbol(), "w");
+    assert_eq!(prefix.fg, ratatui::style::Color::Cyan, "前缀强调色");
+    let value = &buffer[(start as u16 + 3, rect.y)];
+    assert_eq!(value.symbol(), "d");
+    assert!(
+        value.modifier.contains(ratatui::style::Modifier::DIM),
+        "值带 dim"
+    );
+    assert_eq!(
+        (value.fg, value.modifier),
+        (
+            ratatui::style::Color::Cyan,
+            ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM
+        ),
+        "聚焦窗格值高亮（accent + dim，与 prompt ws: 值一致）"
+    );
+
+    // 失焦（prompt 持有键盘焦点）：值回退 muted。
+    state.prompt_focused = true;
+    let buffer = render_buffer(&state);
+    let value = &buffer[(start as u16 + 3, rect.y)];
+    assert_eq!(
+        (value.fg, value.modifier),
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "失焦窗格值回退 muted"
+    );
+    state.prompt_focused = false;
 
     // 切到终端视图不显示路径。
     update::toggle_pane_view(&mut state, pane);
     let lines = render_lines(&state);
-    let bottom: String = lines[usize::from(rect.bottom() - 1)]
-        .chars()
-        .skip(usize::from(rect.x) + 2)
-        .take("work/demo".chars().count())
-        .collect();
-    assert_ne!(bottom, "/work/demo", "终端视图不显示 lx 路径");
+    let top = &lines[usize::from(rect.y)];
+    assert!(!top.contains("ws:"), "终端视图不显示 lx 路径: {top}");
 }
 
 #[test]
-fn lx_pane_bottom_border_keeps_corners_and_narrow_path() {
+fn lx_pane_top_border_keeps_corners_with_long_path() {
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     let config = Config::default();
@@ -2009,13 +2036,13 @@ fn lx_pane_bottom_border_keeps_corners_and_narrow_path() {
         config.min_pane_height,
     );
     let (_, rect) = rects[0];
-    // 超长路径：底边仍保留左右角字符与两侧一格。
+    // 超长路径：顶边仍保留左右角字符。
     let long = format!("/very/long/{}", "x".repeat(200));
     update::update_pane_cwd(&mut state, pane, Path::new(&long), "x".into());
     let lines = render_lines(&state);
-    let bottom: Vec<char> = lines[usize::from(rect.bottom() - 1)].chars().collect();
-    assert_eq!(bottom[usize::from(rect.x)], '╰', "保留左下角");
-    assert_eq!(bottom[usize::from(rect.right() - 1)], '╯', "保留右下角");
+    let top: Vec<char> = lines[usize::from(rect.y)].chars().collect();
+    assert_eq!(top[usize::from(rect.x)], '╭', "保留左上角");
+    assert_eq!(top[usize::from(rect.right() - 1)], '╮', "保留右上角");
 }
 
 #[test]

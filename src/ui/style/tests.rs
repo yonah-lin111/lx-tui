@@ -50,3 +50,19 @@ fn overlay_selection_uses_contrast_surface_without_reversed() {
     assert_eq!(style.bg, Some(Color::Indexed(240)));
     assert!(!style.add_modifier.contains(Modifier::REVERSED));
 }
+
+#[test]
+fn model_label_style_runs_the_entry_gradient_and_is_bold() {
+    let first = model_label_style(0, 5);
+    let last = model_label_style(4, 5);
+    assert_eq!(first.fg, Some(Color::Indexed(218)), "起点 = 品牌粉");
+    assert_eq!(last.fg, Some(Color::Indexed(117)), "终点 = 品牌蓝");
+    assert!(first.add_modifier.contains(Modifier::BOLD), "加粗");
+    assert_eq!(
+        model_label_style(2, 5),
+        lx_entry_label_style(LxEntry::Native, 2, 5, true),
+        "与 Native 入口标签（加粗态）完全同款"
+    );
+    // 单字符标签取起点色，不除零。
+    assert_eq!(model_label_style(0, 1).fg, Some(Color::Indexed(218)));
+}

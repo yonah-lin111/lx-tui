@@ -117,6 +117,25 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some((pane, grab)) = state.lx_history_scroll_drag {
+        let bar = rects
+            .iter()
+            .find(|(id, _)| *id == pane)
+            .and_then(|(_, rect)| {
+                let inner = layout::pane_inner_rect(*rect);
+                state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::history_scrollbar(inner, &target.lx))
+            });
+        let Some(bar) = bar else {
+            return;
+        };
+        let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+        if update::set_lx_history_scroll(state, pane, offset, bar.total, bar.visible) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(hit) = state.resizing_pane {
         let pos = match hit.direction {
             Direction::Horizontal => mouse.column,
@@ -265,6 +284,9 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.lx_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.lx_history_scroll_drag.take().is_some() {
         return;
     }
     if state.resizing_pane.is_some() {

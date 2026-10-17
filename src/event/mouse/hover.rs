@@ -18,8 +18,8 @@ use crate::ui;
 use super::super::paste;
 use super::super::session::Geometry;
 use super::hit::{
-    mention_item_at, pane_at, pane_boundary_draggable, panel_item_at, prompt_boundary_hit,
-    slash_item_at,
+    lx_slash_item_at, mention_item_at, pane_at, pane_boundary_draggable, panel_item_at,
+    prompt_boundary_hit, slash_item_at,
 };
 use super::wheel::forward_pane_mouse_event;
 
@@ -150,6 +150,15 @@ pub(crate) fn handle_mouse_moved(
         }
         return;
     }
+    if let Some((pane, index)) = lx_slash_item_at(state, rects, mouse.column, mouse.row) {
+        if update::hover_lx_slash(state, pane, index) {
+            *dirty = true;
+        }
+        if update::clear_tooltip(state) {
+            *dirty = true;
+        }
+        return;
+    }
     if let Some(index) = slash_item_at(state, view, mouse.column, mouse.row) {
         if update::hover_slash(state, index) {
             *dirty = true;
@@ -172,6 +181,17 @@ pub(crate) fn handle_mouse_moved(
         .is_some_and(|toast| toast.contains((mouse.column, mouse.row).into()));
     if update::set_toast_hover(state, hovering_toast) {
         *dirty = true;
+    }
+    // lx 输入框上方「回到底部」按钮悬停高亮：不在按钮上即清空（含离开窗格）。
+    let jump_hover = if hovering_toast {
+        None
+    } else {
+        ui::main_content::lx::chat_bar::jump_bottom_hit(rects, state, mouse.column, mouse.row)
+    };
+    for (id, _) in rects {
+        if update::hover_lx_jump_bottom(state, *id, jump_hover == Some(*id)) {
+            *dirty = true;
+        }
     }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
     let tree_hover = if hovering_toast || state.prompt_collapsed || !update::prompt_tree_mode(state)

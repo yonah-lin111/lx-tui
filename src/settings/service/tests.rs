@@ -1,3 +1,4 @@
+use super::tests_helpers::{body, get, request, status, write};
 use super::*;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,50 +40,6 @@ async fn start(
     (service, receiver, dir)
 }
 
-/// 发送原始 HTTP 请求并读回完整响应文本。
-async fn request(port: u16, raw: &str) -> String {
-    let mut stream = TcpStream::connect(("127.0.0.1", port))
-        .await
-        .expect("connect");
-    stream.write_all(raw.as_bytes()).await.expect("write");
-    let mut out = String::new();
-    tokio::time::timeout(Duration::from_secs(3), stream.read_to_string(&mut out))
-        .await
-        .expect("no timeout")
-        .expect("read");
-    out
-}
-
-/// 解析响应状态码。
-fn status(response: &str) -> u16 {
-    response
-        .split_whitespace()
-        .nth(1)
-        .and_then(|code| code.parse().ok())
-        .unwrap_or(0)
-}
-
-/// 响应体（跳过 header）。
-fn body(response: &str) -> &str {
-    response.split("\r\n\r\n").nth(1).unwrap_or_default()
-}
-
-/// 便捷 GET。
-fn get(path: &str) -> String {
-    format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
-}
-
-/// 便捷带 JSON body 的写请求。
-fn write(method: &str, path: &str, body: &str, origin: Option<&str>) -> String {
-    let origin = origin
-        .map(|origin| format!("Origin: {origin}\r\n"))
-        .unwrap_or_default();
-    format!(
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n{origin}Content-Length: {}\r\n\r\n{body}",
-        body.len()
-    )
-}
-
 #[tokio::test]
 async fn page_requires_token_and_serves_self_contained_assets() {
     let (service, _events, _dir) = start("page").await;
@@ -97,6 +54,18 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let html = body(&ok);
     assert!(html.contains("General"), "tabs present");
     assert!(html.contains("Commands"), "commands tab present");
+    assert!(html.contains("Models"), "models tab present");
+    assert!(html.contains("view-models"), "models view container");
+    assert!(html.contains("provider-list"), "provider list container");
+    assert!(html.contains("prov-api-key"), "api key input present");
+    assert!(
+        html.contains("type=\"password\""),
+        "api key input masked by default"
+    );
+    assert!(
+        html.contains("fetch-candidates"),
+        "remote fetch candidates container"
+    );
     assert!(html.contains("editor-empty"), "empty placeholder container");
     assert!(html.contains("/settings.css"), "styles linked");
     assert!(html.contains("/settings.js"), "script linked");
@@ -107,10 +76,34 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     assert_eq!(status(&css), 200);
     assert!(css.contains("text/css"), "css content type");
     assert!(body(&css).contains("color-scheme: dark"), "dark theme");
+    assert!(body(&css).contains(".models-grid"), "models layout styles");
 
     let js = request(port, &get("/settings.js")).await;
     assert_eq!(status(&js), 200);
     assert!(js.contains("javascript"), "js content type");
+    // 关键交互入口：加载/保存/复制/删除/远端获取与 key 遮蔽。
+    let js_body = body(&js);
+    for entry in [
+        "loadModels",
+        "saveModels",
+        "duplicateProvider",
+        "deleteProvider",
+        "fetchModels",
+        "renderDefaultModel",
+        "/api/models/settings",
+        "/api/models/fetch",
+    ] {
+        assert!(js_body.contains(entry), "models js entry: {entry}");
+    }
+    // 动态文本用 textContent 而非 innerHTML 拼接。
+    assert!(
+        js_body.contains("textContent"),
+        "dynamic text via textContent"
+    );
+    assert!(
+        !js_body.contains("fetch-candidates').innerHTML"),
+        "no innerHTML for dynamic data"
+    );
 
     // 三份资源均无外部引用。
     for (name, text) in [("html", html), ("css", body(&css)), ("js", body(&js))] {

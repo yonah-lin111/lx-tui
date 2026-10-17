@@ -1,0 +1,694 @@
+//! 历史渲染与布局测试：用户底色/前缀、assistant 无标签、markdown 正文、折叠 thinking、
+//! 换行、宽窄窗格与命中矩形。
+
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+
+use super::*;
+use crate::app::state::{ChatMessageView, ChatPartView, Lx, LxChat};
+use crate::chat::events::PartKind;
+
+fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages = messages;
+    lx.chat = chat;
+    lx
+}
+
+fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageView {
+    ChatMessageView {
+        id: format!("{role}-1"),
+        role: role.into(),
+        status: status.into(),
+        turn_index: 0,
+        parts,
+        model_label: Some("P / M".into()),
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }
+}
+
+fn text_part(content: &str) -> ChatPartView {
+    ChatPartView {
+        kind: PartKind::Text,
+        content: content.into(),
+        provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
+    }
+}
+
+/// 带起止时刻的 reasoning part（思考耗时展示用）。
+fn timed_reasoning_part(content: &str, started_at_ms: i64, ended_at_ms: i64) -> ChatPartView {
+    let mut part = reasoning_part(content);
+    part.started_at_ms = Some(started_at_ms);
+    part.ended_at_ms = Some(ended_at_ms);
+    part
+}
+
+fn reasoning_part(content: &str) -> ChatPartView {
+    ChatPartView {
+        kind: PartKind::Reasoning,
+        content: content.into(),
+        provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
+    }
+}
+
+#[test]
+fn thinking_collapsed_after_completion_one_row_each() {
+    let lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![reasoning_part("长思考\n两行"), text_part("正文")],
+    )]);
+    let area = Rect::new(0, 0, 40, 20);
+    let layout = layout(area, &lx);
+    // 完成态默认折叠：折叠头 1 + 块间空行 1 + 正文 1 + 消息间空行 1 = 4
+    //（无用量数据不出统计行）。
+    assert_eq!(layout.total_rows, 4);
+    assert_eq!(layout.thinking.len(), 1);
+    assert_eq!(layout.thinking[0].0, 0);
+    assert_eq!(layout.thinking[0].1, 0);
+}
+
+#[test]
+fn thinking_collapsed_by_default_while_streaming() {
+    // 默认折叠：生成中也不自动展开（对齐 opencode 的 hide 模式，单击才展开）。
+    let lx = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part("l1\nl2"), text_part("")],
+    )]);
+    let area = Rect::new(0, 0, 40, 20);
+    let layout = layout(area, &lx);
+    assert!(!lx.chat.reasoning_expanded(0, 0), "生成中保持折叠");
+    assert!(lx.chat.reasoning_streaming(0, 0), "仍在生成");
+    // 折叠头 1 + 消息间空行 1 = 2（空的正文块不占行、也不引入空行）。
+    assert_eq!(layout.total_rows, 2);
+}
+
+#[test]
+fn expanded_thinking_survives_completion() {
+    // 用户展开后不因生成结束被强制收起（状态完全由用户控制）。
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part("思考内容"), text_part("")],
+    )]);
+    assert!(!lx.chat.reasoning_expanded(0, 0), "默认折叠");
+    lx.chat.toggle_reasoning(0, 0);
+    assert!(lx.chat.reasoning_expanded(0, 0), "显式展开");
+    lx.chat.messages[0].status = "complete".into();
+    assert!(lx.chat.reasoning_expanded(0, 0), "完成后仍保持展开");
+    lx.chat.toggle_reasoning(0, 0);
+    assert!(!lx.chat.reasoning_expanded(0, 0), "再点收起");
+}
+
+#[test]
+fn expanded_thinking_counts_content_rows() {
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![reasoning_part("l1\nl2\nl3"), text_part("t")],
+    )]);
+    lx.chat.toggle_reasoning(0, 0);
+    let area = Rect::new(0, 0, 40, 20);
+    let layout = layout(area, &lx);
+    // 展开头 1 + 3 内容行 + 块间空行 1 + 正文 1 + 消息间空行 1 = 7。
+    assert_eq!(layout.total_rows, 7);
+}
+
+#[test]
+fn assistant_message_has_no_label_and_shows_body() {
+    let lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![reasoning_part("秘密思考"), text_part("可见正文")],
+    )]);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let line0 = row_text(&buf, area, 0);
+    let line1 = row_text(&buf, area, 1);
+    let line2 = row_text(&buf, area, 2);
+    assert!(line0.contains("Thought"), "首个渲染行为折叠头：{line0}");
+    assert!(
+        !line0.contains("assistant"),
+        "不再显示 assistant 标签：{line0}"
+    );
+    assert!(line1.trim().is_empty(), "折叠头与正文间空一行：{line1}");
+    assert!(!line2.contains("秘密思考"), "折叠时不显示内容");
+    assert!(line2.contains("可见正文"), "正文绘制：{line2}");
+}
+
+#[test]
+fn streaming_message_has_no_list_marker() {
+    // 流中不再在消息列表插入标记（改用输入框上方 loading 行）。
+    let lx = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![text_part("部分")],
+    )]);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let joined = (0..3)
+        .map(|row| row_text(&buf, area, row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!joined.contains("[streaming]"), "流中不显示标记：{joined}");
+    assert!(joined.contains("部分"), "正文仍绘制：{joined}");
+}
+
+#[test]
+fn failed_message_shows_error_notice_with_code_at_bottom() {
+    let mut message = message("assistant", "failed", vec![text_part("出错了")]);
+    message.error_code = Some("http 503".into());
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    // 正文 → 空行（块间）→ `! Failed` → `└─ 失败码`（旧 `[failed: …]` 标记不再出现在顶部）。
+    let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    assert!(rows[0].contains("出错了"), "正文：{rows:?}");
+    assert_eq!(rows[1], "", "与正文隔一行");
+    assert_eq!(rows[2], "! Failed");
+    assert_eq!(rows[3], "  └─ http 503");
+    assert!(
+        !rows.iter().any(|row| row.contains("[failed")),
+        "不再有方括号标记：{rows:?}"
+    );
+}
+
+#[test]
+fn failed_message_without_code_uses_fallback_reason() {
+    let lx = lx_with(vec![message(
+        "assistant",
+        "failed",
+        vec![text_part("挂了")],
+    )]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
+    assert_eq!(rows[2], "! Failed");
+    assert_eq!(
+        rows[3], "  └─ no error details provided",
+        "无码时给一句话兜底"
+    );
+}
+
+#[test]
+fn interrupted_message_shows_warning_notice_above_stats_line() {
+    let mut message = message("assistant", "interrupted", vec![text_part("半截回答")]);
+    message.input_tokens = Some(1_200);
+    message.output_tokens = Some(300);
+    message.duration_ms = Some(2_700);
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
+    assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
+    assert_eq!(rows[1], "", "通知与正文隔一行");
+    assert_eq!(rows[2], "! Interrupted", "中断用黄色警告通知");
+    assert_eq!(
+        rows[3], "  └─ interrupted before completion",
+        "固定一句话原因"
+    );
+    assert_eq!(rows[4], "", "通知与统计行之间空一行");
+    assert!(
+        rows[5].starts_with("P / M · 1.2k in · 300 out"),
+        "统计行：{rows:?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("[interrupted]")),
+        "旧标记已移除：{rows:?}"
+    );
+    // 端到端：标题整行黄 + 粗（不再有灰色档）。
+    let title = buf.cell((0, 2)).map(|cell| cell.style()).expect("标题格");
+    assert_eq!(title.fg, style::agent_warn().fg, "中断通知标题用警告黄");
+    assert!(
+        title.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "标题加粗"
+    );
+}
+
+#[test]
+fn user_message_has_prefix_and_background() {
+    let lx = lx_with(vec![message("user", "complete", vec![text_part("你好")])]);
+    let area = Rect::new(0, 0, 20, 4);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let line0 = row_text(&buf, area, 0);
+    assert!(line0.starts_with("> "), "用户消息前缀：{line0}");
+    assert!(line0.contains("你好"));
+    // 整行铺用户底色（内容列末列带背景；最后一列为滚动条预留列）。
+    let cell = buf.cell((18, 0)).expect("cell");
+    assert_eq!(cell.style().bg, style::chat_user_bg().bg, "整块底色");
+}
+
+#[test]
+fn assistant_markdown_collapses_markers() {
+    let lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![text_part("## 标题\n\n- 项 **粗**")],
+    )]);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let joined = (0..6)
+        .map(|row| row_text(&buf, area, row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(joined.contains("标题"), "标题正文：{joined}");
+    assert!(!joined.contains("##"), "隐藏标题标记：{joined}");
+    assert!(joined.contains("• 项 粗"), "列表 + 粗体折叠：{joined}");
+    assert!(!joined.contains("**"), "隐藏粗体标记：{joined}");
+}
+
+#[test]
+fn render_expanded_shows_reasoning_content() {
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![reasoning_part("展开后的思考"), text_part("正文")],
+    )]);
+    lx.chat.toggle_reasoning(0, 0);
+    let area = Rect::new(0, 0, 40, 10);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let joined = (0..4)
+        .map(|row| row_text(&buf, area, row))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(joined.contains("展开后的思考"), "展开后显示内容：{joined}");
+}
+
+#[test]
+fn wrap_counts_wide_characters_as_two_columns() {
+    // 20 列宽、中文每字 2 列 → 每行最多 10 字。
+    let lines = wrap("一二三四五六七八九十一二", 20);
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0].chars().count(), 10);
+    assert_eq!(lines[1], "一二");
+}
+
+#[test]
+fn wrap_preserves_explicit_newlines() {
+    let lines = wrap("a\nb\n", 10);
+    assert_eq!(lines, vec!["a", "b", ""]);
+}
+
+#[test]
+fn layout_handles_zero_area() {
+    let lx = lx_with(vec![message("user", "complete", vec![text_part("x")])]);
+    let layout = layout(Rect::new(0, 0, 0, 0), &lx);
+    assert_eq!(layout.total_rows, 0);
+    assert!(layout.thinking.is_empty());
+}
+
+#[test]
+fn thinking_header_rect_tracks_row_position() {
+    let lx = lx_with(vec![
+        message("user", "complete", vec![text_part("问题")]),
+        message("assistant", "complete", vec![reasoning_part("思考")]),
+    ]);
+    let area = Rect::new(3, 5, 40, 20);
+    let layout = layout(area, &lx);
+    // 第一条：正文(5，用户前缀在首行) + 空行(6)；第二条 thinking 头(7)。
+    assert_eq!(layout.thinking.len(), 1);
+    let (_, _, header) = layout.thinking[0];
+    assert_eq!(header.y, 7);
+    assert_eq!(header.x, 3);
+    assert_eq!(header.width, 40 - super::SCROLLBAR_COLUMNS);
+}
+
+/// 读取缓冲区某行文本（跳过宽字符占位格）。
+fn row_text(buf: &Buffer, area: Rect, row: u16) -> String {
+    let mut out = String::new();
+    for x in area.x..area.right() {
+        if let Some(cell) = buf.cell((x, area.y + row)) {
+            if cell.diff_option == ratatui::buffer::CellDiffOption::Skip {
+                continue;
+            }
+            let symbol = cell.symbol();
+            if symbol == "\0" {
+                continue;
+            }
+            out.push_str(symbol);
+        }
+    }
+    out.trim_end().to_string()
+}
+
+#[test]
+fn narrow_width_table_is_not_deformed() {
+    let src = "| 序号 | 名称 | 类别 | 特点 |\n| --- | --- | --- | --- |\n| 1 | DeepSeek | AI助手 | 免费、支持长上下文 |\n| 2 | Python | 编程语言 | 简洁、生态丰富 |";
+    let lx = lx_with(vec![message("assistant", "complete", vec![text_part(src)])]);
+    for width in [30u16, 40, 50] {
+        let area = Rect::new(0, 0, width, 20);
+        let mut buf = Buffer::empty(area);
+        crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+        // 每行不超过内容宽度（扣除滚动条预留列），且表格边界字符不会跨行断裂。
+        let content_width = width - SCROLLBAR_COLUMNS;
+        for row in 0..area.height {
+            let line = row_text(&buf, area, row);
+            let drawn: usize = line
+                .chars()
+                .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(1))
+                .sum();
+            assert!(
+                drawn <= usize::from(content_width),
+                "宽度 {width} 第 {row} 行超宽：{line}"
+            );
+        }
+        // 右下角边界与左上角边界都在（方框未被折断）。
+        let joined = (0..area.height)
+            .map(|row| row_text(&buf, area, row))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains('┌'), "宽度 {width} 缺左上边界");
+        assert!(joined.contains('┘'), "宽度 {width} 缺右下边界");
+    }
+}
+
+#[test]
+fn history_layout_reserves_scrollbar_column() {
+    let lx = lx_with(vec![message(
+        "user",
+        "complete",
+        vec![text_part("你好世界你好世界")],
+    )]);
+    let area = Rect::new(0, 0, 20, 10);
+    let _layout = layout(area, &lx);
+    // thinking 头宽度应扣除滚动条预留列。
+    assert_eq!(super::content_rect(area).width, 20 - SCROLLBAR_COLUMNS);
+}
+
+#[test]
+fn completed_assistant_shows_turn_stats_line() {
+    let mut completed = message("assistant", "complete", vec![text_part("正文")]);
+    completed.model_label = Some("deepseek-v4.1-flash".into());
+    completed.input_tokens = Some(2_916);
+    completed.output_tokens = Some(307);
+    completed.cache_read_tokens = Some(2_048);
+    completed.duration_ms = Some(2_655);
+    let line = stats_line(&completed).expect("统计行");
+    assert!(line.starts_with("deepseek-v4.1-flash"), "{line}");
+    assert!(line.contains("2.9k in"), "{line}");
+    assert!(line.contains("307 out"), "{line}");
+    assert!(
+        line.contains("70% cached"),
+        "缓存命中 = cached/prompt：{line}"
+    );
+    assert!(line.contains("115.6 tok/s"), "tok/s = 输出 / 耗时：{line}");
+    assert!(line.ends_with("2.7s"), "总耗时：{line}");
+}
+
+#[test]
+fn stats_line_row_is_counted_in_layout() {
+    let mut completed = message("assistant", "complete", vec![text_part("答")]);
+    completed.input_tokens = Some(100);
+    completed.output_tokens = Some(20);
+    completed.duration_ms = Some(1_000);
+    let lx = lx_with(vec![completed]);
+    // 统计行单行放得下（60 列）。
+    let area = Rect::new(0, 0, 60, 20);
+    let layout = layout(area, &lx);
+    // 正文 1 + 块间空行 1 + 统计行 1 + 消息间空行 1 = 4。
+    assert_eq!(layout.total_rows, 4);
+}
+
+#[test]
+fn streaming_assistant_has_no_stats_line() {
+    let mut streaming = message("assistant", "streaming", vec![text_part("部分")]);
+    streaming.input_tokens = Some(10);
+    streaming.output_tokens = Some(2);
+    streaming.duration_ms = Some(100);
+    assert_eq!(stats_line(&streaming), None, "流中不出统计行");
+    // 无任何可用数据（如失败且未返回 usage）时也不出。
+    let empty = message("assistant", "failed", vec![text_part("")]);
+    assert_eq!(stats_line(&empty), None);
+}
+
+#[test]
+fn token_and_duration_formatting_matches_agent_conventions() {
+    assert_eq!(text::token_count(999), "999");
+    assert_eq!(text::token_count(1_200), "1.2k");
+    assert_eq!(text::token_count(12_345), "12k");
+    assert_eq!(text::token_count(1_250_000), "1.2M");
+    assert_eq!(format_duration(820), "820ms");
+    assert_eq!(format_duration(4_200), "4.2s");
+    assert_eq!(format_duration(38_400), "38s");
+    assert_eq!(format_duration(72_000), "1m 12s");
+}
+
+#[test]
+fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
+    use ratatui::style::{Color, Modifier};
+
+    // 生成中：首列转轮（左对齐，与正文/统计行同一起点）、UI 页思考蓝、文案 `Thinking`。
+    let streaming = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part("流式思考"), text_part("")],
+    )]);
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
+    let header = &buf[(0, 0)];
+    assert_eq!(header.fg, Color::Indexed(117), "生成中用 UI 页思考蓝");
+    assert_eq!(header.modifier, Modifier::empty(), "生成中不压暗");
+    let line0 = row_text(&buf, area, 0);
+    assert!(line0.starts_with('⠋'), "转轮在首列（左对齐）：{line0}");
+    assert!(line0.contains("Thinking"), "生成中文案首字母大写：{line0}");
+    assert!(!line0.contains('▸'), "生成中不带折叠标记：{line0}");
+    let line1 = row_text(&buf, area, 1);
+    assert!(!line1.contains("流式思考"), "默认折叠不显示内容：{line1}");
+
+    // 完成后（带起止时刻）：`▸ Thought · 6.3s`、同为品牌蓝但压暗一档；展开时内容同样左对齐。
+    let mut done = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![
+            timed_reasoning_part("旧思考", 1_000, 7_300),
+            text_part("正文"),
+        ],
+    )]);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
+    let header = &buf[(0, 0)];
+    assert_eq!(header.fg, Color::Indexed(117), "完成后仍是品牌蓝");
+    assert_eq!(header.modifier, Modifier::DIM, "完成后压暗");
+    let line0 = row_text(&buf, area, 0);
+    assert!(
+        line0.starts_with("▸ Thought · 6.3s"),
+        "完成后显示思考耗时：{line0}"
+    );
+    // 展开：内容左对齐第 0 列，文案换成展开标记。
+    done.chat.toggle_reasoning(0, 0);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
+    let header = &buf[(0, 0)];
+    assert_eq!(header.fg, Color::Indexed(117), "展开后仍品牌蓝");
+    assert_eq!(header.modifier, Modifier::DIM, "展开后仍压暗");
+    let line0 = row_text(&buf, area, 0);
+    assert!(line0.starts_with("▾ Thought · 6.3s"), "展开文案：{line0}");
+    let line1 = row_text(&buf, area, 1);
+    assert!(line1.starts_with("旧思考"), "内容左对齐：{line1}");
+    assert!(!line0.contains("Thinking"), "不再是 Thinking：{line0}");
+}
+
+// ===== 置顶用户消息行（表现层，codex prompt_header 口径）=====
+
+/// 构造一段够长、能溢出的历史：两轮问答，正文各若干行。
+fn sticky_lx() -> Lx {
+    let mut lx = lx_with(vec![
+        message("user", "complete", vec![text_part("第一轮的问题")]),
+        message("assistant", "complete", vec![text_part("A1\nA2\nA3")]),
+        message("user", "complete", vec![text_part("第二轮的问题")]),
+        message("assistant", "complete", vec![text_part("B1\nB2\nB3")]),
+    ]);
+    // 溢出必需的滚动空间：视口 6 行、内容远多于 6 行。
+    lx.chat.follow_bottom = false;
+    lx
+}
+
+/// 历史区（宽 24、高 8）：body 6 行。
+fn sticky_area() -> Rect {
+    Rect::new(0, 0, 24, 8)
+}
+
+#[test]
+fn sticky_prompt_pins_the_turn_prompt_when_top_row_is_answer() {
+    let mut lx = sticky_lx();
+    let area = sticky_area();
+    let layout = layout(area, &lx);
+    // 顶行落在第一轮回复里。
+    let scroll = layout.messages[1].start;
+    lx.chat.history_scroll = scroll;
+    let computed = view(area, &lx);
+    assert_eq!(computed.sticky, Some(0), "钉第一轮的 prompt");
+    assert_eq!(computed.body.y, area.y + 1, "让位一行");
+    assert_eq!(computed.body.height, area.height - 1);
+    assert_eq!(computed.scroll, computed.scroll, "滚动偏移按 body 钳制");
+}
+
+#[test]
+fn sticky_prompt_yields_when_top_row_is_the_prompt() {
+    let mut lx = sticky_lx();
+    let area = sticky_area();
+    let layout = layout(area, &lx);
+    // 顶行就是第二条用户消息自己的行（含它前面的空行）→ 不钉。
+    lx.chat.history_scroll = layout.messages[2].start;
+    let computed = view(area, &lx);
+    assert_eq!(computed.sticky, None, "用户消息自带上下文");
+    assert_eq!(computed.body, area, "不占行");
+
+    // 轮边界空行（归后一条消息）同样按用户消息自己的行处理。
+    lx.chat.history_scroll = layout.messages[2].start.saturating_sub(1);
+    let at_blank = view(area, &lx);
+    assert_eq!(at_blank.sticky, None, "空行归后一条：仍算用户消息的行");
+}
+
+#[test]
+fn sticky_prompt_revert_records_suppression_memory() {
+    let mut lx = sticky_lx();
+    let area = sticky_area();
+    let layout = layout(area, &lx);
+    // 整块 body 下顶行 = 第一轮回复最后一行 → 需要钉；让位一行后顶行变成
+    // 第二条用户消息的边界空行 → 不再需要 → 撤销让位并记记忆。
+    let scroll = layout.messages[2].start.saturating_sub(1);
+    lx.chat.history_scroll = scroll;
+    let computed = view(area, &lx);
+    assert_eq!(computed.sticky, None, "让位后不再需要 → 撤销");
+    assert_eq!(computed.body, area, "撤销让位");
+    let memory = computed.suppressed.expect("写入抑制记忆");
+    assert_eq!(memory.viewport, area);
+    assert_eq!(memory.message, 1, "记忆的是整块视口的顶行位置");
+}
+
+#[test]
+fn sticky_prompt_respects_suppression_memory_while_reading() {
+    let mut lx = sticky_lx();
+    let area = sticky_area();
+    let layout = layout(area, &lx);
+    // 顶行在第一轮回复里：本会钉，但记忆一致 → 跳过重判、沿用抑制。
+    lx.chat.history_scroll = layout.messages[1].start;
+    let top = message_at(&layout.messages, layout.messages[1].start).expect("顶行");
+    lx.chat.suppressed_prompt_header = Some(crate::app::state::lx::chat::StickySuppression {
+        viewport: area,
+        message: top.0,
+        row: top.1,
+    });
+    let computed = view(area, &lx);
+    assert_eq!(computed.sticky, None, "阅读态沿用抑制");
+    assert_eq!(computed.body, area);
+    assert_eq!(
+        computed.suppressed, lx.chat.suppressed_prompt_header,
+        "记忆保留"
+    );
+
+    // 视口一变化记忆即失效 → 重新判定（本会钉）。
+    lx.chat.suppressed_prompt_header = Some(crate::app::state::lx::chat::StickySuppression {
+        viewport: Rect::new(0, 0, 23, 8),
+        ..computed.suppressed.expect("记忆")
+    });
+    let resized = view(area, &lx);
+    assert_eq!(resized.sticky, Some(0), "视口变化使记忆失效");
+}
+
+#[test]
+fn sticky_prompt_thresholds_hide_the_row() {
+    let mut lx = sticky_lx();
+    let layout = layout(sticky_area(), &lx);
+    lx.chat.history_scroll = layout.messages[1].start;
+    // 太矮：不显示（也不写记忆）。
+    let short = view(Rect::new(0, 0, 24, 3), &lx);
+    assert_eq!(short.sticky, None, "高度不足不显示");
+    assert_eq!(short.suppressed, None);
+    // 太窄：不显示。
+    let narrow = view(Rect::new(0, 0, 15, 8), &lx);
+    assert_eq!(narrow.sticky, None, "宽度不足不显示");
+}
+
+#[test]
+fn sticky_text_collapses_sanitizes_and_marks_empty() {
+    let mut message = message(
+        "user",
+        "complete",
+        vec![text_part("  第一  行\n\t第二\r行  ")],
+    );
+    assert_eq!(sticky_text(&message).as_deref(), Some("第一 行 第二 行"));
+    // 只有空白 → 不钉（None）。
+    message.parts = vec![text_part("   \n\t ")];
+    assert_eq!(sticky_text(&message), None);
+    // 超长粘贴按 512 字符取样（限住每帧成本）。
+    message.parts = vec![text_part(&"字".repeat(1_000))];
+    let text = sticky_text(&message).expect("摘要");
+    assert_eq!(text.chars().count(), STICKY_SAMPLE_CHARS);
+}
+
+#[test]
+fn sticky_row_is_painted_outside_the_grid() {
+    let mut lx = sticky_lx();
+    let area = sticky_area();
+    let layout = layout(area, &lx);
+    lx.chat.history_scroll = layout.messages[1].start;
+    let computed = view(area, &lx);
+    let row = sticky_rect(&computed).expect("置顶行");
+    assert_eq!(row.rect, Rect::new(area.x, area.y, area.width, 1));
+
+    // 表现层：直接写 Buffer，网格那一行保持空白（→ 不进复制与选区）。
+    let message = lx.chat.messages[row.message].clone();
+    let mut buf = Buffer::empty(area);
+    render_sticky_prompt(&mut buf, row, &message);
+    let painted = row_text(&buf, area, 0);
+    let squeezed = painted.replace(' ', "");
+    assert!(
+        squeezed.starts_with(">第一轮的问题"),
+        "前缀与用户消息同款 `> `：{painted}"
+    );
+
+    let mut grid = Grid::new(area);
+    render(&mut grid, computed.body, &lx, computed.scroll);
+    let mut grid_row = String::new();
+    for x in area.x..area.right() {
+        grid_row.push(grid.cell(x, area.y).ch);
+    }
+    assert!(
+        grid_row.trim().is_empty(),
+        "网格置顶行保持空白：{grid_row:?}"
+    );
+}
+
+#[test]
+fn sticky_text_is_truncated_with_ellipsis_to_width() {
+    let mut lx = sticky_lx();
+    lx.chat.messages[0].parts = vec![text_part("很长很长很长很长很长很长很长的问题")];
+    let area = sticky_area();
+    let layout = layout(area, &lx);
+    lx.chat.history_scroll = layout.messages[1].start;
+    let computed = view(area, &lx);
+    let row = sticky_rect(&computed).expect("置顶行");
+    let message = lx.chat.messages[row.message].clone();
+    let mut buf = Buffer::empty(area);
+    render_sticky_prompt(&mut buf, row, &message);
+    let painted = row_text(&buf, area, 0);
+    assert!(
+        painted.trim_end().ends_with('…'),
+        "溢出以省略号收尾：{painted}"
+    );
+    // 截断函数本体：按显示列截断、宽字符按两列计。
+    assert_eq!(truncate_with_ellipsis("abcdef", 4), "abc…");
+    assert_eq!(truncate_with_ellipsis("中文中文", 5), "中文…");
+    assert_eq!(truncate_with_ellipsis("abc", 3), "abc");
+}

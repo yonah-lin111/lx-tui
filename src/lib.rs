@@ -3,6 +3,7 @@
 //! 模块划分与依赖方向见 `docs/standards/project-directory-structure.md`。
 
 pub mod app;
+pub mod chat;
 pub mod config;
 pub mod db;
 pub mod detect;

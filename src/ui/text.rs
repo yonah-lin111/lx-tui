@@ -57,8 +57,10 @@ pub fn agent_location(tab_index: usize) -> String {
 pub const PROMPT_TITLE: &str = "Prompt Manager";
 /// prompt 底边框分支前缀。
 pub const PROMPT_BRANCH_PREFIX: &str = "b:";
+/// 工作区路径标记前缀；prompt 底边框与 lx 窗格顶边框共用（前缀强调色、值 muted）。
+pub const WORKSPACE_PREFIX: &str = "ws:";
 /// prompt 底边框右侧的工作区路径名前缀。
-pub const PROMPT_WORKSPACE_PREFIX: &str = "ws:";
+pub const PROMPT_WORKSPACE_PREFIX: &str = WORKSPACE_PREFIX;
 /// prompt 底边框 linked worktree 标记前缀。
 pub const PROMPT_WORKTREE_PREFIX: &str = "wt:";
 /// prompt 工具栏按钮与保存状态点。
@@ -172,6 +174,12 @@ pub const LX_TOGGLE_LX: &str = "[lx]";
 /// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
+/// lx 页输入框上方 loading 行的转轮帧（braille，对齐 codex 的 10 帧）与文案。
+pub const LX_LOADING_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+pub const LX_LOADING_LABEL: &str = "Working";
+/// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
+pub const LX_JUMP_BOTTOM: &str = "↓";
+pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
 /// lx 页三个入口标签。
 pub const LX_ENTRY_NATIVE: &str = "Native Agent";
 pub const LX_ENTRY_HYBRID: &str = "Hybrid Agent";
@@ -486,6 +494,90 @@ pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 
 /// 提示词保存失败：内容保留脏状态，自动保存将重试。
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
+
+/// lx 聊天相关提示与状态文案。
+pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Chat is available in Native Agent only";
+pub const LX_CHAT_NO_MODEL: &str = "No model available; configure providers in settings";
+pub const LX_CHAT_NO_WORKSPACE: &str = "Workspace path unavailable";
+pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
+pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
+pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
+/// 流中「按 Esc 停止」待命提示短语（从长到短，按可用宽度取第一条放得下的；对齐 opencode）。
+pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
+    "Press esc again to stop",
+    "esc again to stop",
+    "esc again: stop",
+    "esc stop",
+];
+/// 数值 + 单位后缀（保留一位小数，整数值去掉 `.0`）：`1.2k` / `720k` / `1M`。
+fn scaled(value: f64, suffix: &str) -> String {
+    let text = format!("{value:.1}");
+    let trimmed = text.strip_suffix(".0").unwrap_or(&text);
+    format!("{trimmed}{suffix}")
+}
+
+/// token 短格式：`999` / `1.2k` / `12k` / `1.2M`（统计行用；≥10k 取整到 k）。
+pub fn token_count(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 10_000 {
+        return scaled(tokens as f64 / 1_000.0, "k");
+    }
+    if tokens < 1_000_000 {
+        return format!("{}k", (tokens as f64 / 1_000.0).round() as i64);
+    }
+    scaled(tokens as f64 / 1_000_000.0, "M")
+}
+
+/// token 精确短格式（始终保留一位小数）：`999` / `1.2k` / `258.7k` / `1.2M`；
+/// 状态行上下文占用用它（用量数值得看清一位小数）。
+pub fn token_count_precise(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 1_000_000 {
+        return scaled(tokens as f64 / 1_000.0, "k");
+    }
+    scaled(tokens as f64 / 1_000_000.0, "M")
+}
+
+/// 状态行：模型名与供应商名之间的分隔（` · `）。
+pub const LX_CHAT_MODEL_SEP: &str = " · ";
+/// 状态行：上下文占用前缀（`context:258.7k(25%)`；无消耗整段隐藏）。
+pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
+/// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
+/// （`Thought` 与 UI 页 agent 步骤的动词一致）。
+pub const LX_CHAT_THINKING_LABEL: &str = "Thinking";
+pub const LX_CHAT_THOUGHT_LABEL: &str = "Thought";
+/// 本轮统计行（assistant 消息底部）：字段分隔与各字段后缀。
+pub const LX_CHAT_STATS_SEP: &str = " · ";
+pub const LX_CHAT_STATS_INPUT_SUFFIX: &str = " in";
+pub const LX_CHAT_STATS_OUTPUT_SUFFIX: &str = " out";
+pub const LX_CHAT_STATS_CACHE_SUFFIX: &str = " cached";
+pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
+/// `/` 命令面板标题。
+pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
+/// `/` 命令面板底边提示（与 `@` 提及面板同款）。
+pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
+/// `/resume` 命令描述。
+pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
+/// `/resume` 历史面板标题与空态。
+pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
+pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
+/// `/model` 面板标题。
+pub const LX_MODEL_PANEL_TITLE: &str = "Model";
+pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
+/// 消息底部通知的标题（固定枚举，对齐 ui 页 agent error；渲染为 `! <标题>`）。
+pub const LX_CHAT_NOTICE_FAILED: &str = "Failed";
+pub const LX_CHAT_NOTICE_INTERRUPTED: &str = "Interrupted";
+/// 通知原因（一句话；失败有原因码时用原因码）。
+pub const LX_CHAT_NOTICE_INTERRUPTED_REASON: &str = "interrupted before completion";
+pub const LX_CHAT_NOTICE_FAILED_REASON: &str = "no error details provided";
+pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
+pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
+/// 上下文省略提示前缀。
+pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
 
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";
@@ -859,27 +951,20 @@ pub fn pane_title(id: PaneId, osc_title: Option<&str>, cwd_label: Option<&str>) 
     }
 }
 
-/// lx pane 底边左侧的 cwd 显示文本：完整路径放得下则整段；否则取末段；末段仍超宽则按
-/// 终端显示列截断并加 `…`。可用宽度连省略号也放不下时返回 None（不绘制）。
-pub fn pane_bottom_path(path: &std::path::Path, available: usize) -> Option<String> {
+/// lx 窗格顶边框右侧 `ws:` 值：路径末两段（`a/b`）；不足两段用现有全部段，
+/// 无可用段回退完整路径；超出可用宽度按列宽中间省略。可用宽度连省略号也放不下时返回 None。
+pub fn workspace_path_label(path: &std::path::Path, available: usize) -> Option<String> {
     if available == 0 {
         return None;
     }
-    let full = path.to_string_lossy();
-    if full.width() <= available {
-        return Some(full.into_owned());
+    let label = crate::app::state::path_tail_two(path);
+    if label.is_empty() {
+        return None;
     }
-    let segment = path
-        .file_name()
-        .map(|name| name.to_string_lossy())
-        .filter(|name| !name.is_empty());
-    if let Some(segment) = segment {
-        if segment.width() <= available {
-            return Some(segment.into_owned());
-        }
-        return (available >= 2).then(|| ellipsize_middle(&segment, available));
+    if label.width() <= available {
+        return Some(label);
     }
-    (available >= 2).then(|| ellipsize_middle(&full, available))
+    (available >= 2).then(|| ellipsize_middle(&label, available))
 }
 
 #[cfg(test)]

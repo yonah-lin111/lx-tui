@@ -109,6 +109,7 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             'e' | 'E' => Some(LxInput::LineEnd),
             'd' | 'D' => Some(LxInput::Delete),
             'c' | 'C' => Some(LxInput::Clear),
+            't' | 'T' => Some(LxInput::ToggleThinking),
             'z' | '-' => Some(LxInput::Undo),
             'Z' | 'y' | 'Y' | '.' => Some(LxInput::Redo),
             _ => None,

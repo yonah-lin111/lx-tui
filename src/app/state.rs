@@ -20,11 +20,15 @@ pub mod lx;
 pub mod pane;
 pub mod workspace;
 
-pub use lx::{Lx, LxEntry};
+pub use lx::{
+    ChatMessageView, ChatPartView, FrozenModel, HistoryEntry, HistoryPanel, Lx, LxChat, LxEntry,
+    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, RequestKey,
+    RequestState, SlashCommand, SlashPanel,
+};
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceRow, current_workspace_identity, home_dir,
-    tab_label, unique_workspace_name, workspace_label, workspace_name,
+    path_tail_two, tab_label, unique_workspace_name, workspace_label, workspace_name,
 };
 
 /// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
@@ -130,6 +134,8 @@ pub struct AppState {
     pub terminal_scroll_drag: Option<(PaneId, u16)>,
     /// 拖拽 lx 输入框滚动条 thumb：窗格与相对顶部的抓取偏移。
     pub lx_scroll_drag: Option<(PaneId, u16)>,
+    /// 拖拽 lx 聊天历史滚动条 thumb：窗格与相对顶部的抓取偏移。
+    pub lx_history_scroll_drag: Option<(PaneId, u16)>,
     /// 鼠标悬停的侧栏 Agents 条目槽位索引（含滚动偏移）；None 表示未悬停。
     pub agent_hover: Option<usize>,
     /// 侧栏 Agents 列表滚动偏移（顶部条目索引）。
@@ -160,6 +166,8 @@ pub struct AppState {
     pub settings_available: bool,
     /// 设置按钮点击请求：事件层取走后打开浏览器。
     pub settings_open_requested: bool,
+    /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
+    pub models: ModelsSnapshot,
 }
 
 impl AppState {
@@ -219,6 +227,7 @@ impl AppState {
             referenced_menu_scroll_drag: None,
             terminal_scroll_drag: None,
             lx_scroll_drag: None,
+            lx_history_scroll_drag: None,
             agent_hover: None,
             agent_scroll: 0,
             agent_scroll_drag: None,
@@ -234,6 +243,7 @@ impl AppState {
             collapsed_groups: Vec::new(),
             settings_available: false,
             settings_open_requested: false,
+            models: ModelsSnapshot::default(),
         }
     }
 
@@ -346,6 +356,14 @@ impl AppState {
             .flat_map(|workspace| workspace.tabs.iter())
             .flat_map(|tab| tab.layout.pane_ids())
             .collect()
+    }
+
+    /// 是否存在正在生成（流中）的 lx 窗格；驱动 loading 转轮。
+    pub fn has_streaming_lx(&self) -> bool {
+        self.all_pane_ids().into_iter().any(|pane| {
+            self.pane_anywhere(pane)
+                .is_some_and(|target| target.lx.chat.status.streaming)
+        })
     }
 
     /// 当前激活工作区内全部窗格标识（按标签与树序）；Agent 探测扫描用。

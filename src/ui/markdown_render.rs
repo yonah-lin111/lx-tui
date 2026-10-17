@@ -1,7 +1,8 @@
-//! `markdown` item 的渲染器：把 agent 回答的 markdown 源码渲染成带样式的行。
+//! 面向阅读的 markdown 渲染器：把 markdown 源码渲染成带样式的行（吃掉标记）。
 //!
-//! 这是**面向阅读的渲染**（吃掉 `#`、`**`、``` 等标记），与编辑器用的
+//! 这是**面向阅读的渲染**（隐藏 `#`、`**`、``` 等标记），与编辑器用的
 //! `ui/markdown.rs` 高亮（保留标记上色）是两回事，故独立实现。
+//! UI 查看器的 agent 回答样例与 lx 聊天历史共用本模块，保证 markdown 观感一致。
 //!
 //! 支持全部常见 markdown 格式：六级标题、段落、无序/有序/嵌套列表、任务列表、
 //! 引用、围栏/缩进代码块、表格（对齐）、水平线、图片，以及行内
@@ -13,16 +14,93 @@
 
 use ratatui::style::Style;
 
-use crate::ui::{style, text};
-
-use super::SampleLine;
+use crate::ui::style;
 
 mod highlight;
+mod table;
 
-/// 渲染整个样例文档为若干行（含末尾 token 页脚）。
-pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
+/// 渲染出的一行：左缩进列 + 多色分段（拼接即该行纯文本）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct MdLine {
+    pub indent: u16,
+    /// 悬挂缩进：软换行时**续行**相对首行额外缩进的列数（列表/引用的标记宽度）。
+    /// 首行含 `• ` / `1. ` / `> ` 等标记，续行要跳过标记、对齐正文起始列。
+    pub hang: u16,
+    pub spans: Vec<(String, Style)>,
+}
+
+impl MdLine {
+    /// 单色单段行。
+    pub(crate) fn plain(indent: u16, value: impl Into<String>, style: Style) -> Self {
+        Self {
+            indent,
+            hang: 0,
+            spans: vec![(value.into(), style)],
+        }
+    }
+
+    /// 多段行。
+    pub(crate) fn spans(indent: u16, spans: Vec<(String, Style)>) -> Self {
+        Self {
+            indent,
+            hang: 0,
+            spans,
+        }
+    }
+
+    /// 多段行 + 悬挂缩进（列表项/引用：续行对齐正文起始列）。
+    pub(crate) fn hanging(indent: u16, hang: u16, spans: Vec<(String, Style)>) -> Self {
+        Self {
+            indent,
+            hang,
+            spans,
+        }
+    }
+
+    /// 该行的显示宽度（缩进 + 各分段宽度）。
+    pub fn width(&self) -> usize {
+        usize::from(self.indent)
+            + self
+                .spans
+                .iter()
+                .map(|(value, _)| display_width(value))
+                .sum::<usize>()
+    }
+
+    /// 该行的纯文本（不含缩进）。
+    pub fn text(&self) -> String {
+        self.spans.iter().map(|(value, _)| value.as_str()).collect()
+    }
+}
+
+/// 把 markdown 源码渲染成带样式的行（任意来源；不附加 token 页脚）。
+///
+/// 调用方负责换行与宽度裁剪；本函数只做块级结构还原与行内标记折叠。
+pub fn render(source: &str) -> Vec<MdLine> {
+    render_blocks(source, None)
+}
+
+/// 把 markdown 源码渲染成**恰好不超过 `width` 列**的行（块级：表格自适应宽度、其余软换行）。
+///
+/// 与 [`render`] 共用块级解析，但表格按可用宽度收缩列宽并在单元格内换行
+/// （对齐 opencode 的 markdown 表格），避免窄宽度下把方框网格硬折断成「变形」；
+/// 其余块（段落/列表/引用/代码）按词优先软换行，超长不可断的内容按字符切分。
+pub fn render_wrapped(source: &str, width: u16) -> Vec<MdLine> {
+    let width = usize::from(width.max(1));
+    let mut out = Vec::new();
+    for line in render_blocks(source, Some(width)) {
+        wrap_md_line(&line, width, &mut out);
+    }
+    out
+}
+
+/// 块级解析：`width` 为 Some 时表格按可用宽度收缩（其余块仍按自然宽度产出，由调用方换行）。
+fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
     let mut lines = Vec::new();
-    let source_lines: Vec<&str> = text::agent::MD_SAMPLE.split('\n').collect();
+    let source_lines: Vec<&str> = source.split('\n').collect();
+    // 列表缩进档位栈：把源码缩进列数换算成层级，跨行维护，非列表行清空（空行不清，
+    // 允许松散列表）。这样 2 空格（`- ` 对齐）与 3 空格（`1. ` 对齐）混用也能得到均匀层间距。
+    let mut list_indents: Vec<usize> = Vec::new();
     let mut index = 0;
     while index < source_lines.len() {
         let line = source_lines[index];
@@ -31,8 +109,21 @@ pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
             index += 1;
             continue;
         }
+        let item = list_item(line);
+        if item.is_none() {
+            list_indents.clear();
+        }
         if trimmed.trim_start().starts_with("```") {
             index = fenced_code(&source_lines, index, &mut lines);
+            continue;
+        }
+        // 缩进列表项优先于缩进代码块：模型常用 4 空格嵌套（`- xxx` 下接 `    - aaa`），
+        // 若按 CommonMark 的 4 空格规则当成代码块，整段会被渲染成一坨 `│ - aaa` 贴最左，
+        // 列表看起来就“没有缩进”。真代码块请用围栏（```）。
+        if let Some(item) = item {
+            let depth = list_depth(&mut list_indents, item.indent());
+            lines.push(item.render(depth));
+            index += 1;
             continue;
         }
         if is_indented_code(line) {
@@ -45,29 +136,25 @@ pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
             continue;
         }
         if is_rule(trimmed) {
-            lines.push(SampleLine::plain(
+            let rule_width = width.unwrap_or(40).max(1);
+            lines.push(MdLine::plain(
                 0,
-                RULE.repeat(40),
+                RULE.repeat(rule_width),
                 style::markdown_rule(),
             ));
             index += 1;
             continue;
         }
         if trimmed.trim_start().starts_with('|') {
-            index = table(&source_lines, index, &mut lines);
+            index = table::table(&source_lines, index, &mut lines, width);
             continue;
         }
         if trimmed.trim_start().starts_with('>') {
             index = blockquote(&source_lines, index, &mut lines);
             continue;
         }
-        if let Some(item) = list_item(line) {
-            lines.push(item.render());
-            index += 1;
-            continue;
-        }
         if let Some((alt, url)) = image(trimmed) {
-            lines.push(SampleLine::spans(
+            lines.push(MdLine::spans(
                 0,
                 vec![
                     (alt.to_string(), style::text()),
@@ -79,15 +166,9 @@ pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
             continue;
         }
         // 普通段落行：行内渲染。
-        lines.push(SampleLine::spans(0, inline_spans(trimmed)));
+        lines.push(MdLine::spans(0, inline_spans(trimmed)));
         index += 1;
     }
-    // 每一步都带 token 页脚。
-    lines.push(SampleLine::plain(
-        2,
-        super::format_tokens_line(tokens),
-        style::agent_tokens(),
-    ));
     lines
 }
 
@@ -95,6 +176,8 @@ pub(super) fn markdown_lines(tokens: super::Tokens) -> Vec<SampleLine> {
 const RULE: &str = "─";
 /// 引用 / 代码竖条（直角）。
 const BAR_MARKER: &str = "│";
+/// 引用块前缀标记。
+const QUOTE_MARKER: &str = ">";
 
 /// ATX 标题：`#{1,6}` 加后随空白；返回（级别、正文）。
 fn heading(line: &str) -> Option<(u8, &str)> {
@@ -108,8 +191,8 @@ fn heading(line: &str) -> Option<(u8, &str)> {
 }
 
 /// 渲染一行标题：隐藏 `#` 标记，正文用分级样式。
-fn heading_line(level: u8, body: &str) -> SampleLine {
-    SampleLine::plain(0, body, style::markdown_heading_level(level))
+fn heading_line(level: u8, body: &str) -> MdLine {
+    MdLine::plain(0, body, style::markdown_heading_level(level))
 }
 
 /// 水平线：仅由同一种 `-`/`*`/`_` 组成且至少 3 个。
@@ -132,10 +215,12 @@ fn is_rule(line: &str) -> bool {
     count >= 3
 }
 
-/// 缩进代码块行：4 个以上前导空格且非空。
+/// 缩进代码块行：4 个以上前导空格且非空（列表项已在调用前按列表处理，走不到这里）。
 fn is_indented_code(line: &str) -> bool {
     let indent = line.len() - line.trim_start_matches(' ').len();
-    indent >= 4 && !line.trim().is_empty()
+    // 列表项不算缩进代码：块级分派已优先按列表处理，这里同时兜住 `indented_code` 的
+    // 续行判断——紧跟在代码行后的 `- 子项` 形态的行会提前收尾代码块，不再漏成 `│ - 子项`。
+    indent >= 4 && !line.trim().is_empty() && list_item(line).is_none()
 }
 
 /// 图片 `![alt](url)`。
@@ -149,7 +234,7 @@ fn image(line: &str) -> Option<(&str, &str)> {
 }
 
 /// 围栏代码块：从起始 ``` 行读到闭合 ```；隐藏围栏，显示语言标记。
-fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
+fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
     let fence = source[start].trim();
     let lang = fence.trim_start_matches('`').trim();
     let mut index = start + 1;
@@ -167,7 +252,7 @@ fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> us
 }
 
 /// 缩进代码块：收集连续 4 空格缩进行。
-fn indented_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
+fn indented_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
     let mut index = start;
     let mut body = Vec::new();
     while index < source.len()
@@ -191,9 +276,9 @@ fn indented_code(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> 
 }
 
 /// 渲染代码块：每行前置直角竖条，语言作为 muted 首行；代码正文按语言做轻量语法高亮。
-fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<SampleLine>) {
+fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<MdLine>) {
     if let Some(lang) = lang {
-        lines.push(SampleLine::spans(
+        lines.push(MdLine::spans(
             0,
             vec![
                 (format!("{BAR_MARKER} "), style::markdown_rule()),
@@ -204,12 +289,12 @@ fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<SampleLine>) {
     for line in body {
         let mut spans = vec![(format!("{BAR_MARKER} "), style::markdown_rule())];
         spans.extend(highlight::highlight_line(lang, line));
-        lines.push(SampleLine::spans(0, spans));
+        lines.push(MdLine::spans(0, spans));
     }
 }
 
 /// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框）。
-fn blockquote(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
+fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
     let mut index = start;
     while index < source.len() {
         let trimmed = source[index].trim_start();
@@ -217,13 +302,12 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usi
             break;
         };
         let body = rest.strip_prefix(' ').unwrap_or(rest);
-        lines.push(SampleLine::spans(
+        let marker = format!("{QUOTE_MARKER} ");
+        lines.push(MdLine::hanging(
             0,
+            marker_width(&marker),
             vec![
-                (
-                    format!("{} ", text::agent::MD_QUOTE_MARKER),
-                    style::markdown_marker(),
-                ),
+                (marker, style::markdown_marker()),
                 (body.to_string(), style::markdown_quote()),
             ],
         ));
@@ -232,67 +316,83 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usi
     index
 }
 
-/// 列表项（无序 / 有序 / 任务），含两级嵌套缩进。
+/// 列表项（无序 / 有序 / 任务）；`indent` 是源码里的**原始缩进列数**，
+/// 层级由 [`list_depth`] 按实际出现的缩进档位换算。
 #[derive(Debug, Clone, Copy)]
 enum ListItem<'a> {
     Bullet {
-        depth: usize,
+        indent: usize,
         text: &'a str,
     },
     Ordered {
-        depth: usize,
+        indent: usize,
         number: &'a str,
         text: &'a str,
     },
     Task {
-        depth: usize,
+        indent: usize,
         done: bool,
         text: &'a str,
     },
 }
 
 impl ListItem<'_> {
-    /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）。
-    fn render(&self) -> SampleLine {
+    /// 源码缩进列数。
+    fn indent(&self) -> usize {
         match *self {
-            Self::Bullet { depth, text: body } => SampleLine::spans(
-                indent(depth),
-                vec![
-                    ("• ".to_string(), style::markdown_bullet()),
-                    (body.to_string(), style::text()),
-                ],
-            ),
+            Self::Bullet { indent, .. }
+            | Self::Ordered { indent, .. }
+            | Self::Task { indent, .. } => indent,
+        }
+    }
+
+    /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）；
+    /// `depth` 为换算后的层级（0 = 顶层）。
+    fn render(&self, depth: usize) -> MdLine {
+        match *self {
+            Self::Bullet { text: body, .. } => {
+                let marker = "• ";
+                MdLine::hanging(
+                    indent(depth),
+                    marker_width(marker),
+                    marker_spans(marker, style::markdown_bullet(), body),
+                )
+            }
             Self::Ordered {
-                depth,
-                number,
-                text: body,
-            } => SampleLine::spans(
-                indent(depth),
-                vec![
-                    (format!("{number}. "), style::markdown_ordered()),
-                    (body.to_string(), style::text()),
-                ],
-            ),
+                number, text: body, ..
+            } => {
+                let marker = format!("{number}. ");
+                MdLine::hanging(
+                    indent(depth),
+                    marker_width(&marker),
+                    marker_spans(&marker, style::markdown_ordered(), body),
+                )
+            }
             Self::Task {
-                depth,
-                done,
-                text: body,
+                done, text: body, ..
             } => {
                 let (marker, body_style) = if done {
-                    ("[x]", style::markdown_task_done())
+                    ("[x] ", style::markdown_task_done())
                 } else {
-                    ("[ ]", style::markdown_task_open())
+                    ("[ ] ", style::markdown_task_open())
                 };
-                SampleLine::spans(
-                    indent(depth),
-                    vec![
-                        (format!("{marker} "), body_style),
-                        (body.to_string(), body_style),
-                    ],
-                )
+                let mut spans = vec![(marker.to_string(), body_style)];
+                spans.extend(
+                    inline_spans(body)
+                        .into_iter()
+                        .map(|(value, _)| (value, body_style)),
+                );
+                MdLine::hanging(indent(depth), marker_width(marker), spans)
             }
         }
     }
+}
+
+/// 列表项内容：标记分段 + 行内渲染的正文（粗体/斜体/代码等在列表内同样折叠）。
+fn marker_spans(marker: &str, marker_style: Style, body: &str) -> Vec<(String, Style)> {
+    let mut spans = vec![(marker.to_string(), marker_style)];
+    spans.extend(inline_spans(body));
+    spans
 }
 
 /// 列表项缩进（每级 2 列）。
@@ -300,19 +400,42 @@ fn indent(depth: usize) -> u16 {
     (depth * 2) as u16
 }
 
+/// 把源码缩进列数换算成层级：维护“已出现缩进档位”的栈——
+/// 相同档位 = 同级；更深一档 = 下一级；更浅则回退到匹配的档位。
+fn list_depth(stack: &mut Vec<usize>, indent: usize) -> usize {
+    while let Some(last) = stack.last().copied() {
+        if last == indent {
+            break;
+        }
+        if last < indent {
+            stack.push(indent);
+            break;
+        }
+        stack.pop();
+    }
+    if stack.is_empty() {
+        stack.push(indent);
+    }
+    stack.len() - 1
+}
+
+/// 标记的显示宽度（悬挂缩进列数）。
+fn marker_width(marker: &str) -> u16 {
+    u16::try_from(display_width(marker)).unwrap_or(u16::MAX)
+}
+
 /// 解析列表项；非列表返回 None。
 fn list_item(line: &str) -> Option<ListItem<'_>> {
     let spaces = line.len() - line.trim_start_matches(' ').len();
-    let depth = spaces / 2;
     let rest = &line[spaces..];
     // 任务列表：`- [ ] ` / `- [x] `。
     if let Some(after) = rest.strip_prefix("- [") {
         let done = after.starts_with('x') || after.starts_with('X');
         let marker = after.get(1..)?.strip_prefix("] ")?;
         return Some(ListItem::Task {
-            depth,
+            indent: spaces,
             done,
-            text: marker.trim_end(),
+            text: marker.trim(),
         });
     }
     // 无序列表。
@@ -322,8 +445,8 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
         .or_else(|| rest.strip_prefix("+ "))
     {
         return Some(ListItem::Bullet {
-            depth,
-            text: after.trim_end(),
+            indent: spaces,
+            text: after.trim(),
         });
     }
     // 有序列表 `N. `。
@@ -331,157 +454,12 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
     if digits > 0 && rest.as_bytes().get(digits) == Some(&b'.') {
         let after = rest.get(digits + 1..)?.strip_prefix(' ')?;
         return Some(ListItem::Ordered {
-            depth,
+            indent: spaces,
             number: &rest[..digits],
-            text: after.trim_end(),
+            text: after.trim(),
         });
     }
     None
-}
-
-/// 表格：表头 + 对齐行 + 数据行，用方框网格。
-fn table(source: &[&str], start: usize, lines: &mut Vec<SampleLine>) -> usize {
-    let mut rows = Vec::new();
-    let mut index = start;
-    while index < source.len() && source[index].trim_start().starts_with('|') {
-        rows.push(parse_row(source[index]));
-        index += 1;
-    }
-    if rows.is_empty() {
-        return index;
-    }
-    let header = rows.first().cloned().unwrap_or_default();
-    // 第二行若为对齐行（全为 `:`/`-`），解析对齐后跳过。
-    let align = rows
-        .get(1)
-        .map(|cells| cells.iter().map(|cell| column_align(cell)).collect())
-        .unwrap_or_else(|| vec![Align::Left; header.len()]);
-    let body: Vec<Vec<String>> = rows
-        .iter()
-        .skip(if rows.len() > 1 { 2 } else { 1 })
-        .cloned()
-        .collect();
-    let columns = header.len();
-    let mut widths = vec![1usize; columns];
-    for row in std::iter::once(&header).chain(body.iter()) {
-        for (column, cell) in row.iter().enumerate() {
-            let width = display_width(cell);
-            if let Some(slot) = widths.get_mut(column) {
-                *slot = (*slot).max(width);
-            }
-        }
-    }
-    // 行尾若有数据行但其列数不足，补齐到表头列数。
-    let header = pad_row(header, columns);
-    let body = body
-        .into_iter()
-        .map(|row| pad_row(row, columns))
-        .collect::<Vec<_>>();
-    grid_table(&header, &body, &widths, &align, lines);
-    index
-}
-
-/// 把一行单元格补齐到 `columns` 列（不足补空串）。
-fn pad_row(mut cells: Vec<String>, columns: usize) -> Vec<String> {
-    while cells.len() < columns {
-        cells.push(String::new());
-    }
-    cells
-}
-
-/// 解析一行表格为单元格（去掉首尾 `|` 与空白）。
-fn parse_row(line: &str) -> Vec<String> {
-    let trimmed = line.trim().trim_start_matches('|').trim_end_matches('|');
-    trimmed
-        .split('|')
-        .map(|cell| cell.trim().to_string())
-        .collect()
-}
-
-/// 列对齐。
-#[derive(Debug, Clone, Copy)]
-enum Align {
-    Left,
-    Center,
-    Right,
-}
-
-/// 由对齐行单元格解析列对齐（`:--` 左、`:-:` 中、`--:` 右）。
-fn column_align(cell: &str) -> Align {
-    let left = cell.starts_with(':');
-    let right = cell.ends_with(':');
-    match (left, right) {
-        (true, true) => Align::Center,
-        (false, true) => Align::Right,
-        _ => Align::Left,
-    }
-}
-
-/// 单元格按显示宽度与对齐填充。
-fn pad(cell: &str, width: usize, align: Align) -> String {
-    let len = display_width(cell);
-    let pad = width.saturating_sub(len);
-    let (before, after) = match align {
-        Align::Left => (0, pad),
-        Align::Right => (pad, 0),
-        Align::Center => (pad / 2, pad - pad / 2),
-    };
-    format!("{}{}{}", " ".repeat(before), cell, " ".repeat(after))
-}
-
-/// 方框网格表格：`┌─┬─┐` / `│ x │` / `├─┼─┤` / `└─┴─┘`。
-fn grid_table(
-    header: &[String],
-    body: &[Vec<String>],
-    widths: &[usize],
-    align: &[Align],
-    lines: &mut Vec<SampleLine>,
-) {
-    let border = |left: &str, fill: &str, mid: &str, right: &str| -> String {
-        let segments: Vec<String> = widths.iter().map(|width| fill.repeat(width + 2)).collect();
-        format!("{left}{}{right}", segments.join(mid))
-    };
-    // 单元格行：两端与列间用 `│`，内容左右各留 1 空格。
-    let row_line = |cells: &[String], value_style: Style| -> Vec<(String, Style)> {
-        let rule = style::markdown_rule();
-        let mut spans = vec![("│".to_string(), rule)];
-        for (column, width) in widths.iter().enumerate() {
-            let empty = String::new();
-            let cell = cells.get(column).unwrap_or(&empty);
-            let aligned = pad(
-                cell,
-                *width,
-                align.get(column).copied().unwrap_or(Align::Left),
-            );
-            spans.push((" ".to_string(), rule));
-            spans.push((aligned, value_style));
-            spans.push((" ".to_string(), rule));
-            spans.push(("│".to_string(), rule));
-        }
-        spans
-    };
-    lines.push(SampleLine::plain(
-        0,
-        border("┌", "─", "┬", "┐"),
-        style::markdown_rule(),
-    ));
-    lines.push(SampleLine::spans(
-        0,
-        row_line(header, style::markdown_strong()),
-    ));
-    lines.push(SampleLine::plain(
-        0,
-        border("├", "─", "┼", "┤"),
-        style::markdown_rule(),
-    ));
-    for row in body {
-        lines.push(SampleLine::spans(0, row_line(row, style::text())));
-    }
-    lines.push(SampleLine::plain(
-        0,
-        border("└", "─", "┴", "┘"),
-        style::markdown_rule(),
-    ));
 }
 
 /// 行内渲染：吃掉粗体/斜体/粗斜体/删除线/行内代码标记；链接显示 `文字 (url)`。
@@ -603,8 +581,101 @@ fn link(rest: &str) -> Option<(&str, &str, usize)> {
 }
 
 /// 字符串的显示宽度（按字符宽度求和）。
-fn display_width(value: &str) -> usize {
+pub fn display_width(value: &str) -> usize {
     value.chars().map(|ch| char_width(ch) as usize).sum()
+}
+
+/// 把一条渲染行按可用宽度软换行（保留缩进；续行缩进到内容起始列）。
+///
+/// 优先在空白/汉字边界断行（对齐 opencode/主流 agent 的 word wrap），
+/// 单个超宽字符单独成行；供表格外的段落/列表/引用/代码使用。
+fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
+    let first_indent = usize::from(line.indent);
+    let hang = usize::from(line.hang);
+    let cont_indent = first_indent.saturating_add(hang);
+    let cells: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
+        .collect();
+    if cells.is_empty() {
+        out.push(MdLine::spans(line.indent, Vec::new()));
+        return;
+    }
+    let mut index = 0usize;
+    let mut first = true;
+    while index < cells.len() {
+        // 首行含标记（`• ` / `1. ` / `> `），续行用悬挂缩进对齐正文起始列。
+        let indent = if first { first_indent } else { cont_indent };
+        let avail = width.saturating_sub(indent).max(1);
+        // 适应 `avail` 列的最大结束下标。
+        let mut col = 0usize;
+        let mut end = index;
+        while end < cells.len() {
+            let cell = char_width(cells[end].0) as usize;
+            if col + cell > avail {
+                break;
+            }
+            col += cell;
+            end += 1;
+        }
+        if end == index {
+            end = index + 1; // 单字符超宽：单独成行。
+        }
+        // 未到行尾时，回退到最近一个空白之后断行（词优先）。
+        let mut break_at = end;
+        if end < cells.len() {
+            for probe in (index..end).rev() {
+                if cells[probe].0.is_whitespace() {
+                    break_at = probe + 1;
+                    break;
+                }
+            }
+        }
+        // 首行不能断在标记内部（否则出现 `•` 独占一行的孤儿标记）：
+        // 断点没越过标记宽度时改为按列硬切。
+        if first && break_at <= index.saturating_add(hang) {
+            break_at = end;
+        }
+        let mut spans: Vec<(String, Style)> = Vec::new();
+        for (ch, span_style) in &cells[index..break_at] {
+            if let Some(last) = spans.last_mut()
+                && last.1 == *span_style
+            {
+                last.0.push(*ch);
+                continue;
+            }
+            spans.push((ch.to_string(), *span_style));
+        }
+        trim_trailing_whitespace(&mut spans);
+        out.push(MdLine::spans(
+            u16::try_from(indent).unwrap_or(u16::MAX),
+            spans,
+        ));
+        index = break_at;
+        first = false;
+        // 跳过下一物理行的行首空白。
+        while index < cells.len() && cells[index].0 == ' ' {
+            index += 1;
+        }
+    }
+}
+
+/// 去掉行尾空白分段（软换行产生的悬挂空格）。
+fn trim_trailing_whitespace(spans: &mut Vec<(String, Style)>) {
+    while let Some((value, _)) = spans.last() {
+        let trimmed = value.trim_end();
+        if trimmed.len() == value.len() {
+            break;
+        }
+        if trimmed.is_empty() {
+            spans.pop();
+        } else {
+            let trimmed = trimmed.to_string();
+            spans.last_mut().expect("last").0 = trimmed;
+            break;
+        }
+    }
 }
 
 /// 单个字符的显示宽度。

@@ -16,7 +16,7 @@ use crate::ui::widgets::command_panel::{
 /// 面板最多显示的内容行数；对齐 codex `MAX_POPUP_ROWS`（8），保证浮层观感统一。
 pub(crate) const MAX_POPUP_ROWS: u16 = 8;
 /// 面板边框行数（上下各一行）。
-const PANEL_BORDER_ROWS: u16 = 2;
+pub(super) const PANEL_BORDER_ROWS: u16 = 2;
 
 /// 提及面板条目文本：候选文件/目录（双行）或状态行（单行）。
 enum PanelRow {

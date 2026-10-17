@@ -53,7 +53,7 @@ pub fn border_title() -> Style {
         .remove_modifier(Modifier::BOLD)
 }
 
-/// 选中项：主题强调色填充（Cyan 底、黑字、加粗）；激活标签使用。
+/// 主题强调色填充（Cyan 底、黑字、加粗）；激活标签使用。
 pub fn selected_item() -> Style {
     Style::default()
         .fg(Color::Black)
@@ -129,6 +129,13 @@ pub fn agent_ok() -> Style {
 /// Agent 步骤失败/中断标记（Red 加粗）。
 pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+}
+
+/// Agent 通知的警告标记（Yellow 加粗）：本轮未完成等需要留意、但非失败的情况。
+pub fn agent_warn() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗高亮，让图标从标题里跳出。
@@ -461,6 +468,49 @@ pub fn template_block_bg(status: TemplateStatus) -> Style {
 /// 补充块 `+++` 结构标记：次要信息。
 pub fn supple_marker() -> Style {
     muted()
+}
+
+/// 用户聊天消息整块底色（低饱和暗蓝，Indexed）：跨行一致、不抢正文。
+pub fn chat_user_bg() -> Style {
+    Style::default().bg(Color::Indexed(236))
+}
+
+/// 通知原因行的连接符（`└─`）：供应商同款灰色（[`chat_provider`]）+ 加粗。
+pub fn chat_notice_connector() -> Style {
+    chat_provider().add_modifier(Modifier::BOLD)
+}
+
+/// 状态行模型名：与 lx 页三个模式入口标签**同款**的粉→蓝逐字符渐变 + 加粗
+/// （入口标签的 `selected` 态）。端点固定用 Native 的 `218→117`；`position`/`length`
+/// 按**显示字符**计，渐变按整条标签取样，软换行不会改变某个字符的颜色。
+pub fn model_label_style(position: usize, length: usize) -> Style {
+    lx_entry_label_style(crate::app::state::LxEntry::Native, position, length, true)
+}
+
+/// 状态行供应商名：与本轮统计行（assistant 消息底部）同款次要信息色。
+pub fn chat_provider() -> Style {
+    muted()
+}
+
+/// lx 输入框上方 loading 行：转轮用品牌天蓝（Indexed 117）加粗。
+pub fn chat_loading_spinner() -> Style {
+    Style::default()
+        .fg(Color::Indexed(117))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// lx 输入框上方 loading 行文案：次要信息。
+pub fn chat_loading_label() -> Style {
+    muted()
+}
+
+/// loading 行右端「回到底部」按钮：常态次要信息、悬停亮白。
+pub fn chat_jump_bottom(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(252))
+    } else {
+        muted()
+    }
 }
 
 /// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。

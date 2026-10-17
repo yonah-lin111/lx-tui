@@ -85,10 +85,13 @@ fn entry_label_spans_a_gradient() {
 #[test]
 fn empty_input_box_is_minimal_height() {
     let area = Rect::new(0, 0, 60, 16);
-    let input = layout(area, &Lx::new()).input.expect("input block");
+    let lx = Lx::new();
+    let lay = layout(area, &lx);
+    let input = lay.input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX);
     assert_eq!(input.x, area.x + MARGIN);
-    assert_eq!(input.y, area.bottom() - INPUT_MIN_BOX);
+    // 输入框下沿贴窗格底部（状态绘制在底边框上，不再单独占行）。
+    assert_eq!(input.bottom(), area.bottom());
 }
 
 #[test]
@@ -100,7 +103,7 @@ fn multiline_input_grows_the_box() {
     lx.insert_char('b');
     let input = layout(area, &lx).input.expect("input block");
     assert_eq!(input.height, INPUT_MIN_BOX + 1, "两行内容");
-    assert_eq!(input.y, area.bottom() - INPUT_MIN_BOX - 1);
+    assert_eq!(input.bottom(), area.bottom());
 }
 
 #[test]
@@ -205,7 +208,9 @@ fn input_box_is_capped_at_forty_percent() {
         lx.insert_char('x');
     }
     let input = layout(area, &lx).input.expect("input");
-    assert_eq!(input.height, 40 * INPUT_MAX_PERCENT / 100, "封顶 40%");
+    // 输入框高度上限=内容区高度取 40%。
+    let expected = (area.height * INPUT_MAX_PERCENT / 100).max(INPUT_MIN_BOX);
+    assert_eq!(input.height, expected, "封顶 40%");
 }
 
 #[test]
@@ -325,7 +330,7 @@ fn cursor_is_relative_to_content_area() {
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
     assert!(buffer_text(&buf).contains("hi"));
-    // 行相对内容区：输入行是底部 3 行块的中行。
+    // 行相对内容区：输入框下沿贴底，内容行即倒数第 2 行（底边框为最后一行）。
     assert_eq!(cursor.0, area.height - 2);
     assert_eq!(cursor.1, MARGIN + 2 + 2);
 }
@@ -339,7 +344,7 @@ fn cursor_follows_the_active_line() {
     lx.insert_char('b');
     let mut buf = Buffer::empty(area);
     let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
-    // 输入框高 4：内容行在倒数第 2、3 行；光标在第二行。
+    // 行相对内容区：输入框高 4，末行内容在倒数第 2 行（最后一行是底边框）。
     assert_eq!(cursor.0, area.height - 2);
     assert_eq!(cursor.1, MARGIN + 2 + 1);
 }
@@ -699,4 +704,548 @@ fn mention_panel_height_limited_by_space_above_input() {
     let panel = mention::layout(area, &lx).expect("panel");
     assert!(panel.rect.height <= input.y, "面板不超过输入框上方空间");
     assert_eq!(panel.rect.bottom(), input.y, "面板紧贴输入框上沿");
+}
+
+// ===== `/` 命令面板（与 `@` 面板同款几何/交互） =====
+
+use crate::app::state::lx::slash::{ModelPicker, PanelWindow};
+use crate::app::state::{ModelCandidate, ModelPickerStage, SlashCommand, SlashPanel};
+
+/// 构造带 `/` 命令候选面板的 lx 状态。
+fn slash_commands_lx(active: usize) -> Lx {
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Commands {
+        items: SlashCommand::ALL.to_vec(),
+        window: PanelWindow::new(active),
+    });
+    lx
+}
+
+/// 构造带 `/model` 第一级面板的 lx 状态（两个候选，展示名与 id 不同）。
+fn slash_model_lx() -> Lx {
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
+        stage: ModelPickerStage::Models,
+        candidates: vec![
+            ModelCandidate {
+                selection: crate::config::ai::ModelSelection {
+                    provider: "provider-alq374".into(),
+                    model: "cbcn/deepseek-v4.1-flash".into(),
+                    variant: None,
+                },
+                provider_name: "9router-lx-t".into(),
+                model_name: "deepseek-v4.1-flash".into(),
+            },
+            ModelCandidate {
+                selection: crate::config::ai::ModelSelection {
+                    provider: "provider-alq374".into(),
+                    model: "gpt-5.6-luna".into(),
+                    variant: None,
+                },
+                provider_name: "9router-lx-t".into(),
+                model_name: "gpt-5.6-luna".into(),
+            },
+        ],
+        window: PanelWindow::new(0),
+    })));
+    lx
+}
+
+/// 构造带 `/resume` 空历史面板的 lx 状态。
+fn slash_resume_empty_lx() -> Lx {
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::History(Box::default()));
+    lx
+}
+
+#[test]
+fn slash_panel_is_same_width_as_input_and_adjacent() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_commands_lx(0);
+    let input = layout(area, &lx).input.expect("input");
+    let panel = slash_layout(area, &lx).expect("slash panel");
+    assert_eq!(panel.rect.x, input.x, "面板左边缘与输入框一致（充满）");
+    assert_eq!(panel.rect.width, input.width, "面板与输入框等宽");
+    assert_eq!(
+        panel.rect.bottom(),
+        input.y,
+        "面板底边紧贴输入框上沿（不覆盖输入框）"
+    );
+}
+
+#[test]
+fn slash_panel_width_stays_full_for_narrow_content() {
+    // 命令文本很短，面板仍须撑满输入框宽度。
+    let area = Rect::new(0, 0, 100, 30);
+    let lx = slash_commands_lx(0);
+    let input = layout(area, &lx).input.expect("input");
+    let panel = slash_layout(area, &lx).expect("slash panel");
+    assert_eq!(panel.rect.width, input.width);
+    assert!(panel.rect.width > 40, "远宽于内容自然宽度");
+}
+
+#[test]
+fn slash_panel_absent_without_panel() {
+    let area = Rect::new(0, 0, 80, 24);
+    assert!(slash_layout(area, &Lx::new()).is_none());
+}
+
+#[test]
+fn slash_model_and_resume_show_empty_placeholder_row() {
+    let area = Rect::new(0, 0, 80, 24);
+    let resume = slash_resume_empty_lx();
+    let layout = slash_layout(area, &resume).expect("empty panel still has a row");
+    assert!(layout.visible >= 1, "空态占位行可见");
+    // `/model` 无候选同样显示占位（而非整块消失）。
+    let mut lx = Lx::new();
+    lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
+        stage: ModelPickerStage::Models,
+        candidates: Vec::new(),
+        window: PanelWindow::new(0),
+    })));
+    assert!(slash_layout(area, &lx).is_some());
+}
+
+#[test]
+fn slash_item_hit_matches_visible_row() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_commands_lx(0);
+    let panel = slash_layout(area, &lx).expect("panel");
+    // 首个可见条目行 → 索引等于窗口起点。
+    assert_eq!(
+        slash_item_at(area, &lx, panel.content.x, panel.content.y),
+        Some(panel.start)
+    );
+    // 面板外不命中。
+    assert_eq!(slash_item_at(area, &lx, 0, 0), None);
+}
+
+#[test]
+fn slash_empty_placeholder_is_not_clickable() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_resume_empty_lx();
+    let panel = slash_layout(area, &lx).expect("panel");
+    assert_eq!(
+        slash_item_at(area, &lx, panel.content.x, panel.content.y),
+        None,
+        "空态占位不可选"
+    );
+}
+
+#[test]
+fn slash_model_panel_is_full_width_and_lists_models() {
+    // `/model` 第一级：候选为模型名，面板仍充满输入框宽度。
+    let area = Rect::new(0, 0, 90, 24);
+    let lx = slash_model_lx();
+    let input = layout(area, &lx).input.expect("input");
+    let panel = slash_layout(area, &lx).expect("model panel");
+    assert_eq!(panel.rect.width, input.width);
+    assert_eq!(panel.rect.bottom(), input.y);
+    assert_eq!(panel.visible, 2, "两个模型候选可见");
+}
+
+#[test]
+fn slash_panel_renders_ascii_only() {
+    // 面板（含标题/预览/来源标签/底边提示）不得出现双宽字符，否则中文会撑破布局。
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_commands_lx(0);
+    let mut buf = Buffer::empty(area);
+    let (built, _cursor, _sticky) = build(area, &lx, true);
+    blit_grid(area, &mut buf, &built);
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let Some(cell) = buf.cell((x, y)) else {
+                continue;
+            };
+            for ch in cell.symbol().chars() {
+                let width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                assert!(width <= 1, "面板出现双宽字符 {ch:?} at ({x},{y})");
+            }
+        }
+    }
+    // 文案常量不得含双宽字符（含右对齐来源标签与底边提示）；命令描述须为纯 ASCII。
+    for text in [
+        crate::ui::text::LX_SLASH_PANEL_TITLE,
+        crate::ui::text::LX_SLASH_PANEL_FOOTER,
+        crate::ui::text::LX_MODEL_PANEL_TITLE,
+        crate::ui::text::LX_HISTORY_PANEL_TITLE,
+        crate::ui::text::LX_CHAT_NO_MODEL,
+        crate::ui::text::LX_HISTORY_EMPTY,
+    ] {
+        for ch in text.chars() {
+            let width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            assert!(width <= 1, "面板文案含双宽字符 {ch:?} in {text:?}");
+        }
+    }
+    for command in SlashCommand::ALL {
+        assert!(command.text().is_ascii(), "命令文本 ASCII");
+        assert!(command.description().is_ascii(), "命令描述不得含中文");
+        assert!(command.tag().is_ascii(), "来源标签 ASCII");
+    }
+}
+
+#[test]
+fn initial_page_shows_status_on_pane_bottom_border() {
+    // 模拟窗格：内容区 `inner` + 底边框行（`inner.bottom()`，位于 inner 之外）。
+    let rect = Rect::new(0, 0, 80, 24);
+    let inner = crate::layout::pane_inner_rect(rect);
+    let mut lx = Lx::new();
+    lx.chat.status = crate::app::state::lx::chat::ChatStatus {
+        model_name: Some("deepseek-v4.1-flash".into()),
+        provider_name: Some("9router-lx-t".into()),
+        context_limit: Some(1_000_000),
+        input_tokens: Some(720_000),
+        streaming: false,
+        omitted_turns: None,
+    };
+    let lay = layout(inner, &lx);
+    let input = lay.input.expect("input");
+    // 输入框保留自己的上下分割线，下沿仍贴内容区底部（状态改画在窗格底边框上）。
+    assert_eq!(input.bottom(), inner.bottom());
+    // 底边框行预铺 `─`（保留两角）后渲染状态，检查覆盖效果。
+    let mut buf = Buffer::empty(rect);
+    let row = inner.bottom();
+    for x in rect.x..rect.right() {
+        if let Some(cell) = buf.cell_mut((x, row)) {
+            cell.set_char('─');
+        }
+    }
+    render(inner, &mut buf, &lx, false, None);
+    let border: String = (rect.x..rect.right())
+        .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
+        .collect();
+    assert!(
+        border.contains("deepseek-v4.1-flash") && border.contains("9router-lx-t"),
+        "底边框显示模型 · 供应商：{border}"
+    );
+    assert!(
+        border.contains("context:720k(72%)"),
+        "底边框显示上下文占用 `context:720k(72%)`：{border}"
+    );
+}
+
+#[test]
+fn chat_history_scrollbar_geometry_appears_when_overflowing() {
+    use crate::app::state::{ChatMessageView, ChatPartView, LxChat};
+    let area = Rect::new(0, 0, 40, 6);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    for index in 0..12 {
+        chat.messages.push(ChatMessageView {
+            id: format!("m{index}"),
+            role: "user".into(),
+            status: "complete".into(),
+            turn_index: index,
+            parts: vec![ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: format!("消息 {index}"),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+    }
+    lx.chat = chat;
+    let bar = history_scrollbar(area, &lx).expect("溢出时有滚动条几何");
+    // 滚动条贴历史区（与输入框同宽）右缘一列。
+    let input = layout(area, &lx).input.expect("input");
+    assert_eq!(bar.track.x, input.right() - 1, "滚动条在输入框右缘内一列");
+    assert!(bar.total > bar.visible);
+}
+
+#[test]
+fn overflowing_history_draws_scrollbar_glyphs() {
+    use crate::app::state::{ChatMessageView, ChatPartView, LxChat};
+    let area = Rect::new(0, 0, 40, 10);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    for index in 0..12 {
+        chat.messages.push(ChatMessageView {
+            id: format!("m{index}"),
+            role: "user".into(),
+            status: "complete".into(),
+            turn_index: index,
+            parts: vec![ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: format!("消息 {index}"),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+    }
+    lx.chat = chat;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains('▐') || text.contains('▕'),
+        "溢出时历史滚动条可见：{text}"
+    );
+}
+
+#[test]
+fn model_panel_shows_provider_and_model_names_not_ids() {
+    let area = Rect::new(0, 0, 80, 24);
+    let lx = slash_model_lx();
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("deepseek-v4.1-flash"), "显示模型名：{text}");
+    assert!(text.contains("9router-lx-t"), "显示供应商名：{text}");
+    // 不能出现原始 id。
+    assert!(
+        !text.contains("provider-alq374"),
+        "不应显示供应商 id：{text}"
+    );
+    assert!(!text.contains("cbcn/"), "不应显示模型 id：{text}");
+}
+
+// ===== 输入框上方聊天栏（loading 转轮 + 回到底部按钮）=====
+
+use crate::app::state::{ChatMessageView, ChatPartView, LxChat};
+
+/// 构造带一条 assistant 流中消息的 lx 状态。
+fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "m0".into(),
+        role: "assistant".into(),
+        status: if streaming { "streaming" } else { "complete" }.into(),
+        turn_index: 0,
+        parts: vec![ChatPartView {
+            kind: crate::chat::events::PartKind::Text,
+            content: "答".into(),
+            provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    chat.follow_bottom = follow_bottom;
+    chat.status.streaming = streaming;
+    chat.loading_frame = 0;
+    lx.chat = chat;
+    lx
+}
+
+#[test]
+fn streaming_shows_loading_bar_above_input() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(true, true);
+    let lay = layout(area, &lx);
+    let input = lay.input.expect("input");
+    let bar = lay.chat_bar.expect("流中显示聊天栏");
+    assert_eq!(bar.bottom(), input.y, "聊天栏紧贴输入框上沿");
+    assert_eq!(bar.height, 1);
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains(text::LX_LOADING_LABEL),
+        "显示 loading 文案：{text}"
+    );
+    assert!(
+        text::LX_LOADING_FRAMES
+            .iter()
+            .any(|frame| text.contains(*frame)),
+        "显示转轮帧：{text}"
+    );
+}
+
+#[test]
+fn idle_following_hides_chat_bar() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(false, true);
+    assert!(
+        layout(area, &lx).chat_bar.is_none(),
+        "空闲且跟随底部：无聊天栏"
+    );
+}
+
+#[test]
+fn scrolled_up_shows_jump_bottom_button() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(false, false);
+    let rect = chat_bar::jump_bottom_rect(area, &lx).expect("上滚时显示回到底部控件");
+    let bar = layout(area, &lx).chat_bar.expect("chat bar");
+    assert_eq!(rect.right(), bar.right() - 1, "控件贴聊天栏右端（留 1 列）");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains(text::LX_JUMP_BOTTOM), "显示 ↓ 箭头：{text}");
+    assert!(
+        text.contains(text::LX_JUMP_BOTTOM_HINT),
+        "箭头右侧显示说明：{text}"
+    );
+}
+
+#[test]
+fn jump_bottom_hit_matches_button_rect() {
+    use crate::app::state::AppState;
+    let area = Rect::new(0, 0, 60, 16);
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx = streaming_lx(false, false);
+    }
+    // 直接构造窗格矩形（内缩 1 边框），命中按钮内部一格。
+    let rects = [(pane, Rect::new(0, 0, 62, 18))];
+    let inner = crate::layout::pane_inner_rect(rects[0].1);
+    let button =
+        chat_bar::jump_bottom_rect(inner, &state.pane_anywhere(pane).unwrap().lx).expect("button");
+    assert_eq!(
+        chat_bar::jump_bottom_hit(&rects, &state, button.x, button.y),
+        Some(pane),
+        "命中回到底部按钮"
+    );
+    assert_eq!(
+        chat_bar::jump_bottom_hit(&rects, &state, 0, 0),
+        None,
+        "未命中"
+    );
+    let _ = area;
+}
+
+#[test]
+fn esc_armed_replaces_loading_label_with_stop_hint() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = streaming_lx(true, true);
+    lx.chat.stop_armed_at = Some(std::time::Instant::now());
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("Press esc again to stop"), "待命提示：{text}");
+    assert!(
+        !text.contains(text::LX_LOADING_LABEL),
+        "提示替换 Working：{text}"
+    );
+    // 未待命（超时/未按 Esc）时仍是普通 loading 文案。
+    lx.chat.stop_armed_at = None;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    assert!(buffer_text(&buf).contains(text::LX_LOADING_LABEL));
+}
+
+#[test]
+fn esc_hint_shortens_on_narrow_bar() {
+    let area = Rect::new(0, 0, 28, 16);
+    let mut lx = streaming_lx(true, true);
+    lx.chat.stop_armed_at = Some(std::time::Instant::now());
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("esc again"), "窄栏取短短语：{text}");
+    assert!(
+        !text.contains("Press esc again to stop"),
+        "放不下时不画长短语：{text}"
+    );
+}
+
+// ===== 置顶用户消息行（命中与跳转目标）=====
+
+/// 构造溢出视口的历史：两轮问答，正文各若干行。
+fn sticky_history_lx() -> Lx {
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    let mut push = |role: &str, text: &str| {
+        chat.messages.push(ChatMessageView {
+            id: format!("{role}-{}", chat.messages.len()),
+            role: role.into(),
+            status: "complete".into(),
+            turn_index: 0,
+            parts: vec![ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: text.into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+    };
+    push("user", "第一轮的问题");
+    push("assistant", "A1\nA2\nA3\nA4\nA5");
+    push("user", "第二轮的问题");
+    push("assistant", "B1\nB2\nB3\nB4\nB5");
+    lx.chat = chat;
+    lx
+}
+
+#[test]
+fn sticky_prompt_row_is_clickable_and_jumps_to_the_prompt() {
+    let area = Rect::new(0, 0, 40, 16);
+    let mut lx = sticky_history_lx();
+    lx.chat.follow_bottom = false;
+    // 扫一个"顶行落在回复里"的滚动位置（几何随布局变化，不硬编码行号）。
+    let mut found = None;
+    for scroll in 0..32 {
+        lx.chat.history_scroll = scroll;
+        if let Some(view) = history_view(area, &lx)
+            && let Some(message) = view.sticky
+        {
+            found = Some((message, view.area.y, view.messages[message].start));
+            break;
+        }
+    }
+    let (message, row_y, start) = found.expect("存在置顶行");
+    assert_eq!(message, 0, "钉第一轮 prompt（顶行在第一轮回复里）");
+    assert_eq!(
+        chat_hit(area, &lx, area.x + 4, row_y),
+        Some(LxChatHit::PromptHeader),
+        "置顶行整宽可点"
+    );
+    assert_eq!(
+        sticky_prompt_jump(area, &lx),
+        Some(start),
+        "跳转目标 = 该消息起始行"
+    );
+    // 非置顶行不命中（body 第一行是正文）。
+    assert_eq!(chat_hit(area, &lx, area.x + 4, row_y + 1), None);
+}
+
+#[test]
+fn history_rows_uses_body_height_while_sticky_is_shown() {
+    let area = Rect::new(0, 0, 40, 16);
+    let mut lx = sticky_history_lx();
+    lx.chat.follow_bottom = false;
+    let mut with_sticky = None;
+    for scroll in 0..32 {
+        lx.chat.history_scroll = scroll;
+        if let Some(view) = history_view(area, &lx)
+            && view.sticky.is_some()
+        {
+            with_sticky = Some((view.body.height, view.total_rows));
+            break;
+        }
+    }
+    let (body_height, total) = with_sticky.expect("存在置顶行");
+    assert_eq!(
+        history_rows(area, &lx),
+        Some((total, usize::from(body_height))),
+        "滚轮钳制用 body 高度（否则滚不到最后一行）"
+    );
 }

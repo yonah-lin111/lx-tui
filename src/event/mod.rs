@@ -1,5 +1,6 @@
 //! 唯一事件循环：tokio select 收敛键盘、PTY 输出与渲染调度。
 
+pub(crate) mod chat;
 pub(crate) mod commands;
 mod git;
 pub(crate) mod input;
@@ -90,12 +91,17 @@ pub enum AppEvent {
         id: u64,
         outcome: Result<PathBuf, crate::app::referenced::PathValidation>,
     },
+    /// lx 聊天网络流事件（delta / finished）；按 request key 过滤。
+    ChatNet(chat::ChatNetEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
 const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 /// 空闲等待：只由输入或 PTY 输出唤醒。
 const IDLE_WAIT: Duration = Duration::from_secs(3600);
+
+/// lx loading 转轮每帧间隔（对齐 codex motion.rs 的 100ms）。
+const LOADING_FRAME_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 同步入口：构造 tokio 运行时并阻塞到主循环结束；持久化服务由入口构造并移交。
 pub fn run(
@@ -128,6 +134,8 @@ async fn run_loop(
         }
     };
     state.settings_available = settings_service.is_some();
+    // 模型配置：启动加载（首次已由 main 导入）；加载后刷新状态行。
+    load_models_snapshot(state);
     // 自定义命令重载触发：启动、切换显示工作区与设置页写入后。
     let mut commands_reload = true;
     let mut last_prompt_workspace = state.prompt_workspace();
@@ -137,6 +145,8 @@ async fn run_loop(
     let mut events = EventStream::new();
     let mut dirty = true;
     let mut last_draw = Instant::now();
+    // lx loading 转轮的下一帧时刻；无流中窗格时为 None（空闲不轮询）。
+    let mut spinner_at: Option<Instant> = None;
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
     let mut cwd_check: Option<Instant> = None;
@@ -144,6 +154,8 @@ async fn run_loop(
     let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
+    // lx 聊天在途流的取消句柄。
+    let mut chat_streams = chat::ChatStreams::default();
     commands::seed_git_requests(state);
 
     while !state.should_quit {
@@ -154,6 +166,11 @@ async fn run_loop(
             match event {
                 SettingsEvent::ConfigChanged(updated) => config = updated,
                 SettingsEvent::CommandsChanged => commands_reload = true,
+                SettingsEvent::ModelsChanged(settings) => {
+                    // 模型配置已落盘：更新快照；在途请求继续持有旧快照到结束，
+                    // 下一轮发送才用新配置。
+                    update::apply_models_changed(state, &settings);
+                }
             }
             dirty = true;
         }
@@ -187,6 +204,10 @@ async fn run_loop(
         commands_reload = false;
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
+            dirty = true;
+        }
+        // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
+        if chat::pump_chat_streams(state, &mut chat_streams, &sender) {
             dirty = true;
         }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
@@ -230,8 +251,23 @@ async fn run_loop(
         if update::tick(state, Instant::now()) {
             dirty = true;
         }
+        // lx loading 转轮：流中每 `LX_LOADING_FRAME_MS` 推进一帧（无流时不计时）。
+        let streaming = state.has_streaming_lx();
+        if streaming {
+            let at = spinner_at.get_or_insert_with(|| Instant::now() + LOADING_FRAME_INTERVAL);
+            if Instant::now() >= *at {
+                spinner_at = Some(*at + LOADING_FRAME_INTERVAL);
+                if update::advance_lx_loading(state) {
+                    dirty = true;
+                }
+            }
+        } else {
+            spinner_at = None;
+        }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            // 置顶用户消息行结论：渲染前落状态（渲染层只读，不写状态）。
+            update::resolve_lx_sticky_prompt(state, &geometry.rects);
             tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();
@@ -245,6 +281,9 @@ async fn run_loop(
         };
         if let Some(deadline) = update::next_deadline(state) {
             wait = wait.min(deadline.saturating_duration_since(Instant::now()));
+        }
+        if let Some(at) = spinner_at {
+            wait = wait.min(at.saturating_duration_since(Instant::now()));
         }
         if let Some(at) = cwd_check {
             wait = wait.min(at.saturating_duration_since(Instant::now()));
@@ -268,9 +307,21 @@ async fn run_loop(
             },
             message = receiver.recv() => {
                 if let Some(message) = message {
-                    handle_app_event(message, state, &mut sessions, &mut git_inflight);
+                    handle_app_event(
+                        message,
+                        state,
+                        &mut sessions,
+                        &mut git_inflight,
+                        &mut chat_streams,
+                    );
                     while let Ok(message) = receiver.try_recv() {
-                        handle_app_event(message, state, &mut sessions, &mut git_inflight);
+                        handle_app_event(
+                            message,
+                            state,
+                            &mut sessions,
+                            &mut git_inflight,
+                            &mut chat_streams,
+                        );
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
                     cwd_check.get_or_insert_with(|| Instant::now() + session::CWD_CHECK_DELAY);
@@ -307,6 +358,23 @@ fn initialize_layout_widths(
     Ok(())
 }
 
+/// 启动加载模型配置快照；缺失或损坏时留空配置并刷新状态行。
+fn load_models_snapshot(state: &mut AppState) {
+    let path = match crate::config::ai::ai_config_path() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::warn!(%error, "ai config path unavailable");
+            return;
+        }
+    };
+    match crate::config::ai::load_ai(&path) {
+        Ok(Some(settings)) => state.models.settings = settings,
+        Ok(None) => {}
+        Err(error) => tracing::warn!(%error, "ai config load failed"),
+    }
+    update::refresh_all_lx_status(state);
+}
+
 fn handle_terminal_event(
     event: TerminalEvent,
     state: &mut AppState,
@@ -334,6 +402,7 @@ fn handle_app_event(
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
     git_inflight: &mut HashSet<PathBuf>,
+    chat_streams: &mut chat::ChatStreams,
 ) {
     match message {
         AppEvent::PaneOutput(id, bytes) => {
@@ -390,6 +459,10 @@ fn handle_app_event(
                 update::apply_referenced_validation_error(state, id, error);
             }
         },
+        AppEvent::ChatNet(event) => {
+            // 网络事件按 key 过滤后转 update；调用方随后统一置脏。
+            chat::handle_net_event(state, chat_streams, event);
+        }
         AppEvent::PromptWorktreeListed {
             repo_root,
             candidates,

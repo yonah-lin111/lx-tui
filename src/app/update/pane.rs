@@ -73,9 +73,11 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
 ///
-/// 面板优先级：粘贴参照 > `@` 提及 > md 块命令；面板打开时其余按键吞掉。
+/// 面板优先级：粘贴参照 > `@` 提及 > `/` 命令（model/resume/new） > md 块命令；
+/// 面板打开时其余按键按面板策略吞掉。
 /// 提及面板打开时 `↑`/`↓` 移动高亮、`Tab`/`Enter` 采纳、`Shift+Enter` 进入目录、`Esc` 关闭。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
+    let pane_id = state.active_tab().layout.focus();
     let Some(pane) = state.active_pane_mut() else {
         return;
     };
@@ -139,6 +141,55 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     if mention_visible && command == LxInput::EnterFolder {
         return;
     }
+    // `/` 命令面板：与 `@` 提及面板一致的交互——仅接管导航、采纳与关闭，
+    // 其余编辑键**继续走下方编辑分支并重算面板**，因此可以删除 `/`（触发消失即关闭）
+    // 或继续输入做模糊过滤。Model/Resume/History 二级面板仍吞掉编辑键（其内容不由草稿驱动）。
+    if let Some(slash) = lx.slash.as_ref() {
+        let move_panel = |lx: &mut super::super::state::Lx, delta: isize| {
+            if let Some(panel) = lx.slash.as_mut() {
+                panel.move_active(delta);
+            }
+        };
+        let editable = matches!(slash, super::super::state::SlashPanel::Commands { .. });
+        match command {
+            LxInput::Up => {
+                move_panel(lx, -1);
+                return;
+            }
+            LxInput::Down => {
+                move_panel(lx, 1);
+                return;
+            }
+            LxInput::Enter | LxInput::Tab => {}
+            LxInput::Escape => {
+                match slash {
+                    super::super::state::SlashPanel::Model(picker)
+                        if matches!(
+                            picker.stage,
+                            super::super::state::ModelPickerStage::Variants { .. }
+                        ) =>
+                    {
+                        if let Some(panel) = lx.slash.as_mut()
+                            && let super::super::state::SlashPanel::Model(picker) = panel
+                        {
+                            picker.stage = super::super::state::ModelPickerStage::Models;
+                            picker.window =
+                                super::super::state::PanelWindow::new(picker.window.active);
+                        }
+                    }
+                    _ => lx.slash = None,
+                }
+                return;
+            }
+            // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板吞掉。
+            _ if editable => {}
+            _ => return,
+        }
+        if command == LxInput::Enter || command == LxInput::Tab {
+            super::chat::apply_slash_enter(state, pane_id);
+            return;
+        }
+    }
     let panel_open = lx.panel.is_some();
     match command {
         LxInput::Up if panel_open => lx.panel_move(-1),
@@ -150,11 +201,20 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             lx.panel_accept();
         }
         LxInput::Escape if panel_open => lx.panel_close(),
-        LxInput::Char(ch) => lx.insert_char(ch),
+        LxInput::Char(ch) => {
+            lx.insert_char(ch);
+            refresh_slash_panel(state, pane_id);
+        }
         // 提及面板未打开时 Shift+Enter 回落为换行。
         LxInput::Newline | LxInput::EnterFolder => lx.newline(),
-        LxInput::Backspace => lx.backspace(),
-        LxInput::Delete => lx.delete(),
+        LxInput::Backspace => {
+            lx.backspace();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::Delete => {
+            lx.delete();
+            refresh_slash_panel(state, pane_id);
+        }
         LxInput::Left => lx.move_left(),
         LxInput::Right => lx.move_right(),
         LxInput::Up => lx.move_up(),
@@ -163,16 +223,116 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::End | LxInput::LineEnd => lx.end(),
         LxInput::WordLeft => lx.word_left(),
         LxInput::WordRight => lx.word_right(),
-        LxInput::DeleteToLineStart => lx.delete_to_line_start(),
-        LxInput::DeleteToLineEnd => lx.delete_to_line_end(),
-        LxInput::DeleteWordBackward => lx.delete_word_backward(),
-        LxInput::DeleteWordForward => lx.delete_word_forward(),
-        LxInput::Undo => lx.undo(),
-        LxInput::Redo => lx.redo(),
-        LxInput::Clear => lx.clear(),
-        // 无面板时 Enter 预留给发送、Tab/Esc 吞掉。
-        LxInput::Enter | LxInput::Tab | LxInput::Escape => {}
+        LxInput::DeleteToLineStart => {
+            lx.delete_to_line_start();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::DeleteToLineEnd => {
+            lx.delete_to_line_end();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::DeleteWordBackward => {
+            lx.delete_word_backward();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::DeleteWordForward => {
+            lx.delete_word_forward();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::Undo => {
+            lx.undo();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::Redo => {
+            lx.redo();
+            refresh_slash_panel(state, pane_id);
+        }
+        LxInput::Clear => {
+            lx.clear();
+            refresh_slash_panel(state, pane_id);
+        }
+        // 无面板且 Native 空闲时 Enter 发送；流中不重复发送。
+        LxInput::Enter => {
+            super::chat::try_send(state, pane_id);
+        }
+        // 无面板：Esc 在流中「单击待命、双击停止」（对齐 opencode），否则吞掉。
+        LxInput::Escape => {
+            super::chat::escape_stop(state, pane_id);
+        }
+        // Ctrl+T：切换最近 thinking 块。
+        LxInput::ToggleThinking => {
+            super::chat::toggle_latest_thinking(state, pane_id);
+        }
+        LxInput::Tab => {}
     }
+}
+
+/// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
+fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+    let query = state.pane_anywhere(pane).and_then(|target| {
+        super::super::state::lx::slash::slash_trigger(&target.lx.input, target.lx.cursor)
+    });
+    let Some(query) = query else {
+        // 离开命令位置时关闭命令候选面板（model/resume 面板不受影响）。
+        if let Some(target) = state.pane_mut_anywhere(pane)
+            && matches!(
+                target.lx.slash,
+                Some(super::super::state::SlashPanel::Commands { .. })
+            )
+        {
+            target.lx.slash = None;
+        }
+        return;
+    };
+    // `/` 前缀或更具体前缀：仅命令候选面板实时过滤。
+    let matching = super::super::state::lx::slash::SlashPanel::commands_matching(&query);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        if matching.is_empty() {
+            if matches!(
+                target.lx.slash,
+                Some(super::super::state::SlashPanel::Commands { .. })
+            ) {
+                target.lx.slash = None;
+            }
+            return;
+        }
+        // 高亮保持或钳到范围；同一起点时保留窗口（含滚轮视口）。
+        let mut window = match &target.lx.slash {
+            Some(super::super::state::SlashPanel::Commands { window, .. }) => *window,
+            _ => super::super::state::lx::slash::PanelWindow::default(),
+        };
+        window.clamp(matching.len());
+        target.lx.slash = Some(super::super::state::SlashPanel::Commands {
+            items: matching,
+            window,
+        });
+    }
+}
+
+/// 采纳 `/` 命令候选：消费整条命令文本（不写入草稿或 DB）。
+pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    // 只在命令候选面板时采纳高亮命令。
+    let Some(super::super::state::SlashPanel::Commands { items, window }) = target.lx.slash.clone()
+    else {
+        return false;
+    };
+    let Some(command) = items.get(window.active).copied() else {
+        target.lx.slash = None;
+        return false;
+    };
+    // 命令文本 = 当前行首 `/...`（含光标前的完整命令）。
+    let input = target.lx.input.clone();
+    let cursor = target.lx.cursor;
+    let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
+    // 消费整条命令：删除该行命令文本。
+    target.lx.input.replace_range(line_start..cursor, "");
+    target.lx.cursor = line_start;
+    target.lx.slash = None;
+    super::chat::apply_slash_command(state, pane, command);
+    true
 }
 
 /// 切换 lx 页选中入口（仅鼠标点击触发）；切换入口会取消在途粘贴面板。
@@ -267,6 +427,33 @@ pub fn scroll_lx_mention(state: &mut AppState, id: PaneId, delta: isize, base: u
     state
         .pane_mut_anywhere(id)
         .is_some_and(|pane| pane.lx.mention_scroll(delta, base))
+}
+
+/// 鼠标悬停 `/` 命令面板条目：更新高亮（窗口不滚动）；返回是否变化。
+pub fn hover_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    state
+        .pane_mut_anywhere(id)
+        .is_some_and(|pane| pane.lx.slash.as_mut().is_some_and(|p| p.set_active(index)))
+}
+
+/// 鼠标点选 `/` 命令面板条目：按该条目的 Enter 语义采纳；返回是否消费。
+pub fn select_lx_slash(state: &mut AppState, id: PaneId, index: usize) -> bool {
+    if let Some(pane) = state.pane_mut_anywhere(id)
+        && let Some(panel) = pane.lx.slash.as_mut()
+    {
+        panel.set_active(index);
+    }
+    super::chat::apply_slash_enter(state, id)
+}
+
+/// 滚轮在 `/` 命令面板上滚动窗口；`base` 为当前窗口起点，高亮不动。
+pub fn scroll_lx_slash(state: &mut AppState, id: PaneId, delta: isize, base: usize) -> bool {
+    state.pane_mut_anywhere(id).is_some_and(|pane| {
+        pane.lx
+            .slash
+            .as_mut()
+            .is_some_and(|p| p.scroll_viewport(delta, base))
+    })
 }
 
 /// 切换窗格主内容视图（lx 页 ↔ 终端）；返回是否变化。

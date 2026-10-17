@@ -20,10 +20,11 @@ use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
     apply_block_button, apply_template_button, block_button_at, handle_agent_scrollbar_press,
-    handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
-    handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, mention_item_at, pane_at,
-    pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
-    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_lx_history_scrollbar_press, handle_lx_input_scrollbar_press,
+    handle_prompt_scrollbar_press, handle_terminal_scrollbar_press,
+    handle_workspace_scrollbar_press, mention_item_at, pane_at, pane_boundary_draggable,
+    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
+    prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -381,7 +382,7 @@ pub(crate) fn handle_mouse_down_left(
                 .pane_anywhere(pane)
                 .is_some_and(|target| target.view == PaneView::Lx)
             {
-                // lx 页：提及面板候选 > 入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
+                // lx 页：提及面板候选 > 聊天控件 > 入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
                 update::focus_pane(state, pane);
                 let mention_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::mention_item_at(
@@ -393,6 +394,40 @@ pub(crate) fn handle_mouse_down_left(
                 });
                 if let Some(index) = mention_hit {
                     update::select_lx_mention(state, pane, index);
+                    *dirty = true;
+                    return;
+                }
+                // 聊天控件：thinking 折叠头部 / 停止按钮 / 历史入口。
+                let chat_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::chat_hit(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(hit) = chat_hit {
+                    match hit {
+                        ui::main_content::lx::LxChatHit::PromptHeader => {
+                            let target = state.pane_anywhere(pane).and_then(|target| {
+                                ui::main_content::lx::sticky_prompt_jump(inner, &target.lx)
+                            });
+                            if let Some(row) = target {
+                                update::jump_lx_history_to_prompt(state, pane, row);
+                            }
+                        }
+                        ui::main_content::lx::LxChatHit::Thinking(message, part) => {
+                            update::toggle_thinking_at(state, pane, message, part);
+                        }
+                        ui::main_content::lx::LxChatHit::JumpBottom => {
+                            update::jump_lx_history_bottom(state, pane);
+                        }
+                    }
+                    update::clear_lx_selection(state);
+                    *dirty = true;
+                    return;
+                }
+                // `/` 命令面板候选：优先于点选输入框与整页选区（与 `@` 面板一致）。
+                let slash_hit = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::slash_item_at(inner, &target.lx, mouse.column, mouse.row)
+                });
+                if let Some(index) = slash_hit {
+                    update::select_lx_slash(state, pane, index);
                     *dirty = true;
                     return;
                 }
@@ -418,6 +453,14 @@ pub(crate) fn handle_mouse_down_left(
                     mouse.row,
                 ) {
                     // 滚动条按下：已处理。
+                } else if handle_lx_history_scrollbar_press(
+                    state,
+                    pane,
+                    inner,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    // 历史滚动条按下：已处理。
                 } else {
                     update::begin_lx_selection(state, pane, row, col);
                 }

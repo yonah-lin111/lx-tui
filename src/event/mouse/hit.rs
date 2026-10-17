@@ -143,6 +143,33 @@ pub(crate) fn handle_lx_input_scrollbar_press(
     true
 }
 
+/// lx 聊天历史滚动条按下：thumb 开始拖拽，轨道点击跳转；返回是否命中。
+pub(crate) fn handle_lx_history_scrollbar_press(
+    state: &mut AppState,
+    pane: PaneId,
+    inner: Rect,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some(bar) = state
+        .pane_anywhere(pane)
+        .and_then(|target| ui::main_content::lx::history_scrollbar(inner, &target.lx))
+    else {
+        return false;
+    };
+    if !bar.track.contains((column, row).into()) {
+        return false;
+    }
+    match ui::widgets::scrollbar::thumb_grab_offset(&bar, row) {
+        Some(grab) => state.lx_history_scroll_drag = Some((pane, grab)),
+        None => {
+            let offset = ui::widgets::scrollbar::offset_from_track_row(&bar, row);
+            update::set_lx_history_scroll(state, pane, offset, bar.total, bar.visible);
+        }
+    }
+    true
+}
+
 /// 提及面板命中：返回条目索引；面板未打开或未命中返回 None。
 pub(crate) fn mention_item_at(
     state: &AppState,
@@ -161,6 +188,42 @@ pub(crate) fn mention_panel_layout(
 ) -> Option<ui::widgets::command_panel::PanelLayout> {
     let area = paste::prompt_text_area(view);
     ui::prompt::mention_layout(&state.prompt, area)
+}
+
+/// 定位鼠标下的 lx 窗格及其内容区（仅 lx 视图）；用于 `/` 面板命中/悬停/滚轮。
+pub(crate) fn lx_pane_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, Rect)> {
+    let (pane, inner) = pane_at(rects, column, row)?;
+    state
+        .pane_anywhere(pane)
+        .filter(|target| target.view == crate::app::state::PaneView::Lx)
+        .map(|_| (pane, inner))
+}
+
+/// lx `/` 命令面板命中：返回 (窗格, 条目索引)；未命中返回 None。
+pub(crate) fn lx_slash_item_at(
+    state: &AppState,
+    rects: &[(PaneId, Rect)],
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, usize)> {
+    let (pane, inner) = lx_pane_at(state, rects, column, row)?;
+    let target = state.pane_anywhere(pane)?;
+    ui::main_content::lx::slash_item_at(inner, &target.lx, column, row).map(|index| (pane, index))
+}
+
+/// lx `/` 命令面板布局；用于滚轮命中与视口滚动。
+pub(crate) fn lx_slash_panel_layout(
+    state: &AppState,
+    pane: PaneId,
+    inner: Rect,
+) -> Option<ui::widgets::command_panel::PanelLayout> {
+    let target = state.pane_anywhere(pane)?;
+    ui::main_content::lx::slash_layout(inner, &target.lx)
 }
 
 /// 块命令面板命中：返回条目索引；面板未打开或未命中返回 None。
