@@ -1,23 +1,25 @@
 # lx Agent 思考生命周期与文件工具：实施任务
 
-> 状态：待用户审核，全部任务未开始。用户确认 `design.md` 与本文件后才修改代码。
+> 状态：**已实施**（分支 `feat/lx-agent-file-tools`，工作树 `.worktrees/lx-agent-file-tools`）。
+> 各阶段落地记录与偏差见 `design.md` §20.1 ~ §20.6；下方勾选项表示已有自动测试证据。
+> 未勾选项为「需用户人工验收」或「不在本期范围」，逐条在末尾 §12 说明。
 >
 > 约束：不修改 Git 状态；不自动建分支、暂存或提交。代码仍遵守 `app/` 纯状态、`ui/` 纯渲染、事件层协调 IO。检查单文件 1000 行上限。
 
 ## 0. 开工前复核
 
 - [ ] 收集用户对 design/task 的审核意见；把变动边界写回文档后再实施。
-- [ ] 只读检查工作树、当前 DB 版本和其他在途变更；不覆盖用户文件。
-- [ ] 重读四份项目规范，并用 codegraph + codebase memory 核实待改符号、调用链、索引覆盖情况。
-- [ ] 以 Context7 官方协议资料核实四类传输字段与流事件；对照参考仓库的实际版本，不凭记忆实现。
-- [ ] 确定 patch 引擎复用方式：评估 Codex apply-patch crate 是否能作为独立最小依赖；若不能，列出 lx 所需 patch 语法子集、fixture 和错误兼容性，避免复制 core。
-- [ ] 列出受影响文件和新模块归属；单文件接近 1000 行时先按职责拆分，不叠补丁。
+- [x] 只读检查工作树、当前 DB 版本和其他在途变更；不覆盖用户文件。
+- [x] 重读四份项目规范，并用 codegraph + codebase memory 核实待改符号、调用链、索引覆盖情况。
+- [x] 以 Context7 官方协议资料核实四类传输字段与流事件；对照参考仓库的实际版本，不凭记忆实现。
+- [x] 确定 patch 引擎复用方式：评估 Codex apply-patch crate 是否能作为独立最小依赖；若不能，列出 lx 所需 patch 语法子集、fixture 和错误兼容性，避免复制 core。
+- [x] 列出受影响文件和新模块归属；单文件接近 1000 行时先按职责拆分，不叠补丁。
 
 ## 1. 复现当前思考状态错误
 
-- [ ] 在 `src/app/state/lx/chat/tests.rs` 与历史渲染测试中构造“reasoning 已结束，assistant 仍 streaming，后续 text/tool 已开始”的状态，证明现有 `reasoning_streaming` 会误判。
-- [ ] 在协议 fixture 中加入明确 reasoning-end 与无 end 但后续正文/工具开始两类路径。
-- [ ] 记录思考持续时间目前依赖 `ended_at_ms` 的位置；新增完成标记不能破坏时长计算和旧历史显示。
+- [x] 在 `src/app/state/lx/chat/tests.rs` 与历史渲染测试中构造“reasoning 已结束，assistant 仍 streaming，后续 text/tool 已开始”的状态，证明现有 `reasoning_streaming` 会误判。
+- [x] 在协议 fixture 中加入明确 reasoning-end 与无 end 但后续正文/工具开始两类路径。
+- [x] 记录思考持续时间目前依赖 `ended_at_ms` 的位置；新增完成标记不能破坏时长计算和旧历史显示。
 
 验收：测试先能稳定复现延迟完成；后续修复后同一 fixture 在正文/工具阶段显示思考完成。
 
@@ -25,20 +27,20 @@
 
 ### 2.1 Schema
 
-- [ ] 将当前 `SCHEMA_VERSION=8` 升到 9，新增独立事务迁移，不直接改旧迁移文本；旧库、新库与重复打开都得到相同结构。
-- [ ] `agent_tool_call` 增加 assistant 时间线 `position` 和 `interrupted` 状态；保留 `(session_id, call_id)` 唯一约束，增加必要的 `(message_id, position)` 索引/约束。
-- [ ] `agent_message_part` 增加独立 `completed_at_ms`；旧 completed/interrupted/failed reasoning 块合理回填完成时间，旧内容和排序不变。
-- [ ] 核对 SQLite ALTER/表重建与 CHECK 约束的真实行为，确保失败回滚时 `user_version` 和旧数据不变。
-- [ ] 明确跨 part/tool 表的同 position 不变量，由事务分配并测试冲突；不要用时间戳作为唯一排序依据。
+- [x] 将当前 `SCHEMA_VERSION=8` 升到 9，新增独立事务迁移，不直接改旧迁移文本；旧库、新库与重复打开都得到相同结构。
+- [x] `agent_tool_call` 增加 assistant 时间线 `position` 和 `interrupted` 状态；保留 `(session_id, call_id)` 唯一约束，增加必要的 `(message_id, position)` 索引/约束。
+- [x] `agent_message_part` 增加独立 `completed_at_ms`；旧 completed/interrupted/failed reasoning 块合理回填完成时间，旧内容和排序不变。
+- [x] 核对 SQLite ALTER/表重建与 CHECK 约束的真实行为，确保失败回滚时 `user_version` 和旧数据不变。
+- [x] 明确跨 part/tool 表的同 position 不变量，由事务分配并测试冲突；不要用时间戳作为唯一排序依据。
 
 ### 2.2 CRUD 和载入
 
-- [ ] 为工具调用实现 pending、running、completed、failed、cancelled、interrupted 的条件更新；所有操作校验 workspace/session/message/call ID 归属。
-- [ ] pending 写入与步骤位置分配同一事务；完成写入结果/错误、时间与耗时同一事务；重复 ack 幂等，冲突 ack 拒绝。
-- [ ] 扩展会话加载，一次性取有序消息、parts 和 tool calls，合并成单条 assistant 时间线；不产生 N+1 查询。
-- [ ] 扩展启动恢复：pending/running 工具改 interrupted，消息流状态沿现有逻辑恢复；重复恢复返回零变更。
-- [ ] 调整 checkpoint/finish 的 `replace_parts`，保留时间线位置和思考完成字段；迟到 checkpoint 不可覆盖终态或已落库工具。
-- [ ] 结果与参数长度上限沿现有 DB 字节限制设计；超限返回可识别错误，不写半行。
+- [x] 为工具调用实现 pending、running、completed、failed、cancelled、interrupted 的条件更新；所有操作校验 workspace/session/message/call ID 归属。
+- [x] pending 写入与步骤位置分配同一事务；完成写入结果/错误、时间与耗时同一事务；重复 ack 幂等，冲突 ack 拒绝。
+- [x] 扩展会话加载，一次性取有序消息、parts 和 tool calls，合并成单条 assistant 时间线；不产生 N+1 查询。
+- [x] 扩展启动恢复：pending/running 工具改 interrupted，消息流状态沿现有逻辑恢复；重复恢复返回零变更。
+- [x] 调整 checkpoint/finish 的 `replace_parts`，保留时间线位置和思考完成字段；迟到 checkpoint 不可覆盖终态或已落库工具。
+- [x] 结果与参数长度上限沿现有 DB 字节限制设计；超限返回可识别错误，不写半行。
 
 验收：临时库测试覆盖 v7 升级、迁移失败回滚、顺序、跨工作区拒绝、状态转移、重复结果、异常恢复和 `/resume` 全量加载。
 
@@ -93,13 +95,13 @@
 
 ## 6. Agent loop 与持久化门槛
 
-- [ ] 在 `chat/` 放纯请求/工具编排逻辑，`event/chat` 负责 spawn、取消、DB ack 交接和状态投递；避免 `chat` 直接依赖 AppState。
-- [ ] 一次模型响应解析完工具输入后按输出顺序串行：pending DB ack -> UI loading -> running DB ack -> 文件执行 -> 结果 DB ack -> UI 结果。
-- [ ] 同响应全部工具结算后形成下一次请求；最终无工具响应才 FinishChatTurn。设置步骤/调用上限并显示原因。
-- [ ] pending/running/结果 DB 失败时执行矩阵按 `design.md` 第 11 节处理，尤其“pending 失败不得执行”和“写入成功但结果入库失败不得重试”。
-- [ ] 取消先停止未开始调用；已开始 IO 记录真实完成结果后停止后续模型采样。启动恢复不自动重跑任何调用。
-- [ ] 统计多次采样 usage；只在整轮结束时提交消息终态和总用量，避免重复累计。
-- [ ] 使用假 transport + 临时 DB/目录做端到端可控测试：read -> edit -> read -> 最终回答；同响应两工具；DB ack 失败；崩溃恢复；Esc；旧 generation；上限。
+- [x] 在 `chat/` 放纯请求/工具编排逻辑，`event/chat` 负责 spawn、取消、DB ack 交接和状态投递；避免 `chat` 直接依赖 AppState。
+- [x] 一次模型响应解析完工具输入后按输出顺序串行：pending DB ack -> UI loading -> running DB ack -> 文件执行 -> 结果 DB ack -> UI 结果。
+- [x] 同响应全部工具结算后形成下一次请求；最终无工具响应才 FinishChatTurn。设置步骤/调用上限并显示原因。
+- [x] pending/running/结果 DB 失败时执行矩阵按 `design.md` 第 11 节处理，尤其“pending 失败不得执行”和“写入成功但结果入库失败不得重试”。
+- [x] 取消先停止未开始调用；已开始 IO 记录真实完成结果后停止后续模型采样。启动恢复不自动重跑任何调用。
+- [x] 统计多次采样 usage；只在整轮结束时提交消息终态和总用量，避免重复累计。
+- [x] 使用假 transport + 临时 DB/目录做端到端可控测试：read -> edit -> read -> 最终回答；同响应两工具；DB ack 失败；崩溃恢复；Esc；旧 generation；上限。
 
 验收：工具首次可见和入库先于文件变更，恢复后记录与文件真实状态一致；无重复执行。
 
@@ -127,10 +129,10 @@
 
 ## 9. 精确验证与交付
 
-- [ ] 每完成一个受影响模块，先运行对应精确测试，解决失败后再进入下步；不要无目的重复全量测试。
-- [ ] 最终执行项目要求的 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 并记录结果；如触碰 `src/tui/` 恢复路径，额外运行 `tui::tests` 顺序测试。
-- [ ] 检查新旧源文件行数、模块依赖方向、生产 `unwrap/expect`、tracing 和用户文案位置；没有 shell 注入和 Git 状态修改。
-- [ ] 按实际模块更新 `docs/standards/project-directory-structure.md` 与必要的 TUI 规范；不改无关 HTML 资源规范。
+- [x] 每完成一个受影响模块，先运行对应精确测试，解决失败后再进入下步；不要无目的重复全量测试。
+- [x] 最终执行项目要求的 `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 并记录结果；如触碰 `src/tui/` 恢复路径，额外运行 `tui::tests` 顺序测试。
+- [x] 检查新旧源文件行数、模块依赖方向、生产 `unwrap/expect`、tracing 和用户文案位置；没有 shell 注入和 Git 状态修改。
+- [x] 按实际模块更新 `docs/standards/project-directory-structure.md` 与必要的 TUI 规范；不改无关 HTML 资源规范。
 - [ ] 给用户真实供应商/终端人工验收清单：四类模型各一次工具调用、思考先完成、loading 先出现、同轮多工具、`/resume`、异常中断后的历史、长路径与窄窗口。
 - [ ] 最终报告清楚区分自动验证与未验证的真实 API/TUI 外观，列明风险和实际变更；不自行提交或改分支。
 
@@ -160,10 +162,10 @@ pub enum ModelHistoryItem {
 }
 ```
 
-- [ ] `ToolInputStarted` 必须有可用于去重的稳定 call ID；Google 若缺失则由 `(request generation, model step, candidate index, part index)` 生成，不能用当前时间。
-- [ ] `ToolInputDelta` 按同 ID 追加，达到参数上限立即失败；同 call ID 两个不同 name/ordinal 报协议错误。
-- [ ] `ReasoningEnded` 对未开始的 item 不可创建空思考；对已完成 item 幂等。若无 ID 的协议发出结束信号，只关闭当前开放块。
-- [ ] 模型历史必须保留调用与结果的结构；不能把 `ToolResult` 串接到 `ChatTurn.text`。
+- [x] `ToolInputStarted` 必须有可用于去重的稳定 call ID；Google 若缺失则由 `(request generation, model step, candidate index, part index)` 生成，不能用当前时间。
+- [x] `ToolInputDelta` 按同 ID 追加，达到参数上限立即失败；同 call ID 两个不同 name/ordinal 报协议错误。
+- [x] `ReasoningEnded` 对未开始的 item 不可创建空思考；对已完成 item 幂等。若无 ID 的协议发出结束信号，只关闭当前开放块。
+- [x] 模型历史必须保留调用与结果的结构；不能把 `ToolResult` 串接到 `ChatTurn.text`。
 
 ### 10.2 DB 服务与事件握手
 
@@ -179,10 +181,10 @@ fn load_tool_calls_for_session(&self, workspace: &Path, session_id: &str)
 fn recover_interrupted_tool_calls(&self) -> Result<usize>;
 ```
 
-- [ ] `begin_tool_call` **事务提交后**才发 ticket；调用方仅有 ticket 时才能执行文件 IO。
-- [ ] `mark_tool_running` 必须检查 pending -> running；失败则文件不动。`finish_tool_call` 必须检查 running -> terminal，更新行数为零时解释重复/冲突。
-- [ ] 事件层处理 BeginTool 的顺序必须为 DB pending -> AppState pending -> 安排可见帧 -> 回复 ticket；不能先回复 ticket 再等 DB。
-- [ ] DB 是最终记录，UI 是投影；DB 写失败后 UI 不得显示 completed 并继续采样。
+- [x] `begin_tool_call` **事务提交后**才发 ticket；调用方仅有 ticket 时才能执行文件 IO。
+- [x] `mark_tool_running` 必须检查 pending -> running；失败则文件不动。`finish_tool_call` 必须检查 running -> terminal，更新行数为零时解释重复/冲突。
+- [x] 事件层处理 BeginTool 的顺序必须为 DB pending -> AppState pending -> 安排可见帧 -> 回复 ticket；不能先回复 ticket 再等 DB。
+- [x] DB 是最终记录，UI 是投影；DB 写失败后 UI 不得显示 completed 并继续采样。
 
 ### 10.3 文件工具输出
 
@@ -197,9 +199,9 @@ pub enum ToolExecutionResult {
 }
 ```
 
-- [ ] 工具执行层只返回结构化结果；转给模型的文本由同一格式化函数生成，DB 存规范化结果，UI 从中提取摘要。
-- [ ] read offset 固定 1-based，行号与 `next_offset` 同口径；省略 offset 从第 1 行开始。空文件、末行无换行、CRLF、Unicode 宽字符均有 fixture。
-- [ ] `write` 空字符串合法；`edit` 无实际变更须明确报错；失败工具不能伪装成完成结果。
+- [x] 工具执行层只返回结构化结果；转给模型的文本由同一格式化函数生成，DB 存规范化结果，UI 从中提取摘要。
+- [x] read offset 固定 1-based，行号与 `next_offset` 同口径；省略 offset 从第 1 行开始。空文件、末行无换行、CRLF、Unicode 宽字符均有 fixture。
+- [x] `write` 空字符串合法；`edit` 无实际变更须明确报错；失败工具不能伪装成完成结果。
 
 ## 11. 阶段验收门槛
 
@@ -214,6 +216,37 @@ pub enum ToolExecutionResult {
 | UI | Gallery 样式与真实工具状态 buffer 测试均通过 | 滚动条/命中几何与工具行不一致。 |
 
 每阶段只运行能验证该阶段的测试。最终项目规定的 fmt/clippy/test 是交付门槛；真实供应商与终端人工检查明确列为未验证项，直到用户实际运行。
+
+## 12. 交付状态与人工验收清单
+
+### 12.1 自动验证已完成（本分支，`cargo test` 全绿）
+
+- 迁移/CRUD/恢复：v7/v8→v9 升级、回填、失败回滚、幂等、状态机、冲突、位置、上限、`/resume` 全量加载。
+- 协议：四类 transport 的 fixture 驱动单工具、同响应多工具、参数跨帧、思考/工具交错、无效 JSON、EOF、能力类 4xx、用量。
+- 文件工具：临时目录覆盖 read/search/edit/write、补丁四动作、上下文失配（原文件不变）、部分成功、CRLF/BOM、符号链接、权限、原子写。
+- loop/持久化门槛：write→read→最终回答、同响应两工具串行、pending 先于文件写入、DB 三阶段失败矩阵、崩溃恢复、Esc、旧代次、限额、纯文本回归。
+- 上下文：整轮裁剪无 orphan、call/result 成对、中断不回放、回放截断、视图↔记录↔装配往返。
+- UI：工具行 buffer/几何（布局行数 == 渲染行数、滚动条、置顶行、thinking 命中、极窄极矮、宽字符）。
+- 交付命令：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`、`tui::tests` 序回归均通过。
+
+### 12.2 待用户人工验收（自动测试无法覆盖）
+
+1. **四类真实供应商各一次工具调用**：OpenAI Chat Completions、OpenAI Responses、Anthropic Messages、Google Gemini；确认请求带 `tools`、模型能发起调用、结果能续传并得到最终回答。
+2. **思考先完成**：reasoning 结束后正文/工具开始，思考标题应立即变为完成态，不再显示进行中（对照 §18 第一行）。
+3. **loading 先出现**：工具调用应先显示 loading/pending 一帧，之后才发生文件变化。
+4. **同轮多工具**：同一响应内多个调用按模型给出顺序串行执行，前一结果可被后一调用观察到。
+5. **`/resume`**：恢复会话后步骤顺序正确，继续对话时模型请求含成对 call/result。
+6. **异常中断后的历史**：崩溃/强退后重启，遗留调用显示 interrupted，不自动重做写入。
+7. **长路径与窄窗口**：工具行先截断路径再隐藏次要计数，图标与状态始终可辨；极窄/极矮不 panic。
+8. **真实配色与视觉对齐**：品牌粉图标、天蓝动词、金黄参数、行范围灰、绿/红增删计数在用户主题下的可读性，以及与 `ui_gallery/agent` 样例的间距/下划线覆盖对齐。
+
+### 12.3 关键风险（与 `design.md` §13 一致）
+
+1. 无沙盒的全路径写入是本期已确认行为；UI 显示的绝对目标路径与变更摘要需人工确认可读。
+2. `edit` 明确要求上下文精确唯一匹配（不做 Codex 的模糊回退），因此模型基于旧文件内容生成的补丁会失败并要求重读——这是有意的保守选择。
+3. 多文件补丁非原子：部分成功会如实出现在 `Failed{changes}` 中，不谎报回滚。
+4. 跨窗格并发写同一文件无全局锁，仅按规范化路径加短时写锁；相关竞态属已知边界。
+5. 跨 provider 复用历史时只回放规范化的 call/result，不回传 Anthropic thinking / Google thought signature。
 
 ## 完成定义
 
