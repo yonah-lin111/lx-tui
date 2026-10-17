@@ -29,7 +29,6 @@ pub(crate) mod slash;
 pub(crate) mod status;
 
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
-pub(crate) use status::status_stop_at;
 
 use grid::{CONTINUATION, Grid};
 
@@ -89,7 +88,7 @@ pub fn render(
         }
     }
     render_input_scrollbar(area, buf, lx);
-    // 状态（模型 · 供应商 · 上下文占用 + 停止控件）覆盖绘制在窗格底边框上。
+    // 状态（模型 · 供应商 · 上下文占用）覆盖绘制在窗格底边框上。
     status::render(buf, area, lx);
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
@@ -370,7 +369,7 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     }
 
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
-    // 输入框下沿贴窗格底部；状态（模型 · 供应商 · 上下文占用 + 停止控件）绘制在其底边框上。
+    // 输入框下沿贴窗格底部；状态（模型 · 供应商 · 上下文占用）绘制在其底边框上。
     let rows = lx.visual_rows();
     let total = rows.len().max(1);
     let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
@@ -630,8 +629,6 @@ fn build_chat(area: Rect, lx: &Lx, focused: bool, lay: &Layout) -> (Grid, Option
 pub enum LxChatHit {
     /// 点击 thinking 折叠块头部（消息索引, part 索引）。
     Thinking(usize, usize),
-    /// 点击停止按钮。
-    Stop,
     /// 点击「回到底部」按钮。
     JumpBottom,
 }
@@ -711,12 +708,6 @@ pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
 pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
     if lx.chat.messages.is_empty() {
         return None;
-    }
-    // 窗格底边框上的停止控件（`area` 为内容区，底边框行 = `area.bottom()`）。
-    if let Some(stop) = status::stop_rect(area, lx)
-        && stop.contains((column, row).into())
-    {
-        return Some(LxChatHit::Stop);
     }
     // 输入框上方聊天栏右端的「回到底部」控件。
     if let Some(rect) = chat_bar::jump_bottom_rect(area, lx)

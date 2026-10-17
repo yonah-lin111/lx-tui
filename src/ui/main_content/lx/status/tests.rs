@@ -1,5 +1,5 @@
-//! 状态测试：`context:NN%` 显示与隐藏（无消耗整段隐藏）、降级（丢停止控件 → 上下文占用）、
-//! 模型名硬切不省略号、底边线保留、供应商用 prompt 条目标题色（均绘制在窗格底边框上）。
+//! 状态测试：`context:NN%` 显示与隐藏（无消耗整段隐藏）、窄宽度降级（丢上下文占用）、
+//! 模型名硬切不省略号、底边线保留、供应商用统计行同款次要信息色（均绘制在窗格底边框上）。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -135,7 +135,7 @@ fn context_style_is_white() {
 }
 
 #[test]
-fn provider_uses_prompt_item_title_style() {
+fn provider_uses_stats_line_style() {
     let lx = lx_with_status(status(
         Some("deepseek-v4.1-flash"),
         Some("9router-lx-t"),
@@ -150,9 +150,9 @@ fn provider_uses_prompt_item_title_style() {
     let row = inner.bottom();
     let provider_x = rect.x + 1 + "deepseek-v4.1-flash · ".width() as u16;
     let cell = &buf[(provider_x, row)];
-    // prompt 条目标题 / 供应商：普通文字色（Reset），无 dim、无加粗。
-    assert_eq!(cell.fg, Color::Reset, "供应商用普通文字色");
-    assert_eq!(cell.modifier, Modifier::empty(), "供应商不加粗、不 dim");
+    // 供应商用本轮统计行同款次要信息色（显式 Reset 前景 + dim），不加粗。
+    assert_eq!(cell.fg, Color::Reset, "供应商用默认前景");
+    assert_eq!(cell.modifier, Modifier::DIM, "供应商与统计行同款（dim）");
 }
 
 #[test]
@@ -168,21 +168,18 @@ fn border_line_stays_visible_between_segments() {
 }
 
 #[test]
-fn narrow_drops_stop_then_context_keeps_model() {
+fn narrow_drops_context_keeps_model() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), true));
-    // 宽：上下文占用 + 停止控件 + 供应商。
+    // 宽：上下文占用 + 供应商。
     let inner = Rect::new(0, 0, 40, 3);
     let lay = layout(inner, &lx.chat.status);
-    assert!(lay.context.width > 0, "40 列仍显示上下文占用");
-    assert!(lay.stop.is_some(), "40 列仍显示停止控件");
-    // 收窄：丢停止控件，保留模型名与上下文占用。
+    assert!(lay.context.width > 0, "40 列显示上下文占用");
     let inner = Rect::new(0, 0, 20, 3);
     let lay = layout(inner, &lx.chat.status);
-    assert!(lay.stop.is_none(), "窄窗格丢弃停止控件");
-    assert!(lay.context.width > 0, "保留上下文占用");
+    assert!(lay.context.width > 0, "20 列仍保留上下文占用");
     assert!(lay.label.width > 0, "保留模型名区");
     // 更窄：连上下文占用也放不下时只留模型名（仍硬切保留）。
-    let inner = Rect::new(0, 0, 12, 3);
+    let inner = Rect::new(0, 0, 16, 3);
     let lay = layout(inner, &lx.chat.status);
     assert_eq!(lay.context.width, 0, "更窄时丢弃上下文占用");
     assert!(lay.label.width > 0, "仍保留模型名区");
@@ -204,7 +201,7 @@ fn narrow_hides_provider_without_ellipsis() {
 }
 
 #[test]
-fn wide_status_on_border_with_stop_button() {
+fn wide_status_on_border_with_provider_and_context() {
     let lx = lx_with_status(status(
         Some("deepseek-v4.1-flash"),
         Some("9router-lx-t"),
@@ -215,26 +212,24 @@ fn wide_status_on_border_with_stop_button() {
     let inner = Rect::new(0, 0, 80, 3);
     let lay = layout(inner, &lx.chat.status);
     assert_eq!(lay.area.height, 1);
-    assert_eq!(lay.area.y, inner.bottom(), "绘制在底边框行");
-    assert!(lay.stop.is_some(), "流中显示停止按钮");
+    assert_eq!(lay.area.y, inner.bottom(), "绘制在边框行");
     let line = render_border(&lx, 80);
     assert!(
         line.starts_with("╰ deepseek-v4.1-flash · 9router-lx-t"),
         "左角后模型 · 供应商：{line}"
     );
-    assert!(line.ends_with("[■] ╯"), "停止控件贴右端、保留角：{line}");
     assert!(
-        line.contains("context:72% [■]"),
-        "停止控件在上下文占用右侧：{line}"
+        line.ends_with("context:72% ╯"),
+        "上下文占用贴右端、保留角：{line}"
     );
 }
 
 #[test]
-fn idle_status_hides_stop_button() {
-    let lx = lx_with_status(status(Some("M"), Some("P"), Some(1000), None, false));
-    let inner = Rect::new(0, 0, 80, 3);
-    let lay = layout(inner, &lx.chat.status);
-    assert!(lay.stop.is_none(), "空闲不显示停止按钮");
+fn no_stop_button_on_border() {
+    // 停止交互改为 Esc 双击，底边框上不再有任何按钮文案。
+    let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), true));
+    let line = render_border(&lx, 80);
+    assert!(!line.contains("[■]"), "不再渲染停止按钮：{line}");
 }
 
 #[test]
@@ -242,7 +237,6 @@ fn tiny_inner_yields_no_status() {
     let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
     let lay = layout(Rect::new(0, 0, 7, 3), &lx.chat.status);
     assert_eq!(lay.area.height, 0);
-    assert!(lay.stop.is_none());
 }
 
 #[test]

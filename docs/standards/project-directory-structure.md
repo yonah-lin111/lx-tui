@@ -37,7 +37,7 @@ lx-tui/
       markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记；UI 页 agent 回答与 lx 聊天共用）
       markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染与 `<br>` 换行）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
-      main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、命令面板（slash.rs）、历史（history.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，loading + 回到底部）、提及面板
+      main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、命令面板（slash.rs）、历史（history.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，loading / Esc 待命提示 + 回到底部）、提及面板
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）

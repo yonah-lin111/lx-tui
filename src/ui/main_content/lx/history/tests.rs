@@ -106,7 +106,7 @@ fn assistant_message_has_no_label_and_shows_body() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let line0 = row_text(&buf, area, 0);
     let line1 = row_text(&buf, area, 1);
-    assert!(line0.contains("thinking"), "首个渲染行为折叠头：{line0}");
+    assert!(line0.contains("Thought"), "首个渲染行为折叠头：{line0}");
     assert!(
         !line0.contains("assistant"),
         "不再显示 assistant 标签：{line0}"
@@ -355,4 +355,45 @@ fn token_and_duration_formatting_matches_agent_conventions() {
     assert_eq!(format_duration(4_200), "4.2s");
     assert_eq!(format_duration(38_400), "38s");
     assert_eq!(format_duration(72_000), "1m 12s");
+}
+
+#[test]
+fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
+    use ratatui::style::{Color, Modifier};
+
+    // 生成中：首列转轮（左对齐，与正文/统计行同一起点）、UI 页思考蓝、文案 `Thinking`。
+    let streaming = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part("流式思考"), text_part("")],
+    )]);
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
+    let header = &buf[(0, 0)];
+    assert_eq!(header.fg, Color::Indexed(117), "生成中用 UI 页思考蓝");
+    assert_eq!(header.modifier, Modifier::empty(), "生成中不压暗");
+    let line0 = row_text(&buf, area, 0);
+    assert!(line0.starts_with('⠋'), "转轮在首列（左对齐）：{line0}");
+    assert!(line0.contains("Thinking"), "生成中文案首字母大写：{line0}");
+    let line1 = row_text(&buf, area, 1);
+    assert!(line1.starts_with("流式思考"), "思考内容同样左对齐：{line1}");
+
+    // 完成后：`▸ Thought`、同为品牌蓝但压暗一档。
+    let done = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![reasoning_part("旧思考"), text_part("正文")],
+    )]);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
+    let header = &buf[(0, 0)];
+    assert_eq!(header.fg, Color::Indexed(117), "完成后仍是品牌蓝");
+    assert_eq!(header.modifier, Modifier::DIM, "完成后压暗");
+    let line0 = row_text(&buf, area, 0);
+    assert!(
+        line0.starts_with("▸ Thought"),
+        "完成后文案为 Thought：{line0}"
+    );
+    assert!(!line0.contains("Thinking"), "不再是 Thinking：{line0}");
 }

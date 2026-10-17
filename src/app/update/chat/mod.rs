@@ -3,7 +3,7 @@
 //! 只产生效应/更新纯状态；IO（DB/HTTP）由事件层执行，结果经 `AppEvent` 回投。
 //! 按 `(pane, session, generation)` 过滤过期结果；`Finishing` 期间不允许新一轮。
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::app::state::lx::slash::{SlashCommand, SlashPanel};
 use crate::app::state::{
@@ -86,6 +86,9 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
                 variant: frozen.variant.clone(),
             },
         });
+    // 立即进入流中态：loading 行（转轮 + Esc 待命提示）从按下 Enter 起就可见，
+    // 不必等首个 delta。
+    refresh_lx_status(state, pane);
     true
 }
 
@@ -188,6 +191,7 @@ pub fn on_turn_failed(state: &mut AppState, pane: PaneId, generation: u64) -> bo
     }
     target.lx.chat.request = RequestState::Idle;
     show_chat_toast(state, ToastKind::Error, text::LX_CHAT_COMMIT_FAILED);
+    refresh_lx_status(state, pane);
     true
 }
 
@@ -275,6 +279,7 @@ pub fn on_stream_finished(
         })
         .unwrap_or_default();
     // 视图先行进入终态（DB ack 后确认；失败时保留内存 partial）。
+    target.lx.chat.stop_armed_at = None;
     let duration_ms = target
         .lx
         .chat
@@ -352,11 +357,39 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
     true
 }
 
-/// 停止生成：显式控件/动作触发；流取消后走正常 Finishing 收尾。
+/// Esc 停止的待命窗口：窗口内再按一次才真正停止（对齐 opencode 的 5 秒）。
+pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(5);
+
+/// 流中按 `Esc`（对齐 opencode 的双击停止）：首次只**待命**并显示提示，
+/// 窗口内再按一次才停止；非流中吞掉（返回 false 不置脏）。
+pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if !target.lx.chat.request.is_busy() {
+        return false;
+    }
+    let now = Instant::now();
+    let armed = target
+        .lx
+        .chat
+        .stop_armed_at
+        .is_some_and(|at| now.saturating_duration_since(at) <= STOP_ARM_WINDOW);
+    if !armed {
+        target.lx.chat.stop_armed_at = Some(now);
+        return true;
+    }
+    target.lx.chat.stop_armed_at = None;
+    stop_stream(state, pane);
+    true
+}
+
+/// 停止生成：Esc 双击确认后触发；流取消后走正常 Finishing 收尾。
 pub fn stop_stream(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    target.lx.chat.stop_armed_at = None;
     match target.lx.chat.request.clone() {
         RequestState::Streaming { key, .. } => {
             state
@@ -946,6 +979,15 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
             && target.view == crate::app::state::PaneView::Lx
             && target.lx.chat.status.streaming
         {
+            // 待命超时：提示消失（重新回到普通 `Working`）。
+            if target
+                .lx
+                .chat
+                .stop_armed_at
+                .is_some_and(|at| at.elapsed() > STOP_ARM_WINDOW)
+            {
+                target.lx.chat.stop_armed_at = None;
+            }
             target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
             changed = true;
         }

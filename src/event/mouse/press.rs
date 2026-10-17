@@ -22,9 +22,9 @@ use super::hit::{
     apply_block_button, apply_template_button, block_button_at, handle_agent_scrollbar_press,
     handle_lx_history_scrollbar_press, handle_lx_input_scrollbar_press,
     handle_prompt_scrollbar_press, handle_terminal_scrollbar_press,
-    handle_workspace_scrollbar_press, lx_pane_stop_at, mention_item_at, pane_at,
-    pane_boundary_draggable, pane_content_inner, pane_toggle_button_at, panel_item_at,
-    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    handle_workspace_scrollbar_press, mention_item_at, pane_at, pane_boundary_draggable,
+    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_boundary_hit,
+    prompt_header_at, slash_item_at, template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -337,10 +337,6 @@ pub(crate) fn handle_mouse_down_left(
         // 按钮是控件：只切换视图，不改变焦点。
         update::toggle_pane_view(state, pane);
         *dirty = true;
-    } else if let Some(pane) = lx_pane_stop_at(state, rects, mouse.column, mouse.row) {
-        // lx 窗格底边框上的停止控件：中断当前流，不改变焦点。
-        update::stop_stream(state, pane);
-        *dirty = true;
     } else if let Some(hit) = layout::resize_boundary_at(rects, mouse.column, mouse.row)
         .filter(|hit| pane_boundary_draggable(state, *hit))
     {
@@ -409,9 +405,6 @@ pub(crate) fn handle_mouse_down_left(
                     match hit {
                         ui::main_content::lx::LxChatHit::Thinking(message, part) => {
                             update::toggle_thinking_at(state, pane, message, part);
-                        }
-                        ui::main_content::lx::LxChatHit::Stop => {
-                            update::stop_stream(state, pane);
                         }
                         ui::main_content::lx::LxChatHit::JumpBottom => {
                             update::jump_lx_history_bottom(state, pane);

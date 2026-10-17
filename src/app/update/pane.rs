@@ -255,9 +255,9 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Enter => {
             super::chat::try_send(state, pane_id);
         }
-        // 无面板：Esc 在流中停止生成，否则吞掉。
+        // 无面板：Esc 在流中「单击待命、双击停止」（对齐 opencode），否则吞掉。
         LxInput::Escape => {
-            super::chat::stop_stream(state, pane_id);
+            super::chat::escape_stop(state, pane_id);
         }
         // Ctrl+T：切换最近 thinking 块。
         LxInput::ToggleThinking => {

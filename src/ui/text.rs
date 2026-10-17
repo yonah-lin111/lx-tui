@@ -501,16 +501,25 @@ pub const LX_CHAT_NO_WORKSPACE: &str = "Workspace path unavailable";
 pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
 pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
 pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
-pub const LX_CHAT_STOP_HINT: &str = "stop";
+/// 流中「按 Esc 停止」待命提示短语（从长到短，按可用宽度取第一条放得下的；对齐 opencode）。
+pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
+    "Press esc again to stop",
+    "esc again to stop",
+    "esc again: stop",
+    "esc stop",
+];
 /// 状态行：模型名与供应商名之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
 /// 状态行：上下文占用前缀与百分比后缀（`context:72%`；无消耗整段隐藏）。
 pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
 pub const LX_CHAT_PERCENT_SUFFIX: &str = "%";
-/// thinking 折叠行：折叠 / 展开 / 生成中三态文案。
-pub const LX_CHAT_THINKING_LABEL: &str = "thinking";
-pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ thinking";
-pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ thinking";
+/// thinking 折叠行：生成中文案（`Thinking`）与完成后的折叠/展开文案（`Thought`，
+/// 与 UI 页 agent 步骤的 `Thought` 动词一致）。
+pub const LX_CHAT_THINKING_LABEL: &str = "Thinking";
+pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ Thought";
+/// 生成中但被用户收起的思考块头部（仍需表达「进行中」）。
+pub const LX_CHAT_THINKING_COLLAPSED_LIVE: &str = "▸ Thinking";
+pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ Thought";
 /// 本轮统计行（assistant 消息底部）：字段分隔与各字段后缀。
 pub const LX_CHAT_STATS_SEP: &str = " · ";
 pub const LX_CHAT_STATS_INPUT_SUFFIX: &str = " in";
@@ -534,8 +543,6 @@ pub const LX_CHAT_INTERRUPTED_LABEL: &str = "interrupted";
 pub const LX_CHAT_FAILED_LABEL: &str = "failed";
 pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
-/// 状态行控件文案（逐格强调色绘制）。
-pub const LX_CHAT_STOP_BUTTON: &str = "[■]";
 /// 上下文省略提示前缀。
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
 

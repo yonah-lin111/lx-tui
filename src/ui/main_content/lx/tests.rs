@@ -1119,3 +1119,38 @@ fn jump_bottom_hit_matches_button_rect() {
     );
     let _ = area;
 }
+
+#[test]
+fn esc_armed_replaces_loading_label_with_stop_hint() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = streaming_lx(true, true);
+    lx.chat.stop_armed_at = Some(std::time::Instant::now());
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("Press esc again to stop"), "待命提示：{text}");
+    assert!(
+        !text.contains(text::LX_LOADING_LABEL),
+        "提示替换 Working：{text}"
+    );
+    // 未待命（超时/未按 Esc）时仍是普通 loading 文案。
+    lx.chat.stop_armed_at = None;
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    assert!(buffer_text(&buf).contains(text::LX_LOADING_LABEL));
+}
+
+#[test]
+fn esc_hint_shortens_on_narrow_bar() {
+    let area = Rect::new(0, 0, 28, 16);
+    let mut lx = streaming_lx(true, true);
+    lx.chat.stop_armed_at = Some(std::time::Instant::now());
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("esc again"), "窄栏取短短语：{text}");
+    assert!(
+        !text.contains("Press esc again to stop"),
+        "放不下时不画长短语：{text}"
+    );
+}

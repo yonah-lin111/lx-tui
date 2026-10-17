@@ -26,8 +26,8 @@ use super::Grid;
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
 const USER_INDENT: u16 = 2;
-/// thinking 折叠块头部缩进列。
-const THINKING_MARGIN: u16 = 2;
+/// thinking 块左侧缩进列：与正文、统计行**左对齐**（0，不额外缩进）。
+const THINKING_MARGIN: u16 = 0;
 /// 历史区右侧滚动条预留列数。
 pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 
@@ -160,36 +160,37 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                     let expanded = lx.chat.reasoning_expanded(message_index, part_index);
                     let streaming = lx.chat.reasoning_streaming(message_index, part_index);
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：转轮 + `thinking`（继续生成时头部保持可见）；
-                        // 完成后：`▸ thinking` / `▾ thinking` 折叠标记。
+                        // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色）；
+                        // 完成后：`▸ Thought` / `▾ Thought`（压暗一档的品牌蓝）。
+                        let header_style = if streaming {
+                            style::agent_verb()
+                        } else {
+                            style::agent_connector()
+                        };
+                        let x = content.x.saturating_add(THINKING_MARGIN);
                         if streaming && expanded {
                             let frame = text::LX_LOADING_FRAMES
                                 [lx.chat.loading_frame % text::LX_LOADING_FRAMES.len()];
-                            grid.put_char(
-                                content.x + THINKING_MARGIN,
-                                y,
-                                frame,
-                                style::chat_loading_spinner(),
-                            );
+                            grid.put_char(x, y, frame, header_style);
                             grid.put_clipped(
-                                content.x + THINKING_MARGIN + 2,
+                                x.saturating_add(2),
                                 y,
                                 text::LX_CHAT_THINKING_LABEL,
-                                style::chat_loading_label(),
-                                content.width.saturating_sub(THINKING_MARGIN + 2),
+                                header_style,
+                                content.right().saturating_sub(x.saturating_add(2)),
                             );
                         } else {
-                            let label = if expanded {
-                                text::LX_CHAT_THINKING_EXPANDED
-                            } else {
-                                text::LX_CHAT_THINKING_COLLAPSED
+                            let label = match (streaming, expanded) {
+                                (true, _) => text::LX_CHAT_THINKING_COLLAPSED_LIVE,
+                                (false, true) => text::LX_CHAT_THINKING_EXPANDED,
+                                (false, false) => text::LX_CHAT_THINKING_COLLAPSED,
                             };
                             grid.put_clipped(
-                                content.x + THINKING_MARGIN,
+                                x,
                                 y,
                                 label,
-                                style::muted(),
-                                content.width.saturating_sub(THINKING_MARGIN),
+                                header_style,
+                                content.right().saturating_sub(x),
                             );
                         }
                     }

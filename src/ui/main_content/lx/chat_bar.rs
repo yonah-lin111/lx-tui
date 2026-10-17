@@ -63,7 +63,8 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
 /// 绘制聊天栏：左侧 loading 转轮 + 文案，右端「回到底部」控件。
 ///
 /// 流中显示 `⠋ Working`（旋转帧由 `loading_frame` 决定，仅一帧渲染）；
-/// 未跟随底部时右端显示 `↓ 说明`（悬停高亮）；两种状态可同时出现。
+/// Esc 待命（`stop_armed_at`）时文案换成 `Press esc again to stop`（按宽度取短）；
+/// 未跟随底部时右端显示 `↓ 说明`（悬停高亮）；各状态可同时出现。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
         return;
@@ -110,14 +111,24 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
         x = x.saturating_add(2);
     }
     if x < limit {
-        grid.put_clipped(
-            x,
-            bar.y,
-            text::LX_LOADING_LABEL,
-            style::chat_loading_label(),
-            limit - x,
-        );
+        // Esc 待命：提示「再按一次停止」（取第一条放得下的短语，对齐 opencode）。
+        let label = if lx.chat.stop_armed_at.is_some() {
+            stop_phrase(limit.saturating_sub(x))
+        } else {
+            text::LX_LOADING_LABEL
+        };
+        grid.put_clipped(x, bar.y, label, style::chat_loading_label(), limit - x);
     }
+}
+
+/// Esc 待命提示短语：从长到短取第一条放得下的；都放不下时用最短的（由调用方裁剪）。
+fn stop_phrase(width: u16) -> &'static str {
+    let width = usize::from(width);
+    text::LX_CHAT_STOP_PHRASES
+        .iter()
+        .find(|phrase| phrase.width() <= width)
+        .copied()
+        .unwrap_or_else(|| text::LX_CHAT_STOP_PHRASES[text::LX_CHAT_STOP_PHRASES.len() - 1])
 }
 
 /// 命中「回到底部」控件的窗格；无控件或未命中返回 None。

@@ -277,7 +277,7 @@ pub struct ChatStatus {
     pub input_tokens: Option<u64>,
     /// 上下文占用百分比（真实输入 token / 上限，夹到 0..=100）；两者任一未知为 None。
     pub context_percent: Option<u8>,
-    /// 是否正在生成（显示停止控件）。
+    /// 是否正在生成（决定 loading 行与 Esc 停止待命是否生效）。
     pub streaming: bool,
     /// 上下文裁剪省略提示（一次性）。
     pub omitted_turns: Option<usize>,
@@ -318,6 +318,9 @@ pub struct LxChat {
     pub loading_frame: usize,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
     pub jump_bottom_hover: bool,
+    /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
+    /// （对齐 opencode 的双击停止）；超时或流结束清除。
+    pub stop_armed_at: Option<std::time::Instant>,
 }
 
 impl Default for LxChat {
@@ -344,6 +347,7 @@ impl LxChat {
             history_scroll: 0,
             loading_frame: 0,
             jump_bottom_hover: false,
+            stop_armed_at: None,
         }
     }
 

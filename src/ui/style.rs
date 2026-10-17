@@ -475,9 +475,9 @@ pub fn chat_model() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 状态行供应商名：用 prompt 条目标题同款普通文字色（默认前景，不加粗/dim）。
+/// 状态行供应商名：与本轮统计行（assistant 消息底部）同款次要信息色。
 pub fn chat_provider() -> Style {
-    text()
+    muted()
 }
 
 /// 状态行上下文占用（进度条已用段与百分比文字）：亮白（Indexed 252），与金色模型名区分。
