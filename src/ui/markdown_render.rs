@@ -110,6 +110,14 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             index = fenced_code(&source_lines, index, &mut lines);
             continue;
         }
+        // 缩进列表项优先于缩进代码块：模型常用 4 空格嵌套（`- xxx` 下接 `    - aaa`），
+        // 若按 CommonMark 的 4 空格规则当成代码块，整段会被渲染成一坨 `│ - aaa` 贴最左，
+        // 列表看起来就“没有缩进”。真代码块请用围栏（```）。
+        if let Some(item) = list_item(line) {
+            lines.push(item.render());
+            index += 1;
+            continue;
+        }
         if is_indented_code(line) {
             index = indented_code(&source_lines, index, &mut lines);
             continue;
@@ -135,11 +143,6 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
         }
         if trimmed.trim_start().starts_with('>') {
             index = blockquote(&source_lines, index, &mut lines);
-            continue;
-        }
-        if let Some(item) = list_item(line) {
-            lines.push(item.render());
-            index += 1;
             continue;
         }
         if let Some((alt, url)) = image(trimmed) {
@@ -204,7 +207,7 @@ fn is_rule(line: &str) -> bool {
     count >= 3
 }
 
-/// 缩进代码块行：4 个以上前导空格且非空。
+/// 缩进代码块行：4 个以上前导空格且非空（列表项已在调用前按列表处理，走不到这里）。
 fn is_indented_code(line: &str) -> bool {
     let indent = line.len() - line.trim_start_matches(' ').len();
     indent >= 4 && !line.trim().is_empty()
