@@ -268,6 +268,56 @@ fn wrapped_paragraph_breaks_at_word_boundaries() {
     assert!(lines.iter().all(|line| line.width() <= 10));
 }
 
+/// 列表项换行：标记后不留多余空格（`*   text` 的三个空格是排版对齐），续行悬挂缩进
+/// 对齐正文起始列，且不出现 `•` 独占一行的孤儿标记。
+#[test]
+fn wrapped_list_items_hang_indent_under_the_text() {
+    let src =
+        "*   代码生成：支持 Python、JavaScript、C++、Java、Go、SQL、HTML/CSS 等多种主流编程语言。";
+    let lines = render_wrapped(src, 40);
+    assert!(lines.len() > 1, "确实换行");
+    assert!(
+        lines[0].text().starts_with("• 代码生成"),
+        "标记后只留一个空格：{:?}",
+        lines[0].text()
+    );
+    assert!(
+        !lines.iter().any(|line| line.text().trim() == "•"),
+        "不出现孤儿标记"
+    );
+    assert!(
+        lines[1..].iter().all(|line| line.indent == 2),
+        "无序列表续行悬挂 2 列：{:?}",
+        lines.iter().map(|line| line.indent).collect::<Vec<_>>()
+    );
+
+    // 有序列表按标记宽度悬挂（`12. ` = 4 列）。
+    let lines = render_wrapped(
+        "12. 这是一个很长很长的有序列表项目，需要在窄宽度下换行显示。",
+        20,
+    );
+    assert!(lines.len() > 1);
+    assert!(
+        lines[1..].iter().all(|line| line.indent == 4),
+        "有序列表按标记宽度悬挂：{:?}",
+        lines.iter().map(|line| line.indent).collect::<Vec<_>>()
+    );
+}
+
+/// 引用换行：续行对齐引用正文（`> ` 之后），不丢字符。
+#[test]
+fn wrapped_quote_hangs_under_the_text() {
+    let lines = render_wrapped("> 这是一段很长很长的引用文字，需要在窄宽度下换行显示。", 20);
+    assert!(lines.len() > 1, "确实换行");
+    assert!(
+        lines[1..].iter().all(|line| line.indent == 2),
+        "引用续行对齐正文：{:?}",
+        lines.iter().map(|line| line.indent).collect::<Vec<_>>()
+    );
+    let flat: String = lines.iter().map(MdLine::text).collect();
+    assert!(flat.contains("换行显示"), "不丢字符：{flat}");
+}
+
 /// 缩进的多行内容续行保持缩进，且不丢字符。
 #[test]
 fn wrapped_indented_lines_keep_indent() {

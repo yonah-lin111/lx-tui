@@ -23,6 +23,9 @@ mod table;
 #[derive(Debug, Clone, PartialEq)]
 pub struct MdLine {
     pub indent: u16,
+    /// 悬挂缩进：软换行时**续行**相对首行额外缩进的列数（列表/引用的标记宽度）。
+    /// 首行含 `• ` / `1. ` / `> ` 等标记，续行要跳过标记、对齐正文起始列。
+    pub hang: u16,
     pub spans: Vec<(String, Style)>,
 }
 
@@ -31,13 +34,27 @@ impl MdLine {
     pub(crate) fn plain(indent: u16, value: impl Into<String>, style: Style) -> Self {
         Self {
             indent,
+            hang: 0,
             spans: vec![(value.into(), style)],
         }
     }
 
     /// 多段行。
     pub(crate) fn spans(indent: u16, spans: Vec<(String, Style)>) -> Self {
-        Self { indent, spans }
+        Self {
+            indent,
+            hang: 0,
+            spans,
+        }
+    }
+
+    /// 多段行 + 悬挂缩进（列表项/引用：续行对齐正文起始列）。
+    pub(crate) fn hanging(indent: u16, hang: u16, spans: Vec<(String, Style)>) -> Self {
+        Self {
+            indent,
+            hang,
+            spans,
+        }
     }
 
     /// 该行的显示宽度（缩进 + 各分段宽度）。
@@ -272,10 +289,12 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
             break;
         };
         let body = rest.strip_prefix(' ').unwrap_or(rest);
-        lines.push(MdLine::spans(
+        let marker = format!("{QUOTE_MARKER} ");
+        lines.push(MdLine::hanging(
             0,
+            marker_width(&marker),
             vec![
-                (format!("{QUOTE_MARKER} "), style::markdown_marker()),
+                (marker, style::markdown_marker()),
                 (body.to_string(), style::markdown_quote()),
             ],
         ));
@@ -307,18 +326,26 @@ impl ListItem<'_> {
     /// 渲染一行列表项（lx：`•` 项目符号；任务用 claude 一组 `[x]`/`[ ]`）。
     fn render(&self) -> MdLine {
         match *self {
-            Self::Bullet { depth, text: body } => MdLine::spans(
-                indent(depth),
-                marker_spans("• ", style::markdown_bullet(), body),
-            ),
+            Self::Bullet { depth, text: body } => {
+                let marker = "• ";
+                MdLine::hanging(
+                    indent(depth),
+                    marker_width(marker),
+                    marker_spans(marker, style::markdown_bullet(), body),
+                )
+            }
             Self::Ordered {
                 depth,
                 number,
                 text: body,
-            } => MdLine::spans(
-                indent(depth),
-                marker_spans(&format!("{number}. "), style::markdown_ordered(), body),
-            ),
+            } => {
+                let marker = format!("{number}. ");
+                MdLine::hanging(
+                    indent(depth),
+                    marker_width(&marker),
+                    marker_spans(&marker, style::markdown_ordered(), body),
+                )
+            }
             Self::Task {
                 depth,
                 done,
@@ -335,7 +362,7 @@ impl ListItem<'_> {
                         .into_iter()
                         .map(|(value, _)| (value, body_style)),
                 );
-                MdLine::spans(indent(depth), spans)
+                MdLine::hanging(indent(depth), marker_width(marker), spans)
             }
         }
     }
@@ -353,6 +380,11 @@ fn indent(depth: usize) -> u16 {
     (depth * 2) as u16
 }
 
+/// 标记的显示宽度（悬挂缩进列数）。
+fn marker_width(marker: &str) -> u16 {
+    u16::try_from(display_width(marker)).unwrap_or(u16::MAX)
+}
+
 /// 解析列表项；非列表返回 None。
 fn list_item(line: &str) -> Option<ListItem<'_>> {
     let spaces = line.len() - line.trim_start_matches(' ').len();
@@ -365,7 +397,7 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
         return Some(ListItem::Task {
             depth,
             done,
-            text: marker.trim_end(),
+            text: marker.trim(),
         });
     }
     // 无序列表。
@@ -376,7 +408,7 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
     {
         return Some(ListItem::Bullet {
             depth,
-            text: after.trim_end(),
+            text: after.trim(),
         });
     }
     // 有序列表 `N. `。
@@ -386,7 +418,7 @@ fn list_item(line: &str) -> Option<ListItem<'_>> {
         return Some(ListItem::Ordered {
             depth,
             number: &rest[..digits],
-            text: after.trim_end(),
+            text: after.trim(),
         });
     }
     None
@@ -520,19 +552,24 @@ pub fn display_width(value: &str) -> usize {
 /// 优先在空白/汉字边界断行（对齐 opencode/主流 agent 的 word wrap），
 /// 单个超宽字符单独成行；供表格外的段落/列表/引用/代码使用。
 fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
-    let indent = line.indent;
-    let avail = width.saturating_sub(usize::from(indent)).max(1);
+    let first_indent = usize::from(line.indent);
+    let hang = usize::from(line.hang);
+    let cont_indent = first_indent.saturating_add(hang);
     let cells: Vec<(char, Style)> = line
         .spans
         .iter()
         .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
         .collect();
     if cells.is_empty() {
-        out.push(MdLine::spans(indent, Vec::new()));
+        out.push(MdLine::spans(line.indent, Vec::new()));
         return;
     }
     let mut index = 0usize;
+    let mut first = true;
     while index < cells.len() {
+        // 首行含标记（`• ` / `1. ` / `> `），续行用悬挂缩进对齐正文起始列。
+        let indent = if first { first_indent } else { cont_indent };
+        let avail = width.saturating_sub(indent).max(1);
         // 适应 `avail` 列的最大结束下标。
         let mut col = 0usize;
         let mut end = index;
@@ -557,6 +594,11 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
                 }
             }
         }
+        // 首行不能断在标记内部（否则出现 `•` 独占一行的孤儿标记）：
+        // 断点没越过标记宽度时改为按列硬切。
+        if first && break_at <= index.saturating_add(hang) {
+            break_at = end;
+        }
         let mut spans: Vec<(String, Style)> = Vec::new();
         for (ch, span_style) in &cells[index..break_at] {
             if let Some(last) = spans.last_mut()
@@ -568,8 +610,12 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
             spans.push((ch.to_string(), *span_style));
         }
         trim_trailing_whitespace(&mut spans);
-        out.push(MdLine::spans(indent, spans));
+        out.push(MdLine::spans(
+            u16::try_from(indent).unwrap_or(u16::MAX),
+            spans,
+        ));
         index = break_at;
+        first = false;
         // 跳过下一物理行的行首空白。
         while index < cells.len() && cells[index].0 == ' ' {
             index += 1;
