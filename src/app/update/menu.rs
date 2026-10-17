@@ -41,6 +41,13 @@ pub fn open_workspace_menu(state: &mut AppState, target: usize, anchor: (u16, u1
         commands.push(MenuCommand::OpenWorktree);
     }
     commands.push(MenuCommand::OpenPrompt);
+    if state
+        .workspaces
+        .get(target)
+        .is_some_and(|workspace| workspace.cwd.is_some())
+    {
+        commands.push(MenuCommand::CopyPath);
+    }
     commands.push(MenuCommand::RenameWorkspace);
     if state.workspaces.len() > 1 {
         commands.push(MenuCommand::CloseWorkspace);
@@ -128,6 +135,17 @@ pub fn open_pane_menu(state: &mut AppState, pane: PaneId, anchor: (u16, u16)) {
             .is_some_and(|ws| ws.cwd.as_deref() != Some(terminal_cwd))
     {
         commands.push(MenuCommand::SyncWorkspaceToTerminalCwd);
+    }
+    // 目标窗格或工作区具备有效路径时提供复制路径。
+    if state.workspaces.get(workspace).is_some_and(|ws| {
+        ws.cwd.is_some()
+            || ws
+                .tabs
+                .get(tab)
+                .and_then(|t| t.pane(pane))
+                .is_some_and(|p| p.cwd.is_some())
+    }) {
+        commands.push(MenuCommand::CopyPath);
     }
     if state.active_tab().layout.pane_ids().len() > 1 {
         commands.push(MenuCommand::ClosePane);
@@ -363,6 +381,38 @@ pub fn activate_menu(state: &mut AppState) {
             OverlayTarget::TempPrompt { workspace, temp_id },
         ) => {
             copy_prompt_temp_content(state, workspace, temp_id);
+        }
+        (Some(MenuCommand::CopyPath), OverlayTarget::Workspace(target)) => {
+            if let Some(path) = state
+                .workspaces
+                .get(target)
+                .and_then(|workspace| workspace.cwd.as_ref())
+            {
+                state
+                    .effects
+                    .push(Effect::CopyToClipboard(path.display().to_string()));
+            }
+        }
+        (
+            Some(MenuCommand::CopyPath),
+            OverlayTarget::Pane {
+                workspace,
+                tab,
+                pane,
+            },
+        ) => {
+            let path = state.workspaces.get(workspace).and_then(|ws| {
+                ws.tabs
+                    .get(tab)
+                    .and_then(|t| t.pane(pane))
+                    .and_then(|p| p.cwd.clone())
+                    .or_else(|| ws.cwd.clone())
+            });
+            if let Some(path) = path {
+                state
+                    .effects
+                    .push(Effect::CopyToClipboard(path.display().to_string()));
+            }
         }
         (Some(MenuCommand::DeleteTemp), OverlayTarget::TempPrompt { workspace, temp_id }) => {
             delete_prompt_temp(state, workspace, temp_id);

@@ -468,6 +468,7 @@ fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
             MenuCommand::OpenPrompt,
             MenuCommand::SwitchToWorkspaceCwd,
             MenuCommand::SyncWorkspaceToTerminalCwd,
+            MenuCommand::CopyPath,
         ],
         0,
     );
@@ -481,6 +482,7 @@ fn menu_labels_cover_terminal_prompt_and_workspace_path_commands() {
             text::MENU_OPEN_PROMPT,
             text::MENU_SWITCH_TO_WORKSPACE_CWD,
             text::MENU_SYNC_WS_TO_TERMINAL_CWD,
+            text::MENU_COPY_PATH,
         ]
     );
 }

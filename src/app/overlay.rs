@@ -324,6 +324,7 @@ pub enum MenuCommand {
     DeleteTemp,
     EditPrompt,
     CopyPromptContent,
+    CopyPath,
 }
 
 /// 重命名作用目标：工作区、标签或提示词树节点；窗格不可重命名，因此不在此枚举内。

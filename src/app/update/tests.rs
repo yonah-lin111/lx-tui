@@ -915,6 +915,7 @@ fn open_workspace_menu_offers_terminal_prompt_rename_and_close() {
         vec![
             MenuCommand::NewTerminal,
             MenuCommand::OpenPrompt,
+            MenuCommand::CopyPath,
             MenuCommand::RenameWorkspace,
             MenuCommand::CloseWorkspace
         ]
@@ -934,6 +935,7 @@ fn open_workspace_menu_hides_close_for_last_workspace() {
         vec![
             MenuCommand::NewTerminal,
             MenuCommand::OpenPrompt,
+            MenuCommand::CopyPath,
             MenuCommand::RenameWorkspace
         ]
     );
@@ -976,7 +978,7 @@ fn menu_selection_wraps_and_reports_changes() {
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
     };
-    assert_eq!(menu.selected, 3);
+    assert_eq!(menu.selected, 4);
     move_menu_selection(&mut state, 1);
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
         panic!("menu overlay expected");
@@ -1920,6 +1922,7 @@ fn open_pane_menu_offers_split_switch_prompt_path_and_close() {
             MenuCommand::OpenPrompt,
             MenuCommand::SwitchToTerminal,
             MenuCommand::SwitchToWorkspaceCwd,
+            MenuCommand::CopyPath,
             MenuCommand::ClosePane
         ]
     );
@@ -2030,6 +2033,93 @@ fn activate_menu_close_pane_opens_confirmation() {
         }
     );
     assert_eq!(state.active_tab().layout.pane_ids().len(), 2);
+}
+
+#[test]
+fn activate_menu_copy_path_from_workspace_emits_effect() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/Users/test/workspace"));
+    open_workspace_menu(&mut state, 0, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CopyPath);
+    activate_menu(&mut state);
+
+    assert_eq!(
+        state.effects,
+        vec![Effect::CopyToClipboard("/Users/test/workspace".to_string())]
+    );
+}
+
+#[test]
+fn open_workspace_menu_hides_copy_path_when_cwd_is_none() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = None;
+    open_workspace_menu(&mut state, 0, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert!(!menu.commands.contains(&MenuCommand::CopyPath));
+}
+
+#[test]
+fn open_workspace_list_menu_never_offers_copy_path() {
+    let mut state = AppState::demo();
+    open_workspace_list_menu(&mut state, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert_eq!(menu.commands, vec![MenuCommand::NewWorkspace]);
+    assert!(!menu.commands.contains(&MenuCommand::CopyPath));
+}
+
+#[test]
+fn activate_menu_copy_path_from_terminal_pane_prefers_pane_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-cwd"));
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = Some(PathBuf::from("/tmp/term-cwd"));
+
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CopyPath);
+    activate_menu(&mut state);
+
+    assert_eq!(
+        state.effects,
+        vec![Effect::CopyToClipboard("/tmp/term-cwd".to_string())]
+    );
+}
+
+#[test]
+fn activate_menu_copy_path_from_lx_pane_falls_back_to_workspace_cwd() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-cwd"));
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Lx;
+    pane_state.cwd = None;
+
+    open_pane_menu(&mut state, pane, (0, 0));
+    select_menu_command(&mut state, MenuCommand::CopyPath);
+    activate_menu(&mut state);
+
+    assert_eq!(
+        state.effects,
+        vec![Effect::CopyToClipboard("/tmp/ws-cwd".to_string())]
+    );
+}
+
+#[test]
+fn open_pane_menu_hides_copy_path_when_both_pane_and_ws_cwd_are_none() {
+    let (mut state, _, pane) = demo_two_panes();
+    state.workspaces[0].cwd = None;
+    let pane_state = state.pane_mut_anywhere(pane).expect("pane exists");
+    pane_state.view = PaneView::Terminal;
+    pane_state.cwd = None;
+
+    open_pane_menu(&mut state, pane, (0, 0));
+    let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
+        panic!("menu overlay expected");
+    };
+    assert!(!menu.commands.contains(&MenuCommand::CopyPath));
 }
 
 #[test]
@@ -2834,6 +2924,7 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
             MenuCommand::NewTerminal,
             MenuCommand::OpenWorktree,
             MenuCommand::OpenPrompt,
+            MenuCommand::CopyPath,
             MenuCommand::RenameWorkspace
         ]
     );
@@ -2854,6 +2945,7 @@ fn workspace_menu_offers_open_worktree_only_with_git_metadata() {
             MenuCommand::NewTerminal,
             MenuCommand::OpenWorktree,
             MenuCommand::OpenPrompt,
+            MenuCommand::CopyPath,
             MenuCommand::RenameWorkspace,
             MenuCommand::CloseWorkspace
         ]
@@ -2870,7 +2962,7 @@ fn menus_follow_new_open_switch_rename_close_order() {
         )
     }
 
-    // 工作区：New terminal → Open worktree → Open prompt → Rename → Close。
+    // 工作区：New terminal → Open worktree → Open prompt → Copy path → Rename → Close。
     let mut state = AppState::demo();
     state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
     push_git_workspace(
@@ -2889,6 +2981,7 @@ fn menus_follow_new_open_switch_rename_close_order() {
             MenuCommand::NewTerminal,
             MenuCommand::OpenWorktree,
             MenuCommand::OpenPrompt,
+            MenuCommand::CopyPath,
             MenuCommand::RenameWorkspace,
             MenuCommand::CloseWorkspace
         ]
@@ -2911,7 +3004,7 @@ fn menus_follow_new_open_switch_rename_close_order() {
     );
     assert!(close_is_last(&menu.commands));
 
-    // 窗格：Split → Open prompt → Switch → Switch to ws path → Sync → Close。
+    // 窗格：Split → Open prompt → Switch → Switch to ws path → Sync → Copy path → Close。
     state.overlay = None;
     let (mut state, _, pane) = demo_two_panes();
     state.workspaces[0].cwd = Some(PathBuf::from("/tmp/ws-cwd"));
@@ -2931,6 +3024,7 @@ fn menus_follow_new_open_switch_rename_close_order() {
             MenuCommand::SwitchToLx,
             MenuCommand::SwitchToWorkspaceCwd,
             MenuCommand::SyncWorkspaceToTerminalCwd,
+            MenuCommand::CopyPath,
             MenuCommand::ClosePane
         ]
     );

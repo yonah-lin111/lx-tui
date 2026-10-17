@@ -266,6 +266,7 @@ pub const MENU_SWITCH_TO_TERMINAL: &str = "Switch to terminal";
 pub const MENU_SWITCH_TO_LX: &str = "Switch to lx";
 pub const MENU_SWITCH_TO_WORKSPACE_CWD: &str = "Switch to ws path";
 pub const MENU_SYNC_WS_TO_TERMINAL_CWD: &str = "Sync ws to terminal path";
+pub const MENU_COPY_PATH: &str = "Copy path";
 pub const MENU_CLOSE_PANE: &str = "Close";
 
 /// 提示词树右键菜单项。

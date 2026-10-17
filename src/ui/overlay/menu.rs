@@ -97,6 +97,7 @@ pub(crate) fn menu_labels(menu: &Menu) -> Vec<&'static str> {
             }
             MenuCommand::EditPrompt => text::MENU_PROMPT_EDIT,
             MenuCommand::CopyPromptContent => text::MENU_PROMPT_COPY,
+            MenuCommand::CopyPath => text::MENU_COPY_PATH,
         })
         .collect()
 }
