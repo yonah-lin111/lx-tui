@@ -2,7 +2,7 @@
 //!
 //! 标题是**固定枚举**（[`NoticeTitle`]）：文案与配色都由枚举决定，调用点只给一句原因，
 //! 不允许随手拼自由标题。标题整行按级别着色：失败红 + 粗、警告黄 + 粗、提示用窗格底部
-//! 供应商同款次要信息色；原因行连接符压暗、正文正常色。
+//! 供应商同款次要信息色；原因行连接符用供应商灰 + 粗、正文正常色。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -118,7 +118,7 @@ pub(super) fn draw(
                     content.x,
                     y,
                     &prefix,
-                    style::agent_connector(),
+                    style::chat_notice_connector(),
                     prefix_width,
                 );
             }
@@ -136,3 +136,6 @@ pub(super) fn draw(
         *row_index += 1;
     }
 }
+
+#[cfg(test)]
+mod tests;

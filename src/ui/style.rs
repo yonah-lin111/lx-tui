@@ -475,6 +475,11 @@ pub fn chat_user_bg() -> Style {
     Style::default().bg(Color::Indexed(236))
 }
 
+/// 通知原因行的连接符（`└─`）：供应商同款灰色（[`chat_provider`]）+ 加粗。
+pub fn chat_notice_connector() -> Style {
+    chat_provider().add_modifier(Modifier::BOLD)
+}
+
 /// 状态行模型名高亮：金色（Indexed 220）加粗，避开边框青/蓝。
 pub fn chat_model() -> Style {
     Style::default()

@@ -25,13 +25,21 @@ fn titles_are_fixed_enum_values_with_their_own_palette() {
     assert_eq!(NoticeTitle::Failed.label(), "Failed");
     assert_eq!(NoticeTitle::Interrupted.label(), "Interrupted");
     assert_eq!(NoticeTitle::Warning.label(), "Warning");
-    assert_eq!(NoticeTitle::Failed.style(), style::agent_fail(), "失败红 + 粗");
+    assert_eq!(
+        NoticeTitle::Failed.style(),
+        style::agent_fail(),
+        "失败红 + 粗"
+    );
     assert_eq!(
         NoticeTitle::Interrupted.style(),
         style::chat_provider(),
         "中断用窗格底部供应商同款次要信息色"
     );
-    assert_eq!(NoticeTitle::Warning.style(), style::agent_warn(), "警告黄 + 粗");
+    assert_eq!(
+        NoticeTitle::Warning.style(),
+        style::agent_warn(),
+        "警告黄 + 粗"
+    );
 }
 
 #[test]
@@ -49,8 +57,19 @@ fn notice_is_title_plus_exactly_one_reason_line() {
     for x in 0..8 {
         assert_eq!(grid.cell(x, 0).style, style::agent_fail(), "x={x}");
     }
-    // 原因行：连接符压暗、正文正常色。
-    assert_eq!(grid.cell(2, 1).style, style::agent_connector());
+    // 原因行：连接符供应商灰 + 粗、正文正常色。
+    assert_eq!(grid.cell(2, 1).style, style::chat_notice_connector());
+    assert!(
+        style::chat_notice_connector()
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "连接符加粗"
+    );
+    assert_eq!(
+        style::chat_notice_connector().fg,
+        style::chat_provider().fg,
+        "连接符用供应商同款前景（默认灰）"
+    );
     assert_eq!(grid.cell(5, 1).style, style::text());
 }
 
