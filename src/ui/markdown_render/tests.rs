@@ -304,6 +304,57 @@ fn wrapped_list_items_hang_indent_under_the_text() {
     );
 }
 
+/// 三级及更深的列表不会被吞成「缩进代码块」：标记保留、每级 2 列。
+#[test]
+fn deeply_nested_lists_keep_markers_and_two_column_levels() {
+    let src = "- 一级\n  - 二级\n    - 三级\n      - 四级";
+    let lines = render_wrapped(src, 40);
+    assert_eq!(
+        lines.iter().map(|line| line.indent).collect::<Vec<_>>(),
+        vec![0, 2, 4, 6],
+        "每级 2 列"
+    );
+    assert!(
+        lines.iter().all(|line| line.text().starts_with("• ")),
+        "全部按列表项渲染（`-` 不再漏进正文）：{lines:?}"
+    );
+}
+
+/// 有序列表按 `1. ` 的 3 空格对齐时，层级仍换算成均匀的 2 列。
+#[test]
+fn mixed_indent_steps_map_to_uniform_levels() {
+    let src = "1. 一级\n   1. 二级\n      1. 三级";
+    let lines = render_wrapped(src, 40);
+    assert_eq!(
+        lines.iter().map(|line| line.indent).collect::<Vec<_>>(),
+        vec![0, 2, 4]
+    );
+    assert!(lines[2].text().starts_with("1. 三级"));
+}
+
+/// 真正的缩进代码块仍按代码渲染（4 空格 + 非列表内容）。
+#[test]
+fn indented_code_blocks_still_render_as_code() {
+    let lines = render("    let x = 1;\n    let y = 2;");
+    assert!(lines.len() >= 2, "两行都在代码块里：{lines:?}");
+    let text: String = lines
+        .iter()
+        .map(MdLine::text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("let x = 1;"), "{text}");
+    assert!(text.contains("let y = 2;"), "{text}");
+}
+
+/// 列表结束后缩进档位复位：段落之后的同级列表仍从第 0 列开始。
+#[test]
+fn list_indent_stack_resets_after_other_blocks() {
+    let src = "- 一级\n  - 二级\n段落\n- 另一个列表";
+    let lines = render_wrapped(src, 40);
+    assert_eq!(lines[1].indent, 2, "嵌套仍是二级");
+    assert_eq!(lines[3].indent, 0, "段落之后复位到顶层：{lines:?}");
+}
+
 /// 引用换行：续行对齐引用正文（`> ` 之后），不丢字符。
 #[test]
 fn wrapped_quote_hangs_under_the_text() {
