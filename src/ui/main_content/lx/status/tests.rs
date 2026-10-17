@@ -1,4 +1,4 @@
-//! 状态测试：`context:当前用量/模型上限` 显示与隐藏（无消耗整段隐藏）、窄宽度降级（丢上下文占用）、
+//! 状态测试：`context:当前用量(百分比)` 显示与隐藏（无消耗整段隐藏）、窄宽度降级（丢上下文占用）、
 //! 模型名硬切不省略号、底边线保留、供应商用统计行同款次要信息色（均绘制在窗格底边框上）。
 
 use ratatui::buffer::Buffer;
@@ -64,31 +64,44 @@ fn render_border(lx: &Lx, width: u16) -> String {
 }
 
 #[test]
-fn context_text_is_usage_over_model_limit() {
-    let st = status(Some("M"), Some("P"), Some(1_000_000), Some(720_000), false);
+fn context_text_is_usage_with_percent() {
+    let st = status(Some("M"), Some("P"), Some(1_000_000), Some(258_700), false);
     assert_eq!(
         context_text_for_test(&st).as_deref(),
-        Some("context:720k/1.0M")
+        Some("context:258.7k(26%)"),
+        "一位小数 + 四舍五入百分比"
     );
     let st = status(Some("M"), Some("P"), Some(200_000), Some(45_200), false);
     assert_eq!(
         context_text_for_test(&st).as_deref(),
-        Some("context:45k/200k")
+        Some("context:45.2k(23%)")
     );
-    let st = status(Some("M"), Some("P"), Some(100), Some(100), false);
+    // 整数值不带 `.0`；用量超过上限时百分比夹到 100%。
+    let st = status(Some("M"), Some("P"), Some(1_000_000), Some(720_000), false);
     assert_eq!(
         context_text_for_test(&st).as_deref(),
-        Some("context:100/100")
+        Some("context:720k(72%)")
+    );
+    let st = status(Some("M"), Some("P"), Some(100), Some(200), false);
+    assert_eq!(
+        context_text_for_test(&st).as_deref(),
+        Some("context:200(100%)"),
+        "超过上限夹到 100%"
     );
 }
 
 #[test]
-fn tiny_usage_shows_exact_count_not_rounded_away() {
-    // 小用量按 token 短格式原样显示（不再四舍五入成 0%）。
+fn tiny_usage_shows_exact_count_with_zero_percent() {
+    // 小用量按一位小数原样显示（百分比取整到 0% 也照常给出）。
     let st = status(Some("M"), Some("P"), Some(1_000_000), Some(2_500), false);
     assert_eq!(
         context_text_for_test(&st).as_deref(),
-        Some("context:2.5k/1.0M")
+        Some("context:2.5k(0%)")
+    );
+    let st = status(Some("M"), Some("P"), Some(1_000_000), Some(999), false);
+    assert_eq!(
+        context_text_for_test(&st).as_deref(),
+        Some("context:999(0%)")
     );
 }
 
@@ -110,23 +123,23 @@ fn context_without_usage_is_hidden_entirely() {
 }
 
 #[test]
-fn context_usage_shows_used_over_limit_on_border() {
+fn context_usage_shows_usage_with_percent_on_border() {
     let lx = lx_with_status(status(
         Some("M"),
         Some("P"),
         Some(1_000_000),
-        Some(720_000),
+        Some(258_700),
         false,
     ));
     let line = render_border(&lx, 60);
     assert!(
-        line.contains("context:720k/1.0M"),
-        "占用显示 `context:720k/1.0M`：{line}"
+        line.contains("context:258.7k(26%)"),
+        "占用显示 `context:258.7k(26%)`：{line}"
     );
 }
 
 #[test]
-fn context_style_is_white() {
+fn context_uses_provider_color() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), false));
     let rect = Rect::new(0, 0, 60, 5);
     let inner = pane(rect);
@@ -135,7 +148,12 @@ fn context_style_is_white() {
     let lay = layout(inner, &lx.chat.status);
     let cell = &buf[(lay.context.x, lay.context.y)];
     assert_eq!(cell.symbol(), "c");
-    assert_eq!(cell.fg, Color::Indexed(252), "占用文字亮白");
+    assert_eq!(cell.fg, Color::Reset, "占用文字用默认前景（供应商灰）");
+    assert_eq!(
+        cell.modifier,
+        style::chat_provider().add_modifier,
+        "占用文字与供应商同款（dim、不加粗）"
+    );
 }
 
 #[test]
@@ -178,9 +196,9 @@ fn narrow_drops_context_keeps_model() {
     let inner = Rect::new(0, 0, 40, 3);
     let lay = layout(inner, &lx.chat.status);
     assert!(lay.context.width > 0, "40 列显示上下文占用");
-    let inner = Rect::new(0, 0, 22, 3);
+    let inner = Rect::new(0, 0, 23, 3);
     let lay = layout(inner, &lx.chat.status);
-    assert!(lay.context.width > 0, "22 列仍保留上下文占用");
+    assert!(lay.context.width > 0, "23 列仍保留上下文占用");
     assert!(lay.label.width > 0, "保留模型名区");
     // 更窄：连上下文占用也放不下时只留模型名（仍硬切保留）。
     let inner = Rect::new(0, 0, 16, 3);
@@ -198,10 +216,11 @@ fn narrow_hides_provider_without_ellipsis() {
         Some(50),
         false,
     ));
-    let line = render_border(&lx, 24);
+    // 内宽 24（`render_border` 的 width - 2）：上下文占用 15 列 + 模型名区 6 列刚好放得下。
+    let line = render_border(&lx, 26);
     assert!(!line.contains('…'), "不使用省略号：{line}");
     assert!(!line.contains("Provider"), "供应商被整体隐藏：{line}");
-    assert!(line.contains("context:50/100"), "保留上下文占用：{line}");
+    assert!(line.contains("context:50(50%)"), "保留上下文占用：{line}");
 }
 
 #[test]
@@ -223,7 +242,7 @@ fn wide_status_on_border_with_provider_and_context() {
         "左角后模型 · 供应商：{line}"
     );
     assert!(
-        line.ends_with("context:720k/1.0M ╯"),
+        line.ends_with("context:720k(72%) ╯"),
         "上下文占用贴右端、保留角：{line}"
     );
 }

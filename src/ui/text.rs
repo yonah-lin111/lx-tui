@@ -508,23 +508,42 @@ pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "esc again: stop",
     "esc stop",
 ];
-/// token 短格式：`999` / `1.2k` / `12k` / `1.2M`（统计行与上下文占用共用）。
+/// 数值 + 单位后缀（保留一位小数，整数值去掉 `.0`）：`1.2k` / `720k` / `1M`。
+fn scaled(value: f64, suffix: &str) -> String {
+    let text = format!("{value:.1}");
+    let trimmed = text.strip_suffix(".0").unwrap_or(&text);
+    format!("{trimmed}{suffix}")
+}
+
+/// token 短格式：`999` / `1.2k` / `12k` / `1.2M`（统计行用；≥10k 取整到 k）。
 pub fn token_count(tokens: u64) -> String {
     if tokens < 1_000 {
         return tokens.to_string();
     }
     if tokens < 10_000 {
-        return format!("{:.1}k", tokens as f64 / 1_000.0);
+        return scaled(tokens as f64 / 1_000.0, "k");
     }
     if tokens < 1_000_000 {
         return format!("{}k", (tokens as f64 / 1_000.0).round() as i64);
     }
-    format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    scaled(tokens as f64 / 1_000_000.0, "M")
+}
+
+/// token 精确短格式（始终保留一位小数）：`999` / `1.2k` / `258.7k` / `1.2M`；
+/// 状态行上下文占用用它（用量数值得看清一位小数）。
+pub fn token_count_precise(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 1_000_000 {
+        return scaled(tokens as f64 / 1_000.0, "k");
+    }
+    scaled(tokens as f64 / 1_000_000.0, "M")
 }
 
 /// 状态行：模型名与供应商名之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
-/// 状态行：上下文占用前缀（`context:45.2k/200k`；无消耗整段隐藏）。
+/// 状态行：上下文占用前缀（`context:258.7k(25%)`；无消耗整段隐藏）。
 pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
 /// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
 /// （`Thought` 与 UI 页 agent 步骤的动词一致）。

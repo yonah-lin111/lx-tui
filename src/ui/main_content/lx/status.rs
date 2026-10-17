@@ -3,8 +3,9 @@
 //! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
 //! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
 //! 左侧 ` 模型名 · 供应商名 `（模型名金色高亮、供应商用本轮统计行同款次要信息色），
-//! 右端 `context:当前用量/模型上限`（token 短格式，如 `context:45.2k/200k`；**未知用量、
-//! 未知上限或零消耗整段隐藏**）。
+//! 右端 `context:当前用量(百分比)`（token 短格式一位小数，如 `context:258.7k(26%)`；
+//! 用量取最近一次同模型请求的分子、百分比 = 用量 / 模型上限（四舍五入），夹到 100%；
+//! 用**供应商同款次要信息色**（与左侧供应商名一致）；**未知用量、未知上限或零消耗整段隐藏**）。
 //! 宽度不足时依次丢弃上下文占用 → 供应商，始终保留模型名；模型名按列硬切（不使用省略号）。
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
 //! 两端角字符保留，各控件矩形由同一布局函数派生。
@@ -167,22 +168,24 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
             lay.context.x,
             y,
             &context,
-            style::chat_context_text(),
+            style::chat_provider(),
             lay.context.right(),
         );
     }
 }
 
-/// 上下文占用文字（`context:当前用量/模型上限`，token 短格式）；未知（无上限或无用量）
-/// 与**零消耗**返回 None（整段隐藏）。
+/// 上下文占用文字（`context:当前用量(百分比)`，用量用一位小数的 token 短格式）；
+/// 未知（无上限或无用量）与**零消耗**返回 None（整段隐藏）。
 fn context_text(status: &ChatStatus) -> Option<String> {
     let used = status.input_tokens.filter(|tokens| *tokens > 0)?;
     let limit = status.context_limit.filter(|limit| *limit > 0)?;
+    // 四舍五入（`258.7k / 1M` → 26%，与展示口径一致）。
+    let percent = used.saturating_mul(100).saturating_add(limit / 2) / limit;
     Some(format!(
-        "{}{}/{}",
+        "{}{}({}%)",
         text::LX_CHAT_CONTEXT_PREFIX,
-        text::token_count(used),
-        text::token_count(limit)
+        text::token_count_precise(used),
+        percent.min(100)
     ))
 }
 

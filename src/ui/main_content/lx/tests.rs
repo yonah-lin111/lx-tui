@@ -919,8 +919,8 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         "底边框显示模型 · 供应商：{border}"
     );
     assert!(
-        border.contains("context:720k/1.0M"),
-        "底边框显示上下文占用 `context:720k/1.0M`：{border}"
+        border.contains("context:720k(72%)"),
+        "底边框显示上下文占用 `context:720k(72%)`：{border}"
     );
 }
 

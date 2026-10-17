@@ -492,11 +492,6 @@ pub fn chat_provider() -> Style {
     muted()
 }
 
-/// 状态行上下文占用（进度条已用段与百分比文字）：亮白（Indexed 252），与金色模型名区分。
-pub fn chat_context_text() -> Style {
-    Style::default().fg(Color::Indexed(252))
-}
-
 /// lx 输入框上方 loading 行：转轮用品牌天蓝（Indexed 117）加粗。
 pub fn chat_loading_spinner() -> Style {
     Style::default()
