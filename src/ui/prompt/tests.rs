@@ -1522,3 +1522,23 @@ fn header_rename_input_replaces_page_name_with_cursor() {
     let input_col = char_col(&row, "Draft", panel.x);
     assert_eq!(cursor.0, input_col + 2, "光标列随字符索引: row={row}");
 }
+
+#[test]
+fn short_ref_renders_with_its_own_style() {
+    let area = Rect::new(0, 0, 40, 4);
+    let editor = prompt(40, 4, "@ref/a/b.md");
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &editor, None);
+    let cell = &buf[(0, 0)];
+    assert_eq!(cell.fg, Color::Indexed(141), "柔紫");
+    assert!(cell.modifier.contains(Modifier::BOLD), "加粗");
+    assert!(
+        !cell.modifier.contains(Modifier::UNDERLINED),
+        "无下划线，区别于 refer-*"
+    );
+    // 与同类既有引用色都不同。
+    assert_ne!(cell.fg, Color::Yellow, "不与 @ 提及黄混");
+    assert_ne!(cell.fg, Color::LightGreen);
+    assert_ne!(cell.fg, Color::Indexed(208));
+    assert_ne!(cell.fg, Color::LightMagenta);
+}

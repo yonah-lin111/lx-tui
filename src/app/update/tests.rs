@@ -3856,7 +3856,11 @@ fn refer_panel_routes_keys_before_slash_and_edits() {
     state.prompt.insert_str("@abc 记录\nac");
     assert!(state.prompt.refer_panel().is_some());
     apply_editor(&mut state, EditorCommand::Newline);
-    assert!(state.prompt.text().ends_with("@abc "), "回车确认快捷候选");
+    assert!(
+        state.prompt.text().ends_with("@ref/abc "),
+        "回车确认快捷候选并插入短格式: {}",
+        state.prompt.text()
+    );
     state.prompt.undo();
     assert!(state.prompt.text().ends_with("\nac"), "单步撤销回触发词");
 }

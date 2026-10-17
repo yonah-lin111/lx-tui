@@ -3,6 +3,7 @@
 mod blocks;
 mod refer;
 mod refer_shortcut;
+mod short_ref;
 mod slash;
 mod supple;
 mod template;
@@ -11,6 +12,7 @@ mod worktree;
 pub use blocks::*;
 pub use refer::*;
 pub use refer_shortcut::*;
+pub use short_ref::*;
 pub use slash::*;
 pub use supple::*;
 pub use template::*;

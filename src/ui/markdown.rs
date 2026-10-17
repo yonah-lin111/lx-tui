@@ -35,6 +35,8 @@ pub enum TokenKind {
     ReferFolder,
     /// `@[refer-image](path)` 图片引用。
     ReferImage,
+    /// `@ref/末两段` 短引用（文件 / 文件夹 / 图片由形状推断，统一一种样式）。
+    ShortRef,
 }
 
 /// 引用类型 → 高亮分类。
@@ -385,6 +387,16 @@ fn scan_inline(line: &str, base: usize, tokens: &mut Vec<Token>) {
             );
             index += close + 2;
             continue;
+        }
+        // 短引用 `@ref/…` 先于 `@` 提及判定：整段（含前缀）统一着色。
+        if rest.starts_with(markdown::SHORT_REF_PREFIX) {
+            let prefix = markdown::SHORT_REF_PREFIX.len();
+            let body = markdown::short_ref_body_len(line, index + prefix);
+            if body > 0 {
+                push(tokens, index..index + prefix + body, TokenKind::ShortRef);
+                index += prefix + body;
+                continue;
+            }
         }
         // 引用标记先于 `@` 提及判定：整段（含括号内路径）着引用色，路径不再参与其他语法。
         if rest.starts_with('@')

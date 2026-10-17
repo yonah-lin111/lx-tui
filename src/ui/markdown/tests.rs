@@ -327,3 +327,47 @@ fn refer_tokens_carry_kind_specific_highlights() {
     );
     assert_eq!(kinds("@[refer-file]"), vec![], "缺路径不成标记");
 }
+
+#[test]
+fn short_ref_tokens_are_one_highlight() {
+    assert_eq!(
+        kinds("see @ref/agent/lx-agent/ and @ref/src/main.rs"),
+        vec![
+            (TokenKind::ShortRef, "@ref/agent/lx-agent/"),
+            (TokenKind::ShortRef, "@ref/src/main.rs"),
+        ]
+    );
+    // 整段一个 token：路径内的 `*`、`_` 不参与强调解析。
+    assert_eq!(
+        kinds("@ref/a_b*c.md tail"),
+        vec![(TokenKind::ShortRef, "@ref/a_b*c.md")]
+    );
+    // 句末 `.` 属于句子标点，不进 token。
+    assert_eq!(
+        kinds("see @ref/a/b.md."),
+        vec![(TokenKind::ShortRef, "@ref/a/b.md")]
+    );
+    // 与既有 `@` 提及、`@[refer-*]` 引用各自独立分类。
+    assert_eq!(
+        kinds("@ref/a/b @src/app.rs @[refer-file](/x/y.md)"),
+        vec![
+            (TokenKind::ShortRef, "@ref/a/b"),
+            (TokenKind::FileMention, "@src/app.rs"),
+            (TokenKind::ReferFile, "@[refer-file](/x/y.md)"),
+        ],
+        "短引用不复用提及或引用分类"
+    );
+    assert_eq!(
+        kinds("@ref/"),
+        vec![(TokenKind::FileMention, "@ref/")],
+        "只输入前缀时退回普通 @ 提及，不当作短引用"
+    );
+    assert_eq!(
+        kinds("`@ref/a/b`"),
+        vec![
+            (TokenKind::Marker, "`"),
+            (TokenKind::InlineCode, "@ref/a/b"),
+            (TokenKind::Marker, "`"),
+        ]
+    );
+}
