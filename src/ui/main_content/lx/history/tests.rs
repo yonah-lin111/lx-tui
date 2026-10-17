@@ -69,8 +69,9 @@ fn thinking_collapsed_after_completion_one_row_each() {
     )]);
     let area = Rect::new(0, 0, 40, 20);
     let layout = layout(area, &lx);
-    // 完成态默认折叠：1 折叠头 + 1 正文行 + 1 空行 = 3（无用量数据不出统计行）。
-    assert_eq!(layout.total_rows, 3);
+    // 完成态默认折叠：折叠头 1 + 块间空行 1 + 正文 1 + 消息间空行 1 = 4
+    //（无用量数据不出统计行）。
+    assert_eq!(layout.total_rows, 4);
     assert_eq!(layout.thinking.len(), 1);
     assert_eq!(layout.thinking[0].0, 0);
     assert_eq!(layout.thinking[0].1, 0);
@@ -88,7 +89,7 @@ fn thinking_collapsed_by_default_while_streaming() {
     let layout = layout(area, &lx);
     assert!(!lx.chat.reasoning_expanded(0, 0), "生成中保持折叠");
     assert!(lx.chat.reasoning_streaming(0, 0), "仍在生成");
-    // 折叠头 1 + 正文 0（markdown 空渲染为 0 行）+ 空行 1 = 2。
+    // 折叠头 1 + 消息间空行 1 = 2（空的正文块不占行、也不引入空行）。
     assert_eq!(layout.total_rows, 2);
 }
 
@@ -119,8 +120,8 @@ fn expanded_thinking_counts_content_rows() {
     lx.chat.toggle_reasoning(0, 0);
     let area = Rect::new(0, 0, 40, 20);
     let layout = layout(area, &lx);
-    // 展开头 1 + 3 内容行 + 正文 1 + 空行 1 = 6。
-    assert_eq!(layout.total_rows, 6);
+    // 展开头 1 + 3 内容行 + 块间空行 1 + 正文 1 + 消息间空行 1 = 7。
+    assert_eq!(layout.total_rows, 7);
 }
 
 #[test]
@@ -135,13 +136,15 @@ fn assistant_message_has_no_label_and_shows_body() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let line0 = row_text(&buf, area, 0);
     let line1 = row_text(&buf, area, 1);
+    let line2 = row_text(&buf, area, 2);
     assert!(line0.contains("Thought"), "首个渲染行为折叠头：{line0}");
     assert!(
         !line0.contains("assistant"),
         "不再显示 assistant 标签：{line0}"
     );
-    assert!(!line1.contains("秘密思考"), "折叠时不显示内容");
-    assert!(line1.contains("可见正文"), "正文绘制：{line1}");
+    assert!(line1.trim().is_empty(), "折叠头与正文间空一行：{line1}");
+    assert!(!line2.contains("秘密思考"), "折叠时不显示内容");
+    assert!(line2.contains("可见正文"), "正文绘制：{line2}");
 }
 
 #[test]
@@ -358,8 +361,8 @@ fn stats_line_row_is_counted_in_layout() {
     // 统计行单行放得下（60 列）。
     let area = Rect::new(0, 0, 60, 20);
     let layout = layout(area, &lx);
-    // 正文 1 + 统计行 1 + 空行 1 = 3。
-    assert_eq!(layout.total_rows, 3);
+    // 正文 1 + 块间空行 1 + 统计行 1 + 消息间空行 1 = 4。
+    assert_eq!(layout.total_rows, 4);
 }
 
 #[test]

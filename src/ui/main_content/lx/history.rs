@@ -72,31 +72,49 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         };
     }
     for (message_index, message) in lx.chat.messages.iter().enumerate() {
+        // 消息内块（状态标记 / 各内容块 / 统计行）之间空一行。
+        let mut first_block = true;
         if let Some(marker) = status_marker(message) {
+            first_block = false;
             rows += wrap(&marker, width).len();
         }
         for (part_index, part) in message.parts.iter().enumerate() {
-            match part.kind {
+            let (is_reasoning, part_rows) = match part.kind {
                 crate::chat::events::PartKind::Text => {
-                    rows += text_rows(message, &part.content, width);
+                    (false, text_rows(message, &part.content, width))
                 }
-                crate::chat::events::PartKind::Reasoning => {
-                    let header_y = area
-                        .y
-                        .saturating_add(u16::try_from(rows).unwrap_or(u16::MAX));
-                    thinking.push((
-                        message_index,
-                        part_index,
-                        Rect::new(area.x, header_y, width, 1),
-                    ));
-                    rows += 1;
-                    if lx.chat.reasoning_expanded(message_index, part_index) {
-                        rows += thinking_rows(&part.content, width);
-                    }
-                }
+                crate::chat::events::PartKind::Reasoning => (
+                    true,
+                    1 + if lx.chat.reasoning_expanded(message_index, part_index) {
+                        thinking_rows(&part.content, width)
+                    } else {
+                        0
+                    },
+                ),
+            };
+            if part_rows == 0 {
+                continue; // 空正文块不占行，也不引入块间空行。
             }
+            if !first_block {
+                rows += 1;
+            }
+            first_block = false;
+            if is_reasoning {
+                let header_y = area
+                    .y
+                    .saturating_add(u16::try_from(rows).unwrap_or(u16::MAX));
+                thinking.push((
+                    message_index,
+                    part_index,
+                    Rect::new(area.x, header_y, width, 1),
+                ));
+            }
+            rows += part_rows;
         }
         if let Some(line) = stats_line(message) {
+            if !first_block {
+                rows += 1;
+            }
             rows += wrap(&line, width).len();
         }
         rows += 1; // 消息间空行。
@@ -118,8 +136,11 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
     let mut row_index = 0usize;
     for (message_index, message) in lx.chat.messages.iter().enumerate() {
         let is_user = message.role == "user";
+        // 消息内块（状态标记 / 各内容块 / 统计行）之间空一行（与 `layout` 同口径）。
+        let mut first_block = true;
         // assistant 状态标记行（失败/中断/流中）；完成态无标记（移除 `assistant` 标签）。
         if !is_user && let Some(marker) = status_marker(message) {
+            first_block = false;
             let marker_style = if message.status == "failed" {
                 style::error()
             } else {
@@ -134,6 +155,26 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
         }
         let mut first_user_line = true;
         for (part_index, part) in message.parts.iter().enumerate() {
+            let expanded = lx.chat.reasoning_expanded(message_index, part_index);
+            let block_rows = match part.kind {
+                crate::chat::events::PartKind::Text => {
+                    text_rows(message, &part.content, content.width)
+                }
+                crate::chat::events::PartKind::Reasoning => {
+                    1 + if expanded {
+                        thinking_rows(&part.content, content.width)
+                    } else {
+                        0
+                    }
+                }
+            };
+            if block_rows == 0 {
+                continue; // 空正文块不占行，也不引入块间空行（与 `layout` 同口径）。
+            }
+            if !first_block {
+                row_index += 1;
+            }
+            first_block = false;
             match part.kind {
                 crate::chat::events::PartKind::Text => {
                     if is_user {
@@ -162,7 +203,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                     }
                 }
                 crate::chat::events::PartKind::Reasoning => {
-                    let expanded = lx.chat.reasoning_expanded(message_index, part_index);
                     let streaming = lx.chat.reasoning_streaming(message_index, part_index);
                     if let Some(y) = visible_row(content, scroll, row_index) {
                         // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色；不带折叠标记）；
@@ -207,6 +247,9 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
             }
         }
         if let Some(line) = stats_line(message) {
+            if !first_block {
+                row_index += 1;
+            }
             for row in wrap(&line, content.width) {
                 if let Some(y) = visible_row(content, scroll, row_index) {
                     grid.put_clipped(content.x, y, &row, style::muted(), content.width);
