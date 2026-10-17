@@ -920,12 +920,8 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         "底边框显示模型 · 供应商：{border}"
     );
     assert!(
-        border.contains('█'),
-        "底边框显示上下文进度条已用段：{border}"
-    );
-    assert!(
-        border.contains('░'),
-        "底边框显示上下文进度条空余段：{border}"
+        border.contains("context:72%"),
+        "底边框显示上下文占用 `context:72%`：{border}"
     );
 }
 
@@ -948,6 +944,10 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
             }],
             model_label: None,
             error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
         });
     }
     lx.chat = chat;
@@ -977,6 +977,10 @@ fn overflowing_history_draws_scrollbar_glyphs() {
             }],
             model_label: None,
             error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
         });
     }
     lx.chat = chat;
@@ -1026,6 +1030,10 @@ fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
         }],
         model_label: None,
         error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
     });
     chat.follow_bottom = follow_bottom;
     chat.status.streaming = streaming;

@@ -82,6 +82,17 @@ impl ModelsSnapshot {
         }
     }
 
+    /// 模型展示名：配置里的 `name`，缺失回退模型 id（历史行统计用）。
+    pub fn model_display_name(&self, provider_key: &str, model_id: &str) -> String {
+        self.settings
+            .providers
+            .get(provider_key)
+            .and_then(|provider| provider.models.get(model_id))
+            .map(|model| model.name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| model_id.to_string())
+    }
+
     /// 该选择对应模型的思考等级参数对象（variants 的 value）。
     pub fn variant_params_of(&self, selection: &ModelSelection) -> Option<serde_json::Value> {
         let variant = selection.variant.as_ref()?;
@@ -92,6 +103,27 @@ impl ModelsSnapshot {
             .models
             .get(&selection.model)?;
         model.variants.get(variant).cloned()
+    }
+
+    /// 规范化选择：显式 `variant` 失效或缺失时回落模型配置里的默认思考等级
+    /// （模型 `variant` 字段），使「配了默认等级」的模型开箱即用（如 deepseek 思考）。
+    pub fn normalize_selection(&self, mut selection: ModelSelection) -> ModelSelection {
+        let Some(model) = self
+            .settings
+            .providers
+            .get(&selection.provider)
+            .and_then(|provider| provider.models.get(&selection.model))
+        else {
+            return selection;
+        };
+        let valid = selection
+            .variant
+            .as_ref()
+            .is_some_and(|variant| model.variants.contains_key(variant));
+        if !valid {
+            selection.variant = model.variant.clone();
+        }
+        selection
     }
 
     /// 流式空闲超时。
@@ -176,10 +208,16 @@ pub struct ChatMessageView {
     pub status: String,
     pub turn_index: i64,
     pub parts: Vec<ChatPartView>,
-    /// 该轮实际模型（assistant 行）。
+    /// 该轮实际模型展示名（assistant 行）。
     pub model_label: Option<String>,
     /// 失败原因码（如 `http 503`、`timeout`）；仅 `failed` 时有值，用于历史行提示。
     pub error_code: Option<String>,
+    /// 该轮供应商报的输入 / 输出 / 缓存读取 token（未知为 None，不写 0 冒充）。
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    /// 该轮耗时（毫秒；未完成或时间戳缺失为 None）。
+    pub duration_ms: Option<i64>,
 }
 
 /// 请求状态机：Idle → Committing → Streaming → Finishing → Idle。
@@ -233,9 +271,9 @@ pub struct ChatStatus {
     pub model_name: Option<String>,
     /// 供应商展示名。
     pub provider_name: Option<String>,
-    /// 当前模型上下文上限（未知为 None → `--`）。
+    /// 当前模型上下文上限（未知为 None → 不显示上下文占用）。
     pub context_limit: Option<u64>,
-    /// 最近一次同模型成功请求的真实输入 token（未知为 None → `--`）。
+    /// 上下文占用分子：最近一次同模型请求的输入 + 输出 token（未知为 None）。
     pub input_tokens: Option<u64>,
     /// 上下文占用百分比（真实输入 token / 上限，夹到 0..=100）；两者任一未知为 None。
     pub context_percent: Option<u8>,
@@ -258,9 +296,11 @@ pub struct LxChat {
     pub request: RequestState,
     /// 历史视图滚动：是否跟随底部（用户上滚后暂停）。
     pub follow_bottom: bool,
-    /// 该窗格最近一次**同模型**成功请求的真实输入 token；None 显示 `--`。
-    pub last_input_tokens: Option<u64>,
-    /// 该输入 token 对应模型（切换模型时分子清空）。
+    /// 上下文占用分子：最近一次**同模型**请求的输入 + 输出 token
+    /// （codex 口径 `total_tokens`——下一轮请求的输入近似为其上一轮输入加输出）；
+    /// None 表示未知（状态行整段隐藏上下文占用）。
+    pub context_tokens: Option<u64>,
+    /// 该占用分子对应模型（切换模型时分子清空）。
     pub last_tokens_model: Option<String>,
     /// 上下文裁剪省略提示（一次性显示；读取后清除）。
     pub omitted_turns_notice: Option<usize>,
@@ -268,8 +308,10 @@ pub struct LxChat {
     pub generation_counter: u64,
     /// 状态行展示数据。
     pub status: ChatStatus,
-    /// 已展开的 thinking 块（消息索引, part 索引）。
-    pub expanded_thinking: Vec<(usize, usize)>,
+    /// 用户显式切换过的 thinking 块（消息索引, part 索引, 是否展开）；覆盖流中自动展开。
+    pub thinking_toggled: Vec<(usize, usize, bool)>,
+    /// 当前轮开始时刻（毫秒；来自 `begin_turn` 落库时间），用于在线计算本轮耗时。
+    pub turn_started_at_ms: Option<i64>,
     /// 历史视图滚动偏移（跟随底部时忽略）。
     pub history_scroll: usize,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
@@ -292,32 +334,61 @@ impl LxChat {
             messages: Vec::new(),
             request: RequestState::Idle,
             follow_bottom: true,
-            last_input_tokens: None,
+            context_tokens: None,
             last_tokens_model: None,
             omitted_turns_notice: None,
             generation_counter: 0,
             status: ChatStatus::default(),
-            expanded_thinking: Vec::new(),
+            thinking_toggled: Vec::new(),
+            turn_started_at_ms: None,
             history_scroll: 0,
             loading_frame: 0,
             jump_bottom_hover: false,
         }
     }
 
-    /// thinking 块是否展开。
+    /// thinking 块是否展开：用户显式切换优先；否则**流中正在生成的块自动展开**，
+    /// 历史块默认折叠（对齐 opencode 的「生成中可见、完成后收起」）。
     pub fn reasoning_expanded(&self, message_index: usize, part_index: usize) -> bool {
-        self.expanded_thinking
-            .contains(&(message_index, part_index))
+        if let Some((_, _, expanded)) = self
+            .thinking_toggled
+            .iter()
+            .find(|(message, part, _)| *message == message_index && *part == part_index)
+        {
+            return *expanded;
+        }
+        self.reasoning_streaming(message_index, part_index)
     }
 
-    /// 切换 thinking 块展开状态。
-    pub fn toggle_reasoning(&mut self, message_index: usize, part_index: usize) {
-        let key = (message_index, part_index);
-        if let Some(position) = self.expanded_thinking.iter().position(|item| *item == key) {
-            self.expanded_thinking.remove(position);
-        } else {
-            self.expanded_thinking.push(key);
+    /// 该 thinking 块是否仍在生成：所属消息是最后一条且仍在流中，且它是其中最后一个
+    /// reasoning 块。
+    pub fn reasoning_streaming(&self, message_index: usize, part_index: usize) -> bool {
+        let Some(message) = self.messages.get(message_index) else {
+            return false;
+        };
+        if message.status != "streaming" || message_index + 1 != self.messages.len() {
+            return false;
         }
+        message
+            .parts
+            .iter()
+            .rposition(|part| part.kind == PartKind::Reasoning)
+            == Some(part_index)
+    }
+
+    /// 切换 thinking 块展开状态（记录显式选择，覆盖流中自动展开）。
+    pub fn toggle_reasoning(&mut self, message_index: usize, part_index: usize) {
+        let next = !self.reasoning_expanded(message_index, part_index);
+        if let Some(existing) = self
+            .thinking_toggled
+            .iter_mut()
+            .find(|(message, part, _)| *message == message_index && *part == part_index)
+        {
+            existing.2 = next;
+            return;
+        }
+        self.thinking_toggled
+            .push((message_index, part_index, next));
     }
 
     /// 重算状态行展示数据：模型/供应商展示名、上限、用量与上下文百分比来自当前选择
@@ -347,47 +418,42 @@ impl LxChat {
             self.input_tokens_reset();
         }
         self.last_tokens_model = token_key;
-        let context_percent = context_percent(self.last_input_tokens, context_limit);
+        let context_percent = context_percent(self.context_tokens, context_limit);
         self.status = ChatStatus {
             model_name,
             provider_name,
             context_limit,
-            input_tokens: self.last_input_tokens,
+            input_tokens: self.context_tokens,
             context_percent,
             streaming: self.request.is_busy(),
             omitted_turns: self.omitted_turns_notice.take(),
         };
     }
 
-    /// 清空输入 token 分子（切模型/新建会话）。
+    /// 清空上下文占用分子（切模型/新建会话）。
     pub fn input_tokens_reset(&mut self) {
-        self.last_input_tokens = None;
+        self.context_tokens = None;
         self.last_tokens_model = None;
     }
 
     /// 当前选择；无窗格级选择时回落配置默认。
+    ///
+    /// 统一规范化：显式 variant 失效或缺失时回落模型默认思考等级（`normalize_selection`），
+    /// 否则「只配了模型默认等级」的模型永远不会带上思考参数。
     pub fn effective_selection(&self, models: &ModelsSnapshot) -> Option<ModelSelection> {
         // 窗格选择若已失效（provider/model 被删）回落默认。
         if let Some(selection) = &self.selection
-            && let Some(provider) = models.settings.providers.get(&selection.provider)
-            && provider.models.contains_key(&selection.model)
+            && models
+                .settings
+                .providers
+                .get(&selection.provider)
+                .is_some_and(|provider| provider.models.contains_key(&selection.model))
         {
-            let mut resolved = selection.clone();
-            // variant 失效回落模型默认 variant。
-            if let Some(variant) = &resolved.variant
-                && !provider
-                    .models
-                    .get(&selection.model)
-                    .is_some_and(|model| model.variants.contains_key(variant))
-            {
-                resolved.variant = provider
-                    .models
-                    .get(&selection.model)
-                    .and_then(|model| model.variant.clone());
-            }
-            return Some(resolved);
+            return Some(models.normalize_selection(selection.clone()));
         }
-        models.default_selection()
+        models
+            .default_selection()
+            .map(|selection| models.normalize_selection(selection))
     }
 
     /// 追加/合并一个流式 delta part 到最后一条 assistant 消息。

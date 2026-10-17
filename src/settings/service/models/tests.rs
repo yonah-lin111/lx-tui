@@ -380,6 +380,77 @@ async fn api_key_semantics_keep_clear_replace() {
 }
 
 #[tokio::test]
+async fn variant_params_and_modalities_survive_round_trip() {
+    let (service, _events, _dir) = start_models("models-variants").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let path = state_user_root(&service).join("config").join("ai.json");
+
+    // 首轮保存：模型带思考等级参数对象、模态与未知字段。
+    let mut value: serde_json::Value = serde_json::from_str(&put_body()).expect("json");
+    value["providers"][0]["models"][0]["variants"] = serde_json::json!({
+        "low": {"reasoningEffort": "low"},
+        "high": {"reasoningEffort": "high"}
+    });
+    value["providers"][0]["models"][0]["variant"] = serde_json::json!("high");
+    value["providers"][0]["models"][0]["modalities"] = serde_json::json!({"input": ["text"]});
+    value["providers"][0]["models"][0]["x-custom"] = serde_json::json!(1);
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&value).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "保存成功：{}", body(&saved));
+
+    // GET：variants 带参数对象（不是键数组），供前端原样往返。
+    let current = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let parsed: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    assert_eq!(
+        parsed["providers"][0]["models"][0]["variants"]["high"]["reasoningEffort"],
+        serde_json::json!("high"),
+        "GET 携带思考等级参数"
+    );
+
+    // 再保存一次（模拟设置页编辑后保存）：参数与模态不丢。
+    let revision = revision_of(body(&current)).expect("revision");
+    let mut again: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    again["revision"] = serde_json::json!(revision);
+    let resaved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&again).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&resaved), 200, "二次保存成功：{}", body(&resaved));
+
+    let disk = std::fs::read_to_string(&path).expect("ai.json readable");
+    let on_disk: serde_json::Value = serde_json::from_str(&disk).expect("disk json");
+    let model = &on_disk["ai"]["providers"]["p"]["models"]["m"];
+    assert_eq!(
+        model["variants"]["high"]["reasoningEffort"],
+        serde_json::json!("high"),
+        "二次保存后思考等级参数仍在：{disk}"
+    );
+    assert_eq!(model["variant"], serde_json::json!("high"));
+    assert_eq!(
+        model["modalities"],
+        serde_json::json!({"input": ["text"]}),
+        "模态往返保留"
+    );
+    assert_eq!(model["x-custom"], serde_json::json!(1), "未知字段往返保留");
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn fetch_without_key_is_422() {
     let (service, _events, _dir) = start_models("models-fetch-nokey").await;
     let port = service.port();

@@ -98,6 +98,7 @@ pub fn on_turn_committed(
     generation: u64,
     committed: &crate::db::chat::TurnCommitted,
 ) -> bool {
+    let models = state.models.clone();
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -117,6 +118,13 @@ pub fn on_turn_committed(
     }
     // 展示：user 消息 + streaming assistant 占位。
     target.lx.chat.session_id = Some(committed.session_id.clone());
+    target.lx.chat.turn_started_at_ms = Some(committed.created_at_ms);
+    // 本轮模型展示名：发送时冻结的选择（设置页缺失时回退 provider/model）。
+    let model_label = target
+        .lx
+        .chat
+        .effective_selection(&models)
+        .map(|selection| models.model_display_name(&selection.provider, &selection.model));
     target.lx.chat.messages.push(ChatMessageView {
         id: committed.user_message_id.clone(),
         role: "user".into(),
@@ -129,6 +137,10 @@ pub fn on_turn_committed(
         }],
         model_label: None,
         error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
     });
     target.lx.chat.messages.push(ChatMessageView {
         id: committed.assistant_message_id.clone(),
@@ -136,8 +148,12 @@ pub fn on_turn_committed(
         status: "streaming".into(),
         turn_index: committed.turn_index,
         parts: Vec::new(),
-        model_label: None,
+        model_label,
         error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
     });
     target.lx.chat.follow_bottom = true;
     let key = RequestKey {
@@ -200,9 +216,11 @@ pub fn on_stream_delta(state: &mut AppState, key: &RequestKey, deltas: &[ChatDel
                 changed = true;
             }
             ChatDelta::Usage(usage) => {
-                // 真实输入 token：同模型口径，切模型时分子清空（键由 refresh 维护）。
+                // 上下文占用按 codex 口径：上一轮请求的输入 + 输出（下一轮请求的输入近似
+                // 为其上一轮输入加上该轮输出）。切模型时分子清空（键由 refresh 维护）。
                 if let Some(input) = usage.input {
-                    target.lx.chat.last_input_tokens = Some(input as u64);
+                    let context = input.saturating_add(usage.output.unwrap_or(0));
+                    target.lx.chat.context_tokens = Some(context.max(0) as u64);
                 }
                 changed = true;
             }
@@ -257,6 +275,11 @@ pub fn on_stream_finished(
         })
         .unwrap_or_default();
     // 视图先行进入终态（DB ack 后确认；失败时保留内存 partial）。
+    let duration_ms = target
+        .lx
+        .chat
+        .turn_started_at_ms
+        .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
     if let Some(message) = target
         .lx
         .chat
@@ -274,6 +297,11 @@ pub fn on_stream_finished(
             StopReason::Failed { code } => Some(code.clone()),
             _ => None,
         };
+        // 本轮统计：供应商用量 + 耗时（tok/s 由渲染层按输出/耗时派生）。
+        message.input_tokens = usage.input;
+        message.output_tokens = usage.output;
+        message.cache_read_tokens = usage.cache_read;
+        message.duration_ms = duration_ms;
     }
     target.lx.chat.request = RequestState::Finishing {
         key: key.clone(),
@@ -363,7 +391,8 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.chat.messages.clear();
     target.lx.chat.follow_bottom = true;
     target.lx.chat.input_tokens_reset();
-    target.lx.chat.expanded_thinking.clear();
+    target.lx.chat.thinking_toggled.clear();
+    target.lx.chat.turn_started_at_ms = None;
     refresh_lx_status(state, pane);
     true
 }
@@ -463,6 +492,9 @@ pub fn resume_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
 }
 
 /// 会话加载回投：重建消息视图与模型选择。
+///
+/// 同时恢复**上下文占用**：按 codex 口径取最近一次带用量的 assistant 轮次
+/// （其输入 + 输出 token 近似下一轮请求的输入），因此重开历史会话不再显示空上下文。
 pub fn on_session_loaded(
     state: &mut AppState,
     pane: PaneId,
@@ -470,6 +502,7 @@ pub fn on_session_loaded(
     messages: &[ChatMessage],
     selection: Option<ModelSelection>,
 ) -> bool {
+    let models = state.models.clone();
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -501,11 +534,36 @@ pub fn on_session_loaded(
                 .model_provider
                 .as_deref()
                 .zip(message.model_id.as_deref())
-                .map(|(provider, model)| format!("{provider}/{model}")),
+                .map(|(provider, model)| models.model_display_name(provider, model)),
             error_code: message.error_code.clone(),
+            input_tokens: message.input_tokens,
+            output_tokens: message.output_tokens,
+            cache_read_tokens: message.cache_read_tokens,
+            duration_ms: message
+                .completed_at_ms
+                .map(|completed| completed.saturating_sub(message.created_at_ms).max(0)),
         })
         .collect();
+    // 上下文占用：最近一条带用量的 assistant 轮次（同模型键由 refresh 校验）。
+    let recent = messages.iter().rev().find(|message| {
+        message.role == "assistant"
+            && (message.input_tokens.is_some() || message.output_tokens.is_some())
+    });
+    target.lx.chat.last_tokens_model = recent.and_then(|message| {
+        message
+            .model_provider
+            .as_deref()
+            .zip(message.model_id.as_deref())
+            .map(|(provider, model)| format!("{provider}/{model}"))
+    });
+    target.lx.chat.context_tokens = recent.map(|message| {
+        let input = message.input_tokens.unwrap_or(0).max(0);
+        let output = message.output_tokens.unwrap_or(0).max(0);
+        (input + output) as u64
+    });
     target.lx.chat.follow_bottom = true;
+    target.lx.chat.thinking_toggled.clear();
+    target.lx.chat.turn_started_at_ms = None;
     refresh_lx_status(state, pane);
     true
 }
@@ -644,8 +702,7 @@ fn finish_model_selection(state: &mut AppState, pane: PaneId, selection: ModelSe
         target.lx.slash = None;
         target.lx.chat.selection = Some(selection.clone());
         // 切模型时旧分子清空。
-        target.lx.chat.last_input_tokens = None;
-        target.lx.chat.last_tokens_model = None;
+        target.lx.chat.input_tokens_reset();
         // 已保存 session：选择动作排队写 DB。
         if let Some(session_id) = target.lx.chat.session_id.clone() {
             let workspace = state

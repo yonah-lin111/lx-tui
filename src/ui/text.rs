@@ -504,15 +504,19 @@ pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
 pub const LX_CHAT_STOP_HINT: &str = "stop";
 /// 状态行：模型名与供应商名之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
-/// 状态行：上下文进度条已用 / 空余字符（灰色空余、白色已用）。
-pub const LX_CHAT_CONTEXT_BAR_USED: char = '█';
-pub const LX_CHAT_CONTEXT_BAR_FREE: char = '░';
-/// 状态行：上下文占用百分比后缀（`%`）。
+/// 状态行：上下文占用前缀与百分比后缀（`context:72%`；无消耗整段隐藏）。
+pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
 pub const LX_CHAT_PERCENT_SUFFIX: &str = "%";
-/// thinking 折叠行前缀与展开提示。
+/// thinking 折叠行：折叠 / 展开 / 生成中三态文案。
 pub const LX_CHAT_THINKING_LABEL: &str = "thinking";
 pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ thinking";
 pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ thinking";
+/// 本轮统计行（assistant 消息底部）：字段分隔与各字段后缀。
+pub const LX_CHAT_STATS_SEP: &str = " · ";
+pub const LX_CHAT_STATS_INPUT_SUFFIX: &str = " in";
+pub const LX_CHAT_STATS_OUTPUT_SUFFIX: &str = " out";
+pub const LX_CHAT_STATS_CACHE_SUFFIX: &str = " cached";
+pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 /// `/` 命令面板标题。
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边提示（与 `@` 提及面板同款）。

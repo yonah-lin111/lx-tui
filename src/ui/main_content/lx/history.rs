@@ -1,4 +1,4 @@
-//! 聊天历史渲染：消息、正文流增量、thinking 折叠块、滚动条与滚动。
+//! 聊天历史渲染：消息、正文流增量、thinking 折叠块、本轮统计行、滚动条与滚动。
 //!
 //! 纯渲染：只读 `Lx`，只写 lx 页网格；命中几何（thinking 头部矩形）由
 //! 同一布局函数提供，渲染与命中不漂移。
@@ -7,12 +7,15 @@
 //!   （`style::chat_user_bg`），正文按显示列软换行。
 //! - assistant 消息：正文用共享阅读渲染器（`ui::markdown_render`，与 UI 页 agent 回答
 //!   同款；表格按宽度收缩自适应），不显示标题行；失败/中断/流中在此上方插入一行状态标记。
+//! - thinking：生成中的块自动展开（头部转轮 + 正文），完成后默认折叠；点击头部或
+//!   Ctrl+T 切换；正文同样走 markdown 渲染并整体压暗（对齐 opencode 的思考显示）。
+//! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
 //! - 右侧预留一列滚动条（内容溢出时显示），宽度与输入框对齐。
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthChar;
 
-use crate::app::state::Lx;
+use crate::app::state::{ChatMessageView, Lx};
 use crate::ui::markdown_render;
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
@@ -83,10 +86,13 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     ));
                     rows += 1;
                     if lx.chat.reasoning_expanded(message_index, part_index) {
-                        rows += wrap(&part.content, width.saturating_sub(THINKING_MARGIN)).len();
+                        rows += thinking_rows(&part.content, width);
                     }
                 }
             }
+        }
+        if let Some(line) = stats_line(message) {
+            rows += wrap(&line, width).len();
         }
         rows += 1; // 消息间空行。
     }
@@ -152,37 +158,54 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                 }
                 crate::chat::events::PartKind::Reasoning => {
                     let expanded = lx.chat.reasoning_expanded(message_index, part_index);
-                    let label = if expanded {
-                        text::LX_CHAT_THINKING_EXPANDED
-                    } else {
-                        text::LX_CHAT_THINKING_COLLAPSED
-                    };
+                    let streaming = lx.chat.reasoning_streaming(message_index, part_index);
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        grid.put_clipped(
-                            content.x + THINKING_MARGIN,
-                            y,
-                            label,
-                            style::muted(),
-                            content.width.saturating_sub(THINKING_MARGIN),
-                        );
+                        // 生成中：转轮 + `thinking`（继续生成时头部保持可见）；
+                        // 完成后：`▸ thinking` / `▾ thinking` 折叠标记。
+                        if streaming && expanded {
+                            let frame = text::LX_LOADING_FRAMES
+                                [lx.chat.loading_frame % text::LX_LOADING_FRAMES.len()];
+                            grid.put_char(
+                                content.x + THINKING_MARGIN,
+                                y,
+                                frame,
+                                style::chat_loading_spinner(),
+                            );
+                            grid.put_clipped(
+                                content.x + THINKING_MARGIN + 2,
+                                y,
+                                text::LX_CHAT_THINKING_LABEL,
+                                style::chat_loading_label(),
+                                content.width.saturating_sub(THINKING_MARGIN + 2),
+                            );
+                        } else {
+                            let label = if expanded {
+                                text::LX_CHAT_THINKING_EXPANDED
+                            } else {
+                                text::LX_CHAT_THINKING_COLLAPSED
+                            };
+                            grid.put_clipped(
+                                content.x + THINKING_MARGIN,
+                                y,
+                                label,
+                                style::muted(),
+                                content.width.saturating_sub(THINKING_MARGIN),
+                            );
+                        }
                     }
                     row_index += 1;
                     if expanded {
-                        let inner = content.width.saturating_sub(THINKING_MARGIN);
-                        for line in wrap(&part.content, inner) {
-                            if let Some(y) = visible_row(content, scroll, row_index) {
-                                grid.put_clipped(
-                                    content.x + THINKING_MARGIN,
-                                    y,
-                                    &line,
-                                    style::muted(),
-                                    inner,
-                                );
-                            }
-                            row_index += 1;
-                        }
+                        draw_thinking(grid, content, scroll, &mut row_index, &part.content);
                     }
                 }
+            }
+        }
+        if let Some(line) = stats_line(message) {
+            for row in wrap(&line, content.width) {
+                if let Some(y) = visible_row(content, scroll, row_index) {
+                    grid.put_clipped(content.x, y, &row, style::muted(), content.width);
+                }
+                row_index += 1;
             }
         }
         row_index += 1; // 消息间空行。
@@ -230,6 +253,129 @@ fn draw_markdown(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usi
         }
         *row_index += 1;
     }
+}
+
+/// thinking 正文渲染行数（markdown；左缩进 `THINKING_MARGIN`）。
+fn thinking_rows(content: &str, width: u16) -> usize {
+    markdown_render::render_wrapped(content, width.saturating_sub(THINKING_MARGIN)).len()
+}
+
+/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`）。
+fn draw_thinking(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
+    let inner = rect.width.saturating_sub(THINKING_MARGIN);
+    for line in markdown_render::render_wrapped(content, inner) {
+        if let Some(y) = visible_row(rect, scroll, *row_index) {
+            let mut cx = rect
+                .x
+                .saturating_add(THINKING_MARGIN)
+                .saturating_add(line.indent);
+            for (value, span_style) in &line.spans {
+                let cell_style = span_style.patch(style::muted());
+                for ch in value.chars() {
+                    let cell = ch.width().unwrap_or(1).max(1) as u16;
+                    if cx.saturating_add(cell) > rect.right() {
+                        break;
+                    }
+                    grid.put_char(cx, y, ch, cell_style);
+                    cx = cx.saturating_add(cell);
+                }
+            }
+        }
+        *row_index += 1;
+    }
+}
+
+/// 本轮统计行（assistant 消息末尾）：`模型 · 2.9k in · 307 out · 70% cached ·
+/// 33.4 tok/s · 2.7s`；仍在流中或无任何可用数据时返回 None。
+///
+/// tok/s 对齐 opencode：输出 token ÷ 本轮耗时（秒）。
+fn stats_line(message: &ChatMessageView) -> Option<String> {
+    if message.role != "assistant" || message.status == "streaming" {
+        return None;
+    }
+    let mut fields: Vec<String> = Vec::new();
+    if let Some(input) = message.input_tokens.filter(|tokens| *tokens > 0) {
+        fields.push(format!(
+            "{}{}",
+            token_count(input),
+            text::LX_CHAT_STATS_INPUT_SUFFIX
+        ));
+    }
+    if let Some(output) = message.output_tokens.filter(|tokens| *tokens > 0) {
+        fields.push(format!(
+            "{}{}",
+            token_count(output),
+            text::LX_CHAT_STATS_OUTPUT_SUFFIX
+        ));
+    }
+    // 缓存命中率：cached / prompt（OpenAI 口径 prompt_tokens 已含 cached）。
+    if let (Some(cache), Some(input)) = (
+        message.cache_read_tokens.filter(|tokens| *tokens > 0),
+        message.input_tokens.filter(|tokens| *tokens > 0),
+    ) && let Some(percent) = cache.saturating_mul(100).checked_div(input)
+    {
+        fields.push(format!(
+            "{}%{}",
+            percent.clamp(0, 100),
+            text::LX_CHAT_STATS_CACHE_SUFFIX
+        ));
+    }
+    if let (Some(output), Some(duration)) = (
+        message.output_tokens.filter(|tokens| *tokens > 0),
+        message.duration_ms.filter(|duration| *duration > 0),
+    ) {
+        let speed = output as f64 / (duration as f64 / 1000.0);
+        if speed.is_finite() && speed > 0.0 {
+            fields.push(format!("{speed:.1}{}", text::LX_CHAT_STATS_SPEED_SUFFIX));
+        }
+    }
+    if let Some(duration) = message.duration_ms.filter(|duration| *duration > 0) {
+        fields.push(format_duration(duration));
+    }
+    // 仅「模型名」不算统计：没有任何用量/耗时数据时不出行（失败且无 usage 的轮次）。
+    if fields.is_empty() {
+        return None;
+    }
+    if let Some(model) = message
+        .model_label
+        .as_deref()
+        .filter(|model| !model.is_empty())
+    {
+        fields.insert(0, model.to_string());
+    }
+    Some(fields.join(text::LX_CHAT_STATS_SEP))
+}
+
+/// token 计数短格式（对齐 lx-agent）：`999`、`1.2k`、`123k`、`1.2M`。
+fn token_count(tokens: i64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    if tokens < 10_000 {
+        return format!("{:.1}k", tokens as f64 / 1_000.0);
+    }
+    if tokens < 1_000_000 {
+        return format!("{}k", (tokens as f64 / 1_000.0).round() as i64);
+    }
+    format!("{:.1}M", tokens as f64 / 1_000_000.0)
+}
+
+/// 耗时短格式（对齐 lx-agent）：`820ms`、`4.2s`、`38s`、`1m 12s`。
+fn format_duration(ms: i64) -> String {
+    if ms < 1_000 {
+        return format!("{ms}ms");
+    }
+    let seconds = ms as f64 / 1_000.0;
+    if seconds < 60.0 {
+        return if seconds < 10.0 {
+            format!("{seconds:.1}s")
+        } else {
+            format!("{:.0}s", seconds)
+        };
+    }
+    let minutes = (seconds / 60.0).floor() as i64;
+    let rest = (seconds % 60.0).round() as i64;
+    format!("{minutes}m {rest}s")
 }
 
 /// 行可见时返回其屏幕 Y。

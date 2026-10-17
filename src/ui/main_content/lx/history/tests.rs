@@ -25,6 +25,10 @@ fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageVie
         parts,
         model_label: Some("P / M".into()),
         error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
     }
 }
 
@@ -45,7 +49,7 @@ fn reasoning_part(content: &str) -> ChatPartView {
 }
 
 #[test]
-fn thinking_collapsed_by_default_one_row_each() {
+fn thinking_collapsed_after_completion_one_row_each() {
     let lx = lx_with(vec![message(
         "assistant",
         "complete",
@@ -53,11 +57,27 @@ fn thinking_collapsed_by_default_one_row_each() {
     )]);
     let area = Rect::new(0, 0, 40, 20);
     let layout = layout(area, &lx);
-    // 1 折叠头 + 1 正文行 + 1 空行 = 3（reasoning 折叠不展开内容；完成态无标题）。
+    // 完成态默认折叠：1 折叠头 + 1 正文行 + 1 空行 = 3（无用量数据不出统计行）。
     assert_eq!(layout.total_rows, 3);
     assert_eq!(layout.thinking.len(), 1);
     assert_eq!(layout.thinking[0].0, 0);
     assert_eq!(layout.thinking[0].1, 0);
+}
+
+#[test]
+fn streaming_thinking_auto_expands_content() {
+    // 生成中的 reasoning 块自动展开（对齐 opencode：思考过程可见）。
+    let lx = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part("l1\nl2"), text_part("")],
+    )]);
+    let area = Rect::new(0, 0, 40, 20);
+    let layout = layout(area, &lx);
+    assert!(lx.chat.reasoning_expanded(0, 0), "流中自动展开");
+    assert!(lx.chat.reasoning_streaming(0, 0), "仍在生成");
+    // 展开头 1 + 2 内容行 + 正文 0（markdown 空渲染为 0 行）+ 空行 1 = 4。
+    assert_eq!(layout.total_rows, 4);
 }
 
 #[test]
@@ -71,7 +91,7 @@ fn expanded_thinking_counts_content_rows() {
     let area = Rect::new(0, 0, 40, 20);
     let layout = layout(area, &lx);
     // 展开头 1 + 3 内容行 + 正文 1 + 空行 1 = 6。
-    assert_eq!(layout.total_rows, 7 - 1);
+    assert_eq!(layout.total_rows, 6);
 }
 
 #[test]
@@ -277,4 +297,62 @@ fn history_layout_reserves_scrollbar_column() {
     let _layout = layout(area, &lx);
     // thinking 头宽度应扣除滚动条预留列。
     assert_eq!(super::content_rect(area).width, 20 - SCROLLBAR_COLUMNS);
+}
+
+#[test]
+fn completed_assistant_shows_turn_stats_line() {
+    let mut completed = message("assistant", "complete", vec![text_part("正文")]);
+    completed.model_label = Some("deepseek-v4.1-flash".into());
+    completed.input_tokens = Some(2_916);
+    completed.output_tokens = Some(307);
+    completed.cache_read_tokens = Some(2_048);
+    completed.duration_ms = Some(2_655);
+    let line = stats_line(&completed).expect("统计行");
+    assert!(line.starts_with("deepseek-v4.1-flash"), "{line}");
+    assert!(line.contains("2.9k in"), "{line}");
+    assert!(line.contains("307 out"), "{line}");
+    assert!(
+        line.contains("70% cached"),
+        "缓存命中 = cached/prompt：{line}"
+    );
+    assert!(line.contains("115.6 tok/s"), "tok/s = 输出 / 耗时：{line}");
+    assert!(line.ends_with("2.7s"), "总耗时：{line}");
+}
+
+#[test]
+fn stats_line_row_is_counted_in_layout() {
+    let mut completed = message("assistant", "complete", vec![text_part("答")]);
+    completed.input_tokens = Some(100);
+    completed.output_tokens = Some(20);
+    completed.duration_ms = Some(1_000);
+    let lx = lx_with(vec![completed]);
+    // 统计行单行放得下（60 列）。
+    let area = Rect::new(0, 0, 60, 20);
+    let layout = layout(area, &lx);
+    // 正文 1 + 统计行 1 + 空行 1 = 3。
+    assert_eq!(layout.total_rows, 3);
+}
+
+#[test]
+fn streaming_assistant_has_no_stats_line() {
+    let mut streaming = message("assistant", "streaming", vec![text_part("部分")]);
+    streaming.input_tokens = Some(10);
+    streaming.output_tokens = Some(2);
+    streaming.duration_ms = Some(100);
+    assert_eq!(stats_line(&streaming), None, "流中不出统计行");
+    // 无任何可用数据（如失败且未返回 usage）时也不出。
+    let empty = message("assistant", "failed", vec![text_part("")]);
+    assert_eq!(stats_line(&empty), None);
+}
+
+#[test]
+fn token_and_duration_formatting_matches_agent_conventions() {
+    assert_eq!(token_count(999), "999");
+    assert_eq!(token_count(1_200), "1.2k");
+    assert_eq!(token_count(12_345), "12k");
+    assert_eq!(token_count(1_250_000), "1.2M");
+    assert_eq!(format_duration(820), "820ms");
+    assert_eq!(format_duration(4_200), "4.2s");
+    assert_eq!(format_duration(38_400), "38s");
+    assert_eq!(format_duration(72_000), "1m 12s");
 }

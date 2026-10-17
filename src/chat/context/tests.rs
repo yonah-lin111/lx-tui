@@ -24,7 +24,10 @@ fn message(
         error_code: None,
         input_tokens: None,
         output_tokens: None,
+        cache_read_tokens: None,
+        cache_write_tokens: None,
         created_at_ms: 0,
+        completed_at_ms: None,
         parts: vec![crate::db::chat::ChatPart {
             position: 0,
             kind: "text".into(),

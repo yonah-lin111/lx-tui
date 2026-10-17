@@ -46,7 +46,10 @@ pub struct ChatMessage {
     pub error_code: Option<String>,
     pub input_tokens: Option<i64>,
     pub output_tokens: Option<i64>,
+    pub cache_read_tokens: Option<i64>,
+    pub cache_write_tokens: Option<i64>,
     pub created_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
     /// 有序内容块（text / reasoning 交错保持原始顺序）。
     pub parts: Vec<ChatPart>,
 }
@@ -69,6 +72,8 @@ pub struct TurnCommitted {
     pub user_message_id: String,
     pub assistant_message_id: String,
     pub turn_index: i64,
+    /// 本轮落库时刻（两个消息与 session 共用），用于在线计算本轮耗时。
+    pub created_at_ms: i64,
 }
 
 /// 发送一轮时的模型快照（写入 assistant message 与 session 选择三列）。
@@ -171,7 +176,8 @@ impl Database {
         }
         let mut statement = self.conn.prepare(
             r#"SELECT external_id, sequence, turn_index, role, status, model_provider, model_id,
-                      variant, stop_reason, error_code, input_tokens, output_tokens, created_at_ms
+                      variant, stop_reason, error_code, input_tokens, output_tokens,
+                      cache_read_tokens, cache_write_tokens, created_at_ms, completed_at_ms
                FROM agent_message WHERE session_id = ?1 ORDER BY sequence"#,
         )?;
         let mut messages: Vec<ChatMessage> = statement
@@ -189,7 +195,10 @@ impl Database {
                     error_code: row.get(9)?,
                     input_tokens: row.get(10)?,
                     output_tokens: row.get(11)?,
-                    created_at_ms: row.get(12)?,
+                    cache_read_tokens: row.get(12)?,
+                    cache_write_tokens: row.get(13)?,
+                    created_at_ms: row.get(14)?,
+                    completed_at_ms: row.get(15)?,
                     parts: Vec::new(),
                 })
             })?
@@ -344,6 +353,7 @@ impl Database {
             user_message_id,
             assistant_message_id,
             turn_index,
+            created_at_ms: now,
         })
     }
 

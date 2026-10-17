@@ -475,11 +475,6 @@ pub fn chat_model() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 状态行中性灰（上下文进度条空余段）：固定灰，不继承终端主题前景。
-pub fn chat_secondary() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-
 /// 状态行供应商名：用 prompt 条目标题同款普通文字色（默认前景，不加粗/dim）。
 pub fn chat_provider() -> Style {
     text()

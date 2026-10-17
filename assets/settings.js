@@ -312,7 +312,7 @@ function selectProvider(key) {
     models: provider.models.map((model) => ({
       key: model.key, id: model.id, name: model.name, transport: model.transport,
       context: model.limit ? model.limit.context : '', output: model.limit ? model.limit.output : '',
-      variant: model.variant || '', variants: model.variants || []
+      variant: model.variant || '', variantsJson: JSON.stringify(model.variants || {})
     }))
   };
   keyTouched = false;
@@ -407,7 +407,8 @@ function modelRow(model, index) {
     ['name', model.name, 'Display name'],
     ['context', model.context, 'Context'],
     ['output', model.output, 'Output'],
-    ['variant', model.variant, 'Default variant']
+    ['variant', model.variant, 'Default variant'],
+    ['variantsJson', model.variantsJson === undefined ? '{}' : model.variantsJson, 'Variants (JSON)']
   ];
   for (const [field, value, label] of fields) {
     const wrap = document.createElement('div');
@@ -465,7 +466,7 @@ function modelRow(model, index) {
 function addModel() {
   if (!providerDraft) { return; }
   const id = 'model-' + Date.now().toString(36).slice(-6);
-  providerDraft.models.push({key: id, id: id, name: 'New Model', transport: null, context: '', output: '', variant: '', variants: []});
+  providerDraft.models.push({key: id, id: id, name: 'New Model', transport: null, context: '', output: '', variant: '', variantsJson: '{}'});
   renderModelList();
 }
 
@@ -521,6 +522,20 @@ function collectPayload() {
 }
 
 function buildProviderPayload() {
+  // variants 是「等级名 -> 供应商参数对象」映射（如 {"high":{"reasoningEffort":"high"}}）。
+  // 以 JSON 文本编辑：既保留从 lx-agent 带入的参数，也允许手工配置思考等级。
+  const variantsOf = (model) => {
+    const raw = (model.variantsJson || '').trim();
+    if (raw === '') { return {}; }
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch (error) {
+      throw new Error('Invalid variants JSON for ' + (model.id || 'model') + ': ' + error.message);
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error('Variants must be a JSON object for ' + (model.id || 'model'));
+    }
+    return parsed;
+  };
   const provider = {
     key: providerDraft.key,
     id: providerDraft.id,
@@ -540,7 +555,7 @@ function buildProviderPayload() {
           ? {context: Number(model.context), output: Number(model.output)}
           : null,
         variant: model.variant || null,
-        variants: model.variants && model.variants.length ? Object.fromEntries(model.variants.map((v) => [v, {}])) : {}
+        variants: variantsOf(model)
       }))
   };
   const keyInput = document.getElementById('prov-api-key').value;
@@ -555,7 +570,14 @@ function buildProviderPayload() {
 
 function saveModels() {
   if (!providerDraft) { return; }
-  const payload = collectPayload();
+  let payload;
+  try {
+    payload = collectPayload();
+  } catch (error) {
+    document.getElementById('provider-status').textContent = error.message;
+    document.getElementById('provider-status').className = 'status error';
+    return;
+  }
   api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)}).then((result) => {
     document.getElementById('provider-status').textContent = 'Saved';
     document.getElementById('provider-status').className = 'status ok';
@@ -622,7 +644,7 @@ function renderFetchCandidates(models) {
       // 明确选择加入；不覆盖已编辑模型。
       if (!providerDraft.models.some((model) => model.id === candidate.id)) {
         providerDraft.models.push({key: candidate.id, id: candidate.id, name: candidate.id,
-          transport: null, context: '', output: '', variant: '', variants: []});
+          transport: null, context: '', output: '', variant: '', variantsJson: '{}'});
         renderModelList();
       }
       add.disabled = true;

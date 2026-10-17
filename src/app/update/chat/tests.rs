@@ -84,6 +84,7 @@ fn committed(session: &str) -> TurnCommitted {
         user_message_id: format!("{session}-u"),
         assistant_message_id: format!("{session}-a"),
         turn_index: 0,
+        created_at_ms: 1_000,
     }
 }
 
@@ -263,11 +264,12 @@ fn finish_moves_to_finishing_then_idle_with_usage() {
         RequestState::Finishing { .. }
     ));
     assert_eq!(target.lx.chat.messages[1].status, "complete");
-    assert_eq!(
-        target.lx.chat.last_input_tokens,
-        Some(42),
-        "真实输入 token 记录"
-    );
+    // 上下文占用 = 输入 + 输出（codex 口径 total_tokens）。
+    assert_eq!(target.lx.chat.context_tokens, Some(49), "上下文占用分子");
+    // 本轮统计：用量与耗时回填到 assistant 视图。
+    assert_eq!(target.lx.chat.messages[1].input_tokens, Some(42));
+    assert_eq!(target.lx.chat.messages[1].output_tokens, Some(7));
+    assert!(target.lx.chat.messages[1].duration_ms.is_some(), "本轮耗时");
     // DB ack 成功：回 Idle。
     assert!(on_finish_ack(&mut state, &key, true));
     assert!(matches!(
@@ -509,7 +511,7 @@ fn usage_unknown_shows_none_not_zero() {
     // 无 usage 完成流。
     on_stream_finished(&mut state, &key, &StopReason::Complete, Usage::default());
     let target = state.pane_anywhere(pane).unwrap();
-    assert_eq!(target.lx.chat.last_input_tokens, None, "未知显示 --");
+    assert_eq!(target.lx.chat.context_tokens, None, "未知不显示上下文");
 }
 
 #[test]
@@ -587,7 +589,10 @@ fn session_loaded_rebuilds_view_and_selection() {
             error_code: None,
             input_tokens: None,
             output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
             created_at_ms: 0,
+            completed_at_ms: None,
             parts: vec![crate::db::chat::ChatPart {
                 position: 0,
                 kind: "text".into(),
@@ -608,7 +613,10 @@ fn session_loaded_rebuilds_view_and_selection() {
             error_code: None,
             input_tokens: None,
             output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
             created_at_ms: 0,
+            completed_at_ms: None,
             parts: vec![crate::db::chat::ChatPart {
                 position: 0,
                 kind: "reasoning".into(),
@@ -723,6 +731,10 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         parts: Vec::new(),
         model_label: None,
         error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
     });
     chat.append_stream_delta(PartKind::Text, "a", None);
     chat.append_stream_delta(PartKind::Text, "b", None);
@@ -750,6 +762,10 @@ fn signature_metadata_binds_to_reasoning_part() {
         parts: Vec::new(),
         model_label: None,
         error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
     });
     chat.append_stream_delta(PartKind::Reasoning, "思考", None);
     // 空文本 + 签名元数据：绑定到相邻 reasoning part。
@@ -936,6 +952,10 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
             }],
             model_label: None,
             error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
         });
     }
 }
@@ -1062,4 +1082,121 @@ fn advance_lx_loading_only_when_streaming() {
             .loading_frame,
         1
     );
+}
+
+/// 回归：打开历史会话时上下文占用不再为空——按 codex 口径从最近一条带用量的
+/// assistant 轮次恢复（输入 + 输出），并回填本轮统计（耗时/模型名）。
+#[test]
+fn session_loaded_restores_context_usage_and_stats() {
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    let messages = vec![
+        crate::db::chat::ChatMessage {
+            external_id: "u1".into(),
+            sequence: 0,
+            turn_index: 0,
+            role: "user".into(),
+            status: "complete".into(),
+            model_provider: None,
+            model_id: None,
+            variant: None,
+            stop_reason: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
+            created_at_ms: 1_000,
+            completed_at_ms: None,
+            parts: vec![crate::db::chat::ChatPart {
+                position: 0,
+                kind: "text".into(),
+                content: "问".into(),
+                provider_metadata_json: None,
+            }],
+        },
+        crate::db::chat::ChatMessage {
+            external_id: "a1".into(),
+            sequence: 1,
+            turn_index: 0,
+            role: "assistant".into(),
+            status: "complete".into(),
+            model_provider: Some("p".into()),
+            model_id: Some("m".into()),
+            variant: None,
+            stop_reason: Some("complete".into()),
+            error_code: None,
+            input_tokens: Some(2_000),
+            output_tokens: Some(500),
+            cache_read_tokens: Some(1_500),
+            cache_write_tokens: None,
+            created_at_ms: 1_000,
+            completed_at_ms: Some(3_500),
+            parts: vec![crate::db::chat::ChatPart {
+                position: 0,
+                kind: "text".into(),
+                content: "答".into(),
+                provider_metadata_json: None,
+            }],
+        },
+    ];
+    assert!(on_session_loaded(
+        &mut state,
+        pane,
+        "sess-ctx",
+        &messages,
+        Some(ModelSelection {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: Some("high".into()),
+        })
+    ));
+    let target = state.pane_anywhere(pane).unwrap();
+    let chat = &target.lx.chat;
+    assert_eq!(chat.context_tokens, Some(2_500), "上下文占用 = 输入 + 输出");
+    assert_eq!(chat.status.input_tokens, Some(2_500), "状态行分子同步恢复");
+    assert_eq!(chat.status.context_percent, Some(2), "2_500 / 100_000 = 2%");
+    assert_eq!(
+        chat.messages[1].model_label.as_deref(),
+        Some("M"),
+        "模型展示名"
+    );
+    assert_eq!(chat.messages[1].input_tokens, Some(2_000));
+    assert_eq!(chat.messages[1].output_tokens, Some(500));
+    assert_eq!(chat.messages[1].cache_read_tokens, Some(1_500));
+    assert_eq!(chat.messages[1].duration_ms, Some(2_500), "本轮耗时");
+    assert!(
+        chat.thinking_toggled.is_empty(),
+        "历史加载清空显式 thinking 切换"
+    );
+}
+
+/// 模型配置了默认思考等级时，未显式选择的窗格选择也带上该等级（variant 参数）。
+#[test]
+fn effective_selection_applies_model_default_variant() {
+    let models = models_with(Some("high"));
+    let chat = LxChat::new();
+    let selection = chat
+        .effective_selection(&models)
+        .expect("default selection");
+    assert_eq!(
+        selection.variant.as_deref(),
+        Some("high"),
+        "回落模型默认等级"
+    );
+    // 端到端：规范化后的选择能取到思考参数（→ 请求体 `reasoning_effort`）。
+    assert_eq!(
+        models.variant_params_of(&selection),
+        Some(serde_json::json!({"reasoningEffort": "high"})),
+        "默认等级参数可用"
+    );
+    // 显式失效的 variant 也回落默认。
+    let mut chat = LxChat::new();
+    chat.selection = Some(ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: Some("gone".into()),
+    });
+    let selection = chat.effective_selection(&models).expect("pane selection");
+    assert_eq!(selection.variant.as_deref(), Some("high"));
 }

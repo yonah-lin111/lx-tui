@@ -110,14 +110,11 @@ fn start_stream(
         return false;
     };
     // 冻结模型快照：从窗格当前消息流状态读取该轮的选择（发送时冻结语义：
-    // Committing 已把模型写入 DB；流启动时按窗格 selection 重解析——
+    // Committing 已把模型写入 DB；流启动时按窗格 effective_selection 重解析——
     // 在途请求持有启动时快照，设置页中途保存不影响本轮）。
-    let selection = pane
-        .lx
-        .chat
-        .selection
-        .clone()
-        .or_else(|| state.models.default_selection());
+    // 必须走 `effective_selection`：它会把模型默认思考等级（variant）补上，
+    // 否则「未显式选等级」的窗格请求不会带思考参数（reasoning 恒为空）。
+    let selection = pane.lx.chat.effective_selection(&state.models);
     let Some(selection) = selection else {
         // 无有效模型：直接按失败收尾。
         let _ = sender.send(AppEvent::ChatNet(ChatNetEvent::Finished {
@@ -337,7 +334,10 @@ fn chat_part_views_to_db(
             error_code: message.error_code.clone(),
             input_tokens: None,
             output_tokens: None,
+            cache_read_tokens: None,
+            cache_write_tokens: None,
             created_at_ms: 0,
+            completed_at_ms: None,
             parts: chat_part_views(&message.parts),
         })
         .collect()
@@ -371,6 +371,10 @@ mod tests {
             parts,
             model_label: None,
             error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
         }
     }
 

@@ -1,4 +1,4 @@
-//! 状态测试：进度条填充/空余、无消耗不显示百分比、降级（丢进度条 → 停止控件 → 供应商）、
+//! 状态测试：`context:NN%` 显示与隐藏（无消耗整段隐藏）、降级（丢停止控件 → 上下文占用）、
 //! 模型名硬切不省略号、底边线保留、供应商用 prompt 条目标题色（均绘制在窗格底边框上）。
 
 use ratatui::buffer::Buffer;
@@ -75,35 +75,38 @@ fn context_percent_is_ratio_clamped() {
 }
 
 #[test]
-fn context_bar_fills_proportionally() {
-    let st = status(Some("M"), Some("P"), Some(100), Some(50), false);
-    assert_eq!(context_bar_text(&st, 10), "█████░░░░░");
-    let st = status(Some("M"), Some("P"), Some(100), Some(0), false);
-    assert_eq!(context_bar_text(&st, 10), "░░░░░░░░░░", "0% 全空余");
+fn context_text_is_prefixed_percent() {
+    let st = status(Some("M"), Some("P"), Some(1_000_000), Some(720_000), false);
+    assert_eq!(context_text_for_test(&st).as_deref(), Some("context:72%"));
     let st = status(Some("M"), Some("P"), Some(100), Some(100), false);
-    assert_eq!(context_bar_text(&st, 10), "██████████", "满格");
-    let st = status(Some("M"), Some("P"), Some(100), None, false);
-    assert_eq!(context_bar_text(&st, 10), "░░░░░░░░░░", "未知整条空余");
+    assert_eq!(context_text_for_test(&st).as_deref(), Some("context:100%"));
 }
 
 #[test]
-fn context_bar_rounds_nearest_cell() {
-    let st = status(Some("M"), Some("P"), Some(100), Some(42), false);
-    assert_eq!(context_bar_text(&st, 10), "████░░░░░░");
-    let st = status(Some("M"), Some("P"), Some(100), Some(78), false);
-    assert_eq!(context_bar_text(&st, 10), "████████░░");
+fn tiny_usage_still_shows_zero_percent() {
+    // 百万级上下限下，小用量四舍五入到 0% 仍要显示（否则历史会话看起来「上下文为空」）。
+    let st = status(Some("M"), Some("P"), Some(1_000_000), Some(2_500), false);
+    assert_eq!(context_text_for_test(&st).as_deref(), Some("context:0%"));
 }
 
 #[test]
-fn context_zero_usage_hides_percent_text() {
+fn context_without_usage_is_hidden_entirely() {
+    // 未知（无上限/无用量）与 0% 都整段隐藏。
+    for value in [
+        status(Some("M"), Some("P"), None, None, false),
+        status(Some("M"), Some("P"), Some(1_000), None, false),
+        status(Some("M"), Some("P"), Some(1_000), Some(0), false),
+    ] {
+        assert_eq!(context_text_for_test(&value), None, "无消耗整段隐藏");
+    }
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(0), false));
     let line = render_border(&lx, 60);
-    assert!(!line.contains('%'), "无消耗不显示百分比：{line}");
-    assert!(line.contains('░'), "仍显示空进度条：{line}");
+    assert!(!line.contains('%'), "0% 不显示百分比：{line}");
+    assert!(!line.contains("context"), "0% 整段隐藏：{line}");
 }
 
 #[test]
-fn context_usage_shows_percent_after_bar() {
+fn context_usage_shows_prefixed_percent_on_border() {
     let lx = lx_with_status(status(
         Some("M"),
         Some("P"),
@@ -112,35 +115,23 @@ fn context_usage_shows_percent_after_bar() {
         false,
     ));
     let line = render_border(&lx, 60);
-    assert!(line.contains("72%"), "占用显示百分比：{line}");
-    let bar_at = line.find(text::LX_CHAT_CONTEXT_BAR_FREE).expect("进度条");
-    assert!(line.contains('█'), "有已用段：{line}");
-    assert!(line[bar_at..].contains("72%"), "百分比在进度条右侧：{line}");
+    assert!(
+        line.contains("context:72%"),
+        "占用显示 `context:72%`：{line}"
+    );
 }
 
 #[test]
-fn unknown_usage_shows_empty_bar_without_percent() {
-    let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
-    let line = render_border(&lx, 60);
-    assert!(!line.contains('%'), "未知不显示百分比：{line}");
-    // 无上下文上限时不显示进度条。
-    assert!(!line.contains('░'), "无上限不显示进度条：{line}");
-}
-
-#[test]
-fn bar_used_white_and_free_gray() {
+fn context_style_is_white() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), false));
     let rect = Rect::new(0, 0, 60, 5);
     let inner = pane(rect);
     let mut buf = Buffer::empty(rect);
     render(&mut buf, inner, &lx);
     let lay = layout(inner, &lx.chat.status);
-    let used = &buf[(lay.bar.x, lay.bar.y)];
-    assert_eq!(used.symbol(), "█");
-    assert_eq!(used.fg, Color::Indexed(252), "已用段亮白");
-    let free = &buf[(lay.bar.x + lay.bar.width - 1, lay.bar.y)];
-    assert_eq!(free.symbol(), "░");
-    assert_eq!(free.fg, Color::DarkGray, "空余段中性灰");
+    let cell = &buf[(lay.context.x, lay.context.y)];
+    assert_eq!(cell.symbol(), "c");
+    assert_eq!(cell.fg, Color::Indexed(252), "占用文字亮白");
 }
 
 #[test]
@@ -172,29 +163,28 @@ fn border_line_stays_visible_between_segments() {
     assert!(line.contains('─'), "底边线保留：{line}");
     assert!(
         line.starts_with("╰ M · P─"),
-        "模型 · 供应商与进度条之间为底边线：{line}"
+        "模型 · 供应商与上下文占用之间为底边线：{line}"
     );
 }
 
 #[test]
-fn narrow_drops_bar_then_stop_keeps_model_and_percent() {
-    // 够「条 + 百分比」：三者中无流中，故为 条+百分比。
+fn narrow_drops_stop_then_context_keeps_model() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), true));
-    let inner = Rect::new(0, 0, 30, 3);
+    // 宽：上下文占用 + 停止控件 + 供应商。
+    let inner = Rect::new(0, 0, 40, 3);
     let lay = layout(inner, &lx.chat.status);
-    assert!(lay.bar.width > 0, "30 列仍有进度条");
-    assert!(lay.stop.is_some(), "30 列仍有停止控件");
-    // 收窄到放不下进度条：丢进度条、丢供应商，保留模型名与百分比（+停止控件）。
+    assert!(lay.context.width > 0, "40 列仍显示上下文占用");
+    assert!(lay.stop.is_some(), "40 列仍显示停止控件");
+    // 收窄：丢停止控件，保留模型名与上下文占用。
     let inner = Rect::new(0, 0, 20, 3);
     let lay = layout(inner, &lx.chat.status);
-    assert_eq!(lay.bar.width, 0, "窄窗格丢弃进度条");
-    assert!(lay.percent.width > 0, "保留百分比");
+    assert!(lay.stop.is_none(), "窄窗格丢弃停止控件");
+    assert!(lay.context.width > 0, "保留上下文占用");
     assert!(lay.label.width > 0, "保留模型名区");
-    // 更窄：丢停止控件，仍保留模型名与百分比。
+    // 更窄：连上下文占用也放不下时只留模型名（仍硬切保留）。
     let inner = Rect::new(0, 0, 12, 3);
     let lay = layout(inner, &lx.chat.status);
-    assert!(lay.stop.is_none(), "更窄时丢弃停止控件");
-    assert!(lay.percent.width > 0, "仍保留百分比");
+    assert_eq!(lay.context.width, 0, "更窄时丢弃上下文占用");
     assert!(lay.label.width > 0, "仍保留模型名区");
 }
 
@@ -210,7 +200,7 @@ fn narrow_hides_provider_without_ellipsis() {
     let line = render_border(&lx, 24);
     assert!(!line.contains('…'), "不使用省略号：{line}");
     assert!(!line.contains("Provider"), "供应商被整体隐藏：{line}");
-    assert!(line.contains("50%"), "保留百分比：{line}");
+    assert!(line.contains("50%"), "保留上下文占用：{line}");
 }
 
 #[test]
@@ -233,8 +223,10 @@ fn wide_status_on_border_with_stop_button() {
         "左角后模型 · 供应商：{line}"
     );
     assert!(line.ends_with("[■] ╯"), "停止控件贴右端、保留角：{line}");
-    assert!(line.contains('█'), "含已用进度段：{line}");
-    assert!(line.contains("72%"), "占用显示百分比：{line}");
+    assert!(
+        line.contains("context:72% [■]"),
+        "停止控件在上下文占用右侧：{line}"
+    );
 }
 
 #[test]

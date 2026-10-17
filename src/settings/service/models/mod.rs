@@ -78,7 +78,7 @@ fn get_settings(state: &ServiceState) -> Response {
                             "context": limit.context,
                             "output": limit.output,
                         })),
-                        "variants": model.variants.keys().cloned().collect::<Vec<_>>(),
+                        "variants": model.variants,
                         "variant": model.variant,
                     })
                 }).collect::<Vec<_>>(),
@@ -237,6 +237,36 @@ fn merge_settings(
                         "model '{model_id}' variant '{variant}' is not in variants"
                     ));
                 }
+                let previous_model = existing.and_then(|provider| provider.models.get(&model_id));
+                // 前端不编辑的字段：优先取请求体（原样往返），缺失时保留旧值。
+                let modalities = model_item
+                    .get("modalities")
+                    .filter(|value| !value.is_null())
+                    .cloned()
+                    .or_else(|| previous_model.and_then(|model| model.modalities.clone()));
+                // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
+                const KNOWN_KEYS: [&str; 9] = [
+                    "id",
+                    "key",
+                    "name",
+                    "transport",
+                    "limit",
+                    "variants",
+                    "variant",
+                    "modalities",
+                    "pricing",
+                ];
+                let mut extra = previous_model
+                    .map(|model| model.extra.clone())
+                    .unwrap_or_default();
+                if let Some(item) = model_item.as_object() {
+                    for (field, value) in item {
+                        if KNOWN_KEYS.contains(&field.as_str()) {
+                            continue;
+                        }
+                        extra.insert(field.clone(), value.clone());
+                    }
+                }
                 models.insert(
                     model_id.clone(),
                     ModelConfig {
@@ -244,13 +274,11 @@ fn merge_settings(
                         name: model_name,
                         transport,
                         limit,
-                        modalities: None,
+                        modalities,
                         variants,
                         variant,
-                        pricing: existing
-                            .and_then(|existing| existing.models.get(&model_id))
-                            .and_then(|model| model.pricing.clone()),
-                        extra: serde_json::Map::new(),
+                        pricing: previous_model.and_then(|model| model.pricing.clone()),
+                        extra,
                     },
                 );
             }
@@ -263,7 +291,9 @@ fn merge_settings(
                 name,
                 options: ProviderOptions { api_key, base_url },
                 models,
-                extra: serde_json::Map::new(),
+                extra: existing
+                    .map(|provider| provider.extra.clone())
+                    .unwrap_or_default(),
             },
         );
     }
