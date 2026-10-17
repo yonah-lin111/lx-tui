@@ -68,6 +68,8 @@ pub enum DbError {
     ToolArgumentTooLarge,
     /// 工具结果 JSON 超过单次上限。
     ToolResultTooLarge,
+    /// 数据库不可用（无持久化模式）；调用方据此停止需要落库的流程。
+    Unavailable,
 }
 
 impl fmt::Display for DbError {
@@ -101,12 +103,42 @@ impl fmt::Display for DbError {
             }
             Self::ToolArgumentTooLarge => write!(formatter, "tool arguments exceed size limit"),
             Self::ToolResultTooLarge => write!(formatter, "tool result exceeds size limit"),
+            Self::Unavailable => write!(formatter, "database unavailable"),
         }
     }
 }
 
 impl std::error::Error for DbError {}
 
+impl DbError {
+    /// 稳定错误码（用于回传 agent loop 的错误码与 tracing，不含 SQL 原文/参数）。
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::HomeMissing => "home missing",
+            Self::Io(_) => "io",
+            Self::Sqlite(_) => "sqlite",
+            Self::WorkspaceMissing => "workspace missing",
+            Self::FolderMissing => "folder missing",
+            Self::PageMissing => "page missing",
+            Self::DepthExceeded => "depth exceeded",
+            Self::ForeignKeyViolation => "foreign key violation",
+            Self::UnsupportedSchema(_) => "unsupported schema",
+            Self::SessionMissing => "session missing",
+            Self::MessageNotStreaming => "message not streaming",
+            Self::SessionBusy => "session busy",
+            Self::InvalidDraft => "invalid draft",
+            Self::MessageTooLarge => "message too large",
+            Self::ToolCallMissing => "tool call missing",
+            Self::ToolCallConflict => "tool call conflict",
+            Self::PositionConflict => "position conflict",
+            Self::InvalidToolTransition => "invalid tool transition",
+            Self::ToolTerminalConflict => "tool terminal conflict",
+            Self::ToolArgumentTooLarge => "tool argument too large",
+            Self::ToolResultTooLarge => "tool result too large",
+            Self::Unavailable => "database unavailable",
+        }
+    }
+}
 impl From<rusqlite::Error> for DbError {
     fn from(error: rusqlite::Error) -> Self {
         Self::Sqlite(error)

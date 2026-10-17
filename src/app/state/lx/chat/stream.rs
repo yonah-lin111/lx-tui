@@ -197,6 +197,31 @@ impl LxChat {
         true
     }
 
+    /// DB pending 已提交后的状态推进：`InputStreaming -> Pending`。
+    ///
+    /// 参数已完整接收但与 `ToolInputEnded` 存在竞态时（例如响应收尾先转 Pending），
+    /// 本方法补齐一次；已经是 `Pending` 时幂等返回 false，不伪造其他转移。
+    pub fn mark_tool_pending(&mut self, call_id: &str) -> bool {
+        let Some(message) = self.streaming_message_mut() else {
+            return false;
+        };
+        let Some(call) = message.tool_mut(call_id) else {
+            return false;
+        };
+        match call.status {
+            ToolStatus::InputStreaming if !call.arguments_json.is_empty() => {
+                let arguments = std::mem::take(&mut call.arguments_json);
+                let accepted = call.accept_arguments(arguments);
+                if !accepted {
+                    call.fail(TOOL_ARGUMENTS_INVALID_CODE);
+                }
+                true
+            }
+            // 已 Pending：DB 也已提交，无需再改状态。
+            _ => false,
+        }
+    }
+
     /// `Pending -> Running`（DB pending 已入库后由 agent loop 通知；本组不执行 IO）。
     ///
     /// 只有 `Pending` 可推进；重复推进或从其它状态推进返回 false（不伪造转移）。
@@ -224,6 +249,20 @@ impl LxChat {
         status: ToolStatus,
         error: Option<String>,
     ) -> bool {
+        self.settle_tool_result(call_id, status, None, error)
+    }
+
+    /// 结果落库后的终态结算：除状态与错误码外还写入**UI 摘要**（路径/行范围/增删计数）。
+    ///
+    /// 摘要由 `chat::tools::to_summary` 生成、事件层做一次字段映射；摘要绝不含文件内容。
+    /// 只接受从开放状态的转移，已终态时幂等返回 false（迟到结果不覆盖真实终态）。
+    pub fn settle_tool_result(
+        &mut self,
+        call_id: &str,
+        status: ToolStatus,
+        summary: Option<ToolSummary>,
+        error: Option<String>,
+    ) -> bool {
         if !status.is_terminal() {
             return false;
         }
@@ -237,6 +276,9 @@ impl LxChat {
             return false;
         }
         call.settle(status, error);
+        if summary.is_some() {
+            call.summary = summary;
+        }
         true
     }
 

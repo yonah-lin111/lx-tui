@@ -4,6 +4,7 @@
 //! 网络任务在独立 Tokio 任务运行，结果经 channel 回流事件循环。
 //! 模块不依赖 `app`/`ui`；DB 依赖仅限记录类型转换。
 
+pub mod agent_loop;
 pub mod client;
 pub mod context;
 pub mod events;

@@ -502,6 +502,9 @@ pub const LX_CHAT_NO_WORKSPACE: &str = "Workspace path unavailable";
 pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
 pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
 pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
+/// 工具结果落库失败：文件可能已变化，需要用户核查（绝不重试写入）。
+pub const LX_CHAT_TOOL_RESULT_SAVE_FAILED: &str =
+    "Failed to persist the tool result; check the files on disk";
 /// 流中「按 Esc 停止」待命提示短语（从长到短，按可用宽度取第一条放得下的；对齐 opencode）。
 pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "Press esc again to stop",

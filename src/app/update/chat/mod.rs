@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use crate::app::state::{
     AppState, AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, RequestKey,
-    RequestState,
+    RequestState, ToolStatus, ToolSummary,
 };
 use crate::app::toast::{Toast, ToastKind};
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
@@ -439,6 +439,80 @@ pub fn stop_stream(state: &mut AppState, pane: PaneId) -> bool {
         }
         _ => false,
     }
+}
+
+/// agent loop 的 BeginTool ack 第 ② 步：把该工具步骤推进到 `Pending`（DB 已提交）。
+///
+/// 只作用于**在途**轮次（`(pane, session, generation)` 与当前 `RequestState::Streaming`
+/// 一致）；会话切换/窗格关闭/旧 generation 一律忽略，调用方据此拒绝执行文件 IO。
+/// 返回是否产生状态变化（供事件层安排下一帧渲染）。
+pub fn on_tool_pending(state: &mut AppState, key: &RequestKey, call_id: &str) -> bool {
+    let Some(target) = state.pane_mut_anywhere(key.pane) else {
+        return false;
+    };
+    if !matches!(
+        &target.lx.chat.request,
+        RequestState::Streaming { key: active, .. } if active == key
+    ) {
+        return false;
+    }
+    let changed = target.lx.chat.mark_tool_pending(call_id);
+    if changed {
+        refresh_lx_status(state, key.pane);
+    }
+    changed
+}
+
+/// agent loop 的 BeginTool ack 第 ③ 步：`Pending -> Running`（DB running 已推进）。
+///
+/// 只有 pending 可推进；ack 顺序保证先 pending 后 running，此处的失败只表示状态已变，
+/// 事件层据此拒绝执行文件 IO。
+pub fn on_tool_running(state: &mut AppState, key: &RequestKey, call_id: &str) -> bool {
+    let Some(target) = state.pane_mut_anywhere(key.pane) else {
+        return false;
+    };
+    if !matches!(
+        &target.lx.chat.request,
+        RequestState::Streaming { key: active, .. } if active == key
+    ) {
+        return false;
+    }
+    let changed = target.lx.chat.mark_tool_running(call_id);
+    if changed {
+        refresh_lx_status(state, key.pane);
+    }
+    changed
+}
+
+/// agent loop 的 FinishTool ack 第 ② 步：把工具步骤结算为终态并写入摘要/错误码。
+///
+/// 摘要已由事件层从 `chat::tools::to_summary` 映射成纯数据；本函数不执行 IO。
+/// 迟到/重复结果（已终态）不覆盖真实结果。
+pub fn on_tool_settled(
+    state: &mut AppState,
+    key: &RequestKey,
+    call_id: &str,
+    status: ToolStatus,
+    summary: Option<ToolSummary>,
+    error: Option<String>,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(key.pane) else {
+        return false;
+    };
+    if !matches!(
+        &target.lx.chat.request,
+        RequestState::Streaming { key: active, .. } if active == key
+    ) {
+        return false;
+    }
+    let changed = target
+        .lx
+        .chat
+        .settle_tool_result(call_id, status, summary, error);
+    if changed {
+        refresh_lx_status(state, key.pane);
+    }
+    changed
 }
 
 /// 刷新单窗格状态行展示数据（设置页保存、选择变更、usage 到达后调用）。

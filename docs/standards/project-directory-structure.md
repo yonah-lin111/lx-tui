@@ -47,7 +47,9 @@ lx-tui/
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）
       encode.rs                 按键到终端字节序列
     event/                      唯一事件循环：tokio select、PTY 消息与渲染调度
-      chat.rs                   聊天网络流编排：取走网络效应、装配上下文、回投结果
+      chat/mod.rs               聊天轮次编排：取走网络效应、装配上下文、启动 agent turn、
+                                工具调用 BeginTool/FinishTool 的 DB→状态→回执握手与按 key 过滤
+      chat/host.rs              agent loop ↔ 事件层的请求枚举与 `AgentHost` 生产实现
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     git/                        git 查询：worktree 列表的执行与解析（唯一执行 git 命令的模块）
@@ -83,6 +85,8 @@ lx-tui/
       tools/write.rs            write：创建或完整覆盖、父目录创建、原子替换
       tools/lock.rs             按规范化路径的短时写锁（不做全局串行）
       tools/output.rs           format_for_model / to_summary / to_result_json 三合一呈现
+      agent_loop/mod.rs         agent loop 纯编排：多步采样、ordinal 串行工具调度、取消与限额
+                                （不依赖 app/ui/event，文件 IO 经注入的 ToolExecutor）
     settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
       commands.rs               自定义命令 Markdown 文件的读写
       service.rs                回环 HTTP 服务：静态设置页、JSON API 与事件投递（路由 async，禁止在运行时内再建运行时）
@@ -103,7 +107,7 @@ lx-tui/
 1. `app/`：唯一状态来源；`state.rs`/`state/` 只放数据结构（含窗格终端仿真状态与 lx 聊天会话状态），`update/` 只做状态转换；不得执行 IO、渲染或线程操作。`update/chat/` 实现 lx 聊天状态机（发送/流事件/终态/`/` 命令），只产生 `Effect` 与纯状态更新；展示历史唯一顺序来源是 `ChatMessageView::steps`（part 与工具步骤共用同一 `position`），由 `update/chat/view.rs` 从 DB 的 parts 与 tools 按 position 合并。
 2. `layout.rs`（根级）：BSP 平铺模型与几何计算，`pane_rects` / `pane_inner_size` / 方向导航等均为纯函数，可直接用 `Rect` 单元测试。
 3. `ui/`：接收 `&AppState`（及其只读派生）绘制；`layout.rs` 负责屏幕区域划分，`main_content.rs` 按窗格视图分派 lx 页与终端网格并写入 `Buffer`，均为纯渲染；lx 页的聊天历史（`main_content/lx/history.rs`）、消息底部通知（`main_content/lx/notice.rs`）、状态（`main_content/lx/status.rs`，覆盖绘制在窗格底边框上）按职责拆分，命中几何与绘制共享纯布局函数。
-4. `event/`：唯一事件循环；tokio `select!` 收敛键盘、PTY 输出与定时事件为 `app` 行为调用与窗格写入，并做帧节流。
+4. `event/`：唯一事件循环；tokio `select!` 收敛键盘、PTY 输出与定时事件为 `app` 行为调用与窗格写入，并做帧节流。`event/chat/` 是 lx agent 轮次的唯一编排者：启动 agent turn、按 `RequestKey` 过滤过期事件、并处理工具调用的 BeginTool/FinishTool 握手（DB pending/running/结果落库 → 状态 → 回执）；可见窗格的 pending 只在该帧绘制完成后才推进 running 并回执 ticket。
 5. `input/`：终端事件到应用行为的映射与按键编码；`encode.rs` 为纯函数，按键判断不得散落在 `ui/` 组件中。
 6. `terminal/`：终端仿真状态机（alacritty_terminal 封装）；字节进、画面出，不触碰 IO、不依赖其他模块状态。
 7. `pty/`：真实进程会话；唯一允许持有 `portable-pty` 句柄与读线程的模块；窗格 shell 按所属工作区 cwd 启动。
@@ -112,7 +116,7 @@ lx-tui/
 10. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
 11. `config/`：配置结构、默认值与校验；`ai.rs` 承载模型配置（`config/ai.json`）的类型、校验与原子保存；配置只读写本项目数据根（`~/.lx-t[-dev]/config/ai.json`），不读取 lx-agent 的 `~/.lx`；配置变更不直接改运行时状态，交由 `app` 行为处理。
 12. `settings/`：设置与命令文件持久化（`settings.json`、自定义命令 Markdown 文件）及本地回环设置 Web 服务；`service.rs` 只监听 `127.0.0.1` 并带每次运行随机 token，静态资源（`page.rs` 以 `include_str!` 加载 `assets/`，经独立路由提供）与 JSON API 共用一套存储函数；`service/models.rs` 提供模型设置的脱敏 GET、原子 PUT 与远端发现 POST，状态变更经事件投递回 `event` 循环。
-13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、`lx` 身份提示（`prompt.rs`）、五种 transport 的请求/解码（`transport/`，其中 `transport/tools/` 统一四工具 wire 形状、历史 call/result 归并与跨帧参数缓冲）、请求执行与取消（`client.rs`，含“已产生工具输入即不重试”的重试闸门）与上下文装配（`context.rs`）；`chat/tools/` 是文件工具执行层（`read`/`search`/`edit`/`write` 与 Codex 风格补丁引擎）：相对路径以调用方冻结的 `ToolContext::cwd` 为基准、同步阻塞（由调用方 `spawn_blocking`）、只返回结构化结果，`format_for_model`/`to_summary`/`to_result_json` 是唯一三种呈现口径；工具层不触碰 Git 索引/分支/暂存区/提交，写文件经 `platform::write_file_atomic` 原子替换并按规范化路径加短时写锁。不依赖 `app`/`ui`/`event`。
+13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、`lx` 身份提示（`prompt.rs`）、五种 transport 的请求/解码（`transport/`，其中 `transport/tools/` 统一四工具 wire 形状、历史 call/result 归并与跨帧参数缓冲）、请求执行与取消（`client.rs`，含“已产生工具输入即不重试”的重试闸门）与上下文装配（`context.rs`）；`chat/agent_loop/` 是 agent loop 纯编排（多步采样、按 ordinal 串行调度工具、取消与步骤/调用上限），只依赖纯数据事件与 `db::chat` 记录类型，持久化与状态经注入的 `AgentHost` 由事件层回复；`chat/tools/` 是文件工具执行层（`read`/`search`/`edit`/`write` 与 Codex 风格补丁引擎）：相对路径以调用方冻结的 `ToolContext::cwd` 为基准、同步阻塞（由调用方 `spawn_blocking`）、只返回结构化结果，`format_for_model`/`to_summary`/`to_result_json` 是唯一三种呈现口径；工具层不触碰 Git 索引/分支/暂存区/提交，写文件经 `platform::write_file_atomic` 原子替换并按规范化路径加短时写锁。不依赖 `app`/`ui`/`event`。
 14. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控（含文件/目录权限收紧、原子文件替换 `write_file_atomic`/`rename_over`）；核心模块不得出现裸 OS 分支。
 15. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
 16. `assets/`：浏览器前端资源，HTML/CSS/JS 分文件维护，经 `include_str!` 编译进二进制并按独立路由提供，遵循 `html-assets.md`。

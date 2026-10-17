@@ -657,3 +657,75 @@ lx 配置层有四类 provider transport；`src/chat/transport` 实际有五条�
 9. **重试闸门**：`can_retry` 要求“零增量 + 零工具输入 + 临时故障（timeout/connection failed/429/5xx）”。任何 `ToolInputStarted/Delta/Ended`、任何正文/思考增量、任何 `ResponseFinished` 都会永久关闭本响应的重试；`StreamOutcome` 未改动（仍是 deltas + stop）。
 10. **Responses `response.incomplete`**：无未闭合工具时按旧的 `ResponseFinished{Final}` + `Finished{Complete}` 处理；有未闭合调用则协议错误。
 11. **Anthropic `cache_creation_input_tokens`** 仍按旧行为映射进 `Usage.cache_write`；`message_start` 的 input usage 与 `message_delta` 的 output usage 分两条增量上报，解码器只报本响应值（累加由上层负责）。
+
+### 20.4 已实施（G5：agent loop 编排、事件层 host 握手、取消与限额）
+
+落地位置：`src/chat/agent_loop/`（`mod.rs` 纯编排 + `tests.rs` / `tests/limits.rs`）、`src/event/chat/`（`mod.rs` 事件层握手 + `host.rs` 请求枚举与 `AgentHost` 生产实现 + `tests/{mod,flow,ack,limits}.rs`）、`src/app/state/lx/chat/stream.rs`（`mark_tool_pending` / `settle_tool_result`）、`src/app/update/chat/mod.rs`（`on_tool_pending` / `on_tool_running` / `on_tool_settled`）、`src/db/service.rs`（工具三写操作的**可区分结果**收口 + `checkpoint_parts`）、`src/ui/text.rs`（`LX_CHAT_TOOL_RESULT_SAVE_FAILED`）。
+
+**宿主握手（顺序不可交换）**
+
+```text
+loop                                event/chat（唯一状态修改者）
+begin_tool  ──BeginTool──▶  ① checkpoint_parts（对齐时间线位置）
+                            ② Database::begin_tool_call（pending 事务提交）
+                            ③ update::on_tool_pending（UI→Pending）+ 安排下一帧
+                            ④ 可见窗格：等该帧 draw 完成后
+                                 Database::mark_tool_running + update::on_tool_running
+                                 → 回执 Ok(ticket)；不可见窗格不等渲染
+ ◀──Ok(ticket)────────────
+executor.execute（spawn_blocking 文件 IO）
+finish_tool ──FinishTool(ticket)──▶ ① Database::finish_tool_call（真实结果原子落库）
+                                    ② update::on_tool_settled（终态 + to_summary 摘要）
+                                    ③ 回执 Ok(())；落库失败 → Err + toast，不重试
+ ◀──Ok(())─────────────────
+```
+
+- 与 §15.2 的差异：`AgentHostRequest` 的 `FinishTool` 携带 **begin 阶段发放的 ticket**（而非仅 call_id），事件层据此做 session/message/call 归属校验，不接受 loop 侧自造标识。trait 默认方法把 oneshot 建通道与“回执丢失 = 取消”收敛在一处，实现方只需 `send`。
+- 与 §15.2 的差异：`BeginTool` 在 pending 事务**之前**多一步 `checkpoint_parts`。原因：`begin_tool_call` 按该消息内 parts/tools 的 `MAX(position)+1` 分配工具位置，而 app 时间线的 parts 尚未全部落库时编号会错位，导致后续 `checkpoint`/`finish` 撞 `PositionConflict`。这不是新的持久化语义，只是把“该工具之前的 parts”先同步一次（幂等覆盖，不删除工具行）。
+- 与 §15.3 的差异：取消时**未开始的调用**也留下 `cancelled` 行（`begin_tool` → `finish_tool(Cancelled)`，走 G1 的 `pending -> cancelled` 分支）。理由：让“模型要求了但用户取消”可回放、可审计，且绝不会执行文件 IO。已开始的调用仍以真实结果结算。
+
+**loop 不变量**
+
+- 单轮上限 `MAX_MODEL_STEPS = 24` / `MAX_TOOL_CALLS = 64`；超限给稳定错误码 `agent step limit reached` / `agent tool call limit reached`，**整批不执行（不做半批）**。
+- 执行顺序取 `ToolInputEnded` 收集后的 **ordinal 排序**，与到达顺序无关；严格串行（begin/execute/finish 交替）。
+- `ReadyToolCall` 只在“`ToolInputStarted`+`ToolInputEnded` 且参数为 JSON 对象”时构造；未闭合 → `tool input truncated`，非法 → `tool arguments invalid`，同响应重复 call ID → `tool call protocol error`，三者都不进 pending、不产生文件副作用。
+- 工具级失败（`ToolExecutionResult::Failed`）不终止本轮：以 `is_error=true` 回传模型后继续采样。
+- usage 跨采样累加；从未上报过则保持 `None`（不写 0）。
+- 取消检查点：每次采样前、每个调用 begin 前、begin ack 后、结果落库后。已开始的 IO 必须等其返回并记录真实结果后才退出。
+- `chat/agent_loop` 不依赖 `app`/`ui`/`event`；`tool_rows`/`assistant_parts` 等 DB 读取只在测试中出现。
+
+**事件层过滤**
+
+- `AppEvent::AgentHost(AgentHostEvent)` 承载两种请求；`active_assistant_id(state, key)` 是唯一归属判据（要求 `RequestState::Streaming{key}` 完全相等）。旧 generation、其它窗格、会话切换后的请求一律回 `Err(HostError::Cancelled)`，不写库、不执行文件。
+- `pump_chat_streams` 每轮 `reap_stale_streams`：在途 key 已不属于任何窗格时发取消并丢弃未回执 pending。
+- 可见窗格由事件循环**每帧**写入 `ChatStreams::set_visible_panes`（几何未变化时也要刷新，否则首帧会被误判为不可见而跳过渲染门槛）。
+- 整轮终态仍由 `ChatNetEvent::Finished{reason, usage}` 驱动 `update::on_stream_finished`，`FinishChatTurn` 只提交一次消息终态与**累计** usage；工具行已单独落库，不重复写入。
+
+**测试与可观测证据**（`cargo test` 全绿）
+
+| 测试 | 断言的可观测证据 |
+| --- | --- |
+| `flow::write_then_read_then_final_answer_persists_in_order` | begin/finish 交替轨迹；read 读到刚写入内容；两行 position 单调、状态 completed、结果 JSON 含写入内容；最终消息 complete 且 UI 工具摘要来自 `to_summary`；parts 与工具 position 不重叠 |
+| `flow::two_calls_in_one_response_run_serially_in_ordinal_order` | 到达顺序与 ordinal 相反时执行顺序仍为 ordinal；trace 严格交替；DB 行 position 单调 |
+| `ack::pending_failure_has_no_file_side_effect_and_fails_turn` | 错误码前缀 `tool call pending record failed`；文件不存在；无执行；无工具行 |
+| `ack::running_failure_has_no_file_side_effect` | 插桩删除 pending 行后 `mark_tool_running` 失败 → 错误码前缀 `tool call running record failed`；文件不存在、未执行 |
+| `ack::result_persistence_failure_does_not_retry_the_write` | 只执行一次；文件内容为首次写入；DB 保留外来终态不被覆盖；toast 文案 = `LX_CHAT_TOOL_RESULT_SAVE_FAILED` |
+| `ack::duplicate_call_id_is_rejected_without_second_side_effect` | 同 call ID 冲突 → pending 失败；不执行；库中仍只有原行 |
+| `ack::crash_recovery_marks_interrupted_and_resume_never_reexecutes` | `recover_interrupted_tool_calls` 首次 2、再次 0；两行 interrupted + `interrupted` 错误码 + 无 result_json；`/resume` 可见；`a.txt`/`b.txt` 均不存在 |
+| `ack::escape_cancel_skips_unstarted_calls_and_keeps_real_result` | c1 为 completed 且文件存在；c2 为 cancelled 且文件不存在；恢复返回 0；只采样 1 次 |
+| `ack::cancel_while_waiting_for_ticket_never_executes_the_tool` | 中断终态；pending 行结算为 cancelled；文件不存在；恢复返回 0 |
+| `ack::tool_level_failure_keeps_the_turn_alive_and_records_failed` | 行 failed + error_text + result_json；UI 为 Failed；第二次请求含 `is_error=true` 结果；共 2 次采样 |
+| `ack::stale_generation_events_do_not_pollute_the_new_turn` | 旧 key 的 delta 返回 false 且不进入新轮；旧 key 的 BeginTool 回 Err(Cancelled)、无文件、无工具行 |
+| `limits::step_limit_surfaces_stable_error_code` | 错误码 = `agent step limit reached`；采样恰 24 次；消息 failed + error_code 一致 |
+| `limits::tool_call_limit_surfaces_stable_error_code` | 错误码 = `agent tool call limit reached`；trace 空、无执行、无工具行 |
+| `limits::plain_text_turn_matches_legacy_single_sample_behavior` | 一次采样、无 pending 请求、`FinishChatTurn` 恰一次、正文与 usage 正确 |
+| `limits::multiple_calls_never_execute_concurrently` | begin/finish 严格交替；两文件内容正确 |
+| `limits::pending_row_committed_before_the_file_is_written` | 执行时 DB 行已是 running 且目标文件尚不存在 |
+| `limits::request_items_keep_call_result_pairing_across_steps` | 第三次请求中 call id 序列与 result call id 序列一致，且每条结果都在其调用之后 |
+
+**已知未覆盖 / 留待后续**
+
+1. `src/chat/context/`（§7.3）仍是“只取完整轮次正文”，历史工具的 call/result 成对回放属 G7；本轮 loop 内的 call/result 已保留（见上表最后一行）。
+2. 网络断开且已执行工具时“不自动重试”由 G4 的重试闸门保证（`can_retry` 见到任何工具输入即永久关闭），本组未新增重复断言。
+3. 结果入库成功但 UI ack 丢失：DB 为真相，重启后 `/resume` 幂等加载；本组只验证了“落库失败不重试”，没有构造“ack 通道丢失后仍成功”的注入（该路径依赖进程内 oneshot 语义，等价于杀进程 + 恢复，已由崩溃恢复测试覆盖）。
+4. 真实供应商与终端外观仍由用户 `cargo run` 人工验收。

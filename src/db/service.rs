@@ -66,6 +66,73 @@ impl Persistence {
         Self { db: Some(db) }
     }
 
+    /// 数据库是否可用（无持久化模式下为 false）。
+    pub fn has_database(&self) -> bool {
+        self.db.is_some()
+    }
+
+    /// 记录一次工具调用的 pending 行并返回执行票据（事务提交后才返回）。
+    ///
+    /// 「结果落库」「pending 落库」这类**必须区分成功/失败**的写操作不经
+    /// [`Self::with_db`]：失败原因要回给 agent loop（决定是否执行文件 IO），
+    /// 不能被折叠成 `None`。
+    pub fn begin_tool_call(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        message_id: &str,
+        call_id: &str,
+        name: &str,
+        arguments_json: &str,
+    ) -> super::Result<crate::db::chat::ToolCallTicket> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.begin_tool_call(
+            workspace,
+            session_id,
+            message_id,
+            call_id,
+            name,
+            arguments_json,
+        )
+    }
+
+    /// pending -> running；失败时调用方不得执行文件 IO。
+    pub fn mark_tool_running(
+        &self,
+        workspace: &Path,
+        ticket: &crate::db::chat::ToolCallTicket,
+    ) -> super::Result<()> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.mark_tool_running(workspace, ticket)
+    }
+
+    /// 结算工具调用（running -> 终态；pending -> cancelled 允许）。
+    pub fn finish_tool_call(
+        &self,
+        workspace: &Path,
+        ticket: &crate::db::chat::ToolCallTicket,
+        result: &crate::db::chat::ToolCallResult,
+    ) -> super::Result<()> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.finish_tool_call(workspace, ticket, result)
+    }
+
+    /// 工具 pending 前的 parts 快照同步：让 DB 的时间线位置与 app 步骤时间线一致。
+    ///
+    /// `begin_tool_call` 按该消息内 parts/tools 的 `MAX(position) + 1` 分配工具位置，
+    /// 若 app 已产生的 parts 尚未落库，分配的编号会与 app 时间线错位（后续 checkpoint /
+    /// finish 会撞 `PositionConflict`）。因此 pending 之前先提交当前 parts 快照，
+    /// 保证同一消息内两表位置严格对应。失败时调用方必须中止该工具（不执行文件 IO）。
+    pub fn checkpoint_parts(
+        &self,
+        workspace: &Path,
+        assistant_id: &str,
+        parts: &[crate::db::chat::ChatPart],
+    ) -> super::Result<()> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.checkpoint(workspace, assistant_id, parts)
+    }
+
     /// 记录工作区信任（写库）；库不可用或写失败返回 false（仅日志，不阻断进入）。
     pub fn trust_path(&self, path: &Path, name: &str) -> bool {
         self.with_db(|db| db.trust_workspace(path, name)).is_some()
