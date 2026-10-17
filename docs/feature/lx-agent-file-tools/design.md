@@ -649,7 +649,7 @@ lx 配置层有四类 provider transport；`src/chat/transport` 实际有五条�
 1. **参数非法 JSON 直接 `Err`，不发 `ToolInputEnded`**。§17 允许“发 Ended 让 G2 状态层判失败”，但四类协议在 `ToolInputEnded` 之前都已拿到**权威完整串**（Chat/Anthropic 在闭合事件、Responses 在 `arguments.done`、Google 在完整对象），非法即协议级问题，直接失败更早、更不可能把不可解析调用推进到 `Pending`。超限与半截参数同理直接 `Err`（`TOOL_ARGUMENTS_INVALID_CODE` / `TOOL_ARGUMENTS_TOO_LARGE_CODE`）。
 2. **EOF 时未闭合工具输入**由新增的 `StreamDecoder::has_open_tool_input()` 检出，client 以 `tool input truncated` 失败，不补造 `ToolInputEnded`。
 3. **hosted tool 处理**：Responses 的 `web_search_call` / `file_search_call` / `code_interpreter_call` / `image_generation_call` / `mcp_call` / `mcp_list_tools` / `mcp_approval_request` / `computer_call` / `local_shell_call` 一律协议错误（不当成本地文件工具）；Anthropic 的 `server_tool_use` / `web_search_tool_result` / `code_execution_tool_result` block 同样拒绝。普通输出项（`message` / `reasoning`）忽略。
-4. **Google 去重与合成 ID**：内部 call ID 为 `gemini-{candidate index}-{part index}-{name}`（不含时间戳），并按 `(candidate, part, name, args 序列化)` 二次去重累计快照；该 ID **不写入**任何供应商字段（`functionResponse` 只带 `{name, response}`）。
+4. **Google 去重与合成 ID**：内部 call ID 为 `gemini-{response seq}-{candidate index}-{part index}-{name}`（不含时间戳；`response seq` 见 §20.6 的偏差修复），并按 `(candidate, part, name, args 序列化)` 二次去重累计快照；该 ID **不写入**任何供应商字段（`functionResponse` 只带 `{name, response}`）。
 5. **Google `functionResponse.response` 包装**：成功为 `{"result": <文本>}`，失败为 `{"error": <文本>}`（用协议在 `functionResponse` 里保留结构的最简包装，失败不伪装成功）。
 6. **Google `finishReason="MAX_TOKENS"` 也结束本次响应**（按 `Final`）；旧实现只在 STOP/SAFETY/RECITATION 结束，未知原因等 EOF。
 7. **Chat Completions 的 `finish_reason="tool_calls"` 同时置完成位**：`finish_reason` 已是协议级响应结束信号，缺少 `[DONE]` 时不应误判 `stream ended without completion`。旧的 `unsupported finish_reason` 与 `tool calls are not supported` 拒绝分支已删除；未知 `finish_reason` 仍是协议错误。
@@ -819,3 +819,101 @@ finish_tool ──FinishTool(ticket)──▶ ① Database::finish_tool_call（�
 1. 真实终端配色与对比度：品牌粉图标（Indexed 218）/ 天蓝动词（117）/ 金黄参数（220）/ 浅灰行范围（245）/ 绿红增删计数在用户的明暗主题下是否清晰。
 2. 与 gallery 样例的视觉对齐（间距、下划线覆盖长度、转轮与文字的视觉居中）。
 3. 真实模型四类协议下工具行的实际观感（含 `/resume` 回放、Esc 取消、异常中断后的历史）与窄窗口滚动体验。
+
+### 20.6 偏差修复（G8：Google 合成 call ID 跨模型采样冲突）
+
+**缺陷（真实、可复现）**
+
+G4 按 §20 第 4 条把 Google 的内部 call ID 合成为
+`gemini-{candidate index}-{part index}-{name}`。该 ID 只含**一次响应内**的位置信息，
+但解码器实例是按「一次模型响应」创建的（`client::stream_once` 内
+`transport::decoder_for(...)`），因此**同一用户轮次的第 2 次及之后的采样会产生与第 1 次
+完全相同的 ID**：
+
+```text
+step 0: call_id = gemini-0-0-read
+step 1: call_id = gemini-0-0-read   ← 与上一步冲突
+```
+
+DB 有 `UNIQUE(session_id, call_id)`，`agent_loop::run_agent_turn` 又要求同轮 call ID 唯一，
+于是 `begin_tool_call` 返回 `ToolCallConflict`，事件层以
+`tool call pending record failed · tool call conflict` 结束整轮。多步工具链
+（`read → write → read`、`read → edit → read`）只要第 2 次采样调用同名工具就必然失败。
+
+**这违反了 §10.1 的设计约束**：合成 ID 必须由
+`(request generation, model step, candidate index, part index)` 生成。G4 的落点漏掉了
+「model step / generation」这一维，只按响应内位置合成，因此不满足「跨响应唯一」。
+
+**修复（最小改动，等价实现）**
+
+- `chat::transport::decoder_for(transport, response_seq: u64)` 新增「响应序号」入参；
+  由 `client::stream_once` 在**每次 HTTP 响应**里传入。
+- `chat::transport::next_response_seq()` 提供该序号：进程级 `AtomicU64`，一次性随机种子
+  （标准库 `RandomState` 取 OS 熵）后单调递增。不读系统时钟、不是时间戳，符合 §10.1
+  「不能用当前时间」的约束。
+- Google 解码器把序号并入 ID：`gemini-{response seq}-{candidate}-{part}-{name}`。
+  其余四类 transport 有原生 ID，忽略该参数。
+
+**与设计口径的等价性**
+
+| 设计口径 | 实现 | 说明 |
+| --- | --- | --- |
+| request generation | 不解码器可见 | 事件层已用 `(pane, session, generation)` 的 `RequestKey` 过滤过期结果，跨轮次事件不会进入当前轮状态。 |
+| model step | `response_seq` | 序号按每次响应分配，同一轮第 N 次采样 = 第 N 个序号；跨轮次也继续递增，因此比 model step 更严格（跨轮也唯一）。 |
+| candidate index | `candidate` 段 | 原样保留。 |
+| part index | `part` 段 | 原样保留。 |
+| 不得用当前时间 | 随机种子 + 自增 | 种子只用于让不同进程（退出后 `/resume` 同一会话）不会从 0 重新计数而复用旧行 ID。 |
+| 同响应内稳定 | 序号在解码器生命周期内常量 | 同一响应的多次快照得到同一 ID，去重语义不变。 |
+
+**被保住的不变量**
+
+1. 同一响应内同一 `(candidate, part, name, args)` 的累计快照仍只产生一次
+   `ToolInputStarted` / `ToolInputEnded`（`Decoder::seen` 去重表未改动）。
+2. 同一响应内不同 `(candidate, part)` 的调用 ID 互不相同（序号相同、位置不同）。
+3. 不同响应之间同一 `(candidate, part, name)` 的 ID 必定不同（序号不同）。
+4. 不产生空串/含空白/含时间戳的 ID。
+5. 合成 ID 仍**绝不**进入发送给供应商的字段：`functionCall` 只有 `name`/`args`，
+   `functionResponse` 只有 `name`/`response`。
+
+**其余三类 transport 的核查结论（均无此缺陷，无需改动）**
+
+| transport | call ID 来源 | 结论与依据 |
+| --- | --- | --- |
+| Chat Completions / compatible | `choices[].delta.tool_calls[].id`（供应商原生） | 解码器只 `bind_call_id`，从不合成。缺 `id` 时 `end_all_open` 报 `tool call protocol error`，不补假 ID。同一轮不同采样的 `id` 由供应商保证不同。 |
+| OpenAI Responses | `item.call_id`（供应商原生） | `response.output_item.added` 直接 `identify(ordinal, call_id, name)`；缺 `call_id` 即协议错误。 |
+| Anthropic Messages | `content_block_start(tool_use).id`（供应商原生） | 同上；解码器只做 `identify` + 按 block index 聚合。 |
+
+三者的 `ordinal` 只是**响应内**顺序号（用于跨帧聚合参数），从不参与 ID 生成，
+因此「解码器按响应创建」对它们没有影响。已为三者各补一条断言
+「call ID 来自 wire、不来自解码器」的回归测试。
+
+**改动文件清单**
+
+| 文件 | 改动 |
+| --- | --- |
+| `src/chat/transport/mod.rs` | `decoder_for` 增加 `response_seq` 入参；新增 `next_response_seq()` / `random_seed()` |
+| `src/chat/transport/google/mod.rs` | `Decoder` 增 `response_seq` 字段与 `Decoder::new`；ID 形状改为含序号；模块文档同步 |
+| `src/chat/client/mod.rs` | `stream_once` 传入 `transport::next_response_seq()` |
+| `src/chat/transport/google/tests.rs` | 新增 6 项（跨响应唯一、显式序号确定性、序号单调、同响应去重不变、同响应多调用唯一、不污染请求）；既有断言更新为含序号的 ID 形状 |
+| `src/chat/client/tests/tools.rs` | 新增 1 项真实网络路径回归（两次 `run_stream` 的 ID 不同） |
+| `src/event/chat/tests/flow.rs` | 新增 1 项端到端回归（真实 Google 解码器 + 真实 DB + agent loop：`read → write → read` 整轮成功） |
+| `src/chat/transport/{openai,anthropic,responses}/tests.rs` | 各新增 call ID 来源核查断言 |
+
+**测试证据（`cargo test` 全绿：lib 2278 项 + 14 个集成测试二进制）**
+
+| 测试 | 断言 |
+| --- | --- |
+| `google::tests::call_ids_are_unique_across_model_responses` | 三个连续响应（走生产 `decoder_for` + `next_response_seq`）的同名 `read` 调用 ID 两两不同 |
+| `google::tests::explicit_response_seq_is_deterministic_and_distinct` | 同一序号 → 同一 ID；不同序号 → 不同 ID（无随机、无时钟） |
+| `google::tests::response_seq_is_strictly_increasing` | 进程内序号严格单调 |
+| `google::tests::cumulative_snapshot_still_dedupes_within_one_response` | 同一 decoder 两帧相同快照仍只一次 Started/Ended，ID 与序号绑定 |
+| `google::tests::multiple_calls_in_one_response_get_distinct_ids` | 一帧两个 `read`（不同 part）ID 不同，靠 part 段区分 |
+| `google::tests::synthesized_call_ids_never_reach_the_wire` | `functionCall` 只有 `{name,args}`、`functionResponse` 只有 `{name,response}`；请求体不含合成 ID 与 `call_id` |
+| `client::tests::tools::google_call_ids_differ_between_two_model_responses` | 真实 `run_stream` 两次采样的 `ToolInputStarted.call_id` 不同 |
+| `event::chat::tests::flow::google_repeated_tool_across_steps_does_not_collide_in_db` | 真实 Google 解码器 + 真实 DB：`read → write → read` 整轮 `Complete`，三行 call ID 不同、position 单调、第 3 步读到第 2 步写入内容、请求体无合成 ID |
+| `transport::{openai,anthropic,responses}::tests::call_ids_come_from_*` | 三类原生 ID 协议：ID 来自 wire 而非解码器 |
+| `openai::tests::missing_wire_id_is_a_protocol_error_not_a_synthesized_id` | 缺 `id` 时报协议错误，绝不合成 |
+
+**回归有效性已反向验证**：临时把 ID 形状改回
+`gemini-{candidate}-{part}-{name}` 后，上述 5 项新断言全部失败，其中端到端项复现了
+用户报告的确切错误码 `tool call pending record failed · tool call conflict`；恢复修复后全绿。

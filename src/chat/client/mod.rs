@@ -244,7 +244,9 @@ async fn stream_once(
     // 逐 chunk 喂入 SSE 解析器。
     let mut stream = response.bytes_stream();
     let mut parser = SseParser::new();
-    let mut decoder = transport::decoder_for(transport_kind);
+    // 解码器实例按“一次模型响应”创建：序号从进程内计数器取，
+    // Google 用它合成跨响应唯一的 call ID（同轮第 2 次采样不得复用第 1 次）。
+    let mut decoder = transport::decoder_for(transport_kind, transport::next_response_seq());
     let mut total_text = 0_usize;
     use tokio_stream::StreamExt;
     loop {

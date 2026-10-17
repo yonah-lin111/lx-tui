@@ -695,3 +695,37 @@ fn usage_is_reported_per_response_only() {
         vec![(Some(40), None), (None, Some(5))]
     );
 }
+
+// ------------------------------------------------- G8 核查：原生 ID 跨响应唯一
+
+/// **G8 核查**：Anthropic 的 call ID 来自 `content_block_start(tool_use).id`，
+/// 解码器不自造 ID；两次响应（两个解码器）都直接用供应商给的 ID。
+#[test]
+fn call_ids_come_from_block_id_not_from_the_decoder() {
+    let frames = &[
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"read","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a\"}"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    let ids_of = |frames: &[&str]| {
+        decode_frames(&mut Decoder::default(), frames)
+            .into_iter()
+            .filter_map(|delta| match delta {
+                ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids_of(frames), vec!["toolu_1".to_string()]);
+    // 不同采样拿到不同供应商 ID 时不撞库。
+    let second = &[
+        r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_2","name":"read","input":{}}}"#,
+        r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"a\"}"}}"#,
+        r#"{"type":"content_block_stop","index":0}"#,
+        r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"}}"#,
+        r#"{"type":"message_stop"}"#,
+    ];
+    assert_ne!(ids_of(frames)[0], ids_of(second)[0]);
+}

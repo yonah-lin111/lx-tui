@@ -46,22 +46,22 @@ fn tool_request() -> ChatRequest {
     req.items = vec![
         ModelItem::UserText("读 a.rs".into()),
         ModelItem::AssistantToolCall {
-            call_id: "gemini-0-0-read".into(),
+            call_id: "gemini-7-0-0-read".into(),
             name: "read".into(),
             input: json!({"path": "a.rs"}),
         },
         ModelItem::ToolResult {
-            call_id: "gemini-0-0-read".into(),
+            call_id: "gemini-7-0-0-read".into(),
             content: "1: fn main() {}".into(),
             is_error: false,
         },
         ModelItem::AssistantToolCall {
-            call_id: "gemini-0-1-write".into(),
+            call_id: "gemini-7-0-1-write".into(),
             name: "write".into(),
             input: json!({"path": "b.rs", "content": ""}),
         },
         ModelItem::ToolResult {
-            call_id: "gemini-0-1-write".into(),
+            call_id: "gemini-7-0-1-write".into(),
             content: "permission_denied".into(),
             is_error: true,
         },
@@ -211,6 +211,52 @@ fn tool_history_encodes_function_call_and_response_parts() {
     assert_eq!(failed["response"]["error"], "permission_denied");
 }
 
+/// **不污染请求**：`functionResponse` 只含 `name` / `response`，
+/// 合成 call ID（含响应序号）不得出现在发送给供应商的任何字段里。
+#[test]
+fn synthesized_call_ids_never_reach_the_wire() {
+    let mut req = tool_request();
+    // 用真实合成形状（含响应序号）的历史，确保序号也不会泄漏到请求体。
+    req.items[1] = ModelItem::AssistantToolCall {
+        call_id: "gemini-42-0-0-read".into(),
+        name: "read".into(),
+        input: json!({"path": "a.rs"}),
+    };
+    req.items[2] = ModelItem::ToolResult {
+        call_id: "gemini-42-0-0-read".into(),
+        content: "1: fn main() {}".into(),
+        is_error: false,
+    };
+    let body = body_of(&req);
+    let contents = body["contents"].as_array().expect("contents");
+    // functionCall：只有 name / args 两个键。
+    let call = contents[1]["parts"][0]["functionCall"]
+        .as_object()
+        .expect("functionCall object");
+    let mut call_keys: Vec<&str> = call.keys().map(String::as_str).collect();
+    call_keys.sort_unstable();
+    assert_eq!(call_keys, vec!["args", "name"], "functionCall 不得带 id");
+    // functionResponse：只有 name / response 两个键。
+    for index in [2_usize, 4] {
+        let response = contents[index]["parts"][0]["functionResponse"]
+            .as_object()
+            .expect("functionResponse object");
+        let mut keys: Vec<&str> = response.keys().map(String::as_str).collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            vec!["name", "response"],
+            "functionResponse 只能带 name/response：{response:?}"
+        );
+    }
+    // 整个请求体里不得出现合成 ID 的任何痕迹。
+    assert!(
+        !body.to_string().contains("gemini-42"),
+        "合成 call ID 泄漏进请求体：{body}"
+    );
+    assert!(!body.to_string().contains("call_id"));
+}
+
 #[test]
 fn thinking_budget_maps_to_generation_config() {
     let mut req = request();
@@ -224,9 +270,17 @@ fn thinking_budget_maps_to_generation_config() {
 
 // ---------------------------------------------------------------- 解码
 
+/// 测试用响应序号：ID 内容随序号变化，断言固定序号下的完整形状。
+const SEQ: u64 = 7;
+
+/// 构造一个使用固定响应序号的解码器。
+fn decoder() -> Decoder {
+    Decoder::new(SEQ)
+}
+
 #[test]
 fn thought_part_is_reasoning_and_order_preserved() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -266,7 +320,7 @@ fn thought_part_is_reasoning_and_order_preserved() {
 /// 单 functionCall：Started + Ended（args 已是完整对象）+ ResponseFinished{ToolCalls}。
 #[test]
 fn single_function_call_emits_started_and_ended() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -276,9 +330,9 @@ fn single_function_call_emits_started_and_ended() {
     assert_eq!(
         trace(&deltas),
         vec![
-            // 合成 ID 只用 (candidate, part, name)，不含时间戳。
-            "started:gemini-0-0-read:read:0".to_string(),
-            "ended:gemini-0-0-read:{\"path\":\"a.rs\"}".to_string(),
+            // 合成 ID 用 (response seq, candidate, part, name)，不含时间戳。
+            "started:gemini-7-0-0-read:read:0".to_string(),
+            "ended:gemini-7-0-0-read:{\"path\":\"a.rs\"}".to_string(),
             "response:ToolCalls".to_string(),
             "finished:complete".to_string(),
         ]
@@ -288,7 +342,7 @@ fn single_function_call_emits_started_and_ended() {
 /// 累计快照重复给同一 functionCall：只执行一次。
 #[test]
 fn repeated_cumulative_snapshot_is_deduped() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -316,7 +370,7 @@ fn repeated_cumulative_snapshot_is_deduped() {
 /// 同一帧两个 functionCall：按 part index 顺序，ID 各自稳定。
 #[test]
 fn two_function_calls_in_one_frame_keep_part_order() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -326,10 +380,10 @@ fn two_function_calls_in_one_frame_keep_part_order() {
     assert_eq!(
         trace(&deltas),
         vec![
-            "started:gemini-0-0-read:read:0".to_string(),
-            "ended:gemini-0-0-read:{\"path\":\"a\"}".to_string(),
-            "started:gemini-0-1-write:write:1".to_string(),
-            "ended:gemini-0-1-write:{\"content\":\"\",\"path\":\"b\"}".to_string(),
+            "started:gemini-7-0-0-read:read:0".to_string(),
+            "ended:gemini-7-0-0-read:{\"path\":\"a\"}".to_string(),
+            "started:gemini-7-0-1-write:write:1".to_string(),
+            "ended:gemini-7-0-1-write:{\"content\":\"\",\"path\":\"b\"}".to_string(),
             "response:ToolCalls".to_string(),
             "finished:complete".to_string(),
         ]
@@ -339,7 +393,7 @@ fn two_function_calls_in_one_frame_keep_part_order() {
 /// reasoning → tool → reasoning → text 交错：thought part 与 functionCall 顺序保持。
 #[test]
 fn reasoning_tool_reasoning_text_interleaving() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -363,8 +417,8 @@ fn reasoning_tool_reasoning_text_interleaving() {
         trace,
         vec![
             "part:Reasoning:先想",
-            "started:gemini-0-0-read",
-            "ended:gemini-0-0-read",
+            "started:gemini-7-0-0-read",
+            "ended:gemini-7-0-0-read",
             "part:Reasoning:再想",
             "part:Text:正文",
             "response:ToolCalls",
@@ -376,7 +430,7 @@ fn reasoning_tool_reasoning_text_interleaving() {
 /// 缺 args 的 functionCall：按空对象处理（协议允许无参调用）。
 #[test]
 fn function_call_without_args_uses_empty_object() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -386,8 +440,8 @@ fn function_call_without_args_uses_empty_object() {
     assert_eq!(
         trace(&deltas),
         vec![
-            "started:gemini-0-0-search:search:0".to_string(),
-            "ended:gemini-0-0-search:{}".to_string(),
+            "started:gemini-7-0-0-search:search:0".to_string(),
+            "ended:gemini-7-0-0-search:{}".to_string(),
             "response:ToolCalls".to_string(),
             "finished:complete".to_string(),
         ]
@@ -397,7 +451,7 @@ fn function_call_without_args_uses_empty_object() {
 /// 缺 name 的 functionCall：协议错误，不执行。
 #[test]
 fn function_call_without_name_is_protocol_error() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let error = decoder
         .decode_frame(
             r#"{"candidates":[{"content":{"parts":[{"functionCall":{"args":{"path":"a"}}}],"role":"model"},"index":0}]}"#,
@@ -409,7 +463,7 @@ fn function_call_without_name_is_protocol_error() {
 /// 非对象类型的 args：序列化后校验失败（参数必须可被工具层解析）。
 #[test]
 fn function_call_with_non_object_args_is_invalid() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let error = decoder
         .decode_frame(
             r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":"not-an-object"}}],"role":"model"},"index":0}]}"#,
@@ -421,7 +475,7 @@ fn function_call_with_non_object_args_is_invalid() {
 /// 未知 finishReason（如 MAX_TOKENS 之外的值）不产生终态，EOF 由 client 判失败。
 #[test]
 fn unknown_finish_reason_waits_for_client() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_frames(
         &mut decoder,
         &[
@@ -439,7 +493,7 @@ fn unknown_finish_reason_waits_for_client() {
 /// `MAX_TOKENS` 也视为本次响应结束（内容已截断但响应本身完成）。
 #[test]
 fn max_tokens_finish_reason_completes_response() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[
@@ -456,7 +510,7 @@ fn max_tokens_finish_reason_completes_response() {
 
 #[test]
 fn error_response_is_rejected() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let error = decoder
         .decode_frame(r#"{"error":{"message":"quota exceeded"}}"#)
         .expect_err("error rejected");
@@ -465,7 +519,7 @@ fn error_response_is_rejected() {
 
 #[test]
 fn eof_without_stop_finish_reason_is_protocol_error() {
-    let mut decoder = Decoder::default();
+    let mut decoder = decoder();
     let deltas = decode_all(
         &mut decoder,
         &[r#"{"candidates":[{"content":{"parts":[{"text":"x"}],"role":"model"}}]}"#],
@@ -516,4 +570,142 @@ fn usage_is_reported_per_response_only() {
     };
     assert_eq!(usages(&first_deltas), vec![(Some(10), Some(2))]);
     assert_eq!(usages(&second_deltas), vec![(Some(40), Some(5))]);
+}
+
+// ------------------------------------------------- 跨响应 call ID 唯一性（G8 回归）
+
+/// 一次响应只含一个 `read` 调用的真实帧（G8 缺陷的最小复现素材）。
+const ONE_READ_FRAME: &str = r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":{"path":"a.rs"}}}],"role":"model"},"finishReason":"STOP"}]}"#;
+
+/// 提取一帧解码出的全部 `ToolInputStarted.call_id`。
+fn started_ids(decoder: &mut dyn super::super::StreamDecoder, frame: &str) -> Vec<String> {
+    decoder
+        .decode_frame(frame)
+        .expect("frame decodes")
+        .into_iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// **G8 回归**：同一用户轮次的第 2 次及之后的模型采样，同一个 `read` 调用
+/// 必须拿到**不同**的 call ID。
+///
+/// 缺陷根因：解码器实例按“一次模型响应”创建，旧 ID 只用
+/// `(candidate, part, name)`，于是每次采样都合成出同一个
+/// `gemini-0-0-read`，撞上 DB 的 `UNIQUE(session_id, call_id)`，
+/// 多步工具链（read → edit → read）在第 2 次同名调用时整轮失败。
+#[test]
+fn call_ids_are_unique_across_model_responses() {
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        // 每次采样都由 client 新建一个解码器（序号来自进程内计数器）。
+        let seq = super::super::next_response_seq();
+        let mut decoder = super::super::decoder_for("google", seq);
+        let started = started_ids(decoder.as_mut(), ONE_READ_FRAME);
+        assert_eq!(started.len(), 1, "每帧一个 functionCall");
+        ids.extend(started);
+    }
+    assert_eq!(ids.len(), 3);
+    for (index, id) in ids.iter().enumerate() {
+        assert!(!id.is_empty(), "合成 ID 不得为空");
+        assert_eq!(id, id.trim(), "合成 ID 不得含空白：{id:?}");
+        // 不含时间戳：只由序号与位置/工具名组成。
+        assert_eq!(
+            id.split('-').count(),
+            5,
+            "ID 形状应为 gemini-{{seq}}-{{candidate}}-{{part}}-{{name}}：{id}"
+        );
+        for other in ids.iter().skip(index + 1) {
+            assert_ne!(id, other, "跨响应同名调用必须拿到不同 call ID");
+        }
+    }
+}
+
+/// 显式序号也能保证跨响应唯一，且同一序号下结果**确定**（无随机、无时钟）。
+#[test]
+fn explicit_response_seq_is_deterministic_and_distinct() {
+    let first = started_ids(&mut Decoder::new(1), ONE_READ_FRAME);
+    let first_again = started_ids(&mut Decoder::new(1), ONE_READ_FRAME);
+    let second = started_ids(&mut Decoder::new(2), ONE_READ_FRAME);
+    assert_eq!(first, first_again, "同一序号必须得到同一 ID");
+    assert_ne!(first, second, "不同序号必须得到不同 ID");
+    assert_eq!(first, vec!["gemini-1-0-0-read".to_string()]);
+    assert_eq!(second, vec!["gemini-2-0-0-read".to_string()]);
+}
+
+/// `next_response_seq` 严格单调：同一进程内连续两次响应不会拿到同一序号。
+#[test]
+fn response_seq_is_strictly_increasing() {
+    let first = super::super::next_response_seq();
+    let second = super::super::next_response_seq();
+    let third = super::super::next_response_seq();
+    assert!(first < second, "{first} < {second}");
+    assert!(second < third, "{second} < {third}");
+}
+
+/// **同响应去重不变**：同一 decoder 连续喂入同一累计快照两帧，
+/// 仍只产生一次 Started/Ended，且 ID 与序号绑定（不会被第二帧改写）。
+#[test]
+fn cumulative_snapshot_still_dedupes_within_one_response() {
+    let mut decoder = Decoder::new(SEQ);
+    let deltas = decode_all(
+        &mut decoder,
+        &[
+            ONE_READ_FRAME,
+            // 累计快照：完全相同的 functionCall 再来一次。
+            ONE_READ_FRAME,
+        ],
+    );
+    let started: Vec<&String> = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect();
+    let ended: Vec<&String> = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::ToolInputEnded { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, vec!["gemini-7-0-0-read"], "去重后只执行一次");
+    assert_eq!(ended, started, "Started/Ended 成对且 ID 一致");
+    assert_eq!(
+        deltas
+            .iter()
+            .filter(|delta| matches!(delta, ChatDelta::ResponseFinished { .. }))
+            .count(),
+        1,
+        "重复 finishReason 幂等"
+    );
+}
+
+/// **同响应多调用唯一**：一帧内两个 functionCall（不同 part）ID 互不相同，
+/// 且候选之间存在区别（不同 candidate 也不撞）。
+#[test]
+fn multiple_calls_in_one_response_get_distinct_ids() {
+    let mut decoder = Decoder::new(SEQ);
+    let deltas = decode_all(
+        &mut decoder,
+        &[
+            r#"{"candidates":[{"content":{"parts":[{"functionCall":{"name":"read","args":{"path":"a"}}},{"functionCall":{"name":"read","args":{"path":"b"}}}],"role":"model"},"finishReason":"STOP","index":0}]}"#,
+        ],
+    );
+    let ids: Vec<&String> = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(ids.len(), 2);
+    assert_ne!(ids[0], ids[1], "同响应不同 part 不得共用 call ID");
+    // 同一工具名的两次调用靠 part 区分（不是靠名字）。
+    assert!(ids[0].ends_with("-0-read"), "{:?}", ids[0]);
+    assert!(ids[1].ends_with("-1-read"), "{:?}", ids[1]);
 }

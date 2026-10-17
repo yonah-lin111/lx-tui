@@ -16,9 +16,12 @@
 //! 两个 Gemini 特有约束：
 //! 1. 流帧可能给**累计候选快照**：同一 `(candidate index, part index, name, args)`
 //!    重复出现只执行一次（[`ToolCallBuffer`] 按 ordinal 去重）。
-//! 2. 协议没有原生 call ID：内部合成 `gemini-{candidate}-{part}-{name}`，只用在本进程
-//!    的去重与 DB 主键上，**绝不**写进发送给供应商的字段（`functionResponse` 只带
-//!    `name`，不带伪造 ID）。
+//! 2. 协议没有原生 call ID：内部合成
+//!    `gemini-{response seq}-{candidate}-{part}-{name}`，只用在本进程的去重与 DB
+//!    主键上，**绝不**写进发送给供应商的字段（`functionResponse` 只带 `name`，
+//!    不带伪造 ID）。`response seq` 来自 [`super::next_response_seq`]：解码器实例
+//!    按**一次模型响应**创建，同一用户轮次的第 2 次及之后的采样必须换一个序号，
+//!    否则同名调用会与上一步的 call ID 相同，撞上 `UNIQUE(session_id, call_id)`。
 
 use serde_json::{Value, json};
 
@@ -176,6 +179,8 @@ fn push_parts(contents: &mut Vec<Value>, role: &str, part: Value) {
 pub struct Decoder {
     splitter: TagSplitter,
     finished: bool,
+    /// 本次模型响应的进程内唯一序号（并进合成 call ID，保证跨响应唯一）。
+    response_seq: u64,
     /// 跨帧工具缓冲（按内部 ordinal 去重；每响应独立实例）。
     calls: ToolCallBuffer,
     /// `(candidate index, part index) -> 内部 ordinal`，保证同一 part 只有一条调用。
@@ -187,6 +192,14 @@ pub struct Decoder {
 }
 
 impl Decoder {
+    /// 按响应序号构造解码器（ID 只在本次响应内稳定，跨响应不同）。
+    pub fn new(response_seq: u64) -> Self {
+        Self {
+            response_seq,
+            ..Self::default()
+        }
+    }
+
     /// 取或创建 `(candidate, part)` 对应的内部 ordinal。
     fn slot_of(&mut self, candidate: usize, part: usize) -> usize {
         if let Some((_, _, ordinal)) = self
@@ -228,12 +241,13 @@ impl Decoder {
             return Ok(());
         }
         self.seen.push(key);
-        // 合成稳定内部 call ID：只用 (candidate, part, name)，不含时间戳。
-        let call_id = format!("gemini-{candidate}-{part}-{name}");
+        // 合成稳定内部 call ID：(response seq, candidate, part, name)，不含时间戳。
+        // 响应序号保证同一轮第 2 次采样不会与第 1 次同名调用撞 ID。
         let ordinal = self.slot_of(candidate, part);
+        let synthesized_id = format!("gemini-{}-{candidate}-{part}-{name}", self.response_seq);
         let Some((call_id, arguments_json)) =
             self.calls
-                .start_complete(ordinal, &call_id, name, &arguments_json)?
+                .start_complete(ordinal, &synthesized_id, name, &arguments_json)?
         else {
             return Ok(());
         };

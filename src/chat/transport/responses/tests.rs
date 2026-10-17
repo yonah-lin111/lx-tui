@@ -605,3 +605,28 @@ fn usage_is_reported_per_response_only() {
     assert_eq!(usages(&first_deltas), vec![(Some(10), Some(2))]);
     assert_eq!(usages(&second_deltas), vec![(Some(40), Some(5))]);
 }
+
+// ------------------------------------------------- G8 核查：原生 ID 跨响应唯一
+
+/// **G8 核查**：Responses 的 call ID 来自 `item.call_id`，解码器不自造 ID；
+/// 两次响应（两个解码器）都直接用供应商给的 ID。
+#[test]
+fn call_ids_come_from_item_call_id_not_from_the_decoder() {
+    let frames = &[
+        r#"{"type":"response.output_item.added","output_index":0,"item":{"id":"item-1","type":"function_call","call_id":"call_srv_1","name":"read","arguments":""}}"#,
+        r#"{"type":"response.function_call_arguments.done","output_index":0,"arguments":"{\"path\":\"a\"}"}"#,
+        r#"{"type":"response.completed","response":{}}"#,
+    ];
+    let ids_of = |frames: &[&str]| {
+        decode_frames(&mut Decoder::default(), frames)
+            .into_iter()
+            .filter_map(|delta| match delta {
+                ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids_of(frames), vec!["call_srv_1".to_string()]);
+    // 同一份 wire 帧进两个解码器 → 同一个供应商 ID（解码器不参与生成）。
+    assert_eq!(ids_of(frames), ids_of(frames));
+}

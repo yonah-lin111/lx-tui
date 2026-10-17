@@ -473,3 +473,50 @@ async fn client_streams_tool_events_for_google_and_dedupes() {
         stop: crate::chat::events::ModelStepStop::ToolCalls
     }));
 }
+
+/// **G8 回归（真实网络路径）**：同一轮的第 1、2 次模型采样各跑一次 `run_stream`，
+/// 同一个 `read` 调用必须拿到**不同**的 call ID。
+///
+/// 旧实现里两次采样都合成 `gemini-0-0-read`，DB 的
+/// `UNIQUE(session_id, call_id)` 让第 2 步 `begin_tool_call` 返回
+/// `ToolCallConflict`，read → edit → read 这类多步工具链整轮失败。
+#[tokio::test]
+async fn google_call_ids_differ_between_two_model_responses() {
+    let body = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"functionCall\":{\"name\":\"read\",\"args\":{\"path\":\"a.rs\"}}}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}]}\n\n";
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let (base, _server) = spawn_mock("200 OK", body).await;
+        let (_cancel_sender, cancel) = no_cancel();
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(10),
+            run_stream(
+                "google",
+                &base,
+                Some("k"),
+                Duration::from_secs(5),
+                request(),
+                cancel,
+                |_| {},
+            ),
+        )
+        .await
+        .expect("stream completes within timeout");
+        let started: Vec<String> = outcome
+            .deltas
+            .iter()
+            .filter_map(|delta| match delta {
+                ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started.len(), 1, "每次响应一个 functionCall");
+        ids.extend(started);
+    }
+    assert_ne!(
+        ids[0], ids[1],
+        "两次模型采样不得复用同一 call ID（否则撞 UNIQUE(session_id, call_id)）"
+    );
+    for id in &ids {
+        assert!(!id.trim().is_empty(), "合成 ID 不得为空或全空白：{id:?}");
+    }
+}

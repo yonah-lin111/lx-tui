@@ -171,3 +171,112 @@ async fn two_calls_in_one_response_run_serially_in_ordinal_order() {
         "read 返回刚写入的内容: {read_json}"
     );
 }
+
+// ===== 3. Gemini 多步工具链：跨采样的合成 call ID 不得撞库（G8 回归） =====
+
+/// 把一段 Google SSE 帧喂给**真实 Google 解码器**，收集它产出的增量。
+///
+/// 每次调用都新建解码器（与 `client::stream_once` 一致），序号来自生产用的
+/// 进程内计数器（[`crate::chat::transport::next_response_seq`]），因此这里
+/// 走的就是生产 ID 生成路径，不是测试自造的 call ID。
+fn google_decoder_step(frames: &[&str]) -> Vec<ChatDelta> {
+    let mut decoder =
+        crate::chat::transport::decoder_for("google", crate::chat::transport::next_response_seq());
+    let mut deltas = Vec::new();
+    for frame in frames {
+        deltas.extend(decoder.decode_frame(frame).expect("google frame decodes"));
+    }
+    deltas.extend(decoder.finish());
+    deltas
+}
+
+/// 构造只有一个 functionCall 的 Google 帧（`finishReason=STOP` = 本次响应结束）。
+fn google_step(name: &str, args: &str) -> Vec<ChatDelta> {
+    let args: serde_json::Value = serde_json::from_str(args).expect("args json");
+    let frame = serde_json::json!({
+        "candidates": [{
+            "content": {"parts": [{"functionCall": {"name": name, "args": args}}], "role": "model"},
+            "finishReason": "STOP",
+        }],
+    })
+    .to_string();
+    google_decoder_step(&[&frame])
+}
+
+/// **G8 端到端回归**：Gemini 下同一个工具在第 1、3 步各被调用一次
+/// （read → write → read），整轮必须成功。
+///
+/// 修复前，两次采样都合成 `gemini-0-0-read`：第 3 步的 `begin_tool_call`
+/// 撞上 `UNIQUE(session_id, call_id)` 返回 `ToolCallConflict`，整轮失败。
+#[tokio::test]
+async fn google_repeated_tool_across_steps_does_not_collide_in_db() {
+    let fixture = Fixture::new("google-repeat-tool");
+    std::fs::write(fixture.workspace().join("note.txt"), "from agent\n").expect("seed file");
+    let (mut state, key, persistence, session) = streaming_state(&fixture);
+    // 三步：read（响应 1）→ write（响应 2）→ read（响应 3，与第 1 步同名同形状）→ 最终回答。
+    let transport = FakeTransport::new(
+        vec![
+            google_step("read", r#"{"path":"note.txt"}"#),
+            google_step("write", r#"{"path":"note.txt","content":"from agent2\n"}"#),
+            google_step("read", r#"{"path":"note.txt"}"#),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let mut streams = ChatStreams::default();
+    let driven = drive(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        no_cancel(),
+    )
+    .await;
+
+    assert_eq!(
+        driven.summary.outcome,
+        TurnOutcome::Complete,
+        "多步工具链不得因 call ID 撞库而整轮失败：{:?}",
+        driven.summary
+    );
+    let rows = tool_rows(&fixture, &session);
+    assert_eq!(rows.len(), 3, "read / write / read 各一行：{rows:?}");
+    assert_eq!(rows[0].name, "read");
+    assert_eq!(rows[1].name, "write");
+    assert_eq!(rows[2].name, "read");
+    assert_ne!(
+        rows[0].call_id, rows[2].call_id,
+        "跨模型采样的同名调用不得复用 call ID"
+    );
+    assert!(
+        rows[0].position < rows[1].position && rows[1].position < rows[2].position,
+        "position 必须单调"
+    );
+    // 第 3 步读到第 2 步写入后的内容（工具链真的跑了第二遍）。
+    let last = rows[2].result_json.as_deref().expect("read result");
+    assert!(
+        last.contains("from agent2"),
+        "重读应看到 write 之后的内容: {last}"
+    );
+    // 合成 ID 不得进入发给供应商的请求体（Gemini 无原生 ID）。
+    let requests = transport.requests();
+    let last_request = requests.last().expect("final request");
+    let built = crate::chat::transport::build_request(
+        "google",
+        "https://example.invalid",
+        Some("k"),
+        last_request,
+    )
+    .expect("build google request");
+    assert!(built.body.contains("\"functionResponse\""));
+    assert!(!built.body.contains("\"call_id\""));
+    for row in &rows {
+        assert!(
+            !built.body.contains(&row.call_id),
+            "合成 call ID {} 泄漏进 Google 请求体",
+            row.call_id
+        );
+    }
+}

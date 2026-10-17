@@ -806,3 +806,59 @@ fn deprecated_function_call_delta_is_protocol_error() {
     assert!(error.contains(TOOL_PROTOCOL_ERROR_CODE), "{error}");
     assert!(error.contains("function_call"), "{error}");
 }
+
+// ------------------------------------------------- G8 核查：原生 ID 跨响应唯一
+
+/// **G8 核查**：Chat Completions 的 call ID 来自供应商原生 `tool_calls[].id`，
+/// 解码器不自造 ID，因此同一会话的多次采样不会因解码器复用而撞库。
+///
+/// 这里用**两个独立解码器**（等价于两次模型响应）喂同一份 wire 帧：
+/// 两次拿到的都是供应商给的原 ID，而不是解码器合成的位置 ID。
+#[test]
+fn call_ids_come_from_the_wire_not_from_the_decoder() {
+    let frames = &[
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_server_1","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+    ];
+    let ids_of = |frames: &[&str]| {
+        decode_frames(&mut Decoder::default(), frames)
+            .into_iter()
+            .filter_map(|delta| match delta {
+                ChatDelta::ToolInputStarted { call_id, .. } => Some(call_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    // 同一份 wire 帧进两个解码器 → 同一个供应商 ID（解码器不参与生成）。
+    assert_eq!(ids_of(frames), vec!["call_server_1".to_string()]);
+    assert_eq!(ids_of(frames), ids_of(frames));
+    // 供应商给不同 ID（同一轮的下一次采样）时不会撞库。
+    let second = &[
+        r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_server_2","function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":null}]}"#,
+        r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
+    ];
+    assert_ne!(ids_of(frames)[0], ids_of(second)[0]);
+}
+
+/// **G8 核查**：缺 `id` 的 Chat 分片不会被合成假 ID（供应商 ID 是唯一来源）。
+#[test]
+fn missing_wire_id_is_a_protocol_error_not_a_synthesized_id() {
+    let mut decoder = Decoder::default();
+    let first = decoder
+        .decode_frame(
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"read","arguments":"{\"path\":\"a\"}"}}]},"finish_reason":null}]}"#,
+        )
+        .expect("first frame decodes");
+    // 只有参数、没有 ID：不得发出 Started（不猜调用）。
+    assert!(
+        !first
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::ToolInputStarted { .. })),
+        "缺 ID 不得发 Started：{first:?}"
+    );
+    // 闭合时按协议错误失败（不会补一个合成 ID 出来）。
+    let error = decoder
+        .decode_frame(r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#)
+        .expect_err("closing without id is a protocol error");
+    assert!(error.contains(TOOL_PROTOCOL_ERROR_CODE), "{error}");
+}
