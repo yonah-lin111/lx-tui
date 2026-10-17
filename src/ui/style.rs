@@ -53,6 +53,12 @@ pub fn border_title() -> Style {
         .remove_modifier(Modifier::BOLD)
 }
 
+/// 边框上的正文（页重命名输入、页控件空白位）：显式重置前景，
+/// 避免继承聚焦态边框的强调色；不带 dim，保证可编辑内容清晰。
+pub fn text_on_border() -> Style {
+    Style::default().fg(Color::Reset)
+}
+
 /// 主题强调色填充（Cyan 底、黑字、加粗）；激活标签使用。
 pub fn selected_item() -> Style {
     Style::default()

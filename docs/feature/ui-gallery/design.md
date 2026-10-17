@@ -97,7 +97,7 @@ pub struct UiGalleryFolder {
   - `menu`：圆角强调色边框 + 标题 + 条目行，首项 `overlay_selection` 高亮。
   - `button`：纯强调色标签行，**无边框、无底色**（组件本身就是标签）。
   - `fullscreen`：本全屏覆盖组件自身——蓝色圆角边框 + 标题/提示内嵌边框线 + 右上角 `[✕]`。
-  - `prompt editor` / `prompt list`：复用真实 prompt 面板外观——圆角边框 + `Prompt Manager` 标题 + 工具栏/搜索行 + 分割线 + 内容行。
+  - `prompt editor` / `prompt list`：复用真实 prompt 面板外观——圆角边框 + 顶边框标题（编辑视图 `条目名 · 页名` 与页控件、列表视图固定 `Prompts`）+ 工具栏/搜索行 + 分割线 + 内容行。
   - `prompt toolbar`：真实工具栏行——强调色按钮 + 右对齐 `[◉] [*] ●`。
   - `folders` / `folder search`：引用文件夹目录菜单与内容搜索弹窗的真实外观（蓝色圆角边框 + 边框内嵌标题与快捷键提示 + 列表行）。
 - 预览只使用 `ui/style.rs` 的语义样式与 `ui/text.rs` 的文案常量，不读 `AppState` 领域数据。

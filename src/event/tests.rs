@@ -4297,10 +4297,10 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let header = crate::layout::prompt_header_rect(geo.view.prompt).expect("header");
+    let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border row");
     // 第一页左箭头置灰：点击不切页、不移动正文光标。
     state.prompt.set_cursor_offset_for_test(0);
-    let controls = ui::prompt::page_controls(header, "1/2").expect("controls");
+    let controls = ui::prompt::border_page_controls(border, "1/2").expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -4331,7 +4331,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
     assert_eq!(state.prompt.text(), "beta");
     assert!(state.prompt_focused);
     // 计数：打开页码菜单。
-    let controls = ui::prompt::page_controls(header, "2/2").expect("controls");
+    let controls = ui::prompt::border_page_controls(border, "2/2").expect("controls");
     handle_terminal_event(
         mouse(
             MouseEventKind::Down(MouseButton::Left),
@@ -4365,15 +4365,11 @@ fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
     let geo = geometry(&state, &config, Rect::new(0, 0, 140, 30));
     let mut sessions = HashMap::new();
     let mut dirty = false;
-    let header = crate::layout::prompt_header_rect(geo.view.prompt).expect("header");
-    // 标题 ` paged ` + 页名段 `· Page 1 `：点击页名起始后两列。
-    let name_col = header.x + 1 + " paged ".len() as u16 + 2;
+    let border = crate::layout::prompt_border_rect(geo.view.prompt).expect("border row");
+    // 顶边框 `╭─ paged · Page 1 `：点击页名起始后两列。
+    let name_col = border.x + 2 + " paged ".len() as u16 + 2;
     handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            name_col,
-            header.y + crate::layout::PROMPT_TOOLBAR_HEIGHT,
-        ),
+        mouse(MouseEventKind::Down(MouseButton::Left), name_col, border.y),
         &mut state,
         &mut sessions,
         &geo,

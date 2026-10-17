@@ -123,3 +123,4 @@ Prompt 列表的 `Copy content`、临时条目的同类复制命令取各自记�
 8. **`+++` 补充子块副本**：补充块起始行新增复制按钮 `[❐]`（tooltip `copy block`）；`Ctrl/Cmd+Shift+C` 由只支持 `&&&` 扩展为光标在 `+++` 子块内时优先复制该子块、否则回退模板块（`copy_text_at_cursor` 先取补充子块）。
 9. **文件拆分**：`app/update/prompt/{draft,pages,tree_view}.rs`、`ui/prompt/header.rs`、`ui/overlay/{page_menu,worktree}.rs` 从原大文件拆出，生产文件均 ≤1000 行。
 10. **测试基础设施**：`tests/prompt_panel_interaction.rs` 改为每 App 独立 DB 路径，替代全局 `DB_PATH: OnceLock`。
+11. **title 与页控件搬到面板顶边框**（后续需求批次）：固定标题 `Prompt Manager` 被移除——编辑视图顶边框左侧显示 `条目名 · 页名`、右端显示 `‹ n/m ›`，树视图顶边框改为固定 `Prompts` 且不显示页控件；工具栏下方分割线不再承载文字，保持空行。页控件仍是控件（箭头切页、计数开页菜单、页名进入重命名），并新增"点击顶边框任何位置只聚焦编辑器、不移动正文光标"的命中规则（`layout::prompt_border_rect` + `ui::prompt::border_*`）。宽度不足时优先级为 页控件 → 条目名 → 页名，取代初稿第 3.1 节的"页名优先完整"。

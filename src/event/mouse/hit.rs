@@ -349,6 +349,11 @@ pub(crate) fn prompt_header_at(panel: Rect, column: u16, row: u16) -> bool {
     layout::prompt_header_rect(panel).is_some_and(|header| header.contains((column, row).into()))
 }
 
+/// 坐标是否落在 prompt 面板顶边框行（标题与页控件所在的控件区）。
+pub(crate) fn prompt_border_at(panel: Rect, column: u16, row: u16) -> bool {
+    layout::prompt_border_rect(panel).is_some_and(|border| border.contains((column, row).into()))
+}
+
 /// 窗格交互内容区：prompt 用文本区（顶部表头下移），其余窗格用整块内容区。
 pub(crate) fn pane_content_inner(
     state: &AppState,

@@ -24,6 +24,42 @@ pub(crate) fn prompt_edit_title(state: &AppState) -> Option<String> {
     }
 }
 
+/// 顶边框标题数据：编辑视图取绑定目标名（`None` 时整段留空），树视图用固定标题 `Prompts`。
+enum BorderTitle {
+    Tree,
+    Editor {
+        title: Option<String>,
+        draft: bool,
+        page: Option<PromptPageHeader>,
+    },
+}
+
+/// 读当前面板的顶边框标题来源（名称与页信息按所有权持有，供调用方借用组装）。
+fn prompt_border_title(state: &AppState) -> BorderTitle {
+    let panel = &state.prompt_owner().prompt_panel;
+    match panel.mode {
+        PromptMode::Tree => BorderTitle::Tree,
+        PromptMode::Editor => BorderTitle::Editor {
+            title: prompt_edit_title(state),
+            draft: matches!(panel.editing, Some(PromptEditing::Temp(_))),
+            page: prompt_page_header(state),
+        },
+    }
+}
+
+/// 页信息 → 顶边框渲染/命中数据。
+fn page_header_data(page: Option<&PromptPageHeader>) -> Option<prompt::PageHeaderData<'_>> {
+    page.map(|page| prompt::PageHeaderData {
+        current: page.current,
+        total: page.total,
+        name: &page.name,
+        rename: page
+            .rename
+            .as_ref()
+            .map(|(input, cursor)| (input.as_str(), *cursor)),
+    })
+}
+
 /// 显示中编辑目标的页信息：当前序号（1 起）、总页数、页名与重命名现场。
 pub(crate) struct PromptPageHeader {
     pub(crate) current: usize,
@@ -64,8 +100,8 @@ pub(crate) fn prompt_page_header(state: &AppState) -> Option<PromptPageHeader> {
     })
 }
 
-/// 命中 prompt 标题行页控件（编辑视图）；
-/// 页重命名输入期间名称区不命中（改由键盘输入消费）。
+/// 命中 prompt 顶边框标题行页控件（编辑视图）；
+/// 页重命名输入期间命中输入区（`PageControl::Name`），条目名与空白返回 None。
 pub fn prompt_page_control_at(
     panel: Rect,
     state: &AppState,
@@ -75,40 +111,24 @@ pub fn prompt_page_control_at(
     if state.prompt_collapsed {
         return None;
     }
-    let header = crate::layout::prompt_header_rect(panel)?;
-    let page = prompt_page_header(state)?;
-    let title = prompt_edit_title(state)?;
-    let data = prompt::PageHeaderData {
-        current: page.current,
-        total: page.total,
-        name: &page.name,
-        rename: page
-            .rename
-            .as_ref()
-            .map(|(input, cursor)| (input.as_str(), *cursor)),
-    };
-    if page.rename.is_some() {
-        let controls = prompt::page_controls(header, &text::page_counter(page.current, page.total));
-        if let Some(controls) = controls.as_ref() {
-            for (rect, control) in [
-                (controls.prev, prompt::PageControl::Prev),
-                (controls.counter, prompt::PageControl::Counter),
-                (controls.next, prompt::PageControl::Next),
-            ] {
-                if rect.contains((column, row).into()) {
-                    return Some(control);
-                }
-            }
-        }
+    let border = crate::layout::prompt_border_rect(panel)?;
+    let BorderTitle::Editor { title, page, .. } = prompt_border_title(state) else {
         return None;
-    }
-    prompt::header_page_control_at(header, &title, &data, column, row)
+    };
+    let page = page.as_ref()?;
+    let data = prompt::BorderTitleData {
+        title: Some(title.as_deref().unwrap_or("")),
+        draft: false,
+        page: page_header_data(Some(page)),
+    };
+    prompt::border_page_control_at(border, &data, column, row)
 }
 
 /// 右栏 prompt：编辑视图渲染 markdown 编辑器（聚焦时可输入、可选择复制）、
 /// 树视图渲染提示词管理器；折叠时渲染为窄条。
 ///
-/// 文本区固定预留最右 1 列作滚动条槽，文本/树溢出时该列显示滚动条。
+/// 面板顶边框内嵌标题（编辑视图 `条目名 · 页名` + 右侧 `‹ n/m ›`，树视图固定 `Prompts`），
+/// 工具栏下方分割线保持空行。文本区固定预留最右 1 列作滚动条槽。
 /// 返回编辑视图聚焦时的硬件光标位置：终端把 IME 预输入绘制在硬件光标处，需与编辑器光标同步。
 pub(crate) fn render_prompt(
     frame: &mut Frame<'_>,
@@ -125,43 +145,37 @@ pub(crate) fn render_prompt(
     }
     let focused = state.prompt_focused;
     let mode = state.prompt_owner().prompt_panel.mode;
-    let block = Block::bordered()
+    let border = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(style::border(focused))
-        .title(Span::styled(
-            format!(" {} ", text::PROMPT_TITLE),
-            style::border_title(),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+        .border_style(style::border(focused));
+    let inner = border.inner(area);
+    frame.render_widget(border, area);
     if inner.width == 0 || inner.height == 0 {
         return None;
     }
-    let title = prompt_edit_title(state);
-    let draft = matches!(
-        state.prompt_owner().prompt_panel.editing,
-        Some(PromptEditing::Temp(_))
-    );
-    let page = prompt_page_header(state);
-    let page_data = page.as_ref().map(|page| prompt::PageHeaderData {
-        current: page.current,
-        total: page.total,
-        name: &page.name,
-        rename: page
-            .rename
-            .as_ref()
-            .map(|(input, cursor)| (input.as_str(), *cursor)),
-    });
+    let title = prompt_border_title(state);
+    let (title_text, draft, page) = match &title {
+        BorderTitle::Tree => (Some(text::PROMPT_TREE_BORDER_TITLE), false, None),
+        BorderTitle::Editor { title, draft, page } => {
+            (title.as_deref().or(Some("")), *draft, page.as_ref())
+        }
+    };
+    let page_data = prompt::BorderTitleData {
+        title: title_text,
+        draft,
+        page: page_header_data(page),
+    };
+    if let Some(border_rect) = crate::layout::prompt_border_rect(area) {
+        prompt::paint_border_title(frame.buffer_mut(), border_rect, &page_data);
+    }
     prompt::render_header(
         area,
         frame.buffer_mut(),
         &state.prompt,
         focused,
         mode,
-        title.as_deref(),
         draft,
         state.prompt_pinned.is_some(),
-        page_data,
     );
     render_prompt_bottom(frame, area, state);
     let text_area = crate::layout::prompt_text_rect(area);
@@ -190,22 +204,25 @@ pub(crate) fn render_prompt(
         // 树视图硬件光标落在搜索框输入位置（与模态输入框一致），未聚焦不显示。
         return focused.then_some(tree_cursor).flatten();
     }
-    if let Some(header) = crate::layout::prompt_header_rect(area)
-        && let Some(page) = page.as_ref()
-        && page.rename.is_some()
+    if let Some(page) = page.filter(|page| page.rename.is_some())
+        && let Some(border_rect) = crate::layout::prompt_border_rect(area)
     {
-        let title = title.as_deref().unwrap_or("");
-        let data = prompt::PageHeaderData {
-            current: page.current,
-            total: page.total,
-            name: &page.name,
-            rename: page
-                .rename
-                .as_ref()
-                .map(|(input, cursor)| (input.as_str(), *cursor)),
-        };
         return focused
-            .then(|| prompt::header_rename_cursor(header, title, &data))
+            .then(|| {
+                prompt::border_rename_cursor(
+                    border_rect,
+                    title_text,
+                    &prompt::PageHeaderData {
+                        current: page.current,
+                        total: page.total,
+                        name: &page.name,
+                        rename: page
+                            .rename
+                            .as_ref()
+                            .map(|(input, cursor)| (input.as_str(), *cursor)),
+                    },
+                )
+            })
             .flatten();
     }
     let (row, col) = focused.then(|| state.prompt.cursor_cell()).flatten()?;
