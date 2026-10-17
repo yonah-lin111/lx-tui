@@ -33,6 +33,8 @@ fn message(
             kind: "text".into(),
             content: text.into(),
             provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
         }],
     }
 }
@@ -224,6 +226,8 @@ fn reasoning_metadata_not_carried_across_providers() {
         kind: "reasoning".into(),
         content: "内部思考".into(),
         provider_metadata_json: Some(r#"{"signature":"sig"}"#.into()),
+        started_at_ms: None,
+        ended_at_ms: None,
     });
     let assembly = assemble(&AssemblyInput {
         messages: &history,

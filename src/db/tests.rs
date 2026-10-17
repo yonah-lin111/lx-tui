@@ -719,6 +719,8 @@ fn unique_sequence_and_position_constraints_hold() {
                 kind: "text".into(),
                 content: "a".into(),
                 provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
         )
         .expect("checkpoint");
@@ -1193,4 +1195,95 @@ fn create_prompt_with_pages_is_atomic_and_mirrors_first_page() {
         .expect("record");
     assert_eq!(record.pages.len(), 1);
     assert_eq!(record.pages[0].content, "");
+}
+
+// ===== v8 消息 part 起止时刻迁移 =====
+
+/// 构造 v7 现场：完整库建好后把 `agent_message_part` 换回无起止时刻的 v7 定义并回退版本号。
+fn seed_v7_database(label: &str, workspace: &Path) -> PathBuf {
+    let path = temp_db_path(label);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+    {
+        let database = Database::open(&path).expect("open to v8");
+        database.trust_workspace(workspace, "ws").expect("trust");
+        database
+            .conn
+            .execute_batch(
+                "PRAGMA foreign_keys = OFF;
+                 DROP TABLE agent_message_part;
+                 CREATE TABLE agent_message_part (
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     external_id TEXT NOT NULL UNIQUE,
+                     message_id TEXT NOT NULL REFERENCES agent_message(external_id) ON DELETE CASCADE,
+                     position INTEGER NOT NULL CHECK (position >= 0),
+                     kind TEXT NOT NULL CHECK (kind IN ('text', 'reasoning')),
+                     content TEXT NOT NULL DEFAULT '',
+                     provider_metadata_json TEXT,
+                     created_at_ms INTEGER NOT NULL,
+                     UNIQUE(message_id, position)
+                 );
+                 PRAGMA foreign_keys = ON;
+                 PRAGMA user_version = 7;",
+            )
+            .expect("back to v7");
+    }
+    path
+}
+
+#[test]
+fn v7_database_upgrades_to_v8_with_part_timing_columns() {
+    let workspace = workspace_path("v7-part-timing");
+    let path = seed_v7_database("v7-part-timing", &workspace);
+    let database = Database::open(&path).expect("v7 upgrades to v8");
+    assert_eq!(schema_version(&database), SCHEMA_VERSION);
+    let columns: Vec<String> = {
+        let mut statement = database
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('agent_message_part')")
+            .expect("prepare");
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("query");
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .expect("collect")
+    };
+    assert!(
+        columns.contains(&"started_at_ms".to_string()),
+        "{columns:?}"
+    );
+    assert!(columns.contains(&"ended_at_ms".to_string()), "{columns:?}");
+    // 迁移后旧行（无时刻）仍可读；新写入带时刻。
+    let committed = database
+        .begin_turn(
+            &workspace,
+            None,
+            "问",
+            &chat::ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        )
+        .expect("begin");
+    database
+        .checkpoint(
+            &workspace,
+            &committed.assistant_message_id,
+            &[chat::ChatPart {
+                position: 0,
+                kind: "reasoning".into(),
+                content: "思考".into(),
+                provider_metadata_json: None,
+                started_at_ms: Some(10),
+                ended_at_ms: Some(6_310),
+            }],
+        )
+        .expect("checkpoint");
+    let loaded = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    let assistant = loaded.last().expect("assistant");
+    assert_eq!(assistant.parts[0].started_at_ms, Some(10));
+    assert_eq!(assistant.parts[0].ended_at_ms, Some(6_310));
 }

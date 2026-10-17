@@ -137,6 +137,8 @@ pub fn on_turn_committed(
             kind: PartKind::Text,
             content: frozen_draft,
             provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
         }],
         model_label: None,
         error_code: None,
@@ -274,6 +276,8 @@ pub fn on_stream_finished(
                     kind: part.kind_str().into(),
                     content: part.content.clone(),
                     provider_metadata_json: part.provider_metadata_json.clone(),
+                    started_at_ms: part.started_at_ms,
+                    ended_at_ms: part.ended_at_ms,
                 })
                 .collect()
         })
@@ -561,6 +565,8 @@ pub fn on_session_loaded(
                     },
                     content: part.content.clone(),
                     provider_metadata_json: part.provider_metadata_json.clone(),
+                    started_at_ms: part.started_at_ms,
+                    ended_at_ms: part.ended_at_ms,
                 })
                 .collect(),
             model_label: message

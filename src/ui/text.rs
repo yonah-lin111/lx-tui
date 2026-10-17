@@ -513,13 +513,10 @@ pub const LX_CHAT_MODEL_SEP: &str = " · ";
 /// 状态行：上下文占用前缀与百分比后缀（`context:72%`；无消耗整段隐藏）。
 pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
 pub const LX_CHAT_PERCENT_SUFFIX: &str = "%";
-/// thinking 折叠行：生成中文案（`Thinking`）与完成后的折叠/展开文案（`Thought`，
-/// 与 UI 页 agent 步骤的 `Thought` 动词一致）。
+/// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
+/// （`Thought` 与 UI 页 agent 步骤的动词一致）。
 pub const LX_CHAT_THINKING_LABEL: &str = "Thinking";
-pub const LX_CHAT_THINKING_COLLAPSED: &str = "▸ Thought";
-/// 生成中但被用户收起的思考块头部（仍需表达「进行中」）。
-pub const LX_CHAT_THINKING_COLLAPSED_LIVE: &str = "▸ Thinking";
-pub const LX_CHAT_THINKING_EXPANDED: &str = "▾ Thought";
+pub const LX_CHAT_THOUGHT_LABEL: &str = "Thought";
 /// 本轮统计行（assistant 消息底部）：字段分隔与各字段后缀。
 pub const LX_CHAT_STATS_SEP: &str = " · ";
 pub const LX_CHAT_STATS_INPUT_SUFFIX: &str = " in";

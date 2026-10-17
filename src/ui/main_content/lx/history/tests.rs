@@ -37,7 +37,17 @@ fn text_part(content: &str) -> ChatPartView {
         kind: PartKind::Text,
         content: content.into(),
         provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
     }
+}
+
+/// 带起止时刻的 reasoning part（思考耗时展示用）。
+fn timed_reasoning_part(content: &str, started_at_ms: i64, ended_at_ms: i64) -> ChatPartView {
+    let mut part = reasoning_part(content);
+    part.started_at_ms = Some(started_at_ms);
+    part.ended_at_ms = Some(ended_at_ms);
+    part
 }
 
 fn reasoning_part(content: &str) -> ChatPartView {
@@ -45,6 +55,8 @@ fn reasoning_part(content: &str) -> ChatPartView {
         kind: PartKind::Reasoning,
         content: content.into(),
         provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
     }
 }
 
@@ -65,8 +77,8 @@ fn thinking_collapsed_after_completion_one_row_each() {
 }
 
 #[test]
-fn streaming_thinking_auto_expands_content() {
-    // 生成中的 reasoning 块自动展开（对齐 opencode：思考过程可见）。
+fn thinking_collapsed_by_default_while_streaming() {
+    // 默认折叠：生成中也不自动展开（对齐 opencode 的 hide 模式，单击才展开）。
     let lx = lx_with(vec![message(
         "assistant",
         "streaming",
@@ -74,10 +86,27 @@ fn streaming_thinking_auto_expands_content() {
     )]);
     let area = Rect::new(0, 0, 40, 20);
     let layout = layout(area, &lx);
-    assert!(lx.chat.reasoning_expanded(0, 0), "流中自动展开");
+    assert!(!lx.chat.reasoning_expanded(0, 0), "生成中保持折叠");
     assert!(lx.chat.reasoning_streaming(0, 0), "仍在生成");
-    // 展开头 1 + 2 内容行 + 正文 0（markdown 空渲染为 0 行）+ 空行 1 = 4。
-    assert_eq!(layout.total_rows, 4);
+    // 折叠头 1 + 正文 0（markdown 空渲染为 0 行）+ 空行 1 = 2。
+    assert_eq!(layout.total_rows, 2);
+}
+
+#[test]
+fn expanded_thinking_survives_completion() {
+    // 用户展开后不因生成结束被强制收起（状态完全由用户控制）。
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![reasoning_part("思考内容"), text_part("")],
+    )]);
+    assert!(!lx.chat.reasoning_expanded(0, 0), "默认折叠");
+    lx.chat.toggle_reasoning(0, 0);
+    assert!(lx.chat.reasoning_expanded(0, 0), "显式展开");
+    lx.chat.messages[0].status = "complete".into();
+    assert!(lx.chat.reasoning_expanded(0, 0), "完成后仍保持展开");
+    lx.chat.toggle_reasoning(0, 0);
+    assert!(!lx.chat.reasoning_expanded(0, 0), "再点收起");
 }
 
 #[test]
@@ -376,14 +405,18 @@ fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
     let line0 = row_text(&buf, area, 0);
     assert!(line0.starts_with('⠋'), "转轮在首列（左对齐）：{line0}");
     assert!(line0.contains("Thinking"), "生成中文案首字母大写：{line0}");
+    assert!(!line0.contains('▸'), "生成中不带折叠标记：{line0}");
     let line1 = row_text(&buf, area, 1);
-    assert!(line1.starts_with("流式思考"), "思考内容同样左对齐：{line1}");
+    assert!(!line1.contains("流式思考"), "默认折叠不显示内容：{line1}");
 
-    // 完成后：`▸ Thought`、同为品牌蓝但压暗一档。
-    let done = lx_with(vec![message(
+    // 完成后（带起止时刻）：`▸ Thought · 6.3s`、同为品牌蓝但压暗一档；展开时内容同样左对齐。
+    let mut done = lx_with(vec![message(
         "assistant",
         "complete",
-        vec![reasoning_part("旧思考"), text_part("正文")],
+        vec![
+            timed_reasoning_part("旧思考", 1_000, 7_300),
+            text_part("正文"),
+        ],
     )]);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
@@ -392,8 +425,19 @@ fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
     assert_eq!(header.modifier, Modifier::DIM, "完成后压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("▸ Thought"),
-        "完成后文案为 Thought：{line0}"
+        line0.starts_with("▸ Thought · 6.3s"),
+        "完成后显示思考耗时：{line0}"
     );
+    // 展开：内容左对齐第 0 列，文案换成展开标记。
+    done.chat.toggle_reasoning(0, 0);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
+    let header = &buf[(0, 0)];
+    assert_eq!(header.fg, Color::Indexed(117), "展开后仍品牌蓝");
+    assert_eq!(header.modifier, Modifier::DIM, "展开后仍压暗");
+    let line0 = row_text(&buf, area, 0);
+    assert!(line0.starts_with("▾ Thought · 6.3s"), "展开文案：{line0}");
+    let line1 = row_text(&buf, area, 1);
+    assert!(line1.starts_with("旧思考"), "内容左对齐：{line1}");
     assert!(!line0.contains("Thinking"), "不再是 Thinking：{line0}");
 }

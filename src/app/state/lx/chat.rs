@@ -190,6 +190,10 @@ pub struct ChatPartView {
     pub content: String,
     /// 供应商元数据 JSON（如 Anthropic signature）。
     pub provider_metadata_json: Option<String>,
+    /// 该 part 首个增量到达时刻（毫秒）；本轮流式写入，历史加载时从 DB 恢复。
+    pub started_at_ms: Option<i64>,
+    /// 该 part 最后一个增量到达时刻（毫秒）；None 表示未知（思考耗时不显示）。
+    pub ended_at_ms: Option<i64>,
 }
 
 impl ChatPartView {
@@ -351,17 +355,14 @@ impl LxChat {
         }
     }
 
-    /// thinking 块是否展开：用户显式切换优先；否则**流中正在生成的块自动展开**，
-    /// 历史块默认折叠（对齐 opencode 的「生成中可见、完成后收起」）。
+    /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或
+    /// `Ctrl+T` 才展开；状态一直保留——生成结束不会强制展开或强制收起（对齐 opencode 的
+    /// hide 模式：单击展开、再点收起）。
     pub fn reasoning_expanded(&self, message_index: usize, part_index: usize) -> bool {
-        if let Some((_, _, expanded)) = self
-            .thinking_toggled
+        self.thinking_toggled
             .iter()
             .find(|(message, part, _)| *message == message_index && *part == part_index)
-        {
-            return *expanded;
-        }
-        self.reasoning_streaming(message_index, part_index)
+            .is_some_and(|(_, _, expanded)| *expanded)
     }
 
     /// 该 thinking 块是否仍在生成：所属消息是最后一条且仍在流中，且它是其中最后一个
@@ -477,6 +478,8 @@ impl LxChat {
         else {
             return;
         };
+        // 起止时刻：首个增量定起点、每个增量刷新终点（思考耗时 = 两者之差）。
+        let now = crate::db::now_ms();
         // 签名元数据（text 为空）绑定到同 kind 的相邻 part。
         if let Some(meta) = metadata.as_ref()
             && text.is_empty()
@@ -493,6 +496,7 @@ impl LxChat {
             && last.provider_metadata_json.is_none()
         {
             last.content.push_str(text);
+            last.ended_at_ms = Some(now);
             return;
         }
         message.parts.push(ChatPartView {
@@ -500,6 +504,8 @@ impl LxChat {
             content: text.to_string(),
             provider_metadata_json: metadata
                 .map(|meta| serde_json::to_string(&meta).unwrap_or_default()),
+            started_at_ms: Some(now),
+            ended_at_ms: Some(now),
         });
     }
 }

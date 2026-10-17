@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// 旧正文迁移为唯一第一页时使用的默认页名。
 const FIRST_PAGE_NAME: &str = "Page 1";
@@ -191,6 +191,8 @@ CREATE TABLE IF NOT EXISTS agent_message_part (
     content TEXT NOT NULL DEFAULT '',
     provider_metadata_json TEXT,
     created_at_ms INTEGER NOT NULL,
+    started_at_ms INTEGER,
+    ended_at_ms INTEGER,
     UNIQUE(message_id, position)
 );
 
@@ -449,6 +451,13 @@ impl Database {
                 if violations != 0 {
                     return Err(DbError::ForeignKeyViolation);
                 }
+            }
+            // v8：消息 part 记录流中起止时刻（思考耗时展示）；老库补列（新库由 SCHEMA 建出）。
+            if version < 8 && !column_exists(&transaction, "agent_message_part", "started_at_ms")? {
+                transaction.execute_batch(
+                    "ALTER TABLE agent_message_part ADD COLUMN started_at_ms INTEGER;
+                     ALTER TABLE agent_message_part ADD COLUMN ended_at_ms INTEGER;",
+                )?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;

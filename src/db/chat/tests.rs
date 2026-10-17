@@ -38,6 +38,8 @@ fn part(position: i64, kind: &str, content: &str) -> ChatPart {
         kind: kind.into(),
         content: content.into(),
         provider_metadata_json: None,
+        started_at_ms: None,
+        ended_at_ms: None,
     }
 }
 
@@ -570,6 +572,8 @@ fn provider_metadata_round_trips() {
                 kind: "reasoning".into(),
                 content: "thought".into(),
                 provider_metadata_json: Some(r#"{"signature":"sig-abc"}"#.into()),
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
         )
         .expect("checkpoint");
@@ -611,4 +615,65 @@ fn failed_outcome_persists_and_loads_error_code() {
         Some("http 503"),
         "失败原因码持久化并可回读（供历史行显示）"
     );
+}
+
+#[test]
+fn part_timings_round_trip_for_thinking_duration() {
+    let (database, workspace, _) = database_with_two_workspaces("part-timing");
+    let committed = database
+        .begin_turn(&workspace, None, "问", &model())
+        .expect("begin");
+    // 流中 checkpoint 先写入带起止时刻的 thinking part。
+    database
+        .checkpoint(
+            &workspace,
+            &committed.assistant_message_id,
+            &[
+                ChatPart {
+                    started_at_ms: Some(1_000),
+                    ended_at_ms: Some(7_300),
+                    ..part(0, "reasoning", "思考中")
+                },
+                part(1, "text", "答"),
+            ],
+        )
+        .expect("checkpoint");
+    let loaded = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    let assistant = loaded.last().expect("assistant");
+    assert_eq!(assistant.parts[0].started_at_ms, Some(1_000));
+    assert_eq!(assistant.parts[0].ended_at_ms, Some(7_300));
+    assert_eq!(assistant.parts[0].kind, "reasoning");
+    // 非流式 part（无时刻）保持 None，不写 0 冒充。
+    assert_eq!(assistant.parts[1].started_at_ms, None);
+    assert_eq!(assistant.parts[1].ended_at_ms, None);
+
+    // 终态提交同样带时刻（覆盖 checkpoint 快照）。
+    database
+        .finish(
+            &workspace,
+            &committed.assistant_message_id,
+            &[
+                ChatPart {
+                    started_at_ms: Some(1_000),
+                    ended_at_ms: Some(7_300),
+                    ..part(0, "reasoning", "思考中")
+                },
+                part(1, "text", "答"),
+            ],
+            &TurnOutcome::Complete {
+                stop_reason: Some("stop".into()),
+            },
+            Usage::default(),
+        )
+        .expect("finish");
+    let loaded = database
+        .load_chat_session(&workspace, &committed.session_id)
+        .expect("load")
+        .expect("exists");
+    let assistant = loaded.last().expect("assistant");
+    assert_eq!(assistant.parts[0].started_at_ms, Some(1_000));
+    assert_eq!(assistant.parts[0].ended_at_ms, Some(7_300));
 }

@@ -598,6 +598,8 @@ fn session_loaded_rebuilds_view_and_selection() {
                 kind: "text".into(),
                 content: "问".into(),
                 provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
         },
         crate::db::chat::ChatMessage {
@@ -622,6 +624,8 @@ fn session_loaded_rebuilds_view_and_selection() {
                 kind: "reasoning".into(),
                 content: "半截思考".into(),
                 provider_metadata_json: Some(r#"{"signature":"s"}"#.into()),
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
         },
     ];
@@ -949,6 +953,8 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
                 kind: PartKind::Text,
                 content: format!("消息 {index}"),
                 provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
             model_label: None,
             error_code: None,
@@ -1113,6 +1119,8 @@ fn session_loaded_restores_context_usage_and_stats() {
                 kind: "text".into(),
                 content: "问".into(),
                 provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
         },
         crate::db::chat::ChatMessage {
@@ -1137,6 +1145,8 @@ fn session_loaded_restores_context_usage_and_stats() {
                 kind: "text".into(),
                 content: "答".into(),
                 provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
             }],
         },
     ];
@@ -1336,4 +1346,34 @@ fn stop_stream_clears_armed_state() {
             .stop_armed_at
             .is_none()
     );
+}
+
+#[test]
+fn stream_parts_record_start_and_end_timestamps() {
+    let (mut state, pane, key) = streaming_state("sess-part-time");
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Part(PartDelta {
+            kind: PartKind::Reasoning,
+            text: "思考".into(),
+            metadata: None,
+        })],
+    );
+    on_stream_delta(
+        &mut state,
+        &key,
+        &[ChatDelta::Part(PartDelta {
+            kind: PartKind::Reasoning,
+            text: "继续".into(),
+            metadata: None,
+        })],
+    );
+    let target = state.pane_anywhere(pane).unwrap();
+    let part = &target.lx.chat.messages[1].parts[0];
+    assert_eq!(part.content, "思考继续", "同 kind 合并");
+    let started = part.started_at_ms.expect("起点时刻");
+    let ended = part.ended_at_ms.expect("终点时刻");
+    assert!(started > 0, "毫秒时刻有效");
+    assert!(ended >= started, "终点不早于起点");
 }

@@ -356,12 +356,16 @@ mod tests {
                 kind: PartKind::Reasoning,
                 content: reasoning.to_string(),
                 provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
             });
         }
         parts.push(ChatPartView {
             kind: PartKind::Text,
             content: text.to_string(),
             provider_metadata_json: None,
+            started_at_ms: None,
+            ended_at_ms: None,
         });
         ChatMessageView {
             id: id.to_string(),

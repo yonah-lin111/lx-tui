@@ -28,6 +28,11 @@ const USER_PREFIX: &str = "> ";
 const USER_INDENT: u16 = 2;
 /// thinking 块左侧缩进列：与正文、统计行**左对齐**（0，不额外缩进）。
 const THINKING_MARGIN: u16 = 0;
+/// thinking 头部折叠/展开标记。
+const THINKING_COLLAPSED_MARK: &str = "▸ ";
+const THINKING_EXPANDED_MARK: &str = "▾ ";
+/// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
+const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
 pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 
@@ -160,15 +165,16 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                     let expanded = lx.chat.reasoning_expanded(message_index, part_index);
                     let streaming = lx.chat.reasoning_streaming(message_index, part_index);
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色）；
-                        // 完成后：`▸ Thought` / `▾ Thought`（压暗一档的品牌蓝）。
+                        // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色；不带折叠标记）；
+                        // 完成后：`▸ Thought · 6.3s` / `▾ Thought · 6.3s`（压暗一档的品牌蓝）。
                         let header_style = if streaming {
                             style::agent_verb()
                         } else {
                             style::agent_connector()
                         };
                         let x = content.x.saturating_add(THINKING_MARGIN);
-                        if streaming && expanded {
+                        let limit = content.right();
+                        if streaming {
                             let frame = text::LX_LOADING_FRAMES
                                 [lx.chat.loading_frame % text::LX_LOADING_FRAMES.len()];
                             grid.put_char(x, y, frame, header_style);
@@ -177,21 +183,20 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                                 y,
                                 text::LX_CHAT_THINKING_LABEL,
                                 header_style,
-                                content.right().saturating_sub(x.saturating_add(2)),
+                                limit.saturating_sub(x.saturating_add(2)),
                             );
                         } else {
-                            let label = match (streaming, expanded) {
-                                (true, _) => text::LX_CHAT_THINKING_COLLAPSED_LIVE,
-                                (false, true) => text::LX_CHAT_THINKING_EXPANDED,
-                                (false, false) => text::LX_CHAT_THINKING_COLLAPSED,
-                            };
-                            grid.put_clipped(
-                                x,
-                                y,
-                                label,
-                                header_style,
-                                content.right().saturating_sub(x),
-                            );
+                            let mut label = String::from(if expanded {
+                                THINKING_EXPANDED_MARK
+                            } else {
+                                THINKING_COLLAPSED_MARK
+                            });
+                            label.push_str(text::LX_CHAT_THOUGHT_LABEL);
+                            if let Some(duration) = thinking_duration(part) {
+                                label.push_str(THINKING_DURATION_SEP);
+                                label.push_str(&format_duration(duration));
+                            }
+                            grid.put_clipped(x, y, &label, header_style, limit.saturating_sub(x));
                         }
                     }
                     row_index += 1;
@@ -254,6 +259,13 @@ fn draw_markdown(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usi
         }
         *row_index += 1;
     }
+}
+
+/// thinking 块耗时（毫秒）：首个增量到最后一个增量的时间差；时间戳缺失返回 None。
+fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
+    let started = part.started_at_ms?;
+    let ended = part.ended_at_ms?;
+    Some(ended.saturating_sub(started).max(0))
 }
 
 /// thinking 正文渲染行数（markdown；左缩进 `THINKING_MARGIN`）。

@@ -63,6 +63,10 @@ pub struct ChatPart {
     pub content: String,
     /// 供应商专属元数据（如 Anthropic thinking signature），原样往返。
     pub provider_metadata_json: Option<String>,
+    /// 该 part 首个增量到达时刻（毫秒）；非流式写入（用户消息）为 None。
+    pub started_at_ms: Option<i64>,
+    /// 该 part 最后一个增量到达时刻（毫秒）；None 表示未知（老库/非流式）。
+    pub ended_at_ms: Option<i64>,
 }
 
 /// `begin_turn` 的提交结果：一轮的完整落库标识。
@@ -204,7 +208,8 @@ impl Database {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut parts_statement = self.conn.prepare(
-            r#"SELECT message_id, position, kind, content, provider_metadata_json
+            r#"SELECT message_id, position, kind, content, provider_metadata_json,
+                      started_at_ms, ended_at_ms
                FROM agent_message_part WHERE message_id IN (
                    SELECT external_id FROM agent_message WHERE session_id = ?1
                ) ORDER BY message_id, position"#,
@@ -219,6 +224,8 @@ impl Database {
                     kind: row.get(2)?,
                     content: row.get(3)?,
                     provider_metadata_json: row.get(4)?,
+                    started_at_ms: row.get(5)?,
+                    ended_at_ms: row.get(6)?,
                 },
             ))
         })?;
@@ -600,8 +607,9 @@ fn replace_parts(
         }
         transaction.execute(
             r#"INSERT INTO agent_message_part
-                   (external_id, message_id, position, kind, content, provider_metadata_json, created_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)"#,
+                   (external_id, message_id, position, kind, content, provider_metadata_json,
+                    created_at_ms, started_at_ms, ended_at_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
             params![
                 new_external_id("part"),
                 assistant_message_id,
@@ -610,6 +618,8 @@ fn replace_parts(
                 part.content,
                 part.provider_metadata_json,
                 now,
+                part.started_at_ms,
+                part.ended_at_ms,
             ],
         )?;
     }
@@ -669,6 +679,8 @@ pub fn chat_part_views(parts: &[crate::app::state::ChatPartView]) -> Vec<ChatPar
             kind: part.kind_str().to_string(),
             content: part.content.clone(),
             provider_metadata_json: part.provider_metadata_json.clone(),
+            started_at_ms: part.started_at_ms,
+            ended_at_ms: part.ended_at_ms,
         })
         .collect()
 }
