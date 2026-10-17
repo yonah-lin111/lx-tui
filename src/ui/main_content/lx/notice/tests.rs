@@ -21,10 +21,9 @@ fn row_text(grid: &Grid, area: Rect, row: u16) -> String {
 }
 
 #[test]
-fn titles_are_fixed_enum_values_with_their_own_palette() {
+fn titles_are_fixed_enum_values_with_red_or_yellow_only() {
     assert_eq!(NoticeTitle::Failed.label(), "Failed");
     assert_eq!(NoticeTitle::Interrupted.label(), "Interrupted");
-    assert_eq!(NoticeTitle::Warning.label(), "Warning");
     assert_eq!(
         NoticeTitle::Failed.style(),
         style::agent_fail(),
@@ -32,13 +31,8 @@ fn titles_are_fixed_enum_values_with_their_own_palette() {
     );
     assert_eq!(
         NoticeTitle::Interrupted.style(),
-        style::chat_provider(),
-        "中断用窗格底部供应商同款次要信息色"
-    );
-    assert_eq!(
-        NoticeTitle::Warning.style(),
         style::agent_warn(),
-        "警告黄 + 粗"
+        "中断黄 + 粗（不再有灰色档）"
     );
 }
 

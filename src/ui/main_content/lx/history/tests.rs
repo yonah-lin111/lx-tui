@@ -205,7 +205,7 @@ fn failed_message_without_code_uses_fallback_reason() {
 }
 
 #[test]
-fn interrupted_message_shows_info_notice_above_stats_line() {
+fn interrupted_message_shows_warning_notice_above_stats_line() {
     let mut message = message("assistant", "interrupted", vec![text_part("半截回答")]);
     message.input_tokens = Some(1_200);
     message.output_tokens = Some(300);
@@ -217,7 +217,7 @@ fn interrupted_message_shows_info_notice_above_stats_line() {
     let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "通知与正文隔一行");
-    assert_eq!(rows[2], "! Interrupted", "中断用提示级通知");
+    assert_eq!(rows[2], "! Interrupted", "中断用黄色警告通知");
     assert_eq!(
         rows[3], "  └─ interrupted before completion",
         "固定一句话原因"
@@ -230,6 +230,13 @@ fn interrupted_message_shows_info_notice_above_stats_line() {
     assert!(
         !rows.iter().any(|row| row.contains("[interrupted]")),
         "旧标记已移除：{rows:?}"
+    );
+    // 端到端：标题整行黄 + 粗（不再有灰色档）。
+    let title = buf.cell((0, 2)).map(|cell| cell.style()).expect("标题格");
+    assert_eq!(title.fg, style::agent_warn().fg, "中断通知标题用警告黄");
+    assert!(
+        title.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "标题加粗"
     );
 }
 

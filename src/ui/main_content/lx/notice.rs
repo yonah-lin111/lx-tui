@@ -1,8 +1,8 @@
 //! 消息底部通知：`! <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
 //!
 //! 标题是**固定枚举**（[`NoticeTitle`]）：文案与配色都由枚举决定，调用点只给一句原因，
-//! 不允许随手拼自由标题。标题整行按级别着色：失败红 + 粗、警告黄 + 粗、提示用窗格底部
-//! 供应商同款次要信息色；原因行连接符用供应商灰 + 粗、正文正常色。
+//! 不允许随手拼自由标题。标题整行着色只有两档——失败红 + 粗、中断黄 + 粗（没有灰色档）；
+//! 原因行连接符用供应商灰 + 粗、正文正常色。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -22,16 +22,13 @@ const LEAF: &str = text::agent::MARKER_TREE_LEAF;
 /// 原因行缩进（两空格，与 ui 页样例一致）。
 const DETAIL_INDENT: &str = "  ";
 
-/// 通知标题：固定枚举，文案与配色都从这里派生。
+/// 通知标题：固定枚举，文案与配色都从这里派生（只有红、黄两档，没有灰色档）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum NoticeTitle {
     /// 失败（红 + 粗）：请求 / agent 错误、模型问题。
     Failed,
-    /// 中断（次要信息色）：本轮未完成（用户停止或异常退出）。
+    /// 中断（黄 + 粗）：本轮未完成（用户停止或异常退出）。
     Interrupted,
-    /// 警告（黄 + 粗）：非致命问题，留给模型重试等（当前无构造点）。
-    #[allow(dead_code)]
-    Warning,
 }
 
 impl NoticeTitle {
@@ -40,7 +37,6 @@ impl NoticeTitle {
         match self {
             Self::Failed => text::LX_CHAT_NOTICE_FAILED,
             Self::Interrupted => text::LX_CHAT_NOTICE_INTERRUPTED,
-            Self::Warning => text::LX_CHAT_NOTICE_WARNING,
         }
     }
 
@@ -48,8 +44,7 @@ impl NoticeTitle {
     fn style(self) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
-            Self::Interrupted => style::chat_provider(),
-            Self::Warning => style::agent_warn(),
+            Self::Interrupted => style::agent_warn(),
         }
     }
 }

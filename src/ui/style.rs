@@ -131,7 +131,7 @@ pub fn agent_fail() -> Style {
     Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
 }
 
-/// Agent 通知的警告标记（Yellow 加粗）：非致命、但值得留意（模型问题/重试等）。
+/// Agent 通知的警告标记（Yellow 加粗）：本轮未完成等需要留意、但非失败的情况。
 pub fn agent_warn() -> Style {
     Style::default()
         .fg(Color::Yellow)

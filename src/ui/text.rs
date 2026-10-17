@@ -551,7 +551,6 @@ pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
 /// 消息底部通知的标题（固定枚举，对齐 ui 页 agent error；渲染为 `! <标题>`）。
 pub const LX_CHAT_NOTICE_FAILED: &str = "Failed";
 pub const LX_CHAT_NOTICE_INTERRUPTED: &str = "Interrupted";
-pub const LX_CHAT_NOTICE_WARNING: &str = "Warning";
 /// 通知原因（一句话；失败有原因码时用原因码）。
 pub const LX_CHAT_NOTICE_INTERRUPTED_REASON: &str = "interrupted before completion";
 pub const LX_CHAT_NOTICE_FAILED_REASON: &str = "no error details provided";
