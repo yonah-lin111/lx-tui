@@ -3,14 +3,32 @@
 //! 官方 `openai` 走固定 URL；兼容端点用配置 baseURL 安全拼接 `/chat/completions`。
 //! thinking：`delta.reasoning_content` / `delta.reasoning` 字段独立 part；
 //! 正文内嵌 `<think>` / `<thinking>` 标签由 TagSplitter 增量拆块。
+//!
+//! 工具化字段全部来自 OpenAI Chat Completions 的流式事件 `chat.completion.chunk`
+//! （官方文档字段：`choices[].delta.tool_calls[].{index,id,function.name,
+//! function.arguments}`、`choices[].finish_reason ∈ {stop,length,tool_calls,
+//! content_filter,function_call}`、末帧 `usage`、流末尾 `data: [DONE]`）：
+//! - 请求：`tools: [{"type":"function","function":{name,description,parameters}}]`；
+//! - 解码：按 `tool_calls[].index` 合并 id/name/arguments，首片发 `ToolInputStarted`，
+//!   每片发 `ToolInputDelta`，`finish_reason="tool_calls"` 时闭合调用并发
+//!   `ResponseFinished{ToolCalls}`；
+//! - `stop`/`length` 且无工具 → `ResponseFinished{Final}` + `Finished{Complete}`；
+//! - `[DONE]` 只代表本次响应流结束，不代表用户轮次结束。
 
 use serde_json::{Value, json};
 
+use super::super::prompt::LX_SYSTEM_PROMPT;
+use super::super::transport::tools::{
+    HistoryBlock, ToolCallBuffer, arguments_string, history_blocks, openai_chat_tools,
+    protocol_error,
+};
 use super::{
     StreamDecoder, TransportRequest, join_url, json_str, openai_usage, reasoning_delta,
     segments_to_deltas,
 };
-use crate::chat::events::{ChatDelta, ChatRequest, StopReason};
+use crate::chat::events::{
+    ChatDelta, ChatRequest, ModelStepStop, StopReason, TOOL_ARGUMENTS_INVALID_CODE,
+};
 use crate::chat::thinking::TagSplitter;
 
 /// 官方 OpenAI API 基础 URL。
@@ -19,7 +37,8 @@ const OFFICIAL_BASE: &str = "https://api.openai.com/v1";
 /// 构造 Chat Completions 请求。
 ///
 /// `compatible` 为真时用配置 baseURL（典型已含 `/v1`）；官方端点固定 URL。
-/// 不发送 tools/function；无 variant 时不发送推理等级字段。
+/// 四工具定义恒发（`tool_choice` 保持默认 auto）；`items` 非空时按 call/result
+/// 成对编码历史，为空时沿用纯文本 `turns`（与旧行为逐字等价）。
 pub fn build(
     base_url: &str,
     api_key: Option<&str>,
@@ -32,14 +51,12 @@ pub fn build(
     } else {
         join_url(OFFICIAL_BASE, "chat/completions")
     };
-    let messages: Vec<Value> = request
-        .turns
-        .iter()
-        .map(|turn| json!({"role": turn.role, "content": turn.text}))
-        .collect();
+    let messages = messages_of(request)?;
     let mut body = json!({
         "model": request.model.model,
         "messages": messages,
+        // 四条稳定工具定义（系统指令在首条 system 消息里）。
+        "tools": openai_chat_tools(),
         "stream": true,
         // 请求末帧携带 usage。
         "stream_options": {"include_usage": true},
@@ -60,7 +77,62 @@ pub fn build(
         url,
         headers: vec![("Authorization".into(), format!("Bearer {key}"))],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
+        tools_requested: true,
     })
+}
+
+/// 编码 `messages`：首条 system 为 `lx` 指令；`items` 非空走结构化历史。
+fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
+    let mut messages: Vec<Value> = vec![json!({
+        "role": "system",
+        "content": LX_SYSTEM_PROMPT,
+    })];
+    if request.items.is_empty() {
+        messages.extend(
+            request
+                .turns
+                .iter()
+                .map(|turn| json!({"role": turn.role, "content": turn.text})),
+        );
+        return Ok(messages);
+    }
+    for block in history_blocks(&request.items)? {
+        match block {
+            HistoryBlock::Text { role, text } => {
+                messages.push(json!({"role": role.as_str(), "content": text}));
+            }
+            HistoryBlock::ToolCall {
+                call_id,
+                name,
+                input,
+            } => {
+                // assistant 的 tool_calls 消息：`arguments` 是 **JSON 字符串**（只序列化一次）。
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": Value::Null,
+                    "tool_calls": [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments_string(&input)?,
+                        }
+                    }]
+                }));
+            }
+            HistoryBlock::ToolResult {
+                call_id, content, ..
+            } => {
+                // role=tool + tool_call_id；失败结果同样作为 content 回传（wire 无 is_error 字段）。
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": content,
+                }));
+            }
+        }
+    }
+    Ok(messages)
 }
 
 /// Chat Completions SSE 解码器。
@@ -72,6 +144,10 @@ pub struct Decoder {
     finished: bool,
     /// 已收到 usage。
     usage: Option<crate::db::chat::Usage>,
+    /// 跨帧工具参数缓冲（按 `tool_calls[].index` 聚合；每响应独立实例）。
+    calls: ToolCallBuffer,
+    /// 本响应是否已发出 `ResponseFinished`（防重复）。
+    response_finished: bool,
 }
 
 impl StreamDecoder for Decoder {
@@ -103,37 +179,41 @@ impl StreamDecoder for Decoder {
                 // 原生推理字段：独立 reasoning part（不进标签状态机）。
                 // 空串（端点常在每帧回 `reasoning_content:""`）不产出空 part。
                 for key in ["reasoning_content", "reasoning"] {
-                    if let Some(text) = json_str(delta, key).filter(|text| !text.is_empty()) {
+                    if let Some(text) = delta
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.is_empty())
+                    {
                         out.push(reasoning_delta(text));
                     }
                 }
-                if let Some(text) = json_str(delta, "content") {
+                if let Some(text) = delta
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                {
                     // 正文可能内嵌 <think> 标签：经状态机拆分。
                     out.extend(segments_to_deltas(self.splitter.feed(text)));
                 }
+                // 工具调用分片：按 index 合并，跨帧拼接 id/name/arguments。
+                if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+                    for call in calls {
+                        self.absorb_tool_call(call, &mut out)?;
+                    }
+                } else if delta.get("function_call").is_some() {
+                    // 已废弃的 `delta.function_call` 没有 index/ID，无法聚合与续传。
+                    return Err(protocol_error(
+                        "deprecated function_call delta without tool_calls index",
+                    ));
+                }
             }
-            // finish_reason 可能为 null（进行中）或空串；仅非空值视为完成信号。
+            // finish_reason 可能为 null（进行中）或空串；仅非空值视为本次响应完成信号。
             if let Some(reason) = choice
                 .get("finish_reason")
                 .and_then(Value::as_str)
                 .filter(|reason| !reason.is_empty())
             {
-                // tool_calls 之类的结束原因本期不支持，避免误判为完成。
-                if reason != "stop" && reason != "length" {
-                    return Err(format!("unsupported finish_reason: {reason}"));
-                }
-                self.finished = true;
-                out.push(ChatDelta::Finished {
-                    reason: StopReason::Complete,
-                });
-            }
-            // 意外 tool call：不支持工具，本轮以不支持错误结束。
-            if let Some(calls) = delta
-                .and_then(|delta| delta.get("tool_calls"))
-                .and_then(Value::as_array)
-                && !calls.is_empty()
-            {
-                return Err("tool calls are not supported".into());
+                out.extend(self.finish_response(reason)?);
             }
         }
         Ok(out)
@@ -151,9 +231,126 @@ impl StreamDecoder for Decoder {
     }
 
     fn mark_done(&mut self) {
-        // `[DONE]` 是 OpenAI 兼容流的正常结束标记。
+        // `[DONE]` 是 OpenAI 兼容流的正常结束标记：只标本次响应流完成。
         self.finished = true;
     }
+
+    fn has_open_tool_input(&self) -> bool {
+        self.calls.has_open()
+    }
+}
+
+impl Decoder {
+    /// 合并一个 `delta.tool_calls[index]` 分片。
+    fn absorb_tool_call(&mut self, call: &Value, out: &mut Vec<ChatDelta>) -> Result<(), String> {
+        let ordinal = call
+            .get("index")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| protocol_error("tool_calls entry without index"))?
+            as usize;
+        // 旧协议把函数调用放在 `delta.function_call`（无 index/ID）；本期只支持
+        // `tool_calls`，遇到无 index 的分片按协议错误失败，不猜调用。
+        if let Some(id) = call
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            self.calls.bind_call_id(ordinal, id)?;
+        }
+        let function = call.get("function");
+        if let Some(name) = function
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+        {
+            self.calls.bind_name(ordinal, name)?;
+        }
+        if let Some(arguments) = function
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .filter(|arguments| !arguments.is_empty())
+        {
+            self.calls.push_delta(ordinal, arguments)?;
+        }
+        // call ID 与 name 齐备后才能发 Started；此前累计的参数在 Started 后补发。
+        if let Some((call_id, name)) = self.calls.take_start(ordinal) {
+            out.push(ChatDelta::ToolInputStarted {
+                call_id: call_id.clone(),
+                name,
+                ordinal,
+            });
+        }
+        let chunk = self.calls.take_emittable(ordinal);
+        if !chunk.is_empty()
+            && let Some(call_id) = self.calls.call_id_at(ordinal)
+        {
+            out.push(ChatDelta::ToolInputDelta {
+                call_id: call_id.to_string(),
+                chunk,
+            });
+        }
+        Ok(())
+    }
+
+    /// 收到 `finish_reason`：闭合工具并发出 `ResponseFinished`。
+    fn finish_response(&mut self, reason: &str) -> Result<Vec<ChatDelta>, String> {
+        let mut out = Vec::new();
+        if self.response_finished {
+            // 重复 finish_reason 帧（部分兼容端点会重发）：幂等忽略。
+            return Ok(out);
+        }
+        match reason {
+            "tool_calls" | "function_call" => {
+                // 先闭合所有调用：参数不完整/非法属于协议错误，绝不执行半截参数。
+                let ended = self.calls.end_all_open()?;
+                if ended.is_empty() {
+                    return Err(protocol_error(
+                        "finish_reason=tool_calls without any tool call",
+                    ));
+                }
+                for (call_id, arguments_json) in ended {
+                    validate_arguments(&arguments_json)?;
+                    out.push(ChatDelta::ToolInputEnded {
+                        call_id,
+                        arguments_json,
+                    });
+                }
+                out.push(ChatDelta::ResponseFinished {
+                    stop: ModelStepStop::ToolCalls,
+                });
+                // `finish_reason` 已声明本次响应流结束：即使端点没补 `[DONE]`，
+                // 也不应把整轮判成 "stream ended without completion"。
+                self.finished = true;
+            }
+            "stop" | "length" | "content_filter" => {
+                if self.calls.has_calls() {
+                    // 端点先发过工具分片却又以 stop 结束：协议不一致，不猜执行。
+                    return Err(protocol_error(format!(
+                        "finish_reason={reason} after tool call fragments"
+                    )));
+                }
+                out.push(ChatDelta::ResponseFinished {
+                    stop: ModelStepStop::Final,
+                });
+                self.finished = true;
+                out.push(ChatDelta::Finished {
+                    reason: StopReason::Complete,
+                });
+            }
+            other => {
+                return Err(protocol_error(format!("unknown finish_reason: {other}")));
+            }
+        }
+        self.response_finished = true;
+        Ok(out)
+    }
+}
+
+/// 校验完整参数是合法 JSON（`ToolInputEnded` 之前必须成立）。
+fn validate_arguments(arguments_json: &str) -> Result<(), String> {
+    serde_json::from_str::<Value>(arguments_json)
+        .map(|_| ())
+        .map_err(|_| format!("{TOOL_ARGUMENTS_INVALID_CODE}: malformed tool arguments"))
 }
 
 /// 截断错误码（不含完整响应体）。

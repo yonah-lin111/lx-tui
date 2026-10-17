@@ -613,3 +613,47 @@ lx 配置层有四类 provider transport；`src/chat/transport` 实际有五条�
 - **参数校验**：`args.rs` 按字段白名单解析，未知字段/类型错误/0 或负整数一律 `InvalidArguments`，错误消息只含字段名与期望类型，不回显参数内容；参数体超过 1 MiB 直接 `TooLarge`。未知工具名回显名字截断到 64 字符。
 - **路径**：`path::resolve` 先校验 `ctx.cwd`（非空、绝对、存在且为目录），不满足即 `PathUnresolvable`；随后绝对路径原样、相对路径拼接。**未**做任何工作区边界限制（与 §9 一致）。
 - **日志**：工具执行层**不记录**参数与文件内容；唯一日志是 `platform::atomic_write` 的权限复制失败（`tracing::debug!`，只含错误与固定文案）。
+
+### 20.3 已实施（G4：四类 transport 的工具协议）
+
+落地位置：`src/chat/prompt.rs`（`lx` 身份提示）、`src/chat/transport/tools/`（四工具 wire 形状 + 历史归并 + 跨帧参数缓冲）、四个 `src/chat/transport/{openai,responses,anthropic,google}/mod.rs`（请求编码与解码）、`src/chat/client/`（重试闸门与 HTTP 错误归类）。
+
+**请求侧**
+
+- 四工具定义恒发；`ChatRequest::items` 非空时按 call/result 结构编码，为空时逐字保持旧的 `turns` 纯文本编码（每类协议各有回归测试）。
+- system 指令：OpenAI Chat `messages[0].role=system`、Responses 顶层 `instructions`、Anthropic 顶层 `system`、Google `systemInstruction.parts[0].text`；文本是 `LX_SYSTEM_PROMPT`（只描述 lx、四工具、相对路径基准与执行/回报要求，不含品牌或整份系统指令）。
+- `tool_choice` 未强制设置（保持端点默认 auto）。
+- **能力类失败归类**：`TransportRequest` 新增 `tools_requested: bool`；带 tools 的 4xx/501（400/404/405/409/415/422/501）错误码前缀为 `tool calls not supported by endpoint · http <status> · <detail>`，401/403/408/429/5xx 保持原 `http <status>` 语义。**没有**任何“移除 tools 重试”的降级路径。
+
+**解码侧（wire 事件 → 统一 delta）**
+
+| 传输 | wire 事件 | 统一 delta |
+| --- | --- | --- |
+| Chat Completions | `choices[].delta.tool_calls[index]`（id/function.name/function.arguments 分片） | 首个可识别分片发 `ToolInputStarted{ordinal=index}`，其后每片 `ToolInputDelta` |
+| Chat Completions | `finish_reason="tool_calls"` | 闭合全部调用：`ToolInputEnded` × N（按 index 升序）+ `ResponseFinished{ToolCalls}` |
+| Chat Completions | `finish_reason ∈ {stop,length,content_filter}` 且无工具 | `ResponseFinished{Final}` + `Finished{Complete}` |
+| Chat Completions | `data: [DONE]` | 仅置完成位（不代表用户轮次结束） |
+| Responses | `response.output_item.added`（`item.type=="function_call"`） | `ToolInputStarted{call_id=item.call_id, ordinal=output_index}` |
+| Responses | `response.function_call_arguments.delta` / `.done` | `ToolInputDelta` / `ToolInputEnded`（done 的 `arguments` 为权威值） |
+| Responses | `response.completed` | 先补发未闭合调用的 `ToolInputEnded`，再 `ResponseFinished{ToolCalls/Final}` + `Finished{Complete}`（usage 先于终态） |
+| Anthropic | `content_block_start(type="tool_use")` | `ToolInputStarted{call_id=block.id, name=block.name, ordinal=index}` |
+| Anthropic | `content_block_delta(type="input_json_delta")` | `ToolInputDelta{chunk=partial_json}`（按 block index 绑定） |
+| Anthropic | `content_block_stop`（tool_use / thinking） | `ToolInputEnded` / `ReasoningEnded{item_id=index}` |
+| Anthropic | `message_delta.delta.stop_reason="tool_use"` / `"end_turn"` | `ResponseFinished{ToolCalls}` / `{Final}` |
+| Anthropic | `message_stop` | `Finished{Complete}` |
+| Google | `candidates[].content.parts[].functionCall{name,args}` | `ToolInputStarted` + `ToolInputEnded`（args 已是完整对象，序列化为 JSON 字符串） |
+| Google | `finishReason ∈ {STOP,SAFETY,RECITATION,MAX_TOKENS}` | 有 functionCall → `ResponseFinished{ToolCalls}`，否则 `{Final}`；随后 `Finished{Complete}` |
+
+**与设计 §17 / §19 的偏差（均为等价或更严格）：**
+
+1. **参数非法 JSON 直接 `Err`，不发 `ToolInputEnded`**。§17 允许“发 Ended 让 G2 状态层判失败”，但四类协议在 `ToolInputEnded` 之前都已拿到**权威完整串**（Chat/Anthropic 在闭合事件、Responses 在 `arguments.done`、Google 在完整对象），非法即协议级问题，直接失败更早、更不可能把不可解析调用推进到 `Pending`。超限与半截参数同理直接 `Err`（`TOOL_ARGUMENTS_INVALID_CODE` / `TOOL_ARGUMENTS_TOO_LARGE_CODE`）。
+2. **EOF 时未闭合工具输入**由新增的 `StreamDecoder::has_open_tool_input()` 检出，client 以 `tool input truncated` 失败，不补造 `ToolInputEnded`。
+3. **hosted tool 处理**：Responses 的 `web_search_call` / `file_search_call` / `code_interpreter_call` / `image_generation_call` / `mcp_call` / `mcp_list_tools` / `mcp_approval_request` / `computer_call` / `local_shell_call` 一律协议错误（不当成本地文件工具）；Anthropic 的 `server_tool_use` / `web_search_tool_result` / `code_execution_tool_result` block 同样拒绝。普通输出项（`message` / `reasoning`）忽略。
+4. **Google 去重与合成 ID**：内部 call ID 为 `gemini-{candidate index}-{part index}-{name}`（不含时间戳），并按 `(candidate, part, name, args 序列化)` 二次去重累计快照；该 ID **不写入**任何供应商字段（`functionResponse` 只带 `{name, response}`）。
+5. **Google `functionResponse.response` 包装**：成功为 `{"result": <文本>}`，失败为 `{"error": <文本>}`（用协议在 `functionResponse` 里保留结构的最简包装，失败不伪装成功）。
+6. **Google `finishReason="MAX_TOKENS"` 也结束本次响应**（按 `Final`）；旧实现只在 STOP/SAFETY/RECITATION 结束，未知原因等 EOF。
+7. **Chat Completions 的 `finish_reason="tool_calls"` 同时置完成位**：`finish_reason` 已是协议级响应结束信号，缺少 `[DONE]` 时不应误判 `stream ended without completion`。旧的 `unsupported finish_reason` 与 `tool calls are not supported` 拒绝分支已删除；未知 `finish_reason` 仍是协议错误。
+8. **已废弃的 `delta.function_call`**（无 index/ID）明确协议错误，不猜调用。
+9. **重试闸门**：`can_retry` 要求“零增量 + 零工具输入 + 临时故障（timeout/connection failed/429/5xx）”。任何 `ToolInputStarted/Delta/Ended`、任何正文/思考增量、任何 `ResponseFinished` 都会永久关闭本响应的重试；`StreamOutcome` 未改动（仍是 deltas + stop）。
+10. **Responses `response.incomplete`**：无未闭合工具时按旧的 `ResponseFinished{Final}` + `Finished{Complete}` 处理；有未闭合调用则协议错误。
+11. **Anthropic `cache_creation_input_tokens`** 仍按旧行为映射进 `Usage.cache_write`；`message_start` 的 input usage 与 `message_delta` 的 output usage 分两条增量上报，解码器只报本响应值（累加由上层负责）。

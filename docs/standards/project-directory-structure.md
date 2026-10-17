@@ -60,6 +60,9 @@ lx-tui/
     config/                     配置模型、默认值与校验
       ai.rs                     模型配置（config/ai.json）：类型、校验与原子保存
     chat/                       流式聊天协议适配：统一事件、SSE 帧解析、thinking 标签、五种 transport、请求执行与上下文装配；
+                                lx agent 身份提示（prompt.rs：唯一稳定系统指令文本）；
+                                transport/tools/：四工具 wire 形状（Chat/Responses/Anthropic/Google）、
+                                历史 call/result 归并与跨帧工具参数缓冲；
                                 文件工具执行层（chat/tools/：read/search/edit/write 与 Codex 风格补丁引擎）
       events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason）
       sse.rs                    可增量喂入的 SSE 帧解析器
@@ -109,7 +112,7 @@ lx-tui/
 10. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
 11. `config/`：配置结构、默认值与校验；`ai.rs` 承载模型配置（`config/ai.json`）的类型、校验与原子保存；配置只读写本项目数据根（`~/.lx-t[-dev]/config/ai.json`），不读取 lx-agent 的 `~/.lx`；配置变更不直接改运行时状态，交由 `app` 行为处理。
 12. `settings/`：设置与命令文件持久化（`settings.json`、自定义命令 Markdown 文件）及本地回环设置 Web 服务；`service.rs` 只监听 `127.0.0.1` 并带每次运行随机 token，静态资源（`page.rs` 以 `include_str!` 加载 `assets/`，经独立路由提供）与 JSON API 共用一套存储函数；`service/models.rs` 提供模型设置的脱敏 GET、原子 PUT 与远端发现 POST，状态变更经事件投递回 `event` 循环。
-13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、五种 transport 的请求/解码（`transport/`）、请求执行与取消（`client.rs`）与上下文装配（`context.rs`）；`chat/tools/` 是文件工具执行层（`read`/`search`/`edit`/`write` 与 Codex 风格补丁引擎）：相对路径以调用方冻结的 `ToolContext::cwd` 为基准、同步阻塞（由调用方 `spawn_blocking`）、只返回结构化结果，`format_for_model`/`to_summary`/`to_result_json` 是唯一三种呈现口径；工具层不触碰 Git 索引/分支/暂存区/提交，写文件经 `platform::write_file_atomic` 原子替换并按规范化路径加短时写锁。不依赖 `app`/`ui`/`event`。
+13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、`lx` 身份提示（`prompt.rs`）、五种 transport 的请求/解码（`transport/`，其中 `transport/tools/` 统一四工具 wire 形状、历史 call/result 归并与跨帧参数缓冲）、请求执行与取消（`client.rs`，含“已产生工具输入即不重试”的重试闸门）与上下文装配（`context.rs`）；`chat/tools/` 是文件工具执行层（`read`/`search`/`edit`/`write` 与 Codex 风格补丁引擎）：相对路径以调用方冻结的 `ToolContext::cwd` 为基准、同步阻塞（由调用方 `spawn_blocking`）、只返回结构化结果，`format_for_model`/`to_summary`/`to_result_json` 是唯一三种呈现口径；工具层不触碰 Git 索引/分支/暂存区/提交，写文件经 `platform::write_file_atomic` 原子替换并按规范化路径加短时写锁。不依赖 `app`/`ui`/`event`。
 14. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控（含文件/目录权限收紧、原子文件替换 `write_file_atomic`/`rename_over`）；核心模块不得出现裸 OS 分支。
 15. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
 16. `assets/`：浏览器前端资源，HTML/CSS/JS 分文件维护，经 `include_str!` 编译进二进制并按独立路由提供，遵循 `html-assets.md`。

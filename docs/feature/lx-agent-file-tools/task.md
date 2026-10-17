@@ -59,19 +59,21 @@
 
 ### 4.1 通用请求与解码
 
-- [ ] 扩展 `ChatRequest` 为结构化消息/内容块/工具调用/结果，保留旧纯文本历史的编码结果。
-- [ ] 固定 `lx` agent 身份与四工具 schema，合理放入各协议的 system/developer 和 tools 字段；不加入 Codex core、MCP 或 shell 工具。
-- [ ] 解码器按供应商 item/index/call ID 聚合跨帧参数，设置参数体上限；完整参数到达前不得执行。
-- [ ] 区分 `finish_reason=tool_calls/tool_use` 和最终正常完成；EOF 半截参数、缺失 call ID、重复冲突、非法 JSON 给明确错误。
-- [ ] 保留现有 usage、retry、取消、thinking tag 和 provider metadata 处理；已产生工具副作用的响应不得自动重试。
+- [x] 扩展 `ChatRequest` 为结构化消息/内容块/工具调用/结果，保留旧纯文本历史的编码结果。
+- [x] 固定 `lx` agent 身份与四工具 schema，合理放入各协议的 system/developer 和 tools 字段；不加入 Codex core、MCP 或 shell 工具。
+- [x] 解码器按供应商 item/index/call ID 聚合跨帧参数，设置参数体上限；完整参数到达前不得执行。
+- [x] 区分 `finish_reason=tool_calls/tool_use` 和最终正常完成；EOF 半截参数、缺失 call ID、重复冲突、非法 JSON 给明确错误。
+- [x] 保留现有 usage、retry、取消、thinking tag 和 provider metadata 处理；已产生工具副作用的响应不得自动重试。
 
 ### 4.2 各协议 fixture
 
-- [ ] OpenAI Responses：function call 增量/完成、call ID、function_call_output 续传、reasoning 完成、两次采样。
-- [ ] OpenAI Chat Completions：`delta.tool_calls[index]` 跨帧合并、`finish_reason=tool_calls`、role=`tool` 续传、`[DONE]`；compatible 4xx 不支持 tools 明确报错。
-- [ ] Anthropic：tool_use block、input_json_delta、content_block_stop、tool_result block、thinking signature 与顺序。
-- [ ] Google：functionCall/functionResponse、流快照去重、thought signature、候选/part 顺序与无原生 call ID 映射。
-- [ ] 每类覆盖一工具、同响应两工具、reasoning -> tool -> reasoning -> text、取消、无效 JSON、网络 EOF、用量累加。
+- [x] OpenAI Responses：function call 增量/完成、call ID、function_call_output 续传、reasoning 完成、两次采样。
+- [x] OpenAI Chat Completions：`delta.tool_calls[index]` 跨帧合并、`finish_reason=tool_calls`、role=`tool` 续传、`[DONE]`；compatible 4xx 不支持 tools 明确报错。
+- [x] Anthropic：tool_use block、input_json_delta、content_block_stop、tool_result block、thinking signature 与顺序。
+- [x] Google：functionCall/functionResponse、流快照去重、候选/part 顺序与无原生 call ID 映射（`thoughtSignature` 回传属 G7 上下文阶段，见偏差说明）。
+- [x] 每类覆盖一工具、同响应两工具、reasoning -> tool -> reasoning -> text、取消、无效 JSON、网络 EOF、用量累加。
+
+> G4 已实施：`src/chat/prompt.rs` + `src/chat/transport/tools/` + 四个 transport + `client` 重试闸门。事件映射表与偏差（非法 JSON 直接 Err、hosted tool 拒绝、Google 合成 ID 与去重、重试规则）见 `design.md` §20.3。
 
 验收：固定流式 fixture 不访问真实 API 即能完成统一事件和下一次请求编码；真实供应商验证留给用户。
 

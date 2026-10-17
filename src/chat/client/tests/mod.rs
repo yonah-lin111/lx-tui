@@ -1,6 +1,7 @@
-//! 流式请求执行测试：本地 mock HTTP server 覆盖五种协议的真实 SSE 流。
+//! 流式请求执行测试（主模块）：本地 mock HTTP server 覆盖五种协议的真实 SSE 流。
 //!
 //! 不依赖公网与真实 Key；mock server 记录请求 URL/header/body 供断言。
+//! 工具化路径与重试规则的测试分别在 `tools` / `retry` 子模块。
 
 use std::time::Duration;
 
@@ -695,3 +696,6 @@ async fn incremental_deltas_are_streamed_via_callback() {
     // 回调累计 == 最终正文（按分块顺序拼接）。
     assert_eq!(seen.lock().expect("lock").as_str(), "甲乙丙");
 }
+
+mod retry;
+mod tools;

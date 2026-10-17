@@ -8,6 +8,7 @@ pub mod anthropic;
 pub mod google;
 pub mod openai;
 pub mod responses;
+pub mod tools;
 
 use serde_json::Value;
 
@@ -19,6 +20,11 @@ pub struct TransportRequest {
     pub url: String,
     pub headers: Vec<(String, String)>,
     pub body: String,
+    /// 本次请求是否声明了 `tools`。
+    ///
+    /// 用于把 4xx 归类成“该端点不支持工具调用”（[`tools::TOOLS_UNSUPPORTED_CODE`]）：
+    /// 只有确实带了工具定义时，能力类 4xx 才应归因于 tools，绝不静默降级重试。
+    pub tools_requested: bool,
 }
 
 /// 适配器解码出的流结果：完整 delta 列表 + 结束原因。
@@ -64,6 +70,11 @@ pub trait StreamDecoder {
     /// 默认忽略：仅对 `[DONE]` 有语义的解码器（Chat Completions）覆写为置完成位；
     /// 其余协议（Anthropic/Google/Responses）由本协议事件判定完成。
     fn mark_done(&mut self) {}
+
+    /// 是否仍有未闭合的工具参数（EOF/中断时校验：半截参数不得执行）。
+    fn has_open_tool_input(&self) -> bool {
+        false
+    }
 }
 
 /// 按 transport 构造解码器。
