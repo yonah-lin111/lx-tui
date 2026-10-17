@@ -480,11 +480,9 @@ pub fn chat_notice_connector() -> Style {
     chat_provider().add_modifier(Modifier::BOLD)
 }
 
-/// 模型名标签：与 lx 页三个模式入口标签**同款**的粉→蓝逐字符渐变 + 加粗。
-///
-/// 端点固定用 Native 的 `218→117`（入口标签的 `selected = true` 即加粗版）：消息表
-/// 不存模式，历史消息不能随当前模式变色；`position`/`length` 按**显示字符**计，
-/// 渐变按整条标签取样，软换行不会改变某个字符的颜色。
+/// 状态行模型名：与 lx 页三个模式入口标签**同款**的粉→蓝逐字符渐变 + 加粗
+/// （入口标签的 `selected` 态）。端点固定用 Native 的 `218→117`；`position`/`length`
+/// 按**显示字符**计，渐变按整条标签取样，软换行不会改变某个字符的颜色。
 pub fn model_label_style(position: usize, length: usize) -> Style {
     lx_entry_label_style(crate::app::state::LxEntry::Native, position, length, true)
 }
