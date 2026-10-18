@@ -25,7 +25,7 @@ use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
 use crate::ui::{style, text};
 
 use super::super::Grid;
-use super::{StepMark, truncate_with_ellipsis, visible_row};
+use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
 /// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
 const MIN_PARAM_COLS: usize = 6;
@@ -119,7 +119,7 @@ fn lead(call: &ToolCallView, loading_frame: usize) -> Segment {
         ToolStatus::Completed => StepMark::Done,
         ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => StepMark::Running,
     };
-    Segment::new(mark.segment(loading_frame), mark.style())
+    Segment::new(mark.segment(loading_frame), mark.style(StepKind::Tool))
 }
 
 /// 固定动词：品牌天蓝加粗（饱和、与正文默认前景和边框 Cyan/dim 都区分得开）。

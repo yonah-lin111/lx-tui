@@ -53,8 +53,16 @@ const STICKY_SAMPLE_CHARS: usize = 512;
 /// assistant 步骤左侧方块标记的语义状态（思考 / 工具调用 / 正文块共用）。
 ///
 /// 运行中为 `■`/`□` 两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
-/// 终态停为静态方块、仅以颜色区分：完成（暗一档品牌蓝）、失败（红）、中断（黄）、
-/// 取消（次要信息色 + 空心 `□`，表示未产出结果）。
+/// 终态停为静态方块、仅以颜色区分：失败（红）、中断（黄）、取消（次要信息色 + 空心
+/// `□`，表示未产出结果）。
+///
+/// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
+/// - [`StepKind::Body`]（正文块）：**终端默认前景**——方块跟正文同色，不额外抢眼；
+/// - [`StepKind::Thinking`]（思考块）：专用品红 `Indexed 218`；
+/// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
+///
+/// 失败 / 中断 / 取消是**跨角色的语义状态**，一律覆盖角色色（红 / 黄 / 次要灰），
+/// 保证「出问题了」比「是哪类步骤」更先被看到。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepMark {
     Running,
@@ -79,21 +87,69 @@ impl StepMark {
         }
     }
 
-    /// 方块样式：运行中翡翠绿加粗、已完成同款翡翠绿去加粗（与正文默认前景、
-    /// 边框的 Cyan/dim 明确区分）；失败红、中断黄沿用状态色；取消为次要信息色空心。
-    pub(super) fn style(self) -> Style {
+    /// 方块样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
+    pub(super) fn style(self, kind: StepKind) -> Style {
         match self {
-            Self::Running => style::chat_step_mark_running(),
-            Self::Done => style::chat_step_mark_done(),
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
+            Self::Running => kind.style_running(),
+            Self::Done => kind.style_done(),
         }
     }
 
     /// 标记段（字形 + 空格）；工具行与 thinking 头部共用同一份拼法。
+    /// 颜色由调用方用 [`Self::style`] 单独上，所以这里不需要 [`StepKind`]。
     pub(super) fn segment(self, loading_frame: usize) -> String {
         format!("{} ", self.glyph(loading_frame))
+    }
+}
+
+/// 步骤的**类别**：决定运行中 / 已完成时的方块与文案用什么颜色。
+///
+/// 三类的分工（用户要求「正文方块用默认前景、thinking 用别的颜色」）：
+/// - `Body` 用终端默认前景 → 方块与正文本就同色，视觉上不打断阅读；
+/// - `Thinking` 用品红 → 一眼看出「这段是模型的内心活动」；
+/// - `Tool` 用翡翠绿 → 一眼看出「这段是真实动作」，且与 markdown 的 GitHub 色域不相交。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StepKind {
+    /// 正文块（assistant 的可见回答）。
+    Body,
+    /// 思考块（reasoning / thinking）。
+    Thinking,
+    /// 工具调用行。
+    Tool,
+}
+
+impl StepKind {
+    /// 运行中（含呼吸）的样式。
+    fn style_running(self) -> Style {
+        match self {
+            Self::Body => style::chat_step_mark_running_body(),
+            Self::Thinking => style::chat_step_mark_running_thinking(),
+            Self::Tool => style::chat_step_mark_running(),
+        }
+    }
+
+    /// 已完成（静止）的样式。
+    fn style_done(self) -> Style {
+        match self {
+            Self::Body => style::chat_step_mark_done_body(),
+            Self::Thinking => style::chat_step_mark_done_thinking(),
+            Self::Tool => style::chat_step_mark_done(),
+        }
+    }
+
+    /// 该角色的头部文案样式（运行中 / 已完成）。
+    pub(super) fn label(self, running: bool) -> Style {
+        match (self, running) {
+            (Self::Body, true) => style::chat_step_label_running_body(),
+            (Self::Body, false) => style::chat_step_label_done_body(),
+            (Self::Thinking, true) => style::chat_step_label_running_thinking(),
+            (Self::Thinking, false) => style::chat_step_label_done_thinking(),
+            (Self::Tool, true) => style::chat_step_label_running(),
+            (Self::Tool, false) => style::chat_step_label_done(),
+        }
     }
 }
 
@@ -555,6 +611,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             &mut row_index,
                             &part.content,
                             mark,
+                            StepKind::Body,
                             lx.chat.loading_frame,
                         );
                     }
@@ -567,19 +624,16 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         StepMark::Done
                     };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：翡翠绿方块（加粗 + 呼吸）+ `Thinking`（同色不加粗）；
-                        // 完成后：同款翡翠绿方块（去加粗、静止）+ `Thought · 6.3s`
+                        // 生成中：品红方块（加粗 + 呼吸）+ `Thinking`（同色不加粗）；
+                        // 完成后：同款品红方块（去加粗、静止）+ `Thought · 6.3s`
                         // （无折叠箭头，折叠/展开由点击头部或 Ctrl+T 控制，方块即状态标记）。
-                        let header_style = if streaming {
-                            style::chat_step_label_running()
-                        } else {
-                            style::chat_step_label_done()
-                        };
+                        // 思考用品红，与正文（默认前景）和工具（翡翠绿）都分得开。
+                        let header_style = StepKind::Thinking.label(streaming);
                         grid.put_char(
                             content.x,
                             y,
                             mark.glyph(lx.chat.loading_frame),
-                            mark.style(),
+                            mark.style(StepKind::Thinking),
                         );
                         let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();
@@ -672,6 +726,7 @@ fn draw_markdown(
     row_index: &mut usize,
     content: &str,
     mark: StepMark,
+    kind: StepKind,
     loading_frame: usize,
 ) {
     let inner = rect.width.saturating_sub(STEP_GUTTER);
@@ -679,7 +734,7 @@ fn draw_markdown(
     for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             if first {
-                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style());
+                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style(kind));
             }
             let mut cx = rect
                 .x

@@ -1046,15 +1046,20 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 
 **状态映射（终态只按颜色区分，取消另用空心）**
 
-调色板是**翡翠绿 + 金黄三层**：① 结构 / 状态 = **翡翠绿 `Indexed 42`**（`#00d787`）；
-② 可变参数 = 既有的金黄 **`Indexed 220`**（+ 下划线）；③ 只读元信息（行范围、计数、
-状态文字）= `muted()`（dim、无色相）。结构与参数**不压暗**（dim 的 117 曾与边框标题、
-正文几乎同色，这正是用户反馈“和正文与边框色调很接近”的根因）。
+调色板按**步骤类别**分档（`StepKind`）：
+① **正文块** = 终端默认前景（不设 fg，方块与正文同色）；
+② **思考块** = **品红 `Indexed 218`**（`#ffafd7`）；
+③ **工具调用** = **翡翠绿 `Indexed 42`**（`#00d787`）；
+④ **可变参数** = 既有的金黄 **`Indexed 220`**（+ 下划线）；
+⑤ **只读元信息**（行范围、计数、状态文字）= `muted()`（dim、无色相）。
+有色档与参数**不压暗**（dim 的 117 曾与边框标题、正文几乎同色，这正是用户反馈
+“和正文与边框色调很接近”的根因）。
 
-六轮配色迭代（用户逐轮明确要求）：**① 天蓝 117 + DIM**（混同）→ **② 品牌蓝/冰蓝**
+七轮配色迭代（用户逐轮明确要求）：**① 天蓝 117 + DIM**（混同）→ **② 品牌蓝/冰蓝**
 （用户否决：不要蓝色）→ **③ Native 浅粉 218 + 金黄 220 + 灰 245** → **④ 暖色三层
 （粉 218 / 金 220 / dim）** → **⑤ Native 浅蓝 153 + 金黄 220 + dim**（用户原话「用
-native agent 的 a 的字体颜色（蓝蓝的）」）→ **⑥ 翡翠绿 42 + 金黄 220 + dim**（当前）。
+native agent 的 a 的字体颜色（蓝蓝的）」）→ **⑥ 翡翠绿 42 + 金黄 220 + dim** →
+**⑦ 按类别分档（当前）**。
 
 第 ⑥ 轮的触发是用户带截图反馈「工具、思考和 step 小方块与正文内容颜色特别相近」。
 用 CIEDE2000 量出来，⑤ 的 `153`（`#afd7ff`）与**正文**色差只有 **11.5**、与 GitHub Dark 的
@@ -1064,6 +1069,20 @@ native agent 的 a 的字体颜色（蓝蓝的）」）→ **⑥ 翡翠绿 42 + 
 空闲色相只有绿/青绿（120°–170°）。最终取 `Indexed 42`（`#00d787`，158°）：与正文 30.1、
 与全部 GitHub 代码色最近 32.8、与金黄参数 36.2，三项同时 ≥30，是候选表里唯一达标的槽位。
 （偏好更亮可换 `Indexed 49` `#00ffaf`：对深底亮度比 14.3 vs 10.0。）
+
+**第 ⑦ 轮（当前）**——用户要求「设置正文内容的小方块为默认字体的颜色即可」「thinking 的
+小方块和思考的字体颜色使用其他的颜色」：即**正文方块不该抢眼、思考要独立一色**。于是引入
+[`StepKind`]（Body / Thinking / Tool），方块与头部文案的颜色都由类别决定：
+
+| 类别 | 方块 / 文案色 | 说明 |
+| --- | --- | --- |
+| `Body`（正文块） | **终端默认前景**（`fg == None`） | 方块与正文本就同色，不打断阅读；运行态靠加粗 + 呼吸、完成态去加粗 |
+| `Thinking`（思考块） | **品红 `Indexed 218`** `#ffafd7` | 一眼看出「这是模型的内心活动」 |
+| `Tool`（工具调用） | **翡翠绿 `Indexed 42`** `#00d787` | 一眼看出「这是真实动作」 |
+
+三者两两的 CIEDE2000 色差为 24（正文-思考）/ 68（思考-工具）/ 30（正文-工具），由
+`step_roles_use_distinct_colors` 守住。`Failed` / `Interrupted` / `Cancelled` 是**跨类别**
+的语义状态，一律覆盖类别色（红 / 黄 / 次要灰），保证「出问题了」比「是哪类步骤」更先被看到。
 
 **与 markdown 高亮的色域不相交**：正文侧（`markdown_*` / `code_*`）本轮换成 **GitHub Dark
 官方色板**的固定 RGB（语法 token `#ff7b72`/`#a5d6ff`/`#79c0ff`/`#d2a8ff`/`#8b949e`，
@@ -1080,8 +1099,8 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 
 | 状态 | 字形 | 样式 |
 | --- | --- | --- |
-| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | **翡翠绿 `Indexed 42` + 加粗 + 呼吸**（`chat_step_mark_running`） |
-| `Completed`、思考完成、已完成正文块 | `■` 静态 | **翡翠绿 `Indexed 42`、不加粗、不呼吸**（`chat_step_mark_done`） |
+| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | **按类别取色 + 加粗 + 呼吸**：正文 = 默认前景（`chat_step_mark_running_body`）、思考 = 品红 218（`..._thinking`）、工具 = 翡翠绿 42（`chat_step_mark_running`） |
+| `Completed`、思考完成、已完成正文块 | `■` 静态 | **按类别取色、不加粗、不呼吸**（`chat_step_mark_done_body` / `..._thinking` / `chat_step_mark_done`） |
 | `Failed` | `■` 静态 | 红（`agent_fail`；该行同时整行红） |
 | `Interrupted` | `■` 静态 | 黄（`agent_warn`） |
 | `Cancelled` | `□` 静态 | 次要信息色（`agent_step_detail`；空心表示未产出结果） |
@@ -1092,6 +1111,10 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 （通知只在终态渲染，因此没有呼吸态）。随后的标题文案用同级别的 `agent_fail` / `agent_warn`
 （红/黄 + 粗），因此整行仍是「一个色相 + 粗」的两档语义。`!` 只保留在 `[UI]` 查看器的
 agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何标点类步骤标记。
+
+**类别色 vs 语义状态**：`StepMark::style(kind)` 先判状态——`Failed` 红、`Interrupted` 黄、
+`Cancelled` 次要灰**跨类别覆盖**；只有 `Running` / `Done` 才落到 `StepKind` 的角色色。
+这条覆盖关系让通知（消息级失败/中断）不必关心自己属于哪类，也能拿到红/黄方块。
 
 **工具行的三段**（`ui/style.rs`）：动词翡翠绿 `Indexed 42` **不加粗**（`chat_tool_verb`，
 与紧邻的加粗方块靠字重区分）、可变参数（路径 / 搜索范围）既有**金黄 `Indexed 220`
@@ -1111,7 +1134,7 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 （思考块用自己的 `completed_at_ms`，工具块用自己的 `ToolStatus`，三者互不影响——同一消息里
 可以只有一个方块在呼吸。）
 
-**测试证据**（`cargo test` 全绿，lib 2293 项 + 14 个集成测试二进制；§21 累计新增/改写 20 项）
+**测试证据**（`cargo test` 全绿，lib 2294 项 + 14 个集成测试二进制；§21 累计新增/改写 22 项）
 
 | 测试 | 断言 |
 | --- | --- |
@@ -1128,6 +1151,7 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 | `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | 思考完成后头部静态；同消息里运行中的工具行仍呼吸（相位翻空心帧时只有工具行变） |
 | `notice::tests::notice_marker_is_step_square_in_red_or_yellow` | 两种通知的行首都是实心方块 `■`（不再是 `!`），颜色分别为 `agent_fail` 红 / `agent_warn` 黄，方块后 1 列空格、文案从第 2 列起且同色 |
 | `notice::tests::notice_marker_matches_step_mark_shape` | 通知方块的拼法与 `StepMark::Failed.segment(0)` 逐字一致——历史里所有步骤标记是同一套符号 |
+| `ui::style::tests::step_roles_use_distinct_colors` | 正文方块 `fg == None`（默认字体色）+ 运行态加粗/完成态去粗；思考 = 品红 218；工具 = 翡翠绿 42；三者两两不同色 |
 | `ui::style::tests::chat_step_palette_uses_green_structure_and_gold_params` | 六个 `chat_*` token 只取 `{42, 220}`、结构与参数都不压暗、不与正文默认前景/Cyan 撞色；方块/文案/动词统一翡翠绿 42；运行中加粗、完成不加粗；参数与 `agent_param` 同源、行范围退回 `muted()` |
 | `ui::style::tests::markdown_palette_is_github_dark_truecolor` | 逐个 token 钉死 GitHub Dark 官方 RGB：关键字 `#ff7b72`、字符串 `#a5d6ff`、数字与行内代码 `#79c0ff`、类型名 `#d2a8ff`、注释 `#8b949e`、链接/URL/提及 `#4493f8`、引用与标记 `#7d8590`；标题/粗体/斜体/列表符号必须**不换色**（`fg == None`），h1/h2 用下划线 |
 | `ui::style::tests::markdown_palette_is_disjoint_from_chat_steps` | 步骤结构色必须是 256 色槽位、且与十个 markdown / code 的有色 token **不相交**（「工具与步骤方块要区别于 markdown 高亮」的机器可验形式） |

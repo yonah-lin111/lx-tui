@@ -269,3 +269,63 @@ fn markdown_palette_is_disjoint_from_chat_steps() {
         );
     }
 }
+
+/// 三类步骤（正文 / 思考 / 工具）的配色必须**两两可辨**。
+///
+/// 用户要求：「设置正文内容的小方块为默认字体的颜色即可；thinking 的小方块和思考的
+/// 字体颜色使用其他的颜色」。因此：
+/// - 正文 = 终端默认前景（`fg == None`），方块与正文本就同色；
+/// - 思考 = 品红 218；
+/// - 工具 = 翡翠绿 42。
+#[test]
+fn step_roles_use_distinct_colors() {
+    // 正文：不设前景（= 默认字体颜色），运行/完成只差字重。
+    assert_eq!(
+        chat_step_mark_running_body().fg,
+        None,
+        "正文方块的运行态不设前景（默认字体色）"
+    );
+    assert_eq!(chat_step_mark_done_body().fg, None, "正文方块的完成态同上");
+    assert_eq!(chat_step_label_running_body().fg, None);
+    assert_eq!(chat_step_label_done_body().fg, None);
+    assert!(
+        chat_step_mark_running_body()
+            .add_modifier
+            .contains(Modifier::BOLD),
+        "正文方块运行中加粗"
+    );
+    assert!(
+        !chat_step_mark_done_body()
+            .add_modifier
+            .contains(Modifier::BOLD),
+        "正文方块完成去加粗"
+    );
+
+    // 思考：品红 218；工具：翡翠绿 42。
+    assert_eq!(
+        chat_step_mark_running_thinking().fg,
+        Some(Color::Indexed(218)),
+        "思考方块用品红"
+    );
+    assert_eq!(
+        chat_step_label_running_thinking().fg,
+        Some(Color::Indexed(218))
+    );
+    assert_eq!(
+        chat_step_label_done_thinking().fg,
+        Some(Color::Indexed(218))
+    );
+    assert_eq!(
+        chat_step_mark_running().fg,
+        Some(Color::Indexed(42)),
+        "工具方块用翡翠绿"
+    );
+
+    // 两个有色角色互不同色，且都不与正文的默认前景重合。
+    let thinking = chat_step_mark_done_thinking().fg;
+    let tool = chat_step_mark_done().fg;
+    let body = chat_step_mark_done_body().fg;
+    assert_ne!(thinking, tool, "思考与工具的方块必须不同色");
+    assert_ne!(body, thinking, "正文与思考的方块必须不同色");
+    assert_ne!(body, tool, "正文与工具的方块必须不同色");
+}

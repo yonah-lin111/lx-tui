@@ -17,7 +17,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::ui::{style, text};
 
 use super::Grid;
-use super::history::{StepMark, visible_row, wrap};
+use super::history::{StepKind, StepMark, visible_row, wrap};
 
 /// 原因行的连接符（与 ui 页 agent error 一致）。
 const LEAF: &str = text::agent::MARKER_TREE_LEAF;
@@ -45,12 +45,19 @@ impl NoticeTitle {
     /// 行首方块（与聊天步骤共用同一款标记：失败红实心、中断黄实心）。
     ///
     /// 通知只在**终态**渲染（流中不出通知），因此没有"运行中"的呼吸态，
-    /// 直接取 [`StepMark`] 的两个终态。
+    /// 直接取 [`StepMark`] 的两个终态。这两个状态是**跨角色**的语义覆盖色，
+    /// 与 [`StepKind`] 无关，所以这里传 [`StepKind::Tool`] 只是为了满足签名
+    /// （`Failed` / `Interrupted` 会直接命中红/黄，不会落到角色色上）。
     fn mark(self) -> StepMark {
         match self {
             Self::Failed => StepMark::Failed,
             Self::Interrupted => StepMark::Interrupted,
         }
+    }
+
+    /// 通知方块样式：状态色（红/黄）优先，与角色无关。
+    fn mark_style(self) -> Style {
+        self.mark().style(StepKind::Tool)
     }
 
     /// 标题文案样式（不含行首方块：方块自带状态色）。
@@ -122,7 +129,6 @@ pub(super) fn draw(
     row_index: &mut usize,
 ) {
     let title_style = notice.title.style();
-    let mark = notice.title.mark();
     let marker = notice.title.marker_segment();
     let marker_width = u16::try_from(marker.width()).unwrap_or(u16::MAX);
     let label = notice.title.label();
@@ -137,7 +143,7 @@ pub(super) fn draw(
                     content.x,
                     y,
                     &marker,
-                    mark.style(),
+                    notice.title.mark_style(),
                     content.width.min(marker_width),
                 );
                 let x = content.x.saturating_add(marker_width);

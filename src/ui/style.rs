@@ -546,29 +546,82 @@ pub fn chat_loading_spinner() -> Style {
 // 失败红、中断黄、取消灰沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
 // agent 样例仍用上面的 `agent_*` 系列，不受这里影响。
 
-/// 步骤结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
+/// 工具结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
 const CHAT_STEP_GREEN: u8 = 42;
+/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——与工具绿、参数金、正文默认色的
+/// 色差分别为 68 / 55 / 24（CIEDE2000），一眼可分。
+const CHAT_STEP_MAGENTA: u8 = 218;
 /// 可变参数色：金黄（沿用 `agent_param`，下划线表示“每次调用会变的值”）。
 const CHAT_GOLD: u8 = 220;
 
-/// 步骤方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的信号。
+// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
+//
+// 用户要求：「正文内容的小方块用默认字体的颜色即可；thinking 的小方块和思考的字体
+// 颜色使用其他的颜色」。因此**颜色由步骤类别决定**：
+//   Body     → 终端默认前景（不设 fg）+ 加粗/不加粗区分运行态；
+//   Thinking → 品红 218；
+//   Tool     → 翡翠绿 42（含工具动词）。
+
+/// 正文块的方块：运行中（呼吸）——**终端默认前景 + 加粗**，与正文本就同色。
+pub fn chat_step_mark_running_body() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// 正文块的方块：已完成——终端默认前景、不加粗（与运行中的加粗呼吸方块区分）。
+pub fn chat_step_mark_done_body() -> Style {
+    Style::default()
+}
+
+/// 正文块的头部文案：运行中——默认前景、不加粗。
+pub fn chat_step_label_running_body() -> Style {
+    Style::default()
+}
+
+/// 正文块的头部文案：已完成——默认前景、不加粗。
+pub fn chat_step_label_done_body() -> Style {
+    Style::default()
+}
+
+/// 思考块的方块：运行中（呼吸）——品红加粗。
+pub fn chat_step_mark_running_thinking() -> Style {
+    Style::default()
+        .fg(Color::Indexed(CHAT_STEP_MAGENTA))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 思考块的方块：已完成——同款品红、不加粗（静止 + 细一档）。
+pub fn chat_step_mark_done_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+}
+
+/// 思考块的头部文案：运行中——品红（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+}
+
+/// 思考块的头部文案：已完成——品红（同上，不加粗）。
+pub fn chat_step_label_done_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+}
+
+/// 工具行的方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的动作信号。
 pub fn chat_step_mark_running() -> Style {
     Style::default()
         .fg(Color::Indexed(CHAT_STEP_GREEN))
         .add_modifier(Modifier::BOLD)
 }
 
-/// 步骤方块：已完成——同款翡翠绿、**不加粗**（静止 + 细一档，与运行中的加粗呼吸方块区分）。
+/// 工具行的方块：已完成——同款翡翠绿、**不加粗**（静止 + 细一档，与运行中区分）。
 pub fn chat_step_mark_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 步骤头部文案：运行中——翡翠绿（与方块同色系，不加粗）。
+/// 工具行的头部文案：运行中——翡翠绿（与方块同色系，不加粗）。
 pub fn chat_step_label_running() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 步骤头部文案：已完成——翡翠绿（同上，不加粗）。
+/// 工具行的头部文案：已完成——翡翠绿（同上，不加粗）。
 pub fn chat_step_label_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
