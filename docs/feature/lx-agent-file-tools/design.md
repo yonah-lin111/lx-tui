@@ -1272,3 +1272,99 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 1. `Working...` 去掉方块后仅靠扫描高亮是否还有「在加载」的存在感（这是本轮最大的观感风险）。
 2. 提示的黄/红在你的终端配色下是否够醒目；文案压到短语后是否还够清楚。
 3. 扫描 100ms/字符的流畅度（想更慢可只调扫描步长）。
+
+## 23. 已实施（G13：工具调用改两行式 `■ 动词` + `  └─ 详情`）
+
+用户要求：**不要在工具调用后面显示 `done`**；出错时**左侧方块和工具 title 变红**；
+**用 `└─` 重构布局**，失败时 `└─` 只显示错误内容、不再显示其他参数。参考样例：
+
+```text
+■ Interrupted
+  └─ interrupted before completion
+```
+
+方案经 grill-me 六轮盘问后定稿（每轮均取推荐答案）：
+
+| # | 决策 |
+| --- | --- |
+| 1 | 第 1 行**只有** `■ 动词`，所有参数进第 2 行；行数**恒 2**（宽 0 时 0）。否决「第 1 行留路径」：那会让 `InputStreaming → Pending`（摘要从无到有）时行数跳变、视口抖动，且同一块历史出现两种读法 |
+| 2 | 第 1 行**全删**状态文字（`done`/`pending`/`running`/`receiving input`）；`cancelled` 降到第 2 行（它本就没有原因，正好占位） |
+| 3 | 第 2 行**单行绝不换行**：保住了 `layout`/`render`/置顶行/滚动条依赖的「行数恒定」不变量，改造只在 `tool.rs` 内部 |
+| 4 | 第 2 行为空时用 dim 状态词兜底（`receiving input`/`pending`/`running`/`cancelled`）；**完成态不兜底**（`done` 是明确要删的词，方块静止已表达「做完了」） |
+| 5 | 错误文案用**正常前景色**，红只在第 1 行——与 `notice.rs` 的 `■ 标题` 红 / `└─ 详情` 中性完全对齐 |
+| 6 | **连续工具步骤之间不留空行**，与正文/思考/通知之间仍留；`needs_spacer()` 单点口径 |
+
+最终形态：
+
+```text
+■ Read                         ← 方块 + 动词（翡翠绿 42），无状态文字
+  └─ src/ui/style.rs · 12-40   ← └─ 灰+粗；路径金黄下划线；范围 dim
+
+■ Search
+  └─ src · 3 matches
+
+■ Edit
+  └─ src/app/state.rs · +12 · -4
+
+■ Read                         ← 失败：第 1 行整行红
+  └─ read /etc/shadow failed: permission denied (os error 13)
+                                 ↑ 只有错误，不显示路径参数
+
+■ Read                         ← 中断：第 1 行黄
+  └─ interrupted before completion
+
+■ Read                         ← 进行中（还没收到参数）：状态词兜底
+  └─ running
+
+□ Read                         ← 取消：灰空心方块 + 参数 + 状态词
+  └─ src/ui/style.rs · 12-40 · cancelled
+```
+
+连续工具平铺（无空行）：
+
+```text
+■ Read
+  └─ src/ui/style.rs · 12-40
+■ Search
+  └─ src · 3 matches
+■ Edit
+  └─ src/app/state.rs · +12 · -4
+```
+
+**失败时丢掉参数不丢信息**：`failure_text` 本身已含路径——`map_io_error` 产出
+`read /etc/shadow failed: permission denied (os error 13)`，`context_mismatch` 产出
+`hunk lines do not match the current content of <path>`。这也是「失败只显示错误」能成立的前提。
+
+### 23.1 落地位置
+
+| 文件 | 变更 |
+| --- | --- |
+| `lx/history/tool.rs` | 重写为两行式：`header()`（`■ 动词`，失败/中断整行红/黄）+ `detail()`（`  └─ 详情`，`Detail::{Error, Params}` 两分支）；删 `status_segment` / `tail_style`；新增 `cancelled_tail` / `fallback_label` / `fit_fallback`；`rows()` 恒 2 |
+| `lx/history.rs` | 新增 `enum Block` + `needs_spacer()`，替换 `layout`/`render` 共 8 处 `first_block` 布尔 |
+| `lx/history/tool/tests.rs` | 全量重写（23 项）：两行结构、无状态词、`└─` 前缀、失败只放错误、兜底状态词、行数恒 2、单行截断、`└─` 前缀在任何宽度存活 |
+| `lx/history/tests.rs` | `tool_step_occupies_two_rows_and_renders_summary`（4→5 行）、`tool_only_message_still_occupies_rows`（2→3）、`transcript_lays_out_...` 观感锁定改为两行式 |
+| `lx/history/tests/tool_geometry.rs` | `tool_steps_with_all_statuses_stay_two_rows_each`（2→3）；新增 `consecutive_tool_steps_have_no_blank_line_between_them`、`tool_and_text_still_have_a_blank_line_between_them` |
+
+### 23.2 测试证据（`cargo test` 全绿：lib 2317 + 14 个集成二进制 = 2363）
+
+| 测试 | 断言 |
+| --- | --- |
+| `header_is_only_square_and_verb_without_status_text` | 4 工具 × 7 状态：第 1 行**只有方块 + 动词**，不含任何状态词、不含路径、不含 `·` |
+| `completed_and_failed_never_show_status_words_on_any_line` | 完成态无 `done`；失败态第 1 行严格等于 `■ Read` |
+| `detail_line_starts_with_tree_leaf_prefix` | 第 2 行前缀 `  └─ ` 且用 `chat_notice_connector()` |
+| `detail_line_carries_params_with_their_own_colors` | 路径金黄下划线、范围 dim、`+12` 绿、`-4` 红 |
+| `failed_header_is_red_and_detail_shows_only_the_error` | 4 工具：第 1 行**逐格全红**；第 2 行只有错误（无路径、无计数）；错误文案用正常前景 |
+| `interrupted_header_is_yellow_and_detail_shows_only_the_reason` | 第 1 行黄、第 2 行只有原因；无 error 时第 2 行只剩前缀 |
+| `cancelled_uses_hollow_square_and_puts_the_word_in_the_detail_line` | 空心灰方块 + 第 2 行 `· cancelled` |
+| `open_states_without_params_fall_back_to_a_status_word` | `receiving input`/`pending`/`running` 兜底；**完成态无兜底** |
+| `tool_row_count_is_always_two_for_any_content` | 6 种宽度 × 7 状态**恒 2 行**；宽度 0 时为 0 |
+| `failed_reason_is_truncated_on_one_line` | 长错误单行尾部省略，绝不换行 |
+| `consecutive_tool_steps_have_no_blank_line_between_them` | 3 个连续工具 = 6 行紧挨，中间零空行 |
+| `tool_and_text_still_have_a_blank_line_between_them` | 异构块之间仍空一行（正文 1 + 空 1 + 工具 2 + 呼吸 1 = 5） |
+| `transcript_lays_out_step_square_with_two_column_gutter` | 整块观感锁定：`□ Read` / `  └─ src/a.rs · 3-7` |
+
+**未自动验证项（需 `cargo run` 人工验收）**
+
+1. 两行式在真实历史里是否显得过于松散（每个调用占 2 行）；若偏松，可考虑把详情行改成与标题行同色的更暗一档。
+2. 连续工具「零空行」的紧凑串读起来是否清晰（兄弟节点感是否成立）。
+3. 失败时第 1 行整行红 + 第 2 行正常色错误文案的对比是否够醒目。

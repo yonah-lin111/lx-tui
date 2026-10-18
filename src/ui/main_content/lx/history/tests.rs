@@ -843,21 +843,22 @@ fn tool_step(position: i64) -> AssistantStepView {
     }
 }
 
-/// 工具步骤占一行：布局行数与渲染行数一致，且文本可见（不吞掉、不错位）。
+/// 工具步骤占两行（`■ 动词` + `  └─ 详情`）：布局行数与渲染行数一致，
+/// 且文本可见（不吞掉、不错位）。
 #[test]
-fn tool_step_occupies_one_row_and_renders_summary() {
+fn tool_step_occupies_two_rows_and_renders_summary() {
     let mut message = message("assistant", "complete", vec![text_part("正文")]);
     message.steps.push(tool_step(1));
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 20);
     let computed = layout(area, &lx);
-    // 正文 1 + 块间空行 1 + 工具行 1 + 消息间空行 1 = 4。
-    assert_eq!(computed.total_rows, 4);
+    // 正文 1 + 块间空行 1 + 工具 2 行 + 消息间空行 1 = 5。
+    assert_eq!(computed.total_rows, 5);
 
     let mut grid = Grid::new(area);
     render(&mut grid, area, &lx, 0);
     let mut rows: Vec<String> = Vec::new();
-    for y in 0..6u16 {
+    for y in 0..7u16 {
         let mut row = String::new();
         for x in 0..area.right() {
             row.push(grid.cell(x, y).ch);
@@ -874,12 +875,31 @@ fn tool_step_occupies_one_row_and_renders_summary() {
         squeezed.contains(text::agent::VERB_TOOL_READ),
         "工具行动词可见：{painted}"
     );
-    assert!(squeezed.contains("src/a.rs"), "路径摘要可见：{painted}");
+    // 第 1 行只有方块 + 动词（无状态文字、无路径）。
+    let header_row = rows
+        .iter()
+        .find(|row| row.contains(text::agent::VERB_TOOL_READ))
+        .expect("工具标题行");
+    assert_eq!(
+        header_row.trim_end(),
+        format!(
+            "{} {}",
+            text::agent::STEP_MARK_FILLED,
+            text::agent::VERB_TOOL_READ
+        ),
+        "标题行只有方块 + 动词：{header_row:?}"
+    );
+    // 第 2 行是 `└─` + 参数 + 状态词兜底（pending 没有参数摘要之外的状态字段，
+    // 这里 pending 有摘要 → 只显示参数与范围）。
+    let detail_row = rows
+        .iter()
+        .find(|row| row.contains("src/a.rs"))
+        .expect("详情行");
     assert!(
-        squeezed.contains(text::tool_status_label(
-            crate::app::state::ToolStatus::Pending
-        )),
-        "状态文字可见：{painted}"
+        detail_row
+            .trim_start()
+            .starts_with(text::agent::MARKER_TREE_LEAF),
+        "详情行以 └─ 起头：{detail_row:?}"
     );
     assert!(squeezed.contains("3-7"), "行范围可见：{painted}");
 }
@@ -891,8 +911,8 @@ fn tool_only_message_still_occupies_rows() {
     message.steps.push(tool_step(0));
     let lx = lx_with(vec![message]);
     let computed = layout(Rect::new(0, 0, 40, 10), &lx);
-    // 工具行 1 + 消息间空行/呼吸行 1 = 2。
-    assert_eq!(computed.total_rows, 2);
+    // 工具 2 行 + 消息间空行/呼吸行 1 = 3。
+    assert_eq!(computed.total_rows, 3);
 }
 
 #[test]
@@ -917,7 +937,8 @@ fn transcript_lays_out_step_square_with_two_column_gutter() {
     let area = Rect::new(0, 0, 56, 12);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let rows: Vec<String> = (0..10).map(|row| row_text(&buf, area, row)).collect();
+    // 10 行内容 + 1 行呼吸位：工具行改成两行后多出 1 行。
+    let rows: Vec<String> = (0..11).map(|row| row_text(&buf, area, row)).collect();
     assert_eq!(
         rows,
         vec![
@@ -930,8 +951,9 @@ fn transcript_lays_out_step_square_with_two_column_gutter() {
             "■ 正文第一行",
             "  正文第二行",
             "",
-            "□ Read src/a.rs · 3-7 · pending",
+            "□ Read",
+            "  └─ src/a.rs · 3-7",
         ],
-        "步骤方块与 2 列缩进的整块观感"
+        "步骤方块、2 列缩进与两行式工具行的整块观感"
     );
 }

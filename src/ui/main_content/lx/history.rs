@@ -153,6 +153,33 @@ impl StepKind {
     }
 }
 
+/// 消息内的块类别（仅用于判定「两块之间要不要空一行」）。
+///
+/// `layout` 与 `render` 必须共用 [`needs_spacer`]，否则滚动条/置顶行/命中矩形
+/// 会与实际绘制错位一行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Block {
+    /// 正文 markdown 块。
+    Text,
+    /// 思考块（可折叠）。
+    Reasoning,
+    /// 工具调用步骤（两行：`■ 动词` + `  └─ 详情`）。
+    Tool,
+    /// 消息底部失败/中断通知。
+    Notice,
+    /// 本轮统计行。
+    Stats,
+}
+
+/// 两块之间是否插入一行空行。
+///
+/// **连续工具步骤之间不留空行**：两行式的 `■ 动词` / `  └─ 详情` 平铺成一串
+/// 同级兄弟节点，比每块之间插空行好读；工具行高度从 1 行变 2 行后，空行成本
+/// 也翻倍，紧凑排布能抵消一半。其余组合（异构块之间、通知、统计行）一律留空行。
+fn needs_spacer(previous: Block, next: Block) -> bool {
+    !(previous == Block::Tool && next == Block::Tool)
+}
+
 /// 一条消息在渲染行空间中的区间（`end` 不含；含它**前面**的空行，
 /// 末尾那条含收尾呼吸行）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,15 +261,16 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             rows += 1;
         }
         let start = rows;
-        // 消息内块（各内容块 / 工具行 / 通知 / 统计行）之间空一行。
-        let mut first_block = true;
+        // 消息内块之间按 [`needs_spacer`] 决定是否空一行。
+        let mut previous: Option<Block> = None;
         for (step_index, step) in message.steps.iter().enumerate() {
-            let (is_reasoning, step_rows) = match step {
+            let (block, is_reasoning, step_rows) = match step {
                 AssistantStepView::Part { part, .. } => match part.kind {
                     crate::chat::events::PartKind::Text => {
-                        (false, text_rows(message, &part.content, width))
+                        (Block::Text, false, text_rows(message, &part.content, width))
                     }
                     crate::chat::events::PartKind::Reasoning => (
+                        Block::Reasoning,
                         true,
                         1 + if lx.chat.reasoning_expanded(message_index, step_index) {
                             thinking_rows(&part.content, width)
@@ -251,15 +279,17 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         },
                     ),
                 },
-                AssistantStepView::Tool { call, .. } => (false, tool_rows(call, width)),
+                AssistantStepView::Tool { call, .. } => {
+                    (Block::Tool, false, tool_rows(call, width))
+                }
             };
             if step_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行。
             }
-            if !first_block {
+            if previous.is_some_and(|prev| needs_spacer(prev, block)) {
                 rows += 1;
             }
-            first_block = false;
+            previous = Some(block);
             if is_reasoning {
                 let header_y = area
                     .y
@@ -274,14 +304,14 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
-            if !first_block {
+            if previous.is_some_and(|prev| needs_spacer(prev, Block::Notice)) {
                 rows += 1;
             }
-            first_block = false;
+            previous = Some(Block::Notice);
             rows += notice::rows(&notice, width);
         }
         if let Some(line) = stats_line(message) {
-            if !first_block {
+            if previous.is_some_and(|prev| needs_spacer(prev, Block::Stats)) {
                 rows += 1;
             }
             rows += wrap(&line, width).len();
@@ -528,36 +558,40 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
     let mut row_index = 0usize;
     for (message_index, message) in lx.chat.messages.iter().enumerate() {
         let is_user = message.role == "user";
-        // 消息内块（各内容块 / 通知 / 统计行）之间空一行（与 `layout` 同口径）。
-        let mut first_block = true;
+        // 消息内块之间按 [`needs_spacer`] 决定是否空一行（与 `layout` 同口径）。
+        let mut previous: Option<Block> = None;
         let mut first_user_line = true;
         for (step_index, step) in message.steps.iter().enumerate() {
-            let (block_rows, part_kind) = match step {
+            let (block, block_rows, part_kind) = match step {
                 AssistantStepView::Part { part, .. } => {
                     let expanded = lx.chat.reasoning_expanded(message_index, step_index);
-                    let rows = match part.kind {
-                        crate::chat::events::PartKind::Text => {
-                            text_rows(message, &part.content, content.width)
-                        }
-                        crate::chat::events::PartKind::Reasoning => {
+                    let (block, rows) = match part.kind {
+                        crate::chat::events::PartKind::Text => (
+                            Block::Text,
+                            text_rows(message, &part.content, content.width),
+                        ),
+                        crate::chat::events::PartKind::Reasoning => (
+                            Block::Reasoning,
                             1 + if expanded {
                                 thinking_rows(&part.content, content.width)
                             } else {
                                 0
-                            }
-                        }
+                            },
+                        ),
                     };
-                    (rows, Some((part, expanded)))
+                    (block, rows, Some((part, expanded)))
                 }
-                AssistantStepView::Tool { call, .. } => (tool_rows(call, content.width), None),
+                AssistantStepView::Tool { call, .. } => {
+                    (Block::Tool, tool_rows(call, content.width), None)
+                }
             };
             if block_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行（与 `layout` 同口径）。
             }
-            if !first_block {
+            if previous.is_some_and(|prev| needs_spacer(prev, block)) {
                 row_index += 1;
             }
-            first_block = false;
+            previous = Some(block);
             let Some((part, expanded)) = part_kind else {
                 if let AssistantStepView::Tool { call, .. } = step {
                     tool::draw(
@@ -663,14 +697,14 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
-            if !first_block {
+            if previous.is_some_and(|prev| needs_spacer(prev, Block::Notice)) {
                 row_index += 1;
             }
-            first_block = false;
+            previous = Some(Block::Notice);
             notice::draw(grid, &notice, content, scroll, &mut row_index);
         }
         if let Some(line) = stats_line(message) {
-            if !first_block {
+            if previous.is_some_and(|prev| needs_spacer(prev, Block::Stats)) {
                 row_index += 1;
             }
             for row in wrap(&line, content.width) {

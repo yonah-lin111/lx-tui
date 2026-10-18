@@ -184,8 +184,9 @@ fn narrow_and_short_viewports_never_panic_with_tools() {
 }
 
 #[test]
-fn tool_steps_with_all_statuses_stay_one_row_each() {
-    // 每个状态都必须只占 1 行：布局行数 = 工具数 × 1（其余块固定）。
+fn tool_steps_with_all_statuses_stay_two_rows_each() {
+    // 每个状态都必须恰好占 2 行（`■ 动词` + `  └─ 详情`）：布局行数 = 工具数 × 2
+    // （其余块固定），与状态无关——第 2 行永远有内容（参数或兜底状态词）。
     for status in [
         ToolStatus::InputStreaming,
         ToolStatus::Pending,
@@ -200,10 +201,77 @@ fn tool_steps_with_all_statuses_stay_one_row_each() {
         let lx = lx_with(vec![message]);
         let area = Rect::new(0, 0, 40, 10);
         let computed = layout(area, &lx);
-        // 工具行 1 + 消息间空行（呼吸行）1 = 2。
-        assert_eq!(computed.total_rows, 2, "{status:?} 仍只占 1 行");
-        assert_eq!(render_rows(area, &lx, 0), 2, "{status:?} 渲染行数一致");
+        // 工具 2 行 + 消息间空行（呼吸行）1 = 3。
+        assert_eq!(computed.total_rows, 3, "{status:?} 应占 2 行");
+        assert_eq!(render_rows(area, &lx, 0), 3, "{status:?} 渲染行数一致");
     }
+}
+
+/// 连续的工具步骤之间**不留空行**（紧凑成同级兄弟节点），
+/// 与正文 / 思考 / 通知之间仍留空行。
+#[test]
+fn consecutive_tool_steps_have_no_blank_line_between_them() {
+    let mut message = message("assistant", "complete", Vec::new());
+    for (index, status) in [
+        ToolStatus::Completed,
+        ToolStatus::Failed,
+        ToolStatus::Running,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut step = read_step(index as i64 + 1, status);
+        if let AssistantStepView::Tool { call, .. } = &mut step
+            && status == ToolStatus::Failed
+        {
+            call.error = Some("boom".into());
+        }
+        message.steps.push(step);
+    }
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 12);
+    let computed = layout(area, &lx);
+    // 3 个工具 × 2 行 = 6，中间无空行；加消息间呼吸行 1 = 7。
+    assert_eq!(computed.total_rows, 7, "连续工具之间不留空行");
+    assert_eq!(render_rows(area, &lx, 0), 7);
+
+    // 渲染出来应当是紧挨着的 `■` / `└─` 交替，中间没有空行。
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rows: Vec<String> = (0..7).map(|row| row_text(&buf, area, row)).collect();
+    assert!(
+        rows[0].starts_with(text::agent::STEP_MARK_FILLED),
+        "第 1 行是标题：{rows:?}"
+    );
+    assert!(
+        rows[1]
+            .trim_start()
+            .starts_with(text::agent::MARKER_TREE_LEAF),
+        "第 2 行是详情：{rows:?}"
+    );
+    assert!(
+        rows[2].starts_with(text::agent::STEP_MARK_FILLED),
+        "第 3 行直接是下一个标题（无空行）：{rows:?}"
+    );
+    for (index, row) in rows.iter().enumerate().take(6) {
+        assert!(
+            !row.trim().is_empty(),
+            "连续工具之间不该有空行，第 {index} 行却是空：{rows:?}"
+        );
+    }
+}
+
+/// 工具与正文之间的空行仍在（异构块保留空行）。
+#[test]
+fn tool_and_text_still_have_a_blank_line_between_them() {
+    let mut message = message("assistant", "complete", vec![text_part("正文")]);
+    message.steps.push(read_step(1, ToolStatus::Completed));
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 12);
+    let computed = layout(area, &lx);
+    // 正文 1 + 空行 1 + 工具 2 + 呼吸行 1 = 5。
+    assert_eq!(computed.total_rows, 5, "异构块之间保留空行");
+    assert_eq!(render_rows(area, &lx, 0), 5);
 }
 
 #[test]
@@ -235,12 +303,13 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
             .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
         "思考完成态不得出现 braille 转轮：{header}"
     );
-    let running_label = text::tool_status_label(ToolStatus::Running);
+    // 工具标题行按**动词**定位：状态词已搬到第 2 行（`  └─ running`），
+    // 标题行只剩 `■ Read`，方块呼吸只发生在这里。
     let tool_line = |buf: &Buffer| -> String {
-        (0..6)
+        (0..8)
             .map(|row| row_text(buf, area, row))
-            .find(|line| line.contains(running_label))
-            .expect("工具行")
+            .find(|line| line.contains(text::agent::VERB_TOOL_READ))
+            .expect("工具标题行")
     };
     // 工具行自身仍在进行中 → 它自己的方块呼吸（帧 0 实心）。
     assert!(

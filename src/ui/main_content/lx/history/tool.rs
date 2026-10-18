@@ -1,21 +1,26 @@
-//! 工具步骤渲染：单行 `<方块> 动词 参数 · 次要计数 · 状态 · 原因`。行首方块与思考、
-//! 正文块共用同一款步骤标记（见 [`super::StepMark`]：运行中 `■`/`□` 两帧呼吸、
-//! 终态静态并按语义着色），不再使用工具类型图标。
+//! 工具步骤渲染：**两行**「`■ 动词` + `  └─ 详情`」（对齐消息底部通知的语法）。
+//!
+//! 语法与 [`super::super::notice`] 完全一致，同一块历史里只有一套步骤读法：
+//!
+//! ```text
+//! ■ Read                        ← 第 1 行：方块 + 动词（翡翠绿），**不显示任何状态文字**
+//!   └─ src/ui/style.rs · 12-40  ← 第 2 行：`└─` 连接符 + 参数/计数/兜底状态词
+//! ```
+//!
+//! - **第 1 行只回答「哪个工具」**：方块（运行中 `■`/`□` 两帧呼吸、终态静态）+
+//!   固定动词。完成态没有 `done` 之类尾巴——方块静止本身就是「做完了」。
+//! - **第 2 行回答「对什么做了什么 / 出了什么事」**：参数（路径金黄下划线）、
+//!   次要计数（行范围 dim、命中数 dim、增删绿红、截断提示黄）。失败时**只放错误
+//!   文案**（路径等信息 `failure_text` 已带），不再铺任何参数；中断同理；
+//!   没有参数可展示的瞬间（`receiving input` / `pending` / `running` / `cancelled`）
+//!   用 dim 的状态词兜底，第 2 行**永不为空**。
+//!
+//! **行数口径 [`rows`] 恒为 2**（宽度 0 时为 0），第二行**单行绝不换行**——
+//! `history::layout`、`history::render`、置顶用户行与滚动条全靠这条不变量对齐。
+//! 超宽时按「路径中间省略 → 次要计数按优先级丢弃 → 错误尾部省略 → 丢参数」
+//! 依次让位，`└─` 前缀始终可辨。
 //!
 //! 纯渲染：只读 [`ToolCallView`]，只写 lx 页网格；不执行 IO、不改状态、不 `unwrap`。
-//! 行数口径 [`rows`] **恒为 1 行**（`history::layout` 与 `history::render` 共用），
-//! 保证滚动条、置顶用户行与 thinking 命中几何不因工具步骤漂移。
-//!
-//! 宽度自适应（对齐设计 §10：**先截断路径，再隐藏次要计数，方块与状态始终可辨**）：
-//! 1. 参数（路径 / 搜索范围）先按显示列中间省略（宽字符不半写）；
-//! 2. 再按优先级隐藏次要字段：命中数 → 行范围 → 截断提示；
-//! 3. 仍不够时先丢失败/中断原因（尾部省略，仍有最小保留宽度），
-//!    再整段省略参数（路径让位给状态），最后才丢状态文字；
-//! 4. 任何宽度下行首方块都在：运行中呼吸、完成 / 失败 / 中断 / 取消用颜色区分
-//!    （取消另用空心方块），因此状态始终可辨。
-//!
-//! 失败步骤（`Failed`）整行走 [`style::agent_fail`] 并附精简原因；`Interrupted` 用警告黄、
-//! `Cancelled` 只给状态文字，与失败红可区分。
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -27,20 +32,29 @@ use crate::ui::{style, text};
 use super::super::Grid;
 use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
-/// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
-const MIN_PARAM_COLS: usize = 6;
-/// 失败/中断原因的最小显示列数；低于它整段省略（同理不放半个省略号）。
-const MIN_REASON_COLS: usize = 8;
-/// 参数 / 工具名 / 错误原因的字符取样上限（限住超长串的每帧成本）。
-const TEXT_SAMPLE_CHARS: usize = 512;
-
-/// 工具步骤占用的渲染行数：**恒为 1 行**（宽度 0 时不占行，与空正文块同口径）。
+/// 工具步骤占用的渲染行数：**恒为 2 行**（标题行 + 详情行）；宽度 0 时不占行。
 ///
 /// `history::layout` 与 `history::render` 必须共用本函数：工具行一旦换行，滚动条、
 /// 置顶行与 thinking 命中矩形都会漂移。
 pub(super) fn rows(_call: &ToolCallView, width: u16) -> usize {
-    usize::from(width > 0)
+    if width == 0 {
+        0
+    } else {
+        HEADER_ROWS + DETAIL_ROWS
+    }
 }
+
+/// 标题行行数。
+const HEADER_ROWS: usize = 1;
+/// 详情行行数（**单行，绝不换行**；见模块文档的让位顺序）。
+const DETAIL_ROWS: usize = 1;
+
+/// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
+const MIN_PARAM_COLS: usize = 6;
+/// 错误原因的最小显示列数；低于它整段省略（同理不放半个省略号）。
+const MIN_REASON_COLS: usize = 8;
+/// 参数 / 工具名 / 错误原因的字符取样上限（限住超长串的每帧成本）。
+const TEXT_SAMPLE_CHARS: usize = 512;
 
 /// 绘制工具步骤并推进内容行号；推进的行数与 [`rows`] 严格相等。
 pub(super) fn draw(
@@ -51,8 +65,15 @@ pub(super) fn draw(
     call: &ToolCallView,
     loading_frame: usize,
 ) {
+    // 第 1 行：方块 + 动词。
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let segments = line(call, rect.width, loading_frame);
+        let segments = header(call, rect.width, loading_frame);
+        put_segments(grid, rect.x, y, rect.width, &segments);
+    }
+    *row_index += 1;
+    // 第 2 行：`  └─ 详情`。
+    if let Some(y) = visible_row(rect, scroll, *row_index) {
+        let segments = detail(call, rect.width);
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
@@ -84,7 +105,7 @@ fn segments_cols(segments: &[Segment]) -> usize {
     segments.iter().map(Segment::cols).sum()
 }
 
-/// 四文件工具的展示种类；未知工具名走 [`Kind::Other`]（动词 + 参数摘要）。
+/// 四文件工具的展示种类；未知工具名走 [`Kind::Other`]（动词位置显示工具名）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Read,
@@ -106,6 +127,8 @@ impl Kind {
         }
     }
 }
+
+// ===== 第 1 行：`■ 动词` =====
 
 /// 行首方块标记：与思考 / 正文块共用同款步骤标记（运行中两帧呼吸、终态静态；
 /// 颜色区分完成 / 失败 / 中断 / 取消）。
@@ -133,6 +156,71 @@ fn verb(call: &ToolCallView) -> Segment {
         Kind::Other => single_line(&call.name, TEXT_SAMPLE_CHARS),
     };
     Segment::new(format!("{label} "), style::chat_tool_verb())
+}
+
+/// 组装第 1 行（`■ 动词`）：无状态文字、无参数、无计数。
+///
+/// 失败时整行红（方块 + 动词），中断整行黄——对应「左侧卡片和工具 title 变红」。
+fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment> {
+    let limit = usize::from(width);
+    let tint = match call.status {
+        ToolStatus::Failed => Some(style::agent_fail()),
+        ToolStatus::Interrupted => Some(style::agent_warn()),
+        _ => None,
+    };
+    let paint = |segment: Segment| match tint {
+        Some(tint) => Segment::new(segment.text, tint),
+        None => segment,
+    };
+    let lead = paint(lead(call, loading_frame));
+    let verb = paint(verb(call));
+    // 极窄时只留方块（写 buffer 时仍按列裁剪，绝不越界）。
+    if segments_cols(std::slice::from_ref(&lead)) > limit {
+        return vec![lead];
+    }
+    let mut segments = vec![lead, verb];
+    while segments_cols(&segments) > limit {
+        if segments.len() == 1 {
+            break;
+        }
+        // 动词整段放不下：尾部省略到剩余列数。
+        let remaining = limit.saturating_sub(segments[0].cols());
+        let text = truncate_with_ellipsis(&segments[1].text, remaining);
+        if text.is_empty() {
+            segments.truncate(1);
+        } else {
+            segments[1] = Segment::new(text, segments[1].style);
+        }
+    }
+    segments
+}
+
+// ===== 第 2 行：`  └─ 详情` =====
+
+/// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
+/// 列宽固定，续行对齐口径一致。
+fn detail_prefix() -> String {
+    format!("  {} ", text::agent::MARKER_TREE_LEAF)
+}
+
+/// 第二行的内容类型：决定是否有参数可展示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Detail {
+    /// 失败 / 中断：**只放错误文案**，不显示任何参数。
+    Error,
+    /// 正常：参数 + 次要计数（可能为空 → 状态词兜底）。
+    Params,
+}
+
+impl Detail {
+    /// 按状态选择第二行的语义。
+    fn of(call: &ToolCallView) -> Self {
+        if matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+            Self::Error
+        } else {
+            Self::Params
+        }
+    }
 }
 
 /// 主参数：摘要里的路径（或 `search` 的搜索范围）；只显示摘要，
@@ -237,110 +325,182 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
     out
 }
 
-/// 状态段：`· <状态文字>`（最晚让位的一段）。
-fn status_segment(call: &ToolCallView) -> Segment {
-    Segment::new(
-        format!(
-            "{}{}",
-            text::LX_CHAT_TOOL_STATUS_SEP,
-            text::tool_status_label(call.status)
-        ),
-        tail_style(call.status),
-    )
-}
-
-/// 精简原因段：`· <error 单行>`；仅失败/中断且 `error` 非空时存在。
-fn reason_segment(call: &ToolCallView) -> Option<Segment> {
-    if !matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
-        return None;
-    }
-    let reason = single_line(call.error.as_deref()?, TEXT_SAMPLE_CHARS);
-    (!reason.is_empty()).then(|| {
+/// 取消态尾巴：`· cancelled`（dim）。
+///
+/// 取消与失败/中断不同——它**有**参数可展示（模型已给出目标路径），但结果是
+/// 「没跑」。因此第二行 = 参数 + `· cancelled`，既不丢目标信息，也把"没跑成"
+/// 说清楚（状态词统一留在第 2 行，第 1 行永远只有 `■ 动词`）。
+fn cancelled_tail(call: &ToolCallView) -> Option<Segment> {
+    (call.status == ToolStatus::Cancelled).then(|| {
         Segment::new(
-            format!("{}{reason}", text::LX_CHAT_TOOL_STATUS_SEP),
-            tail_style(call.status),
+            format!(
+                "{}{}",
+                text::LX_CHAT_TOOL_STATUS_SEP,
+                text::tool_status_label(ToolStatus::Cancelled)
+            ),
+            style::agent_step_detail(),
         )
     })
 }
 
-/// 状态/原因样式：失败红、中断黄、其余次要信息（完成态不抢注意力）。
-fn tail_style(status: ToolStatus) -> Style {
-    match status {
-        ToolStatus::Failed => style::agent_fail(),
-        ToolStatus::Interrupted => style::agent_warn(),
-        _ => style::agent_step_detail(),
+/// 兜底状态词（`receiving input` / `pending` / `running` / `cancelled`）：
+/// 第二行没有参数也没有错误时的占位，保证「这个调用在动/已停」始终可见。
+///
+/// **完成态没有兜底**：`done` 是本轮明确删除的文案，方块静止已经表达了"做完了"；
+/// 完成态没有摘要时第二行留空（行数仍算 2）。
+fn fallback_label(call: &ToolCallView) -> Option<Segment> {
+    match call.status {
+        ToolStatus::InputStreaming
+        | ToolStatus::Pending
+        | ToolStatus::Running
+        | ToolStatus::Cancelled => Some(Segment::new(
+            text::tool_status_label(call.status).to_string(),
+            style::agent_step_detail(),
+        )),
+        ToolStatus::Completed | ToolStatus::Failed | ToolStatus::Interrupted => None,
     }
 }
 
-/// 组装一行的全部段（含宽度自适应收敛）；`width` 为内容列数。
-fn line(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment> {
+/// 错误文案段：`error` 单行化；仅失败/中断使用。
+///
+/// 失败时第二行**只放它**——路径等信息 `failure_text` 已经写在里面，不再重复参数。
+/// 中断时 `error` 是稳定错误码（`interrupted`），同样单行展示。
+fn error_segment(call: &ToolCallView) -> Option<Segment> {
+    if !matches!(call.status, ToolStatus::Failed | ToolStatus::Interrupted) {
+        return None;
+    }
+    let reason = single_line(call.error.as_deref()?, TEXT_SAMPLE_CHARS);
+    (!reason.is_empty()).then(|| Segment::new(reason, style::text()))
+}
+
+/// 组装第 2 行（`  └─ 详情`）；`width` 为内容列数。
+///
+/// 让位顺序（与设计文档一致）：路径中间省略 → 次要计数按优先级丢弃 →
+/// 错误尾部省略 → 参数让位给错误。前缀永远保留（除非窄到放不下前缀）。
+fn detail(call: &ToolCallView, width: u16) -> Vec<Segment> {
     let limit = usize::from(width);
-    // 失败步骤整行红 + 粗（对齐 gallery 的 error 步骤）；其余保留各自配色。
-    let failed = call.status == ToolStatus::Failed;
-    let tint = |value: Style| if failed { style::agent_fail() } else { value };
-    let paint = |segment: Segment| Segment::new(segment.text, tint(segment.style));
+    let prefix = detail_prefix();
+    let prefix_cols = prefix.width();
+    let prefix_segment = Segment::new(prefix, style::chat_notice_connector());
+    if prefix_cols > limit {
+        // 极窄：连接符都放不下，退回整宽画内容（与通知的原因行同口径）。
+        return detail_body(call, limit);
+    }
+    let mut segments = vec![prefix_segment];
+    segments.extend(detail_body(call, limit.saturating_sub(prefix_cols)));
+    segments
+}
 
-    let lead = paint(lead(call, loading_frame));
-    let verb = paint(verb(call));
-    let param = param(call).map(paint);
-    let extras: Vec<Extra> = extras(call)
-        .into_iter()
-        .map(|extra| Extra {
-            segment: paint(extra.segment),
-            priority: extra.priority,
-        })
-        .collect();
-    let status = paint(status_segment(call));
-    let reason = reason_segment(call).map(paint);
+/// 第二行正文（不含 `└─ ` 前缀）：按 [`Detail`] 分支，并在 `limit` 列内收敛。
+fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
+    match Detail::of(call) {
+        Detail::Error => {
+            let Some(error) = error_segment(call) else {
+                // 失败/中断但没有 error 文案：第 2 行留空（行数仍算 2）。
+                return Vec::new();
+            };
+            if error.cols() <= limit {
+                return vec![error];
+            }
+            if limit < MIN_REASON_COLS {
+                return Vec::new();
+            }
+            vec![Segment::new(
+                truncate_with_ellipsis(&error.text, limit),
+                error.style,
+            )]
+        }
+        Detail::Params => detail_params(call, limit),
+    }
+}
 
-    let head_cols = lead.cols() + verb.cols();
+/// 正常态第二行：参数 + 次要计数，按优先级让位；没有可展示内容时用状态词兜底。
+fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
+    let param = param(call);
+    let extras = extras(call);
+    if param.is_none() && extras.is_empty() {
+        return fit_fallback(call, limit);
+    }
+
     let mut kept = vec![true; extras.len()];
     let mut keep_param = param.is_some();
-    let mut keep_reason = reason.is_some();
-    let mut keep_status = true;
     loop {
-        let fit = assemble(
-            &lead,
-            &verb,
-            param.as_ref().filter(|_| keep_param),
-            &extras,
-            &kept,
-            keep_status.then_some(&status),
-            reason.as_ref().filter(|_| keep_reason),
-            limit,
-            head_cols,
-        );
-        if fit.settled {
-            return tidy(fit.segments);
+        let kept_cols: usize = extras
+            .iter()
+            .zip(&kept)
+            .filter(|(_, keep)| **keep)
+            .map(|(extra, _)| extra.segment.cols())
+            .sum();
+        let param_cols = param
+            .as_ref()
+            .filter(|_| keep_param)
+            .map_or(0, Segment::cols);
+        let reserved = param_cols.min(limit.saturating_sub(kept_cols));
+        let fits_param = !keep_param || {
+            let available = limit.saturating_sub(kept_cols);
+            available >= MIN_PARAM_COLS
+        };
+        let fits = kept_cols.saturating_add(reserved) <= limit && fits_param;
+        if fits {
+            let mut segments = Vec::new();
+            let used_by_extras = kept_cols.min(limit);
+            if let Some(param) = param.as_ref().filter(|_| keep_param) {
+                let available = limit.saturating_sub(used_by_extras);
+                if param.cols() <= available {
+                    segments.push(param.clone());
+                } else {
+                    let text = text::ellipsize_middle(&param.text, available);
+                    if !text.is_empty() {
+                        segments.push(Segment::new(text, param.style));
+                    }
+                }
+            }
+            segments.extend(
+                extras
+                    .iter()
+                    .zip(&kept)
+                    .filter(|(_, keep)| **keep)
+                    .map(|(extra, _)| extra.segment.clone()),
+            );
+            if segments.is_empty() {
+                segments = fit_fallback(call, limit);
+            } else if let Some(tail) = cancelled_tail(call) {
+                // 取消态：参数之后补 `· cancelled`（放不下就丢尾巴，参数优先）。
+                if segments_cols(&segments) + tail.cols() <= limit {
+                    segments.push(tail);
+                }
+            }
+            return segments;
         }
-        // 让位顺序：次要字段（按优先级）→ 原因 → 参数（路径）→ 状态文字。
+        // 让位顺序：次要字段（按优先级）→ 参数。
         if let Some(index) = drop_index(&extras, &kept) {
             kept[index] = false;
-            continue;
-        }
-        if keep_reason {
-            keep_reason = false;
             continue;
         }
         if keep_param {
             keep_param = false;
             continue;
         }
-        if keep_status {
-            keep_status = false;
-            continue;
-        }
         break;
     }
-    // 极窄：只剩行首符号与动词（写 buffer 时按列裁剪，绝不越界）。
-    tidy(vec![lead, verb])
+    Vec::new()
 }
 
-/// 一档候选行的组装结果。
-struct Fit {
-    segments: Vec<Segment>,
-    /// 该档拿到的东西是否都真的画出了（参数/原因各需满足最小列宽）。
-    settled: bool,
+/// 兜底状态词按列宽收敛（放不下且够最小宽度时尾部省略，否则整段不画）。
+fn fit_fallback(call: &ToolCallView, limit: usize) -> Vec<Segment> {
+    let Some(fallback) = fallback_label(call) else {
+        return Vec::new();
+    };
+    if fallback.cols() <= limit {
+        return vec![fallback];
+    }
+    if limit < MIN_REASON_COLS {
+        return Vec::new();
+    }
+    vec![Segment::new(
+        truncate_with_ellipsis(&fallback.text, limit),
+        fallback.style,
+    )]
 }
 
 /// 下一个要丢弃的次要字段：**优先级最低**者；同级取显示顺序靠后的（先丢后出现的
@@ -352,102 +512,6 @@ fn drop_index(extras: &[Extra], kept: &[bool]) -> Option<usize> {
         .filter(|(index, _)| kept[*index])
         .min_by_key(|(index, extra)| (extra.priority, std::cmp::Reverse(*index)))
         .map(|(index, _)| index)
-}
-
-/// 组装一档候选行：定长段先占位，两个**可伸缩**段（参数、原因）按剩余列分账。
-///
-/// 分账规则：参数优先拿满，但为原因预留 [`MIN_REASON_COLS`] 列；参数不足
-/// [`MIN_PARAM_COLS`] 视为放不下（由调用方让位）；原因拿剩余列并尾部省略。
-/// 任何一段拿不到最小列宽时 `settled = false`，调用方据此继续让位。
-#[allow(clippy::too_many_arguments)]
-fn assemble(
-    lead: &Segment,
-    verb: &Segment,
-    param: Option<&Segment>,
-    extras: &[Extra],
-    kept: &[bool],
-    status: Option<&Segment>,
-    reason: Option<&Segment>,
-    limit: usize,
-    head_cols: usize,
-) -> Fit {
-    let kept_cols: usize = extras
-        .iter()
-        .zip(kept)
-        .filter(|(_, keep)| **keep)
-        .map(|(extra, _)| extra.segment.cols())
-        .sum();
-    let fixed = head_cols
-        .saturating_add(kept_cols)
-        .saturating_add(status.map_or(0, Segment::cols));
-    let budget = limit.saturating_sub(fixed);
-
-    let mut settled = true;
-    let param_text = param.and_then(|param| {
-        let reserve = reason.map_or(0, |reason| reason.cols().min(MIN_REASON_COLS));
-        let available = budget.saturating_sub(reserve);
-        if available < MIN_PARAM_COLS {
-            settled = false;
-            return None;
-        }
-        let text = if param.cols() <= available {
-            param.text.clone()
-        } else {
-            text::ellipsize_middle(&param.text, available)
-        };
-        settled &= !text.is_empty();
-        Some(text)
-    });
-    let used = param_text.as_ref().map_or(0, |text| text.width());
-    let reason_text = reason.and_then(|reason| {
-        let available = budget.saturating_sub(used);
-        if reason.cols() <= available {
-            return Some(reason.text.clone());
-        }
-        if available < MIN_REASON_COLS {
-            settled = false;
-            return None;
-        }
-        Some(truncate_with_ellipsis(&reason.text, available))
-    });
-    settled &= param.is_none_or(|_| param_text.is_some());
-    settled &= reason.is_none_or(|_| reason_text.is_some());
-
-    let mut segments = vec![lead.clone(), verb.clone()];
-    if let (Some(param), Some(text)) = (param, param_text) {
-        segments.push(Segment::new(text, param.style));
-    }
-    segments.extend(
-        extras
-            .iter()
-            .zip(kept)
-            .filter(|(_, keep)| **keep)
-            .map(|(extra, _)| extra.segment.clone()),
-    );
-    if let Some(status) = status {
-        segments.push(status.clone());
-    }
-    if let (Some(reason), Some(text)) = (reason, reason_text) {
-        segments.push(Segment::new(text, reason.style));
-    }
-    settled &= segments_cols(&segments) <= limit;
-    Fit { segments, settled }
-}
-
-/// 收敛段间空白：前一段以空格收尾、后一段以空格（分隔符）起头时，
-/// 去掉前一段的收尾空格，避免出现 `Read  · done` 这类双空格。
-fn tidy(mut segments: Vec<Segment>) -> Vec<Segment> {
-    for index in 1..segments.len() {
-        if !segments[index].text.starts_with(' ') {
-            continue;
-        }
-        let previous = &mut segments[index - 1];
-        let trimmed = previous.text.trim_end();
-        if trimmed.len() != previous.text.len() {
-            previous.text = trimmed.to_string();
-        }
-    }
-    segments
 }
 
 /// 逐段写入网格，整体不越过 `width` 列（宽字符不半写）。
