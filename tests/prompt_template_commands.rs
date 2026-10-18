@@ -275,7 +275,7 @@ fn template_buttons_drive_clean_status_delete_with_single_undo() {
 }
 
 #[test]
-fn file_mention_renders_yellow_underline() {
+fn file_mention_renders_as_underlined_accent() {
     let (mut state, config, view) = ready_state();
     update::focus_prompt(&mut state);
     update::apply_editor(&mut state, EditorCommand::InsertText("@src/app.rs".into()));
@@ -284,7 +284,13 @@ fn file_mention_renders_yellow_underline() {
     let area = layout::prompt_text_rect(view.prompt);
     let cell = &terminal.backend().buffer()[(area.x, area.y)];
     assert_eq!(cell.symbol(), "@");
-    assert_eq!(cell.fg, Color::Yellow);
+    // 提及/引用统一一档灰绿（不再按种类分色），下划线仍是“这是一处引用”的信号。
+    assert_eq!(
+        cell.fg,
+        ui::style::markdown_file_mention()
+            .fg
+            .unwrap_or(Color::Reset)
+    );
     assert!(cell.modifier.contains(Modifier::UNDERLINED));
 }
 

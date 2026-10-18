@@ -226,64 +226,70 @@ pub fn directory() -> Style {
     accent()
 }
 
+// ===== markdown 阅读高亮：去色相，只留「正文前景 + 修饰符 + 单档灰绿」=====
+//
+// 早期版本沿袭 ANSI 语义色：标题/粗体黄、行内代码亮红、引用亮品红、链接亮蓝、
+// 代码高亮品红/绿/橙/天蓝、提及绿/橙/品红——一屏里会出现六七个色相，与 lx 页
+// 品牌粉（步骤方块）和金黄（工具参数）彼此抢眼，用户反馈“过于花里胡哨”。
+//
+// 现在整条 markdown 链路**只有一个彩色用途**：`Indexed 108` 灰绿，且只给
+// 「代码 / 行内代码 / 字面量 / 类型 / 引用式提及」这类**代码性内容**用；
+// 标题、粗体、斜体、链接、引用、列表符号等结构性强调全部退回**正文前景 + 修饰符**。
+// 这样 markdown 是「冷 + 近乎无色」，步骤方块与工具行是「暖（粉 218 / 黄 220）」，
+// 两类信息在色相上正交，互不干扰（见 `markdown_palette_is_achromatic` 与
+// `markdown_palette_is_disjoint_from_chat_steps`）。
+
+/// markdown 唯一的彩色档：低饱和灰绿（只给代码性内容用）。
+///
+/// 选 256 色的灰绿而不是 ANSI 亮绿：明暗两种终端主题下都不刺眼，
+/// 且与品牌粉 218、金黄 220、天蓝 117 在色相上都不接近。
+fn markdown_accent() -> Style {
+    Style::default().fg(Color::Indexed(108))
+}
+
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：次要信息。
 pub fn markdown_marker() -> Style {
     muted()
 }
 
-/// markdown 标题文字。
+/// markdown 标题文字：正文色 + 加粗（层级靠修饰符区分，不换色）。
 pub fn markdown_heading() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
 /// markdown 六级标题的样式：h1 加粗+下划线、h2 加粗、h3 加粗+斜体、h4–h6 斜体（对齐 codex）。
 pub fn markdown_heading_level(level: u8) -> Style {
-    let base = Color::Yellow;
     match level {
-        1 => Style::default()
-            .fg(base)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        2 => Style::default().fg(base).add_modifier(Modifier::BOLD),
-        3 => Style::default()
-            .fg(base)
-            .add_modifier(Modifier::BOLD | Modifier::ITALIC),
-        _ => Style::default().fg(base).add_modifier(Modifier::ITALIC),
+        1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        2 => Style::default().add_modifier(Modifier::BOLD),
+        3 => Style::default().add_modifier(Modifier::BOLD | Modifier::ITALIC),
+        _ => Style::default().add_modifier(Modifier::ITALIC),
     }
 }
 
-/// markdown 粗斜体（`***…***`）：Yellow 加粗+斜体。
+/// markdown 粗斜体（`***…***`）：正文色加粗+斜体（不再额外上色）。
 pub fn markdown_strong_emphasis() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD | Modifier::ITALIC)
+    Style::default().add_modifier(Modifier::BOLD | Modifier::ITALIC)
 }
 
-/// markdown 粗体文字。
+/// markdown 粗体文字：正文色加粗。
 pub fn markdown_strong() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
-/// markdown 斜体文字。
+/// markdown 斜体文字：正文色斜体。
 pub fn markdown_emphasis() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::ITALIC)
+    Style::default().add_modifier(Modifier::ITALIC)
 }
 
-/// markdown 删除线文字。
+/// markdown 删除线文字：次要信息 + 删除线（不再用亮红）。
 pub fn markdown_strikethrough() -> Style {
-    Style::default()
-        .fg(Color::LightRed)
-        .add_modifier(Modifier::CROSSED_OUT)
+    muted().add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 行内代码内容。
+/// markdown 行内代码内容：与代码块字面量同档灰绿。
 pub fn markdown_inline_code() -> Style {
-    Style::default().fg(Color::LightRed)
+    markdown_accent()
 }
 
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
@@ -291,21 +297,24 @@ pub fn markdown_code_block() -> Style {
     text()
 }
 
-/// 代码高亮：关键字（`fn`/`const`/`class`/`return`…）——品牌品红加粗，最抢眼。
+/// 代码高亮：关键字（`fn`/`const`/`class`/`return`…）——灰绿加粗，靠字重抢眼而非换色。
 pub fn code_keyword() -> Style {
-    Style::default()
-        .fg(Color::Indexed(213))
-        .add_modifier(Modifier::BOLD)
+    markdown_accent().add_modifier(Modifier::BOLD)
 }
 
-/// 代码高亮：字符串与字符字面量——绿。
+/// 代码高亮：字符串与字符字面量——灰绿（与数字、类型同档）。
 pub fn code_string() -> Style {
-    Style::default().fg(Color::Indexed(114))
+    markdown_accent()
 }
 
-/// 代码高亮：数字字面量——橙。
+/// 代码高亮：数字字面量——灰绿（与字符串、类型同档）。
 pub fn code_number() -> Style {
-    Style::default().fg(Color::Indexed(215))
+    markdown_accent()
+}
+
+/// 代码高亮：类型名（首字母大写的标识符）——灰绿（与字面量同档）。
+pub fn code_type() -> Style {
+    markdown_accent()
 }
 
 /// 代码高亮：注释——次要信息（dim）。
@@ -313,28 +322,19 @@ pub fn code_comment() -> Style {
     muted()
 }
 
-/// 代码高亮：类型名（首字母大写的标识符）——品牌天蓝。
-pub fn code_type() -> Style {
-    Style::default().fg(Color::Indexed(117))
-}
-
-/// markdown 引用内容。
+/// markdown 引用内容：次要信息 + 斜体（不再用亮品红）。
 pub fn markdown_quote() -> Style {
-    Style::default()
-        .fg(Color::LightMagenta)
-        .add_modifier(Modifier::ITALIC)
+    muted().add_modifier(Modifier::ITALIC)
 }
 
-/// markdown 链接文字。
+/// markdown 链接文字：正文色加下划线。
 pub fn markdown_link_text() -> Style {
-    Style::default()
-        .fg(Color::LightBlue)
-        .add_modifier(Modifier::UNDERLINED)
+    Style::default().add_modifier(Modifier::UNDERLINED)
 }
 
-/// markdown URL。
+/// markdown URL：次要信息（链接文字已由下划线标识，URL 不再抢色）。
 pub fn markdown_url() -> Style {
-    Style::default().fg(Color::Cyan)
+    muted()
 }
 
 /// markdown 无序列表项目符号：次要信息。
@@ -342,16 +342,14 @@ pub fn markdown_bullet() -> Style {
     muted()
 }
 
-/// markdown 有序列表序号（对齐 codex 的 light_blue）。
+/// markdown 有序列表序号：次要信息（与无序项目符号同款，不再用亮蓝）。
 pub fn markdown_ordered() -> Style {
-    Style::default().fg(Color::LightBlue)
+    muted()
 }
 
-/// markdown 任务列表已完成项（Green + 删除线）。
+/// markdown 任务列表已完成项：次要信息 + 删除线（不再用 Green）。
 pub fn markdown_task_done() -> Style {
-    Style::default()
-        .fg(Color::Green)
-        .add_modifier(Modifier::CROSSED_OUT)
+    muted().add_modifier(Modifier::CROSSED_OUT)
 }
 
 /// markdown 任务列表未完成项：次要信息。
@@ -399,35 +397,28 @@ pub fn template_title() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@文件` 提及：Yellow 下划线。
-pub fn markdown_file_mention() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::UNDERLINED)
-}
-
-/// `@[refer-file](path)` 文件引用：LightGreen 下划线（与 @ 提及的 Yellow 区分）。
-pub fn markdown_refer_file() -> Style {
-    Style::default()
-        .fg(Color::LightGreen)
-        .add_modifier(Modifier::UNDERLINED)
-}
-
-/// `@[refer-folder](path)` 目录引用：橙（Indexed 208）下划线。
+/// `@文件` 提及 / `@[refer-file]` 引用：灰绿 + 下划线。
 ///
-/// 固定 256 色橙：与 file 亮绿、image 亮品红、`@` 提及黄都能一眼分开，
-/// 且不占用主题蓝/青（边框、URL、link 已用）。
-pub fn markdown_refer_folder() -> Style {
-    Style::default()
-        .fg(Color::Indexed(208))
-        .add_modifier(Modifier::UNDERLINED)
+/// 提及与引用**统一一档色**（不再按 file 绿 / folder 橙 / image 品红分色）：
+/// 种类在语法里自带（目录带尾 `/`、`refer-image` 前缀不同），靠颜色重复编码只会让
+/// 输入框显得花。下划线保留“这是一处引用而非正文”的信号。
+pub fn markdown_file_mention() -> Style {
+    markdown_accent().add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@[refer-image](path)` 图片引用：LightMagenta 下划线。
+/// `@[refer-file](path)` 文件引用：与 `@` 提及同款（灰绿 + 下划线）。
+pub fn markdown_refer_file() -> Style {
+    markdown_accent().add_modifier(Modifier::UNDERLINED)
+}
+
+/// `@[refer-folder](path)` 目录引用：与 `@` 提及同款（目录带尾 `/`，无需另上色）。
+pub fn markdown_refer_folder() -> Style {
+    markdown_accent().add_modifier(Modifier::UNDERLINED)
+}
+
+/// `@[refer-image](path)` 图片引用：与 `@` 提及同款。
 pub fn markdown_refer_image() -> Style {
-    Style::default()
-        .fg(Color::LightMagenta)
-        .add_modifier(Modifier::UNDERLINED)
+    markdown_accent().add_modifier(Modifier::UNDERLINED)
 }
 
 /// 模板块操作按钮：常态次要信息。
@@ -499,60 +490,71 @@ pub fn chat_loading_spinner() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-// ===== 聊天步骤的品牌色（浅粉 + 金黄，取自 lx logo 与既有可变参数色）=====
+// ===== 聊天步骤 / 工具行的暖色体系（与 markdown 的「无色相」色域正交）=====
 //
-// 背景：正文用终端默认前景、面板边框用 `accent`（Cyan）或 `muted`（dim）。此前完成态
-// 用「天蓝 117 + DIM」，与边框标题、正文几乎同色；改品牌色后一度仍带蓝，用户明确要求
-// **只用粉色、不要蓝色的浅粉**（Native 入口标签渐变左侧那一档 `Indexed 218`），并把
-// **可变参数恢复为之前的金黄 `Indexed 220`**。
+// lx 聊天历史里同时存在两类着色信息，必须一眼分得开：
+//   A. **步骤结构**（方块、思考头、工具行）——本组 `chat_*` token，分三层：
+//      ① 结构 / 状态（方块、头部文案、工具动词）：Native 浅粉 `Indexed 218`；
+//      ② 可变参数（路径 / 搜索范围）：金黄 `Indexed 220` + 下划线；
+//      ③ 其余元信息（行范围、计数、状态文字）：`muted()`（终端 dim，无色相）。
+//   B. **正文高亮**（markdown / 代码）——见上面的 `markdown_*` / `code_*`，**近乎无色**：
+//      正文用终端默认前景，结构性强调只靠字重 / 斜体 / 下划线 / 删除线 / dim，
+//      全链路只有一档低饱和灰绿 `Indexed 108`，且只用于代码性内容。
 //
-// 因此本组 token 只用两头：浅粉 218（结构 / 动作 / 状态）+ 金黄 220（可变参数），
-// 行范围回到既有的灰 245。区分靠**字重、下划线、呼吸**，不引入任何蓝色槽位。
+// 两套色域在色相上不相交（暖粉金 vs 无彩色），这是用户两轮反馈的结论：
+// ①“方块与工具调用和正文/边框色调太接近”→ 步骤侧上暖色；②“markdown 过于花里胡哨”
+// → 正文侧去色相。任何一侧反向漂移（步骤变无彩、正文变彩色）都会让两类信息再次混同，
+// 由 `markdown_palette_is_achromatic` / `markdown_palette_is_disjoint_from_chat_steps` 拦住。
 //
-// 语义：**热 = 进行中（方块呼吸）、冷 = 已完成（方块静止）**，两者同为浅粉加粗；
-// 失败红、中断黄、取消灰继续沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
+// 语义：**热 = 进行中（方块加粗 + 呼吸）、冷 = 已完成（方块不加粗、静止）**；
+// 失败红、中断黄、取消灰沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
 // agent 样例仍用上面的 `agent_*` 系列，不受这里影响。
 
-/// 步骤方块：运行中（呼吸）——Native 浅粉（Indexed 218）加粗，整份历史里最亮的信号。
+/// 步骤结构色：Native 浅粉（方块 / 头部文案 / 工具动词共用）。
+const CHAT_PINK: u8 = 218;
+/// 可变参数色：金黄（沿用 `agent_param`，下划线表示“每次调用会变的值”）。
+const CHAT_GOLD: u8 = 220;
+
+/// 步骤方块：运行中（呼吸）——浅粉加粗，整份历史里最亮的信号。
 pub fn chat_step_mark_running() -> Style {
     Style::default()
-        .fg(Color::Indexed(218))
+        .fg(Color::Indexed(CHAT_PINK))
         .add_modifier(Modifier::BOLD)
 }
 
 /// 步骤方块：已完成——同款浅粉、**不加粗**（静止 + 细一档，与运行中的加粗呼吸方块区分）。
 pub fn chat_step_mark_done() -> Style {
-    Style::default().fg(Color::Indexed(218))
+    Style::default().fg(Color::Indexed(CHAT_PINK))
 }
 
 /// 步骤头部文案：运行中——浅粉（与方块同色系，不加粗）。
 pub fn chat_step_label_running() -> Style {
-    Style::default().fg(Color::Indexed(218))
+    Style::default().fg(Color::Indexed(CHAT_PINK))
 }
 
 /// 步骤头部文案：已完成——浅粉（同上，不加粗）。
 pub fn chat_step_label_done() -> Style {
-    Style::default().fg(Color::Indexed(218))
+    Style::default().fg(Color::Indexed(CHAT_PINK))
 }
 
 /// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：浅粉、不加粗——
 /// 与紧邻的加粗方块靠字重区分开。
 pub fn chat_tool_verb() -> Style {
-    Style::default().fg(Color::Indexed(218))
+    Style::default().fg(Color::Indexed(CHAT_PINK))
 }
 
-/// 工具行的可变参数（路径 / 搜索范围）：沿用既有的金黄（Indexed 220）加下划线，
-/// 下划线表示“每次调用都会变的值”。与浅粉的动词/方块、灰色的行范围都区分得开。
+/// 工具行的可变参数（路径 / 搜索范围）：金黄加下划线——暖色里唯一的第二档，
+/// 与浅粉的动词/方块、dim 的元信息都区分得开，也与正文的无色相高亮互不影响。
 pub fn chat_tool_param() -> Style {
     Style::default()
-        .fg(Color::Indexed(220))
+        .fg(Color::Indexed(CHAT_GOLD))
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// 工具行的只读元信息（`read` 的行范围）：既有的浅灰（Indexed 245）、无下划线不加粗，
-/// 纯粉黄体系里最沉的一档，不抢动词与参数的注意力。
+/// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
+/// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
 pub fn chat_tool_range() -> Style {
-    Style::default().fg(Color::Indexed(245))
+    muted()
 }
 
 /// lx 输入框上方 loading 行文案：次要信息。

@@ -64,7 +64,8 @@ fn typed_markdown_renders_highlight_and_cursor() {
 
     let heading = &buffer[(inner.x + 2, inner.y)];
     assert_eq!(heading.symbol(), "标");
-    assert_eq!(heading.fg, Color::Yellow);
+    // 标题不再换色（markdown 侧去色相）：靠加粗表达层级，前景回到正文默认色。
+    assert_eq!(heading.fg, Color::Reset);
     assert!(heading.modifier.contains(Modifier::BOLD));
 
     assert!(terminal.backend().cursor_visible());

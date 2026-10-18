@@ -67,14 +67,13 @@ fn model_label_style_runs_the_entry_gradient_and_is_bold() {
     assert_eq!(model_label_style(0, 1).fg, Some(Color::Indexed(218)));
 }
 
-/// 聊天步骤的配色必须：① 只取「Native 浅粉 218 + 金黄 220 + 灰 245」这套；
-/// ② 不压暗（dim 会与正文 / 边框标题混同）；③ 与正文默认前景（Reset）、边框青（Cyan）
-/// 都不同色；④ **不得出现任何蓝色槽位**（用户明确要求不回退旧配色）。
+/// 聊天步骤的配色必须：① 只用「浅粉 218 + 金黄 220 + dim」三层；
+/// ② 结构与参数不压暗（dim 只用于只读元信息）；③ 与正文默认前景（Reset）、
+/// 边框青（Cyan）都不同色；④ **不得出现任何蓝色槽位**（用户明确要求不回退旧配色）。
 #[test]
 fn chat_step_palette_is_native_pink_with_yellow_params() {
-    // Native 入口标签渐变左侧的浅粉 218 是唯一的结构/动作色；可变参数沿用金黄 220；
-    // 行范围沿用灰 245。蓝色槽位（117 天蓝、195 冰蓝）**不得出现**。
-    let palette = [218u8, 220, 245];
+    // 结构与状态统一 Native 浅粉 218；可变参数沿用金黄 220；只读元信息退回 dim。
+    let palette = [218u8, 220];
     let forbidden_blue = [117u8, 195, 168];
     let chrome = [None, Some(Color::Cyan)];
 
@@ -85,14 +84,13 @@ fn chat_step_palette_is_native_pink_with_yellow_params() {
         ("文案-已完成", chat_step_label_done()),
         ("工具动词", chat_tool_verb()),
         ("工具参数", chat_tool_param()),
-        ("工具行范围", chat_tool_range()),
     ] {
         let Some(Color::Indexed(index)) = style.fg else {
-            panic!("{label} 必须取 256 色品牌槽位，实际 {:?}", style.fg);
+            panic!("{label} 必须取暖色槽位，实际 {:?}", style.fg);
         };
         assert!(
             palette.contains(&index),
-            "{label} 用了体系之外的槽位 Indexed({index})"
+            "{label} 用了暖色体系之外的槽位 Indexed({index})"
         );
         assert!(
             !forbidden_blue.contains(&index),
@@ -126,33 +124,132 @@ fn chat_step_palette_is_native_pink_with_yellow_params() {
         "完成方块不加粗，与运行中区分"
     );
 
-    // 可变参数恢复为既有金黄 220 + 下划线（“每次调用会变的值”）。
+    // 可变参数沿用金黄 220 + 下划线（“每次调用会变的值”）。
     assert_eq!(
         chat_tool_param().fg,
         agent_param().fg,
-        "可变参数回到之前的金黄（与 [UI] 样例同源）"
+        "可变参数沿用之前的金黄（与 [UI] 样例同源）"
     );
     assert!(
         chat_tool_param()
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
-    // 行范围沿用既有灰 245、无下划线，与参数区分。
-    assert_eq!(chat_tool_range().fg, agent_range().fg, "行范围沿用既有灰");
+    // 只读元信息退回 dim：不再占用第三个色相档。
+    assert_eq!(chat_tool_range(), muted(), "行范围退回 dim");
     assert!(
         !chat_tool_range()
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
-    // 参数保留下划线（“每次调用会变的值”），行范围不加。
+}
+
+/// markdown 正文高亮必须是**无色相**的：正文用终端默认前景，强调只靠修饰符，
+/// 全链路最多一档低饱和灰绿（108）。这是用户“markdown 过于花里胡哨”的整改契约。
+#[test]
+fn markdown_palette_is_achromatic() {
+    // 允许出现的显式前景：正文默认（None）与唯一的灰绿档。
+    let allowed = [None, Some(Color::Indexed(108))];
+    for (label, style) in [
+        ("标题", markdown_heading()),
+        ("h1", markdown_heading_level(1)),
+        ("h2", markdown_heading_level(2)),
+        ("h3", markdown_heading_level(3)),
+        ("h4", markdown_heading_level(4)),
+        ("h6", markdown_heading_level(6)),
+        ("粗体", markdown_strong()),
+        ("粗斜体", markdown_strong_emphasis()),
+        ("斜体", markdown_emphasis()),
+        ("删除线", markdown_strikethrough()),
+        ("行内代码", markdown_inline_code()),
+        ("代码块", markdown_code_block()),
+        ("引用", markdown_quote()),
+        ("链接文字", markdown_link_text()),
+        ("URL", markdown_url()),
+        ("项目符号", markdown_bullet()),
+        ("有序序号", markdown_ordered()),
+        ("任务已完成", markdown_task_done()),
+        ("任务未完成", markdown_task_open()),
+        ("水平线", markdown_rule()),
+        ("代码语言标记", markdown_code_lang()),
+        ("图片说明", markdown_image()),
+        ("语法标记", markdown_marker()),
+        ("@提及", markdown_file_mention()),
+        ("refer-file", markdown_refer_file()),
+        ("refer-folder", markdown_refer_folder()),
+        ("refer-image", markdown_refer_image()),
+        ("关键字", code_keyword()),
+        ("字符串", code_string()),
+        ("数字", code_number()),
+        ("类型名", code_type()),
+        ("注释", code_comment()),
+    ] {
+        assert!(
+            allowed.contains(&style.fg),
+            "{label} 的前景必须是默认或唯一灰绿档 108，实际 {:?}",
+            style.fg
+        );
+    }
+
+    // 强调必须落到修饰符上：标题/粗体加粗、斜体、下划线、删除线各有归属，
+    // 不能出现“靠换色来表达强调”的空修饰符。
+    assert!(markdown_heading().add_modifier.contains(Modifier::BOLD));
+    assert!(markdown_strong().add_modifier.contains(Modifier::BOLD));
+    assert!(markdown_emphasis().add_modifier.contains(Modifier::ITALIC));
     assert!(
-        chat_tool_param()
+        markdown_strikethrough()
+            .add_modifier
+            .contains(Modifier::CROSSED_OUT)
+    );
+    assert!(
+        markdown_link_text()
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
+    assert!(markdown_ordered().add_modifier.contains(Modifier::DIM));
+}
+
+/// 步骤侧暖色与正文无色相**色域不相交**：任何 `chat_*` token 都不得使用
+/// markdown 那唯一的彩色档（108），结构/参数也不得回落到正文默认前景。
+#[test]
+fn markdown_palette_is_disjoint_from_chat_steps() {
+    // markdown 侧实际会出现的**有色**前景（正文默认前景 None 不算色域）。
+    let markdown_colors: Vec<Option<Color>> = [
+        markdown_inline_code(),
+        code_keyword(),
+        code_string(),
+        code_number(),
+        code_type(),
+        markdown_file_mention(),
+        markdown_refer_file(),
+        markdown_refer_folder(),
+        markdown_refer_image(),
+    ]
+    .iter()
+    .map(|style| style.fg)
+    .collect();
     assert!(
-        !chat_tool_range()
-            .add_modifier
-            .contains(Modifier::UNDERLINED)
+        markdown_colors.iter().all(|color| color.is_some()),
+        "markdown 的彩色档应当都带显式前景"
     );
+
+    // 结构与参数必须是暖色（Some），且不得与 markdown 的有色档重合。
+    for (label, style) in [
+        ("方块-运行中", chat_step_mark_running()),
+        ("方块-已完成", chat_step_mark_done()),
+        ("文案-运行中", chat_step_label_running()),
+        ("文案-已完成", chat_step_label_done()),
+        ("工具动词", chat_tool_verb()),
+        ("工具参数", chat_tool_param()),
+    ] {
+        assert!(
+            style.fg.is_some(),
+            "{label} 必须有显式暖色前景（不能与正文默认前景同色）"
+        );
+        assert!(
+            !markdown_colors.contains(&style.fg),
+            "{label} 不得复用 markdown 的彩色档：{:?}",
+            style.fg
+        );
+    }
 }

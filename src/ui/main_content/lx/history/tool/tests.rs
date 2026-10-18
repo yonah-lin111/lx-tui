@@ -366,7 +366,7 @@ fn read_shows_line_range_in_range_color() {
         range_text,
         format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, "12-40")
     );
-    assert_eq!(range_style, style::chat_tool_range(), "行范围用既有灰");
+    assert_eq!(range_style, style::chat_tool_range(), "行范围退回 dim");
     assert!(
         !range_style
             .add_modifier
