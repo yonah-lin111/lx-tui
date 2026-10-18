@@ -485,7 +485,7 @@ fn token_and_duration_formatting_matches_agent_conventions() {
 fn thinking_header_uses_step_square_and_becomes_thought() {
     use ratatui::style::{Color, Modifier};
 
-    // 生成中：行首方块（呼吸第 0 帧为实心、lx 品牌粉加粗）+ `Thinking`。
+    // 生成中：行首方块（呼吸第 0 帧为实心、翡翠绿加粗）+ `Thinking`。
     let mut streaming = lx_with(vec![message(
         "assistant",
         "streaming",
@@ -495,15 +495,11 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(
-        header.fg,
-        Color::Indexed(153),
-        "生成中方块用 Native Agent 浅蓝"
-    );
+    assert_eq!(header.fg, Color::Indexed(42), "生成中方块用翡翠绿结构色");
     assert!(header.modifier.contains(Modifier::BOLD), "生成中方块加粗");
-    // 头部文案：品牌粉（与方块同色系）但**不加粗**，让方块更跳。
+    // 头部文案：与方块同款翡翠绿但**不加粗**，让方块更跳。
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(153), "生成中文案同款浅蓝");
+    assert_eq!(label.fg, Color::Indexed(42), "生成中文案同款翡翠绿");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -537,7 +533,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(153), "完成后仍是 Native 浅蓝");
+    assert_eq!(header.fg, Color::Indexed(42), "完成后仍是翡翠绿");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "完成方块不加粗（与运行中的加粗呼吸方块区分）"
@@ -547,7 +543,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
         "完成后不压暗（压暗会与边框标题混同）"
     );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(153), "完成后文案同为浅蓝");
+    assert_eq!(label.fg, Color::Indexed(42), "完成后文案同为翡翠绿");
     assert!(!label.modifier.contains(Modifier::DIM), "完成后文案不压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -568,7 +564,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(153), "展开后仍浅蓝");
+    assert_eq!(header.fg, Color::Indexed(42), "展开后仍翡翠绿");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "展开后仍是不加粗的完成态"
@@ -603,9 +599,9 @@ fn markdown_body_block_has_step_square_and_indented_continuation() {
         line1.starts_with("  第二行"),
         "续行缩进 2 列与方块对齐：{line1}"
     );
-    // 完成态的方块：Native 浅粉、不加粗、不压暗。
+    // 完成态的方块：翡翠绿、不加粗、不压暗。
     let marker = &buf[(0, 0)];
-    assert_eq!(marker.fg, ratatui::style::Color::Indexed(153));
+    assert_eq!(marker.fg, ratatui::style::Color::Indexed(42));
     assert!(!marker.modifier.contains(ratatui::style::Modifier::BOLD));
     assert!(!marker.modifier.contains(ratatui::style::Modifier::DIM));
 }

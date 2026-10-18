@@ -520,67 +520,67 @@ pub fn chat_loading_spinner() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-// ===== 聊天步骤 / 工具行的品牌色（Native 标签蓝 + 金黄参数）=====
+// ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 金黄参数）=====
 //
 // lx 聊天历史里同时存在两类着色信息，必须一眼分得开：
 //   A. **步骤结构**（方块、思考头、工具行）——本组 `chat_*` token，分三层：
-//      ① 结构 / 状态（方块、头部文案、工具动词）：Native `Agent` 字标里的
-//         **浅蓝 `Indexed 153`**（`#afd7ff`）——就是 lx 页 `Native Agent` 标签
-//         渐变中 `A` 那一档，用户原话“native agent 的 a 的字体颜色（蓝蓝的）”。
-//      ② 可变参数（路径 / 搜索范围）：金黄 `Indexed 220` + 下划线。
+//      ① 结构 / 状态（方块、头部文案、工具动词）：**翡翠绿 `Indexed 42`**（`#00d787`）；
+//      ② 可变参数（路径 / 搜索范围）：金黄 `Indexed 220` + 下划线；
 //      ③ 其余元信息（行范围、计数、状态文字）：`muted()`（终端 dim，无色相）。
 //   B. **正文高亮**（markdown / 代码）——见上面的 `github_dark`：GitHub Dark 官方
-//      色板，颜色只出现在链接（蓝）与代码 token（珊瑚红 / 浅蓝 / 紫 / 灰）上，
+//      色板，颜色只出现在链接（蓝）与代码 token（珊瑚红 / 浅蓝 / 蓝 / 紫 / 灰）上，
 //      标题 / 粗体 / 斜体 / 引用全部是正文色 + 修饰符。
 //
-// 两套色域刻意不相交：步骤侧是**单一浅蓝 + 金黄**的结构色，正文侧是 GitHub 的
-// 语义 token 色（且结构性强调无色），因此「`■ Read` 的方块/动词」与「markdown 正文」
-// 一眼可分。用户四轮反馈的演进：
-// ①“方块与工具调用和正文/边框色调太接近”→ 步骤侧上品牌色；
-// ②“markdown 过于花里胡哨”→ 正文侧一度去色相；
-// ③“使用粉色的，不要变回蓝色”→ 步骤侧曾用粉 218；
-// ④“markdown 用 GitHub 黑暗模式” + “方块用 Native Agent 的 a 的蓝色”→ 当前：
-//    正文侧换成 GitHub Dark 官方 token，步骤侧换成 Native 标签蓝 153。
+// **为什么不再是蓝**（第 5 轮，用户带截图反馈「与小方块与正文内容颜色特别相近」）：
+// 上一版用 lx 页 `Native Agent` 标签里 `A` 的浅蓝 `Indexed 153`（`#afd7ff`），
+// 用 CIEDE2000 量出来它和**正文**的色差只有 11.5、和 GitHub 的**字符串浅蓝**
+// `#a5d6ff` 只有 2.1——等于方块、`Write`、`Thought` 与正文/代码字符串用了同一个颜色，
+// 所以视觉上糊成一片。GitHub Dark 的 6 个代码 token 加上金黄参数已经把
+// 蓝（207°/208°/212°/214°）、紫（269°）、珊瑚红（4°）、金（51°）全部占满，
+// 256 色里唯一还剩 ≥30 色差余量的空闲色相是**绿 / 青绿（120°–170°）**。
+// 因此结构色定在 `Indexed 42`（`#00d787`，158°）：与正文色差 30.1、与全部 GitHub
+// 代码色最近 32.8、与金黄参数 36.2——三项同时 ≥30，是这张表里唯一达标的槽位。
+// 备选（同样达标，偏好更亮可换）：`Indexed 49` `#00ffaf`（对深底亮度比 14.3 vs 10.0）。
 //
 // 语义：**热 = 进行中（方块加粗 + 呼吸）、冷 = 已完成（方块不加粗、静止）**；
 // 失败红、中断黄、取消灰沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
 // agent 样例仍用上面的 `agent_*` 系列，不受这里影响。
 
-/// 步骤结构色：Native 标签里 `Agent` 的浅蓝（`Indexed 153` = `#afd7ff`）。
-const CHAT_STEP_BLUE: u8 = 153;
+/// 步骤结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
+const CHAT_STEP_GREEN: u8 = 42;
 /// 可变参数色：金黄（沿用 `agent_param`，下划线表示“每次调用会变的值”）。
 const CHAT_GOLD: u8 = 220;
 
-/// 步骤方块：运行中（呼吸）——Native 浅蓝加粗，整份历史里最亮的信号。
+/// 步骤方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的信号。
 pub fn chat_step_mark_running() -> Style {
     Style::default()
-        .fg(Color::Indexed(CHAT_STEP_BLUE))
+        .fg(Color::Indexed(CHAT_STEP_GREEN))
         .add_modifier(Modifier::BOLD)
 }
 
-/// 步骤方块：已完成——同款浅蓝、**不加粗**（静止 + 细一档，与运行中的加粗呼吸方块区分）。
+/// 步骤方块：已完成——同款翡翠绿、**不加粗**（静止 + 细一档，与运行中的加粗呼吸方块区分）。
 pub fn chat_step_mark_done() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_BLUE))
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 步骤头部文案：运行中——浅蓝（与方块同色系，不加粗）。
+/// 步骤头部文案：运行中——翡翠绿（与方块同色系，不加粗）。
 pub fn chat_step_label_running() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_BLUE))
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 步骤头部文案：已完成——浅蓝（同上，不加粗）。
+/// 步骤头部文案：已完成——翡翠绿（同上，不加粗）。
 pub fn chat_step_label_done() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_BLUE))
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：浅蓝、不加粗——
+/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：翡翠绿、不加粗——
 /// 与紧邻的加粗方块靠字重区分开。
 pub fn chat_tool_verb() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_BLUE))
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 工具行的可变参数（路径 / 搜索范围）：金黄加下划线——暖色里唯一的第二档，
-/// 与浅粉的动词/方块、dim 的元信息都区分得开，也与正文的无色相高亮互不影响。
+/// 工具行的可变参数（路径 / 搜索范围）：金黄加下划线——与绿的结构色色差 36、
+/// 与最近的 GitHub token（注释灰 42 / 关键字珊瑚 46）也拉得开，因此保留既有金黄。
 pub fn chat_tool_param() -> Style {
     Style::default()
         .fg(Color::Indexed(CHAT_GOLD))

@@ -136,13 +136,13 @@ fn every_tool_and_open_status_shows_breathing_square_verb_and_path() {
                 painted.starts_with(text::agent::STEP_MARK_FILLED),
                 "{name}/{status:?} 行首应为步骤方块：{painted}"
             );
-            // 运行中的方块用 Native Agent 浅蓝（Indexed 153）加粗：与正文默认前景、
+            // 运行中的方块用翡翠绿（Indexed 42）加粗：与正文默认前景、
             // 面板边框的 Cyan/dim 都区分得开（不使用任何蓝色槽位）。
             let lead = grid.cell(0, 0).style;
             assert_eq!(
                 lead.fg,
                 style::chat_step_mark_running().fg,
-                "{name}/{status:?} 方块品牌粉"
+                "{name}/{status:?} 方块翡翠绿"
             );
             assert!(
                 lead.add_modifier.contains(ratatui::style::Modifier::BOLD),
@@ -235,12 +235,12 @@ fn completed_tool_has_square_verb_and_status_without_type_icon() {
                 "{name} 不再画类型图标 {icon:?}：{painted}"
             );
         }
-        // 完成方块：Native 浅蓝、不加粗、**不压暗**（压暗会与边框标题/正文混同）。
+        // 完成方块：翡翠绿、不加粗、**不压暗**（压暗会与边框标题/正文混同）。
         let lead = grid.cell(0, 0).style;
         assert_eq!(
             lead.fg,
             style::chat_step_mark_done().fg,
-            "{name} 完成方块 Native 浅蓝"
+            "{name} 完成方块翡翠绿"
         );
         assert!(
             !lead.add_modifier.contains(ratatui::style::Modifier::BOLD),

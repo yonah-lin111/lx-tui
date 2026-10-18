@@ -79,7 +79,7 @@ impl StepMark {
         }
     }
 
-    /// 方块样式：运行中品牌粉、已完成品牌天蓝（都是饱和色加粗，与正文默认前景、
+    /// 方块样式：运行中翡翠绿加粗、已完成同款翡翠绿去加粗（与正文默认前景、
     /// 边框的 Cyan/dim 明确区分）；失败红、中断黄沿用状态色；取消为次要信息色空心。
     pub(super) fn style(self) -> Style {
         match self {
@@ -567,9 +567,9 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         StepMark::Done
                     };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：粉色方块 + `Thinking`（品牌粉，与方块同色系）；
-                        // 完成后：天蓝方块 + `Thought · 6.3s`（品牌天蓝；无折叠箭头，
-                        // 折叠/展开由点击头部或 Ctrl+T 控制，方块即状态标记）。
+                        // 生成中：翡翠绿方块（加粗 + 呼吸）+ `Thinking`（同色不加粗）；
+                        // 完成后：同款翡翠绿方块（去加粗、静止）+ `Thought · 6.3s`
+                        // （无折叠箭头，折叠/展开由点击头部或 Ctrl+T 控制，方块即状态标记）。
                         let header_style = if streaming {
                             style::chat_step_label_running()
                         } else {

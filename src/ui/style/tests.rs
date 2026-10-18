@@ -67,14 +67,14 @@ fn model_label_style_runs_the_entry_gradient_and_is_bold() {
     assert_eq!(model_label_style(0, 1).fg, Some(Color::Indexed(218)));
 }
 
-/// 聊天步骤的配色必须：① 结构 / 状态统一 Native 浅蓝 153、可变参数统一金黄 220；
+/// 聊天步骤的配色必须：① 结构色用翡翠绿 `Indexed 42`、可变参数用金黄 220；
 /// ② 不压暗（dim 只用于只读元信息）；③ 与正文默认前景（Reset）、边框青（Cyan）
-/// 都不同色；④ 与环境里的 markdown GitHub Dark token **色域不相交**。
+/// 都不同色；④ 与 markdown 的 GitHub Dark token 色域不相交。
 #[test]
-fn chat_step_palette_uses_native_agent_blue_and_gold_params() {
-    // Native `Agent` 字标里 `A` 那一档：Indexed 153 = #afd7ff（用户指定“蓝蓝的”）。
-    let step_blue = Color::Indexed(153);
-    let palette = [153u8, 220];
+fn chat_step_palette_uses_green_structure_and_gold_params() {
+    // 用户带截图反馈「方块与正文颜色特别相近」后改定的结构色（理由见 style.rs 注释）。
+    let step_green = Color::Indexed(42);
+    let palette = [42u8, 220];
     let chrome = [None, Some(Color::Cyan)];
 
     for (label, style) in [
@@ -99,7 +99,7 @@ fn chat_step_palette_uses_native_agent_blue_and_gold_params() {
         assert!(!chrome.contains(&style.fg), "{label} 与正文/边框青撞色");
     }
 
-    // 方块 / 文案 / 动词统一 Native 浅蓝；运行中用字重 + 呼吸区分于完成态。
+    // 方块 / 文案 / 动词统一翡翠绿；运行中用字重 + 呼吸区分于完成态。
     for style in [
         chat_step_mark_running(),
         chat_step_mark_done(),
@@ -107,7 +107,7 @@ fn chat_step_palette_uses_native_agent_blue_and_gold_params() {
         chat_step_label_done(),
         chat_tool_verb(),
     ] {
-        assert_eq!(style.fg, Some(step_blue), "统一 Native Agent 浅蓝");
+        assert_eq!(style.fg, Some(step_green), "统一翡翠绿结构色");
     }
     assert!(
         chat_step_mark_running()
@@ -124,7 +124,7 @@ fn chat_step_palette_uses_native_agent_blue_and_gold_params() {
     assert_eq!(
         chat_tool_param().fg,
         agent_param().fg,
-        "可变参数沿用之前的金黄（与 [UI] 样例同源）"
+        "可变参数沿用既有金黄（与 [UI] 样例同源）"
     );
     assert!(
         chat_tool_param()
@@ -137,28 +137,6 @@ fn chat_step_palette_uses_native_agent_blue_and_gold_params() {
         !chat_tool_range()
             .add_modifier
             .contains(Modifier::UNDERLINED)
-    );
-}
-
-/// Native 标签里 `Agent` 的取色必须是 `Indexed 153`——步骤方块用的就是这一档，
-/// 两者若漂移，聊天里的方块就不再是「Native Agent 标签那种蓝」。
-#[test]
-fn native_agent_label_carries_the_step_blue() {
-    let label = crate::ui::text::LX_ENTRY_NATIVE;
-    let length = label.chars().count();
-    let position = label
-        .chars()
-        .position(|ch| ch == 'A')
-        .expect("标签含 Agent");
-    assert_eq!(
-        lx_entry_label_style(LxEntry::Native, position, length, false).fg,
-        Some(Color::Indexed(153)),
-        "`Native Agent` 里 A 的颜色即步骤方块色"
-    );
-    assert_eq!(
-        chat_step_mark_running().fg,
-        Some(Color::Indexed(153)),
-        "方块取同一档"
     );
 }
 
@@ -248,12 +226,12 @@ fn markdown_palette_is_github_dark_truecolor() {
     );
 }
 
-/// 步骤侧品牌蓝与 markdown 的 GitHub token **色域不相交**：方块/动词的浅蓝
-/// （`Indexed 153`）不得出现在任何 markdown token 上，反之亦然。
+/// 步骤侧结构色与 markdown 的 GitHub token **色域不相交**：方块/动词的翡翠绿
+/// （`Indexed 42`）不得出现在任何 markdown token 上，反之亦然。
 ///
 /// 这是「工具/思考/步骤方块要区别于 markdown 高亮」的机器可验形式：GitHub Dark
-/// 的代码 token 是珊瑚红 / 浅蓝 / 紫 / 灰（全部 `Color::Rgb`），步骤结构色是
-/// 单一 `Indexed 153` + 金黄 220，两者永不相交。
+/// 的代码 token 是珊瑚红 / 浅蓝 / 蓝 / 紫 / 灰（全部 `Color::Rgb`），步骤结构色是
+/// 单一 `Indexed 42` + 金黄 220，两者永不相交。
 #[test]
 fn markdown_palette_is_disjoint_from_chat_steps() {
     let step_colors = [

@@ -1046,17 +1046,24 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 
 **状态映射（终态只按颜色区分，取消另用空心）**
 
-调色板是**Native 蓝 + 金黄三层**：① 结构 / 状态 = `Native Agent` 标签里 `Agent` 的浅蓝
-**`Indexed 153`**（`#afd7ff`）；② 可变参数 = 既有的金黄 **`Indexed 220`**（+ 下划线）；
-③ 只读元信息（行范围、计数、状态文字）= `muted()`（dim、无色相）。结构与参数**不压暗**
-（dim 的 117 曾与边框标题、正文几乎同色，这正是用户反馈“和正文与边框色调很接近”的根因）。
+调色板是**翡翠绿 + 金黄三层**：① 结构 / 状态 = **翡翠绿 `Indexed 42`**（`#00d787`）；
+② 可变参数 = 既有的金黄 **`Indexed 220`**（+ 下划线）；③ 只读元信息（行范围、计数、
+状态文字）= `muted()`（dim、无色相）。结构与参数**不压暗**（dim 的 117 曾与边框标题、
+正文几乎同色，这正是用户反馈“和正文与边框色调很接近”的根因）。
 
-五轮配色迭代（用户逐轮明确要求）：**① 天蓝 117 + DIM**（混同）→ **② 品牌蓝/冰蓝**
+六轮配色迭代（用户逐轮明确要求）：**① 天蓝 117 + DIM**（混同）→ **② 品牌蓝/冰蓝**
 （用户否决：不要蓝色）→ **③ Native 浅粉 218 + 金黄 220 + 灰 245** → **④ 暖色三层
-（粉 218 / 金 220 / dim）** → **⑤ Native 浅蓝 153 + 金黄 220 + dim**（当前，用户原话
-「工具、思考和步骤的小方块使用 native agent 的 a 的字体颜色（蓝蓝的，lx 页面的）」）。
-`Indexed 153` 就是 `Native Agent` 标签渐变里 `A` 那一档的实测取色，由
-`native_agent_label_carries_the_step_blue` 把「标签色 = 方块色」钉死，避免以后两边漂移。
+（粉 218 / 金 220 / dim）** → **⑤ Native 浅蓝 153 + 金黄 220 + dim**（用户原话「用
+native agent 的 a 的字体颜色（蓝蓝的）」）→ **⑥ 翡翠绿 42 + 金黄 220 + dim**（当前）。
+
+第 ⑥ 轮的触发是用户带截图反馈「工具、思考和 step 小方块与正文内容颜色特别相近」。
+用 CIEDE2000 量出来，⑤ 的 `153`（`#afd7ff`）与**正文**色差只有 **11.5**、与 GitHub Dark 的
+**字符串浅蓝** `#a5d6ff` 只有 **2.1**——等于方块、`Write`、`Thought` 和代码里的字符串用了
+同一个颜色，必然糊成一片。穷举 256 色后：GitHub 的 6 个代码 token 加金黄参数已占满
+蓝（207°/208°/212°/214°）、紫（269°）、珊瑚红（4°）、金（51°），唯一还剩 ≥30 色差余量的
+空闲色相只有绿/青绿（120°–170°）。最终取 `Indexed 42`（`#00d787`，158°）：与正文 30.1、
+与全部 GitHub 代码色最近 32.8、与金黄参数 36.2，三项同时 ≥30，是候选表里唯一达标的槽位。
+（偏好更亮可换 `Indexed 49` `#00ffaf`：对深底亮度比 14.3 vs 10.0。）
 
 **与 markdown 高亮的色域不相交**：正文侧（`markdown_*` / `code_*`）本轮换成 **GitHub Dark
 官方色板**的固定 RGB（语法 token `#ff7b72`/`#a5d6ff`/`#79c0ff`/`#d2a8ff`/`#8b949e`，
@@ -1073,13 +1080,13 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 
 | 状态 | 字形 | 样式 |
 | --- | --- | --- |
-| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | **Native 浅蓝 `Indexed 153` + 加粗 + 呼吸**（`chat_step_mark_running`） |
-| `Completed`、思考完成、已完成正文块 | `■` 静态 | **Native 浅蓝 `Indexed 153`、不加粗、不呼吸**（`chat_step_mark_done`） |
+| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | **翡翠绿 `Indexed 42` + 加粗 + 呼吸**（`chat_step_mark_running`） |
+| `Completed`、思考完成、已完成正文块 | `■` 静态 | **翡翠绿 `Indexed 42`、不加粗、不呼吸**（`chat_step_mark_done`） |
 | `Failed` | `■` 静态 | 红（`agent_fail`；该行同时整行红） |
 | `Interrupted` | `■` 静态 | 黄（`agent_warn`） |
 | `Cancelled` | `□` 静态 | 次要信息色（`agent_step_detail`；空心表示未产出结果） |
 
-**工具行的三段**（`ui/style.rs`）：动词浅蓝 `Indexed 153` **不加粗**（`chat_tool_verb`，
+**工具行的三段**（`ui/style.rs`）：动词翡翠绿 `Indexed 42` **不加粗**（`chat_tool_verb`，
 与紧邻的加粗方块靠字重区分）、可变参数（路径 / 搜索范围）既有**金黄 `Indexed 220`
 + 下划线**（`chat_tool_param`，与 `agent_param` 同源，下划线仍表示“每次调用都会变的值”）、
 只读元信息（`read` 的行范围）退回 **`muted()`（dim、无色相、无下划线）**（`chat_tool_range`）
@@ -1101,19 +1108,18 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 
 | 测试 | 断言 |
 | --- | --- |
-| `history::tool::tests::every_tool_and_open_status_shows_breathing_square_verb_and_path` | 四工具 × 三种进行中状态：行首为方块、Native 浅蓝加粗、状态文字齐备、无 `!` |
+| `history::tool::tests::every_tool_and_open_status_shows_breathing_square_verb_and_path` | 四工具 × 三种进行中状态：行首为方块、翡翠绿加粗、状态文字齐备、无 `!` |
 | `history::tool::tests::step_square_breathes_while_open_and_stays_static_when_settled` | 呼吸相位（0..3 实心 / 4..7 空心）；完成/失败/中断与帧无关恒实心 |
-| `history::tool::tests::completed_tool_has_square_verb_and_status_without_type_icon` | 完成行无任何 braille 转轮、无类型图标（≣/∇/±/#）、方块为 Native 浅蓝不加粗且不压暗、动词与状态文字齐备 |
+| `history::tool::tests::completed_tool_has_square_verb_and_status_without_type_icon` | 完成行无任何 braille 转轮、无类型图标（≣/∇/±/#）、方块为翡翠绿不加粗且不压暗、动词与状态文字齐备 |
 | `history::tool::tests::failed_tool_is_red_and_carries_trimmed_reason` | 失败行以方块起头且整行红 + 粗，原因仍单行化 |
 | `history::tool::tests::cancelled_and_interrupted_are_distinguishable_from_failed` | 取消 = 空心方块 + 次要信息色；中断 = 实心方块 + 警告黄 |
 | `history::tool::tests::lead_marker_identifies_the_state_at_any_width` | 五个状态的（字形 + 完整样式）两两不同；1 列极窄仍可辨 |
-| `history::tests::thinking_header_uses_step_square_and_becomes_thought` | 生成中 `■/□ Thinking`（Native 浅蓝加粗 + 呼吸）、完成后 `■ Thought · 6.3s`（同色但去加粗、与帧无关）、无 `▸`/`▾`、无 braille；展开正文缩进 2 列 |
-| `history::tests::markdown_body_block_has_step_square_and_indented_continuation` | 正文首行 `■ 第一行`、续行缩进 2 列；完成态方块 Native 浅蓝不加粗、不压暗 |
+| `history::tests::thinking_header_uses_step_square_and_becomes_thought` | 生成中 `■/□ Thinking`（翡翠绿加粗 + 呼吸）、完成后 `■ Thought · 6.3s`（同色但去加粗、与帧无关）、无 `▸`/`▾`、无 braille；展开正文缩进 2 列 |
+| `history::tests::markdown_body_block_has_step_square_and_indented_continuation` | 正文首行 `■ 第一行`、续行缩进 2 列；完成态方块翡翠绿不加粗、不压暗 |
 | `history::tests::only_the_active_last_step_breathes` | 同一流式消息里：已结束的正文块静态实心、最后一块空心呼吸 |
 | `history::tests::transcript_lays_out_step_square_with_two_column_gutter` | 整段观感锁定（用户消息 `> ` / 思考头 / 思考正文 / 正文块 / 工具行的逐行文本） |
 | `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | 思考完成后头部静态；同消息里运行中的工具行仍呼吸（相位翻空心帧时只有工具行变） |
-| `ui::style::tests::chat_step_palette_uses_native_agent_blue_and_gold_params` | 六个 `chat_*` token 只取 `{153, 220}`、结构与参数都不压暗、不与正文默认前景/Cyan 撞色；方块/文案/动词统一 Native 浅蓝 153；运行中加粗、完成不加粗；参数与 `agent_param` 同源、行范围退回 `muted()` |
-| `ui::style::tests::native_agent_label_carries_the_step_blue` | `Native Agent` 标签里 `A` 的取色 = `Indexed 153` = 方块色（用户“用 native agent 的 a 的颜色”这条被钉死） |
+| `ui::style::tests::chat_step_palette_uses_green_structure_and_gold_params` | 六个 `chat_*` token 只取 `{42, 220}`、结构与参数都不压暗、不与正文默认前景/Cyan 撞色；方块/文案/动词统一翡翠绿 42；运行中加粗、完成不加粗；参数与 `agent_param` 同源、行范围退回 `muted()` |
 | `ui::style::tests::markdown_palette_is_github_dark_truecolor` | 逐个 token 钉死 GitHub Dark 官方 RGB：关键字 `#ff7b72`、字符串 `#a5d6ff`、数字与行内代码 `#79c0ff`、类型名 `#d2a8ff`、注释 `#8b949e`、链接/URL/提及 `#4493f8`、引用与标记 `#7d8590`；标题/粗体/斜体/列表符号必须**不换色**（`fg == None`），h1/h2 用下划线 |
 | `ui::style::tests::markdown_palette_is_disjoint_from_chat_steps` | 步骤结构色必须是 256 色槽位、且与十个 markdown / code 的有色 token **不相交**（「工具与步骤方块要区别于 markdown 高亮」的机器可验形式） |
 
@@ -1123,8 +1129,8 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 2. 方块呼吸 400ms 一相的节奏是否合适（过快/过慢可调 `STEP_BREATH_TICKS`）。
 3. 长会话里每步一个静态方块的整体观感（是否过于抢眼——暖色三层已把只读元信息收到
    dim，只剩方块/动词的粉与参数的金属暖色；若仍偏亮可只降饱和，这是纯 `ui/style.rs` 的调整）。
-4. Native 浅蓝 153 / 金黄 220 在用户的 256 色主题映射下的实际观感（部分终端主题会重映射
-   256 色；若被映射得偏暗/偏亮，只改 `ui/style.rs` 的槽位，`native_agent_label_carries_the_step_blue`
-   会同步校验标签与方块仍同色）。
+4. 翡翠绿 42 / 金黄 220 在用户的 256 色主题映射下的实际观感（部分终端主题会重映射 256 色；
+   若被映射得偏暗/偏亮，可换同区间备选 `Indexed 49` `#00ffaf`——更亮一档，三项色差仍 ≥30，
+   只改 `ui/style.rs` 的 `CHAT_STEP_GREEN` 常量）。
 5. GitHub Dark 的固定 RGB 在用户的终端配色上是否够亮/够对比（GitHub 假定深底 `#0d1117`；
    若用户的终端底色偏灰，`#8b949e` 注释与 `#7d8590` 次要色可能偏暗——只改 `github_dark` 常量）。
