@@ -667,6 +667,14 @@ fn tool_calls_finish_without_calls_is_protocol_error() {
         .decode_frame(r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#)
         .expect_err("missing calls rejected");
     assert!(error.contains(TOOL_PROTOCOL_ERROR_CODE), "{error}");
+    // 诊断文案必须回显真实结束原因，便于区分 `function_call` 与 `tool_calls`。
+    assert!(error.contains("finish_reason=tool_calls"), "{error}");
+
+    let mut legacy = Decoder::default();
+    let error = legacy
+        .decode_frame(r#"{"choices":[{"delta":{},"finish_reason":"function_call"}]}"#)
+        .expect_err("missing legacy call rejected");
+    assert!(error.contains("finish_reason=function_call"), "{error}");
 }
 
 /// 先给过工具分片却以 stop 结束：不一致，不猜执行。
@@ -805,6 +813,54 @@ fn deprecated_function_call_delta_is_protocol_error() {
         .expect_err("deprecated function_call rejected");
     assert!(error.contains(TOOL_PROTOCOL_ERROR_CODE), "{error}");
     assert!(error.contains("function_call"), "{error}");
+}
+
+/// 回归：兼容端点在**每一帧**都回 `"function_call": null` / `"tool_calls": null`
+/// 占位键（DeepSeek 等网关常见）。这属于普通对话帧，不能被当成“废弃协议”失败，
+/// 否则像 `你是谁` 这样的纯聊天请求整轮报
+/// `tool call protocol error: deprecated function_call delta without tool_calls index`。
+#[test]
+fn null_function_call_placeholders_are_not_protocol_errors() {
+    let mut decoder = Decoder::default();
+    let deltas = decode_frames(
+        &mut decoder,
+        &[
+            // 首帧：role/空 content + 两个 null 占位键。
+            r#"{"choices":[{"delta":{"role":"assistant","content":"","function_call":null,"tool_calls":null},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"content":"你","function_call":null},"finish_reason":null}]}"#,
+            // 空 tool_calls 数组同样是占位，不应触发 `without any tool call`。
+            r#"{"choices":[{"delta":{"content":"好","tool_calls":[]},"finish_reason":null}]}"#,
+            // 部分端点还会给 `function_call` 空对象占位。
+            r#"{"choices":[{"delta":{"function_call":{}},"finish_reason":"stop"}]}"#,
+        ],
+    );
+    let text: String = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::Part(part) if part.kind == PartKind::Text => Some(part.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "你好");
+    assert!(
+        matches!(deltas.last(), Some(ChatDelta::Finished { .. })),
+        "纯聊天帧仍以恰好一个终态结束: {deltas:?}"
+    );
+}
+
+/// 真正的旧式 `function_call` 调用体（带 name）仍必须报协议错误，不静默忽略。
+#[test]
+fn deprecated_function_call_with_body_still_fails_after_null_guard() {
+    let mut decoder = Decoder::default();
+    for frame in [
+        r#"{"choices":[{"delta":{"function_call":{"name":"read","arguments":"{}"}}}]}"#,
+        r#"{"choices":[{"delta":{"tool_calls":null,"function_call":{"arguments":"{}"}}}]}"#,
+    ] {
+        let error = decoder
+            .decode_frame(frame)
+            .expect_err("real deprecated function_call rejected");
+        assert!(error.contains("deprecated function_call"), "{error}");
+    }
 }
 
 // ------------------------------------------------- G8 核查：原生 ID 跨响应唯一

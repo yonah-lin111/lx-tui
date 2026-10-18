@@ -121,6 +121,64 @@ async fn client_streams_tool_events_for_openai_chat() {
     );
 }
 
+/// 回归（用户实测）：OpenAI 兼容端点在纯聊天时也在每帧回 `function_call: null` /
+/// `tool_calls: null` 占位。此前整轮报
+/// `tool call protocol error: deprecated function_call delta without tool_calls index`，
+/// 连 `你是谁` 这样的普通提问都失败。真实 SSE 走完 client 后必须是正常 Complete。
+#[tokio::test]
+async fn compatible_chat_with_null_function_call_placeholders_completes() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\",\"function_call\":null,\"tool_calls\":null},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"我是\",\"function_call\":null},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\" lx。\",\"tool_calls\":[]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"function_call\":{}},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, server) = spawn_mock("200 OK", body).await;
+    let (_cancel_sender, cancel) = no_cancel();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_stream(
+            "openai-compatible",
+            &format!("{base}/v1"),
+            Some("k"),
+            Duration::from_secs(5),
+            request(),
+            cancel,
+            |_| {},
+        ),
+    )
+    .await
+    .expect("stream completes within timeout");
+    let _ = server.await;
+    assert_eq!(outcome.stop, StopReason::Complete, "{:?}", outcome.stop);
+    let text: String = outcome
+        .deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::Part(part) if part.kind == PartKind::Text => Some(part.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "我是 lx。");
+    assert!(
+        !outcome
+            .deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::ToolInputStarted { .. })),
+        "null 占位不得凭空造出工具调用"
+    );
+    assert_eq!(
+        outcome
+            .deltas
+            .iter()
+            .filter(|delta| matches!(delta, ChatDelta::Finished { .. }))
+            .count(),
+        1,
+        "恰好一个终态"
+    );
+}
+
 /// 工具参数中途 EOF（半截 JSON）：明确截断错误，且**不产生**可执行调用。
 #[tokio::test]
 async fn truncated_tool_arguments_fail_without_executable_call() {

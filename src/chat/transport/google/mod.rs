@@ -323,7 +323,9 @@ impl StreamDecoder for Decoder {
                     .cloned()
                     .unwrap_or_default();
                 for (part_index, part) in parts.iter().enumerate() {
-                    if let Some(call) = part.get("functionCall") {
+                    // 只有**非 null 对象**才是 functionCall 调用体；部分端点/网关会在
+                    // 纯文本 part 里带 `"functionCall": null` 占位，不能据此报协议错误。
+                    if let Some(call) = part.get("functionCall").filter(|call| call.is_object()) {
                         self.absorb_function_call(candidate_index, part_index, call, &mut out)?;
                         continue;
                     }

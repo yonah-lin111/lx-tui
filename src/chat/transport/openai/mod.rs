@@ -196,11 +196,15 @@ impl StreamDecoder for Decoder {
                     out.extend(segments_to_deltas(self.splitter.feed(text)));
                 }
                 // 工具调用分片：按 index 合并，跨帧拼接 id/name/arguments。
-                if let Some(calls) = delta.get("tool_calls").and_then(Value::as_array) {
+                if let Some(calls) = delta
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .filter(|calls| !calls.is_empty())
+                {
                     for call in calls {
                         self.absorb_tool_call(call, &mut out)?;
                     }
-                } else if delta.get("function_call").is_some() {
+                } else if has_deprecated_function_call(delta) {
                     // 已废弃的 `delta.function_call` 没有 index/ID，无法聚合与续传。
                     return Err(protocol_error(
                         "deprecated function_call delta without tool_calls index",
@@ -304,9 +308,9 @@ impl Decoder {
                 // 先闭合所有调用：参数不完整/非法属于协议错误，绝不执行半截参数。
                 let ended = self.calls.end_all_open()?;
                 if ended.is_empty() {
-                    return Err(protocol_error(
-                        "finish_reason=tool_calls without any tool call",
-                    ));
+                    return Err(protocol_error(format!(
+                        "finish_reason={reason} without any tool call"
+                    )));
                 }
                 for (call_id, arguments_json) in ended {
                     validate_arguments(&arguments_json)?;
@@ -344,6 +348,22 @@ impl Decoder {
         self.response_finished = true;
         Ok(out)
     }
+}
+
+/// 是否真的带了**已废弃的** `delta.function_call` 调用体。
+///
+/// 多数 OpenAI 兼容端点（以及部分官方响应）会在**每一帧**都带上
+/// `"function_call": null` / `"tool_calls": null` 之类的占位键，部分端点甚至给空对象
+/// `{}` 占位。`Value::is_some()` 对 `Value::Null` 也为真，直接据此判错会把普通对话帧
+/// 误判成“废弃协议”，导致整轮失败（回归：`你是谁` 这类纯聊天请求）。
+///
+/// 只有值确实是非空对象且带 `name` 或 `arguments` 字段时，才算旧式函数调用。
+fn has_deprecated_function_call(delta: &Value) -> bool {
+    let Some(call) = delta.get("function_call").and_then(Value::as_object) else {
+        return false;
+    };
+    call.get("name").and_then(Value::as_str).is_some()
+        || call.get("arguments").and_then(Value::as_str).is_some()
 }
 
 /// 校验完整参数是合法 JSON（`ToolInputEnded` 之前必须成立）。

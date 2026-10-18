@@ -460,6 +460,32 @@ fn function_call_without_name_is_protocol_error() {
     assert!(error.contains(TOOL_PROTOCOL_ERROR_CODE), "{error}");
 }
 
+/// 回归：纯文本 part 带 `"functionCall": null` 占位时属于普通正文，
+/// 不能被当成“缺 name 的调用”误判成协议错误。
+#[test]
+fn null_function_call_placeholder_in_text_part_is_not_an_error() {
+    let mut decoder = decoder();
+    let deltas = decoder
+        .decode_frame(
+            r#"{"candidates":[{"content":{"parts":[{"text":"我是 lx。","functionCall":null}],"role":"model"},"finishReason":"STOP","index":0}]}"#,
+        )
+        .expect("null placeholder is not a call");
+    let text: String = deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::Part(part) if part.kind == PartKind::Text => Some(part.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "我是 lx。");
+    assert!(
+        !deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::ToolInputStarted { .. })),
+        "null 占位不得造出工具调用"
+    );
+}
+
 /// 非对象类型的 args：序列化后校验失败（参数必须可被工具层解析）。
 #[test]
 fn function_call_with_non_object_args_is_invalid() {
