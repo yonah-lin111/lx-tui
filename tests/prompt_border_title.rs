@@ -281,3 +281,39 @@ fn border_rename_input_cursor_tracks_hardware_position() {
         "硬件光标跟随页名输入: {border}"
     );
 }
+
+#[test]
+fn focused_page_rename_keeps_top_border_line() {
+    let (mut state, config, view) = ready_state();
+    paged_prompt(&mut state);
+    update::focus_prompt(&mut state);
+
+    // 失焦态基准：`╭─ paged · Page 1 ──────‹ 1/2 ›─╮`。
+    let idle = draw(&state, &config);
+    let idle_border = border_row(&idle, &view);
+    assert!(idle_border.ends_with("›─╮"), "{idle_border}");
+
+    // 回归：聚焦重命名（输入仍是当前页名）后顶边框应逐字符不变，
+    // 右侧边框线不得被清成空白。
+    assert!(update::begin_page_rename(&mut state));
+    let focused = draw(&state, &config);
+    let focused_border = border_row(&focused, &view);
+    assert_eq!(
+        focused_border, idle_border,
+        "重命名输入不改变顶边框：聚焦={focused_border} 失焦={idle_border}"
+    );
+
+    // 继续输入也不得擦掉右侧边框线：输入后只多出输入的字符与 1 列空白。
+    update::apply_page_rename_key(&mut state, OverlayKey::Char('X'));
+    let typed = draw(&state, &config);
+    let typed_border = border_row(&typed, &view);
+    assert!(typed_border.contains("· Page 1X "), "{typed_border}");
+    let tail = typed_border.split("· Page 1X").nth(1).expect("输入可见");
+    let before_controls = tail.split('‹').next().unwrap_or_default();
+    assert!(
+        before_controls
+            .strip_prefix(' ')
+            .is_some_and(|rest| !rest.is_empty() && rest.chars().all(|ch| ch == '─')),
+        "输入右侧应是 1 列空白加连续边框线: {typed_border}"
+    );
+}

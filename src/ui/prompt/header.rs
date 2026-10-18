@@ -216,6 +216,9 @@ fn paint_border_text(buf: &mut Buffer, area: Rect, data: &BorderTitleData<'_>, t
 }
 
 /// 页重命名输入：标题按剩余宽度截断，页名段位置渲染单行输入视口。
+///
+/// 输入文本只覆盖自身占据的单元格，右侧保留外层 Block 画好的顶边框线 `─`；
+/// 不要整段清空，否则聚焦期间右侧边框线会消失、取消聚焦后才由 Block 重绘恢复。
 fn paint_border_rename(
     buf: &mut Buffer,
     area: Rect,
@@ -237,15 +240,6 @@ fn paint_border_rename(
     if !prefix.is_empty() {
         buf.set_stringn(area.x, area.y, &prefix, prefix.width(), title_style);
     }
-    // 输入区之前的旧页名段先清成空白，避免输入变短后残留边框 `─`。
-    let clear_from = area.x.saturating_add(prefix.width() as u16);
-    for x in clear_from..area.right() {
-        if let Some(cell) = buf.cell_mut((x, area.y)) {
-            cell.reset();
-            cell.set_char(' ');
-            cell.set_style(style::text_on_border());
-        }
-    }
     let separator = format!("{} ", text::PROMPT_PAGE_NAME_PREFIX);
     buf.set_stringn(
         input_x.saturating_sub(2),
@@ -262,6 +256,15 @@ fn paint_border_rename(
         usize::from(width),
         style::text_on_border(),
     );
+    // 输入文本后保留 1 列空白再接边框线，与失焦态 `· 页名 ` 的收尾一致。
+    let text_end = input_x.saturating_add(u16::try_from(view.visible.width()).unwrap_or(u16::MAX));
+    if text_end < area.right()
+        && let Some(cell) = buf.cell_mut((text_end, area.y))
+    {
+        cell.reset();
+        cell.set_char(' ');
+        cell.set_style(style::text_on_border());
+    }
 }
 
 /// 页重命名输入的硬件光标位置（顶边框行）；输入区放不下时返回 None。
