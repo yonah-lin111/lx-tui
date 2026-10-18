@@ -66,9 +66,17 @@ fn part_view_of(part: &ChatPart) -> ChatPartView {
 /// `interrupted` 必须可见，因此 `error` 保留 DB 中的错误码。
 fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
     let status = ToolStatus::from_stored(&tool.status).unwrap_or(ToolStatus::Interrupted);
-    // 摘要只从参数与错误码派生（不装载完整结果体到 UI）。
-    let summary = ToolSummary::from_arguments(&tool.arguments_json);
-    let has_summary = summary.path.is_some() || summary.range.is_some();
+    // 摘要 = 参数派生（path / pattern / range）**+ 结果体补全**（增删计数、命中数、
+    // 实际行数、截断标记）。只靠参数重建会让重进会话的工具行丢掉这些细节
+    // （写文件类操作重进 session 后只剩方块与空 `└─`）。
+    let summary = ToolSummary::from_arguments(&tool.arguments_json)
+        .absorb_result_json(tool.result_json.as_deref());
+    let has_summary = summary.path.is_some()
+        || summary.range.is_some()
+        || summary.pattern.is_some()
+        || summary.added.is_some()
+        || summary.removed.is_some()
+        || summary.matches.is_some();
     ToolCallView {
         call_id: tool.call_id.clone(),
         name: tool.name.clone(),

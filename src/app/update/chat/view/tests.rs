@@ -136,3 +136,114 @@ fn plain_text_history_matches_legacy_order() {
     assert!(view.tools().next().is_none());
     assert_eq!(view.text(), "旧正文");
 }
+
+// ===== 重进会话：工具详情必须从结果体补全（回归：写文件类操作信息消失）=====
+
+/// 重载后的工具视图：参数派生摘要 + 结果体补全。
+fn reloaded(name: &str, arguments: &str, result: &str) -> ToolCallView {
+    let mut record = tool(1, "call-1", name, "completed");
+    record.arguments_json = arguments.into();
+    record.result_json = Some(result.into());
+    let view = view_message_of(
+        &message(Vec::new(), vec![record]),
+        &ModelsSnapshot::default(),
+    );
+    let AssistantStepView::Tool { call, .. } = &view.steps[0] else {
+        panic!("应为工具步骤");
+    };
+    call.clone()
+}
+
+/// 回归：`edit` 的增删计数只在结果体里，重载后必须还在
+/// （旧 bug：重进 session 后 `Edit` 只剩方块与空 `└─`）。
+#[test]
+fn reload_keeps_edit_added_and_removed_counts() {
+    let call = reloaded(
+        "edit",
+        r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** End Patch"}"#,
+        r#"{"tool":"edit","changes":[{"path":"a.rs","added":12,"removed":4,"kind":"updated"}],"partial":false}"#,
+    );
+    let summary = call.summary.expect("结算摘要");
+    assert_eq!(summary.added, Some(12), "新增计数必须保留");
+    assert_eq!(summary.removed, Some(4), "删除计数必须保留");
+}
+
+/// 回归：`write` 的增删计数同样来自结果体。
+#[test]
+fn reload_keeps_write_added_and_removed_counts() {
+    let call = reloaded(
+        "write",
+        r#"{"path":"docs/notes.md","content":"a\nb"}"#,
+        r#"{"tool":"write","path":"docs/notes.md","created":true,"added":18,"removed":0}"#,
+    );
+    let summary = call.summary.expect("结算摘要");
+    assert_eq!(summary.added, Some(18));
+    assert_eq!(summary.removed, Some(0), "0 删也要保留（表示整文件覆盖）");
+}
+
+/// 回归：`search` 的命中数来自结果体、pattern 来自参数，两者都要在。
+#[test]
+fn reload_keeps_search_pattern_and_match_count() {
+    let call = reloaded(
+        "search",
+        r#"{"pattern":"测试","path":"tool_test.txt"}"#,
+        r#"{"tool":"search","matches":[{"path":"tool_test.txt","line":1,"text":"x","line_truncated":false},{"path":"tool_test.txt","line":3,"text":"y","line_truncated":false},{"path":"tool_test.txt","line":4,"text":"z","line_truncated":false}],"truncated":false,"files_scanned":1}"#,
+    );
+    let summary = call.summary.expect("结算摘要");
+    assert_eq!(summary.pattern.as_deref(), Some("测试"), "pattern 来自参数");
+    assert_eq!(summary.matches, Some(3), "命中数来自结果体");
+    assert_eq!(summary.path.as_deref(), Some("tool_test.txt"));
+}
+
+/// 回归：`read` 的实际行数来自结果体（参数里只有 offset/limit）。
+#[test]
+fn reload_keeps_read_total_lines() {
+    let call = reloaded(
+        "read",
+        r#"{"path":"src/a.rs","offset":12,"limit":29}"#,
+        r#"{"tool":"read","path":"src/a.rs","kind":"file","content":"x","start_line":12,"end_line":40,"next_offset":null,"truncated":false,"total_lines":31}"#,
+    );
+    let summary = call.summary.expect("结算摘要");
+    assert_eq!(summary.range, Some((12, 40)), "区间来自参数");
+    assert_eq!(summary.total_lines, Some(31), "实际行数来自结果体");
+}
+
+/// 结果体缺失/非法时退回纯参数摘要，不 panic 也不编造。
+#[test]
+fn reload_without_result_json_falls_back_to_arguments_only() {
+    let record = {
+        let mut record = tool(1, "call-1", "edit", "interrupted");
+        record.arguments_json =
+            r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n*** End Patch"}"#.into();
+        record.result_json = None;
+        record
+    };
+    let view = view_message_of(
+        &message(Vec::new(), vec![record]),
+        &ModelsSnapshot::default(),
+    );
+    let AssistantStepView::Tool { call, .. } = &view.steps[0] else {
+        panic!("应为工具步骤");
+    };
+    let summary = call.summary.as_ref().expect("参数摘要");
+    assert_eq!(summary.added, None, "没有结果体就没有增删计数");
+    assert_eq!(summary.removed, None);
+
+    // 非法结果体同样不 panic：仍然只按参数派生（patch 里有目标文件，所以有摘要）。
+    let call = reloaded(
+        "edit",
+        r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n*** End Patch"}"#,
+        "not json",
+    );
+    let summary = call.summary.expect("参数派生摘要");
+    assert_eq!(
+        summary.path.as_deref(),
+        Some("a.rs"),
+        "非法结果体时仍能从 patch 取到目标文件"
+    );
+    assert_eq!(summary.added, None, "非法结果体不编造计数");
+
+    // 参数也没有可用字段时，摘要为空（不凭空造一个空摘要）。
+    let call = reloaded("edit", "{}", "not json");
+    assert!(call.summary.is_none(), "无任何可用字段时不造摘要");
+}

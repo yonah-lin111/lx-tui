@@ -207,10 +207,10 @@ fn tool_steps_with_all_statuses_stay_two_rows_each() {
     }
 }
 
-/// 连续的工具步骤之间**不留空行**（紧凑成同级兄弟节点），
-/// 与正文 / 思考 / 通知之间仍留空行。
+/// 连续的工具步骤之间**留一行空行**：每个调用是独立的动作记录，
+/// 两行式的 `■ 动词` / `  └─ 详情` 之间空一行才分得清彼此的边界。
 #[test]
-fn consecutive_tool_steps_have_no_blank_line_between_them() {
+fn consecutive_tool_steps_have_a_blank_line_between_them() {
     let mut message = message("assistant", "complete", Vec::new());
     for (index, status) in [
         ToolStatus::Completed,
@@ -229,16 +229,16 @@ fn consecutive_tool_steps_have_no_blank_line_between_them() {
         message.steps.push(step);
     }
     let lx = lx_with(vec![message]);
-    let area = Rect::new(0, 0, 60, 12);
+    let area = Rect::new(0, 0, 60, 14);
     let computed = layout(area, &lx);
-    // 3 个工具 × 2 行 = 6，中间无空行；加消息间呼吸行 1 = 7。
-    assert_eq!(computed.total_rows, 7, "连续工具之间不留空行");
-    assert_eq!(render_rows(area, &lx, 0), 7);
+    // 3 个工具 × 2 行 + 2 个块间空行 + 消息间呼吸行 1 = 9。
+    assert_eq!(computed.total_rows, 9, "连续工具之间各留一行空行");
+    assert_eq!(render_rows(area, &lx, 0), 9);
 
-    // 渲染出来应当是紧挨着的 `■` / `└─` 交替，中间没有空行。
+    // 渲染出来应当是 `■` / `└─` / 空行 交替。
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let rows: Vec<String> = (0..7).map(|row| row_text(&buf, area, row)).collect();
+    let rows: Vec<String> = (0..9).map(|row| row_text(&buf, area, row)).collect();
     assert!(
         rows[0].starts_with(text::agent::STEP_MARK_FILLED),
         "第 1 行是标题：{rows:?}"
@@ -249,16 +249,16 @@ fn consecutive_tool_steps_have_no_blank_line_between_them() {
             .starts_with(text::agent::MARKER_TREE_LEAF),
         "第 2 行是详情：{rows:?}"
     );
+    assert!(rows[2].trim().is_empty(), "第 3 行是空行：{rows:?}");
     assert!(
-        rows[2].starts_with(text::agent::STEP_MARK_FILLED),
-        "第 3 行直接是下一个标题（无空行）：{rows:?}"
+        rows[3].starts_with(text::agent::STEP_MARK_FILLED),
+        "第 4 行是下一个标题：{rows:?}"
     );
-    for (index, row) in rows.iter().enumerate().take(6) {
-        assert!(
-            !row.trim().is_empty(),
-            "连续工具之间不该有空行，第 {index} 行却是空：{rows:?}"
-        );
-    }
+    assert!(rows[5].trim().is_empty(), "第 6 行是空行：{rows:?}");
+    assert!(
+        rows[6].starts_with(text::agent::STEP_MARK_FILLED),
+        "第 7 行是第三个标题：{rows:?}"
+    );
 }
 
 /// 工具与正文之间的空行仍在（异构块保留空行）。

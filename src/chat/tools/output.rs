@@ -218,6 +218,7 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
                 _ => None,
             },
             matches: (*kind == ReadKind::Directory).then_some(*total_lines),
+            total_lines: Some(*total_lines),
             truncated: *truncated,
             ..ToolSummary::default()
         },

@@ -229,17 +229,35 @@ impl Detail {
 /// `search` 结算后的摘要只带命中数（不含搜索范围），此时退回参数 JSON 里的 `path`；
 /// [`ToolSummary::from_arguments`] 是纯解析，无 IO、不改状态。
 fn param(call: &ToolCallView) -> Option<Segment> {
-    let path = call
-        .summary
-        .as_ref()
-        .and_then(|summary| summary.path.as_deref())
-        .filter(|path| !path.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            (Kind::of(&call.name) == Kind::Search)
-                .then(|| ToolSummary::from_arguments(&call.arguments_json))
-                .and_then(|summary| summary.path)
-        })?;
+    let from_args = || ToolSummary::from_arguments(&call.arguments_json);
+    let summary_path = || {
+        call.summary
+            .as_ref()
+            .and_then(|summary| summary.path.as_deref())
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+    };
+    // `search`：`"pattern" in path`。pattern 只来自参数（结果体不带），
+    // 路径在结算摘要里可能缺席，回退到参数 JSON 的 `path`。
+    if Kind::of(&call.name) == Kind::Search {
+        let pattern = call
+            .summary
+            .as_ref()
+            .and_then(|summary| summary.pattern.clone())
+            .or_else(|| from_args().pattern);
+        let path = summary_path().or_else(|| from_args().path);
+        let scope = text::agent::search_scope_label(
+            pattern
+                .as_deref()
+                .map(|p| single_line(p, TEXT_SAMPLE_CHARS))
+                .as_deref(),
+            path.as_deref()
+                .map(|p| single_line(p, TEXT_SAMPLE_CHARS))
+                .as_deref(),
+        )?;
+        return Some(Segment::new(scope, style::chat_tool_param()));
+    }
+    let path = summary_path().or_else(|| from_args().path)?;
     let text = single_line(&path, TEXT_SAMPLE_CHARS);
     (!text.is_empty()).then(|| Segment::new(text, style::chat_tool_param()))
 }
@@ -264,24 +282,38 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
         return Vec::new();
     };
     let mut out: Vec<Extra> = Vec::new();
-    let mut push = |value: String, style: Style, priority: u8| {
-        out.push(Extra {
-            segment: Segment::new(format!("{sep}{value}"), style),
-            priority,
-        });
-    };
+    /// 收集一段带 `· ` 前缀的次要信息（局部宏，避免闭包同时借用 `out`）。
+    macro_rules! push {
+        ($value:expr, $style:expr, $priority:expr $(,)?) => {
+            out.push(Extra {
+                segment: Segment::new(format!("{sep}{}", $value), $style),
+                priority: $priority,
+            })
+        };
+    }
     match Kind::of(&call.name) {
         Kind::Read => {
             if let Some((start, end)) = summary.range {
-                push(
+                push!(
                     text::agent::range_label(start, end),
+                    style::chat_tool_range(),
+                    PRIORITY_RANGE,
+                );
+            }
+            // 实际读到的行数（结果体里的 total_lines）：与区间并列，
+            // 括号区分"哪一段"与"多大一块"。
+            if summary.range.is_some()
+                && let Some(total) = summary.total_lines
+            {
+                push!(
+                    text::agent::lines_label(total),
                     style::chat_tool_range(),
                     PRIORITY_RANGE,
                 );
             }
             // 目录读取的条目数与 `search` 的命中数同口径显示。
             if let Some(matches) = summary.matches {
-                push(
+                push!(
                     text::agent::matches_label(matches),
                     style::agent_step_detail(),
                     PRIORITY_COUNT,
@@ -290,7 +322,7 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
         }
         Kind::Search => {
             if let Some(matches) = summary.matches {
-                push(
+                push!(
                     text::agent::matches_label(matches),
                     style::agent_step_detail(),
                     PRIORITY_COUNT,
@@ -298,29 +330,38 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
             }
         }
         Kind::Edit | Kind::Write => {
+            // 增删计数是**一个**判断（"加了 12 删了 4"），合成一段 `+12 -4`；
+            // 仍各自上色（绿/红），只是中间不再插 `·` 分隔符。
+            let mut diff = Vec::new();
             if let Some(added) = summary.added {
-                push(
-                    text::agent::added_label(added),
-                    style::agent_added(),
-                    PRIORITY_COUNT,
-                );
+                diff.push((text::agent::added_label(added), style::agent_added()));
             }
             if let Some(removed) = summary.removed {
-                push(
-                    text::agent::removed_label(removed),
-                    style::agent_removed(),
-                    PRIORITY_COUNT,
-                );
+                diff.push((text::agent::removed_label(removed), style::agent_removed()));
+            }
+            if !diff.is_empty() {
+                // 首段带 `· ` 分隔符；后续计数各自成段（保留绿/红），中间只留空格。
+                // 注意不能走 `push`：它会给每段都补 `· `。
+                out.push(Extra {
+                    segment: Segment::new(format!("{sep}{}", diff[0].0), diff[0].1),
+                    priority: PRIORITY_COUNT,
+                });
+                out.extend(diff.iter().skip(1).map(|(label, label_style)| Extra {
+                    segment: Segment::new(format!(" {label}"), *label_style),
+                    priority: PRIORITY_COUNT,
+                }));
             }
         }
         Kind::Other => {}
     }
     if summary.truncated {
-        push(
-            text::agent::TOOL_TRUNCATED.to_string(),
-            style::agent_warn(),
-            PRIORITY_TRUNCATED,
-        );
+        out.push(Extra {
+            segment: Segment::new(
+                format!("{sep}{}", text::agent::TOOL_TRUNCATED),
+                style::agent_warn(),
+            ),
+            priority: PRIORITY_TRUNCATED,
+        });
     }
     out
 }

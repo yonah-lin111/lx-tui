@@ -145,6 +145,31 @@ pub fn range_label(start: usize, end: usize) -> String {
     format!("{start}-{end}")
 }
 
+/// `read` 实际读到的行数：`(31 lines)` / `(1 line)`；与区间并列显示在括号里。
+pub fn lines_label(count: usize) -> String {
+    let suffix = if count == 1 { "line" } else { "lines" };
+    format!("({count} {suffix})")
+}
+
+/// `search` 的搜索模式：加引号，便于与路径区分（`"测试"`）。
+pub fn pattern_label(pattern: &str) -> String {
+    format!("\"{pattern}\"")
+}
+
+/// `search` 的模式与范围：`"测试" in tool_test.txt`；只有模式时就是模式本身。
+pub fn search_scope_label(pattern: Option<&str>, path: Option<&str>) -> Option<String> {
+    let pattern = pattern?;
+    Some(match path {
+        Some(path) if !path.is_empty() => {
+            format!("{} {}{path}", pattern_label(pattern), IN_SCOPE_SEP)
+        }
+        _ => pattern_label(pattern),
+    })
+}
+
+/// 搜索范围的连接词（`"pat" in path` 里的 `in`，dense 渲染时压暗）。
+pub const IN_SCOPE_SEP: &str = "in ";
+
 /// 命中 / 条目数：`3 matches`、`1 match`。
 pub fn matches_label(count: usize) -> String {
     let suffix = if count == 1 {

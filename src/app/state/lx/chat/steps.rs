@@ -116,6 +116,13 @@ pub struct ToolSummary {
     pub removed: Option<usize>,
     /// 命中条目数（`search`）。
     pub matches: Option<usize>,
+    /// `search` 的搜索模式（**只来自调用参数**，结果体里没有）。
+    ///
+    /// 它是搜索行唯一有意义的「对什么搜」，没有它界面只剩一个「3 matches」的裸计数；
+    /// 因此必须进摘要、并在结算/重载两条路径上都不被覆盖丢失。
+    pub pattern: Option<String>,
+    /// `read` 实际读到的行数（来自结果体，参数里没有）。
+    pub total_lines: Option<usize>,
     /// 内容是否被截断（必须显式告知用户）。
     pub truncated: bool,
 }
@@ -133,6 +140,15 @@ impl ToolSummary {
             .get("path")
             .and_then(|path| path.as_str())
             .filter(|path| !path.is_empty())
+            .map(truncate_summary);
+        // `edit` 的参数是 patch 文本，没有 `path` 字段；从 `*** Update File:` 行
+        // 取目标路径，否则工具行只剩方块与空 `└─`（重进会话尤其明显）。
+        let path = path.or_else(|| patch_target(value.get("patch").and_then(|p| p.as_str())));
+        // `search` 的 pattern 只存在于参数里（结果体不带），必须在这里取。
+        let pattern = value
+            .get("pattern")
+            .and_then(|pattern| pattern.as_str())
+            .filter(|pattern| !pattern.is_empty())
             .map(truncate_summary);
         let offset = value
             .get("offset")
@@ -156,9 +172,108 @@ impl ToolSummary {
         Self {
             path,
             range,
+            pattern,
             ..Self::default()
         }
     }
+
+    /// 用**落库的结果体**补全摘要（历史重载路径）。
+    ///
+    /// 增删计数 / 命中数 / 实际行数 / 截断标记只存在于结果体里；只靠
+    /// [`Self::from_arguments`] 重建会让重进会话的工具行丢掉这些细节
+    /// （旧 bug：写文件类操作重进 session 后只剩方块与空 `└─`）。
+    ///
+    /// 纯解析、无 IO；参数侧已有的字段（path / pattern / range）优先保留，
+    /// 结果体只填空缺。结果体不是合法 JSON 时原样返回。
+    pub fn absorb_result_json(mut self, result_json: Option<&str>) -> Self {
+        let Some(result_json) = result_json else {
+            return self;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(result_json) else {
+            return self;
+        };
+        let number = |key: &str| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+                .map(|number| usize::try_from(number).unwrap_or(usize::MAX))
+        };
+        if self.path.is_none() {
+            self.path = value
+                .get("path")
+                .and_then(|path| path.as_str())
+                .filter(|path| !path.is_empty())
+                .map(truncate_summary);
+        }
+        // `search` 结果体带 matches 数组；命中数就是它的长度。
+        if self.matches.is_none()
+            && let Some(matches) = value.get("matches").and_then(|m| m.as_array())
+        {
+            self.matches = Some(matches.len());
+        }
+        // `edit` 的增删计数在 `changes` 数组里逐文件给，需要汇总；
+        // `write` 则直接在顶层。两种形状都要认。
+        if let Some(changes) = value.get("changes").and_then(|c| c.as_array()) {
+            let sum = |key: &str| {
+                changes
+                    .iter()
+                    .filter_map(|change| change.get(key).and_then(serde_json::Value::as_u64))
+                    .fold(None::<usize>, |total, value| {
+                        Some(total.unwrap_or(0) + usize::try_from(value).unwrap_or(usize::MAX))
+                    })
+            };
+            if self.added.is_none() {
+                self.added = sum("added");
+            }
+            if self.removed.is_none() {
+                self.removed = sum("removed");
+            }
+            // 单文件补丁：路径也从 changes 里取（`edit` 的参数是 patch 文本，不含 path）。
+            if self.path.is_none()
+                && let Some(path) = changes
+                    .first()
+                    .and_then(|change| change.get("path"))
+                    .and_then(|path| path.as_str())
+                    .filter(|path| !path.is_empty())
+            {
+                self.path = Some(truncate_summary(path));
+            }
+        }
+        if self.added.is_none() {
+            self.added = number("added");
+        }
+        if self.removed.is_none() {
+            self.removed = number("removed");
+        }
+        if self.total_lines.is_none() {
+            self.total_lines = number("total_lines");
+        }
+        if value
+            .get("truncated")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            self.truncated = true;
+        }
+        self
+    }
+}
+
+/// 从 `edit` 的 patch 文本里取第一个被修改文件的路径。
+///
+/// 只做**展示用**的轻量提取：找 `*** Update File: ` / `*** Add File: ` /
+/// `*** Delete File: ` 之后到行尾的那段文本。不做补丁校验（校验在执行层）。
+fn patch_target(patch: Option<&str>) -> Option<String> {
+    const MARKERS: [&str; 3] = ["*** Update File: ", "*** Add File: ", "*** Delete File: "];
+    let patch = patch?;
+    patch.lines().find_map(|line| {
+        MARKERS
+            .iter()
+            .find_map(|marker| line.strip_prefix(marker))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(truncate_summary)
+    })
 }
 
 /// 摘要单字段截断（按字符数，避免切断 UTF-8）。

@@ -1368,3 +1368,104 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 1. 两行式在真实历史里是否显得过于松散（每个调用占 2 行）；若偏松，可考虑把详情行改成与标题行同色的更暗一档。
 2. 连续工具「零空行」的紧凑串读起来是否清晰（兄弟节点感是否成立）。
 3. 失败时第 1 行整行红 + 第 2 行正常色错误文案的对比是否够醒目。
+
+## 24. 已实施（G14：工具详情信息补全 + 重进会话丢详情修复）
+
+### 24.1 `3 matches` 的根因：摘要里根本没有 pattern
+
+真实 session `sess-18dfad209f640248-1` 的 DB 记录是
+
+```
+search  {"pattern": "测试", "path": "/Users/yonah/Desktop/tool_test_ファイル.txt"}
+search  {"pattern": "edit", "path": ".../tool_test_ファイル.txt"}
+```
+
+但界面显示 `■ Search` / `  └─ ...tool_test_ファイル.txt · 3 matches`——**搜索词整个不见了**。
+
+根因链条：
+
+1. `ToolExecutionResult::Search` 只有 `matches` / `truncated` / `files_scanned`，**不带 pattern**；
+2. `to_summary` 因此只能填 `matches`；
+3. app/chat 两侧的 `ToolSummary` **都没有 `pattern` 字段**，`from_arguments` 也只取 `path`。
+
+于是「对什么搜」在投影成 View 时就被丢掉，UI 只能拿路径 + 裸计数拼行。对照三家实现（codex `Search <pattern>` 且**完全不显示命中数**；opencode `Grep "<pattern>" in <path> (N matches)`；claude code `Search(pattern: "...", path: "...")` + `└ Found N files`），**pattern 一律在最显眼位置**，我们是唯一把主语丢掉、只留谓语的。
+
+### 24.2 重进会话丢详情（用户报的 bug）
+
+`tool_view_of`（`app/update/chat/view.rs`）**只用 `ToolSummary::from_arguments` 重建摘要**，而增删计数（`edit`/`write`）、命中数（`search`）、实际行数（`read`）**全都只存在于 `result_json` 里**：
+
+- 实时路径：`view_settlement` → `to_summary(result)` → 有完整计数 ✅
+- 重载路径：`from_arguments(arguments)` → 只有 path/range → **计数全丢** ❌
+
+用户截图正是这个现象：`Search` 只剩路径、`Edit` 只剩一个空 `└─`。此外 `edit` 的参数是 **patch 文本**（`*** Update File: <path>`），没有 `path` 字段，`from_arguments` 连路径都取不到——所以 `Edit` 行连路径都没了。
+
+### 24.3 修复：摘要 = 参数派生 + 结果体补全
+
+新增 `ToolSummary::absorb_result_json()`（app 层），在重载路径上把结果体里的字段补进摘要：
+
+| 字段 | 参数（`from_arguments`） | 结果体（`absorb_result_json`） |
+| --- | --- | --- |
+| `path` | `path` 字段；**`edit` 从 patch 的 `*** Update File:` 行提取** | `path` 顶层；`edit` 从 `changes[].path` |
+| `pattern` | `pattern` 字段（结果体不带，只能这里取） | — |
+| `range` | `offset` / `limit` | — |
+| `added` / `removed` | — | `write` 顶层；`edit` 汇总 `changes[].added/removed` |
+| `matches` | — | `search` 的 `matches` 数组长度 |
+| `total_lines` | — | `read` 的 `total_lines` |
+| `truncated` | — | `truncated` |
+
+同时补三条链路：
+
+- `chat::tools::ToolSummary` + `to_summary` 补 `pattern` / `total_lines`；
+- 结算路径 `settle_tool_result` 合并一次参数派生值（`to_summary` 没有参数，pattern 拿不到）；
+- 事件层 `view_summary` 透传 `pattern` / `total_lines`。
+
+### 24.4 渲染口径调整（用户新增要求）
+
+**移除参数下划线**：`chat_tool_param` 从「金黄 + UNDERLINED」改成「金黄、无修饰」——连续工具行里下划线会连成一片横线，盖过翡翠绿结构色；金黄本身与绿（色差 36）、与 GitHub token（注释灰 42 / 关键字珊瑚 46）都拉得开。
+
+**`search`**：`  └─ "测试" in tool_test.txt · 3 matches`（加引号区分"被搜的词"与"被搜的文件"；只有模式时省略 `in path`）。
+
+**`read`**：`  └─ src/style.rs · 12-40 (31 lines)`——区间来自参数、行数来自结果体，`(31 lines)` 用括号区分"哪一段"与"多大一块"。
+
+**`edit`/`write`**：`  └─ path · +12 -4`——增删计数合体（中间不插 `·`），仍各自绿/红。
+
+**每个工具之间空一行**（撤销 §23 的"连续工具零空行"）：每个调用是独立动作记录，两行式之间不空行会读成一棵树。
+
+### 24.5 落地位置
+
+| 文件 | 变更 |
+| --- | --- |
+| `app/state/lx/chat/steps.rs` | `ToolSummary` 加 `pattern` / `total_lines`；`from_arguments` 提取 pattern + patch 目标路径；新增 `absorb_result_json()` |
+| `chat/tools/types.rs` | 同步加 `pattern` / `total_lines` |
+| `chat/tools/output.rs` | `to_summary` 的 `Read` 分支填 `total_lines` |
+| `app/state/lx/chat/stream.rs` | `settle_tool_result` 合并参数派生 pattern |
+| `app/update/chat/view.rs` | `tool_view_of` 改用 `from_arguments().absorb_result_json()`；`has_summary` 扩到新字段 |
+| `event/chat/mod.rs` | `view_summary` 透传新字段 |
+| `ui/style.rs` | `chat_tool_param` 去掉下划线 |
+| `ui/text/agent.rs` | 新增 `lines_label` / `pattern_label` / `search_scope_label` / `IN_SCOPE_SEP` |
+| `ui/main_content/lx/history/tool.rs` | `param()` 分 search/其他；`extras()` 的编辑计数合体；read 追加行数 |
+| `ui/main_content/lx/history.rs` | `needs_spacer` 改回恒 `true` |
+
+### 24.6 测试证据（`cargo test` 全绿：lib 2328 + 14 个集成二进制 = 2374）
+
+| 测试 | 断言 |
+| --- | --- |
+| `reload_keeps_edit_added_and_removed_counts` | 重载后 `added=12` / `removed=4`（回归，`changes[]` 汇总） |
+| `reload_keeps_write_added_and_removed_counts` | 重载后 `+18` / `-0`（`-0` 表示整文件覆盖） |
+| `reload_keeps_search_pattern_and_match_count` | `pattern="测试"`（参数）+ `matches=3`（结果体） |
+| `reload_keeps_read_total_lines` | `range=(12,40)`（参数）+ `total_lines=31`（结果体） |
+| `reload_without_result_json_falls_back_to_arguments_only` | 无/非法结果体不 panic、不编造；`edit` 仍能从 patch 取到 `a.rs` |
+| `search_shows_the_pattern_before_the_path` | 详情行严格等于 `└─ "测试" in tool_test.txt · 3 matches`；模式在路径之前；参数无下划线 |
+| `search_without_path_still_shows_the_pattern` | 无路径时省略 `in`，模式仍显示 |
+| `read_shows_range_and_actual_line_count` | `12-40` + `(31 lines)` 并存，同色 dim |
+| `read_without_total_lines_shows_the_range_only` | 老数据不编造行数 |
+| `edit_counts_are_one_group_without_a_separator` | `+12 -4` 合体、无 `·`、绿/红分开 |
+| `write_counts_are_one_group_too` | `+18 -0` |
+| `chat_step_palette_uses_green_structure_and_gold_params` | **断言参数不再有 UNDERLINED** |
+| `consecutive_tool_steps_have_a_blank_line_between_them` | 3 个连续工具 = 9 行（含 2 个空行） |
+
+**未自动验证项（需 `cargo run` 人工验收）**
+
+1. 去掉下划线后，金黄参数在深色背景下是否还够显眼。
+2. `"测试" in /Users/yonah/Desktop/tool_test_ファイル.txt · 3 matches` 在真实终端宽度下是否被 `…` 截断得过早（长绝对路径 + 长 pattern）。
+3. 重进 session 后工具行是否与实时完全一致（本次修复的核心验收点）。

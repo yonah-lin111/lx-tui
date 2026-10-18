@@ -278,8 +278,15 @@ impl LxChat {
             return false;
         }
         call.settle(status, error);
-        if summary.is_some() {
-            call.summary = summary;
+        if let Some(summary) = summary {
+            // 参数侧字段（pattern / path / range）在结算摘要里可能缺失：
+            // `chat::tools::to_summary` 只有结果没有参数，所以合并一次参数派生值。
+            // 重载路径（`tool_view_of`）走同一套「参数 + 结果体」拼装，两条路一致。
+            let from_args = ToolSummary::from_arguments(&call.arguments_json);
+            call.summary = Some(ToolSummary {
+                pattern: summary.pattern.or(from_args.pattern),
+                ..summary
+            });
         }
         if result_json.is_some() {
             call.result_json = result_json;

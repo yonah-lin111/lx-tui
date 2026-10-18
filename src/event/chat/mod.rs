@@ -717,6 +717,8 @@ fn view_summary(summary: &crate::chat::tools::ToolSummary) -> crate::app::state:
         added: summary.added,
         removed: summary.removed,
         matches: summary.matches,
+        pattern: summary.pattern.clone(),
+        total_lines: summary.total_lines,
         truncated: summary.truncated,
     }
 }

@@ -283,5 +283,9 @@ pub struct ToolSummary {
     pub added: Option<usize>,
     pub removed: Option<usize>,
     pub matches: Option<usize>,
+    /// `search` 的搜索模式：结果体不带它，由调用参数提取后带入摘要。
+    pub pattern: Option<String>,
+    /// `read` 实际读到的行数（结果体里的 `total_lines`）。
+    pub total_lines: Option<usize>,
     pub truncated: bool,
 }

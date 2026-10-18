@@ -647,12 +647,13 @@ pub fn chat_tool_verb() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 工具行的可变参数（路径 / 搜索范围）：金黄加下划线——与绿的结构色色差 36、
-/// 与最近的 GitHub token（注释灰 42 / 关键字珊瑚 46）也拉得开，因此保留既有金黄。
+/// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：金黄，**不加下划线**。
+///
+/// 下划线在连续多个工具行时会把整块历史划成一片横线，反而盖过翡翠绿的结构色；
+/// 去掉后靠金黄本身与正文/动词区分（与绿的结构色差 36，与最近的 GitHub token
+/// 注释灰 42 / 关键字珊瑚 46 也拉得开）。
 pub fn chat_tool_param() -> Style {
-    Style::default()
-        .fg(Color::Indexed(CHAT_GOLD))
-        .add_modifier(Modifier::UNDERLINED)
+    Style::default().fg(Color::Indexed(CHAT_GOLD))
 }
 
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——

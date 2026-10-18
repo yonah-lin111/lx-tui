@@ -827,7 +827,7 @@ fn scrolled_out_rows_draw_nothing_but_still_advance() {
 #[test]
 fn settled_search_falls_back_to_arguments_for_its_scope() {
     // 结算后摘要只带命中数（`to_summary` 不给 search 的 path）；此时从参数 JSON
-    // 取搜索范围补上，避免 search 行只剩动词与计数。
+    // 取搜索模式与范围补上，避免 search 行只剩一个裸计数。
     let mut call = tool_call(
         "search",
         ToolStatus::Completed,
@@ -842,8 +842,14 @@ fn settled_search_falls_back_to_arguments_for_its_scope() {
     let painted = detail_text(&call, 80);
     assert!(painted.contains("src/ui"), "搜索范围回退显示：{painted}");
     assert!(painted.contains("5 matches"), "{painted}");
-    // 参数里的正文/模式不铺开（只取 path）。
-    assert!(!painted.contains("fn render"), "不铺搜索模式：{painted}");
+    // 搜索模式必须显示（加引号），且排在范围之前——`"pattern" in path`。
+    assert!(
+        painted.contains(&text::agent::pattern_label("fn render")),
+        "搜索模式必须显示：{painted}"
+    );
+    let pattern_at = painted.find("fn render").expect("模式");
+    let path_at = painted.find("src/ui").expect("范围");
+    assert!(pattern_at < path_at, "模式在范围之前：{painted}");
 }
 
 #[test]
@@ -881,4 +887,147 @@ fn detail_line_is_stable_across_loading_frames() {
     for frame in 0..text::agent::STEP_BREATH_TICKS * 3 {
         assert_eq!(detail_text(&call, 80), reference, "帧 {frame} 详情行不该变");
     }
+}
+
+// ===== 5. 搜索模式 / 实际行数 / 计数组装 =====
+
+/// 搜索行必须显示 pattern（加引号）且在路径之前：`"测试" in path · 3 matches`。
+#[test]
+fn search_shows_the_pattern_before_the_path() {
+    let call = tool_call(
+        "search",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some("tool_test.txt".into()),
+            pattern: Some("测试".into()),
+            matches: Some(3),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let detail = detail_text(&call, 80);
+    let expected = format!(
+        "  {} {} {}tool_test.txt{}{}",
+        text::agent::MARKER_TREE_LEAF,
+        text::agent::pattern_label("测试"),
+        text::agent::IN_SCOPE_SEP,
+        text::LX_CHAT_TOOL_STATUS_SEP,
+        text::agent::matches_label(3)
+    );
+    assert_eq!(detail, expected, "搜索行 = 「模式 in 路径 · 命中数」");
+
+    // 模式与路径都用参数色（金黄、无下划线）。
+    let segments = detail_segments(&call, 80);
+    let scope = segments
+        .iter()
+        .find(|(text, _)| text.contains("测试"))
+        .cloned()
+        .expect("模式段");
+    assert_eq!(scope.1, style::chat_tool_param());
+    assert!(
+        !scope
+            .1
+            .add_modifier
+            .contains(ratatui::style::Modifier::UNDERLINED),
+        "参数不再加下划线"
+    );
+}
+
+/// 只有模式没有路径时仍显示模式（`"fn render" · 5 matches`）。
+#[test]
+fn search_without_path_still_shows_the_pattern() {
+    let call = tool_call(
+        "search",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: None,
+            pattern: Some("fn render".into()),
+            matches: Some(5),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("fn render"), "模式必须显示：{detail:?}");
+    assert!(detail.contains("5 matches"), "{detail:?}");
+    assert!(
+        !detail.contains(text::agent::IN_SCOPE_SEP.trim()),
+        "无路径时不该有 in：{detail:?}"
+    );
+}
+
+/// `read` 同时显示请求区间与实际行数：`12-40 · (31 lines)`。
+#[test]
+fn read_shows_range_and_actual_line_count() {
+    let call = tool_call(
+        "read",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some("src/ui/style.rs".into()),
+            range: Some((12, 40)),
+            total_lines: Some(31),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("12-40"), "区间：{detail:?}");
+    assert!(
+        detail.contains(&text::agent::lines_label(31)),
+        "实际行数：{detail:?}"
+    );
+    // 行数与区间同色（dim 元信息）。
+    let segments = detail_segments(&call, 80);
+    let lines = segments
+        .iter()
+        .find(|(text, _)| text.contains("31 lines"))
+        .cloned()
+        .expect("行数段");
+    assert_eq!(lines.1, style::chat_tool_range());
+}
+
+/// 没有实际行数时只显示区间（老数据/中断调用不编造）。
+#[test]
+fn read_without_total_lines_shows_the_range_only() {
+    let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
+    let detail = detail_text(&call, 80);
+    assert!(detail.contains("12-40"));
+    assert!(!detail.contains("lines)"), "不编造行数：{detail:?}");
+}
+
+/// 增删计数合成一段 `+12 -4`（中间不插 `·`），且各自保留绿/红。
+#[test]
+fn edit_counts_are_one_group_without_a_separator() {
+    let call = tool_call("edit", ToolStatus::Completed, Some(edit_summary()), None);
+    let detail = detail_text(&call, 80);
+    assert!(
+        detail.ends_with("+12 -4"),
+        "应是 `+12 -4` 一个整体：{detail:?}"
+    );
+    assert!(
+        !detail.contains(&format!("+12{}", text::LX_CHAT_TOOL_STATUS_SEP)),
+        "两个计数之间不该有 `·`：{detail:?}"
+    );
+    // 颜色仍分开：`+12` 绿、`-4` 红。
+    let segments = detail_segments(&call, 80);
+    let added = segments
+        .iter()
+        .find(|(text, _)| text.contains("+12"))
+        .cloned()
+        .expect("+12");
+    assert_eq!(added.1, style::agent_added());
+    let removed = segments
+        .iter()
+        .find(|(text, _)| text.contains("-4"))
+        .cloned()
+        .expect("-4");
+    assert_eq!(removed.1, style::agent_removed());
+}
+
+/// `write` 的 `+18 -0` 同样合体（0 删除仍显示）。
+#[test]
+fn write_counts_are_one_group_too() {
+    let call = tool_call("write", ToolStatus::Completed, Some(write_summary()), None);
+    let detail = detail_text(&call, 80);
+    assert!(detail.ends_with("+18 -0"), "{detail:?}");
 }

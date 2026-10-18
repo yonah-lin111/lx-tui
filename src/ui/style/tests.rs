@@ -120,16 +120,18 @@ fn chat_step_palette_uses_green_structure_and_gold_params() {
         "完成方块不加粗，与运行中区分"
     );
 
-    // 可变参数沿用金黄 220 + 下划线（“每次调用会变的值”）。
+    // 可变参数沿用金黄 220，但**不加下划线**（用户要求：连续工具行里下划线成片，
+    // 会盖过翡翠绿结构色；靠金黄本身区分即可）。
     assert_eq!(
         chat_tool_param().fg,
         agent_param().fg,
         "可变参数沿用既有金黄（与 [UI] 样例同源）"
     );
     assert!(
-        chat_tool_param()
+        !chat_tool_param()
             .add_modifier
-            .contains(Modifier::UNDERLINED)
+            .contains(Modifier::UNDERLINED),
+        "工具参数不再加下划线"
     );
     // 只读元信息退回 dim：不占用第三个色相档。
     assert_eq!(chat_tool_range(), muted(), "行范围退回 dim");
