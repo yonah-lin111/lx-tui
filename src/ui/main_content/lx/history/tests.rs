@@ -510,9 +510,12 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
         !line0.contains('▸') && !line0.contains('▾'),
         "折叠标记已移除：{line0}"
     );
-    for frame in text::LX_LOADING_FRAMES {
-        assert!(!line0.contains(frame), "不再使用 braille 转轮：{line0}");
-    }
+    assert!(
+        !line0
+            .chars()
+            .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+        "不再使用 braille 转轮：{line0}"
+    );
     // 呼吸：进入空心相位后同一行换成 `□`（相位每 `STEP_BREATH_TICKS` 帧翻转）。
     streaming.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
     let mut buf = Buffer::empty(area);

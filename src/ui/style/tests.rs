@@ -329,3 +329,43 @@ fn step_roles_use_distinct_colors() {
     assert_ne!(body, thinking, "正文与思考的方块必须不同色");
     assert_ne!(body, tool, "正文与工具的方块必须不同色");
 }
+
+/// loading 卡片的循环色必须**严格来自 `Native Agent` 标签渐变**，不能自己另起一套。
+///
+/// 用户要求「小卡片的颜色使用 native agent 的字体颜色循环显示」。这条测试把
+/// 「loading 的四档色」与「标签逐字符取色」直接对齐：以后谁调 `lx_entry_gradient`
+/// 或换循环表，两边必须一起动。
+#[test]
+fn loading_cycle_matches_native_agent_label_gradient() {
+    let cycle = crate::ui::text::agent::native_label_cycle();
+    assert!(!cycle.is_empty(), "循环表不能为空");
+
+    // 标签上真正出现过的颜色集合（去重、保持出现顺序）。
+    let label = crate::ui::text::LX_ENTRY_NATIVE;
+    let length = label.chars().count();
+    let mut seen: Vec<u8> = Vec::new();
+    for position in 0..length {
+        let Some(Color::Indexed(index)) =
+            lx_entry_label_style(LxEntry::Native, position, length, false).fg
+        else {
+            panic!("标签取色必须是 256 色槽位");
+        };
+        if !seen.contains(&index) {
+            seen.push(index);
+        }
+    }
+    assert_eq!(cycle, seen.as_slice(), "循环表 == 标签上实际出现的颜色序列");
+
+    // 每一档都能被 `chat_loading_phase` 取到，且加粗。
+    for (phase, expected) in cycle.iter().enumerate() {
+        let style = chat_loading_phase(phase);
+        assert_eq!(style.fg, Some(Color::Indexed(*expected)), "第 {phase} 档");
+        assert!(style.add_modifier.contains(Modifier::BOLD), "加载色加粗");
+    }
+    // 循环取模：走完一轮回到起点。
+    assert_eq!(
+        chat_loading_phase(cycle.len()),
+        chat_loading_phase(0),
+        "循环取模"
+    );
+}

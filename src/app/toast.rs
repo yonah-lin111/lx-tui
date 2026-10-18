@@ -10,11 +10,7 @@ pub const TOAST_DURATION: Duration = Duration::from_millis(2000);
 /// toast 语义变体；决定边框颜色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
-    /// 普通提示：强调色。
     Info,
-    /// 需要留意但不算失败：**警告黄**（如「你输入的 `/xxx` 不是一条命令」）。
-    Warning,
-    /// 失败：红色。
     Error,
 }
 

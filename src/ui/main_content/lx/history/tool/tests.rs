@@ -206,12 +206,12 @@ fn completed_tool_has_square_verb_and_status_without_type_icon() {
     for (name, summary, verb) in cases {
         let call = tool_call(name, ToolStatus::Completed, Some(summary), None);
         let (painted, grid) = render_row(&call, 80);
-        for frame in text::LX_LOADING_FRAMES {
-            assert!(
-                !painted.contains(frame),
-                "{name} 完成态不得出现 braille 转轮 {frame}：{painted}"
-            );
-        }
+        assert!(
+            !painted
+                .chars()
+                .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+            "{name} 完成态不得出现 braille 转轮：{painted}"
+        );
         assert!(
             painted.starts_with(text::agent::STEP_MARK_FILLED),
             "{name} 行首为静态方块：{painted}"

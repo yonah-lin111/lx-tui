@@ -984,9 +984,9 @@ fn expired_arm() -> std::time::Instant {
         .expect("monotonic clock")
 }
 
-// ===== 发送时的「未知命令」拦截 =====
+// ===== 发送时的「未知命令」拦截（提示走输入框上方聊天栏，不是 toast）=====
 
-/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、toast 是警告黄」。
+/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、聊天栏出现黄色警告」。
 fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
     let mut state = ready_state(draft);
     let pane = focus_pane(&state);
@@ -1006,18 +1006,25 @@ fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
         draft,
         "草稿必须保留"
     );
-    // 警告黄 + 回显命令名 + 给出可用命令提示。
-    let toast = state.toast.as_ref().expect("有警告 toast");
-    assert_eq!(toast.kind, ToastKind::Warning, "用警告档（黄）而非错误红");
+    // **不是 toast**：警告写进聊天栏状态。
+    assert!(state.toast.is_none(), "不应新建 toast");
+    let warning = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .warning
+        .as_ref()
+        .expect("聊天栏应有警告");
     assert!(
-        toast.message.contains(expected_echo),
+        warning.message.contains(expected_echo),
         "回显命令 {expected_echo:?}：{}",
-        toast.message
+        warning.message
     );
     assert!(
-        toast.message.contains("/model"),
+        warning.message.contains("/model"),
         "应提示可用命令：{}",
-        toast.message
+        warning.message
     );
 }
 
@@ -1029,18 +1036,64 @@ fn unknown_slash_command_warns_instead_of_sending() {
 }
 
 #[test]
-fn unknown_slash_command_toast_is_warning_not_error() {
+fn unknown_command_warning_expires_after_two_seconds() {
     let mut state = ready_state("/nope");
     let pane = focus_pane(&state);
     try_send(&mut state, pane);
-    let toast = state.toast.as_ref().expect("有 toast");
-    assert_eq!(toast.kind, ToastKind::Warning);
-    assert_ne!(toast.kind, ToastKind::Error, "不是失败，不该用红色");
-    // 边框取警告色（与聊天历史里「中断」同一档黄）。
-    assert_eq!(
-        crate::ui::toast::border_style(ToastKind::Warning),
-        crate::ui::style::agent_warn()
+    let deadline = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .warning
+        .as_ref()
+        .expect("有警告")
+        .deadline;
+    // 刚创建时未到期。
+    assert!(
+        !super::super::tick(&mut state, Instant::now()),
+        "未到期不该清除"
     );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .warning
+            .is_some()
+    );
+    // 到点后 tick 清除，聊天栏那行随之消失。
+    assert!(super::super::tick(&mut state, deadline), "到期应清除");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .warning
+            .is_none(),
+        "到点后警告消失"
+    );
+    assert!(!super::super::tick(&mut state, deadline), "已清过不再变化");
+}
+
+#[test]
+fn unknown_command_warning_sets_a_wakeup_deadline() {
+    let mut state = ready_state("/nope");
+    let pane = focus_pane(&state);
+    try_send(&mut state, pane);
+    let deadline = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .warning
+        .as_ref()
+        .expect("有警告")
+        .deadline;
+    // 事件循环据此安排唤醒，否则警告永远不会消失。
+    assert_eq!(super::super::next_deadline(&state), Some(deadline));
 }
 
 #[test]
@@ -1053,7 +1106,7 @@ fn known_commands_and_plain_text_still_send_normally() {
         "/new",                            // 内置命令
         "/session",                        // /resume 的别名
         "/",                               // 还没敲完
-        "/path/to/file.rs 这个文件有问题", // 命令名带空白 → 不是命令
+        "/path/to/file.rs 这个文件有问题", // 首个词含 / → 路径样文本
         "/etc/hosts 是什么",               // 同上
         "/foo\n正文第二行",                // 多行草稿 → 不按命令处理
     ] {
@@ -1066,9 +1119,14 @@ fn known_commands_and_plain_text_still_send_normally() {
             .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. }));
         assert!(sent, "{draft:?} 应按普通消息发送");
         assert!(
-            state.toast.is_none(),
-            "{draft:?} 不该有警告：{:?}",
-            state.toast
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .chat
+                .warning
+                .is_none(),
+            "{draft:?} 不该有警告"
         );
     }
 }

@@ -175,9 +175,6 @@ pub const LX_TOGGLE_LX: &str = "[lx]";
 /// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
-/// lx 页输入框上方 loading 行的转轮帧（braille，对齐 codex 的 10 帧）与文案。
-pub const LX_LOADING_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-pub const LX_LOADING_LABEL: &str = "Working";
 /// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
 pub const LX_JUMP_BOTTOM: &str = "↓";
 pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";

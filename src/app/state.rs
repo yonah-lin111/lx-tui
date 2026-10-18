@@ -21,9 +21,10 @@ pub mod pane;
 pub mod workspace;
 
 pub use lx::{
-    AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, HistoryEntry, HistoryPanel, Lx,
-    LxChat, LxEntry, ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow,
-    RequestKey, RequestState, SlashCommand, SlashPanel, ToolCallView, ToolStatus, ToolSummary,
+    AssistantStepView, ChatMessageView, ChatPartView, ChatWarning, FrozenModel, HistoryEntry,
+    HistoryPanel, Lx, LxChat, LxEntry, ModelCandidate, ModelPicker, ModelPickerStage,
+    ModelsSnapshot, PanelWindow, RequestKey, RequestState, SlashCommand, SlashPanel, ToolCallView,
+    ToolStatus, ToolSummary,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use workspace::{

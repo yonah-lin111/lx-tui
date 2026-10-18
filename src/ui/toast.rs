@@ -111,14 +111,10 @@ pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     crate::ui::widgets::modal::close_button_at(area, column, row)
 }
 
-/// 边框语义色：普通提示用强调色、警告用黄色、失败用红色。
-///
-/// 警告色取 `agent_warn`（Yellow 加粗），与聊天历史里「中断」的黄色同一语义档，
-/// 避免出现第三套黄色。
-pub(crate) fn border_style(kind: ToastKind) -> Style {
+/// 边框语义色：普通提示用强调色，失败用红色。
+fn border_style(kind: ToastKind) -> Style {
     match kind {
         ToastKind::Info => style::accent(),
-        ToastKind::Warning => style::agent_warn(),
         ToastKind::Error => style::error(),
     }
 }

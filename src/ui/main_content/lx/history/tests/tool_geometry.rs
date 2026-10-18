@@ -229,12 +229,12 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
         header.starts_with("■ Thought"),
         "完成态显示静态方块 + Thought：{header}"
     );
-    for frame in text::LX_LOADING_FRAMES {
-        assert!(
-            !header.contains(frame),
-            "思考完成态不得出现 braille 转轮 {frame}：{header}"
-        );
-    }
+    assert!(
+        !header
+            .chars()
+            .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+        "思考完成态不得出现 braille 转轮：{header}"
+    );
     let running_label = text::tool_status_label(ToolStatus::Running);
     let tool_line = |buf: &Buffer| -> String {
         (0..6)

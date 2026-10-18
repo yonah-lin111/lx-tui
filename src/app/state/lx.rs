@@ -9,8 +9,8 @@ pub mod mention;
 pub mod slash;
 
 pub use chat::{
-    AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, LxChat, ModelsSnapshot,
-    RequestKey, RequestState, ToolCallView, ToolStatus, ToolSummary,
+    AssistantStepView, ChatMessageView, ChatPartView, ChatWarning, FrozenModel, LxChat,
+    ModelsSnapshot, RequestKey, RequestState, ToolCallView, ToolStatus, ToolSummary,
 };
 pub use mention::{LxMention, LxMentionView};
 pub use slash::{

@@ -513,11 +513,21 @@ pub fn chat_provider() -> Style {
     muted()
 }
 
-/// lx 输入框上方 loading 行：转轮用品牌天蓝（Indexed 117）加粗。
-pub fn chat_loading_spinner() -> Style {
+/// lx 输入框上方 loading 的**当前档位色**：按 `Native Agent` 标签渐变循环取色、加粗。
+///
+/// 卡片 `■` 与「被扫描窗口命中的字符」共用本函数——同一时刻两者同色，视觉上是
+/// 颜色从卡片流向文字。`phase` 由 `loading_frame` 决定，内部已按循环长度取模。
+pub fn chat_loading_phase(phase: usize) -> Style {
+    let cycle = crate::ui::text::agent::native_label_cycle();
+    let index = cycle.get(phase % cycle.len()).copied().unwrap_or(117);
     Style::default()
-        .fg(Color::Indexed(117))
+        .fg(Color::Indexed(index))
         .add_modifier(Modifier::BOLD)
+}
+
+/// lx 输入框上方聊天栏的临时警告（未知命令等）：警告黄，不加粗（避免比正文更抢眼）。
+pub fn chat_warning() -> Style {
+    Style::default().fg(Color::Yellow)
 }
 
 // ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 金黄参数）=====

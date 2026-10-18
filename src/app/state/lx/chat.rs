@@ -265,6 +265,37 @@ pub struct StickySuppression {
     pub row: usize,
 }
 
+/// 输入框上方聊天栏的临时警告：`Warning: <正文>`，黄色，到点自动消失。
+///
+/// 与 toast 的区别是**位置与生命周期**：它占用聊天栏那一行（`Working` / `jump to bottom`
+/// 的同一行，不额外占历史高度），2 秒后自行消失。未知命令这类「不是失败、只是敲错了」
+/// 的反馈走这里；真正的失败仍走红色 toast。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatWarning {
+    /// 正文（不含 `Warning: ` 前缀，前缀由渲染层加）。
+    pub message: String,
+    /// 到期时刻；`tick` 到点清除。
+    pub deadline: std::time::Instant,
+}
+
+impl ChatWarning {
+    /// 以当前时刻起算的 [`WARNING_TTL`]。
+    pub fn new(message: impl Into<String>, now: std::time::Instant) -> Self {
+        Self {
+            message: message.into(),
+            deadline: now + WARNING_TTL,
+        }
+    }
+
+    /// 是否已到期。
+    pub fn is_expired(&self, now: std::time::Instant) -> bool {
+        now >= self.deadline
+    }
+}
+
+/// 聊天栏警告的展示时长（与 toast 一致，2 秒）。
+pub const WARNING_TTL: std::time::Duration = std::time::Duration::from_millis(2000);
+
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
 pub struct LxChat {
@@ -303,6 +334,11 @@ pub struct LxChat {
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
+    /// 输入框上方聊天栏的**临时警告**（如「你敲的 `/xxx` 不是命令」）。
+    ///
+    /// 复用聊天栏那一行（与 `Working` 同一个位置、同一套排版），黄色、`Warning: ` 开头，
+    /// 到点自动消失；不新建浮层、不进历史。
+    pub warning: Option<ChatWarning>,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
     /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
@@ -334,6 +370,7 @@ impl LxChat {
             loading_frame: 0,
             jump_bottom_hover: false,
             stop_armed_at: None,
+            warning: None,
             suppressed_prompt_header: None,
         }
     }

@@ -294,3 +294,11 @@ fn main() {
 [OpenAI](https://openai.com) <https://example.com>
 ![logo](https://example.com/logo.png)
 ";
+
+/// lx 页 `Native Agent` 标签渐变的**去重色序列**（218 粉 → 182 淡紫 → 153 浅蓝 → 117 天蓝）。
+///
+/// 聊天栏 loading 卡片的循环换色就用这 4 档：它保证「loading 的颜色 = Native 入口标签
+/// 的颜色」，不引入第二套品牌色。由 `ui::style::tests` 与 `lx_entry_label_style` 对齐校验。
+pub fn native_label_cycle() -> &'static [u8] {
+    &[218, 182, 153, 117]
+}
