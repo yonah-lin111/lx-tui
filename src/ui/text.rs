@@ -1,6 +1,7 @@
 //! 全部用户可见文案；组件与逻辑禁止散落硬编码字符串。
 
 pub mod agent;
+pub mod chat;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 

@@ -983,3 +983,136 @@ fn expired_arm() -> std::time::Instant {
         .checked_sub(STOP_ARM_WINDOW + Duration::from_millis(1))
         .expect("monotonic clock")
 }
+
+// ===== 发送时的「未知命令」拦截 =====
+
+/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、toast 是警告黄」。
+fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
+    let mut state = ready_state(draft);
+    let pane = focus_pane(&state);
+    assert!(try_send(&mut state, pane), "{draft:?} 应被拦下并给出反馈");
+    // 没有产生发送效应。
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. })),
+        "{draft:?} 不应真的发给模型：{:?}",
+        state.effects
+    );
+    // 草稿保留，用户可以直接改。
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        draft,
+        "草稿必须保留"
+    );
+    // 警告黄 + 回显命令名 + 给出可用命令提示。
+    let toast = state.toast.as_ref().expect("有警告 toast");
+    assert_eq!(toast.kind, ToastKind::Warning, "用警告档（黄）而非错误红");
+    assert!(
+        toast.message.contains(expected_echo),
+        "回显命令 {expected_echo:?}：{}",
+        toast.message
+    );
+    assert!(
+        toast.message.contains("/model"),
+        "应提示可用命令：{}",
+        toast.message
+    );
+}
+
+#[test]
+fn unknown_slash_command_warns_instead_of_sending() {
+    assert_blocked_as_unknown_command("/foo", "/foo");
+    assert_blocked_as_unknown_command("/xyz 参数", "/xyz");
+    assert_blocked_as_unknown_command("/summary", "/summary");
+}
+
+#[test]
+fn unknown_slash_command_toast_is_warning_not_error() {
+    let mut state = ready_state("/nope");
+    let pane = focus_pane(&state);
+    try_send(&mut state, pane);
+    let toast = state.toast.as_ref().expect("有 toast");
+    assert_eq!(toast.kind, ToastKind::Warning);
+    assert_ne!(toast.kind, ToastKind::Error, "不是失败，不该用红色");
+    // 边框取警告色（与聊天历史里「中断」同一档黄）。
+    assert_eq!(
+        crate::ui::toast::border_style(ToastKind::Warning),
+        crate::ui::style::agent_warn()
+    );
+}
+
+#[test]
+fn known_commands_and_plain_text_still_send_normally() {
+    // 内置命令由面板采纳链路处理；这里验证 try_send **不**拦正常文本。
+    for draft in [
+        "帮我看看这段代码",
+        "/model",                          // 内置命令（面板能匹配到）
+        "/resume",                         // 内置命令
+        "/new",                            // 内置命令
+        "/session",                        // /resume 的别名
+        "/",                               // 还没敲完
+        "/path/to/file.rs 这个文件有问题", // 命令名带空白 → 不是命令
+        "/etc/hosts 是什么",               // 同上
+        "/foo\n正文第二行",                // 多行草稿 → 不按命令处理
+    ] {
+        let mut state = ready_state(draft);
+        let pane = focus_pane(&state);
+        try_send(&mut state, pane);
+        let sent = state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. }));
+        assert!(sent, "{draft:?} 应按普通消息发送");
+        assert!(
+            state.toast.is_none(),
+            "{draft:?} 不该有警告：{:?}",
+            state.toast
+        );
+    }
+}
+
+#[test]
+fn unknown_command_detection_matches_panel_rules() {
+    // 面板能匹配到的前缀一律不拦（用户可能正要选中它）。
+    for draft in ["/mo", "/mod", "/resu", "/ne", "/sess", "/cl"] {
+        assert_eq!(
+            unknown_slash_command(draft),
+            None,
+            "{draft:?} 面板能匹配到，应交给面板"
+        );
+    }
+    // 面板匹配不到的单行命令拦下。
+    for draft in ["/foo", "/zzz", "/models", "/resumes"] {
+        assert_eq!(
+            unknown_slash_command(draft),
+            Some(draft.to_string()),
+            "{draft:?} 应判为未知命令"
+        );
+    }
+    // 空草稿、纯文本、未敲完的 `/`、多行草稿、行内斜杠、路径样文本都不算命令。
+    for draft in [
+        "",
+        "hello",
+        "/",
+        "/x\ny",
+        "前面有字 /foo",
+        "/path/to/file.rs 这个文件有问题",
+        "/etc/hosts 是什么",
+    ] {
+        assert_eq!(
+            unknown_slash_command(draft),
+            None,
+            "{draft:?} 不该判为未知命令"
+        );
+    }
+    // 带参数的未知命令仍拦（命令名取首个词），回显整段原文。
+    for draft in ["/a b", "/foo 一些参数", "/zzz --flag value"] {
+        assert_eq!(
+            unknown_slash_command(draft),
+            Some(draft.to_string()),
+            "{draft:?} 首个词不是命令，应拦下"
+        );
+    }
+}

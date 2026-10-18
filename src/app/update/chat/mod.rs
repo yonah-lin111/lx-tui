@@ -55,6 +55,17 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         // 流中 Enter 不入队、不造消息。
         return false;
     }
+    // 以 `/` 开头的草稿若**不是**任何内置命令（命令面板里也没有它），不要当成
+    // 普通消息发给模型——那会得到一段莫名其妙的自问自答。改为黄色警告提示，
+    // 并**保留草稿**让用户改。（命令面板的采纳走 `apply_slash_enter`，不经过这里。）
+    if let Some(command) = unknown_slash_command(&draft) {
+        show_chat_toast_owned(
+            state,
+            ToastKind::Warning,
+            text::chat::unknown_command(&command),
+        );
+        return true;
+    }
     // 解析有效模型（窗格选择或配置默认）。
     let Some(selection) = selection else {
         show_chat_toast(state, ToastKind::Error, text::LX_CHAT_NO_MODEL);
@@ -545,6 +556,50 @@ fn next_generation(state: &AppState, pane: PaneId) -> u64 {
 /// 显示聊天相关 toast。
 fn show_chat_toast(state: &mut AppState, kind: ToastKind, message: &'static str) {
     crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
+}
+
+/// 显示带动态内容的聊天 toast（例如回显用户敲错的那个命令名）。
+fn show_chat_toast_owned(state: &mut AppState, kind: ToastKind, message: String) {
+    crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
+}
+
+/// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。
+///
+/// 判定口径与命令面板一致（复用 [`slash_trigger`] 与 [`SlashPanel::commands_matching`]），
+/// 保证「面板里能选中的」永远不会被这里拦下：
+/// - 只有**单行**命令算数：多行草稿（首行以 `/` 开头、后面还有正文）可能是用户在写
+///   markdown 引用或路径，只有当**整段草稿**恰好是一行 `/xxx` 时才拦；
+/// - 围栏代码块内不拦（`slash_trigger` 已经处理）。
+///
+/// 返回值保留用户输入的原文（含 `/`），由 `text::lx_unknown_command` 负责截断与拼句。
+fn unknown_slash_command(draft: &str) -> Option<String> {
+    use crate::app::state::lx::slash::{SlashPanel, slash_trigger};
+    // 只处理「整段就是一行」的草稿。
+    let line = draft.trim();
+    if line.contains('\n') {
+        return None;
+    }
+    // 与面板同口径：光标在末尾时的触发前缀。
+    let query = slash_trigger(line, line.len())?;
+    let trimmed = query.trim();
+    // 单独一个 `/` 说明用户还没敲完；不拦（面板此时是完整列表）。
+    if trimmed == "/" {
+        return None;
+    }
+    // 命令名只取**首个词**：`/foo 参数` 的命令名是 `foo`，后面的参数不影响判定。
+    // 但首个词里若还含 `/`（`/path/to/file.rs 这个文件有问题`），说明用户在写路径、
+    // 没在敲命令，按普通文本放行。
+    let name = trimmed.trim_start_matches('/');
+    let name = name.split_whitespace().next().unwrap_or("");
+    if name.is_empty() || name.contains('/') {
+        return None;
+    }
+    // 面板能匹配到就交给面板（用户可能想选中后 Enter）。
+    if !SlashPanel::commands_matching(&format!("/{name}")).is_empty() {
+        return None;
+    }
+    // 回显整段原文（含参数），让用户确认自己敲了什么。
+    Some(trimmed.to_string())
 }
 
 /// 测试钩子：直接完成模型选择（绕过两级面板交互）。

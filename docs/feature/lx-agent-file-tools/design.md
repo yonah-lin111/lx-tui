@@ -1167,3 +1167,48 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
    只改 `ui/style.rs` 的 `CHAT_STEP_GREEN` 常量）。
 5. GitHub Dark 的固定 RGB 在用户的终端配色上是否够亮/够对比（GitHub 假定深底 `#0d1117`；
    若用户的终端底色偏灰，`#8b949e` 注释与 `#7d8590` 次要色可能偏暗——只改 `github_dark` 常量）。
+
+## 22. 已实施（G12：未命中命令面板的 `/命令` 发送时改弹警告黄 toast）
+
+**用户需求（原话）**：设置输入框的 `/` 命令，如果用户输入并发送的命令不是命令面板
+（即不是命令面板里的项），需要使用警告性提示（黄色的）。
+
+**问题**：此前 `try_send` 只校验入口 / 模型 / 工作区，草稿内容原样发给模型。用户敲
+`/foo` 回车会被当成普通消息发给模型，得到一段莫名其妙的自言自语——既浪费一次调用，
+也没告诉用户「这不是命令」。
+
+**方案**：在 `try_send` 的草稿校验链里加一步「未知命令拦截」，命中则**弹 `Warning` 档
+toast 并保留草稿**，不产生任何发送效应。
+
+| 位置 | 变更 |
+| --- | --- |
+| `app/toast.rs` | `ToastKind` 新增 `Warning` 档（原有 `Info` / `Error`） |
+| `ui/toast.rs` | `border_style` 增 `Warning => style::agent_warn()`（黄色加粗，与聊天历史「中断」同一档，不新增第三套黄）；函数提升为 `pub(crate)` 供测试断言 |
+| `app/update/chat/mod.rs` | 新增 `unknown_slash_command(&str) -> Option<String>` 判定 + `show_chat_toast_owned`（toast 正文需要动态回显命令名） |
+| `ui/text/chat.rs`（新文件） | 新增 `UNKNOWN_COMMAND_PREFIX` / `_HINT` / `_SAMPLE` 与 `unknown_command()`（回显命令名，超 32 字符截断加 `…`）。放这里而非 `ui/text.rs`：后者当时已 999 行，贴着 1000 行上限 |
+
+**判定口径（刻意与命令面板完全一致，避免误伤）**
+
+判定复用面板自己的 `slash_trigger` 与 `SlashPanel::commands_matching`，因此
+**面板里能选中的永远不会被拦**。具体放行条件：
+
+1. 整段草稿不是单行 → 放行（多行草稿可能是 markdown 引用/路径，不是命令）；
+2. `slash_trigger` 返回 `None`（不在行首命令位置、或在围栏代码块内）→ 放行；
+3. 整段就是单独一个 `/`（用户还没敲完）→ 放行；
+4. 命令名（**首个词**）为空，或首个词里还含 `/`（`/path/to/file.rs 说明` 这种路径样
+   文本）→ 放行；
+5. 面板能模糊匹配到（`/mo`、`/sess`、`/cl` 等前缀与别名）→ 放行，交给面板。
+
+其余一律拦下并回显**整段原文**（含参数，`/foo 参数` 判为未知命令）。
+
+**测试证据**（`cargo test` 全绿，lib 2302 项）
+
+| 测试 | 断言 |
+| --- | --- |
+| `app::update::chat::tests::unknown_slash_command_warns_instead_of_sending` | `/foo`、`/xyz 参数`、`/summary` 被拦：无 `BeginChatTurn` 效应、草稿保留、toast 为 `Warning`、回显命令名并提示 `/model` |
+| `app::update::chat::tests::unknown_slash_command_toast_is_warning_not_error` | 档位是 `Warning` 而非 `Error`（不是失败不该红），且边框色 = `agent_warn` |
+| `app::update::chat::tests::known_commands_and_plain_text_still_send_normally` | 普通文本、`/model` `/resume` `/new` `/session` 别名、单独 `/`、路径样文本、多行草稿都照常发送且**无** toast |
+| `app::update::chat::tests::unknown_command_detection_matches_panel_rules` | 面板能匹配的前缀全部放行；`/foo` `/zzz` `/models` `/resumes` 拦；`/a b` 等带参数未知命令拦；空/纯文本/`/`/多行/行内斜杠/路径样文本放行 |
+| `ui::toast::tests::warning_toast_border_is_yellow` | `Warning` 边框 = `agent_warn`，且 Info/Warning/Error 三档两两不同 |
+| `ui::toast::tests::unknown_command_toast_paints_yellow_border_and_echoes_command` | 端到端绘制：四角与边框格全是警告黄，正文回显 `/foo` 并提示 `/model` |
+| `ui::text::chat::tests::unknown_command_*`（4 项） | 文案拼接：回显命令 + 提示可用命令；保留参数并去首尾空白；超 32 字符截断加 `…`；短命令不截断 |
