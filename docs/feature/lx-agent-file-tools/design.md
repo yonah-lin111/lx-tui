@@ -1168,95 +1168,89 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 5. GitHub Dark 的固定 RGB 在用户的终端配色上是否够亮/够对比（GitHub 假定深底 `#0d1117`；
    若用户的终端底色偏灰，`#8b949e` 注释与 `#7d8590` 次要色可能偏暗——只改 `github_dark` 常量）。
 
-## 22. 已实施（G12：loading 改成 Native 循环色卡片 + 扫描高亮；未知命令走聊天栏黄色警告）
+## 22. 已实施（G12：loading 卡片 5 帧循环 + 扫描；未知命令走 toast）
 
-本节是两轮需求合并后的最终形态。第一轮我理解错了（把「未知命令提示」做成了新建
-`ToastKind::Warning` 浮层），用户纠正为「不是新建 toast，而是使用和 Interrupted 一样的
-组件显示、在刚刚的 toast 位置」——经 grill-me 逐项确认后定为：**复用输入框上方聊天栏
-那一行**，不做浮层、不新增 toast 档位。
+两轮需求合并后的最终形态。演进过程值得记录，因为中间我错了两次：
+**第一轮**把「未知命令提示」做成新建 `ToastKind::Warning` 浮层（错）；
+**第二轮**经 grill-me 改成「输入框上方聊天栏的黄色 `Warning:`」（也错）；
+**第三轮（当前）**用户明确：提示**回到 toast**（与复制文案同款），聊天栏只留 loading。
 
-### 22.1 loading：`■ Working...` 卡片 + 从左到右扫描
+### 22.1 loading：5 帧循环卡片 + 从左到右扫描
 
-用户原话：「参考 lx 页面 native agent 的字体颜色，将 lx 输入框上方的 loading 调整为：
-正方形卡片 Working... 这种格式，小卡片的颜色使用 native agent 的字体颜色循环显示即可，
-Working... 使用颜色从左到右的渲染高亮（从左到右扫描）」。
+用户原话：「working 左侧的小方块颜色修改为 蓝 -> 默认字体颜色镂空的（参考正文内容的小方块
+颜色） -> 粉 -> 默认字体颜色（参考 markdown 正文内容的小方块颜色） -> 默认字体颜色镂空的
+（参考正文内容的小方块颜色），变化的时间参考 agent 小方块的时间」。
 
-| 决策 | 取值 | 依据 |
-| --- | --- | --- |
-| 卡片字形 | `■`（`text::chat::LOADING_MARK`，与历史步骤方块同一字形） | grill-me 第 2 轮，用户在 `█`/`▮`/`■`/`▛▜` 中选 C |
-| 卡片颜色 | Native 标签渐变 4 档 `218 → 182 → 153 → 117` 循环 | 用户指定「native agent 的字体颜色循环」，循环表放 `text::agent::native_label_cycle()` |
-| 换色节奏 | 每 100ms 一档（复用 `LOADING_FRAME_INTERVAL`） | 不新增定时器；完整一圈 400ms |
-| 扫描形态 | 3 字符宽高亮窗口，自左向右，走出末尾后从左侧重新进入 | grill-me 第 4/5 轮，用户选 A（扫描亮点而非渐变） |
-| 扫描色 | 窗口内字符 = **卡片当前那一档色**（同时刻同色） | 用户「字体颜色需要在扫描时变色（native agent 的字体颜色）」 |
-| 未扫到的字符 | 次要色（dim） | 对比最强 |
-| 位次 | 窗口右端随 `loading_frame` 前进，每帧 1 字符 | 与换色同频，一次 tick 同时推进两者 |
+| 帧 | 字形 | 前景 | 字重 |
+| --- | --- | --- | --- |
+| ① | `■` 实心 | `Indexed 117` 蓝 | 加粗 |
+| ② | `□` 镂空 | **默认字体色**（不设 fg） | 不加粗 |
+| ③ | `■` 实心 | `Indexed 218` 粉 | 加粗 |
+| ④ | `■` 实心 | **默认字体色** | 不加粗 |
+| ⑤ | `□` 镂空 | **默认字体色** | 不加粗 |
 
-**为什么卡片和扫描色用同一个函数**：`style::chat_loading_phase(phase)` 同时供卡片与
-扫描窗口使用，物理上不可能出现「卡片是粉、亮点是蓝」的错位；测试
-`working_label_scans_left_to_right_in_mark_color` 直接断言两者 `fg` 相等。
+「默认字体色」三帧与 `chat_step_mark_done_body()`（markdown 正文里的静态方块）**完全同款**
+——不设前景、不加粗，由 `loading_mark_cycles_blue_hollow_pink_default_hollow` 直接比对。
 
-### 22.2 未知命令：聊天栏黄色 `Warning:`，2 秒消失
+- **节奏**：与 agent 步骤方块共用同一个 `loading_frame`，由 `advance_lx_loading` 按
+  `LOADING_FRAME_INTERVAL`（100ms）推进；呼吸相位另按 `STEP_BREATH_TICKS`（4）折算。
+  用户「变化的时间参考 agent 小方块的时间」由此满足——它们本来就是同一个计数器。
+- **扫描**：3 字符宽窗口自左向右，窗口内取**卡片当前帧**样式。
+  默认字体色帧没有前景可亮，必须补**下划线 + 加粗**，否则 3/5 的帧里扫描完全不可见
+  （这是实现时踩到的一个真实问题：初版只取 `fg`，dump 出来 `scan_bold=0`）。
+- 帧表 `text::agent::loading_mark_frames()`，取样式 `style::chat_loading_frame(phase)`
+  → `(字形, 样式)`，扫描用 `style::chat_loading_scan(phase)`。
 
-用户原话（纠正第一轮）：「还是修改为在输入框上方的 working 区域显示吧，显示 2s 就移除，
-字体颜色使用黄色，开头为 Warning: xxxx」。
+### 22.2 未知命令：走 toast（与复制文案同款）
 
-| 决策 | 取值 | 依据 |
-| --- | --- | --- |
-| 位置 | 输入框上方聊天栏那一行（与 `Working` 同一位置） | 用户明确要求；**不是** toast |
-| 文案 | `Warning: Unknown command `/foo`; try /model, /resume or /new` | 用户指定 `Warning: ` 开头 |
-| 颜色 | `Color::Yellow` 整行（`style::chat_warning()`，不加粗） | 用户指定黄色 |
-| 生命周期 | **2 秒**自动消失（`ChatWarning` + `WARNING_TTL`） | 用户指定 2s；与 `TOAST_DURATION` 同值 |
-| 到期机制 | `update::tick` 清除 + `update::next_deadline` 返回该 deadline 安排唤醒 | 否则警告永远不会消失 |
-| 与 jump 的关系 | **警告优先**，`↓ jump to bottom` 整体让位不显示 | grill-me 第 6 轮，用户选 A |
-| 与 loading 的关系 | 警告优先（两者不会同时出现：未知命令发生在非流中） | — |
-| 草稿 | **保留**，不产生任何发送效应 | 让用户直接改 |
-| 作用域 | 按窗格隔离（每个 `LxChat` 各持一条） | 与其它聊天状态一致 |
+| 决策 | 取值 |
+| --- | --- |
+| 载体 | 全局 toast（`ToastKind::Info`，与 `text::TOAST_COPIED` 同档同边框） |
+| 文案 | ``Unknown command `/foo`; try /model, /resume or /new`` |
+| 生命周期 | toast 自带 2 秒（`TOAST_DURATION`），hover 暂停 |
+| 聊天栏 | **不承载任何提示文案**，只负责 loading 与「回到底部」 |
+| toast 档位 | 仍是 `Info` / `Error` 两档，不新增 `Warning` |
+| 草稿 | 保留，不产生发送效应 |
+| 连续敲错 | toast 单条替换语义（只留最后一条），有测试 |
 
 **判定口径（与命令面板完全一致，避免误伤）**：复用面板自己的 `slash_trigger` 与
 `SlashPanel::commands_matching`，因此**面板里能选中的永远不会被拦**。放行条件：
-① 整段草稿不是单行（可能是 markdown 引用/路径）；② `slash_trigger` 返回 None（不在行首
-命令位、或在围栏代码块内）；③ 整段就是单独 `/`（还没敲完）；④ 命令名（**首个词**）为空
-或首个词含 `/`（`/path/to/file.rs 说明` 这类路径样文本）。其余拦下并回显整段原文
-（`/foo 参数` 也拦）。命令名回显超 32 字符截断加 `…`。
+① 整段草稿不是单行；② `slash_trigger` 返回 None；③ 整段就是单独 `/`；④ 命令名（首个词）
+为空或首个词含 `/`（路径样文本）。其余拦下并回显整段原文（`/foo 参数` 也拦），
+命令名回显超 32 字符截断加 `…`。
 
 ### 22.3 落地位置
 
 | 文件 | 变更 |
 | --- | --- |
-| `app/state/lx/chat.rs` | 新增 `ChatWarning { message, deadline }` + `WARNING_TTL`；`LxChat.warning: Option<ChatWarning>` |
-| `app/update/chat/mod.rs` | `unknown_slash_command()` 判定 + 命中时写入 `lx.chat.warning`（**不再**调 `show_toast`） |
-| `app/update/interaction.rs` | `tick` 清除到期警告（逐窗格）；`next_deadline` 纳入警告 deadline |
-| `ui/main_content/lx/chat_bar.rs` | 优先级 **警告 > loading > jump**；`draw_loading` + `draw_scanned_label`；`visible()` 加入 `warning.is_some()` |
-| `ui/style.rs` | `chat_loading_phase(phase)`（卡片/扫描共用）+ `chat_warning()`；删除 `chat_loading_spinner` |
-| `ui/text/agent.rs` | `native_label_cycle()` → `[218, 182, 153, 117]` |
-| `ui/text/chat.rs` | `LOADING_LABEL` / `LOADING_MARK` / `WARNING_PREFIX` / `unknown_command()`（`ui/text.rs` 已贴 1000 行上限） |
-| `app/toast.rs` · `ui/toast.rs` | **回退**第一轮的 `ToastKind::Warning` 与黄色边框：`ToastKind` 仍是 Info/Error 两档 |
+| `app/state/lx/chat.rs` | 无（第二轮加的 `ChatWarning` / `WARNING_TTL` / `LxChat.warning` 已**全部删除**） |
+| `app/update/chat/mod.rs` | `unknown_slash_command()` 判定 + 命中时 `show_chat_toast_owned(.., ToastKind::Info, ..)` |
+| `ui/main_content/lx/chat_bar.rs` | 只画 loading + jump；卡片用 `chat_loading_frame` 的 `(glyph, style)`；`visible()` 回到 `streaming \|\| !follow_bottom` |
+| `ui/style.rs` | `chat_loading_frame(phase) -> (char, Style)` + `chat_loading_scan(phase)`；删除 `chat_loading_spinner` / `chat_loading_phase` / `chat_warning` |
+| `ui/text/agent.rs` | 新增 `LoadingMarkFrame` + `loading_mark_frames()`（5 帧表）；`native_label_cycle()` 保留供 `model_label_style` 与对账测试 |
+| `ui/text/chat.rs` | `LOADING_LABEL` / `WARNING_PREFIX` / `unknown_command()`（`ui/text.rs` 贴 1000 行上限） |
+| `app/update/interaction.rs` | 回退第二轮的警告 tick / next_deadline 逻辑 |
 
-**删除项**：`text::LX_LOADING_FRAMES`（braille 10 帧转轮）、`style::chat_loading_spinner`。
-历史 / 工具 / 思考的「不得出现 braille 转轮」断言改为直接判 `U+2800..U+28FF` 范围。
-
-**测试证据**（`cargo test` 全绿，lib 2311 项 + 14 个集成测试二进制）
+**测试证据**（`cargo test` 全绿，lib 2310 项 + 14 个集成测试二进制）
 
 | 测试 | 断言 |
 | --- | --- |
-| `ui::style::tests::loading_cycle_matches_native_agent_label_gradient` | 循环表 == `Native Agent` 标签上**实际出现的颜色序列**（把「loading 用 Native 色」这条钉死到标签取色本身）；每档经 `chat_loading_phase` 可取到且加粗；循环取模 |
-| `lx::tests::loading_mark_cycles_through_native_label_colors` | 逐帧渲染：卡片 `fg` 依次为 218/182/153/117；`frame` 与 `frame + 4` 同色 |
-| `lx::tests::working_label_scans_left_to_right_in_mark_color` | 扫描窗口内字符与卡片**同一时刻同色且加粗**；窗口宽度 ≤ 3 |
-| `lx::tests::scan_moves_left_to_right` | 首个高亮字符下标随帧单调不减（只允许一次回绕） |
-| `lx::tests::scan_window_is_contiguous` | 高亮字符下标连续（是「一段」而不是散点） |
-| `lx::tests::warning_takes_over_the_chat_bar_and_hides_jump_bottom` | 警告独占该行：`Warning: ` 开头、回显命令、`fg` 为 `Yellow`、**不并排** jump，且非流中也可见 |
-| `lx::tests::jump_bottom_returns_after_warning_clears` | 警告清掉后 `jump_bottom_rect` 恢复 |
-| `lx::tests::idle_chat_bar_has_no_loading_mark` | 非流中且无警告时不出加载文案 |
-| `lx::tests::streaming_shows_loading_bar_above_input` | 卡片是 `■`、**不再出现任何 braille** |
-| `chat::tests::unknown_slash_command_warns_instead_of_sending` | 被拦：无 `BeginChatTurn` 效应、草稿保留、`toast` 为 `None`（**不新建 toast**）、聊天栏有警告且回显命令 |
-| `chat::tests::unknown_command_warning_expires_after_two_seconds` | 未到期不清、到点 `tick` 清除、重复 tick 不再变化 |
-| `chat::tests::unknown_command_warning_sets_a_wakeup_deadline` | `next_deadline` == 警告 deadline（否则永不消失） |
-| `chat::tests::known_commands_and_plain_text_still_send_normally` | 普通文本 / 内置命令 / 别名 / 单独 `/` / 路径样文本 / 多行草稿都照常发送且无警告 |
+| `ui::style::tests::loading_mark_cycles_blue_hollow_pink_default_hollow` | 5 帧的字形/前景/字重逐帧比对；默认字体色三帧与 `chat_step_mark_done_body()` 完全同款；循环取模；扫描色与卡片同帧（默认色帧补下划线） |
+| `ui::style::tests::loading_frames_advance_on_the_step_breath_cadence` | 帧数与呼吸常量共存、共用同一 `loading_frame` |
+| `lx::tests::loading_mark_renders_the_five_frame_cycle` | 逐帧渲染：`■`蓝 / `□`默认 / `■`粉 / `■`默认 / `□`默认（缓冲区把「不设前景」规范化为 `Reset`，断言按此等价处理）；`frame 5` == `frame 0` |
+| `lx::tests::working_label_scans_left_to_right_in_mark_color` | 扫描窗口内字符与卡片同色（默认色帧靠下划线识别）；窗口宽度 ≤ 3 |
+| `lx::tests::scan_moves_left_to_right` / `scan_window_is_contiguous` | 扫描单调右移（只回绕一次）、窗口连续 |
+| `lx::tests::streaming_shows_loading_bar_above_input` / `idle_chat_bar_has_no_loading_mark` | 卡片是步骤方块、不再出现任何 braille（直接判 `U+2800..U+28FF`）；空闲时无加载文案 |
+| `chat::tests::unknown_slash_command_warns_instead_of_sending` | 被拦：无 `BeginChatTurn` 效应、草稿保留、弹出 **`ToastKind::Info`** toast（与复制文案同档）并回显命令 |
+| `chat::tests::unknown_command_toast_replaces_the_previous_one` | 连续敲错两次只留最后一条（toast 单条替换语义） |
+| `chat::tests::known_commands_and_plain_text_still_send_normally` | 普通文本 / 内置命令 / 别名 / 单独 `/` / 路径样文本 / 多行草稿都照常发送且无 toast |
 | `chat::tests::unknown_command_detection_matches_panel_rules` | 与面板规则对齐（前后缀、带参数、各类放行） |
 | `ui::text::chat::tests::unknown_command_*`（4 项） | 文案拼接：回显 + 提示、保留参数去空白、超 32 字符截断、短命令不截断 |
 
 **未自动验证项（需用户 `cargo run` 人工验收）**
 
-1. 扫描 100ms/字符在真实终端上的流畅度（`LOADING_FRAME_INTERVAL` 与换色同频；若觉太快可调扫描步长而不动换色）。
-2. `218/182/153/117` 在你终端主题映射下的实际观感（部分主题会重映射 256 色；只改 `native_label_cycle` 即可，测试会与标签取色对账）。
-3. 警告 2 秒时长是否合适、以及它出现时历史区高度 −1 再恢复的轻微跳动（若不可接受可改为该行常驻）。
+1. 5 帧循环（蓝 → 默认镂空 → 粉 → 默认实心 → 默认镂空）的观感：
+   尤其「默认字体色」三帧与正文方块同色，是否仍能读出「在加载」。
+2. 扫描 100ms/字符的流畅度（与换帧同频；若觉太快可只调扫描步长）。
+3. 默认字体色帧的扫描靠下划线标识是否够明显（若偏弱可改反显）。
+4. `117` 蓝 / `218` 粉在你终端主题映射下的实际观感（只改 `loading_mark_frames` 的常量）。

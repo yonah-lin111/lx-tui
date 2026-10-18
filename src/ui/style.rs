@@ -513,21 +513,45 @@ pub fn chat_provider() -> Style {
     muted()
 }
 
-/// lx 输入框上方 loading 的**当前档位色**：按 `Native Agent` 标签渐变循环取色、加粗。
+/// lx 输入框上方 loading 卡片的**当前帧**（字形 + 样式）。
 ///
-/// 卡片 `■` 与「被扫描窗口命中的字符」共用本函数——同一时刻两者同色，视觉上是
-/// 颜色从卡片流向文字。`phase` 由 `loading_frame` 决定，内部已按循环长度取模。
-pub fn chat_loading_phase(phase: usize) -> Style {
-    let cycle = crate::ui::text::agent::native_label_cycle();
-    let index = cycle.get(phase % cycle.len()).copied().unwrap_or(117);
-    Style::default()
-        .fg(Color::Indexed(index))
-        .add_modifier(Modifier::BOLD)
+/// 按 [`crate::ui::text::agent::loading_mark_frames`] 的 5 帧表循环：
+/// 蓝实心 → 默认色镂空 → 粉实心 → 默认色实心 → 默认色镂空。
+/// 「默认色」帧不设前景、不加粗，与 markdown 正文里的方块观感一致。
+///
+/// 返回 `(字形, 样式)`：字形随帧变化（实心/镂空交替），样式由帧的 color/bold 决定。
+pub fn chat_loading_frame(phase: usize) -> (char, Style) {
+    let frames = crate::ui::text::agent::loading_mark_frames();
+    let frame = frames.get(phase % frames.len()).copied().unwrap_or(
+        crate::ui::text::agent::LoadingMarkFrame {
+            glyph: crate::ui::text::agent::STEP_MARK_FILLED,
+            color: Some(117),
+            bold: true,
+        },
+    );
+    let mut style = Style::default();
+    if let Some(index) = frame.color {
+        style = style.fg(Color::Indexed(index));
+    }
+    if frame.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    (frame.glyph, style)
 }
 
-/// lx 输入框上方聊天栏的临时警告（未知命令等）：警告黄，不加粗（避免比正文更抢眼）。
-pub fn chat_warning() -> Style {
-    Style::default().fg(Color::Yellow)
+/// 扫描窗口内字符的样式：与卡片**同一帧同色**（有颜色的帧）。
+///
+/// 与 [`chat_loading_frame`] 共用同一帧表，物理上不会出现「卡片是粉、亮点是蓝」。
+/// 「默认字体色」的帧没有前景可亮，改用**下划线**标记扫描位置——否则那 3/5 的帧里
+/// 扫描完全不可见（与 dim 的未扫到字符无从区分）。
+pub fn chat_loading_scan(phase: usize) -> Style {
+    let (_, card) = chat_loading_frame(phase);
+    if card.fg.is_some() {
+        card
+    } else {
+        // 默认色帧：下划线 + 加粗（正文色本就不抢眼，靠修饰符表达「被扫到」）。
+        card.add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
+    }
 }
 
 // ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 金黄参数）=====

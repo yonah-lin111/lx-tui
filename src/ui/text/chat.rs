@@ -1,14 +1,10 @@
 //! lx 聊天输入框相关的动态提示文案拼接。
 //!
 //! 只有**需要拼串**的少数几条放这里，纯字面量常量仍在 `ui/text.rs` 的
-//! `LX_CHAT_*` 区（那里是 999 行的上限边界，新增拼串逻辑挪进本模块）。
+//! `LX_CHAT_*` 区（那里贴着 1000 行上限，新增拼串逻辑挪进本模块）。
 
 /// lx 输入框上方聊天栏的 loading 文案。
 pub const LOADING_LABEL: &str = "Working...";
-/// loading 卡片方块：与聊天历史的步骤方块同一个字形 `■`。
-pub const LOADING_MARK: char = crate::ui::text::agent::STEP_MARK_FILLED;
-/// 聊天栏临时警告的前缀（黄色，`Warning: xxx`）。
-pub const WARNING_PREFIX: &str = "Warning: ";
 /// 输入以 `/` 开头但既不是命令面板项、也不是任何内置命令时的警告前缀。
 pub const UNKNOWN_COMMAND_PREFIX: &str = "Unknown command";
 /// 未知命令提示里给出的可用命令提示尾巴。

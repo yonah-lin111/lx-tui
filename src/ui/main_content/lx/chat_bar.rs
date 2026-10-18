@@ -1,7 +1,7 @@
-//! 输入框上方聊天栏：流中 loading 卡片 + 右端「回到底部」控件 + 临时警告。
+//! 输入框上方聊天栏：流中 loading 卡片 + 右端「回到底部」控件。
 //!
 //! 纯渲染 + 纯几何：布局、绘制与命中共享同一矩形口径；只读 `Lx`、只写 lx 页网格。
-//! 该行贴在输入框上沿、与输入框同宽；无流中、无警告且已跟随底部时整行不占位。
+//! 该行贴在输入框上沿、与输入框同宽；无流中且已跟随底部时整行不占位。
 //! 「回到底部」控件为箭头 + 右侧说明文字（`↓ jump to bottom`），整体右对齐。
 //!
 //! **loading 的形态**（对齐用户要求的「正方形卡片 Working...」）：
@@ -11,10 +11,6 @@
 //! - `Working...` 平时是次要色，有一个 3 字符宽的高亮窗口**从左到右扫描**，
 //!   窗口内字符立刻变成「卡片当前那一档色」——同一时刻卡片与亮点同色，形成
 //!   「颜色从卡片流向文字」的观感。
-//!
-//! **临时警告**（未知命令等）复用这一行：黄色、`Warning: ` 开头、2 秒后自动消失；
-//! 它出现时**优先占用该行**，「回到底部」控件让位不显示（用户此刻视线在输入框，
-//! 不需要跳转按钮，且避免窄屏下两者互相挤压截断警告文案）。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -33,12 +29,12 @@ const HINT_GAP: u16 = 1;
 /// 扫描高亮窗口宽度（字符）。
 const SCAN_WINDOW: usize = 3;
 
-/// 是否显示聊天栏：有临时警告、流中（loading），或上滚未跟随底部（回到底部控件）。
+/// 是否显示聊天栏：流中（loading）或上滚未跟随底部（回到底部控件）。
 pub(super) fn visible(lx: &Lx) -> bool {
-    if lx.chat.messages.is_empty() && lx.chat.warning.is_none() {
+    if lx.chat.messages.is_empty() {
         return false;
     }
-    lx.chat.warning.is_some() || lx.chat.status.streaming || !lx.chat.follow_bottom
+    lx.chat.status.streaming || !lx.chat.follow_bottom
 }
 
 /// 由输入框矩形推导聊天栏矩形（贴其上沿）；上方空间不足时 None。
@@ -47,9 +43,9 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
         .then(|| Rect::new(input.x, input.y - HEIGHT, input.width, HEIGHT))
 }
 
-/// 回到底部控件矩形（未跟随底部、**无临时警告**且空间足够时）；供命中与测试。
+/// 回到底部控件矩形（未跟随底部且空间足够时）；供命中与测试。
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.follow_bottom || lx.chat.messages.is_empty() || lx.chat.warning.is_some() {
+    if lx.chat.follow_bottom || lx.chat.messages.is_empty() {
         return None;
     }
     let input = super::input_rect(area, lx)?;
@@ -76,30 +72,13 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
 
 /// 绘制聊天栏：左侧 loading 卡片 / 临时警告，右端「回到底部」控件。
 ///
-/// 优先级：**临时警告 > loading > 回到底部**。
-/// - 有警告时整行只画警告（黄色 `Warning: …`），jump 让位；
-/// - 流中画 `■ Working...`（卡片按 Native 渐变循环，文案自左向右扫描高亮）；
-/// - 未跟随底部时右端画 `↓ 说明`（悬停高亮）。
+/// 流中画 `■ Working...`（卡片颜色呼吸，文案自左向右扫描高亮）；
+/// 未跟随底部时右端画 `↓ 说明`（悬停高亮）。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
         return;
     };
     if bar.width == 0 {
-        return;
-    }
-    // 临时警告优先独占该行。
-    if let Some(warning) = lx.chat.warning.as_ref() {
-        let x = bar.x.saturating_add(1);
-        let limit = bar.right().saturating_sub(1);
-        if x < limit {
-            grid.put_clipped(
-                x,
-                bar.y,
-                &format!("{}{}", text::chat::WARNING_PREFIX, warning.message),
-                style::chat_warning(),
-                limit.saturating_sub(x),
-            );
-        }
         return;
     }
     let mut right = bar.right();
@@ -160,15 +139,9 @@ fn draw_loading(
     if x >= limit {
         return;
     }
-    // 卡片：当前档位的循环色。
-    let cycle = text::agent::native_label_cycle();
-    let phase = loading_frame % cycle.len();
-    grid.put_char(
-        x,
-        y,
-        text::chat::LOADING_MARK,
-        style::chat_loading_phase(phase),
-    );
+    // 卡片：5 帧循环（蓝实心 → 默认色镂空 → 粉实心 → 默认色实心 → 默认色镂空）。
+    let (glyph, card_style) = style::chat_loading_frame(loading_frame);
+    grid.put_char(x, y, glyph, card_style);
     x = x.saturating_add(2);
 
     if x >= limit {
@@ -184,7 +157,7 @@ fn draw_loading(
     draw_scanned_label(grid, x, y, limit, label, loading_frame);
 }
 
-/// 画扫描高亮文案：窗口外的字符用次要色（dim），窗口内用卡片当前档位色（加粗）。
+/// 画扫描高亮文案：窗口外的字符用次要色（dim），窗口内用卡片**当前帧**的样式。
 fn draw_scanned_label(
     grid: &mut Grid,
     x: u16,
@@ -198,8 +171,6 @@ fn draw_scanned_label(
     if chars.is_empty() {
         return;
     }
-    let cycle = text::agent::native_label_cycle();
-    let phase = loading_frame % cycle.len();
     // 扫描位置：每帧前进 1 个字符，走出末尾后从左侧重新进入。
     let span = chars.len() + SCAN_WINDOW;
     let head = loading_frame % span;
@@ -208,7 +179,7 @@ fn draw_scanned_label(
         // 窗口内：`head - SCAN_WINDOW < index <= head`（head 为窗口右端）。
         let in_window = index + SCAN_WINDOW >= head && index < head;
         let cell_style = if in_window {
-            style::chat_loading_phase(phase)
+            style::chat_loading_scan(loading_frame)
         } else {
             style::chat_loading_label()
         };

@@ -330,42 +330,67 @@ fn step_roles_use_distinct_colors() {
     assert_ne!(body, tool, "正文与工具的方块必须不同色");
 }
 
-/// loading 卡片的循环色必须**严格来自 `Native Agent` 标签渐变**，不能自己另起一套。
+/// loading 卡片的 5 帧循环必须严格按用户指定的顺序，且「默认字体色」的帧与
+/// markdown 正文方块**完全同款**（不设前景、不加粗）。
 ///
-/// 用户要求「小卡片的颜色使用 native agent 的字体颜色循环显示」。这条测试把
-/// 「loading 的四档色」与「标签逐字符取色」直接对齐：以后谁调 `lx_entry_gradient`
-/// 或换循环表，两边必须一起动。
+/// 用户要求：蓝 → 默认字体色镂空 → 粉 → 默认字体色 → 默认字体色镂空。
 #[test]
-fn loading_cycle_matches_native_agent_label_gradient() {
-    let cycle = crate::ui::text::agent::native_label_cycle();
-    assert!(!cycle.is_empty(), "循环表不能为空");
+fn loading_mark_cycles_blue_hollow_pink_default_hollow() {
+    let frames = crate::ui::text::agent::loading_mark_frames();
+    assert_eq!(frames.len(), 5, "5 帧循环");
 
-    // 标签上真正出现过的颜色集合（去重、保持出现顺序）。
-    let label = crate::ui::text::LX_ENTRY_NATIVE;
-    let length = label.chars().count();
-    let mut seen: Vec<u8> = Vec::new();
-    for position in 0..length {
-        let Some(Color::Indexed(index)) =
-            lx_entry_label_style(LxEntry::Native, position, length, false).fg
-        else {
-            panic!("标签取色必须是 256 色槽位");
-        };
-        if !seen.contains(&index) {
-            seen.push(index);
+    // 文案化的期望表（顺序即用户给的顺序）。
+    let expected = [
+        ("蓝实心", Some(Color::Indexed(117)), true, '■'),
+        ("默认色镂空", None, false, '□'),
+        ("粉实心", Some(Color::Indexed(218)), true, '■'),
+        ("默认色实心", None, false, '■'),
+        ("默认色镂空", None, false, '□'),
+    ];
+    for (phase, (label, color, bold, glyph)) in expected.iter().enumerate() {
+        let (got_glyph, style) = chat_loading_frame(phase);
+        assert_eq!(got_glyph, *glyph, "第 {phase} 帧 {label} 的字形");
+        assert_eq!(style.fg, *color, "第 {phase} 帧 {label} 的前景");
+        assert_eq!(
+            style.add_modifier.contains(Modifier::BOLD),
+            *bold,
+            "第 {phase} 帧 {label} 的字重"
+        );
+    }
+    // 默认字体色的帧必须与 markdown 正文方块同款（这就是用户要的「参考正文小方块」）。
+    let body_done = chat_step_mark_done_body();
+    for phase in [1usize, 3, 4] {
+        let (_, style) = chat_loading_frame(phase);
+        assert_eq!(style.fg, body_done.fg, "第 {phase} 帧 = 正文方块前景");
+        assert_eq!(
+            style.add_modifier.contains(Modifier::BOLD),
+            body_done.add_modifier.contains(Modifier::BOLD),
+            "第 {phase} 帧 = 正文方块字重"
+        );
+    }
+    // 循环取模：走完一轮回到第一帧。
+    assert_eq!(chat_loading_frame(frames.len()), chat_loading_frame(0));
+    // 扫描窗口内的样式与卡片同帧：有色帧完全同款；默认色帧补下划线保证可见。
+    for phase in 0..frames.len() {
+        let card = chat_loading_frame(phase).1;
+        let scan = chat_loading_scan(phase);
+        assert_eq!(scan.fg, card.fg, "第 {phase} 帧：扫描色必须与卡片同色");
+        if card.fg.is_some() {
+            assert_eq!(scan, card, "第 {phase} 帧：有色帧扫描与卡片完全一致");
+        } else {
+            assert!(
+                scan.add_modifier.contains(Modifier::UNDERLINED),
+                "第 {phase} 帧：默认色帧靠下划线标识扫描位置"
+            );
         }
     }
-    assert_eq!(cycle, seen.as_slice(), "循环表 == 标签上实际出现的颜色序列");
+}
 
-    // 每一档都能被 `chat_loading_phase` 取到，且加粗。
-    for (phase, expected) in cycle.iter().enumerate() {
-        let style = chat_loading_phase(phase);
-        assert_eq!(style.fg, Some(Color::Indexed(*expected)), "第 {phase} 档");
-        assert!(style.add_modifier.contains(Modifier::BOLD), "加载色加粗");
-    }
-    // 循环取模：走完一轮回到起点。
-    assert_eq!(
-        chat_loading_phase(cycle.len()),
-        chat_loading_phase(0),
-        "循环取模"
-    );
+/// 换帧节奏必须与 agent 步骤方块的呼吸节奏一致（`STEP_BREATH_TICKS` 个 loading 帧一相）。
+#[test]
+fn loading_frames_advance_on_the_step_breath_cadence() {
+    // 呼吸节奏常量就是 loading 帧的推进单位；两者共用同一个 `loading_frame`。
+    assert_eq!(crate::ui::text::agent::STEP_BREATH_TICKS, 4);
+    // 帧表长度与呼吸相位相互独立：帧表 5 帧、呼吸 4 帧一相，但都按同一 tick 推进。
+    assert_eq!(crate::ui::text::agent::loading_mark_frames().len(), 5);
 }

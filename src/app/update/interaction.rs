@@ -200,15 +200,14 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     if expired {
         state.toast = None;
     }
-    // 聊天栏临时警告（未知命令等）：到点清除，聊天栏那行随之消失。
-    let warning_expired = clear_expired_lx_warnings(state, now);
+
     let revealed = state
         .tooltip
         .as_mut()
         .is_some_and(|tooltip| tooltip.reveal(now));
     let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || warning_expired || revealed || saved || scrolled
+    expired || revealed || saved || scrolled
 }
 
 /// 自动保存轮询：条目编辑视图下缓冲静置达标后提交落库并回到已保存态；
@@ -229,7 +228,6 @@ fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
 /// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
-    let warning = lx_warning_deadline(state);
     let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll
@@ -237,40 +235,8 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let autosave = prompt_item_editing(state)
         .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
         .flatten();
-    [toast, warning, tooltip, autoscroll, autosave]
+    [toast, tooltip, autoscroll, autosave]
         .into_iter()
         .flatten()
-        .min()
-}
-
-/// 清除已到期的聊天栏警告；返回是否发生了变化。
-///
-/// 每个窗格各自持有自己的警告（按窗格隔离，与其他聊天状态一致）。
-fn clear_expired_lx_warnings(state: &mut AppState, now: Instant) -> bool {
-    let mut changed = false;
-    for pane in state.all_pane_ids() {
-        if let Some(target) = state.pane_mut_anywhere(pane)
-            && target
-                .lx
-                .chat
-                .warning
-                .as_ref()
-                .is_some_and(|warning| warning.is_expired(now))
-        {
-            target.lx.chat.warning = None;
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// 最近一个聊天栏警告的到期时刻（事件循环据此安排唤醒）。
-fn lx_warning_deadline(state: &AppState) -> Option<Instant> {
-    state
-        .all_pane_ids()
-        .into_iter()
-        .filter_map(|pane| state.pane_anywhere(pane))
-        .filter_map(|target| target.lx.chat.warning.as_ref())
-        .map(|warning| warning.deadline)
         .min()
 }

@@ -59,14 +59,13 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     // 普通消息发给模型——那会得到一段莫名其妙的自问自答。改为黄色警告提示，
     // 并**保留草稿**让用户改。（命令面板的采纳走 `apply_slash_enter`，不经过这里。）
     if let Some(command) = unknown_slash_command(&draft) {
-        // 写进输入框上方聊天栏的临时警告（黄色 `Warning: …`，2 秒后自动消失），
-        // **不是** toast：位置就在用户刚敲字的输入框上沿，视线不用离开。
-        if let Some(target) = state.pane_mut_anywhere(pane) {
-            target.lx.chat.warning = Some(crate::app::state::ChatWarning::new(
-                text::chat::unknown_command(&command),
-                Instant::now(),
-            ));
-        }
+        // 提示走全局 toast（与「复制文案」同款的 `Info` 档浮层），**不占用聊天栏**：
+        // 聊天栏那行只负责 loading 与「回到底部」。
+        show_chat_toast_owned(
+            state,
+            ToastKind::Info,
+            text::chat::unknown_command(&command),
+        );
         return true;
     }
     // 解析有效模型（窗格选择或配置默认）。
@@ -558,6 +557,11 @@ fn next_generation(state: &AppState, pane: PaneId) -> u64 {
 
 /// 显示聊天相关 toast。
 fn show_chat_toast(state: &mut AppState, kind: ToastKind, message: &'static str) {
+    crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
+}
+
+/// 显示带动态内容的聊天 toast（例如回显用户敲错的那个命令名）。
+fn show_chat_toast_owned(state: &mut AppState, kind: ToastKind, message: String) {
     crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
 }
 

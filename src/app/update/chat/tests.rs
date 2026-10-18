@@ -984,9 +984,9 @@ fn expired_arm() -> std::time::Instant {
         .expect("monotonic clock")
 }
 
-// ===== 发送时的「未知命令」拦截（提示走输入框上方聊天栏，不是 toast）=====
+// ===== 发送时的「未知命令」拦截（提示走 toast，与复制文案同款）=====
 
-/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、聊天栏出现黄色警告」。
+/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、弹出 toast 且回显命令」。
 fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
     let mut state = ready_state(draft);
     let pane = focus_pane(&state);
@@ -1006,25 +1006,22 @@ fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
         draft,
         "草稿必须保留"
     );
-    // **不是 toast**：警告写进聊天栏状态。
-    assert!(state.toast.is_none(), "不应新建 toast");
-    let warning = state
-        .pane_anywhere(pane)
-        .expect("pane")
-        .lx
-        .chat
-        .warning
-        .as_ref()
-        .expect("聊天栏应有警告");
-    assert!(
-        warning.message.contains(expected_echo),
-        "回显命令 {expected_echo:?}：{}",
-        warning.message
+    // 提示走全局 toast（与「复制文案」同款 Info 档）。
+    let toast = state.toast.as_ref().expect("应弹出 toast");
+    assert_eq!(
+        toast.kind,
+        ToastKind::Info,
+        "与复制文案同款 Info 档（不是 Error 红）"
     );
     assert!(
-        warning.message.contains("/model"),
+        toast.message.contains(expected_echo),
+        "回显命令 {expected_echo:?}：{}",
+        toast.message
+    );
+    assert!(
+        toast.message.contains("/model"),
         "应提示可用命令：{}",
-        warning.message
+        toast.message
     );
 }
 
@@ -1036,64 +1033,24 @@ fn unknown_slash_command_warns_instead_of_sending() {
 }
 
 #[test]
-fn unknown_command_warning_expires_after_two_seconds() {
-    let mut state = ready_state("/nope");
+fn unknown_command_toast_replaces_the_previous_one() {
+    // toast 是单条替换语义：连续敲错两次只留最后一条。
+    let mut state = ready_state("/foo");
     let pane = focus_pane(&state);
     try_send(&mut state, pane);
-    let deadline = state
-        .pane_anywhere(pane)
-        .expect("pane")
-        .lx
-        .chat
-        .warning
-        .as_ref()
-        .expect("有警告")
-        .deadline;
-    // 刚创建时未到期。
-    assert!(
-        !super::super::tick(&mut state, Instant::now()),
-        "未到期不该清除"
-    );
     assert!(
         state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .warning
-            .is_some()
+            .toast
+            .as_ref()
+            .expect("toast")
+            .message
+            .contains("/foo")
     );
-    // 到点后 tick 清除，聊天栏那行随之消失。
-    assert!(super::super::tick(&mut state, deadline), "到期应清除");
-    assert!(
-        state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .warning
-            .is_none(),
-        "到点后警告消失"
-    );
-    assert!(!super::super::tick(&mut state, deadline), "已清过不再变化");
-}
-
-#[test]
-fn unknown_command_warning_sets_a_wakeup_deadline() {
-    let mut state = ready_state("/nope");
-    let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).expect("pane").lx.input = "/bar".into();
     try_send(&mut state, pane);
-    let deadline = state
-        .pane_anywhere(pane)
-        .expect("pane")
-        .lx
-        .chat
-        .warning
-        .as_ref()
-        .expect("有警告")
-        .deadline;
-    // 事件循环据此安排唤醒，否则警告永远不会消失。
-    assert_eq!(super::super::next_deadline(&state), Some(deadline));
+    let toast = state.toast.as_ref().expect("toast");
+    assert!(toast.message.contains("/bar"), "{}", toast.message);
+    assert!(!toast.message.contains("/foo"), "{}", toast.message);
 }
 
 #[test]
@@ -1119,14 +1076,9 @@ fn known_commands_and_plain_text_still_send_normally() {
             .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. }));
         assert!(sent, "{draft:?} 应按普通消息发送");
         assert!(
-            state
-                .pane_anywhere(pane)
-                .expect("pane")
-                .lx
-                .chat
-                .warning
-                .is_none(),
-            "{draft:?} 不该有警告"
+            state.toast.is_none(),
+            "{draft:?} 不该有提示：{:?}",
+            state.toast
         );
     }
 }
