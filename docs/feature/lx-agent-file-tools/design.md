@@ -1039,19 +1039,34 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 | 文件 | 变更 |
 | --- | --- |
 | `src/ui/text/agent.rs` | 新增 `STEP_MARK_FILLED`（`■`）/ `STEP_MARK_HOLLOW`（`□`）/ `STEP_BREATH_TICKS`（呼吸节奏 = 4 个 loading 帧 ≈ 400ms 一相；放在文本模块的 agent 常量区，`ui/text.rs` 保持 1000 行以内） |
+| `src/ui/style.rs` | 新增聊天步骤品牌色：`chat_step_mark_running` / `chat_step_mark_done` / `chat_step_label_running` / `chat_step_label_done` / `chat_tool_verb` / `chat_tool_param` / `chat_tool_range` |
 | `src/ui/main_content/lx/history.rs` | 新增 `StepMark`（Running / Done / Failed / Interrupted / Cancelled → 字形 + 样式 + `■ ` 标记段）与 `STEP_GUTTER = 2`；思考头、markdown 正文块改用方块；`draw_markdown` / `draw_thinking` / `text_rows` / `thinking_rows` 全部按 `STEP_GUTTER` 缩进与扣宽 |
 | `src/ui/main_content/lx/history/tool.rs` | `lead()` 由「工具类型图标 / `!` / `⊘` / braille 转轮」改为统一方块（`StepMark`）；删除 `Kind::icon()` |
 | `src/ui/text/agent.rs` | 删除只服务旧行首图标的 `ICON_TOOL` / `ICON_TOOL_CANCELLED`（gallery 样例图标常量保留） |
 
 **状态映射（终态只按颜色区分，取消另用空心）**
 
+调色板取 lx 三套 logo 的 256 色槽位（粉 218 / 深粉 168 / 天蓝 117 / 冰蓝 195），
+语义为**热 = 进行中、冷 = 已完成**；全部**不压暗**（dim 的 117 与边框标题、正文几乎同色，
+这正是用户反馈“和正文与边框色调很接近”的根因）。
+
 | 状态 | 字形 | 样式 |
 | --- | --- | --- |
-| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | 品牌蓝加粗（`chat_loading_spinner`，与输入框上方 loading 同款） |
-| `Completed`、思考完成、已完成正文块 | `■` 静态 | 品牌蓝压暗（`agent_connector`） |
+| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | **品牌粉 `Indexed 218` 加粗**（`chat_step_mark_running`） |
+| `Completed`、思考完成、已完成正文块 | `■` 静态 | **品牌天蓝 `Indexed 117` 加粗**（`chat_step_mark_done`，不压暗） |
 | `Failed` | `■` 静态 | 红（`agent_fail`；该行同时整行红） |
 | `Interrupted` | `■` 静态 | 黄（`agent_warn`） |
 | `Cancelled` | `□` 静态 | 次要信息色（`agent_step_detail`；空心表示未产出结果） |
+
+**工具行的三段品牌色**（`ui/style.rs`）：动词深粉 `Indexed 168` 加粗（`chat_tool_verb`）、
+主参数（路径 / 搜索范围）冰蓝 `Indexed 195` 加下划线（`chat_tool_param`，下划线仍表示
+“每次调用会变的值”）、只读元信息（`read` 的行范围）品牌天蓝 `Indexed 117` 无下划线
+（`chat_tool_range`）。三段互不同色，也不与边框青（Cyan）或正文默认前景撞色。
+
+**与既有 `agent_*` token 的关系**：`[UI]` 查看器的 agent 样例继续用
+`agent_icon`（218）/ `agent_verb`（117）/ `agent_param`（220 金黄）/ `agent_range`（245 灰），
+本次不动；聊天历史改用上表的 `chat_*` 系列，两处不再共用配色（此前共用 117 与 245
+正是混同的来源）。
 
 **正文块的运行态判定**：消息仍在流式且该正文块是消息里的**最后一步** → 呼吸；否则静态。
 （思考块用自己的 `completed_at_ms`，工具块用自己的 `ToolStatus`，三者互不影响——同一消息里
@@ -1072,9 +1087,12 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 | `history::tests::only_the_active_last_step_breathes` | 同一流式消息里：已结束的正文块静态实心、最后一块空心呼吸 |
 | `history::tests::transcript_lays_out_step_square_with_two_column_gutter` | 整段观感锁定（用户消息 `> ` / 思考头 / 思考正文 / 正文块 / 工具行的逐行文本） |
 | `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | 思考完成后头部静态；同消息里运行中的工具行仍呼吸（相位翻空心帧时只有工具行变） |
+| `ui::style::tests::chat_step_palette_is_brand_saturated_and_distinct_from_chrome` | 七个 `chat_*` token 都取 logo 调色板槽位、**都不压暗**、都不与正文默认前景/Cyan 撞色；运行中粉 → 完成蓝成对；方块比同色文案更重（字重差）；工具行三段颜色两两不同，参数有下划线而行范围没有 |
 
 **未自动验证项（需用户 `cargo run` 人工验收）**
 
 1. `■`/`□` 在用户终端字体下的宽度与观感（两者均为单宽几何符号，但个别字体渲染可能偏窄/偏宽）。
 2. 方块呼吸 400ms 一相的节奏是否合适（过快/过慢可调 `STEP_BREATH_TICKS`）。
-3. 长会话里每步一个静态方块的整体观感（是否过于抢眼——颜色已压低到品牌蓝 dim）。
+3. 长会话里每步一个静态方块的整体观感（是否过于抢眼——已改用品牌饱和色、不压暗，
+   若仍偏亮可只降饱和或改回 dim；这是纯 `ui/style.rs` 的调整）。
+4. 品牌粉/天蓝/冰蓝在用户的 256 色主题映射下的实际观感（部分终端主题会重映射 256 色）。

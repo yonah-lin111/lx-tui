@@ -79,11 +79,12 @@ impl StepMark {
         }
     }
 
-    /// 方块样式。
+    /// 方块样式：运行中品牌粉、已完成品牌天蓝（都是饱和色加粗，与正文默认前景、
+    /// 边框的 Cyan/dim 明确区分）；失败红、中断黄沿用状态色；取消为次要信息色空心。
     pub(super) fn style(self) -> Style {
         match self {
-            Self::Running => style::chat_loading_spinner(),
-            Self::Done => style::agent_connector(),
+            Self::Running => style::chat_step_mark_running(),
+            Self::Done => style::chat_step_mark_done(),
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
@@ -566,13 +567,13 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         StepMark::Done
                     };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：方块 + `Thinking`（蓝色，与 UI 页思考步骤同色）；
-                        // 完成后：方块 + `Thought · 6.3s`（压暗一档的品牌蓝；无折叠箭头，
+                        // 生成中：粉色方块 + `Thinking`（品牌粉，与方块同色系）；
+                        // 完成后：天蓝方块 + `Thought · 6.3s`（品牌天蓝；无折叠箭头，
                         // 折叠/展开由点击头部或 Ctrl+T 控制，方块即状态标记）。
                         let header_style = if streaming {
-                            style::agent_verb()
+                            style::chat_step_label_running()
                         } else {
-                            style::agent_connector()
+                            style::chat_step_label_done()
                         };
                         grid.put_char(
                             content.x,

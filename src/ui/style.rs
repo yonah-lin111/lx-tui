@@ -499,6 +499,62 @@ pub fn chat_loading_spinner() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+// ===== 聊天步骤的品牌色（取 lx 三套 logo 调色板的主色）=====
+//
+// 背景：正文用终端默认前景、面板边框用 `accent`（Cyan）或 `muted`（dim），
+// 若步骤标记/工具行也用「天蓝 + DIM」，在明暗未知的终端上与边框标题、正文几乎同色。
+// 这里改用 lx 页三个 logo 的调色板（粉 218 / 深粉 168 / 天蓝 117 / 冰蓝 195），
+// 让步骤标记与工具行文案自带品牌饱和色、从正文与边框里跳出来。
+//
+// 语义：**热 = 进行中（品牌粉）、冷 = 已完成（品牌天蓝）**；失败红、中断黄、
+// 取消灰继续沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的 agent 样例仍用
+// 上面的 `agent_*` 系列，不受这里影响。
+
+/// 步骤方块：运行中（呼吸）——品牌粉加粗，是整份历史里最“热”的信号。
+pub fn chat_step_mark_running() -> Style {
+    Style::default()
+        .fg(Color::Indexed(218))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 步骤方块：已完成——品牌天蓝加粗（冷下来，但仍是饱和色，不压暗）。
+pub fn chat_step_mark_done() -> Style {
+    Style::default()
+        .fg(Color::Indexed(117))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 步骤头部文案：运行中——品牌粉（与运行中的方块同色系，不加粗）。
+pub fn chat_step_label_running() -> Style {
+    Style::default().fg(Color::Indexed(218))
+}
+
+/// 步骤头部文案：已完成——品牌天蓝（与已完成方块同色系，不加粗）。
+pub fn chat_step_label_done() -> Style {
+    Style::default().fg(Color::Indexed(117))
+}
+
+/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：深粉（Indexed 168）加粗，
+/// 取 Hybrid 入口 logo 的粉侧主色——与状态方块（粉/蓝）、主参数（冰蓝）都不同色。
+pub fn chat_tool_verb() -> Style {
+    Style::default()
+        .fg(Color::Indexed(168))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 工具行的主参数（路径 / 搜索范围）：冰蓝（Indexed 195）加下划线，落在
+/// 「粉 → 蓝」品牌渐变的蓝侧，与动词语义成对；下划线仍表示“每次调用会变的值”。
+pub fn chat_tool_param() -> Style {
+    Style::default()
+        .fg(Color::Indexed(195))
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// 工具行的只读元信息（`read` 的行范围）：品牌天蓝（Indexed 117）、无下划线。
+pub fn chat_tool_range() -> Style {
+    Style::default().fg(Color::Indexed(117))
+}
+
 /// lx 输入框上方 loading 行文案：次要信息。
 pub fn chat_loading_label() -> Style {
     muted()

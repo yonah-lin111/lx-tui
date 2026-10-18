@@ -122,7 +122,7 @@ fn lead(call: &ToolCallView, loading_frame: usize) -> Segment {
     Segment::new(mark.segment(loading_frame), mark.style())
 }
 
-/// 固定动词（品牌天蓝）：四工具用共享动词常量，未知工具回落到工具名本身。
+/// 固定动词：品牌天蓝加粗（饱和、与正文默认前景和边框 Cyan/dim 都区分得开）。
 fn verb(call: &ToolCallView) -> Segment {
     use text::agent as a;
     let label = match Kind::of(&call.name) {
@@ -132,7 +132,7 @@ fn verb(call: &ToolCallView) -> Segment {
         Kind::Write => a::VERB_TOOL_WRITE.to_string(),
         Kind::Other => single_line(&call.name, TEXT_SAMPLE_CHARS),
     };
-    Segment::new(format!("{label} "), style::agent_verb())
+    Segment::new(format!("{label} "), style::chat_tool_verb())
 }
 
 /// 主参数：摘要里的路径（或 `search` 的搜索范围）；只显示摘要，
@@ -153,7 +153,7 @@ fn param(call: &ToolCallView) -> Option<Segment> {
                 .and_then(|summary| summary.path)
         })?;
     let text = single_line(&path, TEXT_SAMPLE_CHARS);
-    (!text.is_empty()).then(|| Segment::new(text, style::agent_param()))
+    (!text.is_empty()).then(|| Segment::new(text, style::chat_tool_param()))
 }
 
 /// 次要信息段 + 它的**丢弃优先级**（值越小越先被窄宽度隐藏）。
@@ -187,7 +187,7 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
             if let Some((start, end)) = summary.range {
                 push(
                     text::agent::range_label(start, end),
-                    style::agent_range(),
+                    style::chat_tool_range(),
                     PRIORITY_RANGE,
                 );
             }

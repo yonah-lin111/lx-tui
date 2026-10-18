@@ -485,7 +485,7 @@ fn token_and_duration_formatting_matches_agent_conventions() {
 fn thinking_header_uses_step_square_and_becomes_thought() {
     use ratatui::style::{Color, Modifier};
 
-    // 生成中：行首方块（呼吸第 0 帧为实心、品牌蓝加粗）+ `Thinking`。
+    // 生成中：行首方块（呼吸第 0 帧为实心、lx 品牌粉加粗）+ `Thinking`。
     let mut streaming = lx_with(vec![message(
         "assistant",
         "streaming",
@@ -495,11 +495,12 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(117), "生成中方块用品牌天蓝");
-    assert!(
-        header.modifier.contains(Modifier::BOLD),
-        "生成中方块加粗（与输入框上方 loading 同款）"
-    );
+    assert_eq!(header.fg, Color::Indexed(218), "生成中方块用 lx 品牌粉");
+    assert!(header.modifier.contains(Modifier::BOLD), "生成中方块加粗");
+    // 头部文案：品牌粉（与方块同色系）但**不加粗**，让方块更跳。
+    let label = &buf[(2, 0)];
+    assert_eq!(label.fg, Color::Indexed(218), "生成中文案品牌粉");
+    assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thinking"),
@@ -519,7 +520,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let line0 = row_text(&buf, area, 0);
     assert!(line0.starts_with("□ Thinking"), "空心相位：{line0}");
 
-    // 完成后（带起止时刻）：静态实心方块、品牌蓝压暗一档、`Thought · 6.3s`。
+    // 完成后（带起止时刻）：静态实心方块、品牌天蓝加粗（不压暗）、`Thought · 6.3s`。
     let mut done = lx_with(vec![message(
         "assistant",
         "complete",
@@ -532,8 +533,18 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(117), "完成后仍是品牌蓝");
-    assert_eq!(header.modifier, Modifier::DIM, "完成后压暗");
+    assert_eq!(header.fg, Color::Indexed(117), "完成后换品牌天蓝");
+    assert!(
+        header.modifier.contains(Modifier::BOLD),
+        "完成后仍加粗（不压暗）"
+    );
+    assert!(
+        !header.modifier.contains(Modifier::DIM),
+        "完成后不压暗（压暗会与边框标题混同）"
+    );
+    let label = &buf[(2, 0)];
+    assert_eq!(label.fg, Color::Indexed(117), "完成后文案品牌天蓝");
+    assert!(!label.modifier.contains(Modifier::DIM), "完成后文案不压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thought · 6.3s"),
@@ -553,8 +564,8 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(117), "展开后仍品牌蓝");
-    assert_eq!(header.modifier, Modifier::DIM, "展开后仍压暗");
+    assert_eq!(header.fg, Color::Indexed(117), "展开后仍品牌天蓝");
+    assert!(header.modifier.contains(Modifier::BOLD), "展开后仍加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thought · 6.3s"),
@@ -585,10 +596,11 @@ fn markdown_body_block_has_step_square_and_indented_continuation() {
         line1.starts_with("  第二行"),
         "续行缩进 2 列与方块对齐：{line1}"
     );
-    // 完成态的方块：品牌蓝压暗、不加粗。
+    // 完成态的方块：品牌天蓝加粗、不压暗。
     let marker = &buf[(0, 0)];
     assert_eq!(marker.fg, ratatui::style::Color::Indexed(117));
-    assert_eq!(marker.modifier, ratatui::style::Modifier::DIM);
+    assert!(marker.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert!(!marker.modifier.contains(ratatui::style::Modifier::DIM));
 }
 
 #[test]

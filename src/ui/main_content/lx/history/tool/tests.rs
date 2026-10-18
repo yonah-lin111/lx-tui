@@ -136,12 +136,21 @@ fn every_tool_and_open_status_shows_breathing_square_verb_and_path() {
                 painted.starts_with(text::agent::STEP_MARK_FILLED),
                 "{name}/{status:?} 行首应为步骤方块：{painted}"
             );
-            // 运行中的方块用品牌蓝加粗（与输入框上方 loading 转轮同款）。
+            // 运行中的方块用 lx 品牌粉（Indexed 218）加粗：与正文默认前景、
+            // 面板边框的 Cyan/dim 都区分得开。
+            let lead = grid.cell(0, 0).style;
             assert_eq!(
-                grid.cell(0, 0).style.fg,
-                style::chat_loading_spinner().fg,
-                "{name}/{status:?} 方块品牌蓝"
+                lead.fg,
+                style::chat_step_mark_running().fg,
+                "{name}/{status:?} 方块品牌粉"
             );
+            assert!(
+                lead.add_modifier.contains(ratatui::style::Modifier::BOLD),
+                "{name}/{status:?} 方块加粗"
+            );
+            // 与边框青、边框标题淡蓝都不撞色。
+            assert_ne!(lead.fg, style::accent().fg, "不与边框青同色");
+            assert_ne!(lead.fg, style::border_title().fg, "不与边框标题同色");
             assert!(
                 painted.contains(text::tool_status_label(status)),
                 "{name}/{status:?} 应显示状态文字：{painted}"
@@ -226,19 +235,22 @@ fn completed_tool_has_square_verb_and_status_without_type_icon() {
                 "{name} 不再画类型图标 {icon:?}：{painted}"
             );
         }
-        // 方块用暗一档品牌蓝（与完成后 thinking 头部同款）。
-        let lead = grid.cell(0, 0);
+        // 完成方块：品牌天蓝加粗、**不压暗**（压暗会与边框标题/正文混同）。
+        let lead = grid.cell(0, 0).style;
         assert_eq!(
-            lead.style.fg,
-            style::agent_connector().fg,
-            "{name} 完成方块品牌蓝压暗"
+            lead.fg,
+            style::chat_step_mark_done().fg,
+            "{name} 完成方块品牌天蓝"
         );
         assert!(
-            lead.style
-                .add_modifier
-                .contains(ratatui::style::Modifier::DIM),
-            "{name} 完成方块压暗（DIM）"
+            lead.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "{name} 完成方块加粗"
         );
+        assert!(
+            !lead.add_modifier.contains(ratatui::style::Modifier::DIM),
+            "{name} 完成方块不压暗"
+        );
+        assert_ne!(lead.fg, style::accent().fg, "{name} 不与边框青同色");
     }
 }
 
@@ -354,7 +366,7 @@ fn read_shows_line_range_in_range_color() {
         range_text,
         format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, "12-40")
     );
-    assert_eq!(range_style, style::agent_range(), "行范围用专属色");
+    assert_eq!(range_style, style::chat_tool_range(), "行范围用品牌天蓝");
     assert!(
         !range_style
             .add_modifier
