@@ -495,11 +495,15 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(218), "生成中方块用 lx 品牌粉");
+    assert_eq!(
+        header.fg,
+        Color::Indexed(153),
+        "生成中方块用 Native Agent 浅蓝"
+    );
     assert!(header.modifier.contains(Modifier::BOLD), "生成中方块加粗");
     // 头部文案：品牌粉（与方块同色系）但**不加粗**，让方块更跳。
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(218), "生成中文案品牌粉");
+    assert_eq!(label.fg, Color::Indexed(153), "生成中文案同款浅蓝");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -533,7 +537,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(218), "完成后仍是 Native 浅粉");
+    assert_eq!(header.fg, Color::Indexed(153), "完成后仍是 Native 浅蓝");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "完成方块不加粗（与运行中的加粗呼吸方块区分）"
@@ -543,7 +547,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
         "完成后不压暗（压暗会与边框标题混同）"
     );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(218), "完成后文案同为浅粉");
+    assert_eq!(label.fg, Color::Indexed(153), "完成后文案同为浅蓝");
     assert!(!label.modifier.contains(Modifier::DIM), "完成后文案不压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -564,7 +568,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(218), "展开后仍浅粉");
+    assert_eq!(header.fg, Color::Indexed(153), "展开后仍浅蓝");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "展开后仍是不加粗的完成态"
@@ -601,7 +605,7 @@ fn markdown_body_block_has_step_square_and_indented_continuation() {
     );
     // 完成态的方块：Native 浅粉、不加粗、不压暗。
     let marker = &buf[(0, 0)];
-    assert_eq!(marker.fg, ratatui::style::Color::Indexed(218));
+    assert_eq!(marker.fg, ratatui::style::Color::Indexed(153));
     assert!(!marker.modifier.contains(ratatui::style::Modifier::BOLD));
     assert!(!marker.modifier.contains(ratatui::style::Modifier::DIM));
 }

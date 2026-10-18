@@ -30,7 +30,11 @@ fn paints_markdown_styles() {
     // 断言取 `style::*` token 而非硬编码色值：色板调整后这里自动跟随，
     // 但仍逐一验证「谁拿到哪一档语义样式」不串。
     assert_eq!(buf[(0, 0)].symbol(), "#");
-    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+    assert_eq!(
+        buf[(0, 0)].fg,
+        style::markdown_marker().fg.unwrap_or(Color::Reset),
+        "标记用 GitHub 的 fg-muted"
+    );
     assert_eq!(buf[(3, 0)].symbol(), "t");
     assert_eq!(
         buf[(3, 0)].fg,
@@ -54,11 +58,12 @@ fn paints_markdown_styles() {
     );
 
     assert_eq!(buf[(2, 3)].symbol(), "q");
+    // GitHub Dark 的引用只改前景（fg-muted），不加斜体、不换色相。
     assert_eq!(
         buf[(2, 3)].fg,
         style::markdown_quote().fg.unwrap_or(Color::Reset)
     );
-    assert!(buf[(2, 3)].modifier.contains(Modifier::ITALIC));
+    assert!(!buf[(2, 3)].modifier.contains(Modifier::ITALIC));
 
     assert_eq!(buf[(2, 4)].symbol(), "i");
     assert_eq!(buf[(2, 4)].fg, Color::Reset);
@@ -84,11 +89,18 @@ fn fence_lines_are_markers_and_content_stays_default() {
     let prompt = prompt(10, 4, "```\nx\n```");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+    assert_eq!(
+        buf[(0, 0)].fg,
+        style::markdown_marker().fg.unwrap_or(Color::Reset),
+        "围栏标记为 GitHub 的 fg-muted"
+    );
     assert_eq!(buf[(0, 1)].symbol(), "x");
-    assert_eq!(buf[(0, 1)].fg, Color::Reset);
+    assert_eq!(buf[(0, 1)].fg, Color::Reset, "代码正文仍用终端默认前景");
     assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
-    assert!(buf[(0, 2)].modifier.contains(Modifier::DIM));
+    assert_eq!(
+        buf[(0, 2)].fg,
+        style::markdown_marker().fg.unwrap_or(Color::Reset)
+    );
 }
 
 #[test]

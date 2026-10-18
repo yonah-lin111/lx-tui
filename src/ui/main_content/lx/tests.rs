@@ -312,11 +312,12 @@ fn markdown_line_is_styled() {
     let _ = render(area, &mut buf, &lx, false, None);
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
-    // `#` 为标记（muted/dim），`Title` 为标题（灰绿加粗）。
-    assert!(
-        buf[(content_x, row)]
-            .modifier
-            .contains(ratatui::style::Modifier::DIM)
+    // `#` 为标记（GitHub 的 fg-muted），`Title` 为标题（正文色 + 加粗 + 下划线）。
+    assert_eq!(
+        buf[(content_x, row)].fg,
+        crate::ui::style::markdown_marker()
+            .fg
+            .unwrap_or(Color::Reset)
     );
     assert_eq!(
         buf[(content_x + 3, row)].fg,

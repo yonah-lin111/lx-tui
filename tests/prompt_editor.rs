@@ -60,11 +60,15 @@ fn typed_markdown_renders_highlight_and_cursor() {
     let inner = layout::prompt_text_rect(view.prompt);
     let marker = &buffer[(inner.x, inner.y)];
     assert_eq!(marker.symbol(), "#");
-    assert!(marker.modifier.contains(Modifier::DIM));
+    // 标记用 GitHub Dark 的 fg-muted（显式前景，不再是 dim 修饰）。
+    assert_eq!(
+        marker.fg,
+        ui::style::markdown_marker().fg.unwrap_or(Color::Reset)
+    );
 
     let heading = &buffer[(inner.x + 2, inner.y)];
     assert_eq!(heading.symbol(), "标");
-    // 标题不再换色（markdown 侧去色相）：靠加粗表达层级，前景回到正文默认色。
+    // GitHub Dark 的标题不换色：靠加粗（h2 另有下划线）表达层级。
     assert_eq!(heading.fg, Color::Reset);
     assert!(heading.modifier.contains(Modifier::BOLD));
 
