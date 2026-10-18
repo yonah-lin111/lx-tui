@@ -1,16 +1,18 @@
-//! 输入框上方聊天栏：流中 loading 卡片 + 右端「回到底部」控件。
+//! 输入框上方那一行：loading / 临时提示 / 「回到底部」控件。
 //!
 //! 纯渲染 + 纯几何：布局、绘制与命中共享同一矩形口径；只读 `Lx`、只写 lx 页网格。
-//! 该行贴在输入框上沿、与输入框同宽；无流中且已跟随底部时整行不占位。
-//! 「回到底部」控件为箭头 + 右侧说明文字（`↓ jump to bottom`），整体右对齐。
+//! 该行贴在输入框上沿、与输入框同宽；三者都没有时整行不占位。
 //!
-//! **loading 的形态**（对齐用户要求的「正方形卡片 Working...」）：
-//! - 方块 `■` 与聊天历史的步骤方块同一个字形；颜色按 lx 页 `Native Agent` 标签的
-//!   4 档渐变（218 粉 → 182 淡紫 → 153 浅蓝 → 117 天蓝）**循环**，每
-//!   `LOADING_FRAME_INTERVAL`（100ms）换一档；
-//! - `Working...` 平时是次要色，有一个 3 字符宽的高亮窗口**从左到右扫描**，
-//!   窗口内字符立刻变成「卡片当前那一档色」——同一时刻卡片与亮点同色，形成
-//!   「颜色从卡片流向文字」的观感。
+//! **优先级：临时提示 > loading > 回到底部**（提示是用户刚操作产生的即时反馈，
+//! 必须独占可见性；`↓ jump to bottom` 在被挤出时让位——用户此刻视线在输入框）。
+//!
+//! **loading**：只显示 `Working...`（无方块、无转轮），文字带**从左到右的扫描高亮**：
+//! 窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native 标签的
+//! 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
+//! 走出末尾后从左侧重新进入。
+//!
+//! **临时提示**：错误红（`InputHintLevel::Error`）/ 默认黄（`Warning`），
+//! 文案极简、超宽用 `…` 截断；2 秒后由 `update::tick` 清除。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -29,12 +31,12 @@ const HINT_GAP: u16 = 1;
 /// 扫描高亮窗口宽度（字符）。
 const SCAN_WINDOW: usize = 3;
 
-/// 是否显示聊天栏：流中（loading）或上滚未跟随底部（回到底部控件）。
+/// 是否显示聊天栏：有临时提示、流中（loading）或上滚未跟随底部（回到底部控件）。
 pub(super) fn visible(lx: &Lx) -> bool {
-    if lx.chat.messages.is_empty() {
+    if lx.chat.messages.is_empty() && lx.chat.hint.is_none() {
         return false;
     }
-    lx.chat.status.streaming || !lx.chat.follow_bottom
+    lx.chat.hint.is_some() || lx.chat.status.streaming || !lx.chat.follow_bottom
 }
 
 /// 由输入框矩形推导聊天栏矩形（贴其上沿）；上方空间不足时 None。
@@ -43,9 +45,9 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
         .then(|| Rect::new(input.x, input.y - HEIGHT, input.width, HEIGHT))
 }
 
-/// 回到底部控件矩形（未跟随底部且空间足够时）；供命中与测试。
+/// 回到底部控件矩形（未跟随底部、**无临时提示**且空间足够时）；供命中与测试。
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.follow_bottom || lx.chat.messages.is_empty() {
+    if lx.chat.follow_bottom || lx.chat.messages.is_empty() || lx.chat.hint.is_some() {
         return None;
     }
     let input = super::input_rect(area, lx)?;
@@ -70,15 +72,28 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
         .then(|| Rect::new(bar.right() - RIGHT_PAD - arrow, bar.y, arrow, 1))
 }
 
-/// 绘制聊天栏：左侧 loading 卡片 / 临时警告，右端「回到底部」控件。
-///
-/// 流中画 `■ Working...`（卡片颜色呼吸，文案自左向右扫描高亮）；
-/// 未跟随底部时右端画 `↓ 说明`（悬停高亮）。
+/// 绘制聊天栏：临时提示 > loading > 回到底部。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
         return;
     };
     if bar.width == 0 {
+        return;
+    }
+    // 临时提示独占该行（错误红 / 默认黄），不并排 jump。
+    if let Some(hint) = lx.chat.hint.as_ref() {
+        let x = bar.x.saturating_add(1);
+        let limit = bar.right().saturating_sub(1);
+        if x < limit {
+            let width = usize::from(limit.saturating_sub(x));
+            grid.put_clipped(
+                x,
+                bar.y,
+                &text::ellipsize(&hint.message, width),
+                style::chat_input_hint(hint.level),
+                limit.saturating_sub(x),
+            );
+        }
         return;
     }
     let mut right = bar.right();
@@ -100,7 +115,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
         if hint_x < button.right() {
             grid.put_clipped(
                 hint_x,
-                button.y,
+                bar.y,
                 text::LX_JUMP_BOTTOM_HINT,
                 jump_style,
                 button.right() - hint_x,
@@ -121,10 +136,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     );
 }
 
-/// 绘制 `■ Working...`：方块取 Native 渐变循环色，文案做从左到右的扫描高亮。
-///
-/// 卡片与扫描窗口同色同频：`loading_frame` 同时决定「卡片当前是哪一档色」和
-/// 「高亮窗口走到第几个字符」，因此视觉上是颜色从卡片一路流向文字。
+/// 绘制 `Working...`（无方块、无转轮）：只画带扫描高亮的文字。
 fn draw_loading(
     grid: &mut Grid,
     y: u16,
@@ -135,15 +147,7 @@ fn draw_loading(
 ) {
     // 右侧留 1 列空档避免贴边。
     let limit = right.saturating_sub(1);
-    let mut x = bar_x.saturating_add(1);
-    if x >= limit {
-        return;
-    }
-    // 卡片：5 帧循环（蓝实心 → 默认色镂空 → 粉实心 → 默认色实心 → 默认色镂空）。
-    let (glyph, card_style) = style::chat_loading_frame(loading_frame);
-    grid.put_char(x, y, glyph, card_style);
-    x = x.saturating_add(2);
-
+    let x = bar_x.saturating_add(1);
     if x >= limit {
         return;
     }

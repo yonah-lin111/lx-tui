@@ -1169,13 +1169,18 @@ fn esc_armed_replaces_loading_label_with_stop_hint() {
 
 #[test]
 fn esc_hint_shortens_on_narrow_bar() {
-    let area = Rect::new(0, 0, 28, 16);
+    // 卡片移除后 loading 从第 1 列起画，可用宽度比之前宽 2 列，因此用更窄的栏验证降级。
+    let area = Rect::new(0, 0, 22, 16);
     let mut lx = streaming_lx(true, true);
     lx.chat.stop_armed_at = Some(std::time::Instant::now());
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
-    assert!(text.contains("esc again"), "窄栏取短短语：{text}");
+    assert!(
+        text.contains(text::LX_CHAT_STOP_PHRASES[1])
+            || text.contains(text::LX_CHAT_STOP_PHRASES[2]),
+        "窄栏取短短语：{text}"
+    );
     assert!(
         !text.contains("Press esc again to stop"),
         "放不下时不画长短语：{text}"
@@ -1293,174 +1298,103 @@ fn chat_bar_cells(area: Rect, lx: &Lx) -> (String, Vec<ratatui::style::Style>) {
     (text, styles)
 }
 
-/// 卡片必须按**用户指定的 5 帧**循环渲染：蓝实心 → 默认色镂空 → 粉实心 →
-/// 默认色实心 → 默认色镂空（顺序与字形都要对）。
+/// loading **不再有方块**：整行只有 `Working...`，且它带扫描高亮。
 #[test]
-fn loading_mark_renders_the_five_frame_cycle() {
+fn loading_shows_only_the_label_without_a_mark() {
     let area = Rect::new(0, 0, 60, 16);
-    // (字形, 前景, 是否加粗)
-    let expected = [
-        ('■', Some(Color::Indexed(117)), true),
-        ('□', None, false),
-        ('■', Some(Color::Indexed(218)), true),
-        ('■', None, false),
-        ('□', None, false),
-    ];
-    for (frame, (glyph, fg, bold)) in expected.iter().enumerate() {
+    let mut lx = streaming_lx(true, true);
+    lx.chat.loading_frame = 0;
+    let (text, _styles) = chat_bar_cells(area, &lx);
+    // 不含任何方块字形（实心/空心都不该出现）。
+    assert!(
+        !text.contains(crate::ui::text::agent::STEP_MARK_FILLED)
+            && !text.contains(crate::ui::text::agent::STEP_MARK_HOLLOW),
+        "loading 不该再有方块：{text:?}"
+    );
+    // 只有文案，且从第 1 列（贴左边距）开始。
+    let trimmed = text.trim_start();
+    assert!(
+        trimmed.starts_with(text::chat::LOADING_LABEL),
+        "只有 Working... 文案：{text:?}"
+    );
+}
+
+/// 扫描高亮：窗口内字符取当前帧色（按 Native 标签 4 档循环），窗口外是 dim。
+#[test]
+fn working_label_scans_left_to_right() {
+    let area = Rect::new(0, 0, 60, 16);
+    let cycle = crate::ui::text::agent::native_label_cycle();
+    let mut seen_hits = false;
+    for frame in 0..12 {
         let mut lx = streaming_lx(true, true);
         lx.chat.loading_frame = frame;
+        // 直接取渲染后的单元格样式：第 1 列起就是文案。
         let lay = layout(area, &lx);
         let bar = lay.chat_bar.expect("流中显示聊天栏");
         let mut buf = Buffer::empty(area);
         let _ = render(area, &mut buf, &lx, false, None);
-        let cell = &buf[(bar.x + 1, bar.y)];
-        assert_eq!(cell.symbol(), glyph.to_string(), "第 {frame} 帧字形");
-        // 缓冲区会把「不设前景」规范化为 `Reset`（= 默认字体颜色），
-        // 因此以 `Reset` 当作 `None` 的等价物断言。
-        assert_eq!(
-            cell.style().fg.unwrap_or(Color::Reset),
-            fg.unwrap_or(Color::Reset),
-            "第 {frame} 帧前景（默认字体色记作 Reset）"
-        );
-        assert_eq!(
-            cell.style()
-                .add_modifier
-                .contains(ratatui::style::Modifier::BOLD),
-            *bold,
-            "第 {frame} 帧字重"
+        let cells: Vec<&ratatui::buffer::Cell> =
+            (bar.x + 1..bar.right()).map(|x| &buf[(x, bar.y)]).collect();
+        let hits: Vec<usize> = cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| {
+                cell.style()
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        seen_hits = true;
+        assert!(hits.len() <= 3, "frame {frame}: 窗口不超过 3 字符 {hits:?}");
+        // 窗口内颜色 = 当前帧的循环色。
+        let expected = cycle[frame % cycle.len()];
+        for index in &hits {
+            assert_eq!(
+                cells[*index].style().fg,
+                Some(Color::Indexed(expected)),
+                "frame {frame}: 被扫到的字符应为该帧色"
+            );
+        }
+        // 窗口连续。
+        assert!(
+            hits.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "frame {frame}: 窗口不连续 {hits:?}"
         );
     }
-    // 循环：走完 5 帧回到第 0 帧。
-    let render_at = |frame: usize| {
+    assert!(seen_hits, "扫描窗口应当命中过文案");
+}
+
+/// 扫描自左向右推进：每帧前进一步，走完一轮后从左侧重新进入。
+#[test]
+fn scan_advances_one_char_per_frame_and_wraps() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut heads: Vec<usize> = Vec::new();
+    for frame in 0..12 {
         let mut lx = streaming_lx(true, true);
         lx.chat.loading_frame = frame;
         let lay = layout(area, &lx);
         let bar = lay.chat_bar.expect("bar");
         let mut buf = Buffer::empty(area);
         let _ = render(area, &mut buf, &lx, false, None);
-        (
-            buf[(bar.x + 1, bar.y)].symbol().to_string(),
-            buf[(bar.x + 1, bar.y)].style().fg,
-        )
-    };
-    assert_eq!(render_at(5), render_at(0), "循环取模");
-}
-
-/// 扫描高亮：窗口内字符与卡片**同一时刻同色且加粗**，窗口外是次要色（不加粗）。
-#[test]
-fn working_label_scans_left_to_right_in_mark_color() {
-    let area = Rect::new(0, 0, 60, 16);
-    let label_len = text::chat::LOADING_LABEL.chars().count();
-    // 扫一整轮，收集「被高亮的字符下标」序列。
-    let mut seen_first_hit = false;
-    for frame in 0..(label_len + 3) * 2 {
-        let mut lx = streaming_lx(true, true);
-        lx.chat.loading_frame = frame;
-        let (text, styles) = chat_bar_cells(area, &lx);
-        let cells: Vec<char> = text.chars().collect();
-        // 定位文案起点：`■` + 空格之后。
-        let start = cells
-            .iter()
-            .position(|c| {
-                *c == crate::ui::text::agent::STEP_MARK_FILLED
-                    || *c == crate::ui::text::agent::STEP_MARK_HOLLOW
+        let head = (bar.x + 1..bar.right())
+            .rfind(|x| {
+                buf[(*x, bar.y)]
+                    .style()
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
             })
-            .expect("有卡片")
-            + 2;
-        let bold_after_mark: Vec<usize> = styles
-            .iter()
-            .enumerate()
-            .skip(start)
-            .filter(|(_, style)| style.add_modifier.contains(ratatui::style::Modifier::BOLD))
-            .map(|(index, _)| index - start)
-            .collect();
-        if bold_after_mark.is_empty() {
-            continue;
-        }
-        seen_first_hit = true;
-        // 高亮字符数不超过窗口宽度。
-        assert!(
-            bold_after_mark.len() <= 3,
-            "frame {frame}: 高亮 {bold_after_mark:?} 超过窗口宽度"
-        );
-        // 高亮字符的颜色 = 卡片当前档位色。
-        for index in &bold_after_mark {
-            // 默认字体色的帧没有前景（缓冲区记为 Reset），与卡片一致即可。
-            assert_eq!(
-                styles[start + index].fg.unwrap_or(Color::Reset),
-                styles[1].fg.unwrap_or(Color::Reset),
-                "frame {frame}: 被扫到的字符应与卡片同色"
-            );
-        }
-    }
-    assert!(seen_first_hit, "扫描窗口应当命中过文案");
-}
-
-/// 扫描是**从左到右**推进的：首个被扫到的字符下标随帧单调不减（循环回绕除外）。
-#[test]
-fn scan_moves_left_to_right() {
-    let area = Rect::new(0, 0, 60, 16);
-    let mut heads: Vec<usize> = Vec::new();
-    for frame in 0..12 {
-        let mut lx = streaming_lx(true, true);
-        lx.chat.loading_frame = frame;
-        let (text, styles) = chat_bar_cells(area, &lx);
-        let cells: Vec<char> = text.chars().collect();
-        let start = cells
-            .iter()
-            .position(|c| {
-                *c == crate::ui::text::agent::STEP_MARK_FILLED
-                    || *c == crate::ui::text::agent::STEP_MARK_HOLLOW
-            })
-            .expect("有卡片")
-            + 2;
-        let first_bold = styles
-            .iter()
-            .enumerate()
-            .skip(start)
-            .find(|(_, style)| style.add_modifier.contains(ratatui::style::Modifier::BOLD))
-            .map(|(index, _)| index - start);
-        if let Some(head) = first_bold {
+            .map(|x| usize::from(x - bar.x - 1));
+        if let Some(head) = head {
             heads.push(head);
         }
     }
     assert!(heads.len() >= 4, "应收集到足够帧：{heads:?}");
-    // 允许一次回绕（从末尾跳回 0），其余必须单调不减。
     let wraps = heads.windows(2).filter(|pair| pair[1] < pair[0]).count();
     assert!(wraps <= 1, "扫描应只回绕一次：{heads:?}");
-}
-
-/// 扫描窗口必须是**连续的一段**（不是散点）：被高亮的字符下标连续。
-#[test]
-fn scan_window_is_contiguous() {
-    let area = Rect::new(0, 0, 60, 16);
-    for frame in 0..16 {
-        let mut lx = streaming_lx(true, true);
-        lx.chat.loading_frame = frame;
-        let (text, styles) = chat_bar_cells(area, &lx);
-        let cells: Vec<char> = text.chars().collect();
-        let start = cells
-            .iter()
-            .position(|c| {
-                *c == crate::ui::text::agent::STEP_MARK_FILLED
-                    || *c == crate::ui::text::agent::STEP_MARK_HOLLOW
-            })
-            .expect("有卡片")
-            + 2;
-        let hits: Vec<usize> = styles
-            .iter()
-            .enumerate()
-            .skip(start)
-            .filter(|(_, style)| style.add_modifier.contains(ratatui::style::Modifier::BOLD))
-            .map(|(index, _)| index - start)
-            .collect();
-        if hits.len() >= 2 {
-            assert!(
-                hits.windows(2).all(|pair| pair[1] == pair[0] + 1),
-                "frame {frame}: 扫描窗口不连续 {hits:?}"
-            );
-        }
-    }
 }
 
 /// 未流中且没有警告时，聊天栏不该出现加载文案（避免残留）。

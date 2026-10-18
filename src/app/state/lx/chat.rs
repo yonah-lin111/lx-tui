@@ -265,6 +265,50 @@ pub struct StickySuppression {
     pub row: usize,
 }
 
+/// 输入框上方那一行的**临时提示**（loading 之外的第二类内容）。
+///
+/// lx 页所有反馈都收口到输入框上方：`Working...`（loading）、`↓ jump to bottom`（导航）
+/// 与本提示共用一个位置。提示到点自动消失，超宽时渲染层用 `…` 截断。
+///
+/// 文案要求**十分简洁**（见 `ui::text::chat` 里的常量），不要写整句说明。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputHint {
+    /// 提示正文（不含图标与颜色，渲染层只负责排版）。
+    pub message: String,
+    /// 语义级别：决定颜色（错误红 / 默认黄）。
+    pub level: InputHintLevel,
+    /// 到期时刻；`tick` 到点清除。
+    pub deadline: std::time::Instant,
+}
+
+/// 输入框上方提示的两个语义级别（用户指定：错误红、其余黄）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputHintLevel {
+    /// 失败：红色。
+    Error,
+    /// 需要留意但不算失败：黄色（默认档）。
+    Warning,
+}
+
+impl InputHint {
+    /// 以当前时刻起算的 [`INPUT_HINT_TTL`]。
+    pub fn new(level: InputHintLevel, message: impl Into<String>, now: std::time::Instant) -> Self {
+        Self {
+            message: message.into(),
+            level,
+            deadline: now + INPUT_HINT_TTL,
+        }
+    }
+
+    /// 是否已到期。
+    pub fn is_expired(&self, now: std::time::Instant) -> bool {
+        now >= self.deadline
+    }
+}
+
+/// 输入框上方提示的展示时长（与 toast 一致，2 秒）。
+pub const INPUT_HINT_TTL: std::time::Duration = std::time::Duration::from_millis(2000);
+
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
 pub struct LxChat {
@@ -303,6 +347,8 @@ pub struct LxChat {
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
+    /// 输入框上方的临时提示（错误红 / 默认黄），到点自动消失。
+    pub hint: Option<InputHint>,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
     /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
@@ -334,6 +380,7 @@ impl LxChat {
             loading_frame: 0,
             jump_bottom_hover: false,
             stop_armed_at: None,
+            hint: None,
             suppressed_prompt_header: None,
         }
     }

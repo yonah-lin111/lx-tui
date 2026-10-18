@@ -4,16 +4,13 @@
 //! [`super::view::view_message_of`] 把 DB 的 parts 与 tools 按 position 合并成唯一步骤时间线。
 
 use crate::app::state::lx::slash::{SlashCommand, SlashPanel};
-use crate::app::state::{AppState, ModelPicker, ModelPickerStage};
-use crate::app::toast::ToastKind;
+use crate::app::state::{AppState, InputHintLevel, ModelPicker, ModelPickerStage};
 use crate::config::ai::ModelSelection;
 use crate::db::chat::{ChatMessage, ModelSnapshot};
 use crate::layout::PaneId;
 use crate::ui::text;
 
-use super::{
-    refresh_all_lx_status, refresh_lx_status, show_chat_toast, stop_stream, view_message_of,
-};
+use super::{refresh_all_lx_status, refresh_lx_status, show_lx_hint, stop_stream, view_message_of};
 
 /// `/new`：解绑当前窗格会话；在途请求继续按原 session 完成写入。
 pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
@@ -47,7 +44,7 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
     }
     let candidates = ModelPicker::candidates(&state.models.settings);
     if candidates.is_empty() {
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_NO_MODEL);
+        show_lx_hint(state, pane, InputHintLevel::Error, text::LX_CHAT_NO_MODEL);
         return true;
     }
     // 高亮对齐当前选择。
@@ -115,7 +112,12 @@ pub fn resume_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
             })
         });
     if occupied {
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_SESSION_BUSY);
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_SESSION_BUSY,
+        );
         return true;
     }
     state

@@ -28,7 +28,6 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::app::effects::Effect;
 use crate::app::state::{AppState, RequestKey, RequestState};
-use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::chat::agent_loop::{HostError, ModelContext, ReadyToolCall, ToolOutcome, TurnSummary};
 use crate::chat::context::{self, AssemblyInput};
@@ -653,14 +652,12 @@ fn finish_tool(
                 code = db_error.code(),
                 "tool result persistence failed"
             );
-            update::show_toast(
+            // lx 的反馈一律显示在输入框上方（错误红），不再用 toast。
+            update::show_lx_hint(
                 state,
-                Toast::new(
-                    ToastKind::Error,
-                    text::LX_CHAT_TOOL_RESULT_SAVE_FAILED,
-                    Some(key.pane),
-                    std::time::Instant::now(),
-                ),
+                key.pane,
+                crate::app::state::InputHintLevel::Error,
+                text::LX_CHAT_TOOL_RESULT_SAVE_FAILED,
             );
             let _ = reply.send(Err(HostError::Failed {
                 code: format!("{FINISH_TOOL_FAILED_CODE} · {}", db_error.code()),

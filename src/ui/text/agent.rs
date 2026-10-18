@@ -297,59 +297,8 @@ fn main() {
 
 /// lx 页 `Native Agent` 标签渐变的**去重色序列**（218 粉 → 182 淡紫 → 153 浅蓝 → 117 天蓝）。
 ///
-/// 属于品牌色参照，不再直接用于聊天栏 loading（那里改成了下面的 5 帧呼吸表）；
-/// 保留供 `model_label_style` 与测试对账使用。
+/// 输入框上方 loading 的扫描高亮按这 4 档循环换色（`style::chat_loading_scan`），
+/// 保证「loading 的色 = Native 入口标签的色」，不引入第二套品牌色。
 pub fn native_label_cycle() -> &'static [u8] {
     &[218, 182, 153, 117]
-}
-
-/// loading 卡片的一帧：字形 + 是否上色。
-///
-/// 用户要求的 5 帧循环（顺序固定）：
-/// ① 蓝（实心）→ ② 默认字体色**镂空** → ③ 粉（实心）→ ④ 默认字体色（实心）
-/// → ⑤ 默认字体色**镂空**；之后回到 ①。
-///
-/// 「默认字体色」指与 markdown 正文方块同一个观感（不设显式前景、不加粗），
-/// 因此 ④ 与正文里的静态方块完全一致；②⑤ 是它的空心版本。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LoadingMarkFrame {
-    /// `■`（实心）或 `□`（空心）。
-    pub glyph: char,
-    /// 显式前景；`None` = 默认字体色（与 markdown 正文方块一致）。
-    pub color: Option<u8>,
-    /// 是否加粗；默认字体色的帧一律不加粗（与正文方块一致）。
-    pub bold: bool,
-}
-
-/// loading 卡片的 5 帧循环表。
-pub fn loading_mark_frames() -> &'static [LoadingMarkFrame] {
-    const BLUE: u8 = 117;
-    const PINK: u8 = 218;
-    &[
-        LoadingMarkFrame {
-            glyph: STEP_MARK_FILLED,
-            color: Some(BLUE),
-            bold: true,
-        },
-        LoadingMarkFrame {
-            glyph: STEP_MARK_HOLLOW,
-            color: None,
-            bold: false,
-        },
-        LoadingMarkFrame {
-            glyph: STEP_MARK_FILLED,
-            color: Some(PINK),
-            bold: true,
-        },
-        LoadingMarkFrame {
-            glyph: STEP_MARK_FILLED,
-            color: None,
-            bold: false,
-        },
-        LoadingMarkFrame {
-            glyph: STEP_MARK_HOLLOW,
-            color: None,
-            bold: false,
-        },
-    ]
 }

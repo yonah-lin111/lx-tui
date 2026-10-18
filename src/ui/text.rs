@@ -494,15 +494,18 @@ pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
 
 /// lx 聊天相关提示与状态文案。
-pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Chat is available in Native Agent only";
-pub const LX_CHAT_NO_MODEL: &str = "No model available; configure providers in settings";
-pub const LX_CHAT_NO_WORKSPACE: &str = "Workspace path unavailable";
-pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
-pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
-pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
+///
+/// **一律极简**：这些文案显示在输入框上方那一行（`chat_bar`），空间只有一行宽，
+/// 过长会被 `…` 截断。因此用短语而不是整句——多余的上下文由位置本身表达
+/// （它就贴在用户刚敲字的输入框上面）。
+pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
+pub const LX_CHAT_NO_MODEL: &str = "No model configured";
+pub const LX_CHAT_NO_WORKSPACE: &str = "No workspace path";
+pub const LX_CHAT_COMMIT_FAILED: &str = "Send failed, retry";
+pub const LX_CHAT_SAVE_FAILED: &str = "Save failed";
+pub const LX_CHAT_SESSION_BUSY: &str = "Session busy";
 /// 工具结果落库失败：文件可能已变化，需要用户核查（绝不重试写入）。
-pub const LX_CHAT_TOOL_RESULT_SAVE_FAILED: &str =
-    "Failed to persist the tool result; check the files on disk";
+pub const LX_CHAT_TOOL_RESULT_SAVE_FAILED: &str = "Tool result not saved";
 /// 流中「按 Esc 停止」待命提示短语（从长到短，按可用宽度取第一条放得下的；对齐 opencode）。
 pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "Press esc again to stop",

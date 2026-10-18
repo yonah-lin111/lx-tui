@@ -316,8 +316,16 @@ fn finish_ack_failure_keeps_partial_and_shows_error() {
         state.pane_anywhere(pane).unwrap().lx.chat.messages[1].status,
         "failed"
     );
-    // toast 可见。
-    assert!(state.toast.is_some());
+    // 错误提示可见（输入框上方，红色）。
+    let hint = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .hint
+        .as_ref()
+        .expect("错误提示可见");
+    assert_eq!(hint.level, crate::app::state::InputHintLevel::Error);
 }
 
 #[test]
@@ -354,7 +362,16 @@ fn non_native_entry_rejects_send_with_feedback() {
     let pane = focus_pane(&state);
     state.pane_mut_anywhere(pane).unwrap().lx.entry = crate::app::state::LxEntry::Hybrid;
     assert!(try_send(&mut state, pane), "有反馈");
-    assert!(state.toast.is_some(), "显示不可用提示");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .hint
+            .is_some(),
+        "显示不可用提示"
+    );
     assert!(
         state
             .effects
@@ -566,7 +583,16 @@ fn resume_blocked_when_session_busy_in_other_pane() {
     on_turn_committed(&mut state, pane_a, generation, &committed("sess-1"));
     // B 尝试恢复同一 session：占用提示。
     assert!(resume_session(&mut state, pane_b, "sess-1"));
-    assert!(state.toast.is_some(), "占用提示");
+    assert!(
+        state
+            .pane_anywhere(pane_b)
+            .expect("pane")
+            .lx
+            .chat
+            .hint
+            .is_some(),
+        "占用提示"
+    );
     // 未入队 Load 效应。
     assert!(
         !state
@@ -984,9 +1010,9 @@ fn expired_arm() -> std::time::Instant {
         .expect("monotonic clock")
 }
 
-// ===== 发送时的「未知命令」拦截（提示走 toast，与复制文案同款）=====
+// ===== 发送时的「未知命令」拦截（提示显示在输入框上方）=====
 
-/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、弹出 toast 且回显命令」。
+/// 辅助：断言「被拦下、没有产生 BeginChatTurn、草稿保留、输入框上方出现提示」。
 fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
     let mut state = ready_state(draft);
     let pane = focus_pane(&state);
@@ -1006,66 +1032,129 @@ fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
         draft,
         "草稿必须保留"
     );
-    // 提示走全局 toast（与「复制文案」同款 Info 档）。
-    let toast = state.toast.as_ref().expect("应弹出 toast");
+    // 提示在输入框上方（不是 toast）。
+    assert!(state.toast.is_none(), "不再使用 toast");
+    let hint = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .hint
+        .as_ref()
+        .expect("输入框上方应有提示");
     assert_eq!(
-        toast.kind,
-        ToastKind::Info,
-        "与复制文案同款 Info 档（不是 Error 红）"
+        hint.level,
+        crate::app::state::InputHintLevel::Warning,
+        "未知命令属于「要留意」→ 默认黄"
     );
     assert!(
-        toast.message.contains(expected_echo),
+        hint.message.contains(expected_echo),
         "回显命令 {expected_echo:?}：{}",
-        toast.message
+        hint.message
     );
+    // 极简：一行放得下。
     assert!(
-        toast.message.contains("/model"),
-        "应提示可用命令：{}",
-        toast.message
+        hint.message.chars().count() <= 40,
+        "文案必须极简：{}",
+        hint.message
     );
 }
 
 #[test]
 fn unknown_slash_command_warns_instead_of_sending() {
     assert_blocked_as_unknown_command("/foo", "/foo");
-    assert_blocked_as_unknown_command("/xyz 参数", "/xyz");
     assert_blocked_as_unknown_command("/summary", "/summary");
 }
 
+/// 带空格的 `/...` **不**拦截：用户是在写普通内容（`/q a`、路径等）。
 #[test]
-fn unknown_command_toast_replaces_the_previous_one() {
-    // toast 是单条替换语义：连续敲错两次只留最后一条。
-    let mut state = ready_state("/foo");
+fn slash_with_spaces_is_sent_as_plain_text() {
+    for draft in [
+        "/q a",
+        "/foo 参数",
+        "/path/to/file.rs 这个文件有问题",
+        "/etc/hosts 是什么",
+    ] {
+        let mut state = ready_state(draft);
+        let pane = focus_pane(&state);
+        try_send(&mut state, pane);
+        let sent = state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. }));
+        assert!(sent, "{draft:?} 应作为普通内容发送");
+        assert!(
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .chat
+                .hint
+                .is_none(),
+            "{draft:?} 不该有提示"
+        );
+    }
+}
+
+#[test]
+fn unknown_command_hint_expires_after_two_seconds() {
+    let mut state = ready_state("/nope");
     let pane = focus_pane(&state);
     try_send(&mut state, pane);
+    let deadline = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .hint
+        .as_ref()
+        .expect("有提示")
+        .deadline;
+    assert!(
+        !super::super::tick(&mut state, Instant::now()),
+        "未到期不清除"
+    );
+    assert!(super::super::tick(&mut state, deadline), "到期应清除");
     assert!(
         state
-            .toast
-            .as_ref()
-            .expect("toast")
-            .message
-            .contains("/foo")
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .hint
+            .is_none(),
+        "到点后提示消失"
     );
-    state.pane_mut_anywhere(pane).expect("pane").lx.input = "/bar".into();
+    assert!(!super::super::tick(&mut state, deadline), "已清过不再变化");
+}
+
+#[test]
+fn unknown_command_hint_sets_a_wakeup_deadline() {
+    let mut state = ready_state("/nope");
+    let pane = focus_pane(&state);
     try_send(&mut state, pane);
-    let toast = state.toast.as_ref().expect("toast");
-    assert!(toast.message.contains("/bar"), "{}", toast.message);
-    assert!(!toast.message.contains("/foo"), "{}", toast.message);
+    let deadline = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .hint
+        .as_ref()
+        .expect("有提示")
+        .deadline;
+    assert_eq!(super::super::next_deadline(&state), Some(deadline));
 }
 
 #[test]
 fn known_commands_and_plain_text_still_send_normally() {
-    // 内置命令由面板采纳链路处理；这里验证 try_send **不**拦正常文本。
     for draft in [
         "帮我看看这段代码",
-        "/model",                          // 内置命令（面板能匹配到）
-        "/resume",                         // 内置命令
-        "/new",                            // 内置命令
-        "/session",                        // /resume 的别名
-        "/",                               // 还没敲完
-        "/path/to/file.rs 这个文件有问题", // 首个词含 / → 路径样文本
-        "/etc/hosts 是什么",               // 同上
-        "/foo\n正文第二行",                // 多行草稿 → 不按命令处理
+        "/model",           // 内置命令（面板能匹配到）
+        "/resume",          // 内置命令
+        "/new",             // 内置命令
+        "/session",         // /resume 的别名
+        "/",                // 还没敲完
+        "/foo\n正文第二行", // 多行草稿 → 不按命令处理
     ] {
         let mut state = ready_state(draft);
         let pane = focus_pane(&state);
@@ -1076,16 +1165,20 @@ fn known_commands_and_plain_text_still_send_normally() {
             .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. }));
         assert!(sent, "{draft:?} 应按普通消息发送");
         assert!(
-            state.toast.is_none(),
-            "{draft:?} 不该有提示：{:?}",
-            state.toast
+            state
+                .pane_anywhere(pane)
+                .expect("pane")
+                .lx
+                .chat
+                .hint
+                .is_none(),
+            "{draft:?} 不该有提示"
         );
     }
 }
 
 #[test]
 fn unknown_command_detection_matches_panel_rules() {
-    // 面板能匹配到的前缀一律不拦（用户可能正要选中它）。
     for draft in ["/mo", "/mod", "/resu", "/ne", "/sess", "/cl"] {
         assert_eq!(
             unknown_slash_command(draft),
@@ -1093,7 +1186,6 @@ fn unknown_command_detection_matches_panel_rules() {
             "{draft:?} 面板能匹配到，应交给面板"
         );
     }
-    // 面板匹配不到的单行命令拦下。
     for draft in ["/foo", "/zzz", "/models", "/resumes"] {
         assert_eq!(
             unknown_slash_command(draft),
@@ -1101,13 +1193,16 @@ fn unknown_command_detection_matches_panel_rules() {
             "{draft:?} 应判为未知命令"
         );
     }
-    // 空草稿、纯文本、未敲完的 `/`、多行草稿、行内斜杠、路径样文本都不算命令。
+    // 空草稿、纯文本、未敲完的 `/`、多行、行内斜杠、**带空格**、路径样文本都不算命令。
     for draft in [
         "",
         "hello",
         "/",
         "/x\ny",
         "前面有字 /foo",
+        "/q a",
+        "/foo 一些参数",
+        "/zzz --flag value",
         "/path/to/file.rs 这个文件有问题",
         "/etc/hosts 是什么",
     ] {
@@ -1115,14 +1210,6 @@ fn unknown_command_detection_matches_panel_rules() {
             unknown_slash_command(draft),
             None,
             "{draft:?} 不该判为未知命令"
-        );
-    }
-    // 带参数的未知命令仍拦（命令名取首个词），回显整段原文。
-    for draft in ["/a b", "/foo 一些参数", "/zzz --flag value"] {
-        assert_eq!(
-            unknown_slash_command(draft),
-            Some(draft.to_string()),
-            "{draft:?} 首个词不是命令，应拦下"
         );
     }
 }

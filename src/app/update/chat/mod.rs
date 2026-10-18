@@ -6,10 +6,9 @@
 use std::time::{Duration, Instant};
 
 use crate::app::state::{
-    AppState, AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, RequestKey,
-    RequestState, ToolStatus, ToolSummary,
+    AppState, AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, InputHint,
+    InputHintLevel, RequestKey, RequestState, ToolStatus, ToolSummary,
 };
-use crate::app::toast::{Toast, ToastKind};
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
 use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
@@ -48,7 +47,12 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     let (entry, draft, busy, selection, session_id, generation) = context;
     // 只有 Native Agent 发送；Hybrid/Automation 显示不可用提示。
     if entry != crate::app::state::LxEntry::Native {
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_ENTRY_UNAVAILABLE);
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_ENTRY_UNAVAILABLE,
+        );
         return true;
     }
     if draft.is_empty() || busy {
@@ -59,22 +63,22 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     // 普通消息发给模型——那会得到一段莫名其妙的自问自答。改为黄色警告提示，
     // 并**保留草稿**让用户改。（命令面板的采纳走 `apply_slash_enter`，不经过这里。）
     if let Some(command) = unknown_slash_command(&draft) {
-        // 提示走全局 toast（与「复制文案」同款的 `Info` 档浮层），**不占用聊天栏**：
-        // 聊天栏那行只负责 loading 与「回到底部」。
-        show_chat_toast_owned(
+        // 提示显示在**输入框上方那一行**（与 loading / jump 同一个位置），黄色。
+        show_lx_hint(
             state,
-            ToastKind::Info,
+            pane,
+            InputHintLevel::Warning,
             text::chat::unknown_command(&command),
         );
         return true;
     }
     // 解析有效模型（窗格选择或配置默认）。
     let Some(selection) = selection else {
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_NO_MODEL);
+        show_lx_hint(state, pane, InputHintLevel::Error, text::LX_CHAT_NO_MODEL);
         return true;
     };
     let Some(frozen) = FrozenModel::resolve(&state.models, &selection) else {
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_NO_MODEL);
+        show_lx_hint(state, pane, InputHintLevel::Error, text::LX_CHAT_NO_MODEL);
         return true;
     };
     // 冻结草稿并进入 Committing：清空输入由 DB ack 成功后执行。
@@ -82,7 +86,12 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         .workspace_cwd_for_pane(pane)
         .or_else(|| state.active_workspace().cwd.clone());
     let Some(workspace) = workspace else {
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_NO_WORKSPACE);
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_NO_WORKSPACE,
+        );
         return true;
     };
     let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -217,7 +226,12 @@ pub fn on_turn_failed(state: &mut AppState, pane: PaneId, generation: u64) -> bo
         return false;
     }
     target.lx.chat.request = RequestState::Idle;
-    show_chat_toast(state, ToastKind::Error, text::LX_CHAT_COMMIT_FAILED);
+    show_lx_hint(
+        state,
+        pane,
+        InputHintLevel::Error,
+        text::LX_CHAT_COMMIT_FAILED,
+    );
     refresh_lx_status(state, pane);
     true
 }
@@ -397,7 +411,12 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
         target.lx.chat.request = RequestState::Idle;
     } else {
         // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
-        show_chat_toast(state, ToastKind::Error, text::LX_CHAT_SAVE_FAILED);
+        show_lx_hint(
+            state,
+            key.pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_SAVE_FAILED,
+        );
     }
     refresh_lx_status(state, key.pane);
     true
@@ -555,22 +574,26 @@ fn next_generation(state: &AppState, pane: PaneId) -> u64 {
         .max(1)
 }
 
-/// 显示聊天相关 toast。
-fn show_chat_toast(state: &mut AppState, kind: ToastKind, message: &'static str) {
-    crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
-}
-
-/// 显示带动态内容的聊天 toast（例如回显用户敲错的那个命令名）。
-fn show_chat_toast_owned(state: &mut AppState, kind: ToastKind, message: String) {
-    crate::app::update::show_toast(state, Toast::new(kind, message, None, Instant::now()));
+/// 在**指定窗格**的输入框上方显示一条临时提示（错误红 / 默认黄）。
+///
+/// lx 页的所有反馈都走这里而不是 toast：位置贴着用户刚敲字的输入框，2 秒后自动消失。
+pub(crate) fn show_lx_hint(
+    state: &mut AppState,
+    pane: PaneId,
+    level: InputHintLevel,
+    message: impl Into<String>,
+) {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.hint = Some(InputHint::new(level, message, Instant::now()));
+    }
 }
 
 /// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。
 ///
 /// 判定口径与命令面板一致（复用 [`slash_trigger`] 与 [`SlashPanel::commands_matching`]），
 /// 保证「面板里能选中的」永远不会被这里拦下：
-/// - 只有**单行**命令算数：多行草稿（首行以 `/` 开头、后面还有正文）可能是用户在写
-///   markdown 引用或路径，只有当**整段草稿**恰好是一行 `/xxx` 时才拦；
+/// - 只有**单行**命令算数：多行草稿可能是用户在写 markdown 引用或路径；
+/// - **带空格一律不拦**：`/q a`、`/path/to/file.rs 说明` 这种是普通输入，不是命令；
 /// - 围栏代码块内不拦（`slash_trigger` 已经处理）。
 ///
 /// 返回值保留用户输入的原文（含 `/`），由 `text::lx_unknown_command` 负责截断与拼句。
@@ -588,12 +611,11 @@ fn unknown_slash_command(draft: &str) -> Option<String> {
     if trimmed == "/" {
         return None;
     }
-    // 命令名只取**首个词**：`/foo 参数` 的命令名是 `foo`，后面的参数不影响判定。
-    // 但首个词里若还含 `/`（`/path/to/file.rs 这个文件有问题`），说明用户在写路径、
-    // 没在敲命令，按普通文本放行。
+    // **带空格一律不拦**（`/q a`、`/path/to/file.rs 说明`、`/etc/hosts 是什么`）：
+    // 用户在敲命令时不会带空格（面板采纳的是一条无参命令），带空格说明这是
+    // 普通输入（路径、引用、`/` 开头的自然语言），按内容原样发送。
     let name = trimmed.trim_start_matches('/');
-    let name = name.split_whitespace().next().unwrap_or("");
-    if name.is_empty() || name.contains('/') {
+    if name.is_empty() || name.contains(char::is_whitespace) || name.contains('/') {
         return None;
     }
     // 面板能匹配到就交给面板（用户可能想选中后 Enter）。
