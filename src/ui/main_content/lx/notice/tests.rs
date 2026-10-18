@@ -45,7 +45,7 @@ fn notice_is_title_plus_exactly_one_reason_line() {
     draw(&mut grid, &notice, area, 0, &mut row);
 
     assert_eq!(row, 2, "标题 + 原因各一行");
-    assert_eq!(row_text(&grid, area, 0), "! Failed");
+    assert_eq!(row_text(&grid, area, 0), "■ Failed");
     assert_eq!(row_text(&grid, area, 1), "  └─ http 503");
     // 标题整行红 + 粗（标记也同色）。
     for x in 0..8 {
@@ -78,7 +78,7 @@ fn reason_wraps_aligned_and_rows_match_draw() {
         assert_eq!(rows(&notice, width), row, "width={width}：行数口径一致");
         if width > 5 {
             // 首条原因行带连接符；续行按前缀宽度对齐、不重复画。
-            let title_rows = u16::try_from(wrap("! Failed", width).len()).expect("rows");
+            let title_rows = u16::try_from(wrap("■ Failed", width).len()).expect("rows");
             let first = row_text(&grid, area, title_rows);
             assert!(first.starts_with("  └─ "), "width={width}: {first}");
         }
@@ -95,7 +95,7 @@ fn too_narrow_for_prefix_falls_back_to_full_width_reason() {
     let mut row = 0;
     draw(&mut grid, &notice, area, 0, &mut row);
     assert_eq!(rows(&notice, width), row);
-    let title_rows = wrap("! Failed", width).len();
+    let title_rows = wrap("■ Failed", width).len();
     let reason: String = (title_rows..row)
         .map(|line| row_text(&grid, area, u16::try_from(line).expect("row")))
         .collect();
@@ -113,4 +113,61 @@ fn scrolled_out_rows_do_not_paint() {
     draw(&mut grid, &notice, area, 1, &mut row);
     assert_eq!(row, 2);
     assert_eq!(row_text(&grid, area, 0), "  └─ http 503");
+}
+
+/// 通知的行首标记必须是**步骤方块**，且颜色按级别红/黄——不再是 `!` 标点符号。
+#[test]
+fn notice_marker_is_step_square_in_red_or_yellow() {
+    for (title, expected) in [
+        (NoticeTitle::Failed, style::agent_fail()),
+        (NoticeTitle::Interrupted, style::agent_warn()),
+    ] {
+        let notice = Notice::new(title, "reason");
+        let area = Rect::new(0, 0, 40, 4);
+        let mut grid = Grid::new(area);
+        let mut row = 0;
+        draw(&mut grid, &notice, area, 0, &mut row);
+
+        let cell = grid.cell(0, 0);
+        assert_eq!(
+            cell.ch,
+            crate::ui::text::agent::STEP_MARK_FILLED,
+            "{:?} 行首应为实心方块，不再是 `!`",
+            title
+        );
+        assert_eq!(cell.style, expected, "{:?} 方块取该级别状态色", title);
+        assert!(
+            !row_text(&grid, area, 0).contains(crate::ui::text::agent::ICON_ERROR),
+            "{:?} 不应再出现 `!`：{}",
+            title,
+            row_text(&grid, area, 0)
+        );
+        // 方块后紧跟 1 列空格（与 STEP_GUTTER = 2 同宽），文案从第 2 列起。
+        assert_eq!(grid.cell(1, 0).ch, ' ');
+        assert_eq!(
+            grid.cell(2, 0).ch,
+            title.label().chars().next().expect("非空")
+        );
+        assert_eq!(grid.cell(2, 0).style, expected, "文案同色，整行一个色相");
+    }
+}
+
+/// 通知的方块与工具行 / 思考头的方块**形状与宽度完全一致**（同一个 `StepMark`），
+/// 这样历史里所有步骤标记在视觉上是同一套符号。
+#[test]
+fn notice_marker_matches_step_mark_shape() {
+    let area = Rect::new(0, 0, 40, 4);
+    let mut grid = Grid::new(area);
+    let mut row = 0;
+    let notice = Notice::new(NoticeTitle::Failed, "boom");
+    draw(&mut grid, &notice, area, 0, &mut row);
+
+    // 失败步骤在工具行里的拼法：`StepMark::Failed.segment(0)`。
+    let expected = crate::ui::main_content::lx::history::StepMark::Failed.segment(0);
+    let painted: String = expected
+        .chars()
+        .enumerate()
+        .map(|(x, _)| grid.cell(u16::try_from(x).expect("col"), 0).ch)
+        .collect();
+    assert_eq!(painted, expected, "通知方块与步骤方块拼法一致");
 }

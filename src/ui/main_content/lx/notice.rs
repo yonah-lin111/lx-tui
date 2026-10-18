@@ -1,8 +1,12 @@
-//! 消息底部通知：`! <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
+//! 消息底部通知：`■ <标题>` + `  └─ <原因>`（对齐 ui 页 `agent` 分组的 error 步骤）。
 //!
 //! 标题是**固定枚举**（[`NoticeTitle`]）：文案与配色都由枚举决定，调用点只给一句原因，
 //! 不允许随手拼自由标题。标题整行着色只有两档——失败红 + 粗、中断黄 + 粗（没有灰色档）；
 //! 原因行连接符用供应商灰 + 粗、正文正常色。
+//!
+//! **行首标记与聊天步骤共用同一个方块**（[`StepMark`]）：失败为红色实心 `■`、中断为
+//! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽、缩进完全一致（都是 1 列
+//! 字形 + 1 列空格），不再使用 `!` 这种标点符号。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -13,13 +17,11 @@ use unicode_width::UnicodeWidthStr;
 use crate::ui::{style, text};
 
 use super::Grid;
-use super::history::{visible_row, wrap};
+use super::history::{StepMark, visible_row, wrap};
 
-/// 标题行的标记（与 ui 页 agent error 一致）。
-const MARKER: &str = text::agent::ICON_ERROR;
 /// 原因行的连接符（与 ui 页 agent error 一致）。
 const LEAF: &str = text::agent::MARKER_TREE_LEAF;
-/// 原因行缩进（两空格，与 ui 页样例一致）。
+/// 原因行缩进（两空格，与 ui 页样例一致；同时对齐方块的 `STEP_GUTTER` 缩进）。
 const DETAIL_INDENT: &str = "  ";
 
 /// 通知标题：固定枚举，文案与配色都从这里派生（只有红、黄两档，没有灰色档）。
@@ -32,7 +34,7 @@ pub(crate) enum NoticeTitle {
 }
 
 impl NoticeTitle {
-    /// 标题文案（渲染为 `! <label>`）。
+    /// 标题文案（渲染为 `■ <label>`）。
     fn label(self) -> &'static str {
         match self {
             Self::Failed => text::LX_CHAT_NOTICE_FAILED,
@@ -40,12 +42,31 @@ impl NoticeTitle {
         }
     }
 
-    /// 标题整行样式。
+    /// 行首方块（与聊天步骤共用同一款标记：失败红实心、中断黄实心）。
+    ///
+    /// 通知只在**终态**渲染（流中不出通知），因此没有"运行中"的呼吸态，
+    /// 直接取 [`StepMark`] 的两个终态。
+    fn mark(self) -> StepMark {
+        match self {
+            Self::Failed => StepMark::Failed,
+            Self::Interrupted => StepMark::Interrupted,
+        }
+    }
+
+    /// 标题文案样式（不含行首方块：方块自带状态色）。
     fn style(self) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
         }
+    }
+
+    /// 标题整行的标记段（`■ `，2 列，与 [`super::history::STEP_GUTTER`] 同宽）。
+    ///
+    /// 通知只在终态渲染，[`StepMark::Failed`] / [`StepMark::Interrupted`] 的字形与
+    /// 呼吸相位无关（恒为实心 `■`），因此这里固定传 0 帧。
+    fn marker_segment(self) -> String {
+        self.mark().segment(0)
     }
 }
 
@@ -72,7 +93,7 @@ fn reason_prefix() -> String {
 
 /// 通知占用的渲染行数（与 [`draw`] 同口径）。
 pub(super) fn rows(notice: &Notice, width: u16) -> usize {
-    let title_rows = wrap(&format!("{MARKER} {}", notice.title.label()), width).len();
+    let title_rows = wrap(&title_line(notice.title), width).len();
     let prefix_width = u16::try_from(reason_prefix().width()).unwrap_or(u16::MAX);
     let inner = width.saturating_sub(prefix_width);
     let reason_rows = if inner == 0 {
@@ -83,7 +104,16 @@ pub(super) fn rows(notice: &Notice, width: u16) -> usize {
     title_rows + reason_rows
 }
 
+/// 标题整行文本（`■ <label>`）；宽度口径与 [`draw`] 共用。
+fn title_line(title: NoticeTitle) -> String {
+    format!("{}{}", title.marker_segment(), title.label())
+}
+
 /// 绘制通知并推进内容行号；宽度不够放前缀时原因行退回整宽（不画连接符）。
+///
+/// 行首方块用 [`StepMark`] 的状态色单独绘制（红/黄），其后的标题文案用
+/// [`NoticeTitle::style`]——两者在当前配色下同色同字重，但分开画才能保证
+/// 「方块永远是步骤方块的样子」，不受标题样式改动影响。
 pub(super) fn draw(
     grid: &mut Grid,
     notice: &Notice,
@@ -92,9 +122,30 @@ pub(super) fn draw(
     row_index: &mut usize,
 ) {
     let title_style = notice.title.style();
-    for line in wrap(&format!("{MARKER} {}", notice.title.label()), content.width) {
+    let mark = notice.title.mark();
+    let marker = notice.title.marker_segment();
+    let marker_width = u16::try_from(marker.width()).unwrap_or(u16::MAX);
+    let label = notice.title.label();
+    // 标题行按「方块 + 文案」整体换行，但首行要把方块单独着状态色。
+    for (index, line) in wrap(&title_line(notice.title), content.width)
+        .into_iter()
+        .enumerate()
+    {
         if let Some(y) = visible_row(content, scroll, *row_index) {
-            grid.put_clipped(content.x, y, &line, title_style, content.width);
+            if index == 0 {
+                grid.put_clipped(
+                    content.x,
+                    y,
+                    &marker,
+                    mark.style(),
+                    content.width.min(marker_width),
+                );
+                let x = content.x.saturating_add(marker_width);
+                grid.put_clipped(x, y, label, title_style, content.right().saturating_sub(x));
+            } else {
+                // 续行：整段仍用标题样式（极端窄宽度下的兜底，不影响常规显示）。
+                grid.put_clipped(content.x, y, &line, title_style, content.width);
+            }
         }
         *row_index += 1;
     }

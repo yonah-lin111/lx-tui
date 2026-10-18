@@ -1086,6 +1086,13 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 | `Interrupted` | `■` 静态 | 黄（`agent_warn`） |
 | `Cancelled` | `□` 静态 | 次要信息色（`agent_step_detail`；空心表示未产出结果） |
 
+**通知（失败 / 中断）的行首也是同一个方块**：`notice.rs` 的标题由 `! <标题>` 改为
+`■ <标题>`，方块取 `history::StepMark` 的 `Failed` / `Interrupted` 终态——失败红实心 `■`、
+中断黄实心 `■`，形状与 1 列字形 + 1 列空格的口径与工具行 / 思考头 / 正文块完全一致
+（通知只在终态渲染，因此没有呼吸态）。随后的标题文案用同级别的 `agent_fail` / `agent_warn`
+（红/黄 + 粗），因此整行仍是「一个色相 + 粗」的两档语义。`!` 只保留在 `[UI]` 查看器的
+agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何标点类步骤标记。
+
 **工具行的三段**（`ui/style.rs`）：动词翡翠绿 `Indexed 42` **不加粗**（`chat_tool_verb`，
 与紧邻的加粗方块靠字重区分）、可变参数（路径 / 搜索范围）既有**金黄 `Indexed 220`
 + 下划线**（`chat_tool_param`，与 `agent_param` 同源，下划线仍表示“每次调用都会变的值”）、
@@ -1104,7 +1111,7 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 （思考块用自己的 `completed_at_ms`，工具块用自己的 `ToolStatus`，三者互不影响——同一消息里
 可以只有一个方块在呼吸。）
 
-**测试证据**（`cargo test` 全绿，lib 2291 项 + 14 个集成测试二进制；§21 累计新增/改写 16 项）
+**测试证据**（`cargo test` 全绿，lib 2293 项 + 14 个集成测试二进制；§21 累计新增/改写 20 项）
 
 | 测试 | 断言 |
 | --- | --- |
@@ -1119,6 +1126,8 @@ token**。用户这两轮的原话是「markdown 的格式高亮使用 github �
 | `history::tests::only_the_active_last_step_breathes` | 同一流式消息里：已结束的正文块静态实心、最后一块空心呼吸 |
 | `history::tests::transcript_lays_out_step_square_with_two_column_gutter` | 整段观感锁定（用户消息 `> ` / 思考头 / 思考正文 / 正文块 / 工具行的逐行文本） |
 | `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | 思考完成后头部静态；同消息里运行中的工具行仍呼吸（相位翻空心帧时只有工具行变） |
+| `notice::tests::notice_marker_is_step_square_in_red_or_yellow` | 两种通知的行首都是实心方块 `■`（不再是 `!`），颜色分别为 `agent_fail` 红 / `agent_warn` 黄，方块后 1 列空格、文案从第 2 列起且同色 |
+| `notice::tests::notice_marker_matches_step_mark_shape` | 通知方块的拼法与 `StepMark::Failed.segment(0)` 逐字一致——历史里所有步骤标记是同一套符号 |
 | `ui::style::tests::chat_step_palette_uses_green_structure_and_gold_params` | 六个 `chat_*` token 只取 `{42, 220}`、结构与参数都不压暗、不与正文默认前景/Cyan 撞色；方块/文案/动词统一翡翠绿 42；运行中加粗、完成不加粗；参数与 `agent_param` 同源、行范围退回 `muted()` |
 | `ui::style::tests::markdown_palette_is_github_dark_truecolor` | 逐个 token 钉死 GitHub Dark 官方 RGB：关键字 `#ff7b72`、字符串 `#a5d6ff`、数字与行内代码 `#79c0ff`、类型名 `#d2a8ff`、注释 `#8b949e`、链接/URL/提及 `#4493f8`、引用与标记 `#7d8590`；标题/粗体/斜体/列表符号必须**不换色**（`fg == None`），h1/h2 用下划线 |
 | `ui::style::tests::markdown_palette_is_disjoint_from_chat_steps` | 步骤结构色必须是 256 色槽位、且与十个 markdown / code 的有色 token **不相交**（「工具与步骤方块要区别于 markdown 高亮」的机器可验形式） |
