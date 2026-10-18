@@ -499,62 +499,60 @@ pub fn chat_loading_spinner() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-// ===== 聊天步骤的品牌色（全部取 lx logo 的粉色系）=====
+// ===== 聊天步骤的品牌色（浅粉 + 金黄，取自 lx logo 与既有可变参数色）=====
 //
 // 背景：正文用终端默认前景、面板边框用 `accent`（Cyan）或 `muted`（dim）。此前完成态
-// 用「天蓝 117 + DIM」，与边框标题、正文几乎同色；改成品牌色后仍带蓝，用户明确要求
-// **只用粉色、不要再出现蓝色**。因此本组 token 只从 lx logo 的粉色系取色：
-// `218` 品牌粉（亮）、`211` 浅粉、`205` 艳粉、`175` 玫瑰灰、`168` 深粉。
-// 元素之间靠**明度 + 字重 + 下划线**区分，不引入任何蓝色槽位。
+// 用「天蓝 117 + DIM」，与边框标题、正文几乎同色；改品牌色后一度仍带蓝，用户明确要求
+// **只用粉色、不要蓝色的浅粉**（Native 入口标签渐变左侧那一档 `Indexed 218`），并把
+// **可变参数恢复为之前的金黄 `Indexed 220`**。
 //
-// 语义：**热 = 进行中（品牌粉亮档）、冷 = 已完成（深粉）**；失败红、中断黄、取消灰
-// 继续沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的 agent 样例仍用上面的
-// `agent_*` 系列，不受这里影响。
+// 因此本组 token 只用两头：浅粉 218（结构 / 动作 / 状态）+ 金黄 220（可变参数），
+// 行范围回到既有的灰 245。区分靠**字重、下划线、呼吸**，不引入任何蓝色槽位。
+//
+// 语义：**热 = 进行中（方块呼吸）、冷 = 已完成（方块静止）**，两者同为浅粉加粗；
+// 失败红、中断黄、取消灰继续沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
+// agent 样例仍用上面的 `agent_*` 系列，不受这里影响。
 
-/// 步骤方块：运行中（呼吸）——品牌粉（Indexed 218）加粗，整份历史里最亮的信号。
+/// 步骤方块：运行中（呼吸）——Native 浅粉（Indexed 218）加粗，整份历史里最亮的信号。
 pub fn chat_step_mark_running() -> Style {
     Style::default()
         .fg(Color::Indexed(218))
         .add_modifier(Modifier::BOLD)
 }
 
-/// 步骤方块：已完成——深粉（Indexed 168）加粗（沉下来，但仍是饱和粉、不压暗）。
+/// 步骤方块：已完成——同款浅粉、**不加粗**（静止 + 细一档，与运行中的加粗呼吸方块区分）。
 pub fn chat_step_mark_done() -> Style {
-    Style::default()
-        .fg(Color::Indexed(168))
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(Color::Indexed(218))
 }
 
-/// 步骤头部文案：运行中——品牌粉（与运行中的方块同色系，不加粗）。
+/// 步骤头部文案：运行中——浅粉（与方块同色系，不加粗）。
 pub fn chat_step_label_running() -> Style {
     Style::default().fg(Color::Indexed(218))
 }
 
-/// 步骤头部文案：已完成——深粉（与已完成方块同色系，不加粗）。
+/// 步骤头部文案：已完成——浅粉（同上，不加粗）。
 pub fn chat_step_label_done() -> Style {
-    Style::default().fg(Color::Indexed(168))
+    Style::default().fg(Color::Indexed(218))
 }
 
-/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：艳粉（Indexed 205）加粗，
-/// 比状态方块更“热”一档，让动作本身从行里跳出来。
+/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：浅粉、不加粗——
+/// 与紧邻的加粗方块靠字重区分开。
 pub fn chat_tool_verb() -> Style {
-    Style::default()
-        .fg(Color::Indexed(205))
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(Color::Indexed(218))
 }
 
-/// 工具行的主参数（路径 / 搜索范围）：浅粉（Indexed 211）加下划线——下划线仍表示
-/// “每次调用都会变的值”；比动词浅一档，两者一眼可分。
+/// 工具行的可变参数（路径 / 搜索范围）：沿用既有的金黄（Indexed 220）加下划线，
+/// 下划线表示“每次调用都会变的值”。与浅粉的动词/方块、灰色的行范围都区分得开。
 pub fn chat_tool_param() -> Style {
     Style::default()
-        .fg(Color::Indexed(211))
+        .fg(Color::Indexed(220))
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// 工具行的只读元信息（`read` 的行范围）：玫瑰灰（Indexed 175）、无下划线不加粗，
-/// 纯粉系里最沉的一档，不抢动词与路径的注意力。
+/// 工具行的只读元信息（`read` 的行范围）：既有的浅灰（Indexed 245）、无下划线不加粗，
+/// 纯粉黄体系里最沉的一档，不抢动词与参数的注意力。
 pub fn chat_tool_range() -> Style {
-    Style::default().fg(Color::Indexed(175))
+    Style::default().fg(Color::Indexed(245))
 }
 
 /// lx 输入框上方 loading 行文案：次要信息。

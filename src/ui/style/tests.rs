@@ -67,15 +67,15 @@ fn model_label_style_runs_the_entry_gradient_and_is_bold() {
     assert_eq!(model_label_style(0, 1).fg, Some(Color::Indexed(218)));
 }
 
-/// 聊天步骤的品牌色必须：① 只取 lx logo 的**粉色系**槽位（用户明确要求“只用粉色、
-/// 不要变回原来的蓝色”）；② 不压暗（dim 会与正文 / 边框标题混同）；③ 与正文默认
-/// 前景（Reset）、边框青（Cyan）都不同色。
+/// 聊天步骤的配色必须：① 只取「Native 浅粉 218 + 金黄 220 + 灰 245」这套；
+/// ② 不压暗（dim 会与正文 / 边框标题混同）；③ 与正文默认前景（Reset）、边框青（Cyan）
+/// 都不同色；④ **不得出现任何蓝色槽位**（用户明确要求不回退旧配色）。
 #[test]
-fn chat_step_palette_is_pink_saturated_and_distinct_from_chrome() {
-    // lx logo 的粉色系：218 品牌粉、205 艳粉、211 浅粉、175 玫瑰灰、168 深粉。
-    // 蓝色槽位（117 天蓝、195 冰蓝、245 灰蓝）**不得出现**——这正是被否掉的旧配色。
-    let palette = [218u8, 205, 211, 175, 168];
-    let forbidden_blue = [117u8, 195, 245];
+fn chat_step_palette_is_native_pink_with_yellow_params() {
+    // Native 入口标签渐变左侧的浅粉 218 是唯一的结构/动作色；可变参数沿用金黄 220；
+    // 行范围沿用灰 245。蓝色槽位（117 天蓝、195 冰蓝）**不得出现**。
+    let palette = [218u8, 220, 245];
+    let forbidden_blue = [117u8, 195, 168];
     let chrome = [None, Some(Color::Cyan)];
 
     for (label, style) in [
@@ -92,7 +92,7 @@ fn chat_step_palette_is_pink_saturated_and_distinct_from_chrome() {
         };
         assert!(
             palette.contains(&index),
-            "{label} 用了粉色系之外的槽位 Indexed({index})"
+            "{label} 用了体系之外的槽位 Indexed({index})"
         );
         assert!(
             !forbidden_blue.contains(&index),
@@ -105,40 +105,44 @@ fn chat_step_palette_is_pink_saturated_and_distinct_from_chrome() {
         assert!(!chrome.contains(&style.fg), "{label} 与正文/边框青撞色");
     }
 
-    // 语义成对：运行中 = 品牌粉、已完成 = 深粉（热 → 冷但不出蓝）。
-    assert_eq!(chat_step_mark_running().fg, Some(Color::Indexed(218)));
-    assert_eq!(chat_step_mark_done().fg, Some(Color::Indexed(168)));
-    // 方块与头文案同色系但字重不同，方块更跳。
-    assert_eq!(
-        chat_step_mark_running().fg,
-        chat_step_label_running().fg,
-        "运行中方块与文案同色系"
-    );
+    // 方块 / 文案 / 动词统一 Native 浅粉；运行中用字重 + 呼吸区分于完成态。
+    for style in [
+        chat_step_mark_running(),
+        chat_step_mark_done(),
+        chat_step_label_running(),
+        chat_step_label_done(),
+        chat_tool_verb(),
+    ] {
+        assert_eq!(style.fg, Some(Color::Indexed(218)), "统一 Native 浅粉");
+    }
     assert!(
         chat_step_mark_running()
             .add_modifier
-            .contains(Modifier::BOLD)
-            && !chat_step_label_running()
-                .add_modifier
-                .contains(Modifier::BOLD),
-        "同色系下落差靠字重"
+            .contains(Modifier::BOLD),
+        "运行中方块加粗（呼吸 + 加粗是唯一的进行中信号）"
     );
-    // 工具行三档粉互不同色（动词最艳、路径浅一档、行范围最沉），
-    // 一眼分出「动作 / 实体 / 元信息」。
-    let tool_colors = [
-        chat_tool_verb().fg,
-        chat_tool_param().fg,
-        chat_tool_range().fg,
-    ];
-    for (i, a) in tool_colors.iter().enumerate() {
-        for b in &tool_colors[i + 1..] {
-            assert_ne!(a, b, "工具行三段颜色不得重复：{tool_colors:?}");
-        }
-    }
     assert!(
-        chat_tool_verb().add_modifier.contains(Modifier::BOLD)
-            && !chat_tool_param().add_modifier.contains(Modifier::BOLD),
-        "动词加粗、参数不加粗"
+        !chat_step_mark_done().add_modifier.contains(Modifier::BOLD),
+        "完成方块不加粗，与运行中区分"
+    );
+
+    // 可变参数恢复为既有金黄 220 + 下划线（“每次调用会变的值”）。
+    assert_eq!(
+        chat_tool_param().fg,
+        agent_param().fg,
+        "可变参数回到之前的金黄（与 [UI] 样例同源）"
+    );
+    assert!(
+        chat_tool_param()
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+    // 行范围沿用既有灰 245、无下划线，与参数区分。
+    assert_eq!(chat_tool_range().fg, agent_range().fg, "行范围沿用既有灰");
+    assert!(
+        !chat_tool_range()
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
     );
     // 参数保留下划线（“每次调用会变的值”），行范围不加。
     assert!(

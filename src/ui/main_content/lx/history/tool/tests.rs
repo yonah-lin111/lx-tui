@@ -136,8 +136,8 @@ fn every_tool_and_open_status_shows_breathing_square_verb_and_path() {
                 painted.starts_with(text::agent::STEP_MARK_FILLED),
                 "{name}/{status:?} 行首应为步骤方块：{painted}"
             );
-            // 运行中的方块用 lx 品牌粉（Indexed 218）加粗：与正文默认前景、
-            // 面板边框的 Cyan/dim 都区分得开（整条聊天只用粉色系，不出现蓝色）。
+            // 运行中的方块用 Native 浅粉（Indexed 218）加粗：与正文默认前景、
+            // 面板边框的 Cyan/dim 都区分得开（不使用任何蓝色槽位）。
             let lead = grid.cell(0, 0).style;
             assert_eq!(
                 lead.fg,
@@ -235,16 +235,16 @@ fn completed_tool_has_square_verb_and_status_without_type_icon() {
                 "{name} 不再画类型图标 {icon:?}：{painted}"
             );
         }
-        // 完成方块：深粉加粗、**不压暗**（压暗会与边框标题/正文混同）。
+        // 完成方块：Native 浅粉、不加粗、**不压暗**（压暗会与边框标题/正文混同）。
         let lead = grid.cell(0, 0).style;
         assert_eq!(
             lead.fg,
             style::chat_step_mark_done().fg,
-            "{name} 完成方块深粉"
+            "{name} 完成方块 Native 浅粉"
         );
         assert!(
-            lead.add_modifier.contains(ratatui::style::Modifier::BOLD),
-            "{name} 完成方块加粗"
+            !lead.add_modifier.contains(ratatui::style::Modifier::BOLD),
+            "{name} 完成方块不加粗（与运行中区分）"
         );
         assert!(
             !lead.add_modifier.contains(ratatui::style::Modifier::DIM),
@@ -366,7 +366,7 @@ fn read_shows_line_range_in_range_color() {
         range_text,
         format!("{}{}", text::LX_CHAT_TOOL_STATUS_SEP, "12-40")
     );
-    assert_eq!(range_style, style::chat_tool_range(), "行范围用品牌粉");
+    assert_eq!(range_style, style::chat_tool_range(), "行范围用既有灰");
     assert!(
         !range_style
             .add_modifier
