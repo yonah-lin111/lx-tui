@@ -746,6 +746,10 @@ finish_tool ──FinishTool(ticket)──▶ ① Database::finish_tool_call（�
 
 ### 20.5 已实施（G7：TUI 工具步骤与思考完成态的真实渲染）
 
+> 注：本节的**行首符号**（工具类型图标 / `!` / `⊘` / braille 转轮）已在 §21（G11）
+> 统一改为步骤方块标记；本节其余内容（分段结构、宽度自适应、几何一致性、测试口径）
+> 仍然有效，测试名已按现状改名。
+
 落地位置：`src/ui/main_content/lx/history/tool.rs`（新文件，真实工具步骤行）、`src/ui/main_content/lx/history.rs`（`tool_rows` 转发 `tool::rows`、`render` 返回实际推进行数）、`src/ui/text/agent.rs`（工具图标/动词/计数标记常量）、`src/ui/text.rs`（状态文案，沿用 G2 的 `tool_status_label`）。
 
 **行结构（每类工具恒 1 行，全部为着色分段）**
@@ -1013,3 +1017,64 @@ Anthropic 与 Responses 经核查无同类缺陷：二者均以 `and_then(Value:
 | `openai::tests::null_function_call_placeholders_are_not_protocol_errors` | 六种占位形态（null/空对象/空字符串字段/name=null/仅空 arguments）全部忽略；真正旧式调用仍报错 |
 | `openai::tests::placeholder_tool_call_entries_are_ignored` | `tool_calls:[{}]` 与全空壳条目被忽略，不产生调用 |
 | `client::tests::tools::compatible_chat_with_empty_string_function_call_placeholder_completes` | **逐字复刻真实抓包**：中间帧 null 占位 + 末帧 stop 与空字符串占位同帧 + 重复 `[DONE]`，结果 `Complete`、正文正确、恰好一个终态 |
+
+## 21. 已实施（G11：聊天步骤统一方块 loading，替代工具类型图标与转轮）
+
+**用户需求（原话）**：参考 Claude Code 的 agent 回答时每个 step 的 loading（左侧小圆点），
+为聊天历史添加左侧方块 loading（正方形，`■`/`□` 两帧呼吸）；移除工具、思考行原有的
+icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样的方块。
+
+**实施前核对与确认**（`question` 工具逐项与用户对齐，避免猜设计）：
+
+1. 代码里工具/思考行的转轮与图标都在**行首**（`⠋ Thinking`、`▸ Thought`、`⠋ Read …`、
+   `≣ Read … · done`），「右侧」为误述；按「移除行首图标与转轮、统一方块」执行（用户确认）。
+2. 动效取 **`■`/`□` 两帧呼吸**（用户选择；不用四象限旋转）。
+3. 思考行的 `▸`/`▾` 折叠标记**移除**，方块接管状态表达（用户选择；点击头部与 `Ctrl+T`
+   的折叠/展开行为不变，展开与否由内容显隐可见）。
+4. 方块右侧内容（续行、展开的思考正文、markdown 正文）**整体缩进 2 列**对齐方块（用户选择）。
+5. 范围**只改聊天历史**；`[UI]` 查看器的 agent 样例不动（用户选择）。
+
+**落地位置**
+
+| 文件 | 变更 |
+| --- | --- |
+| `src/ui/text/agent.rs` | 新增 `STEP_MARK_FILLED`（`■`）/ `STEP_MARK_HOLLOW`（`□`）/ `STEP_BREATH_TICKS`（呼吸节奏 = 4 个 loading 帧 ≈ 400ms 一相；放在文本模块的 agent 常量区，`ui/text.rs` 保持 1000 行以内） |
+| `src/ui/main_content/lx/history.rs` | 新增 `StepMark`（Running / Done / Failed / Interrupted / Cancelled → 字形 + 样式 + `■ ` 标记段）与 `STEP_GUTTER = 2`；思考头、markdown 正文块改用方块；`draw_markdown` / `draw_thinking` / `text_rows` / `thinking_rows` 全部按 `STEP_GUTTER` 缩进与扣宽 |
+| `src/ui/main_content/lx/history/tool.rs` | `lead()` 由「工具类型图标 / `!` / `⊘` / braille 转轮」改为统一方块（`StepMark`）；删除 `Kind::icon()` |
+| `src/ui/text/agent.rs` | 删除只服务旧行首图标的 `ICON_TOOL` / `ICON_TOOL_CANCELLED`（gallery 样例图标常量保留） |
+
+**状态映射（终态只按颜色区分，取消另用空心）**
+
+| 状态 | 字形 | 样式 |
+| --- | --- | --- |
+| `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | 品牌蓝加粗（`chat_loading_spinner`，与输入框上方 loading 同款） |
+| `Completed`、思考完成、已完成正文块 | `■` 静态 | 品牌蓝压暗（`agent_connector`） |
+| `Failed` | `■` 静态 | 红（`agent_fail`；该行同时整行红） |
+| `Interrupted` | `■` 静态 | 黄（`agent_warn`） |
+| `Cancelled` | `□` 静态 | 次要信息色（`agent_step_detail`；空心表示未产出结果） |
+
+**正文块的运行态判定**：消息仍在流式且该正文块是消息里的**最后一步** → 呼吸；否则静态。
+（思考块用自己的 `completed_at_ms`，工具块用自己的 `ToolStatus`，三者互不影响——同一消息里
+可以只有一个方块在呼吸。）
+
+**测试证据**（`cargo test` 全绿，共 2320 项；本组新增/改写 8 项）
+
+| 测试 | 断言 |
+| --- | --- |
+| `history::tool::tests::every_tool_and_open_status_shows_breathing_square_verb_and_path` | 四工具 × 三种进行中状态：行首为方块、品牌蓝加粗、状态文字齐备、无 `!` |
+| `history::tool::tests::step_square_breathes_while_open_and_stays_static_when_settled` | 呼吸相位（0..3 实心 / 4..7 空心）；完成/失败/中断与帧无关恒实心 |
+| `history::tool::tests::completed_tool_has_square_verb_and_status_without_type_icon` | 完成行无任何 braille 转轮、无类型图标（≣/∇/±/#）、方块品牌蓝压暗、动词与状态文字齐备 |
+| `history::tool::tests::failed_tool_is_red_and_carries_trimmed_reason` | 失败行以方块起头且整行红 + 粗，原因仍单行化 |
+| `history::tool::tests::cancelled_and_interrupted_are_distinguishable_from_failed` | 取消 = 空心方块 + 次要信息色；中断 = 实心方块 + 警告黄 |
+| `history::tool::tests::lead_marker_identifies_the_state_at_any_width` | 五个状态的（字形 + 完整样式）两两不同；1 列极窄仍可辨 |
+| `history::tests::thinking_header_uses_step_square_and_becomes_thought` | 生成中 `■/□ Thinking`（呼吸、品牌蓝加粗）、完成后 `■ Thought · 6.3s`（压暗、与帧无关）、无 `▸`/`▾`、无 braille；展开正文缩进 2 列 |
+| `history::tests::markdown_body_block_has_step_square_and_indented_continuation` | 正文首行 `■ 第一行`、续行缩进 2 列；完成态方块品牌蓝压暗 |
+| `history::tests::only_the_active_last_step_breathes` | 同一流式消息里：已结束的正文块静态实心、最后一块空心呼吸 |
+| `history::tests::transcript_lays_out_step_square_with_two_column_gutter` | 整段观感锁定（用户消息 `> ` / 思考头 / 思考正文 / 正文块 / 工具行的逐行文本） |
+| `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | 思考完成后头部静态；同消息里运行中的工具行仍呼吸（相位翻空心帧时只有工具行变） |
+
+**未自动验证项（需用户 `cargo run` 人工验收）**
+
+1. `■`/`□` 在用户终端字体下的宽度与观感（两者均为单宽几何符号，但个别字体渲染可能偏窄/偏宽）。
+2. 方块呼吸 400ms 一相的节奏是否合适（过快/过慢可调 `STEP_BREATH_TICKS`）。
+3. 长会话里每步一个静态方块的整体观感（是否过于抢眼——颜色已压低到品牌蓝 dim）。

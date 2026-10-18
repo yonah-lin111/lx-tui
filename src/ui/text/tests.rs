@@ -365,16 +365,15 @@ fn workspace_path_label_single_segment_and_root() {
 }
 
 #[test]
-fn tool_verb_and_icon_constants_are_shared_with_agent_gallery() {
+fn tool_verb_constants_are_shared_with_agent_gallery() {
     use super::agent as a;
 
-    // 真实工具行与 gallery 样例共用同一份图标：四工具各有一个单宽符号，
-    // 且未知工具回落到通用符号。
+    // gallery 样例的图标各有一个单宽符号（真实工具行自 G11 起改用统一步骤方块，
+    // 不再按工具区分类型图标）。
     for icon in [a::ICON_READ, a::ICON_SEARCH, a::ICON_EDIT, a::ICON_WRITE] {
         assert!(!icon.is_empty());
         assert_eq!(icon.width(), 1, "工具图标必须严格 1 列宽: {icon:?}");
     }
-    assert_eq!(a::ICON_TOOL, a::ICON_MCP, "未知工具复用通用调用符号");
 
     // 动词常量非空且两处同源（`read` 与 gallery 的 `Read` 完全同形）。
     assert_eq!(a::VERB_TOOL_READ, a::VERB_READ);

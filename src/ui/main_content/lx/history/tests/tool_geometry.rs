@@ -208,15 +208,15 @@ fn tool_steps_with_all_statuses_stay_one_row_each() {
 
 #[test]
 fn completed_thinking_has_no_spinner_even_after_tool_steps() {
-    // 思考完成（`completed_at_ms` 有值）后即便消息仍在流中，也不再渲染转轮；
-    // 工具步骤的存在不影响该判断。
+    // 思考完成（`completed_at_ms` 有值）后即便消息仍在流中，也不再呼吸（静态方块）；
+    // 工具步骤的存在不影响该判断，工具行保留自己的呼吸方块。
     let mut part = reasoning_part("已完成思考");
     part.started_at_ms = Some(1_000);
     part.ended_at_ms = Some(2_000);
     part.completed_at_ms = Some(2_000);
     let mut message = message("assistant", "streaming", vec![part, text_part("接着说话")]);
     push_tool(&mut message, ToolStatus::Running);
-    let lx = lx_with(vec![message]);
+    let mut lx = lx_with(vec![message]);
     assert!(
         !lx.chat.reasoning_streaming(0, 0),
         "思考块已有完成时刻 → 不再进行中"
@@ -226,28 +226,40 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let header = row_text(&buf, area, 0);
     assert!(
-        header.starts_with("▸ Thought"),
-        "完成态显示折叠头而非转轮：{header}"
+        header.starts_with("■ Thought"),
+        "完成态显示静态方块 + Thought：{header}"
     );
     for frame in text::LX_LOADING_FRAMES {
         assert!(
             !header.contains(frame),
-            "思考完成态不得出现转轮 {frame}：{header}"
+            "思考完成态不得出现 braille 转轮 {frame}：{header}"
         );
     }
-    // 但工具行自身仍在进行中 → 它自己的转轮保留（状态是步骤各自的）。
-    let joined = (0..6)
-        .map(|row| row_text(&buf, area, row))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let running_label = text::tool_status_label(ToolStatus::Running);
+    let tool_line = |buf: &Buffer| -> String {
+        (0..6)
+            .map(|row| row_text(buf, area, row))
+            .find(|line| line.contains(running_label))
+            .expect("工具行")
+    };
+    // 工具行自身仍在进行中 → 它自己的方块呼吸（帧 0 实心）。
     assert!(
-        joined.contains(text::tool_status_label(ToolStatus::Running)),
-        "工具行显示自己的状态：{joined}"
+        tool_line(&buf).starts_with(text::agent::STEP_MARK_FILLED),
+        "工具行带呼吸方块：{}",
+        tool_line(&buf)
+    );
+    // 相位翻到空心帧：只有运行中的工具行变空心，已完成的思考头保持实心。
+    lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    assert!(
+        row_text(&buf, area, 0).starts_with("■ Thought"),
+        "思考头不随 loading 帧变化：{}",
+        row_text(&buf, area, 0)
     );
     assert!(
-        joined
-            .lines()
-            .any(|line| line.starts_with(text::LX_LOADING_FRAMES[0])),
-        "工具仍在运行 → 工具行保留自己的转轮：{joined}"
+        tool_line(&buf).starts_with(text::agent::STEP_MARK_HOLLOW),
+        "运行中的工具行进入空心相位：{}",
+        tool_line(&buf)
     );
 }

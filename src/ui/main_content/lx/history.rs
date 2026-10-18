@@ -5,11 +5,15 @@
 //!
 //! - 用户消息：`> ` 前缀（占用整块底色，图标用输入框同款强调色）+ 整块浅底色
 //!   （`style::chat_user_bg`），正文按显示列软换行。
-//! - assistant 消息：正文用共享阅读渲染器（`ui::markdown_render`，与 UI 页 agent 回答
-//!   同款；表格按宽度收缩自适应），不显示标题行；失败/中断在**消息底部**（统计行上方）
-//!   插入一条通知（见 `notice.rs`），流中不插入（改用输入框上方 loading 行）。
-//! - thinking：生成中的块自动展开（头部转轮 + 正文），完成后默认折叠；点击头部或
-//!   Ctrl+T 切换；正文同样走 markdown 渲染并整体压暗（对齐 opencode 的思考显示）。
+//! - assistant 消息：每个步骤（思考 / 工具调用 / 正文块）首行以左侧方块标记起头
+//!   （见 [`StepMark`]：运行中 `■`/`□` 两帧呼吸、终态静态并按语义着色），标记右侧
+//!   的内容（含续行、展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读
+//!   渲染器（`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
+//!   不显示标题行；失败/中断在**消息底部**（统计行上方）插入一条通知（见 `notice.rs`），
+//!   流中不插入（改用输入框上方 loading 行）。
+//! - thinking：头部为方块 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
+//!   箭头——方块即状态标记）；点击头部或 Ctrl+T 折叠/展开；正文同样走 markdown
+//!   渲染并整体压暗（对齐 opencode 的思考显示）。
 //! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
 //! - 右侧预留一列滚动条（内容溢出时显示），宽度与输入框对齐。
 
@@ -32,11 +36,10 @@ mod tool;
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
 const USER_INDENT: u16 = 2;
-/// thinking 块左侧缩进列：与正文、统计行**左对齐**（0，不额外缩进）。
-const THINKING_MARGIN: u16 = 0;
-/// thinking 头部折叠/展开标记。
-const THINKING_COLLAPSED_MARK: &str = "▸ ";
-const THINKING_EXPANDED_MARK: &str = "▾ ";
+/// 每个 assistant 步骤左侧方块标记占用的列数（1 列字形 + 1 列空格）；标记右侧的
+/// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
+/// 与用户消息的 `> ` 缩进同宽。
+pub(super) const STEP_GUTTER: u16 = 2;
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
@@ -46,6 +49,52 @@ const STICKY_MIN_HEIGHT: u16 = 4;
 const STICKY_MIN_WIDTH: u16 = 16;
 /// 置顶行摘要的最大取样字符数（限住超长粘贴的每帧成本，对齐 codex 的 512）。
 const STICKY_SAMPLE_CHARS: usize = 512;
+
+/// assistant 步骤左侧方块标记的语义状态（思考 / 工具调用 / 正文块共用）。
+///
+/// 运行中为 `■`/`□` 两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
+/// 终态停为静态方块、仅以颜色区分：完成（暗一档品牌蓝）、失败（红）、中断（黄）、
+/// 取消（次要信息色 + 空心 `□`，表示未产出结果）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StepMark {
+    Running,
+    Done,
+    Failed,
+    Interrupted,
+    Cancelled,
+}
+
+impl StepMark {
+    /// 方块字形：运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    pub(super) fn glyph(self, loading_frame: usize) -> char {
+        let filled = match self {
+            Self::Running => (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2),
+            Self::Done | Self::Failed | Self::Interrupted => true,
+            Self::Cancelled => false,
+        };
+        if filled {
+            text::agent::STEP_MARK_FILLED
+        } else {
+            text::agent::STEP_MARK_HOLLOW
+        }
+    }
+
+    /// 方块样式。
+    pub(super) fn style(self) -> Style {
+        match self {
+            Self::Running => style::chat_loading_spinner(),
+            Self::Done => style::agent_connector(),
+            Self::Failed => style::agent_fail(),
+            Self::Interrupted => style::agent_warn(),
+            Self::Cancelled => style::agent_step_detail(),
+        }
+    }
+
+    /// 标记段（字形 + 空格）；工具行与 thinking 头部共用同一份拼法。
+    pub(super) fn segment(self, loading_frame: usize) -> String {
+        format!("{} ", self.glyph(loading_frame))
+    }
+}
 
 /// 一条消息在渲染行空间中的区间（`end` 不含；含它**前面**的空行，
 /// 末尾那条含收尾呼吸行）。
@@ -489,39 +538,60 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             row_index += 1;
                         }
                     } else {
-                        draw_markdown(grid, content, scroll, &mut row_index, &part.content);
+                        // 正文块也是步骤：消息仍在流式且它是最后一步 → 方块呼吸，
+                        // 否则静态（已完成）。
+                        let mark = if message.status == "streaming"
+                            && step_index + 1 == message.steps.len()
+                        {
+                            StepMark::Running
+                        } else {
+                            StepMark::Done
+                        };
+                        draw_markdown(
+                            grid,
+                            content,
+                            scroll,
+                            &mut row_index,
+                            &part.content,
+                            mark,
+                            lx.chat.loading_frame,
+                        );
                     }
                 }
                 crate::chat::events::PartKind::Reasoning => {
                     let streaming = lx.chat.reasoning_streaming(message_index, step_index);
+                    let mark = if streaming {
+                        StepMark::Running
+                    } else {
+                        StepMark::Done
+                    };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色；不带折叠标记）；
-                        // 完成后：`▸ Thought · 6.3s` / `▾ Thought · 6.3s`（压暗一档的品牌蓝）。
+                        // 生成中：方块 + `Thinking`（蓝色，与 UI 页思考步骤同色）；
+                        // 完成后：方块 + `Thought · 6.3s`（压暗一档的品牌蓝；无折叠箭头，
+                        // 折叠/展开由点击头部或 Ctrl+T 控制，方块即状态标记）。
                         let header_style = if streaming {
                             style::agent_verb()
                         } else {
                             style::agent_connector()
                         };
-                        let x = content.x.saturating_add(THINKING_MARGIN);
+                        grid.put_char(
+                            content.x,
+                            y,
+                            mark.glyph(lx.chat.loading_frame),
+                            mark.style(),
+                        );
+                        let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();
                         if streaming {
-                            let frame = text::LX_LOADING_FRAMES
-                                [lx.chat.loading_frame % text::LX_LOADING_FRAMES.len()];
-                            grid.put_char(x, y, frame, header_style);
                             grid.put_clipped(
-                                x.saturating_add(2),
+                                x,
                                 y,
                                 text::LX_CHAT_THINKING_LABEL,
                                 header_style,
-                                limit.saturating_sub(x.saturating_add(2)),
+                                limit.saturating_sub(x),
                             );
                         } else {
-                            let mut label = String::from(if expanded {
-                                THINKING_EXPANDED_MARK
-                            } else {
-                                THINKING_COLLAPSED_MARK
-                            });
-                            label.push_str(text::LX_CHAT_THOUGHT_LABEL);
+                            let mut label = String::from(text::LX_CHAT_THOUGHT_LABEL);
                             if let Some(duration) = thinking_duration(part) {
                                 label.push_str(THINKING_DURATION_SEP);
                                 label.push_str(&format_duration(duration));
@@ -570,12 +640,13 @@ pub(super) fn scrollbar(
     scrollbar::layout(area, total, visible, scroll)
 }
 
-/// 消息正文渲染行数：assistant 用 markdown 渲染（宽度自适应），用户按纯文本换行。
+/// 消息正文渲染行数：assistant 用 markdown 渲染（宽度自适应，扣步骤标记缩进），
+/// 用户按纯文本换行（扣 `> ` 前缀）。
 fn text_rows(message: &crate::app::state::ChatMessageView, content: &str, width: u16) -> usize {
     if message.role == "user" {
         return wrap(content, width.saturating_sub(USER_INDENT)).len();
     }
-    markdown_rows(content, width)
+    markdown_rows(content, width.saturating_sub(STEP_GUTTER))
 }
 
 /// assistant markdown 正文渲染成若干行（已按 `width` 自适应：表格收缩、其余软换行）。
@@ -591,11 +662,28 @@ fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
     tool::rows(call, width)
 }
 
-/// 绘制一段 assistant markdown 正文（已按宽度自适应，无需再换行）。
-fn draw_markdown(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    for line in markdown_render::render_wrapped(content, rect.width) {
+/// 绘制一段 assistant markdown 正文：首行以步骤方块起头，所有行缩进 [`STEP_GUTTER`] 列
+/// 与方块对齐（渲染宽度已相应扣除，无需再换行）。
+fn draw_markdown(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    content: &str,
+    mark: StepMark,
+    loading_frame: usize,
+) {
+    let inner = rect.width.saturating_sub(STEP_GUTTER);
+    let mut first = true;
+    for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            let mut cx = rect.x.saturating_add(line.indent);
+            if first {
+                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style());
+            }
+            let mut cx = rect
+                .x
+                .saturating_add(STEP_GUTTER)
+                .saturating_add(line.indent);
             for (value, span_style) in &line.spans {
                 for ch in value.chars() {
                     let cell = ch.width().unwrap_or(1).max(1) as u16;
@@ -607,6 +695,7 @@ fn draw_markdown(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usi
                 }
             }
         }
+        first = false;
         *row_index += 1;
     }
 }
@@ -618,19 +707,20 @@ fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
     Some(ended.saturating_sub(started).max(0))
 }
 
-/// thinking 正文渲染行数（markdown；左缩进 `THINKING_MARGIN`）。
+/// thinking 正文渲染行数（markdown；左缩进 [`STEP_GUTTER`] 与头部方块对齐）。
 fn thinking_rows(content: &str, width: u16) -> usize {
-    markdown_render::render_wrapped(content, width.saturating_sub(THINKING_MARGIN)).len()
+    markdown_render::render_wrapped(content, width.saturating_sub(STEP_GUTTER)).len()
 }
 
-/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`）。
+/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`），
+/// 所有行缩进 [`STEP_GUTTER`] 列与头部方块对齐。
 fn draw_thinking(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    let inner = rect.width.saturating_sub(THINKING_MARGIN);
+    let inner = rect.width.saturating_sub(STEP_GUTTER);
     for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             let mut cx = rect
                 .x
-                .saturating_add(THINKING_MARGIN)
+                .saturating_add(STEP_GUTTER)
                 .saturating_add(line.indent);
             for (value, span_style) in &line.spans {
                 let cell_style = span_style.patch(style::muted());

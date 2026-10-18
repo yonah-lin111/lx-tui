@@ -161,14 +161,20 @@ fn assistant_message_has_no_label_and_shows_body() {
     let line0 = row_text(&buf, area, 0);
     let line1 = row_text(&buf, area, 1);
     let line2 = row_text(&buf, area, 2);
-    assert!(line0.contains("Thought"), "首个渲染行为折叠头：{line0}");
+    assert!(
+        line0.starts_with("■ Thought"),
+        "首个渲染行为带方块的折叠头：{line0}"
+    );
     assert!(
         !line0.contains("assistant"),
         "不再显示 assistant 标签：{line0}"
     );
     assert!(line1.trim().is_empty(), "折叠头与正文间空一行：{line1}");
     assert!(!line2.contains("秘密思考"), "折叠时不显示内容");
-    assert!(line2.contains("可见正文"), "正文绘制：{line2}");
+    assert!(
+        line2.starts_with("■ 可见正文"),
+        "正文块同样以方块起头：{line2}"
+    );
 }
 
 #[test]
@@ -476,11 +482,11 @@ fn token_and_duration_formatting_matches_agent_conventions() {
 }
 
 #[test]
-fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
+fn thinking_header_uses_step_square_and_becomes_thought() {
     use ratatui::style::{Color, Modifier};
 
-    // 生成中：首列转轮（左对齐，与正文/统计行同一起点）、UI 页思考蓝、文案 `Thinking`。
-    let streaming = lx_with(vec![message(
+    // 生成中：行首方块（呼吸第 0 帧为实心、品牌蓝加粗）+ `Thinking`。
+    let mut streaming = lx_with(vec![message(
         "assistant",
         "streaming",
         vec![reasoning_part("流式思考"), text_part("")],
@@ -489,16 +495,31 @@ fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(117), "生成中用 UI 页思考蓝");
-    assert_eq!(header.modifier, Modifier::empty(), "生成中不压暗");
+    assert_eq!(header.fg, Color::Indexed(117), "生成中方块用品牌天蓝");
+    assert!(
+        header.modifier.contains(Modifier::BOLD),
+        "生成中方块加粗（与输入框上方 loading 同款）"
+    );
     let line0 = row_text(&buf, area, 0);
-    assert!(line0.starts_with('⠋'), "转轮在首列（左对齐）：{line0}");
-    assert!(line0.contains("Thinking"), "生成中文案首字母大写：{line0}");
-    assert!(!line0.contains('▸'), "生成中不带折叠标记：{line0}");
-    let line1 = row_text(&buf, area, 1);
-    assert!(!line1.contains("流式思考"), "默认折叠不显示内容：{line1}");
+    assert!(
+        line0.starts_with("■ Thinking"),
+        "方块 + 文案（文案从第 2 列起）：{line0}"
+    );
+    assert!(
+        !line0.contains('▸') && !line0.contains('▾'),
+        "折叠标记已移除：{line0}"
+    );
+    for frame in text::LX_LOADING_FRAMES {
+        assert!(!line0.contains(frame), "不再使用 braille 转轮：{line0}");
+    }
+    // 呼吸：进入空心相位后同一行换成 `□`（相位每 `STEP_BREATH_TICKS` 帧翻转）。
+    streaming.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
+    let line0 = row_text(&buf, area, 0);
+    assert!(line0.starts_with("□ Thinking"), "空心相位：{line0}");
 
-    // 完成后（带起止时刻）：`▸ Thought · 6.3s`、同为品牌蓝但压暗一档；展开时内容同样左对齐。
+    // 完成后（带起止时刻）：静态实心方块、品牌蓝压暗一档、`Thought · 6.3s`。
     let mut done = lx_with(vec![message(
         "assistant",
         "complete",
@@ -507,6 +528,7 @@ fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
             text_part("正文"),
         ],
     )]);
+    done.chat.loading_frame = 0;
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
@@ -514,10 +536,19 @@ fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
     assert_eq!(header.modifier, Modifier::DIM, "完成后压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("▸ Thought · 6.3s"),
+        line0.starts_with("■ Thought · 6.3s"),
         "完成后显示思考耗时：{line0}"
     );
-    // 展开：内容左对齐第 0 列，文案换成展开标记。
+    // 终态与帧无关：奇数帧也是实心。
+    done.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
+    assert!(
+        row_text(&buf, area, 0).starts_with("■ Thought · 6.3s"),
+        "完成后停为静态实心方块"
+    );
+
+    // 展开：文案不变（不再有 ▸/▾），正文缩进 2 列与方块对齐。
     done.chat.toggle_reasoning(0, 0);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
@@ -525,10 +556,57 @@ fn thinking_header_is_left_aligned_blue_and_becomes_thought() {
     assert_eq!(header.fg, Color::Indexed(117), "展开后仍品牌蓝");
     assert_eq!(header.modifier, Modifier::DIM, "展开后仍压暗");
     let line0 = row_text(&buf, area, 0);
-    assert!(line0.starts_with("▾ Thought · 6.3s"), "展开文案：{line0}");
+    assert!(
+        line0.starts_with("■ Thought · 6.3s"),
+        "展开后头部不变（折叠标记已移除）：{line0}"
+    );
     let line1 = row_text(&buf, area, 1);
-    assert!(line1.starts_with("旧思考"), "内容左对齐：{line1}");
+    assert!(line1.starts_with("  旧思考"), "正文缩进对齐方块：{line1}");
     assert!(!line0.contains("Thinking"), "不再是 Thinking：{line0}");
+}
+
+#[test]
+fn markdown_body_block_has_step_square_and_indented_continuation() {
+    let lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![text_part("第一行\n第二行")],
+    )]);
+    let area = Rect::new(0, 0, 40, 6);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let line0 = row_text(&buf, area, 0);
+    let line1 = row_text(&buf, area, 1);
+    assert!(
+        line0.starts_with("■ 第一行"),
+        "markdown 正文同样以方块起头：{line0}"
+    );
+    assert!(
+        line1.starts_with("  第二行"),
+        "续行缩进 2 列与方块对齐：{line1}"
+    );
+    // 完成态的方块：品牌蓝压暗、不加粗。
+    let marker = &buf[(0, 0)];
+    assert_eq!(marker.fg, ratatui::style::Color::Indexed(117));
+    assert_eq!(marker.modifier, ratatui::style::Modifier::DIM);
+}
+
+#[test]
+fn only_the_active_last_step_breathes() {
+    // 消息仍在流式：前一个正文块已结束（静态实心），最后一块仍在输出（空心呼吸）。
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "streaming",
+        vec![text_part("甲"), text_part("乙")],
+    )]);
+    lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    let area = Rect::new(0, 0, 40, 8);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let first = row_text(&buf, area, 0);
+    let last = row_text(&buf, area, 2);
+    assert!(first.starts_with("■ 甲"), "已结束的块停为实心：{first}");
+    assert!(last.starts_with("□ 乙"), "仍在流式的最后一块呼吸：{last}");
 }
 
 // ===== 置顶用户消息行（表现层，codex prompt_header 口径）=====
@@ -793,4 +871,45 @@ fn tool_only_message_still_occupies_rows() {
     let computed = layout(Rect::new(0, 0, 40, 10), &lx);
     // 工具行 1 + 消息间空行/呼吸行 1 = 2。
     assert_eq!(computed.total_rows, 2);
+}
+
+#[test]
+fn transcript_lays_out_step_square_with_two_column_gutter() {
+    // 一份完整观感锁定：用户消息 `> `、每个步骤的方块标记与 2 列内容缩进
+    // （思考头 / 思考正文 / 正文块 / 工具行）、块间空行。
+    let mut assistant = message(
+        "assistant",
+        "streaming",
+        vec![
+            reasoning_part("思考甲\n思考乙"),
+            text_part("正文第一行\n正文第二行"),
+        ],
+    );
+    assistant.steps.push(tool_step(2));
+    let mut lx = lx_with(vec![
+        message("user", "complete", vec![text_part("用户问题")]),
+        assistant,
+    ]);
+    lx.chat.toggle_reasoning(1, 0);
+    lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS; // 呼吸进入空心相位
+    let area = Rect::new(0, 0, 56, 12);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let rows: Vec<String> = (0..10).map(|row| row_text(&buf, area, row)).collect();
+    assert_eq!(
+        rows,
+        vec![
+            "> 用户问题",
+            "",
+            "□ Thinking",
+            "  思考甲",
+            "  思考乙",
+            "",
+            "■ 正文第一行",
+            "  正文第二行",
+            "",
+            "□ Read src/a.rs · 3-7 · pending",
+        ],
+        "步骤方块与 2 列缩进的整块观感"
+    );
 }

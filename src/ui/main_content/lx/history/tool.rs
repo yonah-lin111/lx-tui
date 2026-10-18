@@ -1,17 +1,18 @@
-//! 工具步骤渲染：单行 `<图标> 动词 参数 · 次要计数 · 状态 · 原因`，复用 ui 页 gallery
-//! 的 agent 步骤头部结构（图标品牌粉 + 动词天蓝 + 参数金黄 + 行范围另色 + 增删绿/红）。
+//! 工具步骤渲染：单行 `<方块> 动词 参数 · 次要计数 · 状态 · 原因`。行首方块与思考、
+//! 正文块共用同一款步骤标记（见 [`super::StepMark`]：运行中 `■`/`□` 两帧呼吸、
+//! 终态静态并按语义着色），不再使用工具类型图标。
 //!
 //! 纯渲染：只读 [`ToolCallView`]，只写 lx 页网格；不执行 IO、不改状态、不 `unwrap`。
 //! 行数口径 [`rows`] **恒为 1 行**（`history::layout` 与 `history::render` 共用），
 //! 保证滚动条、置顶用户行与 thinking 命中几何不因工具步骤漂移。
 //!
-//! 宽度自适应（对齐设计 §10：**先截断路径，再隐藏次要计数，图标与状态始终可辨**）：
+//! 宽度自适应（对齐设计 §10：**先截断路径，再隐藏次要计数，方块与状态始终可辨**）：
 //! 1. 参数（路径 / 搜索范围）先按显示列中间省略（宽字符不半写）；
 //! 2. 再按优先级隐藏次要字段：命中数 → 行范围 → 截断提示；
 //! 3. 仍不够时先丢失败/中断原因（尾部省略，仍有最小保留宽度），
 //!    再整段省略参数（路径让位给状态），最后才丢状态文字；
-//! 4. 任何宽度下行首符号都在：转轮 = 进行中、`!` = 失败/中断、`⊘` = 取消、
-//!    工具图标 = 完成，因此状态始终可辨。
+//! 4. 任何宽度下行首方块都在：运行中呼吸、完成 / 失败 / 中断 / 取消用颜色区分
+//!    （取消另用空心方块），因此状态始终可辨。
 //!
 //! 失败步骤（`Failed`）整行走 [`style::agent_fail`] 并附精简原因；`Interrupted` 用警告黄、
 //! `Cancelled` 只给状态文字，与失败红可区分。
@@ -24,7 +25,7 @@ use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
 use crate::ui::{style, text};
 
 use super::super::Grid;
-use super::{truncate_with_ellipsis, visible_row};
+use super::{StepMark, truncate_with_ellipsis, visible_row};
 
 /// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
 const MIN_PARAM_COLS: usize = 6;
@@ -83,7 +84,7 @@ fn segments_cols(segments: &[Segment]) -> usize {
     segments.iter().map(Segment::cols).sum()
 }
 
-/// 四文件工具的展示种类；未知工具名走 [`Kind::Other`]（图标 + 工具名 + 参数摘要）。
+/// 四文件工具的展示种类；未知工具名走 [`Kind::Other`]（动词 + 参数摘要）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Read,
@@ -104,46 +105,21 @@ impl Kind {
             _ => Self::Other,
         }
     }
-
-    /// 行首图标（单宽跨平台；与 gallery 样例同一份常量）。
-    fn icon(self) -> &'static str {
-        use text::agent as a;
-        match self {
-            Self::Read => a::ICON_READ,
-            Self::Search => a::ICON_SEARCH,
-            Self::Edit => a::ICON_EDIT,
-            Self::Write => a::ICON_WRITE,
-            Self::Other => a::ICON_TOOL,
-        }
-    }
 }
 
-/// 行首符号：进行中显示转轮（复用既有 loading 帧语义），失败/中断显示 `!`（红/黄），
-/// 取消显示 `⊘`，其余显示工具图标（终态不再有转轮）。
+/// 行首方块标记：与思考 / 正文块共用同款步骤标记（运行中两帧呼吸、终态静态；
+/// 颜色区分完成 / 失败 / 中断 / 取消）。
 ///
-/// 行首符号是**最窄档唯一保留的状态信号**，因此每个终态都要能一眼区分。
+/// 行首标记是**最窄档唯一保留的状态信号**，因此每个状态都要能一眼区分。
 fn lead(call: &ToolCallView, loading_frame: usize) -> Segment {
-    if call.status.is_open() {
-        let frames = &text::LX_LOADING_FRAMES;
-        let frame = frames[loading_frame % frames.len()];
-        return Segment::new(format!("{frame} "), style::chat_loading_spinner());
-    }
-    match call.status {
-        ToolStatus::Failed => {
-            Segment::new(format!("{} ", text::agent::ICON_ERROR), style::agent_fail())
-        }
-        ToolStatus::Interrupted => {
-            Segment::new(format!("{} ", text::agent::ICON_ERROR), style::agent_warn())
-        }
-        ToolStatus::Cancelled => Segment::new(
-            format!("{} ", text::agent::ICON_TOOL_CANCELLED),
-            style::agent_step_detail(),
-        ),
-        _ => Segment::new(
-            format!("{} ", Kind::of(&call.name).icon()),
-            style::agent_icon(),
-        ),
-    }
+    let mark = match call.status {
+        ToolStatus::Failed => StepMark::Failed,
+        ToolStatus::Interrupted => StepMark::Interrupted,
+        ToolStatus::Cancelled => StepMark::Cancelled,
+        ToolStatus::Completed => StepMark::Done,
+        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => StepMark::Running,
+    };
+    Segment::new(mark.segment(loading_frame), mark.style())
 }
 
 /// 固定动词（品牌天蓝）：四工具用共享动词常量，未知工具回落到工具名本身。

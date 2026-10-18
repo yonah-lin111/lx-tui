@@ -73,10 +73,15 @@ fn write_summary() -> ToolSummary {
 
 /// 渲染一行到网格并按列拼出文本（跳过宽字符占位格）。
 fn render_row(call: &ToolCallView, width: u16) -> (String, Grid) {
+    render_row_at(call, width, 0)
+}
+
+/// 以指定 loading 帧渲染一行（方块呼吸相位断言用）。
+fn render_row_at(call: &ToolCallView, width: u16, loading_frame: usize) -> (String, Grid) {
     let rect = Rect::new(0, 0, width, 1);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, call, 0);
+    draw(&mut grid, rect, 0, &mut row_index, call, loading_frame);
     assert_eq!(row_index, rows(call, width), "绘制推进行数必须与 rows 一致");
     (grid_text(&grid, rect), grid)
 }
@@ -112,7 +117,7 @@ fn line_text(call: &ToolCallView, width: u16) -> String {
 // ===== 1. 四工具 × 四状态 =====
 
 #[test]
-fn every_tool_and_open_status_shows_spinner_icon_verb_and_path() {
+fn every_tool_and_open_status_shows_breathing_square_verb_and_path() {
     let cases: [(&str, ToolSummary); 4] = [
         ("read", read_summary()),
         ("search", search_summary()),
@@ -126,11 +131,16 @@ fn every_tool_and_open_status_shows_spinner_icon_verb_and_path() {
             ToolStatus::Running,
         ] {
             let call = tool_call(name, status, Some(summary.clone()), None);
-            let (painted, _) = render_row(&call, 80);
-            let frame = text::LX_LOADING_FRAMES[0];
+            let (painted, grid) = render_row_at(&call, 80, 0);
             assert!(
-                painted.starts_with(frame),
-                "{name}/{status:?} 行首应为转轮：{painted}"
+                painted.starts_with(text::agent::STEP_MARK_FILLED),
+                "{name}/{status:?} 行首应为步骤方块：{painted}"
+            );
+            // 运行中的方块用品牌蓝加粗（与输入框上方 loading 转轮同款）。
+            assert_eq!(
+                grid.cell(0, 0).style.fg,
+                style::chat_loading_spinner().fg,
+                "{name}/{status:?} 方块品牌蓝"
             );
             assert!(
                 painted.contains(text::tool_status_label(status)),
@@ -142,7 +152,42 @@ fn every_tool_and_open_status_shows_spinner_icon_verb_and_path() {
 }
 
 #[test]
-fn completed_tool_has_no_spinner_and_shows_icon_verb_and_status() {
+fn step_square_breathes_while_open_and_stays_static_when_settled() {
+    // 呼吸：每 `STEP_BREATH_TICKS` 个 loading 帧翻转一次相位（实 ⇄ 空）。
+    let open = tool_call("read", ToolStatus::Running, Some(read_summary()), None);
+    for frame in 0..text::agent::STEP_BREATH_TICKS {
+        let (painted, _) = render_row_at(&open, 40, frame);
+        assert!(
+            painted.starts_with(text::agent::STEP_MARK_FILLED),
+            "帧 {frame} 应为实心：{painted}"
+        );
+    }
+    for frame in text::agent::STEP_BREATH_TICKS..text::agent::STEP_BREATH_TICKS * 2 {
+        let (painted, _) = render_row_at(&open, 40, frame);
+        assert!(
+            painted.starts_with(text::agent::STEP_MARK_HOLLOW),
+            "帧 {frame} 应为空心：{painted}"
+        );
+    }
+    // 终态与帧无关：完成 / 失败 / 中断恒实心（取消恒空心，见下个测试）。
+    for status in [
+        ToolStatus::Completed,
+        ToolStatus::Failed,
+        ToolStatus::Interrupted,
+    ] {
+        let call = tool_call("read", status, Some(read_summary()), Some("boom"));
+        for frame in [0usize, text::agent::STEP_BREATH_TICKS, 13] {
+            let (painted, _) = render_row_at(&call, 40, frame);
+            assert!(
+                painted.starts_with(text::agent::STEP_MARK_FILLED),
+                "{status:?} 帧 {frame} 应停为静态实心：{painted}"
+            );
+        }
+    }
+}
+
+#[test]
+fn completed_tool_has_square_verb_and_status_without_type_icon() {
     let cases: [(&str, ToolSummary, &str); 4] = [
         ("read", read_summary(), text::agent::VERB_TOOL_READ),
         ("search", search_summary(), text::agent::VERB_TOOL_SEARCH),
@@ -155,21 +200,45 @@ fn completed_tool_has_no_spinner_and_shows_icon_verb_and_status() {
         for frame in text::LX_LOADING_FRAMES {
             assert!(
                 !painted.contains(frame),
-                "{name} 完成态不得出现转轮 {frame}：{painted}"
+                "{name} 完成态不得出现 braille 转轮 {frame}：{painted}"
             );
         }
-        assert!(painted.contains(verb), "{name} 缺少动词 {verb}：{painted}");
         assert!(
-            painted.contains(Kind::of(name).icon()),
-            "{name} 缺少工具图标：{painted}"
+            painted.starts_with(text::agent::STEP_MARK_FILLED),
+            "{name} 行首为静态方块：{painted}"
         );
+        assert!(painted.contains(verb), "{name} 缺少动词 {verb}：{painted}");
         assert!(
             painted.contains(text::tool_status_label(ToolStatus::Completed)),
             "{name} 缺少完成态文字：{painted}"
         );
-        // 图标用品牌粉（与 gallery 样例同一 token）。
+        // 不再使用按工具区分的类型图标（G11：统一方块）。`+`（write 的图标）会与
+        // 增删计数的 `+12` 撞字符，故只查不会自然出现的三类；行首由上面的
+        // `starts_with(方块)` 断言兜底。
+        for icon in [
+            text::agent::ICON_READ,
+            text::agent::ICON_SEARCH,
+            text::agent::ICON_EDIT,
+            text::agent::ICON_MCP,
+        ] {
+            assert!(
+                !painted.contains(icon),
+                "{name} 不再画类型图标 {icon:?}：{painted}"
+            );
+        }
+        // 方块用暗一档品牌蓝（与完成后 thinking 头部同款）。
         let lead = grid.cell(0, 0);
-        assert_eq!(lead.style.fg, style::agent_icon().fg, "{name} 图标品牌粉");
+        assert_eq!(
+            lead.style.fg,
+            style::agent_connector().fg,
+            "{name} 完成方块品牌蓝压暗"
+        );
+        assert!(
+            lead.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM),
+            "{name} 完成方块压暗（DIM）"
+        );
     }
 }
 
@@ -189,8 +258,8 @@ fn failed_tool_is_red_and_carries_trimmed_reason() {
         );
         let (painted, grid) = render_row(&call, 100);
         assert!(
-            painted.starts_with(text::agent::ICON_ERROR),
-            "{name} 失败行首为 `!`：{painted}"
+            painted.starts_with(text::agent::STEP_MARK_FILLED),
+            "{name} 失败行首为方块：{painted}"
         );
         assert!(
             painted.contains(text::tool_status_label(ToolStatus::Failed)),
@@ -232,15 +301,15 @@ fn cancelled_and_interrupted_are_distinguishable_from_failed() {
         !painted.contains(text::agent::ICON_ERROR),
         "取消不是失败，不用失败标记：{painted}"
     );
-    // 取消用专属行首符号（次要信息色），与完成态工具图标、失败/中断的 `!` 都不同。
+    // 取消用空心方块（未产出结果）+ 次要信息色，与失败/中断/完成都不同。
     assert!(
-        painted.starts_with(text::agent::ICON_TOOL_CANCELLED),
-        "取消态行首符号专属：{painted}"
+        painted.starts_with(text::agent::STEP_MARK_HOLLOW),
+        "取消态行首用空心方块：{painted}"
     );
     assert_eq!(
         grid.cell(0, 0).style.fg,
         style::agent_step_detail().fg,
-        "取消符号用次要信息色"
+        "取消方块用次要信息色"
     );
 
     // 中断：黄（警告）档，与失败红可区分；无 error 时不显示空段。
@@ -255,13 +324,13 @@ fn cancelled_and_interrupted_are_distinguishable_from_failed() {
     assert_ne!(status_style.fg, style::agent_fail().fg, "与失败红可区分");
     let (interrupted_text, interrupted_grid) = render_row(&interrupted, 80);
     assert!(
-        interrupted_text.starts_with(text::agent::ICON_ERROR),
-        "中断用 `!` 标记：{interrupted_text}"
+        interrupted_text.starts_with(text::agent::STEP_MARK_FILLED),
+        "中断用实心方块：{interrupted_text}"
     );
     assert_eq!(
         interrupted_grid.cell(0, 0).style.fg,
         style::agent_warn().fg,
-        "中断符号黄色（与失败红区分）"
+        "中断方块黄色（与失败红区分）"
     );
     assert!(
         !line_text(&interrupted, 80).ends_with(text::LX_CHAT_TOOL_STATUS_SEP),
@@ -366,16 +435,16 @@ fn unknown_tool_shows_name_and_summary_only() {
     );
     let (painted, _) = render_row(&call, 80);
     assert!(
+        painted.starts_with(text::agent::STEP_MARK_FILLED),
+        "未知工具同样以方块起头：{painted}"
+    );
+    assert!(
         painted.contains("web_fetch"),
         "未知工具显示工具名：{painted}"
     );
     assert!(
         painted.contains("https://example.com"),
         "参数摘要：{painted}"
-    );
-    assert!(
-        painted.contains(text::agent::ICON_TOOL),
-        "未知工具用泛化图标：{painted}"
     );
 }
 
@@ -412,10 +481,10 @@ fn narrow_widths_keep_state_and_never_overflow() {
             "宽 {width} 越界：{painted:?}（{drawn} 列）"
         );
         if width >= 3 {
-            // 状态始终可辨：行首转轮。宽度足够时状态文字也应可见。
+            // 状态始终可辨：行首方块。宽度足够时状态文字也应可见。
             assert!(
-                painted.starts_with(text::LX_LOADING_FRAMES[0]),
-                "宽 {width} 行首应保留状态符号：{painted:?}"
+                painted.starts_with(text::agent::STEP_MARK_FILLED),
+                "宽 {width} 行首应保留状态方块：{painted:?}"
             );
         }
     }
@@ -488,11 +557,11 @@ fn path_is_truncated_before_secondary_counts_are_dropped() {
         painted.contains(text::tool_status_label(ToolStatus::Completed)),
         "状态最后才丢：{painted}"
     );
-    // 生效顺序：极端宽度下先丢计数，状态仍可辨（行首图标）。
+    // 生效顺序：极端宽度下先丢计数，状态仍可辨（行首方块）。
     let (tiny, _) = render_row(&call, 12);
     assert!(
-        tiny.starts_with(Kind::Edit.icon()),
-        "极窄仍保留行首图标：{tiny:?}"
+        tiny.starts_with(text::agent::STEP_MARK_FILLED),
+        "极窄仍保留行首方块：{tiny:?}"
     );
 }
 
@@ -628,7 +697,7 @@ fn settled_search_falls_back_to_arguments_for_its_scope() {
 
 #[test]
 fn lead_marker_identifies_the_state_at_any_width() {
-    // 极窄档唯一保留的是行首符号：每个状态必须给出不同的首符号 + 颜色。
+    // 极窄档唯一保留的是行首方块：五个状态的（字形 + 样式）必须两两不同。
     let cases = [
         ("read", ToolStatus::Running, None),
         ("read", ToolStatus::Completed, None),
@@ -636,19 +705,19 @@ fn lead_marker_identifies_the_state_at_any_width() {
         ("read", ToolStatus::Cancelled, None),
         ("read", ToolStatus::Interrupted, Some("gone")),
     ];
-    let mut seen: Vec<(char, Option<ratatui::style::Color>)> = Vec::new();
+    let mut seen: Vec<(char, Style)> = Vec::new();
     for (name, status, error) in cases {
         let call = tool_call(name, status, Some(read_summary()), error);
-        // 1 列宽也只剩行首符号本身（写 buffer 按列裁剪）。
+        // 1 列宽也只剩行首方块本身（写 buffer 按列裁剪）。
         let (narrow, _) = render_row(&call, 1);
         assert!(!narrow.trim().is_empty(), "{status:?} 极窄仍可辨");
         let (painted, grid) = render_row(&call, 40);
-        let lead_char = painted.chars().next().expect("行首符号");
-        let lead_color = grid.cell(0, 0).style.fg;
+        let lead_char = painted.chars().next().expect("行首方块");
+        let lead_style = grid.cell(0, 0).style;
         assert!(
-            !seen.contains(&(lead_char, lead_color)),
-            "{status:?} 的行首符号 {lead_char:?} 与已有状态重复：{painted}"
+            !seen.contains(&(lead_char, lead_style)),
+            "{status:?} 的行首标记 {lead_char:?} 与已有状态重复：{painted}"
         );
-        seen.push((lead_char, lead_color));
+        seen.push((lead_char, lead_style));
     }
 }

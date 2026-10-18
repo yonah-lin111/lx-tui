@@ -106,15 +106,18 @@ pub const EDIT_DIFF_ADD: &str = "+12";
 pub const EDIT_DIFF_DEL: &str = "-4";
 pub const WRITE_ADD: &str = "+18";
 
-// ===== 真实工具步骤行（lx 聊天历史）与样例共用的图标 / 动词 / 计数标记 =====
+// ===== 真实工具步骤行（lx 聊天历史）与样例共用的方块标记 / 动词 / 计数标记 =====
 //
 // `ui/main_content/lx/history/tool.rs` 渲染真实工具调用时**只读**本组常量与上面的
-// `ICON_*` / `VERB_*`：图标、动词、计数标记不允许在渲染层再写一份字符串。
+// `VERB_*`：动词与计数标记不允许在渲染层再写一份字符串。行首状态标记自 G11 起改由
+// `history::StepMark` 的方块承担，不再使用按工具区分的类型图标。
 
-/// 未知工具名（不在四工具表内）的行首图标；与 `mcp` 样例同一个泛化“调用工具”符号。
-pub const ICON_TOOL: &str = ICON_MCP;
-/// 工具被取消（未开始执行）的行首符号：斜杠圆环，与失败 `!`、完成工具图标都不同。
-pub const ICON_TOOL_CANCELLED: &str = "⊘";
+/// 聊天历史每个 assistant 步骤左侧的方块标记（思考 / 工具调用 / 正文块共用）：
+/// 运行中 `■`/`□` 两帧呼吸，终态停为静态方块；呼吸相位每 [`STEP_BREATH_TICKS`]
+/// 个 loading 帧翻转一次（loading 帧 100ms → 约 400ms 一相，是“呼吸”而非闪烁）。
+pub const STEP_MARK_FILLED: char = '■';
+pub const STEP_MARK_HOLLOW: char = '□';
+pub const STEP_BREATH_TICKS: usize = 4;
 
 /// 真实工具步骤行的固定动词（设计 §10：`Read` / `Search` / `Edit` / `Write`）。
 ///
