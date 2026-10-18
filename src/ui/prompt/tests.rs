@@ -1532,6 +1532,42 @@ fn border_title_draft_uses_muted_style_and_renames_with_cursor() {
 }
 
 #[test]
+fn border_rename_keeps_top_border_line_right_of_input() {
+    let panel = Rect::new(0, 0, 40, 8);
+    let row = border_row(
+        panel,
+        &BorderTitleData {
+            title: Some("named prompt"),
+            draft: false,
+            page: Some(PageHeaderData {
+                current: 1,
+                total: 2,
+                name: "Page 1",
+                rename: Some(("Draft", 5)),
+            }),
+        },
+    );
+    // 回归：重命名输入不得把右侧边框线清成空白；失焦态与聚焦态都保持 `─` 到页控件。
+    assert!(row.starts_with('╭'), "{row}");
+    assert!(row.ends_with("›─╮"), "右圆角与页控件完整: {row}");
+    let tail = row.split("· Draft").nth(1).expect("重命名输入可见");
+    assert!(tail.starts_with(' '), "输入后保留 1 列空白: {row}");
+    let before_controls = tail
+        .trim_start_matches(' ')
+        .split('‹')
+        .next()
+        .unwrap_or_default();
+    assert!(
+        !before_controls.is_empty(),
+        "输入与页控件之间仍有边框线: {row}"
+    );
+    assert!(
+        before_controls.chars().all(|ch| ch == '─'),
+        "输入右侧只保留边框线: {row}"
+    );
+}
+
+#[test]
 fn border_tree_view_title_has_no_page_controls() {
     let panel = Rect::new(0, 0, 40, 8);
     let border = crate::layout::prompt_border_rect(panel).expect("border row");
