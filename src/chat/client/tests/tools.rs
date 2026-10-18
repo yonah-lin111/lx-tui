@@ -179,6 +179,70 @@ async fn compatible_chat_with_null_function_call_placeholders_completes() {
     );
 }
 
+/// 回归（用户实测第三轮）：**逐字复刻真实网关（9router / cbcn-hy3）抓包**。
+///
+/// - 中间帧：`"function_call":null`、`"reasoning_content":""`、`"refusal":null`、
+///   `"extra_fields":{...}`、`"finish_reason":""`（空串）
+/// - 末帧：`finish_reason:"stop"` 与 **`"function_call":{"name":"","arguments":""}` 同帧**
+/// - 流末 `[DONE]` 被网关**重复发送两次**
+///
+/// 修复前该轮被判 failed（正文已完整落库、消息状态 failed），修复后必须 complete。
+#[tokio::test]
+async fn compatible_chat_with_empty_string_function_call_placeholder_completes() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"extra_fields\":{},\"function_call\":null,\"reasoning_content\":\"\",\"refusal\":null,\"role\":\"assistant\"},\"finish_reason\":\"\"}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"extra_fields\":{},\"function_call\":null,\"reasoning_content\":\"\",\"refusal\":null},\"finish_reason\":\"\"}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"我是 lx。\",\"extra_fields\":{},\"function_call\":null,\"reasoning_content\":\"\",\"refusal\":null},\"finish_reason\":\"\"}]}\n\n",
+        // 末帧：stop 与空字符串占位同帧（真实抓包形态）。
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"extra_fields\":{},\"function_call\":{\"name\":\"\",\"arguments\":\"\"},\"reasoning_content\":\"\",\"refusal\":null,\"role\":\"assistant\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":4}}\n\n",
+        "data: [DONE]\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, server) = spawn_mock("200 OK", body).await;
+    let (_cancel_sender, cancel) = no_cancel();
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(10),
+        run_stream(
+            "openai-compatible",
+            &format!("{base}/v1"),
+            Some("k"),
+            Duration::from_secs(5),
+            request(),
+            cancel,
+            |_| {},
+        ),
+    )
+    .await
+    .expect("stream completes within timeout");
+    let _ = server.await;
+    assert_eq!(outcome.stop, StopReason::Complete, "{:?}", outcome.stop);
+    let text: String = outcome
+        .deltas
+        .iter()
+        .filter_map(|delta| match delta {
+            ChatDelta::Part(part) if part.kind == PartKind::Text => Some(part.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "我是 lx。");
+    assert!(
+        !outcome
+            .deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::ToolInputStarted { .. })),
+        "空字符串占位不得造出工具调用"
+    );
+    assert_eq!(
+        outcome
+            .deltas
+            .iter()
+            .filter(|delta| matches!(delta, ChatDelta::Finished { .. }))
+            .count(),
+        1,
+        "重复 [DONE] 也不得产生第二个终态"
+    );
+}
+
 /// 工具参数中途 EOF（半截 JSON）：明确截断错误，且**不产生**可执行调用。
 #[tokio::test]
 async fn truncated_tool_arguments_fail_without_executable_call() {

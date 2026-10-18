@@ -964,3 +964,52 @@ Anthropic 与 Responses 经核查无同类缺陷：二者均以 `and_then(Value:
 
 **回归有效性反向验证**：把判定临时改回 `delta.get("function_call").is_some()` 后，
 上述端到端测试立即失败（复现用户报告的同一错误码）；恢复修复后全绿。
+
+### 20.8 已修复（G10：空字符串占位 + 真实网关抓包复核）
+
+**用户第二轮实测**：`你是谁` 已经能流式输出正文，但整轮最后仍显示
+
+```text
+ ! Failed
+   └─ tool call protocol error: deprecated function_call delta without tool_calls index
+```
+
+**抓包证据**：直接对用户配置的本地网关（9router，`openai-compatible`，模型 `cbcn/hy3`）
+发起真实流式请求，逐帧记录：
+
+```text
+ 1..35  delta_keys=[content, extra_fields, function_call, reasoning_content, refusal, role]  finish=''   function_call=null
+36..39  （正文增量）
+40      finish='stop'  function_call={"name":"","arguments":""}   ← 流末占位
+41..42  [DONE] [DONE]                                             ← 重复的结束标记
+```
+
+即占位有**两种形态**，20.7 只覆盖了第一种：
+
+| 形态 | 出现位置 | 20.7 判定 | 20.8 判定 |
+| --- | --- | --- | --- |
+| `"function_call": null` | 每个中间帧 | 忽略 ✓ | 忽略 ✓ |
+| `"function_call": {"name":"","arguments":""}` | 末帧（与 `stop` 同帧） | **误判为废弃调用 ✗** | 忽略 ✓ |
+| `"function_call": {"name":null,...}` | 部分端点 | 忽略 ✓ | 忽略 ✓ |
+| 真旧式调用（name/arguments 非空） | 旧端点 | 报协议错误 ✓ | 报协议错误 ✓ |
+
+**根因**：20.7 的判定用 `as_str().is_some()`，而空字符串是 `Some("")`，仍判为真。
+修复：只有 `name` 或 `arguments` 是**非空字符串**时才算旧式调用体；同时加
+`is_placeholder_tool_call`，把 `"tool_calls":[{}]` / `{"id":"","function":{…}}` 这类
+空壳条目一并忽略（`index` 存在时仍按真实分片处理）。
+
+**真实端到端复核**（本地网关实跑，非 fixture；仅验证，不进测试套件）：
+
+1. `你是谁` 纯聊天：`stop=Complete`，工具调用 0 次，正文完整。
+2. `读取 Cargo.toml`：模型发起 `read`（`chatcmpl-tool-…`，args `{"path":"Cargo.toml"}`），
+   `ResponseFinished{ToolCalls}` + `Finished{Complete}`，无协议错误。
+3. 完整两轮：本地执行 `read` → 成对回传 call/result → 第二轮 `stop=Complete`，
+   回答「包名是 `lx-tui`」——工具结果续传对真实网关有效。
+
+**测试证据**（`cargo test` 全绿）
+
+| 测试 | 断言 |
+| --- | --- |
+| `openai::tests::null_function_call_placeholders_are_not_protocol_errors` | 六种占位形态（null/空对象/空字符串字段/name=null/仅空 arguments）全部忽略；真正旧式调用仍报错 |
+| `openai::tests::placeholder_tool_call_entries_are_ignored` | `tool_calls:[{}]` 与全空壳条目被忽略，不产生调用 |
+| `client::tests::tools::compatible_chat_with_empty_string_function_call_placeholder_completes` | **逐字复刻真实抓包**：中间帧 null 占位 + 末帧 stop 与空字符串占位同帧 + 重复 `[DONE]`，结果 `Complete`、正文正确、恰好一个终态 |

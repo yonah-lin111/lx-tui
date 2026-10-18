@@ -247,6 +247,11 @@ impl StreamDecoder for Decoder {
 impl Decoder {
     /// 合并一个 `delta.tool_calls[index]` 分片。
     fn absorb_tool_call(&mut self, call: &Value, out: &mut Vec<ChatDelta>) -> Result<(), String> {
+        // 纯占位条目（`{}` 或全空字段）没有任何可聚合信息，直接忽略；
+        // 兼容网关会在无调用时回这类空条目，不能据此报协议错误。
+        if is_placeholder_tool_call(call) {
+            return Ok(());
+        }
         let ordinal = call
             .get("index")
             .and_then(Value::as_u64)
@@ -352,18 +357,41 @@ impl Decoder {
 
 /// 是否真的带了**已废弃的** `delta.function_call` 调用体。
 ///
-/// 多数 OpenAI 兼容端点（以及部分官方响应）会在**每一帧**都带上
-/// `"function_call": null` / `"tool_calls": null` 之类的占位键，部分端点甚至给空对象
-/// `{}` 占位。`Value::is_some()` 对 `Value::Null` 也为真，直接据此判错会把普通对话帧
-/// 误判成“废弃协议”，导致整轮失败（回归：`你是谁` 这类纯聊天请求）。
+/// 兼容端点的占位形态比想象的多：`null`、`{}`、`{"name":"","arguments":""}`
+/// （空字符串占位）、`"tool_calls": []` 等。它们都表示“本帧没有函数调用”。
+/// `Value::is_some()` 对 `Value::Null` 为真，`as_str()` 对空字符串为 `Some("")`，
+/// 只按“字段存在”判断会把普通对话帧误判成废弃协议，整轮失败
+/// （用户实测：`你是谁` 这类纯聊天也失败）。
 ///
-/// 只有值确实是非空对象且带 `name` 或 `arguments` 字段时，才算旧式函数调用。
+/// 只有 `name` 或 `arguments` 是**非空字符串**时，才算旧式函数调用体。
 fn has_deprecated_function_call(delta: &Value) -> bool {
     let Some(call) = delta.get("function_call").and_then(Value::as_object) else {
         return false;
     };
-    call.get("name").and_then(Value::as_str).is_some()
-        || call.get("arguments").and_then(Value::as_str).is_some()
+    ["name", "arguments"].iter().any(|key| {
+        call.get(*key)
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    })
+}
+
+/// 是否为纯占位的 `tool_calls` 条目（无 index/id/name/arguments 任何有效值）。
+///
+/// 部分兼容网关在没有工具调用时也会回 `"tool_calls":[{}]` 或
+/// `{"id":"","function":{"name":"","arguments":""}}` 之类的空壳，不能据此报协议错误。
+fn is_placeholder_tool_call(call: &Value) -> bool {
+    let non_empty_string = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+    };
+    if call.get("index").and_then(Value::as_u64).is_some() {
+        return false;
+    }
+    let function = call.get("function");
+    !non_empty_string(call.get("id"))
+        && !non_empty_string(function.and_then(|function| function.get("name")))
+        && !non_empty_string(function.and_then(|function| function.get("arguments")))
 }
 
 /// 校验完整参数是合法 JSON（`ToolInputEnded` 之前必须成立）。

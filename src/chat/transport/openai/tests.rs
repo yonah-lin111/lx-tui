@@ -819,6 +819,9 @@ fn deprecated_function_call_delta_is_protocol_error() {
 /// 占位键（DeepSeek 等网关常见）。这属于普通对话帧，不能被当成“废弃协议”失败，
 /// 否则像 `你是谁` 这样的纯聊天请求整轮报
 /// `tool call protocol error: deprecated function_call delta without tool_calls index`。
+///
+/// 用户实测的第二种形态是**空字符串占位**：
+/// `"function_call":{"name":"","arguments":""}`（正文完整后于流末出现）。
 #[test]
 fn null_function_call_placeholders_are_not_protocol_errors() {
     let mut decoder = Decoder::default();
@@ -830,8 +833,14 @@ fn null_function_call_placeholders_are_not_protocol_errors() {
             r#"{"choices":[{"delta":{"content":"你","function_call":null},"finish_reason":null}]}"#,
             // 空 tool_calls 数组同样是占位，不应触发 `without any tool call`。
             r#"{"choices":[{"delta":{"content":"好","tool_calls":[]},"finish_reason":null}]}"#,
-            // 部分端点还会给 `function_call` 空对象占位。
-            r#"{"choices":[{"delta":{"function_call":{}},"finish_reason":"stop"}]}"#,
+            // 空对象占位。
+            r#"{"choices":[{"delta":{"function_call":{}},"finish_reason":null}]}"#,
+            // 用户实测形态：空字符串字段占位（流末出现）。
+            r#"{"choices":[{"delta":{"function_call":{"name":"","arguments":""}},"finish_reason":null}]}"#,
+            // 字段为 null 的占位。
+            r#"{"choices":[{"delta":{"function_call":{"name":null,"arguments":null}},"finish_reason":null}]}"#,
+            // 仅空 arguments 的占位。
+            r#"{"choices":[{"delta":{"function_call":{"arguments":""}},"finish_reason":"stop"}]}"#,
         ],
     );
     let text: String = deltas
@@ -843,9 +852,36 @@ fn null_function_call_placeholders_are_not_protocol_errors() {
         .collect();
     assert_eq!(text, "你好");
     assert!(
+        !deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::ToolInputStarted { .. })),
+        "空占位不得凭空造出工具调用"
+    );
+    assert!(
         matches!(deltas.last(), Some(ChatDelta::Finished { .. })),
         "纯聊天帧仍以恰好一个终态结束: {deltas:?}"
     );
+}
+
+/// 回归：没有工具调用时，兼容网关回的空壳 `tool_calls` 条目不是协议错误。
+#[test]
+fn placeholder_tool_call_entries_are_ignored() {
+    let mut decoder = Decoder::default();
+    let deltas = decode_frames(
+        &mut decoder,
+        &[
+            r#"{"choices":[{"delta":{"content":"x","tool_calls":[{}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"id":"","function":{"name":"","arguments":""}}]},"finish_reason":null}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ],
+    );
+    assert!(
+        !deltas
+            .iter()
+            .any(|delta| matches!(delta, ChatDelta::ToolInputStarted { .. })),
+        "空壳条目不得造出调用: {deltas:?}"
+    );
+    assert!(matches!(deltas.last(), Some(ChatDelta::Finished { .. })));
 }
 
 /// 真正的旧式 `function_call` 调用体（带 name）仍必须报协议错误，不静默忽略。
