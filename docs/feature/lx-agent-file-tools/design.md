@@ -1046,22 +1046,25 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 
 **状态映射（终态只按颜色区分，取消另用空心）**
 
-调色板取 lx 三套 logo 的 256 色槽位（粉 218 / 深粉 168 / 天蓝 117 / 冰蓝 195），
-语义为**热 = 进行中、冷 = 已完成**；全部**不压暗**（dim 的 117 与边框标题、正文几乎同色，
-这正是用户反馈“和正文与边框色调很接近”的根因）。
+调色板**只用 lx logo 的粉色系**（218 品牌粉 / 205 艳粉 / 211 浅粉 / 175 玫瑰灰 /
+168 深粉），语义为**热 = 进行中、冷 = 已完成**；全部**不压暗**（dim 的 117 曾与边框标题、
+正文几乎同色，这正是用户反馈“和正文与边框色调很接近”的根因）。
+
+第一版修完仍在天蓝 117 / 冰蓝 195 上，用户第二次明确要求「使用粉色的，并且不要变回原来的
+蓝色」——因此本组 token 里**不存在任何蓝色槽位**，元素靠明度 + 字重 + 下划线区分。
 
 | 状态 | 字形 | 样式 |
 | --- | --- | --- |
 | `InputStreaming` / `Pending` / `Running`（工具）、思考生成中、流中的最后正文块 | `■` ⇄ `□` 呼吸 | **品牌粉 `Indexed 218` 加粗**（`chat_step_mark_running`） |
-| `Completed`、思考完成、已完成正文块 | `■` 静态 | **品牌天蓝 `Indexed 117` 加粗**（`chat_step_mark_done`，不压暗） |
+| `Completed`、思考完成、已完成正文块 | `■` 静态 | **深粉 `Indexed 168` 加粗**（`chat_step_mark_done`，不压暗） |
 | `Failed` | `■` 静态 | 红（`agent_fail`；该行同时整行红） |
 | `Interrupted` | `■` 静态 | 黄（`agent_warn`） |
 | `Cancelled` | `□` 静态 | 次要信息色（`agent_step_detail`；空心表示未产出结果） |
 
-**工具行的三段品牌色**（`ui/style.rs`）：动词深粉 `Indexed 168` 加粗（`chat_tool_verb`）、
-主参数（路径 / 搜索范围）冰蓝 `Indexed 195` 加下划线（`chat_tool_param`，下划线仍表示
-“每次调用会变的值”）、只读元信息（`read` 的行范围）品牌天蓝 `Indexed 117` 无下划线
-（`chat_tool_range`）。三段互不同色，也不与边框青（Cyan）或正文默认前景撞色。
+**工具行的三段粉色**（`ui/style.rs`）：动词艳粉 `Indexed 205` 加粗（`chat_tool_verb`）、
+主参数（路径 / 搜索范围）浅粉 `Indexed 211` 加下划线（`chat_tool_param`，下划线仍表示
+“每次调用会变的值”）、只读元信息（`read` 的行范围）玫瑰灰 `Indexed 175` 无下划线
+（`chat_tool_range`）。三段明度递减，互不同色，也不与边框青（Cyan）或正文默认前景撞色。
 
 **与既有 `agent_*` token 的关系**：`[UI]` 查看器的 agent 样例继续用
 `agent_icon`（218）/ `agent_verb`（117）/ `agent_param`（220 金黄）/ `agent_range`（245 灰），
@@ -1087,7 +1090,7 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 | `history::tests::only_the_active_last_step_breathes` | 同一流式消息里：已结束的正文块静态实心、最后一块空心呼吸 |
 | `history::tests::transcript_lays_out_step_square_with_two_column_gutter` | 整段观感锁定（用户消息 `> ` / 思考头 / 思考正文 / 正文块 / 工具行的逐行文本） |
 | `history::tests::tool_geometry::completed_thinking_has_no_spinner_even_after_tool_steps` | 思考完成后头部静态；同消息里运行中的工具行仍呼吸（相位翻空心帧时只有工具行变） |
-| `ui::style::tests::chat_step_palette_is_brand_saturated_and_distinct_from_chrome` | 七个 `chat_*` token 都取 logo 调色板槽位、**都不压暗**、都不与正文默认前景/Cyan 撞色；运行中粉 → 完成蓝成对；方块比同色文案更重（字重差）；工具行三段颜色两两不同，参数有下划线而行范围没有 |
+| `ui::style::tests::chat_step_palette_is_pink_saturated_and_distinct_from_chrome` | 七个 `chat_*` token 都取**粉色系**槽位、**都不压暗**、都不与正文默认前景/Cyan 撞色，且显式断言**不含 117/195/245 等蓝色槽位**；运行中 218 → 完成 168 成对；方块比同色文案更重（字重差）；工具行三段粉色两两不同，参数有下划线而行范围没有 |
 
 **未自动验证项（需用户 `cargo run` 人工验收）**
 
@@ -1095,4 +1098,5 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 2. 方块呼吸 400ms 一相的节奏是否合适（过快/过慢可调 `STEP_BREATH_TICKS`）。
 3. 长会话里每步一个静态方块的整体观感（是否过于抢眼——已改用品牌饱和色、不压暗，
    若仍偏亮可只降饱和或改回 dim；这是纯 `ui/style.rs` 的调整）。
-4. 品牌粉/天蓝/冰蓝在用户的 256 色主题映射下的实际观感（部分终端主题会重映射 256 色）。
+4. 粉色五档（218 / 205 / 211 / 175 / 168）在用户的 256 色主题映射下的实际观感
+   （部分终端主题会重映射 256 色；若某档被映射得偏暗/偏亮，只改 `ui/style.rs` 的槽位）。

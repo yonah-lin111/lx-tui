@@ -533,7 +533,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(117), "完成后换品牌天蓝");
+    assert_eq!(header.fg, Color::Indexed(168), "完成后换深粉");
     assert!(
         header.modifier.contains(Modifier::BOLD),
         "完成后仍加粗（不压暗）"
@@ -543,7 +543,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
         "完成后不压暗（压暗会与边框标题混同）"
     );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(117), "完成后文案品牌天蓝");
+    assert_eq!(label.fg, Color::Indexed(168), "完成后文案深粉");
     assert!(!label.modifier.contains(Modifier::DIM), "完成后文案不压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -564,7 +564,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(117), "展开后仍品牌天蓝");
+    assert_eq!(header.fg, Color::Indexed(168), "展开后仍深粉");
     assert!(header.modifier.contains(Modifier::BOLD), "展开后仍加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -596,9 +596,9 @@ fn markdown_body_block_has_step_square_and_indented_continuation() {
         line1.starts_with("  第二行"),
         "续行缩进 2 列与方块对齐：{line1}"
     );
-    // 完成态的方块：品牌天蓝加粗、不压暗。
+    // 完成态的方块：深粉加粗、不压暗。
     let marker = &buf[(0, 0)];
-    assert_eq!(marker.fg, ratatui::style::Color::Indexed(117));
+    assert_eq!(marker.fg, ratatui::style::Color::Indexed(168));
     assert!(marker.modifier.contains(ratatui::style::Modifier::BOLD));
     assert!(!marker.modifier.contains(ratatui::style::Modifier::DIM));
 }
