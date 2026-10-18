@@ -917,3 +917,50 @@ DB 有 `UNIQUE(session_id, call_id)`，`agent_loop::run_agent_turn` 又要求同
 **回归有效性已反向验证**：临时把 ID 形状改回
 `gemini-{candidate}-{part}-{name}` 后，上述 5 项新断言全部失败，其中端到端项复现了
 用户报告的确切错误码 `tool call pending record failed · tool call conflict`；恢复修复后全绿。
+
+### 20.7 已修复（G9：null 占位被误判为废弃工具调用）
+
+**用户实测现象**：发一句普通问题 `你是谁`，整轮直接失败并显示
+
+```text
+ ! Failed
+   └─ tool call protocol error: deprecated function_call delta without tool_calls index
+```
+
+**根因**：`openai::Decoder` 用 `delta.get("function_call").is_some()` 判断“已废弃的
+`delta.function_call`”。但 `serde_json::Value::is_some()` 只表示**键存在**，对
+`Value::Null` 同样为真。OpenAI 兼容端点（DeepSeek、各类网关）习惯在**每一帧**都带
+`"function_call": null` / `"tool_calls": null` 占位键，于是纯文本帧也被判成废弃协议，
+任何对话都无法进行。这是相对 G4 之前行为的一处**回归**：旧解码器完全忽略该字段。
+
+**修复口径**（`src/chat/transport/openai/mod.rs`）：
+
+| wire 值 | 判定 |
+| --- | --- |
+| 键缺失 / `null` | 不是调用，正常继续（本次修复的核心） |
+| `{}` 空对象 | 占位，不是调用 |
+| `{"name":...}` 或 `{"arguments":...}` | 真正的旧式调用体 → `tool call protocol error` |
+| `"tool_calls": []` 空数组 | 无调用（不得触发 `without any tool call`） |
+
+同时加固两处相邻逻辑：
+
+1. `finish_reason=function_call`/`tool_calls` 但没有任何分片时的诊断文案改为回显**真实**
+   结束原因（原实现固定写 `finish_reason=tool_calls`，会误导排查）。
+2. Google 侧 `part.get("functionCall")` 同样只接受**对象**，纯文本 part 带
+   `"functionCall": null` 占位不再被当成“缺 name 的调用”。
+
+Anthropic 与 Responses 经核查无同类缺陷：二者均以 `and_then(Value::as_str)` /
+`as_object()` / `as_array()` 取值，`null` 天然退化为 `None`。
+
+**测试证据**（`cargo test` 全绿，共 2328 项）
+
+| 测试 | 断言 |
+| --- | --- |
+| `openai::tests::null_function_call_placeholders_are_not_protocol_errors` | 四种占位帧（`null`/`null`、`[]`、`{}`）全部正常解码，正文为 `你好`，恰好一个终态 |
+| `openai::tests::deprecated_function_call_with_body_still_fails_after_null_guard` | 真正带 `name`/`arguments` 的旧式调用仍报 `deprecated function_call` |
+| `openai::tests::tool_calls_finish_without_calls_is_protocol_error` | 诊断文案分别回显 `finish_reason=tool_calls` 与 `finish_reason=function_call` |
+| `client::tests::tools::compatible_chat_with_null_function_call_placeholders_completes` | **真实 SSE 端到端**：每帧带 null 占位的纯聊天流经 client 后为 `Complete`，正文 `我是 lx。`，不产生任何工具调用 |
+| `google::tests::null_function_call_placeholder_in_text_part_is_not_an_error` | 文本 part 的 `functionCall: null` 不报错、不造调用 |
+
+**回归有效性反向验证**：把判定临时改回 `delta.get("function_call").is_some()` 后，
+上述端到端测试立即失败（复现用户报告的同一错误码）；恢复修复后全绿。
