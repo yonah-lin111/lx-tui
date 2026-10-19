@@ -312,19 +312,15 @@ fn markdown_line_is_styled() {
     let _ = render(area, &mut buf, &lx, false, None);
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
-    // `#` 为标记（GitHub 的 fg-muted），`Title` 为标题（正文色 + 加粗 + 下划线）。
+    // 输入框走**编辑器**高亮色板（`markdown_*`，独立于阅读渲染的 `md_read_*`）：
+    // `#` 为 dim 标记，`Title` 为 Yellow 加粗标题。
     assert_eq!(
         buf[(content_x, row)].fg,
         crate::ui::style::markdown_marker()
             .fg
             .unwrap_or(Color::Reset)
     );
-    assert_eq!(
-        buf[(content_x + 3, row)].fg,
-        crate::ui::style::markdown_heading()
-            .fg
-            .unwrap_or(Color::Reset)
-    );
+    assert_eq!(buf[(content_x + 3, row)].fg, Color::Yellow);
 }
 
 #[test]

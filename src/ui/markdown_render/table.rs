@@ -187,7 +187,7 @@ fn grid_table(
         format!("{left}{}{right}", segments.join(mid))
     };
     let row_lines = |cells: &[String], fallback: Style| -> Vec<Vec<(String, Style)>> {
-        let rule = style::markdown_rule();
+        let rule = style::md_read_rule();
         // 每列：行内渲染 → 拆 `<br>` → 按列宽换行（保留分段样式与对齐）。
         let wrapped: Vec<Vec<Vec<(String, Style)>>> = widths
             .iter()
@@ -228,7 +228,7 @@ fn grid_table(
     lines.push(MdLine::plain(
         0,
         border("┌", "─", "┬", "┐"),
-        style::markdown_rule(),
+        style::md_read_rule(),
     ));
     for spans in row_lines(header, style::text()) {
         lines.push(MdLine::spans(0, spans));
@@ -239,7 +239,7 @@ fn grid_table(
     lines.push(MdLine::plain(
         0,
         border("├", "─", "┼", "┤"),
-        style::markdown_rule(),
+        style::md_read_rule(),
     ));
     for index in 0..body.len() {
         for spans in row_lines(&body[index], style::text()) {
@@ -252,14 +252,14 @@ fn grid_table(
             lines.push(MdLine::plain(
                 0,
                 border("├", "─", "┼", "┤"),
-                style::markdown_rule(),
+                style::md_read_rule(),
             ));
         }
     }
     lines.push(MdLine::plain(
         0,
         border("└", "─", "┴", "┘"),
-        style::markdown_rule(),
+        style::md_read_rule(),
     ));
 }
 

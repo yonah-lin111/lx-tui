@@ -400,7 +400,7 @@ fn table_cells_collapse_inline_markers() {
         .iter()
         .find(|line| line.text().contains("文本对话"))
         .expect("cell line");
-    let bold = style::markdown_strong();
+    let bold = style::md_read_strong();
     assert!(
         bold_cell
             .spans

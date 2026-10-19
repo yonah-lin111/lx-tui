@@ -1089,7 +1089,7 @@ native agent 的 a 的字体颜色（蓝蓝的）」）→ **⑥ 翡翠绿 42 + 
 `step_roles_use_distinct_colors` 守住。`Failed` / `Interrupted` / `Cancelled` 是**跨类别**
 的语义状态，一律覆盖类别色（红 / 黄 / 次要灰），保证「出问题了」比「是哪类步骤」更先被看到。
 
-**与 markdown 高亮的色域不相交**：正文侧（`markdown_*` / `code_*`）本轮换成 **GitHub Dark
+**与 markdown 高亮的色域不相交**：正文侧（`md_read_*` / `code_*`，仅阅读渲染）本轮换成 **GitHub Dark
 官方色板**的固定 RGB（语法 token `#ff7b72`/`#a5d6ff`/`#79c0ff`/`#d2a8ff`/`#8b949e`，
 链接 `#4493f8`，次要 `#7d8590`；标题/粗体/斜体/引用一律正文色 + 修饰符）。于是聊天历史里
 两类着色信息在色域上分开：**步骤侧是单一 256 色浅蓝 + 金黄的结构色，正文侧是 RGB 语义

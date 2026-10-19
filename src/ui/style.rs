@@ -238,7 +238,11 @@ pub fn directory() -> Style {
     accent()
 }
 
-// ===== markdown 阅读高亮：GitHub Dark 官方色板（truecolor，不做主题映射）=====
+// ===== 阅读渲染高亮（`ui::markdown_render` 专用）：GitHub Dark 官方色板 =====
+//
+// 只服务 lx 历史正文与 `[UI]` gallery 的 markdown **阅读渲染**。输入框的
+// markdown **编辑高亮**是另一套独立色板（见下方 `markdown_*`），两者不得复用：
+// 阅读侧要的是 GitHub 观感，编辑侧要的是打字时的语义分色。
 //
 // 用户要求「markdown 的格式高亮使用 GitHub 黑暗模式的」。此前两版都偏离目标：
 // ① 沿袭 ANSI 语义色（黄标题 / 亮红行内代码 / 亮品红引用 / 亮蓝链接 / 五色代码）
@@ -280,18 +284,13 @@ mod github_dark {
 }
 
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：GitHub 的次要前景色。
-pub fn markdown_marker() -> Style {
+pub fn md_read_marker() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
-}
-
-/// markdown 标题文字：正文色 + 加粗（GitHub 的标题几乎不上色，靠字重与下边框分层）。
-pub fn markdown_heading() -> Style {
-    Style::default().add_modifier(Modifier::BOLD)
 }
 
 /// markdown 六级标题的样式：h1 加粗+下划线（对齐 GitHub 的 `border-bottom`）、h2 加粗+
 /// 下划线、h3 加粗、h4–h6 斜体；全程只用修饰符，不换色（与 GitHub Dark 一致）。
-pub fn markdown_heading_level(level: u8) -> Style {
+pub fn md_read_heading_level(level: u8) -> Style {
     match level {
         1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         2 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -301,32 +300,32 @@ pub fn markdown_heading_level(level: u8) -> Style {
 }
 
 /// markdown 粗斜体（`***…***`）：正文色加粗+斜体（不再额外上色）。
-pub fn markdown_strong_emphasis() -> Style {
+pub fn md_read_strong_emphasis() -> Style {
     Style::default().add_modifier(Modifier::BOLD | Modifier::ITALIC)
 }
 
 /// markdown 粗体文字：正文色加粗。
-pub fn markdown_strong() -> Style {
+pub fn md_read_strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
 /// markdown 斜体文字：正文色斜体。
-pub fn markdown_emphasis() -> Style {
+pub fn md_read_emphasis() -> Style {
     Style::default().add_modifier(Modifier::ITALIC)
 }
 
 /// markdown 删除线文字：GitHub 的 `markup.strikethrough` 只加删除线、不换色。
-pub fn markdown_strikethrough() -> Style {
+pub fn md_read_strikethrough() -> Style {
     Style::default().add_modifier(Modifier::CROSSED_OUT)
 }
 
 /// markdown 行内代码内容：GitHub 的 `markup.inline.raw` 用常量蓝 `#79c0ff`。
-pub fn markdown_inline_code() -> Style {
+pub fn md_read_inline_code() -> Style {
     Style::default().fg(github_dark::CONSTANT)
 }
 
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
-pub fn markdown_code_block() -> Style {
+pub fn md_read_code_block() -> Style {
     text()
 }
 
@@ -357,58 +356,129 @@ pub fn code_comment() -> Style {
 }
 
 /// markdown 引用内容：GitHub 的引用只改前景 + 左侧竖条，不斜体、不换色。
-pub fn markdown_quote() -> Style {
+pub fn md_read_quote() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
 /// markdown 链接文字：GitHub 的链接蓝 `#4493f8` + 下划线。
-pub fn markdown_link_text() -> Style {
+pub fn md_read_link_text() -> Style {
     Style::default()
         .fg(github_dark::LINK)
         .add_modifier(Modifier::UNDERLINED)
 }
 
 /// markdown URL：GitHub 把裸 URL 与链接地址都渲染成链接蓝。
-pub fn markdown_url() -> Style {
+pub fn md_read_url() -> Style {
     Style::default().fg(github_dark::LINK)
 }
 
 /// markdown 无序列表项目符号：GitHub 的列表符号与正文同色（不弱化）。
-pub fn markdown_bullet() -> Style {
+pub fn md_read_bullet() -> Style {
     Style::default()
 }
 
 /// markdown 有序列表序号：同无序项目符号，与正文同色。
-pub fn markdown_ordered() -> Style {
+pub fn md_read_ordered() -> Style {
     Style::default()
 }
 
 /// markdown 任务列表已完成项：GitHub 的 `markup.ignored`/复选框语义——只加删除线。
-pub fn markdown_task_done() -> Style {
+pub fn md_read_task_done() -> Style {
     Style::default()
         .fg(github_dark::FG_MUTED)
         .add_modifier(Modifier::CROSSED_OUT)
 }
 
 /// markdown 任务列表未完成项：次要前景色。
-pub fn markdown_task_open() -> Style {
+pub fn md_read_task_open() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
 /// markdown 水平线 / 表格边框：GitHub 的边框色（`#30363d`）在终端里太暗，
 /// 用 `--color-fg-muted` 档兼顾可见度。
-pub fn markdown_rule() -> Style {
+pub fn md_read_rule() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
 /// markdown 代码块语言标记：GitHub 的次要前景色。
-pub fn markdown_code_lang() -> Style {
+pub fn md_read_code_lang() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
 /// markdown 图片说明（alt / url）：GitHub 的次要前景色。
-pub fn markdown_image() -> Style {
+pub fn md_read_image() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
+}
+
+// ===== 编辑器 markdown 高亮（prompt 编辑器与 lx 输入框共用）：ANSI 语义色 =====
+//
+// **与上方 `md_read_*` 阅读色板完全独立**：这里是打字时的语法高亮，需要一眼分得清
+// 标题 / 强调 / 行内代码 / 引用 / 链接，因此保留 ANSI 语义槽位（Yellow / LightRed /
+// LightMagenta / LightBlue / Cyan）。改动阅读侧的 GitHub Dark 不会、也不应影响这里。
+//
+// 消费方：`ui::prompt::token_style`（prompt 编辑器 + lx 多行输入框）。
+// `ui::markdown_render` 绝不使用本组函数。
+
+/// markdown 语法标记（`#`、`**`、`` ` `` 等）：次要信息（dim）。
+pub fn markdown_marker() -> Style {
+    muted()
+}
+
+/// markdown 标题文字。
+pub fn markdown_heading() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// markdown 粗体文字：Yellow 加粗。
+pub fn markdown_strong() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// markdown 斜体文字：Yellow 斜体。
+pub fn markdown_emphasis() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::ITALIC)
+}
+
+/// markdown 删除线文字：亮红 + 删除线。
+pub fn markdown_strikethrough() -> Style {
+    Style::default()
+        .fg(Color::LightRed)
+        .add_modifier(Modifier::CROSSED_OUT)
+}
+
+/// markdown 行内代码内容：亮红。
+pub fn markdown_inline_code() -> Style {
+    Style::default().fg(Color::LightRed)
+}
+
+/// markdown 围栏代码块内容：不引入语法着色，保持正文色。
+pub fn markdown_code_block() -> Style {
+    text()
+}
+
+/// markdown 引用内容：亮品红斜体。
+pub fn markdown_quote() -> Style {
+    Style::default()
+        .fg(Color::LightMagenta)
+        .add_modifier(Modifier::ITALIC)
+}
+
+/// markdown 链接文字：亮蓝下划线。
+pub fn markdown_link_text() -> Style {
+    Style::default()
+        .fg(Color::LightBlue)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// markdown URL：青色。
+pub fn markdown_url() -> Style {
+    Style::default().fg(Color::Cyan)
 }
 
 /// 模板块结构标记（`&&&`、`--start`/`--end`、状态与元数据）：次要信息。
@@ -436,31 +506,35 @@ pub fn template_title() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@文件` 提及 / `@[refer-*]` 引用：GitHub 的链接蓝 + 下划线。
-///
-/// 提及与引用**统一一档色**（不再按 file 绿 / folder 橙 / image 品红分色）：
-/// 种类在语法里自带（目录带尾 `/`、`refer-image` 前缀不同），靠颜色重复编码只会让
-/// 输入框显得花。下划线保留“这是一处引用而非正文”的信号，颜色与 markdown 链接一致
-/// （都是“可跳转的引用”，GitHub 里同样是 `--color-accent-fg`）。
+/// `@文件` 提及：Yellow 下划线（编辑器高亮，与阅读渲染的 `md_read_*` 无关）。
 pub fn markdown_file_mention() -> Style {
     Style::default()
-        .fg(github_dark::LINK)
+        .fg(Color::Yellow)
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@[refer-file](path)` 文件引用：与 `@` 提及同款。
+/// `@[refer-file](path)` 文件引用：LightGreen 下划线（与 @ 提及的 Yellow 区分）。
 pub fn markdown_refer_file() -> Style {
-    markdown_file_mention()
+    Style::default()
+        .fg(Color::LightGreen)
+        .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@[refer-folder](path)` 目录引用：与 `@` 提及同款（目录带尾 `/`，无需另上色）。
+/// `@[refer-folder](path)` 目录引用：橙（Indexed 208）下划线。
+///
+/// 固定 256 色橙：与 file 亮绿、image 亮品红、`@` 提及黄都能一眼分开，
+/// 且不占用主题蓝/青（边框、URL、link 已用）。
 pub fn markdown_refer_folder() -> Style {
-    markdown_file_mention()
+    Style::default()
+        .fg(Color::Indexed(208))
+        .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@[refer-image](path)` 图片引用：与 `@` 提及同款。
+/// `@[refer-image](path)` 图片引用：LightMagenta 下划线。
 pub fn markdown_refer_image() -> Style {
-    markdown_file_mention()
+    Style::default()
+        .fg(Color::LightMagenta)
+        .add_modifier(Modifier::UNDERLINED)
 }
 
 /// `@ref/末两段` 短引用：柔紫（Indexed 141）加粗、无下划线。

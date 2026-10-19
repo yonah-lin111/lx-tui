@@ -140,7 +140,7 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             lines.push(MdLine::plain(
                 0,
                 RULE.repeat(rule_width),
-                style::markdown_rule(),
+                style::md_read_rule(),
             ));
             index += 1;
             continue;
@@ -159,7 +159,7 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
                 vec![
                     (alt.to_string(), style::text()),
                     (" ".to_string(), style::text()),
-                    (format!("({url})"), style::markdown_image()),
+                    (format!("({url})"), style::md_read_image()),
                 ],
             ));
             index += 1;
@@ -192,7 +192,7 @@ fn heading(line: &str) -> Option<(u8, &str)> {
 
 /// 渲染一行标题：隐藏 `#` 标记，正文用分级样式。
 fn heading_line(level: u8, body: &str) -> MdLine {
-    MdLine::plain(0, body, style::markdown_heading_level(level))
+    MdLine::plain(0, body, style::md_read_heading_level(level))
 }
 
 /// 水平线：仅由同一种 `-`/`*`/`_` 组成且至少 3 个。
@@ -281,13 +281,13 @@ fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<MdLine>) {
         lines.push(MdLine::spans(
             0,
             vec![
-                (format!("{BAR_MARKER} "), style::markdown_rule()),
-                (lang.to_string(), style::markdown_code_lang()),
+                (format!("{BAR_MARKER} "), style::md_read_rule()),
+                (lang.to_string(), style::md_read_code_lang()),
             ],
         ));
     }
     for line in body {
-        let mut spans = vec![(format!("{BAR_MARKER} "), style::markdown_rule())];
+        let mut spans = vec![(format!("{BAR_MARKER} "), style::md_read_rule())];
         spans.extend(highlight::highlight_line(lang, line));
         lines.push(MdLine::spans(0, spans));
     }
@@ -307,8 +307,8 @@ fn blockquote(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
             0,
             marker_width(&marker),
             vec![
-                (marker, style::markdown_marker()),
-                (body.to_string(), style::markdown_quote()),
+                (marker, style::md_read_marker()),
+                (body.to_string(), style::md_read_quote()),
             ],
         ));
         index += 1;
@@ -355,7 +355,7 @@ impl ListItem<'_> {
                 MdLine::hanging(
                     indent(depth),
                     marker_width(marker),
-                    marker_spans(marker, style::markdown_bullet(), body),
+                    marker_spans(marker, style::md_read_bullet(), body),
                 )
             }
             Self::Ordered {
@@ -365,16 +365,16 @@ impl ListItem<'_> {
                 MdLine::hanging(
                     indent(depth),
                     marker_width(&marker),
-                    marker_spans(&marker, style::markdown_ordered(), body),
+                    marker_spans(&marker, style::md_read_ordered(), body),
                 )
             }
             Self::Task {
                 done, text: body, ..
             } => {
                 let (marker, body_style) = if done {
-                    ("[x] ", style::markdown_task_done())
+                    ("[x] ", style::md_read_task_done())
                 } else {
-                    ("[ ] ", style::markdown_task_open())
+                    ("[ ] ", style::md_read_task_open())
                 };
                 let mut spans = vec![(marker.to_string(), body_style)];
                 spans.extend(
@@ -473,35 +473,35 @@ fn inline_spans(text: &str) -> Vec<(String, Style)> {
         // 行内代码：`code`（内部不再解析）。
         if let Some(inner) = delimited(rest, "`", "`") {
             flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::markdown_inline_code()));
+            spans.push((inner.to_string(), style::md_read_inline_code()));
             index += inner.len() + 2;
             continue;
         }
         // 粗斜体 `***…***`。
         if let Some(inner) = delimited(rest, "***", "***") {
             flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::markdown_strong_emphasis()));
+            spans.push((inner.to_string(), style::md_read_strong_emphasis()));
             index += inner.len() + 6;
             continue;
         }
         // 粗体 `**…**` / `__…__`。
         if let Some(inner) = delimited(rest, "**", "**").or_else(|| delimited(rest, "__", "__")) {
             flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::markdown_strong()));
+            spans.push((inner.to_string(), style::md_read_strong()));
             index += inner.len() + 4;
             continue;
         }
         // 删除线 `~~…~~`。
         if let Some(inner) = delimited(rest, "~~", "~~") {
             flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::markdown_strikethrough()));
+            spans.push((inner.to_string(), style::md_read_strikethrough()));
             index += inner.len() + 4;
             continue;
         }
         // 斜体 `*…*` / `_…_`（排除双写）。
         if let Some(inner) = emphasis(rest) {
             flush(&mut plain, &mut spans);
-            spans.push((inner.to_string(), style::markdown_emphasis()));
+            spans.push((inner.to_string(), style::md_read_emphasis()));
             index += inner.len() + 2;
             continue;
         }
@@ -510,8 +510,8 @@ fn inline_spans(text: &str) -> Vec<(String, Style)> {
             && let Some((label, url, consumed)) = link(rest)
         {
             flush(&mut plain, &mut spans);
-            spans.push((label.to_string(), style::markdown_link_text()));
-            spans.push((format!(" ({url})"), style::markdown_url()));
+            spans.push((label.to_string(), style::md_read_link_text()));
+            spans.push((format!(" ({url})"), style::md_read_url()));
             index += consumed;
             continue;
         }
@@ -522,7 +522,7 @@ fn inline_spans(text: &str) -> Vec<(String, Style)> {
             let url = &rest[1..close];
             if url.starts_with("http://") || url.starts_with("https://") {
                 flush(&mut plain, &mut spans);
-                spans.push((url.to_string(), style::markdown_url()));
+                spans.push((url.to_string(), style::md_read_url()));
                 index += close + 1;
                 continue;
             }
@@ -531,7 +531,7 @@ fn inline_spans(text: &str) -> Vec<(String, Style)> {
         if rest.starts_with("http://") || rest.starts_with("https://") {
             let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
             flush(&mut plain, &mut spans);
-            spans.push((rest[..end].to_string(), style::markdown_url()));
+            spans.push((rest[..end].to_string(), style::md_read_url()));
             index += end;
             continue;
         }

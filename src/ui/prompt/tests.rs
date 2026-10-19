@@ -27,60 +27,39 @@ fn paints_markdown_styles() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
 
-    // 断言取 `style::*` token 而非硬编码色值：色板调整后这里自动跟随，
-    // 但仍逐一验证「谁拿到哪一档语义样式」不串。
+    // 编辑器高亮是**独立于阅读渲染**的 ANSI 语义色板（与 `md_read_*` 无关）：
+    // 这里用真实色值钉死，防止有人再把两侧合并。
     assert_eq!(buf[(0, 0)].symbol(), "#");
     assert_eq!(
         buf[(0, 0)].fg,
         style::markdown_marker().fg.unwrap_or(Color::Reset),
-        "标记用 GitHub 的 fg-muted"
+        "标记走 markdown_marker（dim）"
     );
     assert_eq!(buf[(3, 0)].symbol(), "t");
-    assert_eq!(
-        buf[(3, 0)].fg,
-        style::markdown_heading().fg.unwrap_or(Color::Reset)
-    );
+    assert_eq!(buf[(3, 0)].fg, Color::Yellow, "标题着色（Yellow）");
     assert!(buf[(3, 0)].modifier.contains(Modifier::BOLD));
 
     assert_eq!(buf[(0, 1)].symbol(), "*");
     assert_eq!(buf[(2, 1)].symbol(), "b");
-    assert_eq!(
-        buf[(2, 1)].fg,
-        style::markdown_strong().fg.unwrap_or(Color::Reset),
-        "粗体不上色"
-    );
+    assert_eq!(buf[(2, 1)].fg, Color::Yellow, "粗体 Yellow");
     assert!(buf[(2, 1)].modifier.contains(Modifier::BOLD));
 
     assert_eq!(buf[(1, 2)].symbol(), "c");
-    assert_eq!(
-        buf[(1, 2)].fg,
-        style::markdown_inline_code().fg.unwrap_or(Color::Reset)
-    );
+    assert_eq!(buf[(1, 2)].fg, Color::LightRed, "行内代码亮红");
 
     assert_eq!(buf[(2, 3)].symbol(), "q");
-    // GitHub Dark 的引用只改前景（fg-muted），不加斜体、不换色相。
-    assert_eq!(
-        buf[(2, 3)].fg,
-        style::markdown_quote().fg.unwrap_or(Color::Reset)
-    );
-    assert!(!buf[(2, 3)].modifier.contains(Modifier::ITALIC));
+    assert_eq!(buf[(2, 3)].fg, Color::LightMagenta, "引用亮品红");
+    assert!(buf[(2, 3)].modifier.contains(Modifier::ITALIC), "引用斜体");
 
     assert_eq!(buf[(2, 4)].symbol(), "i");
     assert_eq!(buf[(2, 4)].fg, Color::Reset);
     assert!(!buf[(2, 4)].modifier.contains(Modifier::DIM));
 
     assert_eq!(buf[(1, 5)].symbol(), "a");
-    assert_eq!(
-        buf[(1, 5)].fg,
-        style::markdown_link_text().fg.unwrap_or(Color::Reset),
-        "链接文字不上色"
-    );
+    assert_eq!(buf[(1, 5)].fg, Color::LightBlue, "链接文字亮蓝");
     assert!(buf[(1, 5)].modifier.contains(Modifier::UNDERLINED));
     assert_eq!(buf[(4, 5)].symbol(), "u");
-    assert_eq!(
-        buf[(4, 5)].fg,
-        style::markdown_url().fg.unwrap_or(Color::Reset)
-    );
+    assert_eq!(buf[(4, 5)].fg, Color::Cyan, "URL 青色");
 }
 
 #[test]
@@ -92,7 +71,7 @@ fn fence_lines_are_markers_and_content_stays_default() {
     assert_eq!(
         buf[(0, 0)].fg,
         style::markdown_marker().fg.unwrap_or(Color::Reset),
-        "围栏标记为 GitHub 的 fg-muted"
+        "围栏标记走编辑器 markdown_marker（dim）"
     );
     assert_eq!(buf[(0, 1)].symbol(), "x");
     assert_eq!(buf[(0, 1)].fg, Color::Reset, "代码正文仍用终端默认前景");

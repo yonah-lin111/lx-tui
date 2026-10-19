@@ -104,7 +104,7 @@ pub(crate) fn highlight_line(lang: Option<&str>, line: &str) -> Vec<(String, Sty
 /// 把累积的普通文本刷入 spans（代码正文色）。
 fn flush(plain: &mut String, spans: &mut Vec<(String, Style)>) {
     if !plain.is_empty() {
-        spans.push((std::mem::take(plain), style::markdown_code_block()));
+        spans.push((std::mem::take(plain), style::md_read_code_block()));
     }
 }
 

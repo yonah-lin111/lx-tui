@@ -196,69 +196,129 @@ fn markdown_palette_is_github_dark_truecolor() {
     assert_eq!(code_type().fg, entity, "类型名 = #d2a8ff");
     assert_eq!(code_comment().fg, comment, "注释 = #8b949e");
     assert_eq!(
-        markdown_inline_code().fg,
+        md_read_inline_code().fg,
         constant,
         "行内代码 = markup.inline.raw = #79c0ff"
     );
 
     // 文档结构：链接用 accent 蓝；引用/标记/URL/表格用 fg-muted。
-    assert_eq!(markdown_link_text().fg, link, "链接 = #4493f8");
+    assert_eq!(md_read_link_text().fg, link, "链接 = #4493f8");
     assert!(
-        markdown_link_text()
+        md_read_link_text()
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
-    assert_eq!(markdown_url().fg, link, "裸 URL 同链接色");
-    assert_eq!(markdown_quote().fg, muted, "引用 = fg-muted");
-    assert_eq!(markdown_marker().fg, muted, "语法标记 = fg-muted");
-    assert_eq!(markdown_rule().fg, muted, "水平线/表格边框 = fg-muted");
-    assert_eq!(markdown_code_lang().fg, muted, "语言标记 = fg-muted");
-    assert_eq!(markdown_image().fg, muted, "图片说明 = fg-muted");
-    assert_eq!(markdown_task_done().fg, muted);
-    assert_eq!(markdown_task_open().fg, muted);
-
-    // 提及/引用与链接同源（GitHub 里都是可跳转引用）。
-    for style in [
-        markdown_file_mention(),
-        markdown_refer_file(),
-        markdown_refer_folder(),
-        markdown_refer_image(),
-    ] {
-        assert_eq!(style.fg, link, "提及/引用用链接蓝");
-        assert!(style.add_modifier.contains(Modifier::UNDERLINED));
-    }
+    assert_eq!(md_read_url().fg, link, "裸 URL 同链接色");
+    assert_eq!(md_read_quote().fg, muted, "引用 = fg-muted");
+    assert_eq!(md_read_marker().fg, muted, "语法标记 = fg-muted");
+    assert_eq!(md_read_rule().fg, muted, "水平线/表格边框 = fg-muted");
+    assert_eq!(md_read_code_lang().fg, muted, "语言标记 = fg-muted");
+    assert_eq!(md_read_image().fg, muted, "图片说明 = fg-muted");
+    assert_eq!(md_read_task_done().fg, muted);
+    assert_eq!(md_read_task_open().fg, muted);
 
     // GitHub Dark 的结构性强调**不上色**，只用修饰符。
     for style in [
-        markdown_heading(),
-        markdown_strong(),
-        markdown_strong_emphasis(),
-        markdown_emphasis(),
-        markdown_bullet(),
-        markdown_ordered(),
-        markdown_code_block(),
+        md_read_strong(),
+        md_read_strong_emphasis(),
+        md_read_emphasis(),
+        md_read_bullet(),
+        md_read_ordered(),
+        md_read_code_block(),
     ] {
         assert_eq!(style.fg, None, "GitHub 的结构强调不换色");
     }
-    assert!(markdown_heading().add_modifier.contains(Modifier::BOLD));
-    assert!(markdown_emphasis().add_modifier.contains(Modifier::ITALIC));
+    assert!(md_read_strong().add_modifier.contains(Modifier::BOLD));
+    assert!(md_read_emphasis().add_modifier.contains(Modifier::ITALIC));
     assert!(
-        markdown_strikethrough()
+        md_read_strikethrough()
             .add_modifier
             .contains(Modifier::CROSSED_OUT)
     );
 
     // 层级靠下划线：GitHub 的 h1/h2 带 border-bottom。
     assert!(
-        markdown_heading_level(1)
+        md_read_heading_level(1)
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
     assert!(
-        markdown_heading_level(2)
+        md_read_heading_level(2)
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
+}
+
+/// 编辑器高亮（prompt 编辑器 / lx 输入框）是**独立于阅读渲染**的 ANSI 语义色板。
+///
+/// 用户要求两者不得混用：阅读侧（`md_read_*` / `code_*`）是 GitHub Dark 固定 RGB，
+/// 编辑侧（`markdown_*`）是打字时的语义分色。这里的断言把编辑侧钉死在 ANSI 槽位，
+/// 并显式检查它与阅读侧不同——谁把两边再合并一次都会立刻失败。
+#[test]
+fn editor_palette_stays_ansi_and_independent_from_reading() {
+    // 编辑侧：标题/粗体/斜体 Yellow、行内代码与删除线 LightRed、引用 LightMagenta 斜体、
+    // 链接 LightBlue 下划线、URL Cyan、标记 dim、提及黄/引用三色。
+    assert_eq!(markdown_heading().fg, Some(Color::Yellow));
+    assert!(markdown_heading().add_modifier.contains(Modifier::BOLD));
+    assert_eq!(markdown_strong().fg, Some(Color::Yellow));
+    assert_eq!(markdown_emphasis().fg, Some(Color::Yellow));
+    assert!(markdown_emphasis().add_modifier.contains(Modifier::ITALIC));
+    assert_eq!(markdown_inline_code().fg, Some(Color::LightRed));
+    assert_eq!(markdown_strikethrough().fg, Some(Color::LightRed));
+    assert_eq!(markdown_quote().fg, Some(Color::LightMagenta));
+    assert!(markdown_quote().add_modifier.contains(Modifier::ITALIC));
+    assert_eq!(markdown_link_text().fg, Some(Color::LightBlue));
+    assert_eq!(markdown_url().fg, Some(Color::Cyan));
+    assert_eq!(markdown_marker().fg, muted().fg);
+    assert!(markdown_marker().add_modifier.contains(Modifier::DIM));
+
+    // 提及与三类 refer 各自一色（与 prompt 设计文档一致）。
+    assert_eq!(markdown_file_mention().fg, Some(Color::Yellow));
+    assert_eq!(markdown_refer_file().fg, Some(Color::LightGreen));
+    assert_eq!(markdown_refer_folder().fg, Some(Color::Indexed(208)));
+    assert_eq!(markdown_refer_image().fg, Some(Color::LightMagenta));
+    assert_eq!(markdown_short_ref().fg, Some(Color::Indexed(141)));
+
+    // 两边独立：编辑侧不得出现 GitHub Dark 的任意 truecolor；阅读侧不得回到 ANSI 槽位。
+    let editor = [
+        markdown_heading(),
+        markdown_strong(),
+        markdown_emphasis(),
+        markdown_inline_code(),
+        markdown_strikethrough(),
+        markdown_quote(),
+        markdown_link_text(),
+        markdown_url(),
+        markdown_file_mention(),
+        markdown_refer_file(),
+        markdown_refer_folder(),
+        markdown_refer_image(),
+        markdown_short_ref(),
+        markdown_marker(),
+    ];
+    for style in editor {
+        assert!(
+            !matches!(style.fg, Some(Color::Rgb(..))),
+            "编辑器高亮不得使用阅读侧的 GitHub truecolor：{:?}",
+            style.fg
+        );
+    }
+    let reading = [
+        md_read_marker(),
+        md_read_strong(),
+        md_read_emphasis(),
+        md_read_inline_code(),
+        md_read_quote(),
+        md_read_link_text(),
+        md_read_url(),
+    ];
+    for style in reading {
+        assert!(
+            matches!(style.fg, None | Some(Color::Rgb(..))),
+            "阅读渲染不得回到 ANSI 槽位：{:?}",
+            style.fg
+        );
+    }
 }
 
 /// 步骤侧结构色与 markdown 的 GitHub token **色域不相交**：方块/动词的翡翠绿
@@ -285,15 +345,15 @@ fn markdown_palette_is_disjoint_from_chat_steps() {
     );
 
     let markdown_tokens = [
-        ("行内代码", markdown_inline_code()),
+        ("行内代码", md_read_inline_code()),
         ("关键字", code_keyword()),
         ("字符串", code_string()),
         ("数字", code_number()),
         ("类型名", code_type()),
         ("注释", code_comment()),
-        ("链接文字", markdown_link_text()),
-        ("URL", markdown_url()),
-        ("引用", markdown_quote()),
+        ("链接文字", md_read_link_text()),
+        ("URL", md_read_url()),
+        ("引用", md_read_quote()),
         ("提及", markdown_file_mention()),
     ];
     for (label, style) in markdown_tokens {
