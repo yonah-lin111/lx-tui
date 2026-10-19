@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, watch};
 
 use super::events::{ChatDelta, ChatRequest, MAX_FRAME_BYTES, MAX_TOTAL_TEXT_BYTES, StopReason};
 use super::sse::{SseFrame, SseParser};
+use super::transport::tools::{TOOLS_UNSUPPORTED_CODE, is_tools_unsupported_status};
 use super::transport::{self, TransportRequest};
 
 /// 一次流式请求的最终结果（恰好一个终态）。
@@ -38,8 +39,10 @@ const RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 /// 事件层按 request key 过滤过期结果；本函数不触碰应用状态。
 /// 每个新产出的增量批经 `on_delta` 即时回调（打字机效果：内容随网络分块实时到达），
 /// 同时仍完整累计在返回值里供终态/usage 使用。
-/// 仅在**尚未产出任何内容**且错误可重试（429/5xx/网络）时重试（最多 10 次，指数退避
-/// 2s→10s，对齐 opencode），绝不重复半截流。
+/// 仅在**尚未产出任何内容、也没有任何工具输入事件**时重试（最多 10 次，指数退避
+/// 2s→10s，对齐 opencode）。一旦本响应出现过 `ToolInputStarted/Delta/Ended`，
+/// 说明模型已经规划了文件操作，重试可能造成重复副作用：该响应绝不重试。
+/// 半截流同样不重试，避免重复内容。
 pub async fn run_stream(
     transport_kind: &str,
     base_url: &str,
@@ -73,10 +76,9 @@ pub async fn run_stream(
             &mut on_delta,
         )
         .await;
-        // 只在尚未产出内容时重试；已有 partial 说明请求已被接受，重试会导致重复内容。
-        let retryable = deltas.is_empty()
-            && matches!(&reason, StopReason::Failed { code } if is_transient(code))
-            && attempt < MAX_RETRIES;
+        // 只在“本响应零增量、零工具输入”时重试：已有 partial 说明请求已被接受，
+        // 重试会导致重复内容；已出现工具输入说明可能有文件副作用，绝不重试。
+        let retryable = can_retry(&deltas, &reason) && attempt < MAX_RETRIES;
         if !retryable {
             break reason;
         }
@@ -102,6 +104,33 @@ pub async fn run_stream(
     StreamOutcome { deltas, stop }
 }
 
+/// 本响应是否仍可安全重试：零增量、零工具输入，且错误属于临时故障。
+///
+/// `deltas` 是本次调用**累计**的增量（跨尝试累积），因此任一工具输入事件都会
+/// 永久关闭重试；`ResponseFinished` 也视为已产出内容（模型已给出结论）。
+fn can_retry(deltas: &[ChatDelta], reason: &StopReason) -> bool {
+    if deltas.iter().any(has_tool_input) {
+        return false;
+    }
+    let produced_content = deltas
+        .iter()
+        .any(|delta| !matches!(delta, ChatDelta::Finished { .. }));
+    if produced_content {
+        return false;
+    }
+    matches!(reason, StopReason::Failed { code } if is_transient(code))
+}
+
+/// 是否为工具输入类增量（Started/Delta/Ended）。
+fn has_tool_input(delta: &ChatDelta) -> bool {
+    matches!(
+        delta,
+        ChatDelta::ToolInputStarted { .. }
+            | ChatDelta::ToolInputDelta { .. }
+            | ChatDelta::ToolInputEnded { .. }
+    )
+}
+
 /// 错误码是否属于可安全重试的临时故障（连接失败/超时/限流/5xx）。
 fn is_transient(code: &str) -> bool {
     if code == "timeout" || code == "connection failed" {
@@ -117,6 +146,29 @@ fn is_transient(code: &str) -> bool {
         return status == 429 || (500..=599).contains(&status);
     }
     false
+}
+
+/// 把 HTTP 失败归类成稳定错误码。
+///
+/// 本轮请求带了 `tools` 且状态码属于能力类 4xx/501 时，错误码前缀明确为
+/// [`TOOLS_UNSUPPORTED_CODE`]（“该接口不支持工具调用”），**不**静默移除 tools 重试；
+/// 认证/限流/超时仍按 `http <status>` 原样上报，保留既有重试与诊断语义。
+fn http_error_code(status: u16, detail: Option<&str>, tools_requested: bool) -> String {
+    let base = if tools_requested && is_tools_unsupported_status(status) {
+        format!("{TOOLS_UNSUPPORTED_CODE} · http {status}")
+    } else {
+        format!("http {status}")
+    };
+    match detail {
+        Some(detail) => format!("{base} · {detail}"),
+        None => base,
+    }
+}
+
+/// 测试用：暴露 HTTP 错误归类函数（保持 `http_error_code` 私有 + 可断言）。
+#[cfg(test)]
+pub(crate) fn http_error_code_for_tests(status: u16, detail: Option<&str>, tools: bool) -> String {
+    http_error_code(status, detail, tools)
 }
 
 /// 把 HTTP 错误体裁剪成一行、单行、限长的可读说明（脱敏后进入 UI/DB）。
@@ -186,16 +238,15 @@ async fn stream_once(
             .map(|body| sanitize_error_detail(&body))
             .filter(|detail| !detail.is_empty());
         return StopReason::Failed {
-            code: match detail {
-                Some(detail) => format!("http {} · {detail}", status.as_u16()),
-                None => format!("http {}", status.as_u16()),
-            },
+            code: http_error_code(status.as_u16(), detail.as_deref(), built.tools_requested),
         };
     }
     // 逐 chunk 喂入 SSE 解析器。
     let mut stream = response.bytes_stream();
     let mut parser = SseParser::new();
-    let mut decoder = transport::decoder_for(transport_kind);
+    // 解码器实例按“一次模型响应”创建：序号从进程内计数器取，
+    // Google 用它合成跨响应唯一的 call ID（同轮第 2 次采样不得复用第 1 次）。
+    let mut decoder = transport::decoder_for(transport_kind, transport::next_response_seq());
     let mut total_text = 0_usize;
     use tokio_stream::StreamExt;
     loop {
@@ -263,6 +314,12 @@ async fn stream_once(
         on_delta(&residual);
         deltas.extend(residual);
     }
+    // EOF 时工具参数仍未闭合：半截 JSON 不得执行，按协议错误结束（不补造 Ended）。
+    if decoder.has_open_tool_input() {
+        return StopReason::Failed {
+            code: super::transport::tools::TOOL_INPUT_TRUNCATED_CODE.to_string(),
+        };
+    }
     // 已有协议终态（finish_reason / message_stop / response.completed 等）则沿用；
     // 缺完成信号按设计视为中断/协议错误，不擅自标记完成。
     if let Some(reason) = deltas.iter().rev().find_map(|delta| match delta {
@@ -297,19 +354,15 @@ fn decode_frame(
     let produced = decoder.decode_frame(&frame.data)?;
     let mut fresh: Vec<ChatDelta> = Vec::new();
     for delta in produced {
-        let stream_it = match &delta {
-            ChatDelta::Part(part) => {
-                *total_text += part.text.len();
-                if *total_text > MAX_TOTAL_TEXT_BYTES {
-                    return Err("response exceeds size limit".into());
-                }
-                true
+        if let ChatDelta::Part(part) = &delta {
+            *total_text += part.text.len();
+            if *total_text > MAX_TOTAL_TEXT_BYTES {
+                return Err("response exceeds size limit".into());
             }
-            ChatDelta::Usage(_) => true,
-            // 终态由 `Finished` 事件单独回投，不进增量批（避免重复/顺序歧义）。
-            ChatDelta::Finished { .. } => false,
-        };
-        if stream_it {
+        }
+        // 整轮终态由 `Finished` 事件单独回投，不进增量批（避免重复/顺序歧义）；
+        // 其余（含 `ResponseFinished`）都是状态层需要即时消费的增量。
+        if delta.is_incremental() {
             fresh.push(delta.clone());
         }
         deltas.push(delta);

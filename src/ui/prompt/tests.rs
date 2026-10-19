@@ -27,33 +27,60 @@ fn paints_markdown_styles() {
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
 
+    // 断言取 `style::*` token 而非硬编码色值：色板调整后这里自动跟随，
+    // 但仍逐一验证「谁拿到哪一档语义样式」不串。
     assert_eq!(buf[(0, 0)].symbol(), "#");
-    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+    assert_eq!(
+        buf[(0, 0)].fg,
+        style::markdown_marker().fg.unwrap_or(Color::Reset),
+        "标记用 GitHub 的 fg-muted"
+    );
     assert_eq!(buf[(3, 0)].symbol(), "t");
-    assert_eq!(buf[(3, 0)].fg, Color::Yellow);
+    assert_eq!(
+        buf[(3, 0)].fg,
+        style::markdown_heading().fg.unwrap_or(Color::Reset)
+    );
     assert!(buf[(3, 0)].modifier.contains(Modifier::BOLD));
 
     assert_eq!(buf[(0, 1)].symbol(), "*");
     assert_eq!(buf[(2, 1)].symbol(), "b");
-    assert_eq!(buf[(2, 1)].fg, Color::Yellow);
+    assert_eq!(
+        buf[(2, 1)].fg,
+        style::markdown_strong().fg.unwrap_or(Color::Reset),
+        "粗体不上色"
+    );
     assert!(buf[(2, 1)].modifier.contains(Modifier::BOLD));
 
     assert_eq!(buf[(1, 2)].symbol(), "c");
-    assert_eq!(buf[(1, 2)].fg, Color::LightRed);
+    assert_eq!(
+        buf[(1, 2)].fg,
+        style::markdown_inline_code().fg.unwrap_or(Color::Reset)
+    );
 
     assert_eq!(buf[(2, 3)].symbol(), "q");
-    assert_eq!(buf[(2, 3)].fg, Color::LightMagenta);
-    assert!(buf[(2, 3)].modifier.contains(Modifier::ITALIC));
+    // GitHub Dark 的引用只改前景（fg-muted），不加斜体、不换色相。
+    assert_eq!(
+        buf[(2, 3)].fg,
+        style::markdown_quote().fg.unwrap_or(Color::Reset)
+    );
+    assert!(!buf[(2, 3)].modifier.contains(Modifier::ITALIC));
 
     assert_eq!(buf[(2, 4)].symbol(), "i");
     assert_eq!(buf[(2, 4)].fg, Color::Reset);
     assert!(!buf[(2, 4)].modifier.contains(Modifier::DIM));
 
     assert_eq!(buf[(1, 5)].symbol(), "a");
-    assert_eq!(buf[(1, 5)].fg, Color::LightBlue);
+    assert_eq!(
+        buf[(1, 5)].fg,
+        style::markdown_link_text().fg.unwrap_or(Color::Reset),
+        "链接文字不上色"
+    );
     assert!(buf[(1, 5)].modifier.contains(Modifier::UNDERLINED));
     assert_eq!(buf[(4, 5)].symbol(), "u");
-    assert_eq!(buf[(4, 5)].fg, Color::Cyan);
+    assert_eq!(
+        buf[(4, 5)].fg,
+        style::markdown_url().fg.unwrap_or(Color::Reset)
+    );
 }
 
 #[test]
@@ -62,11 +89,18 @@ fn fence_lines_are_markers_and_content_stays_default() {
     let prompt = prompt(10, 4, "```\nx\n```");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
-    assert!(buf[(0, 0)].modifier.contains(Modifier::DIM));
+    assert_eq!(
+        buf[(0, 0)].fg,
+        style::markdown_marker().fg.unwrap_or(Color::Reset),
+        "围栏标记为 GitHub 的 fg-muted"
+    );
     assert_eq!(buf[(0, 1)].symbol(), "x");
-    assert_eq!(buf[(0, 1)].fg, Color::Reset);
+    assert_eq!(buf[(0, 1)].fg, Color::Reset, "代码正文仍用终端默认前景");
     assert!(!buf[(0, 1)].modifier.contains(Modifier::DIM));
-    assert!(buf[(0, 2)].modifier.contains(Modifier::DIM));
+    assert_eq!(
+        buf[(0, 2)].fg,
+        style::markdown_marker().fg.unwrap_or(Color::Reset)
+    );
 }
 
 #[test]
@@ -120,12 +154,16 @@ fn wrapped_continuation_row_keeps_line_token_offsets() {
     assert_eq!(buf[(0, 1)].symbol(), "o");
     assert_eq!(
         buf[(0, 1)].fg,
-        Color::Indexed(208),
+        style::markdown_refer_folder().fg.unwrap_or(Color::Reset),
         "引用整段着 refer-folder 色"
     );
     assert!(buf[(0, 1)].modifier.contains(Modifier::UNDERLINED));
     assert_eq!(buf[(7, 1)].symbol(), "/");
-    assert_eq!(buf[(7, 1)].fg, Color::Indexed(208), "路径与标记同色");
+    assert_eq!(
+        buf[(7, 1)].fg,
+        style::markdown_refer_folder().fg.unwrap_or(Color::Reset),
+        "路径与标记同色"
+    );
 }
 
 #[test]
@@ -963,7 +1001,11 @@ fn template_command_and_title_and_mention_styles() {
 
     // 非模板块行不缩进、无边框。
     assert_eq!(buf[(0, 2)].symbol(), "@");
-    assert_eq!(buf[(0, 2)].fg, Color::Yellow, "@文件为 Yellow 下划线");
+    assert_eq!(
+        buf[(0, 2)].fg,
+        style::markdown_file_mention().fg.unwrap_or(Color::Reset),
+        "@文件与其它引用共用一档灰绿"
+    );
     assert!(buf[(0, 2)].modifier.contains(Modifier::UNDERLINED));
 }
 

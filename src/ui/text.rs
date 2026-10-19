@@ -1,6 +1,7 @@
 //! 全部用户可见文案；组件与逻辑禁止散落硬编码字符串。
 
 pub mod agent;
+pub mod chat;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -174,9 +175,6 @@ pub const LX_TOGGLE_LX: &str = "[lx]";
 /// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
-/// lx 页输入框上方 loading 行的转轮帧（braille，对齐 codex 的 10 帧）与文案。
-pub const LX_LOADING_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-pub const LX_LOADING_LABEL: &str = "Working";
 /// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
 pub const LX_JUMP_BOTTOM: &str = "↓";
 pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";
@@ -498,12 +496,18 @@ pub const TOAST_SETTINGS_UNAVAILABLE: &str = "Settings service unavailable";
 pub const TOAST_PROMPT_SAVE_FAILED: &str = "Prompt save failed; will retry";
 
 /// lx 聊天相关提示与状态文案。
-pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Chat is available in Native Agent only";
-pub const LX_CHAT_NO_MODEL: &str = "No model available; configure providers in settings";
-pub const LX_CHAT_NO_WORKSPACE: &str = "Workspace path unavailable";
-pub const LX_CHAT_COMMIT_FAILED: &str = "Message not saved; retry to send";
-pub const LX_CHAT_SAVE_FAILED: &str = "Failed to save response; history may be incomplete";
-pub const LX_CHAT_SESSION_BUSY: &str = "Session is busy in another pane";
+///
+/// **一律极简**：这些文案显示在输入框上方那一行（`chat_bar`），空间只有一行宽，
+/// 过长会被 `…` 截断。因此用短语而不是整句——多余的上下文由位置本身表达
+/// （它就贴在用户刚敲字的输入框上面）。
+pub const LX_CHAT_ENTRY_UNAVAILABLE: &str = "Native Agent only";
+pub const LX_CHAT_NO_MODEL: &str = "No model configured";
+pub const LX_CHAT_NO_WORKSPACE: &str = "No workspace path";
+pub const LX_CHAT_COMMIT_FAILED: &str = "Send failed, retry";
+pub const LX_CHAT_SAVE_FAILED: &str = "Save failed";
+pub const LX_CHAT_SESSION_BUSY: &str = "Session busy";
+/// 工具结果落库失败：文件可能已变化，需要用户核查（绝不重试写入）。
+pub const LX_CHAT_TOOL_RESULT_SAVE_FAILED: &str = "Tool result not saved";
 /// 流中「按 Esc 停止」待命提示短语（从长到短，按可用宽度取第一条放得下的；对齐 opencode）。
 pub const LX_CHAT_STOP_PHRASES: [&str; 4] = [
     "Press esc again to stop",
@@ -580,6 +584,31 @@ pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 上下文省略提示前缀。
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
+
+/// 工具步骤占位摘要：工具名与状态之间的分隔（真实工具行由后续阶段重做）。
+pub const LX_CHAT_TOOL_STATUS_SEP: &str = " · ";
+/// 工具步骤状态文案（占位渲染用；真实工具行动词见后续阶段的 Gallery 样式）。
+pub const LX_CHAT_TOOL_INPUT_STREAMING: &str = "receiving input";
+pub const LX_CHAT_TOOL_PENDING: &str = "pending";
+pub const LX_CHAT_TOOL_RUNNING: &str = "running";
+pub const LX_CHAT_TOOL_COMPLETED: &str = "done";
+pub const LX_CHAT_TOOL_FAILED: &str = "failed";
+pub const LX_CHAT_TOOL_CANCELLED: &str = "cancelled";
+pub const LX_CHAT_TOOL_INTERRUPTED: &str = "interrupted";
+
+/// 工具状态 → 固定文案。
+pub fn tool_status_label(status: crate::app::state::ToolStatus) -> &'static str {
+    use crate::app::state::ToolStatus;
+    match status {
+        ToolStatus::InputStreaming => LX_CHAT_TOOL_INPUT_STREAMING,
+        ToolStatus::Pending => LX_CHAT_TOOL_PENDING,
+        ToolStatus::Running => LX_CHAT_TOOL_RUNNING,
+        ToolStatus::Completed => LX_CHAT_TOOL_COMPLETED,
+        ToolStatus::Failed => LX_CHAT_TOOL_FAILED,
+        ToolStatus::Cancelled => LX_CHAT_TOOL_CANCELLED,
+        ToolStatus::Interrupted => LX_CHAT_TOOL_INTERRUPTED,
+    }
+}
 
 /// 信任检查拒绝时的取消提示。
 pub const TOAST_CREATE_CANCELLED: &str = "Workspace creation cancelled";

@@ -5,11 +5,15 @@
 //!
 //! - 用户消息：`> ` 前缀（占用整块底色，图标用输入框同款强调色）+ 整块浅底色
 //!   （`style::chat_user_bg`），正文按显示列软换行。
-//! - assistant 消息：正文用共享阅读渲染器（`ui::markdown_render`，与 UI 页 agent 回答
-//!   同款；表格按宽度收缩自适应），不显示标题行；失败/中断在**消息底部**（统计行上方）
-//!   插入一条通知（见 `notice.rs`），流中不插入（改用输入框上方 loading 行）。
-//! - thinking：生成中的块自动展开（头部转轮 + 正文），完成后默认折叠；点击头部或
-//!   Ctrl+T 切换；正文同样走 markdown 渲染并整体压暗（对齐 opencode 的思考显示）。
+//! - assistant 消息：每个步骤（思考 / 工具调用 / 正文块）首行以左侧方块标记起头
+//!   （见 [`StepMark`]：运行中 `■`/`□` 两帧呼吸、终态静态并按语义着色），标记右侧
+//!   的内容（含续行、展开的思考正文）整体缩进 [`STEP_GUTTER`] 列；正文用共享阅读
+//!   渲染器（`ui::markdown_render`，与 UI 页 agent 回答同款；表格按宽度收缩自适应），
+//!   不显示标题行；失败/中断在**消息底部**（统计行上方）插入一条通知（见 `notice.rs`），
+//!   流中不插入（改用输入框上方 loading 行）。
+//! - thinking：头部为方块 + `Thinking`（生成中）/ `Thought · 6.3s`（完成后，无折叠
+//!   箭头——方块即状态标记）；点击头部或 Ctrl+T 折叠/展开；正文同样走 markdown
+//!   渲染并整体压暗（对齐 opencode 的思考显示）。
 //! - 本轮统计行（assistant 末尾）：模型名、输入/输出 token、缓存命中、tok/s 与耗时。
 //! - 右侧预留一列滚动条（内容溢出时显示），宽度与输入框对齐。
 
@@ -18,7 +22,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::state::{ChatMessageView, Lx};
+use crate::app::state::{AssistantStepView, ChatMessageView, Lx};
 use crate::ui::markdown_render;
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
@@ -26,15 +30,16 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
+mod tool;
+
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
 const USER_INDENT: u16 = 2;
-/// thinking 块左侧缩进列：与正文、统计行**左对齐**（0，不额外缩进）。
-const THINKING_MARGIN: u16 = 0;
-/// thinking 头部折叠/展开标记。
-const THINKING_COLLAPSED_MARK: &str = "▸ ";
-const THINKING_EXPANDED_MARK: &str = "▾ ";
+/// 每个 assistant 步骤左侧方块标记占用的列数（1 列字形 + 1 列空格）；标记右侧的
+/// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
+/// 与用户消息的 `> ` 缩进同宽。
+pub(super) const STEP_GUTTER: u16 = 2;
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
@@ -44,6 +49,123 @@ const STICKY_MIN_HEIGHT: u16 = 4;
 const STICKY_MIN_WIDTH: u16 = 16;
 /// 置顶行摘要的最大取样字符数（限住超长粘贴的每帧成本，对齐 codex 的 512）。
 const STICKY_SAMPLE_CHARS: usize = 512;
+
+/// assistant 步骤左侧方块标记的语义状态（思考 / 工具调用 / 正文块共用）。
+///
+/// 运行中为 `■`/`□` 两帧呼吸（相位由 `LxChat::loading_frame` 决定，约 400ms 一相）；
+/// 终态停为静态方块、仅以颜色区分：失败（红）、中断（黄）、取消（次要信息色 + 空心
+/// `□`，表示未产出结果）。
+///
+/// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
+/// - [`StepKind::Body`]（正文块）：**终端默认前景**——方块跟正文同色，不额外抢眼；
+/// - [`StepKind::Thinking`]（思考块）：专用品红 `Indexed 218`；
+/// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
+///
+/// 失败 / 中断 / 取消是**跨角色的语义状态**，一律覆盖角色色（红 / 黄 / 次要灰），
+/// 保证「出问题了」比「是哪类步骤」更先被看到。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StepMark {
+    Running,
+    Done,
+    Failed,
+    Interrupted,
+    Cancelled,
+}
+
+impl StepMark {
+    /// 方块字形：运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    pub(super) fn glyph(self, loading_frame: usize) -> char {
+        let filled = match self {
+            Self::Running => (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2),
+            Self::Done | Self::Failed | Self::Interrupted => true,
+            Self::Cancelled => false,
+        };
+        if filled {
+            text::agent::STEP_MARK_FILLED
+        } else {
+            text::agent::STEP_MARK_HOLLOW
+        }
+    }
+
+    /// 方块样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
+    pub(super) fn style(self, kind: StepKind) -> Style {
+        match self {
+            Self::Failed => style::agent_fail(),
+            Self::Interrupted => style::agent_warn(),
+            Self::Cancelled => style::agent_step_detail(),
+            Self::Running => kind.style_running(),
+            Self::Done => kind.style_done(),
+        }
+    }
+
+    /// 标记段（字形 + 空格）；工具行与 thinking 头部共用同一份拼法。
+    /// 颜色由调用方用 [`Self::style`] 单独上，所以这里不需要 [`StepKind`]。
+    pub(super) fn segment(self, loading_frame: usize) -> String {
+        format!("{} ", self.glyph(loading_frame))
+    }
+}
+
+/// 步骤的**类别**：决定运行中 / 已完成时的方块与文案用什么颜色。
+///
+/// 三类的分工（用户要求「正文方块用默认前景、thinking 用别的颜色」）：
+/// - `Body` 用终端默认前景 → 方块与正文本就同色，视觉上不打断阅读；
+/// - `Thinking` 用品红 → 一眼看出「这段是模型的内心活动」；
+/// - `Tool` 用翡翠绿 → 一眼看出「这段是真实动作」，且与 markdown 的 GitHub 色域不相交。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StepKind {
+    /// 正文块（assistant 的可见回答）。
+    Body,
+    /// 思考块（reasoning / thinking）。
+    Thinking,
+    /// 工具调用行。
+    Tool,
+}
+
+impl StepKind {
+    /// 运行中（含呼吸）的样式。
+    fn style_running(self) -> Style {
+        match self {
+            Self::Body => style::chat_step_mark_running_body(),
+            Self::Thinking => style::chat_step_mark_running_thinking(),
+            Self::Tool => style::chat_step_mark_running(),
+        }
+    }
+
+    /// 已完成（静止）的样式。
+    fn style_done(self) -> Style {
+        match self {
+            Self::Body => style::chat_step_mark_done_body(),
+            Self::Thinking => style::chat_step_mark_done_thinking(),
+            Self::Tool => style::chat_step_mark_done(),
+        }
+    }
+
+    /// 该角色的头部文案样式（运行中 / 已完成）。
+    pub(super) fn label(self, running: bool) -> Style {
+        match (self, running) {
+            (Self::Body, true) => style::chat_step_label_running_body(),
+            (Self::Body, false) => style::chat_step_label_done_body(),
+            (Self::Thinking, true) => style::chat_step_label_running_thinking(),
+            (Self::Thinking, false) => style::chat_step_label_done_thinking(),
+            (Self::Tool, true) => style::chat_step_label_running(),
+            (Self::Tool, false) => style::chat_step_label_done(),
+        }
+    }
+}
+
+/// 消息内**前一块与本块之间是否要空一行**。
+///
+/// 已定稿规则：**一律留空行**（含连续工具步骤之间、两个相邻正文块之间）。每个工具
+/// 调用是独立的动作记录，两行式的 `■ 动词` / `  └─ 详情` 与下一个调用之间空一行才分得清
+/// 彼此的边界——不留空行时会读成一棵树，误以为下面的 `└─` 属于上一个调用。
+///
+/// 该规则**当前不区分块类别**，因此本函数不需要任何参数，也不保留
+/// 「`previous: Block, next: Block` 但恒返回 true」这种看起来支持区分、实则恒真的死抽象
+/// （review P3-3）。`layout` 与 `render` 必须共用本函数，否则滚动条/置顶行/命中矩形会与
+/// 实际绘制错位一行；将来若要按类别收敛留白，在这里加参数并同步两个调用点即可。
+fn needs_spacer() -> bool {
+    true
+}
 
 /// 一条消息在渲染行空间中的区间（`end` 不含；含它**前面**的空行，
 /// 末尾那条含收尾呼吸行）。
@@ -58,7 +180,7 @@ pub struct MessageRows {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryLayout {
     pub area: Rect,
-    /// （消息索引, 该消息内 part 索引, 头部矩形）。
+    /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
@@ -126,51 +248,54 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             rows += 1;
         }
         let start = rows;
-        // 消息内块（各内容块 / 通知 / 统计行）之间空一行。
-        let mut first_block = true;
-        for (part_index, part) in message.parts.iter().enumerate() {
-            let (is_reasoning, part_rows) = match part.kind {
-                crate::chat::events::PartKind::Text => {
-                    (false, text_rows(message, &part.content, width))
-                }
-                crate::chat::events::PartKind::Reasoning => (
-                    true,
-                    1 + if lx.chat.reasoning_expanded(message_index, part_index) {
-                        thinking_rows(&part.content, width)
-                    } else {
-                        0
-                    },
-                ),
+        // 消息内块之间一律空一行（见 [`needs_spacer`]）。
+        let mut has_previous = false;
+        for (step_index, step) in message.steps.iter().enumerate() {
+            let (is_reasoning, step_rows) = match step {
+                AssistantStepView::Part { part, .. } => match part.kind {
+                    crate::chat::events::PartKind::Text => {
+                        (false, text_rows(message, &part.content, width))
+                    }
+                    crate::chat::events::PartKind::Reasoning => (
+                        true,
+                        1 + if lx.chat.reasoning_expanded(message_index, step_index) {
+                            thinking_rows(&part.content, width)
+                        } else {
+                            0
+                        },
+                    ),
+                },
+                AssistantStepView::Tool { call, .. } => (false, tool_rows(call, width)),
             };
-            if part_rows == 0 {
+            if step_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行。
             }
-            if !first_block {
+            if has_previous && needs_spacer() {
                 rows += 1;
             }
-            first_block = false;
+            has_previous = true;
             if is_reasoning {
                 let header_y = area
                     .y
                     .saturating_add(u16::try_from(rows).unwrap_or(u16::MAX));
                 thinking.push((
                     message_index,
-                    part_index,
+                    step_index,
                     Rect::new(area.x, header_y, width, 1),
                 ));
             }
-            rows += part_rows;
+            rows += step_rows;
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
-            if !first_block {
+            if has_previous && needs_spacer() {
                 rows += 1;
             }
-            first_block = false;
+            has_previous = true;
             rows += notice::rows(&notice, width);
         }
         if let Some(line) = stats_line(message) {
-            if !first_block {
+            if has_previous && needs_spacer() {
                 rows += 1;
             }
             rows += wrap(&line, width).len();
@@ -293,10 +418,7 @@ fn sticky_candidate(
 /// 置顶行摘要：该用户消息首个正文块的前 512 字符 → 控制字符转空格 → 空白折叠为单行；
 /// 无正文或全空白返回 None（该条不钉）。
 fn sticky_text(message: &crate::app::state::ChatMessageView) -> Option<String> {
-    let part = message
-        .parts
-        .iter()
-        .find(|part| part.kind == crate::chat::events::PartKind::Text)?;
+    let part = message.text_parts().next()?;
     let sample: String = part.content.chars().take(STICKY_SAMPLE_CHARS).collect();
     let single: String = sample
         .chars()
@@ -409,38 +531,60 @@ fn truncate_with_ellipsis(value: &str, max: usize) -> String {
 
 /// 渲染历史内容；`scroll` 为顶部行偏移（0 表示从最早开始）。`rect` 为内容区
 /// （body，不含置顶行；含右侧滚动条列）。
-pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
+///
+/// 返回本次推进的内容行数：与 [`layout`] 的 `total_rows` **必须相等**
+/// （两者共用同一份步骤行数口径；测试逐一比对，防几何漂移）。
+pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usize {
     if rect.width == 0 || rect.height == 0 {
-        return;
+        return 0;
     }
     let content = content_rect(rect);
     let mut row_index = 0usize;
     for (message_index, message) in lx.chat.messages.iter().enumerate() {
         let is_user = message.role == "user";
-        // 消息内块（各内容块 / 通知 / 统计行）之间空一行（与 `layout` 同口径）。
-        let mut first_block = true;
+        // 消息内块之间一律空一行（与 `layout` 同口径）。
+        let mut has_previous = false;
         let mut first_user_line = true;
-        for (part_index, part) in message.parts.iter().enumerate() {
-            let expanded = lx.chat.reasoning_expanded(message_index, part_index);
-            let block_rows = match part.kind {
-                crate::chat::events::PartKind::Text => {
-                    text_rows(message, &part.content, content.width)
+        for (step_index, step) in message.steps.iter().enumerate() {
+            let (block_rows, part_kind) = match step {
+                AssistantStepView::Part { part, .. } => {
+                    let expanded = lx.chat.reasoning_expanded(message_index, step_index);
+                    let rows = match part.kind {
+                        crate::chat::events::PartKind::Text => {
+                            text_rows(message, &part.content, content.width)
+                        }
+                        crate::chat::events::PartKind::Reasoning => {
+                            1 + if expanded {
+                                thinking_rows(&part.content, content.width)
+                            } else {
+                                0
+                            }
+                        }
+                    };
+                    (rows, Some((part, expanded)))
                 }
-                crate::chat::events::PartKind::Reasoning => {
-                    1 + if expanded {
-                        thinking_rows(&part.content, content.width)
-                    } else {
-                        0
-                    }
-                }
+                AssistantStepView::Tool { call, .. } => (tool_rows(call, content.width), None),
             };
             if block_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行（与 `layout` 同口径）。
             }
-            if !first_block {
+            if has_previous && needs_spacer() {
                 row_index += 1;
             }
-            first_block = false;
+            has_previous = true;
+            let Some((part, expanded)) = part_kind else {
+                if let AssistantStepView::Tool { call, .. } = step {
+                    tool::draw(
+                        grid,
+                        content,
+                        scroll,
+                        &mut row_index,
+                        call,
+                        lx.chat.loading_frame,
+                    );
+                }
+                continue;
+            };
             match part.kind {
                 crate::chat::events::PartKind::Text => {
                     if is_user {
@@ -465,39 +609,58 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
                             row_index += 1;
                         }
                     } else {
-                        draw_markdown(grid, content, scroll, &mut row_index, &part.content);
+                        // 正文块也是步骤：消息仍在流式且它是最后一步 → 方块呼吸，
+                        // 否则静态（已完成）。
+                        let mark = if message.status == "streaming"
+                            && step_index + 1 == message.steps.len()
+                        {
+                            StepMark::Running
+                        } else {
+                            StepMark::Done
+                        };
+                        draw_markdown(
+                            grid,
+                            content,
+                            scroll,
+                            &mut row_index,
+                            &part.content,
+                            mark,
+                            StepKind::Body,
+                            lx.chat.loading_frame,
+                        );
                     }
                 }
                 crate::chat::events::PartKind::Reasoning => {
-                    let streaming = lx.chat.reasoning_streaming(message_index, part_index);
+                    let streaming = lx.chat.reasoning_streaming(message_index, step_index);
+                    let mark = if streaming {
+                        StepMark::Running
+                    } else {
+                        StepMark::Done
+                    };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：转轮 + `Thinking`（蓝色，与 UI 页思考步骤同色；不带折叠标记）；
-                        // 完成后：`▸ Thought · 6.3s` / `▾ Thought · 6.3s`（压暗一档的品牌蓝）。
-                        let header_style = if streaming {
-                            style::agent_verb()
-                        } else {
-                            style::agent_connector()
-                        };
-                        let x = content.x.saturating_add(THINKING_MARGIN);
+                        // 生成中：品红方块（加粗 + 呼吸）+ `Thinking`（同色不加粗）；
+                        // 完成后：同款品红方块（去加粗、静止）+ `Thought · 6.3s`
+                        // （无折叠箭头，折叠/展开由点击头部或 Ctrl+T 控制，方块即状态标记）。
+                        // 思考用品红，与正文（默认前景）和工具（翡翠绿）都分得开。
+                        let header_style = StepKind::Thinking.label(streaming);
+                        grid.put_char(
+                            content.x,
+                            y,
+                            mark.glyph(lx.chat.loading_frame),
+                            mark.style(StepKind::Thinking),
+                        );
+                        let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();
                         if streaming {
-                            let frame = text::LX_LOADING_FRAMES
-                                [lx.chat.loading_frame % text::LX_LOADING_FRAMES.len()];
-                            grid.put_char(x, y, frame, header_style);
                             grid.put_clipped(
-                                x.saturating_add(2),
+                                x,
                                 y,
                                 text::LX_CHAT_THINKING_LABEL,
                                 header_style,
-                                limit.saturating_sub(x.saturating_add(2)),
+                                limit.saturating_sub(x),
                             );
                         } else {
-                            let mut label = String::from(if expanded {
-                                THINKING_EXPANDED_MARK
-                            } else {
-                                THINKING_COLLAPSED_MARK
-                            });
-                            label.push_str(text::LX_CHAT_THOUGHT_LABEL);
+                            let mut label = String::from(text::LX_CHAT_THOUGHT_LABEL);
                             if let Some(duration) = thinking_duration(part) {
                                 label.push_str(THINKING_DURATION_SEP);
                                 label.push_str(&format_duration(duration));
@@ -514,14 +677,14 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
-            if !first_block {
+            if has_previous && needs_spacer() {
                 row_index += 1;
             }
-            first_block = false;
+            has_previous = true;
             notice::draw(grid, &notice, content, scroll, &mut row_index);
         }
         if let Some(line) = stats_line(message) {
-            if !first_block {
+            if has_previous && needs_spacer() {
                 row_index += 1;
             }
             for row in wrap(&line, content.width) {
@@ -533,6 +696,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) {
         }
         row_index += 1; // 消息间空行。
     }
+    row_index
 }
 
 /// 历史区滚动条几何（贴右缘一列；内容未溢出时为 None）。
@@ -545,12 +709,13 @@ pub(super) fn scrollbar(
     scrollbar::layout(area, total, visible, scroll)
 }
 
-/// 消息正文渲染行数：assistant 用 markdown 渲染（宽度自适应），用户按纯文本换行。
+/// 消息正文渲染行数：assistant 用 markdown 渲染（宽度自适应，扣步骤标记缩进），
+/// 用户按纯文本换行（扣 `> ` 前缀）。
 fn text_rows(message: &crate::app::state::ChatMessageView, content: &str, width: u16) -> usize {
     if message.role == "user" {
         return wrap(content, width.saturating_sub(USER_INDENT)).len();
     }
-    markdown_rows(content, width)
+    markdown_rows(content, width.saturating_sub(STEP_GUTTER))
 }
 
 /// assistant markdown 正文渲染成若干行（已按 `width` 自适应：表格收缩、其余软换行）。
@@ -558,11 +723,37 @@ fn markdown_rows(content: &str, width: u16) -> usize {
     markdown_render::render_wrapped(content, width).len()
 }
 
-/// 绘制一段 assistant markdown 正文（已按宽度自适应，无需再换行）。
-fn draw_markdown(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    for line in markdown_render::render_wrapped(content, rect.width) {
+/// 工具步骤占用的渲染行数（**恒为 1 行单行工具行**）。
+///
+/// `layout` 与 `render` 共用本入口（内部即 `tool::rows`）：工具行一旦换行，滚动条、
+/// 置顶用户行与 thinking 命中矩形都会漂移。
+fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
+    tool::rows(call, width)
+}
+
+/// 绘制一段 assistant markdown 正文：首行以步骤方块起头，所有行缩进 [`STEP_GUTTER`] 列
+/// 与方块对齐（渲染宽度已相应扣除，无需再换行）。
+fn draw_markdown(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    content: &str,
+    mark: StepMark,
+    kind: StepKind,
+    loading_frame: usize,
+) {
+    let inner = rect.width.saturating_sub(STEP_GUTTER);
+    let mut first = true;
+    for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            let mut cx = rect.x.saturating_add(line.indent);
+            if first {
+                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style(kind));
+            }
+            let mut cx = rect
+                .x
+                .saturating_add(STEP_GUTTER)
+                .saturating_add(line.indent);
             for (value, span_style) in &line.spans {
                 for ch in value.chars() {
                     let cell = ch.width().unwrap_or(1).max(1) as u16;
@@ -574,6 +765,7 @@ fn draw_markdown(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usi
                 }
             }
         }
+        first = false;
         *row_index += 1;
     }
 }
@@ -585,19 +777,20 @@ fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
     Some(ended.saturating_sub(started).max(0))
 }
 
-/// thinking 正文渲染行数（markdown；左缩进 `THINKING_MARGIN`）。
+/// thinking 正文渲染行数（markdown；左缩进 [`STEP_GUTTER`] 与头部方块对齐）。
 fn thinking_rows(content: &str, width: u16) -> usize {
-    markdown_render::render_wrapped(content, width.saturating_sub(THINKING_MARGIN)).len()
+    markdown_render::render_wrapped(content, width.saturating_sub(STEP_GUTTER)).len()
 }
 
-/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`）。
+/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`），
+/// 所有行缩进 [`STEP_GUTTER`] 列与头部方块对齐。
 fn draw_thinking(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    let inner = rect.width.saturating_sub(THINKING_MARGIN);
+    let inner = rect.width.saturating_sub(STEP_GUTTER);
     for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             let mut cx = rect
                 .x
-                .saturating_add(THINKING_MARGIN)
+                .saturating_add(STEP_GUTTER)
                 .saturating_add(line.indent);
             for (value, span_style) in &line.spans {
                 let cell_style = span_style.patch(style::muted());

@@ -312,13 +312,19 @@ fn markdown_line_is_styled() {
     let _ = render(area, &mut buf, &lx, false, None);
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
-    // `#` 为标记（muted/dim），`Title` 为标题（黄色）。
-    assert!(
-        buf[(content_x, row)]
-            .modifier
-            .contains(ratatui::style::Modifier::DIM)
+    // `#` 为标记（GitHub 的 fg-muted），`Title` 为标题（正文色 + 加粗 + 下划线）。
+    assert_eq!(
+        buf[(content_x, row)].fg,
+        crate::ui::style::markdown_marker()
+            .fg
+            .unwrap_or(Color::Reset)
     );
-    assert_eq!(buf[(content_x + 3, row)].fg, Color::Yellow);
+    assert_eq!(
+        buf[(content_x + 3, row)].fg,
+        crate::ui::style::markdown_heading()
+            .fg
+            .unwrap_or(Color::Reset)
+    );
 }
 
 #[test]
@@ -936,12 +942,16 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
             role: "user".into(),
             status: "complete".into(),
             turn_index: index,
-            parts: vec![ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: format!("消息 {index}"),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: format!("消息 {index}"),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
             }],
             model_label: None,
             error_code: None,
@@ -971,12 +981,16 @@ fn overflowing_history_draws_scrollbar_glyphs() {
             role: "user".into(),
             status: "complete".into(),
             turn_index: index,
-            parts: vec![ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: format!("消息 {index}"),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: format!("消息 {index}"),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
             }],
             model_label: None,
             error_code: None,
@@ -1026,12 +1040,16 @@ fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
         role: "assistant".into(),
         status: if streaming { "streaming" } else { "complete" }.into(),
         turn_index: 0,
-        parts: vec![ChatPartView {
-            kind: crate::chat::events::PartKind::Text,
-            content: "答".into(),
-            provider_metadata_json: None,
-            started_at_ms: None,
-            ended_at_ms: None,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "答".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
         }],
         model_label: None,
         error_code: None,
@@ -1060,14 +1078,18 @@ fn streaming_shows_loading_bar_above_input() {
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
     assert!(
-        text.contains(text::LX_LOADING_LABEL),
+        text.contains(text::chat::LOADING_LABEL),
         "显示 loading 文案：{text}"
     );
     assert!(
-        text::LX_LOADING_FRAMES
-            .iter()
-            .any(|frame| text.contains(*frame)),
-        "显示转轮帧：{text}"
+        text.contains(crate::ui::text::agent::STEP_MARK_FILLED),
+        "加载标记是步骤方块（不再是 braille 转轮）：{text}"
+    );
+    assert!(
+        !text
+            .chars()
+            .any(|ch| ('\u{2800}'..='\u{28ff}').contains(&ch)),
+        "不再出现 braille 转轮：{text}"
     );
 }
 
@@ -1135,25 +1157,30 @@ fn esc_armed_replaces_loading_label_with_stop_hint() {
     let text = buffer_text(&buf);
     assert!(text.contains("Press esc again to stop"), "待命提示：{text}");
     assert!(
-        !text.contains(text::LX_LOADING_LABEL),
+        !text.contains(text::chat::LOADING_LABEL),
         "提示替换 Working：{text}"
     );
     // 未待命（超时/未按 Esc）时仍是普通 loading 文案。
     lx.chat.stop_armed_at = None;
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
-    assert!(buffer_text(&buf).contains(text::LX_LOADING_LABEL));
+    assert!(buffer_text(&buf).contains(text::chat::LOADING_LABEL));
 }
 
 #[test]
 fn esc_hint_shortens_on_narrow_bar() {
-    let area = Rect::new(0, 0, 28, 16);
+    // 卡片移除后 loading 从第 1 列起画，可用宽度比之前宽 2 列，因此用更窄的栏验证降级。
+    let area = Rect::new(0, 0, 22, 16);
     let mut lx = streaming_lx(true, true);
     lx.chat.stop_armed_at = Some(std::time::Instant::now());
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
-    assert!(text.contains("esc again"), "窄栏取短短语：{text}");
+    assert!(
+        text.contains(text::LX_CHAT_STOP_PHRASES[1])
+            || text.contains(text::LX_CHAT_STOP_PHRASES[2]),
+        "窄栏取短短语：{text}"
+    );
     assert!(
         !text.contains("Press esc again to stop"),
         "放不下时不画长短语：{text}"
@@ -1172,12 +1199,16 @@ fn sticky_history_lx() -> Lx {
             role: role.into(),
             status: "complete".into(),
             turn_index: 0,
-            parts: vec![ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: text.into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: text.into(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
             }],
             model_label: None,
             error_code: None,
@@ -1248,4 +1279,131 @@ fn history_rows_uses_body_height_while_sticky_is_shown() {
         Some((total, usize::from(body_height))),
         "滚轮钳制用 body 高度（否则滚不到最后一行）"
     );
+}
+
+// ===== 聊天栏：Native 循环色卡片 + 扫描高亮 + 临时警告 =====
+
+/// 取聊天栏整行（文本, 每列样式）。
+fn chat_bar_cells(area: Rect, lx: &Lx) -> (String, Vec<ratatui::style::Style>) {
+    let lay = layout(area, lx);
+    let bar = lay.chat_bar.expect("聊天栏可见");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, lx, false, None);
+    let text: String = (bar.x..bar.right())
+        .map(|x| buf[(x, bar.y)].symbol())
+        .collect();
+    let styles = (bar.x..bar.right())
+        .map(|x| buf[(x, bar.y)].style())
+        .collect();
+    (text, styles)
+}
+
+/// loading **不再有方块**：整行只有 `Working...`，且它带扫描高亮。
+#[test]
+fn loading_shows_only_the_label_without_a_mark() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = streaming_lx(true, true);
+    lx.chat.loading_frame = 0;
+    let (text, _styles) = chat_bar_cells(area, &lx);
+    // 不含任何方块字形（实心/空心都不该出现）。
+    assert!(
+        !text.contains(crate::ui::text::agent::STEP_MARK_FILLED)
+            && !text.contains(crate::ui::text::agent::STEP_MARK_HOLLOW),
+        "loading 不该再有方块：{text:?}"
+    );
+    // 只有文案，且从第 1 列（贴左边距）开始。
+    let trimmed = text.trim_start();
+    assert!(
+        trimmed.starts_with(text::chat::LOADING_LABEL),
+        "只有 Working... 文案：{text:?}"
+    );
+}
+
+/// 扫描高亮：窗口内字符取当前帧色（按 Native 标签 4 档循环），窗口外是 dim。
+#[test]
+fn working_label_scans_left_to_right() {
+    let area = Rect::new(0, 0, 60, 16);
+    let cycle = crate::ui::text::agent::native_label_cycle();
+    let mut seen_hits = false;
+    for frame in 0..12 {
+        let mut lx = streaming_lx(true, true);
+        lx.chat.loading_frame = frame;
+        // 直接取渲染后的单元格样式：第 1 列起就是文案。
+        let lay = layout(area, &lx);
+        let bar = lay.chat_bar.expect("流中显示聊天栏");
+        let mut buf = Buffer::empty(area);
+        let _ = render(area, &mut buf, &lx, false, None);
+        let cells: Vec<&ratatui::buffer::Cell> =
+            (bar.x + 1..bar.right()).map(|x| &buf[(x, bar.y)]).collect();
+        let hits: Vec<usize> = cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| {
+                cell.style()
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+            })
+            .map(|(index, _)| index)
+            .collect();
+        if hits.is_empty() {
+            continue;
+        }
+        seen_hits = true;
+        assert!(hits.len() <= 3, "frame {frame}: 窗口不超过 3 字符 {hits:?}");
+        // 窗口内颜色 = 当前帧的循环色。
+        let expected = cycle[frame % cycle.len()];
+        for index in &hits {
+            assert_eq!(
+                cells[*index].style().fg,
+                Some(Color::Indexed(expected)),
+                "frame {frame}: 被扫到的字符应为该帧色"
+            );
+        }
+        // 窗口连续。
+        assert!(
+            hits.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "frame {frame}: 窗口不连续 {hits:?}"
+        );
+    }
+    assert!(seen_hits, "扫描窗口应当命中过文案");
+}
+
+/// 扫描自左向右推进：每帧前进一步，走完一轮后从左侧重新进入。
+#[test]
+fn scan_advances_one_char_per_frame_and_wraps() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut heads: Vec<usize> = Vec::new();
+    for frame in 0..12 {
+        let mut lx = streaming_lx(true, true);
+        lx.chat.loading_frame = frame;
+        let lay = layout(area, &lx);
+        let bar = lay.chat_bar.expect("bar");
+        let mut buf = Buffer::empty(area);
+        let _ = render(area, &mut buf, &lx, false, None);
+        let head = (bar.x + 1..bar.right())
+            .rfind(|x| {
+                buf[(*x, bar.y)]
+                    .style()
+                    .add_modifier
+                    .contains(ratatui::style::Modifier::BOLD)
+            })
+            .map(|x| usize::from(x - bar.x - 1));
+        if let Some(head) = head {
+            heads.push(head);
+        }
+    }
+    assert!(heads.len() >= 4, "应收集到足够帧：{heads:?}");
+    let wraps = heads.windows(2).filter(|pair| pair[1] < pair[0]).count();
+    assert!(wraps <= 1, "扫描应只回绕一次：{heads:?}");
+}
+
+/// 未流中且没有警告时，聊天栏不该出现加载文案（避免残留）。
+#[test]
+fn idle_chat_bar_has_no_loading_mark() {
+    let area = Rect::new(0, 0, 60, 16);
+    let lx = streaming_lx(false, true);
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(!text.contains(text::chat::LOADING_LABEL), "{text}");
 }

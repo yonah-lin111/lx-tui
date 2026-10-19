@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 
+mod atomic_write;
+pub use atomic_write::{rename_over, write_file_atomic};
+
 mod paste_path;
 pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 

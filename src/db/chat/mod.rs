@@ -4,6 +4,13 @@
 //! `sequence` 只在持有写事务时读取递增，配合 worker 串行化保证同 session 单调。
 //! `checkpoint`/`finish` 以 `status='streaming'` 条件更新，迟到事件不能覆盖终态。
 
+mod tools;
+
+pub use tools::{
+    INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
+    ToolCallResult, ToolCallTicket, ToolTerminalStatus,
+};
+
 use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -52,6 +59,8 @@ pub struct ChatMessage {
     pub completed_at_ms: Option<i64>,
     /// 有序内容块（text / reasoning 交错保持原始顺序）。
     pub parts: Vec<ChatPart>,
+    /// 该消息的工具调用（按 `(message_id, position)` 有序）；用户消息恒为空。
+    pub tools: Vec<ToolCallRecord>,
 }
 
 /// 一条消息内的一个内容块。
@@ -67,6 +76,8 @@ pub struct ChatPart {
     pub started_at_ms: Option<i64>,
     /// 该 part 最后一个增量到达时刻（毫秒）；None 表示未知（老库/非流式）。
     pub ended_at_ms: Option<i64>,
+    /// 该 part 显式完成时刻（毫秒）；仅 reasoning 使用，None 表示尚未完成或非思考块。
+    pub completed_at_ms: Option<i64>,
 }
 
 /// `begin_turn` 的提交结果：一轮的完整落库标识。
@@ -158,7 +169,10 @@ impl Database {
             .map_err(DbError::from)
     }
 
-    /// 加载单个会话及全部有序消息（含 parts）；跨工作区或不存在返回 None。
+    /// 加载单个会话及全部有序消息（含 parts 与工具调用）；跨工作区或不存在返回 None。
+    ///
+    /// 消息、parts、tools 各一次批量查询（不逐消息 N+1）；parts 与 tools 分别按
+    /// `position` 有序并关联到所属消息，调用方据此合并为单条步骤时间线。
     pub fn load_chat_session(
         &self,
         workspace: &Path,
@@ -204,12 +218,13 @@ impl Database {
                     created_at_ms: row.get(14)?,
                     completed_at_ms: row.get(15)?,
                     parts: Vec::new(),
+                    tools: Vec::new(),
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         let mut parts_statement = self.conn.prepare(
             r#"SELECT message_id, position, kind, content, provider_metadata_json,
-                      started_at_ms, ended_at_ms
+                      started_at_ms, ended_at_ms, completed_at_ms
                FROM agent_message_part WHERE message_id IN (
                    SELECT external_id FROM agent_message WHERE session_id = ?1
                ) ORDER BY message_id, position"#,
@@ -226,6 +241,7 @@ impl Database {
                     provider_metadata_json: row.get(4)?,
                     started_at_ms: row.get(5)?,
                     ended_at_ms: row.get(6)?,
+                    completed_at_ms: row.get(7)?,
                 },
             ))
         })?;
@@ -233,9 +249,29 @@ impl Database {
             let (message, part) = row?;
             by_message.entry(message).or_default().push(part);
         }
+        // 工具调用同样一次批量读取，避免逐消息查询。
+        let mut tools_statement = self.conn.prepare(
+            r#"SELECT call_id, message_id, name, arguments_json, position, status,
+                      result_json, error_text, started_at_ms, completed_at_ms, duration_ms
+               FROM agent_tool_call WHERE session_id = ?1
+               ORDER BY message_id, position"#,
+        )?;
+        let mut tools_by_message: std::collections::HashMap<String, Vec<ToolCallRecord>> =
+            std::collections::HashMap::new();
+        let rows = tools_statement.query_map(params![session_id], tools::read_tool_call_record)?;
+        for row in rows {
+            let tool = row?;
+            tools_by_message
+                .entry(tool.message_id.clone())
+                .or_default()
+                .push(tool);
+        }
         for message in &mut messages {
             if let Some(parts) = by_message.remove(&message.external_id) {
                 message.parts = parts;
+            }
+            if let Some(tools) = tools_by_message.remove(&message.external_id) {
+                message.tools = tools;
             }
         }
         Ok(Some(messages))
@@ -367,6 +403,8 @@ impl Database {
     /// 流式 checkpoint：用完整 parts 快照幂等覆盖 streaming assistant 的内容。
     ///
     /// 只在 `status='streaming'` 时生效；迟到 checkpoint 不能覆盖终态。
+    /// 快照保留 app 传入的 position 与 `completed_at_ms`，且不删除也不覆盖
+    /// `agent_tool_call` 行（工具行另有自己的事务）。
     pub fn checkpoint(
         &self,
         workspace: &Path,
@@ -392,6 +430,7 @@ impl Database {
     /// 终态提交：写最后 parts、状态、usage 与 session 时间；重复 finish 幂等。
     ///
     /// usage 只累计实际返回的 provider 值；重复投递同结果不重复累计 token。
+    /// 与 checkpoint 一致：保留传入 position 与 part 完成时刻，不动已落库的工具行。
     pub fn finish(
         &self,
         workspace: &Path,
@@ -550,14 +589,30 @@ impl Database {
         }))
     }
 
-    /// 异常重启恢复：把遗留 `streaming` assistant 标记为 `interrupted`。
+    /// 异常重启恢复：把遗留 `streaming` assistant 标记为 `interrupted`，
+    /// 同事务补齐这些消息里仍缺完成时刻的 reasoning part。
     ///
     /// 保留最后 checkpoint 的 parts，不自动重发或生成第二条用户消息。
+    /// 幂等：第二次调用不再改动任何行，返回 0。
     pub fn recover_interrupted_streams(&self) -> Result<usize> {
-        let updated = self.conn.execute(
+        let now = now_ms();
+        let transaction = self.conn.unchecked_transaction()?;
+        let updated = transaction.execute(
             "UPDATE agent_message SET status = 'interrupted', completed_at_ms = ?1 WHERE status = 'streaming'",
-            params![now_ms()],
+            params![now],
         )?;
+        // 遗留 streaming 消息的思考块按 `COALESCE(ended_at_ms, now)` 封闭，
+        // 与 v9 迁移对已终态消息的回填口径一致。
+        transaction.execute(
+            r#"UPDATE agent_message_part
+               SET completed_at_ms = COALESCE(ended_at_ms, ?1)
+               WHERE kind = 'reasoning' AND completed_at_ms IS NULL
+                 AND message_id IN (
+                     SELECT external_id FROM agent_message WHERE status = 'interrupted'
+                 )"#,
+            params![now],
+        )?;
+        transaction.commit()?;
         Ok(updated)
     }
 
@@ -590,7 +645,11 @@ fn ensure_streaming_message(
     }
 }
 
-/// 用完整快照替换消息 parts：先删旧再按 position 插入，保持交错顺序。
+/// 用完整快照替换消息 parts：先删旧再按传入 position 插入，保留时间线位置。
+///
+/// 位置由调用方（app 步骤时间线）分配，写入前逐条校验该消息内不重复；
+/// 重复或负值返回 `PositionConflict`，事务整体回滚，不产生半行。
+/// 本函数不触碰 `agent_tool_call`：工具行与 parts 各占自己的位置区间。
 fn replace_parts(
     transaction: &Connection,
     assistant_message_id: &str,
@@ -601,25 +660,41 @@ fn replace_parts(
         "DELETE FROM agent_message_part WHERE message_id = ?1",
         params![assistant_message_id],
     )?;
-    for (position, part) in parts.iter().enumerate() {
+    let mut positions: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    for part in parts {
         if part.content.len() > MAX_MESSAGE_BYTES {
             return Err(DbError::MessageTooLarge);
+        }
+        if part.position < 0 || !positions.insert(part.position) {
+            return Err(DbError::PositionConflict);
+        }
+        // 同一位置已被工具调用占用时同样拒绝：两条表共用消息内时间线编号。
+        let taken: Option<i64> = transaction
+            .query_row(
+                "SELECT 1 FROM agent_tool_call WHERE message_id = ?1 AND position = ?2",
+                params![assistant_message_id, part.position],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if taken.is_some() {
+            return Err(DbError::PositionConflict);
         }
         transaction.execute(
             r#"INSERT INTO agent_message_part
                    (external_id, message_id, position, kind, content, provider_metadata_json,
-                    created_at_ms, started_at_ms, ended_at_ms)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+                    created_at_ms, started_at_ms, ended_at_ms, completed_at_ms)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
             params![
                 new_external_id("part"),
                 assistant_message_id,
-                position as i64,
+                part.position,
                 part.kind,
                 part.content,
                 part.provider_metadata_json,
                 now,
                 part.started_at_ms,
                 part.ended_at_ms,
+                part.completed_at_ms,
             ],
         )?;
     }
@@ -669,18 +744,98 @@ fn single_line_preview(text: &str, max_chars: usize) -> String {
     out.trim().to_string()
 }
 
-/// app 层聊天视图 parts → 存储记录 parts（position 按枚举顺序写 0..n）。
-pub fn chat_part_views(parts: &[crate::app::state::ChatPartView]) -> Vec<ChatPart> {
+/// app 层聊天步骤视图 → 存储记录 parts。
+///
+/// position 由调用方的时间线给出（不再按枚举重排），`completed_at_ms` 原样携带；
+/// 重复或负值位置会在写入时被 `replace_parts` 拒绝为 `PositionConflict`。
+pub fn chat_part_views<'a>(
+    parts: impl Iterator<Item = (i64, &'a crate::app::state::ChatPartView)>,
+) -> Vec<ChatPart> {
     parts
-        .iter()
-        .enumerate()
         .map(|(position, part)| ChatPart {
-            position: position as i64,
+            position,
             kind: part.kind_str().to_string(),
             content: part.content.clone(),
             provider_metadata_json: part.provider_metadata_json.clone(),
             started_at_ms: part.started_at_ms,
             ended_at_ms: part.ended_at_ms,
+            completed_at_ms: part.completed_at_ms,
+        })
+        .collect()
+}
+
+/// 消息步骤时间线 → DB parts（使用步骤自带的真实 `position`，不重新编号）。
+///
+/// 工具步骤不是内容块：它们由 `agent_tool_call` 表承载（见 `chat/tools.rs`），
+/// 此处只取 `AssistantStepView::Part`。
+pub fn chat_message_part_views(message: &crate::app::state::ChatMessageView) -> Vec<ChatPart> {
+    chat_part_views(message.steps.iter().filter_map(|step| match step {
+        crate::app::state::AssistantStepView::Part { position, part } => Some((*position, part)),
+        crate::app::state::AssistantStepView::Tool { .. } => None,
+    }))
+}
+
+/// 消息步骤时间线 → DB 工具记录（装配输入用；不写入 DB）。
+///
+/// `position` 取步骤自身编号（与 parts 共用同一编号空间，不重新编号）；
+/// `result_json` 只在结算后存在，`error_text` 只在失败/中断时有值——都不伪造。
+pub fn chat_message_tool_views(
+    message: &crate::app::state::ChatMessageView,
+) -> Vec<ToolCallRecord> {
+    message
+        .steps
+        .iter()
+        .filter_map(|step| match step {
+            crate::app::state::AssistantStepView::Tool { position, call } => Some(ToolCallRecord {
+                call_id: call.call_id.clone(),
+                message_id: message.id.clone(),
+                name: call.name.clone(),
+                arguments_json: call.arguments_json.clone(),
+                position: *position,
+                status: call.status.as_str().to_string(),
+                result_json: call.result_json.clone(),
+                error_text: call.error.clone(),
+                started_at_ms: 0,
+                completed_at_ms: None,
+                duration_ms: None,
+            }),
+            crate::app::state::AssistantStepView::Part { .. } => None,
+        })
+        .collect()
+}
+
+/// 窗格聊天视图 → 装配用 DB 消息记录（parts 与 tools 同源映射）。
+///
+/// **选择**：`/resume` 后的下一轮装配走「窗格内存视图 → 记录 → `context::assemble`」，
+/// 不重新查库。理由：窗格视图已是「DB 历史 + 本轮增量」的唯一时间线
+/// （`on_session_loaded` 按 position 合并 parts 与 tools，`on_stream_delta` 追加本轮步骤），
+/// 再查库既拿不到本轮未完成步骤，也会与内存状态形成两份真相。
+/// 记录里的 `sequence` 用视图下标（装配按消息顺序分组，不使用该字段的绝对值）。
+pub fn chat_message_views_to_db(
+    messages: &[crate::app::state::ChatMessageView],
+) -> Vec<ChatMessage> {
+    messages
+        .iter()
+        .enumerate()
+        .map(|(sequence, message)| ChatMessage {
+            external_id: message.id.clone(),
+            sequence: sequence as i64,
+            turn_index: message.turn_index,
+            role: message.role.clone(),
+            status: message.status.clone(),
+            model_provider: None,
+            model_id: None,
+            variant: None,
+            stop_reason: None,
+            error_code: message.error_code.clone(),
+            input_tokens: message.input_tokens,
+            output_tokens: message.output_tokens,
+            cache_read_tokens: message.cache_read_tokens,
+            cache_write_tokens: None,
+            created_at_ms: 0,
+            completed_at_ms: None,
+            parts: chat_message_part_views(message),
+            tools: chat_message_tool_views(message),
         })
         .collect()
 }

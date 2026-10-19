@@ -3,9 +3,11 @@
 //! 数据库路径按环境区分：生产 `~/.lx-t/db/lx.db`，开发 `~/.lx-t-dev/db/lx.db`；
 //! `LX_TUI_ENV` / `LX_ENV` 环境变量优先（`dev` 走开发路径，其余取值视为生产），
 //! 缺省回退 `cfg!(debug_assertions)` 门控；`LX_TUI_DB_PATH` 可显式覆盖（测试隔离用）。
-//! Schema 迁移使用 SQLite 原生 `PRAGMA user_version` 版本控制。
+//! Schema 迁移使用 SQLite 原生 `PRAGMA user_version` 版本控制，迁移文本集中在
+//! `migration` 子模块；聊天读写见 `chat`，工具调用见 `chat::tools`。
 
 pub mod chat;
+mod migration;
 pub mod service;
 
 use std::fmt;
@@ -16,227 +18,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// 旧正文迁移为唯一第一页时使用的默认页名。
 const FIRST_PAGE_NAME: &str = "Page 1";
-
-/// 建表语句（workspace 语义，对齐 lx-agent 的 external_id + 级联外键设计）。
-const SCHEMA: &str = r#"
-CREATE TABLE IF NOT EXISTS workspace (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    "type" TEXT NOT NULL DEFAULT 'filesystem',
-    path TEXT UNIQUE,
-    is_trusted INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS workspace_folder (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    workspace_id TEXT NOT NULL,
-    parent_folder_id TEXT,
-    name TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
-    FOREIGN KEY (parent_folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_folder_workspace_id ON workspace_folder(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_folder_parent ON workspace_folder(parent_folder_id);
-
-CREATE TABLE IF NOT EXISTS workspace_prompt (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    workspace_id TEXT NOT NULL,
-    folder_id TEXT,
-    name TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    active_page_id INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_prompt_workspace_id ON workspace_prompt(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(folder_id);
-
-CREATE TABLE IF NOT EXISTS workspace_referenced_folder (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    workspace_id TEXT NOT NULL,
-    path TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
-    UNIQUE (workspace_id, path)
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_referenced_folder_workspace_id
-    ON workspace_referenced_folder(workspace_id);
-"#;
-
-/// v4 分页建表语句：页表以 `(prompt_id, position)` 唯一约束保证创建顺序；
-/// `workspace_prompt.content` 保留为第一页镜像（兼容既有读取者）。
-const SCHEMA_V4: &str = r#"
-CREATE TABLE IF NOT EXISTS workspace_prompt_page (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    prompt_id INTEGER NOT NULL,
-    position INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    UNIQUE (prompt_id, position),
-    FOREIGN KEY (prompt_id) REFERENCES workspace_prompt(id) ON DELETE CASCADE
-);
-
-CREATE INDEX IF NOT EXISTS idx_workspace_prompt_page_prompt_id ON workspace_prompt_page(prompt_id);
-"#;
-
-/// v5 迁移的提示词表重建语句：移除 `status` 列（SQLite 不支持带 CHECK 的 DROP COLUMN）。
-/// 重建必须在关闭外键的独立事务中执行（见 `rebuild_prompt_without_status`）。
-const SCHEMA_V5_PROMPT: &str = r#"
-CREATE TABLE workspace_prompt_v5 (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    workspace_id TEXT NOT NULL,
-    folder_id TEXT,
-    name TEXT NOT NULL,
-    content TEXT NOT NULL DEFAULT '',
-    active_page_id INTEGER,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    FOREIGN KEY (workspace_id) REFERENCES workspace(external_id) ON DELETE CASCADE,
-    FOREIGN KEY (folder_id) REFERENCES workspace_folder(external_id) ON DELETE CASCADE
-);
-
-INSERT INTO workspace_prompt_v5 (id, external_id, workspace_id, folder_id, name, content, active_page_id, created_at, updated_at)
-    SELECT id, external_id, workspace_id, folder_id, name, content, active_page_id, created_at, updated_at
-    FROM workspace_prompt;
-
-DROP TABLE workspace_prompt;
-
-ALTER TABLE workspace_prompt_v5 RENAME TO workspace_prompt;
-
-CREATE INDEX IF NOT EXISTS idx_workspace_prompt_workspace_id ON workspace_prompt(workspace_id);
-CREATE INDEX IF NOT EXISTS idx_workspace_prompt_folder_id ON workspace_prompt(folder_id);
-"#;
-
-/// v7 聊天会话建表语句：会话、消息、内容块、工具调用与子 Agent 关系五表。
-///
-/// - 内部 `id` 与稳定 `external_id` 双键：`id` 只作本地排序，跨表外键引用
-///   `external_id`（对齐 workspace 表约定），避免易变的 `PaneId` 进库。
-/// - 时间统一 UTC 毫秒整数；同毫秒排序交给 `id`。
-/// - 工具调用与子 Agent 表本期只建结构、不写行；预建覆盖 Codex item 的
-///   名称、参数、状态与结果语义。
-const SCHEMA_V7: &str = r#"
-CREATE TABLE IF NOT EXISTS agent_session (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    workspace_id TEXT NOT NULL REFERENCES workspace(external_id) ON DELETE CASCADE,
-    source TEXT NOT NULL DEFAULT 'native' CHECK (source IN ('native', 'subagent')),
-    title TEXT NOT NULL,
-    first_user_message TEXT NOT NULL DEFAULT '',
-    model_provider TEXT NOT NULL,
-    model_id TEXT NOT NULL,
-    variant TEXT,
-    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
-    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
-    agent_nickname TEXT,
-    agent_role TEXT,
-    agent_path TEXT,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    last_message_at_ms INTEGER NOT NULL,
-    total_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_input_tokens >= 0),
-    total_output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_output_tokens >= 0)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_session_workspace_recent
-    ON agent_session(workspace_id, archived, updated_at_ms DESC, id DESC);
-
-CREATE TABLE IF NOT EXISTS agent_message (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
-    sequence INTEGER NOT NULL CHECK (sequence >= 0),
-    turn_index INTEGER NOT NULL CHECK (turn_index >= 0),
-    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
-    status TEXT NOT NULL CHECK (status IN ('complete', 'streaming', 'interrupted', 'failed')),
-    model_provider TEXT,
-    model_id TEXT,
-    variant TEXT,
-    stop_reason TEXT,
-    input_tokens INTEGER CHECK (input_tokens >= 0),
-    output_tokens INTEGER CHECK (output_tokens >= 0),
-    cache_read_tokens INTEGER CHECK (cache_read_tokens >= 0),
-    cache_write_tokens INTEGER CHECK (cache_write_tokens >= 0),
-    error_code TEXT,
-    created_at_ms INTEGER NOT NULL,
-    completed_at_ms INTEGER,
-    UNIQUE(session_id, sequence)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_message_session_sequence
-    ON agent_message(session_id, sequence);
-
-CREATE TABLE IF NOT EXISTS agent_message_part (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    message_id TEXT NOT NULL REFERENCES agent_message(external_id) ON DELETE CASCADE,
-    position INTEGER NOT NULL CHECK (position >= 0),
-    kind TEXT NOT NULL CHECK (kind IN ('text', 'reasoning')),
-    content TEXT NOT NULL DEFAULT '',
-    provider_metadata_json TEXT,
-    created_at_ms INTEGER NOT NULL,
-    started_at_ms INTEGER,
-    ended_at_ms INTEGER,
-    UNIQUE(message_id, position)
-);
-
-CREATE TABLE IF NOT EXISTS agent_tool_call (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
-    message_id TEXT NOT NULL REFERENCES agent_message(external_id) ON DELETE CASCADE,
-    call_id TEXT NOT NULL,
-    namespace TEXT,
-    name TEXT NOT NULL,
-    arguments_json TEXT NOT NULL DEFAULT '{}',
-    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
-    result_json TEXT,
-    error_text TEXT,
-    started_at_ms INTEGER NOT NULL,
-    completed_at_ms INTEGER,
-    duration_ms INTEGER CHECK (duration_ms >= 0),
-    UNIQUE(session_id, call_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_tool_call_session_started
-    ON agent_tool_call(session_id, started_at_ms, id);
-
-CREATE TABLE IF NOT EXISTS agent_subagent (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    external_id TEXT NOT NULL UNIQUE,
-    parent_session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
-    child_session_id TEXT NOT NULL UNIQUE REFERENCES agent_session(external_id) ON DELETE CASCADE,
-    spawn_message_id TEXT REFERENCES agent_message(external_id) ON DELETE SET NULL,
-    status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'blocked', 'completed', 'failed', 'cancelled')),
-    nickname TEXT,
-    role TEXT,
-    agent_path TEXT,
-    model_provider TEXT,
-    model_id TEXT,
-    variant TEXT,
-    created_at_ms INTEGER NOT NULL,
-    updated_at_ms INTEGER NOT NULL,
-    completed_at_ms INTEGER,
-    CHECK (parent_session_id <> child_session_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agent_subagent_parent_status
-    ON agent_subagent(parent_session_id, status);
-"#;
 
 /// 持久层错误；仅事件层记录日志，不直接面向用户。
 #[derive(Debug)]
@@ -269,6 +54,22 @@ pub enum DbError {
     InvalidDraft,
     /// 单条消息内容超过上限；拒绝写入而非截断用户输入。
     MessageTooLarge,
+    /// 目标工具调用不存在（或不在指定工作区/会话/消息内）。
+    ToolCallMissing,
+    /// 同会话内工具 call ID 已存在（重复 begin 被拒）。
+    ToolCallConflict,
+    /// 分配的时间线位置已被该消息的 part 或工具占用。
+    PositionConflict,
+    /// 工具调用当前状态不允许目标转移（如 pending 直接 finish）。
+    InvalidToolTransition,
+    /// 工具调用已落不同终态；不同结果不允许覆盖。
+    ToolTerminalConflict,
+    /// 工具参数 JSON 超过单次上限。
+    ToolArgumentTooLarge,
+    /// 工具结果 JSON 超过单次上限。
+    ToolResultTooLarge,
+    /// 数据库不可用（无持久化模式）；调用方据此停止需要落库的流程。
+    Unavailable,
 }
 
 impl fmt::Display for DbError {
@@ -293,12 +94,51 @@ impl fmt::Display for DbError {
             Self::SessionBusy => write!(formatter, "chat session is busy"),
             Self::InvalidDraft => write!(formatter, "empty draft"),
             Self::MessageTooLarge => write!(formatter, "message exceeds size limit"),
+            Self::ToolCallMissing => write!(formatter, "tool call not found"),
+            Self::ToolCallConflict => write!(formatter, "tool call already recorded"),
+            Self::PositionConflict => write!(formatter, "message timeline position already used"),
+            Self::InvalidToolTransition => write!(formatter, "invalid tool call transition"),
+            Self::ToolTerminalConflict => {
+                write!(formatter, "tool call already finished differently")
+            }
+            Self::ToolArgumentTooLarge => write!(formatter, "tool arguments exceed size limit"),
+            Self::ToolResultTooLarge => write!(formatter, "tool result exceeds size limit"),
+            Self::Unavailable => write!(formatter, "database unavailable"),
         }
     }
 }
 
 impl std::error::Error for DbError {}
 
+impl DbError {
+    /// 稳定错误码（用于回传 agent loop 的错误码与 tracing，不含 SQL 原文/参数）。
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::HomeMissing => "home missing",
+            Self::Io(_) => "io",
+            Self::Sqlite(_) => "sqlite",
+            Self::WorkspaceMissing => "workspace missing",
+            Self::FolderMissing => "folder missing",
+            Self::PageMissing => "page missing",
+            Self::DepthExceeded => "depth exceeded",
+            Self::ForeignKeyViolation => "foreign key violation",
+            Self::UnsupportedSchema(_) => "unsupported schema",
+            Self::SessionMissing => "session missing",
+            Self::MessageNotStreaming => "message not streaming",
+            Self::SessionBusy => "session busy",
+            Self::InvalidDraft => "invalid draft",
+            Self::MessageTooLarge => "message too large",
+            Self::ToolCallMissing => "tool call missing",
+            Self::ToolCallConflict => "tool call conflict",
+            Self::PositionConflict => "position conflict",
+            Self::InvalidToolTransition => "invalid tool transition",
+            Self::ToolTerminalConflict => "tool terminal conflict",
+            Self::ToolArgumentTooLarge => "tool argument too large",
+            Self::ToolResultTooLarge => "tool result too large",
+            Self::Unavailable => "database unavailable",
+        }
+    }
+}
 impl From<rusqlite::Error> for DbError {
     fn from(error: rusqlite::Error) -> Self {
         Self::Sqlite(error)
@@ -380,113 +220,6 @@ impl Database {
             return Self::open(Path::new(&overridden));
         }
         Self::open(&database_path(is_dev_environment())?)
-    }
-
-    /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
-    ///
-    /// 开发期的资产/附件表已随截图粘贴功能移除，老库中遗留的这些表不再被读写；
-    /// 已有数据（工作区、提示词）原样保留。版本高于程序支持值时返回错误。
-    ///
-    /// v4 迁移把每条旧提示词的正文原样复制为唯一 `Page 1` 并指向当前页；
-    /// v5 迁移重建提示词表移除状态列（在关闭外键的独立事务中完成，不删页表数据）。
-    /// 已升级库不再回填（版本号门控），空库得到同一结构。
-    fn migrate(&mut self) -> Result<()> {
-        let version: i64 = self
-            .conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if version > SCHEMA_VERSION {
-            return Err(DbError::UnsupportedSchema(version));
-        }
-        if version < SCHEMA_VERSION {
-            if version < 4 {
-                let transaction = self.conn.transaction()?;
-                transaction.execute_batch(SCHEMA)?;
-                transaction.execute_batch(SCHEMA_V4)?;
-                // 老库的 workspace_prompt 由历史 SCHEMA 建立，缺 active_page_id 列。
-                if !column_exists(&transaction, "workspace_prompt", "active_page_id")? {
-                    transaction.execute_batch(
-                        "ALTER TABLE workspace_prompt ADD COLUMN active_page_id INTEGER;",
-                    )?;
-                }
-                // 旧正文逐字进入唯一 Page 1；已有页的提示词（重复迁移）不重复生成。
-                transaction.execute(
-                    r#"INSERT INTO workspace_prompt_page
-                           (prompt_id, position, name, content, created_at, updated_at)
-                       SELECT p.id, 0, ?1, p.content, datetime('now'), datetime('now')
-                       FROM workspace_prompt p
-                       WHERE NOT EXISTS (
-                           SELECT 1 FROM workspace_prompt_page pg WHERE pg.prompt_id = p.id
-                       )"#,
-                    params![FIRST_PAGE_NAME],
-                )?;
-                transaction.execute(
-                    r#"UPDATE workspace_prompt
-                       SET active_page_id = (
-                           SELECT pg.id FROM workspace_prompt_page pg
-                           WHERE pg.prompt_id = workspace_prompt.id
-                           ORDER BY pg.position LIMIT 1
-                       )
-                       WHERE active_page_id IS NULL"#,
-                    [],
-                )?;
-                transaction.pragma_update(None, "user_version", 4)?;
-                transaction.commit()?;
-            }
-            // 旧库（v1..v4）带状态列：整表重建去列，必须在事务外关闭外键，
-            // 否则 `DROP TABLE workspace_prompt` 会级联删除页表数据。
-            if column_exists(&self.conn, "workspace_prompt", "status")? {
-                self.rebuild_prompt_without_status()?;
-            }
-            let transaction = self.conn.transaction()?;
-            transaction.execute_batch(SCHEMA)?;
-            // v7：聊天会话五表；建表与索引成功后才推进 user_version。
-            if version < 7 {
-                transaction.execute_batch(SCHEMA_V7)?;
-                // 打开外键时的完整性自检：v7 只增表，发现违规说明旧数据已坏。
-                let violations: i64 = transaction.query_row(
-                    "SELECT COUNT(*) FROM pragma_foreign_key_check",
-                    [],
-                    |row| row.get(0),
-                )?;
-                if violations != 0 {
-                    return Err(DbError::ForeignKeyViolation);
-                }
-            }
-            // v8：消息 part 记录流中起止时刻（思考耗时展示）；老库补列（新库由 SCHEMA 建出）。
-            if version < 8 && !column_exists(&transaction, "agent_message_part", "started_at_ms")? {
-                transaction.execute_batch(
-                    "ALTER TABLE agent_message_part ADD COLUMN started_at_ms INTEGER;
-                     ALTER TABLE agent_message_part ADD COLUMN ended_at_ms INTEGER;",
-                )?;
-            }
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-            transaction.commit()?;
-        }
-        Ok(())
-    }
-
-    /// v5：重建 `workspace_prompt` 去 `status` 列（页表外键指向重建后的同名表）。
-    ///
-    /// `DROP TABLE` 在打开外键时会级联清空页表，因此重建必须在关闭外键的
-    /// 独立事务内完成；失败不推进版本，下次打开会重试（结构幂等）。
-    fn rebuild_prompt_without_status(&mut self) -> Result<()> {
-        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
-        let result = (|| -> Result<()> {
-            let transaction = self.conn.transaction()?;
-            transaction.execute_batch(SCHEMA_V5_PROMPT)?;
-            let violations: i64 = transaction.query_row(
-                "SELECT COUNT(*) FROM pragma_foreign_key_check",
-                [],
-                |row| row.get(0),
-            )?;
-            if violations != 0 {
-                return Err(DbError::ForeignKeyViolation);
-            }
-            transaction.commit()?;
-            Ok(())
-        })();
-        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-        result
     }
 
     /// 路径是否已信任（`is_trusted = 1`）。
@@ -1010,13 +743,6 @@ pub(crate) fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
-}
-
-/// 表是否已有指定列（`PRAGMA table_info`）；仅迁移期使用。
-fn column_exists(connection: &Connection, table: &str, column: &str) -> Result<bool> {
-    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
-    let mut names = statement.query_map([], |row| row.get::<_, String>(1))?;
-    Ok(names.any(|name| name.is_ok_and(|name| name == column)))
 }
 
 #[cfg(test)]

@@ -1,4 +1,6 @@
-//! `agent` 步骤调用样例册的用户可见文案（`[UI]` 查看器 `agent` 分组）。
+//! agent 步骤的用户可见文案：`[UI]` 查看器 `agent` 分组的样例册，以及 lx 聊天历史里
+//! **真实工具步骤行**（`ui/main_content/lx/history/tool.rs`）与样例**共用**的图标 / 动词 /
+//! 计数标记（同一份常量，两处渲染不得各写一份字符串）。
 //!
 //! 文案仍集中在 `text` 模块；拆到此子模块只为把 `text.rs` 控制在单文件行数上限内。
 //! 结构（图标、状态、token 数值）由 `ui/overlay/ui_gallery/agent.rs` 提供，本模块只放字符串。
@@ -103,6 +105,86 @@ pub const PARAM_QUESTION: &str = "Overwrite the existing file?";
 pub const EDIT_DIFF_ADD: &str = "+12";
 pub const EDIT_DIFF_DEL: &str = "-4";
 pub const WRITE_ADD: &str = "+18";
+
+// ===== 真实工具步骤行（lx 聊天历史）与样例共用的方块标记 / 动词 / 计数标记 =====
+//
+// `ui/main_content/lx/history/tool.rs` 渲染真实工具调用时**只读**本组常量与上面的
+// `VERB_*`：动词与计数标记不允许在渲染层再写一份字符串。行首状态标记自 G11 起改由
+// `history::StepMark` 的方块承担，不再使用按工具区分的类型图标。
+
+/// 聊天历史每个 assistant 步骤左侧的方块标记（思考 / 工具调用 / 正文块共用）：
+/// 运行中 `■`/`□` 两帧呼吸，终态停为静态方块；呼吸相位每 [`STEP_BREATH_TICKS`]
+/// 个 loading 帧翻转一次（loading 帧 100ms → 约 400ms 一相，是“呼吸”而非闪烁）。
+pub const STEP_MARK_FILLED: char = '■';
+pub const STEP_MARK_HOLLOW: char = '□';
+pub const STEP_BREATH_TICKS: usize = 4;
+
+/// 真实工具步骤行的固定动词（设计 §10：`Read` / `Search` / `Edit` / `Write`）。
+///
+/// gallery 样例叙述已完成的调用（`Edited` / `Wrote` / `Searched`），实时历史行叙述
+/// **这次调用本身**，故用同一词根的现在式。`read` 两处同形，直接复用
+/// [`VERB_READ`]，不另写一份字符串。
+pub const VERB_TOOL_READ: &str = VERB_READ;
+pub const VERB_TOOL_SEARCH: &str = "Search";
+pub const VERB_TOOL_EDIT: &str = "Edit";
+pub const VERB_TOOL_WRITE: &str = "Write";
+
+/// 工具行 diff 计数的前缀（绿 `+N` / 红 `-N`，与样例 `+12` / `-4` 同色）。
+pub const TOOL_DIFF_ADD_PREFIX: &str = "+";
+pub const TOOL_DIFF_REMOVE_PREFIX: &str = "-";
+
+/// 内容被截断的显式提示（追加在计数末尾，不与计数同色）。
+pub const TOOL_TRUNCATED: &str = "…[truncated]";
+
+/// `edit` 部分成功的尾部标记：本次补丁里有 hunk 应用后内容与原文相同（无实际变更）。
+pub const TOOL_PARTIAL: &str = "partial";
+
+/// `search` 命中数后缀（单复数分开，避免 `1 matches` 这类错句）。
+pub const TOOL_MATCH_ONE: &str = "match";
+pub const TOOL_MATCH_MANY: &str = "matches";
+
+/// `read` 行范围：`12-40`（起止均为 1-based 闭区间）。
+pub fn range_label(start: usize, end: usize) -> String {
+    format!("{start}-{end}")
+}
+
+/// `read` 实际读到的行数：`(31 lines)` / `(1 line)`；与区间并列显示在括号里。
+pub fn lines_label(count: usize) -> String {
+    let suffix = if count == 1 { "line" } else { "lines" };
+    format!("({count} {suffix})")
+}
+
+/// `search` 的搜索模式：加引号，便于与路径区分（`"测试"`）。
+pub fn pattern_label(pattern: &str) -> String {
+    format!("\"{pattern}\"")
+}
+
+/// `search` 的搜索范围连接词（`"pat" in path` 里的 `in`）。
+///
+/// 渲染层把它作为**独立的一段**（dim）放在 pattern 与 path 之间，窄宽度时整段让位
+/// （review P2-7：三段的着色粒度与 codex 一致）。不要把它拼进 pattern 或 path ——
+/// 拼成一段后只能对整串做中间省略，窄宽度会把 pattern 切碎。
+pub const IN_SCOPE_SEP: &str = "in ";
+
+/// 命中 / 条目数：`3 matches`、`1 match`。
+pub fn matches_label(count: usize) -> String {
+    let suffix = if count == 1 {
+        TOOL_MATCH_ONE
+    } else {
+        TOOL_MATCH_MANY
+    };
+    format!("{count} {suffix}")
+}
+
+/// 新增行数：`+12`。
+pub fn added_label(count: usize) -> String {
+    format!("{TOOL_DIFF_ADD_PREFIX}{count}")
+}
+
+/// 删除行数：`-4`。
+pub fn removed_label(count: usize) -> String {
+    format!("{TOOL_DIFF_REMOVE_PREFIX}{count}")
+}
 
 /// 步骤子行（直角树连接下的细节）。
 pub const BODY_EXEC: &[&str] = &["On branch dev", "nothing to commit, working tree clean"];
@@ -233,3 +315,11 @@ fn main() {
 [OpenAI](https://openai.com) <https://example.com>
 ![logo](https://example.com/logo.png)
 ";
+
+/// lx 页 `Native Agent` 标签渐变的**去重色序列**（218 粉 → 182 淡紫 → 153 浅蓝 → 117 天蓝）。
+///
+/// 输入框上方 loading 的扫描高亮按这 4 档循环换色（`style::chat_loading_scan`），
+/// 保证「loading 的色 = Native 入口标签的色」，不引入第二套品牌色。
+pub fn native_label_cycle() -> &'static [u8] {
+    &[218, 182, 153, 117]
+}

@@ -363,3 +363,44 @@ fn workspace_path_label_single_segment_and_root() {
         Some("/")
     );
 }
+
+#[test]
+fn tool_verb_constants_are_shared_with_agent_gallery() {
+    use super::agent as a;
+
+    // gallery 样例的图标各有一个单宽符号（真实工具行自 G11 起改用统一步骤方块，
+    // 不再按工具区分类型图标）。
+    for icon in [a::ICON_READ, a::ICON_SEARCH, a::ICON_EDIT, a::ICON_WRITE] {
+        assert!(!icon.is_empty());
+        assert_eq!(icon.width(), 1, "工具图标必须严格 1 列宽: {icon:?}");
+    }
+
+    // 动词常量非空且两处同源（`read` 与 gallery 的 `Read` 完全同形）。
+    assert_eq!(a::VERB_TOOL_READ, a::VERB_READ);
+    for verb in [
+        a::VERB_TOOL_READ,
+        a::VERB_TOOL_SEARCH,
+        a::VERB_TOOL_EDIT,
+        a::VERB_TOOL_WRITE,
+    ] {
+        assert!(!verb.is_empty(), "动词不得为空");
+        assert!(!verb.contains('\u{fffd}'), "动词禁止替换字符: {verb}");
+    }
+}
+
+#[test]
+fn tool_count_labels_use_shared_prefixes() {
+    use super::agent as a;
+
+    // `+N` / `-N` 与 gallery 样例的 `+12` / `-4` 前缀完全一致（不各写一份）。
+    assert_eq!(a::added_label(12), a::EDIT_DIFF_ADD);
+    assert_eq!(a::added_label(18), a::WRITE_ADD);
+    assert_eq!(a::removed_label(4), a::EDIT_DIFF_DEL);
+    // 行范围与命中数（含单复数）。
+    assert_eq!(a::range_label(12, 40), "12-40");
+    assert_eq!(a::matches_label(0), "0 matches");
+    assert_eq!(a::matches_label(1), "1 match");
+    assert_eq!(a::matches_label(3), "3 matches");
+    // 截断提示非空且明确。
+    assert!(a::TOOL_TRUNCATED.contains("truncated"));
+}

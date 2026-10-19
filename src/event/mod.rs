@@ -93,6 +93,10 @@ pub enum AppEvent {
     },
     /// lx 聊天网络流事件（delta / finished）；按 request key 过滤。
     ChatNet(chat::ChatNetEvent),
+    /// lx agent loop 的工具调用握手（pending/running/结果落库 ack）。
+    ///
+    /// 事件层在 **DB 与状态都就绪后**才回执，因此 loop 拿到 ticket 才执行文件 IO。
+    AgentHost(chat::AgentHostEvent),
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -229,6 +233,9 @@ async fn run_loop(
         pump_lx_mention_scan(state, &sender);
         git::pump_git_queries(state, &sender, &mut git_inflight);
         let geometry = session::current_geometry(tui, state, &config)?;
+        // 工具调用 loading 门槛按「窗格本帧是否可见」决定是否等一帧；每帧都刷新，
+        // 避免首帧（几何未变化）误判为不可见而跳过渲染门槛。
+        chat_streams.set_visible_panes(&geometry.rects);
         if let Some(rows) = ui::agent_list_rows(&geometry.view, state)
             && update::clamp_agent_scroll(state, rows)
         {
@@ -271,6 +278,11 @@ async fn run_loop(
             tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();
+            // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，
+            // loop 此刻才被允许执行文件 IO（不靠 sleep 保证可见性）。
+            if chat::flush_pending_tool_begins(state, &mut chat_streams, persistence) {
+                dirty = true;
+            }
         }
 
         // 待执行效应（如自动保存落库）必须尽快进入下一轮 pump，不随空闲睡死。
@@ -313,6 +325,7 @@ async fn run_loop(
                         &mut sessions,
                         &mut git_inflight,
                         &mut chat_streams,
+                        persistence,
                     );
                     while let Ok(message) = receiver.try_recv() {
                         handle_app_event(
@@ -321,6 +334,7 @@ async fn run_loop(
                             &mut sessions,
                             &mut git_inflight,
                             &mut chat_streams,
+                            persistence,
                         );
                     }
                     // 输出后安排一次去抖检查；窗口内合并，空闲不轮询。
@@ -403,6 +417,7 @@ fn handle_app_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     git_inflight: &mut HashSet<PathBuf>,
     chat_streams: &mut chat::ChatStreams,
+    persistence: &Persistence,
 ) {
     match message {
         AppEvent::PaneOutput(id, bytes) => {
@@ -462,6 +477,10 @@ fn handle_app_event(
         AppEvent::ChatNet(event) => {
             // 网络事件按 key 过滤后转 update；调用方随后统一置脏。
             chat::handle_net_event(state, chat_streams, event);
+        }
+        AppEvent::AgentHost(event) => {
+            // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
+            chat::handle_agent_host_event(state, chat_streams, persistence, event);
         }
         AppEvent::PromptWorktreeListed {
             repo_root,

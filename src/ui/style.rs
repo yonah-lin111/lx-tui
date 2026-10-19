@@ -165,6 +165,12 @@ pub fn agent_verb() -> Style {
 /// 命令 / 文件 / 目录 / agent / 查询 / 数值等**全部**用这一固定色（不再按类型分色），
 /// 下划线提示“此处是每次调用都会变的值”。与图标（[`agent_icon`]）、动词
 /// （[`agent_verb`]）都区分得开，且避开边框青。
+///
+/// **只服务 `[UI]` 查看器的 `agent` 分组样例**（`ui/overlay/ui_gallery/agent.rs`）。
+/// 实时聊天历史的工具行不用它，改用 [`chat_tool_param`]：那边**刻意不加下划线**——
+/// 连续多个工具行时下划线会把整块历史划成一片横线，盖过翡翠绿结构色
+/// （见 [`chat_tool_param`] 与 `style::tests::agent_param_keeps_legacy_underline`）。
+/// 二者同色（同为 [`CHAT_GOLD`]）而修饰符不同，是**有意为之**，不要「顺手对齐」。
 pub fn agent_param() -> Style {
     Style::default()
         .fg(Color::Indexed(220))
@@ -232,64 +238,91 @@ pub fn directory() -> Style {
     accent()
 }
 
-/// markdown 语法标记（`#`、`**`、`` ` `` 等）：次要信息。
+// ===== markdown 阅读高亮：GitHub Dark 官方色板（truecolor，不做主题映射）=====
+//
+// 用户要求「markdown 的格式高亮使用 GitHub 黑暗模式的」。此前两版都偏离目标：
+// ① 沿袭 ANSI 语义色（黄标题 / 亮红行内代码 / 亮品红引用 / 亮蓝链接 / 五色代码）
+//    —— 用户反馈“过于花里胡哨”；② 一刀切去色相（只剩默认前景 + 一档灰绿）
+//    —— 强调全压在字重上，代码块失去语法信息。
+//
+// 现在直接**照抄 GitHub Dark 的两套官方 token**：
+// - 语法高亮取 `github.github.com/_next/static/...` 的 prettylights 变量
+//   （等价于 VS Code `GitHub Dark Default` 主题的 tokenColors）；
+// - 文档结构取 `github-markdown-css` 的 dark 变量（正文 / 次要 / 边框 / 链接）。
+//
+// 用 `Color::Rgb` 而不是 256 色：GitHub 的十六进制值经过 256 色 cube 量化会明显偏色
+// （例如 `#a5d6ff` 会落到 `#afd7ff`），而且用户主题对 Indexed 的重映射会让它不再是
+// GitHub。固定 RGB 与 [`template_block_bg`] 同一条理由。
+//
+// GitHub Dark 的结构几乎**没有强调色**：标题/粗体/斜体/引用都只是正文色 + 修饰符，
+// 颜色只出现在链接（`#4493f8`）与代码 token 上。因此本组不会重新变成“花里胡哨”。
+mod github_dark {
+    use ratatui::style::Color;
+
+    /// 次要信息 `--color-fg-muted`（引用、URL、语法标记、表格/水平线）。
+    ///
+    /// 注：正文的 `--color-fg-default`（`#e6edf3`）**不落成样式**——正文继续用终端默认
+    /// 前景，否则在浅色终端上会变成浅灰压白、不可读；GitHub 本身也只在自己的深底上用它。
+    pub(super) const FG_MUTED: Color = Color::Rgb(0x7d, 0x85, 0x90);
+    /// 链接 `--color-accent-fg`。
+    pub(super) const LINK: Color = Color::Rgb(0x44, 0x93, 0xf8);
+    /// 语法：关键字 / 类型声明 `--color-prettylights-syntax-keyword`。
+    pub(super) const KEYWORD: Color = Color::Rgb(0xff, 0x7b, 0x72);
+    /// 语法：字符串 `--color-prettylights-syntax-string`。
+    pub(super) const STRING: Color = Color::Rgb(0xa5, 0xd6, 0xff);
+    /// 语法：常量 / 数字 / 内联代码 `--color-prettylights-syntax-constant`
+    /// （`markup.inline.raw` 同色）。
+    pub(super) const CONSTANT: Color = Color::Rgb(0x79, 0xc0, 0xff);
+    /// 语法：函数 / 实体 / 类型名 `--color-prettylights-syntax-entity`。
+    pub(super) const ENTITY: Color = Color::Rgb(0xd2, 0xa8, 0xff);
+    /// 语法：注释 `--color-prettylights-syntax-comment`。
+    pub(super) const COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
+}
+
+/// markdown 语法标记（`#`、`**`、`` ` `` 等）：GitHub 的次要前景色。
 pub fn markdown_marker() -> Style {
-    muted()
+    Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 标题文字。
+/// markdown 标题文字：正文色 + 加粗（GitHub 的标题几乎不上色，靠字重与下边框分层）。
 pub fn markdown_heading() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
-/// markdown 六级标题的样式：h1 加粗+下划线、h2 加粗、h3 加粗+斜体、h4–h6 斜体（对齐 codex）。
+/// markdown 六级标题的样式：h1 加粗+下划线（对齐 GitHub 的 `border-bottom`）、h2 加粗+
+/// 下划线、h3 加粗、h4–h6 斜体；全程只用修饰符，不换色（与 GitHub Dark 一致）。
 pub fn markdown_heading_level(level: u8) -> Style {
-    let base = Color::Yellow;
     match level {
-        1 => Style::default()
-            .fg(base)
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        2 => Style::default().fg(base).add_modifier(Modifier::BOLD),
-        3 => Style::default()
-            .fg(base)
-            .add_modifier(Modifier::BOLD | Modifier::ITALIC),
-        _ => Style::default().fg(base).add_modifier(Modifier::ITALIC),
+        1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        2 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        3 => Style::default().add_modifier(Modifier::BOLD),
+        _ => Style::default().add_modifier(Modifier::ITALIC),
     }
 }
 
-/// markdown 粗斜体（`***…***`）：Yellow 加粗+斜体。
+/// markdown 粗斜体（`***…***`）：正文色加粗+斜体（不再额外上色）。
 pub fn markdown_strong_emphasis() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD | Modifier::ITALIC)
+    Style::default().add_modifier(Modifier::BOLD | Modifier::ITALIC)
 }
 
-/// markdown 粗体文字。
+/// markdown 粗体文字：正文色加粗。
 pub fn markdown_strong() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::BOLD)
+    Style::default().add_modifier(Modifier::BOLD)
 }
 
-/// markdown 斜体文字。
+/// markdown 斜体文字：正文色斜体。
 pub fn markdown_emphasis() -> Style {
-    Style::default()
-        .fg(Color::Yellow)
-        .add_modifier(Modifier::ITALIC)
+    Style::default().add_modifier(Modifier::ITALIC)
 }
 
-/// markdown 删除线文字。
+/// markdown 删除线文字：GitHub 的 `markup.strikethrough` 只加删除线、不换色。
 pub fn markdown_strikethrough() -> Style {
-    Style::default()
-        .fg(Color::LightRed)
-        .add_modifier(Modifier::CROSSED_OUT)
+    Style::default().add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 行内代码内容。
+/// markdown 行内代码内容：GitHub 的 `markup.inline.raw` 用常量蓝 `#79c0ff`。
 pub fn markdown_inline_code() -> Style {
-    Style::default().fg(Color::LightRed)
+    Style::default().fg(github_dark::CONSTANT)
 }
 
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
@@ -297,87 +330,85 @@ pub fn markdown_code_block() -> Style {
     text()
 }
 
-/// 代码高亮：关键字（`fn`/`const`/`class`/`return`…）——品牌品红加粗，最抢眼。
+/// 代码高亮：关键字（`fn`/`const`/`class`/`return`…）——
+/// GitHub 的 `keyword` 珊瑚红 `#ff7b72`（不加粗：GitHub 自身也不加粗）。
 pub fn code_keyword() -> Style {
-    Style::default()
-        .fg(Color::Indexed(213))
-        .add_modifier(Modifier::BOLD)
+    Style::default().fg(github_dark::KEYWORD)
 }
 
-/// 代码高亮：字符串与字符字面量——绿。
+/// 代码高亮：字符串与字符字面量——GitHub 的 `string` 浅蓝 `#a5d6ff`。
 pub fn code_string() -> Style {
-    Style::default().fg(Color::Indexed(114))
+    Style::default().fg(github_dark::STRING)
 }
 
-/// 代码高亮：数字字面量——橙。
+/// 代码高亮：数字字面量——GitHub 的 `constant` 蓝 `#79c0ff`。
 pub fn code_number() -> Style {
-    Style::default().fg(Color::Indexed(215))
+    Style::default().fg(github_dark::CONSTANT)
 }
 
-/// 代码高亮：注释——次要信息（dim）。
-pub fn code_comment() -> Style {
-    muted()
-}
-
-/// 代码高亮：类型名（首字母大写的标识符）——品牌天蓝。
+/// 代码高亮：类型名（首字母大写的标识符）——GitHub 的 `entity` 紫 `#d2a8ff`。
 pub fn code_type() -> Style {
-    Style::default().fg(Color::Indexed(117))
+    Style::default().fg(github_dark::ENTITY)
 }
 
-/// markdown 引用内容。
+/// 代码高亮：注释——GitHub 的 `comment` 灰 `#8b949e`。
+pub fn code_comment() -> Style {
+    Style::default().fg(github_dark::COMMENT)
+}
+
+/// markdown 引用内容：GitHub 的引用只改前景 + 左侧竖条，不斜体、不换色。
 pub fn markdown_quote() -> Style {
-    Style::default()
-        .fg(Color::LightMagenta)
-        .add_modifier(Modifier::ITALIC)
+    Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 链接文字。
+/// markdown 链接文字：GitHub 的链接蓝 `#4493f8` + 下划线。
 pub fn markdown_link_text() -> Style {
     Style::default()
-        .fg(Color::LightBlue)
+        .fg(github_dark::LINK)
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// markdown URL。
+/// markdown URL：GitHub 把裸 URL 与链接地址都渲染成链接蓝。
 pub fn markdown_url() -> Style {
-    Style::default().fg(Color::Cyan)
+    Style::default().fg(github_dark::LINK)
 }
 
-/// markdown 无序列表项目符号：次要信息。
+/// markdown 无序列表项目符号：GitHub 的列表符号与正文同色（不弱化）。
 pub fn markdown_bullet() -> Style {
-    muted()
+    Style::default()
 }
 
-/// markdown 有序列表序号（对齐 codex 的 light_blue）。
+/// markdown 有序列表序号：同无序项目符号，与正文同色。
 pub fn markdown_ordered() -> Style {
-    Style::default().fg(Color::LightBlue)
+    Style::default()
 }
 
-/// markdown 任务列表已完成项（Green + 删除线）。
+/// markdown 任务列表已完成项：GitHub 的 `markup.ignored`/复选框语义——只加删除线。
 pub fn markdown_task_done() -> Style {
     Style::default()
-        .fg(Color::Green)
+        .fg(github_dark::FG_MUTED)
         .add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 任务列表未完成项：次要信息。
+/// markdown 任务列表未完成项：次要前景色。
 pub fn markdown_task_open() -> Style {
-    muted()
+    Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 水平线 / 表格边框：次要信息。
+/// markdown 水平线 / 表格边框：GitHub 的边框色（`#30363d`）在终端里太暗，
+/// 用 `--color-fg-muted` 档兼顾可见度。
 pub fn markdown_rule() -> Style {
-    muted()
+    Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 代码块语言标记：次要信息。
+/// markdown 代码块语言标记：GitHub 的次要前景色。
 pub fn markdown_code_lang() -> Style {
-    muted()
+    Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 图片说明（alt / url）：次要信息。
+/// markdown 图片说明（alt / url）：GitHub 的次要前景色。
 pub fn markdown_image() -> Style {
-    muted()
+    Style::default().fg(github_dark::FG_MUTED)
 }
 
 /// 模板块结构标记（`&&&`、`--start`/`--end`、状态与元数据）：次要信息。
@@ -405,35 +436,31 @@ pub fn template_title() -> Style {
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@文件` 提及：Yellow 下划线。
+/// `@文件` 提及 / `@[refer-*]` 引用：GitHub 的链接蓝 + 下划线。
+///
+/// 提及与引用**统一一档色**（不再按 file 绿 / folder 橙 / image 品红分色）：
+/// 种类在语法里自带（目录带尾 `/`、`refer-image` 前缀不同），靠颜色重复编码只会让
+/// 输入框显得花。下划线保留“这是一处引用而非正文”的信号，颜色与 markdown 链接一致
+/// （都是“可跳转的引用”，GitHub 里同样是 `--color-accent-fg`）。
 pub fn markdown_file_mention() -> Style {
     Style::default()
-        .fg(Color::Yellow)
+        .fg(github_dark::LINK)
         .add_modifier(Modifier::UNDERLINED)
 }
 
-/// `@[refer-file](path)` 文件引用：LightGreen 下划线（与 @ 提及的 Yellow 区分）。
+/// `@[refer-file](path)` 文件引用：与 `@` 提及同款。
 pub fn markdown_refer_file() -> Style {
-    Style::default()
-        .fg(Color::LightGreen)
-        .add_modifier(Modifier::UNDERLINED)
+    markdown_file_mention()
 }
 
-/// `@[refer-folder](path)` 目录引用：橙（Indexed 208）下划线。
-///
-/// 固定 256 色橙：与 file 亮绿、image 亮品红、`@` 提及黄都能一眼分开，
-/// 且不占用主题蓝/青（边框、URL、link 已用）。
+/// `@[refer-folder](path)` 目录引用：与 `@` 提及同款（目录带尾 `/`，无需另上色）。
 pub fn markdown_refer_folder() -> Style {
-    Style::default()
-        .fg(Color::Indexed(208))
-        .add_modifier(Modifier::UNDERLINED)
+    markdown_file_mention()
 }
 
-/// `@[refer-image](path)` 图片引用：LightMagenta 下划线。
+/// `@[refer-image](path)` 图片引用：与 `@` 提及同款。
 pub fn markdown_refer_image() -> Style {
-    Style::default()
-        .fg(Color::LightMagenta)
-        .add_modifier(Modifier::UNDERLINED)
+    markdown_file_mention()
 }
 
 /// `@ref/末两段` 短引用：柔紫（Indexed 141）加粗、无下划线。
@@ -509,11 +536,153 @@ pub fn chat_provider() -> Style {
     muted()
 }
 
-/// lx 输入框上方 loading 行：转轮用品牌天蓝（Indexed 117）加粗。
-pub fn chat_loading_spinner() -> Style {
+/// 输入框上方临时提示的颜色：错误红 / 默认黄（用户指定）。
+pub fn chat_input_hint(level: crate::app::state::InputHintLevel) -> Style {
+    use crate::app::state::InputHintLevel;
+    match level {
+        InputHintLevel::Error => Style::default().fg(Color::Red),
+        InputHintLevel::Warning => Style::default().fg(Color::Yellow),
+    }
+}
+
+/// lx 输入框上方 loading 的**扫描高亮色**：按 `Native Agent` 标签的 4 档渐变循环
+/// （`218` 粉 → `182` 淡紫 → `153` 浅蓝 → `117` 天蓝），加粗。
+///
+/// 每 `LOADING_FRAME_INTERVAL`（100ms）换一档，与扫描窗口同步推进——视觉上是
+/// 颜色沿 `Working...` 从左到右流过。
+pub fn chat_loading_scan(phase: usize) -> Style {
+    let cycle = crate::ui::text::agent::native_label_cycle();
+    let index = cycle.get(phase % cycle.len()).copied().unwrap_or(117);
     Style::default()
-        .fg(Color::Indexed(117))
+        .fg(Color::Indexed(index))
         .add_modifier(Modifier::BOLD)
+}
+
+// ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 金黄参数）=====
+//
+// lx 聊天历史里同时存在两类着色信息，必须一眼分得开：
+//   A. **步骤结构**（方块、思考头、工具行）——本组 `chat_*` token，分三层：
+//      ① 结构 / 状态（方块、头部文案、工具动词）：**翡翠绿 `Indexed 42`**（`#00d787`）；
+//      ② 可变参数（路径 / 搜索范围）：金黄 `Indexed 220` + 下划线；
+//      ③ 其余元信息（行范围、计数、状态文字）：`muted()`（终端 dim，无色相）。
+//   B. **正文高亮**（markdown / 代码）——见上面的 `github_dark`：GitHub Dark 官方
+//      色板，颜色只出现在链接（蓝）与代码 token（珊瑚红 / 浅蓝 / 蓝 / 紫 / 灰）上，
+//      标题 / 粗体 / 斜体 / 引用全部是正文色 + 修饰符。
+//
+// **为什么不再是蓝**（第 5 轮，用户带截图反馈「与小方块与正文内容颜色特别相近」）：
+// 上一版用 lx 页 `Native Agent` 标签里 `A` 的浅蓝 `Indexed 153`（`#afd7ff`），
+// 用 CIEDE2000 量出来它和**正文**的色差只有 11.5、和 GitHub 的**字符串浅蓝**
+// `#a5d6ff` 只有 2.1——等于方块、`Write`、`Thought` 与正文/代码字符串用了同一个颜色，
+// 所以视觉上糊成一片。GitHub Dark 的 6 个代码 token 加上金黄参数已经把
+// 蓝（207°/208°/212°/214°）、紫（269°）、珊瑚红（4°）、金（51°）全部占满，
+// 256 色里唯一还剩 ≥30 色差余量的空闲色相是**绿 / 青绿（120°–170°）**。
+// 因此结构色定在 `Indexed 42`（`#00d787`，158°）：与正文色差 30.1、与全部 GitHub
+// 代码色最近 32.8、与金黄参数 36.2——三项同时 ≥30，是这张表里唯一达标的槽位。
+// 备选（同样达标，偏好更亮可换）：`Indexed 49` `#00ffaf`（对深底亮度比 14.3 vs 10.0）。
+//
+// 语义：**热 = 进行中（方块加粗 + 呼吸）、冷 = 已完成（方块不加粗、静止）**；
+// 失败红、中断黄、取消灰沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
+// agent 样例仍用上面的 `agent_*` 系列，不受这里影响。
+
+/// 工具结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
+const CHAT_STEP_GREEN: u8 = 42;
+/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——与工具绿、参数金、正文默认色的
+/// 色差分别为 68 / 55 / 24（CIEDE2000），一眼可分。
+const CHAT_STEP_MAGENTA: u8 = 218;
+/// 可变参数色：金黄（与 `[UI]` 查看器的 `agent_param` 同色；工具行不加下划线）。
+const CHAT_GOLD: u8 = 220;
+
+// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
+//
+// 用户要求：「正文内容的小方块用默认字体的颜色即可；thinking 的小方块和思考的字体
+// 颜色使用其他的颜色」。因此**颜色由步骤类别决定**：
+//   Body     → 终端默认前景（不设 fg）+ 加粗/不加粗区分运行态；
+//   Thinking → 品红 218；
+//   Tool     → 翡翠绿 42（含工具动词）。
+
+/// 正文块的方块：运行中（呼吸）——**终端默认前景 + 加粗**，与正文本就同色。
+pub fn chat_step_mark_running_body() -> Style {
+    Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// 正文块的方块：已完成——终端默认前景、不加粗（与运行中的加粗呼吸方块区分）。
+pub fn chat_step_mark_done_body() -> Style {
+    Style::default()
+}
+
+/// 正文块的头部文案：运行中——默认前景、不加粗。
+pub fn chat_step_label_running_body() -> Style {
+    Style::default()
+}
+
+/// 正文块的头部文案：已完成——默认前景、不加粗。
+pub fn chat_step_label_done_body() -> Style {
+    Style::default()
+}
+
+/// 思考块的方块：运行中（呼吸）——品红加粗。
+pub fn chat_step_mark_running_thinking() -> Style {
+    Style::default()
+        .fg(Color::Indexed(CHAT_STEP_MAGENTA))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 思考块的方块：已完成——同款品红、不加粗（静止 + 细一档）。
+pub fn chat_step_mark_done_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+}
+
+/// 思考块的头部文案：运行中——品红（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+}
+
+/// 思考块的头部文案：已完成——品红（同上，不加粗）。
+pub fn chat_step_label_done_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+}
+
+/// 工具行的方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的动作信号。
+pub fn chat_step_mark_running() -> Style {
+    Style::default()
+        .fg(Color::Indexed(CHAT_STEP_GREEN))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 工具行的方块：已完成——同款翡翠绿、**不加粗**（静止 + 细一档，与运行中区分）。
+pub fn chat_step_mark_done() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+}
+
+/// 工具行的头部文案：运行中——翡翠绿（与方块同色系，不加粗）。
+pub fn chat_step_label_running() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+}
+
+/// 工具行的头部文案：已完成——翡翠绿（同上，不加粗）。
+pub fn chat_step_label_done() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+}
+
+/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：翡翠绿、不加粗——
+/// 与紧邻的加粗方块靠字重区分开。
+pub fn chat_tool_verb() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+}
+
+/// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：金黄，**不加下划线**。
+///
+/// 下划线在连续多个工具行时会把整块历史划成一片横线，反而盖过翡翠绿的结构色；
+/// 去掉后靠金黄本身与正文/动词区分（与绿的结构色差 36，与最近的 GitHub token
+/// 注释灰 42 / 关键字珊瑚 46 也拉得开）。
+pub fn chat_tool_param() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_GOLD))
+}
+
+/// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
+/// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
+pub fn chat_tool_range() -> Style {
+    muted()
 }
 
 /// lx 输入框上方 loading 行文案：次要信息。
