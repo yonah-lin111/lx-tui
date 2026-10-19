@@ -291,6 +291,14 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
     // API key 明文查看：小眼睛按钮 + 切换逻辑。
     assert!(html.contains("id=\"prov-key-reveal\""), "key reveal button");
     assert!(models_js.contains("Show API key"), "reveal labels wired");
+    // 已移除 Clear stored key 复选框与 key 状态行；key 由 GET 直接回传编辑。
+    assert!(!html.contains("prov-clear-key"), "no clear-key checkbox");
+    assert!(!html.contains("prov-key-state"), "no key state line");
+    assert!(!html.contains("Clear stored key"), "no clear-key label");
+    assert!(
+        models_js.contains("provider.apiKey"),
+        "key round-trips via API"
+    );
     // toast 顶部居中。
     assert!(
         css.contains("left: 50%; top: 16px;"),

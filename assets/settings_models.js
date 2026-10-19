@@ -91,9 +91,7 @@ function snapshotToDraft(snapshot) {
       name: provider.name,
       baseUrl: provider.baseUrl,
       enabled: !!provider.enabled,
-      hasApiKey: !!provider.hasApiKey,
-      apiKeyText: '',
-      clearApiKey: false,
+      apiKey: provider.apiKey || '',
       models: (provider.models || []).map((model) => ({
         id: model.id,
         name: model.name,
@@ -132,7 +130,7 @@ function renderProviders() {
     const row = element('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : ''));
     row.type = 'button';
     const name = element('span', 'nav-name', provider.name || provider.id);
-    const tag = element('span', 'tag', provider.type + (provider.hasApiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
+    const tag = element('span', 'tag', provider.type + (provider.apiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
     row.appendChild(name);
     row.appendChild(tag);
     row.onclick = () => selectProvider(provider.key);
@@ -149,15 +147,13 @@ function renderEditor() {
   document.getElementById('prov-id').value = provider.id;
   document.getElementById('prov-name').value = provider.name;
   document.getElementById('prov-base-url').value = provider.baseUrl;
-  document.getElementById('prov-api-key').value = provider.apiKeyText;
-  document.getElementById('prov-clear-key').checked = provider.clearApiKey;
+  document.getElementById('prov-api-key').value = provider.apiKey;
   document.getElementById('prov-enabled').checked = provider.enabled;
   // 每次切换 provider 都收回明文显示，避免上一条的可见状态带到下一条。
   document.getElementById('prov-api-key').type = 'password';
   document.getElementById('prov-key-reveal').classList.remove('revealed');
   document.getElementById('prov-key-reveal').setAttribute('aria-pressed', 'false');
   document.getElementById('prov-key-reveal').setAttribute('aria-label', 'Show API key');
-  document.getElementById('prov-key-state').textContent = provider.hasApiKey ? 'a key is stored' : 'no key stored';
   modelSelects.provType.setValue(provider.type);
   renderModelList();
 }
@@ -173,7 +169,7 @@ function newProvider() {
   const id = 'provider-' + suffix();
   modelsDraft.providers.push({
     key: id, id: id, type: 'openai-compatible', name: 'New Provider', baseUrl: '',
-    enabled: true, hasApiKey: false, apiKeyText: '', clearApiKey: false, models: []
+    enabled: true, apiKey: '', models: []
   });
   selectedProviderKey = id;
   markModelsDirty();
@@ -188,9 +184,7 @@ function duplicateProvider() {
   copy.key = id;
   copy.id = id;
   copy.name = (provider.name || provider.id) + ' copy';
-  copy.hasApiKey = false; // 复制项默认需重新输入 Key
-  copy.apiKeyText = '';
-  copy.clearApiKey = false;
+  copy.apiKey = ''; // 复制项默认需重新输入 Key
   modelsDraft.providers.push(copy);
   selectedProviderKey = id;
   markModelsDirty();
@@ -578,12 +572,16 @@ function buildPayload() {
         modalities: modalitiesOf(model)
       });
     }
-    const entry = {key: id, id: id, type: provider.type, name: (provider.name || '').trim() || id, baseUrl: baseUrl, models: models};
-    if (provider.clearApiKey) {
-      entry.clearApiKey = true;
-    } else if ((provider.apiKeyText || '') !== '') {
-      entry.apiKey = provider.apiKeyText;
-    }
+    const entry = {
+      key: id,
+      id: id,
+      type: provider.type,
+      name: (provider.name || '').trim() || id,
+      baseUrl: baseUrl,
+      // apiKey 三态：非空替换、空字符串清除、字段缺失保留（这里始终显式发送）。
+      apiKey: provider.apiKey || '',
+      models: models
+    };
     providers.push(entry);
   }
   const enabledProviders = modelsDraft.providers.filter((provider) => provider.enabled).map((provider) => provider.id.trim());
@@ -636,9 +634,9 @@ function fetchModels() {
   const body = {
     type: provider.type,
     baseUrl: provider.baseUrl.trim(),
-    apiKey: provider.apiKeyText || undefined
+    apiKey: provider.apiKey || undefined
   };
-  if (provider.hasApiKey) { body.providerId = provider.key; }
+  if (provider.apiKey) { body.providerId = provider.key; }
   api('/api/models/fetch', {method: 'POST', body: JSON.stringify(body)}).then((result) => {
     showToast(result.models.length + ' model(s) found', 'ok');
     renderFetchCandidates(result.models);
@@ -708,11 +706,7 @@ function initProviderFields() {
   });
   document.getElementById('prov-api-key').addEventListener('input', (event) => {
     const provider = currentProvider();
-    if (provider) { provider.apiKeyText = event.target.value; }
-  });
-  document.getElementById('prov-clear-key').addEventListener('change', (event) => {
-    const provider = currentProvider();
-    if (provider) { provider.clearApiKey = event.target.checked; }
+    if (provider) { provider.apiKey = event.target.value; markModelsDirty(); }
   });
   document.getElementById('prov-enabled').addEventListener('change', (event) => {
     const provider = currentProvider();
