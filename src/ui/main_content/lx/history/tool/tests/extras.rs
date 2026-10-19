@@ -86,12 +86,12 @@ fn optional_error_and_summary_leave_no_empty_segments() {
     assert_eq!(
         header_line.trim_end(),
         format!(
-            "{} {} {}",
+            "{} {}{}",
             text::agent::STEP_MARK_FILLED,
             text::agent::ICON_READ,
             text::agent::VERB_TOOL_READ
         ),
-        "第 1 行为方块 + 图标 + 动词：{header_line:?}"
+        "第 1 行为方块 + 图标（无空格）+ 动词：{header_line:?}"
     );
     assert_eq!(
         detail_line.trim_end(),

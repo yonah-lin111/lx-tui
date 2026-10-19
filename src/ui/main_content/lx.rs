@@ -769,21 +769,36 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
         }
     }
     // 代码块头部的复制按钮（同样按 body + 滚动窗口换算屏幕坐标）。
-    for button in &history::layout(view.body, lx).code_copy {
-        let offset = button.rect.y.saturating_sub(view.body.y);
-        if (offset as usize) < view.scroll {
-            continue;
-        }
-        let screen_y = view
-            .body
-            .y
-            .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
-        let rect = Rect::new(button.rect.x, screen_y, button.rect.width, 1);
-        if rect.contains((column, row).into()) {
-            return Some(LxChatHit::CodeCopy(button.body.clone()));
+    for button in code_copy_hits(area, lx) {
+        if button.rect.contains((column, row).into()) {
+            return Some(LxChatHit::CodeCopy(button.body));
         }
     }
     None
+}
+
+/// 代码块复制按钮的**屏幕矩形**（按当前滚动偏移换算）与正文。
+///
+/// 渲染、命中与 tooltip 共用本入口：滚动位置一变，三者一起跟着变，不会漂移。
+pub fn code_copy_hits(area: Rect, lx: &Lx) -> Vec<history::CodeCopyButton> {
+    let Some(view) = history_view(area, lx) else {
+        return Vec::new();
+    };
+    history::layout(view.body, lx)
+        .code_copy
+        .into_iter()
+        .filter_map(|mut button| {
+            let offset = button.rect.y.saturating_sub(view.body.y);
+            if (offset as usize) < view.scroll {
+                return None;
+            }
+            button.rect.y = view
+                .body
+                .y
+                .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
+            Some(button)
+        })
+        .collect()
 }
 
 /// md 格式面板：圆角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。

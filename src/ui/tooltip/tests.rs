@@ -469,3 +469,71 @@ fn hits_block_buttons_via_prompt_text_area() {
         })
     );
 }
+
+/// lx 历史里代码块复制按钮的 tooltip：悬停到 `[❐]` 上应命中 `LxCodeCopy`。
+#[test]
+fn hits_lx_code_copy_button() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = crate::app::state::PaneView::Lx;
+        let mut chat = crate::app::state::LxChat::new();
+        chat.messages.push(crate::app::state::ChatMessageView {
+            id: "a-0".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: crate::app::state::ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: "```js\nconst a = 1;\n```".into(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+        target.lx.chat = chat;
+    }
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let Some((_, pane_rect)) = rects.iter().find(|(id, _)| *id == pane) else {
+        panic!("pane rect");
+    };
+    let inner = layout::pane_inner_rect(*pane_rect);
+    let button =
+        ui::main_content::lx::code_copy_hits(inner, &state.pane_anywhere(pane).unwrap().lx)
+            .into_iter()
+            .next()
+            .expect("复制按钮可见");
+    assert_eq!(
+        target_at(&view, &state, &rects, SCREEN, button.rect.x, button.rect.y),
+        Some(TooltipTarget::LxCodeCopy {
+            message: button.message,
+            step: button.step,
+            block: button.block,
+        }),
+        "悬停复制按钮命中 LxCodeCopy"
+    );
+    // 提示文案是「copy code」。
+    assert_eq!(
+        text::tooltip_hint(
+            TooltipTarget::LxCodeCopy {
+                message: 0,
+                step: 0,
+                block: 0
+            },
+            &state
+        ),
+        "copy code"
+    );
+}

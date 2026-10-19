@@ -4897,3 +4897,99 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
         "候选面板内滚轮不滚动输入框"
     );
 }
+
+#[test]
+fn lx_code_copy_hover_tracks_pointer_and_clears_on_leave() {
+    // 指针停在 `[❐]` 上 → 记录悬停（按钮高亮 + tooltip）；移开即清空。
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    let inner = pane_inner(&geo, pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        let mut chat = crate::app::state::LxChat::new();
+        chat.messages.push(crate::app::state::ChatMessageView {
+            id: "a-0".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            steps: vec![crate::app::state::AssistantStepView::Part {
+                position: 0,
+                part: crate::app::state::ChatPartView {
+                    kind: crate::chat::events::PartKind::Text,
+                    content: "```js\nconst a = 1;\n```".into(),
+                    provider_metadata_json: None,
+                    started_at_ms: None,
+                    ended_at_ms: None,
+                    completed_at_ms: None,
+                },
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+        target.lx.chat = chat;
+    }
+    let button = code_copy_buttons(inner, &state.pane_anywhere(pane).expect("pane").lx)
+        .into_iter()
+        .next()
+        .expect("代码块复制按钮可见");
+
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, button.rect.x, button.rect.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(dirty, "悬停产生重绘");
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .code_copy_hover,
+        Some((button.message, button.step, button.block)),
+        "悬停记录到具体代码块"
+    );
+    // tooltip 也指向该按钮。
+    assert_eq!(
+        state.tooltip.as_ref().map(|tooltip| tooltip.target),
+        Some(crate::app::tooltip::TooltipTarget::LxCodeCopy {
+            message: button.message,
+            step: button.step,
+            block: button.block,
+        }),
+        "tooltip 目标同步指向复制按钮"
+    );
+
+    // 移开（指针落到输入框区域）：悬停清空。
+    dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Moved, inner.x + 2, inner.bottom() - 2),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .code_copy_hover,
+        None,
+        "移开后清空"
+    );
+}

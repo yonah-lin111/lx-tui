@@ -30,6 +30,7 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
+mod body;
 mod code_copy;
 mod tool;
 
@@ -44,11 +45,13 @@ const USER_INDENT: u16 = 2;
 /// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
 /// 与用户消息的 `> ` 缩进同宽。
 pub(super) const STEP_GUTTER: u16 = 2;
-/// 带图标的步骤（思考 / 工具调用）头部内容起始列：`■` + 空格 + 图标 + 空格 = 4 列。
+/// 带图标的步骤（思考 / 工具调用）头部内容起始列：`■` + 空格 + 图标 = 3 列。
 ///
 /// 图标由步骤种类决定（见 `text::agent::ICON_*`），让「哪类动作」不用读文字就能认出来。
+/// 图标与文案之间**不留空格**（`■ ±Edit`）：图标是标记的一部分，不是独立的一段，
+/// 留空格会把 `± Edit` 读成两个词。
 /// **正文块不加图标**，仍用 [`STEP_GUTTER`]（用户明确要求正文保持原样）。
-pub(super) const STEP_ICON_GUTTER: u16 = 4;
+pub(super) const STEP_ICON_GUTTER: u16 = 3;
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
@@ -274,7 +277,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     crate::chat::events::PartKind::Reasoning => (
                         true,
                         1 + if lx.chat.reasoning_expanded(message_index, step_index) {
-                            thinking_rows(&part.content, width)
+                            body::thinking_rows(&part.content, width)
                         } else {
                             0
                         },
@@ -582,7 +585,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         }
                         crate::chat::events::PartKind::Reasoning => {
                             1 + if expanded {
-                                thinking_rows(&part.content, content.width)
+                                body::thinking_rows(&part.content, content.width)
                             } else {
                                 0
                             }
@@ -645,15 +648,24 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         } else {
                             StepMark::Done
                         };
-                        draw_markdown(
+                        body::draw_body(
                             grid,
                             content,
                             scroll,
                             &mut row_index,
                             &part.content,
-                            mark,
-                            StepKind::Body,
-                            lx.chat.loading_frame,
+                            body::BodyStyle {
+                                mark,
+                                kind: StepKind::Body,
+                                loading_frame: lx.chat.loading_frame,
+                                copy_hover: lx
+                                    .chat
+                                    .code_copy_hover
+                                    .filter(|(message, step, _)| {
+                                        *message == message_index && *step == step_index
+                                    })
+                                    .map(|(_, _, block)| block),
+                            },
                         );
                     }
                 }
@@ -676,12 +688,12 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             mark.glyph(lx.chat.loading_frame),
                             mark.style(StepKind::Thinking),
                         );
-                        // 图标：品牌粉、单宽几何符号（与工具行同款「哪类动作」提示）。
+                        // 图标：跟随思考自己的品红（与方块同色同档，不另起第三种颜色）。
                         grid.put_char(
                             content.x.saturating_add(STEP_GUTTER),
                             y,
                             text::agent::ICON_THINKING.chars().next().unwrap_or(' '),
-                            style::agent_icon(),
+                            style::chat_step_icon(style::IconKind::Thinking, streaming),
                         );
                         let x = content.x.saturating_add(STEP_ICON_GUTTER);
                         let limit = content.right();
@@ -695,7 +707,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             );
                         } else {
                             let mut label = String::from(text::LX_CHAT_THOUGHT_LABEL);
-                            if let Some(duration) = thinking_duration(part) {
+                            if let Some(duration) = body::thinking_duration(part) {
                                 label.push_str(THINKING_DURATION_SEP);
                                 label.push_str(&format_duration(duration));
                             }
@@ -704,7 +716,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                     }
                     row_index += 1;
                     if expanded {
-                        draw_thinking(grid, content, scroll, &mut row_index, &part.content);
+                        body::draw_thinking(grid, content, scroll, &mut row_index, &part.content);
                     }
                 }
             }
@@ -763,83 +775,6 @@ fn markdown_rows(content: &str, width: u16) -> usize {
 /// 置顶用户行与 thinking 命中矩形都会漂移。
 fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
     tool::rows(call, width)
-}
-
-/// 绘制一段 assistant markdown 正文：首行以步骤方块起头，所有行缩进 [`STEP_GUTTER`] 列
-/// 与方块对齐（渲染宽度已相应扣除，无需再换行）。
-fn draw_markdown(
-    grid: &mut Grid,
-    rect: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-    content: &str,
-    mark: StepMark,
-    kind: StepKind,
-    loading_frame: usize,
-) {
-    let inner = rect.width.saturating_sub(STEP_GUTTER);
-    let mut first = true;
-    for line in markdown_render::render_wrapped(content, inner) {
-        if let Some(y) = visible_row(rect, scroll, *row_index) {
-            if first {
-                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style(kind));
-            }
-            let mut cx = rect
-                .x
-                .saturating_add(STEP_GUTTER)
-                .saturating_add(line.indent);
-            for (value, span_style) in &line.spans {
-                for ch in value.chars() {
-                    let cell = ch.width().unwrap_or(1).max(1) as u16;
-                    if cx.saturating_add(cell) > rect.right() {
-                        break;
-                    }
-                    grid.put_char(cx, y, ch, *span_style);
-                    cx = cx.saturating_add(cell);
-                }
-            }
-        }
-        first = false;
-        *row_index += 1;
-    }
-}
-
-/// thinking 块耗时（毫秒）：首个增量到最后一个增量的时间差；时间戳缺失返回 None。
-fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
-    let started = part.started_at_ms?;
-    let ended = part.ended_at_ms?;
-    Some(ended.saturating_sub(started).max(0))
-}
-
-/// thinking 正文渲染行数（markdown；左缩进 [`STEP_ICON_GUTTER`]，与头部图标后的文案对齐）。
-fn thinking_rows(content: &str, width: u16) -> usize {
-    markdown_render::render_wrapped(content, width.saturating_sub(STEP_ICON_GUTTER)).len()
-}
-
-/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`），
-/// 所有行缩进 [`STEP_ICON_GUTTER`] 列，与头部图标之后的 `Thinking` 文案对齐。
-fn draw_thinking(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    let inner = rect.width.saturating_sub(STEP_ICON_GUTTER);
-    for line in markdown_render::render_wrapped(content, inner) {
-        if let Some(y) = visible_row(rect, scroll, *row_index) {
-            let mut cx = rect
-                .x
-                .saturating_add(STEP_ICON_GUTTER)
-                .saturating_add(line.indent);
-            for (value, span_style) in &line.spans {
-                let cell_style = span_style.patch(style::muted());
-                for ch in value.chars() {
-                    let cell = ch.width().unwrap_or(1).max(1) as u16;
-                    if cx.saturating_add(cell) > rect.right() {
-                        break;
-                    }
-                    grid.put_char(cx, y, ch, cell_style);
-                    cx = cx.saturating_add(cell);
-                }
-            }
-        }
-        *row_index += 1;
-    }
 }
 
 /// 本轮统计行（assistant 消息末尾）：`模型 · 2.9k in · 307 out · 70% cached ·

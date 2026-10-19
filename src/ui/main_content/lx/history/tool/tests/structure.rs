@@ -93,7 +93,7 @@ fn completed_and_failed_never_show_status_words_on_any_line() {
     assert!(
         header_line.trim_end()
             == format!(
-                "{} {} {}",
+                "{} {}{}",
                 text::agent::STEP_MARK_FILLED,
                 text::agent::ICON_READ,
                 text::agent::VERB_TOOL_READ
@@ -391,19 +391,18 @@ fn completed_tool_has_square_icon_and_verb() {
         );
         let (header_line, _) = painted.split_once('\n').expect("两行");
         // 标题行 = `■ <图标> <动词>`：图标按工具区分，一眼看出是哪类动作。
-        let expected = format!("{} {icon} {verb}", text::agent::STEP_MARK_FILLED);
+        // 图标与动词之间**不留空格**（`■ ≣Read`）：图标是标记的一部分。
+        let expected = format!("{} {icon}{verb}", text::agent::STEP_MARK_FILLED);
         assert!(
             header_line.trim_end() == expected,
             "{name} 标题行为 `{expected}`：{header_line:?}"
         );
-        // 图标用品牌粉加粗（与 `[UI]` 查看器 agent 分组同款）。
+        // 图标颜色跟随工具自己的翡翠绿（不再用品牌粉）。
         let icon_cell = grid.cell(2, 0).style;
-        assert_eq!(icon_cell.fg, style::agent_icon().fg, "{name} 图标品牌粉");
-        assert!(
-            icon_cell
-                .add_modifier
-                .contains(ratatui::style::Modifier::BOLD),
-            "{name} 图标加粗"
+        assert_eq!(
+            icon_cell.fg,
+            style::chat_step_icon(style::IconKind::Tool, false).fg,
+            "{name} 图标跟随工具结构色"
         );
         // 完成方块：翡翠绿、不加粗、**不压暗**。
         let lead = grid.cell(0, 0).style;

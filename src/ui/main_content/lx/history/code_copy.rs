@@ -19,6 +19,8 @@ use super::{CODE_COPY_WIDTH, STEP_GUTTER};
 pub struct CodeCopyButton {
     pub message: usize,
     pub step: usize,
+    /// 该步骤内的代码块序号（从 0 起）；悬停高亮只作用于被悬停的那一块。
+    pub block: usize,
     pub rect: Rect,
     /// 代码块正文（`\n` 连接，末尾不带换行；缩进原样保留）。
     pub body: String,
@@ -45,6 +47,7 @@ pub(super) fn collect(
     }
     // 当前正在收集的代码块正文（Some 表示上一行是代码块头部）。
     let mut body: Option<String> = None;
+    let mut block = 0usize;
     for (offset, line) in markdown_render::render_wrapped(content, inner)
         .into_iter()
         .enumerate()
@@ -64,9 +67,11 @@ pub(super) fn collect(
             out.push(CodeCopyButton {
                 message,
                 step,
+                block,
                 rect: Rect::new(x, y, CODE_COPY_WIDTH, 1),
                 body: String::new(),
             });
+            block += 1;
             body = Some(String::new());
             continue;
         }

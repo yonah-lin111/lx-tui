@@ -612,30 +612,42 @@ fn code_block_without_language_has_no_language_prefix() {
 }
 
 #[test]
-fn copy_button_follows_language_with_separator() {
-    // 复制按钮紧跟语言名、用 ` · ` 分隔（不再右对齐到面板右缘）。
-    let lines = render("```js\nx\n```");
+fn copy_button_sits_at_right_edge_of_code_header() {
+    // 按钮右对齐到面板可用区右缘（语言名在左、按钮在右）。
+    let width = 40u16;
+    let lines = render_wrapped("```js\nx\n```", width);
     let header = lines.first().expect("header");
     let text = header.text();
-    assert!(
-        text.contains("language: js · [❐]"),
-        "语言与按钮用 ` · ` 分隔：{text:?}"
-    );
-    // 记录列与按钮的实际位置一致（命中与绘制不漂移）。
-    let column = usize::from(header.code_copy.expect("button column"));
+    assert!(text.starts_with("│ language: js"), "左侧写语言：{text:?}");
+    assert!(text.ends_with("[❐]"), "右端是复制按钮：{text:?}");
+    let column = header.code_copy.expect("button column");
     assert_eq!(
-        column, 17,
-        "按钮列 = 竖条 + 空格 + `language: js` + ` · ` 的显示宽度（column={column}）"
+        column.saturating_add(3),
+        width,
+        "按钮右端贴可用区右缘（column={column}, width={width}）"
     );
 }
 
 #[test]
-fn copy_button_sits_right_after_language_without_language() {
-    // 无语言：`│ [❐]`（不留语言前缀，也不留孤立的分隔符）。
-    let header = render("```\nplain\n```")
+fn copy_button_has_no_fill_without_width() {
+    // 无宽度口径（UI 查看器样例走 render）：按钮直接跟在语言名后，不铺填充空格。
+    let header = render("```js\nx\n```").into_iter().next().expect("header");
+    assert_eq!(header.text(), "│ language: js[❐]", "无宽度时不留填充");
+}
+
+#[test]
+fn copy_button_without_language_still_right_aligned() {
+    let width = 24u16;
+    let header = render_wrapped("```\nplain\n```", width)
         .into_iter()
         .next()
         .expect("header");
-    assert_eq!(header.text(), "│ [❐]", "无语言时只留竖条与按钮");
-    assert_eq!(header.code_copy, Some(2), "按钮紧跟竖条");
+    assert!(
+        header.text().starts_with('│') && header.text().ends_with("[❐]"),
+        "无语言时只留竖条与按钮：{:?}",
+        header.text()
+    );
+    assert!(!header.text().contains("language:"), "不假装有语言");
+    let column = header.code_copy.expect("button column");
+    assert_eq!(column.saturating_add(3), width, "仍右对齐");
 }

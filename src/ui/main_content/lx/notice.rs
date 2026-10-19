@@ -5,8 +5,9 @@
 //! 原因行连接符用供应商灰 + 粗、正文正常色。
 //!
 //! **行首标记与聊天步骤共用同一个方块**（[`StepMark`]）：失败为红色实心 `■`、中断为
-//! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽、缩进完全一致（都是 1 列
-//! 字形 + 1 列空格），不再使用 `!` 这种标点符号。
+//! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽完全一致（1 列字形 + 1 列
+//! 空格）；方块之后再跟一个**状态图标** `!`（[`text::agent::ICON_ERROR`]，与工具行 /
+//! 思考头的步骤图标同一套几何符号、同色），一眼就能读出「这里出事了」。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -68,12 +69,17 @@ impl NoticeTitle {
         }
     }
 
-    /// 标题整行的标记段（`■ `，2 列，与 [`super::history::STEP_GUTTER`] 同宽）。
+    /// 标题整行的标记段：`■ `（方块 + 1 列空格，与 [`super::history::STEP_GUTTER`] 同宽）。
     ///
     /// 通知只在终态渲染，[`StepMark::Failed`] / [`StepMark::Interrupted`] 的字形与
     /// 呼吸相位无关（恒为实心 `■`），因此这里固定传 0 帧。
     fn marker_segment(self) -> String {
         self.mark().segment(0)
+    }
+
+    /// 状态图标：红 / 黄的 `!`，与工具行 / 思考头的步骤图标同属一套几何符号。
+    fn icon(self) -> &'static str {
+        text::agent::ICON_ERROR
     }
 }
 
@@ -113,7 +119,12 @@ pub(super) fn rows(notice: &Notice, width: u16) -> usize {
 
 /// 标题整行文本（`■ <label>`）；宽度口径与 [`draw`] 共用。
 fn title_line(title: NoticeTitle) -> String {
-    format!("{}{}", title.marker_segment(), title.label())
+    format!(
+        "{}{}{}",
+        title.marker_segment(),
+        title.icon(),
+        title.label()
+    )
 }
 
 /// 绘制通知并推进内容行号；宽度不够放前缀时原因行退回整宽（不画连接符）。
@@ -139,14 +150,25 @@ pub(super) fn draw(
     {
         if let Some(y) = visible_row(content, scroll, *row_index) {
             if index == 0 {
+                let mark_style = notice.title.mark_style();
                 grid.put_clipped(
                     content.x,
                     y,
                     &marker,
-                    notice.title.mark_style(),
+                    mark_style,
                     content.width.min(marker_width),
                 );
-                let x = content.x.saturating_add(marker_width);
+                // 状态图标：与方块同色（红 / 黄），紧跟方块、不留空格。
+                let mut x = content.x.saturating_add(marker_width);
+                grid.put_clipped(
+                    x,
+                    y,
+                    notice.title.icon(),
+                    mark_style,
+                    content.right().saturating_sub(x),
+                );
+                x = x
+                    .saturating_add(u16::try_from(notice.title.icon().width()).unwrap_or(u16::MAX));
                 grid.put_clipped(x, y, label, title_style, content.right().saturating_sub(x));
             } else {
                 // 续行：整段仍用标题样式（极端窄宽度下的兜底，不影响常规显示）。

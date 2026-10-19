@@ -279,3 +279,37 @@ fn jump_to_prompt_clears_follow_and_moves_viewport() {
         "重复跳转无变化"
     );
 }
+
+/// 代码块复制按钮的悬停态由 update 层跟踪（`(消息, 步骤, 块序号)` 精确定位）。
+#[test]
+fn hover_lx_code_copy_tracks_state() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 1);
+    let pane = state.active_tab().layout.focus();
+    assert!(hover_lx_code_copy(&mut state, pane, Some((0, 0, 1))));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .code_copy_hover,
+        Some((0, 0, 1)),
+        "悬停置位"
+    );
+    assert!(
+        !hover_lx_code_copy(&mut state, pane, Some((0, 0, 1))),
+        "同值不重复重绘"
+    );
+    assert!(hover_lx_code_copy(&mut state, pane, None));
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .code_copy_hover,
+        None,
+        "离开清空"
+    );
+}

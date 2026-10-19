@@ -193,6 +193,28 @@ pub(crate) fn handle_mouse_moved(
             *dirty = true;
         }
     }
+    // lx 历史里代码块复制按钮悬停高亮：不在按钮上即清空。
+    for (id, rect) in rects {
+        let hovered = if hovering_toast {
+            None
+        } else {
+            state
+                .pane_anywhere(*id)
+                .filter(|pane| pane.view == crate::app::state::PaneView::Lx)
+                .and_then(|pane| {
+                    ui::main_content::lx::code_copy_hits(
+                        crate::layout::pane_inner_rect(*rect),
+                        &pane.lx,
+                    )
+                    .into_iter()
+                    .find(|button| button.rect.contains((mouse.column, mouse.row).into()))
+                    .map(|button| (button.message, button.step, button.block))
+                })
+        };
+        if update::hover_lx_code_copy(state, *id, hovered) {
+            *dirty = true;
+        }
+    }
     // 提示词列表悬停：仅树视图且在文本区内；指针离开即清空。
     let tree_hover = if hovering_toast || state.prompt_collapsed || !update::prompt_tree_mode(state)
     {

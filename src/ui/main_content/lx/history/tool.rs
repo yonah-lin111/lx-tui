@@ -144,9 +144,10 @@ impl Kind {
 
 // ===== 第 1 行：`■ 图标 动词` =====
 
-/// 步骤图标：按工具种类取 `text::agent::ICON_*`（单宽几何符号），
-/// 品牌粉加粗——与 `[UI]` 查看器 agent 分组的图标同色同形，两处读法一致。
+/// 步骤图标：按工具种类取 `text::agent::ICON_*`（单宽几何符号）。
 ///
+/// 颜色**跟随工具自己的翡翠绿**（失败红、中断黄），与方块同色同档——不再用品牌粉
+/// 另起第三种颜色。图标后**不留空格**：图标是标记的一部分，`■ ±Edit` 读作一个整体。
 /// 未知工具统一用 `ICON_EXEC`（`$`）：它代表「跑了个命令」，比留空更说明问题。
 fn icon(call: &ToolCallView) -> Segment {
     let glyph = match Kind::of(&call.name) {
@@ -156,7 +157,21 @@ fn icon(call: &ToolCallView) -> Segment {
         Kind::Write => text::agent::ICON_WRITE,
         Kind::Other => text::agent::ICON_EXEC,
     };
-    Segment::new(format!("{glyph} "), style::agent_icon())
+    Segment::new(glyph, icon_style(call.status))
+}
+
+/// 工具图标样式：正常态跟随翡翠绿（运行中加粗），失败 / 中断跟随语义色。
+fn icon_style(status: ToolStatus) -> Style {
+    match status {
+        ToolStatus::Failed => style::agent_fail(),
+        ToolStatus::Interrupted => style::agent_warn(),
+        ToolStatus::Completed | ToolStatus::Cancelled => {
+            style::chat_step_icon(style::IconKind::Tool, false)
+        }
+        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => {
+            style::chat_step_icon(style::IconKind::Tool, true)
+        }
+    }
 }
 
 /// 行首方块标记：与思考 / 正文块共用同款步骤标记（运行中两帧呼吸、终态静态；

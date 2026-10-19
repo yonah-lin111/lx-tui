@@ -812,6 +812,22 @@ pub fn hover_lx_jump_bottom(state: &mut AppState, pane: PaneId, hovered: bool) -
     true
 }
 
+/// 设置代码块复制按钮的悬停态 `(消息, 步骤, 块序号)`；返回是否变化。
+pub fn hover_lx_code_copy(
+    state: &mut AppState,
+    pane: PaneId,
+    hovered: Option<(usize, usize, usize)>,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.chat.code_copy_hover == hovered {
+        return false;
+    }
+    target.lx.chat.code_copy_hover = hovered;
+    true
+}
+
 /// 推进流中窗格的 loading 转轮帧；返回是否需要重绘（仅在有流中的 lx 窗格时）。
 pub fn advance_lx_loading(state: &mut AppState) -> bool {
     let mut changed = false;

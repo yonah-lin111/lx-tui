@@ -45,7 +45,7 @@ fn notice_is_title_plus_exactly_one_reason_line() {
     draw(&mut grid, &notice, area, 0, &mut row);
 
     assert_eq!(row, 2, "标题 + 原因各一行");
-    assert_eq!(row_text(&grid, area, 0), "■ Failed");
+    assert_eq!(row_text(&grid, area, 0), "■ !Failed");
     assert_eq!(row_text(&grid, area, 1), "  └─ http 503");
     // 标题整行红 + 粗（标记也同色）。
     for x in 0..8 {
@@ -115,7 +115,7 @@ fn scrolled_out_rows_do_not_paint() {
     assert_eq!(row_text(&grid, area, 0), "  └─ http 503");
 }
 
-/// 通知的行首标记必须是**步骤方块**，且颜色按级别红/黄——不再是 `!` 标点符号。
+/// 通知的行首标记必须是**步骤方块 + 状态图标 `!`**，且颜色按级别红/黄。
 #[test]
 fn notice_marker_is_step_square_in_red_or_yellow() {
     for (title, expected) in [
@@ -136,19 +136,24 @@ fn notice_marker_is_step_square_in_red_or_yellow() {
             title
         );
         assert_eq!(cell.style, expected, "{:?} 方块取该级别状态色", title);
-        assert!(
-            !row_text(&grid, area, 0).contains(crate::ui::text::agent::ICON_ERROR),
-            "{:?} 不应再出现 `!`：{}",
-            title,
-            row_text(&grid, area, 0)
-        );
-        // 方块后紧跟 1 列空格（与 STEP_GUTTER = 2 同宽），文案从第 2 列起。
+        // 方块之后是 1 列空格 + 状态图标 `!`（与工具行 / 思考头的图标同一套几何符号）。
         assert_eq!(grid.cell(1, 0).ch, ' ');
         assert_eq!(
             grid.cell(2, 0).ch,
+            crate::ui::text::agent::ICON_ERROR
+                .chars()
+                .next()
+                .expect("非空"),
+            "{:?} 方块后有状态图标",
+            title
+        );
+        assert_eq!(grid.cell(2, 0).style, expected, "图标同色");
+        // 图标与文案之间不留空格，文案从第 3 列起。
+        assert_eq!(
+            grid.cell(3, 0).ch,
             title.label().chars().next().expect("非空")
         );
-        assert_eq!(grid.cell(2, 0).style, expected, "文案同色，整行一个色相");
+        assert_eq!(grid.cell(3, 0).style, expected, "文案同色，整行一个色相");
     }
 }
 
