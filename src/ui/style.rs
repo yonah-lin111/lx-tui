@@ -34,12 +34,18 @@ pub fn border(focused: bool) -> Style {
 
 /// 叠加在强调色边框上的灰字（显式前景 + dim）：临时提示词标题等。
 ///
+/// 叠加在强调色边框上的灰字（页重命名 `· ` 分隔符、顶边框页名、浮层底注等）。
+///
 /// `set_stringn` 只覆盖样式里显式给出的字段，`muted()` 不设前景，
 /// 会把底层（聚焦态青色）边框前景带出来；这里显式重置前景。
+///
+/// 同样必须显式移除 BOLD：该文字叠加在聚焦态的 `accent()` 边框上，
+/// 否则会继承边框的粗体，聚焦时无故变粗一档。
 pub fn muted_on_border() -> Style {
     Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
 }
 
 /// 面板边框标题：淡蓝色（Cyan + dim、不加粗），与分支状态同色系。
@@ -101,15 +107,33 @@ pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
-/// 边框标题内的次要值（prompt `ws:` 值、窗格 `agent:` 值）：
-/// 聚焦面板的边框为强调色，值在其上叠加 dim；失焦面板回退 muted。
-/// 与 ratatui 把标题 span 叠加到边框样式上的结果一致（聚焦值 = Cyan + BOLD + DIM）。
-pub fn border_value(focused: bool) -> Style {
-    if focused {
-        accent().add_modifier(Modifier::DIM)
-    } else {
-        muted()
-    }
+/// 边框上的标签前缀：窗格 `ws:`/`agent:`、prompt 底边框 `b:`/`wt:`/`ws:` 的前缀。
+///
+/// 淡青（Cyan + dim、**不加粗**），与 [`border_title`] 同色系，且失焦/聚焦完全一致：
+/// 焦点只由边框框线颜色表达，前缀不应跟着变亮变粗。
+///
+/// BOLD 必须显式移除：这些前缀叠加写入边框单元格，
+/// `Cell::set_style` 只覆盖样式里给出的字段，仅用 [`accent`] 会把边框的粗体一并带出来。
+pub fn border_label_prefix() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
+}
+
+/// 边框上的标签值：窗格 `ws:`/`agent:` 的值、prompt 底边框 `b:`/`wt:`/`ws:` 的值。
+///
+/// 恒为默认前景 + dim，**不随面板焦点变色**：聚焦只由边框框线颜色表达，
+/// 标签值不应跟着变青（用户要求"移除聚焦变蓝、保留原本的默认颜色"）。
+///
+/// 前景与 BOLD 必须显式重置：这些文字直接叠加写入边框单元格，
+/// `Cell::set_style` 只覆盖样式里给出的字段，仅用 [`muted`] 会把聚焦边框的
+/// Cyan + BOLD 一并继承出来。
+pub fn border_label_value() -> Style {
+    Style::default()
+        .fg(Color::Reset)
+        .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
 }
 
 /// Agent 状态圆点：Working 绿、Blocked 黄、Idle 次要信息（Unknown 同 Idle）。

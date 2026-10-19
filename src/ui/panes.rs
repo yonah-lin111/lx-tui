@@ -57,7 +57,7 @@ pub(crate) fn render_panes(
                 .cwd
                 .clone()
                 .or_else(|| state.workspace_cwd_for_pane(*id));
-            render_pane_workspace_label(frame, *rect, &title, path.as_deref(), focused);
+            render_pane_workspace_label(frame, *rect, &title, path.as_deref());
         }
         if inner.width == 0 || inner.height == 0 {
             continue;
@@ -80,7 +80,7 @@ pub(crate) fn render_panes(
                     widgets::scrollbar::render(frame, &scrollbar);
                 }
                 main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
-                render_pane_agent_label(frame, *rect, &title, pane, focused);
+                render_pane_agent_label(frame, *rect, &title, pane);
             }
             PaneKind::Placeholder => {}
         }
@@ -88,23 +88,22 @@ pub(crate) fn render_panes(
     cursor
 }
 
-/// 窗格顶边框右侧 Agent 标记 ` agent:xxx`：前缀强调色、值 muted（与 prompt 顶边框 `ws:` 对齐），
-/// 窗格聚焦时值改用强调色高亮；右端与切换按钮间隔 1 列；按钮缺失、空间不足或会覆盖左侧标题时不绘制。
-fn render_pane_agent_label(
-    frame: &mut Frame<'_>,
-    rect: Rect,
-    title: &str,
-    pane: &Pane,
-    focused: bool,
-) {
+/// 窗格顶边框右侧 Agent 标记 ` agent:xxx`：前缀强调色、值恒为默认灰
+/// （不随窗格焦点变色）；右端与切换按钮间隔 1 列；按钮缺失、空间不足或会覆盖左侧标题时不绘制。
+fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane: &Pane) {
     let Some(agent) = pane.agent.as_ref() else {
         return;
     };
-    let value_style = style::border_value(focused);
     let spans = [
         (" ".to_string(), style::muted()),
-        (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
-        (text::agent_label(agent.kind).to_string(), value_style),
+        (
+            text::PANE_AGENT_PREFIX.to_string(),
+            style::border_label_prefix(),
+        ),
+        (
+            text::agent_label(agent.kind).to_string(),
+            style::border_label_value(),
+        ),
     ];
     render_border_right_label(frame, rect, title, &spans);
 }
@@ -174,14 +173,12 @@ fn pane_display_title(id: PaneId, pane: &Pane) -> String {
 }
 
 /// lx pane 顶边框右侧工作区路径标记 ` ws:末两段`（切换按钮左侧）：前缀强调色、
-/// 值 muted（与 prompt 底边框 `ws:` 一致），窗格聚焦时值改用强调色高亮；
-/// 放不下时按可用宽度中间省略，仍放不下则省略。
+/// 值恒为默认灰（不随窗格焦点变色）；放不下时按可用宽度中间省略，仍放不下则省略。
 fn render_pane_workspace_label(
     frame: &mut Frame<'_>,
     rect: Rect,
     title: &str,
     path: Option<&std::path::Path>,
-    focused: bool,
 ) {
     let Some(path) = path else {
         return;
@@ -210,8 +207,8 @@ fn render_pane_workspace_label(
     };
     let spans = [
         (" ".to_string(), style::muted()),
-        (prefix.to_string(), style::accent()),
-        (value, style::border_value(focused)),
+        (prefix.to_string(), style::border_label_prefix()),
+        (value, style::border_label_value()),
     ];
     render_border_right_label(frame, rect, title, &spans);
 }

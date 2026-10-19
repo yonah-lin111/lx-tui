@@ -43,6 +43,59 @@ fn selection_uses_explicit_colors_without_reversed() {
     assert!(!style.add_modifier.contains(Modifier::REVERSED));
 }
 
+/// 边框标签值必须是"显式默认前景 + dim、且显式去掉 BOLD"：
+/// 该样式叠加在边框单元格上，缺任一项都会把聚焦边框的 Cyan + BOLD 继承出来。
+/// 边框标签前缀必须是"淡青 + dim、且显式去掉 BOLD"：
+/// 叠加到强调色边框后仍不加粗，聚焦不再变亮变粗。
+#[test]
+fn border_label_prefix_is_soft_cyan_without_bold() {
+    let style = border_label_prefix();
+    assert_eq!(style.fg, Some(Color::Cyan), "前缀保持青色");
+    assert!(style.add_modifier.contains(Modifier::DIM), "前缀带 dim");
+    assert!(
+        style.sub_modifier.contains(Modifier::BOLD),
+        "显式移除边框继承的 BOLD"
+    );
+    let mut cell = ratatui::buffer::Cell::default();
+    cell.set_style(accent());
+    cell.set_style(style);
+    assert_eq!(cell.fg, Color::Cyan);
+    assert!(!cell.modifier.contains(Modifier::BOLD));
+    assert!(cell.modifier.contains(Modifier::DIM));
+}
+
+/// 叠加在强调色边框上的灰字同样不能被染色、也不能继承粗体。
+#[test]
+fn muted_on_border_strips_inherited_bold() {
+    let style = muted_on_border();
+    assert_eq!(style.fg, Some(Color::Reset));
+    assert!(style.sub_modifier.contains(Modifier::BOLD));
+    let mut cell = ratatui::buffer::Cell::default();
+    cell.set_style(accent());
+    cell.set_style(style);
+    assert_eq!(cell.fg, Color::Reset);
+    assert!(!cell.modifier.contains(Modifier::BOLD));
+    assert!(cell.modifier.contains(Modifier::DIM));
+}
+
+#[test]
+fn border_label_value_resets_inherited_accent() {
+    let style = border_label_value();
+    assert_eq!(style.fg, Some(Color::Reset), "显式默认前景，切断边框青色");
+    assert!(style.add_modifier.contains(Modifier::DIM), "保留 dim 一档");
+    assert!(
+        style.sub_modifier.contains(Modifier::BOLD),
+        "显式移除边框继承的 BOLD"
+    );
+    // 应用到已带强调色的单元格后，取值必须等于"默认灰"，与焦点无关。
+    let mut cell = ratatui::buffer::Cell::default();
+    cell.set_style(accent());
+    cell.set_style(style);
+    assert_eq!(cell.fg, Color::Reset);
+    assert!(!cell.modifier.contains(Modifier::BOLD));
+    assert!(cell.modifier.contains(Modifier::DIM));
+}
+
 #[test]
 fn overlay_selection_uses_contrast_surface_without_reversed() {
     let style = overlay_selection();
