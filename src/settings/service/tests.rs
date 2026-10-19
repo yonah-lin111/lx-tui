@@ -257,6 +257,21 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
     assert!(js.contains("function createSelect"), "select component");
     assert!(css.contains(".toast-host"), "toast host styles");
     assert!(css.contains(".select-menu"), "select menu styles");
+    // 黑灰分层：色板走变量，悬浮层（toast / select 菜单）比卡片更亮并带阴影层级。
+    assert!(css.contains("--bg: #0f0f0f"), "page uses dark gray base");
+    assert!(css.contains("--overlay: #272727"), "overlay tone defined");
+    assert!(
+        css.contains(".select-menu { position: fixed; z-index: var(--z-menu);"),
+        "select menu is an elevated fixed layer"
+    );
+    assert!(
+        css.contains("background: var(--overlay); box-shadow: var(--shadow-overlay);"),
+        "toast/menu share overlay tone and shadow"
+    );
+    assert!(
+        css.contains("--z-toast: 1000") && css.contains("--z-menu: 60"),
+        "toast stacks above menus"
+    );
 
     // 模态勾选与思考等级编辑入口（Models 视图资源）。
     assert!(

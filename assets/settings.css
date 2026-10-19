@@ -1,18 +1,29 @@
 
 :root {
   color-scheme: dark;
-  --bg: #000;
-  --panel: #0a0a0a;
-  --panel-raised: #121212;
-  --border: #272727;
-  --border-strong: #3a3a3a;
-  --text: #e6e6e6;
-  --muted: #8f8f8f;
+  /* 黑灰分层：底色 < 面板 < 卡片 < 悬浮层，每层差一个可见但克制的灰阶。 */
+  --bg: #0f0f0f;
+  --panel: #171717;
+  --panel-raised: #1f1f1f;
+  --overlay: #272727;
+  --hover: #212121;
+  --active: #2b2b2b;
+  --border: #2e2e2e;
+  --border-strong: #3d3d3d;
+  --border-overlay: #4a4a4a;
+  --text: #e8e8e8;
+  --muted: #9a9a9a;
+  --faint: #5f5f5f;
   /* 黑白灰主题：唯一强调色是浅灰；绿/红只用于成功与失败语义。 */
   --accent: #d4d4d4;
-  --accent-ink: #0a0a0a;
-  --ok: #34d399;
-  --err: #f87171;
+  --accent-ink: #141414;
+  --ok: #3ecf8e;
+  --err: #ef6b6b;
+  /* 层级：内高光 + 近距硬阴影 + 远距柔阴影，悬浮元素才"浮"得起来。 */
+  --shadow-raise: 0 1px 2px rgba(0, 0, 0, .45);
+  --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, .06), 0 2px 6px rgba(0, 0, 0, .5), 0 16px 40px rgba(0, 0, 0, .6);
+  --z-menu: 60;
+  --z-toast: 1000;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -24,8 +35,8 @@ nav.side { width: 200px; flex-shrink: 0; padding: 16px 0; background: var(--pane
 body.resizing { cursor: col-resize; user-select: none; }
 nav.side h1 { font-size: 13px; margin: 0 16px 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
 nav.side button { display: block; width: 100%; text-align: left; padding: 8px 16px; border: 0; background: none; font: inherit; cursor: pointer; color: var(--muted); }
-nav.side button:hover { color: var(--text); background: #151515; }
-nav.side button.active { background: #161616; color: var(--accent); font-weight: 600; }
+nav.side button:hover { color: var(--text); background: var(--hover); }
+nav.side button.active { background: var(--active); color: var(--text); font-weight: 600; }
 main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; padding: 24px; }
 .view { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; }
 .view.hidden { display: none; }
@@ -72,9 +83,9 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .command-list::-webkit-scrollbar { display: none; }
 .nav-empty { margin: 8px 0; font-size: 12px; color: var(--muted); }
 .nav-item { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 6px; row-gap: 2px; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--muted); font: inherit; text-align: left; cursor: pointer; }
-.nav-item:hover { background: #151515; color: var(--text); }
-.nav-item.selected { background: #1c1c1c; color: #fff; }
-.nav-item .nav-slash { grid-column: 1; grid-row: 1; color: #5c5c5c; }
+.nav-item:hover { background: var(--hover); color: var(--text); }
+.nav-item.selected { background: var(--active); color: #fff; }
+.nav-item .nav-slash { grid-column: 1; grid-row: 1; color: var(--faint); }
 .nav-item .nav-name { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nav-item .tag { grid-column: 2; grid-row: 2; justify-self: start; font-size: 11px; border: 1px solid var(--border-strong); border-radius: 3px; padding: 1px 6px; color: var(--muted); }
 .nav-item.new { margin-top: 8px; flex-shrink: 0; border-top: 1px solid var(--border); border-radius: 0 0 4px 4px; padding-top: 10px; }
@@ -105,20 +116,26 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 /* ===== 全局组件：自绘 select 与 toast ===== */
 .select-host { position: relative; }
 .select-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--panel-raised); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
+.select-button:hover { border-color: var(--border-overlay); background: var(--hover); }
 .select-button:focus-visible { outline: 1px solid var(--accent); border-color: var(--accent); }
+.select-button[aria-expanded="true"] { border-color: var(--border-overlay); background: var(--hover); }
 .select-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-label.placeholder { color: var(--muted); }
 .select-caret { flex-shrink: 0; color: var(--muted); font-size: 10px; }
-.select-menu { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-strong); border-radius: 6px; background: var(--panel); box-shadow: 0 8px 24px rgba(0, 0, 0, .6); scrollbar-width: thin; }
+/* 菜单是浮层：比卡片更亮一档 + 亮边 + 双层阴影，脱离文档流也不会糊进背景。
+   菜单挂在 body 上，用 position: fixed 跟随按钮的视口坐标，避免被祖先容器裁剪。 */
+.select-menu { position: fixed; z-index: var(--z-menu); left: 0; right: auto; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-overlay); border-radius: 6px; background: var(--overlay); box-shadow: var(--shadow-overlay); scrollbar-width: thin; }
 .select-option { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.select-option:hover, .select-option.active { background: #1c1c1c; }
-.select-option.selected { background: #222; color: #fff; }
+.select-option:hover, .select-option.active { background: var(--hover); }
+.select-option.selected { background: var(--active); color: #fff; }
 .toolbar-select { width: 220px; }
-.toast-host { position: fixed; left: 50%; top: 16px; z-index: 1000; display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
-.toast { padding: 8px 12px; border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: 6px; background: #141414; color: var(--text); font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .6); pointer-events: auto; }
+.toast-host { position: fixed; left: 50%; top: 16px; z-index: var(--z-toast); display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.toast { padding: 8px 14px; border: 1px solid var(--border-overlay); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--overlay); color: var(--text); font-size: 12px; box-shadow: var(--shadow-overlay); pointer-events: auto; animation: toast-in .16s ease-out; }
 .toast.ok { border-left-color: var(--ok); }
 .toast.error { border-left-color: var(--err); }
 .toast.leaving { opacity: 0; transform: translateY(-4px); transition: opacity .18s ease, transform .18s ease; }
+/* 只淡入不改 transform：入场动画与离场位移各管一个属性，避免把 toast 卡在偏移位置。 */
+@keyframes toast-in { from { opacity: 0; } to { opacity: 1; } }
 
 /* ===== Models view ===== */
 .models-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
@@ -137,7 +154,7 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .input-with-action { position: relative; }
 .input-with-action input { padding-right: 36px; }
 .input-action { position: absolute; top: 50%; right: 4px; display: flex; width: 28px; height: 24px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; transform: translateY(-50%); }
-.input-action:hover { color: var(--text); background: #1c1c1c; }
+.input-action:hover { color: var(--text); background: var(--hover); }
 .input-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .input-action.revealed::after { content: ''; position: absolute; width: 17px; height: 1.4px; background: currentColor; transform: rotate(-45deg); }
 .card { border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 12px; margin-bottom: 12px; }
