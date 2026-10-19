@@ -288,6 +288,14 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         "provider enable checkbox"
     );
     assert!(!css.contains(".prov-toggle"), "no toggle dot styles");
+    // API key 明文查看：小眼睛按钮 + 切换逻辑。
+    assert!(html.contains("id=\"prov-key-reveal\""), "key reveal button");
+    assert!(models_js.contains("Show API key"), "reveal labels wired");
+    // toast 顶部居中。
+    assert!(
+        css.contains("left: 50%; top: 16px;"),
+        "toast anchored top center"
+    );
     service.shutdown();
 }
 

@@ -114,11 +114,11 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .select-option:hover, .select-option.active { background: #1c1c1c; }
 .select-option.selected { background: #222; color: #fff; }
 .toolbar-select { width: 220px; }
-.toast-host { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: flex; flex-direction: column; gap: 8px; max-width: 380px; }
-.toast { padding: 8px 12px; border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: 6px; background: #141414; color: var(--text); font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .6); }
+.toast-host { position: fixed; left: 50%; top: 16px; z-index: 1000; display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.toast { padding: 8px 12px; border: 1px solid var(--border-strong); border-left: 3px solid var(--accent); border-radius: 6px; background: #141414; color: var(--text); font-size: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .6); pointer-events: auto; }
 .toast.ok { border-left-color: var(--ok); }
 .toast.error { border-left-color: var(--err); }
-.toast.leaving { opacity: 0; transform: translateY(4px); transition: opacity .18s ease, transform .18s ease; }
+.toast.leaving { opacity: 0; transform: translateY(-4px); transition: opacity .18s ease, transform .18s ease; }
 
 /* ===== Models view ===== */
 .models-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; }
@@ -134,6 +134,12 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 .provider-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 4px; }
 .field-wide { grid-column: 1 / -1; }
 .field-hint { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--muted); font-size: 12px; }
+.input-with-action { position: relative; }
+.input-with-action input { padding-right: 36px; }
+.input-action { position: absolute; top: 50%; right: 4px; display: flex; width: 28px; height: 24px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--muted); cursor: pointer; transform: translateY(-50%); }
+.input-action:hover { color: var(--text); background: #1c1c1c; }
+.input-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+.input-action.revealed::after { content: ''; position: absolute; width: 17px; height: 1.4px; background: currentColor; transform: rotate(-45deg); }
 .card { border: 1px solid var(--border); border-radius: 6px; background: var(--panel); padding: 12px; margin-bottom: 12px; }
 .card:last-child { margin-bottom: 0; }
 .card-title { margin: 0; font-size: 13px; font-weight: 600; }

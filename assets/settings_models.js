@@ -152,6 +152,11 @@ function renderEditor() {
   document.getElementById('prov-api-key').value = provider.apiKeyText;
   document.getElementById('prov-clear-key').checked = provider.clearApiKey;
   document.getElementById('prov-enabled').checked = provider.enabled;
+  // 每次切换 provider 都收回明文显示，避免上一条的可见状态带到下一条。
+  document.getElementById('prov-api-key').type = 'password';
+  document.getElementById('prov-key-reveal').classList.remove('revealed');
+  document.getElementById('prov-key-reveal').setAttribute('aria-pressed', 'false');
+  document.getElementById('prov-key-reveal').setAttribute('aria-label', 'Show API key');
   document.getElementById('prov-key-state').textContent = provider.hasApiKey ? 'a key is stored' : 'no key stored';
   modelSelects.provType.setValue(provider.type);
   renderModelList();
@@ -682,6 +687,17 @@ function hideFetchCandidates() {
 }
 
 function initProviderFields() {
+  // 小眼睛：在 password / text 之间切换，只影响本次显示，不改动草稿值。
+  const reveal = document.getElementById('prov-key-reveal');
+  const keyInput = document.getElementById('prov-api-key');
+  reveal.addEventListener('click', () => {
+    const show = keyInput.type === 'password';
+    keyInput.type = show ? 'text' : 'password';
+    reveal.classList.toggle('revealed', show);
+    reveal.setAttribute('aria-pressed', show ? 'true' : 'false');
+    reveal.setAttribute('aria-label', show ? 'Hide API key' : 'Show API key');
+    keyInput.focus();
+  });
   document.getElementById('prov-name').addEventListener('input', (event) => {
     const provider = currentProvider();
     if (provider) { provider.name = event.target.value; markModelsDirty(); }
