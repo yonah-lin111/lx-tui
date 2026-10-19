@@ -582,7 +582,15 @@ fn nested_list_markers_stay_colored() {
 fn code_block_header_shows_language_prefix_and_copy_button() {
     // 代码块头部：`language: js` + 复制按钮 `[❐]`，**没有左侧竖条**。
     let lines = render("```js\nconst a = 1;\n```");
-    let header = lines.first().expect("code header");
+    // 第一行是分隔横线（在 language 行**上方**），头部是第二行。
+    let rule = lines.first().expect("rule line");
+    assert!(
+        rule.text().chars().all(|ch| ch == '─'),
+        "语言行上方是横线: {:?}",
+        rule.text()
+    );
+    assert!(!rule.code_body, "分隔线不算代码正文");
+    let header = lines.get(1).expect("code header");
     let text = header.text();
     assert!(
         text.starts_with("language: js"),
@@ -590,14 +598,6 @@ fn code_block_header_shows_language_prefix_and_copy_button() {
     );
     assert!(text.contains("[❐]"), "头部右端有复制按钮: {text:?}");
     assert!(header.code_copy.is_some(), "记录按钮列位置");
-    // 第二行是分隔横线（语言行下一行）。
-    let rule = lines.get(1).expect("rule line");
-    assert!(
-        rule.text().chars().all(|ch| ch == '─'),
-        "语言行下一行是横线: {:?}",
-        rule.text()
-    );
-    assert!(!rule.code_body, "分隔线不算代码正文");
     // 正文行保留代码本身，不带 language 前缀，且不带竖条。
     let body = lines
         .iter()
@@ -608,12 +608,12 @@ fn code_block_header_shows_language_prefix_and_copy_button() {
     assert!(!body.text().contains("language:"), "正文不带语言前缀");
 }
 
-/// 语言名的 `language:` 前缀保持次要灰，**语言名单独上强调色**。
+/// 语言行整行上色：`language:` 前缀与语言名同为实体紫，靠**字重**分层级。
 #[test]
-fn language_name_is_highlighted_separately_from_its_prefix() {
+fn language_line_is_colored_with_prefix_and_name() {
     let header = render("```rust\nfn main() {}\n```")
         .into_iter()
-        .next()
+        .nth(1)
         .expect("header");
     let prefix = header
         .spans
@@ -625,32 +625,44 @@ fn language_name_is_highlighted_separately_from_its_prefix() {
         .iter()
         .find(|(value, _)| value == "rust")
         .expect("语言名段");
-    assert_eq!(
-        prefix.1,
-        style::md_read_code_lang(),
-        "前缀是次要灰（不抢语言名）"
-    );
+    assert_eq!(prefix.1, style::md_read_code_lang(), "前缀走上色样式");
     assert_eq!(
         name.1,
         style::md_read_code_lang_name(),
         "语言名走专用强调色"
     );
-    assert_ne!(prefix.1.fg, name.1.fg, "前缀与语言名不同色");
-    assert!(name.1.fg.is_some(), "语言名有前景色");
+    assert!(prefix.1.fg.is_some(), "前缀也有前景色（不再是无色灰）");
+    assert_eq!(prefix.1.fg, name.1.fg, "前缀与语言名同色相");
+    assert!(
+        !prefix
+            .1
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "前缀不加粗（标签）"
+    );
     assert!(
         name.1.add_modifier.contains(ratatui::style::Modifier::BOLD),
-        "语言名加粗，从这一行里跳出来"
+        "语言名加粗（取值），靠字重从这一行里跳出来"
     );
 }
 
-/// 代码块**上下**各有一条分隔横线，把正文框住（没有左侧竖条后的收尾）。
+/// 代码块**上下**各有一条分隔横线，把头部与正文一起框住。
 #[test]
-fn code_block_has_rule_above_and_below_the_body() {
+fn code_block_has_rule_above_header_and_below_body() {
     let lines = render("```js\nconst a = 1;\nconst b = 2;\n```");
-    // 头部 → 横线 → 正文 ×2 → 横线。
-    assert_eq!(lines.len(), 5, "头部 + 两横线 + 两行正文：{lines:?}");
+    // 横线 → 头部 → 正文 ×2 → 横线。
+    assert_eq!(lines.len(), 5, "两横线 + 头部 + 两行正文：{lines:?}");
     let rule = |line: &MdLine| line.text().chars().all(|ch| ch == '─');
-    assert!(rule(&lines[1]), "头部下一行是横线：{:?}", lines[1].text());
+    assert!(
+        rule(&lines[0]),
+        "第一行是横线（在头部上方）：{:?}",
+        lines[0].text()
+    );
+    assert!(
+        lines[1].text().starts_with("language: js"),
+        "横线之后才是 language 行：{:?}",
+        lines[1].text()
+    );
     assert!(lines[2].code_body && lines[3].code_body, "中间是正文");
     assert!(
         rule(&lines[4]),
@@ -675,7 +687,8 @@ fn closing_rule_is_not_part_of_code_body() {
 #[test]
 fn code_block_without_language_has_no_language_prefix() {
     let lines = render("```\nplain\n```");
-    let text = lines.first().expect("header").text();
+    // 第一行是横线，第二行才是头部。
+    let text = lines.get(1).expect("header").text();
     assert!(
         !text.contains("language:"),
         "无语言时不假装有语言: {text:?}"
@@ -688,7 +701,7 @@ fn copy_button_sits_at_right_edge_of_code_header() {
     // 按钮右对齐到面板可用区右缘（语言名在左、按钮在右）。
     let width = 40u16;
     let lines = render_wrapped("```js\nx\n```", width);
-    let header = lines.first().expect("header");
+    let header = lines.get(1).expect("header");
     let text = header.text();
     assert!(
         text.starts_with("language: js"),
@@ -706,7 +719,7 @@ fn copy_button_sits_at_right_edge_of_code_header() {
 #[test]
 fn copy_button_has_no_fill_without_width() {
     // 无宽度口径（UI 查看器样例走 render）：按钮直接跟在语言名后，不铺填充空格。
-    let header = render("```js\nx\n```").into_iter().next().expect("header");
+    let header = render("```js\nx\n```").into_iter().nth(1).expect("header");
     assert_eq!(header.text(), "language: js[❐]", "无宽度时不留填充");
 }
 
@@ -715,7 +728,7 @@ fn copy_button_without_language_still_right_aligned() {
     let width = 24u16;
     let header = render_wrapped("```\nplain\n```", width)
         .into_iter()
-        .next()
+        .nth(1)
         .expect("header");
     assert!(
         header.text().ends_with("[❐]"),

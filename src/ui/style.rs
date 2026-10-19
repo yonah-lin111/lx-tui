@@ -401,9 +401,12 @@ pub fn md_read_rule() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 代码块语言标记的 `language:` 前缀：GitHub 的次要前景色（不抢语言名）。
+/// markdown 代码块语言标记的 `language:` 前缀：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
+///
+/// 与语言名同色相、不加粗——`language:` 是标签、语言名是取值，靠字重拉开层级即可，
+/// 不用两种颜色挤在一行里（此前的次要灰读起来像「注释」，起不到标示作用）。
 pub fn md_read_code_lang() -> Style {
-    Style::default().fg(github_dark::FG_MUTED)
+    Style::default().fg(github_dark::ENTITY)
 }
 
 /// markdown 代码块的**语言名**（`js` / `rust`…）：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。

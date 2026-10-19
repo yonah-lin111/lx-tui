@@ -299,14 +299,15 @@ fn indented_code(
     index
 }
 
-/// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`，其下一行是横线分隔。
+/// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`；横线在它**上方**（见
+/// [`render_code`]），把头部与正文一起框进块内。
 ///
-/// **没有左侧竖条**（用户要求去掉）：整块靠「头部 + 一条横线 + 正文 + 收尾横线」框住，
+/// **没有左侧竖条**（用户要求去掉）：整块靠「横线 + 头部 + 正文 + 收尾横线」框住，
 /// 比逐行竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时不写
 /// `language:`（不假装有语言），只留按钮。
 ///
-/// `language:` 前缀用次要灰、**语言名单独上强调色**（[`style::md_read_code_lang_name`]）：
-/// 语言是这一行唯一有信息量的内容，值得跳出来。
+/// `language:` 前缀与语言名都上实体紫，靠**字重**分层级：前缀不加粗（标签）、
+/// 语言名加粗（取值，[`style::md_read_code_lang_name`]）。
 ///
 /// `width` 为 None（无宽度口径的自然渲染，如 UI 查看器样例）时按钮直接跟在语言名后，
 /// 不做填充——没有可用宽度就无从右对齐。
@@ -338,20 +339,21 @@ fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
     (line, column)
 }
 
-/// 代码块的分隔横线（头部下方与正文下方各一条，框住代码）。
+/// 代码块的分隔横线（**头部上方**与正文末尾各一条，框住整块）。
 fn code_rule_line(width: Option<usize>) -> MdLine {
     let rule_width = width.unwrap_or(40).max(1);
     MdLine::plain(0, RULE.repeat(rule_width), style::md_read_rule())
 }
 
-/// 渲染代码块：头部（`language: xxx` + 复制按钮）→ 分隔横线 → 正文 → **收尾横线**；
+/// 渲染代码块：**分隔横线** → 头部（`language: xxx` + 复制按钮）→ 正文 → **收尾横线**；
 /// 代码正文按语言做轻量语法高亮，**不带左侧竖条**。
 ///
-/// 上下各一条横线把代码框住：没有左侧竖条之后，只有头部那条线时正文结尾与后文
-/// 分不开（尤其代码块后面紧跟段落时）。
+/// 上下各一条横线把整块框住：横线在头部**上方**（不是头部与正文之间），这样
+/// `language:` 那行读作块首的标签行、而不是悬在线外的标题；没有左侧竖条后，
+/// 收尾横线补齐正文结尾与后文之间的边界。
 fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &mut Vec<MdLine>) {
-    lines.push(code_header_line(lang, width).0);
     lines.push(code_rule_line(width));
+    lines.push(code_header_line(lang, width).0);
     for line in body {
         let mut rendered = MdLine::spans(0, highlight::highlight_line(lang, line));
         rendered.code_body = true;

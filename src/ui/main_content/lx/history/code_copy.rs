@@ -44,8 +44,6 @@ pub(super) fn collect(
     }
     // 当前正在收集的代码块正文（Some 表示上一行是代码块头部）。
     let mut body: Option<String> = None;
-    // 头部之后紧跟的是**分隔横线**（不属于正文），需要跳过恰好一行。
-    let mut pending_rule = false;
     // 本块已收集的正文行数（用行数而不是 `body.is_empty()` 判首行——代码块开头的
     // 空行也是正文，用 `is_empty()` 会把它们吞掉）。
     let mut body_lines = 0usize;
@@ -75,18 +73,13 @@ pub(super) fn collect(
             block += 1;
             body = Some(String::new());
             body_lines = 0;
-            pending_rule = true;
             continue;
         }
         let Some(current) = body.as_mut() else {
             continue;
         };
-        // 头部下一行是分隔横线：跳过它，不算正文也不结束本块。
-        if pending_rule {
-            pending_rule = false;
-            continue;
-        }
-        // 只有代码块正文行属于这一块（逐行直到非正文行为止）。
+        // 只有代码块正文行属于这一块（逐行直到非正文行为止；两条横线都在
+        // 头部之外，天然不带 `code_body` 标记，因此自动排除）。
         if !line.code_body {
             close(&mut body, out);
             continue;

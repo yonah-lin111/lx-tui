@@ -212,7 +212,12 @@ fn markdown_palette_is_github_dark_truecolor() {
     assert_eq!(md_read_quote().fg, muted, "引用 = fg-muted");
     assert_eq!(md_read_marker().fg, muted, "语法标记 = fg-muted");
     assert_eq!(md_read_rule().fg, muted, "水平线/表格边框 = fg-muted");
-    assert_eq!(md_read_code_lang().fg, muted, "语言标记 = fg-muted");
+    // 语言标记（`language:` 前缀）与语言名同用实体紫，靠字重分层级。
+    assert_eq!(
+        md_read_code_lang().fg,
+        md_read_code_lang_name().fg,
+        "语言标记 = 实体紫"
+    );
     assert_eq!(md_read_image().fg, muted, "图片说明 = fg-muted");
     // 任务复选框按状态分色（只染复选框，正文保持原样）。
     assert_eq!(md_read_task_done().fg, Some(Color::Green), "已完成 = 绿");
@@ -505,15 +510,15 @@ fn input_hint_uses_red_for_errors_and_yellow_otherwise() {
     }
 }
 
-/// 代码块语言名用实体紫强调，前缀保持次要灰——两者必须不同色。
+/// 代码块语言行整行上色：`language:` 前缀与语言名同为实体紫，靠字重分层级。
 #[test]
-fn code_block_language_name_is_highlighted() {
+fn code_block_language_line_is_colored() {
     let prefix = md_read_code_lang();
     let name = md_read_code_lang_name();
     assert_eq!(
         prefix.fg,
-        Some(Color::Rgb(0x7d, 0x85, 0x90)),
-        "语言前缀 = fg-muted（不抢语言名）"
+        Some(Color::Rgb(0xd2, 0xa8, 0xff)),
+        "语言前缀也上实体紫（不再是次要灰）"
     );
     assert_eq!(
         name.fg,
@@ -521,10 +526,14 @@ fn code_block_language_name_is_highlighted() {
         "语言名 = 实体紫 #d2a8ff"
     );
     assert!(
-        name.add_modifier.contains(Modifier::BOLD),
-        "语言名加粗，从这一行跳出来"
+        !prefix.add_modifier.contains(Modifier::BOLD),
+        "前缀不加粗（标签）"
     );
-    assert_ne!(prefix.fg, name.fg, "前缀与语言名不同色");
+    assert!(
+        name.add_modifier.contains(Modifier::BOLD),
+        "语言名加粗（取值），靠字重拉开层级"
+    );
+    assert_eq!(prefix.fg, name.fg, "同一行同一个色相");
 }
 
 /// 代码块复制按钮用**面板折叠按钮同款**（`accent`：Cyan 加粗），不做悬停变色。
