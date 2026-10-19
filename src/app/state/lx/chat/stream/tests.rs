@@ -406,3 +406,47 @@ fn same_frame_reasoning_end_then_tool_start_is_ordered() {
     assert_eq!(chat.messages[0].steps.len(), 2);
     assert!(positions_are_monotonic(&chat.messages[0].steps));
 }
+
+/// 结算路径与重载路径共用一套合并：参数只有 `path` 的 `read` 结算后仍有区间与行数。
+#[test]
+fn settle_merges_argument_and_result_summaries() {
+    use crate::app::state::ToolStatus;
+    use crate::app::state::ToolSummary;
+
+    let mut chat = streaming_chat();
+    chat.start_tool_input("c1", "read", 0);
+    chat.end_tool_input("c1", r#"{"path":"src/a.rs"}"#);
+    chat.mark_tool_running("c1");
+    // 结果侧摘要（`to_summary` 的口径）：区间与行数只来自结果体。
+    let result = ToolSummary {
+        path: Some("src/a.rs".into()),
+        range: Some((1, 40)),
+        read_lines: Some(40),
+        total_lines: Some(40),
+        ..ToolSummary::default()
+    };
+    assert!(chat.settle_tool_result("c1", ToolStatus::Completed, Some(result), None, None));
+    let summary = tool(&chat, "c1").summary.as_ref().expect("摘要");
+    assert_eq!(summary.path.as_deref(), Some("src/a.rs"), "路径保留");
+    assert_eq!(summary.range, Some((1, 40)), "区间来自结果侧");
+    assert_eq!(summary.read_lines, Some(40), "实际行数来自结果侧");
+
+    // `search`：pattern 只在参数里，结算后不能被结果侧的空 pattern 覆盖掉。
+    let mut chat = streaming_chat();
+    chat.start_tool_input("c2", "search", 0);
+    chat.end_tool_input("c2", r#"{"pattern":"fn render","path":"src"}"#);
+    chat.mark_tool_running("c2");
+    let result = ToolSummary {
+        matches: Some(3),
+        ..ToolSummary::default()
+    };
+    assert!(chat.settle_tool_result("c2", ToolStatus::Completed, Some(result), None, None));
+    let summary = tool(&chat, "c2").summary.as_ref().expect("摘要");
+    assert_eq!(
+        summary.pattern.as_deref(),
+        Some("fn render"),
+        "pattern 来自参数"
+    );
+    assert_eq!(summary.path.as_deref(), Some("src"), "path 来自参数");
+    assert_eq!(summary.matches, Some(3), "命中数来自结果侧");
+}

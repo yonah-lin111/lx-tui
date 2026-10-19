@@ -1407,17 +1407,20 @@ search  {"pattern": "edit", "path": ".../tool_test_ファイル.txt"}
 | --- | --- | --- |
 | `path` | `path` 字段；**`edit` 从 patch 的 `*** Update File:` 行提取** | `path` 顶层；`edit` 从 `changes[].path` |
 | `pattern` | `pattern` 字段（结果体不带，只能这里取） | — |
-| `range` | `offset` / `limit` | — |
+| `range` | `offset` **且** `limit` 都给全时兜底推导（单边一律 None） | **权威来源**：`kind=="file"` 且 `start_line>0` → `(start_line, end_line)` |
+| `read_lines` | — | **本次实际读到的行数** `end_line - start_line + 1`（文件读取） |
 | `added` / `removed` | — | `write` 顶层；`edit` 汇总 `changes[].added/removed` |
-| `matches` | — | `search` 的 `matches` 数组长度 |
-| `total_lines` | — | `read` 的 `total_lines` |
+| `matches` | — | `search` 的 `matches` 数组长度；**目录 `read` 的 `total_lines`（条目数）** |
+| `total_lines` | — | `read` 的 `total_lines`（文件总行数 / 目录条目数） |
 | `truncated` | — | `truncated` |
+
+**区间与行数的唯一权威来源是结果体**：参数侧的 `offset`/`limit` 只是兜底，且必须两者齐全才推得出闭区间——只有 `offset` 塌成 `(start, start)`（12-1000 显示成 12-12）、只有 `limit` 干脆没有区间，正是实时/重载漂移的根因。
 
 同时补三条链路：
 
-- `chat::tools::ToolSummary` + `to_summary` 补 `pattern` / `total_lines`；
-- 结算路径 `settle_tool_result` 合并一次参数派生值（`to_summary` 没有参数，pattern 拿不到）；
-- 事件层 `view_summary` 透传 `pattern` / `total_lines`。
+- `chat::tools::ToolSummary` + `to_summary` 补 `pattern` / `read_lines` / `total_lines`；
+- 结算路径 `settle_tool_result` 与重载路径共用一套合并：`from_arguments().absorb_summary(result)`，结果侧字段覆盖、`path`/`pattern` 参数侧优先；
+- 事件层 `view_summary` 透传 `pattern` / `read_lines` / `total_lines`。
 
 ### 24.4 渲染口径调整（用户新增要求）
 
@@ -1425,9 +1428,9 @@ search  {"pattern": "edit", "path": ".../tool_test_ファイル.txt"}
 
 **`search`**：`  └─ "测试" in tool_test.txt · 3 matches`（加引号区分"被搜的词"与"被搜的文件"；只有模式时省略 `in path`）。
 
-**`read`**：`  └─ src/style.rs · 12-40 (31 lines)`——区间来自参数、行数来自结果体，`(31 lines)` 用括号区分"哪一段"与"多大一块"。
+**`read`**：`  └─ src/style.rs · 12-40 (31 lines)`——区间与行数**都来自结果体**（`start_line`/`end_line`），`(31 lines)` 是**本次实际读到的行数**（`end_line - start_line + 1`），不是文件总行数；括号区分"哪一段"与"多大一块"。
 
-**`edit`/`write`**：`  └─ path · +12 -4`——增删计数合体（中间不插 `·`），仍各自绿/红。
+**`edit`/`write`**：`  └─ path · +12 -4`——增删计数合体（中间不插 `·`），仍各自绿/红。次要段只在**已有可见前段**时才带 `· ` 前缀：多文件 `edit`（`path == None`）渲染为 `└─ +12 -4`，不再是孤立的 `└─  · +12 -4`。
 
 **每个工具之间空一行**（撤销 §23 的"连续工具零空行"）：每个调用是独立动作记录，两行式之间不空行会读成一棵树。
 
@@ -1435,30 +1438,40 @@ search  {"pattern": "edit", "path": ".../tool_test_ファイル.txt"}
 
 | 文件 | 变更 |
 | --- | --- |
-| `app/state/lx/chat/steps.rs` | `ToolSummary` 加 `pattern` / `total_lines`；`from_arguments` 提取 pattern + patch 目标路径；新增 `absorb_result_json()` |
-| `chat/tools/types.rs` | 同步加 `pattern` / `total_lines` |
-| `chat/tools/output.rs` | `to_summary` 的 `Read` 分支填 `total_lines` |
-| `app/state/lx/chat/stream.rs` | `settle_tool_result` 合并参数派生 pattern |
-| `app/update/chat/view.rs` | `tool_view_of` 改用 `from_arguments().absorb_result_json()`；`has_summary` 扩到新字段 |
+| `app/state/lx/chat/steps.rs` | `ToolSummary` 加 `pattern` / `read_lines` / `total_lines`；`from_arguments` 提取 pattern + patch 目标路径、区间只在 offset+limit 齐全时兜底；新增 `absorb_result_json()`（结果体优先补 range/read_lines/目录 matches）、`absorb_summary()`（结算与重载共用合并）、`is_empty()` |
+| `chat/tools/types.rs` | 同步加 `pattern` / `read_lines` / `total_lines` |
+| `chat/tools/output.rs` | `to_summary` 的 `Read` 分支填 `read_lines` / `matches` / `total_lines` |
+| `app/state/lx/chat/stream.rs` | `settle_tool_result` 改用 `from_arguments().absorb_summary(result)` |
+| `app/update/chat/view.rs` | `tool_view_of` 改用 `from_arguments().absorb_result_json()`；判空改用 `ToolSummary::is_empty()` |
 | `event/chat/mod.rs` | `view_summary` 透传新字段 |
 | `ui/style.rs` | `chat_tool_param` 去掉下划线 |
 | `ui/text/agent.rs` | 新增 `lines_label` / `pattern_label` / `search_scope_label` / `IN_SCOPE_SEP` |
-| `ui/main_content/lx/history/tool.rs` | `param()` 分 search/其他；`extras()` 的编辑计数合体；read 追加行数 |
+| `ui/main_content/lx/history/tool.rs` | `param()` 分 search/其他；`extras()` 的编辑计数合体、区间+行数合体、分隔符按需加 |
+| `ui/main_content/lx/history/tool/tests/{structure,extras,width}.rs` | 工具行测试按职责拆成三个子模块（`tests.rs` 只留共享构造与 `mod` 声明），守住单文件 1000 行上限 |
 | `ui/main_content/lx/history.rs` | `needs_spacer` 改回恒 `true` |
 
-### 24.6 测试证据（`cargo test` 全绿：lib 2328 + 14 个集成二进制 = 2374）
+### 24.6 测试证据（`cargo test` 全绿：lib 2338 + 13 个集成二进制 = 2384）
 
 | 测试 | 断言 |
 | --- | --- |
 | `reload_keeps_edit_added_and_removed_counts` | 重载后 `added=12` / `removed=4`（回归，`changes[]` 汇总） |
 | `reload_keeps_write_added_and_removed_counts` | 重载后 `+18` / `-0`（`-0` 表示整文件覆盖） |
 | `reload_keeps_search_pattern_and_match_count` | `pattern="测试"`（参数）+ `matches=3`（结果体） |
-| `reload_keeps_read_total_lines` | `range=(12,40)`（参数）+ `total_lines=31`（结果体） |
+| `reload_keeps_read_total_lines` | `range=(12,40)` + `read_lines=29` + `total_lines=1000`（三者都来自结果体） |
+| `reload_keeps_read_range_without_offset` | 参数只有 `path`：`range=(1,40)`、`read_lines=40` 仍从结果体补全 |
+| `reload_keeps_directory_entry_count` | 目录 `read`：`matches=2`、`range=None` |
+| `reload_with_offset_only_does_not_collapse_range` / `reload_with_limit_only_gets_range_from_result` | 单边参数不推导区间；重载区间与实时一致 |
+| `live_and_reloaded_summaries_are_identical` | 表驱动（read 带/不带 offset+limit、目录 read、search、单/多文件 edit、write）：实时摘要 == 重载摘要 |
+| `settle_merges_argument_and_result_summaries` | 结算路径的合并口径：区间/行数来自结果侧，`pattern`/`path` 来自参数侧 |
+| `view_summary_maps_every_field` | 事件层字段映射逐字段透传（含 `read_lines`），漏字段即失败 |
 | `reload_without_result_json_falls_back_to_arguments_only` | 无/非法结果体不 panic、不编造；`edit` 仍能从 patch 取到 `a.rs` |
 | `search_shows_the_pattern_before_the_path` | 详情行严格等于 `└─ "测试" in tool_test.txt · 3 matches`；模式在路径之前；参数无下划线 |
 | `search_without_path_still_shows_the_pattern` | 无路径时省略 `in`，模式仍显示 |
-| `read_shows_range_and_actual_line_count` | `12-40` + `(31 lines)` 并存，同色 dim |
-| `read_without_total_lines_shows_the_range_only` | 老数据不编造行数 |
+| `read_shows_range_and_actual_line_count` | 详情行严格等于 `└─ src/ui/style.rs · 12-40 (31 lines)`，区间与行数同段同色 dim |
+| `read_uses_read_lines_not_total_lines` | `read_lines=29` / `total_lines=1000` 时只显示 `29 lines`，不出现 `1000 lines` |
+| `read_without_read_lines_shows_the_range_only` | 老数据不编造行数，也不拿 `total_lines` 兜底 |
+| `multi_file_edit_has_no_orphan_separator` | 多文件 `edit` 详情严格等于 `└─ +12 -4`，无孤立 `· `、无连续空格 |
+| `truncated_only_has_no_orphan_separator` | 只有截断提示时详情为 `└─ …[truncated]` |
 | `edit_counts_are_one_group_without_a_separator` | `+12 -4` 合体、无 `·`、绿/红分开 |
 | `write_counts_are_one_group_too` | `+18 -0` |
 | `chat_step_palette_uses_green_structure_and_gold_params` | **断言参数不再有 UNDERLINED** |

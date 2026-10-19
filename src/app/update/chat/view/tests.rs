@@ -201,11 +201,237 @@ fn reload_keeps_read_total_lines() {
     let call = reloaded(
         "read",
         r#"{"path":"src/a.rs","offset":12,"limit":29}"#,
-        r#"{"tool":"read","path":"src/a.rs","kind":"file","content":"x","start_line":12,"end_line":40,"next_offset":null,"truncated":false,"total_lines":31}"#,
+        r#"{"tool":"read","path":"src/a.rs","kind":"file","content":"x","start_line":12,"end_line":40,"next_offset":null,"truncated":false,"total_lines":1000}"#,
     );
     let summary = call.summary.expect("结算摘要");
-    assert_eq!(summary.range, Some((12, 40)), "区间来自参数");
-    assert_eq!(summary.total_lines, Some(31), "实际行数来自结果体");
+    assert_eq!(summary.range, Some((12, 40)), "区间来自结果体");
+    assert_eq!(summary.total_lines, Some(1000), "文件总行数来自结果体");
+    assert_eq!(summary.read_lines, Some(29), "实际读到的行数来自结果体");
+}
+
+// ===== 实时 vs 重载：两条路径必须给出同一份摘要 =====
+
+/// chat 层摘要 → app 层摘要的字段映射（与事件层 `view_summary` 同口径）。
+///
+/// 逐字段列出、**不写** `..Default::default()`：`ToolSummary` 新增字段时这里会编译
+/// 失败，强制两份清单同步。app 层测试不直接依赖 `event`（单向依赖约束），事件层
+/// 那份映射由 `event::chat::tests::view_summary_maps_every_field` 单独守住。
+fn map_summary(summary: &crate::chat::tools::ToolSummary) -> ToolSummary {
+    ToolSummary {
+        path: summary.path.clone(),
+        range: summary.range,
+        added: summary.added,
+        removed: summary.removed,
+        matches: summary.matches,
+        pattern: summary.pattern.clone(),
+        read_lines: summary.read_lines,
+        total_lines: summary.total_lines,
+        truncated: summary.truncated,
+    }
+}
+
+/// 实时结算路径的摘要：参数派生 + 结果侧摘要合并（`settle_tool_result` 的口径）。
+fn live_summary(arguments: &str, result: &crate::chat::tools::ToolExecutionResult) -> ToolSummary {
+    let from_result = map_summary(&crate::chat::tools::to_summary(result));
+    ToolSummary::from_arguments(arguments).absorb_summary(&from_result)
+}
+
+/// 重进会话路径的摘要：参数派生 + 落库结果体补全（`tool_view_of` 的口径）。
+fn reload_summary(
+    arguments: &str,
+    result: &crate::chat::tools::ToolExecutionResult,
+) -> ToolSummary {
+    let json = crate::chat::tools::to_result_json(result);
+    ToolSummary::from_arguments(arguments).absorb_result_json(json.as_deref())
+}
+
+/// 由结果体 JSON 直接断言重载摘要（不经过 `to_result_json`，用于锁定老数据形状）。
+fn reload_from_json(args: &str, result_json: &str) -> ToolSummary {
+    ToolSummary::from_arguments(args).absorb_result_json(Some(result_json))
+}
+
+/// P1-1：参数只有 `path` 时，区间与行数必须从结果体补全。
+#[test]
+fn reload_keeps_read_range_without_offset() {
+    let summary = reload_from_json(
+        r#"{"path":"src/a.rs"}"#,
+        r#"{"tool":"read","path":"src/a.rs","kind":"file","content":"x","start_line":1,"end_line":40,"next_offset":null,"truncated":false,"total_lines":40}"#,
+    );
+    assert_eq!(summary.range, Some((1, 40)), "区间来自结果体");
+    assert_eq!(summary.read_lines, Some(40), "实际读到的行数来自结果体");
+}
+
+/// P1-1：目录读取的条目数在结果体里叫 `total_lines`，必须映射成 `matches`。
+#[test]
+fn reload_keeps_directory_entry_count() {
+    let summary = reload_from_json(
+        r#"{"path":"src"}"#,
+        r#"{"tool":"read","path":"/w/src","kind":"directory","content":"[file] a\n[file] b\n","start_line":1,"end_line":2,"next_offset":null,"truncated":false,"total_lines":2}"#,
+    );
+    assert_eq!(summary.matches, Some(2), "目录条目数映射成 matches");
+    assert_eq!(summary.range, None, "目录读取没有行区间");
+    assert_eq!(summary.read_lines, None, "目录读取没有「读到的行数」");
+}
+
+/// P2-6：只有 `offset` 时参数侧不推导区间，重载区间来自结果体、与实时一致。
+#[test]
+fn reload_with_offset_only_does_not_collapse_range() {
+    let args = r#"{"path":"src/a.rs","offset":12}"#;
+    let result = file_read_result("src/a.rs", 12, 1000, 1000);
+    // 参数侧单独推导不出来（旧实现会塌成 `(12, 12)`）。
+    assert_eq!(ToolSummary::from_arguments(args).range, None);
+    let reloaded = reload_summary(args, &result);
+    assert_eq!(reloaded.range, Some((12, 1000)), "区间来自结果体");
+    assert_eq!(reloaded.read_lines, Some(989));
+    assert_eq!(reloaded, live_summary(args, &result), "实时与重载必须一致");
+}
+
+/// P2-6：只有 `limit` 时（最常见的「读前 N 行」）同样由结果体给出区间。
+#[test]
+fn reload_with_limit_only_gets_range_from_result() {
+    let args = r#"{"path":"src/a.rs","limit":29}"#;
+    let result = file_read_result("src/a.rs", 1, 29, 40);
+    assert_eq!(ToolSummary::from_arguments(args).range, None);
+    let reloaded = reload_summary(args, &result);
+    assert_eq!(reloaded.range, Some((1, 29)), "区间来自结果体");
+    assert_eq!(reloaded.read_lines, Some(29));
+    assert_eq!(reloaded, live_summary(args, &result), "实时与重载必须一致");
+}
+
+/// 构造一次文件读取结果（含 `content` 长度与行数无关的简化正文）。
+fn file_read_result(
+    path: &str,
+    start_line: usize,
+    end_line: usize,
+    total_lines: usize,
+) -> crate::chat::tools::ToolExecutionResult {
+    crate::chat::tools::ToolExecutionResult::Read {
+        path: std::path::PathBuf::from(path),
+        kind: crate::chat::tools::ReadKind::File,
+        content: "1: a\n".into(),
+        start_line,
+        end_line,
+        next_offset: (end_line < total_lines).then_some(end_line + 1),
+        truncated: end_line < total_lines,
+        total_lines,
+    }
+}
+
+/// 构造一次目录读取结果。
+fn directory_read_result(path: &str, entries: usize) -> crate::chat::tools::ToolExecutionResult {
+    crate::chat::tools::ToolExecutionResult::Read {
+        path: std::path::PathBuf::from(path),
+        kind: crate::chat::tools::ReadKind::Directory,
+        content: "[file] a\n".into(),
+        start_line: 1,
+        end_line: entries,
+        next_offset: None,
+        truncated: false,
+        total_lines: entries,
+    }
+}
+
+/// 表驱动锁死「实时摘要 == 重载摘要」：同一份参数 + 同一份结果，两条路径必须逐字段相等。
+///
+/// 覆盖 `read`（带/不带 offset+limit）、目录 `read`、`search`、单文件/多文件 `edit`、`write`。
+/// 两条路径的差异只允许出现在**参数侧与结果侧都缺失**的字段上；本表里的 case 都已对齐。
+#[test]
+fn live_and_reloaded_summaries_are_identical() {
+    use crate::chat::tools::{FileChange, FileChangeKind};
+
+    let edit_patch = "*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** End Patch";
+    let multi_patch = "*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** Update File: b.rs\n@@\n-z\n+w\n*** End Patch";
+    // 参数用 serde_json 生成（patch 里有换行，手拼 JSON 会得到非法文本）。
+    let patch_args = |patch: &str| serde_json::json!({ "patch": patch }).to_string();
+    let cases: Vec<(&str, String, crate::chat::tools::ToolExecutionResult)> = vec![
+        (
+            "read 带 offset+limit",
+            r#"{"path":"src/a.rs","offset":12,"limit":29}"#.into(),
+            file_read_result("src/a.rs", 12, 40, 1000),
+        ),
+        (
+            "read 不带 offset/limit",
+            r#"{"path":"src/a.rs"}"#.into(),
+            file_read_result("src/a.rs", 1, 40, 40),
+        ),
+        (
+            "read 目录",
+            r#"{"path":"src"}"#.into(),
+            directory_read_result("/w/src", 2),
+        ),
+        (
+            "search",
+            r#"{"pattern":"测试","path":"tool_test.txt"}"#.into(),
+            crate::chat::tools::ToolExecutionResult::Search {
+                matches: vec![
+                    crate::chat::tools::SearchMatch {
+                        path: std::path::PathBuf::from("tool_test.txt"),
+                        line: 1,
+                        text: "x".into(),
+                        line_truncated: false,
+                    },
+                    crate::chat::tools::SearchMatch {
+                        path: std::path::PathBuf::from("tool_test.txt"),
+                        line: 3,
+                        text: "y".into(),
+                        line_truncated: false,
+                    },
+                ],
+                truncated: true,
+                files_scanned: 1,
+            },
+        ),
+        (
+            "edit 单文件",
+            patch_args(edit_patch),
+            crate::chat::tools::ToolExecutionResult::Edit {
+                changes: vec![FileChange {
+                    path: std::path::PathBuf::from("a.rs"),
+                    added: 12,
+                    removed: 4,
+                    kind: FileChangeKind::Updated,
+                }],
+                partial: false,
+            },
+        ),
+        (
+            "edit 多文件",
+            patch_args(multi_patch),
+            crate::chat::tools::ToolExecutionResult::Edit {
+                changes: vec![
+                    FileChange {
+                        path: std::path::PathBuf::from("a.rs"),
+                        added: 1,
+                        removed: 1,
+                        kind: FileChangeKind::Updated,
+                    },
+                    FileChange {
+                        path: std::path::PathBuf::from("b.rs"),
+                        added: 2,
+                        removed: 2,
+                        kind: FileChangeKind::Updated,
+                    },
+                ],
+                partial: false,
+            },
+        ),
+        (
+            "write",
+            r#"{"path":"docs/notes.md","content":"a\nb"}"#.into(),
+            crate::chat::tools::ToolExecutionResult::Write {
+                path: std::path::PathBuf::from("docs/notes.md"),
+                created: true,
+                added: 18,
+                removed: 0,
+            },
+        ),
+    ];
+
+    for (name, arguments, result) in cases {
+        let live = live_summary(&arguments, &result);
+        let reloaded = reload_summary(&arguments, &result);
+        assert_eq!(live, reloaded, "{name}：实时摘要必须等于重载摘要");
+    }
 }
 
 /// 结果体缺失/非法时退回纯参数摘要，不 panic 也不编造。

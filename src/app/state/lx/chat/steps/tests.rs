@@ -136,10 +136,20 @@ fn summary_extracts_path_and_read_range_only() {
     assert_eq!(summary.path.as_deref(), Some("src/a.rs"));
     assert_eq!(summary.range, Some((10, 14)));
 
-    let open_ended = ToolSummary::from_arguments(r#"{"path":"src/b.rs","offset":7}"#);
-    assert_eq!(open_ended.range, Some((7, 7)));
+    // 单边参数推不出闭区间：区间以结果体为准，参数侧只是兜底。
+    let offset_only = ToolSummary::from_arguments(r#"{"path":"src/b.rs","offset":7}"#);
+    assert_eq!(
+        offset_only.range, None,
+        "只有 offset 不推导区间（旧实现会塌成 (7,7)）"
+    );
 
-    let no_range = ToolSummary::from_arguments(r#"{"path":"src/c.rs"}"#);
+    let limit_only = ToolSummary::from_arguments(r#"{"path":"src/c.rs","limit":29}"#);
+    assert_eq!(limit_only.range, None, "只有 limit 同样不推导区间");
+
+    let zero_limit = ToolSummary::from_arguments(r#"{"path":"src/d.rs","offset":3,"limit":0}"#);
+    assert_eq!(zero_limit.range, None, "limit 为 0 时没有区间");
+
+    let no_range = ToolSummary::from_arguments(r#"{"path":"src/e.rs"}"#);
     assert_eq!(no_range.range, None);
 
     let invalid = ToolSummary::from_arguments("{not json");

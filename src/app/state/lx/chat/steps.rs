@@ -109,29 +109,43 @@ pub struct ToolSummary {
     /// 目标路径（相对/绝对按模型给出的形式，超长按 [`MAX_SUMMARY_CHARS`] 截断）。
     pub path: Option<String>,
     /// 1-based 起止行（`read` 类工具的行范围）。
+    ///
+    /// **唯一权威来源是结果体的 `start_line`/`end_line`**（见 [`ToolSummary::absorb_result_json`]）；
+    /// 参数侧的 `offset`/`limit` 只有在两者都给全时才是兜底值（见 [`ToolSummary::from_arguments`]）。
     pub range: Option<(usize, usize)>,
     /// 新增行数。
     pub added: Option<usize>,
     /// 删除行数。
     pub removed: Option<usize>,
-    /// 命中条目数（`search`）。
+    /// 命中条目数（`search` 命中数 / 目录读取的条目数）。
     pub matches: Option<usize>,
     /// `search` 的搜索模式（**只来自调用参数**，结果体里没有）。
     ///
     /// 它是搜索行唯一有意义的「对什么搜」，没有它界面只剩一个「3 matches」的裸计数；
     /// 因此必须进摘要、并在结算/重载两条路径上都不被覆盖丢失。
     pub pattern: Option<String>,
-    /// `read` 实际读到的行数（来自结果体，参数里没有）。
+    /// `read` **实际读到的行数**（`end_line - start_line + 1`，只来自结果体）。
+    ///
+    /// 与 [`Self::total_lines`]（文件总行数 / 目录条目数）是两件不同的事：UI 的
+    /// `(N lines)` 只用本字段，绝不用总行数兜底（否则 `12-40 (1000 lines)` 会被读成
+    /// 「读了 1000 行」）。
+    pub read_lines: Option<usize>,
+    /// 文件总行数（目录读取时为条目数）。
     pub total_lines: Option<usize>,
     /// 内容是否被截断（必须显式告知用户）。
     pub truncated: bool,
 }
 
 impl ToolSummary {
-    /// 从参数 JSON 提取最小摘要（路径 + `read` 行范围）。
+    /// 从参数 JSON 提取最小摘要（路径 + `search` 模式 + `read` 行范围兜底）。
     ///
-    /// 只读参数，不执行任何 IO；执行结果（增删计数/命中数/截断）由工具执行层在
+    /// 只读参数，不执行任何 IO；执行结果（增删计数/命中数/实际行数/截断）由工具执行层在
     /// 结算时补齐。参数不是 JSON 对象或没有可用字段时返回空摘要。
+    ///
+    /// **区间以结果体为准，参数侧只是兜底**：只有 `offset` 与 `limit` **同时**给出
+    /// （且 `limit > 0`）时才推导 `Some((offset, offset + limit - 1))`；只有 `offset`
+    /// 或只有 `limit` 时一律 `None`——单边参数推不出闭区间（旧的「只有 offset 塌成
+    /// `(start, start)`」会把 12-1000 显示成 12-12）。
     pub fn from_arguments(arguments_json: &str) -> Self {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments_json) else {
             return Self::default();
@@ -158,14 +172,11 @@ impl ToolSummary {
             .get("limit")
             .and_then(|limit| limit.as_u64())
             .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX));
+        // 只有 offset + limit 都给全才推得出闭区间（见方法文档）。
         let range = match (offset, limit) {
             (Some(offset), Some(limit)) if limit > 0 => {
                 let start = offset.max(1);
                 Some((start, start.saturating_add(limit).saturating_sub(1)))
-            }
-            (Some(offset), None) => {
-                let start = offset.max(1);
-                Some((start, start))
             }
             _ => None,
         };
@@ -179,12 +190,16 @@ impl ToolSummary {
 
     /// 用**落库的结果体**补全摘要（历史重载路径）。
     ///
-    /// 增删计数 / 命中数 / 实际行数 / 截断标记只存在于结果体里；只靠
+    /// 增删计数 / 命中数 / 实际行数与区间 / 截断标记只存在于结果体里；只靠
     /// [`Self::from_arguments`] 重建会让重进会话的工具行丢掉这些细节
     /// （旧 bug：写文件类操作重进 session 后只剩方块与空 `└─`）。
     ///
-    /// 纯解析、无 IO；参数侧已有的字段（path / pattern / range）优先保留，
-    /// 结果体只填空缺。结果体不是合法 JSON 时原样返回。
+    /// 纯解析、无 IO。字段优先级：
+    /// - **`range` / `read_lines` / `matches` / `added` / `removed` / `total_lines`**：
+    ///   结果体已给出的值覆盖参数侧（区间与行数的唯一权威来源是结果体）；
+    /// - **`path` / `pattern`**：参数侧已有则保留，结果体只填空缺。
+    ///
+    /// 结果体不是合法 JSON 时原样返回。
     pub fn absorb_result_json(mut self, result_json: Option<&str>) -> Self {
         let Some(result_json) = result_json else {
             return self;
@@ -204,6 +219,36 @@ impl ToolSummary {
                 .and_then(|path| path.as_str())
                 .filter(|path| !path.is_empty())
                 .map(truncate_summary);
+        }
+        // `read` 的区间与「实际读到的行数」**只以结果体为准**（参数侧只是兜底，
+        // 见 `from_arguments`）：结果体给了 `kind` 就按它的区间口径改写——
+        // 空文件（`start_line == 0`）与目录读取（`start_line` 是条目序号）都没有行区间。
+        // 这里必须清掉参数侧推导值，否则重载路径清空、实时路径留着，两条路不一致。
+        let kind = value.get("kind").and_then(serde_json::Value::as_str);
+        match kind {
+            Some("file") => {
+                let start = number("start_line").unwrap_or(0);
+                let end = number("end_line").unwrap_or(0);
+                if start > 0 {
+                    self.range = Some((start, end));
+                    self.read_lines = Some(end.saturating_sub(start).saturating_add(1));
+                } else {
+                    self.range = None;
+                    self.read_lines = None;
+                }
+            }
+            Some("directory") => {
+                self.range = None;
+                self.read_lines = None;
+                // 条目数在结果体里叫 `total_lines`（没有 `matches` 数组），
+                // 映射到 `matches`，与 `to_summary` 的口径一致。
+                if self.matches.is_none()
+                    && let Some(entries) = number("total_lines")
+                {
+                    self.matches = Some(entries);
+                }
+            }
+            _ => {}
         }
         // `search` 结果体带 matches 数组；命中数就是它的长度。
         if self.matches.is_none()
@@ -256,6 +301,65 @@ impl ToolSummary {
             self.truncated = true;
         }
         self
+    }
+
+    /// 用**结果侧摘要**合并参数派生摘要（实时结算路径）。
+    ///
+    /// `self` 是 [`Self::from_arguments`] 的参数派生值，`result` 是
+    /// `chat::tools::to_summary` 从执行结果算出的摘要。合并规则与重载路径
+    /// （[`Self::absorb_result_json`]）**同一口径**，两条路径的产出必须逐字段相等：
+    ///
+    /// - 结果侧已给出的字段**优先覆盖**：`range` / `read_lines` / `matches` /
+    ///   `added` / `removed` / `total_lines` / `truncated`；
+    /// - `pattern` 与 `path` **参数侧优先**（`search` 的 pattern 只存在于参数里，
+    ///   `edit` 的参数是 patch 文本、路径也可能比结果侧的更早可用），结果侧只填空缺。
+    pub fn absorb_summary(mut self, result: &Self) -> Self {
+        // 参数侧优先、结果侧填空缺的字段。
+        if self.path.is_none() {
+            self.path.clone_from(&result.path);
+        }
+        if self.pattern.is_none() {
+            self.pattern.clone_from(&result.pattern);
+        }
+        // 结果侧优先、未给出才保留参数值的字段。
+        //
+        // `range` / `read_lines` 需要一条额外口径：`read` 的结果侧摘要**一定带
+        // `total_lines`**（文件总行数 / 目录条目数），它出现就说明结果体已经对区间下了
+        // 结论——此时结果侧的 `None`（空文件、目录读取）也是权威答案，必须覆盖参数
+        // 兜底值，否则实时路径会留着参数推测的区间、重载路径已清空，两条路又不一致。
+        if let Some(total_lines) = result.total_lines {
+            self.range = result.range;
+            self.read_lines = result.read_lines;
+            self.total_lines = Some(total_lines);
+        }
+        if result.matches.is_some() {
+            self.matches = result.matches;
+        }
+        if result.added.is_some() {
+            self.added = result.added;
+        }
+        if result.removed.is_some() {
+            self.removed = result.removed;
+        }
+        self.truncated |= result.truncated;
+        self
+    }
+
+    /// 摘要是否**完全没有可展示信息**（所有字段为 None 且未截断）。
+    ///
+    /// UI 用它决定是否把摘要挂到步骤上：`Some(空摘要)` 会让工具行画出孤立的空
+    /// `└─`；调用方必须用 [`Self::is_empty`] 判空而不是手写字段 `||` 链——后者
+    /// 新增字段时会被静默漏掉（P1-1 的回归温床）。
+    pub fn is_empty(&self) -> bool {
+        self.path.is_none()
+            && self.range.is_none()
+            && self.added.is_none()
+            && self.removed.is_none()
+            && self.matches.is_none()
+            && self.pattern.is_none()
+            && self.read_lines.is_none()
+            && self.total_lines.is_none()
+            && !self.truncated
     }
 }
 

@@ -275,41 +275,49 @@ const PRIORITY_RANGE: u8 = 2;
 /// 截断提示（必须显式告知用户）最后才隐藏的次要信息。
 const PRIORITY_TRUNCATED: u8 = 3;
 
-/// 次要信息（显示顺序：行范围 → 命中数 → 增删计数 → 截断提示）。
-fn extras(call: &ToolCallView) -> Vec<Extra> {
+/// 次要信息（显示顺序：行范围 + 实际行数 → 命中数 → 增删计数 → 截断提示）。
+///
+/// `has_param` 表示第二行是否已有可见的主参数段：**只有前段存在时才给次要段加
+/// ` · ` 分隔符**，否则会渲染出孤立的 `└─  · +12 -4`（多文件 `edit` 的
+/// `path == None`，已实测过的 P2-1）。
+fn extras(call: &ToolCallView, has_param: bool) -> Vec<Extra> {
     let sep = text::LX_CHAT_TOOL_STATUS_SEP;
     let Some(summary) = call.summary.as_ref() else {
         return Vec::new();
     };
     let mut out: Vec<Extra> = Vec::new();
-    /// 收集一段带 `· ` 前缀的次要信息（局部宏，避免闭包同时借用 `out`）。
+    // 「当前详情行已有可见前段」：初始 = 主参数是否存在，之后每收集一段就置 true。
+    let mut has_lead = has_param;
+    /// 收集一段次要信息：前段存在时补 ` · `，否则直接以内容开头。
+    /// （局部宏，避免闭包同时借用 `out` 与 `has_lead`。）
     macro_rules! push {
-        ($value:expr, $style:expr, $priority:expr $(,)?) => {
+        ($value:expr, $style:expr, $priority:expr $(,)?) => {{
+            let lead = if has_lead { sep } else { "" };
             out.push(Extra {
-                segment: Segment::new(format!("{sep}{}", $value), $style),
+                segment: Segment::new(format!("{lead}{}", $value), $style),
                 priority: $priority,
-            })
-        };
+            });
+            has_lead = true;
+        }};
     }
     match Kind::of(&call.name) {
         Kind::Read => {
-            if let Some((start, end)) = summary.range {
-                push!(
-                    text::agent::range_label(start, end),
-                    style::chat_tool_range(),
-                    PRIORITY_RANGE,
-                );
-            }
-            // 实际读到的行数（结果体里的 total_lines）：与区间并列，
-            // 括号区分"哪一段"与"多大一块"。
-            if summary.range.is_some()
-                && let Some(total) = summary.total_lines
-            {
-                push!(
-                    text::agent::lines_label(total),
-                    style::chat_tool_range(),
-                    PRIORITY_RANGE,
-                );
+            // 区间与「实际读到的行数」合成**一段**：`12-40 (31 lines)`——
+            // 括号区分「哪一段」与「多大一块」。行数只用 `read_lines`，
+            // **绝不用 `total_lines` 兜底**（那是文件总行数，会把 `12-40` 读成
+            // 「读了 1000 行」）。目录读取没有区间，只走下面的 `matches` 分支。
+            let range = summary
+                .range
+                .map(|(start, end)| text::agent::range_label(start, end));
+            let lines = summary.read_lines.map(text::agent::lines_label);
+            let label = match (range, lines) {
+                (Some(range), Some(lines)) => Some(format!("{range} {lines}")),
+                (Some(range), None) => Some(range),
+                (None, Some(lines)) => Some(lines),
+                (None, None) => None,
+            };
+            if let Some(label) = label {
+                push!(label, style::chat_tool_range(), PRIORITY_RANGE);
             }
             // 目录读取的条目数与 `search` 的命中数同口径显示。
             if let Some(matches) = summary.matches {
@@ -330,8 +338,8 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
             }
         }
         Kind::Edit | Kind::Write => {
-            // 增删计数是**一个**判断（"加了 12 删了 4"），合成一段 `+12 -4`；
-            // 仍各自上色（绿/红），只是中间不再插 `·` 分隔符。
+            // 增删计数是**一个**判断（"加了 12 删了 4"），合成一段 `+12 -4`：
+            // 首段按需带 `· ` 前缀，后续计数之间只留空格；仍各自上色（绿/红）。
             let mut diff = Vec::new();
             if let Some(added) = summary.added {
                 diff.push((text::agent::added_label(added), style::agent_added()));
@@ -339,25 +347,26 @@ fn extras(call: &ToolCallView) -> Vec<Extra> {
             if let Some(removed) = summary.removed {
                 diff.push((text::agent::removed_label(removed), style::agent_removed()));
             }
-            if !diff.is_empty() {
-                // 首段带 `· ` 分隔符；后续计数各自成段（保留绿/红），中间只留空格。
-                // 注意不能走 `push`：它会给每段都补 `· `。
+            if let Some((first, first_style)) = diff.first() {
+                let lead = if has_lead { sep } else { "" };
                 out.push(Extra {
-                    segment: Segment::new(format!("{sep}{}", diff[0].0), diff[0].1),
+                    segment: Segment::new(format!("{lead}{first}"), *first_style),
                     priority: PRIORITY_COUNT,
                 });
                 out.extend(diff.iter().skip(1).map(|(label, label_style)| Extra {
                     segment: Segment::new(format!(" {label}"), *label_style),
                     priority: PRIORITY_COUNT,
                 }));
+                has_lead = true;
             }
         }
         Kind::Other => {}
     }
     if summary.truncated {
+        let lead = if has_lead { sep } else { "" };
         out.push(Extra {
             segment: Segment::new(
-                format!("{sep}{}", text::agent::TOOL_TRUNCATED),
+                format!("{lead}{}", text::agent::TOOL_TRUNCATED),
                 style::agent_warn(),
             ),
             priority: PRIORITY_TRUNCATED,
@@ -458,7 +467,8 @@ fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
 /// 正常态第二行：参数 + 次要计数，按优先级让位；没有可展示内容时用状态词兜底。
 fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
     let param = param(call);
-    let extras = extras(call);
+    // 次要段是否带 ` · ` 前缀取决于主参数是否存在（否则会出现孤立分隔符）。
+    let extras = extras(call, param.is_some());
     if param.is_none() && extras.is_empty() {
         return fit_fallback(call, limit);
     }
@@ -503,6 +513,8 @@ fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
                     .filter(|(_, keep)| **keep)
                     .map(|(extra, _)| extra.segment.clone()),
             );
+            // 主参数先于它自己的让位被保留（`drop_index` 会先丢光次要段），
+            // 因此保留下来的次要段一定有参数可依附、` · ` 前缀不会孤立。
             if segments.is_empty() {
                 segments = fit_fallback(call, limit);
             } else if let Some(tail) = cancelled_tail(call) {

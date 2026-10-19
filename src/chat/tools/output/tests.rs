@@ -148,8 +148,23 @@ fn summaries_hold_only_metadata() {
     let read = execute(&ctx, "read", r#"{"path":"a.txt"}"#);
     let summary = to_summary(&read);
     assert_eq!(summary.range, Some((1, 2)));
+    assert_eq!(
+        summary.read_lines,
+        Some(2),
+        "实际读到的行数 = end - start + 1"
+    );
     assert_eq!(summary.added, None);
     assert!(!format!("{summary:?}").contains("secret"));
+
+    // 目录读取：条目数映射成 matches，且没有行区间。
+    let directory = to_summary(&execute(&ctx, "read", r#"{"path":"."}"#));
+    assert_eq!(directory.range, None, "目录读取没有行区间");
+    assert_eq!(directory.read_lines, None, "目录读取没有「读到的行数」");
+    assert_eq!(
+        directory.matches, directory.total_lines,
+        "目录条目数同时进 matches 与 total_lines"
+    );
+    assert!(directory.matches.is_some_and(|entries| entries > 0));
 
     let write = execute(&ctx, "write", r#"{"path":"b.txt","content":"x\ny\n"}"#);
     let summary = to_summary(&write);

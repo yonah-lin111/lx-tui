@@ -211,17 +211,21 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
             truncated,
             total_lines,
             ..
-        } => ToolSummary {
-            path: Some(path.display().to_string()),
-            range: match kind {
-                ReadKind::File if *start_line > 0 => Some((*start_line, *end_line)),
-                _ => None,
-            },
-            matches: (*kind == ReadKind::Directory).then_some(*total_lines),
-            total_lines: Some(*total_lines),
-            truncated: *truncated,
-            ..ToolSummary::default()
-        },
+        } => {
+            // 文件读取才有闭区间与「实际读到的行数」；目录读取的 start/end 是条目序号。
+            let file_range =
+                (*kind == ReadKind::File && *start_line > 0).then_some((*start_line, *end_line));
+            ToolSummary {
+                path: Some(path.display().to_string()),
+                range: file_range,
+                read_lines: file_range
+                    .map(|(start, end)| end.saturating_sub(start).saturating_add(1)),
+                matches: (*kind == ReadKind::Directory).then_some(*total_lines),
+                total_lines: Some(*total_lines),
+                truncated: *truncated,
+                ..ToolSummary::default()
+            }
+        }
         ToolExecutionResult::Search {
             matches, truncated, ..
         } => ToolSummary {

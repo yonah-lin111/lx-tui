@@ -710,6 +710,9 @@ fn view_settlement(
 }
 
 /// `chat::tools::ToolSummary` → `app` 层 `ToolSummary`（一次字段映射，保持单向依赖）。
+///
+/// 逐字段列出、**不写** `..Default::default()`：`ToolSummary` 新增字段时这里会直接
+/// 编译失败，强制两份字段清单同步（漏字段正是 P1-1 那类回归的入口）。
 fn view_summary(summary: &crate::chat::tools::ToolSummary) -> crate::app::state::ToolSummary {
     crate::app::state::ToolSummary {
         path: summary.path.clone(),
@@ -718,6 +721,7 @@ fn view_summary(summary: &crate::chat::tools::ToolSummary) -> crate::app::state:
         removed: summary.removed,
         matches: summary.matches,
         pattern: summary.pattern.clone(),
+        read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,
     }

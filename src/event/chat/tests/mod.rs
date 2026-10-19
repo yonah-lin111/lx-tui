@@ -638,6 +638,38 @@ fn assistant_message<'a>(
         .expect("assistant message")
 }
 
+// ===== 摘要字段映射 =====
+
+/// `chat::tools::ToolSummary` → app 层摘要的映射必须逐字段透传（单向依赖的唯一接缝）。
+///
+/// 漏字段是 P1-1 那类「重进会话丢详情」的入口：新增摘要字段时本测试会失败，
+/// 与「实时 == 重载」的表驱动测试一起把两条路径锁死。
+#[test]
+fn view_summary_maps_every_field() {
+    let chat = crate::chat::tools::ToolSummary {
+        path: Some("src/a.rs".into()),
+        range: Some((12, 40)),
+        added: Some(3),
+        removed: Some(1),
+        matches: Some(2),
+        pattern: Some("fn render".into()),
+        read_lines: Some(29),
+        total_lines: Some(1000),
+        truncated: true,
+    };
+    let mapped = view_summary(&chat);
+    assert_eq!(mapped.path.as_deref(), Some("src/a.rs"));
+    assert_eq!(mapped.range, Some((12, 40)));
+    assert_eq!(mapped.added, Some(3));
+    assert_eq!(mapped.removed, Some(1));
+    assert_eq!(mapped.matches, Some(2));
+    assert_eq!(mapped.pattern.as_deref(), Some("fn render"));
+    assert_eq!(mapped.read_lines, Some(29), "实际读到的行数必须透传");
+    assert_eq!(mapped.total_lines, Some(1000));
+    assert!(mapped.truncated);
+    assert!(!mapped.is_empty(), "全字段样本不得被判成空摘要");
+}
+
 mod ack;
 mod flow;
 mod limits;

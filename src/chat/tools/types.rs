@@ -278,14 +278,17 @@ impl ToolSpec {
 pub struct ToolSummary {
     /// 目标路径（绝对路径，超长由 UI 按字符截断）。
     pub path: Option<String>,
-    /// 1-based 起止行（`read` 的行范围）。
+    /// 1-based 起止行（`read` 的行范围）；目录读取与空文件为 None。
     pub range: Option<(usize, usize)>,
     pub added: Option<usize>,
     pub removed: Option<usize>,
+    /// 命中条目数（`search` 命中数 / 目录读取的条目数）。
     pub matches: Option<usize>,
     /// `search` 的搜索模式：结果体不带它，由调用参数提取后带入摘要。
     pub pattern: Option<String>,
-    /// `read` 实际读到的行数（结果体里的 `total_lines`）。
+    /// `read` **实际读到的行数**（`end_line - start_line + 1`），UI 的 `(N lines)` 只用它。
+    pub read_lines: Option<usize>,
+    /// 文件总行数（目录读取时为条目数）；**不是**本次读到的行数。
     pub total_lines: Option<usize>,
     pub truncated: bool,
 }

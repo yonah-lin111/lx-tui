@@ -71,19 +71,15 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
     // （写文件类操作重进 session 后只剩方块与空 `└─`）。
     let summary = ToolSummary::from_arguments(&tool.arguments_json)
         .absorb_result_json(tool.result_json.as_deref());
-    let has_summary = summary.path.is_some()
-        || summary.range.is_some()
-        || summary.pattern.is_some()
-        || summary.added.is_some()
-        || summary.removed.is_some()
-        || summary.matches.is_some();
+    // 空摘要不挂到步骤上：`Some(空摘要)` 会让 UI 画出一个孤立的空 `└─`。
+    // 判空走 [`ToolSummary::is_empty`]（手写字段 `||` 链在新增字段时会静默漏掉）。
     ToolCallView {
         call_id: tool.call_id.clone(),
         name: tool.name.clone(),
         position: tool.position,
         arguments_json: tool.arguments_json.clone(),
         status,
-        summary: has_summary.then_some(summary),
+        summary: (!summary.is_empty()).then_some(summary),
         error: tool.error_text.clone(),
         // 结果体只在历史加载时回填：上下文回放用它（UI 不铺开全文）。
         result_json: tool.result_json.clone(),

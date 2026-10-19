@@ -279,14 +279,11 @@ impl LxChat {
         }
         call.settle(status, error);
         if let Some(summary) = summary {
-            // 参数侧字段（pattern / path / range）在结算摘要里可能缺失：
-            // `chat::tools::to_summary` 只有结果没有参数，所以合并一次参数派生值。
-            // 重载路径（`tool_view_of`）走同一套「参数 + 结果体」拼装，两条路一致。
+            // 结算只拿到**结果侧**摘要（`chat::tools::to_summary` 没有参数），
+            // 因此与重载路径共用同一套合并：参数派生值打底、结果侧覆盖。
+            // `tool_view_of` 走 `from_arguments().absorb_result_json()`，两条路同口径。
             let from_args = ToolSummary::from_arguments(&call.arguments_json);
-            call.summary = Some(ToolSummary {
-                pattern: summary.pattern.or(from_args.pattern),
-                ..summary
-            });
+            call.summary = Some(from_args.absorb_summary(&summary));
         }
         if result_json.is_some() {
             call.result_json = result_json;
