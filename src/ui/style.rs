@@ -101,15 +101,19 @@ pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
 }
 
-/// 边框标题内的次要值（prompt `ws:` 值、窗格 `agent:` 值）：
-/// 聚焦面板的边框为强调色，值在其上叠加 dim；失焦面板回退 muted。
-/// 与 ratatui 把标题 span 叠加到边框样式上的结果一致（聚焦值 = Cyan + BOLD + DIM）。
-pub fn border_value(focused: bool) -> Style {
-    if focused {
-        accent().add_modifier(Modifier::DIM)
-    } else {
-        muted()
-    }
+/// 边框上的标签值：窗格 `ws:`/`agent:` 的值、prompt 底边框 `b:`/`wt:`/`ws:` 的值。
+///
+/// 恒为默认前景 + dim，**不随面板焦点变色**：聚焦只由边框框线颜色表达，
+/// 标签值不应跟着变青（用户要求"移除聚焦变蓝、保留原本的默认颜色"）。
+///
+/// 前景与 BOLD 必须显式重置：这些文字直接叠加写入边框单元格，
+/// `Cell::set_style` 只覆盖样式里给出的字段，仅用 [`muted`] 会把聚焦边框的
+/// Cyan + BOLD 一并继承出来。
+pub fn border_label_value() -> Style {
+    Style::default()
+        .fg(Color::Reset)
+        .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
 }
 
 /// Agent 状态圆点：Working 绿、Blocked 黄、Idle 次要信息（Unknown 同 Idle）。

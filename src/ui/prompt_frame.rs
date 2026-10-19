@@ -328,7 +328,7 @@ fn render_prompt_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     render_workspace_label(frame, row, left, right, state);
 }
 
-/// 底边框右侧 `ws:路径末段名`：右端贴 `right`（不含），前缀强调色、值 muted；
+/// 底边框右侧 `ws:路径末段名`：右端贴 `right`（不含），前缀强调色、值恒为默认灰；
 /// 放不下整段时保留前缀与名字开头（`…` 收尾），前缀加 2 列仍放不下时整体隐藏。
 fn render_workspace_label(
     frame: &mut Frame<'_>,
@@ -351,7 +351,13 @@ fn render_workspace_label(
         let start = right - (prefix_width + name_width) as u16;
         let buf = frame.buffer_mut();
         write_span(buf, start, row, prefix, style::accent());
-        write_span(buf, start + prefix_width as u16, row, name, style::muted());
+        write_span(
+            buf,
+            start + prefix_width as u16,
+            row,
+            name,
+            style::border_label_value(),
+        );
         return;
     }
     if available < prefix_width.saturating_add(2) {
@@ -366,7 +372,7 @@ fn render_workspace_label(
         start + prefix_width as u16,
         row,
         &truncated,
-        style::muted(),
+        style::border_label_value(),
     );
 }
 
@@ -389,7 +395,7 @@ fn branch_status_spans(state: &AppState, available: usize) -> Vec<(String, Style
     let mut spans = vec![(" ".to_string(), style::muted())];
     if let Some(branch) = branch {
         spans.push((text::PROMPT_BRANCH_PREFIX.to_string(), style::accent()));
-        spans.push((branch.to_string(), style::muted()));
+        spans.push((branch.to_string(), style::border_label_value()));
     }
     if linked {
         let worktree = workspace.name.as_str();
@@ -398,7 +404,10 @@ fn branch_status_spans(state: &AppState, available: usize) -> Vec<(String, Style
         let used = spans_width(&spans).saturating_add(prefix.len());
         if used < available {
             spans.push((prefix, style::accent()));
-            spans.push((text::ellipsize(worktree, available - used), style::muted()));
+            spans.push((
+                text::ellipsize(worktree, available - used),
+                style::border_label_value(),
+            ));
         }
     }
     spans

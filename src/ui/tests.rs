@@ -1558,7 +1558,7 @@ fn prompt_title_moves_path_name_to_bottom_right() {
         "ws 与折叠按钮之间有且仅有 1 列空档: {bottom}"
     );
 
-    // 高亮与 `b:` 一致：前缀强调色、值 muted。
+    // 高亮与 `b:` 一致：前缀强调色、值恒为默认灰（不随面板焦点变青）。
     let buffer = render_buffer(&state);
     let row = view.prompt.bottom() - 1;
     let prefix = &buffer[(view.prompt.x + label_start as u16, row)];
@@ -1570,8 +1570,11 @@ fn prompt_title_moves_path_name_to_bottom_right() {
         row,
     )];
     assert_eq!(value.symbol(), "l");
-    assert!(value.modifier.contains(ratatui::style::Modifier::DIM));
-    assert_ne!(value.fg, ratatui::style::Color::Cyan);
+    assert_eq!(
+        (value.fg, value.modifier),
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "值恒为默认灰 + dim，不带边框继承的 BOLD"
+    );
 
     // linked worktree：取 checkout 路径末段，而非工作区 cwd 子目录。
     state.workspaces[0].git = Some(WorkspaceGit {
@@ -2002,27 +2005,20 @@ fn lx_pane_top_border_shows_workspace_path_tail() {
     assert_eq!(prefix.fg, ratatui::style::Color::Cyan, "前缀强调色");
     let value = &buffer[(start as u16 + 3, rect.y)];
     assert_eq!(value.symbol(), "d");
-    assert!(
-        value.modifier.contains(ratatui::style::Modifier::DIM),
-        "值带 dim"
-    );
     assert_eq!(
         (value.fg, value.modifier),
-        (
-            ratatui::style::Color::Cyan,
-            ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM
-        ),
-        "聚焦窗格值高亮（accent + dim，与 prompt ws: 值一致）"
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "聚焦窗格的值保持默认灰（不再随焦点变青）"
     );
 
-    // 失焦（prompt 持有键盘焦点）：值回退 muted。
+    // 失焦（prompt 持有键盘焦点）：值与聚焦时一致，焦点不再影响取色。
     state.prompt_focused = true;
     let buffer = render_buffer(&state);
     let value = &buffer[(start as u16 + 3, rect.y)];
     assert_eq!(
         (value.fg, value.modifier),
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
-        "失焦窗格值回退 muted"
+        "失焦窗格值与聚焦时一致"
     );
     state.prompt_focused = false;
 
@@ -2031,6 +2027,157 @@ fn lx_pane_top_border_shows_workspace_path_tail() {
     let lines = render_lines(&state);
     let top = &lines[usize::from(rect.y)];
     assert!(!top.contains("ws:"), "终端视图不显示 lx 路径: {top}");
+}
+
+/// 边框上某个标签内部单元格的 `(fg, modifier)`：`label` 是完整标签文本，
+/// `offset` 是相对标签起点的列偏移（0 = 前缀首字符，前缀宽度 = 值首字符）。
+fn border_label_cell(
+    buffer: &ratatui::buffer::Buffer,
+    lines: &[String],
+    row: u16,
+    label: &str,
+    value_offset: usize,
+) -> (ratatui::style::Color, ratatui::style::Modifier) {
+    let chars: Vec<char> = lines[usize::from(row)].chars().collect();
+    let needle: Vec<char> = label.chars().collect();
+    let start = chars
+        .windows(needle.len())
+        .position(|window| window == needle.as_slice())
+        .unwrap_or_else(|| panic!("{label} 未渲染: {:?}", lines[usize::from(row)]));
+    let cell = &buffer[(u16::try_from(start + value_offset).expect("col fits"), row)];
+    (cell.fg, cell.modifier)
+}
+
+#[test]
+fn lx_pane_ws_value_ignores_focus() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    update::update_pane_cwd(&mut state, pane, Path::new("/work/demo/src"), "demo".into());
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects[0];
+
+    // 聚焦窗格：值必须是默认灰（Reset + DIM），不再是 accent + dim。
+    let lines = render_lines(&state);
+    let buffer = render_buffer(&state);
+    assert!(
+        lines[usize::from(rect.y)].contains("ws:demo/src"),
+        "顶边框显示 ws:末两段: {}",
+        lines[usize::from(rect.y)]
+    );
+    let focused_value = border_label_cell(&buffer, &lines, rect.y, "ws:", 3);
+    assert_eq!(
+        focused_value,
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "聚焦窗格 ws: 值保持默认灰、不带 BOLD"
+    );
+
+    // 失焦：值与聚焦时逐字段相同（焦点不再影响取色）。
+    state.prompt_focused = true;
+    let lines = render_lines(&state);
+    let buffer = render_buffer(&state);
+    let unfocused_value = border_label_cell(&buffer, &lines, rect.y, "ws:", 3);
+    assert_eq!(focused_value, unfocused_value, "聚焦/失焦取值一致");
+}
+
+#[test]
+fn pane_agent_value_ignores_focus() {
+    let mut state = AppState::demo();
+    terminal_view(&mut state);
+    let pane = state.active_tab().layout.focus();
+    update::update_pane_agent(
+        &mut state,
+        pane,
+        Some(crate::detect::PaneAgentSnapshot {
+            kind: crate::detect::AgentKind::Claude,
+            state: crate::detect::AgentState::Working,
+            title: None,
+        }),
+    );
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects[0];
+
+    let lines = render_lines(&state);
+    let buffer = render_buffer(&state);
+    let value_offset = text::PANE_AGENT_PREFIX.len();
+    let focused_value = border_label_cell(
+        &buffer,
+        &lines,
+        rect.y,
+        text::PANE_AGENT_PREFIX,
+        value_offset,
+    );
+    assert_eq!(
+        focused_value,
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "聚焦窗格 agent: 值保持默认灰、不带 BOLD"
+    );
+
+    state.prompt_focused = true;
+    let lines = render_lines(&state);
+    let buffer = render_buffer(&state);
+    let unfocused_value = border_label_cell(
+        &buffer,
+        &lines,
+        rect.y,
+        text::PANE_AGENT_PREFIX,
+        value_offset,
+    );
+    assert_eq!(focused_value, unfocused_value, "聚焦/失焦取值一致");
+}
+
+#[test]
+fn prompt_bottom_values_stay_default_while_focused() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "work".to_string();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/work"));
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo"),
+        checkout_path: PathBuf::from("/repo/.worktrees/work"),
+        is_linked: true,
+        branch: Some("feat/x".to_string()),
+        main_branch: Some("dev".to_string()),
+    });
+    // prompt 持有焦点：底边框本身是 accent()，值不能被染色。
+    state.prompt_focused = true;
+    state.prompt_width = 60;
+    let view = view_for(&state);
+    let row = view.prompt.bottom() - 1;
+    let lines = render_lines(&state);
+    let bottom = prompt_line(&lines, &view, row);
+    assert!(bottom.contains("b:dev"), "{bottom}");
+    assert!(bottom.contains("wt:work"), "{bottom}");
+
+    let buffer = render_buffer(&state);
+    // `b:` 前缀仍是强调色。
+    let prefix = border_label_cell(&buffer, &lines, row, "b:dev", 0);
+    assert_eq!(prefix.0, ratatui::style::Color::Cyan, "b: 前缀保持强调色");
+    // 分支值、工作区名、ws 路径名的值都必须是默认灰 + dim、不带 BOLD。
+    for (label, offset) in [
+        ("b:dev", text::PROMPT_BRANCH_PREFIX.len()),
+        ("wt:work", text::PROMPT_WORKTREE_PREFIX.len()),
+        ("ws:work", text::PROMPT_WORKSPACE_PREFIX.len()),
+    ] {
+        let value = border_label_cell(&buffer, &lines, row, label, offset);
+        assert_eq!(
+            value,
+            (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+            "{label} 的值应保持默认灰、不带 BOLD"
+        );
+    }
 }
 
 #[test]
@@ -2146,14 +2293,11 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
     let name = &buffer[(name_col, label_area.y)];
     assert_eq!(
         (name.fg, name.modifier),
-        (
-            ratatui::style::Color::Cyan,
-            ratatui::style::Modifier::BOLD | ratatui::style::Modifier::DIM
-        ),
-        "focused pane matches the prompt ws: value style (accent + dim)"
+        (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+        "focused pane keeps the agent name at the default muted style"
     );
 
-    // 窗格失焦（prompt 持有键盘焦点）：值回退 muted。
+    // 窗格失焦（prompt 持有键盘焦点）：值与聚焦时一致，焦点不再影响取色。
     state.prompt_focused = true;
     let buffer = render_buffer(&state);
     let name = &buffer[(name_col, label_area.y)];
