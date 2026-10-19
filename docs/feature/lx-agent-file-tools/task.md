@@ -245,7 +245,7 @@ pub enum ToolExecutionResult {
 ### 12.3 关键风险（与 `design.md` §13 一致）
 
 1. 无沙盒的全路径写入是本期已确认行为；UI 显示的绝对目标路径与变更摘要需人工确认可读。
-2. `edit` 明确要求上下文精确唯一匹配（不做 Codex 的模糊回退），因此模型基于旧文件内容生成的补丁会失败并要求重读——这是有意的保守选择。
+2. `edit` 要求上下文**唯一**匹配（不做「取第一个匹配」的宽松），但已补齐 Codex 的 rstrip 回退与 `*** End of File` 锚定；模型基于旧文件内容生成的补丁仍可能失配并需要重读——这是有意的安全选择（Unicode 标点归一化仍不做）。
 3. 多文件补丁非原子：部分成功会如实出现在 `Failed{changes}` 中，不谎报回滚。
 4. 跨窗格并发写同一文件无全局锁，仅按规范化路径加短时写锁；相关竞态属已知边界。
 5. 跨 provider 复用历史时只回放规范化的 call/result，不回传 Anthropic thinking / Google thought signature。

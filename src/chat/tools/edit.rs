@@ -2,13 +2,17 @@
 //!
 //! 两阶段执行：
 //! 1. **解析与路径校验**（无写入）：解析补丁文本、解析全部目标路径，并做纯路径级检查
-//!    （Add 目标不能已存在、Update/Delete 目标必须是已存在的普通文件）。补丁格式与
-//!    路径问题都在此阶段返回，此时磁盘没有任何变化。
+//!    （Add 目标不能已存在、Update/Delete 目标必须是已存在的普通文件、Move 目标既不能是
+//!    目录也不能已存在）。补丁格式与路径问题都在此阶段返回，此时磁盘没有任何变化。
 //! 2. **逐个提交**：按补丁顺序读取文件、匹配上下文、落盘。多文件补丁**非原子**，
 //!    中途失败会返回失败原因与**已提交**的 [`FileChange`]，绝不谎报整体回滚。
 //!
 //! 上下文匹配要求唯一：每个块的定位行与增删行必须在文件（及前一块之后的位置）中
-//! **恰好匹配一次**，否则 `PatchContextMismatch`；绝不猜测替换位置。
+//! **恰好匹配一次**，否则 `PatchContextMismatch`；绝不猜测替换位置。匹配先按精确
+//! 文本比较，失配后再按「两侧 `trim_end` 后相等」回退一档（模型产出的补丁常丢行尾空白）。
+//!
+//! 纯插入块（块内只有 `+` 行）的落点：带 `@@ <context>` 定位行时紧跟该定位行之后；
+//! 只有裸 `@@` 或完全没有 `@@` 时追加到**文件末尾**（与 codex `file_update.rs` 一致）。
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +20,7 @@ use super::args::Args;
 use super::lock;
 use super::patch::{self, Block, BodyLineKind, Hunk};
 use super::path;
-use super::text::{Newline, SourceText, line_diff_counts};
+use super::text::{Newline, SourceText};
 use super::types::{
     FileChange, FileChangeKind, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure,
     ToolResult,
@@ -62,7 +66,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolExecutionResul
     commit(&resolved)
 }
 
-/// 解析全部路径并做路径级检查（是否存在、是否普通文件、移动目标是否目录）。
+/// 解析全部路径并做路径级检查（是否存在、是否普通文件、移动目标是否目录或已存在）。
 fn resolve_paths<'a>(ctx: &ToolContext, hunks: &'a [Hunk]) -> ToolResult<Vec<Resolved<'a>>> {
     let mut resolved = Vec::with_capacity(hunks.len());
     for hunk in hunks {
@@ -98,6 +102,18 @@ fn resolve_paths<'a>(ctx: &ToolContext, hunks: &'a [Hunk]) -> ToolResult<Vec<Res
                                 ToolErrorCode::NotAFile,
                                 format!(
                                     "cannot move {} to {}: destination is a directory",
+                                    path::display(&target),
+                                    path::display(&destination)
+                                ),
+                            ));
+                        }
+                        // 与 `*** Add File` 同口径：目标已存在就拒绝，避免静默覆盖。
+                        // 消息只含路径，不含被覆盖内容。
+                        if destination.exists() {
+                            return Err(ToolFailure::new(
+                                ToolErrorCode::PatchInvalid,
+                                format!(
+                                    "cannot move {} to {}: destination already exists; delete it first or choose another path",
                                     path::display(&target),
                                     path::display(&destination)
                                 ),
@@ -213,7 +229,9 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
             if before == after {
                 return Ok(None);
             }
-            let (added, removed) = line_diff_counts(&before, &after);
+            // 增删计数按补丁里的 `-` / `+` 行累加：这才是模型与 UI 关心的改动规模，
+            // 用前后缀剥离估算会把「20 行文件改 2 行」算成 +18 -18。
+            let (added, removed) = patch_line_counts(blocks);
             let source = std::fs::read(target)
                 .map_err(|error| path::map_io_error(&error, "read", target))
                 .and_then(|bytes| SourceText::parse(&bytes))?;
@@ -279,16 +297,31 @@ fn apply_blocks(lines: &[String], blocks: &[Block], target: &Path) -> ToolResult
         let old_lines = block_old_lines(block);
         let new_lines = block_new_lines(block);
         let inserted = new_lines.len();
+        // 追加到文件末尾的纯插入不移动搜索游标（与 codex 一致：空 `old_lines` 时保持
+        // `line_index` 不变），否则排在它之后的块会从文件末尾之外开始搜索。
+        let appended_tail = old_lines.is_empty() && position == current.len();
         current.splice(position..position + old_lines.len(), new_lines);
-        search_start = position + inserted;
+        if !appended_tail {
+            search_start = position + inserted;
+        }
     }
     Ok(current)
 }
 
 /// 定位一个块在文件中的唯一替换位置。
 ///
-/// 先按 `@@` 定位行缩小范围（定位行也必须唯一），再要求块的旧行序列在该范围中
-/// 恰好出现一次。
+/// 规则按顺序生效：
+///
+/// 1. **`@@ <context>` 定位行**（若存在）先缩小范围：该行本身也必须在范围内唯一，
+///    之后的匹配从它的下一行开始。
+/// 2. **纯插入块**（块内只有 `+` 行，`old_lines` 为空）：带 `@@ <context>` 时紧跟
+///    该定位行之后；只有裸 `@@` 或没有 `@@` 时**追加到文件末尾**（与 codex 一致）。
+/// 3. **`*** End of File` 块**（[`Block::at_eof`]）：位置只能由「块的旧行贴住文件
+///    末尾」唯一确定（`lines.len() - old_lines.len()`），不做搜索；该位置不匹配即
+///    `PatchContextMismatch`。
+/// 4. **普通块**：块的旧行序列（上下文 + 删除行）在范围内必须恰好出现一次。先按
+///    精确文本匹配，失败后再按「两侧 `trim_end` 后相等」回退一档；两档都不唯一时
+///    报 `PatchContextMismatch` 并列出候选行号。
 fn locate_block(
     lines: &[String],
     block: &Block,
@@ -321,29 +354,123 @@ fn locate_block(
         }
     }
     let old_lines = block_old_lines(block);
+    if block.at_eof {
+        // 唯一合法位置由「旧行贴住文件末尾」确定（空旧行即 `lines.len()`）。
+        if let Some(candidate) = eof_candidate(lines, &old_lines, start) {
+            return Ok(candidate);
+        }
+        return Err(ToolFailure::new(
+            ToolErrorCode::PatchContextMismatch,
+            format!(
+                "block is marked '*** End of File' but the file does not end with it: \
+                 the last {} line(s) of {} do not match the hunk",
+                old_lines.len(),
+                path::display(target)
+            ),
+        ));
+    }
     if old_lines.is_empty() {
+        // 纯插入块：无 `@@ <context>` 时追加到文件末尾（codex 对空 `old_lines` 一律
+        // `replacements.push((original_lines.len(), 0, …))`）。
+        if block.context.is_none() {
+            return Ok(lines.len());
+        }
         return Ok(start.min(lines.len()));
     }
     if old_lines.len() > lines.len() {
         return Err(context_mismatch(block, target));
     }
-    let mut hits: Vec<usize> = Vec::new();
-    for candidate in start..=lines.len() - old_lines.len() {
-        if lines[candidate..candidate + old_lines.len()] == old_lines[..] {
-            hits.push(candidate);
+    // 两档匹配：先精确，再「两侧 trim_end 后相等」（rstrip 回退）。
+    for rstrip in [false, true] {
+        let hits = find_matches(lines, &old_lines, start, rstrip);
+        match hits.len() {
+            1 => return Ok(hits[0]),
+            0 => continue,
+            count => {
+                return Err(ToolFailure::new(
+                    ToolErrorCode::PatchContextMismatch,
+                    format!(
+                        "the changed lines of a hunk match {count} places in {} ({}); extend the hunk with more context lines",
+                        path::display(target),
+                        format_candidate_lines(&hits),
+                    ),
+                ));
+            }
         }
     }
-    match hits.len() {
-        1 => Ok(hits[0]),
-        0 => Err(context_mismatch(block, target)),
-        count => Err(ToolFailure::new(
-            ToolErrorCode::PatchContextMismatch,
-            format!(
-                "the changed lines of a hunk match {count} places in {}; extend the hunk with more context lines",
-                path::display(target)
-            ),
-        )),
+    Err(context_mismatch(block, target))
+}
+
+/// 在 `start..=lines.len()-expected.len()` 范围内找出 `expected` 的所有起始位置。
+///
+/// `rstrip` 为真时按「两侧 `trim_end` 后相等」比较（容忍补丁与文件的行尾空白差异）。
+fn find_matches(lines: &[String], expected: &[String], start: usize, rstrip: bool) -> Vec<usize> {
+    let Some(limit) = lines.len().checked_sub(expected.len()) else {
+        return Vec::new();
+    };
+    (start..=limit)
+        .filter(|candidate| {
+            expected.iter().enumerate().all(|(offset, line)| {
+                let actual = &lines[candidate + offset];
+                if rstrip {
+                    actual.trim_end() == line.trim_end()
+                } else {
+                    actual == line
+                }
+            })
+        })
+        .collect()
+}
+
+/// `*** End of File` 块的唯一合法位置：块的旧行贴住文件末尾（且不早于上一块的搜索起点）。
+///
+/// 旧行为空时该位置就是 `lines.len()`（纯插入到末尾）。返回 `None` 表示位置不存在或
+/// 上下文不匹配。
+fn eof_candidate(lines: &[String], old_lines: &[String], start: usize) -> Option<usize> {
+    let candidate = lines.len().checked_sub(old_lines.len())?;
+    if candidate < start {
+        return None;
     }
+    let exact = old_lines
+        .iter()
+        .enumerate()
+        .all(|(offset, line)| lines[candidate + offset] == *line);
+    let rstrip = old_lines
+        .iter()
+        .enumerate()
+        .all(|(offset, line)| lines[candidate + offset].trim_end() == line.trim_end());
+    (exact || rstrip).then_some(candidate)
+}
+
+/// 候选行号的 1-based 展示（最多 5 个，其余以 `…` 表示）。
+fn format_candidate_lines(hits: &[usize]) -> String {
+    const LIMIT: usize = 5;
+    let shown: Vec<String> = hits
+        .iter()
+        .take(LIMIT)
+        .map(|index| (index + 1).to_string())
+        .collect();
+    let mut text = format!("lines {}", shown.join(", "));
+    if hits.len() > LIMIT {
+        text.push_str(", …");
+    }
+    text
+}
+
+/// 按补丁行统计增删：`removed` 是 `-` 行数，`added` 是 `+` 行数。
+fn patch_line_counts(blocks: &[Block]) -> (usize, usize) {
+    let mut added = 0;
+    let mut removed = 0;
+    for block in blocks {
+        for line in &block.lines {
+            match line.kind {
+                BodyLineKind::Add => added += 1,
+                BodyLineKind::Remove => removed += 1,
+                BodyLineKind::Context => {}
+            }
+        }
+    }
+    (added, removed)
 }
 
 /// 上下文失配错误（只描述位置，不含文件内容）。

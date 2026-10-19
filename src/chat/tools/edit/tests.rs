@@ -430,3 +430,178 @@ fn delete_reports_removed_line_count() {
     assert_eq!(changes[0].added, 0);
     assert!(!fixture.exists("gone.txt"));
 }
+
+/// 纯插入块带 `@@ <context>`：插在该定位行之后。
+#[test]
+fn pure_insert_with_context_goes_after_context() {
+    let fixture = Fixture::new("edit-insert-context");
+    fixture.write("a.txt", "alpha\nmarker\nomega\n");
+    let patch = wrapped("*** Update File: a.txt\n@@ marker\n+inserted");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    expect_changes(&result);
+    assert_eq!(fixture.read("a.txt"), "alpha\nmarker\ninserted\nomega\n");
+}
+
+/// 纯插入块无 `@@ <context>`：追加到**文件末尾**（与 codex 一致，不是文件开头）。
+#[test]
+fn pure_insert_without_context_appends_to_end() {
+    let fixture = Fixture::new("edit-insert-append");
+    fixture.write("a.txt", "line1\nline2\nline3\n");
+    let patch = wrapped("*** Update File: a.txt\n@@\n+tail");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let changes = expect_changes(&result);
+    assert_eq!((changes[0].added, changes[0].removed), (1, 0));
+    assert_eq!(fixture.read("a.txt"), "line1\nline2\nline3\ntail\n");
+    assert_ne!(fixture.read("a.txt"), "tail\nline1\nline2\nline3\n");
+
+    // 追加到末尾的块不移动搜索游标：同文件的后续块仍能在原范围内定位。
+    fixture.write("b.txt", "one\ntwo\n");
+    let patch = wrapped("*** Update File: b.txt\n@@\n+appended\n@@\n-one\n+ONE");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    expect_changes(&result);
+    assert_eq!(fixture.read("b.txt"), "ONE\ntwo\nappended\n");
+}
+
+/// `*** End of File`：块锚定文件末尾，修改最后一段成功。
+#[test]
+fn patch_accepts_end_of_file_marker() {
+    let fixture = Fixture::new("edit-eof");
+    fixture.write("a.txt", "head\nmiddle\ntail\n");
+    let patch = wrapped("*** Update File: a.txt\n@@\n-tail\n+TAIL\n*** End of File");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let changes = expect_changes(&result);
+    assert_eq!((changes[0].added, changes[0].removed), (1, 1));
+    assert_eq!(fixture.read("a.txt"), "head\nmiddle\nTAIL\n");
+}
+
+/// `*** End of File` 锚定失败（文件末尾不是该块）→ PatchContextMismatch 且文件不变。
+#[test]
+fn patch_end_of_file_mismatch_is_reported() {
+    let fixture = Fixture::new("edit-eof-mismatch");
+    fixture.write("a.txt", "head\nmiddle\ntail\n");
+    let before = fixture.read_bytes("a.txt");
+    let patch = wrapped("*** Update File: a.txt\n@@\n-middle\n+MIDDLE\n*** End of File");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    assert_eq!(expect_failure(&result), ToolErrorCode::PatchContextMismatch);
+    assert_eq!(fixture.read_bytes("a.txt"), before);
+    let text = super::super::format_for_model(&result);
+    assert!(text.contains("*** End of File"), "text: {text}");
+}
+
+/// `*** End of File` 之后还有 `@@` 块 → PatchInvalid（只能标记最后一个块）。
+#[test]
+fn patch_rejects_end_of_file_on_non_last_block() {
+    let fixture = Fixture::new("edit-eof-non-last");
+    fixture.write("a.txt", "one\ntwo\n");
+    let before = fixture.read_bytes("a.txt");
+    let patch = wrapped("*** Update File: a.txt\n@@\n-one\n+ONE\n*** End of File\n@@\n-two\n+TWO");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    assert_eq!(expect_failure(&result), ToolErrorCode::PatchInvalid);
+    assert_eq!(fixture.read_bytes("a.txt"), before);
+}
+
+/// 标记行前后允许空白，正文行的前导空格保持原义（不被 trim）。
+#[test]
+fn patch_allows_whitespace_around_markers() {
+    let fixture = Fixture::new("edit-marker-space");
+    fixture.write("a.py", "def f():\n    pass\n    return None\n");
+    // 行首空白必须真实存在，故用 concat! 而非 `\` 续行。
+    let patch = concat!(
+        "  *** Begin Patch  \n",
+        "\t*** Update File: a.py\t\n",
+        "@@ def f():\n",
+        "     pass\n",
+        "-    return None\n",
+        "+    return 1\n",
+        "\t *** End Patch  ",
+    );
+    let result = execute(&fixture.ctx(), "edit", &edit_args(patch));
+    let changes = expect_changes(&result);
+    assert_eq!((changes[0].added, changes[0].removed), (1, 1));
+    // 上下文行 `     pass` 剥掉一个前缀空格后是 `    pass`，与文件一致。
+    assert_eq!(fixture.read("a.py"), "def f():\n    pass\n    return 1\n");
+}
+
+/// 文件行尾有空格、补丁里没有：rstrip 回退后仍能应用。
+#[test]
+fn patch_matches_after_trailing_whitespace_difference() {
+    let fixture = Fixture::new("edit-rstrip");
+    fixture.write("a.txt", "alpha  \nbeta\n");
+    let patch = wrapped("*** Update File: a.txt\n@@\n-alpha\n+ALPHA");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    expect_changes(&result);
+    assert_eq!(fixture.read("a.txt"), "ALPHA\nbeta\n");
+}
+
+/// 上下文多处匹配：失败消息列出候选行号，绝不猜测替换位置。
+#[test]
+fn patch_context_ambiguity_lists_candidate_lines() {
+    let fixture = Fixture::new("edit-candidates");
+    fixture.write("a.txt", "line1\nsame\nline2\nsame\nline3\nsame\n");
+    let before = fixture.read_bytes("a.txt");
+    let patch = wrapped("*** Update File: a.txt\n@@\n-same\n+other");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let ToolExecutionResult::Failed { code, message, .. } = &result else {
+        panic!("expected failure, got {result:?}");
+    };
+    assert_eq!(*code, ToolErrorCode::PatchContextMismatch);
+    assert!(
+        message.contains("(lines 2, 4, 6)"),
+        "message must list candidate lines: {message}"
+    );
+    assert_eq!(fixture.read_bytes("a.txt"), before);
+}
+
+/// `*** Move to:` 目标已存在 → PatchInvalid，且目标内容与源文件都未被修改。
+#[test]
+fn move_to_existing_target_is_rejected() {
+    let fixture = Fixture::new("edit-move-exists");
+    fixture.write("from.txt", "new content\n");
+    fixture.write("to.txt", "PRECIOUS USER DATA\n");
+    let from_before = fixture.read_bytes("from.txt");
+    let to_before = fixture.read_bytes("to.txt");
+    let patch =
+        wrapped("*** Update File: from.txt\n*** Move to: to.txt\n@@\n-new content\n+changed");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let ToolExecutionResult::Failed { code, message, .. } = &result else {
+        panic!("expected failure, got {result:?}");
+    };
+    assert_eq!(*code, ToolErrorCode::PatchInvalid);
+    assert!(
+        message.contains("destination already exists"),
+        "message: {message}"
+    );
+    // 消息只含路径，不回显被覆盖的内容。
+    assert!(!message.contains("PRECIOUS"), "message: {message}");
+    assert_eq!(fixture.read_bytes("to.txt"), to_before);
+    assert_eq!(fixture.read_bytes("from.txt"), from_before);
+}
+
+/// 多 hunk 的增删计数按补丁行统计：20 行文件改 2 行 → `+2 -2`。
+#[test]
+fn multi_hunk_edit_reports_patch_line_counts() {
+    let fixture = Fixture::new("edit-patch-counts");
+    let mut lines = Vec::new();
+    for index in 1..=20 {
+        lines.push(format!("line{index}"));
+    }
+    let before = format!("{}\n", lines.join("\n"));
+    fixture.write("a.txt", &before);
+    let patch = wrapped("*** Update File: a.txt\n@@\n-line2\n+LINE2\n@@\n-line19\n+LINE19");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let changes = expect_changes(&result);
+    assert_eq!((changes[0].added, changes[0].removed), (2, 2));
+}
+
+/// 候选行号最多展示 5 个，其余用 `…` 表示。
+#[test]
+fn candidate_line_list_is_capped_with_ellipsis() {
+    assert_eq!(
+        super::format_candidate_lines(&[0, 11, 47, 90]),
+        "lines 1, 12, 48, 91"
+    );
+    assert_eq!(
+        super::format_candidate_lines(&[0, 1, 2, 3, 4, 5, 6]),
+        "lines 1, 2, 3, 4, 5, …"
+    );
+}

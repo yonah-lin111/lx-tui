@@ -32,10 +32,13 @@ static TOOLS: [ToolSpec; 4] = [
         "Apply a Codex-style patch to one or more files. The patch text must start with \
          `*** Begin Patch` and end with `*** End Patch` and may contain `*** Add File:`, \
          `*** Update File:` (optionally followed by `*** Move to:`), `@@` context blocks \
-         with `-`/`+`/space prefixed lines, and `*** Delete File:` hunks. Context lines \
+         with `-`/`+`/space prefixed lines, `*** Delete File:` hunks and a trailing \
+         `*** End of File` marker that pins a block to the end of the file. Context lines \
          must match the current file uniquely; otherwise the whole tool call fails. \
-         Multiple files may be partially applied; the result lists every file that was \
-         actually changed.",
+         A block with only `+` lines inserts right after its `@@ <context>` line, or at \
+         the end of the file when there is no context line. `*** Move to:` refuses an \
+         existing destination. Multiple files may be partially applied; the result lists \
+         every file that was actually changed.",
         edit_parameters,
     ),
     ToolSpec::new(

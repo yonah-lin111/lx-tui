@@ -11,12 +11,26 @@
 //! -old line
 //! +new line
 //!  context line
+//! *** End of File               （可选：本块必须贴住文件末尾）
 //! *** Delete File: path
 //! *** End Patch
 //! ```
 //!
+//! 语义要点：
+//!
+//! - 标记行（已知 `***` 标记）允许前后空白，判定前两侧 trim；**正文行绝不 trim**，
+//!   行首的 `+` / `-` / ` ` 前缀属于补丁语义。
+//! - `*** End of File` 属于**当前块**：该块只在「贴住文件末尾」的位置匹配，
+//!   且只能标记本 hunk 的最后一个块（后面不能再出现 `@@` 块）。
+//! - `@@` 后只有 `+` 行的**纯插入块**：带 `@@ <context>` 时插在该定位行之后；
+//!   只有裸 `@@`（或没有 `@@`）时**追加到文件末尾**（与 codex `file_update.rs`
+//!   的 `replacements.push((original_lines.len(), 0, …))` 一致）。
+//!
+//! 匹配档位（rstrip 回退与唯一性）由执行阶段 [`super::edit`] 负责；本模块只负责
+//! 把文本变成结构，不做任何文件 IO，也不判断上下文能否匹配。
+//!
 //! 不支持的项：统一 diff 头（`---`/`+++`/`@@ -1,2 +1,3 @@` 行号形式）、
-//! `*** Environment ID`、`*** End of File` 标记、二进制补丁、Git 元数据行。
+//! `*** Environment ID`、heredoc 包裹（`<<'EOF'`）、二进制补丁、Git 元数据行。
 //! 出现未知标记一律返回 [`ToolErrorCode::PatchInvalid`]，绝不猜测语义。
 
 use std::path::PathBuf;
@@ -35,6 +49,8 @@ const DELETE_PREFIX: &str = "*** Delete File: ";
 const UPDATE_PREFIX: &str = "*** Update File: ";
 /// 移动目标标记前缀。
 const MOVE_PREFIX: &str = "*** Move to: ";
+/// 块锚定文件末尾标记。
+const EOF_MARKER: &str = "*** End of File";
 /// 块定位标记。
 const CONTEXT_MARKER: &str = "@@";
 
@@ -81,6 +97,8 @@ pub(crate) struct Block {
     pub(crate) context: Option<String>,
     /// 补丁中的行；每项前缀已剥离，`kind` 说明其语义。
     pub(crate) lines: Vec<BodyLine>,
+    /// 是否带 `*** End of File` 标记：为真时该块只能贴住文件末尾匹配。
+    pub(crate) at_eof: bool,
 }
 
 /// 块内一行。
@@ -119,7 +137,8 @@ pub(crate) fn parse(patch: &str) -> ToolResult<Vec<Hunk>> {
     let mut hunks: Vec<Hunk> = Vec::new();
     let mut closed = false;
     while let Some(line) = lines.next() {
-        let line = line.trim_end();
+        // 顶层只出现标记行；`***` 开头的行允许两侧空白（codex strict 同样 trim）。
+        let line = line.trim();
         if line == END_MARKER {
             closed = true;
             break;
@@ -163,10 +182,11 @@ where
 {
     let mut body = Vec::new();
     while let Some(line) = lines.peek() {
-        let line = line.trim_end();
-        if is_marker(line) {
+        if marker(line).is_some() {
             break;
         }
+        // 正文行只看 `+` 前缀与行尾；前导空格（`+` 之后的内容）属于正文。
+        let line = line.trim_end();
         let Some(rest) = line.strip_prefix('+') else {
             return Err(invalid(format!(
                 "'*** Add File: {}' body lines must start with '+'",
@@ -194,29 +214,62 @@ where
     let mut blocks: Vec<Block> = Vec::new();
     let mut current: Option<Block> = None;
     let mut seen_context = false;
+    let mut seen_eof = false;
     while let Some(line) = lines.peek() {
-        let line = line.trim_end();
-        if is_marker(line) {
+        // 标记行（`***` 开头）才允许前后空白；正文行只剥行尾，前导空格是前缀语义。
+        if let Some(marker) = marker(line) {
+            if let Some(rest) = marker.strip_prefix(MOVE_PREFIX) {
+                if seen_context {
+                    return Err(invalid(format!(
+                        "'*** Move to:' must appear before the first '@@' block (file {})",
+                        path.display()
+                    )));
+                }
+                if move_to.is_some() {
+                    return Err(invalid(format!(
+                        "'*** Move to:' appears more than once for {}",
+                        path.display()
+                    )));
+                }
+                move_to = Some(patch_path(rest)?);
+                lines.next();
+                continue;
+            }
+            if marker == EOF_MARKER {
+                let Some(block) = current.as_mut() else {
+                    return Err(invalid(format!(
+                        "'*** End of File' must follow the changed lines of a block (file {})",
+                        path.display()
+                    )));
+                };
+                if block.lines.is_empty() {
+                    return Err(invalid(format!(
+                        "'*** End of File' must follow the changed lines of a block (file {})",
+                        path.display()
+                    )));
+                }
+                if block.at_eof {
+                    return Err(invalid(format!(
+                        "'*** End of File' appears more than once for {}",
+                        path.display()
+                    )));
+                }
+                block.at_eof = true;
+                seen_eof = true;
+                lines.next();
+                continue;
+            }
             break;
         }
-        if let Some(rest) = line.strip_prefix(MOVE_PREFIX) {
-            if seen_context {
-                return Err(invalid(format!(
-                    "'*** Move to:' must appear before the first '@@' block (file {})",
-                    path.display()
-                )));
-            }
-            if move_to.is_some() {
-                return Err(invalid(format!(
-                    "'*** Move to:' appears more than once for {}",
-                    path.display()
-                )));
-            }
-            move_to = Some(patch_path(rest)?);
-            lines.next();
-            continue;
-        }
+        let line = line.trim_end();
         if let Some(rest) = line.strip_prefix(CONTEXT_MARKER) {
+            if seen_eof {
+                return Err(invalid(format!(
+                    "'*** End of File' must mark the last block of '*** Update File: {}'; \
+                     no '@@' block may follow it",
+                    path.display()
+                )));
+            }
             if let Some(block) = current.take() {
                 blocks.push(block);
             }
@@ -225,9 +278,21 @@ where
             current = Some(Block {
                 context: (!context.is_empty()).then(|| context.to_string()),
                 lines: Vec::new(),
+                at_eof: false,
             });
             lines.next();
             continue;
+        }
+        if seen_eof {
+            // `*** End of File` 之后只允许空行（codex 的样例里也有这一行）。
+            if line.is_empty() {
+                lines.next();
+                continue;
+            }
+            return Err(invalid(format!(
+                "no changed lines may follow '*** End of File' (file {})",
+                path.display()
+            )));
         }
         let Some(prefix) = line.chars().next() else {
             // 空行：作为上下文空行处理（模型常把空行写成空字符串）。
@@ -289,15 +354,25 @@ fn empty_block() -> Block {
     Block {
         context: None,
         lines: Vec::new(),
+        at_eof: false,
     }
 }
 
-/// 是否为补丁结构标记（用于判定文件 body 结束）。
-fn is_marker(line: &str) -> bool {
-    line == END_MARKER
-        || line.starts_with(ADD_PREFIX)
-        || line.starts_with(DELETE_PREFIX)
-        || line.starts_with(UPDATE_PREFIX)
+/// 识别补丁结构标记（已知的 `***` 标记），返回两侧 trim 后的形式；正文行返回 None。
+///
+/// 只对标记行 trim：正文行首的 ` ` / `-` / `+` 是前缀语义，绝不能 trim。
+/// 取舍：为了接受 `  *** End Patch  ` 这类缩进标记，标记判定前会去掉前导空白；
+/// 只有当正文行（剥掉前缀后）**恰好等于**某个已知标记时才会歧义（如上下文行
+/// 内容就是 `*** End of File`），这在实际代码里不可见，而缩进标记是模型常见产出。
+fn marker(line: &str) -> Option<&str> {
+    let trimmed = line.trim();
+    let known = trimmed == END_MARKER
+        || trimmed == EOF_MARKER
+        || trimmed.starts_with(ADD_PREFIX)
+        || trimmed.starts_with(DELETE_PREFIX)
+        || trimmed.starts_with(UPDATE_PREFIX)
+        || trimmed.starts_with(MOVE_PREFIX);
+    known.then_some(trimmed)
 }
 
 /// 解析并校验补丁中的文件路径文本。
