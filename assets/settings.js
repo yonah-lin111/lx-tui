@@ -445,5 +445,16 @@ setupResizer(
   LIST_MIN_WIDTH,
   LIST_MAX_WIDTH
 );
+let modelsListWidth = 220;
+setupResizer(
+  document.getElementById('models-resizer'),
+  () => modelsListWidth,
+  (width) => {
+    modelsListWidth = width;
+    document.querySelector('.models-grid').style.setProperty('--models-list-width', width + 'px');
+  },
+  LIST_MIN_WIDTH,
+  LIST_MAX_WIDTH
+);
 initCommandSelects();
 loadState();

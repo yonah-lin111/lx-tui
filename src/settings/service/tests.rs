@@ -220,8 +220,22 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         "editor scrollbar thumb visible"
     );
     assert!(
-        css.contains(".models-nav::-webkit-scrollbar"),
+        css.contains(".provider-list::-webkit-scrollbar"),
         "provider list scrollbar styled"
+    );
+    // 左侧列表与右侧内容卡之间是可拖拽分隔条（对齐 Commands 页）。
+    assert!(
+        html.contains("id=\"models-resizer\""),
+        "models list resizer present"
+    );
+    assert!(css.contains(".models-resizer"), "models resizer styled");
+    assert!(
+        css.contains("--models-list-width, 220px"),
+        "models list width variable wired"
+    );
+    assert!(
+        js.contains("modelsListWidth"),
+        "models list width clamp wired"
     );
 
     // 页面上不再有原生下拉，全部换成全局 select 组件挂载点。

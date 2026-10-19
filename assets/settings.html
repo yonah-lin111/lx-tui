@@ -118,12 +118,10 @@
     <div class="models-toolbar">
       <button class="ghost" onclick="loadModels()">Reload</button>
       <button class="primary" onclick="saveModels()">Save all</button>
+      <label>Default model</label>
+      <div id="default-model-host" class="select-host models-toolbar-select"></div>
       <span class="status" id="models-status">Loading…</span>
       <span class="status" id="models-revision"></span>
-    </div>
-    <div class="default-model-row">
-      <label>Default model</label>
-      <div id="default-model-host" class="select-host"></div>
     </div>
     <div class="models-grid">
       <nav class="models-nav" aria-label="Model providers">
@@ -133,6 +131,7 @@
           <span class="nav-name">New provider</span>
         </button>
       </nav>
+      <div class="models-resizer" id="models-resizer" role="separator" aria-orientation="vertical" aria-label="Resize provider list"></div>
       <section class="editor-card">
         <div id="provider-empty" class="editor-empty">
           <p id="provider-empty-text">Select a provider to edit.</p>
