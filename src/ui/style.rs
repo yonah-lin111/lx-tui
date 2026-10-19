@@ -32,9 +32,8 @@ pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }
 }
 
-/// 叠加在强调色边框上的灰字（显式前景 + dim）：临时提示词标题等。
-///
-/// 叠加在强调色边框上的灰字（页重命名 `· ` 分隔符、顶边框页名、浮层底注等）。
+/// 叠加在强调色边框上的灰字（显式前景 + dim）：prompt 顶边框页名、页重命名 `· ` 分隔符、
+/// 浮层底注等。
 ///
 /// `set_stringn` 只覆盖样式里显式给出的字段，`muted()` 不设前景，
 /// 会把底层（聚焦态青色）边框前景带出来；这里显式重置前景。
@@ -435,8 +434,9 @@ pub fn md_read_code_lang() -> Style {
 
 /// markdown 代码块的**语言名**（`js` / `rust`…）：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
 ///
-/// 前缀 `language:` 保持次要灰、只有语言名上色：语言是这一行**唯一有信息量**的内容，
-/// 紫色与代码 token（蓝/红/紫）同属语法色域，但用在该行的固定位置不会与正文混淆。
+/// 与 `language:` 前缀同色相、靠**字重**分层级：前缀不加粗（标签）、语言名加粗（取值）。
+/// 语言是这一行唯一有信息量的内容，紫色与代码 token（蓝/红/紫）同属语法色域，
+/// 但用在该行的固定位置不会与正文混淆。
 pub fn md_read_code_lang_name() -> Style {
     Style::default()
         .fg(github_dark::ENTITY)

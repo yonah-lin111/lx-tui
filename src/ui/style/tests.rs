@@ -43,8 +43,6 @@ fn selection_uses_explicit_colors_without_reversed() {
     assert!(!style.add_modifier.contains(Modifier::REVERSED));
 }
 
-/// 边框标签值必须是"显式默认前景 + dim、且显式去掉 BOLD"：
-/// 该样式叠加在边框单元格上，缺任一项都会把聚焦边框的 Cyan + BOLD 继承出来。
 /// 边框标签前缀必须是"淡青 + dim、且显式去掉 BOLD"：
 /// 叠加到强调色边框后仍不加粗，聚焦不再变亮变粗。
 #[test]
@@ -78,6 +76,8 @@ fn muted_on_border_strips_inherited_bold() {
     assert!(cell.modifier.contains(Modifier::DIM));
 }
 
+/// 边框标签值必须是"显式默认前景 + dim、且显式去掉 BOLD"：
+/// 该样式叠加在边框单元格上，缺任一项都会把聚焦边框的 Cyan + BOLD 继承出来。
 #[test]
 fn border_label_value_resets_inherited_accent() {
     let style = border_label_value();
