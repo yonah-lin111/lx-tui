@@ -138,6 +138,19 @@ impl Persistence {
         self.with_db(|db| db.trust_workspace(path, name)).is_some()
     }
 
+    /// 载入全局 prompt 历史并写入状态（启动时调用一次）。
+    ///
+    /// 库不可用或读取失败时保持空历史：历史是便利功能，不应阻断启动。
+    pub fn load_prompt_history(&self, state: &mut AppState) {
+        let Some(db) = self.db.as_ref() else {
+            return;
+        };
+        match db.load_prompt_history(crate::app::state::PROMPT_HISTORY_LIMIT) {
+            Ok(entries) => state.prompt_history.replace_all(entries),
+            Err(error) => tracing::warn!(%error, "loading prompt history failed"),
+        }
+    }
+
     /// 执行全部待办效应并惰性载入显示中工作区的提示词树；返回状态是否有变化。
     ///
     /// 聊天的网络效应（StartChatStream/CancelChatStream）不在此执行——
@@ -604,6 +617,16 @@ impl Persistence {
                         }
                     }
                     Err(error) => tracing::warn!(%error, "ai config load failed"),
+                }
+                false
+            }
+            // 持久化一条已发送 prompt 到全局历史；失败只记日志，不影响聊天。
+            Effect::RecordPromptHistory { text } => {
+                if let Some(db) = self.db.as_ref()
+                    && let Err(error) =
+                        db.record_prompt_history(&text, crate::app::state::PROMPT_HISTORY_LIMIT)
+                {
+                    tracing::warn!(%error, "recording prompt history failed");
                 }
                 false
             }

@@ -219,3 +219,131 @@ fn resize_clamps_scroll_back_into_view() {
     lx.resize(2, 10);
     assert_eq!(lx.scroll(), 0, "视口变高后回钳到顶部");
 }
+
+// ===== 历史 prompt 切换 =====
+
+/// 三条历史（旧 → 新），末尾为最近使用。
+fn entries() -> Vec<String> {
+    vec!["one".to_string(), "two".to_string(), "three".to_string()]
+}
+
+#[test]
+fn history_up_from_empty_input_takes_newest_entry() {
+    let mut lx = Lx::new();
+    assert!(lx.pending_history_move(&entries(), -1).is_some());
+    lx.apply_history(lx.pending_history_move(&entries(), -1).expect("接管"));
+    assert_eq!(lx.input, "three");
+    assert_eq!(lx.cursor, 0, "`↑` 恢复后光标在文首，才能继续向上翻");
+    assert!(lx.history_browsing());
+}
+
+#[test]
+fn history_up_walks_back_and_clamps_at_oldest() {
+    let mut lx = Lx::new();
+    for _ in 0..3 {
+        let next = lx.pending_history_move(&entries(), -1).expect("接管");
+        lx.apply_history(next);
+    }
+    assert_eq!(lx.input, "one");
+    // 已到最旧一条：继续按 `↑` 不接管，回落光标移动。
+    assert_eq!(lx.pending_history_move(&entries(), -1), None);
+}
+
+#[test]
+fn history_down_walks_forward_and_restores_draft() {
+    let mut lx = Lx::new();
+    lx.insert_str("my draft");
+    lx.cursor = 0;
+    // 首次 `↑` 暂存草稿并显示最新一条（光标落文首）。
+    let next = lx.pending_history_move(&entries(), -1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "three");
+    assert_eq!(lx.cursor, 0);
+    // `↑` 继续向前翻到上一条。
+    let next = lx.pending_history_move(&entries(), -1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "two");
+    // 光标不在文末时 `↓` 不归历史：先移动到文末（单行钳到行尾）。
+    assert_eq!(lx.pending_history_move(&entries(), 1), None);
+    lx.move_down();
+    assert_eq!(lx.cursor, lx.input.len(), "单行文本按 `↓` 钳到行尾");
+    // 光标在文末后 `↓` 接管：前进到更新的一条。
+    let next = lx.pending_history_move(&entries(), 1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "three");
+    // 再 `↓` 越过最新一条：恢复进入浏览前的草稿。
+    lx.cursor = lx.input.len();
+    let next = lx.pending_history_move(&entries(), 1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "my draft");
+    assert_eq!(lx.cursor, lx.input.len(), "恢复草稿后光标在末尾");
+    assert!(!lx.history_browsing());
+}
+
+#[test]
+fn history_down_without_browsing_is_not_taken() {
+    let lx = Lx::new();
+    assert_eq!(lx.pending_history_move(&entries(), 1), None);
+}
+
+#[test]
+fn history_requires_cursor_at_boundary() {
+    let mut lx = Lx::new();
+    lx.insert_str("multi\nline");
+    // 光标在中间：`↑`/`↓` 都不归历史。
+    lx.cursor = 2;
+    assert_eq!(lx.pending_history_move(&entries(), -1), None);
+    assert_eq!(lx.pending_history_move(&entries(), 1), None);
+    // 光标在文首：只有 `↑` 接管。
+    lx.cursor = 0;
+    assert!(lx.pending_history_move(&entries(), -1).is_some());
+    assert_eq!(lx.pending_history_move(&entries(), 1), None);
+    // 光标在文末：只有 `↓` 接管（此时不在浏览态，`↓` 仍不接管）。
+    lx.cursor = lx.input.len();
+    assert_eq!(lx.pending_history_move(&entries(), -1), None);
+}
+
+#[test]
+fn history_empty_is_never_taken() {
+    let lx = Lx::new();
+    assert_eq!(lx.pending_history_move(&[], -1), None);
+    assert_eq!(lx.pending_history_move(&[], 1), None);
+}
+
+#[test]
+fn end_history_browse_keeps_text() {
+    let mut lx = Lx::new();
+    let next = lx.pending_history_move(&entries(), -1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "three");
+    lx.end_history_browse();
+    assert!(!lx.history_browsing());
+    assert_eq!(lx.input, "three", "退出浏览不改文本");
+}
+
+#[test]
+fn history_restore_is_undoable() {
+    let mut lx = Lx::new();
+    lx.insert_str("my draft");
+    lx.cursor = 0;
+    let next = lx.pending_history_move(&entries(), -1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "three");
+    lx.undo();
+    assert_eq!(lx.input, "my draft", "恢复历史压了一次撤销快照");
+}
+
+#[test]
+fn history_same_text_does_not_push_undo_step() {
+    let mut lx = Lx::new();
+    // 输入框内容正好等于历史末尾条目。
+    lx.insert_str("three");
+    lx.cursor = 0;
+    let next = lx.pending_history_move(&entries(), -1).expect("接管");
+    lx.apply_history(next);
+    assert_eq!(lx.input, "three");
+    assert_eq!(lx.cursor, 0);
+    // 撤销应回到空输入（历史恢复没有额外产生撤销步）。
+    lx.undo();
+    assert_eq!(lx.input, "");
+}

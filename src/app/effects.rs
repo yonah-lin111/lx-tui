@@ -180,4 +180,9 @@ pub enum Effect {
     SaveDefaultModel {
         selection: crate::config::ai::ModelSelection,
     },
+    /// 持久化一条已发送 prompt 到全局历史表（去重置顶、裁剪到上限）。
+    ///
+    /// 内存历史已在 `on_turn_committed` 同步更新；本效应只负责落库，
+    /// 失败仅记录日志，不影响这一轮聊天。
+    RecordPromptHistory { text: String },
 }

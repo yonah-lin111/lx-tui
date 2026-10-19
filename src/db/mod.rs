@@ -7,6 +7,7 @@
 //! `migration` 子模块；聊天读写见 `chat`，工具调用见 `chat::tools`。
 
 pub mod chat;
+pub mod history;
 mod migration;
 pub mod service;
 
@@ -18,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 /// 旧正文迁移为唯一第一页时使用的默认页名。
 const FIRST_PAGE_NAME: &str = "Page 1";

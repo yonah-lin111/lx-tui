@@ -18,6 +18,7 @@ use super::trust::TrustResolution;
 
 pub mod lx;
 pub mod pane;
+pub mod prompt_history;
 pub mod workspace;
 
 pub use lx::{
@@ -27,6 +28,7 @@ pub use lx::{
     ToolStatus, ToolSummary,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
+pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
 pub use workspace::{
     PromptDraft, Workspace, WorkspaceGit, WorkspaceRow, current_workspace_identity, home_dir,
     path_tail_two, tab_label, unique_workspace_name, workspace_label, workspace_name,
@@ -169,6 +171,8 @@ pub struct AppState {
     pub settings_open_requested: bool,
     /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
     pub models: ModelsSnapshot,
+    /// 全局已发送 prompt 历史（跨窗格/工作区/会话共享；末尾为最近使用）。
+    pub prompt_history: PromptHistory,
 }
 
 impl AppState {
@@ -245,6 +249,7 @@ impl AppState {
             settings_available: false,
             settings_open_requested: false,
             models: ModelsSnapshot::default(),
+            prompt_history: PromptHistory::new(),
         }
     }
 

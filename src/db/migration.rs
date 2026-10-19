@@ -281,6 +281,21 @@ CREATE INDEX IF NOT EXISTS idx_agent_tool_call_session_message_position
     ON agent_tool_call(session_id, message_id, position);
 "#;
 
+/// v10 全局 prompt 历史表：只存输入框原文，`text` 唯一以支持去重置顶。
+///
+/// 不按 workspace/session 分区：历史是全局共享的（跨窗格、跨工作区、跨会话）。
+/// `updated_at_ms` 表示最近使用时刻，裁剪与加载都按它倒序；同毫秒排序交给 `id`。
+const SCHEMA_V10: &str = r#"
+CREATE TABLE IF NOT EXISTS prompt_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL UNIQUE,
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_prompt_history_updated
+    ON prompt_history(updated_at_ms DESC, id DESC);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -355,6 +370,10 @@ impl Database {
             // v9：part 独立完成时刻 + 工具调用重建（position / interrupted）。
             if version < 9 {
                 migrate_v9(&transaction)?;
+            }
+            // v10：全局 prompt 历史表；只增表，老数据不受影响。
+            if version < 10 {
+                transaction.execute_batch(SCHEMA_V10)?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;

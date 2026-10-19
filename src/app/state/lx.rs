@@ -5,8 +5,12 @@ use crate::app::paste::{PasteAction, PasteCandidate, PastePanel};
 use crate::app::prompt::{list, text};
 
 pub mod chat;
+mod history;
 pub mod mention;
 pub mod slash;
+
+use history::HistoryBrowse;
+pub(crate) use history::HistoryMove;
 
 pub use chat::{
     AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, InputHint, InputHintLevel,
@@ -62,6 +66,8 @@ pub struct Lx {
     undo: Vec<LxSnapshot>,
     /// 重做历史。
     redo: Vec<LxSnapshot>,
+    /// 已发送 prompt 的历史浏览态（游标 + 进入浏览前的草稿）。
+    history: HistoryBrowse,
 }
 
 /// 软换行后的一个视觉行：输入缓冲中的字节区间 `[start, end)`。
@@ -112,6 +118,7 @@ impl Lx {
             chat: LxChat::new(),
             undo: Vec::new(),
             redo: Vec::new(),
+            history: HistoryBrowse::default(),
         }
     }
 
@@ -428,6 +435,78 @@ impl Lx {
             self.cursor =
                 target.start + text::offset_at_col(&self.input[target.start..target.end], col);
         }
+        self.refresh_panel();
+    }
+
+    /// 是否正在浏览已发送 prompt 的历史。
+    pub(crate) fn history_browsing(&self) -> bool {
+        self.history.browsing()
+    }
+
+    /// 结束历史浏览（不改输入框文本）。
+    ///
+    /// 任何编辑操作、`Esc` 和发送成功回执都会调用它；浏览态不保留任何隐藏文本。
+    pub(crate) fn end_history_browse(&mut self) {
+        self.history.end();
+    }
+
+    /// 只读判定：这次方向键是否由历史接管，以及要显示哪一条。
+    ///
+    /// `entries` 是全局历史（旧 → 新，末尾最新）。接管条件见 [`history::decide`]：
+    /// `↑` 只在光标位于全文最开头、`↓` 只在光标位于全文末尾时生效，否则返回 None
+    /// 交给调用方回落到光标移动。
+    pub(crate) fn pending_history_move(
+        &self,
+        entries: &[String],
+        direction: i8,
+    ) -> Option<HistoryMove> {
+        history::decide(&self.history, entries, direction, &self.input, self.cursor)
+    }
+
+    /// 应用一次历史切换：更新游标并按 [`Self::apply_history_text`] 写回文本。
+    pub(crate) fn apply_history(&mut self, next: HistoryMove) {
+        match next {
+            HistoryMove::Entry {
+                index,
+                text,
+                cursor_at_start,
+            } => {
+                // 首次向上进入浏览：先暂存当前草稿，供越过末尾时恢复。
+                if !self.history.browsing() {
+                    self.history.begin(self.input.clone());
+                }
+                self.history.set_index(index);
+                self.apply_history_text(&text);
+                // 光标落在文首/文末：连续同向按键才能继续切换（对齐 opencode）。
+                if cursor_at_start {
+                    self.cursor = 0;
+                }
+                self.scroll_cursor_into_view();
+            }
+            HistoryMove::Draft => {
+                // 越过最新一条：恢复进入浏览前的草稿（光标置末尾）。
+                let draft = self.history.take_draft();
+                self.apply_history_text(&draft);
+            }
+        }
+    }
+
+    /// 把历史文本写回输入框：压一次撤销快照、光标置末尾、重算面板。
+    ///
+    /// 文本与当前内容完全相同时只移动光标，不产生无意义的撤销步。
+    fn apply_history_text(&mut self, text: &str) {
+        if self.input == text {
+            self.cursor = self.input.len();
+            self.text_anchor = None;
+            self.scroll_cursor_into_view();
+            return;
+        }
+        self.snapshot();
+        self.input.clear();
+        self.input.push_str(text);
+        self.cursor = self.input.len();
+        self.text_anchor = None;
+        self.scroll_cursor_into_view();
         self.refresh_panel();
     }
 
