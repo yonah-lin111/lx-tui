@@ -78,6 +78,7 @@ fn get_settings(state: &ServiceState) -> Response {
                             "context": limit.context,
                             "output": limit.output,
                         })),
+                        "modalities": model.modalities,
                         "variants": model.variants,
                         "variant": model.variant,
                     })
@@ -238,12 +239,12 @@ fn merge_settings(
                     ));
                 }
                 let previous_model = existing.and_then(|provider| provider.models.get(&model_id));
-                // 前端不编辑的字段：优先取请求体（原样往返），缺失时保留旧值。
-                let modalities = model_item
-                    .get("modalities")
-                    .filter(|value| !value.is_null())
-                    .cloned()
-                    .or_else(|| previous_model.and_then(|model| model.modalities.clone()));
+                // 模态三态：字段缺失 = 保留旧值，显式 null = 清除，对象 = 覆盖。
+                let modalities = match model_item.get("modalities") {
+                    Some(Value::Null) => None,
+                    Some(value) => Some(value.clone()),
+                    None => previous_model.and_then(|model| model.modalities.clone()),
+                };
                 // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
                 const KNOWN_KEYS: [&str; 9] = [
                     "id",

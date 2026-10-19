@@ -81,8 +81,18 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let js = request(port, &get("/settings.js")).await;
     assert_eq!(status(&js), 200);
     assert!(js.contains("javascript"), "js content type");
-    // 关键交互入口：加载/保存/复制/删除/远端获取与 key 遮蔽。
+    // 动态文本用 textContent 而非 innerHTML 拼接。
     let js_body = body(&js);
+    assert!(
+        js_body.contains("textContent"),
+        "dynamic text via textContent"
+    );
+
+    // Models 视图独立资源：加载/保存/复制/删除/远端获取与模态、思考等级入口。
+    let models_js = request(port, &get("/settings_models.js")).await;
+    assert_eq!(status(&models_js), 200);
+    assert!(models_js.contains("javascript"), "models js content type");
+    let models_js_body = body(&models_js);
     for entry in [
         "loadModels",
         "saveModels",
@@ -93,20 +103,20 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "/api/models/settings",
         "/api/models/fetch",
     ] {
-        assert!(js_body.contains(entry), "models js entry: {entry}");
+        assert!(models_js_body.contains(entry), "models js entry: {entry}");
     }
-    // 动态文本用 textContent 而非 innerHTML 拼接。
     assert!(
-        js_body.contains("textContent"),
-        "dynamic text via textContent"
-    );
-    assert!(
-        !js_body.contains("fetch-candidates').innerHTML"),
+        !models_js_body.contains("fetch-candidates').innerHTML"),
         "no innerHTML for dynamic data"
     );
 
-    // 三份资源均无外部引用。
-    for (name, text) in [("html", html), ("css", body(&css)), ("js", body(&js))] {
+    // 四份资源均无外部引用。
+    for (name, text) in [
+        ("html", html),
+        ("css", body(&css)),
+        ("js", js_body),
+        ("models_js", models_js_body),
+    ] {
         assert!(
             !text.contains("https://"),
             "{name} has no external resources"
@@ -182,6 +192,76 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
     assert!(
         css.contains("scrollbar-width: thin"),
         "editor fallback scrollbar thin"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn models_page_scrolls_and_uses_shared_select_toast() {
+    let (service, _events, _dir) = start("page-models-ui").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let js = body(&request(port, &get("/settings.js")).await).to_string();
+    let models_js = body(&request(port, &get("/settings_models.js")).await).to_string();
+    assert!(
+        html.contains("/settings.js") && html.contains("/settings_models.js"),
+        "scripts linked"
+    );
+
+    // 右栏被视口高度约束，模型很多时编辑容器内出现可见滚动条。
+    assert!(
+        css.contains(".models-grid { display: grid; flex: 1 1 auto; min-height: 0;"),
+        "models grid bounded by viewport"
+    );
+    assert!(
+        css.contains(".editor-body::-webkit-scrollbar-thumb"),
+        "editor scrollbar thumb visible"
+    );
+    assert!(
+        css.contains(".models-nav::-webkit-scrollbar"),
+        "provider list scrollbar styled"
+    );
+
+    // 页面上不再有原生下拉，全部换成全局 select 组件挂载点。
+    for id in [
+        "cmd-filter-select",
+        "cmd-scope-select",
+        "cmd-kind-select",
+        "cmd-md-scope-select",
+        "cmd-block-type-select",
+        "prov-type-host",
+        "default-model-host",
+    ] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "select mount: {id}");
+    }
+    assert!(!html.contains("<select"), "no native select left");
+
+    // 全局 toast 与自绘 select 组件入口和样式。
+    assert!(js.contains("function showToast"), "toast component");
+    assert!(js.contains("function createSelect"), "select component");
+    assert!(css.contains(".toast-host"), "toast host styles");
+    assert!(css.contains(".select-menu"), "select menu styles");
+
+    // 模态勾选与思考等级编辑入口（Models 视图资源）。
+    assert!(
+        models_js.contains("INPUT_MODALITIES") && models_js.contains("OUTPUT_MODALITIES"),
+        "modality options"
+    );
+    assert!(
+        models_js.contains("Thinking variants"),
+        "thinking variants editor"
+    );
+    assert!(models_js.contains("VARIANT_PRESETS"), "thinking presets");
+    assert!(models_js.contains("reasoningEffort"), "OpenAI preset wired");
+
+    // 全局内存草稿 + 一次保存全部 + 未保存提示。
+    assert!(models_js.contains("modelsDraft"), "global draft");
+    assert!(models_js.contains("unsaved changes"), "dirty indicator");
+    assert!(
+        models_js.contains("buildPayload"),
+        "single save builds full payload"
     );
     service.shutdown();
 }

@@ -34,19 +34,14 @@
     <div class="actions">
       <button class="primary" onclick="saveConfig()">Save</button>
       <button class="ghost" onclick="loadState()">Reload</button>
-      <span class="status" id="config-state"></span>
     </div>
   </section>
 
   <section id="view-commands" class="view hidden">
     <h2>Commands</h2>
     <div class="commands-toolbar">
-      <label for="cmd-filter">Type</label>
-      <select id="cmd-filter" onchange="renderCommands()">
-        <option value="all">All</option>
-        <option value="agentMD">Markdown insertion</option>
-        <option value="agentBlock">Template block</option>
-      </select>
+      <label>Type</label>
+      <div id="cmd-filter-select" class="select-host toolbar-select"></div>
       <button class="ghost" onclick="loadState()">Reload</button>
       <span class="status" id="commands-status">Loading…</span>
     </div>
@@ -73,7 +68,6 @@
               <button class="primary" onclick="saveCommand()">Save</button>
               <button class="ghost" onclick="hideEditor()">Cancel</button>
               <button class="danger" onclick="deleteCommand()">Delete</button>
-              <span class="status" id="editor-status"></span>
             </div>
           </div>
           <div class="editor-body">
@@ -84,31 +78,20 @@
                   <input id="cmd-name" type="text" placeholder="my-command">
                 </div>
                 <div>
-                  <label for="cmd-scope">Scope</label>
-                  <select id="cmd-scope">
-                    <option value="user">User</option>
-                  </select>
+                  <label>Scope</label>
+                  <div id="cmd-scope-select" class="select-host"></div>
                 </div>
                 <div>
-                  <label for="cmd-kind">Type</label>
-                  <select id="cmd-kind">
-                    <option value="agentMD">Markdown insertion</option>
-                    <option value="agentBlock">Agent block</option>
-                  </select>
+                  <label>Type</label>
+                  <div id="cmd-kind-select" class="select-host"></div>
                 </div>
                 <div>
-                  <label for="cmd-md-scope">Visibility</label>
-                  <select id="cmd-md-scope">
-                    <option value="global">Global (everywhere)</option>
-                    <option value="template">Template only</option>
-                  </select>
+                  <label>Visibility</label>
+                  <div id="cmd-md-scope-select" class="select-host"></div>
                 </div>
                 <div>
-                  <label for="cmd-block-type">Block type (agent block only)</label>
-                  <select id="cmd-block-type">
-                    <option value="template">Task block (&&&amp;&amp;&amp;)</option>
-                    <option value="supple">Supplement block (+++)</option>
-                  </select>
+                  <label>Block type (agent block only)</label>
+                  <div id="cmd-block-type-select" class="select-host"></div>
                 </div>
                 <div>
                   <label for="cmd-title">Block title (agent block only)</label>
@@ -134,8 +117,13 @@
     <h2>Models</h2>
     <div class="models-toolbar">
       <button class="ghost" onclick="loadModels()">Reload</button>
+      <button class="primary" onclick="saveModels()">Save all</button>
       <span class="status" id="models-status">Loading…</span>
       <span class="status" id="models-revision"></span>
+    </div>
+    <div class="default-model-row">
+      <label>Default model</label>
+      <div id="default-model-host" class="select-host"></div>
     </div>
     <div class="models-grid">
       <nav class="models-nav" aria-label="Model providers">
@@ -154,15 +142,13 @@
           <div class="editor-head">
             <h3 id="provider-legend">Edit provider</h3>
             <div class="actions">
-              <button class="primary" onclick="saveModels()">Save all</button>
               <button class="ghost" onclick="duplicateProvider()">Duplicate</button>
               <button class="danger" onclick="deleteProvider()">Delete</button>
-              <span class="status" id="provider-status"></span>
             </div>
           </div>
-          <div class="editor-body">
-            <fieldset>
-              <legend>Provider</legend>
+          <div class="editor-body" id="provider-editor-body">
+            <div class="card">
+              <div class="card-head"><h3 class="card-title">Provider</h3></div>
               <div class="field-grid">
                 <div>
                   <label for="prov-id">ID (stable key)</label>
@@ -172,21 +158,9 @@
                   <label for="prov-name">Display name</label>
                   <input id="prov-name" type="text">
                 </div>
-                <div>
-                  <label for="prov-type">Transport type</label>
-                  <select id="prov-type">
-                    <option value="openai">openai</option>
-                    <option value="openai-compatible">openai-compatible</option>
-                    <option value="anthropic">anthropic</option>
-                    <option value="google">google</option>
-                  </select>
-                </div>
-                <div>
-                  <label for="prov-enabled">Enabled</label>
-                  <select id="prov-enabled">
-                    <option value="true">Enabled</option>
-                    <option value="false">Disabled</option>
-                  </select>
+                <div class="field-wide">
+                  <label>Transport type</label>
+                  <div id="prov-type-host" class="select-host"></div>
                 </div>
                 <div class="field-wide">
                   <label for="prov-base-url">Base URL</label>
@@ -199,26 +173,18 @@
                   <span class="status" id="prov-key-state"></span>
                 </div>
               </div>
-            </fieldset>
-            <fieldset>
-              <legend>Models</legend>
-              <div class="models-toolbar">
-                <button class="ghost" onclick="addModel()">Add model</button>
-                <button class="ghost" onclick="fetchModels()">Fetch models</button>
-                <span class="status" id="fetch-status"></span>
+            </div>
+            <div class="card">
+              <div class="card-head">
+                <h3 class="card-title">Models</h3>
+                <div class="card-tools">
+                  <button class="ghost" onclick="addModel()">Add model</button>
+                  <button class="ghost" onclick="fetchModels()">Fetch models</button>
+                </div>
               </div>
               <div id="fetch-candidates" class="fetch-candidates hidden"></div>
               <div id="model-list" class="model-list"></div>
-            </fieldset>
-            <fieldset>
-              <legend>Default model</legend>
-              <div class="field-grid">
-                <div class="field-wide">
-                  <label for="default-model">Used for new chats</label>
-                  <select id="default-model" onchange="markDefaultDirty()"></select>
-                </div>
-              </div>
-            </fieldset>
+            </div>
           </div>
         </div>
       </section>
@@ -226,5 +192,6 @@
   </section>
 </main>
 <script src="/settings.js"></script>
+<script src="/settings_models.js"></script>
 </body>
 </html>

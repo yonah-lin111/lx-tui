@@ -15,10 +15,12 @@
 assets/
   settings.html        设置页结构（src/settings/service/page.rs 经 include_str! 加载）
   settings.css         设置页样式
-  settings.js          设置页脚本
+  settings.js          设置页核心脚本（标签页、General、Commands、toast 与 select 组件）
+  settings_models.js   Models 视图脚本（全局草稿、模型卡片、模态与思考等级编辑）
 ```
 
 - 文件名使用小写 `snake_case`，一名一页；同一页面的 HTML / CSS / JS 共用词干（`<name>.html` / `.css` / `.js`）。
+- 单页脚本超过 1000 行时按职责拆分：主 `<name>.js` 保留页面骨架与全局组件，其余视图拆为 `<name>_<section>.js`，均在 `page::asset` 登记并按 HTML 中的顺序加载。
 - **结构、样式、脚本分文件维护**：HTML 不含内联 `<style>` / `<script>` 正文，改为 `<link rel="stylesheet" href="/<name>.css">` 与 `<script src="/<name>.js"></script>`。
 - 若确需嵌入非 HTML 资源（图标、字体等二进制），单独放置并以扩展名区分；二进制用 `include_bytes!`，文本用 `include_str!`。
 
