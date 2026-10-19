@@ -29,6 +29,7 @@ function showTab(name) {
     document.getElementById(views[key]).classList.toggle('hidden', !active);
   }
   if (name === 'models' && modelsDraft === null) { loadModels(); }
+  refreshActionBars();
 }
 
 // ===== 页面级组件：toast 与自绘 select =====
@@ -129,6 +130,7 @@ function createSelect(host, config) {
     close();
     renderLabel();
     if (notify && changed && typeof optionsConfig.onChange === 'function') { optionsConfig.onChange(value); }
+    refreshActionBars();
   };
 
   const open = () => {
@@ -193,12 +195,122 @@ document.addEventListener('click', (event) => {
 window.addEventListener('resize', () => { openSelects.forEach((instance) => instance.reposition()); });
 window.addEventListener('scroll', () => { openSelects.forEach((instance) => instance.reposition()); }, true);
 
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) { node.className = className; }
+  if (text !== undefined && text !== null) { node.textContent = text; }
+  return node;
+}
+
+// ===== 页面级组件：视图操作条（状态 + Reset + Save）=====
+// 每个视图注册一个控制器（isDirty/save/reset），标题行右侧只有这一套按钮；
+// 页面内不再有其它保存入口。状态圆点：绿=已保存，白=未保存，红=保存失败，灰脉冲=保存中。
+
+const actionBars = {};
+
+function createActionBar(hostId, controller) {
+  const host = document.getElementById(hostId);
+  const status = element('span', 'action-status');
+  const dot = element('span', 'status-dot clean');
+  const text = element('span', null, 'Saved');
+  status.appendChild(dot);
+  status.appendChild(text);
+  const reset = element('button', 'ghost', 'Reset');
+  reset.type = 'button';
+  const save = element('button', 'primary', 'Save');
+  save.type = 'button';
+  host.appendChild(status);
+  host.appendChild(reset);
+  host.appendChild(save);
+  let saving = false;
+  let failed = false;
+  const refresh = () => {
+    const dirty = controller.isDirty();
+    if (saving) {
+      dot.className = 'status-dot saving';
+      text.textContent = 'Saving…';
+    } else if (failed) {
+      dot.className = 'status-dot error';
+      text.textContent = 'Save failed';
+    } else if (dirty) {
+      dot.className = 'status-dot dirty';
+      text.textContent = 'Unsaved changes';
+    } else {
+      dot.className = 'status-dot clean';
+      text.textContent = 'Saved';
+    }
+    save.disabled = saving || !dirty;
+    reset.disabled = saving || !dirty;
+  };
+  save.onclick = () => {
+    if (saving || !controller.isDirty()) { return; }
+    saving = true;
+    failed = false;
+    refresh();
+    Promise.resolve()
+      .then(() => controller.save())
+      .then(() => { saving = false; failed = false; refresh(); })
+      .catch(() => { saving = false; failed = true; refresh(); });
+  };
+  reset.onclick = () => {
+    if (saving) { return; }
+    controller.reset();
+    failed = false;
+    refresh();
+    showToast('Reset to last saved state', 'info');
+  };
+  refresh();
+  return {refresh: refresh};
+}
+
+function refreshActionBars() {
+  for (const bar of Object.values(actionBars)) { bar.refresh(); }
+}
+
+document.addEventListener('input', refreshActionBars);
+document.addEventListener('change', refreshActionBars);
+
 // ===== General view =====
 
 const CONFIG_KEYS = ['sidebar_width','sidebar_min_width','sidebar_max_width','narrow_width','min_width','min_height','min_pane_width','min_pane_height'];
+let generalBaseline = null;
+
+function generalValues() {
+  const values = {};
+  for (const key of CONFIG_KEYS) {
+    values[key] = document.getElementById(key).value;
+  }
+  return values;
+}
+
+function generalDirty() {
+  return generalBaseline !== null && JSON.stringify(generalValues()) !== JSON.stringify(generalBaseline);
+}
+
+function resetGeneral() {
+  if (generalBaseline === null) { return; }
+  for (const key of CONFIG_KEYS) {
+    document.getElementById(key).value = generalBaseline[key];
+  }
+}
+
+async function saveGeneral() {
+  const config = {};
+  for (const key of CONFIG_KEYS) {
+    config[key] = Number(document.getElementById(key).value);
+  }
+  try {
+    await api('/api/config', {method: 'PUT', body: JSON.stringify({config})});
+    showToast('Settings saved', 'ok');
+    await loadState();
+  } catch (error) {
+    showToast(error.message, 'error');
+    throw error;
+  }
+}
 
 function loadState() {
-  api('/api/state').then((data) => {
+  return api('/api/state').then((data) => {
     state = data;
     // 选中项跟随最新列表；被删除的选中项清空回占位。
     if (selected) {
@@ -208,6 +320,7 @@ function loadState() {
     for (const key of CONFIG_KEYS) {
       document.getElementById(key).value = data.config[key];
     }
+    generalBaseline = generalValues();
     document.getElementById('general-status').textContent = 'Settings loaded';
     document.getElementById('general-status').className = 'status ok';
     renderCommands();
@@ -217,19 +330,6 @@ function loadState() {
     document.getElementById('general-status').className = 'status error';
     document.getElementById('commands-status').textContent = 'Failed to load: ' + error.message;
     document.getElementById('commands-status').className = 'status error';
-  });
-}
-
-function saveConfig() {
-  const config = {};
-  for (const key of CONFIG_KEYS) {
-    config[key] = Number(document.getElementById(key).value);
-  }
-  api('/api/config', {method: 'PUT', body: JSON.stringify({config})}).then(() => {
-    showToast('Settings saved', 'ok');
-    loadState();
-  }).catch((error) => {
-    showToast(error.message, 'error');
   });
 }
 
@@ -318,6 +418,7 @@ function renderCommands() {
     list.appendChild(row);
   }
   document.getElementById('new-command-row').classList.toggle('selected', draft);
+  refreshActionBars();
 }
 
 function selectCommand(command) {
@@ -334,28 +435,77 @@ function newCommand() {
   renderCommands();
 }
 
+let commandBaseline = null;
+
+function editorValues() {
+  return {
+    name: document.getElementById('cmd-name').value.trim(),
+    kind: commandSelects.kind.value(),
+    md_scope: commandSelects.mdScope.value(),
+    block_type: commandSelects.blockType.value(),
+    title: document.getElementById('cmd-title').value,
+    description: document.getElementById('cmd-description').value,
+    body: document.getElementById('cmd-body').value
+  };
+}
+
+function commandsDirty() {
+  return commandBaseline !== null && JSON.stringify(editorValues()) !== JSON.stringify(commandBaseline);
+}
+
+function applyEditorValues(values) {
+  document.getElementById('cmd-name').value = values.name;
+  document.getElementById('cmd-title').value = values.title;
+  document.getElementById('cmd-description').value = values.description;
+  document.getElementById('cmd-body').value = values.body;
+  commandSelects.kind.setValue(values.kind);
+  commandSelects.mdScope.setValue(values.md_scope);
+  commandSelects.blockType.setValue(values.block_type);
+}
+
+function resetCommandEditor() {
+  if (commandBaseline === null) { return; }
+  applyEditorValues(commandBaseline);
+}
+
 function showEditor(command) {
   document.getElementById('editor-empty').classList.add('hidden');
   document.getElementById('editor').classList.remove('hidden');
   document.getElementById('editor-legend').textContent = command.name ? ('Edit ' + command.name) : 'New command';
-  document.getElementById('cmd-name').value = command.name || '';
-  commandSelects.kind.setValue(command.kind || 'agentMD');
-  commandSelects.mdScope.setValue(command.md_scope || 'global');
-  commandSelects.blockType.setValue(command.block_type || 'template');
-  document.getElementById('cmd-title').value = command.title || '';
-  document.getElementById('cmd-description').value = command.description || '';
-  document.getElementById('cmd-body').value = command.body || '';
+  const values = {
+    name: command.name || '',
+    kind: command.kind || 'agentMD',
+    md_scope: command.md_scope || 'global',
+    block_type: command.block_type || 'template',
+    title: command.title || '',
+    description: command.description || '',
+    body: command.body || ''
+  };
+  applyEditorValues(values);
+  commandBaseline = JSON.parse(JSON.stringify(values));
 }
 
 function hideEditor() {
   draft = false;
   selected = null;
+  commandBaseline = null;
   document.getElementById('editor').classList.add('hidden');
   document.getElementById('editor-empty').classList.remove('hidden');
   renderCommands();
 }
 
-function saveCommand() {
+// 命令列表单独刷新：不重放 General 输入，避免保存命令时冲掉未保存的常规设置。
+function reloadCommands() {
+  return api('/api/commands').then((commands) => {
+    if (!state) { state = {}; }
+    state.commands = commands;
+    renderCommands();
+  }).catch((error) => {
+    showToast(error.message, 'error');
+  });
+}
+
+async function saveCommand() {
   const name = document.getElementById('cmd-name').value.trim();
   const kind = commandSelects.kind.value();
   const mdScope = commandSelects.mdScope.value();
@@ -368,23 +518,24 @@ function saveCommand() {
     title: document.getElementById('cmd-title').value,
     body: body
   };
-  // 已存在的命令改名：先 rename（失败即中止，不动内容），再 PUT 新路径。
-  const renameStep = !draft && selected !== null && selected.name && name !== selected.name
-    ? api('/api/commands/user/' + encodeURIComponent(selected.kind) + '/' + encodeURIComponent(selected.name) + '/rename', {method: 'POST', body: JSON.stringify({to: name})}).then(() => {
-        selected = Object.assign({}, selected, {name: name});
-        renderCommands();
-      })
-    : Promise.resolve();
-  renameStep.then(() => api('/api/commands/user/' + encodeURIComponent(kind) + '/' + encodeURIComponent(name), {method: 'PUT', body: JSON.stringify(payload)})).then(() => {
+  try {
+    // 已存在的命令改名：先 rename（失败即中止，不动内容），再 PUT 新路径。
+    if (!draft && selected !== null && selected.name && name !== selected.name) {
+      await api('/api/commands/user/' + encodeURIComponent(selected.kind) + '/' + encodeURIComponent(selected.name) + '/rename', {method: 'POST', body: JSON.stringify({to: name})});
+      selected = Object.assign({}, selected, {name: name});
+      renderCommands();
+    }
+    await api('/api/commands/user/' + encodeURIComponent(kind) + '/' + encodeURIComponent(name), {method: 'PUT', body: JSON.stringify(payload)});
     draft = false;
     selected = {name, scope: 'user', kind, md_scope: mdScope, block_type: blockType, title: payload.title, description: payload.description, body};
     showEditor(selected);
     showToast('Saved', 'ok');
     renderCommands();
-    loadState();
-  }).catch((error) => {
+    await reloadCommands();
+  } catch (error) {
     showToast(error.message, 'error');
-  });
+    throw error;
+  }
 }
 
 function deleteCommand() {
@@ -392,7 +543,7 @@ function deleteCommand() {
   api('/api/commands/user/' + encodeURIComponent(selected.kind) + '/' + encodeURIComponent(selected.name), {method: 'DELETE'}).then(() => {
     hideEditor();
     showToast('Deleted', 'ok');
-    loadState();
+    reloadCommands();
   }).catch((error) => {
     showToast(error.message, 'error');
   });
@@ -456,5 +607,15 @@ setupResizer(
   LIST_MIN_WIDTH,
   LIST_MAX_WIDTH
 );
+actionBars.general = createActionBar('actions-general', {
+  isDirty: generalDirty,
+  save: saveGeneral,
+  reset: resetGeneral
+});
+actionBars.commands = createActionBar('actions-commands', {
+  isDirty: commandsDirty,
+  save: saveCommand,
+  reset: resetCommandEditor
+});
 initCommandSelects();
 loadState();

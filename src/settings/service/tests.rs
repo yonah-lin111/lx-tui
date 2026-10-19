@@ -270,13 +270,24 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
     assert!(models_js.contains("VARIANT_PRESETS"), "thinking presets");
     assert!(models_js.contains("reasoningEffort"), "OpenAI preset wired");
 
-    // 全局内存草稿 + 一次保存全部 + 未保存提示。
+    // 全局内存草稿 + 视图操作条统一保存 + 未保存状态。
     assert!(models_js.contains("modelsDraft"), "global draft");
-    assert!(models_js.contains("unsaved changes"), "dirty indicator");
+    assert!(models_js.contains("modelsBaseline"), "reset baseline");
     assert!(
         models_js.contains("buildPayload"),
         "single save builds full payload"
     );
+    assert!(
+        js.contains("createActionBar"),
+        "shared action bar component"
+    );
+    assert!(js.contains("Unsaved changes"), "dirty indicator");
+    // provider 启停改为编辑卡内复选框，列表行不再有圆点。
+    assert!(
+        html.contains("id=\"prov-enabled\""),
+        "provider enable checkbox"
+    );
+    assert!(!css.contains(".prov-toggle"), "no toggle dot styles");
     service.shutdown();
 }
 
@@ -289,16 +300,24 @@ async fn page_header_actions_fill_width_and_resizers() {
     let css = body(&request(port, &get("/settings.css")).await).to_string();
     let js = body(&request(port, &get("/settings.js")).await).to_string();
 
-    // 操作行与 Edit 标题同行：Save 出现在第一个字段之前。
-    let legend = html.find("id=\"editor-legend\"").expect("legend present");
-    let save = html
-        .find("onclick=\"saveCommand()\"")
-        .expect("save button present");
-    let first_field = html.find("id=\"cmd-name\"").expect("name field present");
+    // 保存入口统一到每个视图标题行右侧的全局操作条；页面内不再有独立保存按钮。
+    for id in ["actions-general", "actions-commands", "actions-models"] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "action bar host: {id}"
+        );
+    }
+    assert!(!html.contains("saveCommand()"), "no per-editor save button");
+    assert!(!html.contains("saveConfig()"), "no general save button");
+    assert!(!html.contains("saveModels()"), "no models save button");
     assert!(
-        legend < save && save < first_field,
-        "actions live in the editor head"
+        css.contains(".action-status") && css.contains(".status-dot"),
+        "action bar status styles"
     );
+    // 编辑器头部保留标题与字段。
+    let legend = html.find("id=\"editor-legend\"").expect("legend present");
+    let first_field = html.find("id=\"cmd-name\"").expect("name field present");
+    assert!(legend < first_field, "editor head above fields");
 
     // 内容撑满：不再有 max-width 上限。
     assert!(

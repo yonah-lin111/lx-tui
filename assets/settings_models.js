@@ -1,6 +1,6 @@
 // ===== Models view =====
 // 全局内存草稿：所有编辑（含删除/复制/启停）先落在 modelsDraft，
-// Save all 一次 PUT 提交全部；Reload 重新拉取并丢弃草稿。
+// Save（视图操作条）一次 PUT 提交全部；Reload / Reset 丢弃草稿回到最近快照。
 // 记录键与模型 id 一致（与 lx-agent 语义相同）；模态与思考等级只在展开区编辑。
 
 const INPUT_MODALITIES = ['text', 'image', 'audio', 'video', 'pdf'];
@@ -13,6 +13,7 @@ const VARIANT_PRESETS = {
 };
 
 let modelsDraft = null;      // 全局编辑草稿
+let modelsBaseline = null;   // 最近一次加载/保存的快照（Reset 回填基准）
 let selectedProviderKey = null;
 let modelsDirty = false;
 const modelSelects = {};
@@ -20,13 +21,6 @@ const expandedModels = new Set();
 
 function suffix() {
   return Date.now().toString(36).slice(-6);
-}
-
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) { node.className = className; }
-  if (text !== undefined && text !== null) { node.textContent = text; }
-  return node;
 }
 
 function currentProvider() {
@@ -37,30 +31,45 @@ function currentProvider() {
 function markModelsDirty() {
   modelsDirty = true;
   updateModelsStatus();
+  refreshActionBars();
 }
 
 function updateModelsStatus() {
   const count = ((modelsDraft && modelsDraft.providers) || []).length;
-  document.getElementById('models-status').textContent = count + ' provider(s)' + (modelsDirty ? ' · unsaved changes' : '');
+  document.getElementById('models-status').textContent = count + ' provider(s)';
   document.getElementById('models-status').className = 'status ok';
 }
 
+// Reset：把草稿回填为最近一次加载/保存的快照。
+function resetModels() {
+  if (modelsBaseline === null) { return; }
+  modelsDraft = JSON.parse(JSON.stringify(modelsBaseline));
+  modelsDirty = false;
+  if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
+    selectedProviderKey = null;
+  }
+  renderModelsView();
+}
+
 function loadModels() {
-  api('/api/models/settings').then((data) => {
+  return api('/api/models/settings').then((data) => {
     modelsDraft = snapshotToDraft(data);
+    modelsBaseline = JSON.parse(JSON.stringify(modelsDraft));
+    // 默认不选中任何 provider：直接显示空状态。
     if (!modelsDraft.providers.some((provider) => provider.key === selectedProviderKey)) {
-      selectedProviderKey = modelsDraft.providers.length ? modelsDraft.providers[0].key : null;
+      selectedProviderKey = null;
     }
     modelsDirty = false;
     renderModelsView();
     document.getElementById('models-revision').textContent = 'revision ' + String(data.revision || '').slice(0, 8);
+    refreshActionBars();
   }).catch((error) => {
     document.getElementById('models-status').textContent = 'Failed to load: ' + error.message;
     document.getElementById('models-status').className = 'status error';
   });
 }
 
-// 409 后只刷新 revision，保留用户草稿（再次点击 Save all 即覆盖）。
+// 409 后只刷新 revision，保留用户草稿（再次点击 Save 即覆盖）。
 function refreshRevision() {
   api('/api/models/settings').then((data) => {
     if (modelsDraft) { modelsDraft.revision = data.revision || ''; }
@@ -122,22 +131,8 @@ function renderProviders() {
   for (const provider of providers) {
     const row = element('button', 'nav-item' + (provider.key === selectedProviderKey ? ' selected' : ''));
     row.type = 'button';
-    const toggle = element('span', 'prov-toggle' + (provider.enabled ? ' on' : ''));
-    toggle.setAttribute('aria-label', provider.enabled ? 'Enabled' : 'Off');
-    toggle.onclick = (event) => {
-      event.stopPropagation();
-      provider.enabled = !provider.enabled;
-      if (!provider.enabled && modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id) {
-        modelsDraft.defaultModel = null;
-        showToast('Default model cleared (its provider was turned off)', 'info');
-      }
-      markModelsDirty();
-      renderProviders();
-      renderDefaultModel();
-    };
     const name = element('span', 'nav-name', provider.name || provider.id);
-    const tag = element('span', 'tag', provider.type + (provider.hasApiKey ? '' : ' · no key'));
-    row.appendChild(toggle);
+    const tag = element('span', 'tag', provider.type + (provider.hasApiKey ? '' : ' · no key') + (provider.enabled ? '' : ' · off'));
     row.appendChild(name);
     row.appendChild(tag);
     row.onclick = () => selectProvider(provider.key);
@@ -156,6 +151,7 @@ function renderEditor() {
   document.getElementById('prov-base-url').value = provider.baseUrl;
   document.getElementById('prov-api-key').value = provider.apiKeyText;
   document.getElementById('prov-clear-key').checked = provider.clearApiKey;
+  document.getElementById('prov-enabled').checked = provider.enabled;
   document.getElementById('prov-key-state').textContent = provider.hasApiKey ? 'a key is stored' : 'no key stored';
   modelSelects.provType.setValue(provider.type);
   renderModelList();
@@ -204,7 +200,7 @@ function deleteProvider() {
     modelsDraft.defaultModel = null;
     showToast('Default model cleared', 'info');
   }
-  selectedProviderKey = modelsDraft.providers.length ? modelsDraft.providers[0].key : null;
+  selectedProviderKey = null;
   markModelsDirty();
   renderModelsView();
 }
@@ -603,28 +599,30 @@ function buildPayload() {
   };
 }
 
-function saveModels() {
+async function saveModels() {
   if (!modelsDraft) { return; }
   let payload;
   try {
     payload = buildPayload();
   } catch (error) {
     showToast(error.message, 'error');
-    return;
+    throw error;
   }
-  api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)}).then(() => {
+  try {
+    await api('/api/models/settings', {method: 'PUT', body: JSON.stringify(payload)});
     showToast('Saved', 'ok');
     modelsDirty = false;
-    loadModels();
-  }).catch((error) => {
+    await loadModels();
+  } catch (error) {
     // 409：磁盘配置已被别处改动。只刷新 revision，保留草稿，再点一次即覆盖。
     if (error.status === 409) {
-      showToast('Configuration changed elsewhere; revision refreshed — click Save all again', 'error');
+      showToast('Configuration changed elsewhere; revision refreshed — click Save again', 'error');
       refreshRevision();
       return;
     }
     showToast(error.message, 'error');
-  });
+    throw error;
+  }
 }
 
 function fetchModels() {
@@ -700,6 +698,19 @@ function initProviderFields() {
     const provider = currentProvider();
     if (provider) { provider.clearApiKey = event.target.checked; }
   });
+  document.getElementById('prov-enabled').addEventListener('change', (event) => {
+    const provider = currentProvider();
+    if (!provider) { return; }
+    provider.enabled = event.target.checked;
+    // 关掉默认模型所属 provider 时清空默认选择，避免后端校验 422。
+    if (!provider.enabled && modelsDraft.defaultModel && modelsDraft.defaultModel.provider === provider.id) {
+      modelsDraft.defaultModel = null;
+      showToast('Default model cleared (its provider was turned off)', 'info');
+    }
+    markModelsDirty();
+    renderProviders();
+    renderDefaultModel();
+  });
 }
 
 function initModelsView() {
@@ -737,5 +748,10 @@ function initModelsView() {
   initProviderFields();
 }
 
+actionBars.models = createActionBar('actions-models', {
+  isDirty: () => modelsDirty,
+  save: saveModels,
+  reset: resetModels
+});
 initModelsView();
 

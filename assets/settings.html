@@ -16,7 +16,10 @@
 <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" aria-label="Resize sidebar"></div>
 <main>
   <section id="view-general" class="view">
-    <h2>General</h2>
+    <div class="view-head">
+      <h2>General</h2>
+      <div id="actions-general" class="view-actions"></div>
+    </div>
     <p class="status" id="general-status">Loading…</p>
     <fieldset>
       <legend>Layout</legend>
@@ -32,13 +35,15 @@
       </div>
     </fieldset>
     <div class="actions">
-      <button class="primary" onclick="saveConfig()">Save</button>
       <button class="ghost" onclick="loadState()">Reload</button>
     </div>
   </section>
 
   <section id="view-commands" class="view hidden">
-    <h2>Commands</h2>
+    <div class="view-head">
+      <h2>Commands</h2>
+      <div id="actions-commands" class="view-actions"></div>
+    </div>
     <div class="commands-toolbar">
       <label>Type</label>
       <div id="cmd-filter-select" class="select-host toolbar-select"></div>
@@ -65,7 +70,6 @@
           <div class="editor-head">
             <h3 id="editor-legend">Edit command</h3>
             <div class="actions">
-              <button class="primary" onclick="saveCommand()">Save</button>
               <button class="ghost" onclick="hideEditor()">Cancel</button>
               <button class="danger" onclick="deleteCommand()">Delete</button>
             </div>
@@ -114,10 +118,12 @@
   </section>
 
   <section id="view-models" class="view hidden">
-    <h2>Models</h2>
+    <div class="view-head">
+      <h2>Models</h2>
+      <div id="actions-models" class="view-actions"></div>
+    </div>
     <div class="models-toolbar">
       <button class="ghost" onclick="loadModels()">Reload</button>
-      <button class="primary" onclick="saveModels()">Save all</button>
       <label>Default model</label>
       <div id="default-model-host" class="select-host models-toolbar-select"></div>
       <span class="status" id="models-status">Loading…</span>
@@ -160,6 +166,9 @@
                 <div class="field-wide">
                   <label>Transport type</label>
                   <div id="prov-type-host" class="select-host"></div>
+                </div>
+                <div class="field-wide">
+                  <label class="field-hint"><input id="prov-enabled" type="checkbox"> Enabled</label>
                 </div>
                 <div class="field-wide">
                   <label for="prov-base-url">Base URL</label>
