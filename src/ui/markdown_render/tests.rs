@@ -608,6 +608,70 @@ fn code_block_header_shows_language_prefix_and_copy_button() {
     assert!(!body.text().contains("language:"), "正文不带语言前缀");
 }
 
+/// 语言名的 `language:` 前缀保持次要灰，**语言名单独上强调色**。
+#[test]
+fn language_name_is_highlighted_separately_from_its_prefix() {
+    let header = render("```rust\nfn main() {}\n```")
+        .into_iter()
+        .next()
+        .expect("header");
+    let prefix = header
+        .spans
+        .iter()
+        .find(|(value, _)| value == "language: ")
+        .expect("语言前缀段");
+    let name = header
+        .spans
+        .iter()
+        .find(|(value, _)| value == "rust")
+        .expect("语言名段");
+    assert_eq!(
+        prefix.1,
+        style::md_read_code_lang(),
+        "前缀是次要灰（不抢语言名）"
+    );
+    assert_eq!(
+        name.1,
+        style::md_read_code_lang_name(),
+        "语言名走专用强调色"
+    );
+    assert_ne!(prefix.1.fg, name.1.fg, "前缀与语言名不同色");
+    assert!(name.1.fg.is_some(), "语言名有前景色");
+    assert!(
+        name.1.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "语言名加粗，从这一行里跳出来"
+    );
+}
+
+/// 代码块**上下**各有一条分隔横线，把正文框住（没有左侧竖条后的收尾）。
+#[test]
+fn code_block_has_rule_above_and_below_the_body() {
+    let lines = render("```js\nconst a = 1;\nconst b = 2;\n```");
+    // 头部 → 横线 → 正文 ×2 → 横线。
+    assert_eq!(lines.len(), 5, "头部 + 两横线 + 两行正文：{lines:?}");
+    let rule = |line: &MdLine| line.text().chars().all(|ch| ch == '─');
+    assert!(rule(&lines[1]), "头部下一行是横线：{:?}", lines[1].text());
+    assert!(lines[2].code_body && lines[3].code_body, "中间是正文");
+    assert!(
+        rule(&lines[4]),
+        "正文之后还有一条横线：{:?}",
+        lines[4].text()
+    );
+    assert!(!lines[4].code_body, "收尾横线不算代码正文");
+}
+
+/// 收尾横线不进入复制内容。
+#[test]
+fn closing_rule_is_not_part_of_code_body() {
+    let lines = render("```js\nconst a = 1;\n```");
+    let copied: Vec<String> = lines
+        .iter()
+        .filter(|line| line.code_body)
+        .map(MdLine::text)
+        .collect();
+    assert_eq!(copied, vec!["const a = 1;"], "只收正文，不含两条横线");
+}
+
 #[test]
 fn code_block_without_language_has_no_language_prefix() {
     let lines = render("```\nplain\n```");

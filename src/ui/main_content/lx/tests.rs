@@ -1535,3 +1535,45 @@ fn code_copy_keeps_code_indentation() {
         "缩进原样保留"
     );
 }
+
+#[test]
+fn code_copy_excludes_both_rules_and_keeps_blank_lines() {
+    // 代码块上下两条分隔横线都不进复制内容；正文里的空行要保留。
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```js\nconst a = 1;\n\nconst b = 2;\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let button = super::history::layout(view.body, &lx)
+        .code_copy
+        .into_iter()
+        .next()
+        .expect("代码块复制按钮");
+    assert_eq!(button.body, "const a = 1;\n\nconst b = 2;", "正文 + 空行");
+    assert!(!button.body.contains('─'), "不含任何分隔横线");
+    assert!(!button.body.contains("language:"), "不含头部");
+}

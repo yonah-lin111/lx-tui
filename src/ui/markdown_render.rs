@@ -301,9 +301,12 @@ fn indented_code(
 
 /// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`，其下一行是横线分隔。
 ///
-/// **没有左侧竖条**（用户要求去掉）：整块靠「头部 + 一条横线 + 正文」框住，比逐行
-/// 竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时不写
+/// **没有左侧竖条**（用户要求去掉）：整块靠「头部 + 一条横线 + 正文 + 收尾横线」框住，
+/// 比逐行竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时不写
 /// `language:`（不假装有语言），只留按钮。
+///
+/// `language:` 前缀用次要灰、**语言名单独上强调色**（[`style::md_read_code_lang_name`]）：
+/// 语言是这一行唯一有信息量的内容，值得跳出来。
 ///
 /// `width` 为 None（无宽度口径的自然渲染，如 UI 查看器样例）时按钮直接跟在语言名后，
 /// 不做填充——没有可用宽度就无从右对齐。
@@ -313,9 +316,10 @@ fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
     let mut spans: Vec<(String, Style)> = Vec::new();
     if let Some(lang) = lang {
         spans.push((
-            format!("{}{lang}", text::LX_CHAT_CODE_LANG_PREFIX),
+            text::LX_CHAT_CODE_LANG_PREFIX.to_string(),
             style::md_read_code_lang(),
         ));
+        spans.push((lang.to_string(), style::md_read_code_lang_name()));
     }
     let used = MdLine::spans(0, spans.clone()).width();
     let button = text::TEMPLATE_BUTTON_COPY;
@@ -334,14 +338,17 @@ fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
     (line, column)
 }
 
-/// 代码块头部与正文之间的分隔横线（与头部的复制按钮同色，不抢代码）。
+/// 代码块的分隔横线（头部下方与正文下方各一条，框住代码）。
 fn code_rule_line(width: Option<usize>) -> MdLine {
     let rule_width = width.unwrap_or(40).max(1);
     MdLine::plain(0, RULE.repeat(rule_width), style::md_read_rule())
 }
 
-/// 渲染代码块：头部（`language: xxx` + 复制按钮）→ 分隔横线 → 正文；
+/// 渲染代码块：头部（`language: xxx` + 复制按钮）→ 分隔横线 → 正文 → **收尾横线**；
 /// 代码正文按语言做轻量语法高亮，**不带左侧竖条**。
+///
+/// 上下各一条横线把代码框住：没有左侧竖条之后，只有头部那条线时正文结尾与后文
+/// 分不开（尤其代码块后面紧跟段落时）。
 fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &mut Vec<MdLine>) {
     lines.push(code_header_line(lang, width).0);
     lines.push(code_rule_line(width));
@@ -350,6 +357,7 @@ fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &
         rendered.code_body = true;
         lines.push(rendered);
     }
+    lines.push(code_rule_line(width));
 }
 
 /// 引用块：收集连续 `>` 行，用 `>` 作前缀（不用左边框）。

@@ -401,9 +401,19 @@ pub fn md_read_rule() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 代码块语言标记：GitHub 的次要前景色。
+/// markdown 代码块语言标记的 `language:` 前缀：GitHub 的次要前景色（不抢语言名）。
 pub fn md_read_code_lang() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
+}
+
+/// markdown 代码块的**语言名**（`js` / `rust`…）：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
+///
+/// 前缀 `language:` 保持次要灰、只有语言名上色：语言是这一行**唯一有信息量**的内容，
+/// 紫色与代码 token（蓝/红/紫）同属语法色域，但用在该行的固定位置不会与正文混淆。
+pub fn md_read_code_lang_name() -> Style {
+    Style::default()
+        .fg(github_dark::ENTITY)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// markdown 代码块的复制按钮 `[❐]`：与左侧容器折叠按钮同款（[`accent`]：Cyan 加粗）。

@@ -505,6 +505,28 @@ fn input_hint_uses_red_for_errors_and_yellow_otherwise() {
     }
 }
 
+/// 代码块语言名用实体紫强调，前缀保持次要灰——两者必须不同色。
+#[test]
+fn code_block_language_name_is_highlighted() {
+    let prefix = md_read_code_lang();
+    let name = md_read_code_lang_name();
+    assert_eq!(
+        prefix.fg,
+        Some(Color::Rgb(0x7d, 0x85, 0x90)),
+        "语言前缀 = fg-muted（不抢语言名）"
+    );
+    assert_eq!(
+        name.fg,
+        Some(Color::Rgb(0xd2, 0xa8, 0xff)),
+        "语言名 = 实体紫 #d2a8ff"
+    );
+    assert!(
+        name.add_modifier.contains(Modifier::BOLD),
+        "语言名加粗，从这一行跳出来"
+    );
+    assert_ne!(prefix.fg, name.fg, "前缀与语言名不同色");
+}
+
 /// 代码块复制按钮用**面板折叠按钮同款**（`accent`：Cyan 加粗），不做悬停变色。
 #[test]
 fn code_copy_button_shares_collapse_button_accent() {

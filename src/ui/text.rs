@@ -616,8 +616,6 @@ pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
 /// markdown 代码块头部的语言前缀（`language: js`）。
 pub const LX_CHAT_CODE_LANG_PREFIX: &str = "language: ";
-/// markdown 代码块头部语言名与复制按钮之间的分隔（` · `）。
-pub const LX_CHAT_CODE_LANG_SEP: &str = " · ";
 
 /// 工具步骤占位摘要：工具名与状态之间的分隔（真实工具行由后续阶段重做）。
 pub const LX_CHAT_TOOL_STATUS_SEP: &str = " · ";
