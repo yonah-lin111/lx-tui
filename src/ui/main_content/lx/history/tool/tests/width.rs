@@ -189,8 +189,8 @@ fn scrolled_out_rows_draw_nothing_but_still_advance() {
 
 #[test]
 fn settled_search_falls_back_to_arguments_for_its_scope() {
-    // 结算后摘要只带命中数（`to_summary` 不给 search 的 path）；此时从参数 JSON
-    // 取搜索模式与范围补上，避免 search 行只剩一个裸计数。
+    // 结算后摘要只带命中数（`to_summary` 不给 search 的 path/pattern）；此时从参数
+    // JSON 取搜索模式与范围补上，避免 search 行只剩一个裸计数。
     let mut call = tool_call(
         "search",
         ToolStatus::Completed,
@@ -213,6 +213,269 @@ fn settled_search_falls_back_to_arguments_for_its_scope() {
     let pattern_at = painted.find("fn render").expect("模式");
     let path_at = painted.find("src/ui").expect("范围");
     assert!(pattern_at < path_at, "模式在范围之前：{painted}");
+}
+
+// ===== 搜索详情的窄宽度让位（P2-7）=====
+
+/// 带范围路径的 `search` 调用（pattern 含宽字符，路径较长）。
+fn search_scoped_call(pattern: &str, path: &str) -> ToolCallView {
+    tool_call(
+        "search",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some(path.into()),
+            pattern: Some(pattern.into()),
+            matches: Some(3),
+            ..ToolSummary::default()
+        }),
+        None,
+    )
+}
+
+/// 详情行去掉前缀后的正文（无则空串）。
+fn detail_body_text(call: &ToolCallView, width: u16) -> String {
+    let painted = detail_text(call, width);
+    let prefix = detail_prefix();
+    painted
+        .strip_prefix(&prefix)
+        .unwrap_or(painted.as_str())
+        .to_string()
+}
+
+/// P2-7：窄宽度下 pattern 的核心字符必须始终可见，且绝不被中间省略切碎。
+///
+/// 旧实现把 `"pattern" in path` 合成**一段**做 `ellipsize_middle`，`w=30` 时得到
+/// `"测试"…ル.txt · 3 matches`（`in` 消失、pattern 与 path 粘连），`w=24` 时
+/// `"测…txt · 3 matches`（pattern 被切成首尾两字）。
+#[test]
+fn search_detail_keeps_pattern_at_narrow_widths() {
+    let call = search_scoped_call("测试", "tool_test.txt");
+    let pattern = text::agent::pattern_label("测试");
+    for width in (10u16..=70).rev() {
+        let body = detail_body_text(&call, width);
+        let painted = detail_text(&call, width);
+        assert!(
+            painted.width() <= usize::from(width),
+            "宽 {width} 越界：{painted:?}"
+        );
+        if width >= 11 {
+            // pattern 完整（连引号一起）。
+            assert!(
+                body.contains(&pattern),
+                "宽 {width} 下 pattern 必须完整：{body:?}"
+            );
+        } else {
+            // 最窄档：至少保留 pattern 的首个模式字符 + 省略号。
+            assert!(
+                body.contains("测…"),
+                "宽 {width} 至少保留 pattern 首字符：{body:?}"
+            );
+        }
+        // 不得出现「省略号 + 范围路径尾部」的粘连残形（旧 bug 的指纹）。
+        for glued in ["…ル", "…txt", "…tool_test"] {
+            assert!(
+                !body.contains(glued),
+                "宽 {width} 出现 pattern 与 path 粘连的残形 {glued:?}：{body:?}"
+            );
+        }
+        // pattern 是这一行第一个内容段：`in` 绝不会跑到它前面。
+        if let Some(pattern_at) = body.find('测')
+            && let Some(in_at) = body.find(text::agent::IN_SCOPE_SEP.trim_end())
+        {
+            assert!(
+                in_at > pattern_at,
+                "宽 {width} 下 `in` 必须在 pattern 之后：{body:?}"
+            );
+        }
+    }
+}
+
+/// 长 pattern + 长路径：窄档只允许**尾部省略** pattern，不允许中间省略。
+#[test]
+fn search_long_pattern_shrinks_from_the_tail_only() {
+    let call = search_scoped_call("fn render_search_detail", "src/ui/main_content/lx");
+    let pattern = "fn render_search_detail";
+    for width in (10u16..=70).rev() {
+        let body = detail_body_text(&call, width);
+        if body.is_empty() {
+            continue;
+        }
+        assert!(
+            body.starts_with('"'),
+            "宽 {width} pattern 必须以引号起头（不是中间省略的残段）：{body:?}"
+        );
+        let shown = body.trim_start_matches('"');
+        if !body.contains('…') {
+            // 放得下：整串原样。
+            assert!(
+                shown.starts_with(pattern),
+                "宽 {width} 放得下就该完整：{body:?}"
+            );
+            continue;
+        }
+        // 尾部省略：保留的字符必须是 pattern 的**前缀**。
+        let kept = shown.split('…').next().unwrap_or_default();
+        assert!(
+            pattern.starts_with(kept),
+            "宽 {width} 只允许尾部省略（保留前缀），实际 {body:?}"
+        );
+        assert!(
+            !kept.is_empty(),
+            "宽 {width} 至少保留一个 pattern 字符：{body:?}"
+        );
+    }
+}
+
+/// P2-7：窄宽度先丢范围（`in` + path），再收敛 pattern。
+#[test]
+fn search_detail_drops_scope_before_pattern() {
+    let call = search_scoped_call("测试", "tool_test.txt");
+    let sep_in = text::agent::IN_SCOPE_SEP.trim_end();
+    // 宽档：三段齐全（pattern / in / path）。
+    let wide = detail_body_text(&call, 70);
+    assert!(wide.contains("tool_test.txt"), "宽档显示范围：{wide:?}");
+    assert!(wide.contains(sep_in), "宽档显示 in：{wide:?}");
+
+    // 收集每一档是否显示 in / path / pattern 完整。
+    let mut saw_scope_dropped = false;
+    let mut pattern_lost_before_scope = Vec::new();
+    for width in (10u16..=70).rev() {
+        let body = detail_body_text(&call, width);
+        let has_scope = body.contains(sep_in) || body.contains("tool_test.txt");
+        let has_pattern = body.contains("测");
+        // `in` 与 path 必须同进同退（要么整段在、要么整段不在）。
+        assert_eq!(
+            body.contains(sep_in),
+            body.contains("tool_test.txt"),
+            "宽 {width} 下 `in` 与 path 必须一起存在/一起丢弃：{body:?}"
+        );
+        if !has_scope && has_pattern {
+            saw_scope_dropped = true;
+        }
+        if !has_pattern && width >= 11 {
+            pattern_lost_before_scope.push(width);
+        }
+    }
+    assert!(
+        saw_scope_dropped,
+        "必须存在「已丢范围、仍保留 pattern」的宽度档"
+    );
+    assert!(
+        pattern_lost_before_scope.is_empty(),
+        "pattern 不得先于范围丢失，缺失于 {pattern_lost_before_scope:?}"
+    );
+}
+
+// ===== 渲染层不做解析（P3-4）=====
+
+/// 摘要已完整时，渲染**不得**回退解析 `arguments_json`。
+///
+/// 用「故意非法的参数 JSON + 完整摘要」来证明：一旦回退解析，模式与路径都会消失
+/// （`from_arguments` 解析失败返回空摘要），渲染结果必然错。
+#[test]
+fn param_does_not_reparse_arguments_when_summary_is_complete() {
+    reset_fallback_parse_count();
+    let mut call = search_scoped_call("测试", "tool_test.txt");
+    call.arguments_json = "{not json at all".into();
+    let painted = detail_text(&call, 80);
+    assert!(
+        painted.contains(&text::agent::pattern_label("测试")),
+        "完整摘要必须独立可见（不依赖参数解析）：{painted:?}"
+    );
+    assert!(painted.contains("tool_test.txt"), "{painted:?}");
+    assert_eq!(
+        fallback_parse_count(),
+        0,
+        "摘要完整时不得回退解析参数 JSON：{painted:?}"
+    );
+
+    // 通用路径同样不解析：非法参数 + 完整摘要仍画出路径与计数。
+    reset_fallback_parse_count();
+    let mut read = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
+    read.arguments_json = "{not json".into();
+    let painted = detail_text(&read, 80);
+    assert!(painted.contains("src/ui/style.rs"), "{painted:?}");
+    assert!(painted.contains("12-40"), "{painted:?}");
+    assert_eq!(fallback_parse_count(), 0, "read 也不回退解析参数 JSON");
+
+    // 多文件 `edit`：摘要无 path（正常），但 added/removed 齐全 → 不回退解析。
+    reset_fallback_parse_count();
+    let mut edit = tool_call(
+        "edit",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: None,
+            added: Some(12),
+            removed: Some(4),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    edit.arguments_json = format!(
+        r#"{{"patch":"*** Begin Patch\n*** Update File: {}\n*** End Patch"}}"#,
+        "a".repeat(1024 * 1024)
+    );
+    let painted = detail_text(&edit, 80);
+    assert!(painted.contains("+12 -4"), "{painted:?}");
+    assert_eq!(
+        fallback_parse_count(),
+        0,
+        "多文件 edit 摘要完整时不得每帧解析巨型 patch JSON"
+    );
+}
+
+/// 摘要缺字段时才回退解析（且同一帧最多一次）。
+#[test]
+fn param_falls_back_to_arguments_only_when_summary_lacks_fields() {
+    reset_fallback_parse_count();
+    let mut call = tool_call(
+        "search",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: None,
+            matches: Some(5),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    call.arguments_json = r#"{"pattern":"fn render","path":"src/ui"}"#.into();
+    let painted = detail_text(&call, 80);
+    assert!(painted.contains("fn render"), "{painted:?}");
+    assert!(painted.contains("src/ui"), "{painted:?}");
+    assert_eq!(
+        fallback_parse_count(),
+        1,
+        "缺字段时只解析一次（共享同一次解析）"
+    );
+}
+
+/// 流式接收中（还没有摘要）也不解析巨型参数：1 MiB 的 patch 每帧解析会白烧 CPU。
+#[test]
+fn streaming_input_skips_fallback_parse_for_oversized_arguments() {
+    reset_fallback_parse_count();
+    let mut call = tool_call("edit", ToolStatus::InputStreaming, None, None);
+    call.arguments_json = format!(
+        r#"{{"patch":"*** Begin Patch\n*** Update File: {}\n*** End Patch"}}"#,
+        "a".repeat(1024 * 1024)
+    );
+    let painted = detail_text(&call, 80);
+    assert_eq!(
+        fallback_parse_count(),
+        0,
+        "超过体积门槛的参数不做兜底解析：{painted:?}"
+    );
+    assert!(
+        painted.contains(text::LX_CHAT_TOOL_INPUT_STREAMING),
+        "仍用状态词兜底：{painted:?}"
+    );
+
+    // 小参数（正常 read/write）照常解析：路径能先看到。
+    reset_fallback_parse_count();
+    let mut small = tool_call("read", ToolStatus::InputStreaming, None, None);
+    small.arguments_json = r#"{"path":"src/ui/style.rs"}"#.into();
+    let painted = detail_text(&small, 80);
+    assert!(painted.contains("src/ui/style.rs"), "{painted:?}");
+    assert_eq!(fallback_parse_count(), 1, "小参数只解析一次");
 }
 
 #[test]

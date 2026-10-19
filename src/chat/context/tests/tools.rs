@@ -144,6 +144,158 @@ fn failed_tool_without_error_text_falls_back_to_result_json() {
     assert!(result.0.contains("context_mismatch"));
 }
 
+/// P1-3：失败补丁的「部分成功」必须跨轮可见——回放内容含 `partially applied`
+/// 与已提交文件名，与同轮 `format_for_model` 的口径一致。
+#[test]
+fn failed_patch_replay_keeps_committed_changes() {
+    let mut history = vec![
+        message("u", 0, 0, "user", "complete", "改三个文件"),
+        message("a", 1, 0, "assistant", "complete", "开始改"),
+    ];
+    history[1].tools = vec![tool(
+        1,
+        "call_patch",
+        "edit",
+        "failed",
+        r#"{"patch":"*** Begin Patch"}"#,
+        Some(
+            r#"{"tool":"error","code":"patch_context_mismatch","message":"hunk lines do not match","changes":[{"path":"/w/a.rs","added":2,"removed":1,"kind":"updated"},{"path":"/w/b.rs","added":0,"removed":0,"kind":"deleted"}]}"#,
+        ),
+        Some("hunk lines do not match at line 7"),
+    )];
+    let assembly = assemble_unbounded(&history, "继续");
+    let content = assembly
+        .request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult {
+                content, is_error, ..
+            } => Some((content.clone(), *is_error)),
+            _ => None,
+        })
+        .expect("失败结果必须回放");
+    assert!(content.1, "失败结果必须标记 is_error");
+    assert!(
+        content.0.contains("hunk lines do not match"),
+        "错误原因先出现：{}",
+        content.0
+    );
+    assert!(
+        content.0.contains("partially applied: 2 file(s)"),
+        "跨轮必须知道部分成功：{}",
+        content.0
+    );
+    assert!(
+        content.0.contains("not a rollback"),
+        "必须明确不是回滚：{}",
+        content.0
+    );
+    for path in ["/w/a.rs", "/w/b.rs"] {
+        assert!(
+            content.0.contains(path),
+            "已改文件必须逐个列出：{}",
+            content.0
+        );
+    }
+    assert!(
+        content.0.contains("updated /w/a.rs (+2 -1)"),
+        "变更行形状与同轮一致：{}",
+        content.0
+    );
+    assert!(
+        content.0.contains("deleted /w/b.rs (+0 -0)"),
+        "删除也要列出：{}",
+        content.0
+    );
+    assert_no_orphan_results(&assembly.request.items);
+}
+
+/// P1-3：失败调用没有已提交变更时仍只回放错误原因（不编造 partial 摘要）。
+#[test]
+fn failed_call_without_changes_replays_error_only() {
+    for result_json in [
+        // 没有 `changes` 字段。
+        Some(r#"{"tool":"error","code":"not_found","message":"missing"}"#),
+        // `changes` 为空数组。
+        Some(r#"{"tool":"error","code":"not_found","message":"missing","changes":[]}"#),
+        // 结果体非法：退回错误原因。
+        Some("{not json"),
+        None,
+    ] {
+        let mut history = vec![
+            message("u", 0, 0, "user", "complete", "读"),
+            message("a", 1, 0, "assistant", "complete", "读一下"),
+        ];
+        history[1].tools = vec![tool(
+            1,
+            "call_read",
+            "read",
+            "failed",
+            r#"{"path":"missing.txt"}"#,
+            result_json,
+            Some("file not found: missing.txt"),
+        )];
+        let assembly = assemble_unbounded(&history, "继续");
+        let content = assembly
+            .request
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ModelItem::ToolResult { content, .. } => Some(content.as_str()),
+                _ => None,
+            })
+            .expect("失败结果必须回放");
+        assert_eq!(
+            content, "file not found: missing.txt",
+            "无变更时回放内容就是错误原因（{result_json:?}）"
+        );
+        assert!(!content.contains("partially applied"));
+    }
+}
+
+/// 回放内容仍受 64 KiB 上限约束：partial 摘要追加后同样按上限截断。
+#[test]
+fn failed_patch_replay_is_still_truncated_to_the_replay_budget() {
+    let big = "x".repeat(MAX_TOOL_RESULT_REPLAY_BYTES);
+    let result_json = Some(format!(
+        r#"{{"tool":"error","code":"patch_context_mismatch","changes":[{{"path":"{big}","added":1,"removed":1,"kind":"updated"}}]}}"#
+    ));
+    let mut history = vec![
+        message("u", 0, 0, "user", "complete", "改"),
+        message("a", 1, 0, "assistant", "complete", "改一下"),
+    ];
+    history[1].tools = vec![tool(
+        1,
+        "call_patch",
+        "edit",
+        "failed",
+        r#"{"patch":"*** Begin Patch"}"#,
+        result_json.as_deref(),
+        Some("hunk lines do not match"),
+    )];
+    let assembly = assemble_unbounded(&history, "继续");
+    let content = assembly
+        .request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .expect("失败结果必须回放");
+    assert!(
+        content.len() <= MAX_TOOL_RESULT_REPLAY_BYTES,
+        "回放内容必须 ≤ 64 KiB，实际 {}",
+        content.len()
+    );
+    assert!(
+        content.starts_with("hunk lines do not match"),
+        "截断保留在尾部，错误原因与 partial 摘要仍在前面"
+    );
+    assert!(content.ends_with(TRUNCATED_MARKER), "截断必须显式标记");
+}
+
 /// pending / running / cancelled / interrupted 工具 → 不出现在 items（无伪造）。
 #[test]
 fn non_terminal_and_unexecuted_tools_are_not_replayed() {

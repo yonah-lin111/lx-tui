@@ -6,6 +6,7 @@ use super::super::test_support::Fixture;
 use super::super::types::{FileChange, FileChangeKind, ReadKind, SearchMatch};
 use super::super::{ToolErrorCode, ToolExecutionResult, execute};
 use super::*;
+use crate::app::state::ToolSummary as AppToolSummary;
 
 /// 读取结果的文本：范围、总行数与 `next_offset` 都在文本里。
 #[test]
@@ -313,4 +314,306 @@ fn many_matches_shrink_but_keep_flag() {
     );
     let value: serde_json::Value = serde_json::from_str(&json).expect("parse");
     assert_eq!(value["truncated"], true);
+}
+
+// ===== 写端 / 读端 JSON 形状往返（review §4 P3-2 的总闸门）=====
+
+/// chat 层摘要 → app 层摘要（与事件层 `view_summary` 同口径的测试侧映射）。
+///
+/// `to_summary` 返回 `chat::Tools::ToolSummary`，而往返的另一端
+/// （`from_arguments` / `absorb_result_json`）是 app 层类型；这里逐字段列出，
+/// **不写** `..Default::default()`：任何一层新增字段都会让本测试编译失败。
+fn to_app_summary(summary: &super::super::types::ToolSummary) -> AppToolSummary {
+    AppToolSummary {
+        path: summary.path.clone(),
+        range: summary.range,
+        added: summary.added,
+        removed: summary.removed,
+        matches: summary.matches,
+        pattern: summary.pattern.clone(),
+        read_lines: summary.read_lines,
+        total_lines: summary.total_lines,
+        truncated: summary.truncated,
+    }
+}
+
+/// 一条往返用例：真实工具参数 + 真实执行结果。
+struct RoundTripCase {
+    /// 用例名（失败时直接指出是哪个工具/哪种形状）。
+    name: &'static str,
+    /// 模型给出的真实调用参数（`edit` 是 patch 文本）。
+    arguments: &'static str,
+    /// 真实 `ToolExecutionResult`。
+    result: ToolExecutionResult,
+}
+
+/// 表驱动的写端↔读端形状往返：`to_summary` 与
+/// `from_arguments(参数).absorb_result_json(&to_result_json(结果))` 必须逐字段相等。
+///
+/// 这是 P1-1 / P1-4 / G14 那类 bug 的**总闸门**：`to_result_json`（写端）与
+/// `absorb_result_json`（读端）互为镜像，字段名/嵌套形状一变就静默漂移，编译器不管。
+/// 任何一侧改名、加减嵌套层、改 `kind` 取值，这条测试都会立刻失败。
+///
+/// 两个例外，都写在断言里：
+/// - **`pattern`**：只来自调用参数（结果体不带它）。两侧的 `pattern` 要么同为 `None`，
+///   要么由同一份参数派生（`search`），因此仍要求严格相等——它证明「读端不会把
+///   `pattern` 从结果体里编出来」。
+/// - **`path`**：写端 `to_summary` 给的是**执行后解析出的绝对路径**，读端
+///   `from_arguments` 优先保留**模型原文里的相对路径**（展示口径：重进会话要显示模型
+///   当初写的那个路径）。实时路径同样先跑 `from_arguments().absorb_summary()`，
+///   所以真实的两条路径在这里也是等价的——第二层断言（`live_merged == reload_merged`）
+///   连 `path` 一起严格比较，正是 P2-1 / P2-8 的口径。
+#[test]
+fn to_result_json_round_trips_into_summary() {
+    let cases = vec![
+        RoundTripCase {
+            name: "read:file-with-offset-and-limit",
+            arguments: r#"{"path":"src/a.rs","offset":12,"limit":29}"#,
+            result: ToolExecutionResult::Read {
+                path: PathBuf::from("/w/src/a.rs"),
+                kind: ReadKind::File,
+                content: "12: x\n".into(),
+                start_line: 12,
+                end_line: 40,
+                next_offset: Some(41),
+                truncated: true,
+                total_lines: 1000,
+            },
+        },
+        RoundTripCase {
+            name: "read:file-without-range-args",
+            arguments: r#"{"path":"src/b.rs"}"#,
+            result: ToolExecutionResult::Read {
+                path: PathBuf::from("/w/src/b.rs"),
+                kind: ReadKind::File,
+                content: "1: x\n".into(),
+                start_line: 1,
+                end_line: 40,
+                next_offset: None,
+                truncated: false,
+                total_lines: 40,
+            },
+        },
+        RoundTripCase {
+            name: "read:directory",
+            arguments: r#"{"path":"src"}"#,
+            result: ToolExecutionResult::Read {
+                path: PathBuf::from("/w/src"),
+                kind: ReadKind::Directory,
+                content: "[file] a.rs\n[file] b.rs\n".into(),
+                start_line: 1,
+                end_line: 2,
+                next_offset: None,
+                truncated: false,
+                total_lines: 2,
+            },
+        },
+        RoundTripCase {
+            name: "read:empty-file",
+            arguments: r#"{"path":"empty.txt"}"#,
+            result: ToolExecutionResult::Read {
+                path: PathBuf::from("/w/empty.txt"),
+                kind: ReadKind::File,
+                content: String::new(),
+                start_line: 0,
+                end_line: 0,
+                next_offset: None,
+                truncated: false,
+                total_lines: 0,
+            },
+        },
+        RoundTripCase {
+            name: "search:with-matches",
+            arguments: r#"{"pattern":"fn render","path":"src/ui"}"#,
+            result: ToolExecutionResult::Search {
+                matches: vec![
+                    SearchMatch {
+                        path: PathBuf::from("/w/src/ui/a.rs"),
+                        line: 3,
+                        text: "fn render()".into(),
+                        line_truncated: false,
+                    },
+                    SearchMatch {
+                        path: PathBuf::from("/w/src/ui/b.rs"),
+                        line: 9,
+                        text: "fn render_helper()".into(),
+                        line_truncated: true,
+                    },
+                ],
+                truncated: false,
+                files_scanned: 42,
+            },
+        },
+        RoundTripCase {
+            name: "search:no-match",
+            arguments: r#"{"pattern":"没有这个"}"#,
+            result: ToolExecutionResult::Search {
+                matches: Vec::new(),
+                truncated: false,
+                files_scanned: 7,
+            },
+        },
+        RoundTripCase {
+            name: "search:truncated",
+            arguments: r#"{"pattern":"needle"}"#,
+            result: ToolExecutionResult::Search {
+                matches: vec![SearchMatch {
+                    path: PathBuf::from("/w/a.txt"),
+                    line: 1,
+                    text: "needle".into(),
+                    line_truncated: false,
+                }],
+                truncated: true,
+                files_scanned: 20_000,
+            },
+        },
+        RoundTripCase {
+            name: "edit:single-file",
+            arguments: r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** End Patch"}"#,
+            result: ToolExecutionResult::Edit {
+                changes: vec![FileChange {
+                    path: PathBuf::from("/w/a.rs"),
+                    added: 1,
+                    removed: 1,
+                    kind: FileChangeKind::Updated,
+                }],
+                partial: false,
+            },
+        },
+        RoundTripCase {
+            name: "edit:multi-file",
+            arguments: r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** Update File: b.rs\n@@\n-p\n+q\n*** End Patch"}"#,
+            result: ToolExecutionResult::Edit {
+                changes: vec![
+                    FileChange {
+                        path: PathBuf::from("/w/a.rs"),
+                        added: 3,
+                        removed: 1,
+                        kind: FileChangeKind::Updated,
+                    },
+                    FileChange {
+                        path: PathBuf::from("/w/b.rs"),
+                        added: 0,
+                        removed: 0,
+                        kind: FileChangeKind::Moved {
+                            to: PathBuf::from("/w/c.rs"),
+                        },
+                    },
+                ],
+                partial: true,
+            },
+        },
+        RoundTripCase {
+            name: "edit:partial-single",
+            arguments: r#"{"patch":"*** Begin Patch\n*** Add File: new.rs\n+x\n*** End Patch"}"#,
+            result: ToolExecutionResult::Edit {
+                changes: vec![FileChange {
+                    path: PathBuf::from("/w/new.rs"),
+                    added: 1,
+                    removed: 0,
+                    kind: FileChangeKind::Added,
+                }],
+                partial: true,
+            },
+        },
+        RoundTripCase {
+            name: "write:created",
+            arguments: r#"{"path":"docs/new.md","content":"a\nb\n"}"#,
+            result: ToolExecutionResult::Write {
+                path: PathBuf::from("/w/docs/new.md"),
+                created: true,
+                added: 2,
+                removed: 0,
+            },
+        },
+        RoundTripCase {
+            name: "write:overwritten",
+            arguments: r#"{"path":"docs/old.md","content":"x\n"}"#,
+            result: ToolExecutionResult::Write {
+                path: PathBuf::from("/w/docs/old.md"),
+                created: false,
+                added: 18,
+                removed: 4,
+            },
+        },
+        RoundTripCase {
+            name: "failed:with-changes",
+            arguments: r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** End Patch"}"#,
+            result: ToolExecutionResult::Failed {
+                code: ToolErrorCode::PatchContextMismatch,
+                message: "hunk lines do not match".into(),
+                changes: vec![FileChange {
+                    path: PathBuf::from("/w/a.rs"),
+                    added: 2,
+                    removed: 1,
+                    kind: FileChangeKind::Updated,
+                }],
+            },
+        },
+        RoundTripCase {
+            name: "failed:single-change-deleted",
+            arguments: r#"{"patch":"*** Begin Patch\n*** Delete File: gone.rs\n*** End Patch"}"#,
+            result: ToolExecutionResult::Failed {
+                code: ToolErrorCode::NoChanges,
+                message: "no changes".into(),
+                changes: vec![FileChange {
+                    path: PathBuf::from("/w/gone.rs"),
+                    added: 0,
+                    removed: 7,
+                    kind: FileChangeKind::Deleted,
+                }],
+            },
+        },
+        RoundTripCase {
+            name: "failed:without-changes",
+            arguments: r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** End Patch"}"#,
+            result: ToolExecutionResult::Failed {
+                code: ToolErrorCode::PatchInvalid,
+                message: "patch must end with '*** End Patch'".into(),
+                changes: Vec::new(),
+            },
+        },
+    ];
+
+    for case in cases {
+        let live = to_app_summary(&to_summary(&case.result));
+        let json = to_result_json(&case.result);
+        assert!(
+            json.is_some(),
+            "{}: 结果必须能落库（None 会让重载路径完全看不到结果）",
+            case.name
+        );
+        let from_args = AppToolSummary::from_arguments(case.arguments);
+        let reloaded = from_args.clone().absorb_result_json(json.as_deref());
+        // 第一层：写端摘要与读端摘要除 `path` / `pattern` 外必须**逐字段相等**——这就是
+        // 「JSON 形状互逆」的断言；任何字段被写端/读端单方面改名都会在这里失败。
+        let mut live_result_only = live.clone();
+        live_result_only.path = reloaded.path.clone();
+        live_result_only.pattern = reloaded.pattern.clone();
+        assert_eq!(
+            live_result_only, reloaded,
+            "{}: 写端 to_result_json 与读端 absorb_result_json 的形状必须互逆",
+            case.name
+        );
+        // `pattern` 只来自参数：`to_summary`（纯结果侧）必须为 None，读端只能由参数
+        // 提供同一个值——读端不得从结果体里编造 pattern。
+        assert_eq!(
+            live.pattern, None,
+            "{}: 结果侧摘要不得携带 pattern（它只来自参数）",
+            case.name
+        );
+        assert_eq!(
+            reloaded.pattern, from_args.pattern,
+            "{}: pattern 只能来自参数（两侧口径必须一致）",
+            case.name
+        );
+        // 第二层：真实的两条路径（实时 `absorb_summary` / 重载 `absorb_result_json`）
+        // 连 `path` 一起严格相等——P2-1 / P2-8 的口径。
+        let live_merged = from_args.clone().absorb_summary(&live);
+        assert_eq!(
+            live_merged, reloaded,
+            "{}: 实时结算摘要与重进会话摘要必须逐字段一致（含 path）",
+            case.name
+        );
+    }
 }

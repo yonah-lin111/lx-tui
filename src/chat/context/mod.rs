@@ -17,6 +17,8 @@
 //!    参数不是 JSON 对象的调用整对跳过（不 panic）。
 //! 4. 预算裁剪以完整轮次为单位：丢弃某轮即丢弃该轮全部 items，绝不产生 orphan result。
 //! 5. reasoning 不回放（跨 provider 的思考原文与签名不注入历史）。
+//! 6. 失败调用若结果体带已提交变更（`changes` 非空），回放内容 = 错误原因 +
+//!    `partially applied: …` 摘要，与同轮 `format_for_model` 的口径一致（P1-3）。
 //!
 //! 当前轮的多步上下文不经过本模块（由 [`crate::chat::agent_loop::ModelContext`] 累计），
 //! 装配只负责「DB/视图历史 + 末尾当前 user 消息」。
@@ -315,6 +317,55 @@ fn assistant_items(message: &ChatMessage) -> Vec<ModelItem> {
     items
 }
 
+/// 失败调用的回放内容：错误原因 + **已提交变更摘要**（跨轮与同轮口径对齐）。
+///
+/// 同轮给模型的 [`crate::chat::tools::format_for_model`] 会写
+/// `partially applied: N file(s) were already changed on disk (this is not a rollback)`，
+/// 并逐文件列出 `kind path (+a -r)`；落库的 `error_text` 只有精简原因（512 字符上限，
+/// 给 UI 失败行用）。若回放只看 `error_text`，下一轮模型就不知道哪些文件已被改，
+/// 与同轮信息矛盾（review P1-3）。
+///
+/// 因此这里把结果体里的结构化 `changes` 重新拼成同一事实：`result_json` 缺失、
+/// 非法或 `changes` 为空时只回错误原因（保持原行为，不编造变更）。
+fn failure_content(error: &str, result_json: Option<&str>) -> String {
+    let Some(changes) = result_json
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|value| value.get("changes").and_then(|c| c.as_array()).cloned())
+        .filter(|changes| !changes.is_empty())
+    else {
+        return error.to_string();
+    };
+    let mut content = String::from(error);
+    content.push_str(&format!(
+        "\npartially applied: {} file(s) already changed on disk (not a rollback)\n",
+        changes.len()
+    ));
+    for change in &changes {
+        content.push_str(&describe_change_json(change));
+        content.push('\n');
+    }
+    content
+}
+
+/// 单条 `changes[]` 的单行描述（与工具层 `describe_change` 同形）：
+/// `updated path (+1 -1)` / `moved a -> b (+0 -0)`。
+fn describe_change_json(change: &serde_json::Value) -> String {
+    let text = |key: &str| change.get(key).and_then(|value| value.as_str());
+    let count = |key: &str| {
+        change
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let kind = text("kind").unwrap_or("changed");
+    let path = text("path").unwrap_or("");
+    let counts = format!("(+{} -{})", count("added"), count("removed"));
+    match (kind, text("to")) {
+        ("moved", Some(to)) => format!("moved {path} -> {to} {counts}"),
+        _ => format!("{kind} {path} {counts}"),
+    }
+}
+
 /// 单次工具调用 → 成对的 (call, result)；不可回放时返回 None 并记 debug 日志。
 ///
 /// 只有 `completed` / `failed` 且参数为 JSON 对象、且有可判定结果内容的调用才回放；
@@ -343,7 +394,10 @@ fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
         tool.error_text.as_deref(),
         tool.result_json.as_deref(),
     ) {
-        (true, Some(error), _) if !error.is_empty() => error.to_string(),
+        // 失败：错误原因 +（结果体带已提交变更时）partial 摘要，见 [`failure_content`]。
+        (true, Some(error), result_json) if !error.is_empty() => {
+            failure_content(error, result_json)
+        }
         (_, _, Some(result)) if !result.is_empty() => result.to_string(),
         _ => {
             tracing::debug!(

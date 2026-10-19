@@ -159,6 +159,12 @@ pub fn agent_verb() -> Style {
 /// 命令 / 文件 / 目录 / agent / 查询 / 数值等**全部**用这一固定色（不再按类型分色），
 /// 下划线提示“此处是每次调用都会变的值”。与图标（[`agent_icon`]）、动词
 /// （[`agent_verb`]）都区分得开，且避开边框青。
+///
+/// **只服务 `[UI]` 查看器的 `agent` 分组样例**（`ui/overlay/ui_gallery/agent.rs`）。
+/// 实时聊天历史的工具行不用它，改用 [`chat_tool_param`]：那边**刻意不加下划线**——
+/// 连续多个工具行时下划线会把整块历史划成一片横线，盖过翡翠绿结构色
+/// （见 [`chat_tool_param`] 与 `style::tests::agent_param_keeps_legacy_underline`）。
+/// 二者同色（同为 [`CHAT_GOLD`]）而修饰符不同，是**有意为之**，不要「顺手对齐」。
 pub fn agent_param() -> Style {
     Style::default()
         .fg(Color::Indexed(220))
@@ -566,7 +572,7 @@ const CHAT_STEP_GREEN: u8 = 42;
 /// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——与工具绿、参数金、正文默认色的
 /// 色差分别为 68 / 55 / 24（CIEDE2000），一眼可分。
 const CHAT_STEP_MAGENTA: u8 = 218;
-/// 可变参数色：金黄（沿用 `agent_param`，下划线表示“每次调用会变的值”）。
+/// 可变参数色：金黄（与 `[UI]` 查看器的 `agent_param` 同色；工具行不加下划线）。
 const CHAT_GOLD: u8 = 220;
 
 // ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----

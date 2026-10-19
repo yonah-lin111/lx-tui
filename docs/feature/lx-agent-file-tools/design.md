@@ -170,6 +170,8 @@ DB API 至少包含 `begin_tool_call`、`mark_tool_running`、`finish_tool_call`
 
 工具结果回放需要考虑单次模型请求的上限；token 估算须包含工具参数和返回内容，`read/search` 的截断标志与实际截断内容一同回放。旧会话没有工具行时请求结果应与原有行为等价。
 
+**失败调用的「部分成功」口径（P1-3）**：同轮给模型的 [`chat::tools::format_for_model`] 会写 `partially applied: N file(s) were already changed on disk (this is not a rollback)` 并逐文件列出变更；因此 `context::replay_pair` 对失败调用**同时使用** `error_text` 与结果体：`error_text` 打底，结果体 `changes` 非空时追加一行 `partially applied: N file(s) already changed on disk (not a rollback)` + 每个变更一行 `{kind} {path} (+a -r)`，`changes` 为空/缺失时只回 `error_text`。落库的 `error_text` 本身不变（512 字符上限，只服务 UI 失败行）；最终内容同样受 64 KiB 回放上限与 `…[truncated]` 标记约束。
+
 ## 8. 四类协议适配
 
 所有协议保持当前 endpoint、认证、variant 参数和文字/思考流式行为；只扩展工具 schema、工具事件解析与结果续传。必须以真实协议 fixture 驱动测试，不靠字符串包含判断。
@@ -725,6 +727,9 @@ finish_tool ──FinishTool(ticket)──▶ ① Database::finish_tool_call（�
 | `context::tests::legacy::plain_text_history_matches_legacy_output_byte_for_byte` | 旧无工具会话的 `turns` 与 `items` 与旧行为逐字节等价 |
 | `context::tests::tools::text_call_result_text_preserves_timeline_order` | 一轮 text + 工具 + text 的 items 顺序为 text, call, result, text；reasoning 不出现 |
 | `context::tests::tools::failed_tool_replays_as_error_result` | `status=failed` + `error_text` → `is_error=true` 成对回放，错误原因作为结果内容 |
+| `context::tests::tools::failed_patch_replay_keeps_committed_changes` | 失败补丁的结果体 `changes` 非空 → 回放内容含 `partially applied: N file(s)` 与逐文件变更（P1-3） |
+| `context::tests::tools::failed_call_without_changes_replays_error_only` | `changes` 缺失/为空/结果体非法 → 只回错误原因，不编造 partial 摘要 |
+| `context::tests::tools::failed_patch_replay_is_still_truncated_to_the_replay_budget` | 追加 partial 摘要后仍受 64 KiB 回放上限约束并显式标记 |
 | `context::tests::tools::non_terminal_and_unexecuted_tools_are_not_replayed` | pending/running/cancelled/interrupted 四种状态都不产生 call/result 项 |
 | `context::tests::tools::invalid_arguments_skip_only_that_pair` | 非对象/非法 JSON 参数只跳过该对，其余工具与正文正常 |
 | `context::tests::budget::trimming_drops_whole_oldest_turn_including_tools` | 被裁掉的最老轮次 call/result 一并消失（无 orphan） |
@@ -1050,7 +1055,7 @@ icon 与转轮，统一改用这个 loading；markdown 正文块也要加同样�
 ① **正文块** = 终端默认前景（不设 fg，方块与正文同色）；
 ② **思考块** = **品红 `Indexed 218`**（`#ffafd7`）；
 ③ **工具调用** = **翡翠绿 `Indexed 42`**（`#00d787`）；
-④ **可变参数** = 既有的金黄 **`Indexed 220`**（+ 下划线）；
+④ **可变参数** = 既有的金黄 **`Indexed 220`**（+ 下划线；**§24.4 起工具行去掉下划线**，见 §25）；
 ⑤ **只读元信息**（行范围、计数、状态文字）= `muted()`（dim、无色相）。
 有色档与参数**不压暗**（dim 的 117 曾与边框标题、正文几乎同色，这正是用户反馈
 “和正文与边框色调很接近”的根因）。
@@ -1116,9 +1121,13 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 `Cancelled` 次要灰**跨类别覆盖**；只有 `Running` / `Done` 才落到 `StepKind` 的角色色。
 这条覆盖关系让通知（消息级失败/中断）不必关心自己属于哪类，也能拿到红/黄方块。
 
+> 现状提示：本节的下划线、`· -4` 分段与「连续工具零空行」均已被 §24 与 §25 取代；
+> 保留原文仅作决策沿革，实现口径以 §25 为准。
+
 **工具行的三段**（`ui/style.rs`）：动词翡翠绿 `Indexed 42` **不加粗**（`chat_tool_verb`，
 与紧邻的加粗方块靠字重区分）、可变参数（路径 / 搜索范围）既有**金黄 `Indexed 220`
-+ 下划线**（`chat_tool_param`，与 `agent_param` 同源，下划线仍表示“每次调用都会变的值”）、
++ 下划线**（原文如此；**§24.4 起 `chat_tool_param` 去掉下划线**，`agent_param` 只留给
+`[UI]` 查看器样例）、
 只读元信息（`read` 的行范围）退回 **`muted()`（dim、无色相、无下划线）**（`chat_tool_range`）
 ——它只是主行的注脚，不该再占一个色相档；`read` 的行范围、命中数、增删计数、状态文字
 因此共用第 ③ 层。
@@ -1298,10 +1307,10 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 
 ```text
 ■ Read                         ← 方块 + 动词（翡翠绿 42），无状态文字
-  └─ src/ui/style.rs · 12-40   ← └─ 灰+粗；路径金黄下划线；范围 dim
+  └─ src/ui/style.rs · 12-40   ← └─ 灰+粗；（原文的「金黄下划线」已在 §24.4 去掉）；范围 dim
 
 ■ Search
-  └─ src · 3 matches
+  └─ src · 3 matches            ← 现状见 §24.4：`"pattern" in path · N matches`
 
 ■ Edit
   └─ src/app/state.rs · +12 · -4
@@ -1340,7 +1349,7 @@ agent 样例里（`text::agent::ICON_ERROR`），聊天历史不再使用任何�
 | 文件 | 变更 |
 | --- | --- |
 | `lx/history/tool.rs` | 重写为两行式：`header()`（`■ 动词`，失败/中断整行红/黄）+ `detail()`（`  └─ 详情`，`Detail::{Error, Params}` 两分支）；删 `status_segment` / `tail_style`；新增 `cancelled_tail` / `fallback_label` / `fit_fallback`；`rows()` 恒 2 |
-| `lx/history.rs` | 新增 `enum Block` + `needs_spacer()`，替换 `layout`/`render` 共 8 处 `first_block` 布尔 |
+| `lx/history.rs` | 新增 `enum Block` + `needs_spacer()`，替换 `layout`/`render` 共 8 处 `first_block` 布尔（**§25.3 起 `enum Block` 与参数已删除**：一律留空行是定稿决策，`Block` 沦为「看似支持区分实则恒真」的死抽象） |
 | `lx/history/tool/tests.rs` | 全量重写（23 项）：两行结构、无状态词、`└─` 前缀、失败只放错误、兜底状态词、行数恒 2、单行截断、`└─` 前缀在任何宽度存活 |
 | `lx/history/tests.rs` | `tool_step_occupies_two_rows_and_renders_summary`（4→5 行）、`tool_only_message_still_occupies_rows`（2→3）、`transcript_lays_out_...` 观感锁定改为两行式 |
 | `lx/history/tests/tool_geometry.rs` | `tool_steps_with_all_statuses_stay_two_rows_each`（2→3）；新增 `consecutive_tool_steps_have_no_blank_line_between_them`、`tool_and_text_still_have_a_blank_line_between_them` |
@@ -1445,8 +1454,8 @@ search  {"pattern": "edit", "path": ".../tool_test_ファイル.txt"}
 | `app/update/chat/view.rs` | `tool_view_of` 改用 `from_arguments().absorb_result_json()`；判空改用 `ToolSummary::is_empty()` |
 | `event/chat/mod.rs` | `view_summary` 透传新字段 |
 | `ui/style.rs` | `chat_tool_param` 去掉下划线 |
-| `ui/text/agent.rs` | 新增 `lines_label` / `pattern_label` / `search_scope_label` / `IN_SCOPE_SEP` |
-| `ui/main_content/lx/history/tool.rs` | `param()` 分 search/其他；`extras()` 的编辑计数合体、区间+行数合体、分隔符按需加 |
+| `ui/text/agent.rs` | 新增 `lines_label` / `pattern_label` / `IN_SCOPE_SEP`（`search_scope_label` 在 P2-7 拆段后删除） |
+| `ui/main_content/lx/history/tool.rs` | `param()` 分 search/其他；`search` 返回三段独立段（pattern / `in` / path）；`extras()` 的编辑计数合体、区间+行数合体、分隔符按需加 |
 | `ui/main_content/lx/history/tool/tests/{structure,extras,width}.rs` | 工具行测试按职责拆成三个子模块（`tests.rs` 只留共享构造与 `mod` 声明），守住单文件 1000 行上限 |
 | `ui/main_content/lx/history.rs` | `needs_spacer` 改回恒 `true` |
 
@@ -1482,3 +1491,45 @@ search  {"pattern": "edit", "path": ".../tool_test_ファイル.txt"}
 1. 去掉下划线后，金黄参数在深色背景下是否还够显眼。
 2. `"测试" in /Users/yonah/Desktop/tool_test_ファイル.txt · 3 matches` 在真实终端宽度下是否被 `…` 截断得过早（长绝对路径 + 长 pattern）。
 3. 重进 session 后工具行是否与实时完全一致（本次修复的核心验收点）。
+
+## 25. 已实施（review 批次：P1-3 / P2-7 / P3 四条）
+
+review（`review.md` §1.4 / §1.8 / §4 / §5）指出本分支仍有 1 条 P1、1 条 P2 与 4 条 P3，本批次只修这些。
+
+### 25.1 P1-3：失败补丁的「部分成功」跨轮可见
+
+同轮给模型的文本（`chat::tools::format_for_model`）写 `partially applied: N file(s) were already changed on disk (this is not a rollback)` + 逐文件 `kind path (+a -r)`，但落库的 `error_text` 只有 512 字符的精简原因（给 UI 失败行用），`context::replay_pair` 又优先用 `error_text` → 下一轮模型只看到 `hunk lines do not match…`，与同轮信息矛盾。
+
+**口径（两条路径统一为「都带」）**：`replay_pair` 对失败调用**同时使用** `error_text` 与结果体——`error_text` 打底；`result_json` 的 `changes` 非空时追加一行 `partially applied: N file(s) already changed on disk (not a rollback)` 与逐条 `{kind} {path} (+a -r)`（`moved` 写成 `moved a -> b (+a -r)`）；`changes` 为空/缺失/结果体非法时只回 `error_text`（不编造变更）。`error_text` 的落库内容与 512 字符上限不变；最终回放内容仍受 `MAX_TOOL_RESULT_REPLAY_BYTES`（64 KiB）与 `…[truncated]` 标记约束。
+
+### 25.2 P2-7：`search` 详情拆三段并按序让位
+
+`param()` 的返回类型由 `Option<Segment>` 改为 `Option<Param>`（`head` + 可整体让位的 `tail`）。`search` 变成**三段独立段**：`"pattern"`（金黄）\+ ` in `（`style::agent_step_detail()` dim，不引入新色相）\+ `path`（金黄），与 codex 的 `query` / `" in ".dim()` / `path` 结构对齐。
+
+让位顺序：**次要计数（按优先级）→ 参数尾段（`in` + path 整体，要么全在要么全不在）→ 参数首段**。首段放不下时才收敛，且按类型分开：路径仍**中间省略**（认得出层级），pattern **尾部省略**（`Shrink::Tail`，绝不中间省略——它是这一行唯一必须保住的信息）。pattern 门槛 `MIN_PATTERN_COLS = 5`（两列引号 + 一个宽字符 + `…`），再窄整段不画，不留裸引号。实测 `"测试" in tool_test.txt · 3 matches`：`w=40..70` 三段齐全，`w=23..39` 丢范围保留完整 pattern，`w=11..22` 只剩 pattern，`w=10` 尾部省略为 `"测…`，`w≤9` 只留前缀。
+
+### 25.3 P3 四条
+
+1. **`tool.rs` 模块文档**：删掉「参数（路径金黄**下划线**）」与「第 2 行**永不为空**」——下划线早已移除；完成态无摘要时第 2 行只有 `└─` 前缀（行数仍算 2）。文档改写为「完成态没有兜底」。
+2. **`style::agent_param`**：grep 确认它**只被 `[UI]` 查看器的 `agent` 分组样例与测试使用**（无实时聊天生产调用点），因此保留旧下划线，改文档与技术注释说明「工具行去下划线是刻意决策，gallery 保留旧样式」，并新增 `style::tests::agent_param_keeps_legacy_underline_while_chat_tool_param_does_not` 显式断言「谁有、谁没有、同色不同修饰符」。
+3. **`needs_spacer` 死抽象**：选**删除参数**——「一律留空行」是已定稿决策，`Block` 枚举只在 `layout`/`render` 里做局部标签、无其它用途，因此连 `enum Block` 一起删，`needs_spacer()` 变成无参函数，两个调用点改用 `has_previous: bool`。理由：保留「看起来支持区分实则恒真」的参数会误导后续维护者以为已经支持按类别收敛。
+4. **渲染层不再每帧解析参数 JSON**：`param()` 只在 `needs_argument_fallback()` 为真时回退解析，且同一帧共享**一次**解析。判据：摘要缺失（流式瞬态，另加 `MAX_FALLBACK_PARSE_BYTES = 8 KiB` 体积门槛——最坏 1 MiB 的 patch 不给解析）、`search` 摘要缺 `pattern`、`edit` 摘要整体为空、其余工具摘要既无 `path` 又整体为空。**`edit` 的 `path` 缺失是正常形态**（多文件补丁没有唯一路径），不算缺字段，因此多文件 `edit` 不再触发解析。测试用线程局部计数器 + 故意非法的 `arguments_json` 双向证明。
+
+### 25.4 测试证据（`cargo test` 全绿：lib 2375 + 11 个集成二进制）
+
+| 测试 | 断言 |
+| --- | --- |
+| `context::tests::tools::failed_patch_replay_keeps_committed_changes` | 失败补丁的 `changes` 非空 → 回放内容含 `partially applied: 2 file(s)` / `not a rollback` / 每个文件名 / `updated /w/a.rs (+2 -1)` 形状（P1-3） |
+| `context::tests::tools::failed_call_without_changes_replays_error_only` | `changes` 缺失 / 为空数组 / 结果体非法 / 无结果体四种输入下回放内容严格等于错误原因 |
+| `context::tests::tools::failed_patch_replay_is_still_truncated_to_the_replay_budget` | 追加 partial 摘要后仍 ≤ 64 KiB 且以 `…[truncated]` 结尾 |
+| `tool::tests::width::search_detail_keeps_pattern_at_narrow_widths` | 宽度 70→10 每档 pattern 完整（≥11）或至少 `"测…`（10），且不出现 `…txt` / `…ル` 这类粘连残形（P2-7） |
+| `tool::tests::width::search_long_pattern_shrinks_from_the_tail_only` | 每档保留字符必须是 pattern 的**前缀**（尾部省略），不得中间省略 |
+| `tool::tests::width::search_detail_drops_scope_before_pattern` | `in` 与 path 同进同退；存在「已丢范围、pattern 仍完整」的宽度档；pattern 从不先于范围丢失 |
+| `tool::tests::width::param_does_not_reparse_arguments_when_summary_is_complete` | 摘要完整 + **故意非法**的 `arguments_json` 仍渲染出 pattern/path/范围与 `+12 -4`，且回退解析计数 == 0（含 1 MiB patch 的多文件 `edit`） |
+| `tool::tests::width::param_falls_back_to_arguments_only_when_summary_lacks_fields` | 摘要缺 `pattern`/`path` 时回退解析，且同帧只解析**一次** |
+| `tool::tests::width::streaming_input_skips_fallback_parse_for_oversized_arguments` | 流式态 + 1 MiB patch 参数：回退解析计数为 0（仍用状态词兜底）；小参数照常解析一次 |
+| `style::tests::agent_param_keeps_legacy_underline_while_chat_tool_param_does_not` | `agent_param` 有 UNDERLINED、`chat_tool_param` 没有、同色、修饰符有意不同（P3-2） |
+| `output::tests::to_result_json_round_trips_into_summary` | 表驱动 15 例（read 带/不带 offset+limit、目录、空文件、search 有/无命中/truncated、edit 单/多文件/partial、write 新建/覆盖、Failed 有/无 changes）：`to_summary` 与 `from_arguments().absorb_result_json(&to_result_json())` 逐字段相等（`path` 形式与 `pattern` 来源两处例外在断言里写明），并额外断言「实时 `absorb_summary` 摘要 == 重载摘要」（连 `path` 一起严格比较） |
+
+往返测试已验证有效：把 `absorb_result_json` 里的 `start_line` 改成 `start`（只改读端字段名），该测试立刻在 `read:file-with-offset-and-limit` 上失败。
+

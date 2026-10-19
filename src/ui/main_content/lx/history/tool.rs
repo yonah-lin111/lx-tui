@@ -9,16 +9,22 @@
 //!
 //! - **第 1 行只回答「哪个工具」**：方块（运行中 `■`/`□` 两帧呼吸、终态静态）+
 //!   固定动词。完成态没有 `done` 之类尾巴——方块静止本身就是「做完了」。
-//! - **第 2 行回答「对什么做了什么 / 出了什么事」**：参数（路径金黄下划线）、
+//! - **第 2 行回答「对什么做了什么 / 出了什么事」**：参数（路径金黄）、
 //!   次要计数（行范围 dim、命中数 dim、增删绿红、截断提示黄）。失败时**只放错误
 //!   文案**（路径等信息 `failure_text` 已带），不再铺任何参数；中断同理；
 //!   没有参数可展示的瞬间（`receiving input` / `pending` / `running` / `cancelled`）
-//!   用 dim 的状态词兜底，第 2 行**永不为空**。
+//!   用 dim 的状态词兜底。**完成态没有兜底**：没有任何摘要时第 2 行只有 `└─`
+//!   前缀（行数仍算 2）。
 //!
 //! **行数口径 [`rows`] 恒为 2**（宽度 0 时为 0），第二行**单行绝不换行**——
 //! `history::layout`、`history::render`、置顶用户行与滚动条全靠这条不变量对齐。
-//! 超宽时按「路径中间省略 → 次要计数按优先级丢弃 → 错误尾部省略 → 丢参数」
-//! 依次让位，`└─` 前缀始终可辨。
+//! 超宽时按「参数内的次要段（`search` 的 `in path`、长路径尾段）→ 次要计数按优先级
+//! 丢弃 → 错误尾部省略 → 丢参数」依次让位，`└─` 前缀始终可辨。`search` 的 pattern
+//! 是这一行唯一必须保住的信息，**绝不中间省略**（只在它单独都放不下时尾部省略）。
+//!
+//! 参数一律取自 [`ToolCallView::summary`]（参数派生 + 结果体补全，见
+//! `ToolSummary::from_arguments` / `absorb_result_json`）；只有摘要缺字段时才回退解析
+//! `arguments_json`，渲染热路径不做常规 JSON 解析。
 //!
 //! 纯渲染：只读 [`ToolCallView`]，只写 lx 页网格；不执行 IO、不改状态、不 `unwrap`。
 
@@ -51,6 +57,14 @@ const DETAIL_ROWS: usize = 1;
 
 /// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
 const MIN_PARAM_COLS: usize = 6;
+/// `search` 的 pattern 只需保留「至少一个模式字符 + 省略号」——它是这一行唯一必须
+/// 保住的信息，因此门槛比路径低（review P2-7：窄宽度也必须看得出在搜什么）。
+/// 门槛取 5 列（两列引号 + 一个宽字符 + `…`），再窄就整段不画，不留一个裸引号。
+const MIN_PATTERN_COLS: usize = 5;
+/// 回退解析参数 JSON 的**体积门槛**：参数还在流式接收（还没有摘要）时，只对这么大的
+/// 参数体做兜底解析。多文件 `edit` 的 patch 最坏 1 MiB，每帧解析会白烧 CPU（P3-4）；
+/// 而路径/patch 目标都在参数开头，小体积足够撑起「先看到一点」的体验。
+const MAX_FALLBACK_PARSE_BYTES: usize = 8 * 1024;
 /// 错误原因的最小显示列数；低于它整段省略（同理不放半个省略号）。
 const MIN_REASON_COLS: usize = 8;
 /// 参数 / 工具名 / 错误原因的字符取样上限（限住超长串的每帧成本）。
@@ -226,40 +240,165 @@ impl Detail {
 /// 主参数：摘要里的路径（或 `search` 的搜索范围）；只显示摘要，
 /// **绝不**铺文件内容或命中正文。
 ///
-/// `search` 结算后的摘要只带命中数（不含搜索范围），此时退回参数 JSON 里的 `path`；
-/// [`ToolSummary::from_arguments`] 是纯解析，无 IO、不改状态。
-fn param(call: &ToolCallView) -> Option<Segment> {
-    let from_args = || ToolSummary::from_arguments(&call.arguments_json);
-    let summary_path = || {
+/// 摘要（`ToolSummary`：参数派生 + 结果体补全）是常规唯一来源；**只有摘要答不出
+/// 需要的字段时**才懒回退解析 `arguments_json`（见 [`needs_argument_fallback`]），
+/// 渲染热路径因此不做常规 JSON 解析（review P3-4）。
+fn param(call: &ToolCallView) -> Option<Param> {
+    let kind = Kind::of(&call.name);
+    let may_parse = needs_argument_fallback(call, kind);
+    let mut parsed: Option<ToolSummary> = None;
+    // 单字段取值：摘要优先；缺字段且允许回退时才触发一次（共享的）解析。
+    let mut field = |pick: fn(&ToolSummary) -> Option<String>| {
         call.summary
             .as_ref()
-            .and_then(|summary| summary.path.as_deref())
-            .filter(|path| !path.is_empty())
-            .map(str::to_string)
+            .and_then(pick)
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                may_parse
+                    .then(|| pick(fallback_summary(call, &mut parsed)))
+                    .flatten()
+                    .filter(|value| !value.is_empty())
+            })
     };
-    // `search`：`"pattern" in path`。pattern 只来自参数（结果体不带），
-    // 路径在结算摘要里可能缺席，回退到参数 JSON 的 `path`。
-    if Kind::of(&call.name) == Kind::Search {
-        let pattern = call
-            .summary
-            .as_ref()
-            .and_then(|summary| summary.pattern.clone())
-            .or_else(|| from_args().pattern);
-        let path = summary_path().or_else(|| from_args().path);
-        let scope = text::agent::search_scope_label(
-            pattern
-                .as_deref()
-                .map(|p| single_line(p, TEXT_SAMPLE_CHARS))
-                .as_deref(),
-            path.as_deref()
-                .map(|p| single_line(p, TEXT_SAMPLE_CHARS))
-                .as_deref(),
-        )?;
-        return Some(Segment::new(scope, style::chat_tool_param()));
+    let path = field(|summary| summary.path.clone())
+        .map(|path| single_line(&path, TEXT_SAMPLE_CHARS))
+        .filter(|path| !path.is_empty());
+    if kind != Kind::Search {
+        return path.map(path_param);
     }
-    let path = summary_path().or_else(|| from_args().path)?;
-    let text = single_line(&path, TEXT_SAMPLE_CHARS);
-    (!text.is_empty()).then(|| Segment::new(text, style::chat_tool_param()))
+    // `search`：三段独立成分 —— pattern（金黄）+ ` in `（dim）+ 范围路径（金黄）。
+    // 拆段是为了窄宽度时「`in` 与 path 一起丢、pattern 完整保留」（review P2-7）。
+    let pattern = field(|summary| summary.pattern.clone())
+        .map(|pattern| single_line(&pattern, TEXT_SAMPLE_CHARS))
+        .filter(|pattern| !pattern.is_empty());
+    let Some(pattern) = pattern else {
+        // 没有 pattern（老数据或参数缺失）：退回单段路径（中间省略）。
+        return path.map(path_param);
+    };
+    let mut tail = Vec::new();
+    if let Some(path) = path {
+        // `in` 不引入新色相：沿用 `agent_step_detail()`（dim 元信息色），
+        // 与行范围/计数同档；路径仍用参数金黄（`chat_tool_param`）。
+        tail.push(Segment::new(
+            format!(" {}", text::agent::IN_SCOPE_SEP),
+            style::agent_step_detail(),
+        ));
+        tail.push(Segment::new(path, style::chat_tool_param()));
+    }
+    Some(Param {
+        head: Segment::new(
+            text::agent::pattern_label(&pattern),
+            style::chat_tool_param(),
+        ),
+        head_shrink: Shrink::Tail,
+        tail,
+    })
+}
+
+/// 摘要是否答不出需要的主参数（只有这时才回退解析 `arguments_json`）。
+///
+/// P2-8 之后「实时结算」与「历史重载」都用 `from_arguments(...).absorb_*()` 把参数
+/// 派生值全量合并进摘要，因此**摘要完整时这里一律返回 false**，渲染层不做每帧解析。
+/// 仍保留三条兜底路径：
+/// - 还没有摘要（`Streaming`/`Pending` 的瞬态）：解析一次即空手（参数可能不完整）；
+/// - `search` 缺 pattern：pattern 只存在于参数里，摘要没有就只能回参数找；
+/// - 其余工具缺 path 且摘要其余字段也空（老数据/未合并）：回退解析补路径。
+///
+/// `edit` 的 path **缺失是正常形态**（多文件补丁没有唯一路径，见 P2-1），不算缺字段。
+fn needs_argument_fallback(call: &ToolCallView, kind: Kind) -> bool {
+    let Some(summary) = call.summary.as_ref() else {
+        // 还没有摘要（流式接收中）：参数可能还不完整，且最坏是 1 MiB 的 patch 文本。
+        // 只在参数体足够小时才做兜底解析，避免「流式期间每帧解析巨型 JSON」（P3-4）。
+        return call.arguments_json.len() <= MAX_FALLBACK_PARSE_BYTES;
+    };
+    match kind {
+        Kind::Search => summary.pattern.is_none(),
+        Kind::Edit => summary.is_empty(),
+        Kind::Read | Kind::Write | Kind::Other => summary.path.is_none() && summary.is_empty(),
+    }
+}
+
+/// 单段路径参数（`read` / `edit` / `write` / 未知工具）：中间省略。
+fn path_param(path: String) -> Param {
+    Param {
+        head: Segment::new(path, style::chat_tool_param()),
+        head_shrink: Shrink::Middle,
+        tail: Vec::new(),
+    }
+}
+
+/// 摘要缺字段时的**懒**回退解析（同一帧内最多一次）。
+///
+/// 渲染层不该做解析：实时结算（`settle_tool_result`）与历史重载（`tool_view_of`）都已
+/// 用「参数派生 + 结果体补全」把摘要填全，`param()` 因此不会走到这里。这段回退只服务
+/// 极少数缺字段的瞬态/老数据，且**绝不**覆盖摘要已给出的值。
+fn fallback_summary<'a>(
+    call: &ToolCallView,
+    parsed: &'a mut Option<ToolSummary>,
+) -> &'a ToolSummary {
+    parsed.get_or_insert_with(|| {
+        #[cfg(test)]
+        FALLBACK_PARSES.with(|count| count.set(count.get() + 1));
+        ToolSummary::from_arguments(&call.arguments_json)
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// 回退解析计数（仅测试、按线程隔离）：守住「摘要完整时渲染层不解析参数 JSON」。
+    ///
+    /// 用线程局部而非全局原子：测试并行跑在不同线程上，互不干扰。
+    static FALLBACK_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 当前线程的回退解析次数（测试用）。
+#[cfg(test)]
+fn fallback_parse_count() -> usize {
+    FALLBACK_PARSES.with(std::cell::Cell::get)
+}
+
+/// 清零当前线程的回退解析计数（测试用）。
+#[cfg(test)]
+fn reset_fallback_parse_count() {
+    FALLBACK_PARSES.with(|count| count.set(0));
+}
+
+/// 首段放不下时的收敛方式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Shrink {
+    /// 路径：**中间省略**（保留首尾，仍认得出是哪一层级）。
+    Middle,
+    /// `search` 的 pattern：**尾部省略**——它是这一行唯一必须保住的信息，
+    /// 中间省略会把它切成首尾两字（review P2-7 实测 `"测…txt`）。
+    Tail,
+}
+
+/// 主参数：**必须保住**的首段 + 可整体让位的尾段。
+///
+/// 其余工具只有首段路径；`search` 首段是 pattern，尾段是 `in` + 范围路径。
+/// 尾段要么整体保留、要么整体丢弃（不做半截中间省略），保证 `in` 不会与
+/// pattern 或 path 粘成一段残字。
+struct Param {
+    head: Segment,
+    head_shrink: Shrink,
+    tail: Vec<Segment>,
+}
+
+impl Param {
+    /// 总列数（`keep_tail == false` 时只算首段）。
+    fn cols(&self, keep_tail: bool) -> usize {
+        self.head.cols()
+            + if keep_tail {
+                segments_cols(&self.tail)
+            } else {
+                0
+            }
+    }
+
+    /// 是否有可丢的尾段。
+    fn has_tail(&self) -> bool {
+        !self.tail.is_empty()
+    }
 }
 
 /// 次要信息段 + 它的**丢弃优先级**（值越小越先被窄宽度隐藏）。
@@ -425,8 +564,9 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 
 /// 组装第 2 行（`  └─ 详情`）；`width` 为内容列数。
 ///
-/// 让位顺序（与设计文档一致）：路径中间省略 → 次要计数按优先级丢弃 →
-/// 错误尾部省略 → 参数让位给错误。前缀永远保留（除非窄到放不下前缀）。
+/// 让位顺序（与设计文档一致）：次要计数按优先级丢弃 → 参数尾段整段丢弃 →
+/// 参数首段收敛（路径中间省略 / pattern 尾部省略）→ 丢参数；
+/// 错误分支则是错误尾部省略。前缀永远保留（除非窄到放不下前缀）。
 fn detail(call: &ToolCallView, width: u16) -> Vec<Segment> {
     let limit = usize::from(width);
     let prefix = detail_prefix();
@@ -465,6 +605,10 @@ fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
 }
 
 /// 正常态第二行：参数 + 次要计数，按优先级让位；没有可展示内容时用状态词兜底。
+///
+/// 让位顺序：**次要计数（按优先级）→ 参数的尾段（`search` 的 `in path` 整体）→
+/// 参数首段**。首段放不下时按 [`Shrink`] 收敛（路径中间省略、pattern 尾部省略）。
+/// 这条顺序保证「范围只在 pattern 完整时才显示」，pattern 绝不被切碎。
 fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
     let param = param(call);
     // 次要段是否带 ` · ` 前缀取决于主参数是否存在（否则会出现孤立分隔符）。
@@ -475,6 +619,7 @@ fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
 
     let mut kept = vec![true; extras.len()];
     let mut keep_param = param.is_some();
+    let mut keep_tail = param.as_ref().is_some_and(Param::has_tail);
     loop {
         let kept_cols: usize = extras
             .iter()
@@ -485,24 +630,47 @@ fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
         let param_cols = param
             .as_ref()
             .filter(|_| keep_param)
-            .map_or(0, Segment::cols);
+            .map_or(0, |param| param.cols(keep_tail));
         let reserved = param_cols.min(limit.saturating_sub(kept_cols));
-        let fits_param = !keep_param || {
-            let available = limit.saturating_sub(kept_cols);
-            available >= MIN_PARAM_COLS
+        // 参数至少要能放下「首段的可收敛形态」；pattern 只需一个字符 + 省略号。
+        let min_head = match param.as_ref().filter(|_| keep_param).map(|p| p.head_shrink) {
+            Some(Shrink::Tail) => MIN_PATTERN_COLS,
+            _ => MIN_PARAM_COLS,
         };
-        let fits = kept_cols.saturating_add(reserved) <= limit && fits_param;
+        let fits_param = !keep_param || limit.saturating_sub(kept_cols) >= min_head;
+        // `search` 的 pattern 不得为了给次要计数让位而被切碎（review P2-7）：
+        // 首段需要收敛且是「尾部省略」形态时，先把次要计数丢光，再动 pattern。
+        let head_room = limit.saturating_sub(kept_cols);
+        let head_intact = !keep_param
+            || kept_cols == 0
+            || param
+                .as_ref()
+                .is_some_and(|param| param.head_shrink == Shrink::Middle)
+            || param
+                .as_ref()
+                .is_some_and(|param| param.head.cols() <= head_room);
+        let fits = kept_cols.saturating_add(reserved) <= limit && fits_param && head_intact;
         if fits {
             let mut segments = Vec::new();
             let used_by_extras = kept_cols.min(limit);
             if let Some(param) = param.as_ref().filter(|_| keep_param) {
                 let available = limit.saturating_sub(used_by_extras);
-                if param.cols() <= available {
-                    segments.push(param.clone());
+                if param.cols(keep_tail) <= available {
+                    segments.push(param.head.clone());
+                    if keep_tail {
+                        segments.extend(param.tail.iter().cloned());
+                    }
+                } else if param.head.cols() <= available {
+                    // 首段完整、尾段放不下：**只丢尾段**（`in path` 要么全在、要么全不在）。
+                    segments.push(param.head.clone());
                 } else {
-                    let text = text::ellipsize_middle(&param.text, available);
+                    // 只有首段自己都放不下时才收敛它：路径中间省略、pattern 尾部省略。
+                    let text = match param.head_shrink {
+                        Shrink::Middle => text::ellipsize_middle(&param.head.text, available),
+                        Shrink::Tail => truncate_with_ellipsis(&param.head.text, available),
+                    };
                     if !text.is_empty() {
-                        segments.push(Segment::new(text, param.style));
+                        segments.push(Segment::new(text, param.head.style));
                     }
                 }
             }
@@ -525,9 +693,13 @@ fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
             }
             return segments;
         }
-        // 让位顺序：次要字段（按优先级）→ 参数。
+        // 让位顺序：次要字段（按优先级）→ 参数尾段 → 参数首段。
         if let Some(index) = drop_index(&extras, &kept) {
             kept[index] = false;
+            continue;
+        }
+        if keep_tail {
+            keep_tail = false;
             continue;
         }
         if keep_param {

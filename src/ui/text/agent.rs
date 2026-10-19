@@ -156,18 +156,11 @@ pub fn pattern_label(pattern: &str) -> String {
     format!("\"{pattern}\"")
 }
 
-/// `search` 的模式与范围：`"测试" in tool_test.txt`；只有模式时就是模式本身。
-pub fn search_scope_label(pattern: Option<&str>, path: Option<&str>) -> Option<String> {
-    let pattern = pattern?;
-    Some(match path {
-        Some(path) if !path.is_empty() => {
-            format!("{} {}{path}", pattern_label(pattern), IN_SCOPE_SEP)
-        }
-        _ => pattern_label(pattern),
-    })
-}
-
-/// 搜索范围的连接词（`"pat" in path` 里的 `in`，dense 渲染时压暗）。
+/// `search` 的搜索范围连接词（`"pat" in path` 里的 `in`）。
+///
+/// 渲染层把它作为**独立的一段**（dim）放在 pattern 与 path 之间，窄宽度时整段让位
+/// （review P2-7：三段的着色粒度与 codex 一致）。不要把它拼进 pattern 或 path ——
+/// 拼成一段后只能对整串做中间省略，窄宽度会把 pattern 切碎。
 pub const IN_SCOPE_SEP: &str = "in ";
 
 /// 命中 / 条目数：`3 matches`、`1 match`。

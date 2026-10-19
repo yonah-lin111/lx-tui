@@ -142,6 +142,39 @@ fn chat_step_palette_uses_green_structure_and_gold_params() {
     );
 }
 
+/// `agent_param`（`[UI]` 查看器样例）与 `chat_tool_param`（实时工具行）**有意不同**：
+/// 前者保留旧的下划线，后者去掉。
+///
+/// 工具行去下划线是刻意的设计决策——连续多个工具调用时下划线会连成一片横线，盖过
+/// 翡翠绿结构色；gallery 的 agent 样例是单条展示、没有这个问题，保留旧样式以免
+/// 连带改掉 `[UI]` 查看器的观感（那里由用户按样例验收）。
+///
+/// 两条断言都写死「谁有、谁没有」：任何一边被「顺手对齐」都会立刻失败。
+#[test]
+fn agent_param_keeps_legacy_underline_while_chat_tool_param_does_not() {
+    assert!(
+        agent_param().add_modifier.contains(Modifier::UNDERLINED),
+        "gallery 的 agent 样例保留旧下划线（单条展示，不会连成一片）"
+    );
+    assert!(
+        !chat_tool_param()
+            .add_modifier
+            .contains(Modifier::UNDERLINED),
+        "实时工具行去下划线（连续多行会盖过翡翠绿结构色）"
+    );
+    // 同色不同修饰符：差异是**刻意**的，只改一边就会让这条断言失败。
+    assert_eq!(
+        agent_param().fg,
+        chat_tool_param().fg,
+        "两者必须同色（金黄 CHAT_GOLD），差异只在修饰符"
+    );
+    assert_ne!(
+        agent_param().add_modifier,
+        chat_tool_param().add_modifier,
+        "修饰符差异是刻意的，不要「顺手对齐」"
+    );
+}
+
 /// markdown 高亮必须是 **GitHub Dark 的官方 token 色**（用户要求“用 github 的黑暗模式”）。
 ///
 /// 断言钉死每个语义 token 的 RGB：谁把它改回 ANSI 槽位、或换成别的主题色，都立刻失败。
