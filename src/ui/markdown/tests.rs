@@ -27,11 +27,14 @@ fn kinds(line: &str) -> Vec<(TokenKind, &str)> {
 fn headings_marker_and_text() {
     assert_eq!(
         kinds("## title"),
-        vec![(TokenKind::Marker, "## "), (TokenKind::Heading, "title")]
+        vec![
+            (TokenKind::HeadingMarker, "## "),
+            (TokenKind::Heading, "title")
+        ]
     );
     assert_eq!(kinds("#hash"), vec![]);
     assert_eq!(kinds("####### x"), vec![]);
-    assert_eq!(kinds("#"), vec![(TokenKind::Marker, "#")]);
+    assert_eq!(kinds("#"), vec![(TokenKind::HeadingMarker, "#")]);
 }
 
 #[test]
@@ -236,7 +239,7 @@ fn template_body_lines_keep_markdown_highlight() {
     assert_eq!(
         summary[1],
         vec![
-            (TokenKind::Marker, "# "),
+            (TokenKind::HeadingMarker, "# "),
             (TokenKind::Heading, "Add Requirement"),
         ]
     );

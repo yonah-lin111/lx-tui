@@ -214,14 +214,21 @@ fn markdown_palette_is_github_dark_truecolor() {
     assert_eq!(md_read_rule().fg, muted, "水平线/表格边框 = fg-muted");
     assert_eq!(md_read_code_lang().fg, muted, "语言标记 = fg-muted");
     assert_eq!(md_read_image().fg, muted, "图片说明 = fg-muted");
-    assert_eq!(md_read_task_done().fg, muted);
-    assert_eq!(md_read_task_open().fg, muted);
+    // 任务复选框按状态分色（只染复选框，正文保持原样）。
+    assert_eq!(md_read_task_done().fg, Some(Color::Green), "已完成 = 绿");
+    assert_eq!(md_read_task_open().fg, Some(Color::Yellow), "未完成 = 黄");
+    assert!(
+        !md_read_task_done()
+            .add_modifier
+            .contains(Modifier::CROSSED_OUT),
+        "已完成项不再整行加删除线"
+    );
 
-    // 行内代码 `xxx` 带浅灰底色（GitHub 的 markup.inline.raw 背景）。
+    // 行内代码 `xxx` 恢复为纯前景色（不铺背景）。
     assert_eq!(
         md_read_inline_code().bg,
-        Some(Color::Rgb(0x1f, 0x24, 0x2c)),
-        "行内代码有暗色底，靠底色方块与正文区分"
+        None,
+        "行内代码不铺背景（按用户要求恢复原格式）"
     );
 
     // 列表符号是**结构强调**：用链接蓝只染符号，正文保持原色。

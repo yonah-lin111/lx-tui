@@ -32,6 +32,11 @@ use super::notice;
 
 mod tool;
 
+/// 代码块复制按钮占用的列数（`[❐]` 三列）。
+const CODE_COPY_WIDTH: u16 = 3;
+/// 代码块竖条（与 `markdown_render` 同一个直角风格符号）。
+const BAR_MARKER: &str = "│";
+
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
 /// 用户消息正文缩进列（与前缀等宽）。
@@ -182,10 +187,22 @@ pub struct HistoryLayout {
     pub area: Rect,
     /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
+    /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
+    pub code_copy: Vec<CodeCopyButton>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
     /// 渲染出的内容总行数（滚动上限用）。
     pub total_rows: usize,
+}
+
+/// 代码块头部的复制按钮：命中矩形 + 该块正文（不含围栏与语言行）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodeCopyButton {
+    pub message: usize,
+    pub step: usize,
+    pub rect: Rect,
+    /// 代码块正文（`\n` 连接，末尾不带换行）。
+    pub body: String,
 }
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
@@ -232,10 +249,12 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     let width = content.width;
     let mut rows = 0usize;
     let mut thinking = Vec::new();
+    let mut code_copy = Vec::new();
     if width == 0 {
         return HistoryLayout {
             area,
             thinking,
+            code_copy,
             messages: Vec::new(),
             total_rows: 0,
         };
@@ -283,6 +302,17 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     step_index,
                     Rect::new(area.x, header_y, width, 1),
                 ));
+            } else if let AssistantStepView::Part { part, .. } = step {
+                // 代码块头部的复制按钮：按渲染行序算出每块头部的屏幕矩形。
+                collect_code_copy(
+                    message_index,
+                    step_index,
+                    &part.content,
+                    width.saturating_sub(STEP_GUTTER),
+                    area,
+                    rows,
+                    &mut code_copy,
+                );
             }
             rows += step_rows;
         }
@@ -316,8 +346,72 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     HistoryLayout {
         area,
         thinking,
+        code_copy,
         messages: messages_rows,
         total_rows: rows,
+    }
+}
+
+/// 收集一个正文步骤里所有代码块的复制按钮矩形（按渲染行序换算屏幕坐标）。
+///
+/// 与 `draw_text` 用同一条渲染管线（`render_wrapped` + 步骤缩进），因此行序一致；
+/// 复制内容是**该块正文**（不含围栏与 `language:` 头部行）。
+fn collect_code_copy(
+    message: usize,
+    step: usize,
+    content: &str,
+    inner: u16,
+    area: Rect,
+    start_row: usize,
+    out: &mut Vec<CodeCopyButton>,
+) {
+    if inner == 0 {
+        return;
+    }
+    let mut code: Option<String> = None;
+    for (offset, line) in markdown_render::render_wrapped(content, inner)
+        .into_iter()
+        .enumerate()
+    {
+        // 代码块正文行：以竖条开头且不是头部（头部带复制按钮列）。
+        let body_row = line.text();
+        if let Some(column) = line.code_copy {
+            let y = area
+                .y
+                .saturating_add(u16::try_from(start_row + offset).unwrap_or(u16::MAX));
+            let x = area
+                .x
+                .saturating_add(STEP_GUTTER)
+                .saturating_add(line.indent)
+                .saturating_add(column);
+            out.push(CodeCopyButton {
+                message,
+                step,
+                rect: Rect::new(x, y, CODE_COPY_WIDTH, 1),
+                // 正文在下一行开始收集，先占位（结束时回填）。
+                body: String::new(),
+            });
+            code = Some(String::new());
+            continue;
+        }
+        if let Some(body) = code.as_mut() {
+            if body_row.starts_with(BAR_MARKER) {
+                if !body.is_empty() {
+                    body.push('\n');
+                }
+                // 去掉竖条与其后 1 个空格。
+                body.push_str(body_row.strip_prefix(BAR_MARKER).unwrap_or("").trim_start());
+                continue;
+            }
+            // 代码块结束：把收集到的正文回填到刚推入的按钮。
+            if let Some(last) = out.last_mut() {
+                last.body = body.clone();
+            }
+            code = None;
+        }
+    }
+    if let (Some(body), Some(last)) = (code, out.last_mut()) {
+        last.body = body;
     }
 }
 

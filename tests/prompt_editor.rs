@@ -60,10 +60,12 @@ fn typed_markdown_renders_highlight_and_cursor() {
     let inner = layout::prompt_text_rect(view.prompt);
     let marker = &buffer[(inner.x, inner.y)];
     assert_eq!(marker.symbol(), "#");
-    // 编辑器高亮（独立于阅读渲染）：标记走 `markdown_marker`。
+    // 编辑器高亮（独立于阅读渲染）：标题的 `#` 走专用 `markdown_heading_marker`。
     assert_eq!(
         marker.fg,
-        ui::style::markdown_marker().fg.unwrap_or(Color::Reset)
+        ui::style::markdown_heading_marker()
+            .fg
+            .unwrap_or(Color::Reset)
     );
 
     let heading = &buffer[(inner.x + 2, inner.y)];

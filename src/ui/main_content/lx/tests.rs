@@ -313,10 +313,10 @@ fn markdown_line_is_styled() {
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
     // 输入框走**编辑器**高亮色板（`markdown_*`，独立于阅读渲染的 `md_read_*`）：
-    // `#` 为 dim 标记，`Title` 为 Yellow 加粗标题。
+    // `#` 为标题专用标记（Yellow + dim），`Title` 为 Yellow 加粗标题。
     assert_eq!(
         buf[(content_x, row)].fg,
-        crate::ui::style::markdown_marker()
+        crate::ui::style::markdown_heading_marker()
             .fg
             .unwrap_or(Color::Reset)
     );
@@ -920,12 +920,13 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
         .collect();
     assert!(
-        border.contains("deepseek-v4.1-flash") && border.contains("9router-lx-t"),
-        "底边框显示模型 · 供应商：{border}"
+        border.contains("deepseek-v4.1-flash"),
+        "底边框显示模型名：{border}"
     );
+    assert!(!border.contains("9router-lx-t"), "供应商不再显示：{border}");
     assert!(
-        border.contains("context:720k(72%)"),
-        "底边框显示上下文占用 `context:720k(72%)`：{border}"
+        border.contains("720k(72%)"),
+        "底边框显示上下文占用 `720k(72%)`（无 context: 前缀）：{border}"
     );
 }
 
@@ -1417,16 +1418,16 @@ fn lx_input_highlights_inline_code_and_list_markers() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None);
 
-    // 行内代码内容格带暗色底（`cargo test` 所在位置）。
-    let mut code_cell = None;
+    // 行内代码内容格带前景色（不铺背景）。
+    let mut code_colored = false;
     for y in 0..area.height {
         for x in 0..area.width {
-            if buf[(x, y)].bg == ratatui::style::Color::Indexed(236) {
-                code_cell = Some((x, y));
+            if buf[(x, y)].fg == ratatui::style::Color::LightRed {
+                code_colored = true;
             }
         }
     }
-    assert!(code_cell.is_some(), "输入框里的行内代码带底色");
+    assert!(code_colored, "输入框里的行内代码有前景色");
 
     // 列表符号（`•`/序号）带前景色，正文无。
     let mut marker_colored = false;
@@ -1440,4 +1441,54 @@ fn lx_input_highlights_inline_code_and_list_markers() {
         }
     }
     assert!(marker_colored, "列表符号有强调色");
+}
+
+#[test]
+fn code_block_copy_button_hit_returns_block_body() {
+    // 点击代码块头部的复制按钮：命中返回该块正文（不含围栏与 language 行）。
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```js\nconst a = 1;\n\nconst b = 2;\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let layout = super::history::layout(view.body, &lx);
+    let button = layout
+        .code_copy
+        .first()
+        .expect("代码块头部应记录复制按钮")
+        .clone();
+    assert_eq!(
+        button.body, "const a = 1;\n\nconst b = 2;",
+        "正文完整且保留空行"
+    );
+    assert!(!button.body.contains("```"), "不含围栏");
+    assert!(!button.body.contains("language:"), "不含语言行");
+
+    // 命中该按钮单元格 → CodeCopy 携带同一份正文。
+    let hit = chat_hit(area, &lx, button.rect.x, button.rect.y);
+    assert_eq!(hit, Some(LxChatHit::CodeCopy(button.body.clone())));
 }

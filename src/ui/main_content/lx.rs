@@ -641,7 +641,9 @@ fn build_chat(
 }
 
 /// lx 页聊天命中结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 代码块复制按钮携带正文（自有 `String`），因此不是 `Copy`。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LxChatHit {
     /// 点击置顶用户消息行（跳到该 prompt）。
     PromptHeader,
@@ -649,6 +651,8 @@ pub enum LxChatHit {
     Thinking(usize, usize),
     /// 点击「回到底部」按钮。
     JumpBottom,
+    /// 点击代码块头部的复制按钮；`text` 为该块正文。
+    CodeCopy(String),
 }
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
@@ -762,6 +766,21 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
         let rect = Rect::new(view.body.x, screen_y, view.body.width, 1);
         if rect.contains((column, row).into()) {
             return Some(LxChatHit::Thinking(message_index, part_index));
+        }
+    }
+    // 代码块头部的复制按钮（同样按 body + 滚动窗口换算屏幕坐标）。
+    for button in &history::layout(view.body, lx).code_copy {
+        let offset = button.rect.y.saturating_sub(view.body.y);
+        if (offset as usize) < view.scroll {
+            continue;
+        }
+        let screen_y = view
+            .body
+            .y
+            .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
+        let rect = Rect::new(button.rect.x, screen_y, button.rect.width, 1);
+        if rect.contains((column, row).into()) {
+            return Some(LxChatHit::CodeCopy(button.body.clone()));
         }
     }
     None

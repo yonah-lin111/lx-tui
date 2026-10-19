@@ -573,10 +573,8 @@ pub fn token_count_precise(tokens: u64) -> String {
     scaled(tokens as f64 / 1_000_000.0, "M")
 }
 
-/// 状态行：模型名与供应商名之间的分隔（` · `）。
+/// 状态行：模型名与上下文占用之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
-/// 状态行：上下文占用前缀（`context:258.7k(25%)`；无消耗整段隐藏）。
-pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
 /// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
 /// （`Thought` 与 UI 页 agent 步骤的动词一致）。
 pub const LX_CHAT_THINKING_LABEL: &str = "Thinking";
@@ -616,6 +614,8 @@ pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 上下文省略提示前缀。
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
+/// markdown 代码块头部的语言前缀（`language: js`）。
+pub const LX_CHAT_CODE_LANG_PREFIX: &str = "language: ";
 
 /// 工具步骤占位摘要：工具名与状态之间的分隔（真实工具行由后续阶段重做）。
 pub const LX_CHAT_TOOL_STATUS_SEP: &str = " · ";

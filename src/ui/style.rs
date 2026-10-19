@@ -281,9 +281,6 @@ mod github_dark {
     pub(super) const ENTITY: Color = Color::Rgb(0xd2, 0xa8, 0xff);
     /// 语法：注释 `--color-prettylights-syntax-comment`。
     pub(super) const COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
-    /// 行内代码底色：GitHub 的 `markup.inline.raw` 背景
-    /// （深底上的浅灰蒙层，等价于 `rgba(110,118,129,0.4)` 叠在 `#0d1117` 上）。
-    pub(super) const INLINE_CODE_BG: Color = Color::Rgb(0x1f, 0x24, 0x2c);
 }
 
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：GitHub 的次要前景色。
@@ -322,12 +319,11 @@ pub fn md_read_strikethrough() -> Style {
     Style::default().add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 行内代码内容：GitHub 的 `markup.inline.raw` 用常量蓝 `#79c0ff`，
-/// 并带一层浅灰底色——`xxx` 靠"底色方块"与正文区分，是 GitHub 实际渲染的做法。
+/// markdown 行内代码内容：GitHub 的 `markup.inline.raw` 用常量蓝 `#79c0ff`。
+///
+/// 按用户要求恢复为**纯前景色、不铺背景**（此前试过加暗色底，观感偏重）。
 pub fn md_read_inline_code() -> Style {
-    Style::default()
-        .fg(github_dark::CONSTANT)
-        .bg(github_dark::INLINE_CODE_BG)
+    Style::default().fg(github_dark::CONSTANT)
 }
 
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
@@ -389,16 +385,14 @@ pub fn md_read_ordered() -> Style {
     Style::default().fg(github_dark::LINK)
 }
 
-/// markdown 任务列表已完成项：GitHub 的 `markup.ignored`/复选框语义——只加删除线。
+/// markdown 任务列表已完成项复选框 `[x]`：绿色（状态色，只染复选框）。
 pub fn md_read_task_done() -> Style {
-    Style::default()
-        .fg(github_dark::FG_MUTED)
-        .add_modifier(Modifier::CROSSED_OUT)
+    Style::default().fg(Color::Green)
 }
 
-/// markdown 任务列表未完成项：次要前景色。
+/// markdown 任务列表未完成项复选框 `[ ]`：黄色（待办，只染复选框）。
 pub fn md_read_task_open() -> Style {
-    Style::default().fg(github_dark::FG_MUTED)
+    Style::default().fg(Color::Yellow)
 }
 
 /// markdown 水平线 / 表格边框：GitHub 的边框色（`#30363d`）在终端里太暗，
@@ -409,6 +403,11 @@ pub fn md_read_rule() -> Style {
 
 /// markdown 代码块语言标记：GitHub 的次要前景色。
 pub fn md_read_code_lang() -> Style {
+    Style::default().fg(github_dark::FG_MUTED)
+}
+
+/// markdown 代码块的复制按钮 `[❐]`：次要前景色（与语言标记同档，不抢代码）。
+pub fn md_read_code_copy() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
@@ -438,6 +437,14 @@ pub fn markdown_heading() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// markdown 标题的 `#` 标记：与标题同色相但压暗，让人看得出"这是标题符号"
+/// 而不与正文的通用标记（dim 灰）混同。
+pub fn markdown_heading_marker() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::DIM)
+}
+
 /// markdown 粗体文字：Yellow 加粗。
 pub fn markdown_strong() -> Style {
     Style::default()
@@ -459,12 +466,9 @@ pub fn markdown_strikethrough() -> Style {
         .add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 行内代码内容：亮红 + 深色底（`xxx` 用"底色方块"与正文区分）。
-///
-/// 底色用 `Indexed 236`（与浮层面板同档的暗底），保证明暗终端下都是一层浅色蒙层
-/// 而不是刺眼的亮块；前景仍是亮红，与正文一眼可分。
+/// markdown 行内代码内容：亮红（不铺背景，与阅读侧口径一致）。
 pub fn markdown_inline_code() -> Style {
-    Style::default().fg(Color::LightRed).bg(Color::Indexed(236))
+    Style::default().fg(Color::LightRed)
 }
 
 /// markdown 无序列表项目符号：Yellow 加粗（只染符号，正文保持原色）。
@@ -478,6 +482,20 @@ pub fn markdown_bullet() -> Style {
 pub fn markdown_ordered() -> Style {
     Style::default()
         .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// markdown 任务列表未完成复选框 `[ ]`：Yellow（待办）。
+pub fn markdown_task_open() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// markdown 任务列表已完成复选框 `[x]`：Green（完成）。
+pub fn markdown_task_done() -> Style {
+    Style::default()
+        .fg(Color::Green)
         .add_modifier(Modifier::BOLD)
 }
 

@@ -708,6 +708,7 @@ fn paint_selection(buf: &mut Buffer, area: Rect, y: u16, row: u16, selection: &S
 pub(crate) fn token_style(kind: TokenKind) -> Style {
     match kind {
         TokenKind::Marker => style::markdown_marker(),
+        TokenKind::HeadingMarker => style::markdown_heading_marker(),
         TokenKind::Heading => style::markdown_heading(),
         TokenKind::Strong => style::markdown_strong(),
         TokenKind::Emphasis => style::markdown_emphasis(),
@@ -719,6 +720,8 @@ pub(crate) fn token_style(kind: TokenKind) -> Style {
         TokenKind::Url => style::markdown_url(),
         TokenKind::ListBullet => style::markdown_bullet(),
         TokenKind::ListOrdered => style::markdown_ordered(),
+        TokenKind::TaskOpen => style::markdown_task_open(),
+        TokenKind::TaskDone => style::markdown_task_done(),
         TokenKind::TemplateMarker => style::template_marker(),
         TokenKind::TemplateCommand(id) => style::template_command(id),
         TokenKind::TemplateTitle => style::template_title(),

@@ -1,13 +1,13 @@
-//! 聊天状态：模型 · 供应商 + 上下文占用，绘制在**窗格底边框**上。
+//! 聊天状态：模型名 · 上下文占用，绘制在**窗格底边框**上。
 //!
 //! 输入框保留自己的上下 `─` 分割线；状态数据**覆盖**在 main content 的底边框（`╰──╯`）上：
 //! 只改写文字落到的单元格，其余底边线保留为 `─`（边框始终可见）。
-//! 左侧 ` 模型名 · 供应商名 `（模型名用入口标签同款粉→蓝渐变、供应商用本轮统计行同款
-//! 次要信息色），
-//! 右端 `context:当前用量(百分比)`（token 短格式一位小数，如 `context:258.7k(26%)`；
+//! 左侧 ` 模型名 · 上下文占用 `（模型名用入口标签同款粉→蓝渐变，上下文占用用次要信息色；
+//! 形如 `258.7k(26%)`——**不带 `context:` 前缀**，紧跟模型名之后即语义明确）。
+//! 供应商名不再显示（对用户无信息量，位置让给上下文占用）。
 //! 用量取最近一次同模型请求的分子、百分比 = 用量 / 模型上限（四舍五入），夹到 100%；
-//! 用**供应商同款次要信息色**（与左侧供应商名一致）；**未知用量、未知上限或零消耗整段隐藏**）。
-//! 宽度不足时依次丢弃上下文占用 → 供应商，始终保留模型名；模型名按列硬切（不使用省略号）。
+//! **未知用量、未知上限或零消耗整段隐藏**。
+//! 宽度不足时依次丢弃上下文占用、再硬切模型名（不使用省略号），始终保留模型名。
 //! 停止生成不再有按钮：流中按 `Esc`（单击待命提示、双击停止，对齐 opencode）。
 //! 两端角字符保留，各控件矩形由同一布局函数派生。
 
@@ -28,14 +28,14 @@ const GAP: u16 = 1;
 const EDGE_PAD: u16 = 1;
 
 /// 底边框状态布局：绘制行（零高表示空间不足不绘制）、上下文占用、
-/// 左侧模型 · 供应商可用矩形，以及右端「块」（供清底）。
+/// 左侧模型 · 上下文可用矩形，以及右端「块」（供清底）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StatusLayout {
     /// 状态绘制行（窗格底边框）；`height == 0` 表示不绘制。
     pub area: Rect,
-    /// 上下文占用文字矩形（零宽表示已隐藏）。
+    /// 上下文占用文字矩形（零宽表示已隐藏）；紧跟模型名之后。
     pub context: Rect,
-    /// 左侧模型 · 供应商可用矩形。
+    /// 左侧模型 · 上下文可用矩形。
     pub label: Rect,
     /// 右端块整体矩形（含右侧留白）；零宽表示无右端元素。
     pub block: Rect,
@@ -53,6 +53,9 @@ fn hidden(left: u16, y: u16) -> StatusLayout {
 
 /// 计算底边框状态布局；`inner` 为窗格内容区（边框行 = `inner.bottom()`，
 /// 可写区间为两端角内侧，角字符保留）。
+///
+/// 供应商已移除、上下文占用改为紧跟模型名：左侧文本区覆盖整条可写区间，
+/// 右侧不再有独立元素，因此 `block` 只用于清底右侧留白。
 pub(super) fn layout(inner: Rect, status: &ChatStatus) -> StatusLayout {
     let y = inner.bottom();
     let left = inner.x.saturating_add(EDGE_PAD);
@@ -62,39 +65,61 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus) -> StatusLayout {
         return hidden(left, y);
     }
     let avail = end.saturating_sub(left);
-    let context = context_text(status);
-    let ctx_w = context
+    let ctx_w = context_text(status)
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
-    // 模型名 = 上下文占用 > 供应商：上下文放不下就整段隐藏。
+    // 上下文占用与模型名同在左侧：放不下就整段隐藏（模型名优先）。
     let keep_ctx = ctx_w > 0 && avail >= MIN_MODEL.saturating_add(ctx_w);
-    let mut right = end;
-    let mut context_rect = Rect::new(end, y, 0, 1);
-    if keep_ctx {
-        right = right.saturating_sub(ctx_w);
-        context_rect = Rect::new(right, y, ctx_w, 1);
-    }
-    // 右端块（含右侧 1 列留白，供清底为空格）；左侧文本区右端再留 1 列空档。
-    let block = if keep_ctx {
-        Rect::new(
-            right,
-            y,
-            end.saturating_sub(right).saturating_add(EDGE_PAD),
-            1,
-        )
+    // 上下文占用的实际起点取决于模型名宽度（渲染时按同一算法定位）。
+    let context_x = if keep_ctx {
+        left.saturating_add(model_start_offset(status, avail))
     } else {
-        Rect::new(end, y, 0, 1)
-    };
-    let label_right = if keep_ctx {
-        right.saturating_sub(GAP)
-    } else {
-        end
+        left
     };
     StatusLayout {
         area: Rect::new(inner.x, y, inner.width, 1),
-        context: context_rect,
-        label: Rect::new(left, y, label_right.saturating_sub(left), 1),
-        block,
+        context: if keep_ctx {
+            Rect::new(context_x, y, ctx_w, 1)
+        } else {
+            Rect::new(left, y, 0, 1)
+        },
+        label: Rect::new(left, y, avail, 1),
+        // 右端留白：契约保留（清底用），不再承载文本。
+        block: Rect::new(end, y, 0, 1),
+    }
+}
+
+/// 上下文占用相对 `label` 起点的偏移：`模型名 + 分隔符` 的显示宽度。
+///
+/// 与 `render` 共用同一份模型名裁剪口径（`cut_width`），保证命中矩形与绘制不漂移。
+fn model_start_offset(status: &ChatStatus, avail: u16) -> u16 {
+    let label_avail = model_available_width(status, avail, 0, 0);
+    let model = status
+        .model_name
+        .clone()
+        .unwrap_or_else(|| text::LX_CHAT_NO_MODEL_SHORT.to_string());
+    let model = cut_width(&model, usize::from(label_avail));
+    u16::try_from(model.width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(u16::try_from(text::LX_CHAT_MODEL_SEP.width()).unwrap_or(0))
+}
+
+/// 模型名可用宽度：从左侧区宽度里扣掉上下文占用（含分隔符）与省略提示。
+///
+/// 渲染与命中矩形共用本函数，避免两处各算一套导致位置漂移。
+fn model_available_width(status: &ChatStatus, label_width: u16, notice_w: u16, gap: u16) -> u16 {
+    let ctx_w = context_text(status)
+        .as_ref()
+        .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
+    let reserved = ctx_w.saturating_add(if ctx_w > 0 {
+        u16::try_from(text::LX_CHAT_MODEL_SEP.width()).unwrap_or(0)
+    } else {
+        0
+    });
+    if notice_w > 0 {
+        label_width.saturating_sub(notice_w + gap + reserved)
+    } else {
+        label_width.saturating_sub(reserved)
     }
 }
 
@@ -122,33 +147,29 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
             cell.set_style(Style::default());
         }
     }
-    // 供应商：放得下完整 `模型 · 供应商` 才显示，否则整体隐藏（不省略号）。
+    // 供应商已移除；上下文占用紧跟模型名（`模型名 · 258.7k(26%)`）。
     let notice = status
         .omitted_turns
         .map(|omitted| format!("{} {omitted}", text::LX_CHAT_OMITTED_PREFIX));
     let notice_w = notice
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
-    // 省略提示贴左侧区右端；模型 · 供应商为其预留空间。
-    let label_avail = if notice_w > 0 {
-        lay.label.width.saturating_sub(notice_w + GAP)
-    } else {
-        lay.label.width
-    };
+    let context = context_text(status);
+    // 省略提示贴左侧区右端；模型 + 上下文为其预留空间。
+    let label_avail = model_available_width(status, lay.label.width, notice_w, GAP);
     let model = status
         .model_name
         .clone()
         .unwrap_or_else(|| text::LX_CHAT_NO_MODEL_SHORT.to_string());
-    let provider = status.provider_name.clone().unwrap_or_default();
-    let (model, provider) = fit_model_provider(&model, &provider, label_avail);
+    let model = cut_width(&model, usize::from(label_avail));
     let mut x = lay.label.x;
     let limit = lay.label.right();
     if !model.is_empty() && x < limit {
         put_model(buf, x, y, &model, limit);
         x = x.saturating_add(u16::try_from(model.width()).unwrap_or(u16::MAX));
     }
-    if let Some(provider) = provider.filter(|_| x < limit) {
-        let value = format!("{}{provider}", text::LX_CHAT_MODEL_SEP);
+    if let Some(context) = context.filter(|_| x < limit) {
+        let value = format!("{}{context}", text::LX_CHAT_MODEL_SEP);
         put(buf, x, y, &value, style::chat_provider(), limit);
     }
     if let Some(notice) = notice.filter(|_| notice_w < lay.label.width) {
@@ -161,30 +182,19 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
             lay.label.right(),
         );
     }
-    if lay.context.width > 0
-        && let Some(context) = context_text(status)
-    {
-        put(
-            buf,
-            lay.context.x,
-            y,
-            &context,
-            style::chat_provider(),
-            lay.context.right(),
-        );
-    }
 }
 
-/// 上下文占用文字（`context:当前用量(百分比)`，用量用一位小数的 token 短格式）；
+/// 上下文占用文字（`当前用量(百分比)`，用量用一位小数的 token 短格式）；
 /// 未知（无上限或无用量）与**零消耗**返回 None（整段隐藏）。
+///
+/// 不再带 `context:` 前缀：紧跟模型名之后（`模型名 · 258.7k(26%)`），语义已明确。
 fn context_text(status: &ChatStatus) -> Option<String> {
     let used = status.input_tokens.filter(|tokens| *tokens > 0)?;
     let limit = status.context_limit.filter(|limit| *limit > 0)?;
     // 四舍五入（`258.7k / 1M` → 26%，与展示口径一致）。
     let percent = used.saturating_mul(100).saturating_add(limit / 2) / limit;
     Some(format!(
-        "{}{}({}%)",
-        text::LX_CHAT_CONTEXT_PREFIX,
+        "{}({}%)",
         text::token_count_precise(used),
         percent.min(100)
     ))
@@ -235,17 +245,6 @@ fn put(buf: &mut Buffer, mut x: u16, y: u16, content: &str, style: Style, limit:
         }
         x = x.saturating_add(width);
     }
-}
-
-/// 左侧模型 · 供应商：模型名按可用宽度硬切（不加省略号）；供应商仅在「模型 + 分隔 + 供应商」
-/// 完整放得下时显示，否则整体隐藏（不省略号）。
-fn fit_model_provider(model: &str, provider: &str, label_width: u16) -> (String, Option<String>) {
-    let avail = usize::from(label_width);
-    let sep = text::LX_CHAT_MODEL_SEP.width();
-    if !provider.is_empty() && model.width() + sep + provider.width() <= avail {
-        return (model.to_string(), Some(provider.to_string()));
-    }
-    (cut_width(model, avail), None)
 }
 
 /// 按显示宽度硬切（无省略号；宽字符按两列计）。

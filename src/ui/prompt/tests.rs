@@ -30,10 +30,15 @@ fn paints_markdown_styles() {
     // 编辑器高亮是**独立于阅读渲染**的 ANSI 语义色板（与 `md_read_*` 无关）：
     // 这里用真实色值钉死，防止有人再把两侧合并。
     assert_eq!(buf[(0, 0)].symbol(), "#");
+    // 标题的 `#` 有专用高亮（Yellow + dim），不再并入通用 dim 标记。
     assert_eq!(
         buf[(0, 0)].fg,
-        style::markdown_marker().fg.unwrap_or(Color::Reset),
-        "标记走 markdown_marker（dim）"
+        style::markdown_heading_marker().fg.unwrap_or(Color::Reset),
+        "标题 `#` 走 markdown_heading_marker"
+    );
+    assert!(
+        buf[(0, 0)].modifier.contains(Modifier::DIM),
+        "标题标记压暗以区别于正文"
     );
     assert_eq!(buf[(3, 0)].symbol(), "t");
     assert_eq!(buf[(3, 0)].fg, Color::Yellow, "标题着色（Yellow）");
@@ -46,6 +51,7 @@ fn paints_markdown_styles() {
 
     assert_eq!(buf[(1, 2)].symbol(), "c");
     assert_eq!(buf[(1, 2)].fg, Color::LightRed, "行内代码亮红");
+    assert_eq!(buf[(1, 2)].bg, Color::Reset, "行内代码不铺背景");
 
     assert_eq!(buf[(2, 3)].symbol(), "q");
     assert_eq!(buf[(2, 3)].fg, Color::LightMagenta, "引用亮品红");
@@ -1635,11 +1641,7 @@ fn editor_tokens_style_inline_code_and_list_markers() {
     // prompt 容器与 lx 输入框共用 `token_style`：两处必须同时生效。
     let inline = token_style(crate::ui::markdown::TokenKind::InlineCode);
     assert_eq!(inline.fg, Some(Color::LightRed), "行内代码前景");
-    assert_eq!(
-        inline.bg,
-        Some(Color::Indexed(236)),
-        "行内代码带暗色底（`xxx` 用底色方块区分）"
-    );
+    assert_eq!(inline.bg, None, "行内代码不铺背景（恢复原格式）");
 
     let bullet = token_style(crate::ui::markdown::TokenKind::ListBullet);
     let ordered = token_style(crate::ui::markdown::TokenKind::ListOrdered);
@@ -1650,27 +1652,32 @@ fn editor_tokens_style_inline_code_and_list_markers() {
         "列表符号加粗以便扫读"
     );
     assert_eq!(bullet, ordered, "两种列表同一强调色");
+
+    // 任务复选框按完成状态分色（编辑侧此前被当成普通无序列表）。
+    let open = token_style(crate::ui::markdown::TokenKind::TaskOpen);
+    let done = token_style(crate::ui::markdown::TokenKind::TaskDone);
+    assert_eq!(open.fg, Some(Color::Yellow), "未完成复选框 = 黄");
+    assert_eq!(done.fg, Some(Color::Green), "已完成复选框 = 绿");
 }
 
 #[test]
-fn inline_code_background_survives_selection_reverse() {
-    // 行内代码有底色；被选区反显时底色与 REVERSED 必须共存（不能丢背景或丢反显）。
+fn selection_reverse_keeps_inline_code_foreground() {
+    // 行内代码现在只有前景色；选区反显只叠 REVERSED，前景不被清掉。
     let area = Rect::new(0, 0, 12, 3);
     let prompt = prompt(12, 3, "a `code` b");
     let mut buf = Buffer::empty(area);
     let selection = selection(&prompt, (0, 0), (0, 8));
     render(area, &mut buf, &prompt, Some(&selection));
-    // 反显覆盖整段选区。
     for col in 0..=8 {
         assert!(
             buf[(col, 0)].modifier.contains(Modifier::REVERSED),
             "column {col} 反显"
         );
     }
-    // 代码内容格保留底色（`code` 在 col 3..7）。
+    // `code` 起始列（col 3）保留行内代码前景色。
     assert_eq!(
-        buf[(3, 0)].bg,
-        Color::Indexed(236),
-        "选区反显不覆盖行内代码底色"
+        buf[(3, 0)].fg,
+        Color::LightRed,
+        "选区反显不覆盖行内代码前景"
     );
 }
