@@ -628,7 +628,7 @@ pub fn resume_edit_button_at(
 
 /// `/resume` 会话编辑模态：标题输入 + 提示行 + 按钮行；返回硬件光标位置。
 ///
-/// 编辑态按钮是 `[save enter] [delete ^d] [cancel esc]`，确认删除态换成
+/// 编辑态按钮是 `[save ↵] [delete ^d] [cancel esc]`，确认删除态换成
 /// `[confirm del enter] [cancel esc]` 并在标题行右侧提示再按一次确认。
 pub(crate) fn render_resume_session_edit(
     frame: &mut Frame<'_>,

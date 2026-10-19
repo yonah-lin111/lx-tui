@@ -226,3 +226,45 @@ fn slash_panel_scrollbar_has_no_track_border() {
         assert_eq!(row[usize::from(bar.track.x)], ' ', "轨道列留空");
     }
 }
+
+#[test]
+fn history_panel_footer_documents_shift_enter_edit() {
+    // `/resume` 底边必须出现 `⇧↵`（与 @ 面板同符号），否则用户无从发现编辑模态。
+    let area = Rect::new(0, 0, 100, 24);
+    let lx = history_panel_lx();
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(
+        all.contains(crate::ui::text::LX_HISTORY_PANEL_FOOTER),
+        "底边显示完整提示: {all}"
+    );
+    assert!(all.contains("⇧↵"), "使用 ⇧↵ 符号: {all}");
+}
+
+#[test]
+fn history_panel_footer_symbols_match_mention_panel() {
+    // 与 @ 面板同一套符号：`⇧↵` 与 `^z` 记法，不出现 shift/ctrl 全拼。
+    let footer = crate::ui::text::LX_HISTORY_PANEL_FOOTER;
+    assert!(footer.contains(crate::ui::text::key::SHIFT));
+    assert!(footer.contains(crate::ui::text::key::ENTER));
+    assert!(!footer.contains("shift"), "不用全拼 shift: {footer}");
+    assert!(!footer.contains("ctrl"), "不用全拼 ctrl: {footer}");
+    // 与 @ 面板尾部的 3 行对比：两个面板的 `⇧↵` 写法完全一致。
+    assert!(crate::ui::text::MENTION_PANEL_FOOTER.contains("⇧↵"));
+}
+
+#[test]
+fn model_panel_footer_stays_without_edit_hint() {
+    // `/model` 没有编辑模态，底边保持通用提示（不放 `⇧↵`）。
+    let area = Rect::new(0, 0, 100, 24);
+    let lx = model_panel_lx(Some(0));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let all = buffer_lines(&buf, area).join("\n");
+    assert!(
+        all.contains(crate::ui::text::LX_SLASH_PANEL_FOOTER),
+        "{all}"
+    );
+    assert!(!all.contains("⇧↵"), "model 面板不放编辑提示: {all}");
+}

@@ -285,12 +285,29 @@ fn rename_modal_scrolls_by_display_width_for_long_wide_names() {
 
 #[test]
 fn rename_buttons_hit_their_cells() {
+    // 按真实按钮行几何取单元格：不写死列号，文案长度变化不会悄悄失效。
     let shell = rename_shell(SCREEN).expect("rename modal fits");
-    assert_eq!(rename_button_at(&shell, 21, 12), Some(RenameButton::Save));
-    assert_eq!(rename_button_at(&shell, 35, 12), Some(RenameButton::Clear));
-    assert_eq!(rename_button_at(&shell, 47, 12), Some(RenameButton::Cancel));
-    assert_eq!(rename_button_at(&shell, 20, 12), None);
-    assert_eq!(rename_button_at(&shell, 21, 11), None);
+    let row = shell.inner.y + crate::ui::overlay::RENAME_BUTTON_ROW;
+    let rects = crate::ui::widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL],
+        crate::ui::overlay::BUTTON_GAP,
+        crate::ui::overlay::RENAME_BUTTON_ROW,
+    );
+    assert_eq!(
+        rename_button_at(&shell, rects[0].x, row),
+        Some(RenameButton::Save)
+    );
+    assert_eq!(
+        rename_button_at(&shell, rects[1].x, row),
+        Some(RenameButton::Clear)
+    );
+    assert_eq!(
+        rename_button_at(&shell, rects[2].x, row),
+        Some(RenameButton::Cancel)
+    );
+    // 按钮行之外不命中。
+    assert_eq!(rename_button_at(&shell, rects[0].x, row + 1), None);
 }
 
 #[test]
@@ -310,16 +327,26 @@ fn confirm_modal_renders_question_and_buttons() {
 
 #[test]
 fn confirm_buttons_hit_their_cells() {
+    // 按真实按钮行几何取单元格：不写死列号。
     let shell = confirm_shell(SCREEN, "close \"x\"?").expect("confirm modal fits");
+    // 确认浮层的按钮行在内容区最后一行（与重命名浮层的固定行号不同）。
+    let offset = shell.inner.height.saturating_sub(1);
+    let rects = crate::ui::widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        crate::ui::overlay::BUTTON_GAP,
+        offset,
+    );
+    let row = shell.inner.y + offset;
     assert_eq!(
-        confirm_button_at(&shell, 25, 12),
+        confirm_button_at(&shell, rects[0].x, row),
         Some(ConfirmButton::Confirm)
     );
     assert_eq!(
-        confirm_button_at(&shell, 42, 12),
+        confirm_button_at(&shell, rects[1].x, row),
         Some(ConfirmButton::Cancel)
     );
-    assert_eq!(confirm_button_at(&shell, 24, 12), None);
+    assert_eq!(confirm_button_at(&shell, rects[0].x, row + 1), None);
 }
 
 #[test]

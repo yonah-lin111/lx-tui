@@ -61,10 +61,34 @@ fn model_picker_marks_current_selection_and_focuses_it() {
 }
 
 #[test]
-fn model_picker_without_bound_selection_has_no_current_marker() {
+fn model_picker_marks_current_model_after_restart() {
+    // 回归：重启后窗格级 `chat.selection` 是 None，真正生效的是配置 `defaultModel`。
+    // 只读 `chat.selection` 会让"重启后打开面板看不到当前模型"。
     let mut state = ready_state("x");
     let pane = focus_pane(&state);
-    // 配置里有候选但窗格尚未绑定选择（如刚启动）。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .selection = None;
+    // ready_state 的配置默认模型是 p/m。
+    assert!(state.models.settings.default_model.is_some());
+    assert!(open_model_picker(&mut state, pane));
+    let Some(SlashPanel::Model(picker)) =
+        state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone())
+    else {
+        panic!("model panel");
+    };
+    assert_eq!(picker.current, Some(0), "重启后仍标出配置里的当前模型");
+    assert_eq!(picker.window.active, 0, "高亮也落在当前模型上");
+}
+
+#[test]
+fn model_picker_falls_back_to_default_when_pane_selection_is_stale() {
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    // 窗格选择指向已不存在的 provider/model：按 `effective_selection` 回落配置默认。
     state
         .pane_mut_anywhere(pane)
         .expect("pane")
@@ -81,7 +105,28 @@ fn model_picker_without_bound_selection_has_no_current_marker() {
     else {
         panic!("model panel");
     };
-    assert_eq!(picker.current, None, "不在候选列表里就不标");
+    assert_eq!(picker.current, Some(0), "失效选择回落到配置默认并标出");
+}
+
+#[test]
+fn model_picker_without_any_selection_has_no_current_marker() {
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    // 窗格没有选择、配置也没有 defaultModel：确实没有"当前模型"可标。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .selection = None;
+    state.models.settings.default_model = None;
+    assert!(open_model_picker(&mut state, pane));
+    let Some(SlashPanel::Model(picker)) =
+        state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone())
+    else {
+        panic!("model panel");
+    };
+    assert_eq!(picker.current, None, "没有任何生效模型时不标");
 }
 
 #[test]

@@ -323,8 +323,8 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "click selects only: \n{}",
         app.screen()
     );
-    // 点击 [save enter] 才执行保存。
-    app.click("[save enter]");
+    // 点击保存按钮（文案里的 Enter 用 `↵` 符号）才执行保存。
+    app.click("[save ↵]");
     assert!(
         app.wait_gone("Save prompt to folder"),
         "picker closed after confirm: \n{}",
@@ -406,7 +406,7 @@ fn draft_save_search_and_rename_via_real_mouse_and_keys() {
         "picker restored: \n{}",
         app.screen()
     );
-    app.click("[save enter]");
+    app.click("[save ↵]");
     assert!(
         app.wait_gone("Save prompt to folder"),
         "draft saved into new folder: \n{}",

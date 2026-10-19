@@ -103,8 +103,12 @@ fn view<'a>(
     area: Rect,
 ) -> CommandPanelView<'a> {
     use crate::app::state::{ModelPickerStage, SlashPanel};
-    let (title, window) = match panel {
-        SlashPanel::Commands { window, .. } => (text::LX_SLASH_PANEL_TITLE, *window),
+    let (title, window, footer) = match panel {
+        SlashPanel::Commands { window, .. } => (
+            text::LX_SLASH_PANEL_TITLE,
+            *window,
+            text::LX_SLASH_PANEL_FOOTER,
+        ),
         SlashPanel::Model(picker) => (
             if matches!(picker.stage, ModelPickerStage::Models) {
                 text::LX_MODEL_PANEL_TITLE
@@ -112,8 +116,14 @@ fn view<'a>(
                 text::LX_MODEL_VARIANT_PANEL_TITLE
             },
             picker.window,
+            text::LX_SLASH_PANEL_FOOTER,
         ),
-        SlashPanel::History(history) => (text::LX_HISTORY_PANEL_TITLE, history.window),
+        // `/resume` 额外提示 `Shift+Enter` 打开会话编辑模态（`⇧↵` 与 `@` 面板同符号）。
+        SlashPanel::History(history) => (
+            text::LX_HISTORY_PANEL_TITLE,
+            history.window,
+            text::LX_HISTORY_PANEL_FOOTER,
+        ),
     };
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
@@ -128,7 +138,7 @@ fn view<'a>(
         max_height: Some(cap),
         title: Some(title),
         right_title: None,
-        footer: Some(text::LX_SLASH_PANEL_FOOTER),
+        footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,
     }

@@ -48,9 +48,13 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     }
     // 当前生效的模型（行首 `❯` 标记 + 底色）；也是打开时的定位目标。
+    //
+    // 必须走 `effective_selection`：窗格级 `chat.selection` 只在本进程选过模型时才有值，
+    // 重启后是 None，此时真正生效的是配置里的 `defaultModel`。只读 `chat.selection`
+    // 会让"重启后打开面板看不到当前模型"——重启前选的模型明明还在生效。
     let current = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.selection.as_ref())
+        .and_then(|target| target.lx.chat.effective_selection(&state.models))
         .and_then(|selection| {
             candidates.iter().position(|candidate| {
                 candidate.selection.provider == selection.provider
