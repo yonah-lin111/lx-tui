@@ -4,9 +4,15 @@
 //! 遍历复用 `ignore` crate 的 `WalkBuilder`（与项目已有的文件扫描同源），不依赖外部 `rg`。
 //! 结果按 `(path, line)` 稳定排序，命中行超长按字符截断并显式标记。
 //!
-//! 时限与规模都有硬上限：超过 [`MAX_SEARCH_RESULTS`]、[`MAX_SEARCH_FILES`] 或
-//! [`SEARCH_TIMEOUT`] 时立即停止遍历并置 `truncated`，绝不无限遍历。
+//! 可达文件集合对齐 ripgrep 的默认语义：`.git/` 与 `.jj/` 是**always-ignore**（与是否搜隐藏
+//! 文件无关）；`.gitignore` / `.ignore` 在真正的 git 仓库内生效（`require_git(true)`），且
+//! 父级忽略规则不随搜索根漂移（`parents(true)`）。隐藏文件（`.env` 等）默认**会**被搜索。
+//!
+//! 时限与规模都有硬上限：超过 [`MAX_SEARCH_RESULTS`]、[`MAX_SEARCH_FILES`]、`MAX_DEPTH`
+//! 或 [`SEARCH_TIMEOUT`] 时立即停止遍历并置 `truncated`，绝不无限遍历。遍历与扫描共用
+//! **同一个** deadline，因此单次调用的总时长上限就是一个 [`SEARCH_TIMEOUT`]。
 
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -34,8 +40,23 @@ const ALLOWED: [&str; 6] = [
     "limit",
 ];
 
-/// 遍历深度上限：显式指定广域路径时避免无限下钻。
+/// 遍历深度上限（`Caps::default()` 的生产值）：显式指定广域路径时避免无限下钻。
+///
+/// 触发时**必须**置 `truncated`（见 [`collect_files`]），否则就是静默截断。
 const MAX_DEPTH: usize = 32;
+
+/// VCS 目录名：无论 `hidden` 设置如何都排除（ripgrep 的 always-ignore 硬规则）。
+///
+/// `.git/config` 含 remote URL 凭据、`.git/logs` 含操作历史，`.jj/` 同理，绝不能进上下文。
+const VCS_DIRS: [&str; 2] = [".git", ".jj"];
+
+#[cfg(test)]
+thread_local! {
+    /// 测试注入点：统计当前线程构造 deadline 的次数。
+    ///
+    /// 用 thread-local 而非全局计数器，避免并行测试互相干扰；断言「一次调用只花一个预算」。
+    static DEADLINES_CREATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// 编译后的匹配器：正则或字面量（大小写开关已折叠进匹配器）。
 enum Matcher {
@@ -93,7 +114,8 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
     if metadata.is_file() {
         // 单文件搜索：直接扫该文件（不受 include 与忽略规则约束）。
         let single = [root.clone()];
-        return scan_files(&matcher, &single, &caps);
+        let deadline = deadline(&caps);
+        return scan_files(&matcher, &single, &caps, deadline);
     }
     if !metadata.is_dir() {
         return Err(ToolFailure::new(
@@ -103,8 +125,10 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
     }
 
     let glob = build_include(&root, include)?;
-    let (files, truncated) = collect_files(&root, glob.as_ref(), &caps);
-    let mut result = scan_files(&matcher, &files, &caps)?;
+    // 遍历与扫描共用一个 deadline：单次调用的总时长上限就是一个 `caps.timeout`。
+    let deadline = deadline(&caps);
+    let (files, truncated) = collect_files(&root, glob.as_ref(), &caps, deadline);
+    let mut result = scan_files(&matcher, &files, &caps, deadline)?;
     if let ToolExecutionResult::Search {
         truncated: inner, ..
     } = &mut result
@@ -114,6 +138,40 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
     Ok(result)
 }
 
+/// 本次调用的唯一 deadline（遍历与扫描共用，避免两段各算一次而变成 2× 预算）。
+fn deadline(caps: &Caps) -> Instant {
+    #[cfg(test)]
+    DEADLINES_CREATED.with(|cell| cell.set(cell.get() + 1));
+    Instant::now() + caps.timeout
+}
+
+/// 重置当前线程的 deadline 计数（测试用）。
+#[cfg(test)]
+fn reset_deadline_count() {
+    DEADLINES_CREATED.with(|cell| cell.set(0));
+}
+
+/// 当前线程已创建的 deadline 数量（测试用）。
+#[cfg(test)]
+fn deadline_count() -> usize {
+    DEADLINES_CREATED.with(std::cell::Cell::get)
+}
+
+/// 目录是否至少有一个子项（用 `read_dir` 只取一项，不排序也不收集）。
+///
+/// 只用于深度上限的截断判定：空目录被剪掉不算丢东西，不必报 `truncated`。
+fn dir_has_children(path: &Path) -> bool {
+    std::fs::read_dir(path)
+        .map(|mut entries| entries.next().is_some())
+        // 读不到目录（权限等）时按「可能有内容」处理：宁可多报截断，不静默丢结果。
+        .unwrap_or(true)
+}
+
+/// 是否为 VCS 元数据目录名（`.git` / `.jj`）。
+fn is_vcs_dir_name(name: &OsStr) -> bool {
+    VCS_DIRS.iter().any(|vcs| name == OsStr::new(vcs))
+}
+
 /// 搜索资源上限快照；生产值即模块常量，测试可注入更小的上限。
 #[derive(Debug, Clone, Copy)]
 struct Caps {
@@ -121,10 +179,12 @@ struct Caps {
     results: usize,
     /// 候选文件数上限。
     files: usize,
-    /// 遍历总时长上限。
+    /// 遍历总时长上限（遍历与扫描共用同一个 deadline）。
     timeout: std::time::Duration,
     /// 单文件字节上限。
     file_bytes: u64,
+    /// 遍历深度上限；目录 entry 落在该深度即无法再下钻，置 `truncated`。
+    depth: usize,
 }
 
 impl Default for Caps {
@@ -134,32 +194,47 @@ impl Default for Caps {
             files: MAX_SEARCH_FILES,
             timeout: SEARCH_TIMEOUT,
             file_bytes: MAX_SEARCH_FILE_BYTES,
+            depth: MAX_DEPTH,
         }
     }
 }
 
-/// 遍历目录收集候选文件；返回文件列表与是否因上限/超时截断。
+/// 遍历目录收集候选文件；返回文件列表与是否因上限/超时/深度截断。
+///
+/// `deadline` 由 [`run`] 统一计算，与 [`scan_files`] 共用同一个预算。
 fn collect_files(
     root: &Path,
     glob: Option<&ignore::overrides::Override>,
     caps: &Caps,
+    deadline: Instant,
 ) -> (Vec<PathBuf>, bool) {
-    let deadline = Instant::now() + caps.timeout;
     let mut files: Vec<PathBuf> = Vec::new();
     let mut truncated = false;
+    // `parents(true)` 必须与 `require_git(true)` **成对**设置：只开 parents 会让父目录
+    // （例如 `~/.gitignore` 里的 `*`）在非 git 目录里吞掉整棵子树，搜索结果变空；
+    // require_git(true) 把 gitignore 限定在真正的仓库内，与 git/ripgrep 语义一致
+    // （codex 在 `file-search/src/lib.rs` 记录过这个坑）。
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .ignore(true)
         .git_ignore(true)
         .git_global(false)
         .git_exclude(false)
-        .parents(false)
-        .require_git(false)
+        .parents(true)
+        .require_git(true)
         .follow_links(false)
-        .max_depth(Some(MAX_DEPTH))
+        .max_depth(Some(caps.depth))
         .filter_entry(|entry| {
-            // 只排除符号链接；目录本身由 ignore 规则决定是否下钻。
-            entry.depth() == 0 || entry.file_type().is_some_and(|kind| !kind.is_symlink())
+            // 搜索根本身始终放行：显式把 `path` 指到 `.git/` 内部时尊重显式意图。
+            if entry.depth() == 0 {
+                return true;
+            }
+            // 符号链接不跟随（剪掉整个子树），与 `follow_links(false)` 保持一致。
+            if entry.file_type().is_some_and(|kind| kind.is_symlink()) {
+                return false;
+            }
+            // VCS 目录是 always-ignore：与 `hidden` 设置无关，任何深度都剪掉。
+            !is_vcs_dir_name(entry.file_name())
         })
         .build();
     for entry in walker {
@@ -172,6 +247,15 @@ fn collect_files(
             break;
         }
         let Ok(entry) = entry else { continue };
+        if entry.file_type().is_some_and(|kind| kind.is_dir()) {
+            // 落在深度上限上的目录无法继续下钻：walker 只是不再深入，不会报错，
+            // 必须在这里显式标记，否则就是静默截断（review P2-2）。
+            // 只在它确实还有子项时才算截断：空目录本来就没有东西可丢，报截断是假消息。
+            if entry.depth() >= caps.depth && dir_has_children(entry.path()) {
+                truncated = true;
+            }
+            continue;
+        }
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {
             continue;
         }
@@ -191,8 +275,8 @@ fn scan_files(
     matcher: &Matcher,
     files: &[PathBuf],
     caps: &Caps,
+    deadline: Instant,
 ) -> ToolResult<ToolExecutionResult> {
-    let deadline = Instant::now() + caps.timeout;
     let mut matches: Vec<SearchMatch> = Vec::new();
     let mut truncated = false;
     let mut files_scanned = 0usize;

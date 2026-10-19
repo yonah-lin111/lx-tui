@@ -8,6 +8,8 @@
 //! - 参数按白名单字段解析，不接受未定义字段，也绝不把参数拼成 shell 命令；
 //! - 结果只有一种模型可见文本来源 [`format_for_model`]，UI 摘要走 [`to_summary`]，
 //!   DB 落库走 [`to_result_json`]；三者在同一处生成，避免多口径漂移；
+//! - 输入与输出都有硬上限：`read` 的单文件输入 16 MiB、目录条目 50 000 条，`search` 的
+//!   遍历深度/文件数/命中数/时长亦然；任一触顶都显式标记 `truncated`，不静默省略；
 //! - 写路径使用同目录临时文件 + rename 原子替换，并按规范化路径加短时锁避免并发写互相踩踏；
 //! - 不触碰 Git 索引/分支/暂存区/提交。
 
@@ -46,6 +48,18 @@ pub const MAX_READ_LINES: usize = 2000;
 
 /// `read` 单行输出字符上限：超长行截断并显式标记（避免单行撑爆上下文）。
 pub const MAX_READ_LINE_CHARS: usize = 4000;
+
+/// `read` **输入**单文件字节上限（16 MiB）：超过直接返回 `TooLarge`，不做部分读取。
+///
+/// 这是**输入**上限（愿意读进内存多少字节），与 [`MAX_READ_BYTES`] 的**输出**上限是两件
+/// 不同的事。codex 的对应值是 512 MiB（`exec-server/src/local_file_system_read.rs`），
+/// 我们取更保守的 16 MiB：超过此体积的文本文件几乎只能靠 `search` 定位后分段读，
+/// 全量读入既无意义也会挤占内存。
+pub const MAX_READ_FILE_INPUT_BYTES: u64 = 16 * 1024 * 1024;
+
+/// `read` 单次列目录的条目上限（对齐 codex 的 50 000）：
+/// 到达上限即停止收集并置 `truncated`，`total_lines` 退化为「已列出条目数」。
+pub const MAX_READ_DIR_ENTRIES: usize = 50_000;
 
 /// `search` 单次返回命中条数上限（也是 `limit` 参数的默认值）。
 pub const MAX_SEARCH_RESULTS: usize = 200;

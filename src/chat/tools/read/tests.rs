@@ -270,3 +270,85 @@ fn context_cwd_is_a_frozen_snapshot() {
     assert_eq!(expect_read(&result).0, "1: frozen\n");
     assert_eq!(ctx.cwd, fixture.path());
 }
+
+/// 输入上限：超过 [`MAX_READ_FILE_INPUT_BYTES`] 的文件直接 `TooLarge`，不读入内存。
+///
+/// 用 `set_len` 造稀疏文件（不占磁盘、也不产生内容），因此这条测试本身很快；
+/// 若实现先 `fs::read` 再判大小，消息里就不会出现 `larger than`。
+#[test]
+fn read_rejects_file_larger_than_input_cap() {
+    let fixture = Fixture::new("read-inputcap");
+    let path = fixture.join("huge.txt");
+    let file = std::fs::File::create(&path).expect("create sparse file");
+    // 36_574_330 B ≈ 34.9 MB，与 review 探针 9 的量级一致。
+    file.set_len(36_574_330).expect("set_len");
+    drop(file);
+
+    let result = execute(&fixture.ctx(), "read", r#"{"path":"huge.txt","limit":10}"#);
+    let message = match &result {
+        ToolExecutionResult::Failed { code, message, .. } => {
+            assert_eq!(*code, ToolErrorCode::TooLarge);
+            message.clone()
+        }
+        other => panic!("expected failure, got {other:?}"),
+    };
+    assert!(
+        message.contains("larger than"),
+        "message must state the cap: {message}"
+    );
+    assert!(message.contains("34.9 MB"), "message: {message}");
+    assert!(message.contains("16.0 MB"), "message: {message}");
+    // 错误消息只描述大小，绝不携带正文（稀疏文件也没有正文可泄漏）。
+    assert!(message.len() < 512, "message too long: {message}");
+    assert!(result.error_code() == Some(ToolErrorCode::TooLarge));
+
+    // 边界：恰好等于上限的文件仍会被读取（这里注入更小的上限验证 `>` 而非 `>=`）。
+    fixture.write("small.txt", "ok\n");
+    let caps = super::InputCaps {
+        file_bytes: 3,
+        ..super::InputCaps::default()
+    };
+    let len = std::fs::metadata(fixture.join("small.txt"))
+        .expect("stat")
+        .len();
+    let accepted = super::read_file(&fixture.join("small.txt"), len, 1, 10, &caps)
+        .expect("3-byte file is at the cap, not over it");
+    assert_eq!(expect_read(&accepted).0, "1: ok\n");
+}
+
+/// 目录条目上限：达到上限即停止收集并置 `truncated`，`total_lines` 是已列出条目数。
+///
+/// 真实上限 50 000 条不便于在测试里造，故通过 [`super::InputCaps`] 注入更小的值，
+/// 走的是与生产完全相同的分支。
+#[test]
+fn directory_read_caps_entries() {
+    let fixture = Fixture::new("read-dircap");
+    for index in 0..6 {
+        fixture.write(&format!("dir/f{index}.txt"), "");
+    }
+    let caps = super::InputCaps {
+        dir_entries: 3,
+        ..super::InputCaps::default()
+    };
+    let result = super::read_directory(&fixture.join("dir"), 1, 2000, &caps).expect("list");
+    let (content, _, end, _, truncated, total) = expect_read(&result);
+    assert!(truncated, "条目达上限必须置 truncated");
+    assert_eq!(total, 3, "total_lines 是已列出条目数，不是目录真实条目数");
+    assert_eq!(end, 3);
+    assert_eq!(content.lines().count(), 3);
+    // 默认上限下同一目录不被截断。
+    let full = super::read_directory(&fixture.join("dir"), 1, 2000, &super::InputCaps::default())
+        .expect("list");
+    let (_, _, _, _, truncated, total) = expect_read(&full);
+    assert!(!truncated);
+    assert_eq!(total, 6);
+}
+
+/// 字节数的人类可读格式：MB / KB 一位小数，小值保留字节。
+#[test]
+fn human_size_formats_readably() {
+    assert_eq!(super::human_size(36_574_330), "34.9 MB");
+    assert_eq!(super::human_size(16 * 1024 * 1024), "16.0 MB");
+    assert_eq!(super::human_size(1536), "1.5 KB");
+    assert_eq!(super::human_size(900), "900 bytes");
+}

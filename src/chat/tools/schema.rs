@@ -16,15 +16,20 @@ static TOOLS: [ToolSpec; 4] = [
          Returns numbered lines as `{line}: {text}` with 1-based line numbers. \
          `offset` is a 1-based first line (omitted = start at line 1) and `limit` caps \
          the number of returned lines. Long output is truncated explicitly and reports \
-         `next_offset` so you can continue reading.",
+         `next_offset` so you can continue reading. A single file larger than 16 MiB is \
+         rejected with a `too_large` error (the limit applies to the bytes read into \
+         memory, not to the returned lines); use `search` to locate the content first.",
         read_parameters,
     ),
     ToolSpec::new(
         "search",
         "Search file contents under a directory (default: the workspace root) using a \
-         regular expression, or a literal string when `literal` is true. Respects \
-         .gitignore/.ignore rules. Returns `path:line: text` matches sorted by path and \
-         line. Truncation (limit, file cap or timeout) is reported explicitly.",
+         regular expression, or a literal string when `literal` is true. Reaches the same \
+         files ripgrep does by default: `.git/` and `.jj/` are always skipped, \
+         `.gitignore`/`.ignore` rules are honored (only inside a real git repository), and \
+         hidden files such as `.env` ARE searched. Returns `path:line: text` matches sorted \
+         by path and line. Truncation (limit, file cap, depth cap or timeout) is reported \
+         explicitly via `truncated`.",
         search_parameters,
     ),
     ToolSpec::new(

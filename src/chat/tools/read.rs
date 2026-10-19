@@ -2,6 +2,10 @@
 //!
 //! `offset` 与返回行号都是 1-based；`offset` 超出文件行数返回 `OffsetOutOfRange`。
 //! 空文件、末行无换行、CRLF、Unicode 宽字符都按原样保留（行号只加前缀，不改内容）。
+//!
+//! 输入侧有硬上限：单文件超过 [`MAX_READ_FILE_INPUT_BYTES`]（16 MiB）直接返回 `TooLarge`
+//! 而不读入内存；目录最多收集 [`MAX_READ_DIR_ENTRIES`]（50 000）条，超出即停止并置
+//! `truncated`。输出侧上限（行数/字节/单行宽度）与它们相互独立。
 
 use std::path::Path;
 
@@ -11,10 +15,31 @@ use super::text::SourceText;
 use super::types::{
     ReadKind, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure, ToolResult,
 };
-use super::{MAX_READ_BYTES, MAX_READ_LINE_CHARS, MAX_READ_LINES};
+use super::{
+    MAX_READ_BYTES, MAX_READ_DIR_ENTRIES, MAX_READ_FILE_INPUT_BYTES, MAX_READ_LINE_CHARS,
+    MAX_READ_LINES,
+};
 
 /// `read` 允许的参数集合。
 const ALLOWED: [&str; 3] = ["path", "offset", "limit"];
+
+/// `read` 的输入上限快照；生产值即模块常量，测试可注入更小的上限。
+#[derive(Debug, Clone, Copy)]
+struct InputCaps {
+    /// 单文件读入内存的字节上限。
+    file_bytes: u64,
+    /// 目录条目收集上限。
+    dir_entries: usize,
+}
+
+impl Default for InputCaps {
+    fn default() -> Self {
+        Self {
+            file_bytes: MAX_READ_FILE_INPUT_BYTES,
+            dir_entries: MAX_READ_DIR_ENTRIES,
+        }
+    }
+}
 
 /// 执行 `read`。
 pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExecutionResult> {
@@ -38,7 +63,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
         metadata
     };
     if metadata.is_dir() {
-        return read_directory(&target, offset, limit);
+        return read_directory(&target, offset, limit, &InputCaps::default());
     }
     if !metadata.is_file() {
         return Err(ToolFailure::new(
@@ -46,11 +71,38 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
             format!("{} is not a regular file", path::display(&target)),
         ));
     }
-    read_file(&target, offset, limit)
+    read_file(
+        &target,
+        metadata.len(),
+        offset,
+        limit,
+        &InputCaps::default(),
+    )
 }
 
 /// 读取文本文件的一段。
-fn read_file(target: &Path, offset: usize, limit: usize) -> ToolResult<ToolExecutionResult> {
+///
+/// `len` 是调用方已 `stat` 得到的文件字节数：先判输入上限再 `fs::read`，避免把巨型文件
+/// 整个读进内存（`limit` 只限制**输出**行数，不能替代输入上限）。
+fn read_file(
+    target: &Path,
+    len: u64,
+    offset: usize,
+    limit: usize,
+    caps: &InputCaps,
+) -> ToolResult<ToolExecutionResult> {
+    if len > caps.file_bytes {
+        // 消息只含路径与大小，绝不含文件内容。
+        return Err(ToolFailure::new(
+            ToolErrorCode::TooLarge,
+            format!(
+                "{} is {}, larger than the {} read limit; use offset/limit on a smaller range or search for the content instead",
+                path::display(target),
+                human_size(len),
+                human_size(caps.file_bytes),
+            ),
+        ));
+    }
     let bytes =
         std::fs::read(target).map_err(|error| path::map_io_error(&error, "read", target))?;
     let source = SourceText::parse(&bytes)?;
@@ -120,6 +172,22 @@ fn render_line(number: usize, line: &str) -> (String, bool) {
     (format!("{number}: {head}…[truncated]"), true)
 }
 
+/// 字节数的人类可读格式（MB / KB 保留一位小数，字节原样）。
+///
+/// 只用于工具错误消息，不参与任何判定；因此无需精确到多个单位档位。
+fn human_size(bytes: u64) -> String {
+    const KIB: f64 = 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    let value = bytes as f64;
+    if value >= MIB {
+        format!("{:.1} MB", value / MIB)
+    } else if value >= KIB {
+        format!("{:.1} KB", value / KIB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
 /// `offset` 越界错误（消息含允许范围，不含文件内容）。
 fn offset_error(offset: usize, total_lines: usize) -> ToolFailure {
     ToolFailure::new(
@@ -131,11 +199,24 @@ fn offset_error(offset: usize, total_lines: usize) -> ToolFailure {
 /// 列目录条目：按名称排序，`[dir]` / `[file]` 前缀，每行一个。
 ///
 /// `offset` / `limit` 与文件读取同口径（1-based 条目序号），便于继续列出大型目录。
-fn read_directory(target: &Path, offset: usize, limit: usize) -> ToolResult<ToolExecutionResult> {
+/// 收集阶段最多取 [`InputCaps::dir_entries`] 条，达到即停止并置 `truncated`；此时
+/// `total_lines` 是**已列出的条目数**而非目录的真实条目数（真实数需要全量遍历才能知道，
+/// 而这正是要避免的开销），`format_for_model` 的 `truncated` 行会说明这一点。
+fn read_directory(
+    target: &Path,
+    offset: usize,
+    limit: usize,
+    caps: &InputCaps,
+) -> ToolResult<ToolExecutionResult> {
     let entries = std::fs::read_dir(target)
         .map_err(|error| path::map_io_error(&error, "list directory", target))?;
     let mut names: Vec<(String, bool)> = Vec::new();
+    let mut entries_truncated = false;
     for entry in entries {
+        if names.len() >= caps.dir_entries {
+            entries_truncated = true;
+            break;
+        }
         let entry = match entry {
             Ok(entry) => entry,
             // 单个条目读取失败按跳过处理（父目录仍可列）。
@@ -158,7 +239,7 @@ fn read_directory(target: &Path, offset: usize, limit: usize) -> ToolResult<Tool
             start_line: 0,
             end_line: 0,
             next_offset: None,
-            truncated: false,
+            truncated: entries_truncated,
             total_lines: 0,
         });
     }
@@ -192,7 +273,8 @@ fn read_directory(target: &Path, offset: usize, limit: usize) -> ToolResult<Tool
         start_line: start_index + 1,
         end_line,
         next_offset,
-        truncated: next_offset.is_some(),
+        // 条目上限与分页截断都走同一个 `truncated` 标志，不新造字段。
+        truncated: next_offset.is_some() || entries_truncated,
         total_lines,
     })
 }
