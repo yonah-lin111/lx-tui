@@ -304,3 +304,226 @@ fn details_marker_text_is_ascii_and_short() {
         assert!(!label.is_empty());
     }
 }
+
+// ===== 树形版式（`│` 中间行 + `└─` 收口）=====
+
+#[test]
+fn command_body_uses_a_tree_with_a_single_leaf_at_the_end() {
+    let output = "aaa\nbbb\nccc\nddd\n";
+    let (text, _) = render(&running_command(output), 60, false);
+    let lines: Vec<&str> = text.lines().collect();
+    // 第 1 行是标题，其余都是树体。
+    assert!(lines[0].starts_with('■'), "第 1 行是标题：{text}");
+    for line in &lines[1..lines.len() - 1] {
+        assert!(
+            line.starts_with(text::agent::TREE_BAR),
+            "中间行都以竖线开头：{line:?}"
+        );
+    }
+    assert!(
+        lines[lines.len() - 1].starts_with(text::agent::TREE_LEAF),
+        "最后一行用直角收口：{text}"
+    );
+    // 只出现一次收口——树干不会分叉成多根。
+    assert_eq!(
+        text.matches(text::agent::TREE_LEAF).count(),
+        1,
+        "整张卡片只有一根树干：{text}"
+    );
+}
+
+#[test]
+fn tree_prefixes_are_equal_width_so_content_stays_aligned() {
+    // `  │  ` 与 `  └─ ` 必须等宽，否则正文会左右错位（视觉上树干断裂）。
+    assert_eq!(
+        text::agent::TREE_BAR.width(),
+        text::agent::TREE_LEAF.width(),
+        "竖线与收口前缀必须等宽"
+    );
+    let (text, _) = render(&running_command("out\n"), 60, false);
+    let content_columns: Vec<usize> = text
+        .lines()
+        .skip(1)
+        .map(|line| {
+            let prefix = if line.starts_with(text::agent::TREE_LEAF) {
+                text::agent::TREE_LEAF
+            } else {
+                text::agent::TREE_BAR
+            };
+            line.strip_prefix(prefix).map(str::len).unwrap_or(0)
+        })
+        .collect();
+    assert!(
+        content_columns.iter().all(|cols| *cols > 0),
+        "每行都有正文：{text}"
+    );
+}
+
+#[test]
+fn folded_preview_states_how_many_lines_are_hidden() {
+    let output: String = (0..10).map(|index| format!("line {index}\n")).collect();
+    let (text, _) = render(&running_command(&output), 60, false);
+    assert!(
+        text.contains(text::agent::EARLIER_OUTPUT_HINT),
+        "折叠必须显式说明省略了多少行：{text}"
+    );
+    assert!(text.contains("7 more lines"), "10 行留 3 行 = 省 7：{text}");
+    // 展开后不再需要这条提示（全部输出都在）。
+    let (expanded, _) = render(&running_command(&output), 60, true);
+    assert!(
+        !expanded.contains(text::agent::EARLIER_OUTPUT_HINT),
+        "展开后不再提示省略：{expanded}"
+    );
+}
+
+#[test]
+fn command_line_has_a_shell_prompt_marker() {
+    let (text, _) = render(&running_command("out\n"), 60, false);
+    assert!(
+        text.contains(&format!(
+            "{}cargo test chat::tools",
+            text::agent::COMMAND_PROMPT_PREFIX
+        )),
+        "命令行带 `$ ` 提示符：{text}"
+    );
+}
+
+#[test]
+fn interaction_body_keys_input_before_output_under_the_same_tree() {
+    let (text, _) = render(&interaction("new line\n", Some("yes\\n")), 60, false);
+    let lines: Vec<&str> = text.lines().collect();
+    let stdin_line = lines
+        .iter()
+        .position(|line| line.contains("stdin: yes\\n"))
+        .expect("输入预览在树体里");
+    let output_line = lines
+        .iter()
+        .position(|line| line.contains("new line"))
+        .expect("输出在树体里");
+    assert!(stdin_line < output_line, "先输入后输出：{text}");
+    assert!(
+        lines[stdin_line].starts_with(text::agent::TREE_BAR),
+        "输入行是中间行：{text}"
+    );
+    assert!(
+        lines[output_line].starts_with(text::agent::TREE_LEAF),
+        "输出行收口：{text}"
+    );
+}
+
+#[test]
+fn plan_steps_use_the_tree_and_leaf_lands_on_the_explanation() {
+    let call = plan(vec![
+        ("one", PlanStepView::Completed),
+        ("two", PlanStepView::Pending),
+    ]);
+    let (text, _) = render(&call, 60, false);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[1].starts_with(text::agent::TREE_BAR) && lines[1].contains("[x] one"),
+        "步骤是中间行：{text}"
+    );
+    assert!(
+        lines[2].starts_with(text::agent::TREE_BAR) && lines[2].contains("[ ] two"),
+        "有解释时步骤不收口：{text}"
+    );
+    assert!(
+        lines[3].starts_with(text::agent::TREE_LEAF) && lines[3].contains("checking behavior"),
+        "解释行收口：{text}"
+    );
+    // 没有解释时，最后一条步骤自己收口（树干照样只有一根）。
+    let mut without = call.clone();
+    if let Some(ToolDetailView::Plan(view)) = without.detail.as_deref_mut() {
+        view.explanation = None;
+    }
+    let (text, _) = render(&without, 60, false);
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines[lines.len() - 1].starts_with(text::agent::TREE_LEAF),
+        "无解释时最后一条步骤收口：{text}"
+    );
+    assert_eq!(text.matches(text::agent::TREE_LEAF).count(), 1, "{text}");
+}
+
+#[test]
+fn empty_plan_also_closes_with_a_leaf() {
+    let (text, _) = render(&plan(Vec::new()), 50, false);
+    let last = text.lines().last().expect("至少两行");
+    assert!(
+        last.starts_with(text::agent::TREE_LEAF),
+        "空计划同样用直角收口：{text}"
+    );
+}
+
+#[test]
+fn running_process_keeps_breathing_even_after_the_tool_settled() {
+    // 命令已经交回（工具 `completed`），但进程仍在后台跑：方块必须继续呼吸。
+    let mut call = running_command("out\n");
+    call.status = ToolStatus::Completed;
+    let rect = Rect::new(0, 0, 60, 30);
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(&mut grid, rect, 0, &mut row_index, &call, 0, false);
+    let filled = grid.cell(rect.x, rect.y);
+    assert_eq!(
+        filled.ch,
+        text::agent::STEP_MARK_FILLED,
+        "运行中的进程在第一相位是实心方块"
+    );
+    // 第二相位翻空心：仍在跑 → 继续呼吸。
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        &call,
+        text::agent::STEP_BREATH_TICKS,
+        false,
+    );
+    assert_eq!(
+        grid.cell(rect.x, rect.y).ch,
+        text::agent::STEP_MARK_HOLLOW,
+        "运行中的进程跟随呼吸相位，不因工具已结算而静止"
+    );
+}
+
+#[test]
+fn finished_process_stops_breathing() {
+    let mut call = running_command("out\n");
+    call.status = ToolStatus::Completed;
+    if let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.state = ProcessStateView::Exited { code: Some(0) };
+    }
+    let rect = Rect::new(0, 0, 60, 30);
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        &call,
+        text::agent::STEP_BREATH_TICKS,
+        false,
+    );
+    assert_eq!(
+        grid.cell(rect.x, rect.y).ch,
+        text::agent::STEP_MARK_FILLED,
+        "已退出的进程停为实心方块（不随相位变化）"
+    );
+}
+
+/// 折叠预览行数只有一个口径：视图快照常量与渲染常量必须相等。
+///
+/// 两处若漂移，卡片会「预览 3 行、快照存 6 行」——摘要与绘制说的不是同一件事。
+#[test]
+fn preview_line_budget_has_a_single_source_of_truth() {
+    use super::super::command::PREVIEW_LINES;
+    assert_eq!(
+        PREVIEW_LINES,
+        crate::app::state::lx::chat::tool_view::COMMAND_PREVIEW_LINES,
+        "渲染层预览行数必须与视图常量一致"
+    );
+}

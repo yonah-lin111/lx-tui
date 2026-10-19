@@ -6,8 +6,8 @@
 use serde_json::Value;
 
 use crate::chat::process::{
-    DEFAULT_YIELD_MS, ExecArgs, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS, MAX_YIELD_MS,
-    StdinArgs,
+    DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, ExecArgs, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES,
+    MAX_TIMEOUT_MS, MAX_YIELD_MS, StdinArgs,
 };
 
 use super::types::{ToolErrorCode, ToolExecutionResult, ToolFailure, ToolResultPublic};
@@ -35,7 +35,8 @@ pub fn parse_exec_args(arguments_json: &str) -> ToolResultPublic<ExecArgs> {
         .to_string();
     let workdir = optional_string(&value, "workdir")?;
     let shell = optional_string(&value, "shell")?;
-    let login = optional_bool(&value, "login")?.unwrap_or(false);
+    // 对齐 codex：默认使用登录 shell（读到用户的 PATH/别名），显式 `login: false` 才关闭。
+    let login = optional_bool(&value, "login")?.unwrap_or(true);
     let tty = optional_bool(&value, "tty")?.unwrap_or(false);
     let yield_time_ms = optional_int(&value, "yield_time_ms", 0, MAX_YIELD_MS as i64)?
         .unwrap_or(DEFAULT_YIELD_MS as i64) as u64;
@@ -90,7 +91,7 @@ pub fn parse_stdin_args(arguments_json: &str) -> ToolResultPublic<StdinArgs> {
         ));
     }
     let yield_time_ms = optional_int(&value, "yield_time_ms", 0, MAX_YIELD_MS as i64)?
-        .unwrap_or(DEFAULT_YIELD_MS as i64) as u64;
+        .unwrap_or(DEFAULT_STDIN_YIELD_MS as i64) as u64;
     let max_output_tokens = optional_int(&value, "max_output_tokens", 1, MAX_OUTPUT_TOKENS as i64)?
         .map(|tokens| tokens as usize)
         .unwrap_or(MAX_OUTPUT_TOKENS);

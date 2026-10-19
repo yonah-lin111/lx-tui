@@ -8,6 +8,7 @@ mod session;
 mod slash_panels;
 mod stop;
 mod timeline;
+mod viewport_anchor;
 
 use super::*;
 use crate::app::state::{

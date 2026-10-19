@@ -21,6 +21,8 @@ fn running_result() -> ProcessResult {
         input: None,
         wrote_input: false,
         terminate: false,
+        chunk_id: "abc123".into(),
+        wall_time_ms: 5,
     }
 }
 
@@ -130,8 +132,13 @@ fn preview_shows_the_last_lines_only() {
     let output: String = (1..=20).map(|index| format!("line {index}\n")).collect();
     let preview = preview_lines(&output);
     assert_eq!(preview.len(), COMMAND_PREVIEW_LINES);
-    assert_eq!(preview.first().map(String::as_str), Some("line 15"));
+    // 窗口贴着输出的末尾（最后一条一定是末行）。
     assert_eq!(preview.last().map(String::as_str), Some("line 20"));
+    assert_eq!(
+        preview.first().map(String::as_str),
+        Some(format!("line {}", 21 - COMMAND_PREVIEW_LINES).as_str()),
+        "预览是尾部窗口，条数由 COMMAND_PREVIEW_LINES 决定"
+    );
 }
 
 #[test]

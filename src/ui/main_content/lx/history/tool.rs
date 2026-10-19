@@ -42,6 +42,9 @@ mod command;
 pub(crate) mod gallery;
 mod plan;
 
+/// 树形前缀列数（`  │  ` 与 `  └─ ` 等宽，都是 5 列）；命令/交互/计划卡片共用。
+pub(super) const TREE_COLS: usize = 5;
+
 /// 工具步骤占用的渲染行数。
 ///
 /// - 文件工具：**恒为 2 行**（标题行 + 详情行）；
@@ -274,6 +277,24 @@ pub(super) fn header_with_verb(
     status: Option<String>,
     expanded: bool,
 ) -> Vec<Segment> {
+    let mark = mark_of(call.status, loading_frame);
+    header_with_mark(call, width, loading_frame, verb, status, expanded, mark)
+}
+
+/// 同上，但方块状态由调用方指定。
+///
+/// 进程卡片需要它：命令已经交回且工具结算为 `completed`，但**进程本身仍在跑**时，
+/// 方块应继续呼吸（`Running`），不能被工具的终态覆盖。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn header_with_mark(
+    call: &ToolCallView,
+    width: u16,
+    loading_frame: usize,
+    verb: &str,
+    status: Option<String>,
+    expanded: bool,
+    mark: StepMark,
+) -> Vec<Segment> {
     let limit = usize::from(width);
     let tint = match call.status {
         ToolStatus::Failed => Some(style::agent_fail()),
@@ -284,7 +305,6 @@ pub(super) fn header_with_verb(
         Some(tint) => Segment::new(segment.text, tint),
         None => segment,
     };
-    let mark = mark_of(call.status, loading_frame);
     let lead = paint(Segment::new(
         mark.segment(loading_frame),
         mark.style(StepKind::Tool),
@@ -317,12 +337,10 @@ pub(super) fn header_with_verb(
         if used + tail_cols + gap <= limit {
             let pad = limit - used - tail_cols;
             segments.push(Segment::new(" ".repeat(pad), style::text()));
-            let last = tail.len().saturating_sub(1);
             for (index, segment) in tail.into_iter().enumerate() {
                 if index > 0 {
                     segments.push(Segment::new(" ", style::text()));
                 }
-                let _ = last;
                 segments.push(segment);
             }
         }

@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::chat::process::{
-    DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS, MAX_YIELD_MS,
+    DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS,
+    MAX_YIELD_MS,
 };
 
 /// 取失败结果里的稳定错误码（便于断言“是校验失败而不是执行失败”）。
@@ -19,7 +20,7 @@ fn exec_minimal_command_gets_defaults() {
     assert_eq!(args.cmd, "echo hi");
     assert_eq!(args.workdir, None);
     assert_eq!(args.shell, None);
-    assert!(!args.login);
+    assert!(args.login, "默认登录 shell（对齐 codex）");
     assert!(!args.tty);
     assert_eq!(args.yield_time_ms, DEFAULT_YIELD_MS);
     assert_eq!(args.timeout_ms, None, "默认无总寿命上限");
@@ -90,7 +91,14 @@ fn stdin_defaults_and_requires_session_id() {
     assert_eq!(args.session_id, 7);
     assert_eq!(args.chars, "", "空写 = 只读输出");
     assert!(!args.terminate);
-    assert_eq!(args.yield_time_ms, DEFAULT_YIELD_MS);
+    assert_eq!(
+        args.yield_time_ms, DEFAULT_STDIN_YIELD_MS,
+        "交互写默认快速返回（对齐 codex 的 250ms）"
+    );
+    assert_ne!(
+        DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS,
+        "首轮命令与交互的默认等待窗口刻意不同"
+    );
 
     assert!(parse_stdin_args(r#"{}"#).is_err(), "session_id 必填");
     assert!(

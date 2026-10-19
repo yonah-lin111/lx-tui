@@ -35,9 +35,17 @@ use super::{
 };
 
 /// 默认等待窗口（毫秒）。
-pub const DEFAULT_YIELD_MS: u64 = 1000;
+///
+/// 对齐 codex：`exec_command` 默认等 10s（`write_stdin` 另有默认，见
+/// [`DEFAULT_STDIN_YIELD_MS`]）。窗口只决定**本次工具调用等多久**，到期不杀进程。
+pub const DEFAULT_YIELD_MS: u64 = 10_000;
+/// `write_stdin` 的默认等待窗口（毫秒）：交互写要快速返回，对齐 codex 的 250ms。
+///
+/// 与 `exec_command` 分开：交互是「打字 → 看反应」，等 10s 完全没有意义；
+/// 而首轮命令往往要几秒才吐第一行输出，等 250ms 只会立刻返回空。
+pub const DEFAULT_STDIN_YIELD_MS: u64 = 250;
 /// 等待窗口上限（毫秒）。
-pub const MAX_YIELD_MS: u64 = 10_000;
+pub const MAX_YIELD_MS: u64 = 30_000;
 /// 命令总寿命上限（毫秒）：24 小时。
 pub const MAX_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1000;
 /// 返回模型的文本近似 token 上限。
@@ -417,6 +425,7 @@ impl ProcessManager {
                 }
             });
         }
+        let started = tokio::time::Instant::now();
         self.wait_window(
             &handle,
             args.yield_time_ms,
@@ -424,7 +433,13 @@ impl ProcessManager {
             args.timeout_ms,
         )
         .await;
-        Ok(self.result_of(&handle, ProcessResultKind::ExecCommand, None, false))
+        Ok(self.result_of(
+            &handle,
+            ProcessResultKind::ExecCommand,
+            None,
+            false,
+            started,
+        ))
     }
 
     /// 进程交互：空写只读输出；非空写 stdin；`terminate` 显式停止。
@@ -447,6 +462,7 @@ impl ProcessManager {
                 format!("'chars' exceeds {MAX_STDIN_BYTES} bytes"),
             ));
         }
+        let started = tokio::time::Instant::now();
         if args.terminate {
             self.stop_handle(&handle, StopReason::Stopped).await;
             let mut result = self.result_of(
@@ -454,6 +470,7 @@ impl ProcessManager {
                 ProcessResultKind::WriteStdin,
                 Some(preview_input(&args.chars)),
                 true,
+                started,
             );
             if result.output.is_empty() {
                 // 显式停止要能看到“最后输出”：读游标已经取空时，补上保留的尾部
@@ -479,7 +496,13 @@ impl ProcessManager {
                     .collect::<String>(),
             )
         });
-        let mut result = self.result_of(&handle, ProcessResultKind::WriteStdin, input, false);
+        let mut result = self.result_of(
+            &handle,
+            ProcessResultKind::WriteStdin,
+            input,
+            false,
+            started,
+        );
         result.wrote_input = wrote_input;
         Ok(result)
     }
@@ -492,8 +515,9 @@ impl ProcessManager {
                 "unknown or expired session_id",
             ));
         };
+        let started = tokio::time::Instant::now();
         self.stop_handle(&handle, StopReason::Stopped).await;
-        Ok(self.result_of(&handle, ProcessResultKind::WriteStdin, None, true))
+        Ok(self.result_of(&handle, ProcessResultKind::WriteStdin, None, true, started))
     }
 
     /// 停止一批进程（会话关闭、Esc 停止当前轮）。
@@ -638,6 +662,7 @@ impl ProcessManager {
         kind: ProcessResultKind,
         input: Option<String>,
         terminate: bool,
+        started: tokio::time::Instant,
     ) -> ProcessResult {
         let budget = MAX_MODEL_OUTPUT_BYTES;
         let read = handle.read_for_model(budget);
@@ -658,6 +683,9 @@ impl ProcessManager {
             input,
             wrote_input: false,
             terminate,
+            chunk_id: crate::chat::process::generate_chunk_id(),
+            // 与 codex 的 `wall_time_seconds` 同口径：本次调用在等待窗口内真正花掉的墙钟。
+            wall_time_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
         }
     }
 

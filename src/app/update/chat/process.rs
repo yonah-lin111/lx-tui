@@ -163,13 +163,16 @@ pub fn apply_process_exit(
 }
 
 /// 切换某个工具卡片的详情展开状态；`call_id` 未知时返回 false。
+///
+/// 与 [`super::toggle_thinking_at`] 同一口径：先锚定视口再切换，否则跟随底部时
+/// 展开后界面会跳回历史最顶部。
 pub fn toggle_tool_detail(
     state: &mut AppState,
     pane: PaneId,
     message_id: &str,
     call_id: &str,
 ) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+    let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
     if !target
@@ -181,6 +184,10 @@ pub fn toggle_tool_detail(
     {
         return false;
     }
+    super::pin_lx_viewport(state, pane);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
     target.lx.chat.toggle_detail(message_id, call_id);
     true
 }

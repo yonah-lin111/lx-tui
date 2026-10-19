@@ -103,6 +103,13 @@ fn format_process(result: &crate::chat::process::ProcessResult) -> String {
         result.session_id,
         result.state.as_str()
     ));
+    // 与 codex 的响应头同口径：分块标识 + 实际墙钟时间（秒），模型据此判断
+    // 「这次是不是刚好卡在等待窗口边界」，以及把本次输出与后续轮次区分开。
+    text.push_str(&format!("chunk_id: {}\n", result.chunk_id));
+    text.push_str(&format!(
+        "wall_time_seconds: {:.4}\n",
+        result.wall_time_ms as f64 / 1_000.0
+    ));
     if let Some(code) = result.exit_code {
         text.push_str(&format!("exit_code: {code}\n"));
     }

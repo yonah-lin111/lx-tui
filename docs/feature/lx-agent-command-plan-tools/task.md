@@ -142,7 +142,17 @@
 - [x] 长步骤按显示列换行、解释行、空计划 `Plan cleared`、历史多次更新各自保留。
 - [x] 不提供点击勾选改状态的功能。
 
-### 8.4 共用布局与 gallery
+### 8.4 树形版式（三卡统一）
+
+- [x] 三张卡片共用一套树形语法：`■ 动词` 标题 + `  │  ` 中间行 + `  └─ ` 收口，**整卡只有一根树干**。
+- [x] 两条前缀等宽 5 列，命令/输入/输出/步骤逐行左对齐（`tree_prefixes_are_equal_width_so_content_stays_aligned`）。
+- [x] 命令折叠保留最近 3 行，省略行数显式标为 `… +N more lines`（`folded_preview_states_how_many_lines_are_hidden`）。
+- [x] 命令行带 `$ ` 提示符；交互卡片输入永远排在输出之前（`interaction_body_keys_input_before_output_under_the_same_tree`）。
+- [x] 计划卡片：有解释时解释行收口，无解释时最后一条步骤收口（`plan_steps_use_the_tree_and_leaf_lands_on_the_explanation`）。
+- [x] 进程仍在跑时方块继续呼吸（不因工具已结算而静止）；终态停为实心（`running_process_keeps_breathing_even_after_the_tool_settled`）。
+- [x] 运行不足一秒不追加时长（避免 `Running · 1ms` 噪声与逐帧抖动）。
+
+### 8.5 共用布局与 gallery
 
 - [x] 接入 history 同一 `rows`/`layout`/`render` 口径；命中区与绘制共用行生成。
 - [x] 文案集中在 `ui/text/agent.rs`；样式复用既有语义 token。
@@ -153,9 +163,21 @@
 
 关键验收：不是只显示工具名；三种工具都能从界面看懂其输入、当前状态与结果。
 
+### 8.6 展开后视口不跳走（缺陷修复）
+
+- [x] 修复：点击可展开内容（思考块 / 工具卡片）后视口跳回历史最顶部，导致「点了展不开」。
+- [x] 根因：`follow_bottom == true` 时 `history_scroll` 是**过期值**（通常是 0），旧实现
+      切换展开时直接把它当顶部行用。
+- [x] 方案：新增 `LxChat::viewport_top`（事件循环每帧绘制前写入）与 `pin_lx_viewport`
+      （切换前把当前顶部行固化、退出跟随）；`toggle_thinking_at` / `toggle_latest_thinking` /
+      `toggle_tool_detail` 内部调用，未知目标不改动状态。
+- [x] 附带修复：`chat_hit` 的命中限定在 `view.body` 内，内容行换算出的屏幕行不会再
+      溢出到聊天栏/输入框上变成幽灵命中。
+- [x] 回归测试：`src/app/update/chat/tests/viewport_anchor.rs`（4 项）。
+
 ## 9. 校验与人工验收
 
-- [x] 执行 `cargo test`：**2632 单元测试 + 16 个集成测试二进制全绿**；`cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 无告警。
+- [x] 执行 `cargo test`：**2655 单元测试 + 16 个集成测试二进制全绿**；`cargo fmt --check` 与 `cargo clippy --all-targets -- -D warnings` 无告警。
 - [x] 执行 `cargo fmt`，`cargo fmt --check` 通过。
 - [x] 执行 `cargo clippy --all-targets -- -D warnings`，无既有问题需说明。
 - [x] 全量 gate 已执行：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、
@@ -196,8 +218,24 @@
 - 测试：新增计划契约、输出缓冲、进程管理器（真实子进程）、参数校验、类型化视图、
   DB 进程持久化、生产执行器、命令/交互/计划卡片渲染与几何、应用层纯状态、
   进程工具端到端（真实 DB 握手 + 跨轮复用）与键位映射，共 **+120 余项**。
-- 验证：`cargo test` 2632 单元 + 16 集成二进制全绿；`cargo fmt --check` 与
+- 验证：`cargo test` 2655 单元 + 16 集成二进制全绿；`cargo fmt --check` 与
   `cargo clippy --all-targets -- -D warnings` 无告警。
+
+后续修订记录（对照 codex harness 与用户反馈）：
+
+- **展开后视口跳走（bug）**：新增 `LxChat::viewport_top` + `pin_lx_viewport`，三个切换入口
+  内部先锚定；`chat_hit` 命中限定在 body 内。测试 `app/update/chat/tests/viewport_anchor.rs`。
+- **三卡改为树形版式**：`ui/text/agent.rs` 新增 `TREE_BAR` / `TREE_LEAF`（等宽 5 列）与
+  `EARLIER_OUTPUT_HINT` / `COMMAND_PROMPT_PREFIX`；`history/tool/{command,plan}.rs` 重写为
+  「标题 + 树体」，`rows` 与 `draw` 共用同一份 `BodyRow` 构造（行数口径唯一来源）。
+- **对齐 codex harness**：
+  - `login` 默认改为 `true`；`exec_command` 默认等待 10s、上限 30000（`write_stdin` 独立
+    默认 250ms，`DEFAULT_STDIN_YIELD_MS`）；
+  - 结果新增 `chunk_id`（6 位十六进制，`generate_chunk_id`）与 `wall_time_ms`（JSON 输出为
+    `wall_time_seconds`），模型文本同步显示；
+  - `ToolExecutionResult::Process` 装箱（新增字段后触发 clippy `large_enum_variant`）。
+  - 有意不跟随：沙箱/审批、并行工具调用、registry/router/runtimes 分层、transcript 全屏、
+    `environment_id`（理由见 design §14.2）。
 - 已知限制：无沙箱（D3 已确认）；输出保留有界，详情只能显示保留尾部；PTY 不做全屏
   终端仿真；显式脱离进程组的守护进程不保证被完整追踪；异常强杀 lx 不声称能优雅清理后代。
 - 未验证：真实终端观感（颜色/对齐/窄窗格）与真实跨重启的用户操作体验，需用户 `cargo run` 验收。

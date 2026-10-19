@@ -45,6 +45,8 @@ fn command_detail(session_id: u64) -> ToolDetailView {
         input: None,
         wrote_input: false,
         terminate: false,
+        chunk_id: "abc123".into(),
+        wall_time_ms: 5,
     };
     ToolDetailView::from_process(&result)
 }

@@ -755,6 +755,11 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
     {
         return Some(LxChatHit::PromptHeader);
     }
+    // 所有命中都限定在 body 内：内容行换算出的屏幕行可能落在 body 之下（正文比视口
+    // 长时），不设边界就会把聊天栏/输入框上的点击误判成「点了看不见的头部」。
+    if !view.body.contains((column, row).into()) {
+        return None;
+    }
     // thinking 头部命中（按 body + 滚动窗口换算屏幕坐标）。
     for (message_index, part_index, header) in history::layout(view.body, lx).thinking {
         let offset = header.y.saturating_sub(view.body.y);

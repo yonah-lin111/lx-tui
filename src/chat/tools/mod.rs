@@ -50,7 +50,8 @@ use types::ToolResult;
 pub use crate::chat::plan::{MAX_EXPLANATION_CHARS, MAX_PLAN_STEPS, MAX_STEP_CHARS};
 /// 进程工具的参数与限额常量（与 schema 同源）。
 pub use crate::chat::process::{
-    DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS, MAX_YIELD_MS,
+    DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS,
+    MAX_YIELD_MS,
 };
 
 /// `read` 单次返回内容字节上限（256 KiB）：超出按行截断并给出 `next_offset`。

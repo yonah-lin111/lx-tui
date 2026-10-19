@@ -661,18 +661,64 @@ pub(crate) mod test_hooks {
     }
 }
 
+/// 退出「跟随底部」前把**当前视口顶部行**固化进状态（锚定视口）。
+///
+/// `follow_bottom = true` 时 `history_scroll` 不参与渲染（顶部行由 `total - height`
+/// 现算），因此它是**过期值**（通常是 0）。任何「切换展开状态」都必须先锚定再改动：
+/// 否则下一帧按过期的 0 渲染，视口会直接跳回历史最顶部——用户看到的是
+/// 「点了没反应 / 展不开」（思考块恰好滚出屏幕，屏幕上只剩对话开头）。
+///
+/// 顶部行取自事件循环每帧写入的 [`crate::app::state::LxChat::viewport_top`]：它是
+/// **上一次绘制实际用的行号**，也就是用户此刻正看着的那一行。尚未绘制过时无从锚定，
+/// 直接保持原状（此时也还没有任何可见内容可点）。
+///
+/// 已在阅读态（`follow_bottom == false`）时无需锚定：顶部行本来就是绝对行号。
+pub fn pin_lx_viewport(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    if !target.lx.chat.follow_bottom {
+        return false;
+    }
+    let Some(scroll) = target.lx.chat.viewport_top else {
+        return false;
+    };
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.chat.history_scroll = scroll;
+    target.lx.chat.follow_bottom = false;
+    true
+}
+
 /// 切换指定 thinking 块展开状态。
+///
+/// 先 [`pin_lx_viewport`] 再切换：跟随底部时 `history_scroll` 是过期值，不先锚定就会
+/// 让展开后的界面跳回历史最顶部（表现为「点了没反应 / 展不开」）。
 pub fn toggle_thinking_at(
     state: &mut AppState,
     pane: PaneId,
     message_index: usize,
     step_index: usize,
 ) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    let Some(message) = target.lx.chat.messages.get(message_index) else {
+        return false;
+    };
+    if !matches!(
+        message.step_at(step_index),
+        Some(crate::app::state::AssistantStepView::Part { part, .. })
+            if part.kind == crate::chat::events::PartKind::Reasoning
+    ) {
+        return false;
+    }
+    pin_lx_viewport(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     target.lx.chat.toggle_reasoning(message_index, step_index);
-    target.lx.chat.follow_bottom = false;
     true
 }
 
@@ -694,6 +740,10 @@ pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
         }
     }
     let Some((message_index, step_index)) = found else {
+        return false;
+    };
+    pin_lx_viewport(state, pane);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     target.lx.chat.toggle_reasoning(message_index, step_index);
@@ -752,6 +802,38 @@ pub fn set_lx_history_scroll(
     target.lx.chat.history_scroll = clamped;
     target.lx.chat.follow_bottom = clamped >= max_top;
     before != clamped || was_following != target.lx.chat.follow_bottom
+}
+
+/// 每轮把各 lx 窗格的「当前视口顶部行」记忆落状态。
+///
+/// 渲染层只读、不写状态（AGENTS：渲染只读），而展开切换需要知道用户正看着哪一行，
+/// 故与 [`resolve_lx_sticky_prompt`] 一样放在事件循环里、`tui.draw` 之前写。
+/// 返回是否有窗格记忆变化。
+pub fn resolve_lx_viewport_top(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::layout::pane_inner_rect(*rect);
+        let resolved = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .and_then(|target| crate::ui::main_content::lx::history_view(inner, &target.lx))
+            .map(|view| view.scroll);
+        let Some(scroll) = resolved else {
+            continue;
+        };
+        let Some(target) = state.pane_mut_anywhere(*pane) else {
+            continue;
+        };
+        if target.lx.chat.viewport_top == Some(scroll) {
+            continue;
+        }
+        target.lx.chat.viewport_top = Some(scroll);
+        changed = true;
+    }
+    changed
 }
 
 /// 每轮把各 lx 窗格的置顶行**抑制记忆**落状态。

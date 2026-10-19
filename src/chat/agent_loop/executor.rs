@@ -122,7 +122,7 @@ impl AgentTools {
                 Err(failure) => return failure.into_result(Vec::new()),
             };
             return match self.processes.exec(args, cwd, call_id).await {
-                Ok(result) => ToolExecutionResult::Process(result),
+                Ok(result) => ToolExecutionResult::Process(Box::new(result)),
                 Err(error) => process_failure(error),
             };
         }
@@ -132,7 +132,7 @@ impl AgentTools {
         };
         let session_id = args.session_id;
         let result = match self.processes.interact(args).await {
-            Ok(result) => ToolExecutionResult::Process(result),
+            Ok(result) => ToolExecutionResult::Process(Box::new(result)),
             Err(error) => process_failure(error),
         };
         // 交互失败（进程不存在/已过期）不改变本轮活动集合，但也清除指向它的活动项。

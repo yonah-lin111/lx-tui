@@ -50,6 +50,19 @@ pub const ICON_TOKENS: &str = "%";
 /// 结构标记（可见符号集中处；均为单宽、跨平台）。
 pub const MARKER_DOT: &str = "●";
 pub const MARKER_TREE_LEAF: &str = "└─";
+/// 工具卡片树形体（与 prompt list 同一套直角语法）。
+///
+/// 两条前缀**等宽 5 列**，内容一律从第 5 列起，与文件工具详情行的
+/// [`detail prefix`](crate::ui::main_content::lx::history::tool::detail_prefix) 完全对齐：
+///
+/// ```text
+///   │  cmd
+///   └─ cmd
+/// ```
+///
+/// `│` 与 `└─` 的 `└` 落在同一列，中间行与收口行因此连成一根树干。
+pub const TREE_BAR: &str = "  │  ";
+pub const TREE_LEAF: &str = "  └─ ";
 /// todo 三态标记（取 claude 一组：完成 / 进行中 / 待办）。
 pub const TODO_DONE: &str = "✔";
 pub const TODO_IN_PROGRESS: &str = "◼";
@@ -353,6 +366,12 @@ pub const STATE_FAILED: &str = "Failed";
 pub const WAITING_FOR_OUTPUT: &str = "Waiting for output";
 pub const NO_NEW_OUTPUT: &str = "No new output";
 pub const EARLIER_OUTPUT_DISCARDED: &str = "Earlier output discarded";
+/// 折叠时被省略的输出行提示前缀（后面接行数）：`… +21 lines`。
+pub const EARLIER_OUTPUT_HINT: &str = "… +";
+/// 被省略行数的后缀：`21 more lines`。
+pub const EARLIER_OUTPUT_SUFFIX: &str = "more lines";
+/// 树体命令行的提示符前缀（`$ cargo test`）。
+pub const COMMAND_PROMPT_PREFIX: &str = "$ ";
 
 /// cwd 次要信息前缀。
 pub const CWD_PREFIX: &str = "cwd:";

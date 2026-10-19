@@ -12,8 +12,8 @@ mod manager;
 pub mod output;
 
 pub use manager::{
-    DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS, MAX_YIELD_MS,
-    ProcessError, ProcessLimits, ProcessManager, ProcessSnapshot, ProcessUiEvent,
+    DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS,
+    MAX_YIELD_MS, ProcessError, ProcessLimits, ProcessManager, ProcessSnapshot, ProcessUiEvent,
 };
 pub use output::{MAX_MODEL_OUTPUT_BYTES, MAX_PROCESS_OUTPUT_BYTES, OutputBuffer, OutputSource};
 
@@ -162,6 +162,16 @@ pub struct ProcessResult {
     pub wrote_input: bool,
     /// 本次调用是否为显式停止。
     pub terminate: bool,
+    /// 本次结果的分块标识（6 位十六进制；对齐 codex 的 `chunk_id`）。
+    ///
+    /// 同一次调用内稳定，模型可用它把「这次读到的输出」与后续轮次区分开。
+    pub chunk_id: String,
+    /// 本次调用在等待窗口内实际花掉的墙钟时间（毫秒）。
+    ///
+    /// 与 `yield_time_ms` 不同：后者是**允许等待的上限**，这是**真正等了多久**，
+    /// 模型据此判断「命令是不是刚好卡在窗口边界」。JSON 里按 codex 的口径
+    /// 输出成秒（`wall_time_seconds`），内部存整数毫秒以保持 `Eq`。
+    pub wall_time_ms: u64,
 }
 
 /// 进程结果的来源工具。
@@ -232,8 +242,32 @@ impl ProcessResult {
             "input": self.input,
             "wrote_input": self.wrote_input,
             "terminate": self.terminate,
+            "chunk_id": self.chunk_id,
+            "wall_time_seconds": self.wall_time_ms as f64 / 1_000.0,
         })
     }
+}
+
+/// 生成本次结果的分块标识（6 位十六进制，对齐 codex 的 `chunk_id`）。
+///
+/// 用 `std` 的简易随机源：只要求同一次调用内不重复、跨调用不撞即可，
+/// 不是安全标识，不引入 `rand` 依赖。
+pub fn generate_chunk_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut id = String::with_capacity(6);
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos() as u64)
+            .unwrap_or(0),
+    );
+    let value = hasher.finish();
+    for shift in 0..6 {
+        let nibble = (value >> (shift * 4)) & 0xf;
+        id.push(char::from_digit(nibble as u32, 16).unwrap_or('0'));
+    }
+    id
 }
 
 /// 输入预览：控制字符转义、按字符限长（卡片里不重复展示完整 stdin）。

@@ -353,17 +353,26 @@ processes.stop_owned(targets).await;
 ### 10.2 CommandCard：exec_command
 
 ```text
-■ Run command                       Running · 12s
-  └─ cargo test chat::tools
-     cwd: /workspace/lx-tui
-     running 24 tests
-     test read::tests::empty_file ... ok
-     [details]
+■ Run command                        Running · 12s [details]
+  │  $ cargo test chat::tools
+  │  … +21 more lines
+  │  test read::tests::empty_file ... ok
+  └─ test result: ok. 24 passed
 ```
 
-首行进程状态优先，第二行命令尾部省略，cwd 为次要信息。默认最多六行输出预览；后续后台输出更新原卡片，不无限追加时间线步骤。工具返回而进程仍运行时，标题仍显示 Running；退出码 0 显示 Exited 0，非零显示 Failed · exit N；停止、超时、中断分别显示。
+首行进程状态优先，第二行起是**树形体**：命令、cwd、输出共用一根竖线 `│`，最后一行用
+`└─` 收口（与 prompt list、文件工具的 `  └─` 同一套直角语法）。两条前缀等宽 5 列，
+内容一律从第 5 列起，因此树干不会错位。命令行带 `$ ` 提示符，与输出区分。
 
-详情原位展开，显示完整保留的命令、cwd、起止时间、退出原因和有界输出。超过保留范围明确显示 Earlier output discarded。折叠显示最近六行，展开允许查看全部保留文本，滚动仍由外层历史管理，不额外引入日志浮层。
+折叠只显示最近三行输出，被省略的行数用 `… +N more lines` **显式**标在树体里——绝不
+静默丢行（对齐 codex 的 `… +N lines` 口径）。cwd 只在展开时出现。
+
+默认最多三行输出预览；后续后台输出更新原卡片，不无限追加时间线步骤。工具返回而进程
+仍运行时，标题仍显示 Running，**方块继续呼吸**（不因工具已结算而静止）；退出码 0 显示
+Exited 0，非零显示 exit N；停止、超时、中断分别显示。运行不足一秒不追加时长（避免
+`Running · 1ms` 噪声与逐帧抖动）。
+
+详情原位展开，显示完整保留的命令、cwd、起止时间、退出原因和有界输出。超过保留范围明确显示 Earlier output discarded。折叠显示最近三行，展开允许查看全部保留文本，滚动仍由外层历史管理，不额外引入日志浮层。
 
 鼠标点击标题或 `[details]` 展开，再次点击标题或 `[collapse]` 收起；点输出文本不触发折叠。纯键盘入口是 Native 聊天中的 `^o`：切换当前选中工具详情，未选中时选最近一张可展开卡片。Alt+上下按时间线选择上一/下一张可展开卡片，保证选中标题可见；输入草稿及光标保持。已有浮层、补全或命令面板打开时继续保持原优先级，不处理这组卡片操作。不把上述键写进后台 stdin。
 
@@ -372,10 +381,14 @@ processes.stop_owned(targets).await;
 ### 10.3 ProcessInteractionCard：write_stdin
 
 ```text
-■ Read output                       Running
-  └─ cargo test chat::tools
-     test result: ok. 24 passed
+■ Send input                        Running [details]
+  │  $ cargo test chat::tools
+  │  stdin: y\n
+  └─ No new output
 ```
+
+与命令卡片共用**同一套树形语法**：命令、`stdin:` 输入预览、本次输出依次排在同一根
+`│` 下，最后一行用 `└─` 收口。输入永远排在输出之前（先看发了什么，再看回什么）。
 
 空 chars 显示 Read output，非空显示 Send input，terminate 显示 Stop command。关联原命令，细节中可显示进程会话 ID；技术 ID 不作为主标题。输入预览限长且转义换行，不将完整 stdin 内容自动重复展示到正文。无新增输出显示 No new output；运行状态变化仍要显示。详情使用 CommandCard 相同的原位展开操作，展示该次保留结果，不读取最新进程缓冲代替快照。
 
@@ -384,12 +397,16 @@ processes.stop_owned(targets).await;
 ### 10.4 PlanCard：update_plan
 
 ```text
-■ Plan                              1/3 completed
-  [x] Implement command tools
-  [>] Verify process cleanup
-  [ ] Review terminal display
+■ Plan                                 1/3 completed
+  │  [x] Implement command tools
+  │  [>] Verify process cleanup
+  │  [ ] Review terminal display
   └─ Implementation finished; checking behavior.
 ```
+
+三张卡片（命令 / 交互 / 计划）共用同一套树形读法：标题是 `■ 动词`，正文全部挂在
+`  │  ` 下，**整张卡片只有一根树干**——最后一行（解释行，或没有解释时的最后一条步骤）
+用 `  └─ ` 收口。
 
 完成项次要色，进行项强调，待办普通文本；三种状态都有 ASCII 标记。计数只认 completed，不把 in_progress 算完成。解释可省略；空计划显示 Plan cleared。计划更新不表示 lx 自动执行了某个步骤，列表不提供用户点击改状态的功能。
 
@@ -489,11 +506,64 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 - command/stdin/output 可能含用户数据；日志仅记录稳定 ID、状态和错误码，不重复记录原始参数与输出。
 - codegraph/codebase memory 是结构证据，不替代编译、测试和手工外观验收。
 
-## 14. 审核门槛与实施结论
+## 14. 与 codex harness 的对照
+
+以 `/Users/yonah/projects/agent/codex-main` 的 `codex-rs` 为参照（`core/src/tools/handlers/unified_exec*`、
+`core/src/unified_exec/*`、`tui/src/exec_cell/*`），逐项核对本 feature 的工具实现。
+
+### 14.1 已对齐的语义
+
+| 维度 | codex | lx（本 feature） |
+| --- | --- | --- |
+| 工具集合 | `exec_command` / `write_stdin`（`update_plan` 独立为 control tool） | 同名三工具，`update_plan` 同样只改计划、不产生文件副作用 |
+| 等待窗口 vs 进程寿命 | `yield_time_ms` 只结束本次等待，不杀进程 | 同；只有 `timeout_ms` 或显式停止才清理 |
+| 跨轮会话复用 | 返回 `session_id`，后续用 `write_stdin` 续读 | 同，且进程归**聊天运行实例**持有（跨轮、跨请求代次） |
+| 增量输出游标 | `output_start` / `output_end` 为原始字节偏移 | 同名同义，且模型游标与 UI 预览游标分离 |
+| 丢弃证据 | `output_omitted_bytes` + 显式 omission marker | `dropped_bytes` + `Earlier output discarded` / `… +N more lines` |
+| 非零退出语义 | 命令**跑完且失败**，带真实输出与退出码 | 同（`is_failure` 由进程状态推导，不是工具异常） |
+| `tty` | 独立 PTY（固定尺寸） | 同（固定 120×40） |
+| `login` 默认 | 默认登录 shell；`login: false` 关闭 | 已对齐为默认 `true` |
+| 首轮等待默认 | `exec_command` 10s（有效范围 250–30000） | 已对齐为 10s / 上限 30000 |
+| 交互等待默认 | `write_stdin` 250ms | 独立常量 `DEFAULT_STDIN_YIELD_MS = 250` |
+| 分块标识 | `chunk_id`（6 位十六进制） | 同名，6 位十六进制，每次调用不同 |
+| 墙钟时间 | `wall_time_seconds`（实际等了多久） | 同名，内部存整数毫秒、JSON 输出秒 |
+| 输出预算 | `max_output_tokens`，超出截断并显式标记 | 同名，另有 `MAX_MODEL_OUTPUT_BYTES` 硬字节上限 |
+
+### 14.2 有意不跟随的部分
+
+- **沙箱与审批**：codex 走 `SandboxManager` + approval（`sandbox_permissions` / `justification` /
+  `prefix_rule`）。lx 本阶段明确不做沙箱、不逐次弹窗（D1），因此 schema 里不出现这些字段——
+  声明了就必须实现，否则等于骗模型。
+- **并行工具调用**：codex handler 声明 `supports_parallel_tool_calls = true`。lx 的
+  `run_agent_turn` **同一响应内串行执行**（顺序即供应商 ordinal，前一结果对后一调用可见），
+  这与 lx 的 BeginTool/FinishTool 双门槛、以及「进程工具的停止集合」语义一致；改成并行会
+  同时动摇这两条不变量，不在本 feature 范围内。
+- **工具路由层**：codex 有 `registry` / `router` / `orchestrator` / `runtimes` 四层抽象以支持
+  多 sandbox runtime、MCP、插件与 hook。lx 是单二进制、固定七工具，分派就是
+  `AgentTools::execute` 里的一次 `match`；引入同样的分层只会为不存在的扩展点付维护成本。
+- **结果形状**：codex 给模型的是 `Chunk ID: … / Wall time: … / Process exited with code N` 的
+  人读文本头 + 裸输出；lx 给的是**唯一结构化 JSON**（`tool`/`session_id`/`process_state`/
+  `output_start`… 加上 `chunk_id`、`wall_time_seconds`）。选择 JSON 的原因：UI 视图、DB
+  落库与历史回放共用同一形状（`ToolDetailView::from_result_json`），不需要第二套解析。
+- **`environment_id` / 多环境**：codex 支持多 environment 与远程执行器；lx 只有冻结工作区
+  一个 cwd（D2），不引入该字段。
+- **transcript 全屏**：codex 用 `ctrl+t` 打开 transcript overlay 看完整输出；lx 选择**原位展开**
+  （D7），滚动仍由外层历史统一管理，不新增日志浮层。
+
+### 14.3 渲染层的口径差异（对齐的部分）
+
+- codex `compact_command_lines`：`• Running <cmd>` 头 + `  └ ` / `    ` 前缀的输出块，
+  只留最近 `DETAIL_PREVIEW_LINES = 3` 行，超出显示 `… +N lines (ctrl+t to view transcript)`。
+  lx 采用同款「3 行预览 + 显式省略行数」，但把整块挂在**一根不断开的树干**下（`│` 中间行 /
+  `└─` 收口），与 lx 已有的 prompt list 语法统一。
+- codex 行首是单色 `•`；lx 沿用既有 `■/□` 呼吸方块（运行中呼吸、终态静止），并把状态文字
+  留在右上角而不是塞进动词。
+
+## 15. 审核门槛与实施结论
 
 D1–D10 已确认并全部落地。实施验证：
 
-- `cargo test`：2640 个单元测试 + 16 个集成测试二进制全部通过；
+- `cargo test`：全部单元测试 + 16 个集成测试二进制通过；
 - `cargo fmt --check`：通过；
 - `cargo clippy --all-targets -- -D warnings`：无告警；
 - SCHEMA_VERSION 实际为 **11**（新增 `agent_process`）；

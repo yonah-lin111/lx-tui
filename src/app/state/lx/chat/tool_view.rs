@@ -13,8 +13,11 @@ use serde_json::Value;
 use crate::chat::plan::{PlanSnapshot, PlanStepStatus};
 use crate::chat::process::{ProcessResult, ProcessResultKind, ProcessState};
 
-/// 最多展示的输出行数（紧凑卡片）。
-pub const COMMAND_PREVIEW_LINES: usize = 6;
+/// 紧凑卡片展示的输出预览行数。
+///
+/// 必须与渲染层 `history/tool/command.rs::PREVIEW_LINES` 同值：渲染实际用的是
+/// `output_tail`（现场切行），本常量既是视图快照的窗口，也是两者的单一口径来源。
+pub const COMMAND_PREVIEW_LINES: usize = 3;
 
 /// 进程状态（UI 语义；未知值按 `Interrupted` 保守处理，不伪装成功）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

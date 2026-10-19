@@ -283,6 +283,8 @@ async fn run_loop(
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             // 置顶用户消息行结论：渲染前落状态（渲染层只读，不写状态）。
             update::resolve_lx_sticky_prompt(state, &geometry.rects);
+            // 当前视口顶部行：同上，供点击展开时原地锚定。
+            update::resolve_lx_viewport_top(state, &geometry.rects);
             tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();

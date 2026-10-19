@@ -345,6 +345,12 @@ pub struct LxChat {
     pub turn_started_at_ms: Option<i64>,
     /// 历史视图滚动偏移（跟随底部时忽略）。
     pub history_scroll: usize,
+    /// 上一帧实际绘制的**顶部内容行号**（事件循环每次绘制前写入，渲染层只读）。
+    ///
+    /// 跟随时 `history_scroll` 是过期值（顶部行由 `total - height` 现算），而「切换
+    /// 展开状态」必须知道**用户当前正看着哪一行**才能原地展开。把它作为跨帧记忆存
+    /// 在这里，与 [`Self::suppressed_prompt_header`] 同一套做法（渲染不改状态）。
+    pub viewport_top: Option<usize>,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
     pub loading_frame: usize,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
@@ -391,6 +397,7 @@ impl LxChat {
             thinking_toggled: Vec::new(),
             turn_started_at_ms: None,
             history_scroll: 0,
+            viewport_top: None,
             loading_frame: 0,
             jump_bottom_hover: false,
             stop_armed_at: None,

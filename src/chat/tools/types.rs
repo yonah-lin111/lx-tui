@@ -212,7 +212,10 @@ pub enum ToolExecutionResult {
         removed: usize,
     },
     /// 命令执行 / 进程交互成功送达（进程可能仍在运行）。
-    Process(super::super::process::ProcessResult),
+    ///
+    /// 装箱：进程结果远大于文件类结果（命令、cwd、输出正文、chunk/时间戳），
+    /// 不装箱会把整个 `ToolExecutionResult` 撑成进程结果的尺寸。
+    Process(Box<super::super::process::ProcessResult>),
     /// 计划更新成功；携带完整规范化快照（已分配修订号）。
     Plan(super::super::plan::PlanSnapshot),
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。

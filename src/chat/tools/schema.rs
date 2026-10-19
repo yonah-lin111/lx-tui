@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use super::types::ToolSpec;
 use super::{MAX_READ_LINES, MAX_SEARCH_RESULTS};
 use crate::chat::plan::{MAX_EXPLANATION_CHARS, MAX_PLAN_STEPS, MAX_STEP_CHARS};
-use crate::chat::process::{MAX_OUTPUT_TOKENS, MAX_TIMEOUT_MS, MAX_YIELD_MS};
+use crate::chat::process::{
+    DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_TIMEOUT_MS, MAX_YIELD_MS,
+};
 
 /// 固定工具表：顺序即给模型的呈现顺序。
 static TOOLS: [ToolSpec; 7] = [
@@ -215,7 +217,7 @@ fn exec_command_parameters() -> Value {
             },
             "login": {
                 "type": "boolean",
-                "description": "Start a login shell (default false)."
+                "description": "Start a login shell so the user's PATH and aliases apply (default true; pass false for a bare non-login shell)."
             },
             "tty": {
                 "type": "boolean",
@@ -225,7 +227,7 @@ fn exec_command_parameters() -> Value {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": MAX_YIELD_MS,
-                "description": format!("How long to wait for output before returning (default 1000, max {MAX_YIELD_MS}); this never kills the process.")
+                "description": format!("How long to wait for output before returning (default {DEFAULT_YIELD_MS}, max {MAX_YIELD_MS}); this never kills the process.")
             },
             "timeout_ms": {
                 "type": "integer",
@@ -267,7 +269,7 @@ fn write_stdin_parameters() -> Value {
                 "type": "integer",
                 "minimum": 0,
                 "maximum": MAX_YIELD_MS,
-                "description": format!("How long to wait for new output (default 1000, max {MAX_YIELD_MS}).")
+                "description": format!("How long to wait for new output (default {DEFAULT_STDIN_YIELD_MS}, max {MAX_YIELD_MS}).")
             },
             "max_output_tokens": {
                 "type": "integer",
