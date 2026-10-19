@@ -1538,3 +1538,37 @@ review（`review.md` §1.4 / §1.8 / §4 / §5）指出本分支仍有 1 条 P1�
 
 往返测试已验证有效：把 `absorb_result_json` 里的 `start_line` 改成 `start`（只改读端字段名），该测试立刻在 `read:file-with-offset-and-limit` 上失败。
 
+
+## 26. review 修复总览（`review.md` 全条目 → 提交 → 测试）
+
+`review.md` §0 摘要表里的 15 条 P1/P2 与 §4 的 10 条 P3 已全部处理，分 5 个提交落地（`0dcdd03` → `4aa06c0` → `dacc1fd` → `4ff3fa4` → `0220910`）。全量 `cargo test`：**2429 passed / 0 failed**（lib 2383 + 11 个集成二进制 + doc-tests；基线 2374）。
+
+| review 条目 | 修复 | 代表测试 |
+| --- | --- | --- |
+| P1-1 `read`/目录重载丢详情 | `absorb_result_json` 补 `range`/`read_lines`/目录 `matches` | `reload_keeps_read_range_without_offset`、`reload_keeps_directory_entry_count` |
+| P1-2 `search` 不排除 `.git/`、`parents(false)` 漂移 | `.git/`/`.jj/` always-ignore；`parents(true)`+`require_git(true)` 成对 | `search_skips_git_and_jj_directories`、`search_respects_parent_gitignore_from_subdirectory` |
+| P1-3 失败补丁的部分成功跨轮丢失 | `replay_pair` 对失败调用追加 `changes` 摘要 | `failed_patch_replay_keeps_committed_changes` |
+| P1-4 `(N lines)` 用文件总行数 | 摘要新增 `read_lines`（`end_line - start_line + 1`） | `read_uses_read_lines_not_total_lines` |
+| P2-1 多文件 edit 出现孤立 `· ` | `extras()` 按「是否已有前段」决定加不加分隔符 | `multi_file_edit_has_no_orphan_separator` |
+| P2-2 `search` 深度上限静默截断 | 深度上限触发即置 `truncated`（空目录不误报） | `search_depth_limit_sets_truncated` |
+| P2-3 `read` 无输入上限 | 单文件 16 MiB → `TooLarge`；目录 50 000 条上限 | `read_rejects_file_larger_than_input_cap`、`directory_read_caps_entries` |
+| P2-4 `Move to` 静默覆盖 | 目标已存在 → 零副作用阶段 `PatchInvalid` | `move_to_existing_target_is_rejected` |
+| P2-5 多 hunk 计数失真 | `edit` 计数改按补丁 `+`/`-` 行累加 | `multi_hunk_edit_reports_patch_line_counts` |
+| P2-6 `offset`-only / `limit`-only 区间错误 | 单边参数不再推区间；区间以结果体为唯一权威 | `reload_with_offset_only_does_not_collapse_range`、`reload_with_limit_only_gets_range_from_result` |
+| P2-7 窄宽度 pattern 被切碎 | `search` 详情拆三段；先丢 `in`+path，pattern 只尾部省略 | `search_detail_keeps_pattern_at_narrow_widths`、`search_detail_drops_scope_before_pattern` |
+| P2-8 结算与重载合并口径不一致 | 新增 `ToolSummary::absorb_summary`，两条路径共用 | `live_and_reloaded_summaries_are_identical`（表驱动 7 例） |
+| P2-9 不支持 `*** End of File` | 接受该标记并锚定末尾（仅最后一个块） | `patch_accepts_end_of_file_marker`、`patch_rejects_end_of_file_on_non_last_block` |
+| P2-10 无 rstrip 回退 | 精确失配后回退一档 rstrip（仍要求唯一），歧义列出候选行号 | `patch_matches_after_trailing_whitespace_difference`、`patch_context_ambiguity_lists_candidate_lines` |
+| P2-11 纯插入插到第 0 行 | 无 `@@` 上下文时追加到文件末尾 | `pure_insert_without_context_appends_to_end` |
+| P3-1 `has_summary` 手写 `\|\|` 链 | 收敛为 `ToolSummary::is_empty()` | `view` 层判空用例 |
+| P3-2 JSON 形状两处手写 | 表驱动往返测试锁死写端/读端 | `to_result_json_round_trips_into_summary`（15 例） |
+| P3-3 `needs_spacer` 死参数 | 删参数与 `Block` 枚举，保留「一律留空行」行为 | `history` 布局用例 |
+| P3-4 `tool.rs` 文档漂移 | 纠正下划线 / 「第 2 行永不为空」表述 | — |
+| P3-5 `style::agent_param` 差异被掩盖 | 保留 gallery 旧样式，新增显式断言 | `agent_param_keeps_legacy_underline_while_chat_tool_param_does_not` |
+| P3-6 每帧重解析参数 JSON | 摘要完整时不解析（另加 8 KiB 流式门槛） | `param_does_not_reparse_arguments_when_summary_is_complete` |
+| P3-7 两段各自 10s deadline | 遍历与扫描共用一个 deadline | `search_deadline_is_shared_between_walk_and_scan` |
+| P3-8 写锁表只增不减 | 引用计数回收（取引用/归还都在表锁内） | `table_does_not_grow_after_writes_complete`、`same_path_locks_are_serialized` |
+| P3-9 `edit` 对同一文件读两次 | 合并为一次 `fs::read` + 一次 `SourceText::parse` | `edit` 编码/BOM/CRLF 回归用例 |
+| P3-10 `Edit.partial` UI 不可见 | 摘要加 `partial`，详情行尾部 dim `· partial` | `edit_partial_shows_dim_tail`、`reload_keeps_edit_partial_flag` |
+
+仍未处理（有意留给你）：review §5 的两份主检出文档冲突（合并前需先处理未跟踪的旧版 `design.md`）、§7.5 的人工验收清单、`total_lines` 是否要在 UI 额外显示「共 M 行」（当前只用于目录条目数）、多文件 `edit` 是否显示 `N files`（当前只显示计数）。
