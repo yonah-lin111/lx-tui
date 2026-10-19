@@ -22,10 +22,11 @@ pub mod prompt_history;
 pub mod workspace;
 
 pub use lx::{
-    AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, HistoryEntry, HistoryPanel,
-    InputHint, InputHintLevel, Lx, LxChat, LxEntry, ModelCandidate, ModelPicker, ModelPickerStage,
-    ModelsSnapshot, PanelWindow, RequestKey, RequestState, SlashCommand, SlashPanel, ToolCallView,
-    ToolStatus, ToolSummary,
+    AssistantStepView, ChatMessageView, ChatPartView, CommandView, FrozenModel, HistoryEntry,
+    HistoryPanel, InputHint, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry,
+    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PlanSnapshotView,
+    PlanStepView, ProcessInteractionView, ProcessStateView, RequestKey, RequestState, SlashCommand,
+    SlashPanel, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

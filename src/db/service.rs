@@ -52,6 +52,16 @@ impl Persistence {
                         tracing::warn!(%error, "recovering interrupted tool calls failed");
                     }
                 }
+                // 遗留的会话进程同样只标 interrupted：不重连、不用旧 PID 操作进程。
+                match db.recover_interrupted_processes() {
+                    Ok(0) => {}
+                    Ok(recovered) => {
+                        tracing::info!(recovered, "recovered interrupted processes");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "recovering interrupted processes failed");
+                    }
+                }
                 Self { db: Some(db) }
             }
             Err(error) => {
@@ -131,6 +141,55 @@ impl Persistence {
     ) -> super::Result<()> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         db.checkpoint(workspace, assistant_id, parts)
+    }
+
+    /// 登记新建进程（`starting`）；失败时调用方必须停止刚 spawn 的进程。
+    pub fn begin_process(
+        &self,
+        workspace: &Path,
+        new: &crate::db::chat::NewProcess<'_>,
+    ) -> super::Result<String> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.begin_process(workspace, new)
+    }
+
+    /// 合并一次输出快照（revision 必须更新，较旧写入零行）。
+    pub fn update_process_output(
+        &self,
+        workspace: &Path,
+        runtime_epoch: &str,
+        process_session_id: u64,
+        snapshot: &crate::db::chat::OutputSnapshot<'_>,
+        revision: i64,
+    ) -> super::Result<bool> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.update_process_output(
+            workspace,
+            runtime_epoch,
+            process_session_id,
+            snapshot,
+            revision,
+        )
+    }
+
+    /// 提交进程终态（revision 必须更新，重复终态幂等）。
+    pub fn finish_process(
+        &self,
+        workspace: &Path,
+        finish: &crate::db::chat::ProcessFinish<'_>,
+    ) -> super::Result<bool> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.finish_process(workspace, finish)
+    }
+
+    /// 批量载入会话进程记录（重载时一次查询，不为每张卡片单独读库）。
+    pub fn load_processes_for_session(
+        &self,
+        workspace: &Path,
+        chat_session_id: &str,
+    ) -> super::Result<Vec<crate::db::chat::ProcessRecord>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.load_processes_for_session(workspace, chat_session_id)
     }
 
     /// 记录工作区信任（写库）；库不可用或写失败返回 false（仅日志，不阻断进入）。
@@ -587,6 +646,8 @@ impl Persistence {
                 workspace,
                 session_id,
             } => {
+                // 会话删除前先清进程元数据（外键也会级联，这里显式做一次以便记录条数）。
+                self.with_db(|db| db.delete_processes_for_session(&session_id));
                 let deleted = self.with_db(|db| db.delete_chat_session(&workspace, &session_id));
                 // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有），
                 // 并从已打开的 `/resume` 列表里就地移除该行。

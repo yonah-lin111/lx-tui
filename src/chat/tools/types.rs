@@ -6,6 +6,17 @@
 
 use std::path::PathBuf;
 
+/// 稳定工具名清单（错误消息、系统提示与测试共用一份，不各写一遍）。
+pub const TOOL_NAMES: [&str; 7] = [
+    "read",
+    "search",
+    "edit",
+    "write",
+    "exec_command",
+    "write_stdin",
+    "update_plan",
+];
+
 /// 工具执行上下文：相对路径的基准目录是**发送时冻结**的工作区 cwd。
 ///
 /// 执行层从不读取进程 cwd，也不因后续 `cd`/切换窗格改变基准；绝对路径原样使用。
@@ -68,6 +79,18 @@ pub enum ToolErrorCode {
     TooLarge,
     /// 未知工具名。
     UnknownTool,
+    /// 进程会话 ID 不存在（或不属于本聊天运行实例）。
+    ProcessNotFound,
+    /// 进程记录已过期（超过保留时间或条数被回收）。
+    ProcessExpired,
+    /// 运行中进程数达到上限（不自动杀已有服务）。
+    ResourceLimit,
+    /// 进程启动或运行失败。
+    ProcessFailed,
+    /// stdin 写入失败（半写 / BrokenPipe / 已退出）。
+    StdinFailed,
+    /// 计划校验失败（超限、非法状态、多个进行中）。
+    PlanInvalid,
 }
 
 impl ToolErrorCode {
@@ -91,6 +114,12 @@ impl ToolErrorCode {
             Self::PathUnresolvable => "path_unresolvable",
             Self::TooLarge => "too_large",
             Self::UnknownTool => "unknown_tool",
+            Self::ProcessNotFound => "process_not_found",
+            Self::ProcessExpired => "process_expired",
+            Self::ResourceLimit => "resource_limit",
+            Self::ProcessFailed => "process_failed",
+            Self::StdinFailed => "stdin_failed",
+            Self::PlanInvalid => "plan_invalid",
         }
     }
 }
@@ -182,6 +211,10 @@ pub enum ToolExecutionResult {
         added: usize,
         removed: usize,
     },
+    /// 命令执行 / 进程交互成功送达（进程可能仍在运行）。
+    Process(super::super::process::ProcessResult),
+    /// 计划更新成功；携带完整规范化快照（已分配修订号）。
+    Plan(super::super::plan::PlanSnapshot),
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。
     Failed {
         code: ToolErrorCode,
@@ -192,14 +225,28 @@ pub enum ToolExecutionResult {
 
 impl ToolExecutionResult {
     /// 是否为失败结果。
+    ///
+    /// 命令**已执行但退出码非零**也算失败：工具协议成功、命令本身失败，模型与 UI
+    /// 都必须看得出来（不能只显示 Completed）。
     pub fn is_failure(&self) -> bool {
-        matches!(self, Self::Failed { .. })
+        match self {
+            Self::Failed { .. } => true,
+            Self::Process(result) => result.is_failure(),
+            _ => false,
+        }
     }
 
     /// 失败错误码（成功为 None）。
     pub fn error_code(&self) -> Option<ToolErrorCode> {
         match self {
             Self::Failed { code, .. } => Some(*code),
+            Self::Process(result) if result.is_failure() => Some(match result.state {
+                super::super::process::ProcessState::TimedOut => ToolErrorCode::Timeout,
+                super::super::process::ProcessState::Interrupted => ToolErrorCode::ProcessFailed,
+                super::super::process::ProcessState::Failed { .. } => ToolErrorCode::ProcessFailed,
+                super::super::process::ProcessState::Exited { .. } => ToolErrorCode::ProcessFailed,
+                _ => ToolErrorCode::ProcessFailed,
+            }),
             _ => None,
         }
     }
@@ -207,14 +254,14 @@ impl ToolExecutionResult {
 
 /// 一次工具执行内部的失败原因（`code` + 已脱敏的单行说明）。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolFailure {
+pub struct ToolFailure {
     pub code: ToolErrorCode,
     pub message: String,
 }
 
 impl ToolFailure {
     /// 构造失败原因。
-    pub(crate) fn new(code: ToolErrorCode, message: impl Into<String>) -> Self {
+    pub fn new(code: ToolErrorCode, message: impl Into<String>) -> Self {
         Self {
             code,
             message: message.into(),
@@ -222,12 +269,12 @@ impl ToolFailure {
     }
 
     /// 参数非法（消息只描述字段名与期望，不含参数全文）。
-    pub(crate) fn invalid(message: impl Into<String>) -> Self {
+    pub fn invalid(message: impl Into<String>) -> Self {
         Self::new(ToolErrorCode::InvalidArguments, message)
     }
 
     /// 转为对外失败结果（`changes` 由调用方补上已提交部分）。
-    pub(crate) fn into_result(self, changes: Vec<FileChange>) -> ToolExecutionResult {
+    pub fn into_result(self, changes: Vec<FileChange>) -> ToolExecutionResult {
         ToolExecutionResult::Failed {
             code: self.code,
             message: self.message,
@@ -239,10 +286,14 @@ impl ToolFailure {
 /// 执行层内部结果别名。
 pub(crate) type ToolResult<T> = Result<T, ToolFailure>;
 
+/// 公开的“校验失败”结果别名（进程/计划参数解析对外返回它）。
+pub type ToolResultPublic<T> = Result<T, ToolFailure>;
+
 /// 工具规格：稳定英文名、英文描述与 JSON Schema 生成函数（用函数指针保持 `'static`）。
 #[derive(Debug, Clone, Copy)]
 pub struct ToolSpec {
-    /// 稳定工具名（`read` / `search` / `edit` / `write`）。
+    /// 稳定工具名（`read` / `search` / `edit` / `write` / `exec_command` / `write_stdin` /
+    /// `update_plan`）。
     pub name: &'static str,
     /// 英文描述（同时作为模型可见文档）。
     pub description: &'static str,

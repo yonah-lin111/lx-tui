@@ -38,16 +38,35 @@ use crate::ui::{style, text};
 use super::super::Grid;
 use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
-/// 工具步骤占用的渲染行数：**恒为 2 行**（标题行 + 详情行）；宽度 0 时不占行。
+mod command;
+pub(crate) mod gallery;
+mod plan;
+
+/// 工具步骤占用的渲染行数。
+///
+/// - 文件工具：**恒为 2 行**（标题行 + 详情行）；
+/// - `exec_command` / `write_stdin`：标题 + 命令 + 输出预览（折叠最多 6 行）；
+/// - `update_plan`：标题 + 步骤（长步骤换行）+ 解释行。
 ///
 /// `history::layout` 与 `history::render` 必须共用本函数：工具行一旦换行，滚动条、
 /// 置顶行与 thinking 命中矩形都会漂移。
-pub(super) fn rows(_call: &ToolCallView, width: u16) -> usize {
+pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
     if width == 0 {
-        0
-    } else {
-        HEADER_ROWS + DETAIL_ROWS
+        return 0;
     }
+    match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(_))
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
+            expanded_or_preview_rows(call, width, expanded)
+        }
+        Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, expanded),
+        None => HEADER_ROWS + DETAIL_ROWS,
+    }
+}
+
+/// 进程卡片行数（折叠/展开共用同一入口）。
+fn expanded_or_preview_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    command::rows(call, width, expanded)
 }
 
 /// 标题行行数。
@@ -78,14 +97,29 @@ pub(super) fn draw(
     row_index: &mut usize,
     call: &ToolCallView,
     loading_frame: usize,
+    expanded: bool,
 ) {
-    // 第 1 行：方块 + 动词。
+    match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(_))
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
+            command::draw(grid, rect, scroll, row_index, call, loading_frame, expanded);
+            return;
+        }
+        Some(crate::app::state::ToolDetailView::Plan(_)) => {
+            plan::draw(grid, rect, scroll, row_index, call, loading_frame);
+            return;
+        }
+        None => {}
+    }
+    if rect.width == 0 {
+        return;
+    }
+    // 文件工具：第 1 行方块 + 动词，第 2 行 `  └─ 详情`。
     if let Some(y) = visible_row(rect, scroll, *row_index) {
         let segments = header(call, rect.width, loading_frame);
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    // 第 2 行：`  └─ 详情`。
     if let Some(y) = visible_row(rect, scroll, *row_index) {
         let segments = detail(call, rect.width);
         put_segments(grid, rect.x, y, rect.width, &segments);
@@ -93,15 +127,20 @@ pub(super) fn draw(
     *row_index += 1;
 }
 
+/// 标题行行数（子模块共用）。
+pub(super) fn title_rows() -> usize {
+    HEADER_ROWS
+}
+
 /// 行内一段着色文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Segment {
+pub(super) struct Segment {
     text: String,
     style: Style,
 }
 
 impl Segment {
-    fn new(text: impl Into<String>, style: Style) -> Self {
+    pub(super) fn new(text: impl Into<String>, style: Style) -> Self {
         Self {
             text: text.into(),
             style,
@@ -109,13 +148,13 @@ impl Segment {
     }
 
     /// 该段的显示列数（宽字符按两列）。
-    fn cols(&self) -> usize {
+    pub(super) fn cols(&self) -> usize {
         self.text.width()
     }
 }
 
 /// 若干段的显示列数合计。
-fn segments_cols(segments: &[Segment]) -> usize {
+pub(super) fn segments_cols(segments: &[Segment]) -> usize {
     segments.iter().map(Segment::cols).sum()
 }
 
@@ -211,9 +250,89 @@ fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment>
 
 // ===== 第 2 行：`  └─ 详情` =====
 
+/// 工具状态 → 行首方块标记（子模块共用）。
+pub(super) fn mark_of(status: ToolStatus, _loading_frame: usize) -> StepMark {
+    match status {
+        ToolStatus::Failed => StepMark::Failed,
+        ToolStatus::Interrupted => StepMark::Interrupted,
+        ToolStatus::Cancelled => StepMark::Cancelled,
+        ToolStatus::Completed => StepMark::Done,
+        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => StepMark::Running,
+    }
+}
+
+/// 标题行：`■ 动词` +（宽度允许时）右对齐状态文字 + 可展开标记。
+///
+/// 状态文字与 `[details]`/`[collapse]` 只在**宽度足够**时画；极窄时保留方块与动词
+/// （最窄档唯一的状态信号是方块）。标记是纯文本提示，点击标题行任意位置即可切换
+/// （见 `history::ToolHit`），所以窄屏丢掉它也不影响可操作性。
+pub(super) fn header_with_verb(
+    call: &ToolCallView,
+    width: u16,
+    loading_frame: usize,
+    verb: &str,
+    status: Option<String>,
+    expanded: bool,
+) -> Vec<Segment> {
+    let limit = usize::from(width);
+    let tint = match call.status {
+        ToolStatus::Failed => Some(style::agent_fail()),
+        ToolStatus::Interrupted => Some(style::agent_warn()),
+        _ => None,
+    };
+    let paint = |segment: Segment| match tint {
+        Some(tint) => Segment::new(segment.text, tint),
+        None => segment,
+    };
+    let mark = mark_of(call.status, loading_frame);
+    let lead = paint(Segment::new(
+        mark.segment(loading_frame),
+        mark.style(StepKind::Tool),
+    ));
+    if segments_cols(std::slice::from_ref(&lead)) > limit {
+        return vec![lead];
+    }
+    let verb = paint(Segment::new(format!("{verb} "), style::chat_tool_verb()));
+    let mut segments = vec![lead, verb];
+    // 右对齐尾巴：状态在前、可展开标记在最后（两者都不挤掉动词）。
+    let mut tail: Vec<Segment> = Vec::new();
+    if let Some(status) = status {
+        tail.push(Segment::new(status, style::agent_step_detail()));
+    }
+    if call.detail.is_some() && !expanded {
+        tail.push(Segment::new(
+            text::agent::DETAILS_OPEN,
+            style::agent_step_detail(),
+        ));
+    } else if call.detail.is_some() {
+        tail.push(Segment::new(
+            text::agent::DETAILS_CLOSE,
+            style::agent_step_detail(),
+        ));
+    }
+    if !tail.is_empty() {
+        let used = segments_cols(&segments);
+        let tail_cols: usize = tail.iter().map(Segment::cols).sum::<usize>() + tail.len() - 1;
+        let gap = 2usize;
+        if used + tail_cols + gap <= limit {
+            let pad = limit - used - tail_cols;
+            segments.push(Segment::new(" ".repeat(pad), style::text()));
+            let last = tail.len().saturating_sub(1);
+            for (index, segment) in tail.into_iter().enumerate() {
+                if index > 0 {
+                    segments.push(Segment::new(" ", style::text()));
+                }
+                let _ = last;
+                segments.push(segment);
+            }
+        }
+    }
+    segments
+}
+
 /// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
 /// 列宽固定，续行对齐口径一致。
-fn detail_prefix() -> String {
+pub(super) fn detail_prefix() -> String {
     // 两空格缩进后接直角连接符（与消息底部通知的 `reason_prefix()` 同款）：
     // `└` 落在图标列，详情行读作头部那一行的延续。
     format!("  {} ", text::agent::MARKER_TREE_LEAF)
@@ -751,7 +870,7 @@ fn drop_index(extras: &[Extra], kept: &[bool]) -> Option<usize> {
 }
 
 /// 逐段写入网格，整体不越过 `width` 列（宽字符不半写）。
-fn put_segments(grid: &mut Grid, x: u16, y: u16, width: u16, segments: &[Segment]) {
+pub(super) fn put_segments(grid: &mut Grid, x: u16, y: u16, width: u16, segments: &[Segment]) {
     let right = x.saturating_add(width);
     let mut cx = x;
     for segment in segments {
@@ -765,7 +884,7 @@ fn put_segments(grid: &mut Grid, x: u16, y: u16, width: u16, segments: &[Segment
 }
 
 /// 单行化并限长：控制字符（含换行/制表）转空格，去掉首尾空白。
-fn single_line(value: &str, max_chars: usize) -> String {
+pub(super) fn single_line(value: &str, max_chars: usize) -> String {
     value
         .chars()
         .take(max_chars)

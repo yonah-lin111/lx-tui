@@ -175,8 +175,46 @@ pub fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     }
 }
 
-/// 在系统默认浏览器中打开 URL；OS 命令按 cfg 门控，失败返回错误。
+/// 按进程组终止命令启动的进程树：`force=false` 先温和（SIGTERM），
+/// `force=true` 强制（SIGKILL）。Windows 走 `taskkill /T`。
 ///
+/// 调用方必须随后 `wait` 取真实退出状态：发送信号不等于进程已消失。
+/// 显式脱离进程组的守护进程不保证被完整追踪，这里只尽力而为。
+pub fn terminate_process_group(pid: u32, force: bool) {
+    #[cfg(unix)]
+    {
+        let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+        // 负数 pid = 以该 pid 为组长的整个进程组（spawn 时用 process_group(0) 建立）。
+        // SAFETY: `kill` 只读取整数参数，失败返回 -1，不产生未定义行为。
+        let result = unsafe { libc::kill(-(pid as libc::pid_t), signal) };
+        if result != 0 {
+            // 进程组已不存在或权限不足：单发给组长进程兜底（通常已退出）。
+            // SAFETY: 同上。
+            unsafe {
+                libc::kill(pid as libc::pid_t, signal);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new("taskkill");
+        command.arg("/PID").arg(pid.to_string()).arg("/T");
+        if force {
+            command.arg("/F");
+        }
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = command.status();
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (pid, force);
+    }
+}
+
+/// 在系统默认浏览器中打开 URL；OS 命令按 cfg 门控，失败返回错误。///
 /// 调用方须在后台线程执行（进程启动会短暂阻塞）；`open`/`xdg-open` 等命令
 /// 本身立即返回，不等待浏览器窗口。
 pub fn open_browser(url: &str) -> io::Result<()> {

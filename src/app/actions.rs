@@ -85,6 +85,12 @@ pub enum LxInput {
     Escape,
     /// Ctrl+T：切换最近 thinking 块展开/折叠。
     ToggleThinking,
+    /// Ctrl+O：切换当前（或最近）工具卡片详情展开。
+    ToggleToolDetail,
+    /// Alt+↑：按时间线选择上一张可展开工具卡片。
+    SelectPrevTool,
+    /// Alt+↓：按时间线选择下一张可展开工具卡片。
+    SelectNextTool,
 }
 
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。

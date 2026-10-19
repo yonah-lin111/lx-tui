@@ -32,6 +32,7 @@ use tokio_stream::StreamExt;
 use crate::app::markdown::MentionEntry;
 use crate::app::state::{AppState, WorkspaceGit};
 use crate::app::update;
+use crate::chat::process::ProcessUiEvent;
 use crate::config::Config;
 use crate::db::service::Persistence;
 use crate::layout::PaneId;
@@ -158,8 +159,11 @@ async fn run_loop(
     let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
-    // lx 聊天在途流的取消句柄。
+    // lx 聊天在途流的取消句柄 + 会话进程运行实例。
     let mut chat_streams = chat::ChatStreams::default();
+    // 进程 UI 事件走独立通道：它们不携带请求代次，只按进程会话 ID 过滤归属。
+    let (process_sender, mut process_receiver) = mpsc::unbounded_channel::<ProcessUiEvent>();
+    chat_streams.set_process_sender(process_sender);
     commands::seed_git_requests(state);
 
     while !state.should_quit {
@@ -321,6 +325,16 @@ async fn run_loop(
                 Some(Err(error)) => return Err(error),
                 None => break,
             },
+            process_event = process_receiver.recv() => {
+                if let Some(event) = process_event {
+                    chat::handle_process_event(state, &mut chat_streams, persistence, event);
+                    // 后台输出/退出一定意味着需要重绘；批量排空同一帧的剩余事件。
+                    dirty = true;
+                    while let Ok(event) = process_receiver.try_recv() {
+                        chat::handle_process_event(state, &mut chat_streams, persistence, event);
+                    }
+                }
+            }
             message = receiver.recv() => {
                 if let Some(message) = message {
                     handle_app_event(
@@ -353,6 +367,18 @@ async fn run_loop(
 
     for session in sessions.values_mut() {
         session.kill();
+    }
+    // 退出 lx：停止并 reap 全部会话进程（有界等待，未确认的保留 Interrupted 记录）。
+    let runtimes: Vec<String> = chat_streams.runtimes.sessions();
+    for session in runtimes {
+        if let Some(runtime) = chat_streams.runtimes.take(&session) {
+            let manager = runtime.manager().clone();
+            let shutdown = tokio::spawn(async move {
+                manager.shutdown().await;
+            });
+            // 单批最长 3 秒：不为持久化失败无限挂住退出。
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), shutdown).await;
+        }
     }
     // 设置服务随 TUI 退出关闭，避免回环端口悬挂。
     if let Some(service) = settings_service.as_ref() {

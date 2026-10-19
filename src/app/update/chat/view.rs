@@ -5,7 +5,7 @@
 //! `position`（消息内唯一编号空间），合并时只用它，不得改用时间戳或到达顺序。
 
 use crate::app::state::lx::chat::{AssistantStepView, ChatMessageView, ChatPartView};
-use crate::app::state::{ModelsSnapshot, ToolCallView, ToolStatus, ToolSummary};
+use crate::app::state::{ModelsSnapshot, ToolCallView, ToolDetailView, ToolStatus, ToolSummary};
 use crate::chat::events::PartKind;
 use crate::db::chat::{ChatMessage, ChatPart, ToolCallRecord};
 
@@ -83,6 +83,8 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
         error: tool.error_text.clone(),
         // 结果体只在历史加载时回填：上下文回放用它（UI 不铺开全文）。
         result_json: tool.result_json.clone(),
+        // 进程/计划工具的展示数据从同一条结果 JSON 生成；文件工具为 None。
+        detail: ToolDetailView::from_result_json(tool.result_json.as_deref()).map(Box::new),
     }
 }
 

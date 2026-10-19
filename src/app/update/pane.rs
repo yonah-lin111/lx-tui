@@ -295,6 +295,17 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::ToggleThinking => {
             super::chat::toggle_latest_thinking(state, pane_id);
         }
+        // Ctrl+O：切换当前（或最近）工具卡片详情；Alt+↑/↓ 切换键盘选择。
+        // 这三者都只改窗格内的展示状态，不把按键转发给后台 shell。
+        LxInput::ToggleToolDetail => {
+            super::chat::toggle_selected_tool_detail(state, pane_id);
+        }
+        LxInput::SelectPrevTool => {
+            super::chat::select_adjacent_tool(state, pane_id, false);
+        }
+        LxInput::SelectNextTool => {
+            super::chat::select_adjacent_tool(state, pane_id, true);
+        }
         LxInput::Tab => {}
     }
 }

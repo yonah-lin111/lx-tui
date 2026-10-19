@@ -1,7 +1,7 @@
-//! 文件工具执行层：`read` / `search` / `edit` / `write`。
+//! 工具执行层：`read` / `search` / `edit` / `write` 与进程/计划工具的参数校验入口。
 //!
-//! 边界：本模块只做**文件 IO 与结构化结果**，不依赖 `app`/`ui`/`event`，不持有 TUI 状态；
-//! 执行函数是同步阻塞的，调用方负责放进 `spawn_blocking`。
+//! 边界：本模块只做**文件 IO、参数校验与结构化结果**，不依赖 `app`/`ui`/`event`，
+//! 不持有 TUI 状态；文件工具是同步阻塞的，调用方负责放进 `spawn_blocking`。
 //!
 //! 契约：
 //! - 相对路径一律以 [`ToolContext::cwd`]（发送时冻结的工作区）为基准，绝不读进程 cwd；
@@ -11,6 +11,8 @@
 //! - 输入与输出都有硬上限：`read` 的单文件输入 16 MiB、目录条目 50 000 条，`search` 的
 //!   遍历深度/文件数/命中数/时长亦然；任一触顶都显式标记 `truncated`，不静默省略；
 //! - 写路径使用同目录临时文件 + rename 原子替换，并按规范化路径加短时锁避免并发写互相踩踏；
+//! - `exec_command` / `write_stdin` 需要长期存活的进程句柄，**不在**本模块执行：
+//!   这里只有它们的参数规范化（[`parse_exec_args`] / [`parse_stdin_args`]）；
 //! - 不触碰 Git 索引/分支/暂存区/提交。
 
 mod args;
@@ -19,6 +21,8 @@ mod lock;
 mod output;
 mod patch;
 mod path;
+mod plan_args;
+mod process_args;
 mod read;
 mod schema;
 mod search;
@@ -32,13 +36,22 @@ mod test_support;
 mod tests;
 
 pub use output::{format_for_model, to_result_json, to_summary};
+pub use plan_args::build_plan_result;
+pub use process_args::{parse_exec_args, parse_stdin_args, process_failure};
 pub use schema::available_tools;
 pub use types::{
-    FileChange, FileChangeKind, ReadKind, SearchMatch, ToolContext, ToolErrorCode,
-    ToolExecutionResult, ToolSpec, ToolSummary,
+    FileChange, FileChangeKind, ReadKind, SearchMatch, TOOL_NAMES, ToolContext, ToolErrorCode,
+    ToolExecutionResult, ToolFailure, ToolResultPublic, ToolSpec, ToolSummary,
 };
 
-use types::{ToolFailure, ToolResult};
+use types::ToolResult;
+
+/// `update_plan` 的限额常量（与 schema 同源）。
+pub use crate::chat::plan::{MAX_EXPLANATION_CHARS, MAX_PLAN_STEPS, MAX_STEP_CHARS};
+/// 进程工具的参数与限额常量（与 schema 同源）。
+pub use crate::chat::process::{
+    DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS, MAX_YIELD_MS,
+};
 
 /// `read` 单次返回内容字节上限（256 KiB）：超出按行截断并给出 `next_offset`。
 pub const MAX_READ_BYTES: usize = 256 * 1024;
@@ -79,11 +92,16 @@ pub const MAX_SEARCH_LINE_CHARS: usize = 400;
 /// 单次工具结果 JSON 落库上限（复用 DB 侧 1 MiB 约定）：超限截断并置 `truncated`。
 pub const MAX_TOOL_RESULT_BYTES: usize = crate::db::chat::MAX_TOOL_RESULT_BYTES;
 
-/// 执行一次工具调用。
+/// 执行一次**文件**工具调用。
 ///
 /// 参数 JSON 先按字段白名单校验（不信任模型遵守 schema）；未知工具名返回
 /// `Failed{UnknownTool}`；任何失败都不会产生文件副作用（校验先于 IO）。
 /// 执行本身同步阻塞，调用方应在后台线程调用。
+///
+/// 进程工具（`exec_command` / `write_stdin`）与 `update_plan` 不经过本函数：
+/// 它们需要跨轮存活的会话句柄，由生产执行器直接分派（见
+/// [`crate::chat::agent_loop::AgentTools`]）；此处的同名分支只做参数校验失败，
+/// 保证“走错入口”也不会产生副作用。
 pub fn execute(ctx: &ToolContext, name: &str, arguments_json: &str) -> ToolExecutionResult {
     if arguments_json.len() > crate::chat::events::MAX_TOOL_ARGUMENTS_BYTES {
         return ToolFailure::new(
@@ -101,12 +119,21 @@ pub fn execute(ctx: &ToolContext, name: &str, arguments_json: &str) -> ToolExecu
         // `edit` 自带已提交变更累积，失败时需把部分成功一并返回。
         "edit" => edit::run(ctx, arguments_json),
         "write" => wrap(write::run(ctx, arguments_json)),
+        // 需要长期进程句柄/会话状态：本入口不执行，返回明确的错误而不是静默成功。
+        "exec_command" | "write_stdin" | "update_plan" => ToolFailure::new(
+            ToolErrorCode::UnknownTool,
+            format!("tool '{name}' must be executed by the agent loop, not the file executor"),
+        )
+        .into_result(Vec::new()),
         other => {
             // 只回显截断后的名字：模型可能塞入超长内容，错误消息不得被撑爆。
             let shown: String = other.chars().take(64).collect();
             ToolFailure::new(
                 ToolErrorCode::UnknownTool,
-                format!("unknown tool '{shown}'; available tools: read, search, edit, write"),
+                format!(
+                    "unknown tool '{shown}'; available tools: {}",
+                    TOOL_NAMES.join(", ")
+                ),
             )
             .into_result(Vec::new())
         }

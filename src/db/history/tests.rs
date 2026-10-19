@@ -26,13 +26,17 @@ fn open_test_database(label: &str) -> Database {
 }
 
 #[test]
-fn fresh_database_exposes_v10_with_empty_history() {
+fn fresh_database_exposes_current_schema_with_empty_history() {
     let database = open_test_database("fresh");
     let version: i64 = database
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("user_version");
-    assert_eq!(version, 10, "新建库直接推进到 v10");
+    assert_eq!(
+        version,
+        crate::db::SCHEMA_VERSION_FOR_TESTS,
+        "新建库直接推进到当前 schema 版本"
+    );
     assert!(database.load_prompt_history(100).expect("load").is_empty());
     assert_eq!(database.prompt_history_count().expect("count"), 0);
 }
@@ -127,15 +131,16 @@ fn migration_is_idempotent_across_reopen() {
 }
 
 #[test]
-fn v9_database_upgrades_to_v10_keeping_chat_data() {
+fn v9_database_upgrades_to_current_schema_keeping_chat_data() {
     let path = temp_db_path("v9");
     {
-        // 先用当前程序建库，再手工把版本号退回 9 并删掉历史表，模拟 v9 旧库。
+        // 先用当前程序建库，再手工把版本号退回 9 并删掉 v10/v11 新增的表，模拟 v9 旧库。
         let database = Database::open(&path).expect("open");
         database
             .conn
             .execute_batch(
                 "DROP TABLE prompt_history;
+                 DROP TABLE agent_process;
                  PRAGMA user_version = 9;",
             )
             .expect("downgrade to v9");
@@ -145,7 +150,11 @@ fn v9_database_upgrades_to_v10_keeping_chat_data() {
         .conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("user_version");
-    assert_eq!(version, 10, "旧库升级到 v10");
+    assert_eq!(
+        version,
+        crate::db::SCHEMA_VERSION_FOR_TESTS,
+        "旧库升级到当前 schema 版本"
+    );
     // 新表可用。
     upgraded
         .record_prompt_history("after upgrade", 100)

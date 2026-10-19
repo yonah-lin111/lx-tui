@@ -19,7 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
+
+/// 当前 Schema 版本（测试断言用；不暴露可变入口）。
+#[cfg(test)]
+pub(crate) const SCHEMA_VERSION_FOR_TESTS: i64 = SCHEMA_VERSION;
 
 /// 旧正文迁移为唯一第一页时使用的默认页名。
 const FIRST_PAGE_NAME: &str = "Page 1";
@@ -69,6 +73,8 @@ pub enum DbError {
     ToolArgumentTooLarge,
     /// 工具结果 JSON 超过单次上限。
     ToolResultTooLarge,
+    /// 同一运行代次内进程会话 ID 已存在（重复 begin 被拒）。
+    ProcessConflict,
     /// 数据库不可用（无持久化模式）；调用方据此停止需要落库的流程。
     Unavailable,
 }
@@ -104,6 +110,7 @@ impl fmt::Display for DbError {
             }
             Self::ToolArgumentTooLarge => write!(formatter, "tool arguments exceed size limit"),
             Self::ToolResultTooLarge => write!(formatter, "tool result exceeds size limit"),
+            Self::ProcessConflict => write!(formatter, "process already recorded"),
             Self::Unavailable => write!(formatter, "database unavailable"),
         }
     }
@@ -136,6 +143,7 @@ impl DbError {
             Self::ToolTerminalConflict => "tool terminal conflict",
             Self::ToolArgumentTooLarge => "tool argument too large",
             Self::ToolResultTooLarge => "tool result too large",
+            Self::ProcessConflict => "process conflict",
             Self::Unavailable => "database unavailable",
         }
     }

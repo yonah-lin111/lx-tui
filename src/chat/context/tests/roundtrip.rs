@@ -44,6 +44,7 @@ fn tool_step(
             summary: Some(ToolSummary::from_arguments(arguments_json)),
             error: error.map(str::to_string),
             result_json: result_json.map(str::to_string),
+            detail: None,
         },
     }
 }

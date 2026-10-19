@@ -14,9 +14,14 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
+mod process;
 mod session;
 mod view;
 
+pub use process::{
+    apply_process_exit, apply_process_output, commit_plan, restore_plan, select_adjacent_tool,
+    settle_tool_detail, toggle_selected_tool_detail, toggle_tool_detail,
+};
 pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, delete_session, new_session,
     on_history_listed, on_session_deleted, on_session_loaded, open_history, open_model_picker,

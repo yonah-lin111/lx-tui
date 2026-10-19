@@ -27,6 +27,7 @@ fn read_step(position: i64, status: ToolStatus) -> AssistantStepView {
             }),
             error: None,
             result_json: None,
+            detail: None,
         },
     }
 }

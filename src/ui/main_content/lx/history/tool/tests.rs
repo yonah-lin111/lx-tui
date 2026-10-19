@@ -6,7 +6,8 @@
 //! 按职责拆成子模块（单文件行数上限 1000）：
 //! - `structure`：两行结构与状态编码（方块/动词/错误文案/兜底状态词）；
 //! - `extras`：各工具特有的次要信息（命中数、区间 + 实际行数、增删计数、截断与分隔符）；
-//! - `width`：宽度自适应、列宽裁剪与行数几何不变量。
+//! - `width`：宽度自适应、列宽裁剪与行数几何不变量；
+//! - `command_cards`：进程/计划卡片的宽窄、中文、展开与几何一致。
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -18,6 +19,7 @@ use crate::app::state::{ToolStatus, ToolSummary};
 use crate::ui::style;
 use crate::ui::text;
 
+mod command_cards;
 mod extras;
 mod structure;
 mod width;
@@ -40,6 +42,7 @@ fn tool_call(
         summary,
         error: error.map(str::to_string),
         result_json: None,
+        detail: None,
     }
 }
 
@@ -91,8 +94,20 @@ fn render_row_at(call: &ToolCallView, width: u16, loading_frame: usize) -> (Stri
     let rect = Rect::new(0, 0, width, (DETAIL_ROWS + HEADER_ROWS) as u16);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, call, loading_frame);
-    assert_eq!(row_index, rows(call, width), "绘制推进行数必须与 rows 一致");
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        call,
+        loading_frame,
+        false,
+    );
+    assert_eq!(
+        row_index,
+        rows(call, width, false),
+        "绘制推进行数必须与 rows 一致"
+    );
     (grid_text(&grid, rect), grid)
 }
 

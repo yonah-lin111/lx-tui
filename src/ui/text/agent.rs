@@ -323,3 +323,135 @@ fn main() {
 pub fn native_label_cycle() -> &'static [u8] {
     &[218, 182, 153, 117]
 }
+
+// ===== 进程 / 计划卡片文案（`history/tool/command.rs` 与 `plan.rs` 共用）=====
+
+use crate::app::state::{InteractionAction, ProcessStateView};
+
+/// `exec_command` 卡片动词。
+pub const VERB_EXEC_COMMAND: &str = "Run command";
+/// `write_stdin` 卡片动词（按动作区分）。
+pub const VERB_READ_OUTPUT: &str = "Read output";
+pub const VERB_SEND_INPUT: &str = "Send input";
+pub const VERB_STOP_COMMAND: &str = "Stop command";
+/// `update_plan` 卡片动词。
+pub const VERB_UPDATE_PLAN: &str = "Plan";
+
+/// 详情操作按钮（ASCII，窄宽度也画得下）。
+pub const DETAILS_OPEN: &str = "[details]";
+pub const DETAILS_CLOSE: &str = "[collapse]";
+
+/// 进程状态词（文字，不只靠颜色）。
+pub const STATE_STARTING: &str = "Starting";
+pub const STATE_RUNNING: &str = "Running";
+pub const STATE_STOPPED: &str = "Stopped";
+pub const STATE_TIMED_OUT: &str = "Timed out";
+pub const STATE_INTERRUPTED: &str = "Interrupted";
+pub const STATE_FAILED: &str = "Failed";
+
+/// 无输出占位。
+pub const WAITING_FOR_OUTPUT: &str = "Waiting for output";
+pub const NO_NEW_OUTPUT: &str = "No new output";
+pub const EARLIER_OUTPUT_DISCARDED: &str = "Earlier output discarded";
+
+/// cwd 次要信息前缀。
+pub const CWD_PREFIX: &str = "cwd:";
+/// 输入预览前缀。
+pub const INPUT_PREFIX: &str = "stdin:";
+/// 进程会话 ID 前缀（只在详情里出现）。
+pub const SESSION_PREFIX: &str = "session:";
+/// 计划完成计数后缀。
+pub const PLAN_COMPLETED_SUFFIX: &str = "completed";
+/// 空计划文案。
+pub const PLAN_EMPTY: &str = "Plan cleared";
+
+/// 计划三态标记（ASCII，与模型结果同一口径）。
+pub const PLAN_PENDING: &str = "[ ]";
+pub const PLAN_IN_PROGRESS: &str = "[>]";
+pub const PLAN_COMPLETED: &str = "[x]";
+
+/// 进程状态 → 固定文案。
+pub fn proc_state_label(state: ProcessStateView) -> &'static str {
+    match state {
+        ProcessStateView::Starting => STATE_STARTING,
+        ProcessStateView::Running => STATE_RUNNING,
+        ProcessStateView::Exited { code } => {
+            if code.is_some_and(|code| code != 0) {
+                STATE_FAILED
+            } else {
+                // 退出码 0 由调用方追加 `Exited 0`，这里只给失败/成功分档。
+                STATE_RUNNING
+            }
+        }
+        ProcessStateView::Stopped => STATE_STOPPED,
+        ProcessStateView::TimedOut => STATE_TIMED_OUT,
+        ProcessStateView::Interrupted => STATE_INTERRUPTED,
+        ProcessStateView::Failed => STATE_FAILED,
+    }
+}
+
+/// 非零退出原因的固定文案：`exit N`。
+pub fn proc_exit_failure(code: i32) -> String {
+    format!("exit {code}")
+}
+
+/// 退出状态标签：`Exited 0` / `exit 2`。
+pub fn proc_exit_label(state: ProcessStateView) -> String {
+    match state {
+        ProcessStateView::Exited { code } => match code {
+            Some(0) => "Exited 0".to_string(),
+            Some(code) => format!("exit {code}"),
+            None => "Exited".to_string(),
+        },
+        other => proc_state_label(other).to_string(),
+    }
+}
+
+/// `write_stdin` 动作动词。
+pub fn interaction_verb(action: InteractionAction) -> &'static str {
+    match action {
+        InteractionAction::ReadOutput => VERB_READ_OUTPUT,
+        InteractionAction::SendInput => VERB_SEND_INPUT,
+        InteractionAction::StopCommand => VERB_STOP_COMMAND,
+    }
+}
+
+/// 计划完成计数：`1/3 completed`。
+pub fn plan_progress(completed: usize, total: usize) -> String {
+    format!("{completed}/{total} {PLAN_COMPLETED_SUFFIX}")
+}
+
+/// 计划步骤标记。
+pub fn plan_marker(status: crate::app::state::PlanStepView) -> &'static str {
+    match status {
+        crate::app::state::PlanStepView::Pending => PLAN_PENDING,
+        crate::app::state::PlanStepView::InProgress => PLAN_IN_PROGRESS,
+        crate::app::state::PlanStepView::Completed => PLAN_COMPLETED,
+    }
+}
+
+/// 详情行：`cwd: /path`。
+pub fn cwd_label(cwd: &str) -> String {
+    format!("{CWD_PREFIX} {cwd}")
+}
+
+/// 详情行：`session: 12`。
+pub fn session_label(session_id: u64) -> String {
+    format!("{SESSION_PREFIX} {session_id}")
+}
+
+/// `exec_command` 卡片：标题动词、状态与输出预览。
+pub const COMMAND_DESC: &[&str] = &[
+    "Command card: verb, running/exited state, the command line",
+    "and the last six output lines; details expand in place.",
+];
+/// `write_stdin` 交互卡片：本次调用的输入与输出快照。
+pub const PROCESS_INTERACTION_DESC: &[&str] = &[
+    "Process interaction: read / send / stop action, the input",
+    "preview and the output snapshot of that single call.",
+];
+/// `update_plan` 计划卡片：三态步骤与完成计数。
+pub const PLAN_DESC: &[&str] = &[
+    "Plan card: pending / in-progress / completed markers with the",
+    "completed count and the optional explanation line.",
+];

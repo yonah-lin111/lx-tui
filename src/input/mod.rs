@@ -102,6 +102,7 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     let mapped = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(LxInput::Newline),
         (true, false, KeyCode::Char(ch)) => match ch {
+            'o' | 'O' => Some(LxInput::ToggleToolDetail),
             'u' | 'U' => Some(LxInput::DeleteToLineStart),
             'k' | 'K' => Some(LxInput::DeleteToLineEnd),
             'w' | 'W' => Some(LxInput::DeleteWordBackward),
@@ -118,6 +119,9 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         (true, false, KeyCode::Delete) => Some(LxInput::DeleteWordForward),
         (true, false, KeyCode::Left) => Some(LxInput::WordLeft),
         (true, false, KeyCode::Right) => Some(LxInput::WordRight),
+        // Alt+↑/↓：在可展开工具卡片之间移动键盘选择（草稿与光标保持不变）。
+        (false, true, KeyCode::Up) => Some(LxInput::SelectPrevTool),
+        (false, true, KeyCode::Down) => Some(LxInput::SelectNextTool),
         (false, true, KeyCode::Char('b')) => Some(LxInput::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(LxInput::WordRight),
         (false, true, KeyCode::Char('d')) => Some(LxInput::DeleteWordForward),
@@ -425,3 +429,6 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod process_keys;

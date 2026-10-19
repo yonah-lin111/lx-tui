@@ -9,9 +9,14 @@ use crate::config::ai::{AiSettings, ModelSelection};
 
 mod steps;
 mod stream;
+pub mod tool_view;
 
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
+};
+pub use tool_view::{
+    CommandView, InteractionAction, PlanSnapshotView, PlanStepView, ProcessInteractionView,
+    ProcessStateView, ToolDetailView,
 };
 
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
@@ -353,6 +358,15 @@ pub struct LxChat {
     /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
     pub suppressed_prompt_header: Option<StickySuppression>,
+    /// 工具卡片详情展开状态：(message_id, call_id, 是否展开)。
+    ///
+    /// 用稳定 ID 而不是数组下标定位：历史增删、重载与切会话都不会把展开状态
+    /// 误挂到别的卡片上；重启或切会话后默认折叠（本字段随窗格内存存在）。
+    pub detail_expanded: Vec<(String, String, bool)>,
+    /// 键盘选中的可展开工具卡片：(message_id, call_id)；None 表示未选中。
+    pub selected_tool: Option<(String, String)>,
+    /// 当前计划快照（最近一次**成功提交**的 update_plan）；失败/中断不覆盖。
+    pub plan: Option<PlanSnapshotView>,
 }
 
 impl Default for LxChat {
@@ -382,7 +396,34 @@ impl LxChat {
             stop_armed_at: None,
             hint: None,
             suppressed_prompt_header: None,
+            detail_expanded: Vec::new(),
+            selected_tool: None,
+            plan: None,
         }
+    }
+
+    /// 工具卡片详情是否展开（按 `(message_id, call_id)` 定位，默认折叠）。
+    pub fn detail_is_expanded(&self, message_id: &str, call_id: &str) -> bool {
+        self.detail_expanded
+            .iter()
+            .find(|(message, call, _)| message == message_id && call == call_id)
+            .is_some_and(|(_, _, expanded)| *expanded)
+    }
+
+    /// 切换工具卡片详情展开状态，返回新状态。
+    pub fn toggle_detail(&mut self, message_id: &str, call_id: &str) -> bool {
+        let next = !self.detail_is_expanded(message_id, call_id);
+        if let Some(existing) = self
+            .detail_expanded
+            .iter_mut()
+            .find(|(message, call, _)| message == message_id && call == call_id)
+        {
+            existing.2 = next;
+            return next;
+        }
+        self.detail_expanded
+            .push((message_id.to_string(), call_id.to_string(), next));
+        next
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或

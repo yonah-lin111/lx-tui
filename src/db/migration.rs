@@ -296,6 +296,40 @@ CREATE INDEX IF NOT EXISTS idx_prompt_history_updated
     ON prompt_history(updated_at_ms DESC, id DESC);
 "#;
 
+/// v11 会话进程元数据表：保存原 exec 工具返回后的进程变化。
+///
+/// 工具原始结果（`agent_tool_call.result_json`）**不可变**；进程后续输出与退出写在
+/// 这里，二者不互相改写。`process_session_id` 是运行实例内身份，不接受 OS PID 作为
+/// 恢复入口；`revision` 用单调整数分配，较旧 revision 与不同运行代次的更新零行。
+const SCHEMA_V11: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_process (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    chat_session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    origin_call_id TEXT NOT NULL,
+    runtime_epoch TEXT NOT NULL,
+    process_session_id INTEGER NOT NULL CHECK (process_session_id > 0),
+    state TEXT NOT NULL CHECK
+        (state IN ('starting', 'running', 'exited', 'stopped', 'timed_out', 'interrupted', 'failed')),
+    exit_code INTEGER,
+    stop_reason TEXT,
+    command TEXT NOT NULL,
+    cwd TEXT NOT NULL,
+    tty INTEGER NOT NULL DEFAULT 0 CHECK (tty IN (0, 1)),
+    output_tail BLOB,
+    output_start INTEGER NOT NULL DEFAULT 0 CHECK (output_start >= 0),
+    output_end INTEGER NOT NULL DEFAULT 0 CHECK (output_end >= 0),
+    dropped_bytes INTEGER NOT NULL DEFAULT 0 CHECK (dropped_bytes >= 0),
+    started_at_ms INTEGER NOT NULL,
+    ended_at_ms INTEGER,
+    revision INTEGER NOT NULL DEFAULT 0 CHECK (revision >= 0),
+    UNIQUE(runtime_epoch, process_session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_process_session
+    ON agent_process(chat_session_id, started_at_ms, id);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -374,6 +408,10 @@ impl Database {
             // v10：全局 prompt 历史表；只增表，老数据不受影响。
             if version < 10 {
                 transaction.execute_batch(SCHEMA_V10)?;
+            }
+            // v11：会话进程元数据表；只增表，工具结果体仍不可变。
+            if version < 11 {
+                transaction.execute_batch(SCHEMA_V11)?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;

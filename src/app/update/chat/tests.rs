@@ -2,6 +2,7 @@
 //! 流终态、命令面板与过期结果过滤。
 
 mod history;
+mod process_cards;
 mod prompt_history;
 mod session;
 mod slash_panels;

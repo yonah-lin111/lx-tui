@@ -52,12 +52,117 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
                 path.display()
             )
         }
+        ToolExecutionResult::Process(result) => format_process(result),
+        ToolExecutionResult::Plan(snapshot) => format_plan(snapshot),
         ToolExecutionResult::Failed {
             code,
             message,
             changes,
         } => format_failure(*code, message, changes),
     }
+}
+
+/// 进程工具结果：状态 / 退出码 / 输出区间 / 输出正文。
+///
+/// 非零退出、超时与中断都写成明确的失败行，绝不让模型把它读成「命令成功」。
+fn format_process(result: &crate::chat::process::ProcessResult) -> String {
+    use crate::chat::process::ProcessState;
+    let mut text = String::new();
+    match &result.state {
+        ProcessState::Exited { code } => {
+            text.push_str(&format!(
+                "{} finished with exit code {}\n",
+                result.command,
+                code.map_or_else(|| "unknown".to_string(), |code| code.to_string())
+            ));
+        }
+        ProcessState::Running | ProcessState::Starting => {
+            text.push_str(&format!(
+                "{} is still running; session_id={} (use write_stdin to read more output or send input)\n",
+                result.command, result.session_id
+            ));
+        }
+        ProcessState::Stopped => {
+            text.push_str(&format!("{} was stopped\n", result.command));
+        }
+        ProcessState::TimedOut => {
+            text.push_str(&format!("{} timed out and was stopped\n", result.command));
+        }
+        ProcessState::Interrupted => {
+            text.push_str(&format!(
+                "{} was interrupted; its final state is unknown\n",
+                result.command
+            ));
+        }
+        ProcessState::Failed { code } => {
+            text.push_str(&format!("{} failed to run: {code}\n", result.command));
+        }
+    }
+    text.push_str(&format!(
+        "session_id: {}\nprocess_state: {}\n",
+        result.session_id,
+        result.state.as_str()
+    ));
+    if let Some(code) = result.exit_code {
+        text.push_str(&format!("exit_code: {code}\n"));
+    }
+    text.push_str(&format!(
+        "output: bytes [{}, {}){}\n",
+        result.output_start,
+        result.output_end,
+        if result.truncated {
+            " · more output pending"
+        } else {
+            ""
+        }
+    ));
+    if result.dropped_bytes > 0 {
+        text.push_str(&format!(
+            "dropped_bytes: {} (earlier output was discarded before it could be read)\n",
+            result.dropped_bytes
+        ));
+    }
+    if let Some(input) = &result.input {
+        text.push_str(&format!("input: {input}\n"));
+    }
+    if result.output.is_empty() {
+        text.push_str("no output\n");
+    } else {
+        text.push_str("---\n");
+        text.push_str(&result.output);
+        if !result.output.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    text
+}
+
+/// 计划结果：已提交的完整快照（模型据此确认替换生效）。
+fn format_plan(snapshot: &crate::chat::plan::PlanSnapshot) -> String {
+    if snapshot.is_empty() {
+        return format!(
+            "Plan updated (revision {}): the plan is now empty\n",
+            snapshot.revision
+        );
+    }
+    let mut text = format!(
+        "Plan updated (revision {}): {}/{} completed\n",
+        snapshot.revision,
+        snapshot.completed(),
+        snapshot.steps.len()
+    );
+    for step in &snapshot.steps {
+        let marker = match step.status {
+            crate::chat::plan::PlanStepStatus::Completed => "[x]",
+            crate::chat::plan::PlanStepStatus::InProgress => "[>]",
+            crate::chat::plan::PlanStepStatus::Pending => "[ ]",
+        };
+        text.push_str(&format!("{marker} {}\n", step.step));
+    }
+    if let Some(explanation) = &snapshot.explanation {
+        text.push_str(&format!("note: {explanation}\n"));
+    }
+    text
 }
 
 /// `read` 的文本表示：首行给出范围与文件总行数，末行给出截断续读信息。
@@ -269,6 +374,9 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
                 ..ToolSummary::default()
             }
         }
+        // 进程工具与计划工具的展示数据走各自的类型化视图（`ProcessView` / `PlanSnapshotView`），
+        // 不塞进文件摘要里：摘要只描述“哪个文件、多少行”，进程/计划没有这个形状。
+        ToolExecutionResult::Process(_) | ToolExecutionResult::Plan(_) => ToolSummary::default(),
     }
 }
 
@@ -366,6 +474,8 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "message": message,
             "changes": changes.iter().map(change_json).collect::<Vec<_>>(),
         }),
+        ToolExecutionResult::Process(result) => result.to_json(),
+        ToolExecutionResult::Plan(snapshot) => snapshot.to_json(),
     };
     let text = serde_json::to_string(&value).ok()?;
     if text.len() <= MAX_TOOL_RESULT_BYTES {
@@ -406,6 +516,10 @@ fn shrink_json_text(mut value: Value) -> Option<String> {
     if let Value::Object(object) = &mut value {
         if let Some(Value::String(content)) = object.get_mut("content") {
             *content = truncate_chars(content, budget);
+        }
+        // 进程结果：正文在 `output` 字段，同样只截断正文、保留区间与状态。
+        if let Some(Value::String(output)) = object.get_mut("output") {
+            *output = truncate_chars(output, budget);
         }
         if let Some(Value::Array(matches)) = object.get_mut("matches") {
             let mut used = 0usize;

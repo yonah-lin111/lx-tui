@@ -841,6 +841,7 @@ fn tool_step(position: i64) -> AssistantStepView {
             }),
             error: None,
             result_json: None,
+            detail: None,
         },
     }
 }

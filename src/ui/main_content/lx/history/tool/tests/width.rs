@@ -160,19 +160,23 @@ fn tool_row_count_is_always_two_for_any_content() {
             ToolStatus::Interrupted,
         ] {
             let call = tool_call("read", status, Some(read_summary()), Some("boom"));
-            assert_eq!(rows(&call, width), 2, "宽 {width} 恒占 2 行（标题 + 详情）");
+            assert_eq!(
+                rows(&call, width, false),
+                2,
+                "宽 {width} 恒占 2 行（标题 + 详情）"
+            );
         }
     }
     // 宽度 0：不占行（与空正文块同口径），渲染也不写任何单元格。
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    assert_eq!(rows(&call, 0), 0);
+    assert_eq!(rows(&call, 0, false), 0);
     let rect = Rect::new(0, 0, 0, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, &call, 0);
+    draw(&mut grid, rect, 0, &mut row_index, &call, 0, false);
     assert_eq!(
-        row_index, 2,
-        "绘制推进与 layout 口径一致（宽度 0 时 layout 跳过该块）"
+        row_index, 0,
+        "绘制推进与 layout 口径一致（宽度 0 时该块整体跳过）"
     );
 }
 
@@ -182,7 +186,7 @@ fn scrolled_out_rows_draw_nothing_but_still_advance() {
     let rect = Rect::new(0, 5, 40, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 3usize; // 已在滚动窗口之上
-    draw(&mut grid, rect, 5, &mut row_index, &call, 0);
+    draw(&mut grid, rect, 5, &mut row_index, &call, 0, false);
     assert_eq!(row_index, 5, "不可见两行仍推进");
     assert!(grid_text(&grid, rect).trim().is_empty(), "不可见行不写网格");
 }

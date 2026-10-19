@@ -653,6 +653,8 @@ pub enum LxChatHit {
     JumpBottom,
     /// 点击代码块头部的复制按钮；`text` 为该块正文。
     CodeCopy(String),
+    /// 点击可展开工具卡片的标题行（消息 id, call id）：切换该卡片详情。
+    ToolDetail(String, String),
 }
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
@@ -774,7 +776,34 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
             return Some(LxChatHit::CodeCopy(button.body));
         }
     }
+    // 可展开工具卡片的标题行（点击标题或 `[details]` 切换；点正文不折叠）。
+    if let Some(hit) = tool_hit_at(&view, lx, column, row) {
+        return Some(LxChatHit::ToolDetail(hit.message_id, hit.call_id));
+    }
     None
+}
+
+/// 包装卡片标题行命中：按 body + 滚动窗口把内容行换算成屏幕坐标。
+fn tool_hit_at(
+    view: &history::HistoryView,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<history::ToolHit> {
+    history::layout(view.body, lx)
+        .tools
+        .into_iter()
+        .find(|hit| {
+            let offset = hit.rect.y.saturating_sub(view.body.y);
+            if (offset as usize) < view.scroll {
+                return false;
+            }
+            let screen_y = view
+                .body
+                .y
+                .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
+            Rect::new(view.body.x, screen_y, view.body.width, 1).contains((column, row).into())
+        })
 }
 
 /// 代码块复制按钮的**屏幕矩形**（按当前滚动偏移换算）与正文。

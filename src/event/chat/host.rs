@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::app::state::RequestKey;
 use crate::chat::agent_loop::{
-    AgentHost, AgentHostRequest, FileTools, HostError, ModelContext, ReadyToolCall, ToolExecutor,
+    AgentHost, AgentHostRequest, AgentTools, HostError, ModelContext, ReadyToolCall, ToolExecutor,
     ToolOutcome, TurnSummary, run_agent_turn,
 };
 use crate::chat::client::StreamOutcome;
@@ -98,11 +98,12 @@ where
     run_agent_turn(context, host, executor, stream_one, cancel).await
 }
 
-/// 生产轮次驱动：事件层 host + `spawn_blocking` 文件工具执行器。
+/// 生产轮次驱动：事件层 host + 生产工具执行器（文件 / 进程 / 计划三类分派）。
 pub(crate) async fn drive_agent_turn<S, F>(
     key: RequestKey,
     context: ModelContext,
     sender: mpsc::UnboundedSender<AppEvent>,
+    executor: AgentTools,
     stream_one: S,
     cancel: watch::Receiver<bool>,
 ) -> TurnSummary
@@ -111,5 +112,5 @@ where
     F: std::future::Future<Output = StreamOutcome> + Send,
 {
     let host = EventHost { key, sender };
-    drive_with(context, host, FileTools, stream_one, cancel).await
+    drive_with(context, host, executor, stream_one, cancel).await
 }
