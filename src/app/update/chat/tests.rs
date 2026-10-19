@@ -2,6 +2,7 @@
 //! 流终态、命令面板与过期结果过滤。
 
 mod history;
+mod prompt_history;
 mod session;
 mod stop;
 mod timeline;

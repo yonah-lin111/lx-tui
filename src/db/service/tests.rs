@@ -1031,3 +1031,71 @@ fn key_change_settles_current_page_before_reload() {
         .expect("record");
     assert_eq!(record.pages[0].content, "body edited");
 }
+
+// ===== 全局 prompt 历史：效应出箱与启动载入 =====
+
+#[test]
+fn record_prompt_history_effect_persists_and_trims() {
+    let db_path = temp_db_path("history-effect");
+    let database = Database::open(&db_path).expect("db opens");
+    let mut service = Persistence::with_database(database);
+    let mut state = AppState::demo();
+    for text in ["alpha", "beta"] {
+        state.effects.push(Effect::RecordPromptHistory {
+            text: text.to_string(),
+        });
+        service.pump(&mut state);
+    }
+    // 直接查库确认落盘。
+    let reopened = Database::open(&db_path).expect("reopen");
+    assert_eq!(
+        reopened.load_prompt_history(100).expect("load"),
+        vec!["alpha", "beta"]
+    );
+}
+
+#[test]
+fn record_prompt_history_failure_does_not_panic() {
+    // 空文本在 DB 层被拒（InvalidDraft）：效应出箱只记日志，不影响其它状态。
+    let db_path = temp_db_path("history-failure");
+    let database = Database::open(&db_path).expect("db opens");
+    let mut service = Persistence::with_database(database);
+    let mut state = AppState::demo();
+    state.effects.push(Effect::RecordPromptHistory {
+        text: "   ".to_string(),
+    });
+    service.pump(&mut state);
+    let reopened = Database::open(&db_path).expect("reopen");
+    assert!(
+        reopened.load_prompt_history(100).expect("load").is_empty(),
+        "空白文本不落库"
+    );
+}
+
+#[test]
+fn load_prompt_history_fills_state_from_database() {
+    let db_path = temp_db_path("history-load");
+    let database = Database::open(&db_path).expect("db opens");
+    database
+        .record_prompt_history("older", 100)
+        .expect("record");
+    database
+        .record_prompt_history("newer", 100)
+        .expect("record");
+    let service = Persistence::with_database(database);
+    let mut state = AppState::demo();
+    service.load_prompt_history(&mut state);
+    assert_eq!(
+        state.prompt_history.entries(),
+        &["older".to_string(), "newer".to_string()],
+        "启动载入保持旧→新顺序"
+    );
+}
+
+#[test]
+fn load_prompt_history_without_database_keeps_empty() {
+    let service = Persistence { db: None };
+    let mut state = AppState::demo();
+    service.load_prompt_history(&mut state);
+    assert!(state.prompt_history.is_empty(), "降级模式历史为空");
+}

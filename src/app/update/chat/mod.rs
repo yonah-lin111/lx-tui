@@ -132,23 +132,37 @@ pub fn on_turn_committed(
     committed: &crate::db::chat::TurnCommitted,
 ) -> bool {
     let models = state.models.clone();
+    // 先只读取出冻结草稿：历史记录要在拿窗格可变借用之前完成，避免同时借用 `state` 两处。
+    let frozen_draft = {
+        let Some(target) = state.pane_anywhere(pane) else {
+            return false;
+        };
+        match &target.lx.chat.request {
+            RequestState::Committing {
+                generation: g,
+                draft,
+            } if *g == generation => draft.clone(),
+            _ => return false,
+        }
+    };
+    // 记录到全局 prompt 历史：DB ack 已确认这一轮真正入库，才值得留在历史里。
+    // 内存先记录（`↑` 立即可用），持久化走独立效应；两者互不阻塞。
+    if state.prompt_history.record(&frozen_draft) {
+        state
+            .effects
+            .push(crate::app::effects::Effect::RecordPromptHistory {
+                text: frozen_draft.trim().to_string(),
+            });
+    }
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
-    };
-    if !matches!(
-        &target.lx.chat.request,
-        RequestState::Committing { generation: g, .. } if *g == generation
-    ) {
-        return false;
-    }
-    let frozen_draft = match &target.lx.chat.request {
-        RequestState::Committing { draft, .. } => draft.clone(),
-        _ => return false,
     };
     // 只清仍与冻结草稿相同的输入（期间用户编辑则保留新草稿）。
     if target.lx.input.trim() == frozen_draft.trim() {
         target.lx.clear();
     }
+    // 发送成功：退出历史浏览态，否则下一次 `↑` 会从旧游标继续而非最新一条。
+    target.lx.end_history_browse();
     // 展示：user 消息 + streaming assistant 占位。
     target.lx.chat.session_id = Some(committed.session_id.clone());
     target.lx.chat.turn_started_at_ms = Some(committed.created_at_ms);

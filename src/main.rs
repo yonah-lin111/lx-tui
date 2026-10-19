@@ -24,6 +24,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config = Config::default();
     let mut state = AppState::demo();
     let persistence = Persistence::start();
+    // 全局 prompt 历史：库不可用时内部降级为空历史，不阻断启动。
+    persistence.load_prompt_history(&mut state);
     // 启动信任门：未信任时先在当前终端屏幕（行内）显示信任页；拒绝则不进入应用。
     if !event::startup_trust(&persistence, &mut state)? {
         eprintln!("lx-tui: {}", lx_tui::ui::text::TRUST_REFUSED_MESSAGE);

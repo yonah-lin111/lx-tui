@@ -73,11 +73,36 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 
 /// 应用 lx 页输入命令到焦点窗格；非 lx 视图忽略。
 ///
-/// 面板优先级：粘贴参照 > `@` 提及 > `/` 命令（model/resume/new） > md 块命令；
-/// 面板打开时其余按键按面板策略吞掉。
+/// 面板优先级：粘贴参照 > `@` 提及 > `/` 命令（model/resume/new） > md 块命令 >
+/// 历史 prompt 切换；面板打开时其余按键按面板策略吞掉。
 /// 提及面板打开时 `↑`/`↓` 移动高亮、`Tab`/`Enter` 采纳、`Shift+Enter` 进入目录、`Esc` 关闭。
+/// 无面板时 `↑`/`↓` 先尝试历史切换（光标在文首/文末才接管），否则回落光标移动。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     let pane_id = state.active_tab().layout.focus();
+    // 历史 prompt 切换：只读定出路由（要读全局历史 + 窗格编辑器，两个不可变借用），
+    // 再单独应用，避免同时借用 `state` 的两个字段。
+    match lx_history_route(state, pane_id, command) {
+        LxHistoryRoute::Move(next) => {
+            if let Some(pane) = state.pane_mut_anywhere(pane_id) {
+                pane.lx.apply_history(next);
+            }
+            return;
+        }
+        // 浏览态 `Esc`：只退出浏览、不动文本，并吞掉该键（不改现有停止语义）。
+        LxHistoryRoute::EndBrowse => {
+            if let Some(pane) = state.pane_mut_anywhere(pane_id) {
+                pane.lx.end_history_browse();
+            }
+            return;
+        }
+        // 编辑类命令：先退出浏览态，再按原语义继续处理。
+        LxHistoryRoute::ClearBrowse => {
+            if let Some(pane) = state.pane_mut_anywhere(pane_id) {
+                pane.lx.end_history_browse();
+            }
+        }
+        LxHistoryRoute::None => {}
+    }
     let Some(pane) = state.active_pane_mut() else {
         return;
     };
@@ -265,6 +290,78 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         }
         LxInput::Tab => {}
     }
+}
+
+/// 历史 prompt 与当前按键的路由结果。
+enum LxHistoryRoute {
+    /// 由历史接管：应用这次切换。
+    Move(crate::app::state::lx::HistoryMove),
+    /// 浏览态 `Esc`：退出浏览并吞掉该键。
+    EndBrowse,
+    /// 编辑类命令：先退出浏览，再按原语义继续。
+    ClearBrowse,
+    /// 与历史无关；按原语义继续。
+    None,
+}
+
+/// 只读判定历史路由：面板优先级高于历史，且 `↑`/`↓` 只在光标位于文首/文末时接管。
+///
+/// 面板（粘贴参照 / `@` 提及 / `/` 命令 / md 块）任一打开时方向键归面板，历史一律不接管，
+/// 因此这里先把"面板占用"和"历史接管"分开判断，避免面板抢键失败后又被历史接走。
+fn lx_history_route(state: &AppState, pane: PaneId, command: LxInput) -> LxHistoryRoute {
+    let Some(pane) = state.pane_anywhere(pane) else {
+        return LxHistoryRoute::None;
+    };
+    if pane.view != PaneView::Lx {
+        return LxHistoryRoute::None;
+    }
+    let lx = &pane.lx;
+    // 与 `apply_lx_input` 完全一致的面板占用判定：任何面板可见都不让历史接管方向键。
+    let panel_busy = lx.paste_panel().is_some()
+        || lx.mention_open()
+        || lx.mention_visible()
+        || lx.slash.is_some()
+        || lx.panel.is_some();
+    if panel_busy {
+        return LxHistoryRoute::None;
+    }
+    match command {
+        LxInput::Up => match lx.pending_history_move(state.prompt_history.entries(), -1) {
+            Some(next) => LxHistoryRoute::Move(next),
+            None => LxHistoryRoute::None,
+        },
+        LxInput::Down => match lx.pending_history_move(state.prompt_history.entries(), 1) {
+            Some(next) => LxHistoryRoute::Move(next),
+            None => LxHistoryRoute::None,
+        },
+        LxInput::Escape if lx.history_browsing() => LxHistoryRoute::EndBrowse,
+        // 其余编辑类命令离开浏览态；导航类（Left/Right/Home/End/词移动）只移动光标，
+        // 不改变文本，因此保留浏览态（继续 `↑`/`↓` 仍沿同一条历史前后翻）。
+        command if edits_text(command) => LxHistoryRoute::ClearBrowse,
+        _ => LxHistoryRoute::None,
+    }
+}
+
+/// 该命令是否会改写输入框文本；改写即视为"离开浏览态"。
+///
+/// 纯光标导航（`Left`/`Right`/`Home`/`End`/词移动）、`Tab`（无面板时无动作）与
+/// `Enter`（发送）都不改写文本，因此不在此列：浏览游标保留。
+fn edits_text(command: LxInput) -> bool {
+    matches!(
+        command,
+        LxInput::Char(_)
+            | LxInput::Newline
+            | LxInput::EnterFolder
+            | LxInput::Backspace
+            | LxInput::Delete
+            | LxInput::DeleteToLineStart
+            | LxInput::DeleteToLineEnd
+            | LxInput::DeleteWordBackward
+            | LxInput::DeleteWordForward
+            | LxInput::Undo
+            | LxInput::Redo
+            | LxInput::Clear
+    )
 }
 
 /// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。

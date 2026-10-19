@@ -4664,3 +4664,144 @@ fn lx_slash_alias_opens_target_command() {
     );
     assert!(pane.lx.input.is_empty(), "命令文本已消费");
 }
+
+// ===== 历史 prompt 切换（apply_lx_input 级）=====
+
+/// 准备带三条全局历史的 demo 状态（末尾为最近使用）。
+fn history_state() -> AppState {
+    let mut state = AppState::demo();
+    for text in ["one", "two", "three"] {
+        state.prompt_history.record(text);
+    }
+    state
+}
+
+#[test]
+fn lx_history_up_takes_newest_and_down_restores_draft() {
+    let mut state = history_state();
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "three");
+    assert!(state.active_pane().expect("pane").lx.history_browsing());
+    // 再按 `↑`：翻到上一条。
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "two");
+    // 再按 `↑`：翻到最旧一条。
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "one");
+    // 最旧一条继续 `↑`：钳住不接管。
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "one");
+}
+
+#[test]
+fn lx_history_not_taken_while_cursor_in_middle() {
+    let mut state = history_state();
+    for ch in "abc".chars() {
+        apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    apply_lx_input(&mut state, LxInput::Left);
+    // 光标在中间：`↑` 仍是光标移动，不换历史。
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "abc");
+    assert!(!state.active_pane().expect("pane").lx.history_browsing());
+}
+
+#[test]
+fn lx_history_edit_leaves_browse_and_keeps_text() {
+    let mut state = history_state();
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.active_pane().expect("pane").lx.input, "three");
+    // 编辑立刻退出浏览态，文本成为新草稿。
+    // 恢复后光标在文首，编辑插入到开头；重点是浏览态被立刻结束。
+    apply_lx_input(&mut state, LxInput::Char('X'));
+    let pane = state.active_pane().expect("pane");
+    assert!(!pane.lx.history_browsing());
+    assert_eq!(pane.lx.input, "Xthree");
+}
+
+#[test]
+fn lx_history_escape_ends_browse_without_changing_text() {
+    let mut state = history_state();
+    apply_lx_input(&mut state, LxInput::Up);
+    apply_lx_input(&mut state, LxInput::Escape);
+    let pane = state.active_pane().expect("pane");
+    assert!(!pane.lx.history_browsing());
+    assert_eq!(pane.lx.input, "three", "Esc 退出浏览不改文本");
+}
+
+#[test]
+fn lx_history_is_blocked_by_mention_panel() {
+    let mut state = history_state();
+    // 提及面板需要有效扫描根才会从 Hidden 变成 Loading/Items。
+    let pane_id = state.active_tab().layout.focus();
+    if let Some(pane) = state.pane_mut_anywhere(pane_id) {
+        pane.cwd = Some(std::path::PathBuf::from("/tmp"));
+    }
+    super::pane::sync_lx_mention_root(&mut state, pane_id);
+    // 输入 `@` 打开提及面板：方向键归面板，不换历史。
+    apply_lx_input(&mut state, LxInput::Char('@'));
+    assert!(state.active_pane().expect("pane").lx.mention_visible());
+    let before = state.active_pane().expect("pane").lx.input.clone();
+    apply_lx_input(&mut state, LxInput::Up);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, before, "面板打开时 `↑` 不换历史");
+    assert!(!pane.lx.history_browsing());
+}
+
+#[test]
+fn lx_history_is_blocked_by_slash_panel() {
+    let mut state = history_state();
+    apply_lx_input(&mut state, LxInput::Char('/'));
+    assert!(state.active_pane().expect("pane").lx.slash.is_some());
+    apply_lx_input(&mut state, LxInput::Up);
+    let pane = state.active_pane().expect("pane");
+    assert_eq!(pane.lx.input, "/", "命令面板打开时 `↑` 不换历史");
+    assert!(!pane.lx.history_browsing());
+}
+
+#[test]
+fn lx_history_is_global_across_panes() {
+    let mut state = history_state();
+    let first = state.active_tab().layout.focus();
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.pane_anywhere(first).expect("pane").lx.input, "three");
+    // 同一份历史对另一窗格同样可见（模拟第二个 lx 窗格读取同一列表）。
+    let other = state.active_tab().layout.focus();
+    assert!(state.prompt_history.record("four"));
+    apply_lx_input(&mut state, LxInput::Up);
+    // 新记录对同一窗格立即可见：游标仍在浏览态，继续向上翻到更旧的一条。
+    assert_eq!(state.pane_anywhere(other).expect("pane").lx.input, "two");
+}
+
+#[test]
+fn lx_history_cursor_is_per_pane_while_entries_are_shared() {
+    let mut state = history_state();
+    let first = state.active_tab().layout.focus();
+    let second = state
+        .active_tab_mut()
+        .split_pane(first, Direction::Horizontal)
+        .expect("split");
+    // 两窗格都在 lx 视图（split 继承源窗格视图）。
+    assert_eq!(
+        state.pane_anywhere(second).expect("pane").view,
+        PaneView::Lx
+    );
+
+    // 窗格 A 翻到第 2 条。
+    state.active_tab_mut().layout.focus_pane(first);
+    apply_lx_input(&mut state, LxInput::Up);
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(state.pane_anywhere(first).expect("pane").lx.input, "two");
+
+    // 窗格 B 独立：首按 `↑` 拿到的仍是最新一条，不继承 A 的游标。
+    state.active_tab_mut().layout.focus_pane(second);
+    apply_lx_input(&mut state, LxInput::Up);
+    assert_eq!(
+        state.pane_anywhere(second).expect("pane").lx.input,
+        "three",
+        "游标各自独立，条目列表共享"
+    );
+
+    // 共享验证：A 的游标仍是它自己的第 2 条。
+    assert_eq!(state.pane_anywhere(first).expect("pane").lx.input, "two");
+}
