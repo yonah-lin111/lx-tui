@@ -287,9 +287,14 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         css.contains("background: var(--option-selected); color: #fff; font-weight: 600;"),
         "selected option marked by tone and weight"
     );
+    // 选中项只靠底色 + 字重区分，不再加左侧竖条。
     assert!(
-        css.contains(".select-option.selected::before"),
-        "selected option left bar"
+        !css.contains(".select-option.selected::before"),
+        "no selected left bar"
+    );
+    assert!(
+        css.contains(".select-option.selected:hover, .select-option.selected.active"),
+        "selected keeps tone while hovered"
     );
 
     // 模态勾选与思考等级编辑入口（Models 视图资源）。

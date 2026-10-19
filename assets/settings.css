@@ -132,11 +132,10 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 /* 菜单是浮层：比卡片更亮一档 + 亮边 + 双层阴影，脱离文档流也不会糊进背景。
    菜单挂在 body 上，用 position: fixed 跟随按钮的视口坐标，避免被祖先容器裁剪。 */
 .select-menu { position: fixed; z-index: var(--z-menu); left: 0; right: auto; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-overlay); border-radius: 6px; background: var(--overlay); box-shadow: var(--shadow-overlay); scrollbar-width: thin; }
-/* 选项高亮在悬浮层之内，必须比菜单底色更亮；选中项用左侧竖条 + 更亮的底色双重标记。 */
-.select-option { position: relative; display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+/* 选项高亮在悬浮层之内，必须比菜单底色更亮；选中项靠更亮底色 + 字重标记。 */
+.select-option { display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .select-option:hover, .select-option.active { background: var(--option-hover); color: #fff; }
 .select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
-.select-option.selected::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 2px; border-radius: 1px; background: #fff; }
 /* 选中项同时被悬停时保持选中底色（选中 > 悬停），避免高亮跳回 hover 档。 */
 .select-option.selected:hover, .select-option.selected.active { background: var(--option-selected); }
 .toolbar-select { width: 220px; }
