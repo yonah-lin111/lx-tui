@@ -1,7 +1,8 @@
 //! 模型设置 API：GET/PUT `/api/models/settings` 与 POST `/api/models/fetch`。
 //!
-//! - GET 只返回 `hasApiKey`，永不回传明文 Key。
-//! - PUT 的 `apiKey` 字段是本次动作（留空保持 / 显式清除 / 非空替换），
+//! - GET 回传完整 provider/model 配置（含明文 `apiKey`），供设置页直接编辑；
+//!   页面仍按同源 + capability token 访问。
+//! - PUT 的 `apiKey` 三态：字段缺失保持、空字符串清除、非空替换；
 //!   携带 `revision` 防止两个设置页互相覆盖；校验失败 422 且文件不改。
 //! - fetch 用当前编辑中的 base URL/key 做一次性远端发现，后台异步执行，
 //!   不堵本地连接；响应不含 Key。
@@ -66,7 +67,7 @@ fn get_settings(state: &ServiceState) -> Response {
                 "type": provider.kind.as_str(),
                 "name": provider.name,
                 "baseUrl": provider.options.base_url,
-                "hasApiKey": provider.options.api_key.as_deref().is_some_and(|key| !key.is_empty()),
+                "apiKey": provider.options.api_key.as_deref().unwrap_or(""),
                 "enabled": settings.enabled_providers.contains(key),
                 "models": provider.models.iter().map(|(model_key, model)| {
                     json!({
@@ -78,6 +79,7 @@ fn get_settings(state: &ServiceState) -> Response {
                             "context": limit.context,
                             "output": limit.output,
                         })),
+                        "modalities": model.modalities,
                         "variants": model.variants,
                         "variant": model.variant,
                     })
@@ -140,7 +142,7 @@ fn put_settings(request: &Request, state: &ServiceState) -> Response {
 }
 
 /// PUT body 到磁盘配置的合并：provider 键为稳定 id；
-/// `apiKey` 三态（省略/空 = Keep、`clearApiKey`=true = Clear、非空 = Replace）。
+/// `apiKey` 三态（字段缺失 = Keep、空字符串 = Clear、非空 = Replace）。
 fn merge_settings(
     current: Option<crate::config::ai::AiSettings>,
     body: &Value,
@@ -238,12 +240,12 @@ fn merge_settings(
                     ));
                 }
                 let previous_model = existing.and_then(|provider| provider.models.get(&model_id));
-                // 前端不编辑的字段：优先取请求体（原样往返），缺失时保留旧值。
-                let modalities = model_item
-                    .get("modalities")
-                    .filter(|value| !value.is_null())
-                    .cloned()
-                    .or_else(|| previous_model.and_then(|model| model.modalities.clone()));
+                // 模态三态：字段缺失 = 保留旧值，显式 null = 清除，对象 = 覆盖。
+                let modalities = match model_item.get("modalities") {
+                    Some(Value::Null) => None,
+                    Some(value) => Some(value.clone()),
+                    None => previous_model.and_then(|model| model.modalities.clone()),
+                };
                 // 未知字段（`extra`）同样往返保留：已知键之外的字段并入。
                 const KNOWN_KEYS: [&str; 9] = [
                     "id",
@@ -348,22 +350,17 @@ fn merge_settings(
     Ok(settings)
 }
 
-/// Key 三态合并：省略/空字符串保持旧 Key，`clearApiKey: true` 清除，非空替换。
+/// Key 三态合并：字段缺失保持旧 Key，空字符串清除，非空替换。
 fn merge_api_key(
     existing: Option<&crate::config::ai::ProviderConfig>,
     item: &Value,
 ) -> Result<Option<String>, String> {
-    if item
-        .get("clearApiKey")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Ok(None);
-    }
     match item.get("apiKey").and_then(Value::as_str) {
-        Some(new_key) if !new_key.is_empty() => Ok(Some(new_key.to_string())),
-        // 留空/省略：保持旧 Key。
-        _ => Ok(existing.and_then(|provider| provider.options.api_key.clone())),
+        // 空字符串：显式清除已存 Key。
+        Some("") => Ok(None),
+        Some(new_key) => Ok(Some(new_key.to_string())),
+        // 字段缺失：保持旧 Key（兼容 curl 与旧调用方）。
+        None => Ok(existing.and_then(|provider| provider.options.api_key.clone())),
     }
 }
 

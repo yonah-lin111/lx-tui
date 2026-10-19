@@ -22,6 +22,10 @@ pub fn asset(path: &str) -> Option<(&'static str, &'static str)> {
             "text/javascript; charset=utf-8",
             include_str!("../../../assets/settings.js"),
         )),
+        "/settings_models.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../../../assets/settings_models.js"),
+        )),
         _ => None,
     }
 }

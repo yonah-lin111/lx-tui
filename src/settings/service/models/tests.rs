@@ -75,7 +75,7 @@ fn revision_of(response_body: &str) -> Option<String> {
 }
 
 #[tokio::test]
-async fn get_requires_token_and_never_leaks_key() {
+async fn get_requires_token_and_returns_stored_key() {
     let (service, _events, _dir) = start_models("models-get").await;
     let port = service.port();
     let token = service.token().to_string();
@@ -93,14 +93,16 @@ async fn get_requires_token_and_never_leaks_key() {
     .await;
     assert_eq!(status(&saved), 200, "saved: {}", body(&saved));
 
-    // GET：只返回 hasApiKey，不返回明文 Key。
+    // GET：直接回传已存 Key，供设置页原地编辑。
     let response = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
     assert_eq!(status(&response), 200);
-    let text = body(&response);
-    assert!(!text.contains(FAKE_KEY), "GET 不泄露明文 Key");
-    assert!(text.contains("hasApiKey"));
-    let parsed: serde_json::Value = serde_json::from_str(text).expect("json");
-    assert_eq!(parsed["providers"][0]["hasApiKey"], serde_json::json!(true));
+    let parsed: serde_json::Value = serde_json::from_str(body(&response)).expect("json");
+    assert_eq!(
+        parsed["providers"][0]["apiKey"],
+        serde_json::json!(FAKE_KEY),
+        "GET 回传明文 Key"
+    );
+    assert!(parsed["providers"][0].get("hasApiKey").is_none());
     service.shutdown();
 }
 
@@ -279,7 +281,7 @@ async fn put_broadcasts_models_changed_event() {
     match event {
         SettingsEvent::ModelsChanged(settings) => {
             assert!(settings.providers.contains_key("p"));
-            // Key 在事件负载里存在（内存快照），但不出现在 GET。
+            // Key 随事件负载进入内存快照（GET 同样回传，供页面编辑）。
         }
         other => panic!("unexpected event: {other:?}"),
     }
@@ -304,21 +306,11 @@ async fn api_key_semantics_keep_clear_replace() {
         ),
     )
     .await;
-    // 留空保持：GET 后取 revision 再保存不带 apiKey 字段。
+    // 取当前 revision，供后续两次保存使用。
     let current = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
     let revision = revision_of(body(&current)).expect("revision");
 
-    // 留空：Key 保持（GET 仍 true）。
-    let keep = put_body()
-        .replace(
-            &format!("\"apiKey\": \"{FAKE_KEY}\",\n    ",),
-            "\"x\": 1,\n    ",
-        )
-        .replace(
-            "\"revision\": \"\"",
-            &format!("\"revision\": \"{revision}\""),
-        );
-    // 构造无 apiKey 的 body：直接从 JSON 层面删字段更可靠。
+    // 字段缺失：Key 保持。
     let keep_body = {
         let mut value: serde_json::Value = serde_json::from_str(&put_body()).expect("json");
         value["revision"] = serde_json::json!(revision);
@@ -328,7 +320,6 @@ async fn api_key_semantics_keep_clear_replace() {
             .remove("apiKey");
         serde_json::to_string(&value).expect("string")
     };
-    let _ = keep;
     let kept = request(
         port,
         &write(
@@ -339,18 +330,14 @@ async fn api_key_semantics_keep_clear_replace() {
         ),
     )
     .await;
-    assert_eq!(status(&kept), 200, "留空保持旧 Key：{}", body(&kept));
+    assert_eq!(status(&kept), 200, "缺失字段保持旧 Key：{}", body(&kept));
 
-    // 显式清除。
+    // 空字符串：显式清除。
     let cleared = {
         let revision = revision_of(body(&kept)).expect("revision 2");
         let mut value: serde_json::Value = serde_json::from_str(&put_body()).expect("json");
         value["revision"] = serde_json::json!(revision);
-        value["providers"][0]
-            .as_object_mut()
-            .expect("provider")
-            .remove("apiKey");
-        value["providers"][0]["clearApiKey"] = serde_json::json!(true);
+        value["providers"][0]["apiKey"] = serde_json::json!("");
         serde_json::to_string(&value).expect("string")
     };
     let cleared_response = request(
@@ -365,13 +352,13 @@ async fn api_key_semantics_keep_clear_replace() {
     .await;
     assert_eq!(status(&cleared_response), 200);
 
-    // GET：hasApiKey=false。
+    // GET：key 已清空。
     let after = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
     let parsed: serde_json::Value = serde_json::from_str(body(&after)).expect("json");
     assert_eq!(
-        parsed["providers"][0]["hasApiKey"],
-        serde_json::json!(false),
-        "显式清除删除 Key"
+        parsed["providers"][0]["apiKey"],
+        serde_json::json!(""),
+        "空字符串清除 Key"
     );
     // 磁盘上的 Key 已删。
     let disk = std::fs::read_to_string(&path).expect("ai.json readable");
@@ -447,6 +434,88 @@ async fn variant_params_and_modalities_survive_round_trip() {
         "模态往返保留"
     );
     assert_eq!(model["x-custom"], serde_json::json!(1), "未知字段往返保留");
+    service.shutdown();
+}
+
+#[tokio::test]
+async fn modalities_returned_and_explicit_null_clears() {
+    let (service, _events, _dir) = start_models("models-modalities").await;
+    let port = service.port();
+    let token = service.token().to_string();
+
+    // 首轮保存：模型带输入/输出模态。
+    let mut value: serde_json::Value = serde_json::from_str(&put_body()).expect("json");
+    value["providers"][0]["models"][0]["modalities"] =
+        serde_json::json!({"input": ["text", "image"], "output": ["text"]});
+    let saved = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&value).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&saved), 200, "保存成功：{}", body(&saved));
+
+    // GET 返回 modalities：设置页据此渲染勾选框。
+    let current = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let parsed: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    assert_eq!(
+        parsed["providers"][0]["models"][0]["modalities"],
+        serde_json::json!({"input": ["text", "image"], "output": ["text"]}),
+        "GET 返回模态"
+    );
+
+    // 字段缺失 = 保留旧值（老客户端往返不丢模态）。
+    let revision = revision_of(body(&current)).expect("revision");
+    let mut keep: serde_json::Value = serde_json::from_str(body(&current)).expect("json");
+    keep["revision"] = serde_json::json!(revision);
+    keep["providers"][0]["models"][0]
+        .as_object_mut()
+        .expect("model")
+        .remove("modalities");
+    let kept = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&keep).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&kept), 200, "缺失保留：{}", body(&kept));
+    let after_keep = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let after_keep_json: serde_json::Value = serde_json::from_str(body(&after_keep)).expect("json");
+    assert!(
+        !after_keep_json["providers"][0]["models"][0]["modalities"].is_null(),
+        "缺失字段保留旧模态"
+    );
+
+    // 显式 null = 清除（设置页清空全部勾选）。
+    let revision = revision_of(body(&after_keep)).expect("revision 2");
+    let mut clear: serde_json::Value = after_keep_json.clone();
+    clear["revision"] = serde_json::json!(revision);
+    clear["providers"][0]["models"][0]["modalities"] = serde_json::Value::Null;
+    let cleared = request(
+        port,
+        &write(
+            "PUT",
+            &format!("/api/models/settings?token={token}"),
+            &serde_json::to_string(&clear).expect("string"),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(status(&cleared), 200, "显式清除：{}", body(&cleared));
+    let after_clear = request(port, &get(&format!("/api/models/settings?token={token}"))).await;
+    let after_clear: serde_json::Value = serde_json::from_str(body(&after_clear)).expect("json");
+    assert!(
+        after_clear["providers"][0]["models"][0]["modalities"].is_null(),
+        "显式 null 清除模态"
+    );
     service.shutdown();
 }
 

@@ -81,8 +81,18 @@ async fn page_requires_token_and_serves_self_contained_assets() {
     let js = request(port, &get("/settings.js")).await;
     assert_eq!(status(&js), 200);
     assert!(js.contains("javascript"), "js content type");
-    // 关键交互入口：加载/保存/复制/删除/远端获取与 key 遮蔽。
+    // 动态文本用 textContent 而非 innerHTML 拼接。
     let js_body = body(&js);
+    assert!(
+        js_body.contains("textContent"),
+        "dynamic text via textContent"
+    );
+
+    // Models 视图独立资源：加载/保存/复制/删除/远端获取与模态、思考等级入口。
+    let models_js = request(port, &get("/settings_models.js")).await;
+    assert_eq!(status(&models_js), 200);
+    assert!(models_js.contains("javascript"), "models js content type");
+    let models_js_body = body(&models_js);
     for entry in [
         "loadModels",
         "saveModels",
@@ -93,20 +103,20 @@ async fn page_requires_token_and_serves_self_contained_assets() {
         "/api/models/settings",
         "/api/models/fetch",
     ] {
-        assert!(js_body.contains(entry), "models js entry: {entry}");
+        assert!(models_js_body.contains(entry), "models js entry: {entry}");
     }
-    // 动态文本用 textContent 而非 innerHTML 拼接。
     assert!(
-        js_body.contains("textContent"),
-        "dynamic text via textContent"
-    );
-    assert!(
-        !js_body.contains("fetch-candidates').innerHTML"),
+        !models_js_body.contains("fetch-candidates').innerHTML"),
         "no innerHTML for dynamic data"
     );
 
-    // 三份资源均无外部引用。
-    for (name, text) in [("html", html), ("css", body(&css)), ("js", body(&js))] {
+    // 四份资源均无外部引用。
+    for (name, text) in [
+        ("html", html),
+        ("css", body(&css)),
+        ("js", js_body),
+        ("models_js", models_js_body),
+    ] {
         assert!(
             !text.contains("https://"),
             "{name} has no external resources"
@@ -187,6 +197,156 @@ async fn page_locks_viewport_and_avoids_extra_scrollbars() {
 }
 
 #[tokio::test]
+async fn models_page_scrolls_and_uses_shared_select_toast() {
+    let (service, _events, _dir) = start("page-models-ui").await;
+    let port = service.port();
+    let token = service.token().to_string();
+    let html = body(&request(port, &get(&format!("/?token={token}"))).await).to_string();
+    let css = body(&request(port, &get("/settings.css")).await).to_string();
+    let js = body(&request(port, &get("/settings.js")).await).to_string();
+    let models_js = body(&request(port, &get("/settings_models.js")).await).to_string();
+    assert!(
+        html.contains("/settings.js") && html.contains("/settings_models.js"),
+        "scripts linked"
+    );
+
+    // 右栏被视口高度约束，模型很多时编辑容器内出现可见滚动条。
+    assert!(
+        css.contains(".models-grid { display: grid; flex: 1 1 auto; min-height: 0;"),
+        "models grid bounded by viewport"
+    );
+    assert!(
+        css.contains(".editor-body::-webkit-scrollbar-thumb"),
+        "editor scrollbar thumb visible"
+    );
+    assert!(
+        css.contains(".provider-list::-webkit-scrollbar"),
+        "provider list scrollbar styled"
+    );
+    // 左侧列表与右侧内容卡之间是可拖拽分隔条（对齐 Commands 页）。
+    assert!(
+        html.contains("id=\"models-resizer\""),
+        "models list resizer present"
+    );
+    assert!(css.contains(".models-resizer"), "models resizer styled");
+    assert!(
+        css.contains("--models-list-width, 220px"),
+        "models list width variable wired"
+    );
+    assert!(
+        js.contains("modelsListWidth"),
+        "models list width clamp wired"
+    );
+
+    // 页面上不再有原生下拉，全部换成全局 select 组件挂载点。
+    for id in [
+        "cmd-filter-select",
+        "cmd-scope-select",
+        "cmd-kind-select",
+        "cmd-md-scope-select",
+        "cmd-block-type-select",
+        "prov-type-host",
+        "default-model-host",
+    ] {
+        assert!(html.contains(&format!("id=\"{id}\"")), "select mount: {id}");
+    }
+    assert!(!html.contains("<select"), "no native select left");
+
+    // 全局 toast 与自绘 select 组件入口和样式。
+    assert!(js.contains("function showToast"), "toast component");
+    assert!(js.contains("function createSelect"), "select component");
+    assert!(css.contains(".toast-host"), "toast host styles");
+    assert!(css.contains(".select-menu"), "select menu styles");
+    // 黑灰分层：色板走变量，悬浮层（toast / select 菜单）比卡片更亮并带阴影层级。
+    assert!(css.contains("--bg: #0f0f0f"), "page uses dark gray base");
+    assert!(css.contains("--overlay: #272727"), "overlay tone defined");
+    assert!(
+        css.contains(".select-menu { position: fixed; z-index: var(--z-menu);"),
+        "select menu is an elevated fixed layer"
+    );
+    assert!(
+        css.contains("background: var(--overlay); box-shadow: var(--shadow-overlay);"),
+        "toast/menu share overlay tone and shadow"
+    );
+    assert!(
+        css.contains("--z-toast: 1000") && css.contains("--z-menu: 60"),
+        "toast stacks above menus"
+    );
+    // 菜单内选项高亮必须比菜单底色更亮，否则 hover/选中在悬浮层上不可见。
+    assert!(
+        css.contains("--option-hover: #575757") && css.contains("--option-selected: #666666"),
+        "option highlight tones above overlay"
+    );
+    assert!(
+        css.contains(
+            ".select-option:hover, .select-option.active { background: var(--option-hover); color: #fff; }"
+        ),
+        "option hover uses elevated tone"
+    );
+    assert!(
+        css.contains("background: var(--option-selected); color: #fff; font-weight: 600;"),
+        "selected option marked by tone and weight"
+    );
+    // 选中项只靠底色 + 字重区分，不再加左侧竖条。
+    assert!(
+        !css.contains(".select-option.selected::before"),
+        "no selected left bar"
+    );
+    assert!(
+        css.contains(".select-option.selected:hover, .select-option.selected.active"),
+        "selected keeps tone while hovered"
+    );
+
+    // 模态勾选与思考等级编辑入口（Models 视图资源）。
+    assert!(
+        models_js.contains("INPUT_MODALITIES") && models_js.contains("OUTPUT_MODALITIES"),
+        "modality options"
+    );
+    assert!(
+        models_js.contains("Thinking variants"),
+        "thinking variants editor"
+    );
+    assert!(models_js.contains("VARIANT_PRESETS"), "thinking presets");
+    assert!(models_js.contains("reasoningEffort"), "OpenAI preset wired");
+
+    // 全局内存草稿 + 视图操作条统一保存 + 未保存状态。
+    assert!(models_js.contains("modelsDraft"), "global draft");
+    assert!(models_js.contains("modelsBaseline"), "reset baseline");
+    assert!(
+        models_js.contains("buildPayload"),
+        "single save builds full payload"
+    );
+    assert!(
+        js.contains("createActionBar"),
+        "shared action bar component"
+    );
+    assert!(js.contains("Unsaved changes"), "dirty indicator");
+    // provider 启停改为编辑卡内复选框，列表行不再有圆点。
+    assert!(
+        html.contains("id=\"prov-enabled\""),
+        "provider enable checkbox"
+    );
+    assert!(!css.contains(".prov-toggle"), "no toggle dot styles");
+    // API key 明文查看：小眼睛按钮 + 切换逻辑。
+    assert!(html.contains("id=\"prov-key-reveal\""), "key reveal button");
+    assert!(models_js.contains("Show API key"), "reveal labels wired");
+    // 已移除 Clear stored key 复选框与 key 状态行；key 由 GET 直接回传编辑。
+    assert!(!html.contains("prov-clear-key"), "no clear-key checkbox");
+    assert!(!html.contains("prov-key-state"), "no key state line");
+    assert!(!html.contains("Clear stored key"), "no clear-key label");
+    assert!(
+        models_js.contains("provider.apiKey"),
+        "key round-trips via API"
+    );
+    // toast 顶部居中。
+    assert!(
+        css.contains("left: 50%; top: 16px;"),
+        "toast anchored top center"
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn page_header_actions_fill_width_and_resizers() {
     let (service, _events, _dir) = start("page-resize").await;
     let port = service.port();
@@ -195,16 +355,24 @@ async fn page_header_actions_fill_width_and_resizers() {
     let css = body(&request(port, &get("/settings.css")).await).to_string();
     let js = body(&request(port, &get("/settings.js")).await).to_string();
 
-    // 操作行与 Edit 标题同行：Save 出现在第一个字段之前。
-    let legend = html.find("id=\"editor-legend\"").expect("legend present");
-    let save = html
-        .find("onclick=\"saveCommand()\"")
-        .expect("save button present");
-    let first_field = html.find("id=\"cmd-name\"").expect("name field present");
+    // 保存入口统一到每个视图标题行右侧的全局操作条；页面内不再有独立保存按钮。
+    for id in ["actions-general", "actions-commands", "actions-models"] {
+        assert!(
+            html.contains(&format!("id=\"{id}\"")),
+            "action bar host: {id}"
+        );
+    }
+    assert!(!html.contains("saveCommand()"), "no per-editor save button");
+    assert!(!html.contains("saveConfig()"), "no general save button");
+    assert!(!html.contains("saveModels()"), "no models save button");
     assert!(
-        legend < save && save < first_field,
-        "actions live in the editor head"
+        css.contains(".action-status") && css.contains(".status-dot"),
+        "action bar status styles"
     );
+    // 编辑器头部保留标题与字段。
+    let legend = html.find("id=\"editor-legend\"").expect("legend present");
+    let first_field = html.find("id=\"cmd-name\"").expect("name field present");
+    assert!(legend < first_field, "editor head above fields");
 
     // 内容撑满：不再有 max-width 上限。
     assert!(
