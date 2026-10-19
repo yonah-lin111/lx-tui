@@ -8,6 +8,13 @@
   --overlay: #272727;
   --hover: #212121;
   --active: #2b2b2b;
+  /* 输入框/下拉触发器：比卡片亮一档，聚焦与展开时再提亮，避免和卡片糊在一起。 */
+  --field: #232323;
+  --field-hover: #2f2f2f;
+  /* 悬浮菜单里的选项高亮：菜单底色是 --overlay #272727，选项必须再亮两档
+     才看得出 hover/选中（#575757 对菜单底约 2.07:1，#666 选中约 2.6:1）。 */
+  --option-hover: #575757;
+  --option-selected: #666666;
   --border: #2e2e2e;
   --border-strong: #3d3d3d;
   --border-overlay: #4a4a4a;
@@ -56,7 +63,7 @@ h2 { font-size: 16px; margin: 0 0 16px; }
 fieldset { border: 1px solid var(--border); border-radius: 6px; margin: 0 0 16px; padding: 12px; background: var(--panel); }
 legend { font-size: 12px; color: var(--muted); padding: 0 6px; }
 label { display: block; margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
-input, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; font: inherit; background: var(--panel-raised); color: var(--text); }
+input, textarea { width: 100%; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; font: inherit; background: var(--field); color: var(--text); }
 input:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
 input[type="checkbox"] { width: auto; }
 textarea { min-height: 260px; resize: none; }
@@ -115,19 +122,23 @@ button.danger { background: none; border: 1px solid var(--err); color: var(--err
 
 /* ===== 全局组件：自绘 select 与 toast ===== */
 .select-host { position: relative; }
-.select-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--panel-raised); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
-.select-button:hover { border-color: var(--border-overlay); background: var(--hover); }
+.select-button { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--field); color: var(--text); font: inherit; cursor: pointer; text-align: left; }
+.select-button:hover { border-color: var(--border-overlay); background: var(--field-hover); }
 .select-button:focus-visible { outline: 1px solid var(--accent); border-color: var(--accent); }
-.select-button[aria-expanded="true"] { border-color: var(--border-overlay); background: var(--hover); }
+.select-button[aria-expanded="true"] { border-color: var(--accent); background: var(--field-hover); }
 .select-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .select-label.placeholder { color: var(--muted); }
 .select-caret { flex-shrink: 0; color: var(--muted); font-size: 10px; }
 /* 菜单是浮层：比卡片更亮一档 + 亮边 + 双层阴影，脱离文档流也不会糊进背景。
    菜单挂在 body 上，用 position: fixed 跟随按钮的视口坐标，避免被祖先容器裁剪。 */
 .select-menu { position: fixed; z-index: var(--z-menu); left: 0; right: auto; max-height: 240px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-overlay); border-radius: 6px; background: var(--overlay); box-shadow: var(--shadow-overlay); scrollbar-width: thin; }
-.select-option { display: block; width: 100%; padding: 6px 8px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
-.select-option:hover, .select-option.active { background: var(--hover); }
-.select-option.selected { background: var(--active); color: #fff; }
+/* 选项高亮在悬浮层之内，必须比菜单底色更亮；选中项用左侧竖条 + 更亮的底色双重标记。 */
+.select-option { position: relative; display: block; width: 100%; padding: 6px 10px; border: 0; border-radius: 4px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.select-option:hover, .select-option.active { background: var(--option-hover); color: #fff; }
+.select-option.selected { background: var(--option-selected); color: #fff; font-weight: 600; }
+.select-option.selected::before { content: ''; position: absolute; top: 4px; bottom: 4px; left: 3px; width: 2px; border-radius: 1px; background: #fff; }
+/* 选中项同时被悬停时保持选中底色（选中 > 悬停），避免高亮跳回 hover 档。 */
+.select-option.selected:hover, .select-option.selected.active { background: var(--option-selected); }
 .toolbar-select { width: 220px; }
 .toast-host { position: fixed; left: 50%; top: 16px; z-index: var(--z-toast); display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: min(480px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
 .toast { padding: 8px 14px; border: 1px solid var(--border-overlay); border-left: 3px solid var(--accent); border-radius: 6px; background: var(--overlay); color: var(--text); font-size: 12px; box-shadow: var(--shadow-overlay); pointer-events: auto; animation: toast-in .16s ease-out; }

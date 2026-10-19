@@ -272,6 +272,25 @@ async fn models_page_scrolls_and_uses_shared_select_toast() {
         css.contains("--z-toast: 1000") && css.contains("--z-menu: 60"),
         "toast stacks above menus"
     );
+    // 菜单内选项高亮必须比菜单底色更亮，否则 hover/选中在悬浮层上不可见。
+    assert!(
+        css.contains("--option-hover: #575757") && css.contains("--option-selected: #666666"),
+        "option highlight tones above overlay"
+    );
+    assert!(
+        css.contains(
+            ".select-option:hover, .select-option.active { background: var(--option-hover); color: #fff; }"
+        ),
+        "option hover uses elevated tone"
+    );
+    assert!(
+        css.contains("background: var(--option-selected); color: #fff; font-weight: 600;"),
+        "selected option marked by tone and weight"
+    );
+    assert!(
+        css.contains(".select-option.selected::before"),
+        "selected option left bar"
+    );
 
     // 模态勾选与思考等级编辑入口（Models 视图资源）。
     assert!(
