@@ -33,6 +33,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_worktree_open_key(state, key);
         return None;
     }
+    // `/resume` 会话编辑模态：Enter 保存、^D 删除（二次确认）、Esc 关闭/退回。
+    if matches!(state.overlay, Some(Overlay::ResumeSessionEdit(_))) {
+        super::resume_edit::apply_resume_session_edit_key(state, key);
+        return None;
+    }
     // 引用文件夹目录弹窗：上下移动、回车打开、Ctrl+C 复制引用、Ctrl+D/Del 移除、Esc 关闭。
     if matches!(state.overlay, Some(Overlay::ReferencedFolderMenu(_))) {
         match key {
@@ -196,6 +201,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderInput
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
+                | OverlayKind::ResumeSessionEdit
                 | OverlayKind::UiGallery,
             )
             | None => None,

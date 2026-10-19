@@ -264,7 +264,7 @@ pub fn set_save_draft_selection(state: &mut AppState, index: usize) -> bool {
     true
 }
 
-/// 确认保存（[save enter] 按钮 / Enter）：名称去空白后为空则拒绝；
+/// 确认保存（`[save ↵]` 按钮 / Enter）：名称去空白后为空则拒绝；
 /// 选中动作行时打开新建文件夹浮层；否则按选中目标登记保存。
 pub fn commit_save_draft(state: &mut AppState) {
     let Some(Overlay::SaveDraft(dialog)) = state.overlay.as_ref() else {

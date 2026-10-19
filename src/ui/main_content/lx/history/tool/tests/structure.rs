@@ -346,9 +346,9 @@ fn step_square_breathes_while_open_and_stays_static_when_settled() {
     }
 }
 
-/// 完成态：静态翡翠绿方块，不出现 braille 转轮，也不画类型图标。
+/// 完成态：静态翡翠绿方块 + 动词，不出现 braille 转轮。
 #[test]
-fn completed_tool_has_square_verb_and_detail_without_type_icon() {
+fn completed_tool_has_square_and_verb() {
     let cases: [(&str, ToolSummary, &str); 4] = [
         ("read", read_summary(), text::agent::VERB_TOOL_READ),
         ("search", search_summary(), text::agent::VERB_TOOL_SEARCH),
@@ -369,20 +369,22 @@ fn completed_tool_has_square_verb_and_detail_without_type_icon() {
             "{name} 行首为静态方块：{painted}"
         );
         let (header_line, _) = painted.split_once('\n').expect("两行");
+        // 标题行 = `■ <动词>`：只有方块与固定动词。
+        let expected = format!("{} {verb}", text::agent::STEP_MARK_FILLED);
         assert!(
-            header_line.contains(verb),
-            "{name} 缺少动词 {verb}：{header_line:?}"
+            header_line.trim_end() == expected,
+            "{name} 标题行为 `{expected}`：{header_line:?}"
         );
-        // 不再使用按工具区分的类型图标（G11：统一方块）。
+        // 不再有步骤图标：方块后直接是动词（类型图标只在 `[UI]` 查看器样例里）。
         for icon in [
             text::agent::ICON_READ,
             text::agent::ICON_SEARCH,
             text::agent::ICON_EDIT,
-            text::agent::ICON_MCP,
+            text::agent::ICON_WRITE,
         ] {
             assert!(
-                !painted.contains(icon),
-                "{name} 不再画类型图标 {icon:?}：{painted}"
+                !header_line.contains(icon),
+                "{name} 不再画步骤图标 {icon:?}：{header_line:?}"
             );
         }
         // 完成方块：翡翠绿、不加粗、**不压暗**。

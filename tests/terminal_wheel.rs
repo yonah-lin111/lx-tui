@@ -218,7 +218,8 @@ fn drag_to_top_edge_autoscrolls_terminal_backlog() {
 fn scrollbar_renders_with_local_scrollback_in_real_binary() {
     let app = App::spawn();
     let screen = screen_text(&app.emulator.lock().unwrap());
-    assert!(screen.contains('▕'), "track visible with backlog");
+    // 轨道不再绘制 `▕`：只有 thumb `▐`。
+    assert!(!screen.contains('▕'), "track border must be gone");
     assert!(screen.contains('▐'), "thumb visible with backlog");
 }
 

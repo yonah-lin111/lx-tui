@@ -82,7 +82,7 @@ fn drag_row_maps_with_grab_offset() {
 }
 
 #[test]
-fn render_draws_track_and_text_thumb() {
+fn render_draws_text_thumb_without_track_border() {
     let bar = layout(LIST, 20, 10, 0).expect("scrollbar is needed");
     let mut terminal = Terminal::new(TestBackend::new(20, 10)).expect("test backend is infallible");
     if let Err(error) = terminal.draw(|frame| render(frame, &bar)) {
@@ -93,8 +93,10 @@ fn render_draws_track_and_text_thumb() {
     assert_eq!(buffer[(19, 0)].modifier, Modifier::empty());
     assert_eq!(buffer[(19, 0)].fg, Color::Reset);
     assert_eq!(buffer[(19, 0)].bg, Color::Reset);
-    assert_eq!(buffer[(19, 9)].symbol(), TRACK_SYMBOL);
-    assert!(buffer[(19, 9)].modifier.contains(Modifier::DIM));
+    // 轨道不再绘制符号：只留空格占位，也不再有 muted 竖线。
+    assert_eq!(buffer[(19, 9)].symbol(), " ");
+    assert_eq!(buffer[(19, 9)].modifier, Modifier::empty());
+    assert_eq!(buffer[(19, 9)].fg, Color::Reset);
 }
 
 #[test]

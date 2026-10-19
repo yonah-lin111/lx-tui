@@ -525,3 +525,140 @@ fn non_continuation_rows_keep_separators() {
     let seps = text.iter().filter(|line| line.starts_with("├")).count();
     assert_eq!(seps, 3, "表头后 + 每行间共 3 条：{text:#?}");
 }
+
+#[test]
+fn inline_code_uses_foreground_only_no_background() {
+    // `xxx` 恢复为纯前景色（不铺背景）。
+    let spans = inline_spans("before `code` after");
+    let code = spans
+        .iter()
+        .find(|(value, _)| value == "code")
+        .expect("行内代码 span");
+    assert_eq!(code.1.bg, None, "行内代码不铺背景");
+    assert!(code.1.fg.is_some(), "行内代码仍有前景色");
+}
+
+#[test]
+fn list_markers_are_colored_while_body_stays_plain() {
+    // 无序 / 有序列表：符号上结构强调色，正文保持原色（只强调标记）。
+    for source in ["- first", "1. first"] {
+        let lines = render(source);
+        let spans = &lines[0].spans;
+        let marker = &spans[0];
+        assert!(
+            marker.1.fg.is_some(),
+            "{source:?} 的列表符号应上色: {:?}",
+            marker
+        );
+        let body = spans
+            .iter()
+            .find(|(value, _)| value.contains("first"))
+            .expect("正文 span");
+        assert_eq!(body.1.fg, None, "{source:?} 的正文保持原色");
+    }
+    // 无序与有序用同一结构强调色，列表结构观感一致。
+    let bullet = render("- x")[0].spans[0].1.fg;
+    let ordered = render("1. x")[0].spans[0].1.fg;
+    assert_eq!(bullet, ordered, "两种列表同一强调色");
+}
+
+#[test]
+fn nested_list_markers_stay_colored() {
+    // 缩进后的嵌套项同样保留符号高亮（缩进列不着色）。
+    let lines = render("- top\n  - nested");
+    let nested = lines
+        .iter()
+        .find(|line| line.text().contains("nested"))
+        .expect("nested line");
+    let marker = nested
+        .spans
+        .iter()
+        .find(|(value, _)| value.contains('•'))
+        .expect("nested bullet");
+    assert!(marker.1.fg.is_some(), "嵌套列表符号同样上色");
+}
+
+#[test]
+fn code_block_header_shows_language_prefix_and_copy_button() {
+    // 代码块头部：`language: js` + 复制按钮 `[❐]`，**没有左侧竖条**。
+    let lines = render("```js\nconst a = 1;\n```");
+    let header = lines.first().expect("code header");
+    let text = header.text();
+    assert!(
+        text.starts_with("language: js"),
+        "头部从 language: 起头（无左侧竖条）: {text:?}"
+    );
+    assert!(text.contains("[❐]"), "头部右端有复制按钮: {text:?}");
+    assert!(header.code_copy.is_some(), "记录按钮列位置");
+    // 第二行是分隔横线（语言行下一行）。
+    let rule = lines.get(1).expect("rule line");
+    assert!(
+        rule.text().chars().all(|ch| ch == '─'),
+        "语言行下一行是横线: {:?}",
+        rule.text()
+    );
+    assert!(!rule.code_body, "分隔线不算代码正文");
+    // 正文行保留代码本身，不带 language 前缀，且不带竖条。
+    let body = lines
+        .iter()
+        .find(|line| line.text().contains("const a"))
+        .expect("code body");
+    assert_eq!(body.text(), "const a = 1;", "正文没有竖条前缀");
+    assert!(body.code_body, "正文行标记为代码正文");
+    assert!(!body.text().contains("language:"), "正文不带语言前缀");
+}
+
+#[test]
+fn code_block_without_language_has_no_language_prefix() {
+    let lines = render("```\nplain\n```");
+    let text = lines.first().expect("header").text();
+    assert!(
+        !text.contains("language:"),
+        "无语言时不假装有语言: {text:?}"
+    );
+    assert!(text.contains("[❐]"), "仍提供复制按钮: {text:?}");
+}
+
+#[test]
+fn copy_button_sits_at_right_edge_of_code_header() {
+    // 按钮右对齐到面板可用区右缘（语言名在左、按钮在右）。
+    let width = 40u16;
+    let lines = render_wrapped("```js\nx\n```", width);
+    let header = lines.first().expect("header");
+    let text = header.text();
+    assert!(
+        text.starts_with("language: js"),
+        "左侧写语言（无竖条）：{text:?}"
+    );
+    assert!(text.ends_with("[❐]"), "右端是复制按钮：{text:?}");
+    let column = header.code_copy.expect("button column");
+    assert_eq!(
+        column.saturating_add(3),
+        width,
+        "按钮右端贴可用区右缘（column={column}, width={width}）"
+    );
+}
+
+#[test]
+fn copy_button_has_no_fill_without_width() {
+    // 无宽度口径（UI 查看器样例走 render）：按钮直接跟在语言名后，不铺填充空格。
+    let header = render("```js\nx\n```").into_iter().next().expect("header");
+    assert_eq!(header.text(), "language: js[❐]", "无宽度时不留填充");
+}
+
+#[test]
+fn copy_button_without_language_still_right_aligned() {
+    let width = 24u16;
+    let header = render_wrapped("```\nplain\n```", width)
+        .into_iter()
+        .next()
+        .expect("header");
+    assert!(
+        header.text().ends_with("[❐]"),
+        "无语言时只留按钮：{:?}",
+        header.text()
+    );
+    assert!(!header.text().contains("language:"), "不假装有语言");
+    let column = header.code_copy.expect("button column");
+    assert_eq!(column.saturating_add(3), width, "仍右对齐");
+}

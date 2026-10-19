@@ -115,7 +115,7 @@ fn scrolled_out_rows_do_not_paint() {
     assert_eq!(row_text(&grid, area, 0), "  └─ http 503");
 }
 
-/// 通知的行首标记必须是**步骤方块**，且颜色按级别红/黄——不再是 `!` 标点符号。
+/// 通知的行首标记必须是**步骤方块**，且颜色按级别红/黄。
 #[test]
 fn notice_marker_is_step_square_in_red_or_yellow() {
     for (title, expected) in [
@@ -136,12 +136,6 @@ fn notice_marker_is_step_square_in_red_or_yellow() {
             title
         );
         assert_eq!(cell.style, expected, "{:?} 方块取该级别状态色", title);
-        assert!(
-            !row_text(&grid, area, 0).contains(crate::ui::text::agent::ICON_ERROR),
-            "{:?} 不应再出现 `!`：{}",
-            title,
-            row_text(&grid, area, 0)
-        );
         // 方块后紧跟 1 列空格（与 STEP_GUTTER = 2 同宽），文案从第 2 列起。
         assert_eq!(grid.cell(1, 0).ch, ' ');
         assert_eq!(

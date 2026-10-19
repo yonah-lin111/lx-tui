@@ -27,11 +27,14 @@ fn kinds(line: &str) -> Vec<(TokenKind, &str)> {
 fn headings_marker_and_text() {
     assert_eq!(
         kinds("## title"),
-        vec![(TokenKind::Marker, "## "), (TokenKind::Heading, "title")]
+        vec![
+            (TokenKind::HeadingMarker, "## "),
+            (TokenKind::Heading, "title")
+        ]
     );
     assert_eq!(kinds("#hash"), vec![]);
     assert_eq!(kinds("####### x"), vec![]);
-    assert_eq!(kinds("#"), vec![(TokenKind::Marker, "#")]);
+    assert_eq!(kinds("#"), vec![(TokenKind::HeadingMarker, "#")]);
 }
 
 #[test]
@@ -120,8 +123,10 @@ fn quotes_lists_and_rules() {
         kinds(">>a"),
         vec![(TokenKind::Marker, ">>"), (TokenKind::Quote, "a")]
     );
-    assert_eq!(kinds("- item"), vec![(TokenKind::Marker, "- ")]);
-    assert_eq!(kinds("1. item"), vec![(TokenKind::Marker, "1. ")]);
+    // 列表标记有独立语义（符号高亮用），不再并入通用 `Marker`。
+    assert_eq!(kinds("- item"), vec![(TokenKind::ListBullet, "- ")]);
+    assert_eq!(kinds("1. item"), vec![(TokenKind::ListOrdered, "1. ")]);
+    assert_eq!(kinds("  - nested"), vec![(TokenKind::ListBullet, "  - ")]);
     assert_eq!(kinds("*item"), vec![]);
     assert_eq!(kinds("---"), vec![(TokenKind::Marker, "---")]);
     assert_eq!(kinds("* * *"), vec![(TokenKind::Marker, "* * *")]);
@@ -234,7 +239,7 @@ fn template_body_lines_keep_markdown_highlight() {
     assert_eq!(
         summary[1],
         vec![
-            (TokenKind::Marker, "# "),
+            (TokenKind::HeadingMarker, "# "),
             (TokenKind::Heading, "Add Requirement"),
         ]
     );

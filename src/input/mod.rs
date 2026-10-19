@@ -287,11 +287,18 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
         },
-        OverlayKind::Rename | OverlayKind::NewWorkspace | OverlayKind::NewNode => match key.code {
+        OverlayKind::Rename
+        | OverlayKind::NewWorkspace
+        | OverlayKind::NewNode
+        | OverlayKind::ResumeSessionEdit => match key.code {
             KeyCode::Esc => Some(OverlayKey::Esc),
             KeyCode::Enter => Some(OverlayKey::Enter),
             KeyCode::Char('c' | 'C') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(OverlayKey::Clear)
+            }
+            // `^D` 进入删除确认 / 确认删除（`/resume` 编辑模态）。
+            KeyCode::Char('d' | 'D') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(OverlayKey::Remove)
             }
             KeyCode::Backspace => Some(OverlayKey::Backspace),
             KeyCode::Delete => Some(OverlayKey::Delete),

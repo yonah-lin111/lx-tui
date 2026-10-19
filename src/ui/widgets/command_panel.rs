@@ -8,6 +8,7 @@ use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
+use crate::ui::text;
 use crate::ui::widgets::clear;
 use crate::ui::widgets::scrollbar::{self, ScrollbarLayout};
 
@@ -60,6 +61,10 @@ pub enum PanelPlacement {
 /// `window_start` 为滚轮滚动后的显式视口起点，优先于 `window_anchor`：窗口从该
 /// 条目起向前填充，高亮允许不在窗口内。
 ///
+/// `current` 是"当前已生效项"（`/model` 正在用的模型、`/resume` 已绑定的会话）：
+/// 该行行首显示 `❯` 且与高亮同底色，与 `active`（下一步要采纳的项）互相独立——
+/// 两者可以是同一行，也可以是不同行，叠加时底色只画一份、互不覆盖。
+///
 /// `title` / `right_title` 绘制在顶边左右两端，`footer` 绘制在底边左端；
 /// 三者均参与面板宽度计算，可用宽度不足时由 Block 自然截断。
 ///
@@ -69,6 +74,8 @@ pub enum PanelPlacement {
 pub struct CommandPanelView<'a> {
     pub items: &'a [CommandItem<'a>],
     pub active: usize,
+    /// 当前已生效项索引；`None` 表示本面板没有"当前项"概念（不占标记列）。
+    pub current: Option<usize>,
     pub window_anchor: Option<usize>,
     pub window_start: Option<usize>,
     pub anchor_row: u16,
@@ -296,10 +303,11 @@ fn panel_width(available: u16, view: &CommandPanelView<'_>) -> u16 {
         .iter()
         .any(|item| matches!(item, CommandItem::Stacked { .. }));
     let tag = if tag == 0 { 0 } else { TAG_GAP + tag + 2 };
+    let marker = marker_width(view);
     let content = match (has_inline, has_stacked) {
-        (true, false) => label + COLUMN_GAP + preview + tag,
-        (false, true) => label.max(detail) + tag,
-        _ => (label + COLUMN_GAP + preview + tag).max(label.max(detail) + tag),
+        (true, false) => marker + label + COLUMN_GAP + preview + tag,
+        (false, true) => marker + label.max(detail) + tag,
+        _ => (marker + label + COLUMN_GAP + preview + tag).max(marker + label.max(detail) + tag),
     };
     // 标题与提示自带的包裹空格随文案宽度计入；最终宽度还需容纳两侧边框。
     let header = view.title.map_or(0, |title| title.width() + 2)
@@ -321,6 +329,17 @@ fn item_label_width(item: &CommandItem<'_>) -> usize {
         CommandItem::Stacked { icon, label, .. } => {
             icon.map_or(0, |icon| icon.width() + 1) + label.width()
         }
+    }
+}
+
+/// "当前项"标记列宽（`❯ `）；面板没有当前项概念时为 0。
+///
+/// 全体条目共用同一列，标记项与未标记项因此左对齐。
+fn marker_width(view: &CommandPanelView<'_>) -> usize {
+    if view.current.is_some() {
+        text::CURRENT_ITEM_MARKER.width() + 1
+    } else {
+        0
     }
 }
 
@@ -365,6 +384,7 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
         .map(|item| item_label_width(item))
         .max()
         .unwrap_or(0);
+    let marker = marker_width(view);
     let mut y = layout.content.y;
     for (offset, item) in view
         .items
@@ -373,36 +393,53 @@ fn render_items(buf: &mut Buffer, layout: &PanelLayout, view: &CommandPanelView<
         .take(layout.visible)
         .enumerate()
     {
+        let index = layout.start + offset;
         let height = item_height(item);
         let row = Rect::new(layout.content.x, y, layout.content.width, height);
         render_item(
             buf,
             row,
             item,
-            layout.start + offset == view.active,
+            index == view.active,
+            view.current == Some(index),
+            marker,
             label_width,
         );
         y = y.saturating_add(height);
     }
 }
 
-/// 绘制单条目；高亮项整行反显，超宽由 Paragraph 截断。
+/// 绘制单条目；高亮项与当前项整行铺底色，当前项另加行首 `❯` 标记。
 fn render_item(
     buf: &mut Buffer,
     area: Rect,
     item: &CommandItem<'_>,
     active: bool,
+    current: bool,
+    marker: usize,
     label_width: usize,
 ) {
     if area.width < 3 {
         return;
     }
-    let row_style = if active {
+    // 当前项与高亮项共用同一底色；两者同时命中时只画一份（同一 Style，重复应用无差别）。
+    let row_style = if active || current {
         style::overlay_selection()
     } else {
         Style::default()
     };
-    let inner = Rect::new(area.x + 1, area.y, area.width - 1, area.height);
+    let inner = Rect::new(
+        area.x + 1,
+        area.y,
+        area.width.saturating_sub(1),
+        area.height,
+    );
+    let marker_span = if current {
+        format!("{} ", text::CURRENT_ITEM_MARKER)
+    } else {
+        // 未标记行补满同一列宽（标记 + 其后空格），名字左缘因此对齐。
+        " ".repeat(marker)
+    };
     match item {
         CommandItem::Inline {
             label,
@@ -414,7 +451,9 @@ fn render_item(
             let available = usize::from(inner.width);
             let tag_label = (!tag.is_empty()).then(|| format!("[{tag}]"));
             // 名称与标签优先；预览按剩余宽度截断，缺空间时整体省略。
+            // 行首占 1 列空格 + 标记列 + 名称 + 间距 + 标签。
             let reserved = 1
+                + marker
                 + label.width()
                 + COLUMN_GAP
                 + tag_label.as_ref().map_or(0, |tag| COLUMN_GAP + tag.width());
@@ -424,7 +463,11 @@ fn render_item(
             } else {
                 crate::ui::text::truncate_to_width(preview, preview_width)
             };
-            let mut spans = vec![Span::raw(" "), Span::styled(label, style::text())];
+            let mut spans = vec![Span::raw(" ")];
+            if marker > 0 {
+                spans.push(Span::styled(marker_span, style::accent()));
+            }
+            spans.push(Span::styled(label, style::text()));
             if !preview.is_empty() {
                 spans.push(Span::raw(" ".repeat(COLUMN_GAP)));
                 spans.push(Span::styled(preview, style::muted()));
@@ -450,6 +493,9 @@ fn render_item(
             detail,
         } => {
             let mut spans = vec![Span::raw(" ")];
+            if marker > 0 {
+                spans.push(Span::styled(marker_span, style::accent()));
+            }
             if let Some(icon) = icon {
                 spans.push(Span::styled(*icon, *icon_style));
                 spans.push(Span::raw(" "));
@@ -458,7 +504,7 @@ fn render_item(
             let mut lines = vec![Line::from(spans)];
             if !detail.is_empty() {
                 lines.push(Line::from(vec![
-                    Span::raw(" "),
+                    Span::raw(" ".repeat(1 + marker)),
                     Span::styled(*detail, style::muted()),
                 ]));
             }

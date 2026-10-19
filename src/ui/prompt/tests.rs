@@ -5,7 +5,7 @@ use crate::app::markdown::MentionEntry;
 use crate::app::state::AppState;
 use crate::app::update;
 use crate::layout::PaneId;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 fn prompt(cols: u16, rows: u16, text: &str) -> Prompt {
     let mut prompt = Prompt::new(PaneId::from_raw_for_test(1));
@@ -30,10 +30,15 @@ fn paints_markdown_styles() {
     // 编辑器高亮是**独立于阅读渲染**的 ANSI 语义色板（与 `md_read_*` 无关）：
     // 这里用真实色值钉死，防止有人再把两侧合并。
     assert_eq!(buf[(0, 0)].symbol(), "#");
+    // 标题的 `#` 有专用高亮（Yellow + dim），不再并入通用 dim 标记。
     assert_eq!(
         buf[(0, 0)].fg,
-        style::markdown_marker().fg.unwrap_or(Color::Reset),
-        "标记走 markdown_marker（dim）"
+        style::markdown_heading_marker().fg.unwrap_or(Color::Reset),
+        "标题 `#` 走 markdown_heading_marker"
+    );
+    assert!(
+        buf[(0, 0)].modifier.contains(Modifier::DIM),
+        "标题标记压暗以区别于正文"
     );
     assert_eq!(buf[(3, 0)].symbol(), "t");
     assert_eq!(buf[(3, 0)].fg, Color::Yellow, "标题着色（Yellow）");
@@ -46,6 +51,7 @@ fn paints_markdown_styles() {
 
     assert_eq!(buf[(1, 2)].symbol(), "c");
     assert_eq!(buf[(1, 2)].fg, Color::LightRed, "行内代码亮红");
+    assert_eq!(buf[(1, 2)].bg, Color::Reset, "行内代码不铺背景");
 
     assert_eq!(buf[(2, 3)].symbol(), "q");
     assert_eq!(buf[(2, 3)].fg, Color::LightMagenta, "引用亮品红");
@@ -1628,4 +1634,50 @@ fn short_ref_renders_with_its_own_style() {
     assert_ne!(cell.fg, Color::LightGreen);
     assert_ne!(cell.fg, Color::Indexed(208));
     assert_ne!(cell.fg, Color::LightMagenta);
+}
+
+#[test]
+fn editor_tokens_style_inline_code_and_list_markers() {
+    // prompt 容器与 lx 输入框共用 `token_style`：两处必须同时生效。
+    let inline = token_style(crate::ui::markdown::TokenKind::InlineCode);
+    assert_eq!(inline.fg, Some(Color::LightRed), "行内代码前景");
+    assert_eq!(inline.bg, None, "行内代码不铺背景（恢复原格式）");
+
+    let bullet = token_style(crate::ui::markdown::TokenKind::ListBullet);
+    let ordered = token_style(crate::ui::markdown::TokenKind::ListOrdered);
+    assert_eq!(bullet.fg, Some(Color::Yellow), "无序符号强调色");
+    assert_eq!(ordered.fg, Some(Color::Yellow), "有序序号强调色");
+    assert!(
+        bullet.add_modifier.contains(Modifier::BOLD),
+        "列表符号加粗以便扫读"
+    );
+    assert_eq!(bullet, ordered, "两种列表同一强调色");
+
+    // 任务复选框按完成状态分色（编辑侧此前被当成普通无序列表）。
+    let open = token_style(crate::ui::markdown::TokenKind::TaskOpen);
+    let done = token_style(crate::ui::markdown::TokenKind::TaskDone);
+    assert_eq!(open.fg, Some(Color::Yellow), "未完成复选框 = 黄");
+    assert_eq!(done.fg, Some(Color::Green), "已完成复选框 = 绿");
+}
+
+#[test]
+fn selection_reverse_keeps_inline_code_foreground() {
+    // 行内代码现在只有前景色；选区反显只叠 REVERSED，前景不被清掉。
+    let area = Rect::new(0, 0, 12, 3);
+    let prompt = prompt(12, 3, "a `code` b");
+    let mut buf = Buffer::empty(area);
+    let selection = selection(&prompt, (0, 0), (0, 8));
+    render(area, &mut buf, &prompt, Some(&selection));
+    for col in 0..=8 {
+        assert!(
+            buf[(col, 0)].modifier.contains(Modifier::REVERSED),
+            "column {col} 反显"
+        );
+    }
+    // `code` 起始列（col 3）保留行内代码前景色。
+    assert_eq!(
+        buf[(3, 0)].fg,
+        Color::LightRed,
+        "选区反显不覆盖行内代码前景"
+    );
 }

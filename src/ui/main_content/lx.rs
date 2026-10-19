@@ -6,17 +6,17 @@
 use ratatui::buffer::{Buffer, CellDiffOption};
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::markdown::BlockPanel;
 use crate::app::paste::PasteAction;
 use crate::app::selection::Selection;
 use crate::app::state::{Lx, LxEntry};
-use crate::ui::markdown::Token;
 use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
+mod input;
 mod mention;
 
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
@@ -122,11 +122,10 @@ fn render_input_scrollbar(area: Rect, buf: &mut Buffer, lx: &Lx) {
     }
 }
 
-/// 把历史滚动条渲染到网格（贴右缘一列；透明底）。
+/// 把历史滚动条渲染到网格（贴右缘一列；轨道留空、只画 thumb）。
+///
+/// 与公共 `scrollbar` 组件同口径：轨道不画符号，只保留占位列与命中几何。
 fn render_history_scrollbar(grid: &mut Grid, bar: &scrollbar::ScrollbarLayout) {
-    for y in bar.track.y..bar.track.bottom() {
-        grid.set(bar.track.x, y, '▕', style::muted());
-    }
     for y in bar.thumb.y..bar.thumb.bottom() {
         grid.set(bar.thumb.x, y, '▐', style::text());
     }
@@ -263,6 +262,7 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
     let view = CommandPanelView {
         items: &items,
         active: panel.active(),
+        current: None,
         window_anchor: Some(panel.active()),
         window_start: None,
         anchor_row: region_h,
@@ -565,7 +565,7 @@ fn build(
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
     if let Some(input) = lay.input {
-        cursor = draw_input(
+        cursor = input::draw(
             &mut grid,
             input,
             lx,
@@ -623,7 +623,7 @@ fn build_chat(
     if let Some(input) = lay.input
         && lay.input_visible > 0
     {
-        cursor = draw_input(
+        cursor = input::draw(
             &mut grid,
             input,
             lx,
@@ -641,7 +641,9 @@ fn build_chat(
 }
 
 /// lx 页聊天命中结果。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// 代码块复制按钮携带正文（自有 `String`），因此不是 `Copy`。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LxChatHit {
     /// 点击置顶用户消息行（跳到该 prompt）。
     PromptHeader,
@@ -649,6 +651,8 @@ pub enum LxChatHit {
     Thinking(usize, usize),
     /// 点击「回到底部」按钮。
     JumpBottom,
+    /// 点击代码块头部的复制按钮；`text` 为该块正文。
+    CodeCopy(String),
 }
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
@@ -764,139 +768,37 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
             return Some(LxChatHit::Thinking(message_index, part_index));
         }
     }
+    // 代码块头部的复制按钮（同样按 body + 滚动窗口换算屏幕坐标）。
+    for button in code_copy_hits(area, lx) {
+        if button.rect.contains((column, row).into()) {
+            return Some(LxChatHit::CodeCopy(button.body));
+        }
+    }
     None
 }
 
-/// 底部多行输入框：上下 `─` 分割线 + 首行 `> ` 前缀 + markdown 高亮；返回光标绝对坐标。
-fn draw_input(
-    grid: &mut Grid,
-    rect: Rect,
-    lx: &Lx,
-    focused: bool,
-    scroll: usize,
-    visible: usize,
-) -> Option<(u16, u16)> {
-    let text_top = rect.y + 1;
-    let bottom_rule = rect.bottom() - 1;
-    for x in rect.x..rect.right() {
-        grid.set(x, rect.y, RULE, style::muted());
-        grid.set(x, bottom_rule, RULE, style::muted());
-    }
-
-    let content_x = rect.x + INPUT_PREFIX;
-    let content_w = rect
-        .width
-        .saturating_sub(INPUT_PREFIX)
-        .saturating_sub(INPUT_SCROLLBAR);
-    let rows = lx.visual_rows();
-    let tokens = crate::ui::markdown::scan(&lx.input);
-    let lines: Vec<&str> = lx.input.split('\n').collect();
-    let (cursor_row, _) = lx.cursor_visual();
-    let selection = lx.text_selection_range();
-
-    let mut cursor = None;
-    for i in 0..visible {
-        let Some(row_index) = scroll.checked_add(i) else {
-            break;
-        };
-        let Some(row) = rows.get(row_index) else {
-            break;
-        };
-        let y = text_top + i as u16;
-        let line_index = lx.input[..row.start].matches('\n').count();
-        let Some(line) = lines.get(line_index) else {
-            break;
-        };
-        let line_start = lx.input[..row.start]
-            .rfind('\n')
-            .map_or(0, |offset| offset + 1);
-        if row_index == 0 {
-            grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
-        }
-        let line_tokens = tokens
-            .get(line_index)
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        paint_markdown_line(
-            grid,
-            content_x,
-            y,
-            line,
-            line_tokens,
-            row.start - line_start,
-            row.end - line_start,
-            content_w,
-            line_start,
-            selection,
-        );
-        if row_index == cursor_row && focused {
-            let col = content_x
-                + u16::try_from(display_width(&lx.input[row.start..lx.cursor])).unwrap_or(u16::MAX);
-            cursor = Some((y, col));
-        }
-    }
-
-    if lx.input.is_empty() {
-        let placeholder =
-            text::truncate_to_width(text::LX_INPUT_PLACEHOLDER, usize::from(content_w));
-        grid.put(content_x, text_top, &placeholder, style::muted());
-    }
-    cursor
-}
-
-/// 按 token 高亮绘制一行 markdown 的 `[row_start, row_end)` 字节区间；
-/// 落在选中字节范围内的字符额外反显；超宽截断。
-#[allow(clippy::too_many_arguments)]
-fn paint_markdown_line(
-    grid: &mut Grid,
-    x: u16,
-    y: u16,
-    line: &str,
-    tokens: &[Token],
-    row_start: usize,
-    row_end: usize,
-    max_w: u16,
-    line_offset: usize,
-    selection: Option<(usize, usize)>,
-) {
-    let mut cx = x;
-    let mut token_index = 0;
-    for (offset, ch) in line.char_indices() {
-        if offset < row_start {
-            continue;
-        }
-        if offset >= row_end {
-            break;
-        }
-        let width = ch.width().unwrap_or(0);
-        if width == 0 {
-            continue;
-        }
-        while tokens
-            .get(token_index)
-            .is_some_and(|token| token.range.end <= offset)
-        {
-            token_index += 1;
-        }
-        let mut cell_style = tokens
-            .get(token_index)
-            .filter(|token| token.range.contains(&offset))
-            .map_or_else(style::text, |token| {
-                crate::ui::prompt::token_style(token.kind)
-            });
-        let absolute = line_offset + offset;
-        if selection.is_some_and(|(start, end)| absolute >= start && absolute < end) {
-            cell_style = cell_style.add_modifier(Modifier::REVERSED);
-        }
-        if cx.saturating_add(width as u16) > x.saturating_add(max_w) {
-            break;
-        }
-        grid.set(cx, y, ch, cell_style);
-        for dx in 1..width as u16 {
-            grid.set(cx.saturating_add(dx), y, CONTINUATION, cell_style);
-        }
-        cx = cx.saturating_add(width as u16);
-    }
+/// 代码块复制按钮的**屏幕矩形**（按当前滚动偏移换算）与正文。
+///
+/// 渲染、命中与 tooltip 共用本入口：滚动位置一变，三者一起跟着变，不会漂移。
+pub fn code_copy_hits(area: Rect, lx: &Lx) -> Vec<history::CodeCopyButton> {
+    let Some(view) = history_view(area, lx) else {
+        return Vec::new();
+    };
+    history::layout(view.body, lx)
+        .code_copy
+        .into_iter()
+        .filter_map(|mut button| {
+            let offset = button.rect.y.saturating_sub(view.body.y);
+            if (offset as usize) < view.scroll {
+                return None;
+            }
+            button.rect.y = view
+                .body
+                .y
+                .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
+            Some(button)
+        })
+        .collect()
 }
 
 /// md 格式面板：圆角边框 + 标题 + 候选行（标签与预览，高亮项 accent）。
@@ -942,11 +844,6 @@ fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
         grid.set(rect.x, y, '│', border);
         grid.set(right, y, '│', border);
     }
-}
-
-/// 文本显示宽度（宽字符按两列计）。
-fn display_width(content: &str) -> usize {
-    content.chars().map(|ch| ch.width().unwrap_or(0)).sum()
 }
 
 /// 测试辅助：仅构建聊天历史网格并 blit（不含输入框与面板）。

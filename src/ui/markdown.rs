@@ -8,6 +8,8 @@ use crate::app::markdown::{self, SlashCommandId};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Marker,
+    /// 标题的 `#` 标记（与通用标记区分：标题符号单独高亮）。
+    HeadingMarker,
     Heading,
     Strong,
     Emphasis,
@@ -17,6 +19,14 @@ pub enum TokenKind {
     Quote,
     LinkText,
     Url,
+    /// 无序列表项目符号（`-`/`*`/`+` 及其后随空白）。
+    ListBullet,
+    /// 有序列表序号（`1.`/`1)` 及其后随空白）。
+    ListOrdered,
+    /// 任务列表复选框 `[ ]`（未完成）。
+    TaskOpen,
+    /// 任务列表复选框 `[x]`（已完成）。
+    TaskDone,
     /// `&&&` 起止行的结构标记（`&&&`、`--start`/`--end`、状态与元数据）。
     TemplateMarker,
     /// 模板块命令名；`None` 为未知命令。
@@ -115,7 +125,7 @@ fn scan_line(line: &str, state: &mut ScanState) -> Vec<Token> {
         }
     }
     if let Some(marker_end) = heading(line) {
-        push(&mut tokens, 0..marker_end, TokenKind::Marker);
+        push(&mut tokens, 0..marker_end, TokenKind::HeadingMarker);
         push(&mut tokens, marker_end..line.len(), TokenKind::Heading);
         return tokens;
     }
@@ -128,8 +138,17 @@ fn scan_line(line: &str, state: &mut ScanState) -> Vec<Token> {
         push(&mut tokens, prefix_end..line.len(), TokenKind::Quote);
         return tokens;
     }
-    if let Some(prefix_end) = list_prefix(line) {
-        push(&mut tokens, 0..prefix_end, TokenKind::Marker);
+    if let Some((prefix_end, kind)) = list_prefix(line) {
+        push(&mut tokens, 0..prefix_end, kind);
+        // 任务列表：项目符号之后紧跟 `[ ]`/`[x]` 复选框，单独成段以便按状态分色。
+        if matches!(kind, TokenKind::TaskOpen | TokenKind::TaskDone) {
+            let checkbox_end = prefix_end.saturating_add(3);
+            if line.len() >= checkbox_end {
+                push(&mut tokens, prefix_end..checkbox_end, kind);
+                scan_inline(line, checkbox_end, &mut tokens);
+                return tokens;
+            }
+        }
         scan_inline(line, prefix_end, &mut tokens);
         return tokens;
     }
@@ -345,8 +364,11 @@ fn quote_prefix(line: &str) -> Option<usize> {
     found.then_some(index)
 }
 
-/// 列表标记段结束偏移：行首（可缩进）项目符号或序号加后随空白。
-fn list_prefix(line: &str) -> Option<usize> {
+/// 列表标记段：结束偏移与种类（无序 / 有序 / 任务）。
+///
+/// 任务列表（`- [ ] ` / `- [x] `）的返回偏移停在**项目符号之后**，
+/// 复选框由调用方再单独切一段（用来按完成状态分色）。
+fn list_prefix(line: &str) -> Option<(usize, TokenKind)> {
     let indent = line.len() - line.trim_start_matches(' ').len();
     let rest = &line[indent..];
     let bullet = ['-', '*', '+']
@@ -367,7 +389,24 @@ fn list_prefix(line: &str) -> Option<usize> {
         .bytes()
         .take_while(|byte| *byte == b' ' || *byte == b'\t')
         .count();
-    (spaces > 0).then_some(indent + marker_len + spaces)
+    if spaces == 0 {
+        return None;
+    }
+    let end = indent + marker_len + spaces;
+    if bullet {
+        // 任务列表：项目符号后紧跟 `[ ]` 或 `[x]`（GfmTaskListItem 形状）。
+        let task = &line[end..];
+        if task.starts_with("[ ]") && task.as_bytes().get(3) == Some(&b' ') {
+            return Some((end, TokenKind::TaskOpen));
+        }
+        if (task.starts_with("[x]") || task.starts_with("[X]"))
+            && task.as_bytes().get(3) == Some(&b' ')
+        {
+            return Some((end, TokenKind::TaskDone));
+        }
+        return Some((end, TokenKind::ListBullet));
+    }
+    Some((end, TokenKind::ListOrdered))
 }
 
 /// 行内语法扫描：代码段优先，内部不再解析其他标记。

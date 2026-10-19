@@ -13,8 +13,10 @@
 //! （`[x]`/`[ ]`）。
 
 use ratatui::style::Style;
+use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
+use crate::ui::text;
 
 mod highlight;
 mod table;
@@ -27,6 +29,11 @@ pub struct MdLine {
     /// 首行含 `• ` / `1. ` / `> ` 等标记，续行要跳过标记、对齐正文起始列。
     pub hang: u16,
     pub spans: Vec<(String, Style)>,
+    /// 代码块头部复制按钮的行内起始列（仅代码块头部行有值）。
+    pub code_copy: Option<u16>,
+    /// 该行是否**代码块正文**（不含头部与分隔横线）；复制内容按此标记收集，
+    /// 不再靠「以竖条起头」判断（代码块已去掉左侧竖条）。
+    pub code_body: bool,
 }
 
 impl MdLine {
@@ -36,6 +43,8 @@ impl MdLine {
             indent,
             hang: 0,
             spans: vec![(value.into(), style)],
+            code_copy: None,
+            code_body: false,
         }
     }
 
@@ -45,6 +54,8 @@ impl MdLine {
             indent,
             hang: 0,
             spans,
+            code_copy: None,
+            code_body: false,
         }
     }
 
@@ -54,6 +65,8 @@ impl MdLine {
             indent,
             hang,
             spans,
+            code_copy: None,
+            code_body: false,
         }
     }
 
@@ -114,7 +127,7 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             list_indents.clear();
         }
         if trimmed.trim_start().starts_with("```") {
-            index = fenced_code(&source_lines, index, &mut lines);
+            index = fenced_code(&source_lines, index, width, &mut lines);
             continue;
         }
         // 缩进列表项优先于缩进代码块：模型常用 4 空格嵌套（`- xxx` 下接 `    - aaa`），
@@ -127,7 +140,7 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             continue;
         }
         if is_indented_code(line) {
-            index = indented_code(&source_lines, index, &mut lines);
+            index = indented_code(&source_lines, index, width, &mut lines);
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
@@ -174,10 +187,11 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
 
 /// 水平线字符。
 const RULE: &str = "─";
-/// 引用 / 代码竖条（直角）。
-const BAR_MARKER: &str = "│";
 /// 引用块前缀标记。
 const QUOTE_MARKER: &str = ">";
+/// 任务列表复选框（与 claude 一组一致；已完成 / 未完成）。
+const TASK_DONE: &str = "[x]";
+const TASK_OPEN: &str = "[ ]";
 
 /// ATX 标题：`#{1,6}` 加后随空白；返回（级别、正文）。
 fn heading(line: &str) -> Option<(u8, &str)> {
@@ -234,7 +248,12 @@ fn image(line: &str) -> Option<(&str, &str)> {
 }
 
 /// 围栏代码块：从起始 ``` 行读到闭合 ```；隐藏围栏，显示语言标记。
-fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
+fn fenced_code(
+    source: &[&str],
+    start: usize,
+    width: Option<usize>,
+    lines: &mut Vec<MdLine>,
+) -> usize {
     let fence = source[start].trim();
     let lang = fence.trim_start_matches('`').trim();
     let mut index = start + 1;
@@ -247,12 +266,17 @@ fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize 
         body.push(source[index]);
         index += 1;
     }
-    render_code(&body, (!lang.is_empty()).then_some(lang), lines);
+    render_code(&body, (!lang.is_empty()).then_some(lang), width, lines);
     index
 }
 
 /// 缩进代码块：收集连续 4 空格缩进行。
-fn indented_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
+fn indented_code(
+    source: &[&str],
+    start: usize,
+    width: Option<usize>,
+    lines: &mut Vec<MdLine>,
+) -> usize {
     let mut index = start;
     let mut body = Vec::new();
     while index < source.len()
@@ -271,25 +295,60 @@ fn indented_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usiz
         body.push(source[index].strip_prefix("    ").unwrap_or(source[index]));
         index += 1;
     }
-    render_code(&body, None, lines);
+    render_code(&body, None, width, lines);
     index
 }
 
-/// 渲染代码块：每行前置直角竖条，语言作为 muted 首行；代码正文按语言做轻量语法高亮。
-fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<MdLine>) {
+/// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`，其下一行是横线分隔。
+///
+/// **没有左侧竖条**（用户要求去掉）：整块靠「头部 + 一条横线 + 正文」框住，比逐行
+/// 竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时不写
+/// `language:`（不假装有语言），只留按钮。
+///
+/// `width` 为 None（无宽度口径的自然渲染，如 UI 查看器样例）时按钮直接跟在语言名后，
+/// 不做填充——没有可用宽度就无从右对齐。
+///
+/// 返回头部行本身 + 按钮的**行内起始列**（供命中换算）。
+fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
+    let mut spans: Vec<(String, Style)> = Vec::new();
     if let Some(lang) = lang {
-        lines.push(MdLine::spans(
-            0,
-            vec![
-                (format!("{BAR_MARKER} "), style::md_read_rule()),
-                (lang.to_string(), style::md_read_code_lang()),
-            ],
+        spans.push((
+            format!("{}{lang}", text::LX_CHAT_CODE_LANG_PREFIX),
+            style::md_read_code_lang(),
         ));
     }
+    let used = MdLine::spans(0, spans.clone()).width();
+    let button = text::TEMPLATE_BUTTON_COPY;
+    // 右对齐：把按钮推到可用区右缘；宽度不够时不留填充（写 buffer 时仍按列裁剪）。
+    let pad = width
+        .map(|width| width.saturating_sub(used.saturating_add(button.width())))
+        .unwrap_or(0);
+    let column = u16::try_from(used.saturating_add(pad)).unwrap_or(u16::MAX);
+    if pad > 0 {
+        spans.push((" ".repeat(pad), Style::default()));
+    }
+    spans.push((button.to_string(), style::md_read_code_copy()));
+    let mut line = MdLine::spans(0, spans);
+    // 记录复制按钮的行内起始列（命中换算与渲染共用）。
+    line.code_copy = Some(column);
+    (line, column)
+}
+
+/// 代码块头部与正文之间的分隔横线（与头部的复制按钮同色，不抢代码）。
+fn code_rule_line(width: Option<usize>) -> MdLine {
+    let rule_width = width.unwrap_or(40).max(1);
+    MdLine::plain(0, RULE.repeat(rule_width), style::md_read_rule())
+}
+
+/// 渲染代码块：头部（`language: xxx` + 复制按钮）→ 分隔横线 → 正文；
+/// 代码正文按语言做轻量语法高亮，**不带左侧竖条**。
+fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &mut Vec<MdLine>) {
+    lines.push(code_header_line(lang, width).0);
+    lines.push(code_rule_line(width));
     for line in body {
-        let mut spans = vec![(format!("{BAR_MARKER} "), style::md_read_rule())];
-        spans.extend(highlight::highlight_line(lang, line));
-        lines.push(MdLine::spans(0, spans));
+        let mut rendered = MdLine::spans(0, highlight::highlight_line(lang, line));
+        rendered.code_body = true;
+        lines.push(rendered);
     }
 }
 
@@ -371,18 +430,16 @@ impl ListItem<'_> {
             Self::Task {
                 done, text: body, ..
             } => {
-                let (marker, body_style) = if done {
-                    ("[x] ", style::md_read_task_done())
+                // 复选框按状态分色，**正文保持正常样式**：已完成项不再整行加删除线
+                // 或压暗——任务状态只由复选框表达，文字仍要能正常阅读。
+                let marker = if done {
+                    (format!("{TASK_DONE} "), style::md_read_task_done())
                 } else {
-                    ("[ ] ", style::md_read_task_open())
+                    (format!("{TASK_OPEN} "), style::md_read_task_open())
                 };
-                let mut spans = vec![(marker.to_string(), body_style)];
-                spans.extend(
-                    inline_spans(body)
-                        .into_iter()
-                        .map(|(value, _)| (value, body_style)),
-                );
-                MdLine::hanging(indent(depth), marker_width(marker), spans)
+                let mut spans = vec![(marker.0.clone(), marker.1)];
+                spans.extend(inline_spans(body));
+                MdLine::hanging(indent(depth), marker_width(&marker.0), spans)
             }
         }
     }
@@ -599,7 +656,10 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
         .collect();
     if cells.is_empty() {
-        out.push(MdLine::spans(line.indent, Vec::new()));
+        // 代码块里的空行也是正文（复制时要保留），不能丢标记。
+        let mut empty = MdLine::spans(line.indent, Vec::new());
+        empty.code_body = line.code_body;
+        out.push(empty);
         return;
     }
     let mut index = 0usize;
@@ -648,10 +708,13 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
             spans.push((ch.to_string(), *span_style));
         }
         trim_trailing_whitespace(&mut spans);
-        out.push(MdLine::spans(
-            u16::try_from(indent).unwrap_or(u16::MAX),
-            spans,
-        ));
+        let mut wrapped = MdLine::spans(u16::try_from(indent).unwrap_or(u16::MAX), spans);
+        // 首行沿用原行的代码块元信息（换行重建行对象时不能丢）。
+        if first {
+            wrapped.code_copy = line.code_copy;
+        }
+        wrapped.code_body = line.code_body;
+        out.push(wrapped);
         index = break_at;
         first = false;
         // 跳过下一物理行的行首空白。

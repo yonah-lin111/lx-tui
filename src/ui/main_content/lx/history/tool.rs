@@ -214,6 +214,8 @@ fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment>
 /// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
 /// 列宽固定，续行对齐口径一致。
 fn detail_prefix() -> String {
+    // 两空格缩进后接直角连接符（与消息底部通知的 `reason_prefix()` 同款）：
+    // `└` 落在图标列，详情行读作头部那一行的延续。
     format!("  {} ", text::agent::MARKER_TREE_LEAF)
 }
 

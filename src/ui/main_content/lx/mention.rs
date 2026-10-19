@@ -153,6 +153,7 @@ fn view<'a>(
     CommandPanelView {
         items,
         active: data.active,
+        current: None,
         window_anchor: data.anchor,
         window_start: data.viewport,
         anchor_row: above,

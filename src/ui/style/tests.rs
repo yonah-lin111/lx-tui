@@ -214,16 +214,32 @@ fn markdown_palette_is_github_dark_truecolor() {
     assert_eq!(md_read_rule().fg, muted, "水平线/表格边框 = fg-muted");
     assert_eq!(md_read_code_lang().fg, muted, "语言标记 = fg-muted");
     assert_eq!(md_read_image().fg, muted, "图片说明 = fg-muted");
-    assert_eq!(md_read_task_done().fg, muted);
-    assert_eq!(md_read_task_open().fg, muted);
+    // 任务复选框按状态分色（只染复选框，正文保持原样）。
+    assert_eq!(md_read_task_done().fg, Some(Color::Green), "已完成 = 绿");
+    assert_eq!(md_read_task_open().fg, Some(Color::Yellow), "未完成 = 黄");
+    assert!(
+        !md_read_task_done()
+            .add_modifier
+            .contains(Modifier::CROSSED_OUT),
+        "已完成项不再整行加删除线"
+    );
 
-    // GitHub Dark 的结构性强调**不上色**，只用修饰符。
+    // 行内代码 `xxx` 恢复为纯前景色（不铺背景）。
+    assert_eq!(
+        md_read_inline_code().bg,
+        None,
+        "行内代码不铺背景（按用户要求恢复原格式）"
+    );
+
+    // 列表符号是**结构强调**：用链接蓝只染符号，正文保持原色。
+    assert_eq!(md_read_bullet().fg, link, "无序列表符号 = 链接蓝");
+    assert_eq!(md_read_ordered().fg, link, "有序列表序号 = 链接蓝");
+
+    // 其余结构性强调仍**不上色**，只用修饰符。
     for style in [
         md_read_strong(),
         md_read_strong_emphasis(),
         md_read_emphasis(),
-        md_read_bullet(),
-        md_read_ordered(),
         md_read_code_block(),
     ] {
         assert_eq!(style.fg, None, "GitHub 的结构强调不换色");
@@ -487,4 +503,19 @@ fn input_hint_uses_red_for_errors_and_yellow_otherwise() {
             style.fg
         );
     }
+}
+
+/// 代码块复制按钮用**面板折叠按钮同款**（`accent`：Cyan 加粗），不做悬停变色。
+#[test]
+fn code_copy_button_shares_collapse_button_accent() {
+    let copy = md_read_code_copy();
+    assert_eq!(copy.fg, accent().fg, "与折叠按钮同色（Cyan）");
+    assert_eq!(copy.add_modifier, accent().add_modifier, "同为加粗");
+    assert_eq!(copy, accent(), "整体就是 accent，不引入新的交互色");
+    // 与语言标记（次要灰）明显不同色，才看得出这是控件。
+    assert_ne!(
+        copy.fg,
+        md_read_code_lang().fg,
+        "按钮不与语言标记同色（否则看不出能点）"
+    );
 }

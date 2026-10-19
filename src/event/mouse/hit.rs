@@ -331,6 +331,14 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
 /// 写系统剪贴板并在 prompt 锚点弹出成功/失败 toast。
 pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
     let anchor = Some(state.prompt.id());
+    copy_with_toast_at(state, text, anchor);
+}
+
+/// 写系统剪贴板并在**指定窗格**锚点弹出 toast（`None` 回落屏幕顶部居中）。
+///
+/// lx 历史里的代码块复制按钮用它把 toast 落在 main content 窗格内，
+/// 而不是跳到屏幕底部的 prompt —— 复制动作发生在哪儿，反馈就出现在哪儿。
+pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
         (ToastKind::Info, ui::text::TOAST_COPIED)

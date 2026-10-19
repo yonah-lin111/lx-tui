@@ -6,7 +6,7 @@
 //!
 //! **行首标记与聊天步骤共用同一个方块**（[`StepMark`]）：失败为红色实心 `■`、中断为
 //! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽、缩进完全一致（都是 1 列
-//! 字形 + 1 列空格），不再使用 `!` 这种标点符号。
+//! 字形 + 1 列空格）。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -68,7 +68,7 @@ impl NoticeTitle {
         }
     }
 
-    /// 标题整行的标记段（`■ `，2 列，与 [`super::history::STEP_GUTTER`] 同宽）。
+    /// 标题整行的标记段：`■ `（方块 + 1 列空格，与 [`super::history::STEP_GUTTER`] 同宽）。
     ///
     /// 通知只在终态渲染，[`StepMark::Failed`] / [`StepMark::Interrupted`] 的字形与
     /// 呼吸相位无关（恒为实心 `■`），因此这里固定传 0 帧。
@@ -139,11 +139,12 @@ pub(super) fn draw(
     {
         if let Some(y) = visible_row(content, scroll, *row_index) {
             if index == 0 {
+                let mark_style = notice.title.mark_style();
                 grid.put_clipped(
                     content.x,
                     y,
                     &marker,
-                    notice.title.mark_style(),
+                    mark_style,
                     content.width.min(marker_width),
                 );
                 let x = content.x.saturating_add(marker_width);

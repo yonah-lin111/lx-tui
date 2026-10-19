@@ -154,8 +154,9 @@ fn long_paste_wraps_and_shows_input_scrollbar() {
     let app = App::spawn();
     let long = "L".repeat(20000);
     app.send(&bracketed_paste(&long));
+    // 滚动条只画 thumb（`▐`）：轨道不再绘制 `▕` 竖线。
     assert!(
-        app.wait_for("▕"),
+        app.wait_for("▐"),
         "输入框内容溢出时必须显示滚动条:\n{}",
         screen_text(&app.emulator.lock().unwrap())
     );
@@ -166,7 +167,7 @@ fn wheel_scrolls_lx_input_viewport() {
     let app = App::spawn();
     let body = format!("HEADMARK{}", "L".repeat(20000));
     app.send(&bracketed_paste(&body));
-    assert!(app.wait_for("▕"), "溢出时显示滚动条");
+    assert!(app.wait_for("▐"), "溢出时显示滚动条");
     assert!(
         !screen_text(&app.emulator.lock().unwrap()).contains("HEADMARK"),
         "初始视口贴底，看不到输入开头"

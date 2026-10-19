@@ -20,6 +20,28 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 pub const AGENTS_EMPTY: &str = "no agents running";
 /// 列表当前项标记：Agents 条目、工作区列表、提示词列表与页码菜单共用（不独立着色）。
 pub const AGENT_SELECTED_MARKER: &str = "❯";
+/// 浮层列表（`/model`、`/resume`）"当前已生效项"标记：与侧栏同一字形，
+/// 使"我现在用的是哪个"在任何列表里都是一个符号。
+pub const CURRENT_ITEM_MARKER: &str = AGENT_SELECTED_MARKER;
+
+/// 快捷键符号（全项目唯一来源，禁止在组件里另写字形）。
+///
+/// 统一规则：**修饰键与"需要按下的键"用符号，动作词保留全拼**——
+/// 修饰键（Shift `⇧`、Ctrl `^`、Cmd `⌘`）用符号省地方、窄面板里不易被截断；
+/// 动作词（`esc`/`cancel`/`close`）用文字一眼懂，全符号化（`⎋`/`⇥`）在部分
+/// 终端字体缺字形会显示成豆腐块。
+pub mod key {
+    /// Shift 修饰键。
+    pub const SHIFT: &str = "⇧";
+    /// Enter / Return 作为"需要按下的键"出现时的符号。
+    pub const ENTER: &str = "↵";
+    /// Cmd / Super 修饰键（不引入第二个字形，避免与 `ICON_WEB` 混淆）。
+    pub const CMD: &str = "⌘";
+    /// Backspace：与模板块清理按钮共用同一字形（`[⌫]`）。
+    pub const BACKSPACE: &str = "⌫";
+    /// Esc 保留全拼：`⎋` 在部分终端字体缺字形，且 `esc` 已是项目既有短记法。
+    pub const ESC: &str = "esc";
+}
 /// Agent 状态圆点：运行/阻塞实心、空闲空心。
 pub const AGENT_STATUS_DOT: &str = "●";
 pub const AGENT_STATUS_RING: &str = "○";
@@ -356,7 +378,7 @@ pub const CONFIRM_SYNC_WS_CWD_TITLE: &str = "Sync ws to terminal path";
 /// 信任工作区模态：标题、问题与按钮。
 pub const TRUST_WORKSPACE_TITLE: &str = "Trust workspace";
 pub const TRUST_WORKSPACE_QUESTION: &str = "Do you trust the files in this folder?";
-pub const BUTTON_TRUST: &str = "[trust & open enter]";
+pub const BUTTON_TRUST: &str = "[trust & open ↵]";
 pub const BUTTON_DONT_TRUST: &str = "[don't trust esc]";
 /// 启动信任页（行内，进入应用前）：标题行、安全提示、说明、可选项与页脚。
 pub const TRUST_CONSOLE_HEADING: &str = "Accessing workspace:";
@@ -372,7 +394,7 @@ pub const TRUST_OPTION_NO: &str = "No, exit";
 pub const TRUST_OPTION_YES: &str = "Yes, I trust this folder";
 /// 信任页选项选中标记（与侧栏 Agents 选中行同符号）。
 pub const TRUST_SELECTION_MARKER: &str = "▸";
-pub const TRUST_CONSOLE_FOOTER: &str = "[↑/↓] select  [enter] confirm  [esc] cancel";
+pub const TRUST_CONSOLE_FOOTER: &str = "[↑/↓] select  [↵] confirm  [esc] cancel";
 /// 启动拒绝信任后的终端提示（不进入应用，直接退出）。
 pub const TRUST_REFUSED_MESSAGE: &str = "workspace not trusted; exiting";
 
@@ -388,15 +410,18 @@ pub const WORKTREE_STATUS_DETACHED: &str = "detached";
 pub const WORKTREE_STATUS_ROOT: &str = "root";
 
 /// 模态底部按钮：名称在前、快捷键在后。
-pub const BUTTON_SAVE: &str = "[save enter]";
-pub const BUTTON_CREATE: &str = "[create enter]";
+pub const BUTTON_SAVE: &str = "[save ↵]";
+pub const BUTTON_CREATE: &str = "[create ↵]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
-pub const BUTTON_CONFIRM: &str = "[confirm enter]";
+pub const BUTTON_CONFIRM: &str = "[confirm ↵]";
+/// `/resume` 会话编辑模态的删除与二次确认按钮。
+pub const BUTTON_DELETE: &str = "[delete ^d]";
+pub const BUTTON_CONFIRM_DELETE: &str = "[confirm del ↵]";
 /// 模态浮层与 toast 右上角的关闭按钮图标；与模板块删除按钮（`TEMPLATE_BUTTON_DEL`）
 /// 共用同一字符，一致性由 `text::tests` 的回归测试钉住。
 pub const MODAL_CLOSE: &str = "[✕]";
-pub const BUTTON_OPEN: &str = "[open enter]";
+pub const BUTTON_OPEN: &str = "[open ↵]";
 
 /// 关闭确认问题文案。
 pub fn confirm_close_question(name: &str) -> String {
@@ -548,10 +573,8 @@ pub fn token_count_precise(tokens: u64) -> String {
     scaled(tokens as f64 / 1_000_000.0, "M")
 }
 
-/// 状态行：模型名与供应商名之间的分隔（` · `）。
+/// 状态行：模型名与上下文占用之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
-/// 状态行：上下文占用前缀（`context:258.7k(25%)`；无消耗整段隐藏）。
-pub const LX_CHAT_CONTEXT_PREFIX: &str = "context:";
 /// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
 /// （`Thought` 与 UI 页 agent 步骤的动词一致）。
 pub const LX_CHAT_THINKING_LABEL: &str = "Thinking";
@@ -571,9 +594,16 @@ pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this work
 /// `/resume` 历史面板标题与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
+/// `/resume` 历史面板底边提示：`⇧↵` 打开会话编辑模态（与 `@` 面板同符号写法）。
+pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [edit ⇧↵] [close esc]";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
+/// `/resume` 会话编辑模态：标题、删除确认提示与校验错误。
+pub const RESUME_EDIT_MODAL_TITLE: &str = "Session";
+pub const RESUME_EDIT_CONFIRM_HINT: &str = "Press ^d again to confirm";
+pub const RESUME_EDIT_EMPTY_TITLE: &str = "title cannot be empty";
+pub const RESUME_EDIT_PLACEHOLDER: &str = "session title";
 /// 消息底部通知的标题（固定枚举，对齐 ui 页 agent error；渲染为 `! <标题>`）。
 pub const LX_CHAT_NOTICE_FAILED: &str = "Failed";
 pub const LX_CHAT_NOTICE_INTERRUPTED: &str = "Interrupted";
@@ -584,6 +614,10 @@ pub const LX_CHAT_UNSUPPORTED_TOOLS: &str = "tool calls are not supported";
 pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 /// 上下文省略提示前缀。
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
+/// markdown 代码块头部的语言前缀（`language: js`）。
+pub const LX_CHAT_CODE_LANG_PREFIX: &str = "language: ";
+/// markdown 代码块头部语言名与复制按钮之间的分隔（` · `）。
+pub const LX_CHAT_CODE_LANG_SEP: &str = " · ";
 
 /// 工具步骤占位摘要：工具名与状态之间的分隔（真实工具行由后续阶段重做）。
 pub const LX_CHAT_TOOL_STATUS_SEP: &str = " · ";
@@ -668,8 +702,8 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             }
         }
         TooltipTarget::PromptTempPrompt => "open temp prompt",
-        TooltipTarget::PromptUndo => "undo (ctrl+z)",
-        TooltipTarget::PromptRedo => "redo (ctrl+y)",
+        TooltipTarget::PromptUndo => "undo (^z)",
+        TooltipTarget::PromptRedo => "redo (^y)",
         TooltipTarget::PromptSelectAll => "select all",
         TooltipTarget::PromptSave => "mark saved",
         TooltipTarget::PromptPin if state.prompt_pinned.is_some() => "unpin prompt",
@@ -692,6 +726,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
         },
+        TooltipTarget::LxCodeCopy { .. } => "copy code",
     }
 }
 
@@ -728,7 +763,7 @@ pub const SETTINGS_LABEL: &str = "[SET]";
 pub const UI_GALLERY_LABEL: &str = "[UI]";
 /// UI 组件查看弹窗边框标题与底部提示。
 pub const UI_GALLERY_TITLE: &str = "UI";
-pub const UI_GALLERY_HINT: &str = "[↑/↓] select  [enter] fold  [esc] close";
+pub const UI_GALLERY_HINT: &str = "[↑/↓] select  [↵] fold  [esc] close";
 
 /// UI 组件查看弹窗：顶层文件夹展示名。
 pub const UI_GALLERY_FOLDER_GLOBAL: &str = "global";
@@ -757,7 +792,7 @@ pub const UI_GALLERY_PROMPT_EDITOR_PAGE_TOTAL: usize = 2;
 
 /// 右侧真实外观预览的样例文案（复用真实组件布局与样式绘制）。
 pub const UI_GALLERY_TOAST_SAMPLE: &str = "Copied to clipboard";
-pub const UI_GALLERY_TOOLTIP_SAMPLE: &str = "undo (ctrl+z)";
+pub const UI_GALLERY_TOOLTIP_SAMPLE: &str = "undo (^z)";
 pub const UI_GALLERY_MODAL_SAMPLE_TITLE: &str = "Close workspace";
 pub const UI_GALLERY_MODAL_SAMPLE_BODY: &str = "Close this workspace?";
 pub const UI_GALLERY_MENU_SAMPLE_TITLE: &str = "demo";

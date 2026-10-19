@@ -404,3 +404,72 @@ fn tool_count_labels_use_shared_prefixes() {
     // 截断提示非空且明确。
     assert!(a::TOOL_TRUNCATED.contains("truncated"));
 }
+
+/// 快捷键符号是全项目唯一来源：单宽、非私有区、且各 hint 不出现全拼修饰键。
+#[test]
+fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
+    use unicode_width::UnicodeWidthChar;
+
+    for (name, symbol) in [
+        ("Shift", key::SHIFT),
+        ("Enter", key::ENTER),
+        ("Cmd", key::CMD),
+        ("Backspace", key::BACKSPACE),
+    ] {
+        let mut chars = symbol.chars();
+        let ch = chars.next().expect("非空");
+        assert!(chars.next().is_none(), "{name} 必须是单个字符");
+        assert_eq!(ch.width(), Some(1), "{name} 符号必须严格占 1 列宽");
+        let cp = ch as u32;
+        let is_pua = (0xE000..=0xF8FF).contains(&cp)
+            || (0xF0000..=0xFFFFD).contains(&cp)
+            || (0x100000..=0x10FFFD).contains(&cp);
+        assert!(!is_pua, "{name} 使用了私有区(PUA)字符 U+{cp:04X}");
+    }
+
+    // 所有面向用户的快捷键提示：修饰键与"要按的键"一律用符号，不出现全拼。
+    for (name, hint) in [
+        ("slash panel", LX_SLASH_PANEL_FOOTER),
+        ("history panel", LX_HISTORY_PANEL_FOOTER),
+        ("resume edit confirm", RESUME_EDIT_CONFIRM_HINT),
+        ("mention panel", MENTION_PANEL_FOOTER),
+        ("referenced menu", REFERENCED_MENU_FOOTER),
+        ("referenced search", REFERENCED_SEARCH_FOOTER),
+        ("trust console", TRUST_CONSOLE_FOOTER),
+        ("ui gallery", UI_GALLERY_HINT),
+    ] {
+        let lower = hint.to_lowercase();
+        for forbidden in ["shift", "ctrl", "cmd", "backspace"] {
+            assert!(
+                !lower.contains(forbidden),
+                "{name} 提示出现全拼 `{forbidden}`（应用符号）: {hint}"
+            );
+        }
+        // `enter` 作为按键提示时也用 `↵`；`esc` 保留全拼（规则允许）。
+        if lower.contains("enter") {
+            panic!("{name} 提示出现全拼 `enter`（应用 ↵）: {hint}");
+        }
+    }
+}
+
+/// 模态按钮与页脚里 `esc` 保留全拼（规则：动作词用文字，符号只给修饰键与键名）。
+#[test]
+fn action_words_stay_spelled_out_while_keys_use_symbols() {
+    // `esc` 全拼保留；按键（enter/delete）用符号 + `^` 记法。
+    assert!(BUTTON_CANCEL.contains("esc"));
+    for hint in [
+        BUTTON_SAVE,
+        BUTTON_CONFIRM,
+        BUTTON_CONFIRM_DELETE,
+        BUTTON_OPEN,
+    ] {
+        assert!(hint.contains(key::ENTER), "按键用 ↵: {hint}");
+        assert!(!hint.to_lowercase().contains("enter"), "不用全拼: {hint}");
+    }
+    // Ctrl 组合沿用 `^` 记法（已是全项目统一且终端圈通用）。
+    assert!(BUTTON_CLEAR.contains("^c"));
+    assert!(BUTTON_DELETE.contains("^d"));
+    assert!(MENTION_PANEL_FOOTER.contains("^z"));
+    // Cmd 只用一个字形，且与 web 图标不重名混淆：`⌘` 就是 `key::CMD`。
+    assert_eq!(key::CMD, "⌘");
+}

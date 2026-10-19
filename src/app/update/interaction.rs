@@ -209,7 +209,32 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
         .is_some_and(|tooltip| tooltip.reveal(now));
     let saved = tick_prompt_autosave(state, now);
     let scrolled = tick_selection_autoscroll(state, now);
-    expired || hint_expired || revealed || saved || scrolled
+    // `/resume` 面板停留期间刷新"现在"，相对时间随之自然推进。
+    let retimed = tick_slash_panel_clock(state);
+    expired || hint_expired || revealed || saved || scrolled || retimed
+}
+
+/// 刷新打开中的 `/resume` 面板时间戳；返回是否有面板需要重绘。
+///
+/// 只改面板自身的时间快照，不触碰列表内容与窗口状态——渲染层据此得到新的相对时间。
+fn tick_slash_panel_clock(state: &mut AppState) -> bool {
+    let now_ms = crate::db::now_ms();
+    let ids = state.all_pane_ids();
+    let mut changed = false;
+    for id in ids {
+        let Some(pane) = state.pane_mut_anywhere(id) else {
+            continue;
+        };
+        let Some(crate::app::state::SlashPanel::History(panel)) = pane.lx.slash.as_mut() else {
+            continue;
+        };
+        // 同一毫秒内不重复标记变化，避免空转重绘。
+        if panel.now_ms != now_ms {
+            panel.now_ms = now_ms;
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// 自动保存轮询：条目编辑视图下缓冲静置达标后提交落库并回到已保存态；

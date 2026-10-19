@@ -31,6 +31,8 @@ pub enum OverlayKind {
     ReferencedFolderSearch,
     /// 引用文件夹删除确认浮层。
     ReferencedFolderDelete,
+    /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
+    ResumeSessionEdit,
     UiGallery,
 }
 
@@ -52,6 +54,8 @@ pub enum Overlay {
     ReferencedFolderInput(ReferencedFolderInput),
     ReferencedFolderSearch(ReferencedFolderSearch),
     ReferencedFolderDelete(ReferencedFolderDelete),
+    /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
+    ResumeSessionEdit(ResumeSessionEdit),
     UiGallery(UiGallery),
 }
 
@@ -74,9 +78,29 @@ impl Overlay {
             Self::ReferencedFolderInput(_) => OverlayKind::ReferencedFolderInput,
             Self::ReferencedFolderSearch(_) => OverlayKind::ReferencedFolderSearch,
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
+            Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
             Self::UiGallery(_) => OverlayKind::UiGallery,
         }
     }
+}
+
+/// `/resume` 会话编辑模态：目标会话、标题输入与删除确认态。
+///
+/// 归属键（工作区 cwd + 发起窗格）随打开时固定：键变化即作废，避免把 A 工作区的
+/// 会话改到 B 工作区的库里。改名与删除都是异步落库，成功回执后才更新列表。
+#[derive(Debug)]
+pub struct ResumeSessionEdit {
+    /// 发起窗格（回执按它路由回 `/resume` 面板）。
+    pub pane: PaneId,
+    /// 该会话所属工作区 cwd（打开时快照）。
+    pub workspace: PathBuf,
+    pub session_id: String,
+    /// 标题输入（预填当前标题）。
+    pub input: TextInput,
+    /// 已进入删除确认态（再按 `^D`/`Enter` 才真删）。
+    pub confirming_delete: bool,
+    /// 模态内提示（如 `Session busy`）；显示在按钮行上方。
+    pub hint: Option<String>,
 }
 
 /// 引用文件夹目录弹窗：锚点、行快照与高亮项。

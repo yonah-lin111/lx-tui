@@ -3,6 +3,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier};
 
 use super::*;
 use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, Lx, LxChat};
@@ -163,7 +164,7 @@ fn assistant_message_has_no_label_and_shows_body() {
     let line2 = row_text(&buf, area, 2);
     assert!(
         line0.starts_with("■ Thought"),
-        "首个渲染行为带方块的折叠头：{line0}"
+        "首个渲染行为方块 + 图标 + 折叠头：{line0}"
     );
     assert!(
         !line0.contains("assistant"),
@@ -483,8 +484,6 @@ fn token_and_duration_formatting_matches_agent_conventions() {
 
 #[test]
 fn thinking_header_uses_step_square_and_becomes_thought() {
-    use ratatui::style::{Color, Modifier};
-
     // 生成中：行首方块（呼吸第 0 帧为实心、翡翠绿加粗）+ `Thinking`。
     let mut streaming = lx_with(vec![message(
         "assistant",
@@ -497,7 +496,10 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let header = &buf[(0, 0)];
     assert_eq!(header.fg, Color::Indexed(218), "思考方块专用品红");
     assert!(header.modifier.contains(Modifier::BOLD), "生成中方块加粗");
-    // 头部文案：与方块同款品红但**不加粗**，让方块更跳。
+    // 图标：跟随思考自己的品红（`~`），位于方块之后第 2 列、紧贴文案。
+    let icon = &buf[(2, 0)];
+    assert_eq!(icon.fg, Color::Indexed(218), "图标品红（跟随步骤结构色）");
+    // 头部文案：与方块同款品红但**不加粗**，让方块更跳；方块后从第 2 列起。
     let label = &buf[(2, 0)];
     assert_eq!(label.fg, Color::Indexed(218), "生成中文案同款品红");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");

@@ -540,9 +540,11 @@ impl Database {
             .workspace_external_id(workspace)?
             .ok_or(DbError::WorkspaceMissing)?;
         let title = single_line_preview(title, 200);
+        // 改名只改标题，不动 `updated_at_ms`：改备注不是对话活动，不该把该会话
+        // 顶到"最近活动"列表最前（opencode 同款：备注名不影响排序）。
         let updated = self.conn.execute(
-            "UPDATE agent_session SET title = ?1, updated_at_ms = ?2 WHERE external_id = ?3 AND workspace_id = ?4",
-            params![title, now_ms(), session_id, workspace_external],
+            "UPDATE agent_session SET title = ?1 WHERE external_id = ?2 AND workspace_id = ?3",
+            params![title, session_id, workspace_external],
         )?;
         if updated == 0 {
             return Err(DbError::SessionMissing);

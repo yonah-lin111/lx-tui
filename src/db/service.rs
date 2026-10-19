@@ -572,19 +572,30 @@ impl Persistence {
                 // 重命名成功后刷新该窗格的历史面板（若打开）。
                 let renamed =
                     self.with_db(|db| db.rename_chat_session(&workspace, &session_id, &title));
-                renamed.is_some()
+                if renamed.is_some() {
+                    // 就地更新 `/resume` 列表该行标题；面板保持打开、高亮不动。
+                    let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
+                    let mut changed = false;
+                    for pane in panes {
+                        changed |= update::on_session_renamed(state, pane, &session_id, &title);
+                    }
+                    return changed;
+                }
+                false
             }
             Effect::DeleteChatSession {
                 workspace,
                 session_id,
             } => {
                 let deleted = self.with_db(|db| db.delete_chat_session(&workspace, &session_id));
-                // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有）。
+                // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有），
+                // 并从已打开的 `/resume` 列表里就地移除该行。
                 if deleted.is_some() {
                     let mut changed = false;
                     let panes: Vec<crate::layout::PaneId> = state.all_pane_ids();
                     for pane in panes {
                         changed |= update::on_session_deleted(state, pane, &session_id);
+                        changed |= update::on_session_removed(state, pane, &session_id);
                     }
                     return changed;
                 }
@@ -800,5 +811,7 @@ fn canonical_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+#[cfg(test)]
+mod resume_tests;
 #[cfg(test)]
 mod tests;

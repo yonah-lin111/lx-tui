@@ -285,12 +285,29 @@ fn rename_modal_scrolls_by_display_width_for_long_wide_names() {
 
 #[test]
 fn rename_buttons_hit_their_cells() {
+    // 按真实按钮行几何取单元格：不写死列号，文案长度变化不会悄悄失效。
     let shell = rename_shell(SCREEN).expect("rename modal fits");
-    assert_eq!(rename_button_at(&shell, 21, 12), Some(RenameButton::Save));
-    assert_eq!(rename_button_at(&shell, 35, 12), Some(RenameButton::Clear));
-    assert_eq!(rename_button_at(&shell, 47, 12), Some(RenameButton::Cancel));
-    assert_eq!(rename_button_at(&shell, 20, 12), None);
-    assert_eq!(rename_button_at(&shell, 21, 11), None);
+    let row = shell.inner.y + crate::ui::overlay::RENAME_BUTTON_ROW;
+    let rects = crate::ui::widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL],
+        crate::ui::overlay::BUTTON_GAP,
+        crate::ui::overlay::RENAME_BUTTON_ROW,
+    );
+    assert_eq!(
+        rename_button_at(&shell, rects[0].x, row),
+        Some(RenameButton::Save)
+    );
+    assert_eq!(
+        rename_button_at(&shell, rects[1].x, row),
+        Some(RenameButton::Clear)
+    );
+    assert_eq!(
+        rename_button_at(&shell, rects[2].x, row),
+        Some(RenameButton::Cancel)
+    );
+    // 按钮行之外不命中。
+    assert_eq!(rename_button_at(&shell, rects[0].x, row + 1), None);
 }
 
 #[test]
@@ -310,16 +327,26 @@ fn confirm_modal_renders_question_and_buttons() {
 
 #[test]
 fn confirm_buttons_hit_their_cells() {
+    // 按真实按钮行几何取单元格：不写死列号。
     let shell = confirm_shell(SCREEN, "close \"x\"?").expect("confirm modal fits");
+    // 确认浮层的按钮行在内容区最后一行（与重命名浮层的固定行号不同）。
+    let offset = shell.inner.height.saturating_sub(1);
+    let rects = crate::ui::widgets::modal::button_row(
+        shell.inner,
+        &[text::BUTTON_CONFIRM, text::BUTTON_CANCEL],
+        crate::ui::overlay::BUTTON_GAP,
+        offset,
+    );
+    let row = shell.inner.y + offset;
     assert_eq!(
-        confirm_button_at(&shell, 25, 12),
+        confirm_button_at(&shell, rects[0].x, row),
         Some(ConfirmButton::Confirm)
     );
     assert_eq!(
-        confirm_button_at(&shell, 42, 12),
+        confirm_button_at(&shell, rects[1].x, row),
         Some(ConfirmButton::Cancel)
     );
-    assert_eq!(confirm_button_at(&shell, 24, 12), None);
+    assert_eq!(confirm_button_at(&shell, rects[0].x, row + 1), None);
 }
 
 #[test]
@@ -1066,7 +1093,7 @@ fn referenced_menu_viewport_decouples_window_from_highlight() {
 }
 
 #[test]
-fn referenced_menu_renders_scrollbar_track_and_thumb() {
+fn referenced_menu_renders_scrollbar_thumb_without_track_border() {
     use crate::app::overlay::ReferencedFolderMenuRow;
     let rows: Vec<ReferencedFolderMenuRow> = (0..30)
         .map(|id| ReferencedFolderMenuRow::Folder {
@@ -1094,9 +1121,10 @@ fn referenced_menu_renders_scrollbar_track_and_thumb() {
     let bar = layout.scrollbar.expect("overflows");
     let thumb_row: Vec<char> = lines[bar.thumb.y as usize].chars().collect();
     assert_eq!(thumb_row[usize::from(bar.thumb.x)], '▐', "thumb 在最右一列");
+    // 轨道不再绘制竖线：滚动条列在 thumb 之外保持空格。
     let last = usize::from(bar.track.bottom()) - 1;
     let last_row: Vec<char> = lines[last].chars().collect();
-    assert_eq!(last_row[usize::from(bar.track.x)], '▕', "轨道铺到最后一行");
+    assert_eq!(last_row[usize::from(bar.track.x)], ' ', "轨道不画符号");
 }
 
 #[test]
@@ -1736,4 +1764,112 @@ fn save_draft_empty_or_overflow_behavior() {
 
     let too_small = Rect::new(0, 0, 3, 2);
     assert!(save_draft_shell(too_small, 5).is_none());
+}
+
+// ===== `/resume` 会话编辑模态 =====
+
+/// 构造处于 `/resume` 编辑模态的状态。
+fn resume_edit_state(confirming: bool, title: &str) -> AppState {
+    use crate::app::overlay::ResumeSessionEdit;
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    state.overlay = Some(Overlay::ResumeSessionEdit(ResumeSessionEdit {
+        pane,
+        workspace: std::path::PathBuf::from("/tmp/ws"),
+        session_id: "sess-a".into(),
+        input: TextInput::new(title),
+        confirming_delete: confirming,
+        hint: None,
+    }));
+    state
+}
+
+#[test]
+fn resume_edit_modal_renders_input_and_buttons() {
+    let state = resume_edit_state(false, "My session");
+    let (lines, cursor) = draw_overlay(&state);
+    let all = lines.join("\n");
+    assert!(
+        all.contains(crate::ui::text::RESUME_EDIT_MODAL_TITLE),
+        "{all}"
+    );
+    assert!(all.contains("My session"), "显示标题正文: {all}");
+    assert!(all.contains(crate::ui::text::BUTTON_SAVE), "{all}");
+    assert!(all.contains(crate::ui::text::BUTTON_DELETE), "{all}");
+    assert!(all.contains(crate::ui::text::BUTTON_CANCEL), "{all}");
+    assert!(cursor.is_some(), "输入框有硬件光标");
+}
+
+#[test]
+fn resume_edit_modal_confirm_state_swaps_buttons_and_shows_hint() {
+    let state = resume_edit_state(true, "My session");
+    let (lines, _) = draw_overlay(&state);
+    let all = lines.join("\n");
+    assert!(
+        all.contains(crate::ui::text::BUTTON_CONFIRM_DELETE),
+        "确认态主按钮: {all}"
+    );
+    assert!(
+        !all.contains(crate::ui::text::BUTTON_DELETE),
+        "不再显示编辑态删除按钮: {all}"
+    );
+    assert!(
+        all.contains(crate::ui::text::RESUME_EDIT_CONFIRM_HINT),
+        "显示二次确认提示: {all}"
+    );
+}
+
+#[test]
+fn resume_edit_modal_buttons_hit_primary_delete_and_cancel() {
+    use crate::ui::overlay::ResumeEditButton;
+    let shell = crate::ui::overlay::resume_edit_shell(SCREEN).expect("shell");
+    // 编辑态：save / delete / cancel 三个按钮可命中。
+    let row = shell.inner.y + crate::ui::overlay::RENAME_BUTTON_ROW;
+    let rects = crate::ui::widgets::modal::button_row(
+        shell.inner,
+        &[
+            crate::ui::text::BUTTON_SAVE,
+            crate::ui::text::BUTTON_DELETE,
+            crate::ui::text::BUTTON_CANCEL,
+        ],
+        crate::ui::overlay::BUTTON_GAP,
+        crate::ui::overlay::RENAME_BUTTON_ROW,
+    );
+    assert_eq!(
+        crate::ui::overlay::resume_edit_button_at(&shell, false, rects[0].x, row),
+        Some(ResumeEditButton::Primary)
+    );
+    assert_eq!(
+        crate::ui::overlay::resume_edit_button_at(&shell, false, rects[1].x, row),
+        Some(ResumeEditButton::Delete)
+    );
+    assert_eq!(
+        crate::ui::overlay::resume_edit_button_at(&shell, false, rects[2].x, row),
+        Some(ResumeEditButton::Cancel)
+    );
+}
+
+#[test]
+fn resume_edit_modal_confirm_state_second_button_is_cancel() {
+    use crate::ui::overlay::ResumeEditButton;
+    let shell = crate::ui::overlay::resume_edit_shell(SCREEN).expect("shell");
+    let row = shell.inner.y + crate::ui::overlay::RENAME_BUTTON_ROW;
+    let rects = crate::ui::widgets::modal::button_row(
+        shell.inner,
+        &[
+            crate::ui::text::BUTTON_CONFIRM_DELETE,
+            crate::ui::text::BUTTON_CANCEL,
+        ],
+        crate::ui::overlay::BUTTON_GAP,
+        crate::ui::overlay::RENAME_BUTTON_ROW,
+    );
+    assert_eq!(
+        crate::ui::overlay::resume_edit_button_at(&shell, true, rects[0].x, row),
+        Some(ResumeEditButton::Primary)
+    );
+    assert_eq!(
+        crate::ui::overlay::resume_edit_button_at(&shell, true, rects[1].x, row),
+        Some(ResumeEditButton::Cancel),
+        "确认态第二个按钮是取消（退回编辑态）"
+    );
 }

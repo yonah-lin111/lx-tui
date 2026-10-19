@@ -30,7 +30,12 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
+mod body;
+mod code_copy;
 mod tool;
+
+/// 代码块复制按钮占用的列数（`[❐]` 三列）。
+const CODE_COPY_WIDTH: u16 = 3;
 
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
@@ -182,11 +187,15 @@ pub struct HistoryLayout {
     pub area: Rect,
     /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
+    /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
+    pub code_copy: Vec<CodeCopyButton>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
     /// 渲染出的内容总行数（滚动上限用）。
     pub total_rows: usize,
 }
+
+pub use code_copy::CodeCopyButton;
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,15 +236,17 @@ fn content_rect(area: Rect) -> Rect {
 }
 
 /// 计算历史布局（按当前展开状态）。`area` 为整个历史区（含滚动条列）。
-pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
+pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     let content = content_rect(area);
     let width = content.width;
     let mut rows = 0usize;
     let mut thinking = Vec::new();
+    let mut code_copy = Vec::new();
     if width == 0 {
         return HistoryLayout {
             area,
             thinking,
+            code_copy,
             messages: Vec::new(),
             total_rows: 0,
         };
@@ -259,7 +270,7 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     crate::chat::events::PartKind::Reasoning => (
                         true,
                         1 + if lx.chat.reasoning_expanded(message_index, step_index) {
-                            thinking_rows(&part.content, width)
+                            body::thinking_rows(&part.content, width)
                         } else {
                             0
                         },
@@ -283,6 +294,17 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     step_index,
                     Rect::new(area.x, header_y, width, 1),
                 ));
+            } else if let AssistantStepView::Part { part, .. } = step {
+                // 代码块头部的复制按钮：按渲染行序算出每块头部的屏幕矩形。
+                code_copy::collect(
+                    message_index,
+                    step_index,
+                    &part.content,
+                    width.saturating_sub(STEP_GUTTER),
+                    area,
+                    rows,
+                    &mut code_copy,
+                );
             }
             rows += step_rows;
         }
@@ -316,6 +338,7 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     HistoryLayout {
         area,
         thinking,
+        code_copy,
         messages: messages_rows,
         total_rows: rows,
     }
@@ -555,7 +578,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         }
                         crate::chat::events::PartKind::Reasoning => {
                             1 + if expanded {
-                                thinking_rows(&part.content, content.width)
+                                body::thinking_rows(&part.content, content.width)
                             } else {
                                 0
                             }
@@ -618,15 +641,17 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         } else {
                             StepMark::Done
                         };
-                        draw_markdown(
+                        body::draw_body(
                             grid,
                             content,
                             scroll,
                             &mut row_index,
                             &part.content,
-                            mark,
-                            StepKind::Body,
-                            lx.chat.loading_frame,
+                            body::BodyStyle {
+                                mark,
+                                kind: StepKind::Body,
+                                loading_frame: lx.chat.loading_frame,
+                            },
                         );
                     }
                 }
@@ -661,7 +686,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             );
                         } else {
                             let mut label = String::from(text::LX_CHAT_THOUGHT_LABEL);
-                            if let Some(duration) = thinking_duration(part) {
+                            if let Some(duration) = body::thinking_duration(part) {
                                 label.push_str(THINKING_DURATION_SEP);
                                 label.push_str(&format_duration(duration));
                             }
@@ -670,7 +695,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                     }
                     row_index += 1;
                     if expanded {
-                        draw_thinking(grid, content, scroll, &mut row_index, &part.content);
+                        body::draw_thinking(grid, content, scroll, &mut row_index, &part.content);
                     }
                 }
             }
@@ -729,83 +754,6 @@ fn markdown_rows(content: &str, width: u16) -> usize {
 /// 置顶用户行与 thinking 命中矩形都会漂移。
 fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
     tool::rows(call, width)
-}
-
-/// 绘制一段 assistant markdown 正文：首行以步骤方块起头，所有行缩进 [`STEP_GUTTER`] 列
-/// 与方块对齐（渲染宽度已相应扣除，无需再换行）。
-fn draw_markdown(
-    grid: &mut Grid,
-    rect: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-    content: &str,
-    mark: StepMark,
-    kind: StepKind,
-    loading_frame: usize,
-) {
-    let inner = rect.width.saturating_sub(STEP_GUTTER);
-    let mut first = true;
-    for line in markdown_render::render_wrapped(content, inner) {
-        if let Some(y) = visible_row(rect, scroll, *row_index) {
-            if first {
-                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style(kind));
-            }
-            let mut cx = rect
-                .x
-                .saturating_add(STEP_GUTTER)
-                .saturating_add(line.indent);
-            for (value, span_style) in &line.spans {
-                for ch in value.chars() {
-                    let cell = ch.width().unwrap_or(1).max(1) as u16;
-                    if cx.saturating_add(cell) > rect.right() {
-                        break;
-                    }
-                    grid.put_char(cx, y, ch, *span_style);
-                    cx = cx.saturating_add(cell);
-                }
-            }
-        }
-        first = false;
-        *row_index += 1;
-    }
-}
-
-/// thinking 块耗时（毫秒）：首个增量到最后一个增量的时间差；时间戳缺失返回 None。
-fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
-    let started = part.started_at_ms?;
-    let ended = part.ended_at_ms?;
-    Some(ended.saturating_sub(started).max(0))
-}
-
-/// thinking 正文渲染行数（markdown；左缩进 [`STEP_GUTTER`] 与头部方块对齐）。
-fn thinking_rows(content: &str, width: u16) -> usize {
-    markdown_render::render_wrapped(content, width.saturating_sub(STEP_GUTTER)).len()
-}
-
-/// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`），
-/// 所有行缩进 [`STEP_GUTTER`] 列与头部方块对齐。
-fn draw_thinking(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    let inner = rect.width.saturating_sub(STEP_GUTTER);
-    for line in markdown_render::render_wrapped(content, inner) {
-        if let Some(y) = visible_row(rect, scroll, *row_index) {
-            let mut cx = rect
-                .x
-                .saturating_add(STEP_GUTTER)
-                .saturating_add(line.indent);
-            for (value, span_style) in &line.spans {
-                let cell_style = span_style.patch(style::muted());
-                for ch in value.chars() {
-                    let cell = ch.width().unwrap_or(1).max(1) as u16;
-                    if cx.saturating_add(cell) > rect.right() {
-                        break;
-                    }
-                    grid.put_char(cx, y, ch, cell_style);
-                    cx = cx.saturating_add(cell);
-                }
-            }
-        }
-        *row_index += 1;
-    }
 }
 
 /// 本轮统计行（assistant 消息末尾）：`模型 · 2.9k in · 307 out · 70% cached ·

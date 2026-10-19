@@ -4,6 +4,7 @@
 mod history;
 mod prompt_history;
 mod session;
+mod slash_panels;
 mod stop;
 mod timeline;
 

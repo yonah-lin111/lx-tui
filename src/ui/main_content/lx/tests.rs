@@ -313,10 +313,10 @@ fn markdown_line_is_styled() {
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
     // 输入框走**编辑器**高亮色板（`markdown_*`，独立于阅读渲染的 `md_read_*`）：
-    // `#` 为 dim 标记，`Title` 为 Yellow 加粗标题。
+    // `#` 为标题专用标记（Yellow + dim），`Title` 为 Yellow 加粗标题。
     assert_eq!(
         buf[(content_x, row)].fg,
-        crate::ui::style::markdown_marker()
+        crate::ui::style::markdown_heading_marker()
             .fg
             .unwrap_or(Color::Reset)
     );
@@ -473,10 +473,9 @@ fn wrapped_input_caps_height_and_shows_scrollbar() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None);
     let text = buffer_text(&buf);
-    assert!(
-        text.contains('▐') || text.contains('▕'),
-        "溢出时滚动条可见: {text}"
-    );
+    // 轨道不画符号，只看 thumb：滚动条列只剩 `▐`。
+    assert!(text.contains('▐'), "溢出时滚动条可见: {text}");
+    assert!(!text.contains('▕'), "轨道不再绘制竖线: {text}");
 }
 
 // ===== `@` 提及面板几何 =====
@@ -748,6 +747,8 @@ fn slash_model_lx() -> Lx {
                 model_name: "gpt-5.6-luna".into(),
             },
         ],
+        current: None,
+        current_variant: None,
         window: PanelWindow::new(0),
     })));
     lx
@@ -803,6 +804,8 @@ fn slash_model_and_resume_show_empty_placeholder_row() {
     lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
         stage: ModelPickerStage::Models,
         candidates: Vec::new(),
+        current: None,
+        current_variant: None,
         window: PanelWindow::new(0),
     })));
     assert!(slash_layout(area, &lx).is_some());
@@ -917,12 +920,13 @@ fn initial_page_shows_status_on_pane_bottom_border() {
         .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
         .collect();
     assert!(
-        border.contains("deepseek-v4.1-flash") && border.contains("9router-lx-t"),
-        "底边框显示模型 · 供应商：{border}"
+        border.contains("deepseek-v4.1-flash"),
+        "底边框显示模型名：{border}"
     );
+    assert!(!border.contains("9router-lx-t"), "供应商不再显示：{border}");
     assert!(
-        border.contains("context:720k(72%)"),
-        "底边框显示上下文占用 `context:720k(72%)`：{border}"
+        border.contains("720k(72%)"),
+        "底边框显示上下文占用 `720k(72%)`（无 context: 前缀）：{border}"
     );
 }
 
@@ -1000,10 +1004,9 @@ fn overflowing_history_draws_scrollbar_glyphs() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
-    assert!(
-        text.contains('▐') || text.contains('▕'),
-        "溢出时历史滚动条可见：{text}"
-    );
+    // 历史滚动条与公共组件同口径：只有 thumb，没有轨道竖线。
+    assert!(text.contains('▐'), "溢出时历史滚动条可见：{text}");
+    assert!(!text.contains('▕'), "轨道不再绘制竖线：{text}");
 }
 
 #[test]
@@ -1402,4 +1405,133 @@ fn idle_chat_bar_has_no_loading_mark() {
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
     assert!(!text.contains(text::chat::LOADING_LABEL), "{text}");
+}
+
+mod slash_panels;
+
+#[test]
+fn lx_input_highlights_inline_code_and_list_markers() {
+    // lx 输入框与 prompt 容器共用 `token_style`：`xxx` 带底色、列表符号上强调色。
+    let area = Rect::new(0, 0, 60, 20);
+    let mut lx = Lx::new();
+    lx.insert_str("use `cargo test`\n- bullet item\n1. ordered item");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None);
+
+    // 行内代码内容格带前景色（不铺背景）。
+    let mut code_colored = false;
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if buf[(x, y)].fg == ratatui::style::Color::LightRed {
+                code_colored = true;
+            }
+        }
+    }
+    assert!(code_colored, "输入框里的行内代码有前景色");
+
+    // 列表符号（`•`/序号）带前景色，正文无。
+    let mut marker_colored = false;
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let symbol = buf[(x, y)].symbol();
+            if (symbol == "•" || symbol == "1") && buf[(x, y)].fg == ratatui::style::Color::Yellow
+            {
+                marker_colored = true;
+            }
+        }
+    }
+    assert!(marker_colored, "列表符号有强调色");
+}
+
+#[test]
+fn code_block_copy_button_hit_returns_block_body() {
+    // 点击代码块头部的复制按钮：命中返回该块正文（不含围栏与 language 行）。
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```js\nconst a = 1;\n\nconst b = 2;\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let layout = super::history::layout(view.body, &lx);
+    let button = layout
+        .code_copy
+        .first()
+        .expect("代码块头部应记录复制按钮")
+        .clone();
+    assert_eq!(
+        button.body, "const a = 1;\n\nconst b = 2;",
+        "正文完整且保留空行"
+    );
+    assert!(!button.body.contains("```"), "不含围栏");
+    assert!(!button.body.contains("language:"), "不含语言行");
+
+    // 命中该按钮单元格 → CodeCopy 携带同一份正文。
+    let hit = chat_hit(area, &lx, button.rect.x, button.rect.y);
+    assert_eq!(hit, Some(LxChatHit::CodeCopy(button.body.clone())));
+}
+
+#[test]
+fn code_copy_keeps_code_indentation() {
+    // 代码块里的缩进是代码本身的一部分，复制时必须原样保留（不能 trim_start）。
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```js\nfn main() {\n    let a = 1;\n}\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let button = super::history::layout(view.body, &lx)
+        .code_copy
+        .into_iter()
+        .next()
+        .expect("代码块复制按钮");
+    assert_eq!(
+        button.body, "fn main() {\n    let a = 1;\n}",
+        "缩进原样保留"
+    );
 }

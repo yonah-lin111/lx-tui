@@ -39,6 +39,12 @@ pub(crate) const RENAME_BUTTON_ROW: u16 = 2;
 pub(crate) const NEW_WORKSPACE_BUTTON_ROW: u16 = 2;
 
 const RENAME_BUTTONS: [&str; 3] = [text::BUTTON_SAVE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
+/// `/resume` 会话编辑模态尺寸与按钮组（编辑态 3 个、确认删除态 2 个）。
+const RESUME_EDIT_WIDTH: u16 = 48;
+const RESUME_EDIT_HEIGHT: u16 = 5;
+const RESUME_EDIT_BUTTONS: [&str; 3] =
+    [text::BUTTON_SAVE, text::BUTTON_DELETE, text::BUTTON_CANCEL];
+const RESUME_EDIT_CONFIRM_BUTTONS: [&str; 2] = [text::BUTTON_CONFIRM_DELETE, text::BUTTON_CANCEL];
 pub(crate) const NEW_NODE_BUTTONS: [&str; 3] =
     [text::BUTTON_CREATE, text::BUTTON_CLEAR, text::BUTTON_CANCEL];
 pub(crate) const NEW_WORKSPACE_BUTTONS: [&str; 3] =
@@ -581,6 +587,114 @@ pub(crate) fn render_buttons(
     for (rect, (label, button_style)) in rects.iter().zip(buttons) {
         frame.render_widget(Paragraph::new(Span::styled(*label, *button_style)), *rect);
     }
+}
+
+/// `/resume` 会话编辑模态几何：标题输入行、提示行（仅确认态/错误时占位）与按钮行。
+pub fn resume_edit_shell(screen: Rect) -> Option<widgets::modal::ModalShell> {
+    widgets::modal::layout(screen, RESUME_EDIT_WIDTH, RESUME_EDIT_HEIGHT)
+}
+
+/// `/resume` 会话编辑模态的按钮。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeEditButton {
+    /// 主按钮：编辑态保存、确认删除态确认删除。
+    Primary,
+    /// 编辑态的 `[delete ^d]`。
+    Delete,
+    /// 编辑态 `[cancel esc]` 关闭、确认态退回编辑态。
+    Cancel,
+}
+
+/// 命中 `/resume` 会话编辑模态的按钮行。
+pub fn resume_edit_button_at(
+    shell: &widgets::modal::ModalShell,
+    confirming: bool,
+    column: u16,
+    row: u16,
+) -> Option<ResumeEditButton> {
+    let labels: &[&str] = if confirming {
+        &RESUME_EDIT_CONFIRM_BUTTONS
+    } else {
+        &RESUME_EDIT_BUTTONS
+    };
+    let rects = widgets::modal::button_row(shell.inner, labels, BUTTON_GAP, RENAME_BUTTON_ROW);
+    match widgets::modal::button_at(&rects, column, row) {
+        Some(0) => Some(ResumeEditButton::Primary),
+        Some(1) if !confirming => Some(ResumeEditButton::Delete),
+        Some(_) => Some(ResumeEditButton::Cancel),
+        None => None,
+    }
+}
+
+/// `/resume` 会话编辑模态：标题输入 + 提示行 + 按钮行；返回硬件光标位置。
+///
+/// 编辑态按钮是 `[save ↵] [delete ^d] [cancel esc]`，确认删除态换成
+/// `[confirm del enter] [cancel esc]` 并在标题行右侧提示再按一次确认。
+pub(crate) fn render_resume_session_edit(
+    frame: &mut Frame<'_>,
+    screen: Rect,
+    edit: &crate::app::overlay::ResumeSessionEdit,
+) -> Option<(u16, u16)> {
+    let shell = resume_edit_shell(screen)?;
+    widgets::modal::render(frame, &shell, text::RESUME_EDIT_MODAL_TITLE);
+    if shell.inner.width == 0 || shell.inner.height == 0 {
+        return None;
+    }
+    let (labels, buttons): (&[&str], &[(&str, ratatui::style::Style)]) = if edit.confirming_delete {
+        (
+            &RESUME_EDIT_CONFIRM_BUTTONS,
+            &[
+                (text::BUTTON_CONFIRM_DELETE, style::accent()),
+                (text::BUTTON_CANCEL, style::muted()),
+            ],
+        )
+    } else {
+        (
+            &RESUME_EDIT_BUTTONS,
+            &[
+                (text::BUTTON_SAVE, style::accent()),
+                (text::BUTTON_DELETE, style::error()),
+                (text::BUTTON_CANCEL, style::muted()),
+            ],
+        )
+    };
+    render_buttons(
+        frame,
+        &widgets::modal::button_row(shell.inner, labels, BUTTON_GAP, RENAME_BUTTON_ROW),
+        buttons,
+    );
+    // 提示行：确认态显示"再按一次"，或显示校验/占用错误（红字）。
+    let hint = edit
+        .hint
+        .as_deref()
+        .map(|hint| (hint, style::error()))
+        .or_else(|| {
+            edit.confirming_delete
+                .then_some((text::RESUME_EDIT_CONFIRM_HINT, style::error()))
+        });
+    if let Some((hint, hint_style)) = hint
+        && shell.inner.height > 1
+    {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                text::ellipsize(hint, usize::from(shell.inner.width)),
+                hint_style,
+            )),
+            Rect::new(
+                shell.inner.x,
+                shell.inner.y.saturating_add(1),
+                shell.inner.width,
+                1,
+            ),
+        );
+    }
+    render_input(
+        frame,
+        Rect::new(shell.inner.x, shell.inner.y, shell.inner.width, 1),
+        edit.input.text(),
+        edit.input.cursor(),
+        Some(text::RESUME_EDIT_PLACEHOLDER),
+    )
 }
 
 /// 模态输入行：左侧 `> ` 前缀（与 prompt 列表搜索框同图标）+ 单行输入；

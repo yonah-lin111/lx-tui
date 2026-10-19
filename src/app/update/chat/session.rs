@@ -47,23 +47,31 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
         show_lx_hint(state, pane, InputHintLevel::Error, text::LX_CHAT_NO_MODEL);
         return true;
     }
-    // 高亮对齐当前选择。
-    let active = state
+    // 当前生效的模型（行首 `❯` 标记 + 底色）；也是打开时的定位目标。
+    //
+    // 必须走 `effective_selection`：窗格级 `chat.selection` 只在本进程选过模型时才有值，
+    // 重启后是 None，此时真正生效的是配置里的 `defaultModel`。只读 `chat.selection`
+    // 会让"重启后打开面板看不到当前模型"——重启前选的模型明明还在生效。
+    let current = state
         .pane_anywhere(pane)
-        .and_then(|target| target.lx.chat.selection.as_ref())
+        .and_then(|target| target.lx.chat.effective_selection(&state.models))
         .and_then(|selection| {
             candidates.iter().position(|candidate| {
                 candidate.selection.provider == selection.provider
                     && candidate.selection.model == selection.model
             })
-        })
-        .unwrap_or(0);
+        });
+    let active = current.unwrap_or(0);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     target.lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
         stage: ModelPickerStage::Models,
         candidates,
+        current,
+        current_variant: None,
+        // `PanelWindow::new(active)` 即"最小滚动"：窗口以高亮项为底向前回填，
+        // 选中模型在候选靠后时贴底可见、靠前时贴顶可见，已可见时窗口不动。
         window: crate::app::state::lx::slash::PanelWindow::new(active),
     })));
     true
@@ -83,6 +91,9 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
 }
 
 /// 历史列表回投：填充 `/resume` 面板。
+///
+/// 当前窗格已绑定的会话打上 `❯` 标记，并作为高亮与窗口定位目标
+/// （`PanelWindow::new(active)` 的最小滚动语义：它在视口外时会被拉进视口）。
 pub fn on_history_listed(
     state: &mut AppState,
     pane: PaneId,
@@ -91,11 +102,20 @@ pub fn on_history_listed(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    let bound = target.lx.chat.session_id.clone();
     let Some(SlashPanel::History(panel)) = target.lx.slash.as_mut() else {
         return false;
     };
     panel.entries = entries;
-    panel.window = crate::app::state::lx::slash::PanelWindow::new(0);
+    panel.current = bound.as_deref().and_then(|session_id| {
+        panel
+            .entries
+            .iter()
+            .position(|entry| entry.session_id == session_id)
+    });
+    panel.now_ms = crate::db::now_ms();
+    let active = panel.current.unwrap_or(0);
+    panel.window = crate::app::state::lx::slash::PanelWindow::new(active);
     true
 }
 
@@ -261,6 +281,23 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                     finish_model_selection(state, pane, selection);
                 } else {
                     let active = default_variant_index(state, &selection, &variants);
+                    // 当前生效的 variant（第一级高亮的模型若正是当前模型，其 variant
+                    // 就是"现在生效"的那一档）；否则第二级没有"已生效项"。
+                    let current_variant = (picker.current == Some(picker.window.active))
+                        .then(|| {
+                            state
+                                .models
+                                .settings
+                                .providers
+                                .get(&selection.provider)
+                                .and_then(|provider| provider.models.get(&selection.model))
+                                .and_then(|model| model.variant.clone())
+                                .and_then(|variant| {
+                                    variants.iter().position(|item| *item == variant)
+                                })
+                        })
+                        .flatten();
+                    let active = current_variant.unwrap_or(active);
                     if let Some(target) = state.pane_mut_anywhere(pane)
                         && let Some(SlashPanel::Model(current)) = target.lx.slash.as_mut()
                     {
@@ -268,6 +305,7 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                             model: selection,
                             variants,
                         };
+                        current.current_variant = current_variant;
                         current.window = crate::app::state::lx::slash::PanelWindow::new(active);
                     }
                 }
