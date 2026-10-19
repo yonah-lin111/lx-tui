@@ -217,13 +217,22 @@ fn markdown_palette_is_github_dark_truecolor() {
     assert_eq!(md_read_task_done().fg, muted);
     assert_eq!(md_read_task_open().fg, muted);
 
-    // GitHub Dark 的结构性强调**不上色**，只用修饰符。
+    // 行内代码 `xxx` 带浅灰底色（GitHub 的 markup.inline.raw 背景）。
+    assert_eq!(
+        md_read_inline_code().bg,
+        Some(Color::Rgb(0x1f, 0x24, 0x2c)),
+        "行内代码有暗色底，靠底色方块与正文区分"
+    );
+
+    // 列表符号是**结构强调**：用链接蓝只染符号，正文保持原色。
+    assert_eq!(md_read_bullet().fg, link, "无序列表符号 = 链接蓝");
+    assert_eq!(md_read_ordered().fg, link, "有序列表序号 = 链接蓝");
+
+    // 其余结构性强调仍**不上色**，只用修饰符。
     for style in [
         md_read_strong(),
         md_read_strong_emphasis(),
         md_read_emphasis(),
-        md_read_bullet(),
-        md_read_ordered(),
         md_read_code_block(),
     ] {
         assert_eq!(style.fg, None, "GitHub 的结构强调不换色");

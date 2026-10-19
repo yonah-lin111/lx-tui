@@ -5,7 +5,7 @@ use crate::app::markdown::MentionEntry;
 use crate::app::state::AppState;
 use crate::app::update;
 use crate::layout::PaneId;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 
 fn prompt(cols: u16, rows: u16, text: &str) -> Prompt {
     let mut prompt = Prompt::new(PaneId::from_raw_for_test(1));
@@ -1628,4 +1628,49 @@ fn short_ref_renders_with_its_own_style() {
     assert_ne!(cell.fg, Color::LightGreen);
     assert_ne!(cell.fg, Color::Indexed(208));
     assert_ne!(cell.fg, Color::LightMagenta);
+}
+
+#[test]
+fn editor_tokens_style_inline_code_and_list_markers() {
+    // prompt 容器与 lx 输入框共用 `token_style`：两处必须同时生效。
+    let inline = token_style(crate::ui::markdown::TokenKind::InlineCode);
+    assert_eq!(inline.fg, Some(Color::LightRed), "行内代码前景");
+    assert_eq!(
+        inline.bg,
+        Some(Color::Indexed(236)),
+        "行内代码带暗色底（`xxx` 用底色方块区分）"
+    );
+
+    let bullet = token_style(crate::ui::markdown::TokenKind::ListBullet);
+    let ordered = token_style(crate::ui::markdown::TokenKind::ListOrdered);
+    assert_eq!(bullet.fg, Some(Color::Yellow), "无序符号强调色");
+    assert_eq!(ordered.fg, Some(Color::Yellow), "有序序号强调色");
+    assert!(
+        bullet.add_modifier.contains(Modifier::BOLD),
+        "列表符号加粗以便扫读"
+    );
+    assert_eq!(bullet, ordered, "两种列表同一强调色");
+}
+
+#[test]
+fn inline_code_background_survives_selection_reverse() {
+    // 行内代码有底色；被选区反显时底色与 REVERSED 必须共存（不能丢背景或丢反显）。
+    let area = Rect::new(0, 0, 12, 3);
+    let prompt = prompt(12, 3, "a `code` b");
+    let mut buf = Buffer::empty(area);
+    let selection = selection(&prompt, (0, 0), (0, 8));
+    render(area, &mut buf, &prompt, Some(&selection));
+    // 反显覆盖整段选区。
+    for col in 0..=8 {
+        assert!(
+            buf[(col, 0)].modifier.contains(Modifier::REVERSED),
+            "column {col} 反显"
+        );
+    }
+    // 代码内容格保留底色（`code` 在 col 3..7）。
+    assert_eq!(
+        buf[(3, 0)].bg,
+        Color::Indexed(236),
+        "选区反显不覆盖行内代码底色"
+    );
 }

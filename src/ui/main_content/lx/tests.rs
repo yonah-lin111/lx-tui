@@ -1407,3 +1407,37 @@ fn idle_chat_bar_has_no_loading_mark() {
 }
 
 mod slash_panels;
+
+#[test]
+fn lx_input_highlights_inline_code_and_list_markers() {
+    // lx 输入框与 prompt 容器共用 `token_style`：`xxx` 带底色、列表符号上强调色。
+    let area = Rect::new(0, 0, 60, 20);
+    let mut lx = Lx::new();
+    lx.insert_str("use `cargo test`\n- bullet item\n1. ordered item");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, true, None);
+
+    // 行内代码内容格带暗色底（`cargo test` 所在位置）。
+    let mut code_cell = None;
+    for y in 0..area.height {
+        for x in 0..area.width {
+            if buf[(x, y)].bg == ratatui::style::Color::Indexed(236) {
+                code_cell = Some((x, y));
+            }
+        }
+    }
+    assert!(code_cell.is_some(), "输入框里的行内代码带底色");
+
+    // 列表符号（`•`/序号）带前景色，正文无。
+    let mut marker_colored = false;
+    for y in 0..area.height {
+        for x in 0..area.width {
+            let symbol = buf[(x, y)].symbol();
+            if (symbol == "•" || symbol == "1") && buf[(x, y)].fg == ratatui::style::Color::Yellow
+            {
+                marker_colored = true;
+            }
+        }
+    }
+    assert!(marker_colored, "列表符号有强调色");
+}

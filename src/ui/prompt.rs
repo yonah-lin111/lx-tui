@@ -717,6 +717,8 @@ pub(crate) fn token_style(kind: TokenKind) -> Style {
         TokenKind::Quote => style::markdown_quote(),
         TokenKind::LinkText => style::markdown_link_text(),
         TokenKind::Url => style::markdown_url(),
+        TokenKind::ListBullet => style::markdown_bullet(),
+        TokenKind::ListOrdered => style::markdown_ordered(),
         TokenKind::TemplateMarker => style::template_marker(),
         TokenKind::TemplateCommand(id) => style::template_command(id),
         TokenKind::TemplateTitle => style::template_title(),

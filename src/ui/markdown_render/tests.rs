@@ -525,3 +525,64 @@ fn non_continuation_rows_keep_separators() {
     let seps = text.iter().filter(|line| line.starts_with("├")).count();
     assert_eq!(seps, 3, "表头后 + 每行间共 3 条：{text:#?}");
 }
+
+#[test]
+fn inline_code_spans_carry_background_so_it_reads_as_a_block() {
+    // `xxx` 靠"底色方块"与正文区分：span 样式必须带背景，而不只是换前景。
+    let spans = inline_spans("before `code` after");
+    let code = spans
+        .iter()
+        .find(|(value, _)| value == "code")
+        .expect("行内代码 span");
+    assert_eq!(
+        code.1.bg,
+        Some(ratatui::style::Color::Rgb(0x1f, 0x24, 0x2c)),
+        "行内代码带暗色底"
+    );
+    // 正文不受影响（不继承底色）。
+    let plain = spans
+        .iter()
+        .find(|(value, _)| value.contains("before"))
+        .expect("正文 span");
+    assert_eq!(plain.1.bg, None, "正文没有底色");
+}
+
+#[test]
+fn list_markers_are_colored_while_body_stays_plain() {
+    // 无序 / 有序列表：符号上结构强调色，正文保持原色（只强调标记）。
+    for source in ["- first", "1. first"] {
+        let lines = render(source);
+        let spans = &lines[0].spans;
+        let marker = &spans[0];
+        assert!(
+            marker.1.fg.is_some(),
+            "{source:?} 的列表符号应上色: {:?}",
+            marker
+        );
+        let body = spans
+            .iter()
+            .find(|(value, _)| value.contains("first"))
+            .expect("正文 span");
+        assert_eq!(body.1.fg, None, "{source:?} 的正文保持原色");
+    }
+    // 无序与有序用同一结构强调色，列表结构观感一致。
+    let bullet = render("- x")[0].spans[0].1.fg;
+    let ordered = render("1. x")[0].spans[0].1.fg;
+    assert_eq!(bullet, ordered, "两种列表同一强调色");
+}
+
+#[test]
+fn nested_list_markers_stay_colored() {
+    // 缩进后的嵌套项同样保留符号高亮（缩进列不着色）。
+    let lines = render("- top\n  - nested");
+    let nested = lines
+        .iter()
+        .find(|line| line.text().contains("nested"))
+        .expect("nested line");
+    let marker = nested
+        .spans
+        .iter()
+        .find(|(value, _)| value.contains('•'))
+        .expect("nested bullet");
+    assert!(marker.1.fg.is_some(), "嵌套列表符号同样上色");
+}

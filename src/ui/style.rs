@@ -281,6 +281,9 @@ mod github_dark {
     pub(super) const ENTITY: Color = Color::Rgb(0xd2, 0xa8, 0xff);
     /// 语法：注释 `--color-prettylights-syntax-comment`。
     pub(super) const COMMENT: Color = Color::Rgb(0x8b, 0x94, 0x9e);
+    /// 行内代码底色：GitHub 的 `markup.inline.raw` 背景
+    /// （深底上的浅灰蒙层，等价于 `rgba(110,118,129,0.4)` 叠在 `#0d1117` 上）。
+    pub(super) const INLINE_CODE_BG: Color = Color::Rgb(0x1f, 0x24, 0x2c);
 }
 
 /// markdown 语法标记（`#`、`**`、`` ` `` 等）：GitHub 的次要前景色。
@@ -319,9 +322,12 @@ pub fn md_read_strikethrough() -> Style {
     Style::default().add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 行内代码内容：GitHub 的 `markup.inline.raw` 用常量蓝 `#79c0ff`。
+/// markdown 行内代码内容：GitHub 的 `markup.inline.raw` 用常量蓝 `#79c0ff`，
+/// 并带一层浅灰底色——`xxx` 靠"底色方块"与正文区分，是 GitHub 实际渲染的做法。
 pub fn md_read_inline_code() -> Style {
-    Style::default().fg(github_dark::CONSTANT)
+    Style::default()
+        .fg(github_dark::CONSTANT)
+        .bg(github_dark::INLINE_CODE_BG)
 }
 
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
@@ -372,14 +378,15 @@ pub fn md_read_url() -> Style {
     Style::default().fg(github_dark::LINK)
 }
 
-/// markdown 无序列表项目符号：GitHub 的列表符号与正文同色（不弱化）。
+/// markdown 无序列表项目符号：GitHub 的列表符号与正文同色，但终端里同色会让
+/// 列表结构看不出来，因此用链接蓝 `#4493f8` 作为**结构强调**（只染符号，不动正文）。
 pub fn md_read_bullet() -> Style {
-    Style::default()
+    Style::default().fg(github_dark::LINK)
 }
 
-/// markdown 有序列表序号：同无序项目符号，与正文同色。
+/// markdown 有序列表序号：与无序项目符号同色，保持列表结构的一致观感。
 pub fn md_read_ordered() -> Style {
-    Style::default()
+    Style::default().fg(github_dark::LINK)
 }
 
 /// markdown 任务列表已完成项：GitHub 的 `markup.ignored`/复选框语义——只加删除线。
@@ -452,9 +459,26 @@ pub fn markdown_strikethrough() -> Style {
         .add_modifier(Modifier::CROSSED_OUT)
 }
 
-/// markdown 行内代码内容：亮红。
+/// markdown 行内代码内容：亮红 + 深色底（`xxx` 用"底色方块"与正文区分）。
+///
+/// 底色用 `Indexed 236`（与浮层面板同档的暗底），保证明暗终端下都是一层浅色蒙层
+/// 而不是刺眼的亮块；前景仍是亮红，与正文一眼可分。
 pub fn markdown_inline_code() -> Style {
-    Style::default().fg(Color::LightRed)
+    Style::default().fg(Color::LightRed).bg(Color::Indexed(236))
+}
+
+/// markdown 无序列表项目符号：Yellow 加粗（只染符号，正文保持原色）。
+pub fn markdown_bullet() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
+/// markdown 有序列表序号：与无序项目符号同款，保持列表结构的一致观感。
+pub fn markdown_ordered() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
 }
 
 /// markdown 围栏代码块内容：不引入语法着色，保持正文色。
