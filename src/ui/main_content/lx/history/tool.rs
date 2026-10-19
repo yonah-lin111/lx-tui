@@ -142,7 +142,22 @@ impl Kind {
     }
 }
 
-// ===== 第 1 行：`■ 动词` =====
+// ===== 第 1 行：`■ 图标 动词` =====
+
+/// 步骤图标：按工具种类取 `text::agent::ICON_*`（单宽几何符号），
+/// 品牌粉加粗——与 `[UI]` 查看器 agent 分组的图标同色同形，两处读法一致。
+///
+/// 未知工具统一用 `ICON_EXEC`（`$`）：它代表「跑了个命令」，比留空更说明问题。
+fn icon(call: &ToolCallView) -> Segment {
+    let glyph = match Kind::of(&call.name) {
+        Kind::Read => text::agent::ICON_READ,
+        Kind::Search => text::agent::ICON_SEARCH,
+        Kind::Edit => text::agent::ICON_EDIT,
+        Kind::Write => text::agent::ICON_WRITE,
+        Kind::Other => text::agent::ICON_EXEC,
+    };
+    Segment::new(format!("{glyph} "), style::agent_icon())
+}
 
 /// 行首方块标记：与思考 / 正文块共用同款步骤标记（运行中两帧呼吸、终态静态；
 /// 颜色区分完成 / 失败 / 中断 / 取消）。
@@ -187,23 +202,26 @@ fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment>
         None => segment,
     };
     let lead = paint(lead(call, loading_frame));
+    let icon = paint(icon(call));
     let verb = paint(verb(call));
     // 极窄时只留方块（写 buffer 时仍按列裁剪，绝不越界）。
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];
     }
-    let mut segments = vec![lead, verb];
-    while segments_cols(&segments) > limit {
-        if segments.len() == 1 {
-            break;
-        }
-        // 动词整段放不下：尾部省略到剩余列数。
-        let remaining = limit.saturating_sub(segments[0].cols());
-        let text = truncate_with_ellipsis(&segments[1].text, remaining);
-        if text.is_empty() {
-            segments.truncate(1);
-        } else {
-            segments[1] = Segment::new(text, segments[1].style);
+    // 次一档：方块 + 图标（仍放不下动词时，图标是「哪类动作」的最后提示）。
+    if segments_cols(&[lead.clone(), icon.clone()]) > limit {
+        return vec![lead];
+    }
+    let mut segments = vec![lead, icon, verb];
+    // 动词整段放不下：尾部省略到剩余列数（图标始终保留）。
+    if segments_cols(&segments) > limit {
+        let used = segments[0].cols() + segments[1].cols();
+        let remaining = limit.saturating_sub(used);
+        let style = segments[2].style;
+        let text = truncate_with_ellipsis(&segments[2].text, remaining);
+        segments.truncate(2);
+        if !text.is_empty() {
+            segments.push(Segment::new(text, style));
         }
     }
     segments
@@ -214,6 +232,8 @@ fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment>
 /// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
 /// 列宽固定，续行对齐口径一致。
 fn detail_prefix() -> String {
+    // 两空格缩进后接直角连接符（与消息底部通知的 `reason_prefix()` 同款）：
+    // `└` 落在图标列，详情行读作头部那一行的延续。
     format!("  {} ", text::agent::MARKER_TREE_LEAF)
 }
 

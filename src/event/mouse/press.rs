@@ -422,8 +422,9 @@ pub(crate) fn handle_mouse_down_left(
                             update::jump_lx_history_bottom(state, pane);
                         }
                         ui::main_content::lx::LxChatHit::CodeCopy(text) => {
-                            // 复制代码块正文（不含围栏与语言行），toast 反馈。
-                            crate::event::mouse::hit::copy_with_toast(state, &text);
+                            // 复制代码块正文（不含围栏与语言行）；toast 锚在**本窗格**
+                            // （main content）而不是 prompt——复制发生在哪儿，反馈就在哪儿。
+                            crate::event::mouse::hit::copy_with_toast_at(state, &text, Some(pane));
                         }
                     }
                     update::clear_lx_selection(state);

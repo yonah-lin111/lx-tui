@@ -1492,3 +1492,46 @@ fn code_block_copy_button_hit_returns_block_body() {
     let hit = chat_hit(area, &lx, button.rect.x, button.rect.y);
     assert_eq!(hit, Some(LxChatHit::CodeCopy(button.body.clone())));
 }
+
+#[test]
+fn code_copy_keeps_code_indentation() {
+    // 代码块里的缩进是代码本身的一部分，复制时必须原样保留（不能 trim_start）。
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```js\nfn main() {\n    let a = 1;\n}\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let button = super::history::layout(view.body, &lx)
+        .code_copy
+        .into_iter()
+        .next()
+        .expect("代码块复制按钮");
+    assert_eq!(
+        button.body, "fn main() {\n    let a = 1;\n}",
+        "缩进原样保留"
+    );
+}

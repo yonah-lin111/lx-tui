@@ -93,11 +93,12 @@ fn completed_and_failed_never_show_status_words_on_any_line() {
     assert!(
         header_line.trim_end()
             == format!(
-                "{} {}",
+                "{} {} {}",
                 text::agent::STEP_MARK_FILLED,
+                text::agent::ICON_READ,
                 text::agent::VERB_TOOL_READ
             ),
-        "失败态第 1 行只有方块 + 动词：{header_line:?}"
+        "失败态第 1 行为方块 + 图标 + 动词：{header_line:?}"
     );
 }
 
@@ -346,16 +347,36 @@ fn step_square_breathes_while_open_and_stays_static_when_settled() {
     }
 }
 
-/// 完成态：静态翡翠绿方块，不出现 braille 转轮，也不画类型图标。
+/// 完成态：静态翡翠绿方块 + 步骤图标，不出现 braille 转轮。
 #[test]
-fn completed_tool_has_square_verb_and_detail_without_type_icon() {
-    let cases: [(&str, ToolSummary, &str); 4] = [
-        ("read", read_summary(), text::agent::VERB_TOOL_READ),
-        ("search", search_summary(), text::agent::VERB_TOOL_SEARCH),
-        ("edit", edit_summary(), text::agent::VERB_TOOL_EDIT),
-        ("write", write_summary(), text::agent::VERB_TOOL_WRITE),
+fn completed_tool_has_square_icon_and_verb() {
+    let cases: [(&str, ToolSummary, &str, &str); 4] = [
+        (
+            "read",
+            read_summary(),
+            text::agent::VERB_TOOL_READ,
+            text::agent::ICON_READ,
+        ),
+        (
+            "search",
+            search_summary(),
+            text::agent::VERB_TOOL_SEARCH,
+            text::agent::ICON_SEARCH,
+        ),
+        (
+            "edit",
+            edit_summary(),
+            text::agent::VERB_TOOL_EDIT,
+            text::agent::ICON_EDIT,
+        ),
+        (
+            "write",
+            write_summary(),
+            text::agent::VERB_TOOL_WRITE,
+            text::agent::ICON_WRITE,
+        ),
     ];
-    for (name, summary, verb) in cases {
+    for (name, summary, verb, icon) in cases {
         let call = tool_call(name, ToolStatus::Completed, Some(summary), None);
         let (painted, grid) = render_row(&call, 80);
         assert!(
@@ -369,22 +390,21 @@ fn completed_tool_has_square_verb_and_detail_without_type_icon() {
             "{name} 行首为静态方块：{painted}"
         );
         let (header_line, _) = painted.split_once('\n').expect("两行");
+        // 标题行 = `■ <图标> <动词>`：图标按工具区分，一眼看出是哪类动作。
+        let expected = format!("{} {icon} {verb}", text::agent::STEP_MARK_FILLED);
         assert!(
-            header_line.contains(verb),
-            "{name} 缺少动词 {verb}：{header_line:?}"
+            header_line.trim_end() == expected,
+            "{name} 标题行为 `{expected}`：{header_line:?}"
         );
-        // 不再使用按工具区分的类型图标（G11：统一方块）。
-        for icon in [
-            text::agent::ICON_READ,
-            text::agent::ICON_SEARCH,
-            text::agent::ICON_EDIT,
-            text::agent::ICON_MCP,
-        ] {
-            assert!(
-                !painted.contains(icon),
-                "{name} 不再画类型图标 {icon:?}：{painted}"
-            );
-        }
+        // 图标用品牌粉加粗（与 `[UI]` 查看器 agent 分组同款）。
+        let icon_cell = grid.cell(2, 0).style;
+        assert_eq!(icon_cell.fg, style::agent_icon().fg, "{name} 图标品牌粉");
+        assert!(
+            icon_cell
+                .add_modifier
+                .contains(ratatui::style::Modifier::BOLD),
+            "{name} 图标加粗"
+        );
         // 完成方块：翡翠绿、不加粗、**不压暗**。
         let lead = grid.cell(0, 0).style;
         assert_eq!(

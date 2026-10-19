@@ -13,7 +13,6 @@
 //! （`[x]`/`[ ]`）。
 
 use ratatui::style::Style;
-use unicode_width::UnicodeWidthStr;
 
 use crate::ui::style;
 use crate::ui::text;
@@ -121,7 +120,7 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             list_indents.clear();
         }
         if trimmed.trim_start().starts_with("```") {
-            index = fenced_code(&source_lines, index, width, &mut lines);
+            index = fenced_code(&source_lines, index, &mut lines);
             continue;
         }
         // 缩进列表项优先于缩进代码块：模型常用 4 空格嵌套（`- xxx` 下接 `    - aaa`），
@@ -134,7 +133,7 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
             continue;
         }
         if is_indented_code(line) {
-            index = indented_code(&source_lines, index, width, &mut lines);
+            index = indented_code(&source_lines, index, &mut lines);
             continue;
         }
         if let Some((level, body)) = heading(trimmed) {
@@ -244,12 +243,7 @@ fn image(line: &str) -> Option<(&str, &str)> {
 }
 
 /// 围栏代码块：从起始 ``` 行读到闭合 ```；隐藏围栏，显示语言标记。
-fn fenced_code(
-    source: &[&str],
-    start: usize,
-    width: Option<usize>,
-    lines: &mut Vec<MdLine>,
-) -> usize {
+fn fenced_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
     let fence = source[start].trim();
     let lang = fence.trim_start_matches('`').trim();
     let mut index = start + 1;
@@ -262,17 +256,12 @@ fn fenced_code(
         body.push(source[index]);
         index += 1;
     }
-    render_code(&body, (!lang.is_empty()).then_some(lang), width, lines);
+    render_code(&body, (!lang.is_empty()).then_some(lang), lines);
     index
 }
 
 /// 缩进代码块：收集连续 4 空格缩进行。
-fn indented_code(
-    source: &[&str],
-    start: usize,
-    width: Option<usize>,
-    lines: &mut Vec<MdLine>,
-) -> usize {
+fn indented_code(source: &[&str], start: usize, lines: &mut Vec<MdLine>) -> usize {
     let mut index = start;
     let mut body = Vec::new();
     while index < source.len()
@@ -291,34 +280,36 @@ fn indented_code(
         body.push(source[index].strip_prefix("    ").unwrap_or(source[index]));
         index += 1;
     }
-    render_code(&body, None, width, lines);
+    render_code(&body, None, lines);
     index
 }
 
-/// 代码块头部：左侧 `│ language: js`，右侧右对齐复制按钮 `[❐]`。
+/// 代码块头部：`│ language: js · [❐]`。
 ///
-/// 复制按钮复用模板块的 `TEMPLATE_BUTTON_COPY` 字形（全项目同一个"复制"符号）。
-/// 语言为空（` ``` ` 无语言）时不写 `language:`（不假装有语言），只留竖条与按钮。
+/// 复制按钮紧跟在语言名之后、用 ` · ` 分隔（不再右对齐——右对齐会让用户先看到
+/// 一整行空白才找到按钮），按钮复用模板块的 `TEMPLATE_BUTTON_COPY` 字形
+/// （全项目同一个"复制"符号）。语言为空（``` 无语言）时不写 `language:` 与其
+/// 分隔符（不假装有语言），只留竖条与复制按钮。
+///
 /// 返回行本身 + 按钮的**行内起始列**（供命中换算）。
-fn code_header_line(lang: Option<&str>, width: u16) -> (MdLine, u16) {
+fn code_header_line(lang: Option<&str>) -> (MdLine, u16) {
     let mut spans = vec![(format!("{BAR_MARKER} "), style::md_read_rule())];
     if let Some(lang) = lang {
         spans.push((
             format!("{}{lang}", text::LX_CHAT_CODE_LANG_PREFIX),
             style::md_read_code_lang(),
         ));
+        spans.push((
+            text::LX_CHAT_CODE_LANG_SEP.to_string(),
+            style::md_read_rule(),
+        ));
     }
-    let used = MdLine::spans(0, spans.clone()).width();
-    // 按钮右对齐贴 `width` 右端；空间不够时不留按钮（`saturating_sub` 会给出 0 宽）。
-    let button = text::TEMPLATE_BUTTON_COPY;
-    let button_width = button.width();
-    let pad = usize::from(width).saturating_sub(used.saturating_add(button_width));
-    if usize::from(width) < used.saturating_add(button_width) {
-        return (MdLine::spans(0, spans), 0);
-    }
-    let column = u16::try_from(used.saturating_add(pad)).unwrap_or(0);
-    spans.push((" ".repeat(pad), style::md_read_rule()));
-    spans.push((button.to_string(), style::md_read_code_copy()));
+    // 按钮列 = 已占宽度（按钮紧跟其后，不铺填充空格）。
+    let column = u16::try_from(MdLine::spans(0, spans.clone()).width()).unwrap_or(u16::MAX);
+    spans.push((
+        text::TEMPLATE_BUTTON_COPY.to_string(),
+        style::md_read_code_copy(),
+    ));
     let mut line = MdLine::spans(0, spans);
     // 记录复制按钮的行内起始列（命中换算与渲染共用）。
     line.code_copy = Some(column);
@@ -327,9 +318,8 @@ fn code_header_line(lang: Option<&str>, width: u16) -> (MdLine, u16) {
 
 /// 渲染代码块：首行为头部（`language: xxx` + 复制按钮），其余每行前置直角竖条；
 /// 代码正文按语言做轻量语法高亮。
-fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &mut Vec<MdLine>) {
-    let header_width = u16::try_from(width.unwrap_or(usize::from(u16::MAX))).unwrap_or(u16::MAX);
-    lines.push(code_header_line(lang, header_width).0);
+fn render_code(body: &[&str], lang: Option<&str>, lines: &mut Vec<MdLine>) {
+    lines.push(code_header_line(lang).0);
     for line in body {
         let mut spans = vec![(format!("{BAR_MARKER} "), style::md_read_rule())];
         spans.extend(highlight::highlight_line(lang, line));

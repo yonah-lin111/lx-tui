@@ -30,12 +30,11 @@ use crate::ui::{style, text};
 use super::Grid;
 use super::notice;
 
+mod code_copy;
 mod tool;
 
 /// 代码块复制按钮占用的列数（`[❐]` 三列）。
 const CODE_COPY_WIDTH: u16 = 3;
-/// 代码块竖条（与 `markdown_render` 同一个直角风格符号）。
-const BAR_MARKER: &str = "│";
 
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
@@ -45,6 +44,11 @@ const USER_INDENT: u16 = 2;
 /// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
 /// 与用户消息的 `> ` 缩进同宽。
 pub(super) const STEP_GUTTER: u16 = 2;
+/// 带图标的步骤（思考 / 工具调用）头部内容起始列：`■` + 空格 + 图标 + 空格 = 4 列。
+///
+/// 图标由步骤种类决定（见 `text::agent::ICON_*`），让「哪类动作」不用读文字就能认出来。
+/// **正文块不加图标**，仍用 [`STEP_GUTTER`]（用户明确要求正文保持原样）。
+pub(super) const STEP_ICON_GUTTER: u16 = 4;
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
@@ -195,15 +199,7 @@ pub struct HistoryLayout {
     pub total_rows: usize,
 }
 
-/// 代码块头部的复制按钮：命中矩形 + 该块正文（不含围栏与语言行）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodeCopyButton {
-    pub message: usize,
-    pub step: usize,
-    pub rect: Rect,
-    /// 代码块正文（`\n` 连接，末尾不带换行）。
-    pub body: String,
-}
+pub use code_copy::CodeCopyButton;
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,7 +240,7 @@ fn content_rect(area: Rect) -> Rect {
 }
 
 /// 计算历史布局（按当前展开状态）。`area` 为整个历史区（含滚动条列）。
-pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
+pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     let content = content_rect(area);
     let width = content.width;
     let mut rows = 0usize;
@@ -304,7 +300,7 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                 ));
             } else if let AssistantStepView::Part { part, .. } = step {
                 // 代码块头部的复制按钮：按渲染行序算出每块头部的屏幕矩形。
-                collect_code_copy(
+                code_copy::collect(
                     message_index,
                     step_index,
                     &part.content,
@@ -349,69 +345,6 @@ pub(super) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         code_copy,
         messages: messages_rows,
         total_rows: rows,
-    }
-}
-
-/// 收集一个正文步骤里所有代码块的复制按钮矩形（按渲染行序换算屏幕坐标）。
-///
-/// 与 `draw_text` 用同一条渲染管线（`render_wrapped` + 步骤缩进），因此行序一致；
-/// 复制内容是**该块正文**（不含围栏与 `language:` 头部行）。
-fn collect_code_copy(
-    message: usize,
-    step: usize,
-    content: &str,
-    inner: u16,
-    area: Rect,
-    start_row: usize,
-    out: &mut Vec<CodeCopyButton>,
-) {
-    if inner == 0 {
-        return;
-    }
-    let mut code: Option<String> = None;
-    for (offset, line) in markdown_render::render_wrapped(content, inner)
-        .into_iter()
-        .enumerate()
-    {
-        // 代码块正文行：以竖条开头且不是头部（头部带复制按钮列）。
-        let body_row = line.text();
-        if let Some(column) = line.code_copy {
-            let y = area
-                .y
-                .saturating_add(u16::try_from(start_row + offset).unwrap_or(u16::MAX));
-            let x = area
-                .x
-                .saturating_add(STEP_GUTTER)
-                .saturating_add(line.indent)
-                .saturating_add(column);
-            out.push(CodeCopyButton {
-                message,
-                step,
-                rect: Rect::new(x, y, CODE_COPY_WIDTH, 1),
-                // 正文在下一行开始收集，先占位（结束时回填）。
-                body: String::new(),
-            });
-            code = Some(String::new());
-            continue;
-        }
-        if let Some(body) = code.as_mut() {
-            if body_row.starts_with(BAR_MARKER) {
-                if !body.is_empty() {
-                    body.push('\n');
-                }
-                // 去掉竖条与其后 1 个空格。
-                body.push_str(body_row.strip_prefix(BAR_MARKER).unwrap_or("").trim_start());
-                continue;
-            }
-            // 代码块结束：把收集到的正文回填到刚推入的按钮。
-            if let Some(last) = out.last_mut() {
-                last.body = body.clone();
-            }
-            code = None;
-        }
-    }
-    if let (Some(body), Some(last)) = (code, out.last_mut()) {
-        last.body = body;
     }
 }
 
@@ -743,7 +676,14 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             mark.glyph(lx.chat.loading_frame),
                             mark.style(StepKind::Thinking),
                         );
-                        let x = content.x.saturating_add(STEP_GUTTER);
+                        // 图标：品牌粉、单宽几何符号（与工具行同款「哪类动作」提示）。
+                        grid.put_char(
+                            content.x.saturating_add(STEP_GUTTER),
+                            y,
+                            text::agent::ICON_THINKING.chars().next().unwrap_or(' '),
+                            style::agent_icon(),
+                        );
+                        let x = content.x.saturating_add(STEP_ICON_GUTTER);
                         let limit = content.right();
                         if streaming {
                             grid.put_clipped(
@@ -871,20 +811,20 @@ fn thinking_duration(part: &crate::app::state::ChatPartView) -> Option<i64> {
     Some(ended.saturating_sub(started).max(0))
 }
 
-/// thinking 正文渲染行数（markdown；左缩进 [`STEP_GUTTER`] 与头部方块对齐）。
+/// thinking 正文渲染行数（markdown；左缩进 [`STEP_ICON_GUTTER`]，与头部图标后的文案对齐）。
 fn thinking_rows(content: &str, width: u16) -> usize {
-    markdown_render::render_wrapped(content, width.saturating_sub(STEP_GUTTER)).len()
+    markdown_render::render_wrapped(content, width.saturating_sub(STEP_ICON_GUTTER)).len()
 }
 
 /// 绘制展开的 thinking 正文：与正文同款 markdown 渲染，但整体压暗（`style::muted`），
-/// 所有行缩进 [`STEP_GUTTER`] 列与头部方块对齐。
+/// 所有行缩进 [`STEP_ICON_GUTTER`] 列，与头部图标之后的 `Thinking` 文案对齐。
 fn draw_thinking(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, content: &str) {
-    let inner = rect.width.saturating_sub(STEP_GUTTER);
+    let inner = rect.width.saturating_sub(STEP_ICON_GUTTER);
     for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             let mut cx = rect
                 .x
-                .saturating_add(STEP_GUTTER)
+                .saturating_add(STEP_ICON_GUTTER)
                 .saturating_add(line.indent);
             for (value, span_style) in &line.spans {
                 let cell_style = span_style.patch(style::muted());
