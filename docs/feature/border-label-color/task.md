@@ -36,10 +36,46 @@
 - [x] `docs/feature/workspace-agent-status/design.md`：`agent:` 值描述
 
 ### 5. 验证
-- [x] `cargo test --lib`（2513 passed）
+- [x] `cargo test --lib`（2517 passed）
 - [x] `cargo fmt`
 - [x] `cargo clippy --all-targets -- -D warnings`
 - [x] `cargo test`（全量）
+
+## 第二轮：前缀与页名也不再随焦点变化
+
+用户追加要求：prompt 容器聚焦时 git 信息与 `ws` 的**前缀**不要高亮加粗；prompt 左上角 title 的**页名**聚焦不要高亮；并把 main content 的 `agent:` / `ws:` 前缀调整为与 prompt git 前缀一致。
+
+### 1. 边界对齐（Grill Me 阶段）
+- [x] 质问 1：前缀去掉加粗、保留青色 → 采纳推荐（`Cyan + DIM` + 显式去 BOLD）
+- [x] 质问 2：prompt 底边框与窗格顶边前缀统一 → 采纳推荐
+- [x] 质问 3：页名去掉继承的粗体、保留默认灰 + dim → 采纳推荐
+- [x] 质问 4：需求 2 与需求 1 合并为同一处改动（五处前缀共用一个 token）→ 采纳推荐
+- [x] 质问 5：取方案甲（两状态都是淡青，聚焦不变亮变粗）→ 采纳推荐
+- [x] 质问 6：`muted_on_border()` 补 `remove_modifier(BOLD)`，一处修好全部 5 个调用点 → 采纳推荐
+
+### 2. 复现测试（先红）
+- [x] `ui::tests::prompt_bottom_prefix_ignores_focus`（新增）：聚焦时 `b:` 前缀 `(Cyan, BOLD | DIM)` → 期望 `(Cyan, DIM)`
+- [x] `ui::tests::prompt_page_name_ignores_focus`（新增）：聚焦时页名 `(Reset, BOLD | DIM)` → 期望 `(Reset, DIM)`
+- [x] `lx_pane_ws_value_ignores_focus` / `pane_agent_value_ignores_focus`（扩展前缀断言）：`(Cyan, BOLD)` → 期望 `(Cyan, DIM)`
+- [x] `prompt_bottom_values_stay_default_while_focused`（扩展前缀断言）：同上
+- [x] 五条测试先跑出预期失败，确认精确复现
+
+### 3. 实现
+- [x] `src/ui/style.rs`：新增 `border_label_prefix()`（`Cyan + DIM` + 显式去 BOLD）
+- [x] `src/ui/style.rs`：`muted_on_border()` 补 `.remove_modifier(BOLD)`
+- [x] `src/ui/panes.rs`：`ws:` / `agent:` 前缀改用新 token
+- [x] `src/ui/prompt_frame.rs`：`b:` / `wt:` / `ws:` 前缀改用新 token
+
+### 4. 测试与文档
+- [x] `ui::style::tests::border_label_prefix_is_soft_cyan_without_bold`（新增）
+- [x] `ui::style::tests::muted_on_border_strips_inherited_bold`（新增）
+- [x] 更新 2 处断言旧前缀样式的既有测试
+- [x] `docs/standards/tui-design-requirements.md`：窗格 `ws:`、`agent:`、prompt `ws:`、`b:`/`wt:`、页名共 5 处描述
+- [x] `docs/feature/workspace-agent-status/design.md`：`agent:` 前缀描述
+
+### 5. 验证
+- [x] `cargo test --lib`（2517 passed）
+- [x] `cargo fmt` / `cargo clippy --all-targets -- -D warnings` / `cargo test` 全绿
 
 ## 完成记录
 

@@ -96,7 +96,10 @@ fn render_pane_agent_label(frame: &mut Frame<'_>, rect: Rect, title: &str, pane:
     };
     let spans = [
         (" ".to_string(), style::muted()),
-        (text::PANE_AGENT_PREFIX.to_string(), style::accent()),
+        (
+            text::PANE_AGENT_PREFIX.to_string(),
+            style::border_label_prefix(),
+        ),
         (
             text::agent_label(agent.kind).to_string(),
             style::border_label_value(),
@@ -204,7 +207,7 @@ fn render_pane_workspace_label(
     };
     let spans = [
         (" ".to_string(), style::muted()),
-        (prefix.to_string(), style::accent()),
+        (prefix.to_string(), style::border_label_prefix()),
         (value, style::border_label_value()),
     ];
     render_border_right_label(frame, rect, title, &spans);

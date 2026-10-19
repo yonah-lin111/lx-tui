@@ -60,8 +60,36 @@ pub fn border_label_value() -> Style {
 ## 4. 不变量
 
 1. 值的样式与 `focused` / `state.prompt_focused` 完全无关。
-2. 前缀样式仍是 `accent()`，未做任何改动。
+2. 前缀样式统一为 `border_label_prefix()`（`Cyan + DIM`，显式去 BOLD）。
 3. 文本内容、宽度计算、截断与隐藏规则不变：本次只换样式，不改布局，因此 `truncate_to_width` / `ellipsize` / 可见宽度判定都不受影响。
+
+## 4.1 第二轮：前缀与页名也不再随焦点变化
+
+第一轮只处理了四条**值**，前缀仍是 `accent()`；实测（`TestBackend` 单元格样式）暴露了同一类问题的其余两处：
+
+| 单元格 | 第一轮后失焦 | 第一轮后聚焦 | 期望 |
+| --- | --- | --- | --- |
+| prompt `b:` 前缀 | `Cyan + BOLD + DIM` | `Cyan + BOLD` | `Cyan + DIM` |
+| 窗格 `ws:` / `agent:` 前缀 | `Cyan + BOLD` | `Cyan + BOLD` | `Cyan + DIM` |
+| prompt 页名 `· Page 1` | `Reset + DIM` | `Reset + BOLD + DIM` | `Reset + DIM` |
+
+根因仍是"样式只写部分字段 → 其余从边框继承"：前缀用 `accent()` 写死了 BOLD，页名用 `muted_on_border()` 没去 BOLD 而继承了聚焦边框的粗体。
+
+本轮决策（grill-me 逐条确认）：
+
+| 决策 | 口径 |
+| --- | --- |
+| 前缀 | 五处（prompt `b:`/`wt:`/`ws:`、窗格 `ws:`/`agent:`）共用新 token `border_label_prefix()` = `Cyan + DIM` + 显式去 BOLD。 |
+| 页名 | `muted_on_border()` 增加 `.remove_modifier(BOLD)`，一处修好全部 5 个调用点（页名、`· ` 重命名分隔符、引用菜单/搜索底注、`[UI]` 查看器底注）。 |
+| 亮度 | 取方案甲：前缀两个状态都是这档淡青，聚焦不再变亮变粗。 |
+
+### 4.2 第二轮实现要点
+
+- `style::border_label_prefix()`：前缀统一 token；与 `border_title()` 同色系（都是 `Cyan + DIM`、都不加粗）。
+- `style::muted_on_border()`：补 `.remove_modifier(BOLD)`。该 token 的设计意图本就是"叠加在强调色边框上的灰字不被染色"，漏了 BOLD 一项；5 个调用点全画在 `accent()` 边框上，同病同治。
+- `ui/panes.rs`、`ui/prompt_frame.rs`：五处前缀从 `style::accent()` 改为 `style::border_label_prefix()`。
+- 页名本身不改绘制代码，由 token 修复即可生效。
+
 
 ## 5. 验证
 
@@ -74,3 +102,12 @@ pub fn border_label_value() -> Style {
 5. `style::border_label_value()` 的 token 单测，锁定"显式 Reset 前景 + DIM + 无 BOLD"。
 
 原有断言旧行为的 3 个测试同步更新断言，不降低覆盖面。
+
+### 5.1 第二轮新增/更新
+
+- 新增 `ui::tests::prompt_bottom_prefix_ignores_focus`：prompt 底边框 `b:` 前缀在失焦/聚焦都必须是 `Cyan + DIM` 且逐字段一致。
+- 新增 `ui::tests::prompt_page_name_ignores_focus`：页名在失焦/聚焦都必须是 `Reset + DIM`（不带 BOLD）。
+- 扩展 `lx_pane_ws_value_ignores_focus` / `pane_agent_value_ignores_focus`：追加前缀断言，并断言聚焦/失焦前缀样式一致。
+- 新增 `ui::style::tests::border_label_prefix_is_soft_cyan_without_bold`、`muted_on_border_strips_inherited_bold`：token 级断言"叠加到 `accent()` 单元格后不带 BOLD"。
+- 更新既有 2 处前缀断言（`prompt_title_moves_path_name_to_bottom_right`、`pane_border_shows_agent_label_separated_from_toggle_button`）。
+

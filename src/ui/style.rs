@@ -34,12 +34,18 @@ pub fn border(focused: bool) -> Style {
 
 /// 叠加在强调色边框上的灰字（显式前景 + dim）：临时提示词标题等。
 ///
+/// 叠加在强调色边框上的灰字（页重命名 `· ` 分隔符、顶边框页名、浮层底注等）。
+///
 /// `set_stringn` 只覆盖样式里显式给出的字段，`muted()` 不设前景，
 /// 会把底层（聚焦态青色）边框前景带出来；这里显式重置前景。
+///
+/// 同样必须显式移除 BOLD：该文字叠加在聚焦态的 `accent()` 边框上，
+/// 否则会继承边框的粗体，聚焦时无故变粗一档。
 pub fn muted_on_border() -> Style {
     Style::default()
         .fg(Color::Reset)
         .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
 }
 
 /// 面板边框标题：淡蓝色（Cyan + dim、不加粗），与分支状态同色系。
@@ -99,6 +105,20 @@ pub fn status_dot_draft() -> Style {
 /// 浮层标题：正文加粗。
 pub fn strong() -> Style {
     Style::default().add_modifier(Modifier::BOLD)
+}
+
+/// 边框上的标签前缀：窗格 `ws:`/`agent:`、prompt 底边框 `b:`/`wt:`/`ws:` 的前缀。
+///
+/// 淡青（Cyan + dim、**不加粗**），与 [`border_title`] 同色系，且失焦/聚焦完全一致：
+/// 焦点只由边框框线颜色表达，前缀不应跟着变亮变粗。
+///
+/// BOLD 必须显式移除：这些前缀叠加写入边框单元格，
+/// `Cell::set_style` 只覆盖样式里给出的字段，仅用 [`accent`] 会把边框的粗体一并带出来。
+pub fn border_label_prefix() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::DIM)
+        .remove_modifier(Modifier::BOLD)
 }
 
 /// 边框上的标签值：窗格 `ws:`/`agent:` 的值、prompt 底边框 `b:`/`wt:`/`ws:` 的值。

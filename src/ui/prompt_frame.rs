@@ -350,7 +350,7 @@ fn render_workspace_label(
     if prefix_width.saturating_add(name_width) <= available {
         let start = right - (prefix_width + name_width) as u16;
         let buf = frame.buffer_mut();
-        write_span(buf, start, row, prefix, style::accent());
+        write_span(buf, start, row, prefix, style::border_label_prefix());
         write_span(
             buf,
             start + prefix_width as u16,
@@ -366,7 +366,7 @@ fn render_workspace_label(
     let truncated = text::truncate_to_width(name, available - prefix_width);
     let start = right - (prefix_width + truncated.width()) as u16;
     let buf = frame.buffer_mut();
-    write_span(buf, start, row, prefix, style::accent());
+    write_span(buf, start, row, prefix, style::border_label_prefix());
     write_span(
         buf,
         start + prefix_width as u16,
@@ -394,7 +394,10 @@ fn branch_status_spans(state: &AppState, available: usize) -> Vec<(String, Style
     }
     let mut spans = vec![(" ".to_string(), style::muted())];
     if let Some(branch) = branch {
-        spans.push((text::PROMPT_BRANCH_PREFIX.to_string(), style::accent()));
+        spans.push((
+            text::PROMPT_BRANCH_PREFIX.to_string(),
+            style::border_label_prefix(),
+        ));
         spans.push((branch.to_string(), style::border_label_value()));
     }
     if linked {
@@ -403,7 +406,7 @@ fn branch_status_spans(state: &AppState, available: usize) -> Vec<(String, Style
         let prefix = format!("{separator}{}", text::PROMPT_WORKTREE_PREFIX);
         let used = spans_width(&spans).saturating_add(prefix.len());
         if used < available {
-            spans.push((prefix, style::accent()));
+            spans.push((prefix, style::border_label_prefix()));
             spans.push((
                 text::ellipsize(worktree, available - used),
                 style::border_label_value(),

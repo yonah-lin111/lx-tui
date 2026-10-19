@@ -149,7 +149,7 @@ pub struct AppState {
     - 窗格归属：固定右对齐 `[tab N]`（N 为标签位置，1 基），宽度不足先截断 Agent 名称，归属标签不随宽度缩小隐藏；
     - 鼠标悬停行：使用终端原生高亮 `style::selection` 整行背景（不采用聚焦整行底色）。
   - 溢出时右侧 1 列绘制滚动条（复用 `widgets::scrollbar`）。
-  - 窗格顶边框：探测到 Agent 的终端窗格在 `[lx]`/`[>_]` 按钮左侧间隔 1 列绘制 ` agent:xxx`（前缀 accent、值恒为终端默认灰：显式默认前景 + dim，不随窗格焦点变色）；空间不足或会覆盖左侧标题时不绘制。
+  - 窗格顶边框：探测到 Agent 的终端窗格在 `[lx]`/`[>_]` 按钮左侧间隔 1 列绘制 ` agent:xxx`（前缀淡青 Cyan + dim、不加粗；值恒为终端默认灰：显式默认前景 + dim，两者都不随窗格焦点变色，与 prompt 底边框同款）；空间不足或会覆盖左侧标题时不绘制。
 - `src/ui/text.rs`：收敛全部 Agent 状态与空状态文案（`AGENTS_EMPTY = "no agents running"`、`AGENT_SELECTED_MARKER = "▸"`、`PANE_AGENT_PREFIX = "agent:"`）。
 
 ## 4. 风险与边界

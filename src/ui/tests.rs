@@ -1558,13 +1558,16 @@ fn prompt_title_moves_path_name_to_bottom_right() {
         "ws 与折叠按钮之间有且仅有 1 列空档: {bottom}"
     );
 
-    // 高亮与 `b:` 一致：前缀强调色、值恒为默认灰（不随面板焦点变青）。
+    // 前缀淡青、值恒为默认灰（不随面板焦点变色或变粗）。
     let buffer = render_buffer(&state);
     let row = view.prompt.bottom() - 1;
     let prefix = &buffer[(view.prompt.x + label_start as u16, row)];
     assert_eq!(prefix.symbol(), "w");
-    assert_eq!(prefix.fg, ratatui::style::Color::Cyan);
-    assert!(prefix.modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(
+        (prefix.fg, prefix.modifier),
+        (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+        "前缀恒为淡青、不带 BOLD"
+    );
     let value = &buffer[(
         view.prompt.x + label_start as u16 + text::PROMPT_WORKSPACE_PREFIX.len() as u16,
         row,
@@ -2071,6 +2074,12 @@ fn lx_pane_ws_value_ignores_focus() {
         "顶边框显示 ws:末两段: {}",
         lines[usize::from(rect.y)]
     );
+    let focused_prefix = border_label_cell(&buffer, &lines, rect.y, "ws:", 0);
+    assert_eq!(
+        focused_prefix,
+        (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+        "窗格 ws: 前缀恒为淡青、不带 BOLD（与 prompt 底边框同款）"
+    );
     let focused_value = border_label_cell(&buffer, &lines, rect.y, "ws:", 3);
     assert_eq!(
         focused_value,
@@ -2078,10 +2087,15 @@ fn lx_pane_ws_value_ignores_focus() {
         "聚焦窗格 ws: 值保持默认灰、不带 BOLD"
     );
 
-    // 失焦：值与聚焦时逐字段相同（焦点不再影响取色）。
+    // 失焦：前缀与值都与聚焦时逐字段相同（焦点不再影响取色）。
     state.prompt_focused = true;
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
+    assert_eq!(
+        border_label_cell(&buffer, &lines, rect.y, "ws:", 0),
+        focused_prefix,
+        "聚焦/失焦前缀样式一致"
+    );
     let unfocused_value = border_label_cell(&buffer, &lines, rect.y, "ws:", 3);
     assert_eq!(focused_value, unfocused_value, "聚焦/失焦取值一致");
 }
@@ -2113,6 +2127,12 @@ fn pane_agent_value_ignores_focus() {
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
     let value_offset = text::PANE_AGENT_PREFIX.len();
+    let focused_prefix = border_label_cell(&buffer, &lines, rect.y, text::PANE_AGENT_PREFIX, 0);
+    assert_eq!(
+        focused_prefix,
+        (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+        "窗格 agent: 前缀恒为淡青、不带 BOLD（与 prompt 底边框同款）"
+    );
     let focused_value = border_label_cell(
         &buffer,
         &lines,
@@ -2129,6 +2149,11 @@ fn pane_agent_value_ignores_focus() {
     state.prompt_focused = true;
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
+    assert_eq!(
+        border_label_cell(&buffer, &lines, rect.y, text::PANE_AGENT_PREFIX, 0),
+        focused_prefix,
+        "聚焦/失焦前缀样式一致"
+    );
     let unfocused_value = border_label_cell(
         &buffer,
         &lines,
@@ -2162,22 +2187,76 @@ fn prompt_bottom_values_stay_default_while_focused() {
     assert!(bottom.contains("wt:work"), "{bottom}");
 
     let buffer = render_buffer(&state);
-    // `b:` 前缀仍是强调色。
-    let prefix = border_label_cell(&buffer, &lines, row, "b:dev", 0);
-    assert_eq!(prefix.0, ratatui::style::Color::Cyan, "b: 前缀保持强调色");
-    // 分支值、工作区名、ws 路径名的值都必须是默认灰 + dim、不带 BOLD。
-    for (label, offset) in [
+    // 前缀为淡青（Cyan + dim、不加粗），与失焦态一致：聚焦不再变亮变粗。
+    for (label, prefix_len) in [
         ("b:dev", text::PROMPT_BRANCH_PREFIX.len()),
         ("wt:work", text::PROMPT_WORKTREE_PREFIX.len()),
         ("ws:work", text::PROMPT_WORKSPACE_PREFIX.len()),
     ] {
-        let value = border_label_cell(&buffer, &lines, row, label, offset);
+        let prefix = border_label_cell(&buffer, &lines, row, label, 0);
+        assert_eq!(
+            prefix,
+            (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+            "{label} 前缀恒为淡青、不带 BOLD"
+        );
+        // 分支值、工作区名、ws 路径名的值都必须是默认灰 + dim、不带 BOLD。
+        let value = border_label_cell(&buffer, &lines, row, label, prefix_len);
         assert_eq!(
             value,
             (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
             "{label} 的值应保持默认灰、不带 BOLD"
         );
     }
+}
+
+/// prompt 底边框前缀：失焦与聚焦都必须是 `Cyan + DIM`（无 BOLD），聚焦不再变亮变粗。
+#[test]
+fn prompt_bottom_prefix_ignores_focus() {
+    let mut state = AppState::demo();
+    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    state.prompt_width = 56;
+    let view = view_for(&state);
+    let row = view.prompt.bottom() - 1;
+    let mut styles = Vec::new();
+    for focused in [false, true] {
+        state.prompt_focused = focused;
+        let lines = render_lines(&state);
+        let buffer = render_buffer(&state);
+        let prefix = border_label_cell(&buffer, &lines, row, "b:main", 0);
+        assert_eq!(
+            prefix,
+            (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+            "prompt_focused={focused} 时 b: 前缀应恒为淡青、不带 BOLD"
+        );
+        styles.push(prefix);
+    }
+    assert_eq!(styles[0], styles[1], "聚焦/失焦前缀样式一致");
+}
+
+/// prompt 顶边框页名：失焦 `Reset + DIM`，聚焦不再被边框的 BOLD 染色。
+#[test]
+fn prompt_page_name_ignores_focus() {
+    let mut state = AppState::demo();
+    state.prompt_width = 56;
+    let view = view_for(&state);
+    let mut styles = Vec::new();
+    for focused in [false, true] {
+        state.prompt_focused = focused;
+        let lines = render_lines(&state);
+        let buffer = render_buffer(&state);
+        let top = prompt_line(&lines, &view, view.prompt.y);
+        let byte = top.find("· ").expect("页名前缀已渲染");
+        let col = u16::try_from(top[..byte].chars().count()).expect("col fits");
+        // `· ` 之后的第一个字符是页名首字符。
+        let cell = &buffer[(view.prompt.x + col + 2, view.prompt.y)];
+        assert_eq!(
+            (cell.fg, cell.modifier),
+            (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
+            "prompt_focused={focused} 时页名应恒为默认灰 + dim、不带 BOLD"
+        );
+        styles.push((cell.fg, cell.modifier));
+    }
+    assert_eq!(styles[0], styles[1], "聚焦/失焦页名样式一致");
 }
 
 #[test]
@@ -2285,11 +2364,10 @@ fn pane_border_shows_agent_label_separated_from_toggle_button() {
     let buffer = render_buffer(&state);
     let prefix = &buffer[(label_area.x + 1, label_area.y)];
     assert_eq!(
-        prefix.fg,
-        ratatui::style::Color::Cyan,
-        "agent prefix uses accent color like the prompt ws: label"
+        (prefix.fg, prefix.modifier),
+        (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+        "agent prefix stays soft cyan (no BOLD), same as the prompt ws: label"
     );
-    assert_eq!(prefix.modifier, ratatui::style::Modifier::BOLD);
     let name = &buffer[(name_col, label_area.y)];
     assert_eq!(
         (name.fg, name.modifier),
