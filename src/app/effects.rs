@@ -154,6 +154,17 @@ pub enum Effect {
     },
     /// 读取当前工作区会话列表（`/resume` 首页）。
     ListChatSessions { pane: crate::layout::PaneId },
+    /// 列出本会话仍在运行的后台进程（`/stop` 一级列表）。
+    ///
+    /// 进程句柄不进 `AppState`（`app/` 不持有进程），因此与 `/resume` 同一模式：
+    /// 这里只发请求，由事件层从运行实例取快照后回投。
+    ListSessionProcesses { pane: crate::layout::PaneId },
+    /// 停止指定会话进程（`/stop` 二级采纳）。
+    StopSessionProcess {
+        pane: crate::layout::PaneId,
+        /// 模型见过的进程会话 ID。
+        process_session_id: u64,
+    },
     /// 加载单个会话及有序消息（恢复旧会话）。
     LoadChatSession {
         pane: crate::layout::PaneId,

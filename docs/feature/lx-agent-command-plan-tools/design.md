@@ -506,12 +506,62 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 - command/stdin/output 可能含用户数据；日志仅记录稳定 ID、状态和错误码，不重复记录原始参数与输出。
 - codegraph/codebase memory 是结构证据，不替代编译、测试和手工外观验收。
 
-## 14. 与 codex harness 的对照
+## 14. 后台进程的主动清理：`/stop`
+
+### 14.1 问题
+
+本 feature 的 D9 停止语义只覆盖**本轮**：Esc 停止清「本轮新建 ∪ 当前活动交互」，而
+清理整个会话只在「切会话 / `/new` / 关窗格 / 退出」时发生。于是用户留在会话里时，
+自己起的服务（`npm run dev`、`cargo watch`…）没有任何办法停掉；一旦撞到
+`max_running` 上限，也只会收到 `resource_limit` 错误而没有出路。
+
+codex 的对应能力是显式的 `/stop` → `Op::CleanBackgroundTerminals`（`SlashCommand::Stop`
+的描述就是 "stop all background terminals"）。它**不**随 `/interrupt` 或 Esc 触发——
+`Op::Interrupt` 的注释明确写着 "Abort current task **without terminating** background
+terminal processes"。也就是说「停生成」与「停后台进程」是两件事，各自有独立入口。
+
+### 14.2 设计
+
+两级面板，与 `/model` 完全同构（同一套 `PanelWindow`、同一套键盘语义）：
+
+```text
+╭ Background processes ────────────────────────────────────────────╮
+│  npm run dev         /workspace/web              [running 1m 30s]│
+│  cargo watch -x test /workspace                  [running 2m 05s]│
+╰ [select ↵] [back esc] ───────────────────────────────────────────╯
+```
+
+Enter 进入二级（回显目标命令，避免停错）：
+
+```text
+╭ Stop process ────────────────────────────────────────────────────╮
+│  stop this process npm run dev                                   │
+╰ [select ↵] [back esc] ───────────────────────────────────────────╯
+```
+
+- **一级**只列**仍在运行**的进程：已退出的没有可停的东西。
+- **二级**保留一个确认步骤：停掉正在跑的服务不可撤销，值得多按一次 Enter。
+- Enter 采纳后**留在面板里**并提示 `Stopped 1 background process`——常常要连停多个。
+- Esc 在二级返回一级并恢复原高亮；在一级关闭面板。
+
+补充入口（对齐 opencode 的「`↓` 向下层派发」）：**空草稿按 `↓`** 直接打开面板。
+实现上沿用 lx 已有的「历史先接管、否则继续」结构——`↓` 在历史/光标能消费时不动，
+消费不了才向下派发，因此有草稿时 `↓` 仍是光标移动，不会突然弹面板。
+
+### 14.3 刷新时机（踩过的坑）
+
+停止是**异步**的（真实退出码只能由 `wait` 得到）。第一版在采纳后同步重拉列表，结果
+读到的是**停止前**的快照：进程还在列表里，看起来像「停不掉」。实测复现后改为由
+**进程终态事件**驱动刷新（`process_events::refresh_stop_panels`）：进程真正退出时把
+该条目从任何打开着的 `/stop` 面板里移除并钳制高亮，同时把这次变更计入 `changed`
+让事件循环置脏重绘。
+
+## 15. 与 codex harness 的对照
 
 以 `/Users/yonah/projects/agent/codex-main` 的 `codex-rs` 为参照（`core/src/tools/handlers/unified_exec*`、
 `core/src/unified_exec/*`、`tui/src/exec_cell/*`），逐项核对本 feature 的工具实现。
 
-### 14.1 已对齐的语义
+### 15.1 已对齐的语义
 
 | 维度 | codex | lx（本 feature） |
 | --- | --- | --- |
@@ -529,7 +579,7 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 | 墙钟时间 | `wall_time_seconds`（实际等了多久） | 同名，内部存整数毫秒、JSON 输出秒 |
 | 输出预算 | `max_output_tokens`，超出截断并显式标记 | 同名，另有 `MAX_MODEL_OUTPUT_BYTES` 硬字节上限 |
 
-### 14.2 有意不跟随的部分
+### 15.2 有意不跟随的部分
 
 - **沙箱与审批**：codex 走 `SandboxManager` + approval（`sandbox_permissions` / `justification` /
   `prefix_rule`）。lx 本阶段明确不做沙箱、不逐次弹窗（D1），因此 schema 里不出现这些字段——
@@ -550,7 +600,7 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 - **transcript 全屏**：codex 用 `ctrl+t` 打开 transcript overlay 看完整输出；lx 选择**原位展开**
   （D7），滚动仍由外层历史统一管理，不新增日志浮层。
 
-### 14.3 渲染层的口径差异（对齐的部分）
+### 15.3 渲染层的口径差异（对齐的部分）
 
 - codex `compact_command_lines`：`• Running <cmd>` 头 + `  └ ` / `    ` 前缀的输出块，
   只留最近 `DETAIL_PREVIEW_LINES = 3` 行，超出显示 `… +N lines (ctrl+t to view transcript)`。
@@ -559,7 +609,7 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 - codex 行首是单色 `•`；lx 沿用既有 `■/□` 呼吸方块（运行中呼吸、终态静止），并把状态文字
   留在右上角而不是塞进动词。
 
-## 15. 审核门槛与实施结论
+## 16. 审核门槛与实施结论
 
 D1–D10 已确认并全部落地。实施验证：
 

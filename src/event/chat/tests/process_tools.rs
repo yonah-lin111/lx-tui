@@ -484,3 +484,111 @@ async fn runtimes_survive_a_completed_turn() {
     );
     tools.processes().shutdown().await;
 }
+
+/// `/stop` 端到端：列出真实后台进程，再按会话 ID 停掉它。
+///
+/// 这是「缺失的主动清理入口」的核心验证：此前 lx 只有在切会话/退出时才会清理，
+/// 用户留在会话里时没有任何办法停掉自己起的服务。
+#[tokio::test]
+async fn stop_panel_lists_and_stops_a_real_background_process() {
+    let fixture = Fixture::new("stop-panel");
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
+    let mut streams = ChatStreams::default();
+    let tools = agent_tools(&fixture, &mut streams, &key);
+    let exec_args = serde_json::json!({
+        "cmd": "sleep 30",
+        "yield_time_ms": 100,
+        "shell": "/bin/sh"
+    })
+    .to_string();
+    let transport = FakeTransport::new(
+        vec![
+            tool_calls(&[("call_bg", "exec_command", &exec_args, 0)], None),
+            final_response("started", None),
+        ],
+        StopReason::Complete,
+    );
+    drive_processes(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        tools.clone(),
+    )
+    .await;
+    assert_eq!(tools.processes().running_count(), 1, "进程在跑");
+
+    // 打开 `/stop`：面板骨架 + 列表效应。
+    assert!(crate::app::update::open_stop_picker(&mut state, key.pane));
+    assert!(crate::event::chat::apply_process_effects(
+        &mut state,
+        &mut streams
+    ));
+    let panel = match state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.slash.clone())
+    {
+        Some(crate::app::state::SlashPanel::Stop(picker)) => picker,
+        other => panic!("期望 /stop 面板，实际 {other:?}"),
+    };
+    assert_eq!(panel.processes.len(), 1, "列出真实后台进程");
+    assert_eq!(panel.processes[0].command, "sleep 30");
+    let process_session_id = panel.processes[0].session_id;
+
+    // 一级 → 二级 → 采纳：停止该进程。
+    assert!(crate::app::update::apply_slash_enter(&mut state, key.pane));
+    assert!(crate::app::update::apply_slash_enter(&mut state, key.pane));
+    assert!(crate::event::chat::apply_process_effects(
+        &mut state,
+        &mut streams
+    ));
+    // 停止是异步的：等到进程真的不在运行。
+    for _ in 0..100 {
+        if tools.processes().running_count() == 0 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        tools.processes().running_count(),
+        0,
+        "进程 {process_session_id} 已被 /stop 停掉"
+    );
+    // 进程终态事件驱动面板刷新（実生产路径：运行实例在进程退出时发
+    // `ProcessUiEvent::Exited`）。这里直接投递同一个事件验证面板响应。
+    let snapshot = tools
+        .processes()
+        .snapshot(process_session_id)
+        .expect("snapshot");
+    // 面板列表被移除一项 → 视为一次变化（事件层据此置脏重绘）。
+    assert!(
+        crate::event::chat::handle_process_event(
+            &mut state,
+            &mut streams,
+            &persistence,
+            crate::chat::process::ProcessUiEvent::Exited {
+                session_id: process_session_id,
+                origin_call_id: snapshot.origin_call_id.clone(),
+                state: snapshot.state.clone(),
+                exit_code: snapshot.exit_code,
+            },
+        ),
+        "终态事件应刷新打开着的 /stop 面板"
+    );
+    // 面板仍在（便于连停多个），并已刷新为空列表。
+    let panel = match state
+        .pane_anywhere(key.pane)
+        .and_then(|target| target.lx.slash.clone())
+    {
+        Some(crate::app::state::SlashPanel::Stop(picker)) => picker,
+        other => panic!("停止后仍应留在面板里，实际 {other:?}"),
+    };
+    assert!(
+        panel.processes.is_empty(),
+        "刷新后不再列出已停止的进程：{:?}",
+        panel.processes
+    );
+    tools.processes().shutdown().await;
+}

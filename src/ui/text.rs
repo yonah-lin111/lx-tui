@@ -599,6 +599,28 @@ pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [edit ⇧↵] [close esc
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
+
+/// `/stop` 命令描述：说清它停的是**后台进程**，而不是「停止生成」。
+pub const LX_STOP_COMMAND_DESC: &str = "Stop background processes in this session";
+/// `/stop` 一级面板标题（进程列表）与空态。
+pub const LX_STOP_PANEL_TITLE: &str = "Background processes";
+pub const LX_STOP_EMPTY: &str = "no background processes";
+/// `/stop` 二级面板标题（动作列表）。
+pub const LX_STOP_ACTION_PANEL_TITLE: &str = "Stop process";
+/// `/stop` 二级面板的唯一动作。
+pub const LX_STOP_ACTION_KILL: &str = "stop this process";
+/// `/stop` 两级面板底边提示：一级进二级、二级执行并关闭。
+pub const LX_STOP_PANEL_FOOTER: &str = "[select ↵] [back esc]";
+/// `/stop` 执行后的聊天栏提示。
+pub fn lx_stop_done(count: usize) -> String {
+    if count == 1 {
+        "Stopped 1 background process".to_string()
+    } else {
+        format!("Stopped {count} background processes")
+    }
+}
+/// `/stop` 执行失败提示（进程已退出等，不影响其它进程）。
+pub const LX_STOP_FAILED: &str = "Failed to stop the process";
 /// `/resume` 会话编辑模态：标题、删除确认提示与校验错误。
 pub const RESUME_EDIT_MODAL_TITLE: &str = "Session";
 pub const RESUME_EDIT_CONFIRM_HINT: &str = "Press ^d again to confirm";

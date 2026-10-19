@@ -202,6 +202,19 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                                 super::super::state::PanelWindow::new(picker.window.active);
                         }
                     }
+                    // `/stop` 二级：Esc 返回进程列表（与 `/model` 的 variant → 模型同款）。
+                    super::super::state::SlashPanel::Stop(picker)
+                        if matches!(
+                            picker.stage,
+                            super::super::state::StopPickerStage::Actions { .. }
+                        ) =>
+                    {
+                        if let Some(panel) = lx.slash.as_mut()
+                            && let super::super::state::SlashPanel::Stop(picker) = panel
+                        {
+                            picker.back_to_processes();
+                        }
+                    }
                     _ => lx.slash = None,
                 }
                 return;
@@ -250,6 +263,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Left => lx.move_left(),
         LxInput::Right => lx.move_right(),
         LxInput::Up => lx.move_up(),
+        // ↓ 落空：历史不接管、草稿为空、光标在末尾时打开后台进程面板（对齐 opencode 的 `run() == false`
+        // 向下层派发）。有草稿时↓ 仍是光标/历史移动，不会突然弹面板。
+        LxInput::Down if lx.input.trim().is_empty() && lx.cursor == lx.input.len() => {
+            super::chat::open_stop_picker(state, pane_id);
+        }
         LxInput::Down => lx.move_down(),
         LxInput::Home | LxInput::LineStart => lx.home(),
         LxInput::End | LxInput::LineEnd => lx.end(),

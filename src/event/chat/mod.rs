@@ -269,6 +269,135 @@ fn reap_stale_streams(state: &AppState, streams: &mut ChatStreams) {
     }
 }
 
+/// 执行进程类效应（`/stop` 的列表与停止）。
+///
+/// 与 `pump_chat_streams` 同一处置方式：从 `state.effects` 取出自己关心的效应执行，
+/// 其余的留给持久化泵/网络泵。进程句柄只在事件层的运行实例里，所以这两件事只能
+/// 在这里做——`app/` 与 `db/` 都碰不到进程。
+///
+/// 返回是否产生状态变化。
+pub fn apply_process_effects(state: &mut AppState, streams: &mut ChatStreams) -> bool {
+    let effects: Vec<Effect> = state
+        .effects
+        .iter()
+        .filter(|effect| {
+            matches!(
+                effect,
+                Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. }
+            )
+        })
+        .cloned()
+        .collect();
+    if effects.is_empty() {
+        return false;
+    }
+    state.effects.retain(|effect| {
+        !matches!(
+            effect,
+            Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. }
+        )
+    });
+    let mut changed = false;
+    for effect in effects {
+        match effect {
+            Effect::ListSessionProcesses { pane } => {
+                changed |= list_session_processes(state, streams, pane);
+            }
+            Effect::StopSessionProcess {
+                pane,
+                process_session_id,
+            } => {
+                stop_session_process(state, streams, pane, process_session_id);
+                changed = true;
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// 列出某窗格所绑会话仍在运行的进程，回投给 `/stop` 面板。
+///
+/// 只列 `running`/`starting` 的：已退出的进程没有可停的东西，列出来只会让用户
+/// 以为还有服务在跑。窗格没有绑定会话（空白草稿）时回投空列表。
+fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: PaneId) -> bool {
+    let Some(session_id) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone())
+    else {
+        return update::on_process_listed(state, pane, Vec::new());
+    };
+    let entries = streams
+        .runtimes
+        .get(&session_id)
+        .map(|runtime| runtime.manager().snapshots())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|snapshot| !snapshot.state.is_terminal())
+        .map(|snapshot| crate::app::state::ProcessEntry {
+            session_id: snapshot.session_id,
+            command: snapshot.command,
+            cwd: snapshot.cwd,
+            tty: snapshot.tty,
+            running: true,
+            started_at_ms: snapshot.started_at_ms,
+        })
+        .collect();
+    update::on_process_listed(state, pane, entries)
+}
+
+/// 停止 `/stop` 选中的进程，并在聊天栏给出结果反馈。
+///
+/// 停止是异步的（真实退出码只能由 `wait` 得到）；这里不阻塞事件循环。
+fn stop_session_process(
+    state: &mut AppState,
+    streams: &ChatStreams,
+    pane: PaneId,
+    process_session_id: u64,
+) {
+    let session_id = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.chat.session_id.clone());
+    let manager = session_id
+        .as_deref()
+        .and_then(|session_id| streams.runtimes.get(session_id))
+        .map(|runtime| runtime.manager().clone());
+    let Some(manager) = manager else {
+        // 会话运行实例已经不在（刚切会话/刚退出）：窗格里还挂着面板，
+        // 不能静默失败，否则用户会以为点了没生效。
+        update::show_lx_hint(
+            state,
+            pane,
+            crate::app::state::InputHintLevel::Error,
+            crate::ui::text::LX_STOP_FAILED,
+        );
+        return;
+    };
+    tokio::spawn(async move {
+        match manager.stop(process_session_id).await {
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    target: "lx::process",
+                    process_session_id,
+                    code = error.code,
+                    "stopping a background process failed"
+                );
+            }
+        }
+    });
+    // 停止是异步的，但“点了就要有反馈”。
+    //
+    // 这里只给“已发出停止请求”的确认；真正的结果由进程终态事件驱动面板刷新。
+    // 用 Warning 档而不是 Error：这是用户主动要求的动作，不是出错。
+    update::show_lx_hint(
+        state,
+        pane,
+        crate::app::state::InputHintLevel::Warning,
+        crate::ui::text::lx_stop_done(1),
+    );
+}
+
 /// 回收不再被任何窗格绑定的会话运行实例（`/new`、切换会话、关窗格）。
 ///
 /// 只移除运行实例并**异步停止**其进程：事件循环不阻塞等待，回执由后台任务完成。

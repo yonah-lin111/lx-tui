@@ -60,7 +60,10 @@ pub fn handle_process_event(
             update::apply_process_output(state, session_id, &origin_call_id, snapshot.clone())
         }
         ProcessUiEvent::Exited { .. } => {
-            update::apply_process_exit(state, &event, Some(snapshot.clone()))
+            let applied = update::apply_process_exit(state, &event, Some(snapshot.clone()));
+            // 终态事件可能没改到工具卡片（该卡片已不在屏幕上），
+            // 但仍需刷新打开着的 `/stop` 面板——否则用户会看到已停的进程还挂在列表里。
+            applied | refresh_stop_panels(state, session_id)
         }
     };
     // UI 已取走本次输出通知：允许下一次输出重新通知。
@@ -184,4 +187,41 @@ fn next_revision(session_id: u64) -> i64 {
     *entry = entry.saturating_add(1);
     COUNTER.fetch_add(1, Ordering::Relaxed);
     *entry
+}
+
+/// 进程终态后刷新打开着的 `/stop` 面板。
+///
+/// 只处理“列表里含该进程”的窗格：面板本身不记载会话归属，因此用“该窗格绑定的会话持有该进程”来判定。
+/// 不重建面板、不改高亮位置：这里只把已退出的条目从列表里移除。
+fn refresh_stop_panels(state: &mut AppState, session_id: u64) -> bool {
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_anywhere(pane) else {
+            continue;
+        };
+        let Some(crate::app::state::SlashPanel::Stop(picker)) = target.lx.slash.as_ref() else {
+            continue;
+        };
+        if !picker
+            .processes
+            .iter()
+            .any(|process| process.session_id == session_id)
+        {
+            continue;
+        }
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        if let Some(crate::app::state::SlashPanel::Stop(picker)) = target.lx.slash.as_mut() {
+            picker
+                .processes
+                .retain(|process| process.session_id != session_id);
+            picker.window.clamp(picker.processes.len());
+            picker
+                .action_window
+                .clamp(crate::app::state::StopAction::ALL.len());
+            changed = true;
+        }
+    }
+    changed
 }

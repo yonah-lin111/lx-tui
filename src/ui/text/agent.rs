@@ -459,6 +459,11 @@ pub fn session_label(session_id: u64) -> String {
     format!("{SESSION_PREFIX} {session_id}")
 }
 
+/// 进程已运行时长标签：`running 12s`（`age` 为已格式化的时长）。
+pub fn process_age_label(age: &str) -> String {
+    format!("running {age}")
+}
+
 /// `exec_command` 卡片：标题动词、状态与输出预览。
 pub const COMMAND_DESC: &[&str] = &[
     "Command card: verb, running/exited state, the command line",

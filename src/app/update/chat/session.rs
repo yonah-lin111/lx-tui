@@ -90,6 +90,56 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// `/stop` 打开后台进程面板（事件层提供本会话运行中的进程）。
+pub fn open_stop_picker(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    // 与 `/resume` 同款：先打开面板骨架，列表由事件层回投
+    //（`app/` 不持有进程句柄，不能在这里直接读进程）。
+    target.lx.slash = Some(SlashPanel::Stop(Box::default()));
+    state
+        .effects
+        .push(crate::app::effects::Effect::ListSessionProcesses { pane });
+    true
+}
+
+/// 后台进程列表回投：填充 `/stop` 一级列表。
+///
+/// 只收**仍在运行**的进程：已退出的进程没有可停的东西，列出来只会让用户误以为
+/// 还有服务在跑。列表为空时面板保持打开并显示空态（用户能明确看到“没有在跑的”）。
+pub fn on_process_listed(
+    state: &mut AppState,
+    pane: PaneId,
+    processes: Vec<crate::app::state::ProcessEntry>,
+) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(SlashPanel::Stop(picker)) = target.lx.slash.as_mut() else {
+        return false;
+    };
+    picker.processes = processes;
+    picker.now_ms = crate::db::now_ms();
+    // 回到一级并钳制高亮（进程可能在面板停留期间退出）。
+    picker.stage = crate::app::state::StopPickerStage::Processes;
+    picker.window.clamp(picker.processes.len());
+    true
+}
+
+/// `/stop` 二级采纳：停止目标进程，并刷新列表（可能还有其他进程）。
+///
+/// 停完仍留在面板里：用户常常要一次停掉多个（前端 + 后端 + watcher）。
+pub fn stop_process_at(state: &mut AppState, pane: PaneId, process_session_id: u64) -> bool {
+    state
+        .effects
+        .push(crate::app::effects::Effect::StopSessionProcess {
+            pane,
+            process_session_id,
+        });
+    true
+}
+
 /// 历史列表回投：填充 `/resume` 面板。
 ///
 /// 当前窗格已绑定的会话打上 `❯` 标记，并作为高亮与窗口定位目标
@@ -334,6 +384,28 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
             }
             true
         }
+        SlashPanel::Stop(picker) => match picker.stage {
+            // 一级：进入二级动作列表（先确认停哪个、再确认执行）。
+            crate::app::state::StopPickerStage::Processes => {
+                if let Some(target) = state.pane_mut_anywhere(pane)
+                    && let Some(SlashPanel::Stop(current)) = target.lx.slash.as_mut()
+                {
+                    current.enter_actions();
+                }
+                true
+            }
+            // 二级：执行停止。面板不在这里同步刷新列表：停止是异步的，
+            // 同步重读会读到停止前的快照（进程还没真正退出）。
+            // 列表由进程终态事件驱动刷新（`process_events::refresh_stop_panels`）。
+            crate::app::state::StopPickerStage::Actions { .. } => {
+                let target_id = picker.target_session_id();
+                let Some(target_id) = target_id else {
+                    return true;
+                };
+                stop_process_at(state, pane, target_id);
+                true
+            }
+        },
     }
 }
 
@@ -436,6 +508,7 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
     match command {
         SlashCommand::Model => open_model_picker(state, pane),
         SlashCommand::Resume => open_history(state, pane),
+        SlashCommand::Stop => open_stop_picker(state, pane),
         SlashCommand::New => new_session(state, pane),
     }
 }

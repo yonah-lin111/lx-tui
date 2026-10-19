@@ -223,6 +223,23 @@
 
 后续修订记录（对照 codex harness 与用户反馈）：
 
+- **新增 `/stop`：主动清理后台进程（缺失能力）**：
+  - 问题：lx 此前只有「切会话 / `/new` / 退出」才清理进程，用户留在会话里时**没有任何**
+    办法停掉自己起的服务；`max_running` 报 `resource_limit` 时也无出路。codex 有
+    `/stop`（`CleanBackgroundTerminals`，描述 "stop all background terminals"）。
+  - 一级：列出本会话**仍在运行**的进程（命令 + cwd + `running Ns` 时长）。
+  - 二级：动作列表（`stop this process`），回显目标命令以便确认。
+  - 交互与 `/model` 完全同构：↑↓ 移动、Enter 进二级 / 采纳、Esc 返回上级 / 顶层关闭；
+    另有 opencode 式入口——**空草稿按 `↓`** 直接打开（有草稿时 `↓` 仍是光标移动）。
+  - 数据来源：`Effect::ListSessionProcesses` / `Effect::StopSessionProcess` 由事件层执行
+    （`app/` 与 `db/` 都不持有进程句柄）。
+  - **刷新时机**：列表由**进程终态事件**驱动（`process_events::refresh_stop_panels`），
+    不同步重读——停止是异步的，同步刷新会读到停止前的快照（实测踩到并修掉）。
+  - 停止后**留在面板里**并显示 `Stopped 1 background process`：常常要连停多个。
+  - 测试：`app/update/chat/tests/stop_panel.rs`（12 项，含两级导航、空态、高亮钳制、
+    `↓` 入口）+ `slash_panels.rs` 渲染 3 项 + 真实进程端到端 1 项。
+
+
 - **展开后视口跳走（bug）**：新增 `LxChat::viewport_top` + `pin_lx_viewport`，三个切换入口
   内部先锚定；`chat_hit` 命中限定在 body 内。测试 `app/update/chat/tests/viewport_anchor.rs`。
 - **三卡改为树形版式**：`ui/text/agent.rs` 新增 `TREE_BAR` / `TREE_LEAF`（等宽 5 列）与

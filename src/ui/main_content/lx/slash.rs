@@ -21,6 +21,7 @@ use super::mention;
 pub(super) fn items<'a>(
     panel: &'a crate::app::state::SlashPanel,
     time_labels: &'a [String],
+    age_labels: &'a [String],
 ) -> Vec<CommandItem<'a>> {
     use crate::app::state::{ModelPickerStage, SlashPanel};
     match panel {
@@ -80,6 +81,39 @@ pub(super) fn items<'a>(
                 })
                 .collect()
         }
+        SlashPanel::Stop(picker) => match &picker.stage {
+            crate::app::state::StopPickerStage::Processes => {
+                if picker.processes.is_empty() {
+                    return vec![CommandItem::Inline {
+                        label: text::LX_STOP_EMPTY,
+                        preview: "",
+                        tag: "",
+                    }];
+                }
+                // 一级：命令在前、cwd 在后，行尾是已运行时长（对齐 opencode 的 shell 列表）。
+                picker
+                    .processes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, process)| CommandItem::Inline {
+                        label: process.command.as_str(),
+                        preview: process.cwd.as_str(),
+                        tag: age_labels.get(index).map_or("", String::as_str),
+                    })
+                    .collect()
+            }
+            // 二级：动作列表（当前只有一个，但保留列表形状以便将来扩展）。
+            crate::app::state::StopPickerStage::Actions { command, .. } => {
+                crate::app::state::StopAction::ALL
+                    .iter()
+                    .map(|action| CommandItem::Inline {
+                        label: action.label(),
+                        preview: command.as_str(),
+                        tag: "",
+                    })
+                    .collect()
+            }
+        },
     }
 }
 
@@ -90,6 +124,21 @@ pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<
             .entries
             .iter()
             .map(|entry| entry.time_label(history.now_ms))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `/stop` 一级列表的已运行时长标签（与进程条目索引一一对应）；非 `/stop` 面板为空。
+///
+/// 与 [`history_time_labels`] 同一手法：`CommandItem` 只借用 `&str`，因此这些
+/// 临时字符串必须由调用方先算好、活到渲染结束。
+pub(super) fn process_age_labels(panel: &crate::app::state::SlashPanel) -> Vec<String> {
+    match panel {
+        crate::app::state::SlashPanel::Stop(picker) => picker
+            .processes
+            .iter()
+            .map(|process| process.age_label(picker.now_ms))
             .collect(),
         _ => Vec::new(),
     }
@@ -124,6 +173,16 @@ fn view<'a>(
             history.window,
             text::LX_HISTORY_PANEL_FOOTER,
         ),
+        SlashPanel::Stop(picker) => (
+            match picker.stage {
+                crate::app::state::StopPickerStage::Processes => text::LX_STOP_PANEL_TITLE,
+                crate::app::state::StopPickerStage::Actions { .. } => {
+                    text::LX_STOP_ACTION_PANEL_TITLE
+                }
+            },
+            picker.stage_window(),
+            text::LX_STOP_PANEL_FOOTER,
+        ),
     };
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
@@ -154,7 +213,8 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let panel = lx.slash.as_ref()?;
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
-    let items = items(panel, &time_labels);
+    let age_labels = process_age_labels(panel);
+    let items = items(panel, &time_labels, &age_labels);
     command_panel::layout(area_of(input, area), &view(&items, panel, input, area))
 }
 
@@ -164,12 +224,19 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
     // 空态占位行不可选。
     if matches!(panel, crate::app::state::SlashPanel::Model(p) if p.candidates.is_empty())
         || matches!(panel, crate::app::state::SlashPanel::History(h) if h.entries.is_empty())
+        // 一级列表为空时，那行空态占位不可选。
+        || matches!(
+            panel,
+            crate::app::state::SlashPanel::Stop(p)
+                if p.stage_len() == 0
+        )
     {
         return None;
     }
     let input = super::input_rect(area, lx)?;
     let time_labels = history_time_labels(panel);
-    let items = items(panel, &time_labels);
+    let age_labels = process_age_labels(panel);
+    let items = items(panel, &time_labels, &age_labels);
     let layout = command_panel::layout(area_of(input, area), &view(&items, panel, input, area))?;
     command_panel::item_at(&layout, &items, column, row)
 }
@@ -183,6 +250,7 @@ pub(super) fn render(area: Rect, buf: &mut ratatui::buffer::Buffer, lx: &Lx) {
         return;
     };
     let time_labels = history_time_labels(panel);
-    let items = items(panel, &time_labels);
+    let age_labels = process_age_labels(panel);
+    let items = items(panel, &time_labels, &age_labels);
     command_panel::render(area_of(input, area), buf, &view(&items, panel, input, area));
 }

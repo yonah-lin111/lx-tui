@@ -222,6 +222,10 @@ async fn run_loop(
         if chat::pump_chat_streams(state, &mut chat_streams, &sender) {
             dirty = true;
         }
+        // `/stop` 的进程列表与停止：进程句柄只在运行实例里，由事件层执行。
+        if chat::apply_process_effects(state, &mut chat_streams) {
+            dirty = true;
+        }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
             cwd_check = None;
             if session::poll_process_cwds(state, &sessions) {
