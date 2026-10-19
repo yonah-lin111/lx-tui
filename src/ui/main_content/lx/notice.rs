@@ -5,9 +5,8 @@
 //! 原因行连接符用供应商灰 + 粗、正文正常色。
 //!
 //! **行首标记与聊天步骤共用同一个方块**（[`StepMark`]）：失败为红色实心 `■`、中断为
-//! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽完全一致（1 列字形 + 1 列
-//! 空格）；方块之后再跟一个**状态图标** `!`（[`text::agent::ICON_ERROR`]，与工具行 /
-//! 思考头的步骤图标同一套几何符号、同色），一眼就能读出「这里出事了」。
+//! 黄色实心 `■`，与工具行 / 思考头 / 正文块的方块形状、字宽、缩进完全一致（都是 1 列
+//! 字形 + 1 列空格）。
 //!
 //! **不含统计**——本轮统计行由 `history::stats_line` 负责，显示在通知下方（空一行）。
 
@@ -76,11 +75,6 @@ impl NoticeTitle {
     fn marker_segment(self) -> String {
         self.mark().segment(0)
     }
-
-    /// 状态图标：红 / 黄的 `!`，与工具行 / 思考头的步骤图标同属一套几何符号。
-    fn icon(self) -> &'static str {
-        text::agent::ICON_ERROR
-    }
 }
 
 /// 一条消息级通知：固定标题 + **一句话原因**；由 `history` 从消息终态派生。
@@ -119,12 +113,7 @@ pub(super) fn rows(notice: &Notice, width: u16) -> usize {
 
 /// 标题整行文本（`■ <label>`）；宽度口径与 [`draw`] 共用。
 fn title_line(title: NoticeTitle) -> String {
-    format!(
-        "{}{}{}",
-        title.marker_segment(),
-        title.icon(),
-        title.label()
-    )
+    format!("{}{}", title.marker_segment(), title.label())
 }
 
 /// 绘制通知并推进内容行号；宽度不够放前缀时原因行退回整宽（不画连接符）。
@@ -158,17 +147,7 @@ pub(super) fn draw(
                     mark_style,
                     content.width.min(marker_width),
                 );
-                // 状态图标：与方块同色（红 / 黄），紧跟方块、不留空格。
-                let mut x = content.x.saturating_add(marker_width);
-                grid.put_clipped(
-                    x,
-                    y,
-                    notice.title.icon(),
-                    mark_style,
-                    content.right().saturating_sub(x),
-                );
-                x = x
-                    .saturating_add(u16::try_from(notice.title.icon().width()).unwrap_or(u16::MAX));
+                let x = content.x.saturating_add(marker_width);
                 grid.put_clipped(x, y, label, title_style, content.right().saturating_sub(x));
             } else {
                 // 续行：整段仍用标题样式（极端窄宽度下的兜底，不影响常规显示）。

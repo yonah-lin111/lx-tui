@@ -163,7 +163,7 @@ fn assistant_message_has_no_label_and_shows_body() {
     let line1 = row_text(&buf, area, 1);
     let line2 = row_text(&buf, area, 2);
     assert!(
-        line0.starts_with("■ ~Thought"),
+        line0.starts_with("■ Thought"),
         "首个渲染行为方块 + 图标 + 折叠头：{line0}"
     );
     assert!(
@@ -209,10 +209,7 @@ fn failed_message_shows_error_notice_with_code_at_bottom() {
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("出错了"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "与正文隔一行");
-    assert_eq!(
-        rows[2], "■ !Failed",
-        "行首为方块 + 状态图标 !，与步骤标记同款"
-    );
+    assert_eq!(rows[2], "■ Failed", "行首为方块，与步骤标记同款");
     assert_eq!(rows[3], "  └─ http 503");
     assert!(
         !rows.iter().any(|row| row.contains("[failed")),
@@ -231,7 +228,7 @@ fn failed_message_without_code_uses_fallback_reason() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let rows: Vec<String> = (0..4).map(|row| row_text(&buf, area, row)).collect();
-    assert_eq!(rows[2], "■ !Failed");
+    assert_eq!(rows[2], "■ Failed");
     assert_eq!(
         rows[3], "  └─ no error details provided",
         "无码时给一句话兜底"
@@ -251,10 +248,7 @@ fn interrupted_message_shows_warning_notice_above_stats_line() {
     let rows: Vec<String> = (0..6).map(|row| row_text(&buf, area, row)).collect();
     assert!(rows[0].contains("半截回答"), "正文：{rows:?}");
     assert_eq!(rows[1], "", "通知与正文隔一行");
-    assert_eq!(
-        rows[2], "■ !Interrupted",
-        "中断用黄色警告通知 + 方块 + 状态图标"
-    );
+    assert_eq!(rows[2], "■ Interrupted", "中断用黄色警告通知 + 方块标记");
     assert_eq!(
         rows[3], "  └─ interrupted before completion",
         "固定一句话原因"
@@ -505,14 +499,14 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     // 图标：跟随思考自己的品红（`~`），位于方块之后第 2 列、紧贴文案。
     let icon = &buf[(2, 0)];
     assert_eq!(icon.fg, Color::Indexed(218), "图标品红（跟随步骤结构色）");
-    // 头部文案：与方块同款品红但**不加粗**，让方块更跳；图标后从第 3 列起。
-    let label = &buf[(3, 0)];
+    // 头部文案：与方块同款品红但**不加粗**，让方块更跳；方块后从第 2 列起。
+    let label = &buf[(2, 0)];
     assert_eq!(label.fg, Color::Indexed(218), "生成中文案同款品红");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ ~Thinking"),
-        "方块 + 图标 + 文案：{line0}"
+        line0.starts_with("■ Thinking"),
+        "方块 + 文案（文案从第 2 列起）：{line0}"
     );
     assert!(
         !line0.contains('▸') && !line0.contains('▾'),
@@ -529,7 +523,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let line0 = row_text(&buf, area, 0);
-    assert!(line0.starts_with("□ ~Thinking"), "空心相位：{line0}");
+    assert!(line0.starts_with("□ Thinking"), "空心相位：{line0}");
 
     // 完成后（带起止时刻）：静态实心方块、品牌天蓝加粗（不压暗）、`Thought · 6.3s`。
     let mut done = lx_with(vec![message(
@@ -553,12 +547,12 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
         !header.modifier.contains(Modifier::DIM),
         "完成后不压暗（压暗会与边框标题混同）"
     );
-    let label = &buf[(3, 0)];
+    let label = &buf[(2, 0)];
     assert_eq!(label.fg, Color::Indexed(218), "完成后文案同为品红");
     assert!(!label.modifier.contains(Modifier::DIM), "完成后文案不压暗");
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ ~Thought · 6.3s"),
+        line0.starts_with("■ Thought · 6.3s"),
         "完成后显示思考耗时：{line0}"
     );
     // 终态与帧无关：奇数帧也是实心。
@@ -566,7 +560,7 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     assert!(
-        row_text(&buf, area, 0).starts_with("■ ~Thought · 6.3s"),
+        row_text(&buf, area, 0).starts_with("■ Thought · 6.3s"),
         "完成后停为静态实心方块"
     );
 
@@ -582,14 +576,11 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     );
     let line0 = row_text(&buf, area, 0);
     assert!(
-        line0.starts_with("■ ~Thought · 6.3s"),
+        line0.starts_with("■ Thought · 6.3s"),
         "展开后头部不变（折叠标记已移除）：{line0}"
     );
     let line1 = row_text(&buf, area, 1);
-    assert!(
-        line1.starts_with("   旧思考"),
-        "正文缩进对齐图标后的文案列（3 列）：{line1}"
-    );
+    assert!(line1.starts_with("  旧思考"), "正文缩进对齐方块：{line1}");
     assert!(!line0.contains("Thinking"), "不再是 Thinking：{line0}");
 }
 
@@ -894,12 +885,11 @@ fn tool_step_occupies_two_rows_and_renders_summary() {
     assert_eq!(
         header_row.trim_end(),
         format!(
-            "{} {}{}",
+            "{} {}",
             text::agent::STEP_MARK_FILLED,
-            text::agent::ICON_READ,
             text::agent::VERB_TOOL_READ
         ),
-        "标题行是方块 + 图标（图标与动词之间无空格）：{header_row:?}"
+        "标题行只有方块 + 动词：{header_row:?}"
     );
     // 第 2 行是 `└─` + 参数 + 状态词兜底（pending 没有参数摘要之外的状态字段，
     // 这里 pending 有摘要 → 只显示参数与范围）。
@@ -928,9 +918,9 @@ fn tool_only_message_still_occupies_rows() {
 }
 
 #[test]
-fn transcript_lays_out_step_square_with_icon_gutter() {
-    // 一份完整观感锁定：用户消息 `> `、思考头与工具行的「方块 + 图标 + 文案」
-    // （4 列缩进）、正文块仍 2 列缩进、工具详情行 `└─` 与块间空行。
+fn transcript_lays_out_step_square_with_two_column_gutter() {
+    // 一份完整观感锁定：用户消息 `> `、每个步骤的方块标记与 2 列内容缩进
+    // （思考头 / 思考正文 / 正文块 / 工具行）、块间空行。
     let mut assistant = message(
         "assistant",
         "streaming",
@@ -956,95 +946,16 @@ fn transcript_lays_out_step_square_with_icon_gutter() {
         vec![
             "> 用户问题",
             "",
-            "□ ~Thinking",
-            "   思考甲",
-            "   思考乙",
+            "□ Thinking",
+            "  思考甲",
+            "  思考乙",
             "",
             "■ 正文第一行",
             "  正文第二行",
             "",
-            "□ ≣Read",
+            "□ Read",
             "  └─ src/a.rs · 3-7",
         ],
         "步骤方块、2 列缩进与两行式工具行的整块观感"
-    );
-}
-
-/// 代码块复制按钮悬停时换成高亮样式（加粗 + 下划线），非按钮字符不受影响。
-#[test]
-fn hovered_code_copy_button_repaints_bold_and_underlined() {
-    let mut lx = lx_with(vec![message(
-        "assistant",
-        "complete",
-        vec![text_part("```js\nconst a = 1;\n```")],
-    )]);
-    let area = Rect::new(0, 0, 52, 12);
-    // 先取按钮列，确认它落在代码块头部行。
-    let view = super::view(area, &lx);
-    let button = super::layout(view.body, &lx)
-        .code_copy
-        .into_iter()
-        .next()
-        .expect("复制按钮");
-    let button_x = button.rect.x - view.body.x;
-    let button_y = button.rect.y - view.body.y;
-
-    // 常态：蓝色、不粗不下划线。
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let idle = &buf[(button_x, button_y)];
-    assert_eq!(idle.symbol(), "[", "按钮首字符");
-    assert_eq!(idle.fg, Color::Rgb(0x44, 0x93, 0xf8), "常态链接蓝");
-    assert!(!idle.modifier.contains(Modifier::BOLD), "常态不加粗");
-
-    // 悬停：同一格加粗 + 下划线。
-    lx.chat.code_copy_hover = Some((0, 0, 0));
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let hovered = &buf[(button_x, button_y)];
-    assert_eq!(hovered.fg, Color::Rgb(0x44, 0x93, 0xf8), "悬停不换色相");
-    assert!(hovered.modifier.contains(Modifier::BOLD), "悬停加粗");
-    assert!(
-        hovered.modifier.contains(Modifier::UNDERLINED),
-        "悬停加下划线"
-    );
-    // 语言名那几列保持语言标记样式（没有被整行改掉）。
-    let lang = &buf[(view.body.x - view.body.x + 2, button_y)];
-    assert_ne!(lang.fg, hovered.fg, "语言标记不受悬停影响");
-}
-
-/// 一个正文步骤里有多个代码块时，悬停只高亮被悬停的那一块（块序号精确定位）。
-#[test]
-fn hover_targets_only_the_hovered_code_block() {
-    let mut lx = lx_with(vec![message(
-        "assistant",
-        "complete",
-        vec![text_part(
-            "```js\nconst a = 1;\n```\n\ntext\n\n```py\nb = 2\n```",
-        )],
-    )]);
-    let area = Rect::new(0, 0, 52, 20);
-    let view = super::view(area, &lx);
-    let buttons = super::layout(view.body, &lx).code_copy;
-    assert_eq!(buttons.len(), 2, "两个代码块各有一个按钮");
-    let cell_of = |index: usize| {
-        (
-            buttons[index].rect.x - view.body.x,
-            buttons[index].rect.y - view.body.y,
-        )
-    };
-
-    lx.chat.code_copy_hover = Some((0, 0, 1));
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let (first_x, first_y) = cell_of(0);
-    let (second_x, second_y) = cell_of(1);
-    assert!(
-        !buf[(first_x, first_y)].modifier.contains(Modifier::BOLD),
-        "第 1 块不因悬停第 2 块而高亮"
-    );
-    assert!(
-        buf[(second_x, second_y)].modifier.contains(Modifier::BOLD),
-        "第 2 块高亮"
     );
 }

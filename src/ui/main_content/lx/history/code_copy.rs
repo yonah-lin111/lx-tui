@@ -26,9 +26,6 @@ pub struct CodeCopyButton {
     pub body: String,
 }
 
-/// 代码块竖条（与 `markdown_render` 同一个直角风格符号）。
-const BAR_MARKER: &str = "│";
-
 /// 收集一个正文步骤里所有代码块的复制按钮矩形（按渲染行序换算屏幕坐标）。
 ///
 /// `inner` 是该步骤正文的可用宽度（已扣步骤缩进），`start_row` 是它在内容行空间
@@ -47,12 +44,16 @@ pub(super) fn collect(
     }
     // 当前正在收集的代码块正文（Some 表示上一行是代码块头部）。
     let mut body: Option<String> = None;
+    // 头部之后紧跟的是**分隔横线**（不属于正文），需要跳过恰好一行。
+    let mut pending_rule = false;
+    // 本块已收集的正文行数（用行数而不是 `body.is_empty()` 判首行——代码块开头的
+    // 空行也是正文，用 `is_empty()` 会把它们吞掉）。
+    let mut body_lines = 0usize;
     let mut block = 0usize;
     for (offset, line) in markdown_render::render_wrapped(content, inner)
         .into_iter()
         .enumerate()
     {
-        let text = line.text();
         // 头部行：记录按钮矩形，并开始收集紧随其后的正文行。
         if let Some(column) = line.code_copy {
             close(&mut body, out);
@@ -73,22 +74,29 @@ pub(super) fn collect(
             });
             block += 1;
             body = Some(String::new());
+            body_lines = 0;
+            pending_rule = true;
             continue;
         }
         let Some(current) = body.as_mut() else {
             continue;
         };
-        // 以竖条起头的行属于代码块正文；其余行表示代码块结束。
-        let Some(rest) = text.strip_prefix(BAR_MARKER) else {
+        // 头部下一行是分隔横线：跳过它，不算正文也不结束本块。
+        if pending_rule {
+            pending_rule = false;
+            continue;
+        }
+        // 只有代码块正文行属于这一块（逐行直到非正文行为止）。
+        if !line.code_body {
             close(&mut body, out);
             continue;
-        };
-        if !current.is_empty() {
+        }
+        if body_lines > 0 {
             current.push('\n');
         }
-        // 只去掉竖条与其后那 1 个空格——**不 trim_start**：代码块里的缩进
-        // 是代码本身的一部分，复制时必须原样保留。
-        current.push_str(rest.strip_prefix(' ').unwrap_or(rest));
+        body_lines += 1;
+        // **不 trim**：代码块里的缩进是代码本身的一部分，复制时必须原样保留。
+        current.push_str(&line.text());
     }
     close(&mut body, out);
 }

@@ -406,22 +406,13 @@ pub fn md_read_code_lang() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 代码块的复制按钮 `[❐]`：**链接蓝**（`#4493f8`）。
+/// markdown 代码块的复制按钮 `[❐]`：与左侧容器折叠按钮同款（[`accent`]：Cyan 加粗）。
 ///
-/// 它是一个**可点的控件**，不该和代码/语言标记一样是灰的——蓝色是全项目「可交互」
-/// 的信号（链接、列表符号同色），扫一眼就知道这里能点。
+/// 全项目里「面板上的可点小控件」统一是这个青色加粗档（折叠按钮、面板按钮都用它），
+/// 复制按钮跟着走，观感一致、也不用再引入一个新的交互色。
+/// **不做悬停变色**：按钮只有 3 列，变色反而比常色更吵；可点性由 tooltip 承担。
 pub fn md_read_code_copy() -> Style {
-    Style::default().fg(github_dark::LINK)
-}
-
-/// markdown 代码块复制按钮的**悬停**态：链接蓝 + 加粗 + 下划线。
-///
-/// 只加字重不够明显（按钮只有 3 列），加下划线后悬停一眼可辨；配合 tooltip
-/// 一起给出「这里能点」的反馈。
-pub fn md_read_code_copy_hover() -> Style {
-    Style::default()
-        .fg(github_dark::LINK)
-        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+    accent()
 }
 
 /// markdown 图片说明（alt / url）：GitHub 的次要前景色。
@@ -797,28 +788,6 @@ pub fn chat_step_label_done() -> Style {
 /// 与紧邻的加粗方块靠字重区分开。
 pub fn chat_tool_verb() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
-}
-
-/// 思考头 / 工具行的**步骤图标**色：跟随该步骤自己的结构与状态色。
-///
-/// 取值就是 [`chat_step_mark_running_thinking`] / [`chat_step_mark_running`] 那一档
-/// （品红 / 翡翠绿），图标与方块同色同档，读作「一个整体的步骤标记」——不再用
-/// 品牌粉另起第三种颜色。失败 / 中断时由调用方换成 [`agent_fail`] / [`agent_warn`]。
-pub fn chat_step_icon(kind: IconKind, running: bool) -> Style {
-    match (kind, running) {
-        (IconKind::Thinking, _) => Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA)),
-        (IconKind::Tool, true) => Style::default()
-            .fg(Color::Indexed(CHAT_STEP_GREEN))
-            .add_modifier(Modifier::BOLD),
-        (IconKind::Tool, false) => Style::default().fg(Color::Indexed(CHAT_STEP_GREEN)),
-    }
-}
-
-/// 步骤图标所属的两类结构色（思考 / 工具）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IconKind {
-    Thinking,
-    Tool,
 }
 
 /// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：金黄，**不加下划线**。

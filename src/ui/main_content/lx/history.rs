@@ -45,13 +45,6 @@ const USER_INDENT: u16 = 2;
 /// 内容（头部文案、续行、展开的思考正文、markdown 正文）一律缩进到该列之后，
 /// 与用户消息的 `> ` 缩进同宽。
 pub(super) const STEP_GUTTER: u16 = 2;
-/// 带图标的步骤（思考 / 工具调用）头部内容起始列：`■` + 空格 + 图标 = 3 列。
-///
-/// 图标由步骤种类决定（见 `text::agent::ICON_*`），让「哪类动作」不用读文字就能认出来。
-/// 图标与文案之间**不留空格**（`■ ±Edit`）：图标是标记的一部分，不是独立的一段，
-/// 留空格会把 `± Edit` 读成两个词。
-/// **正文块不加图标**，仍用 [`STEP_GUTTER`]（用户明确要求正文保持原样）。
-pub(super) const STEP_ICON_GUTTER: u16 = 3;
 /// 头部文案与思考耗时之间的分隔（`Thought · 6.3s`）。
 const THINKING_DURATION_SEP: &str = " · ";
 /// 历史区右侧滚动条预留列数。
@@ -658,13 +651,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                                 mark,
                                 kind: StepKind::Body,
                                 loading_frame: lx.chat.loading_frame,
-                                copy_hover: lx
-                                    .chat
-                                    .code_copy_hover
-                                    .filter(|(message, step, _)| {
-                                        *message == message_index && *step == step_index
-                                    })
-                                    .map(|(_, _, block)| block),
                             },
                         );
                     }
@@ -688,14 +674,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             mark.glyph(lx.chat.loading_frame),
                             mark.style(StepKind::Thinking),
                         );
-                        // 图标：跟随思考自己的品红（与方块同色同档，不另起第三种颜色）。
-                        grid.put_char(
-                            content.x.saturating_add(STEP_GUTTER),
-                            y,
-                            text::agent::ICON_THINKING.chars().next().unwrap_or(' '),
-                            style::chat_step_icon(style::IconKind::Thinking, streaming),
-                        );
-                        let x = content.x.saturating_add(STEP_ICON_GUTTER);
+                        let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();
                         if streaming {
                             grid.put_clipped(

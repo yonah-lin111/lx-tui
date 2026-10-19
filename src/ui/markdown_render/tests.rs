@@ -580,23 +580,31 @@ fn nested_list_markers_stay_colored() {
 
 #[test]
 fn code_block_header_shows_language_prefix_and_copy_button() {
-    // 代码块头部：左侧 `│ language: js`，右侧复制按钮 `[❐]`。
+    // 代码块头部：`language: js` + 复制按钮 `[❐]`，**没有左侧竖条**。
     let lines = render("```js\nconst a = 1;\n```");
     let header = lines.first().expect("code header");
     let text = header.text();
     assert!(
-        text.trim_start_matches('│')
-            .trim_start()
-            .starts_with("language: js"),
-        "头部显示 language: 前缀: {text:?}"
+        text.starts_with("language: js"),
+        "头部从 language: 起头（无左侧竖条）: {text:?}"
     );
     assert!(text.contains("[❐]"), "头部右端有复制按钮: {text:?}");
     assert!(header.code_copy.is_some(), "记录按钮列位置");
-    // 正文行保留代码本身，不带 language 前缀。
+    // 第二行是分隔横线（语言行下一行）。
+    let rule = lines.get(1).expect("rule line");
+    assert!(
+        rule.text().chars().all(|ch| ch == '─'),
+        "语言行下一行是横线: {:?}",
+        rule.text()
+    );
+    assert!(!rule.code_body, "分隔线不算代码正文");
+    // 正文行保留代码本身，不带 language 前缀，且不带竖条。
     let body = lines
         .iter()
         .find(|line| line.text().contains("const a"))
         .expect("code body");
+    assert_eq!(body.text(), "const a = 1;", "正文没有竖条前缀");
+    assert!(body.code_body, "正文行标记为代码正文");
     assert!(!body.text().contains("language:"), "正文不带语言前缀");
 }
 
@@ -618,7 +626,10 @@ fn copy_button_sits_at_right_edge_of_code_header() {
     let lines = render_wrapped("```js\nx\n```", width);
     let header = lines.first().expect("header");
     let text = header.text();
-    assert!(text.starts_with("│ language: js"), "左侧写语言：{text:?}");
+    assert!(
+        text.starts_with("language: js"),
+        "左侧写语言（无竖条）：{text:?}"
+    );
     assert!(text.ends_with("[❐]"), "右端是复制按钮：{text:?}");
     let column = header.code_copy.expect("button column");
     assert_eq!(
@@ -632,7 +643,7 @@ fn copy_button_sits_at_right_edge_of_code_header() {
 fn copy_button_has_no_fill_without_width() {
     // 无宽度口径（UI 查看器样例走 render）：按钮直接跟在语言名后，不铺填充空格。
     let header = render("```js\nx\n```").into_iter().next().expect("header");
-    assert_eq!(header.text(), "│ language: js[❐]", "无宽度时不留填充");
+    assert_eq!(header.text(), "language: js[❐]", "无宽度时不留填充");
 }
 
 #[test]
@@ -643,8 +654,8 @@ fn copy_button_without_language_still_right_aligned() {
         .next()
         .expect("header");
     assert!(
-        header.text().starts_with('│') && header.text().ends_with("[❐]"),
-        "无语言时只留竖条与按钮：{:?}",
+        header.text().ends_with("[❐]"),
+        "无语言时只留按钮：{:?}",
         header.text()
     );
     assert!(!header.text().contains("language:"), "不假装有语言");

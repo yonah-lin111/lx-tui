@@ -344,9 +344,6 @@ pub struct LxChat {
     pub loading_frame: usize,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
     pub jump_bottom_hover: bool,
-    /// 鼠标悬停的代码块复制按钮 `(消息索引, 步骤索引, 该步骤内的块序号)`；
-    /// 用于按钮高亮 + tooltip（一个正文步骤里可能有多个代码块，必须精确到块）。
-    pub code_copy_hover: Option<(usize, usize, usize)>,
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
@@ -382,7 +379,6 @@ impl LxChat {
             history_scroll: 0,
             loading_frame: 0,
             jump_bottom_hover: false,
-            code_copy_hover: None,
             stop_armed_at: None,
             hint: None,
             suppressed_prompt_header: None,

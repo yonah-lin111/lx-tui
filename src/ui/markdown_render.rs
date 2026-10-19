@@ -31,6 +31,9 @@ pub struct MdLine {
     pub spans: Vec<(String, Style)>,
     /// 代码块头部复制按钮的行内起始列（仅代码块头部行有值）。
     pub code_copy: Option<u16>,
+    /// 该行是否**代码块正文**（不含头部与分隔横线）；复制内容按此标记收集，
+    /// 不再靠「以竖条起头」判断（代码块已去掉左侧竖条）。
+    pub code_body: bool,
 }
 
 impl MdLine {
@@ -41,6 +44,7 @@ impl MdLine {
             hang: 0,
             spans: vec![(value.into(), style)],
             code_copy: None,
+            code_body: false,
         }
     }
 
@@ -51,6 +55,7 @@ impl MdLine {
             hang: 0,
             spans,
             code_copy: None,
+            code_body: false,
         }
     }
 
@@ -61,6 +66,7 @@ impl MdLine {
             hang,
             spans,
             code_copy: None,
+            code_body: false,
         }
     }
 
@@ -181,8 +187,6 @@ fn render_blocks(source: &str, width: Option<usize>) -> Vec<MdLine> {
 
 /// 水平线字符。
 const RULE: &str = "─";
-/// 引用 / 代码竖条（直角）。
-const BAR_MARKER: &str = "│";
 /// 引用块前缀标记。
 const QUOTE_MARKER: &str = ">";
 /// 任务列表复选框（与 claude 一组一致；已完成 / 未完成）。
@@ -295,19 +299,18 @@ fn indented_code(
     index
 }
 
-/// 代码块头部：左侧 `│ language: js`，右侧右对齐复制按钮 `[❐]`。
+/// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`，其下一行是横线分隔。
 ///
-/// 按钮贴可用区右缘（语言名在左、按钮在右，中间留空），复用模板块的
-/// `TEMPLATE_BUTTON_COPY` 字形（全项目同一个"复制"符号）；颜色用链接蓝
-/// （[`style::md_read_code_copy`]）——它是**可点的控件**，不该和代码一样是灰的。
-/// 语言为空（``` 无语言）时不写 `language:`（不假装有语言），只留竖条与按钮。
+/// **没有左侧竖条**（用户要求去掉）：整块靠「头部 + 一条横线 + 正文」框住，比逐行
+/// 竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时不写
+/// `language:`（不假装有语言），只留按钮。
 ///
 /// `width` 为 None（无宽度口径的自然渲染，如 UI 查看器样例）时按钮直接跟在语言名后，
 /// 不做填充——没有可用宽度就无从右对齐。
 ///
-/// 返回行本身 + 按钮的**行内起始列**（供命中换算）。
+/// 返回头部行本身 + 按钮的**行内起始列**（供命中换算）。
 fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
-    let mut spans = vec![(format!("{BAR_MARKER} "), style::md_read_rule())];
+    let mut spans: Vec<(String, Style)> = Vec::new();
     if let Some(lang) = lang {
         spans.push((
             format!("{}{lang}", text::LX_CHAT_CODE_LANG_PREFIX),
@@ -322,7 +325,7 @@ fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
         .unwrap_or(0);
     let column = u16::try_from(used.saturating_add(pad)).unwrap_or(u16::MAX);
     if pad > 0 {
-        spans.push((" ".repeat(pad), style::md_read_rule()));
+        spans.push((" ".repeat(pad), Style::default()));
     }
     spans.push((button.to_string(), style::md_read_code_copy()));
     let mut line = MdLine::spans(0, spans);
@@ -331,14 +334,21 @@ fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
     (line, column)
 }
 
-/// 渲染代码块：首行为头部（`language: xxx` + 复制按钮），其余每行前置直角竖条；
-/// 代码正文按语言做轻量语法高亮。
+/// 代码块头部与正文之间的分隔横线（与头部的复制按钮同色，不抢代码）。
+fn code_rule_line(width: Option<usize>) -> MdLine {
+    let rule_width = width.unwrap_or(40).max(1);
+    MdLine::plain(0, RULE.repeat(rule_width), style::md_read_rule())
+}
+
+/// 渲染代码块：头部（`language: xxx` + 复制按钮）→ 分隔横线 → 正文；
+/// 代码正文按语言做轻量语法高亮，**不带左侧竖条**。
 fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &mut Vec<MdLine>) {
     lines.push(code_header_line(lang, width).0);
+    lines.push(code_rule_line(width));
     for line in body {
-        let mut spans = vec![(format!("{BAR_MARKER} "), style::md_read_rule())];
-        spans.extend(highlight::highlight_line(lang, line));
-        lines.push(MdLine::spans(0, spans));
+        let mut rendered = MdLine::spans(0, highlight::highlight_line(lang, line));
+        rendered.code_body = true;
+        lines.push(rendered);
     }
 }
 
@@ -646,7 +656,10 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         .flat_map(|(value, span_style)| value.chars().map(|ch| (ch, *span_style)))
         .collect();
     if cells.is_empty() {
-        out.push(MdLine::spans(line.indent, Vec::new()));
+        // 代码块里的空行也是正文（复制时要保留），不能丢标记。
+        let mut empty = MdLine::spans(line.indent, Vec::new());
+        empty.code_body = line.code_body;
+        out.push(empty);
         return;
     }
     let mut index = 0usize;
@@ -696,10 +709,11 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         }
         trim_trailing_whitespace(&mut spans);
         let mut wrapped = MdLine::spans(u16::try_from(indent).unwrap_or(u16::MAX), spans);
-        // 首行沿用原行的代码块复制按钮列（换行重建行对象时不能丢）。
+        // 首行沿用原行的代码块元信息（换行重建行对象时不能丢）。
         if first {
             wrapped.code_copy = line.code_copy;
         }
+        wrapped.code_body = line.code_body;
         out.push(wrapped);
         index = break_at;
         first = false;

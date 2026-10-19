@@ -505,65 +505,17 @@ fn input_hint_uses_red_for_errors_and_yellow_otherwise() {
     }
 }
 
-/// 代码块复制按钮是**可用蓝色**（链接蓝）——控件不该和代码一样是灰的。
+/// 代码块复制按钮用**面板折叠按钮同款**（`accent`：Cyan 加粗），不做悬停变色。
 #[test]
-fn code_copy_button_uses_interactive_link_blue() {
-    let idle = md_read_code_copy();
-    assert_eq!(
-        idle.fg,
-        Some(Color::Rgb(0x44, 0x93, 0xf8)),
-        "复制按钮用链接蓝（可交互信号）"
-    );
-    assert_eq!(
-        idle.fg,
-        md_read_link_text().fg,
-        "与链接同色：全项目「蓝 = 可点」"
-    );
-    assert!(
-        !idle.add_modifier.contains(Modifier::UNDERLINED),
-        "常态不加下划线（悬停才加）"
-    );
-    // 悬停：同色但加粗 + 下划线，按钮只有 3 列，靠下划线才看得清。
-    let hover = md_read_code_copy_hover();
-    assert_eq!(hover.fg, idle.fg, "悬停不换色相");
-    assert!(hover.add_modifier.contains(Modifier::BOLD), "悬停加粗");
-    assert!(
-        hover.add_modifier.contains(Modifier::UNDERLINED),
-        "悬停加下划线"
-    );
-    // 与语言标记（次要灰）明显不同色。
+fn code_copy_button_shares_collapse_button_accent() {
+    let copy = md_read_code_copy();
+    assert_eq!(copy.fg, accent().fg, "与折叠按钮同色（Cyan）");
+    assert_eq!(copy.add_modifier, accent().add_modifier, "同为加粗");
+    assert_eq!(copy, accent(), "整体就是 accent，不引入新的交互色");
+    // 与语言标记（次要灰）明显不同色，才看得出这是控件。
     assert_ne!(
-        idle.fg,
+        copy.fg,
         md_read_code_lang().fg,
         "按钮不与语言标记同色（否则看不出能点）"
     );
-}
-
-/// 步骤图标色跟随各自的结构色：思考品红、工具翡翠绿（不再用品牌粉）。
-#[test]
-fn step_icons_follow_their_own_structure_color() {
-    let thinking = chat_step_icon(IconKind::Thinking, false);
-    assert_eq!(
-        thinking.fg,
-        Some(Color::Indexed(218)),
-        "思考图标品红（与思考方块同色）"
-    );
-    let tool_done = chat_step_icon(IconKind::Tool, false);
-    assert_eq!(
-        tool_done.fg,
-        Some(Color::Indexed(42)),
-        "工具图标翡翠绿（与工具方块同色）"
-    );
-    assert!(
-        !tool_done.add_modifier.contains(Modifier::BOLD),
-        "完成态图标不加粗"
-    );
-    let tool_running = chat_step_icon(IconKind::Tool, true);
-    assert_eq!(tool_running.fg, tool_done.fg, "运行中不换色相");
-    assert!(
-        tool_running.add_modifier.contains(Modifier::BOLD),
-        "运行中图标加粗（与呼吸方块一致）"
-    );
-    // 不再是品牌粉 `218` 之外的第三种颜色给工具用。
-    assert_ne!(tool_done.fg, agent_icon().fg, "工具图标不再用品牌粉");
 }
