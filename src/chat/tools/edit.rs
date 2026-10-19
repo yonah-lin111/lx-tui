@@ -224,7 +224,13 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
             let Hunk::Update { blocks, .. } = hunk else {
                 return Err(internal_error("update hunk mismatch"));
             };
-            let before = read_text(target)?;
+            // 一次读 + 一次解析：`before` 与写回编码共用同一份 `SourceText`。
+            // （旧实现先 `read_text` 再 `std::fs::read` + `parse`：两次读之间有窗口，
+            // 解析也做了两遍。）
+            let bytes = std::fs::read(target)
+                .map_err(|error| path::map_io_error(&error, "read", target))?;
+            let source = SourceText::parse(&bytes)?;
+            let before = source.lines.clone();
             let after = apply_blocks(&before, blocks, target)?;
             if before == after {
                 return Ok(None);
@@ -232,9 +238,6 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
             // 增删计数按补丁里的 `-` / `+` 行累加：这才是模型与 UI 关心的改动规模，
             // 用前后缀剥离估算会把「20 行文件改 2 行」算成 +18 -18。
             let (added, removed) = patch_line_counts(blocks);
-            let source = std::fs::read(target)
-                .map_err(|error| path::map_io_error(&error, "read", target))
-                .and_then(|bytes| SourceText::parse(&bytes))?;
             let bytes = source.encode(&after);
             match move_to {
                 None => {

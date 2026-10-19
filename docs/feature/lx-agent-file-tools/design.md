@@ -606,9 +606,9 @@ lx 配置层有四类 provider transport；`src/chat/transport` 实际有五条�
 - **三口径**：模型文本、UI 摘要、DB 结果 JSON 全部由 `output.rs` 生成（`format_for_model` / `to_summary` / `to_result_json`）。`chat/tools` 不依赖 `app`，故摘要类型 `chat::tools::ToolSummary` 与 `app::state::ToolSummary` 字段对齐但独立存在，由事件层做一次字段映射，避免 `chat -> app` 反向依赖。
 - **补丁引擎**：在 lx 内实现 Codex 风格语法子集（`*** Begin Patch`/`*** End Patch`、`*** Add File`、`*** Update File` + `*** Move to` + `@@` 块、`*** Delete File`、块级 `*** End of File`），未依赖 Codex crate。**不做项**：`*** Environment ID`、heredoc 包裹（`<<'EOF'`）、统一 diff 头（`---`/`+++`/`@@ -1,2 +1,3 @@` 行号形式）、Unicode 标点归一化的模糊匹配。匹配口径：标记行允许两侧空白（判定前 trim，正文行绝不 trim）；块的旧行先精确匹配，失配后按「两侧 `trim_end` 相等」回退一档，仍要求**恰好唯一**，多处匹配即 `PatchContextMismatch` 并在消息里列出候选行号。`*** End of File` 属于当前块，表示该块只能在「贴住文件末尾」的位置匹配，且只能标记最后一个块（其后出现 `@@` 即 `PatchInvalid`）。纯插入块（块内只有 `+` 行）带 `@@ <context>` 时插在该定位行之后、无定位行时**追加到文件末尾**（与 codex `file_update.rs` 一致）。
 - **两阶段执行**：先解析补丁 + 解析全部路径 + 纯路径级检查（Add 目标不得已存在、Update/Delete 必须是已存在普通文件、Move 目标不得是目录、**Move 目标不得已存在**——目标存在即 `PatchInvalid`，与 Add 同口径，因此 `FileChangeKind::Moved` 的语义是「目标此前不存在」，不会静默覆盖），再逐个 hunk 读取并落盘。格式与路径问题在零副作用阶段返回；上下文失配发生在提交阶段，因此**前面已成功的文件会如实出现在 `Failed{changes}` 里**（与 §13 风险 3 的“多文件非原子”一致）。
-- **`partial` 语义**：`Edit.partial` 表示“本次补丁里有 hunk 应用后内容与原文相同（无实际变更）”。所有 hunk 都无变更时整体返回 `NoChanges`。`Delete` 的 `removed` 是被删除文件的原文本行数（二进制内容按 0 计）。
+- **`partial` 语义**：`Edit.partial` 表示“本次补丁里有 hunk 应用后内容与原文相同（无实际变更）”。所有 hunk 都无变更时整体返回 `NoChanges`。`Delete` 的 `removed` 是被删除文件的原文本行数（二进制内容按 0 计）。该标志经 `to_summary` 进 `ToolSummary.partial`、经 `to_result_json` 的顶层 `"partial"` 落库，重载时由 `absorb_result_json` 补回；UI 在 `edit`/`write` 的详情行尾部以 dim 的 `· partial` 显示（`partial == false` 时不出现）。
 - **落库 JSON**：成功结果是 `{"tool": <名字>, ...}`；失败结果是 `{"tool": "error", "code", "message", "changes"}`。`ToolExecutionResult::Failed` 按 §10.3 的契约不携带工具名，因此失败 JSON 用 `"error"` 标记；调用方（事件层/DB 层）本来就知道 name，需要时可按调用侧补齐。
-- **原子写与锁**：`platform::write_file_atomic` 为同目录临时文件（`.{name}.tmp.{pid}.{seq}`）+ `sync_all` + rename，沿用既有文件权限；Unix 用 `rename` 覆盖，非 Unix 退化为“删除目标再改名”（Windows 语义限制，已在注释与文档写明）。写操作按**规范化路径**加短时锁（`lock::with_path_lock`，锁表惰性建立、闭包内持有），不做全局串行。目标为符号链接时写入其解析后的真实文件（原子替换不能作用于链接本身）。
+- **原子写与锁**：`platform::write_file_atomic` 为同目录临时文件（`.{name}.tmp.{pid}.{seq}`）+ `sync_all` + rename，沿用既有文件权限；Unix 用 `rename` 覆盖，非 Unix 退化为“删除目标再改名”（Windows 语义限制，已在注释与文档写明）。写操作按**规范化路径**加短时锁（`lock::with_path_lock`，锁表惰性建立、闭包内持有），不做全局串行。锁表条目按引用计数回收：取引用与归还（减到 0 时移除）都在表锁内完成，表大小 = 当前在途写入路径数，不随历史写入过的路径数增长；panic 展开同样归还引用。目标为符号链接时写入其解析后的真实文件（原子替换不能作用于链接本身）。
 - **编码保留**：`text::SourceText` 在读取时记录 BOM 与主要换行风格，写回时还原；`edit`/`write` 都不会把 CRLF 变 LF 或丢掉 BOM。新建文件统一 LF、无 BOM。
 - **`read`**：目录列表同样支持 1-based `offset`/`limit` 与 `next_offset`（条目按名排序，`[dir]`/`[file]` 前缀），使超大目录可分页。单行超过 `MAX_READ_LINE_CHARS`（4000 字符）时截断并置 `truncated`。**输入侧上限**：单文件超过 `MAX_READ_FILE_INPUT_BYTES`（16 MiB）时在读入前直接返回 `TooLarge`（消息含人类可读大小与上限，不含内容；`limit` 只限制输出行数，不能替代输入上限），目录最多收集 `MAX_READ_DIR_ENTRIES`（50 000，对齐 codex）条，达上限即停止并置 `truncated`——此时 `total_lines` 是「已列出条目数」而非目录真实条目数。输入上限与输出上限（`MAX_READ_BYTES`/`MAX_READ_LINES`）是两件独立的事。
 - **`search`**：遍历复用 `ignore::WalkBuilder`（`git_ignore(true)`、**`parents(true)` + `require_git(true)`**、`hidden(false)`、不跟随符号链接、`max_depth(32)`），`include` 用 `ignore::overrides` 的白名单语义且**相对搜索根**匹配；结果为 `(path, line)` 稳定排序。可达文件集合对齐 ripgrep 默认语义：`.git/` 与 `.jj/` 是 **always-ignore**（`filter_entry` 按目录名剪掉整个子树，与 `hidden` 设置无关；`depth == 0` 的显式根放行），`parents(true)` 让父级忽略规则不随搜索根漂移，而 `require_git(true)` 保证 `.gitignore` 只在真正的 git 仓库内生效（两者必须成对，否则父目录 `~/.gitignore` 里的 `*` 会清空结果——codex 记录过同一坑）。隐藏文件（`.env` 等）**仍然会被搜索**。上限为 `MAX_SEARCH_RESULTS`(200)、`MAX_SEARCH_FILES`(20000)、`SEARCH_TIMEOUT`(10s)、深度 `MAX_DEPTH`(32)、单文件 `MAX_SEARCH_FILE_BYTES`(8 MiB)、单行 `MAX_SEARCH_LINE_CHARS`(400)；任一触发都置 `truncated`（深度截断靠检测「落在 `MAX_DEPTH` 上的目录」判定，不再静默）。遍历与扫描**共用同一个 deadline**，单次调用总预算就是一个 `SEARCH_TIMEOUT`。二进制（含 NUL）与非 UTF-8 文件静默跳过。正则使用 `regex` crate；它在依赖树中已由 `globset`/`ignore`/`termwiz` 引入，本轮只是显式声明为直接依赖（`Cargo.lock` 仅新增一行，无新 crate）。
@@ -1515,7 +1515,7 @@ review（`review.md` §1.4 / §1.8 / §4 / §5）指出本分支仍有 1 条 P1�
 3. **`needs_spacer` 死抽象**：选**删除参数**——「一律留空行」是已定稿决策，`Block` 枚举只在 `layout`/`render` 里做局部标签、无其它用途，因此连 `enum Block` 一起删，`needs_spacer()` 变成无参函数，两个调用点改用 `has_previous: bool`。理由：保留「看起来支持区分实则恒真」的参数会误导后续维护者以为已经支持按类别收敛。
 4. **渲染层不再每帧解析参数 JSON**：`param()` 只在 `needs_argument_fallback()` 为真时回退解析，且同一帧共享**一次**解析。判据：摘要缺失（流式瞬态，另加 `MAX_FALLBACK_PARSE_BYTES = 8 KiB` 体积门槛——最坏 1 MiB 的 patch 不给解析）、`search` 摘要缺 `pattern`、`edit` 摘要整体为空、其余工具摘要既无 `path` 又整体为空。**`edit` 的 `path` 缺失是正常形态**（多文件补丁没有唯一路径），不算缺字段，因此多文件 `edit` 不再触发解析。测试用线程局部计数器 + 故意非法的 `arguments_json` 双向证明。
 
-### 25.4 测试证据（`cargo test` 全绿：lib 2375 + 11 个集成二进制）
+### 25.4 测试证据（`cargo test` 全绿：lib 2383 + 11 个集成二进制）
 
 | 测试 | 断言 |
 | --- | --- |
@@ -1530,6 +1530,11 @@ review（`review.md` §1.4 / §1.8 / §4 / §5）指出本分支仍有 1 条 P1�
 | `tool::tests::width::streaming_input_skips_fallback_parse_for_oversized_arguments` | 流式态 + 1 MiB patch 参数：回退解析计数为 0（仍用状态词兜底）；小参数照常解析一次 |
 | `style::tests::agent_param_keeps_legacy_underline_while_chat_tool_param_does_not` | `agent_param` 有 UNDERLINED、`chat_tool_param` 没有、同色、修饰符有意不同（P3-2） |
 | `output::tests::to_result_json_round_trips_into_summary` | 表驱动 15 例（read 带/不带 offset+limit、目录、空文件、search 有/无命中/truncated、edit 单/多文件/partial、write 新建/覆盖、Failed 有/无 changes）：`to_summary` 与 `from_arguments().absorb_result_json(&to_result_json())` 逐字段相等（`path` 形式与 `pattern` 来源两处例外在断言里写明），并额外断言「实时 `absorb_summary` 摘要 == 重载摘要」（连 `path` 一起严格比较） |
+| `chat::tools::lock::tests::table_does_not_grow_after_writes_complete` | 100 个不同路径写完 → 锁表回到空（引用计数回收，P3-8） |
+| `chat::tools::lock::tests::same_path_locks_are_serialized` | 两线程对同一路径并发进入，闭包内并发计数峰值 == 1（去掉互斥量必红，P3-8） |
+| `chat::tools::lock::tests::poisoned_lock_does_not_panic` | `body` 内 panic 后互斥量中毒，后续调用仍能取到锁且引用已归还（P3-8） |
+| `output::tests::edit_summary_reports_partial` / `view::tests::reload_keeps_edit_partial_flag` | `Edit.partial` 进 `ToolSummary`，且重载路径能从结果体 `"partial"` 补回（P3-10） |
+| `tool::tests::extras::edit_partial_shows_dim_tail` / `edit_without_partial_has_no_tail` | `partial == true` 时详情行尾追加 dim 的 `· partial`；false 时不出现，只有路径 + partial 时也无孤立分隔符（P3-10） |
 
 往返测试已验证有效：把 `absorb_result_json` 里的 `start_line` 改成 `start`（只改读端字段名），该测试立刻在 `read:file-with-offset-and-limit` 上失败。
 

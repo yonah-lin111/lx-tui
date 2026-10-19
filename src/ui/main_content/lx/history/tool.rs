@@ -414,7 +414,7 @@ const PRIORITY_RANGE: u8 = 2;
 /// 截断提示（必须显式告知用户）最后才隐藏的次要信息。
 const PRIORITY_TRUNCATED: u8 = 3;
 
-/// 次要信息（显示顺序：行范围 + 实际行数 → 命中数 → 增删计数 → 截断提示）。
+/// 次要信息（显示顺序：行范围 + 实际行数 → 命中数 → 增删计数 → `partial` → 截断提示）。
 ///
 /// `has_param` 表示第二行是否已有可见的主参数段：**只有前段存在时才给次要段加
 /// ` · ` 分隔符**，否则会渲染出孤立的 `└─  · +12 -4`（多文件 `edit` 的
@@ -497,6 +497,15 @@ fn extras(call: &ToolCallView, has_param: bool) -> Vec<Extra> {
                     priority: PRIORITY_COUNT,
                 }));
                 has_lead = true;
+            }
+            // 部分成功：本次补丁里有 hunk 应用后内容没变，与截断提示同档显式告知，
+            // 否则模型看到的 `partial: true` 在 UI 上完全消失（review P3-10）。
+            if summary.partial {
+                push!(
+                    text::agent::TOOL_PARTIAL,
+                    style::agent_step_detail(),
+                    PRIORITY_TRUNCATED,
+                );
             }
         }
         Kind::Other => {}

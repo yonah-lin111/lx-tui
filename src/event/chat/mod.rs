@@ -724,6 +724,7 @@ fn view_summary(summary: &crate::chat::tools::ToolSummary) -> crate::app::state:
         read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,
+        partial: summary.partial,
     }
 }
 

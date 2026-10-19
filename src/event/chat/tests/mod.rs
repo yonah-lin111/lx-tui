@@ -656,6 +656,7 @@ fn view_summary_maps_every_field() {
         read_lines: Some(29),
         total_lines: Some(1000),
         truncated: true,
+        partial: true,
     };
     let mapped = view_summary(&chat);
     assert_eq!(mapped.path.as_deref(), Some("src/a.rs"));
@@ -667,6 +668,7 @@ fn view_summary_maps_every_field() {
     assert_eq!(mapped.read_lines, Some(29), "实际读到的行数必须透传");
     assert_eq!(mapped.total_lines, Some(1000));
     assert!(mapped.truncated);
+    assert!(mapped.partial, "partial 必须透传");
     assert!(!mapped.is_empty(), "全字段样本不得被判成空摘要");
 }
 

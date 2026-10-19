@@ -288,6 +288,66 @@ fn write_counts_are_one_group_too() {
     assert!(detail.ends_with("+18 -0"), "{detail:?}");
 }
 
+/// `partial == true` 时详情行尾追加 dim 的 `· partial`（与增删计数同一行）。
+#[test]
+fn edit_partial_shows_dim_tail() {
+    let call = tool_call(
+        "edit",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            partial: true,
+            ..edit_summary()
+        }),
+        None,
+    );
+    let detail = detail_text(&call, 80);
+    let expected_tail = format!("{}partial", text::LX_CHAT_TOOL_STATUS_SEP);
+    assert!(
+        detail.ends_with(&expected_tail),
+        "partial 必须在详情行尾：{detail:?}"
+    );
+    assert!(
+        detail.contains(&format!("+12 -4{expected_tail}")),
+        "partial 与计数之间要有 `· ` 分隔：{detail:?}"
+    );
+    // 该段是 dim 元信息（不是警告黄、也不是计数色）。
+    let segments = detail_segments(&call, 80);
+    let partial = segments
+        .iter()
+        .find(|(text, _)| text.contains(text::agent::TOOL_PARTIAL))
+        .cloned()
+        .expect("partial 段");
+    assert_eq!(partial.1, style::agent_step_detail(), "partial 用 dim 样式");
+}
+
+/// 没有 partial 时不追加尾巴（不得凭空出现 `· partial`）。
+#[test]
+fn edit_without_partial_has_no_tail() {
+    let call = tool_call("edit", ToolStatus::Completed, Some(edit_summary()), None);
+    let detail = detail_text(&call, 80);
+    assert!(
+        !detail.contains(text::agent::TOOL_PARTIAL),
+        "未部分成功时不显示 partial：{detail:?}"
+    );
+    // 只有路径 + partial（没有计数）时同样不能产生孤立分隔符。
+    let only_partial = tool_call(
+        "edit",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some("src/app/state.rs".into()),
+            partial: true,
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let detail = detail_text(&only_partial, 80);
+    let body = detail
+        .strip_prefix(&format!("  {} ", text::agent::MARKER_TREE_LEAF))
+        .expect("前缀");
+    let expected = format!("src/app/state.rs{}partial", text::LX_CHAT_TOOL_STATUS_SEP);
+    assert_eq!(body, expected, "详情 = 路径 + `· partial`，无孤立分隔符");
+}
+
 /// 多文件 `edit`（`path == None`）不得渲染出孤立的 `· `：应为 `└─ +12 -4`。
 #[test]
 fn multi_file_edit_has_no_orphan_separator() {

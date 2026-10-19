@@ -205,6 +205,26 @@ fn multi_file_summary_has_no_single_path() {
     assert_eq!(summary.removed, Some(2));
 }
 
+/// `Edit.partial` 必须进 UI 摘要（否则模型看到的 `partial: true` 在界面上完全消失）。
+#[test]
+fn edit_summary_reports_partial() {
+    let result = ToolExecutionResult::Edit {
+        changes: vec![FileChange {
+            path: PathBuf::from("/tmp/a.txt"),
+            added: 1,
+            removed: 0,
+            kind: FileChangeKind::Updated,
+        }],
+        partial: true,
+    };
+    let summary = to_summary(&result);
+    assert!(summary.partial, "partial 必须透传进摘要");
+    assert!(
+        !to_app_summary(&summary).is_empty(),
+        "partial 也是可展示信息，摘要不得判空"
+    );
+}
+
 /// 落库 JSON：read / search / edit 三个变体结构完整。
 #[test]
 fn result_json_covers_every_variant() {
@@ -334,6 +354,7 @@ fn to_app_summary(summary: &super::super::types::ToolSummary) -> AppToolSummary 
         read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,
+        partial: summary.partial,
     }
 }
 

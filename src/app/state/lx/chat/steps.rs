@@ -134,6 +134,12 @@ pub struct ToolSummary {
     pub total_lines: Option<usize>,
     /// 内容是否被截断（必须显式告知用户）。
     pub truncated: bool,
+    /// `edit` 是否有 hunk 应用后内容与原文相同（无实际变更）。
+    ///
+    /// 语义见设计 §20.2：本次补丁里至少有一个 hunk「应用了但内容没变」。结果体 JSON
+    /// 带 `"partial"`，重载路径从这里补；UI 在 `edit`/`write` 的详情行尾部显示
+    /// `· partial`。其它工具恒为 false。
+    pub partial: bool,
 }
 
 impl ToolSummary {
@@ -300,6 +306,14 @@ impl ToolSummary {
         {
             self.truncated = true;
         }
+        // `edit` 的部分成功标记（`to_result_json` 的顶层 `"partial"`）。
+        if value
+            .get("partial")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            self.partial = true;
+        }
         self
     }
 
@@ -342,10 +356,13 @@ impl ToolSummary {
             self.removed = result.removed;
         }
         self.truncated |= result.truncated;
+        // `partial` 是「本次补丁里存在无实际变更的 hunk」，只增不减：参数侧永远推不出它，
+        // 结果侧为 false 时也不能把已有的 true 覆盖掉（与 `truncated` 同口径）。
+        self.partial |= result.partial;
         self
     }
 
-    /// 摘要是否**完全没有可展示信息**（所有字段为 None 且未截断）。
+    /// 摘要是否**完全没有可展示信息**（所有字段为 None 且两个标志都为 false）。
     ///
     /// UI 用它决定是否把摘要挂到步骤上：`Some(空摘要)` 会让工具行画出孤立的空
     /// `└─`；调用方必须用 [`Self::is_empty`] 判空而不是手写字段 `||` 链——后者
@@ -360,6 +377,7 @@ impl ToolSummary {
             && self.read_lines.is_none()
             && self.total_lines.is_none()
             && !self.truncated
+            && !self.partial
     }
 }
 

@@ -168,6 +168,18 @@ fn reload_keeps_edit_added_and_removed_counts() {
     assert_eq!(summary.removed, Some(4), "删除计数必须保留");
 }
 
+/// 回归：`Edit.partial` 只在结果体里，重载后必须还在（UI 的 `· partial` 靠它）。
+#[test]
+fn reload_keeps_edit_partial_flag() {
+    let call = reloaded(
+        "edit",
+        r#"{"patch":"*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n-x\n*** End Patch"}"#,
+        r#"{"tool":"edit","changes":[{"path":"a.rs","added":0,"removed":0,"kind":"updated"}],"partial":true}"#,
+    );
+    let summary = call.summary.expect("结算摘要");
+    assert!(summary.partial, "partial 必须从结果体补回");
+}
+
 /// 回归：`write` 的增删计数同样来自结果体。
 #[test]
 fn reload_keeps_write_added_and_removed_counts() {
@@ -227,6 +239,7 @@ fn map_summary(summary: &crate::chat::tools::ToolSummary) -> ToolSummary {
         read_lines: summary.read_lines,
         total_lines: summary.total_lines,
         truncated: summary.truncated,
+        partial: summary.partial,
     }
 }
 
@@ -413,6 +426,19 @@ fn live_and_reloaded_summaries_are_identical() {
                     },
                 ],
                 partial: false,
+            },
+        ),
+        (
+            "edit 部分成功（partial）",
+            patch_args(edit_patch),
+            crate::chat::tools::ToolExecutionResult::Edit {
+                changes: vec![FileChange {
+                    path: std::path::PathBuf::from("a.rs"),
+                    added: 0,
+                    removed: 0,
+                    kind: FileChangeKind::Updated,
+                }],
+                partial: true,
             },
         ),
         (

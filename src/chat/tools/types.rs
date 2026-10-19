@@ -291,4 +291,7 @@ pub struct ToolSummary {
     /// 文件总行数（目录读取时为条目数）；**不是**本次读到的行数。
     pub total_lines: Option<usize>,
     pub truncated: bool,
+    /// `edit` 是否有 hunk 应用后内容与原文相同（无实际变更）；UI 在详情行尾显示
+    /// `· partial`。其它工具恒为 false。
+    pub partial: bool,
 }

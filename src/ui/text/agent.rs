@@ -136,6 +136,9 @@ pub const TOOL_DIFF_REMOVE_PREFIX: &str = "-";
 /// 内容被截断的显式提示（追加在计数末尾，不与计数同色）。
 pub const TOOL_TRUNCATED: &str = "…[truncated]";
 
+/// `edit` 部分成功的尾部标记：本次补丁里有 hunk 应用后内容与原文相同（无实际变更）。
+pub const TOOL_PARTIAL: &str = "partial";
+
 /// `search` 命中数后缀（单复数分开，避免 `1 matches` 这类错句）。
 pub const TOOL_MATCH_ONE: &str = "match";
 pub const TOOL_MATCH_MANY: &str = "matches";

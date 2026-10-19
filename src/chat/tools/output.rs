@@ -233,16 +233,14 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
             truncated: *truncated,
             ..ToolSummary::default()
         },
-        ToolExecutionResult::Edit {
-            changes,
-            partial: _partial,
-        } => {
+        ToolExecutionResult::Edit { changes, partial } => {
             let path = single_path(changes);
             let (added, removed) = sum_counts(changes);
             ToolSummary {
                 path,
                 added: Some(added),
                 removed: Some(removed),
+                partial: *partial,
                 ..ToolSummary::default()
             }
         }
