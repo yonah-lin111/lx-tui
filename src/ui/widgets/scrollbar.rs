@@ -7,9 +7,10 @@ use ratatui::style::Style;
 
 use crate::ui::style;
 
-/// 轨道符号。
-const TRACK_SYMBOL: &str = "▕";
 /// thumb 符号。
+///
+/// 轨道不再绘制任何符号（只保留占位列与命中几何），右侧只留这一条滑动的实心条：
+/// 轨道与 thumb 叠在一起的两道竖线在浮层深底上观感很脏，去轨道后与主流终端 UI 一致。
 const THUMB_SYMBOL: &str = "▐";
 
 /// 滚动条几何：轨道、thumb 与视口信息；不需要滚动时为 None。
@@ -93,9 +94,11 @@ fn offset_for_thumb_top(layout: &ScrollbarLayout, thumb_top: usize) -> usize {
     thumb_top.min(max_thumb_top).saturating_mul(max_offset) / max_thumb_top
 }
 
-/// 渲染滚动条：轨道 muted、thumb text（终端原生前景色，避免半块字符反显产生黑边）。
+/// 渲染滚动条：轨道留空（不画符号），thumb 用终端原生前景色。
 ///
-/// 非浮层区域保持透明底；浮层（弹窗、命令面板等）用 [`render_with_base`] 传入面板底色。
+/// 轨道列仍占位并参与命中（轨道点击跳转、拖拽 thumb 都依赖 [`ScrollbarLayout::track`]），
+/// 只是不再绘制 `▕` 竖线。非浮层区域保持透明底；浮层（弹窗、命令面板等）用
+/// [`render_with_base`] 传入面板底色。
 pub fn render(frame: &mut Frame<'_>, layout: &ScrollbarLayout) {
     render_with_base(frame, layout, Style::default());
 }
@@ -105,18 +108,20 @@ pub fn render_buffer(buf: &mut Buffer, layout: &ScrollbarLayout) {
     render_buffer_with_base(buf, layout, Style::default());
 }
 
-/// 渲染滚动条并叠加面板底色：轨道/thumb 保留各自前景与修饰符，背景沿用 `base`。
+/// 渲染滚动条并叠加面板底色：thumb 保留自身前景与修饰符，背景沿用 `base`。
 pub fn render_with_base(frame: &mut Frame<'_>, layout: &ScrollbarLayout, base: Style) {
     render_buffer_with_base(frame.buffer_mut(), layout, base);
 }
 
 /// 在缓冲区内渲染滚动条并叠加面板底色；`base` 通常为 `style::overlay_panel()`。
+///
+/// 轨道不绘制符号，但会按 `base` 重置为面板底色，保证浮层底下的旧内容不透过滚动条列。
 pub fn render_buffer_with_base(buf: &mut Buffer, layout: &ScrollbarLayout, base: Style) {
     for y in layout.track.y..layout.track.bottom() {
         if let Some(cell) = buf.cell_mut((layout.track.x, y)) {
             cell.reset();
-            cell.set_symbol(TRACK_SYMBOL);
-            cell.set_style(base.patch(style::muted()));
+            cell.set_symbol(" ");
+            cell.set_style(base);
         }
     }
     for y in layout.thumb.y..layout.thumb.bottom() {

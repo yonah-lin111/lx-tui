@@ -154,6 +154,11 @@ pub struct ModelPicker {
     pub stage: ModelPickerStage,
     /// 第一级候选：启用的 provider × 其模型（含展示名）。
     pub candidates: Vec<ModelCandidate>,
+    /// 当前生效的模型在 `candidates` 中的索引（行首 `❯` 与底色标记）；
+    /// 未绑定或不在候选列表时为 None。
+    pub current: Option<usize>,
+    /// 当前生效的 variant 在第二级候选中的索引（进入 `Variants` 时按阶段计算）。
+    pub current_variant: Option<usize>,
     /// 窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
 }
@@ -200,10 +205,68 @@ pub struct HistoryEntry {
     pub updated_at_ms: i64,
 }
 
+/// 超过该时长改用绝对日期（对齐 opencode 的"近期相对、久远绝对"）。
+const RELATIVE_TIME_LIMIT_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+
+impl HistoryEntry {
+    /// 右侧时间列：7 天内相对时间（`just now` / `5m ago` / `3h ago` / `2d ago`），
+    /// 更早显示 `YYYY-MM-DD`。`now_ms` 由渲染层传入（`ui/` 不自己取系统时间）。
+    ///
+    /// 未来时间戳（时钟回拨）按 `just now` 处理，不显示负数。
+    pub fn time_label(&self, now_ms: i64) -> String {
+        let elapsed = now_ms.saturating_sub(self.updated_at_ms);
+        if elapsed < 0 {
+            return "just now".to_string();
+        }
+        if elapsed < 60_000 {
+            return "just now".to_string();
+        }
+        if elapsed < 60 * 60 * 1000 {
+            return format!("{}m ago", elapsed / 60_000);
+        }
+        if elapsed < 24 * 60 * 60 * 1000 {
+            return format!("{}h ago", elapsed / (60 * 60 * 1000));
+        }
+        if elapsed < RELATIVE_TIME_LIMIT_MS {
+            return format!("{}d ago", elapsed / (24 * 60 * 60 * 1000));
+        }
+        format_date(self.updated_at_ms)
+    }
+}
+
+/// 由 UTC 毫秒时间戳格式化为 `YYYY-MM-DD`（不引入时区依赖）。
+fn format_date(ms: i64) -> String {
+    let days = ms.div_euclid(86_400_000);
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+/// 自 1970-01-01 起的天数 → 公历年月日（Howard Hinnant 的 civil_from_days）。
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let mp = (5 * day_of_year + 2) / 153;
+    let day = u32::try_from(day_of_year - (153 * mp + 2) / 5 + 1).unwrap_or(1);
+    let month = u32::try_from(if mp < 10 { mp + 3 } else { mp - 9 }).unwrap_or(1);
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
 /// `/resume` 历史面板。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HistoryPanel {
     pub entries: Vec<HistoryEntry>,
+    /// 当前窗格已绑定的会话在 `entries` 中的索引（行首 `❯` 与底色标记）。
+    pub current: Option<usize>,
+    /// 计算相对时间的"现在"（UTC 毫秒），由事件循环每轮 `tick` 刷新。
+    ///
+    /// 渲染层只读它做算术，不自己取系统时间：面板停留期间 `just now` 会自然走成
+    /// `1m ago`，而 `ui/` 保持纯函数可测。
+    pub now_ms: i64,
     /// 窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
 }
@@ -271,6 +334,18 @@ impl SlashPanel {
             Self::Commands { window, .. } => *window,
             Self::Model(picker) => picker.window,
             Self::History(panel) => panel.window,
+        }
+    }
+
+    /// 当前视图"已生效项"的索引（行首 `❯` 标记与底色）；命令候选面板没有该概念。
+    pub fn current_index(&self) -> Option<usize> {
+        match self {
+            Self::Commands { .. } => None,
+            Self::Model(picker) => match &picker.stage {
+                ModelPickerStage::Models => picker.current,
+                ModelPickerStage::Variants { .. } => picker.current_variant,
+            },
+            Self::History(panel) => panel.current,
         }
     }
 
@@ -386,3 +461,6 @@ pub fn slash_trigger(input: &str, cursor: usize) -> Option<String> {
     }
     Some(line_prefix.to_string())
 }
+
+#[cfg(test)]
+mod tests;

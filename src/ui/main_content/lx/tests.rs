@@ -473,10 +473,9 @@ fn wrapped_input_caps_height_and_shows_scrollbar() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, true, None);
     let text = buffer_text(&buf);
-    assert!(
-        text.contains('▐') || text.contains('▕'),
-        "溢出时滚动条可见: {text}"
-    );
+    // 轨道不画符号，只看 thumb：滚动条列只剩 `▐`。
+    assert!(text.contains('▐'), "溢出时滚动条可见: {text}");
+    assert!(!text.contains('▕'), "轨道不再绘制竖线: {text}");
 }
 
 // ===== `@` 提及面板几何 =====
@@ -748,6 +747,8 @@ fn slash_model_lx() -> Lx {
                 model_name: "gpt-5.6-luna".into(),
             },
         ],
+        current: None,
+        current_variant: None,
         window: PanelWindow::new(0),
     })));
     lx
@@ -803,6 +804,8 @@ fn slash_model_and_resume_show_empty_placeholder_row() {
     lx.slash = Some(SlashPanel::Model(Box::new(ModelPicker {
         stage: ModelPickerStage::Models,
         candidates: Vec::new(),
+        current: None,
+        current_variant: None,
         window: PanelWindow::new(0),
     })));
     assert!(slash_layout(area, &lx).is_some());
@@ -1000,10 +1003,9 @@ fn overflowing_history_draws_scrollbar_glyphs() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
-    assert!(
-        text.contains('▐') || text.contains('▕'),
-        "溢出时历史滚动条可见：{text}"
-    );
+    // 历史滚动条与公共组件同口径：只有 thumb，没有轨道竖线。
+    assert!(text.contains('▐'), "溢出时历史滚动条可见：{text}");
+    assert!(!text.contains('▕'), "轨道不再绘制竖线：{text}");
 }
 
 #[test]
@@ -1403,3 +1405,5 @@ fn idle_chat_bar_has_no_loading_mark() {
     let text = buffer_text(&buf);
     assert!(!text.contains(text::chat::LOADING_LABEL), "{text}");
 }
+
+mod slash_panels;

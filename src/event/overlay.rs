@@ -375,6 +375,30 @@ pub(crate) fn handle_overlay_click(
             }
             None
         }
+        Some(Overlay::ResumeSessionEdit(edit)) => {
+            let confirming = edit.confirming_delete;
+            let Some(shell) = ui::overlay::resume_edit_shell(screen) else {
+                update::close_overlay(state);
+                return None;
+            };
+            if modal_dismissed(state, &shell, column, row) {
+                return None;
+            }
+            match ui::overlay::resume_edit_button_at(&shell, confirming, column, row) {
+                Some(ui::overlay::ResumeEditButton::Primary) => {
+                    update::apply_overlay_key(state, OverlayKey::Enter)
+                }
+                Some(ui::overlay::ResumeEditButton::Delete) => {
+                    update::apply_overlay_key(state, OverlayKey::Remove)
+                }
+                // 取消：确认态退回编辑态（不关窗），编辑态关闭模态。
+                Some(ui::overlay::ResumeEditButton::Cancel) => {
+                    update::apply_overlay_key(state, OverlayKey::Esc)
+                }
+                // 内部空白：保持打开。
+                None => None,
+            }
+        }
         Some(Overlay::UiGallery(_)) => {
             let Some(layout) = ui::overlay::ui_gallery_layout(screen) else {
                 update::close_overlay(state);

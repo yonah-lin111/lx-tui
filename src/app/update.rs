@@ -8,6 +8,7 @@ mod menu;
 mod pane;
 mod prompt;
 mod referenced;
+mod resume_edit;
 mod selection;
 mod trust;
 mod ui_gallery;
@@ -23,6 +24,7 @@ pub use menu::*;
 pub use pane::*;
 pub use prompt::*;
 pub use referenced::*;
+pub use resume_edit::*;
 pub use selection::*;
 pub use trust::*;
 pub use ui_gallery::{

@@ -20,6 +20,9 @@ pub const MIN_SIZE_HINT: &str = "terminal too small";
 pub const AGENTS_EMPTY: &str = "no agents running";
 /// 列表当前项标记：Agents 条目、工作区列表、提示词列表与页码菜单共用（不独立着色）。
 pub const AGENT_SELECTED_MARKER: &str = "❯";
+/// 浮层列表（`/model`、`/resume`）"当前已生效项"标记：与侧栏同一字形，
+/// 使"我现在用的是哪个"在任何列表里都是一个符号。
+pub const CURRENT_ITEM_MARKER: &str = AGENT_SELECTED_MARKER;
 /// Agent 状态圆点：运行/阻塞实心、空闲空心。
 pub const AGENT_STATUS_DOT: &str = "●";
 pub const AGENT_STATUS_RING: &str = "○";
@@ -393,6 +396,9 @@ pub const BUTTON_CREATE: &str = "[create enter]";
 pub const BUTTON_CLEAR: &str = "[clear ^c]";
 pub const BUTTON_CANCEL: &str = "[cancel esc]";
 pub const BUTTON_CONFIRM: &str = "[confirm enter]";
+/// `/resume` 会话编辑模态的删除与二次确认按钮。
+pub const BUTTON_DELETE: &str = "[delete ^d]";
+pub const BUTTON_CONFIRM_DELETE: &str = "[confirm del enter]";
 /// 模态浮层与 toast 右上角的关闭按钮图标；与模板块删除按钮（`TEMPLATE_BUTTON_DEL`）
 /// 共用同一字符，一致性由 `text::tests` 的回归测试钉住。
 pub const MODAL_CLOSE: &str = "[✕]";
@@ -574,6 +580,11 @@ pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
+/// `/resume` 会话编辑模态：标题、删除确认提示与校验错误。
+pub const RESUME_EDIT_MODAL_TITLE: &str = "Session";
+pub const RESUME_EDIT_CONFIRM_HINT: &str = "Press ^d again to confirm";
+pub const RESUME_EDIT_EMPTY_TITLE: &str = "title cannot be empty";
+pub const RESUME_EDIT_PLACEHOLDER: &str = "session title";
 /// 消息底部通知的标题（固定枚举，对齐 ui 页 agent error；渲染为 `! <标题>`）。
 pub const LX_CHAT_NOTICE_FAILED: &str = "Failed";
 pub const LX_CHAT_NOTICE_INTERRUPTED: &str = "Interrupted";

@@ -34,7 +34,7 @@ fn state_with_cwd(cwd: &std::path::Path) -> AppState {
 }
 
 /// 构造服务：数据库已信任该工作区。
-fn trusted_service(label: &str) -> (Persistence, AppState, PathBuf, PathBuf) {
+pub(super) fn trusted_service(label: &str) -> (Persistence, AppState, PathBuf, PathBuf) {
     let db_path = temp_db_path(label);
     let cwd = workspace_path(label);
     let database = Database::open(&db_path).expect("db opens");

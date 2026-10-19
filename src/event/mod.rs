@@ -193,6 +193,10 @@ async fn run_loop(
         }
         // 显示工作区变化或设置页写入后重载自定义命令；git 元数据到达后同步仓库根。
         let prompt_workspace = state.prompt_workspace();
+        // `/resume` 编辑模态归属失效（切工作区/切焦点窗格）即作废，丢弃未保存标题。
+        if update::discard_stale_resume_edit(state) {
+            dirty = true;
+        }
         if prompt_workspace != last_prompt_workspace {
             last_prompt_workspace = prompt_workspace;
             commands_reload = true;

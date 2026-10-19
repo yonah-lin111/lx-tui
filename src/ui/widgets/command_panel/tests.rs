@@ -463,12 +463,8 @@ fn renders_scrollbar_when_overflowing() {
     let bar = layout.scrollbar.expect("scrollbar visible");
     assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].symbol(), "▐");
     assert_eq!(buf[(bar.thumb.x, bar.thumb.y)].modifier, Modifier::empty());
-    assert_eq!(buf[(bar.track.x, bar.track.bottom() - 1)].symbol(), "▕");
-    assert!(
-        buf[(bar.track.x, bar.track.bottom() - 1)]
-            .modifier
-            .contains(Modifier::DIM)
-    );
+    // 轨道不绘制符号，只保留占位列（滚动条列 = 浮层底色）。
+    assert_eq!(buf[(bar.track.x, bar.track.bottom() - 1)].symbol(), " ");
 }
 
 #[test]

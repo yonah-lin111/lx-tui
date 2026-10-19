@@ -122,11 +122,10 @@ fn render_input_scrollbar(area: Rect, buf: &mut Buffer, lx: &Lx) {
     }
 }
 
-/// 把历史滚动条渲染到网格（贴右缘一列；透明底）。
+/// 把历史滚动条渲染到网格（贴右缘一列；轨道留空、只画 thumb）。
+///
+/// 与公共 `scrollbar` 组件同口径：轨道不画符号，只保留占位列与命中几何。
 fn render_history_scrollbar(grid: &mut Grid, bar: &scrollbar::ScrollbarLayout) {
-    for y in bar.track.y..bar.track.bottom() {
-        grid.set(bar.track.x, y, '▕', style::muted());
-    }
     for y in bar.thumb.y..bar.thumb.bottom() {
         grid.set(bar.thumb.x, y, '▐', style::text());
     }
@@ -263,6 +262,7 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
     let view = CommandPanelView {
         items: &items,
         active: panel.active(),
+        current: None,
         window_anchor: Some(panel.active()),
         window_start: None,
         anchor_row: region_h,

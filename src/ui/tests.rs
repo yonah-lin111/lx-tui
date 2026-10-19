@@ -820,10 +820,11 @@ fn workspace_list_renders_scrolled_window_and_scrollbar() {
         .collect();
     assert!(rendered.contains(&expected), "{rendered}");
 
+    // 轨道不再绘制竖线：滚动条列在 thumb 之外是空格。
     let scrollbar_row: Vec<char> = lines[list.y as usize].chars().collect();
     assert_eq!(
         scrollbar_row[usize::from(list.right() - 1)].to_string(),
-        "▕"
+        " "
     );
     let bottom_row: Vec<char> = lines[list.bottom() as usize - 1].chars().collect();
     assert_eq!(bottom_row[usize::from(list.right() - 1)].to_string(), "▐");
@@ -1432,7 +1433,7 @@ fn prompt_text_wraps_before_scrollbar_gutter() {
 }
 
 #[test]
-fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
+fn prompt_scrollbar_renders_thumb_without_track_border_in_gutter() {
     let mut state = AppState::demo();
     let view = view_for(&state);
     overflow_prompt(&mut state, &view);
@@ -1447,8 +1448,9 @@ fn prompt_scrollbar_renders_track_and_thumb_in_gutter() {
     let lines = render_lines(&state);
     let last: Vec<char> = lines[gutter.bottom() as usize - 1].chars().collect();
     assert_eq!(last[usize::from(gutter.x)].to_string(), "▐");
+    // 轨道留空（不画 `▕`），只保留 thumb。
     let middle: Vec<char> = lines[gutter.y as usize + 1].chars().collect();
-    assert_eq!(middle[usize::from(gutter.x)].to_string(), "▕");
+    assert_eq!(middle[usize::from(gutter.x)].to_string(), " ");
 }
 
 #[test]

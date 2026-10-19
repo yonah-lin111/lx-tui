@@ -16,8 +16,12 @@ use super::mention;
 
 /// `/` 命令面板条目（与 `render` 同源）；面板在但无候选时给一行空态占位。
 ///
-/// 返回的 `CommandItem` 只借用 `panel`（含 `&'static str` 占位），无自有字符串。
-pub(super) fn items(panel: &crate::app::state::SlashPanel) -> Vec<CommandItem<'_>> {
+/// 返回的 `CommandItem` 只借用 `panel` 与 `time_labels`（含 `&'static str` 占位），
+/// 无自有字符串；相对时间由调用方预先算好并以切片传入，避免在条目里持有临时值。
+pub(super) fn items<'a>(
+    panel: &'a crate::app::state::SlashPanel,
+    time_labels: &'a [String],
+) -> Vec<CommandItem<'a>> {
     use crate::app::state::{ModelPickerStage, SlashPanel};
     match panel {
         SlashPanel::Commands { items, .. } => items
@@ -64,16 +68,30 @@ pub(super) fn items(panel: &crate::app::state::SlashPanel) -> Vec<CommandItem<'_
                     tag: "",
                 }];
             }
+            // 行右端是相对时间（对齐 opencode）；会话 id 不再上桌（只用于内部绑定）。
             history
                 .entries
                 .iter()
-                .map(|entry| CommandItem::Inline {
+                .enumerate()
+                .map(|(index, entry)| CommandItem::Inline {
                     label: entry.title.as_str(),
-                    preview: entry.session_id.as_str(),
-                    tag: "",
+                    preview: "",
+                    tag: time_labels.get(index).map_or("", String::as_str),
                 })
                 .collect()
         }
+    }
+}
+
+/// 历史条目的相对时间标签（与 `items` 的条目索引一一对应）；非历史面板为空。
+pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<String> {
+    match panel {
+        crate::app::state::SlashPanel::History(history) => history
+            .entries
+            .iter()
+            .map(|entry| entry.time_label(history.now_ms))
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -102,6 +120,8 @@ fn view<'a>(
     CommandPanelView {
         items,
         active: window.active,
+        // 空态占位行时 current 越界，渲染侧按索引匹配不到，自然不画标记。
+        current: panel.current_index(),
         window_anchor: Some(window.anchor),
         window_start: window.viewport,
         anchor_row: above,
@@ -123,7 +143,8 @@ fn area_of(input: Rect, area: Rect) -> Rect {
 pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
     let panel = lx.slash.as_ref()?;
     let input = super::input_rect(area, lx)?;
-    let items = items(panel);
+    let time_labels = history_time_labels(panel);
+    let items = items(panel, &time_labels);
     command_panel::layout(area_of(input, area), &view(&items, panel, input, area))
 }
 
@@ -137,7 +158,8 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
         return None;
     }
     let input = super::input_rect(area, lx)?;
-    let items = items(panel);
+    let time_labels = history_time_labels(panel);
+    let items = items(panel, &time_labels);
     let layout = command_panel::layout(area_of(input, area), &view(&items, panel, input, area))?;
     command_panel::item_at(&layout, &items, column, row)
 }
@@ -150,6 +172,7 @@ pub(super) fn render(area: Rect, buf: &mut ratatui::buffer::Buffer, lx: &Lx) {
     let Some(input) = super::input_rect(area, lx) else {
         return;
     };
-    let items = items(panel);
+    let time_labels = history_time_labels(panel);
+    let items = items(panel, &time_labels);
     command_panel::render(area_of(input, area), buf, &view(&items, panel, input, area));
 }

@@ -183,6 +183,13 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             }
             // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板吞掉。
             _ if editable => {}
+            // `/resume` 历史面板：`Shift+Enter` 打开该会话的编辑模态（改名/删除）。
+            LxInput::EnterFolder
+                if matches!(slash, super::super::state::SlashPanel::History(_)) =>
+            {
+                super::resume_edit::open_resume_session_edit(state, pane_id);
+                return;
+            }
             _ => return,
         }
         if command == LxInput::Enter || command == LxInput::Tab {

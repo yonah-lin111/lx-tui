@@ -3,6 +3,7 @@
 
 mod history;
 mod session;
+mod slash_panels;
 mod stop;
 mod timeline;
 

@@ -58,6 +58,7 @@ fn paste_items<'a>(data: &'a PastePanelData) -> Vec<CommandItem<'a>> {
 /// 粘贴面板视图：锚定光标行，标题固定；不设高度上限。
 fn paste_view<'a>(items: &'a [CommandItem<'a>], data: &PastePanelData) -> CommandPanelView<'a> {
     CommandPanelView {
+        current: None,
         items,
         active: data.active,
         window_anchor: Some(data.active),
@@ -120,6 +121,7 @@ fn refer_panel_data(prompt: &Prompt) -> Option<ReferPanelData> {
 /// 字母快捷面板视图：锚定光标行，窗口跟随高亮；标题固定。
 fn refer_view<'a>(items: &'a [CommandItem<'a>], data: &ReferPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
+        current: None,
         items,
         active: data.active,
         window_anchor: Some(data.active),
@@ -227,6 +229,7 @@ fn block_items<'a>(data: &'a BlockPanelData) -> Vec<CommandItem<'a>> {
 /// 块命令面板视图：窗口锚定面板状态，显式视口优先，不设高度上限；顶边左侧为 `Commands` 标题。
 fn block_view<'a>(items: &'a [CommandItem<'a>], data: &BlockPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
+        current: None,
         items,
         active: data.active,
         window_anchor: Some(data.anchor),
@@ -343,6 +346,7 @@ fn slash_row_items(rows: &[SlashRow]) -> Vec<CommandItem<'_>> {
 /// 斜杠命令面板视图：窗口锚定面板状态，显式视口优先；选择器换标题。
 fn slash_view<'a>(items: &'a [CommandItem<'a>], data: &'a SlashPanelData) -> CommandPanelView<'a> {
     CommandPanelView {
+        current: None,
         items,
         active: data.active,
         window_anchor: Some(data.anchor),
@@ -497,6 +501,7 @@ fn mention_view<'a>(
     max_height: u16,
 ) -> CommandPanelView<'a> {
     CommandPanelView {
+        current: None,
         items,
         active: data.active,
         window_anchor: Some(data.anchor),
