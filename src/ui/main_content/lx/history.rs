@@ -189,10 +189,10 @@ pub struct HistoryLayout {
     pub thinking: Vec<(usize, usize, Rect)>,
     /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
     pub code_copy: Vec<CodeCopyButton>,
-    /// 可展开工具卡片的标题行命中矩形：消息 id、call id、标题行矩形。
+    /// 可展开工具卡片的命中矩形：消息 id、call id、可点区域。
     ///
-    /// 只有进程/计划卡片（有类型化详情）进入这里；点击标题或 `[details]` 切换展开，
-    /// 点击输出正文不触发折叠。
+    /// 只有进程/计划卡片（有类型化详情）进入这里；一张卡片可能有两个矩形
+    /// （标题行 + 树体末尾的展开/收起行），点输出正文不触发折叠。
     pub tools: Vec<ToolHit>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
@@ -202,7 +202,10 @@ pub struct HistoryLayout {
 
 pub use code_copy::CodeCopyButton;
 
-/// 可展开工具卡片的标题行命中区。
+/// 可展开工具卡片的命中区。
+///
+/// 一张卡片可能有**两个**命中矩形：标题行（整行可点）与树体末尾的展开/收起行
+/// （`… +21 more lines` / `[collapse]`）。两者都切换同一个 `call_id`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolHit {
     pub message_id: String,
@@ -310,7 +313,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             if let AssistantStepView::Tool { call, .. } = step
                 && call.detail.is_some()
             {
-                // 标题行命中区：带 `[details]` 的卡片可点标题展开/收起。
+                // 标题行命中区：带类型化详情（进程/计划）的卡片可点标题展开/收起。
                 let header_y = area
                     .y
                     .saturating_add(u16::try_from(rows).unwrap_or(u16::MAX));
@@ -319,6 +322,19 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     call_id: call.call_id.clone(),
                     rect: Rect::new(area.x, header_y, width, 1),
                 });
+                // 树体末尾的展开/收起行（`… +N more lines` / `[collapse]`）同样可点：
+                // 用户要求「more lines 移到底部，点击展开，展开后点尾部折叠文字收起」。
+                let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
+                if let Some(offset) = tool::toggle_offset(call, expanded) {
+                    let toggle_y = area
+                        .y
+                        .saturating_add(u16::try_from(rows + 1 + offset).unwrap_or(u16::MAX));
+                    tools.push(ToolHit {
+                        message_id: message.id.clone(),
+                        call_id: call.call_id.clone(),
+                        rect: Rect::new(area.x, toggle_y, width, 1),
+                    });
+                }
             }
             if is_reasoning {
                 let header_y = area

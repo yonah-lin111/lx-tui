@@ -275,29 +275,56 @@ fn failed_exit_is_visible_on_the_card() {
 }
 
 #[test]
-fn header_shows_details_or_collapse_marker() {
+fn header_shows_status_inline_and_has_no_corner_details_marker() {
     let call = running_command("out\n");
     let (folded, _) = render(&call, 60, false);
+    // 状态紧贴动词、以 ` · ` 分隔，且**不在行尾**（右上角已没有 [details]）。
     assert!(
-        folded.contains(crate::ui::text::agent::DETAILS_OPEN),
-        "折叠时显示 [details]：{folded}"
+        folded.contains(&format!(
+            "Run command{}Running",
+            text::LX_CHAT_TOOL_STATUS_SEP
+        )),
+        "状态紧跟动词：{folded}"
     );
-    let (expanded, _) = render(&call, 60, true);
     assert!(
-        expanded.contains(crate::ui::text::agent::DETAILS_CLOSE),
-        "展开时显示 [collapse]：{expanded}"
+        !folded.contains(crate::ui::text::agent::DETAILS_CLOSE),
+        "折叠态不该出现 [collapse]：{folded}"
     );
-    // 极窄：标记被省略，但方块与动词仍在（不挤掉动词）。
+    // 极窄：状态整段丢弃，但方块与动词仍在（不挤掉动词）。
     let (narrow, _) = render(&call, 14, false);
     assert!(narrow.contains('■'), "极窄保留方块：{narrow:?}");
     assert!(narrow.contains("Run"), "极窄保留动词：{narrow:?}");
+    assert!(!narrow.contains("Running"), "极窄整项丢弃状态：{narrow:?}");
+}
+
+#[test]
+fn collapse_marker_lives_at_the_bottom_of_the_tree() {
+    let output: String = (0..10).map(|index| format!("line {index}\n")).collect();
+    let call = running_command(&output);
+    let (expanded, _) = render(&call, 60, true);
+    let lines: Vec<&str> = expanded.lines().collect();
+    let last = lines.last().expect("至少两行");
+    assert!(
+        last.contains(crate::ui::text::agent::DETAILS_CLOSE),
+        "收起入口在树体最后一行：{expanded}"
+    );
+    assert!(
+        last.starts_with(text::agent::TREE_LEAF),
+        "最后一行用直角收口：{expanded}"
+    );
+    // 标题行不再带收起标记。
+    assert!(
+        !lines[0].contains(crate::ui::text::agent::DETAILS_CLOSE),
+        "标题行不该有收起标记：{expanded}"
+    );
 }
 
 #[test]
 fn details_marker_text_is_ascii_and_short() {
-    // 详情按钮文案为纯 ASCII，窄卡片也不会变成乱码。
+    // 展开/收起按钮文案为纯 ASCII，窄卡片也不会变成乱码。
+    // （省略提示 `… +` 不是 ASCII：它是内容提示，不是按钮文案。）
     for label in [
-        crate::ui::text::agent::DETAILS_OPEN,
+        crate::ui::text::agent::EARLIER_OUTPUT_SUFFIX,
         crate::ui::text::agent::DETAILS_CLOSE,
     ] {
         assert!(label.is_ascii());
@@ -386,7 +413,21 @@ fn folded_preview_states_how_many_lines_are_hidden() {
         "折叠必须显式说明省略了多少行：{text}"
     );
     assert!(text.contains("7 more lines"), "10 行留 3 行 = 省 7：{text}");
-    // 展开后不再需要这条提示（全部输出都在）。
+    // 省略提示在树体**最后一行**（可点击的展开入口），不是输出中间。
+    let lines: Vec<&str> = text.lines().collect();
+    assert!(
+        lines
+            .last()
+            .is_some_and(|line| line.contains("7 more lines")),
+        "省略提示要在底部：{text}"
+    );
+    assert!(
+        lines
+            .last()
+            .is_some_and(|line| line.starts_with(text::agent::TREE_LEAF)),
+        "底部提示行用直角收口：{text}"
+    );
+    // 展开后不再提示省略（全部输出都在）。
     let (expanded, _) = render(&running_command(&output), 60, true);
     assert!(
         !expanded.contains(text::agent::EARLIER_OUTPUT_HINT),
@@ -611,11 +652,16 @@ fn running_card_shows_status_without_elapsed_time() {
     let call = running_command("out\n");
     let (text, _) = render(&call, 80, false);
     assert!(text.contains("Running"), "状态词仍然可见：{text}");
-    // 不应出现 `Running · 12s` 这类时长。
-    assert!(!text.contains(" · "), "不应再拼接时长分隔符：{text}");
-    for unit in ["ms", "s]", "m "] {
-        let _ = unit;
-    }
+    // 状态紧跟动词，但不拼接任何时长（`Running · 12s` 这类形态）。
+    assert!(
+        text.contains(&format!(
+            "Run command{}Running",
+            text::LX_CHAT_TOOL_STATUS_SEP
+        )),
+        "状态以 · 分隔后紧跟动词：{text}"
+    );
+    assert!(!text.contains("Running ·"), "状态后不得再跟时长：{text}");
+    assert!(!text.contains("12s"), "不应出现时长：{text}");
 }
 
 #[test]
@@ -629,5 +675,51 @@ fn finished_card_shows_exit_code_without_elapsed_time() {
     view.ended_at_ms = Some(200_000);
     let (text, _) = render(&call, 80, false);
     assert!(text.contains("Exited 0"), "终态显示退出码：{text}");
-    assert!(!text.contains(" · "), "终态也不带时长：{text}");
+    assert!(!text.contains("Exited 0 ·"), "退出码后不得跟时长：{text}");
+    assert!(!text.contains("3m 19s"), "不应出现时长：{text}");
+}
+
+// ===== 末尾展开/收起行的宽度让位（整项丢弃，不截半段）=====
+
+#[test]
+fn toggle_row_falls_back_to_the_compact_form_then_disappears() {
+    let output: String = (0..9).map(|index| format!("o{index}\n")).collect();
+    let call = running_command(&output);
+    // 宽：完整文案。
+    let (wide, _) = render(&call, 40, false);
+    assert!(
+        wide.lines()
+            .last()
+            .is_some_and(|line| line.contains("6 more lines")),
+        "宽窗格用完整文案：{wide}"
+    );
+    // 中：退成 `… +6`（仍点得动、仍说得出还有几行），不当成半个词截断。
+    let (medium, _) = render(&call, 14, false);
+    let last = medium.lines().last().unwrap_or_default();
+    assert!(
+        last.contains(text::agent::EARLIER_OUTPUT_HINT),
+        "紧凑形态：{medium}"
+    );
+    assert!(!last.contains("more"), "宽度不够时不画半个词：{medium}");
+    // 极窄：整项丢弃，只剩收口连接符（标题行仍可点）。
+    let (narrow, _) = render(&call, 6, false);
+    let last = narrow.lines().last().unwrap_or_default();
+    assert!(
+        !last.contains(text::agent::EARLIER_OUTPUT_HINT),
+        "极窄整项丢弃：{narrow}"
+    );
+}
+
+#[test]
+fn collapse_marker_is_dropped_instead_of_truncated_when_narrow() {
+    let output: String = (0..9).map(|index| format!("o{index}\n")).collect();
+    let call = running_command(&output);
+    let (narrow, _) = render(&call, 6, true);
+    let last = narrow.lines().last().unwrap_or_default();
+    assert!(
+        !last.contains("[colla") || last.contains(text::agent::DETAILS_CLOSE),
+        "收起文案不得被截半：{narrow}"
+    );
+    // 展开态的行数仍与 rows 一致（丢文案不改几何）。
+    assert_eq!(narrow.lines().count(), rows(&call, 6, true));
 }

@@ -360,7 +360,10 @@ pub const VERB_STOP_COMMAND: &str = "Stop command";
 pub const VERB_UPDATE_PLAN: &str = "Plan";
 
 /// 详情操作按钮（ASCII，窄宽度也画得下）。
-pub const DETAILS_OPEN: &str = "[details]";
+///
+/// `[details]` 已从卡片右上角移除：展开入口改到树体**末尾**（`… +N more lines`），
+/// 收起入口是同一条末尾行（`[collapse]`）。用户要求「more lines 调到底部，点击展开，
+/// 展开后点尾部折叠文字收起」。
 pub const DETAILS_CLOSE: &str = "[collapse]";
 
 /// 进程状态词（文字，不只靠颜色）。

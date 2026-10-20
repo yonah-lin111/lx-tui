@@ -135,6 +135,14 @@ pub(super) fn title_rows() -> usize {
     HEADER_ROWS
 }
 
+/// 末尾展开/收起行的卡片内行偏移（0 = 标题行）；没有这一行时返回 None。
+///
+/// 进程/交互卡片把它画在树体最后一行（`… +N more lines` / `[collapse]`），
+/// 并由 `history::layout` 收成可点击的命中矩形。计划卡片没有这一行。
+pub(super) fn toggle_offset(call: &ToolCallView, expanded: bool) -> Option<usize> {
+    command::toggle_offset(call, expanded)
+}
+
 /// 行内一段着色文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Segment {
@@ -264,35 +272,35 @@ pub(super) fn mark_of(status: ToolStatus, _loading_frame: usize) -> StepMark {
     }
 }
 
-/// 标题行：`■ 动词` +（宽度允许时）右对齐状态文字 + 可展开标记。
+/// 标题行：`■ 动词` +（宽度允许时）紧跟动词的状态文字。
 ///
-/// 状态文字与 `[details]`/`[collapse]` 只在**宽度足够**时画；极窄时保留方块与动词
-/// （最窄档唯一的状态信号是方块）。标记是纯文本提示，点击标题行任意位置即可切换
-/// （见 `history::ToolHit`），所以窄屏丢掉它也不影响可操作性。
+/// 状态**不再右对齐**，而是紧贴动词、用 ` · ` 分隔（`■ Run command · Running`）：
+/// 右上角原来的 `[details]` 已移除，展开/收起改由树体末尾的可点击行承担
+/// （`command::toggle_row`）；状态若仍右对齐，就会孤零零贴在行的最右端、与动词断开。
+///
+/// 状态只在**整段放得下**时画（窄屏整项丢弃，绝不截半段）；极窄时保留方块与动词
+/// ——方块是最窄档唯一的状态信号。
 pub(super) fn header_with_verb(
     call: &ToolCallView,
     width: u16,
     loading_frame: usize,
     verb: &str,
     status: Option<String>,
-    expanded: bool,
 ) -> Vec<Segment> {
     let mark = mark_of(call.status, loading_frame);
-    header_with_mark(call, width, loading_frame, verb, status, expanded, mark)
+    header_with_mark(call, width, loading_frame, verb, status, mark)
 }
 
 /// 同上，但方块状态由调用方指定。
 ///
 /// 进程卡片需要它：命令已经交回且工具结算为 `completed`，但**进程本身仍在跑**时，
 /// 方块应继续呼吸（`Running`），不能被工具的终态覆盖。
-#[allow(clippy::too_many_arguments)]
 pub(super) fn header_with_mark(
     call: &ToolCallView,
     width: u16,
     loading_frame: usize,
     verb: &str,
     status: Option<String>,
-    expanded: bool,
     mark: StepMark,
 ) -> Vec<Segment> {
     let limit = usize::from(width);
@@ -312,37 +320,28 @@ pub(super) fn header_with_mark(
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];
     }
-    let verb = paint(Segment::new(format!("{verb} "), style::chat_tool_verb()));
+    let verb = paint(Segment::new(verb.to_string(), style::chat_tool_verb()));
     let mut segments = vec![lead, verb];
-    // 右对齐尾巴：状态在前、可展开标记在最后（两者都不挤掉动词）。
-    let mut tail: Vec<Segment> = Vec::new();
-    if let Some(status) = status {
-        tail.push(Segment::new(status, style::agent_step_detail()));
+    // 动词整段放不下时尾部省略（不挤掉行首方块）。
+    while segments_cols(&segments) > limit && segments.len() > 1 {
+        let remaining = limit.saturating_sub(segments[0].cols());
+        let text = truncate_with_ellipsis(&segments[1].text, remaining);
+        if text.is_empty() {
+            segments.truncate(1);
+        } else {
+            segments[1] = Segment::new(text, segments[1].style);
+        }
     }
-    if call.detail.is_some() && !expanded {
-        tail.push(Segment::new(
-            text::agent::DETAILS_OPEN,
+    // 状态紧跟动词：`■ 动词 · 状态`（够宽才画，且必须落在动词之后）。
+    if let Some(status) = status
+        && segments.len() == 2
+    {
+        let tail = Segment::new(
+            format!("{}{status}", text::LX_CHAT_TOOL_STATUS_SEP),
             style::agent_step_detail(),
-        ));
-    } else if call.detail.is_some() {
-        tail.push(Segment::new(
-            text::agent::DETAILS_CLOSE,
-            style::agent_step_detail(),
-        ));
-    }
-    if !tail.is_empty() {
-        let used = segments_cols(&segments);
-        let tail_cols: usize = tail.iter().map(Segment::cols).sum::<usize>() + tail.len() - 1;
-        let gap = 2usize;
-        if used + tail_cols + gap <= limit {
-            let pad = limit - used - tail_cols;
-            segments.push(Segment::new(" ".repeat(pad), style::text()));
-            for (index, segment) in tail.into_iter().enumerate() {
-                if index > 0 {
-                    segments.push(Segment::new(" ", style::text()));
-                }
-                segments.push(segment);
-            }
+        );
+        if segments_cols(&segments) + tail.cols() <= limit {
+            segments.push(tail);
         }
     }
     segments

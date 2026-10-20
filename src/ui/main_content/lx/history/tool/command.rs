@@ -3,21 +3,23 @@
 //! 版式（对应 design §10.2 / §10.3）：
 //!
 //! ```text
-//! ■ Run command                              Running · 12s  [details]
+//! ■ Run command · Running
 //!   │  $ cargo test chat::tools
-//!   │  … +21 earlier lines
 //!   │  test read::empty_file ... ok
-//!   └─ test result: ok. 24 passed
+//!   │  test result: ok. 24 passed
+//!   └─ … +21 more lines          ← 点这一行展开
 //! ```
 //!
 //! - **标题行**沿用文件工具同一套 `■ 动词` 语法；方块颜色/呼吸表达状态，
-//!   状态文字与 `[details]` 靠右（窄屏先丢文字、再丢标记，方块永远保留）；
+//!   状态文字用 ` · ` 分隔紧跟在动词右侧（不是行尾右对齐，右上角没有 `[details]`）；
+//!   窄屏整项丢弃状态、再收敛动词，方块永远保留；
 //! - **树形体**从第 2 行起：命令、cwd、输出共用一根竖线 `│`，**最后一行**用
 //!   `└─` 收口（与 prompt list、文件工具的 `  └─` 同一套直角语法；两段前缀等宽
 //!   5 列，内容逐行左对齐）；
 //! - 折叠时只留最近 [`PREVIEW_LINES`] 行输出，被省略的行数用
-//!   `… +N earlier lines` **显式**标在树体里（绝不静默丢）；
-//! - 展开时补上 cwd 与全部保留输出（上限 [`EXPANDED_LINES`]，滚动交给外层历史区）；
+//!   `… +N more lines` **显式**标在树体**末尾**，这一行就是展开入口；
+//! - 展开时补上 cwd 与全部保留输出（上限 [`EXPANDED_LINES`]，滚动交给外层历史区），
+//!   末尾一行变成 `[collapse]`，点它折回去；
 //! - 没有输出时显式占位（`Waiting for output` / `No new output`），绝不画空行；
 //! - 卡片只读快照：不解析 JSON、不读进程、不读数据库。
 //!
@@ -63,13 +65,13 @@ pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
             title_rows() + command_body(view, expanded).len()
         }
         Some(crate::app::state::ToolDetailView::Interaction(view)) => {
-            title_rows() + interaction_body(view).len()
+            title_rows() + interaction_body(view, expanded).len()
         }
         _ => title_rows(),
     }
 }
 
-/// 命令卡片树体行（命令 + cwd + 输出 + 收口提示）；空卡片也至少一行占位。
+/// 命令卡片树体行（命令 + cwd + 输出 + 末尾可点击行）；空卡片也至少一行占位。
 ///
 /// **与 [`draw_command`] 共用同一份构造**：行数口径只有一个来源。
 fn command_body(view: &CommandView, expanded: bool) -> Vec<BodyRow> {
@@ -79,45 +81,31 @@ fn command_body(view: &CommandView, expanded: bool) -> Vec<BodyRow> {
         view.process_session_id,
         view.tty,
     )];
+    // 只在展开时出现的内容（cwd、输出被淘汰的告警）。
+    let mut extras: Vec<BodyRow> = Vec::new();
+    let cwd = text::agent::cwd_label(&view.cwd);
+    if !cwd.trim().is_empty() {
+        extras.push(BodyRow::detail(cwd));
+    }
+    if view.dropped_bytes > 0 {
+        extras.push(BodyRow::warn(text::agent::EARLIER_OUTPUT_DISCARDED));
+    }
     if expanded {
-        let cwd = text::agent::cwd_label(&view.cwd);
-        if !cwd.trim().is_empty() {
-            body.push(BodyRow::detail(cwd));
-        }
-        if view.dropped_bytes > 0 {
-            body.push(BodyRow::warn(text::agent::EARLIER_OUTPUT_DISCARDED));
-        }
+        body.extend(extras.iter().cloned());
     }
-    if lines.is_empty() {
-        body.push(BodyRow::detail(text::agent::WAITING_FOR_OUTPUT));
-        return body;
+    body.extend(output_rows(
+        &lines,
+        expanded,
+        text::agent::WAITING_FOR_OUTPUT,
+    ));
+    if let Some(row) = toggle_row(&lines, expanded, !extras.is_empty()) {
+        body.push(row);
     }
-    let total = lines.len().min(EXPANDED_LINES);
-    let shown = if expanded {
-        lines.len().min(EXPANDED_LINES)
-    } else {
-        lines.len().min(PREVIEW_LINES)
-    };
-    // 折叠时把「还有多少行没显示」显式标出来（展开后不再需要这条）。
-    if !expanded && total > shown {
-        body.push(BodyRow::detail(format!(
-            "{}{} {}",
-            text::agent::EARLIER_OUTPUT_HINT,
-            total - shown,
-            text::agent::EARLIER_OUTPUT_SUFFIX,
-        )));
-    }
-    let start = lines.len().saturating_sub(shown);
-    body.extend(
-        lines[start..]
-            .iter()
-            .map(|line| BodyRow::output(line.clone())),
-    );
     body
 }
 
-/// 交互卡片树体行（命令 + 输入预览 + 输出 + 空占位）。
-fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
+/// 交互卡片树体行（命令 + 输入预览 + 输出 + 末尾可点击行）。
+fn interaction_body(view: &ProcessInteractionView, expanded: bool) -> Vec<BodyRow> {
     let mut body = vec![BodyRow::command(
         &view.command,
         Some(view.process_session_id),
@@ -129,41 +117,96 @@ fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
             text::agent::INPUT_PREFIX
         )));
     }
-    if view.dropped_bytes > 0 {
+    if expanded && view.dropped_bytes > 0 {
         body.push(BodyRow::warn(text::agent::EARLIER_OUTPUT_DISCARDED));
     }
     let lines = output_lines(&view.output);
-    if lines.is_empty() {
-        body.push(BodyRow::detail(text::agent::NO_NEW_OUTPUT));
-        return body;
+    body.extend(output_rows(&lines, expanded, text::agent::NO_NEW_OUTPUT));
+    if let Some(row) = toggle_row(&lines, expanded, view.dropped_bytes > 0) {
+        body.push(row);
     }
-    let shown = lines.len().min(PREVIEW_LINES);
-    if lines.len() > shown {
-        body.push(BodyRow::detail(format!(
-            "{}{} {}",
-            text::agent::EARLIER_OUTPUT_HINT,
-            lines.len() - shown,
-            text::agent::EARLIER_OUTPUT_SUFFIX,
-        )));
-    }
-    let start = lines.len().saturating_sub(shown);
-    body.extend(
-        lines[start..]
-            .iter()
-            .map(|line| BodyRow::output(line.clone())),
-    );
     body
+}
+
+/// 输出行（折叠时只取尾部 [`PREVIEW_LINES`] 行，展开时取尾部 [`EXPANDED_LINES`] 行）；
+/// 没有输出时给一行显式占位（`placeholder`）。
+fn output_rows(lines: &[String], expanded: bool, placeholder: &str) -> Vec<BodyRow> {
+    if lines.is_empty() {
+        return vec![BodyRow::detail(placeholder)];
+    }
+    let shown = if expanded {
+        lines.len().min(EXPANDED_LINES)
+    } else {
+        lines.len().min(PREVIEW_LINES)
+    };
+    let start = lines.len().saturating_sub(shown);
+    lines[start..]
+        .iter()
+        .map(|line| BodyRow::output(line.clone()))
+        .collect()
+}
+
+/// 树体末尾的展开/收起行（可点击，见 `history::ToolHit` 的命中区）。
+///
+/// - 折叠且**有被省略的输出行**：`… +21 more lines` —— 点它展开；
+/// - 展开：`[collapse]` —— 点它折回。展开态只要真的多露出过东西（省略行或 cwd 这类
+///   注脚）就一定有这一行，否则用户点开后再也找不到往里收的入口；
+/// - 折叠且输出全在：不画——短卡片没有省略行，`… +0 more lines` 只会是噪声
+///   （标题行仍可点，展开后 cwd 与 `[collapse]` 才出现）。
+fn toggle_row(lines: &[String], expanded: bool, has_extras: bool) -> Option<BodyRow> {
+    let hidden = lines.len().saturating_sub(lines.len().min(PREVIEW_LINES));
+    if expanded {
+        return (hidden > 0 || has_extras)
+            .then(|| BodyRow::toggle(text::agent::DETAILS_CLOSE, None));
+    }
+    (hidden > 0).then(|| {
+        BodyRow::toggle(
+            format!(
+                "{}{} {}",
+                text::agent::EARLIER_OUTPUT_HINT,
+                hidden,
+                text::agent::EARLIER_OUTPUT_SUFFIX,
+            ),
+            Some(format!("{}{}", text::agent::EARLIER_OUTPUT_HINT, hidden)),
+        )
+    })
+}
+
+/// 末尾展开/收起行的**卡片内行偏移**（0 = 标题行）；没有这一行时返回 None。
+///
+/// `history::layout` 用它定位可点击的命中矩形：渲染与命中必须共用同一份树体构造，
+/// 否则点击区会与画出来的那一行错位。
+pub(super) fn toggle_offset(call: &ToolCallView, expanded: bool) -> Option<usize> {
+    let body = match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(view)) => command_body(view, expanded),
+        Some(crate::app::state::ToolDetailView::Interaction(view)) => {
+            interaction_body(view, expanded)
+        }
+        _ => return None,
+    };
+    body.last()
+        .is_some_and(|row| row.toggle)
+        .then(|| body.len() - 1)
 }
 
 /// 树体的一行：**未加连接符**的内容 + 着色档位。
 ///
 /// 连接符由 [`draw_body`] 统一补：除最后一行外都是 `  │  `，最后一行 `  └─ `。
 /// 这样「哪一行收口」只有一处判断，行数永远等于 `body.len()`。
+#[derive(Clone)]
 struct BodyRow {
     text: String,
     style: ratatui::style::Style,
     /// 单行化后的取样上限（命令可更长，输出同样限长）。
     sample: usize,
+    /// 是否是末尾的展开/收起行（命中区单独收，见 `history::layout`）。
+    toggle: bool,
+    /// 完整文案放不下时的紧凑形态；连它都放不下就只留连接符（行仍可点）。
+    ///
+    /// 只给折叠提示用：`… +6 more lines` 在窄窗格里会被截成 `… +6 more …`，
+    /// 退成 `… +6` 既可读又点得动。展开态的 `[collapse]` 没有更短的等价说法，
+    /// 放不下就整段不画（与「整项丢弃」一致）。
+    compact: Option<String>,
 }
 
 impl BodyRow {
@@ -172,6 +215,8 @@ impl BodyRow {
             text: format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX),
             style: style::chat_tool_param(),
             sample: SAMPLE_CHARS,
+            toggle: false,
+            compact: None,
         }
     }
 
@@ -180,6 +225,8 @@ impl BodyRow {
             text: content.into(),
             style: style::agent_step_detail(),
             sample: SAMPLE_CHARS,
+            toggle: false,
+            compact: None,
         }
     }
 
@@ -188,6 +235,8 @@ impl BodyRow {
             text: content.into(),
             style: style::agent_warn(),
             sample: SAMPLE_CHARS,
+            toggle: false,
+            compact: None,
         }
     }
 
@@ -196,6 +245,19 @@ impl BodyRow {
             text: content.into(),
             style: style::text(),
             sample: SAMPLE_CHARS,
+            toggle: false,
+            compact: None,
+        }
+    }
+
+    /// 末尾的展开/收起行（沿用旧 `[details]` 的次要信息色：同一处提示，只是挪到了底部）。
+    fn toggle(content: impl Into<String>, compact: Option<String>) -> Self {
+        Self {
+            text: content.into(),
+            style: style::agent_step_detail(),
+            sample: SAMPLE_CHARS,
+            toggle: true,
+            compact,
         }
     }
 }
@@ -243,7 +305,16 @@ pub(super) fn draw(
             );
         }
         Some(crate::app::state::ToolDetailView::Interaction(view)) => {
-            draw_interaction(grid, rect, scroll, row_index, call, view, loading_frame);
+            draw_interaction(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                view,
+                loading_frame,
+                expanded,
+            );
         }
         _ => {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
@@ -254,7 +325,6 @@ pub(super) fn draw(
                     loading_frame,
                     text::agent::VERB_EXEC_COMMAND,
                     status,
-                    expanded,
                 );
                 put_segments(grid, rect.x, y, rect.width, &segments);
             }
@@ -264,7 +334,6 @@ pub(super) fn draw(
 }
 
 /// 命令卡片：标题 + 树体（命令 / cwd / 输出 / 收口）。
-#[allow(clippy::too_many_arguments)]
 fn draw_command(
     grid: &mut Grid,
     rect: Rect,
@@ -291,7 +360,6 @@ fn draw_command(
         loading_frame,
         text::agent::VERB_EXEC_COMMAND,
         status,
-        expanded,
         mark,
     );
     draw_body(grid, rect, scroll, row_index, &command_body(view, expanded));
@@ -306,6 +374,7 @@ fn draw_interaction(
     call: &ToolCallView,
     view: &ProcessInteractionView,
     loading_frame: usize,
+    expanded: bool,
 ) {
     let status = process_status(view.state);
     let mark = if view.state.is_running() && call.status != ToolStatus::Failed {
@@ -322,13 +391,18 @@ fn draw_interaction(
         loading_frame,
         text::agent::interaction_verb(view.action),
         status,
-        false,
         mark,
     );
-    draw_body(grid, rect, scroll, row_index, &interaction_body(view));
+    draw_body(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        &interaction_body(view, expanded),
+    );
 }
 
-/// 标题行（`■ 动词` + 右对齐状态/标记）；推进 1 行。
+/// 标题行（`■ 动词 · 状态`）；推进 1 行。
 #[allow(clippy::too_many_arguments)]
 fn draw_title(
     grid: &mut Grid,
@@ -339,19 +413,10 @@ fn draw_title(
     loading_frame: usize,
     verb: &str,
     status: Option<String>,
-    expanded: bool,
     mark: StepMark,
 ) {
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let segments = super::header_with_mark(
-            call,
-            rect.width,
-            loading_frame,
-            verb,
-            status,
-            expanded,
-            mark,
-        );
+        let segments = super::header_with_mark(call, rect.width, loading_frame, verb, status, mark);
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
@@ -383,11 +448,27 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
                 rect.width.saturating_sub(indent),
             );
             let content_cols = limit.saturating_sub(TREE_COLS);
-            let single = single_line(&row.text, row.sample);
-            let content = if single.width() <= content_cols {
-                single
+            // 展开/收起行按「整项丢弃」让位：完整 → 紧凑（只留 `… +N`）→ 整段不画。
+            // 绝不截半段——`[colla…` 读不出含义，还会让人以为点不了。
+            // （丢掉后标题行与 `^o` 仍是可用入口。）
+            let content = if row.toggle {
+                let full = single_line(&row.text, row.sample);
+                if full.width() <= content_cols {
+                    full
+                } else {
+                    row.compact
+                        .as_deref()
+                        .map(|compact| single_line(compact, row.sample))
+                        .filter(|compact| compact.width() <= content_cols)
+                        .unwrap_or_default()
+                }
             } else {
-                truncate_with_ellipsis(&single, content_cols)
+                let single = single_line(&row.text, row.sample);
+                if single.width() <= content_cols {
+                    single
+                } else {
+                    truncate_with_ellipsis(&single, content_cols)
+                }
             };
             grid.put_clipped(
                 content_x,

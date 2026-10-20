@@ -86,7 +86,6 @@ pub(super) fn draw(
                 loading_frame,
                 text::agent::VERB_UPDATE_PLAN,
                 None,
-                false,
             );
             put_segments(grid, rect.x, y, width, &segments);
         }
@@ -109,7 +108,6 @@ pub(super) fn draw(
             loading_frame,
             text::agent::VERB_UPDATE_PLAN,
             progress,
-            false,
         );
         put_segments(grid, rect.x, y, width, &segments);
     }

@@ -798,7 +798,7 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
             return Some(LxChatHit::CodeCopy(button.body));
         }
     }
-    // 可展开工具卡片的标题行（点击标题或 `[details]` 切换；点正文不折叠）。
+    // 可展开工具卡片（点击标题行或树体末尾的展开/收起行切换；点正文不折叠）。
     if let Some(hit) = tool_hit_at(&view, lx, column, row) {
         return Some(LxChatHit::ToolDetail(hit.message_id, hit.call_id));
     }

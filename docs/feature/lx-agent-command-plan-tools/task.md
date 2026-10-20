@@ -123,7 +123,7 @@
 
 ### 8.1 CommandCard
 
-- [x] 命令卡片显示状态、命令、cwd（展开）、尾部输出、退出码、时长与截断证据。
+- [x] 命令卡片显示状态、命令、cwd（展开）、尾部输出、退出码与截断证据；**不带时长**。
 - [x] 后台输出更新原卡片；running 不显示已退出（`background_output_updates_the_original_card_only`）。
 - [x] 原位展开 + 标题行鼠标命中；展开状态按 `(message_id, call_id)` 保存。
 - [x] `^o` 展开当前/最近工具、Alt+↑/↓ 选择（`input/process_keys.rs`）；面板优先级保持。
@@ -147,10 +147,14 @@
 - [x] 三张卡片共用一套树形语法：`■ 动词` 标题 + `  │  ` 中间行 + `  └─ ` 收口，**整卡只有一根树干**。
 - [x] 两条前缀等宽 5 列，命令/输入/输出/步骤逐行左对齐（`tree_prefixes_are_equal_width_so_content_stays_aligned`）。
 - [x] 命令折叠保留最近 3 行，省略行数显式标为 `… +N more lines`（`folded_preview_states_how_many_lines_are_hidden`）。
+- [x] 省略提示落在**树体末尾**（收口行），这一行就是展开入口；展开后同一行变 `[collapse]`，
+      点它折回（`toggle_row_hit_rect_matches_the_painted_bottom_line`）。
 - [x] 命令行带 `$ ` 提示符；交互卡片输入永远排在输出之前（`interaction_body_keys_input_before_output_under_the_same_tree`）。
 - [x] 计划卡片：有解释时解释行收口，无解释时最后一条步骤收口（`plan_steps_use_the_tree_and_leaf_lands_on_the_explanation`）。
 - [x] 进程仍在跑时方块继续呼吸（不因工具已结算而静止）；终态停为实心（`running_process_keeps_breathing_even_after_the_tool_settled`）。
-- [x] 运行不足一秒不追加时长（避免 `Running · 1ms` 噪声与逐帧抖动）。
+- [x] 标题行是 `■ 动词 · 状态`：状态以 ` · ` 分隔紧跟动词，右上角**没有** `[details]`
+      （用户要求移除）；窄屏**整项丢弃**状态词，再收敛动词，方块永远保留
+      （`header_shows_status_inline_and_has_no_corner_details_marker`）。
 
 ### 8.5 共用布局与 gallery
 
@@ -312,6 +316,24 @@
     开了只会显示一个永远空着的列表。`↓` 因此是无副作用的空操作。
   - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
     历史区几何回到 `lay.input` 一处真相。
+
+- **卡片版式：移除右上角 `[details]`，展开入口下移到底部（按用户反馈）**：
+  - 要求：消息列表里工具卡片右上角不再有 `[details]`；把 `more lines` 挪到树体**底部**，
+    点击即展开；展开后点尾部的折叠文字收回。
+  - 实现：
+    - 标题行改为 `■ 动词 · 状态`：状态用 ` · ` 分隔紧跟动词（右对齐会让它孤零零贴在行尾）；
+      窄屏按「整项丢弃」放弃状态词，再尾部省略动词，方块永远保留。
+    - 树体末尾新增可点击行：折叠态 `… +N more lines`，展开态 `[collapse]`；
+      两者都由 `command::toggle_row` 生成，`rows`/`draw`/命中区共用同一份构造。
+    - `history::layout` 为每张卡多收一个命中矩形（`ToolHit`），
+      由 `command::toggle_offset` 给出「末尾行相对标题行的偏移」，
+      渲染与命中不会再错位。
+    - 交互卡片同样适用（`write_stdin` 的展开/收起一致）；计划卡片本就全量展示，不加这一行。
+    - 移除 `text::agent::DETAILS_OPEN`（右上角按钮），保留 `DETAILS_CLOSE` 作收起文案。
+  - 回归测试：`header_shows_status_inline_and_has_no_corner_details_marker`、
+    `collapse_marker_lives_at_the_bottom_of_the_tree`、
+    `toggle_row_hit_rect_matches_the_painted_bottom_line`（命中行 == 画出来的那一行）、
+    `folded_preview_states_how_many_lines_are_hidden`（省略提示在最后一行）。
 
 - **后台任务在跑，后台面板却显示 no running processes（按用户反馈修复）**：
   - 现象：模型汇报任务已启动并验证存活，`pgrep` 也能看到，但面板全空。
