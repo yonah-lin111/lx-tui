@@ -146,3 +146,42 @@ fn file_tool_cards_have_no_open_hit() {
         "文件工具卡片没有 [open] 命中区"
     );
 }
+
+// ===== bug 回归：后台任务面板打开时不得切换 agent =====
+
+#[test]
+fn task_panel_blocks_entry_switch_hits() {
+    // 真实 bug：面板打开后点"原本三个 agent 入口"的位置仍能切换 agent——
+    // 因为 `layout` 照旧算出入口矩形，命中穿透到下面那层。
+    let area = Rect::new(0, 0, 100, 20);
+    let mut lx = Lx::new();
+    let closed = layout(area, &lx);
+    assert!(!closed.entries.is_empty(), "前提：关闭态确实有入口标签");
+
+    // 记录关闭态每个入口的位置，打开面板后逐点验证都不再命中。
+    let positions: Vec<(u16, u16)> = closed
+        .entries
+        .iter()
+        .map(|(_, rect)| (rect.x + 1, rect.y))
+        .collect();
+    let mut lx_open = Lx::new();
+    lx_open.task = Some(crate::app::state::TaskPage::default());
+    assert!(
+        layout(area, &lx_open).entries.is_empty(),
+        "面板打开时不再登记入口矩形"
+    );
+    for (column, row) in positions.clone() {
+        assert_eq!(
+            entry_hit(area, &lx_open, column, row),
+            None,
+            "面板打开后点 ({column},{row}) 不得切换 agent"
+        );
+    }
+    // 关闭面板后入口命中恢复。
+    lx.task = None;
+    let (column, row) = positions.first().copied().expect("至少一个入口");
+    assert!(
+        entry_hit(area, &lx, column, row).is_some(),
+        "关闭面板后入口恢复正常"
+    );
+}

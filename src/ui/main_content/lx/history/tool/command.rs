@@ -59,17 +59,17 @@ const BODY_ROWS: usize = 2;
 ///
 /// **与 [`draw_command`] 共用同一份构造**：行数口径只有一个来源。输出、cwd 与
 /// `… +N more lines` 都已搬进后台任务面板，消息列表里只看得到"哪条命令在跑"。
-fn command_body(view: &CommandView, running: bool) -> Vec<BodyRow> {
+fn command_body(view: &CommandView) -> Vec<BodyRow> {
     vec![
-        BodyRow::command(&view.command, running),
+        BodyRow::command(&view.command),
         BodyRow::open(text::agent::TASK_OPEN_LABEL),
     ]
 }
 
 /// 交互卡片树体行：命令 + `[open]`（stdin 与输出同样只在面板里看）。
-fn interaction_body(view: &ProcessInteractionView, running: bool) -> Vec<BodyRow> {
+fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
     vec![
-        BodyRow::command(&view.command, running),
+        BodyRow::command(&view.command),
         BodyRow::open(text::agent::TASK_OPEN_LABEL),
     ]
 }
@@ -106,19 +106,15 @@ struct BodyRow {
 }
 
 impl BodyRow {
-    /// 命令原文行（`$ ` 前缀 + 命令）。
+    /// 命令原文行（`$ ` 前缀 + 命令）——**恒为参数金黄**。
     ///
-    /// `alive` 为真时（进程仍存活）整行跟着标题一起染深黄：卡片此时表达的是
-    /// "这条命令还在跑"，命令原文是它的身份，颜色必须与标题同档；进程停止后
-    /// 回到常规金黄参数色。
-    fn command(command: &str, alive: bool) -> Self {
+    /// 参数色不随运行态变化（用户要求「参数颜色不要改变，颜色变化始终是小卡片和
+    /// title」）：一行的主色若跟着状态跳，会让人误以为参数本身也变了含义。
+    /// 状态只由标题行的方块 + 动词表达。
+    fn command(command: &str) -> Self {
         Self {
             text: format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX),
-            style: if alive {
-                style::chat_step_label_alive()
-            } else {
-                style::chat_tool_param()
-            },
+            style: style::chat_tool_param(),
             sample: SAMPLE_CHARS,
             open: false,
         }
@@ -231,8 +227,7 @@ fn draw_command(
         status,
         mark,
     );
-    let running = mark_is_running(mark);
-    draw_body(grid, rect, scroll, row_index, &command_body(view, running));
+    draw_body(grid, rect, scroll, row_index, &command_body(view));
 }
 
 /// 交互卡片：标题 + 树体（命令 / `[open]`）。
@@ -260,14 +255,7 @@ fn draw_interaction(
         status,
         mark,
     );
-    let running = mark_is_running(mark);
-    draw_body(
-        grid,
-        rect,
-        scroll,
-        row_index,
-        &interaction_body(view, running),
-    );
+    draw_body(grid, rect, scroll, row_index, &interaction_body(view));
 }
 
 /// 标题行（`■ 动词 · 状态`）；推进 1 行。
@@ -353,11 +341,6 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
         }
         *row_index += 1;
     }
-}
-
-/// 该标记是否代表"仍在运行"（橙黄档）：进程存活或工具尚未结算都算。
-fn mark_is_running(mark: StepMark) -> bool {
-    matches!(mark, StepMark::Running | StepMark::Alive)
 }
 
 /// 进程状态文案：`Running` / `Exited 0` / `exit 2`。

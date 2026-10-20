@@ -222,14 +222,28 @@ impl TaskPage {
         moved
     }
 
-    /// 写入高亮任务的输出快照：内容变了就贴回尾部，避免视口停在一个已经换掉的
-    /// 缓冲区上（换任务时同样由 [`Self::resolve_focus`] / [`Self::move_active`] 贴尾）。
+    /// 写入高亮任务的输出快照。
+    ///
+    /// **不改变滚动位置**：面板每轮都会重新拉一次输出，如果每次都贴尾，用户往上翻
+    /// 看历史日志时就会被立刻拽回底部（用户报的 bug）。「贴尾」只发生在真正切换
+    /// 目标的时刻——打开面板定位（[`Self::resolve_focus`]）与切换高亮
+    /// （[`Self::move_active`]）。
+    ///
+    /// 内容变短时把偏移钳到新的上限，避免视口停在一个越界位置。
     pub fn set_output(&mut self, output: Vec<String>) -> bool {
         if self.output == output {
             return false;
         }
+        let was_at_tail = self.output_scroll >= self.output_max_scroll();
         self.output = output;
-        self.pin_output_to_tail();
+        let max = self.output_max_scroll();
+        self.output_scroll = if was_at_tail {
+            // 原本就贴着底部（跟随最新）→ 继续跟随，新日志照常推进。
+            max
+        } else {
+            // 用户手动上翻过 → 保持位置，只做越界钳制。
+            self.output_scroll.min(max)
+        };
         true
     }
 

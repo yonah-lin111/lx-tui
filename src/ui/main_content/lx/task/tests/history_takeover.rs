@@ -372,3 +372,48 @@ fn wheel_over_output_container_scrolls_it() {
         rects.output
     );
 }
+
+// ===== bug 回归：输出刷新不得把用户拽回底部 =====
+
+#[test]
+fn refreshing_output_keeps_a_manually_scrolled_position() {
+    // 真实 bug：面板每轮都重新拉输出，原来每次都贴尾 → 用户往上翻立刻被拽回底部。
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = (0..100).map(|index| format!("line {index}")).collect();
+    page.output_visible = 10;
+    page.pin_output_to_tail();
+    assert_eq!(page.output_scroll, 90, "初始贴尾");
+
+    // 用户主动上翻到 20。
+    assert!(page.scroll_output(-70));
+    assert_eq!(page.output_scroll, 20);
+
+    // 后台又追加了几行（事件层回投新快照）：位置必须保持不变。
+    let next: Vec<String> = (0..105).map(|index| format!("line {index}")).collect();
+    assert!(page.set_output(next));
+    assert_eq!(page.output_scroll, 20, "刷新输出不得改变用户手动上翻的位置");
+}
+
+#[test]
+fn refreshing_output_still_follows_when_pinned_at_tail() {
+    // 反过来：本来就在底部跟随最新时，新日志要照常推进视口。
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = (0..100).map(|index| format!("line {index}")).collect();
+    page.output_visible = 10;
+    page.pin_output_to_tail();
+    let next: Vec<String> = (0..120).map(|index| format!("line {index}")).collect();
+    assert!(page.set_output(next));
+    assert_eq!(page.output_scroll, 110, "贴尾状态继续跟随最新输出");
+}
+
+#[test]
+fn shrinking_output_clamps_but_keeps_the_read_position() {
+    // 缓冲区被截断变短时只做越界钳制，不应跳回顶部或底部。
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = (0..100).map(|index| format!("line {index}")).collect();
+    page.output_visible = 10;
+    page.output_scroll = 50;
+    let next: Vec<String> = (0..20).map(|index| format!("line {index}")).collect();
+    page.set_output(next);
+    assert_eq!(page.output_scroll, 10, "钳到新上限（20 − 10）");
+}

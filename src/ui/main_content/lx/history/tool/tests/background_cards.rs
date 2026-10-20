@@ -151,26 +151,32 @@ fn alive_command_card_is_orange_and_stopped_card_is_green() {
 }
 
 #[test]
-fn alive_card_paints_the_command_row_in_the_same_deep_yellow() {
-    // 用户要求：命令行的字体颜色也跟着改（不只是方块与标题）。
-    let alive = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
-    let grid = render_grid(&alive, 70);
-    let command_style = command_row_style(&grid, 70).expect("命令行必须画出来");
+fn command_row_keeps_the_param_colour_in_every_state() {
+    // 用户要求「参数颜色不要改变，颜色变化始终是小卡片和 title」：
+    // 命令行（参数）**恒为参数金黄**，运行中与停止后完全一致。
+    let running = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    let running_style =
+        command_row_style(&render_grid(&running, 70), 70).expect("命令行必须画出来");
     assert_eq!(
-        command_style.fg,
-        style::chat_step_label_alive().fg,
-        "存活时命令行与标题同档深黄：{command_style:?}"
+        running_style.fg,
+        style::chat_tool_param().fg,
+        "运行中命令行仍是参数金黄：{running_style:?}"
     );
 
-    // 停止后回到常规金黄参数色。
     let stopped = command_call(ProcessStateView::Stopped, ToolStatus::Completed, "beat\n");
-    let grid = render_grid(&stopped, 70);
-    let stopped_style = command_row_style(&grid, 70).expect("命令行必须画出来");
+    let stopped_style =
+        command_row_style(&render_grid(&stopped, 70), 70).expect("命令行必须画出来");
     assert_eq!(
-        stopped_style.fg,
-        style::chat_tool_param().fg,
-        "停止后命令行回到参数金黄"
+        running_style.fg, stopped_style.fg,
+        "运行态变化不得影响参数色"
     );
+
+    // 变的是**标题行**：方块与动词从橙黄（运行）切到翡翠绿（完成）。
+    let running_mark = render_grid(&running, 70).cell(0, 0).style;
+    let stopped_mark = render_grid(&stopped, 70).cell(0, 0).style;
+    assert_eq!(running_mark.fg, style::chat_step_mark_alive().fg);
+    assert_eq!(stopped_mark.fg, style::chat_step_mark_done().fg);
+    assert_ne!(running_mark.fg, stopped_mark.fg, "标题档位必须变化");
 }
 
 #[test]

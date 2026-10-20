@@ -316,6 +316,9 @@ pub fn copy_text(area: Rect, lx: &Lx, range: ((i32, u16), (i32, u16))) -> String
 }
 
 /// 命中测试：坐标落在某个入口标签内则返回该入口。
+///
+/// 入口区在后台任务面板打开时由 [`layout`] 置空（面板接管了那块区域），
+/// 因此这里自然拿不到命中——点击不会再穿透到 agent 切换。
 pub(crate) fn entry_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxEntry> {
     layout(area, lx)
         .entries
@@ -510,7 +513,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_top = center
         .min(top_limit.saturating_sub(entries_h + brand::UNDERLINE_ROWS))
         .max(region_top);
-    let entries_ok = entries_fit
+    // 后台任务面板打开时**不登记入口区**：面板接管了历史区与输入框，那三个
+    // 入口标签根本没画出来；若仍留命中矩形，点面板空白处会穿透去切换 agent
+    // （用户报的真实 bug）。
+    let entries_ok = lx.task.is_none()
+        && entries_fit
         && entries_top
             .saturating_add(entries_h)
             .saturating_add(brand::UNDERLINE_ROWS)
