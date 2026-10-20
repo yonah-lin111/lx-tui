@@ -50,6 +50,8 @@ pub const ICON_TOKENS: &str = "%";
 /// 结构标记（可见符号集中处；均为单宽、跨平台）。
 pub const MARKER_DOT: &str = "●";
 pub const MARKER_TREE_LEAF: &str = "└─";
+/// 树体中间行的连接符（`│`）：与 [`MARKER_TREE_LEAF`] 的 `└` 同列，连成一条树干。
+pub const MARKER_TREE_BAR: &str = "│";
 /// 工具卡片树形体（与 prompt list 同一套直角语法）。
 ///
 /// 三条前缀**等宽 5 列**，内容一律从第 5 列起，与文件工具详情行的

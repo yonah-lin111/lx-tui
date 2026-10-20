@@ -264,18 +264,48 @@ fn page_keys_do_not_leak_into_the_draft() {
 }
 
 #[test]
-fn page_navigation_moves_highlight_and_cycles_tabs() {
+fn panel_navigation_moves_the_highlight_and_cycles_tabs() {
+    // 面板沉底后方向键让给了上方消息列表，列表高亮改用 `Alt+↑/↓`
+    // （映射到 `SelectPrevTool` / `SelectNextTool`）；`←/→` 仍然换 tab。
     let mut state = ready_state("");
     let pane = focus_pane(&state);
     open_with_processes(&mut state, pane);
-    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
-    assert_eq!(page(&state, pane).window.active, 1, "↓ 移动高亮");
-    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
-    assert_eq!(page(&state, pane).window.active, 0, "↑ 移动高亮");
+    crate::app::update::pane::apply_lx_input(
+        &mut state,
+        crate::app::actions::LxInput::SelectNextTool,
+    );
+    assert_eq!(page(&state, pane).window.active, 1, "Alt+↓ 移动高亮");
+    crate::app::update::pane::apply_lx_input(
+        &mut state,
+        crate::app::actions::LxInput::SelectPrevTool,
+    );
+    assert_eq!(page(&state, pane).window.active, 0, "Alt+↑ 移动高亮");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Right);
     assert_eq!(page(&state, pane).tab, TaskTab::Agents, "→ 换 tab");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Left);
     assert_eq!(page(&state, pane).tab, TaskTab::Processes, "← 换回");
+}
+
+#[test]
+fn arrow_keys_scroll_the_message_list_instead_of_moving_the_highlight() {
+    // 方向键属于上方消息列表：面板高亮不动。
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    open_with_processes(&mut state, pane);
+    let before = page(&state, pane).window.active;
+    for key in [
+        crate::app::actions::LxInput::Down,
+        crate::app::actions::LxInput::PageDown,
+        crate::app::actions::LxInput::Up,
+        crate::app::actions::LxInput::PageUp,
+    ] {
+        crate::app::update::pane::apply_lx_input(&mut state, key);
+    }
+    assert_eq!(
+        page(&state, pane).window.active,
+        before,
+        "方向键滚动历史，不动列表高亮"
+    );
 }
 
 #[test]

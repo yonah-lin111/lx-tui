@@ -838,6 +838,43 @@ pub fn resolve_lx_viewport_top(
     changed
 }
 
+/// 每轮把后台任务面板的**历史可见行数**落状态（绘制前写）。
+///
+/// 面板打开时输入框被控制面板替换，历史区高度由 `TaskPage` 的列表长度决定；
+/// 键盘翻页需要它，而 `app/` 拿不到窗格几何，故与
+/// [`resolve_lx_viewport_top`] 同一套做法放在事件循环里。
+pub fn resolve_task_history_visible(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::layout::pane_inner_rect(*rect);
+        let resolved = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .filter(|target| target.lx.task.is_some())
+            .and_then(|target| crate::ui::main_content::lx::task_history_rows(inner, &target.lx));
+        let Some(target) = state.pane_mut_anywhere(*pane) else {
+            continue;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            continue;
+        };
+        let (total, visible) = match resolved {
+            Some((total, visible)) => (Some(total), Some(visible)),
+            None => (None, None),
+        };
+        if page.history_total == total && page.history_visible == visible {
+            continue;
+        }
+        page.history_total = total;
+        page.history_visible = visible;
+        changed = true;
+    }
+    changed
+}
+
 /// 每轮把各 lx 窗格的置顶行**抑制记忆**落状态。
 ///
 /// 渲染层只读、不写状态（AGENTS：渲染只读），而记忆是唯一的跨帧状态，故放在

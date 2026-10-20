@@ -307,9 +307,14 @@ pub(crate) fn handle_mouse_wheel(
                     ui::main_content::lx::history_wheel_region(inner, &target.lx)
                 })
                 && history_rect.contains((mouse.column, mouse.row).into())
-                && let Some((total, visible)) = state
-                    .pane_anywhere(pane)
-                    .and_then(|target| ui::main_content::lx::history_rows(inner, &target.lx))
+                && let Some((total, visible)) = state.pane_anywhere(pane).and_then(|target| {
+                    // 面板打开时历史区几何不同，走面板口径。
+                    if target.lx.task.is_some() {
+                        ui::main_content::lx::task_history_rows(inner, &target.lx)
+                    } else {
+                        ui::main_content::lx::history_rows(inner, &target.lx)
+                    }
+                })
                 && update::scroll_lx_history(state, pane, direction, total, visible)
             {
                 *dirty = true;

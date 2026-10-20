@@ -293,6 +293,8 @@ async fn run_loop(
             update::resolve_lx_sticky_prompt(state, &geometry.rects);
             // 当前视口顶部行：同上，供点击展开时原地锚定。
             update::resolve_lx_viewport_top(state, &geometry.rects);
+            // 后台任务面板的历史可见行数：同上，供键盘翻页钳制。
+            update::resolve_task_history_visible(state, &geometry.rects);
             tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();

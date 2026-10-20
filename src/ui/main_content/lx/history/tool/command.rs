@@ -4,10 +4,9 @@
 //!
 //! ```text
 //! ■ Run command                              Running · 12s  [details]
-//!   │ cargo test chat::tools
-//!   │ … +21 earlier lines
-//!   │ test read::empty_file ... ok
-//!   │ test write::created ... ok
+//!   │  $ cargo test chat::tools
+//!   │  … +21 earlier lines
+//!   │  test read::empty_file ... ok
 //!   └─ test result: ok. 24 passed
 //! ```
 //!
@@ -15,12 +14,17 @@
 //!   状态文字与 `[details]` 靠右（窄屏先丢文字、再丢标记，方块永远保留）；
 //! - **树形体**从第 2 行起：命令、cwd、输出共用一根竖线 `│`，**最后一行**用
 //!   `└─` 收口（与 prompt list、文件工具的 `  └─` 同一套直角语法；两段前缀等宽
-//!   4 列，内容逐行左对齐）；
+//!   5 列，内容逐行左对齐）；
 //! - 折叠时只留最近 [`PREVIEW_LINES`] 行输出，被省略的行数用
 //!   `… +N earlier lines` **显式**标在树体里（绝不静默丢）；
 //! - 展开时补上 cwd 与全部保留输出（上限 [`EXPANDED_LINES`]，滚动交给外层历史区）；
 //! - 没有输出时显式占位（`Waiting for output` / `No new output`），绝不画空行；
 //! - 卡片只读快照：不解析 JSON、不读进程、不读数据库。
+//!
+//! 版式刻意**只用 `│` 与 `└─` 两种符号**：命令、stdin、每行输出都靠同一根竖线串成
+//! 一个整体，只有最末一行收口。早先试过给每个「节点」开头再加 `├─`，结果一段输出
+//! 里混着 `├─` / `│` / `└─` 三种符号，比原来更花；统一成一根树干后反而干净
+//! （用户反馈：保留原来那套）。
 
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
@@ -46,6 +50,8 @@ pub(super) const PREVIEW_LINES: usize =
 const EXPANDED_LINES: usize = 200;
 /// 单行取样上限（限住每帧成本）。
 const SAMPLE_CHARS: usize = 512;
+/// 树体行首连接符两侧的缩进（与 [`TREE_COLS`] 同口径：`  │  ` = 2 + 1 + 2）。
+const TREE_INDENT: usize = 2;
 
 /// 命令 / 交互卡片占用的渲染行数；`expanded` 由窗格内展开状态决定。
 pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
@@ -102,12 +108,10 @@ fn command_body(view: &CommandView, expanded: bool) -> Vec<BodyRow> {
         )));
     }
     let start = lines.len().saturating_sub(shown);
-    // 输出块是一个**节点**：首行 `├─`/`└─`，其余行 `│`，读起来是"一段输出"。
     body.extend(
         lines[start..]
             .iter()
-            .enumerate()
-            .map(|(offset, line)| BodyRow::output(line.clone(), offset == 0)),
+            .map(|line| BodyRow::output(line.clone())),
     );
     body
 }
@@ -146,29 +150,20 @@ fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
     body.extend(
         lines[start..]
             .iter()
-            .enumerate()
-            .map(|(offset, line)| BodyRow::output(line.clone(), offset == 0)),
+            .map(|line| BodyRow::output(line.clone())),
     );
     body
 }
 
 /// 树体的一行：**未加连接符**的内容 + 着色档位。
 ///
-/// 连接符由 [`draw_body`] 统一补。这里只为每行标注「它是不是一个**节点**的首行」：
-///
-/// - 节点首行（命令、输出块的第一行、提示行）：`├─`；若是最后一个节点则 `└─`；
-/// - 节点内部的续行（同一段输出的第 2 行起）：`│`，表示「还在上一个节点里」。
-///
-/// 早先的实现给每一行都画 `│`、只有最后一行 `└─`，于是输出看起来是十几根并列的
-/// 竖线，读不出「哪几行属于同一个节点」。改用 `├─` 才有真正的分节语义
-/// （用户要求：不要全部用 `│` 和 `└─`，要结合 `├─`）。
+/// 连接符由 [`draw_body`] 统一补：除最后一行外都是 `  │  `，最后一行 `  └─ `。
+/// 这样「哪一行收口」只有一处判断，行数永远等于 `body.len()`。
 struct BodyRow {
     text: String,
     style: ratatui::style::Style,
     /// 单行化后的取样上限（命令可更长，输出同样限长）。
     sample: usize,
-    /// 是否为一个节点的首行（决定 `├─` / `└─` 还是 `│`）。
-    head: bool,
 }
 
 impl BodyRow {
@@ -177,7 +172,6 @@ impl BodyRow {
             text: format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX),
             style: style::chat_tool_param(),
             sample: SAMPLE_CHARS,
-            head: true,
         }
     }
 
@@ -186,7 +180,6 @@ impl BodyRow {
             text: content.into(),
             style: style::agent_step_detail(),
             sample: SAMPLE_CHARS,
-            head: true,
         }
     }
 
@@ -195,17 +188,14 @@ impl BodyRow {
             text: content.into(),
             style: style::agent_warn(),
             sample: SAMPLE_CHARS,
-            head: true,
         }
     }
 
-    /// 输出的第一行是新节点，其余行是同一节点的续行。
-    fn output(content: impl Into<String>, head: bool) -> Self {
+    fn output(content: impl Into<String>) -> Self {
         Self {
             text: content.into(),
             style: style::text(),
             sample: SAMPLE_CHARS,
-            head,
         }
     }
 }
@@ -367,24 +357,31 @@ fn draw_title(
     *row_index += 1;
 }
 
-/// 绘制树体：节点首行画 `├─`（最后一个节点 `└─`），节点内的续行画 `│`；
-/// 推进的行数 = `body.len()`。
-///
-/// 收口判断看**最后一个节点首行**而非最后一行：最后一段输出可以有多个续行，
-/// `└` 必须落在该段的首行上，否则树干会从输出中间收口、下面继续吊着行。
+/// 绘制树体：除最后一行外 `  │  `，最后一行 `  └─ `；推进的行数 = `body.len()`。
 fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, body: &[BodyRow]) {
-    let last_head = body.iter().rposition(|row| row.head).unwrap_or(0);
+    let last = body.len().saturating_sub(1);
     let limit = usize::from(rect.width);
+    let content_x = rect
+        .x
+        .saturating_add(u16::try_from(TREE_COLS).unwrap_or(u16::MAX));
     for (index, row) in body.iter().enumerate() {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            let connector = if !row.head {
-                text::agent::TREE_BAR
-            } else if index == last_head {
-                text::agent::TREE_LEAF
-            } else {
-                text::agent::TREE_BRANCH
-            };
-            let connector_style = style::chat_notice_connector();
+            // 连接符：`  │  ` / `  └─ `。`│` 与 `└` 落在同一列，树干连成一条线。
+            let bar_style = style::chat_notice_connector();
+            let indent = u16::try_from(TREE_INDENT).unwrap_or(0);
+            let leaf = index == last;
+            grid.put_clipped(rect.x, y, &" ".repeat(TREE_INDENT), bar_style, rect.width);
+            grid.put_clipped(
+                rect.x.saturating_add(indent),
+                y,
+                if leaf {
+                    text::agent::MARKER_TREE_LEAF
+                } else {
+                    text::agent::MARKER_TREE_BAR
+                },
+                bar_style,
+                rect.width.saturating_sub(indent),
+            );
             let content_cols = limit.saturating_sub(TREE_COLS);
             let single = single_line(&row.text, row.sample);
             let content = if single.width() <= content_cols {
@@ -392,11 +389,14 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
             } else {
                 truncate_with_ellipsis(&single, content_cols)
             };
-            let mut x = rect.x;
-            grid.put_clipped(x, y, connector, connector_style, rect.width);
-            x = x.saturating_add(u16::try_from(TREE_COLS).unwrap_or(u16::MAX));
-            let remaining = rect.right().saturating_sub(x);
-            grid.put_clipped(x, y, &content, row.style, remaining);
+            grid.put_clipped(
+                content_x,
+                y,
+                &content,
+                row.style,
+                rect.width
+                    .saturating_sub(u16::try_from(TREE_COLS).unwrap_or(u16::MAX)),
+            );
         }
         *row_index += 1;
     }

@@ -268,6 +268,8 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::End | LxInput::LineEnd => lx.end(),
         LxInput::WordLeft => lx.word_left(),
         LxInput::WordRight => lx.word_right(),
+        // 翻页只在后台任务面板里有对象（滚动上方消息列表），聊天页不消费。
+        LxInput::PageUp | LxInput::PageDown => {}
         LxInput::DeleteToLineStart => {
             lx.delete_to_line_start();
             refresh_slash_panel(state, pane_id);
@@ -716,27 +718,37 @@ pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
 ///
 /// 页面整页接管输入（不回落到草稿编辑）：它是一次独立浏览，退出来后草稿与光标
 /// 仍是进入前的样子。不可用的键直接吞掉，避免"按下去没反应但草稿里多了字符"。
+/// 后台任务面板里方向键/翻页键对**上方消息列表**的滚动量；其余键返回 None。
+fn task_history_delta(command: LxInput) -> Option<isize> {
+    match command {
+        LxInput::Up => Some(-1),
+        LxInput::Down => Some(1),
+        LxInput::PageUp => Some(-10),
+        LxInput::PageDown => Some(10),
+        _ => None,
+    }
+}
+
 fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
+    // 上方消息列表的滚动：`PageUp`/`PageDown` 翻屏，`↑`/`↓` 逐行。
+    //
+    // 面板沉底后，方向键的第一意图通常是回看上面的对话，所以历史滚动优先于
+    // 列表高亮移动；列表高亮改用 `^n`/`^p`（见下），功能不丢。
+    if let Some(delta) = task_history_delta(command) {
+        let rows = state
+            .pane_anywhere(pane)
+            .and_then(|target| target.lx.task.as_ref())
+            .and_then(|page| Some((page.history_total?, page.history_visible?)));
+        if let Some((total, visible)) = rows {
+            super::chat::scroll_lx_history(state, pane, delta, total, visible);
+            return;
+        }
+    }
     match command {
         LxInput::Escape => {
             super::chat::close_task_page(state, pane);
         }
-        LxInput::Up => {
-            if let Some(page) = state
-                .pane_mut_anywhere(pane)
-                .and_then(|target| target.lx.task.as_mut())
-            {
-                page.move_active(-1);
-            }
-        }
-        LxInput::Down => {
-            if let Some(page) = state
-                .pane_mut_anywhere(pane)
-                .and_then(|target| target.lx.task.as_mut())
-            {
-                page.move_active(1);
-            }
-        }
+        LxInput::PageUp | LxInput::PageDown | LxInput::Up | LxInput::Down => {}
         // ←/→ 换 tab（对齐 opencode composer 的左右切 tab）。
         LxInput::Left => {
             if let Some(page) = state
@@ -757,6 +769,23 @@ fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
         // `^d` 停止高亮进程（对齐 opencode `composer.shell.kill`）。
         LxInput::Delete => {
             super::chat::stop_selected_process(state, pane);
+        }
+        // 列表高亮移动（`^n`/`^p`）：上下键让给了上方消息列表，这里保留选择能力。
+        LxInput::SelectNextTool => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.move_active(1);
+            }
+        }
+        LxInput::SelectPrevTool => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.move_active(-1);
+            }
         }
         // 其余键不属于本页：吞掉，不落到草稿。
         _ => {}

@@ -601,3 +601,33 @@ async fn task_page_lists_and_stops_a_real_background_process() {
     );
     tools.processes().shutdown().await;
 }
+
+// ===== 停止反馈走 toast，不用输入框上方的 hint =====
+// 面板打开时输入框已被控制面板替换，hint 的锚点是输入框，会飘在错误的位置。
+
+#[tokio::test]
+async fn stopping_a_missing_runtime_reports_via_toast() {
+    // 运行实例已不在（刚切会话/刚退出）：页面还挂着这一行，必须给出反馈。
+    // 反馈走 toast —— 不是输入框上方的 hint。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut streams = ChatStreams::default();
+    state.toast = None;
+    state
+        .effects
+        .push(crate::app::effects::Effect::StopSessionProcess {
+            pane,
+            process_session_id: 999,
+        });
+    assert!(crate::event::chat::apply_process_effects(
+        &mut state,
+        &mut streams
+    ));
+    let toast = state.toast.as_ref().expect("停止失败应弹出 toast");
+    assert!(
+        toast.message.contains("Failed to stop"),
+        "toast 文案：{:?}",
+        toast.message
+    );
+    assert_eq!(toast.anchor, Some(pane), "toast 锚定在该窗格");
+}

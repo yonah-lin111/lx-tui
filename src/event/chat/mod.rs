@@ -398,11 +398,17 @@ fn stop_session_process(
     let Some(manager) = manager else {
         // 会话运行实例已经不在（刚切会话/刚退出）：页面上还挂着这一行，
         // 不能静默失败，否则用户会以为按了没生效。
-        update::show_lx_hint(
+        //
+        // 用 toast 而不是输入框上方的 hint：这一页已经把输入框换成了控制面板，
+        // hint 的锚点是输入框，面板打开时会飘在错误的位置。
+        update::show_toast(
             state,
-            pane,
-            crate::app::state::InputHintLevel::Error,
-            crate::ui::text::LX_TASK_STOP_FAILED,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Error,
+                crate::ui::text::LX_TASK_STOP_FAILED,
+                Some(pane),
+                std::time::Instant::now(),
+            ),
         );
         return;
     };
@@ -422,12 +428,15 @@ fn stop_session_process(
     // 停止是异步的，但"按了就要有反馈"。
     //
     // 这里只确认"已发出停止请求"；真正的结果由进程终态事件驱动列表刷新。
-    // 用 Warning 档而不是 Error：这是用户主动要求的动作，不是出错。
-    update::show_lx_hint(
+    // 用 Info 而不是 Error：这是用户主动要求的动作，不是出错。
+    update::show_toast(
         state,
-        pane,
-        crate::app::state::InputHintLevel::Warning,
-        crate::ui::text::LX_TASK_STOPPED,
+        crate::app::toast::Toast::new(
+            crate::app::toast::ToastKind::Info,
+            crate::ui::text::LX_TASK_STOPPED,
+            Some(pane),
+            std::time::Instant::now(),
+        ),
     );
 }
 

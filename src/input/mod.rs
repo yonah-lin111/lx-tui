@@ -150,6 +150,8 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         KeyCode::Home => Some(LxInput::Home),
         KeyCode::End => Some(LxInput::End),
         KeyCode::Tab => Some(LxInput::Tab),
+        KeyCode::PageUp => Some(LxInput::PageUp),
+        KeyCode::PageDown => Some(LxInput::PageDown),
         KeyCode::Esc => Some(LxInput::Escape),
         KeyCode::Char(ch) => Some(LxInput::Char(ch)),
         _ => None,

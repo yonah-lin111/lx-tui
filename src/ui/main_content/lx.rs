@@ -71,7 +71,7 @@ pub fn render(
     }
     // 后台任务页整页接管本窗格（不覆盖其他窗格、不改 `lx` 其余状态）。
     if let Some(page) = lx.task.as_ref() {
-        task::render(area, buf, page, focused);
+        task::render(area, buf, lx, page, focused);
         return None;
     }
     let (grid, cursor, sticky) = build(area, lx, focused);
@@ -694,6 +694,11 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
     if lx.chat.messages.is_empty() {
         return None;
     }
+    // 后台任务面板打开时，历史区是面板上方的剩余空间（输入框已被面板替换）。
+    if let Some(page) = lx.task.as_ref() {
+        let lay = task::layout(area, page);
+        return (lay.history.height > 0).then_some(lay.history);
+    }
     let lay = layout(area, lx);
     let (x, width) = match lay.input {
         Some(input) => (input.x, input.width),
@@ -710,6 +715,23 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
 pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> {
     let history_rect = history_rect(area, lx)?;
     Some(history::view(history_rect, lx))
+}
+
+/// 后台任务面板打开时，上方消息列表的 `(总行数, 可见行数)`。
+///
+/// 面板把输入框换成了控制面板，历史区不再是 [`history_rect`] 那套「到输入框上沿」，
+/// 而是面板上方的剩余空间。键盘翻页与渲染因此共用同一份几何。
+pub fn task_history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
+    let page = lx.task.as_ref()?;
+    if lx.chat.messages.is_empty() {
+        return None;
+    }
+    let lay = task::layout(area, page);
+    if lay.history.height == 0 {
+        return None;
+    }
+    let view = history::view(lay.history, lx);
+    Some((view.total_rows, usize::from(view.body.height)))
 }
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。

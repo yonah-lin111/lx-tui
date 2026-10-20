@@ -91,6 +91,9 @@ pub enum LxInput {
     SelectPrevTool,
     /// Alt+↓：按时间线选择下一张可展开工具卡片。
     SelectNextTool,
+    /// PageUp / PageDown：后台任务面板里翻滚动上方的消息列表。
+    PageUp,
+    PageDown,
 }
 
 /// prompt 编辑器的输入命令；仅在 prompt 获得焦点时产生。

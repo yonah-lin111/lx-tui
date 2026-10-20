@@ -85,6 +85,14 @@ pub struct TaskPage {
     pub now_ms: i64,
     /// 进程列表的窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
+    /// 上一帧历史内容的总行数（事件循环在绘制前写入；滚动钳制用）。
+    pub history_total: Option<usize>,
+    /// 上一帧历史区实际可见的行数（事件循环在绘制前写入）。
+    ///
+    /// 键盘翻页需要知道「一屏几行」，而 `app/` 拿不到窗格几何——与
+    /// `LxChat::viewport_top` 同一套做法：渲染只读、事件循环写，滚动钳制与渲染
+    /// 共用同一份口径。`None` 表示本帧还没有历史区（消息为空或窗格太矮）。
+    pub history_visible: Option<usize>,
 }
 
 impl TaskPage {
@@ -99,6 +107,13 @@ impl TaskPage {
     /// 当前 tab 是否没有条目。
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// 面板列表要显示的行数：空态也要占一行（用来显示占位提示）。
+    ///
+    /// 面板高度按它收缩——列表只有一行时不该占掉半屏历史。
+    pub fn items_shown(&self) -> usize {
+        self.len().max(1)
     }
 
     /// 高亮当前的进程条目（`Processes` tab 且索引有效时）。

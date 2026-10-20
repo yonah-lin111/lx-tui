@@ -549,42 +549,58 @@ lx 沿用同一思路，但用窗格内整页承载（窗格比 composer 面板�
 
 ```text
 ╭─ lx-[Native Agent] ──────────────────────────────── ws:…command-plan-tools ─╮
-│❯ npm run dev                /workspace/web                   running 1m 30s │
-│  cargo watch -x test        /workspace                       running 2m 05s │
-│  python -m http.server 8000 /workspace/py                    running 4m 12s │
-├─ Processes · Agents ───────── [↑/↓] select  [^d] stop  [←/→] tab  [esc] ─┤
-╰────────────────────────────────────────────────────────────────────────────╯
+│ 你是谁                                                                      │
+│ ■ 我是 Claude，一个由 Anthropic 开发的 AI 助手。                             │
+│ Build · deepseek-v4.1 · 2.1s · 50.3 tok/s                                   │
+│                                                                             │
+│  Processes · Agents                                                    esc  │
+│  ❯ while read -r line        /workspace/web                   running 32s    │
+│    npm run dev               /workspace/web                   running 1m 30s │
+╰─ ↑↓ select  ^d stop  tabs ←→  esc back ─────────────────────────────────╯
 ```
 
-**页内不再画自己的框**（用户报的「双重边框」）。这一页画在窗格内容区里，内容区本来
-就被窗格边框（`╭─ lx-[Native Agent] ─╮`）包围；早先再画一个完整圆角框，两层边框叠在一起。
+**形态对齐 opencode 的 composer：对话在上、控制面板在下。** 不是整页接管。
 
-取而代之的是底部一条**横栏**：横线贯穿整行，两端 `├` / `┤` 写在**窗格左右竖直边框
-所在的列**（内容区左右各外扩一列），因此读起来是「从窗格边框长出来的一条分隔线」，
-而不是第二个框的顶边。做法与 `status.rs` 把状态写在窗格底边框上完全一致
-（都只改写文字实际占用的单元格，其余边线保留）。
-
-- 横栏左段：tab 指示（当前 tab 高亮），`Processes · Agents`；不再有 `Background` 标题
-  ——窗格标题已经说明了是哪个窗格，页内再写一遍是重复信息。
-- 横栏右段：键位提示，贴右端；放不下时从尾部截断（`[esc] back` 先走），
-  tab 是导航、永远保留。
-- 主体：`❯ 命令 · cwd · running Ns`。命令列**定宽**、cwd 从固定偏移起，各行 cwd 左缘
+- **上半区**是普通聊天历史（只读快照，键盘/滚轮可滚），输入框被控制面板替换。
+  这样打开后台任务时仍能看见上下文，而不是把对话全部遮掉。
+- **下半区**是控制面板：第一行是 tab（`Processes` / `Agents`）+ 右端 `esc`，
+  其后是当前 tab 的列表。面板**沉底**，列表不会贴在最顶部。
+- **键位提示画在窗格最底边框上**（`╰─ ↑↓ select … ─╯`），不占正文行。
+  做法与 `status.rs` 把状态写在窗格底边框上完全一致：只改写文字实际落到的单元格，
+  其余底边线保留 `─`，两端角字符不动。
+- 面板高度 = tab 行 + 列表行（空态也占一行），且不超过内容区 60%、并给历史留
+  至少 3 行——列表只有一条时不该占掉半屏历史。
+- **页内不画自己的框**：窗格边框就是唯一一层框。早先画完整圆角内框，与窗格边框叠成
+  双重边框（用户报的 bug）。
+- 列表：`❯ 命令 · cwd · running Ns`。命令列**定宽**、cwd 从固定偏移起，各行 cwd 左缘
   对齐成列；窄窗格先丢 cwd（识别进程靠命令），再硬切命令，时长始终可见。
 - `Agents` tab 是**预留位**：列表恒空并显示 `no subagents yet`，后续在此显示 subagent 内容。
+
+**停止反馈走 toast**，不再用输入框上方的 hint：面板已经把输入框换掉，hint 的锚点是
+输入框，面板打开时会飘在错误的位置。toast 锚定在该窗格（`Toast::new(..., Some(pane), ..)`）。
 
 ### 14.4 键位（对齐 opencode `composer.*`）
 
 | 键 | 动作 | opencode 对应 |
 |---|---|---|
-| `↑` / `↓` | 移动高亮 | `composer.shell.up` / `down` |
+| `↑` / `↓` | 逐行滚上方消息列表 | 消息区滚动 |
+| `PageUp` / `PageDown` | 翻页滚上方消息列表 | 同上 |
+| `Alt+↑` / `Alt+↓` | 移动面板列表高亮 | `composer.shell.up` / `down` |
 | `^d` | 停止高亮进程 | `composer.shell.kill` |
 | `←` / `→` | 换 tab | composer 内联 `left`/`right` |
 | `esc` | 返回 lx 页 | `escape` → Close composer |
-| 空草稿 `↓` | 进入页面 | `session.child.first = down` |
+| 空草稿 `↓` | 进入面板 | `session.child.first = down` |
+
+**方向键让给消息列表**：面板沉底后，按方向键的第一意图通常是回看上面的对话；
+列表高亮改用 `Alt+↑/↓`，功能不丢。
 
 `↓` 入口沿用 lx 已有的「历史先接管、否则继续」结构（对齐 opencode 的 `run() == false`
 向下层派发）：历史/光标能消费时不动，消费不了才换页。因此**有草稿时 `↓` 仍是光标移动**，
-不会突然换页。页面内整页接管按键，字符不会漏进草稿。
+不会突然换页。面板内整页接管按键，字符不会漏进草稿。
+
+滚动需要知道「一屏几行」，而 `app/` 拿不到窗格几何：由事件循环在绘制前把
+`TaskPage::history_total` / `history_visible` 写入（与 `LxChat::viewport_top` 同一套做法：
+渲染只读、事件循环写，滚动钳制与渲染共用同一份口径）。
 
 ### 14.5 底部计数指标
 
@@ -641,32 +657,27 @@ it a failure"。codex 在协议层仍把非零退出作为 `RespondToModel` 回�
 并丢弃那句已经作废的 `command exited with code N`。这样**不需要写库迁移**，旧会话打开即正确。
 真正的失败（`timed_out` / `interrupted` / `failed`）保持 `failed`，有反向测试守着。
 
-### 14.7 树形分节：`├─` / `└─` / `│` 三件套
+### 14.7 卡片树形：只用 `│` 与 `└─`
 
-用户反馈：命令卡片的树体**所有行都用 `│`、只有最后一行 `└─`**，读不出结构。
-
-改为按**节点**分节。一个节点是「一段有语义的内容」：命令行、输出块、stdin 预览、收口提示。
+命令与交互卡片统一成一根树干：
 
 ```text
-■ Run command                                    Running · 12s  [details]
-  ├─ $ while true; do read -r line; echo "got: $line"; done
-  ├─ … +21 earlier lines
-  └─ test result: ok. 24 passed
+■ Send input                                Stopped [details]
+  │  $ while true; do read -r line; echo "got: $line"; done
+  │  stdin: hello lx\n
+  │  hello lx
+  │  got: hello lx
+  └─ hello lx
 ```
 
-| 前缀 | 含义 |
-|---|---|
-| `  ├─ ` | 一个**节点**的首行，且后面还有节点 |
-| `  └─ ` | **最后一个**节点的首行（全卡唯一，收口） |
-| `  │  ` | 节点内部的**续行**（同一段输出的第 2 行起） |
+- **中间行一律 `  │  `**，**最后一行** `  └─ `。两条前缀等宽 5 列，正文永远从第 5 列起。
+- `│` 与 `└` 落在同一列，树干连成一条线。
+- 命令 → stdin → 输出 → 提示**全部串在同一根树干上**，只有一个收口。
 
-关键点：
-
-- 收口判断看**最后一个节点首行**而不是最后一行。最后一段输出可以有多个续行，
-  `└` 必须落在该段首行上，否则树干会在输出中间收口、下面继续吊着行。
-  实现是 `body.iter().rposition(|row| row.head)`。
-- 三条前缀**等宽 5 列**，正文永远从第 5 列起（与文件工具详情行对齐）。
-- 空态占位（`Waiting for output`）本身也是一个节点，因此照常收口。
+曾经试过给每个「节点」开头再加 `├─`（命令一个节点、输出一个节点），结果一段输出里
+同时出现 `├─` / `│` / `└─` 三种符号，比原来更花。用户明确要求恢复统一版式：
+**一树干到底，只有末行收口**。回归测试 `tree_never_mixes_branch_symbols` 锁住
+「不出现 `├─`」。
 
 ### 14.8 `Running` 停不下来（真实 bug）
 
