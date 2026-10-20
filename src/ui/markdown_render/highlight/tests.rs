@@ -68,10 +68,21 @@ fn java_keywords_recognized() {
 }
 
 #[test]
-fn unknown_language_falls_back_to_c_like_keywords() {
-    let spans = highlight_line(None, "int x = 1;");
+fn unknown_named_language_falls_back_to_c_like_keywords() {
+    let spans = highlight_line(Some("foo"), "int x = 1;");
     assert!(has_style(&spans, style::code_keyword()), "int 应识别");
     assert!(has_style(&spans, style::code_number()), "1 应识别");
+}
+
+#[test]
+fn missing_language_keeps_plain_code_color_without_guessing() {
+    // 「没写语言」等于纯文本：不猜 C 系关键字，整行只有代码正文色。
+    let spans = highlight_line(None, "int x = 1;");
+    assert!(!has_style(&spans, style::code_keyword()), "int 不算关键字");
+    assert!(!has_style(&spans, style::code_number()), "1 不算数字");
+    assert_eq!(spans.len(), 1, "整行一段：{spans:?}");
+    assert_eq!(spans[0].1, style::md_read_code_block());
+    assert_eq!(spans[0].0, "int x = 1;", "文本原样保留");
 }
 
 #[test]

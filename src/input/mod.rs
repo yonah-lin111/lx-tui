@@ -96,6 +96,9 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             KeyCode::Char('z' | 'Z') if shift => Some(LxInput::Redo),
             KeyCode::Char('z' | 'Z') => Some(LxInput::Undo),
             KeyCode::Char('y' | 'Y') => Some(LxInput::Redo),
+            // Cmd+C 与 Ctrl+C 落到同一命令：是否「清空」还是「复制」由 update 层按
+            // 当前面板决定，输入层不感知状态。
+            KeyCode::Char('c' | 'C') => Some(LxInput::Clear),
             _ => None,
         };
     }

@@ -75,7 +75,7 @@ pub enum LxInput {
     Undo,
     /// Ctrl+Y / Ctrl+Shift+Z：重做。
     Redo,
-    /// Ctrl+C：清空输入框。
+    /// Ctrl/Cmd+C：清空输入框；`/resume` 历史面板打开时改为复制高亮会话 id。
     Clear,
     /// Tab：md 面板打开时采纳高亮候选。
     Tab,

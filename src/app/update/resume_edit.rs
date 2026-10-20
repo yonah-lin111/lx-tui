@@ -43,6 +43,27 @@ pub fn open_resume_session_edit(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// 复制 `/resume` 历史面板高亮行的会话 id 到剪贴板；返回是否产生了复制效应。
+///
+/// 剪贴板内容为**裸 id**（无前缀、无引号、无换行），便于直接粘给 `sqlite3`/`git` 等外部工具。
+/// 面板未打开、列表为空（空态占位行）或高亮越界时返回 false 且**不产生任何效应**：
+/// 调用方据此把这个按键静默吞掉（不清空输入框、不报错、不关面板）。
+pub fn copy_resume_session_id(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    let Some(SlashPanel::History(panel)) = target.lx.slash.as_ref() else {
+        return false;
+    };
+    let Some(entry) = panel.entries.get(panel.window.active) else {
+        return false;
+    };
+    let session_id = entry.session_id.clone();
+    // 唯一剪贴板出口：剪贴板写入与 toast 由事件层按 Effect 出箱，app 层不做 IO。
+    state.effects.push(Effect::CopyToClipboard(session_id));
+    true
+}
+
 /// 编辑模态按键分派；返回是否产生了需要写库的效应（由调用方照常 pump）。
 ///
 /// - `Enter`：保存标题（确认删除态下等同确认删除）。

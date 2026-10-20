@@ -1577,3 +1577,96 @@ fn code_copy_excludes_both_rules_and_keeps_blank_lines() {
     assert!(!button.body.contains('─'), "不含任何分隔横线");
     assert!(!button.body.contains("language:"), "不含头部");
 }
+
+/// 头部下方新增分割线后，复制内容仍必须是完整正文（回归：`code_rule` 行曾被当成
+/// 「第一个非正文行」而提前关闭收集，导致复制出空串）。
+#[test]
+fn code_copy_still_complete_with_rule_below_header() {
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```\nline one\nline two\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let button = super::history::layout(view.body, &lx)
+        .code_copy
+        .into_iter()
+        .next()
+        .expect("代码块复制按钮");
+    assert_eq!(
+        button.body, "line one\nline two",
+        "头部下方分割线不得截断复制内容"
+    );
+    assert!(!button.body.is_empty(), "复制内容不能为空");
+    assert!(!button.body.contains('─'), "不含任何分隔横线");
+    assert!(!button.body.contains("language:"), "不含头部");
+}
+
+/// 无语言代码块：头部显示 `language: text`，复制内容仍只是正文。
+#[test]
+fn text_code_block_shows_label_and_copies_body_only() {
+    let area = Rect::new(0, 0, 60, 24);
+    let mut lx = Lx::new();
+    let mut chat = LxChat::new();
+    chat.messages.push(ChatMessageView {
+        id: "a-0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![crate::app::state::AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: crate::chat::events::PartKind::Text,
+                content: "```\nplain text\n```".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    });
+    lx.chat = chat;
+
+    let view = history_view(area, &lx).expect("history");
+    let lines = crate::ui::markdown_render::render_wrapped("```\nplain text\n```", 60);
+    let header = lines.get(1).expect("header").text();
+    assert!(
+        header.starts_with("language: text"),
+        "头部默认显示 text: {header:?}"
+    );
+    let button = super::history::layout(view.body, &lx)
+        .code_copy
+        .into_iter()
+        .next()
+        .expect("代码块复制按钮");
+    assert_eq!(button.body, "plain text", "只复制正文，不含 language: text");
+}

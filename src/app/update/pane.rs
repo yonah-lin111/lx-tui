@@ -208,6 +208,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             }
             // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板吞掉。
             _ if editable => {}
+            // `/resume` 历史面板：`Ctrl/Cmd+C` 复制高亮行的会话 id（不清空输入框）。
+            LxInput::Clear if matches!(slash, super::super::state::SlashPanel::History(_)) => {
+                super::resume_edit::copy_resume_session_id(state, pane_id);
+                return;
+            }
             // `/resume` 历史面板：`Shift+Enter` 打开该会话的编辑模态（改名/删除）。
             LxInput::EnterFolder
                 if matches!(slash, super::super::state::SlashPanel::History(_)) =>

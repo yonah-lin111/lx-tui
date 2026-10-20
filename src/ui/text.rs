@@ -594,8 +594,9 @@ pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this work
 /// `/resume` 历史面板标题与空态。
 pub const LX_HISTORY_PANEL_TITLE: &str = "Resume";
 pub const LX_HISTORY_EMPTY: &str = "no sessions yet";
-/// `/resume` 历史面板底边提示：`⇧↵` 打开会话编辑模态（与 `@` 面板同符号写法）。
-pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [edit ⇧↵] [close esc]";
+/// `/resume` 历史面板底边提示：`⇧↵` 打开会话编辑模态（与 `@` 面板同符号写法），
+/// `^c` 复制高亮会话 id（Ctrl/Cmd+C 同一键位，记法与本项目其它 `[copy ^c]` 一致）。
+pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [copy ^c] [edit ⇧↵] [close esc]";
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
@@ -616,6 +617,8 @@ pub const LX_CHAT_NO_MODEL_SHORT: &str = "no model";
 pub const LX_CHAT_OMITTED_PREFIX: &str = "omitted turns:";
 /// markdown 代码块头部的语言前缀（`language: js`）。
 pub const LX_CHAT_CODE_LANG_PREFIX: &str = "language: ";
+/// 代码块未写语言时的默认展示语言（`text`）：只作标签，不参与语法高亮。
+pub const LX_CHAT_CODE_LANG_DEFAULT: &str = "text";
 
 /// 工具步骤占位摘要：工具名与状态之间的分隔（真实工具行由后续阶段重做）。
 pub const LX_CHAT_TOOL_STATUS_SEP: &str = " · ";

@@ -229,7 +229,8 @@ fn slash_panel_scrollbar_has_no_track_border() {
 
 #[test]
 fn history_panel_footer_documents_shift_enter_edit() {
-    // `/resume` 底边必须出现 `⇧↵`（与 @ 面板同符号），否则用户无从发现编辑模态。
+    // `/resume` 底边必须出现 `⇧↵`（与 @ 面板同符号），否则用户无从发现编辑模态；
+    // 也必须出现 `^c`，否则用户无从发现复制会话 id 的快捷键。
     let area = Rect::new(0, 0, 100, 24);
     let lx = history_panel_lx();
     let mut buf = Buffer::empty(area);
@@ -240,6 +241,7 @@ fn history_panel_footer_documents_shift_enter_edit() {
         "底边显示完整提示: {all}"
     );
     assert!(all.contains("⇧↵"), "使用 ⇧↵ 符号: {all}");
+    assert!(all.contains("[copy ^c]"), "底边提示复制快捷键: {all}");
 }
 
 #[test]
