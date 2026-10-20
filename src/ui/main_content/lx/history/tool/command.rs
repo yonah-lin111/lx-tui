@@ -275,7 +275,7 @@ fn draw_command(
     loading_frame: usize,
     expanded: bool,
 ) {
-    let status = process_status(view.state, view.started_at_ms);
+    let status = process_status(view.state);
     // 进程仍在跑时方块继续呼吸——即便本次工具调用已经结算（命令被留在了后台）。
     let mark = if view.state.is_running() && call.status != ToolStatus::Failed {
         StepMark::Running
@@ -307,7 +307,7 @@ fn draw_interaction(
     view: &ProcessInteractionView,
     loading_frame: usize,
 ) {
-    let status = process_status(view.state, None);
+    let status = process_status(view.state);
     let mark = if view.state.is_running() && call.status != ToolStatus::Failed {
         StepMark::Running
     } else {
@@ -402,41 +402,15 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
     }
 }
 
-/// 进程状态文案 + 运行时长：`Running · 12s` / `Exited 0` / `exit 2`。
+/// 进程状态文案：`Running` / `Exited 0` / `exit 2`。
 ///
-/// 时长只在**跑够一秒**后才追加上去：刚 spawn 的命令显示 `Running · 1ms` 既是噪声，
-/// 又会在输出预览刷新时反复抖动（每帧变一个数）。不足一秒统一显示纯状态词。
-fn process_status(state: ProcessStateView, started_at_ms: Option<i64>) -> Option<String> {
-    let label = text::agent::proc_exit_label(state);
-    // 时长只在进程**仍在跑**时才有意义：终态的时间戳冻结在 `ended_at_ms`，
-    // 拿 `now - started` 算会一路涨下去（"关掉了还在计时"那个 bug 的直接原因）。
-    if state.is_running()
-        && let Some(started) = started_at_ms
-    {
-        let elapsed = crate::db::now_ms().saturating_sub(started).max(0);
-        if elapsed >= 1_000 {
-            return Some(format!(
-                "{label}{}{}",
-                text::LX_CHAT_TOOL_STATUS_SEP,
-                format_elapsed(elapsed)
-            ));
-        }
-    }
-    Some(label)
-}
-
-/// 时长短格式：`820ms` / `4s` / `1m 12s`。
-fn format_elapsed(ms: i64) -> String {
-    if ms < 1_000 {
-        return format!("{ms}ms");
-    }
-    let seconds = ms as f64 / 1_000.0;
-    if seconds < 60.0 {
-        return format!("{seconds:.0}s");
-    }
-    let minutes = (seconds / 60.0).floor() as i64;
-    let rest = (seconds % 60.0).round() as i64;
-    format!("{minutes}m {rest}s")
+/// **不显示运行时长**。时长只在后台任务面板里给（那里会定时刷新），因为：
+///
+/// 1. 消息列表是历史记录，一张卡片的时长每帧都在变会让整段历史"活起来"，
+///    滚动与复制时都不稳定；
+/// 2. 时长属于"现在还有几个服务在跑、各自跑了多久"这件事，面板才是回答它的地方。
+fn process_status(state: ProcessStateView) -> Option<String> {
+    Some(text::agent::proc_exit_label(state))
 }
 
 /// 没有类型化详情时的状态词（例如只有失败错误的卡片）。

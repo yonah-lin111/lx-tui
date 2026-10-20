@@ -202,6 +202,18 @@ pub(crate) fn finish_tool(
             // ②b 类型化详情（进程/计划）：与结果体同源，渲染层不解析 JSON。
             changed |=
                 update::settle_tool_detail(state, &key, &ticket.call_id, detail_of(&outcome));
+            // ②b1 进程工具结算后按**运行实例的真实状态**再校正一次。
+            //
+            // 结果体里的 `process_state` 是"这次调用读到的那一刻"，而 `write_stdin`
+            // 卡片完全可能在进程**早已退出之后**才结算（模型隔了几十秒才发起读写），
+            // 于是它记下一个 `running` 快照，之后再没有任何事件会去改它——
+            // 卡片就永远显示 `Running`（真实案例见 design §14.8）。
+            if let ToolOutcome::Executed(ToolExecutionResult::Process(process)) = &outcome
+                && let Some(runtime) = streams.runtimes.get(key.session.as_str())
+                && let Some(snapshot) = runtime.manager().snapshot(process.session_id)
+            {
+                changed |= update::apply_process_snapshot(state, process.session_id, &snapshot);
+            }
             // ②b2 新建进程的元数据登记：工具已记账后才落进程记录（供历史恢复）。
             if let ToolOutcome::Executed(ToolExecutionResult::Process(process)) = &outcome
                 && process.kind == crate::chat::process::ProcessResultKind::ExecCommand

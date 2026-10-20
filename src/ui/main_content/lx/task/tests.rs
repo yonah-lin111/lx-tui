@@ -192,7 +192,7 @@ fn model_name_returns_when_the_panel_closes() {
 fn panel_height_is_fixed_regardless_of_entry_count() {
     // 用户要求：面板高度**固定**。0 条、2 条、9 条都必须一样高，
     // 否则打开面板时上方消息列表会被挤动一下再弹回来。
-    let expected = TAB_ROW + LIST_MAX as u16;
+    let expected = TOP_BORDER + TAB_ROW + LIST_MAX as u16;
     let mut page = page_with(Vec::new(), 0);
     assert_eq!(height(&page), expected, "空列表也是固定高度");
 
@@ -363,4 +363,72 @@ fn window_scrolls_to_keep_the_highlight_visible() {
     let text = render_lines(&lx, 50, 20).join("\n");
     assert!(text.contains("cmd-10"), "末项可见：{text}");
     assert!(!text.contains("cmd-1 "), "窗口已滚离首项：{text}");
+}
+
+// ===== 顶部边框、tab 配色与固定高度 =====
+
+#[test]
+fn panel_draws_a_top_border_above_the_tab_row() {
+    // 面板顶边框把面板与上方消息列表分开；它画在面板矩形**内部**，不是第二个窗格框。
+    let mut lx = lx_with_messages();
+    lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
+    let lines = render_lines(&lx, 70, 20);
+    let tab_row = lines
+        .iter()
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    let border = &lines[tab_row - 1];
+    assert!(
+        border.trim().chars().all(|ch| ch == '─'),
+        "tab 行上方应是一条纯横线：{border:?}"
+    );
+}
+
+#[test]
+fn active_tab_uses_the_workspace_label_blue() {
+    // 用户要求：右上角 tab 高亮用 main content 里 `ws:` 那种浅蓝（= border_label_prefix）。
+    let mut lx = lx_with_messages();
+    lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
+    let area = Rect::new(0, 0, 70, 20);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 70, 21));
+    super::super::render(area, &mut buf, &lx, true, None);
+    // 找到 "Processes" 首字符所在单元格，断言其前景 = Cyan + DIM（与 `ws:` 前缀一致）。
+    let mut found = None;
+    for y in 0..21u16 {
+        for x in 0..70u16 {
+            if buf[(x, y)].symbol() == "P" {
+                found = Some((x, y));
+            }
+        }
+    }
+    let (x, y) = found.expect("Processes 标签");
+    let style = buf[(x, y)].style();
+    assert_eq!(
+        style.fg,
+        Some(ratatui::style::Color::Cyan),
+        "当前 tab 用浅蓝前景"
+    );
+    assert!(
+        style.add_modifier.contains(ratatui::style::Modifier::DIM),
+        "与 `ws:` 前缀同款 dim"
+    );
+    // 非当前 tab 不是强调色。
+    for y in 0..21u16 {
+        for x in 0..70u16 {
+            if buf[(x, y)].symbol() == "A" {
+                let s = buf[(x, y)].style();
+                assert_ne!(
+                    s.fg,
+                    Some(ratatui::style::Color::Cyan),
+                    "非当前 tab 不该用强调色"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn panel_is_taller_than_five_list_rows() {
+    // 用户要求"高度再高一点"：列表区已从 5 行提到 6 行。
+    const { assert!(LIST_MAX > 5) };
 }

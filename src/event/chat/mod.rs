@@ -348,6 +348,33 @@ pub fn sync_background_task_counts(state: &mut AppState, streams: &ChatStreams) 
     changed
 }
 
+/// 后台任务面板的运行时长节拍：把各面板的 `now_ms` 推到当前时刻。
+///
+/// 面板每行右侧显示 `running 1m 30s`，而它是 `now_ms - started_at_ms` 现算的。
+/// `now_ms` 原来只在**列表回投**时更新——进程不变就再也不会变，时长会冻住
+/// （用户报的"时间不更新"）。
+///
+/// 每轮循环调一次（一次 `now_ms()` + 几个比较，成本可忽略）；只在面板打开时
+/// 才追高 `now_ms`，返回值用于置脏重绘。按秒对齐，避免每帧都重绘。
+pub fn tick_task_pages(state: &mut AppState) -> bool {
+    let now = crate::db::now_ms();
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        let Some(page) = target.lx.task.as_mut() else {
+            continue;
+        };
+        // 同一秒内不重绘：时长显示精度是秒。
+        if now.saturating_sub(page.now_ms) >= 1_000 {
+            page.now_ms = now;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// 列出某窗格所绑会话仍在运行的进程，回投给后台任务页的进程 tab。
 ///
 /// 只列 `running`/`starting` 的：已退出的进程没有可停的东西，列出来只会让用户

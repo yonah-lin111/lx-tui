@@ -230,6 +230,10 @@ async fn run_loop(
         if chat::sync_background_task_counts(state, &chat_streams) {
             dirty = true;
         }
+        // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
+        if chat::tick_task_pages(state) {
+            dirty = true;
+        }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
             cwd_check = None;
             if session::poll_process_cwds(state, &sessions) {

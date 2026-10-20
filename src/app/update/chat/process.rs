@@ -228,6 +228,65 @@ pub fn apply_interaction_exit(
     changed
 }
 
+/// 按**运行实例的真实快照**校正某个进程的全部卡片（结算后立即调用）。
+///
+/// 与 [`apply_interaction_exit`] 的区别：那个只在**终态事件**到达时生效，而
+/// `write_stdin` 卡片完全可能在进程早已退出之后才结算——它记下一个 `running`
+/// 快照，此后不会再有任何事件去改它，卡片就永远显示 `Running`。
+///
+/// 这里在结算当下按会话内运行实例的真实状态再校正一次：终态覆盖，运行态也覆盖
+/// （快照比结果体更新）。只改 `state`/`exit_code`，不动输出正文——输出是那次调用
+/// 的事实记录。
+pub fn apply_process_snapshot(
+    state: &mut AppState,
+    process_session_id: u64,
+    snapshot: &crate::chat::process::ProcessSnapshot,
+) -> bool {
+    let next = crate::app::state::ProcessStateView::from(snapshot.state.clone());
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        for message in &mut target.lx.chat.messages {
+            for step in &mut message.steps {
+                let crate::app::state::AssistantStepView::Tool { call, .. } = step else {
+                    continue;
+                };
+                match call.detail.as_deref_mut() {
+                    Some(crate::app::state::ToolDetailView::Command(view)) => {
+                        if view.process_session_id != Some(process_session_id) || view.state == next
+                        {
+                            continue;
+                        }
+                        view.state = next;
+                        changed = true;
+                    }
+                    Some(crate::app::state::ToolDetailView::Interaction(view)) => {
+                        if view.process_session_id != process_session_id || view.state == next {
+                            continue;
+                        }
+                        view.state = next;
+                        if let Some(code) = snapshot.exit_code
+                            && view.exit_code.is_none()
+                        {
+                            view.exit_code = Some(code);
+                        }
+                        changed = true;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    if changed {
+        for pane in state.all_pane_ids() {
+            refresh_lx_status(state, pane);
+        }
+    }
+    changed
+}
+
 /// 历史重载：用 `agent_process` 的真实记录校正卡片状态。
 ///
 /// 结果 JSON 记的是**当次调用结算那一刻**的进程状态（`running` 是常态），

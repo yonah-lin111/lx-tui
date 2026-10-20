@@ -511,3 +511,103 @@ fn interaction_cards_settle_when_the_process_exits() {
         &ProcessState::Stopped
     ));
 }
+
+// ===== write_stdin 在进程早已终态之后才结算（真实案例 design §14.8）=====
+
+/// 一个 `write_stdin` 交互卡片（结算那一刻读到 `running`）。
+fn interaction_detail(session_id: u64) -> ToolDetailView {
+    let result = ProcessResult {
+        kind: ProcessResultKind::WriteStdin,
+        session_id,
+        command: "while true; do echo heartbeat; sleep 10; done".into(),
+        cwd: "/w".into(),
+        tty: false,
+        state: ProcessState::Running,
+        exit_code: None,
+        output: "hb\n".into(),
+        output_start: 0,
+        output_end: 3,
+        dropped_bytes: 0,
+        truncated: false,
+        input: Some("x".into()),
+        wrote_input: true,
+        terminate: false,
+        chunk_id: "c".into(),
+        wall_time_ms: 5,
+    };
+    ToolDetailView::from_process(&result)
+}
+
+#[test]
+fn snapshot_reconcile_settles_interaction_cards_of_a_dead_process() {
+    // 真实时序：进程 33:36 已 stopped，而 write_stdin 卡片 34:26 才结算。
+    // 它记下 `running` 快照后不会再收到任何事件 —— 必须在结算时按真实状态校正。
+    let (_state, pane) = state_with_command(1);
+    let mut state = _state;
+    let mut call = ToolCallView::new("call-stdin", "write_stdin", 1);
+    call.status = ToolStatus::Completed;
+    call.detail = Some(Box::new(interaction_detail(1)));
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages[0]
+            .steps
+            .push(crate::app::state::AssistantStepView::Tool { position: 1, call });
+    }
+    let snapshot = ProcessSnapshot {
+        session_id: 1,
+        command: "while true; do echo heartbeat; sleep 10; done".into(),
+        cwd: "/w".into(),
+        tty: false,
+        state: ProcessState::Stopped,
+        exit_code: None,
+        tail: "hb\n".into(),
+        dropped_bytes: 0,
+        started_at_ms: 1_000,
+        ended_at_ms: Some(2_000),
+        origin_call_id: "call-exec".into(),
+    };
+    assert!(
+        apply_process_snapshot(&mut state, 1, &snapshot),
+        "结算后校正应当改动卡片"
+    );
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-stdin").expect("tool");
+    let Some(ToolDetailView::Interaction(view)) = call.detail.as_deref() else {
+        panic!("expected interaction view");
+    };
+    assert_eq!(
+        view.state,
+        ProcessStateView::Stopped,
+        "write_stdin 卡片必须收敛到真实终态，不能停在 Running"
+    );
+    // 输出正文不动：那是这次调用的事实记录。
+    assert_eq!(view.output, "hb\n");
+    // 幂等。
+    assert!(!apply_process_snapshot(&mut state, 1, &snapshot));
+}
+
+#[test]
+fn snapshot_reconcile_keeps_a_live_process_running() {
+    // 进程确实还在跑：校正后仍是 Running（不能反过来把活的判死）。
+    let (mut state, pane) = state_with_command(1);
+    let snapshot = ProcessSnapshot {
+        session_id: 1,
+        command: "cargo test".into(),
+        cwd: "/workspace".into(),
+        tty: false,
+        state: ProcessState::Running,
+        exit_code: None,
+        tail: "first\n".into(),
+        dropped_bytes: 0,
+        started_at_ms: 1_000,
+        ended_at_ms: None,
+        origin_call_id: "call-1".into(),
+    };
+    assert!(!apply_process_snapshot(&mut state, 1, &snapshot), "无变化");
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-1").expect("tool");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert_eq!(view.state, ProcessStateView::Running);
+}

@@ -602,3 +602,32 @@ fn timeout_still_renders_the_red_failure_mark() {
         "超时仍必须是红色"
     );
 }
+
+// ===== 消息列表不再显示运行时长（时长只在后台任务面板）=====
+
+#[test]
+fn running_card_shows_status_without_elapsed_time() {
+    // 用户要求：移除消息列表里的时长，只留状态词；时长改由后台任务面板定时刷新。
+    let call = running_command("out\n");
+    let (text, _) = render(&call, 80, false);
+    assert!(text.contains("Running"), "状态词仍然可见：{text}");
+    // 不应出现 `Running · 12s` 这类时长。
+    assert!(!text.contains(" · "), "不应再拼接时长分隔符：{text}");
+    for unit in ["ms", "s]", "m "] {
+        let _ = unit;
+    }
+}
+
+#[test]
+fn finished_card_shows_exit_code_without_elapsed_time() {
+    let mut call = running_command("out\n");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() else {
+        panic!("expected command view");
+    };
+    view.state = ProcessStateView::Exited { code: Some(0) };
+    view.started_at_ms = Some(1);
+    view.ended_at_ms = Some(200_000);
+    let (text, _) = render(&call, 80, false);
+    assert!(text.contains("Exited 0"), "终态显示退出码：{text}");
+    assert!(!text.contains(" · "), "终态也不带时长：{text}");
+}

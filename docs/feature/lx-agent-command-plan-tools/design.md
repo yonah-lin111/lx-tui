@@ -548,9 +548,14 @@ Lx {
 面板不是独立页面，也**不整页接管**。它是「占输入框那个矩形」的组件：
 
 - `lx.rs::layout` 在算输入框高度时分支：`lx.task` 有值时用 `task::height(page)`，
-  恒为 `1 tab 行 + LIST_MAX`（`LIST_MAX = 5`，对齐 opencode `maxHeight={5}`）。
-  **高度固定，不随条目数变化**：0 条与 5 条时面板一样高。否则打开面板会让上方
+  恒为 `1 顶边框 + 1 tab 行 + LIST_MAX`（`LIST_MAX = 6`，比 opencode 的
+  `maxHeight={5}` 再高一档——面板高度固定，多一点列表区不会让布局跳动）。
+  **高度固定，不随条目数变化**：0 条与 6 条时面板一样高。否则打开面板会让上方
   消息列表被挤动一下再弹回来，空态也会孤零零吊在面板顶上。
+- **顶边框**：面板首行是一条横线，把面板与上方消息列表分开。它画在面板矩形
+  **内部**（`border_title()` 同色系），不与窗格边框重叠，因此不是早期那个双重边框。
+- **tab 配色**：当前 tab 用 `border_label_prefix()`（淡青 + dim），与窗格顶边框上
+  `ws:` 前缀完全同色；非当前 tab 用 `muted()`。
 - `build_chat` 在同一个 `lay.input` 矩形里，画输入框还是画面板，二选一。
 - 其余一切照旧：历史区、置顶行、滚动条、聊天栏全部走原本路径。
 
@@ -714,8 +719,18 @@ agent_process:    session_id=1  state=stopped  started=…831050  ended=…89038
    → `reconcile_process_records` 在 `LoadChatSession` 后用 `agent_process` 的真实记录
    覆盖卡片状态与起止时刻。没有记录时保持原样，绝不凭空捏造终态。
 
-时长冻结另有保险：`process_status` 只在 `state.is_running()` 时才算时长，终态只显示结果词
-（`Exited 0` / `exit 1` / `Stopped`）。
+4. **`write_stdin` 在进程早已终态之后才结算**。真实时序（会话
+   `sess-18e022434523f4f8-1`）：进程 14 在 `…356694` 已 `stopped`，而 `write_stdin`
+   卡片 115 在 `…326003` 才结算——它读到的是 `running` 快照，此后**不会再有任何事件**
+   去改它（终态事件早已过去），卡片就永远显示 `Running`。
+   → 结算时（`finish_tool` 的 ②b1）按**会话运行实例的真实快照**再校正一次
+   （`apply_process_snapshot`）：终态与运行态都覆盖，只改 `state`/`exit_code`，
+   不动输出正文。
+
+**时长只属于面板。** 消息列表里的卡片不再显示运行时长——历史记录里每帧变一个数
+会让滚动与复制都不稳定，而"还有几个服务在跑、各自跑了多久"正是面板该回答的问题。
+面板的 `now_ms` 由 `event::chat::tick_task_pages` 每轮推进（按秒对齐，同一秒内不重绘）；
+它原来只在**列表回投**时更新，进程不变就会冻住时长。
 
 回归测试四层：`process_cards`（轮次结束后仍收到终态/输出、交互卡片收敛）、
 `view::tests`（回放按进程记录校正、活着的进程不许判死、无记录不改动）、

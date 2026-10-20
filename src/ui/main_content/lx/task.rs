@@ -32,10 +32,18 @@ use crate::ui::{style, text};
 
 use super::grid::CONTINUATION;
 
-/// tab 行占用的行数（面板首行）。
+/// 面板顶部边框占用的行数。
+///
+/// 一条横线把面板与上方消息列表分开——这条线**属于面板内部**（画在 `lay.input`
+/// 矩形之内），不是第二个窗格边框，所以不会重演早期「双重边框」那个 bug。
+pub(super) const TOP_BORDER: u16 = 1;
+/// tab 行占用的行数（顶边框之下）。
 pub(super) const TAB_ROW: u16 = 1;
-/// 列表最多显示的行数（对齐 opencode `maxHeight={5}`）。
-pub(super) const LIST_MAX: usize = 5;
+/// 列表最多显示的行数。
+///
+/// 比 opencode 的 `maxHeight={5}` 再高一档：5 行在 24 行窗格里信息量偏少，
+/// 而面板高度固定，多一点列表区不会让布局跳动。
+pub(super) const LIST_MAX: usize = 6;
 /// 行首高亮标记占位列数（`❯ ` 或两个空格）。
 const MARKER_COLS: u16 = 2;
 /// 行内各段之间的最小空档（列）。
@@ -45,9 +53,9 @@ const COMMAND_MIN: u16 = 10;
 /// 显示 cwd 所需的最小文字区宽度：再窄就整段丢弃 cwd。
 const CWD_MIN_ROOM: u16 = 30;
 
-/// 面板高度（tab 行 + 固定 [`LIST_MAX`] 行）；由 `lx.rs::layout` 用来定输入框矩形。
+/// 面板高度（顶边框 + tab 行 + 固定 [`LIST_MAX`] 行）；由 `lx.rs::layout` 定输入框矩形。
 ///
-/// **高度固定**，不随条目数变化：列表 0 条和 5 条时面板一样高。理由有二：
+/// **高度固定**，不随条目数变化：列表 0 条和 6 条时面板一样高。理由有二：
 ///
 /// 1. 打开面板时上方消息列表不会因为「当前有几个后台进程」而被挤动一下再弹回来；
 /// 2. 空态能占满整个列表区，`no running processes` 不会孤零零吊在面板顶上一行。
@@ -57,45 +65,61 @@ pub(super) fn height(_page: &TaskPage) -> u16 {
     u16::try_from(LIST_MAX)
         .unwrap_or(LIST_MAX as u16)
         .saturating_add(TAB_ROW)
+        .saturating_add(TOP_BORDER)
 }
 
-/// 在输入框矩形里画面板：首行 tab 指示（右端 `esc`），其后是当前 tab 的列表。
+/// 在输入框矩形里画面板：顶边框 → tab 行（右端 `esc`）→ 当前 tab 的列表。
 pub(super) fn draw(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
-    if rect.width == 0 || rect.height < TAB_ROW {
+    if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
         return;
     }
-    // tab 行：当前 tab 亮色，其余次要色；右端 `esc` 提示关闭。
+    // 顶边框：一条横线把面板与上方消息列表分开。
+    //
+    // 用 `border_title()`（淡青 + dim，与窗格边框标题同色系），不抢焦点；
+    // 它画在面板矩形**内部**，不与窗格边框重叠，所以不是双重边框。
+    grid.put_clipped(
+        rect.x,
+        rect.y,
+        &"─".repeat(usize::from(rect.width)),
+        style::border_title(),
+        rect.width,
+    );
+
+    let tab_y = rect.y.saturating_add(TOP_BORDER);
+    // tab 行：当前 tab 用 `ws:` 同款浅蓝（`border_label_prefix`），其余次要色；
+    // 右端 `esc` 提示关闭。
     let mut x = rect.x;
     for (index, tab) in TaskTab::ALL.iter().enumerate() {
         if index > 0 {
             x = put_grid(
                 grid,
                 x,
-                rect.y,
+                tab_y,
                 text::LX_TASK_TAB_SEP,
                 style::muted(),
                 rect.right(),
             );
         }
         let tab_style = if *tab == page.tab {
-            style::accent()
+            style::border_label_prefix()
         } else {
             style::muted()
         };
-        x = put_grid(grid, x, rect.y, tab.label(), tab_style, rect.right());
+        x = put_grid(grid, x, tab_y, tab.label(), tab_style, rect.right());
     }
     let esc = text::LX_TASK_ESC;
     let esc_w = u16::try_from(esc.width()).unwrap_or(0);
     let esc_x = rect.right().saturating_sub(esc_w);
     if esc_x > x.saturating_add(GAP) {
-        put_grid(grid, esc_x, rect.y, esc, style::muted(), rect.right());
+        put_grid(grid, esc_x, tab_y, esc, style::muted(), rect.right());
     }
 
+    let chrome = TOP_BORDER.saturating_add(TAB_ROW);
     let list = Rect::new(
         rect.x,
-        rect.y.saturating_add(TAB_ROW),
+        rect.y.saturating_add(chrome),
         rect.width,
-        rect.height.saturating_sub(TAB_ROW),
+        rect.height.saturating_sub(chrome),
     );
     if list.height == 0 {
         return;

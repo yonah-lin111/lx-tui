@@ -631,3 +631,49 @@ async fn stopping_a_missing_runtime_reports_via_toast() {
     );
     assert_eq!(toast.anchor, Some(pane), "toast 锚定在该窗格");
 }
+
+// ===== 后台任务面板的运行时长必须定时刷新 =====
+
+#[test]
+fn task_page_clock_advances_even_when_the_list_is_unchanged() {
+    // `now_ms` 原来只在列表回投时更新：进程不变就冻住，时长永远停在第一次的值。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some("sess-1".into());
+        target.lx.task = Some(crate::app::state::TaskPage::default());
+    }
+    // 把 now_ms 拨回过去，模拟"已经过了一秒以上"。
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.task.as_mut().expect("page").now_ms = 0;
+    }
+    assert!(
+        crate::event::chat::tick_task_pages(&mut state),
+        "经过一秒后应当推进 now_ms 并要求重绘"
+    );
+    let now = state
+        .pane_anywhere(pane)
+        .unwrap()
+        .lx
+        .task
+        .as_ref()
+        .unwrap()
+        .now_ms;
+    assert!(now > 0, "now_ms 已被推进");
+    // 同一秒内不重复重绘。
+    assert!(
+        !crate::event::chat::tick_task_pages(&mut state),
+        "同一秒内不重复置脏"
+    );
+}
+
+#[test]
+fn task_page_clock_is_ignored_without_a_page() {
+    let mut state = AppState::demo();
+    assert!(
+        !crate::event::chat::tick_task_pages(&mut state),
+        "没有面板时不动作"
+    );
+}

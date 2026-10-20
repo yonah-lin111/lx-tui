@@ -19,8 +19,8 @@ mod session;
 mod view;
 
 pub use process::{
-    apply_interaction_exit, apply_process_exit, apply_process_output, commit_plan,
-    reconcile_process_records, restore_plan, select_adjacent_tool, settle_tool_detail,
+    apply_interaction_exit, apply_process_exit, apply_process_output, apply_process_snapshot,
+    commit_plan, reconcile_process_records, restore_plan, select_adjacent_tool, settle_tool_detail,
     toggle_selected_tool_detail, toggle_tool_detail,
 };
 pub use session::{
