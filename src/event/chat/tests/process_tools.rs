@@ -773,3 +773,234 @@ fn refresh_is_a_noop_without_an_open_panel() {
         "没有打开的面板时不发请求"
     );
 }
+
+// ===== 重开会话：卡片与后台面板不许给出相反答案 =====
+
+/// 登记首帧不该给仍在运行的进程盖 `ended_at_ms`。
+///
+/// 回归用户报的现象：重开 session 后消息列表显示 Running，而后台任务面板是空的。
+/// 根因之一：`register_process` 用 `terminal = true` 写首帧，`finish_process`
+/// 无条件写 `ended_at_ms`，库里出现 "state=running 但已结束" 的矛盾行。
+#[tokio::test]
+async fn registering_a_running_process_does_not_stamp_its_end_time() {
+    let fixture = Fixture::new("register-running");
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
+    let mut streams = ChatStreams::default();
+    let tools = agent_tools(&fixture, &mut streams, &key);
+
+    let exec_args = serde_json::json!({
+        "cmd": "sleep 30",
+        "yield_time_ms": 100,
+        "shell": "/bin/sh"
+    })
+    .to_string();
+    let transport = FakeTransport::new(
+        vec![
+            tool_calls(&[("call_alive", "exec_command", &exec_args, 0)], None),
+            final_response("running", None),
+        ],
+        StopReason::Complete,
+    );
+    let driven = drive_processes(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        tools.clone(),
+    )
+    .await;
+    assert_eq!(driven.summary.outcome, TurnOutcome::Complete);
+
+    let recorded = persistence
+        .load_processes_for_session(fixture.workspace(), &key.session)
+        .expect("load processes");
+    assert_eq!(recorded.len(), 1, "进程元数据已登记");
+    assert_eq!(recorded[0].state, "running", "进程仍在跑");
+    assert_eq!(
+        recorded[0].ended_at_ms, None,
+        "还在跑的进程不该有结束时刻（否则「运行中但已结束」自相矛盾）"
+    );
+    tools.processes().shutdown().await;
+}
+
+/// 关闭会话（运行实例被回收）后必须把终态写回库。
+///
+/// 这是用户报的那条完整链路：关掉 session → 重新打开 → 卡片 Running，
+/// 但后台任务面板空着。面板读内存运行实例（已随会话回收而空），
+/// 卡片读 DB 记录——若回收时只杀进程不落终态，两处就永久不一致。
+#[tokio::test]
+async fn reaping_the_runtime_persists_the_terminal_state() {
+    let fixture = Fixture::new("reap-terminal");
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
+    let mut streams = ChatStreams::default();
+    let tools = agent_tools(&fixture, &mut streams, &key);
+
+    let exec_args = serde_json::json!({
+        "cmd": "sleep 30",
+        "yield_time_ms": 100,
+        "shell": "/bin/sh"
+    })
+    .to_string();
+    let transport = FakeTransport::new(
+        vec![
+            tool_calls(&[("call_reap", "exec_command", &exec_args, 0)], None),
+            final_response("running", None),
+        ],
+        StopReason::Complete,
+    );
+    let driven = drive_processes(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        tools.clone(),
+    )
+    .await;
+    assert_eq!(driven.summary.outcome, TurnOutcome::Complete);
+
+    let before = persistence
+        .load_processes_for_session(fixture.workspace(), &key.session)
+        .expect("load");
+    assert_eq!(before[0].state, "running", "回收前仍在跑");
+
+    // 模拟关闭拥有该运行实例的窗格：解绑会话 → 下一轮事件循环回收运行实例。
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.chat.session_id = None;
+    }
+    let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
+    assert!(
+        crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender),
+        "解绑后回收运行实例"
+    );
+    // 回收是后台任务：等它停止完成并回投终态快照。
+    let (workspace, epoch, snapshots) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(AppEvent::ProcessesReaped {
+                    workspace,
+                    epoch,
+                    snapshots,
+                }) = receiver.recv().await
+                {
+                    return (workspace, epoch, snapshots);
+                }
+            }
+        })
+        .await
+        .expect("回收任务回投终态快照");
+    // 生产由 handle_app_event 的 ProcessesReaped 分支完成，这里调用同一入口。
+    crate::event::chat::persist_terminal_snapshots(&persistence, &workspace, &epoch, &snapshots);
+
+    let after = persistence
+        .load_processes_for_session(fixture.workspace(), &key.session)
+        .expect("load after reap");
+    assert!(
+        after[0].state != "running",
+        "回收后库里不能再留 running 行：{:?}",
+        after[0]
+    );
+    assert!(
+        after[0].ended_at_ms.is_some(),
+        "终态必须有结束时刻：{:?}",
+        after[0]
+    );
+}
+
+/// 用户报的完整链路：关闭会话 → 重新打开 → 卡片与后台面板不许说两套话。
+///
+/// 修复前：回收运行实例只杀进程不落终态，库里留着 `running` 行。重开后
+/// `reconcile_process_records` 按该行把卡片判活显示 Running，而后台任务面板
+/// 读的是内存运行实例（已随会话回收而空）——于是"卡片在跑、面板全空"。
+#[tokio::test]
+async fn closing_then_reopening_a_session_settles_the_card_to_a_terminal_state() {
+    let fixture = Fixture::new("close-reopen");
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
+    let mut streams = ChatStreams::default();
+    let tools = agent_tools(&fixture, &mut streams, &key);
+    let exec_args = serde_json::json!({
+        "cmd": "sleep 30",
+        "yield_time_ms": 100,
+        "shell": "/bin/sh"
+    })
+    .to_string();
+    let transport = FakeTransport::new(
+        vec![
+            tool_calls(&[("call_reopen", "exec_command", &exec_args, 0)], None),
+            final_response("running", None),
+        ],
+        StopReason::Complete,
+    );
+    let driven = drive_processes(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        tools.clone(),
+    )
+    .await;
+    assert_eq!(driven.summary.outcome, TurnOutcome::Complete);
+
+    // 关闭会话：解绑窗格 → 下一轮事件循环回收运行实例。
+    {
+        let target = state.pane_mut_anywhere(key.pane).expect("pane");
+        target.lx.chat.session_id = None;
+    }
+    let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
+    crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender);
+    let (workspace, epoch, snapshots) =
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if let Some(AppEvent::ProcessesReaped {
+                    workspace,
+                    epoch,
+                    snapshots,
+                }) = receiver.recv().await
+                {
+                    return (workspace, epoch, snapshots);
+                }
+            }
+        })
+        .await
+        .expect("回收任务回投终态快照");
+    crate::event::chat::persist_terminal_snapshots(&persistence, &workspace, &epoch, &snapshots);
+
+    // 重新打开同一会话：卡片按库里的记录校正。
+    let records = persistence
+        .load_processes_for_session(fixture.workspace(), &key.session)
+        .expect("load processes");
+    assert!(
+        records.iter().all(|record| record.state != "running"),
+        "关闭会话后库里不能留 running 行：{:?}",
+        records
+    );
+    let messages = fixture
+        .reopen()
+        .load_chat_session(fixture.workspace(), &key.session)
+        .expect("load session")
+        .unwrap_or_default();
+    crate::app::update::on_session_loaded(&mut state, key.pane, &key.session, &messages, None);
+    crate::app::update::reconcile_process_records(&mut state, key.pane, &records);
+
+    let chat = &state.pane_anywhere(key.pane).expect("pane").lx.chat;
+    let call = chat
+        .messages
+        .iter()
+        .flat_map(|message| message.tools())
+        .find(|tool| tool.call_id == "call_reopen")
+        .expect("tool card");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert!(
+        !view.state.is_running(),
+        "重开会话后卡片不能还显示 Running（进程早已被回收）：{:?}",
+        view.state
+    );
+}

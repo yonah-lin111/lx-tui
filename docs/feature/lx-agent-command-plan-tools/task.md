@@ -313,6 +313,27 @@
   - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
     历史区几何回到 `lay.input` 一处真相。
 
+- **关掉会话再打开：卡片 Running 而后台面板全空（bug，按用户反馈修复）**：
+  - 现象：启动后台任务 → 关闭当前会话 → 重新打开，消息列表里卡片显示 `Running`，
+    但后台任务面板显示 `no running processes`。
+  - 两个根因（都由真实库数据坐实）：
+    1. `register_process` 用 `terminal = true` 写首帧，`finish_process` 无条件写
+       `ended_at_ms`，库里出现 "`state = running` 但已结束"的矛盾行
+       （实测 id=21：`state=running`, `ended_at_ms=1792480677765`）。
+    2. `reap_orphan_runtimes` 回收运行实例时**只杀进程、不落终态**，违反设计 §8
+       「清理其进程并记录终态」。库里 `running` 行留存 → 重开时
+       `reconcile_process_records` 把卡片判活显示 Running；而面板读内存运行实例
+       （已随会话回收而空）→ 两处对同一件事给出相反答案。
+  - 修法：首帧按快照状态判断是否终态；回收后把终态快照经
+    `AppEvent::ProcessesReaped` 回投事件层，由 `persist_terminal_snapshots`
+    只写终态行（活进程快照一律跳过）。退出 lx 的路径同样在 `shutdown()` 后落库。
+  - `pump_chat_streams` 原本在「无网络效应」时提前 `return false`，会吞掉回收结果，
+    一并改为返回 `changed`。
+  - 回归测试：`registering_a_running_process_does_not_stamp_its_end_time`、
+    `reaping_the_runtime_persists_the_terminal_state`、
+    `closing_then_reopening_a_session_settles_the_card_to_a_terminal_state`
+    （最后一条完整复现用户链路：启动 → 关闭 → 重开 → 断言卡片非 Running）。
+
 - **面板打开后新进程不出现（bug，按用户反馈修复）**：
   - 现象：启动任务后，后台任务面板里看不到它。
   - 根因：`ListSessionProcesses` 只在 `open_task_page` 时发一次；面板**打开之后**

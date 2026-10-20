@@ -118,14 +118,43 @@ pub fn register_process(
         );
         return;
     }
+    // 首帧快照**不是**退出事件：写 `terminal = true` 会无条件走 `finish_process`，
+    // 于是刚启动的进程就被盖上 `ended_at_ms`——库里出现 "state=running 但已结束"
+    // 的自相矛盾行。是否终态交给 `persist_snapshot` 按快照状态自己判断。
     persist_snapshot(
         persistence,
         workspace,
         epoch,
         snapshot.session_id,
         snapshot,
-        true,
+        false,
     );
+}
+
+/// 把一批**已停止**的进程快照写入终态（会话关闭 / 退出 lx 时清理后的可获取终态）。
+///
+/// 设计 §8 要求「清理其进程并记录终态」：只杀不记，库里会留下永远 `running` 的行，
+/// 重开该会话后卡片显示 Running，而后台任务面板（读内存运行实例）却是空的——
+/// 两处对同一件事给出相反答案。非终态快照一律跳过，绝不凭空给活进程盖终态。
+pub fn persist_terminal_snapshots(
+    persistence: &Persistence,
+    workspace: &Path,
+    epoch: &str,
+    snapshots: &[crate::chat::process::ProcessSnapshot],
+) {
+    for snapshot in snapshots {
+        if !snapshot.state.is_terminal() {
+            continue;
+        }
+        persist_snapshot(
+            persistence,
+            workspace,
+            epoch,
+            snapshot.session_id,
+            snapshot,
+            true,
+        );
+    }
 }
 
 /// 写入一次输出/终态快照（revision 自增，较旧写入零行）。

@@ -17,7 +17,7 @@ pub mod runtime;
 mod timeline;
 mod tool_calls;
 
-pub use process_events::handle_process_event;
+pub use process_events::{handle_process_event, persist_terminal_snapshots};
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
 pub(crate) use timeline::{chat_part_views_to_db, latest_user_draft, schedule_checkpoint};
 #[cfg(test)]
@@ -212,9 +212,9 @@ pub fn pump_chat_streams(
 ) -> bool {
     // 会话切换、`/new`、窗格关闭：在途轮次不再归属于任何可见请求 → 取消。
     reap_stale_streams(state, streams);
-    // 已不再被任何窗格绑定的会话运行实例：停止其全部进程并释放句柄。
-    reap_orphan_runtimes(state, streams);
-    let mut changed = false;
+    // 已不再被任何窗格绑定的会话运行实例：停止其全部进程、释放句柄，并把终态回投落库。
+    let reaped = reap_orphan_runtimes(state, streams, sender);
+    let mut changed = reaped;
     let effects: Vec<Effect> = state
         .effects
         .iter()
@@ -227,7 +227,8 @@ pub fn pump_chat_streams(
         .cloned()
         .collect();
     if effects.is_empty() {
-        return false;
+        // 没有网络效应要取，但运行实例回收本身可能就是本帧唯一的变化。
+        return changed;
     }
     state.effects.retain(|effect| {
         !matches!(
@@ -496,7 +497,18 @@ fn stop_session_process(
 /// 回收不再被任何窗格绑定的会话运行实例（`/new`、切换会话、关窗格）。
 ///
 /// 只移除运行实例并**异步停止**其进程：事件循环不阻塞等待，回执由后台任务完成。
-fn reap_orphan_runtimes(state: &AppState, streams: &mut ChatStreams) {
+///
+/// 停止完成后把可获取的终态快照经 [`AppEvent::ProcessesReaped`] 回投事件层落库。
+/// 设计 §8 要求「关闭旧运行实例，清理其进程**并记录终态**」——只杀不记，库里会
+/// 永远留着 `running` 行：重开该会话时卡片按记录判活显示 Running，而后台任务面板
+/// 读的是内存运行实例（已随会话回收而空），两处对同一件事给出相反答案。
+///
+/// 返回是否回收了运行实例（后台任务计数随之变化，调用方需要重绘）。
+fn reap_orphan_runtimes(
+    state: &AppState,
+    streams: &mut ChatStreams,
+    sender: &mpsc::UnboundedSender<AppEvent>,
+) -> bool {
     let bound: Vec<String> = state
         .all_pane_ids()
         .into_iter()
@@ -509,13 +521,30 @@ fn reap_orphan_runtimes(state: &AppState, streams: &mut ChatStreams) {
         .into_iter()
         .filter(|session| !bound.contains(session))
         .collect();
+    let mut reaped = false;
     for session in orphans {
         if let Some(runtime) = streams.runtimes.take(&session) {
+            reaped = true;
+            let manager = runtime.manager.clone();
+            let workspace = manager.owner().workspace.clone();
+            let epoch = runtime.epoch.clone();
+            let sender = sender.clone();
             tokio::spawn(async move {
-                runtime.manager.shutdown().await;
+                manager.shutdown().await;
+                // 停止之后才读快照：此时才是真正的终态（Stopped / Interrupted）。
+                let snapshots = manager.snapshots();
+                if snapshots.is_empty() {
+                    return;
+                }
+                let _ = sender.send(AppEvent::ProcessesReaped {
+                    workspace,
+                    epoch,
+                    snapshots,
+                });
             });
         }
     }
+    reaped
 }
 
 /// 该 request key 仍是窗格的在途流时，返回本轮 assistant 消息 id。

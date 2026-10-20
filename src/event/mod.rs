@@ -98,6 +98,15 @@ pub enum AppEvent {
     ///
     /// 事件层在 **DB 与状态都就绪后**才回执，因此 loop 拿到 ticket 才执行文件 IO。
     AgentHost(chat::AgentHostEvent),
+    /// 会话运行实例被回收（切会话 / `/new` / 关窗格）后，其进程的终态快照。
+    ///
+    /// 停止发生在后台任务里，而 `Persistence` 不跨线程：终态必须回投事件层落库，
+    /// 否则库里永远留着 `running` 行（设计 §8「清理进程并记录终态」）。
+    ProcessesReaped {
+        workspace: PathBuf,
+        epoch: String,
+        snapshots: Vec<crate::chat::process::ProcessSnapshot>,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -394,11 +403,20 @@ async fn run_loop(
     for session in runtimes {
         if let Some(runtime) = chat_streams.runtimes.take(&session) {
             let manager = runtime.manager().clone();
+            let workspace = manager.owner().workspace.clone();
+            let epoch = runtime.epoch.clone();
             let shutdown = tokio::spawn(async move {
                 manager.shutdown().await;
+                manager.snapshots()
             });
             // 单批最长 3 秒：不为持久化失败无限挂住退出。
-            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), shutdown).await;
+            if let Ok(Ok(snapshots)) =
+                tokio::time::timeout(std::time::Duration::from_secs(3), shutdown).await
+            {
+                // 停止后落库终态：否则下次启动这些行仍是 running，
+                // 卡片会显示 Running 但没有任何进程可停（设计 §8）。
+                chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
+            }
         }
     }
     // 设置服务随 TUI 退出关闭，避免回环端口悬挂。
@@ -532,6 +550,14 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::ProcessesReaped {
+            workspace,
+            epoch,
+            snapshots,
+        } => {
+            // 会话运行实例回收后的终态落库：只写终态，活进程快照一律跳过。
+            chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
         }
         AppEvent::PromptWorktreeListed {
             repo_root,
