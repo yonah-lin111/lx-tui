@@ -404,7 +404,16 @@ pub fn tick_task_pages(state: &mut AppState) -> bool {
 
 /// 列出某窗格所绑会话仍在运行的进程，回投给后台任务页的进程 tab。
 ///
-/// 只列 `running`/`starting` 的：已退出的进程没有可停的东西，列出来只会让用户
+/// 两条准入条件（任一成立即列出）：
+///
+/// 1. 进程本身还没到终态（`starting`/`running`）；
+/// 2. **shell 已退出，但它拉起的后台作业还活着**（`background_alive`）。
+///
+/// 第 2 条是必须的：`nohup bash task.sh &` 之后 shell 立刻退出，用户的服务却还在
+/// 跑。只看 `state` 会把它过滤掉，面板显示「no running processes」而任务明明活着
+/// ——这正是用户报的情形（进程组仍存活，组长 shell 已退出）。
+///
+/// 已彻底结束（终态且组内无成员）的进程不列：没有可停的东西，列出来只会让用户
 /// 以为还有服务在跑。窗格没有绑定会话（空白草稿）时回投空列表。
 ///
 /// 会话切换后页面可能还开着：此时回投的是新会话的进程，页面据此整体翻新。
@@ -421,7 +430,7 @@ fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: Pan
         .map(|runtime| runtime.manager().snapshots())
         .unwrap_or_default()
         .into_iter()
-        .filter(|snapshot| !snapshot.state.is_terminal())
+        .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
         .map(|snapshot| crate::app::state::ProcessEntry {
             session_id: snapshot.session_id,
             command: snapshot.command,

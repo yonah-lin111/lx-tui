@@ -192,6 +192,27 @@ pub fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     }
 }
 
+/// 该进程组是否仍有存活成员（组长已退出但后台作业还在时为 true）。
+///
+/// 用于回答「shell 退了，它拉起的后台任务还在吗」这个问题：lx spawn 时用
+/// `process_group(0)` 让 shell 当组长，shell 里 `nohup cmd &` 的作业留在同一个
+/// 进程组里。组长退出后组仍可能存活，单看组长状态会误判成"什么都没在跑"。
+///
+/// `pgid` 必须是 lx 自己 spawn 的 shell pid（组长），不是任意进程。
+pub fn process_group_has_members(pgid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // signal 0 只做权限与存在性检查，不发信号。
+        // SAFETY: `kill` 只读整数参数，失败返回 -1，不产生未定义行为。
+        unsafe { libc::kill(-(pgid as libc::pid_t), 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+        false
+    }
+}
+
 /// 按进程组终止命令启动的进程树：`force=false` 先温和（SIGTERM），
 /// `force=true` 强制（SIGKILL）。Windows 走 `taskkill /T`。
 ///

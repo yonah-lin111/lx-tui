@@ -814,6 +814,30 @@ PTY 作为控制终端时，shell 退出会对该作业发 SIGHUP，裸 `cmd &` 
 于是模型向用户汇报「任务已在运行」，用户看到的却是「启动后马上退出」。
 日志一行都没有——后台作业根本没起来。
 
+**第三个问题（真正的「面板不显示」）：只看组长，漏掉后台作业。**
+
+`nohup bash task.sh &` 之后 shell 立刻退出，用户的服务却还在跑。lx 只 `wait`
+得到直接子进程（那个 shell），shell 一退 `state` 就是 `exited`，而面板按
+「非终态」过滤 —— 于是显示 `no running processes`，任务却活得好好的。
+
+实测证据（用户真实会话）：`agent_process` 里 5 条记录全是 `exited`，但
+
+```
+PID 2342  PPID=1  PGID=2334  bash background_task.sh   ← 已跑 10 分钟
+kill -0 -2334  →  进程组仍存活
+```
+
+shell（PGID 2334 的组长）早已退出，后台作业留在同一个进程组里。
+
+修法：
+
+- spawn 时记录组长 pid（`process_group(0)` 让 shell 当组长）；
+- `ProcessSnapshot::background_alive`：组长已终态但 `kill(-pgid, 0)` 仍成功，
+  说明组里还有活体；
+- 面板准入条件改为「非终态 **或** `background_alive`」；
+- `stop_handle` 在终态但组仍存活时，直接按进程组终止 —— 否则面板里那一行
+  永远停不掉（没有 supervisor 可通知，也没有子进程可等）。
+
 对应的两处改动：
 
 1. **系统提示注入平台信息**（`platform::environment_summary`）：报 OS 与默认

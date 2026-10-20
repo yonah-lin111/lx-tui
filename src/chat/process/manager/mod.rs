@@ -132,6 +132,12 @@ pub struct ProcessSnapshot {
     pub ended_at_ms: Option<i64>,
     /// 发起该进程的 `exec_command` 工具调用 ID（卡片归属）。
     pub origin_call_id: String,
+    /// shell 已退出，但它拉起的后台作业仍在进程组里存活。
+    ///
+    /// 真实场景：`nohup bash task.sh &` 之后 shell 立刻退出。此时 lx 的直接子进程
+    /// 已是 `exited`，可用户的服务还在跑——只看 `state` 会把它从后台任务面板里
+    /// 过滤掉，面板显示「no running processes」而任务其实活着。
+    pub background_alive: bool,
 }
 
 /// 停止原因（决定终态标记）。
@@ -151,6 +157,11 @@ pub(super) struct ProcessHandle {
     cwd: String,
     tty: bool,
     started_at_ms: i64,
+    /// lx 直接 spawn 的 shell 的 pid（也是进程组 id，`process_group(0)` 建立）。
+    ///
+    /// spawn 之后才知道，所以是 `Mutex<Option<u32>>`；PTY 分支没有独立进程组。
+    /// 用途：shell 退出后判断它拉起的后台作业是否还活着。
+    pid: std::sync::Mutex<Option<u32>>,
     output: std::sync::Mutex<OutputBuffer>,
     state: std::sync::Mutex<ProcessState>,
     ended_at_ms: std::sync::Mutex<Option<i64>>,
@@ -195,6 +206,7 @@ impl ProcessHandle {
             output: std::sync::Mutex::new(OutputBuffer::default()),
             state: std::sync::Mutex::new(ProcessState::Starting),
             ended_at_ms: std::sync::Mutex::new(None),
+            pid: std::sync::Mutex::new(None),
             cursor: AtomicU64::new(0),
             stdin_slot: std::sync::Mutex::new(None),
             stop: Mutex::new(None),
@@ -206,6 +218,24 @@ impl ProcessHandle {
 
     fn state(&self) -> ProcessState {
         lock(&self.state).clone()
+    }
+
+    /// 记录 spawn 出来的 shell pid（也是进程组 id）。
+    fn set_pid(&self, pid: u32) {
+        *lock(&self.pid) = Some(pid);
+    }
+
+    /// shell 已退出的进程，其进程组里是否还有存活的后台作业。
+    ///
+    /// 这是回答「`nohup cmd &` 起的服务还在不在」的唯一可靠方式：lx 只 wait 得到
+    /// 直接子进程（shell），后台作业一旦脱离就再无句柄，只能靠进程组存在性探测。
+    fn has_living_group(&self) -> bool {
+        if !self.state().is_terminal() {
+            return false;
+        }
+        lock(&self.pid)
+            .map(crate::platform::process_group_has_members)
+            .unwrap_or(false)
     }
 
     /// 写入输出并通知等待者与 UI（UI 通知按进程合并）。
@@ -283,6 +313,7 @@ impl ProcessHandle {
             started_at_ms: self.started_at_ms,
             ended_at_ms: *lock(&self.ended_at_ms),
             origin_call_id: self.origin_call_id.clone(),
+            background_alive: self.has_living_group(),
         }
     }
 }
@@ -719,6 +750,15 @@ impl ProcessManager {
 /// 停止进程（spawn 出去的 `'static` 任务不能借用管理器）。
 async fn stop_handle(handle: &Arc<ProcessHandle>, reason: StopReason) {
     if handle.state().is_terminal() {
+        // 组长（shell）已经退了，但它拉起的后台作业可能还在进程组里跑
+        // （`nohup cmd &` 的典型结果）。此时没有 supervisor 可通知，
+        // 也没有可等的子进程，只能按进程组直接终止——否则面板里的这一行
+        // 永远停不掉，用户会以为按钮没生效。
+        if handle.has_living_group()
+            && let Some(pid) = *lock(&handle.pid)
+        {
+            crate::platform::terminate_process_group(pid, true);
+        }
         return;
     }
     let sender = {

@@ -187,6 +187,7 @@ fn background_output_updates_the_original_card_only() {
         started_at_ms: 1_000,
         ended_at_ms: None,
         origin_call_id: "call-1".into(),
+        background_alive: false,
     };
     assert!(apply_process_output(
         &mut state,
@@ -216,6 +217,7 @@ fn background_output_updates_the_original_card_only() {
         started_at_ms: 1_000,
         ended_at_ms: None,
         origin_call_id: "call-1".into(),
+        background_alive: false,
     };
     assert!(!apply_process_output(
         &mut state,
@@ -440,6 +442,7 @@ fn background_output_reaches_a_card_in_a_finished_turn() {
         started_at_ms: 1_000,
         ended_at_ms: None,
         origin_call_id: "call-1".into(),
+        background_alive: false,
     };
     assert!(
         apply_process_output(&mut state, 4, "call-1", snapshot),
@@ -565,6 +568,7 @@ fn snapshot_reconcile_settles_interaction_cards_of_a_dead_process() {
         started_at_ms: 1_000,
         ended_at_ms: Some(2_000),
         origin_call_id: "call-exec".into(),
+        background_alive: false,
     };
     assert!(
         apply_process_snapshot(&mut state, 1, &snapshot),
@@ -602,6 +606,7 @@ fn snapshot_reconcile_keeps_a_live_process_running() {
         started_at_ms: 1_000,
         ended_at_ms: None,
         origin_call_id: "call-1".into(),
+        background_alive: false,
     };
     assert!(!apply_process_snapshot(&mut state, 1, &snapshot), "无变化");
     let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;

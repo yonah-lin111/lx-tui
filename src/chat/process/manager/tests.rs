@@ -485,3 +485,96 @@ async fn no_match_grep_exit_code_one_is_a_normal_result() {
     // 输出（这里是 `0`）照常返回给模型。
     assert_eq!(result.output.trim(), "0");
 }
+
+// ===== 后台任务：shell 退了但作业还活着，必须仍算「在跑」 =====
+
+/// 复刻用户真实场景：`nohup bash script &`，shell 立刻退出，后台作业继续跑。
+///
+/// 修复前：`snapshot.state` 是 `exited`，面板按「非终态」过滤 → 显示
+/// `no running processes`，而任务其实活着（PID 还在、日志还在写）。
+/// 修复后：`background_alive` 为 true，面板能列出它，`stop` 能停掉它。
+#[tokio::test]
+async fn detached_background_job_stays_visible_and_stoppable() {
+    let dir = TempDir::new("detached-bg");
+    let manager = manager(&dir);
+    let script = dir.path.join("bg.sh");
+    std::fs::write(&script, "#!/bin/bash\nwhile true; do sleep 5; done\n").expect("write script");
+    let log = dir.path.join("bg.log");
+    let args = ExecArgs {
+        cmd: format!(
+            "nohup bash {} > {} 2>&1 & echo LAUNCHED",
+            script.display(),
+            log.display()
+        ),
+        workdir: None,
+        shell: Some("/bin/sh".to_string()),
+        login: false,
+        tty: false,
+        yield_time_ms: 1500,
+        timeout_ms: None,
+        max_output_tokens: 1000,
+    };
+    let out = manager
+        .exec(args, &dir.path, "call-detached")
+        .await
+        .expect("exec");
+    // shell 自己退出了：这是 `nohup ... &` 的正常结果。
+    assert_eq!(out.state, ProcessState::Exited { code: Some(0) });
+
+    // 给后台作业一点时间去写日志并落稳。
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    // 关键断言：快照必须报告「组里还有活体」。
+    let snapshots = manager.snapshots();
+    assert_eq!(snapshots.len(), 1);
+    assert!(
+        snapshots[0].background_alive,
+        "shell 已退出但后台作业仍在跑，background_alive 必须为 true：{:?}",
+        snapshots[0]
+    );
+
+    // 面板的准入条件（与 list_session_processes 同一判据）。
+    let listed = snapshots
+        .iter()
+        .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
+        .count();
+    assert_eq!(listed, 1, "后台任务必须出现在面板里");
+
+    // 停止必须真的杀掉后台作业，尽管 lx 的直接子进程早已退出。
+    manager.stop(snapshots[0].session_id).await.expect("stop");
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(
+        !manager.snapshots()[0].background_alive,
+        "stop 之后进程组不该再有存活成员"
+    );
+}
+
+/// 纯前景命令不该被误判成「还有后台作业」。
+#[tokio::test]
+async fn plain_foreground_command_reports_no_living_group() {
+    let dir = TempDir::new("fg-only");
+    let manager = manager(&dir);
+    let args = ExecArgs {
+        cmd: "echo done".to_string(),
+        workdir: None,
+        shell: Some("/bin/sh".to_string()),
+        login: false,
+        tty: false,
+        yield_time_ms: 2000,
+        timeout_ms: None,
+        max_output_tokens: 1000,
+    };
+    let out = manager
+        .exec(args, &dir.path, "call-fg")
+        .await
+        .expect("exec");
+    assert_eq!(out.state, ProcessState::Exited { code: Some(0) });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let snapshots = manager.snapshots();
+    assert!(
+        !snapshots[0].background_alive,
+        "前景命令结束后进程组应已空：{:?}",
+        snapshots[0]
+    );
+    manager.shutdown().await;
+}

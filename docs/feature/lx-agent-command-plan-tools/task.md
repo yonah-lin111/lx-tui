@@ -313,6 +313,22 @@
   - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
     历史区几何回到 `lay.input` 一处真相。
 
+- **后台任务在跑，后台面板却显示 no running processes（按用户反馈修复）**：
+  - 现象：模型汇报任务已启动并验证存活，`pgrep` 也能看到，但面板全空。
+  - 根因：`nohup bash task.sh &` 后 shell 立刻退出。lx 只 `wait` 得到直接子进程
+    （shell），`state` 随即变为 `exited`；面板按「非终态」过滤 → 过滤掉它。
+    实测：用户会话 5 条进程记录全是 `exited`，而 PID 2342（PPID=1, PGID=2334）
+    已跑 10 分钟，`kill -0 -2334` 仍成功 —— 进程组活着，只是组长退了。
+  - 修法：
+    - spawn 记录组长 pid；新增 `ProcessSnapshot::background_alive`
+      （组长终态 + `kill(-pgid, 0)` 成功）。
+    - 面板准入改为「非终态 **或** `background_alive`」。
+    - `stop_handle` 在终态但组仍存活时按进程组终止，否则面板里那一行停不掉。
+    - 新增 `platform::process_group_has_members`。
+  - 回归测试：`detached_background_job_stays_visible_and_stoppable`
+    （真实子进程：`nohup bash script &` → 断言 `background_alive`、能列出、能停掉）、
+    `plain_foreground_command_reports_no_living_group`（前景命令不误判）。
+
 - **后台任务「启动后马上退出」（按用户反馈排查 + 修复）**：
   - 现象：启动后台任务后它立刻消失，后台任务面板里也没有。
   - 实测结论（真实子进程复现，非推断）：

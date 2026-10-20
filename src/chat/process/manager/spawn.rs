@@ -45,6 +45,10 @@ impl ProcessManager {
             ProcessError::new("spawn_failed", format!("failed to start shell: {error}"))
         })?;
         let pid = child.id();
+        // 记下组长 pid：shell 退出后要靠它探测进程组里是否还有后台作业。
+        if let Some(pid) = pid {
+            handle.set_pid(pid);
+        }
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
