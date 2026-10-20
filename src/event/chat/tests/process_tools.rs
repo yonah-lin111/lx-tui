@@ -485,13 +485,16 @@ async fn runtimes_survive_a_completed_turn() {
     tools.processes().shutdown().await;
 }
 
-/// `/stop` 端到端：列出真实后台进程，再按会话 ID 停掉它。
+/// 后台任务页端到端：列出真实后台进程，再按会话 ID 停掉它。
 ///
 /// 这是「缺失的主动清理入口」的核心验证：此前 lx 只有在切会话/退出时才会清理，
 /// 用户留在会话里时没有任何办法停掉自己起的服务。
+///
+/// 注意刷新时机：`^d` 只发停止请求（异步），列表由**进程终态事件**驱动移除——
+/// 同步重读会读到停止前的快照，表现为「停不掉」。这里按生产路径投递终态事件。
 #[tokio::test]
-async fn stop_panel_lists_and_stops_a_real_background_process() {
-    let fixture = Fixture::new("stop-panel");
+async fn task_page_lists_and_stops_a_real_background_process() {
+    let fixture = Fixture::new("task-page");
     let (mut state, key, persistence, _session) = streaming_state(&fixture);
     let mut streams = ChatStreams::default();
     let tools = agent_tools(&fixture, &mut streams, &key);
@@ -520,31 +523,35 @@ async fn stop_panel_lists_and_stops_a_real_background_process() {
     .await;
     assert_eq!(tools.processes().running_count(), 1, "进程在跑");
 
-    // 打开 `/stop`：面板骨架 + 列表效应。
-    assert!(crate::app::update::open_stop_picker(&mut state, key.pane));
+    // 打开后台任务页：页面骨架 + 列表效应。
+    assert!(crate::app::update::open_task_page(&mut state, key.pane));
     assert!(crate::event::chat::apply_process_effects(
         &mut state,
         &mut streams
     ));
-    let panel = match state
+    // 底部计数指标同步到页面外的状态行。
+    assert!(crate::event::chat::sync_background_task_counts(
+        &mut state, &streams
+    ));
+    let page = state
         .pane_anywhere(key.pane)
-        .and_then(|target| target.lx.slash.clone())
-    {
-        Some(crate::app::state::SlashPanel::Stop(picker)) => picker,
-        other => panic!("期望 /stop 面板，实际 {other:?}"),
-    };
-    assert_eq!(panel.processes.len(), 1, "列出真实后台进程");
-    assert_eq!(panel.processes[0].command, "sleep 30");
-    let process_session_id = panel.processes[0].session_id;
+        .and_then(|target| target.lx.task.clone())
+        .expect("后台任务页已打开");
+    assert_eq!(page.processes.len(), 1, "列出真实后台进程");
+    assert_eq!(page.processes[0].command, "sleep 30");
+    assert_eq!(
+        state.pane_anywhere(key.pane).unwrap().lx.background_tasks,
+        1,
+        "输入框底部指标显示 1 个后台任务"
+    );
+    let process_session_id = page.processes[0].session_id;
 
-    // 一级 → 二级 → 采纳：停止该进程。
-    assert!(crate::app::update::apply_slash_enter(&mut state, key.pane));
-    assert!(crate::app::update::apply_slash_enter(&mut state, key.pane));
+    // `^d` 停止高亮进程。
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Delete);
     assert!(crate::event::chat::apply_process_effects(
         &mut state,
         &mut streams
     ));
-    // 停止是异步的：等到进程真的不在运行。
     for _ in 0..100 {
         if tools.processes().running_count() == 0 {
             break;
@@ -554,15 +561,14 @@ async fn stop_panel_lists_and_stops_a_real_background_process() {
     assert_eq!(
         tools.processes().running_count(),
         0,
-        "进程 {process_session_id} 已被 /stop 停掉"
+        "进程 {process_session_id} 已被后台任务页停掉"
     );
-    // 进程终态事件驱动面板刷新（実生产路径：运行实例在进程退出时发
-    // `ProcessUiEvent::Exited`）。这里直接投递同一个事件验证面板响应。
+
+    // 进程终态事件驱动列表移除（生产路径：运行实例在进程退出时发 Exited）。
     let snapshot = tools
         .processes()
         .snapshot(process_session_id)
         .expect("snapshot");
-    // 面板列表被移除一项 → 视为一次变化（事件层据此置脏重绘）。
     assert!(
         crate::event::chat::handle_process_event(
             &mut state,
@@ -575,20 +581,16 @@ async fn stop_panel_lists_and_stops_a_real_background_process() {
                 exit_code: snapshot.exit_code,
             },
         ),
-        "终态事件应刷新打开着的 /stop 面板"
+        "终态事件应刷新打开着的后台任务页"
     );
-    // 面板仍在（便于连停多个），并已刷新为空列表。
-    let panel = match state
+    let page = state
         .pane_anywhere(key.pane)
-        .and_then(|target| target.lx.slash.clone())
-    {
-        Some(crate::app::state::SlashPanel::Stop(picker)) => picker,
-        other => panic!("停止后仍应留在面板里，实际 {other:?}"),
-    };
+        .and_then(|target| target.lx.task.clone())
+        .expect("停完仍留在页面上，便于连停多个");
     assert!(
-        panel.processes.is_empty(),
+        page.processes.is_empty(),
         "刷新后不再列出已停止的进程：{:?}",
-        panel.processes
+        page.processes
     );
     tools.processes().shutdown().await;
 }

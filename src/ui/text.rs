@@ -600,27 +600,41 @@ pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [edit ⇧↵] [close esc
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
 
-/// `/stop` 命令描述：说清它停的是**后台进程**，而不是「停止生成」。
-pub const LX_STOP_COMMAND_DESC: &str = "Stop background processes in this session";
-/// `/stop` 一级面板标题（进程列表）与空态。
-pub const LX_STOP_PANEL_TITLE: &str = "Background processes";
-pub const LX_STOP_EMPTY: &str = "no background processes";
-/// `/stop` 二级面板标题（动作列表）。
-pub const LX_STOP_ACTION_PANEL_TITLE: &str = "Stop process";
-/// `/stop` 二级面板的唯一动作。
-pub const LX_STOP_ACTION_KILL: &str = "stop this process";
-/// `/stop` 两级面板底边提示：一级进二级、二级执行并关闭。
-pub const LX_STOP_PANEL_FOOTER: &str = "[select ↵] [back esc]";
-/// `/stop` 执行后的聊天栏提示。
-pub fn lx_stop_done(count: usize) -> String {
+/// 后台任务页（窗格内整页）：tab 标签、标题、底边提示与空态。
+///
+/// 对齐 opencode 的 composer 多 tab：进程与子代理各占一个 tab，指标与列表同一名词。
+pub const LX_TASK_PAGE_TITLE: &str = "Background";
+pub const LX_TASK_TAB_PROCESSES: &str = "Processes";
+pub const LX_TASK_TAB_AGENTS: &str = "Agents";
+/// 进程 tab 空态。
+pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
+/// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
+pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
+/// 底边提示：`↑/↓` 移动、`^d` 停止、`←/→` 换 tab、`esc` 返回。
+pub const LX_TASK_PAGE_FOOTER: &str = "[↑/↓] select  [^d] stop  [←/→] tab  [esc] back";
+/// 顶边右端的 tab 指示分隔符（`·`）。
+pub const LX_TASK_TAB_SEP: &str = " · ";
+/// 行尾的运行时长前缀（`running 1m 30s`）。
+pub const LX_TASK_AGE_PREFIX: &str = "running ";
+
+/// 输入框底边框右端的后台任务计数指标：`1 process` / `3 processes`。
+///
+/// 与 opencode 的 `N shell` 同一口径：数量为 0 时整段不渲染；单复数随数量变化。
+pub fn lx_task_count_label(count: usize) -> String {
     if count == 1 {
-        "Stopped 1 background process".to_string()
+        format!("1 {}", LX_TASK_COUNT_NOUN_ONE)
     } else {
-        format!("Stopped {count} background processes")
+        format!("{count} {}", LX_TASK_COUNT_NOUN_MANY)
     }
 }
-/// `/stop` 执行失败提示（进程已退出等，不影响其它进程）。
-pub const LX_STOP_FAILED: &str = "Failed to stop the process";
+pub const LX_TASK_COUNT_NOUN_ONE: &str = "process";
+pub const LX_TASK_COUNT_NOUN_MANY: &str = "processes";
+
+/// 停止一个后台进程后的提示。
+pub const LX_TASK_STOPPED: &str = "Stopped 1 background process";
+/// 停止失败（进程已退出、运行实例已销毁等）。
+pub const LX_TASK_STOP_FAILED: &str = "Failed to stop the process";
+
 /// `/resume` 会话编辑模态：标题、删除确认提示与校验错误。
 pub const RESUME_EDIT_MODAL_TITLE: &str = "Session";
 pub const RESUME_EDIT_CONFIRM_HINT: &str = "Press ^d again to confirm";

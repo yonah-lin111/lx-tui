@@ -506,7 +506,7 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 - command/stdin/output 可能含用户数据；日志仅记录稳定 ID、状态和错误码，不重复记录原始参数与输出。
 - codegraph/codebase memory 是结构证据，不替代编译、测试和手工外观验收。
 
-## 14. 后台进程的主动清理：`/stop`
+## 14. 后台任务页面（窗格内独立页）
 
 ### 14.1 问题
 
@@ -515,46 +515,80 @@ chat 不依赖 app/ui/event；回调只传纯数据。PTY 实现留在 pty，因
 自己起的服务（`npm run dev`、`cargo watch`…）没有任何办法停掉；一旦撞到
 `max_running` 上限，也只会收到 `resource_limit` 错误而没有出路。
 
-codex 的对应能力是显式的 `/stop` → `Op::CleanBackgroundTerminals`（`SlashCommand::Stop`
-的描述就是 "stop all background terminals"）。它**不**随 `/interrupt` 或 Esc 触发——
-`Op::Interrupt` 的注释明确写着 "Abort current task **without terminating** background
-terminal processes"。也就是说「停生成」与「停后台进程」是两件事，各自有独立入口。
+更根本的是**没有痕迹**：进程一直活着，界面上却什么都不显示，用户根本不会想到去清理。
+所以只加一个"清理入口"不够，还得让"有几个在跑"随时可见。
 
-### 14.2 设计
+### 14.2 形态：窗格内的第二个页面
 
-两级面板，与 `/model` 完全同构（同一套 `PanelWindow`、同一套键盘语义）：
+第一版做成 `/stop` 两级浮层。用户判定不合格，给出三条硬约束，据此重做：
 
-```text
-╭ Background processes ────────────────────────────────────────────╮
-│  npm run dev         /workspace/web              [running 1m 30s]│
-│  cargo watch -x test /workspace                  [running 2m 05s]│
-╰ [select ↵] [back esc] ───────────────────────────────────────────╯
-```
+1. **独立页面**，且**只在所在窗格内全屏**——不能全局覆盖屏幕；
+2. 移除 `/stop` 命令，改为**输入框底部用量右侧的计数指标**（点指标/按 `↓` 进页面）；
+3. 页面里**预留 subagent 的位置**（后续在此显示 subagent 内容）。
 
-Enter 进入二级（回显目标命令，避免停错）：
+因此页面挂在 `Lx::task`（`Option<TaskPage>`）上，而不是 `app::overlay`：
+绘制时只接管本窗格内容区（`ui/main_content/lx.rs::render` 早返回），不碰其他窗格。
+这直接带来一个重要性质——**进入页面不销毁 lx 页状态**：
 
 ```text
-╭ Stop process ────────────────────────────────────────────────────╮
-│  stop this process npm run dev                                   │
-╰ [select ↵] [back esc] ───────────────────────────────────────────╯
+Lx {
+    input, cursor, scroll, undo, ...      // 原样保留
+    chat: LxChat { session_id, messages, history_scroll, follow_bottom, ... }
+    task: Option<TaskPage>                // 仅新增这一个字段
+}
 ```
 
-- **一级**只列**仍在运行**的进程：已退出的没有可停的东西。
-- **二级**保留一个确认步骤：停掉正在跑的服务不可撤销，值得多按一次 Enter。
-- Enter 采纳后**留在面板里**并提示 `Stopped 1 background process`——常常要连停多个。
-- Esc 在二级返回一级并恢复原高亮；在一级关闭面板。
+`esc` 返回即回到离开时的样子，**不需要保存/恢复任何状态**。这也满足"保证 lx 页面不被
+清理"的要求：没有任何清理路径会碰到 `pane.lx`。
 
-补充入口（对齐 opencode 的「`↓` 向下层派发」）：**空草稿按 `↓`** 直接打开面板。
-实现上沿用 lx 已有的「历史先接管、否则继续」结构——`↓` 在历史/光标能消费时不动，
-消费不了才向下派发，因此有草稿时 `↓` 仍是光标移动，不会突然弹面板。
+### 14.3 版式（对齐 opencode 的 composer 多 tab）
 
-### 14.3 刷新时机（踩过的坑）
+opencode 的后台管理不是一个独立路由，而是 session 页内 composer 的 tab 切换
+（`shell-tab` / `terminals-tab` / `subagents-tab`），因为不换路由，对话状态天然不被销毁。
+lx 沿用同一思路，但用窗格内整页承载（窗格比 composer 面板更适合长列表）：
 
-停止是**异步**的（真实退出码只能由 `wait` 得到）。第一版在采纳后同步重拉列表，结果
+```text
+╭─ Background ───────────────────────────────────────Processes · Agents──╮
+│❯ npm run dev                /workspace/web               running 1m 30s│
+│  cargo watch -x test        /workspace                   running 2m 05s│
+│  python -m http.server 8000 /workspace/py                running 4m 12s│
+╰─ [↑/↓] select  [^d] stop  [←/→] tab  [esc] back ──────────────────────╯
+```
+
+- 顶边框：页面标题 + 右侧 tab 指示（当前 tab 高亮），放不下时先让位给标题。
+- 主体：`❯ 命令 · cwd · running Ns`。命令列**定宽**、cwd 从固定偏移起，各行 cwd 左缘
+  对齐成列；窄窗格先丢 cwd（识别进程靠命令），再硬切命令，时长始终可见。
+- 底边框：键位提示。
+- `Agents` tab 是**预留位**：列表恒空并显示 `no subagents yet`，后续在此显示 subagent 内容。
+
+### 14.4 键位（对齐 opencode `composer.*`）
+
+| 键 | 动作 | opencode 对应 |
+|---|---|---|
+| `↑` / `↓` | 移动高亮 | `composer.shell.up` / `down` |
+| `^d` | 停止高亮进程 | `composer.shell.kill` |
+| `←` / `→` | 换 tab | composer 内联 `left`/`right` |
+| `esc` | 返回 lx 页 | `escape` → Close composer |
+| 空草稿 `↓` | 进入页面 | `session.child.first = down` |
+
+`↓` 入口沿用 lx 已有的「历史先接管、否则继续」结构（对齐 opencode 的 `run() == false`
+向下层派发）：历史/光标能消费时不动，消费不了才换页。因此**有草稿时 `↓` 仍是光标移动**，
+不会突然换页。页面内整页接管按键，字符不会漏进草稿。
+
+### 14.5 底部计数指标
+
+输入框底边框右端（用量右侧）显示 `1 process` / `3 processes`，**0 个时整段隐藏**
+（对齐 opencode footer 的 `N shell`，同样单复数与 0 隐藏）。窄到放不下时指标让位给模型名。
+
+指标由 `event::chat::sync_background_task_counts` **每轮同步**，与页面是否打开无关——
+这一条针对的正是「进程还活着但界面上没痕迹」这个根因。
+
+### 14.6 刷新时机（踩过的坑）
+
+停止是**异步**的（真实退出码只能由 `wait` 得到）。第一版在按 `^d` 后同步重拉列表，结果
 读到的是**停止前**的快照：进程还在列表里，看起来像「停不掉」。实测复现后改为由
-**进程终态事件**驱动刷新（`process_events::refresh_stop_panels`）：进程真正退出时把
-该条目从任何打开着的 `/stop` 面板里移除并钳制高亮，同时把这次变更计入 `changed`
-让事件循环置脏重绘。
+**进程终态事件**驱动刷新（`process_events::refresh_task_pages`）：进程真正退出时把该条目
+从任何打开着的页面里移除并钳制高亮，同时把变更计入 `changed` 让事件循环置脏重绘。
 
 ## 15. 与 codex harness 的对照
 

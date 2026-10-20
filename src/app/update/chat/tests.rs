@@ -7,7 +7,7 @@ mod prompt_history;
 mod session;
 mod slash_panels;
 mod stop;
-mod stop_panel;
+mod task_page;
 mod timeline;
 mod viewport_anchor;
 

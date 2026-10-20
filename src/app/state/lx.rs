@@ -8,6 +8,7 @@ pub mod chat;
 mod history;
 pub mod mention;
 pub mod slash;
+pub mod task;
 
 use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
@@ -21,8 +22,9 @@ pub use chat::{
 pub use mention::{LxMention, LxMentionView};
 pub use slash::{
     HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker, ModelPickerStage, PanelWindow,
-    ProcessEntry, SlashCommand, SlashPanel, StopAction, StopPicker, StopPickerStage,
+    SlashCommand, SlashPanel,
 };
+pub use task::{ProcessEntry, TaskPage, TaskTab};
 
 /// lx 页三个入口：原生 agent、混合 agent、自动化 agent。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,6 +66,14 @@ pub struct Lx {
     pub slash: Option<super::lx::SlashPanel>,
     /// 聊天会话状态：会话引用、历史视图与请求状态机。
     pub chat: LxChat,
+    /// 后台任务页面；`Some` 表示当前窗格正停在该页（整页替换 lx 页的绘制，
+    /// 但 `Lx` 其余字段——会话、消息、草稿、滚动——全部原样保留，退出页面即复原）。
+    pub task: Option<TaskPage>,
+    /// 本会话正在运行的后台任务数（底部状态行指标）。
+    ///
+    /// 由事件循环按运行实例刷新，与页面是否打开无关——用户不打开后台任务页也要
+    /// 能看见"还有几个服务在跑"，否则忘了清理就是这样发生的。
+    pub background_tasks: usize,
     /// 撤销历史（上限 `LX_HISTORY_LIMIT`）。
     undo: Vec<LxSnapshot>,
     /// 重做历史。
@@ -118,6 +128,8 @@ impl Lx {
             mention: LxMention::default(),
             slash: None,
             chat: LxChat::new(),
+            task: None,
+            background_tasks: 0,
             undo: Vec::new(),
             redo: Vec::new(),
             history: HistoryBrowse::default(),

@@ -23,9 +23,10 @@ pub use process::{
     settle_tool_detail, toggle_selected_tool_detail, toggle_tool_detail,
 };
 pub use session::{
-    apply_models_changed, apply_slash_command, apply_slash_enter, delete_session, new_session,
-    on_history_listed, on_process_listed, on_session_deleted, on_session_loaded, open_history,
-    open_model_picker, open_stop_picker, persist_default_model, rename_session, resume_session,
+    apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
+    new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
+    open_history, open_model_picker, open_task_page, persist_default_model, rename_session,
+    resume_session, stop_selected_process,
 };
 pub(crate) use view::view_message_of;
 

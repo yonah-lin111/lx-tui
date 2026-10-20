@@ -223,22 +223,35 @@
 
 后续修订记录（对照 codex harness 与用户反馈）：
 
-- **新增 `/stop`：主动清理后台进程（缺失能力）**：
+- **后台任务改为独立页面（移除 `/stop`，按用户反馈重做）**：
   - 问题：lx 此前只有「切会话 / `/new` / 退出」才清理进程，用户留在会话里时**没有任何**
-    办法停掉自己起的服务；`max_running` 报 `resource_limit` 时也无出路。codex 有
-    `/stop`（`CleanBackgroundTerminals`，描述 "stop all background terminals"）。
-  - 一级：列出本会话**仍在运行**的进程（命令 + cwd + `running Ns` 时长）。
-  - 二级：动作列表（`stop this process`），回显目标命令以便确认。
-  - 交互与 `/model` 完全同构：↑↓ 移动、Enter 进二级 / 采纳、Esc 返回上级 / 顶层关闭；
-    另有 opencode 式入口——**空草稿按 `↓`** 直接打开（有草稿时 `↓` 仍是光标移动）。
+    办法停掉自己起的进程；`max_running` 报 `resource_limit` 时也无出路。
+  - 第一版做成 `/stop` 两级浮层，用户判定不合格并给出两条明确要求，据此重做：
+    1. 必须是**独立页面**，且**只在该窗格内全屏**（不能全局覆盖，也不能清理 lx 页）；
+    2. 移除 `/stop` 命令，改为输入框底部用量**右侧的计数指标**，点它/按 `↓` 进页面；
+    3. 页面里要**预留 subagent 的位置**（后续在此显示 subagent 内容）。
+  - 形态（对齐 opencode 的 composer 多 tab）：顶边框 `Background` + 右侧 tab 指示
+    `Processes · Agents`，主体是当前 tab 的列表，底边框是键位提示。
+  - **不做全局覆盖**：页面挂在 `Lx::task`（`Option<TaskPage>`），绘制时只接管本窗格内容区
+    （`ui/main_content/lx.rs::render` 早返回）。因此 `pane.lx` 的会话、消息、草稿、光标、
+    滚动偏移全部原样保留，`esc` 返回即回到离开时的样子——**不需要保存/恢复任何状态**，
+    也绝不会清理 lx 页。测试 `opening_the_page_keeps_every_other_lx_field` 逐字段锁住。
+  - 键位（对齐 opencode `composer.*`）：`↑/↓` 移动、`^d` 停止高亮进程（`composer.shell.kill`）、
+    `←/→` 换 tab、`esc` 返回。页面整页接管按键，字符不会漏进草稿。
+  - 入口：**空草稿按 `↓`**（沿用「历史先接管、否则继续」结构，有草稿时 `↓` 仍是光标移动），
+    与 opencode `session.child.first = down` 同一机制。
+  - 底部指标：输入框底边框右端（用量右侧）显示 `1 process` / `3 processes`，**0 个时整段隐藏**；
+    窄到放不下时让位给模型名。由 `event::chat::sync_background_task_counts` 每轮同步，
+    与页面是否打开无关——这补上了"进程还活着但界面上没痕迹"的根因。
   - 数据来源：`Effect::ListSessionProcesses` / `Effect::StopSessionProcess` 由事件层执行
-    （`app/` 与 `db/` 都不持有进程句柄）。
-  - **刷新时机**：列表由**进程终态事件**驱动（`process_events::refresh_stop_panels`），
+    （`app/` 与 `db/` 都不持有进程句柄），与 `/resume` 同一套取数模式。
+  - **刷新时机**：列表由**进程终态事件**驱动（`process_events::refresh_task_pages`），
     不同步重读——停止是异步的，同步刷新会读到停止前的快照（实测踩到并修掉）。
-  - 停止后**留在面板里**并显示 `Stopped 1 background process`：常常要连停多个。
-  - 测试：`app/update/chat/tests/stop_panel.rs`（12 项，含两级导航、空态、高亮钳制、
-    `↓` 入口）+ `slash_panels.rs` 渲染 3 项 + 真实进程端到端 1 项。
-
+  - `Agents` tab 是**预留位**：列表恒空并显示 `no subagents yet`，后续在此显示 subagent 内容。
+  - 测试：`app/state/lx/task/tests.rs`（10 项状态模型）+ `app/update/chat/tests/task_page.rs`
+    （16 项：进入/退出不丢 lx 状态、列表回投、停止效应、`↓` 入口、按键不漏进草稿、tab 导航）
+    + `ui/main_content/lx/task/tests.rs`（8 项渲染，含窄窗格降级与 tab 占位）
+    + `status/tests.rs`（4 项底部指标）+ 真实子进程端到端 1 项。
 
 - **展开后视口跳走（bug）**：新增 `LxChat::viewport_top` + `pin_lx_viewport`，三个切换入口
   内部先锚定；`chat_hit` 命中限定在 body 内。测试 `app/update/chat/tests/viewport_anchor.rs`。

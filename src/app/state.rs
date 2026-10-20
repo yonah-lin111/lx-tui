@@ -26,8 +26,8 @@ pub use lx::{
     HistoryPanel, InputHint, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry,
     ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PlanSnapshotView,
     PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, RequestKey, RequestState,
-    SlashCommand, SlashPanel, StopAction, StopPicker, StopPickerStage, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary,
+    SlashCommand, SlashPanel, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
+    ToolSummary,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

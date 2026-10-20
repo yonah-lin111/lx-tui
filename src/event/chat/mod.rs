@@ -269,7 +269,7 @@ fn reap_stale_streams(state: &AppState, streams: &mut ChatStreams) {
     }
 }
 
-/// 执行进程类效应（`/stop` 的列表与停止）。
+/// 执行进程类效应（后台任务页的列表与停止）。
 ///
 /// 与 `pump_chat_streams` 同一处置方式：从 `state.effects` 取出自己关心的效应执行，
 /// 其余的留给持久化泵/网络泵。进程句柄只在事件层的运行实例里，所以这两件事只能
@@ -316,10 +316,44 @@ pub fn apply_process_effects(state: &mut AppState, streams: &mut ChatStreams) ->
     changed
 }
 
-/// 列出某窗格所绑会话仍在运行的进程，回投给 `/stop` 面板。
+/// 把每个 lx 窗格的会话后台任务数同步到底部状态行指标。
+///
+/// 每轮循环都算（`running_count` 只是一次加锁 + 计数），这样无论用户是否打开
+/// 后台任务页，都能随时看到"还有几个服务在跑"——这正是此前"忘了清理"的根因：
+/// 进程一直活着，界面上却没有任何痕迹。
+///
+/// 返回是否有窗格的计数发生变化（用于置脏重绘）。
+pub fn sync_background_task_counts(state: &mut AppState, streams: &ChatStreams) -> bool {
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_anywhere(pane) else {
+            continue;
+        };
+        let count = target
+            .lx
+            .chat
+            .session_id
+            .as_deref()
+            .and_then(|session_id| streams.runtimes.get(session_id))
+            .map(|runtime| runtime.manager().running_count())
+            .unwrap_or(0);
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        if target.lx.background_tasks != count {
+            target.lx.background_tasks = count;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// 列出某窗格所绑会话仍在运行的进程，回投给后台任务页的进程 tab。
 ///
 /// 只列 `running`/`starting` 的：已退出的进程没有可停的东西，列出来只会让用户
 /// 以为还有服务在跑。窗格没有绑定会话（空白草稿）时回投空列表。
+///
+/// 会话切换后页面可能还开着：此时回投的是新会话的进程，页面据此整体翻新。
 fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: PaneId) -> bool {
     let Some(session_id) = state
         .pane_anywhere(pane)
@@ -339,14 +373,13 @@ fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: Pan
             command: snapshot.command,
             cwd: snapshot.cwd,
             tty: snapshot.tty,
-            running: true,
             started_at_ms: snapshot.started_at_ms,
         })
         .collect();
     update::on_process_listed(state, pane, entries)
 }
 
-/// 停止 `/stop` 选中的进程，并在聊天栏给出结果反馈。
+/// 停止后台任务页选中的进程，并给出结果反馈。
 ///
 /// 停止是异步的（真实退出码只能由 `wait` 得到）；这里不阻塞事件循环。
 fn stop_session_process(
@@ -363,13 +396,13 @@ fn stop_session_process(
         .and_then(|session_id| streams.runtimes.get(session_id))
         .map(|runtime| runtime.manager().clone());
     let Some(manager) = manager else {
-        // 会话运行实例已经不在（刚切会话/刚退出）：窗格里还挂着面板，
-        // 不能静默失败，否则用户会以为点了没生效。
+        // 会话运行实例已经不在（刚切会话/刚退出）：页面上还挂着这一行，
+        // 不能静默失败，否则用户会以为按了没生效。
         update::show_lx_hint(
             state,
             pane,
             crate::app::state::InputHintLevel::Error,
-            crate::ui::text::LX_STOP_FAILED,
+            crate::ui::text::LX_TASK_STOP_FAILED,
         );
         return;
     };
@@ -386,15 +419,15 @@ fn stop_session_process(
             }
         }
     });
-    // 停止是异步的，但“点了就要有反馈”。
+    // 停止是异步的，但"按了就要有反馈"。
     //
-    // 这里只给“已发出停止请求”的确认；真正的结果由进程终态事件驱动面板刷新。
+    // 这里只确认"已发出停止请求"；真正的结果由进程终态事件驱动列表刷新。
     // 用 Warning 档而不是 Error：这是用户主动要求的动作，不是出错。
     update::show_lx_hint(
         state,
         pane,
         crate::app::state::InputHintLevel::Warning,
-        crate::ui::text::lx_stop_done(1),
+        crate::ui::text::LX_TASK_STOPPED,
     );
 }
 

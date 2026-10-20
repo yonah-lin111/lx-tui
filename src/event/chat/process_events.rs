@@ -62,8 +62,8 @@ pub fn handle_process_event(
         ProcessUiEvent::Exited { .. } => {
             let applied = update::apply_process_exit(state, &event, Some(snapshot.clone()));
             // 终态事件可能没改到工具卡片（该卡片已不在屏幕上），
-            // 但仍需刷新打开着的 `/stop` 面板——否则用户会看到已停的进程还挂在列表里。
-            applied | refresh_stop_panels(state, session_id)
+            // 但仍需刷新打开着的后台任务页——否则用户会看到已停的进程还挂在列表里。
+            applied | refresh_task_pages(state, session_id)
         }
     };
     // UI 已取走本次输出通知：允许下一次输出重新通知。
@@ -189,39 +189,22 @@ fn next_revision(session_id: u64) -> i64 {
     *entry
 }
 
-/// 进程终态后刷新打开着的 `/stop` 面板。
+/// 进程终态后把该进程从打开着的后台任务页里摘掉。
 ///
-/// 只处理“列表里含该进程”的窗格：面板本身不记载会话归属，因此用“该窗格绑定的会话持有该进程”来判定。
-/// 不重建面板、不改高亮位置：这里只把已退出的条目从列表里移除。
-fn refresh_stop_panels(state: &mut AppState, session_id: u64) -> bool {
+/// 这是"停止后刷新列表"的**唯一可靠时机**：停止是异步的，按了 `^d` 之后立刻
+/// 重读会读到停止前的快照（进程还没真正退出），列表看起来像"停不掉"。
+///
+/// 只处理列表里含该进程的窗格；不重建页面、不重置 tab，高亮由 `clamp` 收尾。
+fn refresh_task_pages(state: &mut AppState, session_id: u64) -> bool {
     let mut changed = false;
     for pane in state.all_pane_ids() {
-        let Some(target) = state.pane_anywhere(pane) else {
-            continue;
-        };
-        let Some(crate::app::state::SlashPanel::Stop(picker)) = target.lx.slash.as_ref() else {
-            continue;
-        };
-        if !picker
-            .processes
-            .iter()
-            .any(|process| process.session_id == session_id)
-        {
-            continue;
-        }
         let Some(target) = state.pane_mut_anywhere(pane) else {
             continue;
         };
-        if let Some(crate::app::state::SlashPanel::Stop(picker)) = target.lx.slash.as_mut() {
-            picker
-                .processes
-                .retain(|process| process.session_id != session_id);
-            picker.window.clamp(picker.processes.len());
-            picker
-                .action_window
-                .clamp(crate::app::state::StopAction::ALL.len());
-            changed = true;
-        }
+        let Some(page) = target.lx.task.as_mut() else {
+            continue;
+        };
+        changed |= page.retain_process(session_id);
     }
     changed
 }

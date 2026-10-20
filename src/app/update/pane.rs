@@ -79,6 +79,14 @@ pub fn focus_pane(state: &mut AppState, id: PaneId) {
 /// 无面板时 `↑`/`↓` 先尝试历史切换（光标在文首/文末才接管），否则回落光标移动。
 pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
     let pane_id = state.active_tab().layout.focus();
+    // 后台任务页是窗格内的第二个页面：整页接管按键，不回落到输入框。
+    if state
+        .pane_anywhere(pane_id)
+        .is_some_and(|pane| pane.lx.task.is_some())
+    {
+        apply_task_page_input(state, pane_id, command);
+        return;
+    }
     // 历史 prompt 切换：只读定出路由（要读全局历史 + 窗格编辑器，两个不可变借用），
     // 再单独应用，避免同时借用 `state` 的两个字段。
     match lx_history_route(state, pane_id, command) {
@@ -202,19 +210,6 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                                 super::super::state::PanelWindow::new(picker.window.active);
                         }
                     }
-                    // `/stop` 二级：Esc 返回进程列表（与 `/model` 的 variant → 模型同款）。
-                    super::super::state::SlashPanel::Stop(picker)
-                        if matches!(
-                            picker.stage,
-                            super::super::state::StopPickerStage::Actions { .. }
-                        ) =>
-                    {
-                        if let Some(panel) = lx.slash.as_mut()
-                            && let super::super::state::SlashPanel::Stop(picker) = panel
-                        {
-                            picker.back_to_processes();
-                        }
-                    }
                     _ => lx.slash = None,
                 }
                 return;
@@ -263,10 +258,10 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Left => lx.move_left(),
         LxInput::Right => lx.move_right(),
         LxInput::Up => lx.move_up(),
-        // ↓ 落空：历史不接管、草稿为空、光标在末尾时打开后台进程面板（对齐 opencode 的 `run() == false`
-        // 向下层派发）。有草稿时↓ 仍是光标/历史移动，不会突然弹面板。
+        // ↓ 落空：历史不接管、草稿为空、光标在末尾时进入后台任务页（对齐 opencode 的
+        // `run() == false` 向下层派发）。有草稿时 ↓ 仍是光标/历史移动，不会突然换页。
         LxInput::Down if lx.input.trim().is_empty() && lx.cursor == lx.input.len() => {
-            super::chat::open_stop_picker(state, pane_id);
+            super::chat::open_task_page(state, pane_id);
         }
         LxInput::Down => lx.move_down(),
         LxInput::Home | LxInput::LineStart => lx.home(),
@@ -715,4 +710,55 @@ pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
     state.pane_mut_anywhere(pane).is_some_and(|target| {
         target.kind == PaneKind::Terminal && target.terminal.scroll_to_content_offset(offset)
     })
+}
+
+/// 后台任务页的按键：`↑/↓` 移动、`^d` 停止高亮进程、`←/→` 换 tab、`Esc` 返回 lx 页。
+///
+/// 页面整页接管输入（不回落到草稿编辑）：它是一次独立浏览，退出来后草稿与光标
+/// 仍是进入前的样子。不可用的键直接吞掉，避免"按下去没反应但草稿里多了字符"。
+fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
+    match command {
+        LxInput::Escape => {
+            super::chat::close_task_page(state, pane);
+        }
+        LxInput::Up => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.move_active(-1);
+            }
+        }
+        LxInput::Down => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.move_active(1);
+            }
+        }
+        // ←/→ 换 tab（对齐 opencode composer 的左右切 tab）。
+        LxInput::Left => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.cycle_tab(-1);
+            }
+        }
+        LxInput::Right => {
+            if let Some(page) = state
+                .pane_mut_anywhere(pane)
+                .and_then(|target| target.lx.task.as_mut())
+            {
+                page.cycle_tab(1);
+            }
+        }
+        // `^d` 停止高亮进程（对齐 opencode `composer.shell.kill`）。
+        LxInput::Delete => {
+            super::chat::stop_selected_process(state, pane);
+        }
+        // 其余键不属于本页：吞掉，不落到草稿。
+        _ => {}
+    }
 }

@@ -28,7 +28,7 @@ const GAP: u16 = 1;
 const EDGE_PAD: u16 = 1;
 
 /// 底边框状态布局：绘制行（零高表示空间不足不绘制）、上下文占用、
-/// 左侧模型 · 上下文可用矩形，以及右端「块」（供清底）。
+/// 左侧模型 · 上下文可用矩形，以及右端的后台任务计数指标块。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct StatusLayout {
     /// 状态绘制行（窗格底边框）；`height == 0` 表示不绘制。
@@ -37,7 +37,7 @@ pub(super) struct StatusLayout {
     pub context: Rect,
     /// 左侧模型 · 上下文可用矩形。
     pub label: Rect,
-    /// 右端块整体矩形（含右侧留白）；零宽表示无右端元素。
+    /// 右端后台任务计数指标矩形（零宽表示不显示）。
     pub block: Rect,
 }
 
@@ -54,9 +54,10 @@ fn hidden(left: u16, y: u16) -> StatusLayout {
 /// 计算底边框状态布局；`inner` 为窗格内容区（边框行 = `inner.bottom()`，
 /// 可写区间为两端角内侧，角字符保留）。
 ///
-/// 供应商已移除、上下文占用改为紧跟模型名：左侧文本区覆盖整条可写区间，
-/// 右侧不再有独立元素，因此 `block` 只用于清底右侧留白。
-pub(super) fn layout(inner: Rect, status: &ChatStatus) -> StatusLayout {
+/// 左段是 `模型 · 上下文占用`；右段是后台任务计数指标（`1 process`），
+/// 为 0 时整段不渲染（对齐 opencode 的 `N shell`）。两段互不重叠：左侧可用宽度
+/// 先扣掉指标宽度，再决定上下文占用是否还放得下。
+pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLayout {
     let y = inner.bottom();
     let left = inner.x.saturating_add(EDGE_PAD);
     // 可写列区间 `[left, end)`（右端避让角字符）。
@@ -64,7 +65,16 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus) -> StatusLayout {
     if inner.width < 8 || end <= left {
         return hidden(left, y);
     }
-    let avail = end.saturating_sub(left);
+    let task_w = task_text(tasks)
+        .as_ref()
+        .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
+    // 指标贴右端；留一格空档与左侧文字分开。
+    let keep_tasks = task_w > 0 && inner.width > task_w.saturating_add(MIN_MODEL);
+    let avail = end.saturating_sub(left).saturating_sub(if keep_tasks {
+        task_w.saturating_add(GAP)
+    } else {
+        0
+    });
     let ctx_w = context_text(status)
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
@@ -84,8 +94,11 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus) -> StatusLayout {
             Rect::new(left, y, 0, 1)
         },
         label: Rect::new(left, y, avail, 1),
-        // 右端留白：契约保留（清底用），不再承载文本。
-        block: Rect::new(end, y, 0, 1),
+        block: if keep_tasks {
+            Rect::new(end.saturating_sub(task_w), y, task_w, 1)
+        } else {
+            Rect::new(end, y, 0, 1)
+        },
     }
 }
 
@@ -126,7 +139,7 @@ fn model_available_width(status: &ChatStatus, label_width: u16, notice_w: u16, g
 /// 在窗格底边框行上覆盖绘制状态（两端角与未被覆盖的底边线保留为 `─`）。
 pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
     let status = &lx.chat.status;
-    let lay = layout(inner, status);
+    let lay = layout(inner, status, lx.background_tasks);
     if lay.area.height == 0 {
         return;
     }
@@ -182,6 +195,22 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
             lay.label.right(),
         );
     }
+    // 右端：后台任务计数（`1 process`）。为 0 时整段不画，留给底边线。
+    if let Some(tasks) = task_text(lx.background_tasks) {
+        put(
+            buf,
+            lay.block.x,
+            y,
+            &tasks,
+            style::chat_provider(),
+            lay.block.right(),
+        );
+    }
+}
+
+/// 后台任务计数指标文字：`1 process` / `3 processes`；为 0 时 None（整段隐藏）。
+fn task_text(count: usize) -> Option<String> {
+    (count > 0).then(|| text::lx_task_count_label(count))
 }
 
 /// 上下文占用文字（`当前用量(百分比)`，用量用一位小数的 token 短格式）；

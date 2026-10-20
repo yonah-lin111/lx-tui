@@ -222,8 +222,12 @@ async fn run_loop(
         if chat::pump_chat_streams(state, &mut chat_streams, &sender) {
             dirty = true;
         }
-        // `/stop` 的进程列表与停止：进程句柄只在运行实例里，由事件层执行。
+        // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
         if chat::apply_process_effects(state, &mut chat_streams) {
+            dirty = true;
+        }
+        // 底部状态行的后台任务计数：与页面是否打开无关，每轮同步。
+        if chat::sync_background_task_counts(state, &chat_streams) {
             dirty = true;
         }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {

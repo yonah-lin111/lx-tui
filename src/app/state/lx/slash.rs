@@ -73,27 +73,20 @@ pub enum SlashCommand {
     Model,
     /// `/resume`：当前工作区历史列表。
     Resume,
-    /// `/stop`：列出本会话的后台进程，进入二级面板逐个/全部停止。
-    Stop,
     /// `/new`：清当前窗格会话关联并回空白草稿。
     New,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 4] = [
-        SlashCommand::Model,
-        SlashCommand::Resume,
-        SlashCommand::Stop,
-        SlashCommand::New,
-    ];
+    pub const ALL: [SlashCommand; 3] =
+        [SlashCommand::Model, SlashCommand::Resume, SlashCommand::New];
 
     /// 命令名（不含 `/`）。
     pub fn name(self) -> &'static str {
         match self {
             Self::Model => "model",
             Self::Resume => "resume",
-            Self::Stop => "stop",
             Self::New => "new",
         }
     }
@@ -103,8 +96,6 @@ impl SlashCommand {
         match self {
             Self::Model => &[],
             Self::Resume => &["session"],
-            // `kill` / `ps` 都是用户会先想到的词（对齐 codex 的 `/stop` 与 `/ps`）。
-            Self::Stop => &["kill", "ps"],
             Self::New => &["clear"],
         }
     }
@@ -114,7 +105,6 @@ impl SlashCommand {
         match self {
             Self::Model => "/model",
             Self::Resume => "/resume",
-            Self::Stop => "/stop",
             Self::New => "/new",
         }
     }
@@ -124,7 +114,6 @@ impl SlashCommand {
         match self {
             Self::Model => "Choose the model and reasoning level for the next turn",
             Self::Resume => crate::ui::text::LX_RESUME_COMMAND_DESC,
-            Self::Stop => crate::ui::text::LX_STOP_COMMAND_DESC,
             Self::New => "Start a fresh blank session",
         }
     }
@@ -282,173 +271,6 @@ pub struct HistoryPanel {
     pub window: PanelWindow,
 }
 
-/// `/stop` 面板中的一个后台进程条目。
-///
-/// 只装**展示 + 定位**所需的数据：`session_id` 是模型见过的进程会话 ID（真正用于
-/// 停止操作），其余字段供列表行显示。进程句柄不进 `AppState`（`app/` 不持有进程）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProcessEntry {
-    /// 模型见到的进程会话 ID（停止操作的唯一键）。
-    pub session_id: u64,
-    /// 命令原文（单行化后的展示文本）。
-    pub command: String,
-    /// 该进程的原始工作目录。
-    pub cwd: String,
-    /// 是否使用 PTY。
-    pub tty: bool,
-    /// 运行中为 true（列表只收运行中的进程，留此字段备将来展示终态）。
-    pub running: bool,
-    /// 启动时刻（UTC 毫秒）：用于计算已运行时长。
-    pub started_at_ms: i64,
-}
-
-impl ProcessEntry {
-    /// 运行时长标签：`running 12s` / `running 4m 03s`。
-    pub fn age_label(&self, now_ms: i64) -> String {
-        if !self.running {
-            return String::new();
-        }
-        let elapsed = now_ms.saturating_sub(self.started_at_ms).max(0);
-        let seconds = elapsed / 1_000;
-        let text = if seconds < 60 {
-            format!("{seconds}s")
-        } else if seconds < 3_600 {
-            format!("{}m {:02}s", seconds / 60, seconds % 60)
-        } else {
-            format!("{}h {:02}m", seconds / 3_600, (seconds % 3_600) / 60)
-        };
-        crate::ui::text::agent::process_age_label(&text)
-    }
-}
-
-/// `/stop` 二级面板对**某个进程**可执行的动作。
-///
-/// 与 `/model` 的 `Variants` 同构：第一级选进程，第二级选动作。动作只有停止一个，
-/// 但保留两级结构是为了让「先看清是哪个进程、再确认停掉」这件事有个确认步骤——
-/// 停掉正在跑的服务是不可撤销的。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StopAction {
-    /// 停止这一个进程。
-    StopProcess,
-}
-
-impl StopAction {
-    /// 全部动作（固定顺序）。
-    pub const ALL: [StopAction; 1] = [StopAction::StopProcess];
-
-    /// 动作标签。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::StopProcess => crate::ui::text::LX_STOP_ACTION_KILL,
-        }
-    }
-}
-
-/// `/stop` 面板的两级视图。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub enum StopPickerStage {
-    /// 第一级：本会话的后台进程列表。
-    #[default]
-    Processes,
-    /// 第二级：所选进程的动作列表。
-    Actions {
-        /// 目标进程在 `Processes` 里的索引（Esc 返回时恢复高亮）。
-        index: usize,
-        /// 该进程的会话 ID（停哪个）。
-        session_id: u64,
-        /// 该进程的命令（二级面板标题里回显，确认停的是哪一个）。
-        command: String,
-    },
-}
-
-/// `/stop` 面板：先列进程，再选动作。
-///
-/// 与 `/model` 完全同构的两级面板（↑↓ 移动、Enter 进入下一级、Esc 返回上一级、
-/// 顶层 Esc 关闭），差别只在数据来源与「第二级采纳后执行的是停止而不是写配置」。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StopPicker {
-    pub stage: StopPickerStage,
-    /// 本会话当前运行中的进程（事件层按需加载）。
-    pub processes: Vec<ProcessEntry>,
-    /// 计算运行时长的"现在"（UTC 毫秒），由事件循环每轮刷新。
-    pub now_ms: i64,
-    /// 一级列表的窗口状态。
-    pub window: PanelWindow,
-    /// 二级动作列表的窗口状态。
-    pub action_window: PanelWindow,
-}
-
-impl StopPicker {
-    /// 当前级要高亮的条目数。
-    pub fn stage_len(&self) -> usize {
-        match self.stage {
-            StopPickerStage::Processes => self.processes.len(),
-            StopPickerStage::Actions { .. } => StopAction::ALL.len(),
-        }
-    }
-
-    /// 当前级的窗口（一级/二级各有一份，互不串位置）。
-    pub fn stage_window(&self) -> PanelWindow {
-        match self.stage {
-            StopPickerStage::Processes => self.window,
-            StopPickerStage::Actions { .. } => self.action_window,
-        }
-    }
-
-    /// 写回当前级的窗口。
-    pub fn set_stage_window(&mut self, window: PanelWindow) {
-        match self.stage {
-            StopPickerStage::Processes => self.window = window,
-            StopPickerStage::Actions { .. } => self.action_window = window,
-        }
-    }
-
-    /// 选中的进程（一级）。
-    pub fn selected(&self) -> Option<&ProcessEntry> {
-        self.processes.get(self.window.active)
-    }
-
-    /// 进入二级：记录目标进程并重置动作窗口。
-    pub fn enter_actions(&mut self) -> bool {
-        let Some(entry) = self.processes.get(self.window.active).cloned() else {
-            return false;
-        };
-        self.stage = StopPickerStage::Actions {
-            index: self.window.active,
-            session_id: entry.session_id,
-            command: entry.command,
-        };
-        self.action_window = PanelWindow::new(0);
-        true
-    }
-
-    /// 返回一级（Esc）：恢复进入前的进程高亮。
-    pub fn back_to_processes(&mut self) -> bool {
-        let StopPickerStage::Actions { index, .. } = self.stage else {
-            return false;
-        };
-        self.stage = StopPickerStage::Processes;
-        self.window = PanelWindow::new(index);
-        true
-    }
-
-    /// 二级当前选中的动作。
-    pub fn selected_action(&self) -> Option<StopAction> {
-        let StopPickerStage::Actions { .. } = self.stage else {
-            return None;
-        };
-        StopAction::ALL.get(self.action_window.active).copied()
-    }
-
-    /// 二级采纳后的目标进程 ID。
-    pub fn target_session_id(&self) -> Option<u64> {
-        match &self.stage {
-            StopPickerStage::Processes => None,
-            StopPickerStage::Actions { session_id, .. } => Some(*session_id),
-        }
-    }
-}
-
 /// `/` 命令面板（互斥浮层；同一时刻至多一个视图）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum SlashPanel {
@@ -461,8 +283,6 @@ pub enum SlashPanel {
     Model(Box<ModelPicker>),
     /// `/resume` 历史列表。
     History(Box<HistoryPanel>),
-    /// `/stop` 两级选择（进程 → 动作）。
-    Stop(Box<StopPicker>),
 }
 
 impl SlashPanel {
@@ -505,7 +325,6 @@ impl SlashPanel {
                 ModelPickerStage::Variants { variants, .. } => variants.len(),
             },
             Self::History(panel) => panel.entries.len(),
-            Self::Stop(picker) => picker.stage_len(),
         }
     }
 
@@ -515,7 +334,6 @@ impl SlashPanel {
             Self::Commands { window, .. } => *window,
             Self::Model(picker) => picker.window,
             Self::History(panel) => panel.window,
-            Self::Stop(picker) => picker.stage_window(),
         }
     }
 
@@ -528,8 +346,6 @@ impl SlashPanel {
                 ModelPickerStage::Variants { .. } => picker.current_variant,
             },
             Self::History(panel) => panel.current,
-            // `/stop` 没有"已生效项"：后台进程不是可长期选中的状态。
-            Self::Stop(_) => None,
         }
     }
 
@@ -541,7 +357,6 @@ impl SlashPanel {
             } => *current = window,
             Self::Model(picker) => picker.window = window,
             Self::History(panel) => panel.window = window,
-            Self::Stop(picker) => picker.set_stage_window(window),
         }
     }
 

@@ -28,6 +28,7 @@ pub(crate) mod history;
 pub(crate) mod notice;
 pub(crate) mod slash;
 pub(crate) mod status;
+pub(crate) mod task;
 
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 
@@ -66,6 +67,11 @@ pub fn render(
     selection: Option<&Selection>,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
+        return None;
+    }
+    // 后台任务页整页接管本窗格（不覆盖其他窗格、不改 `lx` 其余状态）。
+    if let Some(page) = lx.task.as_ref() {
+        task::render(area, buf, page, focused);
         return None;
     }
     let (grid, cursor, sticky) = build(area, lx, focused);
