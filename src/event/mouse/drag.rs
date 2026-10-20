@@ -53,6 +53,30 @@ pub(crate) fn handle_mouse_drag(
         }
         return;
     }
+    if let Some(grab) = state.task_scroll_drag {
+        // 后台任务输出容器：按拖拽行换算目标偏移（与轨道点击同一套几何）。
+        for (pane, rect) in rects {
+            let inner = layout::pane_inner_rect(*rect);
+            let Some(target) = state.pane_anywhere(*pane) else {
+                continue;
+            };
+            let Some(rects) = ui::main_content::lx::task_rects(inner, &target.lx) else {
+                continue;
+            };
+            let Some(page) = target.lx.task.as_ref() else {
+                continue;
+            };
+            let Some(bar) = ui::main_content::lx::task::output_scrollbar(rects.output, page) else {
+                continue;
+            };
+            let offset = ui::widgets::scrollbar::offset_from_drag_row(&bar, mouse.row, grab);
+            if update::set_task_output_scroll(state, *pane, offset) {
+                *dirty = true;
+            }
+            return;
+        }
+        return;
+    }
     if let Some(grab) = state.prompt_scroll_drag {
         let Some(bar) = ui::prompt_scrollbar(view, state) else {
             return;
@@ -275,6 +299,9 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     if state.prompt_scroll_drag.take().is_some() {
+        return;
+    }
+    if state.task_scroll_drag.take().is_some() {
         return;
     }
     if state.agent_scroll_drag.take().is_some() {

@@ -257,8 +257,11 @@ fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
     )
 }
 
-/// 固定动词：品牌天蓝加粗（饱和、与正文默认前景和边框 Cyan/dim 都区分得开）。
-fn verb(call: &ToolCallView) -> Segment {
+/// 固定动词（卡片 title 主体）：运行中橙黄、已完成翡翠绿。
+///
+/// 用户要求「方块颜色和工具 title 统一为黄色」：动词必须与方块同色，
+/// 否则一张卡片两种颜色。
+fn verb(call: &ToolCallView, running: bool) -> Segment {
     use text::agent as a;
     let label = match Kind::of(&call.name) {
         Kind::Read => a::VERB_TOOL_READ.to_string(),
@@ -267,7 +270,14 @@ fn verb(call: &ToolCallView) -> Segment {
         Kind::Write => a::VERB_TOOL_WRITE.to_string(),
         Kind::Other => single_line(&call.name, TEXT_SAMPLE_CHARS),
     };
-    Segment::new(format!("{label} "), style::chat_tool_verb())
+    Segment::new(
+        format!("{label} "),
+        if running {
+            style::chat_tool_verb_running()
+        } else {
+            style::chat_tool_verb()
+        },
+    )
 }
 
 /// 组装第 1 行（`■ 动词`）：无状态文字、无参数、无计数。
@@ -285,7 +295,11 @@ fn header(call: &ToolCallView, width: u16, loading_frame: usize, animating: bool
         None => segment,
     };
     let lead = paint(lead(call, loading_frame, animating));
-    let verb = paint(verb(call));
+    let running = matches!(
+        call.status,
+        ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running
+    );
+    let verb = paint(verb(call, running));
     // 极窄时只留方块（写 buffer 时仍按列裁剪，绝不越界）。
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];
@@ -370,7 +384,15 @@ pub(super) fn header_with_mark(
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];
     }
-    let verb = paint(Segment::new(verb.to_string(), style::chat_tool_verb()));
+    let running = matches!(mark, StepMark::Running | StepMark::Alive);
+    let verb = paint(Segment::new(
+        verb.to_string(),
+        if running {
+            style::chat_tool_verb_running()
+        } else {
+            style::chat_tool_verb()
+        },
+    ));
     let mut segments = vec![lead, verb];
     // 动词整段放不下时尾部省略（不挤掉行首方块）。
     while segments_cols(&segments) > limit && segments.len() > 1 {

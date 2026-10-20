@@ -59,17 +59,17 @@ const BODY_ROWS: usize = 2;
 ///
 /// **与 [`draw_command`] 共用同一份构造**：行数口径只有一个来源。输出、cwd 与
 /// `… +N more lines` 都已搬进后台任务面板，消息列表里只看得到"哪条命令在跑"。
-fn command_body(view: &CommandView) -> Vec<BodyRow> {
+fn command_body(view: &CommandView, running: bool) -> Vec<BodyRow> {
     vec![
-        BodyRow::command(&view.command, view.state.is_running()),
+        BodyRow::command(&view.command, running),
         BodyRow::open(text::agent::TASK_OPEN_LABEL),
     ]
 }
 
 /// 交互卡片树体行：命令 + `[open]`（stdin 与输出同样只在面板里看）。
-fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
+fn interaction_body(view: &ProcessInteractionView, running: bool) -> Vec<BodyRow> {
     vec![
-        BodyRow::command(&view.command, view.state.is_running()),
+        BodyRow::command(&view.command, running),
         BodyRow::open(text::agent::TASK_OPEN_LABEL),
     ]
 }
@@ -231,7 +231,8 @@ fn draw_command(
         status,
         mark,
     );
-    draw_body(grid, rect, scroll, row_index, &command_body(view));
+    let running = mark_is_running(mark);
+    draw_body(grid, rect, scroll, row_index, &command_body(view, running));
 }
 
 /// 交互卡片：标题 + 树体（命令 / `[open]`）。
@@ -259,7 +260,14 @@ fn draw_interaction(
         status,
         mark,
     );
-    draw_body(grid, rect, scroll, row_index, &interaction_body(view));
+    let running = mark_is_running(mark);
+    draw_body(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        &interaction_body(view, running),
+    );
 }
 
 /// 标题行（`■ 动词 · 状态`）；推进 1 行。
@@ -345,6 +353,11 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
         }
         *row_index += 1;
     }
+}
+
+/// 该标记是否代表"仍在运行"（橙黄档）：进程存活或工具尚未结算都算。
+fn mark_is_running(mark: StepMark) -> bool {
+    matches!(mark, StepMark::Running | StepMark::Alive)
 }
 
 /// 进程状态文案：`Running` / `Exited 0` / `exit 2`。

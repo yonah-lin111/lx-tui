@@ -748,14 +748,13 @@ const CHAT_STEP_GREEN: u8 = 42;
 const CHAT_STEP_MAGENTA: u8 = 218;
 /// 可变参数色：金黄（与 `[UI]` 查看器的 `agent_param` 同色；工具行不加下划线）。
 const CHAT_GOLD: u8 = 220;
-/// 后台进程**存活**色：深黄 `Indexed 136`（`#af8700`）。
+/// 工具**运行中**色：橙黄 `Indexed 208`（`#ff8700`）。
 ///
-/// 只服务进程类卡片（`exec_command` / `write_stdin`）：深黄表达"任务还在跑"，
-/// 进程停止即回翡翠绿。用户明确要求「深一点的黄色」——比金黄参数 `220`
-/// 暗一档（L 86.9 → 58.5），因此不会与参数金混淆；选色依据（CIEDE2000，
-/// 见 `ui::style::tests`）：与工具绿 39.2、品红思考 50.4、天蓝 117 51.3
-/// 均 ≥35；与金黄参数 22.5 的差距靠**明度差**补足（见下方 palette 测试）。
-const CHAT_STEP_YELLOW: u8 = 136;
+/// 语义是「还在进行」：**所有**正在运行的工具（文件工具、`exec_command`、
+/// `write_stdin`、`update_plan`）的方块与动词统一用它，只有 `Completed` 才回翡翠绿。
+/// 用户要求「橙黄一点」——比金黄参数 `220` 更橙更饱和（色差 27.9），比深土黄亮一档
+/// （L 68.5 vs 58.5）；与工具绿 56.0、品红思考 40.7、天蓝 117 50.9 均 ≥40。
+const CHAT_STEP_AMBER: u8 = 208;
 
 // ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
 //
@@ -819,25 +818,24 @@ pub fn chat_step_mark_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 后台进程卡片的方块：**进程仍存活**——橙色加粗。
+/// 工具**运行中**的方块：橙黄加粗（呼吸 + 加粗是唯一的进行中信号）。
 ///
-/// 只用于进程类卡片（`exec_command` / `write_stdin`），属"后台任务还在烧"的专属
-/// 信号；进程停止后回到 [`chat_step_mark_done`] 的翡翠绿（决策：橙 = 活着，绿 = 停了）。
-/// 与绿（色差 66.7）、金黄参数（39.6）、品红思考（37.4）、天蓝（55.2）都拉得开。
+/// 用户要求「所有正在运行中的 tool 的方块和 title 统一为黄色，完成才显示绿色」，
+/// 因此不再按工具种类分色：文件工具、进程卡片、计划卡片共用这一档。
 pub fn chat_step_mark_alive() -> Style {
     Style::default()
-        .fg(Color::Indexed(CHAT_STEP_YELLOW))
+        .fg(Color::Indexed(CHAT_STEP_AMBER))
         .add_modifier(Modifier::BOLD)
 }
 
-/// 后台进程卡片的动词与状态文字：橙色（同色系，不加粗）——方块靠字重衬出来。
+/// 工具**运行中**的动词与状态文字：同档橙黄、不加粗（方块靠字重衬出来）。
 pub fn chat_step_label_alive() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_YELLOW))
+    Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
-/// 工具行的头部文案：运行中——翡翠绿（与方块同色系，不加粗）。
+/// 工具行的头部文案：运行中——橙黄（与方块同色系，不加粗）。
 pub fn chat_step_label_running() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+    Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
 /// 工具行的头部文案：已完成——翡翠绿（同上，不加粗）。
@@ -845,10 +843,18 @@ pub fn chat_step_label_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
 }
 
-/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：翡翠绿、不加粗——
-/// 与紧邻的加粗方块靠字重区分开。
+/// 工具行的固定动词（`Read` / `Search` / `Edit` / `Write`）：**已完成**——翡翠绿、
+/// 不加粗（与紧邻的加粗方块靠字重区分开）。
 pub fn chat_tool_verb() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+}
+
+/// 工具行的固定动词：**运行中**——与方块同档橙黄。
+///
+/// 用户要求「方块颜色和工具 title 统一为黄色」：动词是卡片的 title 主体，
+/// 必须跟方块同色，否则一张卡片两种颜色。
+pub fn chat_tool_verb_running() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
 /// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：金黄，**不加下划线**。

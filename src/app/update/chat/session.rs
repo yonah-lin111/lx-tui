@@ -191,6 +191,34 @@ pub fn on_task_output(state: &mut AppState, pane: PaneId, output: Vec<String>) -
     page.set_output(output)
 }
 
+/// 直接设置输出视口顶部偏移（滚动条轨道点击/thumb 拖拽）；返回是否变化。
+pub fn set_task_output_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
+    let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    else {
+        return false;
+    };
+    let max = page.output.len().saturating_sub(page.output_visible);
+    let next = offset.min(max);
+    if page.output_scroll == next {
+        return false;
+    }
+    page.output_scroll = next;
+    true
+}
+
+/// 滚动后台任务面板的输出视口（滚轮/翻页共用）；返回视口是否移动。
+pub fn scroll_task_output(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
+    let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    else {
+        return false;
+    };
+    page.scroll_output(delta)
+}
+
 /// 停止后台任务页高亮的那个进程（`^d`）。
 ///
 /// 只发效应，不改页面：进程真正退出后由终态事件把它从列表里摘掉，页面因此

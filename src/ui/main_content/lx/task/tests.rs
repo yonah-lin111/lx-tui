@@ -98,9 +98,9 @@ fn panel_replaces_messages_with_output_and_keeps_the_input_slot() {
     // 历史区被输出容器接管：消息正文不再出现。
     let joined = after.join("\n");
     assert!(!joined.contains('你'), "历史区已被输出容器接管：{joined}");
-    // 输出容器从内容区顶部开始。
+    // 输出容器（无边框）从内容区顶部开始。
     assert!(
-        after[0].contains(text::LX_TASK_OUTPUT_TITLE),
+        after[0].contains(text::LX_TASK_OUTPUT_EMPTY),
         "输出容器贴内容区顶部：{after:#?}"
     );
     // item 列表在窗格下半部，顶边框 + tab 行 + 固定列表行。
@@ -148,9 +148,9 @@ fn item_list_sits_at_the_input_box_position() {
         .map(|offset| tab_row + offset)
         .expect("进程行");
     assert!(entry_row > tab_row, "条目在 tab 行之下");
-    // 输出容器的顶边栏在上半部（占原消息列表位置）。
+    // 输出容器（无边框）在上半部，占原消息列表位置。
     assert!(
-        lines[0].contains(text::LX_TASK_OUTPUT_TITLE),
+        lines[0].contains(text::LX_TASK_OUTPUT_EMPTY),
         "输出容器贴内容区顶部：{lines:#?}"
     );
 }
@@ -209,16 +209,28 @@ fn list_height_is_fixed_regardless_of_entry_count() {
 }
 
 #[test]
-fn output_container_rows_deduct_its_chrome() {
-    // 输出容器可用行数 = 高度 − 顶边栏 − 分隔行；翻页钳制与渲染共用这一份口径。
-    for height in [2u16, 3, 10, 30] {
+fn output_container_has_no_chrome_rows() {
+    // 用户要求移除多余横线：输出容器**没有**顶边栏与分隔行，整块高度都给日志。
+    for height in [1u16, 2, 3, 10, 30] {
         let rect = Rect::new(0, 0, 70, height);
         assert_eq!(
             output_rows(rect),
-            usize::from(height.saturating_sub(TOP_BORDER + DIVIDER)),
-            "高 {height} 的输出容器"
+            usize::from(height),
+            "高 {height} 的输出容器高度全部可用"
         );
     }
+}
+
+#[test]
+fn output_content_reserves_the_scrollbar_column_always() {
+    // 常驻预留最右 1 列：滚动条出现/消失不改变日志宽度（与 prompt 编辑器同规则）。
+    assert_eq!(output_content_width(Rect::new(0, 0, 70, 10)), 69);
+    assert_eq!(output_content_width(Rect::new(0, 0, 2, 10)), 1);
+    assert_eq!(
+        output_content_width(Rect::new(0, 0, 1, 10)),
+        1,
+        "宽度不足 2 列时无处预留"
+    );
 }
 
 #[test]

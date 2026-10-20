@@ -105,10 +105,10 @@ fn output_container_takes_over_the_message_list_area() {
         !joined.contains("我是 Claude"),
         "输出容器占用历史区后不再画消息正文：{lines:#?}"
     );
-    // 输出容器从内容区最顶部开始（顶边栏 + 标题）。
+    // 输出容器从内容区最顶部开始（**没有**顶边栏，第一行就是占位/日志）。
     assert!(
-        lines[0].contains(text::LX_TASK_OUTPUT_TITLE),
-        "输出容器贴内容区顶部：{lines:#?}"
+        lines[0].contains(text::LX_TASK_OUTPUT_EMPTY),
+        "输出容器贴内容区顶部且无边框：{lines:#?}"
     );
 }
 
@@ -129,7 +129,7 @@ fn output_container_shows_the_selected_process_output() {
     );
     assert!(
         joined.contains("npm run dev"),
-        "顶边栏标题带上高亮任务：{joined}"
+        "item 列表里能看到高亮任务：{joined}"
     );
 }
 
@@ -289,39 +289,86 @@ fn changing_selection_pins_output_to_the_tail() {
     assert_eq!(page.output_scroll, 40, "换任务后输出贴尾部（最新输出）");
 }
 
-// ===== 输出容器的 `[close esc]` 可点 =====
+// ===== 输出容器：无边框 + 常驻滚动条槽 =====
 
 #[test]
-fn output_container_close_button_is_clickable() {
-    let area = Rect::new(0, 0, 70, 24);
+fn output_container_draws_no_border_lines() {
+    // 用户圈红的两条整行横线（顶边栏 + 分隔行）必须消失：第一行直接是日志。
     let mut lx = lx_with_messages();
-    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
-    let rects = crate::ui::main_content::lx::task_rects(area, &lx).expect("面板已打开");
-    let close = output_close_rect(rects.output).expect("输出容器有 [close esc]");
-    assert_eq!(
-        hit_in(
-            rects.list,
-            Some(rects.output),
-            lx.task.as_ref().expect("page"),
-            close.x,
-            close.y
-        ),
-        Some(TaskHit::Close),
-        "输出容器右端的 [close esc] 可点"
-    );
-    // item 列表的 tab 仍可点，两段命中互不干扰。
-    let tab_row = rects.list.y.saturating_add(TOP_BORDER);
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = vec!["first log line".into(), "second log line".into()];
+    lx.task = Some(page);
+    let lines = render_lines(&lx, 70, 24);
     assert!(
-        matches!(
-            hit_in(
-                rects.list,
-                Some(rects.output),
-                lx.task.as_ref().expect("page"),
-                rects.list.x,
-                tab_row
-            ),
-            Some(TaskHit::Tab(0))
-        ),
-        "item 列表左上角 tab 仍可点"
+        lines[0].contains("first log line"),
+        "第一行就是日志正文，没有顶边栏：{lines:#?}"
+    );
+    // 输出区最后一行不能再是整行横线（它下面是 item 列表自己的顶边框）。
+    let tab_row = lines
+        .iter()
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    assert!(
+        lines[tab_row - 1].contains('─'),
+        "紧邻 tab 行上方是列表自己的顶边框（唯一的线）：{lines:#?}"
+    );
+    assert!(
+        !lines[tab_row - 1].contains(text::LX_TASK_OUTPUT_TITLE),
+        "那条线不再带 Output 标题：{lines:#?}"
+    );
+}
+
+#[test]
+fn output_scrollbar_appears_only_when_content_overflows() {
+    let mut lx = lx_with_messages();
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    // 10 行输出、输出容器远高于它：没有滚动条。
+    page.output = (0..10).map(|index| format!("line {index}")).collect();
+    lx.task = Some(page);
+    let rects = {
+        let area = Rect::new(0, 0, 70, 40);
+        crate::ui::main_content::lx::task_rects(area, &lx).expect("面板已打开")
+    };
+    assert!(
+        output_scrollbar(rects.output, lx.task.as_ref().expect("page")).is_none(),
+        "内容不溢出时没有滚动条"
+    );
+
+    // 200 行输出：必须出现滚动条，且贴最右一列、只画 thumb。
+    if let Some(page) = lx.task.as_mut() {
+        page.output = (0..200).map(|index| format!("line {index}")).collect();
+        page.output_visible = usize::from(rects.output.height);
+        page.pin_output_to_tail();
+    }
+    let bar = output_scrollbar(rects.output, lx.task.as_ref().expect("page"))
+        .expect("溢出时必须有滚动条");
+    assert_eq!(bar.track.x, rects.output.right() - 1, "贴最右一列");
+    assert_eq!(
+        bar.track.height, rects.output.height,
+        "轨道覆盖输出容器整高"
+    );
+
+    let lines = render_lines(&lx, 70, 40);
+    let thumb_rows: Vec<&String> = lines.iter().filter(|line| line.contains('▐')).collect();
+    assert!(!thumb_rows.is_empty(), "滚动条要画出来：{lines:#?}");
+    assert!(
+        lines.iter().all(|line| !line.contains('▕')),
+        "轨道不画竖线（只画 thumb）：{lines:#?}"
+    );
+}
+
+#[test]
+fn wheel_over_output_container_scrolls_it() {
+    // 输出容器滚轮：翻输出视口，不穿透到下方 item 列表。
+    let mut lx = lx_with_messages();
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = (0..200).map(|index| format!("line {index}")).collect();
+    lx.task = Some(page);
+    let area = Rect::new(0, 0, 70, 30);
+    let rects = crate::ui::main_content::lx::task_rects(area, &lx).expect("面板已打开");
+    assert!(
+        rects.output.height > 3,
+        "输出容器够高，可滚动：{:?}",
+        rects.output
     );
 }

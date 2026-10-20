@@ -146,7 +146,9 @@ impl StepKind {
         match self {
             Self::Body => style::chat_step_mark_running_body(),
             Self::Thinking => style::chat_step_mark_running_thinking(),
-            Self::Tool => style::chat_step_mark_running(),
+            // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
+            // tool 的方块和 title 统一为黄色，完成才显示绿色"。
+            Self::Tool => style::chat_step_mark_alive(),
         }
     }
 

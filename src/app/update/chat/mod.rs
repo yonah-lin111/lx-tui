@@ -27,7 +27,8 @@ pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
     on_task_output, open_history, open_model_picker, open_task_page, open_task_page_at,
-    persist_default_model, rename_session, resume_session, select_task_tab, stop_selected_process,
+    persist_default_model, rename_session, resume_session, scroll_task_output, select_task_tab,
+    set_task_output_scroll, stop_selected_process,
 };
 pub(crate) use view::view_message_of;
 

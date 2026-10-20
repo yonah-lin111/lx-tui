@@ -400,6 +400,27 @@ pub(crate) fn handle_mouse_down_left(
                         mouse.row,
                     )
                 });
+                // 输出容器的滚动条：thumb 开始拖拽，轨道点击跳转。
+                if let Some(rects) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
+                    && let Some(page) = state.pane_anywhere(pane).and_then(|t| t.lx.task.as_ref())
+                    && let Some(bar) =
+                        ui::main_content::lx::task::output_scrollbar(rects.output, page)
+                    && bar.track.contains((mouse.column, mouse.row).into())
+                {
+                    match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                        Some(grab) => state.task_scroll_drag = Some(grab),
+                        None => {
+                            let offset =
+                                ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                            update::set_task_output_scroll(state, pane, offset);
+                        }
+                    }
+                    update::focus_pane(state, pane);
+                    *dirty = true;
+                    return;
+                }
                 if let Some(hit) = task_hit {
                     match hit {
                         ui::main_content::lx::task::TaskHit::Tab(index) => {

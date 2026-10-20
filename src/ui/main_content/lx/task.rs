@@ -46,8 +46,6 @@ const HINT_GAP: usize = 2;
 /// 比 opencode 的 `maxHeight={5}` 再高一档：5 行在 24 行窗格里信息量偏少，
 /// 而列表区高度固定，多一点列表不会让布局跳动。
 pub(super) const LIST_MAX: usize = 6;
-/// 输出容器与 item 列表之间的分隔行（画在输出容器末行）。
-pub(super) const DIVIDER: u16 = 1;
 /// 行首高亮标记占位列数（`❯ ` 或两个空格）。
 const MARKER_COLS: u16 = 2;
 /// 行内各段之间的最小空档（列）。
@@ -68,112 +66,91 @@ pub(super) fn list_height() -> u16 {
         .saturating_add(TOP_BORDER)
 }
 
-/// 输出容器里可供输出正文使用的行数（扣除顶栏与分隔行）；键位翻页钳制用。
+/// 输出容器**正文宽度**：常驻预留最右 1 列作滚动条槽。
+///
+/// 与 prompt 编辑器同一规则（"文本区固定预留最右 1 列作滚动条槽，滚动条出现/消失
+/// 不改变换行"）：日志按列硬切，槽位若按需出现/消失，溢出那一刻整块日志会横向
+/// 抖一格。宽度不足 2 列时不预留（留也无处画）。
+pub(super) fn output_content_width(rect: Rect) -> u16 {
+    if rect.width >= 2 {
+        rect.width - 1
+    } else {
+        rect.width
+    }
+}
+
+/// 输出容器里可供输出正文使用的行数；键位翻页钳制用。
 pub(super) fn output_rows(rect: Rect) -> usize {
-    usize::from(rect.height.saturating_sub(TOP_BORDER + DIVIDER))
+    usize::from(rect.height)
 }
 
 /// **输出容器**：占用原消息列表位置，显示高亮任务的输出。
 ///
-/// 版式：顶边栏（`Output · <命令>` + 右端 `[close esc]`）→ 输出正文 → 末行分隔线。
-/// 输出**单行不换行**（终端日志按行读，软换行会让行数与滚动错位），超宽硬切。
+/// 刻意**不画任何边框/横线**（用户要求移除此前的顶边栏与分隔行）：第一行直接是
+/// 日志正文，与下方 item 列表之间由列表自己的顶边框分界。最右一列**常驻**滚动条槽，
+/// 内容溢出时只画 thumb `▐`（与 prompt / 历史区同一套滚动条组件）。
 pub(super) fn draw_output_container(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
-    if rect.width == 0 || rect.height < TOP_BORDER + DIVIDER {
+    if rect.width == 0 || rect.height == 0 {
         return;
     }
-    // 顶边栏：一条横线 + 左端标题（高亮任务是谁），右端 `[close esc]`。
-    grid.put_clipped(
-        rect.x,
-        rect.y,
-        &"─".repeat(usize::from(rect.width)),
-        style::border_title(),
-        rect.width,
-    );
-    let title = match page.selected() {
-        Some(process) => format!(
-            "{} {}",
-            text::LX_TASK_OUTPUT_TITLE,
-            clip(&process.command, 40)
-        ),
-        None => text::LX_TASK_OUTPUT_TITLE.to_string(),
-    };
-    put_grid(
-        grid,
-        rect.x.saturating_add(2),
-        rect.y,
-        &title,
-        style::border_title(),
-        rect.right().saturating_sub(TOP_BORDER),
-    );
-    if let Some(close) = output_close_rect(rect) {
-        put_grid(
-            grid,
-            close.x,
-            close.y,
-            &text::LX_TASK_CLOSE.label(),
-            style::muted(),
-            rect.right(),
-        );
-    }
-
-    // 输出正文：从顶边栏之下到分隔行之上。
-    let body = Rect::new(
-        rect.x,
-        rect.y.saturating_add(TOP_BORDER),
-        rect.width,
-        rect.height.saturating_sub(TOP_BORDER + DIVIDER),
-    );
-    if body.height > 0 {
-        if page.output.is_empty() {
-            draw_placeholder(grid, body, text::LX_TASK_OUTPUT_EMPTY);
-        } else {
-            let visible = usize::from(body.height);
-            let start = page.output_scroll.min(page.output.len());
-            for (offset, line) in page.output.iter().skip(start).take(visible).enumerate() {
-                let y = body.y + u16::try_from(offset).unwrap_or(0);
-                let text_line = clip(line, body.width);
-                put_grid(
-                    grid,
-                    body.x,
-                    y,
-                    &text_line,
-                    style::agent_step_detail(),
-                    body.right(),
-                );
-            }
+    let width = output_content_width(rect);
+    let body = Rect::new(rect.x, rect.y, width, rect.height);
+    let visible = usize::from(body.height);
+    if page.output.is_empty() {
+        draw_placeholder(grid, body, text::LX_TASK_OUTPUT_EMPTY);
+    } else {
+        let start = page.output_scroll.min(page.output.len());
+        for (offset, line) in page.output.iter().skip(start).take(visible).enumerate() {
+            let y = body.y + u16::try_from(offset).unwrap_or(0);
+            let text_line = clip(line, width);
+            put_grid(
+                grid,
+                body.x,
+                y,
+                &text_line,
+                style::agent_step_detail(),
+                body.right(),
+            );
         }
     }
-
-    // 末行分隔线：把输出容器与下方 item 列表分开。
-    let divider_y = rect.bottom().saturating_sub(DIVIDER);
-    if divider_y >= rect.y && rect.height > TOP_BORDER {
-        grid.put_clipped(
-            rect.x,
-            divider_y,
-            &"─".repeat(usize::from(rect.width)),
-            style::border_title(),
-            rect.width,
-        );
+    // 滚动条：贴输出容器最右一列，只在内容溢出时画 thumb。
+    //
+    // 组件只操作 ratatui `Buffer`，而 lx 页画在自己的 `Grid` 上：这里按同一份
+    // 几何（`scrollbar::layout`）把 thumb 写进网格，符号与样式和组件保持一致。
+    if let Some(slot) = output_scrollbar_rect(rect)
+        && let Some(bar) = crate::ui::widgets::scrollbar::layout(
+            slot,
+            page.output.len(),
+            visible,
+            page.output_scroll,
+        )
+    {
+        for y in bar.thumb.y..bar.thumb.bottom() {
+            grid.put_char(bar.thumb.x, y, THUMB_CHAR, style::text());
+        }
     }
 }
 
-/// 输出容器右端 `[close esc]` 的矩形（命中用）；太窄时隐藏。
-pub(super) fn output_close_rect(rect: Rect) -> Option<Rect> {
-    if rect.width == 0 || rect.height < TOP_BORDER {
-        return None;
-    }
-    let label = text::LX_TASK_CLOSE.label();
-    // 标题左端占 2 列内边距，关闭按钮右端也留 2 列，二者不能重叠。
-    let need = u16::try_from(label.width()).unwrap_or(u16::MAX);
-    if rect.width < need.saturating_add(8) {
-        return None;
-    }
-    Some(Rect::new(
-        rect.right().saturating_sub(need + 2),
-        rect.y,
-        need,
-        1,
-    ))
+/// 滚动条 thumb 字形（与 `ui::widgets::scrollbar` 同款：只画 thumb、不画轨道）。
+const THUMB_CHAR: char = '▐';
+
+/// 输出容器的滚动条槽矩形（最右一列）；宽度不足时 None。
+pub(super) fn output_scrollbar_rect(rect: Rect) -> Option<Rect> {
+    (rect.width >= 2 && rect.height > 0)
+        .then(|| Rect::new(rect.right() - 1, rect.y, 1, rect.height))
+}
+
+/// 输出容器的滚动条几何（命中用）：内容溢出时才有。
+pub(crate) fn output_scrollbar(
+    rect: Rect,
+    page: &TaskPage,
+) -> Option<crate::ui::widgets::scrollbar::ScrollbarLayout> {
+    crate::ui::widgets::scrollbar::layout(
+        output_scrollbar_rect(rect)?,
+        page.output.len(),
+        usize::from(rect.height),
+        page.output_scroll,
+    )
 }
 
 /// **item 列表**：仍在原输入框位置（顶边框 → tab 行 → 任务行）。
@@ -334,25 +311,18 @@ fn tab_row_rects(rect: Rect) -> (Vec<(usize, u16, u16)>, Option<Rect>) {
 }
 
 /// 面板点击命中：tab 或 `[esc]`；点在别处返回 None。
-/// 面板点击命中：**item 列表**的 tab 与 `[close esc]`，以及**输出容器**的 `[close esc]`。
+/// 面板点击命中：**item 列表**的 tab 与 `[close esc]`。
 ///
-/// `rect` 是 item 列表矩形；`output` 是输出容器矩形（两者由 `lx.rs::layout` 给出，
-/// 渲染与命中共用同一份几何）。点在别处返回 None。
+/// `rect` 是 item 列表矩形。输出容器不再有边框与 `[close esc]`（用户要求移除多余
+/// 横线），因此那一侧没有可点区域；`esc` 键仍可关闭。
 pub(crate) fn hit_in(
     rect: Rect,
-    output: Option<Rect>,
-    _page: &TaskPage,
+    _output: Option<Rect>,
+    page: &TaskPage,
     column: u16,
     row: u16,
 ) -> Option<TaskHit> {
-    // 输出容器右端的 `[close esc]` 同样可点（用户在那里最常按）。
-    if let Some(output) = output
-        && let Some(close) = output_close_rect(output)
-        && close.contains((column, row).into())
-    {
-        return Some(TaskHit::Close);
-    }
-    hit(rect, _page, column, row)
+    hit(rect, page, column, row)
 }
 
 pub(crate) fn hit(rect: Rect, _page: &TaskPage, column: u16, row: u16) -> Option<TaskHit> {

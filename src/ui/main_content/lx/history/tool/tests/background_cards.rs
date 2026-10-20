@@ -185,8 +185,9 @@ fn alive_interaction_card_is_deep_yellow_too() {
 }
 
 #[test]
-fn file_tool_cards_stay_green() {
-    // 决策 1：橙色只给进程类卡片，文件工具的瞬时动作不得闪橙。
+fn running_file_tool_cards_are_amber_too() {
+    // 用户要求「所有正在运行中的 tool 的方块和 title 统一为黄色」：文件工具
+    // 运行中同样是橙黄，不再单独保持绿色。
     let call = ToolCallView {
         call_id: "call-read".into(),
         name: "read".into(),
@@ -201,9 +202,10 @@ fn file_tool_cards_stay_green() {
     let mark = render_grid(&call, 60).cell(0, 0).style;
     assert_eq!(
         mark.fg,
-        style::chat_step_mark_running().fg,
-        "文件工具卡片保持翡翠绿：{mark:?}"
+        style::chat_step_mark_alive().fg,
+        "运行中的文件工具同样是橙黄：{mark:?}"
     );
+    assert_ne!(mark.fg, style::chat_step_mark_done().fg, "不再用完成态的绿");
 }
 
 // ===== 决策 2、3：动画停止时恒实心，不再定格镂空 =====
