@@ -85,33 +85,44 @@ pub(super) fn draw(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
         rect.width,
     );
 
+    // tab 行：当前 tab 用与顶部 tab 栏**同一套**激活样式（青底黑字），其余次要色。
+    // 几何与 [`hit`] 共用 [`tab_row_rects`]，保证"画在这、点在那"。
     let tab_y = rect.y.saturating_add(TOP_BORDER);
-    // tab 行：当前 tab 用 `ws:` 同款浅蓝（`border_label_prefix`），其余次要色；
-    // 右端 `esc` 提示关闭。
-    let mut x = rect.x;
+    let (tabs, close) = tab_row_rects(rect);
     for (index, tab) in TaskTab::ALL.iter().enumerate() {
         if index > 0 {
-            x = put_grid(
+            let sep_w = u16::try_from(text::LX_TASK_TAB_SEP.width()).unwrap_or(0);
+            let sep_x = tabs
+                .get(index)
+                .map_or(rect.x, |(_, x, _)| x.saturating_sub(sep_w));
+            put_grid(
                 grid,
-                x,
+                sep_x,
                 tab_y,
                 text::LX_TASK_TAB_SEP,
                 style::muted(),
                 rect.right(),
             );
         }
+        let Some((_, x, _)) = tabs.get(index) else {
+            continue;
+        };
         let tab_style = if *tab == page.tab {
-            style::border_label_prefix()
+            style::selected_item()
         } else {
             style::muted()
         };
-        x = put_grid(grid, x, tab_y, tab.label(), tab_style, rect.right());
+        put_grid(grid, *x, tab_y, tab.label(), tab_style, rect.right());
     }
-    let esc = text::LX_TASK_ESC;
-    let esc_w = u16::try_from(esc.width()).unwrap_or(0);
-    let esc_x = rect.right().saturating_sub(esc_w);
-    if esc_x > x.saturating_add(GAP) {
-        put_grid(grid, esc_x, tab_y, esc, style::muted(), rect.right());
+    if let Some(close) = close {
+        put_grid(
+            grid,
+            close.x,
+            close.y,
+            text::LX_TASK_ESC,
+            style::muted(),
+            rect.right(),
+        );
     }
 
     let chrome = TOP_BORDER.saturating_add(TAB_ROW);
@@ -165,6 +176,57 @@ pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
         style::muted(),
         left.saturating_add(width),
     );
+}
+
+/// 面板上的可点击目标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskHit {
+    /// 左上角的某个 tab（索引 `TaskTab::ALL`）。
+    Tab(usize),
+    /// 右上角的 `[esc]`：关闭面板。
+    Close,
+}
+
+/// tab 行各段几何：`(tab 索引/标签的起始列, 宽度)` + `[esc]` 矩形。
+///
+/// 渲染与命中共用同一份计算，避免"画在这、点在那"。
+fn tab_row_rects(rect: Rect) -> (Vec<(usize, u16, u16)>, Option<Rect>) {
+    let tab_y = rect.y.saturating_add(TOP_BORDER);
+    let mut x = rect.x;
+    let mut tabs = Vec::with_capacity(TaskTab::ALL.len());
+    for (index, tab) in TaskTab::ALL.iter().enumerate() {
+        if index > 0 {
+            let sep_w = u16::try_from(text::LX_TASK_TAB_SEP.width()).unwrap_or(0);
+            x = x.saturating_add(sep_w);
+        }
+        let label_w = u16::try_from(tab.label().width()).unwrap_or(0);
+        tabs.push((index, x, label_w));
+        x = x.saturating_add(label_w);
+    }
+    let esc = text::LX_TASK_ESC;
+    let esc_w = u16::try_from(esc.width()).unwrap_or(0);
+    let esc_x = rect.right().saturating_sub(esc_w);
+    let close = (esc_x > x).then(|| Rect::new(esc_x, tab_y, esc_w, 1));
+    (tabs, close)
+}
+
+/// 面板点击命中：tab 或 `[esc]`；点在别处返回 None。
+pub(crate) fn hit(rect: Rect, _page: &TaskPage, column: u16, row: u16) -> Option<TaskHit> {
+    if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
+        return None;
+    }
+    let (tabs, close) = tab_row_rects(rect);
+    if let Some(close) = close
+        && close.contains((column, row).into())
+    {
+        return Some(TaskHit::Close);
+    }
+    tabs.iter()
+        .find(|(_, x, width)| {
+            let right = x.saturating_add(*width);
+            row == rect.y.saturating_add(TOP_BORDER) && column >= *x && column < right
+        })
+        .map(|(index, _, _)| TaskHit::Tab(*index))
 }
 
 /// 进程列表：每行 `❯ 命令 · cwd · running 12s`，行尾右对齐时长。

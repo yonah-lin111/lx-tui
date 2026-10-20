@@ -386,8 +386,25 @@ pub(crate) fn handle_mouse_down_left(
                 .pane_anywhere(pane)
                 .is_some_and(|target| target.view == PaneView::Lx)
             {
-                // lx 页：提及面板候选 > 聊天控件 > 入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
+                // lx 页：提及面板候选 > 聊天控件 > 后台任务面板控件 > 入口按钮 > …
                 update::focus_pane(state, pane);
+                // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
+                let task_hit = state.pane_anywhere(pane).and_then(|target| {
+                    let page = target.lx.task.as_ref()?;
+                    ui::main_content::lx::task::hit(inner, page, mouse.column, mouse.row)
+                });
+                if let Some(hit) = task_hit {
+                    match hit {
+                        ui::main_content::lx::task::TaskHit::Tab(index) => {
+                            update::select_task_tab(state, pane, index);
+                        }
+                        ui::main_content::lx::task::TaskHit::Close => {
+                            update::close_task_page(state, pane);
+                        }
+                    }
+                    *dirty = true;
+                    return;
+                }
                 let mention_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::mention_item_at(
                         inner,

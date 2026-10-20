@@ -554,8 +554,14 @@ Lx {
   消息列表被挤动一下再弹回来，空态也会孤零零吊在面板顶上。
 - **顶边框**：面板首行是一条横线，把面板与上方消息列表分开。它画在面板矩形
   **内部**（`border_title()` 同色系），不与窗格边框重叠，因此不是早期那个双重边框。
-- **tab 配色**：当前 tab 用 `border_label_prefix()`（淡青 + dim），与窗格顶边框上
-  `ws:` 前缀完全同色；非当前 tab 用 `muted()`。
+- **tab 配色**：当前 tab 用 `style::selected_item()`（青底黑字 + BOLD），
+  与**顶部标签栏的激活态完全同一套样式**——两处 tab 视觉一致，用户一眼就知道
+  是同一个 tab 控件；非当前 tab 用 `muted()`。
+- **键位提示一律 `[]` 包裹**：右上角 `[esc]`、底边框 `[↑↓] select  [^d] stop
+  [←→] tabs  [esc] back`。`[]` 同时表达"这是个键位、可点"。
+- **tab 与 `[esc]` 可点击**：`task::hit(rect, page, col, row)` 返回 `TaskHit::Tab(i)`
+  或 `TaskHit::Close`；几何由 `tab_row_rects()` 统一给出，**渲染与命中共用同一份**，
+  不会"画在这、点在那"。点击接到 `update::select_task_tab` / `update::close_task_page`。
 - `build_chat` 在同一个 `lay.input` 矩形里，画输入框还是画面板，二选一。
 - 其余一切照旧：历史区、置顶行、滚动条、聊天栏全部走原本路径。
 
@@ -582,6 +588,12 @@ Lx {
 - 列表：`❯ 命令 · cwd · running Ns`。命令列**定宽**、cwd 从固定偏移起，各行 cwd 左缘
   对齐成列；窄窗格先丢 cwd（识别进程靠命令），再硬切命令，时长始终可见。
 - `Agents` tab 是**预留位**：列表恒空并显示 `no subagents yet`，后续在此显示 subagent 内容。
+
+**面板打开期间每轮刷新进程列表。** `ListSessionProcesses` 原来只在
+`open_task_page` 时发一次——面板**打开之后**才启动的进程永远进不了列表（用户报的
+"启动任务后没有在面板中显示"）。现在 `event::chat::refresh_open_task_pages` 每轮为
+每个「面板打开且绑定会话」的窗格压一次请求；列表回投幂等（`set_processes` 按内容
+比较），无变化不置脏，因此不会引起重绘风暴。
 
 **未绑定会话时不允许打开面板。** 面板列的是「本会话的后台进程」，而进程运行实例挂在
 会话上（`ChatStreams::runtimes`）。空白草稿既没有可列的进程，也发不出有效的

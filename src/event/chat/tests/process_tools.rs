@@ -677,3 +677,99 @@ fn task_page_clock_is_ignored_without_a_page() {
         "没有面板时不动作"
     );
 }
+
+// ===== 面板打开后才启动的进程也必须出现 =====
+
+#[tokio::test]
+async fn a_process_started_after_opening_the_panel_shows_up() {
+    let fixture = Fixture::new("panel-late-process");
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
+    let mut streams = ChatStreams::default();
+    let tools = agent_tools(&fixture, &mut streams, &key);
+
+    // 先把面板打开（此时还没有任何进程）。
+    let pane = key.pane;
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some(key.session.clone());
+        target.lx.task = Some(crate::app::state::TaskPage::default());
+    }
+    // 手动压入一次列表请求（等价于每轮刷新做的那一步）。
+    state
+        .effects
+        .push(crate::app::effects::Effect::ListSessionProcesses { pane });
+    crate::event::chat::apply_process_effects(&mut state, &mut streams);
+    let listed = state
+        .pane_anywhere(pane)
+        .unwrap()
+        .lx
+        .task
+        .clone()
+        .expect("page");
+    assert!(listed.processes.is_empty(), "此刻确实还没有进程");
+
+    // 现在启动一个长驻进程。
+    let exec_args = serde_json::json!({
+        "cmd": "sleep 30",
+        "yield_time_ms": 100,
+        "shell": "/bin/sh"
+    })
+    .to_string();
+    let transport = FakeTransport::new(
+        vec![
+            tool_calls(&[("call_late", "exec_command", &exec_args, 0)], None),
+            final_response("started", None),
+        ],
+        StopReason::Complete,
+    );
+    let driven = drive_processes(
+        &fixture,
+        &mut state,
+        &key,
+        &transport,
+        &persistence,
+        &mut streams,
+        tools.clone(),
+    )
+    .await;
+    assert_eq!(driven.summary.outcome, TurnOutcome::Complete);
+
+    // 关键：不需要重开面板，下一次**每轮刷新**就要把它拉进列表。
+    assert!(
+        crate::event::chat::refresh_open_task_pages(&mut state),
+        "面板开着时应每轮请求刷新"
+    );
+    assert!(crate::event::chat::apply_process_effects(
+        &mut state,
+        &mut streams
+    ));
+    let page = state
+        .pane_anywhere(pane)
+        .unwrap()
+        .lx
+        .task
+        .clone()
+        .expect("page");
+    assert!(
+        !page.processes.is_empty(),
+        "面板打开之后启动的进程必须出现在列表里：{:?}",
+        page.processes
+    );
+    assert!(
+        page.processes
+            .iter()
+            .any(|p| p.command.contains("sleep 30")),
+        "列表里应是刚启动的那个进程：{:?}",
+        page.processes
+    );
+    tools.processes().shutdown().await;
+}
+
+#[test]
+fn refresh_is_a_noop_without_an_open_panel() {
+    let mut state = AppState::demo();
+    assert!(
+        !crate::event::chat::refresh_open_task_pages(&mut state),
+        "没有打开的面板时不发请求"
+    );
+}

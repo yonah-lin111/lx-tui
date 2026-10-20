@@ -611,13 +611,15 @@ pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
 /// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
 pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
 /// 面板 tab 行右端的关闭提示（对齐 opencode composer 右上角的 `esc`）。
-pub const LX_TASK_ESC: &str = "esc";
-/// 窗格**底边框**上的键位提示（进程 tab）。
+///
+/// 用 `[]` 包裹，与底边框的键位提示同一套视觉语法，也表明它是可点击的。
+pub const LX_TASK_ESC: &str = "[esc]";
+/// 窗格**底边框**上的键位提示（进程 tab）。键位一律 `[]` 包裹。
 ///
 /// 刻意写短：它画在窗格底边框上，太长会在常见窗格宽度下被截断。
-pub const LX_TASK_FOOTER_PROCESSES: &str = "↑↓ select  ^d stop  tabs ←→  esc back";
+pub const LX_TASK_FOOTER_PROCESSES: &str = "[↑↓] select  [^d] stop  [←→] tabs  [esc] back";
 /// 窗格底边框键位提示（子代理 tab；`^d` 无对象，故只留导航）。
-pub const LX_TASK_FOOTER_AGENTS: &str = "tabs ←→  esc back";
+pub const LX_TASK_FOOTER_AGENTS: &str = "[←→] tabs  [esc] back";
 /// 顶边右端的 tab 指示分隔符（`·`）。
 pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。

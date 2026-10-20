@@ -385,14 +385,14 @@ fn panel_draws_a_top_border_above_the_tab_row() {
 }
 
 #[test]
-fn active_tab_uses_the_workspace_label_blue() {
-    // 用户要求：右上角 tab 高亮用 main content 里 `ws:` 那种浅蓝（= border_label_prefix）。
+fn active_tab_uses_the_header_tab_bar_style() {
+    // 用户要求：右上角 tab 用**头部 tab 栏的背景颜色** = `style::selected_item()`
+    // （青底黑字 + BOLD），与顶部标签栏激活态完全一致。
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
     let area = Rect::new(0, 0, 70, 20);
     let mut buf = Buffer::empty(Rect::new(0, 0, 70, 21));
     super::super::render(area, &mut buf, &lx, true, None);
-    // 找到 "Processes" 首字符所在单元格，断言其前景 = Cyan + DIM（与 `ws:` 前缀一致）。
     let mut found = None;
     for y in 0..21u16 {
         for x in 0..70u16 {
@@ -404,31 +404,100 @@ fn active_tab_uses_the_workspace_label_blue() {
     let (x, y) = found.expect("Processes 标签");
     let style = buf[(x, y)].style();
     assert_eq!(
-        style.fg,
+        style.bg,
         Some(ratatui::style::Color::Cyan),
-        "当前 tab 用浅蓝前景"
+        "当前 tab 用头部标签栏的青底"
+    );
+    assert_eq!(
+        style.fg,
+        Some(ratatui::style::Color::Black),
+        "青底配黑字，与顶部标签栏一致"
     );
     assert!(
-        style.add_modifier.contains(ratatui::style::Modifier::DIM),
-        "与 `ws:` 前缀同款 dim"
+        style.add_modifier.contains(ratatui::style::Modifier::BOLD),
+        "与头部标签栏一样加粗"
     );
-    // 非当前 tab 不是强调色。
-    for y in 0..21u16 {
-        for x in 0..70u16 {
-            if buf[(x, y)].symbol() == "A" {
-                let s = buf[(x, y)].style();
-                assert_ne!(
-                    s.fg,
-                    Some(ratatui::style::Color::Cyan),
-                    "非当前 tab 不该用强调色"
-                );
-            }
-        }
-    }
 }
 
 #[test]
 fn panel_is_taller_than_five_list_rows() {
     // 用户要求"高度再高一点"：列表区已从 5 行提到 6 行。
     const { assert!(LIST_MAX > 5) };
+}
+
+// ===== `[]` 包裹的键位提示 + tab/esc 可点击 =====
+
+#[test]
+fn esc_hint_is_wrapped_in_brackets() {
+    // 用户要求：右上角 esc 用 `[]` 包裹。
+    assert_eq!(text::LX_TASK_ESC, "[esc]");
+    let mut lx = lx_with_messages();
+    lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
+    let lines = render_lines(&lx, 70, 20);
+    let tab_row = lines
+        .iter()
+        .find(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    assert!(tab_row.contains("[esc]"), "tab 行右端是 [esc]：{tab_row}");
+}
+
+#[test]
+fn footer_hints_are_wrapped_in_brackets() {
+    // 用户要求：底部快捷键用 `[]` 包裹。
+    let mut lx = lx_with_messages();
+    lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
+    let bottom = render_lines(&lx, 70, 20).last().cloned().expect("底边框");
+    assert!(bottom.contains("[↑↓]"), "方向键用 [] 包裹：{bottom}");
+    assert!(bottom.contains("[^d]"), "停止键用 [] 包裹：{bottom}");
+    assert!(bottom.contains("[esc]"), "退出键用 [] 包裹：{bottom}");
+}
+
+#[test]
+fn clicking_a_tab_hits_it() {
+    let page = page_with(vec![entry(1, "cmd", "/w")], 0);
+    let rect = Rect::new(0, 10, 70, 8);
+    // tab 行 = rect.y + TOP_BORDER。
+    let tab_y = rect.y + TOP_BORDER;
+    // 第一个 tab 标签首字符。
+    assert_eq!(
+        hit(rect, &page, rect.x, tab_y),
+        Some(TaskHit::Tab(0)),
+        "点第一个 tab"
+    );
+    // `Agents` 标签首字符位置：跳过 "Processes" + 分隔符。
+    let sep = u16::try_from(text::LX_TASK_TAB_SEP.width()).unwrap();
+    let first_w = u16::try_from(TaskTab::Processes.label().width()).unwrap();
+    let agents_x = rect.x + first_w + sep;
+    assert_eq!(
+        hit(rect, &page, agents_x, tab_y),
+        Some(TaskHit::Tab(1)),
+        "点第二个 tab"
+    );
+}
+
+#[test]
+fn clicking_esc_hits_close() {
+    let page = page_with(vec![entry(1, "cmd", "/w")], 0);
+    let rect = Rect::new(0, 10, 70, 8);
+    let tab_y = rect.y + TOP_BORDER;
+    let esc_w = u16::try_from(text::LX_TASK_ESC.width()).unwrap();
+    let esc_x = rect.right() - esc_w;
+    assert_eq!(
+        hit(rect, &page, esc_x, tab_y),
+        Some(TaskHit::Close),
+        "点 [esc] 关闭"
+    );
+}
+
+#[test]
+fn clicking_elsewhere_in_the_panel_misses() {
+    let page = page_with(vec![entry(1, "cmd", "/w")], 0);
+    let rect = Rect::new(0, 10, 70, 8);
+    // 列表区 / 顶边框 / 面板之外都不该命中 tab 或 esc。
+    assert_eq!(hit(rect, &page, rect.x, rect.y), None, "顶边框不命中");
+    assert_eq!(
+        hit(rect, &page, rect.x, rect.y + TOP_BORDER + 1),
+        None,
+        "列表区不命中"
+    );
 }

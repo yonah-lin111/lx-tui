@@ -133,6 +133,16 @@ impl TaskPage {
         true
     }
 
+    /// 直接切到指定 tab（鼠标点击）；返回是否变化。
+    pub fn select_tab(&mut self, tab: TaskTab) -> bool {
+        if self.tab == tab {
+            return false;
+        }
+        self.tab = tab;
+        self.window.clamp(self.len());
+        true
+    }
+
     /// 移动高亮（**不循环**，到两端即停）；返回高亮是否真的移动了。
     ///
     /// 不循环是「↑ 在列表顶部回到输入框」的前提：面板要能分辨"上移成功"与

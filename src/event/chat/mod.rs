@@ -348,6 +348,32 @@ pub fn sync_background_task_counts(state: &mut AppState, streams: &ChatStreams) 
     changed
 }
 
+/// 面板打开时每轮重新拉取一次进程列表。
+///
+/// `ListSessionProcesses` 原来只在 `open_task_page` 时发一次——面板**打开之后**
+/// 才启动的进程永远进不了列表（用户报的"启动任务后没有在面板中显示"）。
+///
+/// 改成每轮嗅探：只要某窗格的面板开着且绑定了会话，就发一次列表请求。列表回投
+/// 是幂等的（`set_processes` 按内容比较），无变化不会置脏，因此不会引起重绘风暴。
+///
+/// 返回是否新压入了请求（供调用方判断要不要多跑一轮效应泵）。
+pub fn refresh_open_task_pages(state: &mut AppState) -> bool {
+    let mut requested = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_anywhere(pane) else {
+            continue;
+        };
+        if target.lx.task.is_none() || target.lx.chat.session_id.is_none() {
+            continue;
+        }
+        state
+            .effects
+            .push(crate::app::effects::Effect::ListSessionProcesses { pane });
+        requested = true;
+    }
+    requested
+}
+
 /// 后台任务面板的运行时长节拍：把各面板的 `now_ms` 推到当前时刻。
 ///
 /// 面板每行右侧显示 `running 1m 30s`，而它是 `now_ms - started_at_ms` 现算的。

@@ -230,6 +230,11 @@ async fn run_loop(
         if chat::sync_background_task_counts(state, &chat_streams) {
             dirty = true;
         }
+        // 面板打开期间每轮刷新进程列表：打开之后才启动的进程也要能出现。
+        if chat::refresh_open_task_pages(state) {
+            // 列表请求已入队，下一轮 `apply_process_effects` 会把它执行掉。
+            dirty = true;
+        }
         // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
         if chat::tick_task_pages(state) {
             dirty = true;

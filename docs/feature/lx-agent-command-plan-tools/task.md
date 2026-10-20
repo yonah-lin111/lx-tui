@@ -299,13 +299,32 @@
     宁可少写也不被截半。
   - **高度固定**（`1 顶边框 + 1 tab 行 + LIST_MAX(6)`），不随条目数变化：0 条与 6 条
     一样高。否则打开面板会让上方消息列表被挤动一下再弹回来，空态也会吊在面板顶上一行。
-  - **顶边框**：面板首行是一条横线，画在面板矩形内部（不与窗格边框重叠）；
-    当前 tab 用 `border_label_prefix()`（淡青 + dim），与窗格顶边框上 `ws:` 同色。
+  - **顶边框**：面板首行是一条横线，画在面板矩形内部（不与窗格边框重叠）。
+  - **tab 配色**：当前 tab 用 `style::selected_item()`（青底黑字 + BOLD），与顶部
+    标签栏激活态同一套样式；非当前 tab 用次要色。
+  - **键位一律 `[]` 包裹**：`[esc]`、`[↑↓] select  [^d] stop  [←→] tabs  [esc] back`。
+  - **tab 与 `[esc]` 可点击**：`task::hit` 给 `TaskHit::Tab/Close`，几何由
+    `tab_row_rects()` 与渲染共用，不会"画在这、点在那"。
   - **未绑定会话时拒绝打开**（`open_task_page` 在 `session_id.is_none()` 时返回
     `false`）：没有会话就没有可列的进程、也发不出有效的 `ListSessionProcesses`，
     开了只会显示一个永远空着的列表。`↓` 因此是无副作用的空操作。
   - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
     历史区几何回到 `lay.input` 一处真相。
+
+- **面板打开后新进程不出现（bug，按用户反馈修复）**：
+  - 现象：启动任务后，后台任务面板里看不到它。
+  - 根因：`ListSessionProcesses` 只在 `open_task_page` 时发一次；面板**打开之后**
+    才启动的进程再也没有任何请求去拉它。
+  - 修法：`event::chat::refresh_open_task_pages` 每轮为「面板打开且绑定会话」的窗格
+    压一次列表请求。回投幂等（`set_processes` 按内容比较），无变化不置脏。
+  - 回归测试 `a_process_started_after_opening_the_panel_shows_up` 复现真实时序：
+    先开面板（空列表）→ 启动长驻进程 → 断言无需重开面板即可出现在列表里。
+
+- **面板 tab/键位配色与可点击（按用户反馈调整）**：
+  - 当前 tab 用 `style::selected_item()`（青底黑字），与顶部标签栏激活态同一套。
+  - 键位一律 `[]` 包裹（右上 `[esc]`、底部 `[↑↓] [^d] [←→] [esc]`）。
+  - tab 与 `[esc]` 均可鼠标点击：`TaskHit::Tab/Close`，几何与渲染共用
+    `tab_row_rects()`，避免"画在这、点在那"。
 
 - **卡片时长移入面板 + `write_stdin` 停在 Running（按用户反馈修复）**：
   - 消息列表里的命令卡片不再显示运行时长（`Running · 12s` → `Running`）。

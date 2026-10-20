@@ -127,6 +127,20 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.task.take().is_some()
 }
 
+/// 鼠标点击面板 tab：直接切到该 tab（`position` 为 `TaskTab::ALL` 的索引）。
+pub fn select_task_tab(state: &mut AppState, pane: PaneId, position: usize) -> bool {
+    let Some(tab) = crate::app::state::TaskTab::ALL.get(position).copied() else {
+        return false;
+    };
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(page) = target.lx.task.as_mut() else {
+        return false;
+    };
+    page.select_tab(tab)
+}
+
 /// 后台进程列表回投：填充后台任务页的进程 tab。
 ///
 /// 只收**仍在运行**的进程：已退出的没有可停的东西，列出来只会让用户误以为
