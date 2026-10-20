@@ -226,7 +226,7 @@ fn background_output_updates_the_original_card_only() {
 }
 
 #[test]
-fn process_exit_updates_state_and_marks_failure() {
+fn non_zero_exit_updates_state_without_flagging_a_failure() {
     let (mut state, pane) = state_with_command(9);
     // 工具已经结算为 completed，但进程随后以非零码退出。
     {
@@ -247,11 +247,34 @@ fn process_exit_updates_state_and_marks_failure() {
         panic!("expected command view");
     };
     assert_eq!(view.state, ProcessStateView::Exited { code: Some(1) });
-    assert_eq!(
-        call.error.as_deref(),
-        Some("exit 1"),
-        "失败终态在步骤上留下可见原因"
+    // 非零退出是命令跑完后的正常结果，不写失败原因：写了会被渲染成红色失败标记。
+    // 退出码仍显示在卡片标题上（`exit 1`），信息不丢。
+    assert_eq!(call.error, None, "非零退出不留失败原因");
+    assert!(
+        view.state.is_nonzero_exit(),
+        "但视图仍记录着非零退出，标题据此显示 exit 1"
     );
+}
+
+#[test]
+fn timeout_exit_still_leaves_a_visible_reason() {
+    // 真正的进程级失败必须仍然留原因（红色标记的来源）。
+    let (mut state, pane) = state_with_command(9);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let call = target.lx.chat.messages[0].tool_mut("call-1").expect("tool");
+        call.status = ToolStatus::Completed;
+    }
+    let event = crate::chat::process::ProcessUiEvent::Exited {
+        session_id: 9,
+        origin_call_id: "call-1".into(),
+        state: ProcessState::TimedOut,
+        exit_code: None,
+    };
+    assert!(apply_process_exit(&mut state, &event, None));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-1").expect("tool");
+    assert!(call.error.is_some(), "超时仍留下可见原因");
 }
 
 #[test]

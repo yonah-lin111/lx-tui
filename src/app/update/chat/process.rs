@@ -144,12 +144,13 @@ pub fn apply_process_exit(
             view.dropped_bytes = snapshot.dropped_bytes;
             view.ended_at_ms = snapshot.ended_at_ms;
         }
-        // 失败终态在步骤上留下可见原因（非零退出、超时、中断）。
-        if next.is_failure() && call.status == ToolStatus::Completed {
-            call.error = Some(match next.exit_code() {
-                Some(code) if code != 0 => text::agent::proc_exit_failure(code),
-                _ => text::agent::proc_state_label(next).to_string(),
-            });
+        // 只有**进程级失败**（超时 / 中断 / 启动失败）才在步骤上留原因。
+        //
+        // 非零退出不在此列：它是命令跑完后的正常结果（`grep` 无匹配 = 1、
+        // `diff` 有差异 = 1），写进 `error` 会被渲染成红色失败标记。
+        // 退出码仍然显示在卡片标题上（`exit 1`），信息不丢。
+        if next.is_process_failure() && call.status == ToolStatus::Completed {
+            call.error = Some(text::agent::proc_state_label(next).to_string());
         }
         let _ = exit_code;
         changed = true;

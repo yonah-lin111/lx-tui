@@ -583,7 +583,48 @@ lx 沿用同一思路，但用窗格内整页承载（窗格比 composer 面板�
 指标由 `event::chat::sync_background_task_counts` **每轮同步**，与页面是否打开无关——
 这一条针对的正是「进程还活着但界面上没痕迹」这个根因。
 
-### 14.6 刷新时机（踩过的坑）
+### 14.6 非零退出不是失败（真实误判）
+
+用户报告：一张 `■ Run command` 卡片是**红色**的，但命令本身完全正常。
+
+真实会话记录（`agent_tool_call` id=98）：
+
+```text
+cmd:  pgrep -af "IFS= read" 2>/dev/null; echo "---"; ps -ef | grep -c "[r]ead -r line"
+out:  35293
+      ---
+      0
+exit: 1
+```
+
+`grep -c` / `pgrep` 在**没有匹配**时返回 1——这是"没找到"这个答案的正常表达，
+不是命令坏了。模型自己读懂了（回答里写"退出码 1 表示未找到"），但界面把它渲染成了
+红色失败卡片。
+
+根因是三层把"进程以非零码退出"当成了"工具失败"：
+
+| 层 | 原来的判定 | 后果 |
+|---|---|---|
+| `ProcessResult::is_failure` | `Exited { code != 0 }` → true | 工具结算为 `failed` |
+| `apply_process_exit` | 非零退出写 `call.error = "exit 1"` | 步骤被标记为有错误 |
+| `ToolStatus::Failed` → `StepMark::Failed` | 红方块 + 红色动词 | 界面显示红叉 |
+
+修法是把**「进程级失败」与「命令退出码」彻底分开**：
+
+- 进程级失败 = 超时 / 被中断 / 启动失败（`is_process_failure`）。这些仍然是红的。
+- 命令以非零码退出 = 命令跑完了并给出了结果（`is_nonzero_exit`）。**不是失败**：
+  工具结算为 `completed`、不写失败原因、方块保持工具色。
+
+退出码本身**照常显示**在卡片标题上（`exit 1`），信息一点没丢——模型与用户都能看到。
+这与 codex 的口径一致：它的 exec 渲染对 `exit 1` 的 search 类命令用 `dim()` 而不是
+`red()`，注释写着 "Search exit 1 can mean no matches; report the code without calling
+it a failure"。codex 在协议层仍把非零退出作为 `RespondToModel` 回给模型（模型能看到
+退出码并自行判断），同样没有把它渲染成红色失败。
+
+回归测试铺在三层：`process/manager`（真实子进程 `grep -c` 无匹配）、`agent_loop/executor`、
+`event/chat` 端到端（落库 `completed`）、UI 渲染（方块不是红色，且 `exit 1` 可见）。
+
+### 14.7 刷新时机（踩过的坑）
 
 停止是**异步**的（真实退出码只能由 `wait` 得到）。第一版在按 `^d` 后同步重拉列表，结果
 读到的是**停止前**的快照：进程还在列表里，看起来像「停不掉」。实测复现后改为由

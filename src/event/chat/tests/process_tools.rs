@@ -206,8 +206,12 @@ async fn exec_command_then_read_output_across_turns() {
     tools.processes().shutdown().await;
 }
 
+/// 非零退出落库为 **completed**，且不留失败原因。
+///
+/// 这是 `grep -c` 无匹配返回 1 那次误判的回归测试：工具成功跑完了，
+/// 退出码 4 是它的结果，不是它坏了。
 #[tokio::test]
-async fn non_zero_exit_marks_the_tool_result_as_failed() {
+async fn non_zero_exit_settles_completed_without_a_failure_reason() {
     let fixture = Fixture::new("exec-failure");
     let (mut state, key, persistence, _session) = streaming_state(&fixture);
     let mut streams = ChatStreams::default();
@@ -239,9 +243,9 @@ async fn non_zero_exit_marks_the_tool_result_as_failed() {
         driven.trace,
         vec![
             Trace::Begin("call_fail".into()),
-            Trace::Finish("call_fail".into(), ToolTerminalStatus::Failed),
+            Trace::Finish("call_fail".into(), ToolTerminalStatus::Completed),
         ],
-        "非零退出落库为 failed，不是 completed"
+        "非零退出落库为 completed：工具成功跑完了"
     );
     let chat = &state.pane_anywhere(key.pane).expect("pane").lx.chat;
     let call = chat
@@ -250,14 +254,17 @@ async fn non_zero_exit_marks_the_tool_result_as_failed() {
         .expect("msg")
         .tool("call_fail")
         .expect("tool");
-    assert_eq!(call.status, ToolStatus::Failed);
-    assert!(
-        call.error
-            .as_deref()
-            .is_some_and(|error| error.contains('4')),
-        "失败原因带真实退出码：{:?}",
-        call.error
+    assert_eq!(call.status, ToolStatus::Completed, "不是 failed");
+    assert_eq!(call.error, None, "不留失败原因：{:?}", call.error);
+    // 退出码仍在结果体里，界面据此显示 `exit 4`。
+    let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert_eq!(
+        view.state,
+        crate::app::state::ProcessStateView::Exited { code: Some(4) }
     );
+    assert!(view.state.is_nonzero_exit(), "退出码信息保留");
     tools.processes().shutdown().await;
 }
 

@@ -51,13 +51,21 @@ impl ProcessStateView {
         matches!(self, Self::Starting | Self::Running)
     }
 
-    /// 是否失败（非零退出也算）。
-    pub fn is_failure(self) -> bool {
-        match self {
-            Self::TimedOut | Self::Interrupted | Self::Failed => true,
-            Self::Exited { code } => code.is_some_and(|code| code != 0),
-            Self::Starting | Self::Running | Self::Stopped => false,
-        }
+    /// 是否为**进程级**失败：超时 / 被中断 / 启动失败。
+    ///
+    /// **不含"命令以非零码退出"**。非零退出经常是正常结果（`grep` 无匹配 = 1、
+    /// `diff` 有差异 = 1、`test` 条件不成立 = 1），把它当失败会让界面把一次成功的
+    /// 查询标成红叉。退出码本身仍会在标题行上显示（`exit 1`），信息不丢失。
+    pub fn is_process_failure(self) -> bool {
+        matches!(self, Self::TimedOut | Self::Interrupted | Self::Failed)
+    }
+
+    /// 命令是否以非零码退出（跑完了，但退出码不是 0）。
+    ///
+    /// 与 [`Self::is_process_failure`] 分开：它驱动的只是"用中性色显示退出码"，
+    /// 不驱动红色失败标记。
+    pub fn is_nonzero_exit(self) -> bool {
+        matches!(self, Self::Exited { code } if code.is_some_and(|code| code != 0))
     }
 
     /// 退出码（只有 `Exited`）。

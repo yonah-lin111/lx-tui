@@ -200,23 +200,39 @@ impl ProcessResultKind {
 }
 
 impl ProcessResult {
-    /// 是否应作为工具失败回给模型（非零退出、超时、启动失败、中断）。
-    pub fn is_failure(&self) -> bool {
+    /// 是否为**进程级**失败：超时、被中断、启动/运行失败。
+    ///
+    /// **不含"命令以非零码退出"**——那是命令跑完了并给出了一个结果，不是工具出错。
+    ///
+    /// 这条区分是必须的，因为非零退出经常是**正常且有意义的结果**：
+    /// `grep` / `pgrep` 无匹配返回 1、`diff` 有差异返回 1、`test` 条件不成立返回 1。
+    /// 把这类退出码当作失败，界面会把一次成功的查询标成红叉，模型也会以为工具坏了、
+    /// 于是反复重试同一个"失败"命令。真实案例见 design §14.7。
+    pub fn is_process_failure(&self) -> bool {
         match &self.state {
             ProcessState::TimedOut | ProcessState::Interrupted | ProcessState::Failed { .. } => {
                 true
             }
-            ProcessState::Exited { code } => code.is_some_and(|code| code != 0),
-            ProcessState::Starting | ProcessState::Running | ProcessState::Stopped => false,
+            ProcessState::Starting
+            | ProcessState::Running
+            | ProcessState::Exited { .. }
+            | ProcessState::Stopped => false,
         }
     }
 
+    /// 是否为工具失败（进程级失败；非零退出**不算**）。
+    ///
+    /// 保留此名以表达"模型与 UI 是否应看到错误"这一语义；实现即进程级失败。
+    pub fn is_failure(&self) -> bool {
+        self.is_process_failure()
+    }
+
     /// 失败原因（给模型与 UI 的单行说明；不含输出正文）。
+    ///
+    /// 只有进程级失败才有原因：非零退出不是错误，它由 `exit_code` 自己表达，
+    /// 不需要再编一段"失败原因"。
     pub fn failure_message(&self) -> Option<String> {
         match &self.state {
-            ProcessState::Exited { code: Some(code) } if *code != 0 => {
-                Some(format!("command exited with code {code}"))
-            }
             ProcessState::TimedOut => Some("command timed out".to_string()),
             ProcessState::Interrupted => Some("command interrupted".to_string()),
             ProcessState::Failed { code } => Some(format!("command failed: {code}")),

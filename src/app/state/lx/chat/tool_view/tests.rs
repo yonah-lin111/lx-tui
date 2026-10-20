@@ -37,20 +37,46 @@ fn command_view_carries_command_state_and_preview() {
     assert_eq!(command.cwd, "/workspace");
     assert!(command.state.is_running());
     assert_eq!(command.output_preview, vec!["running 1 test"]);
-    assert!(!command.state.is_failure());
+    assert!(!command.state.is_process_failure());
 }
 
 #[test]
-fn non_zero_exit_marks_the_view_as_failure() {
+fn non_zero_exit_is_not_a_process_failure() {
+    // 非零退出是命令跑完后的正常结果（`grep` 无匹配 = 1、`diff` 有差异 = 1），
+    // 不能把它当成进程失败——否则界面会把一次成功的查询标成红叉。
     let mut result = running_result();
-    result.state = ProcessState::Exited { code: Some(2) };
-    result.exit_code = Some(2);
+    result.state = ProcessState::Exited { code: Some(1) };
+    result.exit_code = Some(1);
     let view = ToolDetailView::from_process(&result);
     let ToolDetailView::Command(command) = view else {
         panic!("expected command view");
     };
-    assert!(command.state.is_failure(), "非零退出在卡片上必须显示为失败");
-    assert_eq!(command.state.exit_code(), Some(2));
+    assert!(
+        !command.state.is_process_failure(),
+        "非零退出不是进程级失败"
+    );
+    assert!(command.state.is_nonzero_exit(), "但仍然记录着非零退出");
+    assert_eq!(command.state.exit_code(), Some(1), "退出码照常可见");
+}
+
+#[test]
+fn timeout_and_interrupt_stay_process_failures() {
+    // 真正的进程级失败必须仍然算失败，不能被上一条放宽掉。
+    for state in [
+        ProcessState::TimedOut,
+        ProcessState::Interrupted,
+        ProcessState::Failed {
+            code: "spawn_failed".into(),
+        },
+    ] {
+        let mut result = running_result();
+        result.state = state.clone();
+        let view = ToolDetailView::from_process(&result);
+        let ToolDetailView::Command(command) = view else {
+            panic!("expected command view");
+        };
+        assert!(command.state.is_process_failure(), "{state:?} 必须仍是失败");
+    }
 }
 
 #[test]

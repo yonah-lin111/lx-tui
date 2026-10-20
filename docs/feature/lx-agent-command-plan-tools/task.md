@@ -253,6 +253,24 @@
     + `ui/main_content/lx/task/tests.rs`（8 项渲染，含窄窗格降级与 tab 占位）
     + `status/tests.rs`（4 项底部指标）+ 真实子进程端到端 1 项。
 
+- **非零退出被误判为失败（bug，按用户反馈修复）**：
+  - 现象：一张正常的 `■ Run command` 卡片显示成**红色**，标题为 `exit 1`。
+  - 真实会话（`agent_tool_call` id=98）：`pgrep -af "IFS= read" ; echo ---; ps -ef |
+    grep -c "[r]ead -r line"`，输出 `35293 / --- / 0`，退出码 1——`grep -c` 无匹配的正常返回。
+    模型自己正确读懂了，界面却把它标成失败。
+  - 根因：三层都把「进程以非零码退出」等同于「工具失败」——`ProcessResult::is_failure`
+    → 工具结算 `failed`；`apply_process_exit` 写入 `error = "exit 1"`；`ToolStatus::Failed`
+    → 红方块 + 红色动词。
+  - 修法：拆成两个互不替代的概念。
+    - **进程级失败**（`is_process_failure`）= 超时 / 中断 / 启动失败 → 仍然红。
+    - **非零退出**（`is_nonzero_exit`）= 命令跑完并给出结果 → 结算 `completed`、
+      不写失败原因、方块保持工具色；**退出码照常显示**在标题行（`exit 1`）。
+  - 与 codex 口径一致：其 exec 渲染对 search 类命令的 `exit 1` 用 `dim()` 而非 `red()`，
+    注释为 "Search exit 1 can mean no matches; report the code without calling it a failure"。
+  - 回归测试四层：`process/manager`（真实子进程 `grep -c` 无匹配）、`agent_loop/executor`、
+    `event/chat` 端到端（落库 `completed`）、UI 渲染（方块非红且 `exit 1` 可见），
+    另加"超时仍是红"的反向断言防止放宽过头。
+
 - **展开后视口跳走（bug）**：新增 `LxChat::viewport_top` + `pin_lx_viewport`，三个切换入口
   内部先锚定；`chat_hit` 命中限定在 body 内。测试 `app/update/chat/tests/viewport_anchor.rs`。
 - **三卡改为树形版式**：`ui/text/agent.rs` 新增 `TREE_BAR` / `TREE_LEAF`（等宽 5 列）与

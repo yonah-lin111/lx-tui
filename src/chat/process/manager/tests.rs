@@ -93,8 +93,12 @@ async fn short_command_returns_real_exit_code_and_output() {
     assert!(result.command.contains("echo hello"));
 }
 
+/// 非零退出**不是**失败：命令跑完并给出了结果，退出码本身就是结果的一部分。
+///
+/// 真实案例：`pgrep -af ... ; ... | grep -c ...` 的 `grep -c` 在没有匹配时返回 1，
+/// 这是"没找到"这个答案的正常表达，把它标成失败会让界面显示红叉。
 #[tokio::test]
-async fn non_zero_exit_is_a_command_failure_not_a_tool_error() {
+async fn non_zero_exit_is_a_result_not_a_failure() {
     let dir = TempDir::new("nonzero");
     let manager = manager(&dir);
     let result = manager
@@ -103,13 +107,11 @@ async fn non_zero_exit_is_a_command_failure_not_a_tool_error() {
         .expect("exec");
     assert_eq!(result.state, ProcessState::Exited { code: Some(3) });
     assert_eq!(result.exit_code, Some(3));
-    assert!(result.is_failure(), "非零退出必须被识别为失败");
+    assert!(!result.is_failure(), "非零退出不是工具失败");
     assert!(result.output.contains("boom"), "输出仍要如实返回");
     assert!(
-        result
-            .failure_message()
-            .is_some_and(|message| message.contains('3')),
-        "失败原因带真实退出码"
+        result.failure_message().is_none(),
+        "非零退出不编造失败原因（退出码自己就是答案）"
     );
 }
 
@@ -454,4 +456,32 @@ async fn wait_window_does_not_kill_the_process() {
     let snapshot = manager.snapshot(started.session_id).expect("tracked");
     assert!(!snapshot.state.is_terminal(), "等待窗口到期不杀进程");
     manager.shutdown().await;
+}
+
+/// 回归：`grep -c` / `pgrep` 无匹配返回 1，这是**答案**，不是失败。
+///
+/// 真实案例（design §14.7）：模型为确认"测试进程是否全部停止"执行
+/// `pgrep -af "IFS= read" ; echo ---; ps -ef | grep -c "[r]ead -r line"`，
+/// 输出 `35293 / --- / 0`，退出码 1（`pgrep` 无匹配）。界面把它渲染成红色
+/// `exit 1` 失败卡片，而模型自己读懂了"退出码 1 表示未找到"。
+#[tokio::test]
+async fn no_match_grep_exit_code_one_is_a_normal_result() {
+    let dir = TempDir::new("grep-no-match");
+    let manager = manager(&dir);
+    let result = manager
+        .exec(
+            exec("grep -c nomatch /dev/null; exit 1", 5_000),
+            &dir.path,
+            "call-1",
+        )
+        .await
+        .expect("exec");
+    assert_eq!(result.exit_code, Some(1), "退出码如实记录");
+    assert!(
+        !result.is_failure(),
+        "grep 无匹配的 exit 1 是正常结果，不能标成失败"
+    );
+    assert!(result.failure_message().is_none(), "不编造失败原因");
+    // 输出（这里是 `0`）照常返回给模型。
+    assert_eq!(result.output.trim(), "0");
 }

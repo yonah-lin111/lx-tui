@@ -527,3 +527,60 @@ fn preview_line_budget_has_a_single_source_of_truth() {
         "渲染层预览行数必须与视图常量一致"
     );
 }
+
+// ===== 非零退出不应被画成失败（真实案例回归，design §14.7）=====
+
+/// 构造一个已退出的命令卡片（指定退出码与工具状态）。
+fn exited_command(code: i32, status: ToolStatus, error: Option<&str>) -> ToolCallView {
+    let mut call = running_command("35293\n---\n0\n");
+    call.status = status;
+    call.error = error.map(str::to_string);
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() else {
+        panic!("expected command view");
+    };
+    view.state = ProcessStateView::Exited { code: Some(code) };
+    view.ended_at_ms = Some(crate::db::now_ms());
+    call
+}
+
+/// 首行方块的前景色（行首标记）。
+fn mark_style(call: &ToolCallView) -> ratatui::style::Style {
+    let area = Rect::new(0, 0, 100, 12);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    draw(&mut grid, area, 0, &mut row, call, 0, false);
+    grid.cell(area.x, 0).style
+}
+
+#[test]
+fn non_zero_exit_keeps_the_tool_color_instead_of_red() {
+    // `grep -c` 无匹配返回 1、`pgrep` 无匹配返回 1：这是答案，不是失败。
+    // 工具状态是 Completed，方块必须保持工具色（不是红色）。
+    let call = exited_command(1, ToolStatus::Completed, None);
+    let style = mark_style(&call);
+    assert_ne!(
+        style.fg,
+        Some(ratatui::style::Color::Red),
+        "非零退出不得画成红色失败方块"
+    );
+    // 退出码仍然显示在标题行上（信息不丢）。
+    let text = render_row(&call, 100).0;
+    assert!(text.contains("exit 1"), "退出码仍可见：{text}");
+    assert!(!text.contains("Failed"), "不显示 Failed：{text}");
+}
+
+#[test]
+fn timeout_still_renders_the_red_failure_mark() {
+    // 真正的失败（超时）必须仍然是红的，不能被上一条放宽掉。
+    let mut call = exited_command(1, ToolStatus::Failed, Some("Timed out"));
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() else {
+        panic!("expected command view");
+    };
+    view.state = ProcessStateView::TimedOut;
+    let style = mark_style(&call);
+    assert_eq!(
+        style.fg,
+        Some(ratatui::style::Color::Red),
+        "超时仍必须是红色"
+    );
+}

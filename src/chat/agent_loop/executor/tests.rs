@@ -156,8 +156,10 @@ async fn invalid_plan_arguments_are_a_validation_failure() {
     assert_eq!(result.error_code(), Some(ToolErrorCode::PlanInvalid));
 }
 
+/// 非零退出**不是**工具失败：命令跑完并给出了结果（`grep` 无匹配 = 1 就是正常答案）。
+/// 退出码本身照常记录，供模型与界面判断。
 #[tokio::test]
-async fn exit_code_failures_are_reported_as_failure_results() {
+async fn non_zero_exit_is_not_a_tool_failure() {
     let dir = TempDir::new("nonzero");
     let tools = executor(&dir);
     let result = tools
@@ -166,11 +168,12 @@ async fn exit_code_failures_are_reported_as_failure_results() {
             &call("exec_command", r#"{"cmd":"exit 7","yield_time_ms":5000}"#),
         )
         .await;
-    assert!(result.is_failure(), "非零退出是命令失败");
+    assert!(!result.is_failure(), "非零退出不是工具失败");
     let ToolExecutionResult::Process(process) = &result else {
         panic!("expected process");
     };
-    assert_eq!(process.exit_code, Some(7));
+    assert_eq!(process.exit_code, Some(7), "退出码仍被记录");
+    assert!(process.failure_message().is_none(), "非零退出没有失败原因");
     tools.processes().shutdown().await;
 }
 
