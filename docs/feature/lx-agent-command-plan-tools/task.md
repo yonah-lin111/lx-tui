@@ -302,7 +302,9 @@
   - **顶边框**：面板首行是一条横线，画在面板矩形内部（不与窗格边框重叠）。
   - **tab 配色**：当前 tab 用 `style::selected_item()`（青底黑字 + BOLD），与顶部
     标签栏激活态同一套样式；非当前 tab 用次要色。
-  - **键位一律 `[]` 包裹**：`[esc]`、`[↑↓] select  [^d] stop  [←→] tabs  [esc] back`。
+  - **键位统一为 `[功能 键]`**：右上 `[close esc]`；
+    底部 `[select ↑↓]  [stop ^d]  [tabs ←→]  [back esc]`。
+    窄窗格整项丢弃（从右往左），不截半项。
   - **tab 与 `[esc]` 可点击**：`task::hit` 给 `TaskHit::Tab/Close`，几何由
     `tab_row_rects()` 与渲染共用，不会"画在这、点在那"。
   - **未绑定会话时拒绝打开**（`open_task_page` 在 `session_id.is_none()` 时返回

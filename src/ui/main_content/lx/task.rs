@@ -39,6 +39,8 @@ use super::grid::CONTINUATION;
 pub(super) const TOP_BORDER: u16 = 1;
 /// tab 行占用的行数（顶边框之下）。
 pub(super) const TAB_ROW: u16 = 1;
+/// 相邻键位提示之间的空档（列）。
+const HINT_GAP: usize = 2;
 /// 列表最多显示的行数。
 ///
 /// 比 opencode 的 `maxHeight={5}` 再高一档：5 行在 24 行窗格里信息量偏少，
@@ -119,7 +121,7 @@ pub(super) fn draw(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
             grid,
             close.x,
             close.y,
-            text::LX_TASK_ESC,
+            &text::LX_TASK_CLOSE.label(),
             style::muted(),
             rect.right(),
         );
@@ -154,12 +156,28 @@ pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
     if right <= left {
         return;
     }
-    let hints = match page.tab {
-        TaskTab::Processes => text::LX_TASK_FOOTER_PROCESSES,
-        TaskTab::Agents => text::LX_TASK_FOOTER_AGENTS,
+    // 按项拼接：窄窗格里**整项丢弃**（从右往左），绝不把 `[back esc]` 截成半截。
+    let hints: &[text::Hint] = match page.tab {
+        TaskTab::Processes => &text::LX_TASK_HINTS_PROCESSES,
+        TaskTab::Agents => &text::LX_TASK_HINTS_AGENTS,
     };
-    let clipped = clip(hints, right.saturating_sub(left));
-    let width = u16::try_from(clipped.width()).unwrap_or(0);
+    let room = usize::from(right.saturating_sub(left));
+    let mut rendered = String::new();
+    for hint in hints {
+        let label = hint.label();
+        let sep = if rendered.is_empty() { 0 } else { HINT_GAP };
+        if rendered.width() + sep + label.width() > room {
+            break;
+        }
+        if sep > 0 {
+            rendered.push_str(&" ".repeat(sep));
+        }
+        rendered.push_str(&label);
+    }
+    if rendered.is_empty() {
+        return;
+    }
+    let width = u16::try_from(rendered.width()).unwrap_or(0);
     // 先清成空格再写文字；未覆盖的部分保持底边线。
     for x in left..left.saturating_add(width) {
         if let Some(cell) = buf.cell_mut((x, y)) {
@@ -172,7 +190,7 @@ pub(super) fn draw_footer(buf: &mut Buffer, area: Rect, page: &TaskPage) {
         buf,
         left,
         y,
-        &clipped,
+        &rendered,
         style::muted(),
         left.saturating_add(width),
     );
@@ -203,8 +221,8 @@ fn tab_row_rects(rect: Rect) -> (Vec<(usize, u16, u16)>, Option<Rect>) {
         tabs.push((index, x, label_w));
         x = x.saturating_add(label_w);
     }
-    let esc = text::LX_TASK_ESC;
-    let esc_w = u16::try_from(esc.width()).unwrap_or(0);
+    let close_label = text::LX_TASK_CLOSE.label();
+    let esc_w = u16::try_from(close_label.width()).unwrap_or(0);
     let esc_x = rect.right().saturating_sub(esc_w);
     let close = (esc_x > x).then(|| Rect::new(esc_x, tab_y, esc_w, 1));
     (tabs, close)

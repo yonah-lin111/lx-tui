@@ -153,8 +153,9 @@ fn footer_shows_hints_and_hides_model_name() {
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let lines = render_lines(&lx, 70, 16);
     let bottom = lines.last().expect("底边框行");
+    // 每一项都是 `[功能 键]`；首项 `[select ↑↓]`。
     assert!(
-        bottom.contains(text::LX_TASK_FOOTER_PROCESSES),
+        bottom.contains(&text::LX_TASK_HINTS_PROCESSES[0].label()),
         "底边框是键位提示：{bottom}"
     );
     assert!(
@@ -170,7 +171,7 @@ fn footer_shows_hints_and_hides_model_name() {
     assert!(
         bottom
             .trim_start()
-            .starts_with(text::LX_TASK_FOOTER_PROCESSES),
+            .starts_with(&text::LX_TASK_HINTS_PROCESSES[0].label()),
         "hints 从左边框内侧起：{bottom}"
     );
 }
@@ -293,7 +294,7 @@ fn agents_tab_shows_its_placeholder_and_reserves_the_slot() {
     );
     // 键位提示随 tab 变化。
     assert!(
-        text.contains(text::LX_TASK_FOOTER_AGENTS),
+        text.contains(&text::LX_TASK_HINTS_AGENTS[0].label()),
         "Agents tab 的键位：{text}"
     );
 }
@@ -308,8 +309,8 @@ fn tab_row_shows_esc_on_the_right() {
         .find(|line| line.contains(TaskTab::Processes.label()))
         .expect("tab 行");
     assert!(
-        tab_row.contains(text::LX_TASK_ESC),
-        "tab 行右端有 esc 提示：{tab_row}"
+        tab_row.contains(&text::LX_TASK_CLOSE.label()),
+        "tab 行右端是关闭按钮：{tab_row}"
     );
 }
 
@@ -425,12 +426,31 @@ fn panel_is_taller_than_five_list_rows() {
     const { assert!(LIST_MAX > 5) };
 }
 
-// ===== `[]` 包裹的键位提示 + tab/esc 可点击 =====
+// ===== 键位提示：`[功能 键]` 语法 + tab/esc 可点击 =====
 
 #[test]
-fn esc_hint_is_wrapped_in_brackets() {
-    // 用户要求：右上角 esc 用 `[]` 包裹。
-    assert_eq!(text::LX_TASK_ESC, "[esc]");
+fn hints_use_action_then_key_inside_brackets() {
+    // 用户要求：`[功能名称 快捷键]` —— 功能在前、键在后，方括号包整条。
+    assert_eq!(text::hint("select", "↑↓").label(), "[select ↑↓]");
+    assert_eq!(text::LX_TASK_CLOSE.label(), "[close esc]");
+    let labels: Vec<String> = text::LX_TASK_HINTS_PROCESSES
+        .iter()
+        .map(|hint| hint.label())
+        .collect();
+    assert_eq!(
+        labels,
+        vec![
+            "[select ↑↓]".to_string(),
+            "[stop ^d]".to_string(),
+            "[tabs ←→]".to_string(),
+            "[back esc]".to_string(),
+        ],
+        "进程 tab 的四项提示"
+    );
+}
+
+#[test]
+fn close_button_uses_the_same_action_key_syntax() {
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
     let lines = render_lines(&lx, 70, 20);
@@ -438,18 +458,44 @@ fn esc_hint_is_wrapped_in_brackets() {
         .iter()
         .find(|line| line.contains(TaskTab::Processes.label()))
         .expect("tab 行");
-    assert!(tab_row.contains("[esc]"), "tab 行右端是 [esc]：{tab_row}");
+    assert!(
+        tab_row.contains("[close esc]"),
+        "右上角是 [close esc]：{tab_row}"
+    );
 }
 
 #[test]
-fn footer_hints_are_wrapped_in_brackets() {
-    // 用户要求：底部快捷键用 `[]` 包裹。
+fn footer_renders_every_hint_as_action_key() {
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
     let bottom = render_lines(&lx, 70, 20).last().cloned().expect("底边框");
-    assert!(bottom.contains("[↑↓]"), "方向键用 [] 包裹：{bottom}");
-    assert!(bottom.contains("[^d]"), "停止键用 [] 包裹：{bottom}");
-    assert!(bottom.contains("[esc]"), "退出键用 [] 包裹：{bottom}");
+    for hint in text::LX_TASK_HINTS_PROCESSES {
+        assert!(
+            bottom.contains(&hint.label()),
+            "底边框缺少 `{}`：{bottom}",
+            hint.label()
+        );
+    }
+}
+
+#[test]
+fn narrow_pane_drops_whole_hints_instead_of_truncating() {
+    // 窄窗格整项丢弃，绝不把 `[back esc]` 截成半截。
+    let mut lx = lx_with_messages();
+    lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
+    let bottom = render_lines(&lx, 34, 20).last().cloned().expect("底边框");
+    let kept = text::LX_TASK_HINTS_PROCESSES
+        .iter()
+        .filter(|hint| bottom.contains(&hint.label()))
+        .count();
+    assert!(kept >= 1, "至少保留第一项：{bottom}");
+    assert!(kept < 4, "窄窗格应丢掉后面的项：{bottom}");
+    // 保留的每一项都完整（方括号闭合）。
+    assert_eq!(
+        bottom.matches('[').count(),
+        bottom.matches(']').count(),
+        "不得出现半个方括号：{bottom}"
+    );
 }
 
 #[test]
@@ -480,12 +526,12 @@ fn clicking_esc_hits_close() {
     let page = page_with(vec![entry(1, "cmd", "/w")], 0);
     let rect = Rect::new(0, 10, 70, 8);
     let tab_y = rect.y + TOP_BORDER;
-    let esc_w = u16::try_from(text::LX_TASK_ESC.width()).unwrap();
+    let esc_w = u16::try_from(text::LX_TASK_CLOSE.label().width()).unwrap();
     let esc_x = rect.right() - esc_w;
     assert_eq!(
         hit(rect, &page, esc_x, tab_y),
         Some(TaskHit::Close),
-        "点 [esc] 关闭"
+        "点 [close esc] 关闭"
     );
 }
 

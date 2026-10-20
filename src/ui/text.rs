@@ -610,16 +610,41 @@ pub const LX_TASK_TAB_AGENTS: &str = "Agents";
 pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
 /// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
 pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
-/// 面板 tab 行右端的关闭提示（对齐 opencode composer 右上角的 `esc`）。
+/// 一条键位提示：`[功能 键]`。
 ///
-/// 用 `[]` 包裹，与底边框的键位提示同一套视觉语法，也表明它是可点击的。
-pub const LX_TASK_ESC: &str = "[esc]";
-/// 窗格**底边框**上的键位提示（进程 tab）。键位一律 `[]` 包裹。
-///
-/// 刻意写短：它画在窗格底边框上，太长会在常见窗格宽度下被截断。
-pub const LX_TASK_FOOTER_PROCESSES: &str = "[↑↓] select  [^d] stop  [←→] tabs  [esc] back";
-/// 窗格底边框键位提示（子代理 tab；`^d` 无对象，故只留导航）。
-pub const LX_TASK_FOOTER_AGENTS: &str = "[←→] tabs  [esc] back";
+/// **功能名在前、快捷键在后**（用户要求），方括号包住整条——它既是一个视觉单位，
+/// 也是可点击的目标。所有提示都是这个形状，不再有"只有键位"的例外写法。
+pub const fn hint(action: &'static str, key: &'static str) -> Hint {
+    Hint { action, key }
+}
+
+/// 键位提示（`[功能 键]`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hint {
+    /// 功能名称，如 `select`。
+    pub action: &'static str,
+    /// 快捷键，如 `↑↓`。
+    pub key: &'static str,
+}
+
+impl Hint {
+    /// 完整文案：`[select ↑↓]`。
+    pub fn label(self) -> String {
+        format!("[{} {}]", self.action, self.key)
+    }
+}
+
+/// 面板 tab 行右端的关闭按钮（`[close esc]`）。
+pub const LX_TASK_CLOSE: Hint = hint("close", "esc");
+/// 进程 tab 的底边框键位提示（按顺序从左到右，窄窗格整项丢弃）。
+pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
+    hint("select", "↑↓"),
+    hint("stop", "^d"),
+    hint("tabs", "←→"),
+    hint("back", "esc"),
+];
+/// 子代理 tab 的键位提示（`^d` / `↑↓` 无对象：预留 tab 恒空，故只留导航与退出）。
+pub const LX_TASK_HINTS_AGENTS: [Hint; 2] = [hint("tabs", "←→"), hint("back", "esc")];
 /// 顶边右端的 tab 指示分隔符（`·`）。
 pub const LX_TASK_TAB_SEP: &str = " · ";
 /// 行尾的运行时长前缀（`running 1m 30s`）。

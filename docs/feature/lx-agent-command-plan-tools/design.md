@@ -557,8 +557,12 @@ Lx {
 - **tab 配色**：当前 tab 用 `style::selected_item()`（青底黑字 + BOLD），
   与**顶部标签栏的激活态完全同一套样式**——两处 tab 视觉一致，用户一眼就知道
   是同一个 tab 控件；非当前 tab 用 `muted()`。
-- **键位提示一律 `[]` 包裹**：右上角 `[esc]`、底边框 `[↑↓] select  [^d] stop
-  [←→] tabs  [esc] back`。`[]` 同时表达"这是个键位、可点"。
+- **键位提示统一为 `[功能 键]`**：功能名在前、快捷键在后，方括号包住整条。
+  右上角 `[close esc]`；底边框 `[select ↑↓]  [stop ^d]  [tabs ←→]  [back esc]`。
+  每条提示是一个整体（`text::Hint`），既表达"这是个可点的键位"，也避免
+  "只有键位"与"功能+键"两套写法并存。
+  窄窗格**整项丢弃**（从右往左），绝不把 `[back esc]` 截成半截——
+  前两版实测过截尾会切出 `[esc] b`，比不显示更糟。
 - **tab 与 `[esc]` 可点击**：`task::hit(rect, page, col, row)` 返回 `TaskHit::Tab(i)`
   或 `TaskHit::Close`；几何由 `tab_row_rects()` 统一给出，**渲染与命中共用同一份**，
   不会"画在这、点在那"。点击接到 `update::select_task_tab` / `update::close_task_page`。
