@@ -19,6 +19,7 @@ use crate::app::state::{ToolStatus, ToolSummary};
 use crate::ui::style;
 use crate::ui::text;
 
+mod background_cards;
 mod command_cards;
 mod extras;
 mod structure;
@@ -129,7 +130,7 @@ fn grid_text(grid: &Grid, rect: Rect) -> String {
 
 /// 标题行的段（第 1 行：`■ 动词`）。
 fn header_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
-    header(call, width, 0)
+    header(call, width, 0, true)
         .into_iter()
         .map(|segment| (segment.text, segment.style))
         .collect()

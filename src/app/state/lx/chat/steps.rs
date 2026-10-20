@@ -469,6 +469,18 @@ impl ToolCallView {
         }
     }
 
+    /// 该工具步骤关联的**进程会话 ID**（进程类卡片才有）。
+    ///
+    /// `[open]` 点击时用它把后台任务面板的高亮定位到这条任务；文件工具与计划
+    /// 卡片返回 None（它们没有可打开的后台进程）。
+    pub fn process_session_id(&self) -> Option<u64> {
+        match self.detail.as_deref()? {
+            super::tool_view::ToolDetailView::Command(view) => view.process_session_id,
+            super::tool_view::ToolDetailView::Interaction(view) => Some(view.process_session_id),
+            super::tool_view::ToolDetailView::Plan(_) => None,
+        }
+    }
+
     /// 命令卡片视图（可变）。
     pub fn command_view_mut(&mut self) -> Option<&mut super::tool_view::CommandView> {
         match self.detail.as_deref_mut()? {

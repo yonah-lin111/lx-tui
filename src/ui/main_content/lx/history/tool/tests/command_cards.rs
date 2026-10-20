@@ -149,55 +149,63 @@ fn rows_and_draw_agree_for_every_width_and_state() {
 }
 
 #[test]
-fn running_command_card_shows_command_status_and_preview() {
+fn running_command_card_shows_command_and_status_only() {
+    // 卡片收敛为三行：输出、cwd、`… +N more lines` 全部搬进后台任务面板。
     let output = "running 24 tests\ntest read::empty_file ... ok\ntest result: ok\n";
     let (text, _) = render(&running_command(output), 60, false);
     assert!(text.contains("Run command"), "标题动词：{text}");
     assert!(
         text.contains("cargo test chat::tools"),
-        "命令在详情行：{text}"
+        "命令在树体首行：{text}"
     );
     assert!(text.contains("Running"), "状态文字必须可见：{text}");
-    assert!(text.contains("test result: ok"), "输出预览：{text}");
-    assert!(!text.contains("cwd:"), "折叠时不显示 cwd：{text}");
+    assert!(!text.contains("test result: ok"), "不再渲染输出：{text}");
+    assert!(!text.contains("cwd:"), "不再渲染 cwd：{text}");
+    assert!(text.contains(crate::ui::text::agent::TASK_OPEN_LABEL));
 }
 
 #[test]
-fn expanded_command_card_shows_cwd_and_full_tail() {
+fn command_card_ignores_the_expanded_flag() {
+    // 卡片没有展开态了：两种 flag 下都必须逐字符一致（几何与内容都恒定）。
     let output: String = (0..10).map(|index| format!("line {index}\n")).collect();
-    let (folded, _) = render(&running_command(&output), 60, false);
-    assert!(!folded.contains("line 0"), "折叠只显示最近六行：{folded}");
-    assert!(folded.contains("line 9"));
-    let (expanded, _) = render(&running_command(&output), 60, true);
-    assert!(
-        expanded.contains("cwd: /workspace/lx"),
-        "展开显示 cwd：{expanded}"
-    );
-    assert!(
-        expanded.contains("line 0"),
-        "展开显示全部保留输出：{expanded}"
-    );
+    let (folded, folded_rows) = render(&running_command(&output), 60, false);
+    let (expanded, expanded_rows) = render(&running_command(&output), 60, true);
+    assert_eq!(folded, expanded, "展开标志不再影响卡片内容");
+    assert_eq!(folded_rows, expanded_rows, "也不再影响行数");
+    assert!(!folded.contains("line 0"), "任何形态都不渲染输出：{folded}");
 }
 
 #[test]
-fn command_without_output_shows_a_placeholder() {
+fn command_without_output_still_shows_the_open_entry() {
+    // 没有输出时不再需要 `Waiting for output` 占位：输出只在面板里看，
+    // 卡片固定给 `[open]` 入口。
     let (text, _) = render(&running_command(""), 60, false);
     assert!(
-        text.contains("Waiting for output"),
-        "无输出必须显式占位：{text}"
+        !text.contains("Waiting for output"),
+        "不再有输出占位：{text}"
+    );
+    assert!(
+        text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+        "[open] 仍在：{text}"
     );
 }
 
 #[test]
-fn interaction_card_distinguishes_read_send_and_empty_output() {
+fn interaction_card_distinguishes_verbs_and_hides_io() {
+    // 动词仍按动作区分（Read output / Send input），但 stdin 与输出都不再上卡片。
     let (read, _) = render(&interaction("later output\n", None), 60, false);
     assert!(read.contains("Read output"), "空写是 Read output：{read}");
-    assert!(read.contains("later output"));
+    assert!(!read.contains("later output"), "输出只在面板里看：{read}");
 
     let (send, _) = render(&interaction("", Some("yes\\n")), 60, false);
     assert!(send.contains("Send input"), "非空写是 Send input：{send}");
-    assert!(send.contains("stdin: yes\\n"), "输入预览转义换行：{send}");
-    assert!(send.contains("No new output"), "无输出占位：{send}");
+    assert!(!send.contains("stdin:"), "输入预览不再上卡片：{send}");
+    for text in [read, send] {
+        assert!(
+            text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+            "交互卡片也有 [open]：{text}"
+        );
+    }
 }
 
 #[test]
@@ -298,24 +306,24 @@ fn header_shows_status_inline_and_has_no_corner_details_marker() {
 }
 
 #[test]
-fn collapse_marker_lives_at_the_bottom_of_the_tree() {
-    let output: String = (0..10).map(|index| format!("line {index}\n")).collect();
-    let call = running_command(&output);
-    let (expanded, _) = render(&call, 60, true);
-    let lines: Vec<&str> = expanded.lines().collect();
-    let last = lines.last().expect("至少两行");
+fn open_entry_lives_at_the_bottom_of_the_tree() {
+    // `[open]` 独占树体末行，用直角收口；标题行不带任何标记。
+    let call = running_command("line\n");
+    let (text, _) = render(&call, 60, false);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "恒三行：{text}");
+    let last = lines.last().copied().unwrap_or_default();
     assert!(
-        last.contains(crate::ui::text::agent::DETAILS_CLOSE),
-        "收起入口在树体最后一行：{expanded}"
+        last.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+        "末行是 [open]：{text}"
     );
     assert!(
         last.starts_with(text::agent::TREE_LEAF),
-        "最后一行用直角收口：{expanded}"
+        "末行用直角收口：{text}"
     );
-    // 标题行不再带收起标记。
     assert!(
-        !lines[0].contains(crate::ui::text::agent::DETAILS_CLOSE),
-        "标题行不该有收起标记：{expanded}"
+        !lines[0].contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+        "标题行不带 [open]：{text}"
     );
 }
 
@@ -405,34 +413,16 @@ fn tree_prefixes_are_equal_width_so_content_stays_aligned() {
 }
 
 #[test]
-fn folded_preview_states_how_many_lines_are_hidden() {
-    let output: String = (0..10).map(|index| format!("line {index}\n")).collect();
+fn card_never_mentions_hidden_output_lines() {
+    // 省略提示是为"卡片内预览"存在的；输出全搬进面板后它必须彻底消失。
+    let output: String = (0..40).map(|index| format!("line {index}\n")).collect();
     let (text, _) = render(&running_command(&output), 60, false);
     assert!(
-        text.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "折叠必须显式说明省略了多少行：{text}"
+        !text.contains(text::agent::EARLIER_OUTPUT_HINT),
+        "不再有 `… +N` 省略提示：{text}"
     );
-    assert!(text.contains("7 more lines"), "10 行留 3 行 = 省 7：{text}");
-    // 省略提示在树体**最后一行**（可点击的展开入口），不是输出中间。
-    let lines: Vec<&str> = text.lines().collect();
-    assert!(
-        lines
-            .last()
-            .is_some_and(|line| line.contains("7 more lines")),
-        "省略提示要在底部：{text}"
-    );
-    assert!(
-        lines
-            .last()
-            .is_some_and(|line| line.starts_with(text::agent::TREE_LEAF)),
-        "底部提示行用直角收口：{text}"
-    );
-    // 展开后不再提示省略（全部输出都在）。
-    let (expanded, _) = render(&running_command(&output), 60, true);
-    assert!(
-        !expanded.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "展开后不再提示省略：{expanded}"
-    );
+    assert!(!text.contains("more lines"), "不再提 more lines：{text}");
+    assert_eq!(text.lines().count(), 3, "恒三行：{text}");
 }
 
 #[test]
@@ -448,26 +438,22 @@ fn command_line_has_a_shell_prompt_marker() {
 }
 
 #[test]
-fn interaction_body_keys_input_before_output_under_the_same_tree() {
+fn interaction_card_keeps_command_then_open_entry() {
+    // 树体只剩命令 + `[open]`：stdin 预览与输出都在面板里看。
     let (text, _) = render(&interaction("new line\n", Some("yes\\n")), 60, false);
     let lines: Vec<&str> = text.lines().collect();
-    let stdin_line = lines
+    assert_eq!(lines.len(), 3, "恒三行：{text}");
+    let command_line = lines
         .iter()
-        .position(|line| line.contains("stdin: yes\\n"))
-        .expect("输入预览在树体里");
-    let output_line = lines
-        .iter()
-        .position(|line| line.contains("new line"))
-        .expect("输出在树体里");
-    assert!(stdin_line < output_line, "先输入后输出：{text}");
+        .position(|line| line.contains("cargo test chat::tools"))
+        .expect("命令在树体首行");
+    assert!(command_line > 0, "命令在标题行之下：{text}");
     assert!(
-        lines[stdin_line].starts_with(text::agent::TREE_BAR),
-        "输入行是中间行：{text}"
+        lines[command_line].starts_with(text::agent::TREE_BAR),
+        "命令行是中间行：{text}"
     );
-    assert!(
-        lines[output_line].starts_with(text::agent::TREE_LEAF),
-        "输出行收口：{text}"
-    );
+    assert!(!text.contains("stdin:"), "stdin 预览不再上卡片：{text}");
+    assert!(!text.contains("new line"), "输出不再上卡片：{text}");
 }
 
 #[test]
@@ -574,19 +560,6 @@ fn finished_process_stops_breathing() {
     );
 }
 
-/// 折叠预览行数只有一个口径：视图快照常量与渲染常量必须相等。
-///
-/// 两处若漂移，卡片会「预览 3 行、快照存 6 行」——摘要与绘制说的不是同一件事。
-#[test]
-fn preview_line_budget_has_a_single_source_of_truth() {
-    use super::super::command::PREVIEW_LINES;
-    assert_eq!(
-        PREVIEW_LINES,
-        crate::app::state::lx::chat::tool_view::COMMAND_PREVIEW_LINES,
-        "渲染层预览行数必须与视图常量一致"
-    );
-}
-
 // ===== 非零退出不应被画成失败（真实案例回归，design §14.7）=====
 
 /// 构造一个已退出的命令卡片（指定退出码与工具状态）。
@@ -682,32 +655,24 @@ fn finished_card_shows_exit_code_without_elapsed_time() {
 // ===== 末尾展开/收起行的宽度让位（整项丢弃，不截半段）=====
 
 #[test]
-fn toggle_row_falls_back_to_the_compact_form_then_disappears() {
-    let output: String = (0..9).map(|index| format!("o{index}\n")).collect();
-    let call = running_command(&output);
-    // 宽：完整文案。
+fn open_entry_is_dropped_instead_of_truncated_when_narrow() {
+    // `[open]` 整项丢弃（绝不出现 `[ope…`），且行数保持几何口径不变。
+    let call = running_command("line\n");
+    // 宽：完整 `[open]`。
     let (wide, _) = render(&call, 40, false);
     assert!(
-        wide.lines()
-            .last()
-            .is_some_and(|line| line.contains("6 more lines")),
-        "宽窗格用完整文案：{wide}"
+        wide.contains(text::agent::TASK_OPEN_LABEL),
+        "宽窗格画完整 [open]：{wide}"
     );
-    // 中：退成 `… +6`（仍点得动、仍说得出还有几行），不当成半个词截断。
-    let (medium, _) = render(&call, 14, false);
-    let last = medium.lines().last().unwrap_or_default();
-    assert!(
-        last.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "紧凑形态：{medium}"
-    );
-    assert!(!last.contains("more"), "宽度不够时不画半个词：{medium}");
-    // 极窄：整项丢弃，只剩收口连接符（标题行仍可点）。
-    let (narrow, _) = render(&call, 6, false);
-    let last = narrow.lines().last().unwrap_or_default();
-    assert!(
-        !last.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "极窄整项丢弃：{narrow}"
-    );
+    // 极窄：整项丢弃，只留收口连接符。
+    for width in [6u16, 8, 9] {
+        let (narrow, rows) = render(&call, width, false);
+        assert_eq!(rows, 3, "宽 {width}：行数不变");
+        assert!(
+            !narrow.contains("[ope"),
+            "宽 {width}：不得画半个 [open]：{narrow}"
+        );
+    }
 }
 
 #[test]

@@ -366,6 +366,12 @@ pub const VERB_UPDATE_PLAN: &str = "Plan";
 /// 展开后点尾部折叠文字收起」。
 pub const DETAILS_CLOSE: &str = "[collapse]";
 
+/// 进程卡片末行的**后台任务面板入口**：`[open]`（灰色次要信息色，点击打开面板）。
+///
+/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`[open]`
+/// 是这条命令的唯一入口，独占树体末行。
+pub const TASK_OPEN_LABEL: &str = "[open]";
+
 /// 进程状态词（文字，不只靠颜色）。
 pub const STATE_STARTING: &str = "Starting";
 pub const STATE_RUNNING: &str = "Running";

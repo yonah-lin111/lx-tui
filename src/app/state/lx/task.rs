@@ -85,6 +85,17 @@ pub struct TaskPage {
     pub now_ms: i64,
     /// 进程列表的窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
+    /// `[open]` 带进来的目标进程会话 ID：**一次性定位请求**。
+    ///
+    /// 落地由 [`Self::resolve_focus`] 消费（高亮落到该任务并清空），因此不会
+    /// 干扰后续的 ↑/↓ 操作；目标进程已经退出时回落列表首项。
+    pub focus: Option<u64>,
+    /// 高亮任务的输出尾部快照（事件层回投；`app/` 不持有进程句柄）。
+    pub output: Vec<String>,
+    /// 输出区顶部行偏移（`PageUp`/`PageDown` 与滚轮用）。
+    pub output_scroll: usize,
+    /// 输出区可见行数（事件循环在绘制前写入，键盘翻页钳制用）。
+    pub output_visible: usize,
     /// 上一帧历史内容的总行数（事件循环在绘制前写入；滚动钳制用）。
     pub history_total: Option<usize>,
     /// 上一帧历史区实际可见的行数（事件循环在绘制前写入）。
@@ -161,6 +172,64 @@ impl TaskPage {
         self.window.active = next;
         self.window.anchor = next;
         self.window.viewport = None;
+        // 换任务就把输出贴到尾部：用户点开/切到某条任务，关心的是它**最新**的输出。
+        self.pin_output_to_tail();
+        true
+    }
+
+    /// 消费一次性的 `[open]` 定位请求：高亮落到指定会话的进程。
+    ///
+    /// 目标进程已消失（卡片还留在历史里，但进程早退出了）时回落列表首项——
+    /// 面板照常打开，而不是给一个空高亮。请求无论成败都清空（一次性）。
+    pub fn resolve_focus(&mut self) {
+        let Some(session_id) = self.focus.take() else {
+            return;
+        };
+        let index = self
+            .processes
+            .iter()
+            .position(|process| process.session_id == session_id)
+            .unwrap_or(0);
+        if self.processes.is_empty() {
+            return;
+        }
+        self.window.active = index;
+        self.window.anchor = index;
+        self.window.viewport = None;
+        self.window.clamp(self.processes.len());
+        self.pin_output_to_tail();
+    }
+
+    /// 输出视口贴到尾部（最新输出）；总行数不足一屏时归零。
+    pub fn pin_output_to_tail(&mut self) {
+        self.output_scroll = self.output_max_scroll();
+    }
+
+    /// 输出区可滚动的最大偏移（总行数 − 可见行数）。
+    fn output_max_scroll(&self) -> usize {
+        self.output.len().saturating_sub(self.output_visible)
+    }
+
+    /// 翻动输出区（负数向上）；返回视口是否移动。
+    pub fn scroll_output(&mut self, delta: isize) -> bool {
+        let max = self.output_max_scroll();
+        let current = self.output_scroll.min(max);
+        let next = (current as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize) as usize;
+        let moved = next != self.output_scroll;
+        self.output_scroll = next;
+        moved
+    }
+
+    /// 写入高亮任务的输出快照：内容变了就贴回尾部，避免视口停在一个已经换掉的
+    /// 缓冲区上（换任务时同样由 [`Self::resolve_focus`] / [`Self::move_active`] 贴尾）。
+    pub fn set_output(&mut self, output: Vec<String>) -> bool {
+        if self.output == output {
+            return false;
+        }
+        self.output = output;
+        self.pin_output_to_tail();
         true
     }
 

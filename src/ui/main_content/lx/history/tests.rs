@@ -490,6 +490,8 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
         "streaming",
         vec![reasoning_part("流式思考"), text_part("")],
     )]);
+    // 闪烁只在动画推进时发生（`status.streaming`）：这是「动画停止恒实心」的前提。
+    streaming.chat.status.streaming = true;
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
@@ -624,6 +626,8 @@ fn only_the_active_last_step_breathes() {
         vec![text_part("甲"), text_part("乙")],
     )]);
     lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    // 动画推进中才有呼吸（动画一停就恒实心，见 `StepMark::glyph`）。
+    lx.chat.status.streaming = true;
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
@@ -937,6 +941,8 @@ fn transcript_lays_out_step_square_with_two_column_gutter() {
     ]);
     lx.chat.toggle_reasoning(1, 0);
     lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS; // 呼吸进入空心相位
+    // 动画推进中才呼吸（停止后恒实心，见 `StepMark::glyph`）。
+    lx.chat.status.streaming = true;
     let area = Rect::new(0, 0, 56, 12);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);

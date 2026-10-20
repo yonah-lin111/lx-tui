@@ -438,8 +438,8 @@ pub(crate) fn handle_mouse_down_left(
                         ui::main_content::lx::LxChatHit::JumpBottom => {
                             update::jump_lx_history_bottom(state, pane);
                         }
-                        ui::main_content::lx::LxChatHit::ToolDetail(message_id, call_id) => {
-                            update::toggle_tool_detail(state, pane, &message_id, &call_id);
+                        ui::main_content::lx::LxChatHit::ToolOpen(session_id) => {
+                            update::open_task_page_at(state, pane, session_id);
                         }
                         ui::main_content::lx::LxChatHit::CodeCopy(text) => {
                             // 复制代码块正文（不含围栏与语言行）；toast 锚在**本窗格**

@@ -310,10 +310,10 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::ToggleThinking => {
             super::chat::toggle_latest_thinking(state, pane_id);
         }
-        // Ctrl+O：切换当前（或最近）工具卡片详情；Alt+↑/↓ 切换键盘选择。
-        // 这三者都只改窗格内的展示状态，不把按键转发给后台 shell。
+        // Ctrl+O：打开后台任务面板并定位到当前（或最近一张）进程卡片；
+        // Alt+↑/↓ 切换键盘选择。三者都只改窗格内的展示状态，不转发给后台 shell。
         LxInput::ToggleToolDetail => {
-            super::chat::toggle_selected_tool_detail(state, pane_id);
+            super::chat::open_task_for_selected_tool(state, pane_id);
         }
         LxInput::SelectPrevTool => {
             super::chat::select_adjacent_tool(state, pane_id, false);
@@ -718,11 +718,12 @@ pub fn set_terminal_scroll(state: &mut AppState, pane: PaneId, offset: usize) ->
 ///
 /// 页面整页接管输入（不回落到草稿编辑）：它是一次独立浏览，退出来后草稿与光标
 /// 仍是进入前的样子。不可用的键直接吞掉，避免"按下去没反应但草稿里多了字符"。
-/// 后台任务面板里 `PageUp`/`PageDown` 对**上方消息列表**的翻页量；其余键返回 None。
+/// 后台任务面板里 `PageUp`/`PageDown` 对**输出区**的翻页量；其余键返回 None。
 ///
 /// `↑`/`↓` 不在此列——它们归面板列表的高亮（见 [`apply_task_page_input`]）。
-/// 这两个翻页键是辅助手段，不写进底边框提示。
-fn task_history_delta(command: LxInput) -> Option<isize> {
+/// 面板接管历史区后上方已经没有可见的消息列表，因此翻页键改翻输出区
+/// （决策 11：让它继续有意义，而不是去翻一块看不见的内容）。
+fn task_output_delta(command: LxInput) -> Option<isize> {
     match command {
         LxInput::PageUp => Some(-10),
         LxInput::PageDown => Some(10),
@@ -731,16 +732,15 @@ fn task_history_delta(command: LxInput) -> Option<isize> {
 }
 
 fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
-    // `PageUp`/`PageDown`：翻上方消息列表（`↑`/`↓` 已经归面板列表）。
-    if let Some(delta) = task_history_delta(command) {
-        let rows = state
-            .pane_anywhere(pane)
-            .and_then(|target| target.lx.task.as_ref())
-            .and_then(|page| Some((page.history_total?, page.history_visible?)));
-        if let Some((total, visible)) = rows {
-            super::chat::scroll_lx_history(state, pane, delta, total, visible);
-            return;
+    // `PageUp`/`PageDown`：翻输出区（`↑`/`↓` 已经归任务列表高亮）。
+    if let Some(delta) = task_output_delta(command) {
+        if let Some(page) = state
+            .pane_mut_anywhere(pane)
+            .and_then(|target| target.lx.task.as_mut())
+        {
+            page.scroll_output(delta);
         }
+        return;
     }
     match command {
         // `esc` 无条件退出：列表很长时不必连按 ↑ 到顶。

@@ -73,6 +73,7 @@ pub(super) fn draw(
     row_index: &mut usize,
     call: &ToolCallView,
     loading_frame: usize,
+    animating: bool,
 ) {
     let width = rect.width;
     if width == 0 {
@@ -84,6 +85,7 @@ pub(super) fn draw(
                 call,
                 width,
                 loading_frame,
+                animating,
                 text::agent::VERB_UPDATE_PLAN,
                 None,
             );
@@ -106,6 +108,7 @@ pub(super) fn draw(
             call,
             width,
             loading_frame,
+            animating,
             text::agent::VERB_UPDATE_PLAN,
             progress,
         );

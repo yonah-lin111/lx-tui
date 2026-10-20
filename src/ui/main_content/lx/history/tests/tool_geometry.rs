@@ -320,6 +320,8 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     );
     // 相位翻到空心帧：只有运行中的工具行变空心，已完成的思考头保持实心。
     lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    // 动画推进中：工具行才允许进入空心相位（停止后恒实心）。
+    lx.chat.status.streaming = true;
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     assert!(
@@ -331,89 +333,5 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
         tool_line(&buf).starts_with(text::agent::STEP_MARK_HOLLOW),
         "运行中的工具行进入空心相位：{}",
         tool_line(&buf)
-    );
-}
-
-// ===== 末尾展开/收起行的命中区（`more lines` 在底部，点它展开/收起）=====
-
-use crate::app::state::{CommandView, ProcessStateView, ToolDetailView};
-
-/// 构造一张带长输出的 `exec_command` 卡片步骤（折叠时会省略行）。
-fn long_command_step(position: i64, lines: usize) -> AssistantStepView {
-    let output: String = (0..lines).map(|index| format!("line {index}\n")).collect();
-    AssistantStepView::Tool {
-        position,
-        call: ToolCallView {
-            call_id: format!("call-{position}"),
-            name: "exec_command".into(),
-            position,
-            arguments_json: r#"{"cmd":"cargo test"}"#.into(),
-            status: ToolStatus::Completed,
-            summary: None,
-            error: None,
-            result_json: None,
-            detail: Some(Box::new(ToolDetailView::Command(CommandView {
-                process_session_id: Some(1),
-                command: "cargo test".into(),
-                cwd: "/workspace/lx".into(),
-                tty: false,
-                state: ProcessStateView::Running,
-                output_preview: Vec::new(),
-                truncated: false,
-                dropped_bytes: 0,
-                output_tail: output,
-                started_at_ms: Some(0),
-                ended_at_ms: None,
-            }))),
-        },
-    }
-}
-
-/// 折叠时树体末尾画出 `… +N more lines`，该行有命中矩形；展开后同一行变 `[collapse]`。
-#[test]
-fn toggle_row_hit_rect_matches_the_painted_bottom_line() {
-    let mut message = message("assistant", "complete", Vec::new());
-    message.steps.push(long_command_step(1, 10));
-    message.id = "assistant-toggle".into();
-    let lx = lx_with(vec![message.clone()]);
-    let area = Rect::new(0, 0, 60, 20);
-
-    // 折叠：标题行 + 末尾提示行，共两个命中矩形。
-    let folded = layout(area, &lx);
-    assert_eq!(
-        folded.tools.len(),
-        2,
-        "标题行与末尾提示行都可点：{folded:?}"
-    );
-    let rows = folded.messages[0];
-    let last_hit = folded.tools[1].clone();
-    let last_row = usize::from(last_hit.rect.y - area.y);
-    assert_eq!(
-        last_row,
-        rows.end - 2,
-        "命中行应落在卡片最后一行（消息末尾留一呼吸行）：{folded:?}"
-    );
-
-    // 渲染出的最后一行确实是可点击提示，且与命中矩形同高。
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
-    let painted = row_text(&buf, area, last_row as u16);
-    assert!(
-        painted.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "命中行就是画出来的 `more lines` 行：{painted:?}"
-    );
-
-    // 展开：命中行变成 `[collapse]`，位置仍与绘制一致。
-    let mut expanded_lx = lx;
-    assert!(expanded_lx.chat.toggle_detail("assistant-toggle", "call-1"));
-    let expanded = layout(area, &expanded_lx);
-    assert_eq!(expanded.tools.len(), 2, "展开态仍有两个命中区");
-    let collapse_hit = expanded.tools[1].clone();
-    let mut buf = Buffer::empty(area);
-    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &expanded_lx, 0);
-    let collapse_row = row_text(&buf, area, collapse_hit.rect.y - area.y);
-    assert!(
-        collapse_row.contains(text::agent::DETAILS_CLOSE),
-        "展开后同一位置是可点的收起行：{collapse_row:?}"
     );
 }

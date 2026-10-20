@@ -99,16 +99,21 @@ fn toggle_detail_flips_and_is_keyed_by_stable_ids() {
 }
 
 #[test]
-fn keyboard_toggle_selects_the_latest_expandable_card() {
+fn keyboard_shortcut_opens_the_task_panel_on_the_latest_card() {
+    // 卡片没有"展开详情"了：`^o` 改走 `[open]` 同一条路径（打开后台任务面板）。
     let (mut state, pane) = state_with_command(1);
-    assert!(toggle_selected_tool_detail(&mut state, pane));
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    // 面板列的是"本会话的后台进程"，未绑定会话时会被拒绝打开。
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.session_id = Some("session-1".into());
+    }
+    assert!(open_task_for_selected_tool(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(
-        chat.selected_tool,
+        target.lx.chat.selected_tool,
         Some(("msg-1".to_string(), "call-1".to_string())),
         "未选中时自动选最近一张可展开卡片"
     );
-    assert!(chat.detail_is_expanded("msg-1", "call-1"));
+    assert!(target.lx.task.is_some(), "打开了后台任务面板");
 }
 
 #[test]

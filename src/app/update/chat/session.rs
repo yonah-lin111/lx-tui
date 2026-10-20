@@ -119,6 +119,23 @@ pub fn open_task_page(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// 从卡片的 `[open]` 打开后台任务面板，并把高亮**定位到该进程**。
+///
+/// `session_id` 为空（卡片没有关联进程）时退化为普通打开（高亮保持当前值）。
+/// 进程已经结束的降级由 [`crate::app::state::TaskPage::resolve_focus`] 负责：
+/// 请求落地时若找不到该会话就回落列表首项，面板照常打开。
+pub fn open_task_page_at(state: &mut AppState, pane: PaneId, session_id: Option<u64>) -> bool {
+    let opened = open_task_page(state, pane);
+    if let Some(session_id) = session_id
+        && let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(page) = target.lx.task.as_mut()
+    {
+        page.focus = Some(session_id);
+        page.resolve_focus();
+    }
+    opened
+}
+
 /// 关闭后台任务页，回到 lx 页（`Esc`）；返回是否确实关闭了。
 pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
@@ -158,6 +175,20 @@ pub fn on_process_listed(
         return false;
     };
     page.set_processes(processes, crate::db::now_ms())
+}
+
+/// 回投高亮任务的输出尾部（与进程列表同一次快照，保证上下同步）。
+///
+/// 内容没变返回 false（不置脏、不重绘）；内容一变就贴回尾部——最新输出才是
+/// 用户打开面板想看的。
+pub fn on_task_output(state: &mut AppState, pane: PaneId, output: Vec<String>) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let Some(page) = target.lx.task.as_mut() else {
+        return false;
+    };
+    page.set_output(output)
 }
 
 /// 停止后台任务页高亮的那个进程（`^d`）。

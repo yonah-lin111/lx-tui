@@ -430,3 +430,115 @@ fn open_task_page_works_once_a_session_exists() {
     assert!(open_task_page(&mut state, pane));
     assert!(state.pane_anywhere(pane).unwrap().lx.task.is_some());
 }
+
+// ===== 卡片 `[open]` 打开面板并定位高亮（决策 4/9）=====
+
+#[test]
+fn open_from_card_focuses_that_process() {
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    assert_eq!(page(&state, pane).window.active, 0, "初始高亮在首项");
+
+    // 卡片指向第三条进程：打开面板后高亮必须落到它。
+    assert!(open_task_page_at(&mut state, pane, Some(13)));
+    let page = page(&state, pane);
+    assert_eq!(
+        page.selected().map(|process| process.session_id),
+        Some(13),
+        "高亮定位到卡片对应的进程"
+    );
+    assert_eq!(page.focus, None, "定位是一次性的");
+}
+
+#[test]
+fn open_from_card_falls_back_when_the_process_is_gone() {
+    // 卡片会留在历史里，但进程可能早就退出了：回落首项而不是空高亮。
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    assert!(open_task_page_at(&mut state, pane, Some(999)));
+    let page = page(&state, pane);
+    assert_eq!(page.window.active, 0, "失效定位回落首项");
+    assert!(page.selected().is_some(), "面板照常显示首项，不是空高亮");
+}
+
+#[test]
+fn open_without_a_process_keeps_the_current_highlight() {
+    // `[open]` 没带进程 id（理论上不出现）：只打开面板，不动高亮。
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    assert!(open_task_page_at(&mut state, pane, None));
+    assert_eq!(page(&state, pane).window.active, 0, "高亮保持当前值");
+}
+
+#[test]
+fn open_from_card_is_refused_without_a_session() {
+    // 与普通打开同一门槛：未绑定会话时拒绝。
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(!open_task_page_at(&mut state, pane, Some(11)));
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.task.is_none(),
+        "未绑定会话不打开面板"
+    );
+}
+
+// ===== 输出回投与翻页（决策 8/11）=====
+
+#[test]
+fn task_output_is_stored_and_pinned_to_the_tail() {
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    let output: Vec<String> = (0..50).map(|index| format!("line {index}")).collect();
+    assert!(on_task_output(&mut state, pane, output.clone()));
+    let page = page(&state, pane);
+    assert_eq!(page.output, output, "输出尾部写入页面状态");
+    assert_eq!(
+        page.output_scroll,
+        output.len().saturating_sub(page.output_visible),
+        "新输出贴到尾（最新输出）"
+    );
+    // 内容不变不置脏。
+    assert!(!on_task_output(&mut state, pane, output));
+}
+
+#[test]
+fn page_keys_scroll_the_output_area_not_the_history() {
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    on_task_output(
+        &mut state,
+        pane,
+        (0..60).map(|index| format!("line {index}")).collect(),
+    );
+    if let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    {
+        page.output_visible = 10;
+        page.pin_output_to_tail();
+    }
+    // PageUp 前翻输出区；上方历史（面板接管后不可见）不再被翻动。
+    let history_before = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .history_scroll;
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::PageUp);
+    let page = page(&state, pane);
+    assert!(
+        page.output_scroll < 50,
+        "PageUp 上翻输出区：{}",
+        page.output_scroll
+    );
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .history_scroll,
+        history_before,
+        "面板接管历史区后不再翻动上方历史"
+    );
+}

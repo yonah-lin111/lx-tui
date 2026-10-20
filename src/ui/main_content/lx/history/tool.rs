@@ -93,6 +93,9 @@ const MIN_REASON_COLS: usize = 8;
 const TEXT_SAMPLE_CHARS: usize = 512;
 
 /// 绘制工具步骤并推进内容行号；推进的行数与 [`rows`] 严格相等。
+///
+/// `animating` 是"呼吸相位是否还在推进"（调用方传 `lx.chat.status.streaming`）：
+/// 动画停止时方块恒实心，避免定格成 `□`（见 [`crate::ui::main_content::lx::history::StepMark::glyph`]）。
 pub(super) fn draw(
     grid: &mut Grid,
     rect: Rect,
@@ -102,14 +105,55 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: bool,
 ) {
+    draw_animated(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        call,
+        loading_frame,
+        expanded,
+        true,
+    );
+}
+
+/// 同上，但显式给出动画推进状态（渲染层按 `lx.chat.status.streaming` 传入）。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_animated(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    call: &ToolCallView,
+    loading_frame: usize,
+    expanded: bool,
+    animating: bool,
+) {
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
         | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command::draw(grid, rect, scroll, row_index, call, loading_frame, expanded);
+            command::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                loading_frame,
+                expanded,
+                animating,
+            );
             return;
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => {
-            plan::draw(grid, rect, scroll, row_index, call, loading_frame);
+            plan::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                loading_frame,
+                animating,
+            );
             return;
         }
         None => {}
@@ -119,7 +163,7 @@ pub(super) fn draw(
     }
     // 文件工具：第 1 行方块 + 动词，第 2 行 `  └─ 详情`。
     if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let segments = header(call, rect.width, loading_frame);
+        let segments = header(call, rect.width, loading_frame, animating);
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
@@ -135,12 +179,13 @@ pub(super) fn title_rows() -> usize {
     HEADER_ROWS
 }
 
-/// 末尾展开/收起行的卡片内行偏移（0 = 标题行）；没有这一行时返回 None。
+/// `[open]` 行的卡片内行偏移（0 = 标题行）；没有这一行时返回 None。
 ///
-/// 进程/交互卡片把它画在树体最后一行（`… +N more lines` / `[collapse]`），
-/// 并由 `history::layout` 收成可点击的命中矩形。计划卡片没有这一行。
-pub(super) fn toggle_offset(call: &ToolCallView, expanded: bool) -> Option<usize> {
-    command::toggle_offset(call, expanded)
+/// 进程卡片（`exec_command` / `write_stdin`）把 `[open]` 画在树体最后一行，
+/// 由 `history::layout` 收成**唯一**的可点击命中矩形（点它打开后台任务面板）。
+/// 卡片不再有"展开/收起"语义，因此没有第二个命中区。
+pub(super) fn open_offset(call: &ToolCallView) -> Option<usize> {
+    command::open_offset(call)
 }
 
 /// 行内一段着色文本。
@@ -198,7 +243,7 @@ impl Kind {
 /// 颜色区分完成 / 失败 / 中断 / 取消）。
 ///
 /// 行首标记是**最窄档唯一保留的状态信号**，因此每个状态都要能一眼区分。
-fn lead(call: &ToolCallView, loading_frame: usize) -> Segment {
+fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
     let mark = match call.status {
         ToolStatus::Failed => StepMark::Failed,
         ToolStatus::Interrupted => StepMark::Interrupted,
@@ -206,7 +251,10 @@ fn lead(call: &ToolCallView, loading_frame: usize) -> Segment {
         ToolStatus::Completed => StepMark::Done,
         ToolStatus::InputStreaming | ToolStatus::Pending | ToolStatus::Running => StepMark::Running,
     };
-    Segment::new(mark.segment(loading_frame), mark.style(StepKind::Tool))
+    Segment::new(
+        mark.segment(loading_frame, animating),
+        mark.style(StepKind::Tool),
+    )
 }
 
 /// 固定动词：品牌天蓝加粗（饱和、与正文默认前景和边框 Cyan/dim 都区分得开）。
@@ -225,7 +273,7 @@ fn verb(call: &ToolCallView) -> Segment {
 /// 组装第 1 行（`■ 动词`）：无状态文字、无参数、无计数。
 ///
 /// 失败时整行红（方块 + 动词），中断整行黄——对应「左侧卡片和工具 title 变红」。
-fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment> {
+fn header(call: &ToolCallView, width: u16, loading_frame: usize, animating: bool) -> Vec<Segment> {
     let limit = usize::from(width);
     let tint = match call.status {
         ToolStatus::Failed => Some(style::agent_fail()),
@@ -236,7 +284,7 @@ fn header(call: &ToolCallView, width: u16, loading_frame: usize) -> Vec<Segment>
         Some(tint) => Segment::new(segment.text, tint),
         None => segment,
     };
-    let lead = paint(lead(call, loading_frame));
+    let lead = paint(lead(call, loading_frame, animating));
     let verb = paint(verb(call));
     // 极窄时只留方块（写 buffer 时仍按列裁剪，绝不越界）。
     if segments_cols(std::slice::from_ref(&lead)) > limit {
@@ -284,11 +332,12 @@ pub(super) fn header_with_verb(
     call: &ToolCallView,
     width: u16,
     loading_frame: usize,
+    animating: bool,
     verb: &str,
     status: Option<String>,
 ) -> Vec<Segment> {
     let mark = mark_of(call.status, loading_frame);
-    header_with_mark(call, width, loading_frame, verb, status, mark)
+    header_with_mark(call, width, loading_frame, animating, verb, status, mark)
 }
 
 /// 同上，但方块状态由调用方指定。
@@ -299,6 +348,7 @@ pub(super) fn header_with_mark(
     call: &ToolCallView,
     width: u16,
     loading_frame: usize,
+    animating: bool,
     verb: &str,
     status: Option<String>,
     mark: StepMark,
@@ -314,7 +364,7 @@ pub(super) fn header_with_mark(
         None => segment,
     };
     let lead = paint(Segment::new(
-        mark.segment(loading_frame),
+        mark.segment(loading_frame, animating),
         mark.style(StepKind::Tool),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {

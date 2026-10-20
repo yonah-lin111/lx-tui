@@ -455,20 +455,33 @@ pub fn restore_plan(state: &mut AppState, pane: PaneId, messages: &[ChatMessageV
     true
 }
 
-/// 键盘 `^o`：切换当前选中工具详情；未选中时选最近一张可展开卡片。
-pub fn toggle_selected_tool_detail(state: &mut AppState, pane: PaneId) -> bool {
+/// 键盘 `^o`：打开后台任务面板，并把高亮定位到当前（或最近一张）进程卡片。
+///
+/// 卡片收敛成三行后没有"展开详情"了，`^o` 因此改走和 `[open]` 同一条路径
+/// （决策 7：卡片唯一的动作就是打开后台任务面板）。没有可定位的进程卡片时
+/// 退化为普通打开（高亮保持当前值）。
+pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
     let selected = target.lx.chat.selected_tool.clone();
     let target_key = selected.or_else(|| latest_expandable(&target.lx.chat));
-    let Some((message_id, call_id)) = target_key else {
-        return false;
-    };
-    if let Some(target) = state.pane_mut_anywhere(pane) {
-        target.lx.chat.selected_tool = Some((message_id.clone(), call_id.clone()));
+    let session_id = target_key.clone().and_then(|(message_id, call_id)| {
+        target
+            .lx
+            .chat
+            .messages
+            .iter()
+            .find(|message| message.id == message_id)
+            .and_then(|message| message.tool(&call_id))
+            .and_then(|call| call.process_session_id())
+    });
+    if let Some((message_id, call_id)) = target_key
+        && let Some(target) = state.pane_mut_anywhere(pane)
+    {
+        target.lx.chat.selected_tool = Some((message_id, call_id));
     }
-    toggle_tool_detail(state, pane, &message_id, &call_id)
+    super::open_task_page_at(state, pane, session_id)
 }
 
 /// Alt+↑/↓：按时间线选择上一/下一张可展开卡片（保留草稿与光标）。

@@ -71,6 +71,11 @@ const STICKY_SAMPLE_CHARS: usize = 512;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepMark {
     Running,
+    /// 后台进程仍存活（`exec_command` / `write_stdin` 卡片专用）：橙色。
+    ///
+    /// 与 [`Self::Running`] 的区别只在**颜色**（橙 = 任务还在后台烧）；字形规则完全
+    /// 相同——两者都靠"有动画时才闪"，见 [`Self::glyph`]。
+    Alive,
     Done,
     Failed,
     Interrupted,
@@ -78,10 +83,18 @@ pub(super) enum StepMark {
 }
 
 impl StepMark {
-    /// 方块字形：运行中按帧呼吸；取消恒空心，其余终态恒实心。
-    pub(super) fn glyph(self, loading_frame: usize) -> char {
+    /// 方块字形：**有动画时**运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    ///
+    /// `animating` 是"这一帧的相位是否还在推进"（渲染层传 `lx.chat.status.streaming`）。
+    /// **动画一停就必须画实心**：相位冻结在空心那一相会让一个活着的后台任务永久显示
+    /// 成 `□`，看起来像失败/取消（用户带截图反馈的真实 bug）。把兜底写在这里而不是
+    /// 让状态层在收尾时手动归零，是因为导致动画停下的路径很多（流结束、面板遮挡、
+    /// 事件循环短暂卡住），漏掉任何一处都会复现。
+    pub(super) fn glyph(self, loading_frame: usize, animating: bool) -> char {
         let filled = match self {
-            Self::Running => (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2),
+            Self::Running | Self::Alive => {
+                !animating || (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2)
+            }
             Self::Done | Self::Failed | Self::Interrupted => true,
             Self::Cancelled => false,
         };
@@ -99,14 +112,15 @@ impl StepMark {
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
             Self::Running => kind.style_running(),
+            Self::Alive => style::chat_step_mark_alive(),
             Self::Done => kind.style_done(),
         }
     }
 
     /// 标记段（字形 + 空格）；工具行与 thinking 头部共用同一份拼法。
     /// 颜色由调用方用 [`Self::style`] 单独上，所以这里不需要 [`StepKind`]。
-    pub(super) fn segment(self, loading_frame: usize) -> String {
-        format!("{} ", self.glyph(loading_frame))
+    pub(super) fn segment(self, loading_frame: usize, animating: bool) -> String {
+        format!("{} ", self.glyph(loading_frame, animating))
     }
 }
 
@@ -189,10 +203,9 @@ pub struct HistoryLayout {
     pub thinking: Vec<(usize, usize, Rect)>,
     /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
     pub code_copy: Vec<CodeCopyButton>,
-    /// 可展开工具卡片的命中矩形：消息 id、call id、可点区域。
+    /// 进程卡片 `[open]` 行的命中矩形：消息 id、call id、进程会话 id、可点区域。
     ///
-    /// 只有进程/计划卡片（有类型化详情）进入这里；一张卡片可能有两个矩形
-    /// （标题行 + 树体末尾的展开/收起行），点输出正文不触发折叠。
+    /// 每张进程卡片**只有一个**矩形（树体末行）；点标题或命令行都不触发任何动作。
     pub tools: Vec<ToolHit>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
@@ -202,14 +215,16 @@ pub struct HistoryLayout {
 
 pub use code_copy::CodeCopyButton;
 
-/// 可展开工具卡片的命中区。
+/// 进程卡片 `[open]` 行的命中区。
 ///
-/// 一张卡片可能有**两个**命中矩形：标题行（整行可点）与树体末尾的展开/收起行
-/// （`… +21 more lines` / `[collapse]`）。两者都切换同一个 `call_id`。
+/// 只有进程卡片有命中区，且只有**一行**（树体末行的 `[open]`）：点它打开后台任务
+/// 面板并把高亮定位到 `session_id` 对应的任务。标题行与命令行是纯展示。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolHit {
     pub message_id: String,
     pub call_id: String,
+    /// 该卡片关联的进程会话 ID（`[open]` 用它定位面板高亮）；未知时为 None。
+    pub session_id: Option<u64>,
     pub rect: Rect,
 }
 
@@ -311,30 +326,19 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             }
             has_previous = true;
             if let AssistantStepView::Tool { call, .. } = step
-                && call.detail.is_some()
+                && let Some(offset) = tool::open_offset(call)
             {
-                // 标题行命中区：带类型化详情（进程/计划）的卡片可点标题展开/收起。
-                let header_y = area
+                // 进程卡片只有 `[open]` 一行可点（打开后台任务面板）：标题与命令是
+                // 纯展示，点它们什么都不发生——卡片已经没有可展开的内容。
+                let open_y = area
                     .y
-                    .saturating_add(u16::try_from(rows).unwrap_or(u16::MAX));
+                    .saturating_add(u16::try_from(rows + offset).unwrap_or(u16::MAX));
                 tools.push(ToolHit {
                     message_id: message.id.clone(),
                     call_id: call.call_id.clone(),
-                    rect: Rect::new(area.x, header_y, width, 1),
+                    session_id: call.process_session_id(),
+                    rect: Rect::new(area.x, open_y, width, 1),
                 });
-                // 树体末尾的展开/收起行（`… +N more lines` / `[collapse]`）同样可点：
-                // 用户要求「more lines 移到底部，点击展开，展开后点尾部折叠文字收起」。
-                let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
-                if let Some(offset) = tool::toggle_offset(call, expanded) {
-                    let toggle_y = area
-                        .y
-                        .saturating_add(u16::try_from(rows + 1 + offset).unwrap_or(u16::MAX));
-                    tools.push(ToolHit {
-                        message_id: message.id.clone(),
-                        call_id: call.call_id.clone(),
-                        rect: Rect::new(area.x, toggle_y, width, 1),
-                    });
-                }
             }
             if is_reasoning {
                 let header_y = area
@@ -656,7 +660,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
             has_previous = true;
             let Some((part, expanded)) = part_kind else {
                 if let AssistantStepView::Tool { call, .. } = step {
-                    tool::draw(
+                    tool::draw_animated(
                         grid,
                         content,
                         scroll,
@@ -664,6 +668,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         call,
                         lx.chat.loading_frame,
                         lx.chat.detail_is_expanded(&message.id, &call.call_id),
+                        lx.chat.status.streaming,
                     );
                 }
                 continue;
@@ -711,6 +716,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                                 mark,
                                 kind: StepKind::Body,
                                 loading_frame: lx.chat.loading_frame,
+                                animating: lx.chat.status.streaming,
                             },
                         );
                     }
@@ -731,7 +737,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         grid.put_char(
                             content.x,
                             y,
-                            mark.glyph(lx.chat.loading_frame),
+                            mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
                             mark.style(StepKind::Thinking),
                         );
                         let x = content.x.saturating_add(STEP_GUTTER);

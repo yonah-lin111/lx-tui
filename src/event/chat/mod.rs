@@ -424,13 +424,30 @@ fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: Pan
     else {
         return update::on_process_listed(state, pane, Vec::new());
     };
-    let entries = streams
+    let snapshots: Vec<crate::chat::process::ProcessSnapshot> = streams
         .runtimes
         .get(&session_id)
         .map(|runtime| runtime.manager().snapshots())
         .unwrap_or_default()
         .into_iter()
         .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
+        .collect();
+    // 高亮任务的输出尾部：与列表同一次回投，保证"上面选谁、下面看谁"永远同步。
+    // `app/` 不持有进程句柄，所以输出也必须由这里切好行交过去。
+    let active = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.task.as_ref())
+        .and_then(|page| page.selected().map(|process| process.session_id));
+    let output = active
+        .and_then(|session| {
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot.session_id == session)
+        })
+        .map(|snapshot| process_output_lines(&snapshot.tail))
+        .unwrap_or_default();
+    let entries = snapshots
+        .into_iter()
         .map(|snapshot| crate::app::state::ProcessEntry {
             session_id: snapshot.session_id,
             command: snapshot.command,
@@ -439,7 +456,27 @@ fn list_session_processes(state: &mut AppState, streams: &ChatStreams, pane: Pan
             started_at_ms: snapshot.started_at_ms,
         })
         .collect();
-    update::on_process_listed(state, pane, entries)
+    let listed = update::on_process_listed(state, pane, entries);
+    let shown = update::on_task_output(state, pane, output);
+    listed || shown
+}
+
+/// 进程输出尾部 → 展示行（保留中间空行；末尾换行不额外占行）。
+///
+/// 面板输出区**不做软换行**（终端日志按行读，换行会让行数与滚动错位），
+/// 超宽由渲染层硬切，因此这里只需要按 `\n` 切分。
+fn process_output_lines(tail: &str) -> Vec<String> {
+    if tail.is_empty() {
+        return Vec::new();
+    }
+    let mut lines: Vec<String> = tail
+        .split('\n')
+        .map(|line| line.trim_end_matches('\r').to_string())
+        .collect();
+    if lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
 }
 
 /// 停止后台任务页选中的进程，并给出结果反馈。

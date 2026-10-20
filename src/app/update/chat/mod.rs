@@ -20,14 +20,14 @@ mod view;
 
 pub use process::{
     apply_interaction_exit, apply_process_exit, apply_process_output, apply_process_snapshot,
-    commit_plan, reconcile_process_records, restore_plan, select_adjacent_tool, settle_tool_detail,
-    toggle_selected_tool_detail, toggle_tool_detail,
+    commit_plan, open_task_for_selected_tool, reconcile_process_records, restore_plan,
+    select_adjacent_tool, settle_tool_detail, toggle_tool_detail,
 };
 pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
-    open_history, open_model_picker, open_task_page, persist_default_model, rename_session,
-    resume_session, select_task_tab, stop_selected_process,
+    on_task_output, open_history, open_model_picker, open_task_page, open_task_page_at,
+    persist_default_model, rename_session, resume_session, select_task_tab, stop_selected_process,
 };
 pub(crate) use view::view_message_of;
 
@@ -850,11 +850,21 @@ pub fn resolve_task_history_visible(
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::layout::pane_inner_rect(*rect);
-        let resolved = state
+        // 两个几何量都在**同一次只读借用**里算完：历史区行数与输出区可见行数
+        // 共用 `layout` 的同一份几何，避免"翻到哪停"与"画到哪停"出现第二套口径。
+        let Some((resolved, output_visible)) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
             .filter(|target| target.lx.task.is_some())
-            .and_then(|target| crate::ui::main_content::lx::history_rows(inner, &target.lx));
+            .map(|target| {
+                (
+                    crate::ui::main_content::lx::history_rows(inner, &target.lx),
+                    crate::ui::main_content::lx::task_output_rows(inner, &target.lx).unwrap_or(0),
+                )
+            })
+        else {
+            continue;
+        };
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };
@@ -865,12 +875,19 @@ pub fn resolve_task_history_visible(
             Some((total, visible)) => (Some(total), Some(visible)),
             None => (None, None),
         };
-        if page.history_total == total && page.history_visible == visible {
-            continue;
+        let mut changed_here = false;
+        if page.history_total != total || page.history_visible != visible {
+            page.history_total = total;
+            page.history_visible = visible;
+            changed_here = true;
         }
-        page.history_total = total;
-        page.history_visible = visible;
-        changed = true;
+        if page.output_visible != output_visible {
+            page.output_visible = output_visible;
+            // 可见行数变了要重新贴尾：否则窗口缩小后视口可能停在越界位置。
+            page.pin_output_to_tail();
+            changed_here = true;
+        }
+        changed |= changed_here;
     }
     changed
 }

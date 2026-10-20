@@ -610,6 +610,10 @@ pub const LX_TASK_TAB_AGENTS: &str = "Agents";
 pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
 /// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
 pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
+/// 输出区空态：高亮任务还没有产出（或刚起步）。
+///
+/// 必须显式占位而不是留白：面板下半区突然空着，会让人以为"输出丢了"。
+pub const LX_TASK_OUTPUT_EMPTY: &str = "waiting for output";
 /// 一条键位提示：`[功能 键]`。
 ///
 /// **功能名在前、快捷键在后**（用户要求），方括号包住整条——它既是一个视觉单位，

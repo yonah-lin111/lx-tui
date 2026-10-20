@@ -41,11 +41,13 @@ pub(super) const TOP_BORDER: u16 = 1;
 pub(super) const TAB_ROW: u16 = 1;
 /// 相邻键位提示之间的空档（列）。
 const HINT_GAP: usize = 2;
-/// 列表最多显示的行数。
+/// 列表最多显示的行数（面板接管历史区后仍给列表封顶：输出区才是主要阅读对象）。
 ///
 /// 比 opencode 的 `maxHeight={5}` 再高一档：5 行在 24 行窗格里信息量偏少，
 /// 而面板高度固定，多一点列表区不会让布局跳动。
 pub(super) const LIST_MAX: usize = 6;
+/// 列表区与输出区之间的分隔行。
+pub(super) const DIVIDER: u16 = 1;
 /// 行首高亮标记占位列数（`❯ ` 或两个空格）。
 const MARKER_COLS: u16 = 2;
 /// 行内各段之间的最小空档（列）。
@@ -55,19 +57,35 @@ const COMMAND_MIN: u16 = 10;
 /// 显示 cwd 所需的最小文字区宽度：再窄就整段丢弃 cwd。
 const CWD_MIN_ROOM: u16 = 30;
 
-/// 面板高度（顶边框 + tab 行 + 固定 [`LIST_MAX`] 行）；由 `lx.rs::layout` 定输入框矩形。
+/// 面板固定开销：顶边框 + tab 行 + 分隔行。
+const CHROME: u16 = TOP_BORDER + TAB_ROW + DIVIDER;
+
+/// 列表区高度：面板不够高时先压缩输出区，列表最多 [`LIST_MAX`] 行。
 ///
-/// **高度固定**，不随条目数变化：列表 0 条和 6 条时面板一样高。理由有二：
-///
-/// 1. 打开面板时上方消息列表不会因为「当前有几个后台进程」而被挤动一下再弹回来；
-/// 2. 空态能占满整个列表区，`no running processes` 不会孤零零吊在面板顶上一行。
-///
-/// 条目超过 [`LIST_MAX`] 时列表内部滚动（`window_start` 跟高亮走）。
-pub(super) fn height(_page: &TaskPage) -> u16 {
-    u16::try_from(LIST_MAX)
-        .unwrap_or(LIST_MAX as u16)
-        .saturating_add(TAB_ROW)
+/// 面板接管整块**历史区**（高度随窗格变化），所以这里不再返回"面板总高度"，
+/// 而是给出列表 / 输出两段的分界：`lx.rs::layout` 只负责把矩形交出来。
+pub(super) fn list_rows(rect: Rect, page: &TaskPage) -> u16 {
+    let available = rect.height.saturating_sub(CHROME);
+    if available == 0 {
+        return 0;
+    }
+    let wanted = u16::try_from(page.len().max(1))
+        .unwrap_or(u16::MAX)
+        .min(u16::try_from(LIST_MAX).unwrap_or(u16::MAX));
+    // 输出区至少留 3 行（两条日志 + 余量）；面板实在不够高时列表优先。
+    let reserve = 3u16.min(available);
+    wanted.min(available.saturating_sub(reserve).max(1))
+}
+
+/// 输出区矩形：分隔行之下到面板底部。
+pub(super) fn output_rect(rect: Rect, list: u16) -> Rect {
+    let top = rect
+        .y
         .saturating_add(TOP_BORDER)
+        .saturating_add(TAB_ROW)
+        .saturating_add(list)
+        .saturating_add(DIVIDER);
+    Rect::new(rect.x, top, rect.width, rect.bottom().saturating_sub(top))
 }
 
 /// 在输入框矩形里画面板：顶边框 → tab 行（右端 `esc`）→ 当前 tab 的列表。
@@ -127,20 +145,59 @@ pub(super) fn draw(grid: &mut super::grid::Grid, rect: Rect, page: &TaskPage) {
         );
     }
 
-    let chrome = TOP_BORDER.saturating_add(TAB_ROW);
+    let rows = list_rows(rect, page);
     let list = Rect::new(
         rect.x,
-        rect.y.saturating_add(chrome),
+        rect.y.saturating_add(TOP_BORDER + TAB_ROW),
         rect.width,
-        rect.height.saturating_sub(chrome),
+        rows,
     );
-    if list.height == 0 {
+    if list.height > 0 {
+        match page.tab {
+            TaskTab::Processes => draw_processes(grid, list, page),
+            // 子代理 tab：本阶段是预留位，只给占位提示。
+            TaskTab::Agents => draw_placeholder(grid, list, text::LX_TASK_AGENTS_EMPTY),
+        }
+    }
+    // 分隔行：把任务列表与输出区分开（`├─┤` 风格的一条细线）。
+    let divider_y = list.y.saturating_add(rows);
+    if rows > 0 && divider_y < rect.bottom() {
+        grid.put_clipped(
+            rect.x,
+            divider_y,
+            &"─".repeat(usize::from(rect.width)),
+            style::border_title(),
+            rect.width,
+        );
+    }
+    // 输出区：高亮任务的输出尾部（子代理 tab 不显示进程输出）。
+    let output = output_rect(rect, rows);
+    if page.tab == TaskTab::Processes && output.height > 0 {
+        draw_output(grid, output, page);
+    }
+}
+
+/// 输出区：高亮任务的输出尾部，按 `output_scroll` 定位；空则显式占位。
+///
+/// 输出**单行不换行**（终端日志按行读，软换行会让行数与滚动错位），超宽硬切。
+fn draw_output(grid: &mut super::grid::Grid, area: Rect, page: &TaskPage) {
+    if page.output.is_empty() {
+        draw_placeholder(grid, area, text::LX_TASK_OUTPUT_EMPTY);
         return;
     }
-    match page.tab {
-        TaskTab::Processes => draw_processes(grid, list, page),
-        // 子代理 tab：本阶段是预留位，只给占位提示。
-        TaskTab::Agents => draw_placeholder(grid, list, text::LX_TASK_AGENTS_EMPTY),
+    let visible = usize::from(area.height);
+    let start = page.output_scroll.min(page.output.len());
+    for (offset, line) in page.output.iter().skip(start).take(visible).enumerate() {
+        let y = area.y + u16::try_from(offset).unwrap_or(0);
+        let text_line = clip(line, area.width);
+        put_grid(
+            grid,
+            area.x,
+            y,
+            &text_line,
+            style::agent_step_detail(),
+            area.right(),
+        );
     }
 }
 

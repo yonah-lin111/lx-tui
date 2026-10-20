@@ -341,6 +341,8 @@ struct Layout {
     input_visible: usize,
     /// 输入框上方聊天栏（loading 转轮 + 右端回到底部按钮）；无则为 None。
     chat_bar: Option<Rect>,
+    /// 后台任务面板矩形：**接管历史区**（输入框仍在原位）；未打开时为 None。
+    task: Option<Rect>,
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
@@ -357,6 +359,7 @@ impl Layout {
             input_scroll: 0,
             input_visible: 0,
             chat_bar: None,
+            task: None,
             panel: None,
             entries: Vec::new(),
             horizontal: true,
@@ -383,20 +386,17 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
     // 输入框下沿贴窗格底部；状态（模型 · 供应商 · 上下文占用）绘制在其底边框上。
     //
-    // 后台任务面板打开时，**同一个矩形**改由面板占用（高度按列表条目数算，封顶
-    // `task::LIST_MAX`）。历史区、聊天栏、滚动条因此照常复用，不需要第二份几何。
-    let (box_h, visible, scroll) = match lx.task.as_ref() {
-        Some(page) => (task::height(page), 0, 0),
-        None => {
-            let rows = lx.visual_rows();
-            let total = rows.len().max(1);
-            let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
-            let cap = usize::from(max_box.saturating_sub(2)).max(1);
-            let visible = total.min(cap);
-            let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
-            let max_scroll = total.saturating_sub(visible);
-            (box_h, visible, lx.scroll().min(max_scroll))
-        }
+    // 后台任务面板打开时输入框**仍在原位**（不参与面板布局）：面板接管的是上方
+    // 历史区，这样退出面板后消息列表与草稿都还是离开时的样子。
+    let (box_h, visible, scroll) = {
+        let rows = lx.visual_rows();
+        let total = rows.len().max(1);
+        let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
+        let cap = usize::from(max_box.saturating_sub(2)).max(1);
+        let visible = total.min(cap);
+        let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
+        let max_scroll = total.saturating_sub(visible);
+        (box_h, visible, lx.scroll().min(max_scroll))
     };
     let input = Rect::new(
         content_x,
@@ -413,6 +413,16 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 输入框上方一行的聊天栏：流中显示 loading 转轮，或上滚未跟随底部时显示回到底部按钮。
     if chat_bar::visible(lx) {
         out.chat_bar = chat_bar::rect(area, input);
+    }
+
+    // 后台任务面板：接管**历史区**矩形（输入框上沿之上的整块），与 `history_rect`
+    // 同一份几何——面板、消息列表、滚动条因此共用一套口径，不产生第二套坐标。
+    if lx.task.is_some() {
+        let bottom = out.chat_bar.map_or(input.y, |bar| bar.y);
+        let height = bottom.saturating_sub(area.y);
+        if height > 0 {
+            out.task = Some(Rect::new(input.x, area.y, input.width, height));
+        }
     }
 
     // md 格式面板：贴输入框上方（聊天栏之上）；放不下则省略。
@@ -618,37 +628,45 @@ fn build_chat(
         history_bottom.saturating_sub(area.y),
     );
     // 历史视图：滚动偏移 / body（置顶行让位）/ 置顶行结论，统一由纯函数给出。
-    let history_view = history::view(history_rect, lx);
-    history::render(&mut grid, history_view.body, lx, history_view.scroll);
-    // 历史滚动条贴右缘一列（内容溢出时；轨道只覆盖 body）。
-    if let Some(bar) = history::scrollbar(
-        history_view.body,
-        history_view.total_rows,
-        usize::from(history_view.body.height),
-        history_view.scroll,
-    ) {
-        render_history_scrollbar(&mut grid, &bar);
-    }
-    let sticky = history::sticky_rect(&history_view);
+    //
+    // 后台任务面板打开时**不画历史**（面板占用同一块矩形），但历史几何仍照常
+    // 计算：滚动偏移与 `follow_bottom` 全程不动，关闭面板后消息列表原样回来。
+    let sticky = if lay.task.is_some() {
+        None
+    } else {
+        let history_view = history::view(history_rect, lx);
+        history::render(&mut grid, history_view.body, lx, history_view.scroll);
+        // 历史滚动条贴右缘一列（内容溢出时；轨道只覆盖 body）。
+        if let Some(bar) = history::scrollbar(
+            history_view.body,
+            history_view.total_rows,
+            usize::from(history_view.body.height),
+            history_view.scroll,
+        ) {
+            render_history_scrollbar(&mut grid, &bar);
+        }
+        history::sticky_rect(&history_view)
+    };
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
-    // 输入框容器：普通状态下画输入框；后台任务面板打开时**同一个矩形**改画面板。
-    // 面板没有文本光标，所以 `cursor` 保持 None（不画硬件光标）。
-    match (lay.input, lx.task.as_ref()) {
-        (Some(rect), Some(page)) => task::draw(&mut grid, rect, page),
-        (Some(input), None) if lay.input_visible > 0 => {
-            cursor = input::draw(
-                &mut grid,
-                input,
-                lx,
-                focused,
-                lay.input_scroll,
-                lay.input_visible,
-            )
-            .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
-        }
-        _ => {}
+    // 后台任务面板：占用**历史区**矩形（输入框仍在原位）。
+    if let (Some(rect), Some(page)) = (lay.task, lx.task.as_ref()) {
+        task::draw(&mut grid, rect, page);
+    }
+    // 输入框容器：面板打开时输入框照常绘制（草稿仍可编辑，退出面板即可发送）。
+    if let Some(input) = lay.input
+        && lay.input_visible > 0
+    {
+        cursor = input::draw(
+            &mut grid,
+            input,
+            lx,
+            focused,
+            lay.input_scroll,
+            lay.input_visible,
+        )
+        .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     }
     // 面板：块命令 / 粘贴 / 提及 / `/` 命令。
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
@@ -670,8 +688,11 @@ pub enum LxChatHit {
     JumpBottom,
     /// 点击代码块头部的复制按钮；`text` 为该块正文。
     CodeCopy(String),
-    /// 点击可展开工具卡片的标题行（消息 id, call id）：切换该卡片详情。
-    ToolDetail(String, String),
+    /// 点击进程卡片的 `[open]` 行：打开后台任务面板并把高亮定位到该进程。
+    ///
+    /// `None` 表示卡片没有可定位的进程（理论上不会出现：文件工具与计划卡片不登记
+    /// 命中区），此时只打开面板、高亮落在列表首项。
+    ToolOpen(Option<u64>),
 }
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
@@ -742,6 +763,18 @@ pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     Some((view.total_rows, usize::from(view.body.height)))
 }
 
+/// 后台任务面板输出区的可见行数（键位翻页钳制用）；面板未打开返回 None。
+///
+/// 与渲染共用 [`layout`] → `task::list_rows` → `task::output_rect` 同一份几何，
+/// 因此"翻到哪停"和"画到哪停"永远是同一个数。
+pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
+    let lay = layout(area, lx);
+    let rect = lay.task?;
+    let page = lx.task.as_ref()?;
+    let rows = task::list_rows(rect, page);
+    Some(usize::from(task::output_rect(rect, rows).height))
+}
+
 /// 置顶用户消息行的"跳转目标"：该消息起始行（钳到 body 的滚动上限）；无置顶行返回 None。
 pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
     let view = history_view(area, lx)?;
@@ -798,9 +831,9 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
             return Some(LxChatHit::CodeCopy(button.body));
         }
     }
-    // 可展开工具卡片（点击标题行或树体末尾的展开/收起行切换；点正文不折叠）。
+    // 进程卡片的 `[open]` 行：点击打开后台任务面板并定位到该进程。
     if let Some(hit) = tool_hit_at(&view, lx, column, row) {
-        return Some(LxChatHit::ToolDetail(hit.message_id, hit.call_id));
+        return Some(LxChatHit::ToolOpen(hit.session_id));
     }
     None
 }

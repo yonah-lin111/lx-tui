@@ -120,6 +120,62 @@ fn model_label_style_runs_the_entry_gradient_and_is_bold() {
     assert_eq!(model_label_style(0, 1).fg, Some(Color::Indexed(218)));
 }
 
+/// 后台进程"存活"橙色必须与既有色域全部拉得开，且**不复用**其他语义色。
+///
+/// 橙色是"任务还在后台跑"的专属信号：进程停止即回翡翠绿，所以它必须和绿（结构色）、
+/// 金黄（可变参数）、品红（思考）、天蓝（连接符）都明显不同，否则用户分不出
+/// "还在跑"与"已经停了"。同时不得压暗（dim 只留给只读元信息）。
+#[test]
+fn alive_process_orange_is_distinct_from_every_other_step_color() {
+    let orange = chat_step_mark_alive().fg.expect("存活色必须有前景");
+    let Color::Indexed(index) = orange else {
+        panic!("存活色必须取 256 色槽位，实际 {orange:?}");
+    };
+    assert_eq!(
+        index, 202,
+        "存活橙固定为 Indexed 202（选色依据见 style.rs）"
+    );
+
+    // 动词/状态文字与方块同色系（同一档橙），只靠字重区分。
+    assert_eq!(
+        chat_step_label_alive().fg,
+        Some(orange),
+        "状态文字与方块同色"
+    );
+    assert!(
+        chat_step_mark_alive().add_modifier.contains(Modifier::BOLD),
+        "存活方块加粗（与深绿完成态靠字重区分）"
+    );
+    assert!(
+        !chat_step_label_alive()
+            .add_modifier
+            .contains(Modifier::BOLD),
+        "状态文字不加粗，让方块衬出来"
+    );
+    for (label, style) in [
+        ("方块", chat_step_mark_alive()),
+        ("文案", chat_step_label_alive()),
+    ] {
+        assert!(
+            !style.add_modifier.contains(Modifier::DIM),
+            "{label} 不得压暗"
+        );
+    }
+
+    // 不能与既有语义色撞车（撞了就分不出"活着"与"做完了/参数/思考"）。
+    for (label, other) in [
+        ("工具绿", chat_step_mark_done().fg),
+        ("工具动词绿", chat_tool_verb().fg),
+        ("参数金黄", chat_tool_param().fg),
+        ("思考品红", Some(Color::Indexed(218))),
+        ("失败红", agent_fail().fg),
+        ("中断黄", agent_warn().fg),
+        ("正文默认", None),
+    ] {
+        assert_ne!(Some(orange), other, "存活橙不得与{label}同色");
+    }
+}
+
 /// 聊天步骤的配色必须：① 结构色用翡翠绿 `Indexed 42`、可变参数用金黄 220；
 /// ② 不压暗（dim 只用于只读元信息）；③ 与正文默认前景（Reset）、边框青（Cyan）
 /// 都不同色；④ 与 markdown 的 GitHub Dark token 色域不相交。

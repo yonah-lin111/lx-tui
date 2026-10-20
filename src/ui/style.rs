@@ -748,6 +748,13 @@ const CHAT_STEP_GREEN: u8 = 42;
 const CHAT_STEP_MAGENTA: u8 = 218;
 /// 可变参数色：金黄（与 `[UI]` 查看器的 `agent_param` 同色；工具行不加下划线）。
 const CHAT_GOLD: u8 = 220;
+/// 后台进程**存活**色：橙 `Indexed 202`（`#ff5f00`）。
+///
+/// 只服务进程类卡片（`exec_command` / `write_stdin`）：橙色表达"任务还在跑"，
+/// 进程停止即回翡翠绿。选色依据（CIEDE2000，见 `ui::style::tests`）：
+/// 与工具绿 66.7、金黄参数 39.6、品红思考 37.4、天蓝 117 55.2 均 ≥30；
+/// 与 markdown 引用橙 `Indexed 208` 同色相但明度更沉，两者不在同一区域出现。
+const CHAT_STEP_ORANGE: u8 = 202;
 
 // ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
 //
@@ -809,6 +816,22 @@ pub fn chat_step_mark_running() -> Style {
 /// 工具行的方块：已完成——同款翡翠绿、**不加粗**（静止 + 细一档，与运行中区分）。
 pub fn chat_step_mark_done() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_GREEN))
+}
+
+/// 后台进程卡片的方块：**进程仍存活**——橙色加粗。
+///
+/// 只用于进程类卡片（`exec_command` / `write_stdin`），属"后台任务还在烧"的专属
+/// 信号；进程停止后回到 [`chat_step_mark_done`] 的翡翠绿（决策：橙 = 活着，绿 = 停了）。
+/// 与绿（色差 66.7）、金黄参数（39.6）、品红思考（37.4）、天蓝（55.2）都拉得开。
+pub fn chat_step_mark_alive() -> Style {
+    Style::default()
+        .fg(Color::Indexed(CHAT_STEP_ORANGE))
+        .add_modifier(Modifier::BOLD)
+}
+
+/// 后台进程卡片的动词与状态文字：橙色（同色系，不加粗）——方块靠字重衬出来。
+pub fn chat_step_label_alive() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_ORANGE))
 }
 
 /// 工具行的头部文案：运行中——翡翠绿（与方块同色系，不加粗）。

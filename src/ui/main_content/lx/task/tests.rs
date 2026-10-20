@@ -1,13 +1,15 @@
-//! 后台任务面板：只替换输入框容器，消息列表照旧，键位内嵌底边框。
+//! 后台任务面板：接管历史区、输入框原位，键位内嵌底边框。
 //!
 //! 断言口径来自用户要求：
-//! 1. 不覆盖整个 pane——上方消息列表与普通聊天页**逐行一致**；
-//! 2. 面板占输入框那一块，高度随条目数（封顶 `LIST_MAX`）；
+//! 1. 面板占用**原消息列表矩形**（`[open]` 打开后在这里看任务与输出）；
+//! 2. 输入框仍在原位，退出面板后消息列表原样恢复；
 //! 3. 底边框只显示 hints，**不出现**模型名 / 用量 / 进程计数；
 //! 4. `↑` 在顶部或空列表时回到输入框。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+
+mod history_takeover;
 
 use super::*;
 use crate::app::state::{
@@ -86,41 +88,49 @@ fn lx_with_messages() -> Lx {
 }
 
 #[test]
-fn panel_replaces_only_the_input_box() {
-    // 用户要求：不要覆盖整个 pane。面板打开与关闭时，**上方消息行必须完全一致**。
+fn panel_takes_over_the_history_area_and_keeps_the_input_box() {
+    // 用户要求：面板占用原消息列表位置；关闭后消息列表原样恢复（见
+    // `history_takeover::closing_the_panel_restores_the_message_list_verbatim`）。
     let mut lx = lx_with_messages();
     let before = render_lines(&lx, 70, 16);
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let after = render_lines(&lx, 70, 16);
 
-    // 找到面板 tab 行，其上方的**消息行**应逐字相同（输入框那几行本就该被替换）。
     let tab_row = after
         .iter()
         .position(|line| line.contains(TaskTab::Processes.label()))
         .expect("面板 tab 行");
-    assert!(tab_row > 0, "面板上方必须有消息列表：{after:#?}");
-    // 关闭态里消息占 1..tab_row；比对这段（不含标题/分割线）。
-    let before_msg: Vec<&String> = before[..tab_row]
-        .iter()
-        .filter(|line| !line.trim().is_empty() && !line.contains('─'))
-        .collect();
-    let after_msg: Vec<&String> = after[..tab_row]
-        .iter()
-        .filter(|line| !line.trim().is_empty() && !line.contains('─'))
-        .collect();
-    assert!(!before_msg.is_empty(), "对照态应有消息行：{before:#?}");
+    // 面板从内容区顶部开始接管历史区。
     assert_eq!(
-        before_msg, after_msg,
-        "面板打开不得改动消息行：\n关闭 {before:#?}\n打开 {after:#?}"
+        tab_row,
+        usize::from(TOP_BORDER),
+        "面板贴着历史区顶部：{after:#?}"
     );
-    // 消息确实渲染出来了（不是空区）。
+    // 消息正文必须从这块区域消失（被面板接管）。
     let joined = after[..tab_row].join("\n");
-    assert!(joined.contains('你'), "消息列表可见：{joined}");
+    assert!(!joined.contains('你'), "历史区已被面板接管：{joined}");
+    // 输入框仍在原位：lx 输入框是上下 `─` 分割线 + `> ` 前缀（没有圆角），
+    // 取关闭态里输入框内那几行的整体行范围，打开后必须逐字符相同。
+    let input_top = before
+        .iter()
+        .rposition(|line| {
+            line.trim_start()
+                .starts_with(text::LX_INPUT_PROMPT.trim_end())
+        })
+        .expect("关闭态应有输入框");
+    // 输入框三行（上分割线 / `> ` 文本行 / 下分割线）必须逐字符不变；
+    // 其下那一行是窗格底边框，面板打开时按设计换成键位提示，不参与比较。
+    let top = input_top.saturating_sub(1);
+    let end = (input_top + 2).min(before.len());
+    assert_eq!(
+        before[top..end],
+        after[top..end],
+        "输入框三行逐字符不变（面板不挤动输入框）：\n关闭 {before:#?}\n打开 {after:#?}"
+    );
 }
 
 #[test]
-fn panel_sits_where_the_input_box_was() {
-    // 面板占输入框矩形：面板**沉底**、紧贴底边框，且占满固定高度（不贴顶）。
+fn panel_sits_in_the_history_area_not_at_the_bottom() {
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let lines = render_lines(&lx, 70, 16);
@@ -132,16 +142,11 @@ fn panel_sits_where_the_input_box_was() {
         .iter()
         .position(|line| line.contains("npm run dev"))
         .expect("进程行");
-    // `render_lines` 返回 `height + 1` 行：最后一行是窗格底边框（hints）。
-    // 面板高度固定 = TAB_ROW + LIST_MAX，因此 tab 行应正好落在该起点上。
-    assert_eq!(
-        tab_row + usize::from(TAB_ROW + LIST_MAX as u16),
-        lines.len() - 1,
-        "面板占满固定高度并紧贴底边框：{lines:#?}"
+    assert!(
+        tab_row < lines.len() / 2,
+        "面板在历史区而不是贴底：{lines:#?}"
     );
-    // 条目落在面板内部。
     assert!(entry_row > tab_row, "条目在 tab 行之下");
-    assert!(entry_row < lines.len() - 1, "条目在底边框之上");
 }
 
 #[test]
@@ -190,28 +195,38 @@ fn model_name_returns_when_the_panel_closes() {
 }
 
 #[test]
-fn panel_height_is_fixed_regardless_of_entry_count() {
-    // 用户要求：面板高度**固定**。0 条、2 条、9 条都必须一样高，
-    // 否则打开面板时上方消息列表会被挤动一下再弹回来。
-    let expected = TOP_BORDER + TAB_ROW + LIST_MAX as u16;
-    let mut page = page_with(Vec::new(), 0);
-    assert_eq!(height(&page), expected, "空列表也是固定高度");
-
-    for count in [1usize, 2, 5, 9] {
+fn list_rows_caps_at_list_max_regardless_of_entry_count() {
+    // 面板接管历史区后高度随窗格变化，但**列表区**仍封顶 `LIST_MAX`，
+    // 余下空间全给输出区；条目数多少都不改变这个上限。
+    let rect = Rect::new(0, 0, 70, 30);
+    for count in [0usize, 1, 2, 5] {
         let entries: Vec<ProcessEntry> = (1..=count)
             .map(|i| entry(i as u64, &format!("cmd-{i}"), "/w"))
             .collect();
-        page = page_with(entries, 0);
-        assert_eq!(height(&page), expected, "{count} 条时高度不变");
+        let page = page_with(entries, 0);
+        assert_eq!(
+            list_rows(rect, &page),
+            u16::try_from(count.max(1)).unwrap_or(u16::MAX),
+            "{count} 条时列表区随条目数（1 条起）"
+        );
     }
-    // 切 tab 也不改变高度（Agents 恒空）。
-    page.tab = TaskTab::Agents;
-    assert_eq!(height(&page), expected, "Agents tab 高度相同");
+    // 条目多于上限时封顶。
+    let many: Vec<ProcessEntry> = (1..=20)
+        .map(|i| entry(i as u64, &format!("cmd-{i}"), "/w"))
+        .collect();
+    let page = page_with(many, 0);
+    assert_eq!(
+        list_rows(rect, &page),
+        u16::try_from(LIST_MAX).unwrap_or(u16::MAX),
+        "超过上限时封顶 LIST_MAX"
+    );
+    // 面板极矮时列表优先，但仍要留出输出区（至少 1 行）。
+    let tiny = Rect::new(0, 0, 40, TOP_BORDER + TAB_ROW + DIVIDER + 1);
+    assert!(list_rows(tiny, &page) >= 1, "极矮时列表仍占 1 行");
 }
 
 #[test]
-fn empty_state_fills_the_fixed_list_area() {
-    // 固定高度下，空态提示落在列表区首行，面板整体仍占满固定行数。
+fn empty_state_sits_at_the_top_of_the_list_area() {
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(Vec::new(), 0));
     let lines = render_lines(&lx, 70, 20);
@@ -219,11 +234,11 @@ fn empty_state_fills_the_fixed_list_area() {
         .iter()
         .position(|line| line.contains(TaskTab::Processes.label()))
         .expect("tab 行");
-    // 面板共 TAB_ROW + LIST_MAX 行，末行紧贴底边框上一行。
-    assert_eq!(
-        tab_row + usize::from(TAB_ROW + LIST_MAX as u16),
-        lines.len() - 1,
-        "面板占满固定行数：{lines:#?}"
+    assert!(
+        lines
+            .get(tab_row + 1)
+            .is_some_and(|line| line.contains(text::LX_TASK_PROCESSES_EMPTY)),
+        "空态紧跟 tab 行：{lines:#?}"
     );
 }
 
