@@ -47,6 +47,6 @@
 
 ## 4. 验证
 
-- [ ] `cargo fmt`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test`
+- [x] `cargo fmt`
+- [x] `cargo clippy --all-targets -- -D warnings`
+- [x] `cargo test`（2531 lib + 全部集成测试通过）
