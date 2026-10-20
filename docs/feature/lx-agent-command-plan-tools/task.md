@@ -230,14 +230,16 @@
     1. 必须是**独立页面**，且**只在该窗格内全屏**（不能全局覆盖，也不能清理 lx 页）；
     2. 移除 `/stop` 命令，改为输入框底部用量**右侧的计数指标**，点它/按 `↓` 进页面；
     3. 页面里要**预留 subagent 的位置**（后续在此显示 subagent 内容）。
-  - 形态（对齐 opencode 的 composer 多 tab）：顶边框 `Background` + 右侧 tab 指示
-    `Processes · Agents`，主体是当前 tab 的列表，底边框是键位提示。
-  - **不做全局覆盖**：页面挂在 `Lx::task`（`Option<TaskPage>`），绘制时只接管本窗格内容区
-    （`ui/main_content/lx.rs::render` 早返回）。因此 `pane.lx` 的会话、消息、草稿、光标、
-    滚动偏移全部原样保留，`esc` 返回即回到离开时的样子——**不需要保存/恢复任何状态**，
-    也绝不会清理 lx 页。测试 `opening_the_page_keeps_every_other_lx_field` 逐字段锁住。
-  - 键位（对齐 opencode `composer.*`）：`↑/↓` 移动、`^d` 停止高亮进程（`composer.shell.kill`）、
-    `←/→` 换 tab、`esc` 返回。页面整页接管按键，字符不会漏进草稿。
+  - 形态（对齐 opencode 的 composer）：**占输入框那个矩形的组件**，不是独立页面。
+    `lx.task` 有值时 `layout` 把输入框高度换成面板高度，`build_chat` 在同一矩形里画
+    面板而不是输入框；上方消息列表、置顶行、滚动条、聊天栏全部照旧。
+    （详见下方"替换输入框容器的组件"一条与 design §14.2/§14.3。）
+  - **不做全局覆盖**：状态挂在 `Lx::task`（`Option<TaskPage>`），不碰 `app::overlay`。
+    因此 `pane.lx` 的会话、消息、草稿、光标、滚动偏移全部原样保留，`esc` 关闭即回到
+    离开时的样子——**不需要保存/恢复任何状态**，也绝不会清理 lx 页。
+    测试 `opening_the_page_keeps_every_other_lx_field` 逐字段锁住。
+  - 键位（对齐 opencode `composer.*`）：`↑/↓` 移列表高亮、`^d` 停止高亮进程
+    （`composer.shell.kill`）、`←/→` 换 tab、`esc` 关闭。面板内接管按键，字符不会漏进草稿。
   - 入口：**空草稿按 `↓`**（沿用「历史先接管、否则继续」结构，有草稿时 `↓` 仍是光标移动），
     与 opencode `session.child.first = down` 同一机制。
   - 底部指标：输入框底边框右端（用量右侧）显示 `1 process` / `3 processes`，**0 个时整段隐藏**；
@@ -280,19 +282,23 @@
     命令 → stdin → 输出 → 提示全串在同一根树干上，只有一个收口。
   - 回归测试 `tree_never_mixes_branch_symbols` 断言**不出现 `├─`**。
 
-- **后台任务面板改为 opencode 形态（按用户反馈重构）**：
-  - 形态：**对话在上、控制面板在下**。上半区是普通聊天历史（只读快照，键盘/滚轮可滚），
-    输入框被控制面板替换；面板沉底，列表不再贴顶部。
-  - 键位提示移到**窗格最底边框**（`╰─ ↑↓ select  ^d stop  tabs ←→  esc back ─╯`），
-    不占正文行；与 `status.rs` 把状态写在底边框上同一套做法。
-  - 面板首行是 tab（`Processes` / `Agents`）+ 右端 `esc`（对齐 opencode composer）。
-  - 面板高度 = tab 行 + 列表行（空态占一行），不超过内容区 60%，且给历史留至少 3 行。
-  - **方向键让给上方消息列表**（`↑`/`↓` 逐行、`PageUp`/`PageDown` 翻页），
-    列表高亮改用 `Alt+↑/↓`，功能不丢。
-  - 滚动需要「一屏几行」而 `app/` 拿不到窗格几何：由事件循环在绘制前写
-    `TaskPage::history_total` / `history_visible`（与 `LxChat::viewport_top` 同一套做法）。
-  - **停止反馈改为 toast**（锚定该窗格），不再用输入框上方的 hint——面板已把输入框
-    换掉，hint 的锚点会飘在错误的位置。
+- **后台任务面板：替换输入框容器的组件（按用户反馈重构）**：
+  - 形态：**不整页接管**。`lx.task` 有值时，`lx.rs::layout` 把输入框矩形高度换成
+    `1 tab 行 + min(条目数, 5)`，`build_chat` 在**同一个矩形**里画面板而不是输入框。
+  - 上方消息列表**照旧**：历史区、置顶行、滚动条、聊天栏全部走原本路径
+    （整页接管会跳过它们，这正是"覆盖整个 pane"的来源）。
+  - 底边框：面板打开时**跳过 `status::render`**，整行归面板 hints——不显示模型名 /
+    用量 / 进程计数；关闭后自动恢复。
+  - 面板内不画框（窗格边框是唯一一层）；列表封顶 5 行（对齐 opencode `maxHeight={5}`），
+    不额外加 padding/gap 空行。
+  - 键位：`↑`/`↓` 移高亮；**`↑` 已在顶部或列表为空 → 关闭面板回到输入框**；
+    `esc` 无条件关闭；空草稿 `↓` 进入；`PageUp`/`PageDown` 翻消息列表（不写进提示）。
+  - `move_active` 改为**不循环**：这是 `↑` 能"到顶即退出"的前提（循环会让顶部绕回底部，
+    永远退不出去）。
+  - 底边框 hints 只写 `↑↓ select  ^d stop  tabs ←→  esc`：常驻位置只放高频键，
+    宁可少写也不被截半。
+  - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
+    历史区几何回到 `lay.input` 一处真相。
 
 - **非零退出被误判为失败（bug，按用户反馈修复）**：
   - 现象：一张正常的 `■ Run command` 卡片显示成**红色**，标题为 `exit 1`。

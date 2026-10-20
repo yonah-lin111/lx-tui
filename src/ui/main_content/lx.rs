@@ -69,11 +69,6 @@ pub fn render(
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    // 后台任务页整页接管本窗格（不覆盖其他窗格、不改 `lx` 其余状态）。
-    if let Some(page) = lx.task.as_ref() {
-        task::render(area, buf, lx, page, focused);
-        return None;
-    }
     let (grid, cursor, sticky) = build(area, lx, focused);
     for dy in 0..area.height {
         for dx in 0..area.width {
@@ -101,8 +96,12 @@ pub fn render(
     {
         history::render_sticky_prompt(buf, row, message);
     }
-    // 状态（模型 · 供应商 · 上下文占用）覆盖绘制在窗格底边框上。
-    status::render(buf, area, lx);
+    // 窗格底边框：面板打开时整行归面板的键位提示（不显示模型名 / 用量 / 进程计数）；
+    // 否则照旧画状态（模型 · 上下文占用 · 后台任务计数）。
+    match lx.task.as_ref() {
+        Some(page) => task::draw_footer(buf, area, page),
+        None => status::render(buf, area, lx),
+    }
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
@@ -383,20 +382,28 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
 
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
     // 输入框下沿贴窗格底部；状态（模型 · 供应商 · 上下文占用）绘制在其底边框上。
-    let rows = lx.visual_rows();
-    let total = rows.len().max(1);
-    let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
-    let cap = usize::from(max_box.saturating_sub(2)).max(1);
-    let visible = total.min(cap);
-    let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
+    //
+    // 后台任务面板打开时，**同一个矩形**改由面板占用（高度按列表条目数算，封顶
+    // `task::LIST_MAX`）。历史区、聊天栏、滚动条因此照常复用，不需要第二份几何。
+    let (box_h, visible, scroll) = match lx.task.as_ref() {
+        Some(page) => (task::height(page), 0, 0),
+        None => {
+            let rows = lx.visual_rows();
+            let total = rows.len().max(1);
+            let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
+            let cap = usize::from(max_box.saturating_sub(2)).max(1);
+            let visible = total.min(cap);
+            let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
+            let max_scroll = total.saturating_sub(visible);
+            (box_h, visible, lx.scroll().min(max_scroll))
+        }
+    };
     let input = Rect::new(
         content_x,
         area.bottom().saturating_sub(box_h),
         content_w,
         box_h,
     );
-    let max_scroll = total.saturating_sub(visible);
-    let scroll = lx.scroll().min(max_scroll);
 
     let mut out = Layout::empty(false);
     out.input = Some(input);
@@ -626,18 +633,22 @@ fn build_chat(
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
-    if let Some(input) = lay.input
-        && lay.input_visible > 0
-    {
-        cursor = input::draw(
-            &mut grid,
-            input,
-            lx,
-            focused,
-            lay.input_scroll,
-            lay.input_visible,
-        )
-        .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
+    // 输入框容器：普通状态下画输入框；后台任务面板打开时**同一个矩形**改画面板。
+    // 面板没有文本光标，所以 `cursor` 保持 None（不画硬件光标）。
+    match (lay.input, lx.task.as_ref()) {
+        (Some(rect), Some(page)) => task::draw(&mut grid, rect, page),
+        (Some(input), None) if lay.input_visible > 0 => {
+            cursor = input::draw(
+                &mut grid,
+                input,
+                lx,
+                focused,
+                lay.input_scroll,
+                lay.input_visible,
+            )
+            .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
+        }
+        _ => {}
     }
     // 面板：块命令 / 粘贴 / 提及 / `/` 命令。
     if let (Some(rect), Some(panel)) = (lay.panel, lx.panel.as_ref()) {
@@ -694,11 +705,6 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
     if lx.chat.messages.is_empty() {
         return None;
     }
-    // 后台任务面板打开时，历史区是面板上方的剩余空间（输入框已被面板替换）。
-    if let Some(page) = lx.task.as_ref() {
-        let lay = task::layout(area, page);
-        return (lay.history.height > 0).then_some(lay.history);
-    }
     let lay = layout(area, lx);
     let (x, width) = match lay.input {
         Some(input) => (input.x, input.width),
@@ -715,23 +721,6 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
 pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> {
     let history_rect = history_rect(area, lx)?;
     Some(history::view(history_rect, lx))
-}
-
-/// 后台任务面板打开时，上方消息列表的 `(总行数, 可见行数)`。
-///
-/// 面板把输入框换成了控制面板，历史区不再是 [`history_rect`] 那套「到输入框上沿」，
-/// 而是面板上方的剩余空间。键盘翻页与渲染因此共用同一份几何。
-pub fn task_history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
-    let page = lx.task.as_ref()?;
-    if lx.chat.messages.is_empty() {
-        return None;
-    }
-    let lay = task::layout(area, page);
-    if lay.history.height == 0 {
-        return None;
-    }
-    let view = history::view(lay.history, lx);
-    Some((view.total_rows, usize::from(view.body.height)))
 }
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。

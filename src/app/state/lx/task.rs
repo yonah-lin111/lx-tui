@@ -140,13 +140,24 @@ impl TaskPage {
         true
     }
 
-    /// 移动高亮（循环）；无可选项时不动。
+    /// 移动高亮（**不循环**，到两端即停）；返回高亮是否真的移动了。
+    ///
+    /// 不循环是「↑ 在列表顶部回到输入框」的前提：面板要能分辨"上移成功"与
+    /// "已经在顶部、无处可去"，后者才该退出面板。循环会把顶部再绕回底部，
+    /// 用户永远退不出去。
     pub fn move_active(&mut self, delta: isize) -> bool {
         let len = self.len();
         if len == 0 {
             return false;
         }
-        self.window.move_active(delta, len);
+        let last = len - 1;
+        let next = (self.window.active as isize + delta).clamp(0, last as isize) as usize;
+        if next == self.window.active {
+            return false;
+        }
+        self.window.active = next;
+        self.window.anchor = next;
+        self.window.viewport = None;
         true
     }
 

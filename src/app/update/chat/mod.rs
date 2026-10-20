@@ -854,7 +854,7 @@ pub fn resolve_task_history_visible(
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
             .filter(|target| target.lx.task.is_some())
-            .and_then(|target| crate::ui::main_content::lx::task_history_rows(inner, &target.lx));
+            .and_then(|target| crate::ui::main_content::lx::history_rows(inner, &target.lx));
         let Some(target) = state.pane_mut_anywhere(*pane) else {
             continue;
         };

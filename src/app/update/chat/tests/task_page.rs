@@ -265,21 +265,14 @@ fn page_keys_do_not_leak_into_the_draft() {
 
 #[test]
 fn panel_navigation_moves_the_highlight_and_cycles_tabs() {
-    // 面板沉底后方向键让给了上方消息列表，列表高亮改用 `Alt+↑/↓`
-    // （映射到 `SelectPrevTool` / `SelectNextTool`）；`←/→` 仍然换 tab。
+    // `↑`/`↓` 移列表高亮；`←/→` 换 tab。
     let mut state = ready_state("");
     let pane = focus_pane(&state);
     open_with_processes(&mut state, pane);
-    crate::app::update::pane::apply_lx_input(
-        &mut state,
-        crate::app::actions::LxInput::SelectNextTool,
-    );
-    assert_eq!(page(&state, pane).window.active, 1, "Alt+↓ 移动高亮");
-    crate::app::update::pane::apply_lx_input(
-        &mut state,
-        crate::app::actions::LxInput::SelectPrevTool,
-    );
-    assert_eq!(page(&state, pane).window.active, 0, "Alt+↑ 移动高亮");
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
+    assert_eq!(page(&state, pane).window.active, 1, "↓ 移动高亮");
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
+    assert_eq!(page(&state, pane).window.active, 0, "↑ 移动高亮");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Right);
     assert_eq!(page(&state, pane).tab, TaskTab::Agents, "→ 换 tab");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Left);
@@ -287,16 +280,58 @@ fn panel_navigation_moves_the_highlight_and_cycles_tabs() {
 }
 
 #[test]
-fn arrow_keys_scroll_the_message_list_instead_of_moving_the_highlight() {
-    // 方向键属于上方消息列表：面板高亮不动。
+fn up_at_the_top_returns_to_the_input_box() {
+    // 用户要求：列表顶部（或空列表）按 ↑ 回到输入框 = 关闭面板。
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    open_with_processes(&mut state, pane);
+    assert_eq!(page(&state, pane).window.active, 0, "初始在首项");
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_none(),
+        "已在顶部时 ↑ 关闭面板、回到输入框"
+    );
+}
+
+#[test]
+fn up_on_an_empty_list_returns_to_the_input_box() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_task_page(&mut state, pane));
+    assert!(on_process_listed(&mut state, pane, Vec::new()));
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_none(),
+        "空列表时 ↑ 关闭面板"
+    );
+}
+
+#[test]
+fn closing_via_up_keeps_the_draft_and_cursor() {
+    // 「回到原来的输入框」：草稿与光标必须原样。
+    let mut state = ready_state("hello draft");
+    let pane = focus_pane(&state);
+    let before = {
+        let lx = &state.pane_anywhere(pane).unwrap().lx;
+        (lx.input.clone(), lx.cursor)
+    };
+    open_with_processes(&mut state, pane);
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
+    let lx = &state.pane_anywhere(pane).unwrap().lx;
+    assert!(lx.task.is_none(), "面板已关闭");
+    assert_eq!(lx.input, before.0, "草稿原样");
+    assert_eq!(lx.cursor, before.1, "光标原样");
+}
+
+#[test]
+fn page_keys_scroll_the_message_list_without_moving_the_highlight() {
+    // `PageUp`/`PageDown` 是留给上方消息列表的辅助键：列表高亮不动，面板也不关。
     let mut state = ready_state("");
     let pane = focus_pane(&state);
     open_with_processes(&mut state, pane);
     let before = page(&state, pane).window.active;
     for key in [
-        crate::app::actions::LxInput::Down,
         crate::app::actions::LxInput::PageDown,
-        crate::app::actions::LxInput::Up,
         crate::app::actions::LxInput::PageUp,
     ] {
         crate::app::update::pane::apply_lx_input(&mut state, key);
@@ -304,7 +339,11 @@ fn arrow_keys_scroll_the_message_list_instead_of_moving_the_highlight() {
     assert_eq!(
         page(&state, pane).window.active,
         before,
-        "方向键滚动历史，不动列表高亮"
+        "翻页键不动列表高亮"
+    );
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_some(),
+        "翻页键不关闭面板"
     );
 }
 

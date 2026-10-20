@@ -59,15 +59,21 @@ fn selected_only_returns_processes_on_the_processes_tab() {
 }
 
 #[test]
-fn move_active_wraps_and_is_noop_when_empty() {
+fn move_active_stops_at_both_ends_and_reports_whether_it_moved() {
+    // **不循环**是「↑ 在顶部回到输入框」的前提：面板要能分辨"上移成功"与
+    // "已经在顶部、无处可去"，后者才该退出面板。
     let mut page = page_with(3);
-    assert!(page.move_active(-1), "从首项上移循环到末项");
-    assert_eq!(page.window.active, 2);
-    assert!(page.move_active(1));
+    assert!(!page.move_active(-1), "已在首项：上移不动，返回 false");
     assert_eq!(page.window.active, 0);
+    assert!(page.move_active(1), "下移成功");
+    assert_eq!(page.window.active, 1);
+    assert!(page.move_active(1), "再下移成功");
+    assert_eq!(page.window.active, 2, "钳在末项");
+    assert!(!page.move_active(1), "已在末项：下移不动，返回 false");
 
     let mut empty = TaskPage::default();
     assert!(!empty.move_active(1), "空列表不移动");
+    assert!(!empty.move_active(-1), "空列表不移动");
 }
 
 #[test]
