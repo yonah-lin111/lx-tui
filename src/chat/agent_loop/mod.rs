@@ -34,8 +34,12 @@ use crate::chat::tools::{self, ToolContext, ToolErrorCode, ToolExecutionResult};
 use crate::chat::transport::tools::{TOOL_INPUT_TRUNCATED_CODE, TOOL_PROTOCOL_ERROR_CODE};
 use crate::db::chat::{ToolCallTicket, Usage};
 
+mod executor;
+
 #[cfg(test)]
 mod tests;
+
+pub use executor::{AgentTools, TurnExecution, plan_snapshot_of};
 
 /// 单轮最多采样次数（资源保护，不是路径限制）。
 pub const MAX_MODEL_STEPS: usize = 24;
@@ -276,6 +280,11 @@ pub struct ModelContext {
     items: Vec<ModelItem>,
     /// 发送时冻结的工作区根；文件工具的相对路径基准。
     cwd: PathBuf,
+    /// 本轮开始时的**本地运行上下文**摘要（存活进程 + 当前计划）。
+    ///
+    /// 它不是工具结果，也不伪装成新的调用：只在第一次采样时并入用户消息末尾，
+    /// 避免历史裁剪后模型忘记 `session_id` 或把已完成的计划当成当前计划。
+    runtime_summary: Option<String>,
 }
 
 impl ModelContext {
@@ -286,7 +295,14 @@ impl ModelContext {
             request,
             items,
             cwd: cwd.into(),
+            runtime_summary: None,
         }
+    }
+
+    /// 附加本地运行上下文摘要（存活进程与当前计划的有界快照）。
+    pub fn with_runtime_summary(mut self, summary: Option<String>) -> Self {
+        self.runtime_summary = summary;
+        self
     }
 
     /// 冻结的工作区根。
@@ -300,6 +316,8 @@ impl ModelContext {
     }
 
     /// 下一次采样请求：turns/model 不变，items 为本轮累计结果。
+    ///
+    /// 运行上下文摘要只在**第一次**采样时并入（后续采样已包含在 items 里）。
     fn next_request(&self) -> ChatRequest {
         ChatRequest {
             turns: self.request.turns.clone(),
@@ -307,6 +325,24 @@ impl ModelContext {
             model: self.request.model.clone(),
             variant_params: self.request.variant_params.clone(),
         }
+    }
+
+    /// 运行上下文摘要（诊断与测试用）。
+    pub fn runtime_summary(&self) -> Option<&str> {
+        self.runtime_summary.as_deref()
+    }
+
+    /// 把运行上下文摘要并入最后一次用户消息（只并入一次）。
+    fn absorb_runtime_summary(&mut self) {
+        let Some(summary) = self.runtime_summary.take() else {
+            return;
+        };
+        let Some(ModelItem::UserText(text)) = self.items.last_mut() else {
+            // 末尾不是用户消息（理论上不会发生）：不伪造位置，直接放弃摘要。
+            return;
+        };
+        text.push_str("\n\n");
+        text.push_str(&summary);
     }
 
     /// 追加一次模型响应：可见正文（若有）按出现顺序合并为一条 assistant 文本，
@@ -367,6 +403,7 @@ where
     F: Future<Output = StreamOutcome>,
 {
     let mut context = context;
+    context.absorb_runtime_summary();
     let mut usage = Usage::default();
     let mut total_calls = 0_usize;
     for step in 0..MAX_MODEL_STEPS {

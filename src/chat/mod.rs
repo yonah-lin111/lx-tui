@@ -8,6 +8,8 @@ pub mod agent_loop;
 pub mod client;
 pub mod context;
 pub mod events;
+pub mod plan;
+pub mod process;
 pub mod prompt;
 pub mod sse;
 pub mod thinking;

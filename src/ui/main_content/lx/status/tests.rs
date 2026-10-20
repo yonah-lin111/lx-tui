@@ -156,7 +156,7 @@ fn model_name_uses_entry_label_gradient() {
     let inner = pane(rect);
     let mut buf = Buffer::empty(rect);
     render(&mut buf, inner, &lx);
-    let lay = layout(inner, &lx.chat.status);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
     let row = lay.label.y;
     let first = &buf[(lay.label.x, row)];
     assert_eq!(first.symbol(), "m");
@@ -199,15 +199,15 @@ fn narrow_drops_context_keeps_model() {
     let lx = lx_with_status(status(Some("M"), Some("P"), Some(100), Some(50), true));
     // 宽：上下文占用 + 供应商。
     let inner = Rect::new(0, 0, 40, 3);
-    let lay = layout(inner, &lx.chat.status);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
     assert!(lay.context.width > 0, "40 列显示上下文占用");
     let inner = Rect::new(0, 0, 23, 3);
-    let lay = layout(inner, &lx.chat.status);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
     assert!(lay.context.width > 0, "23 列仍保留上下文占用");
     assert!(lay.label.width > 0, "保留模型名区");
     // 更窄：连上下文占用（7 列 `50(50%)`）也放不下时只留模型名（仍硬切保留）。
     let inner = Rect::new(0, 0, 10, 3);
-    let lay = layout(inner, &lx.chat.status);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
     assert_eq!(lay.context.width, 0, "更窄时丢弃上下文占用");
     assert!(lay.label.width > 0, "仍保留模型名区");
 }
@@ -237,7 +237,7 @@ fn wide_status_on_border_with_provider_and_context() {
         true,
     ));
     let inner = Rect::new(0, 0, 80, 3);
-    let lay = layout(inner, &lx.chat.status);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
     assert_eq!(lay.area.height, 1);
     assert_eq!(lay.area.y, inner.bottom(), "绘制在边框行");
     let line = render_border(&lx, 80);
@@ -259,7 +259,7 @@ fn no_stop_button_on_border() {
 #[test]
 fn tiny_inner_yields_no_status() {
     let lx = lx_with_status(status(Some("M"), Some("P"), None, None, false));
-    let lay = layout(Rect::new(0, 0, 7, 3), &lx.chat.status);
+    let lay = layout(Rect::new(0, 0, 7, 3), &lx.chat.status, lx.background_tasks);
     assert_eq!(lay.area.height, 0);
 }
 
@@ -278,4 +278,51 @@ fn long_model_name_is_hard_cut_without_ellipsis() {
         line.contains("very-long-model-name"),
         "模型名尽量保留：{line}"
     );
+}
+
+// ===== 后台任务计数指标（输入框底部、用量右侧）=====
+
+/// 设置计数后取底边框整行文本。
+fn border_with_tasks(count: usize, width: u16) -> String {
+    let mut lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), false));
+    lx.background_tasks = count;
+    render_border(&lx, width)
+}
+
+#[test]
+fn task_count_is_hidden_when_zero() {
+    // 为 0 时整段不渲染：不留空占位、底边线照常延伸（对齐 opencode 的 `N shell`）。
+    let line = border_with_tasks(0, 60);
+    assert!(!line.contains("process"), "0 个不显示指标：{line}");
+    assert!(line.contains('─'), "底边线保留：{line}");
+}
+
+#[test]
+fn task_count_uses_singular_and_plural() {
+    assert_eq!(text::lx_task_count_label(1), "1 process");
+    assert_eq!(text::lx_task_count_label(2), "2 processes");
+    assert_eq!(text::lx_task_count_label(11), "11 processes");
+}
+
+#[test]
+fn task_count_sits_at_the_right_end_of_the_border() {
+    // 指标贴右端（用量在左侧），两者之间留底边线。
+    let line = border_with_tasks(3, 60);
+    // 右端角字符内侧保留 1 列底边线（与左侧 `╰ ` 对称）。
+    assert!(
+        line.trim_end().ends_with("3 processes─╯"),
+        "指标贴右端：{line}"
+    );
+    assert!(line.contains("500(50%)"), "左侧用量仍在：{line}");
+    // 用量在指标左边。
+    let used = line.find("500(50%)").expect("用量");
+    let tasks = line.find("3 processes").expect("指标");
+    assert!(used < tasks, "用量在指标之前：{line}");
+}
+
+#[test]
+fn task_count_hides_when_too_narrow() {
+    // 极窄时指标整段让位，不与模型名抢位置。
+    let line = border_with_tasks(3, 9);
+    assert!(!line.contains("process"), "窄到放不下时不画：{line}");
 }

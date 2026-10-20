@@ -399,7 +399,7 @@ async fn request_body_carries_tools_and_system_prompt() {
     let sent: serde_json::Value = serde_json::from_str(&recorded.body).expect("json body");
     assert_eq!(
         sent["messages"][0]["content"],
-        crate::chat::prompt::LX_SYSTEM_PROMPT
+        crate::chat::prompt::system_prompt()
     );
     let names: Vec<&str> = sent["tools"]
         .as_array()
@@ -407,7 +407,7 @@ async fn request_body_carries_tools_and_system_prompt() {
         .iter()
         .map(|tool| tool["function"]["name"].as_str().unwrap_or_default())
         .collect();
-    assert_eq!(names, vec!["read", "search", "edit", "write"]);
+    assert_eq!(names, crate::chat::tools::TOOL_NAMES.to_vec());
 }
 
 /// 取消发生在工具参数中途：保留已收增量、只产出一个终态、绝不产生可执行调用。

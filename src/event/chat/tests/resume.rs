@@ -338,7 +338,7 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
 #[test]
 fn start_stream_fails_the_turn_when_draft_exceeds_context() {
     let fixture = Fixture::new("draft-exceeds");
-    let (mut state, key, _persistence, _session) = streaming_state(&fixture);
+    let (mut state, key, persistence, _session) = streaming_state(&fixture);
     // 把模型上下文上限压到远小于本轮草稿（`on_turn_committed` 已写入的长正文）。
     if let Some(model) = state
         .models
@@ -378,7 +378,12 @@ fn start_stream_fails_the_turn_when_draft_exceeds_context() {
     });
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     let mut streams = ChatStreams::default();
-    assert!(pump_chat_streams(&mut state, &mut streams, &sender));
+    assert!(pump_chat_streams(
+        &mut state,
+        &mut streams,
+        &sender,
+        &persistence
+    ));
     let event = receiver.try_recv().expect("terminal event emitted");
     let AppEvent::ChatNet(ChatNetEvent::Finished { reason, .. }) = event else {
         panic!("expected a terminal ChatNet event, got {event:?}");

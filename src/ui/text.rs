@@ -599,6 +599,81 @@ pub const LX_HISTORY_PANEL_FOOTER: &str = "[select ↵] [edit ⇧↵] [close esc
 /// `/model` 面板标题。
 pub const LX_MODEL_PANEL_TITLE: &str = "Model";
 pub const LX_MODEL_VARIANT_PANEL_TITLE: &str = "Reasoning level";
+
+/// 后台任务页（窗格内整页）：tab 标签、标题、底边提示与空态。
+///
+/// 对齐 opencode 的 composer 多 tab：进程与子代理各占一个 tab，指标与列表同一名词。
+pub const LX_TASK_PAGE_TITLE: &str = "Background";
+pub const LX_TASK_TAB_PROCESSES: &str = "Processes";
+pub const LX_TASK_TAB_AGENTS: &str = "Agents";
+/// 进程 tab 空态。
+pub const LX_TASK_PROCESSES_EMPTY: &str = "no running processes";
+/// 子代理 tab 占位（本阶段尚无数据来源；后续在此显示 subagent 内容）。
+pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
+/// 输出区空态：高亮任务还没有产出（或刚起步）。
+///
+/// 必须显式占位而不是留白：面板下半区突然空着，会让人以为"输出丢了"。
+pub const LX_TASK_OUTPUT_EMPTY: &str = "waiting for output";
+/// 输出容器顶边栏的标题（右侧接高亮任务的命令原文）。
+pub const LX_TASK_OUTPUT_TITLE: &str = "Output";
+/// 一条键位提示：`[功能 键]`。
+///
+/// **功能名在前、快捷键在后**（用户要求），方括号包住整条——它既是一个视觉单位，
+/// 也是可点击的目标。所有提示都是这个形状，不再有"只有键位"的例外写法。
+pub const fn hint(action: &'static str, key: &'static str) -> Hint {
+    Hint { action, key }
+}
+
+/// 键位提示（`[功能 键]`）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Hint {
+    /// 功能名称，如 `select`。
+    pub action: &'static str,
+    /// 快捷键，如 `↑↓`。
+    pub key: &'static str,
+}
+
+impl Hint {
+    /// 完整文案：`[select ↑↓]`。
+    pub fn label(self) -> String {
+        format!("[{} {}]", self.action, self.key)
+    }
+}
+
+/// 面板 tab 行右端的关闭按钮（`[close esc]`）。
+pub const LX_TASK_CLOSE: Hint = hint("close", "esc");
+/// 进程 tab 的底边框键位提示（按顺序从左到右，窄窗格整项丢弃）。
+pub const LX_TASK_HINTS_PROCESSES: [Hint; 4] = [
+    hint("select", "↑↓"),
+    hint("stop", "^d"),
+    hint("tabs", "←→"),
+    hint("back", "esc"),
+];
+/// 子代理 tab 的键位提示（`^d` / `↑↓` 无对象：预留 tab 恒空，故只留导航与退出）。
+pub const LX_TASK_HINTS_AGENTS: [Hint; 2] = [hint("tabs", "←→"), hint("back", "esc")];
+/// 顶边右端的 tab 指示分隔符（`·`）。
+pub const LX_TASK_TAB_SEP: &str = " · ";
+/// 行尾的运行时长前缀（`running 1m 30s`）。
+pub const LX_TASK_AGE_PREFIX: &str = "running ";
+
+/// 输入框底边框右端的后台任务计数指标：`1 process` / `3 processes`。
+///
+/// 与 opencode 的 `N shell` 同一口径：数量为 0 时整段不渲染；单复数随数量变化。
+pub fn lx_task_count_label(count: usize) -> String {
+    if count == 1 {
+        format!("1 {}", LX_TASK_COUNT_NOUN_ONE)
+    } else {
+        format!("{count} {}", LX_TASK_COUNT_NOUN_MANY)
+    }
+}
+pub const LX_TASK_COUNT_NOUN_ONE: &str = "process";
+pub const LX_TASK_COUNT_NOUN_MANY: &str = "processes";
+
+/// 停止一个后台进程后的提示。
+pub const LX_TASK_STOPPED: &str = "Stopped 1 background process";
+/// 停止失败（进程已退出、运行实例已销毁等）。
+pub const LX_TASK_STOP_FAILED: &str = "Failed to stop the process";
+
 /// `/resume` 会话编辑模态：标题、删除确认提示与校验错误。
 pub const RESUME_EDIT_MODAL_TITLE: &str = "Session";
 pub const RESUME_EDIT_CONFIRM_HINT: &str = "Press ^d again to confirm";

@@ -27,6 +27,7 @@ fn read_step(position: i64, status: ToolStatus) -> AssistantStepView {
             }),
             error: None,
             result_json: None,
+            detail: None,
         },
     }
 }
@@ -319,6 +320,8 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
     );
     // 相位翻到空心帧：只有运行中的工具行变空心，已完成的思考头保持实心。
     lx.chat.loading_frame = text::agent::STEP_BREATH_TICKS;
+    // 动画推进中：工具行才允许进入空心相位（停止后恒实心）。
+    lx.chat.status.streaming = true;
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     assert!(

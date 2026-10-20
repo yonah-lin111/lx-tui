@@ -167,7 +167,7 @@ fn system_instruction_carries_lx_prompt() {
     let body = body_of(&request());
     assert_eq!(
         body["systemInstruction"]["parts"][0]["text"],
-        crate::chat::prompt::LX_SYSTEM_PROMPT
+        crate::chat::prompt::system_prompt()
     );
 }
 

@@ -2,11 +2,14 @@
 //! 流终态、命令面板与过期结果过滤。
 
 mod history;
+mod process_cards;
 mod prompt_history;
 mod session;
 mod slash_panels;
 mod stop;
+mod task_page;
 mod timeline;
+mod viewport_anchor;
 
 use super::*;
 use crate::app::state::{
@@ -890,9 +893,12 @@ fn slash_keyboard_move_cycles_and_follows_highlight() {
     let mut state = ready_state("问");
     let pane = focus_pane(&state);
     seed_slash_commands(&mut state, pane);
-    move_panel_active(&mut state, pane, -1); // 从 0 循环到末项
+    // 循环到末项：末项应当是命令表的最后一条（不硬编码索引，
+    // 命令表增删时这条测试不应跟着改）。
+    let last = crate::app::state::SlashCommand::ALL.len() - 1;
+    move_panel_active(&mut state, pane, -1);
     let window = slash_window(&state, pane);
-    assert_eq!(window.active, 2, "上移循环到末项");
+    assert_eq!(window.active, last, "上移循环到末项");
     assert_eq!(window.anchor, window.active, "键盘移动锚点跟随高亮");
 }
 

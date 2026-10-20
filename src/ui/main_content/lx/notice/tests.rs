@@ -156,8 +156,8 @@ fn notice_marker_matches_step_mark_shape() {
     let notice = Notice::new(NoticeTitle::Failed, "boom");
     draw(&mut grid, &notice, area, 0, &mut row);
 
-    // 失败步骤在工具行里的拼法：`StepMark::Failed.segment(0)`。
-    let expected = crate::ui::main_content::lx::history::StepMark::Failed.segment(0);
+    // 失败步骤在工具行里的拼法：`StepMark::Failed.segment(0, false)`。
+    let expected = crate::ui::main_content::lx::history::StepMark::Failed.segment(0, false);
     let painted: String = expected
         .chars()
         .enumerate()

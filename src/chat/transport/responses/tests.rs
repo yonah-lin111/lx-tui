@@ -123,7 +123,7 @@ fn body_uses_input_not_messages() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["model"], "grok");
     // 系统指令走顶层 instructions。
-    assert_eq!(body["instructions"], crate::chat::prompt::LX_SYSTEM_PROMPT);
+    assert_eq!(body["instructions"], crate::chat::prompt::system_prompt());
 }
 
 /// `tools` 是扁平函数项（不套 `function`），schema 与 `available_tools()` 一致。

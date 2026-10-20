@@ -42,8 +42,24 @@ pub fn agent_step_of(id: UiGalleryComponentId) -> Option<AgentStepId> {
 /// `agent` 步骤预览的自然尺寸：宽度贴合最长内容，高度按样例实际行数计算。
 pub fn agent_appearance_size(step: AgentStepId, available: Rect) -> (u16, u16) {
     let width = 52u16.min(available.width);
+    // 三种新增工具走**生产渲染路径**：高度按内容计算（含换行），不写死样例行数。
+    if let Some((call, expanded)) =
+        crate::ui::main_content::lx::history::tool::gallery::sample_card(step)
+    {
+        let rows = crate::ui::main_content::lx::history::tool::gallery::card_rows(
+            call_ref(&call),
+            width,
+            expanded,
+        );
+        return (width, (rows as u16).min(available.height));
+    }
     let height = (step_lines(step).len() as u16).min(available.height);
     (width, height)
+}
+
+/// 取卡片的只读引用（`sample_card` 返回所有权，尺寸与绘制两处共用同一份构造）。
+fn call_ref(call: &crate::app::state::ToolCallView) -> &crate::app::state::ToolCallView {
+    call
 }
 
 /// 把某步骤展开成若干行（头部 + 子行 + token 页脚）。
@@ -186,6 +202,15 @@ pub fn render_agent_appearance(buf: &mut Buffer, rect: Rect, step: AgentStepId) 
     if rect.width < 6 || rect.height == 0 {
         return;
     }
+    // 三种新增工具直接调用聊天历史的同一行生成函数（不复制样例，避免"只有样例好看"）。
+    if let Some((call, expanded)) =
+        crate::ui::main_content::lx::history::tool::gallery::sample_card(step)
+    {
+        crate::ui::main_content::lx::history::tool::gallery::render_card_into(
+            buf, rect, &call, expanded,
+        );
+        return;
+    }
     let mut y = rect.y;
     for line in step_lines(step) {
         if y >= rect.bottom() {
@@ -222,6 +247,8 @@ fn step_tokens(step: AgentStepId) -> Tokens {
         AgentStepId::Error => (1_460, 40, 700),
         AgentStepId::Question => (900, 60, 300),
         AgentStepId::Tokens => (12_400, 312, 8_100),
+        // 三种新增工具按生产卡片渲染，不走这套 token 页脚样例。
+        AgentStepId::Command | AgentStepId::ProcessInteraction | AgentStepId::Plan => (0, 0, 0),
     }
 }
 
@@ -283,6 +310,9 @@ fn verb(step: AgentStepId) -> &'static str {
         AgentStepId::Error => agent::VERB_ERROR,
         AgentStepId::Question => agent::VERB_QUESTION,
         AgentStepId::Tokens => agent::VERB_FINAL,
+        AgentStepId::Command => agent::VERB_EXEC_COMMAND,
+        AgentStepId::ProcessInteraction => agent::VERB_READ_OUTPUT,
+        AgentStepId::Plan => agent::VERB_UPDATE_PLAN,
     }
 }
 
@@ -330,6 +360,8 @@ fn detail_spans(step: AgentStepId) -> Vec<(String, Style)> {
         }
         AgentStepId::Error => push(&mut spans, t::PARAM_ERROR_CMD, param()),
         AgentStepId::Question => push(&mut spans, t::PARAM_QUESTION, param()),
+        // 三种新增工具由生产卡片渲染，主参数不在这里拼。
+        AgentStepId::Command | AgentStepId::ProcessInteraction | AgentStepId::Plan => {}
     }
     spans
 }
@@ -355,6 +387,8 @@ fn lx_icon(step: AgentStepId) -> &'static str {
         AgentStepId::Error => agent::ICON_ERROR,
         AgentStepId::Question => agent::ICON_QUESTION,
         AgentStepId::Tokens => agent::ICON_TOKENS,
+        // 三种新增工具走生产卡片（`■ 动词` 语法自带方块），这些图标不参与。
+        AgentStepId::Command | AgentStepId::ProcessInteraction | AgentStepId::Plan => "",
     }
 }
 
@@ -381,7 +415,10 @@ fn body_lines(step: AgentStepId) -> &'static [&'static str] {
         | AgentStepId::Compact
         | AgentStepId::Mode
         | AgentStepId::Markdown
-        | AgentStepId::Tokens => &[],
+        | AgentStepId::Tokens
+        | AgentStepId::Command
+        | AgentStepId::ProcessInteraction
+        | AgentStepId::Plan => &[],
     }
 }
 

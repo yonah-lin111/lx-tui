@@ -19,6 +19,9 @@ use super::hit::{
     block_panel_layout, mention_panel_layout, pane_at, pane_content_inner, slash_panel_layout,
 };
 
+/// 每次滚轮滚动的视觉行数（与 prompt 视口一致）。
+const WHEEL_LINES: isize = 3;
+
 /// 纵向滚轮方向（负数向上）；横向滚轮返回 None。
 pub(crate) fn vertical_wheel_direction(kind: MouseEventKind) -> Option<isize> {
     match kind {
@@ -299,6 +302,33 @@ pub(crate) fn handle_mouse_wheel(
                 && bar.rect.contains((mouse.column, mouse.row).into())
             {
                 if update::scroll_lx_mention(state, pane, direction, bar.start) {
+                    *dirty = true;
+                }
+                return;
+            }
+            // 后台任务面板的输出容器：滚轮滚动输出视口（不穿透到下方 item 列表）。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(rects) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
+                && rects.output.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_task_output(state, pane, direction.saturating_mul(WHEEL_LINES)) {
+                    *dirty = true;
+                }
+                return;
+            }
+            // 后台任务面板的 **item 列表**：进程超过一屏时滚动显式视口。
+            //
+            // 之前这里没有分支，滚轮直接漏到下方 `scroll_lx_input`——滚动一个看不见的
+            // 输入缓冲并置脏，而列表实际滚不动（`window.viewport` 永远没人写）。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(rects) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
+                && rects.list.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_task_list(state, pane, direction.saturating_mul(WHEEL_LINES)) {
                     *dirty = true;
                 }
                 return;

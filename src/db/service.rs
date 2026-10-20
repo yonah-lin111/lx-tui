@@ -19,6 +19,16 @@ use super::Database;
 /// 单次泵送内效应执行的轮数上限（效应可级联产生新效应，如信任授予后的续作）。
 const MAX_EFFECT_ROUNDS: usize = 16;
 
+/// 一次会话加载的结果：消息、模型快照、该会话的进程记录。
+///
+/// 进程记录单独带出来是为了给**历史卡片校正状态**：结果 JSON 写的是结算那一刻
+/// （通常是 `running`），进程之后可能早已退出（见 `reconcile_process_records`）。
+type LoadedSession = (
+    Option<Vec<crate::db::chat::ChatMessage>>,
+    Option<crate::db::chat::ModelSnapshot>,
+    Vec<crate::db::chat::ProcessRecord>,
+);
+
 /// 持久化服务实例：数据库句柄可为 None（库不可用时降级为无持久化）。
 pub struct Persistence {
     db: Option<Database>,
@@ -50,6 +60,16 @@ impl Persistence {
                     }
                     Err(error) => {
                         tracing::warn!(%error, "recovering interrupted tool calls failed");
+                    }
+                }
+                // 遗留的会话进程同样只标 interrupted：不重连、不用旧 PID 操作进程。
+                match db.recover_interrupted_processes() {
+                    Ok(0) => {}
+                    Ok(recovered) => {
+                        tracing::info!(recovered, "recovered interrupted processes");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "recovering interrupted processes failed");
                     }
                 }
                 Self { db: Some(db) }
@@ -131,6 +151,55 @@ impl Persistence {
     ) -> super::Result<()> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         db.checkpoint(workspace, assistant_id, parts)
+    }
+
+    /// 登记新建进程（`starting`）；失败时调用方必须停止刚 spawn 的进程。
+    pub fn begin_process(
+        &self,
+        workspace: &Path,
+        new: &crate::db::chat::NewProcess<'_>,
+    ) -> super::Result<String> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.begin_process(workspace, new)
+    }
+
+    /// 合并一次输出快照（revision 必须更新，较旧写入零行）。
+    pub fn update_process_output(
+        &self,
+        workspace: &Path,
+        runtime_epoch: &str,
+        process_session_id: u64,
+        snapshot: &crate::db::chat::OutputSnapshot<'_>,
+        revision: i64,
+    ) -> super::Result<bool> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.update_process_output(
+            workspace,
+            runtime_epoch,
+            process_session_id,
+            snapshot,
+            revision,
+        )
+    }
+
+    /// 提交进程终态（revision 必须更新，重复终态幂等）。
+    pub fn finish_process(
+        &self,
+        workspace: &Path,
+        finish: &crate::db::chat::ProcessFinish<'_>,
+    ) -> super::Result<bool> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.finish_process(workspace, finish)
+    }
+
+    /// 批量载入会话进程记录（重载时一次查询，不为每张卡片单独读库）。
+    pub fn load_processes_for_session(
+        &self,
+        workspace: &Path,
+        chat_session_id: &str,
+    ) -> super::Result<Vec<crate::db::chat::ProcessRecord>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.load_processes_for_session(workspace, chat_session_id)
     }
 
     /// 记录工作区信任（写库）；库不可用或写失败返回 false（仅日志，不阻断进入）。
@@ -536,15 +605,17 @@ impl Persistence {
                 let Some(workspace) = workspace else {
                     return false;
                 };
-                let loaded: Option<(
-                    Option<Vec<crate::db::chat::ChatMessage>>,
-                    Option<crate::db::chat::ModelSnapshot>,
-                )> = self.with_db(|db| {
+                let loaded: Option<LoadedSession> = self.with_db(|db| {
                     let messages = db.load_chat_session(&workspace, &session_id)?;
                     let model = db.chat_session_model(&workspace, &session_id)?;
-                    Ok((messages, model))
+                    // 进程记录用来校正卡片状态：结果 JSON 写的是「结算那一刻」，
+                    // 进程之后可能早已退出/被停止（见 `reconcile_process_records`）。
+                    let processes = db
+                        .load_processes_for_session(&workspace, &session_id)
+                        .unwrap_or_default();
+                    Ok((messages, model, processes))
                 });
-                let Some((Some(messages), model)) = loaded else {
+                let Some((Some(messages), model, processes)) = loaded else {
                     update::show_toast(
                         state,
                         Toast::new(
@@ -562,7 +633,10 @@ impl Persistence {
                     model: snapshot.model,
                     variant: snapshot.variant,
                 });
-                update::on_session_loaded(state, pane, &session_id, &messages, selection)
+                let changed =
+                    update::on_session_loaded(state, pane, &session_id, &messages, selection);
+                // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
+                update::reconcile_process_records(state, pane, &processes) | changed
             }
             Effect::RenameChatSession {
                 workspace,
@@ -587,6 +661,9 @@ impl Persistence {
                 workspace,
                 session_id,
             } => {
+                // 进程记录由外键 `ON DELETE CASCADE` 随会话一起删。**不要**在这里
+                // 单独预删：预删成功而会话删除失败时，会话还在、进程元数据却已清空，
+                // 历史里 `running` 的卡片会永远停在 Running 且没有进程可停。
                 let deleted = self.with_db(|db| db.delete_chat_session(&workspace, &session_id));
                 // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有），
                 // 并从已打开的 `/resume` 列表里就地移除该行。
@@ -641,9 +718,14 @@ impl Persistence {
                 }
                 false
             }
-            // 网络效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
+            // 网络与进程效应由事件层执行（pump 已过滤；此处兜底忽略并记录）。
+            // 进程句柄只存在于事件层的运行实例里，持久化层既读不到也停不了。
             Effect::StartChatStream { .. } | Effect::CancelChatStream { .. } => {
                 tracing::warn!("chat network effect reached persistence pump");
+                false
+            }
+            Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. } => {
+                tracing::warn!("process effect reached persistence pump");
                 false
             }
         }
@@ -777,7 +859,11 @@ impl Persistence {
 fn is_network_effect(effect: &Effect) -> bool {
     matches!(
         effect,
-        Effect::StartChatStream { .. } | Effect::CancelChatStream { .. }
+        Effect::StartChatStream { .. }
+            | Effect::CancelChatStream { .. }
+            // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
+            | Effect::ListSessionProcesses { .. }
+            | Effect::StopSessionProcess { .. }
     )
 }
 

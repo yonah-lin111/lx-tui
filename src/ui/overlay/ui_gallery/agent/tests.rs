@@ -354,7 +354,14 @@ fn appearance_size_fits_content_and_clamps_to_available() {
     for step in AgentStepId::ALL {
         let (width, height) = agent_appearance_size(step, available);
         assert!((6..=available.width).contains(&width));
-        let expected = step_lines(step).len() as u16;
+        // 三种新增工具走生产卡片渲染：高度由卡片行数决定（> 0 且不超过可用高度）。
+        let expected =
+            if crate::ui::main_content::lx::history::tool::gallery::sample_card(step).is_some() {
+                assert!(height > 0 && height <= available.height, "{step:?}");
+                continue;
+            } else {
+                step_lines(step).len() as u16
+            };
         assert_eq!(height, expected.min(available.height));
     }
     let tiny = Rect::new(0, 0, 80, 3);
@@ -391,6 +398,22 @@ fn every_step_renders_at_its_natural_height() {
     for step in AgentStepId::ALL {
         let (width, height) = agent_appearance_size(step, available);
         let all = render_step(step, width, height);
+        // 三种新增工具由生产卡片渲染：断言其动词出现在首行。
+        if let Some((call, _)) =
+            crate::ui::main_content::lx::history::tool::gallery::sample_card(step)
+        {
+            let verb = call.name.as_str();
+            assert!(
+                !all.trim().is_empty(),
+                "步骤 {step:?}（宽 {width} 高 {height}）没有画出任何内容：\n{all}"
+            );
+            let first_line = all.lines().next().unwrap_or_default();
+            assert!(
+                first_line.contains('■') || first_line.contains('□'),
+                "步骤 {step:?} 首行缺少方块标记（{verb}）：{first_line:?}"
+            );
+            continue;
+        }
         let first = step_lines(step).first().map(line_text).unwrap_or_default();
         assert!(
             !first.is_empty() && all.contains(&first),

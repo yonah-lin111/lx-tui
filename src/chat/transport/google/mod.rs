@@ -25,7 +25,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::LX_SYSTEM_PROMPT;
+use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, Role, ToolCallBuffer, arguments_string, google_tools, history_blocks,
     protocol_error,
@@ -65,7 +65,7 @@ pub fn build(
         "contents": contents,
         "tools": google_tools(),
         // 系统指令：Gemini 用 systemInstruction.parts[0].text。
-        "systemInstruction": {"parts": [{"text": LX_SYSTEM_PROMPT}]},
+        "systemInstruction": {"parts": [{"text": system_prompt()}]},
     });
     let mut generation_config = serde_json::Map::new();
     if let Some(params) = &request.variant_params {

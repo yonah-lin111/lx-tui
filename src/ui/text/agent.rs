@@ -50,6 +50,28 @@ pub const ICON_TOKENS: &str = "%";
 /// 结构标记（可见符号集中处；均为单宽、跨平台）。
 pub const MARKER_DOT: &str = "●";
 pub const MARKER_TREE_LEAF: &str = "└─";
+/// 树体中间行的连接符（`│`）：与 [`MARKER_TREE_LEAF`] 的 `└` 同列，连成一条树干。
+pub const MARKER_TREE_BAR: &str = "│";
+/// 工具卡片树形体（与 prompt list 同一套直角语法）。
+///
+/// 三条前缀**等宽 5 列**，内容一律从第 5 列起，与文件工具详情行的
+/// [`detail prefix`](crate::ui::main_content::lx::history::tool::detail_prefix) 完全对齐：
+///
+/// ```text
+///   ├─ $ cargo test
+///   │  test one ... ok
+///   └─ test result: ok
+/// ```
+///
+/// - [`TREE_BRANCH`]：一个**节点**的首行，且后面还有节点（`├─`）；
+/// - [`TREE_LEAF`]：最后一个节点的首行，收口（`└─`）；
+/// - [`TREE_BAR`]：节点内部的续行（同一段输出的后续行），只画竖线。
+///
+/// `├` 与 `└` 落在同一列，节点首行因此连成一根主干；续行用 `│` 表示
+/// 「还在上一个节点里」。三条前缀等宽，正文永远左对齐。
+pub const TREE_BAR: &str = "  │  ";
+pub const TREE_BRANCH: &str = "  ├─ ";
+pub const TREE_LEAF: &str = "  └─ ";
 /// todo 三态标记（取 claude 一组：完成 / 进行中 / 待办）。
 pub const TODO_DONE: &str = "✔";
 pub const TODO_IN_PROGRESS: &str = "◼";
@@ -323,3 +345,155 @@ fn main() {
 pub fn native_label_cycle() -> &'static [u8] {
     &[218, 182, 153, 117]
 }
+
+// ===== 进程 / 计划卡片文案（`history/tool/command.rs` 与 `plan.rs` 共用）=====
+
+use crate::app::state::{InteractionAction, ProcessStateView};
+
+/// `exec_command` 卡片动词。
+pub const VERB_EXEC_COMMAND: &str = "Run command";
+/// `write_stdin` 卡片动词（按动作区分）。
+pub const VERB_READ_OUTPUT: &str = "Read output";
+pub const VERB_SEND_INPUT: &str = "Send input";
+pub const VERB_STOP_COMMAND: &str = "Stop command";
+/// `update_plan` 卡片动词。
+pub const VERB_UPDATE_PLAN: &str = "Plan";
+
+/// 详情操作按钮（ASCII，窄宽度也画得下）。
+///
+/// `[details]` 已从卡片右上角移除：展开入口改到树体**末尾**（`… +N more lines`），
+/// 收起入口是同一条末尾行（`[collapse]`）。用户要求「more lines 调到底部，点击展开，
+/// 展开后点尾部折叠文字收起」。
+pub const DETAILS_CLOSE: &str = "[collapse]";
+
+/// 进程卡片末行的**后台任务面板入口**：`[open]`（灰色次要信息色，点击打开面板）。
+///
+/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`[open]`
+/// 是这条命令的唯一入口，独占树体末行。
+pub const TASK_OPEN_LABEL: &str = "[open]";
+
+/// 进程状态词（文字，不只靠颜色）。
+pub const STATE_STARTING: &str = "Starting";
+pub const STATE_RUNNING: &str = "Running";
+pub const STATE_STOPPED: &str = "Stopped";
+pub const STATE_TIMED_OUT: &str = "Timed out";
+pub const STATE_INTERRUPTED: &str = "Interrupted";
+pub const STATE_FAILED: &str = "Failed";
+
+/// 无输出占位。
+pub const WAITING_FOR_OUTPUT: &str = "Waiting for output";
+pub const NO_NEW_OUTPUT: &str = "No new output";
+pub const EARLIER_OUTPUT_DISCARDED: &str = "Earlier output discarded";
+/// 折叠时被省略的输出行提示前缀（后面接行数）：`… +21 lines`。
+pub const EARLIER_OUTPUT_HINT: &str = "… +";
+/// 被省略行数的后缀：`21 more lines`。
+pub const EARLIER_OUTPUT_SUFFIX: &str = "more lines";
+/// 树体命令行的提示符前缀（`$ cargo test`）。
+pub const COMMAND_PROMPT_PREFIX: &str = "$ ";
+
+/// cwd 次要信息前缀。
+pub const CWD_PREFIX: &str = "cwd:";
+/// 输入预览前缀。
+pub const INPUT_PREFIX: &str = "stdin:";
+/// 进程会话 ID 前缀（只在详情里出现）。
+pub const SESSION_PREFIX: &str = "session:";
+/// 计划完成计数后缀。
+pub const PLAN_COMPLETED_SUFFIX: &str = "completed";
+/// 空计划文案。
+pub const PLAN_EMPTY: &str = "Plan cleared";
+
+/// 计划三态标记（ASCII，与模型结果同一口径）。
+pub const PLAN_PENDING: &str = "[ ]";
+pub const PLAN_IN_PROGRESS: &str = "[>]";
+pub const PLAN_COMPLETED: &str = "[x]";
+
+/// 进程状态 → 固定文案。
+pub fn proc_state_label(state: ProcessStateView) -> &'static str {
+    match state {
+        ProcessStateView::Starting => STATE_STARTING,
+        ProcessStateView::Running => STATE_RUNNING,
+        ProcessStateView::Exited { code } => {
+            if code.is_some_and(|code| code != 0) {
+                STATE_FAILED
+            } else {
+                // 退出码 0 由调用方追加 `Exited 0`，这里只给失败/成功分档。
+                STATE_RUNNING
+            }
+        }
+        ProcessStateView::Stopped => STATE_STOPPED,
+        ProcessStateView::TimedOut => STATE_TIMED_OUT,
+        ProcessStateView::Interrupted => STATE_INTERRUPTED,
+        ProcessStateView::Failed => STATE_FAILED,
+    }
+}
+
+/// 非零退出原因的固定文案：`exit N`。
+pub fn proc_exit_failure(code: i32) -> String {
+    format!("exit {code}")
+}
+
+/// 退出状态标签：`Exited 0` / `exit 2`。
+pub fn proc_exit_label(state: ProcessStateView) -> String {
+    match state {
+        ProcessStateView::Exited { code } => match code {
+            Some(0) => "Exited 0".to_string(),
+            Some(code) => format!("exit {code}"),
+            None => "Exited".to_string(),
+        },
+        other => proc_state_label(other).to_string(),
+    }
+}
+
+/// `write_stdin` 动作动词。
+pub fn interaction_verb(action: InteractionAction) -> &'static str {
+    match action {
+        InteractionAction::ReadOutput => VERB_READ_OUTPUT,
+        InteractionAction::SendInput => VERB_SEND_INPUT,
+        InteractionAction::StopCommand => VERB_STOP_COMMAND,
+    }
+}
+
+/// 计划完成计数：`1/3 completed`。
+pub fn plan_progress(completed: usize, total: usize) -> String {
+    format!("{completed}/{total} {PLAN_COMPLETED_SUFFIX}")
+}
+
+/// 计划步骤标记。
+pub fn plan_marker(status: crate::app::state::PlanStepView) -> &'static str {
+    match status {
+        crate::app::state::PlanStepView::Pending => PLAN_PENDING,
+        crate::app::state::PlanStepView::InProgress => PLAN_IN_PROGRESS,
+        crate::app::state::PlanStepView::Completed => PLAN_COMPLETED,
+    }
+}
+
+/// 详情行：`cwd: /path`。
+pub fn cwd_label(cwd: &str) -> String {
+    format!("{CWD_PREFIX} {cwd}")
+}
+
+/// 详情行：`session: 12`。
+pub fn session_label(session_id: u64) -> String {
+    format!("{SESSION_PREFIX} {session_id}")
+}
+
+/// 进程已运行时长标签：`running 12s`（`age` 为已格式化的时长）。
+pub fn process_age_label(age: &str) -> String {
+    format!("running {age}")
+}
+
+/// `exec_command` 卡片：标题动词、状态与输出预览。
+pub const COMMAND_DESC: &[&str] = &[
+    "Command card: verb, running/exited state, the command line",
+    "and the last six output lines; details expand in place.",
+];
+/// `write_stdin` 交互卡片：本次调用的输入与输出快照。
+pub const PROCESS_INTERACTION_DESC: &[&str] = &[
+    "Process interaction: read / send / stop action, the input",
+    "preview and the output snapshot of that single call.",
+];
+/// `update_plan` 计划卡片：三态步骤与完成计数。
+pub const PLAN_DESC: &[&str] = &[
+    "Plan card: pending / in-progress / completed markers with the",
+    "completed count and the optional explanation line.",
+];

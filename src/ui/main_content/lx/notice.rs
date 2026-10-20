@@ -73,7 +73,7 @@ impl NoticeTitle {
     /// 通知只在终态渲染，[`StepMark::Failed`] / [`StepMark::Interrupted`] 的字形与
     /// 呼吸相位无关（恒为实心 `■`），因此这里固定传 0 帧。
     fn marker_segment(self) -> String {
-        self.mark().segment(0)
+        self.mark().segment(0, false)
     }
 }
 

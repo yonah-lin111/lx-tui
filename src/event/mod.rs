@@ -32,6 +32,7 @@ use tokio_stream::StreamExt;
 use crate::app::markdown::MentionEntry;
 use crate::app::state::{AppState, WorkspaceGit};
 use crate::app::update;
+use crate::chat::process::ProcessUiEvent;
 use crate::config::Config;
 use crate::db::service::Persistence;
 use crate::layout::PaneId;
@@ -97,6 +98,15 @@ pub enum AppEvent {
     ///
     /// 事件层在 **DB 与状态都就绪后**才回执，因此 loop 拿到 ticket 才执行文件 IO。
     AgentHost(chat::AgentHostEvent),
+    /// 会话运行实例被回收（切会话 / `/new` / 关窗格）后，其进程的终态快照。
+    ///
+    /// 停止发生在后台任务里，而 `Persistence` 不跨线程：终态必须回投事件层落库，
+    /// 否则库里永远留着 `running` 行（设计 §8「清理进程并记录终态」）。
+    ProcessesReaped {
+        workspace: PathBuf,
+        epoch: String,
+        snapshots: Vec<crate::chat::process::ProcessSnapshot>,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -158,8 +168,11 @@ async fn run_loop(
     let mut agent_check: Option<Instant> = None;
     // 对话框列表查询在途的仓库根；结果返回前不重复发起。
     let mut git_inflight: HashSet<PathBuf> = HashSet::new();
-    // lx 聊天在途流的取消句柄。
+    // lx 聊天在途流的取消句柄 + 会话进程运行实例。
     let mut chat_streams = chat::ChatStreams::default();
+    // 进程 UI 事件走独立通道：它们不携带请求代次，只按进程会话 ID 过滤归属。
+    let (process_sender, mut process_receiver) = mpsc::unbounded_channel::<ProcessUiEvent>();
+    chat_streams.set_process_sender(process_sender);
     commands::seed_git_requests(state);
 
     while !state.should_quit {
@@ -215,7 +228,26 @@ async fn run_loop(
             dirty = true;
         }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
-        if chat::pump_chat_streams(state, &mut chat_streams, &sender) {
+        if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
+            dirty = true;
+        }
+        // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
+        if chat::apply_process_effects(state, &mut chat_streams) {
+            dirty = true;
+        }
+        // 底部状态行的后台任务计数：与页面是否打开无关，每轮同步。
+        if chat::sync_background_task_counts(state, &chat_streams) {
+            dirty = true;
+        }
+        // 面板打开期间每轮刷新进程列表：打开之后才启动的进程也要能出现。
+        //
+        // 这里**不置脏**：返回值的语义是「已压入请求」，不是「画面需要变」。
+        // 早先把它当变化用，导致面板一打开就每帧 dirty、空闲也按 60fps 重绘
+        // 并反复克隆全部进程快照（用户观感：停在后台任务页风扇就转）。
+        // 真正的重绘由 `apply_process_effects` / `tick_task_pages` 的实际变化驱动。
+        chat::refresh_open_task_pages(state);
+        // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
+        if chat::tick_task_pages(state) {
             dirty = true;
         }
         if cwd_check.is_some_and(|at| Instant::now() >= at) {
@@ -279,6 +311,10 @@ async fn run_loop(
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             // 置顶用户消息行结论：渲染前落状态（渲染层只读，不写状态）。
             update::resolve_lx_sticky_prompt(state, &geometry.rects);
+            // 当前视口顶部行：同上，供点击展开时原地锚定。
+            update::resolve_lx_viewport_top(state, &geometry.rects);
+            // 后台任务面板的输出可见行数：同上，供翻页与滚动条几何钳制。
+            update::resolve_task_output_visible(state, &geometry.rects);
             tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();
@@ -321,6 +357,16 @@ async fn run_loop(
                 Some(Err(error)) => return Err(error),
                 None => break,
             },
+            process_event = process_receiver.recv() => {
+                if let Some(event) = process_event {
+                    chat::handle_process_event(state, &mut chat_streams, persistence, event);
+                    // 后台输出/退出一定意味着需要重绘；批量排空同一帧的剩余事件。
+                    dirty = true;
+                    while let Ok(event) = process_receiver.try_recv() {
+                        chat::handle_process_event(state, &mut chat_streams, persistence, event);
+                    }
+                }
+            }
             message = receiver.recv() => {
                 if let Some(message) = message {
                     handle_app_event(
@@ -353,6 +399,27 @@ async fn run_loop(
 
     for session in sessions.values_mut() {
         session.kill();
+    }
+    // 退出 lx：停止并 reap 全部会话进程（有界等待，未确认的保留 Interrupted 记录）。
+    let runtimes: Vec<String> = chat_streams.runtimes.sessions();
+    for session in runtimes {
+        if let Some(runtime) = chat_streams.runtimes.take(&session) {
+            let manager = runtime.manager().clone();
+            let workspace = manager.owner().workspace.clone();
+            let epoch = runtime.epoch.clone();
+            let shutdown = tokio::spawn(async move {
+                manager.shutdown().await;
+                manager.snapshots()
+            });
+            // 单批最长 3 秒：不为持久化失败无限挂住退出。
+            if let Ok(Ok(snapshots)) =
+                tokio::time::timeout(std::time::Duration::from_secs(3), shutdown).await
+            {
+                // 停止后落库终态：否则下次启动这些行仍是 running，
+                // 卡片会显示 Running 但没有任何进程可停（设计 §8）。
+                chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
+            }
+        }
     }
     // 设置服务随 TUI 退出关闭，避免回环端口悬挂。
     if let Some(service) = settings_service.as_ref() {
@@ -485,6 +552,14 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::ProcessesReaped {
+            workspace,
+            epoch,
+            snapshots,
+        } => {
+            // 会话运行实例回收后的终态落库：只写终态，活进程快照一律跳过。
+            chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
         }
         AppEvent::PromptWorktreeListed {
             repo_root,

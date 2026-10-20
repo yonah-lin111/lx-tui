@@ -427,6 +427,11 @@ pub struct ToolCallView {
     /// 上下文回放需要它把「本轮已发生的调用/结果」与历史同源重建；UI 只按需读取摘要，
     /// 绝不把本字段铺进历史正文。
     pub result_json: Option<String>,
+    /// 进程/计划工具的**类型化展示数据**；文件工具为 None（沿用 `summary`）。
+    ///
+    /// 由事件层在结算与重载两条路径上从同一条结果 JSON 生成，渲染层只读、不解析。
+    /// 装箱是为了不让单个工具步骤把整个步骤时间线撑大（卡片数据远大于文件摘要）。
+    pub detail: Option<Box<super::tool_view::ToolDetailView>>,
 }
 
 impl ToolCallView {
@@ -441,6 +446,7 @@ impl ToolCallView {
             summary: None,
             error: None,
             result_json: None,
+            detail: None,
         }
     }
 
@@ -453,6 +459,55 @@ impl ToolCallView {
         self.summary = Some(ToolSummary::from_arguments(&self.arguments_json));
         self.status = ToolStatus::Pending;
         true
+    }
+
+    /// 命令卡片视图（仅 `exec_command` 有）。
+    pub fn command_view(&self) -> Option<&super::tool_view::CommandView> {
+        match self.detail.as_deref()? {
+            super::tool_view::ToolDetailView::Command(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// 该工具步骤关联的**进程会话 ID**（进程类卡片才有）。
+    ///
+    /// `[open]` 点击时用它把后台任务面板的高亮定位到这条任务；文件工具与计划
+    /// 卡片返回 None（它们没有可打开的后台进程）。
+    pub fn process_session_id(&self) -> Option<u64> {
+        match self.detail.as_deref()? {
+            super::tool_view::ToolDetailView::Command(view) => view.process_session_id,
+            super::tool_view::ToolDetailView::Interaction(view) => Some(view.process_session_id),
+            super::tool_view::ToolDetailView::Plan(_) => None,
+        }
+    }
+
+    /// 命令卡片视图（可变）。
+    pub fn command_view_mut(&mut self) -> Option<&mut super::tool_view::CommandView> {
+        match self.detail.as_deref_mut()? {
+            super::tool_view::ToolDetailView::Command(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// 交互卡片视图（仅 `write_stdin` 有）。
+    pub fn interaction_view(&self) -> Option<&super::tool_view::ProcessInteractionView> {
+        match self.detail.as_deref()? {
+            super::tool_view::ToolDetailView::Interaction(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// 计划卡片视图（仅 `update_plan` 有）。
+    pub fn plan_view(&self) -> Option<&super::tool_view::PlanSnapshotView> {
+        match self.detail.as_deref()? {
+            super::tool_view::ToolDetailView::Plan(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// 是否带可展开的类型化详情（进程 / 计划卡片）。
+    pub fn has_detail(&self) -> bool {
+        self.detail.is_some()
     }
 
     /// 记为失败（参数超限/非法、执行失败等）。

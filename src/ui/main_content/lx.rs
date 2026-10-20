@@ -28,6 +28,7 @@ pub(crate) mod history;
 pub(crate) mod notice;
 pub(crate) mod slash;
 pub(crate) mod status;
+pub(crate) mod task;
 
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 
@@ -95,8 +96,12 @@ pub fn render(
     {
         history::render_sticky_prompt(buf, row, message);
     }
-    // 状态（模型 · 供应商 · 上下文占用）覆盖绘制在窗格底边框上。
-    status::render(buf, area, lx);
+    // 窗格底边框：面板打开时整行归面板的键位提示（不显示模型名 / 用量 / 进程计数）；
+    // 否则照旧画状态（模型 · 上下文占用 · 后台任务计数）。
+    match lx.task.as_ref() {
+        Some(page) => task::draw_footer(buf, area, page),
+        None => status::render(buf, area, lx),
+    }
     // 提及面板浮于基础内容之上、贴输入框上沿；与粘贴面板互斥。
     mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
@@ -311,6 +316,9 @@ pub fn copy_text(area: Rect, lx: &Lx, range: ((i32, u16), (i32, u16))) -> String
 }
 
 /// 命中测试：坐标落在某个入口标签内则返回该入口。
+///
+/// 入口区在后台任务面板打开时由 [`layout`] 置空（面板接管了那块区域），
+/// 因此这里自然拿不到命中——点击不会再穿透到 agent 切换。
 pub(crate) fn entry_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxEntry> {
     layout(area, lx)
         .entries
@@ -336,6 +344,10 @@ struct Layout {
     input_visible: usize,
     /// 输入框上方聊天栏（loading 转轮 + 右端回到底部按钮）；无则为 None。
     chat_bar: Option<Rect>,
+    /// 后台任务**输出容器**矩形：占用原历史区（消息列表的位置）；未打开时为 None。
+    task_output: Option<Rect>,
+    /// 后台任务 **item 列表**矩形：仍在输入框原来的位置（替换输入框）；未打开时为 None。
+    task_list: Option<Rect>,
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
@@ -352,6 +364,8 @@ impl Layout {
             input_scroll: 0,
             input_visible: 0,
             chat_bar: None,
+            task_output: None,
+            task_list: None,
             panel: None,
             entries: Vec::new(),
             horizontal: true,
@@ -360,6 +374,26 @@ impl Layout {
             fallback,
         }
     }
+}
+
+/// 后台任务面板两段式矩形的公开快照（`(item 列表, 输出容器)`）。
+///
+/// 命中测试在 `event/` 里做，而 `Layout` 是 `ui/` 私有类型；这里只把命中真正需要的
+/// 两个矩形交出去，渲染与命中共用 `layout` 的同一份几何。
+pub struct TaskRects {
+    /// item 列表：原输入框位置。
+    pub list: Rect,
+    /// 输出容器：原消息列表位置。
+    pub output: Rect,
+}
+
+/// 面板打开时的两段矩形；未打开返回 None。
+pub fn task_rects(area: Rect, lx: &Lx) -> Option<TaskRects> {
+    let lay = layout(area, lx);
+    Some(TaskRects {
+        list: lay.task_list?,
+        output: lay.task_output?,
+    })
 }
 
 /// 计算整页布局。
@@ -377,20 +411,29 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
 
     // 输入框：高度随软换行后的视觉行数增长，最多占内容区高度的一定比例（避免挤掉上方内容）。
     // 输入框下沿贴窗格底部；状态（模型 · 供应商 · 上下文占用）绘制在其底边框上。
-    let rows = lx.visual_rows();
-    let total = rows.len().max(1);
-    let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
-    let cap = usize::from(max_box.saturating_sub(2)).max(1);
-    let visible = total.min(cap);
-    let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
+    //
+    // 后台任务面板打开时输入框**仍在原位**（不参与面板布局）：面板接管的是上方
+    // 历史区，这样退出面板后消息列表与草稿都还是离开时的样子。
+    // 面板打开时这一块改由 item 列表占用：高度固定（顶边框 + tab 行 + LIST_MAX），
+    // 不随草稿行数变化——否则开关面板会让上方输出容器跳动。
+    let (box_h, visible, scroll) = if lx.task.is_some() {
+        (task::list_height(), 0, 0)
+    } else {
+        let rows = lx.visual_rows();
+        let total = rows.len().max(1);
+        let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
+        let cap = usize::from(max_box.saturating_sub(2)).max(1);
+        let visible = total.min(cap);
+        let box_h = u16::try_from(visible).unwrap_or(u16::MAX).saturating_add(2);
+        let max_scroll = total.saturating_sub(visible);
+        (box_h, visible, lx.scroll().min(max_scroll))
+    };
     let input = Rect::new(
         content_x,
         area.bottom().saturating_sub(box_h),
         content_w,
         box_h,
     );
-    let max_scroll = total.saturating_sub(visible);
-    let scroll = lx.scroll().min(max_scroll);
 
     let mut out = Layout::empty(false);
     out.input = Some(input);
@@ -400,6 +443,28 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 输入框上方一行的聊天栏：流中显示 loading 转轮，或上滚未跟随底部时显示回到底部按钮。
     if chat_bar::visible(lx) {
         out.chat_bar = chat_bar::rect(area, input);
+    }
+
+    // 后台任务面板：**两段式**布局（用户明确要求）
+    //
+    //   ┌──────────────────────────────┐
+    //   │ 输出容器（原消息列表位置）        │ ← out.task_output
+    //   ├──────────────────────────────┤
+    //   │ … 消息列表在它下方不可见 …       │
+    //   └──────────────────────────────┘
+    //   ┌──────────────────────────────┐
+    //   │ task item 列表（原输入框位置）    │ ← out.task_list
+    //   └──────────────────────────────┘
+    //
+    // 输出容器吃掉**历史区**（`history_rect` 同一份几何），item 列表继续占输入框
+    // 矩形并沿用原本的固定高度；两者之间是面板自己的分隔行。
+    if lx.task.is_some() {
+        let bottom = out.chat_bar.map_or(input.y, |bar| bar.y);
+        let height = bottom.saturating_sub(area.y);
+        if height > 0 {
+            out.task_output = Some(Rect::new(input.x, area.y, input.width, height));
+        }
+        out.task_list = Some(input);
     }
 
     // md 格式面板：贴输入框上方（聊天栏之上）；放不下则省略。
@@ -448,7 +513,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_top = center
         .min(top_limit.saturating_sub(entries_h + brand::UNDERLINE_ROWS))
         .max(region_top);
-    let entries_ok = entries_fit
+    // 后台任务面板打开时**不登记入口区**：面板接管了历史区与输入框，那三个
+    // 入口标签根本没画出来；若仍留命中矩形，点面板空白处会穿透去切换 agent
+    // （用户报的真实 bug）。
+    let entries_ok = lx.task.is_none()
+        && entries_fit
         && entries_top
             .saturating_add(entries_h)
             .saturating_add(brand::UNDERLINE_ROWS)
@@ -564,7 +633,17 @@ fn build(
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
-    if let Some(input) = lay.input {
+    // 后台任务面板打开时输入框已被替换：与 `build_chat` 同一条路径，
+    // 否则会画出上下两条`─`和一个空占位，而面板本身不画——按键却全被
+    // `apply_task_page_input` 吞掉，只剩一个死画面。
+    if let Some(page) = lx.task.as_ref() {
+        if let Some(rect) = lay.task_output {
+            task::draw_output_container(&mut grid, rect, page);
+        }
+        if let Some(rect) = lay.task_list {
+            task::draw_list(&mut grid, rect, page);
+        }
+    } else if let Some(input) = lay.input {
         cursor = input::draw(
             &mut grid,
             input,
@@ -605,24 +684,40 @@ fn build_chat(
         history_bottom.saturating_sub(area.y),
     );
     // 历史视图：滚动偏移 / body（置顶行让位）/ 置顶行结论，统一由纯函数给出。
-    let history_view = history::view(history_rect, lx);
-    history::render(&mut grid, history_view.body, lx, history_view.scroll);
-    // 历史滚动条贴右缘一列（内容溢出时；轨道只覆盖 body）。
-    if let Some(bar) = history::scrollbar(
-        history_view.body,
-        history_view.total_rows,
-        usize::from(history_view.body.height),
-        history_view.scroll,
-    ) {
-        render_history_scrollbar(&mut grid, &bar);
-    }
-    let sticky = history::sticky_rect(&history_view);
+    //
+    // 后台任务面板打开时**不画历史**（面板占用同一块矩形），但历史几何仍照常
+    // 计算：滚动偏移与 `follow_bottom` 全程不动，关闭面板后消息列表原样回来。
+    let sticky = if lay.task_output.is_some() {
+        None
+    } else {
+        let history_view = history::view(history_rect, lx);
+        history::render(&mut grid, history_view.body, lx, history_view.scroll);
+        // 历史滚动条贴右缘一列（内容溢出时；轨道只覆盖 body）。
+        if let Some(bar) = history::scrollbar(
+            history_view.body,
+            history_view.total_rows,
+            usize::from(history_view.body.height),
+            history_view.scroll,
+        ) {
+            render_history_scrollbar(&mut grid, &bar);
+        }
+        history::sticky_rect(&history_view)
+    };
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
-    if let Some(input) = lay.input
+    // 后台任务面板：输出容器占原消息列表位置，item 列表仍在原输入框位置。
+    if let Some(page) = lx.task.as_ref() {
+        if let Some(rect) = lay.task_output {
+            task::draw_output_container(&mut grid, rect, page);
+        }
+        if let Some(rect) = lay.task_list {
+            task::draw_list(&mut grid, rect, page);
+        }
+    } else if let Some(input) = lay.input
         && lay.input_visible > 0
     {
+        // 输入框容器（面板未打开时）。
         cursor = input::draw(
             &mut grid,
             input,
@@ -653,6 +748,11 @@ pub enum LxChatHit {
     JumpBottom,
     /// 点击代码块头部的复制按钮；`text` 为该块正文。
     CodeCopy(String),
+    /// 点击进程卡片的 `[open]` 行：打开后台任务面板并把高亮定位到该进程。
+    ///
+    /// `None` 表示卡片没有可定位的进程（理论上不会出现：文件工具与计划卡片不登记
+    /// 命中区），此时只打开面板、高亮落在列表首项。
+    ToolOpen(Option<u64>),
 }
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
@@ -683,7 +783,7 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
 /// 与 [`history_rect`] 的区别：滚轮区含输入框上方聊天栏（loading/回到底部按钮）一行，
 /// 保证在聊天栏上滚轮同样滚动历史；渲染/滚动条仍用不含聊天栏的 [`history_rect`]。
 pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.messages.is_empty() {
+    if !chat_geometry_is_live(lx) {
         return None;
     }
     let lay = layout(area, lx);
@@ -706,6 +806,9 @@ pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> 
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。
 pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
     let view = history_view(area, lx)?;
     history::scrollbar(
         view.body,
@@ -723,8 +826,20 @@ pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     Some((view.total_rows, usize::from(view.body.height)))
 }
 
+/// 后台任务输出容器的可见行数（键位翻页钳制用）；面板未打开返回 None。
+///
+/// 与渲染共用 [`layout`] → `task::output_rows` 同一份几何，因此"翻到哪停"与
+/// "画到哪停"永远是同一个数。
+pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
+    let rect = layout(area, lx).task_output?;
+    Some(task::output_rows(rect))
+}
+
 /// 置顶用户消息行的"跳转目标"：该消息起始行（钳到 body 的滚动上限）；无置顶行返回 None。
 pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
     let view = history_view(area, lx)?;
     let message = view.sticky?;
     let start = view.messages.get(message)?.start;
@@ -736,8 +851,18 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
 }
 
 /// 聊天模式命中测试：回到底部按钮 > 置顶行 > thinking 头部。
+/// 聊天区的几何是否「正在被画出来」——**所有基于历史几何的命中入口都必须先问它**。
+///
+/// 后台任务面板打开时，输出容器与历史区是**同一块矩形**，但历史根本没画（`build_chat`
+/// 只在没有面板时画）。命中若照旧按历史几何作答，输出区就成了一个巨大的点击穿透面：
+/// 点置顶行会跳一块看不见的历史、点代码块 `[❐]` 会复制看不见的代码、点 thinking
+/// 头部会展开看不见的块。把判定收在这里，避免每个入口各写一遍、反复漏。
+fn chat_geometry_is_live(lx: &Lx) -> bool {
+    lx.task.is_none() && !lx.chat.messages.is_empty()
+}
+
 pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
-    if lx.chat.messages.is_empty() {
+    if !chat_geometry_is_live(lx) {
         return None;
     }
     // 输入框上方聊天栏右端的「回到底部」控件。
@@ -752,6 +877,11 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
         && sticky.rect.contains((column, row).into())
     {
         return Some(LxChatHit::PromptHeader);
+    }
+    // 所有命中都限定在 body 内：内容行换算出的屏幕行可能落在 body 之下（正文比视口
+    // 长时），不设边界就会把聊天栏/输入框上的点击误判成「点了看不见的头部」。
+    if !view.body.contains((column, row).into()) {
+        return None;
     }
     // thinking 头部命中（按 body + 滚动窗口换算屏幕坐标）。
     for (message_index, part_index, header) in history::layout(view.body, lx).thinking {
@@ -774,13 +904,43 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
             return Some(LxChatHit::CodeCopy(button.body));
         }
     }
+    // 进程卡片的 `[open]` 行：点击打开后台任务面板并定位到该进程。
+    if let Some(hit) = tool_hit_at(&view, lx, column, row) {
+        return Some(LxChatHit::ToolOpen(hit.session_id));
+    }
     None
+}
+
+/// 包装卡片标题行命中：按 body + 滚动窗口把内容行换算成屏幕坐标。
+fn tool_hit_at(
+    view: &history::HistoryView,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<history::ToolHit> {
+    history::layout(view.body, lx)
+        .tools
+        .into_iter()
+        .find(|hit| {
+            let offset = hit.rect.y.saturating_sub(view.body.y);
+            if (offset as usize) < view.scroll {
+                return false;
+            }
+            let screen_y = view
+                .body
+                .y
+                .saturating_add(u16::try_from(offset as usize - view.scroll).unwrap_or(u16::MAX));
+            Rect::new(view.body.x, screen_y, view.body.width, 1).contains((column, row).into())
+        })
 }
 
 /// 代码块复制按钮的**屏幕矩形**（按当前滚动偏移换算）与正文。
 ///
 /// 渲染、命中与 tooltip 共用本入口：滚动位置一变，三者一起跟着变，不会漂移。
 pub fn code_copy_hits(area: Rect, lx: &Lx) -> Vec<history::CodeCopyButton> {
+    if !chat_geometry_is_live(lx) {
+        return Vec::new();
+    }
     let Some(view) = history_view(area, lx) else {
         return Vec::new();
     };

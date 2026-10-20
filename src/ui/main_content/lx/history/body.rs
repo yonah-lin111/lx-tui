@@ -23,6 +23,8 @@ pub(super) struct BodyStyle {
     pub(super) mark: StepMark,
     pub(super) kind: StepKind,
     pub(super) loading_frame: usize,
+    /// 呼吸相位是否还在推进（动画停止时方块恒实心）。
+    pub(super) animating: bool,
 }
 
 /// 绘制正文块：首行以步骤方块起头，所有行缩进 [`STEP_GUTTER`] 列与方块对齐
@@ -39,13 +41,19 @@ pub(super) fn draw_body(
         mark,
         kind,
         loading_frame,
+        animating,
     } = style_args;
     let inner = rect.width.saturating_sub(STEP_GUTTER);
     let mut first = true;
     for line in markdown_render::render_wrapped(content, inner) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             if first {
-                grid.put_char(rect.x, y, mark.glyph(loading_frame), mark.style(kind));
+                grid.put_char(
+                    rect.x,
+                    y,
+                    mark.glyph(loading_frame, animating),
+                    mark.style(kind),
+                );
             }
             let mut cx = rect
                 .x

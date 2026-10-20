@@ -249,9 +249,9 @@ fn history_blocks_reject_non_object_arguments() {
 
 /// 四种 wire 形状的名称集合必须等于四工具（防止漏发或错名）。
 #[test]
-fn all_wire_shapes_expose_the_four_tool_names() {
+fn all_wire_shapes_expose_the_tool_names() {
     let expected: Vec<&str> = available_tools().iter().map(|spec| spec.name).collect();
-    assert_eq!(expected, vec!["read", "search", "edit", "write"]);
+    assert_eq!(expected, crate::chat::tools::TOOL_NAMES.to_vec());
 
     let chat: Vec<String> = openai_chat_tools()
         .as_array()

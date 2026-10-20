@@ -638,3 +638,60 @@ fn to_result_json_round_trips_into_summary() {
         );
     }
 }
+
+/// 进程结果的模型文本带 `chunk_id` 与 `wall_time_seconds`（对齐 codex 响应头）。
+///
+/// 这两个字段让模型能区分「这次读到的输出」与「后续轮次」，并判断命令是不是
+/// 刚好卡在等待窗口边界——没有它们，`process_state: running` 看起来完全一样。
+#[test]
+fn process_text_reports_chunk_id_and_wall_time() {
+    let result = ToolExecutionResult::Process(Box::new(crate::chat::process::ProcessResult {
+        kind: crate::chat::process::ProcessResultKind::ExecCommand,
+        session_id: 7,
+        command: "cargo test".into(),
+        cwd: "/workspace".into(),
+        tty: false,
+        state: crate::chat::process::ProcessState::Running,
+        exit_code: None,
+        output: "running\n".into(),
+        output_start: 0,
+        output_end: 8,
+        dropped_bytes: 0,
+        truncated: false,
+        input: None,
+        wrote_input: false,
+        terminate: false,
+        chunk_id: "a1b2c3".into(),
+        wall_time_ms: 1_250,
+    }));
+    let text = format_for_model(&result);
+    assert!(text.contains("chunk_id: a1b2c3"), "text: {text}");
+    assert!(
+        text.contains("wall_time_seconds: 1.2500"),
+        "秒数按 codex 口径保留 4 位小数：{text}"
+    );
+    // 落库 JSON 用同一口径（读写两端形状必须互逆）。
+    let json = super::to_result_json(&result).expect("进程结果必须可落库");
+    let value: serde_json::Value = serde_json::from_str(&json).expect("落库 JSON");
+    assert_eq!(value["chunk_id"], "a1b2c3");
+    assert!(
+        (value["wall_time_seconds"].as_f64().unwrap_or_default() - 1.25).abs() < 1e-9,
+        "JSON 里是秒（浮点）：{json}"
+    );
+}
+
+/// 分块标识每次调用都不同，且是 6 位十六进制（codex 同款形状）。
+#[test]
+fn chunk_ids_are_six_hex_digits_and_unique() {
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..32 {
+        let id = crate::chat::process::generate_chunk_id();
+        assert_eq!(id.len(), 6, "6 位：{id}");
+        assert!(
+            id.chars().all(|ch| ch.is_ascii_hexdigit()),
+            "只含十六进制字符：{id}"
+        );
+        seen.insert(id);
+    }
+    assert!(seen.len() > 1, "不同调用不得恒定同一 ID");
+}

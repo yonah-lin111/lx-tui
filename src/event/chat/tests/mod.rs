@@ -675,4 +675,5 @@ fn view_summary_maps_every_field() {
 mod ack;
 mod flow;
 mod limits;
+mod process_tools;
 mod resume;

@@ -4,8 +4,10 @@
 //! `sequence` 只在持有写事务时读取递增，配合 worker 串行化保证同 session 单调。
 //! `checkpoint`/`finish` 以 `status='streaming'` 条件更新，迟到事件不能覆盖终态。
 
+mod process;
 mod tools;
 
+pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
 pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
     ToolCallResult, ToolCallTicket, ToolTerminalStatus,

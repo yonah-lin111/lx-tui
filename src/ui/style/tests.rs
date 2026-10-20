@@ -120,22 +120,93 @@ fn model_label_style_runs_the_entry_gradient_and_is_bold() {
     assert_eq!(model_label_style(0, 1).fg, Some(Color::Indexed(218)));
 }
 
-/// 聊天步骤的配色必须：① 结构色用翡翠绿 `Indexed 42`、可变参数用金黄 220；
-/// ② 不压暗（dim 只用于只读元信息）；③ 与正文默认前景（Reset）、边框青（Cyan）
-/// 都不同色；④ 与 markdown 的 GitHub Dark token 色域不相交。
+/// 后台进程"存活"橙色必须与既有色域全部拉得开，且**不复用**其他语义色。
+///
+/// 橙色是"任务还在后台跑"的专属信号：进程停止即回翡翠绿，所以它必须和绿（结构色）、
+/// 金黄（可变参数）、品红（思考）、天蓝（连接符）都明显不同，否则用户分不出
+/// "还在跑"与"已经停了"。同时不得压暗（dim 只留给只读元信息）。
 #[test]
-fn chat_step_palette_uses_green_structure_and_gold_params() {
-    // 用户带截图反馈「方块与正文颜色特别相近」后改定的结构色（理由见 style.rs 注释）。
+fn alive_process_yellow_is_distinct_from_every_other_step_color() {
+    let orange = chat_step_mark_alive().fg.expect("存活色必须有前景");
+    let Color::Indexed(index) = orange else {
+        panic!("存活色必须取 256 色槽位，实际 {orange:?}");
+    };
+    assert_eq!(
+        index, 208,
+        "运行中橙黄固定为 Indexed 208（选色依据见 style.rs）"
+    );
+
+    // 动词/状态文字与方块同色系（同一档深黄），只靠字重区分。
+    assert_eq!(
+        chat_step_label_alive().fg,
+        Some(orange),
+        "状态文字与方块同色"
+    );
+    assert!(
+        chat_step_mark_alive().add_modifier.contains(Modifier::BOLD),
+        "存活方块加粗（与深绿完成态靠字重区分）"
+    );
+    assert!(
+        !chat_step_label_alive()
+            .add_modifier
+            .contains(Modifier::BOLD),
+        "状态文字不加粗，让方块衬出来"
+    );
+    for (label, style) in [
+        ("方块", chat_step_mark_alive()),
+        ("文案", chat_step_label_alive()),
+    ] {
+        assert!(
+            !style.add_modifier.contains(Modifier::DIM),
+            "{label} 不得压暗"
+        );
+    }
+
+    // 不能与既有语义色撞车（撞了就分不出"活着"与"做完了/参数/思考"）。
+    for (label, other) in [
+        ("工具绿", chat_step_mark_done().fg),
+        ("工具动词绿", chat_tool_verb().fg),
+        ("思考品红", Some(Color::Indexed(218))),
+        ("失败红", agent_fail().fg),
+        ("正文默认", None),
+    ] {
+        assert_ne!(Some(orange), other, "存活深黄不得与{label}同色");
+    }
+
+    // 与金黄参数**同为暖色系**，必须区分得开（用户要求"橙黄一点"）：
+    // 运行态橙黄 208（#ff8700）比参数金 220（#ffd700）更橙，色差 27.9。
+    assert_ne!(
+        Some(orange),
+        chat_tool_param().fg,
+        "存活深黄不得与参数金黄同槽位"
+    );
+    let Color::Indexed(gold) = chat_tool_param().fg.expect("参数金有前景") else {
+        panic!("参数金必须取槽位");
+    };
+    assert!(gold > index, "参数金槽位({gold})应比存活深黄({index})更亮");
+}
+
+/// 工具步骤的配色规则：**运行中橙黄 `Indexed 208`、完成才翡翠绿 `Indexed 42`**，
+/// 可变参数金黄 220，三者都不压暗、不与正文默认前景/边框青撞色。
+///
+/// 用户要求「所有正在运行中的 tool 的方块和 title 统一为黄色，完成才显示绿色」：
+/// 因此不再按工具种类分色（进程卡片 / 文件工具 / 计划卡片共用同一档），
+/// 运行态由 `chat_step_mark_alive` / `chat_step_label_alive` / `chat_tool_verb_running`
+/// 三个 token 表达，完成态仍走原来的绿。
+#[test]
+fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
+    let running_amber = Color::Indexed(208);
     let step_green = Color::Indexed(42);
-    let palette = [42u8, 220];
+    let palette = [208u8, 42, 220];
     let chrome = [None, Some(Color::Cyan)];
 
     for (label, style) in [
-        ("方块-运行中", chat_step_mark_running()),
+        ("方块-运行中", chat_step_mark_alive()),
         ("方块-已完成", chat_step_mark_done()),
         ("文案-运行中", chat_step_label_running()),
         ("文案-已完成", chat_step_label_done()),
-        ("工具动词", chat_tool_verb()),
+        ("动词-运行中", chat_tool_verb_running()),
+        ("动词-已完成", chat_tool_verb()),
         ("工具参数", chat_tool_param()),
     ] {
         let Some(Color::Indexed(index)) = style.fg else {
@@ -152,29 +223,37 @@ fn chat_step_palette_uses_green_structure_and_gold_params() {
         assert!(!chrome.contains(&style.fg), "{label} 与正文/边框青撞色");
     }
 
-    // 方块 / 文案 / 动词统一翡翠绿；运行中用字重 + 呼吸区分于完成态。
+    // 运行态统一橙黄；完成态统一翡翠绿。
     for style in [
-        chat_step_mark_running(),
-        chat_step_mark_done(),
+        chat_step_mark_alive(),
         chat_step_label_running(),
+        chat_tool_verb_running(),
+    ] {
+        assert_eq!(style.fg, Some(running_amber), "运行态统一橙黄");
+    }
+    for style in [
+        chat_step_mark_done(),
         chat_step_label_done(),
         chat_tool_verb(),
     ] {
-        assert_eq!(style.fg, Some(step_green), "统一翡翠绿结构色");
+        assert_eq!(style.fg, Some(step_green), "完成态统一翡翠绿");
     }
+    assert_ne!(
+        chat_step_mark_alive().fg,
+        chat_step_mark_done().fg,
+        "运行与完成必须不同色（这是「完成才显示绿色」的前提）"
+    );
     assert!(
-        chat_step_mark_running()
-            .add_modifier
-            .contains(Modifier::BOLD),
-        "运行中方块加粗（呼吸 + 加粗是唯一的进行中信号）"
+        chat_step_mark_alive().add_modifier.contains(Modifier::BOLD),
+        "运行中方块加粗（呼吸 + 加粗是进行中信号）"
     );
     assert!(
         !chat_step_mark_done().add_modifier.contains(Modifier::BOLD),
         "完成方块不加粗，与运行中区分"
     );
 
-    // 可变参数沿用金黄 220，但**不加下划线**（用户要求：连续工具行里下划线成片，
-    // 会盖过翡翠绿结构色；靠金黄本身区分即可）。
+    // 可变参数沿用金黄 220，但**不加下划线**（连续工具行里下划线成片，
+    // 会盖过结构色；靠金黄本身区分即可）。
     assert_eq!(
         chat_tool_param().fg,
         agent_param().fg,

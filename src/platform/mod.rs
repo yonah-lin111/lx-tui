@@ -144,6 +144,49 @@ pub fn default_shell() -> String {
     shell
 }
 
+/// 把「登录 shell + 执行命令」翻译成该平台的 shell 参数。
+///
+/// POSIX shell 用 `-l -c <cmd>`，Windows 的 `cmd.exe` 只认 `/C <cmd>`（没有 `-l`）。
+/// 这条差异必须收在 platform 层：`chat/` 里硬编码 `-l`/`-c` 会让 Windows 上的
+/// `exec_command` 100% 失败（shell 直接报参数错误），而 OS 专属分支只允许在这里。
+pub fn shell_arguments(login: bool, cmd: &str) -> Vec<std::ffi::OsString> {
+    #[cfg(windows)]
+    {
+        let _ = login; // cmd.exe 没有登录 shell 的概念。
+        vec!["/C".into(), cmd.into()]
+    }
+    #[cfg(not(windows))]
+    {
+        let mut args: Vec<std::ffi::OsString> = Vec::with_capacity(3);
+        if login {
+            args.push("-l".into());
+        }
+        args.push("-c".into());
+        args.push(cmd.into());
+        args
+    }
+}
+
+/// 是否支持「独立进程组」（`process_group(0)`）。Windows 走 `taskkill /T`，不需要。
+pub const SUPPORTS_PROCESS_GROUP: bool = cfg!(unix);
+
+/// 运行环境的一句话描述（进系统提示，让模型不再假设 Linux 工具齐备）。
+///
+/// 只报**可判定**的事实：OS 与默认 shell。不猜包管理器或其它命令是否存在——
+/// 声明了就会被模型当成保证，而 `command -v` 才是唯一可信的探针。
+pub fn environment_summary() -> String {
+    let shell = default_shell();
+    #[cfg(target_os = "macos")]
+    let os = "macOS";
+    #[cfg(target_os = "linux")]
+    let os = "Linux";
+    #[cfg(target_os = "windows")]
+    let os = "Windows";
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let os = "an unknown OS";
+    format!("{os}, default shell `{shell}`")
+}
+
 /// 路径稳定比较键：Windows 大小写不敏感，其余平台取原文本。
 pub fn path_key(path: &Path) -> String {
     #[cfg(windows)]
@@ -175,8 +218,110 @@ pub fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
     }
 }
 
-/// 在系统默认浏览器中打开 URL；OS 命令按 cfg 门控，失败返回错误。
+/// 进程启动时刻（用于「这个 pid 还是我 spawn 的那个吗」的校验）。
 ///
+/// 只靠 pid 认进程是不安全的：pid 会被内核回收再分配。`(pid, start_time)` 才是
+/// 稳定身份——杀一个「shell 已退出的进程组」之前必须比对，否则可能误杀无关进程组。
+///
+/// 返回 `None` 表示无法判定（进程已不存在、平台不支持、或读不到）。
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        // /proc/<pid>/stat 的第 22 个字段是 starttime（开机以来的 tick 数）。
+        // 字段用空格分隔，但 comm 可能含空格与括号，因此从最后一个 ')' 之后再切。
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let tail = stat.rsplit_once(')').map(|(_, tail)| tail)?;
+        tail.split_whitespace().nth(19)?.parse().ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 没有 /proc：用 `ps -o lstart=` 的文本作为身份指纹（精度足够区分
+        // 「同一个 pid 被复用」，且无需额外 crate）。
+        let output = std::process::Command::new("ps")
+            .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!text.is_empty()).then(|| {
+            // 稳定哈希：只要同一个进程两次读到相同文本就行。
+            text.bytes().fold(0u64, |hash, byte| {
+                hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+            })
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// 该进程组是否仍有存活成员（组长已退出但后台作业还在时为 true）。
+///
+/// 用于回答「shell 退了，它拉起的后台任务还在吗」这个问题：lx spawn 时用
+/// `process_group(0)` 让 shell 当组长，shell 里 `nohup cmd &` 的作业留在同一个
+/// 进程组里。组长退出后组仍可能存活，单看组长状态会误判成"什么都没在跑"。
+///
+/// `pgid` 必须是 lx 自己 spawn 的 shell pid（组长），不是任意进程。
+pub fn process_group_has_members(pgid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        // signal 0 只做权限与存在性检查，不发信号。
+        // SAFETY: `kill` 只读整数参数，失败返回 -1，不产生未定义行为。
+        unsafe { libc::kill(-(pgid as libc::pid_t), 0) == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid;
+        false
+    }
+}
+
+/// 按进程组终止命令启动的进程树：`force=false` 先温和（SIGTERM），
+/// `force=true` 强制（SIGKILL）。Windows 走 `taskkill /T`。
+///
+/// 调用方必须随后 `wait` 取真实退出状态：发送信号不等于进程已消失。
+/// 显式脱离进程组的守护进程不保证被完整追踪，这里只尽力而为。
+pub fn terminate_process_group(pid: u32, force: bool) {
+    #[cfg(unix)]
+    {
+        let signal = if force { libc::SIGKILL } else { libc::SIGTERM };
+        // 负数 pid = 以该 pid 为组长的整个进程组（spawn 时用 process_group(0) 建立）。
+        // SAFETY: `kill` 只读取整数参数，失败返回 -1，不产生未定义行为。
+        let result = unsafe { libc::kill(-(pid as libc::pid_t), signal) };
+        if result != 0 {
+            // 进程组已不存在或权限不足：单发给组长进程兜底（通常已退出）。
+            // SAFETY: 同上。
+            unsafe {
+                libc::kill(pid as libc::pid_t, signal);
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let mut command = std::process::Command::new("taskkill");
+        command.arg("/PID").arg(pid.to_string()).arg("/T");
+        if force {
+            command.arg("/F");
+        }
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let _ = command.status();
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (pid, force);
+    }
+}
+
+/// 在系统默认浏览器中打开 URL；OS 命令按 cfg 门控，失败返回错误。///
 /// 调用方须在后台线程执行（进程启动会短暂阻塞）；`open`/`xdg-open` 等命令
 /// 本身立即返回，不等待浏览器窗口。
 pub fn open_browser(url: &str) -> io::Result<()> {

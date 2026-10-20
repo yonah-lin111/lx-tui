@@ -102,12 +102,13 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
     let mapped = match (ctrl, alt, key.code) {
         (true, false, KeyCode::Enter) => Some(LxInput::Newline),
         (true, false, KeyCode::Char(ch)) => match ch {
+            'o' | 'O' => Some(LxInput::ToggleToolDetail),
             'u' | 'U' => Some(LxInput::DeleteToLineStart),
             'k' | 'K' => Some(LxInput::DeleteToLineEnd),
             'w' | 'W' => Some(LxInput::DeleteWordBackward),
             'a' | 'A' => Some(LxInput::LineStart),
             'e' | 'E' => Some(LxInput::LineEnd),
-            'd' | 'D' => Some(LxInput::Delete),
+            'd' | 'D' => Some(LxInput::StopProcess),
             'c' | 'C' => Some(LxInput::Clear),
             't' | 'T' => Some(LxInput::ToggleThinking),
             'z' | '-' => Some(LxInput::Undo),
@@ -118,6 +119,9 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         (true, false, KeyCode::Delete) => Some(LxInput::DeleteWordForward),
         (true, false, KeyCode::Left) => Some(LxInput::WordLeft),
         (true, false, KeyCode::Right) => Some(LxInput::WordRight),
+        // Alt+↑/↓：在可展开工具卡片之间移动键盘选择（草稿与光标保持不变）。
+        (false, true, KeyCode::Up) => Some(LxInput::SelectPrevTool),
+        (false, true, KeyCode::Down) => Some(LxInput::SelectNextTool),
         (false, true, KeyCode::Char('b')) => Some(LxInput::WordLeft),
         (false, true, KeyCode::Char('f')) => Some(LxInput::WordRight),
         (false, true, KeyCode::Char('d')) => Some(LxInput::DeleteWordForward),
@@ -146,6 +150,8 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
         KeyCode::Home => Some(LxInput::Home),
         KeyCode::End => Some(LxInput::End),
         KeyCode::Tab => Some(LxInput::Tab),
+        KeyCode::PageUp => Some(LxInput::PageUp),
+        KeyCode::PageDown => Some(LxInput::PageDown),
         KeyCode::Esc => Some(LxInput::Escape),
         KeyCode::Char(ch) => Some(LxInput::Char(ch)),
         _ => None,
@@ -425,3 +431,6 @@ fn editor_command(key: KeyEvent) -> Option<EditorCommand> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod process_keys;

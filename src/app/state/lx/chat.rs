@@ -9,9 +9,14 @@ use crate::config::ai::{AiSettings, ModelSelection};
 
 mod steps;
 mod stream;
+pub mod tool_view;
 
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
+};
+pub use tool_view::{
+    CommandView, InteractionAction, PlanSnapshotView, PlanStepView, ProcessInteractionView,
+    ProcessStateView, ToolDetailView,
 };
 
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。
@@ -340,6 +345,12 @@ pub struct LxChat {
     pub turn_started_at_ms: Option<i64>,
     /// 历史视图滚动偏移（跟随底部时忽略）。
     pub history_scroll: usize,
+    /// 上一帧实际绘制的**顶部内容行号**（事件循环每次绘制前写入，渲染层只读）。
+    ///
+    /// 跟随时 `history_scroll` 是过期值（顶部行由 `total - height` 现算），而「切换
+    /// 展开状态」必须知道**用户当前正看着哪一行**才能原地展开。把它作为跨帧记忆存
+    /// 在这里，与 [`Self::suppressed_prompt_header`] 同一套做法（渲染不改状态）。
+    pub viewport_top: Option<usize>,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
     pub loading_frame: usize,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
@@ -353,6 +364,15 @@ pub struct LxChat {
     /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
     pub suppressed_prompt_header: Option<StickySuppression>,
+    /// 工具卡片详情展开状态：(message_id, call_id, 是否展开)。
+    ///
+    /// 用稳定 ID 而不是数组下标定位：历史增删、重载与切会话都不会把展开状态
+    /// 误挂到别的卡片上；重启或切会话后默认折叠（本字段随窗格内存存在）。
+    pub detail_expanded: Vec<(String, String, bool)>,
+    /// 键盘选中的可展开工具卡片：(message_id, call_id)；None 表示未选中。
+    pub selected_tool: Option<(String, String)>,
+    /// 当前计划快照（最近一次**成功提交**的 update_plan）；失败/中断不覆盖。
+    pub plan: Option<PlanSnapshotView>,
 }
 
 impl Default for LxChat {
@@ -377,12 +397,59 @@ impl LxChat {
             thinking_toggled: Vec::new(),
             turn_started_at_ms: None,
             history_scroll: 0,
+            viewport_top: None,
             loading_frame: 0,
             jump_bottom_hover: false,
             stop_armed_at: None,
             hint: None,
             suppressed_prompt_header: None,
+            detail_expanded: Vec::new(),
+            selected_tool: None,
+            plan: None,
         }
+    }
+
+    /// 复位**会话级**展示状态（`/new`、会话删除、切换到别的会话共用）。
+    ///
+    /// 三条路径的口径必须一致：`plan` 不只是展示——`start_stream` 会把它拼进本轮的
+    /// system 上下文（`current plan: …`），漏清会让新会话继承上一会话的待办；
+    /// `selected_tool` 残留会让 `^o` 指向已删除的消息而静默失去定位能力。
+    pub fn reset_session_view(&mut self) {
+        self.session_id = None;
+        self.messages.clear();
+        self.follow_bottom = true;
+        self.input_tokens_reset();
+        self.thinking_toggled.clear();
+        self.turn_started_at_ms = None;
+        self.history_scroll = 0;
+        self.viewport_top = None;
+        self.detail_expanded.clear();
+        self.selected_tool = None;
+        self.plan = None;
+    }
+
+    /// 工具卡片详情是否展开（按 `(message_id, call_id)` 定位，默认折叠）。
+    pub fn detail_is_expanded(&self, message_id: &str, call_id: &str) -> bool {
+        self.detail_expanded
+            .iter()
+            .find(|(message, call, _)| message == message_id && call == call_id)
+            .is_some_and(|(_, _, expanded)| *expanded)
+    }
+
+    /// 切换工具卡片详情展开状态，返回新状态。
+    pub fn toggle_detail(&mut self, message_id: &str, call_id: &str) -> bool {
+        let next = !self.detail_is_expanded(message_id, call_id);
+        if let Some(existing) = self
+            .detail_expanded
+            .iter_mut()
+            .find(|(message, call, _)| message == message_id && call == call_id)
+        {
+            existing.2 = next;
+            return next;
+        }
+        self.detail_expanded
+            .push((message_id.to_string(), call_id.to_string(), next));
+        next
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或

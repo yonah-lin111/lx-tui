@@ -27,11 +27,15 @@ lx-tui/
       selection.rs              选区模型（终端窗格内文本选择）
       actions.rs                行为枚举
       state/lx/                 lx 页状态：编辑器、聊天会话（chat.rs 会话/请求状态机）、
-                                聊天步骤时间线（chat/steps.rs：part/工具/status/摘要）、
+                                聊天步骤时间线（chat/steps.rs：part/工具/status/摘要/类型化详情）、
+                                进程/计划卡片视图（chat/tool_view.rs：CommandView /
+                                ProcessInteractionView / PlanSnapshotView）、
                                 流事件→步骤状态转换（chat/stream.rs）、`/` 命令面板（slash.rs）
       update/                   行为到状态的转换（含 update/chat：发送/流事件/终态；
                                 update/chat/session.rs：会话生命周期与 `/` 命令；
-                                update/chat/view.rs：DB 记录→步骤时间线投影）
+                                update/chat/view.rs：DB 记录→步骤时间线投影；
+                                update/chat/process.rs：卡片展开/键盘选择、进程事件更新、
+                                计划提交与重载恢复）
     ui/                         渲染层，只读状态
       mod.rs
       layout.rs                 屏幕区域划分（侧栏/标签栏/主区/右栏）
@@ -50,6 +54,9 @@ lx-tui/
       chat/mod.rs               聊天轮次编排：取走网络效应、装配上下文、启动 agent turn、
                                 工具调用 BeginTool/FinishTool 的 DB→状态→回执握手与按 key 过滤
       chat/host.rs              agent loop ↔ 事件层的请求枚举与 `AgentHost` 生产实现
+      chat/tool_calls.rs        BeginTool/FinishTool 握手：pending/running/结果落库门槛与结算
+      chat/timeline.rs          步骤 position、parts 快照、checkpoint 与草稿提取
+      chat/process_events.rs    进程事件 → UI 更新 + 受控输出快照落库（每秒合并、终态立即）
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     git/                        git 查询：worktree 列表的执行与解析（唯一执行 git 命令的模块）
@@ -57,15 +64,21 @@ lx-tui/
       migration.rs              Schema 迁移（v4~v9）：建表、表重建、数据回填与 `user_version` 推进
       chat.rs                   聊天会话/消息/内容块读写与按序加载
       chat/tools.rs             工具调用 CRUD、时间线位置分配、按会话加载与启动恢复
+      chat/process.rs           会话进程元数据（agent_process）：登记、输出快照合并、
+                                终态提交（revision 单调）、按会话批量加载与启动恢复
       service.rs                同步持久化服务：执行 app 层效应出箱、按需载入提示词树
     tui/                        终端生命周期：原始模式、备用屏幕、恢复
     config/                     配置模型、默认值与校验
       ai.rs                     模型配置（config/ai.json）：类型、校验与原子保存
     chat/                       流式聊天协议适配：统一事件、SSE 帧解析、thinking 标签、五种 transport、请求执行与上下文装配；
                                 lx agent 身份提示（prompt.rs：唯一稳定系统指令文本）；
-                                transport/tools/：四工具 wire 形状（Chat/Responses/Anthropic/Google）、
+                                transport/tools/：七工具 wire 形状（Chat/Responses/Anthropic/Google）、
                                 历史 call/result 归并与跨帧工具参数缓冲；
-                                文件工具执行层（chat/tools/：read/search/edit/write 与 Codex 风格补丁引擎）
+                                文件工具执行层（chat/tools/：read/search/edit/write 与 Codex 风格补丁引擎；
+                                进程/计划工具的参数规范化与结果 JSON）；
+                                会话进程管理器（chat/process/：pipe 与 PTY spawn、双流 drain、
+                                有界输出缓冲与安全文本化、stdin、等待窗口、停止与 reap）；
+                                计划契约（chat/plan.rs：全量替换、最多一个 in_progress、快照 JSON）
       events.rs                 统一纯数据事件（ChatDelta/PartKind/StopReason）
       sse.rs                    可增量喂入的 SSE 帧解析器
       thinking.rs               <think>/<thinking> 跨 chunk 标签状态机
@@ -75,7 +88,7 @@ lx-tui/
                                 单条结果 64 KiB 回放上限；turns 与 items 两视图同源）
       tools/mod.rs              文件工具执行入口：参数校验分发、上限常量、结构化结果
       tools/types.rs            工具上下文/结果/变更/错误码/ToolSpec 契约
-      tools/schema.rs           四工具稳定英文名、描述与严格 JSON Schema（additionalProperties=false）
+      tools/schema.rs           七工具稳定英文名、描述与严格 JSON Schema（additionalProperties=false）
       tools/args.rs             参数白名单校验（不信任模型遵守 schema）
       tools/path.rs             路径解析（相对路径以冻结 cwd 为基准）与 IO 错误归一化
       tools/text.rs             文本编解码：BOM/换行保留、行切分与行 diff 计数
@@ -87,6 +100,8 @@ lx-tui/
       tools/lock.rs             按规范化路径的短时写锁（不做全局串行）
       tools/output.rs           format_for_model / to_summary / to_result_json 三合一呈现
       agent_loop/mod.rs         agent loop 纯编排：多步采样、ordinal 串行工具调度、取消与限额
+      agent_loop/executor.rs    生产执行器 `AgentTools`：文件走 spawn_blocking、进程走会话
+                                ProcessManager、计划走校验 + 修订号；本轮停止集合
                                 （不依赖 app/ui/event，文件 IO 经注入的 ToolExecutor）
     settings/                   设置与命令文件持久化，及本地回环设置 Web 服务
       commands.rs               自定义命令 Markdown 文件的读写
@@ -113,11 +128,11 @@ lx-tui/
 6. `terminal/`：终端仿真状态机（alacritty_terminal 封装）；字节进、画面出，不触碰 IO、不依赖其他模块状态。
 7. `pty/`：真实进程会话；唯一允许持有 `portable-pty` 句柄与读线程的模块；窗格 shell 按所属工作区 cwd 启动。
 8. `git/`：唯一执行 git 命令的模块（`git worktree list --porcelain` 的查询与解析）；由事件层在后台线程调用，app 只接收转换后的纯数据。
-9. `db/`：唯一使用 rusqlite 的模块：SQLite 初始化与 `PRAGMA user_version` 迁移（`migration.rs`，含 v4~v9：v9 为 part 完成时刻与工具调用表重建）、工作区信任读写、提示词与文件夹 CRUD（含 2 层嵌套约束与级联删除）、聊天会话/消息/内容块 CRUD 与按序加载（`chat/mod.rs`）、工具调用状态机与时间线位置分配（`chat/tools.rs`）；`service.rs` 是事件循环持有的同步受控服务，执行 app 层 `Effect` 出箱并惰性载入提示词树，启动时按序恢复遗留 streaming 消息与 pending/running 工具；app 层保持纯内存，禁止直接触碰 rusqlite。
+9. `db/`：唯一使用 rusqlite 的模块：SQLite 初始化与 `PRAGMA user_version` 迁移（`migration.rs`，含 v4~v11：v9 为 part 完成时刻与工具调用表重建、v11 为会话进程元数据表）、工作区信任读写、提示词与文件夹 CRUD（含 2 层嵌套约束与级联删除）、聊天会话/消息/内容块 CRUD 与按序加载（`chat/mod.rs`）、工具调用状态机与时间线位置分配（`chat/tools.rs`）、会话进程元数据（`chat/process.rs`，工具结果体保持不可变）；`service.rs` 是事件循环持有的同步受控服务，执行 app 层 `Effect` 出箱并惰性载入提示词树，启动时按序恢复遗留 streaming 消息与 pending/running 工具；app 层保持纯内存，禁止直接触碰 rusqlite。
 10. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
 11. `config/`：配置结构、默认值与校验；`ai.rs` 承载模型配置（`config/ai.json`）的类型、校验与原子保存；配置只读写本项目数据根（`~/.lx-t[-dev]/config/ai.json`），不读取 lx-agent 的 `~/.lx`；配置变更不直接改运行时状态，交由 `app` 行为处理。
 12. `settings/`：设置与命令文件持久化（`settings.json`、自定义命令 Markdown 文件）及本地回环设置 Web 服务；`service.rs` 只监听 `127.0.0.1` 并带每次运行随机 token，静态资源（`page.rs` 以 `include_str!` 加载 `assets/`，经独立路由提供）与 JSON API 共用一套存储函数；`service/models.rs` 提供模型设置的脱敏 GET、原子 PUT 与远端发现 POST，状态变更经事件投递回 `event` 循环。
-13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、`lx` 身份提示（`prompt.rs`）、五种 transport 的请求/解码（`transport/`，其中 `transport/tools/` 统一四工具 wire 形状、历史 call/result 归并与跨帧参数缓冲）、请求执行与取消（`client.rs`，含“已产生工具输入即不重试”的重试闸门）与上下文装配（`context/`：完整轮次分组、`parts`/`tools` 按 position 合并为有序 `ModelItem`、整轮预算裁剪与单条结果 64 KiB 回放上限，`turns` 与 `items` 两视图同源）；`chat/agent_loop/` 是 agent loop 纯编排（多步采样、按 ordinal 串行调度工具、取消与步骤/调用上限），只依赖纯数据事件与 `db::chat` 记录类型，持久化与状态经注入的 `AgentHost` 由事件层回复；`chat/tools/` 是文件工具执行层（`read`/`search`/`edit`/`write` 与 Codex 风格补丁引擎）：相对路径以调用方冻结的 `ToolContext::cwd` 为基准、同步阻塞（由调用方 `spawn_blocking`）、只返回结构化结果，`format_for_model`/`to_summary`/`to_result_json` 是唯一三种呈现口径；工具层不触碰 Git 索引/分支/暂存区/提交，写文件经 `platform::write_file_atomic` 原子替换并按规范化路径加短时写锁。不依赖 `app`/`ui`/`event`。
+13. `chat/`：流式聊天协议适配，唯一使用 `reqwest` 的模块：统一纯数据事件（`events.rs`）、可增量 SSE 帧解析（`sse.rs`）、thinking 标签状态机（`thinking.rs`）、`lx` 身份提示（`prompt.rs`）、五种 transport 的请求/解码（`transport/`，其中 `transport/tools/` 统一七工具 wire 形状、历史 call/result 归并与跨帧参数缓冲）、请求执行与取消（`client.rs`，含“已产生工具输入即不重试”的重试闸门）与上下文装配（`context/`：完整轮次分组、`parts`/`tools` 按 position 合并为有序 `ModelItem`、整轮预算裁剪与单条结果 64 KiB 回放上限，`turns` 与 `items` 两视图同源）；`chat/agent_loop/` 是 agent loop 纯编排（多步采样、按 ordinal 串行调度工具、取消与步骤/调用上限），只依赖纯数据事件与 `db::chat` 记录类型，持久化与状态经注入的 `AgentHost` 由事件层回复；`chat/tools/` 是文件工具执行层（`read`/`search`/`edit`/`write` 与 Codex 风格补丁引擎）：相对路径以调用方冻结的 `ToolContext::cwd` 为基准、同步阻塞（由调用方 `spawn_blocking`）、只返回结构化结果，`format_for_model`/`to_summary`/`to_result_json` 是唯一三种呈现口径；工具层不触碰 Git 索引/分支/暂存区/提交，写文件经 `platform::write_file_atomic` 原子替换并按规范化路径加短时写锁。不依赖 `app`/`ui`/`event`。
 14. `platform/`：OS 专属代码唯一落点，按 `#[cfg(...)]` 门控（含文件/目录权限收紧、原子文件替换 `write_file_atomic`/`rename_over`）；核心模块不得出现裸 OS 分支。
 15. `tests/`：跨模块集成测试；单元测试体放模块对应的 `tests.rs`，由主文件的 `#[cfg(test)] mod tests;` 引入，不集中存放。
 16. `assets/`：浏览器前端资源，HTML/CSS/JS 分文件维护，经 `include_str!` 编译进二进制并按独立路由提供，遵循 `html-assets.md`。

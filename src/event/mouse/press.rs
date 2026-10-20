@@ -386,8 +386,47 @@ pub(crate) fn handle_mouse_down_left(
                 .pane_anywhere(pane)
                 .is_some_and(|target| target.view == PaneView::Lx)
             {
-                // lx 页：提及面板候选 > 聊天控件 > 入口按钮 > 输入框文本区 > 输入框滚动条 > 整页选区。
+                // lx 页：提及面板候选 > 聊天控件 > 后台任务面板控件 > 入口按钮 > …
                 update::focus_pane(state, pane);
+                // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
+                let task_hit = state.pane_anywhere(pane).and_then(|target| {
+                    target.lx.task.as_ref()?;
+                    let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
+                    ui::main_content::lx::task::hit(rects.list, mouse.column, mouse.row)
+                });
+                // 输出容器的滚动条：thumb 开始拖拽，轨道点击跳转。
+                if let Some(rects) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
+                    && let Some(page) = state.pane_anywhere(pane).and_then(|t| t.lx.task.as_ref())
+                    && let Some(bar) =
+                        ui::main_content::lx::task::output_scrollbar(rects.output, page)
+                    && bar.track.contains((mouse.column, mouse.row).into())
+                {
+                    match ui::widgets::scrollbar::thumb_grab_offset(&bar, mouse.row) {
+                        Some(grab) => state.task_scroll_drag = Some(grab),
+                        None => {
+                            let offset =
+                                ui::widgets::scrollbar::offset_from_track_row(&bar, mouse.row);
+                            update::set_task_output_scroll(state, pane, offset);
+                        }
+                    }
+                    update::focus_pane(state, pane);
+                    *dirty = true;
+                    return;
+                }
+                if let Some(hit) = task_hit {
+                    match hit {
+                        ui::main_content::lx::task::TaskHit::Tab(index) => {
+                            update::select_task_tab(state, pane, index);
+                        }
+                        ui::main_content::lx::task::TaskHit::Close => {
+                            update::close_task_page(state, pane);
+                        }
+                    }
+                    *dirty = true;
+                    return;
+                }
                 let mention_hit = state.pane_anywhere(pane).and_then(|target| {
                     ui::main_content::lx::mention_item_at(
                         inner,
@@ -420,6 +459,9 @@ pub(crate) fn handle_mouse_down_left(
                         }
                         ui::main_content::lx::LxChatHit::JumpBottom => {
                             update::jump_lx_history_bottom(state, pane);
+                        }
+                        ui::main_content::lx::LxChatHit::ToolOpen(session_id) => {
+                            update::open_task_page_at(state, pane, session_id);
                         }
                         ui::main_content::lx::LxChatHit::CodeCopy(text) => {
                             // 复制代码块正文（不含围栏与语言行）；toast 锚在**本窗格**

@@ -2,3 +2,6 @@
 .worktrees/
 
 .codegraph/
+# 手工验证后台任务功能时留下的临时脚本与日志（不要提交）
+/background_task*.sh
+/background_task*.log

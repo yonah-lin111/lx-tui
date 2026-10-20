@@ -1407,6 +1407,7 @@ fn idle_chat_bar_has_no_loading_mark() {
     assert!(!text.contains(text::chat::LOADING_LABEL), "{text}");
 }
 
+mod open_entry;
 mod slash_panels;
 
 #[test]

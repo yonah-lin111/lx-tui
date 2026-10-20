@@ -32,7 +32,7 @@ use super::notice;
 
 mod body;
 mod code_copy;
-mod tool;
+pub(crate) mod tool;
 
 /// 代码块复制按钮占用的列数（`[❐]` 三列）。
 const CODE_COPY_WIDTH: u16 = 3;
@@ -71,6 +71,11 @@ const STICKY_SAMPLE_CHARS: usize = 512;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepMark {
     Running,
+    /// 后台进程仍存活（`exec_command` / `write_stdin` 卡片专用）：橙色。
+    ///
+    /// 与 [`Self::Running`] 的区别只在**颜色**（橙 = 任务还在后台烧）；字形规则完全
+    /// 相同——两者都靠"有动画时才闪"，见 [`Self::glyph`]。
+    Alive,
     Done,
     Failed,
     Interrupted,
@@ -78,10 +83,18 @@ pub(super) enum StepMark {
 }
 
 impl StepMark {
-    /// 方块字形：运行中按帧呼吸；取消恒空心，其余终态恒实心。
-    pub(super) fn glyph(self, loading_frame: usize) -> char {
+    /// 方块字形：**有动画时**运行中按帧呼吸；取消恒空心，其余终态恒实心。
+    ///
+    /// `animating` 是"这一帧的相位是否还在推进"（渲染层传 `lx.chat.status.streaming`）。
+    /// **动画一停就必须画实心**：相位冻结在空心那一相会让一个活着的后台任务永久显示
+    /// 成 `□`，看起来像失败/取消（用户带截图反馈的真实 bug）。把兜底写在这里而不是
+    /// 让状态层在收尾时手动归零，是因为导致动画停下的路径很多（流结束、面板遮挡、
+    /// 事件循环短暂卡住），漏掉任何一处都会复现。
+    pub(super) fn glyph(self, loading_frame: usize, animating: bool) -> char {
         let filled = match self {
-            Self::Running => (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2),
+            Self::Running | Self::Alive => {
+                !animating || (loading_frame / text::agent::STEP_BREATH_TICKS).is_multiple_of(2)
+            }
             Self::Done | Self::Failed | Self::Interrupted => true,
             Self::Cancelled => false,
         };
@@ -99,14 +112,15 @@ impl StepMark {
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
             Self::Running => kind.style_running(),
+            Self::Alive => style::chat_step_mark_alive(),
             Self::Done => kind.style_done(),
         }
     }
 
     /// 标记段（字形 + 空格）；工具行与 thinking 头部共用同一份拼法。
     /// 颜色由调用方用 [`Self::style`] 单独上，所以这里不需要 [`StepKind`]。
-    pub(super) fn segment(self, loading_frame: usize) -> String {
-        format!("{} ", self.glyph(loading_frame))
+    pub(super) fn segment(self, loading_frame: usize, animating: bool) -> String {
+        format!("{} ", self.glyph(loading_frame, animating))
     }
 }
 
@@ -132,7 +146,9 @@ impl StepKind {
         match self {
             Self::Body => style::chat_step_mark_running_body(),
             Self::Thinking => style::chat_step_mark_running_thinking(),
-            Self::Tool => style::chat_step_mark_running(),
+            // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
+            // tool 的方块和 title 统一为黄色，完成才显示绿色"。
+            Self::Tool => style::chat_step_mark_alive(),
         }
     }
 
@@ -189,6 +205,10 @@ pub struct HistoryLayout {
     pub thinking: Vec<(usize, usize, Rect)>,
     /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
     pub code_copy: Vec<CodeCopyButton>,
+    /// 进程卡片 `[open]` 行的命中矩形：消息 id、call id、进程会话 id、可点区域。
+    ///
+    /// 每张进程卡片**只有一个**矩形（树体末行）；点标题或命令行都不触发任何动作。
+    pub tools: Vec<ToolHit>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
     /// 渲染出的内容总行数（滚动上限用）。
@@ -196,6 +216,19 @@ pub struct HistoryLayout {
 }
 
 pub use code_copy::CodeCopyButton;
+
+/// 进程卡片 `[open]` 行的命中区。
+///
+/// 只有进程卡片有命中区，且只有**一行**（树体末行的 `[open]`）：点它打开后台任务
+/// 面板并把高亮定位到 `session_id` 对应的任务。标题行与命令行是纯展示。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolHit {
+    pub message_id: String,
+    pub call_id: String,
+    /// 该卡片关联的进程会话 ID（`[open]` 用它定位面板高亮）；未知时为 None。
+    pub session_id: Option<u64>,
+    pub rect: Rect,
+}
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,11 +275,13 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     let mut rows = 0usize;
     let mut thinking = Vec::new();
     let mut code_copy = Vec::new();
+    let mut tools: Vec<ToolHit> = Vec::new();
     if width == 0 {
         return HistoryLayout {
             area,
             thinking,
             code_copy,
+            tools,
             messages: Vec::new(),
             total_rows: 0,
         };
@@ -276,7 +311,14 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         },
                     ),
                 },
-                AssistantStepView::Tool { call, .. } => (false, tool_rows(call, width)),
+                AssistantStepView::Tool { call, .. } => (
+                    false,
+                    tool_rows(
+                        call,
+                        width,
+                        lx.chat.detail_is_expanded(&message.id, &call.call_id),
+                    ),
+                ),
             };
             if step_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行。
@@ -285,6 +327,21 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                 rows += 1;
             }
             has_previous = true;
+            if let AssistantStepView::Tool { call, .. } = step
+                && let Some(offset) = tool::open_offset(call)
+            {
+                // 进程卡片只有 `[open]` 一行可点（打开后台任务面板）：标题与命令是
+                // 纯展示，点它们什么都不发生——卡片已经没有可展开的内容。
+                let open_y = area
+                    .y
+                    .saturating_add(u16::try_from(rows + offset).unwrap_or(u16::MAX));
+                tools.push(ToolHit {
+                    message_id: message.id.clone(),
+                    call_id: call.call_id.clone(),
+                    session_id: call.process_session_id(),
+                    rect: Rect::new(area.x, open_y, width, 1),
+                });
+            }
             if is_reasoning {
                 let header_y = area
                     .y
@@ -339,6 +396,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         area,
         thinking,
         code_copy,
+        tools,
         messages: messages_rows,
         total_rows: rows,
     }
@@ -531,7 +589,7 @@ fn put_buffer_line(
 }
 
 /// 按显示列截断，溢出以 `…` 收尾（宽字符按两列计）。
-fn truncate_with_ellipsis(value: &str, max: usize) -> String {
+pub(super) fn truncate_with_ellipsis(value: &str, max: usize) -> String {
     if value.width() <= max {
         return value.to_string();
     }
@@ -586,7 +644,14 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                     };
                     (rows, Some((part, expanded)))
                 }
-                AssistantStepView::Tool { call, .. } => (tool_rows(call, content.width), None),
+                AssistantStepView::Tool { call, .. } => (
+                    tool_rows(
+                        call,
+                        content.width,
+                        lx.chat.detail_is_expanded(&message.id, &call.call_id),
+                    ),
+                    None,
+                ),
             };
             if block_rows == 0 {
                 continue; // 空正文块不占行，也不引入块间空行（与 `layout` 同口径）。
@@ -597,13 +662,15 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
             has_previous = true;
             let Some((part, expanded)) = part_kind else {
                 if let AssistantStepView::Tool { call, .. } = step {
-                    tool::draw(
+                    tool::draw_animated(
                         grid,
                         content,
                         scroll,
                         &mut row_index,
                         call,
                         lx.chat.loading_frame,
+                        lx.chat.detail_is_expanded(&message.id, &call.call_id),
+                        lx.chat.status.streaming,
                     );
                 }
                 continue;
@@ -651,6 +718,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                                 mark,
                                 kind: StepKind::Body,
                                 loading_frame: lx.chat.loading_frame,
+                                animating: lx.chat.status.streaming,
                             },
                         );
                     }
@@ -671,7 +739,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         grid.put_char(
                             content.x,
                             y,
-                            mark.glyph(lx.chat.loading_frame),
+                            mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
                             mark.style(StepKind::Thinking),
                         );
                         let x = content.x.saturating_add(STEP_GUTTER);
@@ -748,12 +816,13 @@ fn markdown_rows(content: &str, width: u16) -> usize {
     markdown_render::render_wrapped(content, width).len()
 }
 
-/// 工具步骤占用的渲染行数（**恒为 1 行单行工具行**）。
+/// 工具步骤占用的渲染行数。
 ///
 /// `layout` 与 `render` 共用本入口（内部即 `tool::rows`）：工具行一旦换行，滚动条、
-/// 置顶用户行与 thinking 命中矩形都会漂移。
-fn tool_rows(call: &crate::app::state::ToolCallView, width: u16) -> usize {
-    tool::rows(call, width)
+/// 置顶用户行与 thinking 命中矩形都会漂移。`expanded` 只影响进程/计划卡片
+/// （文件工具恒为 2 行，展开状态不改变它的几何）。
+fn tool_rows(call: &crate::app::state::ToolCallView, width: u16, expanded: bool) -> usize {
+    tool::rows(call, width, expanded)
 }
 
 /// 本轮统计行（assistant 消息末尾）：`模型 · 2.9k in · 307 out · 70% cached ·

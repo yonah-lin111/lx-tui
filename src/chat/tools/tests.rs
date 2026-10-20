@@ -3,11 +3,11 @@
 use super::test_support::*;
 use super::*;
 
-/// 四工具名字固定且英文。
+/// 工具名字固定且英文（四个文件工具 + 进程/计划三工具）。
 #[test]
-fn available_tools_are_the_four_stable_names() {
+fn available_tools_are_the_seven_stable_names() {
     let names: Vec<&str> = available_tools().iter().map(|spec| spec.name).collect();
-    assert_eq!(names, vec!["read", "search", "edit", "write"]);
+    assert_eq!(names, crate::chat::tools::TOOL_NAMES.to_vec());
     for spec in available_tools() {
         assert!(
             !spec.description.is_empty(),

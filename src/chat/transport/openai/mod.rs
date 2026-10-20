@@ -17,7 +17,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::LX_SYSTEM_PROMPT;
+use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, ToolCallBuffer, arguments_string, history_blocks, openai_chat_tools,
     protocol_error,
@@ -85,7 +85,7 @@ pub fn build(
 fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
     let mut messages: Vec<Value> = vec![json!({
         "role": "system",
-        "content": LX_SYSTEM_PROMPT,
+        "content": system_prompt(),
     })];
     if request.items.is_empty() {
         messages.extend(

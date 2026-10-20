@@ -22,10 +22,12 @@ pub mod prompt_history;
 pub mod workspace;
 
 pub use lx::{
-    AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, HistoryEntry, HistoryPanel,
-    InputHint, InputHintLevel, Lx, LxChat, LxEntry, ModelCandidate, ModelPicker, ModelPickerStage,
-    ModelsSnapshot, PanelWindow, RequestKey, RequestState, SlashCommand, SlashPanel, ToolCallView,
-    ToolStatus, ToolSummary,
+    AssistantStepView, ChatMessageView, ChatPartView, CommandView, FrozenModel, HistoryEntry,
+    HistoryPanel, InputHint, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry,
+    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PlanSnapshotView,
+    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, RequestKey, RequestState,
+    SlashCommand, SlashPanel, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
+    ToolSummary,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -125,6 +127,8 @@ pub struct AppState {
     pub workspace_scroll_drag: Option<u16>,
     /// 拖拽 prompt 滚动条 thumb 时相对顶部的抓取偏移。
     pub prompt_scroll_drag: Option<u16>,
+    /// 拖拽后台任务输出容器滚动条 thumb 时相对顶部的抓取偏移。
+    pub task_scroll_drag: Option<u16>,
     /// prompt 树行最近一次左键点击（可见行索引、时刻）；双击判定用。
     pub prompt_row_click: Option<(usize, Instant)>,
     /// 引用文件夹目录弹窗最近一次左键点击（行下标、时刻）；双击判定用。
@@ -226,6 +230,7 @@ impl AppState {
             workspace_hover: None,
             workspace_scroll_drag: None,
             prompt_scroll_drag: None,
+            task_scroll_drag: None,
             prompt_row_click: None,
             referenced_menu_click: None,
             referenced_search_scroll_drag: None,
