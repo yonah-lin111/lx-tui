@@ -32,7 +32,14 @@ const HINT_GAP: u16 = 1;
 const SCAN_WINDOW: usize = 3;
 
 /// 是否显示聊天栏：有临时提示、流中（loading）或上滚未跟随底部（回到底部控件）。
+///
+/// **后台任务面板打开时不显示**：这一行属于聊天历史区（loading / 回到底部都是
+/// 针对消息列表的），而面板已经把历史区换成输出容器——此时漂一个
+/// `↓ jump to bottom` 出来既是错位信息，点了也只会滚动看不见的历史。
 pub(super) fn visible(lx: &Lx) -> bool {
+    if lx.task.is_some() {
+        return false;
+    }
     if lx.chat.messages.is_empty() && lx.chat.hint.is_none() {
         return false;
     }
@@ -47,7 +54,13 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
 
 /// 回到底部控件矩形（未跟随底部、**无临时提示**且空间足够时）；供命中与测试。
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.follow_bottom || lx.chat.messages.is_empty() || lx.chat.hint.is_some() {
+    // 面板打开时聊天栏整体不画（见 [`visible`]），命中区也必须一起消失，
+    // 否则会出现"看不见却能点"的穿透。
+    if lx.task.is_some()
+        || lx.chat.follow_bottom
+        || lx.chat.messages.is_empty()
+        || lx.chat.hint.is_some()
+    {
         return None;
     }
     let input = super::input_rect(area, lx)?;

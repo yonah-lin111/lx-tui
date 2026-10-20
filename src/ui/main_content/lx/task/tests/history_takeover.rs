@@ -417,3 +417,54 @@ fn shrinking_output_clamps_but_keeps_the_read_position() {
     page.set_output(next);
     assert_eq!(page.output_scroll, 10, "钳到新上限（20 − 10）");
 }
+
+// ===== bug 回归：面板里不得出现「↓ jump to bottom」 =====
+
+#[test]
+fn task_panel_hides_the_jump_to_bottom_bar() {
+    // 真实 bug：面板打开时输出容器已接管历史区，聊天栏却还画着
+    // `↓ jump to bottom`——那是消息列表的控件，此时点了只会滚动看不见的历史。
+    let mut lx = lx_with_messages();
+    // 构造"上滚未跟随底部"状态：平时正是它让聊天栏出现。
+    lx.chat.follow_bottom = false;
+    lx.chat.history_scroll = 0;
+    let closed = render_lines(&lx, 70, 24).join("\n");
+    assert!(
+        closed.contains(text::LX_JUMP_BOTTOM_HINT),
+        "前提：关闭态确实显示回到底部控件：{closed}"
+    );
+
+    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    let opened = render_lines(&lx, 70, 24).join("\n");
+    assert!(
+        !opened.contains(text::LX_JUMP_BOTTOM_HINT),
+        "面板打开时不得显示回到底部控件：{opened}"
+    );
+
+    // 关闭面板后恢复（历史区回来，控件也跟着回来）。
+    lx.task = None;
+    let restored = render_lines(&lx, 70, 24).join("\n");
+    assert!(
+        restored.contains(text::LX_JUMP_BOTTOM_HINT),
+        "关闭面板后控件恢复：{restored}"
+    );
+}
+
+#[test]
+fn task_panel_hides_the_streaming_loading_bar() {
+    // loading 行同理：它属于聊天历史区，面板打开时不显示。
+    let mut lx = lx_with_messages();
+    lx.chat.status.streaming = true;
+    let closed = render_lines(&lx, 70, 24).join("\n");
+    assert!(
+        closed.contains(text::chat::LOADING_LABEL),
+        "前提：流中确实显示 loading 行：{closed}"
+    );
+
+    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    let opened = render_lines(&lx, 70, 24).join("\n");
+    assert!(
+        !opened.contains(text::chat::LOADING_LABEL),
+        "面板打开时不得显示聊天栏 loading：{opened}"
+    );
+}
