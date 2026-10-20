@@ -102,10 +102,12 @@ fn command_body(view: &CommandView, expanded: bool) -> Vec<BodyRow> {
         )));
     }
     let start = lines.len().saturating_sub(shown);
+    // 输出块是一个**节点**：首行 `├─`/`└─`，其余行 `│`，读起来是"一段输出"。
     body.extend(
         lines[start..]
             .iter()
-            .map(|line| BodyRow::output(line.clone())),
+            .enumerate()
+            .map(|(offset, line)| BodyRow::output(line.clone(), offset == 0)),
     );
     body
 }
@@ -144,20 +146,29 @@ fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
     body.extend(
         lines[start..]
             .iter()
-            .map(|line| BodyRow::output(line.clone())),
+            .enumerate()
+            .map(|(offset, line)| BodyRow::output(line.clone(), offset == 0)),
     );
     body
 }
 
 /// 树体的一行：**未加连接符**的内容 + 着色档位。
 ///
-/// 连接符由 [`draw_body`] 统一补：前 n-1 行 `  │ `、最后一行 `  └─`，
-/// 因此「哪一行收口」只有一处判断，行数永远等于 `body.len()`。
+/// 连接符由 [`draw_body`] 统一补。这里只为每行标注「它是不是一个**节点**的首行」：
+///
+/// - 节点首行（命令、输出块的第一行、提示行）：`├─`；若是最后一个节点则 `└─`；
+/// - 节点内部的续行（同一段输出的第 2 行起）：`│`，表示「还在上一个节点里」。
+///
+/// 早先的实现给每一行都画 `│`、只有最后一行 `└─`，于是输出看起来是十几根并列的
+/// 竖线，读不出「哪几行属于同一个节点」。改用 `├─` 才有真正的分节语义
+/// （用户要求：不要全部用 `│` 和 `└─`，要结合 `├─`）。
 struct BodyRow {
     text: String,
     style: ratatui::style::Style,
     /// 单行化后的取样上限（命令可更长，输出同样限长）。
     sample: usize,
+    /// 是否为一个节点的首行（决定 `├─` / `└─` 还是 `│`）。
+    head: bool,
 }
 
 impl BodyRow {
@@ -166,6 +177,7 @@ impl BodyRow {
             text: format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX),
             style: style::chat_tool_param(),
             sample: SAMPLE_CHARS,
+            head: true,
         }
     }
 
@@ -174,6 +186,7 @@ impl BodyRow {
             text: content.into(),
             style: style::agent_step_detail(),
             sample: SAMPLE_CHARS,
+            head: true,
         }
     }
 
@@ -182,14 +195,17 @@ impl BodyRow {
             text: content.into(),
             style: style::agent_warn(),
             sample: SAMPLE_CHARS,
+            head: true,
         }
     }
 
-    fn output(content: impl Into<String>) -> Self {
+    /// 输出的第一行是新节点，其余行是同一节点的续行。
+    fn output(content: impl Into<String>, head: bool) -> Self {
         Self {
             text: content.into(),
             style: style::text(),
             sample: SAMPLE_CHARS,
+            head,
         }
     }
 }
@@ -351,16 +367,22 @@ fn draw_title(
     *row_index += 1;
 }
 
-/// 绘制树体：前 n-1 行 `  │  `、最后一行 `  └─ `；推进的行数 = `body.len()`。
+/// 绘制树体：节点首行画 `├─`（最后一个节点 `└─`），节点内的续行画 `│`；
+/// 推进的行数 = `body.len()`。
+///
+/// 收口判断看**最后一个节点首行**而非最后一行：最后一段输出可以有多个续行，
+/// `└` 必须落在该段的首行上，否则树干会从输出中间收口、下面继续吊着行。
 fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, body: &[BodyRow]) {
-    let last = body.len().saturating_sub(1);
+    let last_head = body.iter().rposition(|row| row.head).unwrap_or(0);
     let limit = usize::from(rect.width);
     for (index, row) in body.iter().enumerate() {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            let connector = if index == last {
+            let connector = if !row.head {
+                text::agent::TREE_BAR
+            } else if index == last_head {
                 text::agent::TREE_LEAF
             } else {
-                text::agent::TREE_BAR
+                text::agent::TREE_BRANCH
             };
             let connector_style = style::chat_notice_connector();
             let content_cols = limit.saturating_sub(TREE_COLS);
@@ -386,6 +408,8 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
 /// 又会在输出预览刷新时反复抖动（每帧变一个数）。不足一秒统一显示纯状态词。
 fn process_status(state: ProcessStateView, started_at_ms: Option<i64>) -> Option<String> {
     let label = text::agent::proc_exit_label(state);
+    // 时长只在进程**仍在跑**时才有意义：终态的时间戳冻结在 `ended_at_ms`，
+    // 拿 `now - started` 算会一路涨下去（"关掉了还在计时"那个 bug 的直接原因）。
     if state.is_running()
         && let Some(started) = started_at_ms
     {

@@ -3,6 +3,8 @@
 use crate::app::state::{
     AppState, ChatMessageView, ProcessStateView, ToolCallView, ToolDetailView, ToolStatus,
 };
+#[allow(unused_imports)]
+use crate::app::update::chat::apply_interaction_exit;
 use crate::app::update::chat::*;
 use crate::chat::plan::{PlanSnapshot, PlanStep, PlanStepStatus};
 use crate::chat::process::{
@@ -381,4 +383,131 @@ fn process_owner_is_not_confused_with_the_chat_session() {
         panic!("expected command");
     };
     assert_eq!(view.process_session_id, Some(1));
+}
+
+// ===== 本轮结束后的后台终态（用户报的 `Running · 4m 44s` 停不下来）=====
+
+/// 把助手消息改成**已结束**（`complete`），模拟"这一轮早说完了，进程还在后台跑"。
+fn finish_the_turn(state: &mut AppState, pane: PaneId) {
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.chat.messages[0].status = "complete".into();
+}
+
+#[test]
+fn background_exit_reaches_a_card_in_a_finished_turn() {
+    // 真实场景：模型交出进程控制权后本轮结束，用户继续别的对话；
+    // 进程过一会儿退出，卡片必须跟着变成终态。
+    // 旧实现只在「最后一条 streaming 助手消息」里找卡片，轮次一结束就再也找不到，
+    // 于是标题一直显示 `Running · 4m 44s`，直到进程被杀。
+    let (mut state, pane) = state_with_command(3);
+    finish_the_turn(&mut state, pane);
+    let event = crate::chat::process::ProcessUiEvent::Exited {
+        session_id: 3,
+        origin_call_id: "call-1".into(),
+        state: ProcessState::Stopped,
+        exit_code: None,
+    };
+    assert!(
+        apply_process_exit(&mut state, &event, None),
+        "已结束的轮次里的卡片也必须收到终态"
+    );
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-1").expect("tool");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert_eq!(
+        view.state,
+        ProcessStateView::Stopped,
+        "卡片必须收敛到终态，不能停在 Running"
+    );
+}
+
+#[test]
+fn background_output_reaches_a_card_in_a_finished_turn() {
+    // 输出同理：轮次结束后进程继续输出，预览应当继续更新。
+    let (mut state, pane) = state_with_command(4);
+    finish_the_turn(&mut state, pane);
+    let snapshot = ProcessSnapshot {
+        session_id: 4,
+        command: "cargo test".into(),
+        cwd: "/workspace".into(),
+        tty: false,
+        state: ProcessState::Running,
+        exit_code: None,
+        tail: "later line\n".into(),
+        dropped_bytes: 0,
+        started_at_ms: 1_000,
+        ended_at_ms: None,
+        origin_call_id: "call-1".into(),
+    };
+    assert!(
+        apply_process_output(&mut state, 4, "call-1", snapshot),
+        "已结束的轮次里的卡片也必须继续接收输出"
+    );
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-1").expect("tool");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert_eq!(view.output_tail, "later line\n");
+}
+
+#[test]
+fn interaction_cards_settle_when_the_process_exits() {
+    // `Send input` 卡片记的是"当次交互时进程在跑"。进程退出后它也必须收敛，
+    // 否则那几张卡片会永远显示 `Running`（截图里的三张 `Send input`）。
+    let (mut state, pane) = state_with_command(5);
+    let result = ProcessResult {
+        kind: ProcessResultKind::WriteStdin,
+        session_id: 5,
+        command: "while true; do read -r line; done".into(),
+        cwd: "/workspace".into(),
+        tty: true,
+        state: ProcessState::Running,
+        exit_code: None,
+        output: "got: hi\n".into(),
+        output_start: 0,
+        output_end: 8,
+        dropped_bytes: 0,
+        truncated: false,
+        input: Some("hi".into()),
+        wrote_input: true,
+        terminate: false,
+        chunk_id: "c1".into(),
+        wall_time_ms: 3,
+    };
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let mut call = ToolCallView::new("call-input", "write_stdin", 1);
+        call.status = ToolStatus::Completed;
+        call.detail = Some(Box::new(ToolDetailView::from_process(&result)));
+        let message = &mut target.lx.chat.messages[0];
+        message
+            .steps
+            .push(crate::app::state::AssistantStepView::Tool { position: 1, call });
+    }
+    assert!(apply_interaction_exit(
+        &mut state,
+        5,
+        &ProcessState::Stopped
+    ));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-input").expect("tool");
+    let Some(ToolDetailView::Interaction(view)) = call.detail.as_deref() else {
+        panic!("expected interaction view");
+    };
+    assert_eq!(
+        view.state,
+        ProcessStateView::Stopped,
+        "交互卡片也必须收敛到终态"
+    );
+    // 输出正文不动：那是一次交互的事实记录。
+    assert_eq!(view.output, "got: hi\n");
+    // 已终态的卡片不会被再次改动。
+    assert!(!apply_interaction_exit(
+        &mut state,
+        5,
+        &ProcessState::Stopped
+    ));
 }

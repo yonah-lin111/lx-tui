@@ -52,16 +52,23 @@ pub const MARKER_DOT: &str = "●";
 pub const MARKER_TREE_LEAF: &str = "└─";
 /// 工具卡片树形体（与 prompt list 同一套直角语法）。
 ///
-/// 两条前缀**等宽 5 列**，内容一律从第 5 列起，与文件工具详情行的
+/// 三条前缀**等宽 5 列**，内容一律从第 5 列起，与文件工具详情行的
 /// [`detail prefix`](crate::ui::main_content::lx::history::tool::detail_prefix) 完全对齐：
 ///
 /// ```text
-///   │  cmd
-///   └─ cmd
+///   ├─ $ cargo test
+///   │  test one ... ok
+///   └─ test result: ok
 /// ```
 ///
-/// `│` 与 `└─` 的 `└` 落在同一列，中间行与收口行因此连成一根树干。
+/// - [`TREE_BRANCH`]：一个**节点**的首行，且后面还有节点（`├─`）；
+/// - [`TREE_LEAF`]：最后一个节点的首行，收口（`└─`）；
+/// - [`TREE_BAR`]：节点内部的续行（同一段输出的后续行），只画竖线。
+///
+/// `├` 与 `└` 落在同一列，节点首行因此连成一根主干；续行用 `│` 表示
+/// 「还在上一个节点里」。三条前缀等宽，正文永远左对齐。
 pub const TREE_BAR: &str = "  │  ";
+pub const TREE_BRANCH: &str = "  ├─ ";
 pub const TREE_LEAF: &str = "  └─ ";
 /// todo 三态标记（取 claude 一组：完成 / 进行中 / 待办）。
 pub const TODO_DONE: &str = "✔";

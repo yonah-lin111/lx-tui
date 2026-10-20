@@ -253,6 +253,43 @@
     + `ui/main_content/lx/task/tests.rs`（8 项渲染，含窄窗格降级与 tab 占位）
     + `status/tests.rs`（4 项底部指标）+ 真实子进程端到端 1 项。
 
+- **`Running` 停不下来（bug，按用户反馈修复）**：
+  - 现象：`Run command` 与 `Send input` 卡片的标题一直显示 `Running · 4m 44s`，
+    进程明明已关，时长还在涨。
+  - 真实数据（会话 `sess-18e01a856ea4e7f8-1`）：`agent_tool_call` 100/101/102 的
+    `process_state` 全是 `running`，而 `agent_process.session_id=1` 是 `stopped`
+    （started …831050 → ended …890382）。
+  - 三处独立根因：
+    1. **只在本轮 streaming 消息里找卡片**。`apply_process_output` / `apply_process_exit`
+       用 `streaming_message_mut()`；本轮结束（消息转 `complete`）后后台事件再也找不到卡片，
+       `state` 永远停在 `Running`，而时长按 `now - started` 每帧现算 → 一路涨。
+       → 改为按 `call_id` 扫**所有**窗格的所有消息（`call_id` 会话内唯一）。
+    2. **`write_stdin` 卡片收不到终态**。两个函数只处理 `Command` 视图，`Interaction`
+       分支根本没有 → 三张 `Send input` 永久 `Running`。
+       → 新增 `apply_interaction_exit`，终态时一并收敛；只改 `state`，保留当次输出正文。
+    3. **历史回放照抄结果 JSON 的 `process_state`**（结算那一刻通常是 `running`）。
+       → `reconcile_process_records` 在 `LoadChatSession` 后用 `agent_process` 记录覆盖
+       卡片状态与起止时刻；无记录时保持原样，绝不凭空捏造终态。
+  - 另有保险：`process_status` 只在 `is_running()` 时算时长，终态只显示结果词。
+  - 回归测试：`process_cards`（轮次结束后仍收到终态/输出、交互卡片收敛）、
+    `view::tests`（回放按记录校正、活着的进程不许判死、无记录不改动）。
+
+- **树形改用 `├─` 分节（按用户反馈调整）**：
+  - 现象：命令卡片所有中间行都是 `│`，只有最后一行 `└─`，读不出结构。
+  - 改法：按**节点**分节——节点首行 `├─`、最后一个节点 `└─`、节点内续行 `│`。
+    一个节点是「一段有语义的内容」（命令行 / 输出块 / stdin 预览 / 提示）。
+  - 关键：收口看**最后一个节点首行**（`rposition(|row| row.head)`）而非最后一行，
+    否则树干会从输出中间收口、下面还吊着行。
+  - 三条前缀等宽 5 列，正文永远从第 5 列起；`├` 与 `└` 同列，主干连成一条线。
+
+- **后台任务页双重边框（bug，按用户反馈修复）**：
+  - 现象：页内画完整圆角框，与窗格边框叠成双重边框。
+  - 改法：页内**不再画框**，改为底部一条横栏 `├─ Processes · Agents ─── [键位] ─┤`，
+    `├`/`┤` 写在窗格左右竖直边框所在列（内容区左右各外扩一列），
+    与 `status.rs` 把状态写在窗格底边框上同一套做法。
+  - 同时去掉页内 `Background` 标题（窗格标题已说明是哪个窗格，重复信息）。
+  - 键位提示放不下时从尾部截断（`[esc] back` 先走），tab 永远保留。
+
 - **非零退出被误判为失败（bug，按用户反馈修复）**：
   - 现象：一张正常的 `■ Run command` 卡片显示成**红色**，标题为 `exit 1`。
   - 真实会话（`agent_tool_call` id=98）：`pgrep -af "IFS= read" ; echo ---; ps -ef |

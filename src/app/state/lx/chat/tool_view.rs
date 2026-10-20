@@ -51,6 +51,20 @@ impl ProcessStateView {
         matches!(self, Self::Starting | Self::Running)
     }
 
+    /// 是否已到终态（进程不会再产生新输出，标题上的时长必须停住）。
+    ///
+    /// 卡片只有在**非终态**时才把 `started_at_ms` 换算成「已经跑了多久」；
+    /// 一旦终态就只显示结果（`Exited 0` / `exit 1` / `Stopped`），这正是
+    /// 「关掉之后还在涨时间」那个 bug 的判据。
+    pub fn is_terminal(self) -> bool {
+        !self.is_running()
+    }
+
+    /// 进程是否仍在后台存活（终态为 false）。
+    pub fn is_alive(self) -> bool {
+        self.is_running()
+    }
+
     /// 是否为**进程级**失败：超时 / 被中断 / 启动失败。
     ///
     /// **不含"命令以非零码退出"**。非零退出经常是正常结果（`grep` 无匹配 = 1、
@@ -86,6 +100,23 @@ impl ProcessStateView {
             Self::TimedOut => "timed_out",
             Self::Interrupted => "interrupted",
             Self::Failed => "failed",
+        }
+    }
+
+    /// 由 `agent_process.state` 的稳定字符串还原（历史重载用）。
+    ///
+    /// 未知值按 [`Self::Interrupted`] 保守处理：宁可显示「结果未知」，
+    /// 也不把一条来历不明的记录伪装成正常跑完。
+    pub fn from_stored(state: &str, exit_code: Option<i32>) -> Self {
+        match state {
+            "starting" => Self::Starting,
+            "running" => Self::Running,
+            "exited" => Self::Exited { code: exit_code },
+            "stopped" => Self::Stopped,
+            "timed_out" => Self::TimedOut,
+            "failed" => Self::Failed,
+            "interrupted" => Self::Interrupted,
+            _ => Self::Interrupted,
         }
     }
 }

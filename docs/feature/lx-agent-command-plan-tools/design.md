@@ -548,17 +548,28 @@ opencode 的后台管理不是一个独立路由，而是 session 页内 compose
 lx 沿用同一思路，但用窗格内整页承载（窗格比 composer 面板更适合长列表）：
 
 ```text
-╭─ Background ───────────────────────────────────────Processes · Agents──╮
-│❯ npm run dev                /workspace/web               running 1m 30s│
-│  cargo watch -x test        /workspace                   running 2m 05s│
-│  python -m http.server 8000 /workspace/py                running 4m 12s│
-╰─ [↑/↓] select  [^d] stop  [←/→] tab  [esc] back ──────────────────────╯
+╭─ lx-[Native Agent] ──────────────────────────────── ws:…command-plan-tools ─╮
+│❯ npm run dev                /workspace/web                   running 1m 30s │
+│  cargo watch -x test        /workspace                       running 2m 05s │
+│  python -m http.server 8000 /workspace/py                    running 4m 12s │
+├─ Processes · Agents ───────── [↑/↓] select  [^d] stop  [←/→] tab  [esc] ─┤
+╰────────────────────────────────────────────────────────────────────────────╯
 ```
 
-- 顶边框：页面标题 + 右侧 tab 指示（当前 tab 高亮），放不下时先让位给标题。
+**页内不再画自己的框**（用户报的「双重边框」）。这一页画在窗格内容区里，内容区本来
+就被窗格边框（`╭─ lx-[Native Agent] ─╮`）包围；早先再画一个完整圆角框，两层边框叠在一起。
+
+取而代之的是底部一条**横栏**：横线贯穿整行，两端 `├` / `┤` 写在**窗格左右竖直边框
+所在的列**（内容区左右各外扩一列），因此读起来是「从窗格边框长出来的一条分隔线」，
+而不是第二个框的顶边。做法与 `status.rs` 把状态写在窗格底边框上完全一致
+（都只改写文字实际占用的单元格，其余边线保留）。
+
+- 横栏左段：tab 指示（当前 tab 高亮），`Processes · Agents`；不再有 `Background` 标题
+  ——窗格标题已经说明了是哪个窗格，页内再写一遍是重复信息。
+- 横栏右段：键位提示，贴右端；放不下时从尾部截断（`[esc] back` 先走），
+  tab 是导航、永远保留。
 - 主体：`❯ 命令 · cwd · running Ns`。命令列**定宽**、cwd 从固定偏移起，各行 cwd 左缘
   对齐成列；窄窗格先丢 cwd（识别进程靠命令），再硬切命令，时长始终可见。
-- 底边框：键位提示。
 - `Agents` tab 是**预留位**：列表恒空并显示 `no subagents yet`，后续在此显示 subagent 内容。
 
 ### 14.4 键位（对齐 opencode `composer.*`）
@@ -630,7 +641,73 @@ it a failure"。codex 在协议层仍把非零退出作为 `RespondToModel` 回�
 并丢弃那句已经作废的 `command exited with code N`。这样**不需要写库迁移**，旧会话打开即正确。
 真正的失败（`timed_out` / `interrupted` / `failed`）保持 `failed`，有反向测试守着。
 
-### 14.7 刷新时机（踩过的坑）
+### 14.7 树形分节：`├─` / `└─` / `│` 三件套
+
+用户反馈：命令卡片的树体**所有行都用 `│`、只有最后一行 `└─`**，读不出结构。
+
+改为按**节点**分节。一个节点是「一段有语义的内容」：命令行、输出块、stdin 预览、收口提示。
+
+```text
+■ Run command                                    Running · 12s  [details]
+  ├─ $ while true; do read -r line; echo "got: $line"; done
+  ├─ … +21 earlier lines
+  └─ test result: ok. 24 passed
+```
+
+| 前缀 | 含义 |
+|---|---|
+| `  ├─ ` | 一个**节点**的首行，且后面还有节点 |
+| `  └─ ` | **最后一个**节点的首行（全卡唯一，收口） |
+| `  │  ` | 节点内部的**续行**（同一段输出的第 2 行起） |
+
+关键点：
+
+- 收口判断看**最后一个节点首行**而不是最后一行。最后一段输出可以有多个续行，
+  `└` 必须落在该段首行上，否则树干会在输出中间收口、下面继续吊着行。
+  实现是 `body.iter().rposition(|row| row.head)`。
+- 三条前缀**等宽 5 列**，正文永远从第 5 列起（与文件工具详情行对齐）。
+- 空态占位（`Waiting for output`）本身也是一个节点，因此照常收口。
+
+### 14.8 `Running` 停不下来（真实 bug）
+
+用户报告：`Run command` 与 `Send input` 卡片上的 `Running · 4m 44s` 一直是 `Running`，
+进程明明已经关了，时长还在涨。
+
+真实数据（会话 `sess-18e01a856ea4e7f8-1`）：
+
+```text
+agent_tool_call:  100 exec_command  process_state=running
+                  101 write_stdin   process_state=running
+                  102 write_stdin   process_state=running
+agent_process:    session_id=1  state=stopped  started=…831050  ended=…890382
+```
+
+三个根因，各自独立：
+
+1. **卡片只在本轮 streaming 消息里找**。`apply_process_output` / `apply_process_exit`
+   用 `streaming_message_mut()`，只认「最后一条 `status == "streaming"` 的助手消息」。
+   模型把进程交回后本轮很快结束，消息转 `complete`；此后后台终态事件找不到那张卡片，
+   `state` 永远停在 `Running`。而时长是 `now - started_at_ms` 每帧实时算的，于是一路涨。
+   → 改为按 `call_id` 扫**所有**窗格的所有消息（`call_id` 在会话内唯一，DB 有唯一约束）。
+
+2. **`write_stdin` 卡片从来收不到终态**。`apply_process_*` 只处理 `Command` 视图，
+   `Interaction` 分支压根没有。三张 `Send input` 卡片因此永久 `Running`。
+   → 新增 `apply_interaction_exit`，由 `handle_process_event` 在终态时一并收敛。
+   只改 `state`，保留当次交互的输出正文（那是一次的「事实记录」）。
+
+3. **历史回放照抄结果 JSON 的 `process_state`**。结果 JSON 记的是**结算那一刻**
+   （通常是 `running`），进程之后可能早已退出。重开旧会话时卡片又疯跑。
+   → `reconcile_process_records` 在 `LoadChatSession` 后用 `agent_process` 的真实记录
+   覆盖卡片状态与起止时刻。没有记录时保持原样，绝不凭空捏造终态。
+
+时长冻结另有保险：`process_status` 只在 `state.is_running()` 时才算时长，终态只显示结果词
+（`Exited 0` / `exit 1` / `Stopped`）。
+
+回归测试四层：`process_cards`（轮次结束后仍收到终态/输出、交互卡片收敛）、
+`view::tests`（回放按进程记录校正、活着的进程不许判死、无记录不改动）、
+外加真实会话形状的临时验证（三张卡片全部收敛到 `Stopped`）。
+
+### 14.9 刷新时机（踩过的坑）
 
 停止是**异步**的（真实退出码只能由 `wait` 得到）。第一版在按 `^d` 后同步重拉列表，结果
 读到的是**停止前**的快照：进程还在列表里，看起来像「停不掉」。实测复现后改为由

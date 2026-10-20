@@ -55,6 +55,9 @@ pub fn handle_process_event(
     let epoch = runtime.epoch.clone();
     let manager = runtime.manager.clone();
     let terminal = matches!(event, ProcessUiEvent::Exited { .. });
+    // 终态同时收敛 `write_stdin` 卡片：它们记的是「当次调用时进程在跑」，
+    // 进程结束后必须改成终态，否则 `Send input` 会一直显示 `Running`。
+    let terminal_state = terminal.then(|| snapshot.state.clone());
     let changed = match &event {
         ProcessUiEvent::Output { .. } => {
             update::apply_process_output(state, session_id, &origin_call_id, snapshot.clone())
@@ -66,6 +69,10 @@ pub fn handle_process_event(
             applied | refresh_task_pages(state, session_id)
         }
     };
+    let changed = changed
+        | terminal_state
+            .as_ref()
+            .is_some_and(|terminal| update::apply_interaction_exit(state, session_id, terminal));
     // UI 已取走本次输出通知：允许下一次输出重新通知。
     manager.acknowledge_output(session_id);
     // 落库：终态立即写，运行态按间隔合并（每进程最多一个待合并快照）。

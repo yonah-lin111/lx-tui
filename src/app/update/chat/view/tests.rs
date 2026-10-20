@@ -1,7 +1,9 @@
 //! DB 记录 → 步骤时间线投影的纯测试：跨表按 position 合并、顺序唯一、中断工具可见。
 
 use super::*;
-use crate::db::chat::{ChatMessage, ChatPart, ToolCallRecord};
+use crate::app::state::{AppState, ProcessStateView};
+use crate::app::update::chat::reconcile_process_records;
+use crate::db::chat::{ChatMessage, ChatPart, ProcessRecord, ToolCallRecord};
 
 fn part(position: i64, kind: &str, content: &str) -> ChatPart {
     ChatPart {
@@ -578,4 +580,135 @@ fn replay_keeps_completed_records_completed() {
     record.error_text = None;
     let view = view_message_of(&message(Vec::new(), vec![record]), &models);
     assert_eq!(only_tool(&view).status, ToolStatus::Completed);
+}
+
+// ===== 历史回放：卡片状态按 `agent_process` 校正 =====
+// 结果 JSON 记的是「结算那一刻」（通常是 running），进程之后可能早已退出；
+// 只按结果回放会让历史卡片永远停在 `Running`（用户报的「关掉了还在计时」）。
+
+/// 一条 `exec_command` 记录：结果体里写着 `running`（结算那一刻）。
+fn running_command_tool(call_id: &str) -> ToolCallRecord {
+    let mut record = tool(0, call_id, "exec_command", "completed");
+    record.result_json = Some(
+        serde_json::json!({
+            "tool": "exec_command",
+            "session_id": 1,
+            "command": "while true; do read -r line; done",
+            "cwd": "/workspace",
+            "tty": true,
+            "process_state": "running",
+            "exit_code": null,
+            "output": "",
+            "output_start": 0,
+            "output_end": 0,
+            "dropped_bytes": 0,
+            "truncated": false,
+            "wrote_input": false,
+            "terminate": false,
+        })
+        .to_string(),
+    );
+    record
+}
+
+/// 进程表里的一条终态记录。
+fn process_record(origin_call_id: &str, state: &str, ended_at_ms: i64) -> ProcessRecord {
+    ProcessRecord {
+        external_id: "p1".into(),
+        chat_session_id: "s1".into(),
+        origin_call_id: origin_call_id.into(),
+        runtime_epoch: "e1".into(),
+        process_session_id: 1,
+        state: state.into(),
+        exit_code: None,
+        stop_reason: Some("stopped".into()),
+        command: "while true; do read -r line; done".into(),
+        cwd: "/workspace".into(),
+        tty: true,
+        output_tail: String::new(),
+        output_start: 0,
+        output_end: 0,
+        dropped_bytes: 0,
+        started_at_ms: 1_000,
+        ended_at_ms: Some(ended_at_ms),
+        revision: 1,
+    }
+}
+
+#[test]
+fn replay_settles_a_running_card_from_the_process_record() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let models = ModelsSnapshot::default();
+    let db = message(Vec::new(), vec![running_command_tool("call-1")]);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages = vec![view_message_of(&db, &models)];
+    }
+    let records = vec![process_record("call-1", "stopped", 9_999)];
+    assert!(reconcile_process_records(&mut state, pane, &records));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-1").expect("tool");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert_eq!(
+        view.state,
+        ProcessStateView::Stopped,
+        "历史卡片必须收敛到进程表的终态，不能停在 Running"
+    );
+    // 时长取自进程记录：终态后不再随 now 增长。
+    assert_eq!(view.started_at_ms, Some(1_000));
+    assert_eq!(view.ended_at_ms, Some(9_999));
+    // 幂等：再跑一次没有变化。
+    assert!(!reconcile_process_records(&mut state, pane, &records));
+}
+
+#[test]
+fn replay_keeps_running_cards_running() {
+    // 进程表说还在跑：卡片就该继续显示 Running（不能反过来把活的判死）。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let models = ModelsSnapshot::default();
+    let db = message(Vec::new(), vec![running_command_tool("call-1")]);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages = vec![view_message_of(&db, &models)];
+    }
+    let mut record = process_record("call-1", "running", 9_999);
+    record.ended_at_ms = None;
+    // 第一次会补上起始时刻（历史卡片原本没有，补上后才显示「跑了多久」）。
+    assert!(reconcile_process_records(
+        &mut state,
+        pane,
+        &[record.clone()]
+    ));
+    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
+    let call = chat.messages[0].tool("call-1").expect("tool");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert_eq!(
+        view.state,
+        ProcessStateView::Running,
+        "活着的进程不许被判死"
+    );
+    assert_eq!(view.started_at_ms, Some(1_000), "补上起始时刻");
+    assert_eq!(view.ended_at_ms, None, "没有结束时刻");
+    // 幂等。
+    assert!(!reconcile_process_records(&mut state, pane, &[record]));
+}
+
+#[test]
+fn replay_without_process_records_leaves_the_card_alone() {
+    // 库不可用/记录缺失时保持结果 JSON 原样，绝不凭空捏造终态。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let models = ModelsSnapshot::default();
+    let db = message(Vec::new(), vec![running_command_tool("call-1")]);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.messages = vec![view_message_of(&db, &models)];
+    }
+    assert!(!reconcile_process_records(&mut state, pane, &[]));
 }

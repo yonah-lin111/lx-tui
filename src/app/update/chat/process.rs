@@ -8,8 +8,13 @@
 //! 3. **历史重载**：`view::tool_view_of` 从结果 JSON 生成同一份 `ToolDetailView`。
 //!
 //! 渲染层只读这些视图：不读数据库、不读进程、不解析巨型 JSON。
+//!
+//! **卡片定位不按「第几条消息」猜**：进程事件带 `origin_call_id`，而 `call_id` 在整个
+//! 会话内唯一（DB 唯一约束）。早先的实现只在**最后一条 streaming 助手消息**里找卡片，
+//! 一旦本轮结束（消息转 `complete`）后台事件就再也找不到它，标题上的 `Running · 4m 44s`
+//! 会一直走到进程被杀——这就是用户看到的「关掉了还在计时」。
 
-use crate::app::state::{AppState, RequestKey, ToolStatus, ToolSummary};
+use crate::app::state::{AppState, ChatMessageView, RequestKey, ToolStatus, ToolSummary};
 use crate::chat::process::ProcessUiEvent;
 use crate::layout::PaneId;
 use crate::ui::text;
@@ -41,9 +46,36 @@ pub fn settle_tool_detail(
     true
 }
 
+/// 遍历所有窗格里**全部**消息的工具卡片。
+///
+/// 进程卡片可以在本轮结束后继续被后台事件更新，所以这里不能用
+/// [`crate::app::state::lx::chat::LxChat::streaming_message_mut`]——那条捷径只在流式
+/// 期间的“最后一条”里找，轮次一结束就失效（历史 bug，见模块文档）。
+fn for_each_tool_mut(
+    state: &mut AppState,
+    call_id: &str,
+    mut visit: impl FnMut(&mut crate::app::state::ToolCallView) -> bool,
+) -> bool {
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        for message in &mut target.lx.chat.messages {
+            let Some(call) = message.tool_mut(call_id) else {
+                continue;
+            };
+            changed |= visit(call);
+        }
+    }
+    changed
+}
+
 /// 后台输出到达：刷新原命令卡片的尾部输出与状态（**不**新增时间线步骤）。
 ///
-/// 只更新 `exec_command` 对应的卡片；`write_stdin` 的历史卡片保留当时快照。
+/// 只更新 `exec_command` 的 `Command` 视图；`write_stdin` 的历史卡片保留当时快照
+/// （那是一次调用的事实记录，不该被后续输出追改）。
+///
 /// 返回是否发生变化（供事件循环安排一次重绘）。
 pub fn apply_process_output(
     state: &mut AppState,
@@ -51,23 +83,13 @@ pub fn apply_process_output(
     origin_call_id: &str,
     snapshot: crate::chat::process::ProcessSnapshot,
 ) -> bool {
-    let mut changed = false;
-    for pane in state.all_pane_ids() {
-        let Some(target) = state.pane_mut_anywhere(pane) else {
-            continue;
-        };
-        let Some(message) = target.lx.chat.streaming_message_mut() else {
-            continue;
-        };
-        let Some(call) = message.tool_mut(origin_call_id) else {
-            continue;
-        };
+    let changed = for_each_tool_mut(state, origin_call_id, |call| {
         let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut()
         else {
-            continue;
+            return false;
         };
         if view.process_session_id != Some(session_id) {
-            continue;
+            return false;
         }
         // 逐字段比较，避免用「无变化」的输出触发额外重绘。
         let preview = crate::app::state::lx::chat::tool_view::preview_lines(&snapshot.tail);
@@ -77,7 +99,7 @@ pub fn apply_process_output(
             && view.dropped_bytes == snapshot.dropped_bytes
             && view.output_tail == snapshot.tail
         {
-            continue;
+            return false;
         }
         view.output_preview = preview;
         view.state = next_state;
@@ -87,8 +109,8 @@ pub fn apply_process_output(
         if view.started_at_ms.is_none() {
             view.started_at_ms = Some(snapshot.started_at_ms);
         }
-        changed = true;
-    }
+        true
+    });
     if changed {
         for pane in state.all_pane_ids() {
             refresh_lx_status(state, pane);
@@ -100,6 +122,9 @@ pub fn apply_process_output(
 /// 进程终态：更新卡片状态，并把 FAILED / STOPPED 的语义写进工具步骤。
 ///
 /// 工具调用的**持久化状态**不改写：只有进程记录变化，历史回执保持原样。
+///
+/// 与 [`apply_process_output`] 一样按 `call_id` 扫全部消息：进程经常在本轮结束之后
+/// 才退出，只认流式末条消息会让卡片永远停在 `Running`。
 pub fn apply_process_exit(
     state: &mut AppState,
     event: &ProcessUiEvent,
@@ -114,27 +139,17 @@ pub fn apply_process_exit(
     else {
         return false;
     };
-    let mut changed = false;
-    for pane in state.all_pane_ids() {
-        let Some(target) = state.pane_mut_anywhere(pane) else {
-            continue;
-        };
-        let Some(message) = target.lx.chat.streaming_message_mut() else {
-            continue;
-        };
-        let Some(call) = message.tool_mut(origin_call_id) else {
-            continue;
-        };
+    let changed = for_each_tool_mut(state, origin_call_id, |call| {
         let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut()
         else {
-            continue;
+            return false;
         };
         if view.process_session_id != Some(*session_id) {
-            continue;
+            return false;
         }
         let next = crate::app::state::ProcessStateView::from(terminal.clone());
         if view.state == next {
-            continue;
+            return false;
         }
         view.state = next;
         if let Some(snapshot) = &snapshot {
@@ -143,6 +158,9 @@ pub fn apply_process_exit(
             view.output_tail.clone_from(&snapshot.tail);
             view.dropped_bytes = snapshot.dropped_bytes;
             view.ended_at_ms = snapshot.ended_at_ms;
+            if view.started_at_ms.is_none() {
+                view.started_at_ms = Some(snapshot.started_at_ms);
+            }
         }
         // 只有**进程级失败**（超时 / 中断 / 启动失败）才在步骤上留原因。
         //
@@ -153,11 +171,140 @@ pub fn apply_process_exit(
             call.error = Some(text::agent::proc_state_label(next).to_string());
         }
         let _ = exit_code;
-        changed = true;
+        true
+    });
+    if changed {
+        for pane in state.all_pane_ids() {
+            refresh_lx_status(state, pane);
+        }
+    }
+    changed
+}
+
+/// `write_stdin` 卡片的本轮快照随进程终态收敛。
+///
+/// `write_stdin` 的历史卡片保留**当次调用**的输出（那是一次事实记录），但它记录的
+/// `state` 是「这一刻进程在跑」，进程结束后必须改成终态——否则 `Send input` 卡片会
+/// 永远显示 `Running`，跟第一张卡片一样停不下来。
+///
+/// 与 [`apply_process_exit`] 分开：这里只改状态、不动输出正文。
+pub fn apply_interaction_exit(
+    state: &mut AppState,
+    session_id: u64,
+    terminal: &crate::chat::process::ProcessState,
+) -> bool {
+    let next = crate::app::state::ProcessStateView::from(terminal.clone());
+    if !next.is_terminal() {
+        return false;
+    }
+    let mut changed = false;
+    for pane in state.all_pane_ids() {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        for message in &mut target.lx.chat.messages {
+            for step in &mut message.steps {
+                let crate::app::state::AssistantStepView::Tool { call, .. } = step else {
+                    continue;
+                };
+                let Some(crate::app::state::ToolDetailView::Interaction(view)) =
+                    call.detail.as_deref_mut()
+                else {
+                    continue;
+                };
+                if view.process_session_id != session_id || view.state.is_terminal() {
+                    continue;
+                }
+                view.state = next;
+                changed = true;
+            }
+        }
     }
     if changed {
         for pane in state.all_pane_ids() {
             refresh_lx_status(state, pane);
+        }
+    }
+    changed
+}
+
+/// 历史重载：用 `agent_process` 的真实记录校正卡片状态。
+///
+/// 结果 JSON 记的是**当次调用结算那一刻**的进程状态（`running` 是常态），
+/// 而进程之后可能早已退出、被停止，或在 lx 退出时被标成 `interrupted`。
+/// 只按结果 JSON 回放会让历史卡片永远停在 `Running`——正是用户看到的
+/// 「关掉了还在计时」。这里用进程表的终态覆盖它。
+///
+/// 返回是否有卡片被改动。
+pub fn reconcile_process_records(
+    state: &mut AppState,
+    pane: PaneId,
+    records: &[crate::db::chat::ProcessRecord],
+) -> bool {
+    if records.is_empty() {
+        return false;
+    }
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    let mut changed = false;
+    for message in &mut target.lx.chat.messages {
+        for step in &mut message.steps {
+            let crate::app::state::AssistantStepView::Tool { call, .. } = step else {
+                continue;
+            };
+            // 只认本会话确有记录的进程；没有记录（例如库不可用）时保持结果 JSON 的原样。
+            let session_id = match call.detail.as_deref() {
+                Some(crate::app::state::ToolDetailView::Command(view)) => view.process_session_id,
+                Some(crate::app::state::ToolDetailView::Interaction(view)) => {
+                    Some(view.process_session_id)
+                }
+                _ => None,
+            };
+            let Some(session_id) = session_id else {
+                continue;
+            };
+            let Some(record) = records
+                .iter()
+                .find(|record| record.process_session_id == session_id as i64)
+            else {
+                continue;
+            };
+            // `origin_call_id` 是进程的发起卡片；只有它承载时长，`write_stdin` 卡片
+            // 只是一次交互快照（时长会误导成"交互持续了多久"）。
+            let owns_process = call.call_id == record.origin_call_id;
+            let next = crate::app::state::ProcessStateView::from_stored(
+                &record.state,
+                record.exit_code.and_then(|code| i32::try_from(code).ok()),
+            );
+            match call.detail.as_deref_mut() {
+                Some(crate::app::state::ToolDetailView::Command(view)) => {
+                    if view.state == next
+                        && (!owns_process
+                            || (view.started_at_ms == Some(record.started_at_ms)
+                                && view.ended_at_ms == record.ended_at_ms))
+                    {
+                        continue;
+                    }
+                    view.state = next;
+                    if owns_process {
+                        view.started_at_ms = Some(record.started_at_ms);
+                        view.ended_at_ms = record.ended_at_ms;
+                    }
+                    changed = true;
+                }
+                Some(crate::app::state::ToolDetailView::Interaction(view)) => {
+                    if view.state == next {
+                        continue;
+                    }
+                    view.state = next;
+                    if view.exit_code.is_none() {
+                        view.exit_code = record.exit_code.and_then(|code| i32::try_from(code).ok());
+                    }
+                    changed = true;
+                }
+                _ => {}
+            }
         }
     }
     changed
@@ -213,15 +360,8 @@ pub fn commit_plan(
     true
 }
 
-/// 从最后一条**成功**的 `update_plan` 结果恢复当前计划（会话重载路径）。
-///
-/// 失败、pending、interrupted 的更新都不覆盖最后成功的计划：只接受 `completed`
-/// 且有合法结果体的调用，并按 revision 取最新。返回是否有计划写入。
-pub fn restore_plan(
-    state: &mut AppState,
-    pane: PaneId,
-    messages: &[crate::app::state::ChatMessageView],
-) -> bool {
+/// 历史重载时恢复「当前计划」：取最后一条成功的 `update_plan`。
+pub fn restore_plan(state: &mut AppState, pane: PaneId, messages: &[ChatMessageView]) -> bool {
     let mut latest: Option<crate::app::state::PlanSnapshotView> = None;
     for message in messages {
         for call in message.tools() {

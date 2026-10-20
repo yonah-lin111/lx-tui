@@ -42,16 +42,54 @@ fn page_with(entries: Vec<ProcessEntry>, now_ms: i64) -> TaskPage {
 }
 
 #[test]
-fn page_draws_title_tabs_and_footer() {
+fn page_draws_tabs_and_footer_on_one_bottom_bar() {
     let page = page_with(vec![entry(1, "npm run dev", "/w/web")], 90_000);
     let text = render_page(&page, 70, 12).join("\n");
-    assert!(text.contains(text::LX_TASK_PAGE_TITLE), "页面标题：{text}");
     assert!(
         text.contains(TaskTab::Processes.label()),
         "进程 tab：{text}"
     );
     assert!(text.contains(TaskTab::Agents.label()), "子代理 tab：{text}");
     assert!(text.contains(text::LX_TASK_PAGE_FOOTER), "键位提示：{text}");
+}
+
+#[test]
+fn page_does_not_draw_its_own_frame() {
+    // 用户报的 bug：页内整框与窗格边框叠成双重边框。
+    // 页面只负责列表 + 底部一条横栏，绝不再画 `╭ ╮ ╰ ╯`。
+    let page = page_with(vec![entry(1, "npm run dev", "/w/web")], 0);
+    let lines = render_page(&page, 70, 12);
+    let text = lines.join("\n");
+    for corner in ['╭', '╮', '╰', '╯'] {
+        assert!(
+            !text.contains(corner),
+            "页内不得再画圆角框（`{corner}` 属于窗格边框）：{text}"
+        );
+    }
+}
+
+#[test]
+fn bottom_bar_joins_the_pane_side_borders() {
+    // 横栏是 `├─…─┤`：两端落在窗格竖直边框所在列（内容区左右各外扩一列），
+    // 因此读作"从边框长出来的一条分隔线"，而不是第二个框的顶边。
+    let page = page_with(vec![entry(1, "npm run dev", "/w/web")], 0);
+    // 内容区左右各外扩一列放接缝，所以缓冲区要比内容区宽 2 列。
+    let area = Rect::new(1, 1, 68, 12);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 70, 14));
+    render(area, &mut buf, &page, true);
+    let bar_y = area.bottom() - 1;
+    assert_eq!(
+        buf[(area.x - 1, bar_y)].symbol(),
+        "├",
+        "左端接在窗格左边框上"
+    );
+    assert_eq!(
+        buf[(area.right(), bar_y)].symbol(),
+        "┤",
+        "右端接在窗格右边框上"
+    );
+    // tab 标签紧跟在左接缝之后（角内侧留一列空白）。
+    assert_eq!(buf[(area.x + 2, bar_y)].symbol(), "P", "tab 从接缝右侧起");
 }
 
 #[test]

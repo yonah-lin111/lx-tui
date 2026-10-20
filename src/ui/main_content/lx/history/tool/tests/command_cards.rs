@@ -305,52 +305,90 @@ fn details_marker_text_is_ascii_and_short() {
     }
 }
 
-// ===== 树形版式（`│` 中间行 + `└─` 收口）=====
+// ===== 树形版式（节点首行 `├─` / 末节点 `└─` / 续行 `│`）=====
 
 #[test]
-fn command_body_uses_a_tree_with_a_single_leaf_at_the_end() {
+fn command_body_uses_branch_nodes_and_one_closing_leaf() {
     let output = "aaa\nbbb\nccc\nddd\n";
     let (text, _) = render(&running_command(output), 60, false);
     let lines: Vec<&str> = text.lines().collect();
     // 第 1 行是标题，其余都是树体。
     assert!(lines[0].starts_with('■'), "第 1 行是标题：{text}");
-    for line in &lines[1..lines.len() - 1] {
-        assert!(
-            line.starts_with(text::agent::TREE_BAR),
-            "中间行都以竖线开头：{line:?}"
-        );
-    }
+    // 命令行是第一个节点，用 `├─` 续接（不是收口）。
     assert!(
-        lines[lines.len() - 1].starts_with(text::agent::TREE_LEAF),
-        "最后一行用直角收口：{text}"
+        lines[1].starts_with(text::agent::TREE_BRANCH),
+        "命令行是首个节点，用 `├─` 续接：{text}"
     );
-    // 只出现一次收口——树干不会分叉成多根。
+    // 只有最后一个节点首行用 `└─` 收口。
+    let heads: Vec<&&str> = lines[1..]
+        .iter()
+        .filter(|line| {
+            line.starts_with(text::agent::TREE_BRANCH) || line.starts_with(text::agent::TREE_LEAF)
+        })
+        .collect();
+    assert!(heads.len() > 1, "至少两个节点才谈得上分节：{text}");
+    assert!(
+        heads
+            .last()
+            .is_some_and(|line| line.starts_with(text::agent::TREE_LEAF)),
+        "最后一个节点用 `└─` 收口：{text}"
+    );
+    // 收口只出现一次，且其余节点都是 `├─`。
     assert_eq!(
         text.matches(text::agent::TREE_LEAF).count(),
         1,
-        "整张卡片只有一根树干：{text}"
+        "整张卡片只有一个收口：{text}"
+    );
+    assert_eq!(
+        heads.len() - 1,
+        text.matches(text::agent::TREE_BRANCH).count(),
+        "其余节点都是 `├─`：{text}"
     );
 }
 
 #[test]
+fn branch_is_used_so_nodes_are_visually_separated() {
+    // 用户要求：不要所有行都用 `│`/`└─`，要结合 `├─` 形成分节。
+    // 命令与输出是两个节点，因此 `├─` 必须出现，且落在节点首行上。
+    let (text, _) = render(&running_command("out\n"), 60, false);
+    assert!(
+        text.contains(text::agent::TREE_BRANCH),
+        "节点之间必须有 `├─`：{text}"
+    );
+    // `├` 与 `└` 落在同一列（树干连成一条竖线）。
+    let branch_col = text::agent::TREE_BRANCH.find('├').expect("`├` 位置");
+    let leaf_col = text::agent::TREE_LEAF.find('└').expect("`└` 位置");
+    assert_eq!(branch_col, leaf_col, "`├` 与 `└` 必须同列：{text}");
+}
+
+#[test]
 fn tree_prefixes_are_equal_width_so_content_stays_aligned() {
-    // `  │  ` 与 `  └─ ` 必须等宽，否则正文会左右错位（视觉上树干断裂）。
+    // 三条前缀必须等宽，否则正文会左右错位（视觉上树干断裂）。
     assert_eq!(
         text::agent::TREE_BAR.width(),
+        text::agent::TREE_BRANCH.width(),
+        "竖线与分节前缀必须等宽"
+    );
+    assert_eq!(
+        text::agent::TREE_BRANCH.width(),
         text::agent::TREE_LEAF.width(),
-        "竖线与收口前缀必须等宽"
+        "分节与收口前缀必须等宽"
     );
     let (text, _) = render(&running_command("out\n"), 60, false);
     let content_columns: Vec<usize> = text
         .lines()
         .skip(1)
         .map(|line| {
-            let prefix = if line.starts_with(text::agent::TREE_LEAF) {
-                text::agent::TREE_LEAF
-            } else {
-                text::agent::TREE_BAR
-            };
-            line.strip_prefix(prefix).map(str::len).unwrap_or(0)
+            for prefix in [
+                text::agent::TREE_LEAF,
+                text::agent::TREE_BRANCH,
+                text::agent::TREE_BAR,
+            ] {
+                if let Some(rest) = line.strip_prefix(prefix) {
+                    return rest.len();
+                }
+            }
+            0
         })
         .collect();
     assert!(
@@ -401,9 +439,10 @@ fn interaction_body_keys_input_before_output_under_the_same_tree() {
         .position(|line| line.contains("new line"))
         .expect("输出在树体里");
     assert!(stdin_line < output_line, "先输入后输出：{text}");
+    // 命令、输入、输出是三个节点：前两个 `├─` 续接，最后一个 `└─` 收口。
     assert!(
-        lines[stdin_line].starts_with(text::agent::TREE_BAR),
-        "输入行是中间行：{text}"
+        lines[stdin_line].starts_with(text::agent::TREE_BRANCH),
+        "输入行是中间节点：{text}"
     );
     assert!(
         lines[output_line].starts_with(text::agent::TREE_LEAF),

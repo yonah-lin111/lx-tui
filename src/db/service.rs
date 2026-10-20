@@ -19,6 +19,16 @@ use super::Database;
 /// 单次泵送内效应执行的轮数上限（效应可级联产生新效应，如信任授予后的续作）。
 const MAX_EFFECT_ROUNDS: usize = 16;
 
+/// 一次会话加载的结果：消息、模型快照、该会话的进程记录。
+///
+/// 进程记录单独带出来是为了给**历史卡片校正状态**：结果 JSON 写的是结算那一刻
+/// （通常是 `running`），进程之后可能早已退出（见 `reconcile_process_records`）。
+type LoadedSession = (
+    Option<Vec<crate::db::chat::ChatMessage>>,
+    Option<crate::db::chat::ModelSnapshot>,
+    Vec<crate::db::chat::ProcessRecord>,
+);
+
 /// 持久化服务实例：数据库句柄可为 None（库不可用时降级为无持久化）。
 pub struct Persistence {
     db: Option<Database>,
@@ -595,15 +605,17 @@ impl Persistence {
                 let Some(workspace) = workspace else {
                     return false;
                 };
-                let loaded: Option<(
-                    Option<Vec<crate::db::chat::ChatMessage>>,
-                    Option<crate::db::chat::ModelSnapshot>,
-                )> = self.with_db(|db| {
+                let loaded: Option<LoadedSession> = self.with_db(|db| {
                     let messages = db.load_chat_session(&workspace, &session_id)?;
                     let model = db.chat_session_model(&workspace, &session_id)?;
-                    Ok((messages, model))
+                    // 进程记录用来校正卡片状态：结果 JSON 写的是「结算那一刻」，
+                    // 进程之后可能早已退出/被停止（见 `reconcile_process_records`）。
+                    let processes = db
+                        .load_processes_for_session(&workspace, &session_id)
+                        .unwrap_or_default();
+                    Ok((messages, model, processes))
                 });
-                let Some((Some(messages), model)) = loaded else {
+                let Some((Some(messages), model, processes)) = loaded else {
                     update::show_toast(
                         state,
                         Toast::new(
@@ -621,7 +633,10 @@ impl Persistence {
                     model: snapshot.model,
                     variant: snapshot.variant,
                 });
-                update::on_session_loaded(state, pane, &session_id, &messages, selection)
+                let changed =
+                    update::on_session_loaded(state, pane, &session_id, &messages, selection);
+                // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
+                update::reconcile_process_records(state, pane, &processes) | changed
             }
             Effect::RenameChatSession {
                 workspace,
