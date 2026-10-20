@@ -499,3 +499,83 @@ fn reload_without_result_json_falls_back_to_arguments_only() {
     let call = reloaded("edit", "{}", "not json");
     assert!(call.summary.is_none(), "无任何可用字段时不造摘要");
 }
+
+// ===== 旧会话里的非零退出：按结果体重判，不照抄库里的 failed =====
+// 详见 design §14.6：早期版本把"命令非零退出"判成工具失败，库里因此留下 failed 行。
+
+/// 一条进程工具记录：`status` 是库里存的状态，`result_json` 是当时的真实结果体。
+fn process_tool(status: &str, process_state: &str, exit_code: i32) -> ToolCallRecord {
+    let mut record = tool(0, "call-1", "exec_command", status);
+    record.result_json = Some(
+        serde_json::json!({
+            "tool": "exec_command",
+            "session_id": 2,
+            "command": "pgrep -af x; echo ---; ps -ef | grep -c y",
+            "cwd": "/workspace",
+            "tty": false,
+            "process_state": process_state,
+            "exit_code": exit_code,
+            "output": "35293\n---\n0\n",
+            "output_start": 0,
+            "output_end": 12,
+            "dropped_bytes": 0,
+            "truncated": false,
+            "wrote_input": false,
+            "terminate": false,
+        })
+        .to_string(),
+    );
+    record.error_text = Some(format!("command exited with code {exit_code}"));
+    record
+}
+
+/// 取唯一工具步骤。
+fn only_tool(message: &ChatMessageView) -> &ToolCallView {
+    let mut found = None;
+    for step in &message.steps {
+        if let AssistantStepView::Tool { call, .. } = step {
+            found = Some(call);
+        }
+    }
+    found.expect("tool step")
+}
+
+#[test]
+fn replay_downgrades_legacy_nonzero_exit_failure_to_completed() {
+    let models = ModelsSnapshot::default();
+    // 库里存的是旧判定留下的 failed + "command exited with code 1"。
+    let record = process_tool("failed", "exited", 1);
+    let view = view_message_of(&message(Vec::new(), vec![record]), &models);
+    let call = only_tool(&view);
+    assert_eq!(
+        call.status,
+        ToolStatus::Completed,
+        "非零退出按结果体重判为 completed，不能继续显示成红色失败"
+    );
+    assert_eq!(call.error, None, "旧记录的\"失败原因\"随之作废");
+    // 退出码仍从结果体回放出来，标题照常显示 `exit 1`。
+    let Some(ToolDetailView::Command(command)) = call.detail.as_deref() else {
+        panic!("expected command view");
+    };
+    assert!(command.state.is_nonzero_exit());
+}
+
+#[test]
+fn replay_keeps_genuine_process_failures_failed() {
+    let models = ModelsSnapshot::default();
+    // 超时是真正的失败：库里 failed 与结果体一致，必须保持红。
+    let record = process_tool("failed", "timed_out", 124);
+    let view = view_message_of(&message(Vec::new(), vec![record]), &models);
+    let call = only_tool(&view);
+    assert_eq!(call.status, ToolStatus::Failed, "超时仍为失败");
+    assert!(call.error.is_some(), "失败原因保留");
+}
+
+#[test]
+fn replay_keeps_completed_records_completed() {
+    let models = ModelsSnapshot::default();
+    let mut record = process_tool("completed", "exited", 0);
+    record.error_text = None;
+    let view = view_message_of(&message(Vec::new(), vec![record]), &models);
+    assert_eq!(only_tool(&view).status, ToolStatus::Completed);
+}

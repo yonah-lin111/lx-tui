@@ -65,7 +65,20 @@ fn part_view_of(part: &ChatPart) -> ChatPartView {
 /// 未知状态按 `Interrupted` 保守处理（宁可显示“结果未知”，也不伪装成功）；
 /// `interrupted` 必须可见，因此 `error` 保留 DB 中的错误码。
 fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
-    let status = ToolStatus::from_stored(&tool.status).unwrap_or(ToolStatus::Interrupted);
+    let mut status = ToolStatus::from_stored(&tool.status).unwrap_or(ToolStatus::Interrupted);
+    // 进程工具的历史状态按**结果体**重判，而不是照抄 DB 里的 `status`。
+    //
+    // 早期版本把"命令以非零码退出"判成工具失败，于是 `grep -c` 无匹配（退出码 1）
+    // 这类正常结果在库里留下了 `failed`。结果体本身是自洽的（`process_state` +
+    // `exit_code`），据此重判可以让**旧会话**也正确显示，不需要写库迁移。
+    // 详见 design §14.6。
+    let detail = ToolDetailView::from_result_json(tool.result_json.as_deref());
+    if let Some(ToolDetailView::Command(view)) = detail.as_ref()
+        && view.state.is_nonzero_exit()
+    {
+        // 非零退出是结果的一部分，不是工具失败。
+        status = ToolStatus::Completed;
+    }
     // 摘要 = 参数派生（path / pattern / range）**+ 结果体补全**（增删计数、命中数、
     // 实际行数、截断标记）。只靠参数重建会让重进会话的工具行丢掉这些细节
     // （写文件类操作重进 session 后只剩方块与空 `└─`）。
@@ -80,11 +93,17 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
         arguments_json: tool.arguments_json.clone(),
         status,
         summary: (!summary.is_empty()).then_some(summary),
-        error: tool.error_text.clone(),
+        // 非零退出的旧记录里存着 `command exited with code N`，那句"失败"结论
+        // 已经在重判时被推翻，不能继续显示。
+        error: if status == ToolStatus::Completed {
+            None
+        } else {
+            tool.error_text.clone()
+        },
         // 结果体只在历史加载时回填：上下文回放用它（UI 不铺开全文）。
         result_json: tool.result_json.clone(),
         // 进程/计划工具的展示数据从同一条结果 JSON 生成；文件工具为 None。
-        detail: ToolDetailView::from_result_json(tool.result_json.as_deref()).map(Box::new),
+        detail: detail.map(Box::new),
     }
 }
 

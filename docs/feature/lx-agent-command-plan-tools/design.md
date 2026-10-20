@@ -624,6 +624,12 @@ it a failure"。codex 在协议层仍把非零退出作为 `RespondToModel` 回�
 回归测试铺在三层：`process/manager`（真实子进程 `grep -c` 无匹配）、`agent_loop/executor`、
 `event/chat` 端到端（落库 `completed`）、UI 渲染（方块不是红色，且 `exit 1` 可见）。
 
+**历史记录的兼容**：改动前写库的旧记录仍标着 `failed`，只修判定会让老会话继续显示红色。
+因此历史回放（`update::chat::view::tool_view_of`）对进程工具**按结果体重判**：
+结果体里的 `process_state` + `exit_code` 是自洽的，`exited` + 非零 → `completed`，
+并丢弃那句已经作废的 `command exited with code N`。这样**不需要写库迁移**，旧会话打开即正确。
+真正的失败（`timed_out` / `interrupted` / `failed`）保持 `failed`，有反向测试守着。
+
 ### 14.7 刷新时机（踩过的坑）
 
 停止是**异步**的（真实退出码只能由 `wait` 得到）。第一版在按 `^d` 后同步重拉列表，结果

@@ -270,6 +270,10 @@
   - 回归测试四层：`process/manager`（真实子进程 `grep -c` 无匹配）、`agent_loop/executor`、
     `event/chat` 端到端（落库 `completed`）、UI 渲染（方块非红且 `exit 1` 可见），
     另加"超时仍是红"的反向断言防止放宽过头。
+  - **历史兼容**：旧记录库里仍是 `failed`，只改判定会让老会话继续红。历史回放
+    （`view::tool_view_of`）对进程工具按**结果体**重判（`exited` + 非零 → `completed`，
+    并丢弃已作废的 `command exited with code N`），**无需写库迁移**；超时/中断/启动
+    失败仍保持 `failed`（有反向测试）。
 
 - **展开后视口跳走（bug）**：新增 `LxChat::viewport_top` + `pin_lx_viewport`，三个切换入口
   内部先锚定；`chat_hit` 命中限定在 body 内。测试 `app/update/chat/tests/viewport_anchor.rs`。
