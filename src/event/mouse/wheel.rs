@@ -281,8 +281,10 @@ pub(crate) fn handle_mouse_wheel(
                         *dirty = true;
                     }
                 } else {
-                    update::scroll_prompt(state, direction);
-                    *dirty = true;
+                    // 无滚动条时上限为 0，滚轮不产生位移、也不触发重绘。
+                    if update::scroll_prompt(state, direction) {
+                        *dirty = true;
+                    }
                 }
             }
         } else if state

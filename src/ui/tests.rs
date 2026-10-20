@@ -1420,6 +1420,41 @@ fn prompt_scrollbar_appears_only_on_overflow() {
 }
 
 #[test]
+fn prompt_scrollable_iff_scrollbar_visible() {
+    // 不变量（真实布局几何）：滚动条不可见时滚轮/拖拽一律无效，
+    // 可见时上限恰等于滚动条 thumb 可拖距离（total - visible）。
+    for lines in [1_usize, 2, 5, 8, 12, 20, 40] {
+        let mut state = AppState::demo();
+        let view = view_for(&state);
+        let text = crate::layout::prompt_text_rect(view.prompt);
+        state.prompt.resize(text.width, text.height);
+        let body = (1..=lines)
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        state.prompt.insert_str(&body);
+
+        let bar = prompt_scrollbar(&view, &state);
+        state.prompt.scroll_to(usize::MAX);
+        let max = state.prompt.scroll();
+        let drag = bar.as_ref().map(|bar| bar.total - bar.visible).unwrap_or(0);
+        let label = format!("lines {lines} (height {})", text.height);
+        assert_eq!(max, drag, "{label}: 可滚动上限必须等于滚动条可拖距离");
+        assert_eq!(
+            bar.is_some(),
+            max > 0,
+            "{label}: 滚动条可见性与可滚动性必须一致"
+        );
+
+        // 滚轮同样受同一上限约束：无滚动条时一次滚动都不该发生。
+        state.prompt.scroll_to(0);
+        let moved = state.prompt.scroll_by(3);
+        assert_eq!(moved, max > 0, "{label}: 滚轮可用性与滚动条一致");
+        assert_eq!(state.prompt.scroll() > 0, max > 0, "{label}: 滚轮结果一致");
+    }
+}
+
+#[test]
 fn prompt_text_wraps_before_scrollbar_gutter() {
     let mut state = AppState::demo();
     let view = view_for(&state);

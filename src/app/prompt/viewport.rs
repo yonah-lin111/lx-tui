@@ -93,8 +93,13 @@ impl Prompt {
             .saturating_sub(usize::from(self.height.max(1)))
     }
     /// 最大可滚动偏移：真实文本上限加底部虚拟空占位。
+    ///
+    /// 与滚动条几何共用同一口径——滚动条 `total = 视觉行 + 留白`、可拖距离
+    /// `total - 视口高`，这里直接按同一公式计算，因此「滚动条不可见 ⇔ 上限为 0 ⇔
+    /// 滚轮/拖拽/轨道点击一律无效」是恒等式，不需要第二套溢出判据。
     fn max_scroll(&self) -> usize {
-        self.text_max_scroll() + self.bottom_padding()
+        (self.visual_rows().len() + self.bottom_padding())
+            .saturating_sub(usize::from(self.height.max(1)))
     }
     /// 将视口单元格坐标映射为光标位置；超出文本时钳到最近行行尾。
     pub fn set_cursor_from_cell(&mut self, row: u16, col: u16) {

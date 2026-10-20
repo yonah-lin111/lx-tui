@@ -351,6 +351,34 @@ fn overflow_prompt(state: &mut AppState, view: &ui::layout::ViewLayout) {
 }
 
 #[test]
+fn mouse_wheel_over_short_prompt_does_not_scroll_without_scrollbar() {
+    // 回归：正文不溢出、滚动条不出现时，滚轮不得移动视口，也不产生多余重绘。
+    let config = Config::default();
+    let mut state = demo_terminal();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let inner = crate::layout::prompt_text_rect(geo.view.prompt);
+    state.prompt.resize(inner.width, inner.height);
+    state.prompt.insert_str("1\n2");
+    assert!(
+        ui::prompt_scrollbar(&geo.view, &state).is_none(),
+        "前提：短正文没有滚动条"
+    );
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    handle_terminal_event(
+        mouse(MouseEventKind::ScrollDown, inner.x + 1, inner.y),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert_eq!(state.prompt.scroll(), 0, "没有滚动条时滚轮不移动视口");
+    assert!(!dirty, "没有位移就不要触发重绘");
+}
+
+#[test]
 fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
     let config = Config::default();
     let mut state = demo_terminal();

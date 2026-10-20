@@ -20,13 +20,14 @@ prompt 编辑器允许把视口滚到正文之后，留出视觉呼吸空间。`
 ## 3. 实现要点
 
 - `src/app/prompt/viewport.rs`：`bottom_padding()` 返回 `usize::from(self.height) / 4`，文档注释同步为“四分之一”，并说明高度不足 4 行取整为 0。
-- 占位仍只进入 `max_scroll()`（`text_max_scroll() + bottom_padding()`）与 `src/ui/prompt_frame.rs` 的滚动条 `total`，不写入 `visual_rows()`，因此光标、点击、选区与 `row_in_padding` 语义不变。
+- 占位仍只进入 `max_scroll()` 与 `src/ui/prompt_frame.rs` 的滚动条 `total`，不写入 `visual_rows()`，因此光标、点击、选区与 `row_in_padding` 语义不变。
+  - 公式订正（`docs/feature/prompt-scroll-guard/`）：原为 `text_max_scroll() + bottom_padding()`，正文不溢出时仍会多出可滚动距离；现为 `(visual_rows + bottom_padding).saturating_sub(height)`，与滚动条可拖距离同一口径，不溢出时上限为 0。
 - `row_in_padding` 仍以“滚动偏移 + 视口行 >= 视觉行数”判断，点击留白只聚焦不移动光标的行为自动跟随新的滚动上限。
 
 ## 4. 影响与不变量
 
 - 空文档、短文本打开时仍从顶部显示，不自动滚到留白。
-- 滚轮与滚动条可进入文末留白；方向键与编辑命令仍限于真实正文。
+- 滚动条可见时，滚轮与滚动条可进入文末留白；正文不溢出、滚动条不可见时一律不可滚动。方向键与编辑命令仍限于真实正文。
 - `scroll_cursor_into_view` 的钳制上限自动缩小，编辑时不再把留白立即收回的行为保留。
 - 用户可见文案无变化，不新增 `ui/text.rs` 常量。
 

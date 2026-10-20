@@ -496,8 +496,10 @@ pub fn delete_supple_block(state: &mut AppState, start_line: usize) -> bool {
 }
 
 /// 按方向滚动 prompt 视口（负数向上、正数向下）；光标不动，编辑后自动吸回。
-pub fn scroll_prompt(state: &mut AppState, direction: isize) {
-    scroll_prompt_selection(state, direction, WHEEL_LINES);
+///
+/// 返回视口是否实际移动：滚动条不可见时上限为 0，滚轮一律不产生位移。
+pub fn scroll_prompt(state: &mut AppState, direction: isize) -> bool {
+    scroll_prompt_selection(state, direction, WHEEL_LINES)
 }
 
 /// 鼠标点击 prompt：把视口单元格映射为光标位置。

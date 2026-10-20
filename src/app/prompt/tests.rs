@@ -304,18 +304,20 @@ fn click_focus_keeps_bottom_padding_scroll() {
 }
 
 #[test]
-fn scroll_by_can_enter_bottom_padding_for_short_text() {
+fn short_text_without_scrollbar_cannot_scroll() {
+    // 回归：2 行正文放进 5 行视口，内容不溢出、滚动条不出现，此时视口必须焊死。
     let mut prompt = prompt(10, 5);
     prompt.insert_str("1\n2");
     assert_eq!(prompt.scroll(), 0, "短正文初次打开仍在顶部");
-    prompt.scroll_by(3);
-    assert_eq!(
-        prompt.scroll(),
-        1,
-        "滚轮可进入底部四分之一屏留白（5 / 4 向下取整）"
+    let total = prompt.visual_rows().len() + prompt.bottom_padding();
+    assert!(
+        total <= usize::from(prompt.size().1),
+        "前提：内容未溢出视口（total {total} <= height）"
     );
+    assert!(!prompt.scroll_by(3), "没有滚动条时滚轮不移动视口");
+    assert_eq!(prompt.scroll(), 0);
     prompt.scroll_to(99);
-    assert_eq!(prompt.scroll(), 1, "滚动条偏移同样钳到留白上限");
+    assert_eq!(prompt.scroll(), 0, "没有滚动条时滚动条轨道点击/拖拽不生效");
 }
 
 #[test]
@@ -331,15 +333,30 @@ fn bottom_padding_is_quarter_of_viewport_height() {
 }
 
 #[test]
-fn bottom_padding_does_not_extend_text_rows() {
-    let mut prompt = prompt(10, 8);
-    prompt.insert_str("1\n2");
-    let text_rows = prompt.visual_rows().len();
-    prompt.scroll_to(99);
-    assert_eq!(prompt.bottom_padding(), 2);
-    assert_eq!(prompt.visual_rows().len(), text_rows, "占位不混入视觉行");
-    assert_eq!(prompt.scroll(), 2, "留白全部计入可滚动上限");
-    assert!(prompt.row_in_padding(0), "滚到底后首行即留白区");
+fn bottom_padding_counts_only_after_text_overflows() {
+    // 占位始终不写入视觉行；但只有正文溢出视口时，留白才额外贡献滚动距离。
+    let mut short = prompt(10, 8);
+    short.insert_str("1\n2");
+    let text_rows = short.visual_rows().len();
+    assert_eq!(short.bottom_padding(), 2);
+    short.scroll_to(99);
+    assert_eq!(short.visual_rows().len(), text_rows, "占位不混入视觉行");
+    assert_eq!(short.scroll(), 0, "内容未溢出时留白不产生可滚动距离");
+    assert!(!short.row_in_padding(0), "未溢出时首行仍是正文");
+
+    // 12 行正文放 8 行视口：真实上限 4 行 + 留白 2 行 = 6 行。
+    let mut long = prompt(10, 8);
+    long.insert_str(
+        &(1..=12)
+            .map(|line| line.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    assert_eq!(long.text_max_scroll(), 4);
+    long.scroll_to(99);
+    assert_eq!(long.scroll(), 6, "溢出后留白全部计入可滚动上限");
+    assert!(!long.row_in_padding(5), "第 5 个视口行仍是正文末行");
+    assert!(long.row_in_padding(6), "滚到底后末尾两个视口行是留白");
 }
 
 #[test]
