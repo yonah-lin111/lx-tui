@@ -88,49 +88,48 @@ fn lx_with_messages() -> Lx {
 }
 
 #[test]
-fn panel_takes_over_the_history_area_and_keeps_the_input_box() {
-    // 用户要求：面板占用原消息列表位置；关闭后消息列表原样恢复（见
-    // `history_takeover::closing_the_panel_restores_the_message_list_verbatim`）。
+fn panel_replaces_messages_with_output_and_keeps_the_input_slot() {
+    // 两段式：输出容器吃历史区（消息正文消失），item 列表接替输入框位置。
     let mut lx = lx_with_messages();
     let before = render_lines(&lx, 70, 16);
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let after = render_lines(&lx, 70, 16);
 
+    // 历史区被输出容器接管：消息正文不再出现。
+    let joined = after.join("\n");
+    assert!(!joined.contains('你'), "历史区已被输出容器接管：{joined}");
+    // 输出容器从内容区顶部开始。
+    assert!(
+        after[0].contains(text::LX_TASK_OUTPUT_TITLE),
+        "输出容器贴内容区顶部：{after:#?}"
+    );
+    // item 列表在窗格下半部，顶边框 + tab 行 + 固定列表行。
     let tab_row = after
         .iter()
         .position(|line| line.contains(TaskTab::Processes.label()))
         .expect("面板 tab 行");
-    // 面板从内容区顶部开始接管历史区。
     assert_eq!(
         tab_row,
-        usize::from(TOP_BORDER),
-        "面板贴着历史区顶部：{after:#?}"
+        after.len() - 1 - usize::from(TAB_ROW + LIST_MAX as u16),
+        "item 列表占满固定高度并紧贴底边框：{after:#?}"
     );
-    // 消息正文必须从这块区域消失（被面板接管）。
-    let joined = after[..tab_row].join("\n");
-    assert!(!joined.contains('你'), "历史区已被面板接管：{joined}");
-    // 输入框仍在原位：lx 输入框是上下 `─` 分割线 + `> ` 前缀（没有圆角），
-    // 取关闭态里输入框内那几行的整体行范围，打开后必须逐字符相同。
-    let input_top = before
+    // 关闭态里输入框所在的那一块，打开后由 item 列表占用（行数一致，不挤动布局）。
+    let input_row = before
         .iter()
         .rposition(|line| {
             line.trim_start()
                 .starts_with(text::LX_INPUT_PROMPT.trim_end())
         })
         .expect("关闭态应有输入框");
-    // 输入框三行（上分割线 / `> ` 文本行 / 下分割线）必须逐字符不变；
-    // 其下那一行是窗格底边框，面板打开时按设计换成键位提示，不参与比较。
-    let top = input_top.saturating_sub(1);
-    let end = (input_top + 2).min(before.len());
-    assert_eq!(
-        before[top..end],
-        after[top..end],
-        "输入框三行逐字符不变（面板不挤动输入框）：\n关闭 {before:#?}\n打开 {after:#?}"
+    assert!(
+        tab_row <= input_row,
+        "item 列表不高于原输入框位置：tab {tab_row} / 输入框 {input_row}"
     );
 }
 
 #[test]
-fn panel_sits_in_the_history_area_not_at_the_bottom() {
+fn item_list_sits_at_the_input_box_position() {
+    // 用户要求：输出容器占消息列表位置，**item 列表仍在输入框位置**（窗格下半部）。
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let lines = render_lines(&lx, 70, 16);
@@ -138,15 +137,22 @@ fn panel_sits_in_the_history_area_not_at_the_bottom() {
         .iter()
         .position(|line| line.contains(TaskTab::Processes.label()))
         .expect("tab 行");
+    assert!(
+        tab_row > lines.len() / 2,
+        "item 列表在窗格下半部（原输入框位置）：{lines:#?}"
+    );
     let entry_row = lines
         .iter()
+        .skip(tab_row)
         .position(|line| line.contains("npm run dev"))
+        .map(|offset| tab_row + offset)
         .expect("进程行");
-    assert!(
-        tab_row < lines.len() / 2,
-        "面板在历史区而不是贴底：{lines:#?}"
-    );
     assert!(entry_row > tab_row, "条目在 tab 行之下");
+    // 输出容器的顶边栏在上半部（占原消息列表位置）。
+    assert!(
+        lines[0].contains(text::LX_TASK_OUTPUT_TITLE),
+        "输出容器贴内容区顶部：{lines:#?}"
+    );
 }
 
 #[test]
@@ -195,34 +201,24 @@ fn model_name_returns_when_the_panel_closes() {
 }
 
 #[test]
-fn list_rows_caps_at_list_max_regardless_of_entry_count() {
-    // 面板接管历史区后高度随窗格变化，但**列表区**仍封顶 `LIST_MAX`，
-    // 余下空间全给输出区；条目数多少都不改变这个上限。
-    let rect = Rect::new(0, 0, 70, 30);
-    for count in [0usize, 1, 2, 5] {
-        let entries: Vec<ProcessEntry> = (1..=count)
-            .map(|i| entry(i as u64, &format!("cmd-{i}"), "/w"))
-            .collect();
-        let page = page_with(entries, 0);
+fn list_height_is_fixed_regardless_of_entry_count() {
+    // item 列表占原输入框那一段，高度**固定**：0 条和 9 条一样高，
+    // 开关面板时上方输出容器不会被挤动一下。
+    let expected = TOP_BORDER + TAB_ROW + LIST_MAX as u16;
+    assert_eq!(list_height(), expected, "列表高度固定");
+}
+
+#[test]
+fn output_container_rows_deduct_its_chrome() {
+    // 输出容器可用行数 = 高度 − 顶边栏 − 分隔行；翻页钳制与渲染共用这一份口径。
+    for height in [2u16, 3, 10, 30] {
+        let rect = Rect::new(0, 0, 70, height);
         assert_eq!(
-            list_rows(rect, &page),
-            u16::try_from(count.max(1)).unwrap_or(u16::MAX),
-            "{count} 条时列表区随条目数（1 条起）"
+            output_rows(rect),
+            usize::from(height.saturating_sub(TOP_BORDER + DIVIDER)),
+            "高 {height} 的输出容器"
         );
     }
-    // 条目多于上限时封顶。
-    let many: Vec<ProcessEntry> = (1..=20)
-        .map(|i| entry(i as u64, &format!("cmd-{i}"), "/w"))
-        .collect();
-    let page = page_with(many, 0);
-    assert_eq!(
-        list_rows(rect, &page),
-        u16::try_from(LIST_MAX).unwrap_or(u16::MAX),
-        "超过上限时封顶 LIST_MAX"
-    );
-    // 面板极矮时列表优先，但仍要留出输出区（至少 1 行）。
-    let tiny = Rect::new(0, 0, 40, TOP_BORDER + TAB_ROW + DIVIDER + 1);
-    assert!(list_rows(tiny, &page) >= 1, "极矮时列表仍占 1 行");
 }
 
 #[test]
@@ -265,14 +261,20 @@ fn selected_row_carries_the_marker() {
     page.window.active = 1;
     lx.task = Some(page);
     let lines = render_lines(&lx, 60, 16);
-    let second = lines
+    // 命令名也会出现在输出容器顶边栏（`Output <命令>`），所以只在 **item 列表区**
+    // （tab 行之下）找任务行，避免命中顶边栏。
+    let tab_row = lines
         .iter()
-        .find(|line| line.contains("second"))
-        .expect("第二行");
-    let first = lines
-        .iter()
-        .find(|line| line.contains("first"))
-        .expect("第一行");
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    let lookup = |needle: &str| {
+        lines[tab_row..]
+            .iter()
+            .find(|line| line.contains(needle))
+            .expect("任务行")
+    };
+    let second = lookup("second");
+    let first = lookup("first");
     assert!(
         second.contains(text::AGENT_SELECTED_MARKER),
         "高亮行带标记：{second}"

@@ -1,10 +1,19 @@
-//! 后台任务面板接管消息列表区域的回归测试。
+//! 后台任务面板两段式布局的回归测试。
 //!
-//! 用户要求（Grill Me 决策 4/8/9/10/11）：
-//! 1. 点卡片的 `[open]` 后，面板占用**原消息列表位置**，输入框仍在原位；
-//! 2. 面板上半是任务列表（`❯` + `^d`），下半是高亮任务的输出；
-//! 3. `[open]` 携带 session_id 定位高亮，进程已结束则回落首项；
-//! 4. 面板期间历史滚动冻结，关闭后消息列表位置与内容原样恢复。
+//! 用户明确要求的版式：
+//!
+//! ```text
+//! ┌────────────────────────────┐
+//! │ 显示后台任务的容器            │ ← 原**消息列表**的位置
+//! │ （高亮任务的输出）            │
+//! ├────────────────────────────┤
+//! ┌────────────────────────────┐
+//! │ Processes · Agents  [close]│ ← 原**输入框**的位置（item 列表）
+//! │ ❯ cmd  cwd        running  │
+//! └────────────────────────────┘
+//! ```
+//!
+//! 两个区块**同时存在**：输出容器吃掉历史区，item 列表继续占输入框矩形。
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -83,70 +92,28 @@ fn render_lines(lx: &Lx, width: u16, height: u16) -> Vec<String> {
         .collect()
 }
 
-// ===== 决策 4：面板接管历史区，输入框原位 =====
+// ===== 输出容器：占原消息列表位置 =====
 
 #[test]
-fn panel_takes_over_the_history_region_not_the_input_box() {
+fn output_container_takes_over_the_message_list_area() {
     let mut lx = lx_with_messages();
-    let closed = render_lines(&lx, 70, 20);
     lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
-    let opened = render_lines(&lx, 70, 20);
-
-    // 消息内容必须从消息列表区域消失（被面板接管）。
-    let joined = opened.join("\n");
+    let lines = render_lines(&lx, 70, 24);
+    let joined = lines.join("\n");
+    // 消息正文不再出现（那块矩形被输出容器接管）。
     assert!(
         !joined.contains("我是 Claude"),
-        "面板占用历史区后不应再画消息正文：{opened:#?}"
+        "输出容器占用历史区后不再画消息正文：{lines:#?}"
     );
-    // 输入框仍在原位（lx 输入框是上下 `─` 分割线 + `> ` 前缀，没有圆角）。
-    let input_row_closed = closed.iter().rposition(|line| {
-        line.trim_start()
-            .starts_with(text::LX_INPUT_PROMPT.trim_end())
-    });
-    assert!(input_row_closed.is_some(), "关闭态应有输入框：{closed:#?}");
-    // tab 行必须出现在历史区起点附近（而不是贴底）。
-    let tab_row = opened
-        .iter()
-        .position(|line| line.contains(TaskTab::Processes.label()))
-        .expect("面板 tab 行");
+    // 输出容器从内容区最顶部开始（顶边栏 + 标题）。
     assert!(
-        tab_row < opened.len() / 2,
-        "面板必须从历史区顶部开始，而不是贴底：{opened:#?}"
+        lines[0].contains(text::LX_TASK_OUTPUT_TITLE),
+        "输出容器贴内容区顶部：{lines:#?}"
     );
 }
 
 #[test]
-fn input_box_stays_at_its_original_position() {
-    let mut lx = lx_with_messages();
-    let closed = render_lines(&lx, 70, 20);
-    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
-    let opened = render_lines(&lx, 70, 20);
-    // 底边框行（最后一行）两侧都必须是同一套键位/状态渲染位置：
-    // 输入框的下边框在关闭态倒数第二行，打开面板后该行仍然是输入框下边框。
-    let closed_bottom = closed[closed.len() - 2].clone();
-    let opened_bottom = opened[opened.len() - 2].clone();
-    assert!(
-        closed_bottom.contains('─') && opened_bottom.contains('─'),
-        "输入框样式区域仍在原位：关闭 {closed_bottom:?} 打开 {opened_bottom:?}"
-    );
-}
-
-#[test]
-fn closing_the_panel_restores_the_message_list_verbatim() {
-    // 决策 10：关闭后消息列表位置与内容必须原样恢复。
-    let mut lx = lx_with_messages();
-    let before = render_lines(&lx, 70, 20);
-    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
-    let _opened = render_lines(&lx, 70, 20);
-    lx.task = None;
-    let after = render_lines(&lx, 70, 20);
-    assert_eq!(before, after, "关闭面板后整屏必须与打开前一致");
-}
-
-// ===== 决策 8：列表 + 输出区 =====
-
-#[test]
-fn panel_shows_process_list_and_selected_output() {
+fn output_container_shows_the_selected_process_output() {
     let mut lx = lx_with_messages();
     let mut page = page_with(vec![entry(1, "npm run dev"), entry(2, "cargo watch")]);
     page.output = vec![
@@ -155,26 +122,106 @@ fn panel_shows_process_list_and_selected_output() {
         "heartbeat 19:39:46".into(),
     ];
     lx.task = Some(page);
-    let lines = render_lines(&lx, 70, 24);
-    let joined = lines.join("\n");
-    assert!(joined.contains("npm run dev"), "任务列表可见：{joined}");
-    assert!(joined.contains("cargo watch"), "另一条任务也可见：{joined}");
+    let joined = render_lines(&lx, 70, 24).join("\n");
     assert!(
         joined.contains("heartbeat 19:39:36"),
-        "高亮任务的输出必须显示：{joined}"
+        "输出正文必须显示：{joined}"
+    );
+    assert!(
+        joined.contains("npm run dev"),
+        "顶边栏标题带上高亮任务：{joined}"
     );
 }
 
 #[test]
-fn output_area_renders_nothing_alarming_when_empty() {
+fn empty_output_shows_an_explicit_placeholder() {
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
-    let lines = render_lines(&lx, 70, 24);
-    let joined = lines.join("\n");
+    let joined = render_lines(&lx, 70, 24).join("\n");
     assert!(
         joined.contains(text::LX_TASK_OUTPUT_EMPTY),
-        "空输出要有占位而不是空白：{joined}"
+        "空输出要有占位而不是留白：{joined}"
     );
+}
+
+// ===== item 列表：仍在原输入框位置 =====
+
+#[test]
+fn item_list_stays_where_the_input_box_was() {
+    let mut lx = lx_with_messages();
+    let closed = render_lines(&lx, 70, 24);
+    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    let opened = render_lines(&lx, 70, 24);
+
+    // 关闭态里输入框所在行（`> Ask anything…` 上方那条分隔线）。
+    let input_row = closed
+        .iter()
+        .rposition(|line| {
+            line.trim_start()
+                .starts_with(text::LX_INPUT_PROMPT.trim_end())
+        })
+        .expect("关闭态应有输入框");
+    // 打开态里 tab 行必须落在输入框那一块（而不是贴内容区顶部）。
+    let tab_row = opened
+        .iter()
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    assert!(
+        tab_row > opened.len() / 2,
+        "item 列表在窗格下半部（原输入框位置）：{opened:#?}"
+    );
+    assert!(
+        tab_row <= input_row,
+        "item 列表不高于原输入框位置：tab {tab_row} / 输入框 {input_row}\n{opened:#?}"
+    );
+    // 任务条目也在下半部（命令名同样出现在输出容器顶边栏，只在 tab 行之下找）。
+    let entry_row = tab_row
+        + opened[tab_row..]
+            .iter()
+            .position(|line| line.contains("npm run dev"))
+            .expect("任务行");
+    assert!(entry_row > tab_row, "任务行在 tab 行之下");
+}
+
+#[test]
+fn both_blocks_are_visible_at_the_same_time() {
+    // 用户强调：消息列表位置变成输出容器，**同时**输入框位置是 item 列表。
+    let mut lx = lx_with_messages();
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = vec!["heartbeat".into()];
+    lx.task = Some(page);
+    let lines = render_lines(&lx, 70, 24);
+    let output_row = lines
+        .iter()
+        .position(|line| line.contains("heartbeat"))
+        .expect("输出容器显示输出");
+    // 命令名也出现在输出容器顶边栏，只在 tab 行之下找真正的 item 行。
+    let tab_row = lines
+        .iter()
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    let list_row = tab_row
+        + lines[tab_row..]
+            .iter()
+            .position(|line| line.contains("npm run dev"))
+            .expect("item 列表显示任务");
+    assert!(
+        output_row < list_row,
+        "输出容器在上、item 列表在下：输出 @{output_row} 列表 @{list_row}"
+    );
+}
+
+// ===== 关闭面板后恢复 =====
+
+#[test]
+fn closing_the_panel_restores_the_message_list_verbatim() {
+    let mut lx = lx_with_messages();
+    let before = render_lines(&lx, 70, 24);
+    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    let _opened = render_lines(&lx, 70, 24);
+    lx.task = None;
+    let after = render_lines(&lx, 70, 24);
+    assert_eq!(before, after, "关闭面板后整屏必须与打开前一致");
 }
 
 // ===== 决策 9：`[open]` 定位高亮 =====
@@ -198,7 +245,6 @@ fn focus_selects_the_requested_process() {
 
 #[test]
 fn focus_falls_back_to_first_when_the_process_is_gone() {
-    // 卡片会留在历史里，但进程可能早就退出了：此时优雅降级到首项。
     let mut page = page_with(vec![entry(1, "first"), entry(2, "second")]);
     page.focus = Some(99);
     page.resolve_focus();
@@ -235,11 +281,47 @@ fn output_scroll_moves_within_bounds() {
 
 #[test]
 fn changing_selection_pins_output_to_the_tail() {
-    // 用户要求：高亮变了就贴输出尾部（最新输出）。
     let mut page = page_with(vec![entry(1, "first"), entry(2, "second")]);
     page.output = (0..50).map(|index| format!("line {index}")).collect();
     page.output_visible = 10;
     page.output_scroll = 3;
     assert!(page.move_active(1), "高亮移到第二条");
     assert_eq!(page.output_scroll, 40, "换任务后输出贴尾部（最新输出）");
+}
+
+// ===== 输出容器的 `[close esc]` 可点 =====
+
+#[test]
+fn output_container_close_button_is_clickable() {
+    let area = Rect::new(0, 0, 70, 24);
+    let mut lx = lx_with_messages();
+    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    let rects = crate::ui::main_content::lx::task_rects(area, &lx).expect("面板已打开");
+    let close = output_close_rect(rects.output).expect("输出容器有 [close esc]");
+    assert_eq!(
+        hit_in(
+            rects.list,
+            Some(rects.output),
+            lx.task.as_ref().expect("page"),
+            close.x,
+            close.y
+        ),
+        Some(TaskHit::Close),
+        "输出容器右端的 [close esc] 可点"
+    );
+    // item 列表的 tab 仍可点，两段命中互不干扰。
+    let tab_row = rects.list.y.saturating_add(TOP_BORDER);
+    assert!(
+        matches!(
+            hit_in(
+                rects.list,
+                Some(rects.output),
+                lx.task.as_ref().expect("page"),
+                rects.list.x,
+                tab_row
+            ),
+            Some(TaskHit::Tab(0))
+        ),
+        "item 列表左上角 tab 仍可点"
+    );
 }

@@ -748,13 +748,14 @@ const CHAT_STEP_GREEN: u8 = 42;
 const CHAT_STEP_MAGENTA: u8 = 218;
 /// 可变参数色：金黄（与 `[UI]` 查看器的 `agent_param` 同色；工具行不加下划线）。
 const CHAT_GOLD: u8 = 220;
-/// 后台进程**存活**色：橙 `Indexed 202`（`#ff5f00`）。
+/// 后台进程**存活**色：深黄 `Indexed 136`（`#af8700`）。
 ///
-/// 只服务进程类卡片（`exec_command` / `write_stdin`）：橙色表达"任务还在跑"，
-/// 进程停止即回翡翠绿。选色依据（CIEDE2000，见 `ui::style::tests`）：
-/// 与工具绿 66.7、金黄参数 39.6、品红思考 37.4、天蓝 117 55.2 均 ≥30；
-/// 与 markdown 引用橙 `Indexed 208` 同色相但明度更沉，两者不在同一区域出现。
-const CHAT_STEP_ORANGE: u8 = 202;
+/// 只服务进程类卡片（`exec_command` / `write_stdin`）：深黄表达"任务还在跑"，
+/// 进程停止即回翡翠绿。用户明确要求「深一点的黄色」——比金黄参数 `220`
+/// 暗一档（L 86.9 → 58.5），因此不会与参数金混淆；选色依据（CIEDE2000，
+/// 见 `ui::style::tests`）：与工具绿 39.2、品红思考 50.4、天蓝 117 51.3
+/// 均 ≥35；与金黄参数 22.5 的差距靠**明度差**补足（见下方 palette 测试）。
+const CHAT_STEP_YELLOW: u8 = 136;
 
 // ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
 //
@@ -825,13 +826,13 @@ pub fn chat_step_mark_done() -> Style {
 /// 与绿（色差 66.7）、金黄参数（39.6）、品红思考（37.4）、天蓝（55.2）都拉得开。
 pub fn chat_step_mark_alive() -> Style {
     Style::default()
-        .fg(Color::Indexed(CHAT_STEP_ORANGE))
+        .fg(Color::Indexed(CHAT_STEP_YELLOW))
         .add_modifier(Modifier::BOLD)
 }
 
 /// 后台进程卡片的动词与状态文字：橙色（同色系，不加粗）——方块靠字重衬出来。
 pub fn chat_step_label_alive() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_ORANGE))
+    Style::default().fg(Color::Indexed(CHAT_STEP_YELLOW))
 }
 
 /// 工具行的头部文案：运行中——翡翠绿（与方块同色系，不加粗）。

@@ -61,7 +61,7 @@ const BODY_ROWS: usize = 2;
 /// `… +N more lines` 都已搬进后台任务面板，消息列表里只看得到"哪条命令在跑"。
 fn command_body(view: &CommandView) -> Vec<BodyRow> {
     vec![
-        BodyRow::command(&view.command),
+        BodyRow::command(&view.command, view.state.is_running()),
         BodyRow::open(text::agent::TASK_OPEN_LABEL),
     ]
 }
@@ -69,7 +69,7 @@ fn command_body(view: &CommandView) -> Vec<BodyRow> {
 /// 交互卡片树体行：命令 + `[open]`（stdin 与输出同样只在面板里看）。
 fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
     vec![
-        BodyRow::command(&view.command),
+        BodyRow::command(&view.command, view.state.is_running()),
         BodyRow::open(text::agent::TASK_OPEN_LABEL),
     ]
 }
@@ -106,11 +106,19 @@ struct BodyRow {
 }
 
 impl BodyRow {
-    /// 命令原文行（`$ ` 前缀 + 命令，金黄参数色）。
-    fn command(command: &str) -> Self {
+    /// 命令原文行（`$ ` 前缀 + 命令）。
+    ///
+    /// `alive` 为真时（进程仍存活）整行跟着标题一起染深黄：卡片此时表达的是
+    /// "这条命令还在跑"，命令原文是它的身份，颜色必须与标题同档；进程停止后
+    /// 回到常规金黄参数色。
+    fn command(command: &str, alive: bool) -> Self {
         Self {
             text: format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX),
-            style: style::chat_tool_param(),
+            style: if alive {
+                style::chat_step_label_alive()
+            } else {
+                style::chat_tool_param()
+            },
             sample: SAMPLE_CHARS,
             open: false,
         }

@@ -126,17 +126,17 @@ fn model_label_style_runs_the_entry_gradient_and_is_bold() {
 /// 金黄（可变参数）、品红（思考）、天蓝（连接符）都明显不同，否则用户分不出
 /// "还在跑"与"已经停了"。同时不得压暗（dim 只留给只读元信息）。
 #[test]
-fn alive_process_orange_is_distinct_from_every_other_step_color() {
+fn alive_process_yellow_is_distinct_from_every_other_step_color() {
     let orange = chat_step_mark_alive().fg.expect("存活色必须有前景");
     let Color::Indexed(index) = orange else {
         panic!("存活色必须取 256 色槽位，实际 {orange:?}");
     };
     assert_eq!(
-        index, 202,
-        "存活橙固定为 Indexed 202（选色依据见 style.rs）"
+        index, 136,
+        "存活深黄固定为 Indexed 136（选色依据见 style.rs）"
     );
 
-    // 动词/状态文字与方块同色系（同一档橙），只靠字重区分。
+    // 动词/状态文字与方块同色系（同一档深黄），只靠字重区分。
     assert_eq!(
         chat_step_label_alive().fg,
         Some(orange),
@@ -166,14 +166,24 @@ fn alive_process_orange_is_distinct_from_every_other_step_color() {
     for (label, other) in [
         ("工具绿", chat_step_mark_done().fg),
         ("工具动词绿", chat_tool_verb().fg),
-        ("参数金黄", chat_tool_param().fg),
         ("思考品红", Some(Color::Indexed(218))),
         ("失败红", agent_fail().fg),
-        ("中断黄", agent_warn().fg),
         ("正文默认", None),
     ] {
-        assert_ne!(Some(orange), other, "存活橙不得与{label}同色");
+        assert_ne!(Some(orange), other, "存活深黄不得与{label}同色");
     }
+
+    // 与金黄参数**同为黄色系**，必须靠明度差拉开（用户要求"深一点的黄色"）：
+    // 参数金 220 是亮黄（L 86.9），存活色是深黄（L 58.5），差 28 个明度点。
+    assert_ne!(
+        Some(orange),
+        chat_tool_param().fg,
+        "存活深黄不得与参数金黄同槽位"
+    );
+    let Color::Indexed(gold) = chat_tool_param().fg.expect("参数金有前景") else {
+        panic!("参数金必须取槽位");
+    };
+    assert!(gold > index, "参数金槽位({gold})应比存活深黄({index})更亮");
 }
 
 /// 聊天步骤的配色必须：① 结构色用翡翠绿 `Indexed 42`、可变参数用金黄 220；

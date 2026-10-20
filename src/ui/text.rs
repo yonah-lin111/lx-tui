@@ -614,6 +614,8 @@ pub const LX_TASK_AGENTS_EMPTY: &str = "no subagents yet";
 ///
 /// 必须显式占位而不是留白：面板下半区突然空着，会让人以为"输出丢了"。
 pub const LX_TASK_OUTPUT_EMPTY: &str = "waiting for output";
+/// 输出容器顶边栏的标题（右侧接高亮任务的命令原文）。
+pub const LX_TASK_OUTPUT_TITLE: &str = "Output";
 /// 一条键位提示：`[功能 键]`。
 ///
 /// **功能名在前、快捷键在后**（用户要求），方括号包住整条——它既是一个视觉单位，

@@ -98,7 +98,33 @@ fn render_text(call: &ToolCallView, width: u16) -> String {
     lines.join("\n")
 }
 
-// ===== 决策 1：存活期为橙色，停止后恢复绿色 =====
+/// 命令行（树体中段 y = 1）里**命令正文**的样式：跳到 `$ ` 提示符之后取色，
+/// 跳过树干的 `│` 连接符（那是 dim 灰，不属于命令正文）。
+fn command_row_style(grid: &Grid, width: u16) -> Option<ratatui::style::Style> {
+    let mut seen_prompt = false;
+    for x in 0..width {
+        let cell = grid.cell(x, 1);
+        let glyph = cell.ch;
+        if glyph == crate::ui::main_content::lx::grid::CONTINUATION || glyph == ' ' {
+            continue;
+        }
+        if !seen_prompt {
+            if glyph
+                == text::agent::COMMAND_PROMPT_PREFIX
+                    .chars()
+                    .next()
+                    .unwrap_or('$')
+            {
+                seen_prompt = true;
+            }
+            continue;
+        }
+        return Some(cell.style);
+    }
+    None
+}
+
+// ===== 决策 1：存活期为深黄，停止后恢复绿色 =====
 
 #[test]
 fn alive_command_card_is_orange_and_stopped_card_is_green() {
@@ -125,7 +151,30 @@ fn alive_command_card_is_orange_and_stopped_card_is_green() {
 }
 
 #[test]
-fn alive_interaction_card_is_orange_too() {
+fn alive_card_paints_the_command_row_in_the_same_deep_yellow() {
+    // 用户要求：命令行的字体颜色也跟着改（不只是方块与标题）。
+    let alive = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    let grid = render_grid(&alive, 70);
+    let command_style = command_row_style(&grid, 70).expect("命令行必须画出来");
+    assert_eq!(
+        command_style.fg,
+        style::chat_step_label_alive().fg,
+        "存活时命令行与标题同档深黄：{command_style:?}"
+    );
+
+    // 停止后回到常规金黄参数色。
+    let stopped = command_call(ProcessStateView::Stopped, ToolStatus::Completed, "beat\n");
+    let grid = render_grid(&stopped, 70);
+    let stopped_style = command_row_style(&grid, 70).expect("命令行必须画出来");
+    assert_eq!(
+        stopped_style.fg,
+        style::chat_tool_param().fg,
+        "停止后命令行回到参数金黄"
+    );
+}
+
+#[test]
+fn alive_interaction_card_is_deep_yellow_too() {
     let alive = interaction_call(ProcessStateView::Running, ToolStatus::Completed);
     let mark = render_grid(&alive, 60).cell(0, 0).style;
     assert_eq!(

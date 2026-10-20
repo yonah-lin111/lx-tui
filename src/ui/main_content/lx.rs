@@ -341,8 +341,10 @@ struct Layout {
     input_visible: usize,
     /// 输入框上方聊天栏（loading 转轮 + 右端回到底部按钮）；无则为 None。
     chat_bar: Option<Rect>,
-    /// 后台任务面板矩形：**接管历史区**（输入框仍在原位）；未打开时为 None。
-    task: Option<Rect>,
+    /// 后台任务**输出容器**矩形：占用原历史区（消息列表的位置）；未打开时为 None。
+    task_output: Option<Rect>,
+    /// 后台任务 **item 列表**矩形：仍在输入框原来的位置（替换输入框）；未打开时为 None。
+    task_list: Option<Rect>,
     panel: Option<Rect>,
     entries: Vec<(LxEntry, Rect)>,
     horizontal: bool,
@@ -359,7 +361,8 @@ impl Layout {
             input_scroll: 0,
             input_visible: 0,
             chat_bar: None,
-            task: None,
+            task_output: None,
+            task_list: None,
             panel: None,
             entries: Vec::new(),
             horizontal: true,
@@ -368,6 +371,26 @@ impl Layout {
             fallback,
         }
     }
+}
+
+/// 后台任务面板两段式矩形的公开快照（`(item 列表, 输出容器)`）。
+///
+/// 命中测试在 `event/` 里做，而 `Layout` 是 `ui/` 私有类型；这里只把命中真正需要的
+/// 两个矩形交出去，渲染与命中共用 `layout` 的同一份几何。
+pub struct TaskRects {
+    /// item 列表：原输入框位置。
+    pub list: Rect,
+    /// 输出容器：原消息列表位置。
+    pub output: Rect,
+}
+
+/// 面板打开时的两段矩形；未打开返回 None。
+pub fn task_rects(area: Rect, lx: &Lx) -> Option<TaskRects> {
+    let lay = layout(area, lx);
+    Some(TaskRects {
+        list: lay.task_list?,
+        output: lay.task_output?,
+    })
 }
 
 /// 计算整页布局。
@@ -388,7 +411,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     //
     // 后台任务面板打开时输入框**仍在原位**（不参与面板布局）：面板接管的是上方
     // 历史区，这样退出面板后消息列表与草稿都还是离开时的样子。
-    let (box_h, visible, scroll) = {
+    // 面板打开时这一块改由 item 列表占用：高度固定（顶边框 + tab 行 + LIST_MAX），
+    // 不随草稿行数变化——否则开关面板会让上方输出容器跳动。
+    let (box_h, visible, scroll) = if lx.task.is_some() {
+        (task::list_height(), 0, 0)
+    } else {
         let rows = lx.visual_rows();
         let total = rows.len().max(1);
         let max_box = (area.height.saturating_mul(INPUT_MAX_PERCENT) / 100).max(INPUT_MIN_BOX);
@@ -415,14 +442,26 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
         out.chat_bar = chat_bar::rect(area, input);
     }
 
-    // 后台任务面板：接管**历史区**矩形（输入框上沿之上的整块），与 `history_rect`
-    // 同一份几何——面板、消息列表、滚动条因此共用一套口径，不产生第二套坐标。
+    // 后台任务面板：**两段式**布局（用户明确要求）
+    //
+    //   ┌──────────────────────────────┐
+    //   │ 输出容器（原消息列表位置）        │ ← out.task_output
+    //   ├──────────────────────────────┤
+    //   │ … 消息列表在它下方不可见 …       │
+    //   └──────────────────────────────┘
+    //   ┌──────────────────────────────┐
+    //   │ task item 列表（原输入框位置）    │ ← out.task_list
+    //   └──────────────────────────────┘
+    //
+    // 输出容器吃掉**历史区**（`history_rect` 同一份几何），item 列表继续占输入框
+    // 矩形并沿用原本的固定高度；两者之间是面板自己的分隔行。
     if lx.task.is_some() {
         let bottom = out.chat_bar.map_or(input.y, |bar| bar.y);
         let height = bottom.saturating_sub(area.y);
         if height > 0 {
-            out.task = Some(Rect::new(input.x, area.y, input.width, height));
+            out.task_output = Some(Rect::new(input.x, area.y, input.width, height));
         }
+        out.task_list = Some(input);
     }
 
     // md 格式面板：贴输入框上方（聊天栏之上）；放不下则省略。
@@ -631,7 +670,7 @@ fn build_chat(
     //
     // 后台任务面板打开时**不画历史**（面板占用同一块矩形），但历史几何仍照常
     // 计算：滚动偏移与 `follow_bottom` 全程不动，关闭面板后消息列表原样回来。
-    let sticky = if lay.task.is_some() {
+    let sticky = if lay.task_output.is_some() {
         None
     } else {
         let history_view = history::view(history_rect, lx);
@@ -650,14 +689,18 @@ fn build_chat(
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
-    // 后台任务面板：占用**历史区**矩形（输入框仍在原位）。
-    if let (Some(rect), Some(page)) = (lay.task, lx.task.as_ref()) {
-        task::draw(&mut grid, rect, page);
-    }
-    // 输入框容器：面板打开时输入框照常绘制（草稿仍可编辑，退出面板即可发送）。
-    if let Some(input) = lay.input
+    // 后台任务面板：输出容器占原消息列表位置，item 列表仍在原输入框位置。
+    if let Some(page) = lx.task.as_ref() {
+        if let Some(rect) = lay.task_output {
+            task::draw_output_container(&mut grid, rect, page);
+        }
+        if let Some(rect) = lay.task_list {
+            task::draw_list(&mut grid, rect, page);
+        }
+    } else if let Some(input) = lay.input
         && lay.input_visible > 0
     {
+        // 输入框容器（面板未打开时）。
         cursor = input::draw(
             &mut grid,
             input,
@@ -763,16 +806,13 @@ pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
     Some((view.total_rows, usize::from(view.body.height)))
 }
 
-/// 后台任务面板输出区的可见行数（键位翻页钳制用）；面板未打开返回 None。
+/// 后台任务输出容器的可见行数（键位翻页钳制用）；面板未打开返回 None。
 ///
-/// 与渲染共用 [`layout`] → `task::list_rows` → `task::output_rect` 同一份几何，
-/// 因此"翻到哪停"和"画到哪停"永远是同一个数。
+/// 与渲染共用 [`layout`] → `task::output_rows` 同一份几何，因此"翻到哪停"与
+/// "画到哪停"永远是同一个数。
 pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
-    let lay = layout(area, lx);
-    let rect = lay.task?;
-    let page = lx.task.as_ref()?;
-    let rows = task::list_rows(rect, page);
-    Some(usize::from(task::output_rect(rect, rows).height))
+    let rect = layout(area, lx).task_output?;
+    Some(task::output_rows(rect))
 }
 
 /// 置顶用户消息行的"跳转目标"：该消息起始行（钳到 body 的滚动上限）；无置顶行返回 None。

@@ -391,7 +391,14 @@ pub(crate) fn handle_mouse_down_left(
                 // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
                 let task_hit = state.pane_anywhere(pane).and_then(|target| {
                     let page = target.lx.task.as_ref()?;
-                    ui::main_content::lx::task::hit(inner, page, mouse.column, mouse.row)
+                    let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
+                    ui::main_content::lx::task::hit_in(
+                        rects.list,
+                        Some(rects.output),
+                        page,
+                        mouse.column,
+                        mouse.row,
+                    )
                 });
                 if let Some(hit) = task_hit {
                     match hit {
