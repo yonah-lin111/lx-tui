@@ -874,7 +874,7 @@ async fn reaping_the_runtime_persists_the_terminal_state() {
     }
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
     assert!(
-        crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender),
+        crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender, &persistence),
         "解绑后回收运行实例"
     );
     // 回收是后台任务：等它停止完成并回投终态快照。
@@ -953,7 +953,7 @@ async fn closing_then_reopening_a_session_settles_the_card_to_a_terminal_state()
         target.lx.chat.session_id = None;
     }
     let (sender, mut receiver) = mpsc::unbounded_channel::<AppEvent>();
-    crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender);
+    crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender, &persistence);
     let (workspace, epoch, snapshots) =
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             loop {

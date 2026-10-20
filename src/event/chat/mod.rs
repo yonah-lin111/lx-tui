@@ -193,10 +193,27 @@ impl ChatStreams {
             .finish_turn(&key.session, &key.generation.to_string());
     }
 
-    /// 丢弃某 key 尚未回执的 BeginTool（窗格关闭时）：
-    /// 回执通道被 drop，loop 得到 `Err(RecvError)` 即等于取消，**不会执行**文件 IO。
-    fn drop_pending(&mut self, key: &RequestKey) {
-        self.pending_begins.retain(|pending| &pending.key != key);
+    /// 抽取某 key 尚未回执的 BeginTool（窗格关闭 / 会话切换 / `/new` 时）。
+    ///
+    /// **不能直接丢掉**：`begin_tool` 已经把 `agent_tool_call` 写成 `pending` 并提交，
+    /// 直接丢条目会让 `reply` 被 drop，loop 拿 `Err(RecvError)` 直接返回——`finish_tool`
+    /// 永远不会再被调用，库里那一行**永久停在 `pending`**（重开会话时卡片一直显示
+    /// Pending，直到整进程重启的恢复逻辑才纠正）。
+    ///
+    /// 正确做法是把它们交给调用方，由 [`settle_begin`] 走「无归属 → `cancel_pending`」
+    /// 那条唯一合法的 pending→cancelled 落库路径。
+    fn take_pending(&mut self, key: &RequestKey) -> Vec<PendingBegin> {
+        let mut taken = Vec::new();
+        let mut kept = Vec::with_capacity(self.pending_begins.len());
+        for pending in std::mem::take(&mut self.pending_begins) {
+            if &pending.key == key {
+                taken.push(pending);
+            } else {
+                kept.push(pending);
+            }
+        }
+        self.pending_begins = kept;
+        taken
     }
 }
 
@@ -223,12 +240,12 @@ pub fn pump_chat_streams(
     state: &mut AppState,
     streams: &mut ChatStreams,
     sender: &mpsc::UnboundedSender<AppEvent>,
+    persistence: &Persistence,
 ) -> bool {
     // 会话切换、`/new`、窗格关闭：在途轮次不再归属于任何可见请求 → 取消。
-    reap_stale_streams(state, streams);
+    let mut changed = reap_stale_streams(state, streams, persistence);
     // 已不再被任何窗格绑定的会话运行实例：停止其全部进程、释放句柄，并把终态回投落库。
-    let reaped = reap_orphan_runtimes(state, streams, sender);
-    let mut changed = reaped;
+    changed |= reap_orphan_runtimes(state, streams, sender);
     let effects: Vec<Effect> = state
         .effects
         .iter()
@@ -269,19 +286,28 @@ pub fn pump_chat_streams(
 }
 
 /// 取消已不再属于任何在途请求的轮次（窗格删除、会话切换、generation 前进）。
-fn reap_stale_streams(state: &AppState, streams: &mut ChatStreams) {
+fn reap_stale_streams(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+) -> bool {
     let stale: Vec<RequestKey> = streams
         .cancels
         .keys()
         .filter(|key| active_assistant_id(state, key).is_none())
         .cloned()
         .collect();
+    let mut changed = false;
     for key in stale {
         streams.cancel(&key);
-        streams.drop_pending(&key);
+        // 已提交 pending 的调用必须落成 cancelled，否则库里永久停在 `pending`。
+        for pending in streams.take_pending(&key) {
+            changed |= tool_calls::settle_begin(state, streams, persistence, pending);
+        }
         // 窗格关闭/会话切换：取消已不足以表达“清理进程”，这里按本轮范围停止。
         stop_turn_processes(streams, &key);
     }
+    changed
 }
 
 /// 执行进程类效应（后台任务页的列表与停止）。

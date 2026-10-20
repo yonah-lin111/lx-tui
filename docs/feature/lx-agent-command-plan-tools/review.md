@@ -7,9 +7,9 @@
 每条给出：**错误原因**（为什么是 bug、什么条件触发、用户看到什么）、**关键代码**、**修复建议**。
 
 > 修复状态标记：`[已修]` 表示本轮已改并补了回归测试；`[已修-部分]` 表示主体已修、
-> 有明确记录的残余风险；`[待修]` 表示记录在案、未在本轮处理（均有说明为什么留待后续）。
+> 有明确记录的残余风险；`[待修]` 表示记录在案、未处理。
 >
-> 统计：**28 条已修**（含 1 条部分修复），**1 条待修**。
+> 统计：**29 条已修**（含 1 条部分修复），**0 条待修**。
 
 ---
 
@@ -391,8 +391,10 @@ let snapshot_ref = OutputSnapshot {
 ```
 
 - 修复建议：`ProcessSnapshot` 带上真实的 `output_start()/output_end()`；
-  或把两列改名为 `tail_bytes` 并删掉偏移语义，别留一个会说谎的字段。`[待修]`（涉及 DB 列语义，
-  当前无消费者，改动留给后续 schema 变更）
+  或把两列改名为 `tail_bytes` 并删掉偏移语义，别留一个会说谎的字段。
+- 实际处理：`[已修]` `ProcessSnapshot` 新增 `output_start` / `output_end` 字段，
+  `tail_text()` 返回 `read.start` / `read.end`，`persist_snapshot` 落库写真实原始偏移
+  （`i64::try_from(...)`，不再用 `tail.len()` 冒充）。
 
 ### [低] `Effect::DeleteChatSession` 先删进程记录再删会话，删除失败会留下不一致状态
 
@@ -459,9 +461,15 @@ fn drop_pending(&mut self, key: &RequestKey) {
 
 - 修复建议：`drop_pending` 不要移除条目，只把 `reply` 置 `None`，让下一帧
   `flush_pending_tool_begins → settle_begin` 走 `active_assistant_id == None` 分支完成
-  `cancel_pending`。`[待修]`（需要把 `Persistence` 贯通到 `pump_chat_streams` 的清理路径，
-  改动跨 3 个函数签名；本轮的 review 修复已覆盖同源的一批问题，但这一处涉及落库授权，
-  留作独立改动以便单独评审）
+  `cancel_pending`。
+- 实际处理：`[已修]` `drop_pending` 改为 `take_pending(key) -> Vec<PendingBegin>`
+  （只抽取、不丢弃），`reap_stale_streams` 拿到后逐个交给 `settle_begin`——它本来就带
+  「无归属 → `cancel_pending` + 回执 `Cancelled`」这条唯一的合法 pending→cancelled 路径。
+  `pump_chat_streams` / `reap_stale_streams` 各加一个 `&Persistence` 参数（调用点只有
+  事件循环与 3 处测试）。回归测试
+  `abandoning_a_pending_begin_records_cancelled_not_pending`：构造「已提交 pending 但该帧
+  尚未回执」的状态，再让会话解绑触发 reap，断言库里从 `pending` 变 `cancelled`、
+  回执是 `HostError::Cancelled`。已用「临时回退实现」验证过该测试确实会红。
 
 ### [中] 后台任务面板打开期间每轮都置脏 → 空闲时永久 60fps 重绘并每帧克隆全部进程快照
 
@@ -1085,7 +1093,7 @@ pub(crate) fn hit_in(
 | 内核 | `db/service.rs` | 去掉删会话前的进程记录预删（靠外键级联） |
 | 事件 | `event/mod.rs` | 面板刷新不再每轮置脏（消除 60fps 空转） |
 | 事件 | `event/chat/process_events.rs` | 先复位 `ui_pending` 再读快照（不丢输出通知）；落库写真实偏移 |
-| 事件 | `event/chat/mod.rs` | `cancel()` 上报发送失败；`stop_turn_processes` 同步取目标 |
+| 事件 | `event/chat/mod.rs` | `cancel()` 上报发送失败；`stop_turn_processes` 同步取目标；`drop_pending` → `take_pending`，被遗弃的 pending 落成 `cancelled` |
 | 事件 | `event/mouse/wheel.rs` | 补 item 列表滚轮分支 |
 | 状态 | `app/state/lx/task.rs` | `resolve_focus` 先判空再 `take`；窗口 `clamp` 用进程数而非 tab 数；`set_processes` 只在列表变化时置脏；`resize_output_viewport` 保持阅读位置；`scroll_window`；`output_max_scroll` 提升可见性；删两个死字段 |
 | 状态 | `app/state/lx/chat.rs` | `reset_session_view()` 统一会话级复位（含 `plan`） |
@@ -1121,6 +1129,7 @@ pub(crate) fn hit_in(
 | `empty_plan_with_an_explanation_keeps_rows_and_draw_in_step` | 空计划 + 解释的行数口径 |
 | `plan_row_indices_advance_even_when_rows_scroll_out_of_view` | 滚出视口仍推进号（命中不错位） |
 | `tail_snapshot_keeps_up_past_the_model_budget` | 落库/预览的尾部口径 |
+| `abandoning_a_pending_begin_records_cancelled_not_pending` | 被遗弃的 pending 落成 `cancelled`（不再永久停在 `pending`） |
 
 ### 一条值得记下来的教训
 
@@ -1132,7 +1141,11 @@ pub(crate) fn hit_in(
    稳定复现 3~4 条失败。改成惰性取指纹后立刻恢复。
 2. **`Notify` 用 `notify_waiters()` 而不是 `notify_one()`。** 后者会把 permit 留在
    通道里，后续每次 `notified()` 都立刻返回，让 `wait_window` 变成忙等。
-3. **「一次性请求」不要在数据未到达时消费。** `resolve_focus()` 里 `take()` 早于判空，
+3. **「丢弃」不等于「取消」。** `drop_pending` 丢掉条目看似最省事，但 `begin_tool`
+   已经把 DB 行写成 `pending` 并提交过了——丢掉 `reply` 只让 loop 提前返回，落库那一半
+   永远补不上。凡是「已提交的事务 + 迟到的结算」，都必须显式走结算路径（这里就是
+   `cancel_pending`），不能靠 drop 语义兜底。
+4. **「一次性请求」不要在数据未到达时消费。** `resolve_focus()` 里 `take()` 早于判空，
    请求被静默吃掉；这类 bug 单测很难写（要「先构造空数据、再补数据」），
    而现有测试因为「先塞数据再调用」恰好绕过了它 —— 测试的前置构造顺序本身
    就是一种覆盖率。

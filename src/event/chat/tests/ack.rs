@@ -21,6 +21,12 @@ async fn pending_failure_has_no_file_side_effect_and_fails_turn() {
     streams
         .workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
+    // 必须让该窗格「可见」：可见窗格的 BeginTool 才会推迟到该帧绘制后回执
+    // （正是这个推迟窗口让 pending 条目可能被遗弃）。
+    streams.set_visible_panes(&[(key.pane, Rect::new(0, 0, 80, 24))]);
+    // 在途轮次（生产由 `start_stream` 写入）；`reap_stale_streams` 遍历的就是它。
+    let (cancel_sender, _cancel) = watch::channel(false);
+    streams.cancels.insert(key.clone(), cancel_sender);
     let driven = drive(
         &fixture,
         &mut state,
@@ -602,4 +608,74 @@ async fn duplicate_call_id_is_rejected_without_second_side_effect() {
     let rows = tool_rows(&fixture, &session);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].call_id, "dup");
+}
+
+// ===== review 回归：被遗弃的 pending 必须落成 cancelled =====
+
+#[tokio::test]
+async fn abandoning_a_pending_begin_records_cancelled_not_pending() {
+    // 真实缺陷：`begin_tool` 已把 `agent_tool_call` 写成 `pending` 并提交，
+    // 若此时窗格被关 / 会话被切 / `/new`，`drop_pending` 直接把 `PendingBegin`
+    // 丢掉 → `reply` 被 drop → loop 拿 `Err(RecvError)` 直接返回，`finish_tool`
+    // 永远不会再被调用。库里那一行**永久停在 `pending`**：重开会话时卡片一直
+    // 显示 Pending，直到整个进程重启的恢复逻辑才纠正。
+    let fixture = Fixture::new("abandon-pending");
+    let (mut state, key, persistence, session) = streaming_state(&fixture);
+    let mut streams = ChatStreams::default();
+    streams
+        .workspaces
+        .insert(key.clone(), fixture.workspace().to_path_buf());
+    // 必须让该窗格「可见」：可见窗格的 BeginTool 才会推迟到该帧绘制后回执
+    // （正是这个推迟窗口让 pending 条目可能被遗弃）。
+    streams.set_visible_panes(&[(key.pane, Rect::new(0, 0, 80, 24))]);
+    // 在途轮次（生产由 `start_stream` 写入）；`reap_stale_streams` 遍历的就是它。
+    let (cancel_sender, _cancel) = watch::channel(false);
+    streams.cancels.insert(key.clone(), cancel_sender);
+
+    // 提交一条 pending（DB 已写 pending 行），并让它停在「等该帧绘制」的状态。
+    let (reply, mut reply_rx) = oneshot::channel();
+    let committed = crate::event::chat::tool_calls::begin_tool(
+        &mut state,
+        &mut streams,
+        &persistence,
+        key.clone(),
+        ReadyToolCall {
+            call_id: "c-abandoned".into(),
+            name: "read".into(),
+            arguments_json: r#"{"path":"a.txt"}"#.into(),
+            ordinal: 0,
+        },
+        reply,
+    );
+    assert!(committed, "BeginTool 已受理");
+    assert_eq!(
+        tool_rows(&fixture, &session)[0].status,
+        "pending",
+        "前提：DB 里已经是 pending"
+    );
+
+    // 模拟会话切换：窗格解绑该会话并退回 Idle → 该轮不再归属于任何在途请求。
+    {
+        let pane = state.pane_mut_anywhere(key.pane).expect("pane");
+        pane.lx.chat.session_id = None;
+        pane.lx.chat.request = crate::app::state::RequestState::Idle;
+    }
+    assert!(
+        crate::event::chat::active_assistant_id(&state, &key).is_none(),
+        "前提：该轮已不再归属于任何在途请求"
+    );
+    let (sender, _receiver) = mpsc::unbounded_channel::<AppEvent>();
+    crate::event::chat::pump_chat_streams(&mut state, &mut streams, &sender, &persistence);
+
+    // 关键断言：DB 行必须被落成 cancelled，而不是留在 pending。
+    assert_eq!(
+        tool_rows(&fixture, &session)[0].status,
+        "cancelled",
+        "被遗弃的 pending 必须落成 cancelled（否则卡片永久显示 Pending）"
+    );
+    // 并且 loop 侧拿到的回执是「取消」，不会去执行文件 IO。
+    assert!(
+        matches!(reply_rx.try_recv(), Ok(Err(HostError::Cancelled))),
+        "回执必须是 Cancelled"
+    );
 }

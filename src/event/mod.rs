@@ -228,7 +228,7 @@ async fn run_loop(
             dirty = true;
         }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
-        if chat::pump_chat_streams(state, &mut chat_streams, &sender) {
+        if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
             dirty = true;
         }
         // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
