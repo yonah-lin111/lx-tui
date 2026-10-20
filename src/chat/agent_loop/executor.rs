@@ -47,6 +47,16 @@ impl TurnExecution {
         targets
     }
 
+    /// 在 `exec_command` **spawn 成功后立刻**登记该进程。
+    ///
+    /// 与 [`Self::observe`] 的区别是时机：`observe` 只在工具返回后才被调用，而
+    /// 命令的等待窗口默认 10s（上限 30s）。不提前登记的话，用户在等待窗口里按
+    /// Esc 时 `stop_targets()` 是空集，命令会一直跑在后台。
+    fn observe_spawned(&mut self, session_id: u64) {
+        self.created.insert(session_id);
+        self.active_interaction = Some(session_id);
+    }
+
     /// 记录本次调用涉及的进程（新建或交互）。
     fn observe(&mut self, name: &str, result: &ToolExecutionResult) {
         let ToolExecutionResult::Process(result) = result else {
@@ -121,7 +131,20 @@ impl AgentTools {
                 Ok(args) => args,
                 Err(failure) => return failure.into_result(Vec::new()),
             };
-            return match self.processes.exec(args, cwd, call_id).await {
+            // 用 `exec_observed` 提前登记：等待窗口期间也能被本轮停止杀掉。
+            let turn = Arc::clone(&self.turn);
+            let on_spawn = move |session_id: u64| {
+                // 这里是同步回调（在 `exec` 内部、非 await 点），用 `try_lock`
+                // 避免阻塞；拿不到锁说明别的路径正持有，退化为「结果返回后登记」。
+                if let Ok(mut turn) = turn.try_lock() {
+                    turn.observe_spawned(session_id);
+                }
+            };
+            return match self
+                .processes
+                .exec_observed(args, cwd, call_id, &on_spawn)
+                .await
+            {
                 Ok(result) => ToolExecutionResult::Process(Box::new(result)),
                 Err(error) => process_failure(error),
             };

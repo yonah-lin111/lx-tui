@@ -151,3 +151,51 @@ fn sustained_output_stays_bounded() {
 fn display_lines_keeps_blank_lines() {
     assert_eq!(display_lines("a\n\nb\n"), vec!["a", "", "b", ""]);
 }
+
+// ===== review 回归：跨读取边界的转义序列不得被吞掉 =====
+
+#[test]
+fn escape_sequence_split_across_reads_is_not_swallowed() {
+    // 真实缺陷：未闭合的 CSI 被整段吞掉并**推进模型游标**，于是被读取边界切开的
+    // 转义序列后半段（`2mred`）会在下次读取时被当作正文输出给模型。
+    let mut output = buffer(1024);
+    output.push(OutputSource::Stdout, b"\x1b[3");
+    // 第一次读取（flush=false）：序列未闭合 → 不消费，游标不动。
+    let first = output.read_from(0, 1024, false);
+    assert_eq!(first.text, "", "未闭合的转义序列不得产出正文");
+    assert_eq!(first.end, 0, "未闭合序列不得推进游标：{:?}", first);
+
+    // 后半段到达后，整条序列应被完整剥掉，且后面的正文照常可读。
+    output.push(OutputSource::Stdout, b"2mred\x1b[0m done");
+    let second = output.read_from(first.end, 1024, false);
+    assert!(
+        !second.text.contains("2mred") && !second.text.contains('\x1b'),
+        "转义序列必须整体剥离，实际 {:?}",
+        second.text
+    );
+    assert!(
+        second.text.contains("red"),
+        "正文必须保留：{:?}",
+        second.text
+    );
+    assert!(
+        second.text.contains("done"),
+        "正文必须保留：{:?}",
+        second.text
+    );
+}
+
+#[test]
+fn unflushed_split_utf8_and_split_escape_behave_the_same_way() {
+    // 两条「数据不够」的路径必须同策略（不消费、下次重试）：否则一边等、
+    // 一边吞，语义自相矛盾。
+    let mut output = buffer(1024);
+    output.push(OutputSource::Stdout, b"\xe4\xbd");
+    let utf8 = output.read_from(0, 1024, false);
+    assert_eq!(utf8.end, 0, "不完整 UTF-8 不消费");
+
+    let mut escape = buffer(1024);
+    escape.push(OutputSource::Stdout, b"\x1b]0;title");
+    let osc = escape.read_from(0, 1024, false);
+    assert_eq!(osc.end, 0, "未闭合 OSC 同样不消费");
+}

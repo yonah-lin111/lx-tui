@@ -409,6 +409,25 @@ impl LxChat {
         }
     }
 
+    /// 复位**会话级**展示状态（`/new`、会话删除、切换到别的会话共用）。
+    ///
+    /// 三条路径的口径必须一致：`plan` 不只是展示——`start_stream` 会把它拼进本轮的
+    /// system 上下文（`current plan: …`），漏清会让新会话继承上一会话的待办；
+    /// `selected_tool` 残留会让 `^o` 指向已删除的消息而静默失去定位能力。
+    pub fn reset_session_view(&mut self) {
+        self.session_id = None;
+        self.messages.clear();
+        self.follow_bottom = true;
+        self.input_tokens_reset();
+        self.thinking_toggled.clear();
+        self.turn_started_at_ms = None;
+        self.history_scroll = 0;
+        self.viewport_top = None;
+        self.detail_expanded.clear();
+        self.selected_tool = None;
+        self.plan = None;
+    }
+
     /// 工具卡片详情是否展开（按 `(message_id, call_id)` 定位，默认折叠）。
     pub fn detail_is_expanded(&self, message_id: &str, call_id: &str) -> bool {
         self.detail_expanded

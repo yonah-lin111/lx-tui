@@ -30,8 +30,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::app::state::{TaskPage, TaskTab};
 use crate::ui::{style, text};
 
-use super::grid::CONTINUATION;
-
 /// 面板顶部边框占用的行数。
 ///
 /// 一条横线把面板与上方消息列表分开——这条线**属于面板内部**（画在 `lay.input`
@@ -45,7 +43,7 @@ const HINT_GAP: usize = 2;
 ///
 /// 比 opencode 的 `maxHeight={5}` 再高一档：5 行在 24 行窗格里信息量偏少，
 /// 而列表区高度固定，多一点列表不会让布局跳动。
-pub(super) const LIST_MAX: usize = 6;
+pub(crate) const LIST_MAX: usize = 6;
 /// 行首高亮标记占位列数（`❯ ` 或两个空格）。
 const MARKER_COLS: u16 = 2;
 /// 行内各段之间的最小空档（列）。
@@ -310,22 +308,11 @@ fn tab_row_rects(rect: Rect) -> (Vec<(usize, u16, u16)>, Option<Rect>) {
     (tabs, close)
 }
 
-/// 面板点击命中：tab 或 `[esc]`；点在别处返回 None。
-/// 面板点击命中：**item 列表**的 tab 与 `[close esc]`。
+/// 面板点击命中：**item 列表**的 tab 行与右端 `[close esc]`；点在别处返回 None。
 ///
-/// `rect` 是 item 列表矩形。输出容器不再有边框与 `[close esc]`（用户要求移除多余
-/// 横线），因此那一侧没有可点区域；`esc` 键仍可关闭。
-pub(crate) fn hit_in(
-    rect: Rect,
-    _output: Option<Rect>,
-    page: &TaskPage,
-    column: u16,
-    row: u16,
-) -> Option<TaskHit> {
-    hit(rect, page, column, row)
-}
-
-pub(crate) fn hit(rect: Rect, _page: &TaskPage, column: u16, row: u16) -> Option<TaskHit> {
+/// 输出容器不再有边框与自己的 `[close esc]`（用户要求移除多余横线），因此那一侧
+/// 没有可点区域；`esc` 键仍可关闭面板。
+pub(crate) fn hit(rect: Rect, column: u16, row: u16) -> Option<TaskHit> {
     if rect.width == 0 || rect.height < TOP_BORDER + TAB_ROW {
         return None;
     }
@@ -486,7 +473,9 @@ fn put_buf(buf: &mut Buffer, x: u16, y: u16, content: &str, style: Style, limit:
         for offset in 1..width {
             if let Some(cell) = buf.cell_mut((cx.saturating_add(offset), y)) {
                 cell.reset();
-                cell.set_char(CONTINUATION);
+                // 写空格而不是网格私有的 `CONTINUATION`（`'\0'`）：这条路径直接
+                // 操作 `Buffer`，没有 blit 的 `Skip` 处理，NUL 会被原样送给终端。
+                cell.set_char(' ');
                 cell.set_style(style);
             }
         }

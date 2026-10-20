@@ -108,7 +108,7 @@ fn lx_input_key(key: KeyEvent) -> Option<LxInput> {
             'w' | 'W' => Some(LxInput::DeleteWordBackward),
             'a' | 'A' => Some(LxInput::LineStart),
             'e' | 'E' => Some(LxInput::LineEnd),
-            'd' | 'D' => Some(LxInput::Delete),
+            'd' | 'D' => Some(LxInput::StopProcess),
             'c' | 'C' => Some(LxInput::Clear),
             't' | 'T' => Some(LxInput::ToggleThinking),
             'z' | '-' => Some(LxInput::Undo),

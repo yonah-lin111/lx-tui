@@ -48,12 +48,16 @@ pub fn handle_process_event(
         // 旧代次/已清理会话的迟到事件：不改状态、不复活进程。
         return false;
     };
+    // **先**复位合并标志、**再**读快照：反过来会丢掉「快照读完之后、标志复位之前」
+    // 到达的那一批输出（`push_output` 看到 `ui_pending` 为真就不发事件，紧接着标志
+    // 被清掉，那批输出再也没有事件通知 UI，卡片预览永久停在前一段）。
+    // 复位后到达的输出最多多触发一次空转，代价可以忽略。
+    runtime.manager.acknowledge_output(session_id);
     let Some(snapshot) = runtime.manager.snapshot(session_id) else {
         return false;
     };
     let workspace = runtime.manager.owner().workspace.clone();
     let epoch = runtime.epoch.clone();
-    let manager = runtime.manager.clone();
     let terminal = matches!(event, ProcessUiEvent::Exited { .. });
     // 终态同时收敛 `write_stdin` 卡片：它们记的是「当次调用时进程在跑」，
     // 进程结束后必须改成终态，否则 `Send input` 会一直显示 `Running`。
@@ -73,8 +77,6 @@ pub fn handle_process_event(
         | terminal_state
             .as_ref()
             .is_some_and(|terminal| update::apply_interaction_exit(state, session_id, terminal));
-    // UI 已取走本次输出通知：允许下一次输出重新通知。
-    manager.acknowledge_output(session_id);
     // 落库：终态立即写，运行态按间隔合并（每进程最多一个待合并快照）。
     if terminal || streams.process_snapshot_due(session_id, PROCESS_SNAPSHOT_INTERVAL) {
         persist_snapshot(
@@ -168,10 +170,12 @@ fn persist_snapshot(
 ) {
     let revision = next_revision(session_id);
     let output = snapshot.tail.as_bytes();
+    // 写**真实**原始字节偏移，不是 `tail.len()`：`tail` 已剥离控制序列并做过
+    // lossy 转码，长度与原始流无关；拿文本长度当偏移会让这两列说谎。
     let snapshot_ref = OutputSnapshot {
         output_tail: output,
-        output_start: 0,
-        output_end: snapshot.tail.len() as i64,
+        output_start: i64::try_from(snapshot.output_start).unwrap_or(i64::MAX),
+        output_end: i64::try_from(snapshot.output_end).unwrap_or(i64::MAX),
         dropped_bytes: i64::try_from(snapshot.dropped_bytes).unwrap_or(i64::MAX),
     };
     let result = if terminal || snapshot.state.is_terminal() {

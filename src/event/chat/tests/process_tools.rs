@@ -554,7 +554,7 @@ async fn task_page_lists_and_stops_a_real_background_process() {
     let process_session_id = page.processes[0].session_id;
 
     // `^d` 停止高亮进程。
-    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::Delete);
+    crate::app::update::apply_lx_input(&mut state, crate::app::actions::LxInput::StopProcess);
     assert!(crate::event::chat::apply_process_effects(
         &mut state,
         &mut streams
@@ -1003,4 +1003,24 @@ async fn closing_then_reopening_a_session_settles_the_card_to_a_terminal_state()
         "重开会话后卡片不能还显示 Running（进程早已被回收）：{:?}",
         view.state
     );
+}
+
+// ===== review 回归：输出快照不得落后于最新输出 =====
+
+#[tokio::test]
+async fn tail_snapshot_keeps_up_past_the_model_budget() {
+    // 真实缺陷：`tail_text()` 从保留区间**起点**读 64 KiB，输出超过预算后
+    // 卡片与后台任务面板的预览会永久停在最早那一段。
+    // 这里直接验证 `OutputBuffer` 的尾部读取口径（进程层已按同一公式取数）。
+    let mut buffer = crate::chat::process::OutputBuffer::new(256 * 1024);
+    buffer.push(
+        crate::chat::process::OutputSource::Stdout,
+        &vec![b'x'; 100 * 1024],
+    );
+    buffer.push(crate::chat::process::OutputSource::Stdout, b"\nNEWEST\n");
+    let from = buffer
+        .end()
+        .saturating_sub(crate::chat::process::MAX_MODEL_OUTPUT_BYTES as u64);
+    let read = buffer.read_from(from, crate::chat::process::MAX_MODEL_OUTPUT_BYTES, true);
+    assert!(read.text.contains("NEWEST"), "尾部快照必须包含最新输出");
 }

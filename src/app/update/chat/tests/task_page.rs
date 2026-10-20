@@ -198,7 +198,7 @@ fn stopping_emits_the_effect_for_the_highlighted_process() {
 fn stopping_with_an_empty_list_does_nothing() {
     let (mut state, pane) = state_with_session("x");
     assert!(open_task_page(&mut state, pane));
-    assert!(on_process_listed(&mut state, pane, Vec::new()));
+    on_process_listed(&mut state, pane, Vec::new());
     state.effects.clear();
     assert!(!stop_selected_process(&mut state, pane));
     assert!(state.effects.is_empty(), "没有可停的进程就不发效应");
@@ -296,7 +296,7 @@ fn up_at_the_top_returns_to_the_input_box() {
 fn up_on_an_empty_list_returns_to_the_input_box() {
     let (mut state, pane) = state_with_session("");
     assert!(open_task_page(&mut state, pane));
-    assert!(on_process_listed(&mut state, pane, Vec::new()));
+    on_process_listed(&mut state, pane, Vec::new());
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
     assert!(
         state.pane_anywhere(pane).unwrap().lx.task.is_none(),
@@ -352,12 +352,13 @@ fn escape_closes_the_page_and_returns_to_the_lx_page() {
 }
 
 #[test]
-fn delete_key_stops_the_highlighted_process() {
-    // `^d` 在 lx 输入里映射为 `Delete`（对齐 opencode 的 `composer.shell.kill`）。
+fn ctrl_d_stops_the_highlighted_process() {
+    // Ctrl+D 映射为 `StopProcess`（对齐 opencode 的 `composer.shell.kill`）。
+    // **不能**复用裸 `Delete`：那是行内删字符，面板里当停止用会误杀服务。
     let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     state.effects.clear();
-    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Delete);
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::StopProcess);
     assert!(
         state.effects.iter().any(|effect| matches!(
             effect,
@@ -541,4 +542,53 @@ fn page_keys_scroll_the_output_area_not_the_history() {
         history_before,
         "面板接管历史区后不再翻动上方历史"
     );
+}
+
+// ===== review 回归：会话级状态复位与 tab 切换 =====
+
+#[test]
+fn switching_tabs_keeps_the_process_highlight() {
+    // 真实缺陷：`clamp(self.len())` 按**当前 tab** 的条目数算，Agents 恒为 0，
+    // 于是切到 Agents 就把 active/anchor/viewport 全抹成 0，切回 Processes 时
+    // 用户原来选的那项已经丢了，`^d` 会停错进程。
+    let (mut state, pane) = state_with_session("");
+    open_with_processes(&mut state, pane);
+    state
+        .pane_mut_anywhere(pane)
+        .unwrap()
+        .lx
+        .task
+        .as_mut()
+        .unwrap()
+        .window
+        .active = 2;
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Right);
+    assert_eq!(page(&state, pane).tab, TaskTab::Agents);
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Left);
+    assert_eq!(page(&state, pane).tab, TaskTab::Processes);
+    assert_eq!(
+        page(&state, pane).window.active,
+        2,
+        "切 tab 往返后高亮必须还是原来那项"
+    );
+}
+
+#[test]
+fn new_session_clears_the_previous_plan() {
+    // 真实缺陷：`/new` 没清 `plan`，而 `start_stream` 会把它拼进本轮 system
+    // 上下文——新会话的模型会看到上一个会话的待办清单。
+    let (mut state, pane) = state_with_session("");
+    {
+        let chat = &mut state.pane_mut_anywhere(pane).unwrap().lx.chat;
+        chat.plan = Some(crate::app::state::PlanSnapshotView {
+            revision: 1,
+            steps: vec![("old step".into(), crate::app::state::PlanStepView::Pending)],
+            explanation: None,
+        });
+        chat.selected_tool = Some(("msg-1".into(), "call-1".into()));
+    }
+    crate::app::update::chat::new_session(&mut state, pane);
+    let chat = &state.pane_anywhere(pane).unwrap().lx.chat;
+    assert!(chat.plan.is_none(), "新会话不得继承上一会话的计划");
+    assert!(chat.selected_tool.is_none(), "选中态也要清");
 }

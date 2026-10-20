@@ -325,7 +325,7 @@ pub fn reconcile_process_records(
             };
             let Some(record) = records
                 .iter()
-                .find(|record| record.process_session_id == session_id as i64)
+                .find(|record| i64::try_from(session_id).ok() == Some(record.process_session_id))
             else {
                 continue;
             };
@@ -435,11 +435,14 @@ pub fn restore_plan(state: &mut AppState, pane: PaneId, messages: &[ChatMessageV
             else {
                 continue;
             };
-            let next = crate::app::state::PlanSnapshotView::from_snapshot(&snapshot);
-            latest = Some(match latest {
-                Some(previous) if previous.revision > next.revision => previous,
-                _ => next,
-            });
+            // 按**消息时间线**取最后一条成功的 `update_plan`。
+            //
+            // 不能按 `revision` 取最大：`revision` 由每轮新建的 `AgentTools` 分配，
+            // 是「本轮内单调」而非「跨轮单调」。第 1 轮可能已用到 revision 3、
+            // 第 2 轮才从 1 重新开始，按最大值恢复会把上一轮已作废的计划捞回来。
+            latest = Some(crate::app::state::PlanSnapshotView::from_snapshot(
+                &snapshot,
+            ));
         }
     }
     let Some(next) = latest else {

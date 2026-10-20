@@ -253,12 +253,24 @@ fn focus_falls_back_to_first_when_the_process_is_gone() {
 }
 
 #[test]
-fn focus_on_empty_list_does_not_panic() {
+fn focus_on_empty_list_keeps_the_request() {
+    // 列表还没到（`[open]` 打开面板那一刻必然是空的）时**不能**消费请求：
+    // 早先这里先 `take()` 再判空，请求被吃掉，高亮永远落在首项。
     let mut page = page_with(Vec::new());
     page.focus = Some(7);
     page.resolve_focus();
     assert!(page.selected().is_none(), "空列表下高亮无效");
-    assert_eq!(page.focus, None);
+    assert_eq!(page.focus, Some(7), "请求必须留到列表到达");
+
+    // 列表到达后落地并清空。
+    page.processes = vec![entry(11, "a"), entry(7, "b")];
+    page.resolve_focus();
+    assert_eq!(
+        page.selected().map(|process| process.session_id),
+        Some(7),
+        "列表到达后定位到目标进程"
+    );
+    assert_eq!(page.focus, None, "定位是一次性的");
 }
 
 // ===== 决策 11：PageUp/PageDown 翻输出区 =====
@@ -467,4 +479,69 @@ fn task_panel_hides_the_streaming_loading_bar() {
         !opened.contains(text::chat::LOADING_LABEL),
         "面板打开时不得显示聊天栏 loading：{opened}"
     );
+}
+
+// ===== review 回归：面板打开时历史相关命中必须一起失效 =====
+
+#[test]
+fn task_panel_kills_every_history_hit() {
+    // 真实缺陷：面板打开后 `chat_hit` / `code_copy_hits` / 历史滚动条仍按**隐藏的**
+    // 历史几何作答，于是输出区成了巨大的点击穿透面（点一下会跳看不见的历史、
+    // 复制看不见的代码、展开看不见的 thinking）。
+    let mut lx = lx_with_messages();
+    let area = Rect::new(0, 0, 70, 30);
+    // 关闭态：这些入口在历史区域里是有命中的（先证明前提成立）。
+    assert!(
+        crate::ui::main_content::lx::history_scrollbar(area, &lx).is_some()
+            || crate::ui::main_content::lx::history_wheel_region(area, &lx).is_some(),
+        "前提：关闭态存在历史相关命中"
+    );
+    let history = crate::ui::main_content::lx::history_rect(area, &lx).expect("历史区");
+    let probe = (history.x + 1, history.y + 1);
+
+    lx.task = Some(page_with(vec![entry(1, "npm run dev")]));
+    assert!(
+        crate::ui::main_content::lx::chat_hit(area, &lx, probe.0, probe.1).is_none(),
+        "面板打开时不得命中隐藏的历史行"
+    );
+    assert!(
+        crate::ui::main_content::lx::code_copy_hits(area, &lx).is_empty(),
+        "面板打开时不得产出看不见的 code-copy 热区"
+    );
+    assert!(
+        crate::ui::main_content::lx::history_scrollbar(area, &lx).is_none(),
+        "面板打开时历史滚动条命中必须消失"
+    );
+    assert!(
+        crate::ui::main_content::lx::history_wheel_region(area, &lx).is_none(),
+        "面板打开时历史区滚轮不得接管输出区"
+    );
+    assert!(
+        crate::ui::main_content::lx::sticky_prompt_jump(area, &lx).is_none(),
+        "面板打开时置顶行跳转必须消失"
+    );
+}
+
+#[test]
+fn resizing_the_window_keeps_a_manually_scrolled_output_position() {
+    // 真实缺陷：可见行数一变就无条件 `pin_output_to_tail()`，用户改窗口大小
+    // （哪怕只多/少一行）就被从日志中间甩到最新一屏。
+    let mut page = page_with(vec![entry(1, "npm run dev")]);
+    page.output = (0..100).map(|index| format!("line {index}")).collect();
+    page.output_visible = 10;
+    page.pin_output_to_tail();
+    assert_eq!(page.output_scroll, 90);
+    // 用户上翻到 30。
+    page.scroll_output(-60);
+    assert_eq!(page.output_scroll, 30);
+
+    // 窗口变矮：可见行数 10 → 8（max 90 → 92），阅读位置必须保持。
+    page.resize_output_viewport(8);
+    assert_eq!(page.output_scroll, 30, "改窗口不得把读者拽回底部");
+
+    // 反过来：原本贴尾时继续跟随最新。
+    page.pin_output_to_tail();
+    assert_eq!(page.output_scroll, 92);
+    page.resize_output_viewport(6);
+    assert_eq!(page.output_scroll, 94, "贴尾状态下继续跟随底部");
 }

@@ -268,8 +268,10 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::End | LxInput::LineEnd => lx.end(),
         LxInput::WordLeft => lx.word_left(),
         LxInput::WordRight => lx.word_right(),
-        // 翻页只在后台任务面板里有对象（滚动上方消息列表），聊天页不消费。
+        // 翻页只在后台任务面板里有对象；聊天页不消费。
         LxInput::PageUp | LxInput::PageDown => {}
+        // 停止进程只在后台任务面板里有对象；聊天页不消费（Ctrl+D 原本也无动作）。
+        LxInput::StopProcess => {}
         LxInput::DeleteToLineStart => {
             lx.delete_to_line_start();
             refresh_slash_panel(state, pane_id);
@@ -787,7 +789,11 @@ fn apply_task_page_input(state: &mut AppState, pane: PaneId, command: LxInput) {
             }
         }
         // `^d` 停止高亮进程（对齐 opencode `composer.shell.kill`）。
-        LxInput::Delete => {
+        //
+        // 只认 `StopProcess`（仅 Ctrl+D 映射）：裸 `Delete` 键在编辑器语义里是
+        // 「向后删一个字符」，面板里把它当停止用会让用户「想删一行」时
+        // SIGTERM 掉一个正在跑的服务，且不可撤销。
+        LxInput::StopProcess => {
             super::chat::stop_selected_process(state, pane);
         }
         // 其余键不属于面板：吞掉，不落到草稿。

@@ -24,12 +24,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.chat.session_id = None;
-    target.lx.chat.messages.clear();
-    target.lx.chat.follow_bottom = true;
-    target.lx.chat.input_tokens_reset();
-    target.lx.chat.thinking_toggled.clear();
-    target.lx.chat.turn_started_at_ms = None;
+    target.lx.chat.reset_session_view();
     refresh_lx_status(state, pane);
     true
 }
@@ -130,6 +125,9 @@ pub fn open_task_page_at(state: &mut AppState, pane: PaneId, session_id: Option<
         && let Some(target) = state.pane_mut_anywhere(pane)
         && let Some(page) = target.lx.task.as_mut()
     {
+        // 先登记请求。列表**已经**在时（面板本来就开着）当场落地；列表还没到时
+        // 必须留着，等 `on_process_listed` 回投后再落地——否则一次性请求会被
+        // 「此刻列表为空」吃掉，高亮永远落在首项。
         page.focus = Some(session_id);
         page.resolve_focus();
     }
@@ -141,7 +139,13 @@ pub fn close_task_page(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.task.take().is_some()
+    let closed = target.lx.task.take().is_some();
+    if closed {
+        // 清掉拖拽抓取标记：面板没了还留着 grab，会让后续**所有**拖拽事件
+        // （窗格分割线、选区、prompt 滚动条）都被输出区滚动条那一支吞掉。
+        state.task_scroll_drag = None;
+    }
+    closed
 }
 
 /// 鼠标点击面板 tab：直接切到该 tab（`position` 为 `TaskTab::ALL` 的索引）。
@@ -174,13 +178,17 @@ pub fn on_process_listed(
     let Some(page) = target.lx.task.as_mut() else {
         return false;
     };
-    page.set_processes(processes, crate::db::now_ms())
+    let changed = page.set_processes(processes, crate::db::now_ms());
+    // 列表到了才落地 `[open]` 的一次性定位请求（见 `open_task_page_at`）。
+    page.resolve_focus();
+    changed
 }
 
 /// 回投高亮任务的输出尾部（与进程列表同一次快照，保证上下同步）。
 ///
-/// 内容没变返回 false（不置脏、不重绘）；内容一变就贴回尾部——最新输出才是
-/// 用户打开面板想看的。
+/// 内容没变返回 false（不置脏、不重绘）。内容变了**不**无条件贴尾：只在原本
+/// 贴尾（跟随最新）时继续跟随，用户手动上翻过就保持阅读位置——否则面板每轮
+/// 重拉一次输出就会把上翻的用户拽回底部（用户报过的 bug）。
 pub fn on_task_output(state: &mut AppState, pane: PaneId, output: Vec<String>) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -191,6 +199,18 @@ pub fn on_task_output(state: &mut AppState, pane: PaneId, output: Vec<String>) -
     page.set_output(output)
 }
 
+/// 滚动后台任务面板的 item 列表视口（鼠标滚轮）；返回视口是否移动。
+pub fn scroll_task_list(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
+    let Some(page) = state
+        .pane_mut_anywhere(pane)
+        .and_then(|target| target.lx.task.as_mut())
+    else {
+        return false;
+    };
+    // 可见行数与渲染的 `list` 矩形一致：`LIST_MAX` 是固定高度。
+    page.scroll_window(delta, crate::ui::main_content::lx::task::LIST_MAX)
+}
+
 /// 直接设置输出视口顶部偏移（滚动条轨道点击/thumb 拖拽）；返回是否变化。
 pub fn set_task_output_scroll(state: &mut AppState, pane: PaneId, offset: usize) -> bool {
     let Some(page) = state
@@ -199,8 +219,7 @@ pub fn set_task_output_scroll(state: &mut AppState, pane: PaneId, offset: usize)
     else {
         return false;
     };
-    let max = page.output.len().saturating_sub(page.output_visible);
-    let next = offset.min(max);
+    let next = offset.min(page.output_max_scroll());
     if page.output_scroll == next {
         return false;
     }
@@ -346,7 +365,7 @@ pub fn on_session_loaded(
     target.lx.chat.context_tokens = recent.map(|message| {
         let input = message.input_tokens.unwrap_or(0).max(0);
         let output = message.output_tokens.unwrap_or(0).max(0);
-        (input + output) as u64
+        u64::try_from(input.saturating_add(output)).unwrap_or(u64::MAX)
     });
     target.lx.chat.follow_bottom = true;
     target.lx.chat.thinking_toggled.clear();
@@ -410,8 +429,7 @@ pub fn on_session_deleted(state: &mut AppState, pane: PaneId, session_id: &str) 
         return false;
     };
     if target.lx.chat.session_id.as_deref() == Some(session_id) {
-        target.lx.chat.session_id = None;
-        target.lx.chat.messages.clear();
+        target.lx.chat.reset_session_view();
         return true;
     }
     false

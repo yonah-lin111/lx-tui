@@ -408,9 +408,16 @@ pub(super) fn header_with_mark(
     if let Some(status) = status
         && segments.len() == 2
     {
+        // 运行中的状态词与方块/动词同档橙黄（设计规范：进程存活时「动词与状态
+        // 文字同色不加粗」）；终态保持 dim——失败/中断已由 `tint` 整行覆盖。
+        let status_style = if running {
+            style::chat_step_label_alive()
+        } else {
+            style::agent_step_detail()
+        };
         let tail = Segment::new(
             format!("{}{status}", text::LX_CHAT_TOOL_STATUS_SEP),
-            style::agent_step_detail(),
+            status_style,
         );
         if segments_cols(&segments) + tail.cols() <= limit {
             segments.push(tail);

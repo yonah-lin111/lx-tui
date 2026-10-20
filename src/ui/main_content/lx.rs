@@ -633,7 +633,17 @@ fn build(
 
     chat_bar::draw(&mut grid, lay.chat_bar, lx);
     let mut cursor = None;
-    if let Some(input) = lay.input {
+    // 后台任务面板打开时输入框已被替换：与 `build_chat` 同一条路径，
+    // 否则会画出上下两条`─`和一个空占位，而面板本身不画——按键却全被
+    // `apply_task_page_input` 吞掉，只剩一个死画面。
+    if let Some(page) = lx.task.as_ref() {
+        if let Some(rect) = lay.task_output {
+            task::draw_output_container(&mut grid, rect, page);
+        }
+        if let Some(rect) = lay.task_list {
+            task::draw_list(&mut grid, rect, page);
+        }
+    } else if let Some(input) = lay.input {
         cursor = input::draw(
             &mut grid,
             input,
@@ -773,7 +783,7 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
 /// 与 [`history_rect`] 的区别：滚轮区含输入框上方聊天栏（loading/回到底部按钮）一行，
 /// 保证在聊天栏上滚轮同样滚动历史；渲染/滚动条仍用不含聊天栏的 [`history_rect`]。
 pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.messages.is_empty() {
+    if !chat_geometry_is_live(lx) {
         return None;
     }
     let lay = layout(area, lx);
@@ -796,6 +806,9 @@ pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> 
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。
 pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
     let view = history_view(area, lx)?;
     history::scrollbar(
         view.body,
@@ -824,6 +837,9 @@ pub fn task_output_rows(area: Rect, lx: &Lx) -> Option<usize> {
 
 /// 置顶用户消息行的"跳转目标"：该消息起始行（钳到 body 的滚动上限）；无置顶行返回 None。
 pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
     let view = history_view(area, lx)?;
     let message = view.sticky?;
     let start = view.messages.get(message)?.start;
@@ -835,8 +851,18 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
 }
 
 /// 聊天模式命中测试：回到底部按钮 > 置顶行 > thinking 头部。
+/// 聊天区的几何是否「正在被画出来」——**所有基于历史几何的命中入口都必须先问它**。
+///
+/// 后台任务面板打开时，输出容器与历史区是**同一块矩形**，但历史根本没画（`build_chat`
+/// 只在没有面板时画）。命中若照旧按历史几何作答，输出区就成了一个巨大的点击穿透面：
+/// 点置顶行会跳一块看不见的历史、点代码块 `[❐]` 会复制看不见的代码、点 thinking
+/// 头部会展开看不见的块。把判定收在这里，避免每个入口各写一遍、反复漏。
+fn chat_geometry_is_live(lx: &Lx) -> bool {
+    lx.task.is_none() && !lx.chat.messages.is_empty()
+}
+
 pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
-    if lx.chat.messages.is_empty() {
+    if !chat_geometry_is_live(lx) {
         return None;
     }
     // 输入框上方聊天栏右端的「回到底部」控件。
@@ -912,6 +938,9 @@ fn tool_hit_at(
 ///
 /// 渲染、命中与 tooltip 共用本入口：滚动位置一变，三者一起跟着变，不会漂移。
 pub fn code_copy_hits(area: Rect, lx: &Lx) -> Vec<history::CodeCopyButton> {
+    if !chat_geometry_is_live(lx) {
+        return Vec::new();
+    }
     let Some(view) = history_view(area, lx) else {
         return Vec::new();
     };

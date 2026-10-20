@@ -36,8 +36,16 @@ pub fn stop_turn_processes(streams: &mut ChatStreams, key: &RequestKey) {
     let Some(turn) = runtime.turn_context(&key.generation.to_string()) else {
         return;
     };
+    // 目标集合必须在事件循环里**同步**取定：放到 spawn 出去的任务里异步读，会与
+    // 「工具已换目标」竞态（读到的是下一刻的集合，可能漏杀或错杀）。
+    let targets: Vec<u64> = turn
+        .try_lock()
+        .map(|turn| turn.stop_targets().into_iter().collect())
+        .unwrap_or_default();
+    if targets.is_empty() {
+        return;
+    }
     tokio::spawn(async move {
-        let targets: Vec<u64> = turn.lock().await.stop_targets().into_iter().collect();
         manager.stop_many(targets).await;
     });
 }
@@ -162,7 +170,13 @@ impl ChatStreams {
         let Some(cancel) = self.cancels.get(key) else {
             return false;
         };
-        let _ = cancel.send(true);
+        // `watch::Sender::send` 在没有接收者时**不写入值**却仍返回 `Err`。早先
+        // `let _ =` 吞掉它后依然 `return true`，调用方会误以为取消已生效，
+        // 而 loop 其实早就不在了（任务 panic 等），界面就永久卡在 streaming。
+        if cancel.send(true).is_err() {
+            self.cancels.remove(key);
+            return false;
+        }
         true
     }
 

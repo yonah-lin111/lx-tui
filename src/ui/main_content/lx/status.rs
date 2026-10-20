@@ -69,7 +69,11 @@ pub(super) fn layout(inner: Rect, status: &ChatStatus, tasks: usize) -> StatusLa
         .as_ref()
         .map_or(0, |value| u16::try_from(value.width()).unwrap_or(u16::MAX));
     // 指标贴右端；留一格空档与左侧文字分开。
-    let keep_tasks = task_w > 0 && inner.width > task_w.saturating_add(MIN_MODEL);
+    //
+    // 阈值必须按**真实可写宽度**比较：`inner.width` 还含左右各 `EDGE_PAD` 的内缩，
+    // 直接拿它比会宽出 3 列，于是「状态栏认为放得下」而实际模型名被压成 0 列。
+    let keep_tasks = task_w > 0
+        && end.saturating_sub(left) > task_w.saturating_add(GAP).saturating_add(MIN_MODEL);
     let avail = end.saturating_sub(left).saturating_sub(if keep_tasks {
         task_w.saturating_add(GAP)
     } else {
@@ -181,7 +185,9 @@ pub(crate) fn render(buf: &mut Buffer, inner: Rect, lx: &Lx) {
         put_model(buf, x, y, &model, limit);
         x = x.saturating_add(u16::try_from(model.width()).unwrap_or(u16::MAX));
     }
-    if let Some(context) = context.filter(|_| x < limit) {
+    // 是否画上下文以 `layout` 的结论为唯一真相：`keep_ctx` 为假时它已被判为放不下，
+    // 这里若还按剩余列硬塞，会画出半截 `· 10` 而模型名已被剪没。
+    if let Some(context) = context.filter(|_| lay.context.width > 0 && x < limit) {
         let value = format!("{}{context}", text::LX_CHAT_MODEL_SEP);
         put(buf, x, y, &value, style::chat_provider(), limit);
     }

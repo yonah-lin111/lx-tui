@@ -529,13 +529,12 @@ fn narrow_pane_drops_whole_hints_instead_of_truncating() {
 
 #[test]
 fn clicking_a_tab_hits_it() {
-    let page = page_with(vec![entry(1, "cmd", "/w")], 0);
     let rect = Rect::new(0, 10, 70, 8);
     // tab 行 = rect.y + TOP_BORDER。
     let tab_y = rect.y + TOP_BORDER;
     // 第一个 tab 标签首字符。
     assert_eq!(
-        hit(rect, &page, rect.x, tab_y),
+        hit(rect, rect.x, tab_y),
         Some(TaskHit::Tab(0)),
         "点第一个 tab"
     );
@@ -544,7 +543,7 @@ fn clicking_a_tab_hits_it() {
     let first_w = u16::try_from(TaskTab::Processes.label().width()).unwrap();
     let agents_x = rect.x + first_w + sep;
     assert_eq!(
-        hit(rect, &page, agents_x, tab_y),
+        hit(rect, agents_x, tab_y),
         Some(TaskHit::Tab(1)),
         "点第二个 tab"
     );
@@ -552,13 +551,12 @@ fn clicking_a_tab_hits_it() {
 
 #[test]
 fn clicking_esc_hits_close() {
-    let page = page_with(vec![entry(1, "cmd", "/w")], 0);
     let rect = Rect::new(0, 10, 70, 8);
     let tab_y = rect.y + TOP_BORDER;
     let esc_w = u16::try_from(text::LX_TASK_CLOSE.label().width()).unwrap();
     let esc_x = rect.right() - esc_w;
     assert_eq!(
-        hit(rect, &page, esc_x, tab_y),
+        hit(rect, esc_x, tab_y),
         Some(TaskHit::Close),
         "点 [close esc] 关闭"
     );
@@ -566,12 +564,11 @@ fn clicking_esc_hits_close() {
 
 #[test]
 fn clicking_elsewhere_in_the_panel_misses() {
-    let page = page_with(vec![entry(1, "cmd", "/w")], 0);
     let rect = Rect::new(0, 10, 70, 8);
     // 列表区 / 顶边框 / 面板之外都不该命中 tab 或 esc。
-    assert_eq!(hit(rect, &page, rect.x, rect.y), None, "顶边框不命中");
+    assert_eq!(hit(rect, rect.x, rect.y), None, "顶边框不命中");
     assert_eq!(
-        hit(rect, &page, rect.x, rect.y + TOP_BORDER + 1),
+        hit(rect, rect.x, rect.y + TOP_BORDER + 1),
         None,
         "列表区不命中"
     );

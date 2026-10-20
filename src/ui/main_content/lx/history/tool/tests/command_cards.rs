@@ -688,3 +688,59 @@ fn collapse_marker_is_dropped_instead_of_truncated_when_narrow() {
     // 展开态的行数仍与 rows 一致（丢文案不改几何）。
     assert_eq!(narrow.lines().count(), rows(&call, 6, true));
 }
+
+// ===== review 回归：计划卡片的行数口径必须与绘制一致 =====
+
+#[test]
+fn empty_plan_with_an_explanation_keeps_rows_and_draw_in_step() {
+    // 真实缺陷：`rows()` 无条件把解释行算进去，而 `draw()` 在空计划分支画完
+    // `Plan cleared` 就 return，永不画解释。多算的 1 行会让该卡片之后的所有内容
+    // 与命中矩形整体错位一行。模型发 `{steps: [], explanation: "..."}`（收尾
+    // 清空计划时很常见）就会触发。
+    let call = ToolCallView {
+        call_id: "call-empty-plan".into(),
+        name: "update_plan".into(),
+        position: 0,
+        arguments_json: "{}".into(),
+        status: ToolStatus::Completed,
+        summary: None,
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(ToolDetailView::Plan(PlanSnapshotView {
+            revision: 1,
+            steps: Vec::new(),
+            explanation: Some("wrapped up".into()),
+        }))),
+    };
+    for width in [0u16, 1, 2, 10, 40, 120] {
+        let (_, advanced) = render(&call, width, false);
+        assert_eq!(
+            advanced,
+            rows(&call, width, false),
+            "空计划 + 解释：宽 {width} 的绘制行数必须等于 rows"
+        );
+    }
+}
+
+#[test]
+fn plan_row_indices_advance_even_when_rows_scroll_out_of_view() {
+    // 真实缺陷：解释行的 `row_index += 1` 被写进了 `visible_row` 分支内，
+    // 滚出视口时少加一行，其后所有内容都比 `layout` 认为的位置高一行。
+    // 这里把滚动偏移推到卡片之外，验证推进行数仍与 `rows()` 相等。
+    let call = plan(vec![
+        ("one", PlanStepView::Completed),
+        ("two", PlanStepView::InProgress),
+    ]);
+    let width = 40u16;
+    let expected = rows(&call, width, false);
+    for scroll in [0usize, 1, 2, 5, 50] {
+        let area = Rect::new(0, 0, width, 1);
+        let mut grid = Grid::new(area);
+        let mut row = 0usize;
+        draw(&mut grid, area, scroll, &mut row, &call, 0, false);
+        assert_eq!(
+            row, expected,
+            "scroll={scroll} 时推进行数必须与 rows 相等（命中靠它）"
+        );
+    }
+}

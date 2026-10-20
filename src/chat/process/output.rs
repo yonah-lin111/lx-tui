@@ -205,7 +205,7 @@ impl OutputBuffer {
 
 /// 把原始字节转成可安全显示的文本，返回（文本，消费的原始字节数）。
 ///
-/// - 剥离 CSI / OSC / DCS 等转义序列（超长或未闭合序列整段丢弃，不无限等待）；
+/// - 剥离 CSI / OSC / DCS 等转义序列（超长序列丢弃，未闭合序列**留给下次读取**）；
 /// - `\r\n` 与孤立 `\r` 都归一为换行（进度条不把光标写回真实终端）；
 /// - 其它控制字符转空格，`\n` / `\t` 原样保留；
 /// - 非法 UTF-8 用 `�` 显式可见化；`flush` 为假时尾部不完整字符不计入消费量。
@@ -215,11 +215,15 @@ fn sanitize_text(bytes: &[u8], flush: bool) -> (String, u64) {
     while index < bytes.len() {
         let byte = bytes[index];
         if byte == 0x1b {
-            index = match skip_escape(bytes, index) {
-                // 未闭合序列：丢弃剩余的这几个字节，不把转义原样画出来。
-                None => bytes.len(),
-                Some(next) => next,
-            };
+            match skip_escape(bytes, index) {
+                Escape::Complete(next) => index = next,
+                // 超长：确定是垃圾，丢掉整段（连同其后的可见文本，避免无限等待）。
+                Escape::Overlong => index = bytes.len(),
+                // 未闭合：序列可能被读取边界切开了，**不消费**、下次带更多字节重试。
+                // 若在这里整段吞掉并推进游标，后半段（如 `2mred`）会在下次被当正文
+                // 输出给模型——而尾部不完整 UTF-8 的策略正是「不消费」，两者必须一致。
+                Escape::Pending => break,
+            }
             continue;
         }
         if byte < 0x20 || byte == 0x7f {
@@ -282,14 +286,34 @@ fn sanitize_text(bytes: &[u8], flush: bool) -> (String, u64) {
     (out, index as u64)
 }
 
-/// 从 `start`（一个 `ESC`）起跳过一个转义序列，返回序列后的下标。
+/// [`skip_escape`] 的结论。
 ///
-/// 未闭合或超过 [`MAX_CONTROL_SEQUENCE_BYTES`] 时返回 None（调用方丢弃剩余部分）。
-fn skip_escape(bytes: &[u8], start: usize) -> Option<usize> {
-    let limit = (start + MAX_CONTROL_SEQUENCE_BYTES).min(bytes.len());
+/// 「未闭合」与「超长」必须分开：前者可能只是被读取边界切开（下次会有后续字节），
+/// 后者是确定无法解析的垃圾。合并成一个 `None` 会逼调用方二选一，两种语义必错一个。
+enum Escape {
+    /// 序列完整结束，值是序列之后的下标。
+    Complete(usize),
+    /// 数据不够，序列可能还有后续字节（调用方不消费，下次重试）。
+    Pending,
+    /// 超过 [`MAX_CONTROL_SEQUENCE_BYTES`]：确定要丢弃。
+    Overlong,
+}
+
+/// 从 `start`（一个 `ESC`）起跳过一个转义序列。
+fn skip_escape(bytes: &[u8], start: usize) -> Escape {
+    let cap = start + MAX_CONTROL_SEQUENCE_BYTES;
+    let limit = cap.min(bytes.len());
+    // 读到字节用尽 vs 读到上限：前者是「可能还有后续」，后者是「确定太长」。
+    let at_cap = |index: usize| {
+        if index >= cap {
+            Escape::Overlong
+        } else {
+            Escape::Pending
+        }
+    };
     let mut index = start + 1;
     if index >= limit {
-        return None;
+        return at_cap(index);
     }
     match bytes[index] {
         b'[' => {
@@ -298,31 +322,31 @@ fn skip_escape(bytes: &[u8], start: usize) -> Option<usize> {
             while index < limit {
                 let byte = bytes[index];
                 if (0x40..=0x7e).contains(&byte) {
-                    return Some(index + 1);
+                    return Escape::Complete(index + 1);
                 }
                 if !(0x20..=0x3f).contains(&byte) {
                     // 非法中间字节：当作序列就此结束（丢弃到此为止）。
-                    return Some(index);
+                    return Escape::Complete(index);
                 }
                 index += 1;
             }
-            None
+            at_cap(index)
         }
         b']' | b'P' | b'X' | b'^' | b'_' => {
             // OSC / DCS / SOS / PM / APC：以 BEL 或 ST（`ESC \`）结束。
             index += 1;
             while index < limit {
                 if bytes[index] == 0x07 {
-                    return Some(index + 1);
+                    return Escape::Complete(index + 1);
                 }
                 if bytes[index] == 0x1b && index + 1 < bytes.len() && bytes[index + 1] == b'\\' {
-                    return Some(index + 2);
+                    return Escape::Complete(index + 2);
                 }
                 index += 1;
             }
-            None
+            at_cap(index)
         }
-        _ => Some(index + 1),
+        _ => Escape::Complete(index + 1),
     }
 }
 

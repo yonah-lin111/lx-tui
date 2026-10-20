@@ -27,8 +27,8 @@ pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
     on_task_output, open_history, open_model_picker, open_task_page, open_task_page_at,
-    persist_default_model, rename_session, resume_session, scroll_task_output, select_task_tab,
-    set_task_output_scroll, stop_selected_process,
+    persist_default_model, rename_session, resume_session, scroll_task_list, scroll_task_output,
+    select_task_tab, set_task_output_scroll, stop_selected_process,
 };
 pub(crate) use view::view_message_of;
 
@@ -839,56 +839,41 @@ pub fn resolve_lx_viewport_top(
     changed
 }
 
-/// 每轮把后台任务面板的**历史可见行数**落状态（绘制前写）。
+/// 每轮把后台任务面板的**输出可见行数**落状态（绘制前写）。
 ///
-/// 面板打开时输入框被控制面板替换，历史区高度由 `TaskPage` 的列表长度决定；
-/// 键盘翻页需要它，而 `app/` 拿不到窗格几何，故与
-/// [`resolve_lx_viewport_top`] 同一套做法放在事件循环里。
-pub fn resolve_task_history_visible(
+/// 面板打开时输入框被控制面板替换，输出容器高度由窗格几何决定；键盘翻页与滚动条
+/// 几何需要它，而 `app/` 拿不到窗格几何，故与 [`resolve_lx_viewport_top`] 同一套做法
+/// 放在事件循环里。
+///
+/// 只算 `task_output_rows`（一次 `layout`），**不**顺带算历史行数：面板打开时历史区
+/// 根本没画，历史行数无人消费，而 `history_rows` 内部会对整段会话正文跑一遍
+/// markdown 排版，白烧每帧 CPU。
+pub fn resolve_task_output_visible(
     state: &mut AppState,
     rects: &[(PaneId, ratatui::layout::Rect)],
 ) -> bool {
     let mut changed = false;
     for (pane, rect) in rects {
         let inner = crate::layout::pane_inner_rect(*rect);
-        // 两个几何量都在**同一次只读借用**里算完：历史区行数与输出区可见行数
-        // 共用 `layout` 的同一份几何，避免"翻到哪停"与"画到哪停"出现第二套口径。
-        let Some((resolved, output_visible)) = state
+        let Some(output_visible) = state
             .pane_anywhere(*pane)
             .filter(|target| target.view == crate::app::state::PaneView::Lx)
             .filter(|target| target.lx.task.is_some())
-            .map(|target| {
-                (
-                    crate::ui::main_content::lx::history_rows(inner, &target.lx),
-                    crate::ui::main_content::lx::task_output_rows(inner, &target.lx).unwrap_or(0),
-                )
-            })
+            .and_then(|target| crate::ui::main_content::lx::task_output_rows(inner, &target.lx))
         else {
             continue;
         };
-        let Some(target) = state.pane_mut_anywhere(*pane) else {
+        let Some(page) = state
+            .pane_mut_anywhere(*pane)
+            .and_then(|target| target.lx.task.as_mut())
+        else {
             continue;
         };
-        let Some(page) = target.lx.task.as_mut() else {
-            continue;
-        };
-        let (total, visible) = match resolved {
-            Some((total, visible)) => (Some(total), Some(visible)),
-            None => (None, None),
-        };
-        let mut changed_here = false;
-        if page.history_total != total || page.history_visible != visible {
-            page.history_total = total;
-            page.history_visible = visible;
-            changed_here = true;
-        }
         if page.output_visible != output_visible {
-            page.output_visible = output_visible;
-            // 可见行数变了要重新贴尾：否则窗口缩小后视口可能停在越界位置。
-            page.pin_output_to_tail();
-            changed_here = true;
+            // 只做「保持阅读位置」的钳制；原本贴尾才继续跟随最新。
+            page.resize_output_viewport(output_visible);
+            changed = true;
         }
-        changed |= changed_here;
     }
     changed
 }

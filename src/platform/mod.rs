@@ -144,6 +144,32 @@ pub fn default_shell() -> String {
     shell
 }
 
+/// 把「登录 shell + 执行命令」翻译成该平台的 shell 参数。
+///
+/// POSIX shell 用 `-l -c <cmd>`，Windows 的 `cmd.exe` 只认 `/C <cmd>`（没有 `-l`）。
+/// 这条差异必须收在 platform 层：`chat/` 里硬编码 `-l`/`-c` 会让 Windows 上的
+/// `exec_command` 100% 失败（shell 直接报参数错误），而 OS 专属分支只允许在这里。
+pub fn shell_arguments(login: bool, cmd: &str) -> Vec<std::ffi::OsString> {
+    #[cfg(windows)]
+    {
+        let _ = login; // cmd.exe 没有登录 shell 的概念。
+        vec!["/C".into(), cmd.into()]
+    }
+    #[cfg(not(windows))]
+    {
+        let mut args: Vec<std::ffi::OsString> = Vec::with_capacity(3);
+        if login {
+            args.push("-l".into());
+        }
+        args.push("-c".into());
+        args.push(cmd.into());
+        args
+    }
+}
+
+/// 是否支持「独立进程组」（`process_group(0)`）。Windows 走 `taskkill /T`，不需要。
+pub const SUPPORTS_PROCESS_GROUP: bool = cfg!(unix);
+
 /// 运行环境的一句话描述（进系统提示，让模型不再假设 Linux 工具齐备）。
 ///
 /// 只报**可判定**的事实：OS 与默认 shell。不猜包管理器或其它命令是否存在——
@@ -186,6 +212,49 @@ pub fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// 进程启动时刻（用于「这个 pid 还是我 spawn 的那个吗」的校验）。
+///
+/// 只靠 pid 认进程是不安全的：pid 会被内核回收再分配。`(pid, start_time)` 才是
+/// 稳定身份——杀一个「shell 已退出的进程组」之前必须比对，否则可能误杀无关进程组。
+///
+/// 返回 `None` 表示无法判定（进程已不存在、平台不支持、或读不到）。
+pub fn process_start_time(pid: u32) -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        // /proc/<pid>/stat 的第 22 个字段是 starttime（开机以来的 tick 数）。
+        // 字段用空格分隔，但 comm 可能含空格与括号，因此从最后一个 ')' 之后再切。
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let tail = stat.rsplit_once(')').map(|(_, tail)| tail)?;
+        tail.split_whitespace().nth(19)?.parse().ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // macOS 没有 /proc：用 `ps -o lstart=` 的文本作为身份指纹（精度足够区分
+        // 「同一个 pid 被复用」，且无需额外 crate）。
+        let output = std::process::Command::new("ps")
+            .args(["-o", "lstart=", "-p", &pid.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!text.is_empty()).then(|| {
+            // 稳定哈希：只要同一个进程两次读到相同文本就行。
+            text.bytes().fold(0u64, |hash, byte| {
+                hash.wrapping_mul(31).wrapping_add(u64::from(byte))
+            })
+        })
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = pid;
         None

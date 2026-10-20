@@ -17,6 +17,42 @@ use super::{
     StopReason, StopWaiter, exit_state, lock, spawn_pipe_reader,
 };
 
+/// 收尾一个「还没交给 supervisor」的 PTY 子进程：kill + wait，不留僵尸。
+///
+/// portable-pty 的 `Child` 没有 `kill_on_drop`，spawn 成功后任何一步失败都必须
+/// 显式收尾，否则 shell 会以 lx 子进程的身份残留到 lx 退出。
+fn reap_unmanaged_pty_child(child: &mut (dyn portable_pty::Child + Send + Sync)) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+/// 注册停止通道；抢锁失败时兜底直接终止进程组并记日志。
+///
+/// `try_lock` 失败只可能发生在 spawn 与 stop 撞车的极窄窗口里。此时若只是丢弃
+/// sender，supervisor 就再也收不到停止请求——宁可立刻按进程组终止，也不能留下
+/// 一个"停不掉的进程"。
+fn register_stop_channel(
+    handle: &Arc<ProcessHandle>,
+    sender: oneshot::Sender<StopReason>,
+    pid: Option<u32>,
+) {
+    match handle.stop.try_lock() {
+        Ok(mut guard) => *guard = Some(sender),
+        Err(_) => {
+            tracing::warn!(
+                target: "lx::agent",
+                session_id = handle.session_id,
+                "stop channel busy at spawn; terminating immediately instead of dropping it"
+            );
+            if let Some(pid) = pid {
+                crate::platform::terminate_process_group(pid, true);
+            }
+            drop(sender);
+            handle.settle(ProcessState::Interrupted);
+        }
+    }
+}
+
 impl ProcessManager {
     /// 普通管道 spawn：两路 drain + stdin 写入任务 + supervisor。
     pub(super) fn spawn_pipe(
@@ -27,20 +63,17 @@ impl ProcessManager {
         cwd: &Path,
     ) -> Result<(), ProcessError> {
         let mut command = tokio::process::Command::new(shell);
-        // 登录 shell 与普通 shell 的启动参数不同：只影响环境与启动耗时。
-        if args.login {
-            command.arg("-l");
-        }
+        // shell 参数由 platform 决定（POSIX `-l -c` / Windows `/C`）：在 chat/ 里
+        // 硬编码 `-l`/`-c` 会让 Windows 上的 exec_command 全部启动失败。
         command
-            .arg("-c")
-            .arg(&args.cmd)
+            .args(crate::platform::shell_arguments(args.login, &args.cmd))
             .current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
         #[cfg(unix)]
-        command.process_group(0);
+        command.process_group(0); // OS 专属：见 `platform::SUPPORTS_PROCESS_GROUP`
         let mut child = command.spawn().map_err(|error| {
             ProcessError::new("spawn_failed", format!("failed to start shell: {error}"))
         })?;
@@ -89,25 +122,40 @@ impl ProcessManager {
         let mut builder = CommandBuilder::new(shell);
         builder.env("TERM", "xterm-256color");
         builder.cwd(cwd);
-        if args.login {
-            builder.arg("-l");
+        for arg in crate::platform::shell_arguments(args.login, &args.cmd) {
+            builder.arg(arg);
         }
-        builder.arg("-c");
-        builder.arg(&args.cmd);
-        let child = pair.slave.spawn_command(builder).map_err(|error| {
+        let mut child = pair.slave.spawn_command(builder).map_err(|error| {
             ProcessError::new("spawn_failed", format!("failed to start shell: {error}"))
         })?;
         drop(pair.slave);
-        let reader = pair.master.try_clone_reader().map_err(|error| {
-            ProcessError::new("spawn_failed", format!("failed to read pty: {error}"))
-        })?;
-        let writer = pair.master.take_writer().map_err(|error| {
-            ProcessError::new("spawn_failed", format!("failed to write pty: {error}"))
-        })?;
+        // 从这里往下的每一步失败都必须先 kill+wait：portable-pty 的 `Child` 没有
+        // `kill_on_drop` 语义，直接 `?` 返回会把 shell 变成 lx 的僵尸子进程
+        // （pipe 分支有 `kill_on_drop(true)`，两条路径必须一致）。
+        let reader = match pair.master.try_clone_reader() {
+            Ok(reader) => reader,
+            Err(error) => {
+                reap_unmanaged_pty_child(child.as_mut());
+                return Err(ProcessError::new(
+                    "spawn_failed",
+                    format!("failed to read pty: {error}"),
+                ));
+            }
+        };
+        let writer = match pair.master.take_writer() {
+            Ok(writer) => writer,
+            Err(error) => {
+                reap_unmanaged_pty_child(child.as_mut());
+                return Err(ProcessError::new(
+                    "spawn_failed",
+                    format!("failed to write pty: {error}"),
+                ));
+            }
+        };
         // PTY 读线程：持续 drain，避免子进程因满管道阻塞。
         {
             let handle = Arc::clone(handle);
-            std::thread::Builder::new()
+            let spawned = std::thread::Builder::new()
                 .name(format!("lx-pty-read-{}", handle.session_id))
                 .spawn(move || {
                     let mut reader = reader;
@@ -125,7 +173,11 @@ impl ProcessManager {
                 })
                 .map_err(|error| {
                     ProcessError::new("spawn_failed", format!("failed to spawn reader: {error}"))
-                })?;
+                });
+            if let Err(error) = spawned {
+                reap_unmanaged_pty_child(child.as_mut());
+                return Err(error);
+            }
         }
         self.spawn_pty_stdin_task(handle, writer);
         self.spawn_pty_supervisor(handle, child);
@@ -208,10 +260,11 @@ impl ProcessManager {
         mut child: tokio::process::Child,
         pid: Option<u32>,
     ) {
+        // 注册停止通道：**绝不能静默丢弃** sender。丢弃后 supervisor 永远等不到
+        // 停止请求，而 `stop_handle` 会因 `None` 落 `Interrupted` 却不杀进程 ——
+        // 进程跑到自然结束（长时间服务即永久泄漏），UI 却显示已停止。
         let (stop_sender, mut stop_receiver) = oneshot::channel::<StopReason>();
-        if let Ok(mut guard) = handle.stop.try_lock() {
-            *guard = Some(stop_sender);
-        }
+        register_stop_channel(handle, stop_sender, pid);
         let handle = Arc::clone(handle);
         tokio::spawn(async move {
             tokio::select! {
@@ -249,9 +302,7 @@ impl ProcessManager {
     ) {
         let killer = child.clone_killer();
         let (stop_sender, mut stop_receiver) = oneshot::channel::<StopReason>();
-        if let Ok(mut guard) = handle.stop.try_lock() {
-            *guard = Some(stop_sender);
-        }
+        register_stop_channel(handle, stop_sender, None);
         let handle = Arc::clone(handle);
         std::thread::Builder::new()
             .name(format!("lx-pty-wait-{}", handle.session_id))

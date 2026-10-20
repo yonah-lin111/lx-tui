@@ -9,7 +9,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 
 use crate::app::state::{
-    CommandView, ProcessInteractionView, ProcessStateView, ToolCallView, ToolDetailView, ToolStatus,
+    CommandView, PlanStepView, ProcessInteractionView, ProcessStateView, ToolCallView,
+    ToolDetailView, ToolStatus,
 };
 use crate::ui::main_content::lx::grid::Grid;
 use crate::ui::main_content::lx::history::{StepMark, tool};
@@ -65,6 +66,27 @@ fn interaction_call(state: ProcessStateView, status: ToolStatus) -> ToolCallView
                 exit_code: None,
                 truncated: false,
                 dropped_bytes: 0,
+            },
+        ))),
+    }
+}
+
+/// 构造一条计划卡片（`update_plan`）。
+fn plan_call(steps: Vec<(String, PlanStepView)>) -> ToolCallView {
+    ToolCallView {
+        call_id: "call-plan".into(),
+        name: "update_plan".into(),
+        position: 0,
+        arguments_json: r#"{"steps":[]}"#.into(),
+        status: ToolStatus::Running,
+        summary: None,
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(ToolDetailView::Plan(
+            crate::app::state::PlanSnapshotView {
+                revision: 1,
+                steps,
+                explanation: None,
             },
         ))),
     }
@@ -411,4 +433,29 @@ fn stopped_card_keeps_the_green_exit_code_label() {
     let mark = render_grid(&call, 70).cell(0, 0).style;
     assert_eq!(mark.fg, style::chat_step_mark_done().fg, "终态为绿");
     assert_ne!(mark.fg, Some(Color::Red), "正常退出不得画红");
+}
+
+// ===== review 回归：计划卡片配色与行数口径 =====
+
+#[test]
+fn plan_in_progress_step_uses_the_running_amber() {
+    // 真实缺陷：`InProgress` 取了 `chat_tool_verb()`（完成态翡翠绿），
+    // 与「运行中必须橙黄、完成才绿」的规则直接冲突——一张卡两种语义。
+    let call = plan_call(vec![
+        ("build the thing".to_string(), PlanStepView::InProgress),
+        ("then ship it".to_string(), PlanStepView::Pending),
+    ]);
+    let grid = render_grid(&call, 70);
+    let mut found_amber = false;
+    for x in 0..70 {
+        for y in 0..6 {
+            if grid.cell(x, y).style.fg == style::chat_tool_verb_running().fg {
+                found_amber = true;
+            }
+        }
+    }
+    assert!(
+        found_amber,
+        "计划里「进行中」的步骤必须用运行态橙黄，而不是完成态绿"
+    );
 }

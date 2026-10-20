@@ -316,6 +316,21 @@ pub(crate) fn handle_mouse_wheel(
                 }
                 return;
             }
+            // 后台任务面板的 **item 列表**：进程超过一屏时滚动显式视口。
+            //
+            // 之前这里没有分支，滚轮直接漏到下方 `scroll_lx_input`——滚动一个看不见的
+            // 输入缓冲并置脏，而列表实际滚不动（`window.viewport` 永远没人写）。
+            if let Some(direction) = vertical_wheel_direction(mouse.kind)
+                && let Some(rects) = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| ui::main_content::lx::task_rects(inner, &target.lx))
+                && rects.list.contains((mouse.column, mouse.row).into())
+            {
+                if update::scroll_task_list(state, pane, direction.saturating_mul(WHEEL_LINES)) {
+                    *dirty = true;
+                }
+                return;
+            }
             // 聊天历史区滚轮：滚动历史视口（保留输入框滚轮给输入缓冲区）。
             if let Some(direction) = vertical_wheel_direction(mouse.kind)
                 && let Some(history_rect) = state.pane_anywhere(pane).and_then(|target| {

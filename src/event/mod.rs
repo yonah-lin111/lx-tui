@@ -240,10 +240,12 @@ async fn run_loop(
             dirty = true;
         }
         // 面板打开期间每轮刷新进程列表：打开之后才启动的进程也要能出现。
-        if chat::refresh_open_task_pages(state) {
-            // 列表请求已入队，下一轮 `apply_process_effects` 会把它执行掉。
-            dirty = true;
-        }
+        //
+        // 这里**不置脏**：返回值的语义是「已压入请求」，不是「画面需要变」。
+        // 早先把它当变化用，导致面板一打开就每帧 dirty、空闲也按 60fps 重绘
+        // 并反复克隆全部进程快照（用户观感：停在后台任务页风扇就转）。
+        // 真正的重绘由 `apply_process_effects` / `tick_task_pages` 的实际变化驱动。
+        chat::refresh_open_task_pages(state);
         // 后台任务面板的运行时长节拍：`now_ms` 只在列表回投时更新会冻住时长。
         if chat::tick_task_pages(state) {
             dirty = true;
@@ -311,8 +313,8 @@ async fn run_loop(
             update::resolve_lx_sticky_prompt(state, &geometry.rects);
             // 当前视口顶部行：同上，供点击展开时原地锚定。
             update::resolve_lx_viewport_top(state, &geometry.rects);
-            // 后台任务面板的历史可见行数：同上，供键盘翻页钳制。
-            update::resolve_task_history_visible(state, &geometry.rects);
+            // 后台任务面板的输出可见行数：同上，供翻页与滚动条几何钳制。
+            update::resolve_task_output_visible(state, &geometry.rects);
             tui.draw(|frame| ui::render(frame, state, &config))?;
             dirty = false;
             last_draw = Instant::now();

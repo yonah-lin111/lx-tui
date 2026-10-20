@@ -87,6 +87,11 @@ pub enum LxInput {
     ToggleThinking,
     /// Ctrl+O：切换当前（或最近）工具卡片详情展开。
     ToggleToolDetail,
+    /// Ctrl+D：停止后台任务面板里高亮的进程。
+    ///
+    /// **不能复用 `Delete`**：裸 `Delete` 键也映射到 `Delete`（行内向后删字符），
+    /// 面板里把 `Delete` 当停止用会让用户「想删一行」时 SIGTERM 掉一个正在跑的服务。
+    StopProcess,
     /// Alt+↑：按时间线选择上一张可展开工具卡片。
     SelectPrevTool,
     /// Alt+↓：按时间线选择下一张可展开工具卡片。

@@ -81,6 +81,26 @@ impl Default for ProcessLimits {
 /// 进程内全局运行进程计数（跨会话共享）。
 pub(super) static GLOBAL_RUNNING: AtomicU64 = AtomicU64::new(0);
 
+/// 进程内全局进程 ID 计数器（**跨会话共享**）。
+///
+/// 必须是全局的：`ProcessUiEvent` 只带 `session_id`，事件层靠它在运行实例里反查归属。
+/// 若每个管理器各自从 1 起算，两个并存会话的第一个进程都叫 `1`，事件会被判给错误的
+/// 会话，进而用别人的 `runtime_epoch` 写坏库里的进程行。
+static NEXT_PROCESS_ID: AtomicU64 = AtomicU64::new(1);
+
+/// 取下一个全局唯一的进程 ID。
+fn next_process_id() -> u64 {
+    NEXT_PROCESS_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// 当前全局运行进程数（仅供测试断言）。
+///
+/// 生产代码不该读它（限额判定在内部分支里做），因此只在测试构建下存在。
+#[cfg(test)]
+pub(crate) fn global_running() -> u64 {
+    GLOBAL_RUNNING.load(Ordering::Relaxed)
+}
+
 /// UI 侧进程事件（纯数据；由事件层映射成 `AppEvent`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProcessUiEvent {
@@ -127,6 +147,13 @@ pub struct ProcessSnapshot {
     pub exit_code: Option<i32>,
     /// 保留输出的尾部文本（已剥离控制序列）。
     pub tail: String,
+    /// `tail` 在**原始字节流**中的区间 `[output_start, output_end)`。
+    ///
+    /// 落库时写这两列。它们不是 `tail.len()`——`tail` 是剥掉控制序列、lossy 转码
+    /// 之后的文本，长度与原始偏移无关。留在库里的是真实偏移，恢复侧才能据此判断
+    /// 「模型读到哪」。
+    pub output_start: u64,
+    pub output_end: u64,
     pub dropped_bytes: u64,
     pub started_at_ms: i64,
     pub ended_at_ms: Option<i64>,
@@ -162,11 +189,33 @@ pub(super) struct ProcessHandle {
     /// spawn 之后才知道，所以是 `Mutex<Option<u32>>`；PTY 分支没有独立进程组。
     /// 用途：shell 退出后判断它拉起的后台作业是否还活着。
     pid: std::sync::Mutex<Option<u32>>,
+    /// 该 pid 的启动时刻（身份指纹，见 [`crate::platform::process_start_time`]）。
+    ///
+    /// pid 会被回收再分配：只凭 pid 对「已退出的 shell 的进程组」发 SIGKILL 有
+    /// 误杀无关进程的风险。杀之前比对指纹，对不上就放弃。
+    pid_start_time: std::sync::Mutex<Option<u64>>,
     output: std::sync::Mutex<OutputBuffer>,
     state: std::sync::Mutex<ProcessState>,
     ended_at_ms: std::sync::Mutex<Option<i64>>,
     /// 模型读取游标（绝对字节偏移）。
     cursor: AtomicU64,
+    /// 串行化「读区间 + 推进游标」：否则并发读会重复输出或把游标写回较小值。
+    ///
+    /// 不能复用 `output` 锁：`wait_window` 已在另一处持 `output` 锁时调用其它方法，
+    /// 反向加锁会死锁。
+    cursor_lock: std::sync::Mutex<()>,
+    /// 该 handle 是否已计入 [`GLOBAL_RUNNING`]。
+    ///
+    /// `settle()` 只在「确实加过」时递减：spawn 失败路径会 settle 一个从未 `fetch_add`
+    /// 的 handle，若无条件递减会让 `u64` 下溢成 `u64::MAX`，此后所有 `exec_command`
+    /// 都返回 `resource_limit`（整个进程生命周期内不可恢复）。
+    counted: std::sync::atomic::AtomicBool,
+    /// 停止请求是否已被某个调用者认领。
+    ///
+    /// `stop` 是 `Option<Sender>`，`take()` 之后第二个调用者看到的 `None` 既可能是
+    /// 「已被别人认领」也可能是「压根没有 supervisor」——两者语义完全不同：
+    /// 前者应当等待 supervisor 落终态，后者才该自己标 `Interrupted`。
+    stop_requested: std::sync::atomic::AtomicBool,
     /// 停止信号（被 supervisor 监听）。
     stop: Mutex<Option<oneshot::Sender<StopReason>>>,
     /// stdin 写入通道（写入任务拥有真实句柄）。
@@ -207,7 +256,11 @@ impl ProcessHandle {
             state: std::sync::Mutex::new(ProcessState::Starting),
             ended_at_ms: std::sync::Mutex::new(None),
             pid: std::sync::Mutex::new(None),
+            pid_start_time: std::sync::Mutex::new(None),
             cursor: AtomicU64::new(0),
+            cursor_lock: std::sync::Mutex::new(()),
+            counted: std::sync::atomic::AtomicBool::new(false),
+            stop_requested: std::sync::atomic::AtomicBool::new(false),
             stdin_slot: std::sync::Mutex::new(None),
             stop: Mutex::new(None),
             notify: Notify::new(),
@@ -223,6 +276,36 @@ impl ProcessHandle {
     /// 记录 spawn 出来的 shell pid（也是进程组 id）。
     fn set_pid(&self, pid: u32) {
         *lock(&self.pid) = Some(pid);
+        // 指纹**惰性**取：`set_pid` 在 spawn 的热路径上，同步调用 `ps`（macOS）
+        // 会拖慢「spawn → 进入等待」这一段，实测会让读端 drain 落后于结算。
+    }
+
+    /// 组长 pid 是否**没有**被内核复用（`true` = 可以安全按 pgid 杀）。
+    ///
+    /// 判据分三种情形：
+    ///
+    /// - 组长仍存活：比对启动时刻指纹，相同才放行（pid 被复用会被识破）；
+    /// - 组长已退出（`nohup … &` 的常态，`process_start_time` 返回 None）：
+    ///   此时**无法**证明 pgid 未被复用，但用户明确要停这个后台作业，
+    ///   只能 best-effort 按 pgid 杀。这是本模块已知的残余风险。
+    /// - 平台不支持指纹：同样退化为 best-effort。
+    fn leader_pid_not_recycled(&self) -> bool {
+        let Some(pid) = *lock(&self.pid) else {
+            return false;
+        };
+        let current = crate::platform::process_start_time(pid);
+        let mut recorded = lock(&self.pid_start_time);
+        match (current, *recorded) {
+            // 组长还在：指纹必须一致。
+            (Some(now), Some(saved)) => now == saved,
+            // 首次拿到指纹：记下来，本帧放行。
+            (Some(now), None) => {
+                *recorded = Some(now);
+                true
+            }
+            // 组长已退出 / 平台不支持：无法证明，按 best-effort 放行。
+            (None, _) => true,
+        }
     }
 
     /// shell 已退出的进程，其进程组里是否还有存活的后台作业。
@@ -261,6 +344,8 @@ impl ProcessHandle {
     }
 
     /// 标记终态（幂等：已终态时不覆盖真实结果）。
+    ///
+    /// 全局运行计数只在**确实计入过**时才递减（见 [`Self::counted`]）。
     fn settle(&self, next: ProcessState) -> bool {
         let mut state = lock(&self.state);
         if state.is_terminal() {
@@ -268,8 +353,16 @@ impl ProcessHandle {
         }
         *state = next.clone();
         *lock(&self.ended_at_ms) = Some(crate::db::now_ms());
+        // `counted` 的读写与 `mark_running` 一样都在 state 锁内，两者互斥：
+        // 否则「置位后、加计数前」被 settle 抢先，会让计数先减后加而下溢。
+        let counted = self.counted.swap(false, Ordering::Relaxed);
+        // 注意：**不要**在这里抓「组内成员指纹」。`settle` 在 state 锁内、且是本
+        // 语言层的热路径，同步 `ps` 调用会拖慢每一次进程收尾（实测会让读端 drain
+        // 落后于 settle，卡片输出变空）。pid 复用的防护见 `stop_handle` 的注释。
         drop(state);
-        GLOBAL_RUNNING.fetch_sub(1, Ordering::Relaxed);
+        if counted {
+            GLOBAL_RUNNING.fetch_sub(1, Ordering::Relaxed);
+        }
         self.notify.notify_waiters();
         if let Some(ui) = &self.ui {
             let _ = ui.send(ProcessUiEvent::Exited {
@@ -282,25 +375,52 @@ impl ProcessHandle {
         true
     }
 
+    /// `Starting → Running` 的条件转移：成功时计入全局运行数并返回 true。
+    ///
+    /// 必须是条件转移：supervisor 可能在主任务走到这里之前就已经 `settle(Exited)`
+    /// （`true` / `echo hi` 这类秒退命令），无条件覆盖会把终态改回 `Running`，
+    /// 而 supervisor 已经返回、没人再 settle —— 进程永远显示运行中、全局计数永久 +1。
+    fn mark_running(&self) -> bool {
+        let mut state = lock(&self.state);
+        if !matches!(*state, ProcessState::Starting) {
+            return false;
+        }
+        *state = ProcessState::Running;
+        // 计数与 `counted` 在同一次 state 锁内一起落定，见 `settle`。
+        GLOBAL_RUNNING.fetch_add(1, Ordering::Relaxed);
+        self.counted.store(true, Ordering::Relaxed);
+        true
+    }
+
     /// 从模型游标起读取新输出（推进模型游标，不影响 UI 预览）。
+    ///
+    /// 「读区间 + 推进游标」在同一把锁内完成：否则两个并发调用者（模型正在
+    /// `write_stdin` 等待、用户在面板按停止）会读到同一游标，把同一段输出作为两次
+    /// 工具结果返回；先完成者还可能后写游标，把它写回较小值导致再次重复。
     fn read_for_model(&self, max_bytes: usize) -> super::output::OutputRead {
+        let _guard = lock(&self.cursor_lock);
         let cursor = self.cursor.load(Ordering::Relaxed);
         let read = lock(&self.output).read_from(cursor, max_bytes, self.state().is_terminal());
         self.cursor.store(read.end, Ordering::Relaxed);
         read
     }
 
-    /// 当前保留输出的尾部文本（UI 预览用；不推进任何游标）。
-    fn tail_text(&self) -> (String, u64) {
+    /// 当前保留输出的**尾部**文本（UI 预览用；不推进任何游标）。
+    ///
+    /// 必须从 `end − 预算` 起读：从保留区间起点读会在输出超过预算后永远返回
+    /// 「最早的那一段」，卡片与面板预览就此冻结在旧内容上。
+    fn tail_text(&self) -> (String, u64, u64, u64) {
         let output = lock(&self.output);
-        let start = output.start();
-        let read = output.read_from(start, MAX_MODEL_OUTPUT_BYTES, true);
-        (read.text, output.dropped_bytes())
+        let from = output.end().saturating_sub(MAX_MODEL_OUTPUT_BYTES as u64);
+        let read = output.read_from(from, MAX_MODEL_OUTPUT_BYTES, true);
+        // 第 2、3 项是 `tail` 在**原始字节流**中的区间：落库要写真实偏移，
+        // 不能拿 `tail.len()` 冒充（文本已剥离控制序列，长度与原始流无关）。
+        (read.text, read.start, read.end, output.dropped_bytes())
     }
 
     fn snapshot(&self) -> ProcessSnapshot {
         let state = self.state();
-        let (tail, dropped_bytes) = self.tail_text();
+        let (tail, output_start, output_end, dropped_bytes) = self.tail_text();
         ProcessSnapshot {
             session_id: self.session_id,
             command: self.command.clone(),
@@ -309,6 +429,8 @@ impl ProcessHandle {
             exit_code: state.exit_code(),
             state,
             tail,
+            output_start,
+            output_end,
             dropped_bytes,
             started_at_ms: self.started_at_ms,
             ended_at_ms: *lock(&self.ended_at_ms),
@@ -323,7 +445,6 @@ pub struct ProcessManager {
     owner: ProcessOwner,
     limits: ProcessLimits,
     processes: std::sync::Mutex<HashMap<u64, Arc<ProcessHandle>>>,
-    next_id: AtomicU64,
     ui: Option<mpsc::UnboundedSender<ProcessUiEvent>>,
 }
 
@@ -343,7 +464,6 @@ impl ProcessManager {
             owner,
             limits,
             processes: std::sync::Mutex::new(HashMap::new()),
-            next_id: AtomicU64::new(1),
             ui,
         }
     }
@@ -374,11 +494,20 @@ impl ProcessManager {
     }
 
     /// 该会话的全部进程快照（UI 重载/清理用）。
+    ///
+    /// **按启动时刻排序**（次键 `session_id`）：面板用下标记住高亮，而 `HashMap`
+    /// 迭代顺序不稳定——列表顺序一抖，`^d` 就会停掉另一个进程（破坏性操作）。
     pub fn snapshots(&self) -> Vec<ProcessSnapshot> {
-        lock(&self.processes)
+        let mut snapshots: Vec<ProcessSnapshot> = lock(&self.processes)
             .values()
             .map(|handle| handle.snapshot())
-            .collect()
+            .collect();
+        snapshots.sort_by(|left, right| {
+            left.started_at_ms
+                .cmp(&right.started_at_ms)
+                .then(left.session_id.cmp(&right.session_id))
+        });
+        snapshots
     }
 
     fn handle(&self, session_id: u64) -> Option<Arc<ProcessHandle>> {
@@ -391,6 +520,22 @@ impl ProcessManager {
         args: ExecArgs,
         workspace: &Path,
         origin_call_id: &str,
+    ) -> Result<ProcessResult, ProcessError> {
+        self.exec_observed(args, workspace, origin_call_id, &|_| {})
+            .await
+    }
+
+    /// 同 [`Self::exec`]，但 spawn 成功后**立即**回调新进程 id。
+    ///
+    /// 用途：本轮停止语义必须能在命令**等待期间**就杀掉它。若等 `exec` 返回后
+    /// 才登记（`TurnExecution::observe` 的时机），用户在等待窗口里按 Esc 时
+    /// 目标集合是空的，命令会继续在后台跑。
+    pub async fn exec_observed(
+        &self,
+        args: ExecArgs,
+        workspace: &Path,
+        origin_call_id: &str,
+        on_spawn: &(dyn Fn(u64) + Sync),
     ) -> Result<ProcessResult, ProcessError> {
         self.prune_finished();
         if self.running_count() >= self.limits.max_running {
@@ -413,7 +558,7 @@ impl ProcessManager {
             .shell
             .clone()
             .unwrap_or_else(crate::platform::default_shell);
-        let session_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let session_id = next_process_id();
         let handle = Arc::new(ProcessHandle::new(
             session_id,
             origin_call_id.to_string(),
@@ -443,8 +588,10 @@ impl ProcessManager {
             self.stop_handle(&handle, StopReason::Stopped).await;
             return Err(ProcessError::new("spawn_failed", "duplicate process id"));
         }
-        GLOBAL_RUNNING.fetch_add(1, Ordering::Relaxed);
-        *lock(&handle.state) = ProcessState::Running;
+        // 条件转移：supervisor 可能已经落过终态（秒退命令），绝不能覆盖回 Running。
+        handle.mark_running();
+        // spawn 成功、进程已在管理表里：此刻就登记给调用方（等待窗口期间可被停止）。
+        on_spawn(session_id);
         // 命令总寿命：即使等待窗口先到期（工具已返回 running），后台仍按超时清理。
         if let Some(timeout_ms) = args.timeout_ms {
             let lifetime_handle = Arc::clone(&handle);
@@ -469,6 +616,7 @@ impl ProcessManager {
             ProcessResultKind::ExecCommand,
             None,
             false,
+            args.max_output_tokens,
             started,
         ))
     }
@@ -501,13 +649,16 @@ impl ProcessManager {
                 ProcessResultKind::WriteStdin,
                 Some(preview_input(&args.chars)),
                 true,
+                args.max_output_tokens,
                 started,
             );
             if result.output.is_empty() {
                 // 显式停止要能看到“最后输出”：读游标已经取空时，补上保留的尾部
                 // （不推进模型游标——它已经指向末尾）。
-                let (tail, dropped) = handle.tail_text();
+                let (tail, start, end, dropped) = handle.tail_text();
                 result.output = tail;
+                result.output_start = start;
+                result.output_end = end;
                 result.dropped_bytes = dropped;
             }
             return Ok(result);
@@ -532,6 +683,7 @@ impl ProcessManager {
             ProcessResultKind::WriteStdin,
             input,
             false,
+            args.max_output_tokens,
             started,
         );
         result.wrote_input = wrote_input;
@@ -548,7 +700,14 @@ impl ProcessManager {
         };
         let started = tokio::time::Instant::now();
         self.stop_handle(&handle, StopReason::Stopped).await;
-        Ok(self.result_of(&handle, ProcessResultKind::WriteStdin, None, true, started))
+        Ok(self.result_of(
+            &handle,
+            ProcessResultKind::WriteStdin,
+            None,
+            true,
+            MAX_OUTPUT_TOKENS,
+            started,
+        ))
     }
 
     /// 停止一批进程（会话关闭、Esc 停止当前轮）。
@@ -567,8 +726,33 @@ impl ProcessManager {
 
     /// 关闭运行实例：停止全部进程（幂等）。
     pub async fn shutdown(&self) {
+        // 先对**所有**目标并发送出停止信号，再统一有界等待：逐个 `await` 是
+        // N × 2s 的串行预算，进程一多就会在「还没轮到第 4 个」时超时返回，
+        // 剩下的进程连 SIGTERM 都没收到，退出后变成孤儿进程组。
         let all: Vec<u64> = lock(&self.processes).keys().copied().collect();
-        self.stop_many(all).await;
+        let handles: Vec<Arc<ProcessHandle>> =
+            all.iter().filter_map(|id| self.handle(*id)).collect();
+        // 先广播温和停止信号（不等待），让所有进程并行进入收尾。
+        for handle in &handles {
+            if handle.state().is_terminal() {
+                continue;
+            }
+            let mut guard = handle.stop.lock().await;
+            if let Some(sender) = guard.take() {
+                handle.stop_requested.store(true, Ordering::Relaxed);
+                let _ = sender.send(StopReason::Stopped);
+            }
+        }
+        // 再统一等待：总预算与单个进程的最坏耗时同阶（不再随进程数线性增长）。
+        let deadline = tokio::time::Instant::now() + STOP_GRACE * 2;
+        for handle in &handles {
+            while !handle.state().is_terminal() && tokio::time::Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            if !handle.state().is_terminal() {
+                stop_handle(handle, StopReason::Stopped).await;
+            }
+        }
     }
 
     /// 写入 stdin；半写/BrokenPipe 以稳定错误码返回。
@@ -693,9 +877,16 @@ impl ProcessManager {
         kind: ProcessResultKind,
         input: Option<String>,
         terminate: bool,
+        max_tokens: usize,
         started: tokio::time::Instant,
     ) -> ProcessResult {
-        let budget = MAX_MODEL_OUTPUT_BYTES;
+        // `max_output_tokens` 是**返回模型的文本预算**，不是「何时返回」的开关：
+        // 只用于早退判断会让模型显式请求 200 token 时仍收到 64 KiB 正文。
+        // 按 4 字节 ≈ 1 token 换算，并与硬上限取 min。
+        let budget = max_tokens
+            .max(1)
+            .saturating_mul(4)
+            .min(MAX_MODEL_OUTPUT_BYTES);
         let read = handle.read_for_model(budget);
         let state = handle.state();
         ProcessResult {
@@ -724,9 +915,11 @@ impl ProcessManager {
     fn prune_finished(&self) {
         let now = crate::db::now_ms();
         let mut processes = lock(&self.processes);
+        // 「shell 已退出但后台作业仍在跑」的记录**不能淘汰**：那正是用户要停的服务，
+        // 淘汰掉就等于面板不显示、也停不了，而进程组还在后台烧。
         let mut finished: Vec<(u64, i64)> = processes
             .iter()
-            .filter(|(_, handle)| handle.state().is_terminal())
+            .filter(|(_, handle)| handle.state().is_terminal() && !handle.has_living_group())
             .map(|(id, handle)| (*id, lock(&handle.ended_at_ms).unwrap_or(now)))
             .collect();
         finished.sort_by_key(|(_, ended)| *ended);
@@ -754,7 +947,13 @@ async fn stop_handle(handle: &Arc<ProcessHandle>, reason: StopReason) {
         // （`nohup cmd &` 的典型结果）。此时没有 supervisor 可通知，
         // 也没有可等的子进程，只能按进程组直接终止——否则面板里的这一行
         // 永远停不掉，用户会以为按钮没生效。
+        // pgid 可能已被内核回收并分配给别的进程组。组长仍存活时用启动时刻
+        // 指纹识破复用；组长已退出的 `nohup … &` 场景无法证明，仍是 best-effort
+        // （详见 `docs/feature/lx-agent-command-plan-tools/review.md`）。
+        // 指纹**惰性**取：不能放在 `set_pid` 的 spawn 热路径上（macOS 的 `ps`
+        // 调用会拖慢「spawn → 等待」，让读端 drain 落后于结算）。
         if handle.has_living_group()
+            && handle.leader_pid_not_recycled()
             && let Some(pid) = *lock(&handle.pid)
         {
             crate::platform::terminate_process_group(pid, true);
@@ -767,8 +966,13 @@ async fn stop_handle(handle: &Arc<ProcessHandle>, reason: StopReason) {
     };
     match sender {
         Some(sender) => {
+            handle.stop_requested.store(true, Ordering::Relaxed);
             let _ = sender.send(reason);
         }
+        // `None` 有两种语义：已被别的调用者认领（应当一起等 supervisor 落终态），
+        // 或压根没有 supervisor（才该自己标 Interrupted）。区分开才不会把正常的
+        // `Stopped` / `TimedOut` 覆盖成 `Interrupted`。
+        None if handle.stop_requested.load(Ordering::Relaxed) => {}
         None => {
             // 没有 supervisor（理论上不会发生）：退回直接标记，绝不伪报已停止。
             handle.settle(ProcessState::Interrupted);

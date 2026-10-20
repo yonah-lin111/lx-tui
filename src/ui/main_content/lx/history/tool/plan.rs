@@ -42,7 +42,10 @@ pub(super) fn rows(call: &ToolCallView, width: u16, _expanded: bool) -> usize {
     let Some(crate::app::state::ToolDetailView::Plan(view)) = call.detail.as_deref() else {
         return title_rows();
     };
-    title_rows() + step_rows(view, width) + usize::from(explanation_of(view).is_some())
+    // 空计划分支画完 `Plan cleared` 就返回，**永远不画解释行**：这里必须一起
+    // 排除，否则布局比绘制多一行，其后所有内容的绘制与命中统统一行错位。
+    let has_explanation = !view.is_empty() && explanation_of(view).is_some();
+    title_rows() + step_rows(view, width) + usize::from(has_explanation)
 }
 
 /// 全部步骤（含换行与占位）占用的行数。
@@ -141,10 +144,16 @@ pub(super) fn draw(
     let last_step = view.steps.len().saturating_sub(1);
     for (index, (step, status)) in view.steps.iter().enumerate() {
         let marker = text::agent::plan_marker(*status);
+        // 「进行中」必须与其它运行中工具同档（橙黄）：用完成态的翡翠绿会让
+        // 真正在推进的那一步读起来像"已经做完了"。
         let step_style = match status {
             PlanStepView::Completed => style::agent_step_detail(),
-            PlanStepView::InProgress => style::chat_tool_verb(),
+            PlanStepView::InProgress => style::chat_tool_verb_running(),
             PlanStepView::Pending => style::text(),
+        };
+        let marker_style = match status {
+            PlanStepView::InProgress => style::chat_step_label_alive(),
+            _ => style::agent_step_detail(),
         };
         // 步骤是中间行；没有解释行时最后一条步骤自己收口。
         let connector = if index == last_step && explanation.is_none() {
@@ -163,7 +172,7 @@ pub(super) fn draw(
                         prefix_x,
                         y,
                         &format!("{marker} "),
-                        style::agent_step_detail(),
+                        marker_style,
                         width.saturating_sub(TREE_COLS as u16),
                     );
                 }
@@ -178,11 +187,14 @@ pub(super) fn draw(
             *row_index += 1;
         }
     }
-    if let Some(explanation) = explanation
-        && let Some(y) = visible_row(rect, scroll, *row_index)
-    {
-        let segments = explanation_line(&explanation, width);
-        put_segments(grid, rect.x, y, width, &segments);
+    // 行号**无论是否可见**都要推进：其余所有绘制路径（`body` / `tool` /
+    // `command` / `notice`）都是这个口径。只在可见时推进会让滚过卡片后
+    // 其后的内容比 `layout` 认为的位置高一行，命中矩形随之整体错位。
+    if let Some(explanation) = explanation.as_deref() {
+        if let Some(y) = visible_row(rect, scroll, *row_index) {
+            let segments = explanation_line(explanation, width);
+            put_segments(grid, rect.x, y, width, &segments);
+        }
         *row_index += 1;
     }
 }

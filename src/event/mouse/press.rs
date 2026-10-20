@@ -390,15 +390,9 @@ pub(crate) fn handle_mouse_down_left(
                 update::focus_pane(state, pane);
                 // 后台任务面板：左上角 tab 与右上角 `[esc]` 都可点击。
                 let task_hit = state.pane_anywhere(pane).and_then(|target| {
-                    let page = target.lx.task.as_ref()?;
+                    target.lx.task.as_ref()?;
                     let rects = ui::main_content::lx::task_rects(inner, &target.lx)?;
-                    ui::main_content::lx::task::hit_in(
-                        rects.list,
-                        Some(rects.output),
-                        page,
-                        mouse.column,
-                        mouse.row,
-                    )
+                    ui::main_content::lx::task::hit(rects.list, mouse.column, mouse.row)
                 });
                 // 输出容器的滚动条：thumb 开始拖拽，轨道点击跳转。
                 if let Some(rects) = state

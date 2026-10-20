@@ -94,16 +94,13 @@ pub struct TaskPage {
     pub output: Vec<String>,
     /// 输出区顶部行偏移（`PageUp`/`PageDown` 与滚轮用）。
     pub output_scroll: usize,
-    /// 输出区可见行数（事件循环在绘制前写入，键盘翻页钳制用）。
-    pub output_visible: usize,
-    /// 上一帧历史内容的总行数（事件循环在绘制前写入；滚动钳制用）。
-    pub history_total: Option<usize>,
-    /// 上一帧历史区实际可见的行数（事件循环在绘制前写入）。
+    /// 输出区可见行数（事件循环在绘制前写入）。
     ///
-    /// 键盘翻页需要知道「一屏几行」，而 `app/` 拿不到窗格几何——与
-    /// `LxChat::viewport_top` 同一套做法：渲染只读、事件循环写，滚动钳制与渲染
-    /// 共用同一份口径。`None` 表示本帧还没有历史区（消息为空或窗格太矮）。
-    pub history_visible: Option<usize>,
+    /// 翻页与滚动条几何需要知道「一屏几行」，而 `app/` 拿不到窗格几何——与
+    /// `LxChat::viewport_top` 同一套做法：渲染只读、事件循环写。
+    /// 面板打开时历史区根本没画，因此**不**维护历史行数（那会白烧每帧一次
+    /// markdown 排版，且没有任何读者）。
+    pub output_visible: usize,
 }
 
 impl TaskPage {
@@ -140,7 +137,10 @@ impl TaskPage {
             return false;
         }
         self.tab = tab;
-        self.window.clamp(self.len());
+        // 窗口状态属于**进程列表**，与当前 tab 的条目数无关：`Agents` 恒为 0，
+        // 若按 `self.len()` 钳制会把 `active/anchor/viewport` 全部抹成 0，
+        // 切回 Processes 时用户原来选的那项已经丢了（`^d` 会停错进程）。
+        self.window.clamp(self.processes.len());
         true
     }
 
@@ -150,7 +150,7 @@ impl TaskPage {
             return false;
         }
         self.tab = tab;
-        self.window.clamp(self.len());
+        self.window.clamp(self.processes.len());
         true
     }
 
@@ -179,9 +179,16 @@ impl TaskPage {
 
     /// 消费一次性的 `[open]` 定位请求：高亮落到指定会话的进程。
     ///
+    /// **列表还没到时要保留请求**：`[open]` 打开面板那一刻 `processes` 必然是空的
+    /// （真正的列表由 `ListSessionProcesses` 在下一轮回投）。早先这里先 `take()`
+    /// 再判空，请求就被吃掉了，高亮永远落在首项。现在只在列表非空时消费。
+    ///
     /// 目标进程已消失（卡片还留在历史里，但进程早退出了）时回落列表首项——
     /// 面板照常打开，而不是给一个空高亮。请求无论成败都清空（一次性）。
     pub fn resolve_focus(&mut self) {
+        if self.processes.is_empty() {
+            return;
+        }
         let Some(session_id) = self.focus.take() else {
             return;
         };
@@ -190,9 +197,6 @@ impl TaskPage {
             .iter()
             .position(|process| process.session_id == session_id)
             .unwrap_or(0);
-        if self.processes.is_empty() {
-            return;
-        }
         self.window.active = index;
         self.window.anchor = index;
         self.window.viewport = None;
@@ -206,8 +210,49 @@ impl TaskPage {
     }
 
     /// 输出区可滚动的最大偏移（总行数 − 可见行数）。
-    fn output_max_scroll(&self) -> usize {
+    ///
+    /// `pub(crate)`：滚动条轨道点击/拖拽也要用它，**不能**在别处再写一遍公式，
+    /// 否则「键盘滚到哪停」与「拖拽滚到哪停」会分叉。
+    pub(crate) fn output_max_scroll(&self) -> usize {
         self.output.len().saturating_sub(self.output_visible)
+    }
+
+    /// 可见行数变化后调整滚动位置并写入新行数。
+    ///
+    /// 「是否原本贴尾」用**旧**可见行数判断（此时 `output_visible` 还是上一帧的值）：
+    /// 直接在写入新行数之后再 `pin_output_to_tail()` 会在用户改窗口大小时把他从
+    /// 日志中间甩到最新一屏——与 [`Self::set_output`] 里的 `was_at_tail` 同一规则。
+    pub fn resize_output_viewport(&mut self, visible: usize) {
+        let was_at_tail = self.output_scroll >= self.output_max_scroll();
+        self.output_visible = visible;
+        let max = self.output_max_scroll();
+        self.output_scroll = if was_at_tail {
+            max
+        } else {
+            self.output_scroll.min(max)
+        };
+    }
+
+    /// 列表滚轮：移动显式视口起点（`visible` 为当前可见行数）；返回是否移动。
+    pub fn scroll_window(&mut self, delta: isize, visible: usize) -> bool {
+        let len = self.processes.len();
+        if len == 0 || visible == 0 {
+            return false;
+        }
+        let max = len.saturating_sub(visible);
+        let current = self.window.viewport.unwrap_or_else(|| {
+            // 没有显式视口时以高亮为准（与渲染的 `window_start` 同口径）。
+            let active = self.window.active.min(len - 1);
+            active.saturating_sub(visible - 1).min(max)
+        });
+        let next = (current as isize)
+            .saturating_add(delta)
+            .clamp(0, max as isize) as usize;
+        if next == current && self.window.viewport.is_some() {
+            return false;
+        }
+        self.window.viewport = Some(next);
+        true
     }
 
     /// 翻动输出区（负数向上）；返回视口是否移动。
@@ -247,12 +292,19 @@ impl TaskPage {
         true
     }
 
-    /// 以新列表替换进程并钳制高亮；返回是否有变化。
+    /// 以新列表替换进程并钳制高亮；返回**列表内容**是否变化。
+    ///
+    /// `now_ms` 只用于渲染时长，不参与「是否变化」判定：它由 `tick_task_pages`
+    /// 单独按秒推进。早先把它算进变化判定，导致面板打开期间每次回投都判「有变化」
+    /// → 每帧重绘。
     pub fn set_processes(&mut self, processes: Vec<ProcessEntry>, now_ms: i64) -> bool {
-        let changed = self.processes != processes || self.now_ms != now_ms;
+        let changed = self.processes != processes;
         self.processes = processes;
         self.now_ms = now_ms;
-        self.window.clamp(self.len());
+        // 列表长度变了才需要钳制（且按进程列表长度，不看当前 tab）。
+        if changed {
+            self.window.clamp(self.processes.len());
+        }
         changed
     }
 
@@ -264,7 +316,7 @@ impl TaskPage {
         if self.processes.len() == before {
             return false;
         }
-        self.window.clamp(self.len());
+        self.window.clamp(self.processes.len());
         true
     }
 }

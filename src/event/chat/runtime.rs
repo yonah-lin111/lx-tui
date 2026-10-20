@@ -80,20 +80,32 @@ pub struct ProcessRuntimes {
 
 impl ProcessRuntimes {
     /// 取（必要时为该会话新建）运行实例。
+    ///
+    /// 代次 `epoch` 必须**跨 lx 重启唯一**：它和 `process_session_id` 一起构成
+    /// `agent_process` 的唯一键。只用「进程内从 1 起算的计数」时，重启后 `/resume`
+    /// 同一会话会算出与上一条历史行相同的键，`begin_process` 命中唯一约束、
+    /// 新进程的行根本写不进去（历史卡片永远停在 `Running`）。
+    /// 因此在会话内计数前加一段进程级唯一前缀（启动毫秒）。
     pub fn get_or_create(
         &mut self,
         workspace: std::path::PathBuf,
         session_id: &str,
         ui: tokio::sync::mpsc::UnboundedSender<ProcessUiEvent>,
     ) -> &mut SessionRuntime {
-        if !self.runtimes.contains_key(session_id) {
-            let counter = self.epochs.entry(session_id.to_string()).or_insert(0);
-            *counter = counter.saturating_add(1);
-            let epoch = format!("{session_id}:{}", *counter);
-            let runtime = SessionRuntime::new(workspace, session_id, epoch, ui);
-            self.runtimes.insert(session_id.to_string(), runtime);
-        }
-        self.runtimes.get_mut(session_id).expect("inserted above")
+        use std::sync::OnceLock;
+        /// 本 lx 进程的启动时刻（毫秒），作为 epoch 的跨进程唯一成分。
+        static STARTED_MS: OnceLock<i64> = OnceLock::new();
+        // 代次只在**首次**为该会话建实例时递增；`entry` 一次完成查找与插入，
+        // 既避免二次查找，也不需要 `expect`（生产代码禁止 unwind 型收尾）。
+        let counter = self.epochs.entry(session_id.to_string()).or_insert(0);
+        let started = *STARTED_MS.get_or_init(crate::db::now_ms);
+        self.runtimes
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                *counter = counter.saturating_add(1);
+                let epoch = format!("{session_id}:{started}:{}", *counter);
+                SessionRuntime::new(workspace, session_id, epoch, ui)
+            })
     }
 
     /// 该会话已有运行实例时返回它（不新建）。

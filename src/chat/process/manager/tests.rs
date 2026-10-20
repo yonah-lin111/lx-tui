@@ -81,7 +81,13 @@ async fn short_command_returns_real_exit_code_and_output() {
         .exec(exec("echo hello", 5_000), &dir.path, "call-1")
         .await
         .expect("exec");
-    assert_eq!(result.session_id, 1, "进程会话 ID 不是 OS PID");
+    // ID 由**进程内全局**计数器分配（跨会话唯一），所以不可能是固定值 1；
+    // 这里只断言它确实是个「管理器分配的小整数」而不是 OS PID。
+    assert!(
+        result.session_id < 10_000,
+        "进程会话 ID 是管理器分配的序号，不是 OS PID：{}",
+        result.session_id
+    );
     assert_eq!(result.state, ProcessState::Exited { code: Some(0) });
     assert_eq!(result.exit_code, Some(0));
     assert!(!result.is_failure(), "退出码 0 不是失败");
@@ -577,4 +583,108 @@ async fn plain_foreground_command_reports_no_living_group() {
         snapshots[0]
     );
     manager.shutdown().await;
+}
+
+// ===== review 回归：生命周期与计数的所有权 =====
+
+#[tokio::test]
+async fn failed_spawn_never_underflows_the_global_running_counter() {
+    // 真实缺陷：spawn 失败时 settle() 无条件递减 GLOBAL_RUNNING，而该 handle 从未
+    // fetch_add 过 → u64 下溢成 u64::MAX → 此后所有 exec_command 都返回
+    // resource_limit，且整个进程生命周期内不可恢复。
+    let dir = TempDir::new("bad-shell");
+    let manager = manager(&dir);
+    let mut args = exec("echo hi", 1_000);
+    args.shell = Some("/definitely/not/a/shell".to_string());
+    assert!(manager.exec(args, &dir.path, "call-bad").await.is_err());
+    // 下溢的唯一症状是计数变成一个巨大的数（u64::MAX 附近）。
+    assert!(
+        crate::chat::process::manager::global_running() < u64::MAX / 2,
+        "全局运行计数被下溢了：{}",
+        crate::chat::process::manager::global_running()
+    );
+}
+
+#[tokio::test]
+async fn a_short_lived_command_never_stays_running() {
+    // 真实缺陷：登记后无条件写回 `Running`，会把 supervisor 已落定的 `Exited`
+    // 覆盖掉 —— 进程永远显示运行中、全局计数永久 +1。秒退命令最容易撞上。
+    let dir = TempDir::new("instant");
+    let manager = manager(&dir);
+    for _ in 0..20 {
+        let result = manager
+            .exec(exec("true", 5_000), &dir.path, "call-fast")
+            .await
+            .expect("exec");
+        assert!(
+            result.state.is_terminal(),
+            "秒退命令必须是终态，实际 {:?}",
+            result.state
+        );
+        // 快照也必须收敛（面板与卡片读的是它）。
+        let snapshot = manager.snapshot(result.session_id).expect("snapshot");
+        assert!(
+            snapshot.state.is_terminal(),
+            "快照状态也必须终态，实际 {:?}",
+            snapshot.state
+        );
+    }
+}
+
+#[tokio::test]
+async fn process_ids_are_unique_across_managers() {
+    // 真实缺陷：id 每管理器从 1 起算，两个并存会话的第一个进程都叫 1，
+    // 事件层按 id 反查归属时会串台（并用别人的 epoch 写坏库里的行）。
+    let dir = TempDir::new("ids");
+    let first = manager(&dir);
+    let second = manager(&dir);
+    let left = first
+        .exec(exec("true", 5_000), &dir.path, "a")
+        .await
+        .expect("exec");
+    let right = second
+        .exec(exec("true", 5_000), &dir.path, "b")
+        .await
+        .expect("exec");
+    assert_ne!(
+        left.session_id, right.session_id,
+        "不同管理器的进程 id 必须互不相同"
+    );
+}
+
+#[tokio::test]
+async fn tail_snapshot_tracks_the_newest_output_past_the_budget() {
+    // 真实缺陷：tail_text() 从保留区间**起点**读 64 KiB，输出超过预算后
+    // 卡片与面板预览永远停在最早那一段。
+    let dir = TempDir::new("tail");
+    let manager = manager(&dir);
+    // 输出量超过 64 KiB 预算，末尾放一个可识别的标记。
+    let result = manager
+        .exec(
+            exec(
+                "yes 0123456789abcdef | head -c 80000; echo TAIL-MARKER",
+                30_000,
+            ),
+            &dir.path,
+            "call-tail",
+        )
+        .await
+        .expect("exec");
+    // 输出量超过 token 预算时 `exec_command` 会先返回 `running`（设计如此），
+    // 因此这里只轮询快照收敛，不断言终态。
+    let _ = result;
+    // 读端 drain 与快照读取之间没有强序：重试到快照收敛为止。
+    let mut tail = String::new();
+    for _ in 0..200 {
+        tail = manager.snapshot(result.session_id).expect("snapshot").tail;
+        if tail.contains("TAIL-MARKER") {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    assert!(
+        tail.contains("TAIL-MARKER"),
+        "快照必须是最新输出的尾部，实际尾部 {:?}",
+        &tail[tail.len().saturating_sub(48)..]
+    );
 }

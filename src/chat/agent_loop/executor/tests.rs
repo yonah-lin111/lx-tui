@@ -329,3 +329,46 @@ async fn invalid_process_arguments_never_spawn_a_process() {
     assert!(result.is_failure());
     assert_eq!(tools.processes().running_count(), 0, "校验失败不产生进程");
 }
+
+// ===== review 回归：等待窗口期间的命令必须可被本轮停止清掉 =====
+
+#[tokio::test]
+async fn a_command_waiting_in_its_yield_window_is_already_a_stop_target() {
+    // 真实缺陷：`observe()` 只在工具**返回之后**才登记进程，而 `exec_command`
+    // 默认等 10s（上限 30s）。用户在等待窗口里按 Esc 时目标集合是空的，
+    // 命令不会被杀，继续在后台跑。
+    let dir = TempDir::new("waiting-stop");
+    let tools = executor(&dir);
+    // 长等待窗口 + 长时间运行：工具调用仍在等待中时来检查目标集合。
+    let waiting = tokio::spawn({
+        let tools = tools.clone();
+        let path = dir.path.clone();
+        async move {
+            tools
+                .execute(
+                    &path,
+                    &call("exec_command", r#"{"cmd":"sleep 30","yield_time_ms":2500}"#),
+                )
+                .await
+        }
+    });
+    // 等 spawn 完成、工具进入等待窗口。
+    let mut targets = std::collections::BTreeSet::new();
+    for _ in 0..100 {
+        {
+            let turn = tools.turn().lock().await;
+            targets = turn.stop_targets();
+        }
+        if !targets.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        !targets.is_empty(),
+        "工具还在等待窗口里时，进程就必须已经是停止目标"
+    );
+    tools.processes().stop_many(targets).await;
+    let _ = waiting.await;
+    tools.processes().shutdown().await;
+}

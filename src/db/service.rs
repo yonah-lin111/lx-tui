@@ -661,8 +661,9 @@ impl Persistence {
                 workspace,
                 session_id,
             } => {
-                // 会话删除前先清进程元数据（外键也会级联，这里显式做一次以便记录条数）。
-                self.with_db(|db| db.delete_processes_for_session(&session_id));
+                // 进程记录由外键 `ON DELETE CASCADE` 随会话一起删。**不要**在这里
+                // 单独预删：预删成功而会话删除失败时，会话还在、进程元数据却已清空，
+                // 历史里 `running` 的卡片会永远停在 Running 且没有进程可停。
                 let deleted = self.with_db(|db| db.delete_chat_session(&workspace, &session_id));
                 // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有），
                 // 并从已打开的 `/resume` 列表里就地移除该行。
