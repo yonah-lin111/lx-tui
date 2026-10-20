@@ -20,7 +20,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::LX_SYSTEM_PROMPT;
+use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, ToolCallBuffer, anthropic_tools, arguments_string, history_blocks, protocol_error,
 };
@@ -58,7 +58,7 @@ pub fn build(
     let mut body = json!({
         "model": request.model.model,
         // 系统指令：Anthropic 用顶层 system，不进 messages。
-        "system": LX_SYSTEM_PROMPT,
+        "system": system_prompt(),
         "messages": messages,
         "tools": anthropic_tools(),
         "max_tokens": DEFAULT_MAX_TOKENS,

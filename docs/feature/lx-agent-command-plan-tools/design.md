@@ -794,6 +794,37 @@ agent_process:    session_id=1  state=stopped  started=…831050  ended=…89038
 | 墙钟时间 | `wall_time_seconds`（实际等了多久） | 同名，内部存整数毫秒、JSON 输出秒 |
 | 输出预算 | `max_output_tokens`，超出截断并显式标记 | 同名，另有 `MAX_MODEL_OUTPUT_BYTES` 硬字节上限 |
 
+### 15.1.1 后台任务的真实语义（实测记录）
+
+模型与用户都会误判「后台任务启动了」。这里记下实测结论，避免以后再猜：
+
+| 场景 | 结果 |
+| --- | --- |
+| `tty: false`（默认管道）+ `sleep 300 &` | 子进程**存活** |
+| `tty: true`（PTY）+ `sleep 300 &` | 子进程**死亡** |
+| `tty: true` + `nohup sleep 300 &` | 存活 |
+
+PTY 作为控制终端时，shell 退出会对该作业发 SIGHUP，裸 `cmd &` 会被一起收走。
+`nohup`（或 `trap "" HUP`）可以存活。这与 design §15.1「`yield_time_ms` 只结束
+本次等待，不杀进程」并不矛盾：**lx 没有杀它，是 shell 自己在退出时收走了作业**。
+但承诺容易被读成「`&` 就能跨轮存活」，所以提示里必须把这个区别写清楚。
+
+另一条真实故障：模型在 macOS 上写 `setsid bash -c '...' &` 起常驻任务。
+**macOS 没有 `setsid`**，命令整条失败，而 shell 因为末尾有 `&` 仍返回 0，
+于是模型向用户汇报「任务已在运行」，用户看到的却是「启动后马上退出」。
+日志一行都没有——后台作业根本没起来。
+
+对应的两处改动：
+
+1. **系统提示注入平台信息**（`platform::environment_summary`）：报 OS 与默认
+   shell。只报可判定的事实，不猜某个命令是否存在——`command -v` 才是探针。
+   同段还写明：`yield_time_ms` 不杀进程、`tty: true` 下裸 `&` 会被 SIGHUP、
+   启动后要用 `pgrep` / 日志验证、不要假设工具存在。
+2. **结果里带 `warning`**（`ProcessResult::background_job_warning`）：命令含
+   后台作业语法（`&` / `disown` / `nohup`）且进程已退出时，提示「lx 无法确认它
+   是否存活」。判定刻意保守——只是提示，不报错，因为 shell 完全可能正常起完
+   后台作业就退出，而脱离进程组的子进程无法可靠追踪。
+
 ### 15.2 有意不跟随的部分
 
 - **沙箱与审批**：codex 走 `SandboxManager` + approval（`sandbox_permissions` / `justification` /

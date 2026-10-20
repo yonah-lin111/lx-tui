@@ -167,10 +167,7 @@ fn body_uses_messages_and_stream() {
     // 首条 system 是 lx 身份提示；其后 3 条与 turns 一一对应（旧行为等价）。
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[0]["role"], "system");
-    assert_eq!(
-        messages[0]["content"],
-        crate::chat::prompt::LX_SYSTEM_PROMPT
-    );
+    assert_eq!(messages[0]["content"], crate::chat::prompt::system_prompt());
     assert_eq!(messages[1]["role"], "user");
     assert_eq!(messages[1]["content"], "第一问");
     assert_eq!(messages[2]["role"], "assistant");

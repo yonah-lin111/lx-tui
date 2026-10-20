@@ -240,6 +240,49 @@ impl ProcessResult {
         }
     }
 
+    /// 可疑的「后台任务并未真正跑起来」提示（给模型与 UI）。
+    ///
+    /// 判定**刻意保守**，只在能确定的两件事同时成立时才提示：
+    ///
+    /// 1. 命令里有后台作业语法（`&` / `disown` / `nohup`）；
+    /// 2. 本次调用结束时**进程本身已经退出**，且没留下任何运行中的进程。
+    ///
+    /// 之所以只提示"可疑"而不报错：shell 完全可能正常地起完后台作业就退出，
+    /// 而 lx 无法在跨进程之外可靠追踪它（后台子进程会脱离进程组）。
+    /// 这条提示的价值在于打破「shell 返回 0 = 后台任务已启动」这个错觉——
+    /// 真实故障里模型正是这样误判的（`setsid` 在 macOS 不存在，
+    /// 命令整条失败却返回 0，模型于是向用户汇报"任务已在运行"）。
+    ///
+    /// `tty: true` 时更容易踩到：PTY 作为控制终端，shell 退出会对后台作业发
+    /// SIGHUP，裸 `cmd &` 会被一起收走。
+    pub fn background_job_warning(&self) -> Option<String> {
+        if self.kind != ProcessResultKind::ExecCommand {
+            return None;
+        }
+        if !matches!(self.state, ProcessState::Exited { .. }) {
+            return None;
+        }
+        if !commands_a_background_job(&self.command) {
+            return None;
+        }
+        if self.tty {
+            Some(
+                "the shell exited and `tty: true` sends SIGHUP to background jobs, so a plain \
+                 `cmd &` may have been killed with it. Detach explicitly (`nohup cmd \
+                 >/dev/null 2>&1 &`) and verify with `pgrep -f <pattern>` before reporting that \
+                 it is running."
+                    .to_string(),
+            )
+        } else {
+            Some(
+                "the shell exited; lx cannot tell whether the background job survived. Verify it \
+                 with `pgrep -f <pattern>` or by reading its log before reporting that it is \
+                 running."
+                    .to_string(),
+            )
+        }
+    }
+
     /// 转成结果 JSON（DB `result_json`、UI 视图解析与回放共用同一形状）。
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
@@ -260,8 +303,36 @@ impl ProcessResult {
             "terminate": self.terminate,
             "chunk_id": self.chunk_id,
             "wall_time_seconds": self.wall_time_ms as f64 / 1_000.0,
+            "warning": self.background_job_warning(),
         })
     }
+}
+
+/// 命令里是否出现后台作业语法。
+///
+/// 只看 `&` / `disown` / `nohup` 这三个显式信号。刻意不解析 shell：误报一次
+/// 只会让模型多跑一条验证命令，而漏报会让它继续汇报一个不存在的后台任务。
+fn commands_a_background_job(command: &str) -> bool {
+    if command.contains("disown") || command.contains("nohup") {
+        return true;
+    }
+    // 单独的 `&`（排除 `&&`、`&>`、`2>&1` 等逻辑运算符与重定向）。
+    let bytes = command.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte != b'&' {
+            continue;
+        }
+        let next = bytes.get(index + 1).copied();
+        let prev = index.checked_sub(1).map(|i| bytes[i]);
+        // `&&`：本字节和后一个都是 `&`，或前一个就是 `&`（第二个字符）。
+        let is_and = next == Some(b'&') || prev == Some(b'&');
+        // `&>` 与 `2>&1`：与重定向相邻。
+        let is_redirect = next == Some(b'>') || prev == Some(b'>');
+        if !is_and && !is_redirect {
+            return true;
+        }
+    }
+    false
 }
 
 /// 生成本次结果的分块标识（6 位十六进制，对齐 codex 的 `chunk_id`）。

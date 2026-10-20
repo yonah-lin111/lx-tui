@@ -20,7 +20,7 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::LX_SYSTEM_PROMPT;
+use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, ToolCallBuffer, arguments_string, history_blocks, openai_responses_tools,
     protocol_error,
@@ -64,7 +64,7 @@ pub fn build(
     let mut body = json!({
         "model": request.model.model,
         // 系统指令：Responses 用顶层 instructions（不是 input 里的 system 消息）。
-        "instructions": LX_SYSTEM_PROMPT,
+        "instructions": system_prompt(),
         "input": input,
         "tools": openai_responses_tools(),
         "stream": true,

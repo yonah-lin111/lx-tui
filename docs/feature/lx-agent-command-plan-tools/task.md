@@ -313,6 +313,30 @@
   - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
     历史区几何回到 `lay.input` 一处真相。
 
+- **后台任务「启动后马上退出」（按用户反馈排查 + 修复）**：
+  - 现象：启动后台任务后它立刻消失，后台任务面板里也没有。
+  - 实测结论（真实子进程复现，非推断）：
+    1. `tty: false` + `sleep 300 &` → 子进程存活；`tty: true` + 同命令 → 死亡。
+       原因是 PTY 作为控制终端，shell 退出对后台作业发 SIGHUP。`nohup` 可存活。
+       lx 没有杀它，违反观感的是「`&` 就够」这个默认假设。
+    2. 用户那批命令用 `setsid bash -c '...' &`，而 **macOS 没有 `setsid`**。
+       命令整条失败但 shell 因末尾 `&` 仍返回 0 → 后台从未启动、日志为空，
+       模型却汇报「已在运行」。
+  - 修法：
+    - 系统提示注入平台信息（`platform::environment_summary`）+ 后台任务语义段，
+      写明 `yield_time_ms` 不杀进程、`tty: true` 下裸 `&` 会被 HUP、
+      启动后要用 `pgrep`/日志验证、不要假设工具存在。
+    - `ProcessResult::background_job_warning` 在「含后台语法且进程已退出」时给出
+      可执行的验证提示；写进结果 JSON 的 `warning` 键与给模型的文本回执。
+      判定保守（只提示不报错）：脱离进程组的子进程无法可靠追踪。
+  - 回归测试：`system_prompt_reports_the_platform`、
+    `system_prompt_warns_about_background_jobs`、
+    `background_command_that_already_exited_is_flagged`、
+    `tty_background_job_warning_names_sighup`、
+    `foreground_commands_are_not_flagged`（`&&` / `2>&1` / `&>` 不误报）、
+    `running_process_is_not_flagged`、`write_stdin_result_is_not_flagged`、
+    `result_json_carries_a_stable_warning_key`。
+
 - **关掉会话再打开：卡片 Running 而后台面板全空（bug，按用户反馈修复）**：
   - 现象：启动后台任务 → 关闭当前会话 → 重新打开，消息列表里卡片显示 `Running`，
     但后台任务面板显示 `no running processes`。

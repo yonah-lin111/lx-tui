@@ -132,6 +132,11 @@ fn format_process(result: &crate::chat::process::ProcessResult) -> String {
     if let Some(input) = &result.input {
         text.push_str(&format!("input: {input}\n"));
     }
+    // 可疑的后台任务：把「shell 返回 0 ≠ 后台任务已启动」这件事说给模型，
+    // 否则它会直接向用户汇报一个并不存在的后台任务。
+    if let Some(warning) = result.background_job_warning() {
+        text.push_str(&format!("warning: {warning}\n"));
+    }
     if result.output.is_empty() {
         text.push_str("no output\n");
     } else {

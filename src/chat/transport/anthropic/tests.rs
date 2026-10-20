@@ -155,7 +155,7 @@ fn plain_text_history_is_unchanged() {
         json!([{"role": "user", "content": "你好"}])
     );
     // 系统指令走顶层 system（不在 messages 里）。
-    assert_eq!(body["system"], crate::chat::prompt::LX_SYSTEM_PROMPT);
+    assert_eq!(body["system"], crate::chat::prompt::system_prompt());
 }
 
 /// `tools` 用 `input_schema` 承载四工具 schema。

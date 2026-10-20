@@ -399,7 +399,7 @@ async fn request_body_carries_tools_and_system_prompt() {
     let sent: serde_json::Value = serde_json::from_str(&recorded.body).expect("json body");
     assert_eq!(
         sent["messages"][0]["content"],
-        crate::chat::prompt::LX_SYSTEM_PROMPT
+        crate::chat::prompt::system_prompt()
     );
     let names: Vec<&str> = sent["tools"]
         .as_array()

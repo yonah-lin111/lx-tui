@@ -144,6 +144,23 @@ pub fn default_shell() -> String {
     shell
 }
 
+/// 运行环境的一句话描述（进系统提示，让模型不再假设 Linux 工具齐备）。
+///
+/// 只报**可判定**的事实：OS 与默认 shell。不猜包管理器或其它命令是否存在——
+/// 声明了就会被模型当成保证，而 `command -v` 才是唯一可信的探针。
+pub fn environment_summary() -> String {
+    let shell = default_shell();
+    #[cfg(target_os = "macos")]
+    let os = "macOS";
+    #[cfg(target_os = "linux")]
+    let os = "Linux";
+    #[cfg(target_os = "windows")]
+    let os = "Windows";
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    let os = "an unknown OS";
+    format!("{os}, default shell `{shell}`")
+}
+
 /// 路径稳定比较键：Windows 大小写不敏感，其余平台取原文本。
 pub fn path_key(path: &Path) -> String {
     #[cfg(windows)]

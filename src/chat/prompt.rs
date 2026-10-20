@@ -31,6 +31,31 @@ Work in small verified steps:
 - Never claim a file changed unless a tool reported the change, and report failures plainly instead of retrying blindly.
 - Reply with concise prose; do not paste large file contents or raw tool payloads back to the user.";
 
+/// 后台任务的语义说明：追加在稳定提示之后的环境相关段落。
+///
+/// 单列一段（而不是写进常量）的原因：它要按**当前平台**给出具体命令能力，
+/// 而常量必须保持平台无关。
+///
+/// 这一段的存在理由是一条真实故障：模型在 macOS 上写出 `setsid bash -c '...' &`
+/// 来起常驻任务。macOS 没有 `setsid`，命令静默失败而 shell 仍返回 0，于是模型
+/// 以为任务在跑、用户却看到它「启动后马上退出」。
+const LX_BACKGROUND_NOTE: &str = "\
+Background and long-running work:
+- `exec_command` only ends one wait window; it does not kill a process that is still running. To keep something alive across turns, start it once and drive it with `write_stdin`.
+- A shell that exits stops its background children unless they are detached. `cmd &` alone does not survive the shell exiting under `tty: true`, because the pseudo terminal sends SIGHUP to the job. Detach explicitly when it must outlive the call: `nohup cmd >/dev/null 2>&1 &` works everywhere; `setsid` does not exist on macOS.
+- Verify a background start instead of assuming it worked: check `pgrep -f <pattern>` or the log file in a separate call. A shell returning 0 does not mean the background job started.
+- Do not reach for tools that may be missing; probe with `command -v <tool>` when unsure.";
+
+/// 组装完整系统提示：稳定身份/工具段 + 平台环境 + 后台任务语义。
+///
+/// 每次请求都要发送，因此保持紧凑。
+pub fn system_prompt() -> String {
+    format!(
+        "{LX_SYSTEM_PROMPT}\n\nEnvironment: {}.\n\n{LX_BACKGROUND_NOTE}",
+        crate::platform::environment_summary()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,5 +81,46 @@ mod tests {
             "系统提示过大：{} 字节",
             LX_SYSTEM_PROMPT.len()
         );
+        assert!(
+            system_prompt().len() < 3072,
+            "完整系统提示过大：{} 字节",
+            system_prompt().len()
+        );
+    }
+
+    /// 组装后的提示必须带上当前平台，否则模型会假设 Linux 工具齐备。
+    ///
+    /// 这条对应真实故障：模型在 macOS 上写出 `setsid ... &` 起常驻任务，
+    /// 而 macOS 没有 `setsid`，命令静默失败但 shell 返回 0。
+    #[test]
+    fn system_prompt_reports_the_platform() {
+        let prompt = system_prompt();
+        assert!(prompt.contains("Environment: "), "缺少环境段：{prompt}");
+        assert!(
+            prompt.contains(&crate::platform::environment_summary()),
+            "环境段必须是当前平台的真实描述"
+        );
+        // 稳定的身份/工具段必须原样保留。
+        assert!(prompt.starts_with(LX_SYSTEM_PROMPT));
+    }
+
+    /// 后台任务的坑必须写进提示：`yield_time_ms` 不杀进程、
+    /// `tty: true` 下裸 `&` 会被 SIGHUP、启动后要主动验证。
+    #[test]
+    fn system_prompt_warns_about_background_jobs() {
+        let prompt = system_prompt();
+        for needle in [
+            "does not kill a process",
+            "SIGHUP",
+            "nohup",
+            "setsid",
+            "pgrep",
+            "command -v",
+        ] {
+            assert!(
+                prompt.contains(needle),
+                "后台任务说明缺少 `{needle}`：{prompt}"
+            );
+        }
     }
 }
