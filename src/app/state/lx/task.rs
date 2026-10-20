@@ -109,13 +109,6 @@ impl TaskPage {
         self.len() == 0
     }
 
-    /// 面板列表要显示的行数：空态也要占一行（用来显示占位提示）。
-    ///
-    /// 面板高度按它收缩——列表只有一行时不该占掉半屏历史。
-    pub fn items_shown(&self) -> usize {
-        self.len().max(1)
-    }
-
     /// 高亮当前的进程条目（`Processes` tab 且索引有效时）。
     pub fn selected(&self) -> Option<&ProcessEntry> {
         matches!(self.tab, TaskTab::Processes)

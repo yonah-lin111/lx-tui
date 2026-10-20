@@ -45,12 +45,18 @@ const COMMAND_MIN: u16 = 10;
 /// 显示 cwd 所需的最小文字区宽度：再窄就整段丢弃 cwd。
 const CWD_MIN_ROOM: u16 = 30;
 
-/// 面板高度（tab 行 + 列表行）；由 `lx.rs::layout` 用来定输入框矩形。
+/// 面板高度（tab 行 + 固定 [`LIST_MAX`] 行）；由 `lx.rs::layout` 用来定输入框矩形。
 ///
-/// 空态也占一行（显示 `no running processes`），所以下限是 `TAB_ROW + 1`。
-pub(super) fn height(page: &TaskPage) -> u16 {
-    let rows = u16::try_from(page.items_shown().min(LIST_MAX)).unwrap_or(LIST_MAX as u16);
-    rows.saturating_add(TAB_ROW)
+/// **高度固定**，不随条目数变化：列表 0 条和 5 条时面板一样高。理由有二：
+///
+/// 1. 打开面板时上方消息列表不会因为「当前有几个后台进程」而被挤动一下再弹回来；
+/// 2. 空态能占满整个列表区，`no running processes` 不会孤零零吊在面板顶上一行。
+///
+/// 条目超过 [`LIST_MAX`] 时列表内部滚动（`window_start` 跟高亮走）。
+pub(super) fn height(_page: &TaskPage) -> u16 {
+    u16::try_from(LIST_MAX)
+        .unwrap_or(LIST_MAX as u16)
+        .saturating_add(TAB_ROW)
 }
 
 /// 在输入框矩形里画面板：首行 tab 指示（右端 `esc`），其后是当前 tab 的列表。

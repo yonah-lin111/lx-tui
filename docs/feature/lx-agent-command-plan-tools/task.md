@@ -297,6 +297,11 @@
     永远退不出去）。
   - 底边框 hints 只写 `↑↓ select  ^d stop  tabs ←→  esc`：常驻位置只放高频键，
     宁可少写也不被截半。
+  - **高度固定**（`1 tab 行 + LIST_MAX(5)`），不随条目数变化：0 条与 5 条一样高。
+    否则打开面板会让上方消息列表被挤动一下再弹回来，空态也会吊在面板顶上一行。
+  - **未绑定会话时拒绝打开**（`open_task_page` 在 `session_id.is_none()` 时返回
+    `false`）：没有会话就没有可列的进程、也发不出有效的 `ListSessionProcesses`，
+    开了只会显示一个永远空着的列表。`↓` 因此是无副作用的空操作。
   - 删掉上一轮为整页接管引入的 `TaskLayout` / `blit` / `task::layout`；
     历史区几何回到 `lay.input` 一处真相。
 

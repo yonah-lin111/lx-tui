@@ -6,6 +6,19 @@
 use super::*;
 use crate::app::state::{ProcessEntry, TaskTab};
 
+/// 已绑定会话的 lx 窗格状态（面板只在有会话时能打开）。
+fn state_with_session(draft: &str) -> (AppState, PaneId) {
+    let mut state = ready_state(draft);
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .session_id = Some("sess-1".into());
+    (state, pane)
+}
+
 fn entry(session_id: u64, command: &str) -> ProcessEntry {
     ProcessEntry {
         session_id,
@@ -50,8 +63,7 @@ fn slash_command_list_no_longer_contains_stop() {
 
 #[test]
 fn opening_the_page_requests_the_process_list() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     assert!(open_task_page(&mut state, pane));
     // 页面骨架先出现，列表由事件层回投（`app/` 不持有进程句柄）。
     assert!(state.pane_anywhere(pane).unwrap().lx.task.is_some());
@@ -68,8 +80,7 @@ fn opening_the_page_requests_the_process_list() {
 #[test]
 fn opening_the_page_keeps_every_other_lx_field() {
     // 这是「不要清理 lx 页」的核心断言：页面只是 Lx 的一个字段。
-    let mut state = ready_state("草稿内容");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("草稿内容");
     {
         let target = state.pane_mut_anywhere(pane).unwrap();
         target.lx.chat.session_id = Some("sess-keep".into());
@@ -90,8 +101,7 @@ fn opening_the_page_keeps_every_other_lx_field() {
 
 #[test]
 fn reopening_the_page_keeps_tab_and_highlight() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     open_with_processes(&mut state, pane);
     {
         let page = state
@@ -113,8 +123,7 @@ fn reopening_the_page_keeps_tab_and_highlight() {
 
 #[test]
 fn closing_the_page_drops_only_the_page() {
-    let mut state = ready_state("草稿");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("草稿");
     open_with_processes(&mut state, pane);
     assert!(close_task_page(&mut state, pane));
     let target = state.pane_anywhere(pane).unwrap();
@@ -126,8 +135,7 @@ fn closing_the_page_drops_only_the_page() {
 
 #[test]
 fn listed_processes_fill_the_page_and_clamp_the_highlight() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     open_with_processes(&mut state, pane);
     assert_eq!(page(&state, pane).processes.len(), 3);
     state
@@ -152,15 +160,13 @@ fn listed_processes_fill_the_page_and_clamp_the_highlight() {
 
 #[test]
 fn listing_into_a_closed_page_is_a_no_op() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     assert!(!on_process_listed(&mut state, pane, processes()));
 }
 
 #[test]
 fn stopping_emits_the_effect_for_the_highlighted_process() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     open_with_processes(&mut state, pane);
     state.effects.clear();
     state
@@ -190,8 +196,7 @@ fn stopping_emits_the_effect_for_the_highlighted_process() {
 
 #[test]
 fn stopping_with_an_empty_list_does_nothing() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     assert!(open_task_page(&mut state, pane));
     assert!(on_process_listed(&mut state, pane, Vec::new()));
     state.effects.clear();
@@ -201,8 +206,7 @@ fn stopping_with_an_empty_list_does_nothing() {
 
 #[test]
 fn agents_tab_has_nothing_to_stop() {
-    let mut state = ready_state("x");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("x");
     open_with_processes(&mut state, pane);
     state
         .pane_mut_anywhere(pane)
@@ -220,8 +224,7 @@ fn agents_tab_has_nothing_to_stop() {
 #[test]
 fn down_arrow_on_an_empty_draft_opens_the_page() {
     // opencode 口径：↓ 在历史不接管时向**下层派发**——空草稿 + 光标在末尾即换页。
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
     assert!(
         state.pane_anywhere(pane).unwrap().lx.task.is_some(),
@@ -232,8 +235,7 @@ fn down_arrow_on_an_empty_draft_opens_the_page() {
 #[test]
 fn down_arrow_with_a_draft_still_moves_the_cursor() {
     // 有草稿时 ↓ 仍是光标移动：不能因为新增入口就让正在写的内容突然换页。
-    let mut state = ready_state("写点东西");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("写点东西");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
     assert!(state.pane_anywhere(pane).unwrap().lx.task.is_none());
 }
@@ -241,8 +243,7 @@ fn down_arrow_with_a_draft_still_moves_the_cursor() {
 #[test]
 fn page_keys_do_not_leak_into_the_draft() {
     // 页面整页接管按键：字符不会被写进草稿。
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     let before = state.pane_anywhere(pane).unwrap().lx.input.clone();
     for key in [
@@ -266,8 +267,7 @@ fn page_keys_do_not_leak_into_the_draft() {
 #[test]
 fn panel_navigation_moves_the_highlight_and_cycles_tabs() {
     // `↑`/`↓` 移列表高亮；`←/→` 换 tab。
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
     assert_eq!(page(&state, pane).window.active, 1, "↓ 移动高亮");
@@ -282,8 +282,7 @@ fn panel_navigation_moves_the_highlight_and_cycles_tabs() {
 #[test]
 fn up_at_the_top_returns_to_the_input_box() {
     // 用户要求：列表顶部（或空列表）按 ↑ 回到输入框 = 关闭面板。
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     assert_eq!(page(&state, pane).window.active, 0, "初始在首项");
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
@@ -295,8 +294,7 @@ fn up_at_the_top_returns_to_the_input_box() {
 
 #[test]
 fn up_on_an_empty_list_returns_to_the_input_box() {
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     assert!(open_task_page(&mut state, pane));
     assert!(on_process_listed(&mut state, pane, Vec::new()));
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Up);
@@ -309,8 +307,7 @@ fn up_on_an_empty_list_returns_to_the_input_box() {
 #[test]
 fn closing_via_up_keeps_the_draft_and_cursor() {
     // 「回到原来的输入框」：草稿与光标必须原样。
-    let mut state = ready_state("hello draft");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("hello draft");
     let before = {
         let lx = &state.pane_anywhere(pane).unwrap().lx;
         (lx.input.clone(), lx.cursor)
@@ -326,8 +323,7 @@ fn closing_via_up_keeps_the_draft_and_cursor() {
 #[test]
 fn page_keys_scroll_the_message_list_without_moving_the_highlight() {
     // `PageUp`/`PageDown` 是留给上方消息列表的辅助键：列表高亮不动，面板也不关。
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     let before = page(&state, pane).window.active;
     for key in [
@@ -349,8 +345,7 @@ fn page_keys_scroll_the_message_list_without_moving_the_highlight() {
 
 #[test]
 fn escape_closes_the_page_and_returns_to_the_lx_page() {
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Escape);
     assert!(state.pane_anywhere(pane).unwrap().lx.task.is_none());
@@ -359,8 +354,7 @@ fn escape_closes_the_page_and_returns_to_the_lx_page() {
 #[test]
 fn delete_key_stops_the_highlighted_process() {
     // `^d` 在 lx 输入里映射为 `Delete`（对齐 opencode 的 `composer.shell.kill`）。
-    let mut state = ready_state("");
-    let pane = focus_pane(&state);
+    let (mut state, pane) = state_with_session("");
     open_with_processes(&mut state, pane);
     state.effects.clear();
     crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Delete);
@@ -375,4 +369,64 @@ fn delete_key_stops_the_highlighted_process() {
         "^d 停止高亮进程：{:?}",
         state.effects
     );
+}
+
+// ===== 无会话时不得打开面板 =====
+
+#[test]
+fn open_task_page_is_refused_without_a_session() {
+    // 未绑定会话的空白草稿：没有可列的进程，也没有对应的进程运行实例。
+    // 开了只会显示一个永远空着的列表，让人误以为"后台什么都没跑"。
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .chat
+            .session_id
+            .is_none(),
+        "前置：该窗格没有会话"
+    );
+    state.effects.clear();
+    assert!(!open_task_page(&mut state, pane), "无会话时拒绝打开");
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_none(),
+        "面板没有被创建"
+    );
+    assert!(
+        state.effects.is_empty(),
+        "也不该发出 ListSessionProcesses：{:?}",
+        state.effects
+    );
+}
+
+#[test]
+fn down_arrow_does_nothing_without_a_session() {
+    // 空草稿 `↓` 是面板入口；无会话时按键应当无声无息，不留下任何状态。
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .unwrap()
+            .lx
+            .chat
+            .session_id
+            .is_none()
+    );
+    crate::app::update::pane::apply_lx_input(&mut state, crate::app::actions::LxInput::Down);
+    assert!(
+        state.pane_anywhere(pane).unwrap().lx.task.is_none(),
+        "无会话时 ↓ 不打开面板"
+    );
+}
+
+#[test]
+fn open_task_page_works_once_a_session_exists() {
+    // 对照：有会话时照常打开（避免上一条测试把功能整个关掉）。
+    let (mut state, pane) = state_with_session("");
+    assert!(open_task_page(&mut state, pane));
+    assert!(state.pane_anywhere(pane).unwrap().lx.task.is_some());
 }

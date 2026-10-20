@@ -120,21 +120,28 @@ fn panel_replaces_only_the_input_box() {
 
 #[test]
 fn panel_sits_where_the_input_box_was() {
-    // 面板占输入框矩形：面板最后一行紧贴底边框上一行，不贴顶。
+    // 面板占输入框矩形：面板**沉底**、紧贴底边框，且占满固定高度（不贴顶）。
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w/web")], 0));
     let lines = render_lines(&lx, 70, 16);
-    let last_entry_row = lines
+    let tab_row = lines
+        .iter()
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    let entry_row = lines
         .iter()
         .position(|line| line.contains("npm run dev"))
         .expect("进程行");
-    // `render_lines` 返回 `height + 1` 行：最后一行是窗格底边框（hints），
-    // 其上一行即面板列表末行。
+    // `render_lines` 返回 `height + 1` 行：最后一行是窗格底边框（hints）。
+    // 面板高度固定 = TAB_ROW + LIST_MAX，因此 tab 行应正好落在该起点上。
     assert_eq!(
-        last_entry_row,
-        lines.len() - 2,
-        "列表最后一行应紧贴底边框上一行：{lines:#?}"
+        tab_row + usize::from(TAB_ROW + LIST_MAX as u16),
+        lines.len() - 1,
+        "面板占满固定高度并紧贴底边框：{lines:#?}"
     );
+    // 条目落在面板内部。
+    assert!(entry_row > tab_row, "条目在 tab 行之下");
+    assert!(entry_row < lines.len() - 1, "条目在底边框之上");
 }
 
 #[test]
@@ -182,26 +189,40 @@ fn model_name_returns_when_the_panel_closes() {
 }
 
 #[test]
-fn panel_height_tracks_entry_count_and_caps_at_list_max() {
-    // 高度 = tab 行 + min(条目数, LIST_MAX)；空态也占一行。
+fn panel_height_is_fixed_regardless_of_entry_count() {
+    // 用户要求：面板高度**固定**。0 条、2 条、9 条都必须一样高，
+    // 否则打开面板时上方消息列表会被挤动一下再弹回来。
+    let expected = TAB_ROW + LIST_MAX as u16;
+    let mut page = page_with(Vec::new(), 0);
+    assert_eq!(height(&page), expected, "空列表也是固定高度");
+
+    for count in [1usize, 2, 5, 9] {
+        let entries: Vec<ProcessEntry> = (1..=count)
+            .map(|i| entry(i as u64, &format!("cmd-{i}"), "/w"))
+            .collect();
+        page = page_with(entries, 0);
+        assert_eq!(height(&page), expected, "{count} 条时高度不变");
+    }
+    // 切 tab 也不改变高度（Agents 恒空）。
+    page.tab = TaskTab::Agents;
+    assert_eq!(height(&page), expected, "Agents tab 高度相同");
+}
+
+#[test]
+fn empty_state_fills_the_fixed_list_area() {
+    // 固定高度下，空态提示落在列表区首行，面板整体仍占满固定行数。
     let mut lx = lx_with_messages();
     lx.task = Some(page_with(Vec::new(), 0));
-    assert_eq!(height(lx.task.as_ref().unwrap()), TAB_ROW + 1, "空态占一行");
-
-    let two: Vec<ProcessEntry> = (1..=2)
-        .map(|i| entry(i, &format!("cmd-{i}"), "/w"))
-        .collect();
-    lx.task = Some(page_with(two, 0));
-    assert_eq!(height(lx.task.as_ref().unwrap()), TAB_ROW + 2);
-
-    let many: Vec<ProcessEntry> = (1..=9)
-        .map(|i| entry(i, &format!("cmd-{i}"), "/w"))
-        .collect();
-    lx.task = Some(page_with(many, 0));
+    let lines = render_lines(&lx, 70, 20);
+    let tab_row = lines
+        .iter()
+        .position(|line| line.contains(TaskTab::Processes.label()))
+        .expect("tab 行");
+    // 面板共 TAB_ROW + LIST_MAX 行，末行紧贴底边框上一行。
     assert_eq!(
-        height(lx.task.as_ref().unwrap()),
-        TAB_ROW + LIST_MAX as u16,
-        "条目更多时封顶 LIST_MAX"
+        tab_row + usize::from(TAB_ROW + LIST_MAX as u16),
+        lines.len() - 1,
+        "面板占满固定行数：{lines:#?}"
     );
 }
 

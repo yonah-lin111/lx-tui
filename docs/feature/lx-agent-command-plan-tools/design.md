@@ -547,8 +547,10 @@ Lx {
 
 面板不是独立页面，也**不整页接管**。它是「占输入框那个矩形」的组件：
 
-- `lx.rs::layout` 在算输入框高度时分支：`lx.task` 有值时用 `task::height(page)`
-  （`1 tab 行 + min(条目数, LIST_MAX)`，`LIST_MAX = 5` 对齐 opencode `maxHeight={5}`）。
+- `lx.rs::layout` 在算输入框高度时分支：`lx.task` 有值时用 `task::height(page)`，
+  恒为 `1 tab 行 + LIST_MAX`（`LIST_MAX = 5`，对齐 opencode `maxHeight={5}`）。
+  **高度固定，不随条目数变化**：0 条与 5 条时面板一样高。否则打开面板会让上方
+  消息列表被挤动一下再弹回来，空态也会孤零零吊在面板顶上。
 - `build_chat` 在同一个 `lay.input` 矩形里，画输入框还是画面板，二选一。
 - 其余一切照旧：历史区、置顶行、滚动条、聊天栏全部走原本路径。
 
@@ -575,6 +577,12 @@ Lx {
 - 列表：`❯ 命令 · cwd · running Ns`。命令列**定宽**、cwd 从固定偏移起，各行 cwd 左缘
   对齐成列；窄窗格先丢 cwd（识别进程靠命令），再硬切命令，时长始终可见。
 - `Agents` tab 是**预留位**：列表恒空并显示 `no subagents yet`，后续在此显示 subagent 内容。
+
+**未绑定会话时不允许打开面板。** 面板列的是「本会话的后台进程」，而进程运行实例挂在
+会话上（`ChatStreams::runtimes`）。空白草稿既没有可列的进程，也发不出有效的
+`ListSessionProcesses`——开了只会显示一个永远空着的列表，让人误以为"后台什么都没跑"。
+`open_task_page` 在 `lx.chat.session_id.is_none()` 时直接返回 `false`，不创建面板、
+也不发效应，`↓` 因此是无副作用的空操作。
 
 ### 14.4 键位（对齐 opencode `composer.*`）
 

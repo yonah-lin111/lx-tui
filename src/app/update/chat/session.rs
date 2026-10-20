@@ -95,11 +95,21 @@ pub fn open_history(state: &mut AppState, pane: PaneId) -> bool {
 /// 与 `/resume` 同款数据流：`app/` 不持有进程句柄，先建页面骨架、再发效应。
 /// 页面挂在 `Lx::task` 上而非浮层：`pane.lx` 的会话、消息、草稿、滚动全部原样
 /// 保留，`Esc` 返回即回到离开时的 lx 页——打开它不会清理任何 lx 页状态。
+/// 打开后台任务面板（`↓` 落空时进入）；返回是否打开。
+///
+/// **没有绑定会话时拒绝打开**：面板列的是「本会话的后台进程」，而进程运行实例挂在
+/// 会话上（`ChatStreams::runtimes`）。未绑定会话的空白草稿既没有可列的进程，也
+/// 发不出有效的 `ListSessionProcesses`——开了只会显示一个永远空着的列表，
+/// 让人误以为"后台什么都没跑"。此时直接返回 false，按键不产生任何副作用。
 pub fn open_task_page(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    // 已在页面上：再次进入只刷新列表，不重置 tab 与高亮。
+    // 未绑定会话：不打开、不发效应。
+    if target.lx.chat.session_id.is_none() {
+        return false;
+    }
+    // 已在面板上：再次进入只刷新列表，不重置 tab 与高亮。
     if target.lx.task.is_none() {
         target.lx.task = Some(crate::app::state::TaskPage::default());
     }
