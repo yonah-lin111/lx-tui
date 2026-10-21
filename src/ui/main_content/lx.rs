@@ -33,8 +33,8 @@ pub(crate) mod task;
 
 use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
-    LxChatHit, chat_hit, code_copy_hits, history_rows, history_scrollbar, history_view,
-    sticky_prompt_jump,
+    LxChatHit, card_body_at, chat_hit, chat_hover, code_copy_hits, history_rows, history_scrollbar,
+    history_view, sticky_prompt_jump,
 };
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 

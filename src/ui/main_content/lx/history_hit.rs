@@ -6,7 +6,7 @@
 
 use ratatui::layout::Rect;
 
-use crate::app::state::Lx;
+use crate::app::state::{ChatHover, Lx};
 use crate::ui::widgets::scrollbar;
 
 use super::chat_bar;
@@ -26,12 +26,12 @@ pub enum LxChatHit {
     JumpBottom,
     /// 点击代码块头部的复制按钮；`text` 为该块正文。
     CodeCopy(String),
-    /// 点击进程卡片的 `[open]` 行：打开后台任务面板并把高亮定位到该进程。
+    /// 点击进程卡片的 `open` 行：打开后台任务面板并把高亮定位到该进程。
     ///
     /// `None` 表示卡片没有可定位的进程（理论上不会出现：文件工具与计划卡片不登记
     /// 该命中区），此时只打开面板、高亮落在列表首项。
     ToolOpen(Option<u64>),
-    /// 点击文件差异卡片的标题行：切换整张卡片的展开/收起。
+    /// 点击文件差异卡片末尾的动作行：切换整张卡片的展开/收起。
     ///
     /// 与 [`Self::ToolOpen`] 是**两种不同动作**，不能靠 `session_id` 是否为空猜测。
     ToolToggle { message_id: String, call_id: String },
@@ -136,7 +136,7 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
             return Some(LxChatHit::CodeCopy(button.body));
         }
     }
-    // 工具卡片的可点击行：进程 `[open]` 打开任务面板，文件标题切换展开。
+    // 工具卡片的可点击行：进程 `open` 打开任务面板，文件卡片末尾动作行切换展开。
     if let Some(hit) = tool_hit_at(&view, lx, column, row) {
         return Some(match hit.kind {
             history::ToolHitKind::OpenTask { session_id } => LxChatHit::ToolOpen(session_id),
@@ -147,6 +147,84 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
         });
     }
     None
+}
+
+/// 鼠标下的可交互块（工具卡片 / 思考块）的整块屏幕矩形。
+///
+/// 悬停高亮与「点展开正文折叠」都从这一个入口取几何：命中区与渲染共用
+/// [`history::layout`]，滚动一变两边一起变。
+pub fn card_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<history::CardHit> {
+    if !chat_geometry_is_live(lx) {
+        return None;
+    }
+    let view = history_view(area, lx)?;
+    if !view.body.contains((column, row).into()) {
+        return None;
+    }
+    history::layout(view.body, lx)
+        .cards
+        .into_iter()
+        .find_map(|hit| {
+            let card = screen_rect(&view, hit.card)?;
+            card.contains((column, row).into()).then_some(hit)
+        })
+}
+
+/// 指针落在哪张卡片上（悬停判据）；与 [`card_at`] 同一份几何。
+pub fn chat_hover(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<ChatHover> {
+    card_at(area, lx, column, row).map(|hit| hover_of(&hit.kind))
+}
+
+/// 指针是否落在**已展开卡片的正文**上：按下时记录目标，松开未拖动即折叠。
+pub fn card_body_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<ChatHover> {
+    let hit = card_at(area, lx, column, row)?;
+    let view = history_view(area, lx)?;
+    let body = screen_rect(&view, hit.body)?;
+    body.contains((column, row).into())
+        .then(|| hover_of(&hit.kind))
+}
+
+/// 命中块 → 状态层悬停标识。
+fn hover_of(kind: &history::CardKind) -> ChatHover {
+    match kind {
+        history::CardKind::Tool {
+            message_id,
+            call_id,
+            ..
+        } => ChatHover::Tool {
+            message_id: message_id.clone(),
+            call_id: call_id.clone(),
+        },
+        history::CardKind::Thinking {
+            message_index,
+            step_index,
+            ..
+        } => ChatHover::Thinking {
+            message_index: *message_index,
+            step_index: *step_index,
+        },
+    }
+}
+
+/// 内容行矩形 → 屏幕矩形（按滚动窗口裁剪）；完全在视口上方时为 None。
+fn screen_rect(view: &history::HistoryView, rect: Rect) -> Option<Rect> {
+    if rect.width == 0 || rect.height == 0 {
+        return None;
+    }
+    let offset = usize::from(rect.y.saturating_sub(view.body.y));
+    let skip = view.scroll.saturating_sub(offset);
+    if skip >= usize::from(rect.height) {
+        return None;
+    }
+    let y = view
+        .body
+        .y
+        .saturating_add(u16::try_from(offset.saturating_sub(view.scroll)).unwrap_or(u16::MAX));
+    let height = rect
+        .height
+        .saturating_sub(u16::try_from(skip).unwrap_or(u16::MAX));
+    let bottom = y.saturating_add(height).min(view.body.bottom());
+    (bottom > y).then(|| Rect::new(view.body.x, y, view.body.width, bottom - y))
 }
 
 /// 包装卡片标题行命中：按 body + 滚动窗口把内容行换算成屏幕坐标。

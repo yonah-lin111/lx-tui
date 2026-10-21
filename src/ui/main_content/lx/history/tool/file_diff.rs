@@ -46,22 +46,30 @@ pub(super) fn has_diff(call: &ToolCallView) -> bool {
         .is_some_and(|view| !view.is_empty() && view.files.iter().any(|file| file.diff.is_some()))
 }
 
-/// 卡片占用的渲染行数（标题行 + 文件详情）。
+/// 卡片占用的渲染行数（标题行 + 文件详情 + 末尾动作行）。
 pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
     if width == 0 {
         return 0;
     }
     match call.file_view().filter(|view| !view.is_empty()) {
-        Some(view) => title_rows() + layout(view, width, expanded).len(),
+        Some(view) => title_rows() + layout(view, width, expanded, false).len(),
         None => title_rows() + 1,
     }
 }
 
-/// 标题行在卡片内的偏移（0 = 标题行）：点击它切换整张卡片的展开状态。
+/// 末尾动作行（展开 / 收起入口）在卡片内的行偏移；没有可展开正文时返回 None。
 ///
-/// 只有正文保留聊天选区行为；这里只登记标题一行。
-pub(super) fn toggle_offset(call: &ToolCallView) -> Option<usize> {
-    has_diff(call).then_some(0)
+/// 与进程卡片的 `open` 是两种不同的命中动作：这一行切换整张文件卡片的展开状态，
+/// 绝不打开后台任务面板（见 `history::ToolHitKind`）。动作行**常驻**——即使预览
+/// 没有省略也画 `Show full diff`，用户不必先判断「有没有被截断」才知道能不能点。
+pub(super) fn action_offset(call: &ToolCallView, width: u16, expanded: bool) -> Option<usize> {
+    let view = call.file_view().filter(|view| !view.is_empty())?;
+    if !has_diff(call) {
+        return None;
+    }
+    // 动作行恒为最后一行：几何直接取同一份 `layout`，绝不另算一遍。
+    let rows = layout(view, width, expanded, false).len();
+    Some(title_rows() + rows.saturating_sub(1))
 }
 
 /// 绘制文件差异卡片；推进行数必须与 [`rows`] 严格相等。
@@ -75,6 +83,7 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: bool,
     animating: bool,
+    hovered: bool,
 ) {
     if rect.width == 0 {
         return;
@@ -91,7 +100,7 @@ pub(super) fn draw(
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    for row in layout(view, rect.width, expanded) {
+    for row in layout(view, rect.width, expanded, hovered) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             put_segments(grid, rect.x, y, rect.width, &row);
         }
@@ -100,7 +109,16 @@ pub(super) fn draw(
 }
 
 /// 全部物理行（标题行除外）；[`rows`] 与 [`draw`] 共用。
-fn layout(view: &FileDiffDetailView, width: u16, expanded: bool) -> Vec<Vec<Segment>> {
+///
+/// 末尾**恒有一行动作行**（`… more changes` / `Show full diff` / `collapse`）：
+/// 它是展开与收起的唯一入口，标题行不再可点。`hovered` 只影响动作行的颜色，
+/// 不影响行数——因此 [`rows`] 传什么都一样。
+fn layout(
+    view: &FileDiffDetailView,
+    width: u16,
+    expanded: bool,
+    hovered: bool,
+) -> Vec<Vec<Segment>> {
     let mut rows = Vec::new();
     let last_index = view.files.len().saturating_sub(1);
     for (index, file) in view.files.iter().enumerate() {
@@ -115,7 +133,44 @@ fn layout(view: &FileDiffDetailView, width: u16, expanded: bool) -> Vec<Vec<Segm
             style::agent_warn(),
         ));
     }
+    // 动作行只在真的存在可展开正文时出现：旧记录没有 `diff` 字段，画一个
+    // 点了没反应的入口只会骗人（与 [`action_offset`] 同一判据）。
+    if expandable(view) {
+        let action = if expanded {
+            text::agent::FILE_DIFF_COLLAPSE
+        } else if preview_is_omitted(view, width) {
+            text::agent::FILE_DIFF_OMITTED
+        } else {
+            text::agent::FILE_DIFF_SHOW_ALL
+        };
+        rows.push(vec![Segment::new(
+            format!("{}{action}", continuation_prefix()),
+            style::chat_action_label(hovered),
+        )]);
+    }
     rows
+}
+
+/// 该详情里是否有任何可展开的差异正文（与 [`has_diff`] 同口径）。
+fn expandable(view: &FileDiffDetailView) -> bool {
+    view.files.iter().any(|file| file.diff.is_some())
+}
+
+/// 折叠预览是否被截断（决定动作行用哪一种文案）。
+///
+/// 与 [`preview_rows`] 同一口径：按每文件 3 个物理行的额度重算一遍，只有真的还有
+/// 内容没画出来才算省略。计算量是 O(hunks)，只在布局时做，不进热路径。
+fn preview_is_omitted(view: &FileDiffDetailView, width: u16) -> bool {
+    let last_index = view.files.len().saturating_sub(1);
+    view.files.iter().enumerate().any(|(index, file)| {
+        let Some(diff) = file.diff.as_ref() else {
+            return false;
+        };
+        let prefix = body_prefix(width, index == last_index);
+        let available = usize::from(width).saturating_sub(prefix.width());
+        let gutter = gutter_width(diff.hunks());
+        preview_omitted(diff.hunks(), gutter, available.max(1))
+    })
 }
 
 /// 文件头：`  ├─ path → to (+N -N)`；最后一个文件收口为 `  └─ `。
@@ -182,10 +237,12 @@ fn file_header(file: &FileChangeView, last: bool, width: u16) -> Vec<Segment> {
     segments
 }
 
-/// 文件正文行（预览或完整展开）。
-fn file_body(file: &FileChangeView, width: u16, expanded: bool, last: bool) -> Vec<Vec<Segment>> {
-    // 极窄时整个树形前缀让位，保证变更符号还看得见。
-    let prefix = if usize::from(width) > TREE_COLS + 3 {
+/// 文件正文行的树形前缀：极窄时整个前缀让位，保证变更符号还看得见。
+///
+/// [`file_body`] 与 [`preview_is_omitted`] 共用同一份口径，否则「动作行文案」与
+/// 「预览实际画了几行」会各自算各自的，省略提示时有时无。
+fn body_prefix(width: u16, last: bool) -> String {
+    if usize::from(width) > TREE_COLS + 3 {
         if last {
             continuation_prefix()
         } else {
@@ -193,7 +250,12 @@ fn file_body(file: &FileChangeView, width: u16, expanded: bool, last: bool) -> V
         }
     } else {
         String::new()
-    };
+    }
+}
+
+/// 文件正文行（预览或完整展开）。
+fn file_body(file: &FileChangeView, width: u16, expanded: bool, last: bool) -> Vec<Vec<Segment>> {
+    let prefix = body_prefix(width, last);
     let available = usize::from(width).saturating_sub(prefix.width());
     let Some(diff) = file.diff.as_ref() else {
         return Vec::new();
@@ -216,7 +278,7 @@ fn file_body(file: &FileChangeView, width: u16, expanded: bool, last: bool) -> V
             let mut rows = if expanded {
                 expanded_body(hunks, gutter, available, &prefix, diff)
             } else {
-                preview_body(hunks, gutter, available, &prefix)
+                preview_rows(hunks, gutter, available, &prefix)
             };
             if expanded && diff.is_truncated() {
                 rows.push(prefixed(
@@ -238,7 +300,10 @@ fn file_body(file: &FileChangeView, width: u16, expanded: bool, last: bool) -> V
 }
 
 /// 折叠预览：只取 Added/Removed 行，最多 [`PREVIEW_LINES`] 个物理行。
-fn preview_body(
+///
+/// 省略提示**不在这里**：它已经是卡片末尾的常驻动作行（见 [`layout`]），这里只
+/// 负责画预览，由 [`preview_omitted`] 决定动作行用哪一种文案。
+fn preview_rows(
     hunks: &[DiffHunkView],
     gutter: usize,
     available: usize,
@@ -246,37 +311,49 @@ fn preview_body(
 ) -> Vec<Vec<Segment>> {
     let mut rows = Vec::new();
     let mut budget = PREVIEW_LINES;
-    let mut omitted = false;
     // 只看增删行：上下文不占预览额度。
     let mut changes = hunks
         .iter()
         .flat_map(|hunk| hunk.lines.iter())
         .filter(|line| line.kind != DiffLineKind::Context);
-    while let Some(line) = changes.next() {
+    for line in changes.by_ref() {
         let physical = render_line(line, gutter, available, prefix);
         if physical.len() > budget {
             // 这一行自己就写不完：剩下的内容同样属于「省略」。
             rows.extend(physical.into_iter().take(budget));
-            omitted = true;
             break;
         }
         budget -= physical.len();
         rows.extend(physical);
         if budget == 0 {
-            // 正好写满：还有没有后续变更决定是否出省略提示。
-            omitted = changes.next().is_some();
             break;
         }
     }
-    if omitted {
-        // 提示行单独计行，不占 3 行正文额度。
-        rows.push(prefixed(
-            prefix,
-            text::agent::FILE_DIFF_OMITTED,
-            style::agent_step_detail(),
-        ));
-    }
     rows
+}
+
+/// 折叠预览是否截断了内容（决定动作行文案：`… more changes` 还是 `Show full diff`）。
+///
+/// 统计的是**物理行**总数而不是变更条数：一行超长被折成 4 行时，前 3 行就吃满了
+/// 额度，第 4 行同样是省略。
+fn preview_omitted(hunks: &[DiffHunkView], gutter: usize, available: usize) -> bool {
+    let mut budget = PREVIEW_LINES;
+    let mut changes = hunks
+        .iter()
+        .flat_map(|hunk| hunk.lines.iter())
+        .filter(|line| line.kind != DiffLineKind::Context)
+        .peekable();
+    while let Some(line) = changes.next() {
+        let physical = render_line(line, gutter, available, "").len();
+        if physical > budget {
+            return true;
+        }
+        budget -= physical;
+        if budget == 0 {
+            return changes.peek().is_some();
+        }
+    }
+    false
 }
 
 /// 完整展开：全部已保存 hunks、hunk 间 `⋮` 与 EOF 元信息。

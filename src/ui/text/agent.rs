@@ -183,18 +183,22 @@ pub const VERB_STOP_COMMAND: &str = "Stop command";
 /// `update_plan` 卡片动词。
 pub const VERB_UPDATE_PLAN: &str = "Plan";
 
-/// 详情操作按钮（ASCII，窄宽度也画得下）。
+/// 历史内**行内动作文字**（常态次要色、悬停默认前景，见 `style::chat_action_label`）。
 ///
-/// `[details]` 已从卡片右上角移除：展开入口改到树体**末尾**（`… +N more lines`），
-/// 收起入口是同一条末尾行（`[collapse]`）。用户要求「more lines 调到底部，点击展开，
-/// 展开后点尾部折叠文字收起」。
-pub const DETAILS_CLOSE: &str = "[collapse]";
+/// 文件差异卡片的展开/收起入口：折叠态是树体末尾的常驻一行（有省略时 `… more changes`，
+/// 没有省略时 `Show full diff`），展开态同一行变成 `collapse`。点击展开、点正文或
+/// 这一行收起；正文保留聊天选区，**拖拽选中不折叠**。
+pub const FILE_DIFF_OMITTED: &str = "… more changes";
+/// 折叠态没有省略时仍可展开：入口文案换成明确的动作。
+pub const FILE_DIFF_SHOW_ALL: &str = "Show full diff";
+/// 展开态树体末尾的收起入口。
+pub const FILE_DIFF_COLLAPSE: &str = "collapse";
 
-/// 进程卡片末行的**后台任务面板入口**：`[open]`（灰色次要信息色，点击打开面板）。
+/// 进程卡片末行的**后台任务面板入口**：`open`（点击打开面板）。
 ///
-/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`[open]`
-/// 是这条命令的唯一入口，独占树体末行。
-pub const TASK_OPEN_LABEL: &str = "[open]";
+/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`open`
+/// 是这条命令的唯一入口，独占树体末行。进程已经到终态时这一行整行不画。
+pub const TASK_OPEN_LABEL: &str = "open";
 
 /// 进程状态词（文字，不只靠颜色）。
 pub const STATE_STARTING: &str = "Starting";
@@ -230,8 +234,6 @@ pub const FILE_DIFF_NO_CHANGES: &str = "No content changes";
 pub const FILE_DIFF_TRUNCATED: &str = "Diff truncated";
 /// 差异正文来自超限输入的线性简化脚本（可能比最小编辑脚本多）。
 pub const FILE_DIFF_SIMPLIFIED: &str = "Diff simplified";
-/// 折叠预览还有未显示的已保存差异行。
-pub const FILE_DIFF_OMITTED: &str = "… more changes";
 /// hunk 之间的分隔（不直接铺 `@@`）。
 pub const FILE_DIFF_HUNK_SEP: &str = "⋮";
 /// 末行无换行的元信息行（不计入增删）。

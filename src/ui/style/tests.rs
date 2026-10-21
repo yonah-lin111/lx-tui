@@ -173,21 +173,17 @@ fn alive_process_yellow_is_distinct_from_every_other_step_color() {
         assert_ne!(Some(orange), other, "存活深黄不得与{label}同色");
     }
 
-    // 与金黄参数**同为暖色系**，必须区分得开（用户要求"橙黄一点"）：
-    // 运行态橙黄 208（#ff8700）比参数金 220（#ffd700）更橙，色差 27.9。
-    assert_ne!(
-        Some(orange),
+    // 工具参数已回归终端默认前景（用户要求「参数字体颜色改用默认字体色」）：
+    // 不再有第二个暖色槽位与存活橙黄抢注意力。
+    assert_eq!(
         chat_tool_param().fg,
-        "存活深黄不得与参数金黄同槽位"
+        None,
+        "参数不上色，存活橙黄({index})是唯一的暖色结构色"
     );
-    let Color::Indexed(gold) = chat_tool_param().fg.expect("参数金有前景") else {
-        panic!("参数金必须取槽位");
-    };
-    assert!(gold > index, "参数金槽位({gold})应比存活深黄({index})更亮");
 }
 
 /// 工具步骤的配色规则：**运行中橙黄 `Indexed 208`、完成才翡翠绿 `Indexed 42`**，
-/// 可变参数金黄 220，三者都不压暗、不与正文默认前景/边框青撞色。
+/// 不再附带任何行内参数色（参数用终端默认前景），三者都不压暗、不与正文默认前景/边框青撞色。
 ///
 /// 用户要求「所有正在运行中的 tool 的方块和 title 统一为黄色，完成才显示绿色」：
 /// 因此不再按工具种类分色（进程卡片 / 文件工具 / 计划卡片共用同一档），
@@ -197,7 +193,7 @@ fn alive_process_yellow_is_distinct_from_every_other_step_color() {
 fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
     let running_amber = Color::Indexed(208);
     let step_green = Color::Indexed(42);
-    let palette = [208u8, 42, 220];
+    let palette = [208u8, 42];
     let chrome = [None, Some(Color::Cyan)];
 
     for (label, style) in [
@@ -207,7 +203,6 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
         ("文案-已完成", chat_step_label_done()),
         ("动词-运行中", chat_tool_verb_running()),
         ("动词-已完成", chat_tool_verb()),
-        ("工具参数", chat_tool_param()),
     ] {
         let Some(Color::Indexed(index)) = style.fg else {
             panic!("{label} 必须取品牌槽位，实际 {:?}", style.fg);
@@ -252,18 +247,13 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
         "完成方块不加粗，与运行中区分"
     );
 
-    // 可变参数沿用金黄 220，但**不加下划线**（连续工具行里下划线成片，
-    // 会盖过结构色；靠金黄本身区分即可）。
-    assert_eq!(
-        chat_tool_param().fg,
-        Some(Color::Indexed(220)),
-        "可变参数沿用既有金黄 CHAT_GOLD"
-    );
+    // 可变参数用终端默认前景：不再有第三个色相档与运行/完成两档抢注意力。
+    assert_eq!(chat_tool_param().fg, None, "工具参数用默认字体色");
     assert!(
         !chat_tool_param()
             .add_modifier
             .contains(Modifier::UNDERLINED),
-        "工具参数不再加下划线"
+        "工具参数不加下划线"
     );
     // 只读元信息退回 dim：不占用第三个色相档。
     assert_eq!(chat_tool_range(), muted(), "行范围退回 dim");
@@ -274,18 +264,14 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
     );
 }
 
-/// 工具行可变参数：金黄 `Indexed 220`、**不加下划线**，且不带任何别的修饰符。
+/// 工具行可变参数：**终端默认前景**，且不带任何修饰符。
 ///
-/// 去下划线是刻意的设计决策——连续多个工具调用时下划线会连成一片横线，盖过翡翠绿
-/// 结构色。这条断言把所有修饰符都钉死为「空」，防止有人「顺手」把下划线加回来。
+/// 用户要求「所有工具的参数字体颜色从黄色改为默认字体色」：参数不再是独立色域，
+/// 工具行的颜色信息只由方块 / 动词承担。修饰符钉死为「空」，防止有人把下划线加回来。
 #[test]
-fn chat_tool_param_is_gold_without_modifiers() {
+fn chat_tool_param_uses_default_foreground_without_modifiers() {
     let style = chat_tool_param();
-    assert_eq!(
-        style.fg,
-        Some(Color::Indexed(220)),
-        "可变参数金黄 Indexed 220"
-    );
+    assert_eq!(style.fg, None, "参数用默认字体色");
     assert_eq!(
         style.add_modifier,
         Modifier::empty(),
@@ -465,7 +451,7 @@ fn editor_palette_stays_ansi_and_independent_from_reading() {
 ///
 /// 这是「工具/思考/步骤方块要区别于 markdown 高亮」的机器可验形式：GitHub Dark
 /// 的代码 token 是珊瑚红 / 浅蓝 / 蓝 / 紫 / 灰（全部 `Color::Rgb`），步骤结构色是
-/// 单一 `Indexed 42` + 金黄 220，两者永不相交。
+/// 单一 `Indexed 42`（+ 运行橙 208），两者永不相交。
 #[test]
 fn markdown_palette_is_disjoint_from_chat_steps() {
     let step_colors = [
@@ -474,7 +460,6 @@ fn markdown_palette_is_disjoint_from_chat_steps() {
         chat_step_label_running().fg,
         chat_step_label_done().fg,
         chat_tool_verb().fg,
-        chat_tool_param().fg,
     ];
     assert!(
         step_colors
@@ -535,18 +520,33 @@ fn step_roles_use_distinct_colors() {
         "正文方块完成去加粗"
     );
 
-    // 思考：品红 218；工具：翡翠绿 42。
+    // 思考：常态压暗（次要信息色），悬停才恢复品红 218；工具：翡翠绿 42。
     assert_eq!(
-        chat_step_mark_running_thinking().fg,
-        Some(Color::Indexed(218)),
-        "思考方块用品红"
+        chat_step_mark_running_thinking(false).fg,
+        muted().fg,
+        "思考方块常态压暗"
     );
     assert_eq!(
-        chat_step_label_running_thinking().fg,
+        chat_step_mark_running_thinking(true).fg,
+        Some(Color::Indexed(218)),
+        "悬停恢复品红"
+    );
+    assert_eq!(
+        chat_step_label_running_thinking(false).fg,
+        muted().fg,
+        "思考标题常态压暗"
+    );
+    assert_eq!(
+        chat_step_label_running_thinking(true).fg,
+        Some(Color::Indexed(218))
+    );
+    assert_eq!(chat_step_label_done_thinking(false).fg, muted().fg);
+    assert_eq!(
+        chat_step_label_done_thinking(true).fg,
         Some(Color::Indexed(218))
     );
     assert_eq!(
-        chat_step_label_done_thinking().fg,
+        chat_step_mark_done_thinking(true).fg,
         Some(Color::Indexed(218))
     );
     assert_eq!(
@@ -556,12 +556,22 @@ fn step_roles_use_distinct_colors() {
     );
 
     // 两个有色角色互不同色，且都不与正文的默认前景重合。
-    let thinking = chat_step_mark_done_thinking().fg;
+    let thinking = chat_step_mark_done_thinking(true).fg;
     let tool = chat_step_mark_done().fg;
     let body = chat_step_mark_done_body().fg;
     assert_ne!(thinking, tool, "思考与工具的方块必须不同色");
     assert_ne!(body, thinking, "正文与思考的方块必须不同色");
     assert_ne!(body, tool, "正文与工具的方块必须不同色");
+
+    // 行内动作文字（`open` / `… more changes` / `collapse`）：常态次要色，悬停默认前景。
+    assert_eq!(
+        chat_action_label(false).fg,
+        muted().fg,
+        "动作文字常态用左下角上下文统计色"
+    );
+    assert_eq!(chat_action_label(true).fg, None, "悬停升为默认前景");
+    // 工具参数不再上黄色：整行走终端默认前景。
+    assert_eq!(chat_tool_param().fg, None, "工具参数用默认字体色");
 }
 
 /// loading 的扫描高亮色必须按 `Native Agent` 标签的 4 档渐变循环、且加粗。

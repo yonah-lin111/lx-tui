@@ -9,7 +9,7 @@
 //!
 //! - **第 1 行只回答「哪个工具」**：方块（运行中 `■`/`□` 两帧呼吸、终态静态）+
 //!   固定动词。完成态没有 `done` 之类尾巴——方块静止本身就是「做完了」。
-//! - **第 2 行回答「对什么做了什么 / 出了什么事」**：参数（路径金黄）、
+//! - **第 2 行回答「对什么做了什么 / 出了什么事」**：参数（默认前景色）、
 //!   次要计数（行范围 dim、命中数 dim、增删绿红、截断提示黄）。失败时**只放错误
 //!   文案**（路径等信息 `failure_text` 已带），不再铺任何参数；中断同理；
 //!   没有参数可展示的瞬间（`receiving input` / `pending` / `running` / `cancelled`）
@@ -52,9 +52,10 @@ pub(super) const TREE_COLS: usize = 5;
 
 /// 工具步骤占用的渲染行数。
 ///
-/// - 文件工具：**恒为 2 行**（标题行 + 详情行）；带差异正文时为标题 + 文件头 /
-///   预览（折叠最多 3 个正文物理行，见 [`file_diff`]）；
-/// - `exec_command` / `write_stdin`：标题 + 命令 + `[open]`；
+/// - 文件工具：标题 + 文件头 / 预览（折叠最多 3 个正文物理行，见 [`file_diff`]）
+///   + **常驻的末尾动作行**（`… more changes` / `Show full diff` / `collapse`）；
+/// - `exec_command` / `write_stdin`：标题 + 命令；进程仍存活时多一行 `open`，
+///   到终态就只剩两行（不再给已结束的任务留入口）；
 /// - `update_plan`：标题 + 步骤（长步骤换行）+ 解释行。
 ///
 /// `history::layout` 与 `history::render` 必须共用本函数：工具行一旦换行，滚动条、
@@ -127,10 +128,12 @@ pub(super) fn draw(
         loading_frame,
         expanded,
         true,
+        false,
     );
 }
 
-/// 同上，但显式给出动画推进状态（渲染层按 `lx.chat.status.streaming` 传入）。
+/// 同上，但显式给出动画推进状态（渲染层按 `lx.chat.status.streaming` 传入）
+/// 与整卡悬停状态（动作文字随之提亮）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_animated(
     grid: &mut Grid,
@@ -141,6 +144,7 @@ pub(super) fn draw_animated(
     loading_frame: usize,
     expanded: bool,
     animating: bool,
+    hovered: bool,
 ) {
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
@@ -154,6 +158,7 @@ pub(super) fn draw_animated(
                 loading_frame,
                 expanded,
                 animating,
+                hovered,
             );
             return;
         }
@@ -179,6 +184,7 @@ pub(super) fn draw_animated(
                 loading_frame,
                 expanded,
                 animating,
+                hovered,
             );
             return;
         }
@@ -205,21 +211,26 @@ pub(super) fn title_rows() -> usize {
     HEADER_ROWS
 }
 
-/// `[open]` 行的卡片内行偏移（0 = 标题行）；没有这一行时返回 None。
+/// `open` 行的卡片内行偏移（0 = 标题行）；进程已到终态时返回 None。
 ///
-/// 进程卡片（`exec_command` / `write_stdin`）把 `[open]` 画在树体最后一行，
-/// 由 `history::layout` 收成**唯一**的可点击命中矩形（点它打开后台任务面板）。
-/// 卡片不再有"展开/收起"语义，因此没有第二个命中区。
+/// 进程卡片（`exec_command` / `write_stdin`）只在**进程还活着**时把 `open` 画在
+/// 树体最后一行，由 `history::layout` 收成唯一可点击的命中矩形（点它打开后台
+/// 任务面板）。任务结束后这一行整行不画，也不再登记命中区。
 pub(super) fn open_offset(call: &ToolCallView) -> Option<usize> {
     command::open_offset(call)
 }
 
-/// 文件差异卡片**标题行**的卡片内偏移；没有可展开差异时返回 None。
+/// 该调用是否有可展开的差异正文（文件卡片专用）。
+pub(super) fn has_expandable(call: &ToolCallView) -> bool {
+    file_diff::has_diff(call)
+}
+
+/// 文件差异卡片**末尾动作行**的卡片内偏移；没有可展开差异时返回 None。
 ///
-/// 与进程 `[open]` 是两种不同的命中动作：标题切换整张文件卡片的展开状态，
-/// 绝不打开后台任务面板（见 `history::ToolHitKind`）。
-pub(super) fn toggle_offset(call: &ToolCallView) -> Option<usize> {
-    file_diff::toggle_offset(call)
+/// 与进程 `open` 是两种不同的命中动作：这一行切换整张文件卡片的展开状态，
+/// 绝不打开后台任务面板（见 `history::ToolHitKind`）。标题行不再可点。
+pub(super) fn action_offset(call: &ToolCallView, width: u16, expanded: bool) -> Option<usize> {
+    file_diff::action_offset(call, width, expanded)
 }
 
 /// 行内一段着色文本。
@@ -287,7 +298,7 @@ fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
     };
     Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool),
+        mark.style(StepKind::Tool, false),
     )
 }
 
@@ -413,7 +424,7 @@ pub(super) fn header_with_mark(
     };
     let lead = paint(Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool),
+        mark.style(StepKind::Tool, false),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

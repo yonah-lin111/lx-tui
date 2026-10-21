@@ -144,8 +144,8 @@
 依赖：步骤 7。
 
 - [x] ToolHit / LxChatHit 明确区分展开文件卡片和打开后台进程，不使用 session_id 是否为空推测动作。
-- [x] 仅注册文件工具标题的展开命中，正文保留选区行为。
-- [x] 标题点击切换整张卡片；再次点击恢复每文件 3 行预览。
+- [x] 仅注册文件卡片末尾动作行的展开命中；正文登记为可折叠区，但拖拽选区优先（有选区就不折叠）。
+- [x] 末尾动作行（`… more changes` / `Show full diff` / `collapse`）切换整张卡片；标题行不可点，展开后点正文（未拖拽）同样折叠。
 - [x] 文件详情加入现有工具选择集合，`^o` 可切换，普通上下方向键继续编辑输入。
 - [x] 复用 toggle_tool_detail、pin_lx_viewport 和既有展开状态，不增加第二套偏移。
 - [x] 保持进程 `[open]` 点击、任务面板和其他浮层优先级。
@@ -206,10 +206,37 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - `cargo test`：全部通过（lib 2839 passed / 0 failed；集成与 doc 测试同样通过）。
 - 新增测试：`chat::tools::diff`（纯差异/边界/预算）、`chat::tools::output`（JSON 形状与裁切）、
   `app::state::lx::chat::file_diff`（兼容解码）、`ui::main_content::lx::history::tool::file_diff`
-  （17 项布局/样式/宽度安全）、`ui::main_content::lx::tests::open_entry`（文件卡片标题命中 vs 正文不可点）、
+  （17 项布局/样式/宽度安全）、`ui::main_content::lx::tests::open_entry`（动作行可点 vs 标题不可点、展开正文是折叠目标）、
   `app::update::chat::tests::process_cards`（文件卡片 `^o` 不误开任务面板）、
   `app::update::chat::tests::viewport_anchor`（展开文件卡片不移动视口）、`chat::context`
   （回放剥离 UI diff 正文）。
 - 行数：`lx.rs` 1050 → 880（命中迁至 `history_hit.rs`），`history/tool.rs` 1015 → 489
   （摘要迁至 `file_summary.rs`）；全部触及文件 ≤1000 行。
 - 人工验收（第 10 节）未勾选，待用户 `cargo run` 确认。
+
+## 12. 交互与配色补充（第二轮）
+
+依赖：步骤 7/8；用户逐项确认后的 11 项决策。
+
+- [x] 工具参数 `chat_tool_param()` 改为终端默认前景（不设 fg、无修饰符）。
+- [x] 文件卡片标题行彻底取消点击；展开入口是末尾**常驻动作行**（`… more changes` / `Show full diff` / `collapse`）。
+- [x] 展开正文可点击折叠：按下同时开始选区，松开无选区范围（未拖动）才折叠；拖拽只复制。
+- [x] 思考块：点击头部切换展开；展开后点正文（未拖拽）折叠。
+- [x] 思考方块与 `Thinking`/`Thought` 文案常态 `muted()`，整块悬停恢复品红 `Indexed 218`。
+- [x] 整卡 hover：标题、正文、动作行任意行悬停都点亮。
+- [x] 后台任务 `[open]` → `open`；进程终态整行不画（卡片只剩两行），`open_offset` 返回 `None`。
+- [x] `open` / 动作行 / `collapse` 常态用左下角上下文统计同款次要色，悬停升为默认前景。
+- [x] 拆出 `app/update/chat/viewport.rs`（滚动/悬停/折叠）与 `ui/main_content/lx/history/sticky.rs`（置顶行）以满足行数上限。
+
+测试：`ui::style::tests`（参数默认前景、思考 hover 两态、动作行两态）、
+`history::tool::file_diff`（常驻动作行、hover 提亮）、`history::tool::tests::background_cards`
+（终态无 `open`）、`lx::tests::open_entry`（动作行命中、正文折叠目标）、
+`app::update::chat::tests::history`（`hover_lx_chat` 按窗格/按块、`collapse_lx_card`）。
+
+当前验证记录（第二轮）：
+
+- `cargo fmt`：已执行。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2844 passed / 0 failed。
+- 行数：`app/update/chat/mod.rs` 1014 → 约 640（拆出 `viewport.rs`），
+  `ui/main_content/lx/history.rs` 1068 → 921（拆出 `sticky.rs`）；全部触及文件 ≤1000 行。

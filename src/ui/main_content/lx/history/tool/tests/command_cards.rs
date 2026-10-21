@@ -295,8 +295,8 @@ fn header_shows_status_inline_and_has_no_corner_details_marker() {
         "状态紧跟动词：{folded}"
     );
     assert!(
-        !folded.contains(crate::ui::text::agent::DETAILS_CLOSE),
-        "折叠态不该出现 [collapse]：{folded}"
+        !folded.contains(text::agent::FILE_DIFF_COLLAPSE),
+        "进程卡片没有展开态，不该出现 collapse：{folded}"
     );
     // 极窄：状态整段丢弃，但方块与动词仍在（不挤掉动词）。
     let (narrow, _) = render(&call, 14, false);
@@ -332,8 +332,9 @@ fn details_marker_text_is_ascii_and_short() {
     // 展开/收起按钮文案为纯 ASCII，窄卡片也不会变成乱码。
     // （省略提示 `… +` 不是 ASCII：它是内容提示，不是按钮文案。）
     for label in [
-        crate::ui::text::agent::EARLIER_OUTPUT_SUFFIX,
-        crate::ui::text::agent::DETAILS_CLOSE,
+        crate::ui::text::agent::TASK_OPEN_LABEL,
+        crate::ui::text::agent::FILE_DIFF_COLLAPSE,
+        crate::ui::text::agent::FILE_DIFF_SHOW_ALL,
     ] {
         assert!(label.is_ascii());
         assert!(!label.is_empty());
@@ -656,37 +657,47 @@ fn finished_card_shows_exit_code_without_elapsed_time() {
 
 #[test]
 fn open_entry_is_dropped_instead_of_truncated_when_narrow() {
-    // `[open]` 整项丢弃（绝不出现 `[ope…`），且行数保持几何口径不变。
+    // `open` 整项丢弃（绝不出现 `ope…`），且行数保持几何口径不变。
     let call = running_command("line\n");
-    // 宽：完整 `[open]`。
+    // 宽：完整 `open`。
     let (wide, _) = render(&call, 40, false);
     assert!(
         wide.contains(text::agent::TASK_OPEN_LABEL),
-        "宽窗格画完整 [open]：{wide}"
+        "宽窗格画完整 open：{wide}"
     );
     // 极窄：整项丢弃，只留收口连接符。
-    for width in [6u16, 8, 9] {
+    // 树体内容列 = 宽 - 5；`open` 4 列，宽 9 起才放得下。
+    for width in [6u16, 8] {
         let (narrow, rows) = render(&call, width, false);
         assert_eq!(rows, 3, "宽 {width}：行数不变");
         assert!(
-            !narrow.contains("[ope"),
-            "宽 {width}：不得画半个 [open]：{narrow}"
+            !narrow.contains("ope"),
+            "宽 {width}：不得画半个 open：{narrow}"
         );
     }
+    let (exact, _) = render(&call, 9, false);
+    assert!(
+        exact.contains(text::agent::TASK_OPEN_LABEL),
+        "宽 9 恰好容纳完整 open：{exact}"
+    );
 }
 
 #[test]
-fn collapse_marker_is_dropped_instead_of_truncated_when_narrow() {
-    let output: String = (0..9).map(|index| format!("o{index}\n")).collect();
-    let call = running_command(&output);
-    let (narrow, _) = render(&call, 6, true);
-    let last = narrow.lines().last().unwrap_or_default();
+fn finished_process_card_has_no_open_entry() {
+    // 用户要求「后台任务已经结束就不要显示 open」：终态卡片整行不画，
+    // 只剩标题 + 命令两行，也不再登记命中区。
+    let mut call = running_command("out\n");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() else {
+        panic!("expected command view");
+    };
+    view.state = ProcessStateView::Exited { code: Some(0) };
+    let (text, rows) = render(&call, 60, false);
+    assert_eq!(rows, 2, "终态两行：{text}");
+    assert!(!text.contains(text::agent::TASK_OPEN_LABEL), "{text}");
     assert!(
-        !last.contains("[colla") || last.contains(text::agent::DETAILS_CLOSE),
-        "收起文案不得被截半：{narrow}"
+        super::super::open_offset(&call).is_none(),
+        "终态不得再登记 open 命中区"
     );
-    // 展开态的行数仍与 rows 一致（丢文案不改几何）。
-    assert_eq!(narrow.lines().count(), rows(&call, 6, true));
 }
 
 // ===== review 回归：计划卡片的行数口径必须与绘制一致 =====

@@ -17,6 +17,7 @@ use crate::ui::text;
 mod process;
 mod session;
 mod view;
+mod viewport;
 
 pub use process::{
     apply_interaction_exit, apply_process_exit, apply_process_output, apply_process_snapshot,
@@ -31,6 +32,11 @@ pub use session::{
     select_task_tab, set_task_output_scroll, stop_selected_process,
 };
 pub(crate) use view::view_message_of;
+pub use viewport::{
+    collapse_lx_card, hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom,
+    jump_lx_history_to_prompt, resolve_lx_sticky_prompt, resolve_lx_viewport_top,
+    resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll,
+};
 
 /// 尝试发送：校验 Native 入口、非空草稿、请求空闲与有效模型后冻结快照并入队效应。
 ///
@@ -750,208 +756,6 @@ pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.toggle_reasoning(message_index, step_index);
-    true
-}
-
-/// 滚动历史视图（正数向下）；`total`/`visible` 为渲染行数与视口行数；返回是否移动。
-///
-/// 状态里的 `history_scroll` 是**顶部行索引**（0 = 最早）；`follow_bottom` 表示
-/// 视口钉在最新一屏（顶部行 = `total - visible`）。
-pub fn scroll_lx_history(
-    state: &mut AppState,
-    pane: PaneId,
-    delta: isize,
-    total: usize,
-    visible: usize,
-) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
-        return false;
-    }
-    let max_top = total.saturating_sub(visible);
-    let current = if target.lx.chat.follow_bottom {
-        max_top
-    } else {
-        target.lx.chat.history_scroll.min(max_top)
-    };
-    let next = (current as isize + delta).clamp(0, max_top as isize) as usize;
-    let moved = next != current || target.lx.chat.follow_bottom;
-    target.lx.chat.history_scroll = next;
-    target.lx.chat.follow_bottom = next >= max_top;
-    moved
-}
-
-/// 直接设置历史视口顶部行偏移（滚动条点击/拖拽）；`total`/`visible` 为渲染行数与视口行数。
-/// 顶部行 == `total - visible` 时视为钉底跟随；返回视口是否移动。
-pub fn set_lx_history_scroll(
-    state: &mut AppState,
-    pane: PaneId,
-    offset: usize,
-    total: usize,
-    visible: usize,
-) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
-        return false;
-    }
-    let max_top = total.saturating_sub(visible);
-    let clamped = offset.min(max_top);
-    let before = target.lx.chat.history_scroll;
-    let was_following = target.lx.chat.follow_bottom;
-    target.lx.chat.history_scroll = clamped;
-    target.lx.chat.follow_bottom = clamped >= max_top;
-    before != clamped || was_following != target.lx.chat.follow_bottom
-}
-
-/// 每轮把各 lx 窗格的「当前视口顶部行」记忆落状态。
-///
-/// 渲染层只读、不写状态（AGENTS：渲染只读），而展开切换需要知道用户正看着哪一行，
-/// 故与 [`resolve_lx_sticky_prompt`] 一样放在事件循环里、`tui.draw` 之前写。
-/// 返回是否有窗格记忆变化。
-pub fn resolve_lx_viewport_top(
-    state: &mut AppState,
-    rects: &[(PaneId, ratatui::layout::Rect)],
-) -> bool {
-    let mut changed = false;
-    for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
-        let resolved = state
-            .pane_anywhere(*pane)
-            .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .and_then(|target| crate::ui::main_content::lx::history_view(inner, &target.lx))
-            .map(|view| view.scroll);
-        let Some(scroll) = resolved else {
-            continue;
-        };
-        let Some(target) = state.pane_mut_anywhere(*pane) else {
-            continue;
-        };
-        if target.lx.chat.viewport_top == Some(scroll) {
-            continue;
-        }
-        target.lx.chat.viewport_top = Some(scroll);
-        changed = true;
-    }
-    changed
-}
-
-/// 每轮把后台任务面板的**输出可见行数**落状态（绘制前写）。
-///
-/// 面板打开时输入框被控制面板替换，输出容器高度由窗格几何决定；键盘翻页与滚动条
-/// 几何需要它，而 `app/` 拿不到窗格几何，故与 [`resolve_lx_viewport_top`] 同一套做法
-/// 放在事件循环里。
-///
-/// 只算 `task_output_rows`（一次 `layout`），**不**顺带算历史行数：面板打开时历史区
-/// 根本没画，历史行数无人消费，而 `history_rows` 内部会对整段会话正文跑一遍
-/// markdown 排版，白烧每帧 CPU。
-pub fn resolve_task_output_visible(
-    state: &mut AppState,
-    rects: &[(PaneId, ratatui::layout::Rect)],
-) -> bool {
-    let mut changed = false;
-    for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
-        let Some(output_visible) = state
-            .pane_anywhere(*pane)
-            .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .filter(|target| target.lx.task.is_some())
-            .and_then(|target| crate::ui::main_content::lx::task_output_rows(inner, &target.lx))
-        else {
-            continue;
-        };
-        let Some(page) = state
-            .pane_mut_anywhere(*pane)
-            .and_then(|target| target.lx.task.as_mut())
-        else {
-            continue;
-        };
-        if page.output_visible != output_visible {
-            // 只做「保持阅读位置」的钳制；原本贴尾才继续跟随最新。
-            page.resize_output_viewport(output_visible);
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// 每轮把各 lx 窗格的置顶行**抑制记忆**落状态。
-///
-/// 渲染层只读、不写状态（AGENTS：渲染只读），而记忆是唯一的跨帧状态，故放在
-/// 事件循环里、`tui.draw` 之前由这里写；判定本身是
-/// `ui::main_content::lx::history_view` 的纯函数（渲染/命中各自现算，不存第二份真相）。
-/// 返回是否有窗格记忆变化。
-pub fn resolve_lx_sticky_prompt(
-    state: &mut AppState,
-    rects: &[(PaneId, ratatui::layout::Rect)],
-) -> bool {
-    let mut changed = false;
-    for (pane, rect) in rects {
-        let inner = crate::layout::pane_inner_rect(*rect);
-        // 先只读地算出结论（借用结束后再写状态）。
-        let resolved = state
-            .pane_anywhere(*pane)
-            .filter(|target| target.view == crate::app::state::PaneView::Lx)
-            .and_then(|target| crate::ui::main_content::lx::history_view(inner, &target.lx))
-            .map(|view| view.suppressed);
-        let Some(suppressed) = resolved else {
-            continue;
-        };
-        let Some(target) = state.pane_mut_anywhere(*pane) else {
-            continue;
-        };
-        if target.lx.chat.suppressed_prompt_header == suppressed {
-            continue;
-        }
-        target.lx.chat.suppressed_prompt_header = suppressed;
-        changed = true;
-    }
-    changed
-}
-
-/// 点击置顶行：跳到该 prompt（顶部对齐该消息起始行），并退出跟随底部。
-/// `target_row` 由 `ui::main_content::lx::sticky_prompt_jump` 按当前几何给出。
-pub fn jump_lx_history_to_prompt(state: &mut AppState, pane: PaneId, target_row: usize) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
-        return false;
-    }
-    let before = target.lx.chat.history_scroll;
-    let was_following = target.lx.chat.follow_bottom;
-    target.lx.chat.history_scroll = target_row;
-    // 明确进入阅读态：置顶行随之按规则让位（顶行成了那条用户消息自己）。
-    target.lx.chat.follow_bottom = false;
-    before != target_row || was_following
-}
-
-/// 回到底部：把历史视口钉到最新一屏（跟随底部）并清除悬停态；返回是否发生变化。
-pub fn jump_lx_history_bottom(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
-        return false;
-    }
-    let changed = !target.lx.chat.follow_bottom || target.lx.chat.jump_bottom_hover;
-    target.lx.chat.follow_bottom = true;
-    target.lx.chat.jump_bottom_hover = false;
-    changed
-}
-
-/// 设置「回到底部」按钮悬停态；返回是否变化。
-pub fn hover_lx_jump_bottom(state: &mut AppState, pane: PaneId, hovered: bool) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    if target.lx.chat.jump_bottom_hover == hovered {
-        return false;
-    }
-    target.lx.chat.jump_bottom_hover = hovered;
     true
 }
 

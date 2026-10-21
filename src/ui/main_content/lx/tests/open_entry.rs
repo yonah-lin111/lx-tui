@@ -1,9 +1,9 @@
-//! 工具卡片命中回归测试：进程卡片 `[open]` 与文件差异卡片标题两种动作。
+//! 工具卡片命中回归测试：进程卡片 `open` 与文件差异卡片末尾动作行两种动作。
 //!
-//! 用户要求（决策 4/7/9）：进程卡片只有 `[open]` 可点；点它打开后台任务面板，并把
-//! 高亮定位到该卡片对应的后台进程；标题行与命令行是纯展示。文件差异卡片反过来——
-//! 只有标题行可点（展开/收起），正文保留聊天选区；两者不能用 `session_id` 是否为空
-//! 互相猜测。
+//! 用户要求：进程卡片只有 `open` 可点，点它打开后台任务面板并把高亮定位到该卡片
+//! 对应的后台进程；进程到终态后整行不画、也不再登记命中区。文件差异卡片反过来——
+//! 展开/收起的唯一入口是**树体末尾动作行**，标题与正文都不是命中动作：正文保留
+//! 聊天选区，点一下（未拖拽）才折叠。两者不能用 `session_id` 是否为空互相猜测。
 
 use ratatui::layout::Rect;
 
@@ -262,7 +262,8 @@ fn file_message(call_id: &str) -> ChatMessageView {
 }
 
 #[test]
-fn file_diff_title_toggles_and_body_is_not_a_hit() {
+fn file_diff_footer_toggles_and_title_is_not_a_hit() {
+    // 用户要求「不是点击工具名称展开，是点击底部 … more changes 展开」。
     let area = Rect::new(0, 0, 60, 20);
     let mut lx = Lx::new();
     lx.chat.messages = vec![file_message("call-edit")];
@@ -272,28 +273,71 @@ fn file_diff_title_toggles_and_body_is_not_a_hit() {
         .tools
         .into_iter()
         .next()
-        .expect("文件卡片标题命中");
+        .expect("文件卡片动作行命中");
     assert_eq!(
         hit.kind,
         crate::ui::main_content::lx::history::ToolHitKind::Toggle
     );
-    let title_y = hit
+    let footer_y = hit
         .rect
         .y
         .saturating_sub(view.body.y)
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
     assert_eq!(
-        chat_hit(area, &lx, area.x + 6, title_y),
+        chat_hit(area, &lx, area.x + 6, footer_y),
         Some(LxChatHit::ToolToggle {
             message_id: "msg-call-edit".into(),
             call_id: "call-edit".into(),
         }),
-        "标题行命中展开切换，不是任务面板"
+        "底部动作行命中展开切换"
     );
-    // 正文行保留聊天选区，不是命中区。
-    assert_eq!(chat_hit(area, &lx, area.x + 6, title_y + 1), None);
-    assert_eq!(chat_hit(area, &lx, area.x + 6, title_y + 2), None);
+    // 标题行与正文行都不是命中动作：正文要留给聊天选区。
+    for row in [footer_y - 1, footer_y - 2, footer_y - 3] {
+        assert_eq!(
+            chat_hit(area, &lx, area.x + 6, row),
+            None,
+            "行 {row} 不该是点击动作"
+        );
+    }
+}
+
+#[test]
+fn expanded_card_body_is_the_click_to_collapse_target() {
+    // 展开后：动作行仍是 Toggle 入口；正文整块进入 `CardHit.body`，点它（未拖拽）折叠。
+    let area = Rect::new(0, 0, 60, 20);
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![file_message("call-edit")];
+    lx.chat.follow_bottom = true;
+    lx.chat.toggle_detail("msg-call-edit", "call-edit");
+    let view = history_view(area, &lx).expect("历史区");
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let card = cards.first().expect("文件卡片整块命中");
+    assert!(
+        matches!(
+            &card.kind,
+            crate::ui::main_content::lx::history::CardKind::Tool { expanded: true, .. }
+        ),
+        "布局记录的展开状态必须与状态层一致"
+    );
+    // 正文至少一行（标题 + 文件头 + 3 行预览 + 动作行 = 6 行，正文 4 行）。
+    assert!(card.body.height >= 2, "展开后正文非空：{card:?}");
+    let body_y = card
+        .body
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y);
+    assert_eq!(
+        card_body_at(area, &lx, area.x + 6, body_y),
+        Some(crate::app::state::ChatHover::Tool {
+            message_id: "msg-call-edit".into(),
+            call_id: "call-edit".into(),
+        }),
+        "正文按下点会被记录为可折叠目标"
+    );
+    // 标题行不是正文：点它不会折叠。
+    assert_eq!(card_body_at(area, &lx, area.x + 6, body_y - 1), None);
 }
 
 #[test]

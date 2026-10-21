@@ -152,6 +152,7 @@ pub fn clear_selection(state: &mut AppState) {
     state.selection = None;
     state.selection_autoscroll = None;
     state.lx_selection = None;
+    state.lx_card_press = None;
     state.lx_scroll_drag = None;
     state.lx_history_scroll_drag = None;
     if let Some(pane) = state.lx_input_drag.take()

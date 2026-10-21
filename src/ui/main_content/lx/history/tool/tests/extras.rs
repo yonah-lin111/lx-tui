@@ -126,7 +126,7 @@ fn search_shows_the_pattern_before_the_path() {
     );
     assert_eq!(detail, expected, "搜索行 = 「模式 in 路径 · 命中数」");
 
-    // 模式与路径都用参数色（金黄、无下划线）。
+    // 模式与路径都用默认字体色（参数不再单独上色）。
     let segments = detail_segments(&call, 80);
     let scope = segments
         .iter()

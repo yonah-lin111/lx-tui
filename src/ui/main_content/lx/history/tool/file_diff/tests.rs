@@ -86,7 +86,17 @@ fn render(call: &ToolCallView, width: u16, expanded: bool) -> (Vec<String>, usiz
     let rect = Rect::new(0, 0, width, height);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, call, 0, expanded, false);
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        call,
+        0,
+        expanded,
+        false,
+        false,
+    );
     assert_eq!(row_index, total, "draw 推进行数必须等于 rows（宽 {width}）");
     let mut lines = Vec::new();
     for y in rect.y..rect.bottom() {
@@ -108,8 +118,56 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
     let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, call, 0, expanded, false);
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        call,
+        0,
+        expanded,
+        false,
+        false,
+    );
     grid.cell(x, y).style
+}
+
+/// 末尾动作行：常态次要色（左下角上下文统计色），整卡悬停升为默认前景。
+#[test]
+fn footer_is_dim_until_the_card_is_hovered() {
+    let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
+    let total = rows(&call, 80, false);
+    let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
+    let footer_y = u16::try_from(total).unwrap_or(u16::MAX) - 1;
+    let mut styles = Vec::new();
+    for hovered in [false, true] {
+        let mut grid = Grid::new(rect);
+        let mut row_index = 0usize;
+        draw(
+            &mut grid,
+            rect,
+            0,
+            &mut row_index,
+            &call,
+            0,
+            false,
+            false,
+            hovered,
+        );
+        styles.push(grid.cell(0, footer_y).style);
+    }
+    assert_eq!(styles[0], style::chat_action_label(false), "常态压暗");
+    assert!(
+        styles[0]
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
+    assert_eq!(styles[1], style::chat_action_label(true), "悬停提亮");
+    assert!(
+        !styles[1]
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM)
+    );
 }
 
 /// 20 行里两处远距修改：展开后 hunk 之间有 `⋮`。
@@ -172,9 +230,14 @@ fn short_preview_has_no_omitted_hint() {
     ]]);
     let call = tool_call("edit", detail_of(vec![(diff, 1, 1)]));
     let (lines, _) = render(&call, 80, false);
-    // 标题 + 文件头 + 2 个正文行（不足 3 行，不加提示）。
-    assert_eq!(lines.len(), 1 + 1 + 2, "{lines:#?}");
-    assert!(!lines.join("\n").contains(text::agent::FILE_DIFF_OMITTED));
+    // 标题 + 文件头 + 2 个正文行 + 常驻动作行（没有省略，文案改为明确动作）。
+    assert_eq!(lines.len(), 1 + 1 + 2 + 1, "{lines:#?}");
+    let joined = lines.join("\n");
+    assert!(!joined.contains(text::agent::FILE_DIFF_OMITTED));
+    assert!(
+        joined.contains(text::agent::FILE_DIFF_SHOW_ALL),
+        "没省略也给展开入口：{joined}"
+    );
 }
 
 /// 长行按列宽换行：续行保留空 gutter、不重复符号与行号。
@@ -454,7 +517,17 @@ fn scroll_does_not_change_advanced_rows() {
     let rect = Rect::new(0, 0, 80, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 1, &mut row_index, &call, 0, true, false);
+    draw(
+        &mut grid,
+        rect,
+        1,
+        &mut row_index,
+        &call,
+        0,
+        true,
+        false,
+        false,
+    );
     assert_eq!(row_index, total);
 }
 

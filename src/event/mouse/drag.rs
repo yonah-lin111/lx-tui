@@ -284,6 +284,9 @@ pub(crate) fn handle_mouse_up_left(
     dirty: &mut bool,
 ) {
     let Geometry { rects, .. } = geometry;
+    // 卡片正文的「按下可能是一次点击」标记只服务本次释放：任何提前返回的路径
+    // （滚动条拖拽、浮层、其它窗格）都必须丢弃它，绝不能让它在下一次松开时误折叠。
+    let card_press = state.lx_card_press.take();
     if state.referenced_search_scroll_drag.take().is_some() {
         *dirty = true;
         return;
@@ -405,7 +408,11 @@ pub(crate) fn handle_mouse_up_left(
         return;
     }
     // lx 页选区松开：复制选中文本（空选区不复制）。
-    if let Some(selection) = update::take_lx_selection(state)
+    // 按下时落在展开卡片正文上、且**没有拖出选区** → 这次是点击，折叠该块；
+    // 拖过哪怕一列就是复制，绝不折叠（长按选中正文不能顺手把卡片收起来）。
+    let selection = update::take_lx_selection(state);
+    let mut clicked_card = None;
+    if let Some(selection) = selection
         && let Some(range) = selection.range()
     {
         let pane = selection.pane();
@@ -438,6 +445,11 @@ pub(crate) fn handle_mouse_up_left(
                 }
             }
         }
+    } else if let Some(pressed) = card_press {
+        clicked_card = Some(pressed);
+    }
+    if let Some((pane, card)) = clicked_card {
+        update::collapse_lx_card(state, pane, card);
     }
     update::clear_selection(state);
     *dirty = true;

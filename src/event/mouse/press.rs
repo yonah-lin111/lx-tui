@@ -514,6 +514,19 @@ pub(crate) fn handle_mouse_down_left(
                 ) {
                     // 历史滚动条按下：已处理。
                 } else {
+                    // 展开卡片正文：既开始选区（允许拖拽复制整段），又记录「可能是一次
+                    // 点击」。松开时若没有拖出范围，就当作点击折叠该块。
+                    state.lx_card_press = state
+                        .pane_anywhere(pane)
+                        .and_then(|target| {
+                            ui::main_content::lx::card_body_at(
+                                inner,
+                                &target.lx,
+                                mouse.column,
+                                mouse.row,
+                            )
+                        })
+                        .map(|card| (pane, card));
                     update::begin_lx_selection(state, pane, row, col);
                 }
                 *dirty = true;

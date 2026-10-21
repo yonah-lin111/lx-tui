@@ -662,13 +662,14 @@ pub fn chat_loading_scan(phase: usize) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-// ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 金黄参数）=====
+// ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 默认色参数）=====
 //
 // lx 聊天历史里同时存在两类着色信息，必须一眼分得开：
 //   A. **步骤结构**（方块、思考头、工具行）——本组 `chat_*` token，分三层：
 //      ① 结构 / 状态（方块、头部文案、工具动词）：**翡翠绿 `Indexed 42`**（`#00d787`）；
-//      ② 可变参数（路径 / 搜索范围）：金黄 `Indexed 220` + 下划线；
-//      ③ 其余元信息（行范围、计数、状态文字）：`muted()`（终端 dim，无色相）。
+//      ② 可变参数（路径 / 搜索范围）：**终端默认前景**（不额外占色相）；
+//      ③ 其余元信息与行内动作（行范围、计数、状态文字、`open` / `collapse`）：
+//         `muted()`（终端 dim，无色相），动作文字悬停升为默认前景。
 //   B. **正文高亮**（markdown / 代码）——见上面的 `github_dark`：GitHub Dark 官方
 //      色板，颜色只出现在链接（蓝）与代码 token（珊瑚红 / 浅蓝 / 蓝 / 紫 / 灰）上，
 //      标题 / 粗体 / 斜体 / 引用全部是正文色 + 修饰符。
@@ -677,11 +678,11 @@ pub fn chat_loading_scan(phase: usize) -> Style {
 // 上一版用 lx 页 `Native Agent` 标签里 `A` 的浅蓝 `Indexed 153`（`#afd7ff`），
 // 用 CIEDE2000 量出来它和**正文**的色差只有 11.5、和 GitHub 的**字符串浅蓝**
 // `#a5d6ff` 只有 2.1——等于方块、`Write`、`Thought` 与正文/代码字符串用了同一个颜色，
-// 所以视觉上糊成一片。GitHub Dark 的 6 个代码 token 加上金黄参数已经把
+// 所以视觉上糊成一片。GitHub Dark 的 6 个代码 token 已经把
 // 蓝（207°/208°/212°/214°）、紫（269°）、珊瑚红（4°）、金（51°）全部占满，
 // 256 色里唯一还剩 ≥30 色差余量的空闲色相是**绿 / 青绿（120°–170°）**。
 // 因此结构色定在 `Indexed 42`（`#00d787`，158°）：与正文色差 30.1、与全部 GitHub
-// 代码色最近 32.8、与金黄参数 36.2——三项同时 ≥30，是这张表里唯一达标的槽位。
+// 代码色最近 32.8——同时 ≥30，是这张表里唯一达标的槽位。
 // 备选（同样达标，偏好更亮可换）：`Indexed 49` `#00ffaf`（对深底亮度比 14.3 vs 10.0）。
 //
 // 语义：**热 = 进行中（方块加粗 + 呼吸）、冷 = 已完成（方块不加粗、静止）**；
@@ -689,25 +690,23 @@ pub fn chat_loading_scan(phase: usize) -> Style {
 
 /// 工具结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
 const CHAT_STEP_GREEN: u8 = 42;
-/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——与工具绿、参数金、正文默认色的
-/// 色差分别为 68 / 55 / 24（CIEDE2000），一眼可分。
+/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——**只在悬停时出现**（常态压暗），
+/// 与工具绿、正文默认色的色差分别为 68 / 24（CIEDE2000），一眼可分。
 const CHAT_STEP_MAGENTA: u8 = 218;
-/// 可变参数色：金黄 Indexed 220（工具行刻意不加下划线，见 [`chat_tool_param`]）。
-const CHAT_GOLD: u8 = 220;
 /// 工具**运行中**色：橙黄 `Indexed 208`（`#ff8700`）。
 ///
 /// 语义是「还在进行」：**所有**正在运行的工具（文件工具、`exec_command`、
 /// `write_stdin`、`update_plan`）的方块与动词统一用它，只有 `Completed` 才回翡翠绿。
-/// 用户要求「橙黄一点」——比金黄参数 `220` 更橙更饱和（色差 27.9），比深土黄亮一档
+/// 用户要求「橙黄一点」——比默认前景亮一档、比工具绿更暖（色差 27.9），比深土黄亮一档
 /// （L 68.5 vs 58.5）；与工具绿 56.0、品红思考 40.7、天蓝 117 50.9 均 ≥40。
 const CHAT_STEP_AMBER: u8 = 208;
 
-// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
+// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 常态压暗/悬停品红，工具 = 翡翠绿）-----
 //
 // 用户要求：「正文内容的小方块用默认字体的颜色即可；thinking 的小方块和思考的字体
 // 颜色使用其他的颜色」。因此**颜色由步骤类别决定**：
 //   Body     → 终端默认前景（不设 fg）+ 加粗/不加粗区分运行态；
-//   Thinking → 品红 218；
+//   Thinking → 常态 `muted()`，悬停品红 218；
 //   Tool     → 翡翠绿 42（含工具动词）。
 
 /// 正文块的方块：运行中（呼吸）——**终端默认前景 + 加粗**，与正文本就同色。
@@ -730,26 +729,45 @@ pub fn chat_step_label_done_body() -> Style {
     Style::default()
 }
 
-/// 思考块的方块：运行中（呼吸）——品红加粗。
-pub fn chat_step_mark_running_thinking() -> Style {
-    Style::default()
-        .fg(Color::Indexed(CHAT_STEP_MAGENTA))
-        .add_modifier(Modifier::BOLD)
+/// 思考块的方块：运行中（呼吸）——常态压暗，悬停恢复品红并加粗。
+///
+/// 用户要求「思考的小方块和思考 title 的字体颜色调淡一点，鼠标 hover 时才显示
+/// 当前的颜色」：思考是次要内容，常驻品红会在整屏里抢走工具行的注意力。
+pub fn chat_step_mark_running_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default()
+            .fg(Color::Indexed(CHAT_STEP_MAGENTA))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        muted()
+    }
 }
 
-/// 思考块的方块：已完成——同款品红、不加粗（静止 + 细一档）。
-pub fn chat_step_mark_done_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的方块：已完成——常态压暗，悬停恢复品红（不加粗：静止 + 细一档）。
+pub fn chat_step_mark_done_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        muted()
+    }
 }
 
-/// 思考块的头部文案：运行中——品红（与方块同色系，不加粗）。
-pub fn chat_step_label_running_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的头部文案：运行中——常态压暗，悬停恢复品红（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        muted()
+    }
 }
 
-/// 思考块的头部文案：已完成——品红（同上，不加粗）。
-pub fn chat_step_label_done_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的头部文案：已完成——常态压暗，悬停恢复品红（同上，不加粗）。
+pub fn chat_step_label_done_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        muted()
+    }
 }
 
 /// 工具行的方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的动作信号。
@@ -803,13 +821,12 @@ pub fn chat_tool_verb_running() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
-/// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：金黄，**不加下划线**。
+/// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：**终端默认前景**、不加修饰。
 ///
-/// 下划线在连续多个工具行时会把整块历史划成一片横线，反而盖过翡翠绿的结构色；
-/// 去掉后靠金黄本身与正文/动词区分（与绿的结构色差 36，与最近的 GitHub token
-/// 注释灰 42 / 关键字珊瑚 46 也拉得开）。
+/// 用户要求「所有工具的参数颜色从黄色改回默认字体颜色」：参数是内容而不是状态，
+/// 跟着默认前景走才能在一屏工具行里把注意力留给方块 / 动词的结构色。
 pub fn chat_tool_param() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_GOLD))
+    Style::default()
 }
 
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
@@ -830,6 +847,15 @@ pub fn chat_jump_bottom(hovered: bool) -> Style {
     } else {
         muted()
     }
+}
+
+/// 历史里的**行内动作文字**（`open` / `… more changes` / `Show full diff` /
+/// `collapse`）：常态同左下角上下文统计的次要色（[`muted`]），悬停升为默认前景。
+///
+/// 与 [`chat_jump_bottom`] 同一套「常态弱、悬停亮」的语义：这些文字是入口而不是
+/// 内容，常驻正文色会让每一张卡片都多出一行抢眼的东西。
+pub fn chat_action_label(hovered: bool) -> Style {
+    if hovered { Style::default() } else { muted() }
 }
 
 /// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。

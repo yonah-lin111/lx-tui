@@ -1,4 +1,4 @@
-//! 后台任务卡片新形态的回归测试：橙色存活态、动画停止后实心、三行结构与 `[open]` 入口。
+//! 后台任务卡片新形态的回归测试：橙色存活态、动画停止后实心、存活三行 / 终态两行与 `open` 入口。
 //!
 //! 用户反馈的两组现象：
 //! 1. 运行中的后台卡片是绿的，且会定格成镂空 `□`（看起来像失败），但进程其实还在跑；
@@ -175,14 +175,14 @@ fn alive_command_card_is_orange_and_stopped_card_is_green() {
 #[test]
 fn command_row_keeps_the_param_colour_in_every_state() {
     // 用户要求「参数颜色不要改变，颜色变化始终是小卡片和 title」：
-    // 命令行（参数）**恒为参数金黄**，运行中与停止后完全一致。
+    // 命令行（参数）**恒为终端默认前景**，运行中与停止后完全一致。
     let running = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
     let running_style =
         command_row_style(&render_grid(&running, 70), 70).expect("命令行必须画出来");
     assert_eq!(
         running_style.fg,
         style::chat_tool_param().fg,
-        "运行中命令行仍是参数金黄：{running_style:?}"
+        "运行中命令行用默认字体色：{running_style:?}"
     );
 
     let stopped = command_call(ProcessStateView::Stopped, ToolStatus::Completed, "beat\n");
@@ -250,7 +250,9 @@ fn alive_mark_never_renders_hollow_when_the_animation_stops() {
             let mut grid = Grid::new(area);
             let mut row = 0usize;
             // animating = false：动画已停止。
-            tool::draw_animated(&mut grid, area, 0, &mut row, &call, frame, false, false);
+            tool::draw_animated(
+                &mut grid, area, 0, &mut row, &call, frame, false, false, false,
+            );
             grid
         };
         assert_eq!(
@@ -297,7 +299,7 @@ fn hollow_glyph_is_reserved_for_cancelled() {
     );
 }
 
-// ===== 决策 5、6：卡片收敛为三行，[open] 独占末行且为灰色 =====
+// ===== 卡片收敛为三行，open 独占末行且为次要色 =====
 
 #[test]
 fn command_card_is_title_command_and_open_row_only() {
@@ -310,11 +312,11 @@ fn command_card_is_title_command_and_open_row_only() {
     assert!(lines[1].contains("while true"), "第 2 行是命令原文：{text}");
     assert!(
         lines[2].starts_with(text::agent::TREE_LEAF),
-        "第 3 行是 [open] 且用直角收口：{text}"
+        "第 3 行是 open 且用直角收口：{text}"
     );
     assert!(
         lines[2].contains(text::agent::TASK_OPEN_LABEL),
-        "[open] 文案：{text}"
+        "open 文案：{text}"
     );
 }
 
@@ -341,7 +343,7 @@ fn command_card_no_longer_renders_any_output_or_ellipsis_row() {
 fn open_row_is_grey_and_open_offset_points_at_it() {
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
     let grid = render_grid(&call, 70);
-    // 定位 `[open]` 所在列（第 3 行，即 y=2）。
+    // 定位 `open` 所在列（第 3 行，即 y=2）。
     let label = text::agent::TASK_OPEN_LABEL;
     let mut found = None;
     for x in 0..70u16 {
@@ -351,16 +353,16 @@ fn open_row_is_grey_and_open_offset_points_at_it() {
             break;
         }
     }
-    let style_grey = found.expect("[open] 必须画出来");
+    let style_grey = found.expect("open 必须画出来");
     assert_eq!(
         style_grey.fg,
         style::agent_step_detail().fg,
-        "[open] 必须用灰色次要信息色：{style_grey:?}"
+        "open 必须是左下角上下文统计色：{style_grey:?}"
     );
     assert_eq!(
         tool::open_offset(&call),
         Some(2),
-        "[open] 位于卡片内第 2 行偏移（0 = 标题）"
+        "open 位于卡片内第 2 行偏移（0 = 标题）"
     );
 }
 
@@ -372,7 +374,7 @@ fn interaction_card_also_shows_the_open_row() {
         text.lines()
             .last()
             .is_some_and(|line| line.contains(text::agent::TASK_OPEN_LABEL)),
-        "交互卡片同样给 [open] 入口：{text}"
+        "交互卡片同样给 open 入口：{text}"
     );
     assert_eq!(text.lines().count(), 3, "行数同样恒为三行：{text}");
 }
