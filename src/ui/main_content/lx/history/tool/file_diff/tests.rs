@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
 use super::*;
-use crate::app::state::ToolStatus;
+use crate::app::state::{FileDiffDetailView, ToolStatus};
 use crate::chat::tools::{
     DiffCounts, DiffHunk, DiffLine, DiffLineKind, DiffUnavailableReason, FileDiff,
 };
@@ -66,12 +66,22 @@ fn replace_diff() -> FileDiff {
 
 /// 构造文件工具的调用步骤。
 fn tool_call(name: &str, view: FileDiffDetailView) -> ToolCallView {
+    tool_call_id("call-1", name, view, ToolStatus::Completed)
+}
+
+/// 带指定 call id / 状态的调用步骤（合并卡测试用）。
+fn tool_call_id(
+    call_id: &str,
+    name: &str,
+    view: FileDiffDetailView,
+    status: ToolStatus,
+) -> ToolCallView {
     ToolCallView {
-        call_id: "call-1".into(),
+        call_id: call_id.into(),
         name: name.into(),
         position: 0,
         arguments_json: String::new(),
-        status: ToolStatus::Completed,
+        status,
         summary: None,
         error: None,
         result_json: None,
@@ -79,9 +89,14 @@ fn tool_call(name: &str, view: FileDiffDetailView) -> ToolCallView {
     }
 }
 
-/// 渲染到网格并返回逐行文本。
+/// 渲染单张卡片到网格并返回逐行文本。
 fn render(call: &ToolCallView, width: u16, expanded: bool) -> (Vec<String>, usize) {
-    let total = rows(call, width, expanded);
+    render_group(&[call], width, expanded)
+}
+
+/// 渲染一张（可能是合并的）卡片到网格并返回逐行文本。
+fn render_group(calls: &[&ToolCallView], width: u16, expanded: bool) -> (Vec<String>, usize) {
+    let total = rows(calls, width, expanded);
     let height = u16::try_from(total.max(1)).unwrap_or(u16::MAX);
     let rect = Rect::new(0, 0, width, height);
     let mut grid = Grid::new(rect);
@@ -91,7 +106,7 @@ fn render(call: &ToolCallView, width: u16, expanded: bool) -> (Vec<String>, usiz
         rect,
         0,
         &mut row_index,
-        call,
+        calls,
         0,
         expanded,
         false,
@@ -114,7 +129,7 @@ fn render(call: &ToolCallView, width: u16, expanded: bool) -> (Vec<String>, usiz
 
 /// 单元格样式（按列取）。
 fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> Style {
-    let total = rows(call, width, expanded);
+    let total = rows(&[call], width, expanded);
     let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
@@ -123,7 +138,7 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
         rect,
         0,
         &mut row_index,
-        call,
+        &[call],
         0,
         expanded,
         false,
@@ -136,7 +151,7 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
 #[test]
 fn footer_is_dim_until_the_card_is_hovered() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
-    let total = rows(&call, 80, false);
+    let total = rows(&[&call], 80, false);
     let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
     let footer_y = u16::try_from(total).unwrap_or(u16::MAX) - 1;
     let mut styles = Vec::new();
@@ -148,7 +163,7 @@ fn footer_is_dim_until_the_card_is_hovered() {
             rect,
             0,
             &mut row_index,
-            &call,
+            &[&call],
             0,
             false,
             false,
@@ -290,7 +305,7 @@ fn wide_characters_wrap_by_display_columns() {
 #[test]
 fn narrow_widths_are_safe() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
-    assert_eq!(rows(&call, 0, false), 0);
+    assert_eq!(rows(&[&call], 0, false), 0);
     for width in [1u16, 2, 3, 8, 20] {
         for expanded in [false, true] {
             let (lines, total) = render(&call, width, expanded);
@@ -309,7 +324,7 @@ fn narrow_widths_are_safe() {
     assert!(text.contains('+') || text.contains('-'), "{text}");
 }
 
-/// 新增绿、删除红；行号/上下文为次要信息色。
+/// 新增绿、删除红（前景 + 整行底色）；上下文行不铺底色。
 #[test]
 fn added_and_removed_use_semantic_styles() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
@@ -323,19 +338,31 @@ fn added_and_removed_use_semantic_styles() {
         u16::try_from(lines[usize::from(added_row)].find('+').expect("新增符号")).expect("列");
     assert_eq!(
         style_at(&call, 40, false, removed_x, removed_row),
-        style::agent_removed()
+        style::agent_removed().patch(style::agent_removed_bg())
     );
     assert_eq!(
         style_at(&call, 40, false, added_x, added_row),
-        style::agent_added()
+        style::agent_added().patch(style::agent_added_bg())
     );
     // 正文首字符（`old`/`new`）同色。
     let old_x =
         u16::try_from(lines[usize::from(removed_row)].find("old").expect("正文")).expect("列");
     assert_eq!(
         style_at(&call, 40, false, old_x, removed_row),
-        style::agent_removed()
+        style::agent_removed().patch(style::agent_removed_bg())
     );
+    // 行尾空白也铺满底色：整行是同一个背景，而不是只染到最后一个字符。
+    assert_eq!(
+        style_at(&call, 40, false, 39, removed_row).bg,
+        style::agent_removed_bg().bg
+    );
+    assert_eq!(
+        style_at(&call, 40, false, 39, added_row).bg,
+        style::agent_added_bg().bg
+    );
+    // 上下文行（折叠预览里不画）与标题/文件头不铺任何底色。
+    assert_eq!(style_at(&call, 40, false, 39, 0).bg, None, "标题行无底色");
+    assert_eq!(style_at(&call, 40, false, 39, 1).bg, None, "文件头无底色");
 }
 
 /// 无内容变化：显示 `No content changes`，仍占一行且可展开（不制造无限入口）。
@@ -501,19 +528,19 @@ fn no_diff_falls_back_to_summary() {
     let mut view = detail_of(vec![(replace_diff(), 1, 1)]);
     view.files[0].diff = None;
     let call = tool_call("edit", view);
-    assert!(!has_diff(&call));
-    assert_eq!(rows(&call, 80, false), title_rows() + 1);
+    assert!(!is_card(&call));
+    assert_eq!(rows(&[&call], 80, false), title_rows() + 1);
     // 没有详情分支时同样不产生行。
     let mut bare = tool_call("edit", detail_of(Vec::new()));
     bare.detail = None;
-    assert!(!has_diff(&bare));
+    assert!(!is_card(&bare));
 }
 
 /// 滚动：滚过卡片首行时，推进的行数不变。
 #[test]
 fn scroll_does_not_change_advanced_rows() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
-    let total = rows(&call, 80, true);
+    let total = rows(&[&call], 80, true);
     let rect = Rect::new(0, 0, 80, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
@@ -522,7 +549,7 @@ fn scroll_does_not_change_advanced_rows() {
         rect,
         1,
         &mut row_index,
-        &call,
+        &[&call],
         0,
         true,
         false,
@@ -551,5 +578,268 @@ fn counts_come_from_diff_not_recomputed() {
         lines[1].contains("+1") && lines[1].contains("-1"),
         "{:?}",
         lines[1]
+    );
+}
+
+// ===== 合并卡：连续同种文件调用 =====
+
+/// 两次 `edit` 调用的两个文件：合并后是**一张卡**，标题给出文件数与合计。
+#[test]
+fn consecutive_edits_merge_into_one_card() {
+    let first = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let second = tool_call_id(
+        "call-b",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let group = [&first, &second];
+    let (lines, total) = render_group(&group, 80, false);
+    let text = lines.join("\n");
+    // 标题只出现一次，且写明文件数。
+    let titles: Vec<&String> = lines
+        .iter()
+        .filter(|line| line.contains(text::agent::VERB_TOOL_EDIT))
+        .collect();
+    assert_eq!(titles.len(), 1, "两次调用只有一张卡：{lines:#?}");
+    assert!(
+        titles[0].contains(&text::agent::tool_files_label(2)),
+        "标题写明文件数：{:?}",
+        titles[0]
+    );
+    // 合计计数：两个文件各 +1 -1。
+    assert!(
+        titles[0].contains("+2") && titles[0].contains("-2"),
+        "{text}"
+    );
+    // 两个文件行都在，按调用顺序扁平铺开；中间节点 `├─`、末尾收口 `└─`。
+    assert!(text.contains("/tmp/file0.rs"), "{text}");
+    assert_eq!(
+        text.matches("/tmp/file0.rs").count(),
+        2,
+        "两个文件同名但各自一行：{text}"
+    );
+    assert!(text.contains(text::agent::TREE_BRANCH), "{text}");
+    assert!(text.contains(text::agent::TREE_LEAF), "{text}");
+    // 只有末尾一条动作行。
+    let actions = lines
+        .iter()
+        .filter(|line| {
+            line.contains(text::agent::FILE_DIFF_SHOW_ALL)
+                || line.contains(text::agent::FILE_DIFF_OMITTED)
+        })
+        .count();
+    assert_eq!(actions, 1, "动作行只有一条：{lines:#?}");
+    assert_eq!(total, lines.len());
+}
+
+/// 合并卡是**一个**展开目标：展开后所有文件一起展开。
+#[test]
+fn merged_card_expands_as_a_whole() {
+    let first = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let second = tool_call_id(
+        "call-b",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let group = [&first, &second];
+    let (folded, _) = render_group(&group, 80, false);
+    let (expanded, _) = render_group(&group, 80, true);
+    assert!(expanded.len() > folded.len(), "展开比折叠多行");
+    // 折叠时有省略提示，展开后是 `collapse`。
+    assert!(
+        folded.join("\n").contains(text::agent::FILE_DIFF_OMITTED)
+            || folded.join("\n").contains(text::agent::FILE_DIFF_SHOW_ALL)
+    );
+    assert!(
+        expanded
+            .join("\n")
+            .contains(text::agent::FILE_DIFF_COLLAPSE)
+    );
+    // 上下文行只在展开时出现（两处）。
+    assert_eq!(expanded.join("\n").matches("keep").count(), 2);
+}
+
+/// 合并卡方块汇总状态：只要有一个失败，整卡就是失败色。
+#[test]
+fn merged_card_mark_follows_the_worst_status() {
+    let ok = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let mut bad = tool_call_id(
+        "call-b",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Failed,
+    );
+    bad.error = Some("boom".into());
+    let group = [&ok, &bad];
+    let total = rows(&group, 80, false);
+    let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        &group,
+        0,
+        false,
+        false,
+        false,
+    );
+    assert_eq!(
+        grid.cell(0, 0).style,
+        style::agent_fail(),
+        "整卡标题转失败色"
+    );
+}
+
+/// `edit` 与 `write` 不合并（标题只能写一个动词）。
+#[test]
+fn different_file_verbs_do_not_merge() {
+    let edit = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let write = tool_call_id(
+        "call-b",
+        "write",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let steps = [
+        crate::app::state::AssistantStepView::Tool {
+            position: 1,
+            call: edit,
+        },
+        crate::app::state::AssistantStepView::Tool {
+            position: 2,
+            call: write,
+        },
+    ];
+    assert_eq!(super::super::merge_group(&steps, 0).len(), 1);
+}
+
+// ===== 语法高亮 =====
+
+/// `.rs` 正文做关键字分色：`let` 不是增删语义色。
+#[test]
+fn rust_body_is_syntax_highlighted() {
+    let diff = complete(vec![vec![line(
+        DiffLineKind::Added,
+        None,
+        Some(1),
+        "let value = 1;",
+    )]]);
+    let call = tool_call("write", detail_of(vec![(diff, 1, 0)]));
+    let (lines, _) = render(&call, 80, false);
+    let row = u16::try_from(
+        lines
+            .iter()
+            .position(|line| line.contains("let value"))
+            .expect("新增行"),
+    )
+    .expect("行号");
+    let keyword_x =
+        u16::try_from(lines[usize::from(row)].find("let").expect("关键字")).expect("列");
+    assert_eq!(
+        style_at(&call, 80, false, keyword_x, row),
+        style::code_keyword().patch(style::agent_added_bg()),
+        "关键字保持语法色，但行底色仍是新增绿"
+    );
+    // 数字也是语法色（不是增删色）。
+    // 取正文里的 `1`（行号槽里的数字是弱化元信息，不是语法高亮）。
+    let number_x = u16::try_from(lines[usize::from(row)].rfind('1').expect("数字")).expect("列");
+    assert_eq!(
+        style_at(&call, 80, false, number_x, row),
+        style::code_number().patch(style::agent_added_bg())
+    );
+}
+
+/// `.md` 正文走 markdown 词法：标题与行内代码分色。
+#[test]
+fn markdown_body_uses_markdown_highlighting() {
+    let diff = complete(vec![vec![
+        line(DiffLineKind::Added, None, Some(1), "# 标题"),
+        line(DiffLineKind::Added, None, Some(2), "普通 `code` 文本"),
+    ]]);
+    let mut call = tool_call("edit", detail_of(vec![(diff, 2, 0)]));
+    if let Some(crate::app::state::ToolDetailView::File(view)) = call.detail.as_deref_mut() {
+        view.files[0].path = "docs/design.md".into();
+    }
+    let (lines, _) = render(&call, 80, false);
+    let head_row = u16::try_from(
+        lines
+            .iter()
+            .position(|line| line.contains("标题"))
+            .expect("标题行"),
+    )
+    .expect("行号");
+    let head_x =
+        u16::try_from(lines[usize::from(head_row)].find('标').expect("标题文字")).expect("列");
+    assert_eq!(
+        style_at(&call, 80, false, head_x, head_row),
+        style::markdown_heading().patch(style::agent_added_bg()),
+        "markdown 标题保留标题色"
+    );
+    let code_row = u16::try_from(
+        lines
+            .iter()
+            .position(|line| line.contains("普通"))
+            .expect("正文行"),
+    )
+    .expect("行号");
+    let code_x =
+        u16::try_from(lines[usize::from(code_row)].find("code").expect("行内代码")).expect("列");
+    assert_eq!(
+        style_at(&call, 80, false, code_x, code_row),
+        style::markdown_inline_code().patch(style::agent_added_bg())
+    );
+}
+
+/// 未知扩展名不做假高亮：正文保持增删语义色。
+#[test]
+fn unknown_extension_keeps_plain_diff_colors() {
+    let diff = complete(vec![vec![line(
+        DiffLineKind::Removed,
+        Some(1),
+        None,
+        "let value = 1;",
+    )]]);
+    let mut call = tool_call("edit", detail_of(vec![(diff, 0, 1)]));
+    if let Some(crate::app::state::ToolDetailView::File(view)) = call.detail.as_deref_mut() {
+        view.files[0].path = "notes.unknownext".into();
+    }
+    let (lines, _) = render(&call, 80, false);
+    let row = u16::try_from(
+        lines
+            .iter()
+            .position(|line| line.contains("let value"))
+            .expect("删除行"),
+    )
+    .expect("行号");
+    let keyword_x = u16::try_from(lines[usize::from(row)].find("let").expect("文字")).expect("列");
+    assert_eq!(
+        style_at(&call, 80, false, keyword_x, row),
+        style::agent_removed().patch(style::agent_removed_bg()),
+        "不认识的语言不得把 let 染成关键字色"
     );
 }

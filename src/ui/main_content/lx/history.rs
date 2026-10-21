@@ -31,8 +31,11 @@ use super::notice;
 
 mod body;
 mod code_copy;
+mod stats;
 mod sticky;
 pub(crate) mod tool;
+
+pub(crate) use stats::{format_duration, stats_line};
 
 /// 代码块复制按钮占用的列数（`[❐]` 三列）。
 const CODE_COPY_WIDTH: u16 = 3;
@@ -342,7 +345,56 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         let start = rows;
         // 消息内块之间一律空一行（见 [`needs_spacer`]）。
         let mut has_previous = false;
-        for (step_index, step) in message.steps.iter().enumerate() {
+        let mut step_index = 0usize;
+        while let Some(step) = message.steps.get(step_index) {
+            // 同种文件工具的连续调用合成**一张卡**：卡片本体、命中区与展开状态都只有
+            // 一份，块间空行也就不在组内出现（组内靠文件行与 `├─`/`└─` 分隔）。
+            if let AssistantStepView::Tool { call, .. } = step {
+                let group = tool::merge_group(&message.steps, step_index);
+                if group.len() > 1 {
+                    let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
+                    let group_rows = tool::group_rows(&group, width, expanded);
+                    if group_rows > 0 {
+                        if has_previous && needs_spacer() {
+                            rows += 1;
+                        }
+                        has_previous = true;
+                        let block_y = |offset: usize| -> u16 {
+                            area.y
+                                .saturating_add(u16::try_from(rows + offset).unwrap_or(u16::MAX))
+                        };
+                        if let Some(offset) = tool::group_action_offset(&group, width, expanded) {
+                            tools.push(ToolHit {
+                                message_id: message.id.clone(),
+                                call_id: call.call_id.clone(),
+                                kind: ToolHitKind::Toggle,
+                                rect: Rect::new(area.x, block_y(offset), width, 1),
+                            });
+                        }
+                        cards.push(CardHit {
+                            kind: CardKind::Tool {
+                                message_id: message.id.clone(),
+                                call_id: call.call_id.clone(),
+                                expanded,
+                            },
+                            card: Rect::new(area.x, block_y(0), width, rows_to_u16(group_rows)),
+                            body: if expanded && group_rows > 2 {
+                                Rect::new(
+                                    area.x,
+                                    block_y(1),
+                                    width,
+                                    rows_to_u16(group_rows.saturating_sub(2)),
+                                )
+                            } else {
+                                Rect::new(area.x, block_y(0), width, 0)
+                            },
+                        });
+                        rows += group_rows;
+                    }
+                    step_index += group.len();
+                    continue;
+                }
+            }
             let (is_reasoning, step_rows) = match step {
                 AssistantStepView::Part { part, .. } => match part.kind {
                     crate::chat::events::PartKind::Text => {
@@ -367,6 +419,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                 ),
             };
             if step_rows == 0 {
+                step_index += 1;
                 continue; // 空正文块不占行，也不引入块间空行。
             }
             if has_previous && needs_spacer() {
@@ -392,7 +445,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     });
                 }
                 // 文件差异卡片：末尾动作行切换展开/收起；正文保留聊天选区。
-                if let Some(offset) = tool::action_offset(call, width, expanded) {
+                if let Some(offset) = tool::action_offset(&[call], width, expanded) {
                     tools.push(ToolHit {
                         message_id: message.id.clone(),
                         call_id: call.call_id.clone(),
@@ -454,6 +507,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                 );
             }
             rows += step_rows;
+            step_index += 1;
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
@@ -579,7 +633,35 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
         // 消息内块之间一律空一行（与 `layout` 同口径）。
         let mut has_previous = false;
         let mut first_user_line = true;
-        for (step_index, step) in message.steps.iter().enumerate() {
+        let mut step_index = 0usize;
+        while let Some(step) = message.steps.get(step_index) {
+            // 同种文件工具的连续调用合并成一张卡（与 `layout` 同一份分组口径）。
+            if let AssistantStepView::Tool { call, .. } = step {
+                let group = tool::merge_group(&message.steps, step_index);
+                if group.len() > 1 {
+                    let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
+                    let group_rows = tool::group_rows(&group, content.width, expanded);
+                    if group_rows > 0 {
+                        if has_previous && needs_spacer() {
+                            row_index += 1;
+                        }
+                        has_previous = true;
+                        tool::group_draw_animated(
+                            grid,
+                            content,
+                            scroll,
+                            &mut row_index,
+                            &group,
+                            lx.chat.loading_frame,
+                            expanded,
+                            lx.chat.status.streaming,
+                            lx.chat.tool_is_hovered(&message.id, &call.call_id),
+                        );
+                    }
+                    step_index += group.len();
+                    continue;
+                }
+            }
             let (block_rows, part_kind) = match step {
                 AssistantStepView::Part { part, .. } => {
                     let expanded = lx.chat.reasoning_expanded(message_index, step_index);
@@ -607,6 +689,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                 ),
             };
             if block_rows == 0 {
+                step_index += 1;
                 continue; // 空正文块不占行，也不引入块间空行（与 `layout` 同口径）。
             }
             if has_previous && needs_spacer() {
@@ -627,6 +710,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         lx.chat.tool_is_hovered(&message.id, &call.call_id),
                     );
                 }
+                step_index += 1;
                 continue;
             };
             match part.kind {
@@ -722,6 +806,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                     }
                 }
             }
+            step_index += 1;
         }
         // 消息底部通知（失败/中断）。
         if let Some(notice) = notice(message) {
@@ -774,90 +859,10 @@ fn markdown_rows(content: &str, width: u16) -> usize {
 /// 工具步骤占用的渲染行数。
 ///
 /// `layout` 与 `render` 共用本入口（内部即 `tool::rows`）：工具行一旦换行，滚动条、
-/// 置顶用户行与 thinking 命中矩形都会漂移。`expanded` 只影响进程/计划卡片
-/// （文件工具恒为 2 行，展开状态不改变它的几何）。
+/// 置顶用户行与 thinking 命中矩形都会漂移。`expanded` 影响带差异正文的文件卡片、
+/// 进程卡片与计划卡片；没有差异正文的文件工具恒为 2 行。
 fn tool_rows(call: &crate::app::state::ToolCallView, width: u16, expanded: bool) -> usize {
     tool::rows(call, width, expanded)
-}
-
-/// 本轮统计行（assistant 消息末尾）：`模型 · 2.9k in · 307 out · 70% cached ·
-/// 33.4 tok/s · 2.7s`；仍在流中或无任何可用数据时返回 None。
-///
-/// tok/s 对齐 opencode：输出 token ÷ 本轮耗时（秒）。
-fn stats_line(message: &ChatMessageView) -> Option<String> {
-    if message.role != "assistant" || message.status == "streaming" {
-        return None;
-    }
-    let mut fields: Vec<String> = Vec::new();
-    if let Some(input) = message.input_tokens.filter(|tokens| *tokens > 0) {
-        fields.push(format!(
-            "{}{}",
-            text::token_count(u64::try_from(input).unwrap_or(0)),
-            text::LX_CHAT_STATS_INPUT_SUFFIX
-        ));
-    }
-    if let Some(output) = message.output_tokens.filter(|tokens| *tokens > 0) {
-        fields.push(format!(
-            "{}{}",
-            text::token_count(u64::try_from(output).unwrap_or(0)),
-            text::LX_CHAT_STATS_OUTPUT_SUFFIX
-        ));
-    }
-    // 缓存命中率：cached / prompt（OpenAI 口径 prompt_tokens 已含 cached）。
-    if let (Some(cache), Some(input)) = (
-        message.cache_read_tokens.filter(|tokens| *tokens > 0),
-        message.input_tokens.filter(|tokens| *tokens > 0),
-    ) && let Some(percent) = cache.saturating_mul(100).checked_div(input)
-    {
-        fields.push(format!(
-            "{}%{}",
-            percent.clamp(0, 100),
-            text::LX_CHAT_STATS_CACHE_SUFFIX
-        ));
-    }
-    if let (Some(output), Some(duration)) = (
-        message.output_tokens.filter(|tokens| *tokens > 0),
-        message.duration_ms.filter(|duration| *duration > 0),
-    ) {
-        let speed = output as f64 / (duration as f64 / 1000.0);
-        if speed.is_finite() && speed > 0.0 {
-            fields.push(format!("{speed:.1}{}", text::LX_CHAT_STATS_SPEED_SUFFIX));
-        }
-    }
-    if let Some(duration) = message.duration_ms.filter(|duration| *duration > 0) {
-        fields.push(format_duration(duration));
-    }
-    // 仅「模型名」不算统计：没有任何用量/耗时数据时不出行（失败且无 usage 的轮次）。
-    if fields.is_empty() {
-        return None;
-    }
-    if let Some(model) = message
-        .model_label
-        .as_deref()
-        .filter(|model| !model.is_empty())
-    {
-        fields.insert(0, model.to_string());
-    }
-    Some(fields.join(text::LX_CHAT_STATS_SEP))
-}
-
-/// token 计数短格式（对齐 lx-agent）：`999`、`1.2k`、`123k`、`1.2M`。
-/// 耗时短格式（对齐 lx-agent）：`820ms`、`4.2s`、`38s`、`1m 12s`。
-fn format_duration(ms: i64) -> String {
-    if ms < 1_000 {
-        return format!("{ms}ms");
-    }
-    let seconds = ms as f64 / 1_000.0;
-    if seconds < 60.0 {
-        return if seconds < 10.0 {
-            format!("{seconds:.1}s")
-        } else {
-            format!("{:.0}s", seconds)
-        };
-    }
-    let minutes = (seconds / 60.0).floor() as i64;
-    let rest = (seconds % 60.0).round() as i64;
-    format!("{minutes}m {rest}s")
 }
 
 /// 行可见时返回其屏幕 Y。

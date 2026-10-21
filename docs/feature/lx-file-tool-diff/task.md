@@ -240,3 +240,42 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - `cargo test`：2844 passed / 0 failed。
 - 行数：`app/update/chat/mod.rs` 1014 → 约 640（拆出 `viewport.rs`），
   `ui/main_content/lx/history.rs` 1068 → 921（拆出 `sticky.rs`）；全部触及文件 ≤1000 行。
+
+## 13. 连续同种文件调用合并 + 语法高亮 + 增删行底色（第三轮）
+
+依赖：§12 的文件差异卡片。用户确认采用**扁平合并**（A 方案），并明确指出：
+
+- 同种工具连续调用必须合在一起、用 `└─` 分隔（对齐 Codex 截图）；
+- 差异正文要语法高亮（含 markdown），新增/删除行要整行背景色（对齐 Codex）；
+- 展开后点击正文即折叠（长按选中不折叠）——§12 已实现，本轮不重复改。
+
+- [x] `tool::merge_group`：从 `steps[start]` 收集**相邻、同名、都带差异正文**的调用；被 Part
+      或不同工具名打断即停；`edit`+`write` 不合并（标题只能写一个动词）。
+- [x] `history::layout` / `history::render` 同步加入合并分支：一组只占一个块（组前一个空行），
+      只登记一份 `CardHit` 与一个 `ToolHitKind::Toggle`（键为组首 `(message_id, call_id)`），
+      `step_index += group.len()`。
+- [x] 合并卡标题 `■ 动词 N files (+A -R)`：计数为组内求和，任一计数未知/文件被裁时整体退化为
+      ` (?)`，绝不用 0 冒充；方块状态取组内最差（失败 > 中断 > 运行中 > 取消 > 完成）。
+      单次调用**不**走合并标题（仍是裸动词，不写 `1 file`）。
+- [x] 文件行扁平铺开、按调用顺序；同一文件被两次 `edit` 会出两行（A 方案已披露的副作用）。
+- [x] 增删行整行底色：`Row.fill` + `Grid::background_row` 先刷整行，再给每个分段 `patch` 同一底色
+      ——字符格样式会覆盖行底色，两处缺一就会掉色。
+- [x] 语法高亮零新依赖：代码走 `markdown_render::highlight_line`（关键字/字符串/数字/类型/注释），
+      `.md`/`.mdx` 走 `ui::markdown::scan` + `prompt::token_style`，未知扩展名不做假高亮；
+      未命中语法的字符保留增删语义色而不是中性正文色。
+- [x] 测试：`file_diff::tests` 新增合并卡、整组展开、最差状态、动词不合并、Rust 语法色、markdown
+      词法色、未知扩展名保持语义色；`history::tests::tool_geometry` 新增合并卡几何（布局=渲染、
+      单份命中区、组内无空行、`write`+`write` 合并、`edit`+`write` 不合并、Part 打断分组）。
+
+- [x] 行数拆分：合并卡把 `history.rs` 顶到 1003 行，按职责抽出 `history/stats.rs`
+      （统计行 `stats_line` + 耗时短格式 `format_duration`），`history.rs` 回到 926 行，
+      对外仍是 `pub(crate) use`，调用点不变。
+
+当前验证记录（第三轮）：
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2853 passed / 0 failed（lib + 集成 + doc）。
+- 触及文件行数：`history.rs` 926、`history/tool.rs` 570、`history/tool/file_diff.rs` 815、
+  `history/tool/file_diff/tests.rs` 845、`history/tests/tool_geometry.rs` 509，全部 ≤1000。
+- 人工验收仍待用户 `cargo run`：合并卡观感、语法高亮与增删底色、点击正文折叠。

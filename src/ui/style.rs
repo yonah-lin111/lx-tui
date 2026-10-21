@@ -182,6 +182,20 @@ pub fn agent_removed() -> Style {
     Style::default().fg(Color::Red)
 }
 
+/// diff 新增行的**整行底色**（深绿 `#213A2B`，取自 codex 的真彩兜底调色板）。
+///
+/// 与 [`agent_added`] 分工不同：前景色说明「这是新增」，底色说明「这一行的范围
+/// 到哪」——只染前景时，空行与行尾的空白看不出属于哪一边。新增/删除行各自铺满
+/// **整行宽度**，上下文行不铺（codex 同口径）。
+pub fn agent_added_bg() -> Style {
+    Style::default().bg(Color::Rgb(0x21, 0x3a, 0x2b))
+}
+
+/// diff 删除行的整行底色（深红 `#4A221D`，同为 codex 的真彩兜底值）。
+pub fn agent_removed_bg() -> Style {
+    Style::default().bg(Color::Rgb(0x4a, 0x22, 0x1d))
+}
+
 /// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
 ///
 /// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、

@@ -1,4 +1,4 @@
-//! 工具步骤渲染：**两行**「`■ 动词` + `  └─ 详情`」（对齐消息底部通知的语法）。
+//! 工具步骤渲染：基本形态是**两行**「`■ 动词` + `  └─ 详情`」（对齐消息底部通知的语法）。
 //!
 //! 语法与 [`super::super::notice`] 完全一致，同一块历史里只有一套步骤读法：
 //!
@@ -16,9 +16,10 @@
 //!   用 dim 的状态词兜底。**完成态没有兜底**：没有任何摘要时第 2 行只有 `└─`
 //!   前缀（行数仍算 2）。
 //!
-//! **行数口径 [`rows`] 恒为 2**（宽度 0 时为 0），第二行**单行绝不换行**——
-//! `history::layout`、`history::render`、置顶用户行与滚动条全靠这条不变量对齐。
-//! 超宽时按「参数内的次要段（`search` 的 `in path`、长路径尾段）→ 次要计数按优先级
+//! **行数口径只有一个来源**：基本文件工具恒为 2（宽度 0 时为 0），第二行**单行
+//! 绝不换行**；带差异正文的文件卡片、进程卡片与计划卡片各有自己的行数函数
+//! （[`rows`] 分派），但 `history::layout`、`history::render`、置顶用户行与滚动条
+//! 全都复用同一份口径。超宽时按「参数内的次要段（`search` 的 `in path`、长路径尾段）→ 次要计数按优先级
 //! 丢弃 → 错误尾部省略 → 丢参数」依次让位，`└─` 前缀始终可辨。`search` 的 pattern
 //! 是这一行唯一必须保住的信息，**绝不中间省略**（只在它单独都放不下时尾部省略）。
 //!
@@ -32,7 +33,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
-use crate::app::state::{ToolCallView, ToolStatus};
+use crate::app::state::{AssistantStepView, ToolCallView, ToolStatus};
 use crate::ui::{style, text};
 
 use super::super::Grid;
@@ -70,8 +71,8 @@ pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
             expanded_or_preview_rows(call, width, expanded)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, expanded),
-        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::has_diff(call) => {
-            file_diff::rows(call, width, expanded)
+        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
+            file_diff::rows(&[call], width, expanded)
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => HEADER_ROWS + DETAIL_ROWS,
     }
@@ -174,13 +175,13 @@ pub(super) fn draw_animated(
             );
             return;
         }
-        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::has_diff(call) => {
+        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::draw(
                 grid,
                 rect,
                 scroll,
                 row_index,
-                call,
+                &[call],
                 loading_frame,
                 expanded,
                 animating,
@@ -222,15 +223,84 @@ pub(super) fn open_offset(call: &ToolCallView) -> Option<usize> {
 
 /// 该调用是否有可展开的差异正文（文件卡片专用）。
 pub(super) fn has_expandable(call: &ToolCallView) -> bool {
-    file_diff::has_diff(call)
+    file_diff::is_card(call)
+}
+
+/// 从 `steps[start]` 起收集可合并的文件工具组（含起点）；不合并时返回空。
+///
+/// 合并条件是**同一工具名**（`edit` 并 `edit`、`write` 并 `write`）且两边都是有
+/// 差异正文的文件卡片。`edit` 与 `write` 是两个不同的动词，不并——标题只能写一个
+/// 动词，混并会把 `write` 说成 `Edit`。组内没有正文步骤可插：一旦被 part 打断就
+/// 是两组。
+///
+/// 返回空的两种情况（不是文件卡片 / 已是单元素）由调用方按单调用原路径处理，
+/// 因此这里不区分「不可合并」与「只有一个」。
+pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&ToolCallView> {
+    let Some(AssistantStepView::Tool { call, .. }) = steps.get(start) else {
+        return Vec::new();
+    };
+    if !file_diff::is_card(call) {
+        return Vec::new();
+    }
+    let mut group = vec![call];
+    for step in &steps[start + 1..] {
+        let AssistantStepView::Tool { call: next, .. } = step else {
+            break;
+        };
+        if next.name != call.name || !file_diff::is_card(next) {
+            break;
+        }
+        group.push(next);
+    }
+    group
+}
+
+/// 合并卡行数；单元素组等价于单调用卡片。
+pub(super) fn group_rows(calls: &[&ToolCallView], width: u16, expanded: bool) -> usize {
+    file_diff::rows(calls, width, expanded)
+}
+
+/// 合并卡末尾动作行的卡片内偏移。
+pub(super) fn group_action_offset(
+    calls: &[&ToolCallView],
+    width: u16,
+    expanded: bool,
+) -> Option<usize> {
+    file_diff::action_offset(calls, width, expanded)
+}
+
+/// 绘制合并卡；推进行数与 [`group_rows`] 严格相等。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn group_draw_animated(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    calls: &[&ToolCallView],
+    loading_frame: usize,
+    expanded: bool,
+    animating: bool,
+    hovered: bool,
+) {
+    file_diff::draw(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        calls,
+        loading_frame,
+        expanded,
+        animating,
+        hovered,
+    );
 }
 
 /// 文件差异卡片**末尾动作行**的卡片内偏移；没有可展开差异时返回 None。
 ///
 /// 与进程 `open` 是两种不同的命中动作：这一行切换整张文件卡片的展开状态，
 /// 绝不打开后台任务面板（见 `history::ToolHitKind`）。标题行不再可点。
-pub(super) fn action_offset(call: &ToolCallView, width: u16, expanded: bool) -> Option<usize> {
-    file_diff::action_offset(call, width, expanded)
+pub(super) fn action_offset(calls: &[&ToolCallView], width: u16, expanded: bool) -> Option<usize> {
+    file_diff::action_offset(calls, width, expanded)
 }
 
 /// 行内一段着色文本。

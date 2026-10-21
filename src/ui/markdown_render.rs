@@ -21,6 +21,9 @@ use crate::ui::text;
 mod highlight;
 mod table;
 
+/// 轻量词法高亮一行代码（文件差异卡片复用同一套分色，避免第二份实现）。
+pub(crate) use highlight::highlight_line;
+
 /// 渲染出的一行：左缩进列 + 多色分段（拼接即该行纯文本）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct MdLine {

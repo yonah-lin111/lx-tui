@@ -335,3 +335,175 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
         tool_line(&buf)
     );
 }
+
+// ===== 连续同种文件调用合并成一张卡 =====
+
+/// 构造一个带差异正文的文件工具步骤（`name` 决定 `edit` / `write`）。
+fn file_step(position: i64, call_id: &str, name: &str, status: ToolStatus) -> AssistantStepView {
+    use crate::app::state::{FileChangeView, FileDiffDetailView, FileDiffView};
+    use crate::chat::tools::{DiffHunk, DiffLine, DiffLineKind, FileChangeKind, FileDiff};
+
+    let diff = FileDiff::Complete {
+        hunks: vec![DiffHunk {
+            // 4 个增删行 > 预览的 3 行额度：折叠态出省略提示，展开态必然多行。
+            lines: (1..=2)
+                .flat_map(|n| {
+                    [
+                        DiffLine {
+                            kind: DiffLineKind::Removed,
+                            old_line: Some(n),
+                            new_line: None,
+                            text: format!("old{n}"),
+                            no_final_newline: false,
+                        },
+                        DiffLine {
+                            kind: DiffLineKind::Added,
+                            old_line: None,
+                            new_line: Some(n),
+                            text: format!("new{n}"),
+                            no_final_newline: false,
+                        },
+                    ]
+                })
+                .collect(),
+        }],
+        simplified: false,
+    };
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: call_id.into(),
+            name: name.into(),
+            position,
+            arguments_json: String::new(),
+            status,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(crate::app::state::ToolDetailView::File(
+                FileDiffDetailView {
+                    files: vec![FileChangeView {
+                        path: format!("src/file{position}.rs"),
+                        to: None,
+                        kind: FileChangeKind::Updated,
+                        added: Some(1),
+                        removed: Some(1),
+                        counts_known: true,
+                        simplified: false,
+                        diff: Some(FileDiffView::from(&diff)),
+                    }],
+                    files_total: 1,
+                    added: Some(1),
+                    removed: Some(1),
+                    simplified: false,
+                    omitted_files: 0,
+                    single: false,
+                },
+            ))),
+        },
+    }
+}
+
+/// 一张合并卡登记的整卡 / 展开入口数量。
+fn card_hits(lx: &Lx, area: Rect) -> (usize, usize) {
+    let computed = layout(area, lx);
+    let cards = computed
+        .cards
+        .iter()
+        .filter(|hit| matches!(hit.kind, CardKind::Tool { .. }))
+        .count();
+    let toggles = computed
+        .tools
+        .iter()
+        .filter(|hit| hit.kind == ToolHitKind::Toggle)
+        .count();
+    (cards, toggles)
+}
+
+/// 连续 `edit` 合并成**一张**卡：布局/渲染行数一致，只登记一份命中区，
+/// 组内不出现块间空行；同组的 `write` 同理，`edit` 与 `write` 不合并。
+#[test]
+fn consecutive_file_tools_merge_into_one_card() {
+    let area = Rect::new(0, 0, 60, 20);
+
+    let build = |names: [&str; 2]| {
+        let mut message = message("assistant", "complete", Vec::new());
+        message
+            .steps
+            .push(file_step(1, "call-a", names[0], ToolStatus::Completed));
+        message
+            .steps
+            .push(file_step(2, "call-b", names[1], ToolStatus::Completed));
+        lx_with(vec![message])
+    };
+
+    let merged = build(["edit", "edit"]);
+    let merged_layout = layout(area, &merged);
+    assert_eq!(
+        render_rows(area, &merged, 0),
+        merged_layout.total_rows,
+        "合并卡布局与渲染行数一致"
+    );
+    assert_eq!(
+        card_hits(&merged, area),
+        (1, 1),
+        "两个连续 edit 只登记一张卡、一个展开入口"
+    );
+
+    // `write` 同为文件工具：连续 `write` 也合并。
+    let writes = build(["write", "write"]);
+    assert_eq!(card_hits(&writes, area), (1, 1), "连续 write 也合并");
+    assert_eq!(
+        render_rows(area, &writes, 0),
+        layout(area, &writes).total_rows
+    );
+
+    // 组内没有块间空行：标题之后到动作行之前的每一行都有内容（文件行/正文/省略提示）。
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &merged, 0);
+    let total = merged_layout.total_rows;
+    for row in 1..total - 1 {
+        let line = row_text(&buf, area, u16::try_from(row).unwrap_or(u16::MAX));
+        assert!(
+            !line.trim().is_empty(),
+            "合并卡内不得出现空行：{row} {line:?}"
+        );
+    }
+
+    // 展开状态记在组首调用名下，整组一起展开。
+    let mut expanded = build(["edit", "edit"]);
+    assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
+    let expanded_layout = layout(area, &expanded);
+    assert!(
+        expanded_layout.total_rows > merged_layout.total_rows,
+        "整组展开多出行"
+    );
+    assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
+    let (cards, toggles) = card_hits(&expanded, area);
+    assert_eq!((cards, toggles), (1, 1), "展开态仍是同一张卡");
+
+    // 同种动词才合并：edit + write 各自成卡，行数更多。
+    let split = build(["edit", "write"]);
+    let split_layout = layout(area, &split);
+    assert_eq!(card_hits(&split, area), (2, 2), "不同动词不合并");
+    assert!(split_layout.total_rows > merged_layout.total_rows);
+    assert_eq!(render_rows(area, &split, 0), split_layout.total_rows);
+}
+
+/// 正文步骤打断即分组：`edit` → 正文 → `edit` 是两张卡。
+#[test]
+fn a_part_step_breaks_the_merge() {
+    let mut message = message("assistant", "complete", vec![text_part("中间说一句")]);
+    message.steps = vec![
+        file_step(1, "call-a", "edit", ToolStatus::Completed),
+        AssistantStepView::Part {
+            position: 2,
+            part: text_part("中间说一句"),
+        },
+        file_step(3, "call-b", "edit", ToolStatus::Completed),
+    ];
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 20);
+    assert_eq!(card_hits(&lx, area), (2, 2), "正文打断合并");
+    assert_eq!(render_rows(area, &lx, 0), layout(area, &lx).total_rows);
+}

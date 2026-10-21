@@ -125,6 +125,15 @@ pub fn removed_label(count: usize) -> String {
     format!("{TOOL_DIFF_REMOVE_PREFIX}{count}")
 }
 
+/// 合并卡标题里的文件数：`1 file` / `3 files`。
+///
+/// 只出现在**连续同种文件调用的合并卡**上：单次调用的标题仍是裸动词，不写 `1 file`
+/// ——那会把最常见的单文件改动也说成汇总，白占标题宽度。
+pub fn tool_files_label(count: usize) -> String {
+    let suffix = if count == 1 { "file" } else { "files" };
+    format!("{count} {suffix}")
+}
+
 /// markdown 渲染器识别的代码块语言标记（代码块头部 `language: xxx` 的取值）。
 pub const MD_LANG: &str = "rust";
 
