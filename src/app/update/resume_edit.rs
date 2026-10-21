@@ -60,7 +60,12 @@ pub fn copy_resume_session_id(state: &mut AppState, pane: PaneId) -> bool {
     };
     let session_id = entry.session_id.clone();
     // 唯一剪贴板出口：剪贴板写入与 toast 由事件层按 Effect 出箱，app 层不做 IO。
-    state.effects.push(Effect::CopyToClipboard(session_id));
+    // `anchor` 锚到当前窗格：toast 落在 main content 里，而不是屏幕顶部居中——
+    // 复制发生在 lx 页，反馈就该出现在同一块区域。
+    state.effects.push(Effect::CopyToClipboard {
+        text: session_id,
+        anchor: Some(pane),
+    });
     true
 }
 

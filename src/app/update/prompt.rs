@@ -877,7 +877,10 @@ pub fn copy_prompt_content(state: &mut AppState, workspace: usize, item_id: i64)
     else {
         return;
     };
-    state.effects.push(Effect::CopyToClipboard(content));
+    state.effects.push(Effect::CopyToClipboard {
+        text: content,
+        anchor: None,
+    });
 }
 
 /// 复制临时提示词当前页正文到剪贴板；不入库、无确认。
@@ -891,7 +894,10 @@ pub fn copy_prompt_temp_content(state: &mut AppState, workspace: usize, temp_id:
     else {
         return;
     };
-    state.effects.push(Effect::CopyToClipboard(content));
+    state.effects.push(Effect::CopyToClipboard {
+        text: content,
+        anchor: None,
+    });
 }
 
 /// 删除临时提示词：仅内存移除并钳制选中；不入库、无确认浮层。

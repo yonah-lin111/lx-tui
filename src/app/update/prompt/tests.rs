@@ -334,7 +334,7 @@ fn item_menu_lists_commands_and_dispatches_copy_delete() {
     crate::app::update::activate_menu(&mut state);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard(text) if text == "nested content"
+        Effect::CopyToClipboard { text, .. } if text == "nested content"
     )));
 
     // 删除命令 → 确认浮层；确认后级联删除。
@@ -985,7 +985,7 @@ fn temp_menu_lists_commands_and_deletes_immediately() {
     crate::app::update::activate_menu(&mut state);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard(text) if text == "doomed"
+        Effect::CopyToClipboard { text, .. } if text == "doomed"
     )));
 
     // 删除命令 → 立即移除（不打开确认浮层）。
@@ -1823,7 +1823,7 @@ fn copy_content_uses_active_page_only() {
     copy_prompt_content(&mut state, 0, 10);
     assert!(state.effects.iter().any(|effect| matches!(
         effect,
-        Effect::CopyToClipboard(text) if text == "second page"
+        Effect::CopyToClipboard { text, .. } if text == "second page"
     )));
 }
 

@@ -512,7 +512,7 @@ impl Persistence {
                 changed |= self.reload_referenced(state, &key);
                 changed
             }
-            Effect::CopyToClipboard(text) => {
+            Effect::CopyToClipboard { text, anchor } => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
                     (ToastKind::Info, text::TOAST_COPIED)
@@ -522,7 +522,7 @@ impl Persistence {
                 };
                 update::show_toast(
                     state,
-                    Toast::new(kind, message, None, now).with_title(text::TOAST_CLIPBOARD_TITLE),
+                    Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
                 );
                 true
             }

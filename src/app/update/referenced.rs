@@ -339,7 +339,10 @@ pub fn copy_referenced_menu_selected(state: &mut AppState) -> bool {
     let Some(text_value) = crate::app::markdown::format_reference(ReferKind::Folder, path) else {
         return false;
     };
-    state.effects.push(Effect::CopyToClipboard(text_value));
+    state.effects.push(Effect::CopyToClipboard {
+        text: text_value,
+        anchor: None,
+    });
     true
 }
 

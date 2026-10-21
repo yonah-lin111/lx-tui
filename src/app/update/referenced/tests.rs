@@ -460,7 +460,7 @@ fn copy_reference_uses_refer_file_and_refer_folder_syntax() {
         .effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::CopyToClipboard(text) => Some(text.as_str()),
+            Effect::CopyToClipboard { text, .. } => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -552,7 +552,7 @@ fn menu_copy_uses_refer_folder_syntax() {
     let expected = format!("@[refer-folder]({})", beta.display());
     assert!(matches!(
         state.effects.as_slice(),
-        [Effect::CopyToClipboard(text)] if *text == expected
+        [Effect::CopyToClipboard { text, .. }] if *text == expected
     ));
 }
 

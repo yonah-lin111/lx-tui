@@ -177,15 +177,19 @@ fn clear_key_copies_highlighted_session_id_without_clearing_input() {
 
     crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
 
-    let copied: Vec<String> = state
+    let copied: Vec<(String, Option<crate::layout::PaneId>)> = state
         .effects
         .iter()
         .filter_map(|effect| match effect {
-            Effect::CopyToClipboard(text) => Some(text.clone()),
+            Effect::CopyToClipboard { text, anchor } => Some((text.clone(), *anchor)),
             _ => None,
         })
         .collect();
-    assert_eq!(copied, vec!["sess-b".to_string()], "复制高亮行裸 id");
+    assert_eq!(
+        copied,
+        vec![("sess-b".to_string(), Some(pane))],
+        "复制高亮行裸 id，且 toast 锚到当前窗格（main content）"
+    );
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
     assert_eq!(lx.input, draft, "面板内 ^C 不清空输入框");
     assert!(
@@ -214,7 +218,7 @@ fn clear_key_on_empty_history_panel_is_swallowed() {
         !state
             .effects
             .iter()
-            .any(|effect| matches!(effect, Effect::CopyToClipboard(_))),
+            .any(|effect| matches!(effect, Effect::CopyToClipboard { .. })),
         "空列表不产生复制效应"
     );
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
@@ -268,7 +272,7 @@ fn clear_key_is_swallowed_in_model_panel() {
         !state
             .effects
             .iter()
-            .any(|effect| matches!(effect, Effect::CopyToClipboard(_))),
+            .any(|effect| matches!(effect, Effect::CopyToClipboard { .. })),
         "model 面板不复制"
     );
     assert_eq!(

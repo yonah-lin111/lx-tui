@@ -111,7 +111,13 @@ pub enum Effect {
     /// 删除引用文件夹记录（仅移除记录，不动磁盘内容）。
     DeleteReferencedFolder { workspace: PathBuf, id: i64 },
     /// 复制文本到系统剪贴板并弹出反馈 toast。
-    CopyToClipboard(String),
+    ///
+    /// `anchor` 决定 toast 位置：`None` 走屏幕顶部居中；`Some(pane)` 落在该窗格
+    /// （main content）顶部居中——复制动作发生在哪儿，反馈就出现在哪儿。
+    CopyToClipboard {
+        text: String,
+        anchor: Option<crate::layout::PaneId>,
+    },
     // ===== lx 聊天 =====
     /// 开启一轮聊天：DB 写入 session(首轮)+user+streaming assistant。
     ///

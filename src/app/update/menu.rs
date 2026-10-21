@@ -388,9 +388,10 @@ pub fn activate_menu(state: &mut AppState) {
                 .get(target)
                 .and_then(|workspace| workspace.cwd.as_ref())
             {
-                state
-                    .effects
-                    .push(Effect::CopyToClipboard(path.display().to_string()));
+                state.effects.push(Effect::CopyToClipboard {
+                    text: path.display().to_string(),
+                    anchor: None,
+                });
             }
         }
         (
@@ -409,9 +410,10 @@ pub fn activate_menu(state: &mut AppState) {
                     .or_else(|| ws.cwd.clone())
             });
             if let Some(path) = path {
-                state
-                    .effects
-                    .push(Effect::CopyToClipboard(path.display().to_string()));
+                state.effects.push(Effect::CopyToClipboard {
+                    text: path.display().to_string(),
+                    anchor: None,
+                });
             }
         }
         (Some(MenuCommand::DeleteTemp), OverlayTarget::TempPrompt { workspace, temp_id }) => {

@@ -2661,7 +2661,7 @@ fn referenced_menu_ctrl_c_copies_and_ctrl_d_or_del_removes() {
     );
     assert!(matches!(
         state.effects.as_slice(),
-        [crate::app::effects::Effect::CopyToClipboard(text)]
+        [crate::app::effects::Effect::CopyToClipboard { text, .. }]
             if text.contains("lx-ref-menu/alpha")
     ));
 }

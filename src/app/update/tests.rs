@@ -2048,7 +2048,10 @@ fn activate_menu_copy_path_from_workspace_emits_effect() {
 
     assert_eq!(
         state.effects,
-        vec![Effect::CopyToClipboard("/Users/test/workspace".to_string())]
+        vec![Effect::CopyToClipboard {
+            text: "/Users/test/workspace".to_string(),
+            anchor: None,
+        }]
     );
 }
 
@@ -2088,7 +2091,10 @@ fn activate_menu_copy_path_from_terminal_pane_prefers_pane_cwd() {
 
     assert_eq!(
         state.effects,
-        vec![Effect::CopyToClipboard("/tmp/term-cwd".to_string())]
+        vec![Effect::CopyToClipboard {
+            text: "/tmp/term-cwd".to_string(),
+            anchor: None,
+        }]
     );
 }
 
@@ -2106,7 +2112,10 @@ fn activate_menu_copy_path_from_lx_pane_falls_back_to_workspace_cwd() {
 
     assert_eq!(
         state.effects,
-        vec![Effect::CopyToClipboard("/tmp/ws-cwd".to_string())]
+        vec![Effect::CopyToClipboard {
+            text: "/tmp/ws-cwd".to_string(),
+            anchor: None,
+        }]
     );
 }
 
