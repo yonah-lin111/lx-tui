@@ -720,9 +720,9 @@ fn enter_on_resume_panel_clears_input() {
     assert!(lx.input.is_empty(), "选中会话后清空: {:?}", lx.input);
 }
 
-/// `↵` 选中模型（进入第二级）：清空输入框。
+/// `↵` 进入第二级：**不清空**（换层继续挑，过滤词要留给退回第一级时用）。
 #[test]
-fn enter_on_model_panel_clears_input() {
+fn enter_into_variant_stage_keeps_input() {
     use crate::app::actions::LxInput;
 
     let mut state = ready_state("");
@@ -734,7 +734,7 @@ fn enter_on_model_panel_clears_input() {
     assert!(apply_slash_enter(&mut state, pane));
 
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
-    assert!(lx.input.is_empty(), "选中模型后清空: {:?}", lx.input);
+    assert_eq!(lx.input, "m", "进入第二级不清空过滤词");
 }
 
 /// `↵` 选中思考等级（关闭面板）：清空输入框。
@@ -850,4 +850,59 @@ fn resume_filter_still_works_after_clear_rules() {
         _ => panic!("history panel"),
     };
     assert_eq!(panel.filtered, vec![1], "过滤仍生效");
+}
+
+/// 回归：`Esc` 从第二级退回第一级，必须重建出**过滤后**的列表，不是全量。
+///
+/// 之前的实现是进入第二级就把输入框清空，退回时按空串重算 → 列表跳回全量，
+/// 用户看到「Esc 退回第一级仍只剩 deepseek 没有效果」。
+#[test]
+fn escape_from_variant_stage_restores_filtered_model_list() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    // 两个模型：m（有 high/low）、other（无 variants）。
+    let mut settings = models_with(Some("high"));
+    {
+        let provider = settings.settings.providers.get_mut("p").expect("provider");
+        let model = provider.models.get_mut("m").expect("model");
+        model
+            .variants
+            .insert("low".into(), serde_json::json!({"reasoningEffort": "low"}));
+        let mut other = model.clone();
+        other.id = "other".into();
+        other.name = "zzz-other".into();
+        other.variants.clear();
+        provider.models.insert("other".into(), other);
+    }
+    state.models = settings;
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    // 只留 m（`m` 也命中 `other` 的 provider？不会，按模型名匹配）。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('m'));
+    let picker = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::Model(picker)) => picker,
+        _ => panic!("model panel"),
+    };
+    let filtered_before = picker.filtered.clone();
+    assert_eq!(filtered_before.len(), 1, "第一级只留一个模型");
+    assert!(picker.stage_len() >= 2, "原始候选至少两个");
+
+    // 进入第二级，再 Esc 退回第一级。
+    assert!(apply_slash_enter(&mut state, pane));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Escape);
+
+    let picker = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::Model(picker)) => picker,
+        _ => panic!("应停留在第一级面板"),
+    };
+    assert!(
+        matches!(picker.stage, ModelPickerStage::Models),
+        "已退回第一级"
+    );
+    assert_eq!(picker.filter, "m", "过滤词仍在");
+    assert_eq!(
+        picker.filtered, filtered_before,
+        "退回后仍是过滤后的列表，不跳回全量"
+    );
 }

@@ -202,18 +202,23 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                             super::super::state::ModelPickerStage::Variants { .. }
                         ) =>
                     {
-                        // 第二级退回第一级：仍在同一个 `/model` 流程里，**不清空**输入框，
-                        // 否则第一级用于过滤的词被抹掉，列表无故跳回全量。
+                        // 第二级退回第一级：仍在同一个 `/model` 流程里，**不清空**输入框。
+                        // 退回后必须按输入框里现存的过滤词重建第一级视图，
+                        // 否则列表会无故跳回全量（`deepseek` 之类被"忘掉"）。
+                        let query = lx.input.clone();
                         if let Some(panel) = lx.slash.as_mut()
                             && let super::super::state::SlashPanel::Model(picker) = panel
                         {
+                            let active = picker.window.active;
                             picker.stage = super::super::state::ModelPickerStage::Models;
-                            // 回第一级：过滤视图按新阶段重建（第二级本来就不支持过滤）。
-                            picker.filtered = (0..picker.stage_len()).collect();
-                            picker.filter.clear();
-                            picker.clamp_window();
-                            picker.window =
-                                super::super::state::PanelWindow::new(picker.window.active);
+                            // 先切回第一级，再按过滤词重算（`refilter` 只对 Models 生效）。
+                            picker.refilter(&query);
+                            let len = picker.filtered.len();
+                            picker.window = super::super::state::PanelWindow::new(if len == 0 {
+                                0
+                            } else {
+                                active.min(len - 1)
+                            });
                         }
                     }
                     // 真正关闭二级面板（`/model` 第一级、`/resume`、命令候选）：整框清空。

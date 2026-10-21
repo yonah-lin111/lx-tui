@@ -469,12 +469,13 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                 };
                 let selection = candidate.selection;
                 let variants = variant_keys(state, &selection);
-                // 选中模型即结束这次搜索：**整框清空**输入框里的过滤词。
-                // 没有 variants 时面板就此关闭；有 variants 时进入第二级（也属选中模型）。
-                clear_lx_input(state, pane);
                 if variants.is_empty() {
+                    // 无 variants：选中即完成，面板关闭 → 清空过滤词。
+                    clear_lx_input(state, pane);
                     finish_model_selection(state, pane, selection);
                 } else {
+                    // 有 variants：只是换到第二级继续挑，**不清空**。
+                    // 清了输入框，`Esc` 退回第一级时过滤词就没了，第一级会跳回全量。
                     let active = default_variant_index(state, &selection, &variants);
                     // 当前生效的 variant（第一级高亮的模型若正是当前模型，其 variant
                     // 就是"现在生效"的那一档）；否则第二级没有"已生效项"。
