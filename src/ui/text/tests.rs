@@ -472,3 +472,82 @@ fn action_words_stay_spelled_out_while_keys_use_symbols() {
     // Cmd 只用一个字形，且与 web 图标不重名混淆：`⌘` 就是 `key::CMD`。
     assert_eq!(key::CMD, "⌘");
 }
+
+/// 身份标签：三段齐全时为 `项目 · b:分支 · wt:工作区名`。
+#[test]
+fn workspace_identity_spans_full_format() {
+    let identity = WorkspaceIdentity {
+        project: "lx-tui".into(),
+        branch: Some("dev".into()),
+        worktree: Some("lx-file-tool-diff".into()),
+    };
+    let spans = workspace_identity_spans(&identity, 40).expect("fits");
+    let line: String = spans.iter().map(|span| span.text.as_str()).collect();
+    assert_eq!(line, "lx-tui · b:dev · wt:lx-file-tool-diff");
+    // 项目名与 `b:`/`wt:` 前缀强调；分隔符与值不强调。
+    assert!(spans[0].emphasis, "项目名强调");
+    assert!(!spans[1].emphasis, "分隔符不强调");
+    assert!(spans[2].emphasis, "b: 前缀强调");
+    assert!(!spans[3].emphasis, "分支值不强调");
+    assert!(!spans[4].emphasis, "分隔符不强调");
+    assert!(spans[5].emphasis, "wt: 前缀强调");
+    assert!(!spans[6].emphasis, "工作区名不强调");
+}
+
+/// 缺段自动省略：非 git 只有项目名，主 checkout 无 `wt:`。
+#[test]
+fn workspace_identity_spans_drop_missing_segments() {
+    let plain = WorkspaceIdentity {
+        project: "lx-tui".into(),
+        branch: None,
+        worktree: None,
+    };
+    let line: String = workspace_identity_spans(&plain, 20)
+        .expect("fits")
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect();
+    assert_eq!(line, "lx-tui");
+
+    let main = WorkspaceIdentity {
+        project: "lx-tui".into(),
+        branch: Some("dev".into()),
+        worktree: None,
+    };
+    let line: String = workspace_identity_spans(&main, 20)
+        .expect("fits")
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect();
+    assert_eq!(line, "lx-tui · b:dev");
+}
+
+/// 降级阶梯：先砍 `wt:`，再省略项目名但保留 `b:`，最后只留项目名。
+#[test]
+fn workspace_identity_spans_degrade_in_order() {
+    let identity = WorkspaceIdentity {
+        project: "lx-tui".into(),
+        branch: Some("dev".into()),
+        worktree: Some("worktree-name".into()),
+    };
+    let render = |available: usize| -> String {
+        workspace_identity_spans(&identity, available)
+            .expect("spans")
+            .iter()
+            .map(|span| span.text.as_str())
+            .collect()
+    };
+    // 16 列：`lx-tui · b:dev` 刚好放得下 → 砍 `wt:`。
+    assert_eq!(render(16), "lx-tui · b:dev");
+    // 12 列：`b:` 段保留，项目名中间省略。
+    let clipped = render(12);
+    assert!(clipped.contains("b:dev"), "{clipped}");
+    assert!(clipped.contains('…'), "{clipped}");
+    assert!(clipped.chars().count() <= 12, "{clipped}");
+    // 5 列：只留项目名（同样可能省略）。
+    let project_only = render(5);
+    assert!(!project_only.contains("b:"), "{project_only}");
+    assert!(project_only.chars().count() <= 5, "{project_only}");
+    // 连省略号都放不下：不绘制。
+    assert!(workspace_identity_spans(&identity, 1).is_none());
+}

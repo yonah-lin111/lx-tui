@@ -546,3 +546,88 @@ fn lx_editing_undo_redo_and_wide_chars() {
     lx.undo();
     assert_eq!(lx.input, "你，好");
 }
+
+/// chat 会话键按仓库根共享：linked worktree 与主 checkout 指向同一路径。
+#[test]
+fn chat_session_key_for_pane_shares_repo_root() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/main"));
+    state.workspaces[0].git = Some(git_info("/repo/main", "/repo/main", false, Some("dev")));
+    let main_pane = state.active_tab().layout.focus();
+
+    let mut linked = Workspace::single_terminal("feat".into(), Some(PathBuf::from("/repo/wt")));
+    linked.git = Some(git_info("/repo/main", "/repo/wt", true, Some("feat/x")));
+    let linked_pane = linked.root_pane().expect("root pane");
+    state.workspaces.push(linked);
+
+    assert_eq!(
+        state.chat_session_key_for_pane(main_pane),
+        Some(PathBuf::from("/repo/main"))
+    );
+    assert_eq!(
+        state.chat_session_key_for_pane(linked_pane),
+        Some(PathBuf::from("/repo/main")),
+        "worktree 与会话键共享仓库根"
+    );
+    // 执行 cwd 仍是各自 checkout，绝不能被共享键覆盖。
+    assert_eq!(
+        state.workspace_cwd_for_pane(linked_pane),
+        Some(PathBuf::from("/repo/wt"))
+    );
+    assert_eq!(state.chat_session_key_for_pane(PaneId::alloc()), None);
+}
+
+/// 非 git 工作区回退 cwd 作为会话键。
+#[test]
+fn chat_session_key_falls_back_to_cwd_without_git() {
+    let mut state = AppState::demo();
+    state.workspaces[0].cwd = Some(PathBuf::from("/plain/ws"));
+    state.workspaces[0].git = None;
+    let pane = state.active_tab().layout.focus();
+    assert_eq!(
+        state.chat_session_key_for_pane(pane),
+        Some(PathBuf::from("/plain/ws"))
+    );
+}
+
+/// 身份标签：主 checkout 无 `wt:`，linked worktree 有；项目名取仓库根目录名。
+#[test]
+fn workspace_identity_follows_git_shape() {
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "renamed".into();
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/lx-tui"));
+    state.workspaces[0].git = Some(git_info("/repo/lx-tui", "/repo/lx-tui", false, Some("dev")));
+    let main = state.workspaces[0].identity();
+    assert_eq!(
+        main.project, "lx-tui",
+        "项目名取仓库根目录名，不取工作区显示名"
+    );
+    assert_eq!(main.branch.as_deref(), Some("dev"));
+    assert_eq!(main.worktree, None, "主 checkout 无工作区名段");
+
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/repo/lx-tui"),
+        checkout_path: PathBuf::from("/repo/wt"),
+        is_linked: true,
+        branch: Some("feat/x".into()),
+        main_branch: Some("dev".into()),
+    });
+    let linked = state.workspaces[0].identity();
+    assert_eq!(linked.project, "lx-tui");
+    assert_eq!(
+        linked.branch.as_deref(),
+        Some("dev"),
+        "b: 取主 checkout 分支"
+    );
+    assert_eq!(
+        linked.worktree.as_deref(),
+        Some("renamed"),
+        "wt: 取工作区显示名"
+    );
+
+    state.workspaces[0].git = None;
+    let plain = state.workspaces[0].identity();
+    assert_eq!(plain.project, "lx-tui", "非 git 取 cwd 末段");
+    assert_eq!(plain.branch, None);
+    assert_eq!(plain.worktree, None);
+}

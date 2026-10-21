@@ -4,7 +4,7 @@
 //! → `Effect::LoadChatSession`），断言窗格的历史视图与绑定会话都被重建，
 //! 而不只是"面板关掉了"。
 
-use super::tests::trusted_service;
+use super::tests::{state_with_cwd, temp_db_path, trusted_service, workspace_path};
 use super::*;
 use crate::app::effects::Effect;
 use crate::app::state::lx::slash::{SlashCommand, SlashPanel};
@@ -300,4 +300,73 @@ fn delete_through_modal_removes_session_and_updates_panel() {
         panel.entries.iter().all(|entry| entry.session_id != doomed),
         "列表就地移除该行"
     );
+}
+
+/// `/resume` 跨工作区共用：同一仓库的主 checkout 与 linked worktree 看到同一份列表，
+/// 且主 checkout 未登记时也能列出（`ensure_workspace` 兜底），而不是静默变空。
+#[test]
+fn resume_lists_shared_sessions_across_worktrees() {
+    let (mut service, mut state, main_cwd, _) = trusted_service("resume-shared");
+    let worktree_cwd = workspace_path("resume-shared-wt");
+    // 主 checkout 落一条会话。
+    let session_id = seed_session(
+        service.db.as_ref().expect("db"),
+        &main_cwd,
+        "shared question",
+    );
+
+    let workspace = state.active_workspace_mut();
+    workspace.cwd = Some(worktree_cwd.clone());
+    workspace.git = Some(crate::app::state::WorkspaceGit {
+        repo_root: main_cwd.clone(),
+        checkout_path: worktree_cwd,
+        is_linked: true,
+        branch: Some("feat/x".into()),
+        main_branch: Some("dev".into()),
+    });
+
+    let count = open_history_list(&mut service, &mut state);
+    assert_eq!(count, 1, "worktree 应看到主 checkout 的会话");
+    let pane = focused_pane(&state);
+    let entry_id = match state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.slash.clone())
+    {
+        Some(SlashPanel::History(panel)) => panel.entries[0].session_id.clone(),
+        other => panic!("历史面板未填充: {other:?}"),
+    };
+    assert_eq!(entry_id, session_id);
+}
+
+/// 只开过 worktree（主 checkout 从未被登记）时，`/resume` 仍能列出并加载共享会话。
+#[test]
+fn resume_ensures_unregistered_repo_root_before_listing() {
+    let db_path = temp_db_path("resume-unregistered");
+    let database = Database::open(&db_path).expect("db opens");
+    let repo_root = workspace_path("resume-unregistered-root");
+    // 会话写在仓库根下，但 workspace 行尚未登记（模拟只打开过 worktree）。
+    database
+        .begin_turn(
+            &repo_root,
+            None,
+            "hidden",
+            &crate::db::chat::ModelSnapshot {
+                provider: "example".into(),
+                model: "example-chat".into(),
+                variant: None,
+            },
+        )
+        .expect("begin turn");
+    let mut state = state_with_cwd(&workspace_path("resume-unregistered-wt"));
+    state.active_workspace_mut().git = Some(crate::app::state::WorkspaceGit {
+        repo_root: repo_root.clone(),
+        checkout_path: workspace_path("resume-unregistered-wt"),
+        is_linked: true,
+        branch: Some("feat/x".into()),
+        main_branch: Some("dev".into()),
+    });
+    let mut service = Persistence::with_database(database);
+
+    let count = open_history_list(&mut service, &mut state);
+    assert_eq!(count, 1, "未登记主 checkout 也要能列出共享会话");
 }
