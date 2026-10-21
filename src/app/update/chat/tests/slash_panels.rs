@@ -720,9 +720,9 @@ fn enter_on_resume_panel_clears_input() {
     assert!(lx.input.is_empty(), "选中会话后清空: {:?}", lx.input);
 }
 
-/// `↵` 进入第二级：**不清空**（换层继续挑，过滤词要留给退回第一级时用）。
+/// `↵` 进入第二级：选中模型即清空过滤词。
 #[test]
-fn enter_into_variant_stage_keeps_input() {
+fn enter_into_variant_stage_clears_input() {
     use crate::app::actions::LxInput;
 
     let mut state = ready_state("");
@@ -734,7 +734,7 @@ fn enter_into_variant_stage_keeps_input() {
     assert!(apply_slash_enter(&mut state, pane));
 
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
-    assert_eq!(lx.input, "m", "进入第二级不清空过滤词");
+    assert!(lx.input.is_empty(), "选中模型后清空过滤词: {:?}", lx.input);
 }
 
 /// `↵` 选中思考等级（关闭面板）：清空输入框。
@@ -852,12 +852,11 @@ fn resume_filter_still_works_after_clear_rules() {
     assert_eq!(panel.filtered, vec![1], "过滤仍生效");
 }
 
-/// 回归：`Esc` 从第二级退回第一级，必须重建出**过滤后**的列表，不是全量。
+/// `Esc` 从第二级退回第一级：过滤词已被「选中模型」清空，退回后显示全量。
 ///
-/// 之前的实现是进入第二级就把输入框清空，退回时按空串重算 → 列表跳回全量，
-/// 用户看到「Esc 退回第一级仍只剩 deepseek 没有效果」。
+/// 不能留下「用户看不见也清不掉的隐藏过滤状态」：输入框为空就一定是全量视图。
 #[test]
-fn escape_from_variant_stage_restores_filtered_model_list() {
+fn escape_from_variant_stage_shows_full_list_after_input_cleared() {
     use crate::app::actions::LxInput;
 
     let mut state = ready_state("");
@@ -884,9 +883,10 @@ fn escape_from_variant_stage_restores_filtered_model_list() {
         Some(SlashPanel::Model(picker)) => picker,
         _ => panic!("model panel"),
     };
-    let filtered_before = picker.filtered.clone();
-    assert_eq!(filtered_before.len(), 1, "第一级只留一个模型");
-    assert!(picker.stage_len() >= 2, "原始候选至少两个");
+    let all = picker.filtered.clone();
+    assert_eq!(all.len(), 1, "过滤后只留一个模型");
+    let total = picker.stage_len();
+    assert!(total >= 2, "原始候选至少两个");
 
     // 进入第二级，再 Esc 退回第一级。
     assert!(apply_slash_enter(&mut state, pane));
@@ -900,9 +900,6 @@ fn escape_from_variant_stage_restores_filtered_model_list() {
         matches!(picker.stage, ModelPickerStage::Models),
         "已退回第一级"
     );
-    assert_eq!(picker.filter, "m", "过滤词仍在");
-    assert_eq!(
-        picker.filtered, filtered_before,
-        "退回后仍是过滤后的列表，不跳回全量"
-    );
+    assert!(picker.filter.is_empty(), "过滤词已被清空");
+    assert_eq!(picker.filtered.len(), total, "退回后显示全部模型");
 }

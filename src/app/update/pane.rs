@@ -202,9 +202,9 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                             super::super::state::ModelPickerStage::Variants { .. }
                         ) =>
                     {
-                        // 第二级退回第一级：仍在同一个 `/model` 流程里，**不清空**输入框。
-                        // 退回后必须按输入框里现存的过滤词重建第一级视图，
-                        // 否则列表会无故跳回全量（`deepseek` 之类被"忘掉"）。
+                        // 第二级退回第一级：不清空输入框（它在「选中模型」时已被清空）。
+                        // 按输入框现状重建过滤视图——清空后即全量，不留任何
+                        // 用户看不见也清不掉的隐藏过滤状态。
                         let query = lx.input.clone();
                         if let Some(panel) = lx.slash.as_mut()
                             && let super::super::state::SlashPanel::Model(picker) = panel
