@@ -505,3 +505,136 @@ fn edit_resume_title(state: &mut AppState, title: &str) {
         edit.input.insert_str(title);
     }
 }
+
+/// 面板内打字即过滤：输入框内容就是过滤词，`↵` 采纳的是过滤后的高亮项。
+#[test]
+fn typing_in_resume_panel_filters_and_enter_picks_filtered_row() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    // 高亮本来在 sess-a（第 1 条）。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('b'));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('e'));
+    let panel = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::History(panel)) => panel,
+        _ => panic!("history panel"),
+    };
+    assert_eq!(panel.filtered, vec![1], "只留标题命中 `be` 的 Beta");
+    assert_eq!(panel.window.active, 0, "高亮移到唯一命中项");
+
+    // 采纳：应加载 Beta，而不是原本高亮的 Alpha（绑定由回投完成，这里看效应）。
+    assert!(apply_slash_enter(&mut state, pane));
+    let loaded: Vec<String> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::LoadChatSession { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(loaded, vec!["sess-b".to_string()], "采纳的是过滤后的高亮项");
+}
+
+/// 面板内退格恢复全量视图。
+#[test]
+fn backspace_in_resume_panel_restores_full_list() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('b'));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Backspace);
+    let panel = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::History(panel)) => panel,
+        _ => panic!("history panel"),
+    };
+    assert_eq!(panel.filtered, vec![0, 1], "退格后恢复全量");
+    assert!(panel.filter.is_empty(), "过滤词随输入框清空");
+}
+
+/// 过滤无命中时：空态不可采纳，面板保持打开。
+#[test]
+fn enter_on_empty_filter_result_is_swallowed() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "zzzz".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    assert!(apply_slash_enter(&mut state, pane), "按键被消费");
+    assert!(
+        matches!(
+            state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()),
+            Some(SlashPanel::History(_))
+        ),
+        "面板保持打开"
+    );
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadChatSession { .. })),
+        "空态不加载任何会话"
+    );
+}
+
+/// 面板内 `^C` 复制的仍是过滤后的高亮项。
+#[test]
+fn copy_in_resume_panel_copies_filtered_row() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "be".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
+    let copied: Vec<String> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::CopyToClipboard { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied, vec!["sess-b".to_string()], "复制过滤后的高亮项");
+}
+
+/// `/model` 第一级键入过滤；进入第二级后过滤视图重置（不沿用上一级过滤词）。
+#[test]
+fn typing_in_model_panel_filters_models_and_variant_stage_resets() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    state.models = models_with(Some("high"));
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    // 唯一候选（p/m）；打一个必然无命中的词验证过滤生效。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('z'));
+    let picker = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::Model(picker)) => picker,
+        _ => panic!("model panel"),
+    };
+    assert!(picker.is_filter_empty(), "无命中");
+    assert_eq!(picker.stage_len(), 1, "原始候选仍在");
+    // 退格恢复。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Backspace);
+    let picker = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::Model(picker)) => picker,
+        _ => panic!("model panel"),
+    };
+    assert_eq!(picker.filtered, vec![0], "恢复全量");
+}

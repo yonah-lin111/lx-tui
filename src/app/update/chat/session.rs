@@ -57,6 +57,7 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
             })
         });
     let active = current.unwrap_or(0);
+    let candidates_len = candidates.len();
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -68,6 +69,9 @@ pub fn open_model_picker(state: &mut AppState, pane: PaneId) -> bool {
         // `PanelWindow::new(active)` 即"最小滚动"：窗口以高亮项为底向前回填，
         // 选中模型在候选靠后时贴底可见、靠前时贴顶可见，已可见时窗口不动。
         window: crate::app::state::lx::slash::PanelWindow::new(active),
+        // 打开面板时**不过滤**：显示全量候选，之后随输入框内容变化才过滤。
+        filter: String::new(),
+        filtered: (0..candidates_len).collect(),
     })));
     true
 }
@@ -288,7 +292,13 @@ pub fn on_history_listed(
             .position(|entry| entry.session_id == session_id)
     });
     panel.now_ms = crate::db::now_ms();
-    let active = panel.current.unwrap_or(0);
+    // 打开面板时不过滤：恢复全量视图，再按当前过滤词重算（打开时为空的恒等视图）。
+    panel.filtered = (0..panel.entries.len()).collect();
+    panel.clamp_window();
+    let active = panel
+        .current
+        .and_then(|index| panel.filtered.iter().position(|item| *item == index))
+        .unwrap_or(0);
     panel.window = crate::app::state::lx::slash::PanelWindow::new(active);
     true
 }
@@ -452,7 +462,8 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
         SlashPanel::Commands { .. } => crate::app::update::pane::accept_slash_command(state, pane),
         SlashPanel::Model(picker) => match &picker.stage {
             ModelPickerStage::Models => {
-                let Some(candidate) = picker.candidates.get(picker.window.active).cloned() else {
+                // 高亮位置是**过滤视图**内的位置，采纳时换算回原始候选索引。
+                let Some(candidate) = picker.active_candidate().cloned() else {
                     // 空态占位：吞掉 Enter，不误采纳。
                     return true;
                 };
@@ -487,6 +498,10 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                             variants,
                         };
                         current.current_variant = current_variant;
+                        // 换级后候选集变了：过滤视图必须按新阶段重建，
+                        // 否则沿用上一级的索引会把高亮指到不存在的项。
+                        current.filtered = (0..current.stage_len()).collect();
+                        current.filter.clear();
                         current.window = crate::app::state::lx::slash::PanelWindow::new(active);
                     }
                 }
@@ -495,13 +510,17 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
             ModelPickerStage::Variants { model, variants } => {
                 let mut selection = model.clone();
                 // 采纳高亮等级（此前只完成默认 variant，未应用用户选择）。
-                selection.variant = variants.get(picker.window.active).cloned();
+                // 同样按过滤视图换算回原始索引。
+                selection.variant = picker
+                    .active_stage_index()
+                    .and_then(|index| variants.get(index).cloned());
                 finish_model_selection(state, pane, selection);
                 true
             }
         },
         SlashPanel::History(history) => {
-            if let Some(entry) = history.entries.get(history.window.active) {
+            // 高亮位置是过滤视图内的位置，采纳时换算回原始条目。
+            if let Some(entry) = history.active_entry() {
                 let session_id = entry.session_id.clone();
                 resume_session(state, pane, &session_id);
             }

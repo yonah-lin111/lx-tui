@@ -32,34 +32,46 @@ pub(super) fn items<'a>(
                 tag: command.tag(),
             })
             .collect(),
-        SlashPanel::Model(picker) => match &picker.stage {
-            ModelPickerStage::Models => {
-                if picker.candidates.is_empty() {
-                    return vec![CommandItem::Inline {
-                        label: text::LX_CHAT_NO_MODEL,
-                        preview: "",
-                        tag: "",
-                    }];
-                }
-                picker
-                    .candidates
-                    .iter()
-                    .map(|candidate| CommandItem::Inline {
-                        label: candidate.model_name.as_str(),
-                        preview: candidate.provider_name.as_str(),
-                        tag: "",
-                    })
-                    .collect()
-            }
-            ModelPickerStage::Variants { variants, .. } => variants
-                .iter()
-                .map(|variant| CommandItem::Inline {
-                    label: variant.as_str(),
+        SlashPanel::Model(picker) => {
+            if picker.stage_len() == 0 {
+                return vec![CommandItem::Inline {
+                    label: text::LX_CHAT_NO_MODEL,
                     preview: "",
                     tag: "",
+                }];
+            }
+            if picker.is_filter_empty() {
+                return vec![CommandItem::Inline {
+                    label: text::LX_SLASH_NO_MATCHES,
+                    preview: "",
+                    tag: "",
+                }];
+            }
+            // 按过滤视图顺序产出（`filtered` 是原始索引序列）。
+            picker
+                .filtered
+                .iter()
+                .filter_map(|index| match &picker.stage {
+                    ModelPickerStage::Models => {
+                        picker
+                            .candidates
+                            .get(*index)
+                            .map(|candidate| CommandItem::Inline {
+                                label: candidate.model_name.as_str(),
+                                preview: candidate.provider_name.as_str(),
+                                tag: "",
+                            })
+                    }
+                    ModelPickerStage::Variants { variants, .. } => {
+                        variants.get(*index).map(|variant| CommandItem::Inline {
+                            label: variant.as_str(),
+                            preview: "",
+                            tag: "",
+                        })
+                    }
                 })
-                .collect(),
-        },
+                .collect()
+        }
         SlashPanel::History(history) => {
             if history.entries.is_empty() {
                 return vec![CommandItem::Inline {
@@ -68,9 +80,17 @@ pub(super) fn items<'a>(
                     tag: "",
                 }];
             }
+            if history.is_filter_empty() {
+                return vec![CommandItem::Inline {
+                    label: text::LX_SLASH_NO_MATCHES,
+                    preview: "",
+                    tag: "",
+                }];
+            }
             // 行右端是相对时间（对齐 opencode）；会话 id 不再上桌（只用于内部绑定）。
+            // 按过滤视图顺序产出，`time_labels` 已是同序。
             history
-                .entries
+                .visible()
                 .iter()
                 .enumerate()
                 .map(|(index, entry)| CommandItem::Inline {
@@ -83,11 +103,11 @@ pub(super) fn items<'a>(
     }
 }
 
-/// 历史条目的相对时间标签（与 `items` 的条目索引一一对应）；非历史面板为空。
+/// 历史条目的相对时间标签（与 `items` 的过滤视图同序）；非历史面板为空。
 pub(super) fn history_time_labels(panel: &crate::app::state::SlashPanel) -> Vec<String> {
     match panel {
         crate::app::state::SlashPanel::History(history) => history
-            .entries
+            .visible()
             .iter()
             .map(|entry| entry.time_label(history.now_ms))
             .collect(),
@@ -161,10 +181,13 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> Option<PanelLayout> {
 /// `/` 命令面板命中：返回被点/悬停的条目索引；未命中返回 None。
 pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usize> {
     let panel = lx.slash.as_ref()?;
-    // 空态占位行不可选。
-    if matches!(panel, crate::app::state::SlashPanel::Model(p) if p.candidates.is_empty())
-        || matches!(panel, crate::app::state::SlashPanel::History(h) if h.entries.is_empty())
-    {
+    // 空态占位行不可选（真无数据，或过滤后无命中）。
+    let placeholder = match panel {
+        crate::app::state::SlashPanel::Model(p) => p.stage_len() == 0 || p.is_filter_empty(),
+        crate::app::state::SlashPanel::History(h) => h.entries.is_empty() || h.is_filter_empty(),
+        crate::app::state::SlashPanel::Commands { .. } => false,
+    };
+    if placeholder {
         return None;
     }
     let input = super::input_rect(area, lx)?;

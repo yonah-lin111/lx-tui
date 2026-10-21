@@ -589,6 +589,8 @@ pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边提示（与 `@` 提及面板同款）。
 pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
+/// 二级面板（`/model`、`/resume`）过滤后无命中：与「真的没有数据」区分开。
+pub const LX_SLASH_NO_MATCHES: &str = "no matches";
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
 /// `/resume` 历史面板标题与空态。

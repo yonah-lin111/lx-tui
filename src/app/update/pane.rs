@@ -214,20 +214,26 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                 }
                 return;
             }
-            // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板吞掉。
+            // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板同样放行，
+            // 但过滤词改为输入框全文（见下方 `refresh_slash_filter`）。
             _ if editable => {}
-            // `/resume` 历史面板：`Ctrl/Cmd+C` 复制高亮行的会话 id（不清空输入框）。
-            LxInput::Clear if matches!(slash, super::super::state::SlashPanel::History(_)) => {
-                super::resume_edit::copy_resume_session_id(state, pane_id);
-                return;
-            }
             // `/resume` 历史面板：`Shift+Enter` 打开该会话的编辑模态（改名/删除）。
+            // 必须排在「编辑键放行」之前：`EnterFolder` 也出现在 `edits_text` 里，
+            // 放行会让它落进下方编辑分支而永远打不开模态。
             LxInput::EnterFolder
                 if matches!(slash, super::super::state::SlashPanel::History(_)) =>
             {
                 super::resume_edit::open_resume_session_edit(state, pane_id);
                 return;
             }
+            // `/resume` 历史面板：`Ctrl/Cmd+C` 复制高亮行的会话 id（不清空输入框）。
+            LxInput::Clear if matches!(slash, super::super::state::SlashPanel::History(_)) => {
+                super::resume_edit::copy_resume_session_id(state, pane_id);
+                return;
+            }
+            // `/model`、`/resume` 二级面板：其余编辑键放行，编辑后重算过滤
+            // （`^C` 与 `⇧↵` 已在上方各自接管）。
+            command if edits_text(command) && command != LxInput::Clear => {}
             _ => return,
         }
         if command == LxInput::Enter || command == LxInput::Tab {
@@ -406,6 +412,8 @@ fn edits_text(command: LxInput) -> bool {
 
 /// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
 fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+    // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
+    refresh_slash_filter(state, pane);
     let query = state.pane_anywhere(pane).and_then(|target| {
         super::super::state::lx::slash::slash_trigger(&target.lx.input, target.lx.cursor)
     });
@@ -443,6 +451,23 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
             items: matching,
             window,
         });
+    }
+}
+
+/// 按输入框全文重算二级面板（`/model`、`/resume`）的过滤视图。
+///
+/// 只在相应面板打开时生效；`CommandPanelView` 候选面板由 `refresh_slash_panel`
+/// 自己按行首 `/...` 过滤，不走这里。过滤词是**输入框全文**（含其它行草稿），
+/// 与用户在编辑区看到的内容一致，不做任何暂存/恢复。
+fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    let query = target.lx.input.clone();
+    match target.lx.slash.as_mut() {
+        Some(super::super::state::SlashPanel::History(panel)) => panel.refilter(&query),
+        Some(super::super::state::SlashPanel::Model(picker)) => picker.refilter(&query),
+        _ => {}
     }
 }
 
