@@ -347,6 +347,42 @@ fn failure_content(error: &str, result_json: Option<&str>) -> String {
     content
 }
 
+/// 回放前剥离**只服务 UI** 的文件差异正文（`edit` / `write` 的 `diff` 字段）。
+///
+/// 差异正文是执行后快照算出来的展示数据，不是模型看到的工具结果；把它带进历史会
+/// 让下一轮上下文凭空膨胀（单次调用最多 512 KiB），且与同轮 `format_for_model` 的
+/// 摘要口径不一致。路径、计数、`counts_known` / `simplified` / `file_totals` /
+/// `omitted_files`、错误与 call/result 配对全部保留。
+///
+/// 非文件结果、坏 JSON 或形状不符时原样返回（不改变既有回放行为）。
+fn strip_ui_diff_json(result: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(result) else {
+        return result.to_string();
+    };
+    let file_tool = matches!(
+        value.get("tool").and_then(serde_json::Value::as_str),
+        Some("edit" | "write" | "error")
+    );
+    if !file_tool {
+        return result.to_string();
+    }
+    let mut stripped = false;
+    if let Some(object) = value.as_object_mut() {
+        stripped |= object.remove("diff").is_some();
+        if let Some(changes) = object.get_mut("changes").and_then(|c| c.as_array_mut()) {
+            for change in changes {
+                if let Some(change) = change.as_object_mut() {
+                    stripped |= change.remove("diff").is_some();
+                }
+            }
+        }
+    }
+    if !stripped {
+        return result.to_string();
+    }
+    serde_json::to_string(&value).unwrap_or_else(|_| result.to_string())
+}
+
 /// 单条 `changes[]` 的单行描述（与工具层 `describe_change` 同形）：
 /// `updated path (+1 -1)` / `moved a -> b (+0 -0)`。
 fn describe_change_json(change: &serde_json::Value) -> String {
@@ -398,7 +434,8 @@ fn replay_pair(tool: &ToolCallRecord) -> Option<(ModelItem, ModelItem)> {
         (true, Some(error), result_json) if !error.is_empty() => {
             failure_content(error, result_json)
         }
-        (_, _, Some(result)) if !result.is_empty() => result.to_string(),
+        // 成功 / 无错误文本的失败：回放落库结果体，但先剥掉只服务 UI 的差异正文。
+        (_, _, Some(result)) if !result.is_empty() => strip_ui_diff_json(result),
         _ => {
             tracing::debug!(
                 target: "lx::agent",

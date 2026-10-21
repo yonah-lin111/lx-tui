@@ -838,11 +838,11 @@ fn tool_step(position: i64) -> AssistantStepView {
             position,
             arguments_json: r#"{"path":"src/a.rs","offset":3,"limit":5}"#.into(),
             status: crate::app::state::ToolStatus::Pending,
-            summary: Some(crate::app::state::ToolSummary {
+            summary: Some(Box::new(crate::app::state::ToolSummary {
                 path: Some("src/a.rs".into()),
                 range: Some((3, 7)),
                 ..Default::default()
-            }),
+            })),
             error: None,
             result_json: None,
             detail: None,

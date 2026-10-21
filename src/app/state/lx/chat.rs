@@ -7,10 +7,12 @@
 
 use crate::config::ai::{AiSettings, ModelSelection};
 
+pub mod file_diff;
 mod steps;
 mod stream;
 pub mod tool_view;
 
+pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView};
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
 };

@@ -222,6 +222,47 @@ pub const PLAN_COMPLETED_SUFFIX: &str = "completed";
 /// 空计划文案。
 pub const PLAN_EMPTY: &str = "Plan cleared";
 
+// ===== 文件工具差异卡片 =====
+
+/// 文件没有内容差异（纯移动、覆盖为相同内容、补丁无实际变更）。
+pub const FILE_DIFF_NO_CHANGES: &str = "No content changes";
+/// 差异正文被存储预算截断（计数仍是完整值，展开也补不回来）。
+pub const FILE_DIFF_TRUNCATED: &str = "Diff truncated";
+/// 差异正文来自超限输入的线性简化脚本（可能比最小编辑脚本多）。
+pub const FILE_DIFF_SIMPLIFIED: &str = "Diff simplified";
+/// 折叠预览还有未显示的已保存差异行。
+pub const FILE_DIFF_OMITTED: &str = "… more changes";
+/// hunk 之间的分隔（不直接铺 `@@`）。
+pub const FILE_DIFF_HUNK_SEP: &str = "⋮";
+/// 末行无换行的元信息行（不计入增删）。
+pub const FILE_DIFF_NO_FINAL_NEWLINE: &str = "No newline at end of file";
+/// 无法生成文本差异（二进制 / 非 UTF-8 / 读取失败 / 结构非法）。
+pub const FILE_DIFF_UNAVAILABLE: &str = "Diff unavailable";
+/// 移动的两端连接符：`旧 → 新`。
+pub const FILE_DIFF_MOVE_SEP: &str = " → ";
+/// 计数未知（旧内容不可解码，删除后无从比较）。
+pub const FILE_DIFF_COUNTS_UNKNOWN: &str = "(?)";
+
+/// 因整体 JSON 预算被省略摘要的文件数：`3 files omitted` / `1 file omitted`。
+pub fn file_diff_omitted_files(count: usize) -> String {
+    let suffix = if count == 1 {
+        "file omitted"
+    } else {
+        "files omitted"
+    };
+    format!("{count} {suffix}")
+}
+
+/// 差异不可用的原因（稳定原因码 → 用户可见说明，不暴露内部细节）。
+pub fn file_diff_unavailable(reason: &str) -> &'static str {
+    match reason {
+        "binary" => "Diff unavailable: binary file",
+        "not_utf8" => "Diff unavailable: not UTF-8",
+        "read_failed" => "Diff unavailable: read failed",
+        _ => FILE_DIFF_UNAVAILABLE,
+    }
+}
+
 /// 计划三态标记（ASCII，与模型结果同一口径）。
 pub const PLAN_PENDING: &str = "[ ]";
 pub const PLAN_IN_PROGRESS: &str = "[>]";

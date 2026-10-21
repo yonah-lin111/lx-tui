@@ -104,7 +104,7 @@ impl ToolStatus {
 }
 
 /// 工具步骤的 UI 摘要：只装路径/行范围/计数，**不装**完整文件内容。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSummary {
     /// 目标路径（相对/绝对按模型给出的形式，超长按 [`MAX_SUMMARY_CHARS`] 截断）。
     pub path: Option<String>,
@@ -140,6 +140,33 @@ pub struct ToolSummary {
     /// 带 `"partial"`，重载路径从这里补；UI 在 `edit`/`write` 的详情行尾部显示
     /// `· partial`。其它工具恒为 false。
     pub partial: bool,
+    /// 增删计数是否已知（旧内容不可解码时为 false，added/removed 不得当事实展示）。
+    pub counts_known: bool,
+    /// 计数是否来自超限输入的线性简化脚本。
+    pub simplified: bool,
+    /// 因元数据超限而未保存摘要的文件数（> 0 时 UI 显示省略提示）。
+    pub omitted_files: usize,
+}
+
+impl Default for ToolSummary {
+    /// `counts_known` 默认 true：旧结果与非文件工具都按已知处理。
+    fn default() -> Self {
+        Self {
+            path: None,
+            range: None,
+            added: None,
+            removed: None,
+            matches: None,
+            pattern: None,
+            read_lines: None,
+            total_lines: None,
+            truncated: false,
+            partial: false,
+            counts_known: true,
+            simplified: false,
+            omitted_files: 0,
+        }
+    }
 }
 
 impl ToolSummary {
@@ -314,6 +341,54 @@ impl ToolSummary {
         {
             self.partial = true;
         }
+        // 调用总计是摘要的唯一权威来源：裁切后的 `changes` 前缀不能重新求和冒充总计。
+        // 旧结果没有 `file_totals`，上面的逐项汇总保持原口径。
+        if let Some(totals) = value.get("file_totals") {
+            let known = !totals.get("added").is_some_and(serde_json::Value::is_null)
+                && !totals
+                    .get("removed")
+                    .is_some_and(serde_json::Value::is_null);
+            self.counts_known = known;
+            self.added = if known {
+                totals
+                    .get("added")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|number| usize::try_from(number).unwrap_or(usize::MAX))
+            } else {
+                None
+            };
+            self.removed = if known {
+                totals
+                    .get("removed")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|number| usize::try_from(number).unwrap_or(usize::MAX))
+            } else {
+                None
+            };
+            self.simplified = totals
+                .get("simplified")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            self.omitted_files = totals
+                .get("omitted_files")
+                .and_then(serde_json::Value::as_u64)
+                .map_or(0, |number| usize::try_from(number).unwrap_or(usize::MAX));
+        }
+        // 不识别的文件结果没有计数标志：按已知处理（旧 JSON 兼容）。
+        if let Some(known) = value
+            .get("counts_known")
+            .and_then(serde_json::Value::as_bool)
+        {
+            self.counts_known = known;
+            if !known {
+                // 未知必须清掉数字，不能因 None 而保留参数/前缀里的旧值。
+                self.added = None;
+                self.removed = None;
+            }
+        }
+        if let Some(simplified) = value.get("simplified").and_then(serde_json::Value::as_bool) {
+            self.simplified |= simplified;
+        }
         self
     }
 
@@ -359,6 +434,14 @@ impl ToolSummary {
         // `partial` 是「本次补丁里存在无实际变更的 hunk」，只增不减：参数侧永远推不出它，
         // 结果侧为 false 时也不能把已有的 true 覆盖掉（与 `truncated` 同口径）。
         self.partial |= result.partial;
+        // 计数已知性是结果侧事实：未知时必须清掉数字，不能保留参数侧的旧值。
+        self.counts_known = result.counts_known;
+        if !result.counts_known {
+            self.added = None;
+            self.removed = None;
+        }
+        self.simplified |= result.simplified;
+        self.omitted_files = result.omitted_files;
         self
     }
 
@@ -378,6 +461,8 @@ impl ToolSummary {
             && self.total_lines.is_none()
             && !self.truncated
             && !self.partial
+            && self.omitted_files == 0
+            && !self.simplified
     }
 }
 
@@ -419,7 +504,10 @@ pub struct ToolCallView {
     pub arguments_json: String,
     pub status: ToolStatus,
     /// UI 摘要（路径/行范围/增删计数等），不装完整文件内容。
-    pub summary: Option<ToolSummary>,
+    ///
+    /// 装箱：摘要有十余个可选字段，直接内联会让整个工具步骤（以及步骤枚举的
+    /// 最大变体）膨胀到 300+ 字节，而摘要本身通常很小甚至为 None。
+    pub summary: Option<Box<ToolSummary>>,
     /// 失败/中断原因（稳定错误码）；仅 `Failed` / `Interrupted` 等有值。
     pub error: Option<String>,
     /// 落库的结果体原文（规范化 JSON）；仅历史加载与结算后填充。
@@ -456,7 +544,7 @@ impl ToolCallView {
         if serde_json::from_str::<serde_json::Value>(&self.arguments_json).is_err() {
             return false;
         }
-        self.summary = Some(ToolSummary::from_arguments(&self.arguments_json));
+        self.summary = Some(Box::new(ToolSummary::from_arguments(&self.arguments_json)));
         self.status = ToolStatus::Pending;
         true
     }
@@ -477,7 +565,8 @@ impl ToolCallView {
         match self.detail.as_deref()? {
             super::tool_view::ToolDetailView::Command(view) => view.process_session_id,
             super::tool_view::ToolDetailView::Interaction(view) => Some(view.process_session_id),
-            super::tool_view::ToolDetailView::Plan(_) => None,
+            super::tool_view::ToolDetailView::Plan(_)
+            | super::tool_view::ToolDetailView::File(_) => None,
         }
     }
 
@@ -505,7 +594,15 @@ impl ToolCallView {
         }
     }
 
-    /// 是否带可展开的类型化详情（进程 / 计划卡片）。
+    /// 文件工具的类型化差异详情。
+    pub fn file_view(&self) -> Option<&super::file_diff::FileDiffDetailView> {
+        match self.detail.as_deref()? {
+            super::tool_view::ToolDetailView::File(view) => Some(view),
+            _ => None,
+        }
+    }
+
+    /// 是否带可展开的类型化详情（进程 / 计划 / 文件卡片）。
     pub fn has_detail(&self) -> bool {
         self.detail.is_some()
     }

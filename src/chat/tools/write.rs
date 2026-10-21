@@ -6,9 +6,10 @@
 use std::path::Path;
 
 use super::args::Args;
+use super::diff::diff_lines;
 use super::lock;
 use super::path;
-use super::text::{SourceText, line_diff_counts, split_lines};
+use super::text::{SourceText, split_lines};
 use super::types::{ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure, ToolResult};
 
 /// `write` 允许的参数集合。
@@ -52,17 +53,37 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
     };
 
     // 保留既有文件的换行风格与 BOM；新建文件统一 LF、无 BOM。
-    let (before_lines, newline, bom) = match &existing {
+    let (before_lines, before_bytes, before_final_newline, newline, bom) = match &existing {
         Some(_) => {
             let bytes = std::fs::read(&target)
                 .map_err(|error| path::map_io_error(&error, "read", &target))?;
             let source = SourceText::parse(&bytes)?;
-            (source.lines.clone(), source.newline, source.bom)
+            (
+                source.lines.clone(),
+                bytes.len(),
+                source.trailing_newline,
+                source.newline,
+                source.bom,
+            )
         }
-        None => (Vec::new(), crate::chat::tools::text::Newline::Lf, false),
+        None => (
+            Vec::new(),
+            0,
+            true,
+            crate::chat::tools::text::Newline::Lf,
+            false,
+        ),
     };
     let after_lines = split_lines(content);
-    let (added, removed) = line_diff_counts(&before_lines, &after_lines);
+    // 差异与计数同源：都来自这份真实 before/after，不在写盘后重读。
+    let (diff, counts) = diff_lines(
+        &before_lines,
+        &after_lines,
+        before_final_newline,
+        content.ends_with('\n'),
+        before_bytes,
+        content.len(),
+    );
     let created = existing.is_none();
     let source = SourceText {
         bom,
@@ -76,8 +97,9 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
     Ok(ToolExecutionResult::Write {
         path: target,
         created,
-        added,
-        removed,
+        added: counts.added,
+        removed: counts.removed,
+        diff: Some(diff),
     })
 }
 

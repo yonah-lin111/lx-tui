@@ -458,6 +458,12 @@ pub(crate) fn handle_mouse_down_left(
                         ui::main_content::lx::LxChatHit::ToolOpen(session_id) => {
                             update::open_task_page_at(state, pane, session_id);
                         }
+                        ui::main_content::lx::LxChatHit::ToolToggle {
+                            message_id,
+                            call_id,
+                        } => {
+                            update::toggle_tool_detail(state, pane, &message_id, &call_id);
+                        }
                         ui::main_content::lx::LxChatHit::CodeCopy(text) => {
                             // 复制代码块正文（不含围栏与语言行）；toast 锚在**本窗格**
                             // （main content）而不是 prompt——复制发生在哪儿，反馈就在哪儿。

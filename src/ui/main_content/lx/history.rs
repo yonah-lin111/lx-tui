@@ -205,9 +205,9 @@ pub struct HistoryLayout {
     pub thinking: Vec<(usize, usize, Rect)>,
     /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
     pub code_copy: Vec<CodeCopyButton>,
-    /// 进程卡片 `[open]` 行的命中矩形：消息 id、call id、进程会话 id、可点区域。
+    /// 工具卡片命中矩形：进程 `[open]` 行或文件卡片标题行。
     ///
-    /// 每张进程卡片**只有一个**矩形（树体末行）；点标题或命令行都不触发任何动作。
+    /// 每张卡片至多**一个**矩形；动作由 [`ToolHitKind`] 决定。
     pub tools: Vec<ToolHit>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
@@ -217,17 +217,30 @@ pub struct HistoryLayout {
 
 pub use code_copy::CodeCopyButton;
 
-/// 进程卡片 `[open]` 行的命中区。
+/// 工具卡片上的可点击命中区。
 ///
-/// 只有进程卡片有命中区，且只有**一行**（树体末行的 `[open]`）：点它打开后台任务
-/// 面板并把高亮定位到 `session_id` 对应的任务。标题行与命令行是纯展示。
+/// 两种动作**语义上完全不同**，用 [`ToolHitKind`] 明确区分，绝不靠 `session_id`
+/// 是否为空去猜：
+/// - 进程卡片的 `[open]` 行（打开后台任务面板）；
+/// - 文件差异卡片的标题行（切换整张卡片展开/收起）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolHit {
     pub message_id: String,
     pub call_id: String,
-    /// 该卡片关联的进程会话 ID（`[open]` 用它定位面板高亮）；未知时为 None。
-    pub session_id: Option<u64>,
+    pub kind: ToolHitKind,
     pub rect: Rect,
+}
+
+/// 命中动作。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolHitKind {
+    /// 打开后台任务面板；`session_id` 用于定位高亮（未知时为 None）。
+    OpenTask {
+        /// 该卡片关联的进程会话 ID。
+        session_id: Option<u64>,
+    },
+    /// 切换文件差异卡片的展开状态。
+    Toggle,
 }
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
@@ -338,8 +351,24 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                 tools.push(ToolHit {
                     message_id: message.id.clone(),
                     call_id: call.call_id.clone(),
-                    session_id: call.process_session_id(),
+                    kind: ToolHitKind::OpenTask {
+                        session_id: call.process_session_id(),
+                    },
                     rect: Rect::new(area.x, open_y, width, 1),
+                });
+            }
+            // 文件差异卡片：只登记**标题行**作为展开/收起命中；正文保留聊天选区。
+            if let AssistantStepView::Tool { call, .. } = step
+                && let Some(offset) = tool::toggle_offset(call)
+            {
+                let header_y = area
+                    .y
+                    .saturating_add(u16::try_from(rows + offset).unwrap_or(u16::MAX));
+                tools.push(ToolHit {
+                    message_id: message.id.clone(),
+                    call_id: call.call_id.clone(),
+                    kind: ToolHitKind::Toggle,
+                    rect: Rect::new(area.x, header_y, width, 1),
                 });
             }
             if is_reasoning {

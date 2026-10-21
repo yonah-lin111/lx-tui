@@ -631,3 +631,110 @@ fn snapshot_reconcile_keeps_a_live_process_running() {
     };
     assert_eq!(view.state, ProcessStateView::Running);
 }
+
+/// 带一张文件差异卡片的窗格状态（`edit`，含可展开正文）。
+fn state_with_file_card() -> (AppState, PaneId) {
+    use crate::app::state::{
+        DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView,
+        ToolDetailView,
+    };
+    use crate::chat::tools::{DiffLineKind, FileChangeKind};
+
+    let view = FileDiffDetailView {
+        files: vec![FileChangeView {
+            path: "/w/a.rs".into(),
+            to: None,
+            kind: FileChangeKind::Updated,
+            added: Some(1),
+            removed: Some(1),
+            counts_known: true,
+            simplified: false,
+            diff: Some(FileDiffView::Complete {
+                hunks: vec![DiffHunkView {
+                    lines: vec![
+                        DiffLineView {
+                            kind: DiffLineKind::Removed,
+                            old_line: Some(1),
+                            new_line: None,
+                            text: "old".into(),
+                            no_final_newline: false,
+                        },
+                        DiffLineView {
+                            kind: DiffLineKind::Added,
+                            old_line: None,
+                            new_line: Some(1),
+                            text: "new".into(),
+                            no_final_newline: false,
+                        },
+                    ],
+                }],
+                simplified: false,
+            }),
+        }],
+        files_total: 1,
+        added: Some(1),
+        removed: Some(1),
+        simplified: false,
+        omitted_files: 0,
+        single: false,
+    };
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let mut call = ToolCallView::new("call-1", "edit", 0);
+    call.status = ToolStatus::Completed;
+    call.detail = Some(Box::new(ToolDetailView::File(view)));
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.messages = vec![message_with(call)];
+    }
+    (state, pane)
+}
+
+#[test]
+fn file_card_shortcut_toggles_detail_instead_of_opening_task_page() {
+    // 文件卡片没有后台进程：`^o` 必须是展开/收起，绝不能误开任务面板。
+    let (mut state, pane) = state_with_file_card();
+    assert!(open_task_for_selected_tool(&mut state, pane));
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("msg-1", "call-1"),
+        "第一次按键展开"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.task.is_none(),
+        "文件卡片不得打开任务面板"
+    );
+    assert!(open_task_for_selected_tool(&mut state, pane));
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("msg-1", "call-1"),
+        "再次按键收起"
+    );
+    assert!(state.pane_anywhere(pane).expect("pane").lx.task.is_none());
+}
+
+#[test]
+fn file_card_without_diff_keeps_task_page_routing() {
+    // 旧记录（没有 diff 正文）不是可展开卡片：保持原有的任务面板路径。
+    let (mut state, pane) = state_with_file_card();
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        if let crate::app::state::AssistantStepView::Tool { call, .. } =
+            &mut target.lx.chat.messages[0].steps[0]
+        {
+            call.detail = Some(Box::new(ToolDetailView::File(
+                crate::app::state::FileDiffDetailView::default(),
+            )));
+        }
+        target.lx.chat.session_id = Some("session-1".into());
+    }
+    assert!(open_task_for_selected_tool(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.task.is_some(), "无差异文件卡片仍走任务面板");
+}

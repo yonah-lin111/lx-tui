@@ -6,9 +6,12 @@
 use serde_json::{Value, json};
 
 use super::MAX_TOOL_RESULT_BYTES;
+use super::diff::FileDiff;
 use super::types::{
     FileChange, FileChangeKind, ReadKind, SearchMatch, ToolExecutionResult, ToolSummary,
 };
+
+mod file;
 
 /// 把结构化结果转成给模型的唯一文本表示。
 ///
@@ -45,6 +48,7 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
             created,
             added,
             removed,
+            ..
         } => {
             let action = if *created { "Created" } else { "Overwrote" };
             format!(
@@ -353,10 +357,14 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         ToolExecutionResult::Edit { changes, partial } => {
             let path = single_path(changes);
             let (added, removed) = sum_counts(changes);
+            let counts_known = changes
+                .iter()
+                .all(|change| change.diff.as_ref().is_none_or(FileDiff::counts_known));
             ToolSummary {
                 path,
-                added: Some(added),
-                removed: Some(removed),
+                added: counts_known.then_some(added),
+                removed: counts_known.then_some(removed),
+                counts_known,
                 partial: *partial,
                 ..ToolSummary::default()
             }
@@ -365,13 +373,18 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
             path,
             added,
             removed,
+            diff,
             ..
-        } => ToolSummary {
-            path: Some(path.display().to_string()),
-            added: Some(*added),
-            removed: Some(*removed),
-            ..ToolSummary::default()
-        },
+        } => {
+            let counts_known = diff.as_ref().is_none_or(FileDiff::counts_known);
+            ToolSummary {
+                path: Some(path.display().to_string()),
+                added: counts_known.then_some(*added),
+                removed: counts_known.then_some(*removed),
+                counts_known,
+                ..ToolSummary::default()
+            }
+        }
         ToolExecutionResult::Failed {
             code: _code,
             message: _message,
@@ -379,10 +392,13 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         } => {
             let path = single_path(changes);
             let (added, removed) = sum_counts(changes);
+            let counts_known = changes
+                .iter()
+                .all(|change| change.diff.as_ref().is_none_or(FileDiff::counts_known));
             ToolSummary {
                 path,
-                added: (!changes.is_empty()).then_some(added),
-                removed: (!changes.is_empty()).then_some(removed),
+                added: (counts_known && !changes.is_empty()).then_some(added),
+                removed: (counts_known && !changes.is_empty()).then_some(removed),
                 ..ToolSummary::default()
             }
         }
@@ -459,33 +475,19 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "truncated": truncated,
             "files_scanned": files_scanned,
         }),
-        ToolExecutionResult::Edit { changes, partial } => json!({
-            "tool": "edit",
-            "changes": changes.iter().map(change_json).collect::<Vec<_>>(),
-            "partial": partial,
-        }),
+        ToolExecutionResult::Edit { changes, partial } => file::edit_json(changes, *partial),
         ToolExecutionResult::Write {
             path,
             created,
             added,
             removed,
-        } => json!({
-            "tool": "write",
-            "path": path.display().to_string(),
-            "created": created,
-            "added": added,
-            "removed": removed,
-        }),
+            diff,
+        } => file::write_json(path, *created, *added, *removed, diff.as_ref()),
         ToolExecutionResult::Failed {
             code,
             message,
             changes,
-        } => json!({
-            "tool": "error",
-            "code": code.as_str(),
-            "message": message,
-            "changes": changes.iter().map(change_json).collect::<Vec<_>>(),
-        }),
+        } => file::failure_json(*code, message, changes),
         ToolExecutionResult::Process(result) => result.to_json(),
         ToolExecutionResult::Plan(snapshot) => snapshot.to_json(),
     };
@@ -496,34 +498,22 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
     shrink_json_text(value)
 }
 
-/// 单个变更的 JSON 表示。
-fn change_json(change: &FileChange) -> Value {
-    let mut object = serde_json::Map::new();
-    object.insert(
-        "path".into(),
-        Value::String(change.path.display().to_string()),
-    );
-    object.insert("added".into(), json!(change.added));
-    object.insert("removed".into(), json!(change.removed));
-    object.insert(
-        "kind".into(),
-        match &change.kind {
-            FileChangeKind::Added => Value::String("added".into()),
-            FileChangeKind::Updated => Value::String("updated".into()),
-            FileChangeKind::Deleted => Value::String("deleted".into()),
-            FileChangeKind::Moved { .. } => Value::String("moved".into()),
-        },
-    );
-    if let FileChangeKind::Moved { to } = &change.kind {
-        object.insert("to".into(), Value::String(to.display().to_string()));
-    }
-    Value::Object(object)
-}
-
 /// 结果 JSON 超限：把 `content` / `text` 段落截断并显式标记 `truncated: true`。
 ///
 /// 只截断承载正文的字段；结构、路径与计数保留，保证回放仍可判断发生了什么。
 fn shrink_json_text(mut value: Value) -> Option<String> {
+    // 文件工具：先按最终 JSON 字节裁差异正文与文件摘要前缀（含 omitted_files），
+    // 不能因为 UI 差异过大把原本成功的文件操作变成落库失败。
+    if value
+        .get("tool")
+        .and_then(Value::as_str)
+        .is_some_and(|tool| {
+            matches!(tool, "edit" | "write" | "error") && value.get("changes").is_some()
+                || tool == "write"
+        })
+    {
+        return file::shrink(value, MAX_TOOL_RESULT_BYTES);
+    }
     let budget = MAX_TOOL_RESULT_BYTES / 2;
     if let Value::Object(object) = &mut value {
         if let Some(Value::String(content)) = object.get_mut("content") {

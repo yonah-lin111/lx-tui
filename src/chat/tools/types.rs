@@ -169,6 +169,8 @@ pub struct FileChange {
     /// 删除行数。
     pub removed: usize,
     pub kind: FileChangeKind,
+    /// 执行后实际内容差异；旧路径/测试可省略（UI 退回两行摘要）。
+    pub diff: Option<super::diff::FileDiff>,
 }
 
 /// 工具执行的结构化结局。
@@ -210,6 +212,8 @@ pub enum ToolExecutionResult {
         created: bool,
         added: usize,
         removed: usize,
+        /// 实际内容差异（新建/覆盖前后快照生成）。
+        diff: Option<super::diff::FileDiff>,
     },
     /// 命令执行 / 进程交互成功送达（进程可能仍在运行）。
     ///
@@ -332,7 +336,7 @@ impl ToolSpec {
 ///
 /// 与 `app` 层 `ToolSummary` 字段一致；放在 `chat` 侧是为了保持
 /// `chat -> app` 的单向依赖（`chat` 不依赖 `app`/`ui`），由事件层做一次字段映射。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolSummary {
     /// 目标路径（绝对路径，超长由 UI 按字符截断）。
     pub path: Option<String>,
@@ -352,4 +356,31 @@ pub struct ToolSummary {
     /// `edit` 是否有 hunk 应用后内容与原文相同（无实际变更）；UI 在详情行尾显示
     /// `· partial`。其它工具恒为 false。
     pub partial: bool,
+    /// 增删计数是否已知（旧内容不可解码时为 false；此时 added/removed 是兼容占位）。
+    pub counts_known: bool,
+    /// 计数是否来自超限输入的线性简化脚本（UI 显示 `Diff simplified`）。
+    pub simplified: bool,
+    /// 因元数据超限而未保存摘要的文件数（0 表示全部保留）。
+    pub omitted_files: usize,
+}
+
+impl Default for ToolSummary {
+    /// `counts_known` 默认为 true：旧结果与无文件计数的工具都按已知处理。
+    fn default() -> Self {
+        Self {
+            path: None,
+            range: None,
+            added: None,
+            removed: None,
+            matches: None,
+            pattern: None,
+            read_lines: None,
+            total_lines: None,
+            truncated: false,
+            partial: false,
+            counts_known: true,
+            simplified: false,
+            omitted_files: 0,
+        }
+    }
 }

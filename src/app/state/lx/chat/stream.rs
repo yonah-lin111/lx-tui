@@ -283,7 +283,7 @@ impl LxChat {
             // 因此与重载路径共用同一套合并：参数派生值打底、结果侧覆盖。
             // `tool_view_of` 走 `from_arguments().absorb_result_json()`，两条路同口径。
             let from_args = ToolSummary::from_arguments(&call.arguments_json);
-            call.summary = Some(from_args.absorb_summary(&summary));
+            call.summary = Some(Box::new(from_args.absorb_summary(&summary)));
         }
         if result_json.is_some() {
             call.result_json = result_json;
@@ -380,7 +380,7 @@ fn settle_open_tools(message: &mut ChatMessageView, outcome: OpenToolOutcome) ->
             continue;
         }
         if call.summary.is_none() && !call.arguments_json.is_empty() {
-            call.summary = Some(ToolSummary::from_arguments(&call.arguments_json));
+            call.summary = Some(Box::new(ToolSummary::from_arguments(&call.arguments_json)));
         }
         call.settle(status, error.clone());
         changed = true;

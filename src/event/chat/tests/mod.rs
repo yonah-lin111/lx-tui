@@ -657,6 +657,9 @@ fn view_summary_maps_every_field() {
         total_lines: Some(1000),
         truncated: true,
         partial: true,
+        counts_known: true,
+        simplified: false,
+        omitted_files: 0,
     };
     let mapped = view_summary(&chat);
     assert_eq!(mapped.path.as_deref(), Some("src/a.rs"));

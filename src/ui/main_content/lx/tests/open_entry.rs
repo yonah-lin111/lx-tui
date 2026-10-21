@@ -1,7 +1,9 @@
-//! 进程卡片 `[open]` 的命中与开启面板回归测试。
+//! 工具卡片命中回归测试：进程卡片 `[open]` 与文件差异卡片标题两种动作。
 //!
-//! 用户要求（决策 4/7/9）：卡片只有 `[open]` 可点；点它打开后台任务面板，并把
-//! 高亮定位到该卡片对应的后台进程；标题行与命令行是纯展示。
+//! 用户要求（决策 4/7/9）：进程卡片只有 `[open]` 可点；点它打开后台任务面板，并把
+//! 高亮定位到该卡片对应的后台进程；标题行与命令行是纯展示。文件差异卡片反过来——
+//! 只有标题行可点（展开/收起），正文保留聊天选区；两者不能用 `session_id` 是否为空
+//! 互相猜测。
 
 use ratatui::layout::Rect;
 
@@ -183,5 +185,133 @@ fn task_panel_blocks_entry_switch_hits() {
     assert!(
         entry_hit(area, &lx, column, row).is_some(),
         "关闭面板后入口恢复正常"
+    );
+}
+
+// ===== 文件差异卡片：只有标题行可点，动作为展开/收起 =====
+
+/// 构造一条含文件差异卡片的 assistant 消息。
+fn file_message(call_id: &str) -> ChatMessageView {
+    use crate::app::state::{
+        DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView,
+    };
+    use crate::chat::tools::{DiffLineKind, FileChangeKind};
+
+    let diff = FileDiffDetailView {
+        files: vec![FileChangeView {
+            path: "/w/a.rs".into(),
+            to: None,
+            kind: FileChangeKind::Updated,
+            added: Some(1),
+            removed: Some(1),
+            counts_known: true,
+            simplified: false,
+            diff: Some(FileDiffView::Complete {
+                hunks: vec![DiffHunkView {
+                    lines: vec![
+                        DiffLineView {
+                            kind: DiffLineKind::Removed,
+                            old_line: Some(1),
+                            new_line: None,
+                            text: "old".into(),
+                            no_final_newline: false,
+                        },
+                        DiffLineView {
+                            kind: DiffLineKind::Added,
+                            old_line: None,
+                            new_line: Some(1),
+                            text: "new".into(),
+                            no_final_newline: false,
+                        },
+                    ],
+                }],
+                simplified: false,
+            }),
+        }],
+        files_total: 1,
+        added: Some(1),
+        removed: Some(1),
+        simplified: false,
+        omitted_files: 0,
+        single: false,
+    };
+    let call = ToolCallView {
+        call_id: call_id.into(),
+        name: "edit".into(),
+        position: 0,
+        arguments_json: r#"{"patch":"*** Begin Patch"}"#.into(),
+        status: ToolStatus::Completed,
+        summary: None,
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(crate::app::state::ToolDetailView::File(diff))),
+    };
+    ChatMessageView {
+        id: format!("msg-{call_id}"),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![AssistantStepView::Tool { position: 0, call }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }
+}
+
+#[test]
+fn file_diff_title_toggles_and_body_is_not_a_hit() {
+    let area = Rect::new(0, 0, 60, 20);
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![file_message("call-edit")];
+    lx.chat.follow_bottom = true;
+    let view = history_view(area, &lx).expect("历史区");
+    let hit = crate::ui::main_content::lx::history::layout(view.body, &lx)
+        .tools
+        .into_iter()
+        .next()
+        .expect("文件卡片标题命中");
+    assert_eq!(
+        hit.kind,
+        crate::ui::main_content::lx::history::ToolHitKind::Toggle
+    );
+    let title_y = hit
+        .rect
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y);
+    assert_eq!(
+        chat_hit(area, &lx, area.x + 6, title_y),
+        Some(LxChatHit::ToolToggle {
+            message_id: "msg-call-edit".into(),
+            call_id: "call-edit".into(),
+        }),
+        "标题行命中展开切换，不是任务面板"
+    );
+    // 正文行保留聊天选区，不是命中区。
+    assert_eq!(chat_hit(area, &lx, area.x + 6, title_y + 1), None);
+    assert_eq!(chat_hit(area, &lx, area.x + 6, title_y + 2), None);
+}
+
+#[test]
+fn file_tool_without_diff_has_no_toggle_hit() {
+    // 旧记录（无 diff）保持两行摘要，不制造无效展开入口。
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![file_message("call-edit")];
+    if let AssistantStepView::Tool { call, .. } = &mut lx.chat.messages[0].steps[0] {
+        call.detail = Some(Box::new(crate::app::state::ToolDetailView::File(
+            crate::app::state::FileDiffDetailView::default(),
+        )));
+    }
+    let area = Rect::new(0, 0, 60, 20);
+    let view = history_view(area, &lx).expect("历史区");
+    assert!(
+        crate::ui::main_content::lx::history::layout(view.body, &lx)
+            .tools
+            .is_empty(),
+        "没有差异正文时不登记命中区"
     );
 }

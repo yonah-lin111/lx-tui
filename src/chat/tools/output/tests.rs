@@ -94,6 +94,7 @@ fn edit_text_lists_each_change() {
                 added: 2,
                 removed: 1,
                 kind: FileChangeKind::Updated,
+                diff: None,
             },
             FileChange {
                 path: PathBuf::from("/tmp/b.txt"),
@@ -102,6 +103,7 @@ fn edit_text_lists_each_change() {
                 kind: FileChangeKind::Moved {
                     to: PathBuf::from("/tmp/c.txt"),
                 },
+                diff: None,
             },
         ],
         partial: true,
@@ -123,6 +125,7 @@ fn failure_text_reports_partial_application() {
             added: 1,
             removed: 1,
             kind: FileChangeKind::Updated,
+            diff: None,
         }],
     };
     let text = format_for_model(&result);
@@ -189,12 +192,14 @@ fn multi_file_summary_has_no_single_path() {
                 added: 1,
                 removed: 0,
                 kind: FileChangeKind::Updated,
+                diff: None,
             },
             FileChange {
                 path: PathBuf::from("/tmp/b.txt"),
                 added: 2,
                 removed: 2,
                 kind: FileChangeKind::Updated,
+                diff: None,
             },
         ],
         partial: false,
@@ -214,6 +219,7 @@ fn edit_summary_reports_partial() {
             added: 1,
             removed: 0,
             kind: FileChangeKind::Updated,
+            diff: None,
         }],
         partial: true,
     };
@@ -267,6 +273,7 @@ fn result_json_covers_every_variant() {
             kind: FileChangeKind::Moved {
                 to: PathBuf::from("/tmp/b.txt"),
             },
+            diff: None,
         }],
         partial: false,
     };
@@ -355,6 +362,9 @@ fn to_app_summary(summary: &super::super::types::ToolSummary) -> AppToolSummary 
         total_lines: summary.total_lines,
         truncated: summary.truncated,
         partial: summary.partial,
+        counts_known: summary.counts_known,
+        simplified: summary.simplified,
+        omitted_files: summary.omitted_files,
     }
 }
 
@@ -497,6 +507,7 @@ fn to_result_json_round_trips_into_summary() {
                     added: 1,
                     removed: 1,
                     kind: FileChangeKind::Updated,
+                    diff: None,
                 }],
                 partial: false,
             },
@@ -511,6 +522,7 @@ fn to_result_json_round_trips_into_summary() {
                         added: 3,
                         removed: 1,
                         kind: FileChangeKind::Updated,
+                        diff: None,
                     },
                     FileChange {
                         path: PathBuf::from("/w/b.rs"),
@@ -519,6 +531,7 @@ fn to_result_json_round_trips_into_summary() {
                         kind: FileChangeKind::Moved {
                             to: PathBuf::from("/w/c.rs"),
                         },
+                        diff: None,
                     },
                 ],
                 partial: true,
@@ -533,6 +546,7 @@ fn to_result_json_round_trips_into_summary() {
                     added: 1,
                     removed: 0,
                     kind: FileChangeKind::Added,
+                    diff: None,
                 }],
                 partial: true,
             },
@@ -545,6 +559,7 @@ fn to_result_json_round_trips_into_summary() {
                 created: true,
                 added: 2,
                 removed: 0,
+                diff: None,
             },
         },
         RoundTripCase {
@@ -555,6 +570,7 @@ fn to_result_json_round_trips_into_summary() {
                 created: false,
                 added: 18,
                 removed: 4,
+                diff: None,
             },
         },
         RoundTripCase {
@@ -568,6 +584,7 @@ fn to_result_json_round_trips_into_summary() {
                     added: 2,
                     removed: 1,
                     kind: FileChangeKind::Updated,
+                    diff: None,
                 }],
             },
         },
@@ -582,6 +599,7 @@ fn to_result_json_round_trips_into_summary() {
                     added: 0,
                     removed: 7,
                     kind: FileChangeKind::Deleted,
+                    diff: None,
                 }],
             },
         },

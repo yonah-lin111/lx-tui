@@ -40,7 +40,7 @@ fn tool_call(
         position: 0,
         arguments_json: String::new(),
         status,
-        summary,
+        summary: summary.map(Box::new),
         error: error.map(str::to_string),
         result_json: None,
         detail: None,

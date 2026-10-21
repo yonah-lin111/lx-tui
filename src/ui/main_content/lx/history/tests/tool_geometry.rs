@@ -20,11 +20,11 @@ fn read_step(position: i64, status: ToolStatus) -> AssistantStepView {
             position,
             arguments_json: String::new(),
             status,
-            summary: Some(ToolSummary {
+            summary: Some(Box::new(ToolSummary {
                 path: Some("src/ui/style.rs".into()),
                 range: Some((12, 40)),
                 ..ToolSummary::default()
-            }),
+            })),
             error: None,
             result_json: None,
             detail: None,

@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 
 use super::args::Args;
+use super::diff::{FileDiff, diff_lines};
 use super::lock;
 use super::patch::{self, Block, BodyLineKind, Hunk};
 use super::path;
@@ -167,7 +168,14 @@ fn commit(resolved: &[Resolved<'_>]) -> ToolExecutionResult {
             Ok(Some(change)) => changes.push(change),
             // 无实际变更：不写盘，但如实标记 partial。
             Ok(None) => partial = true,
-            Err(failure) => return failure.into_result(changes),
+            Err(failure) => {
+                // 源文件可能**已经写入**（随后目录/rename 失败）：先计入已提交变更，
+                // 再报失败——否则 UI 会漏掉这次真实发生的写盘。
+                if let Some(change) = failure.committed {
+                    changes.push(*change);
+                }
+                return failure.cause.into_result(changes);
+            }
         }
     }
     if changes.is_empty() {
@@ -180,12 +188,29 @@ fn commit(resolved: &[Resolved<'_>]) -> ToolExecutionResult {
     ToolExecutionResult::Edit { changes, partial }
 }
 
+/// 提交阶段失败：普通错误，或「源文件已写入、后续移动失败」时附带的已提交变更。
+struct CommitFailure {
+    cause: ToolFailure,
+    /// 已落盘但后续步骤失败的文件变更。装箱：`FileChange` 现在携带差异正文，
+    /// 直接内联会让 `Result<_, CommitFailure>` 的错误变体过大（clippy）。
+    committed: Option<Box<FileChange>>,
+}
+
+impl From<ToolFailure> for CommitFailure {
+    fn from(cause: ToolFailure) -> Self {
+        Self {
+            cause,
+            committed: None,
+        }
+    }
+}
+
 /// 落盘单个 hunk；无实际变更时返回 `Ok(None)`。
-fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
+fn commit_one(plan: &Resolved<'_>) -> Result<Option<FileChange>, CommitFailure> {
     match plan {
         Resolved::Add { hunk, target } => {
             let Hunk::Add { lines, .. } = hunk else {
-                return Err(internal_error("add hunk mismatch"));
+                return Err(internal_error("add hunk mismatch").into());
             };
             if lines.is_empty() {
                 return Ok(None);
@@ -197,16 +222,30 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
                 trailing_newline: true,
             };
             let bytes = source.encode(lines);
+            let (diff, counts) = diff_lines(&[], lines, true, true, 0, bytes.len());
             write_bytes(target, &bytes)?;
             Ok(Some(FileChange {
                 path: target.clone(),
-                added: lines.len(),
-                removed: 0,
+                added: counts.added,
+                removed: counts.removed,
                 kind: FileChangeKind::Added,
+                diff: Some(diff),
             }))
         }
         Resolved::Delete { target } => {
-            let removed = read_text(target).map(|lines| lines.len()).unwrap_or(0);
+            // 旧内容不可读（二进制/非 UTF-8）不改变删除能力：仍删，差异标为不可用。
+            let (diff, removed) = match read_source(target) {
+                Ok((lines, bytes, _)) => {
+                    let (diff, counts) = diff_lines(&lines, &[], true, true, bytes, 0);
+                    (diff, counts.removed)
+                }
+                Err(failure) => (
+                    FileDiff::Unavailable {
+                        reason: unavailable_reason(&failure),
+                    },
+                    0,
+                ),
+            };
             lock::with_path_lock(target, || std::fs::remove_file(target))
                 .map_err(|error| path::map_io_error(&error, "delete", target))?;
             Ok(Some(FileChange {
@@ -214,6 +253,7 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
                 added: 0,
                 removed,
                 kind: FileChangeKind::Deleted,
+                diff: Some(diff),
             }))
         }
         Resolved::Update {
@@ -222,7 +262,7 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
             move_to,
         } => {
             let Hunk::Update { blocks, .. } = hunk else {
-                return Err(internal_error("update hunk mismatch"));
+                return Err(internal_error("update hunk mismatch").into());
             };
             // 一次读 + 一次解析：`before` 与写回编码共用同一份 `SourceText`。
             // （旧实现先 `read_text` 再 `std::fs::read` + `parse`：两次读之间有窗口，
@@ -232,51 +272,74 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
             let source = SourceText::parse(&bytes)?;
             let before = source.lines.clone();
             let after = apply_blocks(&before, blocks, target)?;
-            if before == after {
-                return Ok(None);
-            }
-            // 增删计数按补丁里的 `-` / `+` 行累加：这才是模型与 UI 关心的改动规模，
-            // 用前后缀剥离估算会把「20 行文件改 2 行」算成 +18 -18。
-            let (added, removed) = patch_line_counts(blocks);
-            let bytes = source.encode(&after);
+            let encoded = source.encode(&after);
+            // 差异与计数同源：都来自本次真实 before/after，不按输入 patch 统计。
+            let (diff, counts) = diff_lines(
+                &before,
+                &after,
+                source.trailing_newline,
+                source.trailing_newline,
+                bytes.len(),
+                encoded.len(),
+            );
+            let same_content = before == after;
             match move_to {
                 None => {
-                    write_bytes(target, &bytes)?;
+                    // 内容没有实际变化：不写盘，如实标记 partial。
+                    if same_content {
+                        return Ok(None);
+                    }
+                    write_bytes(target, &encoded)?;
                     Ok(Some(FileChange {
                         path: target.clone(),
-                        added,
-                        removed,
+                        added: counts.added,
+                        removed: counts.removed,
                         kind: FileChangeKind::Updated,
+                        diff: Some(diff),
                     }))
                 }
                 Some(destination) => {
-                    write_bytes(target, &bytes)?;
+                    // 纯移动不重写源文件；只有内容变化时才写。
+                    if !same_content {
+                        write_bytes(target, &encoded)?;
+                    }
+                    // 源文件内容已经更新（或本来就没变）：此后任何失败都必须带上这份
+                    // 已提交的 Updated 变更，不能漏报。
+                    let committed = FileChange {
+                        path: target.clone(),
+                        added: counts.added,
+                        removed: counts.removed,
+                        kind: FileChangeKind::Updated,
+                        diff: Some(diff.clone()),
+                    };
                     if let Some(parent) = destination.parent()
                         && !parent.as_os_str().is_empty()
                     {
-                        std::fs::create_dir_all(parent).map_err(|error| {
-                            path::map_io_error(&error, "create directory", parent)
+                        std::fs::create_dir_all(parent).map_err(|error| CommitFailure {
+                            committed: (!same_content).then(|| Box::new(committed.clone())),
+                            cause: path::map_io_error(&error, "create directory", parent),
                         })?;
                     }
                     lock::with_path_lock(target, || std::fs::rename(target, destination))
-                        .map_err(|error| {
-                            // 源文件内容已经更新；错误消息如实说明，不谎报回滚。
-                            ToolFailure::new(
+                        .map_err(|error| CommitFailure {
+                            committed: (!same_content).then(|| Box::new(committed.clone())),
+                            cause: ToolFailure::new(
                                 io_code(&error),
                                 format!(
                                     "wrote {} but failed to move it to {}: {error}; the source file already has the new content",
                                     path::display(target),
                                     path::display(destination)
                                 ),
-                            )
+                            ),
                         })?;
                     Ok(Some(FileChange {
                         path: target.clone(),
-                        added,
-                        removed,
+                        added: counts.added,
+                        removed: counts.removed,
                         kind: FileChangeKind::Moved {
                             to: destination.clone(),
                         },
+                        diff: Some(diff),
                     }))
                 }
             }
@@ -284,11 +347,21 @@ fn commit_one(plan: &Resolved<'_>) -> ToolResult<Option<FileChange>> {
     }
 }
 
-/// 读取文本文件行（二进制/非 UTF-8 在此报错）。
-fn read_text(target: &Path) -> ToolResult<Vec<String>> {
+/// 读取文本源：行、原始字节数、是否以换行结尾（删除前统计差异用）。
+fn read_source(target: &Path) -> ToolResult<(Vec<String>, usize, bool)> {
     let bytes =
         std::fs::read(target).map_err(|error| path::map_io_error(&error, "read", target))?;
-    Ok(SourceText::parse(&bytes)?.lines)
+    let source = SourceText::parse(&bytes)?;
+    Ok((source.lines, bytes.len(), source.trailing_newline))
+}
+
+/// 读取失败 → 差异不可用的稳定原因。
+fn unavailable_reason(failure: &ToolFailure) -> crate::chat::tools::DiffUnavailableReason {
+    match failure.code {
+        ToolErrorCode::Binary => crate::chat::tools::DiffUnavailableReason::Binary,
+        ToolErrorCode::NotUtf8 => crate::chat::tools::DiffUnavailableReason::NotUtf8,
+        _ => crate::chat::tools::DiffUnavailableReason::ReadFailed,
+    }
 }
 
 /// 应用全部 `@@` 块到行集合；返回更新后的行。
@@ -458,22 +531,6 @@ fn format_candidate_lines(hits: &[usize]) -> String {
         text.push_str(", …");
     }
     text
-}
-
-/// 按补丁行统计增删：`removed` 是 `-` 行数，`added` 是 `+` 行数。
-fn patch_line_counts(blocks: &[Block]) -> (usize, usize) {
-    let mut added = 0;
-    let mut removed = 0;
-    for block in blocks {
-        for line in &block.lines {
-            match line.kind {
-                BodyLineKind::Add => added += 1,
-                BodyLineKind::Remove => removed += 1,
-                BodyLineKind::Context => {}
-            }
-        }
-    }
-    (added, removed)
 }
 
 /// 上下文失配错误（只描述位置，不含文件内容）。

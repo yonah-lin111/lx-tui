@@ -14,7 +14,7 @@
 //! 一旦本轮结束（消息转 `complete`）后台事件就再也找不到它，标题上的 `Running · 4m 44s`
 //! 会一直走到进程被杀——这就是用户看到的「关掉了还在计时」。
 
-use crate::app::state::{AppState, ChatMessageView, RequestKey, ToolStatus, ToolSummary};
+use crate::app::state::{AppState, ChatMessageView, RequestKey, ToolStatus};
 use crate::chat::process::ProcessUiEvent;
 use crate::layout::PaneId;
 use crate::ui::text;
@@ -458,30 +458,35 @@ pub fn restore_plan(state: &mut AppState, pane: PaneId, messages: &[ChatMessageV
     true
 }
 
-/// 键盘 `^o`：打开后台任务面板，并把高亮定位到当前（或最近一张）进程卡片。
+/// 键盘 `^o`：对当前（或最近一张）可展开卡片执行它的**唯一动作**。
 ///
-/// 卡片收敛成三行后没有"展开详情"了，`^o` 因此改走和 `[open]` 同一条路径
-/// （决策 7：卡片唯一的动作就是打开后台任务面板）。没有可定位的进程卡片时
-/// 退化为普通打开（高亮保持当前值）。
+/// - 文件差异卡片：切换整张卡片的展开/收起（与点击标题同一条路径）；
+/// - 进程卡片：打开后台任务面板并把高亮定位到该进程（与 `[open]` 同一条路径）。
+///
+/// 没有可定位的卡片时退化为普通打开（高亮保持当前值）。
 pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
     let selected = target.lx.chat.selected_tool.clone();
     let target_key = selected.or_else(|| latest_expandable(&target.lx.chat));
-    let session_id = target_key.clone().and_then(|(message_id, call_id)| {
-        target
-            .lx
-            .chat
-            .messages
-            .iter()
-            .find(|message| message.id == message_id)
-            .and_then(|message| message.tool(&call_id))
-            .and_then(|call| call.process_session_id())
-    });
-    if let Some((message_id, call_id)) = target_key
-        && let Some(target) = state.pane_mut_anywhere(pane)
-    {
+    let Some((message_id, call_id)) = target_key else {
+        return super::open_task_page_at(state, pane, None);
+    };
+    let call = target
+        .lx
+        .chat
+        .messages
+        .iter()
+        .find(|message| message.id == message_id)
+        .and_then(|message| message.tool(&call_id));
+    // 文件卡片：`^o` 展开/收起，绝不打开后台任务面板。
+    // 判据用 app 层的视图本身（`app` 不得反向依赖 `ui`）。
+    if call.is_some_and(|call| call.file_view().is_some_and(|view| !view.is_empty())) {
+        return toggle_tool_detail(state, pane, &message_id, &call_id);
+    }
+    let session_id = call.and_then(|call| call.process_session_id());
+    if let Some(target) = state.pane_mut_anywhere(pane) {
         target.lx.chat.selected_tool = Some((message_id, call_id));
     }
     super::open_task_page_at(state, pane, session_id)
@@ -540,6 +545,6 @@ pub fn is_expandable(call: &crate::app::state::ToolCallView) -> bool {
     let has_summary = call
         .summary
         .as_ref()
-        .is_some_and(|summary: &ToolSummary| !summary.is_empty());
+        .is_some_and(|summary| !summary.is_empty());
     has_summary || call.result_json.is_some()
 }

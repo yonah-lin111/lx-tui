@@ -609,3 +609,92 @@ fn assistant_with(parts: Vec<ChatPart>, tools: Vec<ToolCallRecord>) -> ChatMessa
     assistant.tools = tools;
     assistant
 }
+
+/// UI 差异正文不得进入历史回放：成功 `edit` 的 diff 被剥掉，摘要字段保留。
+#[test]
+fn successful_edit_replay_strips_ui_diff() {
+    let mut history = vec![
+        message("u", 0, 0, "user", "complete", "改文件"),
+        message("a", 1, 0, "assistant", "complete", "改"),
+    ];
+    history[1].tools = vec![tool(
+        1,
+        "call_edit",
+        "edit",
+        "completed",
+        r#"{"patch":"*** Begin Patch"}"#,
+        Some(
+            r#"{"tool":"edit","changes":[{"path":"/w/a.rs","kind":"updated","added":1,"removed":1,"counts_known":true,"simplified":false,"diff":{"version":1,"status":"complete","hunks":[{"lines":[{"kind":"added","new_line":1,"text":"ONLY_IN_DIFF_BODY"}]}]}}],"partial":false,"file_totals":{"files":1,"added":1,"removed":1,"simplified":false,"omitted_files":0}}"#,
+        ),
+        None,
+    )];
+    let assembly = assemble_unbounded(&history, "继续");
+    let content = assembly
+        .request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("结果回放");
+    assert!(
+        !content.contains("ONLY_IN_DIFF_BODY"),
+        "差异正文不得进入模型历史：{content}"
+    );
+    // 摘要字段与调用配对完整保留。
+    assert!(content.contains("/w/a.rs"), "{content}");
+    assert!(content.contains(r#""added":1"#), "{content}");
+    assert!(content.contains("file_totals"), "{content}");
+    assert!(content.contains("counts_known"), "{content}");
+    assert_no_orphan_results(&assembly.request.items);
+}
+
+/// 失败兜底路径（无 error_text）同样剥离差异正文。
+#[test]
+fn failed_edit_json_fallback_strips_ui_diff() {
+    let mut history = vec![
+        message("u", 0, 0, "user", "complete", "改文件"),
+        message("a", 1, 0, "assistant", "complete", "改"),
+    ];
+    history[1].tools = vec![tool(
+        1,
+        "call_edit",
+        "edit",
+        "failed",
+        r#"{"patch":"*** Begin Patch"}"#,
+        Some(
+            r#"{"tool":"error","code":"io","changes":[{"path":"/w/a.rs","kind":"updated","added":1,"removed":0,"diff":{"version":1,"status":"complete","hunks":[{"lines":[{"kind":"added","new_line":1,"text":"ONLY_IN_DIFF_BODY"}]}]}}]}"#,
+        ),
+        None,
+    )];
+    let assembly = assemble_unbounded(&history, "继续");
+    let content = assembly
+        .request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult { content, .. } => Some(content.clone()),
+            _ => None,
+        })
+        .expect("结果回放");
+    assert!(!content.contains("ONLY_IN_DIFF_BODY"), "{content}");
+    assert!(content.contains("/w/a.rs"), "{content}");
+}
+
+/// 非文件结果逐字节保持原样（剥离只作用于文件工具 JSON）。
+#[test]
+fn non_file_result_replays_verbatim() {
+    let history = turn_with_tool("", "call_a", "");
+    let assembly = assemble_unbounded(&history, "q");
+    let content = assembly
+        .request
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ModelItem::ToolResult { content, .. } => Some(content.as_str()),
+            _ => None,
+        })
+        .expect("result present");
+    assert_eq!(content, r#"{"tool":"read","content":"1: fn main() {}"}"#);
+}

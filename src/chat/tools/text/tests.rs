@@ -59,18 +59,6 @@ fn encode_without_trailing_newline_writes_none() {
 }
 
 #[test]
-fn line_diff_counts_prefix_and_suffix() {
-    let old: Vec<String> = ["a", "b", "c"].iter().map(|s| s.to_string()).collect();
-    let new: Vec<String> = ["a", "B", "c"].iter().map(|s| s.to_string()).collect();
-    assert_eq!(line_diff_counts(&old, &new), (1, 1));
-
-    let empty: Vec<String> = Vec::new();
-    assert_eq!(line_diff_counts(&empty, &old), (3, 0));
-    assert_eq!(line_diff_counts(&old, &empty), (0, 3));
-    assert_eq!(line_diff_counts(&old, &old), (0, 0));
-}
-
-#[test]
 fn blank_detection() {
     assert!(is_blank("  \n\t\n"));
     assert!(!is_blank("a"));

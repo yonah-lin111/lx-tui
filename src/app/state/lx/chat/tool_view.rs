@@ -237,12 +237,15 @@ impl PlanSnapshotView {
     }
 }
 
-/// 三种新增工具的详情视图（文件工具沿用既有摘要，不在这里重复一套）。
+/// 工具详情视图：进程/计划走各自快照，文件工具走**已解码的差异**。
+///
+/// 文件分支与摘要并存：摘要回答"哪个文件、多少行"，详情回答"哪几行变成什么"。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolDetailView {
     Command(CommandView),
     Interaction(ProcessInteractionView),
     Plan(PlanSnapshotView),
+    File(super::file_diff::FileDiffDetailView),
 }
 
 impl ToolDetailView {
@@ -371,6 +374,18 @@ impl ToolDetailView {
             }
             _ => None,
         }
+    }
+
+    /// 文件工具的差异详情（结算与重载共用同一解码入口）。
+    ///
+    /// 坏文件详情在解码内部局部降级为 `Unavailable`，只有**完全**不是文件结果时才返回
+    /// None（此时调用方沿用原两行摘要）。
+    pub fn file_detail(result_json: Option<&str>) -> Option<Self> {
+        let value: Value = serde_json::from_str(result_json?).ok()?;
+        if !super::file_diff::has_file_detail(&value) {
+            return None;
+        }
+        super::file_diff::FileDiffDetailView::from_result_json(Some(result_json?)).map(Self::File)
     }
 }
 
