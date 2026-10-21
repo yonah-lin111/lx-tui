@@ -638,3 +638,216 @@ fn typing_in_model_panel_filters_models_and_variant_stage_resets() {
     };
     assert_eq!(picker.filtered, vec![0], "恢复全量");
 }
+
+/// `Esc` 关闭 `/resume` 面板：整框清空输入框里的过滤词。
+#[test]
+fn escape_closes_resume_panel_and_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "be".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    assert_eq!(state.pane_anywhere(pane).expect("pane").lx.input, "be");
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Escape);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.slash.is_none(), "面板已关闭");
+    assert!(lx.input.is_empty(), "过滤词被清空: {:?}", lx.input);
+}
+
+/// `Esc` 关闭 `/model` 第一级面板：同样整框清空。
+#[test]
+fn escape_closes_model_panel_and_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    state.models = models_with(Some("high"));
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('z'));
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Escape);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.slash.is_none(), "面板已关闭");
+    assert!(lx.input.is_empty(), "过滤词被清空: {:?}", lx.input);
+}
+
+/// `Esc` 从 `/model` 第二级退回第一级：**不清空**（仍在同一流程内）。
+#[test]
+fn escape_from_variant_stage_keeps_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    state.models = models_with(Some("high"));
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    // 进入第二级（默认模型有 high variant）。
+    assert!(apply_slash_enter(&mut state, pane));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('x'));
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Escape);
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(
+        matches!(lx.slash, Some(SlashPanel::Model(_))),
+        "仍停留在第一级面板"
+    );
+    assert_eq!(lx.input, "x", "退回第一级不清空输入框");
+}
+
+/// `↵` 选中会话：清空输入框。
+#[test]
+fn enter_on_resume_panel_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "be".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+
+    assert!(apply_slash_enter(&mut state, pane));
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.input.is_empty(), "选中会话后清空: {:?}", lx.input);
+}
+
+/// `↵` 选中模型（进入第二级）：清空输入框。
+#[test]
+fn enter_on_model_panel_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    state.models = models_with(Some("high"));
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('m'));
+
+    assert!(apply_slash_enter(&mut state, pane));
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.input.is_empty(), "选中模型后清空: {:?}", lx.input);
+}
+
+/// `↵` 选中思考等级（关闭面板）：清空输入框。
+#[test]
+fn enter_on_variant_stage_clears_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    state.models = models_with(Some("high"));
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('m'));
+    assert!(apply_slash_enter(&mut state, pane));
+    // 第二级不支持过滤，但输入框里残留的字符仍应在选中后清空。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('y'));
+
+    assert!(apply_slash_enter(&mut state, pane));
+
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert!(lx.slash.is_none(), "面板已关闭");
+    assert!(lx.input.is_empty(), "选中等级后清空: {:?}", lx.input);
+}
+
+/// `⇧↵` 打开会话编辑模态：**不清空**输入框。
+#[test]
+fn shift_enter_on_resume_panel_keeps_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "be".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::EnterFolder);
+
+    assert!(state.overlay.is_some(), "编辑模态已打开");
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "be",
+        "打开编辑模态不清空输入框"
+    );
+}
+
+/// `^C` 复制会话 id：**不清空**（支持连续复制多条）。
+#[test]
+fn copy_on_resume_panel_keeps_input() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "be".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
+
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        "be",
+        "复制不清空输入框"
+    );
+}
+
+/// `/model` 第二级（思考等级）不支持过滤：键入字符不会缩小列表，也不会出现空态。
+#[test]
+fn variant_stage_ignores_typing_for_filtering() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    // 两个等级：low / high。
+    let mut settings = models_with(Some("high"));
+    let provider = settings.settings.providers.get_mut("p").expect("provider");
+    let model = provider.models.get_mut("m").expect("model");
+    model
+        .variants
+        .insert("low".into(), serde_json::json!({"reasoningEffort": "low"}));
+    state.models = settings;
+    let pane = focus_pane(&state);
+    assert!(open_model_picker(&mut state, pane));
+    assert!(apply_slash_enter(&mut state, pane), "进入第二级");
+
+    // 键一个必然不匹配任何等级的字符。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('z'));
+
+    let picker = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::Model(picker)) => picker,
+        _ => panic!("model panel"),
+    };
+    assert_eq!(picker.stage_len(), 2, "两级都还在");
+    assert_eq!(picker.filtered, vec![0, 1], "第二级恒为全量视图");
+    assert!(!picker.is_filter_empty(), "不会显示 no matches");
+}
+
+/// `/resume` 过滤仍生效（回归：清空逻辑不得破坏过滤本身）。
+#[test]
+fn resume_filter_still_works_after_clear_rules() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    for ch in "be".chars() {
+        crate::app::update::apply_lx_input(&mut state, LxInput::Char(ch));
+    }
+    let panel = match state.pane_anywhere(pane).and_then(|t| t.lx.slash.clone()) {
+        Some(SlashPanel::History(panel)) => panel,
+        _ => panic!("history panel"),
+    };
+    assert_eq!(panel.filtered, vec![1], "过滤仍生效");
+}

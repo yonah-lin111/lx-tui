@@ -469,6 +469,9 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                 };
                 let selection = candidate.selection;
                 let variants = variant_keys(state, &selection);
+                // 选中模型即结束这次搜索：**整框清空**输入框里的过滤词。
+                // 没有 variants 时面板就此关闭；有 variants 时进入第二级（也属选中模型）。
+                clear_lx_input(state, pane);
                 if variants.is_empty() {
                     finish_model_selection(state, pane, selection);
                 } else {
@@ -514,6 +517,8 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
                 selection.variant = picker
                     .active_stage_index()
                     .and_then(|index| variants.get(index).cloned());
+                // 选中思考等级同样结束搜索：整框清空。
+                clear_lx_input(state, pane);
                 finish_model_selection(state, pane, selection);
                 true
             }
@@ -522,10 +527,25 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
             // 高亮位置是过滤视图内的位置，采纳时换算回原始条目。
             if let Some(entry) = history.active_entry() {
                 let session_id = entry.session_id.clone();
+                // 选中会话即结束这次搜索：整框清空。
+                clear_lx_input(state, pane);
                 resume_session(state, pane, &session_id);
             }
             true
         }
+    }
+}
+
+/// 清空窗格输入框（整框清空，压一次 undo 快照）。
+///
+/// 二级面板（`/model`、`/resume`）打开期间输入框内容就是过滤词，属于**临时搜索输入**：
+/// `Esc` 关闭、`↵` 选中模型/会话后都必须清掉，否则过滤词会残留在草稿里被一起发送。
+///
+/// `⇧↵` 打开会话编辑模态、`^C` 复制会话 id **不清空**：前者仍在同一面板流程内，
+/// 后者要支持连续复制多条（清了输入框过滤结果会跳回全量）。
+fn clear_lx_input(state: &mut AppState, pane: PaneId) {
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.clear();
     }
 }
 

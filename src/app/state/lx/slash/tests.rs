@@ -308,9 +308,9 @@ fn model_picker_refilter_matches_model_and_provider() {
     assert_eq!(picker.filtered, vec![0], "provider 名子串也命中");
 }
 
-/// `/model` 第二级：按 variant 名匹配。
+/// `/model` 第二级**不支持过滤**：无论输入什么，都保持全量视图。
 #[test]
-fn model_picker_refilter_matches_variant_names() {
+fn model_picker_variant_stage_never_filters() {
     let mut picker = ModelPicker {
         stage: ModelPickerStage::Variants {
             model: crate::config::ai::ModelSelection {
@@ -328,8 +328,11 @@ fn model_picker_refilter_matches_variant_names() {
         filtered: vec![0, 1, 2],
     };
     picker.refilter("hi");
-    assert_eq!(picker.filtered, vec![1], "按 variant 前缀命中");
-    assert_eq!(picker.active_stage_index(), Some(1));
+    assert_eq!(picker.filtered, vec![0, 1, 2], "第二级恒为全量");
+    assert!(picker.filter.is_empty(), "第二级不记录过滤词");
+    assert!(!picker.is_filter_empty(), "第二级不会出现 no matches");
+    picker.refilter("zzzz");
+    assert_eq!(picker.filtered, vec![0, 1, 2], "无意义的词也不影响第二级");
 }
 
 /// 一级高亮项经视图换算到原始候选（采纳时不能拿视图索引当数据索引）。

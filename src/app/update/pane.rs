@@ -202,15 +202,28 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                             super::super::state::ModelPickerStage::Variants { .. }
                         ) =>
                     {
+                        // 第二级退回第一级：仍在同一个 `/model` 流程里，**不清空**输入框，
+                        // 否则第一级用于过滤的词被抹掉，列表无故跳回全量。
                         if let Some(panel) = lx.slash.as_mut()
                             && let super::super::state::SlashPanel::Model(picker) = panel
                         {
                             picker.stage = super::super::state::ModelPickerStage::Models;
+                            // 回第一级：过滤视图按新阶段重建（第二级本来就不支持过滤）。
+                            picker.filtered = (0..picker.stage_len()).collect();
+                            picker.filter.clear();
+                            picker.clamp_window();
                             picker.window =
                                 super::super::state::PanelWindow::new(picker.window.active);
                         }
                     }
-                    _ => lx.slash = None,
+                    // 真正关闭二级面板（`/model` 第一级、`/resume`、命令候选）：整框清空。
+                    // 命令候选面板（`/`）不清：它的过滤词就是命令本身，由
+                    // `accept_slash_command` 按行删除，`Esc` 关闭时草稿应原样保留。
+                    super::super::state::SlashPanel::Commands { .. } => lx.slash = None,
+                    _ => {
+                        lx.slash = None;
+                        lx.clear();
+                    }
                 }
                 return;
             }

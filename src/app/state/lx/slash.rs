@@ -342,35 +342,35 @@ impl HistoryPanel {
 }
 
 impl ModelPicker {
-    /// 按 `query` 重算 `filtered`：`Models` 匹配**模型名或 provider 名**，
-    /// `Variants` 匹配 variant 名。空查询恢复恒等视图。
+    /// 按 `query` 重算 `filtered`：只在**第一级**（模型列表）生效，匹配
+    /// **模型名或 provider 名**。
+    ///
+    /// 第二级（思考等级 variants）**不支持过滤**：候选通常只有 `low`/`high`/`max`
+    /// 两三档，搜索没有意义；且第一级带来的过滤词（如 `gpt`）对等级名必然无命中，
+    /// 只会制造 `no matches`。因此 `Variants` 阶段恒为全量视图，`filter` 也保持空。
     pub fn refilter(&mut self, query: &str) {
+        if matches!(self.stage, ModelPickerStage::Variants { .. }) {
+            self.filter.clear();
+            self.filtered = (0..self.stage_len()).collect();
+            self.clamp_window();
+            return;
+        }
         self.filter = query.to_string();
-        let len = self.stage_len();
         if query.trim().is_empty() {
-            self.filtered = (0..len).collect();
+            self.filtered = (0..self.stage_len()).collect();
             self.clamp_window();
             return;
         }
         let query = query.trim().to_lowercase();
-        let mut scored: Vec<(u32, usize)> = match &self.stage {
-            ModelPickerStage::Models => self
-                .candidates
-                .iter()
-                .enumerate()
-                .filter_map(|(index, candidate)| {
-                    best_score(&[&candidate.model_name, &candidate.provider_name], &query)
-                        .map(|score| (score, index))
-                })
-                .collect(),
-            ModelPickerStage::Variants { variants, .. } => variants
-                .iter()
-                .enumerate()
-                .filter_map(|(index, variant)| {
-                    command_score(&variant.to_lowercase(), &query).map(|score| (score, index))
-                })
-                .collect(),
-        };
+        let mut scored: Vec<(u32, usize)> = self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                best_score(&[&candidate.model_name, &candidate.provider_name], &query)
+                    .map(|score| (score, index))
+            })
+            .collect();
         scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
         self.filtered = scored.into_iter().map(|(_, index)| index).collect();
         self.clamp_window();
