@@ -9,7 +9,7 @@ use crate::app::effects::{Effect, PromptPageDraft};
 use crate::app::prompt::PromptEditing;
 
 /// 独立临时库路径。
-fn temp_db_path(label: &str) -> PathBuf {
+pub(super) fn temp_db_path(label: &str) -> PathBuf {
     static SEQUENCE: AtomicU64 = AtomicU64::new(0);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -22,12 +22,12 @@ fn temp_db_path(label: &str) -> PathBuf {
 }
 
 /// 独立工作区路径（不要求磁盘存在）。
-fn workspace_path(label: &str) -> PathBuf {
+pub(super) fn workspace_path(label: &str) -> PathBuf {
     std::env::temp_dir().join(format!("lx-tui-service-ws-{label}"))
 }
 
 /// demo 状态并把活动工作区 cwd 指向给定路径。
-fn state_with_cwd(cwd: &std::path::Path) -> AppState {
+pub(super) fn state_with_cwd(cwd: &std::path::Path) -> AppState {
     let mut state = AppState::demo();
     state.active_workspace_mut().cwd = Some(cwd.to_path_buf());
     state

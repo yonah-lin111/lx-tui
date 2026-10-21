@@ -63,7 +63,7 @@ pub(crate) fn schedule_checkpoint(state: &mut AppState, key: &RequestKey) {
         .find(|message| message.id == assistant_id)
         .map(crate::db::chat::chat_message_part_views)
         .unwrap_or_default();
-    let Some(workspace) = state.workspace_cwd_for_pane(key.pane) else {
+    let Some(workspace) = state.chat_session_key_for_pane(key.pane) else {
         return;
     };
     state

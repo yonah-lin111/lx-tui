@@ -559,7 +559,7 @@ impl Persistence {
             } => {
                 // workspace 按窗格当前归属解析（关闭窗格后仍按原 workspace 完成写入）。
                 let workspace = state
-                    .workspace_cwd_for_pane(key.pane)
+                    .chat_session_key_for_pane(key.pane)
                     .unwrap_or_else(|| PathBuf::from(""));
                 let success = self
                     .with_db(|db| db.finish(&workspace, &assistant_id, &parts, &outcome, usage));
@@ -575,12 +575,12 @@ impl Persistence {
                 false
             }
             Effect::ListChatSessions { pane } => {
-                let workspace = state
-                    .workspace_cwd_for_pane(pane)
-                    .map(|path| path.to_path_buf());
-                let Some(workspace) = workspace else {
+                let Some(workspace) = state.chat_session_key_for_pane(pane) else {
                     return false;
                 };
+                // 主 checkout 的 workspace 行可能尚未登记（只开过 worktree）：
+                // 先登记再查，否则共享列表会静默变空。
+                let _ = self.with_db(|db| db.ensure_workspace(&workspace));
                 let entries = self.with_db(|db| {
                     db.list_chat_sessions(&workspace, 0, crate::db::chat::SESSION_PAGE_SIZE)
                 });
@@ -599,12 +599,10 @@ impl Persistence {
                 update::on_history_listed(state, pane, views)
             }
             Effect::LoadChatSession { pane, session_id } => {
-                let workspace = state
-                    .workspace_cwd_for_pane(pane)
-                    .map(|path| path.to_path_buf());
-                let Some(workspace) = workspace else {
+                let Some(workspace) = state.chat_session_key_for_pane(pane) else {
                     return false;
                 };
+                let _ = self.with_db(|db| db.ensure_workspace(&workspace));
                 let loaded: Option<LoadedSession> = self.with_db(|db| {
                     let messages = db.load_chat_session(&workspace, &session_id)?;
                     let model = db.chat_session_model(&workspace, &session_id)?;
@@ -750,7 +748,7 @@ impl Persistence {
             .workspaces
             .iter()
             .enumerate()
-            .filter(|(_, workspace)| workspace.prompt_key() == Some(key))
+            .filter(|(_, workspace)| workspace.repo_key() == Some(key))
             .map(|(index, _)| index)
             .collect();
         if targets.is_empty() {
@@ -793,7 +791,7 @@ impl Persistence {
         let Some(workspace) = state.workspaces.get(index) else {
             return false;
         };
-        let key = workspace.prompt_key().map(Path::to_path_buf);
+        let key = workspace.repo_key().map(Path::to_path_buf);
         if workspace.prompt_panel.loaded && workspace.prompt_panel.loaded_key == key {
             return false;
         }
@@ -883,11 +881,11 @@ fn workspace_index(state: &AppState, path: &Path) -> Option<usize> {
         .position(|workspace| workspace.cwd.as_deref() == Some(path))
 }
 
-/// 效应目标工作区的 prompt 键：git 工作区为仓库主 checkout，其余为 cwd；
+/// 效应目标工作区的仓库键：git 工作区为仓库主 checkout，其余为 cwd；
 /// 来源工作区已关闭时回退效应携带的路径。
 fn prompt_key_for(state: &AppState, workspace: &Path) -> PathBuf {
     workspace_index(state, workspace)
-        .and_then(|index| state.workspaces[index].prompt_key())
+        .and_then(|index| state.workspaces[index].repo_key())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| workspace.to_path_buf())
 }

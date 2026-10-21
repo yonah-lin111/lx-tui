@@ -3,6 +3,7 @@
 //! 只产生效应/更新纯状态；IO（DB/HTTP）由事件层执行，结果经 `AppEvent` 回投。
 //! 按 `(pane, session, generation)` 过滤过期结果；`Finishing` 期间不允许新一轮。
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use crate::app::state::{
@@ -90,9 +91,10 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     };
     // 冻结草稿并进入 Committing：清空输入由 DB ack 成功后执行。
+    // 会话落库用仓库键（worktree 与主 checkout 共用列表），执行 cwd 另行解析。
     let workspace = state
-        .workspace_cwd_for_pane(pane)
-        .or_else(|| state.active_workspace().cwd.clone());
+        .chat_session_key_for_pane(pane)
+        .or_else(|| state.active_workspace().repo_key().map(Path::to_path_buf));
     let Some(workspace) = workspace else {
         show_lx_hint(
             state,

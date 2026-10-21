@@ -6,7 +6,7 @@ pub mod chat;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockCommandId, TemplateCounts, TemplateStatus};
-use crate::app::state::{AppState, LxEntry, PaneView};
+use crate::app::state::{AppState, LxEntry, PaneView, WorkspaceIdentity};
 use crate::app::tooltip::{BlockButtonKind, TemplateButtonKind, TooltipTarget};
 use crate::detect::{AgentKind, AgentState};
 use crate::layout::PaneId;
@@ -982,6 +982,100 @@ fn take_suffix_width(text: &str, max_width: usize) -> &str {
         width += char_width;
     }
     text
+}
+
+/// 身份标签段间分隔符。
+pub const IDENTITY_SEPARATOR: &str = " · ";
+/// 边框身份标签片段：`emphasis` 为真取强调色（项目名与 `b:`/`wt:` 前缀），否则取默认灰。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentitySpan {
+    pub text: String,
+    pub emphasis: bool,
+}
+
+/// 边框身份标签：`项目 · b:分支 · wt:工作区名`，缺段自动省略，` · ` 连接。
+///
+/// 降级阶梯：整段 → 砍 `wt:` → 项目名中间省略（保留 `b:`） → 砍 `b:` → 不绘制。
+/// 返回 None 表示可用宽度连项目名开头的省略形式都放不下。
+pub fn workspace_identity_spans(
+    identity: &WorkspaceIdentity,
+    available: usize,
+) -> Option<Vec<IdentitySpan>> {
+    if available < 2 {
+        return None;
+    }
+    let project = identity.project.as_str();
+    let branch = identity.branch.as_deref();
+    let worktree = identity.worktree.as_deref();
+    let full = identity_spans(project, branch, worktree);
+    if spans_display_width(&full) <= available {
+        return Some(full);
+    }
+    if worktree.is_some() {
+        let trimmed = identity_spans(project, branch, None);
+        if spans_display_width(&trimmed) <= available {
+            return Some(trimmed);
+        }
+    }
+    if let Some(branch) = branch {
+        // 保留 ` · b:分支`，项目名按剩余预算中间省略。
+        let overhead = IDENTITY_SEPARATOR.width() + PROMPT_BRANCH_PREFIX.width() + branch.width();
+        let budget = available.saturating_sub(overhead);
+        if budget >= 2 {
+            let clipped = ellipsize_middle(project, budget);
+            return Some(identity_spans(&clipped, Some(branch), None));
+        }
+    }
+    Some(vec![IdentitySpan {
+        text: ellipsize_middle(project, available),
+        emphasis: true,
+    }])
+}
+
+/// 按给定段组装身份标签片段。
+fn identity_spans(
+    project: &str,
+    branch: Option<&str>,
+    worktree: Option<&str>,
+) -> Vec<IdentitySpan> {
+    let mut spans = vec![IdentitySpan {
+        text: project.to_string(),
+        emphasis: true,
+    }];
+    if let Some(branch) = branch {
+        spans.push(IdentitySpan {
+            text: IDENTITY_SEPARATOR.to_string(),
+            emphasis: false,
+        });
+        spans.push(IdentitySpan {
+            text: PROMPT_BRANCH_PREFIX.to_string(),
+            emphasis: true,
+        });
+        spans.push(IdentitySpan {
+            text: branch.to_string(),
+            emphasis: false,
+        });
+    }
+    if let Some(worktree) = worktree {
+        spans.push(IdentitySpan {
+            text: IDENTITY_SEPARATOR.to_string(),
+            emphasis: false,
+        });
+        spans.push(IdentitySpan {
+            text: PROMPT_WORKTREE_PREFIX.to_string(),
+            emphasis: true,
+        });
+        spans.push(IdentitySpan {
+            text: worktree.to_string(),
+            emphasis: false,
+        });
+    }
+    spans
+}
+
+/// 片段显示列宽合计。
+fn spans_display_width(spans: &[IdentitySpan]) -> usize {
+    spans.iter().map(|span| span.text.width()).sum()
 }
 
 /// 窗格标题：优先 OSC 标题，其次窗格 cwd 末段标签，最后按标识生成。

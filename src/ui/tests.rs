@@ -1531,183 +1531,143 @@ fn prompt_renders_toolbar_and_divider_rows() {
 }
 
 #[test]
-fn prompt_bottom_shows_branch_and_worktree_only() {
+fn prompt_bottom_shows_identity_label_at_left() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "work".to_string();
-    state.workspaces[0].cwd = Some(PathBuf::from("/repo/work"));
-    state.workspaces[0].git = Some(git_info("/repo", "/repo", false, Some("main")));
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/lx-tui"));
+    state.workspaces[0].git = Some(git_info(
+        "/repo/lx-tui",
+        "/repo/lx-tui",
+        false,
+        Some("main"),
+    ));
+    state.prompt_width = 60;
     let view = view_for(&state);
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("b:main"), "{bottom}");
-    assert!(!bottom.contains("wt:"), "{bottom}");
+    assert!(bottom.contains("─lx-tui · b:main"), "左对齐: {bottom}");
+    assert!(!bottom.contains("wt:"), "主 checkout 无 wt 段: {bottom}");
+    assert!(!bottom.contains("ws:"), "旧 ws 标签已移除: {bottom}");
     assert!(!bottom.contains("/repo"), "不显示项目路径: {bottom}");
 
-    // linked worktree：显示仓库主 checkout 分支 + ` wt:工作区名`，不显示自身分支。
+    // linked worktree：主 checkout 分支 + ` wt:工作区名`，不显示自身分支。
     state.workspaces[0].git = Some(WorkspaceGit {
-        repo_root: PathBuf::from("/repo"),
-        checkout_path: PathBuf::from("/repo/.worktrees/work"),
+        repo_root: PathBuf::from("/repo/lx-tui"),
+        checkout_path: PathBuf::from("/repo/lx-tui/.worktrees/work"),
         is_linked: true,
         branch: Some("feat/prompt-controls".to_string()),
         main_branch: Some("dev".to_string()),
     });
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("b:dev"), "{bottom}");
-    assert!(bottom.contains("wt:work"), "{bottom}");
-    assert!(!bottom.contains("-wt:"), "不再使用 -wt: 标记: {bottom}");
+    assert!(bottom.contains("lx-tui · b:dev · wt:work"), "{bottom}");
     assert!(
         !bottom.contains("feat/"),
         "不显示 worktree 自身分支: {bottom}"
     );
 
-    // 非 git 不显示任何状态。
+    // 非 git：只有项目名。
     state.workspaces[0].git = None;
+    state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
+    assert!(bottom.contains("plain"), "{bottom}");
     assert!(!bottom.contains("b:"), "{bottom}");
     assert!(!bottom.contains("wt:"), "{bottom}");
 }
 
 #[test]
-fn prompt_title_moves_path_name_to_bottom_right() {
+fn prompt_bottom_identity_sits_left_of_collapse_button() {
     let mut state = AppState::demo();
-    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    state.workspaces[0].git = Some(git_info(
+        "/repo/lx-tui",
+        "/repo/lx-tui",
+        false,
+        Some("main"),
+    ));
+    state.prompt_width = 60;
     let view = view_for(&state);
     let lines = render_lines(&state);
     let top = prompt_line(&lines, &view, view.prompt.y);
     assert!(top.contains(text::PROMPT_DRAFT_TITLE), "{top}");
     assert!(!top.contains("ws:"), "顶边框不再显示 ws 路径名: {top}");
 
-    // `ws:` 落在底边框右侧、折叠按钮左侧隔 1 列。
+    // 标签在底边框左端（面板左边框后 2 列），右侧留给折叠按钮。
     let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
+    let label = "lx-tui · b:main";
+    let start = bottom.find(label).expect("identity 标签已渲染");
+    let start_col = bottom[..start].chars().count();
+    assert_eq!(start_col, 2, "标签左对齐到面板内容起点: {bottom}");
+    let start_col_u16 = u16::try_from(start_col).expect("col fits");
     let collapse = button_for(&view, CollapseTarget::Prompt);
-    let chars: Vec<char> = bottom.chars().collect();
-    let label: Vec<char> = "ws:lx-tui".chars().collect();
-    let label_start = chars
-        .windows(label.len())
-        .position(|window| window == label.as_slice())
-        .expect("ws 标签已渲染");
-    let label_end = view.prompt.x + label_start as u16 + label.len() as u16;
-    assert_eq!(label_end, collapse.area.x - 1, "ws 右端与折叠按钮隔 1 列");
-    assert_eq!(
-        collapse.area.x - label_end,
-        1,
-        "ws 与折叠按钮之间有且仅有 1 列空档: {bottom}"
+    assert!(
+        start_col + label.chars().count() < usize::from(collapse.area.x - view.prompt.x),
+        "标签不侵入折叠按钮: {bottom}"
     );
 
-    // 前缀淡青、值恒为默认灰（不随面板焦点变色或变粗）。
+    // 项目名与 `b:` 前缀淡青、值恒为默认灰（不随面板焦点变色或变粗）。
     let buffer = render_buffer(&state);
     let row = view.prompt.bottom() - 1;
-    let prefix = &buffer[(view.prompt.x + label_start as u16, row)];
-    assert_eq!(prefix.symbol(), "w");
+    let project = &buffer[(view.prompt.x + start_col_u16, row)];
     assert_eq!(
-        (prefix.fg, prefix.modifier),
+        (project.fg, project.modifier),
         (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
-        "前缀恒为淡青、不带 BOLD"
+        "项目名淡青、不带 BOLD"
     );
-    let value = &buffer[(
-        view.prompt.x + label_start as u16 + text::PROMPT_WORKSPACE_PREFIX.len() as u16,
-        row,
-    )];
-    assert_eq!(value.symbol(), "l");
+    let separator_cols = u16::try_from("lx-tui · ".chars().count()).expect("col fits");
+    let branch_prefix = &buffer[(view.prompt.x + start_col_u16 + separator_cols, row)];
+    assert_eq!(branch_prefix.symbol(), "b");
     assert_eq!(
-        (value.fg, value.modifier),
+        (branch_prefix.fg, branch_prefix.modifier),
+        (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+        "b: 前缀淡青"
+    );
+    let prefix_cols = u16::try_from("lx-tui · b:".chars().count()).expect("col fits");
+    let branch_value = &buffer[(view.prompt.x + start_col_u16 + prefix_cols, row)];
+    assert_eq!(
+        (branch_value.fg, branch_value.modifier),
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
-        "值恒为默认灰 + dim，不带边框继承的 BOLD"
+        "分支值默认灰 + dim"
     );
-
-    // linked worktree：取 checkout 路径末段，而非工作区 cwd 子目录。
-    state.workspaces[0].git = Some(WorkspaceGit {
-        repo_root: PathBuf::from("/repo"),
-        checkout_path: PathBuf::from("/repo/.worktrees/work"),
-        is_linked: true,
-        branch: Some("feat/x".to_string()),
-        main_branch: Some("main".to_string()),
-    });
-    state.workspaces[0].cwd = Some(PathBuf::from("/repo/.worktrees/work/src"));
-    // 放宽面板，避免 `b:`/`wt:` 挤压导致 `ws:` 截断，从而验证取 checkout 末段而非 cwd 子目录。
-    state.prompt_width = 60;
-    let wide_view = view_for(&state);
-    let bottom = prompt_line(
-        &render_lines(&state),
-        &wide_view,
-        wide_view.prompt.bottom() - 1,
-    );
-    assert!(bottom.contains("ws:work"), "{bottom}");
-    assert!(
-        !bottom.contains("ws:src"),
-        "不取工作区 cwd 子目录: {bottom}"
-    );
-
-    // 非 git 回退工作区 cwd；无路径时无 `ws:` 片段。
-    state.workspaces[0].git = None;
-    state.workspaces[0].cwd = Some(PathBuf::from("/repo/plain"));
-    let view = view_for(&state);
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("ws:plain"), "{bottom}");
-
-    state.workspaces[0].cwd = None;
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains('╰'), "{bottom}");
-    assert!(!bottom.contains("ws:"), "{bottom}");
 }
 
 #[test]
-fn prompt_bottom_bar_prefers_bound_prompt_root() {
+fn prompt_bottom_identity_ignores_bound_prompt_root() {
     let mut state = AppState::demo();
-    // 标题文案变长后，默认宽度容不下长路径名与标题共存；本用例只验证路径优先级。
-    state.prompt_width = 40;
-    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    state.prompt_width = 60;
+    state.workspaces[0].git = Some(git_info(
+        "/repo/lx-tui",
+        "/repo/lx-tui",
+        false,
+        Some("main"),
+    ));
     let view = view_for(&state);
 
-    // 显式绑定根路径优先于工作区路径。
+    // 绑定到子目录不改变身份标签。
     state.prompt_root = Some(PathBuf::from("/elsewhere/bound-root"));
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("ws:bound-root"), "{bottom}");
-    assert!(!bottom.contains("ws:lx-tui"), "{bottom}");
+    assert!(bottom.contains("lx-tui · b:main"), "{bottom}");
+    assert!(!bottom.contains("bound-root"), "{bottom}");
 
-    // 绑定路径无末段时回退工作区路径。
-    state.prompt_root = Some(PathBuf::from("/"));
-    let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("ws:lx-tui"), "{bottom}");
-
-    // 未绑定时仍显示工作区路径。
     state.prompt_root = None;
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("ws:lx-tui"), "{bottom}");
+    assert!(bottom.contains("lx-tui · b:main"), "{bottom}");
 }
 
 #[test]
-fn prompt_bottom_ws_label_truncates_tail_keeping_prefix() {
+fn prompt_bottom_identity_degrades_before_hiding() {
     let mut state = AppState::demo();
-    let long = "ws-very-long-project-directory-name";
+    let long = "identity-very-long-project-directory-name";
     let checkout = format!("/repo/{long}");
-    state.workspaces[0].git = Some(git_info("/repo", &checkout, false, Some("main")));
+    state.workspaces[0].git = Some(git_info(&checkout, &checkout, false, Some("main")));
     state.prompt_width = 40;
     let view = view_for(&state);
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(bottom.contains("ws:"), "{bottom}");
-    assert!(bottom.contains('…'), "超长名截断以省略号收尾: {bottom}");
-    // 保留开头：截断后紧跟的前缀是路径名开头，而非结尾。
-    let after = &bottom[bottom.find("ws:").unwrap() + 3..];
-    assert!(after.starts_with("ws-very"), "保留名字开头、砍尾: {bottom}");
-    // `ws:` 左界严格晚于 `b:` 状态右端（两者至少空 1 列，不重叠）。
-    let b_end = bottom.find("b:main").expect("branch status") + "b:main".len();
-    let ws_pos = bottom.find("ws:").expect("ws label");
-    assert!(ws_pos > b_end, "ws 需与 b: 内容保持间隔: {bottom}");
-}
+    assert!(bottom.contains('…'), "超长项目名中间省略: {bottom}");
+    assert!(bottom.contains("b:main"), "分支段保留: {bottom}");
 
-#[test]
-fn prompt_bottom_ws_label_hides_when_too_narrow() {
-    let mut state = AppState::demo();
-    state.workspaces[0].git = Some(git_info("/repo", "/repo/lx-tui", false, Some("main")));
+    // 过窄：连项目名都放不下时整体隐藏，折叠按钮仍在。
     state.prompt_width = 14;
     let view = view_for(&state);
     let bottom = prompt_line(&render_lines(&state), &view, view.prompt.bottom() - 1);
-    assert!(!bottom.contains("ws:"), "过窄时整体隐藏 ws 片段: {bottom}");
-    assert!(
-        bottom.contains("b:"),
-        "b: 分支状态优先级最高、保留: {bottom}"
-    );
-    // 折叠按钮仍在。
+    assert!(!bottom.contains("b:"), "过窄时不绘制标签: {bottom}");
     assert!(bottom.contains(text::RIGHT_COLLAPSE_LABEL), "{bottom}");
 }
 
@@ -1818,12 +1778,12 @@ fn prompt_status_follows_pinned_workspace() {
     let mut state = AppState::demo();
     state.workspaces[0].name = "one".to_string();
     state.workspaces[0].cwd = Some(PathBuf::from("/repo/one"));
-    state.workspaces[0].git = Some(git_info("/repo", "/repo/one", false, Some("main")));
+    state.workspaces[0].git = Some(git_info("/repo/one", "/repo/one", false, Some("main")));
     push_git_workspace(
         &mut state,
         "two",
         "/repo/two",
-        git_info("/repo", "/repo/two", false, Some("dev")),
+        git_info("/repo/two", "/repo/two", false, Some("dev")),
     );
 
     state.prompt_pinned = Some(0);
@@ -1833,24 +1793,16 @@ fn prompt_status_follows_pinned_workspace() {
     let lines = render_lines(&state);
     let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
     assert!(
-        bottom.contains("ws:one"),
+        bottom.contains("one · b:main"),
         "钉住时底栏取显示中工作区: {bottom}"
-    );
-    assert!(
-        bottom.contains("b:main"),
-        "钉住时底边取显示中工作区: {bottom}"
     );
 
     update::release_prompt_pin(&mut state);
     let lines = render_lines(&state);
     let bottom = prompt_line(&lines, &view, view.prompt.bottom() - 1);
     assert!(
-        bottom.contains("ws:two"),
+        bottom.contains("two · b:dev"),
         "释放后底栏回到激活工作区: {bottom}"
-    );
-    assert!(
-        bottom.contains("b:dev"),
-        "释放后底边回到激活工作区: {bottom}"
     );
 }
 
@@ -2014,11 +1966,17 @@ fn rendered_area(lines: &[String], area: Rect) -> String {
 }
 
 #[test]
-fn lx_pane_top_border_shows_workspace_path_tail() {
+fn lx_pane_top_border_shows_workspace_identity() {
     let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    // pane cwd 优先于工作区 cwd；取末两段。
-    update::update_pane_cwd(&mut state, pane, Path::new("/work/demo/src"), "demo".into());
+    state.workspaces[0].name = "w".to_string();
+    state.workspaces[0].cwd = Some(PathBuf::from("/work/lx"));
+    state.workspaces[0].git = Some(WorkspaceGit {
+        repo_root: PathBuf::from("/work/lx"),
+        checkout_path: PathBuf::from("/work/lx/.worktrees/feat"),
+        is_linked: true,
+        branch: Some("feat/x".to_string()),
+        main_branch: Some("dev".to_string()),
+    });
     let config = Config::default();
     let view = view_for(&state);
     let rects = crate::layout::pane_rects(
@@ -2030,41 +1988,50 @@ fn lx_pane_top_border_shows_workspace_path_tail() {
     let (_, rect) = rects[0];
     let lines = render_lines(&state);
     let top = &lines[usize::from(rect.y)];
-    assert!(top.contains("ws:demo/src"), "顶边框显示 ws:末两段: {top}");
-    // 前缀强调色、值 muted（与 prompt 底边框 ws: 一致）。
+    assert!(
+        top.contains("lx · b:dev · wt:w"),
+        "顶边框显示身份标签: {top}"
+    );
+    assert!(!top.contains("ws:"), "旧 ws 标签已移除: {top}");
+
+    // 项目名与 `b:`/`wt:` 前缀淡青，值恒为默认灰（不随焦点变色）。
     let buffer = render_buffer(&state);
     let chars: Vec<char> = top.chars().collect();
+    let label: Vec<char> = "lx · b:dev · wt:w".chars().collect();
     let start = chars
-        .windows(3)
-        .position(|window| window == ['w', 's', ':'])
-        .expect("ws 前缀");
-    let prefix = &buffer[(start as u16, rect.y)];
-    assert_eq!(prefix.symbol(), "w");
-    assert_eq!(prefix.fg, ratatui::style::Color::Cyan, "前缀强调色");
-    let value = &buffer[(start as u16 + 3, rect.y)];
-    assert_eq!(value.symbol(), "d");
+        .windows(label.len())
+        .position(|window| window == label.as_slice())
+        .expect("身份标签");
+    let project = &buffer[(start as u16, rect.y)];
+    assert_eq!(
+        (project.fg, project.modifier),
+        (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
+        "项目名淡青、不带 BOLD"
+    );
+    let value = &buffer[(start as u16 + "lx · b:".len() as u16, rect.y)];
     assert_eq!(
         (value.fg, value.modifier),
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
-        "聚焦窗格的值保持默认灰（不再随焦点变青）"
+        "分支值默认灰 + dim"
     );
 
-    // 失焦（prompt 持有键盘焦点）：值与聚焦时一致，焦点不再影响取色。
+    // 失焦（prompt 持有键盘焦点）：取值不变。
     state.prompt_focused = true;
     let buffer = render_buffer(&state);
-    let value = &buffer[(start as u16 + 3, rect.y)];
+    let value = &buffer[(start as u16 + "lx · b:".len() as u16, rect.y)];
     assert_eq!(
         (value.fg, value.modifier),
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
-        "失焦窗格值与聚焦时一致"
+        "失焦窗格取值一致"
     );
     state.prompt_focused = false;
 
-    // 切到终端视图不显示路径。
-    update::toggle_pane_view(&mut state, pane);
+    // 切到终端视图：身份标签消失（终端页只留 agent 标记）。
+    let focused = state.active_tab().layout.focus();
+    update::toggle_pane_view(&mut state, focused);
     let lines = render_lines(&state);
     let top = &lines[usize::from(rect.y)];
-    assert!(!top.contains("ws:"), "终端视图不显示 lx 路径: {top}");
+    assert!(!top.contains("b:dev"), "终端视图不显示身份标签: {top}");
 }
 
 /// 边框上某个标签内部单元格的 `(fg, modifier)`：`label` 是完整标签文本，
@@ -2087,10 +2054,11 @@ fn border_label_cell(
 }
 
 #[test]
-fn lx_pane_ws_value_ignores_focus() {
+fn lx_pane_identity_value_ignores_focus() {
     let mut state = AppState::demo();
-    let pane = state.active_tab().layout.focus();
-    update::update_pane_cwd(&mut state, pane, Path::new("/work/demo/src"), "demo".into());
+    state.workspaces[0].name = "demo".to_string();
+    state.workspaces[0].cwd = Some(PathBuf::from("/work/demo"));
+    state.workspaces[0].git = Some(git_info("/work/demo", "/work/demo", false, Some("main")));
     let config = Config::default();
     let view = view_for(&state);
     let rects = crate::layout::pane_rects(
@@ -2101,25 +2069,24 @@ fn lx_pane_ws_value_ignores_focus() {
     );
     let (_, rect) = rects[0];
 
-    // 聚焦窗格：值必须是默认灰（Reset + DIM），不再是 accent + dim。
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
     assert!(
-        lines[usize::from(rect.y)].contains("ws:demo/src"),
-        "顶边框显示 ws:末两段: {}",
+        lines[usize::from(rect.y)].contains("demo · b:main"),
+        "顶边框显示身份标签: {}",
         lines[usize::from(rect.y)]
     );
-    let focused_prefix = border_label_cell(&buffer, &lines, rect.y, "ws:", 0);
+    let focused_prefix = border_label_cell(&buffer, &lines, rect.y, "b:main", 0);
     assert_eq!(
         focused_prefix,
         (ratatui::style::Color::Cyan, ratatui::style::Modifier::DIM),
-        "窗格 ws: 前缀恒为淡青、不带 BOLD（与 prompt 底边框同款）"
+        "b: 前缀恒为淡青、不带 BOLD（与 prompt 底边框同款）"
     );
-    let focused_value = border_label_cell(&buffer, &lines, rect.y, "ws:", 3);
+    let focused_value = border_label_cell(&buffer, &lines, rect.y, "b:main", 2);
     assert_eq!(
         focused_value,
         (ratatui::style::Color::Reset, ratatui::style::Modifier::DIM),
-        "聚焦窗格 ws: 值保持默认灰、不带 BOLD"
+        "聚焦窗格分支值保持默认灰、不带 BOLD"
     );
 
     // 失焦：前缀与值都与聚焦时逐字段相同（焦点不再影响取色）。
@@ -2127,12 +2094,46 @@ fn lx_pane_ws_value_ignores_focus() {
     let lines = render_lines(&state);
     let buffer = render_buffer(&state);
     assert_eq!(
-        border_label_cell(&buffer, &lines, rect.y, "ws:", 0),
+        border_label_cell(&buffer, &lines, rect.y, "b:main", 0),
         focused_prefix,
         "聚焦/失焦前缀样式一致"
     );
-    let unfocused_value = border_label_cell(&buffer, &lines, rect.y, "ws:", 3);
+    let unfocused_value = border_label_cell(&buffer, &lines, rect.y, "b:main", 2);
     assert_eq!(focused_value, unfocused_value, "聚焦/失焦取值一致");
+}
+
+#[test]
+fn lx_pane_identity_hidden_for_agent_pane() {
+    // lx 视图中的窗格即使检测到 agent，也只显示身份标签，不并存 `agent:`。
+    let mut state = AppState::demo();
+    state.workspaces[0].name = "demo".to_string();
+    state.workspaces[0].git = Some(git_info("/work/demo", "/work/demo", false, Some("main")));
+    let pane = state.active_tab().layout.focus();
+    update::update_pane_agent(
+        &mut state,
+        pane,
+        Some(crate::detect::PaneAgentSnapshot {
+            kind: crate::detect::AgentKind::Claude,
+            state: crate::detect::AgentState::Working,
+            title: None,
+        }),
+    );
+    let config = Config::default();
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        config.min_pane_width,
+        config.min_pane_height,
+    );
+    let (_, rect) = rects[0];
+    let lines = render_lines(&state);
+    let top = &lines[usize::from(rect.y)];
+    assert!(top.contains("demo · b:main"), "{top}");
+    assert!(
+        !top.contains(text::PANE_AGENT_PREFIX),
+        "不并存 agent: {top}"
+    );
 }
 
 #[test]
@@ -2226,7 +2227,6 @@ fn prompt_bottom_values_stay_default_while_focused() {
     for (label, prefix_len) in [
         ("b:dev", text::PROMPT_BRANCH_PREFIX.len()),
         ("wt:work", text::PROMPT_WORKTREE_PREFIX.len()),
-        ("ws:work", text::PROMPT_WORKSPACE_PREFIX.len()),
     ] {
         let prefix = border_label_cell(&buffer, &lines, row, label, 0);
         assert_eq!(

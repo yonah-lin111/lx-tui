@@ -394,10 +394,7 @@ pub fn on_session_loaded(
 
 /// 重命名会话。
 pub fn rename_session(state: &mut AppState, pane: PaneId, session_id: &str, title: &str) -> bool {
-    let workspace = state
-        .workspace_cwd_for_pane(pane)
-        .map(|path| path.to_path_buf());
-    let Some(workspace) = workspace else {
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };
     state
@@ -418,10 +415,7 @@ pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
     {
         stop_stream(state, pane);
     }
-    let workspace = state
-        .workspace_cwd_for_pane(pane)
-        .map(|path| path.to_path_buf());
-    let Some(workspace) = workspace else {
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };
     state
@@ -578,23 +572,20 @@ pub(crate) fn finish_model_selection(
         // 切模型时旧分子清空。
         target.lx.chat.input_tokens_reset();
         // 已保存 session：选择动作排队写 DB。
-        if let Some(session_id) = target.lx.chat.session_id.clone() {
-            let workspace = state
-                .workspace_cwd_for_pane(pane)
-                .map(|path| path.to_path_buf());
-            if let Some(workspace) = workspace {
-                state
-                    .effects
-                    .push(crate::app::effects::Effect::SetChatSessionModel {
-                        workspace,
-                        session_id,
-                        model: ModelSnapshot {
-                            provider: selection.provider.clone(),
-                            model: selection.model.clone(),
-                            variant: selection.variant.clone(),
-                        },
-                    });
-            }
+        if let Some(session_id) = target.lx.chat.session_id.clone()
+            && let Some(workspace) = state.chat_session_key_for_pane(pane)
+        {
+            state
+                .effects
+                .push(crate::app::effects::Effect::SetChatSessionModel {
+                    workspace,
+                    session_id,
+                    model: ModelSnapshot {
+                        provider: selection.provider.clone(),
+                        model: selection.model.clone(),
+                        variant: selection.variant.clone(),
+                    },
+                });
         }
     }
     // 持久化：写回 `ai.json` defaultModel（关闭重开仍是这个模型）。

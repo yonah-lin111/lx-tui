@@ -1,6 +1,6 @@
 //! 应用状态：唯一状态来源，纯数据，可在无终端环境下构造与测试。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use ratatui::layout::Rect;
@@ -32,8 +32,9 @@ pub use lx::{
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
 pub use workspace::{
-    PromptDraft, Workspace, WorkspaceGit, WorkspaceRow, current_workspace_identity, home_dir,
-    path_tail_two, tab_label, unique_workspace_name, workspace_label, workspace_name,
+    PromptDraft, Workspace, WorkspaceGit, WorkspaceIdentity, WorkspaceRow,
+    current_workspace_identity, home_dir, path_tail_two, tab_label, unique_workspace_name,
+    workspace_label, workspace_name,
 };
 
 /// 全局 prompt 右栏的兜底初始宽度（列，含边框）；
@@ -283,7 +284,7 @@ impl AppState {
     pub fn referenced_key(&self) -> Option<PathBuf> {
         self.workspaces
             .get(self.prompt_workspace())
-            .and_then(|workspace| workspace.prompt_key())
+            .and_then(|workspace| workspace.repo_key())
             .map(PathBuf::from)
     }
 
@@ -319,12 +320,32 @@ impl AppState {
             .find_map(|tab| tab.pane(id))
     }
 
-    /// 窗格所属工作区的工作目录；PTY 启动目录与 git 查询依据。
+    /// 窗格所属工作区（任意标签内）；渲染身份标签与工作区级查询使用。
+    pub fn workspace_for_pane(&self, id: PaneId) -> Option<&Workspace> {
+        self.workspaces
+            .iter()
+            .find(|workspace| workspace.tabs.iter().any(|tab| tab.pane(id).is_some()))
+    }
+
+    /// 窗格所属工作区的工作目录；PTY 启动目录、git 查询与 agent 工具根依据。
     pub fn workspace_cwd_for_pane(&self, id: PaneId) -> Option<PathBuf> {
         self.workspaces
             .iter()
             .find(|workspace| workspace.tabs.iter().any(|tab| tab.pane(id).is_some()))
             .and_then(|workspace| workspace.cwd.clone())
+    }
+
+    /// 窗格的 chat 会话存储键：git 工作区取仓库主 checkout，使同一仓库的主
+    /// checkout 与 linked worktree 共用一份 `/resume` 列表；其余取工作区 cwd。
+    ///
+    /// **只用于 DB 键**：agent 执行 cwd 仍是 [`Self::workspace_cwd_for_pane`]，
+    /// 否则在 worktree 里发的消息会把文件改到主 checkout。
+    pub fn chat_session_key_for_pane(&self, id: PaneId) -> Option<PathBuf> {
+        self.workspaces
+            .iter()
+            .find(|workspace| workspace.tabs.iter().any(|tab| tab.pane(id).is_some()))
+            .and_then(|workspace| workspace.repo_key())
+            .map(Path::to_path_buf)
     }
 
     /// 指定窗格上的选区。

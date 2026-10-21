@@ -51,13 +51,15 @@ pub(crate) fn render_panes(
             .title(title_line);
         let inner = block.inner(*rect);
         frame.render_widget(block, *rect);
-        // lx pane 顶边框右侧显示工作区路径 `ws:末两段`（切换按钮左侧）；只读渲染。
-        if pane.view == PaneView::Lx {
-            let path = pane
-                .cwd
-                .clone()
-                .or_else(|| state.workspace_cwd_for_pane(*id));
-            render_pane_workspace_label(frame, *rect, &title, path.as_deref());
+        // 顶边框右侧标签：终端视图显示 Agent 标记，lx 视图显示工作区身份标签（不并存）。
+        match (pane.kind, pane.view) {
+            (PaneKind::Terminal, PaneView::Lx) => {
+                render_pane_identity_label(frame, *rect, &title, state, *id);
+            }
+            (PaneKind::Terminal, PaneView::Terminal) => {
+                render_pane_agent_label(frame, *rect, &title, pane);
+            }
+            (PaneKind::Placeholder, _) => {}
         }
         if inner.width == 0 || inner.height == 0 {
             continue;
@@ -80,7 +82,6 @@ pub(crate) fn render_panes(
                     widgets::scrollbar::render(frame, &scrollbar);
                 }
                 main_content::draw_toggle_button(frame.buffer_mut(), *rect, pane.view);
-                render_pane_agent_label(frame, *rect, &title, pane);
             }
             PaneKind::Placeholder => {}
         }
@@ -121,6 +122,63 @@ fn lx_title_line(entry: LxEntry) -> Line<'static> {
     }
     spans.push(Span::styled("] ".to_string(), style::border_title()));
     Line::from(spans)
+}
+
+/// lx 窗格顶边框右侧身份标签 `项目 · b:分支 · wt:工作区名`（切换按钮左侧）。
+///
+/// 项目名与 `b:`/`wt:` 前缀取强调色、值恒为默认灰；右端与切换按钮之间留 1 列，
+/// 左界不越过左侧标题。放不下时按 [`text::workspace_identity_spans`] 的阶梯降级。
+fn render_pane_identity_label(
+    frame: &mut Frame<'_>,
+    rect: Rect,
+    title: &str,
+    state: &AppState,
+    id: PaneId,
+) {
+    let Some(workspace) = state.workspace_for_pane(id) else {
+        return;
+    };
+    let identity = workspace.identity();
+    let Some(button) = main_content::toggle_button(rect) else {
+        return;
+    };
+    let Some(anchor) = button.x.checked_sub(2) else {
+        return;
+    };
+    // 两侧各留 1 列空档：右端贴 anchor 左侧，左界不越过标题后的 1 列间隔。
+    let title_width = u16::try_from(title.width())
+        .unwrap_or(u16::MAX)
+        .saturating_add(2);
+    let left = rect.x.saturating_add(title_width).saturating_add(1);
+    if anchor <= left {
+        return;
+    }
+    let available = usize::from(anchor.saturating_sub(left)).saturating_sub(1);
+    let Some(spans) = text::workspace_identity_spans(&identity, available) else {
+        return;
+    };
+    let width: u16 = u16::try_from(spans.iter().map(|span| span.text.width()).sum::<usize>())
+        .unwrap_or(u16::MAX);
+    let Some(start) = anchor.checked_sub(width) else {
+        return;
+    };
+    let buf = frame.buffer_mut();
+    let mut x = start;
+    for span in &spans {
+        let span_style = if span.emphasis {
+            style::border_label_prefix()
+        } else {
+            style::border_label_value()
+        };
+        for symbol in span.text.chars() {
+            if let Some(cell) = buf.cell_mut((x, rect.y)) {
+                cell.reset();
+                cell.set_char(symbol);
+                cell.set_style(span_style);
+            }
+            x = x.saturating_add(1);
+        }
+    }
 }
 
 /// 在窗格顶边框右侧、切换按钮左侧绘制一段带样式文本；空间不足或会覆盖左侧标题时省略。
@@ -170,45 +228,4 @@ fn render_border_right_label(
 /// 窗格标题：空占位与终端走通用标题规则。
 fn pane_display_title(id: PaneId, pane: &Pane) -> String {
     text::pane_title(id, pane.terminal.title(), pane.cwd_label.as_deref())
-}
-
-/// lx pane 顶边框右侧工作区路径标记 ` ws:末两段`（切换按钮左侧）：前缀强调色、
-/// 值恒为默认灰（不随窗格焦点变色）；放不下时按可用宽度中间省略，仍放不下则省略。
-fn render_pane_workspace_label(
-    frame: &mut Frame<'_>,
-    rect: Rect,
-    title: &str,
-    path: Option<&std::path::Path>,
-) {
-    let Some(path) = path else {
-        return;
-    };
-    let Some(button) = main_content::toggle_button(rect) else {
-        return;
-    };
-    let Some(anchor) = button.x.checked_sub(2) else {
-        return;
-    };
-    // 值可用宽度：`ws:` 前缀 + 两侧各 1 列空档之外的余量（与 `render_border_right_label` 的
-    // 落位/覆盖判定一致，这里仅用于提前裁剪名字）。
-    let title_width = u16::try_from(title.width())
-        .unwrap_or(u16::MAX)
-        .saturating_add(2);
-    let left = rect.x.saturating_add(title_width).saturating_add(1);
-    if anchor <= left {
-        return;
-    }
-    let prefix = text::WORKSPACE_PREFIX;
-    let prefix_width = u16::try_from(prefix.width()).unwrap_or(u16::MAX);
-    let value_room =
-        usize::from(anchor.saturating_sub(left)).saturating_sub(usize::from(prefix_width) + 2);
-    let Some(value) = text::workspace_path_label(path, value_room) else {
-        return;
-    };
-    let spans = [
-        (" ".to_string(), style::muted()),
-        (prefix.to_string(), style::border_label_prefix()),
-        (value, style::border_label_value()),
-    ];
-    render_border_right_label(frame, rect, title, &spans);
 }

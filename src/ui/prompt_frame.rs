@@ -1,16 +1,12 @@
 //! Prompt 面板外框、顶底边框状态、滚动条与页码控件命中。
 
-use std::path::Path;
-
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
-use unicode_width::UnicodeWidthStr;
 
 use crate::app::prompt::{PromptEditing, PromptMode};
-use crate::app::state::AppState;
+use crate::app::state::{AppState, Workspace, WorkspaceIdentity};
 
 use super::controls::{PANEL_BUTTON_MARGIN, PANEL_BUTTON_WIDTH, render_collapsed_strip};
 use super::{layout, prompt, style, text, widgets};
@@ -232,35 +228,6 @@ pub(crate) fn render_prompt(
     ))
 }
 
-/// Prompt 顶栏路径名：优先显式绑定根路径末段，回退显示中工作区路径末段。
-fn prompt_path_name(state: &AppState) -> Option<&str> {
-    state
-        .prompt_root
-        .as_deref()
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-        .or_else(|| workspace_path_name(state))
-}
-
-/// 显示中 prompt 所属工作区的路径末段名：优先 checkout 路径，回退工作区 cwd；
-/// 无可用路径或路径无末段时为 None。
-fn workspace_path_name(state: &AppState) -> Option<&str> {
-    state
-        .workspaces
-        .get(state.prompt_workspace())
-        .and_then(|workspace| {
-            workspace
-                .git
-                .as_ref()
-                .map(|git| git.checkout_path.as_path())
-                .or(workspace.cwd.as_deref())
-        })
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-        .filter(|name| !name.is_empty())
-}
-
 /// prompt 滚动条几何：文本溢出内容区时可见；渲染与鼠标命中共用。
 pub fn prompt_scrollbar(
     view: &layout::ViewLayout,
@@ -289,134 +256,46 @@ fn prompt_scrollbar_for(
     widgets::scrollbar::layout(gutter, total, usize::from(gutter.height), offset)
 }
 
-/// prompt 底边框：左侧 git 状态 `b:分支`（linked worktree 追加 ` wt:工作区名`），
-/// 右侧 `ws:路径末段名`；`ws:` 右端与折叠按钮留 1 列空档、左界不越过 `b:` 内容，
-/// 放不下时先截断名字、再整体隐藏（`b:` 与折叠按钮优先级最高）。
+/// 显示中 prompt 所属工作区的身份标签：与 lx 窗格顶边框同一份数据与格式，
+/// 只读，忽略 `prompt_root`（子目录绑定不改变身份）。
+fn prompt_identity(state: &AppState) -> Option<WorkspaceIdentity> {
+    state
+        .workspaces
+        .get(state.prompt_workspace())
+        .map(Workspace::identity)
+}
+
+/// prompt 底边框：整段左对齐的身份标签 `项目 · b:分支 · wt:工作区名`（与 lx 窗格同款），
+/// 右侧只保留折叠按钮；放不下时按同一降级阶梯省略。
 fn render_prompt_bottom(frame: &mut Frame<'_>, area: Rect, state: &AppState) {
     if area.height == 0 || area.width == 0 {
         return;
     }
+    let Some(identity) = prompt_identity(state) else {
+        return;
+    };
     let row = area.bottom().saturating_sub(1);
-    let status_start = area.x.saturating_add(2);
-    let status_end = area
+    let start = area.x.saturating_add(2);
+    let end = area
         .right()
         .saturating_sub(PANEL_BUTTON_WIDTH + PANEL_BUTTON_MARGIN);
-    if status_end <= status_start {
+    if end <= start {
         return;
     }
-    let spans = branch_status_spans(state, usize::from(status_end - status_start));
-    let status_width = spans_width(&spans);
-    if !spans.is_empty() {
-        let line: Vec<Span<'_>> = spans
-            .iter()
-            .map(|(text, span_style)| Span::styled(text.as_str(), *span_style))
-            .collect();
-        Paragraph::new(Line::from(line)).render(
-            Rect::new(status_start, row, status_end - status_start, 1),
-            frame.buffer_mut(),
-        );
-    }
-    // `ws:` 右端与折叠按钮之间留 1 列空档；左界取 `b:` 内容右端再空 1 列。
-    let left = if status_width == 0 {
-        status_start
-    } else {
-        status_start
-            .saturating_add(status_width as u16)
-            .saturating_add(1)
-    };
-    let right = status_end.saturating_sub(1);
-    render_workspace_label(frame, row, left, right, state);
-}
-
-/// 底边框右侧 `ws:路径末段名`：右端贴 `right`（不含），前缀强调色、值恒为默认灰；
-/// 放不下整段时保留前缀与名字开头（`…` 收尾），前缀加 2 列仍放不下时整体隐藏。
-fn render_workspace_label(
-    frame: &mut Frame<'_>,
-    row: u16,
-    left: u16,
-    right: u16,
-    state: &AppState,
-) {
-    if right <= left {
-        return;
-    }
-    let Some(name) = prompt_path_name(state) else {
+    let Some(spans) = text::workspace_identity_spans(&identity, usize::from(end - start)) else {
         return;
     };
-    let prefix = text::PROMPT_WORKSPACE_PREFIX;
-    let prefix_width = prefix.width();
-    let name_width = name.width();
-    let available = usize::from(right - left);
-    if prefix_width.saturating_add(name_width) <= available {
-        let start = right - (prefix_width + name_width) as u16;
-        let buf = frame.buffer_mut();
-        write_span(buf, start, row, prefix, style::border_label_prefix());
-        write_span(
-            buf,
-            start + prefix_width as u16,
-            row,
-            name,
-            style::border_label_value(),
-        );
-        return;
-    }
-    if available < prefix_width.saturating_add(2) {
-        return;
-    }
-    let truncated = text::truncate_to_width(name, available - prefix_width);
-    let start = right - (prefix_width + truncated.width()) as u16;
-    let buf = frame.buffer_mut();
-    write_span(buf, start, row, prefix, style::border_label_prefix());
-    write_span(
-        buf,
-        start + prefix_width as u16,
-        row,
-        &truncated,
-        style::border_label_value(),
-    );
-}
-
-/// 在底边框写入一段带样式文本（覆盖边框线）；按显示列写入，宽字符占位正确。
-fn write_span(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, content: &str, span_style: Style) {
-    buf.set_stringn(x, y, content, content.width(), span_style);
-}
-
-/// 底边框分支状态片段：`b:分支` 与 linked worktree 的 ` wt:工作区名`；
-/// 取显示中 prompt 所属工作区，非 git 不显示；工作区名按剩余宽度截断。
-fn branch_status_spans(state: &AppState, available: usize) -> Vec<(String, Style)> {
-    let Some(workspace) = state.workspaces.get(state.prompt_workspace()) else {
-        return Vec::new();
-    };
-    let branch = workspace.git.as_ref().and_then(|git| git.status_branch());
-    let linked = workspace.git.as_ref().is_some_and(|git| git.is_linked);
-    if branch.is_none() && !linked {
-        return Vec::new();
-    }
-    let mut spans = vec![(" ".to_string(), style::muted())];
-    if let Some(branch) = branch {
-        spans.push((
-            text::PROMPT_BRANCH_PREFIX.to_string(),
-            style::border_label_prefix(),
-        ));
-        spans.push((branch.to_string(), style::border_label_value()));
-    }
-    if linked {
-        let worktree = workspace.name.as_str();
-        let separator = if branch.is_some() { " " } else { "" };
-        let prefix = format!("{separator}{}", text::PROMPT_WORKTREE_PREFIX);
-        let used = spans_width(&spans).saturating_add(prefix.len());
-        if used < available {
-            spans.push((prefix, style::border_label_prefix()));
-            spans.push((
-                text::ellipsize(worktree, available - used),
-                style::border_label_value(),
-            ));
-        }
-    }
-    spans
-}
-
-/// 片段列宽合计。
-fn spans_width(spans: &[(String, Style)]) -> usize {
-    spans.iter().map(|(text, _)| text.width()).sum()
+    let line: Vec<Span<'_>> = spans
+        .iter()
+        .map(|span| {
+            let span_style = if span.emphasis {
+                style::border_label_prefix()
+            } else {
+                style::border_label_value()
+            };
+            Span::styled(span.text.as_str(), span_style)
+        })
+        .collect();
+    Paragraph::new(Line::from(line))
+        .render(Rect::new(start, row, end - start, 1), frame.buffer_mut());
 }

@@ -27,10 +27,7 @@ pub fn open_resume_session_edit(state: &mut AppState, pane: PaneId) -> bool {
     };
     let session_id = entry.session_id.clone();
     let title = entry.title.clone();
-    let Some(workspace) = state
-        .workspace_cwd_for_pane(pane)
-        .map(|path| path.to_path_buf())
-    else {
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;
     };
     state.overlay = Some(Overlay::ResumeSessionEdit(ResumeSessionEdit {
@@ -271,9 +268,7 @@ pub fn discard_stale_resume_edit(state: &mut AppState) -> bool {
         return false;
     };
     let focused = state.active_tab().layout.focus();
-    let workspace = state
-        .workspace_cwd_for_pane(edit.pane)
-        .map(|path| path.to_path_buf());
+    let workspace = state.chat_session_key_for_pane(edit.pane);
     let stale = focused != edit.pane || workspace.as_deref() != Some(edit.workspace.as_path());
     if !stale {
         return false;

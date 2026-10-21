@@ -126,14 +126,55 @@ impl Workspace {
         self.tabs.first().and_then(|tab| tab.root_pane())
     }
 
-    /// prompt 面板与提示词持久化的键：git 工作区取仓库主 checkout（同一仓库的
-    /// 主 checkout 与 linked worktree 共享一棵树），其余取工作区 cwd。
-    pub fn prompt_key(&self) -> Option<&Path> {
+    /// 仓库级持久化键：git 工作区取仓库主 checkout（同一仓库的主 checkout 与
+    /// linked worktree 共享一棵树），其余取工作区 cwd。
+    ///
+    /// prompt 面板、提示词与 chat 会话共用此键；agent 执行 cwd 另用
+    /// [`AppState::workspace_cwd_for_pane`]，不得混用。
+    pub fn repo_key(&self) -> Option<&Path> {
         self.git
             .as_ref()
             .map(|git| git.repo_root.as_path())
             .or(self.cwd.as_deref())
     }
+
+    /// 边框身份标签的分段数据：项目名必填，分支与工作区名按可用信息可选。
+    pub fn identity(&self) -> WorkspaceIdentity {
+        let project = self
+            .git
+            .as_ref()
+            .map(|git| git.repo_root.as_path())
+            .or(self.cwd.as_deref())
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| self.name.clone());
+        let branch = self
+            .git
+            .as_ref()
+            .and_then(WorkspaceGit::status_branch)
+            .map(str::to_string);
+        // 仅 linked worktree 有"工作区名"这一段；主 checkout 自己就是仓库。
+        let worktree = self
+            .git
+            .as_ref()
+            .filter(|git| git.is_linked)
+            .map(|_| self.name.clone());
+        WorkspaceIdentity {
+            project,
+            branch,
+            worktree,
+        }
+    }
+}
+
+/// 边框身份标签分段：`项目 · b:分支 · wt:工作区名`，缺项为 None。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceIdentity {
+    pub project: String,
+    pub branch: Option<String>,
+    pub worktree: Option<String>,
 }
 
 /// 自动工作区名：HOME 显示 `~`，否则取路径末段；根路径等无末段时显示完整路径。
