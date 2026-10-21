@@ -397,3 +397,132 @@ fn truncated_only_has_no_orphan_separator() {
         "只有截断提示时无前导 `· `：{detail:?}"
     );
 }
+
+// ===== 详情行折叠：默认最多 2 行，超出可展开 =====
+
+/// 超长参数：默认只画 2 个物理行，末行以 `…` 收尾；展开后铺开全部（同一份换行口径）。
+#[test]
+fn long_detail_wraps_to_two_rows_and_expands() {
+    let long = "a/very/long/nested/directory/structure/with/many/segments/file.rs".repeat(3);
+    let call = tool_call(
+        "read",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some(long.clone()),
+            range: Some((1, 9)),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let width = 30u16;
+    let folded = file_summary::detail(&call, width, false, false);
+    assert_eq!(folded.len(), 2, "折叠态最多 2 行：{folded:#?}");
+    for row in &folded {
+        let cols: usize = segments_cols(row);
+        assert!(cols <= usize::from(width), "不越界：{cols} > {width}");
+    }
+    // 续行对齐到 `└─ ` 之后的正文列（前缀等宽空白，不重复连接符）。
+    let prefix_cols = file_summary::detail_prefix().width();
+    assert_eq!(folded[1][0].text.width(), prefix_cols, "续行用等宽空白缩进");
+    assert_eq!(folded[1][0].text.trim(), "", "续行不重复 `└─`");
+    // 折叠态保留全部参数（2 行额度足够时不做省略）。
+    let folded_text: String = folded.iter().flatten().map(|s| s.text.as_str()).collect();
+    assert!(folded_text.contains("file.rs"), "{folded_text:?}");
+
+    let expanded = file_summary::detail(&call, width, true, false);
+    assert!(
+        expanded.len() >= folded.len(),
+        "展开不少于折叠：{expanded:#?}"
+    );
+    assert!(
+        expanded.len() <= file_summary::DETAIL_MAX_ROWS,
+        "展开有上限，不会把整屏历史挤没"
+    );
+}
+
+/// 超过 2 行额度的极长参数：折叠态末行以 `…` 收尾，展开后能看到更多。
+#[test]
+fn very_long_detail_marks_truncation_and_expands_further() {
+    let long = "x".repeat(400);
+    let call = tool_call(
+        "write",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some(long),
+            added: Some(1),
+            removed: Some(0),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let width = 24u16;
+    let folded = file_summary::detail(&call, width, false, false);
+    assert_eq!(folded.len(), file_summary::DETAIL_PREVIEW_ROWS);
+    let folded_text: String = folded.iter().flatten().map(|s| s.text.as_str()).collect();
+    assert!(
+        folded_text.contains('…'),
+        "放不下的参数有省略号：{folded_text:?}"
+    );
+    let expanded = file_summary::detail(&call, width, true, false);
+    assert!(expanded.len() > folded.len(), "展开铺开更多行");
+    assert!(expanded.len() <= file_summary::DETAIL_MAX_ROWS);
+}
+
+/// 短参数恒为 1 行：没有可展开内容，也不注册命中区。
+#[test]
+fn short_detail_stays_one_row_and_is_not_clickable() {
+    let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
+    assert_eq!(file_summary::detail(&call, 80, false, false).len(), 1);
+    assert!(!file_summary::detail_overflows(&call, 80), "短参数不可展开");
+    assert_eq!(rows(&call, 80, false), 2, "标题 + 详情");
+    assert_eq!(rows(&call, 80, true), 2, "展开也不变");
+}
+
+/// 长参数：布局行数随展开变化，且折叠/展开差值就是多出来的行。
+#[test]
+fn long_detail_rows_follow_expansion() {
+    let long = "src/deeply/nested/module/path/that/keeps/going/mod.rs".repeat(3);
+    let call = tool_call(
+        "write",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some(long),
+            added: Some(9),
+            removed: Some(2),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let folded = rows(&call, 24, false);
+    let expanded = rows(&call, 24, true);
+    assert!(file_summary::detail_overflows(&call, 24), "长参数可展开");
+    assert_eq!(folded, 1 + file_summary::DETAIL_PREVIEW_ROWS);
+    assert!(expanded > folded, "展开多出行：{folded} → {expanded}");
+}
+
+/// 悬停把参数从 dim 升为默认前景（可点提示），不改变行数。
+#[test]
+fn hovering_lifts_parameter_color_without_changing_rows() {
+    let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
+    let normal = file_summary::detail(&call, 80, false, false);
+    let hovered = file_summary::detail(&call, 80, false, true);
+    assert_eq!(normal.len(), hovered.len(), "悬停不改行数");
+    let param_style = normal
+        .iter()
+        .flatten()
+        .find(|segment| segment.text.contains("src/ui/style.rs"))
+        .map(|segment| segment.style)
+        .expect("参数段");
+    assert_eq!(param_style, style::chat_tool_param(), "常态 dim");
+    let hovered_param = hovered
+        .iter()
+        .flatten()
+        .find(|segment| segment.text.contains("src/ui/style.rs"))
+        .map(|segment| segment.style)
+        .expect("参数段");
+    assert_eq!(
+        hovered_param,
+        style::chat_tool_param_hover(),
+        "悬停升为默认前景"
+    );
+}

@@ -185,9 +185,9 @@ fn narrow_and_short_viewports_never_panic_with_tools() {
 }
 
 #[test]
-fn tool_steps_with_all_statuses_stay_two_rows_each() {
-    // 每个状态都必须恰好占 2 行（`■ 动词` + `  └─ 详情`）：布局行数 = 工具数 × 2
-    // （其余块固定），与状态无关——第 2 行永远有内容（参数或兜底状态词）。
+fn tool_steps_occupy_a_header_plus_one_or_two_detail_rows() {
+    // 工具步骤 = 1 行标题 + 1~2 行详情（`  └─ …`，长参数折行、最多 2 行）。
+    // 行数与状态无关；布局与渲染必须一致。
     for status in [
         ToolStatus::InputStreaming,
         ToolStatus::Pending,
@@ -202,9 +202,17 @@ fn tool_steps_with_all_statuses_stay_two_rows_each() {
         let lx = lx_with(vec![message]);
         let area = Rect::new(0, 0, 40, 10);
         let computed = layout(area, &lx);
-        // 工具 2 行 + 消息间空行（呼吸行）1 = 3。
-        assert_eq!(computed.total_rows, 3, "{status:?} 应占 2 行");
-        assert_eq!(render_rows(area, &lx, 0), 3, "{status:?} 渲染行数一致");
+        // 标题 1 + 详情 1~2 + 收尾呼吸行 1。
+        assert!(
+            (3..=4).contains(&computed.total_rows),
+            "{status:?} 应为 3~4 行，实际 {}",
+            computed.total_rows
+        );
+        assert_eq!(
+            render_rows(area, &lx, 0),
+            computed.total_rows,
+            "{status:?} 渲染行数一致"
+        );
     }
 }
 
@@ -420,10 +428,10 @@ fn card_hits(lx: &Lx, area: Rect) -> (usize, usize) {
     (cards, toggles)
 }
 
-/// 连续 `edit` 合并成**一张**卡：布局/渲染行数一致，只登记一份命中区，
-/// 组内不出现块间空行；同组的 `write` 同理，`edit` 与 `write` 不合并。
+/// 连续 `edit` 共用一行合并标题，但**每个调用各自一块**：各自一份整卡命中区与
+/// 各自的展开入口，展开互不影响；同组的 `write` 同理，`edit` 与 `write` 不共享标题。
 #[test]
-fn consecutive_file_tools_merge_into_one_card() {
+fn consecutive_file_tools_share_one_header_but_expand_independently() {
     let area = Rect::new(0, 0, 60, 20);
 
     let build = |names: [&str; 2]| {
@@ -446,19 +454,23 @@ fn consecutive_file_tools_merge_into_one_card() {
     );
     assert_eq!(
         card_hits(&merged, area),
-        (1, 1),
-        "两个连续 edit 只登记一张卡、一个展开入口"
+        (2, 2),
+        "两个连续 edit 各自一块：两块卡片命中、两个独立展开入口"
     );
 
     // `write` 同为文件工具：连续 `write` 也合并。
     let writes = build(["write", "write"]);
-    assert_eq!(card_hits(&writes, area), (1, 1), "连续 write 也合并");
+    assert_eq!(
+        card_hits(&writes, area),
+        (2, 2),
+        "连续 write 同样共用标题、各自一块"
+    );
     assert_eq!(
         render_rows(area, &writes, 0),
         layout(area, &writes).total_rows
     );
 
-    // 组内没有块间空行：标题之后到动作行之前的每一行都有内容（文件行/正文/省略提示）。
+    // 组内没有块间空行：标题之后到最后一行动作行之间每一行都有内容。
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &merged, 0);
     let total = merged_layout.total_rows;
@@ -470,17 +482,17 @@ fn consecutive_file_tools_merge_into_one_card() {
         );
     }
 
-    // 展开状态记在组首调用名下，整组一起展开。
+    // 展开只作用于被点的那一个调用；另一块保持折叠。
     let mut expanded = build(["edit", "edit"]);
     assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
     let expanded_layout = layout(area, &expanded);
     assert!(
         expanded_layout.total_rows > merged_layout.total_rows,
-        "整组展开多出行"
+        "展开单个调用也会多出行"
     );
     assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
     let (cards, toggles) = card_hits(&expanded, area);
-    assert_eq!((cards, toggles), (1, 1), "展开态仍是同一张卡");
+    assert_eq!((cards, toggles), (2, 2), "展开态仍是两块");
 
     // 同种动词才合并：edit + write 各自成卡，行数更多。
     let split = build(["edit", "write"]);

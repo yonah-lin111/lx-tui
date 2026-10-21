@@ -200,6 +200,15 @@ pub const VERB_UPDATE_PLAN: &str = "Plan";
 pub const FILE_DIFF_OMITTED: &str = "… more changes";
 /// 折叠态没有省略时仍可展开：入口文案换成明确的动作。
 pub const FILE_DIFF_SHOW_ALL: &str = "Show full diff";
+/// 折叠态被省略的行数：`… 421 more lines` / `… 1 more line`。
+///
+/// 取代原先的 `… more changes`：用户要求「把折叠文案换成剩余行数」——数字直接
+/// 回答「点开还能看到多少」，比一句没有量的提示有用。
+pub fn file_diff_more_lines(count: usize) -> String {
+    let suffix = if count == 1 { "line" } else { "lines" };
+    format!("… {count} more {suffix}")
+}
+
 /// 展开态树体末尾的收起入口。
 pub const FILE_DIFF_COLLAPSE: &str = "collapse";
 

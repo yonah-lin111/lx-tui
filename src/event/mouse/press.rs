@@ -163,7 +163,7 @@ pub(crate) fn handle_mouse_down_left(
             update::show_toast(
                 state,
                 Toast::new(
-                    ToastKind::Error,
+                    ToastKind::Danger,
                     ui::text::TOAST_SETTINGS_UNAVAILABLE,
                     None,
                     now,
@@ -463,11 +463,6 @@ pub(crate) fn handle_mouse_down_left(
                             call_id,
                         } => {
                             update::toggle_tool_detail(state, pane, &message_id, &call_id);
-                        }
-                        ui::main_content::lx::LxChatHit::CodeCopy(text) => {
-                            // 复制代码块正文（不含围栏与语言行）；toast 锚在**本窗格**
-                            // （main content）而不是 prompt——复制发生在哪儿，反馈就在哪儿。
-                            crate::event::mouse::hit::copy_with_toast_at(state, &text, Some(pane));
                         }
                     }
                     update::clear_lx_selection(state);

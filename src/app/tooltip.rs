@@ -70,12 +70,6 @@ pub enum TooltipTarget {
         line: usize,
         button: BlockButtonKind,
     },
-    /// lx 历史里代码块头部的复制按钮；`(消息索引, 步骤索引, 块序号)` 唯一定位一块。
-    LxCodeCopy {
-        message: usize,
-        step: usize,
-        block: usize,
-    },
 }
 
 /// 鼠标当前悬停的按钮；到显示时刻前只计时不渲染。

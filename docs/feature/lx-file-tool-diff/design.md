@@ -398,12 +398,13 @@ DB 失败继续返回 HostError，不自动重试文件工具。结果序列化�
 ### 9.2 预览与展开
 
 - 每个文件先筛选 Added/Removed，再按可用列宽换行，最多保留 3 个物理行；上下文不占预览额度。
-- 如仍有未显示的已保存内容，在文件预览后显示弱化省略提示；提示行不占 3 行正文额度。
+- 如仍有未显示的已保存内容，在该调用块末尾的动作行写**剩余行数**（`… 421 more lines`）；
+  没有剩余内容时**不画动作行**（避免点了没反应的入口）。
 - 展开后显示所有已保存 hunks 和每个 hunk 前后各 1 行上下文；相邻上下文合并，分离处显示 `⋮`。
-- 单击卡片末尾动作行切换整张文件卡片，所有文件共同展开/收起；不增加逐文件展开状态。标题行不可点。
-- 连续的**同种**文件调用（相邻、同名、都带差异正文）合并成一张卡：标题 `■ 动词 N files (+A -R)`，
-  文件行按调用顺序扁平铺开、统一 `├─`/`└─`；组内共享一份展开状态（记在组首调用上），
-  组内不插入块间空行。`edit` 与 `write` 不同名，不合并；被正文/思考步骤打断即分组。
+- 单击块末尾动作行切换**这一块**；展开后点块正文（未拖拽）同样收起。标题行不可点。
+- 连续的**同种**文件调用（相邻、同名、都带差异正文）**共用一行合并标题** `■ 动词 N files (+A -R)`，
+  其下每个调用各自一块：自己的文件头（`└─`）、自己的预览、自己的展开状态与自己的展开入口；
+  组内不插入块间空行。`edit` 与 `write` 不同名，不共享标题；被正文/思考步骤打断即分组。
 - 保留 `^o` 和现有工具选择键位入口；文件详情进入现有可选择集合。普通上下箭头仍用于输入。
 - 新增 `ToolToggle` 类命中行为，与进程 `ToolOpen(session_id)` 明确区分，不能用 session_id=None 猜测行为。
 - 无 diff 的旧卡片保留原两行展示；状态提示型详情不能制造无意义的无限展开。
@@ -537,15 +538,17 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 | `src/ui/main_content/lx/history/tool/file_summary.rs` | 从 `tool.rs` 迁出的普通工具第二行摘要组装（行为不变） |
 | `src/ui/main_content/lx/history/tool.rs` | 工具类型分派与共用行能力 |
 | `src/ui/main_content/lx/history.rs` | `ToolHit` / `ToolHitKind::{OpenTask, Toggle}` 收集动作行命中矩形，以及 `CardHit` 整卡/正文矩形 |
-| `src/ui/main_content/lx/history_hit.rs` | 从 `lx.rs` 迁出的聊天历史命中与视口入口（`LxChatHit`、`chat_hit`、`code_copy_hits`、滚动条/行数口径） |
+| `src/ui/main_content/lx/history_hit.rs` | 从 `lx.rs` 迁出的聊天历史命中与视口入口（`LxChatHit`、`chat_hit`、滚动条/行数口径） |
 | `src/chat/context/mod.rs` | `strip_ui_diff_json`：回放前剥离 `diff` 正文，保留摘要/计数/错误/配对 |
 
 `lx.rs` 由 1050 行降到 880 行，`history/tool.rs` 由 1015 行降到 476 行，全部触及文件 ≤1000 行。
 
 ### 14.4 交互与文案
 
-- 命中：文件卡片**标题行不登记任何命中**；展开/收起入口是卡片末尾的**常驻动作行**
-  （`ToolHitKind::Toggle`）：折叠态有省略时 `… more changes`、无省略时 `Show full diff`，展开态 `collapse`。
+- 命中：文件卡片**标题行不登记任何命中**；展开/收起入口是每个调用**自己块末尾**的动作行
+  （`ToolHitKind::Toggle`）：折叠态还有内容没画出来时写**剩余行数**（`… 421 more lines`），
+  展开态 `collapse`；预览已经完整时**不画这一行**（点了没反应的入口只会骗人）。
+  合并卡里每块各有一个 `Toggle`，命中按 `(message_id, call_id)` 定位到那一块。
   进程卡片存活时 `open` 行仍是 `OpenTask { session_id }`，终态不登记。
   `LxChatHit::ToolToggle { message_id, call_id }` 与 `ToolOpen(Option<u64>)` 是两个动作，不靠 `session_id` 为空猜测。
 - **展开正文折叠**：`history::layout` 额外产出 `cards: Vec<CardHit>`（整卡矩形 + 展开后的正文矩形）。鼠标按下落在
@@ -555,11 +558,17 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 - **hover**：`history_hit::chat_hover` 按同一份 `layout` 求指针所在卡片，写回 `LxChat.hover`。整卡任意行悬停都会点亮
   标题与动作行：动作行 / `open` / `collapse` 常态 `muted()`（与左下角上下文统计同款），悬停升为默认前景；
   思考块方块与 `Thinking`/`Thought` 文案常态 `muted()`，悬停恢复品红 `Indexed 218`。
-- **参数配色**：`chat_tool_param()` 返回 `Style::default()`，即终端默认前景、无修饰符；工具行的颜色信息只由
-  方块 / 动词承担。
+- **参数配色**：`chat_tool_param()` 返回 `muted()`——与输入框下方状态行的上下文用量同色（用户要求
+  「工具参数颜色改为输入框下方上下文的字体颜色」）；鼠标悬停整卡时升为 `chat_tool_param_hover()`
+  （终端默认前景），作为「这一行可点」的信号。
+- **参数折行与展开**：`└─` 详情行按可用列软换行，折叠态最多 **2 个物理行**（`DETAIL_PREVIEW_ROWS`），
+  超出时末行 `…` 收尾；展开态上限 `DETAIL_MAX_ROWS`（24 行，防止 1 MiB 补丁铺满整屏）。
+  参数超过 2 行时该卡片的正文区登记 `CardHit.body`，点击（未拖拽）即展开/收起，复用
+  `toggle_tool_detail` 与文件卡片同一套「拖拽选中不折叠」判定；错误/中断文案**恒单行**尾部省略。
 - `^o` 对文件卡片走同一条 `toggle_tool_detail`；对进程卡片仍打开任务面板（仅存活时）。
-- 可见文案集中在 `src/ui/text/agent.rs`：`No content changes`、`Diff truncated`、`Diff simplified`、`… more changes`、
-  `Show full diff`、`collapse`、`open`、`⋮`、`No newline at end of file`、`Diff unavailable`、`→`、`(?)`，以及
+- 可见文案集中在 `src/ui/text/agent.rs`：`No content changes`、`Diff truncated`、`Diff simplified`、`collapse`、
+  `open`、`⋮`、`No newline at end of file`、`Diff unavailable`、`→`、`(?)`，以及
+  `file_diff_more_lines(n)`（`… N more lines`）与
   `file_diff_omitted_files(n)` 与 `file_diff_unavailable(reason)`（binary / not UTF-8 / read failed）。
 - 旧记录无 `diff` 时 `has_diff` 为假，回退为原两行摘要，也不画动作行，不制造无效展开入口。
 

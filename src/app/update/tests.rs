@@ -674,8 +674,14 @@ fn set_prompt_hover_reports_changes() {
 fn show_toast_replaces_previous_and_resets_deadline() {
     let mut state = AppState::demo();
     let now = Instant::now();
-    show_toast(&mut state, Toast::new(ToastKind::Info, "first", None, now));
-    show_toast(&mut state, Toast::new(ToastKind::Info, "second", None, now));
+    show_toast(
+        &mut state,
+        Toast::new(ToastKind::Default, "first", None, now),
+    );
+    show_toast(
+        &mut state,
+        Toast::new(ToastKind::Default, "second", None, now),
+    );
     let toast = state.toast.as_ref().expect("toast is shown");
     assert_eq!(toast.message, "second");
     assert_eq!(toast.next_deadline(), Some(now + TOAST_DURATION));
@@ -685,7 +691,10 @@ fn show_toast_replaces_previous_and_resets_deadline() {
 fn tick_clears_expired_toast_only() {
     let mut state = demo_terminal();
     let now = Instant::now();
-    show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
+    show_toast(
+        &mut state,
+        Toast::new(ToastKind::Default, "hello", None, now),
+    );
     assert!(!tick(
         &mut state,
         now + TOAST_DURATION - Duration::from_millis(1)
@@ -700,7 +709,10 @@ fn tick_clears_expired_toast_only() {
 fn toast_hover_suspends_expiry_until_pointer_leaves() {
     let mut state = demo_terminal();
     let now = Instant::now();
-    show_toast(&mut state, Toast::new(ToastKind::Info, "hello", None, now));
+    show_toast(
+        &mut state,
+        Toast::new(ToastKind::Default, "hello", None, now),
+    );
     assert!(set_toast_hover(&mut state, true));
     assert!(!set_toast_hover(&mut state, true));
     assert!(!tick(&mut state, now + Duration::from_secs(60)));
@@ -3672,7 +3684,7 @@ fn commit_new_workspace_invalid_path_shows_toast_and_keeps_overlay() {
     assert_eq!(state.workspaces.len(), initial_count);
     // Error toast shown
     let toast = state.toast.as_ref().expect("toast must be shown");
-    assert_eq!(toast.kind, ToastKind::Error);
+    assert_eq!(toast.kind, ToastKind::Danger);
     assert_eq!(toast.message, crate::ui::text::TOAST_DIRECTORY_NOT_FOUND);
 }
 

@@ -5,6 +5,14 @@
 
 /// lx 输入框上方聊天栏的 loading 文案。
 pub const LOADING_LABEL: &str = "Working...";
+/// loading 行右端的流中输出 token 估算：`↓1.2k tok`。
+///
+/// 箭头表示「往下吐」，与「回到底部」的 `↓` 同形但含义独立（那个带文字说明，
+/// 这个带 `tok` 单位）；数字用 [`crate::ui::text::token_count_precise`] 的短格式。
+pub fn stream_tokens_label(tokens: u64) -> String {
+    format!("↓{} tok", crate::ui::text::token_count_precise(tokens))
+}
+
 /// 未知命令提示前缀（后面直接跟命令名，整体保持一行短语）。
 pub const UNKNOWN_COMMAND_PREFIX: &str = "Unknown command ";
 /// 未知命令提示里的可用命令示例（短到能塞进一行）。

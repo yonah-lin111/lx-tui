@@ -15,8 +15,8 @@ pub(crate) use history::HistoryMove;
 
 pub use chat::{
     AssistantStepView, ChatHover, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
-    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, InputHint,
-    InputHintLevel, InteractionAction, LxChat, ModelsSnapshot, PlanSnapshotView, PlanStepView,
+    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, InputHintLevel,
+    InteractionAction, LxChat, ModelsSnapshot, PlanSnapshotView, PlanStepView,
     ProcessInteractionView, ProcessStateView, RequestKey, RequestState, ToolCallView,
     ToolDetailView, ToolStatus, ToolSummary,
 };

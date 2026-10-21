@@ -32,7 +32,12 @@ fn pane_rects(state: &AppState, view: &ViewLayout) -> Vec<(PaneId, Rect)> {
 fn show(state: &mut AppState, anchor: Option<PaneId>) {
     update::show_toast(
         state,
-        Toast::new(ToastKind::Info, text::TOAST_COPIED, anchor, Instant::now()),
+        Toast::new(
+            ToastKind::Default,
+            text::TOAST_COPIED,
+            anchor,
+            Instant::now(),
+        ),
     );
 }
 
@@ -65,7 +70,7 @@ fn titled_toast_keeps_three_rows_and_fits_title() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
-        Toast::new(ToastKind::Info, text::TOAST_COPIED, None, Instant::now())
+        Toast::new(ToastKind::Default, text::TOAST_COPIED, None, Instant::now())
             .with_title(text::TOAST_CLIPBOARD_TITLE),
     );
     let view = view_for(&state);
@@ -225,4 +230,68 @@ fn toast_renders_close_button_and_hit_test() {
         .map(|x| buffer[(x, close.y)].symbol())
         .collect();
     assert_eq!(label, text::MODAL_CLOSE);
+}
+
+/// 三档语义色：default 强调青、warning 黄、danger 红；**边框与标题同色**。
+#[test]
+fn kinds_drive_border_and_title_colors() {
+    assert_eq!(border_style(ToastKind::Default), style::accent());
+    assert_eq!(border_style(ToastKind::Warning).fg, Some(Color::Yellow));
+    assert_eq!(border_style(ToastKind::Danger), style::error());
+
+    // 标题：默认档沿用边框标题样式（青灰），warning/danger 与边框同色。
+    assert_eq!(title_style(ToastKind::Default), style::border_title());
+    assert_eq!(title_style(ToastKind::Warning).fg, Some(Color::Yellow));
+    assert_eq!(title_style(ToastKind::Danger).fg, Some(Color::Red));
+    assert_eq!(
+        title_style(ToastKind::Warning).fg,
+        border_style(ToastKind::Warning).fg,
+        "warning 的边框与标题同色"
+    );
+    assert_eq!(
+        title_style(ToastKind::Danger).fg,
+        border_style(ToastKind::Danger).fg,
+        "danger 的边框与标题同色"
+    );
+}
+
+/// 渲染：warning toast 的边框与标题都落黄色单元格。
+#[test]
+fn warning_toast_paints_yellow_border_and_title() {
+    let mut state = AppState::demo();
+    let pane = state.prompt.id();
+    update::show_toast(
+        &mut state,
+        Toast::new(ToastKind::Warning, "watch out", Some(pane), Instant::now())
+            .with_title("Heads up"),
+    );
+    let view = view_for(&state);
+    let rects = pane_rects(&state, &view);
+    let area = rect(
+        &state,
+        &view,
+        &rects,
+        Rect::new(0, 0, 100, 24),
+        &Config::default(),
+    )
+    .expect("toast area");
+    let mut terminal = Terminal::new(TestBackend::new(100, 24)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            render(
+                frame,
+                Rect::new(0, 0, 100, 24),
+                &state,
+                &view,
+                &rects,
+                &Config::default(),
+            );
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    // 顶边框与标题里的字符都应是黄色。
+    let yellow = (area.x..area.right())
+        .filter(|x| buffer[(*x, area.y)].fg == Color::Yellow)
+        .count();
+    assert!(yellow > 0, "warning 的边框/标题变黄");
 }

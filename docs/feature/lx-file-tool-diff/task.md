@@ -252,8 +252,8 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - [x] `tool::merge_group`：从 `steps[start]` 收集**相邻、同名、都带差异正文**的调用；被 Part
       或不同工具名打断即停；`edit`+`write` 不合并（标题只能写一个动词）。
 - [x] `history::layout` / `history::render` 同步加入合并分支：一组只占一个块（组前一个空行），
-      只登记一份 `CardHit` 与一个 `ToolHitKind::Toggle`（键为组首 `(message_id, call_id)`），
-      `step_index += group.len()`。
+      **每个调用各自一块**——各登记一份 `CardHit` 与一个 `ToolHitKind::Toggle`（键为该调用的
+      `(message_id, call_id)`），`expanded` 逐调用独立，`step_index += group.len()`。
 - [x] 合并卡标题 `■ 动词 N files (+A -R)`：计数为组内求和，任一计数未知/文件被裁时整体退化为
       ` (?)`，绝不用 0 冒充；方块状态取组内最差（失败 > 中断 > 运行中 > 取消 > 完成）。
       单次调用**不**走合并标题（仍是裸动词，不写 `1 file`）。
@@ -263,9 +263,10 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - [x] 语法高亮零新依赖：代码走 `markdown_render::highlight_line`（关键字/字符串/数字/类型/注释），
       `.md`/`.mdx` 走 `ui::markdown::scan` + `prompt::token_style`，未知扩展名不做假高亮；
       未命中语法的字符保留增删语义色而不是中性正文色。
-- [x] 测试：`file_diff::tests` 新增合并卡、整组展开、最差状态、动词不合并、Rust 语法色、markdown
-      词法色、未知扩展名保持语义色；`history::tests::tool_geometry` 新增合并卡几何（布局=渲染、
-      单份命中区、组内无空行、`write`+`write` 合并、`edit`+`write` 不合并、Part 打断分组）。
+- [x] 测试：`file_diff::tests` 新增合并标题、逐块展开互不影响、最差状态、动词不合并、Rust 语法色、
+      markdown 词法色、未知扩展名保持语义色、动作行剩余行数；`history::tests::tool_geometry` 新增
+      合并几何（布局=渲染、每块各一份命中区、组内无空行、`write`+`write` 共享标题、
+      `edit`+`write` 不合并、Part 打断分组）。
 
 - [x] 行数拆分：合并卡把 `history.rs` 顶到 1003 行，按职责抽出 `history/stats.rs`
       （统计行 `stats_line` + 耗时短格式 `format_duration`），`history.rs` 回到 926 行，
@@ -279,3 +280,50 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - 触及文件行数：`history.rs` 926、`history/tool.rs` 570、`history/tool/file_diff.rs` 815、
   `history/tool/file_diff/tests.rs` 845、`history/tests/tool_geometry.rs` 509，全部 ≤1000。
 - 人工验收仍待用户 `cargo run`：合并卡观感、语法高亮与增删底色、点击正文折叠。
+
+## 14. 第四轮：逐调用独立展开 + 代码块去装饰 + loading token + toast + 参数折叠
+
+用户要求（原文要点）：
+
+1. 连续调用用 `└─` 连接（对齐 Codex 截图），**每个调用展开互相独立**，不要底部控制整组；
+2. 移除消息列表里 markdown 代码块的 `language: xxx`、复制按钮、上下边框，只显示代码；
+3. 输入框上方 loading 加 `↓token`（参考 Claude Code）；
+4. 移除输入框上方通知，全部改为 main content 的 toast；toast 增加 `default` / `warning`（黄边框+标题）/
+   `danger`（红边框+标题）三档；
+5. 工具参数颜色改为「输入框下方上下文」的字体色；默认显示 2 行、超出折叠，悬停高亮为默认前景、
+   点击展开（复用文件卡片的折叠逻辑，不显示按钮）；
+6. 折叠文案统一加行数——**只改工具卡片**（用户确认），把 `… more changes` 换成剩余行数。
+
+- [x] 合并卡改为「一行合并标题 + 逐调用独立块」：`file_diff::blocks()` 返回每块的
+      `start/len/action/body`，`rows`/`draw`/命中都用它；展开状态按调用逐份保存在
+      `detail_expanded`，点某块的动作行只切换该块。
+- [x] 动作行改为**按需出现**：折叠态还有内容没画出来时写 `… N more lines`，展开态 `collapse`；
+      预览已完整则整行不画。
+- [x] 代码块去装饰：`markdown_render` 删除 `language:` 头、复制按钮与三条横线，
+      `MdLine` 去掉 `code_copy` / `code_body` / `code_rule`；连带删除 `history/code_copy.rs`、
+      `LxChatHit::CodeCopy`、`TooltipTarget::LxCodeCopy`、`md_read_code_lang*` / `md_read_code_copy`
+      以及相关测试（选区复制不受影响）。
+- [x] loading 行右端加 `↓1.2k tok`：`LxChat::stream_output_tokens()` 按 ASCII/4 + 非 ASCII 逐字估算，
+      静态 dim、宽不够先丢、Esc 待命时不画。
+- [x] 输入框上方提示全部迁到 toast：`InputHint` 结构与 `chat_bar` 提示分支删除，
+      `show_lx_hint` 直接出 toast（Error → `Danger`、Warning → `Warning`，锚定触发窗格）；
+      `ToastKind` 由 `Info/Error` 改为 `Default/Warning/Danger`，边框与标题同色。
+- [x] 参数配色改为 `muted()`（与状态行上下文用量同色），悬停 `chat_tool_param_hover()` 升为默认前景；
+      `└─` 详情行软换行、折叠 2 行、展开上限 24 行，参数超 2 行时正文区可点折叠
+      （`tool::card_body_rows` 登记 `CardHit.body`，复用 `toggle_tool_detail` 与拖拽保护）；
+      错误/中断文案恒单行。
+
+- [x] 测试：详情行 2 行折叠/展开/上限、悬停升色不改行数、每行不越界且续行重缩进；
+      合并块独立展开与动作行剩余行数；代码块只剩正文；loading token 估算与显示；
+      toast 三档颜色（边框与标题同色）与 warning 实际绘制；`show_lx_hint` 迁移后的
+      danger/warning 断言。
+
+当前验证记录（第四轮）：
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2849 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
+- 触及文件行数：`history/tool/file_diff.rs` 785、`file_diff/tests.rs` 911、`file_summary.rs` 631、
+  `history/tool.rs` 613、`history.rs` 924、`markdown_render.rs` 684，全部 ≤1000。
+- 人工验收仍待用户 `cargo run`：合并标题下的逐块展开、代码块只剩正文的观感、
+  loading 的 `↓token`、toast 三档颜色、参数 2 行折叠与点击展开。

@@ -3,7 +3,7 @@
 use super::*;
 
 fn toast(now: Instant) -> Toast {
-    Toast::new(ToastKind::Info, "Copied to clipboard", None, now)
+    Toast::new(ToastKind::Default, "Copied to clipboard", None, now)
 }
 
 #[test]

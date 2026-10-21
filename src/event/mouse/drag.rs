@@ -363,7 +363,7 @@ pub(crate) fn handle_mouse_up_left(
         if crate::platform::write_clipboard(&text) {
             update::show_toast(
                 state,
-                Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now)
+                Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
                     .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
             );
         } else {
@@ -371,7 +371,7 @@ pub(crate) fn handle_mouse_up_left(
             update::show_toast(
                 state,
                 Toast::new(
-                    ToastKind::Error,
+                    ToastKind::Danger,
                     ui::text::TOAST_COPY_FAILED,
                     Some(pane),
                     now,
@@ -387,7 +387,7 @@ pub(crate) fn handle_mouse_up_left(
             if crate::platform::write_clipboard(&text) {
                 update::show_toast(
                     state,
-                    Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now)
+                    Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
                         .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                 );
             } else {
@@ -395,7 +395,7 @@ pub(crate) fn handle_mouse_up_left(
                 update::show_toast(
                     state,
                     Toast::new(
-                        ToastKind::Error,
+                        ToastKind::Danger,
                         ui::text::TOAST_COPY_FAILED,
                         Some(pane),
                         now,
@@ -427,7 +427,7 @@ pub(crate) fn handle_mouse_up_left(
                 if crate::platform::write_clipboard(&text) {
                     update::show_toast(
                         state,
-                        Toast::new(ToastKind::Info, ui::text::TOAST_COPIED, Some(pane), now)
+                        Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
                             .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                     );
                 } else {
@@ -435,7 +435,7 @@ pub(crate) fn handle_mouse_up_left(
                     update::show_toast(
                         state,
                         Toast::new(
-                            ToastKind::Error,
+                            ToastKind::Danger,
                             ui::text::TOAST_COPY_FAILED,
                             Some(pane),
                             now,

@@ -6,9 +6,10 @@
 use std::time::{Duration, Instant};
 
 use crate::app::state::{
-    AppState, AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, InputHint,
-    InputHintLevel, RequestKey, RequestState, ToolStatus, ToolSummary,
+    AppState, AssistantStepView, ChatMessageView, ChatPartView, FrozenModel, InputHintLevel,
+    RequestKey, RequestState, ToolStatus, ToolSummary,
 };
+use crate::app::toast::{Toast, ToastKind};
 use crate::chat::events::{ChatDelta, PartKind, StopReason};
 use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
@@ -605,15 +606,23 @@ fn next_generation(state: &AppState, pane: PaneId) -> u64 {
 /// 在**指定窗格**的输入框上方显示一条临时提示（错误红 / 默认黄）。
 ///
 /// lx 页的所有反馈都走这里而不是 toast：位置贴着用户刚敲字的输入框，2 秒后自动消失。
+/// 展示一条 lx 反馈 toast，锚定在触发动作的窗格（`Some(pane)`）。
+///
+/// 用户要求「移除 lx 输入框上方的通知显示，全部改为 main content 的 toast」：
+/// 提示原先贴在输入框上沿，会和 loading / 回到底部抢同一行；toast 覆盖在窗格内，
+/// 只挡一小块、自动消失，且能携带三档语义色（default / warning / danger）。
 pub(crate) fn show_lx_hint(
     state: &mut AppState,
     pane: PaneId,
     level: InputHintLevel,
     message: impl Into<String>,
 ) {
-    if let Some(target) = state.pane_mut_anywhere(pane) {
-        target.lx.chat.hint = Some(InputHint::new(level, message, Instant::now()));
-    }
+    let kind = match level {
+        InputHintLevel::Error => ToastKind::Danger,
+        InputHintLevel::Warning => ToastKind::Warning,
+    };
+    let toast = Toast::new(kind, message, Some(pane), Instant::now());
+    crate::app::update::show_toast(state, toast);
 }
 
 /// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。

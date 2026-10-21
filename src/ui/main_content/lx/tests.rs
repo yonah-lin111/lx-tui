@@ -1173,7 +1173,8 @@ fn esc_armed_replaces_loading_label_with_stop_hint() {
 
 #[test]
 fn esc_hint_shortens_on_narrow_bar() {
-    // 卡片移除后 loading 从第 1 列起画，可用宽度比之前宽 2 列，因此用更窄的栏验证降级。
+    // 窄栏：loading 文案优先，右侧 token 计数整段让位（先丢它），
+    // 因此停止短语仍能按宽度降级显示。
     let area = Rect::new(0, 0, 22, 16);
     let mut lx = streaming_lx(true, true);
     lx.chat.stop_armed_at = Some(std::time::Instant::now());
@@ -1182,13 +1183,15 @@ fn esc_hint_shortens_on_narrow_bar() {
     let text = buffer_text(&buf);
     assert!(
         text.contains(text::LX_CHAT_STOP_PHRASES[1])
-            || text.contains(text::LX_CHAT_STOP_PHRASES[2]),
+            || text.contains(text::LX_CHAT_STOP_PHRASES[2])
+            || text.contains(text::LX_CHAT_STOP_PHRASES[3]),
         "窄栏取短短语：{text}"
     );
     assert!(
         !text.contains("Press esc again to stop"),
         "放不下时不画长短语：{text}"
     );
+    assert!(!text.contains(" tok"), "窄栏先丢 token 计数：{text}");
 }
 
 // ===== 置顶用户消息行（命中与跳转目标）=====
@@ -1450,8 +1453,9 @@ fn lx_input_highlights_inline_code_and_list_markers() {
 }
 
 #[test]
-fn code_block_copy_button_hit_returns_block_body() {
-    // 点击代码块头部的复制按钮：命中返回该块正文（不含围栏与 language 行）。
+fn code_block_renders_body_without_header_or_rules() {
+    // 代码块只画代码本身：没有 `language:` 头部、没有复制按钮、没有上下横线与竖条
+    // （用户要求移除这些装饰），语法高亮仍保留。
     let area = Rect::new(0, 0, 60, 24);
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
@@ -1480,199 +1484,72 @@ fn code_block_copy_button_hit_returns_block_body() {
     });
     lx.chat = chat;
 
-    let view = history_view(area, &lx).expect("history");
-    let layout = super::history::layout(view.body, &lx);
-    let button = layout
-        .code_copy
-        .first()
-        .expect("代码块头部应记录复制按钮")
-        .clone();
-    assert_eq!(
-        button.body, "const a = 1;\n\nconst b = 2;",
-        "正文完整且保留空行"
-    );
-    assert!(!button.body.contains("```"), "不含围栏");
-    assert!(!button.body.contains("language:"), "不含语言行");
-
-    // 命中该按钮单元格 → CodeCopy 携带同一份正文。
-    let hit = chat_hit(area, &lx, button.rect.x, button.rect.y);
-    assert_eq!(hit, Some(LxChatHit::CodeCopy(button.body.clone())));
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(text.contains("const a = 1;"), "代码正文保留：{text}");
+    assert!(text.contains("const b = 2;"), "空行后的正文保留：{text}");
+    assert!(!text.contains("language:"), "不再显示语言头：{text}");
+    assert!(!text.contains("[❐]"), "不再有复制按钮：{text}");
+    assert!(!text.contains('│'), "不再有左侧竖条：{text}");
 }
 
+/// 流中 loading 行右侧给出输出 token 估算 `↓1.2k tok`；不流时不显示。
 #[test]
-fn code_copy_keeps_code_indentation() {
-    // 代码块里的缩进是代码本身的一部分，复制时必须原样保留（不能 trim_start）。
-    let area = Rect::new(0, 0, 60, 24);
-    let mut lx = Lx::new();
-    let mut chat = LxChat::new();
-    chat.messages.push(ChatMessageView {
-        id: "a-0".into(),
-        role: "assistant".into(),
-        status: "complete".into(),
-        turn_index: 0,
-        steps: vec![crate::app::state::AssistantStepView::Part {
-            position: 0,
-            part: ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: "```js\nfn main() {\n    let a = 1;\n}\n```".into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            },
-        }],
-        model_label: None,
-        error_code: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        duration_ms: None,
-    });
-    lx.chat = chat;
-
-    let view = history_view(area, &lx).expect("history");
-    let button = super::history::layout(view.body, &lx)
-        .code_copy
-        .into_iter()
-        .next()
-        .expect("代码块复制按钮");
-    assert_eq!(
-        button.body, "fn main() {\n    let a = 1;\n}",
-        "缩进原样保留"
-    );
-}
-
-#[test]
-fn code_copy_excludes_both_rules_and_keeps_blank_lines() {
-    // 代码块上下两条分隔横线都不进复制内容；正文里的空行要保留。
-    let area = Rect::new(0, 0, 60, 24);
-    let mut lx = Lx::new();
-    let mut chat = LxChat::new();
-    chat.messages.push(ChatMessageView {
-        id: "a-0".into(),
-        role: "assistant".into(),
-        status: "complete".into(),
-        turn_index: 0,
-        steps: vec![crate::app::state::AssistantStepView::Part {
-            position: 0,
-            part: ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: "```js\nconst a = 1;\n\nconst b = 2;\n```".into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            },
-        }],
-        model_label: None,
-        error_code: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        duration_ms: None,
-    });
-    lx.chat = chat;
-
-    let view = history_view(area, &lx).expect("history");
-    let button = super::history::layout(view.body, &lx)
-        .code_copy
-        .into_iter()
-        .next()
-        .expect("代码块复制按钮");
-    assert_eq!(button.body, "const a = 1;\n\nconst b = 2;", "正文 + 空行");
-    assert!(!button.body.contains('─'), "不含任何分隔横线");
-    assert!(!button.body.contains("language:"), "不含头部");
-}
-
-/// 头部下方新增分割线后，复制内容仍必须是完整正文（回归：`code_rule` 行曾被当成
-/// 「第一个非正文行」而提前关闭收集，导致复制出空串）。
-#[test]
-fn code_copy_still_complete_with_rule_below_header() {
-    let area = Rect::new(0, 0, 60, 24);
-    let mut lx = Lx::new();
-    let mut chat = LxChat::new();
-    chat.messages.push(ChatMessageView {
-        id: "a-0".into(),
-        role: "assistant".into(),
-        status: "complete".into(),
-        turn_index: 0,
-        steps: vec![crate::app::state::AssistantStepView::Part {
-            position: 0,
-            part: ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: "```\nline one\nline two\n```".into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            },
-        }],
-        model_label: None,
-        error_code: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        duration_ms: None,
-    });
-    lx.chat = chat;
-
-    let view = history_view(area, &lx).expect("history");
-    let button = super::history::layout(view.body, &lx)
-        .code_copy
-        .into_iter()
-        .next()
-        .expect("代码块复制按钮");
-    assert_eq!(
-        button.body, "line one\nline two",
-        "头部下方分割线不得截断复制内容"
-    );
-    assert!(!button.body.is_empty(), "复制内容不能为空");
-    assert!(!button.body.contains('─'), "不含任何分隔横线");
-    assert!(!button.body.contains("language:"), "不含头部");
-}
-
-/// 无语言代码块：头部显示 `language: text`，复制内容仍只是正文。
-#[test]
-fn text_code_block_shows_label_and_copies_body_only() {
-    let area = Rect::new(0, 0, 60, 24);
-    let mut lx = Lx::new();
-    let mut chat = LxChat::new();
-    chat.messages.push(ChatMessageView {
-        id: "a-0".into(),
-        role: "assistant".into(),
-        status: "complete".into(),
-        turn_index: 0,
-        steps: vec![crate::app::state::AssistantStepView::Part {
-            position: 0,
-            part: ChatPartView {
-                kind: crate::chat::events::PartKind::Text,
-                content: "```\nplain text\n```".into(),
-                provider_metadata_json: None,
-                started_at_ms: None,
-                ended_at_ms: None,
-                completed_at_ms: None,
-            },
-        }],
-        model_label: None,
-        error_code: None,
-        input_tokens: None,
-        output_tokens: None,
-        cache_read_tokens: None,
-        duration_ms: None,
-    });
-    lx.chat = chat;
-
-    let view = history_view(area, &lx).expect("history");
-    let lines = crate::ui::markdown_render::render_wrapped("```\nplain text\n```", 60);
-    let header = lines.get(1).expect("header").text();
+fn streaming_loading_shows_estimated_output_tokens() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = streaming_lx(true, true);
+    // 4k ASCII 字符 ≈ 1k token。
+    if let Some(message) = lx.chat.messages.last_mut()
+        && let Some(part) = message.steps.first_mut().and_then(|step| step.part_mut())
+    {
+        part.content = "a".repeat(4_800);
+    }
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
     assert!(
-        header.starts_with("language: text"),
-        "头部默认显示 text: {header:?}"
+        text.contains(&crate::ui::text::chat::stream_tokens_label(1_200)),
+        "显示 token 估算：{text}"
     );
-    let button = super::history::layout(view.body, &lx)
-        .code_copy
-        .into_iter()
-        .next()
-        .expect("代码块复制按钮");
-    assert_eq!(button.body, "plain text", "只复制正文，不含 language: text");
+    assert!(text.contains(text::chat::LOADING_LABEL), "loading 文案仍在");
+
+    // 流结束：那一行不再画 token（整行随 loading 消失）。
+    lx.chat.status.streaming = false;
+    if let Some(message) = lx.chat.messages.last_mut() {
+        message.status = "complete".into();
+    }
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    assert!(
+        !buffer_text(&buf).contains(" tok"),
+        "非流中不显示 token 估算"
+    );
+}
+
+/// 估算口径：ASCII 4 字符 ≈ 1 token，非 ASCII 1 字符 ≈ 1 token；无输出为 None。
+#[test]
+fn stream_token_estimate_counts_wide_chars_heavier() {
+    let mut lx = streaming_lx(true, true);
+    assert_eq!(
+        lx.chat.stream_output_tokens(),
+        Some(1),
+        "「答」算 1 个 token"
+    );
+    if let Some(message) = lx.chat.messages.last_mut()
+        && let Some(part) = message.steps.first_mut().and_then(|step| step.part_mut())
+    {
+        part.content = "abcdefgh".into();
+    }
+    assert_eq!(
+        lx.chat.stream_output_tokens(),
+        Some(2),
+        "8 个 ASCII ≈ 2 token"
+    );
+    if let Some(message) = lx.chat.messages.last_mut()
+        && let Some(part) = message.steps.first_mut().and_then(|step| step.part_mut())
+    {
+        part.content.clear();
+    }
+    assert_eq!(lx.chat.stream_output_tokens(), None, "没有输出就不显示");
 }

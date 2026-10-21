@@ -49,7 +49,7 @@ lx-tui/
       markdown_render.rs        面向阅读的 markdown 渲染器（折叠标记；UI 页 agent 回答与 lx 聊天共用）
       markdown_render/table.rs  markdown 表格渲染（列宽收缩、单元格行内渲染与 `<br>` 换行）
       main_content.rs           主内容渲染：按视图分派 lx 页与终端网格（含 lx 子模块）
-      main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、命令面板（slash.rs）、历史（history.rs（置顶用户消息行在 history/sticky.rs；本轮统计行在 history/stats.rs）；history/tool.rs 是工具步骤分派与共用行能力：方块/动词/路径/行范围/增删计数与状态，样式 token 与文案均取自 style / text::agent；history/tool/file_summary.rs 是普通工具的第二行摘要组装；history/tool/file_diff.rs 是 edit/write 的文件差异卡片——每文件 3 行预览与完整展开、连续同种调用的合并卡、增删行底色与轻量语法高亮，rows/draw 共用同一布局）、聊天历史命中与视口入口（history_hit.rs：置顶行/thinking/代码复制/工具动作行切换/整卡 hover 与正文折叠目标/滚动条与行数口径）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，loading / Esc 待命提示 + 回到底部）、提及面板
+      main_content/lx/          lx 页渲染：欢迎页（brand.rs 品牌区）、网格（grid.rs）、命令面板（slash.rs）、历史（history.rs（置顶用户消息行在 history/sticky.rs；本轮统计行在 history/stats.rs）；history/tool.rs 是工具步骤分派与共用行能力：方块/动词/路径/行范围/增删计数与状态，样式 token 与文案均取自 style / text::agent；history/tool/file_summary.rs 是普通工具的第二行摘要组装；history/tool/file_diff.rs 是 edit/write 的文件差异卡片——每文件 3 行预览与完整展开、连续同种调用的合并卡、增删行底色与轻量语法高亮，rows/draw 共用同一布局）、聊天历史命中与视口入口（history_hit.rs：置顶行/thinking/代码复制/工具动作行切换/整卡 hover 与正文折叠目标/滚动条与行数口径）、消息底部通知（notice.rs）、状态（status.rs，覆盖绘制在窗格底边框）、聊天栏（chat_bar.rs，loading + 流中 `↓token` 估算 + Esc 待命提示 + 回到底部；提示类反馈已改走 main content 的 toast）、提及面板
       widgets/                  无业务语义的可复用组件（菜单、模态容器等），按需创建
     input/                      键盘路由与编码
       mod.rs                    键盘路由（仅 Ctrl+Q 退出，其余进焦点窗格）

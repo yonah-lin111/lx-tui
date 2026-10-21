@@ -31,7 +31,7 @@
 
 use ratatui::layout::Rect;
 use ratatui::style::Style;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{AssistantStepView, ToolCallView, ToolStatus};
 use crate::ui::{style, text};
@@ -44,7 +44,6 @@ mod file_diff;
 mod file_summary;
 mod plan;
 
-use file_summary::detail;
 #[cfg(test)]
 use file_summary::{detail_prefix, fallback_parse_count, reset_fallback_parse_count};
 
@@ -72,9 +71,11 @@ pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, expanded),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            file_diff::rows(&[call], width, expanded)
+            file_diff::rows(&[call], width, &[expanded])
         }
-        Some(crate::app::state::ToolDetailView::File(_)) | None => HEADER_ROWS + DETAIL_ROWS,
+        Some(crate::app::state::ToolDetailView::File(_)) | None => {
+            HEADER_ROWS + file_summary::detail_rows(call, width, expanded)
+        }
     }
 }
 
@@ -85,8 +86,6 @@ fn expanded_or_preview_rows(call: &ToolCallView, width: u16, expanded: bool) -> 
 
 /// 标题行行数。
 const HEADER_ROWS: usize = 1;
-/// 详情行行数（**单行，绝不换行**；见模块文档的让位顺序）。
-const DETAIL_ROWS: usize = 1;
 
 /// 参数可用的最小显示列数；低于它就把参数整段省略（避免只剩一个省略号）。
 pub(super) const MIN_PARAM_COLS: usize = 6;
@@ -183,9 +182,9 @@ pub(super) fn draw_animated(
                 row_index,
                 &[call],
                 loading_frame,
-                expanded,
+                &[expanded],
                 animating,
-                hovered,
+                hovered.then_some(0),
             );
             return;
         }
@@ -194,17 +193,18 @@ pub(super) fn draw_animated(
     if rect.width == 0 {
         return;
     }
-    // 文件工具：第 1 行方块 + 动词，第 2 行 `  └─ 详情`。
+    // 文件工具：第 1 行方块 + 动词，其后是 `  └─ 详情`（最多 2 行，超长可展开）。
     if let Some(y) = visible_row(rect, scroll, *row_index) {
         let segments = header(call, rect.width, loading_frame, animating);
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    if let Some(y) = visible_row(rect, scroll, *row_index) {
-        let segments = detail(call, rect.width);
-        put_segments(grid, rect.x, y, rect.width, &segments);
+    for segments in file_summary::detail(call, rect.width, expanded, hovered) {
+        if let Some(y) = visible_row(rect, scroll, *row_index) {
+            put_segments(grid, rect.x, y, rect.width, &segments);
+        }
+        *row_index += 1;
     }
-    *row_index += 1;
 }
 
 /// 标题行行数（子模块共用）。
@@ -224,6 +224,26 @@ pub(super) fn open_offset(call: &ToolCallView) -> Option<usize> {
 /// 该调用是否有可展开的差异正文（文件卡片专用）。
 pub(super) fn has_expandable(call: &ToolCallView) -> bool {
     file_diff::is_card(call)
+}
+
+/// 卡片内**可点击折叠的正文区**行数（0 = 没有）。
+///
+/// 两种来源：
+/// - 已展开的文件差异卡片：除标题与动作行之外的全部行；
+/// - 参数详情超过折叠额度的普通文件工具：详情行本身（折叠态点击展开、展开态点击收起，
+///   与文件卡片共用 `toggle_tool_detail` 与「拖拽选中不折叠」的判定）。
+pub(super) fn card_body_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    if file_diff::is_card(call) {
+        return if expanded {
+            file_diff::rows(&[call], width, &[true]).saturating_sub(2)
+        } else {
+            0
+        };
+    }
+    if !file_summary::detail_overflows(call, width) {
+        return 0;
+    }
+    file_summary::detail_rows(call, width, expanded)
 }
 
 /// 从 `steps[start]` 起收集可合并的文件工具组（含起点）；不合并时返回空。
@@ -255,18 +275,18 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
     group
 }
 
-/// 合并卡行数；单元素组等价于单调用卡片。
-pub(super) fn group_rows(calls: &[&ToolCallView], width: u16, expanded: bool) -> usize {
+/// 合并卡行数；`expanded` 与 `calls` 一一对应（逐调用独立）。
+pub(super) fn group_rows(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> usize {
     file_diff::rows(calls, width, expanded)
 }
 
-/// 合并卡末尾动作行的卡片内偏移。
-pub(super) fn group_action_offset(
+/// 合并卡逐调用的块几何（行区间、动作行、可点正文区）。
+pub(super) fn group_blocks(
     calls: &[&ToolCallView],
     width: u16,
-    expanded: bool,
-) -> Option<usize> {
-    file_diff::action_offset(calls, width, expanded)
+    expanded: &[bool],
+) -> Vec<file_diff::Block> {
+    file_diff::blocks(calls, width, expanded)
 }
 
 /// 绘制合并卡；推进行数与 [`group_rows`] 严格相等。
@@ -278,9 +298,9 @@ pub(super) fn group_draw_animated(
     row_index: &mut usize,
     calls: &[&ToolCallView],
     loading_frame: usize,
-    expanded: bool,
+    expanded: &[bool],
     animating: bool,
-    hovered: bool,
+    hovered: Option<usize>,
 ) {
     file_diff::draw(
         grid,
@@ -293,14 +313,6 @@ pub(super) fn group_draw_animated(
         animating,
         hovered,
     );
-}
-
-/// 文件差异卡片**末尾动作行**的卡片内偏移；没有可展开差异时返回 None。
-///
-/// 与进程 `open` 是两种不同的命中动作：这一行切换整张文件卡片的展开状态，
-/// 绝不打开后台任务面板（见 `history::ToolHitKind`）。标题行不再可点。
-pub(super) fn action_offset(calls: &[&ToolCallView], width: u16, expanded: bool) -> Option<usize> {
-    file_diff::action_offset(calls, width, expanded)
 }
 
 /// 行内一段着色文本。
@@ -553,6 +565,37 @@ pub(super) fn put_segments(grid: &mut Grid, x: u16, y: u16, width: u16, segments
         grid.put_clipped(cx, y, &segment.text, segment.style, remaining);
         cx = cx.saturating_add(u16::try_from(segment.cols()).unwrap_or(u16::MAX));
     }
+}
+
+/// 按显示列换行，同时保留分段样式：跨行处切开当前分段，不丢样式。
+///
+/// 差异正文（语法高亮）与工具参数（`└─` 详情行）共用这一份实现：两处都要
+/// 「按列折行且不打断着色」，各写一遍必然一边宽字符算错一边样式丢失。
+pub(super) fn wrap_spans(spans: &[Segment], width: usize) -> Vec<Vec<Segment>> {
+    let width = width.max(1);
+    let mut rows: Vec<Vec<Segment>> = Vec::new();
+    let mut current: Vec<Segment> = Vec::new();
+    let mut col = 0usize;
+    for source in spans {
+        let mut buf = String::new();
+        for ch in source.text.chars() {
+            let cell = ch.width().unwrap_or(1).max(1);
+            if col + cell > width && col > 0 {
+                if !buf.is_empty() {
+                    current.push(Segment::new(std::mem::take(&mut buf), source.style));
+                }
+                rows.push(std::mem::take(&mut current));
+                col = 0;
+            }
+            buf.push(ch);
+            col += cell;
+        }
+        if !buf.is_empty() {
+            current.push(Segment::new(buf, source.style));
+        }
+    }
+    rows.push(current);
+    rows
 }
 
 /// 单行化并限长：控制字符（含换行/制表）转空格，去掉首尾空白。

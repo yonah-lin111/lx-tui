@@ -803,7 +803,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
         },
-        TooltipTarget::LxCodeCopy { .. } => "copy code",
     }
 }
 

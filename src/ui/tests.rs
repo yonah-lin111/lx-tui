@@ -540,7 +540,7 @@ fn toast_renders_title_and_message() {
     update::show_toast(
         &mut state,
         Toast::new(
-            ToastKind::Info,
+            ToastKind::Default,
             text::TOAST_COPIED,
             Some(anchor),
             Instant::now(),
@@ -561,7 +561,7 @@ fn expired_toast_is_not_rendered() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
-        Toast::new(ToastKind::Info, text::TOAST_COPIED, None, Instant::now()),
+        Toast::new(ToastKind::Default, text::TOAST_COPIED, None, Instant::now()),
     );
     update::tick(&mut state, Instant::now() + TOAST_DURATION);
     let lines = render_lines(&state);
@@ -610,7 +610,7 @@ fn toast_over_prompt_search_hides_hardware_cursor() {
     let anchor = state.prompt.id();
     update::show_toast(
         &mut state,
-        Toast::new(ToastKind::Info, message, Some(anchor), Instant::now()),
+        Toast::new(ToastKind::Default, message, Some(anchor), Instant::now()),
     );
     let (visible, _) = render_cursor(&state);
     assert!(!visible, "toast 覆盖搜索框时硬件光标隐藏");
@@ -633,7 +633,7 @@ fn error_toast_uses_red_border() {
     update::show_toast(
         &mut state,
         Toast::new(
-            ToastKind::Error,
+            ToastKind::Danger,
             text::TOAST_COPY_FAILED,
             Some(anchor),
             Instant::now(),
@@ -2485,7 +2485,7 @@ fn overlay_border_titles_use_soft_blue_style() {
     let mut state = AppState::demo();
     update::show_toast(
         &mut state,
-        Toast::new(ToastKind::Info, text::TOAST_COPIED, None, Instant::now())
+        Toast::new(ToastKind::Default, text::TOAST_COPIED, None, Instant::now())
             .with_title("Clipboard"),
     );
     let view = view_for(&state);

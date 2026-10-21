@@ -91,11 +91,13 @@ fn tool_call_id(
 
 /// 渲染单张卡片到网格并返回逐行文本。
 fn render(call: &ToolCallView, width: u16, expanded: bool) -> (Vec<String>, usize) {
-    render_group(&[call], width, expanded)
+    render_group(&[call], width, &[expanded])
 }
 
 /// 渲染一张（可能是合并的）卡片到网格并返回逐行文本。
-fn render_group(calls: &[&ToolCallView], width: u16, expanded: bool) -> (Vec<String>, usize) {
+///
+/// `expanded` 与 `calls` 一一对应：合并卡里每个调用各自的展开状态。
+fn render_group(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> (Vec<String>, usize) {
     let total = rows(calls, width, expanded);
     let height = u16::try_from(total.max(1)).unwrap_or(u16::MAX);
     let rect = Rect::new(0, 0, width, height);
@@ -110,7 +112,7 @@ fn render_group(calls: &[&ToolCallView], width: u16, expanded: bool) -> (Vec<Str
         0,
         expanded,
         false,
-        false,
+        None,
     );
     assert_eq!(row_index, total, "draw 推进行数必须等于 rows（宽 {width}）");
     let mut lines = Vec::new();
@@ -129,7 +131,7 @@ fn render_group(calls: &[&ToolCallView], width: u16, expanded: bool) -> (Vec<Str
 
 /// 单元格样式（按列取）。
 fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> Style {
-    let total = rows(&[call], width, expanded);
+    let total = rows(&[call], width, &[expanded]);
     let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
@@ -140,9 +142,9 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
         &mut row_index,
         &[call],
         0,
-        expanded,
+        &[expanded],
         false,
-        false,
+        None,
     );
     grid.cell(x, y).style
 }
@@ -151,7 +153,7 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
 #[test]
 fn footer_is_dim_until_the_card_is_hovered() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
-    let total = rows(&[&call], 80, false);
+    let total = rows(&[&call], 80, &[false]);
     let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
     let footer_y = u16::try_from(total).unwrap_or(u16::MAX) - 1;
     let mut styles = Vec::new();
@@ -165,9 +167,9 @@ fn footer_is_dim_until_the_card_is_hovered() {
             &mut row_index,
             &[&call],
             0,
+            &[false],
             false,
-            false,
-            hovered,
+            hovered.then_some(0),
         );
         styles.push(grid.cell(0, footer_y).style);
     }
@@ -206,7 +208,7 @@ fn expanded_shows_all_hunks_with_separator() {
     assert!(text.contains(" 2 ") || text.contains("2 -"), "{text}");
 }
 
-/// 折叠：每文件最多 3 个正文物理行；第 4 行起出省略提示（提示不占额度）。
+/// 折叠：每文件最多 3 个正文物理行；第 4 行起在动作行里给出剩余行数。
 #[test]
 fn preview_is_capped_at_three_physical_rows() {
     let diff = complete(vec![vec![
@@ -219,12 +221,13 @@ fn preview_is_capped_at_three_physical_rows() {
     let view = detail_of(vec![(diff, 2, 3)]);
     let call = tool_call("edit", view);
     let (lines, _) = render(&call, 80, false);
-    // 标题 + 文件头 + 3 正文行 + 省略提示。
+    // 标题 + 文件头 + 3 正文行 + 剩余行数动作行。
     assert_eq!(lines.len(), 1 + 1 + PREVIEW_LINES + 1, "{lines:#?}");
     assert!(
         lines
             .last()
-            .is_some_and(|l| l.contains(text::agent::FILE_DIFF_OMITTED))
+            .is_some_and(|l| l.contains("more line") && l.contains('2')),
+        "动作行写明剩余 2 行：{lines:#?}"
     );
     // 上下文行不占预览额度：预览里完全不出现上下文文本。
     assert!(!lines.join("\n").contains("keep"));
@@ -236,23 +239,25 @@ fn preview_is_capped_at_three_physical_rows() {
     assert!(body[2].contains("two"));
 }
 
-/// 内容刚好 3 行以内：不显示省略提示。
+/// 内容刚好 3 行以内：没有可展开内容，也就不画点了没反应的动作行。
 #[test]
-fn short_preview_has_no_omitted_hint() {
+fn short_preview_has_no_action_row() {
     let diff = complete(vec![vec![
         line(DiffLineKind::Removed, Some(1), None, "a"),
         line(DiffLineKind::Added, None, Some(1), "A"),
     ]]);
     let call = tool_call("edit", detail_of(vec![(diff, 1, 1)]));
     let (lines, _) = render(&call, 80, false);
-    // 标题 + 文件头 + 2 个正文行 + 常驻动作行（没有省略，文案改为明确动作）。
-    assert_eq!(lines.len(), 1 + 1 + 2 + 1, "{lines:#?}");
+    // 标题 + 文件头 + 2 个正文行，没有动作行。
+    assert_eq!(lines.len(), 1 + 1 + 2, "{lines:#?}");
     let joined = lines.join("\n");
-    assert!(!joined.contains(text::agent::FILE_DIFF_OMITTED));
     assert!(
-        joined.contains(text::agent::FILE_DIFF_SHOW_ALL),
-        "没省略也给展开入口：{joined}"
+        !joined.contains("more line"),
+        "没省略就没有剩余行数：{joined}"
     );
+    // 展开也不会多出一行（真的没有内容可展开）。
+    let (expanded, _) = render(&call, 80, true);
+    assert_eq!(expanded.len(), lines.len() + 1, "展开只多一行 collapse");
 }
 
 /// 长行按列宽换行：续行保留空 gutter、不重复符号与行号。
@@ -305,7 +310,7 @@ fn wide_characters_wrap_by_display_columns() {
 #[test]
 fn narrow_widths_are_safe() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
-    assert_eq!(rows(&[&call], 0, false), 0);
+    assert_eq!(rows(&[&call], 0, &[false]), 0);
     for width in [1u16, 2, 3, 8, 20] {
         for expanded in [false, true] {
             let (lines, total) = render(&call, width, expanded);
@@ -529,7 +534,7 @@ fn no_diff_falls_back_to_summary() {
     view.files[0].diff = None;
     let call = tool_call("edit", view);
     assert!(!is_card(&call));
-    assert_eq!(rows(&[&call], 80, false), title_rows() + 1);
+    assert_eq!(rows(&[&call], 80, &[false]), title_rows() + 1);
     // 没有详情分支时同样不产生行。
     let mut bare = tool_call("edit", detail_of(Vec::new()));
     bare.detail = None;
@@ -540,7 +545,7 @@ fn no_diff_falls_back_to_summary() {
 #[test]
 fn scroll_does_not_change_advanced_rows() {
     let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
-    let total = rows(&[&call], 80, true);
+    let total = rows(&[&call], 80, &[true]);
     let rect = Rect::new(0, 0, 80, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
@@ -551,9 +556,9 @@ fn scroll_does_not_change_advanced_rows() {
         &mut row_index,
         &[&call],
         0,
-        true,
+        &[true],
         false,
-        false,
+        None,
     );
     assert_eq!(row_index, total);
 }
@@ -599,7 +604,7 @@ fn consecutive_edits_merge_into_one_card() {
         ToolStatus::Completed,
     );
     let group = [&first, &second];
-    let (lines, total) = render_group(&group, 80, false);
+    let (lines, total) = render_group(&group, 80, &[false, false]);
     let text = lines.join("\n");
     // 标题只出现一次，且写明文件数。
     let titles: Vec<&String> = lines
@@ -617,24 +622,24 @@ fn consecutive_edits_merge_into_one_card() {
         titles[0].contains("+2") && titles[0].contains("-2"),
         "{text}"
     );
-    // 两个文件行都在，按调用顺序扁平铺开；中间节点 `├─`、末尾收口 `└─`。
-    assert!(text.contains("/tmp/file0.rs"), "{text}");
+    // 每个调用各自一块，块首都是 `└─`（合并标题之下不再有 `├─` 串联）。
     assert_eq!(
         text.matches("/tmp/file0.rs").count(),
         2,
         "两个文件同名但各自一行：{text}"
     );
-    assert!(text.contains(text::agent::TREE_BRANCH), "{text}");
-    assert!(text.contains(text::agent::TREE_LEAF), "{text}");
-    // 只有末尾一条动作行。
+    assert_eq!(
+        text.matches(text::agent::TREE_LEAF).count(),
+        2,
+        "每个调用一块，各自以 `└─` 起头：{text}"
+    );
+    assert!(!text.contains(text::agent::TREE_BRANCH), "{text}");
+    // 每个调用各有一条动作行（自己的剩余行数 / 收起入口）。
     let actions = lines
         .iter()
-        .filter(|line| {
-            line.contains(text::agent::FILE_DIFF_SHOW_ALL)
-                || line.contains(text::agent::FILE_DIFF_OMITTED)
-        })
+        .filter(|line| line.contains("more line") || line.contains(text::agent::FILE_DIFF_COLLAPSE))
         .count();
-    assert_eq!(actions, 1, "动作行只有一条：{lines:#?}");
+    assert_eq!(actions, 2, "每个调用各自一个展开入口：{lines:#?}");
     assert_eq!(total, lines.len());
 }
 
@@ -654,21 +659,23 @@ fn merged_card_expands_as_a_whole() {
         ToolStatus::Completed,
     );
     let group = [&first, &second];
-    let (folded, _) = render_group(&group, 80, false);
-    let (expanded, _) = render_group(&group, 80, true);
+    let (folded, _) = render_group(&group, 80, &[false, false]);
+    // 只展开第一个调用：两块互不影响。
+    let (expanded, _) = render_group(&group, 80, &[true, false]);
     assert!(expanded.len() > folded.len(), "展开比折叠多行");
-    // 折叠时有省略提示，展开后是 `collapse`。
+    // 折叠时两块各给剩余行数，展开的那一块换成 `collapse`。
+    let folded_text = folded.join("\n");
     assert!(
-        folded.join("\n").contains(text::agent::FILE_DIFF_OMITTED)
-            || folded.join("\n").contains(text::agent::FILE_DIFF_SHOW_ALL)
+        folded_text.contains("more line"),
+        "折叠态给剩余行数：{folded_text}"
     );
     assert!(
         expanded
             .join("\n")
             .contains(text::agent::FILE_DIFF_COLLAPSE)
     );
-    // 上下文行只在展开时出现（两处）。
-    assert_eq!(expanded.join("\n").matches("keep").count(), 2);
+    // 上下文行只出现在被展开的那一块（另一块仍折叠）。
+    assert_eq!(expanded.join("\n").matches("keep").count(), 1);
 }
 
 /// 合并卡方块汇总状态：只要有一个失败，整卡就是失败色。
@@ -688,7 +695,7 @@ fn merged_card_mark_follows_the_worst_status() {
     );
     bad.error = Some("boom".into());
     let group = [&ok, &bad];
-    let total = rows(&group, 80, false);
+    let total = rows(&group, 80, &[false, false]);
     let rect = Rect::new(0, 0, 80, u16::try_from(total).unwrap_or(u16::MAX));
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
@@ -699,9 +706,9 @@ fn merged_card_mark_follows_the_worst_status() {
         &mut row_index,
         &group,
         0,
+        &[false, false],
         false,
-        false,
-        false,
+        None,
     );
     assert_eq!(
         grid.cell(0, 0).style,
@@ -841,5 +848,64 @@ fn unknown_extension_keeps_plain_diff_colors() {
         style_at(&call, 80, false, keyword_x, row),
         style::agent_removed().patch(style::agent_removed_bg()),
         "不认识的语言不得把 let 染成关键字色"
+    );
+}
+
+/// 合并卡的每一块都有自己的展开入口：点第一个不影响第二个（展开互相独立）。
+#[test]
+fn merged_blocks_report_independent_action_rows() {
+    let first = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let second = tool_call_id(
+        "call-b",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let group = [&first, &second];
+    let folded = blocks(&group, 80, &[false, false]);
+    assert_eq!(folded.len(), 2, "两个调用各一块");
+    assert_eq!(folded[0].start, 1, "首块紧跟合并标题");
+    assert_eq!(
+        folded[1].start,
+        folded[0].start + folded[0].len,
+        "块首尾相接，没有块间空行"
+    );
+    assert!(folded[0].action.is_some() && folded[1].action.is_some());
+    assert_eq!(folded[0].body.1, 0, "折叠态正文不可点");
+    assert_eq!(folded[1].body.1, 0);
+
+    // 只展开第一块：它的行变多、动作行换成 collapse；第二块行数与起点跟着后移。
+    let expanded = blocks(&group, 80, &[true, false]);
+    assert!(expanded[0].len > folded[0].len, "第一块展开多行");
+    assert!(expanded[0].body.1 > 0, "展开态正文可点");
+    assert_eq!(expanded[1].len, folded[1].len, "第二块行数不变");
+    assert_eq!(expanded[1].body.1, 0, "第二块仍不可点（没展开）");
+    assert_eq!(
+        expanded[1].start,
+        expanded[0].start + expanded[0].len,
+        "第二块起点随第一块后移"
+    );
+}
+
+/// 动作行文案：折叠态写剩余行数，展开态写 `collapse`；没有省略时没有动作行。
+#[test]
+fn action_row_reports_remaining_lines() {
+    let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
+    let folded = render(&call, 80, false).0;
+    assert!(
+        folded.join("\n").contains("more line"),
+        "折叠态给剩余行数：{folded:#?}"
+    );
+    let expanded = render(&call, 80, true).0;
+    assert!(
+        expanded
+            .join("\n")
+            .contains(text::agent::FILE_DIFF_COLLAPSE),
+        "展开态给收起入口"
     );
 }

@@ -63,7 +63,7 @@ fn wide_characters_and_unbreakable_names_are_clipped_by_cell_width() {
                 );
             }
             // 不得出现只画了一半的宽字符（占位格必须紧跟其首格）。
-            for y in 0..(DETAIL_ROWS + HEADER_ROWS) {
+            for y in 0..rows(&call, width, false) {
                 for x in 0..width {
                     let glyph = grid.cell(x, y as u16);
                     if glyph.ch == crate::ui::main_content::lx::grid::CONTINUATION {
@@ -75,9 +75,10 @@ fn wide_characters_and_unbreakable_names_are_clipped_by_cell_width() {
     }
 }
 
-/// 窄宽度让位顺序：先丢掉次要计数，再省略路径，`└─` 前缀始终保留。
+/// 窄宽度让位：**先折行**（2 行额度），参数仍放不下时再省略路径；
+/// 计数与参数同处一份额度内，路径被省略而计数保留是常态。
 #[test]
-fn detail_drops_secondary_counts_before_truncating_the_path() {
+fn detail_wraps_before_it_truncates_the_path() {
     let path = "src/some/really/deeply/nested/path/that/keeps/going/and/going/mod.rs";
     let call = tool_call(
         "edit",
@@ -90,30 +91,23 @@ fn detail_drops_secondary_counts_before_truncating_the_path() {
         }),
         None,
     );
-    // 中等宽度：路径被中间省略，但计数仍在。
+    // 中等宽度：2 行额度把长路径折开，计数仍在。
     let medium = detail_text(&call, 40);
-    assert!(medium.contains('…'), "长路径中间省略：{medium:?}");
+    assert!(medium.contains('\n'), "长参数折行：{medium:?}");
     assert!(
         medium.contains(text::agent::added_label(3).as_str()),
         "计数保留：{medium:?}"
     );
-    // 更窄：计数先丢，路径仍在。
-    let mut dropped_counts_with_path = false;
+    // 各宽度：前缀始终完整，路径信息不会被截成空串（能画就画）。
     let mut prefix_missing: Vec<u16> = Vec::new();
     for width in 8u16..60 {
         let painted = detail_text(&call, width);
-        if !painted.contains(text::agent::added_label(3).as_str()) && painted.contains("src") {
-            dropped_counts_with_path = true;
-        }
+        let first = painted.split('\n').next().unwrap_or_default();
         // 前缀 "  └─ " 共 5 列，宽 ≥ 6 时必须完整出现。
-        if width >= 6 && !painted.starts_with("  ") {
+        if width >= 6 && !first.starts_with("  ") {
             prefix_missing.push(width);
         }
     }
-    assert!(
-        dropped_counts_with_path,
-        "应存在「丢掉计数、仍保留路径」的宽度档"
-    );
     assert!(
         prefix_missing.is_empty(),
         "宽度 ≥6 时 `  ` 缩进前缀始终在，缺失于 {prefix_missing:?}"
@@ -160,10 +154,11 @@ fn tool_row_count_is_always_two_for_any_content() {
             ToolStatus::Interrupted,
         ] {
             let call = tool_call("read", status, Some(read_summary()), Some("boom"));
-            assert_eq!(
-                rows(&call, width, false),
-                2,
-                "宽 {width} 恒占 2 行（标题 + 详情）"
+            // 详情可能折成 2 行（宽度够时），但绝不超过折叠额度。
+            let detail_rows = rows(&call, width, false) - 1;
+            assert!(
+                (1..=2).contains(&detail_rows),
+                "宽 {width} 详情恒为 1~2 行，实际 {detail_rows}"
             );
         }
     }
@@ -236,9 +231,9 @@ fn search_scoped_call(pattern: &str, path: &str) -> ToolCallView {
     )
 }
 
-/// 详情行去掉前缀后的正文（无则空串）。
+/// 详情行去掉前缀与折行缩进后的正文（用于「内容还在不在」的断言）。
 fn detail_body_text(call: &ToolCallView, width: u16) -> String {
-    let painted = detail_text(call, width);
+    let painted = detail_flat(call, width);
     let prefix = detail_prefix();
     painted
         .strip_prefix(&prefix)
@@ -258,10 +253,12 @@ fn search_detail_keeps_pattern_at_narrow_widths() {
     for width in (10u16..=70).rev() {
         let body = detail_body_text(&call, width);
         let painted = detail_text(&call, width);
-        assert!(
-            painted.width() <= usize::from(width),
-            "宽 {width} 越界：{painted:?}"
-        );
+        for row in painted.split('\n') {
+            assert!(
+                row.width() <= usize::from(width),
+                "宽 {width} 越界：{row:?}"
+            );
+        }
         if width >= 11 {
             // pattern 完整（连引号一起）。
             assert!(
@@ -516,5 +513,53 @@ fn detail_line_is_stable_across_loading_frames() {
     let reference = detail_text(&call, 80);
     for frame in 0..text::agent::STEP_BREATH_TICKS * 3 {
         assert_eq!(detail_text(&call, 80), reference, "帧 {frame} 详情行不该变");
+    }
+}
+
+/// 折行后的详情：每一物理行都不越界，且续行不重复 `└─` 连接符。
+#[test]
+fn wrapped_detail_never_overflows_and_reindents() {
+    let path = "src/some/really/deeply/nested/path/that/keeps/going/and/going/mod.rs";
+    let call = tool_call(
+        "edit",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some(path.into()),
+            added: Some(3),
+            removed: Some(1),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let prefix = detail_prefix();
+    for width in 8u16..80 {
+        let painted = detail_text(&call, width);
+        let rows: Vec<&str> = painted.split('\n').collect();
+        assert!(
+            rows.len() <= super::file_summary::DETAIL_PREVIEW_ROWS,
+            "宽 {width} 折叠态不超过 2 行：{painted:?}"
+        );
+        for row in &rows {
+            assert!(
+                row.width() <= usize::from(width),
+                "宽 {width} 越界：{row:?}"
+            );
+        }
+        assert!(rows[0].starts_with(&prefix), "首行带连接符：{rows:?}");
+        for row in rows.iter().skip(1) {
+            assert!(
+                !row.contains(text::agent::MARKER_TREE_LEAF),
+                "续行不重复连接符：{row:?}"
+            );
+            assert!(
+                row.starts_with(&" ".repeat(prefix.width())),
+                "续行等宽缩进：{row:?}"
+            );
+        }
+        // 路径信息不丢（可以被尾部/中间省略，但至少留下首段与省略号）。
+        assert!(
+            detail_flat(&call, width).contains(&prefix) || width < 6,
+            "宽 {width} 前缀保留"
+        );
     }
 }

@@ -334,7 +334,6 @@ fn details_marker_text_is_ascii_and_short() {
     for label in [
         crate::ui::text::agent::TASK_OPEN_LABEL,
         crate::ui::text::agent::FILE_DIFF_COLLAPSE,
-        crate::ui::text::agent::FILE_DIFF_SHOW_ALL,
     ] {
         assert!(label.is_ascii());
         assert!(!label.is_empty());

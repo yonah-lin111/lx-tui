@@ -173,11 +173,11 @@ fn alive_process_yellow_is_distinct_from_every_other_step_color() {
         assert_ne!(Some(orange), other, "存活深黄不得与{label}同色");
     }
 
-    // 工具参数已回归终端默认前景（用户要求「参数字体颜色改用默认字体色」）：
-    // 不再有第二个暖色槽位与存活橙黄抢注意力。
+    // 工具参数用次要信息色（用户要求「改为输入框下方上下文的字体颜色」）：
+    // 不占第二个暖色槽位，存活橙黄仍是唯一的暖色结构色。
     assert_eq!(
         chat_tool_param().fg,
-        None,
+        muted().fg,
         "参数不上色，存活橙黄({index})是唯一的暖色结构色"
     );
 }
@@ -247,8 +247,12 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
         "完成方块不加粗，与运行中区分"
     );
 
-    // 可变参数用终端默认前景：不再有第三个色相档与运行/完成两档抢注意力。
-    assert_eq!(chat_tool_param().fg, None, "工具参数用默认字体色");
+    // 可变参数用次要信息色：不占第三个色相档，也不与运行/完成两档抢注意力。
+    assert_eq!(
+        chat_tool_param().fg,
+        muted().fg,
+        "工具参数用 dim（与上下文用量同档）"
+    );
     assert!(
         !chat_tool_param()
             .add_modifier
@@ -264,18 +268,23 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
     );
 }
 
-/// 工具行可变参数：**终端默认前景**，且不带任何修饰符。
+/// 工具行可变参数：与左下角上下文用量同档的**次要信息色**；悬停升为默认前景。
 ///
-/// 用户要求「所有工具的参数字体颜色从黄色改为默认字体色」：参数不再是独立色域，
-/// 工具行的颜色信息只由方块 / 动词承担。修饰符钉死为「空」，防止有人把下划线加回来。
+/// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」：那行用量是 `muted()`，
+/// 参数跟着走；悬停档回到默认前景，作为「参数超长可点开」的信号。修饰符钉死为
+/// 「空」，防止有人把下划线加回来。
 #[test]
-fn chat_tool_param_uses_default_foreground_without_modifiers() {
+fn chat_tool_param_matches_context_usage_and_lifts_on_hover() {
     let style = chat_tool_param();
-    assert_eq!(style.fg, None, "参数用默认字体色");
+    assert_eq!(style, muted(), "参数与上下文用量同色（dim）");
+    assert!(
+        !style.add_modifier.contains(Modifier::UNDERLINED),
+        "只有 dim，不加下划线（连续多行下划线会盖过翡翠绿结构色）"
+    );
     assert_eq!(
-        style.add_modifier,
-        Modifier::empty(),
-        "实时工具行不加任何修饰符（连续多行下划线会盖过翡翠绿结构色）"
+        chat_tool_param_hover(),
+        Style::default(),
+        "悬停升为默认前景"
     );
 }
 
@@ -316,12 +325,6 @@ fn markdown_palette_is_github_dark_truecolor() {
     assert_eq!(md_read_quote().fg, muted, "引用 = fg-muted");
     assert_eq!(md_read_marker().fg, muted, "语法标记 = fg-muted");
     assert_eq!(md_read_rule().fg, muted, "水平线/表格边框 = fg-muted");
-    // 语言标记（`language:` 前缀）与语言名同用实体紫，靠字重分层级。
-    assert_eq!(
-        md_read_code_lang().fg,
-        md_read_code_lang_name().fg,
-        "语言标记 = 实体紫"
-    );
     assert_eq!(md_read_image().fg, muted, "图片说明 = fg-muted");
     // 任务复选框按状态分色（只染复选框，正文保持原样）。
     assert_eq!(md_read_task_done().fg, Some(Color::Green), "已完成 = 绿");
@@ -571,7 +574,11 @@ fn step_roles_use_distinct_colors() {
     );
     assert_eq!(chat_action_label(true).fg, None, "悬停升为默认前景");
     // 工具参数不再上黄色：整行走终端默认前景。
-    assert_eq!(chat_tool_param().fg, None, "工具参数用默认字体色");
+    assert_eq!(
+        chat_tool_param().fg,
+        muted().fg,
+        "工具参数用 dim（与上下文用量同档）"
+    );
 }
 
 /// loading 的扫描高亮色必须按 `Native Agent` 标签的 4 档渐变循环、且加粗。
@@ -608,73 +615,5 @@ fn loading_scan_cycles_native_agent_label_colors() {
         chat_loading_scan(cycle.len()),
         chat_loading_scan(0),
         "循环取模"
-    );
-}
-
-/// 输入框上方的提示只有两档颜色：错误红、默认黄。
-#[test]
-fn input_hint_uses_red_for_errors_and_yellow_otherwise() {
-    use crate::app::state::InputHintLevel;
-    assert_eq!(
-        chat_input_hint(InputHintLevel::Error).fg,
-        Some(Color::Red),
-        "错误用红色"
-    );
-    assert_eq!(
-        chat_input_hint(InputHintLevel::Warning).fg,
-        Some(Color::Yellow),
-        "默认为黄色"
-    );
-    // 与步骤/正文色域都不冲突（Red/Yellow 是 ANSI 语义色，不占 256 品牌槽位）。
-    for style in [
-        chat_input_hint(InputHintLevel::Error),
-        chat_input_hint(InputHintLevel::Warning),
-    ] {
-        assert!(
-            matches!(style.fg, Some(Color::Red) | Some(Color::Yellow)),
-            "只允许红/黄两档：{:?}",
-            style.fg
-        );
-    }
-}
-
-/// 代码块语言行整行上色：`language:` 前缀与语言名同为实体紫，靠字重分层级。
-#[test]
-fn code_block_language_line_is_colored() {
-    let prefix = md_read_code_lang();
-    let name = md_read_code_lang_name();
-    assert_eq!(
-        prefix.fg,
-        Some(Color::Rgb(0xd2, 0xa8, 0xff)),
-        "语言前缀也上实体紫（不再是次要灰）"
-    );
-    assert_eq!(
-        name.fg,
-        Some(Color::Rgb(0xd2, 0xa8, 0xff)),
-        "语言名 = 实体紫 #d2a8ff"
-    );
-    assert!(
-        !prefix.add_modifier.contains(Modifier::BOLD),
-        "前缀不加粗（标签）"
-    );
-    assert!(
-        name.add_modifier.contains(Modifier::BOLD),
-        "语言名加粗（取值），靠字重拉开层级"
-    );
-    assert_eq!(prefix.fg, name.fg, "同一行同一个色相");
-}
-
-/// 代码块复制按钮用**面板折叠按钮同款**（`accent`：Cyan 加粗），不做悬停变色。
-#[test]
-fn code_copy_button_shares_collapse_button_accent() {
-    let copy = md_read_code_copy();
-    assert_eq!(copy.fg, accent().fg, "与折叠按钮同色（Cyan）");
-    assert_eq!(copy.add_modifier, accent().add_modifier, "同为加粗");
-    assert_eq!(copy, accent(), "整体就是 accent，不引入新的交互色");
-    // 与语言标记（次要灰）明显不同色，才看得出这是控件。
-    assert_ne!(
-        copy.fg,
-        md_read_code_lang().fg,
-        "按钮不与语言标记同色（否则看不出能点）"
     );
 }

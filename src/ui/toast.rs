@@ -2,7 +2,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
@@ -80,7 +80,7 @@ pub fn render(
                 " {} ",
                 text::ellipsize(title, usize::from(area.width.saturating_sub(2)))
             ),
-            style::border_title(),
+            title_style(toast.kind),
         ));
     }
     let inner = block.inner(area);
@@ -111,11 +111,22 @@ pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
     crate::ui::widgets::modal::close_button_at(area, column, row)
 }
 
-/// 边框语义色：普通提示用强调色，失败用红色。
+/// 边框语义色：默认强调色、警告黄、危险红。
 fn border_style(kind: ToastKind) -> Style {
     match kind {
-        ToastKind::Info => style::accent(),
-        ToastKind::Error => style::error(),
+        ToastKind::Default => style::accent(),
+        ToastKind::Warning => Style::default().fg(Color::Yellow),
+        ToastKind::Danger => style::error(),
+    }
+}
+
+/// 标题语义色：与边框同色（用户要求「warning/danger 的**边框和 title** 分别改黄/红」），
+/// 默认档仍用边框标题的青色灰字。
+fn title_style(kind: ToastKind) -> Style {
+    match kind {
+        ToastKind::Default => style::border_title(),
+        ToastKind::Warning => Style::default().fg(Color::Yellow),
+        ToastKind::Danger => style::error(),
     }
 }
 

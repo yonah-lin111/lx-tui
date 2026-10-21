@@ -341,10 +341,10 @@ pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
 pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Option<PaneId>) {
     let now = Instant::now();
     let (kind, message) = if crate::platform::write_clipboard(text) {
-        (ToastKind::Info, ui::text::TOAST_COPIED)
+        (ToastKind::Default, ui::text::TOAST_COPIED)
     } else {
         tracing::warn!("clipboard write failed");
-        (ToastKind::Error, ui::text::TOAST_COPY_FAILED)
+        (ToastKind::Danger, ui::text::TOAST_COPY_FAILED)
     };
     update::show_toast(
         state,

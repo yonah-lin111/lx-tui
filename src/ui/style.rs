@@ -374,34 +374,6 @@ pub fn md_read_rule() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
 }
 
-/// markdown 代码块语言标记的 `language:` 前缀：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
-///
-/// 与语言名同色相、不加粗——`language:` 是标签、语言名是取值，靠字重拉开层级即可，
-/// 不用两种颜色挤在一行里（此前的次要灰读起来像「注释」，起不到标示作用）。
-pub fn md_read_code_lang() -> Style {
-    Style::default().fg(github_dark::ENTITY)
-}
-
-/// markdown 代码块的**语言名**（`js` / `rust`…）：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
-///
-/// 与 `language:` 前缀同色相、靠**字重**分层级：前缀不加粗（标签）、语言名加粗（取值）。
-/// 语言是这一行唯一有信息量的内容，紫色与代码 token（蓝/红/紫）同属语法色域，
-/// 但用在该行的固定位置不会与正文混淆。
-pub fn md_read_code_lang_name() -> Style {
-    Style::default()
-        .fg(github_dark::ENTITY)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// markdown 代码块的复制按钮 `[❐]`：与左侧容器折叠按钮同款（[`accent`]：Cyan 加粗）。
-///
-/// 全项目里「面板上的可点小控件」统一是这个青色加粗档（折叠按钮、面板按钮都用它），
-/// 复制按钮跟着走，观感一致、也不用再引入一个新的交互色。
-/// **不做悬停变色**：按钮只有 3 列，变色反而比常色更吵；可点性由 tooltip 承担。
-pub fn md_read_code_copy() -> Style {
-    accent()
-}
-
 /// markdown 图片说明（alt / url）：GitHub 的次要前景色。
 pub fn md_read_image() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
@@ -654,15 +626,6 @@ pub fn chat_variant() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 输入框上方临时提示的颜色：错误红 / 默认黄（用户指定）。
-pub fn chat_input_hint(level: crate::app::state::InputHintLevel) -> Style {
-    use crate::app::state::InputHintLevel;
-    match level {
-        InputHintLevel::Error => Style::default().fg(Color::Red),
-        InputHintLevel::Warning => Style::default().fg(Color::Yellow),
-    }
-}
-
 /// lx 输入框上方 loading 的**扫描高亮色**：按 `Native Agent` 标签的 4 档渐变循环
 /// （`218` 粉 → `182` 淡紫 → `153` 浅蓝 → `117` 天蓝），加粗。
 ///
@@ -835,11 +798,21 @@ pub fn chat_tool_verb_running() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
-/// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：**终端默认前景**、不加修饰。
+/// 工具行的可变参数（路径 / 搜索模式 / 命令 / 搜索范围）：**次要信息色**。
 ///
-/// 用户要求「所有工具的参数颜色从黄色改回默认字体颜色」：参数是内容而不是状态，
-/// 跟着默认前景走才能在一屏工具行里把注意力留给方块 / 动词的结构色。
+/// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」——那行上下文用量用的
+/// 就是 [`muted`]（终端 dim、无色相）。参数是内容的注脚而不是标题：常态压暗，
+/// 只在鼠标悬停到卡片上时升为默认前景（见 [`chat_tool_param_hover`]），
+/// 让「这一行可点」由交互态而不是常驻高对比度来表达。
 pub fn chat_tool_param() -> Style {
+    muted()
+}
+
+/// 工具参数在**卡片悬停**时的样式：终端默认前景（从 dim 升上来）。
+///
+/// 与 [`chat_action_label`] 同一套交互语言：常态次要、悬停提亮到默认前景；
+/// 用户据此知道「这块可以点」——参数超过 2 行时点击即展开。
+pub fn chat_tool_param_hover() -> Style {
     Style::default()
 }
 

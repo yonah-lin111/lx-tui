@@ -208,22 +208,28 @@ fn file_message(call_id: &str) -> ChatMessageView {
             simplified: false,
             diff: Some(FileDiffView::Complete {
                 hunks: vec![DiffHunkView {
-                    lines: vec![
-                        DiffLineView {
-                            kind: DiffLineKind::Removed,
-                            old_line: Some(1),
-                            new_line: None,
-                            text: "old".into(),
-                            no_final_newline: false,
-                        },
-                        DiffLineView {
-                            kind: DiffLineKind::Added,
-                            old_line: None,
-                            new_line: Some(1),
-                            text: "new".into(),
-                            no_final_newline: false,
-                        },
-                    ],
+                    // 5 条变更行 > 3 行预览额度：折叠态必然有省略，因此一定有
+                    // 可点的「剩余行数」动作行。
+                    lines: (1..=5)
+                        .flat_map(|number| {
+                            [
+                                DiffLineView {
+                                    kind: DiffLineKind::Removed,
+                                    old_line: Some(number),
+                                    new_line: None,
+                                    text: format!("old {number}"),
+                                    no_final_newline: false,
+                                },
+                                DiffLineView {
+                                    kind: DiffLineKind::Added,
+                                    old_line: None,
+                                    new_line: Some(number),
+                                    text: format!("new {number}"),
+                                    no_final_newline: false,
+                                },
+                            ]
+                        })
+                        .collect(),
                 }],
                 simplified: false,
             }),

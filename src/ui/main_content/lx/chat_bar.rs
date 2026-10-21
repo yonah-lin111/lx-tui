@@ -1,18 +1,16 @@
-//! 输入框上方那一行：loading / 临时提示 / 「回到底部」控件。
+//! 输入框上方那一行：loading（含 token 计数）/ 「回到底部」控件。
 //!
 //! 纯渲染 + 纯几何：布局、绘制与命中共享同一矩形口径；只读 `Lx`、只写 lx 页网格。
-//! 该行贴在输入框上沿、与输入框同宽；三者都没有时整行不占位。
+//! 该行贴在输入框上沿、与输入框同宽；没有内容时整行不占位。
 //!
-//! **优先级：临时提示 > loading > 回到底部**（提示是用户刚操作产生的即时反馈，
-//! 必须独占可见性；`↓ jump to bottom` 在被挤出时让位——用户此刻视线在输入框）。
+//! **优先级：loading > 回到底部**（`↓ jump to bottom` 在被挤出时让位——用户此刻
+//! 视线在输入框）。提示类反馈已全部改走 main content 的 toast（见
+//! `app::update::chat::show_lx_hint`），这一行不再承载临时提示。
 //!
-//! **loading**：只显示 `Working...`（无方块、无转轮），文字带**从左到右的扫描高亮**：
+//! **loading**：`Working...` + 可选 ` · ↓1.2k tok`。文字带**从左到右的扫描高亮**：
 //! 窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native 标签的
 //! 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
-//! 走出末尾后从左侧重新进入。
-//!
-//! **临时提示**：错误红（`InputHintLevel::Error`）/ 默认黄（`Warning`），
-//! 文案极简、超宽用 `…` 截断；2 秒后由 `update::tick` 清除。
+//! 走出末尾后从左侧重新进入；token 计数是静态 dim，不参与扫描，宽度不够时先丢它。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -30,6 +28,8 @@ const RIGHT_PAD: u16 = 1;
 const HINT_GAP: u16 = 1;
 /// 扫描高亮窗口宽度（字符）。
 const SCAN_WINDOW: usize = 3;
+/// loading 文案与右侧 token 计数之间的空档（列）。
+const TOKENS_GAP: u16 = 2;
 
 /// 是否显示聊天栏：有临时提示、流中（loading）或上滚未跟随底部（回到底部控件）。
 ///
@@ -40,10 +40,10 @@ pub(super) fn visible(lx: &Lx) -> bool {
     if lx.task.is_some() {
         return false;
     }
-    if lx.chat.messages.is_empty() && lx.chat.hint.is_none() {
+    if lx.chat.messages.is_empty() {
         return false;
     }
-    lx.chat.hint.is_some() || lx.chat.status.streaming || !lx.chat.follow_bottom
+    lx.chat.status.streaming || !lx.chat.follow_bottom
 }
 
 /// 由输入框矩形推导聊天栏矩形（贴其上沿）；上方空间不足时 None。
@@ -56,11 +56,7 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     // 面板打开时聊天栏整体不画（见 [`visible`]），命中区也必须一起消失，
     // 否则会出现"看不见却能点"的穿透。
-    if lx.task.is_some()
-        || lx.chat.follow_bottom
-        || lx.chat.messages.is_empty()
-        || lx.chat.hint.is_some()
-    {
+    if lx.task.is_some() || lx.chat.follow_bottom || lx.chat.messages.is_empty() {
         return None;
     }
     let input = super::input_rect(area, lx)?;
@@ -85,28 +81,12 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
         .then(|| Rect::new(bar.right() - RIGHT_PAD - arrow, bar.y, arrow, 1))
 }
 
-/// 绘制聊天栏：临时提示 > loading > 回到底部。
+/// 绘制聊天栏：loading（含 token 计数）> 回到底部。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
         return;
     };
     if bar.width == 0 {
-        return;
-    }
-    // 临时提示独占该行（错误红 / 默认黄），不并排 jump。
-    if let Some(hint) = lx.chat.hint.as_ref() {
-        let x = bar.x.saturating_add(1);
-        let limit = bar.right().saturating_sub(1);
-        if x < limit {
-            let width = usize::from(limit.saturating_sub(x));
-            grid.put_clipped(
-                x,
-                bar.y,
-                &text::ellipsize(&hint.message, width),
-                style::chat_input_hint(hint.level),
-                limit.saturating_sub(x),
-            );
-        }
         return;
     }
     let mut right = bar.right();
@@ -139,13 +119,40 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     if !lx.chat.status.streaming {
         return;
     }
+    // token 计数贴右端、静态 dim：它回答「这轮已经吐了多少」，与左侧的扫描高亮
+    // 是两种信息，不能一起闪。宽度不够时**先丢它**（loading 文案优先级更高）；
+    // Esc 待命时不画——那一刻用户要读的是「再按一次停止」，数字只会抢位置。
+    let stop_armed = lx.chat.stop_armed_at.is_some();
+    let tokens = if stop_armed {
+        None
+    } else {
+        lx.chat.stream_output_tokens()
+    };
+    let tokens_label = tokens.map(text::chat::stream_tokens_label);
+    let tokens_w = tokens_label.as_ref().map_or(0u16, |label| {
+        u16::try_from(label.width()).unwrap_or(u16::MAX)
+    });
+    let mut loading_right = right;
+    if let Some(label) = tokens_label.as_ref()
+        && right.saturating_sub(bar.x) > tokens_w.saturating_add(TOKENS_GAP).saturating_add(1)
+    {
+        let x = right.saturating_sub(tokens_w);
+        grid.put_clipped(
+            x,
+            bar.y,
+            label,
+            style::chat_loading_label(),
+            label.len() as u16,
+        );
+        loading_right = x.saturating_sub(TOKENS_GAP);
+    }
     draw_loading(
         grid,
         bar.y,
         bar.x,
-        right,
+        loading_right,
         lx.chat.loading_frame,
-        lx.chat.stop_armed_at.is_some(),
+        stop_armed,
     );
 }
 

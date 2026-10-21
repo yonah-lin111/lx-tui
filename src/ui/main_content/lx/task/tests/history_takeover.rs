@@ -485,9 +485,8 @@ fn task_panel_hides_the_streaming_loading_bar() {
 
 #[test]
 fn task_panel_kills_every_history_hit() {
-    // 真实缺陷：面板打开后 `chat_hit` / `code_copy_hits` / 历史滚动条仍按**隐藏的**
-    // 历史几何作答，于是输出区成了巨大的点击穿透面（点一下会跳看不见的历史、
-    // 复制看不见的代码、展开看不见的 thinking）。
+    // 真实缺陷：面板打开后 `chat_hit` / 历史滚动条仍按**隐藏的**历史几何作答，
+    // 于是输出区成了巨大的点击穿透面（点一下会跳看不见的历史、展开看不见的 thinking）。
     let mut lx = lx_with_messages();
     let area = Rect::new(0, 0, 70, 30);
     // 关闭态：这些入口在历史区域里是有命中的（先证明前提成立）。
@@ -503,10 +502,6 @@ fn task_panel_kills_every_history_hit() {
     assert!(
         crate::ui::main_content::lx::chat_hit(area, &lx, probe.0, probe.1).is_none(),
         "面板打开时不得命中隐藏的历史行"
-    );
-    assert!(
-        crate::ui::main_content::lx::code_copy_hits(area, &lx).is_empty(),
-        "面板打开时不得产出看不见的 code-copy 热区"
     );
     assert!(
         crate::ui::main_content::lx::history_scrollbar(area, &lx).is_none(),

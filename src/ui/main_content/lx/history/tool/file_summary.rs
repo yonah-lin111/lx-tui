@@ -6,6 +6,7 @@
 //! 渲染热路径不做常规 JSON 解析：摘要由事件层填全，只有摘要缺字段时才懒回退
 //! 解析 `arguments_json`（见 [`needs_argument_fallback`]）。
 
+use ratatui::style::Style;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::state::{ToolCallView, ToolStatus, ToolSummary};
@@ -14,8 +15,16 @@ use crate::ui::{style, text};
 use super::super::truncate_with_ellipsis;
 use super::{
     Kind, MAX_FALLBACK_PARSE_BYTES, MIN_PARAM_COLS, MIN_PATTERN_COLS, MIN_REASON_COLS, Segment,
-    TEXT_SAMPLE_CHARS, segments_cols, single_line,
+    TEXT_SAMPLE_CHARS, segments_cols, single_line, wrap_spans,
 };
+
+/// 详情行**折叠态**最多显示的物理行数（用户要求「默认显示 2 行，超过 2 行折叠」）。
+pub(super) const DETAIL_PREVIEW_ROWS: usize = 2;
+/// 详情行**展开态**的物理行上限。
+///
+/// 展开不是「无限展开」：`edit` 的参数里可能塞进 1 MiB 的补丁，逐行铺开会把整屏
+/// 历史挤没。上限之内完整显示，超过上限仍以 `…` 收尾——与折叠态同一种收敛方式。
+pub(super) const DETAIL_MAX_ROWS: usize = 24;
 
 /// 详情行前缀（缩进 + 连接符 + 空格）：与消息底部通知的 `reason_prefix()` 同款，
 /// 列宽固定，续行对齐口径一致。
@@ -51,7 +60,7 @@ impl Detail {
 /// 摘要（`ToolSummary`：参数派生 + 结果体补全）是常规唯一来源；**只有摘要答不出
 /// 需要的字段时**才懒回退解析 `arguments_json`（见 [`needs_argument_fallback`]），
 /// 渲染热路径因此不做常规 JSON 解析（review P3-4）。
-fn param(call: &ToolCallView) -> Option<Param> {
+fn param(call: &ToolCallView, param_style: Style) -> Option<Param> {
     let kind = Kind::of(&call.name);
     let may_parse = needs_argument_fallback(call, kind);
     let mut parsed: Option<ToolSummary> = None;
@@ -72,7 +81,7 @@ fn param(call: &ToolCallView) -> Option<Param> {
         .map(|path| single_line(&path, TEXT_SAMPLE_CHARS))
         .filter(|path| !path.is_empty());
     if kind != Kind::Search {
-        return path.map(path_param);
+        return path.map(|path| path_param(path, param_style));
     }
     // `search`：三段独立成分 —— pattern（金黄）+ ` in `（dim）+ 范围路径（金黄）。
     // 拆段是为了窄宽度时「`in` 与 path 一起丢、pattern 完整保留」（review P2-7）。
@@ -81,7 +90,7 @@ fn param(call: &ToolCallView) -> Option<Param> {
         .filter(|pattern| !pattern.is_empty());
     let Some(pattern) = pattern else {
         // 没有 pattern（老数据或参数缺失）：退回单段路径（中间省略）。
-        return path.map(path_param);
+        return path.map(|path| path_param(path, param_style));
     };
     let mut tail = Vec::new();
     if let Some(path) = path {
@@ -91,13 +100,10 @@ fn param(call: &ToolCallView) -> Option<Param> {
             format!(" {}", text::agent::IN_SCOPE_SEP),
             style::agent_step_detail(),
         ));
-        tail.push(Segment::new(path, style::chat_tool_param()));
+        tail.push(Segment::new(path, param_style));
     }
     Some(Param {
-        head: Segment::new(
-            text::agent::pattern_label(&pattern),
-            style::chat_tool_param(),
-        ),
+        head: Segment::new(text::agent::pattern_label(&pattern), param_style),
         head_shrink: Shrink::Tail,
         tail,
     })
@@ -127,9 +133,9 @@ fn needs_argument_fallback(call: &ToolCallView, kind: Kind) -> bool {
 }
 
 /// 单段路径参数（`read` / `edit` / `write` / 未知工具）：中间省略。
-fn path_param(path: String) -> Param {
+fn path_param(path: String, param_style: Style) -> Param {
     Param {
-        head: Segment::new(path, style::chat_tool_param()),
+        head: Segment::new(path, param_style),
         head_shrink: Shrink::Middle,
         tail: Vec::new(),
     }
@@ -379,27 +385,90 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
     (!reason.is_empty()).then(|| Segment::new(reason, style::text()))
 }
 
-/// 组装第 2 行（`  └─ 详情`）；`width` 为内容列数。
+/// 详情行（`  └─ …`）的物理行：首行带连接符，续行用等宽空白缩进。
 ///
-/// 让位顺序（与设计文档一致）：次要计数按优先级丢弃 → 参数尾段整段丢弃 →
-/// 参数首段收敛（路径中间省略 / pattern 尾部省略）→ 丢参数；
-/// 错误分支则是错误尾部省略。前缀永远保留（除非窄到放不下前缀）。
-pub(super) fn detail(call: &ToolCallView, width: u16) -> Vec<Segment> {
+/// 折叠态最多 [`DETAIL_PREVIEW_ROWS`] 行、展开态最多 [`DETAIL_MAX_ROWS`] 行；
+/// 截断时末行追加 `…`。`rows` 与 `draw` 共用本函数，行数口径只有一份。
+pub(super) fn detail(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    hovered: bool,
+) -> Vec<Vec<Segment>> {
     let limit = usize::from(width);
+    if limit == 0 {
+        return Vec::new();
+    }
     let prefix = detail_prefix();
     let prefix_cols = prefix.width();
-    let prefix_segment = Segment::new(prefix, style::chat_notice_connector());
-    if prefix_cols > limit {
-        // 极窄：连接符都放不下，退回整宽画内容（与通知的原因行同口径）。
-        return detail_body(call, limit);
+    // 极窄：连接符都放不下，退回整宽画内容（与通知的原因行同口径）。
+    let (head, head_cols) = if prefix_cols > limit {
+        (String::new(), 0)
+    } else {
+        (prefix, prefix_cols)
+    };
+    let budget = if expanded {
+        DETAIL_MAX_ROWS
+    } else {
+        DETAIL_PREVIEW_ROWS
+    };
+    let body_limit = limit.saturating_sub(head_cols).max(1);
+    // 参数按「可用列 × 行预算」组装：先折行，只有连折行都放不下才收敛（中间省略 /
+    // 尾部省略 / 丢次要计数）。这样 2 行额度被真正用起来，而不是一路压成一行省略号。
+    // 极窄（放不下任何参数）时不给额度：那里折行只会把一行详情撕成两行碎片。
+    // 错误/中断文案是**叙述**而不是参数：保持单行尾部省略，绝不折成两行碎片。
+    // 参数超过最小列宽时才给多行额度（极窄处折行只会撕碎内容）。
+    let rows_budget = if Detail::of(call) == Detail::Error || body_limit < super::MIN_PARAM_COLS {
+        1
+    } else {
+        budget
+    };
+    let body = detail_body(call, body_limit.saturating_mul(rows_budget), hovered);
+    if body.is_empty() {
+        // 没有可展示内容：仍占一行（连接符留着，行数恒 ≥ 1）。
+        return vec![vec![Segment::new(head, style::chat_notice_connector())]];
     }
-    let mut segments = vec![prefix_segment];
-    segments.extend(detail_body(call, limit.saturating_sub(prefix_cols)));
-    segments
+    let mut wrapped = wrap_spans(&body, body_limit);
+    let omitted = wrapped.len() > budget;
+    wrapped.truncate(budget);
+    let last = wrapped.len().saturating_sub(1);
+    let mut rows: Vec<Vec<Segment>> = Vec::with_capacity(wrapped.len());
+    for (index, mut spans) in wrapped.into_iter().enumerate() {
+        let lead = if index == 0 {
+            head.clone()
+        } else {
+            " ".repeat(head_cols)
+        };
+        let mut row = Vec::with_capacity(spans.len() + 2);
+        if !lead.is_empty() {
+            row.push(Segment::new(lead, style::chat_notice_connector()));
+        }
+        if omitted && index == last {
+            // 截断标记贴在末行末尾：它是「还有内容」的信号，不是新的一行。
+            let used = segments_cols(&spans);
+            let room = limit.saturating_sub(head_cols).saturating_sub(used);
+            if room >= 1 {
+                spans.push(Segment::new("…", style::agent_step_detail()));
+            }
+        }
+        row.extend(spans);
+        rows.push(row);
+    }
+    rows
+}
+
+/// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径）。
+pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    detail(call, width, expanded, false).len()
+}
+
+/// 详情行是否**超出折叠额度**（决定这一行可不可点、要不要注册命中区）。
+pub(super) fn detail_overflows(call: &ToolCallView, width: u16) -> bool {
+    detail(call, width, true, false).len() > DETAIL_PREVIEW_ROWS
 }
 
 /// 第二行正文（不含 `└─ ` 前缀）：按 [`Detail`] 分支，并在 `limit` 列内收敛。
-fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
+fn detail_body(call: &ToolCallView, limit: usize, hovered: bool) -> Vec<Segment> {
     match Detail::of(call) {
         Detail::Error => {
             let Some(error) = error_segment(call) else {
@@ -417,7 +486,7 @@ fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
                 error.style,
             )]
         }
-        Detail::Params => detail_params(call, limit),
+        Detail::Params => detail_params(call, limit, hovered),
     }
 }
 
@@ -426,8 +495,13 @@ fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
 /// 让位顺序：**次要计数（按优先级）→ 参数的尾段（`search` 的 `in path` 整体）→
 /// 参数首段**。首段放不下时按 [`Shrink`] 收敛（路径中间省略、pattern 尾部省略）。
 /// 这条顺序保证「范围只在 pattern 完整时才显示」，pattern 绝不被切碎。
-fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
-    let param = param(call);
+fn detail_params(call: &ToolCallView, limit: usize, hovered: bool) -> Vec<Segment> {
+    let param_style = if hovered {
+        style::chat_tool_param_hover()
+    } else {
+        style::chat_tool_param()
+    };
+    let param = param(call, param_style);
     // 次要段是否带 ` · ` 前缀取决于主参数是否存在（否则会出现孤立分隔符）。
     let extras = extras(call, param.is_some());
     if param.is_none() && extras.is_empty() {

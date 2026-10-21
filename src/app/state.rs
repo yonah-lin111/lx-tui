@@ -24,11 +24,10 @@ pub mod workspace;
 pub use lx::{
     AssistantStepView, ChatHover, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
     DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, HistoryEntry,
-    HistoryPanel, InputHint, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry,
-    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PlanSnapshotView,
-    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, RequestKey, RequestState,
-    SlashCommand, SlashPanel, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus,
-    ToolSummary,
+    HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry, ModelCandidate,
+    ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PlanSnapshotView, PlanStepView,
+    ProcessEntry, ProcessInteractionView, ProcessStateView, RequestKey, RequestState, SlashCommand,
+    SlashPanel, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

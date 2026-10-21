@@ -30,15 +30,11 @@ use super::Grid;
 use super::notice;
 
 mod body;
-mod code_copy;
 mod stats;
 mod sticky;
 pub(crate) mod tool;
 
 pub(crate) use stats::{format_duration, stats_line};
-
-/// 代码块复制按钮占用的列数（`[❐]` 三列）。
-const CODE_COPY_WIDTH: u16 = 3;
 
 /// 用户消息前缀（`> `）。
 const USER_PREFIX: &str = "> ";
@@ -203,8 +199,6 @@ pub struct HistoryLayout {
     pub area: Rect,
     /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
-    /// 代码块复制按钮：消息索引、步骤下标、按钮矩形、该代码块正文（复制内容）。
-    pub code_copy: Vec<CodeCopyButton>,
     /// 工具卡片**动作行**命中矩形：进程 `open` 行或文件卡片的展开/收起行。
     ///
     /// 每张卡片至多**一个**矩形；动作由 [`ToolHitKind`] 决定。
@@ -221,7 +215,6 @@ pub struct HistoryLayout {
     pub total_rows: usize,
 }
 
-pub use code_copy::CodeCopyButton;
 pub use sticky::StickyRow;
 use sticky::sticky_candidate;
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
@@ -321,14 +314,12 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     let width = content.width;
     let mut rows = 0usize;
     let mut thinking = Vec::new();
-    let mut code_copy = Vec::new();
     let mut tools: Vec<ToolHit> = Vec::new();
     let mut cards: Vec<CardHit> = Vec::new();
     if width == 0 {
         return HistoryLayout {
             area,
             thinking,
-            code_copy,
             tools,
             cards: Vec::new(),
             messages: Vec::new(),
@@ -347,13 +338,16 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         let mut has_previous = false;
         let mut step_index = 0usize;
         while let Some(step) = message.steps.get(step_index) {
-            // 同种文件工具的连续调用合成**一张卡**：卡片本体、命中区与展开状态都只有
-            // 一份，块间空行也就不在组内出现（组内靠文件行与 `├─`/`└─` 分隔）。
-            if let AssistantStepView::Tool { call, .. } = step {
+            // 同种文件工具的连续调用共用一行合并标题，但**每个调用各自独立**：
+            // 自己的文件块、自己的展开状态与自己的展开入口（块间不再插空行）。
+            if let AssistantStepView::Tool { .. } = step {
                 let group = tool::merge_group(&message.steps, step_index);
                 if group.len() > 1 {
-                    let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
-                    let group_rows = tool::group_rows(&group, width, expanded);
+                    let expanded: Vec<bool> = group
+                        .iter()
+                        .map(|call| lx.chat.detail_is_expanded(&message.id, &call.call_id))
+                        .collect();
+                    let group_rows = tool::group_rows(&group, width, &expanded);
                     if group_rows > 0 {
                         if has_previous && needs_spacer() {
                             rows += 1;
@@ -363,32 +357,44 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                             area.y
                                 .saturating_add(u16::try_from(rows + offset).unwrap_or(u16::MAX))
                         };
-                        if let Some(offset) = tool::group_action_offset(&group, width, expanded) {
-                            tools.push(ToolHit {
-                                message_id: message.id.clone(),
-                                call_id: call.call_id.clone(),
-                                kind: ToolHitKind::Toggle,
-                                rect: Rect::new(area.x, block_y(offset), width, 1),
+                        let blocks = tool::group_blocks(&group, width, &expanded);
+                        for (index, block) in blocks.iter().enumerate() {
+                            let call = group[index];
+                            // 每个调用各自的展开入口：点它只切换这一块。
+                            if let Some(offset) = block.action {
+                                tools.push(ToolHit {
+                                    message_id: message.id.clone(),
+                                    call_id: call.call_id.clone(),
+                                    kind: ToolHitKind::Toggle,
+                                    rect: Rect::new(area.x, block_y(offset), width, 1),
+                                });
+                            }
+                            cards.push(CardHit {
+                                kind: CardKind::Tool {
+                                    message_id: message.id.clone(),
+                                    call_id: call.call_id.clone(),
+                                    expanded: expanded[index],
+                                },
+                                // 整块命中区只覆盖这一块自己的行（含它自己的展开入口），
+                                // 不吞合并标题、也不与前一块重叠——否则悬停会在两块之间抖动。
+                                card: Rect::new(
+                                    area.x,
+                                    block_y(block.start),
+                                    width,
+                                    rows_to_u16(block.len),
+                                ),
+                                body: if block.body.1 > 0 {
+                                    Rect::new(
+                                        area.x,
+                                        block_y(block.body.0),
+                                        width,
+                                        rows_to_u16(block.body.1),
+                                    )
+                                } else {
+                                    Rect::new(area.x, block_y(0), width, 0)
+                                },
                             });
                         }
-                        cards.push(CardHit {
-                            kind: CardKind::Tool {
-                                message_id: message.id.clone(),
-                                call_id: call.call_id.clone(),
-                                expanded,
-                            },
-                            card: Rect::new(area.x, block_y(0), width, rows_to_u16(group_rows)),
-                            body: if expanded && group_rows > 2 {
-                                Rect::new(
-                                    area.x,
-                                    block_y(1),
-                                    width,
-                                    rows_to_u16(group_rows.saturating_sub(2)),
-                                )
-                            } else {
-                                Rect::new(area.x, block_y(0), width, 0)
-                            },
-                        });
                         rows += group_rows;
                     }
                     step_index += group.len();
@@ -445,24 +451,24 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     });
                 }
                 // 文件差异卡片：末尾动作行切换展开/收起；正文保留聊天选区。
-                if let Some(offset) = tool::action_offset(&[call], width, expanded) {
-                    tools.push(ToolHit {
-                        message_id: message.id.clone(),
-                        call_id: call.call_id.clone(),
-                        kind: ToolHitKind::Toggle,
-                        rect: Rect::new(area.x, block_y(offset), width, 1),
-                    });
+                if tool::has_expandable(call) {
+                    for block in tool::group_blocks(&[call], width, &[expanded]) {
+                        if let Some(offset) = block.action {
+                            tools.push(ToolHit {
+                                message_id: message.id.clone(),
+                                call_id: call.call_id.clone(),
+                                kind: ToolHitKind::Toggle,
+                                rect: Rect::new(area.x, block_y(offset), width, 1),
+                            });
+                        }
+                    }
                 }
                 let card = Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows));
-                // 展开后的正文区（只有带差异的文件卡片有）：标题与动作行之间的部分。
-                // 折叠态零高——点正文不会折叠一张本来就没展开的卡片。
-                let body = if expanded && tool::has_expandable(call) && step_rows > 2 {
-                    Rect::new(
-                        area.x,
-                        block_y(1),
-                        width,
-                        rows_to_u16(step_rows.saturating_sub(2)),
-                    )
+                // 可点击折叠的正文区：已展开的文件卡片（标题与动作行之间），或参数
+                // 超长、点击即可展开的详情行。零高时点正文不会折叠一张没展开的卡片。
+                let body_rows = tool::card_body_rows(call, width, expanded);
+                let body = if body_rows > 0 {
+                    Rect::new(area.x, block_y(1), width, rows_to_u16(body_rows))
                 } else {
                     Rect::new(area.x, block_y(0), width, 0)
                 };
@@ -494,17 +500,6 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                     card: Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows)),
                     body,
                 });
-            } else if let AssistantStepView::Part { part, .. } = step {
-                // 代码块头部的复制按钮：按渲染行序算出每块头部的屏幕矩形。
-                code_copy::collect(
-                    message_index,
-                    step_index,
-                    &part.content,
-                    width.saturating_sub(STEP_GUTTER),
-                    area,
-                    rows,
-                    &mut code_copy,
-                );
             }
             rows += step_rows;
             step_index += 1;
@@ -539,7 +534,6 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     HistoryLayout {
         area,
         thinking,
-        code_copy,
         tools,
         cards,
         messages: messages_rows,
@@ -635,17 +629,23 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
         let mut first_user_line = true;
         let mut step_index = 0usize;
         while let Some(step) = message.steps.get(step_index) {
-            // 同种文件工具的连续调用合并成一张卡（与 `layout` 同一份分组口径）。
-            if let AssistantStepView::Tool { call, .. } = step {
+            // 同种文件工具的连续调用共用一行合并标题（与 `layout` 同一份分组口径）。
+            if let AssistantStepView::Tool { .. } = step {
                 let group = tool::merge_group(&message.steps, step_index);
                 if group.len() > 1 {
-                    let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
-                    let group_rows = tool::group_rows(&group, content.width, expanded);
+                    let expanded: Vec<bool> = group
+                        .iter()
+                        .map(|call| lx.chat.detail_is_expanded(&message.id, &call.call_id))
+                        .collect();
+                    let group_rows = tool::group_rows(&group, content.width, &expanded);
                     if group_rows > 0 {
                         if has_previous && needs_spacer() {
                             row_index += 1;
                         }
                         has_previous = true;
+                        let hovered = group
+                            .iter()
+                            .position(|call| lx.chat.tool_is_hovered(&message.id, &call.call_id));
                         tool::group_draw_animated(
                             grid,
                             content,
@@ -653,9 +653,9 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             &mut row_index,
                             &group,
                             lx.chat.loading_frame,
-                            expanded,
+                            &expanded,
                             lx.chat.status.streaming,
-                            lx.chat.tool_is_hovered(&message.id, &call.call_id),
+                            hovered,
                         );
                     }
                     step_index += group.len();

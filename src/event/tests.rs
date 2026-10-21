@@ -971,16 +971,6 @@ fn mouse_click_confirm_switch_cwd_closes_overlay() {
     assert!(dirty);
 }
 
-/// 历史区里全部代码块复制按钮（含正文），按渲染行序。
-fn code_copy_buttons(
-    area: Rect,
-    lx: &crate::app::state::Lx,
-) -> Vec<crate::ui::main_content::lx::history::CodeCopyButton> {
-    crate::ui::main_content::lx::history_view(area, lx)
-        .map(|view| crate::ui::main_content::lx::history::layout(view.body, lx).code_copy)
-        .unwrap_or_default()
-}
-
 /// 目标窗格内容区矩形。
 fn pane_inner(geo: &Geometry, pane: PaneId) -> Rect {
     let (_, rect) = geo
@@ -3730,77 +3720,6 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
     );
 }
 
-#[test]
-fn lx_code_copy_button_anchors_toast_in_main_content() {
-    // 点 lx 历史里的代码块复制按钮：剪贴板 toast 锚定在**该窗格**（main content），
-    // 而不是屏幕底部的 prompt —— 复制发生在哪儿，反馈就出现在哪儿。
-    let config = Config::default();
-    let mut state = AppState::demo();
-    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
-    let pane = state.active_tab().layout.focus();
-    let inner = pane_inner(&geo, pane);
-    {
-        let lx = &mut state.pane_mut_anywhere(pane).expect("pane").lx;
-        let mut chat = crate::app::state::LxChat::new();
-        chat.messages.push(crate::app::state::ChatMessageView {
-            id: "a-0".into(),
-            role: "assistant".into(),
-            status: "complete".into(),
-            turn_index: 0,
-            steps: vec![crate::app::state::AssistantStepView::Part {
-                position: 0,
-                part: crate::app::state::ChatPartView {
-                    kind: crate::chat::events::PartKind::Text,
-                    content: "```js\nconst a = 1;\n```".into(),
-                    provider_metadata_json: None,
-                    started_at_ms: None,
-                    ended_at_ms: None,
-                    completed_at_ms: None,
-                },
-            }],
-            model_label: None,
-            error_code: None,
-            input_tokens: None,
-            output_tokens: None,
-            cache_read_tokens: None,
-            duration_ms: None,
-        });
-        lx.chat = chat;
-    }
-    let button = code_copy_buttons(inner, &state.pane_anywhere(pane).expect("pane").lx)
-        .into_iter()
-        .next()
-        .expect("代码块复制按钮可见");
-    assert_eq!(button.body, "const a = 1;");
-
-    let mut sessions = HashMap::new();
-    let mut dirty = false;
-    handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            button.rect.x,
-            button.rect.y,
-        ),
-        &mut state,
-        &mut sessions,
-        &geo,
-        &config,
-        &mut dirty,
-    );
-    assert!(dirty);
-    let toast = state.toast.as_ref().expect("复制后弹出 toast");
-    assert_eq!(
-        toast.anchor,
-        Some(pane),
-        "toast 锚定在 main content 窗格（不是 prompt）"
-    );
-    assert_eq!(
-        toast.title.as_deref(),
-        Some(crate::ui::text::TOAST_CLIPBOARD_TITLE),
-        "沿用剪贴板 toast 标题"
-    );
-}
-
 /// 给当前焦点窗格挂 Agent 快照；返回窗格标识。
 fn mount_agent(
     state: &mut AppState,
@@ -4229,7 +4148,7 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
     let show = |state: &mut AppState| {
         update::show_toast(
             state,
-            Toast::new(ToastKind::Info, "toast body", None, Instant::now()),
+            Toast::new(ToastKind::Default, "toast body", None, Instant::now()),
         );
     };
     show(&mut state);

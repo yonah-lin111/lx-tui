@@ -73,7 +73,7 @@ pub fn apply_trust_decision(state: &mut AppState, granted: bool) {
 
 /// 取消操作的工作区告警 toast。
 fn toast_cancelled(state: &mut AppState, message: &str) {
-    let toast = Toast::new(ToastKind::Error, message, None, Instant::now())
+    let toast = Toast::new(ToastKind::Danger, message, None, Instant::now())
         .with_title(text::TOAST_WORKSPACE_TITLE);
     super::show_toast(state, toast);
 }

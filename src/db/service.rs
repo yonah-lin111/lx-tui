@@ -414,7 +414,7 @@ impl Persistence {
                     update::show_toast(
                         state,
                         Toast::new(
-                            ToastKind::Error,
+                            ToastKind::Danger,
                             text::TOAST_PROMPT_SAVE_FAILED,
                             None,
                             Instant::now(),
@@ -480,7 +480,7 @@ impl Persistence {
                     update::show_toast(
                         state,
                         Toast::new(
-                            ToastKind::Error,
+                            ToastKind::Danger,
                             text::TOAST_REFERENCED_SAVE_FAILED,
                             None,
                             Instant::now(),
@@ -500,7 +500,7 @@ impl Persistence {
                     update::show_toast(
                         state,
                         Toast::new(
-                            ToastKind::Error,
+                            ToastKind::Danger,
                             text::TOAST_REFERENCED_DELETE_FAILED,
                             None,
                             Instant::now(),
@@ -515,10 +515,10 @@ impl Persistence {
             Effect::CopyToClipboard { text, anchor } => {
                 let now = Instant::now();
                 let (kind, message) = if crate::platform::write_clipboard(&text) {
-                    (ToastKind::Info, text::TOAST_COPIED)
+                    (ToastKind::Default, text::TOAST_COPIED)
                 } else {
                     tracing::warn!("clipboard write failed");
-                    (ToastKind::Error, text::TOAST_COPY_FAILED)
+                    (ToastKind::Danger, text::TOAST_COPY_FAILED)
                 };
                 update::show_toast(
                     state,
@@ -619,7 +619,7 @@ impl Persistence {
                     update::show_toast(
                         state,
                         Toast::new(
-                            ToastKind::Error,
+                            ToastKind::Danger,
                             text::LX_CHAT_SESSION_BUSY,
                             None,
                             Instant::now(),
