@@ -20,6 +20,7 @@ fn status(
     ChatStatus {
         model_name: model.map(str::to_string),
         provider_name: provider.map(str::to_string),
+        variant: None,
         context_limit: context,
         input_tokens: input,
         streaming,
@@ -325,4 +326,109 @@ fn task_count_hides_when_too_narrow() {
     // 极窄时指标整段让位，不与模型名抢位置。
     let line = border_with_tasks(3, 9);
     assert!(!line.contains("process"), "窄到放不下时不画：{line}");
+}
+
+/// 思考等级显示在模型名与上下文占用之间，用 ` · ` 分隔。
+#[test]
+fn variant_sits_between_model_and_context() {
+    let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);
+    st.variant = Some("high".into());
+    let lx = lx_with_status(st);
+    let line = render_border(&lx, 60);
+    assert!(
+        line.starts_with("╰ M · high · 500(50%)"),
+        "顺序为 模型 · 思考等级 · 上下文：{line}"
+    );
+    assert!(
+        !line.contains("high · ─"),
+        "思考等级后紧跟上下文，不落空：{line}"
+    );
+}
+
+/// 思考等级用加粗黄字（对齐 opencode 的 warning + BOLD），分隔符仍是次要信息色。
+#[test]
+fn variant_is_bold_yellow_while_separator_is_muted() {
+    let mut st = status(Some("M"), Some("P"), None, None, false);
+    st.variant = Some("high".into());
+    let lx = lx_with_status(st);
+    let rect = Rect::new(0, 0, 40, 5);
+    let inner = pane(rect);
+    let mut buf = Buffer::empty(rect);
+    render(&mut buf, inner, &lx);
+    let row = inner.bottom();
+    let cells: Vec<(u16, char, ratatui::style::Style)> = (rect.x..rect.right())
+        .filter_map(|x| {
+            buf.cell((x, row))
+                .map(|cell| (x, cell.symbol().chars().next().unwrap_or(' '), cell.style()))
+        })
+        .collect();
+    let variant_cell = cells
+        .iter()
+        .find(|(_, ch, _)| *ch == 'h')
+        .expect("思考等级首字符");
+    // cell 样式带 bg/underline_color 的 Reset 默认值，只比较前景与加粗。
+    assert_eq!(
+        variant_cell.2.fg,
+        style::chat_variant().fg,
+        "思考等级走专用前景色"
+    );
+    assert_eq!(
+        variant_cell.2.fg,
+        Some(ratatui::style::Color::Yellow),
+        "黄色"
+    );
+    assert!(
+        variant_cell
+            .2
+            .add_modifier
+            .contains(ratatui::style::Modifier::BOLD),
+        "加粗"
+    );
+    // `·` 用次要信息色（与上下文占用的分隔符一致）。
+    let sep_cell = cells.iter().find(|(_, ch, _)| *ch == '·').expect("分隔符");
+    // `muted()` 只有 DIM、无前景色；单元格 fg 的 Reset 来自底边线底色。
+    assert!(
+        sep_cell
+            .2
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM),
+        "分隔符走 muted（DIM）"
+    );
+    assert_ne!(
+        sep_cell.2.fg,
+        Some(ratatui::style::Color::Yellow),
+        "分隔符不是黄色"
+    );
+}
+
+/// 无 variants 时整段不显示（模型名与上下文照常，不出现空占位）。
+#[test]
+fn no_variant_leaves_no_gap() {
+    let lx = lx_with_status(status(Some("M"), Some("P"), Some(1_000), Some(500), false));
+    let line = render_border(&lx, 60);
+    assert!(
+        line.starts_with("╰ M · 500(50%)"),
+        "无 variant 时无空洞：{line}"
+    );
+    assert!(!line.contains("·  ·"), "不留下双分隔符：{line}");
+}
+
+/// 宽度不足时先丢上下文占用，再丢思考等级，模型名始终保留。
+#[test]
+fn narrow_drops_context_before_variant() {
+    let mut st = status(Some("M"), Some("P"), Some(1_000), Some(500), false);
+    st.variant = Some("high".into());
+    let lx = lx_with_status(st);
+    // 14 列内容区：`M · high` 放得下，` · 500(50%)` 放不下。
+    let inner = Rect::new(0, 0, 14, 3);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    assert!(lay.variant.width > 0, "思考等级保留");
+    assert_eq!(lay.context.width, 0, "上下文占用先被丢弃");
+    assert!(lay.label.width > 0, "模型名仍在");
+
+    // 更窄：连思考等级也放不下（`M · high` 需 8 列，可用只有 5）。
+    let inner = Rect::new(0, 0, 9, 3);
+    let lay = layout(inner, &lx.chat.status, lx.background_tasks);
+    assert_eq!(lay.variant.width, 0, "更窄时丢弃思考等级");
+    assert!(lay.label.width > 0, "模型名仍在");
 }

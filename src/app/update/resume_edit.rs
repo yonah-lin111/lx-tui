@@ -21,7 +21,8 @@ pub fn open_resume_session_edit(state: &mut AppState, pane: PaneId) -> bool {
     let Some(SlashPanel::History(panel)) = target.lx.slash.as_ref() else {
         return false;
     };
-    let Some(entry) = panel.entries.get(panel.window.active) else {
+    // 高亮位置是过滤视图内的位置，换算回原始条目。
+    let Some(entry) = panel.active_entry() else {
         return false;
     };
     let session_id = entry.session_id.clone();
@@ -55,7 +56,7 @@ pub fn copy_resume_session_id(state: &mut AppState, pane: PaneId) -> bool {
     let Some(SlashPanel::History(panel)) = target.lx.slash.as_ref() else {
         return false;
     };
-    let Some(entry) = panel.entries.get(panel.window.active) else {
+    let Some(entry) = panel.active_entry() else {
         return false;
     };
     let session_id = entry.session_id.clone();

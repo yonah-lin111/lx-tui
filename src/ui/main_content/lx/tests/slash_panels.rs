@@ -34,6 +34,8 @@ fn model_panel_lx(current: Option<usize>) -> Lx {
         current,
         current_variant: None,
         window: PanelWindow::new(current.unwrap_or(0)),
+        filter: String::new(),
+        filtered: (0..3).collect(),
     })));
     lx
 }
@@ -58,6 +60,8 @@ fn history_panel_lx() -> Lx {
         ],
         current: Some(1),
         now_ms: 2_000 + 5 * 60_000,
+        filter: String::new(),
+        filtered: vec![0, 1],
         window: PanelWindow::new(1),
     })));
     lx
@@ -206,6 +210,8 @@ fn slash_panel_scrollbar_has_no_track_border() {
         current: Some(0),
         current_variant: None,
         window: PanelWindow::new(0),
+        filter: String::new(),
+        filtered: (0..30).collect(),
     })));
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);

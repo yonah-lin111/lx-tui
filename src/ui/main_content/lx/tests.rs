@@ -750,6 +750,8 @@ fn slash_model_lx() -> Lx {
         current: None,
         current_variant: None,
         window: PanelWindow::new(0),
+        filter: String::new(),
+        filtered: vec![0, 1],
     })));
     lx
 }
@@ -807,6 +809,8 @@ fn slash_model_and_resume_show_empty_placeholder_row() {
         current: None,
         current_variant: None,
         window: PanelWindow::new(0),
+        filter: String::new(),
+        filtered: Vec::new(),
     })));
     assert!(slash_layout(area, &lx).is_some());
 }
@@ -898,6 +902,7 @@ fn initial_page_shows_status_on_pane_bottom_border() {
     lx.chat.status = crate::app::state::lx::chat::ChatStatus {
         model_name: Some("deepseek-v4.1-flash".into()),
         provider_name: Some("9router-lx-t".into()),
+        variant: None,
         context_limit: Some(1_000_000),
         input_tokens: Some(720_000),
         streaming: false,

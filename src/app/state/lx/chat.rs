@@ -246,6 +246,8 @@ pub struct ChatStatus {
     pub model_name: Option<String>,
     /// 供应商展示名。
     pub provider_name: Option<String>,
+    /// 思考等级（variant 原始 key，如 `high`）；模型无 variants 时为 None（整段不显示）。
+    pub variant: Option<String>,
     /// 当前模型上下文上限（未知为 None → 不显示上下文占用）。
     pub context_limit: Option<u64>,
     /// 上下文占用分子：最近一次同模型请求的输入 + 输出 token（未知为 None）。
@@ -502,7 +504,7 @@ impl LxChat {
     /// （或默认）；输入 token 只在仍属同一模型时保留（切模型清空分子）。
     pub fn refresh_status(&mut self, models: &ModelsSnapshot) {
         let selection = self.effective_selection(models);
-        let (model_name, provider_name, context_limit) = match &selection {
+        let (model_name, provider_name, variant, context_limit) = match &selection {
             Some(selection) => {
                 let provider = models.settings.providers.get(&selection.provider);
                 let model = provider.and_then(|provider| provider.models.get(&selection.model));
@@ -511,9 +513,10 @@ impl LxChat {
                     .map(|model| model.name.clone())
                     .or_else(|| Some(selection.model.clone()));
                 let limit = model.and_then(|model| model.limit.map(|limit| limit.context));
-                (model_name, provider_name, limit)
+                // 思考等级与模型名同源（都来自当前生效选择），保证两者永不漂移。
+                (model_name, provider_name, selection.variant.clone(), limit)
             }
-            None => (None, None, None),
+            None => (None, None, None, None),
         };
         // 切模型清空分子：当前模型（provider/model 稳定键）与上次记录不一致时重置。
         let token_key = selection
@@ -528,6 +531,7 @@ impl LxChat {
         self.status = ChatStatus {
             model_name,
             provider_name,
+            variant,
             context_limit,
             input_tokens: self.context_tokens,
             streaming: self.request.is_busy(),

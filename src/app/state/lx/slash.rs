@@ -161,6 +161,13 @@ pub struct ModelPicker {
     pub current_variant: Option<usize>,
     /// 窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
+    /// 过滤词（输入框全文快照）；空表示不过滤。
+    pub filter: String,
+    /// 过滤后的候选索引视图（按分数排序）；空过滤时为恒等序列。
+    ///
+    /// 只按当前 `stage` 解释：`Models` 指向 `candidates`，`Variants` 指向其本级的
+    /// `variants`。原始列表全量保留，因此退格删字符能恢复。
+    pub filtered: Vec<usize>,
 }
 
 impl ModelPicker {
@@ -269,6 +276,142 @@ pub struct HistoryPanel {
     pub now_ms: i64,
     /// 窗口状态（高亮/锚点/显式视口）。
     pub window: PanelWindow,
+    /// 过滤词（输入框全文快照）；空表示不过滤。
+    pub filter: String,
+    /// 过滤后的条目索引视图（按分数排序）；空过滤时为恒等序列。
+    ///
+    /// `entries` 全量保留，因此退格删字符能恢复原列表。
+    pub filtered: Vec<usize>,
+}
+
+impl HistoryPanel {
+    /// 按 `query` 重算 `filtered`：匹配**标题或会话 id**，按分数降序、同分保持原序。
+    ///
+    /// 空查询（或全空白）恢复恒等视图（全部条目、原顺序）。时间列不参与匹配——
+    /// 它在变，参与只会让人困惑。
+    pub fn refilter(&mut self, query: &str) {
+        self.filter = query.to_string();
+        if query.trim().is_empty() {
+            self.filtered = (0..self.entries.len()).collect();
+            self.clamp_window();
+            return;
+        }
+        let query = query.trim().to_lowercase();
+        let mut scored: Vec<(u32, usize)> = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter_map(|(index, entry)| {
+                best_score(&[&entry.title, &entry.session_id], &query).map(|score| (score, index))
+            })
+            .collect();
+        scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+        self.filtered = scored.into_iter().map(|(_, index)| index).collect();
+        self.clamp_window();
+    }
+
+    /// 过滤后可见的条目（按视图顺序）；供渲染与命中共用。
+    pub fn visible(&self) -> Vec<&HistoryEntry> {
+        self.filtered
+            .iter()
+            .filter_map(|index| self.entries.get(*index))
+            .collect()
+    }
+
+    /// 高亮项在 `entries` 中的真实索引（供采纳/复制/编辑读取数据）。
+    pub fn active_entry(&self) -> Option<&HistoryEntry> {
+        self.filtered
+            .get(self.window.active)
+            .and_then(|index| self.entries.get(*index))
+    }
+
+    /// 高亮项对应的 `entries` 索引（供 `current` 标记换算）。
+    pub fn active_entry_index(&self) -> Option<usize> {
+        self.filtered.get(self.window.active).copied()
+    }
+
+    /// 可见项数变化后把窗口三索引钳进新范围。
+    pub fn clamp_window(&mut self) {
+        self.window.clamp(self.filtered.len());
+    }
+
+    /// 过滤为空（有过滤词但无命中）——与「真的没有会话」不同，渲染要区分提示。
+    pub fn is_filter_empty(&self) -> bool {
+        !self.filter.trim().is_empty() && self.filtered.is_empty()
+    }
+}
+
+impl ModelPicker {
+    /// 按 `query` 重算 `filtered`：只在**第一级**（模型列表）生效，匹配
+    /// **模型名或 provider 名**。
+    ///
+    /// 第二级（思考等级 variants）**不支持过滤**：候选通常只有 `low`/`high`/`max`
+    /// 两三档，搜索没有意义；且第一级带来的过滤词（如 `gpt`）对等级名必然无命中，
+    /// 只会制造 `no matches`。因此 `Variants` 阶段恒为全量视图，`filter` 也保持空。
+    pub fn refilter(&mut self, query: &str) {
+        if matches!(self.stage, ModelPickerStage::Variants { .. }) {
+            self.filter.clear();
+            self.filtered = (0..self.stage_len()).collect();
+            self.clamp_window();
+            return;
+        }
+        self.filter = query.to_string();
+        if query.trim().is_empty() {
+            self.filtered = (0..self.stage_len()).collect();
+            self.clamp_window();
+            return;
+        }
+        let query = query.trim().to_lowercase();
+        let mut scored: Vec<(u32, usize)> = self
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(index, candidate)| {
+                best_score(&[&candidate.model_name, &candidate.provider_name], &query)
+                    .map(|score| (score, index))
+            })
+            .collect();
+        scored.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+        self.filtered = scored.into_iter().map(|(_, index)| index).collect();
+        self.clamp_window();
+    }
+
+    /// 当前阶段原始候选数（`Models` 为 candidates，`Variants` 为其 variants）。
+    pub fn stage_len(&self) -> usize {
+        match &self.stage {
+            ModelPickerStage::Models => self.candidates.len(),
+            ModelPickerStage::Variants { variants, .. } => variants.len(),
+        }
+    }
+
+    /// 高亮项在当前阶段的原始索引（供采纳读取数据）。
+    pub fn active_stage_index(&self) -> Option<usize> {
+        self.filtered.get(self.window.active).copied()
+    }
+
+    /// 高亮项（第一级）候选。
+    pub fn active_candidate(&self) -> Option<&ModelCandidate> {
+        self.active_stage_index()
+            .and_then(|index| self.candidates.get(index))
+    }
+
+    /// 可见项数变化后把窗口三索引钳进新范围。
+    pub fn clamp_window(&mut self) {
+        self.window.clamp(self.filtered.len());
+    }
+
+    /// 过滤为空（有过滤词但无命中）。
+    pub fn is_filter_empty(&self) -> bool {
+        !self.filter.trim().is_empty() && self.filtered.is_empty()
+    }
+}
+
+/// 多个候选字段取最高分（任一命中即保留）。
+fn best_score(targets: &[&str], query: &str) -> Option<u32> {
+    targets
+        .iter()
+        .filter_map(|target| command_score(&target.to_lowercase(), query))
+        .max()
 }
 
 /// `/` 命令面板（互斥浮层；同一时刻至多一个视图）。
@@ -316,15 +459,12 @@ impl SlashPanel {
         scored.into_iter().map(|(_, _, command)| command).collect()
     }
 
-    /// 当前视图的候选数量。
+    /// 当前视图的候选数量（过滤后可见项数；渲染与导航共用同一口径）。
     pub fn item_count(&self) -> usize {
         match self {
             Self::Commands { items, .. } => items.len(),
-            Self::Model(picker) => match &picker.stage {
-                ModelPickerStage::Models => picker.candidates.len(),
-                ModelPickerStage::Variants { variants, .. } => variants.len(),
-            },
-            Self::History(panel) => panel.entries.len(),
+            Self::Model(picker) => picker.filtered.len(),
+            Self::History(panel) => panel.filtered.len(),
         }
     }
 
@@ -338,14 +478,23 @@ impl SlashPanel {
     }
 
     /// 当前视图"已生效项"的索引（行首 `❯` 标记与底色）；命令候选面板没有该概念。
+    ///
+    /// 返回的是**视图位置**（过滤后），由真实索引换算而来：过滤把已生效项过滤掉时
+    /// 自然返回 None（不画标记），不会把标记错贴到别的行上。
     pub fn current_index(&self) -> Option<usize> {
         match self {
             Self::Commands { .. } => None,
-            Self::Model(picker) => match &picker.stage {
-                ModelPickerStage::Models => picker.current,
-                ModelPickerStage::Variants { .. } => picker.current_variant,
-            },
-            Self::History(panel) => panel.current,
+            Self::Model(picker) => {
+                let real = match &picker.stage {
+                    ModelPickerStage::Models => picker.current,
+                    ModelPickerStage::Variants { .. } => picker.current_variant,
+                }?;
+                picker.filtered.iter().position(|index| *index == real)
+            }
+            Self::History(panel) => {
+                let real = panel.current?;
+                panel.filtered.iter().position(|index| *index == real)
+            }
         }
     }
 
@@ -404,7 +553,9 @@ impl SlashPanel {
 /// 命令名模糊匹配打分（对齐 `@` 提及的层次：精确 > 前缀 > 子串 > 子序列）。
 ///
 /// 返回 None 表示不匹配；分数越高越靠前。空查询给基础分（保持固定顺序）。
-fn command_score(name: &str, query: &str) -> Option<u32> {
+///
+/// 二级面板（`/resume`、`/model`）的过滤复用同一套打分，只把 `name` 换成条目文本。
+pub(crate) fn command_score(name: &str, query: &str) -> Option<u32> {
     if query.is_empty() {
         return Some(100);
     }

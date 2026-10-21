@@ -629,6 +629,17 @@ pub fn chat_provider() -> Style {
     muted()
 }
 
+/// 状态行思考等级（variant）：**加粗黄字**，对齐 opencode 的
+/// `theme.text.feedback.warning.base` + `BOLD`。
+///
+/// 用终端原生 `Color::Yellow` 而非 RGB：本项目配色层只有 16 色语义 token，
+/// 单独塞一个 RGB 琥珀会在不同终端主题下失控。
+pub fn chat_variant() -> Style {
+    Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// 输入框上方临时提示的颜色：错误红 / 默认黄（用户指定）。
 pub fn chat_input_hint(level: crate::app::state::InputHintLevel) -> Style {
     use crate::app::state::InputHintLevel;

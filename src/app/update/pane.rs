@@ -202,32 +202,56 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                             super::super::state::ModelPickerStage::Variants { .. }
                         ) =>
                     {
+                        // 第二级退回第一级：不清空输入框（它在「选中模型」时已被清空）。
+                        // 按输入框现状重建过滤视图——清空后即全量，不留任何
+                        // 用户看不见也清不掉的隐藏过滤状态。
+                        let query = lx.input.clone();
                         if let Some(panel) = lx.slash.as_mut()
                             && let super::super::state::SlashPanel::Model(picker) = panel
                         {
+                            let active = picker.window.active;
                             picker.stage = super::super::state::ModelPickerStage::Models;
-                            picker.window =
-                                super::super::state::PanelWindow::new(picker.window.active);
+                            // 先切回第一级，再按过滤词重算（`refilter` 只对 Models 生效）。
+                            picker.refilter(&query);
+                            let len = picker.filtered.len();
+                            picker.window = super::super::state::PanelWindow::new(if len == 0 {
+                                0
+                            } else {
+                                active.min(len - 1)
+                            });
                         }
                     }
-                    _ => lx.slash = None,
+                    // 真正关闭二级面板（`/model` 第一级、`/resume`、命令候选）：整框清空。
+                    // 命令候选面板（`/`）不清：它的过滤词就是命令本身，由
+                    // `accept_slash_command` 按行删除，`Esc` 关闭时草稿应原样保留。
+                    super::super::state::SlashPanel::Commands { .. } => lx.slash = None,
+                    _ => {
+                        lx.slash = None;
+                        lx.clear();
+                    }
                 }
                 return;
             }
-            // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板吞掉。
+            // 命令候选面板：编辑键放行（继续输入过滤 / 删除 `/` 关闭）；二级面板同样放行，
+            // 但过滤词改为输入框全文（见下方 `refresh_slash_filter`）。
             _ if editable => {}
-            // `/resume` 历史面板：`Ctrl/Cmd+C` 复制高亮行的会话 id（不清空输入框）。
-            LxInput::Clear if matches!(slash, super::super::state::SlashPanel::History(_)) => {
-                super::resume_edit::copy_resume_session_id(state, pane_id);
-                return;
-            }
             // `/resume` 历史面板：`Shift+Enter` 打开该会话的编辑模态（改名/删除）。
+            // 必须排在「编辑键放行」之前：`EnterFolder` 也出现在 `edits_text` 里，
+            // 放行会让它落进下方编辑分支而永远打不开模态。
             LxInput::EnterFolder
                 if matches!(slash, super::super::state::SlashPanel::History(_)) =>
             {
                 super::resume_edit::open_resume_session_edit(state, pane_id);
                 return;
             }
+            // `/resume` 历史面板：`Ctrl/Cmd+C` 复制高亮行的会话 id（不清空输入框）。
+            LxInput::Clear if matches!(slash, super::super::state::SlashPanel::History(_)) => {
+                super::resume_edit::copy_resume_session_id(state, pane_id);
+                return;
+            }
+            // `/model`、`/resume` 二级面板：其余编辑键放行，编辑后重算过滤
+            // （`^C` 与 `⇧↵` 已在上方各自接管）。
+            command if edits_text(command) && command != LxInput::Clear => {}
             _ => return,
         }
         if command == LxInput::Enter || command == LxInput::Tab {
@@ -406,6 +430,8 @@ fn edits_text(command: LxInput) -> bool {
 
 /// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
 fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+    // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
+    refresh_slash_filter(state, pane);
     let query = state.pane_anywhere(pane).and_then(|target| {
         super::super::state::lx::slash::slash_trigger(&target.lx.input, target.lx.cursor)
     });
@@ -443,6 +469,23 @@ fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
             items: matching,
             window,
         });
+    }
+}
+
+/// 按输入框全文重算二级面板（`/model`、`/resume`）的过滤视图。
+///
+/// 只在相应面板打开时生效；`CommandPanelView` 候选面板由 `refresh_slash_panel`
+/// 自己按行首 `/...` 过滤，不走这里。过滤词是**输入框全文**（含其它行草稿），
+/// 与用户在编辑区看到的内容一致，不做任何暂存/恢复。
+fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return;
+    };
+    let query = target.lx.input.clone();
+    match target.lx.slash.as_mut() {
+        Some(super::super::state::SlashPanel::History(panel)) => panel.refilter(&query),
+        Some(super::super::state::SlashPanel::Model(picker)) => picker.refilter(&query),
+        _ => {}
     }
 }
 
