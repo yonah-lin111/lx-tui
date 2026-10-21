@@ -5,7 +5,6 @@ pub mod menu;
 mod page_menu;
 mod referenced;
 pub mod save_draft;
-mod ui_gallery;
 mod worktree;
 
 pub use dialog::*;
@@ -18,9 +17,6 @@ pub use referenced::{
     referenced_search_layout,
 };
 pub use save_draft::*;
-pub use ui_gallery::{
-    UiGalleryLayout, ui_gallery_layout, ui_gallery_max_scroll, ui_gallery_row_at, ui_gallery_shell,
-};
 pub use worktree::{
     WorktreeDialogButton, worktree_dialog_button_at, worktree_dialog_entry_at,
     worktree_dialog_max_rows, worktree_dialog_shell, worktree_dialog_visible_start,
@@ -39,7 +35,6 @@ use referenced::{
     render_referenced_input, render_referenced_menu, render_referenced_menu_footer,
     render_referenced_search, render_referenced_search_footer,
 };
-use ui_gallery::render_ui_gallery;
 use worktree::render_worktree_open;
 
 use ratatui::Frame;
@@ -99,10 +94,6 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
         }
         Overlay::ReferencedFolderDelete(delete) => {
             dialog::render_referenced_delete(frame, screen, delete);
-            None
-        }
-        Overlay::UiGallery(gallery) => {
-            render_ui_gallery(frame, screen, gallery);
             None
         }
     }

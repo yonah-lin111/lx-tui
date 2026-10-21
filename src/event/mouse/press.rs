@@ -173,11 +173,6 @@ pub(crate) fn handle_mouse_down_left(
         *dirty = true;
         return;
     }
-    if ui::ui_gallery_button_at(view, state, mouse.column, mouse.row) {
-        update::open_ui_gallery(state);
-        *dirty = true;
-        return;
-    }
     if let Some(target) =
         ui::collapse_button_at(view, state.agents_collapsed, mouse.column, mouse.row)
     {

@@ -70,7 +70,6 @@ pub fn render(frame: &mut Frame<'_>, state: &AppState, config: &Config) {
         } else {
             sidebar::render(frame, view.sidebar, state);
             controls::render_settings_button(frame, &view, state);
-            controls::render_ui_gallery_button(frame, &view, state);
         }
     }
     tab_bar::render(frame, &view, state);

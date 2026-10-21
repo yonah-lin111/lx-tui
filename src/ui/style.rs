@@ -167,53 +167,6 @@ pub fn agent_warn() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// Agent 步骤标题左侧图标：lx 品牌粉（Indexed 218）加粗高亮，让图标从标题里跳出。
-///
-/// 失败步骤例外——整行走 [`agent_fail`] 变红。
-pub fn agent_icon() -> Style {
-    Style::default()
-        .fg(Color::Indexed(218))
-        .add_modifier(Modifier::BOLD)
-}
-
-/// Agent 步骤标题的固定动词（`Ran` / `Read` / `Edited`…）：lx 品牌天蓝（Indexed 117）。
-///
-/// 与可变参数、正文区分，且避开边框青（[`accent`]）与品牌粉（[`agent_icon`]）。
-pub fn agent_verb() -> Style {
-    Style::default().fg(Color::Indexed(117))
-}
-
-/// Agent 标题里可变参数的统一样式：固定金黄（Indexed 220）加下划线。
-///
-/// 命令 / 文件 / 目录 / agent / 查询 / 数值等**全部**用这一固定色（不再按类型分色），
-/// 下划线提示“此处是每次调用都会变的值”。与图标（[`agent_icon`]）、动词
-/// （[`agent_verb`]）都区分得开，且避开边框青。
-///
-/// **只服务 `[UI]` 查看器的 `agent` 分组样例**（`ui/overlay/ui_gallery/agent.rs`）。
-/// 实时聊天历史的工具行不用它，改用 [`chat_tool_param`]：那边**刻意不加下划线**——
-/// 连续多个工具行时下划线会把整块历史划成一片横线，盖过翡翠绿结构色
-/// （见 [`chat_tool_param`] 与 `style::tests::agent_param_keeps_legacy_underline`）。
-/// 二者同色（同为 [`CHAT_GOLD`]）而修饰符不同，是**有意为之**，不要「顺手对齐」。
-pub fn agent_param() -> Style {
-    Style::default()
-        .fg(Color::Indexed(220))
-        .add_modifier(Modifier::UNDERLINED)
-}
-
-/// Agent 标题里 read 的**行范围**（`(lines 1–2)`）：固定浅灰、无下划线。
-///
-/// 只读元信息，刻意与可变参数（金黄 + 下划线）区分：颜色不同、也不加下划线。
-pub fn agent_range() -> Style {
-    Style::default().fg(Color::Indexed(245))
-}
-
-/// Agent 步骤子行的直角连接符（`└─`）：品牌天蓝压暗，作结构引导而非内容。
-pub fn agent_connector() -> Style {
-    Style::default()
-        .fg(Color::Indexed(117))
-        .add_modifier(Modifier::DIM)
-}
-
 /// Agent 步骤子细节/输出：次要信息（dim 输出）。
 pub fn agent_step_detail() -> Style {
     muted()
@@ -227,23 +180,6 @@ pub fn agent_added() -> Style {
 /// diff 删除行计数与前缀：Red。
 pub fn agent_removed() -> Style {
     Style::default().fg(Color::Red)
-}
-
-/// token 页脚整行（lx-agent 的 `IN · OUT · CACHE`）：次要信息，不抢工具主体注意力。
-pub fn agent_tokens() -> Style {
-    muted()
-}
-
-/// 上下文占用 pill 的状态点：占用 ≥ 90% 红、≥ 75% 黄、否则绿（对齐 lx-agent）。
-pub fn agent_context_dot(percent: u8) -> Style {
-    let color = if percent >= 90 {
-        Color::Red
-    } else if percent >= 75 {
-        Color::Yellow
-    } else {
-        Color::Green
-    };
-    Style::default().fg(color).add_modifier(Modifier::BOLD)
 }
 
 /// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
@@ -263,7 +199,7 @@ pub fn directory() -> Style {
 
 // ===== 阅读渲染高亮（`ui::markdown_render` 专用）：GitHub Dark 官方色板 =====
 //
-// 只服务 lx 历史正文与 `[UI]` gallery 的 markdown **阅读渲染**。输入框的
+// 只服务 lx 历史正文的 markdown **阅读渲染**。输入框的
 // markdown **编辑高亮**是另一套独立色板（见下方 `markdown_*`），两者不得复用：
 // 阅读侧要的是 GitHub 观感，编辑侧要的是打字时的语义分色。
 //
@@ -738,15 +674,14 @@ pub fn chat_loading_scan(phase: usize) -> Style {
 // 备选（同样达标，偏好更亮可换）：`Indexed 49` `#00ffaf`（对深底亮度比 14.3 vs 10.0）。
 //
 // 语义：**热 = 进行中（方块加粗 + 呼吸）、冷 = 已完成（方块不加粗、静止）**；
-// 失败红、中断黄、取消灰沿用既有状态色（语义优先于品牌色）。`[UI]` 查看器的
-// agent 样例仍用上面的 `agent_*` 系列，不受这里影响。
+// 失败红、中断黄、取消灰沿用既有状态色（语义优先于品牌色）。
 
 /// 工具结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
 const CHAT_STEP_GREEN: u8 = 42;
 /// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——与工具绿、参数金、正文默认色的
 /// 色差分别为 68 / 55 / 24（CIEDE2000），一眼可分。
 const CHAT_STEP_MAGENTA: u8 = 218;
-/// 可变参数色：金黄（与 `[UI]` 查看器的 `agent_param` 同色；工具行不加下划线）。
+/// 可变参数色：金黄 Indexed 220（工具行刻意不加下划线，见 [`chat_tool_param`]）。
 const CHAT_GOLD: u8 = 220;
 /// 工具**运行中**色：橙黄 `Indexed 208`（`#ff8700`）。
 ///

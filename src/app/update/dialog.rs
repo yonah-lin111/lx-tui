@@ -18,7 +18,6 @@ use super::prompt::{
     confirm_delete_page, delete_prompt_folder, delete_prompt_item,
 };
 use super::trust::apply_trust_decision;
-use super::ui_gallery::apply_ui_gallery_key;
 use super::workspace::{
     close_pane, close_tab, close_workspace, confirm_switch_cwd, confirm_sync_workspace_cwd,
     create_workspace_with_cwd, parse_workspace_path,
@@ -129,11 +128,6 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         }
         return None;
     }
-    // UI 组件查看弹窗：上下移动、左右折叠展开、回车切换、Esc 关闭。
-    if matches!(state.overlay, Some(Overlay::UiGallery(_))) {
-        apply_ui_gallery_key(state, key);
-        return None;
-    }
     // 信任浮层：Enter 信任并续作，Esc 拒绝并回退；其余按键吞掉。
     if matches!(state.overlay, Some(Overlay::TrustWorkspace(_))) {
         match key {
@@ -201,8 +195,7 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderInput
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
-                | OverlayKind::ResumeSessionEdit
-                | OverlayKind::UiGallery,
+                | OverlayKind::ResumeSessionEdit,
             )
             | None => None,
         },

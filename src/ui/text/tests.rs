@@ -365,17 +365,17 @@ fn workspace_path_label_single_segment_and_root() {
 }
 
 #[test]
-fn tool_verb_constants_are_shared_with_agent_gallery() {
+fn tool_verb_and_icon_constants_are_single_width_and_non_empty() {
     use super::agent as a;
 
-    // gallery 样例的图标各有一个单宽符号（真实工具行自 G11 起改用统一步骤方块，
-    // 不再按工具区分类型图标）。
+    // 工具图标各有一个单宽符号（真实工具行自 G11 起改用统一步骤方块，
+    // 不再按工具区分类型图标；图标仍供步骤分类与测试基线使用）。
     for icon in [a::ICON_READ, a::ICON_SEARCH, a::ICON_EDIT, a::ICON_WRITE] {
         assert!(!icon.is_empty());
         assert_eq!(icon.width(), 1, "工具图标必须严格 1 列宽: {icon:?}");
     }
 
-    // 动词常量非空且两处同源（`read` 与 gallery 的 `Read` 完全同形）。
+    // 动词常量非空，且 `read` 只写一份（工具行复用同一常量）。
     assert_eq!(a::VERB_TOOL_READ, a::VERB_READ);
     for verb in [
         a::VERB_TOOL_READ,
@@ -392,7 +392,7 @@ fn tool_verb_constants_are_shared_with_agent_gallery() {
 fn tool_count_labels_use_shared_prefixes() {
     use super::agent as a;
 
-    // `+N` / `-N` 与 gallery 样例的 `+12` / `-4` 前缀完全一致（不各写一份）。
+    // `+N` / `-N` 前缀与常量同源（不各写一份）。
     assert_eq!(a::added_label(12), a::EDIT_DIFF_ADD);
     assert_eq!(a::added_label(18), a::WRITE_ADD);
     assert_eq!(a::removed_label(4), a::EDIT_DIFF_DEL);
@@ -436,7 +436,6 @@ fn shortcut_symbols_are_single_width_non_pua_and_used_consistently() {
         ("referenced menu", REFERENCED_MENU_FOOTER),
         ("referenced search", REFERENCED_SEARCH_FOOTER),
         ("trust console", TRUST_CONSOLE_FOOTER),
-        ("ui gallery", UI_GALLERY_HINT),
     ] {
         let lower = hint.to_lowercase();
         for forbidden in ["shift", "ctrl", "cmd", "backspace"] {

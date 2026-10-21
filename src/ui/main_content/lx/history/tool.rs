@@ -39,7 +39,6 @@ use super::super::Grid;
 use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
 mod command;
-pub(crate) mod gallery;
 mod plan;
 
 /// 树形前缀列数（`  │  ` 与 `  └─ ` 等宽，都是 5 列）；命令/交互/计划卡片共用。
@@ -96,6 +95,10 @@ const TEXT_SAMPLE_CHARS: usize = 512;
 ///
 /// `animating` 是"呼吸相位是否还在推进"（调用方传 `lx.chat.status.streaming`）：
 /// 动画停止时方块恒实心，避免定格成 `□`（见 [`crate::ui::main_content::lx::history::StepMark::glyph`]）。
+///
+/// 生产渲染走 [`draw_animated`]（显式传动画状态）；本函数只在测试里当便捷入口，
+/// 因此门控在 `cfg(test)`，避免未使用代码进二进制。
+#[cfg(test)]
 pub(super) fn draw(
     grid: &mut Grid,
     rect: Rect,

@@ -7,7 +7,6 @@ use crate::layout::PaneId;
 use super::markdown::TemplateCounts;
 use super::prompt::{PromptEditing, PromptPageId};
 use super::trust::TrustWorkspace;
-use super::ui_gallery::UiGallery;
 
 /// 浮层种类：按键路由与渲染按种类分派。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,7 +32,6 @@ pub enum OverlayKind {
     ReferencedFolderDelete,
     /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
     ResumeSessionEdit,
-    UiGallery,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -56,7 +54,6 @@ pub enum Overlay {
     ReferencedFolderDelete(ReferencedFolderDelete),
     /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
     ResumeSessionEdit(ResumeSessionEdit),
-    UiGallery(UiGallery),
 }
 
 impl Overlay {
@@ -79,7 +76,6 @@ impl Overlay {
             Self::ReferencedFolderSearch(_) => OverlayKind::ReferencedFolderSearch,
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
-            Self::UiGallery(_) => OverlayKind::UiGallery,
         }
     }
 }

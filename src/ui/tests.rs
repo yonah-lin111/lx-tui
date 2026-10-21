@@ -3071,75 +3071,120 @@ fn settings_button_renders_on_sidebar_bottom_and_hits() {
     assert!(settings_button(&unavailable, &state).is_none());
 }
 
+/// `[SET]` 的显示宽度阈值在移除 `[UI]` 后**保持不变**。
+///
+/// `[UI]` 当初是挂在 `[SET]` 右侧的邻居，它的最小宽度常量是从
+/// `SETTINGS_BUTTON_MIN_WIDTH` 推算出来的；反过来说，删除 `[UI]` 时若顺手把
+/// 这个基础常量按「不需要再塞邻居」重新计算，`[SET]` 的显示门槛就会悄悄放宽，
+/// 用户在某些侧栏宽度下会看到本不该出现的 `[SET]`。
+///
+/// 这里钉死两侧边界：宽度 `16`（= 5 列文案 + 1 左边距 + 3 右边距 + 1 + 2...
+/// 即常量当前取值）必须仍显示，再窄 1 列必须隐藏。阈值真的变了这条就失败。
 #[test]
-fn ui_gallery_button_sits_right_of_settings_and_renders() {
+fn settings_button_width_threshold_is_unchanged() {
+    let mut state = AppState::demo();
+    state.sidebar_collapsed = false;
+    state.settings_available = true;
+    let mut view = view_for(&state);
+    let label_cols = text::SETTINGS_LABEL.chars().count() as u16;
+    // 常量 `SETTINGS_BUTTON_MIN_WIDTH = 宽度 + 3 + 1 + 2`；逐列试出真实门槛。
+    let mut threshold = None;
+    for width in label_cols..=40 {
+        view.sidebar = Rect::new(0, 0, width, 24);
+        if settings_button(&view, &state).is_some() {
+            threshold = Some(width);
+            break;
+        }
+    }
+    let threshold = threshold.expect("宽侧栏必须显示 [SET]");
+    assert_eq!(
+        threshold,
+        label_cols + 3 + 1 + 2,
+        "门槛 = 文案宽度 + 右边距 3 + 折叠按钮 1 + 安全余量 2"
+    );
+    view.sidebar = Rect::new(0, 0, threshold, 24);
+    assert!(
+        settings_button(&view, &state).is_some(),
+        "恰好达标时必须显示"
+    );
+    view.sidebar = Rect::new(0, 0, threshold - 1, 24);
+    assert!(
+        settings_button(&view, &state).is_none(),
+        "差 1 列必须隐藏（防止门槛被放宽）"
+    );
+}
+
+/// 侧栏底边框 `[SET]` 右侧只剩边框线，不留 `[UI]` 残影或空洞。
+#[test]
+fn sidebar_bottom_border_has_no_button_after_settings() {
     let mut state = AppState::demo();
     state.sidebar_collapsed = false;
     state.settings_available = true;
     let view = view_for(&state);
-    let settings = settings_button(&view, &state).expect("settings fits");
-    let gallery = ui_gallery_button(&view, &state).expect("gallery button fits");
-    assert_eq!(gallery.y, settings.y);
-    assert_eq!(gallery.x, settings.right() + 1, "紧邻右侧隔 1 列");
-    assert_eq!(gallery.width, text::UI_GALLERY_LABEL.len() as u16);
-    assert!(ui_gallery_button_at(&view, &state, gallery.x, gallery.y));
-    assert!(!ui_gallery_button_at(
-        &view,
-        &state,
-        gallery.x,
-        gallery.y.saturating_sub(1)
-    ));
-
+    let button = settings_button(&view, &state).expect("settings fits");
     let lines = render_lines(&state);
-    let bottom: String = lines[gallery.y as usize]
+    let bottom: String = lines[button.y as usize]
         .chars()
         .skip(usize::from(view.sidebar.x))
         .take(usize::from(view.sidebar.width))
         .collect();
-    assert!(bottom.contains(text::UI_GALLERY_LABEL), "{bottom}");
-    assert!(bottom.contains(text::SETTINGS_LABEL), "{bottom}");
-}
-
-#[test]
-fn ui_gallery_button_independent_of_settings_service() {
-    let mut state = AppState::demo();
-    state.sidebar_collapsed = false;
-    state.settings_available = false;
-    let view = view_for(&state);
-    // [SET] 因服务不可用隐藏，但 [UI] 仍在其固定槽位显示。
-    assert!(settings_button(&view, &state).is_none());
-    let gallery = ui_gallery_button(&view, &state).expect("gallery independent of service");
-    assert_eq!(
-        gallery.x,
-        view.sidebar.x + 1 + text::SETTINGS_LABEL.len() as u16 + 1
+    // `[SET]`（左边距 1 列）之后到右端折叠按钮之前必须全是底边线 `─`。
+    let after_settings: Vec<char> = bottom
+        .chars()
+        .skip(1 + text::SETTINGS_LABEL.chars().count())
+        .collect();
+    let tail: String = after_settings
+        .iter()
+        .rev()
+        .skip(text::SIDEBAR_COLLAPSE_LABEL.chars().count() + 1) // 右端 `[◀]` + 角 `╯`
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    assert!(
+        !tail.is_empty(),
+        "`[SET]` 与折叠按钮之间应有底边线: {bottom}"
     );
+    assert!(
+        tail.chars().all(|c| c == '─' || c == '━'),
+        "`[SET]` 右侧应只剩边框线（旧 [UI] 位置不得留残影）: {bottom}"
+    );
+    assert!(!bottom.contains("[UI]"), "不应再出现 [UI]: {bottom}");
 }
 
+/// tooltip 目标表里不存在指向已删 `[UI]` 按钮的条目。
+///
+/// 编译期已保证枚举变体被删除，这条运行期断言防的是「有人把目标加回来但忘了接
+/// 真实几何」——`targets()` 里任何条目都必须落在屏幕内的真实控件上。
 #[test]
-fn ui_gallery_button_hidden_when_sidebar_collapsed() {
+fn no_tooltip_target_points_at_the_removed_ui_button() {
     let mut state = AppState::demo();
-    state.settings_available = true;
-    state.sidebar_collapsed = true;
-    let view = view_for(&state);
-    assert!(ui_gallery_button(&view, &state).is_none());
-}
-
-#[test]
-fn ui_gallery_button_hidden_when_sidebar_too_narrow() {
-    let mut state = AppState::demo();
-    state.settings_available = true;
     state.sidebar_collapsed = false;
-    // 直接构造窄侧栏：展开宽度 13，恰好容纳 [SET]（含余量）但放不下 [UI]。
-    let view = layout::ViewLayout {
-        sidebar: Rect::new(0, 0, 13, 24),
-        tab_bar: Rect::new(13, 0, 87, 1),
-        panes: Rect::new(13, 1, 87, 22),
-        prompt: Rect::new(60, 1, 40, 22),
-        prompt_left: false,
-    };
-    // 侧栏过窄时优先保留 [SET]、隐藏 [UI]。
-    assert!(settings_button(&view, &state).is_some());
-    assert!(ui_gallery_button(&view, &state).is_none());
+    state.settings_available = true;
+    let view = view_for(&state);
+    let rects = crate::layout::pane_rects(
+        &state.active_tab().layout,
+        view.panes,
+        Config::default().min_pane_width,
+        Config::default().min_pane_height,
+    );
+    let screen = Rect::new(0, 0, 100, 24);
+    // `[SET]` 右侧若还有按钮，它必然在底边框这一行上。右端折叠按钮是既有控件
+    // （在 `[SET]` 之后很远），因此只扫到折叠按钮左缘为止。
+    let settings = settings_button(&view, &state).expect("settings fits");
+    let collapse = crate::ui::collapse_buttons(&view, state.agents_collapsed)
+        .into_iter()
+        .find(|button| button.target == CollapseTarget::Sidebar)
+        .expect("sidebar collapse button visible");
+    let mut column = settings.right();
+    while column < collapse.area.x {
+        assert_eq!(
+            crate::ui::tooltip::target_at(&view, &state, &rects, screen, column, settings.y),
+            None,
+            "侧栏底边框第 {column} 列不应有 tooltip 目标（[UI] 已移除）"
+        );
+        column += 1;
+    }
 }
 
 #[test]
