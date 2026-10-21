@@ -34,6 +34,11 @@ pub struct MdLine {
     /// 该行是否**代码块正文**（不含头部与分隔横线）；复制内容按此标记收集，
     /// 不再靠「以竖条起头」判断（代码块已去掉左侧竖条）。
     pub code_body: bool,
+    /// 该行是否代码块的**分隔横线**（上边框 / 头部下方 / 收尾）。
+    ///
+    /// 复制几何（`history/code_copy.rs`）按此标记跳过横线：头部下方现在也有一条线，
+    /// 若不跳过会被当成「第一个非正文行」而提前关闭收集，导致复制出空内容。
+    pub code_rule: bool,
 }
 
 impl MdLine {
@@ -45,6 +50,7 @@ impl MdLine {
             spans: vec![(value.into(), style)],
             code_copy: None,
             code_body: false,
+            code_rule: false,
         }
     }
 
@@ -56,6 +62,7 @@ impl MdLine {
             spans,
             code_copy: None,
             code_body: false,
+            code_rule: false,
         }
     }
 
@@ -67,6 +74,7 @@ impl MdLine {
             spans,
             code_copy: None,
             code_body: false,
+            code_rule: false,
         }
     }
 
@@ -299,12 +307,12 @@ fn indented_code(
     index
 }
 
-/// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`；横线在它**上方**（见
-/// [`render_code`]），把头部与正文一起框进块内。
+/// 代码块头部：`language: js` + 右侧右对齐复制按钮 `[❐]`；横线在它**上方与下方**（见
+/// [`render_code`]），把头部与正文切开。
 ///
-/// **没有左侧竖条**（用户要求去掉）：整块靠「横线 + 头部 + 正文 + 收尾横线」框住，
-/// 比逐行竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时不写
-/// `language:`（不假装有语言），只留按钮。
+/// **没有左侧竖条**（用户要求去掉）：整块靠「横线 + 头部 + 横线 + 正文 + 收尾横线」框住，
+/// 比逐行竖条更轻，也不会在窄宽度下把代码再挤掉 2 列。语言为空（``` 无语言）时回落
+/// [`text::LX_CHAT_CODE_LANG_DEFAULT`]（`text`），让头部始终读得出「这是什么块」。
 ///
 /// `language:` 前缀与语言名都上实体紫，靠**字重**分层级：前缀不加粗（标签）、
 /// 语言名加粗（取值，[`style::md_read_code_lang_name`]）。
@@ -315,13 +323,14 @@ fn indented_code(
 /// 返回头部行本身 + 按钮的**行内起始列**（供命中换算）。
 fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
     let mut spans: Vec<(String, Style)> = Vec::new();
-    if let Some(lang) = lang {
-        spans.push((
-            text::LX_CHAT_CODE_LANG_PREFIX.to_string(),
-            style::md_read_code_lang(),
-        ));
-        spans.push((lang.to_string(), style::md_read_code_lang_name()));
-    }
+    // 展示标签与高亮语言分开：空语言只影响**显示**，高亮仍按「无语言」处理
+    // （把 `text` 当语言会落到 CLike 集，给纯文本假高亮）。
+    let label = lang.unwrap_or(text::LX_CHAT_CODE_LANG_DEFAULT);
+    spans.push((
+        text::LX_CHAT_CODE_LANG_PREFIX.to_string(),
+        style::md_read_code_lang(),
+    ));
+    spans.push((label.to_string(), style::md_read_code_lang_name()));
     let used = MdLine::spans(0, spans.clone()).width();
     let button = text::TEMPLATE_BUTTON_COPY;
     // 右对齐：把按钮推到可用区右缘；宽度不够时不留填充（写 buffer 时仍按列裁剪）。
@@ -339,21 +348,25 @@ fn code_header_line(lang: Option<&str>, width: Option<usize>) -> (MdLine, u16) {
     (line, column)
 }
 
-/// 代码块的分隔横线（**头部上方**与正文末尾各一条，框住整块）。
+/// 代码块的分隔横线（**头部上方**、**头部下方**与正文末尾各一条，框住整块并切开工具条）。
 fn code_rule_line(width: Option<usize>) -> MdLine {
     let rule_width = width.unwrap_or(40).max(1);
-    MdLine::plain(0, RULE.repeat(rule_width), style::md_read_rule())
+    let mut line = MdLine::plain(0, RULE.repeat(rule_width), style::md_read_rule());
+    // 打标记：复制几何要跳过横线（尤其头部下方那条，否则会提前结束正文收集）。
+    line.code_rule = true;
+    line
 }
 
-/// 渲染代码块：**分隔横线** → 头部（`language: xxx` + 复制按钮）→ 正文 → **收尾横线**；
-/// 代码正文按语言做轻量语法高亮，**不带左侧竖条**。
+/// 渲染代码块：**分隔横线** → 头部（`language: xxx` + 复制按钮）→ **分隔横线** → 正文 →
+/// **收尾横线**；代码正文按语言做轻量语法高亮，**不带左侧竖条**。
 ///
-/// 上下各一条横线把整块框住：横线在头部**上方**（不是头部与正文之间），这样
-/// `language:` 那行读作块首的标签行、而不是悬在线外的标题；没有左侧竖条后，
+/// 三条横线把整块框住，并把「工具条」（语言标签 + 复制按钮）与「代码」明确切开：
+/// 头部上方那条让 `language:` 读作块首标签行，头部下方那条把操作区与内容区分开，
 /// 收尾横线补齐正文结尾与后文之间的边界。
 fn render_code(body: &[&str], lang: Option<&str>, width: Option<usize>, lines: &mut Vec<MdLine>) {
     lines.push(code_rule_line(width));
     lines.push(code_header_line(lang, width).0);
+    lines.push(code_rule_line(width));
     for line in body {
         let mut rendered = MdLine::spans(0, highlight::highlight_line(lang, line));
         rendered.code_body = true;
@@ -669,6 +682,7 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
         // 代码块里的空行也是正文（复制时要保留），不能丢标记。
         let mut empty = MdLine::spans(line.indent, Vec::new());
         empty.code_body = line.code_body;
+        empty.code_rule = line.code_rule;
         out.push(empty);
         return;
     }
@@ -724,6 +738,7 @@ fn wrap_md_line(line: &MdLine, width: usize, out: &mut Vec<MdLine>) {
             wrapped.code_copy = line.code_copy;
         }
         wrapped.code_body = line.code_body;
+        wrapped.code_rule = line.code_rule;
         out.push(wrapped);
         index = break_at;
         first = false;

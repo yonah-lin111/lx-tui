@@ -159,6 +159,125 @@ fn history_panel_without_bound_session_has_no_marker() {
     assert_eq!(panel.window.active, 0, "回退到首项");
 }
 
+/// `/resume` 面板内 `Ctrl/Cmd+C`：复制高亮行 session id（裸 id），且**不清空**输入框。
+#[test]
+fn clear_key_copies_highlighted_session_id_without_clearing_input() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    seed_history(&mut state, pane, "sess-a");
+    // 输入框里放一段草稿：面板内 ^C 不该把它清掉。
+    let draft = "帮我查下昨天那个 panic";
+    state.pane_mut_anywhere(pane).expect("pane").lx.input = draft.into();
+    // 高亮第 2 条（sess-b）。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Down);
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
+
+    let copied: Vec<String> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::CopyToClipboard(text) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(copied, vec!["sess-b".to_string()], "复制高亮行裸 id");
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, draft, "面板内 ^C 不清空输入框");
+    assert!(
+        matches!(lx.slash, Some(SlashPanel::History(_))),
+        "面板保持打开"
+    );
+}
+
+/// 空面板（无条目）时 `^C` 静默吞掉：无复制效应、不清空、不关面板。
+#[test]
+fn clear_key_on_empty_history_panel_is_swallowed() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    assert!(open_history(&mut state, pane));
+    // 不投递任何条目：面板只有空态占位行。
+    let draft = "keep me";
+    state.pane_mut_anywhere(pane).expect("pane").lx.input = draft.into();
+    state.effects.clear();
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
+
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CopyToClipboard(_))),
+        "空列表不产生复制效应"
+    );
+    let lx = &state.pane_anywhere(pane).expect("pane").lx;
+    assert_eq!(lx.input, draft, "不清空输入框");
+    assert!(
+        matches!(lx.slash, Some(SlashPanel::History(_))),
+        "面板保持打开"
+    );
+}
+
+/// 面板关闭时 `^C` 仍是原来的「清空输入框」语义。
+#[test]
+fn clear_key_still_clears_input_when_resume_panel_is_closed() {
+    use crate::app::actions::LxInput;
+
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    state.pane_mut_anywhere(pane).expect("pane").lx.input = "draft".into();
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
+
+    assert!(state.pane_anywhere(pane).expect("pane").lx.input.is_empty());
+}
+
+/// `^C` 在 `/model` 面板里仍被吞掉（不复制、不清空）。
+#[test]
+fn clear_key_is_swallowed_in_model_panel() {
+    use crate::app::actions::LxInput;
+    use crate::app::effects::Effect;
+
+    let mut state = ready_state("x");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .selection = Some(ModelSelection {
+        provider: "p".into(),
+        model: "m".into(),
+        variant: None,
+    });
+    assert!(open_model_picker(&mut state, pane));
+    let draft = "keep me";
+    state.pane_mut_anywhere(pane).expect("pane").lx.input = draft.into();
+    state.effects.clear();
+
+    crate::app::update::apply_lx_input(&mut state, LxInput::Clear);
+
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CopyToClipboard(_))),
+        "model 面板不复制"
+    );
+    assert_eq!(
+        state.pane_anywhere(pane).expect("pane").lx.input,
+        draft,
+        "model 面板内不清空"
+    );
+}
+
 #[test]
 fn shift_enter_opens_resume_session_edit_for_highlighted_row() {
     let mut state = ready_state("x");

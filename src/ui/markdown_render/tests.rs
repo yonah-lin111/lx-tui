@@ -646,30 +646,42 @@ fn language_line_is_colored_with_prefix_and_name() {
     );
 }
 
-/// 代码块**上下**各有一条分隔横线，把头部与正文一起框住。
+/// 代码块**三条**横线：头部上方、头部下方（切开工具条与正文）、正文末尾。
 #[test]
 fn code_block_has_rule_above_header_and_below_body() {
     let lines = render("```js\nconst a = 1;\nconst b = 2;\n```");
-    // 横线 → 头部 → 正文 ×2 → 横线。
-    assert_eq!(lines.len(), 5, "两横线 + 头部 + 两行正文：{lines:?}");
+    // 横线 → 头部 → 横线 → 正文 ×2 → 横线。
+    assert_eq!(lines.len(), 6, "三横线 + 头部 + 两行正文：{lines:?}");
     let rule = |line: &MdLine| line.text().chars().all(|ch| ch == '─');
     assert!(
         rule(&lines[0]),
         "第一行是横线（在头部上方）：{:?}",
         lines[0].text()
     );
+    assert!(lines[0].code_rule, "上横线打 code_rule 标记");
     assert!(
         lines[1].text().starts_with("language: js"),
         "横线之后才是 language 行：{:?}",
         lines[1].text()
     );
-    assert!(lines[2].code_body && lines[3].code_body, "中间是正文");
     assert!(
-        rule(&lines[4]),
-        "正文之后还有一条横线：{:?}",
-        lines[4].text()
+        rule(&lines[2]),
+        "头部下方还有一条横线（切开工具条与正文）：{:?}",
+        lines[2].text()
     );
-    assert!(!lines[4].code_body, "收尾横线不算代码正文");
+    assert!(lines[2].code_rule, "头部下方横线打 code_rule 标记");
+    assert!(lines[3].code_body && lines[4].code_body, "中间是正文");
+    assert!(
+        rule(&lines[5]),
+        "正文之后还有一条横线：{:?}",
+        lines[5].text()
+    );
+    assert!(!lines[5].code_body, "收尾横线不算代码正文");
+    // 三条横线都不算正文，但都带 code_rule 标记（复制几何据此跳过）。
+    for index in [0usize, 2, 5] {
+        assert!(lines[index].code_rule, "第 {index} 行是分隔横线");
+        assert!(!lines[index].code_body, "第 {index} 行不是正文");
+    }
 }
 
 /// 收尾横线不进入复制内容。
@@ -681,19 +693,42 @@ fn closing_rule_is_not_part_of_code_body() {
         .filter(|line| line.code_body)
         .map(MdLine::text)
         .collect();
-    assert_eq!(copied, vec!["const a = 1;"], "只收正文，不含两条横线");
+    assert_eq!(copied, vec!["const a = 1;"], "只收正文，不含三条横线");
 }
 
+/// 无语言代码块头部回落 `language: text`（默认展示语言，便于识别块种类）。
 #[test]
-fn code_block_without_language_has_no_language_prefix() {
+fn code_block_without_language_falls_back_to_text_label() {
     let lines = render("```\nplain\n```");
     // 第一行是横线，第二行才是头部。
     let text = lines.get(1).expect("header").text();
     assert!(
-        !text.contains("language:"),
-        "无语言时不假装有语言: {text:?}"
+        text.starts_with("language: text"),
+        "无语言时默认显示 text: {text:?}"
     );
     assert!(text.contains("[❐]"), "仍提供复制按钮: {text:?}");
+}
+
+/// `text` 只是展示标签，不参与语法高亮：正文里的关键字不被染色。
+#[test]
+fn text_language_label_does_not_enable_syntax_highlighting() {
+    let lines = render("```\nif (x) return 1;\n```");
+    let body = lines.iter().find(|line| line.code_body).expect("code body");
+    // 全部段落都是默认样式（无一走 code_keyword/code_number 等语义色）。
+    let highlighted = body.spans.iter().filter(|(_, span_style)| {
+        *span_style == style::code_keyword()
+            || *span_style == style::code_string()
+            || *span_style == style::code_number()
+            || *span_style == style::code_comment()
+            || *span_style == style::code_type()
+    });
+    assert_eq!(
+        highlighted.count(),
+        0,
+        "text 块不做语法高亮（否则 `if`/`return` 会被当关键字染色）: {:?}",
+        body.spans
+    );
+    assert_eq!(body.text(), "if (x) return 1;", "正文原样保留");
 }
 
 #[test]
@@ -732,10 +767,31 @@ fn copy_button_without_language_still_right_aligned() {
         .expect("header");
     assert!(
         header.text().ends_with("[❐]"),
-        "无语言时只留按钮：{:?}",
+        "无语言时只剩标签 + 按钮：{:?}",
         header.text()
     );
-    assert!(!header.text().contains("language:"), "不假装有语言");
+    assert!(
+        header.text().starts_with("language: text"),
+        "无语言默认显示 text: {:?}",
+        header.text()
+    );
     let column = header.code_copy.expect("button column");
     assert_eq!(column.saturating_add(3), width, "仍右对齐");
+}
+
+/// 缩进代码块（4 空格、无语言）同样回落 `text`，全站「无语言」表现统一。
+#[test]
+fn indented_code_block_also_shows_text_label() {
+    let lines = render("    let x = 1;");
+    // 第一行是上横线，第二行才是头部。
+    let header = lines.get(1).expect("header");
+    assert!(
+        header.text().starts_with("language: text"),
+        "缩进块也显示 text: {:?}",
+        header.text()
+    );
+    assert!(
+        lines.iter().any(|line| line.code_body),
+        "缩进块正文仍标记为代码正文"
+    );
 }

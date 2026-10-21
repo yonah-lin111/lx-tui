@@ -782,6 +782,21 @@ fn lx_view_routes_editing_keys_and_swallows_others() {
     assert_eq!(ctrl('k'), Some(Routed::Lx(LxInput::DeleteToLineEnd)));
     assert_eq!(ctrl('w'), Some(Routed::Lx(LxInput::DeleteWordBackward)));
     assert_eq!(ctrl('c'), Some(Routed::Lx(LxInput::Clear)));
+    // Cmd+C（macOS）与 Ctrl+C 落到同一命令：是否复制还是清空由 update 层按面板决定。
+    let cmd = |ch| {
+        super::route(
+            KeyEvent::new(KeyCode::Char(ch), KeyModifiers::SUPER),
+            TermMode::empty(),
+            false,
+            None,
+            true,
+        )
+    };
+    assert_eq!(cmd('c'), Some(Routed::Lx(LxInput::Clear)));
+    assert_eq!(cmd('C'), Some(Routed::Lx(LxInput::Clear)));
+    // SUPER 分支既有的撤销/重做不受影响。
+    assert_eq!(cmd('z'), Some(Routed::Lx(LxInput::Undo)));
+    assert_eq!(cmd('y'), Some(Routed::Lx(LxInput::Redo)));
     assert_eq!(ctrl('z'), Some(Routed::Lx(LxInput::Undo)));
     assert_eq!(ctrl('y'), Some(Routed::Lx(LxInput::Redo)));
     let ctrl_left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);

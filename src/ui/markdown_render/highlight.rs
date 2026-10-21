@@ -9,7 +9,17 @@ use ratatui::style::Style;
 use crate::ui::style;
 
 /// 高亮一行代码为若干分色分段（保持原字符顺序，拼接即原行）。
+///
+/// `lang` 为 None 表示代码块**没有写语言**：此时不做任何分色，整行按代码正文色返回。
+/// 「无语言」等于「纯文本」，猜成 C 系关键字集会把 `if`/`return` 之类染成关键字色，
+/// 是不该有的假高亮；写了未知语言（如 `foo`）才回退通用 C 系集。
 pub(crate) fn highlight_line(lang: Option<&str>, line: &str) -> Vec<(String, Style)> {
+    if lang.is_none() {
+        if line.is_empty() {
+            return Vec::new();
+        }
+        return vec![(line.to_string(), style::md_read_code_block())];
+    }
     let keywords = keywords_for(lang);
     // `#` 注释只对脚本/配置语言成立；Rust/C 系的 `#` 是属性/预处理指令，不算注释。
     let hash_comment = matches!(lang_kind(lang), LangKind::Hash);
