@@ -4,16 +4,13 @@ use std::collections::HashMap;
 
 use alacritty_terminal::term::TermMode;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::layout::Rect;
 
-use crate::app::actions::OverlayKey;
 use crate::app::overlay::Overlay;
 use crate::app::state::{AppState, PaneView};
 use crate::app::update;
 use crate::input::{self, Routed};
 use crate::layout::PaneId;
 use crate::pty::PtySession;
-use crate::ui;
 use crate::ui::layout::ViewLayout;
 
 use super::mouse::hit::copy_with_toast;
@@ -25,7 +22,6 @@ pub(crate) fn handle_key_event(
     key: KeyEvent,
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
-    screen: Rect,
     view: &ViewLayout,
     dirty: &mut bool,
 ) {
@@ -76,25 +72,6 @@ pub(crate) fn handle_key_event(
                 state.overlay,
                 Some(Overlay::NewWorkspace(_) | Overlay::TrustWorkspace(_))
             );
-            // UI 组件查看弹窗的翻页键：先滚动右侧预览，再按内容高度钳制到最大偏移。
-            if let Some(Overlay::UiGallery(_)) = state.overlay.as_ref()
-                && matches!(key, OverlayKey::PageUp | OverlayKey::PageDown)
-            {
-                let delta = if key == OverlayKey::PageUp {
-                    -update::UI_GALLERY_PAGE
-                } else {
-                    update::UI_GALLERY_PAGE
-                };
-                let max = match state.overlay.as_ref() {
-                    Some(Overlay::UiGallery(gallery)) => {
-                        ui::overlay::ui_gallery_max_scroll(screen, gallery)
-                    }
-                    _ => 0,
-                };
-                update::scroll_ui_gallery(state, delta, max);
-                *dirty = true;
-                return;
-            }
             if let Some((pane, bytes)) = update::apply_overlay_key(state, key) {
                 write_to_pane(sessions, pane, &bytes);
                 update::reset_pane_scroll(state, pane);

@@ -871,33 +871,6 @@ fn worktree_open_overlay_routes_search_and_navigation_keys() {
 }
 
 #[test]
-fn ui_gallery_overlay_routes_navigation_fold_and_paging() {
-    let route_overlay = |code| {
-        super::route(
-            key(code),
-            TermMode::empty(),
-            false,
-            Some(OverlayKind::UiGallery),
-            false,
-        )
-    };
-    for (code, expected) in [
-        (KeyCode::Esc, OverlayKey::Esc),
-        (KeyCode::Up, OverlayKey::Up),
-        (KeyCode::Down, OverlayKey::Down),
-        (KeyCode::Left, OverlayKey::Left),
-        (KeyCode::Right, OverlayKey::Right),
-        (KeyCode::Enter, OverlayKey::Enter),
-        (KeyCode::PageUp, OverlayKey::PageUp),
-        (KeyCode::PageDown, OverlayKey::PageDown),
-    ] {
-        assert_eq!(route_overlay(code), Some(Routed::Overlay(expected)));
-    }
-    // 未映射按键吞掉。
-    assert_eq!(route_overlay(KeyCode::Char('x')), None);
-}
-
-#[test]
 fn save_draft_overlay_routes_navigation_only() {
     let route_overlay = |code| {
         super::route(

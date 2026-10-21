@@ -786,7 +786,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptPin => "pin prompt",
         TooltipTarget::SwapPromptSide => "swap prompt side",
         TooltipTarget::SidebarSettings => "open settings",
-        TooltipTarget::SidebarUiGallery => "open ui gallery",
         TooltipTarget::TemplateButton { button, .. } => match button {
             TemplateButtonKind::Status => "cycle block status",
             TemplateButtonKind::Copy => "copy block",
@@ -834,110 +833,6 @@ pub const SLASH_WORKTREE_PREVIEW: &str = "bind a worktree to this block";
 /// prompt 底边框左侧设置按钮与 tooltip。
 /// 设置按钮文案（纯 ASCII，宽度稳定、无 emoji 呈现）。
 pub const SETTINGS_LABEL: &str = "[SET]";
-
-/// 侧栏底边框设置按钮右侧的 UI 组件查看按钮（纯 ASCII）。
-pub const UI_GALLERY_LABEL: &str = "[UI]";
-/// UI 组件查看弹窗边框标题与底部提示。
-pub const UI_GALLERY_TITLE: &str = "UI";
-pub const UI_GALLERY_HINT: &str = "[↑/↓] select  [↵] fold  [esc] close";
-
-/// UI 组件查看弹窗：顶层文件夹展示名。
-pub const UI_GALLERY_FOLDER_GLOBAL: &str = "global";
-pub const UI_GALLERY_FOLDER_PROMPT: &str = "prompt";
-
-/// UI 组件查看弹窗：组件展示名。
-pub const UI_GALLERY_TOAST: &str = "toast";
-pub const UI_GALLERY_MODAL: &str = "modal";
-pub const UI_GALLERY_TOOLTIP: &str = "tooltip";
-pub const UI_GALLERY_BUTTON: &str = "button";
-pub const UI_GALLERY_MENU: &str = "menu";
-pub const UI_GALLERY_FULLSCREEN: &str = "fullscreen";
-pub const UI_GALLERY_PROMPT_EDITOR: &str = "editor";
-pub const UI_GALLERY_PROMPT_LIST: &str = "list";
-pub const UI_GALLERY_PROMPT_TOOLBAR: &str = "toolbar";
-pub const UI_GALLERY_FOLDERS: &str = "folders";
-pub const UI_GALLERY_FOLDER_SEARCH: &str = "folder search";
-
-/// UI 组件查看弹窗右侧：预览提示与用途说明（不再使用 `Preview` 标题）。
-pub const UI_GALLERY_PREVIEW_HINT: &str = "select a component on the left";
-
-/// prompt 预览的顶边框内容：编辑视图 `条目名 · 页名` + 页控件，列表视图固定标题。
-pub const UI_GALLERY_PROMPT_EDITOR_TITLE: &str = "my prompt";
-pub const UI_GALLERY_PROMPT_EDITOR_PAGE: &str = "Page 1";
-pub const UI_GALLERY_PROMPT_EDITOR_PAGE_TOTAL: usize = 2;
-
-/// 右侧真实外观预览的样例文案（复用真实组件布局与样式绘制）。
-pub const UI_GALLERY_TOAST_SAMPLE: &str = "Copied to clipboard";
-pub const UI_GALLERY_TOOLTIP_SAMPLE: &str = "undo (^z)";
-pub const UI_GALLERY_MODAL_SAMPLE_TITLE: &str = "Close workspace";
-pub const UI_GALLERY_MODAL_SAMPLE_BODY: &str = "Close this workspace?";
-pub const UI_GALLERY_MENU_SAMPLE_TITLE: &str = "demo";
-pub const UI_GALLERY_MENU_SAMPLE: [&str; 4] = ["New terminal", "Open prompt", "Rename", "Close"];
-pub const UI_GALLERY_BUTTON_SAMPLE: &str = "[SET]  [UI]  [EXIT]  [≡]  [◉]";
-pub const UI_GALLERY_FULLSCREEN_SAMPLE_TITLE: &str = "UI";
-pub const UI_GALLERY_FULLSCREEN_SAMPLE_HINT: &str = "[esc] close";
-pub const UI_GALLERY_PROMPT_EDITOR_SAMPLE: &str = "[≡] [←] [→]              [◉] ●";
-pub const UI_GALLERY_PROMPT_EDITOR_BODY: [&str; 4] =
-    ["# Prompt", "", "- first item", "- second item"];
-pub const UI_GALLERY_PROMPT_LIST_SAMPLE: &str = "> search prompts…";
-pub const UI_GALLERY_PROMPT_LIST_BODY: [&str; 5] = ["tmp:", "> default", "", "saved:", "▾ notes"];
-pub const UI_GALLERY_PROMPT_TOOLBAR_LEFT: &str = "[≡] [←] [→]";
-pub const UI_GALLERY_PROMPT_TOOLBAR_RIGHT: &str = "[◉] [*] ●";
-/// 引用文件夹目录菜单预览样例（选中项、普通项与「+ add folder…」动作行）。
-pub const UI_GALLERY_FOLDERS_SAMPLE: [&str; 2] = ["my-project", "lx-tui"];
-/// 引用文件夹内容搜索预览样例（图标、名称、父目录）。
-pub const UI_GALLERY_FOLDER_SEARCH_QUERY: &str = "> search files…";
-pub const UI_GALLERY_FOLDER_SEARCH_ROWS: [(&str, &str, &str); 2] = [
-    ("▸", "src/", "~/projects/my-project"),
-    ("•", "main.rs", "~/projects/my-project/src"),
-];
-
-pub const UI_GALLERY_TOAST_DESC: &[&str] = &[
-    "Non-modal feedback anchored below the container top border.",
-    "Auto-dismisses; hover pauses it. [✕] or an outside click",
-    "closes it.",
-];
-pub const UI_GALLERY_MODAL_DESC: &[&str] = &[
-    "Centered modal shell with a rounded accent border,",
-    "a title and a top-right [✕] close button.",
-    "Esc or an outside click closes it.",
-];
-pub const UI_GALLERY_TOOLTIP_DESC: &[&str] = &[
-    "Small muted box shown after hovering a button.",
-    "Anchored to the button, clamped inside the screen.",
-];
-pub const UI_GALLERY_BUTTON_DESC: &[&str] = &[
-    "ASCII label drawn per-cell with the accent color,",
-    "the same style as collapse and toolbar buttons.",
-];
-pub const UI_GALLERY_MENU_DESC: &[&str] = &[
-    "Right-click context menu anchored at the pointer.",
-    "Up/Down moves the highlight, Enter runs the item.",
-];
-pub const UI_GALLERY_FULLSCREEN_DESC: &[&str] = &[
-    "Fullscreen overlay: an outer accent border with the title and",
-    "hint embedded in the border line, plus a top-right [✕].",
-];
-pub const UI_GALLERY_PROMPT_EDITOR_DESC: &[&str] = &[
-    "Markdown editor with a top toolbar row: typing,",
-    "undo/redo, selection, @ mentions and template blocks.",
-];
-pub const UI_GALLERY_PROMPT_LIST_DESC: &[&str] = &[
-    "Tree view: search box, tmp:/saved: sections,",
-    "folders and prompt items.",
-];
-pub const UI_GALLERY_PROMPT_TOOLBAR_DESC: &[&str] = &[
-    "Editor toolbar row: mode, undo/redo, pin,",
-    "select all and the save dot.",
-];
-pub const UI_GALLERY_FOLDERS_DESC: &[&str] = &[
-    "Referenced folders menu opened from the prompt toolbar;",
-    "lists project directories and opens a content search.",
-];
-pub const UI_GALLERY_FOLDER_SEARCH_DESC: &[&str] = &[
-    "Searches a referenced folder's contents and copies",
-    "file or folder markdown references.",
-];
 
 /// 模板块操作按钮文案；状态按钮按当前状态取标签，动作按钮为图标。
 pub const TEMPLATE_BUTTON_TODO: &str = "[todo]";

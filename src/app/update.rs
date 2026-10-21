@@ -11,7 +11,6 @@ mod referenced;
 mod resume_edit;
 mod selection;
 mod trust;
-mod ui_gallery;
 mod workspace;
 mod workspace_list;
 mod worktree;
@@ -27,10 +26,6 @@ pub use referenced::*;
 pub use resume_edit::*;
 pub use selection::*;
 pub use trust::*;
-pub use ui_gallery::{
-    UI_GALLERY_PAGE, activate_ui_gallery_row, apply_ui_gallery_key, open_ui_gallery,
-    scroll_ui_gallery, set_ui_gallery_scroll, set_ui_gallery_selection,
-};
 pub use workspace::*;
 pub use workspace_list::*;
 pub use worktree::{

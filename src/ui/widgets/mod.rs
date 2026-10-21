@@ -2,7 +2,6 @@
 
 pub mod clear;
 pub mod command_panel;
-pub mod fullscreen;
 pub mod input;
 pub mod menu;
 pub mod modal;

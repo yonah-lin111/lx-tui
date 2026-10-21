@@ -200,19 +200,6 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Enter => Some(OverlayKey::Enter),
             _ => None,
         },
-        // UI 组件查看弹窗：上下移动高亮、左右折叠展开、回车切换、
-        // PageUp/PageDown 翻页右侧预览、Esc 关闭。
-        OverlayKind::UiGallery => match key.code {
-            KeyCode::Esc => Some(OverlayKey::Esc),
-            KeyCode::Up => Some(OverlayKey::Up),
-            KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::PageUp => Some(OverlayKey::PageUp),
-            KeyCode::PageDown => Some(OverlayKey::PageDown),
-            _ => None,
-        },
         // 引用文件夹目录弹窗：上下移动、回车打开；Ctrl/Cmd+C 复制引用、
         // Ctrl/Cmd+D 或 Del 移除记录（沿用弹窗内快捷键语义，行内不再放动作按钮）。
         OverlayKind::ReferencedFolderMenu => match key.code {

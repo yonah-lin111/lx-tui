@@ -168,23 +168,6 @@ pub(crate) fn handle_mouse_wheel(
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
-    // UI 组件查看弹窗：指针在右侧预览区时滚轮滚动预览视口（高亮不动、越界钳制）。
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
-        && let Some(crate::app::overlay::Overlay::UiGallery(gallery)) = state.overlay.as_ref()
-    {
-        let max = ui::overlay::ui_gallery_max_scroll(geometry.screen, gallery);
-        if max > 0 {
-            // 整屏覆盖：滚轮落在右区（分隔线右侧）才滚动预览。
-            let on_right = ui::overlay::ui_gallery_layout(geometry.screen)
-                .is_some_and(|layout| layout.right.contains((mouse.column, mouse.row).into()));
-            if on_right {
-                if update::scroll_ui_gallery(state, direction, max) {
-                    *dirty = true;
-                }
-                return;
-            }
-        }
-    }
     if let Some(direction) = vertical_wheel_direction(mouse.kind)
         && let Some(crate::app::overlay::Overlay::ReferencedFolderSearch(search)) =
             state.overlay.as_ref()
