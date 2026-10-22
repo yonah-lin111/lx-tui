@@ -323,6 +323,9 @@ async fn run_loop(
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
+            // 本帧紧接着绘制，无需再次置脏。
+            update::resolve_lx_rewind_center(state, &geometry.rects);
             // 置顶用户消息行结论：渲染前落状态（渲染层只读，不写状态）。
             update::resolve_lx_sticky_prompt(state, &geometry.rects);
             // 当前视口顶部行：同上，供点击展开时原地锚定。

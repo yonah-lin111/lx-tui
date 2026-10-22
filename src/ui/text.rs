@@ -633,6 +633,15 @@ pub const LX_REWIND_SNAPSHOT_LOADING: &str = "Checking file snapshot...";
 /// 撤销提示标题（独立于 user/assistant）。
 pub const LX_REWIND_NOTICE_TITLE: &str = "-- Rewind --";
 
+/// 撤销提示标题：连续多条合并时把数量放进两侧装饰之间（`-- Rewind x2 --`）。
+pub fn rewind_notice_title(count: usize) -> String {
+    if count > 1 {
+        format!("-- Rewind x{count} --")
+    } else {
+        LX_REWIND_NOTICE_TITLE.to_string()
+    }
+}
+
 /// 撤销提示描述：按动作、恢复数量与“此前已恢复”生成准确文案。
 pub fn rewind_notice(kind: &str, restored: usize, already_restored: bool) -> String {
     if already_restored && kind != "revert_only" {

@@ -32,6 +32,36 @@ pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> 
     Some(history::view(history_rect, lx))
 }
 
+/// 把指定消息滚到视口居中所需的顶部行与可滚动上限；内容不足一屏时返回 None。
+///
+/// 消息块高于视口时按起始行对齐（至少能看到开头）；其余情况上下留白尽量相等，
+/// 接近列表末尾时自然钳到底部。
+pub(crate) fn history_center_target(
+    area: Rect,
+    lx: &Lx,
+    message_id: &str,
+) -> Option<(usize, usize)> {
+    let rect = history_rect(area, lx)?;
+    let layout = history::layout(rect, lx);
+    let index = lx
+        .chat
+        .messages
+        .iter()
+        .position(|message| message.id == message_id)?;
+    let rows = layout.messages.get(index)?;
+    let height = usize::from(rect.height.max(1));
+    let max_top = layout.total_rows.saturating_sub(height);
+    if max_top == 0 {
+        return None;
+    }
+    let block = rows.end.saturating_sub(rows.start).min(height);
+    let top = rows
+        .start
+        .saturating_sub(height.saturating_sub(block) / 2)
+        .min(max_top);
+    Some((top, max_top))
+}
+
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。
 pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
     if !chat_geometry_is_live(lx) {

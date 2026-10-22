@@ -183,6 +183,8 @@ pub struct LxRewind {
     pub armed_at: Option<Instant>,
     /// 已选中的最新轮次目标；`Some` 即 SelectedLatest。
     pub selected: Option<RewindTarget>,
+    /// 下一次取得几何时要把该用户消息滚到视口居中（只消费一次）。
+    pub center_target: Option<String>,
     /// 最近一次预检得到的快照可用性（打开面板时沿用）。
     pub snapshot: SnapshotState,
     /// 四项动作面板；与 `selected` 同时存在时为 ActionPanel。
@@ -196,6 +198,7 @@ impl LxRewind {
     pub fn clear(&mut self) {
         self.armed_at = None;
         self.selected = None;
+        self.center_target = None;
         self.panel = None;
         self.executing = None;
     }

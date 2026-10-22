@@ -150,8 +150,9 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         user_text,
     });
     target.lx.rewind.panel = None;
-    // 最新轮次在列表底部；跟随底部保证目标可见。
+    // 最新轮次在列表底部；先跟随底部，取得几何后再把目标滚到视口居中。
     target.lx.chat.follow_bottom = true;
+    target.lx.rewind.center_target = Some(user_message_id.clone());
     state.effects.push(Effect::PrepareRewind {
         pane,
         session_id,

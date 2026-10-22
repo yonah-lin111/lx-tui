@@ -359,3 +359,50 @@ fn busy_escape_keeps_stop_semantics_and_does_not_arm_rewind() {
         "忙时第一次 Esc 仍进入停止待命"
     );
 }
+
+#[test]
+fn double_escape_requests_centering_latest_user_message() {
+    let (mut state, pane) = rewound_state();
+    apply_lx_input(&mut state, LxInput::Escape);
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .rewind
+            .center_target
+            .as_deref(),
+        Some("u1")
+    );
+}
+
+#[test]
+fn resolver_scrolls_center_request_and_consumes_it() {
+    let (mut state, pane) = rewound_state();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        let mut messages = Vec::new();
+        for index in 0..30 {
+            let role = if index % 2 == 0 { "user" } else { "assistant" };
+            let mut message = if role == "user" {
+                user_message(&format!("u{index}"), "history line", index as i64)
+            } else {
+                assistant_message(&format!("a{index}"), index as i64)
+            };
+            message.id = format!("m{index}");
+            messages.push(message);
+        }
+        target.lx.chat.messages = messages;
+        target.lx.rewind.center_target = Some("m10".into());
+    }
+    let changed = crate::app::update::resolve_lx_rewind_center(
+        &mut state,
+        &[(pane, ratatui::layout::Rect::new(0, 0, 80, 24))],
+    );
+    assert!(changed, "居中请求应改变视口");
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.rewind.center_target.is_none(), "请求只消费一次");
+    assert!(!target.lx.chat.follow_bottom);
+    assert!(target.lx.chat.history_scroll > 0);
+}

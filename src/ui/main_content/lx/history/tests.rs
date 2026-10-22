@@ -8,6 +8,7 @@ use ratatui::style::{Color, Modifier};
 use super::*;
 use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, Lx, LxChat};
 use crate::chat::events::PartKind;
+use crate::ui::main_content::lx::{history_center_target, history_rect};
 
 /// 工具步骤的几何一致性测试（布局/渲染行数、滚动条、置顶行、thinking 命中）。
 mod tool_geometry;
@@ -1068,11 +1069,11 @@ fn consecutive_rewind_notices_merge_with_count() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        text.contains("-- Rewind -- x3"),
+        text.contains("-- Rewind x3 --"),
         "连续提示合并为 xN：{text}"
     );
     assert_eq!(
-        text.matches("-- Rewind --").count(),
+        text.matches("-- Rewind").count(),
         1,
         "三条连续提示只画一条标题"
     );
@@ -1100,8 +1101,45 @@ fn notices_separated_by_messages_are_not_merged() {
         .collect::<Vec<_>>()
         .join("\n");
     assert_eq!(
-        text.matches("-- Rewind --").count(),
+        text.matches("-- Rewind").count(),
         2,
         "被消息分隔的提示各自显示：{text}"
+    );
+}
+
+#[test]
+fn center_target_puts_user_message_middle_of_viewport() {
+    let mut messages = Vec::new();
+    for index in 0..24 {
+        let role = if index % 2 == 0 { "user" } else { "assistant" };
+        let mut message = message(role, "complete", vec![text_part("some history line")]);
+        message.id = format!("m{index}");
+        message.sequence = index;
+        messages.push(message);
+    }
+    let lx = lx_with(messages);
+    let area = Rect::new(0, 0, 40, 14);
+    let (top, max_top) = history_center_target(area, &lx, "m10").expect("scrollable");
+    assert!(top > 0 && top < max_top, "目标应有上下可滚动空间");
+    let rect = history_rect(area, &lx).expect("history");
+    let layout = layout(rect, &lx);
+    let rows = layout.messages[10];
+    let height = usize::from(rect.height);
+    assert!(
+        rows.start >= top && rows.start < top + height,
+        "目标必须在视口内"
+    );
+    assert!(
+        rows.start.saturating_sub(top) <= height / 2 + 1,
+        "目标应落在视口中部而不是底部"
+    );
+}
+
+#[test]
+fn center_target_is_none_when_content_fits() {
+    let lx = lx_with(vec![message("user", "complete", vec![text_part("short")])]);
+    assert_eq!(
+        history_center_target(Rect::new(0, 0, 40, 20), &lx, "user-1"),
+        None
     );
 }

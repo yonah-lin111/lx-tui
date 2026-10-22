@@ -16,13 +16,9 @@ pub(super) fn rows(notice: &RewindNoticeView, count: usize, width: u16) -> usize
     super::wrap(&title(count), width).len() + super::wrap(&description(notice), width).len()
 }
 
-/// 提示标题；连续提示合并为一条时追加 ` xN`（单宽 ASCII）。
+/// 提示标题（连续提示合并为 `-- Rewind xN --`）。
 pub(super) fn title(count: usize) -> String {
-    if count > 1 {
-        format!("{} x{count}", text::LX_REWIND_NOTICE_TITLE)
-    } else {
-        text::LX_REWIND_NOTICE_TITLE.to_string()
-    }
+    text::rewind_notice_title(count)
 }
 
 /// 分布式提示描述。

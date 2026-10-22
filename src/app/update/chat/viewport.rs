@@ -60,6 +60,41 @@ pub fn set_lx_history_scroll(
     before != clamped || was_following != target.lx.chat.follow_bottom
 }
 
+/// 双击 Esc 选中最新轮次后的**一次性居中**：把目标用户消息滚到视口中央。
+///
+/// `app/` 拿不到几何，故与 [`resolve_lx_viewport_top`] 同一做法：事件循环在绘制前
+/// 调用。内容不足一屏（滚动条不可滚动）时不改动视口，只清掉请求。
+pub fn resolve_lx_rewind_center(
+    state: &mut AppState,
+    rects: &[(PaneId, ratatui::layout::Rect)],
+) -> bool {
+    let mut changed = false;
+    for (pane, rect) in rects {
+        let inner = crate::layout::pane_inner_rect(*rect);
+        let Some(message_id) = state
+            .pane_anywhere(*pane)
+            .filter(|target| target.view == crate::app::state::PaneView::Lx)
+            .and_then(|target| target.lx.rewind.center_target.clone())
+        else {
+            continue;
+        };
+        let resolved = state.pane_anywhere(*pane).and_then(|target| {
+            crate::ui::main_content::lx::history_center_target(inner, &target.lx, &message_id)
+        });
+        let Some(target) = state.pane_mut_anywhere(*pane) else {
+            continue;
+        };
+        target.lx.rewind.center_target = None;
+        let Some((top, max_top)) = resolved else {
+            continue;
+        };
+        changed |= target.lx.chat.history_scroll != top || target.lx.chat.follow_bottom;
+        target.lx.chat.history_scroll = top;
+        target.lx.chat.follow_bottom = top >= max_top;
+    }
+    changed
+}
+
 /// 每轮把各 lx 窗格的「当前视口顶部行」记忆落状态。
 ///
 /// 渲染层只读、不写状态（AGENTS：渲染只读），而展开切换需要知道用户正看着哪一行，
