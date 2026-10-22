@@ -979,3 +979,62 @@ fn page_rename_key_maps_single_line_input_semantics() {
     );
     assert_eq!(page_rename_key(key(KeyCode::Tab)), None);
 }
+
+#[test]
+fn f4_toggles_presentation_only_when_prompt_focused_and_no_overlay() {
+    assert_eq!(
+        route(key(KeyCode::F(4)), TermMode::empty(), true),
+        Some(Routed::TogglePromptPresentation)
+    );
+    assert!(
+        matches!(
+            route(key(KeyCode::F(4)), TermMode::empty(), false),
+            Some(Routed::Pane(_))
+        ),
+        "未聚焦 prompt 时 F4 仍按原键路由进窗格"
+    );
+    assert_eq!(
+        super::route(
+            key(KeyCode::F(4)),
+            TermMode::empty(),
+            true,
+            Some(OverlayKind::Supplements),
+            false,
+        ),
+        None,
+        "模态打开时 F4 被吞掉"
+    );
+}
+
+#[test]
+fn supplements_overlay_maps_edit_and_save_keys() {
+    let route_overlay = |key: KeyEvent| {
+        super::route(
+            key,
+            TermMode::empty(),
+            true,
+            Some(OverlayKind::Supplements),
+            false,
+        )
+    };
+    assert_eq!(
+        route_overlay(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+        Some(Routed::Overlay(OverlayKey::Save))
+    );
+    assert_eq!(
+        route_overlay(key(KeyCode::F(6))),
+        Some(Routed::Overlay(OverlayKey::NextField))
+    );
+    assert_eq!(
+        route_overlay(KeyEvent::new(KeyCode::F(6), KeyModifiers::SHIFT)),
+        Some(Routed::Overlay(OverlayKey::PreviousField))
+    );
+    assert_eq!(
+        route_overlay(key(KeyCode::Enter)),
+        Some(Routed::Overlay(OverlayKey::Enter))
+    );
+    assert_eq!(
+        route_overlay(key(KeyCode::Tab)),
+        Some(Routed::Overlay(OverlayKey::Tab))
+    );
+}

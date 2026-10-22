@@ -375,6 +375,87 @@ pub(crate) fn handle_overlay_click(
             }
             None
         }
+        Some(Overlay::Supplements(session)) => {
+            let Some(layout) = ui::overlay::supplements_layout(screen) else {
+                update::close_supplements(state);
+                return None;
+            };
+            // 关闭按钮或模态外点击：按未保存策略收束（草稿 dirty 时进入确认）。
+            if ui::widgets::modal::close_button_at(layout.shell.area, column, row)
+                || !layout.shell.area.contains((column, row).into())
+            {
+                update::close_supplements(state);
+                return None;
+            }
+            use crate::app::supplements::SupplementView;
+            let view = session.view;
+            match view {
+                SupplementView::List => {
+                    // 附件行与末尾新增动作行同属一套行序：单击只选中，双击才打开。
+                    if let Some(index) = ui::overlay::list_row_at(&layout, session, column, row) {
+                        update::click_supplement_row(state, index, std::time::Instant::now());
+                    }
+                }
+                SupplementView::Edit => {
+                    if ui::overlay::title_row_at(&layout, column, row) {
+                        update::focus_supplement_title(state, true);
+                    } else if ui::overlay::detail_body_rect(&layout).contains((column, row).into())
+                    {
+                        update::focus_supplement_title(state, false);
+                    } else {
+                        match ui::overlay::supplement_button_at(&layout, column, row) {
+                            Some(ui::overlay::SupplementButton::Save) => {
+                                update::apply_supplements_key(
+                                    state,
+                                    crate::app::actions::OverlayKey::Save,
+                                )
+                            }
+                            Some(ui::overlay::SupplementButton::Clean) => {
+                                update::clean_supplement_draft(state)
+                            }
+                            Some(ui::overlay::SupplementButton::Back) => {
+                                update::apply_supplements_key(
+                                    state,
+                                    crate::app::actions::OverlayKey::Esc,
+                                )
+                            }
+                            None => {}
+                        }
+                    }
+                }
+                SupplementView::Unsaved => {
+                    match ui::overlay::supplement_unsaved_button_at(&layout, column, row) {
+                        Some(0) => update::apply_supplements_key(
+                            state,
+                            crate::app::actions::OverlayKey::Enter,
+                        ),
+                        Some(1) => update::apply_supplements_key(
+                            state,
+                            crate::app::actions::OverlayKey::Delete,
+                        ),
+                        Some(_) => update::apply_supplements_key(
+                            state,
+                            crate::app::actions::OverlayKey::Esc,
+                        ),
+                        None => {}
+                    }
+                }
+                SupplementView::ConfirmDelete => {
+                    match ui::overlay::supplement_confirm_button_at(&layout, column, row) {
+                        Some(0) => update::apply_supplements_key(
+                            state,
+                            crate::app::actions::OverlayKey::Enter,
+                        ),
+                        Some(_) => update::apply_supplements_key(
+                            state,
+                            crate::app::actions::OverlayKey::Esc,
+                        ),
+                        None => {}
+                    }
+                }
+            }
+            None
+        }
         Some(Overlay::ResumeSessionEdit(edit)) => {
             let confirming = edit.confirming_delete;
             let Some(shell) = ui::overlay::resume_edit_shell(screen) else {

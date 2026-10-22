@@ -32,6 +32,8 @@ pub enum OverlayKind {
     ReferencedFolderDelete,
     /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
     ResumeSessionEdit,
+    /// 补充块附件模态：列表、编辑、未保存确认与删除确认。
+    Supplements,
 }
 
 /// 浮层：同一时刻最多一个，由 `Option` 保证。
@@ -54,6 +56,8 @@ pub enum Overlay {
     ReferencedFolderDelete(ReferencedFolderDelete),
     /// `/resume` 会话编辑模态：改名与删除（`Shift+Enter` 打开）。
     ResumeSessionEdit(ResumeSessionEdit),
+    /// 补充块附件模态：同一模态内切换列表/详情/确认。
+    Supplements(Box<crate::app::supplements::Supplements>),
 }
 
 impl Overlay {
@@ -76,6 +80,7 @@ impl Overlay {
             Self::ReferencedFolderSearch(_) => OverlayKind::ReferencedFolderSearch,
             Self::ReferencedFolderDelete(_) => OverlayKind::ReferencedFolderDelete,
             Self::ResumeSessionEdit(_) => OverlayKind::ResumeSessionEdit,
+            Self::Supplements(_) => OverlayKind::Supplements,
         }
     }
 }

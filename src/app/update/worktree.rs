@@ -213,7 +213,14 @@ pub fn apply_worktree_open_key(state: &mut AppState, key: OverlayKey) {
                 | OverlayKey::Copy
                 | OverlayKey::Remove
                 | OverlayKey::PageUp
-                | OverlayKey::PageDown => {}
+                | OverlayKey::PageDown
+                | OverlayKey::Save
+                | OverlayKey::NextField
+                | OverlayKey::PreviousField
+                | OverlayKey::Tab
+                | OverlayKey::BackTab
+                | OverlayKey::Undo
+                | OverlayKey::Redo => {}
             }
         }
     }

@@ -249,7 +249,7 @@ fn prompt_scrollbar_for(
         ),
         PromptMode::Editor => (
             crate::layout::prompt_scrollbar_rect(panel)?,
-            state.prompt.visual_rows().len() + state.prompt.bottom_padding(),
+            state.prompt.display_rows().len() + state.prompt.bottom_padding(),
             state.prompt.scroll(),
         ),
     };

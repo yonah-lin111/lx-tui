@@ -1873,3 +1873,52 @@ fn resume_edit_modal_confirm_state_second_button_is_cancel() {
         "确认态第二个按钮是取消（退回编辑态）"
     );
 }
+
+#[test]
+fn supplements_modal_clamps_fixed_size_and_hit_tests_rows() {
+    use crate::app::supplements::SupplementTarget;
+    use crate::app::supplements::Supplements;
+    use crate::layout::PaneId;
+
+    let screen = Rect::new(0, 0, 120, 40);
+    let layout = crate::ui::overlay::supplements_layout(screen).expect("layout");
+    assert_eq!(layout.shell.area.width, 96);
+    assert_eq!(layout.shell.area.height, 28);
+    assert!(crate::ui::overlay::supplements_editable(&layout.shell));
+
+    let too_small = Rect::new(0, 0, 31, 9);
+    let shell = crate::ui::overlay::supplements_shell(too_small).expect("clamped shell");
+    assert!(!crate::ui::overlay::supplements_editable(&shell));
+
+    let text = "&&& a --start\n+++ supplement --start\n{title: A}\n\nbody\n+++ supplement --end\n&&& a --end";
+    let mut prompt = crate::app::prompt::Prompt::new(PaneId::from_raw_for_test(1));
+    prompt.set_text(text);
+    let index = crate::app::prompt::supplement_index(text);
+    let targets: Vec<SupplementTarget> = index
+        .entries
+        .iter()
+        .map(|entry| SupplementTarget::from_entry(text, entry).expect("target"))
+        .collect();
+    let session = Supplements::new(
+        crate::app::supplements::SupplementOwner {
+            pane: prompt.id(),
+            workspace: None,
+            target: None,
+            page: None,
+            root: None,
+        },
+        0,
+        0,
+        text.to_string(),
+        targets,
+    );
+    assert_eq!(
+        crate::ui::overlay::list_row_at(&layout, &session, layout.body.x + 2, layout.body.y),
+        Some(0)
+    );
+    assert_eq!(
+        crate::ui::overlay::list_row_at(&layout, &session, layout.body.x + 2, layout.body.y + 1),
+        Some(1),
+        "第二行是新增动作行"
+    );
+}

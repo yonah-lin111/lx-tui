@@ -452,6 +452,9 @@ fn hits_block_buttons_via_prompt_text_area() {
     state.prompt.insert_str(
         "&&& x --start\n+++ supplement --start\nbody\n+++ supplement --end\n&&& x --end",
     );
+    state
+        .prompt
+        .set_presentation(crate::app::prompt::PromptPresentation::Source);
     let view = view_for(&state);
     let rects = pane_rects(&state, &view);
     let area = layout::prompt_text_rect(view.prompt);

@@ -91,6 +91,17 @@ pub(crate) fn handle_mouse_moved(
         {
             *dirty = true;
         }
+        if let Some(Overlay::Supplements(session)) = state.overlay.as_ref()
+            && let Some(layout) = ui::overlay::supplements_layout(*screen)
+        {
+            // 悬停只铺底色，不移动 `❯` 选中标记；仅列表态生效。
+            let hover = (session.view == crate::app::supplements::SupplementView::List)
+                .then(|| ui::overlay::list_row_at(&layout, session, mouse.column, mouse.row))
+                .flatten();
+            if update::hover_supplement_row(state, hover) {
+                *dirty = true;
+            }
+        }
         if update::set_prompt_tree_hover(state, None) {
             *dirty = true;
         }

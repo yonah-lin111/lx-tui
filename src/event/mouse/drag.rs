@@ -287,6 +287,18 @@ pub(crate) fn handle_mouse_up_left(
     // 卡片正文的「按下可能是一次点击」标记只服务本次释放：任何提前返回的路径
     // （滚动条拖拽、浮层、其它窗格）都必须丢弃它，绝不能让它在下一次松开时误折叠。
     let card_press = state.lx_card_press.take();
+    // 附件入口按下：松开未拖动才打开列表（拖动过则按普通选区处理）。
+    if let Some(parent_start) = state.supplement_entry_press.take() {
+        let dragged = state
+            .selection
+            .is_some_and(|selection| selection.range().is_some());
+        if !dragged && state.overlay.is_none() {
+            update::open_supplements_for(state, parent_start);
+            state.selection = None;
+            *dirty = true;
+            return;
+        }
+    }
     if state.referenced_search_scroll_drag.take().is_some() {
         *dirty = true;
         return;

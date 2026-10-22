@@ -37,6 +37,19 @@ pub enum OverlayKey {
     Copy,
     /// Ctrl/Cmd+D 或 Del：引用文件夹目录弹窗移除高亮记录（打开删除确认）。
     Remove,
+    /// Ctrl/Cmd+S：附件详情保存草稿。
+    Save,
+    /// F6 / Shift+F6：附件详情在标题与正文之间切换焦点。
+    NextField,
+    PreviousField,
+    /// Tab：模态内焦点前进（标题 → 正文 → 操作栏）。
+    Tab,
+    /// BackTab：焦点后退。
+    BackTab,
+    /// Ctrl/Cmd+Z：本地草稿撤销。
+    Undo,
+    /// Ctrl/Cmd+Y 或 Ctrl+Shift+Z：本地草稿重做。
+    Redo,
 }
 
 /// lx 页输入命令；仅在焦点窗格显示 lx 页时产生。

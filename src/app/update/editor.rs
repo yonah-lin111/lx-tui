@@ -8,12 +8,13 @@ use crate::layout::PaneId;
 
 use super::prompt::{
     activate_prompt_row, apply_prompt_search, commit_prompt_buffer, move_prompt_selection,
-    prompt_tree_mode, prompt_tree_visible_rows, select_prompt_item, show_prompt_tree,
-    toggle_prompt_panel_mode,
+    open_supplements_at_focus, prompt_tree_mode, prompt_tree_visible_rows, select_prompt_item,
+    show_prompt_tree, toggle_prompt_panel_mode,
 };
 use super::selection::{
     WHEEL_LINES, clear_selection, prompt_selection_bounds, scroll_prompt_selection,
 };
+use super::supplements::start_slash_supplement;
 
 /// 终端粘贴的普通文本：与 `InsertText` 一致，但插入后压制补全面板直到下一次编辑/移动。
 ///
@@ -23,6 +24,21 @@ pub fn apply_pasted_text(state: &mut AppState, text: String) {
     apply_editor(state, EditorCommand::InsertText(text));
     if !prompt_tree_mode(state) {
         state.prompt.suppress_completion_panels();
+    }
+}
+
+/// 写入被集中视图的隐藏附件拒绝时给出可见提示；不改变正文、选区与历史。
+pub fn report_hidden_block(state: &mut AppState) {
+    if state.prompt.take_hidden_block() {
+        super::show_toast(
+            state,
+            crate::app::toast::Toast::new(
+                crate::app::toast::ToastKind::Danger,
+                crate::ui::text::SUPPLEMENTS_HIDDEN_BLOCKED,
+                Some(state.prompt.id()),
+                std::time::Instant::now(),
+            ),
+        );
     }
 }
 
@@ -40,30 +56,49 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
     if route_panel(state, &command) {
         return;
     }
+    // 附件入口焦点：Enter 打开列表；写操作一律不落入隐藏字节。
+    if state.prompt.focus().is_supplements() {
+        if command == EditorCommand::Newline {
+            open_supplements_at_focus(state);
+            return;
+        }
+        if editor_command_writes(&command) {
+            return;
+        }
+    }
     // 编辑绑定条目时 Esc 返回树视图并提交内容；无绑定时保持既有行为。
     if command == EditorCommand::Escape && prompt_editing(state) {
         show_prompt_tree(state);
         return;
     }
     if let Some((start, end)) = prompt_selection_bounds(state) {
-        let replaced = match &command {
-            EditorCommand::InsertChar(ch) => {
-                state.prompt.replace_range(start, end, &ch.to_string())
-            }
-            EditorCommand::InsertText(text) => state.prompt.replace_range(start, end, text),
+        // 写入类命令替换选区：无论成功与否都不再退化到光标处插入。
+        // 跨隐藏附件被拒时保持原文与历史不变，只给可见提示（D6）。
+        let write = match &command {
+            EditorCommand::InsertChar(ch) => Some(ch.to_string()),
+            EditorCommand::InsertText(text) => Some(text.clone()),
             EditorCommand::Newline | EditorCommand::NewlineBelow | EditorCommand::EnterFolder => {
-                state.prompt.replace_range(start, end, "\n")
+                Some("\n".to_string())
             }
-            EditorCommand::Backspace | EditorCommand::Delete => {
-                state.prompt.replace_range(start, end, "")
-            }
-            _ => false,
+            EditorCommand::Backspace | EditorCommand::Delete => Some(String::new()),
+            _ => None,
         };
-        clear_selection(state);
-        if replaced {
+        if let Some(insert) = write {
+            let replaced = state.prompt.replace_range(start, end, &insert);
+            if replaced {
+                clear_selection(state);
+            }
+            report_hidden_block(state);
             return;
         }
+        clear_selection(state);
     }
+    apply_editor_command(state, command);
+    report_hidden_block(state);
+}
+
+/// 无选区时的编辑命令分派。
+fn apply_editor_command(state: &mut AppState, command: EditorCommand) {
     match command {
         EditorCommand::InsertChar(ch) => state.prompt.insert_char(ch),
         EditorCommand::InsertText(text) => state.prompt.insert_str(&text),
@@ -96,6 +131,28 @@ pub fn apply_editor(state: &mut AppState, command: EditorCommand) {
         EditorCommand::Redo => state.prompt.redo(),
         EditorCommand::Escape => {}
     }
+}
+
+/// 该编辑命令是否写入正文（附件入口焦点下必须拒绝）。
+fn editor_command_writes(command: &EditorCommand) -> bool {
+    matches!(
+        command,
+        EditorCommand::InsertChar(_)
+            | EditorCommand::InsertText(_)
+            | EditorCommand::Newline
+            | EditorCommand::NewlineBelow
+            | EditorCommand::EnterFolder
+            | EditorCommand::Backspace
+            | EditorCommand::Delete
+            | EditorCommand::DeleteToLineStart
+            | EditorCommand::DeleteToLineEnd
+            | EditorCommand::DeleteWordBackward
+            | EditorCommand::DeleteWordForward
+            | EditorCommand::Indent
+            | EditorCommand::Outdent
+            | EditorCommand::Undo
+            | EditorCommand::Redo
+    )
 }
 
 /// 块命令面板打开时的按键优先：上下选择、回车确认、Esc 关闭；返回是否消费。
@@ -173,6 +230,10 @@ fn route_slash_panel(state: &mut AppState, command: &EditorCommand) -> bool {
     match command {
         EditorCommand::Up => state.prompt.slash_move(-1),
         EditorCommand::Down => state.prompt.slash_move(1),
+        // 补充块候选不直接插原文：先进入草稿模态，保存时才写回父 Prompt。
+        EditorCommand::Newline if state.prompt.slash_supple_draft().is_some() => {
+            start_slash_supplement(state)
+        }
         EditorCommand::Newline => state.prompt.slash_confirm(),
         EditorCommand::Escape => state.prompt.slash_escape(),
         _ => false,

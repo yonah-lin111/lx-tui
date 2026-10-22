@@ -3298,6 +3298,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
     let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
     let blank_x = select_all.x - 1;
+    let presentation = toolbar_button(&geo, layout::PromptToolbarButton::Presentation);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), blank_x, bar.y),
         &mut state,
@@ -3307,7 +3308,11 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut dirty,
     );
     handle_terminal_event(
-        mouse(MouseEventKind::Down(MouseButton::Left), bar.x + 15, bar.y),
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            presentation.right() + 1,
+            bar.y,
+        ),
         &mut state,
         &mut sessions,
         &geo,
@@ -3690,6 +3695,9 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
                 .into(),
         ),
     );
+    state
+        .prompt
+        .set_presentation(crate::app::prompt::PromptPresentation::Source);
     let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
     let area = crate::layout::prompt_text_rect(geo.view.prompt);
     let copy = crate::ui::prompt::block_buttons(&state.prompt, area)

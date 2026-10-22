@@ -5,7 +5,7 @@ mod mention;
 mod paste;
 pub use mention::MentionRootChoice;
 pub use paste::*;
-mod block;
+pub(crate) mod block;
 mod panel;
 mod refer;
 mod template;
@@ -17,8 +17,19 @@ pub use tree::{
     pages_template_counts,
 };
 
+mod focus;
+mod navigation;
+pub(crate) mod presentation;
 pub(crate) mod text;
 mod viewport;
+
+pub use self::presentation::PromptDisplayRow;
+
+pub(crate) use presentation::line_offsets;
+pub use presentation::{
+    Projection, SupplementEntry, SupplementIndex, project_compact, project_source,
+    prompt_display_row_count, supplement_index,
+};
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -81,6 +92,37 @@ pub struct Prompt {
     revision: u64,
     /// 自动保存静置观察：最近一次判定时的修订号与时间；修订号变化即重置计时。
     autosave: Option<(u64, Instant)>,
+    /// 展示方式：集中附件视图（默认）或完整原文视图。
+    presentation: PromptPresentation,
+    /// 展示焦点：真实文本光标，或某个父任务的合成附件入口。
+    focus: PromptFocus,
+    /// 最近一次写入是否因集中视图隐藏附件而被拒绝（供上层提示，读取即清）。
+    hidden_blocked: bool,
+}
+
+/// 展示方式：集中视图隐藏安全补充子块，原文视图完整显示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptPresentation {
+    #[default]
+    Compact,
+    Source,
+}
+
+/// 展示焦点：文本光标或合成附件入口（入口没有对应的原文字节）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PromptFocus {
+    #[default]
+    Text,
+    Supplements {
+        parent_start: usize,
+    },
+}
+
+impl PromptFocus {
+    /// 是否聚焦在合成附件入口。
+    pub fn is_supplements(self) -> bool {
+        matches!(self, Self::Supplements { .. })
+    }
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -109,6 +151,7 @@ pub struct PromptHistory {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     is_saved: bool,
+    presentation: PromptPresentation,
 }
 
 impl PromptHistory {
@@ -160,10 +203,12 @@ impl Prompt {
             is_saved: true,
             revision: 0,
             autosave: None,
+            presentation: PromptPresentation::Compact,
+            focus: PromptFocus::Text,
+            hidden_blocked: false,
         }
     }
 
-    /// 面板标识；文本选择按此标识归属。
     pub fn id(&self) -> PaneId {
         self.id
     }
@@ -264,6 +309,8 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
+        self.presentation = PromptPresentation::Compact;
+        self.focus = PromptFocus::Text;
         self.scroll_cursor_into_view();
     }
 
@@ -288,6 +335,7 @@ impl Prompt {
             undo: self.undo.clone(),
             redo: self.redo.clone(),
             is_saved: self.is_saved,
+            presentation: self.presentation,
         }
     }
 
@@ -309,6 +357,9 @@ impl Prompt {
         self.is_saved = history.is_saved;
         self.autosave = None;
         self.scroll = 0;
+        self.presentation = history.presentation;
+        self.focus = PromptFocus::Text;
+        self.normalize_hidden_focus();
         self.scroll_cursor_into_view();
     }
 
@@ -692,94 +743,6 @@ impl Prompt {
         self.settle();
     }
 
-    /// 光标左移一个字符。
-    pub fn move_left(&mut self) {
-        self.break_group();
-        self.cursor = prev_boundary(&self.text, self.cursor);
-        self.settle();
-    }
-
-    /// 光标右移一个字符。
-    pub fn move_right(&mut self) {
-        self.break_group();
-        self.cursor = next_boundary(&self.text, self.cursor);
-        self.settle();
-    }
-
-    /// 光标上移一个视觉行，保持显示列；首行时钳到行首。
-    pub fn move_up(&mut self) {
-        self.break_group();
-        let rows = self.visual_rows();
-        let (index, col) = self.cursor_visual_in(&rows);
-        if index == 0 {
-            self.cursor = rows[0].start;
-        } else {
-            let target = rows[index - 1];
-            self.cursor = target.start + offset_at_col(&self.text[target.start..target.end], col);
-        }
-        self.settle();
-    }
-
-    /// 光标下移一个视觉行，保持显示列；末行时钳到行尾。
-    pub fn move_down(&mut self) {
-        self.break_group();
-        let rows = self.visual_rows();
-        let (index, col) = self.cursor_visual_in(&rows);
-        if index + 1 >= rows.len() {
-            self.cursor = rows[rows.len() - 1].end;
-        } else {
-            let target = rows[index + 1];
-            self.cursor = target.start + offset_at_col(&self.text[target.start..target.end], col);
-        }
-        self.settle();
-    }
-
-    /// 光标移到当前视觉行行首。
-    pub fn move_home(&mut self) {
-        self.break_group();
-        let rows = self.visual_rows();
-        let (index, _) = self.cursor_visual_in(&rows);
-        self.cursor = rows[index].start;
-        self.settle();
-    }
-
-    /// 光标移到当前视觉行行尾。
-    pub fn move_end(&mut self) {
-        self.break_group();
-        let rows = self.visual_rows();
-        let (index, _) = self.cursor_visual_in(&rows);
-        self.cursor = rows[index].end;
-        self.settle();
-    }
-
-    /// 光标移到逻辑行行首。
-    pub fn move_line_start(&mut self) {
-        self.break_group();
-        self.cursor = line_start(&self.text, self.cursor);
-        self.settle();
-    }
-
-    /// 光标移到逻辑行行尾（换行前）。
-    pub fn move_line_end(&mut self) {
-        self.break_group();
-        self.cursor = line_end(&self.text, self.cursor);
-        self.settle();
-    }
-
-    /// 光标左移到前一个词的词首。
-    pub fn move_word_backward(&mut self) {
-        self.break_group();
-        self.cursor = self.word_start_before(self.cursor);
-        self.settle();
-    }
-
-    /// 光标右移到下一个词的词尾（readline M-f 语义）。
-    pub fn move_word_forward(&mut self) {
-        self.break_group();
-        self.cursor = self.word_end_after(self.cursor);
-        self.settle();
-    }
-
     /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。
     pub fn delete_word_backward(&mut self) {
         let start = self.word_start_before(self.cursor);
@@ -835,7 +798,6 @@ impl Prompt {
             self.settle();
         }
     }
-
     /// 用插入文本替换字节范围（选区删除/替换）；文本会先净化，作为独立撤销步。
     pub fn replace_range(&mut self, start: usize, end: usize, insert: &str) -> bool {
         if start >= end || end > self.text.len() {
@@ -853,16 +815,37 @@ impl Prompt {
         true
     }
 
+    /// 把光标移到字节偏移（钳到文末；不触发面板重算）。
+    pub(crate) fn set_cursor(&mut self, offset: usize) {
+        self.cursor = offset.min(self.text.len());
+    }
+
     /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。
     #[cfg(test)]
     pub(crate) fn set_cursor_offset_for_test(&mut self, offset: usize) {
         self.cursor = offset.min(self.text.len());
     }
 
-    /// 编辑是否触碰受保护的 `{wt:}` 绑定行；触碰时拒绝该次编辑。
-    fn protected_edit(&self, from: usize, to: usize) -> bool {
-        markdown::edit_touches_worktree_line(&self.text, from, to)
+    /// 编辑是否触碰受保护的 `{wt:}` 绑定行或集中视图隐藏的附件；触碰时拒绝该次编辑。
+    ///
+    /// 集中视图里附件不显示，任何与之相交的写入（含零长度插入落在隐藏区内部）
+    /// 都整体拒绝，避免「删掉看不见的东西」；原文视图不做隐藏区判定。
+    fn protected_edit(&mut self, from: usize, to: usize) -> bool {
+        if markdown::edit_touches_worktree_line(&self.text, from, to)
             || markdown::edit_touches_title_line(&self.text, from, to)
+        {
+            return true;
+        }
+        if self.edit_hits_hidden(from, to) {
+            self.hidden_blocked = true;
+            return true;
+        }
+        false
+    }
+
+    /// 取走「写入因隐藏附件被拒」提示标记。
+    pub fn take_hidden_block(&mut self) -> bool {
+        std::mem::take(&mut self.hidden_blocked)
     }
 
     /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。
@@ -907,6 +890,9 @@ impl Prompt {
         self.text = snapshot.text;
         self.cursor = snapshot.cursor;
         self.last_edit = None;
+        // 撤销/重做可能把光标恢复进隐藏附件：统一归一为父任务的附件入口焦点。
+        self.focus = PromptFocus::Text;
+        self.normalize_hidden_focus();
         self.settle();
     }
 

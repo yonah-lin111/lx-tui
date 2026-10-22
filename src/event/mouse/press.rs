@@ -282,6 +282,9 @@ pub(crate) fn handle_mouse_down_left(
             layout::PromptToolbarButton::Pin => {
                 update::toggle_prompt_pin(state);
             }
+            layout::PromptToolbarButton::Presentation if editor_view => {
+                update::toggle_prompt_presentation(state);
+            }
             layout::PromptToolbarButton::Undo if editor_view => state.prompt.undo(),
             layout::PromptToolbarButton::Redo if editor_view => state.prompt.redo(),
             layout::PromptToolbarButton::SelectAll if editor_view => {
@@ -365,6 +368,16 @@ pub(crate) fn handle_mouse_down_left(
                         update::click_prompt_row(state, index);
                     }
                 }
+            } else if let Some(parent_start) =
+                ui::prompt::supplements_entry_at(&state.prompt, inner, mouse.column, mouse.row)
+            {
+                // 合成附件入口：按下先登记，松开未拖动才打开列表；按下即开会让拖选不可用。
+                // 入口焦点同时生效：拖选之外的写键一律不落入隐藏字节。
+                state.supplement_entry_press = Some(parent_start);
+                state
+                    .prompt
+                    .set_focus(crate::app::prompt::PromptFocus::Supplements { parent_start });
+                update::begin_selection(state, pane, row, col);
             } else {
                 // 底部虚拟空占位只聚焦编辑器，不把光标移到不存在的文本行。
                 if !state.prompt.row_in_padding(row) {

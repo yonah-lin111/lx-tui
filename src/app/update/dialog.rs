@@ -32,6 +32,11 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         apply_worktree_open_key(state, key);
         return None;
     }
+    // 补充块附件模态：列表/详情/未保存确认/删除确认全部在本领域内分派。
+    if matches!(state.overlay, Some(Overlay::Supplements(_))) {
+        super::supplements::apply_supplements_key(state, key);
+        return None;
+    }
     // `/resume` 会话编辑模态：Enter 保存、^D 删除（二次确认）、Esc 关闭/退回。
     if matches!(state.overlay, Some(Overlay::ResumeSessionEdit(_))) {
         super::resume_edit::apply_resume_session_edit_key(state, key);
@@ -111,7 +116,16 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
             | OverlayKey::End => {
                 super::edit_referenced_search(state, key);
             }
-            OverlayKey::Remove | OverlayKey::PageUp | OverlayKey::PageDown => {}
+            OverlayKey::Remove
+            | OverlayKey::PageUp
+            | OverlayKey::PageDown
+            | OverlayKey::Save
+            | OverlayKey::NextField
+            | OverlayKey::PreviousField
+            | OverlayKey::Tab
+            | OverlayKey::BackTab
+            | OverlayKey::Undo
+            | OverlayKey::Redo => {}
         }
         return None;
     }
@@ -195,7 +209,8 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
                 | OverlayKind::ReferencedFolderInput
                 | OverlayKind::ReferencedFolderSearch
                 | OverlayKind::ReferencedFolderDelete
-                | OverlayKind::ResumeSessionEdit,
+                | OverlayKind::ResumeSessionEdit
+                | OverlayKind::Supplements,
             )
             | None => None,
         },
@@ -237,7 +252,14 @@ pub fn apply_overlay_key(state: &mut AppState, key: OverlayKey) -> Option<(PaneI
         | OverlayKey::Copy
         | OverlayKey::Remove
         | OverlayKey::PageUp
-        | OverlayKey::PageDown => None,
+        | OverlayKey::PageDown
+        | OverlayKey::Save
+        | OverlayKey::NextField
+        | OverlayKey::PreviousField
+        | OverlayKey::Tab
+        | OverlayKey::BackTab
+        | OverlayKey::Undo
+        | OverlayKey::Redo => None,
     }
 }
 

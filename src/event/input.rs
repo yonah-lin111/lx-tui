@@ -61,6 +61,10 @@ pub(crate) fn handle_key_event(
             update::apply_editor(state, command);
             *dirty = true;
         }
+        Routed::TogglePromptPresentation => {
+            update::toggle_prompt_presentation(state);
+            *dirty = true;
+        }
         Routed::Overlay(key) => {
             let was_confirm = matches!(
                 state.overlay,
@@ -139,6 +143,19 @@ pub(crate) fn handle_paste_event(
             }
             _ => {}
         }
+    }
+    // 附件模态：粘贴只进本地草稿（标题聚焦时进标题，否则进正文），不穿透底层。
+    if let Some(crate::app::overlay::Overlay::Supplements(session)) = state.overlay.as_mut() {
+        let editable = session.editable;
+        if editable && let Some(draft) = session.draft.as_mut() {
+            if draft.title_focused {
+                draft.title.insert_str(&text);
+            } else {
+                draft.body.insert_str(&text);
+            }
+            *dirty = true;
+        }
+        return;
     }
     // 浮层打开时粘贴吞掉，不穿透到底层终端（与键盘过滤一致）。
     if state.overlay.is_some() {

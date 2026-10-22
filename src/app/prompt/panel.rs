@@ -82,6 +82,36 @@ impl Prompt {
         true
     }
 
+    /// 是否有任一候选面板打开（提及/块/斜杠/引用/粘贴）。
+    pub fn panel_open(&self) -> bool {
+        self.mention.view_open()
+            || self.panel.is_some()
+            || self.slash.is_some()
+            || self.refer.is_some()
+            || self.paste.panel().is_some()
+    }
+
+    /// 关闭当前候选面板且不改文本；返回是否有关闭动作。
+    pub fn panel_escape_key(&mut self) -> bool {
+        if self.paste.panel().is_some() {
+            self.paste_cancel();
+            return true;
+        }
+        if self.mention.view_open() {
+            return self.mention_escape();
+        }
+        if self.refer.is_some() {
+            return self.refer_escape();
+        }
+        if self.slash.is_some() {
+            return self.slash_escape();
+        }
+        if self.panel.is_some() {
+            return self.panel_escape();
+        }
+        false
+    }
+
     /// 当前斜杠命令面板；未打开时为 None。
     pub fn slash_panel(&self) -> Option<&SlashPanel> {
         self.slash.as_ref()
@@ -192,6 +222,27 @@ impl Prompt {
     pub fn slash_confirm_at(&mut self, index: usize) -> bool {
         self.slash_set_active(index);
         self.slash_confirm()
+    }
+
+    /// 斜杠命令面板当前高亮条目的补充块定义（命令名、标题、正文）；
+    /// 非补充块条目或面板未打开返回 None。
+    pub fn slash_supple_draft(&self) -> Option<(String, Option<String>, String)> {
+        let panel = self.slash.as_ref()?;
+        let item = panel.items().get(panel.active())?;
+        match &item.insertion {
+            markdown::SlashInsertion::SuppleBlock {
+                command,
+                title,
+                body,
+            } => Some((command.clone(), title.clone(), body.clone())),
+            _ => None,
+        }
+    }
+
+    /// 斜杠命令面板当前触发区间（整行）；面板未打开返回 None。
+    pub fn slash_trigger_range(&self) -> Option<std::ops::Range<usize>> {
+        let trigger = self.slash.as_ref()?.trigger();
+        (trigger.line_start < trigger.line_end).then_some(trigger.line_start..trigger.line_end)
     }
 
     /// 斜杠命令面板确认：内置/自定义命令整行替换，`/gitWorkTree` 打开二级选择器，
