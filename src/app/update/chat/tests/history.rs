@@ -14,6 +14,8 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
             role: "user".into(),
             status: "complete".into(),
             turn_index: index as i64,
+            kind: "chat".into(),
+            shell: None,
             steps: vec![AssistantStepView::Part {
                 position: 0,
                 part: ChatPartView {
@@ -144,6 +146,8 @@ fn toggle_lx_card_flips_the_pressed_block() {
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Part {
             position: 0,
             part: ChatPartView {
@@ -233,6 +237,8 @@ fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
         role: role.into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Part {
             position: 0,
             part: ChatPartView {

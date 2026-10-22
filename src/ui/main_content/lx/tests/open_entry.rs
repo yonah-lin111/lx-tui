@@ -44,6 +44,8 @@ fn command_message(call_id: &str, session_id: u64) -> ChatMessageView {
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Tool { position: 0, call }],
         model_label: None,
         error_code: None,
@@ -129,6 +131,8 @@ fn file_message(call_id: &str) -> ChatMessageView {
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Tool { position: 0, call }],
         model_label: None,
         error_code: None,
@@ -285,6 +289,8 @@ fn folded_thinking_and_long_param_are_clickable() {
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Part {
             position: 0,
             part: crate::app::state::ChatPartView {
@@ -334,6 +340,8 @@ fn folded_thinking_and_long_param_are_clickable() {
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Tool {
             position: 0,
             call: ToolCallView {

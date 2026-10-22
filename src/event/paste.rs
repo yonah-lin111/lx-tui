@@ -57,6 +57,11 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     }
     // 粘贴也是编辑：让双 Esc 的待命/选中失效（设计 4.2 / D8）。
     pane.lx.clear_rewind();
+    // Shell 模式：路径就是命令字面量，不弹参照面板、不改写引用。
+    if pane.lx.shell_mode() {
+        pane.lx.insert_str(&text);
+        return true;
+    }
     if let Some(paths) = crate::platform::parse_path_text(&text)
         && let Some(candidates) = candidates_from_paths(&paths)
     {

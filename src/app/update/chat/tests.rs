@@ -10,6 +10,7 @@ mod slash_panels;
 mod stop;
 mod task_page;
 mod timeline;
+mod user_shell;
 mod viewport_anchor;
 
 use super::*;
@@ -596,6 +597,8 @@ fn session_loaded_rebuilds_view_and_selection() {
             external_id: "u1".into(),
             sequence: 0,
             turn_index: 0,
+            kind: "chat".to_string(),
+            user_shell: None,
             role: "user".into(),
             status: "complete".into(),
             model_provider: None,
@@ -624,6 +627,8 @@ fn session_loaded_rebuilds_view_and_selection() {
             external_id: "a1".into(),
             sequence: 1,
             turn_index: 0,
+            kind: "chat".to_string(),
+            user_shell: None,
             role: "assistant".into(),
             status: "interrupted".into(),
             model_provider: Some("p".into()),
@@ -759,6 +764,8 @@ fn append_stream_delta_merges_adjacent_same_kind() {
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: Vec::new(),
         model_label: None,
         error_code: None,
@@ -790,6 +797,8 @@ fn signature_metadata_binds_to_reasoning_part() {
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: Vec::new(),
         model_label: None,
         error_code: None,

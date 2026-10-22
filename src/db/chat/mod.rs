@@ -7,6 +7,7 @@
 mod process;
 pub mod rewind;
 mod tools;
+mod user_shell;
 
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
 pub use rewind::{
@@ -18,6 +19,7 @@ pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
     ToolCallResult, ToolCallTicket, ToolTerminalStatus,
 };
+pub use user_shell::{MAX_USER_SHELL_OUTPUT_BYTES, UserShellCommitted, UserShellRecord};
 
 use std::path::Path;
 
@@ -32,8 +34,9 @@ pub struct SessionSummary {
     pub title: String,
     /// 首条用户消息的单行截断预览。
     pub first_user_message: String,
-    pub model_provider: String,
-    pub model_id: String,
+    /// 当前模型；纯本地命令会话没有模型（NULL，不是空串）。
+    pub model_provider: Option<String>,
+    pub model_id: Option<String>,
     pub variant: Option<String>,
     /// `active` / `closed`。
     pub status: String,
@@ -49,6 +52,8 @@ pub struct ChatMessage {
     pub external_id: String,
     pub sequence: i64,
     pub turn_index: i64,
+    /// `chat` / `user_shell`。
+    pub kind: String,
     /// `user` / `assistant`。
     pub role: String,
     /// `complete` / `streaming` / `interrupted` / `failed`。
@@ -65,6 +70,8 @@ pub struct ChatMessage {
     pub cache_write_tokens: Option<i64>,
     pub created_at_ms: i64,
     pub completed_at_ms: Option<i64>,
+    /// 本地命令的完整执行事实（仅 `kind == "user_shell"`）。
+    pub user_shell: Option<UserShellRecord>,
     /// 有序内容块（text / reasoning 交错保持原始顺序）。
     pub parts: Vec<ChatPart>,
     /// 该消息的工具调用（按 `(message_id, position)` 有序）；用户消息恒为空。
@@ -208,15 +215,18 @@ impl Database {
         let mut statement = self.conn.prepare(
             r#"SELECT external_id, sequence, turn_index, role, status, model_provider, model_id,
                       variant, stop_reason, error_code, input_tokens, output_tokens,
-                      cache_read_tokens, cache_write_tokens, created_at_ms, completed_at_ms
+                      cache_read_tokens, cache_write_tokens, created_at_ms, completed_at_ms,
+                      kind, user_shell_json
                FROM agent_message WHERE session_id = ?1 ORDER BY sequence"#,
         )?;
         let mut messages: Vec<ChatMessage> = statement
             .query_map(params![session_id], |row| {
+                let json: Option<String> = row.get(17)?;
                 Ok(ChatMessage {
                     external_id: row.get(0)?,
                     sequence: row.get(1)?,
                     turn_index: row.get(2)?,
+                    kind: row.get(16)?,
                     role: row.get(3)?,
                     status: row.get(4)?,
                     model_provider: row.get(5)?,
@@ -230,6 +240,7 @@ impl Database {
                     cache_write_tokens: row.get(13)?,
                     created_at_ms: row.get(14)?,
                     completed_at_ms: row.get(15)?,
+                    user_shell: json.as_deref().and_then(UserShellRecord::from_json),
                     parts: Vec::new(),
                     tools: Vec::new(),
                 })
@@ -605,19 +616,8 @@ impl Database {
         let Some(external) = self.workspace_external_id(workspace)? else {
             return Ok(None);
         };
-        let row: Option<(String, String, Option<String>)> = self
-            .conn
-            .query_row(
-                "SELECT model_provider, model_id, variant FROM agent_session WHERE external_id = ?1 AND workspace_id = ?2",
-                params![session_id, external],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        Ok(row.map(|(provider, model, variant)| ModelSnapshot {
-            provider,
-            model,
-            variant,
-        }))
+        // 模型列可为 NULL（纯本地命令会话）；只有 provider 与 model 都存在才算有效选择。
+        user_shell::session_model(&self.conn, &external, session_id)
     }
 
     /// 异常重启恢复：把遗留 `streaming` assistant 标记为 `interrupted`，
@@ -842,6 +842,26 @@ pub fn chat_message_tool_views(
         .collect()
 }
 
+/// 展示视图 → 持久化记录（上下文装配与 checkpoint 用；字段一一对应，不丢事实）。
+fn user_shell_record_of(view: &crate::app::state::lx::chat::UserShellView) -> UserShellRecord {
+    UserShellRecord {
+        command: view.command.clone(),
+        cwd: view.cwd.clone(),
+        shell: view.shell.clone(),
+        state: view.state.as_str().to_string(),
+        exit_code: view.exit_code,
+        duration_ms: view.duration_ms,
+        output: view.output.clone(),
+        output_start: view.output_start,
+        output_end: view.output_end,
+        dropped_bytes: view.dropped_bytes,
+        truncated: view.truncated,
+        runtime_epoch: view.runtime_epoch.clone(),
+        process_id: view.process_id,
+        revision: view.revision,
+    }
+}
+
 /// 窗格聊天视图 → 装配用 DB 消息记录（parts 与 tools 同源映射）。
 ///
 /// **选择**：`/resume` 后的下一轮装配走「窗格内存视图 → 记录 → `context::assemble`」，
@@ -859,6 +879,7 @@ pub fn chat_message_views_to_db(
             external_id: message.id.clone(),
             sequence: sequence as i64,
             turn_index: message.turn_index,
+            kind: message.kind.clone(),
             role: message.role.clone(),
             status: message.status.clone(),
             model_provider: None,
@@ -872,6 +893,7 @@ pub fn chat_message_views_to_db(
             cache_write_tokens: None,
             created_at_ms: 0,
             completed_at_ms: None,
+            user_shell: message.shell.as_ref().map(user_shell_record_of),
             parts: chat_message_part_views(message),
             tools: chat_message_tool_views(message),
         })

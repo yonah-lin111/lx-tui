@@ -117,6 +117,20 @@ pub enum AppEvent {
         operation_id: String,
         outcome: chat::RewindOutcome,
     },
+    /// 本地命令 spawn 成功：登记进程 ID，按修订号决定是否清空草稿。
+    UserShellSpawned {
+        pane: PaneId,
+        generation: u64,
+        message_id: String,
+        process_id: u64,
+    },
+    /// 本地命令 spawn 失败：记录失败原因，保留草稿可重试。
+    UserShellSpawnFailed {
+        pane: PaneId,
+        generation: u64,
+        message_id: String,
+        code: String,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -259,6 +273,10 @@ async fn run_loop(
             dirty = true;
         }
         if chat::prune_pending_guards(state, &mut chat_streams) {
+            dirty = true;
+        }
+        // 本地命令：DB 预登记成功后才 spawn；与模型轮次并行。
+        if chat::pump_user_shells(state, &mut chat_streams, &sender, persistence) {
             dirty = true;
         }
         // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
@@ -451,6 +469,12 @@ async fn run_loop(
                 // 停止后落库终态：否则下次启动这些行仍是 running，
                 // 卡片会显示 Running 但没有任何进程可停（设计 §8）。
                 chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
+                // 用户命令记录同样收尾（保留已产生输出，标记 interrupted/stopped）。
+                chat::user_shell::persist_reaped(
+                    persistence,
+                    &mut chat_streams.user_shell,
+                    &snapshots,
+                );
             }
         }
     }
@@ -610,6 +634,39 @@ fn handle_app_event(
         } => {
             // 会话运行实例回收后的终态落库：只写终态，活进程快照一律跳过。
             chat::persist_terminal_snapshots(persistence, &workspace, &epoch, &snapshots);
+            chat::user_shell::persist_reaped(persistence, &mut chat_streams.user_shell, &snapshots);
+        }
+        AppEvent::UserShellSpawned {
+            pane,
+            generation,
+            message_id,
+            process_id,
+        } => {
+            chat::user_shell::handle_spawned(
+                state,
+                chat_streams,
+                persistence,
+                pane,
+                generation,
+                &message_id,
+                process_id,
+            );
+        }
+        AppEvent::UserShellSpawnFailed {
+            pane,
+            generation,
+            message_id,
+            code,
+        } => {
+            chat::user_shell::handle_spawn_failed(
+                state,
+                chat_streams,
+                persistence,
+                pane,
+                generation,
+                &message_id,
+                &code,
+            );
         }
         AppEvent::PromptWorktreeListed {
             repo_root,

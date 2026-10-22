@@ -674,11 +674,15 @@ pub struct ChatMessageView {
     pub id: String,
     /// 会话时间线显示序号（与独立撤销提示共用编号空间）。
     pub sequence: i64,
+    /// `chat` / `user_shell`（数据库 `agent_message.kind`）。
+    pub kind: String,
     /// `user` / `assistant`。
     pub role: String,
     /// `complete` / `streaming` / `interrupted` / `failed`。
     pub status: String,
     pub turn_index: i64,
+    /// 用户 shell 命令记录（仅 `kind == "user_shell"`）。
+    pub shell: Option<super::shell::UserShellView>,
     /// 有序步骤时间线（用户消息只有单个 text part；assistant 可含思考与工具）。
     pub steps: Vec<AssistantStepView>,
     /// 该轮实际模型展示名（assistant 行）。
@@ -694,6 +698,11 @@ pub struct ChatMessageView {
 }
 
 impl ChatMessageView {
+    /// 是否用户本地命令记录（不是普通聊天用户消息）。
+    pub fn is_user_shell(&self) -> bool {
+        self.kind == "user_shell" || self.shell.is_some()
+    }
+
     /// 全部内容块（按时间线顺序；不含工具步骤）。
     pub fn parts(&self) -> impl Iterator<Item = &ChatPartView> {
         self.steps.iter().filter_map(AssistantStepView::part)

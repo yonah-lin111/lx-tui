@@ -26,9 +26,11 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
     ChatMessageView {
         sequence: message.sequence,
         id: message.external_id.clone(),
+        kind: message.kind.clone(),
         role: message.role.clone(),
         status: message.status.clone(),
         turn_index: message.turn_index,
+        shell: message.user_shell.as_ref().map(shell_view_of),
         steps,
         model_label: message
             .model_provider
@@ -42,6 +44,26 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
         duration_ms: message
             .completed_at_ms
             .map(|completed| completed.saturating_sub(message.created_at_ms).max(0)),
+    }
+}
+
+/// DB 本地命令记录 → 展示视图（状态由稳定字符串还原，退出码原样携带）。
+fn shell_view_of(record: &crate::db::chat::UserShellRecord) -> crate::app::state::UserShellView {
+    crate::app::state::UserShellView {
+        command: record.command.clone(),
+        cwd: record.cwd.clone(),
+        shell: record.shell.clone(),
+        state: crate::app::state::ProcessStateView::from_stored(&record.state, record.exit_code),
+        exit_code: record.exit_code,
+        duration_ms: record.duration_ms,
+        output: record.output.clone(),
+        output_start: record.output_start,
+        output_end: record.output_end,
+        dropped_bytes: record.dropped_bytes,
+        truncated: record.truncated,
+        runtime_epoch: record.runtime_epoch.clone(),
+        process_id: record.process_id,
+        revision: record.revision,
     }
 }
 

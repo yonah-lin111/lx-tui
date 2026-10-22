@@ -346,9 +346,21 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Enter => {
             super::chat::try_send(state, pane_id);
         }
-        // 无面板：Esc 在流中「单击待命、双击停止」（对齐 opencode），否则吞掉。
+        // 无面板：空 Shell 模式且无活动任务时 Esc 退出模式；否则走停止待命。
         LxInput::Escape => {
-            super::chat::escape_stop(state, pane_id);
+            let idle_shell = state.pane_anywhere(pane_id).is_some_and(|target| {
+                target.lx.shell_mode()
+                    && target.lx.input.is_empty()
+                    && !target.lx.chat.request.is_busy()
+                    && !target.lx.chat.has_running_shell()
+            });
+            if idle_shell {
+                if let Some(target) = state.pane_mut_anywhere(pane_id) {
+                    target.lx.exit_shell();
+                }
+            } else {
+                super::chat::escape_stop(state, pane_id);
+            }
         }
         // Ctrl+T：切换最近 thinking 块。
         LxInput::ToggleThinking => {
@@ -365,7 +377,10 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::SelectNextTool => {
             super::chat::select_adjacent_tool(state, pane_id, true);
         }
-        LxInput::Tab => {}
+        // 忙时 Tab 把 shell 草稿排队；空闲时保留输入（不执行）。
+        LxInput::Tab => {
+            super::chat::queue_shell(state, pane_id);
+        }
     }
 }
 
@@ -443,6 +458,16 @@ fn edits_text(command: LxInput) -> bool {
 
 /// 编辑后刷新 `/` 命令候选面板：行首命令位置输入 `/` 时打开/过滤。
 fn refresh_slash_panel(state: &mut AppState, pane: PaneId) {
+    // Shell 模式：`/` 是命令字面值，不打开任何内置面板。
+    if state
+        .pane_anywhere(pane)
+        .is_some_and(|target| target.lx.shell_mode())
+    {
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.slash = None;
+        }
+        return;
+    }
     // 二级面板（`/model`、`/resume`）的过滤词是**输入框全文**：任何编辑后都重算一次。
     refresh_slash_filter(state, pane);
     let query = state.pane_anywhere(pane).and_then(|target| {

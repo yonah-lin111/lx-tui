@@ -10,6 +10,8 @@ fn user_message(id: &str, text: &str, sequence: i64) -> crate::app::state::ChatM
     crate::app::state::ChatMessageView {
         sequence,
         id: id.into(),
+        kind: "chat".into(),
+        shell: None,
         role: "user".into(),
         status: "complete".into(),
         turn_index: 0,
@@ -37,6 +39,8 @@ fn assistant_message(id: &str, sequence: i64) -> crate::app::state::ChatMessageV
     crate::app::state::ChatMessageView {
         sequence,
         id: id.into(),
+        kind: "chat".into(),
+        shell: None,
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,

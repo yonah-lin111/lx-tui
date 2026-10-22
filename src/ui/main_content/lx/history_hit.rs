@@ -196,6 +196,9 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
             message_index: *message_index,
             step_index: *step_index,
         },
+        history::CardKind::Shell { message_id, .. } => CardTarget::Shell {
+            message_id: message_id.clone(),
+        },
     }
 }
 

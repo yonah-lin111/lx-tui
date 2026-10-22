@@ -197,6 +197,20 @@ pub const LX_TOGGLE_LX: &str = "[lx]";
 /// lx 页底部输入框：`>` 前缀与占位。
 pub const LX_INPUT_PROMPT: &str = ">";
 pub const LX_INPUT_PLACEHOLDER: &str = "Ask anything…";
+/// shell 模式：与 `>` 等宽的 `! ` 前缀与规则行右端提示。
+pub const LX_INPUT_SHELL_PROMPT: &str = "!";
+pub const LX_INPUT_SHELL_PLACEHOLDER: &str = "Run a shell command…";
+pub const LX_INPUT_SHELL_MODE: &str = "Shell mode";
+/// 本地命令：
+pub const LX_SHELL_EMPTY_COMMAND: &str = "Type a command after !";
+pub const LX_SHELL_NO_CWD: &str = "No working directory for this command";
+pub const LX_SHELL_COMMIT_FAILED: &str = "Could not save the command; draft kept";
+pub const LX_SHELL_SPAWN_FAILED: &str = "Could not start the command";
+pub const LX_SHELL_RUNNING: &str = "Running";
+pub const LX_SHELL_YOU_RAN: &str = "You ran";
+pub const LX_SHELL_NO_OUTPUT: &str = "(no output)";
+pub const LX_SHELL_WAITING_OUTPUT: &str = "waiting for output…";
+pub const LX_SHELL_STOP_ARMED: &str = "Press Esc again to stop the running command";
 /// loading 行右端的回到底部控件：箭头 + 右侧说明文字。
 pub const LX_JUMP_BOTTOM: &str = "↓";
 pub const LX_JUMP_BOTTOM_HINT: &str = "jump to bottom";

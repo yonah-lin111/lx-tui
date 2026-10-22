@@ -24,7 +24,7 @@
 //! 装配只负责「DB/视图历史 + 末尾当前 user 消息」。
 
 use crate::chat::events::{ChatRequest, ChatTurn, ModelItem};
-use crate::db::chat::{ChatMessage, ModelSnapshot, ToolCallRecord};
+use crate::db::chat::{ChatMessage, ModelSnapshot, ToolCallRecord, UserShellRecord};
 
 #[cfg(test)]
 mod tests;
@@ -62,6 +62,20 @@ pub struct Assembly {
     pub omitted_turns: usize,
     /// 当前用户消息是否单独超限（报错，不截断用户输入）。
     pub draft_exceeds: bool,
+    /// 每个参与回放的组的边界（普通完整聊天组或独立终态命令组）。
+    ///
+    /// `shrink_once` 按它整组删除，不能再用「每轮固定两条 turn / 遇到第二个 UserText」
+    /// 推断边界——命令组只有一条 user、没有 assistant。
+    groups: Vec<ContextGroup>,
+}
+
+/// 一个可回放组在两条视图中的区间（`end` 不含）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ContextGroup {
+    turn_start: usize,
+    turn_end: usize,
+    item_start: usize,
+    item_end: usize,
 }
 
 /// 保守估算系数：每 token 约 4 字节（只用于装配，不作为 UI 的已用 token）。
@@ -69,15 +83,15 @@ const CHARS_PER_TOKEN: usize = 4;
 /// 请求封装开销预留（消息结构、role 标记等）。
 const ENVELOPE_RESERVE_TOKENS: u64 = 256;
 
-/// 一个参与回放的完整轮次（已展开成有序 items）。
+/// 一个参与回放的组：普通完整聊天轮次，或一条独立终态本地命令。
 struct PlannedTurn {
-    /// user 正文（text parts 依序拼接）。
+    /// user 正文（聊天正文，或命令的稳定格式化文本）。
     user_text: String,
-    /// assistant 可见正文（旧纯文本视图用；reasoning 不计入）。
-    assistant_text: String,
-    /// assistant 的有序步骤：正文与成对 call/result（不含 reasoning）。
+    /// assistant 可见正文（旧纯文本视图用；reasoning 不计入）；命令组为 None。
+    assistant_text: Option<String>,
+    /// assistant 的有序步骤：正文与成对 call/result（不含 reasoning）；命令组为空。
     items: Vec<ModelItem>,
-    /// 该轮估算 token（user 正文 + 上述全部 items，含工具参数与结果）。
+    /// 该组估算 token（user 正文 + 上述全部 items）。
     tokens: u64,
 }
 
@@ -112,20 +126,32 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
     // 两条视图同步装配：turns 保持旧纯文本形态，items 承载结构化步骤。
     let mut turns: Vec<ChatTurn> = Vec::with_capacity(kept.len() * 2 + 1);
     let mut items: Vec<ModelItem> = Vec::new();
+    let mut groups = Vec::with_capacity(kept.len());
     for turn in &kept {
+        let turn_start = turns.len();
+        let item_start = items.len();
         turns.push(ChatTurn {
             role: "user".into(),
             text: turn.user_text.clone(),
             reasoning_metadata: None,
         });
-        // 跨 provider 的 reasoning 元数据不回传：只回传该轮已完成正文。
-        turns.push(ChatTurn {
-            role: "assistant".into(),
-            text: turn.assistant_text.clone(),
-            reasoning_metadata: None,
-        });
+        // 聊天组才有 assistant 正文；命令组是独立 user 事实，不伪造配对。
+        if let Some(assistant_text) = &turn.assistant_text {
+            // 跨 provider 的 reasoning 元数据不回传：只回传该轮已完成正文。
+            turns.push(ChatTurn {
+                role: "assistant".into(),
+                text: assistant_text.clone(),
+                reasoning_metadata: None,
+            });
+        }
         items.push(ModelItem::UserText(turn.user_text.clone()));
         items.extend(turn.items.iter().cloned());
+        groups.push(ContextGroup {
+            turn_start,
+            turn_end: turns.len(),
+            item_start,
+            item_end: items.len(),
+        });
     }
     // 当前用户消息必须保留（不因预算截断用户输入）。
     let draft_exceeds = budget.is_some_and(|budget| draft_tokens as u64 > budget);
@@ -144,6 +170,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         },
         omitted_turns,
         draft_exceeds,
+        groups,
     }
 }
 
@@ -154,34 +181,17 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
 /// 不会留下 orphan result。只剩当前用户消息时返回 None（调用方报错）。
 pub fn shrink_once(assembly: &Assembly) -> Option<ChatRequest> {
     let request = &assembly.request;
-    // 第一个 `UserText` 之后的第二个 `UserText` 是第一轮的结束边界；
-    // 末尾的 `UserText` 是当前草稿，永远不会被当作可删轮次。
-    let second_user = request
-        .items
-        .iter()
-        .enumerate()
-        .filter(|(_, item)| matches!(item, ModelItem::UserText(_)))
-        .nth(1)
-        .map(|(index, _)| index)?;
-    // turns 视图：每完整轮恰 2 条，且末尾还有 1 条当前 user 消息。
-    if request.turns.len() < 3 {
-        return None;
-    }
+    // 按装配时记录的组边界整组删除：聊天组是 user+assistant，命令组只有一条 user。
+    // 末尾的当前用户草稿不在任何组内，永远不会被删。
+    let group = assembly.groups.first()?;
     let mut turns = request.turns.clone();
-    let first_user = turns.remove(0);
-    let first_assistant = turns.remove(0);
-    if first_user.role != "user" || first_assistant.role != "assistant" {
-        // 视图不一致说明装配阶段已破坏不变量：宁可拒绝收缩，也不发出畸形历史。
-        tracing::warn!(
-            target: "lx::agent",
-            user_role = %first_user.role,
-            assistant_role = %first_assistant.role,
-            "refusing to shrink: unexpected turn layout"
-        );
+    let mut items = request.items.clone();
+    if group.turn_end > turns.len() || group.item_end > items.len() {
+        tracing::warn!(target: "lx::agent", "refusing to shrink: group span out of range");
         return None;
     }
-    let mut items = request.items.clone();
-    items.drain(..second_user);
+    items.drain(group.item_start..group.item_end);
+    turns.drain(group.turn_start..group.turn_end);
     Some(ChatRequest {
         turns,
         items,
@@ -216,10 +226,21 @@ fn plan_turns(messages: &[ChatMessage]) -> Vec<PlannedTurn> {
     let mut planned = Vec::new();
     let mut index = 0;
     while index < messages.len() {
+        // 独立命令组：终态且 JSON 完好才回放；运行中/损坏记录都不进模型。
+        if messages[index].kind == "user_shell" {
+            if let Some(group) = plan_user_shell(&messages[index]) {
+                planned.push(group);
+            }
+            index += 1;
+            continue;
+        }
         let turn_index = messages[index].turn_index;
         let mut user: Option<&ChatMessage> = None;
         let mut assistant: Option<&ChatMessage> = None;
-        while index < messages.len() && messages[index].turn_index == turn_index {
+        while index < messages.len()
+            && messages[index].turn_index == turn_index
+            && messages[index].kind != "user_shell"
+        {
             let message = &messages[index];
             match message.role.as_str() {
                 "user" if user.is_none() => user = Some(message),
@@ -251,10 +272,100 @@ fn plan_turn(user: &ChatMessage, assistant: &ChatMessage) -> PlannedTurn {
     }
     PlannedTurn {
         user_text,
-        assistant_text,
+        assistant_text: Some(assistant_text),
         items,
         tokens,
     }
+}
+
+/// 一条本地命令组：只有终态记录可回放；格式化文本是唯一事实来源。
+fn plan_user_shell(message: &ChatMessage) -> Option<PlannedTurn> {
+    let record = message.user_shell.as_ref()?;
+    // 运行中或未保存终态不注入模型（顺序屏障由调用方按 sequence 保证）。
+    if matches!(message.status.as_str(), "streaming") || !record.is_terminal() {
+        return None;
+    }
+    let text = format_user_shell(record);
+    Some(PlannedTurn {
+        tokens: estimate_tokens(&text) as u64,
+        user_text: text,
+        assistant_text: None,
+        items: Vec::new(),
+    })
+}
+
+/// 用户命令记录 → 稳定的 user 上下文文本。
+///
+/// 结构字段由代码拼接，输出正文先净化控制字符并转义结构符号，绝不改变记录边界。
+/// 回放只截断一次（64 KiB），并显式标注丢弃字节。
+pub fn format_user_shell(record: &UserShellRecord) -> String {
+    let command = escape_record_text(&sanitize_control(&record.command));
+    let output = truncate_result_for_replay(&escape_record_text(&sanitize_control(&record.output)));
+    let mut result = String::new();
+    result.push_str("State: ");
+    result.push_str(&record.state);
+    result.push('\n');
+    result.push_str("Exit code: ");
+    result.push_str(
+        &record
+            .exit_code
+            .map_or_else(|| "unknown".to_string(), |code| code.to_string()),
+    );
+    result.push('\n');
+    if let Some(duration_ms) = record.duration_ms {
+        result.push_str(&format!(
+            "Duration: {:.1} seconds\n",
+            duration_ms as f64 / 1_000.0
+        ));
+    }
+    if record.output_truncated() {
+        result.push_str(&format!(
+            "Output truncated: {} earlier bytes dropped\n",
+            record.dropped_bytes
+        ));
+    }
+    result.push_str("Output:\n");
+    result.push_str(if output.is_empty() {
+        "(no output)"
+    } else {
+        output.as_str()
+    });
+    format!(
+        "<user_shell_command>\n<command>{command}</command>\n<result>\n{result}\n</result>\n</user_shell_command>"
+    )
+}
+
+/// 结构文本转义：输出里的尖括号/& 不得伪造记录字段。
+fn escape_record_text(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// 剥离 ANSI/控制字符（保留换行与制表符）。
+fn sanitize_control(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            // CSI / OSC 等转义序列：吞掉引导符与后续参数字节，直到终止字符。
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            } else {
+                let _ = chars.next();
+            }
+            continue;
+        }
+        if ch == '\n' || ch == '\t' || !ch.is_control() {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// assistant 的有序模型项：把 `parts` 与 `tools` 按 `position` 合并成唯一时间线。

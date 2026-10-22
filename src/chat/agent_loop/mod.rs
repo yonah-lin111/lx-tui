@@ -116,6 +116,8 @@ pub enum AgentHostRequest {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 下一次采样前取已落库的本地命令结果（按提交序的连续终态前缀）。
+    UserShellUpdates { reply: oneshot::Sender<Vec<String>> },
 }
 
 /// loop 对事件层的依赖（持久化门槛 + 可见状态门槛）。
@@ -165,6 +167,20 @@ pub trait AgentHost: Send {
                 Ok(result) => result,
                 Err(_) => Err(HostError::Cancelled),
             }
+        }
+    }
+
+    /// 下一次采样前读取本次请求尚未吸收的本地命令结果。
+    ///
+    /// 回执丢失（事件循环退出）按空集处理：命令结果仍在库里，下一轮聊天会回放。
+    fn user_shell_updates(&mut self) -> impl Future<Output = Vec<String>> + Send
+    where
+        Self: Sized,
+    {
+        async move {
+            let (reply, receiver) = oneshot::channel();
+            self.send(AgentHostRequest::UserShellUpdates { reply });
+            receiver.await.unwrap_or_default()
         }
     }
 }
@@ -385,6 +401,19 @@ impl ModelContext {
         }
     }
 
+    /// 追加一条本地命令结果（user 角色事实，排在已闭合工具对之后）。
+    ///
+    /// 同时进入 `turns` 纯文本视图与 `items` 结构化视图：不支持 item 的 transport
+    /// 也能读到命令事实。
+    fn push_user_context(&mut self, text: String) {
+        self.items.push(ModelItem::UserText(text.clone()));
+        self.request.turns.push(crate::chat::events::ChatTurn {
+            role: "user".into(),
+            text,
+            reasoning_metadata: None,
+        });
+    }
+
     /// 追加一条工具结果（与前面的调用成对；失败结果带 `is_error`）。
     ///
     /// 回放侧单条结果上限与历史装配同一口径（[`MAX_TOOL_RESULT_REPLAY_BYTES`]）：
@@ -423,6 +452,10 @@ where
     for step in 0..MAX_MODEL_STEPS {
         if *cancel.borrow() {
             return TurnSummary::interrupted(usage);
+        }
+        // 每次采样前吸收已落库的本地命令结果；不额外触发模型请求。
+        for text in host.user_shell_updates().await {
+            context.push_user_context(text);
         }
         let outcome = stream_one(context.next_request(), cancel.clone()).await;
         add_usage(&mut usage, &outcome.deltas);

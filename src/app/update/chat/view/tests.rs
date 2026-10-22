@@ -38,6 +38,8 @@ fn message(parts: Vec<ChatPart>, tools: Vec<ToolCallRecord>) -> ChatMessage {
         external_id: "a1".into(),
         sequence: 1,
         turn_index: 0,
+        kind: "chat".to_string(),
+        user_shell: None,
         role: "assistant".into(),
         status: "complete".into(),
         model_provider: None,

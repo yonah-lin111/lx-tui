@@ -39,8 +39,34 @@ pub(super) fn draw(
         .saturating_sub(INPUT_PREFIX)
         .saturating_sub(INPUT_SCROLLBAR);
     let rows = lx.visual_rows();
-    let tokens = crate::ui::markdown::scan(&lx.input);
+    let shell = lx.shell_mode();
+    // Shell 正文按原始脚本绘制：不做 Markdown 词法高亮。
+    let tokens = if shell {
+        Vec::new()
+    } else {
+        crate::ui::markdown::scan(&lx.input)
+    };
     let lines: Vec<&str> = lx.input.split('\n').collect();
+    // 规则行右端的模式/排队提示：窄宽度先隐藏，绝不改变输入框高度。
+    let queued = lx.chat.queue.len();
+    let label = match (shell, queued) {
+        (true, 0) => Some(text::LX_INPUT_SHELL_MODE.to_string()),
+        (true, n) => Some(format!("{} · {n} queued", text::LX_INPUT_SHELL_MODE)),
+        (false, 0) => None,
+        (false, n) => Some(format!("{n} queued")),
+    };
+    if let Some(label) = label {
+        let width = u16::try_from(display_width(&label)).unwrap_or(u16::MAX);
+        if rect.width > width.saturating_add(INPUT_PREFIX).saturating_add(2) {
+            let x = rect.right().saturating_sub(width).saturating_sub(1);
+            let label_style = if shell {
+                style::shell_prompt()
+            } else {
+                style::muted()
+            };
+            grid.put(x, bottom_rule, &label, label_style);
+        }
+    }
     let (cursor_row, _) = lx.cursor_visual();
     let selection = lx.text_selection_range();
 
@@ -61,7 +87,16 @@ pub(super) fn draw(
             .rfind('\n')
             .map_or(0, |offset| offset + 1);
         if row_index == 0 {
-            grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
+            if shell {
+                grid.put(
+                    rect.x,
+                    y,
+                    text::LX_INPUT_SHELL_PROMPT,
+                    style::shell_prompt(),
+                );
+            } else {
+                grid.put(rect.x, y, text::LX_INPUT_PROMPT, style::accent());
+            }
         }
         let line_tokens = tokens
             .get(line_index)
@@ -87,8 +122,14 @@ pub(super) fn draw(
     }
 
     if lx.input.is_empty() {
-        let placeholder =
-            text::truncate_to_width(text::LX_INPUT_PLACEHOLDER, usize::from(content_w));
+        let placeholder = text::truncate_to_width(
+            if shell {
+                text::LX_INPUT_SHELL_PLACEHOLDER
+            } else {
+                text::LX_INPUT_PLACEHOLDER
+            },
+            usize::from(content_w),
+        );
         grid.put(content_x, text_top, &placeholder, style::muted());
     }
     cursor

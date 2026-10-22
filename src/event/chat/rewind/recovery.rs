@@ -69,6 +69,13 @@ pub fn recover_startup(database: &Database) {
         Ok(_) => {}
         Err(error) => tracing::warn!(%error, "recovering interrupted processes failed"),
     }
+    match database.recover_interrupted_user_shells(&guarded) {
+        Ok(recovered) if recovered > 0 => {
+            tracing::info!(recovered, "recovered interrupted user shells");
+        }
+        Ok(_) => {}
+        Err(error) => tracing::warn!(%error, "recovering interrupted user shells failed"),
+    }
     drop(guards);
 }
 

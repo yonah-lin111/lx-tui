@@ -8,18 +8,20 @@ pub mod chat;
 mod history;
 pub mod mention;
 pub mod rewind;
+pub mod shell;
 pub mod slash;
 pub mod task;
 
 use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
+pub use shell::LxInputMode;
 
 pub use chat::{
     AssistantStepView, CardTarget, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
     DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, InputHintLevel,
-    InteractionAction, LxChat, ModelsSnapshot, PlanSnapshotView, PlanStepView,
-    ProcessInteractionView, ProcessStateView, RequestKey, RequestState, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary,
+    InteractionAction, LxChat, ModelsSnapshot, PendingShell, PlanSnapshotView, PlanStepView,
+    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
+    ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use mention::{LxMention, LxMentionView};
 pub use rewind::{
@@ -50,8 +52,12 @@ impl LxEntry {
 pub struct Lx {
     /// 当前选中入口；仅鼠标点击切换，重启复位为 Native。
     pub entry: LxEntry,
-    /// 多行输入内容。
+    /// 多行输入内容；Shell 模式下只存命令正文（不含 `!` 前缀）。
     pub input: String,
+    /// 当前编辑模式；仅首个非空白字符决定，正文中的 `！` 不触发。
+    input_mode: LxInputMode,
+    /// 输入内容修订号：任何正文/模式改动单调递增，undo/redo 也不回退。
+    revision: u64,
     /// 光标字节偏移；恒位于字符边界。
     pub cursor: usize,
     /// 输入框内容宽度（列）；按几何同步，用于软换行与视觉行移动。未同步前视为不换行。
@@ -105,11 +111,12 @@ struct LxPaste {
     redo: Vec<LxSnapshot>,
 }
 
-/// lx 输入缓冲的一份快照（文本 + 光标），供撤销/重做。
+/// lx 输入缓冲的一份快照（文本 + 光标 + 模式），供撤销/重做。
 #[derive(Debug, Clone)]
 struct LxSnapshot {
     text: String,
     cursor: usize,
+    mode: LxInputMode,
 }
 
 /// 撤销历史上限。
@@ -126,6 +133,8 @@ impl Lx {
         Self {
             entry: LxEntry::Native,
             input: String::new(),
+            input_mode: LxInputMode::Chat,
+            revision: 0,
             cursor: 0,
             width: u16::MAX,
             height: usize::MAX,
@@ -164,6 +173,86 @@ impl Lx {
     /// 输入框视口首视觉行索引。
     pub fn scroll(&self) -> usize {
         self.scroll
+    }
+
+    /// 当前编辑模式。
+    pub fn input_mode(&self) -> LxInputMode {
+        self.input_mode
+    }
+
+    /// 输入内容修订号（单调递增；供 shell 草稿 ACK 比对）。
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// 完整输入文本：普通模式为正文，shell 模式为 `!` + 正文。
+    pub fn serialized_input(&self) -> String {
+        shell::serialize(self.input_mode, &self.input)
+    }
+
+    /// 是否处于 shell 模式。
+    pub fn shell_mode(&self) -> bool {
+        self.input_mode == LxInputMode::Shell
+    }
+
+    /// 退出 shell 模式（保留正文），返回是否确实退出。
+    pub fn exit_shell(&mut self) -> bool {
+        if self.input_mode != LxInputMode::Shell {
+            return false;
+        }
+        self.input_mode = LxInputMode::Chat;
+        self.touch();
+        self.refresh_panel();
+        true
+    }
+
+    /// 用完整文本替换草稿（历史召回、排队恢复共用同一模式识别）。
+    pub fn import_full_text(&mut self, text: &str) {
+        let (mode, body) = shell::split_mode(text);
+        if self.input == body && self.input_mode == mode {
+            self.cursor = self.input.len();
+            self.text_anchor = None;
+            self.scroll_cursor_into_view();
+            return;
+        }
+        self.snapshot();
+        self.input = body;
+        self.input_mode = mode;
+        self.cursor = self.input.len();
+        self.text_anchor = None;
+        self.scroll_cursor_into_view();
+        self.refresh_panel();
+    }
+
+    /// 记录一次内容或模式改动（修订号只增不减）。
+    fn touch(&mut self) {
+        self.revision = self.revision.saturating_add(1);
+    }
+
+    /// 新插入的文本若以首个非空白 `!`/`！` 开头，吸收该标记并进入 shell 模式。
+    ///
+    /// 只检查整段输入的**首个非空白字符**；正文中间的符号永远不转换。
+    fn adopt_shell_prefix(&mut self) {
+        if self.input_mode == LxInputMode::Shell {
+            return;
+        }
+        let Some(offset) = shell::marker_offset(&self.input) else {
+            return;
+        };
+        let Some(marker) = self.input[offset..].chars().next() else {
+            return;
+        };
+        self.input.remove(offset);
+        if self.cursor > offset {
+            self.cursor = self.cursor.saturating_sub(marker.len_utf8());
+        }
+        self.input_mode = LxInputMode::Shell;
+        self.panel = None;
+        self.paste = None;
+        self.slash = None;
+        self.mention.suppress();
+        self.text_anchor = None;
+        self.touch();
     }
 
     /// 滚轮滚动输入框视口（正数向下）；返回视口是否移动。
@@ -329,8 +418,10 @@ impl Lx {
         self.undo.push(LxSnapshot {
             text: self.input.clone(),
             cursor: self.cursor,
+            mode: self.input_mode,
         });
         self.redo.clear();
+        self.touch();
     }
 
     /// 在光标处插入一个字符。
@@ -338,6 +429,7 @@ impl Lx {
         self.snapshot();
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
+        self.adopt_shell_prefix();
         self.refresh_panel();
     }
 
@@ -353,13 +445,23 @@ impl Lx {
         self.snapshot();
         self.input.insert_str(self.cursor, &sanitized);
         self.cursor += sanitized.len();
-        self.panel = None;
-        self.mention.suppress();
+        self.adopt_shell_prefix();
+        if self.input_mode == LxInputMode::Chat {
+            self.panel = None;
+            self.mention.suppress();
+        }
         self.scroll_cursor_into_view();
     }
 
     /// 在光标处换行；列表项自动续写标记（对齐 prompt 编辑器）。
     pub fn newline(&mut self) {
+        if self.input_mode == LxInputMode::Shell {
+            self.snapshot();
+            self.input.insert(self.cursor, '\n');
+            self.cursor += 1;
+            self.scroll_cursor_into_view();
+            return;
+        }
         if !list::in_fence(&self.input, self.cursor)
             && let Some(edit) = list::list_continuation(&self.input, self.cursor)
         {
@@ -380,6 +482,14 @@ impl Lx {
     /// 光标紧跟 `@路径 ` 提及之后的空白、且提及面板未打开时，一次删净整块提及
     /// （对齐 prompt 的 `mention_deletion_range` 语义）；面板打开时按普通退格编辑查询。
     pub fn backspace(&mut self) {
+        // Shell 正文起点退格：退出模式并保留正文（不再吞字符）；压一次快照，
+        // 使 undo 能恢复模式与正文。
+        if self.input_mode == LxInputMode::Shell && self.cursor == 0 {
+            self.snapshot();
+            self.input_mode = LxInputMode::Chat;
+            self.refresh_panel();
+            return;
+        }
         if self.cursor == 0 {
             return;
         }
@@ -503,9 +613,10 @@ impl Lx {
                 text,
                 cursor_at_start,
             } => {
-                // 首次向上进入浏览：先暂存当前草稿，供越过末尾时恢复。
+                // 首次向上进入浏览：先暂存完整的序列化草稿（含 shell 前缀），
+                // 供越过末尾时按同一模式识别恢复。
                 if !self.history.browsing() {
-                    self.history.begin(self.input.clone());
+                    self.history.begin(self.serialized_input());
                 }
                 self.history.set_index(index);
                 self.apply_history_text(&text);
@@ -538,19 +649,20 @@ impl Lx {
         self.refresh_panel();
     }
 
-    /// 把历史文本写回输入框：压一次撤销快照、光标置末尾、重算面板。
+    /// 把历史文本写回输入框：吸收首部 `!`/`！` 恢复模式，压一次撤销快照、光标置末尾。
     ///
-    /// 文本与当前内容完全相同时只移动光标，不产生无意义的撤销步。
+    /// 序列化文本与当前内容完全相同时只移动光标，不产生无意义的撤销步。
     fn apply_history_text(&mut self, text: &str) {
-        if self.input == text {
+        let (mode, body) = shell::split_mode(text);
+        if self.input == body && self.input_mode == mode {
             self.cursor = self.input.len();
             self.text_anchor = None;
             self.scroll_cursor_into_view();
             return;
         }
         self.snapshot();
-        self.input.clear();
-        self.input.push_str(text);
+        self.input = body;
+        self.input_mode = mode;
         self.cursor = self.input.len();
         self.text_anchor = None;
         self.scroll_cursor_into_view();
@@ -617,39 +729,46 @@ impl Lx {
         }
     }
 
-    /// 清空输入框内容。
+    /// 清空输入框内容；空 Shell 模式也可借此退出。
     pub fn clear(&mut self) {
-        if self.input.is_empty() {
+        if self.input.is_empty() && self.input_mode == LxInputMode::Chat {
             return;
         }
         self.snapshot();
         self.input.clear();
         self.cursor = 0;
+        self.input_mode = LxInputMode::Chat;
         self.refresh_panel();
     }
 
-    /// 撤销一步。
+    /// 撤销一步（恢复正文、光标与模式；修订号继续前进）。
     pub fn undo(&mut self) {
         if let Some(snapshot) = self.undo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),
                 cursor: self.cursor,
+                mode: self.input_mode,
             };
             self.redo.push(current);
-            self.cursor = snapshot.cursor;
+            self.cursor = snapshot.cursor.min(self.input.len());
+            self.input_mode = snapshot.mode;
+            self.touch();
             self.refresh_panel();
         }
     }
 
-    /// 重做一步。
+    /// 重做一步（恢复正文、光标与模式；修订号继续前进）。
     pub fn redo(&mut self) {
         if let Some(snapshot) = self.redo.pop() {
             let current = LxSnapshot {
                 text: std::mem::replace(&mut self.input, snapshot.text),
                 cursor: self.cursor,
+                mode: self.input_mode,
             };
             self.undo.push(current);
-            self.cursor = snapshot.cursor;
+            self.cursor = snapshot.cursor.min(self.input.len());
+            self.input_mode = snapshot.mode;
+            self.touch();
             self.refresh_panel();
         }
     }
@@ -658,6 +777,15 @@ impl Lx {
     ///
     /// 编辑或移动光标后调用；同时解除提及面板的压制，按当前文本与根重新评估。
     pub fn refresh_panel(&mut self) {
+        // Shell 正文按原始脚本编辑：不弹 Markdown / 提及 / 斜杠 / 路径参照面板。
+        if self.input_mode == LxInputMode::Shell {
+            self.panel = None;
+            self.slash = None;
+            self.paste = None;
+            self.mention.suppress();
+            self.scroll_cursor_into_view();
+            return;
+        }
         self.mention.unsuppress();
         self.mention.refresh(&self.input, self.cursor);
         if self.mention.is_open() {
@@ -798,7 +926,7 @@ impl Lx {
     /// 占位插入与后续引用改写同属一步撤销；打开时关闭 md 块面板（互斥）。
     /// 候选为空返回 false 且不改动缓冲区。
     pub fn paste_open(&mut self, candidates: Vec<PasteCandidate>) -> bool {
-        if candidates.is_empty() {
+        if candidates.is_empty() || self.input_mode == LxInputMode::Shell {
             return false;
         }
         let plain: Vec<String> = candidates

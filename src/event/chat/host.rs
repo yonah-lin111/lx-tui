@@ -49,6 +49,11 @@ pub enum AgentHostEvent {
     },
     /// 文件 mutation 的 Prepare/Commit：worker 在路径锁内等待持久化回执。
     Mutation(super::file_snapshots::MutationHostEvent),
+    /// 下一次采样前的本地命令结果增量。
+    UserShellUpdates {
+        key: RequestKey,
+        reply: oneshot::Sender<Vec<String>>,
+    },
 }
 
 /// [`AgentHost`] 的生产实现：把请求转投事件循环并等待回执。
@@ -76,6 +81,10 @@ impl AgentHost for EventHost {
                 reply,
             },
             // mutation 请求不经 `EventHost`（由文件 recorder 直接投递）。
+            AgentHostRequest::UserShellUpdates { reply } => AgentHostEvent::UserShellUpdates {
+                key: self.key.clone(),
+                reply,
+            },
         };
         // 发送失败（事件循环已退出）时 drop 回执通道：调用方按取消处理。
         let _ = self.sender.send(AppEvent::AgentHost(event));

@@ -19,6 +19,7 @@ use crate::ui::text;
 mod process;
 pub mod rewind;
 mod session;
+pub mod user_shell;
 mod view;
 mod viewport;
 
@@ -42,6 +43,11 @@ pub use session::{
     open_task_page_at, persist_default_model, rename_session, resume_session, scroll_task_list,
     scroll_task_output, select_task_tab, set_task_output_scroll, stop_selected_process,
 };
+pub use user_shell::{
+    apply_user_shell_snapshot, cancel_user_shells, on_user_shell_begun, on_user_shell_cancelled,
+    on_user_shell_rejected, on_user_shell_spawn_failed, on_user_shell_spawned,
+    on_user_shell_terminal, queue_chat_while_shell_runs, queue_shell, try_submit_user_shell,
+};
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
@@ -53,6 +59,14 @@ pub use viewport::{
 ///
 /// 返回是否产生状态变化。DB ack 成功后才清草稿；失败保留草稿可重试。
 pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
+    // shell 分派必须早于入口/模型/busy 检查：本地命令不需要模型，模型忙时照常执行。
+    if user_shell::try_submit_user_shell(state, pane) {
+        return true;
+    }
+    // 仅本地命令在跑：普通聊天冻结入队，等结果落库后再发送。
+    if user_shell::queue_chat_while_shell_runs(state, pane) {
+        return true;
+    }
     // 先收集纯数据（避免长持窗格可变借用）。
     let context = {
         let Some(target) = state.pane_anywhere(pane) else {
@@ -203,9 +217,11 @@ pub fn on_turn_committed(
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.user_sequence,
         id: committed.user_message_id.clone(),
+        kind: "chat".into(),
         role: "user".into(),
         status: "complete".into(),
         turn_index: committed.turn_index,
+        shell: None,
         steps: vec![AssistantStepView::Part {
             position: 0,
             part: ChatPartView {
@@ -227,9 +243,11 @@ pub fn on_turn_committed(
     target.lx.chat.messages.push(ChatMessageView {
         sequence: committed.assistant_sequence,
         id: committed.assistant_message_id.clone(),
+        kind: "chat".into(),
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: committed.turn_index,
+        shell: None,
         steps: Vec::new(),
         model_label,
         error_code: None,
@@ -393,8 +411,8 @@ pub fn on_stream_finished(
         .lx
         .chat
         .messages
-        .last_mut()
-        .filter(|message| message.id == assistant_id)
+        .iter_mut()
+        .find(|message| message.id == assistant_id)
     {
         message.status = match reason {
             StopReason::Complete => "complete".into(),
@@ -453,6 +471,8 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
     }
     if success {
         target.lx.chat.request = RequestState::Idle;
+        // 模型轮次结束后按 FIFO 分派排队项（忙时 Tab 排队的 shell 在这里开始）。
+        user_shell::on_user_shell_terminal(state, key.pane);
     } else {
         // Finishing（保存失败）：保留内存 partial，不能伪装成可恢复历史。
         show_lx_hint(
@@ -475,7 +495,8 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if !target.lx.chat.request.is_busy() {
+    // 目标集合 = 模型在途 ∪ 本地命令在途（含尚未拿到进程 ID 的 pending）。
+    if !target.lx.chat.request.is_busy() && !target.lx.chat.has_running_shell() {
         return false;
     }
     let now = Instant::now();
@@ -485,11 +506,26 @@ pub fn escape_stop(state: &mut AppState, pane: PaneId) -> bool {
         .stop_armed_at
         .is_some_and(|at| now.saturating_duration_since(at) <= STOP_ARM_WINDOW);
     if !armed {
+        let shell_only = !target.lx.chat.request.is_busy()
+            && target.lx.chat.has_running_shell()
+            && !target.lx.chat.status.streaming;
         target.lx.chat.stop_armed_at = Some(now);
+        // 只有本地命令在跑时没有 loading 行，首次 Esc 必须给出可见提示。
+        if shell_only {
+            show_lx_hint(
+                state,
+                pane,
+                InputHintLevel::Warning,
+                text::LX_SHELL_STOP_ARMED,
+            );
+        }
         return true;
     }
     target.lx.chat.stop_armed_at = None;
-    stop_stream(state, pane);
+    if target.lx.chat.request.is_busy() {
+        stop_stream(state, pane);
+    }
+    super::user_shell::cancel_user_shells(state, pane);
     true
 }
 
@@ -609,7 +645,7 @@ pub fn refresh_all_lx_status(state: &mut AppState) {
 }
 
 /// 窗格内下一个 generation（单调递增；从窗格计数器取）。
-fn next_generation(state: &AppState, pane: PaneId) -> u64 {
+pub(super) fn next_generation(state: &AppState, pane: PaneId) -> u64 {
     state
         .pane_anywhere(pane)
         .map(|target| target.lx.chat.generation_counter)
@@ -789,7 +825,7 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
     for pane in state.all_pane_ids() {
         if let Some(target) = state.pane_mut_anywhere(pane)
             && target.view == crate::app::state::PaneView::Lx
-            && target.lx.chat.status.streaming
+            && (target.lx.chat.status.streaming || target.lx.chat.has_running_shell())
         {
             // 待命超时：提示消失（重新回到普通 `Working`）。
             if target

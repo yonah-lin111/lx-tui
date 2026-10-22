@@ -34,6 +34,7 @@ mod rewind;
 mod stats;
 mod sticky;
 pub(crate) mod tool;
+pub(crate) mod user_shell;
 
 pub(crate) use stats::{format_duration, stats_line};
 
@@ -285,6 +286,8 @@ pub enum CardKind {
         step_index: usize,
         expanded: bool,
     },
+    /// 本地命令卡片：整块可点击，展开显示完整受控输出。
+    Shell { message_id: String, expanded: bool },
 }
 
 /// 一个可折叠块的矩形。
@@ -408,6 +411,40 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         }
         entry_has_previous = true;
         let start = rows;
+        // 本地命令是独立卡片：不进入 assistant 步骤时间线，也不参与置顶用户行。
+        if let Some(shell) = &message.shell {
+            let expanded = lx.chat.detail_is_expanded(&message.id, "shell");
+            let shell_rows = user_shell::rows(
+                shell,
+                width,
+                lx.chat.loading_frame,
+                lx.chat.status.streaming || shell.is_running(),
+                expanded,
+            );
+            rows += shell_rows;
+            if user_shell::has_expandable_content(shell, width) {
+                cards.push(CardHit {
+                    kind: CardKind::Shell {
+                        message_id: message.id.clone(),
+                        expanded,
+                    },
+                    card: Rect::new(
+                        area.x,
+                        area.y.saturating_add(rows_to_u16(start)),
+                        width,
+                        rows_to_u16(shell_rows),
+                    ),
+                    // 命令卡片不做 hover 提亮；点击面覆盖整块。
+                    fold: Rect::new(area.x, area.y.saturating_add(rows_to_u16(start)), width, 0),
+                });
+            }
+            messages_rows.push(MessageRows {
+                start,
+                end: rows,
+                is_user: false,
+            });
+            continue;
+        }
         // 消息内块之间一律空一行（见 [`needs_spacer`]）。
         let mut has_previous = false;
         let mut step_index = 0usize;
@@ -563,7 +600,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         messages_rows.push(MessageRows {
             start,
             end: rows,
-            is_user: message.role == "user",
+            is_user: message.role == "user" && message.shell.is_none(),
         });
     }
     // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息（提示结尾时不并入消息区间）。
@@ -688,6 +725,21 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
         };
         let message = &lx.chat.messages[message_index];
         let is_user = message.role == "user";
+        // 本地命令卡片：与 layout 共用 `user_shell::rows` 的行数口径。
+        if let Some(shell) = &message.shell {
+            user_shell::draw(
+                grid,
+                content,
+                scroll,
+                &mut row_index,
+                shell,
+                lx.chat.loading_frame,
+                lx.chat.status.streaming || shell.is_running(),
+                lx.chat.detail_is_expanded(&message.id, "shell"),
+            );
+            row_index += 1; // 消息间空行。
+            continue;
+        }
         // 消息内块之间一律空一行（与 `layout` 同口径）。
         let mut has_previous = false;
         let mut first_user_line = true;

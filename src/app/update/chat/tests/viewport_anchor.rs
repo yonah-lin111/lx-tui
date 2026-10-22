@@ -40,6 +40,8 @@ fn message(role: &str, parts: Vec<ChatPartView>, turn: i64) -> ChatMessageView {
         role: role.into(),
         status: "complete".into(),
         turn_index: turn,
+        kind: "chat".into(),
+        shell: None,
         steps: parts
             .into_iter()
             .enumerate()

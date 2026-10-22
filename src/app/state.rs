@@ -21,14 +21,16 @@ pub mod pane;
 pub mod prompt_history;
 pub mod workspace;
 
+pub use lx::LxInputMode;
 pub use lx::{
     AssistantStepView, CardTarget, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
     DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, HistoryEntry,
     HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry, ModelCandidate,
-    ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PlanSnapshotView, PlanStepView,
-    ProcessEntry, ProcessInteractionView, ProcessStateView, RequestKey, RequestState, RewindAction,
-    RewindExecution, RewindNoticeView, RewindPanel, RewindTarget, SlashCommand, SlashPanel,
-    SnapshotState, TaskPage, TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary,
+    ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView,
+    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission,
+    RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
+    RewindTarget, SlashCommand, SlashPanel, SnapshotState, TaskPage, TaskTab, ToolCallView,
+    ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -400,8 +402,9 @@ impl AppState {
     /// 是否存在正在生成（流中）的 lx 窗格；驱动 loading 转轮。
     pub fn has_streaming_lx(&self) -> bool {
         self.all_pane_ids().into_iter().any(|pane| {
-            self.pane_anywhere(pane)
-                .is_some_and(|target| target.lx.chat.status.streaming)
+            self.pane_anywhere(pane).is_some_and(|target| {
+                target.lx.chat.status.streaming || target.lx.chat.has_running_shell()
+            })
         })
     }
 

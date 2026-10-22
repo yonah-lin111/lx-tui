@@ -60,9 +60,11 @@ fn view(
     ChatMessageView {
         sequence: 0,
         id: id.into(),
+        kind: "chat".into(),
         role: role.into(),
         status: status.into(),
         turn_index,
+        shell: None,
         steps,
         model_label: None,
         error_code: None,

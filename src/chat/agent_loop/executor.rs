@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::chat::plan::PlanSnapshot;
-use crate::chat::process::{ProcessManager, ProcessResultKind};
+use crate::chat::process::{ProcessManager, ProcessResultKind, Rtk};
 use crate::chat::tools::{
     MutationRecorder, MutationRecorderFactory, ToolExecutionResult, build_plan_result,
     parse_exec_args, parse_stdin_args, process_failure,
@@ -91,6 +91,8 @@ pub struct AgentTools {
     plan_revision: Arc<std::sync::atomic::AtomicU64>,
     /// 文件 mutation recorder 工厂；生产入口必注入，测试可留空。
     recorder: Option<Arc<dyn MutationRecorderFactory>>,
+    /// rtk 后端（外部优先，缺失时内置过滤）；随执行器复用检测结果。
+    rtk: Rtk,
 }
 
 impl std::fmt::Debug for AgentTools {
@@ -110,6 +112,7 @@ impl AgentTools {
             turn,
             plan_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             recorder: None,
+            rtk: Rtk::detect(),
         }
     }
 
@@ -185,10 +188,14 @@ impl AgentTools {
         call_id: &str,
     ) -> ToolExecutionResult {
         if name == "exec_command" {
-            let args = match parse_exec_args(arguments_json) {
+            let mut args = match parse_exec_args(arguments_json) {
                 Ok(args) => args,
                 Err(failure) => return failure.into_result(Vec::new()),
             };
+            // rtk：外部安装优先；否则用内置过滤。包装只改实际执行的脚本，
+            // 结果里的 command 仍还原为用户原始命令（卡片/上下文事实不变）。
+            let prepared = self.rtk.prepare(&args.cmd);
+            args.cmd = prepared.command.clone();
             // 用 `exec_observed` 提前登记：等待窗口期间也能被本轮停止杀掉。
             let turn = Arc::clone(&self.turn);
             let on_spawn = move |session_id: u64| {
@@ -203,7 +210,15 @@ impl AgentTools {
                 .exec_observed(args, cwd, call_id, &on_spawn)
                 .await
             {
-                Ok(result) => ToolExecutionResult::Process(Box::new(result)),
+                Ok(mut result) => {
+                    result.command = prepared.original.clone();
+                    // 只有真实终态才过滤：等待窗口到期仍 Running 时返回的是半截输出，
+                    // 不能把“还在编译”压缩成“ok”；后续 write_stdin 继续读原始增量。
+                    if result.state.is_terminal() && self.rtk.should_filter_builtin(&prepared) {
+                        result.output = self.rtk.filter_output(&prepared.original, &result.output);
+                    }
+                    ToolExecutionResult::Process(Box::new(result))
+                }
                 Err(error) => process_failure(error),
             };
         }

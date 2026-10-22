@@ -11,6 +11,7 @@ use super::*;
 mod budget;
 mod legacy;
 mod roundtrip;
+mod shell;
 mod tools;
 
 /// 一条测试消息；`text` 写入单个 text part（position 0）。
@@ -26,6 +27,7 @@ fn message(
         external_id: external_id.into(),
         sequence,
         turn_index,
+        kind: "chat".into(),
         role: role.into(),
         status: status.into(),
         model_provider: (role == "assistant").then(|| "example".to_string()),
@@ -39,6 +41,7 @@ fn message(
         cache_write_tokens: None,
         created_at_ms: 0,
         completed_at_ms: None,
+        user_shell: None,
         parts: vec![part(0, "text", text)],
         tools: Vec::new(),
     }

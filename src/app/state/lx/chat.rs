@@ -8,11 +8,13 @@
 use crate::config::ai::{AiSettings, ModelSelection};
 
 pub mod file_diff;
+pub mod shell;
 mod steps;
 mod stream;
 pub mod tool_view;
 
 pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView};
+pub use shell::{PendingShell, QueuedSubmission, UserShellView};
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
 };
@@ -300,6 +302,8 @@ pub enum CardTarget {
         message_index: usize,
         step_index: usize,
     },
+    /// 本地命令卡片（按稳定消息 ID 定位；折叠状态存 detail_expanded 的 `shell` 槽）。
+    Shell { message_id: String },
 }
 
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
@@ -373,6 +377,10 @@ pub struct LxChat {
     pub selected_tool: Option<(String, String)>,
     /// 当前计划快照（最近一次**成功提交**的 update_plan）；失败/中断不覆盖。
     pub plan: Option<PlanSnapshotView>,
+    /// 已提交、尚未收到 spawn 回执的本地命令（按提交顺序）。
+    pub pending_shells: Vec<PendingShell>,
+    /// 忙时排队、空闲后按 FIFO 分派的提交（只保存在内存，重启不执行）。
+    pub queue: Vec<QueuedSubmission>,
 }
 
 impl Default for LxChat {
@@ -409,6 +417,8 @@ impl LxChat {
             detail_expanded: Vec::new(),
             selected_tool: None,
             plan: None,
+            pending_shells: Vec::new(),
+            queue: Vec::new(),
         }
     }
 
@@ -433,6 +443,50 @@ impl LxChat {
         self.hover = None;
         self.selected_tool = None;
         self.plan = None;
+        // 会话解绑：未执行的命令与排队项不得漂移到新会话执行。
+        self.pending_shells.clear();
+        self.queue.clear();
+    }
+
+    /// 是否仍有本地命令在途（已提交待 spawn 或消息仍显示运行中）。
+    pub fn has_running_shell(&self) -> bool {
+        !self.pending_shells.is_empty()
+            || self.messages.iter().any(|message| {
+                message
+                    .shell
+                    .as_ref()
+                    .is_some_and(UserShellView::is_running)
+            })
+    }
+
+    /// 仍在运行的本地命令消息 ID（停止目标）。
+    pub fn running_shell_ids(&self) -> Vec<String> {
+        self.messages
+            .iter()
+            .filter(|message| {
+                message
+                    .shell
+                    .as_ref()
+                    .is_some_and(UserShellView::is_running)
+            })
+            .map(|message| message.id.clone())
+            .collect()
+    }
+
+    /// 按消息 ID 定位 shell 记录（可变）。
+    pub fn shell_message_mut(&mut self, message_id: &str) -> Option<&mut UserShellView> {
+        self.messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+            .and_then(|message| message.shell.as_mut())
+    }
+
+    /// 按消息 ID 定位消息并标记状态（迟到的终态不得被覆盖由调用方负责比较）。
+    pub fn shell_status_mut(&mut self, message_id: &str) -> Option<&mut String> {
+        self.messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+            .map(|message| &mut message.status)
     }
 
     /// 工具卡片详情是否展开（按 `(message_id, call_id)` 定位，默认折叠）。
@@ -617,17 +671,38 @@ impl LxChat {
             .map(|selection| models.normalize_selection(selection))
     }
 
-    /// 当前仍在流转的 assistant 消息（最后一条且 `streaming`）的只读引用。
+    /// 当前仍在流转的 assistant 消息的只读引用。
+    ///
+    /// **按本轮 `assistant_id` 定位**，不能取 `messages.last()`：本地命令记录可能追加在
+    /// 流式 assistant 之后，最后一条已不是模型消息。
     pub fn streaming_message(&self) -> Option<&ChatMessageView> {
-        self.messages
-            .last()
-            .filter(|message| message.role == "assistant" && message.status == "streaming")
+        match &self.request {
+            RequestState::Streaming { assistant_id, .. } => self
+                .messages
+                .iter()
+                .find(|message| message.id == *assistant_id && message.role == "assistant"),
+            _ => self
+                .messages
+                .last()
+                .filter(|message| message.role == "assistant" && message.status == "streaming"),
+        }
     }
 
-    /// 当前仍在流转的 assistant 消息（最后一条且 `streaming`）的可变引用。
+    /// 当前仍在流转的 assistant 消息的可变引用（按 `assistant_id` 定位）。
     pub(crate) fn streaming_message_mut(&mut self) -> Option<&mut ChatMessageView> {
-        self.messages
-            .last_mut()
-            .filter(|message| message.role == "assistant" && message.status == "streaming")
+        let assistant_id = match &self.request {
+            RequestState::Streaming { assistant_id, .. } => Some(assistant_id.clone()),
+            _ => None,
+        };
+        match assistant_id {
+            Some(assistant_id) => self
+                .messages
+                .iter_mut()
+                .find(|message| message.id == assistant_id && message.role == "assistant"),
+            None => self
+                .messages
+                .last_mut()
+                .filter(|message| message.role == "assistant" && message.status == "streaming"),
+        }
     }
 }

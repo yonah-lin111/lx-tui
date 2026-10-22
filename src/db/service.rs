@@ -87,6 +87,15 @@ impl Persistence {
         self.path.clone()
     }
 
+    /// 无持久化模式（测试 DB 失败路径）。
+    #[cfg(test)]
+    pub fn without_database() -> Self {
+        Self {
+            db: None,
+            path: None,
+        }
+    }
+
     /// 数据库是否可用（无持久化模式下为 false）。
     pub fn has_database(&self) -> bool {
         self.db.is_some()
@@ -314,6 +323,39 @@ impl Persistence {
     ) -> super::Result<()> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         db.checkpoint(workspace, assistant_id, parts)
+    }
+
+    /// 预登记一条本地命令；成功后才允许 spawn。
+    pub fn begin_user_shell(
+        &self,
+        workspace: &Path,
+        session_id: Option<&str>,
+        record: &crate::db::chat::UserShellRecord,
+    ) -> super::Result<crate::db::chat::UserShellCommitted> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.begin_user_shell(workspace, session_id, record)
+    }
+
+    /// 写入命令 checkpoint / 终态（幂等，revision 单调）。
+    pub fn update_user_shell(
+        &self,
+        workspace: &Path,
+        message_id: &str,
+        record: &crate::db::chat::UserShellRecord,
+    ) -> super::Result<bool> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.update_user_shell(workspace, message_id, record)
+    }
+
+    /// 读取会话在某个 sequence 之后的本地命令（模型下一次采样前增量吸收）。
+    pub fn load_user_shells_since(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        after_sequence: i64,
+    ) -> super::Result<Vec<crate::db::chat::ChatMessage>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.load_user_shells_since(workspace, session_id, after_sequence)
     }
 
     /// 登记新建进程（`starting`）；失败时调用方必须停止刚 spawn 的进程。
@@ -954,6 +996,10 @@ impl Persistence {
                 tracing::warn!("rewind effect reached persistence pump");
                 false
             }
+            Effect::BeginUserShell { .. } | Effect::CancelUserShells { .. } => {
+                tracing::warn!("user shell effect reached persistence pump");
+                false
+            }
         }
     }
 
@@ -1092,6 +1138,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::StopSessionProcess { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
+            | Effect::BeginUserShell { .. }
+            | Effect::CancelUserShells { .. }
     )
 }
 
