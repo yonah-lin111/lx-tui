@@ -67,6 +67,8 @@ lx-tui/
       chat/process_events.rs    进程事件 → UI 更新 + 受控输出快照落库（每秒合并、终态立即）
       chat/user_shell.rs        本地命令编排：DB 预登记 → spawn → 输出/终态落库 →
                                 队列分派、停止与下一次采样前的增量注入握手
+      chat/process/rtk/         rtk 集成：外部二进制检测/命令包装（mod.rs）与
+                                内置输出过滤（builtin.rs）；agent 与本地命令共用
     terminal/                   终端仿真：alacritty_terminal 封装，纯内存、无 IO
     pty/                        PTY 会话：spawn / 读写 / 尺寸 / 终止
     git/                        git 查询：worktree 列表的执行与解析（唯一执行 git 命令的模块）

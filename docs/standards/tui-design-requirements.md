@@ -141,3 +141,11 @@
 - **停止**：双 Esc 目标集合 = 模型在途轮次 ∪ 该窗格 pending/running 命令（含尚无进程 ID 的预登记命令）。第一次 Esc 待命（仅命令在跑时显示 toast），5 秒内第二次停止并清空队列；保留已产生的输出，不停止本轮未操作的后台服务。
 - **命令卡片**：独立历史项，标题 `■ Running` / `■ You ran`，随后是 `$ 命令` 与受控输出预览；折叠态最多 6 个物理行（保留首 3 + 省略行 + 末 2），无输出时显示 `(no output)` / `waiting for output…`，终态显示退出码与耗时；点击整块展开完整已保存输出（最多 64 KiB），不改变模型工具卡片的规则。输出按安全文本绘制并剥离控制序列；命令卡片不参与置顶用户消息行。
 - **上下文**：只有终态记录进入模型上下文，格式为稳定的 `<user_shell_command>` 文本（脚本、状态、退出码、耗时、输出、截断信息；结构符号与输出均转义/净化）。历史回放与实时注入复用同一格式与按提交 sequence 的连续终态前缀；一次请求内按稳定消息 ID 去重，注入总量有界，不新增模型工具调用或 token 统计。
+
+## rtk 输出压缩（agent 与本地命令共用）
+
+- 目标：命令输出进入模型上下文前先压缩，降低 token；不改变命令语义、退出码与真实输出偏移。
+- **后端选择**：`LX_RTK_MODE` 控制 `auto`（默认：优先外部 rtk，缺失时内置）、`builtin`（强制内置）、`off`（关闭）；`LX_RTK_BIN` 可显式指定 rtk 可执行文件。测试构建默认 `off`，避免开发机是否安装 rtk 影响断言。
+- **外部 rtk**：仅当命令首段是受支持的短时工具时才前缀 `rtk`（`cargo build/test/check/clippy/install/nextest`、`git diff/log/status/show/add/commit/push/pull/branch/fetch/stash/worktree`、`ls/tree/grep/rg/find/wc/diff/gh/glab/aws/psql/dotnet/jest/vitest/prisma/tsc/prettier/playwright/curl/wget`、`npm|pnpm test`、`npx tsc|eslint|prisma`）。带前导赋值、`cd &&`、换行、已带 rtk 或长驻/交互形态的命令不包装，避免把流式输出改成结束才返回。
+- **内置兜底**：未包装或没有外部 rtk 时，按命令类别过滤（测试只留失败/摘要；构建去掉编译进度、保留警告/错误块；git status 限制文件数；diff 只留增删与 hunk 头；grep/rg 按文件与总量限制；ls/tree/find 限制行数；通用输出保留首尾并按字符兜底）。所有裁剪都写入显式省略标记，绝不静默丢数据。
+- **归属**：模型 `exec_command` 由执行器在 spawn 前包装、返回结果前内置过滤；`!` 本地命令在事件层预登记后同样处理。卡片与上下文里的 `command` 始终是用户原始命令，包装只存在于实际执行的脚本。

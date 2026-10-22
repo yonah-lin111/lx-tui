@@ -10,12 +10,14 @@
 
 mod manager;
 pub mod output;
+pub mod rtk;
 
 pub use manager::{
     DEFAULT_STDIN_YIELD_MS, DEFAULT_YIELD_MS, MAX_OUTPUT_TOKENS, MAX_STDIN_BYTES, MAX_TIMEOUT_MS,
     MAX_YIELD_MS, ProcessError, ProcessLimits, ProcessManager, ProcessSnapshot, ProcessUiEvent,
 };
 pub use output::{MAX_MODEL_OUTPUT_BYTES, MAX_PROCESS_OUTPUT_BYTES, OutputBuffer, OutputSource};
+pub use rtk::{PreparedCommand, Rtk};
 
 use std::path::PathBuf;
 

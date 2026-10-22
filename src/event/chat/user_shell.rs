@@ -34,7 +34,10 @@ struct ShellJob {
     session_id: String,
     epoch: String,
     manager: Arc<ProcessManager>,
+    /// 用户原始命令（卡片与模型上下文的事实；不是 rtk 包装后的脚本）。
     command: String,
+    /// 是否需要用内置过滤器处理输出（外部 rtk 未包装时）。
+    filter_builtin: bool,
     cwd: String,
     shell: String,
     process_id: Option<u64>,
@@ -98,6 +101,7 @@ impl ChatStreams {
         epoch: String,
         manager: Arc<ProcessManager>,
         command: String,
+        filter_builtin: bool,
         cwd: String,
         shell: String,
     ) {
@@ -110,6 +114,7 @@ impl ChatStreams {
                 epoch,
                 manager,
                 command,
+                filter_builtin,
                 cwd,
                 shell,
                 process_id: None,
@@ -256,6 +261,10 @@ fn begin(
     };
     let manager = runtime.manager().clone();
     let epoch = runtime.epoch.clone();
+    // rtk：外部安装优先；未包装的命令由事件层用内置过滤器处理输出。
+    let rtk = crate::chat::process::Rtk::detect();
+    let prepared = rtk.prepare(&request.command);
+    let filter_builtin = rtk.should_filter_builtin(&prepared);
     streams.register_user_shell(
         committed.message_id.clone(),
         request.pane,
@@ -264,11 +273,12 @@ fn begin(
         epoch,
         manager.clone(),
         request.command.clone(),
+        filter_builtin,
         cwd_text,
         request.shell.clone(),
     );
     let args = ExecArgs {
-        cmd: request.command,
+        cmd: prepared.command,
         workdir: None,
         shell: Some(request.shell),
         login: true,
@@ -356,24 +366,30 @@ pub fn handle_process_event(
     let Some(job) = streams.user_shell.jobs.get(origin_call_id) else {
         return Some(false);
     };
-    let (command, cwd, shell, epoch) = (
+    let (command, cwd, shell, epoch, filter_builtin) = (
         job.command.clone(),
         job.cwd.clone(),
         job.shell.clone(),
         job.epoch.clone(),
+        job.filter_builtin,
     );
     let duration_ms = snapshot
         .ended_at_ms
         .map(|ended| ended.saturating_sub(snapshot.started_at_ms).max(0) as u64);
-    let view = view_of(
+    let mut view = view_of(
         snapshot,
-        command,
+        command.clone(),
         cwd,
         shell,
         epoch.clone(),
         revision,
         duration_ms,
     );
+    // 外部 rtk 已过滤时不再二次处理；内置过滤只在终态执行，避免运行中的
+    // 半截输出（例如只有 Compiling 行）被误判成“ok”。
+    if filter_builtin && terminal {
+        view.output = crate::chat::process::rtk::filter_output(&command, &view.output);
+    }
     let changed = update::apply_user_shell_snapshot(state, pane, origin_call_id, view.clone());
     let record = record_of(&view);
     // 终态立即写；运行态按进程 ID 限流合并（每进程最多一个待合并快照）。
@@ -514,6 +530,11 @@ pub fn persist_reaped(
         } else {
             ProcessState::Interrupted
         };
+        let output = if job.filter_builtin {
+            crate::chat::process::rtk::filter_output(&job.command, &snapshot.tail)
+        } else {
+            snapshot.tail.clone()
+        };
         let record = UserShellRecord {
             command: job.command,
             cwd: job.cwd,
@@ -523,7 +544,7 @@ pub fn persist_reaped(
             duration_ms: snapshot
                 .ended_at_ms
                 .map(|ended| ended.saturating_sub(snapshot.started_at_ms).max(0) as u64),
-            output: snapshot.tail.clone(),
+            output,
             output_start: snapshot.output_start,
             output_end: snapshot.output_end,
             dropped_bytes: snapshot.dropped_bytes,
