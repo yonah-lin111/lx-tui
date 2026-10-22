@@ -37,9 +37,11 @@ pub struct Persistence {
 impl Persistence {
     /// 打开默认数据库；库不可用时降级为无持久化模式。
     ///
+    /// `linked_worktree` 由入口解析：开发构建在 linked worktree 内使用独立库文件，
+    /// 避免不同分支的 Schema 互相判废。
     /// 不做启动信任门，由入口在进入 TUI 前处理（见 `untrusted_startup_path`）。
-    pub fn start() -> Self {
-        match Database::open_default() {
+    pub fn start(linked_worktree: Option<&Path>) -> Self {
+        match Database::open_default(linked_worktree) {
             Ok(db) => {
                 // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行与 pending/running
                 // 工具行；启动时统一收口，否则恢复会话时这些行永远停在进行中。

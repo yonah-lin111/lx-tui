@@ -187,6 +187,15 @@ fn list_worktrees_reads_real_repo_with_linked_worktree() {
     assert_eq!(found.checkout_path, repo);
     assert_eq!(found.main_branch.as_deref(), Some("main"));
 
+    let linked_subdir = linked.join("src");
+    std::fs::create_dir_all(&linked_subdir).expect("linked subdir");
+    assert_eq!(
+        linked_worktree_root(&linked_subdir),
+        Some(linked.clone()),
+        "linked worktree 子目录需归位到 worktree 根"
+    );
+    assert_eq!(linked_worktree_root(&repo), None, "主 checkout 不隔离");
+
     std::fs::remove_dir_all(&base).expect("cleanup");
 }
 
