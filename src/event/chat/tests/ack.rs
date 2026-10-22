@@ -19,7 +19,7 @@ async fn pending_failure_has_no_file_side_effect_and_fails_turn() {
     );
     let mut streams = ChatStreams::default();
     streams
-        .workspaces
+        .db_workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
     // 必须让该窗格「可见」：可见窗格的 BeginTool 才会推迟到该帧绘制后回执
     // （正是这个推迟窗口让 pending 条目可能被遗弃）。
@@ -381,7 +381,7 @@ async fn stale_generation_events_do_not_pollute_the_new_turn() {
     };
     let mut streams = ChatStreams::default();
     streams
-        .workspaces
+        .db_workspaces
         .insert(stale.clone(), fixture.workspace().to_path_buf());
     // 旧 generation 的 delta 被丢弃。
     let deltas = vec![ChatDelta::Part(PartDelta {
@@ -616,7 +616,7 @@ async fn abandoning_a_pending_begin_records_cancelled_not_pending() {
     let (mut state, key, persistence, session) = streaming_state(&fixture);
     let mut streams = ChatStreams::default();
     streams
-        .workspaces
+        .db_workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
     // 必须让该窗格「可见」：可见窗格的 BeginTool 才会推迟到该帧绘制后回执
     // （正是这个推迟窗口让 pending 条目可能被遗弃）。

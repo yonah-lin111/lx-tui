@@ -11,10 +11,18 @@ use crate::ui::{style, text};
 use super::visible_row;
 use crate::ui::main_content::lx::Grid;
 
-/// 提示占用的行数（与 [`draw`] 同口径）。
-pub(super) fn rows(notice: &RewindNoticeView, width: u16) -> usize {
-    super::wrap(text::LX_REWIND_NOTICE_TITLE, width).len()
-        + super::wrap(&description(notice), width).len()
+/// 提示占用的行数（与 [`draw`] 同口径）；`count > 1` 表示合并后的连续提示。
+pub(super) fn rows(notice: &RewindNoticeView, count: usize, width: u16) -> usize {
+    super::wrap(&title(count), width).len() + super::wrap(&description(notice), width).len()
+}
+
+/// 提示标题；连续提示合并为一条时追加 ` xN`（单宽 ASCII）。
+pub(super) fn title(count: usize) -> String {
+    if count > 1 {
+        format!("{} x{count}", text::LX_REWIND_NOTICE_TITLE)
+    } else {
+        text::LX_REWIND_NOTICE_TITLE.to_string()
+    }
 }
 
 /// 分布式提示描述。
@@ -26,15 +34,16 @@ pub(super) fn description(notice: &RewindNoticeView) -> String {
     )
 }
 
-/// 绘制提示并推进内容行号。
+/// 绘制提示并推进内容行号；`count` 为合并的连续提示数。
 pub(super) fn draw(
     grid: &mut Grid,
     notice: &RewindNoticeView,
+    count: usize,
     content: Rect,
     scroll: usize,
     row_index: &mut usize,
 ) {
-    for line in super::wrap(text::LX_REWIND_NOTICE_TITLE, content.width) {
+    for line in super::wrap(&title(count), content.width) {
         if let Some(y) = visible_row(content, scroll, *row_index) {
             grid.put_clipped(content.x, y, &line, style::accent(), content.width);
         }

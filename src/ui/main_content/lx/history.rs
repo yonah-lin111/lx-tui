@@ -216,7 +216,11 @@ use sticky::sticky_candidate;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TimelineEntry {
     Message(usize),
-    Notice(usize),
+    /// 连续撤销提示合并为一条；`last` 是最后一条（描述取它），`count` 用于 `xN`。
+    Notices {
+        last: usize,
+        count: usize,
+    },
 }
 
 /// 是否有可绘制的历史（消息为空但提示非空时仍显示历史，不退回欢迎页）。
@@ -243,8 +247,23 @@ fn timeline(lx: &Lx) -> Vec<TimelineEntry> {
             out.push(TimelineEntry::Message(message));
             message += 1;
         } else {
-            out.push(TimelineEntry::Notice(notice));
+            // 连续提示合并：吸收下一条真实消息之前的所有提示（它们按 sequence 相邻）。
             notice += 1;
+            let mut count = 1;
+            while notice < lx.chat.notices.len()
+                && lx
+                    .chat
+                    .messages
+                    .get(message)
+                    .is_none_or(|next| lx.chat.notices[notice].sequence < next.sequence)
+            {
+                count += 1;
+                notice += 1;
+            }
+            out.push(TimelineEntry::Notices {
+                last: notice - 1,
+                count,
+            });
         }
     }
     out
@@ -371,13 +390,13 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     for entry in &timeline {
         let message_index = match entry {
             TimelineEntry::Message(index) => *index,
-            TimelineEntry::Notice(index) => {
+            TimelineEntry::Notices { last, count } => {
                 // 撤销提示是独立历史条目：与消息之间同样留一空行。
                 if entry_has_previous {
                     rows += 1;
                 }
                 entry_has_previous = true;
-                rows += rewind::rows(&lx.chat.notices[*index], width);
+                rows += rewind::rows(&lx.chat.notices[*last], *count, width);
                 continue;
             }
         };
@@ -654,10 +673,11 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
     for entry in &timeline(lx) {
         let message_index = match entry {
             TimelineEntry::Message(index) => *index,
-            TimelineEntry::Notice(index) => {
+            TimelineEntry::Notices { last, count } => {
                 rewind::draw(
                     grid,
-                    &lx.chat.notices[*index],
+                    &lx.chat.notices[*last],
+                    *count,
                     content,
                     scroll,
                     &mut row_index,

@@ -363,7 +363,7 @@ where
     transport.attach(sender.clone(), key.clone());
     // 事件层冻结工作区（生产由 `start_stream` 写入）。
     streams
-        .workspaces
+        .db_workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
     // 窗格可见：BeginTool 的回执推迟到「该帧绘制后」，从而可插桩 pending→running。
     streams.set_visible_panes(&[(key.pane, Rect::new(0, 0, 80, 24))]);
@@ -682,3 +682,4 @@ mod flow;
 mod limits;
 mod process_tools;
 mod resume;
+mod workspace;

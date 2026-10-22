@@ -1049,3 +1049,59 @@ fn selected_latest_user_message_uses_distinct_background() {
     });
     assert!(highlighted, "最新用户消息必须有选中底色");
 }
+
+#[test]
+fn consecutive_rewind_notices_merge_with_count() {
+    let mut lx = Lx::new();
+    lx.chat.notices = vec![rewind_notice(0), rewind_notice(1), rewind_notice(2)];
+    let area = Rect::new(0, 0, 60, 10);
+    let layout = layout(area, &lx);
+    let mut grid = Grid::new(area);
+    let drawn = render(&mut grid, area, &lx, 0);
+    assert_eq!(drawn, layout.total_rows);
+    let text: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        text.contains("-- Rewind -- x3"),
+        "连续提示合并为 xN：{text}"
+    );
+    assert_eq!(
+        text.matches("-- Rewind --").count(),
+        1,
+        "三条连续提示只画一条标题"
+    );
+    assert_eq!(layout.total_rows, 3, "合并后只占标题+描述+空行");
+}
+
+#[test]
+fn notices_separated_by_messages_are_not_merged() {
+    let mut lx = lx_with(vec![message(
+        "assistant",
+        "complete",
+        vec![text_part("middle")],
+    )]);
+    lx.chat.messages[0].sequence = 1;
+    lx.chat.notices = vec![rewind_notice(0), rewind_notice(2)];
+    let area = Rect::new(0, 0, 60, 12);
+    let mut grid = Grid::new(area);
+    render(&mut grid, area, &lx, 0);
+    let text: String = (area.y..area.bottom())
+        .map(|y| {
+            (area.x..area.right())
+                .map(|x| grid.cell(x, y).ch)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(
+        text.matches("-- Rewind --").count(),
+        2,
+        "被消息分隔的提示各自显示：{text}"
+    );
+}

@@ -93,8 +93,11 @@ pub struct ChatStreams {
     cancels: HashMap<RequestKey, watch::Sender<bool>>,
     /// checkpoint 合并状态：最近一次落盘时刻 + 累计字节。
     checkpoints: HashMap<RequestKey, (std::time::Instant, usize)>,
-    /// 冻结的工作区根（工具行落库基准；发送时固定，后续切换窗格不影响）。
-    workspaces: HashMap<RequestKey, PathBuf>,
+    /// 会话的 **DB 工作区键**（`/resume` 共享键，通常是仓库主 checkout）。
+    ///
+    /// 不是工具执行 cwd：linked worktree 里执行时，会话仍存在共享键下；
+    /// 用执行 cwd 落库会报 `workspace missing` 并中断本轮。
+    db_workspaces: HashMap<RequestKey, PathBuf>,
     /// 本轮持有的跨进程 session guard；直到终态才释放。
     guards: HashMap<RequestKey, crate::platform::FileGuard>,
     /// 已提交 pending 但**尚未**回执 ticket 的调用：等该帧绘制后推进 running。
@@ -191,7 +194,7 @@ impl ChatStreams {
     fn finish(&mut self, key: &RequestKey) {
         self.cancels.remove(key);
         self.checkpoints.remove(key);
-        self.workspaces.remove(key);
+        self.db_workspaces.remove(key);
         self.guards.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
         // 只丢弃该轮执行上下文；进程留给会话（正常结束一轮不清理服务）。
@@ -781,7 +784,14 @@ fn start_stream(
     // 取消通道；sender 由 ChatStreams 持有。
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender);
-    streams.workspaces.insert(key.clone(), prepared.cwd.clone());
+    // DB 归属键与执行 cwd 分离：linked worktree / 非工作区写入时，工具行与快照仍
+    // 存在会话所属工作区下，不能拿 `prepared.cwd` 去查 workspace。
+    let session_key = state
+        .chat_session_key_for_pane(key.pane)
+        .unwrap_or_else(|| prepared.cwd.clone());
+    streams
+        .db_workspaces
+        .insert(key.clone(), session_key.clone());
     // 运行实例：同一聊天会话跨轮复用同一进程管理器；本轮执行上下文独立。
     let turn_slot = key.session.clone();
     let Some(runtime) = streams.runtime_for(prepared.cwd.clone(), &turn_slot) else {
@@ -803,9 +813,6 @@ fn start_stream(
         fail_turn(sender, key, "user message unavailable");
         return true;
     };
-    let session_key = state
-        .chat_session_key_for_pane(key.pane)
-        .unwrap_or_else(|| prepared.cwd.clone());
     let recorder = file_snapshots::HostRecorderFactory::new(
         sender.clone(),
         session_key,

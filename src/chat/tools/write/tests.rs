@@ -293,3 +293,31 @@ fn write_eof_newline_change_is_visible() {
     assert!(!diff.hunks().is_empty(), "EOF 换行变化必须可见");
     assert_eq!(fixture.read("a.txt"), "hello\n");
 }
+
+/// 非工作区：绝对路径可写（快照/落库归属由会话键决定，不由目标路径决定）。
+#[test]
+fn writes_absolute_path_outside_workspace() {
+    let fixture = Fixture::new("write-outside");
+    let outside = std::env::temp_dir().join(format!(
+        "lx-write-outside-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&outside).expect("outside");
+    let target = outside.join("note.txt");
+    let args = serde_json::json!({
+        "path": target.to_string_lossy(),
+        "content": "outside\n",
+    })
+    .to_string();
+    let result = execute(&fixture.ctx(), "write", &args);
+    let (created, added, _) = expect_write(&result);
+    assert!(created);
+    assert_eq!(added, 1);
+    assert_eq!(std::fs::read(&target).expect("file"), b"outside\n");
+    let _ = std::fs::remove_file(&target);
+    let _ = std::fs::remove_dir_all(outside);
+}
