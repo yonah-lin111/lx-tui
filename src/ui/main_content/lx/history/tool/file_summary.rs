@@ -490,10 +490,13 @@ pub(super) fn detail(
         let indent = " ".repeat(head_cols);
         let room = limit.saturating_sub(head_cols);
         if hint.width() <= room {
-            rows.push(vec![Segment::new(
-                format!("{indent}{hint}"),
-                style::agent_step_detail(),
-            )]);
+            // 悬停时与折叠内容一起提亮：提示行就是这块可点性的唯一文案。
+            let hint_style = if hovered {
+                style::chat_tool_param_hover()
+            } else {
+                style::agent_step_detail()
+            };
+            rows.push(vec![Segment::new(format!("{indent}{hint}"), hint_style)]);
         }
     }
     rows
@@ -504,13 +507,13 @@ pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> us
     detail(call, width, expanded, false).len()
 }
 
-/// 折叠态可提亮的详情行数：折叠额度内的内容行（不含「剩余行数」提示）。
+/// 折叠态可提亮的详情行数：**含末尾的「剩余行数」提示行**。
+///
+/// 提示行也是折叠内容的一部分（用户要求「hover 折叠块时 `… 1 more line` 要显示
+/// 高亮」）：它就在折叠区最后一行，把命中区截断在提示行之前会让指针落在最该提亮的
+/// 那行时反而没有任何反应。
 pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
-    let rows = detail(call, width, false, false);
-    rows.len().saturating_sub(usize::from(
-        rows.last()
-            .is_some_and(|row| row.iter().any(|s| s.text.contains("more line"))),
-    ))
+    detail(call, width, false, false).len()
 }
 
 /// 详情**内容**行数（不含「剩余行数」提示行）；供「能否展开」判定用。

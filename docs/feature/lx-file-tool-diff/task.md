@@ -569,3 +569,22 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
       并显式断言折叠态**不得**等于 `muted()`；`thinking_header_uses_step_square_and_becomes_thought`
       同步为折叠 182、展开后 218。
   fmt / clippy -D warnings / cargo test（2841 passed）全部通过。
+
+## 26. 第十六轮：`… N more lines` 提示行纳入 hover 提亮
+
+用户要求「hover 工具的折叠块时 `… 1 more line` 需要显示高亮」，并确认 diff 卡的提示行
+也要覆盖。
+
+- [x] `file_summary::foldable_rows` / `command::foldable_rows` 不再排除提示行：提示行是
+      折叠区最后一行，命中区少算一行会让指针停在最该提亮的地方反而毫无反应。
+- [x] 提示行本身在悬停时提亮：`file_summary::detail` 与 `command::wrap_body_row` 的提示
+      段由 `hovered` 决定用 `agent_step_detail()` 还是 `chat_tool_param_expanded()`。
+- [x] diff 卡维持「路径与正文不提亮」，但**提示行提亮**：`file_diff::layout` 恢复 `hovered`
+      参数、只作用于剩余行数行；新增 `hint_offset()` 给出该行在块内的偏移。
+- [x] `tool::foldable_rows` 换成 `tool::FoldRegion { offset, rows }`：各卡片自报「折叠内容
+      从内容首行起第几行、占几行」。diff 卡 = 提示行单行，其它卡片 = 整段折叠内容。
+      `history::tool_fold_rect` 与合并卡逐块的 `fold` 都按它计算（块首标题 +1 行）。
+- [x] 测试：`remaining_hint_row_is_inside_the_fold_region_and_lifts`、
+      `command_hint_row_lifts_on_hover`、`file_diff_hover_region_covers_only_the_hint_row`
+      （含「路径不随 hover 变色」与「提示行升为默认前景」两侧断言）。
+  fmt / clippy -D warnings / cargo test（2843 passed）全部通过。

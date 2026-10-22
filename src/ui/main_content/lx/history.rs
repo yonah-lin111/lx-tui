@@ -266,9 +266,11 @@ pub struct HistoryView {
     pub suppressed: Option<crate::app::state::lx::chat::StickySuppression>,
 }
 
-/// 折叠态工具卡片的「折叠内容」区域：标题之下的内容行（不含参数详情行之外的东西）。
+/// 折叠态工具卡片的 hover 提亮区域（相对该调用块）。
 ///
-/// 折叠内容就是被截断的那部分——文件卡片的预览、命令的折行命令、参数详情的前 2 行。
+/// 折叠内容就是被截断的那部分——文件卡片的预览与剩余行数行、命令的折行命令、
+/// 参数详情的前 2 行；**文件差异卡片只提亮 `… N more lines` 那一行**（见
+/// [`tool::FoldRegion`]）。
 fn tool_fold_rect(
     call: &crate::app::state::ToolCallView,
     area: Rect,
@@ -276,9 +278,10 @@ fn tool_fold_rect(
     block_y: impl Fn(usize) -> u16,
     step_rows: usize,
 ) -> Rect {
-    let start = 1;
-    let content_rows = tool::foldable_rows(call, width);
-    let rows = content_rows.min(step_rows.saturating_sub(start));
+    let region = tool::fold_region(call, width);
+    // 块首是标题行（1 行），折叠区从内容首行起算。
+    let start = 1 + region.offset;
+    let rows = region.rows.min(step_rows.saturating_sub(start));
     Rect::new(area.x, block_y(start), width, rows_to_u16(rows))
 }
 
@@ -371,9 +374,18 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                                         width,
                                         rows_to_u16(block.len),
                                     ),
-                                    // 文件差异卡片**不提供 hover 提亮**：可点性由点击
-                                    // 与展开后的灰底表达，路径/提示行都不是按钮。
-                                    fold: Rect::new(area.x, block_y(block.start), width, 0),
+                                    // 逐块自己的 hover 区：diff 卡只有提示行，其它卡片是
+                                    // 整段折叠内容。展开后没有折叠内容，不再提亮。
+                                    fold: if expanded[index] {
+                                        Rect::new(area.x, block_y(block.start), width, 0)
+                                    } else {
+                                        let region = tool::fold_region(call, width);
+                                        let start = block.start + region.offset;
+                                        let rows = region
+                                            .rows
+                                            .min(block.len.saturating_sub(region.offset));
+                                        Rect::new(area.x, block_y(start), width, rows_to_u16(rows))
+                                    },
                                 });
                             }
                         }
@@ -598,6 +610,9 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             row_index += 1;
                         }
                         has_previous = true;
+                        let hovered = group
+                            .iter()
+                            .position(|call| lx.chat.tool_is_hovered(&message.id, &call.call_id));
                         tool::group_draw_animated(
                             grid,
                             content,
@@ -607,6 +622,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             lx.chat.loading_frame,
                             &expanded,
                             lx.chat.status.streaming,
+                            hovered,
                         );
                     }
                     step_index += group.len();

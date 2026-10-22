@@ -95,7 +95,7 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
             start += CALL_GAP_ROWS;
         }
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        let len = layout(call, width, is_expanded).len();
+        let len = layout(call, width, is_expanded, false).len();
         out.push(Block { start, len });
         start += len;
     }
@@ -104,9 +104,8 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
 
 /// 绘制文件差异卡片；推进行数必须与 [`rows`] 严格相等。
 ///
-/// `expanded` 与 `calls` 一一对应（逐调用独立）。**没有 hover 参数**：文件差异卡片
-/// 不随鼠标悬停改变配色（用户要求「hover diff 块完全不提亮」），可点性由点击与展开
-/// 后的灰底表达。
+/// `expanded` 与 `calls` 一一对应（逐调用独立）。`hovered` 是**被悬停的调用下标**：
+/// 文件差异卡片只有折叠态末尾的剩余行数行会提亮，路径与正文始终不变色。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     grid: &mut Grid,
@@ -117,6 +116,7 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
+    hovered: Option<usize>,
 ) {
     if rect.width == 0 || calls.is_empty() {
         return;
@@ -143,7 +143,7 @@ pub(super) fn draw(
             *row_index += CALL_GAP_ROWS;
         }
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        for row in layout(call, rect.width, is_expanded) {
+        for row in layout(call, rect.width, is_expanded, hovered == Some(index)) {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
                 // 先铺**整行**底色（100% 宽，含左侧缩进与行尾空白）再写字：
                 // `put_segments` 只写字符，不负责行背景，行尾留白会掉色。
@@ -193,17 +193,24 @@ impl Row {
 /// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；
 /// - 展开态铺开全部 hunks，没有剩余行数行；**正文行铺展开块灰底**（文件头不铺），
 ///   增删行自己的红/绿底色优先级更高；
-/// - **文件头路径恒为 dim**，hover 与展开都不提亮（见 [`file_header`]）。
-fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
+/// - **文件头路径恒为 dim**，hover 与展开都不提亮（见 [`file_header`]）；
+/// - 折叠态的剩余行数行是**唯一的 hover 提亮对象**（见 [`hint_span`]）。
+fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
     let mut rows = content_rows(call, width, expanded);
     // 折叠态：下一行单独写剩余行数（展开后消失）。
     if !expanded {
         let remaining = remaining_lines(call, width);
         if remaining > 0 {
+            // 悬停时**只有这一行**提亮：它是折叠块唯一说明「还能展开」的文案，
+            // 路径与正文保持原色（用户要求 diff 卡不做整块提亮）。
             rows.push(Row::plain(prefixed(
                 &continuation_prefix(),
                 text::agent::file_diff_more_lines(remaining),
-                style::agent_step_detail(),
+                if hovered {
+                    style::chat_tool_param_expanded()
+                } else {
+                    style::agent_step_detail()
+                },
             )));
         }
     }
@@ -255,6 +262,14 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
         )));
     }
     rows
+}
+
+/// 折叠态剩余行数行在该调用块内的偏移（块首 = 0）；没有提示行时为 None。
+///
+/// 这是文件差异卡片**唯一**的 hover 提亮区域：路径与正文不随鼠标变色。
+pub(super) fn hint_offset(call: &ToolCallView, width: u16) -> Option<usize> {
+    (remaining_lines(call, width) > 0)
+        .then(|| layout(call, width, false, false).len().saturating_sub(1))
 }
 
 /// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。

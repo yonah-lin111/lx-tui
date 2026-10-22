@@ -59,17 +59,17 @@ fn command_lines(command: &str, width: u16, expanded: bool) -> usize {
     command_body(command, width, expanded, false).len()
 }
 
-/// 折叠态可提亮的命令行数（折叠额度内的内容行，不含剩余行数提示）。
+/// 折叠态可提亮的命令行数：**含末尾的「剩余行数」提示行**。
+///
+/// 提示行是折叠区最后一行，也是「这块还能展开」的唯一文案；把它排除在命中区外，
+/// 会让指针停在最该提亮的那行时反而没有任何反应。
 pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
     let command = match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(view)) => &view.command,
         Some(crate::app::state::ToolDetailView::Interaction(view)) => &view.command,
         _ => return 0,
     };
-    command_body(command, width, false, false)
-        .iter()
-        .filter(|row| !row.text.starts_with("… "))
-        .count()
+    command_body(command, width, false, false).len()
 }
 
 /// 命令**内容**行数（不含末尾的「剩余行数」提示行）；供「能否展开」判定用。
@@ -106,14 +106,14 @@ fn command_body(command: &str, width: u16, expanded: bool, hovered: bool) -> Vec
         },
         sample: SAMPLE_CHARS,
     };
-    wrap_body_row(line, width, expanded)
+    wrap_body_row(line, width, expanded, hovered)
 }
 
 /// 一条树体行按可用列宽折成若干物理行（首行带 `$ `，续行不重复）。
 ///
 /// 预算与普通工具详情一致：折叠 [DETAIL_PREVIEW_ROWS] 行、展开 [DETAIL_MAX_ROWS] 行；
 /// 截断时末行补 `…`。极窄（放不下任何正文）时不折行，避免把内容撕成碎片。
-fn wrap_body_row(row: BodyRow, width: u16, expanded: bool) -> Vec<BodyRow> {
+fn wrap_body_row(row: BodyRow, width: u16, expanded: bool, hovered: bool) -> Vec<BodyRow> {
     use super::file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
     let available = usize::from(width.saturating_sub(super::TREE_COLS as u16));
     if available < super::MIN_PARAM_COLS {
@@ -171,9 +171,14 @@ fn wrap_body_row(row: BodyRow, width: u16, expanded: bool) -> Vec<BodyRow> {
         let hint =
             text::agent::file_diff_more_lines(estimate_remaining_lines(&chars[start..], available));
         if hint.width() <= available {
+            // 悬停时与命令正文一起提亮：提示行是「还能展开」的唯一文案。
             out.push(BodyRow {
                 text: hint,
-                style: style::agent_step_detail(),
+                style: if hovered {
+                    style::chat_tool_param_expanded()
+                } else {
+                    style::agent_step_detail()
+                },
                 sample: SAMPLE_CHARS,
             });
         }

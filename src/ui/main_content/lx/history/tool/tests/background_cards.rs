@@ -429,6 +429,21 @@ fn folded_command_reports_remaining_lines_and_hover_lifts() {
     assert!(!expanded.contains("more line") || expanded.lines().count() > 3);
 }
 
+/// 命令卡片的「剩余行数」提示行同样在折叠区内、悬停时提亮。
+#[test]
+fn command_hint_row_lifts_on_hover() {
+    let mut call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
+    }
+    let folded = tool::rows(&call, 40, false);
+    assert_eq!(
+        tool::fold_region(&call, 40).rows + 1,
+        folded,
+        "折叠区行数 = 卡片行数 - 标题行（提示行计入）"
+    );
+}
+
 /// 命令正文：折叠态 dim，**展开态保持默认前景**（展开后参数文字不退回 dim）。
 #[test]
 fn command_body_lifts_when_expanded() {

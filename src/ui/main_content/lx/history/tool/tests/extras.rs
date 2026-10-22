@@ -613,3 +613,45 @@ fn hovered_detail_lifts_to_default_foreground() {
     // 普通工具的 `└─` 行是参数本身，展开时**不铺**底色（用户要求不覆盖参数）。
     // 底色只属于文件差异卡片与进程命令这类「展开后铺开一坨内容」的卡片。
 }
+
+/// 折叠区的「剩余行数」提示行**也在 hover 命中区内**且同样提亮。
+///
+/// 用户要求「hover 工具的折叠块时 `… 1 more line` 要显示高亮」：提示行是折叠区
+/// 最后一行，命中区少算一行时指针落在最该提亮的那行反而毫无反应。
+#[test]
+fn remaining_hint_row_is_inside_the_fold_region_and_lifts() {
+    let long = "src/deeply/nested/module/path/that/keeps/going/mod.rs".repeat(3);
+    let call = tool_call(
+        "read",
+        ToolStatus::Completed,
+        Some(ToolSummary {
+            path: Some(long),
+            range: Some((1, 9)),
+            ..ToolSummary::default()
+        }),
+        None,
+    );
+    let folded = file_summary::detail(&call, 24, false, false);
+    assert_eq!(
+        file_summary::foldable_rows(&call, 24),
+        folded.len(),
+        "提示行计入折叠区行数"
+    );
+    let hint_style = |hovered: bool| {
+        let rows = file_summary::detail(&call, 24, false, hovered);
+        rows.last()
+            .and_then(|row| row.last())
+            .map(|segment| segment.style)
+            .expect("提示行")
+    };
+    assert_eq!(
+        hint_style(false),
+        style::agent_step_detail(),
+        "常态提示行是 dim"
+    );
+    assert_eq!(
+        hint_style(true),
+        style::chat_tool_param_expanded(),
+        "悬停提示行升为默认前景"
+    );
+}
