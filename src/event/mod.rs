@@ -237,7 +237,7 @@ async fn run_loop(
         if persistence.pump(state) {
             dirty = true;
         }
-        // 双 Esc 待命超时：5 秒窗口外自动失效（不产生历史记录）。
+        // 双 Esc 待命超时：3 秒窗口外自动失效（不产生历史记录）。
         if update::clear_expired_arms(state) {
             dirty = true;
         }

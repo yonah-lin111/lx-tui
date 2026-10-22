@@ -33,12 +33,29 @@ pub enum Route {
 /// - 选中最新轮次时 Enter 开面板、Esc 取消、上下键不改目标；
 /// - 空闲空输入的双 Esc：第一次待命、第二次选中最新轮次。
 pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> Route {
+    let Some(view_ok) = state
+        .pane_anywhere(pane)
+        .map(|target| target.view == crate::app::state::PaneView::Lx)
+    else {
+        return Route::Pass;
+    };
+    if !view_ok {
+        return Route::Pass;
+    }
+    // 即便事件循环节拍尚未清除，超过 3 秒的待命也必须作废：本次 Esc 重新开始计时。
+    let expired = state.pane_anywhere(pane).is_some_and(|target| {
+        target
+            .lx
+            .rewind
+            .armed_at
+            .is_some_and(|at| at.elapsed() > REWIND_ARM_WINDOW)
+    });
+    if expired && let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.rewind.armed_at = None;
+    }
     let Some(target) = state.pane_anywhere(pane) else {
         return Route::Pass;
     };
-    if target.view != crate::app::state::PaneView::Lx {
-        return Route::Pass;
-    }
     if target.lx.rewind.is_executing() {
         return Route::Consumed;
     }
@@ -87,7 +104,7 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> Rout
     Route::Pass
 }
 
-/// 空闲空输入第一次 Esc：只在可撤销时进入 5 秒待命。
+/// 空闲空输入第一次 Esc：只在可撤销时进入 3 秒待命。
 fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
     if target.view != crate::app::state::PaneView::Lx {

@@ -10,8 +10,8 @@ use crate::layout::PaneId;
 
 use super::slash::PanelWindow;
 
-/// 双 Esc 待命窗口（与流中停止的 5 秒一致）。
-pub const REWIND_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+/// 双 Esc 待命窗口：3 秒内没有第二次 Esc 即取消等待。
+pub const REWIND_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// 四项动作（面板顺序即 `ALL` 下标）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

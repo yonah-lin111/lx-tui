@@ -406,3 +406,32 @@ fn resolver_scrolls_center_request_and_consumes_it() {
     assert!(!target.lx.chat.follow_bottom);
     assert!(target.lx.chat.history_scroll > 0);
 }
+
+#[test]
+fn expired_arm_is_restarted_instead_of_selecting_target() {
+    let (mut state, pane) = rewound_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .rewind
+        .armed_at = Some(
+        std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(4))
+            .expect("past"),
+    );
+    apply_lx_input(&mut state, LxInput::Escape);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.rewind.selected.is_none(),
+        "超过 3 秒的旧待命不得直接选中"
+    );
+    assert!(
+        target
+            .lx
+            .rewind
+            .armed_at
+            .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(1)),
+        "本次 Esc 重新开始 3 秒计时"
+    );
+}

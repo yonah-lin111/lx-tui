@@ -1599,3 +1599,24 @@ fn rewind_panel_lists_four_actions() {
     let disabled = SlashPanel::Rewind(Box::new(RewindPanel::new(SnapshotState::Unavailable)));
     assert_eq!(super::slash::items(&disabled, &[]).len(), 4, "禁用仍可见");
 }
+
+/// 非首页（已有历史）不登记入口标签命中，点击消息内容不会穿透切换 agent。
+#[test]
+fn entry_tabs_are_not_hittable_once_history_exists() {
+    let area = Rect::new(0, 0, 100, 40);
+    let homepage = Lx::new();
+    let lay = layout(area, &homepage);
+    let (entry, rect) = *lay.entries.first().expect("homepage entries");
+    let (x, y) = (rect.x + 1, rect.y);
+    assert_eq!(
+        entry_hit(area, &homepage, x, y),
+        Some(entry),
+        "首页仍可切换入口"
+    );
+    let history = streaming_lx(false, true);
+    assert_eq!(
+        entry_hit(area, &history, x, y),
+        None,
+        "有历史时入口不得参与命中"
+    );
+}

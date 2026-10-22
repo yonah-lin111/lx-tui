@@ -519,10 +519,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_top = center
         .min(top_limit.saturating_sub(entries_h + brand::UNDERLINE_ROWS))
         .max(region_top);
-    // 后台任务面板打开时**不登记入口区**：面板接管了历史区与输入框，那三个
-    // 入口标签根本没画出来；若仍留命中矩形，点面板空白处会穿透去切换 agent
+    // 非首页（已有消息或撤销提示）与后台任务面板打开时都**不登记入口区**：
+    // 那三个入口标签根本没画出来，留下命中矩形会让点击历史内容穿透去切换 agent
     // （用户报的真实 bug）。
     let entries_ok = lx.task.is_none()
+        && !history::has_history(lx)
         && entries_fit
         && entries_top
             .saturating_add(entries_h)
