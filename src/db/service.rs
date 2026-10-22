@@ -41,10 +41,12 @@ pub struct Persistence {
 impl Persistence {
     /// 打开默认数据库；库不可用时降级为无持久化模式。
     ///
+    /// `linked_worktree` 由入口解析：开发构建在 linked worktree 内使用独立库文件，
+    /// 避免不同分支的 Schema 互相判废。
     /// 不做启动信任门，由入口在进入 TUI 前处理（见 `untrusted_startup_path`）。
-    pub fn start() -> Self {
-        let path = default_database_path();
-        match Database::open_default() {
+    pub fn start(linked_worktree: Option<&Path>) -> Self {
+        let path = default_database_path(linked_worktree);
+        match Database::open_default(linked_worktree) {
             Ok(db) => {
                 // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行与 pending/running
                 // 工具行；启动时统一收口，否则恢复会话时这些行永远停在进行中。
@@ -1090,11 +1092,11 @@ fn is_network_effect(effect: &Effect) -> bool {
 }
 
 /// 默认数据库路径（与 `Database::open_default` 同一环境判定）。
-fn default_database_path() -> Option<PathBuf> {
+fn default_database_path(linked_worktree: Option<&Path>) -> Option<PathBuf> {
     if let Some(overridden) = std::env::var_os("LX_TUI_DB_PATH").filter(|path| !path.is_empty()) {
         return Some(PathBuf::from(overridden));
     }
-    super::database_path(super::is_dev_environment()).ok()
+    super::database_path(super::is_dev_environment(), linked_worktree).ok()
 }
 
 /// 标记面板已载入（无持久化或查询失败时的空树；键为 None 表示工作区无路径）。

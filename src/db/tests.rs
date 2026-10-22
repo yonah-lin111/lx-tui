@@ -1,6 +1,6 @@
 //! DB 单元测试：迁移、信任、层级约束、级联删除与工作区隔离。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -382,7 +382,47 @@ fn database_dir_follows_environment_flag() {
     let prod = database_dir(false).expect("prod dir");
     assert_eq!(dev, home.join(".lx-t-dev").join("db"));
     assert_eq!(prod, home.join(".lx-t").join("db"));
-    assert_eq!(database_path(false).expect("prod path"), prod.join("lx.db"));
+    assert_eq!(
+        database_path(false, None).expect("prod path"),
+        prod.join("lx.db")
+    );
+    assert_eq!(
+        database_path(true, None).expect("dev path"),
+        dev.join("lx.db")
+    );
+
+    // 开发环境 linked worktree 使用独立文件；生产忽略 worktree 根。
+    let worktree = Path::new("/repo/.worktrees/lx-rewind");
+    let scoped = database_path(true, Some(worktree)).expect("scoped dev path");
+    assert!(scoped.starts_with(dev.join("worktrees")));
+    assert_eq!(
+        scoped.file_name().and_then(|name| name.to_str()),
+        Some("lx.db")
+    );
+    assert_eq!(
+        database_path(false, Some(worktree)).expect("prod path"),
+        prod.join("lx.db")
+    );
+}
+
+#[test]
+fn worktree_scope_is_readable_and_path_specific() {
+    let root = Path::new("/repo/.worktrees/lx-rewind");
+    let scope = worktree_scope_for(root).expect("scope");
+    assert!(scope.starts_with("lx-rewind-"));
+    assert_eq!(scope, worktree_scope_for(root).expect("stable"));
+    assert_ne!(
+        worktree_scope_for(Path::new("/other/.worktrees/lx-rewind")).expect("other"),
+        scope,
+        "同名 worktree 目录不能共用作用域"
+    );
+}
+
+#[test]
+fn worktree_scope_sanitizes_directory_names() {
+    assert_eq!(scope_name("feature/x y"), "feature-x-y");
+    assert_eq!(scope_name(".."), "worktree");
+    assert!(scope_name("lx-rewind").starts_with("lx-rewind"));
 }
 
 // ===== 迁移与 Schema =====

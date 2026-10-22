@@ -1,8 +1,11 @@
 //! SQLite 持久层：工作区信任、提示词、聊天会话的受控读写；唯一接触 rusqlite 的模块。
 //!
 //! 数据库路径按环境区分：生产 `~/.lx-t/db/lx.db`，开发 `~/.lx-t-dev/db/lx.db`；
-//! `LX_TUI_ENV` / `LX_ENV` 环境变量优先（`dev` 走开发路径，其余取值视为生产），
-//! 缺省回退 `cfg!(debug_assertions)` 门控；`LX_TUI_DB_PATH` 可显式覆盖（测试隔离用）。
+//! 开发环境在 linked worktree 内再按 worktree 隔离（`db/worktrees/<名字>-<哈希>/lx.db`，
+//! 由入口传入 worktree 根），避免不同分支各自推进的 Schema 版本互相把库判废；
+//! `LX_TUI_ENV` / `LX_ENV` 环境变量优先
+//! （`dev` 走开发路径，其余取值视为生产），缺省回退 `cfg!(debug_assertions)` 门控；
+//! `LX_TUI_DB_PATH` 可显式覆盖（测试隔离用）。
 //! Schema 迁移使用 SQLite 原生 `PRAGMA user_version` 版本控制，迁移文本集中在
 //! `migration` 子模块；聊天读写见 `chat`，工具调用见 `chat::tools`。
 
@@ -247,12 +250,15 @@ impl Database {
     }
 
     /// 按环境探测路径打开默认数据库；`LX_TUI_DB_PATH` 显式覆盖优先（测试隔离用）。
-    pub fn open_default() -> Result<Self> {
+    ///
+    /// `linked_worktree` 由入口传入：开发环境在 linked worktree 内使用独立库文件，
+    /// 避免不同分支的 Schema 互相判废。
+    pub fn open_default(linked_worktree: Option<&Path>) -> Result<Self> {
         if let Some(overridden) = std::env::var_os("LX_TUI_DB_PATH").filter(|path| !path.is_empty())
         {
             return Self::open(Path::new(&overridden));
         }
-        Self::open(&database_path(is_dev_environment())?)
+        Self::open(&database_path(is_dev_environment(), linked_worktree)?)
     }
 
     /// 路径是否已信任（`is_trusted = 1`）。
@@ -731,8 +737,53 @@ pub fn database_dir(is_dev: bool) -> Result<PathBuf> {
 }
 
 /// 数据库文件路径：`database_dir` 下的 `lx.db`。
-pub fn database_path(is_dev: bool) -> Result<PathBuf> {
-    Ok(database_dir(is_dev)?.join("lx.db"))
+///
+/// 开发环境在 linked worktree 内按 worktree 再分一层（`worktrees/<名字>-<哈希>/lx.db`）：
+/// 不同分支的构建可能各自推进 `SCHEMA_VERSION`，共用同一文件会让先启动的一方把库迁到
+/// 新版本，其余 checkout 打开时被判为 `UnsupportedSchema` 而失去持久化。隔离根由入口
+/// 传入，持久层不依赖 git；生产环境忽略该参数。
+pub fn database_path(is_dev: bool, linked_worktree: Option<&Path>) -> Result<PathBuf> {
+    let dir = database_dir(is_dev)?;
+    if is_dev && let Some(scope) = linked_worktree.and_then(worktree_scope_for) {
+        return Ok(dir.join("worktrees").join(scope).join("lx.db"));
+    }
+    Ok(dir.join("lx.db"))
+}
+
+/// 作用域目录名：清洗后的 worktree 目录名 + 路径哈希（同名目录不互相覆盖）。
+fn worktree_scope_for(root: &Path) -> Option<String> {
+    let name = root.file_name()?.to_str().map(scope_name)?;
+    Some(format!("{name}-{:08x}", path_hash(root) as u32))
+}
+
+/// 目录名清洗：保留 ASCII 字母数字与 `-_.`，其余替换为 `-`；空结果回退 `worktree`。
+fn scope_name(raw: &str) -> String {
+    let name: String = raw
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let name = name.trim_matches('.');
+    if name.is_empty() {
+        "worktree".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// FNV-1a 64 位；作用域只需稳定，不用于安全判定。
+fn path_hash(path: &Path) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// 环境判定：`LX_TUI_ENV` / `LX_ENV` 约定值优先，缺省回退 debug 门控。

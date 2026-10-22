@@ -79,6 +79,16 @@ pub fn checkout(list: &WorktreeList, cwd: &Path) -> Option<Checkout> {
     })
 }
 
+/// cwd 所处 linked worktree 的根；主 checkout、非仓库或 git 失败返回 None。
+///
+/// 开发库据此隔离：不同分支的 worktree 可能跑着 Schema 版本不兼容的构建。
+pub fn linked_worktree_root(cwd: &Path) -> Option<PathBuf> {
+    let cwd = canonical_or_original(cwd);
+    let list = list_worktrees(&cwd)?;
+    let checkout = checkout(&list, &cwd)?;
+    checkout.is_linked.then_some(checkout.checkout_path)
+}
+
 /// 解析 porcelain 输出；空行分隔记录，路径保持原文。
 pub fn parse_worktree_list(text: &str) -> Vec<WorktreeEntry> {
     let mut entries: Vec<WorktreeEntry> = Vec::new();
