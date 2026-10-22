@@ -22,3 +22,10 @@
 - 完成修改后按影响范围执行验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`。
 - Agent 无法交互式验证 TUI 界面；涉及交互与外观的改动由用户运行 `cargo run` 自行确认。
 - 以上文档是项目规范的唯一来源；若与上级指令冲突，以上级指令为准。
+
+## 分支合并与数据库
+
+- 合并前核对 `src/db/mod.rs` 的 `SCHEMA_VERSION` 与各分支新增迁移：多个分支并行加迁移时，后合并的一方必须顺延版本号（如 v12 已被占用则改为 v13），并保留旧库升级路径。禁止两个分支用同一版本号指向不同迁移——先启动的二进制会把库标成该版本，另一方的迁移会被静默跳过，造成缺列/缺表。
+- 涉及整表重建（关闭外键、`DROP TABLE`）的迁移，先在库副本上验证 `user_version`、数据量与 `PRAGMA integrity_check`，再迁移真实开发库；迁移前关闭所有 lx 进程，并保留 `~/.lx-t-dev/db/lx.db.v*.bak*` 便于回滚。
+- 删除 worktree 分支时，先停掉该目录下运行的 lx，再同步删除其隔离库 `~/.lx-t-dev/db/worktrees/<目录名>-<路径哈希>/`；旧隔离库留着会在重建同名 worktree 时被继续误用。
+- 开发库按 linked worktree 隔离：主 checkout 固定使用 `~/.lx-t-dev/db/lx.db`，生产固定使用 `~/.lx-t/db/lx.db`；不要把隔离库复制回主库，也不要让未打补丁的旧二进制指向新库。
