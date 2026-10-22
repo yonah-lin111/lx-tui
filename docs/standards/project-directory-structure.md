@@ -136,7 +136,7 @@ lx-tui/
 6. `terminal/`：终端仿真状态机（alacritty_terminal 封装）；字节进、画面出，不触碰 IO、不依赖其他模块状态。
 7. `pty/`：真实进程会话；唯一允许持有 `portable-pty` 句柄与读线程的模块；窗格 shell 按所属工作区 cwd 启动。
 8. `git/`：唯一执行 git 命令的模块（`git worktree list --porcelain` 的查询与解析）；由事件层在后台线程调用，app 只接收转换后的纯数据。
-9. `db/`：唯一使用 rusqlite 的模块：SQLite 初始化与 `PRAGMA user_version` 迁移（`migration.rs`，含 v4~v11：v9 为 part 完成时刻与工具调用表重建、v11 为会话进程元数据表）、工作区信任读写、提示词与文件夹 CRUD（含 2 层嵌套约束与级联删除）、聊天会话/消息/内容块 CRUD 与按序加载（`chat/mod.rs`）、工具调用状态机与时间线位置分配（`chat/tools.rs`）、会话进程元数据（`chat/process.rs`，工具结果体保持不可变）；`service.rs` 是事件循环持有的同步受控服务，执行 app 层 `Effect` 出箱并惰性载入提示词树，启动时按序恢复遗留 streaming 消息与 pending/running 工具；app 层保持纯内存，禁止直接触碰 rusqlite。
+9. `db/`：唯一使用 rusqlite 的模块：SQLite 初始化与 `PRAGMA user_version` 迁移（`migration.rs`，含 v4~v12：v9 为 part 完成时刻与工具调用表重建、v11 为会话进程元数据表、v12 为撤销 journal 与文件快照表）；路径生产 `~/.lx-t/db/lx.db`、开发 `~/.lx-t-dev/db/lx.db`，开发环境在 linked worktree 内隔离为 `db/worktrees/<目录名>-<路径哈希>/lx.db`（worktree 根由入口解析，db 层不依赖 git）；工作区信任读写、提示词与文件夹 CRUD（含 2 层嵌套约束与级联删除）、聊天会话/消息/内容块 CRUD 与按序加载（`chat/mod.rs`）、工具调用状态机与时间线位置分配（`chat/tools.rs`）、会话进程元数据（`chat/process.rs`，工具结果体保持不可变）；`service.rs` 是事件循环持有的同步受控服务，执行 app 层 `Effect` 出箱并惰性载入提示词树，启动时按序恢复遗留 streaming 消息与 pending/running 工具；app 层保持纯内存，禁止直接触碰 rusqlite。
 10. `tui/`：终端生命周期（原始模式、备用屏幕、括号粘贴、恢复与 panic 保护）与光标去重后端（`QuietCursor`：按物理状态去重下发 Hide/Show/MoveTo）；退出、panic 与终止信号时必须恢复终端状态。
 11. `config/`：配置结构、默认值与校验；`ai.rs` 承载模型配置（`config/ai.json`）的类型、校验与原子保存；配置只读写本项目数据根（`~/.lx-t[-dev]/config/ai.json`），不读取 lx-agent 的 `~/.lx`；配置变更不直接改运行时状态，交由 `app` 行为处理。
 12. `settings/`：设置与命令文件持久化（`settings.json`、自定义命令 Markdown 文件）及本地回环设置 Web 服务；`service.rs` 只监听 `127.0.0.1` 并带每次运行随机 token，静态资源（`page.rs` 以 `include_str!` 加载 `assets/`，经独立路由提供）与 JSON API 共用一套存储函数；`service/models.rs` 提供模型设置的脱敏 GET、原子 PUT 与远端发现 POST，状态变更经事件投递回 `event` 循环。
