@@ -216,6 +216,32 @@ pub fn close_panel(state: &mut AppState, pane: PaneId) -> bool {
     target.lx.rewind.selected.is_some()
 }
 
+/// 鼠标滚动历史时退出撤销高亮/面板（执行中不打断）。
+///
+/// 返回是否清除了撤销状态（调用方据此置脏并吞掉该滚轮事件）。
+pub fn cancel_on_scroll(state: &mut AppState, pane: PaneId) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    if target.lx.rewind.is_executing() {
+        return false;
+    }
+    let active = target.lx.rewind.selected.is_some()
+        || target.lx.rewind.panel.is_some()
+        || matches!(target.lx.slash, Some(SlashPanel::Rewind(_)));
+    if !active {
+        return false;
+    }
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.rewind.clear();
+    if matches!(target.lx.slash, Some(SlashPanel::Rewind(_))) {
+        target.lx.slash = None;
+    }
+    true
+}
+
 /// 取消选择：清空 arm/selected/panel，恢复普通编辑。
 pub fn cancel_selection(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {

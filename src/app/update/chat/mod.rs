@@ -28,7 +28,8 @@ pub use process::{
     select_adjacent_tool, settle_tool_detail, toggle_tool_detail,
 };
 pub use rewind::{
-    apply_enter as apply_rewind_enter, apply_input as apply_rewind_input, clear_expired_arms,
+    apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,
+    cancel_on_scroll as cancel_rewind_on_scroll, clear_expired_arms,
     close_panel as close_rewind_panel, move_active as move_rewind_active,
     on_failed as on_rewind_failed, on_prepared as on_rewind_prepared,
     on_session_reloaded as on_rewind_session_reloaded, on_succeeded as on_rewind_succeeded,
@@ -465,8 +466,8 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
     true
 }
 
-/// Esc 停止的待命窗口：窗口内再按一次才真正停止（对齐 opencode 的 5 秒）。
-pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(5);
+/// Esc 停止的待命窗口：窗口内再按一次才真正停止（与撤销待命统一为 3 秒）。
+pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(3);
 
 /// 流中按 `Esc`（对齐 opencode 的双击停止）：首次只**待命**并显示提示，
 /// 窗口内再按一次才停止；非流中吞掉（返回 false 不置脏）。

@@ -17,11 +17,13 @@ pub fn scroll_lx_history(
     total: usize,
     visible: usize,
 ) -> bool {
+    // 鼠标滚动历史即退出撤销高亮/动作面板；即使内容不可滚也吞掉这次滚轮。
+    let cancelled = super::rewind::cancel_on_scroll(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
-        return false;
+        return cancelled;
     }
     let max_top = total.saturating_sub(visible);
     let current = if target.lx.chat.follow_bottom {
@@ -33,7 +35,7 @@ pub fn scroll_lx_history(
     let moved = next != current || target.lx.chat.follow_bottom;
     target.lx.chat.history_scroll = next;
     target.lx.chat.follow_bottom = next >= max_top;
-    moved
+    moved || cancelled
 }
 
 /// 直接设置历史视口顶部行偏移（滚动条点击/拖拽）；`total`/`visible` 为渲染行数与视口行数。
@@ -45,11 +47,13 @@ pub fn set_lx_history_scroll(
     total: usize,
     visible: usize,
 ) -> bool {
+    // 拖拽/点击历史滚动条同样退出撤销高亮。
+    let cancelled = super::rewind::cancel_on_scroll(state, pane);
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     if target.view != crate::app::state::PaneView::Lx || target.lx.chat.messages.is_empty() {
-        return false;
+        return cancelled;
     }
     let max_top = total.saturating_sub(visible);
     let clamped = offset.min(max_top);
@@ -57,7 +61,7 @@ pub fn set_lx_history_scroll(
     let was_following = target.lx.chat.follow_bottom;
     target.lx.chat.history_scroll = clamped;
     target.lx.chat.follow_bottom = clamped >= max_top;
-    before != clamped || was_following != target.lx.chat.follow_bottom
+    before != clamped || was_following != target.lx.chat.follow_bottom || cancelled
 }
 
 /// 双击 Esc 选中最新轮次后的**一次性居中**：把目标用户消息滚到视口中央。

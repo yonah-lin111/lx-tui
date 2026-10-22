@@ -435,3 +435,22 @@ fn expired_arm_is_restarted_instead_of_selecting_target() {
         "本次 Esc 重新开始 3 秒计时"
     );
 }
+
+#[test]
+fn history_scroll_exits_rewind_selection_and_panel() {
+    let (mut state, pane) = rewound_state();
+    apply_lx_input(&mut state, LxInput::Escape);
+    apply_lx_input(&mut state, LxInput::Escape);
+    prepare_known_empty(&mut state, pane);
+    apply_lx_input(&mut state, LxInput::Enter);
+    assert!(matches!(
+        state.pane_anywhere(pane).expect("pane").lx.slash,
+        Some(SlashPanel::Rewind(_))
+    ));
+    let changed = crate::app::update::scroll_lx_history(&mut state, pane, 1, 60, 10);
+    assert!(changed, "滚轮事件应被消费");
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.rewind.selected.is_none(), "滚动退出高亮选中");
+    assert!(target.lx.rewind.panel.is_none());
+    assert!(target.lx.slash.is_none(), "动作面板随选中一起关闭");
+}
