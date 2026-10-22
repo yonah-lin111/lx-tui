@@ -2,7 +2,6 @@
 //!
 //! 只保存选择与已加载数据；所有 IO 经 `Effect` 交给事件层。`ui/` 只读本状态。
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::db::chat::{FileAvailability, NoticeRecord};
@@ -64,7 +63,6 @@ pub struct RewindTarget {
     pub user_message_id: String,
     pub expected_revision: u64,
     pub pane: PaneId,
-    pub cwd: PathBuf,
     /// 发起时输入框内容：成功后只在与该值仍相同时回填。
     pub input_at_open: String,
     /// 用户原文（来自持久化 user message）。
@@ -100,8 +98,13 @@ impl SnapshotState {
     }
 
     /// 含文件动作是否可用。
+    ///
+    /// 已恢复也保持可用：仅文件恢复是幂等无操作，组合操作此时只删对话（设计 4.3）。
     pub fn files_available(self) -> bool {
-        matches!(self, Self::Managed { .. } | Self::KnownEmpty)
+        matches!(
+            self,
+            Self::Managed { .. } | Self::KnownEmpty | Self::AlreadyRestored
+        )
     }
 
     /// 面板文件选项禁用时的说明键。

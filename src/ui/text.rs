@@ -630,6 +630,8 @@ pub const LX_REWIND_ACTION_CANCEL: &str = "Cancel";
 pub const LX_REWIND_SNAPSHOT_UNAVAILABLE: &str = "File snapshot unavailable";
 pub const LX_REWIND_SNAPSHOT_INCOMPLETE: &str = "File snapshot incomplete";
 pub const LX_REWIND_SNAPSHOT_LOADING: &str = "Checking file snapshot...";
+/// 该轮文件此前已恢复：动作仍可用（幂等/只删对话），但要让用户知道不会再次写文件。
+pub const LX_REWIND_FILES_ALREADY_RESTORED: &str = "Files already restored";
 /// 撤销提示标题（独立于 user/assistant）。
 pub const LX_REWIND_NOTICE_TITLE: &str = "-- Rewind --";
 

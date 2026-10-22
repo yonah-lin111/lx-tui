@@ -88,17 +88,24 @@ fn prepare(
         Ok(plan) => (plan.availability, plan.revision, plan.user_text),
         Err(_) => {
             // 目标过期或库不可用：面板保留但禁用文件动作。
+            // 预检失败时不要用 0 覆盖冻结 revision：一次瞬时读失败会让 delete_only
+            // 在最终提交时恒报“最新轮次已变化”。
+            let selected = state
+                .pane_anywhere(pane)
+                .and_then(|pane| pane.lx.rewind.selected.as_ref())
+                .cloned();
             let revision = persistence
                 .latest_user_turn(&workspace, session_id)
                 .ok()
                 .flatten()
                 .map(|turn| turn.revision)
+                .or_else(|| {
+                    selected
+                        .as_ref()
+                        .map(|target| i64::try_from(target.expected_revision).unwrap_or(0))
+                })
                 .unwrap_or(0);
-            let user_text = state
-                .pane_anywhere(pane)
-                .and_then(|pane| pane.lx.rewind.selected.as_ref())
-                .map(|target| target.user_text.clone())
-                .unwrap_or_default();
+            let user_text = selected.map(|target| target.user_text).unwrap_or_default();
             (FileAvailability::Unavailable, revision, user_text)
         }
     };
@@ -124,6 +131,7 @@ fn execute(
         let _ = sender.send(AppEvent::RewindFinished {
             pane: request.pane,
             session_id: request.session_id.clone(),
+            workspace,
             outcome: RewindOutcome::Failed {
                 message: "rewind requires persistent storage".to_string(),
             },
@@ -138,6 +146,7 @@ fn execute(
         let _ = sender.send(AppEvent::RewindFinished {
             pane,
             session_id,
+            workspace,
             outcome,
         });
     });
@@ -149,6 +158,7 @@ pub fn handle_rewind_finished(
     persistence: &Persistence,
     pane: PaneId,
     session_id: &str,
+    workspace: &std::path::Path,
     outcome: RewindOutcome,
 ) -> bool {
     match outcome {
@@ -186,15 +196,8 @@ pub fn handle_rewind_finished(
                 return true;
             }
             // 先重载数据库真相，再回填；其他绑定 pane 保留各自草稿。
-            let Some(workspace) = state.chat_session_key_for_pane(pane) else {
-                crate::app::update::on_rewind_failed(
-                    state,
-                    pane,
-                    "workspace unavailable after rewind",
-                );
-                return true;
-            };
-            let loaded = persistence.load_rewind_view(&workspace, session_id);
+            // workspace 必须用请求里的冻结值：执行期间切换工作区不能让已成功的撤销误报失败。
+            let loaded = persistence.load_rewind_view(workspace, session_id);
             match loaded {
                 Ok((messages, notices, revision)) => {
                     let panes = state.all_pane_ids();

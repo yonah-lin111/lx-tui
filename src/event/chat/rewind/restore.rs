@@ -28,16 +28,22 @@ pub(super) fn execute(db_path: &Path, workspace: &Path, request: &RewindRequest)
 }
 
 fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> RewindOutcome {
-    // 异常退出遗留的未完成操作：不自动重跑，避免重复副作用。
-    if let Ok(Some(unfinished)) = database.unfinished_operation(&request.session_id) {
-        return failed(format!(
-            "an unfinished rewind ({}) must be recovered before another undo",
-            unfinished.phase
-        ));
+    // 异常退出遗留的未完成操作：不自动重跑，避免重复副作用。读取失败不能当成“没有”。
+    match database.unfinished_operation(&request.session_id) {
+        Ok(Some(unfinished)) => {
+            return failed(format!(
+                "an unfinished rewind ({}) blocks this session; recover the files manually before retrying",
+                unfinished.phase
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return failed(format!("rewind preflight failed: {}", error.code()));
+        }
     }
     // 幂等重放：同 operation id 已成功时只返回原结果，不再动文件/对话。
-    if let Ok(Some(operation)) = database.operation(&request.operation_id) {
-        if operation.phase == crate::db::chat::rewind::OP_COMMITTED {
+    match database.operation(&request.operation_id) {
+        Ok(Some(operation)) if operation.phase == crate::db::chat::rewind::OP_COMMITTED => {
             return RewindOutcome::Succeeded {
                 action: request.action,
                 restored_files: 0,
@@ -47,11 +53,29 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
                 session_deleted: false,
             };
         }
-        return failed(format!(
-            "a previous rewind is unfinished ({}); restart lx to recover it",
-            operation.phase
-        ));
+        Ok(Some(operation)) => {
+            return failed(format!(
+                "a previous rewind is unfinished ({}); recover the files manually before retrying",
+                operation.phase
+            ));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return failed(format!("rewind preflight failed: {}", error.code()));
+        }
     }
+    // 跨进程 session guard 覆盖“预检 → 文件恢复 → 最终提交 → 补偿”全程；仅删对话同样持有。
+    let _session_guard = match crate::platform::try_lock_session(&request.session_id) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            return failed(
+                "another lx instance is running this session; nothing was rewritten".to_string(),
+            );
+        }
+        Err(error) => {
+            return failed(format!("session lock failed: {error}"));
+        }
+    };
     let plan = match database.restore_plan(
         workspace,
         &request.session_id,
@@ -68,30 +92,21 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
         return failed("the session changed; nothing was rewritten".to_string());
     }
     let already_restored = matches!(plan.availability, FileAvailability::AlreadyRestored);
-    let mut restored: Option<Restored> = None;
     if request.action.reverts_files() {
         match plan.availability {
-            FileAvailability::AlreadyRestored => {
-                // 仅恢复文件是幂等无操作，不再插新 tip。
-                if request.action == RewindAction::RevertOnly {
-                    return RewindOutcome::Succeeded {
-                        action: request.action,
-                        restored_files: 0,
-                        already_restored: true,
-                        user_text: plan.user_text,
-                        deleted: false,
-                        session_deleted: false,
-                    };
-                }
-                // 组合操作此时只删对话；不覆盖别人后来的修改。
+            // 仅恢复文件是幂等无操作：不建 operation、不动文件、不再插新 tip。
+            FileAvailability::AlreadyRestored if request.action == RewindAction::RevertOnly => {
+                return RewindOutcome::Succeeded {
+                    action: request.action,
+                    restored_files: 0,
+                    already_restored: true,
+                    user_text: plan.user_text,
+                    deleted: false,
+                    session_deleted: false,
+                };
             }
-            FileAvailability::KnownEmpty => {}
-            FileAvailability::Ready { .. } => {
-                match restore_files(database, workspace, request, &plan) {
-                    Ok(finished) => restored = Some(finished),
-                    Err(failure) => return failure,
-                }
-            }
+            // 组合操作此时只删对话；不覆盖别人后来的修改。
+            FileAvailability::AlreadyRestored | FileAvailability::KnownEmpty => {}
             FileAvailability::Incomplete => {
                 return failed(
                     "file snapshot is incomplete (interleaved writes); nothing was rewritten"
@@ -99,6 +114,44 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
                 );
             }
             FileAvailability::Unavailable => return failed_unavailable(),
+            FileAvailability::Ready { .. } => {}
+        }
+    }
+    // 操作记录先于任何文件写入：崩溃后据此判定，且最终事务必须能找到它。
+    if let Err(error) = database.begin_operation(
+        workspace,
+        &request.operation_id,
+        &request.session_id,
+        &request.target_user_message_id,
+        i64::try_from(request.expected_revision).unwrap_or(-1),
+        request.action.as_str(),
+        &request.user_text,
+    ) {
+        return failed(format!("rewind operation record failed: {}", error.code()));
+    }
+    let mut restored: Option<Restored> = None;
+    if request.action.reverts_files() && matches!(plan.availability, FileAvailability::Ready { .. })
+    {
+        match restore_files(database, request, &plan) {
+            Ok(finished) => restored = Some(finished),
+            Err(failure) => {
+                // 预检/加锁失败不改文件，但 operation 行已经存在；不结算会让该会话
+                // 永久被 unfinished_operation 挡住。写失败已由 restore_files 标成
+                // failed/recovery_required，这里只处理仍停在 preparing/restoring 的情况。
+                if let Ok(Some(operation)) = database.operation(&request.operation_id)
+                    && matches!(
+                        operation.phase.as_str(),
+                        crate::db::chat::rewind::OP_PREPARING | OP_RESTORING
+                    )
+                {
+                    let _ = database.set_operation_phase(
+                        &request.operation_id,
+                        OP_FAILED,
+                        Some("restore preflight failed"),
+                    );
+                }
+                return failure;
+            }
         }
     }
     let restored_files = restored.as_ref().map_or(0, |finished| finished.count);
@@ -113,28 +166,6 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
         restored_file_count: i64::try_from(restored_files).unwrap_or(0),
         files_already_restored: already_restored,
     };
-    // 操作记录必须先存在：最终事务据此提交。
-    if let Err(error) = database.begin_operation(
-        workspace,
-        &request.operation_id,
-        &request.session_id,
-        &request.target_user_message_id,
-        commit.expected_revision,
-        &commit.kind,
-        &request.user_text,
-    ) {
-        // 文件已回退但操作日志写不进去：补偿回执行前状态，绝不留下无记录的副作用。
-        if let Some(finished) = &restored {
-            let compensated = compensate(&plan.paths, &finished.preimages);
-            return failed(if compensated {
-                "rewind operation record failed; file changes were rolled back".to_string()
-            } else {
-                "rewind operation record failed and rollback also failed; manual recovery required"
-                    .to_string()
-            });
-        }
-        return failed(format!("rewind operation record failed: {}", error.code()));
-    }
     match database.commit_rewind(workspace, &commit) {
         Ok(committed) => {
             let _ = database.set_operation_phase(
@@ -154,9 +185,9 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
         }
         Err(error) => {
             // 文件已回退而最终事务失败：尝试补偿回执行前状态。
-            let compensated = restored
-                .as_ref()
-                .map(|finished| compensate(&plan.paths, &finished.preimages));
+            let compensated = restored.as_ref().map(|finished| {
+                compensate(&plan.paths, &finished.restored_to, &finished.preimages)
+            });
             let _ = database.set_operation_phase(
                 &request.operation_id,
                 if compensated == Some(false) {
@@ -178,30 +209,21 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
     }
 }
 
-/// 已恢复文件的执行前镜像（用于最终事务失败时补偿）。
+/// 已恢复文件的执行前镜像与“本操作写入的镜像”（补偿判据）。
 struct Restored {
     count: usize,
+    /// 本次实际写到磁盘上的内容；补偿前必须与当前内容一致。
+    restored_to: Vec<RawImage>,
+    /// 写入前的磁盘内容；补偿写回它。
     preimages: Vec<RawImage>,
 }
 
-/// 恢复文件：session guard → 路径锁 → 全量预检 → 写入 → 记录进度。
+/// 恢复文件：路径锁 → 全量预检 → 写入 → 记录进度（session guard 由 `run` 持有）。
 fn restore_files(
     database: &Database,
-    workspace: &Path,
     request: &RewindRequest,
     plan: &RestorePlan,
 ) -> Result<Restored, RewindOutcome> {
-    let _session_guard = match crate::platform::try_lock_session(&request.session_id) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => {
-            return Err(failed(
-                "another lx instance is running this session; nothing was rewritten".to_string(),
-            ));
-        }
-        Err(error) => {
-            return Err(failed(format!("session lock failed: {error}")));
-        }
-    };
     let targets: Vec<PathBuf> = plan
         .paths
         .iter()
@@ -234,25 +256,15 @@ fn restore_files(
         preimages.push(current);
         befores.push(before);
     }
-    if let Err(error) = database.begin_operation(
-        workspace,
-        &request.operation_id,
-        &request.session_id,
-        &request.target_user_message_id,
-        i64::try_from(request.expected_revision).unwrap_or(-1),
-        request.action.as_str(),
-        &request.user_text,
-    ) {
-        return Err(failed(format!(
-            "rewind operation record failed: {}",
-            error.code()
-        )));
-    }
     let _ = database.set_operation_phase(&request.operation_id, OP_RESTORING, None);
     let mut written = 0usize;
     for (index, path) in plan.paths.iter().enumerate() {
         if let Err(_error) = apply_image(Path::new(&path.target_path), &befores[index]) {
-            let compensated = compensate(&plan.paths[..written], &preimages[..written]);
+            let compensated = compensate(
+                &plan.paths[..written],
+                &befores[..written],
+                &preimages[..written],
+            );
             let _ = database.set_operation_phase(
                 &request.operation_id,
                 if compensated {
@@ -279,24 +291,31 @@ fn restore_files(
     let _ = database.set_operation_phase(&request.operation_id, OP_FILES_RESTORED, None);
     Ok(Restored {
         count: written,
+        restored_to: befores,
         preimages,
     })
 }
 
 /// 逆序补偿已经写入的路径：先确认当前仍是本操作刚写的结果，再恢复执行前镜像。
-fn compensate(paths: &[RestorePath], preimages: &[RawImage]) -> bool {
-    for (path, preimage) in paths.iter().zip(preimages).rev() {
-        let target = Path::new(&path.target_path);
-        if let Ok(current) = read_raw(target, false)
-            && current.same_content(preimage)
-        {
-            if apply_image(target, preimage).is_err() {
-                return false;
-            }
-            continue;
-        }
-        // 补偿前再检查失败（被外部修改）：停止，避免覆盖别人的写入。
+///
+/// `restored_to` 是本操作写入的内容，`preimages` 是写入前的磁盘内容。拿当前内容跟
+/// `preimages` 比较是错的：恢复成功后磁盘上恰是 `restored_to`，那样永远判定为冲突，
+/// 一个字节也不会回滚。
+fn compensate(paths: &[RestorePath], restored_to: &[RawImage], preimages: &[RawImage]) -> bool {
+    if paths.len() != restored_to.len() || paths.len() != preimages.len() {
         return false;
+    }
+    for ((path, written), preimage) in paths.iter().zip(restored_to).zip(preimages).rev() {
+        let target = Path::new(&path.target_path);
+        match read_raw(target, false) {
+            Ok(current) if current.same_content(written) => {
+                if apply_image(target, preimage).is_err() {
+                    return false;
+                }
+            }
+            // 补偿前发现被外部修改：停止，避免覆盖别人的写入。
+            _ => return false,
+        }
     }
     true
 }

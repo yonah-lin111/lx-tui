@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::actions::LxInput;
-use crate::app::state::{PaneView, RewindAction, SlashCommand};
+use crate::app::state::{PaneView, PanelWindow, RewindAction, SlashCommand};
 use crate::app::update::pane::apply_lx_input;
 use crate::db::chat::FileAvailability;
 
@@ -453,4 +453,52 @@ fn history_scroll_exits_rewind_selection_and_panel() {
     assert!(target.lx.rewind.selected.is_none(), "滚动退出高亮选中");
     assert!(target.lx.rewind.panel.is_none());
     assert!(target.lx.slash.is_none(), "动作面板随选中一起关闭");
+}
+
+#[test]
+fn escape_closes_command_panel_without_arming_rewind() {
+    let (mut state, pane) = rewound_state();
+    state.pane_mut_anywhere(pane).expect("pane").lx.slash = Some(SlashPanel::Commands {
+        items: Vec::new(),
+        window: PanelWindow::new(0),
+    });
+    apply_lx_input(&mut state, LxInput::Escape);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.slash.is_none(), "Esc 应关闭面板");
+    assert!(
+        target.lx.rewind.armed_at.is_none(),
+        "关闭高优先级面板的 Esc 不能算作撤销待命"
+    );
+}
+
+#[test]
+fn empty_session_does_not_arm_rewind() {
+    let (mut state, pane) = rewound_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .clear();
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .rewind
+            .armed_at
+            .is_none(),
+        "没有用户轮次时不应提示可撤销"
+    );
+}
+
+#[test]
+fn already_restored_keeps_file_actions_enabled() {
+    let panel = crate::app::state::RewindPanel::new(crate::app::state::SnapshotState::from_db(
+        &FileAvailability::AlreadyRestored,
+    ));
+    assert!(panel.enabled(RewindAction::RevertAndDelete));
+    assert!(panel.enabled(RewindAction::RevertOnly));
 }

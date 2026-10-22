@@ -1036,7 +1036,6 @@ fn selected_latest_user_message_uses_distinct_background() {
         user_message_id: "user-1".into(),
         expected_revision: 1,
         pane: crate::layout::PaneId::alloc(),
-        cwd: std::path::PathBuf::from("/tmp"),
         input_at_open: String::new(),
         user_text: "hello".into(),
     });

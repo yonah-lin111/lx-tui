@@ -111,6 +111,8 @@ pub enum AppEvent {
     RewindFinished {
         pane: PaneId,
         session_id: String,
+        /// 发起时冻结的会话 DB 工作区键（回执重载只认它）。
+        workspace: std::path::PathBuf,
         outcome: chat::RewindOutcome,
     },
 }
@@ -573,9 +575,17 @@ fn handle_app_event(
         AppEvent::RewindFinished {
             pane,
             session_id,
+            workspace,
             outcome,
         } => {
-            chat::handle_rewind_finished(state, persistence, pane, &session_id, outcome);
+            chat::handle_rewind_finished(
+                state,
+                persistence,
+                pane,
+                &session_id,
+                &workspace,
+                outcome,
+            );
         }
         AppEvent::ProcessesReaped {
             workspace,

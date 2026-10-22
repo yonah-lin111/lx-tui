@@ -93,6 +93,65 @@ fn turn_with_file(
     turn
 }
 
+#[cfg(unix)]
+fn record(bytes: &[u8]) -> crate::db::chat::ImageRecord {
+    crate::db::chat::ImageRecord {
+        kind: "regular".into(),
+        bytes: Some(bytes.to_vec()),
+        mode: Some(0o644),
+        link_target: None,
+        git_oid: None,
+    }
+}
+
+#[cfg(unix)]
+fn restore_path(target: &Path) -> RestorePath {
+    RestorePath {
+        path: target.to_string_lossy().into_owned(),
+        target_path: target.to_string_lossy().into_owned(),
+        before: record(b"before"),
+        expected_after: record(b"after"),
+        worktree_root: None,
+        git_dir: None,
+        head_ref: None,
+        head_oid: None,
+    }
+}
+
+/// 补偿必须以“本操作刚写入的内容”为判据，并真正写回执行前镜像。
+#[cfg(unix)]
+#[test]
+fn compensation_writes_preimage_back_when_current_is_restored_content() {
+    let (_database, workspace, _db_path) = fixture("compensate-ok");
+    let file = workspace.join("a.txt");
+    std::fs::write(&file, b"after").expect("restored content");
+    let restored_to = RawImage::regular(b"after".to_vec(), Some(0o644));
+    let preimage = RawImage::regular(b"before".to_vec(), Some(0o644));
+    assert!(super::compensate(
+        &[restore_path(&file)],
+        &[restored_to],
+        &[preimage]
+    ));
+    assert_eq!(std::fs::read(&file).expect("read"), b"before");
+}
+
+/// 恢复后又被外部程序改过：拒绝补偿，保持现状。
+#[cfg(unix)]
+#[test]
+fn compensation_refuses_when_external_write_happened() {
+    let (_database, workspace, _db_path) = fixture("compensate-conflict");
+    let file = workspace.join("a.txt");
+    std::fs::write(&file, b"someone else").expect("external content");
+    let restored_to = RawImage::regular(b"after".to_vec(), Some(0o644));
+    let preimage = RawImage::regular(b"before".to_vec(), Some(0o644));
+    assert!(!super::compensate(
+        &[restore_path(&file)],
+        &[restored_to],
+        &[preimage]
+    ));
+    assert_eq!(std::fs::read(&file).expect("read"), b"someone else");
+}
+
 fn request(
     turn: &crate::db::chat::TurnCommitted,
     workspace: &Path,
@@ -105,7 +164,6 @@ fn request(
         expected_revision: u64::try_from(turn.revision).expect("revision"),
         action,
         workspace: workspace.to_path_buf(),
-        cwd: workspace.to_path_buf(),
         input_at_open: String::new(),
         user_text: "edit it".into(),
         operation_id: format!("op-{}", turn.user_message_id),
@@ -249,6 +307,13 @@ fn later_external_write_is_a_conflict_and_nothing_is_rewritten() {
             .expect("notices")
             .is_empty(),
         "失败不插成功 tip"
+    );
+    assert!(
+        database
+            .unfinished_operation(&turn.session_id)
+            .expect("operation")
+            .is_none(),
+        "预检冲突必须结算 operation，不能永久阻塞该会话"
     );
 }
 
@@ -470,7 +535,6 @@ fn restores_actual_linked_worktree_target_only() {
             expected_revision: u64::try_from(turn.revision).expect("rev"),
             action: RewindAction::RevertAndDelete,
             workspace: repo.clone(),
-            cwd: repo.clone(),
             input_at_open: String::new(),
             user_text: "edit linked".into(),
             operation_id: "op-worktree".into(),
@@ -492,4 +556,25 @@ fn restores_actual_linked_worktree_target_only() {
         b"main-dirty",
         "主 checkout 同名文件不得被恢复"
     );
+}
+
+/// session guard 由 `run` 全程持有：另一实例（或同进程已持锁）运行时零写入拒绝。
+#[cfg(unix)]
+#[test]
+fn held_session_guard_blocks_rewind_without_writing() {
+    let (database, workspace, _db_path) = fixture("session-guard");
+    let file = workspace.join("a.txt");
+    std::fs::write(&file, b"new").expect("agent write");
+    let turn = turn_with_file(&database, &workspace, None, &file, b"old", b"new");
+    let request = request(&turn, &workspace, RewindAction::RevertAndDelete);
+    let guard = crate::platform::try_lock_session(&turn.session_id)
+        .expect("lock")
+        .expect("free");
+    let outcome = run(&database, &workspace, &request);
+    assert!(
+        matches!(outcome, RewindOutcome::Failed { .. }),
+        "持有 session guard 时必须拒绝执行"
+    );
+    assert_eq!(std::fs::read(&file).expect("read"), b"new", "零写入");
+    drop(guard);
 }

@@ -392,3 +392,66 @@ fn known_empty_turn_is_not_unavailable() {
         .expect("plan");
     assert_eq!(plan.availability, FileAvailability::KnownEmpty);
 }
+
+/// 删除轮次时同步清掉该轮的 scope/mutation，避免快照数据永久残留。
+#[test]
+fn deleting_turn_cleans_scope_mutations_and_images() {
+    let (database, workspace) = temp("cleanup");
+    let first = started(&database, &workspace);
+    sealed(&database, &workspace, &first);
+    let turn = database
+        .begin_turn(&workspace, Some(&first.session_id), "latest", &model())
+        .expect("turn");
+    let ticket = database
+        .prepare_mutations(
+            &workspace,
+            &turn.session_id,
+            &turn.user_message_id,
+            "call",
+            &[change("/tmp/a", b"a", b"b")],
+        )
+        .expect("prepare");
+    database
+        .commit_mutations(
+            &workspace,
+            &turn.session_id,
+            &ticket,
+            &[ObservedWrite {
+                actual_after: regular(b"b"),
+                success: true,
+            }],
+        )
+        .expect("commit mutation");
+    sealed(&database, &workspace, &turn);
+    let result = commit_delete(&database, &workspace, &turn, "op-cleanup");
+    assert!(result.executed);
+    assert!(!result.session_deleted, "上一轮仍在");
+    assert!(
+        database
+            .turn_scope(&turn.user_message_id)
+            .expect("scope")
+            .is_none(),
+        "被删轮次的 scope 必须清理"
+    );
+    let mutations: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_file_mutation WHERE user_message_id = ?1",
+            params![turn.user_message_id],
+            |row| row.get(0),
+        )
+        .expect("count mutations");
+    assert_eq!(mutations, 0);
+    database
+        .prune_orphan_images(&turn.session_id)
+        .expect("prune");
+    let images: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM agent_file_image WHERE session_id = ?1",
+            params![turn.session_id],
+            |row| row.get(0),
+        )
+        .expect("count images");
+    assert_eq!(images, 0, "失去引用的镜像必须回收");
+}

@@ -10,6 +10,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Database, DbError, Result, new_external_id, now_ms};
 
+mod plan;
+
 /// 单份文件镜像上限（64 MiB）。
 pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
 /// 单轮新增快照数据上限（256 MiB）。
@@ -489,133 +491,6 @@ impl Database {
         Ok(())
     }
 
-    /// 派生某轮的恢复计划：线性检查、当前期望内容与可用性。
-    pub fn restore_plan(
-        &self,
-        workspace: &Path,
-        session_id: &str,
-        user_message_id: &str,
-    ) -> Result<RestorePlan> {
-        let latest = self
-            .latest_user_turn(workspace, session_id)?
-            .ok_or(DbError::SessionMissing)?;
-        let mut plan = RestorePlan {
-            session_id: session_id.to_string(),
-            user_message_id: user_message_id.to_string(),
-            revision: latest.revision,
-            availability: FileAvailability::Unavailable,
-            paths: Vec::new(),
-            user_text: latest.text.clone(),
-        };
-        if latest.user_message_id != user_message_id {
-            return Err(DbError::RewindTargetChanged);
-        }
-        let Some(scope) = latest.scope else {
-            return Ok(plan);
-        };
-        if !scope.is_complete() {
-            plan.availability = FileAvailability::Incomplete;
-            return Ok(plan);
-        }
-        if scope.files_restored {
-            plan.availability = FileAvailability::AlreadyRestored;
-            return Ok(plan);
-        }
-        let mut statement = self.conn.prepare(
-            r#"SELECT target_path, path, before_image_id,
-                      actual_after_image_id, state, worktree_root, git_dir, head_ref, head_oid
-               FROM agent_file_mutation
-               WHERE session_id = ?1 AND user_message_id = ?2
-               ORDER BY id"#,
-        )?;
-        let rows = statement.query_map(params![session_id, user_message_id], |row| {
-            Ok(MutationRow {
-                target_path: row.get(0)?,
-                path: row.get(1)?,
-                before: row.get(2)?,
-                actual: row.get(3)?,
-                state: row.get(4)?,
-                worktree_root: row.get(5)?,
-                git_dir: row.get(6)?,
-                head_ref: row.get(7)?,
-                head_oid: row.get(8)?,
-            })
-        })?;
-        let mut mutations: Vec<MutationRow> = rows.collect::<std::result::Result<_, _>>()?;
-        if mutations.iter().any(|row| row.state != MUTATION_COMMITTED) {
-            plan.availability = FileAvailability::Incomplete;
-            return Ok(plan);
-        }
-        if mutations.is_empty() {
-            plan.availability = FileAvailability::KnownEmpty;
-            return Ok(plan);
-        }
-        // 同一路径：先按 id 排序，再检查连续性与首 before / 末 after。
-        mutations.sort_by_key(|row| row.target_path.clone());
-        let mut index = 0;
-        while index < mutations.len() {
-            let start = index;
-            while index < mutations.len()
-                && mutations[index].target_path == mutations[start].target_path
-            {
-                index += 1;
-            }
-            let group = &mutations[start..index];
-            let mut previous_after: Option<ImageRecord> = None;
-            for row in group {
-                let before = self.image(row.before)?.ok_or(DbError::RewindUnavailable)?;
-                if let Some(previous) = previous_after.as_ref()
-                    && !previous.same_content(&before)
-                {
-                    // 中间有其他写入：整轮文件恢复保守拒绝。
-                    plan.availability = FileAvailability::Incomplete;
-                    return Ok(plan);
-                }
-                let actual_id = row.actual.ok_or(DbError::RewindUnavailable)?;
-                previous_after = Some(self.image(actual_id)?.ok_or(DbError::RewindUnavailable)?);
-            }
-            let first = self
-                .image(group.first().expect("non-empty group").before)?
-                .ok_or(DbError::RewindUnavailable)?;
-            let last = previous_after.ok_or(DbError::RewindUnavailable)?;
-            let head = group.last().expect("non-empty group");
-            plan.paths.push(RestorePath {
-                path: head.path.clone(),
-                target_path: head.target_path.clone(),
-                before: first,
-                expected_after: last,
-                worktree_root: head.worktree_root.clone(),
-                git_dir: head.git_dir.clone(),
-                head_ref: head.head_ref.clone(),
-                head_oid: head.head_oid.clone(),
-            });
-        }
-        plan.availability = FileAvailability::Ready {
-            paths: plan.paths.len(),
-        };
-        Ok(plan)
-    }
-
-    /// 读取单份镜像。
-    pub fn image(&self, id: i64) -> Result<Option<ImageRecord>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT kind, bytes, mode, link_target, git_oid FROM agent_file_image WHERE id = ?1",
-                params![id],
-                |row| {
-                    Ok(ImageRecord {
-                        kind: row.get(0)?,
-                        bytes: row.get(1)?,
-                        mode: row.get(2)?,
-                        link_target: row.get(3)?,
-                        git_oid: row.get(4)?,
-                    })
-                },
-            )
-            .optional()?)
-    }
-
     /// 开始一次撤销操作（幂等：同 operation_id 返回既有记录）。
     pub fn begin_operation(
         &self,
@@ -697,7 +572,8 @@ impl Database {
             .query_row(
                 r#"SELECT operation_id, phase, user_text, error_code
                    FROM agent_rewind_operation
-                   WHERE session_id = ?1 AND phase IN ('preparing', 'restoring', 'files_restored')
+                   WHERE session_id = ?1
+                     AND phase IN ('preparing', 'restoring', 'files_restored', 'recovery_required')
                    ORDER BY id DESC LIMIT 1"#,
                 params![session_id],
                 |row| {
@@ -839,6 +715,18 @@ impl Database {
                 params![commit.session_id, commit.target_user_message_id],
             )?;
         }
+        if commit.delete_conversation {
+            // 被删轮次不再可能被撤销：同事务清掉它的 scope 与 mutation，
+            // 让提交后的 prune_orphan_images 能回收对应镜像。
+            transaction.execute(
+                "DELETE FROM agent_turn_file_scope WHERE session_id = ?1 AND user_message_id = ?2",
+                params![commit.session_id, commit.target_user_message_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM agent_file_mutation WHERE session_id = ?1 AND user_message_id = ?2",
+                params![commit.session_id, commit.target_user_message_id],
+            )?;
+        }
         // usage 聚合按剩余消息重算，不保留被删轮次的用量。
         transaction.execute(
             r#"UPDATE agent_session
@@ -874,35 +762,6 @@ impl Database {
         )?;
         Ok(())
     }
-
-    /// 清理指定会话中没有未完成操作引用的镜像（恢复成功后调用）。
-    pub fn prune_orphan_images(&self, session_id: &str) -> Result<usize> {
-        let removed = self.conn.execute(
-            r#"DELETE FROM agent_file_image
-               WHERE session_id = ?1
-                 AND id NOT IN (
-                     SELECT before_image_id FROM agent_file_mutation
-                     UNION SELECT planned_after_image_id FROM agent_file_mutation
-                     UNION SELECT actual_after_image_id FROM agent_file_mutation
-                        WHERE actual_after_image_id IS NOT NULL
-                 )"#,
-            params![session_id],
-        )?;
-        Ok(removed)
-    }
-}
-
-/// restore plan 的原始 mutation 行。
-struct MutationRow {
-    target_path: String,
-    path: String,
-    before: i64,
-    actual: Option<i64>,
-    state: String,
-    worktree_root: Option<String>,
-    git_dir: Option<String>,
-    head_ref: Option<String>,
-    head_oid: Option<String>,
 }
 
 /// 插入一份镜像并返回 id。

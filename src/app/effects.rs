@@ -222,7 +222,6 @@ pub struct RewindRequest {
     pub action: crate::app::state::RewindAction,
     /// 会话所属工作区键（DB 归属校验；不是执行 cwd）。
     pub workspace: PathBuf,
-    pub cwd: PathBuf,
     pub input_at_open: String,
     pub user_text: String,
     pub operation_id: String,

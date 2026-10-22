@@ -63,6 +63,15 @@ pub fn apply_input(state: &mut AppState, pane: PaneId, command: LxInput) -> Rout
         // 面板上下/Enter/Esc 由 `/` 面板路由处理（见 `apply_slash_enter` 与 pane 分支）。
         return Route::Pass;
     }
+    // 其它覆盖层同样优先消费 Esc：`/model`、`/resume` 打开时输入框为空，若放行到这里，
+    // 关闭面板的 Esc 会被误算成撤销待命的第一下。
+    if target.lx.slash.is_some()
+        || target.lx.panel.is_some()
+        || target.lx.mention_open()
+        || target.lx.paste_panel().is_some()
+    {
+        return Route::Pass;
+    }
     if target.lx.rewind.selected.is_some() {
         match command {
             LxInput::Enter => {
@@ -110,10 +119,16 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     if target.view != crate::app::state::PaneView::Lx {
         return None;
     }
-    // 忙时保留现有双 Esc 停止语义；草稿非空时不进入撤销。
+    // 忙时保留现有双 Esc 停止语义；草稿非空或根本没有用户轮次时不进入撤销。
     if !matches!(target.lx.chat.request, RequestState::Idle)
         || !target.lx.input.trim().is_empty()
         || target.lx.chat.session_id.is_none()
+        || !target
+            .lx
+            .chat
+            .messages
+            .iter()
+            .any(|message| message.role == "user")
     {
         return None;
     }
@@ -147,10 +162,6 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         .text_parts()
         .map(|part| part.content.as_str())
         .collect::<String>();
-    let cwd = target
-        .cwd
-        .clone()
-        .or_else(|| state.workspace_cwd_for_pane(pane))?;
     let revision = target.lx.chat.revision;
     let input_at_open = target.lx.input.clone();
     let user_message_id = message.id.clone();
@@ -162,7 +173,6 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         user_message_id: user_message_id.clone(),
         expected_revision: revision,
         pane,
-        cwd,
         input_at_open,
         user_text,
     });
@@ -290,9 +300,15 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
         return true;
     }
     let operation_id = crate::db::new_external_id("rewind-op");
-    let workspace = state
-        .chat_session_key_for_pane(pane)
-        .unwrap_or_else(|| selected.cwd.clone());
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_NO_WORKSPACE,
+        );
+        return true;
+    };
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
@@ -310,7 +326,6 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
         expected_revision: selected.expected_revision,
         action,
         workspace,
-        cwd: selected.cwd.clone(),
         input_at_open: selected.input_at_open.clone(),
         user_text: selected.user_text.clone(),
         operation_id,

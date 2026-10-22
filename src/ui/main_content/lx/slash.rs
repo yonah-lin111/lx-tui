@@ -103,13 +103,17 @@ pub(super) fn items<'a>(
         SlashPanel::Rewind(panel) => crate::app::state::RewindAction::ALL
             .iter()
             .map(|action| {
-                let reason = if panel.enabled(*action) {
-                    ""
-                } else {
+                let reason = if !panel.enabled(*action) {
                     panel
                         .snapshot
                         .unavailable_reason()
                         .unwrap_or(text::LX_REWIND_SNAPSHOT_UNAVAILABLE)
+                } else if action.reverts_files()
+                    && panel.snapshot == crate::app::state::SnapshotState::AlreadyRestored
+                {
+                    text::LX_REWIND_FILES_ALREADY_RESTORED
+                } else {
+                    ""
                 };
                 CommandItem::Inline {
                     label: action_label(*action),

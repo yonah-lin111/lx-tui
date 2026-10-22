@@ -204,28 +204,17 @@ pub fn ensure_single_link(path: &Path) -> Result<(), ToolFailure> {
 /// 取得跨进程路径锁（与恢复共用同一套 sidecar）；超时按冲突拒绝。
 pub fn lock_external(paths: &[&Path]) -> Result<Option<crate::platform::PathGuards>, ToolFailure> {
     let owned: Vec<PathBuf> = paths.iter().map(|path| path.to_path_buf()).collect();
-    crate::platform::lock_paths(&owned)
-        .map_err(|error| {
-            ToolFailure::new(
-                ToolErrorCode::Io,
-                format!("failed to acquire path lock: {error}"),
-            )
-        })
-        .map(|guard| {
-            guard.or_else(|| {
-                None // 超时：调用方按冲突失败（返回 Err 由上层构造）。
-            })
-        })
-        .and_then(|guard| {
-            if guard.is_some() {
-                Ok(guard)
-            } else {
-                Err(ToolFailure::new(
-                    ToolErrorCode::Io,
-                    "timed out waiting for a path lock; another process is writing the target",
-                ))
-            }
-        })
+    match crate::platform::lock_paths(&owned) {
+        Ok(Some(guard)) => Ok(Some(guard)),
+        Ok(None) => Err(ToolFailure::new(
+            ToolErrorCode::Io,
+            "timed out waiting for a path lock; another process is writing the target",
+        )),
+        Err(error) => Err(ToolFailure::new(
+            ToolErrorCode::Io,
+            format!("failed to acquire path lock: {error}"),
+        )),
+    }
 }
 
 /// 计划写入后的镜像：普通文件字节 + 保留原权限（新文件 0644）。
