@@ -52,7 +52,7 @@ pub(super) fn draw_body(
                     rect.x,
                     y,
                     mark.glyph(loading_frame, animating),
-                    mark.style(kind, false),
+                    mark.style(kind),
                 );
             }
             let mut cx = rect

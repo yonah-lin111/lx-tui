@@ -389,12 +389,7 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 ///
 /// 折叠态最多 [`DETAIL_PREVIEW_ROWS`] 行、展开态最多 [`DETAIL_MAX_ROWS`] 行；
 /// 截断时末行追加 `…`。`rows` 与 `draw` 共用本函数，行数口径只有一份。
-pub(super) fn detail(
-    call: &ToolCallView,
-    width: u16,
-    expanded: bool,
-    hovered: bool,
-) -> Vec<Vec<Segment>> {
+pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec<Segment>> {
     let limit = usize::from(width);
     if limit == 0 {
         return Vec::new();
@@ -423,7 +418,7 @@ pub(super) fn detail(
     } else {
         budget
     };
-    let body = detail_body(call, body_limit.saturating_mul(rows_budget), hovered);
+    let body = detail_body(call, body_limit.saturating_mul(rows_budget));
     if body.is_empty() {
         // 没有可展示内容：仍占一行（连接符留着，行数恒 ≥ 1）。
         return vec![vec![Segment::new(head, style::chat_notice_connector())]];
@@ -459,16 +454,11 @@ pub(super) fn detail(
 
 /// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径）。
 pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail(call, width, expanded, false).len()
-}
-
-/// 详情行是否**超出折叠额度**（决定这一行可不可点、要不要注册命中区）。
-pub(super) fn detail_overflows(call: &ToolCallView, width: u16) -> bool {
-    detail(call, width, true, false).len() > DETAIL_PREVIEW_ROWS
+    detail(call, width, expanded).len()
 }
 
 /// 第二行正文（不含 `└─ ` 前缀）：按 [`Detail`] 分支，并在 `limit` 列内收敛。
-fn detail_body(call: &ToolCallView, limit: usize, hovered: bool) -> Vec<Segment> {
+fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
     match Detail::of(call) {
         Detail::Error => {
             let Some(error) = error_segment(call) else {
@@ -486,7 +476,7 @@ fn detail_body(call: &ToolCallView, limit: usize, hovered: bool) -> Vec<Segment>
                 error.style,
             )]
         }
-        Detail::Params => detail_params(call, limit, hovered),
+        Detail::Params => detail_params(call, limit),
     }
 }
 
@@ -495,13 +485,8 @@ fn detail_body(call: &ToolCallView, limit: usize, hovered: bool) -> Vec<Segment>
 /// 让位顺序：**次要计数（按优先级）→ 参数的尾段（`search` 的 `in path` 整体）→
 /// 参数首段**。首段放不下时按 [`Shrink`] 收敛（路径中间省略、pattern 尾部省略）。
 /// 这条顺序保证「范围只在 pattern 完整时才显示」，pattern 绝不被切碎。
-fn detail_params(call: &ToolCallView, limit: usize, hovered: bool) -> Vec<Segment> {
-    let param_style = if hovered {
-        style::chat_tool_param_hover()
-    } else {
-        style::chat_tool_param()
-    };
-    let param = param(call, param_style);
+fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
+    let param = param(call, style::chat_tool_param());
     // 次要段是否带 ` · ` 前缀取决于主参数是否存在（否则会出现孤立分隔符）。
     let extras = extras(call, param.is_some());
     if param.is_none() && extras.is_empty() {

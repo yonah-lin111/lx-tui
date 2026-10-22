@@ -5,19 +5,18 @@
 //!   └─ docs/a.md (+424 -0)
 //!         1  ## 标题
 //!         2  + 状态…
-//!        … 421 more lines          ← 这一块自己的展开入口（剩余行数）
 //!   └─ docs/b.md (+196 -0)
 //!         1  ## 标题
-//!        collapse                  ← 已展开时同一位置显示收起
 //! ```
 //!
 //! - **行数只有一个来源**：[`rows`] 与 [`draw`] 共用 [`blocks`] 产出的物理行；
 //! - 连续的**同种**文件调用（`edit` 挨着 `edit`、`write` 挨着 `write`，中间没有正文
 //!   步骤打断）共用**一行合并标题**（文件数与总计），其下每个调用各自一块：自己的
-//!   文件头（`└─`）、自己的预览、自己的展开状态与自己的展开入口。展开互不影响；
-//!   单次调用是长度为 1 的组，标题只写裸动词、不写 `1 file`；
+//!   文件头（`└─`）、自己的预览、自己的展开状态。展开互不影响；单次调用是长度为 1
+//!   的组，标题只写裸动词、不写 `1 file`；
+//! - **没有动作按钮、没有剩余行数文案**（用户要求移除）：整块卡片本身就是点击面——
+//!   点折叠内容展开、点展开内容收起，靠行为而不是文案表达可交互；
 //! - 预览只取 Added/Removed 行、按真实列宽换行，**最多 3 个物理行**；上下文不占额度；
-//!   被省略的行数写在块末尾的**动作行**里（`… 421 more lines`），它同时也是展开入口；
 //! - 展开显示全部已保存 hunks、1 行上下文、hunk 间 `⋮` 分隔与 EOF 元信息；
 //! - 新增绿、删除红，同时保留 `+`/`-`；行号与上下文用次要信息色；
 //! - 增删行铺**整行底色**（`agent_added_bg` / `agent_removed_bg`），上下文行不铺；
@@ -72,43 +71,24 @@ pub(super) fn rows(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> us
 }
 
 /// 合并卡里一个调用所占的行区间（相对整卡顶部，标题行占 0）。
+///
+/// 现在没有动作行了：整块就是点击面，因此只需要「从哪开始、占几行」。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Block {
     /// 块首行（该调用的第一个文件头）在卡内的偏移。
     pub(crate) start: usize,
-    /// 块占用的行数（文件头 + 正文 + 动作行）。
+    /// 块占用的行数（文件头 + 正文）。
     pub(crate) len: usize,
-    /// 展开/收起动作行的卡内偏移；没有可展开正文时为 None。
-    pub(crate) action: Option<usize>,
-    /// 可点击折叠的正文区（卡内偏移, 行数）；0 行表示不可点。
-    pub(crate) body: (usize, usize),
 }
 
 /// 逐调用的块几何；[`rows`]、[`draw`] 与命中共用同一份。
-///
-/// 动作行只在**块内真的有省略**（或已展开）时出现：预览完整时没有可展开内容，
-/// 画一个点了没反应的入口只会骗人。
 pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> Vec<Block> {
     let mut out = Vec::with_capacity(calls.len());
     let mut start = title_rows();
     for (index, call) in calls.iter().enumerate() {
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        let rows = layout(call, width, is_expanded, false);
-        let len = rows.len();
-        let has_action = is_expanded || remaining_lines(call, width) > 0;
-        let action = has_action.then(|| start + len.saturating_sub(1));
-        // 展开时除动作行之外全是正文；折叠时正文不可点（只有动作行能展开）。
-        let body = if is_expanded {
-            (start, len.saturating_sub(1))
-        } else {
-            (start, 0)
-        };
-        out.push(Block {
-            start,
-            len,
-            action,
-            body,
-        });
+        let len = layout(call, width, is_expanded).len();
+        out.push(Block { start, len });
         start += len;
     }
     out
@@ -116,8 +96,7 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
 
 /// 绘制文件差异卡片；推进行数必须与 [`rows`] 严格相等。
 ///
-/// `expanded` 与 `calls` 一一对应（逐调用独立）；`hovered` 也只作用于被悬停的
-/// 那一次调用——合并卡里每个块的展开入口各自独立高亮。
+/// `expanded` 与 `calls` 一一对应（逐调用独立）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     grid: &mut Grid,
@@ -128,7 +107,6 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
-    hovered: Option<usize>,
 ) {
     if rect.width == 0 || calls.is_empty() {
         return;
@@ -151,7 +129,8 @@ pub(super) fn draw(
     *row_index += 1;
     for (index, call) in calls.iter().enumerate() {
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        for row in layout(call, rect.width, is_expanded, hovered == Some(index)) {
+        let _ = index;
+        for row in layout(call, rect.width, is_expanded) {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
                 // 先铺整行底色再写字：`put_segments` 只写字符，不负责行背景。
                 if let Some(fill) = row.fill {
@@ -185,28 +164,9 @@ impl Row {
 
 /// 一次调用的全部物理行（标题行除外）；[`rows`]、[`draw`] 与命中共用。
 ///
-/// 末尾动作行**只在需要时**出现：折叠态还有没画出来的行 → `… N more lines`
-/// （用户要求把折叠文案换成剩余行数），展开态 → `collapse`。预览已经完整时没有
-/// 可展开内容，不放一个点了没反应的入口。`hovered` 只影响动作行颜色，不影响行数。
-fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
-    let mut rows = content_rows(call, width, expanded);
-    let remaining = remaining_lines(call, width);
-    let action = if expanded {
-        Some(text::agent::FILE_DIFF_COLLAPSE.to_string())
-    } else {
-        (remaining > 0).then(|| text::agent::file_diff_more_lines(remaining))
-    };
-    if let Some(action) = action {
-        rows.push(Row::plain(vec![Segment::new(
-            format!("{}{action}", continuation_prefix()),
-            style::chat_action_label(hovered),
-        )]));
-    }
-    rows
-}
-
-/// 差异内容行（文件头 + 正文 + 省略文件提示），**不含**动作行。
-fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
+/// 没有动作行：折叠态画 3 行预览、展开态铺开全部 hunks——是否还有更多内容由
+/// 用户点开即见，不再用 `… N more lines` 之类的文案提示（用户要求移除）。
+fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     let files = files_of(&[call]);
     let mut rows = Vec::new();
     let last_index = files.len().saturating_sub(1);
@@ -227,13 +187,6 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
         )));
     }
     rows
-}
-
-/// 折叠态被省略的物理行数：展开的内容行数减预览的内容行数（两边的动作行都不计）。
-fn remaining_lines(call: &ToolCallView, width: u16) -> usize {
-    content_rows(call, width, true)
-        .len()
-        .saturating_sub(content_rows(call, width, false).len())
 }
 
 /// 组内按调用顺序、文件提交顺序扁平展开的文件列表。
@@ -301,7 +254,7 @@ fn group_header(
     };
     let lead = paint(Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool, false),
+        mark.style(StepKind::Tool),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

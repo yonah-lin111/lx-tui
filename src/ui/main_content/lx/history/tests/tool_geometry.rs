@@ -412,20 +412,13 @@ fn file_step(position: i64, call_id: &str, name: &str, status: ToolStatus) -> As
     }
 }
 
-/// 一张合并卡登记的整卡 / 展开入口数量。
-fn card_hits(lx: &Lx, area: Rect) -> (usize, usize) {
-    let computed = layout(area, lx);
-    let cards = computed
+/// 卡片命中数（每张可折叠卡片一个）；没有动作行，因此只有一个计数。
+fn card_hits(lx: &Lx, area: Rect) -> usize {
+    layout(area, lx)
         .cards
         .iter()
         .filter(|hit| matches!(hit.kind, CardKind::Tool { .. }))
-        .count();
-    let toggles = computed
-        .tools
-        .iter()
-        .filter(|hit| hit.kind == ToolHitKind::Toggle)
-        .count();
-    (cards, toggles)
+        .count()
 }
 
 /// 连续 `edit` 共用一行合并标题，但**每个调用各自一块**：各自一份整卡命中区与
@@ -454,15 +447,15 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
     );
     assert_eq!(
         card_hits(&merged, area),
-        (2, 2),
-        "两个连续 edit 各自一块：两块卡片命中、两个独立展开入口"
+        2,
+        "两个连续 edit 各自一块：两块独立的点击面"
     );
 
     // `write` 同为文件工具：连续 `write` 也合并。
     let writes = build(["write", "write"]);
     assert_eq!(
         card_hits(&writes, area),
-        (2, 2),
+        2,
         "连续 write 同样共用标题、各自一块"
     );
     assert_eq!(
@@ -491,13 +484,12 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
         "展开单个调用也会多出行"
     );
     assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
-    let (cards, toggles) = card_hits(&expanded, area);
-    assert_eq!((cards, toggles), (2, 2), "展开态仍是两块");
+    assert_eq!(card_hits(&expanded, area), 2, "展开态仍是两块");
 
     // 同种动词才合并：edit + write 各自成卡，行数更多。
     let split = build(["edit", "write"]);
     let split_layout = layout(area, &split);
-    assert_eq!(card_hits(&split, area), (2, 2), "不同动词不合并");
+    assert_eq!(card_hits(&split, area), 2, "不同动词不合并");
     assert!(split_layout.total_rows > merged_layout.total_rows);
     assert_eq!(render_rows(area, &split, 0), split_layout.total_rows);
 }
@@ -516,6 +508,6 @@ fn a_part_step_breaks_the_merge() {
     ];
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 20);
-    assert_eq!(card_hits(&lx, area), (2, 2), "正文打断合并");
+    assert_eq!(card_hits(&lx, area), 2, "正文打断合并");
     assert_eq!(render_rows(area, &lx, 0), layout(area, &lx).total_rows);
 }

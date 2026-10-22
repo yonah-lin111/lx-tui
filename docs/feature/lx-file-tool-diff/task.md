@@ -283,6 +283,9 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 
 ## 14. 第四轮：逐调用独立展开 + 代码块去装饰 + loading token + toast + 参数折叠
 
+> **本节的「动作行 / 剩余行数 / hover 提亮」已被 [§15](#15-第五轮loading-统计命令折行移除按钮与-hover) 取代**：
+> 按钮、行数与全部 hover 高亮均已移除，折叠/展开改为「点卡片内容」。以下保留为当时的决策记录。
+
 用户要求（原文要点）：
 
 1. 连续调用用 `└─` 连接（对齐 Codex 截图），**每个调用展开互相独立**，不要底部控制整组；
@@ -327,3 +330,42 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
   `history/tool.rs` 613、`history.rs` 924、`markdown_render.rs` 684，全部 ≤1000。
 - 人工验收仍待用户 `cargo run`：合并标题下的逐块展开、代码块只剩正文的观感、
   loading 的 `↓token`、toast 三档颜色、参数 2 行折叠与点击展开。
+
+## 15. 第五轮：loading 统计、命令折行、移除按钮与 hover
+
+用户要求（原文要点）：
+
+1. loading 的 token 放在 `Working...` **右侧**并加耗时，格式 `Working...(时间 · token)`，
+   token 要同时表达输入（↑）与输出（↓）；
+2. 工具参数没有显示多行、点参数也打不开——截图里实际被截断的是 `Run command` 的 `$ 命令`；
+3. 重构思考与工具的展开交互：**移除按钮与字体高亮**（连行数也不要），点折叠内容展开、
+   点展开内容重新折叠。
+
+- [x] loading 行改为 `Working... (2.7s · ↑1.6k ↓320 tok)`：统计紧贴文案右侧（不再是栏右缘），
+      耗时来自新字段 `LxChat.turn_elapsed_ms`（事件循环每帧刷新，渲染层不取时钟）；
+      输入/输出 token 都由字符数估算（`stream_input_tokens` / `stream_output_tokens`）；
+      宽度不够整段丢、Esc 待命不画。
+- [x] `exec_command` / `write_stdin` 的命令按列宽折行（折叠 2 行、展开同普通详情上限），
+      续行不重复 `$ `；`open` 行与 `wants_open`/`open_offset` 一并删除，后台任务面板只走
+      `^o` / 空输入框按 `↓`。
+- [x] 移除全部 hover 高亮：删 `ChatHover`/`LxChat.hover`/`hover_lx_chat`/`chat_hover`/
+      `thinking_is_hovered`/`tool_is_hovered`、`chat_tool_param_hover`，思考块恒为品红；
+      `ChatHover` 改名为 `CardTarget`（只表示「点了哪一块」），`collapse_lx_card` 改名
+      `toggle_lx_card`。
+- [x] 移除动作按钮与行数文案：`ToolHit`/`ToolHitKind`/`history.tools` 整体删除，
+      文件卡片不再有 `… N more lines` / `collapse`，`chat_action_label` 与
+      `file_diff::Block::{action, body}` 一并移除；每块内容登记一个 `CardHit`，
+      `card_body_at` 改名 `card_target_at`，内容不可展开时 `body` 零高。
+- [x] 测试：统计标签拼装（三段齐全/缺段/全空）、loading 统计紧跟文案且含耗时与双向 token、
+      命令折行与展开、进程卡片无 `open` 行、单行命令不可点/长命令可点、合并块无动作行、
+      思考块恒品红、参数无 hover 档。
+
+当前验证记录（第五轮）：
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2829 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
+- 触及文件行数：`history/tool/command.rs` 388、`file_summary.rs` 616、`file_diff.rs` 738、
+  `history/tool.rs` 581、`history.rs` 846、`history_hit.rs` 182、`chat_bar.rs` 251，全部 ≤1000。
+- 人工验收仍待用户 `cargo run`：loading 的 `(时间 · ↑↓ token)`、长命令折行与点击展开、
+  点击内容折叠、无 hover 变色。

@@ -13,7 +13,7 @@ mod viewport_anchor;
 
 use super::*;
 use crate::app::state::{
-    AppState, ChatHover, LxChat, ModelPickerStage, ModelsSnapshot, RequestKey, RequestState,
+    AppState, CardTarget, LxChat, ModelPickerStage, ModelsSnapshot, RequestKey, RequestState,
     SlashPanel,
 };
 use crate::chat::events::{ChatDelta, PartDelta, PartKind, StopReason};

@@ -5,6 +5,9 @@
 use crate::app::state::ChatMessageView;
 use crate::ui::text;
 
+/// 耗时短格式：统一在 [`text::format_duration`]（loading 行与思考块共用）。
+pub(crate) use crate::ui::text::format_duration;
+
 /// 本轮统计行（assistant 消息末尾）：`模型 · 2.9k in · 307 out · 70% cached ·
 /// 33.4 tok/s · 2.7s`；仍在流中或无任何可用数据时返回 None。
 ///
@@ -64,23 +67,4 @@ pub(crate) fn stats_line(message: &ChatMessageView) -> Option<String> {
         fields.insert(0, model.to_string());
     }
     Some(fields.join(text::LX_CHAT_STATS_SEP))
-}
-
-/// token 计数短格式（对齐 lx-agent）：`999`、`1.2k`、`123k`、`1.2M`。
-/// 耗时短格式（对齐 lx-agent）：`820ms`、`4.2s`、`38s`、`1m 12s`。
-pub(crate) fn format_duration(ms: i64) -> String {
-    if ms < 1_000 {
-        return format!("{ms}ms");
-    }
-    let seconds = ms as f64 / 1_000.0;
-    if seconds < 60.0 {
-        return if seconds < 10.0 {
-            format!("{seconds:.1}s")
-        } else {
-            format!("{:.0}s", seconds)
-        };
-    }
-    let minutes = (seconds / 60.0).floor() as i64;
-    let rest = (seconds % 60.0).round() as i64;
-    format!("{minutes}m {rest}s")
 }

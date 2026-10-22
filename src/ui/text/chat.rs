@@ -5,12 +5,42 @@
 
 /// lx 输入框上方聊天栏的 loading 文案。
 pub const LOADING_LABEL: &str = "Working...";
-/// loading 行右端的流中输出 token 估算：`↓1.2k tok`。
+/// loading 文案右侧的括号统计：`(2.7s · ↑1.6k ↓320 tok)`。
 ///
-/// 箭头表示「往下吐」，与「回到底部」的 `↓` 同形但含义独立（那个带文字说明，
-/// 这个带 `tok` 单位）；数字用 [`crate::ui::text::token_count_precise`] 的短格式。
-pub fn stream_tokens_label(tokens: u64) -> String {
-    format!("↓{} tok", crate::ui::text::token_count_precise(tokens))
+/// 三部分都可缺失（缺哪段就少哪段，全缺返回 None 整段不画）：
+/// - 耗时 = 本轮已耗时（`LxChat.turn_elapsed_ms`，事件循环每帧刷新）；
+/// - `↑N` = 本轮输入估算（会话里已展示内容折算），`↓N` = 已产出输出估算；
+/// - ` tok` 只挂在最后一个数字后，避免 `↑1.6k tok ↓320 tok` 的啰嗦写法。
+///
+/// 箭头沿用「↓ = 往外吐、↑ = 往里送」的直觉；与「回到底部」的 `↓` 靠括号与 `tok`
+/// 单位区分，不会混淆。
+pub fn stream_stats_label(
+    elapsed_ms: Option<i64>,
+    input: Option<u64>,
+    output: Option<u64>,
+) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(elapsed) = elapsed_ms.filter(|value| *value > 0) {
+        parts.push(crate::ui::text::format_duration(elapsed));
+    }
+    let mut tokens = String::new();
+    if let Some(input) = input {
+        tokens.push_str(&format!("↑{}", crate::ui::text::token_count_precise(input)));
+    }
+    if let Some(output) = output {
+        if !tokens.is_empty() {
+            tokens.push(' ');
+        }
+        tokens.push_str(&format!(
+            "↓{}",
+            crate::ui::text::token_count_precise(output)
+        ));
+    }
+    if !tokens.is_empty() {
+        tokens.push_str(" tok");
+        parts.push(tokens);
+    }
+    (!parts.is_empty()).then(|| format!("({})", parts.join(" · ")))
 }
 
 /// 未知命令提示前缀（后面直接跟命令名，整体保持一行短语）。
@@ -69,6 +99,43 @@ mod tests {
         assert_eq!(
             unknown_command("  /foo  "),
             "Unknown command /foo · try /model"
+        );
+    }
+}
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+
+    /// 三段齐全：`(2.7s · ↑1.6k ↓320 tok)`。
+    #[test]
+    fn stats_label_joins_time_and_both_token_directions() {
+        assert_eq!(
+            stream_stats_label(Some(2_700), Some(1_600), Some(320)).as_deref(),
+            Some("(2.7s · ↑1.6k ↓320 tok)")
+        );
+    }
+
+    /// 只有 token：没有耗时就不画时间，` tok` 只挂一次。
+    #[test]
+    fn stats_label_omits_missing_parts() {
+        assert_eq!(
+            stream_stats_label(None, Some(1_600), Some(320)).as_deref(),
+            Some("(↑1.6k ↓320 tok)")
+        );
+        assert_eq!(
+            stream_stats_label(Some(820), None, Some(12)).as_deref(),
+            Some("(820ms · ↓12 tok)")
+        );
+        assert_eq!(
+            stream_stats_label(None, Some(900), None).as_deref(),
+            Some("(↑900 tok)")
+        );
+        assert_eq!(stream_stats_label(None, None, None), None, "全空整段不画");
+        assert_eq!(
+            stream_stats_label(Some(0), None, None),
+            None,
+            "0ms 不算耗时"
         );
     }
 }

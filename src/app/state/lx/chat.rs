@@ -287,12 +287,12 @@ pub enum InputHintLevel {
     Warning,
 }
 
-/// 鼠标悬停的聊天历史块：整卡（标题 + 正文 + 动作行）一起高亮。
+/// 可点击折叠/展开的聊天历史块。
 ///
-/// 只有**可交互**的块才会进入这个状态（带差异正文的文件卡片、进程卡片、思考块）：
-/// 悬停要回答的是「这一下点下去会发生什么」，把纯展示的卡片也算进来只会制造噪音。
+/// **不做 hover 高亮**（用户要求「移除字体高亮」）：这个类型只回答「按下这里
+/// 点的是哪一块」，用于松开时切换它的折叠状态，不参与任何配色。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ChatHover {
+pub enum CardTarget {
     /// 工具卡片（按稳定 ID 定位，与展开状态同一口径）。
     Tool { message_id: String, call_id: String },
     /// 思考块（按时间线步骤下标定位，与 [`LxChat::reasoning_expanded`] 同口径）。
@@ -341,13 +341,13 @@ pub struct LxChat {
     pub viewport_top: Option<usize>,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
     pub loading_frame: usize,
+    /// 本轮已耗时（毫秒），由事件循环在流中每帧刷新。
+    ///
+    /// 渲染层不取时钟（纯渲染），因此时钟只在 `advance_lx_loading` 里读一次写在这里；
+    /// loading 行据此显示 `(2.7s · ↑1.6k ↓320 tok)`。
+    pub turn_elapsed_ms: Option<i64>,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
     pub jump_bottom_hover: bool,
-    /// 鼠标悬停的历史块（工具卡片 / 思考块）；None 表示不在任何可交互块上。
-    ///
-    /// 渲染层只读：它决定思考方块 / 标题是否恢复品红，以及 `open` / `… more changes`
-    /// / `collapse` 这类动作文字是否升为默认前景。
-    pub hover: Option<ChatHover>,
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
@@ -390,8 +390,8 @@ impl LxChat {
             history_scroll: 0,
             viewport_top: None,
             loading_frame: 0,
+            turn_elapsed_ms: None,
             jump_bottom_hover: false,
-            hover: None,
             stop_armed_at: None,
             suppressed_prompt_header: None,
             detail_expanded: Vec::new(),
@@ -412,10 +412,10 @@ impl LxChat {
         self.input_tokens_reset();
         self.thinking_toggled.clear();
         self.turn_started_at_ms = None;
+        self.turn_elapsed_ms = None;
         self.history_scroll = 0;
         self.viewport_top = None;
         self.detail_expanded.clear();
-        self.hover = None;
         self.selected_tool = None;
         self.plan = None;
     }
@@ -442,26 +442,6 @@ impl LxChat {
         self.detail_expanded
             .push((message_id.to_string(), call_id.to_string(), next));
         next
-    }
-
-    /// 该工具卡片是否被鼠标悬停（整卡高亮判据）。
-    pub fn tool_is_hovered(&self, message_id: &str, call_id: &str) -> bool {
-        matches!(
-            &self.hover,
-            Some(ChatHover::Tool { message_id: hovered_message, call_id: hovered_call })
-                if hovered_message == message_id && hovered_call == call_id
-        )
-    }
-
-    /// 该思考块是否被鼠标悬停（常态压暗、悬停恢复品红的判据）。
-    pub fn thinking_is_hovered(&self, message_index: usize, step_index: usize) -> bool {
-        matches!(
-            self.hover,
-            Some(ChatHover::Thinking {
-                message_index: hovered_message,
-                step_index: hovered_step,
-            }) if hovered_message == message_index && hovered_step == step_index
-        )
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或
@@ -547,6 +527,32 @@ impl LxChat {
             streaming: self.request.is_busy(),
             omitted_turns: self.omitted_turns_notice.take(),
         };
+    }
+
+    /// 流中**输入 token 估算值**：整个会话已展示内容（用户消息 + 助手输出）的字符数
+    /// 折算，口径与 [`Self::stream_output_tokens`] 相同。
+    ///
+    /// 真实 usage 只在请求结束时回来，这条只能靠估算——它回答的是「这次请求大概带
+    /// 了多大上下文」，给用户一个量级感，不参与任何计费或统计。
+    pub fn stream_input_tokens(&self) -> Option<u64> {
+        let mut ascii = 0u64;
+        let mut wide = 0u64;
+        for message in &self.messages {
+            for step in &message.steps {
+                let Some(part) = step.part() else {
+                    continue;
+                };
+                for ch in part.content.chars() {
+                    if ch.is_ascii() {
+                        ascii += 1;
+                    } else {
+                        wide += 1;
+                    }
+                }
+            }
+        }
+        let tokens = ascii / 4 + wide;
+        (tokens > 0).then_some(tokens)
     }
 
     /// 流中已产生的**输出 token 估算值**（rough）：ASCII 约 4 字符 1 token，

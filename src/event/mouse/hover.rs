@@ -7,7 +7,7 @@ use crossterm::event::MouseEvent;
 use ratatui::layout::Direction;
 
 use crate::app::overlay::Overlay;
-use crate::app::state::{AppState, PaneView};
+use crate::app::state::AppState;
 use crate::app::update;
 use crate::config::Config;
 use crate::layout::{self, PaneId};
@@ -18,8 +18,8 @@ use crate::ui;
 use super::super::paste;
 use super::super::session::Geometry;
 use super::hit::{
-    lx_slash_item_at, mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner,
-    panel_item_at, prompt_boundary_hit, slash_item_at,
+    lx_slash_item_at, mention_item_at, pane_at, pane_boundary_draggable, panel_item_at,
+    prompt_boundary_hit, slash_item_at,
 };
 use super::wheel::forward_pane_mouse_event;
 
@@ -190,25 +190,6 @@ pub(crate) fn handle_mouse_moved(
     };
     for (id, _) in rects {
         if update::hover_lx_jump_bottom(state, *id, jump_hover == Some(*id)) {
-            *dirty = true;
-        }
-    }
-    // lx 聊天卡片悬停：整卡（工具 / 思考）一起高亮。悬停状态归窗格所有——
-    // 指针下的那个 lx 窗格拿到目标，其余窗格一律清空，否则上一张卡片会一直亮着。
-    let pointer = pane_at(rects, mouse.column, mouse.row).filter(|(pane, _)| {
-        state
-            .pane_anywhere(*pane)
-            .is_some_and(|target| target.view == PaneView::Lx && target.lx.task.is_none())
-    });
-    let card_hover = pointer.and_then(|(pane, inner)| {
-        let target = state.pane_anywhere(pane)?;
-        let inner = pane_content_inner(state, view, pane, inner);
-        ui::main_content::lx::chat_hover(inner, &target.lx, mouse.column, mouse.row)
-    });
-    let pointer_pane = pointer.map(|(pane, _)| pane);
-    for (id, _) in rects {
-        let hover = card_hover.clone().filter(|_| Some(*id) == pointer_pane);
-        if update::hover_lx_chat(state, *id, hover) {
             *dirty = true;
         }
     }

@@ -52,11 +52,12 @@ pub(super) const TREE_COLS: usize = 5;
 
 /// 工具步骤占用的渲染行数。
 ///
-/// - 文件工具：标题 + 文件头 / 预览（折叠最多 3 个正文物理行，见 [`file_diff`]）
-///   + **常驻的末尾动作行**（`… more changes` / `Show full diff` / `collapse`）；
-/// - `exec_command` / `write_stdin`：标题 + 命令；进程仍存活时多一行 `open`，
-///   到终态就只剩两行（不再给已结束的任务留入口）；
+/// - 文件工具：标题 + 文件头 / 预览（折叠最多 3 个正文物理行，见 [`file_diff`]）；
+/// - `exec_command` / `write_stdin`：标题 + 命令（折行，折叠最多 2 行）；
 /// - `update_plan`：标题 + 步骤（长步骤换行）+ 解释行。
+///
+/// **没有动作按钮、没有 hover 高亮**（用户要求）：折叠/展开全靠「点卡片内容」，
+/// 与键盘 `^o` / `^t` 共用同一份展开状态。
 ///
 /// `history::layout` 与 `history::render` 必须共用本函数：工具行一旦换行，滚动条、
 /// 置顶行与 thinking 命中矩形都会漂移。
@@ -128,12 +129,10 @@ pub(super) fn draw(
         loading_frame,
         expanded,
         true,
-        false,
     );
 }
 
-/// 同上，但显式给出动画推进状态（渲染层按 `lx.chat.status.streaming` 传入）
-/// 与整卡悬停状态（动作文字随之提亮）。
+/// 同上，但显式给出动画推进状态（渲染层按 `lx.chat.status.streaming` 传入）。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw_animated(
     grid: &mut Grid,
@@ -144,7 +143,6 @@ pub(super) fn draw_animated(
     loading_frame: usize,
     expanded: bool,
     animating: bool,
-    hovered: bool,
 ) {
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
@@ -158,7 +156,6 @@ pub(super) fn draw_animated(
                 loading_frame,
                 expanded,
                 animating,
-                hovered,
             );
             return;
         }
@@ -184,7 +181,6 @@ pub(super) fn draw_animated(
                 loading_frame,
                 &[expanded],
                 animating,
-                hovered.then_some(0),
             );
             return;
         }
@@ -199,7 +195,7 @@ pub(super) fn draw_animated(
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    for segments in file_summary::detail(call, rect.width, expanded, hovered) {
+    for segments in file_summary::detail(call, rect.width, expanded) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             put_segments(grid, rect.x, y, rect.width, &segments);
         }
@@ -210,40 +206,6 @@ pub(super) fn draw_animated(
 /// 标题行行数（子模块共用）。
 pub(super) fn title_rows() -> usize {
     HEADER_ROWS
-}
-
-/// `open` 行的卡片内行偏移（0 = 标题行）；进程已到终态时返回 None。
-///
-/// 进程卡片（`exec_command` / `write_stdin`）只在**进程还活着**时把 `open` 画在
-/// 树体最后一行，由 `history::layout` 收成唯一可点击的命中矩形（点它打开后台
-/// 任务面板）。任务结束后这一行整行不画，也不再登记命中区。
-pub(super) fn open_offset(call: &ToolCallView) -> Option<usize> {
-    command::open_offset(call)
-}
-
-/// 该调用是否有可展开的差异正文（文件卡片专用）。
-pub(super) fn has_expandable(call: &ToolCallView) -> bool {
-    file_diff::is_card(call)
-}
-
-/// 卡片内**可点击折叠的正文区**行数（0 = 没有）。
-///
-/// 两种来源：
-/// - 已展开的文件差异卡片：除标题与动作行之外的全部行；
-/// - 参数详情超过折叠额度的普通文件工具：详情行本身（折叠态点击展开、展开态点击收起，
-///   与文件卡片共用 `toggle_tool_detail` 与「拖拽选中不折叠」的判定）。
-pub(super) fn card_body_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    if file_diff::is_card(call) {
-        return if expanded {
-            file_diff::rows(&[call], width, &[true]).saturating_sub(2)
-        } else {
-            0
-        };
-    }
-    if !file_summary::detail_overflows(call, width) {
-        return 0;
-    }
-    file_summary::detail_rows(call, width, expanded)
 }
 
 /// 从 `steps[start]` 起收集可合并的文件工具组（含起点）；不合并时返回空。
@@ -275,12 +237,20 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
     group
 }
 
+/// 该调用的内容是否**能靠展开看到更多**（无内容时不登记点击面）。
+///
+/// 判据是「展开后行数变多」：文件差异卡片有完整 hunks、参数超 2 行、命令超 2 行都算；
+/// 两行摘要、单行命令、计划卡片（自己按宽度换行）都不算。
+pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
+    rows(call, width, true) > rows(call, width, false)
+}
+
 /// 合并卡行数；`expanded` 与 `calls` 一一对应（逐调用独立）。
 pub(super) fn group_rows(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> usize {
     file_diff::rows(calls, width, expanded)
 }
 
-/// 合并卡逐调用的块几何（行区间、动作行、可点正文区）。
+/// 合并卡逐调用的块几何（行区间）。
 pub(super) fn group_blocks(
     calls: &[&ToolCallView],
     width: u16,
@@ -300,7 +270,6 @@ pub(super) fn group_draw_animated(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
-    hovered: Option<usize>,
 ) {
     file_diff::draw(
         grid,
@@ -311,7 +280,6 @@ pub(super) fn group_draw_animated(
         loading_frame,
         expanded,
         animating,
-        hovered,
     );
 }
 
@@ -380,7 +348,7 @@ fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
     };
     Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool, false),
+        mark.style(StepKind::Tool),
     )
 }
 
@@ -506,7 +474,7 @@ pub(super) fn header_with_mark(
     };
     let lead = paint(Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool, false),
+        mark.style(StepKind::Tool),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

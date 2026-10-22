@@ -706,45 +706,29 @@ pub fn chat_step_label_done_body() -> Style {
     Style::default()
 }
 
-/// 思考块的方块：运行中（呼吸）——常态压暗，悬停恢复品红并加粗。
+/// 思考块的方块：运行中（呼吸）——**品红加粗**。
 ///
-/// 用户要求「思考的小方块和思考 title 的字体颜色调淡一点，鼠标 hover 时才显示
-/// 当前的颜色」：思考是次要内容，常驻品红会在整屏里抢走工具行的注意力。
-pub fn chat_step_mark_running_thinking(hovered: bool) -> Style {
-    if hovered {
-        Style::default()
-            .fg(Color::Indexed(CHAT_STEP_MAGENTA))
-            .add_modifier(Modifier::BOLD)
-    } else {
-        muted()
-    }
+/// 用户要求「移除字体高亮」：不再有「常态压暗、悬停恢复」的两态，思考块始终是
+/// 它本来的品红；可点性由「点一下会折叠」这个行为本身表达，不靠 hover 变色。
+pub fn chat_step_mark_running_thinking() -> Style {
+    Style::default()
+        .fg(Color::Indexed(CHAT_STEP_MAGENTA))
+        .add_modifier(Modifier::BOLD)
 }
 
-/// 思考块的方块：已完成——常态压暗，悬停恢复品红（不加粗：静止 + 细一档）。
-pub fn chat_step_mark_done_thinking(hovered: bool) -> Style {
-    if hovered {
-        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
-    } else {
-        muted()
-    }
+/// 思考块的方块：已完成——品红（不加粗：静止 + 细一档）。
+pub fn chat_step_mark_done_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
 }
 
-/// 思考块的头部文案：运行中——常态压暗，悬停恢复品红（与方块同色系，不加粗）。
-pub fn chat_step_label_running_thinking(hovered: bool) -> Style {
-    if hovered {
-        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
-    } else {
-        muted()
-    }
+/// 思考块的头部文案：运行中——品红（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
 }
 
-/// 思考块的头部文案：已完成——常态压暗，悬停恢复品红（同上，不加粗）。
-pub fn chat_step_label_done_thinking(hovered: bool) -> Style {
-    if hovered {
-        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
-    } else {
-        muted()
-    }
+/// 思考块的头部文案：已完成——品红（同上，不加粗）。
+pub fn chat_step_label_done_thinking() -> Style {
+    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
 }
 
 /// 工具行的方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的动作信号。
@@ -808,14 +792,6 @@ pub fn chat_tool_param() -> Style {
     muted()
 }
 
-/// 工具参数在**卡片悬停**时的样式：终端默认前景（从 dim 升上来）。
-///
-/// 与 [`chat_action_label`] 同一套交互语言：常态次要、悬停提亮到默认前景；
-/// 用户据此知道「这块可以点」——参数超过 2 行时点击即展开。
-pub fn chat_tool_param_hover() -> Style {
-    Style::default()
-}
-
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
 /// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
 pub fn chat_tool_range() -> Style {
@@ -835,16 +811,6 @@ pub fn chat_jump_bottom(hovered: bool) -> Style {
         muted()
     }
 }
-
-/// 历史里的**行内动作文字**（`open` / `… more changes` / `Show full diff` /
-/// `collapse`）：常态同左下角上下文统计的次要色（[`muted`]），悬停升为默认前景。
-///
-/// 与 [`chat_jump_bottom`] 同一套「常态弱、悬停亮」的语义：这些文字是入口而不是
-/// 内容，常驻正文色会让每一张卡片都多出一行抢眼的东西。
-pub fn chat_action_label(hovered: bool) -> Style {
-    if hovered { Style::default() } else { muted() }
-}
-
 /// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。
 pub fn supple_command() -> Style {
     Style::default()

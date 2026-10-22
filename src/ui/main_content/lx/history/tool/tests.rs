@@ -139,7 +139,7 @@ fn header_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
 
 /// 详情行（`  └─ 详情`，可能多行）拼成一段段文本。
 fn detail_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
-    file_summary::detail(call, width, false, false)
+    file_summary::detail(call, width, false)
         .into_iter()
         .flatten()
         .map(|segment| (segment.text, segment.style))
@@ -156,7 +156,7 @@ fn header_text(call: &ToolCallView, width: u16) -> String {
 
 /// 详情行文本（可能多行，按 `\\n` 连接，与绘制一致）。
 fn detail_text(call: &ToolCallView, width: u16) -> String {
-    file_summary::detail(call, width, false, false)
+    file_summary::detail(call, width, false)
         .into_iter()
         .map(|row| {
             row.into_iter()
@@ -170,7 +170,7 @@ fn detail_text(call: &ToolCallView, width: u16) -> String {
 /// 详情行的**逻辑内容**（折行的续行缩进不计）：用于「某段文字是否还在」的断言。
 fn detail_flat(call: &ToolCallView, width: u16) -> String {
     let mut out = String::new();
-    for row in file_summary::detail(call, width, false, false) {
+    for row in file_summary::detail(call, width, false) {
         for (index, segment) in row.into_iter().enumerate() {
             // 续行的第一个段是等宽空白缩进，不属于内容。
             if index == 0 && segment.text.trim().is_empty() {

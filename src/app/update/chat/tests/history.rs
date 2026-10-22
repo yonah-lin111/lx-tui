@@ -131,53 +131,8 @@ fn hover_lx_jump_bottom_tracks_state() {
 }
 
 #[test]
-fn hover_lx_chat_tracks_card_state_per_pane() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 1);
-    let pane = state.active_tab().layout.focus();
-    let target = ChatHover::Tool {
-        message_id: "m0".into(),
-        call_id: "c0".into(),
-    };
-    assert!(hover_lx_chat(&mut state, pane, Some(target.clone())));
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert!(chat.tool_is_hovered("m0", "c0"));
-    assert!(!chat.tool_is_hovered("m0", "c1"));
-    assert!(
-        !hover_lx_chat(&mut state, pane, Some(target)),
-        "重复置位无变化"
-    );
-    assert!(hover_lx_chat(&mut state, pane, None));
-    assert!(
-        !state
-            .pane_anywhere(pane)
-            .expect("pane")
-            .lx
-            .chat
-            .tool_is_hovered("m0", "c0"),
-        "离开清空"
-    );
-}
-
-#[test]
-fn hover_lx_chat_distinguishes_thinking_from_tool_at_same_index() {
-    let mut state = AppState::demo();
-    lx_with_messages(&mut state, 1);
-    let pane = state.active_tab().layout.focus();
-    let thinking = ChatHover::Thinking {
-        message_index: 0,
-        step_index: 1,
-    };
-    assert!(hover_lx_chat(&mut state, pane, Some(thinking)));
-    let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
-    assert!(chat.thinking_is_hovered(0, 1), "思考块悬停");
-    assert!(!chat.thinking_is_hovered(0, 0), "别的思考块不亮");
-    assert!(!chat.tool_is_hovered("m0", "c0"), "思考悬停不点亮工具卡");
-}
-
-#[test]
-fn collapse_lx_card_toggles_the_pressed_block() {
-    // 「点正文收起」复用工具栏展开入口：一次点击只切一次状态。
+fn toggle_lx_card_flips_the_pressed_block() {
+    // 卡片内容就是点击面：点折叠内容展开、点展开内容收起，一次点击只切一次状态。
     let mut state = AppState::demo();
     let pane = state.active_tab().layout.focus();
     let target = state.pane_mut_anywhere(pane).expect("pane");
@@ -214,11 +169,11 @@ fn collapse_lx_card_toggles_the_pressed_block() {
             .reasoning_expanded(0, 0),
         "默认折叠"
     );
-    let card = ChatHover::Thinking {
+    let card = CardTarget::Thinking {
         message_index: 0,
         step_index: 0,
     };
-    assert!(collapse_lx_card(&mut state, pane, card.clone()), "切换成功");
+    assert!(toggle_lx_card(&mut state, pane, card.clone()), "切换成功");
     assert!(
         state
             .pane_anywhere(pane)
@@ -228,7 +183,7 @@ fn collapse_lx_card_toggles_the_pressed_block() {
             .reasoning_expanded(0, 0),
         "第一次点击展开"
     );
-    assert!(collapse_lx_card(&mut state, pane, card), "再次切换");
+    assert!(toggle_lx_card(&mut state, pane, card), "再次切换");
     assert!(
         !state
             .pane_anywhere(pane)

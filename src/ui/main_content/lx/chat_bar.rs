@@ -7,10 +7,11 @@
 //! 视线在输入框）。提示类反馈已全部改走 main content 的 toast（见
 //! `app::update::chat::show_lx_hint`），这一行不再承载临时提示。
 //!
-//! **loading**：`Working...` + 可选 ` · ↓1.2k tok`。文字带**从左到右的扫描高亮**：
-//! 窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native 标签的
-//! 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
-//! 走出末尾后从左侧重新进入；token 计数是静态 dim，不参与扫描，宽度不够时先丢它。
+//! **loading**：`Working... (2.7s · ↑1.6k ↓320 tok)`。`Working...` 带**从左到右的
+//! 扫描高亮**：窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native
+//! 标签的 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
+//! 走出末尾后从左侧重新进入。括号里的统计**紧贴文案右侧**（用户要求「在 working 的
+//! 组右侧」，不是贴栏右缘），静态 dim、不参与扫描；宽度不够时整段先丢。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -28,8 +29,8 @@ const RIGHT_PAD: u16 = 1;
 const HINT_GAP: u16 = 1;
 /// 扫描高亮窗口宽度（字符）。
 const SCAN_WINDOW: usize = 3;
-/// loading 文案与右侧 token 计数之间的空档（列）。
-const TOKENS_GAP: u16 = 2;
+/// loading 文案与括号统计之间的空档（列）。
+const STATS_GAP: u16 = 1;
 
 /// 是否显示聊天栏：有临时提示、流中（loading）或上滚未跟随底部（回到底部控件）。
 ///
@@ -89,7 +90,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     if bar.width == 0 {
         return;
     }
-    let mut right = bar.right();
+    let right = bar.right();
     // 回到底部控件（仅未跟随底部时）。
     if !lx.chat.follow_bottom
         && let Some(button) = jump_rect(bar)
@@ -114,49 +115,37 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
                 button.right() - hint_x,
             );
         }
-        right = button.x.saturating_sub(1);
     }
     if !lx.chat.status.streaming {
         return;
     }
-    // token 计数贴右端、静态 dim：它回答「这轮已经吐了多少」，与左侧的扫描高亮
-    // 是两种信息，不能一起闪。宽度不够时**先丢它**（loading 文案优先级更高）；
-    // Esc 待命时不画——那一刻用户要读的是「再按一次停止」，数字只会抢位置。
+    // 括号统计紧贴 `Working...` 右侧（用户要求「在 working 的组右侧」）：
+    // 静态 dim、不参与扫描——它回答「这轮跑了多久、大概用了多少 token」，
+    // 与左侧的进行中动画是两种信息，不能一起闪。宽度不够时整段先丢；
+    // Esc 待命时不画——那一刻用户要读的是「再按一次停止」。
     let stop_armed = lx.chat.stop_armed_at.is_some();
-    let tokens = if stop_armed {
+    let stats = if stop_armed {
         None
     } else {
-        lx.chat.stream_output_tokens()
+        text::chat::stream_stats_label(
+            lx.chat.turn_elapsed_ms,
+            lx.chat.stream_input_tokens(),
+            lx.chat.stream_output_tokens(),
+        )
     };
-    let tokens_label = tokens.map(text::chat::stream_tokens_label);
-    let tokens_w = tokens_label.as_ref().map_or(0u16, |label| {
-        u16::try_from(label.width()).unwrap_or(u16::MAX)
-    });
-    let mut loading_right = right;
-    if let Some(label) = tokens_label.as_ref()
-        && right.saturating_sub(bar.x) > tokens_w.saturating_add(TOKENS_GAP).saturating_add(1)
-    {
-        let x = right.saturating_sub(tokens_w);
-        grid.put_clipped(
-            x,
-            bar.y,
-            label,
-            style::chat_loading_label(),
-            label.len() as u16,
-        );
-        loading_right = x.saturating_sub(TOKENS_GAP);
-    }
     draw_loading(
         grid,
         bar.y,
         bar.x,
-        loading_right,
+        right,
         lx.chat.loading_frame,
         stop_armed,
+        stats.as_deref(),
     );
 }
 
 /// 绘制 `Working...`（无方块、无转轮）：只画带扫描高亮的文字。
+#[allow(clippy::too_many_arguments)]
 fn draw_loading(
     grid: &mut Grid,
     y: u16,
@@ -164,6 +153,7 @@ fn draw_loading(
     right: u16,
     loading_frame: usize,
     stop_armed: bool,
+    stats: Option<&str>,
 ) {
     // 右侧留 1 列空档避免贴边。
     let limit = right.saturating_sub(1);
@@ -178,10 +168,26 @@ fn draw_loading(
     } else {
         text::chat::LOADING_LABEL
     };
-    draw_scanned_label(grid, x, y, limit, label, loading_frame);
+    let after_label = draw_scanned_label(grid, x, y, limit, label, loading_frame);
+    // 统计段紧跟其后：放得下才画，放不下整段丢（不在末尾留半截括号）。
+    let Some(stats) = stats else {
+        return;
+    };
+    let stats_x = after_label.saturating_add(STATS_GAP);
+    let stats_w = u16::try_from(stats.width()).unwrap_or(u16::MAX);
+    if stats_x.saturating_add(stats_w) > limit {
+        return;
+    }
+    grid.put_clipped(
+        stats_x,
+        y,
+        stats,
+        style::chat_loading_label(),
+        limit.saturating_sub(stats_x),
+    );
 }
 
-/// 画扫描高亮文案：窗口外的字符用次要色（dim），窗口内用卡片**当前帧**的样式。
+/// 画扫描高亮文案，返回**文案结束后的列**（供紧随其后的统计段定位）。
 fn draw_scanned_label(
     grid: &mut Grid,
     x: u16,
@@ -189,11 +195,11 @@ fn draw_scanned_label(
     limit: u16,
     label: &str,
     loading_frame: usize,
-) {
+) -> u16 {
     let width = usize::from(limit.saturating_sub(x));
     let chars: Vec<char> = label.chars().take(width).collect();
     if chars.is_empty() {
-        return;
+        return x;
     }
     // 扫描位置：每帧前进 1 个字符，走出末尾后从左侧重新进入。
     let span = chars.len() + SCAN_WINDOW;
@@ -213,6 +219,7 @@ fn draw_scanned_label(
             break;
         }
     }
+    cell_x
 }
 
 /// Esc 待命提示短语：从长到短取第一条放得下的；都放不下时用最短的（由调用方裁剪）。

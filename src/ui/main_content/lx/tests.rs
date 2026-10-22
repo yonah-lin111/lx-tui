@@ -1508,10 +1508,7 @@ fn streaming_loading_shows_estimated_output_tokens() {
     let mut buf = Buffer::empty(area);
     let _ = render(area, &mut buf, &lx, false, None);
     let text = buffer_text(&buf);
-    assert!(
-        text.contains(&crate::ui::text::chat::stream_tokens_label(1_200)),
-        "显示 token 估算：{text}"
-    );
+    assert!(text.contains("↓1.2k tok"), "显示 token 估算：{text}");
     assert!(text.contains(text::chat::LOADING_LABEL), "loading 文案仍在");
 
     // 流结束：那一行不再画 token（整行随 loading 消失）。
@@ -1552,4 +1549,34 @@ fn stream_token_estimate_counts_wide_chars_heavier() {
         part.content.clear();
     }
     assert_eq!(lx.chat.stream_output_tokens(), None, "没有输出就不显示");
+}
+
+/// loading 行的统计紧跟 `Working...`（不是贴栏右缘），且含耗时与双向 token。
+#[test]
+fn loading_stats_follow_the_label_with_time_and_both_directions() {
+    let area = Rect::new(0, 0, 80, 16);
+    let mut lx = streaming_lx(true, true);
+    lx.chat.turn_elapsed_ms = Some(2_700);
+    if let Some(message) = lx.chat.messages.last_mut()
+        && let Some(step) = message.steps.first_mut()
+        && let Some(part) = step.part_mut()
+    {
+        part.content = "a".repeat(4_800);
+    }
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let row = buffer_text(&buf)
+        .lines()
+        .find(|line| line.contains(text::chat::LOADING_LABEL))
+        .expect("loading 行")
+        .to_string();
+    let label_at = row.find(text::chat::LOADING_LABEL).expect("文案");
+    let stats_at = row.find('(').expect("统计括号");
+    assert_eq!(
+        stats_at,
+        label_at + text::chat::LOADING_LABEL.len() + 1,
+        "统计紧贴文案右侧一格：{row}"
+    );
+    assert!(row.contains("2.7s"), "含耗时：{row}");
+    assert!(row.contains("↓1.2k tok"), "含输出 token：{row}");
 }

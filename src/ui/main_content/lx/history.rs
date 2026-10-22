@@ -100,16 +100,14 @@ impl StepMark {
     }
 
     /// 方块样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
-    ///
-    /// `hovered` 只对思考块有意义（常态压暗、悬停恢复品红）；其余角色忽略它。
-    pub(super) fn style(self, kind: StepKind, hovered: bool) -> Style {
+    pub(super) fn style(self, kind: StepKind) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
-            Self::Running => kind.style_running(hovered),
+            Self::Running => kind.style_running(),
             Self::Alive => style::chat_step_mark_alive(),
-            Self::Done => kind.style_done(hovered),
+            Self::Done => kind.style_done(),
         }
     }
 
@@ -137,11 +135,11 @@ pub(super) enum StepKind {
 }
 
 impl StepKind {
-    /// 运行中（含呼吸）的样式。`hovered` 只影响思考块（见 [`style::chat_step_mark_running_thinking`]）。
-    fn style_running(self, hovered: bool) -> Style {
+    /// 运行中（含呼吸）的样式。
+    fn style_running(self) -> Style {
         match self {
             Self::Body => style::chat_step_mark_running_body(),
-            Self::Thinking => style::chat_step_mark_running_thinking(hovered),
+            Self::Thinking => style::chat_step_mark_running_thinking(),
             // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
             // tool 的方块和 title 统一为黄色，完成才显示绿色"。
             Self::Tool => style::chat_step_mark_alive(),
@@ -149,21 +147,21 @@ impl StepKind {
     }
 
     /// 已完成（静止）的样式。
-    fn style_done(self, hovered: bool) -> Style {
+    fn style_done(self) -> Style {
         match self {
             Self::Body => style::chat_step_mark_done_body(),
-            Self::Thinking => style::chat_step_mark_done_thinking(hovered),
+            Self::Thinking => style::chat_step_mark_done_thinking(),
             Self::Tool => style::chat_step_mark_done(),
         }
     }
 
-    /// 该角色的头部文案样式（运行中 / 已完成）。`hovered` 只影响思考块。
-    pub(super) fn label(self, running: bool, hovered: bool) -> Style {
+    /// 该角色的头部文案样式（运行中 / 已完成）。
+    pub(super) fn label(self, running: bool) -> Style {
         match (self, running) {
             (Self::Body, true) => style::chat_step_label_running_body(),
             (Self::Body, false) => style::chat_step_label_done_body(),
-            (Self::Thinking, true) => style::chat_step_label_running_thinking(hovered),
-            (Self::Thinking, false) => style::chat_step_label_done_thinking(hovered),
+            (Self::Thinking, true) => style::chat_step_label_running_thinking(),
+            (Self::Thinking, false) => style::chat_step_label_done_thinking(),
             (Self::Tool, true) => style::chat_step_label_running(),
             (Self::Tool, false) => style::chat_step_label_done(),
         }
@@ -199,15 +197,7 @@ pub struct HistoryLayout {
     pub area: Rect,
     /// （消息索引, 该消息内**步骤**下标, 头部矩形）。
     pub thinking: Vec<(usize, usize, Rect)>,
-    /// 工具卡片**动作行**命中矩形：进程 `open` 行或文件卡片的展开/收起行。
-    ///
-    /// 每张卡片至多**一个**矩形；动作由 [`ToolHitKind`] 决定。
-    pub tools: Vec<ToolHit>,
-    /// 可交互块的整块矩形（悬停高亮 + 展开正文的点击折叠）。
-    ///
-    /// 与 [`Self::tools`] 分开：`tools` 回答「按下去会发生什么」，这里回答
-    /// 「鼠标在这一块里意味着什么」——悬停要高亮整张卡片，而正文又必须保留
-    /// 聊天选区，两者不能共用一个矩形。
+    /// 可折叠块的整块矩形与内容矩形（点击切换折叠；没有 hover 高亮）。
     pub cards: Vec<CardHit>,
     /// 每条消息的行区间（置顶行归属判定用）。
     pub messages: Vec<MessageRows>,
@@ -218,20 +208,6 @@ pub struct HistoryLayout {
 pub use sticky::StickyRow;
 use sticky::sticky_candidate;
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
-
-/// 工具卡片上的可点击命中区。
-///
-/// 两种动作**语义上完全不同**，用 [`ToolHitKind`] 明确区分，绝不靠 `session_id`
-/// 是否为空去猜：
-/// - 进程卡片的 `open` 行（打开后台任务面板）；
-/// - 文件差异卡片末尾的动作行（切换整张卡片展开/收起）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolHit {
-    pub message_id: String,
-    pub call_id: String,
-    pub kind: ToolHitKind,
-    pub rect: Rect,
-}
 
 /// 可交互块：工具卡片或思考块。
 ///
@@ -250,26 +226,14 @@ pub enum CardKind {
     },
 }
 
-/// 一个可交互块的两份矩形。
+/// 一个可折叠块的两份矩形。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardHit {
     pub kind: CardKind,
-    /// 整块（标题 + 正文 + 动作行）：悬停高亮范围（决策 3：整卡 hover）。
+    /// 整块（标题 + 内容）：点击切换范围。
     pub card: Rect,
-    /// 展开后的正文区；折叠时为零高（点击它折叠，决策 5/8）。
+    /// 内容区（标题之后的全部行）：点击切换折叠，零高表示没有可点内容。
     pub body: Rect,
-}
-
-/// 命中动作。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolHitKind {
-    /// 打开后台任务面板；`session_id` 用于定位高亮（未知时为 None）。
-    OpenTask {
-        /// 该卡片关联的进程会话 ID。
-        session_id: Option<u64>,
-    },
-    /// 切换文件差异卡片的展开状态（点末尾动作行）。
-    Toggle,
 }
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
@@ -314,13 +278,11 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     let width = content.width;
     let mut rows = 0usize;
     let mut thinking = Vec::new();
-    let mut tools: Vec<ToolHit> = Vec::new();
     let mut cards: Vec<CardHit> = Vec::new();
     if width == 0 {
         return HistoryLayout {
             area,
             thinking,
-            tools,
             cards: Vec::new(),
             messages: Vec::new(),
             total_rows: 0,
@@ -360,39 +322,26 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         let blocks = tool::group_blocks(&group, width, &expanded);
                         for (index, block) in blocks.iter().enumerate() {
                             let call = group[index];
-                            // 每个调用各自的展开入口：点它只切换这一块。
-                            if let Some(offset) = block.action {
-                                tools.push(ToolHit {
-                                    message_id: message.id.clone(),
-                                    call_id: call.call_id.clone(),
-                                    kind: ToolHitKind::Toggle,
-                                    rect: Rect::new(area.x, block_y(offset), width, 1),
-                                });
-                            }
+                            // 每块各自一块点击面：点它只切换这一块（展开互不影响）。
+                            // 正文区 = 块内的文件头与差异行（整块都是内容）。
                             cards.push(CardHit {
                                 kind: CardKind::Tool {
                                     message_id: message.id.clone(),
                                     call_id: call.call_id.clone(),
                                     expanded: expanded[index],
                                 },
-                                // 整块命中区只覆盖这一块自己的行（含它自己的展开入口），
-                                // 不吞合并标题、也不与前一块重叠——否则悬停会在两块之间抖动。
                                 card: Rect::new(
                                     area.x,
                                     block_y(block.start),
                                     width,
                                     rows_to_u16(block.len),
                                 ),
-                                body: if block.body.1 > 0 {
-                                    Rect::new(
-                                        area.x,
-                                        block_y(block.body.0),
-                                        width,
-                                        rows_to_u16(block.body.1),
-                                    )
-                                } else {
-                                    Rect::new(area.x, block_y(0), width, 0)
-                                },
+                                body: Rect::new(
+                                    area.x,
+                                    block_y(block.start),
+                                    width,
+                                    rows_to_u16(block.len),
+                                ),
                             });
                         }
                         rows += group_rows;
@@ -438,40 +387,9 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             };
             if let AssistantStepView::Tool { call, .. } = step {
                 let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
-                // 进程卡片只有 `open` 一行可点（打开后台任务面板）：标题与命令是
-                // 纯展示。任务到终态时 `open_row` 不画，命中区一并消失。
-                if let Some(offset) = tool::open_offset(call) {
-                    tools.push(ToolHit {
-                        message_id: message.id.clone(),
-                        call_id: call.call_id.clone(),
-                        kind: ToolHitKind::OpenTask {
-                            session_id: call.process_session_id(),
-                        },
-                        rect: Rect::new(area.x, block_y(offset), width, 1),
-                    });
-                }
-                // 文件差异卡片：末尾动作行切换展开/收起；正文保留聊天选区。
-                if tool::has_expandable(call) {
-                    for block in tool::group_blocks(&[call], width, &[expanded]) {
-                        if let Some(offset) = block.action {
-                            tools.push(ToolHit {
-                                message_id: message.id.clone(),
-                                call_id: call.call_id.clone(),
-                                kind: ToolHitKind::Toggle,
-                                rect: Rect::new(area.x, block_y(offset), width, 1),
-                            });
-                        }
-                    }
-                }
+                // 没有动作行、没有 `open`：**整块内容**就是点击面。折叠态点它就展开、
+                // 展开态点它就收起（拖拽选中不折叠，见事件层的 `lx_card_press`）。
                 let card = Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows));
-                // 可点击折叠的正文区：已展开的文件卡片（标题与动作行之间），或参数
-                // 超长、点击即可展开的详情行。零高时点正文不会折叠一张没展开的卡片。
-                let body_rows = tool::card_body_rows(call, width, expanded);
-                let body = if body_rows > 0 {
-                    Rect::new(area.x, block_y(1), width, rows_to_u16(body_rows))
-                } else {
-                    Rect::new(area.x, block_y(0), width, 0)
-                };
                 cards.push(CardHit {
                     kind: CardKind::Tool {
                         message_id: message.id.clone(),
@@ -479,7 +397,18 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         expanded,
                     },
                     card,
-                    body,
+                    // 正文区 = 标题之后的全部行**且**确实有更多内容可展开；
+                    // 否则零高——点了没反应的内容不该被登记成点击面。
+                    body: if step_rows > 1 && tool::has_expandable_content(call, width) {
+                        Rect::new(
+                            area.x,
+                            block_y(1),
+                            width,
+                            rows_to_u16(step_rows.saturating_sub(1)),
+                        )
+                    } else {
+                        Rect::new(area.x, block_y(0), width, 0)
+                    },
                 });
             }
             if is_reasoning {
@@ -534,7 +463,6 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
     HistoryLayout {
         area,
         thinking,
-        tools,
         cards,
         messages: messages_rows,
         total_rows: rows,
@@ -643,9 +571,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             row_index += 1;
                         }
                         has_previous = true;
-                        let hovered = group
-                            .iter()
-                            .position(|call| lx.chat.tool_is_hovered(&message.id, &call.call_id));
                         tool::group_draw_animated(
                             grid,
                             content,
@@ -655,7 +580,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             lx.chat.loading_frame,
                             &expanded,
                             lx.chat.status.streaming,
-                            hovered,
                         );
                     }
                     step_index += group.len();
@@ -707,7 +631,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         lx.chat.loading_frame,
                         lx.chat.detail_is_expanded(&message.id, &call.call_id),
                         lx.chat.status.streaming,
-                        lx.chat.tool_is_hovered(&message.id, &call.call_id),
                     );
                 }
                 step_index += 1;
@@ -763,23 +686,20 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                 }
                 crate::chat::events::PartKind::Reasoning => {
                     let streaming = lx.chat.reasoning_streaming(message_index, step_index);
-                    let hovered = lx.chat.thinking_is_hovered(message_index, step_index);
                     let mark = if streaming {
                         StepMark::Running
                     } else {
                         StepMark::Done
                     };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：`Thinking`；完成后：`Thought · 6.3s`。
-                        // 方块与文案常态压暗（`muted()`），**鼠标悬停整块**才恢复品红
-                        // ——思考是次要内容，常驻高饱和色会抢走工具行的注意力。
-                        // 折叠/展开：点标题切换，展开后点正文（未拖拽）收起。
-                        let header_style = StepKind::Thinking.label(streaming, hovered);
+                        // 生成中：`Thinking`；完成后：`Thought · 6.3s`。方块与文案恒品红，
+                        // 不做 hover 变色（用户要求移除字体高亮）；折叠/展开靠点整块。
+                        let header_style = StepKind::Thinking.label(streaming);
                         grid.put_char(
                             content.x,
                             y,
                             mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
-                            mark.style(StepKind::Thinking, hovered),
+                            mark.style(StepKind::Thinking),
                         );
                         let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();

@@ -449,7 +449,7 @@ pub(crate) fn handle_mouse_up_left(
         clicked_card = Some(pressed);
     }
     if let Some((pane, card)) = clicked_card {
-        update::collapse_lx_card(state, pane, card);
+        update::toggle_lx_card(state, pane, card);
     }
     update::clear_selection(state);
     *dirty = true;

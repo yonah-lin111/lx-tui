@@ -545,11 +545,10 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 
 ### 14.4 交互与文案
 
-- 命中：文件卡片**标题行不登记任何命中**；展开/收起入口是每个调用**自己块末尾**的动作行
-  （`ToolHitKind::Toggle`）：折叠态还有内容没画出来时写**剩余行数**（`… 421 more lines`），
-  展开态 `collapse`；预览已经完整时**不画这一行**（点了没反应的入口只会骗人）。
-  合并卡里每块各有一个 `Toggle`，命中按 `(message_id, call_id)` 定位到那一块。
-  进程卡片存活时 `open` 行仍是 `OpenTask { session_id }`，终态不登记。
+- 命中：**没有动作行、没有 `open` 行**（用户要求移除工具按钮）。每块内容登记一个
+  `CardHit`（`card` + `body`），按下时 `card_target_at` 给出 `CardTarget`，松开未拖拽即
+  `toggle_lx_card` 切换该块；内容展开后行数不变时 `body` 为零高、不登记点击面。
+  进程卡片的后台任务面板改由 `^o` / 空输入框按 `↓` 打开。
   `LxChatHit::ToolToggle { message_id, call_id }` 与 `ToolOpen(Option<u64>)` 是两个动作，不靠 `session_id` 为空猜测。
 - **展开正文折叠**：`history::layout` 额外产出 `cards: Vec<CardHit>`（整卡矩形 + 展开后的正文矩形）。鼠标按下落在
   已展开正文内时，事件层同时 `begin_lx_selection` 并记录 `lx_card_press`；松开时**没有选区范围**（`anchor == cursor`，
@@ -559,12 +558,11 @@ pub struct DiffCounts { added, removed, truncated, simplified }
   标题与动作行：动作行 / `open` / `collapse` 常态 `muted()`（与左下角上下文统计同款），悬停升为默认前景；
   思考块方块与 `Thinking`/`Thought` 文案常态 `muted()`，悬停恢复品红 `Indexed 218`。
 - **参数配色**：`chat_tool_param()` 返回 `muted()`——与输入框下方状态行的上下文用量同色（用户要求
-  「工具参数颜色改为输入框下方上下文的字体颜色」）；鼠标悬停整卡时升为 `chat_tool_param_hover()`
-  （终端默认前景），作为「这一行可点」的信号。
-- **参数折行与展开**：`└─` 详情行按可用列软换行，折叠态最多 **2 个物理行**（`DETAIL_PREVIEW_ROWS`），
-  超出时末行 `…` 收尾；展开态上限 `DETAIL_MAX_ROWS`（24 行，防止 1 MiB 补丁铺满整屏）。
-  参数超过 2 行时该卡片的正文区登记 `CardHit.body`，点击（未拖拽）即展开/收起，复用
-  `toggle_tool_detail` 与文件卡片同一套「拖拽选中不折叠」判定；错误/中断文案**恒单行**尾部省略。
+  「工具参数颜色改为输入框下方上下文的字体颜色」）；**没有 hover 升色档**（交互高亮按要求移除）。
+- **参数折行与展开**：`└─` 详情行与 `exec_command` 的 `$ 命令` 都按可用列软换行，折叠态最多
+  **2 个物理行**（`DETAIL_PREVIEW_ROWS`），超出时末行 `…` 收尾；展开态上限 `DETAIL_MAX_ROWS`
+  （24 行，防止 1 MiB 补丁铺满整屏）。点击卡片内容（未拖拽）即展开/收起，复用
+  `toggle_tool_detail` 与「拖拽选中不折叠」判定；错误/中断文案**恒单行**尾部省略。
 - `^o` 对文件卡片走同一条 `toggle_tool_detail`；对进程卡片仍打开任务面板（仅存活时）。
 - 可见文案集中在 `src/ui/text/agent.rs`：`No content changes`、`Diff truncated`、`Diff simplified`、`collapse`、
   `open`、`⋮`、`No newline at end of file`、`Diff unavailable`、`→`、`(?)`，以及
@@ -578,7 +576,7 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 
 | 文件 | 内容 |
 | --- | --- |
-| `src/app/update/chat/viewport.rs` | 滚动/视口记忆/悬停（`hover_lx_chat`）/折叠（`collapse_lx_card`），由 `chat/mod.rs` 再导出 |
+| `src/app/update/chat/viewport.rs` | 滚动/视口记忆/折叠（`toggle_lx_card`；无 hover 态），由 `chat/mod.rs` 再导出 |
 | `src/ui/main_content/lx/history/sticky.rs` | 置顶行判定、矩形、绘制与 `truncate_with_ellipsis`，由 `history.rs` 再导出 |
 
 拆分后 `app/update/chat/mod.rs` 约 640 行、`ui/main_content/lx/history.rs` 921 行，全部触及文件 ≤1000 行。

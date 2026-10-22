@@ -3,7 +3,7 @@
 //! 从 `chat/mod.rs` 拆出（单文件行数上限）；这些函数都只改窗格状态，
 //! 几何由事件循环或 UI 纯函数传入，不做 IO。
 
-use crate::app::state::{AppState, ChatHover};
+use crate::app::state::{AppState, CardTarget};
 use crate::layout::PaneId;
 
 /// 滚动历史视图（正数向下）；`total`/`visible` 为渲染行数与视口行数；返回是否移动。
@@ -208,31 +208,18 @@ pub fn hover_lx_jump_bottom(state: &mut AppState, pane: PaneId, hovered: bool) -
     true
 }
 
-/// 设置聊天历史卡片悬停态（工具卡片 / 思考块）；返回是否变化。
+/// 点击卡片（未拖动）：切换该块的折叠状态。
 ///
-/// 只对 lx 窗格生效：悬停状态归窗格所有，指针换到别的窗格时必须清掉旧值，
-/// 否则上一张卡片会一直保持高亮。
-pub fn hover_lx_chat(state: &mut AppState, pane: PaneId, hover: Option<ChatHover>) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
-        return false;
-    };
-    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.hover == hover {
-        return false;
-    }
-    target.lx.chat.hover = hover;
-    true
-}
-
-/// 点击**已展开卡片的正文**（未拖动）：折叠该块。
-///
-/// 与点击标题 / 动作行走同一对入口，展开状态与视口锚定只有一份实现。
-pub fn collapse_lx_card(state: &mut AppState, pane: PaneId, target: ChatHover) -> bool {
+/// 用户要求「点击折叠内容后展开，点击展开内容后重新折叠」：整张卡片都是点击面，
+/// 不再有单独的动作按钮，也没有 hover 高亮。与键盘入口（`^o` / `^t`）共用同一份
+/// 展开状态与视口锚定实现。
+pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) -> bool {
     match target {
-        ChatHover::Tool {
+        CardTarget::Tool {
             message_id,
             call_id,
         } => super::toggle_tool_detail(state, pane, &message_id, &call_id),
-        ChatHover::Thinking {
+        CardTarget::Thinking {
             message_index,
             step_index,
         } => super::toggle_thinking_at(state, pane, message_index, step_index),

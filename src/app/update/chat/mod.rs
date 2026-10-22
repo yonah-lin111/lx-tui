@@ -34,9 +34,9 @@ pub use session::{
 };
 pub(crate) use view::view_message_of;
 pub use viewport::{
-    collapse_lx_card, hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom,
-    jump_lx_history_to_prompt, resolve_lx_sticky_prompt, resolve_lx_viewport_top,
-    resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll,
+    hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
+    resolve_lx_sticky_prompt, resolve_lx_viewport_top, resolve_task_output_visible,
+    scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
 };
 
 /// 尝试发送：校验 Native 入口、非空草稿、请求空闲与有效模型后冻结快照并入队效应。
@@ -786,6 +786,12 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
                 target.lx.chat.stop_armed_at = None;
             }
             target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
+            // 本轮耗时：时钟只在这里读（渲染层纯只读），随同一帧刷新。
+            target.lx.chat.turn_elapsed_ms = target
+                .lx
+                .chat
+                .turn_started_at_ms
+                .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
             changed = true;
         }
     }

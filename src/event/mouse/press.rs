@@ -449,20 +449,8 @@ pub(crate) fn handle_mouse_down_left(
                                 update::jump_lx_history_to_prompt(state, pane, row);
                             }
                         }
-                        ui::main_content::lx::LxChatHit::Thinking(message, part) => {
-                            update::toggle_thinking_at(state, pane, message, part);
-                        }
                         ui::main_content::lx::LxChatHit::JumpBottom => {
                             update::jump_lx_history_bottom(state, pane);
-                        }
-                        ui::main_content::lx::LxChatHit::ToolOpen(session_id) => {
-                            update::open_task_page_at(state, pane, session_id);
-                        }
-                        ui::main_content::lx::LxChatHit::ToolToggle {
-                            message_id,
-                            call_id,
-                        } => {
-                            update::toggle_tool_detail(state, pane, &message_id, &call_id);
                         }
                     }
                     update::clear_lx_selection(state);
@@ -514,7 +502,7 @@ pub(crate) fn handle_mouse_down_left(
                     state.lx_card_press = state
                         .pane_anywhere(pane)
                         .and_then(|target| {
-                            ui::main_content::lx::card_body_at(
+                            ui::main_content::lx::card_target_at(
                                 inner,
                                 &target.lx,
                                 mouse.column,

@@ -415,7 +415,7 @@ fn long_detail_wraps_to_two_rows_and_expands() {
         None,
     );
     let width = 30u16;
-    let folded = file_summary::detail(&call, width, false, false);
+    let folded = file_summary::detail(&call, width, false);
     assert_eq!(folded.len(), 2, "折叠态最多 2 行：{folded:#?}");
     for row in &folded {
         let cols: usize = segments_cols(row);
@@ -429,7 +429,7 @@ fn long_detail_wraps_to_two_rows_and_expands() {
     let folded_text: String = folded.iter().flatten().map(|s| s.text.as_str()).collect();
     assert!(folded_text.contains("file.rs"), "{folded_text:?}");
 
-    let expanded = file_summary::detail(&call, width, true, false);
+    let expanded = file_summary::detail(&call, width, true);
     assert!(
         expanded.len() >= folded.len(),
         "展开不少于折叠：{expanded:#?}"
@@ -456,14 +456,14 @@ fn very_long_detail_marks_truncation_and_expands_further() {
         None,
     );
     let width = 24u16;
-    let folded = file_summary::detail(&call, width, false, false);
+    let folded = file_summary::detail(&call, width, false);
     assert_eq!(folded.len(), file_summary::DETAIL_PREVIEW_ROWS);
     let folded_text: String = folded.iter().flatten().map(|s| s.text.as_str()).collect();
     assert!(
         folded_text.contains('…'),
         "放不下的参数有省略号：{folded_text:?}"
     );
-    let expanded = file_summary::detail(&call, width, true, false);
+    let expanded = file_summary::detail(&call, width, true);
     assert!(expanded.len() > folded.len(), "展开铺开更多行");
     assert!(expanded.len() <= file_summary::DETAIL_MAX_ROWS);
 }
@@ -472,8 +472,12 @@ fn very_long_detail_marks_truncation_and_expands_further() {
 #[test]
 fn short_detail_stays_one_row_and_is_not_clickable() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    assert_eq!(file_summary::detail(&call, 80, false, false).len(), 1);
-    assert!(!file_summary::detail_overflows(&call, 80), "短参数不可展开");
+    assert_eq!(file_summary::detail(&call, 80, false).len(), 1);
+    assert_eq!(
+        file_summary::detail(&call, 80, true).len(),
+        1,
+        "短参数展开也只有 1 行"
+    );
     assert_eq!(rows(&call, 80, false), 2, "标题 + 详情");
     assert_eq!(rows(&call, 80, true), 2, "展开也不变");
 }
@@ -495,34 +499,26 @@ fn long_detail_rows_follow_expansion() {
     );
     let folded = rows(&call, 24, false);
     let expanded = rows(&call, 24, true);
-    assert!(file_summary::detail_overflows(&call, 24), "长参数可展开");
+    assert!(
+        file_summary::detail(&call, 24, true).len() > file_summary::DETAIL_PREVIEW_ROWS,
+        "长参数展开超过折叠额度"
+    );
     assert_eq!(folded, 1 + file_summary::DETAIL_PREVIEW_ROWS);
     assert!(expanded > folded, "展开多出行：{folded} → {expanded}");
 }
 
-/// 悬停把参数从 dim 升为默认前景（可点提示），不改变行数。
+/// 参数恒为次要信息色（不再有 hover 升色）：行数也不随交互变化。
 #[test]
-fn hovering_lifts_parameter_color_without_changing_rows() {
+fn parameter_stays_dim_without_hover_states() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    let normal = file_summary::detail(&call, 80, false, false);
-    let hovered = file_summary::detail(&call, 80, false, true);
-    assert_eq!(normal.len(), hovered.len(), "悬停不改行数");
+    let normal = file_summary::detail(&call, 80, false);
+    let expanded = file_summary::detail(&call, 80, true);
+    assert_eq!(normal.len(), expanded.len(), "短参数展开后行数不变");
     let param_style = normal
         .iter()
         .flatten()
         .find(|segment| segment.text.contains("src/ui/style.rs"))
         .map(|segment| segment.style)
         .expect("参数段");
-    assert_eq!(param_style, style::chat_tool_param(), "常态 dim");
-    let hovered_param = hovered
-        .iter()
-        .flatten()
-        .find(|segment| segment.text.contains("src/ui/style.rs"))
-        .map(|segment| segment.style)
-        .expect("参数段");
-    assert_eq!(
-        hovered_param,
-        style::chat_tool_param_hover(),
-        "悬停升为默认前景"
-    );
+    assert_eq!(param_style, style::chat_tool_param(), "参数恒为 dim");
 }

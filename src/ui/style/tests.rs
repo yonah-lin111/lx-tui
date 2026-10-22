@@ -271,20 +271,14 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
 /// 工具行可变参数：与左下角上下文用量同档的**次要信息色**；悬停升为默认前景。
 ///
 /// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」：那行用量是 `muted()`，
-/// 参数跟着走；悬停档回到默认前景，作为「参数超长可点开」的信号。修饰符钉死为
-/// 「空」，防止有人把下划线加回来。
+/// 参数跟着走，且**没有 hover 档**（交互高亮已按要求移除）。
 #[test]
-fn chat_tool_param_matches_context_usage_and_lifts_on_hover() {
+fn chat_tool_param_matches_context_usage() {
     let style = chat_tool_param();
     assert_eq!(style, muted(), "参数与上下文用量同色（dim）");
     assert!(
         !style.add_modifier.contains(Modifier::UNDERLINED),
         "只有 dim，不加下划线（连续多行下划线会盖过翡翠绿结构色）"
-    );
-    assert_eq!(
-        chat_tool_param_hover(),
-        Style::default(),
-        "悬停升为默认前景"
     );
 }
 
@@ -523,35 +517,16 @@ fn step_roles_use_distinct_colors() {
         "正文方块完成去加粗"
     );
 
-    // 思考：常态压暗（次要信息色），悬停才恢复品红 218；工具：翡翠绿 42。
-    assert_eq!(
-        chat_step_mark_running_thinking(false).fg,
-        muted().fg,
-        "思考方块常态压暗"
-    );
-    assert_eq!(
-        chat_step_mark_running_thinking(true).fg,
-        Some(Color::Indexed(218)),
-        "悬停恢复品红"
-    );
-    assert_eq!(
-        chat_step_label_running_thinking(false).fg,
-        muted().fg,
-        "思考标题常态压暗"
-    );
-    assert_eq!(
-        chat_step_label_running_thinking(true).fg,
-        Some(Color::Indexed(218))
-    );
-    assert_eq!(chat_step_label_done_thinking(false).fg, muted().fg);
-    assert_eq!(
-        chat_step_label_done_thinking(true).fg,
-        Some(Color::Indexed(218))
-    );
-    assert_eq!(
-        chat_step_mark_done_thinking(true).fg,
-        Some(Color::Indexed(218))
-    );
+    // 思考：恒品红 218（用户要求移除 hover 高亮，不再有「压暗→悬停恢复」两态）；
+    // 工具：翡翠绿 42。
+    for (label, style) in [
+        ("思考方块", chat_step_mark_running_thinking()),
+        ("思考方块完成", chat_step_mark_done_thinking()),
+        ("思考标题运行中", chat_step_label_running_thinking()),
+        ("思考标题完成", chat_step_label_done_thinking()),
+    ] {
+        assert_eq!(style.fg, Some(Color::Indexed(218)), "{label}恒品红");
+    }
     assert_eq!(
         chat_step_mark_running().fg,
         Some(Color::Indexed(42)),
@@ -559,26 +534,12 @@ fn step_roles_use_distinct_colors() {
     );
 
     // 两个有色角色互不同色，且都不与正文的默认前景重合。
-    let thinking = chat_step_mark_done_thinking(true).fg;
+    let thinking = chat_step_mark_done_thinking().fg;
     let tool = chat_step_mark_done().fg;
     let body = chat_step_mark_done_body().fg;
     assert_ne!(thinking, tool, "思考与工具的方块必须不同色");
     assert_ne!(body, thinking, "正文与思考的方块必须不同色");
     assert_ne!(body, tool, "正文与工具的方块必须不同色");
-
-    // 行内动作文字（`open` / `… more changes` / `collapse`）：常态次要色，悬停默认前景。
-    assert_eq!(
-        chat_action_label(false).fg,
-        muted().fg,
-        "动作文字常态用左下角上下文统计色"
-    );
-    assert_eq!(chat_action_label(true).fg, None, "悬停升为默认前景");
-    // 工具参数不再上黄色：整行走终端默认前景。
-    assert_eq!(
-        chat_tool_param().fg,
-        muted().fg,
-        "工具参数用 dim（与上下文用量同档）"
-    );
 }
 
 /// loading 的扫描高亮色必须按 `Native Agent` 标签的 4 档渐变循环、且加粗。

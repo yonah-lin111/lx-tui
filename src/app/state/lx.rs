@@ -14,7 +14,7 @@ use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
 
 pub use chat::{
-    AssistantStepView, ChatHover, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
+    AssistantStepView, CardTarget, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
     DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, InputHintLevel,
     InteractionAction, LxChat, ModelsSnapshot, PlanSnapshotView, PlanStepView,
     ProcessInteractionView, ProcessStateView, RequestKey, RequestState, ToolCallView,

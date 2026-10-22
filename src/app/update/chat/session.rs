@@ -183,7 +183,7 @@ pub fn on_process_listed(
         return false;
     };
     let changed = page.set_processes(processes, crate::db::now_ms());
-    // 列表到了才落地 `[open]` 的一次性定位请求（见 `open_task_page_at`）。
+    // 列表到了才落地后台任务页的一次性定位请求（见 `open_task_page_at`）。
     page.resolve_focus();
     changed
 }
@@ -380,6 +380,7 @@ pub fn on_session_loaded(
     target.lx.chat.follow_bottom = true;
     target.lx.chat.thinking_toggled.clear();
     target.lx.chat.turn_started_at_ms = None;
+    target.lx.chat.turn_elapsed_ms = None;
     // 展开状态与键盘选择按稳定 ID 定位；切会话后默认折叠、不选中任何卡片。
     target.lx.chat.detail_expanded.clear();
     target.lx.chat.selected_tool = None;
