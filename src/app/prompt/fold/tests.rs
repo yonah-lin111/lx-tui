@@ -26,11 +26,12 @@ fn closed_supplement_is_folded_by_default() {
     let prompt = prompt(TASK);
     let rows = prompt.visual_rows();
     let lines: Vec<usize> = rows.iter().map(|row| row.line).collect();
-    assert_eq!(lines, vec![0, 1, 5]);
+    assert_eq!(lines, vec![0, 1, 2, 5], "标题行不折叠");
     let folded = prompt.folded_blocks();
     assert_eq!(folded.len(), 1);
     assert_eq!(folded[0].start_line, 1);
     assert_eq!(folded[0].end_line, 4);
+    assert_eq!(folded[0].hidden_from_line, 3);
 }
 
 #[test]
@@ -41,7 +42,7 @@ fn toggle_expands_and_collapses_without_dirty_or_history() {
     assert!(prompt.is_saved());
     assert!(!prompt.can_undo());
     assert!(prompt.toggle_supple_fold(1));
-    assert_eq!(prompt.visual_rows().len(), 3);
+    assert_eq!(prompt.visual_rows().len(), 4);
     assert!(!prompt.toggle_supple_fold(0));
 }
 
@@ -111,7 +112,7 @@ fn enter_at_header_start_inserts_before_block() {
 fn typing_at_folded_boundary_is_rejected() {
     let mut prompt = prompt(TASK);
     let text = prompt.text().to_string();
-    let (_, end) = block_start_end(&text);
+    let end = offset_of(&text, "{title: Review}") + "{title: Review}".len();
     prompt.set_cursor_offset_for_test(end);
     prompt.insert_char('x');
     assert_eq!(prompt.text(), text);
@@ -123,16 +124,18 @@ fn typing_at_folded_boundary_is_rejected() {
 fn navigation_skips_hidden_lines() {
     let mut prompt = prompt(TASK);
     let text = prompt.text().to_string();
-    let (start, end) = block_start_end(&text);
+    let (start, _) = block_start_end(&text);
+    let title = offset_of(&text, "{title: Review}");
+    let title_end = title + "{title: Review}".len();
     let after = offset_of(&text, "&&& x --end");
     prompt.set_cursor_offset_for_test(start);
     prompt.move_down();
-    assert_eq!(prompt.cursor(), after);
-    prompt.set_cursor_offset_for_test(end);
+    assert_eq!(prompt.cursor(), title, "折叠后下移落到可见标题行");
+    prompt.set_cursor_offset_for_test(title_end);
     prompt.move_right();
-    assert_eq!(prompt.cursor(), after);
+    assert_eq!(prompt.cursor(), after, "标题行之后是整块之后");
     prompt.move_left();
-    assert_eq!(prompt.cursor(), end);
+    assert_eq!(prompt.cursor(), title_end);
 }
 
 #[test]
@@ -183,10 +186,10 @@ fn history_roundtrip_keeps_expansion() {
 #[test]
 fn selection_text_skips_folded_content() {
     let prompt = prompt(TASK);
-    let copied = prompt.selection_text((0, 0), (2, 3));
+    let copied = prompt.selection_text((0, 0), (3, 3));
     assert_eq!(
         copied.as_deref(),
-        Some("&&& x --start\n+++ supplement --start\n&&& ")
+        Some("&&& x --start\n+++ supplement --start\n{title: Review}\n&&& ")
     );
 }
 
@@ -205,6 +208,6 @@ fn collapsing_moves_cursor_out_of_hidden_body() {
     let body = offset_of(prompt.text(), "body");
     prompt.set_cursor_offset_for_test(body);
     assert!(prompt.toggle_supple_fold(1));
-    let (_, end) = block_start_end(prompt.text());
-    assert_eq!(prompt.cursor(), end);
+    let title_end = offset_of(prompt.text(), "{title: Review}") + "{title: Review}".len();
+    assert_eq!(prompt.cursor(), title_end);
 }

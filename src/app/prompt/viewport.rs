@@ -20,7 +20,7 @@ impl Prompt {
         let lines: Vec<&str> = self.text.split('\n').collect();
         let mut hidden = vec![false; lines.len()];
         for block in fold::folded_blocks_from(&scan, &self.text, &self.expanded_supplements) {
-            for line in block.start_line + 1..=block.end_line {
+            for line in block.hidden_from_line..=block.end_line {
                 if let Some(slot) = hidden.get_mut(line) {
                     *slot = true;
                 }

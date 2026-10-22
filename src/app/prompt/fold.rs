@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use super::super::markdown::{self, BlockKind, BlockScan};
+use super::super::markdown::{self, BlockKind, BlockScan, is_title_line};
 use super::Prompt;
 
 /// 一个折叠的补充块。
@@ -17,7 +17,9 @@ pub struct FoldedBlock {
     pub start_line: usize,
     /// 结束逻辑行。
     pub end_line: usize,
-    /// 隐藏字节区间：起始行行尾换行至结束行行尾换行之后。
+    /// 首个隐藏逻辑行：有独立标题行时从起始行 + 2 开始，标题行保持可见。
+    pub hidden_from_line: usize,
+    /// 隐藏字节区间：最后一个可见行行尾换行至结束行行尾换行之后。
     pub hidden: Range<usize>,
     /// 展开键：起始行行首字节偏移。
     pub key: usize,
@@ -44,14 +46,26 @@ fn folded_in(scan: &BlockScan, text: &str, expanded: &BTreeSet<usize>) -> Vec<Fo
         .iter()
         .filter(|span| span.kind == BlockKind::Supple && span.closed)
     {
-        let (Some(&key), Some(line)) = (offsets.get(span.start), lines.get(span.start)) else {
+        let Some(&key) = offsets.get(span.start) else {
             continue;
         };
         if expanded.contains(&key) {
             continue;
         }
-        // 起始行行尾换行本身也隐藏：删除它会把隐藏正文并进可见行。
-        let hidden_start = key + line.len();
+        // 独立标题行保持可见，其余内容整体隐藏；换行本身随隐藏区一起收走，
+        // 避免删除隐藏区与可见行之间的换行。
+        let hidden_from_line = if lines
+            .get(span.start + 1)
+            .is_some_and(|line| is_title_line(line))
+        {
+            span.start + 2
+        } else {
+            span.start + 1
+        };
+        let Some(&next_line) = offsets.get(hidden_from_line) else {
+            continue;
+        };
+        let hidden_start = next_line.saturating_sub(1);
         let hidden_end = offsets.get(span.end + 1).copied().unwrap_or(text.len());
         if hidden_start >= hidden_end {
             continue;
@@ -59,6 +73,7 @@ fn folded_in(scan: &BlockScan, text: &str, expanded: &BTreeSet<usize>) -> Vec<Fo
         blocks.push(FoldedBlock {
             start_line: span.start,
             end_line: span.end,
+            hidden_from_line,
             hidden: hidden_start..hidden_end,
             key,
         });

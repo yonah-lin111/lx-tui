@@ -1277,7 +1277,12 @@ fn folded_supplement_renders_compact_header_and_toggles_icon() {
     assert_eq!(buf[(39, 1)].symbol(), "┤");
     let row = row_text(&buf, 1);
     assert!(row.contains("[▸]"), "{row}");
-    assert!(!(0..8).any(|y| row_text(&buf, y).contains("{title: }")));
+    assert_eq!(buf[(0, 2)].symbol(), "│", "折叠保留标题行");
+    assert!(row_text(&buf, 2).contains("{title: }"));
+    assert!(
+        !(0..8).any(|y| row_text(&buf, y).contains("body")),
+        "正文仍折叠"
+    );
 
     assert!(prompt.toggle_supple_fold(1));
     let mut buf = Buffer::empty(area);
@@ -1286,6 +1291,7 @@ fn folded_supplement_renders_compact_header_and_toggles_icon() {
     let row = row_text(&buf, 1);
     assert!(row.contains("[▾]"), "{row}");
     assert!((0..8).any(|y| row_text(&buf, y).contains("{title: }")));
+    assert!((0..8).any(|y| row_text(&buf, y).contains("body")));
 }
 
 #[test]
