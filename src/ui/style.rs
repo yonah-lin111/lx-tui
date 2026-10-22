@@ -816,6 +816,16 @@ pub fn chat_tool_param_hover() -> Style {
     Style::default()
 }
 
+/// 工具**展开块**的整行背景（参考 Claude Code 的深色卡片底）。
+///
+/// 只铺在展开后的**正文行**上（不含文件头、不含折叠预览、不含工具参数）。
+pub fn chat_expanded_bg() -> Style {
+    Style::default().bg(Color::Indexed(CHAT_EXPANDED_BG))
+}
+
+/// 展开块的整行底色（参考 Claude Code 的深色卡面，256 色里最接近的暗灰蓝）。
+const CHAT_EXPANDED_BG: u8 = 236;
+
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
 /// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
 pub fn chat_tool_range() -> Style {

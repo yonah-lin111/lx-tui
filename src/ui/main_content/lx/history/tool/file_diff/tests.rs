@@ -543,10 +543,11 @@ fn merged_blocks_report_independent_action_rows() {
         "第二块起点随第一块后移"
     );
 }
-/// **只有 diff 的增删行有底色**：文件头、上下文行、展开后的其余行都不铺。
+/// 展开块：**正文行铺灰底、文件头不铺**，diff 增删行保留自己的红/绿（优先级更高）。
 #[test]
-fn only_diff_lines_carry_a_background() {
-    let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
+fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
+    // 带上下文行（`keep`）的 diff：上下文行也必须铺灰底。
+    let call = tool_call("write", detail_of(vec![(replace_diff(), 1, 1)]));
     let width = 60u16;
     let (_, total) = render(&call, width, true);
     let rect = Rect::new(0, 0, width, u16::try_from(total).unwrap_or(u16::MAX));
@@ -563,23 +564,32 @@ fn only_diff_lines_carry_a_background() {
         false,
         None,
     );
+    let grey = style::chat_expanded_bg().bg;
     let added = style::agent_added_bg().bg;
     let removed = style::agent_removed_bg().bg;
-    for y in 0..rect.height {
+    // 行 0 = 标题，行 1 = 文件头，行 2.. 才是正文。
+    for x in 0..width {
+        assert_eq!(grid.cell(x, 1).style.bg, None, "({x},1) 文件头不铺底色");
+    }
+    let mut greys = 0;
+    let mut diffs = 0;
+    for y in 2..rect.height {
         let bg = grid.cell(0, y).style.bg;
-        let is_diff = bg == added || bg == removed;
         for x in 0..width {
-            if is_diff {
-                assert_eq!(grid.cell(x, y).style.bg, bg, "({x},{y}) 增删行必须满宽同色");
-            } else {
-                assert_eq!(
-                    grid.cell(x, y).style.bg,
-                    None,
-                    "({x},{y}) 非 diff 行不该有底色"
-                );
-            }
+            assert_eq!(
+                grid.cell(x, y).style.bg,
+                bg,
+                "({x},{y}) 整行必须同一底色（满宽）"
+            );
+        }
+        match bg {
+            Some(color) if Some(color) == grey => greys += 1,
+            Some(color) if Some(color) == added || Some(color) == removed => diffs += 1,
+            other => panic!("({y}) 意外的底色：{other:?}"),
         }
     }
+    assert!(greys > 0, "上下文行铺展开灰底");
+    assert!(diffs > 0, "增删行保留自己的底色");
 }
 
 /// hover 只点亮**折叠内容**；展开态没有折叠内容，配色与常态完全一致。

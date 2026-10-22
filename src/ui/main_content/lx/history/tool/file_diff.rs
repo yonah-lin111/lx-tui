@@ -179,7 +179,8 @@ impl Row {
 ///
 /// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；悬停时内容从
 ///   dim 提亮为默认前景（唯一的「可点」提示）；
-/// - 展开态铺开全部 hunks，没有剩余行数行；底色只属于增删行。
+/// - 展开态铺开全部 hunks，没有剩余行数行；**正文行铺展开块灰底**（文件头不铺），
+///   增删行自己的红/绿底色优先级更高。
 fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
     let mut rows = content_rows(call, width, expanded);
     // 折叠态：下一行单独写剩余行数（展开后消失）。
@@ -193,9 +194,16 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
             )));
         }
     }
-    // **只有 diff 的增删行有底色**（`render_line` 自己设的 `fill`）：文件头、上下文行、
-    // 展开后的其余行都不铺——用户明确要求「只有 diff 有背景颜色即可」。
-    if !expanded && hovered {
+    // 展开块的**正文行**铺灰底；文件头（该文件的第一行）不铺，增删行自己的红/绿优先。
+    if expanded {
+        let header_rows: Vec<usize> = file_header_row_indexes(call, width, expanded);
+        for (index, row) in rows.iter_mut().enumerate() {
+            if header_rows.contains(&index) || row.fill.is_some() {
+                continue;
+            }
+            row.fill = Some(style::chat_expanded_bg());
+        }
+    } else if hovered {
         // 折叠内容悬停：把 dim 的元信息提到默认前景（增删语义色保持不变）。
         for row in &mut rows {
             if row.fill.is_none() {
@@ -216,6 +224,19 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
         }
     }
     rows
+}
+
+/// 展开态里「文件头」所在的行号（每文件一行，不铺展开底色）。
+fn file_header_row_indexes(call: &ToolCallView, width: u16, expanded: bool) -> Vec<usize> {
+    let mut indexes = Vec::new();
+    let mut row = 0usize;
+    let files = files_of(&[call]);
+    let last_index = files.len().saturating_sub(1);
+    for (index, file) in files.iter().enumerate() {
+        indexes.push(row);
+        row += 1 + file_body(file, width, expanded, index == last_index).len();
+    }
+    indexes
 }
 
 /// 差异内容行（文件头 + 正文 + 省略文件提示），**不含**剩余行数提示。

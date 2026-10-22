@@ -491,3 +491,16 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - [x] 增删行底色仍铺满 100% 宽度（`background_row` + 分段 `patch` 同一 bg）。
 - [x] 测试改为 `only_diff_lines_carry_a_background`：逐格断言「增删行满宽同色、其余行零底色」。
   fmt / clippy -D warnings / cargo test（2836 passed）全部通过。
+
+## 21. 第十一轮：恢复展开块灰底（文件头除外）
+
+第十轮按「只有 diff 有底色」把灰底整个去掉，用户随即反馈「灰色背景颜色直接没了」，
+确认要的是：**灰底恢复，但文件头不铺**。
+
+- [x] 恢复 `style::chat_expanded_bg()`（Indexed 236）。
+- [x] `file_diff::layout` 在展开态给**正文行**补灰底：`file_header_row_indexes` 精确算出
+      每个文件头的行号并跳过；`row.fill.is_some()`（增删行）不覆盖——红/绿优先级更高。
+- [x] 折叠预览、工具参数、进程命令仍不铺灰底。
+- [x] 测试 `expanded_body_is_grey_except_the_file_header_and_diff_lines`：文件头零底色、
+      其余每行满宽同色、灰底与增删底色都出现且互不覆盖。
+  fmt / clippy -D warnings / cargo test（2836 passed）全部通过。
