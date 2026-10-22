@@ -57,7 +57,7 @@ pub(super) const SCROLLBAR_COLUMNS: u16 = crate::layout::LX_HISTORY_SCROLLBAR;
 ///
 /// **颜色由「角色」决定，不只看状态**（用户要求区分三类步骤）：
 /// - [`StepKind::Body`]（正文块）：**终端默认前景**——方块跟正文同色，不额外抢眼；
-/// - [`StepKind::Thinking`]（思考块）：专用品红 `Indexed 218`；
+/// - [`StepKind::Thinking`]（思考块）：折叠浅粉 `Indexed 182`、展开/悬停亮粉 `Indexed 218`；
 /// - [`StepKind::Tool`]（工具调用）：翡翠绿 `Indexed 42`。
 ///
 /// 失败 / 中断 / 取消是**跨角色的语义状态**，一律覆盖角色色（红 / 黄 / 次要灰），
@@ -101,15 +101,16 @@ impl StepMark {
 
     /// 方块样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
     ///
-    /// `hovered` 只对思考块有意义（常态压暗、悬停恢复品红）；其余角色忽略它。
-    pub(super) fn style(self, kind: StepKind, hovered: bool) -> Style {
+    /// `expanded` / `hovered` 只对思考块有意义（折叠浅粉 → 展开/悬停亮粉）；
+    /// 其余角色忽略它们。
+    pub(super) fn style(self, kind: StepKind, expanded: bool, hovered: bool) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
-            Self::Running => kind.style_running(hovered),
+            Self::Running => kind.style_running(expanded, hovered),
             Self::Alive => style::chat_step_mark_alive(),
-            Self::Done => kind.style_done(hovered),
+            Self::Done => kind.style_done(expanded, hovered),
         }
     }
 
@@ -124,7 +125,7 @@ impl StepMark {
 ///
 /// 三类的分工（用户要求「正文方块用默认前景、thinking 用别的颜色」）：
 /// - `Body` 用终端默认前景 → 方块与正文本就同色，视觉上不打断阅读；
-/// - `Thinking` 用品红 → 一眼看出「这段是模型的内心活动」；
+/// - `Thinking` 用粉色（折叠 182 / 展开 218）→ 一眼看出「这段是模型的内心活动」；
 /// - `Tool` 用翡翠绿 → 一眼看出「这段是真实动作」，且与 markdown 的 GitHub 色域不相交。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StepKind {
@@ -137,11 +138,11 @@ pub(super) enum StepKind {
 }
 
 impl StepKind {
-    /// 运行中（含呼吸）的样式。`hovered` 只影响思考块。
-    fn style_running(self, hovered: bool) -> Style {
+    /// 运行中（含呼吸）的样式。`expanded` / `hovered` 只影响思考块。
+    fn style_running(self, expanded: bool, hovered: bool) -> Style {
         match self {
             Self::Body => style::chat_step_mark_running_body(),
-            Self::Thinking => style::chat_step_mark_running_thinking(hovered),
+            Self::Thinking => style::chat_step_mark_running_thinking(expanded, hovered),
             // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
             // tool 的方块和 title 统一为黄色，完成才显示绿色"。
             Self::Tool => style::chat_step_mark_alive(),
@@ -149,21 +150,21 @@ impl StepKind {
     }
 
     /// 已完成（静止）的样式。
-    fn style_done(self, hovered: bool) -> Style {
+    fn style_done(self, expanded: bool, hovered: bool) -> Style {
         match self {
             Self::Body => style::chat_step_mark_done_body(),
-            Self::Thinking => style::chat_step_mark_done_thinking(hovered),
+            Self::Thinking => style::chat_step_mark_done_thinking(expanded, hovered),
             Self::Tool => style::chat_step_mark_done(),
         }
     }
 
-    /// 该角色的头部文案样式（运行中 / 已完成）。`hovered` 只影响思考块。
-    pub(super) fn label(self, running: bool, hovered: bool) -> Style {
+    /// 该角色的头部文案样式（运行中 / 已完成）。`expanded` / `hovered` 只影响思考块。
+    pub(super) fn label(self, running: bool, expanded: bool, hovered: bool) -> Style {
         match (self, running) {
             (Self::Body, true) => style::chat_step_label_running_body(),
             (Self::Body, false) => style::chat_step_label_done_body(),
-            (Self::Thinking, true) => style::chat_step_label_running_thinking(hovered),
-            (Self::Thinking, false) => style::chat_step_label_done_thinking(hovered),
+            (Self::Thinking, true) => style::chat_step_label_running_thinking(expanded, hovered),
+            (Self::Thinking, false) => style::chat_step_label_done_thinking(expanded, hovered),
             (Self::Tool, true) => style::chat_step_label_running(),
             (Self::Tool, false) => style::chat_step_label_done(),
         }
@@ -721,14 +722,13 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                     };
                     if let Some(y) = visible_row(content, scroll, row_index) {
                         // 生成中：`Thinking`；完成后：`Thought · 6.3s`。
-                        // 方块与文案常态压暗（`muted()`），**鼠标悬停整块**才恢复品红
-                        // ——思考是次要内容，常驻高饱和色会抢走工具行的注意力。
-                        let header_style = StepKind::Thinking.label(streaming, hovered);
+                        // 折叠态浅粉、展开/悬停亮粉（见 `style::chat_step_*_thinking`）。
+                        let header_style = StepKind::Thinking.label(streaming, expanded, hovered);
                         grid.put_char(
                             content.x,
                             y,
                             mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
-                            mark.style(StepKind::Thinking, hovered),
+                            mark.style(StepKind::Thinking, expanded, hovered),
                         );
                         let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();

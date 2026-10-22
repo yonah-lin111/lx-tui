@@ -553,3 +553,19 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - [x] 测试：`file_header_path_lifts_when_expanded` → `file_header_path_stays_dim_when_expanded`；
       新增 `merging_blocks_keeps_every_header_dim`（合并卡里展开第一块，两块文件头路径都仍是 dim）。
   fmt / clippy -D warnings / cargo test（2841 passed）全部通过。
+
+## 25. 第十五轮：思考块折叠态改浅粉
+
+用户要求「设置思考的颜色没有展开时颜色不要使用灰色的，使用浅一点粉色的」，
+并确认展开态用亮粉 218。
+
+- [x] 新增 `style::CHAT_STEP_PINK_SOFT = 182`（`#d7afd7`）：同一粉系里低一档饱和度，
+      既不抢工具行注意力，也不像 `muted()` 那样读成「被禁用的灰」。
+- [x] `chat_step_mark_*_thinking` / `chat_step_label_*_thinking` 增加 `expanded` 参数：
+      `expanded || hovered` → 亮粉 218，否则浅粉 182。运行态仍保留呼吸加粗。
+- [x] `StepMark::style` / `StepKind::{style_running,style_done,label}` 透传 `expanded`；
+      非思考角色调用点一律传 `false`（工具、正文、通知都不受展开态影响）。
+- [x] 测试：`step_roles_use_distinct_colors` 改为断言折叠 182 / 展开 218 / 悬停 218，
+      并显式断言折叠态**不得**等于 `muted()`；`thinking_header_uses_step_square_and_becomes_thought`
+      同步为折叠 182、展开后 218。
+  fmt / clippy -D warnings / cargo test（2841 passed）全部通过。

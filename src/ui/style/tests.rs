@@ -542,32 +542,42 @@ fn step_roles_use_distinct_colors() {
         "正文方块完成去加粗"
     );
 
-    // 思考：常态压暗为次要信息色，**悬停恢复品红 218**（用户要求恢复原来的 hover
-    // 交互）；工具：翡翠绿 42。
-    for (label, normal, hovered) in [
+    // 思考：**折叠态浅粉 182**（用户要求「没展开时不要灰色，用浅一点的粉色」）、
+    // 展开与悬停亮粉 218；工具：翡翠绿 42。
+    for (label, folded, expanded, hovered) in [
         (
             "思考方块",
-            chat_step_mark_running_thinking(false),
-            chat_step_mark_running_thinking(true),
+            chat_step_mark_running_thinking(false, false),
+            chat_step_mark_running_thinking(true, false),
+            chat_step_mark_running_thinking(false, true),
         ),
         (
             "思考方块完成",
-            chat_step_mark_done_thinking(false),
-            chat_step_mark_done_thinking(true),
+            chat_step_mark_done_thinking(false, false),
+            chat_step_mark_done_thinking(true, false),
+            chat_step_mark_done_thinking(false, true),
         ),
         (
             "思考标题运行中",
-            chat_step_label_running_thinking(false),
-            chat_step_label_running_thinking(true),
+            chat_step_label_running_thinking(false, false),
+            chat_step_label_running_thinking(true, false),
+            chat_step_label_running_thinking(false, true),
         ),
         (
             "思考标题完成",
-            chat_step_label_done_thinking(false),
-            chat_step_label_done_thinking(true),
+            chat_step_label_done_thinking(false, false),
+            chat_step_label_done_thinking(true, false),
+            chat_step_label_done_thinking(false, true),
         ),
     ] {
-        assert_eq!(normal.fg, muted().fg, "{label}常态压暗");
-        assert_eq!(hovered.fg, Some(Color::Indexed(218)), "{label}悬停恢复品红");
+        assert_eq!(folded.fg, Some(Color::Indexed(182)), "{label}折叠态用浅粉");
+        assert_ne!(folded.fg, muted().fg, "{label}折叠态不得退回无色相的灰");
+        assert_eq!(
+            expanded.fg,
+            Some(Color::Indexed(218)),
+            "{label}展开态升为亮粉"
+        );
+        assert_eq!(hovered.fg, Some(Color::Indexed(218)), "{label}悬停升为亮粉");
     }
     assert_eq!(
         chat_step_mark_running().fg,
@@ -576,7 +586,7 @@ fn step_roles_use_distinct_colors() {
     );
 
     // 两个有色角色互不同色，且都不与正文的默认前景重合。
-    let thinking = chat_step_mark_done_thinking(true).fg;
+    let thinking = chat_step_mark_done_thinking(true, false).fg;
     let tool = chat_step_mark_done().fg;
     let body = chat_step_mark_done_body().fg;
     assert_ne!(thinking, tool, "思考与工具的方块必须不同色");

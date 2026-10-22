@@ -495,16 +495,16 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
-    // 常态压暗（次要内容），悬停才恢复品红（用户要求恢复原来的 hover 交互）。
+    // 折叠态用**浅粉 182**（用户要求「没展开时不要灰色，用浅一点的粉色」），
+    // 展开与悬停才升为亮粉 218。
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Reset, "常态压暗（默认前景 + DIM）");
-    assert!(header.modifier.contains(Modifier::DIM), "常态压暗");
+    assert_eq!(header.fg, Color::Indexed(182), "折叠态方块浅粉");
     assert!(
-        !header.modifier.contains(Modifier::BOLD),
-        "压暗档不加粗（悬停才恢复加粗品红）"
+        header.modifier.contains(Modifier::BOLD),
+        "生成中的方块保留呼吸加粗"
     );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Reset, "文案常态压暗");
+    assert_eq!(label.fg, Color::Indexed(182), "折叠态文案浅粉");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
     // 悬停整块：方块与文案恢复品红 218。
     streaming.chat.hover = Some(crate::app::state::CardTarget::Thinking {
@@ -559,13 +559,13 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Reset, "完成方块常态压暗");
+    assert_eq!(header.fg, Color::Indexed(182), "完成方块折叠态浅粉");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "完成方块不加粗（与运行中的加粗呼吸方块区分）"
     );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Reset, "完成文案常态压暗");
+    assert_eq!(label.fg, Color::Indexed(182), "完成文案折叠态浅粉");
     assert!(!label.modifier.contains(Modifier::BOLD), "完成文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
@@ -586,11 +586,13 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Reset, "展开后仍是常态压暗");
+    assert_eq!(header.fg, Color::Indexed(218), "展开后升为亮粉");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "展开后仍是不加粗的完成态"
     );
+    let label = &buf[(2, 0)];
+    assert_eq!(label.fg, Color::Indexed(218), "展开后文案升为亮粉");
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thought · 6.3s"),

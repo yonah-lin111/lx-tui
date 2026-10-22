@@ -334,7 +334,7 @@ fn group_header(
     };
     let lead = paint(Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool, false),
+        mark.style(StepKind::Tool, false, false),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

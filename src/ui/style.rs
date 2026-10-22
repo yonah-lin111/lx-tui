@@ -667,9 +667,15 @@ pub fn chat_loading_scan(phase: usize) -> Style {
 
 /// 工具结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
 const CHAT_STEP_GREEN: u8 = 42;
-/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——**只在悬停时出现**（常态压暗），
+/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——**展开态与悬停态**使用，
 /// 与工具绿、正文默认色的色差分别为 68 / 24（CIEDE2000），一眼可分。
 const CHAT_STEP_MAGENTA: u8 = 218;
+/// 思考**折叠态**色：浅粉 `Indexed 182`（`#d7afd7`）。
+///
+/// 用户要求「思考没展开时不要灰色，用浅一点的粉色」：218 在折叠态太跳，会让还没
+/// 看的思考抢走工具行的注意力；`muted()` 又是无色相的灰，读起来像被禁用。182 是
+/// 同一色系里低一档饱和度的粉（L 76.6 vs 218 的 84.6），既不抢眼也不失身份。
+const CHAT_STEP_PINK_SOFT: u8 = 182;
 /// 工具**运行中**色：橙黄 `Indexed 208`（`#ff8700`）。
 ///
 /// 语义是「还在进行」：**所有**正在运行的工具（文件工具、`exec_command`、
@@ -678,12 +684,12 @@ const CHAT_STEP_MAGENTA: u8 = 218;
 /// （L 68.5 vs 58.5）；与工具绿 56.0、品红思考 40.7、天蓝 117 50.9 均 ≥40。
 const CHAT_STEP_AMBER: u8 = 208;
 
-// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 常态压暗/悬停品红，工具 = 翡翠绿）-----
+// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 折叠浅粉/展开亮粉，工具 = 翡翠绿）-----
 //
 // 用户要求：「正文内容的小方块用默认字体的颜色即可；thinking 的小方块和思考的字体
 // 颜色使用其他的颜色」。因此**颜色由步骤类别决定**：
 //   Body     → 终端默认前景（不设 fg）+ 加粗/不加粗区分运行态；
-//   Thinking → 常态 `muted()`，悬停品红 218；
+//   Thinking → 折叠浅粉 182、展开与悬停亮粉 218；
 //   Tool     → 翡翠绿 42（含工具动词）。
 
 /// 正文块的方块：运行中（呼吸）——**终端默认前景 + 加粗**，与正文本就同色。
@@ -706,44 +712,47 @@ pub fn chat_step_label_done_body() -> Style {
     Style::default()
 }
 
-/// 思考块的方块：运行中（呼吸）——常态压暗，**悬停恢复品红**加粗。
+/// 思考块的方块：运行中（呼吸）——折叠态浅粉、展开/悬停亮粉加粗。
 ///
-/// 用户要求「思考的 hover 交互恢复原来的」：思考是次要内容，常驻高饱和品红会抢走
-/// 工具行的注意力；鼠标落在块上才提亮，顺带告诉用户「这块可以点」。
-pub fn chat_step_mark_running_thinking(hovered: bool) -> Style {
-    if hovered {
+/// 用户要求「思考没展开时不要用灰色的，用浅一点的粉色」：折叠态不再压暗成
+/// `muted()`（那是无色相的中性灰），改成低饱和的浅粉 [`CHAT_STEP_PINK_SOFT`]；
+/// 展开说明用户正在读这段思考，升为亮粉并保留呼吸加粗；悬停同样到亮粉。
+pub fn chat_step_mark_running_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
         Style::default()
             .fg(Color::Indexed(CHAT_STEP_MAGENTA))
             .add_modifier(Modifier::BOLD)
     } else {
-        muted()
+        Style::default()
+            .fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
+            .add_modifier(Modifier::BOLD)
     }
 }
 
-/// 思考块的方块：已完成——常态压暗，悬停恢复品红（不加粗：静止 + 细一档）。
-pub fn chat_step_mark_done_thinking(hovered: bool) -> Style {
-    if hovered {
+/// 思考块的方块：已完成——折叠态浅粉、展开/悬停亮粉（不加粗：静止 + 细一档）。
+pub fn chat_step_mark_done_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
         Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
     } else {
-        muted()
+        Style::default().fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
     }
 }
 
-/// 思考块的头部文案：运行中——常态压暗，悬停恢复品红（与方块同色系，不加粗）。
-pub fn chat_step_label_running_thinking(hovered: bool) -> Style {
-    if hovered {
+/// 思考块的头部文案：运行中——折叠态浅粉、展开/悬停亮粉（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
         Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
     } else {
-        muted()
+        Style::default().fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
     }
 }
 
-/// 思考块的头部文案：已完成——常态压暗，悬停恢复品红（同上，不加粗）。
-pub fn chat_step_label_done_thinking(hovered: bool) -> Style {
-    if hovered {
+/// 思考块的头部文案：已完成——折叠态浅粉、展开/悬停亮粉（同上，不加粗）。
+pub fn chat_step_label_done_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
         Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
     } else {
-        muted()
+        Style::default().fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
     }
 }
 
