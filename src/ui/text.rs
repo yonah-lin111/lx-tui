@@ -820,6 +820,7 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
         TooltipTarget::PromptFolders => "referenced folders",
         TooltipTarget::ReferencedSearchCopyPath => "copy path",
         TooltipTarget::BlockButton { button, .. } => match button {
+            BlockButtonKind::Fold => "fold/unfold block",
             BlockButtonKind::Copy => "copy block",
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
@@ -873,45 +874,14 @@ pub fn template_status_label(status: TemplateStatus) -> &'static str {
     }
 }
 
-/// 补充块操作按钮：清理与删除（复用模板块图标）。
+/// 补充块操作按钮：折叠/展开、清理与删除（清理/删除复用模板块图标）。
+/// 折叠态显示 `▸`，展开态显示 `▾`。
+pub const SUPPLE_BUTTON_FOLD_CLOSED: &str = "[▸]";
+pub const SUPPLE_BUTTON_FOLD_OPEN: &str = "[▾]";
 pub const SUPPLE_BUTTON_CLEAN: &str = TEMPLATE_BUTTON_CLEAN;
 pub const SUPPLE_BUTTON_DEL: &str = TEMPLATE_BUTTON_DEL;
-
-/// 补充块附件入口：`Supplements · 3 [open]`；数量用同一口径拼接。
-pub const SUPPLEMENTS_ENTRY_LABEL: &str = "Supplements";
-pub const SUPPLEMENTS_ENTRY_SEPARATOR: &str = " · ";
-pub const SUPPLEMENTS_ENTRY_OPEN: &str = "[open]";
-/// 附件列表/详情的模态标题。
-pub const SUPPLEMENTS_MODAL_TITLE: &str = "Supplements";
-/// 附件列表的空态与动作行。
-pub const SUPPLEMENTS_EMPTY: &str = "no supplements";
-pub const SUPPLEMENTS_ADD: &str = "+ add supplement";
-/// 附件详情按钮。
-pub const SUPPLEMENTS_SAVE: &str = "[save ^s]";
-pub const SUPPLEMENTS_CLEAN: &str = "[clean]";
-pub const SUPPLEMENTS_BACK: &str = "[back esc]";
-pub const SUPPLEMENTS_CONFIRM_DELETE: &str = "[confirm del ↵]";
-pub const SUPPLEMENTS_CANCEL: &str = "[cancel esc]";
-/// 附件未保存确认按钮。
-pub const SUPPLEMENTS_UNSAVED_SAVE: &str = "[save ↵]";
-pub const SUPPLEMENTS_UNSAVED_DISCARD: &str = "[discard del]";
-pub const SUPPLEMENTS_UNSAVED_KEEP: &str = "[keep editing esc]";
-/// 未保存确认问题行。
-pub const SUPPLEMENTS_UNSAVED_QUESTION: &str = "Unsaved changes — save, discard, or keep editing?";
-/// 附件详情标题输入占位与提示。
-pub const SUPPLEMENTS_TITLE_PLACEHOLDER: &str = "title";
-pub const SUPPLEMENTS_TARGET_CHANGED: &str = "Target changed; copy draft and reopen";
-pub const SUPPLEMENTS_SAVE_REJECTED: &str = "Save rejected; draft kept";
-pub const SUPPLEMENTS_RESIZE_HINT: &str = "Resize terminal to edit";
-pub const SUPPLEMENTS_DELETE_QUESTION: &str = "Delete supplement";
-/// 普通编辑跨过隐藏附件被整次拒绝时的提示。
-pub const SUPPLEMENTS_HIDDEN_BLOCKED: &str = "Supplements are hidden; open them (F4 for source)";
-/// 内置补充块命令名（新建附件沿用同一外壳）。
-pub const SUPPLEMENTS_DEFAULT_COMMAND: &str = "supplement";
-/// 原文/集中视图切换按钮；宽度与提示。
-pub const PROMPT_SOURCE_LABEL: &str = "[src]";
-pub const PROMPT_COMPACT_LABEL: &str = "[view]";
-pub const PROMPT_PRESENTATION_TOOLTIP: &str = "Toggle source view (F4)";
+/// 写入落在折叠补充块内被拒绝时的提示。
+pub const SUPPLE_FOLD_BLOCKED: &str = "Folded supplement; unfold to edit";
 
 /// @ 面板底边快捷键提示：进入目录 `Shift+Enter` / 回退上一级 `Ctrl+Z`（`^z` 沿用 `[clear ^c]` 记法）。
 pub const MENTION_PANEL_FOOTER: &str = "[open ⇧↵] [back ^z]";

@@ -24,8 +24,6 @@ pub enum Routed {
     SavePrompt,
     /// 复制光标所在模板块/补充块正文到系统剪贴板。
     CopyTemplateBlock,
-    /// F4：在主 Prompt 编辑聚焦、无浮层时切换集中/原文视图。
-    TogglePromptPresentation,
     /// lx 页单行输入命令。
     Lx(LxInput),
     /// 原样写入焦点窗格的字节。
@@ -53,10 +51,6 @@ pub fn route(
     }
     if let Some(kind) = overlay {
         return overlay_key(key, kind).map(Routed::Overlay);
-    }
-    // F4 只作用于主 Prompt 编辑聚焦：无浮层、无候选面板时切换集中/原文视图。
-    if prompt_focused && key.code == KeyCode::F(4) && key.modifiers.is_empty() {
-        return Some(Routed::TogglePromptPresentation);
     }
     if prompt_focused {
         let copy_chord = matches!(key.code, KeyCode::Char('c' | 'C'))
@@ -325,58 +319,6 @@ fn overlay_key(key: KeyEvent, kind: OverlayKind) -> Option<OverlayKey> {
             KeyCode::Right if plain => Some(OverlayKey::Right),
             KeyCode::Home => Some(OverlayKey::Home),
             KeyCode::End => Some(OverlayKey::End),
-            KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
-            _ => None,
-        },
-        OverlayKind::Supplements => match key.code {
-            KeyCode::Esc => Some(OverlayKey::Esc),
-            KeyCode::Enter => Some(OverlayKey::Enter),
-            KeyCode::Up => Some(OverlayKey::Up),
-            KeyCode::Down => Some(OverlayKey::Down),
-            KeyCode::Home => Some(OverlayKey::Home),
-            KeyCode::End => Some(OverlayKey::End),
-            KeyCode::PageUp => Some(OverlayKey::PageUp),
-            KeyCode::PageDown => Some(OverlayKey::PageDown),
-            KeyCode::Delete if plain => Some(OverlayKey::Delete),
-            KeyCode::Backspace => Some(OverlayKey::Backspace),
-            KeyCode::Left if plain => Some(OverlayKey::Left),
-            KeyCode::Right if plain => Some(OverlayKey::Right),
-            KeyCode::Tab if plain => Some(OverlayKey::Tab),
-            KeyCode::BackTab => Some(OverlayKey::BackTab),
-            KeyCode::F(6) if shift => Some(OverlayKey::PreviousField),
-            KeyCode::F(6) => Some(OverlayKey::NextField),
-            KeyCode::Char('c' | 'C')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Copy)
-            }
-            KeyCode::Char('s' | 'S')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Save)
-            }
-            KeyCode::Char('z' | 'Z') if shift => Some(OverlayKey::Redo),
-            KeyCode::Char('z' | 'Z')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Undo)
-            }
-            KeyCode::Char('y' | 'Y')
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER) =>
-            {
-                Some(OverlayKey::Redo)
-            }
-            KeyCode::Char('d' | 'D') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Some(OverlayKey::Remove)
-            }
             KeyCode::Char(ch) if plain => Some(OverlayKey::Char(ch)),
             _ => None,
         },

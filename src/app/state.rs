@@ -139,11 +139,6 @@ pub struct AppState {
     pub prompt_row_click: Option<(usize, Instant)>,
     /// 引用文件夹目录弹窗最近一次左键点击（行下标、时刻）；双击判定用。
     pub referenced_menu_click: Option<(usize, Instant)>,
-    /// 附件列表最近一次左键点击（行下标、时刻）；双击打开判定用。
-    pub supplement_click: Option<(usize, Instant)>,
-    /// prompt 附件入口按下的父任务起始行；松开未拖动才打开列表，
-    /// 保证从入口起拖仍能选区而不误触打开。
-    pub supplement_entry_press: Option<usize>,
     /// 拖拽引用文件夹搜索弹窗滚动条 thumb 时相对顶部的抓取偏移。
     pub referenced_search_scroll_drag: Option<u16>,
     /// 拖拽引用文件夹目录弹窗滚动条 thumb 时相对顶部的抓取偏移。
@@ -245,8 +240,6 @@ impl AppState {
             task_scroll_drag: None,
             prompt_row_click: None,
             referenced_menu_click: None,
-            supplement_click: None,
-            supplement_entry_press: None,
             referenced_search_scroll_drag: None,
             referenced_menu_scroll_drag: None,
             terminal_scroll_drag: None,
@@ -368,11 +361,10 @@ impl AppState {
             .filter(|selection| selection.pane() == pane)
     }
 
-    /// 全选 prompt 文本：按**显示投影**行数与文本区宽度构造覆盖全文的选区
-    /// （集中视图下也覆盖合成附件入口行；复制只取可见原文，见 `selection_text`）。
+    /// 全选 prompt 文本：按视觉行数与文本区宽度构造覆盖全文的选区；
     /// 文本为空时构造空选区（无高亮、无脏状态）。
     pub fn select_all_prompt(&mut self) {
-        let rows = self.prompt.display_rows().len();
+        let rows = self.prompt.visual_rows().len();
         let (width, _) = self.prompt.size();
         let max_row = rows.saturating_sub(1) as i32;
         let max_col = if self.prompt.text().is_empty() {

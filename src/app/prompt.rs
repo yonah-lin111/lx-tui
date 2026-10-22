@@ -5,7 +5,7 @@ mod mention;
 mod paste;
 pub use mention::MentionRootChoice;
 pub use paste::*;
-pub(crate) mod block;
+mod block;
 mod panel;
 mod refer;
 mod template;
@@ -17,20 +17,14 @@ pub use tree::{
     pages_template_counts,
 };
 
-mod focus;
+mod fold;
 mod navigation;
-pub(crate) mod presentation;
 pub(crate) mod text;
 mod viewport;
 
-pub use self::presentation::PromptDisplayRow;
+pub use fold::FoldedBlock;
 
-pub(crate) use presentation::line_offsets;
-pub use presentation::{
-    Projection, SupplementEntry, SupplementIndex, project_compact, project_source,
-    prompt_display_row_count, supplement_index,
-};
-
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -92,37 +86,10 @@ pub struct Prompt {
     revision: u64,
     /// 自动保存静置观察：最近一次判定时的修订号与时间；修订号变化即重置计时。
     autosave: Option<(u64, Instant)>,
-    /// 展示方式：集中附件视图（默认）或完整原文视图。
-    presentation: PromptPresentation,
-    /// 展示焦点：真实文本光标，或某个父任务的合成附件入口。
-    focus: PromptFocus,
-    /// 最近一次写入是否因集中视图隐藏附件而被拒绝（供上层提示，读取即清）。
-    hidden_blocked: bool,
-}
-
-/// 展示方式：集中视图隐藏安全补充子块，原文视图完整显示。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PromptPresentation {
-    #[default]
-    Compact,
-    Source,
-}
-
-/// 展示焦点：文本光标或合成附件入口（入口没有对应的原文字节）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PromptFocus {
-    #[default]
-    Text,
-    Supplements {
-        parent_start: usize,
-    },
-}
-
-impl PromptFocus {
-    /// 是否聚焦在合成附件入口。
-    pub fn is_supplements(self) -> bool {
-        matches!(self, Self::Supplements { .. })
-    }
+    /// 展开的补充块起始行字节偏移；空集合表示全部折叠（默认）。
+    expanded_supplements: BTreeSet<usize>,
+    /// 最近一次写入是否因落在折叠区内被拒绝（供上层提示，读取即清）。
+    fold_blocked: bool,
 }
 
 /// 一个视觉行：所属逻辑行与文本字节范围（不含行尾换行）。
@@ -133,14 +100,15 @@ pub struct VisualRow {
     pub end: usize,
 }
 
-/// 历史快照：文本与光标位置。
+/// 历史快照：文本、光标位置与折叠状态（折叠键只在对应文本内有效）。
 #[derive(Debug, Clone)]
 struct Snapshot {
     text: String,
     cursor: usize,
+    expanded_supplements: BTreeSet<usize>,
 }
 
-/// 编辑器完整历史状态：文本、光标、撤销/重做栈与已保存标记。
+/// 编辑器完整历史状态：文本、光标、撤销/重做栈、已保存标记与折叠状态。
 ///
 /// 用于离开编辑视图（切到列表）时暂存、返回同一目标时整体恢复，
 /// 使撤销/重做记录与光标不因视图往返而丢失（修订号连续演进、不在此暂存）。
@@ -151,7 +119,7 @@ pub struct PromptHistory {
     undo: Vec<Snapshot>,
     redo: Vec<Snapshot>,
     is_saved: bool,
-    presentation: PromptPresentation,
+    expanded_supplements: BTreeSet<usize>,
 }
 
 impl PromptHistory {
@@ -203,12 +171,12 @@ impl Prompt {
             is_saved: true,
             revision: 0,
             autosave: None,
-            presentation: PromptPresentation::Compact,
-            focus: PromptFocus::Text,
-            hidden_blocked: false,
+            expanded_supplements: BTreeSet::new(),
+            fold_blocked: false,
         }
     }
 
+    /// 面板标识；文本选择按此标识归属。
     pub fn id(&self) -> PaneId {
         self.id
     }
@@ -309,8 +277,8 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = true;
         self.autosave = None;
-        self.presentation = PromptPresentation::Compact;
-        self.focus = PromptFocus::Text;
+        self.expanded_supplements.clear();
+        self.fold_blocked = false;
         self.scroll_cursor_into_view();
     }
 
@@ -335,7 +303,7 @@ impl Prompt {
             undo: self.undo.clone(),
             redo: self.redo.clone(),
             is_saved: self.is_saved,
-            presentation: self.presentation,
+            expanded_supplements: self.expanded_supplements.clone(),
         }
     }
 
@@ -356,10 +324,9 @@ impl Prompt {
         self.panel_suppressed = false;
         self.is_saved = history.is_saved;
         self.autosave = None;
+        self.expanded_supplements = history.expanded_supplements;
         self.scroll = 0;
-        self.presentation = history.presentation;
-        self.focus = PromptFocus::Text;
-        self.normalize_hidden_focus();
+        self.normalize_fold_cursor();
         self.scroll_cursor_into_view();
     }
 
@@ -399,6 +366,14 @@ impl Prompt {
     /// 在当前逻辑行尾另起一行并保留行首缩进；不续写列表标记（lx-agent 的 Ctrl/Cmd+Shift+Enter）。
     pub fn newline_below(&mut self) {
         self.break_group();
+        // 折叠块上的换行落在整块之后，不进入隐藏正文。
+        if let Some((at, cursor)) = self.fold_newline_target(self.cursor) {
+            self.record(EditKind::Other);
+            self.splice_text(at, at, "\n");
+            self.cursor = cursor;
+            self.settle();
+            return;
+        }
         let start = line_start(&self.text, self.cursor);
         let end = line_end(&self.text, self.cursor);
         let indent = self.text[start..end]
@@ -410,7 +385,7 @@ impl Prompt {
             return;
         }
         self.record(EditKind::Other);
-        self.text.insert_str(end, &insert);
+        self.splice_text(end, end, &insert);
         self.cursor = end + insert.len();
         self.settle();
     }
@@ -431,7 +406,7 @@ impl Prompt {
             }
             let start = range.start;
             self.record(EditKind::Delete);
-            self.text.replace_range(range, "");
+            self.splice_text(range.start, range.end, "");
             self.cursor = start;
             self.settle();
             return;
@@ -444,7 +419,7 @@ impl Prompt {
             return;
         }
         self.record(EditKind::Delete);
-        self.text.remove(previous);
+        self.splice_text(previous, self.cursor, "");
         self.cursor = previous;
         self.settle();
     }
@@ -454,11 +429,12 @@ impl Prompt {
         if self.cursor >= self.text.len() {
             return;
         }
-        if self.protected_edit(self.cursor, next_boundary(&self.text, self.cursor)) {
+        let next = next_boundary(&self.text, self.cursor);
+        if self.protected_edit(self.cursor, next) {
             return;
         }
         self.record(EditKind::Delete);
-        self.text.remove(self.cursor);
+        self.splice_text(self.cursor, next, "");
         self.settle();
     }
 
@@ -575,7 +551,7 @@ impl Prompt {
         }
         self.break_group();
         self.record(EditKind::Other);
-        self.text.replace_range(range.clone(), &insertion);
+        self.splice_text(range.start, range.end, &insertion);
         self.cursor = range.start + insertion.len();
         self.panel_suppressed = true;
         self.scroll_cursor_into_view();
@@ -595,7 +571,7 @@ impl Prompt {
         }
         self.break_group();
         self.record(EditKind::Other);
-        self.text.replace_range(range.clone(), &insertion);
+        self.splice_text(range.start, range.end, &insertion);
         self.cursor = range.start + insertion.len();
         self.settle();
         true
@@ -720,7 +696,7 @@ impl Prompt {
             return;
         }
         self.record(EditKind::Other);
-        self.text.insert_str(start, TAB_STOP);
+        self.splice_text(start, start, TAB_STOP);
         self.cursor += INDENT_UNIT;
         self.settle();
     }
@@ -738,66 +714,11 @@ impl Prompt {
         }
         self.record(EditKind::Other);
         let offset = self.cursor - start;
-        self.text.replace_range(start..start + remove, "");
+        self.splice_text(start, start + remove, "");
         self.cursor = start + offset.saturating_sub(remove);
         self.settle();
     }
 
-    /// 删除光标前一个词及其后分隔符（readline ctrl+w 语义）。
-    pub fn delete_word_backward(&mut self) {
-        let start = self.word_start_before(self.cursor);
-        if start < self.cursor && !self.protected_edit(start, self.cursor) {
-            self.mark_dirty();
-            self.text.replace_range(start..self.cursor, "");
-            self.cursor = start;
-            self.settle();
-        }
-    }
-
-    /// 删除光标到下一个词尾（readline M-d 语义）。
-    pub fn delete_word_forward(&mut self) {
-        let end = self.word_end_after(self.cursor);
-        if end > self.cursor && !self.protected_edit(self.cursor, end) {
-            self.mark_dirty();
-            self.text.replace_range(self.cursor..end, "");
-            self.settle();
-        }
-    }
-
-    /// 删除光标到逻辑行首；光标已在行首时删除前一个换行（对齐 opencode deleteToLineStart）。
-    pub fn delete_to_line_start(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let start = line_start(&self.text, self.cursor);
-        if start < self.cursor {
-            if self.protected_edit(start, self.cursor) {
-                return;
-            }
-            self.record(EditKind::Delete);
-            self.text.replace_range(start..self.cursor, "");
-            self.cursor = start;
-            self.settle();
-            return;
-        }
-        if self.protected_edit(self.cursor - 1, self.cursor) {
-            return;
-        }
-        self.record(EditKind::Delete);
-        self.text.remove(self.cursor - 1);
-        self.cursor -= 1;
-        self.settle();
-    }
-
-    /// 删除光标到逻辑行尾（不删除换行）。
-    pub fn delete_to_line_end(&mut self) {
-        let end = line_end(&self.text, self.cursor);
-        if end > self.cursor && !self.protected_edit(self.cursor, end) {
-            self.mark_dirty();
-            self.text.replace_range(self.cursor..end, "");
-            self.settle();
-        }
-    }
     /// 用插入文本替换字节范围（选区删除/替换）；文本会先净化，作为独立撤销步。
     pub fn replace_range(&mut self, start: usize, end: usize, insert: &str) -> bool {
         if start >= end || end > self.text.len() {
@@ -809,15 +730,10 @@ impl Prompt {
         let sanitized = sanitize(insert);
         self.break_group();
         self.record(EditKind::Insert);
-        self.text.replace_range(start..end, &sanitized);
+        self.splice_text(start, end, &sanitized);
         self.cursor = start + sanitized.len();
         self.settle();
         true
-    }
-
-    /// 把光标移到字节偏移（钳到文末；不触发面板重算）。
-    pub(crate) fn set_cursor(&mut self, offset: usize) {
-        self.cursor = offset.min(self.text.len());
     }
 
     /// 测试辅助：把光标移到字节偏移（不触发 settle 的面板语义）。
@@ -826,35 +742,49 @@ impl Prompt {
         self.cursor = offset.min(self.text.len());
     }
 
-    /// 编辑是否触碰受保护的 `{wt:}` 绑定行或集中视图隐藏的附件；触碰时拒绝该次编辑。
-    ///
-    /// 集中视图里附件不显示，任何与之相交的写入（含零长度插入落在隐藏区内部）
-    /// 都整体拒绝，避免「删掉看不见的东西」；原文视图不做隐藏区判定。
+    /// 编辑是否触碰受保护的绑定行或折叠区；触碰时拒绝该次编辑。
     fn protected_edit(&mut self, from: usize, to: usize) -> bool {
         if markdown::edit_touches_worktree_line(&self.text, from, to)
             || markdown::edit_touches_title_line(&self.text, from, to)
         {
             return true;
         }
-        if self.edit_hits_hidden(from, to) {
-            self.hidden_blocked = true;
+        if self.edit_hits_fold(from, to) {
+            self.fold_blocked = true;
             return true;
         }
         false
     }
 
-    /// 取走「写入因隐藏附件被拒」提示标记。
-    pub fn take_hidden_block(&mut self) -> bool {
-        std::mem::take(&mut self.hidden_blocked)
+    /// 取走「写入落在折叠补充块内被拒」提示标记。
+    pub fn take_fold_blocked(&mut self) -> bool {
+        std::mem::take(&mut self.fold_blocked)
+    }
+
+    /// 替换正文区间并平移展开键；调用方负责历史、光标与收尾。
+    fn splice_text(&mut self, from: usize, to: usize, insert: &str) {
+        self.shift_folds(from, to - from, insert.len());
+        self.text.replace_range(from..to, insert);
     }
 
     /// 在光标处插入已净化的文本并推进光标；触碰受保护绑定行时忽略。
+    ///
+    /// 光标停在折叠补充块上时，回车改为在整块之后另起一行，不写入隐藏正文。
     fn insert_at(&mut self, insert: &str) {
+        if insert == "\n"
+            && let Some((at, cursor)) = self.fold_newline_target(self.cursor)
+        {
+            self.record(EditKind::Insert);
+            self.splice_text(at, at, "\n");
+            self.cursor = cursor;
+            self.settle();
+            return;
+        }
         if self.protected_edit(self.cursor, self.cursor) {
             return;
         }
         self.record(EditKind::Insert);
-        self.text.insert_str(self.cursor, insert);
+        self.splice_text(self.cursor, self.cursor, insert);
         self.cursor += insert.len();
         self.settle();
     }
@@ -876,6 +806,7 @@ impl Prompt {
         Snapshot {
             text: self.text.clone(),
             cursor: self.cursor,
+            expanded_supplements: self.expanded_supplements.clone(),
         }
     }
 
@@ -889,10 +820,8 @@ impl Prompt {
     fn restore(&mut self, snapshot: Snapshot) {
         self.text = snapshot.text;
         self.cursor = snapshot.cursor;
+        self.expanded_supplements = snapshot.expanded_supplements;
         self.last_edit = None;
-        // 撤销/重做可能把光标恢复进隐藏附件：统一归一为父任务的附件入口焦点。
-        self.focus = PromptFocus::Text;
-        self.normalize_hidden_focus();
         self.settle();
     }
 
@@ -907,6 +836,7 @@ impl Prompt {
     /// 高优先级面板打开时清空其余（粘贴二级面板不由编辑重算，单独由 `clear_panel` 取消）。
     fn settle(&mut self) {
         self.panel_suppressed = false;
+        self.normalize_fold_cursor();
         self.scroll_cursor_into_view();
         self.mention.refresh(&self.text, self.cursor);
         if self.mention.panel().is_some() {

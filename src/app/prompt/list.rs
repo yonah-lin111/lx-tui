@@ -234,7 +234,7 @@ impl Prompt {
             return false;
         };
         self.record(EditKind::Other);
-        self.text.replace_range(edit.range, &edit.replacement);
+        self.splice_text(edit.range.start, edit.range.end, &edit.replacement);
         self.cursor = edit.cursor;
         self.settle();
         true
@@ -256,8 +256,7 @@ impl Prompt {
                 return false;
             }
             self.record(EditKind::Delete);
-            self.text
-                .replace_range(start + item.sep_end..self.cursor, "");
+            self.splice_text(start + item.sep_end, self.cursor, "");
             self.cursor = start + item.sep_end;
             self.settle();
             return true;
@@ -269,17 +268,15 @@ impl Prompt {
         match list_context(&self.text, start, &item) {
             ListContext::Sibling => {
                 let blanks = " ".repeat(item.sep_end - item.indent);
-                self.text
-                    .replace_range(start + item.indent..start + item.sep_end, &blanks);
+                self.splice_text(start + item.indent, start + item.sep_end, &blanks);
                 self.cursor = start + item.sep_end;
             }
             ListContext::Nested => {
-                self.text
-                    .replace_range(start + item.indent..start + item.sep_end, "");
+                self.splice_text(start + item.indent, start + item.sep_end, "");
                 self.cursor = start + item.indent;
             }
             ListContext::TopLevel => {
-                self.text.replace_range(start..start + item.sep_end, "");
+                self.splice_text(start, start + item.sep_end, "");
                 self.cursor = start;
             }
         }

@@ -3298,7 +3298,6 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
     let bar = layout::prompt_toolbar_rect(geo.view.prompt).expect("toolbar visible");
     let select_all = toolbar_button(&geo, layout::PromptToolbarButton::SelectAll);
     let blank_x = select_all.x - 1;
-    let presentation = toolbar_button(&geo, layout::PromptToolbarButton::Presentation);
     handle_terminal_event(
         mouse(MouseEventKind::Down(MouseButton::Left), blank_x, bar.y),
         &mut state,
@@ -3308,11 +3307,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut dirty,
     );
     handle_terminal_event(
-        mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            presentation.right() + 1,
-            bar.y,
-        ),
+        mouse(MouseEventKind::Down(MouseButton::Left), bar.x + 15, bar.y),
         &mut state,
         &mut sessions,
         &geo,
@@ -3695,9 +3690,6 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
                 .into(),
         ),
     );
-    state
-        .prompt
-        .set_presentation(crate::app::prompt::PromptPresentation::Source);
     let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
     let area = crate::layout::prompt_text_rect(geo.view.prompt);
     let copy = crate::ui::prompt::block_buttons(&state.prompt, area)
@@ -3726,6 +3718,51 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
         Some(Some(crate::ui::text::TOAST_CLIPBOARD_TITLE)),
         "复制反馈沿用剪贴板 toast"
     );
+}
+
+#[test]
+fn mouse_supple_fold_button_toggles_without_editing_text() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    state.prompt_width = 80;
+    state.prompt.resize(78, 16);
+    crate::app::update::focus_prompt(&mut state);
+    crate::app::update::apply_editor(
+        &mut state,
+        crate::app::actions::EditorCommand::InsertText(
+            "&&& x --start\n+++ supplement --start\n{title: Review}\n\n- keep me\n+++ supplement --end\n&&& x --end"
+                .into(),
+        ),
+    );
+    state.prompt.mark_saved();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 220, 30));
+    let area = crate::layout::prompt_text_rect(geo.view.prompt);
+    let text = state.prompt.text().to_string();
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+
+    for folded in [false, true] {
+        let fold = crate::ui::prompt::block_buttons(&state.prompt, area)
+            .into_iter()
+            .find(|hit| hit.button == crate::ui::prompt::BlockButton::Fold)
+            .expect("supple fold button visible");
+        assert_eq!(fold.folded, !folded, "按钮字形跟随折叠态");
+        handle_terminal_event(
+            mouse(
+                MouseEventKind::Down(MouseButton::Left),
+                fold.rect.x,
+                fold.rect.y,
+            ),
+            &mut state,
+            &mut sessions,
+            &geo,
+            &config,
+            &mut dirty,
+        );
+        assert_eq!(state.prompt.supple_folded_at(1), folded);
+        assert_eq!(state.prompt.text(), text, "折叠不修改正文");
+        assert!(state.prompt.is_saved(), "折叠不置脏");
+    }
 }
 
 /// 给当前焦点窗格挂 Agent 快照；返回窗格标识。

@@ -184,14 +184,7 @@ pub fn apply_new_node_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::EnterFolder
         | OverlayKey::Back
         | OverlayKey::Copy
-        | OverlayKey::Remove
-        | OverlayKey::Save
-        | OverlayKey::NextField
-        | OverlayKey::PreviousField
-        | OverlayKey::Tab
-        | OverlayKey::BackTab
-        | OverlayKey::Undo
-        | OverlayKey::Redo => {}
+        | OverlayKey::Remove => {}
     }
 }
 
@@ -219,14 +212,7 @@ pub fn apply_save_draft_key(state: &mut AppState, key: OverlayKey) {
         | OverlayKey::Copy
         | OverlayKey::Remove
         | OverlayKey::PageUp
-        | OverlayKey::PageDown
-        | OverlayKey::Save
-        | OverlayKey::NextField
-        | OverlayKey::PreviousField
-        | OverlayKey::Tab
-        | OverlayKey::BackTab
-        | OverlayKey::Undo
-        | OverlayKey::Redo => {}
+        | OverlayKey::PageDown => {}
     }
 }
 

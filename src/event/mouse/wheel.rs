@@ -193,21 +193,6 @@ pub(crate) fn handle_mouse_wheel(
             return;
         }
     }
-    if let Some(direction) = vertical_wheel_direction(mouse.kind)
-        && let Some(crate::app::overlay::Overlay::Supplements(session)) = state.overlay.as_ref()
-        && let Some(layout) = ui::overlay::supplements_layout(geometry.screen)
-    {
-        // 附件列表：滚轮只滚列表视口，不改变选中项、不穿透底层 Prompt。
-        if layout.shell.area.contains((mouse.column, mouse.row).into())
-            && crate::app::supplements::SupplementView::List == session.view
-        {
-            let visible = ui::overlay::list_rows(&layout, session).max(1);
-            if update::scroll_supplement_list(state, direction, visible) {
-                *dirty = true;
-            }
-            return;
-        }
-    }
     if state.overlay.is_some() {
         return;
     }

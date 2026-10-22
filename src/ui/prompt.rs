@@ -19,7 +19,7 @@ use ratatui::style::{Modifier, Style};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::markdown::{BlockKind, BlockLineInfo, BlockRole, TemplateStatus, block_line_infos};
-use crate::app::prompt::{Prompt, PromptDisplayRow, PromptMode, VisualRow};
+use crate::app::prompt::{Prompt, PromptMode, VisualRow};
 use crate::app::selection::Selection;
 use crate::layout::{self, PromptToolbarButton};
 use crate::ui::markdown::{self, Token, TokenKind};
@@ -58,17 +58,6 @@ fn render_toolbar(
     mode: PromptMode,
     draft: bool,
     pinned: bool,
-) {
-    render_toolbar_with(prompt, mode, draft, pinned, panel, buf);
-}
-
-fn render_toolbar_with(
-    prompt: &Prompt,
-    mode: PromptMode,
-    draft: bool,
-    pinned: bool,
-    panel: Rect,
-    buf: &mut Buffer,
 ) {
     let mode_label = match mode {
         PromptMode::Editor => text::PROMPT_MODE_LIST_LABEL,
@@ -119,14 +108,6 @@ fn render_toolbar_with(
                 },
             ),
             (
-                PromptToolbarButton::Presentation,
-                match prompt.presentation() {
-                    crate::app::prompt::PromptPresentation::Compact => text::PROMPT_SOURCE_LABEL,
-                    crate::app::prompt::PromptPresentation::Source => text::PROMPT_COMPACT_LABEL,
-                },
-                style::accent(),
-            ),
-            (
                 PromptToolbarButton::SelectAll,
                 text::PROMPT_SELECT_ALL_LABEL,
                 style::accent(),
@@ -172,9 +153,14 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let display = prompt.display_rows();
+    let rows = prompt.visual_rows();
     let tokens = markdown::scan(prompt.text());
     let infos = block_line_infos(prompt.text());
+    let folded: std::collections::BTreeSet<usize> = prompt
+        .folded_blocks()
+        .into_iter()
+        .map(|block| block.start_line)
+        .collect();
     let lines: Vec<&str> = prompt.text().split('\n').collect();
     let mut line_starts = Vec::new();
     let mut offset = 0;
@@ -182,58 +168,27 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         line_starts.push(offset);
         offset += line.len() + 1;
     }
-    let scroll = prompt.scroll().min(display.len().saturating_sub(1));
+    let scroll = prompt.scroll().min(rows.len().saturating_sub(1));
     let mut block_rows = Vec::new();
     let mut separator_rows = Vec::new();
-    for (index, display_row) in display
+    for (index, row) in rows
         .iter()
         .enumerate()
         .skip(scroll)
         .take(usize::from(area.height))
     {
         let y = area.y + (index - scroll) as u16;
-        // 合成附件入口：一行固定高度的可点击行，不参与文本 token 与边框绘制。
-        if let PromptDisplayRow::Supplements {
-            parent_start,
-            count,
-        } = *display_row
-        {
-            let focused =
-                prompt.focus() == crate::app::prompt::PromptFocus::Supplements { parent_start };
-            let info = infos.get(parent_start).copied().flatten();
-            paint_supplements_entry(buf, area, y, count, focused, info);
-            if let Some(selection) = selection {
-                paint_selection(buf, area, y, index as u16, selection);
-            }
-            continue;
-        }
-        let PromptDisplayRow::Text {
-            line,
-            start: row_start,
-            end: row_end,
-        } = *display_row
-        else {
-            continue;
-        };
-        let row = VisualRow {
-            line,
-            start: row_start,
-            end: row_end,
-        };
         let line_tokens = tokens.get(row.line).map(Vec::as_slice).unwrap_or_default();
         let base = row.start - line_starts.get(row.line).copied().unwrap_or(row.start);
         let info = infos.get(row.line).copied().flatten();
-        let first = display
-            .get(index.wrapping_sub(1))
-            .is_none_or(|prev| prev.line() != row.line);
-        let last = display
-            .get(index + 1)
-            .is_none_or(|next| next.line() != row.line);
+        let first = index == 0 || rows[index - 1].line != row.line;
+        let last = index + 1 >= rows.len() || rows[index + 1].line != row.line;
         let role = block_row_role(info, first, last);
         let start_row = role == Some(BlockRole::Start);
+        let block_folded = folded.contains(&row.line);
         let text_start = area.x + block_gutter(info.is_some());
         let buttons_start = if start_row {
-            let labels = block_button_labels(info);
+            let labels = block_button_labels(info, block_folded);
             block_buttons_start(area, block_buttons_total(&labels))
         } else {
             area.right()
@@ -244,12 +199,21 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
             end_x: text_end,
             ellipsize: start_row,
         };
-        let painted = paint_row(buf, y, prompt.text(), &row, line_tokens, base, geometry);
+        let painted = paint_row(buf, y, prompt.text(), row, line_tokens, base, geometry);
         if let Some(selection) = selection {
             paint_selection(buf, area, y, index as u16, selection);
         }
         if let Some(info) = info {
-            paint_block_border(buf, area, y, info, role, painted, buttons_start);
+            paint_block_border(
+                buf,
+                area,
+                y,
+                info,
+                role,
+                block_folded,
+                painted,
+                buttons_start,
+            );
             block_rows.push((y, info.kind, info.status));
             if first && last && info.separator {
                 separator_rows.push((y, info.kind, info.status));
@@ -268,79 +232,6 @@ pub fn render(area: Rect, buf: &mut Buffer, prompt: &Prompt, selection: Option<&
         paint_placeholder(buf, area);
     }
     render_panels(buf, area, prompt);
-}
-
-/// 父任务末尾的合成附件入口行：`Supplements · N [open]`，聚焦时整行提亮并显示 `❯`。
-///
-/// 入口位于父任务块内部（结束边框之前），因此左右沿用父块边框与底色，
-/// 只替换中间内容；它不是可编辑文本行，不参与 token 着色。
-fn paint_supplements_entry(
-    buf: &mut Buffer,
-    area: Rect,
-    y: u16,
-    count: usize,
-    focused: bool,
-    info: Option<BlockLineInfo>,
-) {
-    let label = format!(
-        "{}{}{}{}",
-        text::SUPPLEMENTS_ENTRY_LABEL,
-        text::SUPPLEMENTS_ENTRY_SEPARATOR,
-        count,
-        text::SUPPLEMENTS_ENTRY_OPEN
-    );
-    let marker = if focused { "❯ " } else { "" };
-    // 整行先按父块底色铺底，再画左右边框，保持块结构连续。
-    let border = info
-        .map(|info| match info.kind {
-            BlockKind::Template => style::template_border(info.status),
-            BlockKind::Supple => style::supple_border(),
-        })
-        .unwrap_or_else(style::supple_border);
-    let bg = info
-        .map(|info| match info.kind {
-            BlockKind::Template => style::template_block_bg(info.status),
-            BlockKind::Supple => style::supple_block_bg(),
-        })
-        .unwrap_or_else(style::supple_block_bg);
-    for x in area.x..area.right() {
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.reset();
-            cell.set_char(' ');
-            cell.set_style(bg);
-        }
-    }
-    let row_style = if focused {
-        style::overlay_selection()
-    } else {
-        style::supple_border()
-    };
-    if info.is_some() {
-        for (x, symbol) in [(area.x, '│'), (area.right().saturating_sub(1), '│')] {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.reset();
-                cell.set_char(symbol);
-                cell.set_style(border);
-            }
-        }
-    }
-    let mut x = area
-        .x
-        .saturating_add(crate::layout::PROMPT_TEMPLATE_GUTTER_LEFT);
-    for ch in marker.chars().chain(label.chars()) {
-        let width = ch.width().unwrap_or(0);
-        if width == 0 {
-            continue;
-        }
-        if x.saturating_add(width as u16) > area.right() {
-            break;
-        }
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            cell.set_char(ch);
-            cell.set_style(row_style);
-        }
-        x = x.saturating_add(width as u16);
-    }
 }
 
 /// 空内容输入说明：内容区首行左侧暗色占位，超出宽度的部分裁剪。
@@ -381,17 +272,19 @@ pub struct TemplateButtonHit {
 /// 补充块操作按钮种类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockButton {
+    Fold,
     Copy,
     Clean,
     Delete,
 }
 
-/// 补充块操作按钮命中。
+/// 补充块操作按钮命中；`folded` 为绘制时的折叠态（决定折叠按钮字形）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockButtonHit {
     pub line: usize,
     pub kind: BlockKind,
     pub button: BlockButton,
+    pub folded: bool,
     pub rect: Rect,
 }
 
@@ -403,9 +296,13 @@ const TEMPLATE_BUTTONS: [TemplateBlockButton; 4] = [
     TemplateBlockButton::Delete,
 ];
 
-/// 补充块按钮组顺序：复制、清理、删除。
-const SUPPLE_BUTTONS: [BlockButton; 3] =
-    [BlockButton::Copy, BlockButton::Clean, BlockButton::Delete];
+/// 补充块按钮组顺序：折叠、复制、清理、删除。
+const SUPPLE_BUTTONS: [BlockButton; 4] = [
+    BlockButton::Fold,
+    BlockButton::Copy,
+    BlockButton::Clean,
+    BlockButton::Delete,
+];
 
 /// 块行左边框槽宽度：块行为 `PROMPT_TEMPLATE_GUTTER_LEFT`，其余为 0。
 fn block_gutter(block: bool) -> u16 {
@@ -426,8 +323,8 @@ fn block_row_role(info: Option<BlockLineInfo>, first: bool, last: bool) -> Optio
     })
 }
 
-/// 按钮组文案（按块类型与状态）。
-fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
+/// 按钮组文案（按块类型、状态与折叠态）。
+fn block_button_labels(info: Option<BlockLineInfo>, folded: bool) -> Vec<&'static str> {
     let Some(info) = info else {
         return Vec::new();
     };
@@ -435,11 +332,7 @@ fn block_button_labels(info: Option<BlockLineInfo>) -> Vec<&'static str> {
         BlockKind::Template => template_button_labels(info.status).to_vec(),
         BlockKind::Supple => SUPPLE_BUTTONS
             .iter()
-            .map(|button| match button {
-                BlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
-                BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
-                BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
-            })
+            .map(|button| block_button_label(*button, folded))
             .collect(),
     }
 }
@@ -480,15 +373,12 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let display = prompt.display_rows();
+    let rows = prompt.visual_rows();
     let infos = crate::app::markdown::template_line_infos(prompt.text());
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
-    for (index, row) in display.iter().enumerate() {
-        let Some((line, _, _)) = row.text() else {
-            continue;
-        };
-        let first = index == 0 || display[index - 1].line() != line;
+    for (index, row) in rows.iter().enumerate() {
+        let first = index == 0 || rows[index - 1].line != row.line;
         if !first {
             continue;
         }
@@ -498,7 +388,7 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
         if visible >= usize::from(area.height) {
             continue;
         }
-        let Some(info) = infos.get(line).copied().flatten() else {
+        let Some(info) = infos.get(row.line).copied().flatten() else {
             continue;
         };
         if info.role != crate::app::markdown::TemplateLineRole::Start {
@@ -511,7 +401,7 @@ pub fn template_buttons(prompt: &Prompt, area: Rect) -> Vec<TemplateButtonHit> {
         for (button, label) in TEMPLATE_BUTTONS.iter().zip(labels) {
             let width = label.width() as u16;
             hits.push(TemplateButtonHit {
-                line,
+                line: row.line,
                 button: *button,
                 status: info.status,
                 rect: Rect::new(x, y, width, 1),
@@ -539,15 +429,17 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
     if area.width == 0 || area.height == 0 {
         return Vec::new();
     }
-    let display = prompt.display_rows();
+    let rows = prompt.visual_rows();
     let infos = block_line_infos(prompt.text());
+    let folded: std::collections::BTreeSet<usize> = prompt
+        .folded_blocks()
+        .into_iter()
+        .map(|block| block.start_line)
+        .collect();
     let scroll = prompt.scroll();
     let mut hits = Vec::new();
-    for (index, row) in display.iter().enumerate() {
-        let Some((line, _, _)) = row.text() else {
-            continue;
-        };
-        let first = index == 0 || display[index - 1].line() != line;
+    for (index, row) in rows.iter().enumerate() {
+        let first = index == 0 || rows[index - 1].line != row.line;
         if !first {
             continue;
         }
@@ -557,13 +449,14 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
         if visible >= usize::from(area.height) {
             continue;
         }
-        let Some(info) = infos.get(line).copied().flatten() else {
+        let Some(info) = infos.get(row.line).copied().flatten() else {
             continue;
         };
         if info.role != BlockRole::Start || info.kind != BlockKind::Supple {
             continue;
         }
-        let labels = block_button_labels(Some(info));
+        let block_folded = folded.contains(&row.line);
+        let labels = block_button_labels(Some(info), block_folded);
         let start = block_buttons_start(area, block_buttons_total(&labels));
         let y = area.y + visible as u16;
         let buttons: &[BlockButton] = &SUPPLE_BUTTONS;
@@ -571,31 +464,16 @@ pub fn block_buttons(prompt: &Prompt, area: Rect) -> Vec<BlockButtonHit> {
         for (button, label) in buttons.iter().zip(labels) {
             let width = label.width() as u16;
             hits.push(BlockButtonHit {
-                line,
+                line: row.line,
                 kind: info.kind,
                 button: *button,
+                folded: block_folded,
                 rect: Rect::new(x, y, width, 1),
             });
             x = x.saturating_add(width + 1);
         }
     }
     hits
-}
-
-/// 合成附件入口行命中：返回父任务起始行。
-///
-/// 与渲染共用 `display_rows` 与滚动偏移，矩形完全一致；入口不当作可编辑文本。
-pub fn supplements_entry_at(prompt: &Prompt, area: Rect, column: u16, row: u16) -> Option<usize> {
-    if area.width == 0 || area.height == 0 || !area.contains((column, row).into()) {
-        return None;
-    }
-    let display = prompt.display_rows();
-    let scroll = prompt.scroll();
-    let index = scroll + usize::from(row - area.y);
-    match display.get(index).copied() {
-        Some(PromptDisplayRow::Supplements { parent_start, .. }) => Some(parent_start),
-        _ => None,
-    }
 }
 
 /// 命中补充块操作按钮；未命中返回 None。
@@ -620,9 +498,16 @@ fn template_button_label(button: TemplateBlockButton, status: TemplateStatus) ->
     }
 }
 
-/// 补充块按钮文案。
-fn block_button_label(button: BlockButton) -> &'static str {
+/// 补充块按钮文案；折叠按钮按当前折叠态取字形。
+fn block_button_label(button: BlockButton, folded: bool) -> &'static str {
     match button {
+        BlockButton::Fold => {
+            if folded {
+                text::SUPPLE_BUTTON_FOLD_CLOSED
+            } else {
+                text::SUPPLE_BUTTON_FOLD_OPEN
+            }
+        }
         BlockButton::Copy => text::TEMPLATE_BUTTON_COPY,
         BlockButton::Clean => text::SUPPLE_BUTTON_CLEAN,
         BlockButton::Delete => text::SUPPLE_BUTTON_DEL,
@@ -635,6 +520,7 @@ fn template_button_labels(status: TemplateStatus) -> [&'static str; 4] {
 }
 
 /// 绘制块边框：左槽 `╭─`/`│ `/`╰─`、右槽 `╮`/`│`/`╯`；
+/// 折叠的补充块只有起始行，改用 `├─` / `┤` 画成自成一行的紧凑标题。
 /// 起始行顶边与结束行底边以 `─` 补满文本之后的空间（按钮组由后续绘制覆盖）。
 fn paint_block_border(
     buf: &mut Buffer,
@@ -642,6 +528,7 @@ fn paint_block_border(
     y: u16,
     info: BlockLineInfo,
     role: Option<BlockRole>,
+    folded: bool,
     painted: u16,
     buttons_start: u16,
 ) {
@@ -659,6 +546,14 @@ fn paint_block_border(
         }
     };
     match role {
+        Some(BlockRole::Start) if folded => {
+            put(left, '├');
+            put(left + 1, '─');
+            put(right, '┤');
+            for x in painted..buttons_start.min(right) {
+                put(x, '─');
+            }
+        }
         Some(BlockRole::Start) => {
             put(left, '╭');
             put(left + 1, '─');
@@ -754,7 +649,7 @@ fn render_template_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
 /// 绘制补充块操作按钮。
 fn render_block_buttons(buf: &mut Buffer, area: Rect, prompt: &Prompt) {
     for hit in block_buttons(prompt, area) {
-        let label = block_button_label(hit.button);
+        let label = block_button_label(hit.button, hit.folded);
         let button_style = style::block_button();
         for (offset, symbol) in label.chars().enumerate() {
             if let Some(cell) = buf.cell_mut((hit.rect.x + offset as u16, hit.rect.y)) {

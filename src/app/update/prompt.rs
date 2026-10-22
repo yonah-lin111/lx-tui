@@ -23,27 +23,6 @@ use crate::app::prompt::{
 use crate::app::state::AppState;
 use crate::db::{FolderRecord, PromptRecord};
 
-/// 切换主 Prompt 的集中/原文展示：只在编辑视图、无浮层与候选面板时生效。
-///
-/// 不清空撤销历史、不置脏；切换后光标落入隐藏附件时由 `Prompt` 自行归一到附件入口。
-pub fn toggle_prompt_presentation(state: &mut AppState) {
-    if state.overlay.is_some() || state.prompt.paste_panel().is_some() {
-        return;
-    }
-    if prompt_tree_mode(state) || state.prompt.panel_open() {
-        return;
-    }
-    state.prompt.toggle_presentation();
-}
-
-/// 打开当前父任务的附件列表（附件入口焦点按 Enter 时）。
-pub fn open_supplements_at_focus(state: &mut AppState) -> bool {
-    if state.overlay.is_some() {
-        return false;
-    }
-    super::supplements::open_supplements(state)
-}
-
 /// 用 DB 记录整体替换指定工作区的树（`key` 为该树对应的 prompt 键）；保持已有折叠状态。
 ///
 /// 重载以数据库为正文真源，但不覆盖未确认页：内存中该页仍有待保存标记时保留内存正文，

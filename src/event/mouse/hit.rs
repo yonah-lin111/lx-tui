@@ -313,6 +313,9 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
     use crate::app::markdown::BlockKind;
     use ui::prompt::BlockButton;
     match (hit.kind, hit.button) {
+        (BlockKind::Supple, BlockButton::Fold) => {
+            state.prompt.toggle_supple_fold(hit.line);
+        }
         (BlockKind::Supple, BlockButton::Copy) => {
             if let Some(text) = update::copy_supple_block(state, hit.line) {
                 copy_with_toast(state, &text);

@@ -69,7 +69,7 @@ impl Prompt {
         let insertion = markdown::refer_insertion(candidate);
         self.break_group();
         self.record(EditKind::Other);
-        self.text.replace_range(range.clone(), &insertion);
+        self.splice_text(range.start, range.end, &insertion);
         self.cursor = range.start + insertion.len();
         self.panel_suppressed = true;
         self.scroll_cursor_into_view();

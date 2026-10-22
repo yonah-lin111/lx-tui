@@ -266,7 +266,7 @@ impl Prompt {
         }
         self.break_group();
         self.record(EditKind::Other);
-        self.text.replace_range(start..end, insert);
+        self.splice_text(start, end, insert);
         self.cursor = start + insert.len();
         self.clear_other_panels();
         self.scroll_cursor_into_view();
@@ -281,7 +281,7 @@ impl Prompt {
         {
             return false;
         }
-        self.text.replace_range(range.clone(), insert);
+        self.splice_text(range.start, range.end, insert);
         self.cursor = range.start + insert.len();
         self.clear_other_panels();
         self.scroll_cursor_into_view();

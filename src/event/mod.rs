@@ -470,8 +470,6 @@ fn handle_terminal_event(
 ) {
     match event {
         TerminalEvent::Key(key) => {
-            // 先按当前几何刷新模态可编辑性，再路由按键（小屏时只允许退出）。
-            update::sync_supplement_geometry(state, geometry.screen);
             input::handle_key_event(key, state, sessions, &geometry.view, dirty);
         }
         TerminalEvent::Paste(text) => {
@@ -482,8 +480,6 @@ fn handle_terminal_event(
         }
         TerminalEvent::FocusGained | TerminalEvent::FocusLost | TerminalEvent::Resize(..) => {}
     }
-    // 打开/切换附件模态后立即按几何同步（草稿正文尺寸、列表窗口、可编辑性）。
-    update::sync_supplement_geometry(state, geometry.screen);
 }
 
 fn handle_app_event(

@@ -349,17 +349,9 @@ pub fn prompt_selection_text(state: &AppState) -> Option<String> {
 }
 
 /// prompt 复制文本：优先选区；无选区时复制全文；无内容返回 None。
-///
-/// 集中视图里选中合成附件入口或空白只得到「有选区但无可复制文字」，
-/// 不能回落为全文（否则会把整页含全部隐藏附件复制出去）。
 pub fn prompt_copy_text(state: &AppState) -> Option<String> {
     if let Some(text) = prompt_selection_text(state) {
         return Some(text);
-    }
-    if state.selection.is_some_and(|selection| {
-        selection.pane() == state.prompt.id() && selection.range().is_some()
-    }) {
-        return None;
     }
     (!state.prompt.text().is_empty()).then(|| state.prompt.text().to_string())
 }

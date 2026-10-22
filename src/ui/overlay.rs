@@ -5,7 +5,6 @@ pub mod menu;
 mod page_menu;
 mod referenced;
 pub mod save_draft;
-pub mod supplements;
 mod worktree;
 
 pub use dialog::*;
@@ -18,12 +17,6 @@ pub use referenced::{
     referenced_search_layout,
 };
 pub use save_draft::*;
-pub use supplements::{
-    SupplementButton, SupplementLayout, detail_body_rect, list_row_at, list_rows,
-    render as render_supplements, supplement_button_at, supplement_confirm_button_at,
-    supplement_unsaved_button_at, supplements_editable, supplements_layout, supplements_shell,
-    title_row_at,
-};
 pub use worktree::{
     WorktreeDialogButton, worktree_dialog_button_at, worktree_dialog_entry_at,
     worktree_dialog_max_rows, worktree_dialog_shell, worktree_dialog_visible_start,
@@ -103,7 +96,6 @@ pub fn render(frame: &mut Frame<'_>, screen: Rect, state: &AppState) -> Option<(
             dialog::render_referenced_delete(frame, screen, delete);
             None
         }
-        Overlay::Supplements(session) => supplements::render(frame, screen, session),
     }
 }
 

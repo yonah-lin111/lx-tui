@@ -2699,6 +2699,10 @@ fn slash_supplement_offered_inside_template_and_inserts_subblock() {
         "{}",
         prompt.text()
     );
+    assert!(
+        prompt.folded_blocks().is_empty(),
+        "新建补充块默认展开，光标落在标题内可见"
+    );
     assert_eq!(
         markdown::block_context(
             prompt.text(),

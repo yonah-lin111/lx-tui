@@ -64,8 +64,7 @@ impl Prompt {
         self.panel = None;
         self.break_group();
         self.record(EditKind::Other);
-        self.text
-            .replace_range(trigger.from..trigger.to, &insertion.text);
+        self.splice_text(trigger.from, trigger.to, &insertion.text);
         self.cursor = trigger.from + insertion.cursor;
         self.panel_suppressed = true;
         self.scroll_cursor_into_view();
@@ -80,36 +79,6 @@ impl Prompt {
         self.panel = None;
         self.panel_suppressed = true;
         true
-    }
-
-    /// 是否有任一候选面板打开（提及/块/斜杠/引用/粘贴）。
-    pub fn panel_open(&self) -> bool {
-        self.mention.view_open()
-            || self.panel.is_some()
-            || self.slash.is_some()
-            || self.refer.is_some()
-            || self.paste.panel().is_some()
-    }
-
-    /// 关闭当前候选面板且不改文本；返回是否有关闭动作。
-    pub fn panel_escape_key(&mut self) -> bool {
-        if self.paste.panel().is_some() {
-            self.paste_cancel();
-            return true;
-        }
-        if self.mention.view_open() {
-            return self.mention_escape();
-        }
-        if self.refer.is_some() {
-            return self.refer_escape();
-        }
-        if self.slash.is_some() {
-            return self.slash_escape();
-        }
-        if self.panel.is_some() {
-            return self.panel_escape();
-        }
-        false
     }
 
     /// 当前斜杠命令面板；未打开时为 None。
@@ -224,27 +193,6 @@ impl Prompt {
         self.slash_confirm()
     }
 
-    /// 斜杠命令面板当前高亮条目的补充块定义（命令名、标题、正文）；
-    /// 非补充块条目或面板未打开返回 None。
-    pub fn slash_supple_draft(&self) -> Option<(String, Option<String>, String)> {
-        let panel = self.slash.as_ref()?;
-        let item = panel.items().get(panel.active())?;
-        match &item.insertion {
-            markdown::SlashInsertion::SuppleBlock {
-                command,
-                title,
-                body,
-            } => Some((command.clone(), title.clone(), body.clone())),
-            _ => None,
-        }
-    }
-
-    /// 斜杠命令面板当前触发区间（整行）；面板未打开返回 None。
-    pub fn slash_trigger_range(&self) -> Option<std::ops::Range<usize>> {
-        let trigger = self.slash.as_ref()?.trigger();
-        (trigger.line_start < trigger.line_end).then_some(trigger.line_start..trigger.line_end)
-    }
-
     /// 斜杠命令面板确认：内置/自定义命令整行替换，`/gitWorkTree` 打开二级选择器，
     /// 选择器确认把分支写回块结束行上方的 `{wt:}` 行；返回是否消费。
     pub fn slash_confirm(&mut self) -> bool {
@@ -277,8 +225,12 @@ impl Prompt {
                 self.slash = None;
                 self.break_group();
                 self.record(EditKind::Other);
-                self.text
-                    .replace_range(trigger.line_start..trigger.line_end, &content);
+                let supple = content.starts_with("+++");
+                self.splice_text(trigger.line_start, trigger.line_end, &content);
+                if supple {
+                    // 新建补充块默认展开：光标落在标题内，折叠会把它藏起来。
+                    self.expanded_supplements.insert(trigger.line_start);
+                }
                 self.cursor = trigger.line_start + cursor;
                 self.panel_suppressed = true;
                 self.scroll_cursor_into_view();
@@ -352,7 +304,7 @@ impl Prompt {
             if range.start > range.end || range.end > self.text.len() {
                 continue;
             }
-            self.text.replace_range(range.clone(), &replacement);
+            self.splice_text(range.start, range.end, &replacement);
             if cursor >= range.end {
                 cursor = cursor - (range.end - range.start) + replacement.len();
             } else if cursor > range.start {
@@ -375,8 +327,7 @@ impl Prompt {
         self.break_group();
         self.record(EditKind::Other);
         let line = markdown::WORKTREE_COMMAND_LINE.to_string();
-        self.text
-            .replace_range(trigger.line_start..trigger.line_end, &line);
+        self.splice_text(trigger.line_start, trigger.line_end, &line);
         self.cursor = trigger.line_start + line.len();
         self.scroll_cursor_into_view();
         let echo = markdown::SlashTrigger {

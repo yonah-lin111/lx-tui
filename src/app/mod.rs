@@ -9,7 +9,6 @@ pub mod prompt;
 pub mod referenced;
 pub mod selection;
 pub mod state;
-pub mod supplements;
 pub mod toast;
 pub mod tooltip;
 pub mod trust;

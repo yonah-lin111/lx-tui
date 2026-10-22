@@ -94,7 +94,7 @@ impl Prompt {
     /// 替换字节区间并按区间位置调整光标（区间之后的偏移平移，区间内钳到插入后）；
     /// 调用方负责记录撤销快照。
     pub(super) fn replace_span(&mut self, from: usize, to: usize, replacement: &str) {
-        self.text.replace_range(from..to, replacement);
+        self.splice_text(from, to, replacement);
         self.cursor = if self.cursor >= to {
             self.cursor - (to - from) + replacement.len()
         } else if self.cursor > from {

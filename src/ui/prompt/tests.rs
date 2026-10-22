@@ -1236,7 +1236,7 @@ fn supple_block_overrides_parent_template_colors() {
             "&&& x --end",
         ),
     );
-    prompt.set_presentation(crate::app::prompt::PromptPresentation::Source);
+    assert!(prompt.toggle_supple_fold(2), "展开才能看到补充块正文");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     assert_eq!(buf[(0, 0)].fg, Color::LightBlue, "父块 todo 边框");
@@ -1244,16 +1244,48 @@ fn supple_block_overrides_parent_template_colors() {
     assert_eq!(buf[(2, 3)].bg, Color::Rgb(46, 32, 54), "+++ 覆盖父底色");
 
     let hits = block_buttons(&prompt, area);
-    assert_eq!(hits.len(), 3, "补充块复制、清理与删除三个按钮");
+    assert_eq!(hits.len(), 4, "补充块折叠、复制、清理与删除四个按钮");
     assert!(hits.iter().all(|hit| hit.kind == BlockKind::Supple));
-    assert_eq!(hits[0].button, BlockButton::Copy);
-    assert_eq!(hits[1].button, BlockButton::Clean);
-    assert_eq!(hits[2].button, BlockButton::Delete);
-    let hit = hits[1];
+    assert_eq!(hits[0].button, BlockButton::Fold);
+    assert_eq!(hits[1].button, BlockButton::Copy);
+    assert_eq!(hits[2].button, BlockButton::Clean);
+    assert_eq!(hits[3].button, BlockButton::Delete);
+    let hit = hits[2];
     assert_eq!(
         block_button_at(&prompt, area, hit.rect.x, hit.rect.y).map(|hit| hit.button),
         Some(BlockButton::Clean)
     );
+}
+
+#[test]
+fn folded_supplement_renders_compact_header_and_toggles_icon() {
+    let area = Rect::new(0, 0, 40, 8);
+    let mut prompt = prompt(
+        40,
+        8,
+        "&&& x --start\n+++ supplement --start\n{title: }\nbody\n+++ supplement --end\n&&& x --end",
+    );
+    let row_text = |buf: &Buffer, y: u16| -> String {
+        (area.x..area.right())
+            .map(|x| buf[(x, y)].symbol())
+            .collect()
+    };
+
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    assert_eq!(buf[(0, 1)].symbol(), "├");
+    assert_eq!(buf[(39, 1)].symbol(), "┤");
+    let row = row_text(&buf, 1);
+    assert!(row.contains("[▸]"), "{row}");
+    assert!(!(0..8).any(|y| row_text(&buf, y).contains("{title: }")));
+
+    assert!(prompt.toggle_supple_fold(1));
+    let mut buf = Buffer::empty(area);
+    render(area, &mut buf, &prompt, None);
+    assert_eq!(buf[(0, 1)].symbol(), "╭");
+    let row = row_text(&buf, 1);
+    assert!(row.contains("[▾]"), "{row}");
+    assert!((0..8).any(|y| row_text(&buf, y).contains("{title: }")));
 }
 
 #[test]
@@ -1302,7 +1334,7 @@ fn supple_block_renders_title_separator_like_template() {
     let area = Rect::new(0, 0, 40, 12);
     let text = "&&& x --start\n{title: }\n\n+++ supplement --start\n{title: }\n\n## S\n+++ supplement --end\n&&& x --end";
     let mut prompt = prompt(40, 12, text);
-    prompt.set_presentation(crate::app::prompt::PromptPresentation::Source);
+    assert!(prompt.toggle_supple_fold(3), "展开才能看到标题分隔行");
     let mut buf = Buffer::empty(area);
     render(area, &mut buf, &prompt, None);
     assert_full_width_separator(&buf, 40, 5);
@@ -1681,126 +1713,5 @@ fn selection_reverse_keeps_inline_code_foreground() {
         buf[(3, 0)].fg,
         Color::LightRed,
         "选区反显不覆盖行内代码前景"
-    );
-}
-
-#[test]
-fn compact_view_hides_supplement_body_and_draws_one_entry() {
-    let area = Rect::new(0, 0, 50, 10);
-    let text = concat!(
-        "&&& a --start\n",
-        "body\n",
-        "+++ supplement --start\n",
-        "{title: T}\n",
-        "\n",
-        "hidden-body\n",
-        "+++ supplement --end\n",
-        "&&& a --end",
-    );
-    let prompt = prompt(50, 10, text);
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
-    let drawn: String = (0..area.height)
-        .map(|y| {
-            (0..area.width)
-                .map(|x| buf[(x, y)].symbol())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(!drawn.contains("hidden-body"), "隐藏附件不绘制: {drawn}");
-    assert!(drawn.contains("Supplements"), "入口行可见: {drawn}");
-}
-
-#[test]
-fn source_view_draws_hidden_supplement_body() {
-    let area = Rect::new(0, 0, 50, 10);
-    let text = concat!(
-        "&&& a --start\n",
-        "body\n",
-        "+++ supplement --start\n",
-        "{title: T}\n",
-        "\n",
-        "visible-body\n",
-        "+++ supplement --end\n",
-        "&&& a --end",
-    );
-    let mut prompt = prompt(50, 10, text);
-    prompt.set_presentation(crate::app::prompt::PromptPresentation::Source);
-    let mut buf = Buffer::empty(area);
-    render(area, &mut buf, &prompt, None);
-    let drawn: String = (0..area.height)
-        .map(|y| {
-            (0..area.width)
-                .map(|x| buf[(x, y)].symbol())
-                .collect::<String>()
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(drawn.contains("visible-body"), "原文视图完整显示: {drawn}");
-    assert!(!drawn.contains("Supplements ·"), "原文视图无合成入口");
-}
-
-#[test]
-fn entry_hit_maps_to_parent_and_ignores_neighbouring_rows() {
-    let area = Rect::new(0, 0, 50, 10);
-    let text = concat!(
-        "&&& a --start\n",
-        "body\n",
-        "+++ supplement --start\n",
-        "{title: T}\n",
-        "\n",
-        "hidden\n",
-        "+++ supplement --end\n",
-        "&&& a --end",
-    );
-    let prompt = prompt(50, 10, text);
-    let rows = prompt.display_rows();
-    let entry_row = rows
-        .iter()
-        .position(|row| {
-            matches!(
-                row,
-                crate::app::prompt::PromptDisplayRow::Supplements { .. }
-            )
-        })
-        .expect("entry row") as u16;
-    assert_eq!(
-        supplements_entry_at(&prompt, area, area.x + 2, area.y + entry_row),
-        Some(0)
-    );
-    assert_eq!(
-        supplements_entry_at(&prompt, area, area.x + 2, area.y + entry_row + 1),
-        None
-    );
-}
-
-#[test]
-fn entry_row_follows_scroll_offset() {
-    let area = Rect::new(0, 0, 50, 3);
-    let text = concat!(
-        "line1\nline2\nline3\n",
-        "&&& a --start\n",
-        "+++ supplement --start\n",
-        "hidden\n",
-        "+++ supplement --end\n",
-        "&&& a --end",
-    );
-    let mut prompt = prompt(50, 3, text);
-    prompt.scroll_to(4);
-    let display = prompt.display_rows();
-    let entry = display
-        .iter()
-        .position(|row| {
-            matches!(
-                row,
-                crate::app::prompt::PromptDisplayRow::Supplements { .. }
-            )
-        })
-        .expect("entry");
-    let expected = u16::try_from(entry - prompt.scroll()).expect("visible");
-    assert!(
-        supplements_entry_at(&prompt, area, area.x + 2, area.y + expected).is_some(),
-        "滚动后命中仍与绘制行一致"
     );
 }
