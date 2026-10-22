@@ -264,12 +264,12 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     rows
 }
 
-/// 折叠态剩余行数行在该调用块内的偏移（块首 = 0）；没有提示行时为 None。
+/// 折叠态内容行数（文件头 + 预览 + 剩余行数提示），即 hover 命中区的高度。
 ///
-/// 这是文件差异卡片**唯一**的 hover 提亮区域：路径与正文不随鼠标变色。
-pub(super) fn hint_offset(call: &ToolCallView, width: u16) -> Option<usize> {
-    (remaining_lines(call, width) > 0)
-        .then(|| layout(call, width, false, false).len().saturating_sub(1))
+/// 命中区覆盖**整块折叠内容**（用户说的是「hover diff 块」）；提亮仍然只发生在
+/// 末行提示上，见 [`layout`]。
+pub(super) fn folded_rows(call: &ToolCallView, width: u16) -> usize {
+    layout(call, width, false, false).len()
 }
 
 /// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。

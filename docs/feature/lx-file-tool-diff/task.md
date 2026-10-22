@@ -588,3 +588,17 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
       `command_hint_row_lifts_on_hover`、`file_diff_hover_region_covers_only_the_hint_row`
       （含「路径不随 hover 变色」与「提示行升为默认前景」两侧断言）。
   fmt / clippy -D warnings / cargo test（2843 passed）全部通过。
+
+## 27. 第十七轮：修 hover diff 块时提示行不亮
+
+用户实测：hover diff 块时对应的 `… 1 more line` 没有高亮。
+
+- [x] 根因：上一轮把 diff 卡的 hover **命中区**收成了「提示行单行」。指针落在文件头或
+      预览上时整块根本不产生 hover 目标，提示行自然不会亮——命中区被裁得比提亮对象还小。
+- [x] 修法：命中区回到**整块折叠内容**（`tool::FoldRegion` 的 diff 分支 offset 0、
+      rows = `file_diff::folded_rows`），提亮仍只作用于提示行（由 `draw` 的 `hovered`
+      传给 `layout`）。`hint_offset` 换成 `folded_rows`，少一层偏移换算。
+- [x] 测试：`file_diff_hover_region_is_the_whole_folded_block_but_only_the_hint_lifts`：
+      断言命中区 = 整块折叠内容、块 = 标题 + 折叠内容、悬停时**路径与正文样式不变、
+      提示行升为默认前景**。
+  fmt / clippy -D warnings / cargo test（2843 passed）全部通过。

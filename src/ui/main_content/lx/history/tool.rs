@@ -243,18 +243,12 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
     group
 }
 
-/// 文件差异卡片折叠态「… N more lines」行**在该调用块内**的偏移；没有时 None。
+/// 折叠态 hover 的**命中区**：相对该调用块的内容首行（标题在块外）从哪一行开始、占几行。
 ///
-/// 它是 diff 卡唯一响应 hover 的行（路径与正文始终不变色）。
-pub(super) fn diff_hint_offset(call: &ToolCallView, width: u16) -> Option<usize> {
-    file_diff::hint_offset(call, width)
-}
-
-/// 折叠态可提亮的区域：**相对该调用块的内容首行**（标题在块外）从哪一行开始、占几行。
-///
-/// 各卡片自报口径：
-/// - 普通工具 / 命令卡片：整个折叠内容（含末尾的 `… N more lines` 提示行）；
-/// - 文件差异卡片：**只有**提示行（路径与正文不随鼠标变色，见 [`diff_hint_offset`]）；
+/// 命中区与「哪一行提亮」是两件事：
+/// - 普通工具 / 命令卡片：整段折叠内容（含末尾的 `… N more lines` 提示行），逐行提亮；
+/// - 文件差异卡片：**命中区是整块折叠内容**（鼠标扫过块内任意一行都算 hover），但
+///   渲染时只提亮 `… N more lines` 那一行（路径与正文不随鼠标变色）；
 /// - 计划卡片：没有折叠内容。
 pub(super) struct FoldRegion {
     /// 折叠区相对内容首行的起始偏移（0 = 内容第一行）。
@@ -280,9 +274,11 @@ pub(super) fn fold_region(call: &ToolCallView, width: u16) -> FoldRegion {
         },
         Some(crate::app::state::ToolDetailView::Plan(_)) => FoldRegion::NONE,
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
+            // 命中整块折叠内容：用户是「hover diff 块」，不是精准停在提示行上。
+            // 提亮仍然只发生在提示行（见 `file_diff::layout`）。
             FoldRegion {
-                offset: diff_hint_offset(call, width).unwrap_or(0),
-                rows: usize::from(diff_hint_offset(call, width).is_some()),
+                offset: 0,
+                rows: file_diff::folded_rows(call, width),
             }
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => FoldRegion {
