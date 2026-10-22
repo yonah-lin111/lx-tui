@@ -330,6 +330,54 @@ CREATE INDEX IF NOT EXISTS idx_agent_process_session
     ON agent_process(chat_session_id, started_at_ms, id);
 "#;
 
+/// v12：会话模型列改为可空（纯本地命令会话无模型），消息增加 kind 与命令记录。
+///
+/// SQLite 无法移除 NOT NULL，只能整表重建；与 v5 一样在关闭外键的独立事务中完成，
+/// 保留主键、external ID、索引与全部外键数据。消息列用 `ALTER TABLE` 追加。
+const SCHEMA_V12_SESSION: &str = r#"
+DROP TABLE IF EXISTS agent_session_v12;
+
+CREATE TABLE agent_session_v12 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    workspace_id TEXT NOT NULL REFERENCES workspace(external_id) ON DELETE CASCADE,
+    source TEXT NOT NULL DEFAULT 'native' CHECK (source IN ('native', 'subagent')),
+    title TEXT NOT NULL,
+    first_user_message TEXT NOT NULL DEFAULT '',
+    model_provider TEXT,
+    model_id TEXT,
+    variant TEXT,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'closed')),
+    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)),
+    agent_nickname TEXT,
+    agent_role TEXT,
+    agent_path TEXT,
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
+    last_message_at_ms INTEGER NOT NULL,
+    total_input_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_input_tokens >= 0),
+    total_output_tokens INTEGER NOT NULL DEFAULT 0 CHECK (total_output_tokens >= 0)
+);
+
+INSERT INTO agent_session_v12
+    (id, external_id, workspace_id, source, title, first_user_message,
+     model_provider, model_id, variant, status, archived, agent_nickname, agent_role,
+     agent_path, created_at_ms, updated_at_ms, last_message_at_ms,
+     total_input_tokens, total_output_tokens)
+SELECT id, external_id, workspace_id, source, title, first_user_message,
+       model_provider, model_id, variant, status, archived, agent_nickname, agent_role,
+       agent_path, created_at_ms, updated_at_ms, last_message_at_ms,
+       total_input_tokens, total_output_tokens
+FROM agent_session;
+
+DROP TABLE agent_session;
+
+ALTER TABLE agent_session_v12 RENAME TO agent_session;
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_workspace_recent
+    ON agent_session(workspace_id, archived, updated_at_ms DESC, id DESC);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -413,10 +461,46 @@ impl Database {
             if version < 11 {
                 transaction.execute_batch(SCHEMA_V11)?;
             }
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            // v12 需要关闭外键重建表，不能在本事务内完成：这里只推进到 v11，
+            // 随后由 `migrate_v12` 在独立事务中完成结构与版本号。
+            transaction.pragma_update(None, "user_version", 11)?;
             transaction.commit()?;
         }
+        if version < 12 {
+            self.migrate_v12()?;
+        }
         Ok(())
+    }
+
+    /// v12：会话模型三列可空 + 消息 kind/命令 JSON。
+    ///
+    /// 重建 `agent_session` 时关闭外键（否则 DROP 会级联清空消息、工具与进程），
+    /// 完成后自检外键并在同一事务内把版本推到当前值；失败保持 v11 便于重试。
+    fn migrate_v12(&mut self) -> Result<()> {
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        let result = (|| -> Result<()> {
+            let transaction = self.conn.transaction()?;
+            if session_model_not_null(&transaction)? {
+                transaction.execute_batch(SCHEMA_V12_SESSION)?;
+            }
+            if !column_exists(&transaction, "agent_message", "kind")? {
+                transaction.execute_batch(
+                    "ALTER TABLE agent_message
+                         ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
+                         CHECK (kind IN ('chat', 'user_shell'));",
+                )?;
+            }
+            if !column_exists(&transaction, "agent_message", "user_shell_json")? {
+                transaction
+                    .execute_batch("ALTER TABLE agent_message ADD COLUMN user_shell_json TEXT;")?;
+            }
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
+            Ok(())
+        })();
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        result
     }
 
     /// v5：重建 `workspace_prompt` 去 `status` 列（页表外键指向重建后的同名表）。
@@ -481,6 +565,17 @@ fn ensure_no_foreign_key_violation(connection: &Connection) -> Result<()> {
         return Err(DbError::ForeignKeyViolation);
     }
     Ok(())
+}
+
+/// `agent_session.model_provider` 是否仍带 NOT NULL（需要 v12 重建）。
+///
+/// 表不存在（全新库尚未建表）时返回 false：建表后由同一套列检查补齐。
+fn session_model_not_null(connection: &Connection) -> Result<bool> {
+    let mut statement = connection.prepare("PRAGMA table_info(agent_session)")?;
+    let mut rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(3)?))
+    })?;
+    Ok(rows.any(|row| row.is_ok_and(|(name, not_null)| name == "model_provider" && not_null == 1)))
 }
 
 /// 表是否已有指定列（`PRAGMA table_info`）；仅迁移期使用。

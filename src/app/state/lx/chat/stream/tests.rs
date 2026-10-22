@@ -13,6 +13,8 @@ fn streaming_chat() -> LxChat {
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: Vec::new(),
         model_label: None,
         error_code: None,

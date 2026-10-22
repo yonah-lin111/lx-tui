@@ -26,6 +26,8 @@ fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageVie
         role: role.into(),
         status: status.into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: parts
             .into_iter()
             .enumerate()

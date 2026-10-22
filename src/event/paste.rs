@@ -51,6 +51,11 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if pane.view != PaneView::Lx {
         return false;
     }
+    // Shell 模式：路径就是命令字面量，不弹参照面板、不改写引用。
+    if pane.lx.shell_mode() {
+        pane.lx.insert_str(&text);
+        return true;
+    }
     if let Some(paths) = crate::platform::parse_path_text(&text)
         && let Some(candidates) = candidates_from_paths(&paths)
     {

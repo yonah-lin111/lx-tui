@@ -44,6 +44,29 @@ pub fn handle_process_event(
             ..
         } => (*session_id, origin_call_id.clone()),
     };
+    // 本地命令：按 origin 消息 ID 分流，不进入模型工具卡片路径。
+    if streams.user_shell.is_origin(&origin_call_id) {
+        let terminal = matches!(event, ProcessUiEvent::Exited { .. });
+        let Some(manager) = streams.user_shell.manager_of(&origin_call_id) else {
+            return false;
+        };
+        let snapshot = {
+            manager.acknowledge_output(session_id);
+            manager.snapshot(session_id)
+        };
+        let Some(snapshot) = snapshot else {
+            return false;
+        };
+        return super::user_shell::handle_process_event(
+            state,
+            streams,
+            persistence,
+            &origin_call_id,
+            &snapshot,
+            terminal,
+        )
+        .unwrap_or(false);
+    }
     let Some(runtime) = streams.runtime_by_session_id(session_id) else {
         // 旧代次/已清理会话的迟到事件：不改状态、不复活进程。
         return false;
@@ -160,7 +183,7 @@ pub fn persist_terminal_snapshots(
 }
 
 /// 写入一次输出/终态快照（revision 自增，较旧写入零行）。
-fn persist_snapshot(
+pub(super) fn persist_snapshot(
     persistence: &Persistence,
     workspace: &Path,
     epoch: &str,

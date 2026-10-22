@@ -30,6 +30,8 @@ fn text_message(id: &str, role: &str, content: &str) -> ChatMessageView {
         role: role.into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![AssistantStepView::Part {
             position: 0,
             part: ChatPartView {

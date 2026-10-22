@@ -85,7 +85,7 @@ fn first_turn_creates_session_user_assistant_and_preview() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].title, "你好，世界");
     assert_eq!(sessions[0].first_user_message, "你好，世界");
-    assert_eq!(sessions[0].model_provider, "example");
+    assert_eq!(sessions[0].model_provider.as_deref(), Some("example"));
 }
 
 #[test]

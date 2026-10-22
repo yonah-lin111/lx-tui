@@ -53,6 +53,16 @@ impl Persistence {
                     }
                 }
                 // 不自动重跑任何工具：只把遗留调用标为 interrupted，结果字段不伪造成功。
+                // 本地命令同样只标中断：保留已保存输出，绝不重跑。
+                match db.recover_interrupted_user_shells() {
+                    Ok(0) => {}
+                    Ok(recovered) => {
+                        tracing::info!(recovered, "recovered interrupted user shells");
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "recovering interrupted user shells failed");
+                    }
+                }
                 match db.recover_interrupted_tool_calls() {
                     Ok(0) => {}
                     Ok(recovered) => {
@@ -84,6 +94,12 @@ impl Persistence {
     /// 使用指定数据库（测试）。
     pub fn with_database(db: Database) -> Self {
         Self { db: Some(db) }
+    }
+
+    /// 无持久化模式（测试 DB 失败路径）。
+    #[cfg(test)]
+    pub fn without_database() -> Self {
+        Self { db: None }
     }
 
     /// 数据库是否可用（无持久化模式下为 false）。
@@ -151,6 +167,39 @@ impl Persistence {
     ) -> super::Result<()> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         db.checkpoint(workspace, assistant_id, parts)
+    }
+
+    /// 预登记一条本地命令；成功后才允许 spawn。
+    pub fn begin_user_shell(
+        &self,
+        workspace: &Path,
+        session_id: Option<&str>,
+        record: &crate::db::chat::UserShellRecord,
+    ) -> super::Result<crate::db::chat::UserShellCommitted> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.begin_user_shell(workspace, session_id, record)
+    }
+
+    /// 写入命令 checkpoint / 终态（幂等，revision 单调）。
+    pub fn update_user_shell(
+        &self,
+        workspace: &Path,
+        message_id: &str,
+        record: &crate::db::chat::UserShellRecord,
+    ) -> super::Result<bool> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.update_user_shell(workspace, message_id, record)
+    }
+
+    /// 读取会话在某个 sequence 之后的本地命令（模型下一次采样前增量吸收）。
+    pub fn load_user_shells_since(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        after_sequence: i64,
+    ) -> super::Result<Vec<crate::db::chat::ChatMessage>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.load_user_shells_since(workspace, session_id, after_sequence)
     }
 
     /// 登记新建进程（`starting`）；失败时调用方必须停止刚 spawn 的进程。
@@ -726,6 +775,10 @@ impl Persistence {
                 tracing::warn!("process effect reached persistence pump");
                 false
             }
+            Effect::BeginUserShell { .. } | Effect::CancelUserShells { .. } => {
+                tracing::warn!("user shell effect reached persistence pump");
+                false
+            }
         }
     }
 
@@ -862,6 +915,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
             | Effect::ListSessionProcesses { .. }
             | Effect::StopSessionProcess { .. }
+            | Effect::BeginUserShell { .. }
+            | Effect::CancelUserShells { .. }
     )
 }
 

@@ -202,4 +202,22 @@ pub enum Effect {
     /// 内存历史已在 `on_turn_committed` 同步更新；本效应只负责落库，
     /// 失败仅记录日志，不影响这一轮聊天。
     RecordPromptHistory { text: String },
+    /// 提交一条本地命令：事件层先落库预登记，成功后才 spawn。
+    ///
+    /// 不占用模型 `RequestState`；`workspace` 是会话 DB 键，`cwd` 是冻结的执行目录。
+    BeginUserShell {
+        pane: crate::layout::PaneId,
+        generation: u64,
+        workspace: PathBuf,
+        cwd: PathBuf,
+        session_id: Option<String>,
+        /// 去模式前缀后的原始脚本（未 trim，保留换行/引号）。
+        command: String,
+        /// 实际使用的登录 shell。
+        shell: String,
+        /// 提交时的输入修订号：只有仍匹配才允许清空草稿。
+        draft_revision: u64,
+    },
+    /// 停止该窗格当前在途/运行中的本地命令（双 Esc）。
+    CancelUserShells { pane: crate::layout::PaneId },
 }

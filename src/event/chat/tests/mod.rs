@@ -473,8 +473,12 @@ fn pump(
 ) {
     match event {
         AppEvent::AgentHost(event) => {
-            let is_begin = matches!(event, AgentHostEvent::BeginTool { .. });
+            let is_begin = matches!(&event, AgentHostEvent::BeginTool { .. });
+            let is_finish = matches!(&event, AgentHostEvent::FinishTool { .. });
             match &event {
+                AgentHostEvent::UserShellUpdates { .. } => {
+                    // 由下方 handle_agent_host_event 读取真实增量并回执。
+                }
                 AgentHostEvent::BeginTool { call, .. } => trace
                     .lock()
                     .expect("lock")
@@ -495,7 +499,7 @@ fn pump(
                         .push(Trace::Finish(ticket.call_id.clone(), status));
                 }
             }
-            if !is_begin && let Some(hook) = hooks.before_finish.as_ref() {
+            if is_finish && let Some(hook) = hooks.before_finish.as_ref() {
                 hook(fixture, key);
             }
             handle_agent_host_event(state, streams, persistence, event);
@@ -680,3 +684,4 @@ mod flow;
 mod limits;
 mod process_tools;
 mod resume;
+mod user_shell;

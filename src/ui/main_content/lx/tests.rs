@@ -947,6 +947,8 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
             role: "user".into(),
             status: "complete".into(),
             turn_index: index,
+            kind: "chat".into(),
+            shell: None,
             steps: vec![crate::app::state::AssistantStepView::Part {
                 position: 0,
                 part: ChatPartView {
@@ -986,6 +988,8 @@ fn overflowing_history_draws_scrollbar_glyphs() {
             role: "user".into(),
             status: "complete".into(),
             turn_index: index,
+            kind: "chat".into(),
+            shell: None,
             steps: vec![crate::app::state::AssistantStepView::Part {
                 position: 0,
                 part: ChatPartView {
@@ -1044,6 +1048,8 @@ fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
         role: "assistant".into(),
         status: if streaming { "streaming" } else { "complete" }.into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![crate::app::state::AssistantStepView::Part {
             position: 0,
             part: ChatPartView {
@@ -1206,6 +1212,8 @@ fn sticky_history_lx() -> Lx {
             role: role.into(),
             status: "complete".into(),
             turn_index: 0,
+            kind: "chat".into(),
+            shell: None,
             steps: vec![crate::app::state::AssistantStepView::Part {
                 position: 0,
                 part: ChatPartView {
@@ -1464,6 +1472,8 @@ fn code_block_renders_body_without_header_or_rules() {
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![crate::app::state::AssistantStepView::Part {
             position: 0,
             part: ChatPartView {

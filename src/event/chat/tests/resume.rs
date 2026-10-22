@@ -287,6 +287,8 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
         role: "user".into(),
         status: "streaming".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![crate::app::state::AssistantStepView::Part {
             position: 0,
             part: crate::app::state::ChatPartView {

@@ -59,6 +59,9 @@ impl RecordingHost {
 impl AgentHost for RecordingHost {
     fn send(&mut self, request: AgentHostRequest) {
         match request {
+            AgentHostRequest::UserShellUpdates { reply } => {
+                let _ = reply.send(Vec::new());
+            }
             AgentHostRequest::BeginTool { call, reply } => {
                 self.trace
                     .lock()

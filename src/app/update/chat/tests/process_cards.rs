@@ -19,6 +19,8 @@ fn message_with(call: ToolCallView) -> ChatMessageView {
         role: "assistant".into(),
         status: "streaming".into(),
         turn_index: 0,
+        kind: "chat".into(),
+        shell: None,
         steps: vec![crate::app::state::AssistantStepView::Tool { position: 0, call }],
         model_label: None,
         error_code: None,

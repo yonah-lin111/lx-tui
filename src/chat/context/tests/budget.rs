@@ -119,6 +119,13 @@ fn shrink_once_removes_oldest_turn_in_both_views() {
         request: shrunk,
         omitted_turns: 0,
         draft_exceeds: false,
+        // 第二问一轮：turns [user, assistant] + items [User, Assistant, call, result]。
+        groups: vec![super::super::ContextGroup {
+            turn_start: 0,
+            turn_end: 2,
+            item_start: 0,
+            item_end: 4,
+        }],
     };
     let once = shrink_once(&single).expect("还剩一轮完整轮次可收缩");
     assert_eq!(
@@ -130,6 +137,7 @@ fn shrink_once_removes_oldest_turn_in_both_views() {
         request: once,
         omitted_turns: 0,
         draft_exceeds: false,
+        groups: Vec::new(),
     };
     assert!(shrink_once(&last).is_none(), "只剩当前消息时不可收缩");
 }
@@ -172,6 +180,7 @@ fn shrink_once_refuses_without_complete_turn() {
         },
         omitted_turns: 0,
         draft_exceeds: false,
+        groups: Vec::new(),
     };
     assert!(shrink_once(&assembly).is_none());
 }

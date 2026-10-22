@@ -4724,6 +4724,8 @@ fn lx_card_click_toggles_expansion_on_release() {
             role: "assistant".into(),
             status: "complete".into(),
             turn_index: 0,
+            kind: "chat".into(),
+            shell: None,
             steps: vec![crate::app::state::AssistantStepView::Tool {
                 position: 0,
                 call: crate::app::state::ToolCallView {

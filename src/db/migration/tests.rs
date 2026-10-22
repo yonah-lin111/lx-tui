@@ -630,3 +630,133 @@ fn directory_entries(dir: &Path) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+/// v11 → v12：模型列可空、消息 kind/JSON、全部历史与外键数据保留。
+#[test]
+fn v11_upgrade_keeps_history_and_adds_shell_columns() {
+    let path = temp_db_path("v11-upgrade");
+    let workspace = workspace_path("v11-upgrade");
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("temp dir");
+        }
+        let conn = rusqlite::Connection::open(&path).expect("raw open");
+        conn.execute_batch(SCHEMA).expect("base schema");
+        conn.execute_batch(SCHEMA_V7).expect("v7 schema");
+        // SCHEMA_V7 已含 v8 的起止时刻列（新装库口径），v9 补齐完成时刻与工具时间线。
+        migrate_v9(&conn).expect("v9 schema");
+        conn.execute_batch(SCHEMA_V10).expect("v10");
+        conn.execute_batch(SCHEMA_V11).expect("v11");
+        let ws = workspace.to_string_lossy().into_owned();
+        conn.execute(
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
+               VALUES ('ws1', 'ws', 'filesystem', ?1, 1, datetime('now'), datetime('now'))"#,
+            rusqlite::params![ws],
+        )
+        .expect("workspace");
+        conn.execute(
+            r#"INSERT INTO agent_session
+               (external_id, workspace_id, source, title, first_user_message,
+                model_provider, model_id, variant, status, archived,
+                created_at_ms, updated_at_ms, last_message_at_ms)
+               VALUES ('sess1', 'ws1', 'native', '旧会话', '旧消息', 'p', 'm', NULL, 'active', 0, 1, 1, 1)"#,
+            [],
+        )
+        .expect("session");
+        conn.execute(
+            r#"INSERT INTO agent_message
+               (external_id, session_id, sequence, turn_index, role, status,
+                model_provider, model_id, created_at_ms, completed_at_ms)
+               VALUES ('msg1', 'sess1', 0, 0, 'user', 'complete', NULL, NULL, 1, 1)"#,
+            [],
+        )
+        .expect("message");
+        conn.execute(
+            r#"INSERT INTO agent_message_part
+               (external_id, message_id, position, kind, content, created_at_ms)
+               VALUES ('part1', 'msg1', 0, 'text', '旧消息', 1)"#,
+            [],
+        )
+        .expect("part");
+        conn.execute(
+            r#"INSERT INTO agent_tool_call
+               (external_id, session_id, message_id, call_id, name, arguments_json,
+                position, status, started_at_ms)
+               VALUES ('tool1', 'sess1', 'msg1', 'c1', 'read', '{}', 1, 'completed', 1)"#,
+            [],
+        )
+        .expect("tool");
+        conn.execute(
+            r#"INSERT INTO agent_process
+               (external_id, chat_session_id, origin_call_id, runtime_epoch,
+                process_session_id, state, command, cwd, started_at_ms)
+               VALUES ('proc1', 'sess1', 'c1', 'e1', 1, 'exited', 'pwd', '/tmp', 1)"#,
+            [],
+        )
+        .expect("process");
+        conn.execute_batch("PRAGMA user_version = 11;")
+            .expect("version 11");
+    }
+    let database = Database::open(&path).expect("migrate v11 -> v12");
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    // 模型列可空（notnull = 0），旧数据原样保留。
+    let mut statement = database
+        .conn
+        .prepare("PRAGMA table_info(agent_session)")
+        .expect("table info");
+    let nullables: Vec<(String, i64)> = statement
+        .query_map([], |row| Ok((row.get(1)?, row.get(3)?)))
+        .expect("rows")
+        .collect::<std::result::Result<_, _>>()
+        .expect("collect");
+    for column in ["model_provider", "model_id"] {
+        assert_eq!(
+            nullables
+                .iter()
+                .find(|(name, _)| name == column)
+                .map(|(_, not_null)| *not_null),
+            Some(0),
+            "{column} 必须可空"
+        );
+    }
+    let messages = database
+        .load_chat_session(&workspace, "sess1")
+        .expect("load")
+        .expect("session exists");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].kind, "chat", "旧记录默认 chat");
+    assert_eq!(messages[0].parts[0].content, "旧消息");
+    let tools = database
+        .load_tool_calls_for_session(&workspace, "sess1")
+        .expect("tools");
+    assert_eq!(tools.len(), 1);
+    let processes = database
+        .load_processes_for_session(&workspace, "sess1")
+        .expect("processes");
+    assert_eq!(processes.len(), 1);
+    let violations: i64 = database
+        .conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get(0)
+        })
+        .expect("fk check");
+    assert_eq!(violations, 0);
+    // 升级后可直接创建纯命令会话。
+    let shell = database
+        .begin_user_shell(
+            &workspace,
+            None,
+            &crate::db::chat::UserShellRecord::starting("pwd", "/tmp", "/bin/zsh"),
+        )
+        .expect("shell-only session after upgrade");
+    assert_eq!(
+        database
+            .chat_session_model(&workspace, &shell.session_id)
+            .expect("model"),
+        None
+    );
+}

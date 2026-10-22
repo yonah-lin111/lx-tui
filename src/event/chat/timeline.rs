@@ -79,11 +79,18 @@ pub(crate) fn schedule_checkpoint(state: &mut AppState, key: &RequestKey) {
 ///
 /// 发送时该轮 assistant 占位已追加在末尾，故不能用 `messages.last()`；
 /// 必须按 role 反向查找 user 消息，否则得到空串（请求携带空 user 消息被拒）。
+#[cfg(test)]
+pub(crate) fn latest_user_draft_for_test(
+    messages: &[crate::app::state::ChatMessageView],
+) -> String {
+    latest_user_draft(messages)
+}
+
 pub(crate) fn latest_user_draft(messages: &[crate::app::state::ChatMessageView]) -> String {
     messages
         .iter()
         .rev()
-        .find(|message| message.role == "user")
+        .find(|message| message.role == "user" && !message.is_user_shell())
         .map(|message| message.text())
         .unwrap_or_default()
 }

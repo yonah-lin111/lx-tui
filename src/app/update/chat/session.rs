@@ -353,6 +353,9 @@ pub fn on_session_loaded(
         return false;
     };
     target.lx.chat.session_id = Some(session_id.to_string());
+    // 切换会话：未执行的命令与排队项不得漂移到新会话。
+    target.lx.chat.pending_shells.clear();
+    target.lx.chat.queue.clear();
     if let Some(selection) = selection {
         target.lx.chat.selection = Some(selection);
     }
@@ -415,6 +418,8 @@ pub fn delete_session(state: &mut AppState, pane: PaneId, session_id: &str) -> b
         && target.lx.chat.session_id.as_deref() == Some(session_id)
     {
         stop_stream(state, pane);
+        // 本地命令不占用 RequestState，必须单独停止；删除后迟到回执不得写回。
+        super::user_shell::cancel_user_shells(state, pane);
     }
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         return false;

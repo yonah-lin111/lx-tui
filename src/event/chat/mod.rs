@@ -16,9 +16,13 @@ mod process_events;
 pub mod runtime;
 mod timeline;
 mod tool_calls;
+pub mod user_shell;
 
 pub use process_events::{handle_process_event, persist_terminal_snapshots};
+pub use user_shell::pump_user_shells;
 // 工具握手与时间线辅助的实现在子模块；本模块保留唯一入口。
+#[cfg(test)]
+pub(crate) use timeline::latest_user_draft_for_test;
 pub(crate) use timeline::{chat_part_views_to_db, latest_user_draft, schedule_checkpoint};
 #[cfg(test)]
 pub(crate) use tool_calls::view_summary;
@@ -102,6 +106,10 @@ pub struct ChatStreams {
     process_sender: Option<mpsc::UnboundedSender<ProcessUiEvent>>,
     /// 每进程上次输出快照落库时刻（限流合并）。
     process_snapshot_at: HashMap<u64, std::time::Instant>,
+    /// 在途本地命令（DB 预登记后、真实进程退出前）。
+    pub(crate) user_shell: user_shell::UserShellJobs,
+    /// 每轮模型请求的命令注入记忆（按 RequestKey）。
+    pub(crate) user_shell_injected: HashMap<RequestKey, user_shell::ShellInjectionState>,
 }
 
 /// 一次待回执的 BeginTool：DB pending 已提交，UI 已转 Pending。
@@ -187,6 +195,7 @@ impl ChatStreams {
         self.cancels.remove(key);
         self.checkpoints.remove(key);
         self.workspaces.remove(key);
+        self.user_shell_injected.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
         // 只丢弃该轮执行上下文；进程留给会话（正常结束一轮不清理服务）。
         self.runtimes
@@ -755,6 +764,8 @@ fn start_stream(
         return true;
     };
     let mut prepared = prepare_turn(request, workspace);
+    // 本轮已进入初始上下文的命令标记为已见（初始运行中的命令仍可在完成后吸收）。
+    user_shell::mark_initial_seen(state, streams, &key);
     // 取消通道；sender 由 ChatStreams 持有。
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender);
@@ -961,5 +972,11 @@ pub fn handle_agent_host_event(
             outcome,
             reply,
         } => finish_tool(state, streams, persistence, key, &ticket, outcome, reply),
+        AgentHostEvent::UserShellUpdates { key, reply } => {
+            // 只读握手：命令结果仍以数据库为事实来源。
+            let updates = user_shell::poll_updates(state, streams, persistence, &key);
+            let _ = reply.send(updates);
+            false
+        }
     }
 }

@@ -27,6 +27,11 @@ pub fn accent() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
+/// shell 模式前缀：浅红色，明确区别于聊天的 accent。
+pub fn shell_prompt() -> Style {
+    Style::default().fg(Color::LightRed)
+}
+
 /// 分区边框；焦点态使用 accent。
 pub fn border(focused: bool) -> Style {
     if focused { accent() } else { muted() }

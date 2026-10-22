@@ -47,6 +47,11 @@ pub enum AgentHostEvent {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 下一次采样前的本地命令结果增量。
+    UserShellUpdates {
+        key: RequestKey,
+        reply: oneshot::Sender<Vec<String>>,
+    },
 }
 
 /// [`AgentHost`] 的生产实现：把请求转投事件循环并等待回执。
@@ -71,6 +76,10 @@ impl AgentHost for EventHost {
                 key: self.key.clone(),
                 ticket,
                 outcome,
+                reply,
+            },
+            AgentHostRequest::UserShellUpdates { reply } => AgentHostEvent::UserShellUpdates {
+                key: self.key.clone(),
                 reply,
             },
         };

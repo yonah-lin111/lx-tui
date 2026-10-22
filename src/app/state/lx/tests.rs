@@ -347,3 +347,87 @@ fn history_same_text_does_not_push_undo_step() {
     lx.undo();
     assert_eq!(lx.input, "");
 }
+
+#[test]
+fn leading_fullwidth_bang_enters_shell_and_strips_prefix() {
+    let mut lx = Lx::new();
+    lx.insert_str("  ！pwd");
+    assert_eq!(lx.input_mode(), LxInputMode::Shell);
+    assert_eq!(lx.input, "  pwd");
+    assert_eq!(lx.cursor, lx.input.len());
+    assert_eq!(lx.serialized_input(), "!  pwd");
+}
+
+#[test]
+fn bang_later_in_text_is_not_shell() {
+    let mut lx = Lx::new();
+    lx.insert_str("说明\n！pwd");
+    assert_eq!(lx.input_mode(), LxInputMode::Chat);
+    assert_eq!(lx.input, "说明\n！pwd");
+    lx.insert_str("¥100");
+    assert_eq!(lx.input_mode(), LxInputMode::Chat);
+    assert!(lx.input.contains('¥'));
+    assert!(!lx.input.contains('￥'));
+}
+
+#[test]
+fn shell_body_keeps_fullwidth_bang_and_currency_symbols() {
+    let mut lx = Lx::new();
+    lx.insert_str("!echo 好！ ¥HOME");
+    assert_eq!(lx.input_mode(), LxInputMode::Shell);
+    assert_eq!(lx.input, "echo 好！ ¥HOME");
+}
+
+#[test]
+fn backspace_at_shell_body_start_exits_mode_and_undo_restores_it() {
+    let mut lx = Lx::new();
+    lx.insert_str("!pwd");
+    lx.cursor = 0;
+    lx.backspace();
+    assert_eq!(lx.input_mode(), LxInputMode::Chat);
+    assert_eq!(lx.input, "pwd");
+    lx.undo();
+    assert_eq!(lx.input_mode(), LxInputMode::Shell);
+    assert_eq!(lx.input, "pwd");
+}
+
+#[test]
+fn clear_exits_empty_shell_mode_and_revision_never_regresses() {
+    let mut lx = Lx::new();
+    lx.insert_str("!pwd");
+    let revision = lx.revision();
+    lx.clear();
+    assert_eq!(lx.input_mode(), LxInputMode::Chat);
+    assert!(lx.revision() > revision);
+    let after_clear = lx.revision();
+    lx.undo();
+    assert!(lx.revision() > after_clear, "undo 也推进修订号");
+}
+
+#[test]
+fn shell_mode_never_opens_editing_panels() {
+    let mut lx = Lx::new();
+    lx.insert_str("!echo @src /model #");
+    assert!(lx.panel.is_none());
+    assert!(lx.slash.is_none());
+    assert!(!lx.mention_visible());
+    assert!(!lx.mention_open());
+}
+
+#[test]
+fn history_recall_restores_shell_mode_and_draft() {
+    let mut lx = Lx::new();
+    lx.insert_str("my draft");
+    let next = HistoryMove::Entry {
+        index: 0,
+        text: "!pwd".into(),
+        cursor_at_start: true,
+    };
+    lx.apply_history(next);
+    assert_eq!(lx.input_mode(), LxInputMode::Shell);
+    assert_eq!(lx.input, "pwd");
+    // 越过最新一条：恢复进入浏览前的普通草稿。
+    lx.apply_history(HistoryMove::Draft);
+    assert_eq!(lx.input_mode(), LxInputMode::Chat);
+    assert_eq!(lx.input, "my draft");
+}
