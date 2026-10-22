@@ -22,7 +22,7 @@
 //! - 预览只取 Added/Removed 行、按真实列宽换行，**最多 3 个物理行**；上下文不占额度；
 //! - 展开显示全部已保存 hunks、1 行上下文、hunk 间 `⋮` 分隔与 EOF 元信息；
 //! - 新增绿、删除红，同时保留 `+`/`-`；行号与上下文用次要信息色；
-//! - 文件头路径折叠态 dim、**展开态升为默认前景**（展开后参数保持高亮，折叠恢复）；
+//! - 文件头路径**恒为 dim**（展开也不提亮）：它是这一块的标题，不是被折叠的内容；
 //! - 增删行铺**整行底色**（`agent_added_bg` / `agent_removed_bg`），上下文行不铺；
 //!   正文按文件扩展名做轻量语法高亮（`.md` 走 markdown 词法，未知扩展名不假高亮）；
 //! - 纯渲染：只读 `FileDiffView`，不读文件、不解析 JSON。
@@ -190,12 +190,10 @@ impl Row {
 
 /// 一次调用的全部物理行（标题行除外）；[`rows`]、[`draw`] 与命中共用。
 ///
-/// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；**不做 hover 提亮**
-///   （用户要求「hover diff 块时文件路径与剩余行数行都不要高亮」）——文件头里的路径
-///   是参数、提示行是注脚，两者都容易被一次误扫当成可点的按钮；
+/// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；
 /// - 展开态铺开全部 hunks，没有剩余行数行；**正文行铺展开块灰底**（文件头不铺），
-///   增删行自己的红/绿底色优先级更高；文件头路径在展开态升为默认前景
-///   （「展开后参数保持高亮文字颜色，折叠后恢复」）。
+///   增删行自己的红/绿底色优先级更高；
+/// - **文件头路径恒为 dim**，hover 与展开都不提亮（见 [`file_header`]）。
 fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     let mut rows = content_rows(call, width, expanded);
     // 折叠态：下一行单独写剩余行数（展开后消失）。
@@ -242,7 +240,7 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     let last_index = files.len().saturating_sub(1);
     for (index, file) in files.iter().enumerate() {
         let last = index == last_index;
-        rows.push(Row::plain(file_header(file, last, width, expanded)));
+        rows.push(Row::plain(file_header(file, last, width)));
         rows.extend(file_body(file, width, expanded, last));
     }
     let omitted: usize = call
@@ -418,10 +416,11 @@ fn group_count_segments(calls: &[&ToolCallView]) -> Vec<Segment> {
 /// 文件头：`  ├─ path → to (+N -N)`；最后一个文件收口为 `  └─ `。
 ///
 /// 路径按剩余列宽做中间省略（保留首尾层级）；放不下时先丢计数、再丢路径，
-/// 连接符始终保留。**展开态路径升为默认前景**（用户要求「展开后参数保持高亮文字
-/// 颜色，折叠后恢复」）：折叠态是注脚级的 dim，展开态说明用户正在看这一块，路径
-/// 是它的标题，必须读得清。
-fn file_header(file: &FileChangeView, last: bool, width: u16, expanded: bool) -> Vec<Segment> {
+/// 连接符始终保留。**路径恒为 `chat_tool_param()`（dim），展开也不提亮**（用户
+/// 要求）：文件头是这一块的**标题**，不是被折叠起来的内容；「展开后参数保持高亮」
+/// 只适用于普通工具的 `└─` 参数行与命令卡片正文——那两处折叠时被藏起来、展开后
+/// 才有内容可读，diff 的路径从头到尾都在。
+fn file_header(file: &FileChangeView, last: bool, width: u16) -> Vec<Segment> {
     let connector = if last {
         text::agent::TREE_LEAF
     } else {
@@ -472,14 +471,7 @@ fn file_header(file: &FileChangeView, last: bool, width: u16, expanded: bool) ->
     let path = text::ellipsize_middle(&path, path_room);
     if !path.is_empty() {
         segments.push(Segment::new(" ", style::text()));
-        segments.push(Segment::new(
-            path,
-            if expanded {
-                style::chat_tool_param_expanded()
-            } else {
-                style::chat_tool_param()
-            },
-        ));
+        segments.push(Segment::new(path, style::chat_tool_param()));
     }
     if keep_counts {
         segments.push(Segment::new(" ", style::text()));

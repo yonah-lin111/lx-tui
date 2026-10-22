@@ -642,9 +642,12 @@ fn file_diff_card_has_no_hover_region() {
     );
 }
 
-/// 文件头路径：折叠态 dim、**展开态升为默认前景**（展开后参数保持高亮文字颜色）。
+/// 文件头路径**恒为 dim**：折叠与展开都不提亮（它是块的标题，不是折叠内容）。
+///
+/// 用户明确要求：展开参数保持高亮只适用于普通工具的 `└─` 参数行与命令正文，
+/// diff 的文件头路径不属于「被折叠起来的参数」。
 #[test]
-fn file_header_path_lifts_when_expanded() {
+fn file_header_path_stays_dim_when_expanded() {
     let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
     let width = 60u16;
     let header_path_style = |expanded: bool| {
@@ -672,7 +675,50 @@ fn file_header_path_lifts_when_expanded() {
     );
     assert_eq!(
         header_path_style(true),
-        style::chat_tool_param_expanded(),
-        "展开态路径升为默认可读前景"
+        style::chat_tool_param(),
+        "展开态路径仍为 dim（不随展开提亮）"
     );
+}
+
+/// 合并卡里各块的路径互不牵连：展开一块不会让另一块的路径变亮。
+#[test]
+fn merging_blocks_keeps_every_header_dim() {
+    let first = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(long_diff(), 5, 5)]),
+        ToolStatus::Completed,
+    );
+    let second = tool_call_id(
+        "call-b",
+        "edit",
+        detail_of(vec![(long_diff(), 5, 5)]),
+        ToolStatus::Completed,
+    );
+    let group = [&first, &second];
+    let expanded = [true, false];
+    let width = 60u16;
+    let folded_blocks = blocks(&group, width, &expanded);
+    let total = rows(&group, width, &expanded);
+    let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        &group,
+        0,
+        &expanded,
+        false,
+    );
+    for block in &folded_blocks {
+        let y = u16::try_from(block.start).unwrap_or(u16::MAX);
+        assert_eq!(
+            grid.cell(6, y).style,
+            style::chat_tool_param(),
+            "块 {y} 的文件头路径必须保持 dim"
+        );
+    }
 }

@@ -540,3 +540,16 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
       `parameter_lifts_when_expanded_and_recovers_when_folded`（替换旧的「参数恒 dim」）、
       `command_body_lifts_when_expanded`、`expanded_param_stays_at_default_foreground`（样式档位）。
   fmt / clippy -D warnings / cargo test（2840 passed）全部通过。
+
+## 24. 第十四轮：diff 文件头路径不再随展开提亮
+
+用户指出：展开 `edit` / `write` 的折叠内容后，`└─ /Users/…/__tool_test_twice__.md (+10 -0)`
+这行路径会变亮；确认要的是「diff 路径永远 dim」。
+
+- [x] `file_diff::file_header` 去掉 `expanded` 参数，路径恒用 `chat_tool_param()`（dim）。
+      「展开后参数保持高亮」只保留在**普通工具的 `└─` 参数行**与**命令卡片正文**：
+      那两处折叠时被藏起来、展开后才有可读内容；diff 的路径从头到尾都在，是标题不是参数。
+- [x] 模块注释与 `layout` 的文档改为「路径恒 dim」。
+- [x] 测试：`file_header_path_lifts_when_expanded` → `file_header_path_stays_dim_when_expanded`；
+      新增 `merging_blocks_keeps_every_header_dim`（合并卡里展开第一块，两块文件头路径都仍是 dim）。
+  fmt / clippy -D warnings / cargo test（2841 passed）全部通过。
