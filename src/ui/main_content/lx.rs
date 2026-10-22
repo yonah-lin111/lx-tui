@@ -614,7 +614,7 @@ fn build(
     focused: bool,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let lay = layout(area, lx);
-    if !lx.chat.messages.is_empty() {
+    if history::has_history(lx) {
         return build_chat(area, lx, focused, &lay);
     }
     let mut grid = Grid::new(area);
@@ -743,7 +743,7 @@ fn build_chat(
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
 pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.messages.is_empty() {
+    if !history::has_history(lx) {
         return None;
     }
     let lay = layout(area, lx);

@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -77,6 +77,18 @@ pub enum DbError {
     ProcessConflict,
     /// 数据库不可用（无持久化模式）；调用方据此停止需要落库的流程。
     Unavailable,
+    /// 该轮没有可用的文件快照（旧轮次 / 缺 scope）。
+    RewindUnavailable,
+    /// 快照超出单份或单轮限额；写入前拒绝。
+    RewindLimit,
+    /// 目标轮次或会话 revision 已变化。
+    RewindTargetChanged,
+    /// mutation 记录缺失或状态不允许该转移。
+    MutationConflict,
+    /// 撤销操作记录不存在。
+    OperationMissing,
+    /// 撤销存在冲突（文件被其他进程/轮次修改）。
+    RewindConflict,
 }
 
 impl fmt::Display for DbError {
@@ -112,6 +124,12 @@ impl fmt::Display for DbError {
             Self::ToolResultTooLarge => write!(formatter, "tool result exceeds size limit"),
             Self::ProcessConflict => write!(formatter, "process already recorded"),
             Self::Unavailable => write!(formatter, "database unavailable"),
+            Self::RewindUnavailable => write!(formatter, "rewind snapshot unavailable"),
+            Self::RewindLimit => write!(formatter, "rewind snapshot exceeds limit"),
+            Self::RewindTargetChanged => write!(formatter, "rewind target changed"),
+            Self::MutationConflict => write!(formatter, "file mutation record conflict"),
+            Self::OperationMissing => write!(formatter, "rewind operation missing"),
+            Self::RewindConflict => write!(formatter, "rewind conflict"),
         }
     }
 }
@@ -145,6 +163,12 @@ impl DbError {
             Self::ToolResultTooLarge => "tool result too large",
             Self::ProcessConflict => "process conflict",
             Self::Unavailable => "database unavailable",
+            Self::RewindUnavailable => "rewind unavailable",
+            Self::RewindLimit => "rewind limit",
+            Self::RewindTargetChanged => "rewind target changed",
+            Self::MutationConflict => "mutation conflict",
+            Self::OperationMissing => "operation missing",
+            Self::RewindConflict => "rewind conflict",
         }
     }
 }

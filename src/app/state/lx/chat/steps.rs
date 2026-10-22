@@ -672,6 +672,8 @@ impl AssistantStepView {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessageView {
     pub id: String,
+    /// 会话时间线显示序号（与独立撤销提示共用编号空间）。
+    pub sequence: i64,
     /// `user` / `assistant`。
     pub role: String,
     /// `complete` / `streaming` / `interrupted` / `failed`。

@@ -77,7 +77,7 @@ pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
 /// 点置顶行会跳一块看不见的历史、点代码块 `[❐]` 会复制看不见的代码、点 thinking
 /// 头部会展开看不见的块。把判定收在这里，避免每个入口各写一遍、反复漏。
 pub(super) fn chat_geometry_is_live(lx: &Lx) -> bool {
-    lx.task.is_none() && !lx.chat.messages.is_empty()
+    lx.task.is_none() && super::history::has_history(lx)
 }
 
 pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {

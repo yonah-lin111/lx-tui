@@ -1,6 +1,9 @@
-//! Git 查询：`git worktree list --porcelain` 的执行与解析。
+//! Git 查询：`git worktree list --porcelain` 的执行与解析，以及撤销所需的 blob 快照。
 //!
 //! 唯一执行 git 命令的模块；由事件层在后台线程调用，app 只接收转换后的纯数据。
+
+mod snapshot;
+pub use snapshot::{WorktreeIdentity, identify, read_blob, write_blob};
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

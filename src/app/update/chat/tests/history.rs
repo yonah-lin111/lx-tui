@@ -9,6 +9,7 @@ fn lx_with_messages(state: &mut AppState, count: usize) {
     let target = state.pane_mut_anywhere(pane).expect("pane");
     for index in 0..count {
         target.lx.chat.messages.push(ChatMessageView {
+            sequence: 0,
             id: format!("m{index}"),
             role: "user".into(),
             status: "complete".into(),
@@ -138,6 +139,7 @@ fn toggle_lx_card_flips_the_pressed_block() {
     let target = state.pane_mut_anywhere(pane).expect("pane");
     target.view = crate::app::state::PaneView::Lx;
     target.lx.chat.messages = vec![ChatMessageView {
+        sequence: 0,
         id: "m0".into(),
         role: "assistant".into(),
         status: "complete".into(),
@@ -226,6 +228,7 @@ fn advance_lx_loading_only_when_streaming() {
 /// 造一条展示用消息（置顶行测试）。
 fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: format!("{role}-{index}"),
         role: role.into(),
         status: "complete".into(),

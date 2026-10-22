@@ -5,9 +5,15 @@
 //! `checkpoint`/`finish` 以 `status='streaming'` 条件更新，迟到事件不能覆盖终态。
 
 mod process;
+pub mod rewind;
 mod tools;
 
 pub use process::{NewProcess, OutputSnapshot, ProcessFinish, ProcessRecord};
+pub use rewind::{
+    FileAvailability, ImageRecord, ImageWrite, LatestTurn, NoticeRecord, ObservedWrite,
+    OperationRecord, PathMutationWrite, PreparedTicket, RestorePath, RestorePlan, RewindCommit,
+    RewindCommitted, TurnScopeRecord,
+};
 pub use tools::{
     INTERRUPTED_ERROR_CODE, MAX_TOOL_ARGUMENT_BYTES, MAX_TOOL_RESULT_BYTES, ToolCallRecord,
     ToolCallResult, ToolCallTicket, ToolTerminalStatus,
@@ -89,6 +95,11 @@ pub struct TurnCommitted {
     pub user_message_id: String,
     pub assistant_message_id: String,
     pub turn_index: i64,
+    /// user / assistant 在会话时间线上的显示序号（与提示共用编号空间）。
+    pub user_sequence: i64,
+    pub assistant_sequence: i64,
+    /// 本轮提交后的会话 revision。
+    pub revision: i64,
     /// 本轮落库时刻（两个消息与 session 共用），用于在线计算本轮耗时。
     pub created_at_ms: i64,
 }
@@ -302,19 +313,26 @@ impl Database {
             .ok_or(DbError::WorkspaceMissing)?;
         let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
-        // 校验 session 归属并读取下一个 sequence/turn。
-        let (session_id, next_sequence, turn_index) = match existing_session {
+        // 校验 session 归属并读取下一个 sequence/turn。sequence 与独立提示共用编号空间，
+        // 必须联合取号；轮次身份仍以稳定 user message id 为准，不依赖可复用的 turn_index。
+        let (session_id, next_sequence, turn_index, revision) = match existing_session {
             Some(session_id) => {
-                let row: Option<(i64, i64)> = transaction
+                let row: Option<(i64, i64, i64)> = transaction
                     .query_row(
-                        r#"SELECT COALESCE(MAX(sequence) + 1, 0),
-                                  COALESCE(MAX(turn_index) + 1, 0)
+                        r#"SELECT
+                               (SELECT COALESCE(MAX(sequence) + 1, 0) FROM (
+                                   SELECT sequence FROM agent_message WHERE session_id = ?1
+                                   UNION ALL
+                                   SELECT sequence FROM agent_session_notice WHERE session_id = ?1
+                               )),
+                               COALESCE(MAX(turn_index) + 1, 0),
+                               COALESCE((SELECT revision FROM agent_session WHERE external_id = ?1), 0)
                            FROM agent_message WHERE session_id = ?1"#,
                         params![session_id],
-                        |row| Ok((row.get(0)?, row.get(1)?)),
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )
                     .optional()?;
-                let Some((next_sequence, turn_index)) = row else {
+                let Some((next_sequence, turn_index, revision)) = row else {
                     return Err(DbError::SessionMissing);
                 };
                 // 双条件归属校验：session 必须属于该 workspace。
@@ -328,7 +346,7 @@ impl Database {
                 if owned.is_none() {
                     return Err(DbError::SessionMissing);
                 }
-                (session_id.to_string(), next_sequence, turn_index)
+                (session_id.to_string(), next_sequence, turn_index, revision)
             }
             None => {
                 let session_id = new_external_id("sess");
@@ -351,7 +369,7 @@ impl Database {
                         now,
                     ],
                 )?;
-                (session_id, 0, 0)
+                (session_id, 0, 0, 0)
             }
         };
         let user_message_id = new_external_id("msg");
@@ -388,9 +406,12 @@ impl Database {
         if existing_session.is_some() {
             update_session_selection(&transaction, &session_id, &workspace_external, model, now)?;
         }
+        // 新一轮在 BeginChatTurn 事务内建立文件 scope：只有它完整封口才允许文件恢复。
+        rewind::begin_turn_scope(&transaction, &session_id, &user_message_id, now)?;
+        let revision = revision.saturating_add(1);
         transaction.execute(
-            "UPDATE agent_session SET updated_at_ms = ?1, last_message_at_ms = ?1 WHERE external_id = ?2",
-            params![now, session_id],
+            "UPDATE agent_session SET updated_at_ms = ?1, last_message_at_ms = ?1, revision = ?2 WHERE external_id = ?3",
+            params![now, revision, session_id],
         )?;
         transaction.commit()?;
         Ok(TurnCommitted {
@@ -398,6 +419,9 @@ impl Database {
             user_message_id,
             assistant_message_id,
             turn_index,
+            user_sequence: next_sequence,
+            assistant_sequence: next_sequence + 1,
+            revision,
             created_at_ms: now,
         })
     }
@@ -505,6 +529,9 @@ impl Database {
             "UPDATE agent_session SET updated_at_ms = ?1, last_message_at_ms = ?1 WHERE external_id = ?2",
             params![now, session_id],
         )?;
+        // 终态即封口本轮文件 scope：全部 mutation ACK 已在 finish_tool 前结算；
+        // 仍有 prepared 记录时保持 capturing，恢复时按“证据不足”拒绝文件动作。
+        rewind::seal_turn_scope(&transaction, &session_id, assistant_message_id)?;
         transaction.commit()?;
         Ok(())
     }

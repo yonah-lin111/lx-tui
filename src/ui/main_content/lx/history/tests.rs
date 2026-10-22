@@ -22,6 +22,7 @@ fn lx_with(messages: Vec<ChatMessageView>) -> Lx {
 
 fn message(role: &str, status: &str, parts: Vec<ChatPartView>) -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: format!("{role}-1"),
         role: role.into(),
         status: status.into(),
@@ -985,4 +986,66 @@ fn transcript_lays_out_step_square_with_two_column_gutter() {
         ],
         "步骤方块、2 列缩进与两行式工具行的整块观感"
     );
+}
+
+// ===== 独立撤销提示 =====
+
+fn rewind_notice(sequence: i64) -> crate::app::state::RewindNoticeView {
+    crate::app::state::RewindNoticeView {
+        id: format!("notice-{sequence}"),
+        sequence,
+        kind: "revert_and_delete".into(),
+        restored_file_count: 2,
+        files_already_restored: false,
+    }
+}
+
+#[test]
+fn tip_only_history_stays_on_history_view() {
+    let mut lx = Lx::new();
+    lx.chat.notices = vec![rewind_notice(0)];
+    assert!(has_history(&lx), "messages 为空但提示非空仍是历史");
+    let area = Rect::new(0, 0, 40, 10);
+    let view = view(area, &lx);
+    assert!(view.total_rows > 0);
+}
+
+#[test]
+fn notices_and_messages_share_one_row_budget() {
+    let mut lx = lx_with(vec![
+        message("user", "complete", vec![text_part("hello")]),
+        message("assistant", "complete", vec![text_part("world")]),
+    ]);
+    lx.chat.messages[0].sequence = 0;
+    lx.chat.messages[1].sequence = 2;
+    lx.chat.notices = vec![rewind_notice(1)];
+    let area = Rect::new(0, 0, 40, 20);
+    let layout = layout(area, &lx);
+    let mut grid = Grid::new(area);
+    let drawn = render(&mut grid, area, &lx, 0);
+    assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
+    assert!(layout.total_rows > 4, "提示占两行，不能与消息共享同一行");
+}
+
+#[test]
+fn selected_latest_user_message_uses_distinct_background() {
+    let mut lx = lx_with(vec![message("user", "complete", vec![text_part("hello")])]);
+    lx.rewind.selected = Some(crate::app::state::RewindTarget {
+        session_id: "s".into(),
+        user_message_id: "user-1".into(),
+        expected_revision: 1,
+        pane: crate::layout::PaneId::alloc(),
+        cwd: std::path::PathBuf::from("/tmp"),
+        input_at_open: String::new(),
+        user_text: "hello".into(),
+    });
+    let area = Rect::new(0, 0, 40, 10);
+    let view = view(area, &lx);
+    let mut grid = Grid::new(area);
+    render(&mut grid, view.body, &lx, view.scroll);
+    let highlighted = (view.body.y..view.body.bottom()).any(|y| {
+        (view.body.x..view.body.right())
+            .any(|x| grid.cell(x, y).style.bg == Some(ratatui::style::Color::Indexed(24)))
+    });
+    assert!(highlighted, "最新用户消息必须有选中底色");
 }

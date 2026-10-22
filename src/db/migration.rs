@@ -330,6 +330,103 @@ CREATE INDEX IF NOT EXISTS idx_agent_process_session
     ON agent_process(chat_session_id, started_at_ms, id);
 "#;
 
+/// v12 最新轮次撤销：会话 revision、独立提示、轮次文件 scope、镜像、mutation 与操作日志。
+///
+/// `user_message_id` 是稳定业务键：journal 与 scope 不随目标消息删除级联消失，
+/// 因此只有 session 外键；提示也不外键到 message（撤销自身不能把 tip 删掉）。
+/// 镜像以原始 BLOB 保存，不区分文本/二进制，也不依赖 diff 正文。
+const SCHEMA_V12: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_session_notice (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence >= 0),
+    operation_id TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL CHECK (kind IN ('revert_and_delete', 'delete_only', 'revert_only')),
+    target_user_message_id TEXT NOT NULL,
+    restored_file_count INTEGER NOT NULL DEFAULT 0 CHECK (restored_file_count >= 0),
+    files_already_restored INTEGER NOT NULL DEFAULT 0 CHECK (files_already_restored IN (0, 1)),
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(session_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_session_notice_session
+    ON agent_session_notice(session_id, sequence);
+
+CREATE TABLE IF NOT EXISTS agent_turn_file_scope (
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    user_message_id TEXT NOT NULL UNIQUE,
+    capture_version INTEGER NOT NULL CHECK (capture_version >= 0),
+    state TEXT NOT NULL CHECK (state IN ('capturing', 'complete', 'incomplete')),
+    snapshot_bytes INTEGER NOT NULL DEFAULT 0 CHECK (snapshot_bytes >= 0),
+    files_restored INTEGER NOT NULL DEFAULT 0 CHECK (files_restored IN (0, 1)),
+    created_at_ms INTEGER NOT NULL,
+    PRIMARY KEY (session_id, user_message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_turn_file_scope_session
+    ON agent_turn_file_scope(session_id, created_at_ms);
+
+CREATE TABLE IF NOT EXISTS agent_file_image (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('missing', 'regular', 'symlink')),
+    bytes BLOB,
+    mode INTEGER,
+    link_target TEXT,
+    git_oid TEXT,
+    worktree_root TEXT,
+    git_dir TEXT,
+    head_ref TEXT,
+    head_oid TEXT,
+    size INTEGER NOT NULL DEFAULT 0 CHECK (size >= 0),
+    created_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_file_image_session
+    ON agent_file_image(session_id, id);
+
+CREATE TABLE IF NOT EXISTS agent_file_mutation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    user_message_id TEXT NOT NULL,
+    tool_call_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    operation TEXT NOT NULL CHECK (operation IN
+        ('create', 'update', 'delete', 'move_src', 'move_dst')),
+    path TEXT NOT NULL,
+    target_path TEXT NOT NULL,
+    before_image_id INTEGER NOT NULL,
+    planned_after_image_id INTEGER NOT NULL,
+    actual_after_image_id INTEGER,
+    worktree_root TEXT,
+    git_dir TEXT,
+    head_ref TEXT,
+    head_oid TEXT,
+    state TEXT NOT NULL CHECK (state IN ('prepared', 'committed')),
+    success INTEGER NOT NULL DEFAULT 1 CHECK (success IN (0, 1)),
+    created_at_ms INTEGER NOT NULL,
+    committed_at_ms INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_agent_file_mutation_turn
+    ON agent_file_mutation(session_id, user_message_id, id);
+
+CREATE TABLE IF NOT EXISTS agent_rewind_operation (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    operation_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    action TEXT NOT NULL,
+    target_user_message_id TEXT NOT NULL,
+    expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+    phase TEXT NOT NULL,
+    error_code TEXT,
+    user_text TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_rewind_operation_session
+    ON agent_rewind_operation(session_id, created_at_ms);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -412,6 +509,16 @@ impl Database {
             // v11：会话进程元数据表；只增表，工具结果体仍不可变。
             if version < 11 {
                 transaction.execute_batch(SCHEMA_V11)?;
+            }
+            // v12：最新轮次撤销的 journal、镜像、操作日志与独立提示。
+            if version < 12 {
+                if !column_exists(&transaction, "agent_session", "revision")? {
+                    transaction.execute_batch(
+                        "ALTER TABLE agent_session ADD COLUMN revision INTEGER NOT NULL DEFAULT 0
+                         CHECK (revision >= 0);",
+                    )?;
+                }
+                transaction.execute_batch(SCHEMA_V12)?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             transaction.commit()?;

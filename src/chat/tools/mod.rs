@@ -19,6 +19,7 @@ mod args;
 mod diff;
 mod edit;
 mod lock;
+mod mutation;
 mod output;
 mod patch;
 mod path;
@@ -39,6 +40,10 @@ mod tests;
 pub use diff::{
     DiffCounts, DiffHunk, DiffLine, DiffLineKind, DiffUnavailableReason, FileDiff, MAX_DIFF_LINES,
     diff_lines,
+};
+pub use mutation::{
+    MutationError, MutationOperation, MutationRecorder, MutationRecorderFactory, MutationTicket,
+    ObservedMutation, ObservedPath, PathMutation, PreparedMutation,
 };
 pub use output::{format_for_model, to_result_json, to_summary};
 pub use plan_args::build_plan_result;
@@ -109,6 +114,16 @@ pub const MAX_TOOL_RESULT_BYTES: usize = crate::db::chat::MAX_TOOL_RESULT_BYTES;
 /// [`crate::chat::agent_loop::AgentTools`]）；此处的同名分支只做参数校验失败，
 /// 保证“走错入口”也不会产生副作用。
 pub fn execute(ctx: &ToolContext, name: &str, arguments_json: &str) -> ToolExecutionResult {
+    execute_with(ctx, name, arguments_json, None)
+}
+
+/// 带 mutation recorder 的版本：生产执行器必须注入 recorder（写工具据此快照）。
+pub fn execute_with(
+    ctx: &ToolContext,
+    name: &str,
+    arguments_json: &str,
+    recorder: Option<&dyn MutationRecorder>,
+) -> ToolExecutionResult {
     if arguments_json.len() > crate::chat::events::MAX_TOOL_ARGUMENTS_BYTES {
         return ToolFailure::new(
             ToolErrorCode::TooLarge,
@@ -123,8 +138,8 @@ pub fn execute(ctx: &ToolContext, name: &str, arguments_json: &str) -> ToolExecu
         "read" => wrap(read::run(ctx, arguments_json)),
         "search" => wrap(search::run(ctx, arguments_json)),
         // `edit` 自带已提交变更累积，失败时需把部分成功一并返回。
-        "edit" => edit::run(ctx, arguments_json),
-        "write" => wrap(write::run(ctx, arguments_json)),
+        "edit" => edit::run_with(ctx, arguments_json, recorder),
+        "write" => write::run_with(ctx, arguments_json, recorder),
         // 需要长期进程句柄/会话状态：本入口不执行，返回明确的错误而不是静默成功。
         "exec_command" | "write_stdin" | "update_plan" => ToolFailure::new(
             ToolErrorCode::UnknownTool,

@@ -107,6 +107,12 @@ pub enum AppEvent {
         epoch: String,
         snapshots: Vec<crate::chat::process::ProcessSnapshot>,
     },
+    /// 最新轮次撤销的后台执行结果（文件恢复 + 最终事务）。
+    RewindFinished {
+        pane: PaneId,
+        session_id: String,
+        outcome: chat::RewindOutcome,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -223,8 +229,16 @@ async fn run_loop(
             }
         }
         commands_reload = false;
+        // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
+        if chat::apply_rewind_effects(state, &sender, persistence) {
+            dirty = true;
+        }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
+            dirty = true;
+        }
+        // 双 Esc 待命超时：5 秒窗口外自动失效（不产生历史记录）。
+        if update::clear_expired_arms(state) {
             dirty = true;
         }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
@@ -552,6 +566,13 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::RewindFinished {
+            pane,
+            session_id,
+            outcome,
+        } => {
+            chat::handle_rewind_finished(state, persistence, pane, &session_id, outcome);
         }
         AppEvent::ProcessesReaped {
             workspace,

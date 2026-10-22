@@ -598,6 +598,11 @@ pub fn chat_user_bg() -> Style {
     Style::default().bg(Color::Indexed(236))
 }
 
+/// 撤销选中的最新用户消息整块底色（深青蓝，与普通用户消息区分）。
+pub fn chat_user_target_bg() -> Style {
+    Style::default().bg(Color::Indexed(24))
+}
+
 /// 通知原因行的连接符（`└─`）：供应商同款灰色（[`chat_provider`]）+ 加粗。
 pub fn chat_notice_connector() -> Style {
     chat_provider().add_modifier(Modifier::BOLD)

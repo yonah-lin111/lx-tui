@@ -479,6 +479,8 @@ fn pump(
                     .lock()
                     .expect("lock")
                     .push(Trace::Begin(call.call_id.clone())),
+                // 测试执行器不同步 mutation；文件快照由事件层单独覆盖。
+                AgentHostEvent::Mutation(_) => {}
                 AgentHostEvent::FinishTool {
                     ticket, outcome, ..
                 } => {

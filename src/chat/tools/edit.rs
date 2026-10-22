@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use super::args::Args;
 use super::diff::{FileDiff, diff_lines};
 use super::lock;
+use super::mutation::{self, MutationOperation, MutationRecorder, PathMutation};
 use super::patch::{self, Block, BodyLineKind, Hunk};
 use super::path;
 use super::text::{Newline, SourceText};
@@ -46,8 +47,12 @@ enum Resolved<'a> {
     },
 }
 
-/// 执行 `edit`。
-pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolExecutionResult {
+/// 执行 `edit`，可注入 mutation recorder。
+pub(crate) fn run_with(
+    ctx: &ToolContext,
+    arguments_json: &str,
+    recorder: Option<&dyn MutationRecorder>,
+) -> ToolExecutionResult {
     let args = match Args::parse(arguments_json, &ALLOWED) {
         Ok(args) => args,
         Err(failure) => return failure.into_result(Vec::new()),
@@ -64,7 +69,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolExecutionResul
         Ok(resolved) => resolved,
         Err(failure) => return failure.into_result(Vec::new()),
     };
-    commit(&resolved)
+    commit(&resolved, recorder)
 }
 
 /// 解析全部路径并做路径级检查（是否存在、是否普通文件、移动目标是否目录或已存在）。
@@ -160,11 +165,14 @@ fn require_regular_file(target: &Path, marker: &str) -> ToolResult<()> {
 }
 
 /// 提交阶段：逐个 hunk 落盘，累计已提交变更。
-fn commit(resolved: &[Resolved<'_>]) -> ToolExecutionResult {
+fn commit(
+    resolved: &[Resolved<'_>],
+    recorder: Option<&dyn MutationRecorder>,
+) -> ToolExecutionResult {
     let mut changes: Vec<FileChange> = Vec::new();
     let mut partial = false;
     for plan in resolved {
-        match commit_one(plan) {
+        match commit_one(plan, recorder) {
             Ok(Some(change)) => changes.push(change),
             // 无实际变更：不写盘，但如实标记 partial。
             Ok(None) => partial = true,
@@ -206,7 +214,12 @@ impl From<ToolFailure> for CommitFailure {
 }
 
 /// 落盘单个 hunk；无实际变更时返回 `Ok(None)`。
-fn commit_one(plan: &Resolved<'_>) -> Result<Option<FileChange>, CommitFailure> {
+///
+/// 捕获与写入同处一个临界区：before / planned-after 持久化 ACK 之后才发生任何 IO。
+fn commit_one(
+    plan: &Resolved<'_>,
+    recorder: Option<&dyn MutationRecorder>,
+) -> Result<Option<FileChange>, CommitFailure> {
     match plan {
         Resolved::Add { hunk, target } => {
             let Hunk::Add { lines, .. } = hunk else {
@@ -223,14 +236,28 @@ fn commit_one(plan: &Resolved<'_>) -> Result<Option<FileChange>, CommitFailure> 
             };
             let bytes = source.encode(lines);
             let (diff, counts) = diff_lines(&[], lines, true, true, 0, bytes.len());
-            write_bytes(target, &bytes)?;
-            Ok(Some(FileChange {
-                path: target.clone(),
-                added: counts.added,
-                removed: counts.removed,
-                kind: FileChangeKind::Added,
-                diff: Some(diff),
-            }))
+            let paths = [target.as_path()];
+            let _cross = mutation::lock_external(&paths)?;
+            lock::with_path_locks(&paths, || {
+                let before = mutation::read_entry(target)
+                    .map_err(|error| path::map_io_error(&error, "stat", target))?;
+                let planned = mutation::planned_regular(&before, bytes.clone());
+                let change = PathMutation {
+                    operation: MutationOperation::Create,
+                    path: target.clone(),
+                    target: target.clone(),
+                    before,
+                    planned_after: planned,
+                };
+                mutation::capture(recorder, vec![change], || write_bytes(target, &bytes))?;
+                Ok(Some(FileChange {
+                    path: target.clone(),
+                    added: counts.added,
+                    removed: counts.removed,
+                    kind: FileChangeKind::Added,
+                    diff: Some(diff),
+                }))
+            })
         }
         Resolved::Delete { target } => {
             // 旧内容不可读（二进制/非 UTF-8）不改变删除能力：仍删，差异标为不可用。
@@ -246,15 +273,30 @@ fn commit_one(plan: &Resolved<'_>) -> Result<Option<FileChange>, CommitFailure> 
                     0,
                 ),
             };
-            lock::with_path_lock(target, || std::fs::remove_file(target))
-                .map_err(|error| path::map_io_error(&error, "delete", target))?;
-            Ok(Some(FileChange {
-                path: target.clone(),
-                added: 0,
-                removed,
-                kind: FileChangeKind::Deleted,
-                diff: Some(diff),
-            }))
+            let paths = [target.as_path()];
+            let _cross = mutation::lock_external(&paths)?;
+            lock::with_path_locks(&paths, || {
+                mutation::ensure_single_link(target)?;
+                let before = mutation::read_entry(target)
+                    .map_err(|error| path::map_io_error(&error, "stat", target))?;
+                let change = PathMutation {
+                    operation: MutationOperation::Delete,
+                    path: target.clone(),
+                    target: target.clone(),
+                    before,
+                    planned_after: crate::platform::RawImage::missing(),
+                };
+                mutation::capture(recorder, vec![change], || {
+                    crate::platform::remove_entry(target)
+                })?;
+                Ok(Some(FileChange {
+                    path: target.clone(),
+                    added: 0,
+                    removed,
+                    kind: FileChangeKind::Deleted,
+                    diff: Some(diff),
+                }))
+            })
         }
         Resolved::Update {
             hunk,
@@ -264,85 +306,131 @@ fn commit_one(plan: &Resolved<'_>) -> Result<Option<FileChange>, CommitFailure> 
             let Hunk::Update { blocks, .. } = hunk else {
                 return Err(internal_error("update hunk mismatch").into());
             };
-            // 一次读 + 一次解析：`before` 与写回编码共用同一份 `SourceText`。
-            // （旧实现先 `read_text` 再 `std::fs::read` + `parse`：两次读之间有窗口，
-            // 解析也做了两遍。）
-            let bytes = std::fs::read(target)
-                .map_err(|error| path::map_io_error(&error, "read", target))?;
-            let source = SourceText::parse(&bytes)?;
-            let before = source.lines.clone();
-            let after = apply_blocks(&before, blocks, target)?;
-            let encoded = source.encode(&after);
-            // 差异与计数同源：都来自本次真实 before/after，不按输入 patch 统计。
-            let (diff, counts) = diff_lines(
-                &before,
-                &after,
-                source.trailing_newline,
-                source.trailing_newline,
-                bytes.len(),
-                encoded.len(),
-            );
-            let same_content = before == after;
-            match move_to {
-                None => {
-                    // 内容没有实际变化：不写盘，如实标记 partial。
-                    if same_content {
-                        return Ok(None);
-                    }
-                    write_bytes(target, &encoded)?;
-                    Ok(Some(FileChange {
-                        path: target.clone(),
-                        added: counts.added,
-                        removed: counts.removed,
-                        kind: FileChangeKind::Updated,
-                        diff: Some(diff),
-                    }))
-                }
-                Some(destination) => {
-                    // 纯移动不重写源文件；只有内容变化时才写。
-                    if !same_content {
-                        write_bytes(target, &encoded)?;
-                    }
-                    // 源文件内容已经更新（或本来就没变）：此后任何失败都必须带上这份
-                    // 已提交的 Updated 变更，不能漏报。
-                    let committed = FileChange {
-                        path: target.clone(),
-                        added: counts.added,
-                        removed: counts.removed,
-                        kind: FileChangeKind::Updated,
-                        diff: Some(diff.clone()),
-                    };
-                    if let Some(parent) = destination.parent()
-                        && !parent.as_os_str().is_empty()
-                    {
-                        std::fs::create_dir_all(parent).map_err(|error| CommitFailure {
-                            committed: (!same_content).then(|| Box::new(committed.clone())),
-                            cause: path::map_io_error(&error, "create directory", parent),
-                        })?;
-                    }
-                    lock::with_path_lock(target, || std::fs::rename(target, destination))
-                        .map_err(|error| CommitFailure {
-                            committed: (!same_content).then(|| Box::new(committed.clone())),
-                            cause: ToolFailure::new(
-                                io_code(&error),
-                                format!(
-                                    "wrote {} but failed to move it to {}: {error}; the source file already has the new content",
-                                    path::display(target),
-                                    path::display(destination)
-                                ),
-                            ),
-                        })?;
-                    Ok(Some(FileChange {
-                        path: target.clone(),
-                        added: counts.added,
-                        removed: counts.removed,
-                        kind: FileChangeKind::Moved {
-                            to: destination.clone(),
-                        },
-                        diff: Some(diff),
-                    }))
-                }
+            // 写入/移动的真实目标：链接写入落到物理文件，移动操作目录项本身。
+            let resolved = path::write_target(target);
+            let mut paths: Vec<&Path> = vec![target.as_path()];
+            if resolved != *target {
+                paths.push(resolved.as_path());
             }
+            if let Some(destination) = move_to {
+                paths.push(destination.as_path());
+            }
+            let _cross = mutation::lock_external(&paths)?;
+            lock::with_path_locks(&paths, || {
+                let before_image = mutation::read_write_target(&resolved)
+                    .map_err(|error| path::map_io_error(&error, "read", target))?;
+                let bytes = before_image.bytes.clone();
+                let source = SourceText::parse(&bytes)?;
+                let before = source.lines.clone();
+                let after = apply_blocks(&before, blocks, target)?;
+                let encoded = source.encode(&after);
+                // 差异与计数同源：都来自本次真实 before/after，不按输入 patch 统计。
+                let (diff, counts) = diff_lines(
+                    &before,
+                    &after,
+                    source.trailing_newline,
+                    source.trailing_newline,
+                    bytes.len(),
+                    encoded.len(),
+                );
+                let same_content = before == after;
+                match move_to {
+                    None => {
+                        // 内容没有实际变化：不写盘，如实标记 partial。
+                        if same_content {
+                            return Ok(None);
+                        }
+                        mutation::ensure_single_link(&resolved)?;
+                        let planned = mutation::planned_regular(&before_image, encoded.clone());
+                        let change = PathMutation {
+                            operation: MutationOperation::Update,
+                            path: target.clone(),
+                            target: resolved.clone(),
+                            before: before_image,
+                            planned_after: planned,
+                        };
+                        mutation::capture(recorder, vec![change], || {
+                            write_bytes(&resolved, &encoded)
+                        })?;
+                        Ok(Some(FileChange {
+                            path: target.clone(),
+                            added: counts.added,
+                            removed: counts.removed,
+                            kind: FileChangeKind::Updated,
+                            diff: Some(diff),
+                        }))
+                    }
+                    Some(destination) => {
+                        // 纯移动不重写源文件；只有内容变化时才写。
+                        let mut changes: Vec<PathMutation> = Vec::new();
+                        if !same_content {
+                            mutation::ensure_single_link(&resolved)?;
+                            changes.push(PathMutation {
+                                operation: MutationOperation::Update,
+                                path: target.clone(),
+                                target: resolved.clone(),
+                                before: before_image.clone(),
+                                planned_after: mutation::planned_regular(
+                                    &before_image,
+                                    encoded.clone(),
+                                ),
+                            });
+                        }
+                        let entry_before = mutation::read_entry(target)
+                            .map_err(|error| path::map_io_error(&error, "stat", target))?;
+                        let destination_before = mutation::read_entry(destination)
+                            .map_err(|error| path::map_io_error(&error, "stat", destination))?;
+                        changes.push(PathMutation {
+                            operation: MutationOperation::MoveSource,
+                            path: target.clone(),
+                            target: target.clone(),
+                            before: entry_before,
+                            planned_after: crate::platform::RawImage::missing(),
+                        });
+                        changes.push(PathMutation {
+                            operation: MutationOperation::MoveDestination,
+                            path: target.clone(),
+                            target: destination.clone(),
+                            before: destination_before,
+                            planned_after: mutation::planned_regular(
+                                &before_image,
+                                encoded.clone(),
+                            ),
+                        });
+                        let committed = FileChange {
+                            path: target.clone(),
+                            added: counts.added,
+                            removed: counts.removed,
+                            kind: FileChangeKind::Updated,
+                            diff: Some(diff.clone()),
+                        };
+                        mutation::capture(recorder, changes, || {
+                            if !same_content {
+                                write_bytes(&resolved, &encoded)?;
+                            }
+                            if let Some(parent) = destination.parent()
+                                && !parent.as_os_str().is_empty()
+                            {
+                                std::fs::create_dir_all(parent)?;
+                            }
+                            std::fs::rename(target, destination)
+                        })
+                        .map_err(|failure| CommitFailure {
+                            committed: (!same_content).then(|| Box::new(committed.clone())),
+                            cause: failure,
+                        })?;
+                        Ok(Some(FileChange {
+                            path: target.clone(),
+                            added: counts.added,
+                            removed: counts.removed,
+                            kind: FileChangeKind::Moved {
+                                to: destination.clone(),
+                            },
+                            diff: Some(diff),
+                        }))
+                    }
+                }
+            })
         }
     }
 }
@@ -569,30 +657,14 @@ fn block_new_lines(block: &Block) -> Vec<String> {
         .collect()
 }
 
-/// 原子写入单个文件（同目录临时文件 + rename），并按路径加短时写锁。
-///
-/// 目标是符号链接时写入其真实文件（原子替换不能作用于链接本身）。
-fn write_bytes(target: &Path, bytes: &[u8]) -> ToolResult<()> {
-    let resolved = path::write_target(target);
+/// 原子写入单个文件（同目录临时文件 + rename）；调用方已持有路径锁。
+fn write_bytes(resolved: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = resolved.parent()
         && !parent.as_os_str().is_empty()
     {
-        std::fs::create_dir_all(parent)
-            .map_err(|error| path::map_io_error(&error, "create directory", parent))?;
+        std::fs::create_dir_all(parent)?;
     }
-    lock::with_path_lock(&resolved, || {
-        crate::platform::write_file_atomic(&resolved, bytes)
-    })
-    .map_err(|error| path::map_io_error(&error, "write", target))
-}
-
-/// IO 错误 → 工具错误码。
-fn io_code(error: &std::io::Error) -> ToolErrorCode {
-    match error.kind() {
-        std::io::ErrorKind::PermissionDenied => ToolErrorCode::PermissionDenied,
-        std::io::ErrorKind::NotFound => ToolErrorCode::NotFound,
-        _ => ToolErrorCode::Io,
-    }
+    crate::platform::write_file_atomic(resolved, bytes)
 }
 
 /// 内部一致性错误（hunk 类型与解析结果不匹配，理论上不可达）。

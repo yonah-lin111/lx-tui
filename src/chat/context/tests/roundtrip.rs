@@ -58,6 +58,7 @@ fn view(
     steps: Vec<AssistantStepView>,
 ) -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: id.into(),
         role: role.into(),
         status: status.into(),

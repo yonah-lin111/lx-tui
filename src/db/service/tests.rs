@@ -457,7 +457,10 @@ fn referenced_snapshot_tracks_prompt_key_and_marks_unavailable_without_db() {
     let mut state = AppState::demo();
     state.active_workspace_mut().cwd = Some(workspace_path("referenced-nodb"));
     // 无数据库：标记不可用（不伪装成空表已持久化）。
-    let mut service = Persistence { db: None };
+    let mut service = Persistence {
+        db: None,
+        path: None,
+    };
     assert!(service.pump(&mut state));
     assert!(state.referenced.loaded);
     assert!(state.referenced.failed);
@@ -1094,7 +1097,10 @@ fn load_prompt_history_fills_state_from_database() {
 
 #[test]
 fn load_prompt_history_without_database_keeps_empty() {
-    let service = Persistence { db: None };
+    let service = Persistence {
+        db: None,
+        path: None,
+    };
     let mut state = AppState::demo();
     service.load_prompt_history(&mut state);
     assert!(state.prompt_history.is_empty(), "降级模式历史为空");

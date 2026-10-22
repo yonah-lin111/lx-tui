@@ -4675,6 +4675,7 @@ fn lx_card_click_toggles_expansion_on_release() {
         target.view = PaneView::Lx;
         let mut chat = crate::app::state::LxChat::new();
         chat.messages.push(crate::app::state::ChatMessageView {
+            sequence: 0,
             id: "m-param".into(),
             role: "assistant".into(),
             status: "complete".into(),

@@ -1290,3 +1290,64 @@ fn v7_database_upgrades_to_v8_with_part_timing_columns() {
     assert_eq!(assistant.parts[0].started_at_ms, Some(10));
     assert_eq!(assistant.parts[0].ended_at_ms, Some(6_310));
 }
+
+/// v11 -> v12：保留历史会话与工具记录，只新增撤销表；重复打开不重复迁移。
+#[test]
+fn v11_upgrade_adds_rewind_schema_and_keeps_history() {
+    let path = temp_db_path("v12-upgrade");
+    let workspace = workspace_path("v12-upgrade");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    {
+        let database = Database::open(&path).expect("open");
+        database
+            .begin_turn(
+                &workspace,
+                None,
+                "history survives",
+                &crate::db::chat::ModelSnapshot {
+                    provider: "p".into(),
+                    model: "m".into(),
+                    variant: None,
+                },
+            )
+            .expect("turn");
+        // 模拟升级前：清掉 v12 建立的对象并回退版本号（revision 列保留，迁移需幂等）。
+        database
+            .conn
+            .execute_batch(
+                "DROP TABLE agent_rewind_operation;
+                 DROP TABLE agent_file_mutation;
+                 DROP TABLE agent_file_image;
+                 DROP TABLE agent_turn_file_scope;
+                 DROP TABLE agent_session_notice;
+                 PRAGMA user_version = 11;",
+            )
+            .expect("downgrade");
+    }
+    let database = Database::open(&path).expect("reopen migrates");
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    let sessions: i64 = database
+        .conn
+        .query_row("SELECT COUNT(*) FROM agent_session", [], |row| row.get(0))
+        .expect("sessions");
+    assert_eq!(sessions, 1, "升级不得清空历史会话");
+    let tables: i64 = database
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name IN
+             ('agent_session_notice', 'agent_turn_file_scope', 'agent_file_image',
+              'agent_file_mutation', 'agent_rewind_operation')",
+            [],
+            |row| row.get(0),
+        )
+        .expect("tables");
+    assert_eq!(tables, 5);
+    // 再次打开：不会因列已存在而失败。
+    drop(database);
+    Database::open(&path).expect("idempotent reopen");
+    let _ = std::fs::remove_dir_all(workspace);
+}

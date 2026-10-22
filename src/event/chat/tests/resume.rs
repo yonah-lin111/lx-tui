@@ -283,6 +283,7 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
     state.models = models_with();
     let pane = state.active_tab().layout.focus();
     let messages = vec![crate::app::state::ChatMessageView {
+        sequence: 0,
         id: "u1".into(),
         role: "user".into(),
         status: "streaming".into(),

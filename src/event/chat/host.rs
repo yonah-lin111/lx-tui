@@ -47,6 +47,8 @@ pub enum AgentHostEvent {
         outcome: ToolOutcome,
         reply: oneshot::Sender<Result<(), HostError>>,
     },
+    /// 文件 mutation 的 Prepare/Commit：worker 在路径锁内等待持久化回执。
+    Mutation(super::file_snapshots::MutationHostEvent),
 }
 
 /// [`AgentHost`] 的生产实现：把请求转投事件循环并等待回执。
@@ -73,6 +75,7 @@ impl AgentHost for EventHost {
                 outcome,
                 reply,
             },
+            // mutation 请求不经 `EventHost`（由文件 recorder 直接投递）。
         };
         // 发送失败（事件循环已退出）时 drop 回执通道：调用方按取消处理。
         let _ = self.sender.send(AppEvent::AgentHost(event));

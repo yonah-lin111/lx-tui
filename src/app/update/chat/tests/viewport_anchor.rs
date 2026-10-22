@@ -35,6 +35,7 @@ fn text_part(content: &str) -> ChatPartView {
 
 fn message(role: &str, parts: Vec<ChatPartView>, turn: i64) -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: format!("{role}-{turn}"),
         role: role.into(),
         status: "complete".into(),

@@ -41,7 +41,7 @@ pub(super) fn visible(lx: &Lx) -> bool {
     if lx.task.is_some() {
         return false;
     }
-    if lx.chat.messages.is_empty() {
+    if !super::history::has_history(lx) {
         return false;
     }
     lx.chat.status.streaming || !lx.chat.follow_bottom
@@ -57,7 +57,7 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     // 面板打开时聊天栏整体不画（见 [`visible`]），命中区也必须一起消失，
     // 否则会出现"看不见却能点"的穿透。
-    if lx.task.is_some() || lx.chat.follow_bottom || lx.chat.messages.is_empty() {
+    if lx.task.is_some() || lx.chat.follow_bottom || !super::history::has_history(lx) {
         return None;
     }
     let input = super::input_rect(area, lx)?;

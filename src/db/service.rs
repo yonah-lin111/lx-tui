@@ -27,11 +27,15 @@ type LoadedSession = (
     Option<Vec<crate::db::chat::ChatMessage>>,
     Option<crate::db::chat::ModelSnapshot>,
     Vec<crate::db::chat::ProcessRecord>,
+    Vec<crate::db::chat::NoticeRecord>,
+    i64,
 );
 
 /// 持久化服务实例：数据库句柄可为 None（库不可用时降级为无持久化）。
 pub struct Persistence {
     db: Option<Database>,
+    /// 数据库文件路径：撤销在后台线程用独立连接执行，需要重新打开。
+    path: Option<PathBuf>,
 }
 
 impl Persistence {
@@ -39,6 +43,7 @@ impl Persistence {
     ///
     /// 不做启动信任门，由入口在进入 TUI 前处理（见 `untrusted_startup_path`）。
     pub fn start() -> Self {
+        let path = default_database_path();
         match Database::open_default() {
             Ok(db) => {
                 // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行与 pending/running
@@ -72,23 +77,182 @@ impl Persistence {
                         tracing::warn!(%error, "recovering interrupted processes failed");
                     }
                 }
-                Self { db: Some(db) }
+                Self { db: Some(db), path }
             }
             Err(error) => {
                 tracing::warn!(%error, "database unavailable; persistence disabled");
-                Self { db: None }
+                Self {
+                    db: None,
+                    path: None,
+                }
             }
         }
     }
 
     /// 使用指定数据库（测试）。
     pub fn with_database(db: Database) -> Self {
-        Self { db: Some(db) }
+        Self {
+            db: Some(db),
+            path: None,
+        }
+    }
+
+    /// 使用指定文件数据库（测试撤销后台执行）。
+    pub fn with_database_at(db: Database, path: PathBuf) -> Self {
+        Self {
+            db: Some(db),
+            path: Some(path),
+        }
+    }
+
+    /// 数据库文件路径；内存测试库为 None（撤销将退化为同步执行）。
+    pub fn database_path(&self) -> Option<PathBuf> {
+        self.path.clone()
     }
 
     /// 数据库是否可用（无持久化模式下为 false）。
     pub fn has_database(&self) -> bool {
         self.db.is_some()
+    }
+
+    /// 最新用户轮次（撤销目标与 revision）。
+    pub fn latest_user_turn(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+    ) -> super::Result<Option<super::chat::LatestTurn>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.latest_user_turn(workspace, session_id)
+    }
+
+    /// 派生恢复计划（只读：可用性、线性检查、目标路径）。
+    pub fn restore_plan(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        user_message_id: &str,
+    ) -> super::Result<super::chat::RestorePlan> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.restore_plan(workspace, session_id, user_message_id)
+    }
+
+    /// 记录 mutation 的 before / planned-after（超限在写入前拒绝）。
+    pub fn prepare_mutations(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        user_message_id: &str,
+        tool_call_id: &str,
+        changes: &[super::chat::PathMutationWrite],
+    ) -> super::Result<super::chat::PreparedTicket> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.prepare_mutations(
+            workspace,
+            session_id,
+            user_message_id,
+            tool_call_id,
+            changes,
+        )
+    }
+
+    /// 记录 mutation 实际观察到的 after。
+    pub fn commit_mutations(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        ticket: &super::chat::PreparedTicket,
+        observed: &[super::chat::ObservedWrite],
+    ) -> super::Result<()> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.commit_mutations(workspace, session_id, ticket, observed)
+    }
+
+    /// 开始/读取撤销操作（幂等）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn begin_rewind_operation(
+        &self,
+        workspace: &Path,
+        operation_id: &str,
+        session_id: &str,
+        target_user_message_id: &str,
+        expected_revision: i64,
+        kind: &str,
+        user_text: &str,
+    ) -> super::Result<super::chat::OperationRecord> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.begin_operation(
+            workspace,
+            operation_id,
+            session_id,
+            target_user_message_id,
+            expected_revision,
+            kind,
+            user_text,
+        )
+    }
+
+    /// 推进撤销操作阶段。
+    pub fn set_rewind_phase(
+        &self,
+        operation_id: &str,
+        phase: &str,
+        error_code: Option<&str>,
+    ) -> super::Result<()> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.set_operation_phase(operation_id, phase, error_code)
+    }
+
+    /// 会话中尚未完成的撤销操作。
+    pub fn unfinished_rewind(
+        &self,
+        session_id: &str,
+    ) -> super::Result<Option<super::chat::OperationRecord>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.unfinished_operation(session_id)
+    }
+
+    /// 撤销操作记录（幂等重放）。
+    pub fn rewind_operation(
+        &self,
+        operation_id: &str,
+    ) -> super::Result<Option<super::chat::OperationRecord>> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.operation(operation_id)
+    }
+
+    /// 最终事务：删对话 + 提示 + revision + operation committed。
+    pub fn commit_rewind(
+        &self,
+        workspace: &Path,
+        commit: &super::chat::RewindCommit,
+    ) -> super::Result<super::chat::RewindCommitted> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.commit_rewind(workspace, commit)
+    }
+
+    /// 清理无引用的镜像。
+    pub fn prune_rewind_images(&self, session_id: &str) -> super::Result<usize> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.prune_orphan_images(session_id)
+    }
+
+    /// 撤销成功后的视图重载：消息、独立提示与会话 revision。
+    pub fn load_rewind_view(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+    ) -> super::Result<(
+        Vec<super::chat::ChatMessage>,
+        Vec<super::chat::NoticeRecord>,
+        i64,
+    )> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        let messages = db
+            .load_chat_session(workspace, session_id)?
+            .ok_or(super::DbError::SessionMissing)?;
+        let notices = db.load_notices(workspace, session_id)?;
+        let revision = db.session_revision(session_id)?;
+        Ok((messages, notices, revision))
     }
 
     /// 记录一次工具调用的 pending 行并返回执行票据（事务提交后才返回）。
@@ -611,9 +775,12 @@ impl Persistence {
                     let processes = db
                         .load_processes_for_session(&workspace, &session_id)
                         .unwrap_or_default();
-                    Ok((messages, model, processes))
+                    // 独立撤销提示与 revision：提示不进入 messages，也不进模型上下文。
+                    let notices = db.load_notices(&workspace, &session_id).unwrap_or_default();
+                    let revision = db.session_revision(&session_id).unwrap_or(0);
+                    Ok((messages, model, processes, notices, revision))
                 });
-                let Some((Some(messages), model, processes)) = loaded else {
+                let Some((Some(messages), model, processes, notices, revision)) = loaded else {
                     update::show_toast(
                         state,
                         Toast::new(
@@ -631,8 +798,15 @@ impl Persistence {
                     model: snapshot.model,
                     variant: snapshot.variant,
                 });
-                let changed =
-                    update::on_session_loaded(state, pane, &session_id, &messages, selection);
+                let changed = update::on_session_loaded_full(
+                    state,
+                    pane,
+                    &session_id,
+                    &messages,
+                    &notices,
+                    revision,
+                    selection,
+                );
                 // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
                 update::reconcile_process_records(state, pane, &processes) | changed
             }
@@ -724,6 +898,11 @@ impl Persistence {
             }
             Effect::ListSessionProcesses { .. } | Effect::StopSessionProcess { .. } => {
                 tracing::warn!("process effect reached persistence pump");
+                false
+            }
+            // 撤销效应由事件层 `apply_rewind_effects` 取走；此处只兜底忽略。
+            Effect::PrepareRewind { .. } | Effect::ExecuteRewind(_) => {
+                tracing::warn!("rewind effect reached persistence pump");
                 false
             }
         }
@@ -853,7 +1032,7 @@ impl Persistence {
     }
 }
 
-/// 是否为聊天网络效应（由事件层 Tokio 任务执行，非同步 DB 写）。
+/// 是否为聊天网络/撤销效应（由事件层执行，非同步 DB 写）。
 fn is_network_effect(effect: &Effect) -> bool {
     matches!(
         effect,
@@ -862,7 +1041,17 @@ fn is_network_effect(effect: &Effect) -> bool {
             // 进程效应与网络效应同一处置：持久化泵不碰，交给事件层。
             | Effect::ListSessionProcesses { .. }
             | Effect::StopSessionProcess { .. }
+            | Effect::PrepareRewind { .. }
+            | Effect::ExecuteRewind(_)
     )
+}
+
+/// 默认数据库路径（与 `Database::open_default` 同一环境判定）。
+fn default_database_path() -> Option<PathBuf> {
+    if let Some(overridden) = std::env::var_os("LX_TUI_DB_PATH").filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(overridden));
+    }
+    super::database_path(super::is_dev_environment()).ok()
 }
 
 /// 标记面板已载入（无持久化或查询失败时的空树；键为 None 表示工作区无路径）。

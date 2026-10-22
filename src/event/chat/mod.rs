@@ -11,8 +11,10 @@
 //!   `FinishTool` 必须先原子写真实结果、再更新状态、最后回执。
 //! - delta 与整轮终态仍按 `(pane, session, generation)` 过滤，旧 generation 事件一律丢弃。
 
+mod file_snapshots;
 mod host;
 mod process_events;
+pub mod rewind;
 pub mod runtime;
 mod timeline;
 mod tool_calls;
@@ -56,6 +58,7 @@ mod tests;
 pub use host::{
     AgentHostEvent, BEGIN_TOOL_FAILED_CODE, FINISH_TOOL_FAILED_CODE, RUNNING_TOOL_FAILED_CODE,
 };
+pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -92,6 +95,8 @@ pub struct ChatStreams {
     checkpoints: HashMap<RequestKey, (std::time::Instant, usize)>,
     /// 冻结的工作区根（工具行落库基准；发送时固定，后续切换窗格不影响）。
     workspaces: HashMap<RequestKey, PathBuf>,
+    /// 本轮持有的跨进程 session guard；直到终态才释放。
+    guards: HashMap<RequestKey, crate::platform::FileGuard>,
     /// 已提交 pending 但**尚未**回执 ticket 的调用：等该帧绘制后推进 running。
     pending_begins: Vec<PendingBegin>,
     /// 上一帧几何中可见的窗格；不可见窗格无需等待渲染即可回执。
@@ -187,6 +192,7 @@ impl ChatStreams {
         self.cancels.remove(key);
         self.checkpoints.remove(key);
         self.workspaces.remove(key);
+        self.guards.remove(key);
         self.pending_begins.retain(|pending| &pending.key != key);
         // 只丢弃该轮执行上下文；进程留给会话（正常结束一轮不清理服务）。
         self.runtimes
@@ -715,28 +721,31 @@ fn start_stream(
     if streams.cancels.contains_key(&key) {
         return false;
     }
-    let Some(pane) = state.pane_anywhere(key.pane) else {
-        return false;
-    };
     // 冻结模型快照：从窗格当前消息流状态读取该轮的选择（发送时冻结语义：
     // Committing 已把模型写入 DB；流启动时按窗格 effective_selection 重解析——
     // 在途请求持有启动时快照，设置页中途保存不影响本轮）。
     // 必须走 `effective_selection`：它会把模型默认思考等级（variant）补上，
     // 否则「未显式选等级」的窗格请求不会带思考参数（reasoning 恒为空）。
-    let selection = pane.lx.chat.effective_selection(&state.models);
-    let Some(selection) = selection else {
-        // 无有效模型：直接按失败收尾。
-        fail_turn(sender, key, "no model available");
-        return true;
+    let (frozen, assembled, current_plan) = {
+        let Some(pane) = state.pane_anywhere(key.pane) else {
+            return false;
+        };
+        let Some(selection) = pane.lx.chat.effective_selection(&state.models) else {
+            // 无有效模型：直接按失败收尾。
+            fail_turn(sender, key, "no model available");
+            return true;
+        };
+        let Some(frozen) = crate::app::state::FrozenModel::resolve(&state.models, &selection)
+        else {
+            fail_turn(sender, key, "model configuration invalid");
+            return true;
+        };
+        // 上下文：从窗格内存中的完整轮次装配（DB 历史与内存一致；partial 排除）。
+        let assembled = assemble_turn_request(&pane.lx.chat.messages, &frozen);
+        // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
+        let current_plan = pane.lx.chat.plan.clone();
+        (frozen, assembled, current_plan)
     };
-    let Some(frozen) = crate::app::state::FrozenModel::resolve(&state.models, &selection) else {
-        fail_turn(sender, key, "model configuration invalid");
-        return true;
-    };
-    // 上下文：从窗格内存中的完整轮次装配（DB 历史与内存一致；partial 排除）。
-    let assembled = assemble_turn_request(&pane.lx.chat.messages, &frozen);
-    // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
-    let current_plan = pane.lx.chat.plan.clone();
     // 省略提示（一次性显示）。
     if assembled.omitted_turns > 0
         && let Some(pane) = state.pane_mut_anywhere(key.pane)
@@ -755,6 +764,20 @@ fn start_stream(
         return true;
     };
     let mut prepared = prepare_turn(request, workspace);
+    // 跨进程 session guard：新轮次、撤销与会话删除共用；拿不到说明另一实例在跑。
+    let guard = match crate::platform::try_lock_session(&key.session) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => {
+            fail_turn(sender, key, "chat session is busy in another instance");
+            return true;
+        }
+        Err(error) => {
+            tracing::warn!(%error, "session guard unavailable");
+            fail_turn(sender, key, "chat session guard unavailable");
+            return true;
+        }
+    };
+    streams.guards.insert(key.clone(), guard);
     // 取消通道；sender 由 ChatStreams 持有。
     let (cancel_sender, cancel) = watch::channel(false);
     streams.cancels.insert(key.clone(), cancel_sender);
@@ -767,7 +790,30 @@ fn start_stream(
         return true;
     };
     let turn = runtime.turn(&key.generation.to_string());
-    let executor = AgentTools::new(runtime.manager.clone(), turn);
+    // 每轮绑定稳定 user message id：文件 mutation 的归属来自这里，不按 turn_index 猜。
+    let Some(user_message_id) = state.pane_anywhere(key.pane).and_then(|pane| {
+        pane.lx
+            .chat
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .map(|message| message.id.clone())
+    }) else {
+        fail_turn(sender, key, "user message unavailable");
+        return true;
+    };
+    let session_key = state
+        .chat_session_key_for_pane(key.pane)
+        .unwrap_or_else(|| prepared.cwd.clone());
+    let recorder = file_snapshots::HostRecorderFactory::new(
+        sender.clone(),
+        session_key,
+        key.session.clone(),
+        user_message_id,
+    );
+    let executor =
+        AgentTools::new(runtime.manager.clone(), turn).with_recorder(std::sync::Arc::new(recorder));
     // 本地运行上下文：存活进程清单 + 当前计划（有界，避免历史裁剪后模型忘记 session_id）。
     let summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
     prepared.context = prepared.context.with_runtime_summary(summary);
@@ -961,5 +1007,6 @@ pub fn handle_agent_host_event(
             outcome,
             reply,
         } => finish_tool(state, streams, persistence, key, &ticket, outcome, reply),
+        AgentHostEvent::Mutation(event) => file_snapshots::handle_mutation(persistence, event),
     }
 }

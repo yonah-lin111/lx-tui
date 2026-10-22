@@ -70,6 +70,7 @@ impl Drop for RefGuard {
 ///
 /// 另外，取到的 `key` 在归还时**原样复用**（不重新计算）：写入过程中目标文件可能从
 /// 「不存在」变成「存在」，重算 `lock_key` 会得到另一个 key，从而找不到自己加的引用。
+#[cfg(test)]
 pub(crate) fn with_path_lock<T>(path: &Path, body: impl FnOnce() -> T) -> T {
     let key = lock_key(path);
     let _refs = RefGuard { key: key.clone() };
@@ -90,6 +91,46 @@ pub(crate) fn with_path_lock<T>(path: &Path, body: impl FnOnce() -> T) -> T {
     };
     let value = body();
     drop(held);
+    value
+}
+
+/// 在一组路径的进程内锁内执行 `body`（按 key 排序去重，避免 move/restore 死锁）。
+///
+/// 必须替代「嵌套调用 `with_path_lock`」：同一非重入互斥量不能重复加锁。
+/// 取到的 key 原样保留到闭包结束，理由同 [`with_path_lock`]。
+pub(crate) fn with_path_locks<T>(paths: &[&Path], body: impl FnOnce() -> T) -> T {
+    let mut keys: Vec<String> = paths.iter().map(|path| lock_key(path)).collect();
+    keys.sort();
+    keys.dedup();
+    let mut refs: Vec<RefGuard> = keys
+        .iter()
+        .map(|key| RefGuard { key: key.clone() })
+        .collect();
+    let entries: Vec<Arc<PathLock>> = {
+        let mut guard = match table().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        keys.iter()
+            .map(|key| {
+                let entry = guard
+                    .entry(key.clone())
+                    .or_insert_with(|| Arc::new(PathLock::new()));
+                entry.refs.fetch_add(1, Ordering::Relaxed);
+                Arc::clone(entry)
+            })
+            .collect()
+    };
+    let mut held = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        held.push(match entry.mutex.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        });
+    }
+    let value = body();
+    drop(held);
+    refs.clear();
     value
 }
 

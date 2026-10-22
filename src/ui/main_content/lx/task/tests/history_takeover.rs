@@ -26,6 +26,7 @@ use crate::app::state::{
 /// 构造一条消息（单个 text part）。
 fn text_message(id: &str, role: &str, content: &str) -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: id.into(),
         role: role.into(),
         status: "complete".into(),

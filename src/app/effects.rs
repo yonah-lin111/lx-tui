@@ -202,4 +202,28 @@ pub enum Effect {
     /// 内存历史已在 `on_turn_committed` 同步更新；本效应只负责落库，
     /// 失败仅记录日志，不影响这一轮聊天。
     RecordPromptHistory { text: String },
+    /// 读取最新轮次的文件快照可用性（只读，事件层同步执行）。
+    PrepareRewind {
+        pane: crate::layout::PaneId,
+        session_id: String,
+        user_message_id: String,
+    },
+    /// 执行一次最新轮次撤销（唯一 operation id；事件层后台执行）。
+    ExecuteRewind(RewindRequest),
+}
+
+/// 撤销执行请求：目标身份、动作与回填所需的原文全部在发起时冻结。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RewindRequest {
+    pub pane: crate::layout::PaneId,
+    pub session_id: String,
+    pub target_user_message_id: String,
+    pub expected_revision: u64,
+    pub action: crate::app::state::RewindAction,
+    /// 会话所属工作区键（DB 归属校验；不是执行 cwd）。
+    pub workspace: PathBuf,
+    pub cwd: PathBuf,
+    pub input_at_open: String,
+    pub user_text: String,
+    pub operation_id: String,
 }

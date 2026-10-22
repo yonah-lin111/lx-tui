@@ -647,15 +647,24 @@ fn move_with_edit_reports_content_diff() {
     assert_eq!(fixture.read("new.txt"), "after\nkeep\n");
 }
 
-/// 移动阶段失败（目标目录被占用）：源文件已写入，失败结果必须带上这份 Updated 与 diff。
+/// 移动阶段失败（目标目录不可写）：源文件已写入，失败结果必须带上这份 Updated 与 diff。
+#[cfg(unix)]
 #[test]
 fn move_failure_reports_already_written_source() {
+    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new("edit-move-failure");
     fixture.write("src.txt", "old\n");
-    // 用同名**文件**占住目标父目录，create_dir_all 必然失败。
-    fixture.write("blocked", "not a directory\n");
-    let patch = wrapped("*** Update File: src.txt\n*** Move to: blocked/dest.txt\n@@\n-old\n+new");
+    // 目标目录去掉写位：源文件所在目录仍可写，写源成功后 rename 必然失败。
+    let dest = fixture.path().join("destdir");
+    std::fs::create_dir_all(&dest).expect("dest dir");
+    let mut permissions = std::fs::metadata(&dest).expect("metadata").permissions();
+    permissions.set_mode(0o500);
+    std::fs::set_permissions(&dest, permissions).expect("chmod");
+    let patch = wrapped("*** Update File: src.txt\n*** Move to: destdir/dest.txt\n@@\n-old\n+new");
     let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let mut restore = std::fs::metadata(&dest).expect("metadata").permissions();
+    restore.set_mode(0o700);
+    let _ = std::fs::set_permissions(&dest, restore);
     let ToolExecutionResult::Failed { changes, .. } = &result else {
         panic!("expected failure, got {result:?}");
     };
@@ -663,7 +672,7 @@ fn move_failure_reports_already_written_source() {
     assert_eq!(changes[0].kind, FileChangeKind::Updated);
     assert!(changes[0].diff.is_some(), "已写盘的源文件必须带差异");
     assert_eq!(fixture.read("src.txt"), "new\n");
-    assert!(!fixture.exists("blocked/dest.txt"));
+    assert!(!fixture.exists("destdir/dest.txt"));
 }
 
 /// 多文件补丁中途失败：失败前已提交的文件仍带 diff，未执行文件不出现。

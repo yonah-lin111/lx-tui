@@ -24,6 +24,7 @@ pub fn view_message_of(message: &ChatMessage, models: &ModelsSnapshot) -> ChatMe
     // 位置唯一（DB 事务保证），稳定排序后即为唯一时间线顺序。
     steps.sort_by_key(AssistantStepView::position);
     ChatMessageView {
+        sequence: message.sequence,
         id: message.external_id.clone(),
         role: message.role.clone(),
         status: message.status.clone(),

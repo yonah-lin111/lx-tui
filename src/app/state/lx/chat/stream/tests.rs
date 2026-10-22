@@ -9,6 +9,7 @@ use crate::chat::events::{MAX_TOOL_ARGUMENTS_BYTES, StopReason};
 fn streaming_chat() -> LxChat {
     let mut chat = LxChat::new();
     chat.messages.push(ChatMessageView {
+        sequence: 0,
         id: "a".into(),
         role: "assistant".into(),
         status: "streaming".into(),

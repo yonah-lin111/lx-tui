@@ -25,6 +25,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.reset_session_view();
+    target.lx.rewind.clear();
     refresh_lx_status(state, pane);
     true
 }
@@ -348,11 +349,25 @@ pub fn on_session_loaded(
     messages: &[ChatMessage],
     selection: Option<ModelSelection>,
 ) -> bool {
+    on_session_loaded_full(state, pane, session_id, messages, &[], 0, selection)
+}
+
+/// 带独立撤销提示与会话 revision 的会话加载（生产入口）。
+pub fn on_session_loaded_full(
+    state: &mut AppState,
+    pane: PaneId,
+    session_id: &str,
+    messages: &[ChatMessage],
+    notices: &[crate::db::chat::NoticeRecord],
+    revision: i64,
+    selection: Option<ModelSelection>,
+) -> bool {
     let models = state.models.clone();
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
     target.lx.chat.session_id = Some(session_id.to_string());
+    target.lx.rewind.clear();
     if let Some(selection) = selection {
         target.lx.chat.selection = Some(selection);
     }
@@ -360,6 +375,11 @@ pub fn on_session_loaded(
         .iter()
         .map(|message| view_message_of(message, &models))
         .collect();
+    target.lx.chat.notices = notices
+        .iter()
+        .map(crate::app::state::RewindNoticeView::from_record)
+        .collect();
+    target.lx.chat.revision = u64::try_from(revision).unwrap_or(0);
     // 上下文占用：最近一条带用量的 assistant 轮次（同模型键由 refresh 校验）。
     let recent = messages.iter().rev().find(|message| {
         message.role == "assistant"
@@ -528,6 +548,8 @@ pub fn apply_slash_enter(state: &mut AppState, pane: PaneId) -> bool {
             }
             true
         }
+        // 撤销动作面板：第二次 Enter 才执行（第一次 Enter 只是打开面板）。
+        SlashPanel::Rewind(_) => super::rewind::apply_enter(state, pane),
     }
 }
 
@@ -641,5 +663,6 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
         SlashCommand::Model => open_model_picker(state, pane),
         SlashCommand::Resume => open_history(state, pane),
         SlashCommand::New => new_session(state, pane),
+        SlashCommand::Rewind => super::rewind::open_from_command(state, pane),
     }
 }

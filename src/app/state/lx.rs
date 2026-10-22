@@ -7,6 +7,7 @@ use crate::app::prompt::{list, text};
 pub mod chat;
 mod history;
 pub mod mention;
+pub mod rewind;
 pub mod slash;
 pub mod task;
 
@@ -21,6 +22,10 @@ pub use chat::{
     ToolDetailView, ToolStatus, ToolSummary,
 };
 pub use mention::{LxMention, LxMentionView};
+pub use rewind::{
+    LxRewind, RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget,
+    SnapshotState,
+};
 pub use slash::{
     HistoryEntry, HistoryPanel, ModelCandidate, ModelPicker, ModelPickerStage, PanelWindow,
     SlashCommand, SlashPanel,
@@ -67,6 +72,8 @@ pub struct Lx {
     pub slash: Option<super::lx::SlashPanel>,
     /// 聊天会话状态：会话引用、历史视图与请求状态机。
     pub chat: LxChat,
+    /// 最新轮次撤销：待命、目标选择、动作面板与执行中。
+    pub rewind: LxRewind,
     /// 后台任务页面；`Some` 表示当前窗格正停在该页（整页替换 lx 页的绘制，
     /// 但 `Lx` 其余字段——会话、消息、草稿、滚动——全部原样保留，退出页面即复原）。
     pub task: Option<TaskPage>,
@@ -129,6 +136,7 @@ impl Lx {
             mention: LxMention::default(),
             slash: None,
             chat: LxChat::new(),
+            rewind: LxRewind::default(),
             task: None,
             background_tasks: 0,
             undo: Vec::new(),
@@ -504,6 +512,21 @@ impl Lx {
                 self.apply_history_text(&draft);
             }
         }
+    }
+
+    /// 一次性替换输入正文（撤销回填复用）：只压一次本地编辑撤销、光标置末尾，
+    /// 并关闭块面板、提及与路径粘贴面板。调用方负责关闭 `/` 面板与撤销状态。
+    pub fn replace_input(&mut self, text: &str) {
+        self.snapshot();
+        self.input.clear();
+        self.input.push_str(text);
+        self.cursor = self.input.len();
+        self.text_anchor = None;
+        self.panel = None;
+        self.paste = None;
+        self.mention.suppress();
+        self.end_history_browse();
+        self.refresh_panel();
     }
 
     /// 把历史文本写回输入框：压一次撤销快照、光标置末尾、重算面板。
