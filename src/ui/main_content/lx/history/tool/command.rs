@@ -310,7 +310,6 @@ fn draw_command(
         scroll,
         row_index,
         &command_body(&view.command, rect.width, expanded, hovered),
-        expanded.then(style::chat_expanded_bg),
     );
 }
 
@@ -348,7 +347,6 @@ fn draw_interaction(
         scroll,
         row_index,
         &command_body(&view.command, rect.width, expanded, hovered),
-        expanded.then(style::chat_expanded_bg),
     );
 }
 
@@ -382,14 +380,7 @@ fn draw_title(
 }
 
 /// 绘制树体：除最后一行外 `  │  `，最后一行 `  └─ `；推进的行数 = `body.len()`。
-fn draw_body(
-    grid: &mut Grid,
-    rect: Rect,
-    scroll: usize,
-    row_index: &mut usize,
-    body: &[BodyRow],
-    fill: Option<ratatui::style::Style>,
-) {
+fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, body: &[BodyRow]) {
     // 末行收口：剩余行数提示行也要收口（它本身是卡片最后一行）。
     let last = body.len().saturating_sub(1);
     let limit = usize::from(rect.width);
@@ -398,9 +389,6 @@ fn draw_body(
         .saturating_add(u16::try_from(TREE_COLS).unwrap_or(u16::MAX));
     for (index, row) in body.iter().enumerate() {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            if let Some(fill) = fill {
-                grid.background_row(rect.x, y, rect.width, fill);
-            }
             // 连接符：`  │  ` / `  └─ `。`│` 与 `└` 落在同一列，树干连成一条线。
             let bar_style = style::chat_notice_connector();
             let indent = u16::try_from(TREE_INDENT).unwrap_or(0);
@@ -424,15 +412,11 @@ fn draw_body(
             } else {
                 truncate_with_ellipsis(&single, content_cols)
             };
-            let style = match fill {
-                Some(fill) => row.style.patch(fill),
-                None => row.style,
-            };
             grid.put_clipped(
                 content_x,
                 y,
                 &content,
-                style,
+                row.style,
                 rect.width
                     .saturating_sub(u16::try_from(TREE_COLS).unwrap_or(u16::MAX)),
             );

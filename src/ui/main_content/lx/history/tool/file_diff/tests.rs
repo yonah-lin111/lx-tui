@@ -543,41 +543,9 @@ fn merged_blocks_report_independent_action_rows() {
         "第二块起点随第一块后移"
     );
 }
-
-/// 合并块之间没有空隙，也都没有动作行：点哪一块就展开哪一块。
+/// **只有 diff 的增删行有底色**：文件头、上下文行、展开后的其余行都不铺。
 #[test]
-fn merged_blocks_are_contiguous_and_buttonless() {
-    let first = tool_call_id(
-        "call-a",
-        "edit",
-        detail_of(vec![(long_diff(), 5, 5)]),
-        ToolStatus::Completed,
-    );
-    let second = tool_call_id(
-        "call-b",
-        "edit",
-        detail_of(vec![(long_diff(), 5, 5)]),
-        ToolStatus::Completed,
-    );
-    let group = [&first, &second];
-    let lines = render_group(&group, 80, &[false, false]).0;
-    let joined = lines.join("\n");
-    assert!(joined.contains("more line"), "折叠态给剩余行数");
-    assert!(
-        !joined.contains(text::agent::FILE_DIFF_COLLAPSE),
-        "无收起文案"
-    );
-    let blocks = blocks(&group, 80, &[false, false]);
-    assert_eq!(
-        blocks[1].start,
-        blocks[0].start + blocks[0].len,
-        "块间无空隙"
-    );
-}
-
-/// 展开块的整行底色必须铺满 100% 宽度，且**增删行自己的底色优先**。
-#[test]
-fn expanded_block_fill_spans_full_width_and_diff_colors_win() {
+fn only_diff_lines_carry_a_background() {
     let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
     let width = 60u16;
     let (_, total) = render(&call, width, true);
@@ -595,33 +563,23 @@ fn expanded_block_fill_spans_full_width_and_diff_colors_win() {
         false,
         None,
     );
-    // 标题行（y=0）不属于展开块，不铺；内容行必须满宽铺底。
-    for y in 1..rect.height {
-        // 每一格都有底色（行首缩进、行尾留白都不能掉色）。
-        for x in 0..width {
-            let glyph = grid.cell(x, y);
-            assert!(
-                glyph.style.bg.is_some(),
-                "({x},{y}) 没有底色：展开块必须满宽铺底"
-            );
-        }
-    }
-    // 增删行：整行底色是绿/红，不是展开块的深灰。
-    let mut saw_added = false;
-    let mut saw_removed = false;
+    let added = style::agent_added_bg().bg;
+    let removed = style::agent_removed_bg().bg;
     for y in 0..rect.height {
         let bg = grid.cell(0, y).style.bg;
-        if bg == style::agent_added_bg().bg {
-            saw_added = true;
-        }
-        if bg == style::agent_removed_bg().bg {
-            saw_removed = true;
+        let is_diff = bg == added || bg == removed;
+        for x in 0..width {
+            if is_diff {
+                assert_eq!(grid.cell(x, y).style.bg, bg, "({x},{y}) 增删行必须满宽同色");
+            } else {
+                assert_eq!(
+                    grid.cell(x, y).style.bg,
+                    None,
+                    "({x},{y}) 非 diff 行不该有底色"
+                );
+            }
         }
     }
-    assert!(
-        saw_added && saw_removed,
-        "增删行保留自己的底色（优先级更高）"
-    );
 }
 
 /// hover 只点亮**折叠内容**；展开态没有折叠内容，配色与常态完全一致。

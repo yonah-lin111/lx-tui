@@ -816,14 +816,6 @@ pub fn chat_tool_param_hover() -> Style {
     Style::default()
 }
 
-/// 工具**展开块**的整行背景（参考 Claude Code 的深色卡片底）。
-///
-/// 只铺在展开后的正文行上，不碰标题与折叠预览：展开是「临时摊开一块」，背景把
-/// 这块和被折叠的其余内容分开，比再加一层边框轻量。
-pub fn chat_expanded_bg() -> Style {
-    Style::default().bg(Color::Indexed(CHAT_EXPANDED_BG))
-}
-
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
 /// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
 pub fn chat_tool_range() -> Style {
@@ -831,9 +823,6 @@ pub fn chat_tool_range() -> Style {
 }
 
 /// lx 输入框上方 loading 行文案：次要信息。
-/// 展开块的整行底色（参考 Claude Code 的深色卡面，256 色里最接近的暗灰蓝）。
-const CHAT_EXPANDED_BG: u8 = 236;
-
 pub fn chat_loading_label() -> Style {
     muted()
 }

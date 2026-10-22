@@ -271,20 +271,15 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
 /// 工具行可变参数：与左下角上下文用量同档的**次要信息色**；悬停升为默认前景。
 ///
 /// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」：那行用量是 `muted()`，
-/// 参数跟着走，且**没有 hover 档**（交互高亮已按要求移除）。
-/// 折叠参数悬停提亮为默认前景；展开块有独立底色。
+/// 参数跟着走；折叠参数悬停提亮为默认前景；**没有**展开块底色（只有 diff 增删行有底色）。
 #[test]
-fn folded_param_lifts_on_hover_and_expanded_block_has_a_fill() {
+fn folded_param_lifts_on_hover_and_no_block_background() {
     assert_eq!(
         chat_tool_param_hover(),
         Style::default(),
         "悬停提亮为默认前景"
     );
-    assert_eq!(
-        chat_expanded_bg().bg,
-        Some(Color::Indexed(236)),
-        "展开块铺底色"
-    );
+    assert_eq!(chat_tool_param().bg, None, "参数行不铺底色");
 }
 
 #[test]

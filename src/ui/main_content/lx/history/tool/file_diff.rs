@@ -179,7 +179,7 @@ impl Row {
 ///
 /// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；悬停时内容从
 ///   dim 提亮为默认前景（唯一的「可点」提示）；
-/// - 展开态铺开全部 hunks，整块铺 [`style::chat_expanded_bg`] 底色，没有剩余行数行。
+/// - 展开态铺开全部 hunks，没有剩余行数行；底色只属于增删行。
 fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
     let mut rows = content_rows(call, width, expanded);
     // 折叠态：下一行单独写剩余行数（展开后消失）。
@@ -193,15 +193,9 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
             )));
         }
     }
-    // 展开块铺整块底色（只盖这一块的内容行，不动标题与折叠预览）。
-    // **增删行自己的底色优先**：`render_line` 已经给它们设了 `fill`，这里不覆盖。
-    if expanded {
-        for row in &mut rows {
-            if row.fill.is_none() {
-                row.fill = Some(style::chat_expanded_bg());
-            }
-        }
-    } else if hovered {
+    // **只有 diff 的增删行有底色**（`render_line` 自己设的 `fill`）：文件头、上下文行、
+    // 展开后的其余行都不铺——用户明确要求「只有 diff 有背景颜色即可」。
+    if !expanded && hovered {
         // 折叠内容悬停：把 dim 的元信息提到默认前景（增删语义色保持不变）。
         for row in &mut rows {
             if row.fill.is_none() {

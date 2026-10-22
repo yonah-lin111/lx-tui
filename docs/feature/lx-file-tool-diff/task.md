@@ -479,3 +479,15 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - [x] 测试：`expanded_block_fill_spans_full_width_and_diff_colors_win`（逐格断言满宽底色 +
       增删行底色胜出）、`only_folded_content_is_hover_highlighted`（折叠态有差异格、展开态零差异格）。
   fmt / clippy -D warnings / cargo test（2837 passed）全部通过。
+
+## 20. 第十轮：只保留 diff 增删行的底色
+
+用户带截图反馈：文件头 `└─ … __tool_test_moved__.md (+1 -0)` 也带了底色，
+要求「只有 diff 有背景颜色即可」。
+
+- [x] 删掉 `style::chat_expanded_bg()` 与全部「展开块底色」逻辑：`file_diff` 不再给展开行
+      补底色（只剩 `render_line` 自己设的增删行 `fill`）、`command` 的 `draw_body` 去掉
+      `fill` 参数、普通工具的 `detail_fill` 早已移除。
+- [x] 增删行底色仍铺满 100% 宽度（`background_row` + 分段 `patch` 同一 bg）。
+- [x] 测试改为 `only_diff_lines_carry_a_background`：逐格断言「增删行满宽同色、其余行零底色」。
+  fmt / clippy -D warnings / cargo test（2836 passed）全部通过。
