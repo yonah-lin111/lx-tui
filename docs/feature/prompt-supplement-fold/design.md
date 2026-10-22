@@ -34,3 +34,22 @@
 ## 4. 不做
 
 不做全文展开/折叠快捷键、搜索、批量操作；不改变持久化格式与块语法。
+
+## 5. 与旧方案的关系
+
+- 此前的「附件栏 + 模态」方案已整体移除：合成入口行、`Overlay::Supplements`、
+  独立草稿与保存/删除流程、`F4` 原文切换和工具栏 `[src]`/`[view]` 入口都不再存在。
+- 需要完整查看或调整块结构时逐个展开即可，不再维护第二套「原文视图」。
+- 旧方案文档不随代码保留；历史见提交 `c11a623`。
+
+## 6. 代码位置与验证
+
+| 位置 | 职责 |
+| --- | --- |
+| `src/app/prompt/fold.rs` | 隐藏区间与展开键、换行落点、写入相交、导航吸附 |
+| `src/app/prompt/viewport.rs` | 可见视觉行、可见选区复制、光标映射 |
+| `src/app/prompt/navigation.rs` | 光标移动（整块跳过） |
+| `src/ui/prompt.rs` | 折叠按钮、`├─ … ┤` 单行边框与命中 |
+| `src/app/update/editor.rs` | 折叠区写入拒绝的 Toast |
+
+- `cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test` 全部通过。
