@@ -537,7 +537,9 @@ fn recovery_marks_pending_and_running_interrupted_once() {
         .mark_tool_running(&workspace, &running)
         .expect("running");
     completed_call(&database, &workspace, &session_id, &message_id, "c-done");
-    let recovered = database.recover_interrupted_tool_calls().expect("recover");
+    let recovered = database
+        .recover_interrupted_tool_calls(std::slice::from_ref(&session_id))
+        .expect("recover");
     assert_eq!(recovered, 2, "只改 pending/running 两行");
     let calls = database
         .load_tool_calls_for_session(&workspace, &session_id)
@@ -555,7 +557,12 @@ fn recovery_marks_pending_and_running_interrupted_once() {
         }
     }
     // 幂等：第二次恢复无行可改。
-    assert_eq!(database.recover_interrupted_tool_calls().expect("again"), 0);
+    assert_eq!(
+        database
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session_id))
+            .expect("again"),
+        0
+    );
     // interrupted 之后不允许再推进 running。
     assert!(matches!(
         database.mark_tool_running(&workspace, &pending),

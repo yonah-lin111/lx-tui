@@ -75,12 +75,18 @@ pub enum SlashCommand {
     Resume,
     /// `/new`：清当前窗格会话关联并回空白草稿。
     New,
+    /// `/rewind`（别名 `/undo`）：撤销当前会话最新一轮。
+    Rewind,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 3] =
-        [SlashCommand::Model, SlashCommand::Resume, SlashCommand::New];
+    pub const ALL: [SlashCommand; 4] = [
+        SlashCommand::Model,
+        SlashCommand::Resume,
+        SlashCommand::New,
+        SlashCommand::Rewind,
+    ];
 
     /// 命令名（不含 `/`）。
     pub fn name(self) -> &'static str {
@@ -88,6 +94,7 @@ impl SlashCommand {
             Self::Model => "model",
             Self::Resume => "resume",
             Self::New => "new",
+            Self::Rewind => "rewind",
         }
     }
 
@@ -97,6 +104,7 @@ impl SlashCommand {
             Self::Model => &[],
             Self::Resume => &["session"],
             Self::New => &["clear"],
+            Self::Rewind => &["undo"],
         }
     }
 
@@ -106,6 +114,7 @@ impl SlashCommand {
             Self::Model => "/model",
             Self::Resume => "/resume",
             Self::New => "/new",
+            Self::Rewind => "/rewind",
         }
     }
 
@@ -115,6 +124,7 @@ impl SlashCommand {
             Self::Model => "Choose the model and reasoning level for the next turn",
             Self::Resume => crate::ui::text::LX_RESUME_COMMAND_DESC,
             Self::New => "Start a fresh blank session",
+            Self::Rewind => "Undo the latest turn (files and conversation)",
         }
     }
 
@@ -426,6 +436,8 @@ pub enum SlashPanel {
     Model(Box<ModelPicker>),
     /// `/resume` 历史列表。
     History(Box<HistoryPanel>),
+    /// `/rewind` 四项动作面板。
+    Rewind(Box<crate::app::state::lx::rewind::RewindPanel>),
 }
 
 impl SlashPanel {
@@ -465,6 +477,7 @@ impl SlashPanel {
             Self::Commands { items, .. } => items.len(),
             Self::Model(picker) => picker.filtered.len(),
             Self::History(panel) => panel.filtered.len(),
+            Self::Rewind(_) => crate::app::state::lx::rewind::RewindAction::ALL.len(),
         }
     }
 
@@ -474,6 +487,7 @@ impl SlashPanel {
             Self::Commands { window, .. } => *window,
             Self::Model(picker) => picker.window,
             Self::History(panel) => panel.window,
+            Self::Rewind(panel) => panel.window,
         }
     }
 
@@ -495,6 +509,7 @@ impl SlashPanel {
                 let real = panel.current?;
                 panel.filtered.iter().position(|index| *index == real)
             }
+            Self::Rewind(_) => None,
         }
     }
 
@@ -506,6 +521,7 @@ impl SlashPanel {
             } => *current = window,
             Self::Model(picker) => picker.window = window,
             Self::History(panel) => panel.window = window,
+            Self::Rewind(panel) => panel.window = window,
         }
     }
 

@@ -30,6 +30,7 @@ use super::Grid;
 use super::notice;
 
 mod body;
+mod rewind;
 mod stats;
 mod sticky;
 pub(crate) mod tool;
@@ -210,6 +211,63 @@ pub struct HistoryLayout {
 
 pub use sticky::StickyRow;
 use sticky::sticky_candidate;
+
+/// 历史时间线条目：真实消息与独立撤销提示按 DB sequence 合并。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimelineEntry {
+    Message(usize),
+    /// 连续撤销提示合并为一条；`last` 是最后一条（描述取它），`count` 用于 `xN`。
+    Notices {
+        last: usize,
+        count: usize,
+    },
+}
+
+/// 是否有可绘制的历史（消息为空但提示非空时仍显示历史，不退回欢迎页）。
+pub fn has_history(lx: &Lx) -> bool {
+    !lx.chat.messages.is_empty() || !lx.chat.notices.is_empty()
+}
+
+/// 按 sequence 合并消息与提示；同序号不可能出现（DB 唯一分配），保险起见消息在前。
+fn timeline(lx: &Lx) -> Vec<TimelineEntry> {
+    let mut out = Vec::with_capacity(lx.chat.messages.len() + lx.chat.notices.len());
+    let mut message = 0usize;
+    let mut notice = 0usize;
+    while message < lx.chat.messages.len() || notice < lx.chat.notices.len() {
+        let take_message = match (
+            lx.chat.messages.get(message).map(|item| item.sequence),
+            lx.chat.notices.get(notice).map(|item| item.sequence),
+        ) {
+            (Some(left), Some(right)) => left <= right,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        if take_message {
+            out.push(TimelineEntry::Message(message));
+            message += 1;
+        } else {
+            // 连续提示合并：吸收下一条真实消息之前的所有提示（它们按 sequence 相邻）。
+            notice += 1;
+            let mut count = 1;
+            while notice < lx.chat.notices.len()
+                && lx
+                    .chat
+                    .messages
+                    .get(message)
+                    .is_none_or(|next| lx.chat.notices[notice].sequence < next.sequence)
+            {
+                count += 1;
+                notice += 1;
+            }
+            out.push(TimelineEntry::Notices {
+                last: notice - 1,
+                count,
+            });
+        }
+    }
+    out
+}
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
 
 /// 可交互块：工具卡片或思考块。
@@ -327,12 +385,28 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         };
     }
     let mut messages_rows: Vec<MessageRows> = Vec::new();
-    for (message_index, message) in lx.chat.messages.iter().enumerate() {
-        // 消息间空行归**后**一条消息（codex 的 leading spacer 口径）：顶行落在轮边界
+    let timeline = timeline(lx);
+    let mut entry_has_previous = false;
+    for entry in &timeline {
+        let message_index = match entry {
+            TimelineEntry::Message(index) => *index,
+            TimelineEntry::Notices { last, count } => {
+                // 撤销提示是独立历史条目：与消息之间同样留一空行。
+                if entry_has_previous {
+                    rows += 1;
+                }
+                entry_has_previous = true;
+                rows += rewind::rows(&lx.chat.notices[*last], *count, width);
+                continue;
+            }
+        };
+        let message = &lx.chat.messages[message_index];
+        // 条目间空行归**后**一条消息（codex 的 leading spacer 口径）：顶行落在轮边界
         // 空行上时算用户消息自己的行 → 用户消息自带上下文，不置顶。
-        if message_index > 0 {
+        if entry_has_previous {
             rows += 1;
         }
+        entry_has_previous = true;
         let start = rows;
         // 消息内块之间一律空一行（见 [`needs_spacer`]）。
         let mut has_previous = false;
@@ -492,10 +566,12 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             is_user: message.role == "user",
         });
     }
-    // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息。
-    if !messages_rows.is_empty() {
+    // 末尾留一行呼吸位（滚动到底部时不贴死）；归最后一条消息（提示结尾时不并入消息区间）。
+    if !timeline.is_empty() {
         rows += 1;
-        if let Some(last) = messages_rows.last_mut() {
+        if matches!(timeline.last(), Some(TimelineEntry::Message(_)))
+            && let Some(last) = messages_rows.last_mut()
+        {
             last.end = rows;
         }
     }
@@ -589,7 +665,28 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
     }
     let content = content_rect(rect);
     let mut row_index = 0usize;
-    for (message_index, message) in lx.chat.messages.iter().enumerate() {
+    let selected_user = lx
+        .rewind
+        .selected
+        .as_ref()
+        .map(|target| target.user_message_id.as_str());
+    for entry in &timeline(lx) {
+        let message_index = match entry {
+            TimelineEntry::Message(index) => *index,
+            TimelineEntry::Notices { last, count } => {
+                rewind::draw(
+                    grid,
+                    &lx.chat.notices[*last],
+                    *count,
+                    content,
+                    scroll,
+                    &mut row_index,
+                );
+                row_index += 1;
+                continue;
+            }
+        };
+        let message = &lx.chat.messages[message_index];
         let is_user = message.role == "user";
         // 消息内块之间一律空一行（与 `layout` 同口径）。
         let mut has_previous = false;
@@ -683,9 +780,14 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
             match part.kind {
                 crate::chat::events::PartKind::Text => {
                     if is_user {
+                        let selected = selected_user == Some(message.id.as_str());
                         for line in wrap(&part.content, content.width.saturating_sub(USER_INDENT)) {
                             if let Some(y) = visible_row(content, scroll, row_index) {
-                                let bg = style::chat_user_bg();
+                                let bg = if selected {
+                                    style::chat_user_target_bg()
+                                } else {
+                                    style::chat_user_bg()
+                                };
                                 // 整块底色覆盖整个内容列（含 `> ` 前缀列）。
                                 grid.background_row(content.x, y, content.width, bg);
                                 if first_user_line {

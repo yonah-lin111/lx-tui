@@ -107,6 +107,16 @@ pub enum AppEvent {
         epoch: String,
         snapshots: Vec<crate::chat::process::ProcessSnapshot>,
     },
+    /// 最新轮次撤销的后台执行结果（文件恢复 + 最终事务）。
+    RewindFinished {
+        pane: PaneId,
+        session_id: String,
+        /// 发起时冻结的会话 DB 工作区键（回执重载只认它）。
+        workspace: std::path::PathBuf,
+        /// 发起时的 operation id：迟到回执不得覆盖更新的一次执行。
+        operation_id: String,
+        outcome: chat::RewindOutcome,
+    },
 }
 
 /// 最小帧间隔；PTY 洪峰经此合并。
@@ -136,6 +146,11 @@ async fn run_loop(
     config: &Config,
     persistence: &mut Persistence,
 ) -> io::Result<()> {
+    // 启动恢复：在进入事件循环前按 session guard 结算遗留 journal 与旧流/工具/进程。
+    // 必须在任何新轮次之前，且只处理拿得到 guard 的会话。
+    if let Some(database) = persistence.database() {
+        chat::rewind::recover_startup(database);
+    }
     // 运行时配置副本：设置页保存后经事件更新，渲染每帧读取。
     let mut config = config.clone();
     // 本地设置服务：仅回环监听；失败只影响设置页，不阻断 TUI。
@@ -223,12 +238,27 @@ async fn run_loop(
             }
         }
         commands_reload = false;
+        // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
+        if chat::apply_rewind_effects(state, &sender, persistence) {
+            dirty = true;
+        }
+        // 续轮的 session guard 必须在 BeginChatTurn 事务之前取得。
+        if chat::guard_begin_turns(state, &mut chat_streams, persistence) {
+            dirty = true;
+        }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
             dirty = true;
         }
+        // 双 Esc 待命超时：3 秒窗口外自动失效（不产生历史记录）。
+        if update::clear_expired_arms(state) {
+            dirty = true;
+        }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
         if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
+            dirty = true;
+        }
+        if chat::prune_pending_guards(state, &mut chat_streams) {
             dirty = true;
         }
         // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。
@@ -309,6 +339,9 @@ async fn run_loop(
         }
 
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
+            // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
+            // 本帧紧接着绘制，无需再次置脏。
+            update::resolve_lx_rewind_center(state, &geometry.rects);
             // 置顶用户消息行结论：渲染前落状态（渲染层只读，不写状态）。
             update::resolve_lx_sticky_prompt(state, &geometry.rects);
             // 当前视口顶部行：同上，供点击展开时原地锚定。
@@ -552,6 +585,23 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::RewindFinished {
+            pane,
+            session_id,
+            workspace,
+            operation_id,
+            outcome,
+        } => {
+            chat::handle_rewind_finished(
+                state,
+                persistence,
+                pane,
+                &session_id,
+                &workspace,
+                &operation_id,
+                outcome,
+            );
         }
         AppEvent::ProcessesReaped {
             workspace,

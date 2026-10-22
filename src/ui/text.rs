@@ -610,6 +610,79 @@ pub const LX_CHAT_STATS_SPEED_SUFFIX: &str = " tok/s";
 pub const LX_SLASH_PANEL_TITLE: &str = "/Command";
 /// `/` 命令面板底边提示（与 `@` 提及面板同款）。
 pub const LX_SLASH_PANEL_FOOTER: &str = "[select ↵] [close esc]";
+
+// ===== 最新轮次撤销 =====
+
+/// 撤销动作面板标题。
+pub const LX_REWIND_PANEL_TITLE: &str = "Rewind";
+/// 撤销动作面板底边提示（第二次 Enter 才执行）。
+pub const LX_REWIND_PANEL_FOOTER: &str = "[select ↵] [back esc]";
+/// 第一次 Esc 后的待命提示（toast，不写历史）。
+pub const LX_REWIND_ARMED_HINT: &str = "Press esc again to rewind";
+/// 面板范围说明。
+pub const LX_REWIND_SCOPE: &str = "Files changed by edit/write only";
+/// 四项动作文案（顺序与 `RewindAction::ALL` 一致）。
+pub const LX_REWIND_ACTION_REVERT_AND_DELETE: &str = "Restore files and undo conversation";
+pub const LX_REWIND_ACTION_DELETE_ONLY: &str = "Undo conversation only";
+pub const LX_REWIND_ACTION_REVERT_ONLY: &str = "Restore files only";
+pub const LX_REWIND_ACTION_CANCEL: &str = "Cancel";
+/// 含文件动作不可用时的说明。
+pub const LX_REWIND_SNAPSHOT_UNAVAILABLE: &str = "File snapshot unavailable";
+pub const LX_REWIND_SNAPSHOT_INCOMPLETE: &str = "File snapshot incomplete";
+pub const LX_REWIND_SNAPSHOT_LOADING: &str = "Checking file snapshot...";
+/// 该轮文件此前已恢复：动作仍可用（幂等/只删对话），但要让用户知道不会再次写文件。
+pub const LX_REWIND_FILES_ALREADY_RESTORED: &str = "Files already restored";
+/// 撤销提示标题（独立于 user/assistant）。
+pub const LX_REWIND_NOTICE_TITLE: &str = "-- Rewind --";
+
+/// 撤销提示标题：连续多条合并时把数量放进两侧装饰之间（`-- Rewind x2 --`）。
+pub fn rewind_notice_title(count: usize) -> String {
+    if count > 1 {
+        format!("-- Rewind x{count} --")
+    } else {
+        LX_REWIND_NOTICE_TITLE.to_string()
+    }
+}
+
+/// 撤销提示描述：按动作、恢复数量与“此前已恢复”生成准确文案。
+pub fn rewind_notice(kind: &str, restored: usize, already_restored: bool) -> String {
+    if already_restored && kind != "revert_only" {
+        return LX_REWIND_NOTICE_ALREADY_RESTORED.to_string();
+    }
+    match kind {
+        "delete_only" => LX_REWIND_NOTICE_DELETE_ONLY.to_string(),
+        "revert_only" => {
+            if restored == 0 {
+                // 没有文件变更时不能声称“恢复了文件”（设计 §9）。
+                "No file changes; conversation kept.".to_string()
+            } else {
+                format!("Restored {restored} files; conversation kept.")
+            }
+        }
+        _ => {
+            if restored == 0 {
+                format!("Conversation undone; {LX_REWIND_NOTICE_NO_FILES}.")
+            } else {
+                format!("Conversation undone; restored {restored} files.")
+            }
+        }
+    }
+}
+/// 三种成功提示。
+pub const LX_REWIND_NOTICE_REVERT_AND_DELETE: &str = "Conversation undone; restored files.";
+pub const LX_REWIND_NOTICE_DELETE_ONLY: &str = "Conversation undone; files kept.";
+pub const LX_REWIND_NOTICE_REVERT_ONLY: &str = "Restored files; conversation kept.";
+pub const LX_REWIND_NOTICE_ALREADY_RESTORED: &str =
+    "Conversation undone; files were restored earlier.";
+pub const LX_REWIND_NOTICE_NO_FILES: &str = "no file changes";
+/// 撤销失败/冲突提示。
+pub const LX_REWIND_FAILED: &str = "Rewind failed; conversation and files were kept.";
+pub const LX_REWIND_CONFLICT: &str = "Rewind refused: files changed after this turn.";
+/// 撤销未完成/需手工恢复时阻止新轮次。
+pub const LX_REWIND_RECOVERY_BLOCKED: &str =
+    "This session has an unfinished rewind; recover it before sending";
+pub const LX_REWIND_BUSY: &str = "Stop background tasks before rewinding.";
+pub const LX_REWIND_SESSION_BUSY: &str = "This session is busy; finish or stop it first.";
 /// 二级面板（`/model`、`/resume`）过滤后无命中：与「真的没有数据」区分开。
 pub const LX_SLASH_NO_MATCHES: &str = "no matches";
 /// `/resume` 命令描述。

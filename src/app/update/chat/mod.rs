@@ -17,6 +17,7 @@ use crate::layout::PaneId;
 use crate::ui::text;
 
 mod process;
+pub mod rewind;
 mod session;
 mod view;
 mod viewport;
@@ -26,18 +27,26 @@ pub use process::{
     commit_plan, open_task_for_selected_tool, reconcile_process_records, restore_plan,
     select_adjacent_tool, settle_tool_detail, toggle_tool_detail,
 };
+pub use rewind::{
+    apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,
+    cancel_on_scroll as cancel_rewind_on_scroll, clear_expired_arms,
+    close_panel as close_rewind_panel, move_active as move_rewind_active,
+    on_failed as on_rewind_failed, on_prepared as on_rewind_prepared,
+    on_session_reloaded as on_rewind_session_reloaded, on_succeeded as on_rewind_succeeded,
+    open_from_command as open_rewind_from_command, set_active as set_rewind_active,
+};
 pub use session::{
     apply_models_changed, apply_slash_command, apply_slash_enter, close_task_page, delete_session,
     new_session, on_history_listed, on_process_listed, on_session_deleted, on_session_loaded,
-    on_task_output, open_history, open_model_picker, open_task_page, open_task_page_at,
-    persist_default_model, rename_session, resume_session, scroll_task_list, scroll_task_output,
-    select_task_tab, set_task_output_scroll, stop_selected_process,
+    on_session_loaded_full, on_task_output, open_history, open_model_picker, open_task_page,
+    open_task_page_at, persist_default_model, rename_session, resume_session, scroll_task_list,
+    scroll_task_output, select_task_tab, set_task_output_scroll, stop_selected_process,
 };
 pub(crate) use view::view_message_of;
 pub use viewport::{
     hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
-    resolve_lx_sticky_prompt, resolve_lx_viewport_top, resolve_task_output_visible,
-    scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
+    resolve_lx_rewind_center, resolve_lx_sticky_prompt, resolve_lx_viewport_top,
+    resolve_task_output_visible, scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
 };
 
 /// 尝试发送：校验 Native 入口、非空草稿、请求空闲与有效模型后冻结快照并入队效应。
@@ -114,6 +123,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
+    target.lx.clear_rewind();
     target.lx.chat.generation_counter = generation;
     target.lx.chat.request = RequestState::Committing {
         generation,
@@ -189,7 +199,9 @@ pub fn on_turn_committed(
         .chat
         .effective_selection(&models)
         .map(|selection| models.model_display_name(&selection.provider, &selection.model));
+    target.lx.chat.revision = u64::try_from(committed.revision).unwrap_or(0);
     target.lx.chat.messages.push(ChatMessageView {
+        sequence: committed.user_sequence,
         id: committed.user_message_id.clone(),
         role: "user".into(),
         status: "complete".into(),
@@ -213,6 +225,7 @@ pub fn on_turn_committed(
         duration_ms: None,
     });
     target.lx.chat.messages.push(ChatMessageView {
+        sequence: committed.assistant_sequence,
         id: committed.assistant_message_id.clone(),
         role: "assistant".into(),
         status: "streaming".into(),
@@ -453,8 +466,8 @@ pub fn on_finish_ack(state: &mut AppState, key: &RequestKey, success: bool) -> b
     true
 }
 
-/// Esc 停止的待命窗口：窗口内再按一次才真正停止（对齐 opencode 的 5 秒）。
-pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(5);
+/// Esc 停止的待命窗口：窗口内再按一次才真正停止（与撤销待命统一为 3 秒）。
+pub const STOP_ARM_WINDOW: Duration = Duration::from_secs(3);
 
 /// 流中按 `Esc`（对齐 opencode 的双击停止）：首次只**待命**并显示提示，
 /// 窗口内再按一次才停止；非流中吞掉（返回 false 不置脏）。

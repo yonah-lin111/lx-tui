@@ -943,6 +943,7 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
     let mut chat = LxChat::new();
     for index in 0..12 {
         chat.messages.push(ChatMessageView {
+            sequence: 0,
             id: format!("m{index}"),
             role: "user".into(),
             status: "complete".into(),
@@ -982,6 +983,7 @@ fn overflowing_history_draws_scrollbar_glyphs() {
     let mut chat = LxChat::new();
     for index in 0..12 {
         chat.messages.push(ChatMessageView {
+            sequence: 0,
             id: format!("m{index}"),
             role: "user".into(),
             status: "complete".into(),
@@ -1040,6 +1042,7 @@ fn streaming_lx(streaming: bool, follow_bottom: bool) -> Lx {
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
     chat.messages.push(ChatMessageView {
+        sequence: 0,
         id: "m0".into(),
         role: "assistant".into(),
         status: if streaming { "streaming" } else { "complete" }.into(),
@@ -1202,6 +1205,7 @@ fn sticky_history_lx() -> Lx {
     let mut chat = LxChat::new();
     let mut push = |role: &str, text: &str| {
         chat.messages.push(ChatMessageView {
+            sequence: 0,
             id: format!("{role}-{}", chat.messages.len()),
             role: role.into(),
             status: "complete".into(),
@@ -1460,6 +1464,7 @@ fn code_block_renders_body_without_header_or_rules() {
     let mut lx = Lx::new();
     let mut chat = LxChat::new();
     chat.messages.push(ChatMessageView {
+        sequence: 0,
         id: "a-0".into(),
         role: "assistant".into(),
         status: "complete".into(),
@@ -1581,4 +1586,37 @@ fn loading_stats_follow_the_label_with_seconds_and_output_tokens() {
     assert!(!row.contains("ms"), "不出现毫秒：{row}");
     assert!(row.contains("↓1.2k tok"), "含输出 token：{row}");
     assert!(!row.contains('↑'), "不再显示输入方向：{row}");
+}
+
+/// 撤销动作面板复用 `/` 面板：固定四项、默认第一项、快照不可用时仍可见。
+#[test]
+fn rewind_panel_lists_four_actions() {
+    use crate::app::state::{RewindPanel, SlashPanel, SnapshotState};
+    let panel = SlashPanel::Rewind(Box::new(RewindPanel::new(SnapshotState::KnownEmpty)));
+    let items = super::slash::items(&panel, &[]);
+    assert_eq!(items.len(), 4, "四项动作固定顺序");
+    assert_eq!(panel.window().active, 0, "默认第一项");
+    let disabled = SlashPanel::Rewind(Box::new(RewindPanel::new(SnapshotState::Unavailable)));
+    assert_eq!(super::slash::items(&disabled, &[]).len(), 4, "禁用仍可见");
+}
+
+/// 非首页（已有历史）不登记入口标签命中，点击消息内容不会穿透切换 agent。
+#[test]
+fn entry_tabs_are_not_hittable_once_history_exists() {
+    let area = Rect::new(0, 0, 100, 40);
+    let homepage = Lx::new();
+    let lay = layout(area, &homepage);
+    let (entry, rect) = *lay.entries.first().expect("homepage entries");
+    let (x, y) = (rect.x + 1, rect.y);
+    assert_eq!(
+        entry_hit(area, &homepage, x, y),
+        Some(entry),
+        "首页仍可切换入口"
+    );
+    let history = streaming_lx(false, true);
+    assert_eq!(
+        entry_hit(area, &history, x, y),
+        None,
+        "有历史时入口不得参与命中"
+    );
 }

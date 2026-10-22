@@ -39,6 +39,7 @@ fn command_message(call_id: &str, session_id: u64) -> ChatMessageView {
         ))),
     };
     ChatMessageView {
+        sequence: 0,
         id: format!("msg-{call_id}"),
         role: "assistant".into(),
         status: "complete".into(),
@@ -123,6 +124,7 @@ fn file_message(call_id: &str) -> ChatMessageView {
         detail: Some(Box::new(crate::app::state::ToolDetailView::File(diff))),
     };
     ChatMessageView {
+        sequence: 0,
         id: format!("msg-{call_id}"),
         role: "assistant".into(),
         status: "complete".into(),
@@ -278,6 +280,7 @@ fn folded_thinking_and_long_param_are_clickable() {
     // 1) 折叠的思考块：只有头部一行，点它必须能展开。
     let mut lx = Lx::new();
     lx.chat.messages = vec![ChatMessageView {
+        sequence: 0,
         id: "think".into(),
         role: "assistant".into(),
         status: "complete".into(),
@@ -326,6 +329,7 @@ fn folded_thinking_and_long_param_are_clickable() {
     let mut lx = Lx::new();
     let long = "src/some/really/deeply/nested/path/that/keeps/going/and/going/mod.rs".repeat(3);
     lx.chat.messages = vec![ChatMessageView {
+        sequence: 0,
         id: "m-param".into(),
         role: "assistant".into(),
         status: "complete".into(),

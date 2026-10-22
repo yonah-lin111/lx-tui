@@ -15,6 +15,7 @@ use crate::layout::PaneId;
 /// 一个助手消息（带一个工具步骤）。
 fn message_with(call: ToolCallView) -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: "msg-1".into(),
         role: "assistant".into(),
         status: "streaming".into(),

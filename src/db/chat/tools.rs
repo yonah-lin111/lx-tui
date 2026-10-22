@@ -312,16 +312,19 @@ impl Database {
     /// 启动恢复：遗留 pending/running 全部改 interrupted（不自动重跑、不伪造结果）。
     ///
     /// 幂等：第二次调用返回 0。`completed_at_ms` 与 `duration_ms` 按当前时刻补齐。
-    pub fn recover_interrupted_tool_calls(&self) -> Result<usize> {
+    pub fn recover_interrupted_tool_calls(&self, sessions: &[String]) -> Result<usize> {
         let now = now_ms();
-        let updated = self.conn.execute(
-            r#"UPDATE agent_tool_call
-               SET status = 'interrupted', error_text = ?1,
-                   completed_at_ms = ?2,
-                   duration_ms = MAX(?2 - started_at_ms, 0)
-               WHERE status IN ('pending', 'running')"#,
-            params![INTERRUPTED_ERROR_CODE, now],
-        )?;
+        let mut updated = 0usize;
+        for session in sessions {
+            updated += self.conn.execute(
+                r#"UPDATE agent_tool_call
+                   SET status = 'interrupted', error_text = ?1,
+                       completed_at_ms = ?2,
+                       duration_ms = MAX(?2 - started_at_ms, 0)
+                   WHERE status IN ('pending', 'running') AND session_id = ?3"#,
+                params![INTERRUPTED_ERROR_CODE, now, session],
+            )?;
+        }
         Ok(updated)
     }
 }

@@ -24,7 +24,7 @@ pub(crate) fn begin_tool(
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };
-    let Some(workspace) = streams.workspaces.get(&key).cloned() else {
+    let Some(workspace) = streams.db_workspaces.get(&key).cloned() else {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };
@@ -116,7 +116,7 @@ pub(crate) fn settle_begin(
         // 回执通道已被丢弃（窗格关闭）：loop 会按取消结束，不再执行。
         return false;
     };
-    let Some(workspace) = streams.workspaces.get(&pending.key).cloned() else {
+    let Some(workspace) = streams.db_workspaces.get(&pending.key).cloned() else {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };
@@ -179,7 +179,7 @@ pub(crate) fn finish_tool(
     outcome: ToolOutcome,
     reply: oneshot::Sender<Result<(), HostError>>,
 ) -> bool {
-    let Some(workspace) = streams.workspaces.get(&key).cloned() else {
+    let Some(workspace) = streams.db_workspaces.get(&key).cloned() else {
         let _ = reply.send(Err(HostError::Cancelled));
         return false;
     };

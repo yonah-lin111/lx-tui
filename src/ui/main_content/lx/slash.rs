@@ -100,6 +100,39 @@ pub(super) fn items<'a>(
                 })
                 .collect()
         }
+        SlashPanel::Rewind(panel) => crate::app::state::RewindAction::ALL
+            .iter()
+            .map(|action| {
+                let reason = if !panel.enabled(*action) {
+                    panel
+                        .snapshot
+                        .unavailable_reason()
+                        .unwrap_or(text::LX_REWIND_SNAPSHOT_UNAVAILABLE)
+                } else if action.reverts_files()
+                    && panel.snapshot == crate::app::state::SnapshotState::AlreadyRestored
+                {
+                    text::LX_REWIND_FILES_ALREADY_RESTORED
+                } else {
+                    ""
+                };
+                CommandItem::Inline {
+                    label: action_label(*action),
+                    preview: "",
+                    tag: reason,
+                }
+            })
+            .collect(),
+    }
+}
+
+/// 撤销动作文案（集中 `ui::text`）。
+fn action_label(action: crate::app::state::RewindAction) -> &'static str {
+    use crate::app::state::RewindAction;
+    match action {
+        RewindAction::RevertAndDelete => text::LX_REWIND_ACTION_REVERT_AND_DELETE,
+        RewindAction::DeleteOnly => text::LX_REWIND_ACTION_DELETE_ONLY,
+        RewindAction::RevertOnly => text::LX_REWIND_ACTION_REVERT_ONLY,
+        RewindAction::Cancel => text::LX_REWIND_ACTION_CANCEL,
     }
 }
 
@@ -144,7 +177,14 @@ fn view<'a>(
             history.window,
             text::LX_HISTORY_PANEL_FOOTER,
         ),
+        SlashPanel::Rewind(panel) => (
+            text::LX_REWIND_PANEL_TITLE,
+            panel.window,
+            text::LX_REWIND_PANEL_FOOTER,
+        ),
     };
+    // 撤销面板顶边右侧固定说明恢复范围；窄面板由渲染侧裁剪。
+    let right_title = matches!(panel, SlashPanel::Rewind(_)).then_some(text::LX_REWIND_SCOPE);
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
     CommandPanelView {
@@ -157,7 +197,7 @@ fn view<'a>(
         anchor_row: above,
         max_height: Some(cap),
         title: Some(title),
-        right_title: None,
+        right_title,
         footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,
@@ -186,6 +226,7 @@ pub(crate) fn item_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<usiz
         crate::app::state::SlashPanel::Model(p) => p.stage_len() == 0 || p.is_filter_empty(),
         crate::app::state::SlashPanel::History(h) => h.entries.is_empty() || h.is_filter_empty(),
         crate::app::state::SlashPanel::Commands { .. } => false,
+        crate::app::state::SlashPanel::Rewind(_) => false,
     };
     if placeholder {
         return None;

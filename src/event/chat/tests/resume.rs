@@ -116,7 +116,7 @@ async fn resume_then_continue_replays_completed_pairs_and_skips_interrupted() {
     };
     assert_eq!(
         database
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session_id))
             .expect("recover tool calls"),
         1,
         "遗留调用转 interrupted"
@@ -283,6 +283,7 @@ fn oversized_draft_is_flagged_by_the_production_assembler() {
     state.models = models_with();
     let pane = state.active_tab().layout.focus();
     let messages = vec![crate::app::state::ChatMessageView {
+        sequence: 0,
         id: "u1".into(),
         role: "user".into(),
         status: "streaming".into(),

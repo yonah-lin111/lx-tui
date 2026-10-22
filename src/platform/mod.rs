@@ -10,8 +10,35 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 mod atomic_write;
 pub use atomic_write::{rename_over, write_file_atomic};
 
+mod lock;
+pub use lock::{FileGuard, PathGuards, lock_paths, try_lock_named, try_lock_session};
+mod raw_image;
+pub use raw_image::{
+    RawImage, RawKind, exists as raw_exists, hard_link_count, read as read_raw, remove_entry,
+    write_regular as write_raw_regular, write_symlink as write_raw_symlink,
+};
+
+/// 是否开发环境（与 `db` 的数据库路径判定同一口径）。
+///
+/// 锁目录必须与数据库同环境，避免 dev 与生产实例互相看不见对方的锁。
+pub fn dev_environment() -> bool {
+    let explicit = std::env::var("LX_TUI_ENV")
+        .or_else(|_| std::env::var("LX_ENV"))
+        .ok();
+    match explicit {
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "dev" | "development" | "local"
+        ),
+        None => cfg!(debug_assertions),
+    }
+}
+
 mod paste_path;
 pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
+
+mod path_text;
+pub use path_text::{decode_path, encode_path, path_anchor, verify_path_chain};
 
 /// 收紧文件权限到仅所有者可读写（Unix 0600；Windows no-op）。
 ///

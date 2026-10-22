@@ -261,15 +261,18 @@ impl Database {
     /// 启动恢复：遗留 starting/running 一律标 interrupted（不重跑、不重连）。
     ///
     /// 幂等：第二次调用返回 0。
-    pub fn recover_interrupted_processes(&self) -> Result<usize> {
+    pub fn recover_interrupted_processes(&self, sessions: &[String]) -> Result<usize> {
         let now = now_ms();
-        let updated = self.conn.execute(
-            r#"UPDATE agent_process
-               SET state = 'interrupted', stop_reason = 'lx exited before the process finished',
-                   ended_at_ms = ?1, revision = revision + 1
-               WHERE state IN ('starting', 'running')"#,
-            params![now],
-        )?;
+        let mut updated = 0usize;
+        for session in sessions {
+            updated += self.conn.execute(
+                r#"UPDATE agent_process
+                   SET state = 'interrupted', stop_reason = 'lx exited before the process finished',
+                       ended_at_ms = ?1, revision = revision + 1
+                   WHERE state IN ('starting', 'running') AND chat_session_id = ?2"#,
+                params![now, session],
+            )?;
+        }
         Ok(updated)
     }
 

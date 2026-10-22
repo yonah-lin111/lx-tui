@@ -80,6 +80,10 @@ pub fn route(
         };
     }
     if pane_lx {
+        // 长按 Esc/Enter 的 Repeat 不推进撤销待命与二次确认，也不重复发送。
+        if key.kind == KeyEventKind::Repeat && matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+            return None;
+        }
         return lx_input_key(key).map(Routed::Lx);
     }
     encode::encode_key(key, mode).map(Routed::Pane)

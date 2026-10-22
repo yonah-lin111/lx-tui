@@ -295,7 +295,7 @@ fn restart_marks_running_processes_interrupted_without_rerun() {
         .expect("begin");
     let recovered = fixture
         .database
-        .recover_interrupted_processes()
+        .recover_interrupted_processes(std::slice::from_ref(&session))
         .expect("recover");
     assert_eq!(recovered, 1);
     let records = fixture
@@ -308,7 +308,7 @@ fn restart_marks_running_processes_interrupted_without_rerun() {
     assert_eq!(
         fixture
             .database
-            .recover_interrupted_processes()
+            .recover_interrupted_processes(std::slice::from_ref(&session))
             .expect("again"),
         0
     );

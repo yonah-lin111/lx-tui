@@ -87,6 +87,14 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         apply_task_page_input(state, pane_id, command);
         return;
     }
+    // 最新轮次撤销：执行中吞键；选中态接管 Enter/Esc/方向键；空闲空输入的双 Esc
+    // 在这里待命/选中。动作面板由下方 `/` 面板路由接管。
+    if matches!(
+        super::chat::rewind::apply_input(state, pane_id, command),
+        super::chat::rewind::Route::Consumed
+    ) {
+        return;
+    }
     // 历史 prompt 切换：只读定出路由（要读全局历史 + 窗格编辑器，两个不可变借用），
     // 再单独应用，避免同时借用 `state` 的两个字段。
     match lx_history_route(state, pane_id, command) {
@@ -220,6 +228,11 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
                                 active.min(len - 1)
                             });
                         }
+                    }
+                    // 撤销面板 Esc：退回选中态（不清输入框、不取消目标）。
+                    super::super::state::SlashPanel::Rewind(_) => {
+                        lx.slash = None;
+                        lx.rewind.panel = None;
                     }
                     // 真正关闭二级面板（`/model` 第一级、`/resume`、命令候选）：整框清空。
                     // 命令候选面板（`/`）不清：它的过滤词就是命令本身，由
@@ -491,26 +504,59 @@ fn refresh_slash_filter(state: &mut AppState, pane: PaneId) {
 
 /// 采纳 `/` 命令候选：消费整条命令文本（不写入草稿或 DB）。
 pub fn accept_slash_command(state: &mut AppState, pane: PaneId) -> bool {
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+    // 只读取出候选与输入，避免在调用 update 函数时仍持有窗格可变借用。
+    let Some((command, input, cursor)) = state.pane_anywhere(pane).and_then(|target| {
+        let Some(super::super::state::SlashPanel::Commands { items, window }) =
+            target.lx.slash.clone()
+        else {
+            return None;
+        };
+        items
+            .get(window.active)
+            .copied()
+            .map(|command| (command, target.lx.input.clone(), target.lx.cursor))
+    }) else {
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.slash = None;
+        }
         return false;
     };
-    // 只在命令候选面板时采纳高亮命令。
-    let Some(super::super::state::SlashPanel::Commands { items, window }) = target.lx.slash.clone()
-    else {
-        return false;
-    };
-    let Some(command) = items.get(window.active).copied() else {
-        target.lx.slash = None;
-        return false;
-    };
-    // 命令文本 = 当前行首 `/...`（含光标前的完整命令）。
-    let input = target.lx.input.clone();
-    let cursor = target.lx.cursor;
+    // 撤销命令必须独立占满输入：夹带正文/多行/参数/光标前后残留时拒绝并保留草稿。
+    if command == super::super::state::SlashCommand::Rewind {
+        let trimmed = input.trim();
+        let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
+        let line = input[line_start..].trim();
+        let standalone = trimmed == line
+            && input[cursor..].trim().is_empty()
+            && !line.contains('\n')
+            && !line.contains('\r')
+            && !line.contains(char::is_whitespace)
+            && line.starts_with('/');
+        if !standalone {
+            super::chat::show_lx_hint(
+                state,
+                pane,
+                super::super::state::InputHintLevel::Warning,
+                crate::ui::text::LX_REWIND_FAILED,
+            );
+            return true;
+        }
+        // 命令文本整条消费（不进入历史/撤销栈）。
+        if let Some(target) = state.pane_mut_anywhere(pane) {
+            target.lx.input.clear();
+            target.lx.cursor = 0;
+            target.lx.slash = None;
+        }
+        super::chat::apply_slash_command(state, pane, command);
+        return true;
+    }
     let line_start = input[..cursor].rfind('\n').map_or(0, |offset| offset + 1);
     // 消费整条命令：删除该行命令文本。
-    target.lx.input.replace_range(line_start..cursor, "");
-    target.lx.cursor = line_start;
-    target.lx.slash = None;
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.input.replace_range(line_start..cursor, "");
+        target.lx.cursor = line_start;
+        target.lx.slash = None;
+    }
     super::chat::apply_slash_command(state, pane, command);
     true
 }

@@ -23,6 +23,7 @@ fn reasoning(content: &str) -> ChatPartView {
 
 fn assistant() -> ChatMessageView {
     ChatMessageView {
+        sequence: 0,
         id: "a".into(),
         role: "assistant".into(),
         status: "streaming".into(),

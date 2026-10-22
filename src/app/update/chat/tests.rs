@@ -4,6 +4,7 @@
 mod history;
 mod process_cards;
 mod prompt_history;
+mod rewind;
 mod session;
 mod slash_panels;
 mod stop;
@@ -91,6 +92,9 @@ fn focus_pane(state: &AppState) -> PaneId {
 
 fn committed(session: &str) -> TurnCommitted {
     TurnCommitted {
+        user_sequence: 0,
+        assistant_sequence: 1,
+        revision: 1,
         session_id: session.into(),
         user_message_id: format!("{session}-u"),
         assistant_message_id: format!("{session}-a"),
@@ -750,6 +754,7 @@ fn apply_models_changed_updates_snapshot() {
 fn append_stream_delta_merges_adjacent_same_kind() {
     let mut chat = LxChat::new();
     chat.messages.push(crate::app::state::ChatMessageView {
+        sequence: 0,
         id: "a".into(),
         role: "assistant".into(),
         status: "streaming".into(),
@@ -780,6 +785,7 @@ fn append_stream_delta_merges_adjacent_same_kind() {
 fn signature_metadata_binds_to_reasoning_part() {
     let mut chat = LxChat::new();
     chat.messages.push(crate::app::state::ChatMessageView {
+        sequence: 0,
         id: "a".into(),
         role: "assistant".into(),
         status: "streaming".into(),

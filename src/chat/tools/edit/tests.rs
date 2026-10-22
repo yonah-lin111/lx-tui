@@ -617,7 +617,7 @@ fn pure_move_renames_without_content_change() {
     let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
     let changes = expect_changes(&result);
     assert_eq!(changes.len(), 1);
-    assert!(matches!(changes[0].kind, FileChangeKind::Moved { .. }));
+    assert!(matches!(&changes[0].kind, FileChangeKind::Moved { .. }));
     assert_eq!((changes[0].added, changes[0].removed), (0, 0));
     assert!(!fixture.exists("from.txt"), "纯移动必须真的移走源文件");
     assert_eq!(fixture.read("dest/from.txt"), "same\nbody\n");
@@ -634,7 +634,7 @@ fn move_with_edit_reports_content_diff() {
     let patch = wrapped("*** Update File: old.txt\n*** Move to: new.txt\n@@\n-before\n+after");
     let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
     let changes = expect_changes(&result);
-    assert!(matches!(changes[0].kind, FileChangeKind::Moved { .. }));
+    assert!(matches!(&changes[0].kind, FileChangeKind::Moved { .. }));
     let diff = changes[0].diff.as_ref().expect("移动同时改内容");
     let kinds: Vec<super::super::DiffLineKind> = diff
         .hunks()
@@ -647,15 +647,24 @@ fn move_with_edit_reports_content_diff() {
     assert_eq!(fixture.read("new.txt"), "after\nkeep\n");
 }
 
-/// 移动阶段失败（目标目录被占用）：源文件已写入，失败结果必须带上这份 Updated 与 diff。
+/// 移动阶段失败（目标目录不可写）：源文件已写入，失败结果必须带上这份 Updated 与 diff。
+#[cfg(unix)]
 #[test]
 fn move_failure_reports_already_written_source() {
+    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::new("edit-move-failure");
     fixture.write("src.txt", "old\n");
-    // 用同名**文件**占住目标父目录，create_dir_all 必然失败。
-    fixture.write("blocked", "not a directory\n");
-    let patch = wrapped("*** Update File: src.txt\n*** Move to: blocked/dest.txt\n@@\n-old\n+new");
+    // 目标目录去掉写位：源文件所在目录仍可写，写源成功后 rename 必然失败。
+    let dest = fixture.path().join("destdir");
+    std::fs::create_dir_all(&dest).expect("dest dir");
+    let mut permissions = std::fs::metadata(&dest).expect("metadata").permissions();
+    permissions.set_mode(0o500);
+    std::fs::set_permissions(&dest, permissions).expect("chmod");
+    let patch = wrapped("*** Update File: src.txt\n*** Move to: destdir/dest.txt\n@@\n-old\n+new");
     let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let mut restore = std::fs::metadata(&dest).expect("metadata").permissions();
+    restore.set_mode(0o700);
+    let _ = std::fs::set_permissions(&dest, restore);
     let ToolExecutionResult::Failed { changes, .. } = &result else {
         panic!("expected failure, got {result:?}");
     };
@@ -663,7 +672,7 @@ fn move_failure_reports_already_written_source() {
     assert_eq!(changes[0].kind, FileChangeKind::Updated);
     assert!(changes[0].diff.is_some(), "已写盘的源文件必须带差异");
     assert_eq!(fixture.read("src.txt"), "new\n");
-    assert!(!fixture.exists("blocked/dest.txt"));
+    assert!(!fixture.exists("destdir/dest.txt"));
 }
 
 /// 多文件补丁中途失败：失败前已提交的文件仍带 diff，未执行文件不出现。
@@ -701,4 +710,80 @@ fn delete_binary_file_keeps_deletion_and_marks_diff_unavailable() {
     let summary = super::super::to_summary(&result);
     assert!(!summary.counts_known);
     assert!(summary.added.is_none() && summary.removed.is_none());
+}
+
+/// 记录 Prepare 阶段提交的 mutation 形状。
+#[derive(Default)]
+struct RecordingRecorder {
+    prepared: std::sync::Mutex<Option<crate::chat::tools::mutation::PreparedMutation>>,
+}
+
+impl crate::chat::tools::mutation::MutationRecorder for RecordingRecorder {
+    fn prepare(
+        &self,
+        mutation: &crate::chat::tools::mutation::PreparedMutation,
+    ) -> Result<
+        crate::chat::tools::mutation::MutationTicket,
+        crate::chat::tools::mutation::MutationError,
+    > {
+        *self.prepared.lock().expect("lock") = Some(mutation.clone());
+        Ok(crate::chat::tools::mutation::MutationTicket {
+            ids: (0..mutation.paths.len())
+                .map(|index| i64::try_from(index).unwrap_or(0))
+                .collect(),
+        })
+    }
+
+    fn commit(
+        &self,
+        _ticket: crate::chat::tools::mutation::MutationTicket,
+        _observed: &crate::chat::tools::mutation::ObservedMutation,
+    ) -> Result<(), crate::chat::tools::mutation::MutationError> {
+        Ok(())
+    }
+}
+
+/// Update + Move（无链接间接）必须只产生一条同路径 mutation：内容写入与 rename
+/// 是同一路径的连续状态，拆成两条会被撤销的线性检查判成第三方交错写。
+#[test]
+fn update_with_move_records_one_mutation_per_path() {
+    let fixture = Fixture::new("edit-move-linear");
+    fixture.write("a.txt", "one\ntwo\n");
+    let patch = wrapped("*** Update File: a.txt\n*** Move to: b.txt\n@@\n-one\n+uno");
+    let recorder = RecordingRecorder::default();
+    let result = super::run_with(&fixture.ctx(), &edit_args(&patch), Some(&recorder));
+    let changes = expect_changes(&result);
+    assert!(matches!(&changes[0].kind, FileChangeKind::Moved { .. }));
+    assert!(!fixture.exists("a.txt"));
+    assert_eq!(fixture.read("b.txt"), "uno\ntwo\n");
+
+    let prepared = recorder
+        .prepared
+        .lock()
+        .expect("lock")
+        .clone()
+        .expect("prepared");
+    let mut targets: Vec<_> = prepared
+        .paths
+        .iter()
+        .map(|path| path.target.clone())
+        .collect();
+    targets.sort();
+    let total = targets.len();
+    targets.dedup();
+    assert_eq!(
+        targets.len(),
+        total,
+        "同一路径不能有两条 mutation：{targets:?}"
+    );
+    let source = prepared
+        .paths
+        .iter()
+        .find(|path| path.operation == crate::chat::tools::mutation::MutationOperation::MoveSource)
+        .expect("move source");
+    assert_eq!(
+        source.before.bytes,
+        b"one\ntwo\n".to_vec(),
+        "before 必须是写前内容"
+    );
 }

@@ -33,8 +33,8 @@ pub(crate) mod task;
 
 use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
-    LxChatHit, card_target_at, chat_hit, fold_target_at, history_rows, history_scrollbar,
-    history_view, sticky_prompt_jump,
+    LxChatHit, card_target_at, chat_hit, fold_target_at, history_center_target, history_rows,
+    history_scrollbar, history_view, sticky_prompt_jump,
 };
 pub(crate) use slash::{item_at as slash_item_at, layout as slash_layout};
 
@@ -519,10 +519,11 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     let entries_top = center
         .min(top_limit.saturating_sub(entries_h + brand::UNDERLINE_ROWS))
         .max(region_top);
-    // 后台任务面板打开时**不登记入口区**：面板接管了历史区与输入框，那三个
-    // 入口标签根本没画出来；若仍留命中矩形，点面板空白处会穿透去切换 agent
+    // 非首页（已有消息或撤销提示）与后台任务面板打开时都**不登记入口区**：
+    // 那三个入口标签根本没画出来，留下命中矩形会让点击历史内容穿透去切换 agent
     // （用户报的真实 bug）。
     let entries_ok = lx.task.is_none()
+        && !history::has_history(lx)
         && entries_fit
         && entries_top
             .saturating_add(entries_h)
@@ -614,7 +615,7 @@ fn build(
     focused: bool,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let lay = layout(area, lx);
-    if !lx.chat.messages.is_empty() {
+    if history::has_history(lx) {
         return build_chat(area, lx, focused, &lay);
     }
     let mut grid = Grid::new(area);
@@ -743,7 +744,7 @@ fn build_chat(
 
 /// 聊天历史区矩形（与输入框同宽对齐；无消息返回 None）；滚轮/命中/滚动条用。
 pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
-    if lx.chat.messages.is_empty() {
+    if !history::has_history(lx) {
         return None;
     }
     let lay = layout(area, lx);

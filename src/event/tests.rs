@@ -4720,6 +4720,7 @@ fn lx_card_click_toggles_expansion_on_release() {
         target.view = PaneView::Lx;
         let mut chat = crate::app::state::LxChat::new();
         chat.messages.push(crate::app::state::ChatMessageView {
+            sequence: 0,
             id: "m-param".into(),
             role: "assistant".into(),
             status: "complete".into(),
@@ -4808,4 +4809,21 @@ fn lx_card_click_toggles_expansion_on_release() {
             .detail_is_expanded("m-param", "call-param"),
         "未拖拽的点击必须展开卡片"
     );
+}
+
+/// 粘贴也是编辑：必须让双 Esc 的待命失效，避免带草稿选中后回填覆盖。
+#[test]
+fn lx_paste_cancels_rewind_arming() {
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.chat.session_id = Some("sess".into());
+        target.lx.rewind.armed_at = Some(std::time::Instant::now());
+    }
+    assert!(paste::handle_lx_paste(&mut state, "pasted".into()));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.rewind.armed_at.is_none(), "粘贴必须清除撤销待命");
+    assert_eq!(target.lx.input, "pasted");
 }

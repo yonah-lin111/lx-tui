@@ -20,10 +20,12 @@ use tokio::sync::Mutex;
 use crate::chat::plan::PlanSnapshot;
 use crate::chat::process::{ProcessManager, ProcessResultKind};
 use crate::chat::tools::{
-    ToolExecutionResult, build_plan_result, parse_exec_args, parse_stdin_args, process_failure,
+    MutationRecorder, MutationRecorderFactory, ToolExecutionResult, build_plan_result,
+    parse_exec_args, parse_stdin_args, process_failure,
 };
+use crate::db::chat::ToolCallTicket;
 
-use super::{FileTools, ReadyToolCall, ToolExecutor};
+use super::{ReadyToolCall, ToolExecutor};
 
 /// 一轮执行上下文：本轮新建的进程集合与当前正在等待/交互的进程。
 ///
@@ -87,6 +89,8 @@ pub struct AgentTools {
     turn: Arc<Mutex<TurnExecution>>,
     /// 计划修订计数（每次成功 update_plan 单调递增）。
     plan_revision: Arc<std::sync::atomic::AtomicU64>,
+    /// 文件 mutation recorder 工厂；生产入口必注入，测试可留空。
+    recorder: Option<Arc<dyn MutationRecorderFactory>>,
 }
 
 impl std::fmt::Debug for AgentTools {
@@ -105,6 +109,60 @@ impl AgentTools {
             processes,
             turn,
             plan_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            recorder: None,
+        }
+    }
+
+    /// 注入每轮 mutation recorder 工厂（生产路径必须调用）。
+    pub fn with_recorder(mut self, recorder: Arc<dyn MutationRecorderFactory>) -> Self {
+        self.recorder = Some(recorder);
+        self
+    }
+
+    /// 文件工具：在阻塞线程池执行，并注入本次调用的 recorder。
+    async fn execute_file(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        ticket: &ToolCallTicket,
+    ) -> ToolExecutionResult {
+        let context = crate::chat::tools::ToolContext::new(cwd.to_path_buf());
+        let name = call.name.clone();
+        let arguments_json = call.arguments_json.clone();
+        let call_id = call.call_id.clone();
+        let recorder: Option<Arc<dyn MutationRecorder>> = self
+            .recorder
+            .as_ref()
+            .map(|factory| factory.for_call(&call_id));
+        // ticket 只用于归属校验（recorder 已按 call_id 绑定）；这里保留参数，
+        // 防止将来误用模型参数代替已提交票据。
+        let _ = ticket;
+        let worker_name = name.clone();
+        match tokio::task::spawn_blocking(move || {
+            crate::chat::tools::execute_with(
+                &context,
+                &worker_name,
+                &arguments_json,
+                recorder.as_deref(),
+            )
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                tracing::warn!(
+                    target: "lx::agent",
+                    call_id = %call_id,
+                    name = %name,
+                    %error,
+                    "tool execution task failed"
+                );
+                ToolExecutionResult::Failed {
+                    code: crate::chat::tools::ToolErrorCode::Io,
+                    message: crate::chat::agent_loop::TOOL_EXECUTION_ABORTED_CODE.to_string(),
+                    changes: Vec::new(),
+                }
+            }
         }
     }
 
@@ -171,6 +229,26 @@ impl AgentTools {
 
 impl ToolExecutor for AgentTools {
     async fn execute(&self, cwd: &Path, call: &ReadyToolCall) -> ToolExecutionResult {
+        self.run(cwd, call, None).await
+    }
+
+    async fn execute_tracked(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        ticket: &ToolCallTicket,
+    ) -> ToolExecutionResult {
+        self.run(cwd, call, Some(ticket)).await
+    }
+}
+
+impl AgentTools {
+    async fn run(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        ticket: Option<&ToolCallTicket>,
+    ) -> ToolExecutionResult {
         let result = match call.name.as_str() {
             "exec_command" | "write_stdin" => {
                 self.execute_process(cwd, &call.name, &call.arguments_json, &call.call_id)
@@ -187,7 +265,10 @@ impl ToolExecutor for AgentTools {
                     Err(failure) => failure.into_result(Vec::new()),
                 }
             }
-            _ => FileTools.execute(cwd, call).await,
+            _ => match ticket {
+                Some(ticket) => self.execute_file(cwd, call, ticket).await,
+                None => crate::chat::agent_loop::FileTools.execute(cwd, call).await,
+            },
         };
         if !call.name.is_empty() {
             let mut turn = self.turn.lock().await;

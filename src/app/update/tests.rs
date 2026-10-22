@@ -4640,8 +4640,8 @@ fn lx_slash_fuzzy_matches_subsequence_and_aliases() {
         .collect();
     assert_eq!(
         names,
-        vec!["resume"],
-        "前缀命中 /resume（别名不做子序列匹配）"
+        vec!["resume", "rewind"],
+        "前缀命中 /resume 与 /rewind（别名不做子序列匹配）"
     );
     // 别名：/clear → new，/session → resume。
     let names: Vec<&str> = SlashPanel::commands_matching("/clear")

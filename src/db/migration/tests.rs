@@ -319,7 +319,9 @@ fn interrupted_status_is_accepted_after_migration() {
     assert_eq!(calls.len(), 2);
     // v8 的 pending 行在启动恢复后变成 interrupted（新 CHECK 允许写入）。
     assert_eq!(
-        database.recover_interrupted_tool_calls().expect("recover"),
+        database
+            .recover_interrupted_tool_calls(&["sess-1".to_string()])
+            .expect("recover"),
         1
     );
     let calls = database
@@ -336,7 +338,12 @@ fn interrupted_status_is_accepted_after_migration() {
 fn recovery_backfills_streaming_reasoning_completion() {
     let (path, workspace) = seed_v8_database("streaming-reasoning");
     let database = Database::open(&path).expect("upgrade");
-    assert_eq!(database.recover_interrupted_streams().expect("recover"), 1);
+    assert_eq!(
+        database
+            .recover_interrupted_streams(&["sess-1".to_string()])
+            .expect("recover"),
+        1
+    );
     let messages = database
         .load_chat_session(&workspace, "sess-1")
         .expect("load")
@@ -348,7 +355,12 @@ fn recovery_backfills_streaming_reasoning_completion() {
         .expect("reasoning completed after recovery");
     assert!(completed > 0, "回填当前时刻");
     // 幂等：第二次无行可改。
-    assert_eq!(database.recover_interrupted_streams().expect("again"), 0);
+    assert_eq!(
+        database
+            .recover_interrupted_streams(&["sess-1".to_string()])
+            .expect("again"),
+        0
+    );
 }
 
 #[test]

@@ -363,7 +363,7 @@ where
     transport.attach(sender.clone(), key.clone());
     // 事件层冻结工作区（生产由 `start_stream` 写入）。
     streams
-        .workspaces
+        .db_workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
     // 窗格可见：BeginTool 的回执推迟到「该帧绘制后」，从而可插桩 pending→running。
     streams.set_visible_panes(&[(key.pane, Rect::new(0, 0, 80, 24))]);
@@ -479,6 +479,8 @@ fn pump(
                     .lock()
                     .expect("lock")
                     .push(Trace::Begin(call.call_id.clone())),
+                // 测试执行器不同步 mutation；文件快照由事件层单独覆盖。
+                AgentHostEvent::Mutation(_) => {}
                 AgentHostEvent::FinishTool {
                     ticket, outcome, ..
                 } => {
@@ -677,6 +679,8 @@ fn view_summary_maps_every_field() {
 
 mod ack;
 mod flow;
+mod guard;
 mod limits;
 mod process_tools;
 mod resume;
+mod workspace;

@@ -177,6 +177,20 @@ pub trait ToolExecutor: Send + Sync {
         cwd: &Path,
         call: &ReadyToolCall,
     ) -> impl Future<Output = ToolExecutionResult> + Send;
+
+    /// 带 BeginTool 票据的执行入口：生产执行器据此把 mutation 绑定到真实
+    /// session / message / call；默认实现忽略票据（测试执行器无需关心快照）。
+    fn execute_tracked(
+        &self,
+        cwd: &Path,
+        call: &ReadyToolCall,
+        _ticket: &ToolCallTicket,
+    ) -> impl Future<Output = ToolExecutionResult> + Send
+    where
+        Self: Sized,
+    {
+        self.execute(cwd, call)
+    }
 }
 
 /// 生产执行器：文件工具是阻塞 IO，必须放入阻塞线程池。
@@ -467,7 +481,9 @@ where
                 return TurnSummary::interrupted(usage);
             }
             // 门槛二：running 已推进（事件层在 ack 内完成），此后才允许文件 IO。
-            let result = executor.execute(context.cwd(), &call).await;
+            let result = executor
+                .execute_tracked(context.cwd(), &call, &ticket)
+                .await;
             let content = tools::format_for_model(&result);
             let is_error = result.is_failure();
             // 结果必须先落库再进入上下文；落库失败即停止本轮，**不重试写入**。

@@ -19,7 +19,7 @@ async fn pending_failure_has_no_file_side_effect_and_fails_turn() {
     );
     let mut streams = ChatStreams::default();
     streams
-        .workspaces
+        .db_workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
     // 必须让该窗格「可见」：可见窗格的 BeginTool 才会推迟到该帧绘制后回执
     // （正是这个推迟窗口让 pending 条目可能被遗弃）。
@@ -239,14 +239,14 @@ async fn crash_recovery_marks_interrupted_and_resume_never_reexecutes() {
     let reopened = fixture.reopen();
     assert_eq!(
         reopened
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
             .expect("recover tool calls"),
         2,
         "pending 与 running 都转 interrupted"
     );
     assert_eq!(
         reopened
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
             .expect("idempotent"),
         0,
         "恢复动作幂等"
@@ -346,7 +346,9 @@ async fn escape_cancel_skips_unstarted_calls_and_keeps_real_result() {
     // DB 恢复时不会再把这个 cancelled 行当 running/interrupted。
     let reopened = fixture.reopen();
     assert_eq!(
-        reopened.recover_interrupted_tool_calls().expect("recover"),
+        reopened
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
+            .expect("recover"),
         0,
         "已结算的调用不受恢复影响"
     );
@@ -381,7 +383,7 @@ async fn stale_generation_events_do_not_pollute_the_new_turn() {
     };
     let mut streams = ChatStreams::default();
     streams
-        .workspaces
+        .db_workspaces
         .insert(stale.clone(), fixture.workspace().to_path_buf());
     // 旧 generation 的 delta 被丢弃。
     let deltas = vec![ChatDelta::Part(PartDelta {
@@ -486,7 +488,7 @@ async fn cancel_while_waiting_for_ticket_never_executes_the_tool() {
     assert_eq!(
         fixture
             .reopen()
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
             .expect("recover"),
         0,
         "没有遗留 pending/running 行"
@@ -616,7 +618,7 @@ async fn abandoning_a_pending_begin_records_cancelled_not_pending() {
     let (mut state, key, persistence, session) = streaming_state(&fixture);
     let mut streams = ChatStreams::default();
     streams
-        .workspaces
+        .db_workspaces
         .insert(key.clone(), fixture.workspace().to_path_buf());
     // 必须让该窗格「可见」：可见窗格的 BeginTool 才会推迟到该帧绘制后回执
     // （正是这个推迟窗口让 pending 条目可能被遗弃）。

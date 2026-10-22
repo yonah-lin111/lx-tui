@@ -311,6 +311,10 @@ pub struct LxChat {
     pub selection: Option<ModelSelection>,
     /// 展示用消息列表（含流中 partial；DB 恢复时重建）。
     pub messages: Vec<ChatMessageView>,
+    /// 独立持久化的撤销提示（不进入 messages / 模型上下文）。
+    pub notices: Vec<super::rewind::RewindNoticeView>,
+    /// 会话 revision（撤销预检与迟到结果防护）。
+    pub revision: u64,
     /// 请求状态机。
     pub request: RequestState,
     /// 历史视图滚动：是否跟随底部（用户上滚后暂停）。
@@ -383,6 +387,8 @@ impl LxChat {
             session_id: None,
             selection: None,
             messages: Vec::new(),
+            notices: Vec::new(),
+            revision: 0,
             request: RequestState::Idle,
             follow_bottom: true,
             context_tokens: None,
@@ -414,6 +420,8 @@ impl LxChat {
     pub fn reset_session_view(&mut self) {
         self.session_id = None;
         self.messages.clear();
+        self.notices.clear();
+        self.revision = 0;
         self.follow_bottom = true;
         self.input_tokens_reset();
         self.thinking_toggled.clear();
