@@ -282,6 +282,21 @@ fn folded_param_lifts_on_hover_and_no_block_background() {
     assert_eq!(chat_tool_param().bg, None, "参数行不铺底色");
 }
 
+/// 展开态与悬停态同档：参数自己维持默认可读前景，不靠鼠标。
+#[test]
+fn expanded_param_stays_at_default_foreground() {
+    assert_eq!(
+        chat_tool_param_expanded(),
+        chat_tool_param_hover(),
+        "展开态与悬停态同档"
+    );
+    assert_ne!(
+        chat_tool_param_expanded(),
+        chat_tool_param(),
+        "展开态必须比折叠态的 dim 更亮"
+    );
+}
+
 #[test]
 fn chat_tool_param_matches_context_usage() {
     let style = chat_tool_param();

@@ -133,7 +133,6 @@ fn render_group(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> (Vec<
         0,
         expanded,
         false,
-        None,
     );
     assert_eq!(row_index, total, "draw 推进行数必须等于 rows（宽 {width}）");
     let mut lines = Vec::new();
@@ -165,7 +164,6 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
         0,
         &[expanded],
         false,
-        None,
     );
     grid.cell(x, y).style
 }
@@ -208,7 +206,6 @@ fn scroll_does_not_change_advanced_rows() {
         0,
         &[true],
         false,
-        None,
     );
     assert_eq!(row_index, total);
 }
@@ -366,7 +363,6 @@ fn merged_card_mark_follows_the_worst_status() {
         0,
         &[false, false],
         false,
-        None,
     );
     assert_eq!(
         grid.cell(0, 0).style,
@@ -599,7 +595,6 @@ fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
         0,
         &[true],
         false,
-        None,
     );
     let grey = style::chat_expanded_bg().bg;
     let added = style::agent_added_bg().bg;
@@ -629,17 +624,32 @@ fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
     assert!(diffs > 0, "增删行保留自己的底色");
 }
 
-/// hover 只点亮**折叠内容**；展开态没有折叠内容，配色与常态完全一致。
+/// 文件差异卡片**没有任何 hover 提亮**：折叠/展开只靠点击与展开后的灰底表达。
+///
+/// 曾经会提亮文件头路径与行号槽，用户反馈「hover diff 块时工具参数不要高亮」后
+/// 整卡取消提亮——这里用「折叠内容行数为 0」把这条约定钉死在唯一判据上。
 #[test]
-fn only_folded_content_is_hover_highlighted() {
+fn file_diff_card_has_no_hover_region() {
+    let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
+    assert_eq!(
+        super::super::foldable_rows(&call, 60),
+        0,
+        "文件差异卡片不提供 hover 提亮区域"
+    );
+    assert!(
+        has_more_content(&call, 60),
+        "没有 hover 不等于不可点：内容仍可展开"
+    );
+}
+
+/// 文件头路径：折叠态 dim、**展开态升为默认前景**（展开后参数保持高亮文字颜色）。
+#[test]
+fn file_header_path_lifts_when_expanded() {
     let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
     let width = 60u16;
-    let rect_of = |expanded: bool| {
+    let header_path_style = |expanded: bool| {
         let total = rows(&[&call], width, &[expanded]);
-        Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX))
-    };
-    let style_at = |expanded: bool, hovered: Option<usize>, x: u16, y: u16| {
-        let rect = rect_of(expanded);
+        let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
         let mut grid = Grid::new(rect);
         let mut row_index = 0usize;
         draw(
@@ -651,28 +661,18 @@ fn only_folded_content_is_hover_highlighted() {
             0,
             &[expanded],
             false,
-            hovered,
         );
-        grid.cell(x, y).style
+        // 行 0 = 标题，行 1 = 文件头；路径从连接符（5 列）之后开始。
+        grid.cell(6, 1).style
     };
-    // 折叠态：悬停把文件头的 dim 提亮为默认前景。
-    // 提亮作用在「dim 元信息」上；增删行保持语义色。取整块的行样式对比是否有差异。
-    let differing: Vec<(u16, u16)> = (0..rect_of(false).height)
-        .flat_map(|y| (0..width).map(move |x| (x, y)))
-        .filter(|(x, y)| style_at(false, None, *x, *y) != style_at(false, Some(0), *x, *y))
-        .collect();
-    assert!(
-        !differing.is_empty(),
-        "折叠态悬停应提亮 dim 内容（实际没有任何单元格变化）"
+    assert_eq!(
+        header_path_style(false),
+        style::chat_tool_param(),
+        "折叠态路径是注脚级 dim"
     );
-    // 展开态：没有折叠内容，悬停不改变任何配色。
-    let expanded_diff: Vec<(u16, u16)> = (0..rect_of(true).height)
-        .flat_map(|y| (0..width).map(move |x| (x, y)))
-        .filter(|(x, y)| style_at(true, None, *x, *y) != style_at(true, Some(0), *x, *y))
-        .collect();
-    assert!(
-        expanded_diff.is_empty(),
-        "展开态不该有 hover 提亮，实际变了 {} 格",
-        expanded_diff.len()
+    assert_eq!(
+        header_path_style(true),
+        style::chat_tool_param_expanded(),
+        "展开态路径升为默认可读前景"
     );
 }

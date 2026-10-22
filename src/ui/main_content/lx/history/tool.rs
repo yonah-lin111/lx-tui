@@ -184,7 +184,6 @@ pub(super) fn draw_animated(
                 loading_frame,
                 &[expanded],
                 animating,
-                hovered.then_some(0),
             );
             return;
         }
@@ -246,6 +245,8 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
 /// 折叠态**可提亮的内容行数**（不含标题行）：只有折叠的内容才在 hover 时提亮。
 ///
 /// 具体行数由各卡片自己的折叠额度决定；这里只回答「标题之下有多少行属于折叠内容」。
+/// **文件差异卡片恒为 0**：用户要求「hover diff 块完全不提亮」，它没有需要提亮的
+/// 折叠内容（可点性由点击与展开后的灰底表达）。
 pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
     if width == 0 {
         return 0;
@@ -256,9 +257,7 @@ pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
             command::foldable_rows(call, width)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => 0,
-        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            file_diff::foldable_rows(call, width)
-        }
+        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => 0,
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             file_summary::foldable_rows(call, width)
         }
@@ -315,7 +314,6 @@ pub(super) fn group_draw_animated(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
-    hovered: Option<usize>,
 ) {
     file_diff::draw(
         grid,
@@ -326,7 +324,6 @@ pub(super) fn group_draw_animated(
         loading_frame,
         expanded,
         animating,
-        hovered,
     );
 }
 

@@ -523,20 +523,28 @@ fn long_detail_rows_follow_expansion() {
     );
 }
 
-/// 参数恒为次要信息色（不再有 hover 升色）：行数也不随交互变化。
+/// 参数文字：**折叠态 dim、展开态默认前景**（展开后保持高亮，收起后恢复）。
+///
+/// 用户要求「展开参数后参数内容文字保持高亮的文字颜色，折叠后恢复」。
 #[test]
-fn parameter_stays_dim_without_hover_states() {
+fn parameter_lifts_when_expanded_and_recovers_when_folded() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    let normal = file_summary::detail(&call, 80, false, false);
+    let folded = file_summary::detail(&call, 80, false, false);
     let expanded = file_summary::detail(&call, 80, true, false);
-    assert_eq!(normal.len(), expanded.len(), "短参数展开后行数不变");
-    let param_style = normal
-        .iter()
-        .flatten()
-        .find(|segment| segment.text.contains("src/ui/style.rs"))
-        .map(|segment| segment.style)
-        .expect("参数段");
-    assert_eq!(param_style, style::chat_tool_param(), "参数恒为 dim");
+    assert_eq!(folded.len(), expanded.len(), "短参数展开后行数不变");
+    let param_style = |rows: &[Vec<Segment>]| {
+        rows.iter()
+            .flatten()
+            .find(|segment| segment.text.contains("src/ui/style.rs"))
+            .map(|segment| segment.style)
+            .expect("参数段")
+    };
+    assert_eq!(param_style(&folded), style::chat_tool_param(), "折叠态 dim");
+    assert_eq!(
+        param_style(&expanded),
+        style::chat_tool_param_expanded(),
+        "展开态保持默认前景"
+    );
 }
 
 // ===== 折叠态的剩余行数提示、悬停提亮与展开块底色 =====

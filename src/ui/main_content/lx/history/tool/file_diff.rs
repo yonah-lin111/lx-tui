@@ -14,11 +14,15 @@
 //!   步骤打断）共用**一行合并标题**（文件数与总计），其下每个调用各自一块：自己的
 //!   文件头（`└─`）、自己的预览、自己的展开状态，块与块之间空一行区分。展开互不影响；
 //!   单次调用是长度为 1 的组，标题只写裸动词、不写 `1 file`；
-//! - **没有动作按钮、没有剩余行数文案**（用户要求移除）：整块卡片本身就是点击面——
-//!   点折叠内容展开、点展开内容收起，靠行为而不是文案表达可交互；
+//! - **没有动作按钮**（用户要求移除）：整块卡片本身就是点击面——点折叠内容展开、
+//!   点展开内容收起，靠行为而不是文案表达可交互；折叠态在内容下一行写剩余行数
+//!   （`… N more lines`）；
+//! - **hover 不提亮**（用户要求「hover diff 块时工具参数不要高亮」）：文件路径是参数、
+//!   提示行是注脚，都不该像按钮一样亮起来；可点性由点击与展开后的灰底表达；
 //! - 预览只取 Added/Removed 行、按真实列宽换行，**最多 3 个物理行**；上下文不占额度；
 //! - 展开显示全部已保存 hunks、1 行上下文、hunk 间 `⋮` 分隔与 EOF 元信息；
 //! - 新增绿、删除红，同时保留 `+`/`-`；行号与上下文用次要信息色；
+//! - 文件头路径折叠态 dim、**展开态升为默认前景**（展开后参数保持高亮，折叠恢复）；
 //! - 增删行铺**整行底色**（`agent_added_bg` / `agent_removed_bg`），上下文行不铺；
 //!   正文按文件扩展名做轻量语法高亮（`.md` 走 markdown 词法，未知扩展名不假高亮）；
 //! - 纯渲染：只读 `FileDiffView`，不读文件、不解析 JSON。
@@ -91,7 +95,7 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
             start += CALL_GAP_ROWS;
         }
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        let len = layout(call, width, is_expanded, false).len();
+        let len = layout(call, width, is_expanded).len();
         out.push(Block { start, len });
         start += len;
     }
@@ -100,7 +104,9 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
 
 /// 绘制文件差异卡片；推进行数必须与 [`rows`] 严格相等。
 ///
-/// `expanded` 与 `calls` 一一对应（逐调用独立）。
+/// `expanded` 与 `calls` 一一对应（逐调用独立）。**没有 hover 参数**：文件差异卡片
+/// 不随鼠标悬停改变配色（用户要求「hover diff 块完全不提亮」），可点性由点击与展开
+/// 后的灰底表达。
 #[allow(clippy::too_many_arguments)]
 pub(super) fn draw(
     grid: &mut Grid,
@@ -111,7 +117,6 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
-    hovered: Option<usize>,
 ) {
     if rect.width == 0 || calls.is_empty() {
         return;
@@ -138,7 +143,7 @@ pub(super) fn draw(
             *row_index += CALL_GAP_ROWS;
         }
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        for row in layout(call, rect.width, is_expanded, hovered == Some(index)) {
+        for row in layout(call, rect.width, is_expanded) {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
                 // 先铺**整行**底色（100% 宽，含左侧缩进与行尾空白）再写字：
                 // `put_segments` 只写字符，不负责行背景，行尾留白会掉色。
@@ -185,11 +190,13 @@ impl Row {
 
 /// 一次调用的全部物理行（标题行除外）；[`rows`]、[`draw`] 与命中共用。
 ///
-/// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；悬停时内容从
-///   dim 提亮为默认前景（唯一的「可点」提示）；
+/// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；**不做 hover 提亮**
+///   （用户要求「hover diff 块时文件路径与剩余行数行都不要高亮」）——文件头里的路径
+///   是参数、提示行是注脚，两者都容易被一次误扫当成可点的按钮；
 /// - 展开态铺开全部 hunks，没有剩余行数行；**正文行铺展开块灰底**（文件头不铺），
-///   增删行自己的红/绿底色优先级更高。
-fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
+///   增删行自己的红/绿底色优先级更高；文件头路径在展开态升为默认前景
+///   （「展开后参数保持高亮文字颜色，折叠后恢复」）。
+fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     let mut rows = content_rows(call, width, expanded);
     // 折叠态：下一行单独写剩余行数（展开后消失）。
     if !expanded {
@@ -210,25 +217,6 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
                 continue;
             }
             row.fill = Some(style::chat_expanded_bg());
-        }
-    } else if hovered {
-        // 折叠内容悬停：把 dim 的元信息提到默认前景（增删语义色保持不变）。
-        for row in &mut rows {
-            if row.fill.is_none() {
-                row.segments = row
-                    .segments
-                    .drain(..)
-                    .map(|segment| {
-                        // 只提亮「次要信息」（dim）：增删的绿/红、语法高亮的彩度都不动。
-                        let lifted = if segment.style.fg == style::muted().fg {
-                            style::chat_tool_param_hover()
-                        } else {
-                            segment.style
-                        };
-                        Segment::new(segment.text, lifted)
-                    })
-                    .collect();
-            }
         }
     }
     rows
@@ -254,7 +242,7 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     let last_index = files.len().saturating_sub(1);
     for (index, file) in files.iter().enumerate() {
         let last = index == last_index;
-        rows.push(Row::plain(file_header(file, last, width)));
+        rows.push(Row::plain(file_header(file, last, width, expanded)));
         rows.extend(file_body(file, width, expanded, last));
     }
     let omitted: usize = call
@@ -269,11 +257,6 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
         )));
     }
     rows
-}
-
-/// 折叠态可提亮的内容行数（文件头 + 预览行，不含剩余行数提示）。
-pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
-    content_rows(call, width, false).len()
 }
 
 /// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。
@@ -435,8 +418,10 @@ fn group_count_segments(calls: &[&ToolCallView]) -> Vec<Segment> {
 /// 文件头：`  ├─ path → to (+N -N)`；最后一个文件收口为 `  └─ `。
 ///
 /// 路径按剩余列宽做中间省略（保留首尾层级）；放不下时先丢计数、再丢路径，
-/// 连接符始终保留。
-fn file_header(file: &FileChangeView, last: bool, width: u16) -> Vec<Segment> {
+/// 连接符始终保留。**展开态路径升为默认前景**（用户要求「展开后参数保持高亮文字
+/// 颜色，折叠后恢复」）：折叠态是注脚级的 dim，展开态说明用户正在看这一块，路径
+/// 是它的标题，必须读得清。
+fn file_header(file: &FileChangeView, last: bool, width: u16, expanded: bool) -> Vec<Segment> {
     let connector = if last {
         text::agent::TREE_LEAF
     } else {
@@ -487,7 +472,14 @@ fn file_header(file: &FileChangeView, last: bool, width: u16) -> Vec<Segment> {
     let path = text::ellipsize_middle(&path, path_room);
     if !path.is_empty() {
         segments.push(Segment::new(" ", style::text()));
-        segments.push(Segment::new(path, style::chat_tool_param()));
+        segments.push(Segment::new(
+            path,
+            if expanded {
+                style::chat_tool_param_expanded()
+            } else {
+                style::chat_tool_param()
+            },
+        ));
     }
     if keep_counts {
         segments.push(Segment::new(" ", style::text()));

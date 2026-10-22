@@ -519,3 +519,24 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
       总行数覆盖空行）；`consecutive_file_tools_share_one_header_but_expand_independently` 由
       「组内不得出现空行」改为「恰好一个空行，且下一行是第二块文件头」。
   fmt / clippy -D warnings / cargo test（2837 passed）全部通过。
+
+## 23. 第十三轮：交互三修（diff 不提亮 / 参数互不牵连 / 展开保持高亮）
+
+用户三条要求：`… 9 more lines` hover 不要高亮；hover diff 块时工具参数不要高亮；
+展开参数后参数文字保持高亮文字颜色、折叠后恢复。
+
+- [x] **diff 卡彻底不做 hover 提亮**：`file_diff::draw`/`layout` 删掉 `hovered` 参数，
+      `tool::foldable_rows` 对文件差异卡片恒返回 0（`history` 单卡 `fold` 因此零高），
+      `history::layout` 合并卡的 `fold` 也直接置零高——折叠态文件头路径、剩余行数行、
+      行号槽全都不随鼠标变色。「能点」由点击与展开后的灰底表达。
+- [x] **hover diff 不再牵动工具参数**：普通工具（`file_summary`）的 `hovered` 只由它自己的
+      命中矩形决定，diff 卡片不再产生 hover 目标，参数自然不会跟着亮。
+- [x] **展开态参数保持默认前景**：新增 `style::chat_tool_param_expanded()`（与
+      `chat_tool_param_hover()` 同档 = 终端默认前景）。`file_summary::detail` 的
+      `param_style = expanded || hovered`，`command::command_body` 同样 `expanded || hovered`，
+      `file_diff::file_header` 展开态路径改用该档；折叠后回到 `chat_tool_param()`（dim）。
+- [x] 测试：`file_diff_card_has_no_hover_region`（`foldable_rows == 0` 且仍可展开）、
+      `file_header_path_lifts_when_expanded`（折叠 dim / 展开默认前景）、
+      `parameter_lifts_when_expanded_and_recovers_when_folded`（替换旧的「参数恒 dim」）、
+      `command_body_lifts_when_expanded`、`expanded_param_stays_at_default_foreground`（样式档位）。
+  fmt / clippy -D warnings / cargo test（2840 passed）全部通过。

@@ -393,8 +393,8 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 ///
 /// - 折叠态：最多 [`DETAIL_PREVIEW_ROWS`] 行正文，**下面再单独一行**写剩余行数
 ///   （`… 421 more lines`，用户要求「在折叠内容下一行显示剩余行数」）；
-/// - 展开态：最多 [`DETAIL_MAX_ROWS`] 行，整块铺 [`style::chat_expanded_bg`] 底色，
-///   且不再有剩余行数行。
+/// - 展开态：最多 [`DETAIL_MAX_ROWS`] 行，**参数文字升为默认可读前景**（折叠回 dim），
+///   且不再有剩余行数行；`└─` 行是工具参数本身，不铺展开灰底。
 ///
 /// `rows` 与 `draw` 共用本函数，行数口径只有一份。
 pub(super) fn detail(
@@ -416,9 +416,10 @@ pub(super) fn detail(
         (prefix, prefix_cols)
     };
     let body_limit = limit.saturating_sub(head_cols).max(1);
-    // 折叠内容在悬停时提亮为默认前景（没有按钮，hover 是「这块可点」的唯一提示）。
-    let param_style = if hovered {
-        style::chat_tool_param_hover()
+    // 参数文字：**展开后保持默认可读前景**（用户要求「展开参数后文字保持高亮、
+    // 折叠后恢复」），折叠态只在悬停时提亮（没有按钮，hover 是「这块可点」的提示）。
+    let param_style = if expanded || hovered {
+        style::chat_tool_param_expanded()
     } else {
         style::chat_tool_param()
     };

@@ -816,6 +816,14 @@ pub fn chat_tool_param_hover() -> Style {
     Style::default()
 }
 
+/// 工具参数在**展开态**的样式：与悬停同档（终端默认前景）。
+///
+/// 用户要求「展开参数后，参数内容的文字需要保持高亮的文字颜色，折叠后恢复」：
+/// 展开态没有 hover 可依赖，参数必须自己维持默认可读前景；折叠回 dim。
+pub fn chat_tool_param_expanded() -> Style {
+    chat_tool_param_hover()
+}
+
 /// 工具**展开块**的整行背景（参考 Claude Code 的深色卡片底）。
 ///
 /// 只铺在展开后的**正文行**上（不含文件头、不含折叠预览、不含工具参数）。

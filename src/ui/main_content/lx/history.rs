@@ -370,18 +370,9 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                                         width,
                                         rows_to_u16(block.len),
                                     ),
-                                    // 每块的整块就是它自己的折叠内容（文件头 + 差异行）；
-                                    // 展开后没有折叠内容，不再提亮。
-                                    fold: if expanded[index] {
-                                        Rect::new(area.x, block_y(block.start), width, 0)
-                                    } else {
-                                        Rect::new(
-                                            area.x,
-                                            block_y(block.start),
-                                            width,
-                                            rows_to_u16(block.len),
-                                        )
-                                    },
+                                    // 文件差异卡片**不提供 hover 提亮**：可点性由点击
+                                    // 与展开后的灰底表达，路径/提示行都不是按钮。
+                                    fold: Rect::new(area.x, block_y(block.start), width, 0),
                                 });
                             }
                         }
@@ -606,9 +597,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             row_index += 1;
                         }
                         has_previous = true;
-                        let hovered = group
-                            .iter()
-                            .position(|call| lx.chat.tool_is_hovered(&message.id, &call.call_id));
                         tool::group_draw_animated(
                             grid,
                             content,
@@ -618,7 +606,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             lx.chat.loading_frame,
                             &expanded,
                             lx.chat.status.streaming,
-                            hovered,
                         );
                     }
                     step_index += group.len();

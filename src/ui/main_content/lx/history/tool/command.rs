@@ -96,11 +96,11 @@ fn command_body(command: &str, width: u16, expanded: bool, hovered: bool) -> Vec
     } else {
         format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX)
     };
-    // 折叠内容悬停提亮为默认前景（没有按钮，hover 是「这块可点」的唯一提示）。
+    // 展开后命令文字保持默认可读前景，折叠态只在悬停时提亮。
     let line = BodyRow {
         text,
-        style: if hovered {
-            style::chat_tool_param_hover()
+        style: if expanded || hovered {
+            style::chat_tool_param_expanded()
         } else {
             style::chat_tool_param()
         },

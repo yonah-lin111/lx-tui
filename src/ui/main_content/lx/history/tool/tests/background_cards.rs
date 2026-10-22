@@ -428,3 +428,25 @@ fn folded_command_reports_remaining_lines_and_hover_lifts() {
     let expanded = render_text(&call, 40);
     assert!(!expanded.contains("more line") || expanded.lines().count() > 3);
 }
+
+/// 命令正文：折叠态 dim，**展开态保持默认前景**（展开后参数文字不退回 dim）。
+#[test]
+fn command_body_lifts_when_expanded() {
+    let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    let folded = render_grid(&call, 60);
+    assert_eq!(
+        command_row_style(&folded, 60),
+        Some(style::chat_tool_param()),
+        "折叠态命令是 dim"
+    );
+    let height = tool::rows(&call, 60, true).max(1) as u16;
+    let area = Rect::new(0, 0, 60, height);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    tool::draw(&mut grid, area, 0, &mut row, &call, 0, true);
+    assert_eq!(
+        command_row_style(&grid, 60),
+        Some(style::chat_tool_param_expanded()),
+        "展开态命令保持默认前景"
+    );
+}
