@@ -38,6 +38,7 @@ fn image(bytes: &[u8]) -> ImageWrite {
 fn turn_with_file(
     database: &Database,
     workspace: &Path,
+    existing_session: Option<&str>,
     file: &Path,
     before: &[u8],
     after: &[u8],
@@ -45,7 +46,7 @@ fn turn_with_file(
     let turn = database
         .begin_turn(
             workspace,
-            None,
+            existing_session,
             "edit it",
             &ModelSnapshot {
                 provider: "p".into(),
@@ -112,11 +113,11 @@ fn request(
 }
 
 #[test]
-fn restores_bytes_and_deletes_latest_turn() {
+fn restores_bytes_and_removes_empty_session() {
     let (database, workspace, _db_path) = fixture("restore");
     let file = workspace.join("a.txt");
     std::fs::write(&file, b"new").expect("agent write");
-    let turn = turn_with_file(&database, &workspace, &file, b"old", b"new");
+    let turn = turn_with_file(&database, &workspace, None, &file, b"old", b"new");
 
     let outcome = run(
         &database,
@@ -128,6 +129,7 @@ fn restores_bytes_and_deletes_latest_turn() {
             outcome,
             RewindOutcome::Succeeded {
                 restored_files: 1,
+                session_deleted: true,
                 ..
             }
         ),
@@ -138,9 +140,73 @@ fn restores_bytes_and_deletes_latest_turn() {
         database
             .load_chat_session(&workspace, &turn.session_id)
             .expect("load")
-            .expect("session")
-            .is_empty()
+            .is_none(),
+        "只剩 Rewind 提示的空会话必须整体删除"
     );
+    assert!(
+        database
+            .load_notices(&workspace, &turn.session_id)
+            .expect("notices")
+            .is_empty(),
+        "提示随会话级联清除"
+    );
+}
+
+#[test]
+fn restores_and_keeps_tip_when_earlier_turns_remain() {
+    let (database, workspace, _db_path) = fixture("restore-tip");
+    let first = database
+        .begin_turn(
+            &workspace,
+            None,
+            "first",
+            &ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+        )
+        .expect("first turn");
+    database
+        .finish(
+            &workspace,
+            &first.assistant_message_id,
+            &[],
+            &TurnOutcome::Interrupted,
+            Usage::default(),
+        )
+        .expect("finish first");
+    let file = workspace.join("a.txt");
+    std::fs::write(&file, b"new").expect("agent write");
+    let turn = turn_with_file(
+        &database,
+        &workspace,
+        Some(&first.session_id),
+        &file,
+        b"old",
+        b"new",
+    );
+    let outcome = run(
+        &database,
+        &workspace,
+        &request(&turn, &workspace, RewindAction::RevertAndDelete),
+    );
+    assert!(
+        matches!(
+            outcome,
+            RewindOutcome::Succeeded {
+                restored_files: 1,
+                session_deleted: false,
+                ..
+            }
+        ),
+        "unexpected: {outcome:?}"
+    );
+    let messages = database
+        .load_chat_session(&workspace, &turn.session_id)
+        .expect("load")
+        .expect("session");
+    assert_eq!(messages.len(), 2, "上一轮保留");
     let notices = database
         .load_notices(&workspace, &turn.session_id)
         .expect("notices");
@@ -154,7 +220,7 @@ fn later_external_write_is_a_conflict_and_nothing_is_rewritten() {
     let (database, workspace, _db_path) = fixture("conflict");
     let file = workspace.join("a.txt");
     std::fs::write(&file, b"new").expect("agent write");
-    let turn = turn_with_file(&database, &workspace, &file, b"old", b"new");
+    let turn = turn_with_file(&database, &workspace, None, &file, b"old", b"new");
     // 该轮之后，外部程序（或另一个 Agent）又改了同一文件。
     std::fs::write(&file, b"later").expect("external write");
 
@@ -191,7 +257,7 @@ fn revert_only_keeps_conversation_and_is_idempotent() {
     let (database, workspace, _db_path) = fixture("revert-only");
     let file = workspace.join("a.txt");
     std::fs::write(&file, b"new").expect("agent write");
-    let turn = turn_with_file(&database, &workspace, &file, b"old", b"new");
+    let turn = turn_with_file(&database, &workspace, None, &file, b"old", b"new");
 
     let first = run(
         &database,

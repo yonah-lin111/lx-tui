@@ -110,15 +110,37 @@ fn prepare_with_prepared_mutation_keeps_scope_unsealed() {
     );
 }
 
-#[test]
-fn rewind_deletes_latest_turn_and_persists_one_notice() {
-    let (database, workspace) = temp("commit");
-    let turn = started(&database, &workspace);
-    sealed(&database, &workspace, &turn);
+/// 在已有会话上追加一轮并封口。
+fn next_turn(
+    database: &Database,
+    workspace: &std::path::Path,
+    session_id: &str,
+) -> crate::db::chat::TurnCommitted {
+    let turn = database
+        .begin_turn(workspace, Some(session_id), "latest", &model())
+        .expect("turn");
+    database
+        .finish(
+            workspace,
+            &turn.assistant_message_id,
+            &[],
+            &TurnOutcome::Interrupted,
+            Usage::default(),
+        )
+        .expect("finish");
+    turn
+}
+
+fn commit_delete(
+    database: &Database,
+    workspace: &std::path::Path,
+    turn: &crate::db::chat::TurnCommitted,
+    operation_id: &str,
+) -> RewindCommitted {
     database
         .begin_operation(
-            &workspace,
-            "op-1",
+            workspace,
+            operation_id,
             &turn.session_id,
             &turn.user_message_id,
             turn.revision,
@@ -126,11 +148,11 @@ fn rewind_deletes_latest_turn_and_persists_one_notice() {
             "hello",
         )
         .expect("operation");
-    let result = database
+    database
         .commit_rewind(
-            &workspace,
+            workspace,
             &RewindCommit {
-                operation_id: "op-1".into(),
+                operation_id: operation_id.into(),
                 session_id: turn.session_id.clone(),
                 target_user_message_id: turn.user_message_id.clone(),
                 expected_revision: turn.revision,
@@ -141,17 +163,25 @@ fn rewind_deletes_latest_turn_and_persists_one_notice() {
                 files_already_restored: false,
             },
         )
-        .expect("commit");
+        .expect("commit")
+}
+
+#[test]
+fn rewind_deletes_latest_turn_and_persists_one_notice() {
+    let (database, workspace) = temp("commit");
+    let first = started(&database, &workspace);
+    sealed(&database, &workspace, &first);
+    let turn = next_turn(&database, &workspace, &first.session_id);
+    let result = commit_delete(&database, &workspace, &turn, "op-1");
     assert!(result.executed);
-    assert_eq!(result.user_text, "hello");
-    assert!(
-        database
-            .load_chat_session(&workspace, &turn.session_id)
-            .expect("load")
-            .expect("session")
-            .is_empty(),
-        "最新轮次消息必须删除"
-    );
+    assert!(!result.session_deleted, "仍有上一轮，会话必须保留");
+    assert_eq!(result.user_text, "latest");
+    let messages = database
+        .load_chat_session(&workspace, &turn.session_id)
+        .expect("load")
+        .expect("session");
+    assert_eq!(messages.len(), 2, "只删除最新轮次，保留上一轮");
+    assert_eq!(messages[0].external_id, first.user_message_id);
     let notices = database
         .load_notices(&workspace, &turn.session_id)
         .expect("notices");
@@ -184,43 +214,58 @@ fn rewind_deletes_latest_turn_and_persists_one_notice() {
     );
 }
 
+/// 只剩对话提示的空会话必须整体移除，不保留“仅 Rewind”历史。
+#[test]
+fn rewinding_only_turn_removes_session_and_related_data() {
+    let (database, workspace) = temp("only-turn");
+    let turn = started(&database, &workspace);
+    sealed(&database, &workspace, &turn);
+    let result = commit_delete(&database, &workspace, &turn, "op-only");
+    assert!(result.executed);
+    assert!(result.session_deleted);
+    assert_eq!(result.user_text, "hello");
+    assert!(
+        database
+            .load_chat_session(&workspace, &turn.session_id)
+            .expect("load")
+            .is_none(),
+        "空会话必须删除"
+    );
+    assert!(
+        database
+            .load_notices(&workspace, &turn.session_id)
+            .expect("notices")
+            .is_empty()
+    );
+    assert!(
+        database
+            .turn_scope(&turn.user_message_id)
+            .expect("scope")
+            .is_none(),
+        "scope 随会话级联清理"
+    );
+    assert!(
+        database.operation("op-only").expect("operation").is_none(),
+        "操作日志随会话级联清理"
+    );
+}
+
 #[test]
 fn next_turn_sequence_is_after_persisted_notice() {
     let (database, workspace) = temp("sequence");
-    let turn = started(&database, &workspace);
-    sealed(&database, &workspace, &turn);
-    database
-        .begin_operation(
-            &workspace,
-            "op-seq",
-            &turn.session_id,
-            &turn.user_message_id,
-            turn.revision,
-            "delete_only",
-            "hello",
-        )
-        .expect("operation");
-    database
-        .commit_rewind(
-            &workspace,
-            &RewindCommit {
-                operation_id: "op-seq".into(),
-                session_id: turn.session_id.clone(),
-                target_user_message_id: turn.user_message_id.clone(),
-                expected_revision: turn.revision,
-                kind: "delete_only".into(),
-                delete_conversation: true,
-                revert_files: false,
-                restored_file_count: 0,
-                files_already_restored: false,
-            },
-        )
-        .expect("commit");
+    let first = started(&database, &workspace);
+    sealed(&database, &workspace, &first);
+    let turn = next_turn(&database, &workspace, &first.session_id);
+    commit_delete(&database, &workspace, &turn, "op-seq");
+    let notices = database
+        .load_notices(&workspace, &turn.session_id)
+        .expect("notices");
+    assert_eq!(notices.len(), 1);
     let next = database
         .begin_turn(&workspace, Some(&turn.session_id), "again", &model())
         .expect("next turn");
     assert!(
-        next.user_sequence > 1,
+        next.user_sequence > notices[0].sequence,
         "新消息序号必须在提示之后，不能复用旧位置"
     );
 }

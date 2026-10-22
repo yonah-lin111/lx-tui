@@ -44,6 +44,7 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
                 already_restored: true,
                 user_text: operation.user_text,
                 deleted: request.action.deletes_conversation(),
+                session_deleted: false,
             };
         }
         return failed(format!(
@@ -79,6 +80,7 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
                         already_restored: true,
                         user_text: plan.user_text,
                         deleted: false,
+                        session_deleted: false,
                     };
                 }
                 // 组合操作此时只删对话；不覆盖别人后来的修改。
@@ -147,6 +149,7 @@ fn run(database: &Database, workspace: &Path, request: &RewindRequest) -> Rewind
                 already_restored,
                 user_text: committed.user_text,
                 deleted: request.action.deletes_conversation(),
+                session_deleted: committed.session_deleted,
             }
         }
         Err(error) => {

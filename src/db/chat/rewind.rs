@@ -217,6 +217,8 @@ pub struct RewindCommitted {
     pub user_text: String,
     /// 是否本次真正执行（false = 幂等重放）。
     pub executed: bool,
+    /// 删空对话后会话是否已被整体移除（提示与快照随会话级联清理）。
+    pub session_deleted: bool,
 }
 
 impl Database {
@@ -739,6 +741,7 @@ impl Database {
                 return Ok(RewindCommitted {
                     user_text: record.user_text,
                     executed: false,
+                    session_deleted: false,
                 });
             }
             None => return Err(DbError::OperationMissing),
@@ -792,6 +795,25 @@ impl Database {
                 params![commit.session_id, turn_index],
             )?;
         }
+        // 删掉最后一轮后会话只剩提示（或什么都没有）：整体移除会话及其提示、快照、
+        // mutation、操作日志与进程记录；不保留“只剩 Rewind 提示”的空会话。
+        let remaining: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM agent_message WHERE session_id = ?1",
+            params![commit.session_id],
+            |row| row.get(0),
+        )?;
+        if commit.delete_conversation && remaining == 0 {
+            transaction.execute(
+                "DELETE FROM agent_session WHERE external_id = ?1",
+                params![commit.session_id],
+            )?;
+            transaction.commit()?;
+            return Ok(RewindCommitted {
+                user_text,
+                executed: true,
+                session_deleted: true,
+            });
+        }
         let now = now_ms();
         transaction.execute(
             r#"INSERT INTO agent_session_notice
@@ -839,6 +861,7 @@ impl Database {
         Ok(RewindCommitted {
             user_text,
             executed: true,
+            session_deleted: false,
         })
     }
 

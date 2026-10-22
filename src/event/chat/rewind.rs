@@ -21,6 +21,8 @@ pub enum RewindOutcome {
         already_restored: bool,
         user_text: String,
         deleted: bool,
+        /// 删空对话后会话已被整体移除（UI 需解绑并回到空白草稿）。
+        session_deleted: bool,
     },
     Failed {
         message: String,
@@ -160,7 +162,29 @@ pub fn handle_rewind_finished(
             already_restored: _,
             user_text,
             deleted: _,
+            session_deleted,
         } => {
+            // 删空会话：先回填发起 pane，再解绑所有绑定该会话的 pane（保留草稿）。
+            if session_deleted {
+                crate::app::update::on_rewind_succeeded(state, pane, action, &user_text);
+                let panes = state.all_pane_ids();
+                for target_pane in panes {
+                    if state.pane_anywhere(target_pane).is_some_and(|target| {
+                        target.lx.chat.session_id.as_deref() == Some(session_id)
+                    }) && let Some(target) = state.pane_mut_anywhere(target_pane)
+                    {
+                        target.lx.chat.reset_session_view();
+                        target.lx.rewind.clear();
+                        if matches!(
+                            target.lx.slash,
+                            Some(crate::app::state::SlashPanel::Rewind(_))
+                        ) {
+                            target.lx.slash = None;
+                        }
+                    }
+                }
+                return true;
+            }
             // 先重载数据库真相，再回填；其他绑定 pane 保留各自草稿。
             let Some(workspace) = state.chat_session_key_for_pane(pane) else {
                 crate::app::update::on_rewind_failed(
