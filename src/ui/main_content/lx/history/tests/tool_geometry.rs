@@ -473,17 +473,23 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
         layout(area, &writes).total_rows
     );
 
-    // 组内没有块间空行：标题之后到最后一行动作行之间每一行都有内容。
+    // 合并卡内**恰好一个**空行：两块之间的分隔行。
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &merged, 0);
     let total = merged_layout.total_rows;
-    for row in 1..total - 1 {
-        let line = row_text(&buf, area, u16::try_from(row).unwrap_or(u16::MAX));
-        assert!(
-            !line.trim().is_empty(),
-            "合并卡内不得出现空行：{row} {line:?}"
-        );
-    }
+    let blanks: Vec<usize> = (1..total - 1)
+        .filter(|row| {
+            row_text(&buf, area, u16::try_from(*row).unwrap_or(u16::MAX))
+                .trim()
+                .is_empty()
+        })
+        .collect();
+    assert_eq!(blanks.len(), 1, "两块之间只隔一行空行：{blanks:?}");
+    let next = row_text(&buf, area, u16::try_from(blanks[0] + 1).unwrap_or(u16::MAX));
+    assert!(
+        next.contains("file2"),
+        "空行之后紧跟第二块的文件头：{next:?}"
+    );
 
     // 展开只作用于被点的那一个调用；另一块保持折叠。
     //

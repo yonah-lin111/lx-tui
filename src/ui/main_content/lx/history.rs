@@ -335,7 +335,7 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
         let mut step_index = 0usize;
         while let Some(step) = message.steps.get(step_index) {
             // 同种文件工具的连续调用共用一行合并标题，但**每个调用各自独立**：
-            // 自己的文件块、自己的展开状态与自己的展开入口（块间不再插空行）。
+            // 自己的文件块、自己的展开状态与自己的展开入口（块间空一行分隔）。
             if let AssistantStepView::Tool { .. } = step {
                 let group = tool::merge_group(&message.steps, step_index);
                 if group.len() > 1 {

@@ -504,3 +504,18 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - [x] 测试 `expanded_body_is_grey_except_the_file_header_and_diff_lines`：文件头零底色、
       其余每行满宽同色、灰底与增删底色都出现且互不覆盖。
   fmt / clippy -D warnings / cargo test（2836 passed）全部通过。
+
+## 22. 第十二轮：连续调用之间空一行
+
+用户带截图反馈：合并卡里两个 `edit` 块紧贴，第一块的最后一行（剩余行数提示）与第二块
+的文件头直接相邻，读起来像同一个文件的内容，要求「同一个工具连续调用之间添加一个换行」。
+
+- [x] `file_diff::CALL_GAP_ROWS = 1`：`blocks()` 给非首块多让 1 行，`draw()` 在块间同样推进 1 行
+      （两边共用同一常量，`draw` 推进行数仍等于 `rows`）。
+- [x] `rows()` 改为「最后一块的 start + len」：卡片总行数天然包含块间空行，不再另外相加。
+- [x] `history` 的命中矩形沿用 `block.start`，块间空行不属于任何块——点空行不切换展开。
+- [x] 测试：`consecutive_calls_are_separated_by_a_blank_line`（块间那一行是空行、其后紧跟第二块
+      文件头）、`merged_blocks_report_independent_action_rows`（第二块起点 = 第一块 + len + 1、
+      总行数覆盖空行）；`consecutive_file_tools_share_one_header_but_expand_independently` 由
+      「组内不得出现空行」改为「恰好一个空行，且下一行是第二块文件头」。
+  fmt / clippy -D warnings / cargo test（2837 passed）全部通过。

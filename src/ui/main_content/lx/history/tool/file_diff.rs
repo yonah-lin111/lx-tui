@@ -12,8 +12,8 @@
 //! - **行数只有一个来源**：[`rows`] 与 [`draw`] 共用 [`blocks`] 产出的物理行；
 //! - 连续的**同种**文件调用（`edit` 挨着 `edit`、`write` 挨着 `write`，中间没有正文
 //!   步骤打断）共用**一行合并标题**（文件数与总计），其下每个调用各自一块：自己的
-//!   文件头（`└─`）、自己的预览、自己的展开状态。展开互不影响；单次调用是长度为 1
-//!   的组，标题只写裸动词、不写 `1 file`；
+//!   文件头（`└─`）、自己的预览、自己的展开状态，块与块之间空一行区分。展开互不影响；
+//!   单次调用是长度为 1 的组，标题只写裸动词、不写 `1 file`；
 //! - **没有动作按钮、没有剩余行数文案**（用户要求移除）：整块卡片本身就是点击面——
 //!   点折叠内容展开、点展开内容收起，靠行为而不是文案表达可交互；
 //! - 预览只取 Added/Removed 行、按真实列宽换行，**最多 3 个物理行**；上下文不占额度；
@@ -46,6 +46,8 @@ const TAB_COLS: usize = 4;
 const TEXT_SAMPLE_CHARS: usize = 4096;
 /// 文件头里路径可用的最小列数；低于它先丢计数、再丢路径。
 const MIN_PATH_COLS: usize = 8;
+/// 合并卡里相邻调用之间留的空白行数（同一工具的连续调用之间分隔一块）。
+const CALL_GAP_ROWS: usize = 1;
 
 /// 单次调用是否有可展示的差异正文。
 ///
@@ -63,11 +65,10 @@ pub(super) fn rows(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> us
     if width == 0 || calls.is_empty() {
         return 0;
     }
-    title_rows()
-        + blocks(calls, width, expanded)
-            .iter()
-            .map(|b| b.len)
-            .sum::<usize>()
+    // 行数 = 最后一块的收尾位置（含块间空行），几何只有一个来源。
+    blocks(calls, width, expanded)
+        .last()
+        .map_or(0, |block| block.start + block.len)
 }
 
 /// 合并卡里一个调用所占的行区间（相对整卡顶部，标题行占 0）。
@@ -86,6 +87,9 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
     let mut out = Vec::with_capacity(calls.len());
     let mut start = title_rows();
     for (index, call) in calls.iter().enumerate() {
+        if index > 0 {
+            start += CALL_GAP_ROWS;
+        }
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
         let len = layout(call, width, is_expanded, false).len();
         out.push(Block { start, len });
@@ -129,6 +133,10 @@ pub(super) fn draw(
     }
     *row_index += 1;
     for (index, call) in calls.iter().enumerate() {
+        // 相邻调用之间留空行（与 [`blocks`] 同一口径）。
+        if index > 0 {
+            *row_index += CALL_GAP_ROWS;
+        }
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
         for row in layout(call, rect.width, is_expanded, hovered == Some(index)) {
             if let Some(y) = visible_row(rect, scroll, *row_index) {

@@ -530,8 +530,13 @@ fn merged_blocks_report_independent_action_rows() {
     assert_eq!(folded[0].start, 1, "首块紧跟合并标题");
     assert_eq!(
         folded[1].start,
-        folded[0].start + folded[0].len,
-        "块首尾相接，没有块间空行"
+        folded[0].start + folded[0].len + CALL_GAP_ROWS,
+        "块间空一行分隔"
+    );
+    assert_eq!(
+        rows(&group, 80, &[false, false]),
+        folded[1].start + folded[1].len,
+        "卡片总行数覆盖块间空行"
     );
     // 只展开第一块：它的行变多；第二块行数与起点跟着后移（展开互不影响）。
     let expanded = blocks(&group, 80, &[true, false]);
@@ -539,10 +544,42 @@ fn merged_blocks_report_independent_action_rows() {
     assert_eq!(expanded[1].len, folded[1].len, "第二块行数不变");
     assert_eq!(
         expanded[1].start,
-        expanded[0].start + expanded[0].len,
+        expanded[0].start + expanded[0].len + CALL_GAP_ROWS,
         "第二块起点随第一块后移"
     );
 }
+/// 同一工具的连续调用之间空一行：上一块末行与下一块文件头之间是空行。
+#[test]
+fn consecutive_calls_are_separated_by_a_blank_line() {
+    let first = tool_call_id(
+        "call-a",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let second = tool_call_id(
+        "call-b",
+        "edit",
+        detail_of(vec![(replace_diff(), 1, 1)]),
+        ToolStatus::Completed,
+    );
+    let group = [&first, &second];
+    let (lines, _) = render_group(&group, 80, &[false, false]);
+    let folded = blocks(&group, 80, &[false, false]);
+    let start = folded[1].start;
+    assert_eq!(
+        start,
+        folded[0].start + folded[0].len + CALL_GAP_ROWS,
+        "块间空一行"
+    );
+    assert!(
+        lines[start - 1].trim().is_empty(),
+        "块间那一行必须是空行：{:?}",
+        lines
+    );
+    assert!(lines[start].contains("file0"), "空行之后紧跟下一块的文件头");
+}
+
 /// 展开块：**正文行铺灰底、文件头不铺**，diff 增删行保留自己的红/绿（优先级更高）。
 #[test]
 fn expanded_body_is_grey_except_the_file_header_and_diff_lines() {
