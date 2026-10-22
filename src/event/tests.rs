@@ -4659,3 +4659,108 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
         "候选面板内滚轮不滚动输入框"
     );
 }
+
+/// 回归：lx 卡片「按下 → 松开（未拖拽）」必须真的切换折叠。
+///
+/// 真实 bug：`begin_lx_selection` 内部先 `clear_selection`（会把 `lx_card_press` 清空），
+/// 早期代码先记 press 再 begin，等于记了个寂寞——每次松开都被当成拖拽，卡片永远展不开。
+#[test]
+fn lx_card_click_toggles_expansion_on_release() {
+    let config = Config::default();
+    let mut state = AppState::demo();
+    let geo = geometry(&state, &config, Rect::new(0, 0, 120, 30));
+    let pane = state.active_tab().layout.focus();
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        let mut chat = crate::app::state::LxChat::new();
+        chat.messages.push(crate::app::state::ChatMessageView {
+            id: "m-param".into(),
+            role: "assistant".into(),
+            status: "complete".into(),
+            turn_index: 0,
+            steps: vec![crate::app::state::AssistantStepView::Tool {
+                position: 0,
+                call: crate::app::state::ToolCallView {
+                    call_id: "call-param".into(),
+                    name: "read".into(),
+                    position: 0,
+                    arguments_json: String::new(),
+                    status: crate::app::state::ToolStatus::Completed,
+                    summary: Some(Box::new(crate::app::state::ToolSummary {
+                        // 足够长：折叠 2 行装不下，展开才多行。
+                        path: Some(
+                            "src/some/really/deeply/nested/path/that/keeps/going/mod.rs".repeat(3),
+                        ),
+                        range: Some((1, 9)),
+                        ..Default::default()
+                    })),
+                    error: None,
+                    result_json: None,
+                    detail: None,
+                },
+            }],
+            model_label: None,
+            error_code: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read_tokens: None,
+            duration_ms: None,
+        });
+        chat.follow_bottom = true;
+        target.lx.chat = chat;
+    }
+    let inner = pane_inner(&geo, pane);
+    let card = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        crate::ui::main_content::lx::history_view(inner, &target.lx)
+            .and_then(|view| {
+                crate::ui::main_content::lx::history::layout(view.body, &target.lx)
+                    .cards
+                    .into_iter()
+                    .next()
+            })
+            .expect("可展开卡片")
+    };
+    let (column, row) = (inner.x + 3, card.card.y);
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("m-param", "call-param"),
+        "初始折叠"
+    );
+    let mut sessions = HashMap::new();
+    let mut dirty = false;
+    handle_terminal_event(
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        state.lx_card_press.is_some(),
+        "按下必须记录「可能是一次点击」（不能被 begin_lx_selection 清掉）"
+    );
+    handle_terminal_event(
+        mouse(MouseEventKind::Up(MouseButton::Left), column, row),
+        &mut state,
+        &mut sessions,
+        &geo,
+        &config,
+        &mut dirty,
+    );
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .detail_is_expanded("m-param", "call-param"),
+        "未拖拽的点击必须展开卡片"
+    );
+}

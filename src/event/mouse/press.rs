@@ -499,18 +499,20 @@ pub(crate) fn handle_mouse_down_left(
                 } else {
                     // 展开卡片正文：既开始选区（允许拖拽复制整段），又记录「可能是一次
                     // 点击」。松开时若没有拖出范围，就当作点击折叠该块。
-                    state.lx_card_press = state
-                        .pane_anywhere(pane)
-                        .and_then(|target| {
-                            ui::main_content::lx::card_target_at(
-                                inner,
-                                &target.lx,
-                                mouse.column,
-                                mouse.row,
-                            )
-                        })
-                        .map(|card| (pane, card));
+                    //
+                    // **顺序不能反**：`begin_lx_selection` 内部先 `clear_selection`，
+                    // 而 `clear_selection` 会把 `lx_card_press` 置空。先记后清等于没记，
+                    // 于是每次松开都被当成拖拽、卡片永远展不开（真实 bug）。
+                    let target = state.pane_anywhere(pane).and_then(|target| {
+                        ui::main_content::lx::card_target_at(
+                            inner,
+                            &target.lx,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    });
                     update::begin_lx_selection(state, pane, row, col);
+                    state.lx_card_press = target.map(|card| (pane, card));
                 }
                 *dirty = true;
             } else if handle_terminal_scrollbar_press(state, pane, inner, mouse.column, mouse.row) {

@@ -397,3 +397,25 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - `cargo test`：2830 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
 - 人工验收仍待用户 `cargo run`：折叠卡片（思考 / 长参数 / 长命令）点一下就展开、再点收起，
       loading 只显示 `(3s · ↓320 tok)`。
+
+## 17. 第七轮：修复「点击后依旧没有展开」
+
+用户反馈：上一轮改完「整块卡片可点」后，实机点击**仍然没有展开**。
+
+- [x] **真正根因**（上一轮只修了一半）：事件层的按下分支先写 `state.lx_card_press`、
+      再调 `update::begin_lx_selection`，而 `begin_lx_selection` 内部第一步就是
+      `clear_selection(state)`——它会把 `lx_card_press` 置空。于是标记刚写就被清掉，
+      松开时永远走「拖拽复制」分支，卡片一次也展不开。
+      修法：**先 begin 选区、后写标记**（并在代码里写明顺序不可交换的原因）。
+- [x] 新增事件层端到端回归测试 `lx_card_click_toggles_expansion_on_release`：
+      构造超长参数卡片 → 合成 Down/Up → 断言 `detail_is_expanded`。
+      已验证「把顺序改回错误版本时该测试失败」，确保它守得住这个 bug。
+- [x] 上一轮的 `folded_thinking_and_long_param_are_clickable` 继续保留（守命中级几何），
+      两层测试分别覆盖「命中判据」与「按下/松开状态流转」。
+
+当前验证记录（第七轮）：
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2831 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
+- 人工验收仍待用户 `cargo run`。
