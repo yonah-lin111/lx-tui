@@ -208,6 +208,21 @@ pub fn hover_lx_jump_bottom(state: &mut AppState, pane: PaneId, hovered: bool) -
     true
 }
 
+/// 设置聊天历史卡片悬停态；返回是否变化。
+///
+/// 只对 lx 窗格生效：悬停状态归窗格所有，指针换到别的窗格时必须清掉旧值，
+/// 否则上一张卡片会一直保持高亮。
+pub fn hover_lx_chat(state: &mut AppState, pane: PaneId, hover: Option<CardTarget>) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    if target.view != crate::app::state::PaneView::Lx || target.lx.chat.hover == hover {
+        return false;
+    }
+    target.lx.chat.hover = hover;
+    true
+}
+
 /// 点击卡片（未拖动）：切换该块的折叠状态。
 ///
 /// 用户要求「点击折叠内容后展开，点击展开内容后重新折叠」：整张卡片都是点击面，

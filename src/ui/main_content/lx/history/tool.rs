@@ -129,6 +129,7 @@ pub(super) fn draw(
         loading_frame,
         expanded,
         true,
+        false,
     );
 }
 
@@ -143,6 +144,7 @@ pub(super) fn draw_animated(
     loading_frame: usize,
     expanded: bool,
     animating: bool,
+    hovered: bool,
 ) {
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
@@ -156,6 +158,7 @@ pub(super) fn draw_animated(
                 loading_frame,
                 expanded,
                 animating,
+                hovered,
             );
             return;
         }
@@ -181,6 +184,7 @@ pub(super) fn draw_animated(
                 loading_frame,
                 &[expanded],
                 animating,
+                hovered.then_some(0),
             );
             return;
         }
@@ -195,9 +199,21 @@ pub(super) fn draw_animated(
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    for segments in file_summary::detail(call, rect.width, expanded) {
+    // 展开块铺整行底色（只盖展开后的内容，不动标题与折叠预览）。
+    let fill = file_summary::detail_fill(expanded);
+    for segments in file_summary::detail(call, rect.width, expanded, hovered) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            put_segments(grid, rect.x, y, rect.width, &segments);
+            if let Some(fill) = fill {
+                // 底色铺满整行，再给每个分段补同一底色（字符格样式优先于行底色）。
+                grid.background_row(rect.x, y, rect.width, fill);
+                let tinted: Vec<Segment> = segments
+                    .into_iter()
+                    .map(|segment| Segment::new(segment.text, segment.style.patch(fill)))
+                    .collect();
+                put_segments(grid, rect.x, y, rect.width, &tinted);
+            } else {
+                put_segments(grid, rect.x, y, rect.width, &segments);
+            }
         }
         *row_index += 1;
     }
@@ -237,12 +253,29 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
     group
 }
 
-/// 该调用的内容是否**能靠展开看到更多**（无内容时不登记点击面）。
+/// 该调用的内容是否**能靠展开看到更多**（不能时不登记点击面）。
 ///
-/// 判据是「展开后行数变多」：文件差异卡片有完整 hunks、参数超 2 行、命令超 2 行都算；
-/// 两行摘要、单行命令、计划卡片（自己按宽度换行）都不算。
+/// 判据必须是**内容行**的比较，而不是 `rows()`：折叠态末尾有一行「剩余行数」提示，
+/// 直接比 `rows()` 会让「展开」反而比「折叠」少一行（真实 bug：卡片因此不可点）。
+/// 各卡片按自己的语义提供内容行数：文件差异比 hunks、普通工具比详情、命令比折行命令。
 pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
-    rows(call, width, true) > rows(call, width, false)
+    if width == 0 {
+        return false;
+    }
+    match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(_))
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
+            command::content_rows(call, width, true) > command::content_rows(call, width, false)
+        }
+        Some(crate::app::state::ToolDetailView::Plan(_)) => false,
+        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
+            file_diff::has_more_content(call, width)
+        }
+        Some(crate::app::state::ToolDetailView::File(_)) | None => {
+            file_summary::detail_content_rows(call, width, true)
+                > file_summary::detail_content_rows(call, width, false)
+        }
+    }
 }
 
 /// 合并卡行数；`expanded` 与 `calls` 一一对应（逐调用独立）。
@@ -270,6 +303,7 @@ pub(super) fn group_draw_animated(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
+    hovered: Option<usize>,
 ) {
     file_diff::draw(
         grid,
@@ -280,6 +314,7 @@ pub(super) fn group_draw_animated(
         loading_frame,
         expanded,
         animating,
+        hovered,
     );
 }
 
@@ -348,7 +383,7 @@ fn lead(call: &ToolCallView, loading_frame: usize, animating: bool) -> Segment {
     };
     Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool),
+        mark.style(StepKind::Tool, false),
     )
 }
 
@@ -474,7 +509,7 @@ pub(super) fn header_with_mark(
     };
     let lead = paint(Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool),
+        mark.style(StepKind::Tool, false),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

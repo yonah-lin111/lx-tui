@@ -419,3 +419,40 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - `cargo clippy --all-targets -- -D warnings`：通过。
 - `cargo test`：2831 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
 - 人工验收仍待用户 `cargo run`。
+
+## 18. 第八轮：剩余行数、hover 提亮、展开块底色、恢复思考 hover
+
+用户要求：
+
+1. 折叠参数 / 折叠内容下方显示剩余行数；鼠标 hover 折叠内容时字体改为默认字体颜色；
+   展开后为**展开块**（不是整个工具）添加背景色（参考 Claude 的配色）；
+2. 思考的 hover 交互恢复原来的（常态压暗、悬停恢复品红）。
+
+- [x] 剩余行数：`file_summary::detail` / `command::command_body` / `file_diff::layout` 在折叠态
+      末尾各加一行 `… N more lines`（不占折叠额度、不带连接符、窄到放不下整行不画）；
+      展开后该行消失。`file_diff::remaining_lines` 恢复（content_rows 差值）。
+- [x] **剩余行数恒为 0 的 bug**：早先 `detail_body` 按折叠额度组装，内容被提前砍掉，
+      差值必然是 0。改为「折叠展示按折叠额度组装（保住让位顺序）+ 另按展开上限组装算总数」，
+      两次调用共享同一份 `arguments_json` 解析缓存（`param_falls_back_to_arguments_only_when_summary_lacks_fields`
+      守住的「一帧只解析一次」不变量不变）。
+- [x] 悬停提亮：`chat_tool_param_hover()`（默认前景）回到 `detail` / `command_body`，
+      折叠态内容整体从 dim 提亮；`CardTarget` 恢复同时承载 hover 语义，
+      `LxChat.hover` / `hover_lx_chat` / `tool_is_hovered` / `thinking_is_hovered` 全部恢复，
+      `hover.rs` 重新下发卡片悬停。
+- [x] 展开块底色：新增 `style::chat_expanded_bg()`（Indexed 236），只铺展开后的内容行
+      （`file_summary::detail_fill`、命令 `draw_body` 的 `fill`、`file_diff` 的 `Row.fill`），
+      分段样式用 `patch` 补底色，避免字符格覆盖行底色。
+- [x] 思考 hover 恢复：`chat_step_mark_*_thinking(hovered)` / `chat_step_label_*_thinking(hovered)`
+      回到「常态 `muted()`、悬停 `Indexed 218`」，`StepMark::style` / `StepKind::label` 重新接收
+      `hovered`。
+- [x] 测试：剩余行数行存在/展开后消失、悬停提亮不改行数、`detail_fill` 只在展开态返回底色、
+      思考 hover 两态、展开块底色、命令卡的剩余行数；并按新语义修正既有断言
+      （折叠态 = 2 行内容 + 1 行提示）。
+
+当前验证记录（第八轮）：
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2835 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
+- 人工验收仍待用户 `cargo run`：折叠内容下方的剩余行数、hover 提亮、展开块底色、
+      思考块 hover 恢复品红。

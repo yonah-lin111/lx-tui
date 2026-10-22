@@ -87,7 +87,7 @@ pub(super) fn blocks(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> 
     let mut start = title_rows();
     for (index, call) in calls.iter().enumerate() {
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        let len = layout(call, width, is_expanded).len();
+        let len = layout(call, width, is_expanded, false).len();
         out.push(Block { start, len });
         start += len;
     }
@@ -107,6 +107,7 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: &[bool],
     animating: bool,
+    hovered: Option<usize>,
 ) {
     if rect.width == 0 || calls.is_empty() {
         return;
@@ -129,8 +130,7 @@ pub(super) fn draw(
     *row_index += 1;
     for (index, call) in calls.iter().enumerate() {
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
-        let _ = index;
-        for row in layout(call, rect.width, is_expanded) {
+        for row in layout(call, rect.width, is_expanded, hovered == Some(index)) {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
                 // 先铺整行底色再写字：`put_segments` 只写字符，不负责行背景。
                 if let Some(fill) = row.fill {
@@ -164,9 +164,54 @@ impl Row {
 
 /// 一次调用的全部物理行（标题行除外）；[`rows`]、[`draw`] 与命中共用。
 ///
-/// 没有动作行：折叠态画 3 行预览、展开态铺开全部 hunks——是否还有更多内容由
-/// 用户点开即见，不再用 `… N more lines` 之类的文案提示（用户要求移除）。
-fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
+/// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；悬停时内容从
+///   dim 提亮为默认前景（唯一的「可点」提示）；
+/// - 展开态铺开全部 hunks，整块铺 [`style::chat_expanded_bg`] 底色，没有剩余行数行。
+fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
+    let mut rows = content_rows(call, width, expanded);
+    // 折叠态：下一行单独写剩余行数（展开后消失）。
+    if !expanded {
+        let remaining = remaining_lines(call, width);
+        if remaining > 0 {
+            rows.push(Row::plain(prefixed(
+                &continuation_prefix(),
+                text::agent::file_diff_more_lines(remaining),
+                style::agent_step_detail(),
+            )));
+        }
+    }
+    // 展开块铺整块底色（只盖这一块的内容行，不动标题与折叠预览）。
+    if expanded {
+        for row in &mut rows {
+            row.fill = Some(style::chat_expanded_bg());
+        }
+    } else if hovered {
+        // 折叠内容悬停：把 dim 的元信息提到默认前景（增删语义色保持不变）。
+        for row in &mut rows {
+            if row.fill.is_none() {
+                row.segments = row
+                    .segments
+                    .drain(..)
+                    .map(|segment| {
+                        let lifted = if segment.style == style::agent_step_detail()
+                            || segment.style == style::chat_tool_param()
+                            || segment.style == style::muted()
+                        {
+                            style::chat_tool_param_hover()
+                        } else {
+                            segment.style
+                        };
+                        Segment::new(segment.text, lifted)
+                    })
+                    .collect();
+            }
+        }
+    }
+    rows
+}
+
+/// 差异内容行（文件头 + 正文 + 省略文件提示），**不含**剩余行数提示。
+fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
     let files = files_of(&[call]);
     let mut rows = Vec::new();
     let last_index = files.len().saturating_sub(1);
@@ -187,6 +232,18 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
         )));
     }
     rows
+}
+
+/// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。
+pub(super) fn has_more_content(call: &ToolCallView, width: u16) -> bool {
+    content_rows(call, width, true).len() > content_rows(call, width, false).len()
+}
+
+/// 折叠态被省略的物理行数：展开内容行数减预览内容行数。
+fn remaining_lines(call: &ToolCallView, width: u16) -> usize {
+    content_rows(call, width, true)
+        .len()
+        .saturating_sub(content_rows(call, width, false).len())
 }
 
 /// 组内按调用顺序、文件提交顺序扁平展开的文件列表。
@@ -254,7 +311,7 @@ fn group_header(
     };
     let lead = paint(Segment::new(
         mark.segment(loading_frame, animating),
-        mark.style(StepKind::Tool),
+        mark.style(StepKind::Tool, false),
     ));
     if segments_cols(std::slice::from_ref(&lead)) > limit {
         return vec![lead];

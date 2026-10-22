@@ -52,6 +52,30 @@ fn complete(hunks: Vec<Vec<DiffLine>>) -> FileDiff {
     }
 }
 
+/// 5 条变更行（超过 3 行预览额度）：折叠会省略、展开会多行。
+fn long_diff() -> FileDiff {
+    complete(vec![
+        (1..=5)
+            .flat_map(|number| {
+                [
+                    line(
+                        DiffLineKind::Removed,
+                        Some(number),
+                        None,
+                        &format!("old {number}"),
+                    ),
+                    line(
+                        DiffLineKind::Added,
+                        None,
+                        Some(number),
+                        &format!("new {number}"),
+                    ),
+                ]
+            })
+            .collect(),
+    ])
+}
+
 /// 两行替换（1 上下文 + 删除 + 新增）。
 fn replace_diff() -> FileDiff {
     complete(vec![vec![
@@ -109,6 +133,7 @@ fn render_group(calls: &[&ToolCallView], width: u16, expanded: &[bool]) -> (Vec<
         0,
         expanded,
         false,
+        None,
     );
     assert_eq!(row_index, total, "draw 推进行数必须等于 rows（宽 {width}）");
     let mut lines = Vec::new();
@@ -140,24 +165,30 @@ fn style_at(call: &ToolCallView, width: u16, expanded: bool, x: u16, y: u16) -> 
         0,
         &[expanded],
         false,
+        None,
     );
     grid.cell(x, y).style
 }
 
-/// 没有动作行、没有剩余行数文案：卡片只画文件头与预览（用户要求移除按钮与行数）。
+/// 折叠态在内容**下一行**写剩余行数；展开后这一行消失（用户要求）。
 #[test]
-fn card_has_no_action_row() {
-    let call = tool_call("edit", detail_of(vec![(replace_diff(), 1, 1)]));
+fn folded_card_shows_remaining_lines_below_the_content() {
+    let call = tool_call("edit", detail_of(vec![(long_diff(), 5, 5)]));
     let lines = render(&call, 80, false).0;
     let joined = lines.join("\n");
-    assert!(!joined.contains("more line"), "不显示剩余行数：{joined}");
+    assert!(
+        joined.contains("more line"),
+        "折叠态下一行显示剩余行数：{joined}"
+    );
     assert!(
         !joined.contains(text::agent::FILE_DIFF_COLLAPSE),
-        "不显示收起文案：{joined}"
+        "没有收起按钮文案"
     );
     // 折叠 3 行预览、展开铺开：行数差就是被折起来的行。
     let expanded = render(&call, 80, true).0;
-    assert!(expanded.len() > lines.len(), "展开多出行");
+    assert!(!expanded.join("\n").contains("more line"), "展开后不再提示");
+    // 展开后多出的是真实内容行（hunks 全铺）。
+    assert!(expanded.len() > lines.len());
 }
 
 /// 滚动：滚过卡片首行时，推进的行数不变。
@@ -177,6 +208,7 @@ fn scroll_does_not_change_advanced_rows() {
         0,
         &[true],
         false,
+        None,
     );
     assert_eq!(row_index, total);
 }
@@ -252,10 +284,15 @@ fn consecutive_edits_merge_into_one_card() {
         "每个调用一块，各自以 `└─` 起头：{text}"
     );
     assert!(!text.contains(text::agent::TREE_BRANCH), "{text}");
-    // 没有动作行：两块各自是点击面，点内容即展开（按钮已移除）。
+    // 每块折叠态各有一行剩余行数提示（在各自内容下方）；没有收起按钮文案。
+    assert_eq!(
+        text.matches("more line").count(),
+        2,
+        "每块各一行提示：{text}"
+    );
     assert!(
-        !text.contains("more line") && !text.contains(text::agent::FILE_DIFF_COLLAPSE),
-        "无动作行文案：{text}"
+        !text.contains(text::agent::FILE_DIFF_COLLAPSE),
+        "无收起文案"
     );
     assert_eq!(total, lines.len());
 }
@@ -266,13 +303,13 @@ fn merged_card_expands_as_a_whole() {
     let first = tool_call_id(
         "call-a",
         "edit",
-        detail_of(vec![(replace_diff(), 1, 1)]),
+        detail_of(vec![(long_diff(), 5, 5)]),
         ToolStatus::Completed,
     );
     let second = tool_call_id(
         "call-b",
         "edit",
-        detail_of(vec![(replace_diff(), 1, 1)]),
+        detail_of(vec![(long_diff(), 5, 5)]),
         ToolStatus::Completed,
     );
     let group = [&first, &second];
@@ -280,19 +317,23 @@ fn merged_card_expands_as_a_whole() {
     // 只展开第一个调用：两块互不影响。
     let (expanded, _) = render_group(&group, 80, &[true, false]);
     assert!(expanded.len() > folded.len(), "展开比折叠多行");
-    // 折叠态只画预览、展开态铺开 hunks；没有动作行文案。
+    // 折叠态各块给剩余行数提示，展开后铺开 hunks。
     let folded_text = folded.join("\n");
     assert!(
-        !folded_text.contains("more line"),
-        "折叠态无剩余行数：{folded_text}"
+        folded_text.contains("more line"),
+        "折叠态给剩余行数：{folded_text}"
     );
     assert!(
         !expanded
             .join("\n")
             .contains(text::agent::FILE_DIFF_COLLAPSE)
     );
-    // 上下文行只出现在被展开的那一块（另一块仍折叠）。
-    assert_eq!(expanded.join("\n").matches("keep").count(), 1);
+    // 被展开的那一块露出更多变更行（另一块仍停在 3 行预览）。
+    let expanded_text = expanded.join("\n");
+    assert!(
+        expanded_text.matches("new 5").count() == 1,
+        "展开块露出第 5 条变更，另一块没有：{expanded_text}"
+    );
 }
 
 /// 合并卡方块汇总状态：只要有一个失败，整卡就是失败色。
@@ -325,6 +366,7 @@ fn merged_card_mark_follows_the_worst_status() {
         0,
         &[false, false],
         false,
+        None,
     );
     assert_eq!(
         grid.cell(0, 0).style,
@@ -473,13 +515,13 @@ fn merged_blocks_report_independent_action_rows() {
     let first = tool_call_id(
         "call-a",
         "edit",
-        detail_of(vec![(replace_diff(), 1, 1)]),
+        detail_of(vec![(long_diff(), 5, 5)]),
         ToolStatus::Completed,
     );
     let second = tool_call_id(
         "call-b",
         "edit",
-        detail_of(vec![(replace_diff(), 1, 1)]),
+        detail_of(vec![(long_diff(), 5, 5)]),
         ToolStatus::Completed,
     );
     let group = [&first, &second];
@@ -508,19 +550,19 @@ fn merged_blocks_are_contiguous_and_buttonless() {
     let first = tool_call_id(
         "call-a",
         "edit",
-        detail_of(vec![(replace_diff(), 1, 1)]),
+        detail_of(vec![(long_diff(), 5, 5)]),
         ToolStatus::Completed,
     );
     let second = tool_call_id(
         "call-b",
         "edit",
-        detail_of(vec![(replace_diff(), 1, 1)]),
+        detail_of(vec![(long_diff(), 5, 5)]),
         ToolStatus::Completed,
     );
     let group = [&first, &second];
     let lines = render_group(&group, 80, &[false, false]).0;
     let joined = lines.join("\n");
-    assert!(!joined.contains("more line"), "无剩余行数文案");
+    assert!(joined.contains("more line"), "折叠态给剩余行数");
     assert!(
         !joined.contains(text::agent::FILE_DIFF_COLLAPSE),
         "无收起文案"

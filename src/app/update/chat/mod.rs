@@ -34,7 +34,7 @@ pub use session::{
 };
 pub(crate) use view::view_message_of;
 pub use viewport::{
-    hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
+    hover_lx_chat, hover_lx_jump_bottom, jump_lx_history_bottom, jump_lx_history_to_prompt,
     resolve_lx_sticky_prompt, resolve_lx_viewport_top, resolve_task_output_visible,
     scroll_lx_history, set_lx_history_scroll, toggle_lx_card,
 };

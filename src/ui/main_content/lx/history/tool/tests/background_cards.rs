@@ -250,7 +250,9 @@ fn alive_mark_never_renders_hollow_when_the_animation_stops() {
             let mut grid = Grid::new(area);
             let mut row = 0usize;
             // animating = false：动画已停止。
-            tool::draw_animated(&mut grid, area, 0, &mut row, &call, frame, false, false);
+            tool::draw_animated(
+                &mut grid, area, 0, &mut row, &call, frame, false, false, false,
+            );
             grid
         };
         assert_eq!(
@@ -342,8 +344,10 @@ fn command_wraps_to_two_rows_when_folded() {
     // 用户带截图反馈：长命令被单行截断成 `$ { ...`。现在 `$ 命令` 按列宽折行，
     // 折叠态最多 2 行；展开态铺开更多。
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    // 足够长：折叠 2 行装不下，展开才铺得开（否则「展开」不会多出行）。
     let long = format!(
-        "$ {{{} echo \"==== 项目概览 ====\" && echo \"Rust 版本\" && echo \"文件数\" }}",
+        "$ {{ {} echo \"==== 项目概览 ====\" && echo \"Rust 版本: $(rustc --version)\" \
+         && echo \"文件数\" && echo \"目录结构\" && ls -R && echo \"依赖\" && cat Cargo.toml }}",
         " ".repeat(40)
     );
     let mut call = call;
@@ -352,7 +356,7 @@ fn command_wraps_to_two_rows_when_folded() {
     }
     let folded = tool::rows(&call, 50, false);
     let expanded = tool::rows(&call, 50, true);
-    assert_eq!(folded, 1 + 2, "折叠态：标题 + 2 行命令");
+    assert_eq!(folded, 1 + 2 + 1, "折叠态：标题 + 2 行命令 + 剩余行数");
     assert!(expanded > folded, "展开更多行：{folded} → {expanded}");
     let text = render_text(&call, 50);
     assert!(text.lines().count() >= 3, "命令确实折行：{text}");
@@ -409,4 +413,18 @@ fn plan_in_progress_step_uses_the_running_amber() {
         found_amber,
         "计划里「进行中」的步骤必须用运行态橙黄，而不是完成态绿"
     );
+}
+
+#[test]
+fn folded_command_reports_remaining_lines_and_hover_lifts() {
+    // 折叠态：命令下方单独一行写剩余行数；悬停时命令从 dim 提亮。
+    let mut call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
+    }
+    let text = render_text(&call, 40);
+    assert!(text.contains("more line"), "折叠态给剩余行数：{text}");
+    // 展开态不再有剩余行数行。
+    let expanded = render_text(&call, 40);
+    assert!(!expanded.contains("more line") || expanded.lines().count() > 3);
 }

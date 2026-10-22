@@ -100,14 +100,16 @@ impl StepMark {
     }
 
     /// 方块样式：先看状态（失败/中断/取消跨角色覆盖），否则按角色取色。
-    pub(super) fn style(self, kind: StepKind) -> Style {
+    ///
+    /// `hovered` 只对思考块有意义（常态压暗、悬停恢复品红）；其余角色忽略它。
+    pub(super) fn style(self, kind: StepKind, hovered: bool) -> Style {
         match self {
             Self::Failed => style::agent_fail(),
             Self::Interrupted => style::agent_warn(),
             Self::Cancelled => style::agent_step_detail(),
-            Self::Running => kind.style_running(),
+            Self::Running => kind.style_running(hovered),
             Self::Alive => style::chat_step_mark_alive(),
-            Self::Done => kind.style_done(),
+            Self::Done => kind.style_done(hovered),
         }
     }
 
@@ -135,11 +137,11 @@ pub(super) enum StepKind {
 }
 
 impl StepKind {
-    /// 运行中（含呼吸）的样式。
-    fn style_running(self) -> Style {
+    /// 运行中（含呼吸）的样式。`hovered` 只影响思考块。
+    fn style_running(self, hovered: bool) -> Style {
         match self {
             Self::Body => style::chat_step_mark_running_body(),
-            Self::Thinking => style::chat_step_mark_running_thinking(),
+            Self::Thinking => style::chat_step_mark_running_thinking(hovered),
             // 运行中的工具统一橙黄（与 `Alive` 同档）：用户要求"所有正在运行中的
             // tool 的方块和 title 统一为黄色，完成才显示绿色"。
             Self::Tool => style::chat_step_mark_alive(),
@@ -147,21 +149,21 @@ impl StepKind {
     }
 
     /// 已完成（静止）的样式。
-    fn style_done(self) -> Style {
+    fn style_done(self, hovered: bool) -> Style {
         match self {
             Self::Body => style::chat_step_mark_done_body(),
-            Self::Thinking => style::chat_step_mark_done_thinking(),
+            Self::Thinking => style::chat_step_mark_done_thinking(hovered),
             Self::Tool => style::chat_step_mark_done(),
         }
     }
 
-    /// 该角色的头部文案样式（运行中 / 已完成）。
-    pub(super) fn label(self, running: bool) -> Style {
+    /// 该角色的头部文案样式（运行中 / 已完成）。`hovered` 只影响思考块。
+    pub(super) fn label(self, running: bool, hovered: bool) -> Style {
         match (self, running) {
             (Self::Body, true) => style::chat_step_label_running_body(),
             (Self::Body, false) => style::chat_step_label_done_body(),
-            (Self::Thinking, true) => style::chat_step_label_running_thinking(),
-            (Self::Thinking, false) => style::chat_step_label_done_thinking(),
+            (Self::Thinking, true) => style::chat_step_label_running_thinking(hovered),
+            (Self::Thinking, false) => style::chat_step_label_done_thinking(hovered),
             (Self::Tool, true) => style::chat_step_label_running(),
             (Self::Tool, false) => style::chat_step_label_done(),
         }
@@ -561,6 +563,9 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             row_index += 1;
                         }
                         has_previous = true;
+                        let hovered = group
+                            .iter()
+                            .position(|call| lx.chat.tool_is_hovered(&message.id, &call.call_id));
                         tool::group_draw_animated(
                             grid,
                             content,
@@ -570,6 +575,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             lx.chat.loading_frame,
                             &expanded,
                             lx.chat.status.streaming,
+                            hovered,
                         );
                     }
                     step_index += group.len();
@@ -621,6 +627,7 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         lx.chat.loading_frame,
                         lx.chat.detail_is_expanded(&message.id, &call.call_id),
                         lx.chat.status.streaming,
+                        lx.chat.tool_is_hovered(&message.id, &call.call_id),
                     );
                 }
                 step_index += 1;
@@ -676,20 +683,22 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                 }
                 crate::chat::events::PartKind::Reasoning => {
                     let streaming = lx.chat.reasoning_streaming(message_index, step_index);
+                    let hovered = lx.chat.thinking_is_hovered(message_index, step_index);
                     let mark = if streaming {
                         StepMark::Running
                     } else {
                         StepMark::Done
                     };
                     if let Some(y) = visible_row(content, scroll, row_index) {
-                        // 生成中：`Thinking`；完成后：`Thought · 6.3s`。方块与文案恒品红，
-                        // 不做 hover 变色（用户要求移除字体高亮）；折叠/展开靠点整块。
-                        let header_style = StepKind::Thinking.label(streaming);
+                        // 生成中：`Thinking`；完成后：`Thought · 6.3s`。
+                        // 方块与文案常态压暗（`muted()`），**鼠标悬停整块**才恢复品红
+                        // ——思考是次要内容，常驻高饱和色会抢走工具行的注意力。
+                        let header_style = StepKind::Thinking.label(streaming, hovered);
                         grid.put_char(
                             content.x,
                             y,
                             mark.glyph(lx.chat.loading_frame, lx.chat.status.streaming),
-                            mark.style(StepKind::Thinking),
+                            mark.style(StepKind::Thinking, hovered),
                         );
                         let x = content.x.saturating_add(STEP_GUTTER);
                         let limit = content.right();

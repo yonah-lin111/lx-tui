@@ -706,29 +706,45 @@ pub fn chat_step_label_done_body() -> Style {
     Style::default()
 }
 
-/// 思考块的方块：运行中（呼吸）——**品红加粗**。
+/// 思考块的方块：运行中（呼吸）——常态压暗，**悬停恢复品红**加粗。
 ///
-/// 用户要求「移除字体高亮」：不再有「常态压暗、悬停恢复」的两态，思考块始终是
-/// 它本来的品红；可点性由「点一下会折叠」这个行为本身表达，不靠 hover 变色。
-pub fn chat_step_mark_running_thinking() -> Style {
-    Style::default()
-        .fg(Color::Indexed(CHAT_STEP_MAGENTA))
-        .add_modifier(Modifier::BOLD)
+/// 用户要求「思考的 hover 交互恢复原来的」：思考是次要内容，常驻高饱和品红会抢走
+/// 工具行的注意力；鼠标落在块上才提亮，顺带告诉用户「这块可以点」。
+pub fn chat_step_mark_running_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default()
+            .fg(Color::Indexed(CHAT_STEP_MAGENTA))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        muted()
+    }
 }
 
-/// 思考块的方块：已完成——品红（不加粗：静止 + 细一档）。
-pub fn chat_step_mark_done_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的方块：已完成——常态压暗，悬停恢复品红（不加粗：静止 + 细一档）。
+pub fn chat_step_mark_done_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        muted()
+    }
 }
 
-/// 思考块的头部文案：运行中——品红（与方块同色系，不加粗）。
-pub fn chat_step_label_running_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的头部文案：运行中——常态压暗，悬停恢复品红（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        muted()
+    }
 }
 
-/// 思考块的头部文案：已完成——品红（同上，不加粗）。
-pub fn chat_step_label_done_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的头部文案：已完成——常态压暗，悬停恢复品红（同上，不加粗）。
+pub fn chat_step_label_done_thinking(hovered: bool) -> Style {
+    if hovered {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        muted()
+    }
 }
 
 /// 工具行的方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的动作信号。
@@ -792,6 +808,22 @@ pub fn chat_tool_param() -> Style {
     muted()
 }
 
+/// 工具参数在**卡片悬停**时的样式：终端默认前景（从 dim 升上来）。
+///
+/// 用户要求「鼠标 hover 折叠内容时字体颜色改为默认字体颜色」：折叠的参数是 dim，
+/// 悬停提亮即「这块可以点」的唯一提示（没有按钮、没有下划线）。
+pub fn chat_tool_param_hover() -> Style {
+    Style::default()
+}
+
+/// 工具**展开块**的整行背景（参考 Claude Code 的深色卡片底）。
+///
+/// 只铺在展开后的正文行上，不碰标题与折叠预览：展开是「临时摊开一块」，背景把
+/// 这块和被折叠的其余内容分开，比再加一层边框轻量。
+pub fn chat_expanded_bg() -> Style {
+    Style::default().bg(Color::Indexed(CHAT_EXPANDED_BG))
+}
+
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
 /// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
 pub fn chat_tool_range() -> Style {
@@ -799,6 +831,9 @@ pub fn chat_tool_range() -> Style {
 }
 
 /// lx 输入框上方 loading 行文案：次要信息。
+/// 展开块的整行底色（参考 Claude Code 的深色卡面，256 色里最接近的暗灰蓝）。
+const CHAT_EXPANDED_BG: u8 = 236;
+
 pub fn chat_loading_label() -> Style {
     muted()
 }

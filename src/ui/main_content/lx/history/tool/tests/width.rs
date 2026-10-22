@@ -154,11 +154,11 @@ fn tool_row_count_is_always_two_for_any_content() {
             ToolStatus::Interrupted,
         ] {
             let call = tool_call("read", status, Some(read_summary()), Some("boom"));
-            // 详情可能折成 2 行（宽度够时），但绝不超过折叠额度。
+            // 详情 = 最多 2 行内容 + 可能 1 行剩余行数提示。
             let detail_rows = rows(&call, width, false) - 1;
             assert!(
-                (1..=2).contains(&detail_rows),
-                "宽 {width} 详情恒为 1~2 行，实际 {detail_rows}"
+                (1..=3).contains(&detail_rows),
+                "宽 {width} 详情恒为 1~3 行，实际 {detail_rows}"
             );
         }
     }
@@ -233,11 +233,13 @@ fn search_scoped_call(pattern: &str, path: &str) -> ToolCallView {
 
 /// 详情行去掉前缀与折行缩进后的正文（用于「内容还在不在」的断言）。
 fn detail_body_text(call: &ToolCallView, width: u16) -> String {
-    let painted = detail_flat(call, width);
+    // 只看内容行（不含末尾「… N more lines」提示行），并去掉 `└─ ` 前缀。
+    let painted = detail_content_flat(call, width);
     let prefix = detail_prefix();
     painted
         .strip_prefix(&prefix)
         .unwrap_or(painted.as_str())
+        .trim_end()
         .to_string()
 }
 
@@ -536,8 +538,8 @@ fn wrapped_detail_never_overflows_and_reindents() {
         let painted = detail_text(&call, width);
         let rows: Vec<&str> = painted.split('\n').collect();
         assert!(
-            rows.len() <= super::file_summary::DETAIL_PREVIEW_ROWS,
-            "宽 {width} 折叠态不超过 2 行：{painted:?}"
+            rows.len() <= super::file_summary::DETAIL_PREVIEW_ROWS + 1,
+            "宽 {width} 折叠态最多 2 行内容 + 1 行剩余行数：{painted:?}"
         );
         for row in &rows {
             assert!(

@@ -412,6 +412,16 @@ fn file_step(position: i64, call_id: &str, name: &str, status: ToolStatus) -> As
     }
 }
 
+/// 历史区整页文本（用于断言内容差异）。
+fn rendered_text(lx: &Lx, area: Rect) -> String {
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, lx, 0);
+    (0..area.height)
+        .map(|y| row_text(&buf, area, y))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// 卡片命中数（每张可折叠卡片一个）；没有动作行，因此只有一个计数。
 fn card_hits(lx: &Lx, area: Rect) -> usize {
     layout(area, lx)
@@ -476,12 +486,22 @@ fn consecutive_file_tools_share_one_header_but_expand_independently() {
     }
 
     // 展开只作用于被点的那一个调用；另一块保持折叠。
+    //
+    // 断言的是**内容差异**而不是总行数：折叠态末尾多一行「剩余行数」提示，展开后这行
+    // 消失、内容行铺开，两边总行数可以相等甚至反向，行数不是这个交互的判据。
     let mut expanded = build(["edit", "edit"]);
     assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
     let expanded_layout = layout(area, &expanded);
+    assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
+    let folded_text = rendered_text(&merged, area);
+    let expanded_text = rendered_text(&expanded, area);
     assert!(
-        expanded_layout.total_rows > merged_layout.total_rows,
-        "展开单个调用也会多出行"
+        folded_text.matches("more line").count() == 2,
+        "折叠态两块各一行剩余行数：{folded_text}"
+    );
+    assert!(
+        expanded_text.matches("more line").count() == 1,
+        "展开后只剩另一块的提示：{expanded_text}"
     );
     assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
     assert_eq!(card_hits(&expanded, area), 2, "展开态仍是两块");

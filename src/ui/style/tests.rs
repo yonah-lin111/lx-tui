@@ -272,6 +272,21 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
 ///
 /// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」：那行用量是 `muted()`，
 /// 参数跟着走，且**没有 hover 档**（交互高亮已按要求移除）。
+/// 折叠参数悬停提亮为默认前景；展开块有独立底色。
+#[test]
+fn folded_param_lifts_on_hover_and_expanded_block_has_a_fill() {
+    assert_eq!(
+        chat_tool_param_hover(),
+        Style::default(),
+        "悬停提亮为默认前景"
+    );
+    assert_eq!(
+        chat_expanded_bg().bg,
+        Some(Color::Indexed(236)),
+        "展开块铺底色"
+    );
+}
+
 #[test]
 fn chat_tool_param_matches_context_usage() {
     let style = chat_tool_param();
@@ -517,15 +532,32 @@ fn step_roles_use_distinct_colors() {
         "正文方块完成去加粗"
     );
 
-    // 思考：恒品红 218（用户要求移除 hover 高亮，不再有「压暗→悬停恢复」两态）；
-    // 工具：翡翠绿 42。
-    for (label, style) in [
-        ("思考方块", chat_step_mark_running_thinking()),
-        ("思考方块完成", chat_step_mark_done_thinking()),
-        ("思考标题运行中", chat_step_label_running_thinking()),
-        ("思考标题完成", chat_step_label_done_thinking()),
+    // 思考：常态压暗为次要信息色，**悬停恢复品红 218**（用户要求恢复原来的 hover
+    // 交互）；工具：翡翠绿 42。
+    for (label, normal, hovered) in [
+        (
+            "思考方块",
+            chat_step_mark_running_thinking(false),
+            chat_step_mark_running_thinking(true),
+        ),
+        (
+            "思考方块完成",
+            chat_step_mark_done_thinking(false),
+            chat_step_mark_done_thinking(true),
+        ),
+        (
+            "思考标题运行中",
+            chat_step_label_running_thinking(false),
+            chat_step_label_running_thinking(true),
+        ),
+        (
+            "思考标题完成",
+            chat_step_label_done_thinking(false),
+            chat_step_label_done_thinking(true),
+        ),
     ] {
-        assert_eq!(style.fg, Some(Color::Indexed(218)), "{label}恒品红");
+        assert_eq!(normal.fg, muted().fg, "{label}常态压暗");
+        assert_eq!(hovered.fg, Some(Color::Indexed(218)), "{label}悬停恢复品红");
     }
     assert_eq!(
         chat_step_mark_running().fg,
@@ -534,7 +566,7 @@ fn step_roles_use_distinct_colors() {
     );
 
     // 两个有色角色互不同色，且都不与正文的默认前景重合。
-    let thinking = chat_step_mark_done_thinking().fg;
+    let thinking = chat_step_mark_done_thinking(true).fg;
     let tool = chat_step_mark_done().fg;
     let body = chat_step_mark_done_body().fg;
     assert_ne!(thinking, tool, "思考与工具的方块必须不同色");

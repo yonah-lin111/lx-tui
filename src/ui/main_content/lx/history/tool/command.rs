@@ -56,23 +56,41 @@ pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
 
 /// 命令正文的物理行数（与 [`draw_body`] 同一份折行口径）。
 fn command_lines(command: &str, width: u16, expanded: bool) -> usize {
-    command_body(command, width, expanded).len()
+    command_body(command, width, expanded, false).len()
+}
+
+/// 命令**内容**行数（不含末尾的「剩余行数」提示行）；供「能否展开」判定用。
+pub(super) fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    let command = match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(view)) => &view.command,
+        Some(crate::app::state::ToolDetailView::Interaction(view)) => &view.command,
+        _ => return 0,
+    };
+    command_body(command, width, expanded, false)
+        .iter()
+        .filter(|row| !row.text.starts_with("… "))
+        .count()
 }
 
 /// 命令卡片树体行：`$ 命令` 按列宽折行后的物理行。
 ///
 /// **与 [`draw_command`]、[`rows`] 共用同一份构造**：行数口径只有一个来源。输出、
 /// cwd 与 `… +N more lines` 都已搬进后台任务面板，消息列表里只看得到"哪条命令在跑"。
-fn command_body(command: &str, width: u16, expanded: bool) -> Vec<BodyRow> {
+fn command_body(command: &str, width: u16, expanded: bool, hovered: bool) -> Vec<BodyRow> {
     // 已带提示符就不重复（调用方可能传入完整命令行）。
     let text = if command.starts_with(text::agent::COMMAND_PROMPT_PREFIX) {
         command.to_string()
     } else {
         format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX)
     };
+    // 折叠内容悬停提亮为默认前景（没有按钮，hover 是「这块可点」的唯一提示）。
     let line = BodyRow {
         text,
-        style: style::chat_tool_param(),
+        style: if hovered {
+            style::chat_tool_param_hover()
+        } else {
+            style::chat_tool_param()
+        },
         sample: SAMPLE_CHARS,
     };
     wrap_body_row(line, width, expanded)
@@ -134,7 +152,27 @@ fn wrap_body_row(row: BodyRow, width: u16, expanded: bool) -> Vec<BodyRow> {
             sample: row.sample,
         });
     }
+    // 折叠态末尾单独一行写剩余行数（展开后消失）；不占折叠额度。
+    // 窄到放不下整句就不画，避免半截提示。
+    if !expanded && start < chars.len() {
+        let hint =
+            text::agent::file_diff_more_lines(estimate_remaining_lines(&chars[start..], available));
+        if hint.width() <= available {
+            out.push(BodyRow {
+                text: hint,
+                style: style::agent_step_detail(),
+                sample: SAMPLE_CHARS,
+            });
+        }
+    }
     out
+}
+
+/// 剩余内容还能折成几行（只用于提示文案，按整列硬切估算即可）。
+fn estimate_remaining_lines(rest: &[char], available: usize) -> usize {
+    let width = available.max(1);
+    let cols: usize = rest.iter().map(|ch| ch.width().unwrap_or(1).max(1)).sum();
+    cols.div_ceil(width).max(1)
 }
 
 /// 树体的一行：**未加连接符**的内容 + 着色档位。
@@ -160,6 +198,7 @@ pub(super) fn draw(
     loading_frame: usize,
     expanded: bool,
     animating: bool,
+    hovered: bool,
 ) {
     if rect.width == 0 {
         // 宽度 0：与 [`rows`] 一致地不占行（外层布局已跳过该块）。
@@ -177,6 +216,7 @@ pub(super) fn draw(
                 loading_frame,
                 animating,
                 expanded,
+                hovered,
             );
         }
         Some(crate::app::state::ToolDetailView::Interaction(view)) => {
@@ -190,6 +230,7 @@ pub(super) fn draw(
                 loading_frame,
                 animating,
                 expanded,
+                hovered,
             );
         }
         _ => {
@@ -234,6 +275,7 @@ fn draw_command(
     loading_frame: usize,
     animating: bool,
     expanded: bool,
+    hovered: bool,
 ) {
     let status = process_status(view.state);
     let mark = process_mark(call, view.state, loading_frame);
@@ -254,7 +296,8 @@ fn draw_command(
         rect,
         scroll,
         row_index,
-        &command_body(&view.command, rect.width, expanded),
+        &command_body(&view.command, rect.width, expanded, hovered),
+        expanded.then(style::chat_expanded_bg),
     );
 }
 
@@ -270,6 +313,7 @@ fn draw_interaction(
     loading_frame: usize,
     animating: bool,
     expanded: bool,
+    hovered: bool,
 ) {
     let status = process_status(view.state);
     let mark = process_mark(call, view.state, loading_frame);
@@ -290,7 +334,8 @@ fn draw_interaction(
         rect,
         scroll,
         row_index,
-        &command_body(&view.command, rect.width, expanded),
+        &command_body(&view.command, rect.width, expanded, hovered),
+        expanded.then(style::chat_expanded_bg),
     );
 }
 
@@ -324,7 +369,15 @@ fn draw_title(
 }
 
 /// 绘制树体：除最后一行外 `  │  `，最后一行 `  └─ `；推进的行数 = `body.len()`。
-fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, body: &[BodyRow]) {
+fn draw_body(
+    grid: &mut Grid,
+    rect: Rect,
+    scroll: usize,
+    row_index: &mut usize,
+    body: &[BodyRow],
+    fill: Option<ratatui::style::Style>,
+) {
+    // 末行收口：剩余行数提示行也要收口（它本身是卡片最后一行）。
     let last = body.len().saturating_sub(1);
     let limit = usize::from(rect.width);
     let content_x = rect
@@ -332,6 +385,9 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
         .saturating_add(u16::try_from(TREE_COLS).unwrap_or(u16::MAX));
     for (index, row) in body.iter().enumerate() {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
+            if let Some(fill) = fill {
+                grid.background_row(rect.x, y, rect.width, fill);
+            }
             // 连接符：`  │  ` / `  └─ `。`│` 与 `└` 落在同一列，树干连成一条线。
             let bar_style = style::chat_notice_connector();
             let indent = u16::try_from(TREE_INDENT).unwrap_or(0);
@@ -355,11 +411,15 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
             } else {
                 truncate_with_ellipsis(&single, content_cols)
             };
+            let style = match fill {
+                Some(fill) => row.style.patch(fill),
+                None => row.style,
+            };
             grid.put_clipped(
                 content_x,
                 y,
                 &content,
-                row.style,
+                style,
                 rect.width
                     .saturating_sub(u16::try_from(TREE_COLS).unwrap_or(u16::MAX)),
             );

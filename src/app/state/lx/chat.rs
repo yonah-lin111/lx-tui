@@ -289,8 +289,8 @@ pub enum InputHintLevel {
 
 /// 可点击折叠/展开的聊天历史块。
 ///
-/// **不做 hover 高亮**（用户要求「移除字体高亮」）：这个类型只回答「按下这里
-/// 点的是哪一块」，用于松开时切换它的折叠状态，不参与任何配色。
+/// 既回答「按下这里点的是哪一块」（松开时切换折叠），也回答「鼠标现在悬在哪一块」
+/// （折叠内容提亮 / 思考块恢复品红）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CardTarget {
     /// 工具卡片（按稳定 ID 定位，与展开状态同一口径）。
@@ -341,6 +341,11 @@ pub struct LxChat {
     pub viewport_top: Option<usize>,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
     pub loading_frame: usize,
+    /// 鼠标悬停的可折叠块；None 表示不在任何卡片上。
+    ///
+    /// 渲染层只读：工具卡片用它把折叠内容从 dim 提亮为默认前景，思考块用它
+    /// 从压暗恢复品红。
+    pub hover: Option<CardTarget>,
     /// 本轮已耗时（毫秒），由事件循环在流中每帧刷新。
     ///
     /// 渲染层不取时钟（纯渲染），因此时钟只在 `advance_lx_loading` 里读一次写在这里；
@@ -390,6 +395,7 @@ impl LxChat {
             history_scroll: 0,
             viewport_top: None,
             loading_frame: 0,
+            hover: None,
             turn_elapsed_ms: None,
             jump_bottom_hover: false,
             stop_armed_at: None,
@@ -416,6 +422,7 @@ impl LxChat {
         self.history_scroll = 0;
         self.viewport_top = None;
         self.detail_expanded.clear();
+        self.hover = None;
         self.selected_tool = None;
         self.plan = None;
     }
@@ -442,6 +449,26 @@ impl LxChat {
         self.detail_expanded
             .push((message_id.to_string(), call_id.to_string(), next));
         next
+    }
+
+    /// 该工具卡片是否被鼠标悬停（折叠内容提亮判据）。
+    pub fn tool_is_hovered(&self, message_id: &str, call_id: &str) -> bool {
+        matches!(
+            &self.hover,
+            Some(CardTarget::Tool { message_id: hovered_message, call_id: hovered_call })
+                if hovered_message == message_id && hovered_call == call_id
+        )
+    }
+
+    /// 该思考块是否被鼠标悬停（压暗 → 恢复品红的判据）。
+    pub fn thinking_is_hovered(&self, message_index: usize, step_index: usize) -> bool {
+        matches!(
+            self.hover,
+            Some(CardTarget::Thinking {
+                message_index: hovered_message,
+                step_index: hovered_step,
+            }) if hovered_message == message_index && hovered_step == step_index
+        )
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或

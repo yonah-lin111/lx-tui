@@ -60,11 +60,15 @@ impl Detail {
 /// 摘要（`ToolSummary`：参数派生 + 结果体补全）是常规唯一来源；**只有摘要答不出
 /// 需要的字段时**才懒回退解析 `arguments_json`（见 [`needs_argument_fallback`]），
 /// 渲染热路径因此不做常规 JSON 解析（review P3-4）。
-fn param(call: &ToolCallView, param_style: Style) -> Option<Param> {
+fn param(
+    call: &ToolCallView,
+    param_style: Style,
+    cache: &mut Option<ToolSummary>,
+) -> Option<Param> {
     let kind = Kind::of(&call.name);
     let may_parse = needs_argument_fallback(call, kind);
-    let mut parsed: Option<ToolSummary> = None;
     // 单字段取值：摘要优先；缺字段且允许回退时才触发一次（共享的）解析。
+    // `cache` 由调用方跨多次组装共享——一帧内最多解析一次。
     let mut field = |pick: fn(&ToolSummary) -> Option<String>| {
         call.summary
             .as_deref()
@@ -72,7 +76,7 @@ fn param(call: &ToolCallView, param_style: Style) -> Option<Param> {
             .filter(|value| !value.is_empty())
             .or_else(|| {
                 may_parse
-                    .then(|| pick(fallback_summary(call, &mut parsed)))
+                    .then(|| pick(fallback_summary(call, cache)))
                     .flatten()
                     .filter(|value| !value.is_empty())
             })
@@ -387,9 +391,18 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 
 /// 详情行（`  └─ …`）的物理行：首行带连接符，续行用等宽空白缩进。
 ///
-/// 折叠态最多 [`DETAIL_PREVIEW_ROWS`] 行、展开态最多 [`DETAIL_MAX_ROWS`] 行；
-/// 截断时末行追加 `…`。`rows` 与 `draw` 共用本函数，行数口径只有一份。
-pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec<Segment>> {
+/// - 折叠态：最多 [`DETAIL_PREVIEW_ROWS`] 行正文，**下面再单独一行**写剩余行数
+///   （`… 421 more lines`，用户要求「在折叠内容下一行显示剩余行数」）；
+/// - 展开态：最多 [`DETAIL_MAX_ROWS`] 行，整块铺 [`style::chat_expanded_bg`] 底色，
+///   且不再有剩余行数行。
+///
+/// `rows` 与 `draw` 共用本函数，行数口径只有一份。
+pub(super) fn detail(
+    call: &ToolCallView,
+    width: u16,
+    expanded: bool,
+    hovered: bool,
+) -> Vec<Vec<Segment>> {
     let limit = usize::from(width);
     if limit == 0 {
         return Vec::new();
@@ -402,33 +415,60 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
     } else {
         (prefix, prefix_cols)
     };
-    let budget = if expanded {
-        DETAIL_MAX_ROWS
-    } else {
-        DETAIL_PREVIEW_ROWS
-    };
     let body_limit = limit.saturating_sub(head_cols).max(1);
-    // 参数按「可用列 × 行预算」组装：先折行，只有连折行都放不下才收敛（中间省略 /
-    // 尾部省略 / 丢次要计数）。这样 2 行额度被真正用起来，而不是一路压成一行省略号。
-    // 极窄（放不下任何参数）时不给额度：那里折行只会把一行详情撕成两行碎片。
-    // 错误/中断文案是**叙述**而不是参数：保持单行尾部省略，绝不折成两行碎片。
-    // 参数超过最小列宽时才给多行额度（极窄处折行只会撕碎内容）。
-    let rows_budget = if Detail::of(call) == Detail::Error || body_limit < super::MIN_PARAM_COLS {
-        1
+    // 折叠内容在悬停时提亮为默认前景（没有按钮，hover 是「这块可点」的唯一提示）。
+    let param_style = if hovered {
+        style::chat_tool_param_hover()
     } else {
-        budget
+        style::chat_tool_param()
     };
-    let body = detail_body(call, body_limit.saturating_mul(rows_budget));
-    if body.is_empty() {
+    // 两次组装、共享同一份解析缓存（一帧内仍只解析一次 `arguments_json`）：
+    // - **展示**按折叠额度组装，让位顺序照旧（次要计数先丢、路径再省略）——
+    //   用展开额度展示会让长路径铺满两行、把计数挤到看不见；
+    // - **总行数**按展开上限组装，差值就是「还剩多少行」。
+    //   只组装一次时这两件事互斥（早先「剩余行数恒为 0」就是这么来的）。
+    let narrow = Detail::of(call) == Detail::Error || body_limit < super::MIN_PARAM_COLS;
+    let fold_budget = if narrow { 1 } else { DETAIL_PREVIEW_ROWS };
+    let full_budget = if narrow { 1 } else { DETAIL_MAX_ROWS };
+    let mut cache: Option<ToolSummary> = None;
+    // 展开态直接按上限组装并展示全部；折叠态按折叠额度组装（保住让位顺序），
+    // 另按上限算总行数得到「还剩多少行」。两次组装共享 `cache`，解析仍只发生一次。
+    let fold_body = detail_body(
+        call,
+        body_limit.saturating_mul(fold_budget),
+        param_style,
+        &mut cache,
+    );
+    if fold_body.is_empty() {
         // 没有可展示内容：仍占一行（连接符留着，行数恒 ≥ 1）。
         return vec![vec![Segment::new(head, style::chat_notice_connector())]];
     }
-    let mut wrapped = wrap_spans(&body, body_limit);
-    let omitted = wrapped.len() > budget;
-    wrapped.truncate(budget);
-    let last = wrapped.len().saturating_sub(1);
-    let mut rows: Vec<Vec<Segment>> = Vec::with_capacity(wrapped.len());
-    for (index, mut spans) in wrapped.into_iter().enumerate() {
+    let full_body = if expanded {
+        detail_body(
+            call,
+            body_limit.saturating_mul(full_budget),
+            param_style,
+            &mut cache,
+        )
+    } else {
+        Vec::new()
+    };
+    let mut wrapped = wrap_spans(if expanded { &full_body } else { &fold_body }, body_limit);
+    wrapped.truncate(if expanded { full_budget } else { fold_budget });
+    let shown = wrapped.len();
+    let total = if expanded {
+        shown
+    } else {
+        let full = detail_body(
+            call,
+            body_limit.saturating_mul(full_budget),
+            param_style,
+            &mut cache,
+        );
+        wrap_spans(&full, body_limit).len().max(shown)
+    };
+    let mut rows: Vec<Vec<Segment>> = Vec::with_capacity(wrapped.len() + 1);
+    for (index, spans) in wrapped.into_iter().enumerate() {
         let lead = if index == 0 {
             head.clone()
         } else {
@@ -438,27 +478,54 @@ pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec
         if !lead.is_empty() {
             row.push(Segment::new(lead, style::chat_notice_connector()));
         }
-        if omitted && index == last {
-            // 截断标记贴在末行末尾：它是「还有内容」的信号，不是新的一行。
-            let used = segments_cols(&spans);
-            let room = limit.saturating_sub(head_cols).saturating_sub(used);
-            if room >= 1 {
-                spans.push(Segment::new("…", style::agent_step_detail()));
-            }
-        }
         row.extend(spans);
         rows.push(row);
+    }
+    // 折叠态：下一行单独写「还剩多少行」（不占折叠额度，展开后消失）。
+    // 窄到放不下就整行不画——半截 `… 1 more li` 比没有更糟。
+    let remaining = total.saturating_sub(shown);
+    if remaining > 0 {
+        let hint = text::agent::file_diff_more_lines(remaining);
+        let indent = " ".repeat(head_cols);
+        let room = limit.saturating_sub(head_cols);
+        if hint.width() <= room {
+            rows.push(vec![Segment::new(
+                format!("{indent}{hint}"),
+                style::agent_step_detail(),
+            )]);
+        }
     }
     rows
 }
 
-/// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径）。
+/// 展开块是否要铺整块底色（展开态且确有内容）。
+pub(super) fn detail_fill(expanded: bool) -> Option<Style> {
+    expanded.then(style::chat_expanded_bg)
+}
+
+/// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径，含「剩余行数」提示行）。
 pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail(call, width, expanded).len()
+    detail(call, width, expanded, false).len()
+}
+
+/// 详情**内容**行数（不含「剩余行数」提示行）；供「能否展开」判定用。
+pub(super) fn detail_content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    detail_rows(call, width, expanded)
+        .saturating_sub(usize::from(!expanded && omitted_rows(call, width) > 0))
+}
+
+/// 折叠态是否还有内容没画出来。
+fn omitted_rows(call: &ToolCallView, width: u16) -> usize {
+    detail_rows(call, width, true).saturating_sub(detail_rows(call, width, false))
 }
 
 /// 第二行正文（不含 `└─ ` 前缀）：按 [`Detail`] 分支，并在 `limit` 列内收敛。
-fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
+fn detail_body(
+    call: &ToolCallView,
+    limit: usize,
+    param_style: Style,
+    cache: &mut Option<ToolSummary>,
+) -> Vec<Segment> {
     match Detail::of(call) {
         Detail::Error => {
             let Some(error) = error_segment(call) else {
@@ -476,7 +543,7 @@ fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
                 error.style,
             )]
         }
-        Detail::Params => detail_params(call, limit),
+        Detail::Params => detail_params(call, limit, param_style, cache),
     }
 }
 
@@ -485,8 +552,13 @@ fn detail_body(call: &ToolCallView, limit: usize) -> Vec<Segment> {
 /// 让位顺序：**次要计数（按优先级）→ 参数的尾段（`search` 的 `in path` 整体）→
 /// 参数首段**。首段放不下时按 [`Shrink`] 收敛（路径中间省略、pattern 尾部省略）。
 /// 这条顺序保证「范围只在 pattern 完整时才显示」，pattern 绝不被切碎。
-fn detail_params(call: &ToolCallView, limit: usize) -> Vec<Segment> {
-    let param = param(call, style::chat_tool_param());
+fn detail_params(
+    call: &ToolCallView,
+    limit: usize,
+    param_style: Style,
+    cache: &mut Option<ToolSummary>,
+) -> Vec<Segment> {
+    let param = param(call, param_style, cache);
     // 次要段是否带 ` · ` 前缀取决于主参数是否存在（否则会出现孤立分隔符）。
     let extras = extras(call, param.is_some());
     if param.is_none() && extras.is_empty() {
