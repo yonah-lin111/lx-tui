@@ -13,7 +13,7 @@
 | 决策 | 已确认行为 |
 | --- | --- |
 | 展示时机 | 展示 `edit`、`write` 执行后的实际变更，不增加执行前审批 |
-| 默认展示 | 每个文件最多预览 3 个物理行；点卡片末尾动作行展开完整 diff、行号及相邻上下文 |
+| 默认展示 | 每个文件最多预览 3 个物理行；点卡片内容展开完整 diff、行号及相邻上下文 |
 | 操作范围 | 新建、覆盖、修改、删除、移动；移动显示旧路径 → 新路径及内容差异 |
 | 超大结果 | 允许截断 diff 正文；保留文件路径和完整增删计数，明确显示 `Diff truncated`，实时与历史一致 |
 
@@ -398,15 +398,18 @@ DB 失败继续返回 HostError，不自动重试文件工具。结果序列化�
 ### 9.2 预览与展开
 
 - 每个文件先筛选 Added/Removed，再按可用列宽换行，最多保留 3 个物理行；上下文不占预览额度。
-- 如仍有未显示的已保存内容，在该调用块末尾的动作行写**剩余行数**（`… 421 more lines`）；
-  没有剩余内容时**不画动作行**（避免点了没反应的入口）。
+- 如仍有未显示的已保存内容，在该调用块末尾**单独一行**写**剩余行数**（`… 421 more lines`），
+  不占预览额度、展开后消失；没有剩余内容时不画这一行。
 - 展开后显示所有已保存 hunks 和每个 hunk 前后各 1 行上下文；相邻上下文合并，分离处显示 `⋮`。
-- 单击块末尾动作行切换**这一块**；展开后点块正文（未拖拽）同样收起。标题行不可点。
+- **没有动作按钮、没有 `open` 行**：整块卡片就是展开/收起入口——点折叠内容展开、
+  展开后点内容（未拖拽）收起。标题行不可点。
 - 连续的**同种**文件调用（相邻、同名、都带差异正文）**共用一行合并标题** `■ 动词 N files (+A -R)`，
-  其下每个调用各自一块：自己的文件头（`└─`）、自己的预览、自己的展开状态与自己的展开入口；
-  组内不插入块间空行。`edit` 与 `write` 不同名，不共享标题；被正文/思考步骤打断即分组。
+  其下每个调用各自一块：自己的文件头（`└─`）、自己的预览、自己的展开状态与自己的命中区，
+  **块与块之间空一行**（相邻调用是两次独立动作，紧贴会读成一棵树）。
+  `edit` 与 `write` 不同名，不共享标题；被正文/思考步骤打断即分组。
 - 保留 `^o` 和现有工具选择键位入口；文件详情进入现有可选择集合。普通上下箭头仍用于输入。
-- 新增 `ToolToggle` 类命中行为，与进程 `ToolOpen(session_id)` 明确区分，不能用 session_id=None 猜测行为。
+- 命中统一走 `CardHit { kind, card, fold }`：`card` 是整块点击面（`card_target_at`），
+  `fold` 是 hover 提亮区（`fold_target_at`）。两者判据不同，不能共用一个矩形。
 - 无 diff 的旧卡片保留原两行展示；状态提示型详情不能制造无意义的无限展开。
 - 标题以外正文继续支持聊天选区，不把整张卡片变成吞掉选区的按钮。
 
@@ -447,7 +450,7 @@ fn lines(view: &FileDiffView, width: u16, expanded: bool) -> Vec<DiffRenderLine>
 | `src/ui/main_content/lx/history/tool/file_summary.rs`（新增） | 从近 1000 行父文件迁出现有普通文件摘要组装职责 |
 | `src/ui/main_content/lx/history/tool.rs` | 工具类型分派及共用 Segment/标题能力 |
 | `src/ui/main_content/lx/history_hit.rs`（新增） | 从 lx.rs 迁出聊天历史命中函数，包含展开与任务打开的区分 |
-| `src/ui/main_content/lx/history.rs` | 调用统一 diff 行数，收集动作行命中与整卡/正文矩形（`CardHit`） |
+| `src/ui/main_content/lx/history.rs` | 调用统一 diff 行数，收集整卡点击面与 hover 区（`CardHit { card, fold }`） |
 | `src/event/mouse/press.rs` | 分派文件展开命中，不改进程任务页语义 |
 | `src/ui/style.rs`、`src/ui/text.rs` | 差异语义样式及全部新增可见文案 |
 | 四份规范中实际受影响的条款 | 更新文件工具展示、可变行数及新增模块说明 |
@@ -466,7 +469,7 @@ fn lines(view: &FileDiffView, width: u16, expanded: bool) -> Vec<DiffRenderLine>
 | 状态同源 | 首次结算、`/resume`、已裁切结果 | typed view 完全一致；重开不读取磁盘补差异 |
 | 上下文 | 成功/失败/error兜底/旧记录/非文件工具 | 新 UI 正文不进模型历史，原字段与调用配对保留 |
 | UI 行布局 | 展开/折叠、宽/窄/0宽/极矮、中文和长行 | layout rows == draw rows，续行 gutter、颜色和 + / - 正确 |
-| 交互 | 动作行点击、展开正文点击折叠、^o、工具选择、任务 `open`、上滚展开 | 文件展开不打开任务页；拖拽选中不折叠；视口锚点和正文选择正确 |
+| 交互 | 整块点击展开/收起、hover 提亮、^o、工具选择、任务 `open`、上滚展开 | 文件展开不打开任务页；拖拽选中不折叠；视口锚点和正文选择正确 |
 
 自动验证按阶段只跑受影响的测试和检查；最后按项目交付规范运行 fmt/clippy/test，已通过后不无理由重复全量。
 
@@ -537,7 +540,7 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 | `src/ui/main_content/lx/history/tool/file_diff.rs` + `file_diff/tests.rs` | 文件差异卡片布局/绘制（预览 3 物理行、展开全 hunks、`⋮`、EOF 元信息） |
 | `src/ui/main_content/lx/history/tool/file_summary.rs` | 从 `tool.rs` 迁出的普通工具第二行摘要组装（行为不变） |
 | `src/ui/main_content/lx/history/tool.rs` | 工具类型分派与共用行能力 |
-| `src/ui/main_content/lx/history.rs` | `ToolHit` / `ToolHitKind::{OpenTask, Toggle}` 收集动作行命中矩形，以及 `CardHit` 整卡/正文矩形 |
+| `src/ui/main_content/lx/history.rs` | 收集 `CardHit { kind, card, fold }`：整卡点击面 + 折叠态 hover 区 |
 | `src/ui/main_content/lx/history_hit.rs` | 从 `lx.rs` 迁出的聊天历史命中与视口入口（`LxChatHit`、`chat_hit`、滚动条/行数口径） |
 | `src/chat/context/mod.rs` | `strip_ui_diff_json`：回放前剥离 `diff` 正文，保留摘要/计数/错误/配对 |
 
@@ -545,31 +548,31 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 
 ### 14.4 交互与文案
 
-- 命中：**没有动作行、没有 `open` 行**（用户要求移除工具按钮）。每块登记一个 `CardHit.card`
+- 命中：**没有动作行、没有 `open` 行**（用户要求移除工具按钮）。每块登记一个 `CardHit`
   （**整块即点击面**：折叠态没有正文行，只认正文区会让折叠卡片永远点不开），按下时
   `card_target_at` 给出 `CardTarget`，松开未拖拽即 `toggle_lx_card` 切换该块；
-  展开前后行数不变时不登记点击面。
-  进程卡片的后台任务面板改由 `^o` / 空输入框按 `↓` 打开。
-  `LxChatHit::ToolToggle { message_id, call_id }` 与 `ToolOpen(Option<u64>)` 是两个动作，不靠 `session_id` 为空猜测。
+  展开前后行数不变时不登记点击面。进程卡片的后台任务面板改由 `^o` / 空输入框按 `↓` 打开。
+  `LxChatHit` 只剩 `PromptHeader` 与 `JumpBottom` 两种终态命中。
 - **展开正文折叠**：`history::layout` 额外产出 `cards: Vec<CardHit>`（整卡矩形 + 展开后的正文矩形）。鼠标按下落在
   已展开正文内时，事件层同时 `begin_lx_selection` 并记录 `lx_card_press`；松开时**没有选区范围**（`anchor == cursor`，
   即未拖动）才折叠，拖过哪怕一列就是复制、不折叠。`lx_card_press` 在 `handle_mouse_up_left` 入口统一 `take()`，
   所有提前返回路径都不会留下脏标记。
-- **hover**：`history_hit::chat_hover` 按同一份 `layout` 求指针所在卡片，写回 `LxChat.hover`。整卡任意行悬停都会点亮
-  标题与动作行：动作行 / `open` / `collapse` 常态 `muted()`（与左下角上下文统计同款），悬停升为默认前景；
-  思考块方块与 `Thinking`/`Thought` 文案常态 `muted()`，悬停恢复品红 `Indexed 218`。
-- **参数配色**：`chat_tool_param()` 返回 `muted()`——与输入框下方状态行的上下文用量同色（用户要求
-  「工具参数颜色改为输入框下方上下文的字体颜色」）；**没有 hover 升色档**（交互高亮按要求移除）。
+- **hover**：`history_hit::fold_target_at` 按同一份 `layout` 求指针所在的**折叠内容区**（`CardHit.fold`），
+  写回 `LxChat.hover`；展开后该区零高，因此不产生 hover。命令卡与普通工具卡整段折叠内容提亮
+  （含末尾 `… N more lines`）；diff 卡命中区覆盖整块折叠内容、但只提亮提示行；思考块悬停整块。
+- **参数配色**：`chat_tool_param()` 返回 `muted()`——与输入框下方状态行的上下文用量同色；
+  折叠内容悬停提亮为 `chat_tool_param_hover()`（默认前景），**展开态**用同档的
+  `chat_tool_param_expanded()`，折叠后回 dim。
 - **参数折行与展开**：`└─` 详情行与 `exec_command` 的 `$ 命令` 都按可用列软换行，折叠态最多
   **2 个物理行**（`DETAIL_PREVIEW_ROWS`），超出时末行 `…` 收尾；展开态上限 `DETAIL_MAX_ROWS`
   （24 行，防止 1 MiB 补丁铺满整屏）。点击卡片内容（未拖拽）即展开/收起，复用
   `toggle_tool_detail` 与「拖拽选中不折叠」判定；错误/中断文案**恒单行**尾部省略。
 - `^o` 对文件卡片走同一条 `toggle_tool_detail`；对进程卡片仍打开任务面板（仅存活时）。
-- 可见文案集中在 `src/ui/text/agent.rs`：`No content changes`、`Diff truncated`、`Diff simplified`、`collapse`、
-  `open`、`⋮`、`No newline at end of file`、`Diff unavailable`、`→`、`(?)`，以及
+- 可见文案集中在 `src/ui/text/agent.rs`：`No content changes`、`Diff truncated`、`Diff simplified`、
+  `⋮`、`No newline at end of file`、`Diff unavailable`、`→`、`(?)`，以及
   `file_diff_more_lines(n)`（`… N more lines`）与
   `file_diff_omitted_files(n)` 与 `file_diff_unavailable(reason)`（binary / not UTF-8 / read failed）。
-- 旧记录无 `diff` 时 `has_diff` 为假，回退为原两行摘要，也不画动作行，不制造无效展开入口。
+- 旧记录无 `diff` 时 `has_diff` 为假，回退为原两行摘要，不制造无效展开入口。
 
 ### 14.5 行数拆分
 
@@ -577,7 +580,7 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 
 | 文件 | 内容 |
 | --- | --- |
-| `src/app/update/chat/viewport.rs` | 滚动/视口记忆/折叠（`toggle_lx_card`；无 hover 态），由 `chat/mod.rs` 再导出 |
+| `src/app/update/chat/viewport.rs` | 滚动/视口记忆/折叠（`toggle_lx_card`）与 hover 写回（`hover_lx_chat`），由 `chat/mod.rs` 再导出 |
 | `src/ui/main_content/lx/history/sticky.rs` | 置顶行判定、矩形、绘制与 `truncate_with_ellipsis`，由 `history.rs` 再导出 |
 
 拆分后 `app/update/chat/mod.rs` 约 640 行、`ui/main_content/lx/history.rs` 921 行，全部触及文件 ≤1000 行。
