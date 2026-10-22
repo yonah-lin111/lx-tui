@@ -574,3 +574,100 @@ fn merged_blocks_are_contiguous_and_buttonless() {
         "块间无空隙"
     );
 }
+
+/// 展开块的整行底色必须铺满 100% 宽度，且**增删行自己的底色优先**。
+#[test]
+fn expanded_block_fill_spans_full_width_and_diff_colors_win() {
+    let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
+    let width = 60u16;
+    let (_, total) = render(&call, width, true);
+    let rect = Rect::new(0, 0, width, u16::try_from(total).unwrap_or(u16::MAX));
+    let mut grid = Grid::new(rect);
+    let mut row_index = 0usize;
+    draw(
+        &mut grid,
+        rect,
+        0,
+        &mut row_index,
+        &[&call],
+        0,
+        &[true],
+        false,
+        None,
+    );
+    // 标题行（y=0）不属于展开块，不铺；内容行必须满宽铺底。
+    for y in 1..rect.height {
+        // 每一格都有底色（行首缩进、行尾留白都不能掉色）。
+        for x in 0..width {
+            let glyph = grid.cell(x, y);
+            assert!(
+                glyph.style.bg.is_some(),
+                "({x},{y}) 没有底色：展开块必须满宽铺底"
+            );
+        }
+    }
+    // 增删行：整行底色是绿/红，不是展开块的深灰。
+    let mut saw_added = false;
+    let mut saw_removed = false;
+    for y in 0..rect.height {
+        let bg = grid.cell(0, y).style.bg;
+        if bg == style::agent_added_bg().bg {
+            saw_added = true;
+        }
+        if bg == style::agent_removed_bg().bg {
+            saw_removed = true;
+        }
+    }
+    assert!(
+        saw_added && saw_removed,
+        "增删行保留自己的底色（优先级更高）"
+    );
+}
+
+/// hover 只点亮**折叠内容**；展开态没有折叠内容，配色与常态完全一致。
+#[test]
+fn only_folded_content_is_hover_highlighted() {
+    let call = tool_call("write", detail_of(vec![(long_diff(), 5, 5)]));
+    let width = 60u16;
+    let rect_of = |expanded: bool| {
+        let total = rows(&[&call], width, &[expanded]);
+        Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX))
+    };
+    let style_at = |expanded: bool, hovered: Option<usize>, x: u16, y: u16| {
+        let rect = rect_of(expanded);
+        let mut grid = Grid::new(rect);
+        let mut row_index = 0usize;
+        draw(
+            &mut grid,
+            rect,
+            0,
+            &mut row_index,
+            &[&call],
+            0,
+            &[expanded],
+            false,
+            hovered,
+        );
+        grid.cell(x, y).style
+    };
+    // 折叠态：悬停把文件头的 dim 提亮为默认前景。
+    // 提亮作用在「dim 元信息」上；增删行保持语义色。取整块的行样式对比是否有差异。
+    let differing: Vec<(u16, u16)> = (0..rect_of(false).height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .filter(|(x, y)| style_at(false, None, *x, *y) != style_at(false, Some(0), *x, *y))
+        .collect();
+    assert!(
+        !differing.is_empty(),
+        "折叠态悬停应提亮 dim 内容（实际没有任何单元格变化）"
+    );
+    // 展开态：没有折叠内容，悬停不改变任何配色。
+    let expanded_diff: Vec<(u16, u16)> = (0..rect_of(true).height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .filter(|(x, y)| style_at(true, None, *x, *y) != style_at(true, Some(0), *x, *y))
+        .collect();
+    assert!(
+        expanded_diff.is_empty(),
+        "展开态不该有 hover 提亮，实际变了 {} 格",
+        expanded_diff.len()
+    );
+}

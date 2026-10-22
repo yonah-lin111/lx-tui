@@ -238,6 +238,12 @@ pub struct CardHit {
     pub kind: CardKind,
     /// 整块（标题 + 内容）：点击切换折叠。
     pub card: Rect,
+    /// **可折叠内容区**（标题之下、工具参数之上）：悬停提亮只跟这块走。
+    ///
+    /// 与 `card` 分开是因为两件事的判据不同：点击要覆盖整块（折叠态没有正文行，
+    /// 只认内容区就点不开），而 hover 提亮只应该发生在**真的被折叠的内容**上——
+    /// 展开后没有折叠内容，整块都不该亮；工具参数（详情行）在展开块之外，也不该亮。
+    pub fold: Rect,
 }
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
@@ -257,6 +263,22 @@ pub struct HistoryView {
     pub sticky: Option<usize>,
     /// 本帧要写回状态的新记忆（[`crate::app::state::lx::chat::StickySuppression`]）。
     pub suppressed: Option<crate::app::state::lx::chat::StickySuppression>,
+}
+
+/// 折叠态工具卡片的「折叠内容」区域：标题之下的内容行（不含参数详情行之外的东西）。
+///
+/// 折叠内容就是被截断的那部分——文件卡片的预览、命令的折行命令、参数详情的前 2 行。
+fn tool_fold_rect(
+    call: &crate::app::state::ToolCallView,
+    area: Rect,
+    width: u16,
+    block_y: impl Fn(usize) -> u16,
+    step_rows: usize,
+) -> Rect {
+    let start = 1;
+    let content_rows = tool::foldable_rows(call, width);
+    let rows = content_rows.min(step_rows.saturating_sub(start));
+    Rect::new(area.x, block_y(start), width, rows_to_u16(rows))
 }
 
 /// 是否把这张工具卡片登记成可点击面。
@@ -348,6 +370,18 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                                         width,
                                         rows_to_u16(block.len),
                                     ),
+                                    // 每块的整块就是它自己的折叠内容（文件头 + 差异行）；
+                                    // 展开后没有折叠内容，不再提亮。
+                                    fold: if expanded[index] {
+                                        Rect::new(area.x, block_y(block.start), width, 0)
+                                    } else {
+                                        Rect::new(
+                                            area.x,
+                                            block_y(block.start),
+                                            width,
+                                            rows_to_u16(block.len),
+                                        )
+                                    },
                                 });
                             }
                         }
@@ -405,6 +439,13 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                             expanded,
                         },
                         card: Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows)),
+                        // 只有**折叠态**才有「折叠内容」可提亮：标题之下的内容行。
+                        // 展开后没有折叠内容（`fold` 零高），点击照样能收起。
+                        fold: if expanded {
+                            Rect::new(area.x, block_y(0), width, 0)
+                        } else {
+                            tool_fold_rect(call, area, width, block_y, step_rows)
+                        },
                     });
                 }
             }
@@ -420,6 +461,8 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         expanded,
                     },
                     card: Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows)),
+                    // 思考块恢复原来的 hover：悬停整块（含展开后的正文）都提亮。
+                    fold: Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows)),
                 });
             }
             rows += step_rows;

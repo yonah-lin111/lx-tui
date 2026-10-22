@@ -132,11 +132,24 @@ pub(super) fn draw(
         let is_expanded = expanded.get(index).copied().unwrap_or(false);
         for row in layout(call, rect.width, is_expanded, hovered == Some(index)) {
             if let Some(y) = visible_row(rect, scroll, *row_index) {
-                // 先铺整行底色再写字：`put_segments` 只写字符，不负责行背景。
-                if let Some(fill) = row.fill {
-                    grid.background_row(rect.x, y, rect.width, fill);
+                // 先铺**整行**底色（100% 宽，含左侧缩进与行尾空白）再写字：
+                // `put_segments` 只写字符，不负责行背景，行尾留白会掉色。
+                match row.fill {
+                    Some(fill) => {
+                        grid.background_row(rect.x, y, rect.width, fill);
+                        // 字符格样式优先于行底色：不把 fill 补到分段上，写回的字会把
+                        // 底色擦掉（只剩没被字覆盖的空白还有色）——这就是「背景不满宽」。
+                        let tinted: Vec<Segment> = row
+                            .segments
+                            .iter()
+                            .map(|segment| {
+                                Segment::new(segment.text.clone(), segment.style.patch(fill))
+                            })
+                            .collect();
+                        put_segments(grid, rect.x, y, rect.width, &tinted);
+                    }
+                    None => put_segments(grid, rect.x, y, rect.width, &row.segments),
                 }
-                put_segments(grid, rect.x, y, rect.width, &row.segments);
             }
             *row_index += 1;
         }
@@ -181,9 +194,12 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
         }
     }
     // 展开块铺整块底色（只盖这一块的内容行，不动标题与折叠预览）。
+    // **增删行自己的底色优先**：`render_line` 已经给它们设了 `fill`，这里不覆盖。
     if expanded {
         for row in &mut rows {
-            row.fill = Some(style::chat_expanded_bg());
+            if row.fill.is_none() {
+                row.fill = Some(style::chat_expanded_bg());
+            }
         }
     } else if hovered {
         // 折叠内容悬停：把 dim 的元信息提到默认前景（增删语义色保持不变）。
@@ -193,10 +209,8 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
                     .segments
                     .drain(..)
                     .map(|segment| {
-                        let lifted = if segment.style == style::agent_step_detail()
-                            || segment.style == style::chat_tool_param()
-                            || segment.style == style::muted()
-                        {
+                        // 只提亮「次要信息」（dim）：增删的绿/红、语法高亮的彩度都不动。
+                        let lifted = if segment.style.fg == style::muted().fg {
                             style::chat_tool_param_hover()
                         } else {
                             segment.style
@@ -232,6 +246,11 @@ fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Row> {
         )));
     }
     rows
+}
+
+/// 折叠态可提亮的内容行数（文件头 + 预览行，不含剩余行数提示）。
+pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
+    content_rows(call, width, false).len()
 }
 
 /// 展开是否真的能看到更多内容（判据只看内容行，不看「剩余行数」提示行）。

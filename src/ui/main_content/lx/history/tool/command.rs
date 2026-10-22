@@ -59,6 +59,19 @@ fn command_lines(command: &str, width: u16, expanded: bool) -> usize {
     command_body(command, width, expanded, false).len()
 }
 
+/// 折叠态可提亮的命令行数（折叠额度内的内容行，不含剩余行数提示）。
+pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
+    let command = match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(view)) => &view.command,
+        Some(crate::app::state::ToolDetailView::Interaction(view)) => &view.command,
+        _ => return 0,
+    };
+    command_body(command, width, false, false)
+        .iter()
+        .filter(|row| !row.text.starts_with("… "))
+        .count()
+}
+
 /// 命令**内容**行数（不含末尾的「剩余行数」提示行）；供「能否展开」判定用。
 pub(super) fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
     let command = match call.detail.as_deref() {

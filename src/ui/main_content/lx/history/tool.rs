@@ -199,21 +199,11 @@ pub(super) fn draw_animated(
         put_segments(grid, rect.x, y, rect.width, &segments);
     }
     *row_index += 1;
-    // 展开块铺整行底色（只盖展开后的内容，不动标题与折叠预览）。
-    let fill = file_summary::detail_fill(expanded);
+    // 普通工具的 `└─` 行**就是工具参数**，不铺展开底色（用户要求「不要覆盖到工具参数」）；
+    // hover 提亮同样只作用于折叠内容，由 `file_summary::detail` 自己按 `hovered` 决定。
     for segments in file_summary::detail(call, rect.width, expanded, hovered) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
-            if let Some(fill) = fill {
-                // 底色铺满整行，再给每个分段补同一底色（字符格样式优先于行底色）。
-                grid.background_row(rect.x, y, rect.width, fill);
-                let tinted: Vec<Segment> = segments
-                    .into_iter()
-                    .map(|segment| Segment::new(segment.text, segment.style.patch(fill)))
-                    .collect();
-                put_segments(grid, rect.x, y, rect.width, &tinted);
-            } else {
-                put_segments(grid, rect.x, y, rect.width, &segments);
-            }
+            put_segments(grid, rect.x, y, rect.width, &segments);
         }
         *row_index += 1;
     }
@@ -251,6 +241,28 @@ pub(super) fn merge_group(steps: &[AssistantStepView], start: usize) -> Vec<&Too
         group.push(next);
     }
     group
+}
+
+/// 折叠态**可提亮的内容行数**（不含标题行）：只有折叠的内容才在 hover 时提亮。
+///
+/// 具体行数由各卡片自己的折叠额度决定；这里只回答「标题之下有多少行属于折叠内容」。
+pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
+    if width == 0 {
+        return 0;
+    }
+    match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(_))
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
+            command::foldable_rows(call, width)
+        }
+        Some(crate::app::state::ToolDetailView::Plan(_)) => 0,
+        Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
+            file_diff::foldable_rows(call, width)
+        }
+        Some(crate::app::state::ToolDetailView::File(_)) | None => {
+            file_summary::foldable_rows(call, width)
+        }
+    }
 }
 
 /// 该调用的内容是否**能靠展开看到更多**（不能时不登记点击面）。

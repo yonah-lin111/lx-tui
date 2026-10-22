@@ -498,14 +498,18 @@ pub(super) fn detail(
     rows
 }
 
-/// 展开块是否要铺整块底色（展开态且确有内容）。
-pub(super) fn detail_fill(expanded: bool) -> Option<Style> {
-    expanded.then(style::chat_expanded_bg)
-}
-
 /// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径，含「剩余行数」提示行）。
 pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
     detail(call, width, expanded, false).len()
+}
+
+/// 折叠态可提亮的详情行数：折叠额度内的内容行（不含「剩余行数」提示）。
+pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
+    let rows = detail(call, width, false, false);
+    rows.len().saturating_sub(usize::from(
+        rows.last()
+            .is_some_and(|row| row.iter().any(|s| s.text.contains("more line"))),
+    ))
 }
 
 /// 详情**内容**行数（不含「剩余行数」提示行）；供「能否展开」判定用。

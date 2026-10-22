@@ -456,3 +456,26 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
 - `cargo test`：2835 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
 - 人工验收仍待用户 `cargo run`：折叠内容下方的剩余行数、hover 提亮、展开块底色、
       思考块 hover 恢复品红。
+
+## 19. 第九轮：展开底色满宽、diff 底色优先、hover 只亮折叠内容
+
+用户带截图反馈：
+
+1. 展开块底色要 **100% 宽**；diff 添加/删除行的底色优先级必须高于展开底色；
+2. 展开底色**不要覆盖到工具参数**；
+3. 工具参数或内容**没有折叠**时，hover 不该高亮；且参数与折叠内容的高亮**必须独立**
+   （之前一次 hover 两块一起亮）。
+
+- [x] `CardHit` 新增 `fold: Rect`：与 `card`（点击面）分开。`fold` 只覆盖**折叠态的内容行**，
+      展开后为零高；思考块按用户要求恢复「悬停整块（含展开正文）」。
+      事件层新增 `fold_target_at`（hover 判据），`card_target_at` 继续管点击。
+- [x] 文件卡片底色：`Row.fill` 先 `background_row` 铺满 `rect.width`，再把同一 bg `patch`
+      到每个分段——**只铺不 patch 会让写回的字擦掉底色**（截图里背景不满宽的根因）。
+      展开底色只给 `fill.is_none()` 的行，增删行自己的 `agent_added_bg`/`agent_removed_bg`
+      优先级更高。
+- [x] 普通工具（`└─` 参数行）删除 `detail_fill`：参数不是「展开出来的内容」，不铺底色。
+- [x] hover 提亮判据从「style 白名单」改为「fg == muted().fg」：折叠预览里的行号/路径/计数
+      都会提亮，增删绿红与语法彩度保持不变。
+- [x] 测试：`expanded_block_fill_spans_full_width_and_diff_colors_win`（逐格断言满宽底色 +
+      增删行底色胜出）、`only_folded_content_is_hover_highlighted`（折叠态有差异格、展开态零差异格）。
+  fmt / clippy -D warnings / cargo test（2837 passed）全部通过。

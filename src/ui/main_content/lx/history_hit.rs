@@ -126,13 +126,25 @@ pub fn card_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<history::Ca
         })
 }
 
-/// 指针是否落在**可折叠卡片**上：按下时记录目标，松开未拖动即切换折叠。
+/// 指针下的**可折叠内容**：按下时记录目标，松开未拖动即切换折叠。
 ///
 /// **整块都是点击面**：折叠态点标题/内容展开，展开态点内容收起。早先只认「正文区」
 /// 是真实 bug——折叠态没有正文行，于是折叠的思考和长参数永远点不开。
 pub fn card_target_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<CardTarget> {
     let hit = card_at(area, lx, column, row)?;
     Some(target_of(&hit.kind))
+}
+
+/// 指针是否落在**折叠内容**上（hover 提亮判据）。
+///
+/// 与 [`card_target_at`] 分开：点击覆盖整块（折叠态没有正文行），而 hover 只该点亮
+/// 真正被折叠的内容——展开后没有折叠内容、工具参数不在折叠内容里，都不提亮。
+pub fn fold_target_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<CardTarget> {
+    let hit = card_at(area, lx, column, row)?;
+    let view = history_view(area, lx)?;
+    let fold = screen_rect(&view, hit.fold)?;
+    fold.contains((column, row).into())
+        .then(|| target_of(&hit.kind))
 }
 
 /// 命中块 → 可折叠目标。

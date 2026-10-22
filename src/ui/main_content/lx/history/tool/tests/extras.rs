@@ -602,10 +602,6 @@ fn hovered_detail_lifts_to_default_foreground() {
         "悬停提亮为默认前景"
     );
     assert_eq!(normal.len(), hovered.len(), "悬停不改行数");
-    // 展开块才有整行底色；折叠态不铺。
-    assert_eq!(file_summary::detail_fill(false), None);
-    assert_eq!(
-        file_summary::detail_fill(true),
-        Some(style::chat_expanded_bg())
-    );
+    // 普通工具的 `└─` 行是参数本身，展开时**不铺**底色（用户要求不覆盖参数）。
+    // 底色只属于文件差异卡片与进程命令这类「展开后铺开一坨内容」的卡片。
 }
