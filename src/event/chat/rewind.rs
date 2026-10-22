@@ -3,7 +3,10 @@
 //! 撤销文件 IO 与最终 DB 事务在 `spawn_blocking` 的独立连接上执行；事件循环不做
 //! 文件读写，也不乐观删除消息——只有 `RewindFinished` 回投后才重载视图并回填。
 
+mod recovery;
 mod restore;
+
+pub use recovery::recover_startup;
 
 use crate::app::effects::Effect;
 use crate::app::state::{AppState, RewindAction};

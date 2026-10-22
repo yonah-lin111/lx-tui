@@ -48,37 +48,7 @@ impl Persistence {
         let path = default_database_path(linked_worktree);
         match Database::open_default(linked_worktree) {
             Ok(db) => {
-                // 异常退出（进程被杀/崩溃）会遗留 `streaming` assistant 行与 pending/running
-                // 工具行；启动时统一收口，否则恢复会话时这些行永远停在进行中。
-                match db.recover_interrupted_streams() {
-                    Ok(0) => {}
-                    Ok(recovered) => {
-                        tracing::info!(recovered, "recovered interrupted chat streams");
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "recovering interrupted chat streams failed");
-                    }
-                }
-                // 不自动重跑任何工具：只把遗留调用标为 interrupted，结果字段不伪造成功。
-                match db.recover_interrupted_tool_calls() {
-                    Ok(0) => {}
-                    Ok(recovered) => {
-                        tracing::info!(recovered, "recovered interrupted tool calls");
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "recovering interrupted tool calls failed");
-                    }
-                }
-                // 遗留的会话进程同样只标 interrupted：不重连、不用旧 PID 操作进程。
-                match db.recover_interrupted_processes() {
-                    Ok(0) => {}
-                    Ok(recovered) => {
-                        tracing::info!(recovered, "recovered interrupted processes");
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "recovering interrupted processes failed");
-                    }
-                }
+                // 遗留流的恢复由启动装配层按 session guard 执行（见 event::recover_startup）。
                 Self { db: Some(db), path }
             }
             Err(error) => {
@@ -105,6 +75,11 @@ impl Persistence {
             db: Some(db),
             path: Some(path),
         }
+    }
+
+    /// 启动恢复与只读扫描使用的数据库句柄。
+    pub(crate) fn database(&self) -> Option<&Database> {
+        self.db.as_ref()
     }
 
     /// 数据库文件路径；内存测试库为 None（撤销将退化为同步执行）。
@@ -222,6 +197,17 @@ impl Persistence {
     ) -> super::Result<Option<super::chat::OperationRecord>> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         db.unfinished_operation(session_id)
+    }
+
+    /// 推进撤销操作阶段（启动恢复/测试使用）。
+    pub fn set_rewind_operation_phase(
+        &self,
+        operation_id: &str,
+        phase: &str,
+        error_code: Option<&str>,
+    ) -> super::Result<()> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.set_operation_phase(operation_id, phase, error_code)
     }
 
     /// 撤销操作记录（幂等重放）。
@@ -712,6 +698,24 @@ impl Persistence {
                 draft,
                 model,
             } => {
+                // 未完成的撤销（尤其 recovery_required）必须先处理，否则新轮次会叠在
+                // 一半恢复的文件状态上。检查放在 begin_turn 之前，避免先加一条 user 消息。
+                if let Some(session) = session_id.as_deref()
+                    && let Some(Some(operation)) =
+                        self.with_db(|db| db.unfinished_operation(session))
+                {
+                    update::on_turn_failed(state, pane, generation);
+                    update::show_toast(
+                        state,
+                        Toast::new(
+                            ToastKind::Danger,
+                            format!("{} ({})", text::LX_REWIND_RECOVERY_BLOCKED, operation.phase),
+                            None,
+                            Instant::now(),
+                        ),
+                    );
+                    return true;
+                }
                 let committed = self
                     .with_db(|db| db.begin_turn(&workspace, session_id.as_deref(), &draft, &model));
                 match committed {

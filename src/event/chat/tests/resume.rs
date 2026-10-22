@@ -116,7 +116,7 @@ async fn resume_then_continue_replays_completed_pairs_and_skips_interrupted() {
     };
     assert_eq!(
         database
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session_id))
             .expect("recover tool calls"),
         1,
         "遗留调用转 interrupted"

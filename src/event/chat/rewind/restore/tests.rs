@@ -65,6 +65,8 @@ fn turn_with_file(
                 operation: "update".into(),
                 path: file.to_string_lossy().into_owned(),
                 target_path: file.to_string_lossy().into_owned(),
+                anchor_path: None,
+                anchor_canonical: None,
                 before: image(before),
                 planned_after: image(after),
             }],
@@ -107,8 +109,10 @@ fn record(bytes: &[u8]) -> crate::db::chat::ImageRecord {
 #[cfg(unix)]
 fn restore_path(target: &Path) -> RestorePath {
     RestorePath {
-        path: target.to_string_lossy().into_owned(),
-        target_path: target.to_string_lossy().into_owned(),
+        path: target.to_path_buf(),
+        target_path: target.to_path_buf(),
+        anchor_path: None,
+        anchor_canonical: None,
         before: record(b"before"),
         expected_after: record(b"after"),
         worktree_root: None,
@@ -498,6 +502,8 @@ fn restores_actual_linked_worktree_target_only() {
                 operation: "update".into(),
                 path: target.to_string_lossy().into_owned(),
                 target_path: target.to_string_lossy().into_owned(),
+                anchor_path: None,
+                anchor_canonical: None,
                 before: with_git(b"base"),
                 planned_after: with_git(b"new"),
             }],

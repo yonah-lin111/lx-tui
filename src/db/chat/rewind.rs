@@ -4,13 +4,15 @@
 //! 恢复时的 IO 由事件层完成。所有写操作以 `workspace + session + 稳定 user message id`
 //! 三条件校验，`operation_id` 唯一以支持幂等重放。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::{Database, DbError, Result, new_external_id, now_ms};
 
 mod plan;
+mod recovery;
+pub use self::recovery::PendingMutation;
 
 /// 单份文件镜像上限（64 MiB）。
 pub const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
@@ -132,6 +134,9 @@ pub struct PathMutationWrite {
     pub path: String,
     /// 实际写入对象（链接写入时为物理目标；删除/移动时为目录项本身）。
     pub target_path: String,
+    /// 捕获时的现存祖先（词法）与规范化身份；恢复前复核路径链未被重定向。
+    pub anchor_path: Option<String>,
+    pub anchor_canonical: Option<String>,
     pub before: ImageWrite,
     pub planned_after: ImageWrite,
 }
@@ -139,8 +144,13 @@ pub struct PathMutationWrite {
 /// 一个路径的恢复计划。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RestorePath {
-    pub path: String,
-    pub target_path: String,
+    /// 原始路径（审计）。
+    pub path: PathBuf,
+    /// 实际恢复目标；从 DB TEXT 无损失解码。
+    pub target_path: PathBuf,
+    /// 捕获时的现存祖先（词法）与规范化身份。
+    pub anchor_path: Option<PathBuf>,
+    pub anchor_canonical: Option<PathBuf>,
     pub before: ImageRecord,
     /// 该轮最后一次写入后的内容；预检必须与当前文件一致。
     pub expected_after: ImageRecord,
@@ -197,6 +207,8 @@ pub struct OperationRecord {
     pub phase: String,
     pub user_text: String,
     pub error_code: Option<String>,
+    /// 操作目标（启动恢复据此重建文件计划）。
+    pub target_user_message_id: String,
 }
 
 /// 撤销最终提交参数。
@@ -403,11 +415,11 @@ impl Database {
             transaction.execute(
                 r#"INSERT INTO agent_file_mutation
                        (external_id, session_id, user_message_id, tool_call_id, ordinal,
-                        operation, path, target_path,
+                        operation, path, target_path, anchor_path, anchor_canonical,
                         before_image_id, planned_after_image_id, actual_after_image_id,
                         worktree_root, git_dir, head_ref, head_oid, state, created_at_ms)
-                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL,
-                           ?11, ?12, ?13, ?14, 'prepared', ?15)"#,
+                   VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL,
+                           ?13, ?14, ?15, ?16, 'prepared', ?17)"#,
                 params![
                     new_external_id("mut"),
                     session_id,
@@ -417,6 +429,8 @@ impl Database {
                     change.operation,
                     change.path,
                     change.target_path,
+                    change.anchor_path,
+                    change.anchor_canonical,
                     before,
                     planned,
                     change.before.worktree_root,
@@ -481,11 +495,24 @@ impl Database {
             if state != MUTATION_PREPARED {
                 return Err(DbError::MutationConflict);
             }
+            let actual_size = item.actual_after.size();
             let actual = insert_image(&transaction, session_id, &item.actual_after, now)?;
             transaction.execute(
                 "UPDATE agent_file_mutation SET actual_after_image_id = ?1, state = 'committed', success = ?2, committed_at_ms = ?3 WHERE id = ?4",
                 params![actual, i64::from(item.success), now, id],
             )?;
+            // actual-after 也真实占用快照字节：计入本轮用量，后续 prepare 的限额才有意义。
+            // 这里不能拒绝（文件已经写了），只能如实记账。
+            if actual_size > 0 {
+                transaction.execute(
+                    r#"UPDATE agent_turn_file_scope
+                       SET snapshot_bytes = snapshot_bytes + ?1
+                       WHERE user_message_id = (
+                           SELECT user_message_id FROM agent_file_mutation WHERE id = ?2
+                       )"#,
+                    params![i64::try_from(actual_size).unwrap_or(i64::MAX), id],
+                )?;
+            }
         }
         transaction.commit()?;
         Ok(())
@@ -543,6 +570,7 @@ impl Database {
             phase: OP_PREPARING.to_string(),
             user_text: user_text.to_string(),
             error_code: None,
+            target_user_message_id: target_user_message_id.to_string(),
         })
     }
 
@@ -570,7 +598,7 @@ impl Database {
         Ok(self
             .conn
             .query_row(
-                r#"SELECT operation_id, phase, user_text, error_code
+                r#"SELECT operation_id, phase, user_text, error_code, target_user_message_id
                    FROM agent_rewind_operation
                    WHERE session_id = ?1
                      AND phase IN ('preparing', 'restoring', 'files_restored', 'recovery_required')
@@ -582,6 +610,7 @@ impl Database {
                         phase: row.get(1)?,
                         user_text: row.get(2)?,
                         error_code: row.get(3)?,
+                        target_user_message_id: row.get(4)?,
                     })
                 },
             )
@@ -799,7 +828,7 @@ fn insert_image(
 fn operation_by_id(connection: &Connection, operation_id: &str) -> Result<Option<OperationRecord>> {
     Ok(connection
         .query_row(
-            "SELECT operation_id, phase, user_text, error_code FROM agent_rewind_operation WHERE operation_id = ?1",
+            "SELECT operation_id, phase, user_text, error_code, target_user_message_id FROM agent_rewind_operation WHERE operation_id = ?1",
             params![operation_id],
             |row| {
                 Ok(OperationRecord {
@@ -807,6 +836,7 @@ fn operation_by_id(connection: &Connection, operation_id: &str) -> Result<Option
                     phase: row.get(1)?,
                     user_text: row.get(2)?,
                     error_code: row.get(3)?,
+                    target_user_message_id: row.get(4)?,
                 })
             },
         )

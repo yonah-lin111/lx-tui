@@ -214,10 +214,17 @@ pub(crate) fn handle_mutation(persistence: &Persistence, event: MutationHostEven
 /// 工具侧 mutation → DB 写入参数；Git blob 在调用线程（worker）完成。
 fn change_write(change: &PathMutation) -> PathMutationWrite {
     let identity = identify(&change.target);
+    let anchor = crate::platform::path_anchor(&change.target);
     PathMutationWrite {
         operation: change.operation.as_str().to_string(),
-        path: change.path.to_string_lossy().into_owned(),
-        target_path: change.target.to_string_lossy().into_owned(),
+        path: crate::platform::encode_path(&change.path),
+        target_path: crate::platform::encode_path(&change.target),
+        anchor_path: anchor
+            .as_ref()
+            .map(|(lexical, _)| crate::platform::encode_path(lexical)),
+        anchor_canonical: anchor
+            .as_ref()
+            .map(|(_, canonical)| crate::platform::encode_path(canonical)),
         before: image_write(&change.before, identity.as_ref(), true),
         planned_after: image_write(&change.planned_after, identity.as_ref(), true),
     }
@@ -245,7 +252,7 @@ fn image_write(
         link_target: image
             .link_target
             .as_ref()
-            .map(|target| target.to_string_lossy().into_owned()),
+            .map(|target| crate::platform::encode_path(target)),
         git_oid,
         worktree_root: identity.map(|identity| path_string(&identity.root)),
         git_dir: identity.map(|identity| path_string(&identity.git_dir)),
@@ -255,5 +262,5 @@ fn image_write(
 }
 
 fn path_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+    crate::platform::encode_path(path)
 }

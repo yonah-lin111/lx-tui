@@ -45,6 +45,8 @@ fn change(path: &str, before: &[u8], after: &[u8]) -> PathMutationWrite {
         operation: "update".into(),
         path: path.into(),
         target_path: path.into(),
+        anchor_path: None,
+        anchor_canonical: None,
         before: regular(before),
         planned_after: regular(after),
     }
@@ -488,5 +490,56 @@ fn availability_is_metadata_only() {
         availability,
         FileAvailability::Incomplete,
         "未结算的 mutation 不能报可恢复"
+    );
+}
+
+/// actual-after 镜像也计入本轮快照字节，后续 prepare 的限额才有意义。
+#[test]
+fn commit_accounts_actual_image_bytes() {
+    let (database, workspace) = temp("actual-bytes");
+    let turn = started(&database, &workspace);
+    database
+        .prepare_mutations(
+            &workspace,
+            &turn.session_id,
+            &turn.user_message_id,
+            "call",
+            &[change("/tmp/a", b"a", b"bb")],
+        )
+        .expect("prepare");
+    let ticket = database
+        .prepare_mutations(
+            &workspace,
+            &turn.session_id,
+            &turn.user_message_id,
+            "call-2",
+            &[change("/tmp/b", b"", b"ccc")],
+        )
+        .expect("prepare second");
+    let prepared = database
+        .turn_scope(&turn.user_message_id)
+        .expect("scope")
+        .expect("present")
+        .snapshot_bytes;
+    database
+        .commit_mutations(
+            &workspace,
+            &turn.session_id,
+            &ticket,
+            &[ObservedWrite {
+                actual_after: regular(b"ccc"),
+                success: true,
+            }],
+        )
+        .expect("commit");
+    let after = database
+        .turn_scope(&turn.user_message_id)
+        .expect("scope")
+        .expect("present")
+        .snapshot_bytes;
+    assert_eq!(
+        after - prepared,
+        3,
+        "actual-after 的 3 字节必须计入本轮用量"
     );
 }

@@ -146,6 +146,11 @@ async fn run_loop(
     config: &Config,
     persistence: &mut Persistence,
 ) -> io::Result<()> {
+    // 启动恢复：在进入事件循环前按 session guard 结算遗留 journal 与旧流/工具/进程。
+    // 必须在任何新轮次之前，且只处理拿得到 guard 的会话。
+    if let Some(database) = persistence.database() {
+        chat::rewind::recover_startup(database);
+    }
     // 运行时配置副本：设置页保存后经事件更新，渲染每帧读取。
     let mut config = config.clone();
     // 本地设置服务：仅回环监听；失败只影响设置页，不阻断 TUI。
@@ -237,6 +242,10 @@ async fn run_loop(
         if chat::apply_rewind_effects(state, &sender, persistence) {
             dirty = true;
         }
+        // 续轮的 session guard 必须在 BeginChatTurn 事务之前取得。
+        if chat::guard_begin_turns(state, &mut chat_streams, persistence) {
+            dirty = true;
+        }
         // 执行 app 层效应出箱（信任检查/授予、提示词 CRUD 与剪贴板）并载入提示词树。
         if persistence.pump(state) {
             dirty = true;
@@ -247,6 +256,9 @@ async fn run_loop(
         }
         // 聊天网络效应：取走并在 Tokio 任务执行（结果按 key 回投）。
         if chat::pump_chat_streams(state, &mut chat_streams, &sender, persistence) {
+            dirty = true;
+        }
+        if chat::prune_pending_guards(state, &mut chat_streams) {
             dirty = true;
         }
         // 后台任务页的列表与停止：进程句柄只在运行实例里，由事件层执行。

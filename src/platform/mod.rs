@@ -37,6 +37,9 @@ pub fn dev_environment() -> bool {
 mod paste_path;
 pub use paste_path::{parse_path_text, resolve_pasted_path, sniff_image_file};
 
+mod path_text;
+pub use path_text::{decode_path, encode_path, path_anchor, verify_path_chain};
+
 /// 收紧文件权限到仅所有者可读写（Unix 0600；Windows no-op）。
 ///
 /// 已有权限更严格时不放宽；失败返回错误由调用方决定是否致命。

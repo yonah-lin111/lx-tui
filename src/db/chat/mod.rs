@@ -625,24 +625,31 @@ impl Database {
     ///
     /// 保留最后 checkpoint 的 parts，不自动重发或生成第二条用户消息。
     /// 幂等：第二次调用不再改动任何行，返回 0。
-    pub fn recover_interrupted_streams(&self) -> Result<usize> {
+    pub fn recover_interrupted_streams(&self, sessions: &[String]) -> Result<usize> {
+        if sessions.is_empty() {
+            return Ok(0);
+        }
         let now = now_ms();
         let transaction = self.conn.unchecked_transaction()?;
-        let updated = transaction.execute(
-            "UPDATE agent_message SET status = 'interrupted', completed_at_ms = ?1 WHERE status = 'streaming'",
-            params![now],
-        )?;
-        // 遗留 streaming 消息的思考块按 `COALESCE(ended_at_ms, now)` 封闭，
-        // 与 v9 迁移对已终态消息的回填口径一致。
-        transaction.execute(
-            r#"UPDATE agent_message_part
-               SET completed_at_ms = COALESCE(ended_at_ms, ?1)
-               WHERE kind = 'reasoning' AND completed_at_ms IS NULL
-                 AND message_id IN (
-                     SELECT external_id FROM agent_message WHERE status = 'interrupted'
-                 )"#,
-            params![now],
-        )?;
+        let mut updated = 0usize;
+        for session in sessions {
+            updated += transaction.execute(
+                "UPDATE agent_message SET status = 'interrupted', completed_at_ms = ?1
+                 WHERE status = 'streaming' AND session_id = ?2",
+                params![now, session],
+            )?;
+            // 遗留 streaming 消息的思考块按 `COALESCE(ended_at_ms, now)` 封闭。
+            transaction.execute(
+                r#"UPDATE agent_message_part
+                   SET completed_at_ms = COALESCE(ended_at_ms, ?1)
+                   WHERE kind = 'reasoning' AND completed_at_ms IS NULL
+                     AND message_id IN (
+                         SELECT external_id FROM agent_message
+                         WHERE status = 'interrupted' AND session_id = ?2
+                     )"#,
+                params![now, session],
+            )?;
+        }
         transaction.commit()?;
         Ok(updated)
     }

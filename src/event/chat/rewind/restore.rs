@@ -227,7 +227,7 @@ fn restore_files(
     let targets: Vec<PathBuf> = plan
         .paths
         .iter()
-        .map(|path| PathBuf::from(&path.target_path))
+        .map(|path| path.target_path.clone())
         .collect();
     let _paths = match crate::platform::lock_paths(&targets) {
         Ok(Some(guard)) => guard,
@@ -243,13 +243,17 @@ fn restore_files(
     let mut befores = Vec::with_capacity(plan.paths.len());
     for path in &plan.paths {
         let identity = verify_identity(path)?;
-        let current = read_raw(Path::new(&path.target_path), false)
-            .map_err(|error| failed(format!("cannot read {}: {error}", path.target_path)))?;
+        let current = read_raw(&path.target_path, false).map_err(|error| {
+            failed(format!(
+                "cannot read {}: {error}",
+                path.target_path.display()
+            ))
+        })?;
         let expected = raw_from_record(path, &path.expected_after, identity.as_ref())?;
         if !current.same_content(&expected) {
             return Err(failed(format!(
                 "{} changed after this turn; nothing was rewritten",
-                path.target_path
+                path.target_path.display()
             )));
         }
         let before = raw_from_record(path, &path.before, identity.as_ref())?;
@@ -260,11 +264,11 @@ fn restore_files(
     let mut written = 0usize;
     for (index, path) in plan.paths.iter().enumerate() {
         // 写前复检：预检与写入之间，不遵守 advisory lock 的外部程序仍可能改文件。
-        let unchanged = read_raw(Path::new(&path.target_path), false)
+        let unchanged = read_raw(&path.target_path, false)
             .map(|current| current.same_content(&preimages[index]))
             .unwrap_or(false);
         let failure = if unchanged {
-            apply_image(Path::new(&path.target_path), &befores[index])
+            apply_image(&path.target_path, &befores[index])
                 .err()
                 .map(|error| error.to_string())
         } else {
@@ -288,12 +292,12 @@ fn restore_files(
             return Err(failed(if compensated {
                 format!(
                     "failed to restore {}: {reason}; changes were rolled back",
-                    path.target_path
+                    path.target_path.display()
                 )
             } else {
                 format!(
                     "failed to restore {}: {reason}; automatic rollback also failed, manual recovery required",
-                    path.target_path
+                    path.target_path.display()
                 )
             }));
         }
@@ -317,7 +321,7 @@ fn compensate(paths: &[RestorePath], restored_to: &[RawImage], preimages: &[RawI
         return false;
     }
     for ((path, written), preimage) in paths.iter().zip(restored_to).zip(preimages).rev() {
-        let target = Path::new(&path.target_path);
+        let target = path.target_path.as_path();
         match read_raw(target, false) {
             Ok(current) if current.same_content(written) => {
                 if apply_image(target, preimage).is_err() {
@@ -332,7 +336,7 @@ fn compensate(paths: &[RestorePath], restored_to: &[RawImage], preimages: &[RawI
 }
 
 /// 写入单个镜像。
-fn apply_image(target: &Path, image: &RawImage) -> std::io::Result<()> {
+pub(super) fn apply_image(target: &Path, image: &RawImage) -> std::io::Result<()> {
     match image.kind {
         RawKind::Missing => crate::platform::remove_entry(target),
         RawKind::Regular => crate::platform::write_raw_regular(target, image),
@@ -346,17 +350,20 @@ fn apply_image(target: &Path, image: &RawImage) -> std::io::Result<()> {
 }
 
 /// 校验实际目标仍属于同一 worktree / HEAD 身份；返回当前身份供 blob 读取。
-fn verify_identity(path: &RestorePath) -> Result<Option<WorktreeIdentity>, RewindOutcome> {
-    let target = Path::new(&path.target_path);
+pub(super) fn verify_identity(
+    path: &RestorePath,
+) -> Result<Option<WorktreeIdentity>, RewindOutcome> {
+    verify_chain(path)?;
+    let target = path.target_path.as_path();
     let current = git::identify(target);
     match (&path.worktree_root, &current) {
         (None, None) => Ok(None),
         (Some(root), Some(identity)) => {
-            let same = identity.root.to_string_lossy() == root.as_str()
-                && path
-                    .git_dir
-                    .as_deref()
-                    .is_some_and(|git_dir| identity.git_dir.to_string_lossy() == git_dir)
+            // 两侧都按同一套无损编码比较；直接 to_string_lossy 会漏掉非 UTF-8 路径。
+            let same = crate::platform::encode_path(&identity.root) == *root
+                && path.git_dir.as_deref().is_some_and(|git_dir| {
+                    crate::platform::encode_path(&identity.git_dir) == git_dir
+                })
                 && path.head_ref == identity.head_ref
                 && path.head_oid == identity.head_oid;
             if same {
@@ -364,26 +371,49 @@ fn verify_identity(path: &RestorePath) -> Result<Option<WorktreeIdentity>, Rewin
             } else {
                 Err(failed(format!(
                     "{} is no longer in the recorded worktree/HEAD; nothing was rewritten",
-                    path.target_path
+                    path.target_path.display()
                 )))
             }
         }
         _ => Err(failed(format!(
             "{} changed its Git identity; nothing was rewritten",
-            path.target_path
+            path.target_path.display()
+        ))),
+    }
+}
+
+/// 捕获时的路径链复核：祖先目录未被替换、中间目录不是符号链接。
+///
+/// 旧记录没有锚点（两列都为 NULL）时只做内容校验；只有一侧有值是损坏记录，拒绝。
+fn verify_chain(path: &RestorePath) -> Result<(), RewindOutcome> {
+    match (&path.anchor_path, &path.anchor_canonical) {
+        (Some(anchor), Some(canonical)) => {
+            crate::platform::verify_path_chain(anchor, canonical, &path.target_path).map_err(
+                |error| {
+                    failed(format!(
+                        "{} path chain changed: {error}; nothing was rewritten",
+                        path.target_path.display()
+                    ))
+                },
+            )
+        }
+        (None, None) => Ok(()),
+        _ => Err(failed(format!(
+            "{} has an incomplete path anchor; nothing was rewritten",
+            path.target_path.display()
         ))),
     }
 }
 
 /// DB 镜像 → 原始镜像；字节缺失时回退项目对象库。
-fn raw_from_record(
+pub(super) fn raw_from_record(
     _path: &RestorePath,
     record: &crate::db::chat::ImageRecord,
     identity: Option<&WorktreeIdentity>,
 ) -> Result<RawImage, RewindOutcome> {
     match record.kind.as_str() {
         "missing" => Ok(RawImage::missing()),
-        "symlink" => Ok(RawImage::symlink(PathBuf::from(
+        "symlink" => Ok(RawImage::symlink(crate::platform::decode_path(
             record
                 .link_target
                 .as_deref()

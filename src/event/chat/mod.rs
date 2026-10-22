@@ -62,12 +62,13 @@ pub use rewind::{RewindOutcome, apply_rewind_effects, handle_rewind_finished};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::app::effects::Effect;
 use crate::app::state::{AppState, RequestKey, RequestState};
+use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::chat::agent_loop::{
     AgentTools, HostError, ModelContext, ReadyToolCall, ToolOutcome, TurnSummary,
@@ -100,6 +101,9 @@ pub struct ChatStreams {
     db_workspaces: HashMap<RequestKey, PathBuf>,
     /// 本轮持有的跨进程 session guard；直到终态才释放。
     guards: HashMap<RequestKey, crate::platform::FileGuard>,
+    /// `BeginChatTurn` 之前就取得的 guard：续轮必须在 DB 事务之前锁住会话。
+    /// 以 `(pane, generation)` 暂存，`start_stream` 取走；轮次失败时由清理函数释放。
+    pending_guards: HashMap<(PaneId, u64), crate::platform::FileGuard>,
     /// 已提交 pending 但**尚未**回执 ticket 的调用：等该帧绘制后推进 running。
     pending_begins: Vec<PendingBegin>,
     /// 上一帧几何中可见的窗格；不可见窗格无需等待渲染即可回执。
@@ -292,6 +296,98 @@ pub fn pump_chat_streams(
         }
     }
     changed
+}
+
+/// 在 `BeginChatTurn` 落库之前取得/复核 session guard。
+///
+/// 续轮的 guard 必须早于 `begin_turn` 事务：否则另一实例可以在事务提交与流启动之间
+/// 插入同一会话，revision 只能事后发现。取不到或存在未完成撤销时移除该效应，
+/// 状态回到 Idle、草稿保留，并提示原因。
+pub fn guard_begin_turns(
+    state: &mut AppState,
+    streams: &mut ChatStreams,
+    persistence: &Persistence,
+) -> bool {
+    let targets: Vec<(PaneId, u64, String)> = state
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::BeginChatTurn {
+                pane,
+                generation,
+                session_id: Some(session_id),
+                ..
+            } => Some((*pane, *generation, session_id.clone())),
+            _ => None,
+        })
+        .collect();
+    let mut changed = false;
+    for (pane, generation, session_id) in targets {
+        if streams.pending_guards.contains_key(&(pane, generation)) {
+            continue;
+        }
+        let mut reason = persistence
+            .unfinished_rewind(&session_id)
+            .ok()
+            .flatten()
+            .map(|operation| format!("{} ({})", text::LX_REWIND_RECOVERY_BLOCKED, operation.phase));
+        if reason.is_none() {
+            match crate::platform::try_lock_session(&session_id) {
+                Ok(Some(guard)) => {
+                    streams.pending_guards.insert((pane, generation), guard);
+                    continue;
+                }
+                Ok(None) => reason = Some(text::LX_CHAT_SESSION_BUSY.to_string()),
+                Err(error) => {
+                    tracing::warn!(%error, "session guard unavailable");
+                    reason = Some(text::LX_CHAT_SESSION_BUSY.to_string());
+                }
+            }
+        }
+        state.effects.retain(|effect| {
+            !matches!(
+                effect,
+                Effect::BeginChatTurn { pane: p, generation: g, .. }
+                    if *p == pane && *g == generation
+            )
+        });
+        update::on_turn_failed(state, pane, generation);
+        update::show_toast(
+            state,
+            Toast::new(
+                ToastKind::Danger,
+                reason.unwrap_or_default(),
+                None,
+                Instant::now(),
+            ),
+        );
+        changed = true;
+    }
+    changed
+}
+
+/// 释放没有对应在途请求的暂存 guard（`begin_turn` 失败、效应被移除等）。
+pub fn prune_pending_guards(state: &AppState, streams: &mut ChatStreams) -> bool {
+    let stale: Vec<(PaneId, u64)> = streams
+        .pending_guards
+        .keys()
+        .copied()
+        .filter(|(pane, generation)| {
+            !state
+                .pane_anywhere(*pane)
+                .is_some_and(|target| match &target.lx.chat.request {
+                    RequestState::Committing {
+                        generation: active, ..
+                    } => active == generation,
+                    RequestState::Streaming { key, .. } => key.generation == *generation,
+                    _ => false,
+                })
+        })
+        .collect();
+    for key in &stale {
+        streams.pending_guards.remove(key);
+    }
+    !stale.is_empty()
 }
 
 /// 取消已不再属于任何在途请求的轮次（窗格删除、会话切换、generation 前进）。
@@ -767,18 +863,22 @@ fn start_stream(
         return true;
     };
     let mut prepared = prepare_turn(request, workspace);
-    // 跨进程 session guard：新轮次、撤销与会话删除共用；拿不到说明另一实例在跑。
-    let guard = match crate::platform::try_lock_session(&key.session) {
-        Ok(Some(guard)) => guard,
-        Ok(None) => {
-            fail_turn(sender, key, "chat session is busy in another instance");
-            return true;
-        }
-        Err(error) => {
-            tracing::warn!(%error, "session guard unavailable");
-            fail_turn(sender, key, "chat session guard unavailable");
-            return true;
-        }
+    // 跨进程 session guard：续轮在 `BeginChatTurn` 之前已由事件循环取得并暂存，
+    // 这里取走；新会话没有并发者，才在拿到 session id 后补取。
+    let guard = match streams.pending_guards.remove(&(key.pane, key.generation)) {
+        Some(guard) => guard,
+        None => match crate::platform::try_lock_session(&key.session) {
+            Ok(Some(guard)) => guard,
+            Ok(None) => {
+                fail_turn(sender, key, "chat session is busy in another instance");
+                return true;
+            }
+            Err(error) => {
+                tracing::warn!(%error, "session guard unavailable");
+                fail_turn(sender, key, "chat session guard unavailable");
+                return true;
+            }
+        },
     };
     streams.guards.insert(key.clone(), guard);
     // 取消通道；sender 由 ChatStreams 持有。

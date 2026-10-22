@@ -678,6 +678,9 @@ pub const LX_REWIND_NOTICE_NO_FILES: &str = "no file changes";
 /// 撤销失败/冲突提示。
 pub const LX_REWIND_FAILED: &str = "Rewind failed; conversation and files were kept.";
 pub const LX_REWIND_CONFLICT: &str = "Rewind refused: files changed after this turn.";
+/// 撤销未完成/需手工恢复时阻止新轮次。
+pub const LX_REWIND_RECOVERY_BLOCKED: &str =
+    "This session has an unfinished rewind; recover it before sending";
 pub const LX_REWIND_BUSY: &str = "Stop background tasks before rewinding.";
 pub const LX_REWIND_SESSION_BUSY: &str = "This session is busy; finish or stop it first.";
 /// 二级面板（`/model`、`/resume`）过滤后无命中：与「真的没有数据」区分开。

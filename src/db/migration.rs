@@ -394,6 +394,8 @@ CREATE TABLE IF NOT EXISTS agent_file_mutation (
         ('create', 'update', 'delete', 'move_src', 'move_dst')),
     path TEXT NOT NULL,
     target_path TEXT NOT NULL,
+    anchor_path TEXT,
+    anchor_canonical TEXT,
     before_image_id INTEGER NOT NULL,
     planned_after_image_id INTEGER NOT NULL,
     actual_after_image_id INTEGER,
@@ -521,6 +523,15 @@ impl Database {
                 transaction.execute_batch(SCHEMA_V12)?;
             }
             transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
+        }
+        // v12 发布前补列：已经停在 v12 的开发库也要拿到路径锚点列（不推进版本）。
+        if !column_exists(&self.conn, "agent_file_mutation", "anchor_path")? {
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute_batch(
+                "ALTER TABLE agent_file_mutation ADD COLUMN anchor_path TEXT;
+                 ALTER TABLE agent_file_mutation ADD COLUMN anchor_canonical TEXT;",
+            )?;
             transaction.commit()?;
         }
         Ok(())

@@ -239,14 +239,14 @@ async fn crash_recovery_marks_interrupted_and_resume_never_reexecutes() {
     let reopened = fixture.reopen();
     assert_eq!(
         reopened
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
             .expect("recover tool calls"),
         2,
         "pending 与 running 都转 interrupted"
     );
     assert_eq!(
         reopened
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
             .expect("idempotent"),
         0,
         "恢复动作幂等"
@@ -346,7 +346,9 @@ async fn escape_cancel_skips_unstarted_calls_and_keeps_real_result() {
     // DB 恢复时不会再把这个 cancelled 行当 running/interrupted。
     let reopened = fixture.reopen();
     assert_eq!(
-        reopened.recover_interrupted_tool_calls().expect("recover"),
+        reopened
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
+            .expect("recover"),
         0,
         "已结算的调用不受恢复影响"
     );
@@ -486,7 +488,7 @@ async fn cancel_while_waiting_for_ticket_never_executes_the_tool() {
     assert_eq!(
         fixture
             .reopen()
-            .recover_interrupted_tool_calls()
+            .recover_interrupted_tool_calls(std::slice::from_ref(&session))
             .expect("recover"),
         0,
         "没有遗留 pending/running 行"

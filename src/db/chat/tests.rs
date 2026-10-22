@@ -335,7 +335,9 @@ fn recover_interrupted_marks_only_streaming_rows() {
         .begin_turn(&workspace, Some(&first.session_id), "two", &model())
         .expect("second");
     // 模拟异常退出后重开：遗留 streaming 改为 interrupted。
-    let recovered = database.recover_interrupted_streams().expect("recover");
+    let recovered = database
+        .recover_interrupted_streams(std::slice::from_ref(&first.session_id))
+        .expect("recover");
     assert_eq!(recovered, 1);
     let messages = database
         .load_chat_session(&workspace, &first.session_id)
@@ -348,7 +350,12 @@ fn recover_interrupted_marks_only_streaming_rows() {
         second.assistant_message_id
     );
     // 幂等：第二次恢复无行可改。
-    assert_eq!(database.recover_interrupted_streams().expect("again"), 0);
+    assert_eq!(
+        database
+            .recover_interrupted_streams(std::slice::from_ref(&first.session_id))
+            .expect("again"),
+        0
+    );
 }
 
 #[test]
@@ -680,4 +687,35 @@ fn part_timings_round_trip_for_thinking_duration() {
     let assistant = loaded.last().expect("assistant");
     assert_eq!(assistant.parts[0].started_at_ms, Some(1_000));
     assert_eq!(assistant.parts[0].ended_at_ms, Some(7_300));
+}
+
+/// 启动恢复只处理拿得到 guard 的会话：未列出的 streaming 行保持原状。
+#[test]
+fn recovery_only_touches_listed_sessions() {
+    let path = temp_db_path("recovery-scope");
+    let database = Database::open(&path).expect("db");
+    let workspace = path.with_extension("ws");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let first = database
+        .begin_turn(&workspace, None, "one", &model())
+        .expect("first");
+    let second = database
+        .begin_turn(&workspace, None, "two", &model())
+        .expect("second");
+    let recovered = database
+        .recover_interrupted_streams(std::slice::from_ref(&first.session_id))
+        .expect("recover");
+    assert_eq!(recovered, 1, "只动列出的会话");
+    let untouched = database
+        .load_chat_session(&workspace, &second.session_id)
+        .expect("load")
+        .expect("session");
+    assert_eq!(
+        untouched
+            .iter()
+            .find(|message| message.role == "assistant")
+            .map(|message| message.status.as_str()),
+        Some("streaming"),
+        "另一实例的流不能被本实例中断"
+    );
 }
