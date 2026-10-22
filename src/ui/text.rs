@@ -653,7 +653,8 @@ pub fn rewind_notice(kind: &str, restored: usize, already_restored: bool) -> Str
         "delete_only" => LX_REWIND_NOTICE_DELETE_ONLY.to_string(),
         "revert_only" => {
             if restored == 0 {
-                format!("Restored files; {LX_REWIND_NOTICE_NO_FILES}.")
+                // 没有文件变更时不能声称“恢复了文件”（设计 §9）。
+                "No file changes; conversation kept.".to_string()
             } else {
                 format!("Restored {restored} files; conversation kept.")
             }

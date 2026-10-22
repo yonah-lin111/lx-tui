@@ -11,6 +11,51 @@ use crate::db::{Database, DbError, Result};
 use super::{FileAvailability, ImageRecord, MUTATION_COMMITTED, RestorePath, RestorePlan};
 
 impl Database {
+    /// 面板预检：只读 scope / mutation 元数据，**不加载任何文件字节**。
+    ///
+    /// 双击 Esc 的预检在事件主循环里同步执行；`restore_plan` 为了线性校验会把每份
+    /// 镜像的完整 bytes 读进内存（单份上限 64 MiB、单轮 256 MiB），不能走这条路径。
+    /// 线性与内容校验留给后台执行期的 `restore_plan`。
+    pub fn rewind_availability(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        user_message_id: &str,
+    ) -> Result<(FileAvailability, i64, String)> {
+        let latest = self
+            .latest_user_turn(workspace, session_id)?
+            .ok_or(DbError::SessionMissing)?;
+        if latest.user_message_id != user_message_id {
+            return Err(DbError::RewindTargetChanged);
+        }
+        let availability = match latest.scope.as_ref() {
+            None => FileAvailability::Unavailable,
+            Some(scope) if !scope.is_complete() => FileAvailability::Incomplete,
+            Some(scope) if scope.files_restored => FileAvailability::AlreadyRestored,
+            Some(_) => {
+                let (total, pending, distinct): (i64, i64, i64) = self.conn.query_row(
+                    r#"SELECT COUNT(*),
+                              COALESCE(SUM(CASE WHEN state != ?3 THEN 1 ELSE 0 END), 0),
+                              COUNT(DISTINCT target_path)
+                       FROM agent_file_mutation
+                       WHERE session_id = ?1 AND user_message_id = ?2"#,
+                    params![session_id, user_message_id, MUTATION_COMMITTED],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                if pending > 0 {
+                    FileAvailability::Incomplete
+                } else if total == 0 {
+                    FileAvailability::KnownEmpty
+                } else {
+                    FileAvailability::Ready {
+                        paths: usize::try_from(distinct).unwrap_or(0),
+                    }
+                }
+            }
+        };
+        Ok((availability, latest.revision, latest.text))
+    }
+
     /// 派生某轮的恢复计划：线性检查、当前期望内容与可用性。
     pub fn restore_plan(
         &self,

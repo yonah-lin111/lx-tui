@@ -145,6 +145,15 @@ impl Lx {
         }
     }
 
+    /// 清除撤销状态，并关闭 `/rewind` 动作面板（渲染与 Enter 判定都以 `slash` 为准，
+    /// 只清 `rewind` 会留下点不动的孤儿面板）。
+    pub fn clear_rewind(&mut self) {
+        self.rewind.clear();
+        if matches!(self.slash, Some(slash::SlashPanel::Rewind(_))) {
+            self.slash = None;
+        }
+    }
+
     /// 同步输入框内容宽度（列）与可视高度（内容行）；用于软换行、视觉行移动与滚动。
     pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width.max(1);

@@ -183,6 +183,8 @@ fn view<'a>(
             text::LX_REWIND_PANEL_FOOTER,
         ),
     };
+    // 撤销面板顶边右侧固定说明恢复范围；窄面板由渲染侧裁剪。
+    let right_title = matches!(panel, SlashPanel::Rewind(_)).then_some(text::LX_REWIND_SCOPE);
     let above = input.y.saturating_sub(area.y);
     let cap = above.min(mention::MAX_POPUP_ROWS.saturating_add(mention::PANEL_BORDER_ROWS));
     CommandPanelView {
@@ -195,7 +197,7 @@ fn view<'a>(
         anchor_row: above,
         max_height: Some(cap),
         title: Some(title),
-        right_title: None,
+        right_title,
         footer: Some(footer),
         width: Some(input.width),
         placement: PanelPlacement::Above,

@@ -51,6 +51,12 @@ pub(super) fn handle_lx_paste(state: &mut AppState, text: String) -> bool {
     if pane.view != PaneView::Lx {
         return false;
     }
+    // 执行中吞掉输入：粘贴不能把 executing 清掉，否则重复确认会二次执行。
+    if pane.lx.rewind.is_executing() {
+        return false;
+    }
+    // 粘贴也是编辑：让双 Esc 的待命/选中失效（设计 4.2 / D8）。
+    pane.lx.clear_rewind();
     if let Some(paths) = crate::platform::parse_path_text(&text)
         && let Some(candidates) = candidates_from_paths(&paths)
     {

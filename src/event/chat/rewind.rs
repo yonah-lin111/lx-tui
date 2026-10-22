@@ -83,9 +83,10 @@ fn prepare(
     else {
         return;
     };
-    let result = persistence.restore_plan(&workspace, session_id, user_message_id);
+    // 只做元数据预检：这条路径在事件主循环里同步执行，不能把快照 BLOB 读进内存。
+    let result = persistence.rewind_availability(&workspace, session_id, user_message_id);
     let (availability, revision, user_text) = match result {
-        Ok(plan) => (plan.availability, plan.revision, plan.user_text),
+        Ok(value) => value,
         Err(_) => {
             // 目标过期或库不可用：面板保留但禁用文件动作。
             // 预检失败时不要用 0 覆盖冻结 revision：一次瞬时读失败会让 delete_only
@@ -127,11 +128,13 @@ fn execute(
     request: crate::app::effects::RewindRequest,
 ) {
     let workspace = request.workspace.clone();
+    let operation_id = request.operation_id.clone();
     let Some(path) = persistence.database_path() else {
         let _ = sender.send(AppEvent::RewindFinished {
             pane: request.pane,
             session_id: request.session_id.clone(),
             workspace,
+            operation_id,
             outcome: RewindOutcome::Failed {
                 message: "rewind requires persistent storage".to_string(),
             },
@@ -147,6 +150,7 @@ fn execute(
             pane,
             session_id,
             workspace,
+            operation_id,
             outcome,
         });
     });
@@ -159,8 +163,17 @@ pub fn handle_rewind_finished(
     pane: PaneId,
     session_id: &str,
     workspace: &std::path::Path,
+    operation_id: &str,
     outcome: RewindOutcome,
 ) -> bool {
+    // 迟到回执：当前正在执行的是更晚的一次撤销，旧结果不得清掉它的 executing。
+    if let Some(executing) = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.rewind.executing.as_ref())
+        && executing.operation_id != operation_id
+    {
+        return false;
+    }
     match outcome {
         RewindOutcome::Failed { message } => {
             crate::app::update::on_rewind_failed(state, pane, &message);
@@ -184,13 +197,7 @@ pub fn handle_rewind_finished(
                     }) && let Some(target) = state.pane_mut_anywhere(target_pane)
                     {
                         target.lx.chat.reset_session_view();
-                        target.lx.rewind.clear();
-                        if matches!(
-                            target.lx.slash,
-                            Some(crate::app::state::SlashPanel::Rewind(_))
-                        ) {
-                            target.lx.slash = None;
-                        }
+                        target.lx.clear_rewind();
                     }
                 }
                 return true;

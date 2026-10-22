@@ -455,3 +455,38 @@ fn deleting_turn_cleans_scope_mutations_and_images() {
         .expect("count images");
     assert_eq!(images, 0, "失去引用的镜像必须回收");
 }
+
+/// 面板预检只读元数据：不加载 BLOB，也能区分空轮次、未结算与已恢复。
+#[test]
+fn availability_is_metadata_only() {
+    let (database, workspace) = temp("availability");
+    let turn = started(&database, &workspace);
+    sealed(&database, &workspace, &turn);
+    let (availability, revision, text) = database
+        .rewind_availability(&workspace, &turn.session_id, &turn.user_message_id)
+        .expect("availability");
+    assert_eq!(availability, FileAvailability::KnownEmpty);
+    assert_eq!(revision, turn.revision);
+    assert_eq!(text, "hello");
+
+    let next = database
+        .begin_turn(&workspace, Some(&turn.session_id), "latest", &model())
+        .expect("turn");
+    let _ticket = database
+        .prepare_mutations(
+            &workspace,
+            &next.session_id,
+            &next.user_message_id,
+            "call",
+            &[change("/tmp/a", b"a", b"b")],
+        )
+        .expect("prepare");
+    let (availability, _, _) = database
+        .rewind_availability(&workspace, &next.session_id, &next.user_message_id)
+        .expect("availability");
+    assert_eq!(
+        availability,
+        FileAvailability::Incomplete,
+        "未结算的 mutation 不能报可恢复"
+    );
+}

@@ -365,16 +365,22 @@ fn commit_one(
                         let mut changes: Vec<PathMutation> = Vec::new();
                         if !same_content {
                             mutation::ensure_single_link(&resolved)?;
-                            changes.push(PathMutation {
-                                operation: MutationOperation::Update,
-                                path: target.clone(),
-                                target: resolved.clone(),
-                                before: before_image.clone(),
-                                planned_after: mutation::planned_regular(
-                                    &before_image,
-                                    encoded.clone(),
-                                ),
-                            });
+                            // 无链接间接时 resolved == target：内容更新与目录项移动发生在
+                            // 同一路径上，而工具结束后的观察只能看到最终 Missing。这里合成
+                            // 一条 MoveSource（before 取写前内容），否则同路径两条 mutation
+                            // 会被线性检查误判为第三方交错写，整轮永久不可恢复。
+                            if resolved != *target {
+                                changes.push(PathMutation {
+                                    operation: MutationOperation::Update,
+                                    path: target.clone(),
+                                    target: resolved.clone(),
+                                    before: before_image.clone(),
+                                    planned_after: mutation::planned_regular(
+                                        &before_image,
+                                        encoded.clone(),
+                                    ),
+                                });
+                            }
                         }
                         let entry_before = mutation::read_entry(target)
                             .map_err(|error| path::map_io_error(&error, "stat", target))?;

@@ -123,7 +123,7 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.rewind.clear();
+    target.lx.clear_rewind();
     target.lx.chat.generation_counter = generation;
     target.lx.chat.request = RequestState::Committing {
         generation,

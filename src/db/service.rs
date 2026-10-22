@@ -125,6 +125,17 @@ impl Persistence {
         db.latest_user_turn(workspace, session_id)
     }
 
+    /// 面板预检（轻量：只读元数据，不加载快照字节）。
+    pub fn rewind_availability(
+        &self,
+        workspace: &Path,
+        session_id: &str,
+        user_message_id: &str,
+    ) -> super::Result<(super::chat::FileAvailability, i64, String)> {
+        let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
+        db.rewind_availability(workspace, session_id, user_message_id)
+    }
+
     /// 派生恢复计划（只读：可用性、线性检查、目标路径）。
     pub fn restore_plan(
         &self,
@@ -833,10 +844,42 @@ impl Persistence {
                 workspace,
                 session_id,
             } => {
+                // 与轮次/撤销共用 session guard：另一实例或本进程在途轮次占用时拒绝删除，
+                // 否则会级联删掉别人正在写入的轮次与工具记录。
+                let guard = match crate::platform::try_lock_session(&session_id) {
+                    Ok(Some(guard)) => guard,
+                    Ok(None) => {
+                        update::show_toast(
+                            state,
+                            Toast::new(
+                                ToastKind::Danger,
+                                text::LX_CHAT_SESSION_BUSY,
+                                None,
+                                Instant::now(),
+                            ),
+                        );
+                        return true;
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "session guard unavailable");
+                        update::show_toast(
+                            state,
+                            Toast::new(
+                                ToastKind::Danger,
+                                text::LX_CHAT_SESSION_BUSY,
+                                None,
+                                Instant::now(),
+                            ),
+                        );
+                        return true;
+                    }
+                };
                 // 进程记录由外键 `ON DELETE CASCADE` 随会话一起删。**不要**在这里
                 // 单独预删：预删成功而会话删除失败时，会话还在、进程元数据却已清空，
                 // 历史里 `running` 的卡片会永远停在 Running 且没有进程可停。
                 let deleted = self.with_db(|db| db.delete_chat_session(&workspace, &session_id));
+                // guard 必须活到删除落库之后。
+                drop(guard);
                 // 删除成功后解绑引用该会话的窗格（所有工作区内的窗格都可能持有），
                 // 并从已打开的 `/resume` 列表里就地移除该行。
                 if deleted.is_some() {

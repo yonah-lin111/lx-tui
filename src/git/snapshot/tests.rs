@@ -29,12 +29,18 @@ fn git(dir: &Path, args: &[&str]) {
 fn blobs_roundtrip_and_identity_is_per_worktree() {
     let dir = temp_dir("roundtrip");
     git(&dir, &["init", "-q"]);
+    git(&dir, &["symbolic-ref", "HEAD", "refs/heads/lx-test"]);
     let file = dir.join("a.txt");
     std::fs::write(&file, b"x").expect("seed");
     let identity = identify(&file).expect("identity");
     assert_eq!(
         identity.root,
         std::fs::canonicalize(&dir).expect("canonical")
+    );
+    assert_eq!(
+        identity.head_ref.as_deref(),
+        Some("refs/heads/lx-test"),
+        "符号 HEAD 必须被采集"
     );
     let oid = write_blob(&identity, b"hello\0world").expect("blob");
     let bytes = read_blob(&identity, &oid).expect("read blob");

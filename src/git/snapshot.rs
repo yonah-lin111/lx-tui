@@ -48,7 +48,9 @@ pub fn identify(path: &Path) -> Option<WorktreeIdentity> {
     let root = run_text(&directory, &["rev-parse", "--show-toplevel"])?;
     let git_dir = run_text(&directory, &["rev-parse", "--git-dir"])?;
     let common_dir = run_text(&directory, &["rev-parse", "--git-common-dir"])?;
-    let head_ref = run_text(&directory, &["symbolic-full-name", "HEAD"])
+    // 用 `symbolic-ref` 而不是 `rev-parse --symbolic-full-name`：后者在 unborn 分支上
+    // 会报 ambiguous 而丢失分支名；detached HEAD 时 symbolic-ref 失败，正好表达 None。
+    let head_ref = run_text(&directory, &["symbolic-ref", "-q", "HEAD"])
         .filter(|value| value.starts_with("refs/"));
     // unborn 仓库没有 HEAD OID；显式保持 None，不伪造提交。
     let head_oid = run_text(&directory, &["rev-parse", "--verify", "HEAD"]);

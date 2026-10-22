@@ -259,7 +259,18 @@ fn restore_files(
     let _ = database.set_operation_phase(&request.operation_id, OP_RESTORING, None);
     let mut written = 0usize;
     for (index, path) in plan.paths.iter().enumerate() {
-        if let Err(_error) = apply_image(Path::new(&path.target_path), &befores[index]) {
+        // 写前复检：预检与写入之间，不遵守 advisory lock 的外部程序仍可能改文件。
+        let unchanged = read_raw(Path::new(&path.target_path), false)
+            .map(|current| current.same_content(&preimages[index]))
+            .unwrap_or(false);
+        let failure = if unchanged {
+            apply_image(Path::new(&path.target_path), &befores[index])
+                .err()
+                .map(|error| error.to_string())
+        } else {
+            Some("file changed while restoring".to_string())
+        };
+        if let Some(reason) = failure {
             let compensated = compensate(
                 &plan.paths[..written],
                 &befores[..written],
@@ -276,12 +287,12 @@ fn restore_files(
             );
             return Err(failed(if compensated {
                 format!(
-                    "failed to restore {}; changes were rolled back",
+                    "failed to restore {}: {reason}; changes were rolled back",
                     path.target_path
                 )
             } else {
                 format!(
-                    "failed to restore {}; automatic rollback also failed, manual recovery required",
+                    "failed to restore {}: {reason}; automatic rollback also failed, manual recovery required",
                     path.target_path
                 )
             }));

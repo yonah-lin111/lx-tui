@@ -69,6 +69,15 @@ pub fn lock_root() -> io::Result<PathBuf> {
         .filter(|home| !home.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "home directory unavailable"))?;
+    // 显式覆盖数据库路径时，锁目录也必须跟着同一份 DB 走：否则两个实例用不同
+    // `LX_TUI_ENV` 打开同一个 DB，却落在 dev/prod 两个互不相干的锁目录。
+    if let Some(db) = std::env::var_os("LX_TUI_DB_PATH").filter(|value| !value.is_empty()) {
+        let key = super::path_key(Path::new(&db));
+        return Ok(home
+            .join(".lx-t")
+            .join("locks")
+            .join(format!("db-{:016x}", hash(key.as_bytes()))));
+    }
     let root = if crate::platform::dev_environment() {
         ".lx-t-dev"
     } else {

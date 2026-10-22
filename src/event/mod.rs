@@ -113,6 +113,8 @@ pub enum AppEvent {
         session_id: String,
         /// 发起时冻结的会话 DB 工作区键（回执重载只认它）。
         workspace: std::path::PathBuf,
+        /// 发起时的 operation id：迟到回执不得覆盖更新的一次执行。
+        operation_id: String,
         outcome: chat::RewindOutcome,
     },
 }
@@ -576,6 +578,7 @@ fn handle_app_event(
             pane,
             session_id,
             workspace,
+            operation_id,
             outcome,
         } => {
             chat::handle_rewind_finished(
@@ -584,6 +587,7 @@ fn handle_app_event(
                 pane,
                 &session_id,
                 &workspace,
+                &operation_id,
                 outcome,
             );
         }

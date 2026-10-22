@@ -25,7 +25,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.reset_session_view();
-    target.lx.rewind.clear();
+    target.lx.clear_rewind();
     refresh_lx_status(state, pane);
     true
 }
@@ -367,7 +367,7 @@ pub fn on_session_loaded_full(
         return false;
     };
     target.lx.chat.session_id = Some(session_id.to_string());
-    target.lx.rewind.clear();
+    target.lx.clear_rewind();
     if let Some(selection) = selection {
         target.lx.chat.selection = Some(selection);
     }

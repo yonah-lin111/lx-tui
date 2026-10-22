@@ -150,6 +150,10 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
     if !matches!(target.lx.chat.request, RequestState::Idle) {
         return None;
     }
+    // 待命后可能经粘贴等非键盘路径写入草稿：选中时再复核一次空输入。
+    if !target.lx.input.trim().is_empty() {
+        return None;
+    }
     let session_id = target.lx.chat.session_id.clone()?;
     let message = target
         .lx
@@ -425,7 +429,7 @@ pub fn on_session_reloaded(
     target.lx.chat.turn_elapsed_ms = None;
     // 其他 pane 的旧选择/面板随被删轮次作废；发起 pane 的 executing 必须保留到回填。
     if target.lx.rewind.executing.is_none() {
-        target.lx.rewind.clear();
+        target.lx.clear_rewind();
     }
     // 用量按剩余消息重算，避免残留被删轮次。
     let recent = messages.iter().rev().find(|message| {
@@ -437,7 +441,11 @@ pub fn on_session_reloaded(
         let output = message.output_tokens.unwrap_or(0).max(0);
         u64::try_from(input.saturating_add(output)).unwrap_or(u64::MAX)
     });
+    // 计划从剩余消息的最后一条成功 update_plan 重建：revert_only 时对话未变，
+    // 计划卡片与下一轮运行上下文都不能因重载而丢。
+    let restored_messages = target.lx.chat.messages.clone();
     refresh_lx_status(state, pane);
+    super::restore_plan(state, pane, &restored_messages);
     true
 }
 
