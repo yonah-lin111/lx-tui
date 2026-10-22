@@ -5,42 +5,37 @@
 
 /// lx 输入框上方聊天栏的 loading 文案。
 pub const LOADING_LABEL: &str = "Working...";
-/// loading 文案右侧的括号统计：`(2.7s · ↑1.6k ↓320 tok)`。
+/// loading 文案右侧的括号统计：`(2s · ↓320 tok)`。
 ///
-/// 三部分都可缺失（缺哪段就少哪段，全缺返回 None 整段不画）：
-/// - 耗时 = 本轮已耗时（`LxChat.turn_elapsed_ms`，事件循环每帧刷新）；
-/// - `↑N` = 本轮输入估算（会话里已展示内容折算），`↓N` = 已产出输出估算；
-/// - ` tok` 只挂在最后一个数字后，避免 `↑1.6k tok ↓320 tok` 的啰嗦写法。
+/// 用户要求：
+/// - **只显示 agent 输出**（`↓`），不再显示输入方向的 `↑`；
+/// - 耗时**最小单位为秒**，不出现毫秒（`0s` / `2s` / `1m 12s`）。
 ///
-/// 箭头沿用「↓ = 往外吐、↑ = 往里送」的直觉；与「回到底部」的 `↓` 靠括号与 `tok`
-/// 单位区分，不会混淆。
-pub fn stream_stats_label(
-    elapsed_ms: Option<i64>,
-    input: Option<u64>,
-    output: Option<u64>,
-) -> Option<String> {
+/// 两部分都可缺失：没有耗时也没有输出时返回 None，整段不画。
+pub fn stream_stats_label(elapsed_ms: Option<i64>, output: Option<u64>) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(elapsed) = elapsed_ms.filter(|value| *value > 0) {
-        parts.push(crate::ui::text::format_duration(elapsed));
-    }
-    let mut tokens = String::new();
-    if let Some(input) = input {
-        tokens.push_str(&format!("↑{}", crate::ui::text::token_count_precise(input)));
+        parts.push(format_duration_seconds(elapsed));
     }
     if let Some(output) = output {
-        if !tokens.is_empty() {
-            tokens.push(' ');
-        }
-        tokens.push_str(&format!(
-            "↓{}",
+        parts.push(format!(
+            "↓{} tok",
             crate::ui::text::token_count_precise(output)
         ));
     }
-    if !tokens.is_empty() {
-        tokens.push_str(" tok");
-        parts.push(tokens);
-    }
     (!parts.is_empty()).then(|| format!("({})", parts.join(" · ")))
+}
+
+/// loading 行的耗时格式：**最小单位是秒**（`0s` / `2s` / `1m 12s`）。
+///
+/// 与统计行的 [`crate::ui::text::format_duration`] 分开：那个要精确到毫秒（本轮统计
+/// 用），这里只回答「这轮跑了多久」，毫秒级的抖动没有信息量。
+fn format_duration_seconds(ms: i64) -> String {
+    let seconds = (ms.max(0) + 500) / 1_000;
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    format!("{}m {}s", seconds / 60, seconds % 60)
 }
 
 /// 未知命令提示前缀（后面直接跟命令名，整体保持一行短语）。
@@ -107,35 +102,39 @@ mod tests {
 mod stats_tests {
     use super::*;
 
-    /// 三段齐全：`(2.7s · ↑1.6k ↓320 tok)`。
+    /// 只显示输出方向；` tok` 只挂一次。
     #[test]
-    fn stats_label_joins_time_and_both_token_directions() {
+    fn stats_label_shows_time_and_downward_tokens_only() {
         assert_eq!(
-            stream_stats_label(Some(2_700), Some(1_600), Some(320)).as_deref(),
-            Some("(2.7s · ↑1.6k ↓320 tok)")
+            stream_stats_label(Some(2_700), Some(320)).as_deref(),
+            Some("(3s · ↓320 tok)")
         );
+        assert_eq!(
+            stream_stats_label(None, Some(1_200)).as_deref(),
+            Some("(↓1.2k tok)")
+        );
+        assert_eq!(
+            stream_stats_label(Some(2_000), None).as_deref(),
+            Some("(2s)")
+        );
+        assert_eq!(stream_stats_label(None, None), None, "全空整段不画");
+        assert_eq!(stream_stats_label(Some(0), None), None, "0ms 不算耗时");
     }
 
-    /// 只有 token：没有耗时就不画时间，` tok` 只挂一次。
+    /// 耗时最小单位是秒：永远不会出现 `ms`。
     #[test]
-    fn stats_label_omits_missing_parts() {
-        assert_eq!(
-            stream_stats_label(None, Some(1_600), Some(320)).as_deref(),
-            Some("(↑1.6k ↓320 tok)")
-        );
-        assert_eq!(
-            stream_stats_label(Some(820), None, Some(12)).as_deref(),
-            Some("(820ms · ↓12 tok)")
-        );
-        assert_eq!(
-            stream_stats_label(None, Some(900), None).as_deref(),
-            Some("(↑900 tok)")
-        );
-        assert_eq!(stream_stats_label(None, None, None), None, "全空整段不画");
-        assert_eq!(
-            stream_stats_label(Some(0), None, None),
-            None,
-            "0ms 不算耗时"
-        );
+    fn stats_label_never_shows_milliseconds() {
+        for (ms, expected) in [
+            (120i64, "0s"),
+            (999, "1s"),
+            (1_400, "1s"),
+            (4_200, "4s"),
+            (38_400, "38s"),
+            (72_000, "1m 12s"),
+        ] {
+            let label = stream_stats_label(Some(ms), None).expect("有耗时");
+            assert_eq!(label, format!("({expected})"), "{ms}ms");
+            assert!(!label.contains("ms"), "不得出现毫秒：{label}");
+        }
     }
 }

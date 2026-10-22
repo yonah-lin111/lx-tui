@@ -545,9 +545,10 @@ pub struct DiffCounts { added, removed, truncated, simplified }
 
 ### 14.4 交互与文案
 
-- 命中：**没有动作行、没有 `open` 行**（用户要求移除工具按钮）。每块内容登记一个
-  `CardHit`（`card` + `body`），按下时 `card_target_at` 给出 `CardTarget`，松开未拖拽即
-  `toggle_lx_card` 切换该块；内容展开后行数不变时 `body` 为零高、不登记点击面。
+- 命中：**没有动作行、没有 `open` 行**（用户要求移除工具按钮）。每块登记一个 `CardHit.card`
+  （**整块即点击面**：折叠态没有正文行，只认正文区会让折叠卡片永远点不开），按下时
+  `card_target_at` 给出 `CardTarget`，松开未拖拽即 `toggle_lx_card` 切换该块；
+  展开前后行数不变时不登记点击面。
   进程卡片的后台任务面板改由 `^o` / 空输入框按 `↓` 打开。
   `LxChatHit::ToolToggle { message_id, call_id }` 与 `ToolOpen(Option<u64>)` 是两个动作，不靠 `session_id` 为空猜测。
 - **展开正文折叠**：`history::layout` 额外产出 `cards: Vec<CardHit>`（整卡矩形 + 展开后的正文矩形）。鼠标按下落在

@@ -126,16 +126,13 @@ pub fn card_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<history::Ca
         })
 }
 
-/// 指针是否落在**可折叠卡片的内容**上：按下时记录目标，松开未拖动即切换折叠。
+/// 指针是否落在**可折叠卡片**上：按下时记录目标，松开未拖动即切换折叠。
 ///
-/// 用户在折叠态点预览、在展开态点正文，都是同一个入口——「点内容切换折叠」，
-/// 不再区分动作行；标题行不算内容（避免误触）。
+/// **整块都是点击面**：折叠态点标题/内容展开，展开态点内容收起。早先只认「正文区」
+/// 是真实 bug——折叠态没有正文行，于是折叠的思考和长参数永远点不开。
 pub fn card_target_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<CardTarget> {
     let hit = card_at(area, lx, column, row)?;
-    let view = history_view(area, lx)?;
-    let body = screen_rect(&view, hit.body)?;
-    body.contains((column, row).into())
-        .then(|| target_of(&hit.kind))
+    Some(target_of(&hit.kind))
 }
 
 /// 命中块 → 可折叠目标。

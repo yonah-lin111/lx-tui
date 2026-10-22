@@ -226,14 +226,16 @@ pub enum CardKind {
     },
 }
 
-/// 一个可折叠块的两份矩形。
+/// 一个可折叠块的矩形。
+///
+/// **整块就是点击面**（用户要求「点折叠内容展开、点展开内容收起」，且没有动作按钮）：
+/// 因此不再区分「标题」与「正文区」两个矩形——折叠态没有正文行，若只认正文区，
+/// 折叠的卡片就永远点不开。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CardHit {
     pub kind: CardKind,
-    /// 整块（标题 + 内容）：点击切换范围。
+    /// 整块（标题 + 内容）：点击切换折叠。
     pub card: Rect,
-    /// 内容区（标题之后的全部行）：点击切换折叠，零高表示没有可点内容。
-    pub body: Rect,
 }
 
 /// 历史视图：渲染 / 滚轮钳制 / 滚动条 / 命中 / 置顶行的**唯一**几何口径。
@@ -253,6 +255,14 @@ pub struct HistoryView {
     pub sticky: Option<usize>,
     /// 本帧要写回状态的新记忆（[`crate::app::state::lx::chat::StickySuppression`]）。
     pub suppressed: Option<crate::app::state::lx::chat::StickySuppression>,
+}
+
+/// 是否把这张工具卡片登记成可点击面。
+///
+/// 判据：**有内容可展开**（展开后行数变多）。没有更多内容的卡片点了也不会有任何
+/// 变化，登记只会制造「看得见点不动」的错觉。
+fn should_register_card(call: &crate::app::state::ToolCallView, width: u16) -> bool {
+    tool::has_expandable_content(call, width)
 }
 
 /// 行数 → 矩形高度（饱和转换：极端长历史不会回绕成 0）。
@@ -322,27 +332,22 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         let blocks = tool::group_blocks(&group, width, &expanded);
                         for (index, block) in blocks.iter().enumerate() {
                             let call = group[index];
-                            // 每块各自一块点击面：点它只切换这一块（展开互不影响）。
-                            // 正文区 = 块内的文件头与差异行（整块都是内容）。
-                            cards.push(CardHit {
-                                kind: CardKind::Tool {
-                                    message_id: message.id.clone(),
-                                    call_id: call.call_id.clone(),
-                                    expanded: expanded[index],
-                                },
-                                card: Rect::new(
-                                    area.x,
-                                    block_y(block.start),
-                                    width,
-                                    rows_to_u16(block.len),
-                                ),
-                                body: Rect::new(
-                                    area.x,
-                                    block_y(block.start),
-                                    width,
-                                    rows_to_u16(block.len),
-                                ),
-                            });
+                            // 每块各自一整块点击面：点它只切换这一块（展开互不影响）。
+                            if should_register_card(group[index], width) {
+                                cards.push(CardHit {
+                                    kind: CardKind::Tool {
+                                        message_id: message.id.clone(),
+                                        call_id: call.call_id.clone(),
+                                        expanded: expanded[index],
+                                    },
+                                    card: Rect::new(
+                                        area.x,
+                                        block_y(block.start),
+                                        width,
+                                        rows_to_u16(block.len),
+                                    ),
+                                });
+                            }
                         }
                         rows += group_rows;
                     }
@@ -387,39 +392,25 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             };
             if let AssistantStepView::Tool { call, .. } = step {
                 let expanded = lx.chat.detail_is_expanded(&message.id, &call.call_id);
-                // 没有动作行、没有 `open`：**整块内容**就是点击面。折叠态点它就展开、
-                // 展开态点它就收起（拖拽选中不折叠，见事件层的 `lx_card_press`）。
-                let card = Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows));
-                cards.push(CardHit {
-                    kind: CardKind::Tool {
-                        message_id: message.id.clone(),
-                        call_id: call.call_id.clone(),
-                        expanded,
-                    },
-                    card,
-                    // 正文区 = 标题之后的全部行**且**确实有更多内容可展开；
-                    // 否则零高——点了没反应的内容不该被登记成点击面。
-                    body: if step_rows > 1 && tool::has_expandable_content(call, width) {
-                        Rect::new(
-                            area.x,
-                            block_y(1),
-                            width,
-                            rows_to_u16(step_rows.saturating_sub(1)),
-                        )
-                    } else {
-                        Rect::new(area.x, block_y(0), width, 0)
-                    },
-                });
+                // 没有动作行、没有 `open`：**整块**就是点击面。折叠态点它展开、
+                // 展开态点它收起（拖拽选中不折叠，见事件层的 `lx_card_press`）。
+                // 展开前后行数不变（没有更多内容）时不登记，避免点了没反应。
+                if should_register_card(call, width) {
+                    cards.push(CardHit {
+                        kind: CardKind::Tool {
+                            message_id: message.id.clone(),
+                            call_id: call.call_id.clone(),
+                            expanded,
+                        },
+                        card: Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows)),
+                    });
+                }
             }
             if is_reasoning {
                 let expanded = lx.chat.reasoning_expanded(message_index, step_index);
                 let header = Rect::new(area.x, block_y(0), width, 1);
                 thinking.push((message_index, step_index, header));
-                let body = if expanded {
-                    Rect::new(area.x, block_y(1), width, rows_to_u16(step_rows - 1))
-                } else {
-                    Rect::new(area.x, block_y(0), width, 0)
-                };
+                // 思考块整块可点（折叠态只有头部一行，也必须点得开）。
                 cards.push(CardHit {
                     kind: CardKind::Thinking {
                         message_index,
@@ -427,7 +418,6 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         expanded,
                     },
                     card: Rect::new(area.x, block_y(0), width, rows_to_u16(step_rows)),
-                    body,
                 });
             }
             rows += step_rows;

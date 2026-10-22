@@ -7,7 +7,7 @@
 //! 视线在输入框）。提示类反馈已全部改走 main content 的 toast（见
 //! `app::update::chat::show_lx_hint`），这一行不再承载临时提示。
 //!
-//! **loading**：`Working... (2.7s · ↑1.6k ↓320 tok)`。`Working...` 带**从左到右的
+//! **loading**：`Working... (3s · ↓320 tok)`（只显示输出方向；耗时最小单位是秒）。`Working...` 带**从左到右的
 //! 扫描高亮**：窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native
 //! 标签的 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
 //! 走出末尾后从左侧重新进入。括号里的统计**紧贴文案右侧**（用户要求「在 working 的
@@ -127,11 +127,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let stats = if stop_armed {
         None
     } else {
-        text::chat::stream_stats_label(
-            lx.chat.turn_elapsed_ms,
-            lx.chat.stream_input_tokens(),
-            lx.chat.stream_output_tokens(),
-        )
+        text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens())
     };
     draw_loading(
         grid,

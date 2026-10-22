@@ -1551,9 +1551,9 @@ fn stream_token_estimate_counts_wide_chars_heavier() {
     assert_eq!(lx.chat.stream_output_tokens(), None, "没有输出就不显示");
 }
 
-/// loading 行的统计紧跟 `Working...`（不是贴栏右缘），且含耗时与双向 token。
+/// loading 行的统计紧跟 `Working...`（不是贴栏右缘），只含输出 token，耗时为秒。
 #[test]
-fn loading_stats_follow_the_label_with_time_and_both_directions() {
+fn loading_stats_follow_the_label_with_seconds_and_output_tokens() {
     let area = Rect::new(0, 0, 80, 16);
     let mut lx = streaming_lx(true, true);
     lx.chat.turn_elapsed_ms = Some(2_700);
@@ -1577,6 +1577,8 @@ fn loading_stats_follow_the_label_with_time_and_both_directions() {
         label_at + text::chat::LOADING_LABEL.len() + 1,
         "统计紧贴文案右侧一格：{row}"
     );
-    assert!(row.contains("2.7s"), "含耗时：{row}");
+    assert!(row.contains("3s"), "耗时按秒取整（2.7s → 3s）：{row}");
+    assert!(!row.contains("ms"), "不出现毫秒：{row}");
     assert!(row.contains("↓1.2k tok"), "含输出 token：{row}");
+    assert!(!row.contains('↑'), "不再显示输入方向：{row}");
 }

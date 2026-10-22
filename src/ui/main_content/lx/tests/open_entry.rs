@@ -148,23 +148,23 @@ fn card_content_is_the_toggle_target() {
     let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
     assert_eq!(cards.len(), 1, "一张卡片");
     let card = &cards[0];
-    assert!(card.body.height > 0, "内容区非空：{card:?}");
-    let body_y = card
-        .body
+    // 整块可点：折叠态点预览行就能展开。
+    let top_y = card
+        .card
         .y
         .saturating_sub(view.body.y)
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
-    assert_eq!(
-        card_target_at(area, &lx, area.x + 6, body_y),
-        Some(crate::app::state::CardTarget::Tool {
-            message_id: "msg-call-edit".into(),
-            call_id: "call-edit".into(),
-        }),
-        "点内容记录为折叠目标"
-    );
-    // 标题行不是内容：点它不切换（避免误触）。
-    assert_eq!(card_target_at(area, &lx, area.x + 6, body_y - 1), None);
+    for row in [top_y, top_y + 1, top_y + 2] {
+        assert_eq!(
+            card_target_at(area, &lx, area.x + 6, row),
+            Some(crate::app::state::CardTarget::Tool {
+                message_id: "msg-call-edit".into(),
+                call_id: "call-edit".into(),
+            }),
+            "行 {row} 属于卡片，点它切换折叠"
+        );
+    }
 }
 
 #[test]
@@ -185,24 +185,21 @@ fn expanded_card_body_is_the_click_to_collapse_target() {
         ),
         "布局记录的展开状态必须与状态层一致"
     );
-    // 正文至少一行（标题 + 文件头 + 预览）。
-    assert!(card.body.height >= 2, "展开后正文非空：{card:?}");
-    let body_y = card
-        .body
+    // 展开态整块仍是点击面：点内容即收起。
+    let top_y = card
+        .card
         .y
         .saturating_sub(view.body.y)
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
     assert_eq!(
-        card_target_at(area, &lx, area.x + 6, body_y),
+        card_target_at(area, &lx, area.x + 6, top_y + 2),
         Some(crate::app::state::CardTarget::Tool {
             message_id: "msg-call-edit".into(),
             call_id: "call-edit".into(),
         }),
-        "正文按下点会被记录为可折叠目标"
+        "展开态点内容收起"
     );
-    // 标题行不是正文：点它不会折叠。
-    assert_eq!(card_target_at(area, &lx, area.x + 6, body_y - 1), None);
 }
 
 #[test]
@@ -220,9 +217,8 @@ fn file_tool_without_diff_has_no_toggle_hit() {
     assert!(
         crate::ui::main_content::lx::history::layout(view.body, &lx)
             .cards
-            .iter()
-            .all(|card| card.body.height == 0),
-        "无差异正文时内容区不可展开"
+            .is_empty(),
+        "无差异正文、展开也不多行时不登记点击面"
     );
 }
 
@@ -234,8 +230,7 @@ fn process_card_has_no_open_row_and_single_line_command_is_not_clickable() {
     let lx = lx_with_command("call-1", 42);
     let view = history_view(area, &lx).expect("历史区");
     let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
-    let card = cards.first().expect("进程卡片整块命中");
-    assert_eq!(card.body.height, 0, "单行命令没有可展开内容：{card:?}");
+    assert!(cards.is_empty(), "单行命令没有可展开内容，不登记点击面");
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let text = super::buffer_text(&buf);
@@ -259,20 +254,125 @@ fn long_process_command_wraps_and_is_clickable() {
     }
     let view = history_view(area, &lx).expect("历史区");
     let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
-    let card = cards.first().expect("进程卡片整块命中");
-    assert!(card.body.height > 0, "折行命令可展开：{card:?}");
-    let body_y = card
-        .body
+    let card = cards.first().expect("折行命令可展开，应有卡片");
+    let top_y = card
+        .card
         .y
         .saturating_sub(view.body.y)
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
     assert_eq!(
-        card_target_at(area, &lx, area.x + 6, body_y),
+        card_target_at(area, &lx, area.x + 6, top_y + 1),
         Some(crate::app::state::CardTarget::Tool {
             message_id: "msg-call-1".into(),
             call_id: "call-1".into(),
         }),
         "点折行命令切换折叠"
+    );
+}
+
+#[test]
+fn folded_thinking_and_long_param_are_clickable() {
+    // 回归：折叠态点内容要能展开——点击面必须覆盖**整个卡片**，而不只是「正文区」。
+    let area = Rect::new(0, 0, 60, 20);
+    // 1) 折叠的思考块：只有头部一行，点它必须能展开。
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![ChatMessageView {
+        id: "think".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![AssistantStepView::Part {
+            position: 0,
+            part: crate::app::state::ChatPartView {
+                kind: crate::chat::events::PartKind::Reasoning,
+                content: "想一想".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }];
+    lx.chat.follow_bottom = true;
+    let view = history_view(area, &lx).expect("历史区");
+    let card = crate::ui::main_content::lx::history::layout(view.body, &lx)
+        .cards
+        .into_iter()
+        .next()
+        .expect("思考块卡片");
+    let header_y = card
+        .card
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y);
+    assert_eq!(
+        card_target_at(area, &lx, area.x + 6, header_y),
+        Some(crate::app::state::CardTarget::Thinking {
+            message_index: 0,
+            step_index: 0,
+        }),
+        "折叠态点思考头必须可展开"
+    );
+
+    // 2) 折叠的超长参数：点详情行必须能展开。
+    let mut lx = Lx::new();
+    let long = "src/some/really/deeply/nested/path/that/keeps/going/and/going/mod.rs".repeat(3);
+    lx.chat.messages = vec![ChatMessageView {
+        id: "m-param".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![AssistantStepView::Tool {
+            position: 0,
+            call: ToolCallView {
+                call_id: "call-param".into(),
+                name: "read".into(),
+                position: 0,
+                arguments_json: String::new(),
+                status: ToolStatus::Completed,
+                summary: Some(Box::new(crate::app::state::ToolSummary {
+                    path: Some(long),
+                    range: Some((1, 9)),
+                    ..Default::default()
+                })),
+                error: None,
+                result_json: None,
+                detail: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }];
+    lx.chat.follow_bottom = true;
+    let view = history_view(area, &lx).expect("历史区");
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let card = cards.first().expect("长参数可展开，必须有卡片");
+    assert!(card.card.height > 1, "长参数卡片含详情行：{card:?}");
+    let detail_y = card
+        .card
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y)
+        .saturating_add(1);
+    assert_eq!(
+        card_target_at(area, &lx, area.x + 6, detail_y),
+        Some(crate::app::state::CardTarget::Tool {
+            message_id: "m-param".into(),
+            call_id: "call-param".into(),
+        }),
+        "折叠态点参数必须可展开"
     );
 }

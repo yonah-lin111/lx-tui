@@ -529,32 +529,6 @@ impl LxChat {
         };
     }
 
-    /// 流中**输入 token 估算值**：整个会话已展示内容（用户消息 + 助手输出）的字符数
-    /// 折算，口径与 [`Self::stream_output_tokens`] 相同。
-    ///
-    /// 真实 usage 只在请求结束时回来，这条只能靠估算——它回答的是「这次请求大概带
-    /// 了多大上下文」，给用户一个量级感，不参与任何计费或统计。
-    pub fn stream_input_tokens(&self) -> Option<u64> {
-        let mut ascii = 0u64;
-        let mut wide = 0u64;
-        for message in &self.messages {
-            for step in &message.steps {
-                let Some(part) = step.part() else {
-                    continue;
-                };
-                for ch in part.content.chars() {
-                    if ch.is_ascii() {
-                        ascii += 1;
-                    } else {
-                        wide += 1;
-                    }
-                }
-            }
-        }
-        let tokens = ascii / 4 + wide;
-        (tokens > 0).then_some(tokens)
-    }
-
     /// 流中已产生的**输出 token 估算值**（rough）：ASCII 约 4 字符 1 token，
     /// 非 ASCII（CJK 等）约 1 字符 1 token；只统计正文与思考正文。
     ///

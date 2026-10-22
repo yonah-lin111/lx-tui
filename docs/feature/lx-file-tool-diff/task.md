@@ -369,3 +369,31 @@ Agent 只能提供自动测试证据，不把以上真实终端验收勾为已�
   `history/tool.rs` 581、`history.rs` 846、`history_hit.rs` 182、`chat_bar.rs` 251，全部 ≤1000。
 - 人工验收仍待用户 `cargo run`：loading 的 `(时间 · ↑↓ token)`、长命令折行与点击展开、
   点击内容折叠、无 hover 变色。
+
+## 16. 第六轮：loading 只留输出方向 + 修复点击无法展开
+
+用户要求：
+
+1. loading 的 token 只显示 agent 输出（`↓`），去掉输入（`↑`）；耗时最小单位为秒，不出现毫秒；
+2. **bug**：点击折叠参数与折叠内容都无法展开。
+
+- [x] `stream_stats_label` 去掉输入方向参数，耗时走新的 `format_duration_seconds`
+      （`0s` / `2s` / `1m 12s`，四舍五入到秒，绝不出现 `ms`）；`LxChat::stream_input_tokens`
+      随之删除。
+- [x] **点击 bug 根因**：`CardHit` 曾把点击面收窄成「标题之后的正文区」（`body`），而折叠态
+      正文为零高——于是折叠的思考块与超长参数永远命中不到，点哪里都没反应。修法：
+      `CardHit` 只保留 `card`，`card_target_at` 不再校验 `body`，**整块卡片即点击面**。
+- [x] 「没有更多内容就不登记」的判据改由 `history::should_register_card`
+      （`tool::has_expandable_content`：展开后行数变多）统一决定，避免点了没反应。
+- [x] 测试：`folded_thinking_and_long_param_are_clickable`（折叠思考头 / 折叠长参数都能命中）、
+      `loading_stats_follow_the_label_with_seconds_and_output_tokens`、
+      `stats_label_never_shows_milliseconds`、`stats_label_shows_time_and_downward_tokens_only`；
+      并把原「只认正文区」的断言改成「整块任意行都是点击面」。
+
+当前验证记录（第六轮）：
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets -- -D warnings`：通过。
+- `cargo test`：2830 passed / 0 failed（lib）+ 全部集成/doc 套件通过。
+- 人工验收仍待用户 `cargo run`：折叠卡片（思考 / 长参数 / 长命令）点一下就展开、再点收起，
+      loading 只显示 `(3s · ↓320 tok)`。
