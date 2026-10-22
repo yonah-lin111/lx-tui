@@ -1,18 +1,17 @@
-//! 输入框上方那一行：loading / 临时提示 / 「回到底部」控件。
+//! 输入框上方那一行：loading（含 token 计数）/ 「回到底部」控件。
 //!
 //! 纯渲染 + 纯几何：布局、绘制与命中共享同一矩形口径；只读 `Lx`、只写 lx 页网格。
-//! 该行贴在输入框上沿、与输入框同宽；三者都没有时整行不占位。
+//! 该行贴在输入框上沿、与输入框同宽；没有内容时整行不占位。
 //!
-//! **优先级：临时提示 > loading > 回到底部**（提示是用户刚操作产生的即时反馈，
-//! 必须独占可见性；`↓ jump to bottom` 在被挤出时让位——用户此刻视线在输入框）。
+//! **优先级：loading > 回到底部**（`↓ jump to bottom` 在被挤出时让位——用户此刻
+//! 视线在输入框）。提示类反馈已全部改走 main content 的 toast（见
+//! `app::update::chat::show_lx_hint`），这一行不再承载临时提示。
 //!
-//! **loading**：只显示 `Working...`（无方块、无转轮），文字带**从左到右的扫描高亮**：
-//! 窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native 标签的
-//! 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
-//! 走出末尾后从左侧重新进入。
-//!
-//! **临时提示**：错误红（`InputHintLevel::Error`）/ 默认黄（`Warning`），
-//! 文案极简、超宽用 `…` 截断；2 秒后由 `update::tick` 清除。
+//! **loading**：`Working... (3s · ↓320 tok)`（只显示输出方向；耗时最小单位是秒）。`Working...` 带**从左到右的
+//! 扫描高亮**：窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native
+//! 标签的 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
+//! 走出末尾后从左侧重新进入。括号里的统计**紧贴文案右侧**（用户要求「在 working 的
+//! 组右侧」，不是贴栏右缘），静态 dim、不参与扫描；宽度不够时整段先丢。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -30,6 +29,8 @@ const RIGHT_PAD: u16 = 1;
 const HINT_GAP: u16 = 1;
 /// 扫描高亮窗口宽度（字符）。
 const SCAN_WINDOW: usize = 3;
+/// loading 文案与括号统计之间的空档（列）。
+const STATS_GAP: u16 = 1;
 
 /// 是否显示聊天栏：有临时提示、流中（loading）或上滚未跟随底部（回到底部控件）。
 ///
@@ -40,10 +41,10 @@ pub(super) fn visible(lx: &Lx) -> bool {
     if lx.task.is_some() {
         return false;
     }
-    if lx.chat.messages.is_empty() && lx.chat.hint.is_none() {
+    if lx.chat.messages.is_empty() {
         return false;
     }
-    lx.chat.hint.is_some() || lx.chat.status.streaming || !lx.chat.follow_bottom
+    lx.chat.status.streaming || !lx.chat.follow_bottom
 }
 
 /// 由输入框矩形推导聊天栏矩形（贴其上沿）；上方空间不足时 None。
@@ -56,11 +57,7 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     // 面板打开时聊天栏整体不画（见 [`visible`]），命中区也必须一起消失，
     // 否则会出现"看不见却能点"的穿透。
-    if lx.task.is_some()
-        || lx.chat.follow_bottom
-        || lx.chat.messages.is_empty()
-        || lx.chat.hint.is_some()
-    {
+    if lx.task.is_some() || lx.chat.follow_bottom || lx.chat.messages.is_empty() {
         return None;
     }
     let input = super::input_rect(area, lx)?;
@@ -85,7 +82,7 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
         .then(|| Rect::new(bar.right() - RIGHT_PAD - arrow, bar.y, arrow, 1))
 }
 
-/// 绘制聊天栏：临时提示 > loading > 回到底部。
+/// 绘制聊天栏：loading（含 token 计数）> 回到底部。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
         return;
@@ -93,23 +90,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     if bar.width == 0 {
         return;
     }
-    // 临时提示独占该行（错误红 / 默认黄），不并排 jump。
-    if let Some(hint) = lx.chat.hint.as_ref() {
-        let x = bar.x.saturating_add(1);
-        let limit = bar.right().saturating_sub(1);
-        if x < limit {
-            let width = usize::from(limit.saturating_sub(x));
-            grid.put_clipped(
-                x,
-                bar.y,
-                &text::ellipsize(&hint.message, width),
-                style::chat_input_hint(hint.level),
-                limit.saturating_sub(x),
-            );
-        }
-        return;
-    }
-    let mut right = bar.right();
+    let right = bar.right();
     // 回到底部控件（仅未跟随底部时）。
     if !lx.chat.follow_bottom
         && let Some(button) = jump_rect(bar)
@@ -134,22 +115,33 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
                 button.right() - hint_x,
             );
         }
-        right = button.x.saturating_sub(1);
     }
     if !lx.chat.status.streaming {
         return;
     }
+    // 括号统计紧贴 `Working...` 右侧（用户要求「在 working 的组右侧」）：
+    // 静态 dim、不参与扫描——它回答「这轮跑了多久、大概用了多少 token」，
+    // 与左侧的进行中动画是两种信息，不能一起闪。宽度不够时整段先丢；
+    // Esc 待命时不画——那一刻用户要读的是「再按一次停止」。
+    let stop_armed = lx.chat.stop_armed_at.is_some();
+    let stats = if stop_armed {
+        None
+    } else {
+        text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens())
+    };
     draw_loading(
         grid,
         bar.y,
         bar.x,
         right,
         lx.chat.loading_frame,
-        lx.chat.stop_armed_at.is_some(),
+        stop_armed,
+        stats.as_deref(),
     );
 }
 
 /// 绘制 `Working...`（无方块、无转轮）：只画带扫描高亮的文字。
+#[allow(clippy::too_many_arguments)]
 fn draw_loading(
     grid: &mut Grid,
     y: u16,
@@ -157,6 +149,7 @@ fn draw_loading(
     right: u16,
     loading_frame: usize,
     stop_armed: bool,
+    stats: Option<&str>,
 ) {
     // 右侧留 1 列空档避免贴边。
     let limit = right.saturating_sub(1);
@@ -171,10 +164,26 @@ fn draw_loading(
     } else {
         text::chat::LOADING_LABEL
     };
-    draw_scanned_label(grid, x, y, limit, label, loading_frame);
+    let after_label = draw_scanned_label(grid, x, y, limit, label, loading_frame);
+    // 统计段紧跟其后：放得下才画，放不下整段丢（不在末尾留半截括号）。
+    let Some(stats) = stats else {
+        return;
+    };
+    let stats_x = after_label.saturating_add(STATS_GAP);
+    let stats_w = u16::try_from(stats.width()).unwrap_or(u16::MAX);
+    if stats_x.saturating_add(stats_w) > limit {
+        return;
+    }
+    grid.put_clipped(
+        stats_x,
+        y,
+        stats,
+        style::chat_loading_label(),
+        limit.saturating_sub(stats_x),
+    );
 }
 
-/// 画扫描高亮文案：窗口外的字符用次要色（dim），窗口内用卡片**当前帧**的样式。
+/// 画扫描高亮文案，返回**文案结束后的列**（供紧随其后的统计段定位）。
 fn draw_scanned_label(
     grid: &mut Grid,
     x: u16,
@@ -182,11 +191,11 @@ fn draw_scanned_label(
     limit: u16,
     label: &str,
     loading_frame: usize,
-) {
+) -> u16 {
     let width = usize::from(limit.saturating_sub(x));
     let chars: Vec<char> = label.chars().take(width).collect();
     if chars.is_empty() {
-        return;
+        return x;
     }
     // 扫描位置：每帧前进 1 个字符，走出末尾后从左侧重新进入。
     let span = chars.len() + SCAN_WINDOW;
@@ -206,6 +215,7 @@ fn draw_scanned_label(
             break;
         }
     }
+    cell_x
 }
 
 /// Esc 待命提示短语：从长到短取第一条放得下的；都放不下时用最短的（由调用方裁剪）。

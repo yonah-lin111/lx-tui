@@ -182,6 +182,20 @@ pub fn agent_removed() -> Style {
     Style::default().fg(Color::Red)
 }
 
+/// diff 新增行的**整行底色**（深绿 `#213A2B`，取自 codex 的真彩兜底调色板）。
+///
+/// 与 [`agent_added`] 分工不同：前景色说明「这是新增」，底色说明「这一行的范围
+/// 到哪」——只染前景时，空行与行尾的空白看不出属于哪一边。新增/删除行各自铺满
+/// **整行宽度**，上下文行不铺（codex 同口径）。
+pub fn agent_added_bg() -> Style {
+    Style::default().bg(Color::Rgb(0x21, 0x3a, 0x2b))
+}
+
+/// diff 删除行的整行底色（深红 `#4A221D`，同为 codex 的真彩兜底值）。
+pub fn agent_removed_bg() -> Style {
+    Style::default().bg(Color::Rgb(0x4a, 0x22, 0x1d))
+}
+
 /// 浮层面板：自包含深底浅字（256 色），保证明暗终端下的对比度。
 ///
 /// 用于 toast、右键菜单、命令面板与模态容器的整块着色：底色 Indexed 236、
@@ -358,34 +372,6 @@ pub fn md_read_task_open() -> Style {
 /// 用 `--color-fg-muted` 档兼顾可见度。
 pub fn md_read_rule() -> Style {
     Style::default().fg(github_dark::FG_MUTED)
-}
-
-/// markdown 代码块语言标记的 `language:` 前缀：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
-///
-/// 与语言名同色相、不加粗——`language:` 是标签、语言名是取值，靠字重拉开层级即可，
-/// 不用两种颜色挤在一行里（此前的次要灰读起来像「注释」，起不到标示作用）。
-pub fn md_read_code_lang() -> Style {
-    Style::default().fg(github_dark::ENTITY)
-}
-
-/// markdown 代码块的**语言名**（`js` / `rust`…）：实体紫 `#d2a8ff`（`--color-prettylights-syntax-entity`）。
-///
-/// 与 `language:` 前缀同色相、靠**字重**分层级：前缀不加粗（标签）、语言名加粗（取值）。
-/// 语言是这一行唯一有信息量的内容，紫色与代码 token（蓝/红/紫）同属语法色域，
-/// 但用在该行的固定位置不会与正文混淆。
-pub fn md_read_code_lang_name() -> Style {
-    Style::default()
-        .fg(github_dark::ENTITY)
-        .add_modifier(Modifier::BOLD)
-}
-
-/// markdown 代码块的复制按钮 `[❐]`：与左侧容器折叠按钮同款（[`accent`]：Cyan 加粗）。
-///
-/// 全项目里「面板上的可点小控件」统一是这个青色加粗档（折叠按钮、面板按钮都用它），
-/// 复制按钮跟着走，观感一致、也不用再引入一个新的交互色。
-/// **不做悬停变色**：按钮只有 3 列，变色反而比常色更吵；可点性由 tooltip 承担。
-pub fn md_read_code_copy() -> Style {
-    accent()
 }
 
 /// markdown 图片说明（alt / url）：GitHub 的次要前景色。
@@ -640,15 +626,6 @@ pub fn chat_variant() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-/// 输入框上方临时提示的颜色：错误红 / 默认黄（用户指定）。
-pub fn chat_input_hint(level: crate::app::state::InputHintLevel) -> Style {
-    use crate::app::state::InputHintLevel;
-    match level {
-        InputHintLevel::Error => Style::default().fg(Color::Red),
-        InputHintLevel::Warning => Style::default().fg(Color::Yellow),
-    }
-}
-
 /// lx 输入框上方 loading 的**扫描高亮色**：按 `Native Agent` 标签的 4 档渐变循环
 /// （`218` 粉 → `182` 淡紫 → `153` 浅蓝 → `117` 天蓝），加粗。
 ///
@@ -662,13 +639,14 @@ pub fn chat_loading_scan(phase: usize) -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-// ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 金黄参数）=====
+// ===== 聊天步骤 / 工具行的配色（翡翠绿结构色 + 默认色参数）=====
 //
 // lx 聊天历史里同时存在两类着色信息，必须一眼分得开：
 //   A. **步骤结构**（方块、思考头、工具行）——本组 `chat_*` token，分三层：
 //      ① 结构 / 状态（方块、头部文案、工具动词）：**翡翠绿 `Indexed 42`**（`#00d787`）；
-//      ② 可变参数（路径 / 搜索范围）：金黄 `Indexed 220` + 下划线；
-//      ③ 其余元信息（行范围、计数、状态文字）：`muted()`（终端 dim，无色相）。
+//      ② 可变参数（路径 / 搜索范围）：**终端默认前景**（不额外占色相）；
+//      ③ 其余元信息与行内动作（行范围、计数、状态文字、`open` / `collapse`）：
+//         `muted()`（终端 dim，无色相），动作文字悬停升为默认前景。
 //   B. **正文高亮**（markdown / 代码）——见上面的 `github_dark`：GitHub Dark 官方
 //      色板，颜色只出现在链接（蓝）与代码 token（珊瑚红 / 浅蓝 / 蓝 / 紫 / 灰）上，
 //      标题 / 粗体 / 斜体 / 引用全部是正文色 + 修饰符。
@@ -677,11 +655,11 @@ pub fn chat_loading_scan(phase: usize) -> Style {
 // 上一版用 lx 页 `Native Agent` 标签里 `A` 的浅蓝 `Indexed 153`（`#afd7ff`），
 // 用 CIEDE2000 量出来它和**正文**的色差只有 11.5、和 GitHub 的**字符串浅蓝**
 // `#a5d6ff` 只有 2.1——等于方块、`Write`、`Thought` 与正文/代码字符串用了同一个颜色，
-// 所以视觉上糊成一片。GitHub Dark 的 6 个代码 token 加上金黄参数已经把
+// 所以视觉上糊成一片。GitHub Dark 的 6 个代码 token 已经把
 // 蓝（207°/208°/212°/214°）、紫（269°）、珊瑚红（4°）、金（51°）全部占满，
 // 256 色里唯一还剩 ≥30 色差余量的空闲色相是**绿 / 青绿（120°–170°）**。
 // 因此结构色定在 `Indexed 42`（`#00d787`，158°）：与正文色差 30.1、与全部 GitHub
-// 代码色最近 32.8、与金黄参数 36.2——三项同时 ≥30，是这张表里唯一达标的槽位。
+// 代码色最近 32.8——同时 ≥30，是这张表里唯一达标的槽位。
 // 备选（同样达标，偏好更亮可换）：`Indexed 49` `#00ffaf`（对深底亮度比 14.3 vs 10.0）。
 //
 // 语义：**热 = 进行中（方块加粗 + 呼吸）、冷 = 已完成（方块不加粗、静止）**；
@@ -689,25 +667,29 @@ pub fn chat_loading_scan(phase: usize) -> Style {
 
 /// 工具结构色：翡翠绿 `Indexed 42`（`#00d787`）。选色依据见上方注释的 CIEDE2000 数据。
 const CHAT_STEP_GREEN: u8 = 42;
-/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——与工具绿、参数金、正文默认色的
-/// 色差分别为 68 / 55 / 24（CIEDE2000），一眼可分。
+/// 思考结构色：品红 `Indexed 218`（`#ffafd7`）——**展开态与悬停态**使用，
+/// 与工具绿、正文默认色的色差分别为 68 / 24（CIEDE2000），一眼可分。
 const CHAT_STEP_MAGENTA: u8 = 218;
-/// 可变参数色：金黄 Indexed 220（工具行刻意不加下划线，见 [`chat_tool_param`]）。
-const CHAT_GOLD: u8 = 220;
+/// 思考**折叠态**色：浅粉 `Indexed 182`（`#d7afd7`）。
+///
+/// 用户要求「思考没展开时不要灰色，用浅一点的粉色」：218 在折叠态太跳，会让还没
+/// 看的思考抢走工具行的注意力；`muted()` 又是无色相的灰，读起来像被禁用。182 是
+/// 同一色系里低一档饱和度的粉（L 76.6 vs 218 的 84.6），既不抢眼也不失身份。
+const CHAT_STEP_PINK_SOFT: u8 = 182;
 /// 工具**运行中**色：橙黄 `Indexed 208`（`#ff8700`）。
 ///
 /// 语义是「还在进行」：**所有**正在运行的工具（文件工具、`exec_command`、
 /// `write_stdin`、`update_plan`）的方块与动词统一用它，只有 `Completed` 才回翡翠绿。
-/// 用户要求「橙黄一点」——比金黄参数 `220` 更橙更饱和（色差 27.9），比深土黄亮一档
+/// 用户要求「橙黄一点」——比默认前景亮一档、比工具绿更暖（色差 27.9），比深土黄亮一档
 /// （L 68.5 vs 58.5）；与工具绿 56.0、品红思考 40.7、天蓝 117 50.9 均 ≥40。
 const CHAT_STEP_AMBER: u8 = 208;
 
-// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 品红，工具 = 翡翠绿）-----
+// ----- 三类的方块 / 文案色（正文 = 默认前景，思考 = 折叠浅粉/展开亮粉，工具 = 翡翠绿）-----
 //
 // 用户要求：「正文内容的小方块用默认字体的颜色即可；thinking 的小方块和思考的字体
 // 颜色使用其他的颜色」。因此**颜色由步骤类别决定**：
 //   Body     → 终端默认前景（不设 fg）+ 加粗/不加粗区分运行态；
-//   Thinking → 品红 218；
+//   Thinking → 折叠浅粉 182、展开与悬停亮粉 218；
 //   Tool     → 翡翠绿 42（含工具动词）。
 
 /// 正文块的方块：运行中（呼吸）——**终端默认前景 + 加粗**，与正文本就同色。
@@ -730,26 +712,48 @@ pub fn chat_step_label_done_body() -> Style {
     Style::default()
 }
 
-/// 思考块的方块：运行中（呼吸）——品红加粗。
-pub fn chat_step_mark_running_thinking() -> Style {
-    Style::default()
-        .fg(Color::Indexed(CHAT_STEP_MAGENTA))
-        .add_modifier(Modifier::BOLD)
+/// 思考块的方块：运行中（呼吸）——折叠态浅粉、展开/悬停亮粉加粗。
+///
+/// 用户要求「思考没展开时不要用灰色的，用浅一点的粉色」：折叠态不再压暗成
+/// `muted()`（那是无色相的中性灰），改成低饱和的浅粉 [`CHAT_STEP_PINK_SOFT`]；
+/// 展开说明用户正在读这段思考，升为亮粉并保留呼吸加粗；悬停同样到亮粉。
+pub fn chat_step_mark_running_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
+        Style::default()
+            .fg(Color::Indexed(CHAT_STEP_MAGENTA))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
+            .add_modifier(Modifier::BOLD)
+    }
 }
 
-/// 思考块的方块：已完成——同款品红、不加粗（静止 + 细一档）。
-pub fn chat_step_mark_done_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的方块：已完成——折叠态浅粉、展开/悬停亮粉（不加粗：静止 + 细一档）。
+pub fn chat_step_mark_done_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        Style::default().fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
+    }
 }
 
-/// 思考块的头部文案：运行中——品红（与方块同色系，不加粗）。
-pub fn chat_step_label_running_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的头部文案：运行中——折叠态浅粉、展开/悬停亮粉（与方块同色系，不加粗）。
+pub fn chat_step_label_running_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        Style::default().fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
+    }
 }
 
-/// 思考块的头部文案：已完成——品红（同上，不加粗）。
-pub fn chat_step_label_done_thinking() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+/// 思考块的头部文案：已完成——折叠态浅粉、展开/悬停亮粉（同上，不加粗）。
+pub fn chat_step_label_done_thinking(expanded: bool, hovered: bool) -> Style {
+    if hovered || expanded {
+        Style::default().fg(Color::Indexed(CHAT_STEP_MAGENTA))
+    } else {
+        Style::default().fg(Color::Indexed(CHAT_STEP_PINK_SOFT))
+    }
 }
 
 /// 工具行的方块：运行中（呼吸）——翡翠绿加粗，整份历史里最亮的动作信号。
@@ -803,14 +807,41 @@ pub fn chat_tool_verb_running() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
-/// 工具行的可变参数（路径 / 搜索模式 / 搜索范围）：金黄，**不加下划线**。
+/// 工具行的可变参数（路径 / 搜索模式 / 命令 / 搜索范围）：**次要信息色**。
 ///
-/// 下划线在连续多个工具行时会把整块历史划成一片横线，反而盖过翡翠绿的结构色；
-/// 去掉后靠金黄本身与正文/动词区分（与绿的结构色差 36，与最近的 GitHub token
-/// 注释灰 42 / 关键字珊瑚 46 也拉得开）。
+/// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」——那行上下文用量用的
+/// 就是 [`muted`]（终端 dim、无色相）。参数是内容的注脚而不是标题：常态压暗，
+/// 只在鼠标悬停到卡片上时升为默认前景（见 [`chat_tool_param_hover`]），
+/// 让「这一行可点」由交互态而不是常驻高对比度来表达。
 pub fn chat_tool_param() -> Style {
-    Style::default().fg(Color::Indexed(CHAT_GOLD))
+    muted()
 }
+
+/// 工具参数在**卡片悬停**时的样式：终端默认前景（从 dim 升上来）。
+///
+/// 用户要求「鼠标 hover 折叠内容时字体颜色改为默认字体颜色」：折叠的参数是 dim，
+/// 悬停提亮即「这块可以点」的唯一提示（没有按钮、没有下划线）。
+pub fn chat_tool_param_hover() -> Style {
+    Style::default()
+}
+
+/// 工具参数在**展开态**的样式：与悬停同档（终端默认前景）。
+///
+/// 用户要求「展开参数后，参数内容的文字需要保持高亮的文字颜色，折叠后恢复」：
+/// 展开态没有 hover 可依赖，参数必须自己维持默认可读前景；折叠回 dim。
+pub fn chat_tool_param_expanded() -> Style {
+    chat_tool_param_hover()
+}
+
+/// 工具**展开块**的整行背景（参考 Claude Code 的深色卡片底）。
+///
+/// 只铺在展开后的**正文行**上（不含文件头、不含折叠预览、不含工具参数）。
+pub fn chat_expanded_bg() -> Style {
+    Style::default().bg(Color::Indexed(CHAT_EXPANDED_BG))
+}
+
+/// 展开块的整行底色（参考 Claude Code 的深色卡面，256 色里最接近的暗灰蓝）。
+const CHAT_EXPANDED_BG: u8 = 236;
 
 /// 工具行的只读元信息（`read` 的行范围）：退回 `muted()`（终端 dim、无色相）——
 /// 它只是给主行做注脚，不值得再占一个色相档；显式前景会让它和动词抢注意力。
@@ -831,7 +862,6 @@ pub fn chat_jump_bottom(hovered: bool) -> Style {
         muted()
     }
 }
-
 /// 补充块命令名：固定品红加粗（不随父 `&&&` 状态变化）。
 pub fn supple_command() -> Style {
     Style::default()

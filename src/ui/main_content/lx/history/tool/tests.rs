@@ -40,7 +40,7 @@ fn tool_call(
         position: 0,
         arguments_json: String::new(),
         status,
-        summary,
+        summary: summary.map(Box::new),
         error: error.map(str::to_string),
         result_json: None,
         detail: None,
@@ -92,7 +92,8 @@ fn render_row(call: &ToolCallView, width: u16) -> (String, Grid) {
 
 /// 以指定 loading 帧渲染（方块呼吸相位断言用）。
 fn render_row_at(call: &ToolCallView, width: u16, loading_frame: usize) -> (String, Grid) {
-    let rect = Rect::new(0, 0, width, (DETAIL_ROWS + HEADER_ROWS) as u16);
+    let total = rows(call, width, false);
+    let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
     draw(
@@ -136,10 +137,11 @@ fn header_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
         .collect()
 }
 
-/// 详情行的段（第 2 行：`  └─ 详情`）。
+/// 详情行（`  └─ 详情`，可能多行）拼成一段段文本。
 fn detail_segments(call: &ToolCallView, width: u16) -> Vec<(String, Style)> {
-    detail(call, width)
+    file_summary::detail(call, width, false, false)
         .into_iter()
+        .flatten()
         .map(|segment| (segment.text, segment.style))
         .collect()
 }
@@ -152,12 +154,56 @@ fn header_text(call: &ToolCallView, width: u16) -> String {
         .collect()
 }
 
-/// 第 2 行文本（未裁剪）。
+/// 详情行文本（可能多行，按 `\\n` 连接，与绘制一致）。
 fn detail_text(call: &ToolCallView, width: u16) -> String {
-    detail_segments(call, width)
+    file_summary::detail(call, width, false, false)
         .into_iter()
-        .map(|(text, _)| text)
-        .collect()
+        .map(|row| {
+            row.into_iter()
+                .map(|segment| segment.text)
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 详情行的**内容**（去掉末尾「… N more lines」提示行与折行缩进）：
+/// 用于「某段文字是否还在」的断言。
+fn detail_content_flat(call: &ToolCallView, width: u16) -> String {
+    // 用**展开态**的行：让位顺序是在完整组装时决定的，折叠态的 2 行截断会切在
+    // 段落中间（`in` 与 path 分处两行），不适合用来断言「整段在不在」。
+    let mut rows = file_summary::detail(call, width, true, false);
+    if rows
+        .last()
+        .is_some_and(|row| row.iter().any(|segment| segment.text.contains("more line")))
+    {
+        rows.pop();
+    }
+    let mut out = String::new();
+    for row in rows {
+        for (index, segment) in row.into_iter().enumerate() {
+            if index == 0 && segment.text.trim().is_empty() {
+                continue;
+            }
+            out.push_str(&segment.text);
+        }
+    }
+    out
+}
+
+/// 详情行的**逻辑内容**（折行的续行缩进不计）：用于「某段文字是否还在」的断言。
+fn detail_flat(call: &ToolCallView, width: u16) -> String {
+    let mut out = String::new();
+    for row in file_summary::detail(call, width, false, false) {
+        for (index, segment) in row.into_iter().enumerate() {
+            // 续行的第一个段是等宽空白缩进，不属于内容。
+            if index == 0 && segment.text.trim().is_empty() {
+                continue;
+            }
+            out.push_str(&segment.text);
+        }
+    }
+    out
 }
 
 /// 两行用 `\n` 连接（段拼接，未裁剪）。

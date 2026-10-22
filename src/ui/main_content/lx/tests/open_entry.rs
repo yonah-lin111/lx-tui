@@ -1,7 +1,8 @@
-//! 进程卡片 `[open]` 的命中与开启面板回归测试。
+//! 工具卡片命中回归测试：折叠/展开的唯一点击面是**卡片内容**。
 //!
-//! 用户要求（决策 4/7/9）：卡片只有 `[open]` 可点；点它打开后台任务面板，并把
-//! 高亮定位到该卡片对应的后台进程；标题行与命令行是纯展示。
+//! 用户要求移除动作按钮与 hover 高亮：点折叠内容展开、点展开内容收起，标题行不是
+//! 点击面（避免误触），拖拽选中不折叠。进程卡片不再有 `open` 行，后台任务面板改走
+//! `^o` / 空输入框按 `↓`。
 
 use ratatui::layout::Rect;
 
@@ -59,72 +60,289 @@ fn lx_with_command(call_id: &str, session_id: u64) -> Lx {
     lx
 }
 
-/// 卡片三行在屏幕上的 y 坐标（标题 / 命令 / `[open]`）。
-fn card_rows(area: Rect, lx: &Lx) -> (u16, u16, u16) {
-    let view = history_view(area, lx).expect("历史区");
-    let hit = crate::ui::main_content::lx::history::layout(view.body, lx)
-        .tools
-        .into_iter()
-        .next()
-        .expect("[open] 命中区");
-    let open_y = hit
-        .rect
+/// 构造一条含文件差异卡片的 assistant 消息。
+fn file_message(call_id: &str) -> ChatMessageView {
+    use crate::app::state::{
+        DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView,
+    };
+    use crate::chat::tools::{DiffLineKind, FileChangeKind};
+
+    let diff = FileDiffDetailView {
+        files: vec![FileChangeView {
+            path: "/w/a.rs".into(),
+            to: None,
+            kind: FileChangeKind::Updated,
+            added: Some(1),
+            removed: Some(1),
+            counts_known: true,
+            simplified: false,
+            diff: Some(FileDiffView::Complete {
+                hunks: vec![DiffHunkView {
+                    // 5 条变更行 > 3 行预览额度：折叠态必然有省略，因此一定有
+                    // 可点的「剩余行数」动作行。
+                    lines: (1..=5)
+                        .flat_map(|number| {
+                            [
+                                DiffLineView {
+                                    kind: DiffLineKind::Removed,
+                                    old_line: Some(number),
+                                    new_line: None,
+                                    text: format!("old {number}"),
+                                    no_final_newline: false,
+                                },
+                                DiffLineView {
+                                    kind: DiffLineKind::Added,
+                                    old_line: None,
+                                    new_line: Some(number),
+                                    text: format!("new {number}"),
+                                    no_final_newline: false,
+                                },
+                            ]
+                        })
+                        .collect(),
+                }],
+                simplified: false,
+            }),
+        }],
+        files_total: 1,
+        added: Some(1),
+        removed: Some(1),
+        simplified: false,
+        omitted_files: 0,
+        single: false,
+    };
+    let call = ToolCallView {
+        call_id: call_id.into(),
+        name: "edit".into(),
+        position: 0,
+        arguments_json: r#"{"patch":"*** Begin Patch"}"#.into(),
+        status: ToolStatus::Completed,
+        summary: None,
+        error: None,
+        result_json: None,
+        detail: Some(Box::new(crate::app::state::ToolDetailView::File(diff))),
+    };
+    ChatMessageView {
+        id: format!("msg-{call_id}"),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![AssistantStepView::Tool { position: 0, call }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }
+}
+
+#[test]
+fn card_content_is_the_toggle_target() {
+    // 没有动作按钮、没有剩余行数：整块内容就是点击面。
+    let area = Rect::new(0, 0, 60, 20);
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![file_message("call-edit")];
+    lx.chat.follow_bottom = true;
+    let view = history_view(area, &lx).expect("历史区");
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    assert_eq!(cards.len(), 1, "一张卡片");
+    let card = &cards[0];
+    // 整块可点：折叠态点预览行就能展开。
+    let top_y = card
+        .card
         .y
         .saturating_sub(view.body.y)
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
-    let title_y = open_y.saturating_sub(2);
-    (title_y, open_y.saturating_sub(1), open_y)
+    for row in [top_y, top_y + 1, top_y + 2] {
+        assert_eq!(
+            card_target_at(area, &lx, area.x + 6, row),
+            Some(crate::app::state::CardTarget::Tool {
+                message_id: "msg-call-edit".into(),
+                call_id: "call-edit".into(),
+            }),
+            "行 {row} 属于卡片，点它切换折叠"
+        );
+    }
 }
 
 #[test]
-fn clicking_open_row_opens_the_task_panel_for_that_process() {
+fn expanded_card_body_is_the_click_to_collapse_target() {
+    // 展开后：整块内容仍是 `CardHit.body`，点它（未拖拽）收起。
+    let area = Rect::new(0, 0, 60, 20);
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![file_message("call-edit")];
+    lx.chat.follow_bottom = true;
+    lx.chat.toggle_detail("msg-call-edit", "call-edit");
+    let view = history_view(area, &lx).expect("历史区");
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let card = cards.first().expect("文件卡片整块命中");
+    assert!(
+        matches!(
+            &card.kind,
+            crate::ui::main_content::lx::history::CardKind::Tool { expanded: true, .. }
+        ),
+        "布局记录的展开状态必须与状态层一致"
+    );
+    // 展开态整块仍是点击面：点内容即收起。
+    let top_y = card
+        .card
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y);
+    assert_eq!(
+        card_target_at(area, &lx, area.x + 6, top_y + 2),
+        Some(crate::app::state::CardTarget::Tool {
+            message_id: "msg-call-edit".into(),
+            call_id: "call-edit".into(),
+        }),
+        "展开态点内容收起"
+    );
+}
+
+#[test]
+fn file_tool_without_diff_has_no_toggle_hit() {
+    // 旧记录（无 diff）保持两行摘要，不制造无效展开入口。
+    let mut lx = Lx::new();
+    lx.chat.messages = vec![file_message("call-edit")];
+    if let AssistantStepView::Tool { call, .. } = &mut lx.chat.messages[0].steps[0] {
+        call.detail = Some(Box::new(crate::app::state::ToolDetailView::File(
+            crate::app::state::FileDiffDetailView::default(),
+        )));
+    }
+    let area = Rect::new(0, 0, 60, 20);
+    let view = history_view(area, &lx).expect("历史区");
+    assert!(
+        crate::ui::main_content::lx::history::layout(view.body, &lx)
+            .cards
+            .is_empty(),
+        "无差异正文、展开也不多行时不登记点击面"
+    );
+}
+
+#[test]
+fn process_card_has_no_open_row_and_single_line_command_is_not_clickable() {
+    // 用户要求移除 `open` 按钮：进程卡片不再有入口行。
+    // 命令一行放得下时**没有更多内容可展开**，因此内容区零高——点了也不会变。
     let area = Rect::new(0, 0, 60, 20);
     let lx = lx_with_command("call-1", 42);
-    let (_, _, open_y) = card_rows(area, &lx);
-    assert_eq!(
-        chat_hit(area, &lx, area.x + 6, open_y),
-        Some(LxChatHit::ToolOpen(Some(42))),
-        "点 [open] 行触发打开面板并携带进程会话 id"
+    let view = history_view(area, &lx).expect("历史区");
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    assert!(cards.is_empty(), "单行命令没有可展开内容，不登记点击面");
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
+    let text = super::buffer_text(&buf);
+    assert!(
+        !text.contains(text::agent::TASK_OPEN_LABEL),
+        "没有 open 行：{text}"
     );
 }
 
 #[test]
-fn title_and_command_rows_are_not_clickable() {
-    // 决策 7：只有 `[open]` 可点，标题与命令是纯展示。
+fn long_process_command_wraps_and_is_clickable() {
+    // 长命令折行后确实有更多内容：内容区可点，点它切换折叠。
     let area = Rect::new(0, 0, 60, 20);
-    let lx = lx_with_command("call-1", 42);
-    let (title_y, command_y, _) = card_rows(area, &lx);
+    let mut lx = lx_with_command("call-1", 42);
+    if let AssistantStepView::Tool { call, .. } = &mut lx.chat.messages[0].steps[0]
+        && let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut()
+    {
+        // 足够长：折叠 2 行装不下，展开才铺得开。
+        view.command = r#"$ { echo "==== 项目概览 ====" && echo "Rust 版本: $(rustc --version)" && echo "文件数: $(find . -type f | wc -l)" && echo "目录结构" && ls -R && echo "依赖" && cat Cargo.toml && echo "完成" }"#
+            .into();
+    }
+    let view = history_view(area, &lx).expect("历史区");
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let card = cards.first().expect("折行命令可展开，应有卡片");
+    let top_y = card
+        .card
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y);
     assert_eq!(
-        chat_hit(area, &lx, area.x + 6, title_y),
-        None,
-        "标题行不再是命中区"
-    );
-    assert_eq!(
-        chat_hit(area, &lx, area.x + 6, command_y),
-        None,
-        "命令行不是命中区"
+        card_target_at(area, &lx, area.x + 6, top_y + 1),
+        Some(crate::app::state::CardTarget::Tool {
+            message_id: "msg-call-1".into(),
+            call_id: "call-1".into(),
+        }),
+        "点折行命令切换折叠"
     );
 }
 
 #[test]
-fn file_tool_cards_have_no_open_hit() {
-    // 文件工具没有后台进程，不该出现 `[open]` 命中区。
+fn folded_thinking_and_long_param_are_clickable() {
+    // 回归：折叠态点内容要能展开——点击面必须覆盖**整个卡片**，而不只是「正文区」。
+    let area = Rect::new(0, 0, 60, 20);
+    // 1) 折叠的思考块：只有头部一行，点它必须能展开。
     let mut lx = Lx::new();
     lx.chat.messages = vec![ChatMessageView {
-        id: "msg-read".into(),
+        id: "think".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![AssistantStepView::Part {
+            position: 0,
+            part: crate::app::state::ChatPartView {
+                kind: crate::chat::events::PartKind::Reasoning,
+                content: "想一想".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }];
+    lx.chat.follow_bottom = true;
+    let view = history_view(area, &lx).expect("历史区");
+    let card = crate::ui::main_content::lx::history::layout(view.body, &lx)
+        .cards
+        .into_iter()
+        .next()
+        .expect("思考块卡片");
+    let header_y = card
+        .card
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y);
+    assert_eq!(
+        card_target_at(area, &lx, area.x + 6, header_y),
+        Some(crate::app::state::CardTarget::Thinking {
+            message_index: 0,
+            step_index: 0,
+        }),
+        "折叠态点思考头必须可展开"
+    );
+
+    // 2) 折叠的超长参数：点详情行必须能展开。
+    let mut lx = Lx::new();
+    let long = "src/some/really/deeply/nested/path/that/keeps/going/and/going/mod.rs".repeat(3);
+    lx.chat.messages = vec![ChatMessageView {
+        id: "m-param".into(),
         role: "assistant".into(),
         status: "complete".into(),
         turn_index: 0,
         steps: vec![AssistantStepView::Tool {
             position: 0,
             call: ToolCallView {
-                call_id: "call-read".into(),
+                call_id: "call-param".into(),
                 name: "read".into(),
                 position: 0,
-                arguments_json: r#"{"path":"src/main.rs"}"#.into(),
+                arguments_json: String::new(),
                 status: ToolStatus::Completed,
-                summary: None,
+                summary: Some(Box::new(crate::app::state::ToolSummary {
+                    path: Some(long),
+                    range: Some((1, 9)),
+                    ..Default::default()
+                })),
                 error: None,
                 result_json: None,
                 detail: None,
@@ -137,51 +355,24 @@ fn file_tool_cards_have_no_open_hit() {
         cache_read_tokens: None,
         duration_ms: None,
     }];
-    let area = Rect::new(0, 0, 60, 20);
+    lx.chat.follow_bottom = true;
     let view = history_view(area, &lx).expect("历史区");
-    assert!(
-        crate::ui::main_content::lx::history::layout(view.body, &lx)
-            .tools
-            .is_empty(),
-        "文件工具卡片没有 [open] 命中区"
-    );
-}
-
-// ===== bug 回归：后台任务面板打开时不得切换 agent =====
-
-#[test]
-fn task_panel_blocks_entry_switch_hits() {
-    // 真实 bug：面板打开后点"原本三个 agent 入口"的位置仍能切换 agent——
-    // 因为 `layout` 照旧算出入口矩形，命中穿透到下面那层。
-    let area = Rect::new(0, 0, 100, 20);
-    let mut lx = Lx::new();
-    let closed = layout(area, &lx);
-    assert!(!closed.entries.is_empty(), "前提：关闭态确实有入口标签");
-
-    // 记录关闭态每个入口的位置，打开面板后逐点验证都不再命中。
-    let positions: Vec<(u16, u16)> = closed
-        .entries
-        .iter()
-        .map(|(_, rect)| (rect.x + 1, rect.y))
-        .collect();
-    let mut lx_open = Lx::new();
-    lx_open.task = Some(crate::app::state::TaskPage::default());
-    assert!(
-        layout(area, &lx_open).entries.is_empty(),
-        "面板打开时不再登记入口矩形"
-    );
-    for (column, row) in positions.clone() {
-        assert_eq!(
-            entry_hit(area, &lx_open, column, row),
-            None,
-            "面板打开后点 ({column},{row}) 不得切换 agent"
-        );
-    }
-    // 关闭面板后入口命中恢复。
-    lx.task = None;
-    let (column, row) = positions.first().copied().expect("至少一个入口");
-    assert!(
-        entry_hit(area, &lx, column, row).is_some(),
-        "关闭面板后入口恢复正常"
+    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let card = cards.first().expect("长参数可展开，必须有卡片");
+    assert!(card.card.height > 1, "长参数卡片含详情行：{card:?}");
+    let detail_y = card
+        .card
+        .y
+        .saturating_sub(view.body.y)
+        .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
+        .saturating_add(view.body.y)
+        .saturating_add(1);
+    assert_eq!(
+        card_target_at(area, &lx, area.x + 6, detail_y),
+        Some(crate::app::state::CardTarget::Tool {
+            message_id: "m-param".into(),
+            call_id: "call-param".into(),
+        }),
+        "折叠态点参数必须可展开"
     );
 }

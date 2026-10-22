@@ -131,7 +131,7 @@ fn detail_line_carries_params_with_their_own_colors() {
         .find(|(text, _)| text == "src/ui/style.rs")
         .cloned()
         .expect("路径段");
-    assert_eq!(path.1, style::chat_tool_param(), "路径金黄下划线");
+    assert_eq!(path.1, style::chat_tool_param(), "路径用默认字体色");
     let range = segments
         .iter()
         .find(|(text, _)| text.contains("12-40"))

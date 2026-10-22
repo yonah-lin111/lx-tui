@@ -200,9 +200,6 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     if expired {
         state.toast = None;
     }
-    // 输入框上方的临时提示（错误红 / 默认黄）：到点清除，那一行随之消失。
-    let hint_expired = clear_expired_lx_hints(state, now);
-
     let revealed = state
         .tooltip
         .as_mut()
@@ -211,7 +208,7 @@ pub fn tick(state: &mut AppState, now: Instant) -> bool {
     let scrolled = tick_selection_autoscroll(state, now);
     // `/resume` 面板停留期间刷新"现在"，相对时间随之自然推进。
     let retimed = tick_slash_panel_clock(state);
-    expired || hint_expired || revealed || saved || scrolled || retimed
+    expired || revealed || saved || scrolled || retimed
 }
 
 /// 刷新打开中的 `/resume` 面板时间戳；返回是否有面板需要重绘。
@@ -255,7 +252,6 @@ fn tick_prompt_autosave(state: &mut AppState, now: Instant) -> bool {
 /// 事件循环据此安排唤醒。
 pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let toast = state.toast.as_ref().and_then(Toast::next_deadline);
-    let hint = lx_hint_deadline(state);
     let tooltip = state.tooltip.as_ref().and_then(Tooltip::next_deadline);
     let autoscroll = state
         .selection_autoscroll
@@ -263,38 +259,8 @@ pub fn next_deadline(state: &AppState) -> Option<Instant> {
     let autosave = prompt_item_editing(state)
         .then(|| state.prompt.autosave_deadline(PROMPT_AUTOSAVE_DELAY))
         .flatten();
-    [toast, hint, tooltip, autoscroll, autosave]
+    [toast, tooltip, autoscroll, autosave]
         .into_iter()
         .flatten()
-        .min()
-}
-
-/// 清除已到期的输入框上方提示；返回是否发生变化（逐窗格）。
-fn clear_expired_lx_hints(state: &mut AppState, now: Instant) -> bool {
-    let mut changed = false;
-    for pane in state.all_pane_ids() {
-        if let Some(target) = state.pane_mut_anywhere(pane)
-            && target
-                .lx
-                .chat
-                .hint
-                .as_ref()
-                .is_some_and(|hint| hint.is_expired(now))
-        {
-            target.lx.chat.hint = None;
-            changed = true;
-        }
-    }
-    changed
-}
-
-/// 最近一个输入框上方提示的到期时刻（事件循环据此安排唤醒）。
-fn lx_hint_deadline(state: &AppState) -> Option<Instant> {
-    state
-        .all_pane_ids()
-        .into_iter()
-        .filter_map(|pane| state.pane_anywhere(pane))
-        .filter_map(|target| target.lx.chat.hint.as_ref())
-        .map(|hint| hint.deadline)
         .min()
 }

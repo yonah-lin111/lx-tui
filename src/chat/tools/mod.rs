@@ -16,6 +16,7 @@
 //! - 不触碰 Git 索引/分支/暂存区/提交。
 
 mod args;
+mod diff;
 mod edit;
 mod lock;
 mod output;
@@ -35,6 +36,10 @@ mod test_support;
 #[cfg(test)]
 mod tests;
 
+pub use diff::{
+    DiffCounts, DiffHunk, DiffLine, DiffLineKind, DiffUnavailableReason, FileDiff, MAX_DIFF_LINES,
+    diff_lines,
+};
 pub use output::{format_for_model, to_result_json, to_summary};
 pub use plan_args::build_plan_result;
 pub use process_args::{parse_exec_args, parse_stdin_args, process_failure};

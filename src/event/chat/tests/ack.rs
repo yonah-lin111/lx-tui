@@ -178,20 +178,13 @@ async fn result_persistence_failure_does_not_retry_the_write() {
     // 只执行一次：落库失败后绝不重试写入。
     assert_eq!(driven.executed.len(), 1, "不得重试写入");
     assert_eq!(fixture.read("once.txt"), "v1", "文件已写入且不重复写");
-    // UI 明示“结果持久化失败，文件状态需核查”——显示在输入框上方（不是 toast）。
-    let hint = &state
-        .pane_anywhere(key.pane)
-        .expect("pane")
-        .lx
-        .chat
-        .hint
-        .as_ref()
-        .expect("输入框上方应有提示");
+    // UI 明示“结果持久化失败，文件状态需核查”——走 main content 的 danger toast。
+    let toast = state.toast.as_ref().expect("应有提示");
     assert_eq!(
-        hint.message,
+        toast.message,
         crate::ui::text::LX_CHAT_TOOL_RESULT_SAVE_FAILED
     );
-    assert_eq!(hint.level, crate::app::state::InputHintLevel::Error);
+    assert_eq!(toast.kind, crate::app::toast::ToastKind::Danger);
     // DB 里保留的是那次“外来”结果，不会被覆盖。
     let rows = tool_rows(&fixture, &session);
     assert_eq!(rows.len(), 1);

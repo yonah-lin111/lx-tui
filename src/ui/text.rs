@@ -573,6 +573,27 @@ pub fn token_count_precise(tokens: u64) -> String {
     scaled(tokens as f64 / 1_000_000.0, "M")
 }
 
+/// 耗时短格式（对齐 lx-agent）：`820ms`、`4.2s`、`38s`、`1m 12s`。
+///
+/// 放在 `text` 里而不是某个渲染子模块：本轮统计行、思考耗时与 loading 行的
+/// 流中耗时都要用它，谁都不是它的唯一归属。
+pub fn format_duration(ms: i64) -> String {
+    if ms < 1_000 {
+        return format!("{ms}ms");
+    }
+    let seconds = ms as f64 / 1_000.0;
+    if seconds < 60.0 {
+        return if seconds < 10.0 {
+            format!("{seconds:.1}s")
+        } else {
+            format!("{:.0}s", seconds)
+        };
+    }
+    let minutes = (seconds / 60.0).floor() as i64;
+    let rest = (seconds % 60.0).round() as i64;
+    format!("{minutes}m {rest}s")
+}
+
 /// 状态行：模型名与上下文占用之间的分隔（` · `）。
 pub const LX_CHAT_MODEL_SEP: &str = " · ";
 /// thinking 头部文案：生成中 `Thinking`、完成后 `Thought · <耗时>`
@@ -803,7 +824,6 @@ pub fn tooltip_hint(target: TooltipTarget, state: &AppState) -> &'static str {
             BlockButtonKind::Clean => "clean block",
             BlockButtonKind::Delete => "delete block",
         },
-        TooltipTarget::LxCodeCopy { .. } => "copy code",
     }
 }
 

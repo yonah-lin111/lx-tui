@@ -7,11 +7,17 @@ use crate::layout::PaneId;
 /// 默认展示时长。
 pub const TOAST_DURATION: Duration = Duration::from_millis(2000);
 
-/// toast 语义变体；决定边框颜色。
+/// toast 语义变体；决定边框与标题颜色。
+///
+/// 三档由用户指定：`default`（默认强调色）、`warning`（黄）、`danger`（红）。
+/// 原先只有 `Info` / `Error` 两档，`Warning` 是为一类「要留意但不算失败」的反馈
+/// （例如 lx 输入框上方的未知命令提示）补的——把两者混进 `danger` 会让真正的
+/// 失败失去分量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToastKind {
-    Info,
-    Error,
+    Default,
+    Warning,
+    Danger,
 }
 
 /// 单条 toast；新消息整体替换旧消息并重置倒计时。

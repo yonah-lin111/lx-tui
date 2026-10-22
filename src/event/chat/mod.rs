@@ -544,7 +544,7 @@ fn stop_session_process(
         update::show_toast(
             state,
             crate::app::toast::Toast::new(
-                crate::app::toast::ToastKind::Error,
+                crate::app::toast::ToastKind::Danger,
                 crate::ui::text::LX_TASK_STOP_FAILED,
                 Some(pane),
                 std::time::Instant::now(),
@@ -572,7 +572,7 @@ fn stop_session_process(
     update::show_toast(
         state,
         crate::app::toast::Toast::new(
-            crate::app::toast::ToastKind::Info,
+            crate::app::toast::ToastKind::Default,
             crate::ui::text::LX_TASK_STOPPED,
             Some(pane),
             std::time::Instant::now(),

@@ -1,9 +1,9 @@
-//! `exec_command` / `write_stdin` 卡片：**三行**（标题 / 命令 / `[open]`）。
+//! `exec_command` / `write_stdin` 卡片：标题 + 折行的命令。
 //!
 //! ```text
-//! ■ Run command · Running          ← 橙 = 进程还活着，绿 = 已停止
-//!   │  $ cargo test chat::tools
-//!   └─ [open]                      ← 点这一行打开后台任务面板
+//! ■ Run command · Exited 0         ← 橙 = 进程还活着，绿 = 已停止
+//!   └─ $ { echo "==== 项目概览 ===="
+//!          echo "Rust 版本: ... }    ← 长命令按列宽折行（折叠最多 2 行）
 //! ```
 //!
 //! - **标题行**沿用文件工具同一套 `■ 动词` 语法；方块颜色/呼吸表达状态，
@@ -11,14 +11,13 @@
 //!   窄屏整项丢弃状态、再收敛动词，方块永远保留；
 //! - **进程存活时整行橙色**（[`StepMark::Alive`]）：判据是进程状态而不是工具结算
 //!   状态——命令交回后台后工具已经 `Completed`，但进程还在跑；停止后回翡翠绿；
-//! - **树体只剩命令一行 + `[open]` 一行**：命令、cwd、输出与 `… +N more lines`
-//!   全部搬进后台任务面板，消息列表里只回答"哪条命令还在跑"；
-//! - `[open]` 独占树体末行、用次要信息灰，是**唯一**可点击的命中区；标题与命令
-//!   都是纯展示（卡片没有可展开的内容）；
+//! - **命令折行**：`$ 命令` 按可用列宽软换行，折叠态最多 2 个物理行、展开态铺开
+//!   全部（上限与普通工具详情一致）。折叠/展开靠**点卡片内容**，没有按钮、
+//!   没有 `open` 行（后台任务面板改用 `^o` / 空输入框按 `↓` 打开）；
 //! - 卡片只读快照：不解析 JSON、不读进程、不读数据库。
 
 use ratatui::layout::Rect;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::state::{
     CommandView, ProcessInteractionView, ProcessStateView, ToolCallView, ToolStatus,
@@ -36,56 +35,162 @@ const SAMPLE_CHARS: usize = 512;
 /// 树体行首连接符两侧的缩进（与 [`TREE_COLS`] 同口径：`  │  ` = 2 + 1 + 2）。
 const TREE_INDENT: usize = 2;
 
-/// 命令 / 交互卡片占用的渲染行数：**恒为 3 行**（标题 / 命令 / `[open]`）。
+/// 命令 / 交互卡片占用的渲染行数：标题 + 命令的物理行。
 ///
-/// 输出整体搬到后台任务面板后，卡片不再有折叠与展开两种形态，行数因此恒定；
-/// `expanded` 参数保留是为了与 [`crate::ui::main_content::lx::history::tool::rows`]
-/// 的统一签名对齐（传什么都一样）。
-pub(super) fn rows(call: &ToolCallView, width: u16, _expanded: bool) -> usize {
+/// `expanded` 只影响折叠额度：折叠最多 [`super::file_summary::DETAIL_PREVIEW_ROWS`]
+/// 行，展开最多 [`super::file_summary::DETAIL_MAX_ROWS`] 行——与普通工具详情同一口径。
+pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
     if width == 0 {
         return 0;
     }
     match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Command(_))
-        | Some(crate::app::state::ToolDetailView::Interaction(_)) => title_rows() + BODY_ROWS,
+        Some(crate::app::state::ToolDetailView::Command(view)) => {
+            title_rows() + command_lines(&view.command, width, expanded)
+        }
+        Some(crate::app::state::ToolDetailView::Interaction(view)) => {
+            title_rows() + command_lines(&view.command, width, expanded)
+        }
         _ => title_rows(),
     }
 }
 
-/// 树体行数：命令 + `[open]`。
-const BODY_ROWS: usize = 2;
-
-/// 命令卡片树体行：命令 + `[open]`。
-///
-/// **与 [`draw_command`] 共用同一份构造**：行数口径只有一个来源。输出、cwd 与
-/// `… +N more lines` 都已搬进后台任务面板，消息列表里只看得到"哪条命令在跑"。
-fn command_body(view: &CommandView) -> Vec<BodyRow> {
-    vec![
-        BodyRow::command(&view.command),
-        BodyRow::open(text::agent::TASK_OPEN_LABEL),
-    ]
+/// 命令正文的物理行数（与 [`draw_body`] 同一份折行口径）。
+fn command_lines(command: &str, width: u16, expanded: bool) -> usize {
+    command_body(command, width, expanded, false).len()
 }
 
-/// 交互卡片树体行：命令 + `[open]`（stdin 与输出同样只在面板里看）。
-fn interaction_body(view: &ProcessInteractionView) -> Vec<BodyRow> {
-    vec![
-        BodyRow::command(&view.command),
-        BodyRow::open(text::agent::TASK_OPEN_LABEL),
-    ]
-}
-
-/// `[open]` 行的**卡片内行偏移**（0 = 标题行）；进程卡片恒有这一行。
+/// 折叠态可提亮的命令行数：**含末尾的「剩余行数」提示行**。
 ///
-/// `history::layout` 用它定位可点击的命中矩形：渲染与命中必须共用同一份树体构造，
-/// 否则点击区会与画出来的那一行错位。
-pub(super) fn open_offset(call: &ToolCallView) -> Option<usize> {
-    let body = match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Command(_))
-        | Some(crate::app::state::ToolDetailView::Interaction(_)) => BODY_ROWS,
-        _ => return None,
+/// 提示行是折叠区最后一行，也是「这块还能展开」的唯一文案；把它排除在命中区外，
+/// 会让指针停在最该提亮的那行时反而没有任何反应。
+pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
+    let command = match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(view)) => &view.command,
+        Some(crate::app::state::ToolDetailView::Interaction(view)) => &view.command,
+        _ => return 0,
     };
-    // 标题占 1 行，`[open]` 是树体末行。
-    Some(title_rows() + body - 1)
+    command_body(command, width, false, false).len()
+}
+
+/// 命令**内容**行数（不含末尾的「剩余行数」提示行）；供「能否展开」判定用。
+pub(super) fn content_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+    let command = match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(view)) => &view.command,
+        Some(crate::app::state::ToolDetailView::Interaction(view)) => &view.command,
+        _ => return 0,
+    };
+    command_body(command, width, expanded, false)
+        .iter()
+        .filter(|row| !row.text.starts_with("… "))
+        .count()
+}
+
+/// 命令卡片树体行：`$ 命令` 按列宽折行后的物理行。
+///
+/// **与 [`draw_command`]、[`rows`] 共用同一份构造**：行数口径只有一个来源。输出、
+/// cwd 与 `… +N more lines` 都已搬进后台任务面板，消息列表里只看得到"哪条命令在跑"。
+fn command_body(command: &str, width: u16, expanded: bool, hovered: bool) -> Vec<BodyRow> {
+    // 已带提示符就不重复（调用方可能传入完整命令行）。
+    let text = if command.starts_with(text::agent::COMMAND_PROMPT_PREFIX) {
+        command.to_string()
+    } else {
+        format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX)
+    };
+    // 展开后命令文字保持默认可读前景，折叠态只在悬停时提亮。
+    let line = BodyRow {
+        text,
+        style: if expanded || hovered {
+            style::chat_tool_param_expanded()
+        } else {
+            style::chat_tool_param()
+        },
+        sample: SAMPLE_CHARS,
+    };
+    wrap_body_row(line, width, expanded, hovered)
+}
+
+/// 一条树体行按可用列宽折成若干物理行（首行带 `$ `，续行不重复）。
+///
+/// 预算与普通工具详情一致：折叠 [DETAIL_PREVIEW_ROWS] 行、展开 [DETAIL_MAX_ROWS] 行；
+/// 截断时末行补 `…`。极窄（放不下任何正文）时不折行，避免把内容撕成碎片。
+fn wrap_body_row(row: BodyRow, width: u16, expanded: bool, hovered: bool) -> Vec<BodyRow> {
+    use super::file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
+    let available = usize::from(width.saturating_sub(super::TREE_COLS as u16));
+    if available < super::MIN_PARAM_COLS {
+        return vec![row];
+    }
+    let budget = if expanded {
+        DETAIL_MAX_ROWS
+    } else {
+        DETAIL_PREVIEW_ROWS
+    };
+    // 组装按「可用列 × 行预算」放宽，让长命令真正折行而不是一路压成省略号。
+    let safe = single_line(&row.text, row.sample.saturating_mul(budget).max(row.sample));
+    let chars: Vec<char> = safe.chars().collect();
+    let mut out: Vec<BodyRow> = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() && out.len() < budget {
+        let mut col = 0usize;
+        let mut end = start;
+        while end < chars.len() {
+            let cell = chars[end].width().unwrap_or(1).max(1);
+            if col + cell > available {
+                break;
+            }
+            col += cell;
+            end += 1;
+        }
+        if end == start {
+            end = start + 1;
+        }
+        let mut text: String = chars[start..end].iter().collect();
+        // 末行仍有内容没画完：补 `…`（截断标记不占新行）。
+        if end < chars.len() && out.len() + 1 == budget {
+            while text.width() + 1 > available && !text.is_empty() {
+                text.pop();
+            }
+            text.push('…');
+        }
+        out.push(BodyRow {
+            text: text.trim_end().to_string(),
+            style: row.style,
+            sample: row.sample,
+        });
+        start = end;
+    }
+    if out.is_empty() {
+        out.push(BodyRow {
+            text: String::new(),
+            style: row.style,
+            sample: row.sample,
+        });
+    }
+    // 折叠态末尾单独一行写剩余行数（展开后消失）；不占折叠额度。
+    // 窄到放不下整句就不画，避免半截提示。
+    if !expanded && start < chars.len() {
+        let hint =
+            text::agent::file_diff_more_lines(estimate_remaining_lines(&chars[start..], available));
+        if hint.width() <= available {
+            // 悬停时与命令正文一起提亮：提示行是「还能展开」的唯一文案。
+            out.push(BodyRow {
+                text: hint,
+                style: if hovered {
+                    style::chat_tool_param_expanded()
+                } else {
+                    style::agent_step_detail()
+                },
+                sample: SAMPLE_CHARS,
+            });
+        }
+    }
+    out
+}
+
+/// 剩余内容还能折成几行（只用于提示文案，按整列硬切估算即可）。
+fn estimate_remaining_lines(rest: &[char], available: usize) -> usize {
+    let width = available.max(1);
+    let cols: usize = rest.iter().map(|ch| ch.width().unwrap_or(1).max(1)).sum();
+    cols.div_ceil(width).max(1)
 }
 
 /// 树体的一行：**未加连接符**的内容 + 着色档位。
@@ -98,37 +203,6 @@ struct BodyRow {
     style: ratatui::style::Style,
     /// 单行化后的取样上限（命令可能很长）。
     sample: usize,
-    /// 是否是末行的 `[open]`（按「整项丢弃」让位，不截半段）。
-    ///
-    /// 只有它可以被整段丢弃：`[ope…` 读不出含义，还会让人以为点不了；
-    /// 丢文案不改行数，命中区与几何都不会漂移。
-    open: bool,
-}
-
-impl BodyRow {
-    /// 命令原文行（`$ ` 前缀 + 命令）——**恒为参数金黄**。
-    ///
-    /// 参数色不随运行态变化（用户要求「参数颜色不要改变，颜色变化始终是小卡片和
-    /// title」）：一行的主色若跟着状态跳，会让人误以为参数本身也变了含义。
-    /// 状态只由标题行的方块 + 动词表达。
-    fn command(command: &str) -> Self {
-        Self {
-            text: format!("{}{command}", text::agent::COMMAND_PROMPT_PREFIX),
-            style: style::chat_tool_param(),
-            sample: SAMPLE_CHARS,
-            open: false,
-        }
-    }
-
-    /// 末行的 `[open]` 入口（次要信息灰；点击打开后台任务面板）。
-    fn open(content: impl Into<String>) -> Self {
-        Self {
-            text: content.into(),
-            style: style::agent_step_detail(),
-            sample: SAMPLE_CHARS,
-            open: true,
-        }
-    }
 }
 
 /// 绘制命令或交互卡片；推进的行数必须与 [`rows`] 严格相等。
@@ -140,8 +214,9 @@ pub(super) fn draw(
     row_index: &mut usize,
     call: &ToolCallView,
     loading_frame: usize,
-    _expanded: bool,
+    expanded: bool,
     animating: bool,
+    hovered: bool,
 ) {
     if rect.width == 0 {
         // 宽度 0：与 [`rows`] 一致地不占行（外层布局已跳过该块）。
@@ -158,6 +233,8 @@ pub(super) fn draw(
                 view,
                 loading_frame,
                 animating,
+                expanded,
+                hovered,
             );
         }
         Some(crate::app::state::ToolDetailView::Interaction(view)) => {
@@ -170,6 +247,8 @@ pub(super) fn draw(
                 view,
                 loading_frame,
                 animating,
+                expanded,
+                hovered,
             );
         }
         _ => {
@@ -202,7 +281,8 @@ fn process_mark(call: &ToolCallView, state: ProcessStateView, loading_frame: usi
     }
 }
 
-/// 命令卡片：标题（橙 = 存活）+ 树体（命令 / `[open]`）。
+/// 命令卡片：标题（橙 = 存活）+ 折行的命令。
+#[allow(clippy::too_many_arguments)]
 fn draw_command(
     grid: &mut Grid,
     rect: Rect,
@@ -212,6 +292,8 @@ fn draw_command(
     view: &CommandView,
     loading_frame: usize,
     animating: bool,
+    expanded: bool,
+    hovered: bool,
 ) {
     let status = process_status(view.state);
     let mark = process_mark(call, view.state, loading_frame);
@@ -227,10 +309,17 @@ fn draw_command(
         status,
         mark,
     );
-    draw_body(grid, rect, scroll, row_index, &command_body(view));
+    draw_body(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        &command_body(&view.command, rect.width, expanded, hovered),
+    );
 }
 
-/// 交互卡片：标题 + 树体（命令 / `[open]`）。
+/// 交互卡片：标题 + 折行的命令。
+#[allow(clippy::too_many_arguments)]
 fn draw_interaction(
     grid: &mut Grid,
     rect: Rect,
@@ -240,6 +329,8 @@ fn draw_interaction(
     view: &ProcessInteractionView,
     loading_frame: usize,
     animating: bool,
+    expanded: bool,
+    hovered: bool,
 ) {
     let status = process_status(view.state);
     let mark = process_mark(call, view.state, loading_frame);
@@ -255,7 +346,13 @@ fn draw_interaction(
         status,
         mark,
     );
-    draw_body(grid, rect, scroll, row_index, &interaction_body(view));
+    draw_body(
+        grid,
+        rect,
+        scroll,
+        row_index,
+        &command_body(&view.command, rect.width, expanded, hovered),
+    );
 }
 
 /// 标题行（`■ 动词 · 状态`）；推进 1 行。
@@ -289,6 +386,7 @@ fn draw_title(
 
 /// 绘制树体：除最后一行外 `  │  `，最后一行 `  └─ `；推进的行数 = `body.len()`。
 fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, body: &[BodyRow]) {
+    // 末行收口：剩余行数提示行也要收口（它本身是卡片最后一行）。
     let last = body.len().saturating_sub(1);
     let limit = usize::from(rect.width);
     let content_x = rect
@@ -313,22 +411,11 @@ fn draw_body(grid: &mut Grid, rect: Rect, scroll: usize, row_index: &mut usize, 
                 rect.width.saturating_sub(indent),
             );
             let content_cols = limit.saturating_sub(TREE_COLS);
-            // `[open]` 按「整项丢弃」让位：放不下就整段不画，绝不截半段
-            // （`[ope…` 读不出含义，还会让人以为点不了）。丢掉不改行数。
-            let content = if row.open {
-                let full = single_line(&row.text, row.sample);
-                if full.width() <= content_cols {
-                    full
-                } else {
-                    String::new()
-                }
+            let single = single_line(&row.text, row.sample);
+            let content = if single.width() <= content_cols {
+                single
             } else {
-                let single = single_line(&row.text, row.sample);
-                if single.width() <= content_cols {
-                    single
-                } else {
-                    truncate_with_ellipsis(&single, content_cols)
-                }
+                truncate_with_ellipsis(&single, content_cols)
             };
             grid.put_clipped(
                 content_x,

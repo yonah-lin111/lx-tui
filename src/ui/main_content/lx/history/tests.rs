@@ -495,16 +495,35 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let area = Rect::new(0, 0, 40, 8);
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
+    // 折叠态用**浅粉 182**（用户要求「没展开时不要灰色，用浅一点的粉色」），
+    // 展开与悬停才升为亮粉 218。
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(218), "思考方块专用品红");
-    assert!(header.modifier.contains(Modifier::BOLD), "生成中方块加粗");
-    // 图标：跟随思考自己的品红（`~`），位于方块之后第 2 列、紧贴文案。
-    let icon = &buf[(2, 0)];
-    assert_eq!(icon.fg, Color::Indexed(218), "图标品红（跟随步骤结构色）");
-    // 头部文案：与方块同款品红但**不加粗**，让方块更跳；方块后从第 2 列起。
+    assert_eq!(header.fg, Color::Indexed(182), "折叠态方块浅粉");
+    assert!(
+        header.modifier.contains(Modifier::BOLD),
+        "生成中的方块保留呼吸加粗"
+    );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(218), "生成中文案同款品红");
+    assert_eq!(label.fg, Color::Indexed(182), "折叠态文案浅粉");
     assert!(!label.modifier.contains(Modifier::BOLD), "文案不加粗");
+    // 悬停整块：方块与文案恢复品红 218。
+    streaming.chat.hover = Some(crate::app::state::CardTarget::Thinking {
+        message_index: 0,
+        step_index: 0,
+    });
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
+    assert_eq!(buf[(0, 0)].fg, Color::Indexed(218), "悬停方块恢复品红");
+    assert!(
+        buf[(0, 0)].modifier.contains(Modifier::BOLD),
+        "悬停时方块加粗（生成中的原色）"
+    );
+    assert_eq!(buf[(2, 0)].fg, Color::Indexed(218), "悬停文案恢复品红");
+    streaming.chat.hover = None;
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &streaming, 0);
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thinking"),
@@ -540,18 +559,14 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(218), "完成后仍是品红");
+    assert_eq!(header.fg, Color::Indexed(182), "完成方块折叠态浅粉");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "完成方块不加粗（与运行中的加粗呼吸方块区分）"
     );
-    assert!(
-        !header.modifier.contains(Modifier::DIM),
-        "完成后不压暗（压暗会与边框标题混同）"
-    );
     let label = &buf[(2, 0)];
-    assert_eq!(label.fg, Color::Indexed(218), "完成后文案同为品红");
-    assert!(!label.modifier.contains(Modifier::DIM), "完成后文案不压暗");
+    assert_eq!(label.fg, Color::Indexed(182), "完成文案折叠态浅粉");
+    assert!(!label.modifier.contains(Modifier::BOLD), "完成文案不加粗");
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thought · 6.3s"),
@@ -571,11 +586,13 @@ fn thinking_header_uses_step_square_and_becomes_thought() {
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &done, 0);
     let header = &buf[(0, 0)];
-    assert_eq!(header.fg, Color::Indexed(218), "展开后仍品红");
+    assert_eq!(header.fg, Color::Indexed(218), "展开后升为亮粉");
     assert!(
         !header.modifier.contains(Modifier::BOLD),
         "展开后仍是不加粗的完成态"
     );
+    let label = &buf[(2, 0)];
+    assert_eq!(label.fg, Color::Indexed(218), "展开后文案升为亮粉");
     let line0 = row_text(&buf, area, 0);
     assert!(
         line0.starts_with("■ Thought · 6.3s"),
@@ -713,7 +730,7 @@ fn sticky_prompt_respects_suppression_memory_while_reading() {
     let layout = layout(area, &lx);
     // 顶行在第一轮回复里：本会钉，但记忆一致 → 跳过重判、沿用抑制。
     lx.chat.history_scroll = layout.messages[1].start;
-    let top = message_at(&layout.messages, layout.messages[1].start).expect("顶行");
+    let top = sticky::message_at(&layout.messages, layout.messages[1].start).expect("顶行");
     lx.chat.suppressed_prompt_header = Some(crate::app::state::lx::chat::StickySuppression {
         viewport: area,
         message: top.0,
@@ -757,14 +774,17 @@ fn sticky_text_collapses_sanitizes_and_marks_empty() {
         "complete",
         vec![text_part("  第一  行\n\t第二\r行  ")],
     );
-    assert_eq!(sticky_text(&message).as_deref(), Some("第一 行 第二 行"));
+    assert_eq!(
+        sticky::sticky_text(&message).as_deref(),
+        Some("第一 行 第二 行")
+    );
     // 只有空白 → 不钉（None）。
     set_parts(&mut message, vec![text_part("   \n\t ")]);
-    assert_eq!(sticky_text(&message), None);
+    assert_eq!(sticky::sticky_text(&message), None);
     // 超长粘贴按 512 字符取样（限住每帧成本）。
     set_parts(&mut message, vec![text_part(&"字".repeat(1_000))]);
-    let text = sticky_text(&message).expect("摘要");
-    assert_eq!(text.chars().count(), STICKY_SAMPLE_CHARS);
+    let text = sticky::sticky_text(&message).expect("摘要");
+    assert_eq!(text.chars().count(), sticky::SAMPLE_CHARS);
 }
 
 #[test]
@@ -838,11 +858,11 @@ fn tool_step(position: i64) -> AssistantStepView {
             position,
             arguments_json: r#"{"path":"src/a.rs","offset":3,"limit":5}"#.into(),
             status: crate::app::state::ToolStatus::Pending,
-            summary: Some(crate::app::state::ToolSummary {
+            summary: Some(Box::new(crate::app::state::ToolSummary {
                 path: Some("src/a.rs".into()),
                 range: Some((3, 7)),
                 ..Default::default()
-            }),
+            })),
             error: None,
             result_json: None,
             detail: None,

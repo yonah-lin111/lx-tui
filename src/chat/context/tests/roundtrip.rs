@@ -41,7 +41,7 @@ fn tool_step(
             position,
             arguments_json: arguments_json.into(),
             status,
-            summary: Some(ToolSummary::from_arguments(arguments_json)),
+            summary: Some(Box::new(ToolSummary::from_arguments(arguments_json))),
             error: error.map(str::to_string),
             result_json: result_json.map(str::to_string),
             detail: None,

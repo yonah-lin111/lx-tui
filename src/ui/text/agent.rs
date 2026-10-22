@@ -125,6 +125,15 @@ pub fn removed_label(count: usize) -> String {
     format!("{TOOL_DIFF_REMOVE_PREFIX}{count}")
 }
 
+/// 合并卡标题里的文件数：`1 file` / `3 files`。
+///
+/// 只出现在**连续同种文件调用的合并卡**上：单次调用的标题仍是裸动词，不写 `1 file`
+/// ——那会把最常见的单文件改动也说成汇总，白占标题宽度。
+pub fn tool_files_label(count: usize) -> String {
+    let suffix = if count == 1 { "file" } else { "files" };
+    format!("{count} {suffix}")
+}
+
 /// markdown 渲染器识别的代码块语言标记（代码块头部 `language: xxx` 的取值）。
 pub const MD_LANG: &str = "rust";
 
@@ -183,18 +192,31 @@ pub const VERB_STOP_COMMAND: &str = "Stop command";
 /// `update_plan` 卡片动词。
 pub const VERB_UPDATE_PLAN: &str = "Plan";
 
-/// 详情操作按钮（ASCII，窄宽度也画得下）。
+/// 历史内**行内动作文字**（常态次要色、悬停默认前景，见 `style::chat_action_label`）。
 ///
-/// `[details]` 已从卡片右上角移除：展开入口改到树体**末尾**（`… +N more lines`），
-/// 收起入口是同一条末尾行（`[collapse]`）。用户要求「more lines 调到底部，点击展开，
-/// 展开后点尾部折叠文字收起」。
-pub const DETAILS_CLOSE: &str = "[collapse]";
+/// 文件差异卡片的展开/收起入口：折叠态是树体末尾的常驻一行（有省略时 `… more changes`，
+/// 没有省略时 `Show full diff`），展开态同一行变成 `collapse`。点击展开、点正文或
+/// 这一行收起；正文保留聊天选区，**拖拽选中不折叠**。
+pub const FILE_DIFF_OMITTED: &str = "… more changes";
+/// 折叠态没有省略时仍可展开：入口文案换成明确的动作。
+pub const FILE_DIFF_SHOW_ALL: &str = "Show full diff";
+/// 折叠态被省略的行数：`… 421 more lines` / `… 1 more line`。
+///
+/// 取代原先的 `… more changes`：用户要求「把折叠文案换成剩余行数」——数字直接
+/// 回答「点开还能看到多少」，比一句没有量的提示有用。
+pub fn file_diff_more_lines(count: usize) -> String {
+    let suffix = if count == 1 { "line" } else { "lines" };
+    format!("… {count} more {suffix}")
+}
 
-/// 进程卡片末行的**后台任务面板入口**：`[open]`（灰色次要信息色，点击打开面板）。
+/// 展开态树体末尾的收起入口。
+pub const FILE_DIFF_COLLAPSE: &str = "collapse";
+
+/// 进程卡片末行的**后台任务面板入口**：`open`（点击打开面板）。
 ///
-/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`[open]`
-/// 是这条命令的唯一入口，独占树体末行。
-pub const TASK_OPEN_LABEL: &str = "[open]";
+/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`open`
+/// 是这条命令的唯一入口，独占树体末行。进程已经到终态时这一行整行不画。
+pub const TASK_OPEN_LABEL: &str = "open";
 
 /// 进程状态词（文字，不只靠颜色）。
 pub const STATE_STARTING: &str = "Starting";
@@ -221,6 +243,45 @@ pub const INPUT_PREFIX: &str = "stdin:";
 pub const PLAN_COMPLETED_SUFFIX: &str = "completed";
 /// 空计划文案。
 pub const PLAN_EMPTY: &str = "Plan cleared";
+
+// ===== 文件工具差异卡片 =====
+
+/// 文件没有内容差异（纯移动、覆盖为相同内容、补丁无实际变更）。
+pub const FILE_DIFF_NO_CHANGES: &str = "No content changes";
+/// 差异正文被存储预算截断（计数仍是完整值，展开也补不回来）。
+pub const FILE_DIFF_TRUNCATED: &str = "Diff truncated";
+/// 差异正文来自超限输入的线性简化脚本（可能比最小编辑脚本多）。
+pub const FILE_DIFF_SIMPLIFIED: &str = "Diff simplified";
+/// hunk 之间的分隔（不直接铺 `@@`）。
+pub const FILE_DIFF_HUNK_SEP: &str = "⋮";
+/// 末行无换行的元信息行（不计入增删）。
+pub const FILE_DIFF_NO_FINAL_NEWLINE: &str = "No newline at end of file";
+/// 无法生成文本差异（二进制 / 非 UTF-8 / 读取失败 / 结构非法）。
+pub const FILE_DIFF_UNAVAILABLE: &str = "Diff unavailable";
+/// 移动的两端连接符：`旧 → 新`。
+pub const FILE_DIFF_MOVE_SEP: &str = " → ";
+/// 计数未知（旧内容不可解码，删除后无从比较）。
+pub const FILE_DIFF_COUNTS_UNKNOWN: &str = "(?)";
+
+/// 因整体 JSON 预算被省略摘要的文件数：`3 files omitted` / `1 file omitted`。
+pub fn file_diff_omitted_files(count: usize) -> String {
+    let suffix = if count == 1 {
+        "file omitted"
+    } else {
+        "files omitted"
+    };
+    format!("{count} {suffix}")
+}
+
+/// 差异不可用的原因（稳定原因码 → 用户可见说明，不暴露内部细节）。
+pub fn file_diff_unavailable(reason: &str) -> &'static str {
+    match reason {
+        "binary" => "Diff unavailable: binary file",
+        "not_utf8" => "Diff unavailable: not UTF-8",
+        "read_failed" => "Diff unavailable: read failed",
+        _ => FILE_DIFF_UNAVAILABLE,
+    }
+}
 
 /// 计划三态标记（ASCII，与模型结果同一口径）。
 pub const PLAN_PENDING: &str = "[ ]";

@@ -20,11 +20,11 @@ fn read_step(position: i64, status: ToolStatus) -> AssistantStepView {
             position,
             arguments_json: String::new(),
             status,
-            summary: Some(ToolSummary {
+            summary: Some(Box::new(ToolSummary {
                 path: Some("src/ui/style.rs".into()),
                 range: Some((12, 40)),
                 ..ToolSummary::default()
-            }),
+            })),
             error: None,
             result_json: None,
             detail: None,
@@ -185,9 +185,9 @@ fn narrow_and_short_viewports_never_panic_with_tools() {
 }
 
 #[test]
-fn tool_steps_with_all_statuses_stay_two_rows_each() {
-    // 每个状态都必须恰好占 2 行（`■ 动词` + `  └─ 详情`）：布局行数 = 工具数 × 2
-    // （其余块固定），与状态无关——第 2 行永远有内容（参数或兜底状态词）。
+fn tool_steps_occupy_a_header_plus_one_or_two_detail_rows() {
+    // 工具步骤 = 1 行标题 + 1~2 行详情（`  └─ …`，长参数折行、最多 2 行）。
+    // 行数与状态无关；布局与渲染必须一致。
     for status in [
         ToolStatus::InputStreaming,
         ToolStatus::Pending,
@@ -202,9 +202,17 @@ fn tool_steps_with_all_statuses_stay_two_rows_each() {
         let lx = lx_with(vec![message]);
         let area = Rect::new(0, 0, 40, 10);
         let computed = layout(area, &lx);
-        // 工具 2 行 + 消息间空行（呼吸行）1 = 3。
-        assert_eq!(computed.total_rows, 3, "{status:?} 应占 2 行");
-        assert_eq!(render_rows(area, &lx, 0), 3, "{status:?} 渲染行数一致");
+        // 标题 1 + 详情 1~2 + 收尾呼吸行 1。
+        assert!(
+            (3..=4).contains(&computed.total_rows),
+            "{status:?} 应为 3~4 行，实际 {}",
+            computed.total_rows
+        );
+        assert_eq!(
+            render_rows(area, &lx, 0),
+            computed.total_rows,
+            "{status:?} 渲染行数一致"
+        );
     }
 }
 
@@ -334,4 +342,198 @@ fn completed_thinking_has_no_spinner_even_after_tool_steps() {
         "运行中的工具行进入空心相位：{}",
         tool_line(&buf)
     );
+}
+
+// ===== 连续同种文件调用合并成一张卡 =====
+
+/// 构造一个带差异正文的文件工具步骤（`name` 决定 `edit` / `write`）。
+fn file_step(position: i64, call_id: &str, name: &str, status: ToolStatus) -> AssistantStepView {
+    use crate::app::state::{FileChangeView, FileDiffDetailView, FileDiffView};
+    use crate::chat::tools::{DiffHunk, DiffLine, DiffLineKind, FileChangeKind, FileDiff};
+
+    let diff = FileDiff::Complete {
+        hunks: vec![DiffHunk {
+            // 4 个增删行 > 预览的 3 行额度：折叠态出省略提示，展开态必然多行。
+            lines: (1..=2)
+                .flat_map(|n| {
+                    [
+                        DiffLine {
+                            kind: DiffLineKind::Removed,
+                            old_line: Some(n),
+                            new_line: None,
+                            text: format!("old{n}"),
+                            no_final_newline: false,
+                        },
+                        DiffLine {
+                            kind: DiffLineKind::Added,
+                            old_line: None,
+                            new_line: Some(n),
+                            text: format!("new{n}"),
+                            no_final_newline: false,
+                        },
+                    ]
+                })
+                .collect(),
+        }],
+        simplified: false,
+    };
+    AssistantStepView::Tool {
+        position,
+        call: ToolCallView {
+            call_id: call_id.into(),
+            name: name.into(),
+            position,
+            arguments_json: String::new(),
+            status,
+            summary: None,
+            error: None,
+            result_json: None,
+            detail: Some(Box::new(crate::app::state::ToolDetailView::File(
+                FileDiffDetailView {
+                    files: vec![FileChangeView {
+                        path: format!("src/file{position}.rs"),
+                        to: None,
+                        kind: FileChangeKind::Updated,
+                        added: Some(1),
+                        removed: Some(1),
+                        counts_known: true,
+                        simplified: false,
+                        diff: Some(FileDiffView::from(&diff)),
+                    }],
+                    files_total: 1,
+                    added: Some(1),
+                    removed: Some(1),
+                    simplified: false,
+                    omitted_files: 0,
+                    single: false,
+                },
+            ))),
+        },
+    }
+}
+
+/// 历史区整页文本（用于断言内容差异）。
+fn rendered_text(lx: &Lx, area: Rect) -> String {
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, lx, 0);
+    (0..area.height)
+        .map(|y| row_text(&buf, area, y))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 卡片命中数（每张可折叠卡片一个）；没有动作行，因此只有一个计数。
+fn card_hits(lx: &Lx, area: Rect) -> usize {
+    layout(area, lx)
+        .cards
+        .iter()
+        .filter(|hit| matches!(hit.kind, CardKind::Tool { .. }))
+        .count()
+}
+
+/// 连续 `edit` 共用一行合并标题，但**每个调用各自一块**：各自一份整卡命中区与
+/// 各自的展开入口，展开互不影响；同组的 `write` 同理，`edit` 与 `write` 不共享标题。
+#[test]
+fn consecutive_file_tools_share_one_header_but_expand_independently() {
+    let area = Rect::new(0, 0, 60, 20);
+
+    let build = |names: [&str; 2]| {
+        let mut message = message("assistant", "complete", Vec::new());
+        message
+            .steps
+            .push(file_step(1, "call-a", names[0], ToolStatus::Completed));
+        message
+            .steps
+            .push(file_step(2, "call-b", names[1], ToolStatus::Completed));
+        lx_with(vec![message])
+    };
+
+    let merged = build(["edit", "edit"]);
+    let merged_layout = layout(area, &merged);
+    assert_eq!(
+        render_rows(area, &merged, 0),
+        merged_layout.total_rows,
+        "合并卡布局与渲染行数一致"
+    );
+    assert_eq!(
+        card_hits(&merged, area),
+        2,
+        "两个连续 edit 各自一块：两块独立的点击面"
+    );
+
+    // `write` 同为文件工具：连续 `write` 也合并。
+    let writes = build(["write", "write"]);
+    assert_eq!(
+        card_hits(&writes, area),
+        2,
+        "连续 write 同样共用标题、各自一块"
+    );
+    assert_eq!(
+        render_rows(area, &writes, 0),
+        layout(area, &writes).total_rows
+    );
+
+    // 合并卡内**恰好一个**空行：两块之间的分隔行。
+    let mut buf = Buffer::empty(area);
+    crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &merged, 0);
+    let total = merged_layout.total_rows;
+    let blanks: Vec<usize> = (1..total - 1)
+        .filter(|row| {
+            row_text(&buf, area, u16::try_from(*row).unwrap_or(u16::MAX))
+                .trim()
+                .is_empty()
+        })
+        .collect();
+    assert_eq!(blanks.len(), 1, "两块之间只隔一行空行：{blanks:?}");
+    let next = row_text(&buf, area, u16::try_from(blanks[0] + 1).unwrap_or(u16::MAX));
+    assert!(
+        next.contains("file2"),
+        "空行之后紧跟第二块的文件头：{next:?}"
+    );
+
+    // 展开只作用于被点的那一个调用；另一块保持折叠。
+    //
+    // 断言的是**内容差异**而不是总行数：折叠态末尾多一行「剩余行数」提示，展开后这行
+    // 消失、内容行铺开，两边总行数可以相等甚至反向，行数不是这个交互的判据。
+    let mut expanded = build(["edit", "edit"]);
+    assert!(expanded.chat.toggle_detail("assistant-1", "call-a"));
+    let expanded_layout = layout(area, &expanded);
+    assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
+    let folded_text = rendered_text(&merged, area);
+    let expanded_text = rendered_text(&expanded, area);
+    assert!(
+        folded_text.matches("more line").count() == 2,
+        "折叠态两块各一行剩余行数：{folded_text}"
+    );
+    assert!(
+        expanded_text.matches("more line").count() == 1,
+        "展开后只剩另一块的提示：{expanded_text}"
+    );
+    assert_eq!(render_rows(area, &expanded, 0), expanded_layout.total_rows);
+    assert_eq!(card_hits(&expanded, area), 2, "展开态仍是两块");
+
+    // 同种动词才合并：edit + write 各自成卡，行数更多。
+    let split = build(["edit", "write"]);
+    let split_layout = layout(area, &split);
+    assert_eq!(card_hits(&split, area), 2, "不同动词不合并");
+    assert!(split_layout.total_rows > merged_layout.total_rows);
+    assert_eq!(render_rows(area, &split, 0), split_layout.total_rows);
+}
+
+/// 正文步骤打断即分组：`edit` → 正文 → `edit` 是两张卡。
+#[test]
+fn a_part_step_breaks_the_merge() {
+    let mut message = message("assistant", "complete", vec![text_part("中间说一句")]);
+    message.steps = vec![
+        file_step(1, "call-a", "edit", ToolStatus::Completed),
+        AssistantStepView::Part {
+            position: 2,
+            part: text_part("中间说一句"),
+        },
+        file_step(3, "call-b", "edit", ToolStatus::Completed),
+    ];
+    let lx = lx_with(vec![message]);
+    let area = Rect::new(0, 0, 60, 20);
+    assert_eq!(card_hits(&lx, area), 2, "正文打断合并");
+    assert_eq!(render_rows(area, &lx, 0), layout(area, &lx).total_rows);
 }

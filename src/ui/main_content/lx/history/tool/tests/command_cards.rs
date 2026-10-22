@@ -161,7 +161,10 @@ fn running_command_card_shows_command_and_status_only() {
     assert!(text.contains("Running"), "状态文字必须可见：{text}");
     assert!(!text.contains("test result: ok"), "不再渲染输出：{text}");
     assert!(!text.contains("cwd:"), "不再渲染 cwd：{text}");
-    assert!(text.contains(crate::ui::text::agent::TASK_OPEN_LABEL));
+    assert!(
+        !text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+        "没有 open 入口（按钮已移除）：{text}"
+    );
 }
 
 #[test]
@@ -176,17 +179,13 @@ fn command_card_ignores_the_expanded_flag() {
 }
 
 #[test]
-fn command_without_output_still_shows_the_open_entry() {
-    // 没有输出时不再需要 `Waiting for output` 占位：输出只在面板里看，
-    // 卡片固定给 `[open]` 入口。
+fn command_without_output_has_no_placeholder_or_entry() {
+    // 没有输出时不需要占位，也不再给入口行：卡片只剩标题 + 命令。
     let (text, _) = render(&running_command(""), 60, false);
+    assert!(!text.contains("Waiting for output"), "无输出占位：{text}");
     assert!(
-        !text.contains("Waiting for output"),
-        "不再有输出占位：{text}"
-    );
-    assert!(
-        text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
-        "[open] 仍在：{text}"
+        !text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+        "{text}"
     );
 }
 
@@ -202,8 +201,8 @@ fn interaction_card_distinguishes_verbs_and_hides_io() {
     assert!(!send.contains("stdin:"), "输入预览不再上卡片：{send}");
     for text in [read, send] {
         assert!(
-            text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
-            "交互卡片也有 [open]：{text}"
+            !text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+            "交互卡片也没有 open：{text}"
         );
     }
 }
@@ -295,8 +294,8 @@ fn header_shows_status_inline_and_has_no_corner_details_marker() {
         "状态紧跟动词：{folded}"
     );
     assert!(
-        !folded.contains(crate::ui::text::agent::DETAILS_CLOSE),
-        "折叠态不该出现 [collapse]：{folded}"
+        !folded.contains(text::agent::FILE_DIFF_COLLAPSE),
+        "进程卡片没有展开态，不该出现 collapse：{folded}"
     );
     // 极窄：状态整段丢弃，但方块与动词仍在（不挤掉动词）。
     let (narrow, _) = render(&call, 14, false);
@@ -306,38 +305,23 @@ fn header_shows_status_inline_and_has_no_corner_details_marker() {
 }
 
 #[test]
-fn open_entry_lives_at_the_bottom_of_the_tree() {
-    // `[open]` 独占树体末行，用直角收口；标题行不带任何标记。
+fn command_body_is_the_only_tree_row_and_closes_with_leaf() {
+    // 树体只有命令（可能折成多行），最后一行用直角收口。
     let call = running_command("line\n");
     let (text, _) = render(&call, 60, false);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 3, "恒三行：{text}");
-    let last = lines.last().copied().unwrap_or_default();
+    assert_eq!(lines.len(), 2, "标题 + 命令：{text}");
     assert!(
-        last.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
-        "末行是 [open]：{text}"
-    );
-    assert!(
-        last.starts_with(text::agent::TREE_LEAF),
+        lines[1].starts_with(text::agent::TREE_LEAF),
         "末行用直角收口：{text}"
-    );
-    assert!(
-        !lines[0].contains(crate::ui::text::agent::TASK_OPEN_LABEL),
-        "标题行不带 [open]：{text}"
     );
 }
 
 #[test]
-fn details_marker_text_is_ascii_and_short() {
-    // 展开/收起按钮文案为纯 ASCII，窄卡片也不会变成乱码。
-    // （省略提示 `… +` 不是 ASCII：它是内容提示，不是按钮文案。）
-    for label in [
-        crate::ui::text::agent::EARLIER_OUTPUT_SUFFIX,
-        crate::ui::text::agent::DETAILS_CLOSE,
-    ] {
-        assert!(label.is_ascii());
-        assert!(!label.is_empty());
-    }
+fn command_prompt_marker_is_ascii_and_short() {
+    let label = text::agent::COMMAND_PROMPT_PREFIX;
+    assert!(label.is_ascii());
+    assert!(!label.is_empty());
 }
 
 // ===== 树形版式（`│` 中间行 + `└─` 收口）=====
@@ -422,7 +406,7 @@ fn card_never_mentions_hidden_output_lines() {
         "不再有 `… +N` 省略提示：{text}"
     );
     assert!(!text.contains("more lines"), "不再提 more lines：{text}");
-    assert_eq!(text.lines().count(), 3, "恒三行：{text}");
+    assert_eq!(text.lines().count(), 2, "标题 + 命令：{text}");
 }
 
 #[test]
@@ -438,22 +422,26 @@ fn command_line_has_a_shell_prompt_marker() {
 }
 
 #[test]
-fn interaction_card_keeps_command_then_open_entry() {
-    // 树体只剩命令 + `[open]`：stdin 预览与输出都在面板里看。
+fn interaction_card_keeps_only_the_command_row() {
+    // 树体只剩命令：stdin 预览与输出都在面板里看；不再有 `open` 入口行。
     let (text, _) = render(&interaction("new line\n", Some("yes\\n")), 60, false);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 3, "恒三行：{text}");
+    assert_eq!(lines.len(), 2, "标题 + 命令：{text}");
     let command_line = lines
         .iter()
         .position(|line| line.contains("cargo test chat::tools"))
         .expect("命令在树体首行");
     assert!(command_line > 0, "命令在标题行之下：{text}");
     assert!(
-        lines[command_line].starts_with(text::agent::TREE_BAR),
-        "命令行是中间行：{text}"
+        lines[command_line].starts_with(text::agent::TREE_LEAF),
+        "命令行用直角收口：{text}"
     );
     assert!(!text.contains("stdin:"), "stdin 预览不再上卡片：{text}");
     assert!(!text.contains("new line"), "输出不再上卡片：{text}");
+    assert!(
+        !text.contains(text::agent::TASK_OPEN_LABEL),
+        "没有 open：{text}"
+    );
 }
 
 #[test]
@@ -655,38 +643,17 @@ fn finished_card_shows_exit_code_without_elapsed_time() {
 // ===== 末尾展开/收起行的宽度让位（整项丢弃，不截半段）=====
 
 #[test]
-fn open_entry_is_dropped_instead_of_truncated_when_narrow() {
-    // `[open]` 整项丢弃（绝不出现 `[ope…`），且行数保持几何口径不变。
-    let call = running_command("line\n");
-    // 宽：完整 `[open]`。
-    let (wide, _) = render(&call, 40, false);
-    assert!(
-        wide.contains(text::agent::TASK_OPEN_LABEL),
-        "宽窗格画完整 [open]：{wide}"
-    );
-    // 极窄：整项丢弃，只留收口连接符。
-    for width in [6u16, 8, 9] {
-        let (narrow, rows) = render(&call, width, false);
-        assert_eq!(rows, 3, "宽 {width}：行数不变");
-        assert!(
-            !narrow.contains("[ope"),
-            "宽 {width}：不得画半个 [open]：{narrow}"
-        );
-    }
-}
-
-#[test]
-fn collapse_marker_is_dropped_instead_of_truncated_when_narrow() {
-    let output: String = (0..9).map(|index| format!("o{index}\n")).collect();
-    let call = running_command(&output);
-    let (narrow, _) = render(&call, 6, true);
-    let last = narrow.lines().last().unwrap_or_default();
-    assert!(
-        !last.contains("[colla") || last.contains(text::agent::DETAILS_CLOSE),
-        "收起文案不得被截半：{narrow}"
-    );
-    // 展开态的行数仍与 rows 一致（丢文案不改几何）。
-    assert_eq!(narrow.lines().count(), rows(&call, 6, true));
+fn finished_process_card_has_no_open_entry() {
+    // 用户要求「后台任务已经结束就不要显示 open」：终态卡片整行不画，
+    // 只剩标题 + 命令两行，也不再登记命中区。
+    let mut call = running_command("out\n");
+    let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() else {
+        panic!("expected command view");
+    };
+    view.state = ProcessStateView::Exited { code: Some(0) };
+    let (text, rows) = render(&call, 60, false);
+    assert_eq!(rows, 2, "终态两行：{text}");
+    assert!(!text.contains(text::agent::TASK_OPEN_LABEL), "{text}");
 }
 
 // ===== review 回归：计划卡片的行数口径必须与绘制一致 =====

@@ -7,10 +7,12 @@
 
 use crate::config::ai::{AiSettings, ModelSelection};
 
+pub mod file_diff;
 mod steps;
 mod stream;
 pub mod tool_view;
 
+pub use file_diff::{DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView};
 pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
 };
@@ -272,49 +274,33 @@ pub struct StickySuppression {
     pub row: usize,
 }
 
-/// 输入框上方那一行的**临时提示**（loading 之外的第二类内容）。
+/// 反馈提示的语义级别；决定 toast 的边框与标题色。
 ///
-/// lx 页所有反馈都收口到输入框上方：`Working...`（loading）、`↓ jump to bottom`（导航）
-/// 与本提示共用一个位置。提示到点自动消失，超宽时渲染层用 `…` 截断。
-///
-/// 文案要求**十分简洁**（见 `ui::text::chat` 里的常量），不要写整句说明。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InputHint {
-    /// 提示正文（不含图标与颜色，渲染层只负责排版）。
-    pub message: String,
-    /// 语义级别：决定颜色（错误红 / 默认黄）。
-    pub level: InputHintLevel,
-    /// 到期时刻；`tick` 到点清除。
-    pub deadline: std::time::Instant,
-}
-
-/// 输入框上方提示的两个语义级别（用户指定：错误红、其余黄）。
+/// 提示本身已改为 toast（见 `app::update::chat::show_lx_hint`），这里只剩级别——
+/// 颜色映射在 `ui::toast` 的 `ToastKind` 上，状态层不再保存提示正文与到期时刻
+/// （toast 自己管这两个）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputHintLevel {
-    /// 失败：红色。
+    /// 失败：红色（danger）。
     Error,
-    /// 需要留意但不算失败：黄色（默认档）。
+    /// 需要留意但不算失败：黄色（warning）。
     Warning,
 }
 
-impl InputHint {
-    /// 以当前时刻起算的 [`INPUT_HINT_TTL`]。
-    pub fn new(level: InputHintLevel, message: impl Into<String>, now: std::time::Instant) -> Self {
-        Self {
-            message: message.into(),
-            level,
-            deadline: now + INPUT_HINT_TTL,
-        }
-    }
-
-    /// 是否已到期。
-    pub fn is_expired(&self, now: std::time::Instant) -> bool {
-        now >= self.deadline
-    }
+/// 可点击折叠/展开的聊天历史块。
+///
+/// 既回答「按下这里点的是哪一块」（松开时切换折叠），也回答「鼠标现在悬在哪一块」
+/// （折叠内容提亮 / 思考块恢复品红）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CardTarget {
+    /// 工具卡片（按稳定 ID 定位，与展开状态同一口径）。
+    Tool { message_id: String, call_id: String },
+    /// 思考块（按时间线步骤下标定位，与 [`LxChat::reasoning_expanded`] 同口径）。
+    Thinking {
+        message_index: usize,
+        step_index: usize,
+    },
 }
-
-/// 输入框上方提示的展示时长（与 toast 一致，2 秒）。
-pub const INPUT_HINT_TTL: std::time::Duration = std::time::Duration::from_millis(2000);
 
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
@@ -355,13 +341,21 @@ pub struct LxChat {
     pub viewport_top: Option<usize>,
     /// loading 转轮帧序号（按时间推进，仅流中递增）。
     pub loading_frame: usize,
+    /// 鼠标悬停的可折叠块；None 表示不在任何卡片上。
+    ///
+    /// 渲染层只读：工具卡片用它把折叠内容从 dim 提亮为默认前景，思考块用它
+    /// 从压暗恢复品红。
+    pub hover: Option<CardTarget>,
+    /// 本轮已耗时（毫秒），由事件循环在流中每帧刷新。
+    ///
+    /// 渲染层不取时钟（纯渲染），因此时钟只在 `advance_lx_loading` 里读一次写在这里；
+    /// loading 行据此显示 `(2.7s · ↑1.6k ↓320 tok)`。
+    pub turn_elapsed_ms: Option<i64>,
     /// 鼠标是否悬停在「回到底部」按钮上（决定其高亮）。
     pub jump_bottom_hover: bool,
     /// Esc 停止待命时刻：流中首次按 Esc 只待命并显示提示，窗口内再按一次才真正停止
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
-    /// 输入框上方的临时提示（错误红 / 默认黄），到点自动消失。
-    pub hint: Option<InputHint>,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
     /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
@@ -401,9 +395,10 @@ impl LxChat {
             history_scroll: 0,
             viewport_top: None,
             loading_frame: 0,
+            hover: None,
+            turn_elapsed_ms: None,
             jump_bottom_hover: false,
             stop_armed_at: None,
-            hint: None,
             suppressed_prompt_header: None,
             detail_expanded: Vec::new(),
             selected_tool: None,
@@ -423,9 +418,11 @@ impl LxChat {
         self.input_tokens_reset();
         self.thinking_toggled.clear();
         self.turn_started_at_ms = None;
+        self.turn_elapsed_ms = None;
         self.history_scroll = 0;
         self.viewport_top = None;
         self.detail_expanded.clear();
+        self.hover = None;
         self.selected_tool = None;
         self.plan = None;
     }
@@ -452,6 +449,26 @@ impl LxChat {
         self.detail_expanded
             .push((message_id.to_string(), call_id.to_string(), next));
         next
+    }
+
+    /// 该工具卡片是否被鼠标悬停（折叠内容提亮判据）。
+    pub fn tool_is_hovered(&self, message_id: &str, call_id: &str) -> bool {
+        matches!(
+            &self.hover,
+            Some(CardTarget::Tool { message_id: hovered_message, call_id: hovered_call })
+                if hovered_message == message_id && hovered_call == call_id
+        )
+    }
+
+    /// 该思考块是否被鼠标悬停（压暗 → 恢复品红的判据）。
+    pub fn thinking_is_hovered(&self, message_index: usize, step_index: usize) -> bool {
+        matches!(
+            self.hover,
+            Some(CardTarget::Thinking {
+                message_index: hovered_message,
+                step_index: hovered_step,
+            }) if hovered_message == message_index && hovered_step == step_index
+        )
     }
 
     /// thinking 块是否展开：**默认折叠**（生成中也不自动展开），只有用户显式点击头部或
@@ -539,6 +556,33 @@ impl LxChat {
         };
     }
 
+    /// 流中已产生的**输出 token 估算值**（rough）：ASCII 约 4 字符 1 token，
+    /// 非 ASCII（CJK 等）约 1 字符 1 token；只统计正文与思考正文。
+    ///
+    /// 用途仅限输入框上方 loading 行的 `↓1.2k tok` 提示——真实 usage 只在请求
+    /// 结束时回来，那时 loading 行已经消失（真实值由消息底部统计行给出）。
+    /// 因此这里是估算而不是统计：宁可给出「还在往外吐多少字」的活信号，也不让
+    /// 用户在漫长的流里盯着一个没有数字的 `Working...`。
+    pub fn stream_output_tokens(&self) -> Option<u64> {
+        let message = self.streaming_message()?;
+        let mut ascii = 0u64;
+        let mut wide = 0u64;
+        for step in &message.steps {
+            let Some(part) = step.part() else {
+                continue;
+            };
+            for ch in part.content.chars() {
+                if ch.is_ascii() {
+                    ascii += 1;
+                } else {
+                    wide += 1;
+                }
+            }
+        }
+        let tokens = ascii / 4 + wide;
+        (tokens > 0).then_some(tokens)
+    }
+
     /// 清空上下文占用分子（切模型/新建会话）。
     pub fn input_tokens_reset(&mut self) {
         self.context_tokens = None;
@@ -563,6 +607,13 @@ impl LxChat {
         models
             .default_selection()
             .map(|selection| models.normalize_selection(selection))
+    }
+
+    /// 当前仍在流转的 assistant 消息（最后一条且 `streaming`）的只读引用。
+    pub fn streaming_message(&self) -> Option<&ChatMessageView> {
+        self.messages
+            .last()
+            .filter(|message| message.role == "assistant" && message.status == "streaming")
     }
 
     /// 当前仍在流转的 assistant 消息（最后一条且 `streaming`）的可变引用。

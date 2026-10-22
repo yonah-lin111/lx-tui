@@ -1,4 +1,4 @@
-//! 文本文件编解码：BOM / 换行风格保留、行切分、行 diff 计数。
+//! 文本文件编解码：BOM / 换行风格保留与行切分。
 //!
 //! 工具层所有读写都经过 [`SourceText`]：读入时记录 BOM 与换行风格，写回时按原样
 //! 还原（CRLF 文件不会变成 LF，带 BOM 的文件不会丢 BOM）；未改动的行保留原始字节。
@@ -127,28 +127,6 @@ pub(crate) fn split_lines(text: &str) -> Vec<String> {
         lines.push(current);
     }
     lines
-}
-
-/// 按行统计增删：先剥掉公共前后缀，剩余旧行数即删除、新行数即新增。
-///
-/// 不追求最小编辑脚本（成本 O(n)）；用途是给模型与 UI 展示变化规模。
-pub(crate) fn line_diff_counts(old: &[String], new: &[String]) -> (usize, usize) {
-    let prefix = old
-        .iter()
-        .zip(new.iter())
-        .take_while(|(left, right)| left == right)
-        .count();
-    let max_suffix = old.len().min(new.len()).saturating_sub(prefix);
-    let suffix = old
-        .iter()
-        .rev()
-        .zip(new.iter().rev())
-        .take(max_suffix)
-        .take_while(|(left, right)| left == right)
-        .count();
-    let removed = old.len().saturating_sub(prefix).saturating_sub(suffix);
-    let added = new.len().saturating_sub(prefix).saturating_sub(suffix);
-    (added, removed)
 }
 
 /// 内容是否只由空白组成（用于判断空内容清空）。

@@ -605,3 +605,100 @@ fn candidate_line_list_is_capped_with_ellipsis() {
         "lines 1, 2, 3, 4, 5, …"
     );
 }
+
+// ===== 文件差异：纯移动、移动失败与内容不变 =====
+
+/// 纯移动（内容不变）：必须真的 rename，不能被 `before == after` 提前跳过。
+#[test]
+fn pure_move_renames_without_content_change() {
+    let fixture = Fixture::new("edit-pure-move");
+    fixture.write("from.txt", "same\nbody\n");
+    let patch = wrapped("*** Update File: from.txt\n*** Move to: dest/from.txt");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let changes = expect_changes(&result);
+    assert_eq!(changes.len(), 1);
+    assert!(matches!(changes[0].kind, FileChangeKind::Moved { .. }));
+    assert_eq!((changes[0].added, changes[0].removed), (0, 0));
+    assert!(!fixture.exists("from.txt"), "纯移动必须真的移走源文件");
+    assert_eq!(fixture.read("dest/from.txt"), "same\nbody\n");
+    let diff = changes[0].diff.as_ref().expect("纯移动也带 diff");
+    assert!(diff.counts_known());
+    assert!(diff.hunks().is_empty(), "内容没变就不应有差异正文");
+}
+
+/// 修改并移动：差异正文与 `Moved` 动作一致，磁盘结果同步。
+#[test]
+fn move_with_edit_reports_content_diff() {
+    let fixture = Fixture::new("edit-move-diff");
+    fixture.write("old.txt", "before\nkeep\n");
+    let patch = wrapped("*** Update File: old.txt\n*** Move to: new.txt\n@@\n-before\n+after");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let changes = expect_changes(&result);
+    assert!(matches!(changes[0].kind, FileChangeKind::Moved { .. }));
+    let diff = changes[0].diff.as_ref().expect("移动同时改内容");
+    let kinds: Vec<super::super::DiffLineKind> = diff
+        .hunks()
+        .iter()
+        .flat_map(|hunk| hunk.lines.iter())
+        .map(|line| line.kind)
+        .collect();
+    assert!(kinds.contains(&super::super::DiffLineKind::Removed));
+    assert!(kinds.contains(&super::super::DiffLineKind::Added));
+    assert_eq!(fixture.read("new.txt"), "after\nkeep\n");
+}
+
+/// 移动阶段失败（目标目录被占用）：源文件已写入，失败结果必须带上这份 Updated 与 diff。
+#[test]
+fn move_failure_reports_already_written_source() {
+    let fixture = Fixture::new("edit-move-failure");
+    fixture.write("src.txt", "old\n");
+    // 用同名**文件**占住目标父目录，create_dir_all 必然失败。
+    fixture.write("blocked", "not a directory\n");
+    let patch = wrapped("*** Update File: src.txt\n*** Move to: blocked/dest.txt\n@@\n-old\n+new");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let ToolExecutionResult::Failed { changes, .. } = &result else {
+        panic!("expected failure, got {result:?}");
+    };
+    assert_eq!(changes.len(), 1, "已写盘的源文件必须出现在失败变更里");
+    assert_eq!(changes[0].kind, FileChangeKind::Updated);
+    assert!(changes[0].diff.is_some(), "已写盘的源文件必须带差异");
+    assert_eq!(fixture.read("src.txt"), "new\n");
+    assert!(!fixture.exists("blocked/dest.txt"));
+}
+
+/// 多文件补丁中途失败：失败前已提交的文件仍带 diff，未执行文件不出现。
+#[test]
+fn partial_failure_keeps_committed_diffs() {
+    let fixture = Fixture::new("edit-partial-diff");
+    fixture.write("first.txt", "one\n");
+    fixture.write("second.txt", "keep\n");
+    let patch = wrapped(
+        "*** Update File: first.txt\n@@\n-one\n+ONE\n\
+         *** Update File: second.txt\n@@\n-not-there\n+x",
+    );
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let ToolExecutionResult::Failed { changes, .. } = &result else {
+        panic!("expected failure, got {result:?}");
+    };
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, FileChangeKind::Updated);
+    assert!(changes[0].diff.is_some());
+}
+
+/// 删除不可解码文件：仍能删除，差异标记为不可用且计数未知。
+#[test]
+fn delete_binary_file_keeps_deletion_and_marks_diff_unavailable() {
+    let fixture = Fixture::new("edit-delete-binary");
+    fixture.write_bytes("blob.bin", &[0u8, 1, 2, 3]);
+    let patch = wrapped("*** Delete File: blob.bin");
+    let result = execute(&fixture.ctx(), "edit", &edit_args(&patch));
+    let changes = expect_changes(&result);
+    assert!(!fixture.exists("blob.bin"));
+    let diff = changes[0].diff.as_ref().expect("删除也带 diff");
+    assert!(!diff.counts_known());
+    assert!(diff.hunks().is_empty());
+    // 汇总摘要必须显示未知而不是 0。
+    let summary = super::super::to_summary(&result);
+    assert!(!summary.counts_known);
+    assert!(summary.added.is_none() && summary.removed.is_none());
+}

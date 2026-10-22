@@ -242,6 +242,9 @@ fn map_summary(summary: &crate::chat::tools::ToolSummary) -> ToolSummary {
         total_lines: summary.total_lines,
         truncated: summary.truncated,
         partial: summary.partial,
+        counts_known: summary.counts_known,
+        simplified: summary.simplified,
+        omitted_files: summary.omitted_files,
     }
 }
 
@@ -405,6 +408,7 @@ fn live_and_reloaded_summaries_are_identical() {
                     added: 12,
                     removed: 4,
                     kind: FileChangeKind::Updated,
+                    diff: None,
                 }],
                 partial: false,
             },
@@ -419,12 +423,14 @@ fn live_and_reloaded_summaries_are_identical() {
                         added: 1,
                         removed: 1,
                         kind: FileChangeKind::Updated,
+                        diff: None,
                     },
                     FileChange {
                         path: std::path::PathBuf::from("b.rs"),
                         added: 2,
                         removed: 2,
                         kind: FileChangeKind::Updated,
+                        diff: None,
                     },
                 ],
                 partial: false,
@@ -439,6 +445,7 @@ fn live_and_reloaded_summaries_are_identical() {
                     added: 0,
                     removed: 0,
                     kind: FileChangeKind::Updated,
+                    diff: None,
                 }],
                 partial: true,
             },
@@ -451,6 +458,7 @@ fn live_and_reloaded_summaries_are_identical() {
                 created: true,
                 added: 18,
                 removed: 0,
+                diff: None,
             },
         ),
     ];

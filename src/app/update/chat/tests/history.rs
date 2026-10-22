@@ -131,6 +131,71 @@ fn hover_lx_jump_bottom_tracks_state() {
 }
 
 #[test]
+fn toggle_lx_card_flips_the_pressed_block() {
+    // 卡片内容就是点击面：点折叠内容展开、点展开内容收起，一次点击只切一次状态。
+    let mut state = AppState::demo();
+    let pane = state.active_tab().layout.focus();
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.view = crate::app::state::PaneView::Lx;
+    target.lx.chat.messages = vec![ChatMessageView {
+        id: "m0".into(),
+        role: "assistant".into(),
+        status: "complete".into(),
+        turn_index: 0,
+        steps: vec![AssistantStepView::Part {
+            position: 0,
+            part: ChatPartView {
+                kind: PartKind::Reasoning,
+                content: "想一想".into(),
+                provider_metadata_json: None,
+                started_at_ms: None,
+                ended_at_ms: None,
+                completed_at_ms: None,
+            },
+        }],
+        model_label: None,
+        error_code: None,
+        input_tokens: None,
+        output_tokens: None,
+        cache_read_tokens: None,
+        duration_ms: None,
+    }];
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .reasoning_expanded(0, 0),
+        "默认折叠"
+    );
+    let card = CardTarget::Thinking {
+        message_index: 0,
+        step_index: 0,
+    };
+    assert!(toggle_lx_card(&mut state, pane, card.clone()), "切换成功");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .reasoning_expanded(0, 0),
+        "第一次点击展开"
+    );
+    assert!(toggle_lx_card(&mut state, pane, card), "再次切换");
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .reasoning_expanded(0, 0),
+        "第二次点击收起"
+    );
+}
+
+#[test]
 fn advance_lx_loading_only_when_streaming() {
     let mut state = AppState::demo();
     lx_with_messages(&mut state, 1);

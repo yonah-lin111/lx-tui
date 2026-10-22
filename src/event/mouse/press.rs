@@ -163,7 +163,7 @@ pub(crate) fn handle_mouse_down_left(
             update::show_toast(
                 state,
                 Toast::new(
-                    ToastKind::Error,
+                    ToastKind::Danger,
                     ui::text::TOAST_SETTINGS_UNAVAILABLE,
                     None,
                     now,
@@ -449,19 +449,8 @@ pub(crate) fn handle_mouse_down_left(
                                 update::jump_lx_history_to_prompt(state, pane, row);
                             }
                         }
-                        ui::main_content::lx::LxChatHit::Thinking(message, part) => {
-                            update::toggle_thinking_at(state, pane, message, part);
-                        }
                         ui::main_content::lx::LxChatHit::JumpBottom => {
                             update::jump_lx_history_bottom(state, pane);
-                        }
-                        ui::main_content::lx::LxChatHit::ToolOpen(session_id) => {
-                            update::open_task_page_at(state, pane, session_id);
-                        }
-                        ui::main_content::lx::LxChatHit::CodeCopy(text) => {
-                            // 复制代码块正文（不含围栏与语言行）；toast 锚在**本窗格**
-                            // （main content）而不是 prompt——复制发生在哪儿，反馈就在哪儿。
-                            crate::event::mouse::hit::copy_with_toast_at(state, &text, Some(pane));
                         }
                     }
                     update::clear_lx_selection(state);
@@ -508,7 +497,22 @@ pub(crate) fn handle_mouse_down_left(
                 ) {
                     // 历史滚动条按下：已处理。
                 } else {
+                    // 展开卡片正文：既开始选区（允许拖拽复制整段），又记录「可能是一次
+                    // 点击」。松开时若没有拖出范围，就当作点击折叠该块。
+                    //
+                    // **顺序不能反**：`begin_lx_selection` 内部先 `clear_selection`，
+                    // 而 `clear_selection` 会把 `lx_card_press` 置空。先记后清等于没记，
+                    // 于是每次松开都被当成拖拽、卡片永远展不开（真实 bug）。
+                    let target = state.pane_anywhere(pane).and_then(|target| {
+                        ui::main_content::lx::card_target_at(
+                            inner,
+                            &target.lx,
+                            mouse.column,
+                            mouse.row,
+                        )
+                    });
                     update::begin_lx_selection(state, pane, row, col);
+                    state.lx_card_press = target.map(|card| (pane, card));
                 }
                 *dirty = true;
             } else if handle_terminal_scrollbar_press(state, pane, inner, mouse.column, mouse.row) {

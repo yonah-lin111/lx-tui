@@ -330,13 +330,15 @@ where
     if let Some(block) = current.take() {
         blocks.push(block);
     }
-    if blocks.is_empty() {
+    // 纯移动（只有 `*** Move to:`、没有 `@@` 块）是合法操作：内容不变也要 rename。
+    let no_change_marker = move_to.is_none();
+    if blocks.is_empty() && no_change_marker {
         return Err(invalid(format!(
             "'*** Update File: {}' has no changes",
             path.display()
         )));
     }
-    if blocks.iter().all(|block| block.lines.is_empty()) {
+    if no_change_marker && blocks.iter().all(|block| block.lines.is_empty()) {
         return Err(invalid(format!(
             "'*** Update File: {}' has no changes",
             path.display()

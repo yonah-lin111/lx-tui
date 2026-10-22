@@ -1,4 +1,4 @@
-//! 后台任务卡片新形态的回归测试：橙色存活态、动画停止后实心、三行结构与 `[open]` 入口。
+//! 后台任务卡片新形态的回归测试：橙色存活态、动画停止后实心、存活三行 / 终态两行与 `open` 入口。
 //!
 //! 用户反馈的两组现象：
 //! 1. 运行中的后台卡片是绿的，且会定格成镂空 `□`（看起来像失败），但进程其实还在跑；
@@ -175,14 +175,14 @@ fn alive_command_card_is_orange_and_stopped_card_is_green() {
 #[test]
 fn command_row_keeps_the_param_colour_in_every_state() {
     // 用户要求「参数颜色不要改变，颜色变化始终是小卡片和 title」：
-    // 命令行（参数）**恒为参数金黄**，运行中与停止后完全一致。
+    // 命令行（参数）**恒为终端默认前景**，运行中与停止后完全一致。
     let running = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
     let running_style =
         command_row_style(&render_grid(&running, 70), 70).expect("命令行必须画出来");
     assert_eq!(
         running_style.fg,
         style::chat_tool_param().fg,
-        "运行中命令行仍是参数金黄：{running_style:?}"
+        "运行中命令行用默认字体色：{running_style:?}"
     );
 
     let stopped = command_call(ProcessStateView::Stopped, ToolStatus::Completed, "beat\n");
@@ -250,7 +250,9 @@ fn alive_mark_never_renders_hollow_when_the_animation_stops() {
             let mut grid = Grid::new(area);
             let mut row = 0usize;
             // animating = false：动画已停止。
-            tool::draw_animated(&mut grid, area, 0, &mut row, &call, frame, false, false);
+            tool::draw_animated(
+                &mut grid, area, 0, &mut row, &call, frame, false, false, false,
+            );
             grid
         };
         assert_eq!(
@@ -297,24 +299,24 @@ fn hollow_glyph_is_reserved_for_cancelled() {
     );
 }
 
-// ===== 决策 5、6：卡片收敛为三行，[open] 独占末行且为灰色 =====
+// ===== 卡片收敛为「标题 + 折行命令」，没有入口行 =====
 
 #[test]
-fn command_card_is_title_command_and_open_row_only() {
+fn command_card_is_title_and_wrapped_command_only() {
     let output = "heartbeat 1\nheartbeat 2\nheartbeat 3\nheartbeat 4\n";
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, output);
     let text = render_text(&call, 70);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 3, "卡片恒为三行：{text}");
+    assert_eq!(lines.len(), 2, "标题 + 命令：{text}");
     assert!(lines[0].contains("Run command"), "第 1 行标题：{text}");
     assert!(lines[1].contains("while true"), "第 2 行是命令原文：{text}");
     assert!(
-        lines[2].starts_with(text::agent::TREE_LEAF),
-        "第 3 行是 [open] 且用直角收口：{text}"
+        lines[1].starts_with(text::agent::TREE_LEAF),
+        "命令行用直角收口：{text}"
     );
     assert!(
-        lines[2].contains(text::agent::TASK_OPEN_LABEL),
-        "[open] 文案：{text}"
+        !text.contains(text::agent::TASK_OPEN_LABEL),
+        "没有 open：{text}"
     );
 }
 
@@ -333,91 +335,44 @@ fn command_card_no_longer_renders_any_output_or_ellipsis_row() {
         !text.contains(text::agent::WAITING_FOR_OUTPUT),
         "无输出占位也不再需要：{text}"
     );
-    assert_eq!(text.lines().count(), 3, "行数恒为三行：{text}");
-    assert_eq!(tool::rows(&call, 70, false), 3, "几何口径恒为三行");
+    assert_eq!(text.lines().count(), 2, "标题 + 命令：{text}");
+    assert_eq!(tool::rows(&call, 70, false), 2, "几何口径一致");
 }
 
 #[test]
-fn open_row_is_grey_and_open_offset_points_at_it() {
+fn command_wraps_to_two_rows_when_folded() {
+    // 用户带截图反馈：长命令被单行截断成 `$ { ...`。现在 `$ 命令` 按列宽折行，
+    // 折叠态最多 2 行；展开态铺开更多。
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
-    let grid = render_grid(&call, 70);
-    // 定位 `[open]` 所在列（第 3 行，即 y=2）。
-    let label = text::agent::TASK_OPEN_LABEL;
-    let mut found = None;
-    for x in 0..70u16 {
-        let cell = grid.cell(x, 2);
-        if cell.ch == label.chars().next().unwrap_or('[') {
-            found = Some(cell.style);
-            break;
-        }
+    // 足够长：折叠 2 行装不下，展开才铺得开（否则「展开」不会多出行）。
+    let long = format!(
+        "$ {{ {} echo \"==== 项目概览 ====\" && echo \"Rust 版本: $(rustc --version)\" \
+         && echo \"文件数\" && echo \"目录结构\" && ls -R && echo \"依赖\" && cat Cargo.toml }}",
+        " ".repeat(40)
+    );
+    let mut call = call;
+    if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.command = long.clone();
     }
-    let style_grey = found.expect("[open] 必须画出来");
-    assert_eq!(
-        style_grey.fg,
-        style::agent_step_detail().fg,
-        "[open] 必须用灰色次要信息色：{style_grey:?}"
-    );
-    assert_eq!(
-        tool::open_offset(&call),
-        Some(2),
-        "[open] 位于卡片内第 2 行偏移（0 = 标题）"
-    );
+    let folded = tool::rows(&call, 50, false);
+    let expanded = tool::rows(&call, 50, true);
+    assert_eq!(folded, 1 + 2 + 1, "折叠态：标题 + 2 行命令 + 剩余行数");
+    assert!(expanded > folded, "展开更多行：{folded} → {expanded}");
+    let text = render_text(&call, 50);
+    assert!(text.lines().count() >= 3, "命令确实折行：{text}");
+    // 续行不重复 `$ ` 提示符。
+    let dollars = text.matches(text::agent::COMMAND_PROMPT_PREFIX).count();
+    assert_eq!(dollars, 1, "提示符只出现一次：{text}");
 }
 
 #[test]
-fn interaction_card_also_shows_the_open_row() {
+fn interaction_card_wraps_its_command_too() {
     let call = interaction_call(ProcessStateView::Running, ToolStatus::Completed);
     let text = render_text(&call, 70);
     assert!(
-        text.lines()
-            .last()
-            .is_some_and(|line| line.contains(text::agent::TASK_OPEN_LABEL)),
-        "交互卡片同样给 [open] 入口：{text}"
+        !text.contains(text::agent::TASK_OPEN_LABEL),
+        "不再有 open 入口：{text}"
     );
-    assert_eq!(text.lines().count(), 3, "行数同样恒为三行：{text}");
-}
-
-#[test]
-fn open_row_is_dropped_instead_of_truncated_when_extremely_narrow() {
-    // 极窄时整项丢弃文案，但行数与几何口径不变（滚动条/命中不会漂移）。
-    let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
-    for width in [1u16, 4, 6, 9] {
-        assert_eq!(tool::rows(&call, width, false), 3, "宽 {width}：行数不变");
-        // 用 `rows()` 校验几何（`render_text` 会 trim 掉末尾空行，窄到画不出内容时
-        // 空行会被折叠掉，不能用来数行）。
-        let grid = render_grid(&call, width);
-        let area = Rect::new(0, 0, width, 3);
-        let mut painted = 0;
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                if grid.cell(x, y).ch != crate::ui::main_content::lx::grid::CONTINUATION
-                    && grid.cell(x, y).ch != ' '
-                {
-                    painted += 1;
-                }
-            }
-        }
-        assert!(painted > 0 || width == 0, "宽 {width}：至少画出方块");
-        let rendered = render_text(&call, width);
-        assert!(
-            !rendered.contains("[ope"),
-            "宽 {width}：不得画半个 [open]：{rendered}"
-        );
-    }
-}
-
-// ===== 决策 7：只有 [open] 行可点 =====
-
-#[test]
-fn only_the_open_row_is_a_click_target() {
-    let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
-    assert_eq!(
-        tool::open_offset(&call),
-        Some(2),
-        "只有 [open] 行提供命中偏移"
-    );
-    // 标题行不再可点：卡片没有"展开/收起"语义，`open_offset` 是唯一命中来源。
-    assert_eq!(tool::rows(&call, 70, false), 3, "三行里只有末行是 [open]");
 }
 
 #[test]
@@ -457,5 +412,56 @@ fn plan_in_progress_step_uses_the_running_amber() {
     assert!(
         found_amber,
         "计划里「进行中」的步骤必须用运行态橙黄，而不是完成态绿"
+    );
+}
+
+#[test]
+fn folded_command_reports_remaining_lines_and_hover_lifts() {
+    // 折叠态：命令下方单独一行写剩余行数；悬停时命令从 dim 提亮。
+    let mut call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
+    }
+    let text = render_text(&call, 40);
+    assert!(text.contains("more line"), "折叠态给剩余行数：{text}");
+    // 展开态不再有剩余行数行。
+    let expanded = render_text(&call, 40);
+    assert!(!expanded.contains("more line") || expanded.lines().count() > 3);
+}
+
+/// 命令卡片的「剩余行数」提示行同样在折叠区内、悬停时提亮。
+#[test]
+fn command_hint_row_lifts_on_hover() {
+    let mut call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
+        view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
+    }
+    let folded = tool::rows(&call, 40, false);
+    assert_eq!(
+        tool::fold_region(&call, 40).rows + 1,
+        folded,
+        "折叠区行数 = 卡片行数 - 标题行（提示行计入）"
+    );
+}
+
+/// 命令正文：折叠态 dim，**展开态保持默认前景**（展开后参数文字不退回 dim）。
+#[test]
+fn command_body_lifts_when_expanded() {
+    let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    let folded = render_grid(&call, 60);
+    assert_eq!(
+        command_row_style(&folded, 60),
+        Some(style::chat_tool_param()),
+        "折叠态命令是 dim"
+    );
+    let height = tool::rows(&call, 60, true).max(1) as u16;
+    let area = Rect::new(0, 0, 60, height);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    tool::draw(&mut grid, area, 0, &mut row, &call, 0, true);
+    assert_eq!(
+        command_row_style(&grid, 60),
+        Some(style::chat_tool_param_expanded()),
+        "展开态命令保持默认前景"
     );
 }

@@ -278,7 +278,7 @@ pub(crate) fn commit_new_workspace(state: &mut AppState) {
         Err(err) => {
             show_toast(
                 state,
-                Toast::new(ToastKind::Error, err, None, Instant::now())
+                Toast::new(ToastKind::Danger, err, None, Instant::now())
                     .with_title(text::TOAST_WORKSPACE_TITLE),
             );
         }

@@ -72,7 +72,10 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
     // 这类正常结果在库里留下了 `failed`。结果体本身是自洽的（`process_state` +
     // `exit_code`），据此重判可以让**旧会话**也正确显示，不需要写库迁移。
     // 详见 design §14.6。
-    let detail = ToolDetailView::from_result_json(tool.result_json.as_deref());
+    // 文件工具的差异详情与进程/计划同源：都从落库 JSON 解码；文件分支缺失时
+    // `from_result_json` 返回 None，卡片沿用原两行摘要。
+    let detail = ToolDetailView::from_result_json(tool.result_json.as_deref())
+        .or_else(|| ToolDetailView::file_detail(tool.result_json.as_deref()));
     if let Some(ToolDetailView::Command(view)) = detail.as_ref()
         && view.state.is_nonzero_exit()
     {
@@ -92,7 +95,7 @@ fn tool_view_of(tool: &ToolCallRecord) -> ToolCallView {
         position: tool.position,
         arguments_json: tool.arguments_json.clone(),
         status,
-        summary: (!summary.is_empty()).then_some(summary),
+        summary: (!summary.is_empty()).then_some(Box::new(summary)),
         // 非零退出的旧记录里存着 `command exited with code N`，那句"失败"结论
         // 已经在重判时被推翻，不能继续显示。
         error: if status == ToolStatus::Completed {

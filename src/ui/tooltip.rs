@@ -128,22 +128,6 @@ fn targets(
         if let Some(area) = main_content::toggle_button(*rect) {
             targets.push((TooltipTarget::PaneToggle(*pane), area));
         }
-        // lx 历史里代码块头部的复制按钮：贴在窗格内容区，按滚动窗口换算屏幕坐标。
-        if let Some(target) = state.pane_anywhere(*pane)
-            && target.view == crate::app::state::PaneView::Lx
-        {
-            let inner = layout::pane_inner_rect(*rect);
-            for button in main_content::lx::code_copy_hits(inner, &target.lx) {
-                targets.push((
-                    TooltipTarget::LxCodeCopy {
-                        message: button.message,
-                        step: button.step,
-                        block: button.block,
-                    },
-                    button.rect,
-                ));
-            }
-        }
     }
     if let Some(area) = sidebar::add_workspace_button(view) {
         targets.push((TooltipTarget::AddWorkspace, area));

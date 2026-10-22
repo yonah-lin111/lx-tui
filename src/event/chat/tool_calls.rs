@@ -184,6 +184,8 @@ pub(crate) fn finish_tool(
         return false;
     };
     let result = db_result_of(&outcome);
+    // 文件详情与实时摘要都来自这份**即将落库**的 JSON（若落库前的序列化失败则为 None）。
+    let settled_result_json = result.result_json.clone();
     let started = std::time::Instant::now();
     // ① 真实结果原子落库（DB 是唯一真相）。
     match persistence.finish_tool_call(&workspace, ticket, &result) {
@@ -199,9 +201,13 @@ pub(crate) fn finish_tool(
                 result.result_json.clone(),
                 error,
             );
-            // ②b 类型化详情（进程/计划）：与结果体同源，渲染层不解析 JSON。
-            changed |=
-                update::settle_tool_detail(state, &key, &ticket.call_id, detail_of(&outcome));
+            // ②b 类型化详情（进程/计划/文件）：与落库结果体同源，渲染层不解析 JSON。
+            changed |= update::settle_tool_detail(
+                state,
+                &key,
+                &ticket.call_id,
+                detail_of(&outcome, settled_result_json.as_deref()),
+            );
             // ②b1 进程工具结算后按**运行实例的真实状态**再校正一次。
             //
             // 结果体里的 `process_state` 是"这次调用读到的那一刻"，而 `write_stdin`
@@ -291,8 +297,14 @@ fn register_process_record(
     );
 }
 
-/// 工具执行结局 → 类型化详情视图（进程 / 计划；文件工具为 None）。
-fn detail_of(outcome: &ToolOutcome) -> Option<crate::app::state::ToolDetailView> {
+/// 工具执行结局 → 类型化详情视图（进程 / 计划 / 文件差异）。
+///
+/// 文件详情必须从**刚落库的 result_json** 解码（不是原始执行结果）：实时与历史
+/// 因此读的是同一份经过预算裁切的正文。
+fn detail_of(
+    outcome: &ToolOutcome,
+    result_json: Option<&str>,
+) -> Option<crate::app::state::ToolDetailView> {
     let ToolOutcome::Executed(execution) = outcome else {
         return None;
     };
@@ -303,6 +315,11 @@ fn detail_of(outcome: &ToolOutcome) -> Option<crate::app::state::ToolDetailView>
         ToolExecutionResult::Plan(snapshot) => Some(crate::app::state::ToolDetailView::Plan(
             crate::app::state::PlanSnapshotView::from_snapshot(snapshot),
         )),
+        ToolExecutionResult::Edit { .. }
+        | ToolExecutionResult::Write { .. }
+        | ToolExecutionResult::Failed { .. } => {
+            crate::app::state::ToolDetailView::file_detail(result_json)
+        }
         _ => None,
     }
 }
@@ -367,6 +384,9 @@ pub(crate) fn view_summary(
         total_lines: summary.total_lines,
         truncated: summary.truncated,
         partial: summary.partial,
+        counts_known: summary.counts_known,
+        simplified: summary.simplified,
+        omitted_files: summary.omitted_files,
     }
 }
 

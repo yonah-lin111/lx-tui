@@ -195,3 +195,101 @@ fn unicode_content_round_trips() {
     assert_eq!(added, 2);
     assert_eq!(fixture.read("u.txt"), content);
 }
+
+// ===== 差异正文 =====
+
+/// 新建文件：全绿新增，行号从 1 开始。
+#[test]
+fn write_new_file_reports_diff_base() {
+    let fixture = Fixture::new("write-diff-new");
+    let result = execute(
+        &fixture.ctx(),
+        "write",
+        r#"{"path":"new.txt","content":"one\ntwo\n"}"#,
+    );
+    let super::super::ToolExecutionResult::Write { diff, .. } = &result else {
+        panic!("expected write result, got {result:?}");
+    };
+    let diff = diff.as_ref().expect("write 必须带 diff");
+    assert!(diff.counts_known());
+    let added: Vec<Option<usize>> = diff
+        .hunks()
+        .iter()
+        .flat_map(|hunk| hunk.lines.iter())
+        .filter_map(|line| {
+            (line.kind == super::super::DiffLineKind::Added).then_some(line.new_line)
+        })
+        .collect();
+    assert_eq!(added, vec![Some(1), Some(2)]);
+}
+
+/// 覆盖：差异来自真实 before/after，不只是计数。
+#[test]
+fn write_overwrite_reports_real_diff() {
+    let fixture = Fixture::new("write-diff-overwrite");
+    fixture.write("a.txt", "keep\ndrop\n");
+    let result = execute(
+        &fixture.ctx(),
+        "write",
+        r#"{"path":"a.txt","content":"keep\nnew\n"}"#,
+    );
+    let super::super::ToolExecutionResult::Write {
+        diff,
+        added,
+        removed,
+        ..
+    } = &result
+    else {
+        panic!("expected write result, got {result:?}");
+    };
+    assert_eq!((*added, *removed), (1, 1));
+    let diff = diff.as_ref().expect("覆盖必须带 diff");
+    let body: Vec<&super::super::DiffLine> = diff
+        .hunks()
+        .iter()
+        .flat_map(|hunk| hunk.lines.iter())
+        .collect();
+    assert!(body.iter().any(|line| line.text == "drop"));
+    assert!(body.iter().any(|line| line.text == "new"));
+}
+
+/// 相同内容覆盖：没有差异正文，但仍是成功写入。
+#[test]
+fn write_same_content_has_no_diff_body() {
+    let fixture = Fixture::new("write-diff-same");
+    fixture.write("a.txt", "same\n");
+    let result = execute(
+        &fixture.ctx(),
+        "write",
+        r#"{"path":"a.txt","content":"same\n"}"#,
+    );
+    let super::super::ToolExecutionResult::Write {
+        diff,
+        added,
+        removed,
+        ..
+    } = &result
+    else {
+        panic!("expected write result, got {result:?}");
+    };
+    assert_eq!((*added, *removed), (0, 0));
+    assert!(diff.as_ref().is_some_and(|diff| diff.hunks().is_empty()));
+}
+
+/// 只改 EOF 换行：必须显示差异（不是「无变化」）。
+#[test]
+fn write_eof_newline_change_is_visible() {
+    let fixture = Fixture::new("write-diff-eof");
+    fixture.write("a.txt", "hello");
+    let result = execute(
+        &fixture.ctx(),
+        "write",
+        r#"{"path":"a.txt","content":"hello\n"}"#,
+    );
+    let super::super::ToolExecutionResult::Write { diff, .. } = &result else {
+        panic!("expected write result, got {result:?}");
+    };
+    let diff = diff.as_ref().expect("必须带 diff");
+    assert!(!diff.hunks().is_empty(), "EOF 换行变化必须可见");
+    assert_eq!(fixture.read("a.txt"), "hello\n");
+}
