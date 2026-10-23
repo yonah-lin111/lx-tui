@@ -1,4 +1,4 @@
-//! 输入框上方那一行：loading（含 token 计数）/ 「回到底部」控件。
+//! 输入框上方那一行：动态任务/阶段文案（含 token 计数）/ 「回到底部」控件。
 //!
 //! 纯渲染 + 纯几何：布局、绘制与命中共享同一矩形口径；只读 `Lx`、只写 lx 页网格。
 //! 该行贴在输入框上沿、与输入框同宽；没有内容时整行不占位。
@@ -7,16 +7,23 @@
 //! 视线在输入框）。提示类反馈已全部改走 main content 的 toast（见
 //! `app::update::chat::show_lx_hint`），这一行不再承载临时提示。
 //!
-//! **loading**：`Working... (3s · ↓320 tok)`（只显示输出方向；耗时最小单位是秒）。`Working...` 带**从左到右的
-//! 扫描高亮**：窗口外的字符用次要色（dim），3 字符宽的窗口内用当前帧色（按 Native
-//! 标签的 4 档渐变 `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），
-//! 走出末尾后从左侧重新进入。括号里的统计**紧贴文案右侧**（用户要求「在 working 的
-//! 组右侧」，不是贴栏右缘），静态 dim、不参与扫描；宽度不够时整段先丢。
+//! **loading 文案**：由 [`activity_label`] 只读派生——会话计划有 `in_progress` 步骤时
+//! 显示该步骤原文，否则按当前 assistant 的真实阶段显示 `Thinking...` /
+//! `Running tools...` / `Working...`。文案带**从左到右的扫描高亮**：窗口外的字符用
+//! 次要色（dim），3 字符宽的窗口内用当前帧色（按 Native 标签的 4 档渐变
+//! `218 → 182 → 153 → 117` 循环，每 `LOADING_FRAME_INTERVAL` 换一档），走出末尾后
+//! 从左侧重新进入。
+//!
+//! **统计优先**：括号里的统计先占位（`(3s · ↓320 tok)`，静态 dim、不参与扫描），
+//! 文字只用剩余宽度并在尾部加 `…`；因此长 todo 永远不会挤掉耗时/token。统计自身
+//! 都放不下时（W<S）文字整体隐藏、统计按列裁切可见前缀，绝不越界或换行。
 
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::state::Lx;
+use crate::app::state::{
+    AssistantStepView, ChatMessageView, Lx, PlanStepView, RequestState, ToolStatus,
+};
 use crate::ui::{style, text};
 
 use super::Grid;
@@ -82,6 +89,103 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
         .then(|| Rect::new(bar.right() - RIGHT_PAD - arrow, bar.y, arrow, 1))
 }
 
+/// 输入框上方那一行的展示文案（只读派生，不缓存）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActivityLabel<'a> {
+    /// 当前计划里第一个 `in_progress` 步骤的（已净化的）原文。
+    Todo(&'a str),
+    /// 当前 assistant 最后一步是开放思考块。
+    Thinking,
+    /// 当前 assistant 有 Pending/Running 工具。
+    RunningTools,
+    /// 阶段不明确或尚未开始。
+    Working,
+}
+
+impl ActivityLabel<'_> {
+    /// 实际显示的文字；英文短语来自 `ui::text::chat`，不在此硬编码。
+    fn text(&self) -> &str {
+        match self {
+            Self::Todo(todo) => todo,
+            Self::Thinking => text::chat::THINKING_LABEL,
+            Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL,
+            Self::Working => text::chat::LOADING_LABEL,
+        }
+    }
+}
+
+/// 只读派生当前要显示的任务/阶段文案。
+///
+/// 优先级：会话计划里的 `in_progress` 步骤 > 当前 assistant 的 Pending/Running 工具 >
+/// 当前 assistant 最后一步的开放思考块 > `Working...`。当前 assistant 严格按
+/// [`RequestState::Streaming`] 的 `assistant_id` 定位——本地命令记录会追加在流式
+/// assistant 之后，不能用 `messages.last()`。`Committing`/`Finishing` 没有当前消息，
+/// 因此不会读出上一轮的思考或工具阶段。
+fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'a> {
+    if let Some(todo) = plan_text {
+        return ActivityLabel::Todo(todo);
+    }
+    let Some(message) = current_streaming_message(&lx.chat) else {
+        return ActivityLabel::Working;
+    };
+    if message
+        .tools()
+        .any(|call| matches!(call.status, ToolStatus::Pending | ToolStatus::Running))
+    {
+        return ActivityLabel::RunningTools;
+    }
+    match message.steps.last() {
+        Some(AssistantStepView::Part { part, .. }) if part.reasoning_open() => {
+            ActivityLabel::Thinking
+        }
+        _ => ActivityLabel::Working,
+    }
+}
+
+/// 当前仍在流转的 assistant 消息；仅在 `Streaming` 时按 `assistant_id` 定位。
+fn current_streaming_message(chat: &crate::app::state::LxChat) -> Option<&ChatMessageView> {
+    let RequestState::Streaming { assistant_id, .. } = &chat.request else {
+        return None;
+    };
+    chat.messages
+        .iter()
+        .find(|message| message.id == *assistant_id && message.role == "assistant")
+}
+
+/// 计划里第一个 `in_progress` 步骤的原文（会话级快照，跨轮保留）。
+fn plan_todo(plan: Option<&crate::app::state::PlanSnapshotView>) -> Option<&str> {
+    plan?
+        .steps
+        .iter()
+        .find(|(_, status)| *status == PlanStepView::InProgress)
+        .map(|(step, _)| step.as_str())
+}
+
+/// 统计优先的宽度预算（设计 §6.2/§6.3/§6.4）：返回**文字可用列数**。
+///
+/// - 有统计时先预留完整统计宽度 S，文字只用 `W - S - G`；
+/// - 文字预算为 0 时整段不画，也不留多余间隔（统计从起点开始）；
+/// - 统计自身都放不下（W<S）时文字让位，统计按剩余列裁切可见前缀；
+/// - 没有统计时全部可用宽度归文字。
+/// - 唯一例外是 Esc 待命：最短停止提示与完整统计不能共存时停止反馈优先，
+///   文字拿到全部可用宽度，统计在剩余列安全裁切（普通 todo 不走这条路径）。
+fn title_budget(available: u16, stats_width: Option<u16>, stop_armed: bool) -> u16 {
+    let Some(stats_w) = stats_width else {
+        return available;
+    };
+    let budget = available.saturating_sub(stats_w).saturating_sub(STATS_GAP);
+    // 唯一例外（设计 §6.4）：Esc 待命时最短停止提示与完整统计不能共存，停止反馈优先；
+    // 统计由调用方按文字尾部的剩余列安全裁切。普通 todo 不走这条路径。
+    if stop_armed && budget < stop_shortest_width() {
+        return available;
+    }
+    if available < stats_w {
+        // 极窄：连统计自身都放不下，文字先完全隐藏。
+        return 0;
+    }
+    budget
+}
+
 /// 绘制聊天栏：loading（含 token 计数）> 回到底部。
 pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     let Some(bar) = bar else {
@@ -90,7 +194,6 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     if bar.width == 0 {
         return;
     }
-    let right = bar.right();
     // 回到底部控件（仅未跟随底部时）。
     if !lx.chat.follow_bottom
         && let Some(button) = jump_rect(bar)
@@ -119,71 +222,97 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     if !lx.chat.status.streaming {
         return;
     }
-    // 括号统计紧贴 `Working...` 右侧（用户要求「在 working 的组右侧」）：
-    // 静态 dim、不参与扫描——它回答「这轮跑了多久、大概用了多少 token」，
-    // 与左侧的进行中动画是两种信息，不能一起闪。宽度不够时整段先丢；
-    // Esc 待命时不画——那一刻用户要读的是「再按一次停止」。
-    let stop_armed = lx.chat.stop_armed_at.is_some();
-    let stats = if stop_armed {
-        None
-    } else {
-        text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens())
-    };
+    // 计划原文先净化成单行副本（模型给的换行/Tab/控制字符不能进终端）。
+    let todo = plan_todo(lx.chat.plan.as_ref()).map(text::chat::single_line_label);
+    let label = activity_label(lx, todo.as_deref());
+    // 统计静态 dim、不参与扫描：它回答「这轮跑了多久、大概用了多少 token」，
+    // 与左侧的进行中动画是两种信息，不能一起闪。Esc 待命时同样保留（空间够时），
+    // 极窄才让停止反馈优先。
+    let stats =
+        text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens());
     draw_loading(
         grid,
-        bar.y,
-        bar.x,
-        right,
+        bar,
         lx.chat.loading_frame,
-        stop_armed,
+        lx.chat.stop_armed_at.is_some(),
+        label.text(),
         stats.as_deref(),
     );
 }
 
-/// 绘制 `Working...`（无方块、无转轮）：只画带扫描高亮的文字。
-#[allow(clippy::too_many_arguments)]
+/// 画一行 loading：扫描高亮文字 + 静态统计，各自在自己的预算内绘制。
+///
+/// 顺序不可交换：先按统计优先算出文字预算并绘制文字，统计再紧贴**实际文字尾部**
+/// 落位。这样长 todo 只会自己截断，不可能挤掉统计；也不会把短文案右对齐。
 fn draw_loading(
     grid: &mut Grid,
-    y: u16,
-    bar_x: u16,
-    right: u16,
+    bar: Rect,
     loading_frame: usize,
     stop_armed: bool,
+    activity: &str,
     stats: Option<&str>,
 ) {
-    // 右侧留 1 列空档避免贴边。
-    let limit = right.saturating_sub(1);
-    let x = bar_x.saturating_add(1);
+    // 左右各留 1 列空档（既有口径：左侧起点、右侧不贴边）。
+    let x = bar.x.saturating_add(1);
+    let limit = bar.right().saturating_sub(1);
     if x >= limit {
         return;
     }
-    // Esc 待命：提示「再按一次停止」（取第一条放得下的短语，对齐 opencode）；
+    let available = limit.saturating_sub(x);
+    let stats_width = stats.map(|stats| u16::try_from(stats.width()).unwrap_or(u16::MAX));
+    let budget = title_budget(available, stats_width, stop_armed);
+    // Esc 待命：提示「再按一次停止」（按文字预算取第一条放得下的短语，对齐 opencode）；
     // 待命提示同样走扫描高亮（它也是「进行中」的提示，观感保持一致）。
-    let label = if stop_armed {
-        stop_phrase(limit.saturating_sub(x))
+    let text = if stop_armed {
+        stop_phrase(budget)
     } else {
-        text::chat::LOADING_LABEL
+        activity
     };
-    let after_label = draw_scanned_label(grid, x, y, limit, label, loading_frame);
-    // 统计段紧跟其后：放得下才画，放不下整段丢（不在末尾留半截括号）。
+    // 文字天然短于预算时不补空格：统计紧贴实际尾部（设计 §6.2 第 4 条）。
+    let text_end = if budget > 0 {
+        draw_scanned_label(
+            grid,
+            x,
+            bar.y,
+            x.saturating_add(budget),
+            text,
+            loading_frame,
+        )
+    } else {
+        x
+    };
     let Some(stats) = stats else {
         return;
     };
-    let stats_x = after_label.saturating_add(STATS_GAP);
-    let stats_w = u16::try_from(stats.width()).unwrap_or(u16::MAX);
-    if stats_x.saturating_add(stats_w) > limit {
+    // 文字被整体隐藏时统计从起点开始，不留无意义的前导间隔。
+    let stats_x = if text_end > x {
+        text_end.saturating_add(STATS_GAP)
+    } else {
+        x
+    };
+    if stats_x >= limit {
         return;
     }
     grid.put_clipped(
         stats_x,
-        y,
+        bar.y,
         stats,
         style::chat_loading_label(),
         limit.saturating_sub(stats_x),
     );
 }
 
+/// 按显示列宽把文案裁到 `budget` 列（尾部 `…`，`budget == 0` 返回空串）。
+///
+/// 复用共享的 [`crate::ui::text::truncate_to_width`]，不另造第二套截断器。
+fn clip_label(label: &str, budget: u16) -> String {
+    crate::ui::text::truncate_to_width(label, usize::from(budget))
+}
+
 /// 画扫描高亮文案，返回**文案结束后的列**（供紧随其后的统计段定位）。
+///
+/// 先按显示列宽裁切（中文不会被拆半），再用裁切后的可见文字计算扫描周期：
+/// 长 todo 被截断后高亮不会因为按原文长度推进而长时间消失。
 fn draw_scanned_label(
     grid: &mut Grid,
     x: u16,
@@ -192,16 +321,29 @@ fn draw_scanned_label(
     label: &str,
     loading_frame: usize,
 ) -> u16 {
-    let width = usize::from(limit.saturating_sub(x));
-    let chars: Vec<char> = label.chars().take(width).collect();
+    let budget = limit.saturating_sub(x);
+    if budget == 0 {
+        return x;
+    }
+    let visible = clip_label(label, budget);
+    // 扫描位置：每帧前进 1 个**字符**，走出末尾后从左侧重新进入。
+    let chars: Vec<char> = visible.chars().collect();
     if chars.is_empty() {
         return x;
     }
-    // 扫描位置：每帧前进 1 个字符，走出末尾后从左侧重新进入。
     let span = chars.len() + SCAN_WINDOW;
     let head = loading_frame % span;
     let mut cell_x = x;
     for (index, ch) in chars.iter().enumerate() {
+        // 零宽字符不占列：跳过（不写入、也不推进光标）。
+        let Some(cell_width) = ch.width().filter(|width| *width > 0) else {
+            continue;
+        };
+        let cell_width = u16::try_from(cell_width).unwrap_or(u16::MAX);
+        // 落笔前测宽：宽字符不能半写、也不能侵入统计区。
+        if cell_x.saturating_add(cell_width) > limit {
+            break;
+        }
         // 窗口内：`head - SCAN_WINDOW < index <= head`（head 为窗口右端）。
         let in_window = index + SCAN_WINDOW >= head && index < head;
         let cell_style = if in_window {
@@ -210,10 +352,7 @@ fn draw_scanned_label(
             style::chat_loading_label()
         };
         grid.put_char(cell_x, y, *ch, cell_style);
-        cell_x = cell_x.saturating_add(ch.width().unwrap_or(1).max(1) as u16);
-        if cell_x >= limit {
-            break;
-        }
+        cell_x = cell_x.saturating_add(cell_width);
     }
     cell_x
 }
@@ -226,6 +365,15 @@ fn stop_phrase(width: u16) -> &'static str {
         .find(|phrase| phrase.width() <= width)
         .copied()
         .unwrap_or_else(|| text::LX_CHAT_STOP_PHRASES[text::LX_CHAT_STOP_PHRASES.len() - 1])
+}
+
+/// 最短停止提示的显示列宽（极窄时停止反馈优先的判定阈值）。
+fn stop_shortest_width() -> u16 {
+    text::LX_CHAT_STOP_PHRASES
+        .iter()
+        .map(|phrase| u16::try_from(phrase.width()).unwrap_or(u16::MAX))
+        .min()
+        .unwrap_or(0)
 }
 
 /// 命中「回到底部」控件的窗格；无控件或未命中返回 None。
@@ -245,3 +393,6 @@ pub fn jump_bottom_hit(
             .map(|_| *id)
     })
 }
+
+#[cfg(test)]
+mod tests;

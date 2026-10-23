@@ -3,8 +3,57 @@
 //! 只有**需要拼串**的少数几条放这里，纯字面量常量仍在 `ui/text.rs` 的
 //! `LX_CHAT_*` 区（那里贴着 1000 行上限，新增拼串逻辑挪进本模块）。
 
-/// lx 输入框上方聊天栏的 loading 文案。
+use std::borrow::Cow;
+
+use unicode_width::UnicodeWidthStr;
+
+/// lx 输入框上方聊天栏的兜底 loading 文案（没有可展示的任务或阶段）。
 pub const LOADING_LABEL: &str = "Working...";
+/// 当前 assistant 仍有**开放**思考块时的阶段文案。
+pub const THINKING_LABEL: &str = "Thinking...";
+/// 当前 assistant 有已进入调度/执行中的工具时的阶段文案。
+pub const RUNNING_TOOLS_LABEL: &str = "Running tools...";
+
+/// 计划步骤原文 → 状态栏**单行**文案。
+///
+/// 计划原文由模型给出，可能含换行、Tab、CR、ESC 或其他控制字符：这里把控制字符与
+/// 各类空白一律当作空格，连续空白折叠成一个、去首尾空白。**只净化展示副本**，
+/// 不改计划、工具结果或数据库。零宽字符本身不占列；净化后没有任何可见列时回退
+/// [`LOADING_LABEL`]，避免整行只剩看不见的动画。
+pub fn single_line_label(raw: &str) -> Cow<'_, str> {
+    if needs_single_line(raw) {
+        let mut clean = String::with_capacity(raw.len());
+        for chunk in raw.split(|ch: char| ch.is_control() || ch.is_whitespace()) {
+            if chunk.is_empty() {
+                continue;
+            }
+            if !clean.is_empty() {
+                clean.push(' ');
+            }
+            clean.push_str(chunk);
+        }
+        return if clean.width() > 0 {
+            Cow::Owned(clean)
+        } else {
+            Cow::Borrowed(LOADING_LABEL)
+        };
+    }
+    if raw.width() > 0 {
+        Cow::Borrowed(raw)
+    } else {
+        Cow::Borrowed(LOADING_LABEL)
+    }
+}
+
+/// 原文是否需要单行净化（否则可直接借用，省掉每帧一次分配）。
+fn needs_single_line(raw: &str) -> bool {
+    raw.contains("  ")
+        || raw.starts_with(' ')
+        || raw.ends_with(' ')
+        || raw
+            .chars()
+            .any(|ch| ch.is_control() || (ch.is_whitespace() && ch != ' '))
+}
 /// loading 文案右侧的括号统计：`(2s · ↓320 tok)`。
 ///
 /// 用户要求：
@@ -138,3 +187,6 @@ mod stats_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod activity_tests;

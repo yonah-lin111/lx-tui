@@ -1182,8 +1182,8 @@ fn esc_armed_replaces_loading_label_with_stop_hint() {
 
 #[test]
 fn esc_hint_shortens_on_narrow_bar() {
-    // 窄栏：loading 文案优先，右侧 token 计数整段让位（先丢它），
-    // 因此停止短语仍能按宽度降级显示。
+    // 窄栏：停止反馈优先取得文字预算，短停止短语仍按宽度降级显示；
+    // 统计不再整段让位——空间够时保留（设计 §6.4），极窄才被裁切。
     let area = Rect::new(0, 0, 22, 16);
     let mut lx = streaming_lx(true, true);
     lx.chat.stop_armed_at = Some(std::time::Instant::now());
@@ -1200,7 +1200,8 @@ fn esc_hint_shortens_on_narrow_bar() {
         !text.contains("Press esc again to stop"),
         "放不下时不画长短语：{text}"
     );
-    assert!(!text.contains(" tok"), "窄栏先丢 token 计数：{text}");
+    // 统计仍在同一行（不再是「窄栏先丢 token」的旧行为）。
+    assert!(text.contains("↓1 tok"), "待命期间统计保留：{text}");
 }
 
 // ===== 置顶用户消息行（命中与跳转目标）=====
