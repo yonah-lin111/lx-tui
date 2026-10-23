@@ -296,15 +296,37 @@ pub enum InputHintLevel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CardTarget {
     /// 工具卡片（按稳定 ID 定位，与展开状态同一口径）。
-    Tool { message_id: String, call_id: String },
+    Tool {
+        message_id: String,
+        call_id: String,
+        section: CardSection,
+    },
     /// 思考块（按时间线步骤下标定位，与 [`LxChat::reasoning_expanded`] 同口径）。
     Thinking {
         message_index: usize,
         step_index: usize,
     },
     /// 本地命令卡片（按稳定消息 ID 定位；折叠状态存 detail_expanded 的 `shell` 槽）。
-    Shell { message_id: String },
+    Shell {
+        message_id: String,
+        section: CardSection,
+    },
 }
+
+/// 卡片内可独立折叠的区域。
+///
+/// 命令卡片把「命令参数」与「命令输出」拆成两块：各自的点击面与 hover 面互不影响，
+/// 点其中一块不会连带另一块。其余卡片只有一个整体（[`Self::Body`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardSection {
+    /// 卡片主体（文件差异 / 普通工具详情 / 命令参数）。
+    Body,
+    /// 命令卡片的输出区。
+    Output,
+}
+
+/// 本地命令卡片在 [`LxChat::detail_expanded`] 里的槽位（它没有 call_id）。
+pub const SHELL_SLOT: &str = "shell";
 
 /// 单窗格的聊天状态：会话引用、历史视图与请求状态机。
 #[derive(Debug)]
@@ -368,11 +390,13 @@ pub struct LxChat {
     /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
     pub suppressed_prompt_header: Option<StickySuppression>,
-    /// 工具卡片详情展开状态：(message_id, call_id, 是否展开)。
+    /// 卡片展开状态：(message_id, slot, 区域, 是否展开)。
     ///
     /// 用稳定 ID 而不是数组下标定位：历史增删、重载与切会话都不会把展开状态
     /// 误挂到别的卡片上；重启或切会话后默认折叠（本字段随窗格内存存在）。
-    pub detail_expanded: Vec<(String, String, bool)>,
+    /// `slot` 是工具调用的 call_id（本地命令卡片固定为 [`SHELL_SLOT`]）；
+    /// 命令卡片的参数与输出各占一条记录，互不影响。
+    pub detail_expanded: Vec<(String, String, CardSection, bool)>,
     /// 键盘选中的可展开工具卡片：(message_id, call_id)；None 表示未选中。
     pub selected_tool: Option<(String, String)>,
     /// 当前计划快照（最近一次**成功提交**的 update_plan）；失败/中断不覆盖。
@@ -489,37 +513,70 @@ impl LxChat {
             .map(|message| &mut message.status)
     }
 
-    /// 工具卡片详情是否展开（按 `(message_id, call_id)` 定位，默认折叠）。
-    pub fn detail_is_expanded(&self, message_id: &str, call_id: &str) -> bool {
+    /// 卡片某区域是否展开（按 `(message_id, slot, section)` 定位，默认折叠）。
+    pub fn section_is_expanded(&self, message_id: &str, slot: &str, section: CardSection) -> bool {
         self.detail_expanded
             .iter()
-            .find(|(message, call, _)| message == message_id && call == call_id)
-            .is_some_and(|(_, _, expanded)| *expanded)
+            .find(|(message, key, part, _)| {
+                message == message_id && key == slot && *part == section
+            })
+            .is_some_and(|(_, _, _, expanded)| *expanded)
     }
 
-    /// 切换工具卡片详情展开状态，返回新状态。
-    pub fn toggle_detail(&mut self, message_id: &str, call_id: &str) -> bool {
-        let next = !self.detail_is_expanded(message_id, call_id);
+    /// 卡片主体（整卡 / 命令参数）是否展开。
+    pub fn detail_is_expanded(&self, message_id: &str, slot: &str) -> bool {
+        self.section_is_expanded(message_id, slot, CardSection::Body)
+    }
+
+    /// 切换卡片某区域的展开状态，返回新状态。
+    pub fn toggle_section(&mut self, message_id: &str, slot: &str, section: CardSection) -> bool {
+        let next = !self.section_is_expanded(message_id, slot, section);
         if let Some(existing) = self
             .detail_expanded
             .iter_mut()
-            .find(|(message, call, _)| message == message_id && call == call_id)
+            .find(|(message, key, part, _)| {
+                message == message_id && key == slot && *part == section
+            })
         {
-            existing.2 = next;
+            existing.3 = next;
             return next;
         }
         self.detail_expanded
-            .push((message_id.to_string(), call_id.to_string(), next));
+            .push((message_id.to_string(), slot.to_string(), section, next));
         next
+    }
+
+    /// 切换卡片主体的展开状态，返回新状态。
+    pub fn toggle_detail(&mut self, message_id: &str, slot: &str) -> bool {
+        self.toggle_section(message_id, slot, CardSection::Body)
+    }
+
+    /// 该工具卡片当前被悬停的区域（`None` = 未悬停）。
+    pub fn tool_hovered_section(&self, message_id: &str, call_id: &str) -> Option<CardSection> {
+        match &self.hover {
+            Some(CardTarget::Tool {
+                message_id: hovered_message,
+                call_id: hovered_call,
+                section,
+            }) if hovered_message == message_id && hovered_call == call_id => Some(*section),
+            _ => None,
+        }
     }
 
     /// 该工具卡片是否被鼠标悬停（折叠内容提亮判据）。
     pub fn tool_is_hovered(&self, message_id: &str, call_id: &str) -> bool {
-        matches!(
-            &self.hover,
-            Some(CardTarget::Tool { message_id: hovered_message, call_id: hovered_call })
-                if hovered_message == message_id && hovered_call == call_id
-        )
+        self.tool_hovered_section(message_id, call_id).is_some()
+    }
+
+    /// 该本地命令卡片当前被悬停的区域（`None` = 未悬停）。
+    pub fn shell_hovered_section(&self, message_id: &str) -> Option<CardSection> {
+        match &self.hover {
+            Some(CardTarget::Shell {
+                message_id: hovered,
+                section,
+            }) if hovered == message_id => Some(*section),
+            _ => None,
+        }
     }
 
     /// 该思考块是否被鼠标悬停（压暗 → 恢复品红的判据）。

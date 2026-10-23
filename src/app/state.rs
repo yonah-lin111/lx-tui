@@ -23,14 +23,14 @@ pub mod workspace;
 
 pub use lx::LxInputMode;
 pub use lx::{
-    AssistantStepView, CardTarget, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
-    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, HistoryEntry,
-    HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry, ModelCandidate,
-    ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PendingShell, PlanSnapshotView,
-    PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView, QueuedSubmission,
-    RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView, RewindPanel,
-    RewindTarget, SlashCommand, SlashPanel, SnapshotState, TaskPage, TaskTab, ToolCallView,
-    ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
+    DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel,
+    HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry,
+    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PendingShell,
+    PlanSnapshotView, PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView,
+    QueuedSubmission, RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView,
+    RewindPanel, RewindTarget, SHELL_SLOT, SlashCommand, SlashPanel, SnapshotState, TaskPage,
+    TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};

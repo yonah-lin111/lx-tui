@@ -1,13 +1,14 @@
-//! 后台任务卡片新形态的回归测试：橙色存活态、动画停止后实心、存活三行 / 终态两行与 `open` 入口。
+//! 后台任务卡片新形态的回归测试：橙色存活态、动画停止后实心、运行中实时尾部与整卡引导。
 //!
 //! 用户反馈的两组现象：
 //! 1. 运行中的后台卡片是绿的，且会定格成镂空 `□`（看起来像失败），但进程其实还在跑；
-//! 2. 卡片把命令、cwd、输出、`… +N more lines` 全画在消息列表里，把历史撑得很长，
-//!    而这些内容应该只在后台任务面板里看。
+//! 2. 卡片曾把命令、cwd、输出、`… +N more lines` 全画在消息列表里，把历史撑得很长。
+//!    现在输出只保留受控预览：运行中给实时尾部 + 打开面板的引导，终态给首尾预览。
 
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 
+use super::folds;
 use crate::app::state::{
     CommandView, PlanStepView, ProcessInteractionView, ProcessStateView, ToolCallView,
     ToolDetailView, ToolStatus,
@@ -94,18 +95,23 @@ fn plan_call(steps: Vec<(String, PlanStepView)>) -> ToolCallView {
 
 /// 渲染并返回网格（用于取颜色）。
 fn render_grid(call: &ToolCallView, width: u16) -> Grid {
-    let height = tool::rows(call, width, false).max(1) as u16;
+    let height = tool::rows(call, width, folds(false)).max(1) as u16;
     let area = Rect::new(0, 0, width, height);
     let mut grid = Grid::new(area);
     let mut row = 0usize;
-    tool::draw(&mut grid, area, 0, &mut row, call, 0, false);
+    tool::draw(&mut grid, area, 0, &mut row, call, 0, folds(false));
     grid
 }
 
 /// 渲染并返回整块文本。
 fn render_text(call: &ToolCallView, width: u16) -> String {
     let grid = render_grid(call, width);
-    let area = Rect::new(0, 0, width, tool::rows(call, width, false).max(1) as u16);
+    let area = Rect::new(
+        0,
+        0,
+        width,
+        tool::rows(call, width, folds(false)).max(1) as u16,
+    );
     let mut lines = Vec::new();
     for y in area.y..area.bottom() {
         let mut line = String::new();
@@ -245,13 +251,21 @@ fn alive_mark_never_renders_hollow_when_the_animation_stops() {
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
     for frame in 0..12usize {
         let grid = {
-            let height = tool::rows(&call, 60, false).max(1) as u16;
+            let height = tool::rows(&call, 60, folds(false)).max(1) as u16;
             let area = Rect::new(0, 0, 60, height);
             let mut grid = Grid::new(area);
             let mut row = 0usize;
             // animating = false：动画已停止。
             tool::draw_animated(
-                &mut grid, area, 0, &mut row, &call, frame, false, false, false,
+                &mut grid,
+                area,
+                0,
+                &mut row,
+                &call,
+                frame,
+                folds(false),
+                false,
+                None,
             );
             grid
         };
@@ -299,51 +313,69 @@ fn hollow_glyph_is_reserved_for_cancelled() {
     );
 }
 
-// ===== 卡片收敛为「标题 + 折行命令」，没有入口行 =====
+// ===== 卡片：命令 + 运行中实时尾部 + 整卡引导（终态改为输出预览） =====
 
 #[test]
-fn command_card_is_title_and_wrapped_command_only() {
+fn running_command_card_shows_only_the_panel_guide() {
     let output = "heartbeat 1\nheartbeat 2\nheartbeat 3\nheartbeat 4\n";
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, output);
     let text = render_text(&call, 70);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 2, "标题 + 命令：{text}");
     assert!(lines[0].contains("Run command"), "第 1 行标题：{text}");
     assert!(lines[1].contains("while true"), "第 2 行是命令原文：{text}");
     assert!(
         lines[1].starts_with(text::agent::TREE_LEAF),
-        "命令行用直角收口：{text}"
+        "命令是参数区的收口行：{text}"
+    );
+    // 长任务不在消息列表铺输出：命令 + 一行引导，实时日志去面板看。
+    assert!(
+        !text.contains("heartbeat 1"),
+        "运行中不渲染任何输出：{text}"
+    );
+    assert_eq!(lines.len(), 3, "标题 + 命令 + 引导：{text}");
+    assert!(
+        lines
+            .last()
+            .is_some_and(|line| line.contains(text::agent::TASK_OPEN_GUIDE)),
+        "末行是整卡点击引导：{text}"
     );
     assert!(
-        !text.contains(text::agent::TASK_OPEN_LABEL),
-        "没有 open：{text}"
+        lines
+            .last()
+            .is_some_and(|line| line.starts_with(text::agent::TREE_PAD)),
+        "引导行只缩进、不画连接符：{text}"
     );
 }
 
 #[test]
-fn command_card_no_longer_renders_any_output_or_ellipsis_row() {
-    // 输出全部搬到后台任务面板；消息列表里连省略提示都不该出现。
+fn running_card_never_prints_output_or_ellipsis_rows() {
+    // 任何长度的输出都不进消息列表：长任务的完整日志在后台任务面板里。
     let output: String = (0..40).map(|index| format!("line {index}\n")).collect();
     let call = command_call(ProcessStateView::Running, ToolStatus::Completed, &output);
     let text = render_text(&call, 70);
-    assert!(!text.contains("line 0"), "不得渲染输出正文：{text}");
+    assert!(!text.contains("line 0"), "不渲染输出：{text}");
+    assert!(!text.contains("line 39"), "不渲染输出：{text}");
     assert!(
-        !text.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "不得出现 `… +N more lines`：{text}"
+        !text.contains("… +") && !text.contains("more lines"),
+        "不画省略提示（面板里看全量）：{text}"
     );
-    assert!(
-        !text.contains(text::agent::WAITING_FOR_OUTPUT),
-        "无输出占位也不再需要：{text}"
+    assert_eq!(
+        tool::rows(&call, 70, folds(false)),
+        text.lines().count(),
+        "几何口径一致"
     );
-    assert_eq!(text.lines().count(), 2, "标题 + 命令：{text}");
-    assert_eq!(tool::rows(&call, 70, false), 2, "几何口径一致");
 }
 
 #[test]
 fn command_wraps_to_two_rows_when_folded() {
     // 用户带截图反馈：长命令被单行截断成 `$ { ...`。现在 `$ 命令` 按列宽折行，
     // 折叠态最多 2 行；展开态铺开更多。
-    let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+    // 终态卡片：没有实时输出与引导行，几何只由命令折行决定。
+    let call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        "",
+    );
     // 足够长：折叠 2 行装不下，展开才铺得开（否则「展开」不会多出行）。
     let long = format!(
         "$ {{ {} echo \"==== 项目概览 ====\" && echo \"Rust 版本: $(rustc --version)\" \
@@ -354,8 +386,8 @@ fn command_wraps_to_two_rows_when_folded() {
     if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
         view.command = long.clone();
     }
-    let folded = tool::rows(&call, 50, false);
-    let expanded = tool::rows(&call, 50, true);
+    let folded = tool::rows(&call, 50, folds(false));
+    let expanded = tool::rows(&call, 50, folds(true));
     assert_eq!(folded, 1 + 2 + 1, "折叠态：标题 + 2 行命令 + 剩余行数");
     assert!(expanded > folded, "展开更多行：{folded} → {expanded}");
     let text = render_text(&call, 50);
@@ -367,11 +399,19 @@ fn command_wraps_to_two_rows_when_folded() {
 
 #[test]
 fn interaction_card_wraps_its_command_too() {
+    // `write_stdin` 是调用快照：只画命令，不跟随后台输出，也没有面板引导。
     let call = interaction_call(ProcessStateView::Running, ToolStatus::Completed);
     let text = render_text(&call, 70);
+    assert!(text.contains("while true"), "命令可见：{text}");
     assert!(
-        !text.contains(text::agent::TASK_OPEN_LABEL),
-        "不再有 open 入口：{text}"
+        !text.contains(text::agent::TASK_OPEN_GUIDE),
+        "交互卡片没有整卡引导：{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|line| line.contains("heartbeat") && !line.contains("echo")),
+        "不渲染调用快照之外的输出：{text}"
     );
 }
 
@@ -429,39 +469,168 @@ fn folded_command_reports_remaining_lines_and_hover_lifts() {
     assert!(!expanded.contains("more line") || expanded.lines().count() > 3);
 }
 
-/// 命令卡片的「剩余行数」提示行同样在折叠区内、悬停时提亮。
+/// 参数区不响应 hover（恒为浅黄），但「剩余行数」提示行仍属于参数区的点击面。
 #[test]
-fn command_hint_row_lifts_on_hover() {
-    let mut call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+fn params_section_has_no_hover_face_and_keeps_its_hint() {
+    let mut call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        "",
+    );
     if let Some(crate::app::state::ToolDetailView::Command(view)) = call.detail.as_deref_mut() {
         view.command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
     }
-    let folded = tool::rows(&call, 40, false);
-    assert_eq!(
-        tool::fold_region(&call, 40).rows + 1,
-        folded,
-        "折叠区行数 = 卡片行数 - 标题行（提示行计入）"
-    );
+    let width = 40u16;
+    let step_rows = tool::rows(&call, width, folds(false));
+    let regions = tool::card_regions(&call, width, folds(false), step_rows);
+    let params = regions
+        .iter()
+        .find(|region| region.section == crate::app::state::CardSection::Body)
+        .expect("参数区");
+    assert_eq!(params.fold.rows, 0, "参数区不做 hover 高亮");
+    assert!(params.clickable, "参数区仍可点击展开");
+    let text = render_text(&call, width);
+    assert!(text.contains("more line"), "折叠态给剩余行数：{text}");
 }
 
-/// 命令正文：折叠态 dim，**展开态保持默认前景**（展开后参数文字不退回 dim）。
+/// 参数区的 `… N more lines` 提示行与参数同色（不是 meta 灰）。
 #[test]
-fn command_body_lifts_when_expanded() {
-    let call = command_call(ProcessStateView::Running, ToolStatus::Completed, "beat\n");
+fn params_more_lines_hint_uses_the_param_color() {
+    let command = format!("$ {{ {} }}", "echo 项目概览; ".repeat(20));
+    let lines = tool::param_lines(&command, 40, false);
+    let hint = lines.last().expect("折叠态必须有提示行");
+    assert!(hint.text.contains("more line"), "{:?}", hint.text);
+    assert_eq!(hint.style, style::chat_tool_param(), "提示行与参数同色");
+}
+
+/// 短输出（没达到折叠额度）不登记 hover 面：悬停不会提亮任何东西。
+#[test]
+fn short_output_has_no_hover_face() {
+    let call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        "one\ntwo\n",
+    );
+    let width = 60u16;
+    let step_rows = tool::rows(&call, width, folds(false));
+    let regions = tool::card_regions(&call, width, folds(false), step_rows);
+    let output = regions
+        .iter()
+        .find(|region| region.section == crate::app::state::CardSection::Output)
+        .expect("输出区");
+    assert_eq!(output.fold.rows, 0, "短输出不做 hover 高亮");
+    assert!(!output.clickable, "短输出没有可展开内容");
+}
+
+/// 参数区恒为浅黄（不随 hover/展开变色）；输出区折叠 dim、展开为默认前景；
+/// 两块互不连带，且都没有整行底色。
+#[test]
+fn params_stay_light_yellow_and_output_lifts_independently() {
+    let output: String = (0..40)
+        .map(|index| format!("heartbeat {index}\n"))
+        .collect();
+    let call = command_call(
+        ProcessStateView::Exited { code: Some(0) },
+        ToolStatus::Completed,
+        &output,
+    );
     let folded = render_grid(&call, 60);
     assert_eq!(
         command_row_style(&folded, 60),
         Some(style::chat_tool_param()),
-        "折叠态命令是 dim"
+        "折叠态命令是浅黄"
     );
-    let height = tool::rows(&call, 60, true).max(1) as u16;
+    let first_output = 2; // 标题 + 1 行命令。
+    let content_col = 5; // 树体前缀占前 5 列，正文从第 5 列起。
+    assert_eq!(
+        folded.cell(content_col, first_output).style,
+        style::muted(),
+        "折叠态输出是 dim"
+    );
+    // 只展开输出：命令仍是浅黄，输出首行升为默认前景，且不铺底色。
+    let only_output = tool::Folds {
+        body: false,
+        output: true,
+    };
+    let height = tool::rows(&call, 60, only_output).max(1) as u16;
     let area = Rect::new(0, 0, 60, height);
     let mut grid = Grid::new(area);
     let mut row = 0usize;
-    tool::draw(&mut grid, area, 0, &mut row, &call, 0, true);
+    tool::draw_animated(
+        &mut grid,
+        area,
+        0,
+        &mut row,
+        &call,
+        0,
+        only_output,
+        true,
+        None,
+    );
     assert_eq!(
         command_row_style(&grid, 60),
-        Some(style::chat_tool_param_expanded()),
-        "展开态命令保持默认前景"
+        Some(style::chat_tool_param()),
+        "展开输出不得改变参数颜色"
+    );
+    assert_eq!(
+        grid.cell(content_col, first_output).style,
+        style::text(),
+        "展开的输出是默认前景"
+    );
+    assert_eq!(
+        grid.cell(content_col, first_output).style.bg,
+        None,
+        "展开的输出不铺任何底色"
+    );
+    // 悬停参数区：参数仍是同一档浅黄（用户要求去掉 hover 高亮）。
+    let height = tool::rows(&call, 60, folds(false)).max(1) as u16;
+    let area = Rect::new(0, 0, 60, height);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    tool::draw_animated(
+        &mut grid,
+        area,
+        0,
+        &mut row,
+        &call,
+        0,
+        folds(false),
+        true,
+        Some(crate::app::state::CardSection::Body),
+    );
+    assert_eq!(
+        command_row_style(&grid, 60),
+        Some(style::chat_tool_param()),
+        "悬停不改变参数颜色"
+    );
+    // 只展开参数：输出仍 dim。
+    let only_params = tool::Folds {
+        body: true,
+        output: false,
+    };
+    let height = tool::rows(&call, 60, only_params).max(1) as u16;
+    let area = Rect::new(0, 0, 60, height);
+    let mut grid = Grid::new(area);
+    let mut row = 0usize;
+    tool::draw_animated(
+        &mut grid,
+        area,
+        0,
+        &mut row,
+        &call,
+        0,
+        only_params,
+        true,
+        None,
+    );
+    assert_eq!(
+        command_row_style(&grid, 60),
+        Some(style::chat_tool_param()),
+        "展开参数仍是浅黄"
+    );
+    assert_eq!(
+        grid.cell(content_col, first_output).style,
+        style::muted(),
+        "展开参数不得连带展开输出"
     );
 }

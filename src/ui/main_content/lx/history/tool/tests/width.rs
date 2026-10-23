@@ -63,7 +63,7 @@ fn wide_characters_and_unbreakable_names_are_clipped_by_cell_width() {
                 );
             }
             // 不得出现只画了一半的宽字符（占位格必须紧跟其首格）。
-            for y in 0..rows(&call, width, false) {
+            for y in 0..rows(&call, width, folds(false)) {
                 for x in 0..width {
                     let glyph = grid.cell(x, y as u16);
                     if glyph.ch == crate::ui::main_content::lx::grid::CONTINUATION {
@@ -155,7 +155,7 @@ fn tool_row_count_is_always_two_for_any_content() {
         ] {
             let call = tool_call("read", status, Some(read_summary()), Some("boom"));
             // 详情 = 最多 2 行内容 + 可能 1 行剩余行数提示。
-            let detail_rows = rows(&call, width, false) - 1;
+            let detail_rows = rows(&call, width, folds(false)) - 1;
             assert!(
                 (1..=3).contains(&detail_rows),
                 "宽 {width} 详情恒为 1~3 行，实际 {detail_rows}"
@@ -164,11 +164,11 @@ fn tool_row_count_is_always_two_for_any_content() {
     }
     // 宽度 0：不占行（与空正文块同口径），渲染也不写任何单元格。
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
-    assert_eq!(rows(&call, 0, false), 0);
+    assert_eq!(rows(&call, 0, folds(false)), 0);
     let rect = Rect::new(0, 0, 0, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, &call, 0, false);
+    draw(&mut grid, rect, 0, &mut row_index, &call, 0, folds(false));
     assert_eq!(
         row_index, 0,
         "绘制推进与 layout 口径一致（宽度 0 时该块整体跳过）"
@@ -181,7 +181,7 @@ fn scrolled_out_rows_draw_nothing_but_still_advance() {
     let rect = Rect::new(0, 5, 40, 2);
     let mut grid = Grid::new(rect);
     let mut row_index = 3usize; // 已在滚动窗口之上
-    draw(&mut grid, rect, 5, &mut row_index, &call, 0, false);
+    draw(&mut grid, rect, 5, &mut row_index, &call, 0, folds(false));
     assert_eq!(row_index, 5, "不可见两行仍推进");
     assert!(grid_text(&grid, rect).trim().is_empty(), "不可见行不写网格");
 }

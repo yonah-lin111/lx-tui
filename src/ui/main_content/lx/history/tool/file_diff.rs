@@ -193,7 +193,7 @@ impl Row {
 /// - 折叠态画 3 行预览，**下一行**写剩余行数（`… N more lines`）；
 /// - 展开态铺开全部 hunks，没有剩余行数行；**正文行铺展开块灰底**（文件头不铺），
 ///   增删行自己的红/绿底色优先级更高；
-/// - **文件头路径恒为 dim**，hover 与展开都不提亮（见 [`file_header`]）；
+/// - **文件头路径恒为浅黄**，hover 与展开都不变色（见 [`file_header`]）；
 /// - 折叠态的剩余行数行是**唯一的 hover 提亮对象**（见 [`hint_span`]）。
 fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec<Row> {
     let mut rows = content_rows(call, width, expanded);
@@ -207,7 +207,7 @@ fn layout(call: &ToolCallView, width: u16, expanded: bool, hovered: bool) -> Vec
                 &continuation_prefix(),
                 text::agent::file_diff_more_lines(remaining),
                 if hovered {
-                    style::chat_tool_param_expanded()
+                    style::text()
                 } else {
                     style::agent_step_detail()
                 },
@@ -431,10 +431,8 @@ fn group_count_segments(calls: &[&ToolCallView]) -> Vec<Segment> {
 /// 文件头：`  ├─ path → to (+N -N)`；最后一个文件收口为 `  └─ `。
 ///
 /// 路径按剩余列宽做中间省略（保留首尾层级）；放不下时先丢计数、再丢路径，
-/// 连接符始终保留。**路径恒为 `chat_tool_param()`（dim），展开也不提亮**（用户
-/// 要求）：文件头是这一块的**标题**，不是被折叠起来的内容；「展开后参数保持高亮」
-/// 只适用于普通工具的 `└─` 参数行与命令卡片正文——那两处折叠时被藏起来、展开后
-/// 才有内容可读，diff 的路径从头到尾都在。
+/// 连接符始终保留。**路径恒为 `chat_tool_param()`（浅黄），不随 hover/展开变色**
+/// （用户要求）：文件头是这一块的**标题**，颜色是这一层唯一的常驻标识。
 fn file_header(file: &FileChangeView, last: bool, width: u16) -> Vec<Segment> {
     let connector = if last {
         text::agent::TREE_LEAF

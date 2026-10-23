@@ -13,10 +13,10 @@ use serde_json::Value;
 use crate::chat::plan::{PlanSnapshot, PlanStepStatus};
 use crate::chat::process::{ProcessResult, ProcessResultKind, ProcessState};
 
-/// 紧凑卡片展示的输出预览行数。
+/// 视图快照保留的输出尾部窗口行数（变化检测用）。
 ///
-/// 必须与渲染层 `history/tool/command.rs::PREVIEW_LINES` 同值：渲染实际用的是
-/// `output_tail`（现场切行），本常量既是视图快照的窗口，也是两者的单一口径来源。
+/// 渲染实际用的是 `output_tail`（按卡片宽度现场切行）：运行中的卡片根本不铺输出，
+/// 终态输出区按首 3 + 尾 2 行折叠。这个窗口只服务于「快照是否变化」的比较。
 pub const COMMAND_PREVIEW_LINES: usize = 3;
 
 /// 进程状态（UI 语义；未知值按 `Interrupted` 保守处理，不伪装成功）。
@@ -130,7 +130,7 @@ pub struct CommandView {
     pub cwd: String,
     pub tty: bool,
     pub state: ProcessStateView,
-    /// 尾部输出预览（最近 [`COMMAND_PREVIEW_LINES`] 行）。
+    /// 尾部输出窗口（最近 [`COMMAND_PREVIEW_LINES`] 行；变化检测用，不直接渲染）。
     pub output_preview: Vec<String>,
     /// 是否还有更多保留输出（展开可见）。
     pub truncated: bool,

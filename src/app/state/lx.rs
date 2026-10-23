@@ -16,12 +16,13 @@ use history::HistoryBrowse;
 pub(crate) use history::HistoryMove;
 pub use shell::LxInputMode;
 
+pub use chat::SHELL_SLOT;
 pub use chat::{
-    AssistantStepView, CardTarget, ChatMessageView, ChatPartView, CommandView, DiffHunkView,
-    DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel, InputHintLevel,
-    InteractionAction, LxChat, ModelsSnapshot, PendingShell, PlanSnapshotView, PlanStepView,
-    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
-    ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
+    DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel,
+    InputHintLevel, InteractionAction, LxChat, ModelsSnapshot, PendingShell, PlanSnapshotView,
+    PlanStepView, ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey,
+    RequestState, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use mention::{LxMention, LxMentionView};
 pub use rewind::{

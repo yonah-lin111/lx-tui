@@ -817,31 +817,17 @@ pub fn chat_tool_verb_running() -> Style {
     Style::default().fg(Color::Indexed(CHAT_STEP_AMBER))
 }
 
-/// 工具行的可变参数（路径 / 搜索模式 / 命令 / 搜索范围）：**次要信息色**。
+/// 工具行的可变参数（路径 / 搜索模式 / 命令 / 搜索范围）：**浅黄**、常驻。
 ///
-/// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」——那行上下文用量用的
-/// 就是 [`muted`]（终端 dim、无色相）。参数是内容的注脚而不是标题：常态压暗，
-/// 只在鼠标悬停到卡片上时升为默认前景（见 [`chat_tool_param_hover`]），
-/// 让「这一行可点」由交互态而不是常驻高对比度来表达。
+/// 用户要求「工具参数与文件操作工具的 path 用浅一点的黄色，不要 hover 高亮和
+/// 展开高亮」：颜色是这一层唯一的标识，不随鼠标悬停或折叠状态变化；
+/// 折叠/展开只改变可见行数。
 pub fn chat_tool_param() -> Style {
-    muted()
+    Style::default().fg(Color::Indexed(CHAT_TOOL_PARAM_YELLOW))
 }
 
-/// 工具参数在**卡片悬停**时的样式：终端默认前景（从 dim 升上来）。
-///
-/// 用户要求「鼠标 hover 折叠内容时字体颜色改为默认字体颜色」：折叠的参数是 dim，
-/// 悬停提亮即「这块可以点」的唯一提示（没有按钮、没有下划线）。
-pub fn chat_tool_param_hover() -> Style {
-    Style::default()
-}
-
-/// 工具参数在**展开态**的样式：与悬停同档（终端默认前景）。
-///
-/// 用户要求「展开参数后，参数内容的文字需要保持高亮的文字颜色，折叠后恢复」：
-/// 展开态没有 hover 可依赖，参数必须自己维持默认可读前景；折叠回 dim。
-pub fn chat_tool_param_expanded() -> Style {
-    chat_tool_param_hover()
-}
+/// 工具参数浅黄：比运行态琥珀 `208` 淡一档，常驻、不压暗。
+const CHAT_TOOL_PARAM_YELLOW: u8 = 222;
 
 /// 工具**展开块**的整行背景（参考 Claude Code 的深色卡片底）。
 ///

@@ -167,6 +167,7 @@ fn card_content_is_the_toggle_target() {
             Some(crate::app::state::CardTarget::Tool {
                 message_id: "msg-call-edit".into(),
                 call_id: "call-edit".into(),
+                section: crate::app::state::CardSection::Body,
             }),
             "行 {row} 属于卡片，点它切换折叠"
         );
@@ -203,6 +204,7 @@ fn expanded_card_body_is_the_click_to_collapse_target() {
         Some(crate::app::state::CardTarget::Tool {
             message_id: "msg-call-edit".into(),
             call_id: "call-edit".into(),
+            section: crate::app::state::CardSection::Body,
         }),
         "展开态点内容收起"
     );
@@ -229,20 +231,25 @@ fn file_tool_without_diff_has_no_toggle_hit() {
 }
 
 #[test]
-fn process_card_has_no_open_row_and_single_line_command_is_not_clickable() {
-    // 用户要求移除 `open` 按钮：进程卡片不再有入口行。
-    // 命令一行放得下时**没有更多内容可展开**，因此内容区零高——点了也不会变。
+fn running_process_card_is_clickable_without_an_open_row() {
+    // 进程仍在跑：整卡可点（打开后台任务面板），但卡片里没有 `open` 入口行，
+    // 只有末行的引导文字。
     let area = Rect::new(0, 0, 60, 20);
     let lx = lx_with_command("call-1", 42);
     let view = history_view(area, &lx).expect("历史区");
     let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
-    assert!(cards.is_empty(), "单行命令没有可展开内容，不登记点击面");
+    // 参数区与引导行各自可点，行为都是打开后台任务面板。
+    assert_eq!(cards.len(), 2, "运行中的卡片必须可点");
     let mut buf = Buffer::empty(area);
     crate::ui::main_content::lx::render_history_for_test(area, &mut buf, &lx, 0);
     let text = super::buffer_text(&buf);
     assert!(
-        !text.contains(text::agent::TASK_OPEN_LABEL),
+        !text.lines().any(|line| line.trim_end().ends_with(" open")),
         "没有 open 行：{text}"
+    );
+    assert!(
+        text.contains(text::agent::TASK_OPEN_GUIDE),
+        "改为整卡引导：{text}"
     );
 }
 
@@ -272,6 +279,7 @@ fn long_process_command_wraps_and_is_clickable() {
         Some(crate::app::state::CardTarget::Tool {
             message_id: "msg-call-1".into(),
             call_id: "call-1".into(),
+            section: crate::app::state::CardSection::Body,
         }),
         "点折行命令切换折叠"
     );
@@ -384,6 +392,7 @@ fn folded_thinking_and_long_param_are_clickable() {
         Some(crate::app::state::CardTarget::Tool {
             message_id: "m-param".into(),
             call_id: "call-param".into(),
+            section: crate::app::state::CardSection::Body,
         }),
         "折叠态点参数必须可展开"
     );

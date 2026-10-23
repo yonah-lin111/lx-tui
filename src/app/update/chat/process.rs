@@ -369,6 +369,41 @@ pub fn reconcile_process_records(
     changed
 }
 
+/// 点击工具卡片：**行为随进程状态切换**。
+///
+/// - 命令仍在跑（长任务）：打开后台任务面板并定位该进程——卡片自己不给输出，
+///   完整实时输出在面板里；
+/// - 其余卡片：切换**被点中的那个区域**的折叠（参数与输出各自独立）。
+pub fn activate_tool_card(
+    state: &mut AppState,
+    pane: PaneId,
+    message_id: &str,
+    call_id: &str,
+    section: crate::app::state::CardSection,
+) -> bool {
+    let running = state
+        .pane_anywhere(pane)
+        .and_then(|target| {
+            target
+                .lx
+                .chat
+                .messages
+                .iter()
+                .find(|message| message.id == message_id)
+                .and_then(|message| message.tool(call_id))
+        })
+        .and_then(|call| call.command_view())
+        .filter(|view| view.state.is_running())
+        .and_then(|view| view.process_session_id);
+    let Some(session_id) = running else {
+        return toggle_tool_detail(state, pane, message_id, call_id, section);
+    };
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.selected_tool = Some((message_id.to_string(), call_id.to_string()));
+    }
+    super::open_task_page_at(state, pane, Some(session_id))
+}
+
 /// 切换某个工具卡片的详情展开状态；`call_id` 未知时返回 false。
 ///
 /// 与 [`super::toggle_thinking_at`] 同一口径：先锚定视口再切换，否则跟随底部时
@@ -378,6 +413,7 @@ pub fn toggle_tool_detail(
     pane: PaneId,
     message_id: &str,
     call_id: &str,
+    section: crate::app::state::CardSection,
 ) -> bool {
     let Some(target) = state.pane_anywhere(pane) else {
         return false;
@@ -395,7 +431,7 @@ pub fn toggle_tool_detail(
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.chat.toggle_detail(message_id, call_id);
+    target.lx.chat.toggle_section(message_id, call_id, section);
     true
 }
 
@@ -483,7 +519,13 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
     // 文件卡片：`^o` 展开/收起，绝不打开后台任务面板。
     // 判据用 app 层的视图本身（`app` 不得反向依赖 `ui`）。
     if call.is_some_and(|call| call.file_view().is_some_and(|view| !view.is_empty())) {
-        return toggle_tool_detail(state, pane, &message_id, &call_id);
+        return toggle_tool_detail(
+            state,
+            pane,
+            &message_id,
+            &call_id,
+            crate::app::state::CardSection::Body,
+        );
     }
     let session_id = call.and_then(|call| call.process_session_id());
     if let Some(target) = state.pane_mut_anywhere(pane) {

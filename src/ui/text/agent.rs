@@ -38,6 +38,10 @@ pub const MARKER_TREE_BAR: &str = "│";
 pub const TREE_BAR: &str = "  │  ";
 pub const TREE_BRANCH: &str = "  ├─ ";
 pub const TREE_LEAF: &str = "  └─ ";
+/// 树体之外的同宽空白前缀：正文仍与树体内容左对齐，但不画连接符。
+///
+/// 命令卡片用它让「输出正文」继续缩进在参数之下的内容列，而不被 `│` / `└─` 包裹。
+pub const TREE_PAD: &str = "     ";
 
 /// 步骤动词的固定形式（`Read`）。工具行叙述**这次调用本身**，用现在式。
 pub const VERB_READ: &str = "Read";
@@ -212,11 +216,10 @@ pub fn file_diff_more_lines(count: usize) -> String {
 /// 展开态树体末尾的收起入口。
 pub const FILE_DIFF_COLLAPSE: &str = "collapse";
 
-/// 进程卡片末行的**后台任务面板入口**：`open`（点击打开面板）。
+/// 运行中命令卡片末行的**整卡点击引导**：点击打开后台任务面板看完整实时输出。
 ///
-/// 卡片不再在消息列表里输出任务内容，改为把输出集中在后台任务面板；`open`
-/// 是这条命令的唯一入口，独占树体末行。进程已经到终态时这一行整行不画。
-pub const TASK_OPEN_LABEL: &str = "open";
+/// 这是「点整张卡」的提示，不是一行按钮；终态卡片不画这一行，改画省略行数。
+pub const TASK_OPEN_GUIDE: &str = "open task panel · live output";
 
 /// 进程状态词（文字，不只靠颜色）。
 pub const STATE_STARTING: &str = "Starting";
@@ -226,12 +229,6 @@ pub const STATE_TIMED_OUT: &str = "Timed out";
 pub const STATE_INTERRUPTED: &str = "Interrupted";
 pub const STATE_FAILED: &str = "Failed";
 
-/// 无输出占位。
-pub const WAITING_FOR_OUTPUT: &str = "Waiting for output";
-/// 折叠时被省略的输出行提示前缀（后面接行数）：`… +21 lines`。
-pub const EARLIER_OUTPUT_HINT: &str = "… +";
-/// 被省略行数的后缀：`21 more lines`。
-pub const EARLIER_OUTPUT_SUFFIX: &str = "more lines";
 /// 树体命令行的提示符前缀（`$ cargo test`）。
 pub const COMMAND_PROMPT_PREFIX: &str = "$ ";
 

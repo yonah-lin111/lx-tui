@@ -33,11 +33,13 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::state::{AssistantStepView, ToolCallView, ToolStatus};
+use crate::app::state::{AssistantStepView, CardSection, ToolCallView, ToolStatus};
 use crate::ui::{style, text};
 
 use super::super::Grid;
 use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
+
+use file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 
 mod command;
 mod file_diff;
@@ -50,39 +52,70 @@ use file_summary::{detail_prefix, fallback_parse_count, reset_fallback_parse_cou
 /// 树形前缀列数（`  │  ` 与 `  └─ ` 等宽，都是 5 列）；命令/交互/计划卡片共用。
 pub(super) const TREE_COLS: usize = 5;
 
+/// 卡片折叠状态：主体（文件差异 / 命令参数）与命令输出**各自独立**。
+///
+/// 命令卡片两块可以分开折叠；其余卡片只有整体，`output` 无意义（恒为 false）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Folds {
+    pub body: bool,
+    pub output: bool,
+}
+
+impl Folds {
+    /// 某一块的展开状态。
+    pub(crate) fn of(self, section: CardSection) -> bool {
+        match section {
+            CardSection::Body => self.body,
+            CardSection::Output => self.output,
+        }
+    }
+}
+
+/// 一个可交互区域的几何（相对步骤块首：标题行是偏移 0）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct RowSpan {
+    pub offset: usize,
+    pub rows: usize,
+}
+
+/// 卡片内的一个交互区域：点击面、hover 面与它折叠的是哪一块。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CardRegion {
+    pub section: CardSection,
+    pub card: RowSpan,
+    pub fold: RowSpan,
+    /// 点击是否真的会改变内容（false 时只响应 hover，不登记点击面）。
+    pub clickable: bool,
+}
+
 /// 工具步骤占用的渲染行数。
 ///
 /// - 文件工具：标题 + 文件头 / 预览（折叠最多 3 个正文物理行，见 [`file_diff`]）；
-/// - `exec_command` / `write_stdin`：标题 + 命令（折行，折叠最多 2 行）；
+/// - `exec_command` / `write_stdin`：标题 + 参数区 + 输出区（或运行中的一行引导）；
 /// - `update_plan`：标题 + 步骤（长步骤换行）+ 解释行。
 ///
-/// **没有动作按钮、没有 hover 高亮**（用户要求）：折叠/展开全靠「点卡片内容」，
-/// 与键盘 `^o` / `^t` 共用同一份展开状态。
+/// 命令卡片的参数区与输出区按 [`Folds`] 各自折叠；没有动作按钮、没有点击热区以外的
+/// 控件——折叠/展开全靠「点该区块」，与键盘 `^o` / `^t` 共用同一份展开状态。
 ///
 /// `history::layout` 与 `history::render` 必须共用本函数：工具行一旦换行，滚动条、
 /// 置顶行与 thinking 命中矩形都会漂移。
-pub(super) fn rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
+pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
     if width == 0 {
         return 0;
     }
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
         | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            expanded_or_preview_rows(call, width, expanded)
+            command::rows(call, width, folds)
         }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, expanded),
+        Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
-            file_diff::rows(&[call], width, &[expanded])
+            file_diff::rows(&[call], width, &[folds.body])
         }
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
-            HEADER_ROWS + file_summary::detail_rows(call, width, expanded)
+            HEADER_ROWS + file_summary::detail_rows(call, width, folds.body)
         }
     }
-}
-
-/// 进程卡片行数（折叠/展开共用同一入口）。
-fn expanded_or_preview_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    command::rows(call, width, expanded)
 }
 
 /// 标题行行数。
@@ -118,7 +151,7 @@ pub(super) fn draw(
     row_index: &mut usize,
     call: &ToolCallView,
     loading_frame: usize,
-    expanded: bool,
+    folds: Folds,
 ) {
     draw_animated(
         grid,
@@ -127,9 +160,9 @@ pub(super) fn draw(
         row_index,
         call,
         loading_frame,
-        expanded,
+        folds,
         true,
-        false,
+        None,
     );
 }
 
@@ -142,9 +175,9 @@ pub(super) fn draw_animated(
     row_index: &mut usize,
     call: &ToolCallView,
     loading_frame: usize,
-    expanded: bool,
+    folds: Folds,
     animating: bool,
-    hovered: bool,
+    hovered: Option<CardSection>,
 ) {
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
@@ -156,7 +189,7 @@ pub(super) fn draw_animated(
                 row_index,
                 call,
                 loading_frame,
-                expanded,
+                folds,
                 animating,
                 hovered,
             );
@@ -182,9 +215,9 @@ pub(super) fn draw_animated(
                 row_index,
                 &[call],
                 loading_frame,
-                &[expanded],
+                &[folds.body],
                 animating,
-                hovered.then_some(0),
+                hovered.is_some().then_some(0),
             );
             return;
         }
@@ -201,7 +234,7 @@ pub(super) fn draw_animated(
     *row_index += 1;
     // 普通工具的 `└─` 行**就是工具参数**，不铺展开底色（用户要求「不要覆盖到工具参数」）；
     // hover 提亮同样只作用于折叠内容，由 `file_summary::detail` 自己按 `hovered` 决定。
-    for segments in file_summary::detail(call, rect.width, expanded, hovered) {
+    for segments in file_summary::detail(call, rect.width, folds.body, hovered.is_some()) {
         if let Some(y) = visible_row(rect, scroll, *row_index) {
             put_segments(grid, rect.x, y, rect.width, &segments);
         }
@@ -268,10 +301,7 @@ pub(super) fn fold_region(call: &ToolCallView, width: u16) -> FoldRegion {
     }
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
-        | Some(crate::app::state::ToolDetailView::Interaction(_)) => FoldRegion {
-            offset: 0,
-            rows: command::foldable_rows(call, width),
-        },
+        | Some(crate::app::state::ToolDetailView::Interaction(_)) => FoldRegion::NONE,
         Some(crate::app::state::ToolDetailView::Plan(_)) => FoldRegion::NONE,
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             // 命中整块折叠内容：用户是「hover diff 块」，不是精准停在提示行上。
@@ -288,6 +318,106 @@ pub(super) fn fold_region(call: &ToolCallView, width: u16) -> FoldRegion {
     }
 }
 
+/// 输出区的文字档位：折叠且未悬停 = dim；悬停或展开 = 终端默认前景。
+///
+/// 只有**输出正文**随交互态提亮；参数/路径恒为浅黄（[`style::chat_tool_param`]）。
+pub(super) fn output_style(expanded: bool, hovered: bool) -> Style {
+    if expanded || hovered {
+        style::text()
+    } else {
+        style::muted()
+    }
+}
+
+/// 命令参数区折行后的一行（文本 + 着色档位）。
+pub(super) struct ParamLine {
+    pub(super) text: String,
+    pub(super) style: Style,
+}
+
+/// 命令参数区折行：折叠 [DETAIL_PREVIEW_ROWS] 行、展开 [DETAIL_MAX_ROWS] 行，
+/// 截断补 `…`，折叠态末尾单独一行写剩余行数。
+///
+/// agent 命令卡片与本地命令卡片共用：两个参数区必须同一口径（折行预算与截断），
+/// 否则同样长度的一句话在两处显示成不同的样子。参数恒为浅黄，不随 hover/展开变色。
+pub(super) fn param_lines(text: &str, width: u16, expanded: bool) -> Vec<ParamLine> {
+    let style = style::chat_tool_param();
+    let available = usize::from(width.saturating_sub(TREE_COLS as u16));
+    if available < MIN_PARAM_COLS {
+        return vec![ParamLine {
+            text: text.to_string(),
+            style,
+        }];
+    }
+    let budget = if expanded {
+        DETAIL_MAX_ROWS
+    } else {
+        DETAIL_PREVIEW_ROWS
+    };
+    // 组装按「可用列 × 行预算」放宽，让长命令真正折行而不是一路压成省略号。
+    let safe = single_line(
+        text,
+        TEXT_SAMPLE_CHARS
+            .saturating_mul(budget)
+            .max(TEXT_SAMPLE_CHARS),
+    );
+    let chars: Vec<char> = safe.chars().collect();
+    let mut out: Vec<ParamLine> = Vec::new();
+    let mut start = 0usize;
+    while start < chars.len() && out.len() < budget {
+        let mut col = 0usize;
+        let mut end = start;
+        while end < chars.len() {
+            let cell = chars[end].width().unwrap_or(1).max(1);
+            if col + cell > available {
+                break;
+            }
+            col += cell;
+            end += 1;
+        }
+        if end == start {
+            end = start + 1;
+        }
+        let mut row: String = chars[start..end].iter().collect();
+        // 末行仍有内容没画完：补 `…`（截断标记不占新行）。
+        if end < chars.len() && out.len() + 1 == budget {
+            while row.width() + 1 > available && !row.is_empty() {
+                row.pop();
+            }
+            row.push('…');
+        }
+        out.push(ParamLine {
+            text: row.trim_end().to_string(),
+            style,
+        });
+        start = end;
+    }
+    if out.is_empty() {
+        out.push(ParamLine {
+            text: String::new(),
+            style,
+        });
+    }
+    // 折叠态末尾单独一行写剩余行数（展开后消失）；不占折叠额度。
+    // 提示行属于参数区，与参数同一档颜色（不是 meta 信息）。
+    // 窄到放不下整句就不画，避免半截提示。
+    if !expanded && start < chars.len() {
+        let hint =
+            text::agent::file_diff_more_lines(estimate_remaining_lines(&chars[start..], available));
+        if hint.width() <= available {
+            out.push(ParamLine { text: hint, style });
+        }
+    }
+    out
+}
+
+/// 剩余内容还能折成几行（只用于提示文案，按整列硬切估算即可）。
+fn estimate_remaining_lines(rest: &[char], available: usize) -> usize {
+    let width = available.max(1);
+    let cols: usize = rest.iter().map(|ch| ch.width().unwrap_or(1).max(1)).sum();
+    cols.div_ceil(width).max(1)
+}
+
 /// 该调用的内容是否**能靠展开看到更多**（不能时不登记点击面）。
 ///
 /// 判据必须是**内容行**的比较，而不是 `rows()`：折叠态末尾有一行「剩余行数」提示，
@@ -298,9 +428,11 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         return false;
     }
     match call.detail.as_deref() {
-        Some(crate::app::state::ToolDetailView::Command(_))
-        | Some(crate::app::state::ToolDetailView::Interaction(_)) => {
-            command::content_rows(call, width, true) > command::content_rows(call, width, false)
+        Some(crate::app::state::ToolDetailView::Command(_)) => {
+            command::params_expandable(call, width) || command::output_expandable(call, width)
+        }
+        Some(crate::app::state::ToolDetailView::Interaction(_)) => {
+            command::params_expandable(call, width)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => false,
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
@@ -309,6 +441,109 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             file_summary::detail_content_rows(call, width, true)
                 > file_summary::detail_content_rows(call, width, false)
+        }
+    }
+}
+
+/// 卡片的可交互区域（几何相对步骤块首）。
+///
+/// 命令卡片把「命令参数」与「输出」拆成两块：各自的点击面与折叠状态互不影响；
+/// 参数区恒为浅黄、**不响应 hover**，只有输出区（或运行中的引导行）随 hover 提亮。
+/// 文件工具仍是整块一个区域（hover 只看折叠内容）；运行中的命令卡片整卡点击打开
+/// 后台任务面板。
+pub(super) fn card_regions(
+    call: &ToolCallView,
+    width: u16,
+    folds: Folds,
+    step_rows: usize,
+) -> Vec<CardRegion> {
+    if width == 0 {
+        return Vec::new();
+    }
+    let no_fold = RowSpan { offset: 0, rows: 0 };
+    match call.detail.as_deref() {
+        Some(crate::app::state::ToolDetailView::Command(view)) => {
+            let blocks = command::blocks(call, width, folds);
+            let params = RowSpan {
+                offset: HEADER_ROWS,
+                rows: blocks.params,
+            };
+            let guide = RowSpan {
+                offset: HEADER_ROWS + blocks.params,
+                rows: blocks.output,
+            };
+            if view.state.is_running() {
+                // 长任务：参数整段与引导行都是「打开面板」的点击面；只有引导行响应 hover。
+                return vec![
+                    CardRegion {
+                        section: CardSection::Body,
+                        card: RowSpan {
+                            offset: 0,
+                            rows: HEADER_ROWS + blocks.params,
+                        },
+                        fold: no_fold,
+                        clickable: true,
+                    },
+                    CardRegion {
+                        section: CardSection::Output,
+                        card: guide,
+                        fold: guide,
+                        clickable: true,
+                    },
+                ];
+            }
+            let mut regions = vec![CardRegion {
+                section: CardSection::Body,
+                card: params,
+                fold: no_fold,
+                clickable: command::params_expandable(call, width),
+            }];
+            if blocks.output > 0 {
+                // 只有**真被折叠**的输出（比预览多）才响应 hover：短输出点了也不会变，
+                // 提亮只会制造「还能展开」的错觉。
+                let expandable = command::output_expandable(call, width);
+                regions.push(CardRegion {
+                    section: CardSection::Output,
+                    card: guide,
+                    fold: if expandable { guide } else { no_fold },
+                    clickable: expandable,
+                });
+            }
+            regions
+        }
+        Some(crate::app::state::ToolDetailView::Interaction(_)) => {
+            let params = RowSpan {
+                offset: HEADER_ROWS,
+                rows: step_rows.saturating_sub(HEADER_ROWS),
+            };
+            vec![CardRegion {
+                section: CardSection::Body,
+                card: params,
+                fold: no_fold,
+                clickable: command::params_expandable(call, width),
+            }]
+        }
+        Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
+        Some(crate::app::state::ToolDetailView::File(_)) | None => {
+            // 展开前后行数不变就不登记：文件工具没有「分块 hover」可提亮，
+            // 留下一个点了没反应的点击面只会误导。
+            if !has_expandable_content(call, width) {
+                return Vec::new();
+            }
+            let region = fold_region(call, width);
+            let fold_offset = HEADER_ROWS + region.offset;
+            vec![CardRegion {
+                section: CardSection::Body,
+                card: RowSpan {
+                    offset: 0,
+                    rows: step_rows,
+                },
+                fold: RowSpan {
+                    offset: fold_offset,
+                    rows: region.rows.min(step_rows.saturating_sub(fold_offset)),
+                },
+                clickable: true,
+            }]
         }
     }
 }

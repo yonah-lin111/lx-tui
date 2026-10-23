@@ -393,7 +393,7 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 ///
 /// - 折叠态：最多 [`DETAIL_PREVIEW_ROWS`] 行正文，**下面再单独一行**写剩余行数
 ///   （`… 421 more lines`，用户要求「在折叠内容下一行显示剩余行数」）；
-/// - 展开态：最多 [`DETAIL_MAX_ROWS`] 行，**参数文字升为默认可读前景**（折叠回 dim），
+/// - 展开态：最多 [`DETAIL_MAX_ROWS`] 行（参数文字始终是同一档浅黄），
 ///   且不再有剩余行数行；`└─` 行是工具参数本身，不铺展开灰底。
 ///
 /// `rows` 与 `draw` 共用本函数，行数口径只有一份。
@@ -416,13 +416,8 @@ pub(super) fn detail(
         (prefix, prefix_cols)
     };
     let body_limit = limit.saturating_sub(head_cols).max(1);
-    // 参数文字：**展开后保持默认可读前景**（用户要求「展开参数后文字保持高亮、
-    // 折叠后恢复」），折叠态只在悬停时提亮（没有按钮，hover 是「这块可点」的提示）。
-    let param_style = if expanded || hovered {
-        style::chat_tool_param_expanded()
-    } else {
-        style::chat_tool_param()
-    };
+    // 参数文字（路径 / 搜索模式）：**恒为浅黄**，不随 hover 或展开变色。
+    let param_style = style::chat_tool_param();
     // 两次组装、共享同一份解析缓存（一帧内仍只解析一次 `arguments_json`）：
     // - **展示**按折叠额度组装，让位顺序照旧（次要计数先丢、路径再省略）——
     //   用展开额度展示会让长路径铺满两行、把计数挤到看不见；
@@ -492,7 +487,7 @@ pub(super) fn detail(
         if hint.width() <= room {
             // 悬停时与折叠内容一起提亮：提示行就是这块可点性的唯一文案。
             let hint_style = if hovered {
-                style::chat_tool_param_hover()
+                style::text()
             } else {
                 style::agent_step_detail()
             };

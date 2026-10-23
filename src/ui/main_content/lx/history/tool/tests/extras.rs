@@ -490,8 +490,8 @@ fn short_detail_stays_one_row_and_is_not_clickable() {
         1,
         "短参数展开也只有 1 行"
     );
-    assert_eq!(rows(&call, 80, false), 2, "标题 + 详情");
-    assert_eq!(rows(&call, 80, true), 2, "展开也不变");
+    assert_eq!(rows(&call, 80, folds(false)), 2, "标题 + 详情");
+    assert_eq!(rows(&call, 80, folds(true)), 2, "展开也不变");
 }
 
 /// 长参数：布局行数随展开变化，且折叠/展开差值就是多出来的行。
@@ -509,8 +509,8 @@ fn long_detail_rows_follow_expansion() {
         }),
         None,
     );
-    let folded = rows(&call, 24, false);
-    let expanded = rows(&call, 24, true);
+    let folded = rows(&call, 24, folds(false));
+    let expanded = rows(&call, 24, folds(true));
     assert!(
         file_summary::detail(&call, 24, true, false).len() > file_summary::DETAIL_PREVIEW_ROWS,
         "长参数展开超过折叠额度"
@@ -527,7 +527,7 @@ fn long_detail_rows_follow_expansion() {
 ///
 /// 用户要求「展开参数后参数内容文字保持高亮的文字颜色，折叠后恢复」。
 #[test]
-fn parameter_lifts_when_expanded_and_recovers_when_folded() {
+fn parameter_stays_light_yellow_when_expanded() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
     let folded = file_summary::detail(&call, 80, false, false);
     let expanded = file_summary::detail(&call, 80, true, false);
@@ -539,11 +539,11 @@ fn parameter_lifts_when_expanded_and_recovers_when_folded() {
             .map(|segment| segment.style)
             .expect("参数段")
     };
-    assert_eq!(param_style(&folded), style::chat_tool_param(), "折叠态 dim");
+    assert_eq!(param_style(&folded), style::chat_tool_param(), "折叠态浅黄");
     assert_eq!(
         param_style(&expanded),
-        style::chat_tool_param_expanded(),
-        "展开态保持默认前景"
+        style::chat_tool_param(),
+        "展开态仍是同一档浅黄（不做展开高亮）"
     );
 }
 
@@ -592,7 +592,7 @@ fn folded_detail_reports_remaining_lines_below_content() {
 
 /// 悬停把折叠参数从 dim 提亮为默认前景；展开块有独立底色。
 #[test]
-fn hovered_detail_lifts_to_default_foreground() {
+fn hovered_detail_keeps_the_light_yellow() {
     let call = tool_call("read", ToolStatus::Completed, Some(read_summary()), None);
     let normal = file_summary::detail(&call, 80, false, false);
     let hovered = file_summary::detail(&call, 80, false, true);
@@ -603,11 +603,11 @@ fn hovered_detail_lifts_to_default_foreground() {
             .map(|segment| segment.style)
             .expect("参数段")
     };
-    assert_eq!(param_style(&normal), style::chat_tool_param(), "常态 dim");
+    assert_eq!(param_style(&normal), style::chat_tool_param(), "常态浅黄");
     assert_eq!(
         param_style(&hovered),
-        style::chat_tool_param_hover(),
-        "悬停提亮为默认前景"
+        style::chat_tool_param(),
+        "悬停不改参数颜色（不做 hover 高亮）"
     );
     assert_eq!(normal.len(), hovered.len(), "悬停不改行数");
     // 普通工具的 `└─` 行是参数本身，展开时**不铺**底色（用户要求不覆盖参数）。
@@ -649,9 +649,5 @@ fn remaining_hint_row_is_inside_the_fold_region_and_lifts() {
         style::agent_step_detail(),
         "常态提示行是 dim"
     );
-    assert_eq!(
-        hint_style(true),
-        style::chat_tool_param_expanded(),
-        "悬停提示行升为默认前景"
-    );
+    assert_eq!(hint_style(true), style::text(), "悬停提示行升为默认前景");
 }

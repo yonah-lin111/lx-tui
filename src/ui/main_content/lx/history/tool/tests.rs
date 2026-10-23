@@ -25,6 +25,14 @@ mod extras;
 mod structure;
 mod width;
 
+/// 两块按同一个开关折叠：文件工具只有主体一块，命令卡片测试按需显式给两块。
+fn folds(expanded: bool) -> Folds {
+    Folds {
+        body: expanded,
+        output: expanded,
+    }
+}
+
 // ===== 构造与辅助 =====
 
 /// 构造一个工具调用步骤。
@@ -92,7 +100,7 @@ fn render_row(call: &ToolCallView, width: u16) -> (String, Grid) {
 
 /// 以指定 loading 帧渲染（方块呼吸相位断言用）。
 fn render_row_at(call: &ToolCallView, width: u16, loading_frame: usize) -> (String, Grid) {
-    let total = rows(call, width, false);
+    let total = rows(call, width, folds(false));
     let rect = Rect::new(0, 0, width, u16::try_from(total.max(1)).unwrap_or(u16::MAX));
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
@@ -103,11 +111,11 @@ fn render_row_at(call: &ToolCallView, width: u16, loading_frame: usize) -> (Stri
         &mut row_index,
         call,
         loading_frame,
-        false,
+        folds(false),
     );
     assert_eq!(
         row_index,
-        rows(call, width, false),
+        rows(call, width, folds(false)),
         "绘制推进行数必须与 rows 一致"
     );
     (grid_text(&grid, rect), grid)

@@ -208,7 +208,8 @@ fn toggling_tool_detail_while_following_keeps_the_viewport() {
         &mut state,
         pane,
         "assistant-0",
-        "call-1"
+        "call-1",
+        crate::app::state::CardSection::Body
     ));
     let after = crate::ui::main_content::lx::history_view(
         area,
@@ -237,7 +238,13 @@ fn unknown_targets_do_not_anchor_the_viewport() {
     assert!(!toggle_thinking_at(&mut state, pane, 0, 99));
     // 存在但不是 thinking 的步骤（用户消息的正文）。
     assert!(!toggle_thinking_at(&mut state, pane, 0, 0));
-    assert!(!toggle_tool_detail(&mut state, pane, "missing", "missing"));
+    assert!(!toggle_tool_detail(
+        &mut state,
+        pane,
+        "missing",
+        "missing",
+        crate::app::state::CardSection::Body
+    ));
     let chat = &state.pane_anywhere(pane).expect("pane").lx.chat;
     assert!(chat.follow_bottom, "失败的切换不应改动视口状态");
     assert_eq!(chat.history_scroll, 0);
@@ -329,7 +336,8 @@ fn toggling_file_diff_card_while_following_keeps_the_viewport() {
         &mut state,
         pane,
         "assistant-1",
-        "call-1"
+        "call-1",
+        crate::app::state::CardSection::Body
     ));
     let view = crate::ui::main_content::lx::history_view(
         area,

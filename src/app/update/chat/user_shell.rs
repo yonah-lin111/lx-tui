@@ -412,13 +412,43 @@ pub fn on_user_shell_cancelled(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 切换命令卡片展开状态（点击整块）：先锚定视口，避免跟随底部时跳回顶部。
-pub fn toggle_shell_expanded(state: &mut AppState, pane: PaneId, message_id: &str) -> bool {
-    let expanded = state
+/// 点击本地命令卡片：**行为随进程状态切换**（与 agent 命令卡片同一口径）。
+///
+/// - 命令仍在跑（长任务）：打开后台任务面板并定位该进程——卡片只给一行引导；
+/// - 终态：切换**被点中的那个区域**的折叠（参数与输出各自独立）。
+pub fn activate_shell_card(
+    state: &mut AppState,
+    pane: PaneId,
+    message_id: &str,
+    section: crate::app::state::CardSection,
+) -> bool {
+    let running = state
         .pane_anywhere(pane)
-        .is_some_and(|target| target.lx.chat.detail_is_expanded(message_id, "shell"));
-    super::pin_lx_viewport(state, pane);
-    let Some(target) = state.pane_mut_anywhere(pane) else {
+        .and_then(|target| {
+            target
+                .lx
+                .chat
+                .messages
+                .iter()
+                .find(|message| message.id == message_id)
+                .and_then(|message| message.shell.as_ref())
+        })
+        .filter(|shell| shell.is_running())
+        .map(|shell| shell.process_id);
+    let Some(process_id) = running else {
+        return toggle_shell_section(state, pane, message_id, section);
+    };
+    super::open_task_page_at(state, pane, process_id)
+}
+
+/// 切换命令卡片某区域的展开状态：先锚定视口，避免跟随底部时跳回顶部。
+pub fn toggle_shell_section(
+    state: &mut AppState,
+    pane: PaneId,
+    message_id: &str,
+    section: crate::app::state::CardSection,
+) -> bool {
+    let Some(target) = state.pane_anywhere(pane) else {
         return false;
     };
     if !target
@@ -430,16 +460,14 @@ pub fn toggle_shell_expanded(state: &mut AppState, pane: PaneId, message_id: &st
     {
         return false;
     }
+    super::pin_lx_viewport(state, pane);
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
     target
         .lx
         .chat
-        .detail_expanded
-        .retain(|(id, slot, _)| !(id == message_id && slot == "shell"));
-    target
-        .lx
-        .chat
-        .detail_expanded
-        .push((message_id.to_string(), "shell".into(), !expanded));
+        .toggle_section(message_id, crate::app::state::SHELL_SLOT, section);
     true
 }
 

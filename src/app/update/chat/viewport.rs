@@ -272,13 +272,15 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
         CardTarget::Tool {
             message_id,
             call_id,
-        } => super::toggle_tool_detail(state, pane, &message_id, &call_id),
+            section,
+        } => super::activate_tool_card(state, pane, &message_id, &call_id, section),
         CardTarget::Thinking {
             message_index,
             step_index,
         } => super::toggle_thinking_at(state, pane, message_index, step_index),
-        CardTarget::Shell { message_id } => {
-            super::user_shell::toggle_shell_expanded(state, pane, &message_id)
-        }
+        CardTarget::Shell {
+            message_id,
+            section,
+        } => super::user_shell::activate_shell_card(state, pane, &message_id, section),
     }
 }

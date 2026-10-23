@@ -24,9 +24,9 @@ mod view;
 mod viewport;
 
 pub use process::{
-    apply_interaction_exit, apply_process_exit, apply_process_output, apply_process_snapshot,
-    commit_plan, open_task_for_selected_tool, reconcile_process_records, restore_plan,
-    select_adjacent_tool, settle_tool_detail, toggle_tool_detail,
+    activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
+    apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,
+    restore_plan, select_adjacent_tool, settle_tool_detail, toggle_tool_detail,
 };
 pub use rewind::{
     apply_enter as apply_rewind_enter, apply_input as apply_rewind_input,

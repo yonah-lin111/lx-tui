@@ -173,12 +173,11 @@ fn alive_process_yellow_is_distinct_from_every_other_step_color() {
         assert_ne!(Some(orange), other, "存活深黄不得与{label}同色");
     }
 
-    // 工具参数用次要信息色（用户要求「改为输入框下方上下文的字体颜色」）：
-    // 不占第二个暖色槽位，存活橙黄仍是唯一的暖色结构色。
+    // 工具参数用浅黄：与存活橙黄同色系但更淡，两者不得撞色。
     assert_eq!(
         chat_tool_param().fg,
-        muted().fg,
-        "参数不上色，存活橙黄({index})是唯一的暖色结构色"
+        Some(Color::Indexed(222)),
+        "参数是浅黄（与存活橙黄 {index} 区分）"
     );
 }
 
@@ -247,11 +246,11 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
         "完成方块不加粗，与运行中区分"
     );
 
-    // 可变参数用次要信息色：不占第三个色相档，也不与运行/完成两档抢注意力。
+    // 可变参数用浅黄：比运行态琥珀淡一档，常驻、不压暗。
     assert_eq!(
         chat_tool_param().fg,
-        muted().fg,
-        "工具参数用 dim（与上下文用量同档）"
+        Some(Color::Indexed(222)),
+        "工具参数是浅黄"
     );
     assert!(
         !chat_tool_param()
@@ -268,42 +267,22 @@ fn chat_step_palette_uses_amber_for_running_and_green_when_done() {
     );
 }
 
-/// 工具行可变参数：与左下角上下文用量同档的**次要信息色**；悬停升为默认前景。
+/// 工具行可变参数：**常驻浅黄**，不随 hover / 展开变色，不铺底色。
 ///
-/// 用户要求「工具参数颜色改为输入框下方上下文的字体颜色」：那行用量是 `muted()`，
-/// 参数跟着走；折叠参数悬停提亮为默认前景；**没有**展开块底色（只有 diff 增删行有底色）。
+/// 用户要求「工具参数与文件操作工具的 path 用浅一点的黄色，不要 hover 高亮和
+/// 展开高亮」：这一层只有一个常驻档位。
 #[test]
-fn folded_param_lifts_on_hover_and_no_block_background() {
-    assert_eq!(
-        chat_tool_param_hover(),
-        Style::default(),
-        "悬停提亮为默认前景"
-    );
-    assert_eq!(chat_tool_param().bg, None, "参数行不铺底色");
-}
-
-/// 展开态与悬停态同档：参数自己维持默认可读前景，不靠鼠标。
-#[test]
-fn expanded_param_stays_at_default_foreground() {
-    assert_eq!(
-        chat_tool_param_expanded(),
-        chat_tool_param_hover(),
-        "展开态与悬停态同档"
-    );
-    assert_ne!(
-        chat_tool_param_expanded(),
-        chat_tool_param(),
-        "展开态必须比折叠态的 dim 更亮"
-    );
-}
-
-#[test]
-fn chat_tool_param_matches_context_usage() {
+fn tool_param_is_a_steady_light_yellow() {
     let style = chat_tool_param();
-    assert_eq!(style, muted(), "参数与上下文用量同色（dim）");
+    assert_eq!(style.fg, Some(Color::Indexed(222)), "浅黄");
+    assert_eq!(style.bg, None, "参数行不铺底色");
+    assert!(
+        !style.add_modifier.contains(Modifier::DIM),
+        "参数不压暗（浅黄本身就是常驻标识）"
+    );
     assert!(
         !style.add_modifier.contains(Modifier::UNDERLINED),
-        "只有 dim，不加下划线（连续多行下划线会盖过翡翠绿结构色）"
+        "只有颜色，不加下划线（连续多行下划线会盖过翡翠绿结构色）"
     );
 }
 

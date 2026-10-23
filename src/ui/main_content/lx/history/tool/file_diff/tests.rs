@@ -678,14 +678,10 @@ fn file_diff_hover_region_is_the_whole_folded_block_but_only_the_hint_lifts() {
     let (path_normal, hint_normal, body_normal) = styles(None);
     let (path_hovered, hint_hovered, body_hovered) = styles(Some(0));
     assert_eq!(path_normal, path_hovered, "文件头路径不随 hover 变色");
-    assert_eq!(path_normal, style::chat_tool_param(), "路径恒为 dim");
+    assert_eq!(path_normal, style::chat_tool_param(), "路径恒为浅黄");
     assert_eq!(body_normal, body_hovered, "diff 正文不随 hover 变色");
     assert_ne!(hint_normal, hint_hovered, "提示行应提亮");
-    assert_eq!(
-        hint_hovered,
-        style::chat_tool_param_expanded(),
-        "提示行升为默认前景"
-    );
+    assert_eq!(hint_hovered, style::text(), "提示行升为默认前景");
     assert!(
         has_more_content(&call, width),
         "有 hover 区更要有展开：内容确实更多"

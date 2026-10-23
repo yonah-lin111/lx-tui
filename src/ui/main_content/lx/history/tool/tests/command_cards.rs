@@ -99,11 +99,11 @@ fn plan(steps: Vec<(&str, PlanStepView)>) -> ToolCallView {
 ///
 /// 宽度 0 时网格不可用（`Grid` 要求非零尺寸），仍调用 `draw` 验证「不推进不 panic」。
 fn render(call: &ToolCallView, width: u16, expanded: bool) -> (String, usize) {
-    let height = rows(call, width, expanded).max(1) as u16;
+    let height = rows(call, width, folds(expanded)).max(1) as u16;
     let rect = Rect::new(0, 0, width, height);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, call, 0, expanded);
+    draw(&mut grid, rect, 0, &mut row_index, call, 0, folds(expanded));
     let mut lines: Vec<String> = Vec::new();
     for y in rect.y..rect.bottom() {
         let mut line = String::new();
@@ -136,7 +136,7 @@ fn rows_and_draw_agree_for_every_width_and_state() {
         for width in [0u16, 1, 2, 4, 10, 20, 40, 120] {
             for expanded in [false, true] {
                 let (_, advanced) = render(call, width, expanded);
-                let expected = rows(call, width, expanded);
+                let expected = rows(call, width, folds(expanded));
                 // 宽度 0 不占行、也不推进（外层布局已跳过该块）。
                 assert_eq!(
                     advanced, expected,
@@ -149,8 +149,8 @@ fn rows_and_draw_agree_for_every_width_and_state() {
 }
 
 #[test]
-fn running_command_card_shows_command_and_status_only() {
-    // 卡片收敛为三行：输出、cwd、`… +N more lines` 全部搬进后台任务面板。
+fn running_command_card_shows_only_the_command_and_guide() {
+    // 长任务：命令 + 一行引导；输出一律不进消息列表（完整日志在面板里）。
     let output = "running 24 tests\ntest read::empty_file ... ok\ntest result: ok\n";
     let (text, _) = render(&running_command(output), 60, false);
     assert!(text.contains("Run command"), "标题动词：{text}");
@@ -159,32 +159,36 @@ fn running_command_card_shows_command_and_status_only() {
         "命令在树体首行：{text}"
     );
     assert!(text.contains("Running"), "状态文字必须可见：{text}");
-    assert!(!text.contains("test result: ok"), "不再渲染输出：{text}");
+    assert!(!text.contains("test result: ok"), "不渲染任何输出：{text}");
     assert!(!text.contains("cwd:"), "不再渲染 cwd：{text}");
     assert!(
-        !text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
-        "没有 open 入口（按钮已移除）：{text}"
+        text.contains(crate::ui::text::agent::TASK_OPEN_GUIDE),
+        "末行给出打开面板的引导：{text}"
     );
+    assert_eq!(text.lines().count(), 3, "标题 + 命令 + 引导：{text}");
 }
 
 #[test]
-fn command_card_ignores_the_expanded_flag() {
-    // 卡片没有展开态了：两种 flag 下都必须逐字符一致（几何与内容都恒定）。
+fn running_card_never_prints_output_rows() {
+    // 运行中的卡片只留引导行：输出只在后台任务面板里。
     let output: String = (0..10).map(|index| format!("line {index}\n")).collect();
-    let (folded, folded_rows) = render(&running_command(&output), 60, false);
-    let (expanded, expanded_rows) = render(&running_command(&output), 60, true);
-    assert_eq!(folded, expanded, "展开标志不再影响卡片内容");
-    assert_eq!(folded_rows, expanded_rows, "也不再影响行数");
-    assert!(!folded.contains("line 0"), "任何形态都不渲染输出：{folded}");
+    let (text, _) = render(&running_command(&output), 60, false);
+    assert!(!text.contains("line 9"), "不渲染输出：{text}");
+    assert!(!text.contains("line 0"), "不渲染输出：{text}");
+    assert!(!text.contains("… +"), "运行中不给省略提示：{text}");
 }
 
 #[test]
-fn command_without_output_has_no_placeholder_or_entry() {
-    // 没有输出时不需要占位，也不再给入口行：卡片只剩标题 + 命令。
+fn command_without_output_has_no_placeholder() {
+    // 尚无输出时不画「等待中」占位（那是本地命令卡片的口径）；只留命令 + 引导。
     let (text, _) = render(&running_command(""), 60, false);
     assert!(!text.contains("Waiting for output"), "无输出占位：{text}");
     assert!(
-        !text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
+        text.contains(crate::ui::text::agent::TASK_OPEN_GUIDE),
+        "引导行始终在：{text}"
+    );
+    assert!(
+        !text.lines().any(|line| line.trim_end().ends_with(" open")),
         "{text}"
     );
 }
@@ -201,8 +205,8 @@ fn interaction_card_distinguishes_verbs_and_hides_io() {
     assert!(!send.contains("stdin:"), "输入预览不再上卡片：{send}");
     for text in [read, send] {
         assert!(
-            !text.contains(crate::ui::text::agent::TASK_OPEN_LABEL),
-            "交互卡片也没有 open：{text}"
+            !text.lines().any(|line| line.trim_end().ends_with(" open")),
+            "交互卡片也没有 open 入口行：{text}"
         );
     }
 }
@@ -240,7 +244,11 @@ fn wide_characters_and_long_steps_wrap_without_breaking_geometry() {
     )]);
     for width in [10u16, 20, 30] {
         let (text, advanced) = render(&call, width, false);
-        assert_eq!(advanced, rows(&call, width, false), "中文换行后几何仍一致");
+        assert_eq!(
+            advanced,
+            rows(&call, width, folds(false)),
+            "中文换行后几何仍一致"
+        );
         assert!(!text.contains('\u{fffd}'), "不得按字节切断宽字符：{text}");
     }
 }
@@ -259,11 +267,11 @@ fn long_command_is_truncated_with_an_ellipsis() {
 #[test]
 fn zero_width_card_draws_nothing() {
     let call = running_command("output\n");
-    assert_eq!(rows(&call, 0, false), 0);
+    assert_eq!(rows(&call, 0, folds(false)), 0);
     let rect = Rect::new(0, 0, 0, 1);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, &call, 0, false);
+    draw(&mut grid, rect, 0, &mut row_index, &call, 0, folds(false));
     assert_eq!(row_index, 0, "宽度 0 不推进任何行");
 }
 
@@ -305,15 +313,26 @@ fn header_shows_status_inline_and_has_no_corner_details_marker() {
 }
 
 #[test]
-fn command_body_is_the_only_tree_row_and_closes_with_leaf() {
-    // 树体只有命令（可能折成多行），最后一行用直角收口。
+fn running_card_guide_is_not_wrapped_by_the_tree() {
+    // 运行中的树体：`└─` 只收口参数（命令），引导行用等宽空白对齐、不再被树干包围。
     let call = running_command("line\n");
     let (text, _) = render(&call, 60, false);
     let lines: Vec<&str> = text.lines().collect();
-    assert_eq!(lines.len(), 2, "标题 + 命令：{text}");
+    assert!(lines[0].starts_with('■'), "首行是标题：{text}");
     assert!(
         lines[1].starts_with(text::agent::TREE_LEAF),
-        "末行用直角收口：{text}"
+        "命令行是参数区的收口行：{text}"
+    );
+    assert!(
+        lines.last().is_some_and(|line| {
+            line.starts_with(text::agent::TREE_PAD) && line.contains(text::agent::TASK_OPEN_GUIDE)
+        }),
+        "引导行只缩进、不画连接符：{text}"
+    );
+    assert_eq!(
+        text.matches(text::agent::TREE_LEAF).count(),
+        1,
+        "整张卡片只有一根树干：{text}"
     );
 }
 
@@ -327,24 +346,23 @@ fn command_prompt_marker_is_ascii_and_short() {
 // ===== 树形版式（`│` 中间行 + `└─` 收口）=====
 
 #[test]
-fn command_body_uses_one_tree_with_a_single_leaf_at_the_end() {
+fn leaf_closes_the_params_block_and_output_is_not_wrapped() {
     let output = "aaa\nbbb\nccc\nddd\n";
     let (text, _) = render(&running_command(output), 60, false);
     let lines: Vec<&str> = text.lines().collect();
-    // 第 1 行是标题，其余都是树体。
     assert!(lines[0].starts_with('■'), "第 1 行是标题：{text}");
-    // 中间行一律是 `  │  `：命令、省略提示、输出的每一行都串在同一根树干上。
-    for line in &lines[1..lines.len() - 1] {
+    // 参数区收口：命令只有一行，它就是 `└─`。
+    assert!(
+        lines[1].starts_with(text::agent::TREE_LEAF),
+        "参数区最后一行收口：{text}"
+    );
+    // 输出/引导区块不画树：只用等宽空白对齐到内容列。
+    for line in &lines[2..] {
         assert!(
-            line.starts_with(text::agent::TREE_BAR),
-            "中间行都以竖线开头：{line:?}"
+            line.starts_with(text::agent::TREE_PAD),
+            "输出区不被 `│` / `└─` 包裹：{line:?}"
         );
     }
-    assert!(
-        lines[lines.len() - 1].starts_with(text::agent::TREE_LEAF),
-        "最后一行用直角收口：{text}"
-    );
-    // 只出现一次收口——树干不会分叉成多根。
     assert_eq!(
         text.matches(text::agent::TREE_LEAF).count(),
         1,
@@ -371,22 +389,27 @@ fn tree_never_mixes_branch_symbols() {
 
 #[test]
 fn tree_prefixes_are_equal_width_so_content_stays_aligned() {
-    // `  │  ` 与 `  └─ ` 必须等宽，否则正文会左右错位（视觉上树干断裂）。
-    assert_eq!(
-        text::agent::TREE_BAR.width(),
-        text::agent::TREE_LEAF.width(),
-        "竖线与收口前缀必须等宽"
-    );
+    // `  │  ` / `  └─ ` / 空白前缀必须等宽，否则正文会左右错位（视觉上树干断裂）。
+    for prefix in [text::agent::TREE_LEAF, text::agent::TREE_PAD] {
+        assert_eq!(
+            text::agent::TREE_BAR.width(),
+            prefix.width(),
+            "树体与空白前缀必须等宽"
+        );
+    }
     let (text, _) = render(&running_command("out\n"), 60, false);
     let content_columns: Vec<usize> = text
         .lines()
         .skip(1)
         .map(|line| {
-            let prefix = if line.starts_with(text::agent::TREE_LEAF) {
-                text::agent::TREE_LEAF
-            } else {
-                text::agent::TREE_BAR
-            };
+            let prefix = [
+                text::agent::TREE_LEAF,
+                text::agent::TREE_BAR,
+                text::agent::TREE_PAD,
+            ]
+            .into_iter()
+            .find(|prefix| line.starts_with(prefix))
+            .unwrap_or(text::agent::TREE_PAD);
             line.strip_prefix(prefix).map(str::len).unwrap_or(0)
         })
         .collect();
@@ -397,16 +420,14 @@ fn tree_prefixes_are_equal_width_so_content_stays_aligned() {
 }
 
 #[test]
-fn card_never_mentions_hidden_output_lines() {
-    // 省略提示是为"卡片内预览"存在的；输出全搬进面板后它必须彻底消失。
+fn running_card_never_shows_output_or_ellipsis_hint() {
+    // 「还有多少行没显示」由面板回答：卡片只画命令与引导，不画输出与省略提示。
     let output: String = (0..40).map(|index| format!("line {index}\n")).collect();
     let (text, _) = render(&running_command(&output), 60, false);
-    assert!(
-        !text.contains(text::agent::EARLIER_OUTPUT_HINT),
-        "不再有 `… +N` 省略提示：{text}"
-    );
+    assert!(!text.contains("… +"), "运行中没有 `… +N` 省略提示：{text}");
     assert!(!text.contains("more lines"), "不再提 more lines：{text}");
-    assert_eq!(text.lines().count(), 2, "标题 + 命令：{text}");
+    assert!(!text.contains("line 39"), "输出不上卡片：{text}");
+    assert!(!text.contains("line 0"), "输出不上卡片：{text}");
 }
 
 #[test]
@@ -439,8 +460,8 @@ fn interaction_card_keeps_only_the_command_row() {
     assert!(!text.contains("stdin:"), "stdin 预览不再上卡片：{text}");
     assert!(!text.contains("new line"), "输出不再上卡片：{text}");
     assert!(
-        !text.contains(text::agent::TASK_OPEN_LABEL),
-        "没有 open：{text}"
+        !text.lines().any(|line| line.trim_end().ends_with(" open")),
+        "没有 open 入口行：{text}"
     );
 }
 
@@ -496,7 +517,7 @@ fn running_process_keeps_breathing_even_after_the_tool_settled() {
     let rect = Rect::new(0, 0, 60, 30);
     let mut grid = Grid::new(rect);
     let mut row_index = 0usize;
-    draw(&mut grid, rect, 0, &mut row_index, &call, 0, false);
+    draw(&mut grid, rect, 0, &mut row_index, &call, 0, folds(false));
     let filled = grid.cell(rect.x, rect.y);
     assert_eq!(
         filled.ch,
@@ -513,7 +534,7 @@ fn running_process_keeps_breathing_even_after_the_tool_settled() {
         &mut row_index,
         &call,
         text::agent::STEP_BREATH_TICKS,
-        false,
+        folds(false),
     );
     assert_eq!(
         grid.cell(rect.x, rect.y).ch,
@@ -539,7 +560,7 @@ fn finished_process_stops_breathing() {
         &mut row_index,
         &call,
         text::agent::STEP_BREATH_TICKS,
-        false,
+        folds(false),
     );
     assert_eq!(
         grid.cell(rect.x, rect.y).ch,
@@ -568,7 +589,7 @@ fn mark_style(call: &ToolCallView) -> ratatui::style::Style {
     let area = Rect::new(0, 0, 100, 12);
     let mut grid = Grid::new(area);
     let mut row = 0usize;
-    draw(&mut grid, area, 0, &mut row, call, 0, false);
+    draw(&mut grid, area, 0, &mut row, call, 0, folds(false));
     grid.cell(area.x, 0).style
 }
 
@@ -643,17 +664,28 @@ fn finished_card_shows_exit_code_without_elapsed_time() {
 // ===== 末尾展开/收起行的宽度让位（整项丢弃，不截半段）=====
 
 #[test]
-fn finished_process_card_has_no_open_entry() {
-    // 用户要求「后台任务已经结束就不要显示 open」：终态卡片整行不画，
-    // 只剩标题 + 命令两行，也不再登记命中区。
+fn finished_process_card_has_no_guide_and_no_ellipsis() {
+    // 终态：不再有打开面板的引导（面板是给「还在跑」的东西看的），
+    // 改为命令 + 输出首尾预览，行数与 `rows()` 一致。
     let mut call = running_command("out\n");
     let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut() else {
         panic!("expected command view");
     };
     view.state = ProcessStateView::Exited { code: Some(0) };
-    let (text, rows) = render(&call, 60, false);
-    assert_eq!(rows, 2, "终态两行：{text}");
-    assert!(!text.contains(text::agent::TASK_OPEN_LABEL), "{text}");
+    let (text, advanced) = render(&call, 60, false);
+    assert_eq!(advanced, rows(&call, 60, folds(false)), "几何口径一致");
+    assert!(!text.contains(text::agent::TASK_OPEN_GUIDE), "{text}");
+    assert!(
+        !text.lines().any(|line| line.trim_end().ends_with(" open")),
+        "{text}"
+    );
+    assert!(text.contains("out"), "终态保留输出预览：{text}");
+    assert!(
+        text.lines()
+            .last()
+            .is_some_and(|line| line.starts_with(text::agent::TREE_PAD)),
+        "输出区不画树、只用空白对齐：{text}"
+    );
 }
 
 // ===== review 回归：计划卡片的行数口径必须与绘制一致 =====
@@ -683,7 +715,7 @@ fn empty_plan_with_an_explanation_keeps_rows_and_draw_in_step() {
         let (_, advanced) = render(&call, width, false);
         assert_eq!(
             advanced,
-            rows(&call, width, false),
+            rows(&call, width, folds(false)),
             "空计划 + 解释：宽 {width} 的绘制行数必须等于 rows"
         );
     }
@@ -699,12 +731,12 @@ fn plan_row_indices_advance_even_when_rows_scroll_out_of_view() {
         ("two", PlanStepView::InProgress),
     ]);
     let width = 40u16;
-    let expected = rows(&call, width, false);
+    let expected = rows(&call, width, folds(false));
     for scroll in [0usize, 1, 2, 5, 50] {
         let area = Rect::new(0, 0, width, 1);
         let mut grid = Grid::new(area);
         let mut row = 0usize;
-        draw(&mut grid, area, scroll, &mut row, &call, 0, false);
+        draw(&mut grid, area, scroll, &mut row, &call, 0, folds(false));
         assert_eq!(
             row, expected,
             "scroll={scroll} 时推进行数必须与 rows 相等（命中靠它）"

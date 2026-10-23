@@ -79,7 +79,13 @@ fn toggle_detail_flips_and_is_keyed_by_stable_ids() {
             .chat
             .detail_is_expanded("msg-1", "call-1")
     );
-    assert!(toggle_tool_detail(&mut state, pane, "msg-1", "call-1"));
+    assert!(toggle_tool_detail(
+        &mut state,
+        pane,
+        "msg-1",
+        "call-1",
+        crate::app::state::CardSection::Body
+    ));
     assert!(
         state
             .pane_anywhere(pane)
@@ -88,7 +94,13 @@ fn toggle_detail_flips_and_is_keyed_by_stable_ids() {
             .chat
             .detail_is_expanded("msg-1", "call-1")
     );
-    assert!(toggle_tool_detail(&mut state, pane, "msg-1", "call-1"));
+    assert!(toggle_tool_detail(
+        &mut state,
+        pane,
+        "msg-1",
+        "call-1",
+        crate::app::state::CardSection::Body
+    ));
     assert!(
         !state
             .pane_anywhere(pane)
@@ -98,7 +110,13 @@ fn toggle_detail_flips_and_is_keyed_by_stable_ids() {
             .detail_is_expanded("msg-1", "call-1")
     );
     // 未知卡片：不改任何状态。
-    assert!(!toggle_tool_detail(&mut state, pane, "msg-1", "missing"));
+    assert!(!toggle_tool_detail(
+        &mut state,
+        pane,
+        "msg-1",
+        "missing",
+        crate::app::state::CardSection::Body
+    ));
 }
 
 #[test]
@@ -117,6 +135,59 @@ fn keyboard_shortcut_opens_the_task_panel_on_the_latest_card() {
         "未选中时自动选最近一张可展开卡片"
     );
     assert!(target.lx.task.is_some(), "打开了后台任务面板");
+}
+
+#[test]
+fn clicking_a_running_card_opens_the_task_panel_instead_of_toggling() {
+    // 长任务卡片没有可折叠内容：点击必须打开后台任务面板并定位该进程。
+    let (mut state, pane) = state_with_command(7);
+    if let Some(target) = state.pane_mut_anywhere(pane) {
+        target.lx.chat.session_id = Some("session-1".into());
+    }
+    assert!(activate_tool_card(
+        &mut state,
+        pane,
+        "msg-1",
+        "call-1",
+        crate::app::state::CardSection::Body
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.task.is_some(), "运行中点击卡片打开面板");
+    assert_eq!(
+        target.lx.task.as_ref().and_then(|page| page.focus),
+        Some(7),
+        "面板高亮定位到该进程"
+    );
+    assert_eq!(
+        target.lx.chat.selected_tool,
+        Some(("msg-1".to_string(), "call-1".to_string()))
+    );
+    assert!(
+        !target.lx.chat.detail_is_expanded("msg-1", "call-1"),
+        "运行中不做折叠切换"
+    );
+}
+
+#[test]
+fn clicking_a_finished_card_toggles_its_detail() {
+    // 终态：没有实时输出可看，点击回到折叠/展开。
+    let (mut state, pane) = state_with_command(7);
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && let Some(call) = target.lx.chat.messages[0].tool_mut("call-1")
+        && let Some(ToolDetailView::Command(view)) = call.detail.as_deref_mut()
+    {
+        view.state = ProcessStateView::Exited { code: Some(0) };
+    }
+    assert!(activate_tool_card(
+        &mut state,
+        pane,
+        "msg-1",
+        "call-1",
+        crate::app::state::CardSection::Body
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.task.is_none(), "终态不打开面板");
+    assert!(target.lx.chat.detail_is_expanded("msg-1", "call-1"));
 }
 
 #[test]
