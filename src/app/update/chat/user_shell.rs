@@ -232,7 +232,7 @@ pub fn on_user_shell_spawned(
     generation: u64,
     message_id: &str,
     process_id: u64,
-    runtime_epoch: &str,
+    runtime_epoch: Option<&str>,
 ) -> bool {
     let mut changed = false;
     if let Some(shell) = state
@@ -241,7 +241,10 @@ pub fn on_user_shell_spawned(
         && shell.process_id.is_none()
     {
         shell.process_id = Some(process_id);
-        shell.runtime_epoch = Some(runtime_epoch.to_string());
+        // job 已因终态移除时没有 epoch 可写；已有快照（含 epoch）不得被空值覆盖。
+        if let Some(runtime_epoch) = runtime_epoch {
+            shell.runtime_epoch = Some(runtime_epoch.to_string());
+        }
         changed = true;
     }
     // 取出待提交项后再改其它字段，避免同时借用 `state` 的两处。
@@ -337,8 +340,11 @@ pub fn apply_user_shell_snapshot(
 
 /// 命令进入终态（真实进程退出）：更新卡片后按 FIFO 分派下一项。
 pub fn on_user_shell_terminal(state: &mut AppState, pane: PaneId) -> bool {
-    // 命令结束（或 spawn 失败）后清除停止待命，避免下一次任务开始后误判为双击。
-    if let Some(target) = state.pane_mut_anywhere(pane) {
+    // 只在模型也已结束时清除停止待命：模型仍在流式时，第一次 Esc 的待命目标是
+    // 模型轮次，不能被一条无关命令的结束顺手取消。
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && !target.lx.chat.request.is_busy()
+    {
         target.lx.chat.stop_armed_at = None;
     }
     drain_queue(state, pane)
@@ -350,6 +356,10 @@ fn drain_queue(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     if !target.lx.chat.request.can_send() || target.lx.chat.has_running_shell() {
+        return false;
+    }
+    // 用户正在输入时不得用队列文本覆盖草稿：队首留到下一次结算（或用户提交后）再派发。
+    if !target.lx.input.trim().is_empty() {
         return false;
     }
     let Some(item) = target.lx.chat.queue.first().cloned() else {

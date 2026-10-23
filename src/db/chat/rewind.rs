@@ -265,7 +265,7 @@ impl Database {
             .conn
             .query_row(
                 r#"SELECT external_id, sequence, turn_index FROM agent_message
-                   WHERE session_id = ?1 AND role = 'user'
+                   WHERE session_id = ?1 AND role = 'user' AND kind <> 'user_shell'
                    ORDER BY sequence DESC LIMIT 1"#,
                 params![session_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -664,7 +664,7 @@ impl Database {
         let latest: Option<(String, i64)> = transaction
             .query_row(
                 r#"SELECT external_id, turn_index FROM agent_message
-                   WHERE session_id = ?1 AND role = 'user'
+                   WHERE session_id = ?1 AND role = 'user' AND kind <> 'user_shell'
                    ORDER BY sequence DESC LIMIT 1"#,
                 params![commit.session_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),

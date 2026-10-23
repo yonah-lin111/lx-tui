@@ -211,6 +211,19 @@ fn begin(
     request: BeginShell,
 ) -> bool {
     let _ = request.draft_revision;
+    // 取消、切会话、会话复位都会先清空 pending：效应可能已在队列里，必须以 pending
+    // 为唯一凭据，否则用户已经按停/离开的命令仍会落库并产生不可撤销的副作用。
+    let pending = state.pane_anywhere(request.pane).is_some_and(|target| {
+        target
+            .lx
+            .chat
+            .pending_shells
+            .iter()
+            .any(|pending| pending.generation == request.generation)
+    });
+    if !pending {
+        return false;
+    }
     let cwd_text = request.cwd.display().to_string();
     let record = UserShellRecord::starting(&request.command, &cwd_text, &request.shell);
     // 先落库预登记：失败绝不 spawn（不产生不可追踪副作用），草稿保留。
@@ -440,36 +453,51 @@ pub fn handle_spawned(
     message_id: &str,
     process_id: u64,
 ) -> bool {
-    let Some(job) = streams.user_shell.jobs.get_mut(message_id) else {
-        return false;
-    };
-    job.process_id = Some(process_id);
-    let epoch = job.epoch.clone();
-    let manager = job.manager.clone();
-    let db_workspace = job.db_workspace.clone();
-    let session_id = job.session_id.clone();
-    if job.stop_requested {
-        tokio::spawn(async move {
-            manager.stop_many([process_id]).await;
-        });
+    // 进程可能在 spawn 回执**之前**就已退出（终态事件先到，job 已被移除）。
+    // 回执仍必须结算 pending：否则 `pending_shells` 永远非空，聊天 Enter 会一直入队、
+    // Esc 一直待命停止，直到切会话才能恢复。
+    let mut epoch = None;
+    let job = streams.user_shell.jobs.get_mut(message_id).map(|job| {
+        job.process_id = Some(process_id);
+        epoch = Some(job.epoch.clone());
+        (
+            job.epoch.clone(),
+            job.manager.clone(),
+            job.db_workspace.clone(),
+            job.session_id.clone(),
+            job.stop_requested,
+        )
+    });
+    if let Some((job_epoch, manager, db_workspace, session_id, stop_requested)) = job {
+        if stop_requested {
+            tokio::spawn(async move {
+                manager.stop_many([process_id]).await;
+            });
+        }
+        // 进程元数据落库：后台任务页/历史卡片与运行实例同一份事实。
+        if let Some(snapshot) = streams
+            .user_shell
+            .manager_of(message_id)
+            .and_then(|manager| manager.snapshot(process_id))
+        {
+            super::process_events::register_process(
+                persistence,
+                &db_workspace,
+                &job_epoch,
+                &session_id,
+                message_id,
+                &snapshot,
+            );
+        }
     }
-    // 进程元数据落库：后台任务页/历史卡片与运行实例同一份事实。
-    if let Some(snapshot) = streams
-        .user_shell
-        .manager_of(message_id)
-        .and_then(|manager| manager.snapshot(process_id))
-    {
-        super::process_events::register_process(
-            persistence,
-            &db_workspace,
-            &epoch,
-            &session_id,
-            message_id,
-            &snapshot,
-        );
-    }
-    let changed =
-        update::on_user_shell_spawned(state, pane, generation, message_id, process_id, &epoch);
+    let changed = update::on_user_shell_spawned(
+        state,
+        pane,
+        generation,
+        message_id,
+        process_id,
+        epoch.as_deref(),
+    );
     // 命令可能在 spawn 回执前就已退出：此刻 pending 已移除，队列可继续。
     update::on_user_shell_terminal(state, pane) | changed
 }
@@ -525,12 +553,15 @@ pub fn persist_reaped(
         let Some(job) = jobs.jobs.remove(&snapshot.origin_call_id) else {
             continue;
         };
-        let state = if snapshot.state.is_terminal() {
+        let terminal = snapshot.state.is_terminal();
+        let state = if terminal {
             snapshot.state.clone()
         } else {
             ProcessState::Interrupted
         };
-        let output = if job.filter_builtin {
+        // 非终态快照是被强制记成 interrupted 的半截输出：内置过滤会把它压成
+        // “ok”，形成 interrupted/ok 的自相矛盾记录，这里保留原始尾部。
+        let output = if terminal && job.filter_builtin {
             crate::chat::process::rtk::filter_output(&job.command, &snapshot.tail)
         } else {
             snapshot.tail.clone()
@@ -657,7 +688,10 @@ pub fn poll_updates(
 }
 
 /// 单轮增量注入的文本预算（防止多条 64 KiB 输出无限堆叠）。
-pub const MAX_INJECTED_BYTES: usize = 96 * 1024;
+///
+/// 与历史装配的预留同源：装配按 [`MAX_USER_SHELL_INJECTION_BYTES`] 扣掉等量 token，
+/// 两边任一改动都必须同步。
+pub const MAX_INJECTED_BYTES: usize = crate::chat::context::MAX_USER_SHELL_INJECTION_BYTES;
 
 /// 一轮开始时把**已进入初始上下文的终态命令**标记为已见。
 ///

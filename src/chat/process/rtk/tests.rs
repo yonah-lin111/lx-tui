@@ -59,9 +59,25 @@ fn leaves_unsupported_shapes_untouched() {
 }
 
 #[test]
-fn pipes_and_redirections_after_the_first_command_stay_wrapped() {
-    let prepared = external().prepare("cargo test 2>&1 | tail -20");
-    assert_eq!(prepared.command, "rtk cargo test 2>&1 | tail -20");
+fn pipes_and_redirections_are_never_wrapped() {
+    // rtk 压的是 stdout：写文件或喂下游时必须保留原始输出。
+    for command in [
+        "cargo test 2>&1 | tail -20",
+        "git diff > /tmp/diff.patch",
+        "git diff | patch -p1",
+        "curl -s https://example.com > resp.json",
+        "rg foo src 2>/dev/null",
+    ] {
+        let prepared = external().prepare(command);
+        assert_eq!(prepared.command, command, "{command} 不应被包装");
+        assert!(!prepared.external, "{command}");
+    }
+}
+
+#[test]
+fn quoted_operators_do_not_block_wrapping() {
+    let prepared = external().prepare("rg 'a|b' src");
+    assert_eq!(prepared.command, "rtk rg 'a|b' src");
     assert!(prepared.external);
 }
 
@@ -223,4 +239,25 @@ fn ansi_and_control_bytes_are_stripped() {
 fn empty_output_stays_empty() {
     assert_eq!(filter_output("cargo test", ""), "");
     assert_eq!(filter_output("cargo test", "  \n"), "");
+}
+
+#[test]
+fn unrecognized_output_is_never_reported_as_ok() {
+    let output = "zsh: command not found: cargo\n";
+    for command in [
+        "cargo test",
+        "cargo nextest run",
+        "cargo build",
+        "cargo clippy",
+    ] {
+        let filtered = filter_output(command, output);
+        assert!(
+            !filtered.to_ascii_lowercase().contains("ok"),
+            "{command}: {filtered}"
+        );
+        assert!(
+            filtered.contains("command not found"),
+            "{command}: {filtered}"
+        );
+    }
 }

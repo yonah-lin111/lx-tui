@@ -918,7 +918,8 @@ fn start_stream(
             .messages
             .iter()
             .rev()
-            .find(|message| message.role == "user")
+            // 本地命令卡片同样是 `role == "user"`，不能作为本轮聊天消息的锚点。
+            .find(|message| message.role == "user" && !message.is_user_shell())
             .map(|message| message.id.clone())
     }) else {
         fail_turn(sender, key, "user message unavailable");

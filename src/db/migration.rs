@@ -562,15 +562,16 @@ impl Database {
                 transaction.execute_batch(SCHEMA_V11)?;
             }
             // v12：最新轮次撤销的 journal、镜像、操作日志与独立提示。
-            if version < 12 {
-                if !column_exists(&transaction, "agent_session", "revision")? {
-                    transaction.execute_batch(
-                        "ALTER TABLE agent_session ADD COLUMN revision INTEGER NOT NULL DEFAULT 0
-                         CHECK (revision >= 0);",
-                    )?;
-                }
-                transaction.execute_batch(SCHEMA_V12)?;
+            if version < 12 && !column_exists(&transaction, "agent_session", "revision")? {
+                transaction.execute_batch(
+                    "ALTER TABLE agent_session ADD COLUMN revision INTEGER NOT NULL DEFAULT 0
+                     CHECK (revision >= 0);",
+                )?;
             }
+            // 合并前另一分支曾把 v12 指向另一套迁移（无这些表）。停在 12 的旧库不会走
+            // `version < 12` 分支，后续启动恢复会因缺表整体失败；这里无条件补齐。
+            // 语句全部是 `CREATE ... IF NOT EXISTS`，重复执行幂等。
+            transaction.execute_batch(SCHEMA_V12)?;
             // v13 需要关闭外键重建表，不能在本事务内完成：这里只推进到 v12。
             transaction.pragma_update(None, "user_version", 12)?;
             transaction.commit()?;
@@ -598,15 +599,16 @@ impl Database {
         self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
         let result = (|| -> Result<()> {
             let transaction = self.conn.transaction()?;
-            if session_model_not_null(&transaction)? {
-                transaction.execute_batch(SCHEMA_V13_SESSION)?;
-            }
             // 旧 shell v12 库没有 revision 列（该分支的 v12 早于 rewind 合并）。
+            // 必须先补列：下面的整表重建会 `SELECT revision FROM agent_session`。
             if !column_exists(&transaction, "agent_session", "revision")? {
                 transaction.execute_batch(
                     "ALTER TABLE agent_session ADD COLUMN revision INTEGER NOT NULL DEFAULT 0
                      CHECK (revision >= 0);",
                 )?;
+            }
+            if session_model_not_null(&transaction)? {
+                transaction.execute_batch(SCHEMA_V13_SESSION)?;
             }
             if !column_exists(&transaction, "agent_message", "kind")? {
                 transaction.execute_batch(

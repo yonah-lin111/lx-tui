@@ -65,6 +65,33 @@ fn rewound_state() -> (AppState, PaneId) {
     (state, pane)
 }
 
+fn shell_message(
+    id: &str,
+    command: &str,
+    sequence: i64,
+    state: crate::app::state::ProcessStateView,
+) -> crate::app::state::ChatMessageView {
+    let mut message = user_message(id, command, sequence);
+    message.kind = "user_shell".into();
+    message.shell = Some(crate::app::state::UserShellView {
+        command: command.into(),
+        cwd: "/tmp".into(),
+        shell: "/bin/zsh".into(),
+        state,
+        exit_code: None,
+        duration_ms: None,
+        output: String::new(),
+        output_start: 0,
+        output_end: 0,
+        dropped_bytes: 0,
+        truncated: false,
+        runtime_epoch: None,
+        process_id: None,
+        revision: 0,
+    });
+    message
+}
+
 fn prepare_known_empty(state: &mut AppState, pane: PaneId) {
     assert!(crate::app::update::on_rewind_prepared(
         state,
@@ -505,4 +532,118 @@ fn already_restored_keeps_file_actions_enabled() {
     ));
     assert!(panel.enabled(RewindAction::RevertAndDelete));
     assert!(panel.enabled(RewindAction::RevertOnly));
+}
+
+#[test]
+fn escape_in_empty_shell_mode_exits_mode_instead_of_arming_rewind() {
+    let (mut state, pane) = rewound_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .import_full_text("!");
+    apply_lx_input(&mut state, LxInput::Escape);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.rewind.armed_at.is_none(),
+        "空 shell 模式的 Esc 不进入撤销待命"
+    );
+    assert_eq!(
+        target.lx.input_mode(),
+        crate::app::state::LxInputMode::Chat,
+        "Esc 优先退出 shell 模式"
+    );
+}
+
+#[test]
+fn escape_while_shell_runs_arms_stop_not_rewind() {
+    let (mut state, pane) = rewound_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(shell_message(
+            "s1",
+            "sleep 60",
+            2,
+            crate::app::state::ProcessStateView::Running,
+        ));
+    apply_lx_input(&mut state, LxInput::Escape);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.rewind.armed_at.is_none(),
+        "命令在跑时 Esc 不得被撤销路由消费"
+    );
+    assert!(
+        target.lx.chat.stop_armed_at.is_some(),
+        "第一次 Esc 应进入停止待命"
+    );
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert!(
+        state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::CancelUserShells { .. })),
+        "第二次 Esc 必须停止本地命令"
+    );
+}
+
+#[test]
+fn rewind_never_selects_shell_command() {
+    let (mut state, pane) = rewound_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages
+        .push(shell_message(
+            "s1",
+            "pwd",
+            2,
+            crate::app::state::ProcessStateView::Exited { code: Some(0) },
+        ));
+    apply_lx_input(&mut state, LxInput::Escape);
+    apply_lx_input(&mut state, LxInput::Escape);
+    let selected = state
+        .pane_anywhere(pane)
+        .expect("pane")
+        .lx
+        .rewind
+        .selected
+        .clone()
+        .expect("selected");
+    assert_eq!(
+        selected.user_message_id, "u1",
+        "命令卡片不是可撤销的聊天轮次"
+    );
+}
+
+#[test]
+fn shell_only_session_does_not_arm_rewind() {
+    let (mut state, pane) = rewound_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .messages = vec![shell_message(
+        "s1",
+        "pwd",
+        0,
+        crate::app::state::ProcessStateView::Exited { code: Some(0) },
+    )];
+    apply_lx_input(&mut state, LxInput::Escape);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .rewind
+            .armed_at
+            .is_none(),
+        "只有命令记录时没有可撤销的聊天轮次"
+    );
 }

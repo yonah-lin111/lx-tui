@@ -197,6 +197,30 @@ pub fn shell_arguments(login: bool, cmd: &str) -> Vec<std::ffi::OsString> {
 /// 是否支持「独立进程组」（`process_group(0)`）。Windows 走 `taskkill /T`，不需要。
 pub const SUPPORTS_PROCESS_GROUP: bool = cfg!(unix);
 
+/// 把可执行文件路径安全地拼进 shell 命令行。
+///
+/// POSIX 用单引号（内部单引号写成 `'\''`）；Windows 的 `cmd.exe` 不认单引号，
+/// 必须用双引号，否则 `C:\tools\rtk.exe` 这类路径会让整条命令无法执行。
+pub fn shell_quote_path(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        // Windows 路径不允许 `"`，只需整体加引号并转义 `%` 以外的展开风险。
+        format!("\"{}\"", path.to_string_lossy().replace('"', "\\\""))
+    }
+    #[cfg(not(windows))]
+    {
+        let raw = path.to_string_lossy();
+        if !raw.is_empty()
+            && raw
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '+'))
+        {
+            return raw.into_owned();
+        }
+        format!("'{}'", raw.replace('\'', "'\\''"))
+    }
+}
+
 /// 运行环境的一句话描述（进系统提示，让模型不再假设 Linux 工具齐备）。
 ///
 /// 只报**可判定**的事实：OS 与默认 shell。不猜包管理器或其它命令是否存在——

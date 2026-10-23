@@ -108,7 +108,12 @@ fn spawn_ack_clears_matching_revision_and_records_history_once() {
         &mut state, pane, generation, "sess", "msg-1", 0, "pwd", "/tmp", "/bin/zsh",
     );
     assert!(user_shell::on_user_shell_spawned(
-        &mut state, pane, generation, "msg-1", 7, "epoch"
+        &mut state,
+        pane,
+        generation,
+        "msg-1",
+        7,
+        Some("epoch")
     ));
     let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(target.lx.input, "", "spawn 成功清空草稿");
@@ -130,7 +135,7 @@ fn spawn_ack_clears_matching_revision_and_records_history_once() {
     assert!(state.prompt_history.entries().contains(&"!pwd".to_string()));
     // 重复 ACK 不再追加历史。
     let before = state.prompt_history.entries().to_vec();
-    user_shell::on_user_shell_spawned(&mut state, pane, generation, "msg-1", 7, "epoch");
+    user_shell::on_user_shell_spawned(&mut state, pane, generation, "msg-1", 7, Some("epoch"));
     assert_eq!(state.prompt_history.entries(), before.as_slice());
 }
 
@@ -149,7 +154,7 @@ fn stale_spawn_ack_does_not_clear_new_draft() {
         .unwrap()
         .lx
         .import_full_text("!ls");
-    user_shell::on_user_shell_spawned(&mut state, pane, generation, "msg-1", 7, "epoch");
+    user_shell::on_user_shell_spawned(&mut state, pane, generation, "msg-1", 7, Some("epoch"));
     assert_eq!(state.pane_anywhere(pane).unwrap().lx.input, "ls");
     assert!(state.pane_anywhere(pane).unwrap().lx.shell_mode());
 }
@@ -363,4 +368,58 @@ fn shell_message_is_not_a_chat_user_draft() {
     assert!(messages.last().unwrap().is_user_shell());
     let draft = crate::event::chat::latest_user_draft_for_test(&messages);
     assert_eq!(draft, "", "最后一条 shell 不得被当成普通用户草稿");
+}
+
+#[test]
+fn queued_dispatch_never_overwrites_an_active_draft() {
+    let mut state = shell_state("!pwd");
+    let pane = focus_pane(&state);
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .queue
+        .push(QueuedSubmission::Shell {
+            full_text: "!echo queued".into(),
+            cwd: std::path::PathBuf::from("/tmp"),
+        });
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .import_full_text("!echo mine");
+    assert!(!user_shell::on_user_shell_terminal(&mut state, pane));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "echo mine", "正在输入的草稿不得被队列覆盖");
+    assert_eq!(target.lx.chat.queue.len(), 1, "队首保留到下次结算");
+}
+
+#[test]
+fn shell_terminal_keeps_model_stop_arm() {
+    let mut state = shell_state("!pwd");
+    let pane = focus_pane(&state);
+    let key = crate::app::state::RequestKey {
+        pane,
+        session: "sess".into(),
+        generation: 1,
+    };
+    let target = state.pane_mut_anywhere(pane).expect("pane");
+    target.lx.chat.request = RequestState::Streaming {
+        key,
+        assistant_id: "a1".into(),
+    };
+    target.lx.chat.stop_armed_at = Some(std::time::Instant::now());
+    // 模型仍在流式：命令结束不能取消模型轮的停止待命。
+    user_shell::on_user_shell_terminal(&mut state, pane);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .stop_armed_at
+            .is_some(),
+        "模型未结束时必须保留待命"
+    );
 }

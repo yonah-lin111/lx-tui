@@ -155,11 +155,12 @@ fn resolve_bin() -> Option<PathBuf> {
 
 /// 命令是否可以安全地前缀 `rtk`。
 ///
-/// 只包装**首段是受支持工具**的简单命令：带前导赋值、`cd &&`、换行或已带 rtk 的
-/// 脚本一律不包装。首段之后的管道/重定向仍由 shell 处理，不影响语义。
+/// 只包装**首段是受支持工具**的简单命令：带前导赋值、`cd &&`、换行、已带 rtk 或
+/// 含管道/重定向的脚本一律不包装。`rtk` 只压缩 stdout，若用户把 stdout 写进文件或
+/// 交给下游（`curl … > resp.json`、`git diff | patch`），压缩结果会替换真实数据。
 fn wrap_supported(command: &str) -> bool {
     let trimmed = command.trim_start();
-    if trimmed.is_empty() || trimmed.contains('\n') {
+    if trimmed.is_empty() || trimmed.contains('\n') || has_shell_operators(trimmed) {
         return false;
     }
     let mut words = trimmed.split_whitespace();
@@ -208,6 +209,34 @@ fn wrap_supported(command: &str) -> bool {
     }
 }
 
+/// 命令是否包含未加引号的管道/重定向（引号内的字面字符不算）。
+fn has_shell_operators(command: &str) -> bool {
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    for ch in command.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match quote {
+            Some(current) => {
+                if ch == '\\' && current == '"' {
+                    escaped = true;
+                } else if ch == current {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => escaped = true,
+                '|' | '<' | '>' => return true,
+                _ => {}
+            },
+        }
+    }
+    false
+}
+
 /// `FOO=bar` 形式的前导赋值。
 fn is_assignment(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
@@ -220,14 +249,7 @@ fn is_assignment(word: &str) -> bool {
         && !name.starts_with(|ch: char| ch.is_ascii_digit())
 }
 
-/// shell 单引号转义（路径可能含空格）。
+/// shell 路径转义（POSIX 单引号 / Windows 双引号），差异收在 platform 层。
 fn shell_quote(path: &Path) -> String {
-    let raw = path.to_string_lossy();
-    if raw
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | '+'))
-    {
-        return raw.into_owned();
-    }
-    format!("'{}'", raw.replace('\'', "'\\''"))
+    crate::platform::shell_quote_path(path)
 }

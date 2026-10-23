@@ -790,3 +790,93 @@ fn v11_upgrade_keeps_history_and_adds_shell_columns() {
         None
     );
 }
+
+/// 合并前 shell 分支的 v12 库：模型列可空、有 `kind`，但没有 rewind 五表与 revision。
+/// 升级后必须补齐这些表，否则 `sessions_needing_recovery` 的 UNION 会整体报错。
+#[test]
+fn shell_branch_v12_upgrade_creates_rewind_tables() {
+    let path = temp_db_path("shell-v12");
+    let workspace = workspace_path("shell-v12");
+    {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("temp dir");
+        }
+        let conn = rusqlite::Connection::open(&path).expect("raw open");
+        conn.execute_batch(SCHEMA).expect("base schema");
+        conn.execute_batch(SCHEMA_V7).expect("v7 schema");
+        migrate_v9(&conn).expect("v9 schema");
+        conn.execute_batch(SCHEMA_V10).expect("v10");
+        conn.execute_batch(SCHEMA_V11).expect("v11");
+        // shell 分支 v12 只加了这两列；没有 revision，也没有 rewind 表。
+        conn.execute_batch(
+            "ALTER TABLE agent_message ADD COLUMN kind TEXT NOT NULL DEFAULT 'chat'
+                 CHECK (kind IN ('chat', 'user_shell'));
+             ALTER TABLE agent_message ADD COLUMN user_shell_json TEXT;",
+        )
+        .expect("shell v12 columns");
+        let ws = workspace.to_string_lossy().into_owned();
+        conn.execute(
+            r#"INSERT INTO workspace (external_id, name, "type", path, is_trusted, created_at, updated_at)
+               VALUES ('ws1', 'ws', 'filesystem', ?1, 1, datetime('now'), datetime('now'))"#,
+            rusqlite::params![ws],
+        )
+        .expect("workspace");
+        // 模型列在本模拟库里仍是 NOT NULL：升级走 v13 整表重建路径，
+        // 与真实 shell v12（已可空）只差这一步，不影响缺表修复的覆盖。
+        conn.execute(
+            r#"INSERT INTO agent_session
+               (external_id, workspace_id, source, title, first_user_message,
+                model_provider, model_id, variant, status, archived,
+                created_at_ms, updated_at_ms, last_message_at_ms)
+               VALUES ('sess1', 'ws1', 'native', '旧命令', 'pwd', 'p', 'm', NULL, 'active', 0, 1, 1, 1)"#,
+            [],
+        )
+        .expect("session");
+        conn.execute(
+            r#"INSERT INTO agent_message
+               (external_id, session_id, sequence, turn_index, role, status,
+                model_provider, model_id, created_at_ms, completed_at_ms, kind, user_shell_json)
+               VALUES ('msg1', 'sess1', 0, 0, 'user', 'interrupted',
+                       NULL, NULL, 1, 1, 'user_shell', '{"command":"pwd","cwd":"/tmp","shell":"/bin/sh","state":"interrupted","exit_code":null,"duration_ms":null,"output":"","output_start":0,"output_end":0,"dropped_bytes":0,"truncated":false,"runtime_epoch":null,"process_id":null,"revision":1}')"#,
+            [],
+        )
+        .expect("message");
+        conn.execute_batch("PRAGMA user_version = 12;")
+            .expect("version 12");
+    }
+    let database = Database::open(&path).expect("migrate shell v12");
+    let version: i64 = database
+        .conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("version");
+    assert_eq!(version, SCHEMA_VERSION);
+    for table in [
+        "agent_session_notice",
+        "agent_turn_file_scope",
+        "agent_file_image",
+        "agent_file_mutation",
+        "agent_rewind_operation",
+    ] {
+        let count: i64 = database
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                rusqlite::params![table],
+                |row| row.get(0),
+            )
+            .expect("table lookup");
+        assert_eq!(count, 1, "{table} 必须由升级补建");
+    }
+    // 启动恢复的 UNION 查询必须能执行（缺表时这里会整体失败）。
+    database.sessions_needing_recovery().expect("recovery scan");
+    // 旧命令记录仍在且 kind 保留。
+    let kind: String = database
+        .conn
+        .query_row(
+            "SELECT kind FROM agent_message WHERE external_id = 'msg1'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("shell message preserved");
+    assert_eq!(kind, "user_shell");
+}

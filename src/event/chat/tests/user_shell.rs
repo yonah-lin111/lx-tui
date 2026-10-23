@@ -353,3 +353,117 @@ async fn injection_skips_initial_terminal_and_absorbs_later_completion_once() {
             .is_empty()
     );
 }
+
+/// spawn 回执晚于终态：job 已被移除，但回执仍必须结算 pending。
+#[tokio::test]
+async fn spawn_ack_after_terminal_still_clears_pending() {
+    let fixture = Fixture::new("shell-ack-after-exit");
+    let (mut state, persistence, pane) = shell_ready(&fixture, "!true");
+    assert!(update::try_send(&mut state, pane));
+    let (sender, mut receiver, process_sender, mut process_receiver) = channels();
+    let mut streams = ChatStreams::default();
+    streams.set_process_sender(process_sender);
+    assert!(pump_user_shells(
+        &mut state,
+        &mut streams,
+        &sender,
+        &persistence
+    ));
+    // 故意先处理终态、扣住 spawn 回执，复现两个通道的真实乱序。
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    let mut ack = None;
+    while !terminal(&state, pane) {
+        assert!(tokio::time::Instant::now() < deadline, "命令未在超时内结束");
+        tokio::select! {
+            event = receiver.recv() => {
+                if let Some(AppEvent::UserShellSpawned {
+                    pane,
+                    generation,
+                    message_id,
+                    process_id,
+                }) = event
+                {
+                    ack = Some((pane, generation, message_id, process_id));
+                }
+            }
+            event = process_receiver.recv() => {
+                if let Some(event) = event {
+                    handle_process_event(&mut state, &mut streams, &persistence, event);
+                }
+            }
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    // 终态先到不代表回执不存在：继续收，直到拿到 spawn 回执。
+    while ack.is_none() {
+        assert!(tokio::time::Instant::now() < deadline, "未收到 spawn 回执");
+        tokio::select! {
+            event = receiver.recv() => {
+                if let Some(AppEvent::UserShellSpawned {
+                    pane,
+                    generation,
+                    message_id,
+                    process_id,
+                }) = event
+                {
+                    ack = Some((pane, generation, message_id, process_id));
+                }
+            }
+            () = tokio::time::sleep(Duration::from_millis(10)) => {}
+        }
+    }
+    let (ack_pane, generation, message_id, process_id) = ack.expect("spawn 回执");
+    assert!(crate::event::chat::user_shell::handle_spawned(
+        &mut state,
+        &mut streams,
+        &persistence,
+        ack_pane,
+        generation,
+        &message_id,
+        process_id,
+    ));
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.chat.pending_shells.is_empty(),
+        "晚到的 spawn 回执必须结算 pending，否则输入与队列永久卡住"
+    );
+    assert_eq!(target.lx.input, "", "草稿按修订号清空");
+    assert!(!target.lx.chat.has_running_shell());
+}
+
+/// 取消发生在效应出箱之前：不得落库、不得 spawn。
+#[tokio::test]
+async fn cancelled_pending_never_reaches_database_or_spawn() {
+    let fixture = Fixture::new("shell-cancel-before-begin");
+    let (mut state, persistence, pane) = shell_ready(&fixture, "!touch cancel-must-not-run");
+    assert!(update::try_send(&mut state, pane));
+    // 等价于双 Esc 或切会话在 pump 之前清空 pending。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .chat
+        .pending_shells
+        .clear();
+    let (sender, _receiver, process_sender, _process_receiver) = channels();
+    let mut streams = ChatStreams::default();
+    streams.set_process_sender(process_sender);
+    assert!(!pump_user_shells(
+        &mut state,
+        &mut streams,
+        &sender,
+        &persistence
+    ));
+    let database = fixture.reopen();
+    assert!(
+        database
+            .list_chat_sessions(fixture.workspace(), 0, 50)
+            .expect("list")
+            .is_empty(),
+        "没有 pending 的命令不得预登记会话"
+    );
+    assert!(
+        !fixture.workspace().join("cancel-must-not-run").exists(),
+        "取消的命令不得产生副作用"
+    );
+}

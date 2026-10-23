@@ -110,9 +110,11 @@ fn filter_test(output: &str) -> String {
         }
     }
     if kept.is_empty() {
+        // 认不出标记不等于成功（cargo 不存在、wrapper 自带失败文案都可能如此）：
+        // 未识别的非空输出按通用规则降级，绝不伪造 `ok` 结论。
         return match summary {
             Some(line) => format!("{line}\n"),
-            None => "ok (no failures detected)\n".to_string(),
+            None => filter_generic(output),
         };
     }
     cap_lines(kept, MAX_TEST_LINES, "lines")
@@ -154,7 +156,8 @@ fn filter_build(output: &str) -> String {
         }
     }
     if kept.is_empty() {
-        return "ok\n".to_string();
+        // 没有 Finished/error 等已知标记时不能断言成功（例如工具链缺失）。
+        return filter_generic(output);
     }
     cap_lines(kept, MAX_BUILD_LINES, "lines")
 }

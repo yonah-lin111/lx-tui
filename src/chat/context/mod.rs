@@ -78,6 +78,16 @@ struct ContextGroup {
     item_end: usize,
 }
 
+/// 一轮内本地命令结果的注入上限（字节）。
+///
+/// 历史装配无法预知“本轮运行中的命令何时结束”，因此装配时按同量级预留 token，
+/// 否则历史刚好占满预算时再注入一条大输出会直接超过模型上下文。
+pub const MAX_USER_SHELL_INJECTION_BYTES: usize = 16 * 1024;
+
+/// 为本轮注入预留的 token（与 [`CHARS_PER_TOKEN`] 同一估算口径）。
+pub(crate) const USER_SHELL_INJECTION_RESERVE_TOKENS: u64 =
+    (MAX_USER_SHELL_INJECTION_BYTES / CHARS_PER_TOKEN) as u64;
+
 /// 保守估算系数：每 token 约 4 字节（只用于装配，不作为 UI 的已用 token）。
 const CHARS_PER_TOKEN: usize = 4;
 /// 请求封装开销预留（消息结构、role 标记等）。
@@ -108,6 +118,7 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         context
             .saturating_sub(output_reserve)
             .saturating_sub(ENVELOPE_RESERVE_TOKENS)
+            .saturating_sub(USER_SHELL_INJECTION_RESERVE_TOKENS)
     });
     // 从近到远纳入，直到预算耗尽；整轮为最小单位（丢一轮即丢该轮全部 items）。
     let mut kept: Vec<&PlannedTurn> = Vec::new();

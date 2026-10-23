@@ -139,10 +139,16 @@ impl super::Database {
                 if owned.is_none() {
                     return Err(DbError::SessionMissing);
                 }
+                // sequence 与独立提示共用编号空间（`begin_turn` 同口径）：
+                // 撤销删除消息后提示仍保留高水位，只查 agent_message 会撞号。
                 let (sequence, turn_index): (i64, i64) = transaction.query_row(
                     r#"SELECT COALESCE(MAX(sequence) + 1, 0),
                               COALESCE(MAX(turn_index) + 1, 0)
-                       FROM agent_message WHERE session_id = ?1"#,
+                       FROM (
+                           SELECT sequence, turn_index FROM agent_message WHERE session_id = ?1
+                           UNION ALL
+                           SELECT sequence, NULL FROM agent_session_notice WHERE session_id = ?1
+                       )"#,
                     params![session_id],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;

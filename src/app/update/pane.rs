@@ -350,7 +350,8 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Escape => {
             let idle_shell = state.pane_anywhere(pane_id).is_some_and(|target| {
                 target.lx.shell_mode()
-                    && target.lx.input.is_empty()
+                    // 与提交/排队的判空口径一致：只有空格也算空命令。
+                    && target.lx.input.trim().is_empty()
                     && !target.lx.chat.request.is_busy()
                     && !target.lx.chat.has_running_shell()
             });

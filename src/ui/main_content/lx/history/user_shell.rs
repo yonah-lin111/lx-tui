@@ -142,6 +142,10 @@ fn header_mark(shell: &UserShellView, loading_frame: usize, animating: bool) -> 
     if shell.is_failed() {
         return (text::agent::STEP_MARK_FILLED, style::agent_fail());
     }
+    // 用户主动停止不是成功：绿色勾会让标题与底部 `stopped` 自相矛盾。
+    if matches!(shell.state, crate::app::state::ProcessStateView::Stopped) {
+        return (text::agent::STEP_MARK_FILLED, style::agent_warn());
+    }
     (text::agent::STEP_MARK_FILLED, style::agent_ok())
 }
 
@@ -343,5 +347,15 @@ mod tests {
         let first = &lines(&shell, 40, 0, false, false)[0];
         assert_eq!(first.style, style::agent_fail());
         assert!(first.text.contains("You ran"));
+    }
+
+    #[test]
+    fn stopped_command_does_not_use_success_mark() {
+        let ok = shell("", ProcessStateView::Exited { code: Some(0) });
+        let stopped = shell("", ProcessStateView::Stopped);
+        let (_, ok_style) = header_mark(&ok, 0, false);
+        let (_, stopped_style) = header_mark(&stopped, 0, false);
+        assert_ne!(ok_style, stopped_style, "主动停止不是成功");
+        assert_eq!(stopped_style, style::agent_warn());
     }
 }

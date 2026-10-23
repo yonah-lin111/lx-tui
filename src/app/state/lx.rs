@@ -200,8 +200,9 @@ impl Lx {
         if self.input_mode != LxInputMode::Shell {
             return false;
         }
+        // 与正文起点 Backspace 一致：退出模式也要进撤销栈，undo 能恢复 Shell 模式。
+        self.snapshot();
         self.input_mode = LxInputMode::Chat;
-        self.touch();
         self.refresh_panel();
         true
     }
@@ -638,8 +639,11 @@ impl Lx {
     /// 并关闭块面板、提及与路径粘贴面板。调用方负责关闭 `/` 面板与撤销状态。
     pub fn replace_input(&mut self, text: &str) {
         self.snapshot();
-        self.input.clear();
-        self.input.push_str(text);
+        // 与历史召回同一判定：正文可能带 `!` 前缀，模式必须一起重算，
+        // 否则撤销回填的聊天原文会留在 shell 模式，下一次 Enter 被当命令执行。
+        let (mode, body) = shell::split_mode(text);
+        self.input = body;
+        self.input_mode = mode;
         self.cursor = self.input.len();
         self.text_anchor = None;
         self.panel = None;

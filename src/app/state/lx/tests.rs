@@ -431,3 +431,29 @@ fn history_recall_restores_shell_mode_and_draft() {
     assert_eq!(lx.input_mode(), LxInputMode::Chat);
     assert_eq!(lx.input, "my draft");
 }
+
+#[test]
+fn replace_input_recomputes_shell_mode() {
+    let mut lx = Lx::new();
+    lx.insert_str("!");
+    assert!(lx.shell_mode());
+    lx.replace_input("普通提问");
+    assert_eq!(lx.input, "普通提问");
+    assert!(!lx.shell_mode(), "聊天原文不得留在 Shell 模式");
+
+    lx.replace_input("!pwd");
+    assert_eq!(lx.input, "pwd");
+    assert!(lx.shell_mode(), "带 ! 前缀的文本恢复 Shell 模式");
+}
+
+#[test]
+fn exit_shell_is_undoable() {
+    let mut lx = Lx::new();
+    lx.insert_str("!");
+    lx.insert_str("pwd");
+    assert!(lx.exit_shell());
+    assert!(!lx.shell_mode());
+    lx.undo();
+    assert!(lx.shell_mode(), "undo 恢复退出前的 Shell 模式");
+    assert_eq!(lx.input, "pwd");
+}

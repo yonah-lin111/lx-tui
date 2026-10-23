@@ -119,8 +119,14 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     if target.view != crate::app::state::PaneView::Lx {
         return None;
     }
-    // 忙时保留现有双 Esc 停止语义；草稿非空或根本没有用户轮次时不进入撤销。
+    // 忙时保留现有双 Esc 停止语义；草稿非空或根本没有聊天用户轮次时不进入撤销。
+    //
+    // 本地命令不占用 `RequestState`：命令在跑时仍是 `Idle`，且命令卡片 `role == "user"`。
+    // 必须显式排除这两种情况，否则 Esc 会被这里抢走，停止待命（含空 shell 模式退出）
+    // 永远收不到按键。
     if !matches!(target.lx.chat.request, RequestState::Idle)
+        || target.lx.shell_mode()
+        || target.lx.chat.has_running_shell()
         || !target.lx.input.trim().is_empty()
         || target.lx.chat.session_id.is_none()
         || !target
@@ -128,7 +134,7 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
             .chat
             .messages
             .iter()
-            .any(|message| message.role == "user")
+            .any(|message| message.role == "user" && !message.is_user_shell())
     {
         return None;
     }
@@ -144,10 +150,11 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     Some(())
 }
 
-/// 选中当前会话最新一条用户消息（只允许最新轮次）。
+/// 选中当前会话最新一条**聊天**用户消息（只允许最新轮次）。
 pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
-    if !matches!(target.lx.chat.request, RequestState::Idle) {
+    // 本地命令在途时拒绝：截断会删掉正在运行命令的记录，而进程仍在写文件。
+    if !matches!(target.lx.chat.request, RequestState::Idle) || target.lx.chat.has_running_shell() {
         return None;
     }
     // 待命后可能经粘贴等非键盘路径写入草稿：选中时再复核一次空输入。
@@ -161,7 +168,7 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         .messages
         .iter()
         .rev()
-        .find(|message| message.role == "user")?;
+        .find(|message| message.role == "user" && !message.is_user_shell())?;
     let user_text = message
         .text_parts()
         .map(|part| part.content.as_str())

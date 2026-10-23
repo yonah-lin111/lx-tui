@@ -543,3 +543,54 @@ fn commit_accounts_actual_image_bytes() {
         "actual-after 的 3 字节必须计入本轮用量"
     );
 }
+
+/// 本地命令记录在数据库里也是 `role='user'`，但不能成为撤销目标。
+#[test]
+fn latest_user_turn_skips_shell_command_records() {
+    let (database, workspace) = temp("shell-latest");
+    let turn = started(&database, &workspace);
+    sealed(&database, &workspace, &turn);
+    database
+        .begin_user_shell(
+            &workspace,
+            Some(&turn.session_id),
+            &crate::db::chat::UserShellRecord::starting("pwd", "/tmp", "/bin/sh"),
+        )
+        .expect("shell record");
+    let latest = database
+        .latest_user_turn(&workspace, &turn.session_id)
+        .expect("latest")
+        .expect("turn");
+    assert_eq!(latest.user_message_id, turn.user_message_id);
+    assert_eq!(latest.text, "hello");
+}
+
+/// 本地命令与聊天共用 sequence 编号空间：撤销提示的高水位必须被命令看到。
+#[test]
+fn shell_sequence_is_after_persisted_notice() {
+    let (database, workspace) = temp("shell-sequence");
+    let first = started(&database, &workspace);
+    sealed(&database, &workspace, &first);
+    let turn = next_turn(&database, &workspace, &first.session_id);
+    commit_delete(&database, &workspace, &turn, "op-shell-seq");
+    let notices = database
+        .load_notices(&workspace, &turn.session_id)
+        .expect("notices");
+    let notice_sequence = notices[0].sequence;
+    let mut last = 0;
+    // 连续三条命令覆盖旧实现的 2/3/4：第三条会撞上提示占用的序号。
+    for _ in 0..3 {
+        let committed = database
+            .begin_user_shell(
+                &workspace,
+                Some(&turn.session_id),
+                &crate::db::chat::UserShellRecord::starting("pwd", "/tmp", "/bin/sh"),
+            )
+            .expect("shell");
+        last = committed.sequence;
+    }
+    assert!(
+        last > notice_sequence,
+        "命令序号必须在提示之后：{last} vs {notice_sequence}"
+    );
+}

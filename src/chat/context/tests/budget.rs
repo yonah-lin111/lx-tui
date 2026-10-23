@@ -50,7 +50,13 @@ fn trimming_drops_whole_oldest_turn_including_tools() {
     let mut history = turn_with_result(0, 0, &first_question, &old_result);
     history.extend(turn_with_result(1, 2, &second_question, &new_result));
     // 预算 ≈ 300 token：只容得下最近一轮 + 草稿。
-    let assembly = assemble_with_limit(&history, "第三问", 556, 0);
+    // 另加本地命令注入预留，保持历史可用预算与断言口径不变。
+    let assembly = assemble_with_limit(
+        &history,
+        "第三问",
+        556 + super::super::USER_SHELL_INJECTION_RESERVE_TOKENS,
+        0,
+    );
     assert_eq!(assembly.omitted_turns, 1, "只省略最老一轮");
     let views = item_views(&assembly.request.items);
     assert_eq!(
@@ -206,8 +212,10 @@ fn token_estimate_includes_tool_arguments_and_results() {
         None,
     )];
     // 预算刚好容得下纯正文轮次，但容不下带工具内容的同一轮。
-    let plain_assembly = assemble_with_limit(&plain, "继续", 400, 0);
-    let tool_assembly = assemble_with_limit(&with_tool, "继续", 400, 0);
+    // 与上一条相同：加上注入预留，保持历史可用预算不变。
+    let limit = 400 + super::super::USER_SHELL_INJECTION_RESERVE_TOKENS;
+    let plain_assembly = assemble_with_limit(&plain, "继续", limit, 0);
+    let tool_assembly = assemble_with_limit(&with_tool, "继续", limit, 0);
     assert_eq!(plain_assembly.omitted_turns, 0, "纯正文轮次在预算内");
     assert_eq!(
         tool_assembly.omitted_turns, 1,
