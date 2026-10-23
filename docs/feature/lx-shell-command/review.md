@@ -72,7 +72,9 @@ v13 迁移（`src/db/migration.rs`）整表重建 `agent_session` 使模型三�
 
 ### 1.6 命令卡片
 
-`src/ui/main_content/lx/history/user_shell.rs:26` 的 `lines()` 是行数与绘制的唯一来源；`layout` 用 `rows()`、`render` 用 `draw()`，避免滚动条/命中区漂移。shell 卡片在 `history.rs` 中 `is_user = false`，不参与置顶用户行。运行中为橙/呼吸点，失败红，主动停止为警告色，正常结束为绿色。
+`src/ui/main_content/lx/history/user_shell.rs` 的 `lines()` 是行数与绘制的唯一来源；`layout` 用 `rows()`、`render` 用 `draw()`，避免滚动条/命中区漂移。shell 卡片在 `history.rs` 中 `is_user = false`，不参与置顶用户行。运行中为橙/呼吸点，失败红，主动停止为警告色，正常结束为绿色。
+
+卡片与工具步骤共用直角树体（`  │  ` / `  └─ `，`TREE_COLS = 5`）：标题是唯一不带连接符的行，终态的退出码与耗时并入标题（`■ You run command · exit 2 · 1.2s`），树体首行是 `$ 命令`，终态输出折叠保留首 3 + 尾 2，末行收口写 `… N more lines`。**参数区与输出区各自独立折叠**（`CardSection::Body` / `CardSection::Output` + 各自 `CardHit`）：参数与输出各有点击面，点其中一块不会连带另一块。**参数区恒为浅黄**（不随 hover/展开变色，`… N more lines` 同色），**输出区**折叠 dim、悬停或展开为终端默认前景（只有真的能展开才响应 hover），不铺整行底色；`└─` 只收口参数区，输出内容只用等宽空白对齐。命令运行中不铺实时输出，只给一行 `open task panel · live output`（点击打开面板并定位该进程）。`exec_command` 卡片逐项同口径。
 
 ---
 
@@ -266,6 +268,7 @@ if kept.is_empty() {
 - `stopped_command_does_not_use_success_mark`
 - `unrecognized_output_is_never_reported_as_ok`
 - `pipes_and_redirections_are_never_wrapped` / `quoted_operators_do_not_block_wrapping`
+- `body_rows_use_the_shared_tree_prefixes` / `hover_and_expand_lift_folded_output_to_default_foreground` / `narrow_width_truncates_title_and_keeps_tree_within_bounds`
 
 ## 5. 验证
 
@@ -273,7 +276,7 @@ if kept.is_empty() {
 
 - `cargo fmt -- --check`：通过。
 - `cargo clippy --all-targets -- -D warnings`：通过，无告警。
-- `cargo test`：3084 项通过（lib 3025 + 16 个集成套件），0 失败。
+- `cargo test`：3087 项通过（lib 3027 + 16 个集成套件），0 失败。
 - 定向测试：`app::update::chat::tests::rewind` 22 项、`app::update::chat::tests::user_shell` 12 项、`event::chat::tests::user_shell` 7 项、`chat::process::rtk` 17 项、`db::migration::tests` 全通过。
 
 ## 6. 遗留风险

@@ -63,7 +63,7 @@
 | 上下文 | `codex-rs/core/src/user_shell_command.rs:9`；`core/src/context/user_shell_command.rs:30`、`:43` | 按输出预算格式化，作为 user 角色的 `<user_shell_command>` 记录 |
 | 持久化/注入 | `core/src/tasks/user_shell.rs:440` | 独立执行保存会话；辅助执行注入当前上下文，不新开模型 turn |
 | 跟进消息测试 | `core/tests/suite/user_shell_cmd.rs:406` | 跟进模型请求包含命令及结果 |
-| 展示 | `codex-rs/tui/src/exec_cell/render.rs:462`、`:468`、`:576` | `Running` / `You ran`，成功失败色、无输出占位、输出中部裁剪 |
+| 展示 | `codex-rs/tui/src/exec_cell/render.rs:462`、`:468`、`:576` | `Running` / 终态标签，成功失败色、无输出占位、输出中部裁剪 |
 
 关键代码证据：
 
@@ -473,12 +473,24 @@ struct ContextGroup {
 
 ### 9.2 命令结果卡片
 
-用户 shell 是独立历史项，使用 `Running` / `You ran` 文案，明确区别于模型执行的 `Ran` / `exec_command`。
+用户 shell 是独立历史项，使用 `Running` / `You run command` 文案，明确区别于模型执行的 `Run command` / `exec_command`。
 
-- 标题包含状态色和用户命令；运行中实时显示受控输出；完成后保留输出、退出码和耗时。
-- 无输出显示 `(no output)`；命令仍在运行但尚无输出时使用等待文案。
-- 默认输出最多 6 个物理行，按宽度换行后保留首尾，中部显示明确省略行数；展开显示已保存的受控输出，最多 64 KiB。
-- 这一展示是用户 shell 专用分支，不改现有模型进程卡片“输出只在后台任务页查看”的规则。
+卡片与工具步骤**共用同一套直角树体语法**（`  │  ` / `  └─ `，5 列前缀，内容左对齐）：
+
+```text
+■ You run command · exit 2 · 1.2s
+  │  $ cargo test
+  │  error[E0308]: mismatched types
+  └─ … 18 more lines
+```
+
+- 标题是唯一不带连接符的行：状态色方块 + `Running` / `You run command`；终态紧跟 ` · ` 分组的退出码与耗时（`exit 0 · 1.2s`、`stopped`、`timed out`）。窄屏只截断标题尾部，不挤掉行首方块。
+- 树体第一行是命令本身（`$ ` 前缀，保留字面脚本并按内容宽度折行）；终态其后是受控输出。
+- 无输出显示 `(no output)`。**命令运行中不在消息列表铺实时输出**：只给 `$ 命令` + 一行 `open task panel · live output` 引导，点击打开后台任务面板并定位该进程——完整实时输出只存在于面板。
+- 默认输出最多 6 个物理行**含末尾省略行**：保留首 3 行 + 尾 2 行，末行写显式省略行数 `… N more lines`；展开显示已保存的受控输出，最多 64 KiB。
+- **参数区与输出区各自独立折叠**：命令行折叠 2 个物理行（展开铺开），输出折叠首 3 + 尾 2 行；两块各自登记点击面，点其中一块不会连带另一块。**参数区恒为浅黄**（不随 hover/展开变色，`… N more lines` 同色），**输出区**折叠 dim、悬停或展开为终端默认前景（只有超出预览预算、真的能展开才响应 hover）；不铺任何整行底色。
+- **`└─` 只包裹参数部分**（与文件工具的 `└─ 详情` 同口径）：参数区最后一行收口，输出内容改用等宽空白对齐到内容列，不再被 `│` / `└─` 围住。
+- 模型进程卡片（`exec_command`）逐项同口径：运行中只有命令 + 引导，终态给两块独立折叠的首尾预览；整卡行为按 `ProcessStateView::is_running()` 切换，不是按工具结算状态。`write_stdin` 仍是调用快照，只画命令。
 - 正文是安全文本，不解释 OSC/ANSI、不当 Markdown 执行；reuse 现有净化逻辑。
 - 卡片行数、绘制、滚动、点击和复制必须共用同一布局结果；拖拽复制不触发展开，标题不承载隐藏执行按钮。
 - `^o` 后台任务面板仍可查看命令完整缓存范围及停止任务；直接复用 ProcessManager 快照列表，不创建第二份任务数据。
