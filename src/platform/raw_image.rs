@@ -158,6 +158,86 @@ pub fn exists(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok()
 }
 
+/// 文件版本 token 的稳定前缀（内容与身份摘要；CAS 校验的唯一口径）。
+pub const VERSION_PREFIX: &str = "lxv1-";
+
+/// 一份镜像的内容/身份 token：类型、字节、权限与链接目标。
+///
+/// 用途是 CAS 前的期望值比较，**不是**加密摘要：用双 64 位 FNV-1a 降低碰撞面，
+/// 不引入新依赖。同一字节序列必须永远得到同一 token（读写两侧共用本函数），
+/// 因此 token 可以跨进程持久化（撤销/读取登记都依赖这一点）。
+pub fn version_token(
+    kind: RawKind,
+    bytes: &[u8],
+    mode: Option<u32>,
+    link_target: Option<&Path>,
+) -> String {
+    let mut low: u64 = 0xcbf2_9ce4_8422_2325;
+    let mut high: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut feed = |byte: u8| {
+        low ^= u64::from(byte);
+        low = low.wrapping_mul(0x0000_0100_0000_01b3);
+        high ^= u64::from(byte).rotate_left(1);
+        high = high.wrapping_mul(0x0000_0100_0000_01b3).rotate_left(5);
+    };
+    let kind_byte = match kind {
+        RawKind::Missing => 0,
+        RawKind::Regular => 1,
+        RawKind::Symlink => 2,
+    };
+    feed(kind_byte);
+    for byte in mode.unwrap_or(u32::MAX).to_le_bytes() {
+        feed(byte);
+    }
+    for byte in (bytes.len() as u64).to_le_bytes() {
+        feed(byte);
+    }
+    for byte in bytes {
+        feed(*byte);
+    }
+    if let Some(target) = link_target {
+        for byte in crate::platform::encode_path(target).into_bytes() {
+            feed(byte);
+        }
+    }
+    format!("{VERSION_PREFIX}{low:016x}{high:016x}")
+}
+
+/// 镜像 → token。
+pub fn version_token_of(image: &RawImage) -> String {
+    version_token(
+        image.kind,
+        &image.bytes,
+        image.mode,
+        image.link_target.as_deref(),
+    )
+}
+
+/// 由持久化字段（DB 稳定字符串 + 原始字节）重算 token。
+///
+/// `kind` 不是三个稳定值之一时返回 None（损坏记录不参与 CAS，直接判为不一致）。
+pub fn version_token_from_parts(
+    kind: &str,
+    bytes: Option<&[u8]>,
+    mode: Option<i64>,
+    link_target: Option<&str>,
+) -> Option<String> {
+    let kind = match kind {
+        "missing" => RawKind::Missing,
+        "regular" => RawKind::Regular,
+        "symlink" => RawKind::Symlink,
+        _ => return None,
+    };
+    let mode = mode.and_then(|mode| u32::try_from(mode).ok());
+    let link = link_target.map(PathBuf::from);
+    Some(version_token(
+        kind,
+        bytes.unwrap_or(&[]),
+        mode,
+        link.as_deref(),
+    ))
+}
+
 /// 普通文件的硬链接数；不存在、链接或不支持的系统返回 None。
 ///
 /// 原地写入多硬链接对象会连带修改其他路径，撤销快照无法只恢复其中一个目录项；

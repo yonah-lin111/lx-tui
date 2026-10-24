@@ -77,15 +77,18 @@ pub enum SlashCommand {
     New,
     /// `/rewind`（别名 `/undo`）：撤销当前会话最新一轮。
     Rewind,
+    /// `/compact`：把增量历史压缩成可撤销的检查点。
+    Compact,
 }
 
 impl SlashCommand {
     /// 全部命令（固定顺序）。
-    pub const ALL: [SlashCommand; 4] = [
+    pub const ALL: [SlashCommand; 5] = [
         SlashCommand::Model,
         SlashCommand::Resume,
         SlashCommand::New,
         SlashCommand::Rewind,
+        SlashCommand::Compact,
     ];
 
     /// 命令名（不含 `/`）。
@@ -95,6 +98,7 @@ impl SlashCommand {
             Self::Resume => "resume",
             Self::New => "new",
             Self::Rewind => "rewind",
+            Self::Compact => "compact",
         }
     }
 
@@ -105,6 +109,7 @@ impl SlashCommand {
             Self::Resume => &["session"],
             Self::New => &["clear"],
             Self::Rewind => &["undo"],
+            Self::Compact => &["summarize"],
         }
     }
 
@@ -115,6 +120,7 @@ impl SlashCommand {
             Self::Resume => "/resume",
             Self::New => "/new",
             Self::Rewind => "/rewind",
+            Self::Compact => "/compact",
         }
     }
 
@@ -125,6 +131,7 @@ impl SlashCommand {
             Self::Resume => crate::ui::text::LX_RESUME_COMMAND_DESC,
             Self::New => "Start a fresh blank session",
             Self::Rewind => "Undo the latest turn (files and conversation)",
+            Self::Compact => crate::ui::text::LX_COMPACT_COMMAND_DESC,
         }
     }
 
@@ -477,7 +484,8 @@ impl SlashPanel {
             Self::Commands { items, .. } => items.len(),
             Self::Model(picker) => picker.filtered.len(),
             Self::History(panel) => panel.filtered.len(),
-            Self::Rewind(_) => crate::app::state::lx::rewind::RewindAction::ALL.len(),
+            // 动作集按目标类型不同（普通轮次四项 / compact 两项），以面板为准。
+            Self::Rewind(panel) => panel.len(),
         }
     }
 

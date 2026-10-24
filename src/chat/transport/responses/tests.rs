@@ -30,6 +30,8 @@ fn request() -> ChatRequest {
             variant: Some("high".into()),
         },
         variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::Chat,
+        system_prompt: None,
     }
 }
 

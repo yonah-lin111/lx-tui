@@ -28,8 +28,17 @@ type LoadedSession = (
     Option<crate::db::chat::ModelSnapshot>,
     Vec<crate::db::chat::ProcessRecord>,
     Vec<crate::db::chat::NoticeRecord>,
+    Vec<crate::db::chat::CompactCheckpoint>,
     i64,
 );
+
+/// 撤销成功后的视图重载结果：消息、独立提示、compact 检查点与会话 revision。
+pub struct RewindView {
+    pub messages: Vec<crate::db::chat::ChatMessage>,
+    pub notices: Vec<crate::db::chat::NoticeRecord>,
+    pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
+    pub revision: i64,
+}
 
 /// 持久化服务实例：数据库句柄可为 None（库不可用时降级为无持久化）。
 pub struct Persistence {
@@ -244,23 +253,25 @@ impl Persistence {
         db.prune_orphan_images(session_id)
     }
 
-    /// 撤销成功后的视图重载：消息、独立提示与会话 revision。
+    /// 撤销成功后的视图重载：消息、独立提示、compact 检查点与会话 revision。
     pub fn load_rewind_view(
         &self,
         workspace: &Path,
         session_id: &str,
-    ) -> super::Result<(
-        Vec<super::chat::ChatMessage>,
-        Vec<super::chat::NoticeRecord>,
-        i64,
-    )> {
+    ) -> super::Result<RewindView> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         let messages = db
             .load_chat_session(workspace, session_id)?
             .ok_or(super::DbError::SessionMissing)?;
         let notices = db.load_notices(workspace, session_id)?;
+        let checkpoints = db.compact_checkpoints(workspace, session_id)?;
         let revision = db.session_revision(session_id)?;
-        Ok((messages, notices, revision))
+        Ok(RewindView {
+            messages,
+            notices,
+            checkpoints,
+            revision,
+        })
     }
 
     /// 记录一次工具调用的 pending 行并返回执行票据（事务提交后才返回）。
@@ -834,12 +845,18 @@ impl Persistence {
                     let processes = db
                         .load_processes_for_session(&workspace, &session_id)
                         .unwrap_or_default();
-                    // 独立撤销提示与 revision：提示不进入 messages，也不进模型上下文。
+                    // 独立撤销提示、compact 检查点与 revision：三者都不进入 messages，
+                    // 也不作为普通消息进模型上下文（检查点只投影为摘要前缀）。
                     let notices = db.load_notices(&workspace, &session_id).unwrap_or_default();
+                    let checkpoints = db
+                        .compact_checkpoints(&workspace, &session_id)
+                        .unwrap_or_default();
                     let revision = db.session_revision(&session_id).unwrap_or(0);
-                    Ok((messages, model, processes, notices, revision))
+                    Ok((messages, model, processes, notices, checkpoints, revision))
                 });
-                let Some((Some(messages), model, processes, notices, revision)) = loaded else {
+                let Some((Some(messages), model, processes, notices, checkpoints, revision)) =
+                    loaded
+                else {
                     update::show_toast(
                         state,
                         Toast::new(
@@ -866,8 +883,13 @@ impl Persistence {
                     revision,
                     selection,
                 );
+                // 检查点列表随会话一起回填（渲染与撤销都依赖它）。
+                let checkpoints_changed =
+                    update::set_compact_checkpoints(state, pane, &checkpoints);
                 // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
-                update::reconcile_process_records(state, pane, &processes) | changed
+                update::reconcile_process_records(state, pane, &processes)
+                    | changed
+                    | checkpoints_changed
             }
             Effect::RenameChatSession {
                 workspace,
@@ -991,9 +1013,12 @@ impl Persistence {
                 tracing::warn!("process effect reached persistence pump");
                 false
             }
-            // 撤销效应由事件层 `apply_rewind_effects` 取走；此处只兜底忽略。
-            Effect::PrepareRewind { .. } | Effect::ExecuteRewind(_) => {
-                tracing::warn!("rewind effect reached persistence pump");
+            // 撤销/压缩效应由事件层取走；此处只兜底忽略。
+            Effect::PrepareRewind { .. }
+            | Effect::ExecuteRewind(_)
+            | Effect::ExecuteCompact(_)
+            | Effect::RevertCompact(_) => {
+                tracing::warn!("rewind/compact effect reached persistence pump");
                 false
             }
             Effect::BeginUserShell { .. } | Effect::CancelUserShells { .. } => {
@@ -1138,6 +1163,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::StopSessionProcess { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
+            | Effect::ExecuteCompact(_)
+            | Effect::RevertCompact(_)
             | Effect::BeginUserShell { .. }
             | Effect::CancelUserShells { .. }
     )

@@ -282,5 +282,8 @@ pub fn toggle_lx_card(state: &mut AppState, pane: PaneId, target: CardTarget) ->
             message_id,
             section,
         } => super::user_shell::activate_shell_card(state, pane, &message_id, section),
+        CardTarget::Compact { checkpoint_id } => {
+            super::compact::toggle_checkpoint(state, pane, &checkpoint_id)
+        }
     }
 }

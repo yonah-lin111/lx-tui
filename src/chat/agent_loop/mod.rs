@@ -354,6 +354,8 @@ impl ModelContext {
             items: self.items.clone(),
             model: self.request.model.clone(),
             variant_params: self.request.variant_params.clone(),
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            system_prompt: None,
         }
     }
 

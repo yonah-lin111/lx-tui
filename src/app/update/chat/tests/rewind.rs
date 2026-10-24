@@ -318,7 +318,8 @@ fn notices_are_not_part_of_model_assembly() {
         variant_params: None,
         idle_timeout_ms: 30_000,
     };
-    let assembled = crate::event::chat::assemble_turn_request(&target.lx.chat.messages, &frozen);
+    let assembled =
+        crate::event::chat::assemble_turn_request(&target.lx.chat.messages, &frozen, None, None);
     let debug = format!("{:?}", assembled.request.items);
     assert!(debug.contains("原文"));
     assert!(!debug.contains("revert_and_delete"));

@@ -20,6 +20,12 @@ fn fixture(label: &str) -> (Database, std::path::PathBuf, std::path::PathBuf) {
     (database, root, db_path)
 }
 
+/// 读后版本 token：与执行层同一口径。
+fn version_of(bytes: &[u8]) -> String {
+    crate::platform::version_token_from_parts("regular", Some(bytes), Some(0o644), None)
+        .expect("token")
+}
+
 fn image(bytes: &[u8]) -> ImageWrite {
     ImageWrite {
         kind: "regular".into(),
@@ -69,6 +75,7 @@ fn turn_with_file(
                 anchor_canonical: None,
                 before: image(before),
                 planned_after: image(after),
+                expected_version: Some(version_of(before)),
             }],
         )
         .expect("prepare");
@@ -506,6 +513,7 @@ fn restores_actual_linked_worktree_target_only() {
                 anchor_canonical: None,
                 before: with_git(b"base"),
                 planned_after: with_git(b"new"),
+                expected_version: Some(version_of(b"base")),
             }],
         )
         .expect("prepare");

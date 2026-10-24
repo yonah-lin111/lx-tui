@@ -9,6 +9,7 @@
 use super::*;
 
 mod budget;
+mod compact;
 mod legacy;
 mod roundtrip;
 mod shell;
@@ -102,6 +103,8 @@ fn assemble_unbounded(messages: &[ChatMessage], draft: &str) -> Assembly {
         context_limit: None,
         output_limit: None,
         variant_params: None,
+        compact: None,
+        environment: None,
     })
 }
 
@@ -114,6 +117,8 @@ fn assemble_with_limit(messages: &[ChatMessage], draft: &str, limit: u64, output
         context_limit: Some(limit),
         output_limit: Some(output),
         variant_params: None,
+        compact: None,
+        environment: None,
     })
 }
 

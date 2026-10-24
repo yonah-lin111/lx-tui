@@ -313,6 +313,8 @@ fn context(cwd: &Path) -> ModelContext {
                 variant: None,
             },
             variant_params: None,
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            system_prompt: None,
         },
         cwd.to_path_buf(),
     )

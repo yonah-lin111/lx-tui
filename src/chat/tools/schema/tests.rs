@@ -103,15 +103,21 @@ fn read_schema_documents_one_based_offset() {
 }
 
 #[test]
-fn edit_schema_has_only_patch() {
+fn edit_schema_has_patch_and_read_versions() {
     let edit = available_tools()
         .iter()
         .find(|spec| spec.name == "edit")
         .expect("edit");
     let parameters = edit.parameters();
     let properties = parameters["properties"].as_object().expect("properties");
-    assert_eq!(properties.len(), 1);
+    // `read_versions` 是读后版本保护的唯一入口：字符串映射，不能是数组/数字。
+    assert_eq!(properties.len(), 2);
     assert!(properties.contains_key("patch"));
+    assert!(properties.contains_key("read_versions"));
+    assert_eq!(
+        parameters["properties"]["read_versions"]["additionalProperties"],
+        serde_json::json!({"type": "string"})
+    );
     assert_eq!(parameters["required"], serde_json::json!(["patch"]));
 }
 

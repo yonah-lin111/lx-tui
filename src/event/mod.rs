@@ -107,6 +107,20 @@ pub enum AppEvent {
         epoch: String,
         snapshots: Vec<crate::chat::process::ProcessSnapshot>,
     },
+    /// `/compact` 的后台执行结果（摘要请求 + 检查点事务）。
+    CompactFinished {
+        pane: PaneId,
+        session_id: String,
+        /// 会话 DB 工作区键（回执重载只认它）。
+        workspace: PathBuf,
+        outcome: chat::compact::CompactOutcome,
+    },
+    /// compact 撤销的后台执行结果（只切检查点状态与指针）。
+    CompactReverted {
+        pane: PaneId,
+        session_id: String,
+        outcome: Result<(), String>,
+    },
     /// 最新轮次撤销的后台执行结果（文件恢复 + 最终事务）。
     RewindFinished {
         pane: PaneId,
@@ -254,6 +268,10 @@ async fn run_loop(
         commands_reload = false;
         // 撤销效应先取走：预检同步、执行转后台；持久化泵不再看到它们。
         if chat::apply_rewind_effects(state, &sender, persistence) {
+            dirty = true;
+        }
+        // 压缩效应：摘要请求转后台、检查点事务在独立连接执行。
+        if chat::apply_compact_effects(state, &sender, persistence) {
             dirty = true;
         }
         // 续轮的 session guard 必须在 BeginChatTurn 事务之前取得。
@@ -609,6 +627,28 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::CompactFinished {
+            pane,
+            session_id,
+            workspace,
+            outcome,
+        } => {
+            chat::handle_compact_finished(
+                state,
+                persistence,
+                pane,
+                &session_id,
+                &workspace,
+                outcome,
+            );
+        }
+        AppEvent::CompactReverted {
+            pane,
+            session_id,
+            outcome,
+        } => {
+            chat::handle_compact_reverted(state, persistence, pane, &session_id, outcome);
         }
         AppEvent::RewindFinished {
             pane,

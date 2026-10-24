@@ -25,6 +25,7 @@ pub fn new_session(state: &mut AppState, pane: PaneId) -> bool {
         return false;
     };
     target.lx.chat.reset_session_view();
+    target.lx.compact.reset();
     target.lx.clear_rewind();
     refresh_lx_status(state, pane);
     true
@@ -367,6 +368,8 @@ pub fn on_session_loaded_full(
         return false;
     };
     target.lx.chat.session_id = Some(session_id.to_string());
+    // 切会话：先清空 compact 状态（检查点列表随后由加载回执回填）。
+    target.lx.compact.reset();
     target.lx.clear_rewind();
     // 切换会话：未执行的命令与排队项不得漂移到新会话。
     target.lx.chat.pending_shells.clear();
@@ -669,5 +672,6 @@ pub fn apply_slash_command(state: &mut AppState, pane: PaneId, command: SlashCom
         SlashCommand::Resume => open_history(state, pane),
         SlashCommand::New => new_session(state, pane),
         SlashCommand::Rewind => super::rewind::open_from_command(state, pane),
+        SlashCommand::Compact => super::compact::compact_command(state, pane),
     }
 }

@@ -114,6 +114,8 @@ fn request() -> ChatRequest {
             variant: None,
         },
         variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::Chat,
+        system_prompt: None,
     }
 }
 
@@ -381,9 +383,10 @@ async fn responses_stream_decodes_summary_and_raw_reasoning() {
         "URL: {}",
         recorded.target
     );
-    // body 用 input 而非 messages。
-    assert!(recorded.body.contains("input"));
-    assert!(!recorded.body.contains("messages"));
+    // body 用 input 而非 messages（按字段名精确断言：系统提示正文里也可能出现
+    // “messages” 这个词，不能把提示文本当成协议字段）。
+    assert!(recorded.body.contains("\"input\""));
+    assert!(!recorded.body.contains("\"messages\""));
     // summary/raw reasoning 均为独立 part 且带来源元数据。
     let summary = outcome.deltas.iter().find_map(|delta| match delta {
         ChatDelta::Part(part) if part.text == "摘要思考" => part.metadata.clone(),

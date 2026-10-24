@@ -29,6 +29,7 @@ use super::notice;
 
 mod body;
 mod cards;
+mod compact;
 mod rewind;
 mod rows;
 mod stats;
@@ -216,7 +217,7 @@ pub struct HistoryLayout {
 pub use sticky::StickyRow;
 use sticky::sticky_candidate;
 
-/// 历史时间线条目：真实消息与独立撤销提示按 DB sequence 合并。
+/// 历史时间线条目：真实消息、独立撤销提示与 compact 检查点按 DB sequence 合并。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TimelineEntry {
     Message(usize),
@@ -225,42 +226,71 @@ enum TimelineEntry {
         last: usize,
         count: usize,
     },
+    /// compact 检查点（独立条目；不合并，每条各自可折叠）。
+    Compact(usize),
 }
 
-/// 是否有可绘制的历史（消息为空但提示非空时仍显示历史，不退回欢迎页）。
+/// 是否有可绘制的历史（消息为空但提示/检查点非空时仍显示历史，不退回欢迎页）。
 pub fn has_history(lx: &Lx) -> bool {
-    !lx.chat.messages.is_empty() || !lx.chat.notices.is_empty()
+    !lx.chat.messages.is_empty() || !lx.chat.notices.is_empty() || !lx.compact.is_empty()
 }
 
-/// 按 sequence 合并消息与提示；同序号不可能出现（DB 唯一分配），保险起见消息在前。
+/// 按 sequence 合并消息、撤销提示与 compact 检查点。
+///
+/// 三者共用同一编号空间（DB 唯一分配），因此按 sequence 升序交叉合并即可；
+/// 同序号不可能出现，保险起见消息在前。连续撤销提示仍合并成一条 `xN`，
+/// 而 compact 检查点**不合并**：每条摘要都需要独立展开。
 fn timeline(lx: &Lx) -> Vec<TimelineEntry> {
-    let mut out = Vec::with_capacity(lx.chat.messages.len() + lx.chat.notices.len());
+    let mut out = Vec::with_capacity(
+        lx.chat.messages.len() + lx.chat.notices.len() + lx.compact.checkpoints.len(),
+    );
     let mut message = 0usize;
     let mut notice = 0usize;
-    while message < lx.chat.messages.len() || notice < lx.chat.notices.len() {
-        let take_message = match (
-            lx.chat.messages.get(message).map(|item| item.sequence),
-            lx.chat.notices.get(notice).map(|item| item.sequence),
-        ) {
-            (Some(left), Some(right)) => left <= right,
-            (Some(_), None) => true,
-            (None, Some(_)) => false,
-            (None, None) => break,
+    let mut checkpoint = 0usize;
+    while message < lx.chat.messages.len()
+        || notice < lx.chat.notices.len()
+        || checkpoint < lx.compact.checkpoints.len()
+    {
+        let next_message = lx.chat.messages.get(message).map(|item| item.sequence);
+        let next_notice = lx.chat.notices.get(notice).map(|item| item.sequence);
+        let next_checkpoint = lx
+            .compact
+            .checkpoints
+            .get(checkpoint)
+            .map(|item| item.sequence);
+        // 取三者中最小 sequence 的条目（相等时消息优先，其次提示，最后检查点）。
+        let take_message = match (next_message, next_notice, next_checkpoint) {
+            (None, None, None) => break,
+            (Some(sequence), notice, checkpoint) => {
+                let mut smallest = sequence;
+                for other in [notice, checkpoint].into_iter().flatten() {
+                    smallest = smallest.min(other);
+                }
+                sequence == smallest
+            }
+            _ => false,
         };
         if take_message {
             out.push(TimelineEntry::Message(message));
             message += 1;
-        } else {
-            // 连续提示合并：吸收下一条真实消息之前的所有提示（它们按 sequence 相邻）。
+            continue;
+        }
+        let take_notice = match (next_notice, next_checkpoint) {
+            (Some(sequence), Some(other)) => sequence <= other,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        if take_notice {
+            // 连续提示合并：吸收下一条条目前的所有提示（它们按 sequence 相邻）。
             notice += 1;
             let mut count = 1;
-            while notice < lx.chat.notices.len()
-                && lx
-                    .chat
-                    .messages
-                    .get(message)
-                    .is_none_or(|next| lx.chat.notices[notice].sequence < next.sequence)
-            {
+            while notice < lx.chat.notices.len() {
+                let next = lx.chat.notices[notice].sequence;
+                let blocked = next_message.is_some_and(|sequence| sequence <= next)
+                    || next_checkpoint.is_some_and(|sequence| sequence <= next);
+                if blocked {
+                    break;
+                }
                 count += 1;
                 notice += 1;
             }
@@ -268,7 +298,10 @@ fn timeline(lx: &Lx) -> Vec<TimelineEntry> {
                 last: notice - 1,
                 count,
             });
+            continue;
         }
+        out.push(TimelineEntry::Compact(checkpoint));
+        checkpoint += 1;
     }
     out
 }
@@ -354,6 +387,39 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                 }
                 entry_has_previous = true;
                 rows += rewind::rows(&lx.chat.notices[*last], *count, width);
+                continue;
+            }
+            TimelineEntry::Compact(index) => {
+                // compact 条目同样独立成条：与消息之间留一空行，行数与渲染同口径。
+                if entry_has_previous {
+                    rows += 1;
+                }
+                entry_has_previous = true;
+                let start = rows;
+                let notice = &lx.compact.checkpoints[*index];
+                let expanded = compact::is_expanded(lx, &notice.id);
+                let notice_rows = compact::rows(notice, 1, width, expanded);
+                rows += notice_rows;
+                // 整块都是点击面：折叠态只有头部两行，点哪里都应能展开。
+                cards.push(CardHit {
+                    kind: CardKind::Compact {
+                        checkpoint_id: notice.id.clone(),
+                        expanded,
+                    },
+                    card: Rect::new(
+                        area.x,
+                        area.y.saturating_add(rows_to_u16(start)),
+                        width,
+                        rows_to_u16(notice_rows),
+                    ),
+                    fold: Rect::new(
+                        area.x,
+                        area.y.saturating_add(rows_to_u16(start)),
+                        width,
+                        rows_to_u16(notice_rows),
+                    ),
+                    clickable: true,
+                });
                 continue;
             }
         };
@@ -706,6 +772,13 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                     scroll,
                     &mut row_index,
                 );
+                row_index += 1;
+                continue;
+            }
+            TimelineEntry::Compact(index) => {
+                let notice = &lx.compact.checkpoints[*index];
+                let expanded = compact::is_expanded(lx, &notice.id);
+                compact::draw(grid, notice, 1, expanded, content, scroll, &mut row_index);
                 row_index += 1;
                 continue;
             }

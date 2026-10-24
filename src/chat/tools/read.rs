@@ -72,6 +72,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
         ));
     }
     read_file(
+        ctx,
         &target,
         metadata.len(),
         offset,
@@ -85,6 +86,7 @@ pub(crate) fn run(ctx: &ToolContext, arguments_json: &str) -> ToolResult<ToolExe
 /// `len` 是调用方已 `stat` 得到的文件字节数：先判输入上限再 `fs::read`，避免把巨型文件
 /// 整个读进内存（`limit` 只限制**输出**行数，不能替代输入上限）。
 fn read_file(
+    ctx: &ToolContext,
     target: &Path,
     len: u64,
     offset: usize,
@@ -107,6 +109,16 @@ fn read_file(
         std::fs::read(target).map_err(|error| path::map_io_error(&error, "read", target))?;
     let source = SourceText::parse(&bytes)?;
     let total_lines = source.lines.len();
+    // 读后版本 token：与本轮内容同一份镜像口径（跟随符号链接到物理文件）。
+    let image = crate::platform::read_raw(target, true)
+        .map_err(|error| path::map_io_error(&error, "read", target))?;
+    let version = ctx.reads.as_ref().map(|reads| {
+        reads.record(
+            &super::read_version::canonical_key(target),
+            &path::display(target),
+            &image,
+        )
+    });
     if total_lines == 0 {
         // 空文件：offset 只允许 1（从首行开始读，读到 0 行）。
         if offset > 1 {
@@ -121,6 +133,7 @@ fn read_file(
             next_offset: None,
             truncated: false,
             total_lines: 0,
+            version,
         });
     }
     if offset > total_lines {
@@ -159,6 +172,7 @@ fn read_file(
         next_offset,
         truncated: next_offset.is_some() || line_truncated,
         total_lines,
+        version,
     })
 }
 
@@ -241,6 +255,7 @@ fn read_directory(
             next_offset: None,
             truncated: entries_truncated,
             total_lines: 0,
+            version: None,
         });
     }
     if offset > total_lines {
@@ -276,6 +291,8 @@ fn read_directory(
         // 条目上限与分页截断都走同一个 `truncated` 标志，不新造字段。
         truncated: next_offset.is_some() || entries_truncated,
         total_lines,
+        // 目录不是写入目标，不产生版本 token。
+        version: None,
     })
 }
 

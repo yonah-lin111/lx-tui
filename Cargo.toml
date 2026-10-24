@@ -27,6 +27,7 @@ rusqlite = { version = "0.40.2", features = ["bundled"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream", "gzip", "json"] }
 similar = "2.7"
 
-# macOS 读取进程 cwd 需要 proc_pidinfo（Linux 走 /proc，无额外依赖）。
-[target.'cfg(target_os = "macos")'.dependencies]
+# Unix 平台能力：macOS 读取进程 cwd 需要 proc_pidinfo，环境快照需要 localtime_r
+# 取本地时间与时区（Windows 无 libc 依赖，走 UTC 兜底）。
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"

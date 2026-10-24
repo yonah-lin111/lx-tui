@@ -696,8 +696,49 @@ pub const LX_REWIND_RECOVERY_BLOCKED: &str =
     "This session has an unfinished rewind; recover it before sending";
 pub const LX_REWIND_BUSY: &str = "Stop background tasks before rewinding.";
 pub const LX_REWIND_SESSION_BUSY: &str = "This session is busy; finish or stop it first.";
-/// 二级面板（`/model`、`/resume`）过滤后无命中：与「真的没有数据」区分开。
+/// 三级面板（`/model`、`/resume`、`/compact`）过滤后无命中：与「真的没有数据」区分开。
 pub const LX_SLASH_NO_MATCHES: &str = "no matches";
+
+// ===== 上下文压缩（`/compact`）=====
+
+/// 压缩命令的一句话描述（`/` 面板）。
+pub const LX_COMPACT_COMMAND_DESC: &str = "Summarize earlier context into a compact checkpoint";
+/// 有内容被压缩时的成功提示（toast）。
+pub const LX_COMPACT_DONE: &str = "Context compacted.";
+/// 没有可压缩的增量（已是最新检查点之后为空）。
+pub const LX_COMPACT_EMPTY: &str = "Nothing new to compact.";
+/// 忙碌（流式回复 / 工具执行 / 压缩进行中）时拒绝。
+pub const LX_COMPACT_BUSY: &str = "Finish the current response before compacting.";
+/// 未绑定会话：没有可压缩的上下文。
+pub const LX_COMPACT_NO_SESSION: &str = "Send a message first; there is no context to compact.";
+/// 失败（网络/超限/取消）：**不写检查点**，原始消息保持不变。
+pub const LX_COMPACT_FAILED: &str = "Compact failed; conversation was left unchanged.";
+/// 摘要输出超限。
+pub const LX_COMPACT_TOO_LARGE: &str = "Compact summary exceeded the size limit; nothing changed.";
+/// 撤销 compact 的提示（`/rewind` 成功后）。
+pub const LX_COMPACT_REWOUND: &str = "Context restored to the previous checkpoint.";
+/// compact 撤销面板的唯一动作文案。
+pub const LX_COMPACT_ACTION_RESTORE: &str = "Restore the context before this checkpoint";
+/// 检查点条目标题（独立时间线条目）。
+pub const LX_COMPACT_NOTICE_TITLE: &str = "-- Context compacted --";
+/// 折叠态的提示摘要（模型名与时间）。
+pub const LX_COMPACT_COLLAPSED_HINT: &str = "select ↵ to expand";
+/// 展开态的范围标签。
+pub const LX_COMPACT_RANGE_LABEL: &str = "covered";
+
+/// 检查点条目标题：连续多条合并时带数量（`-- Context compacted x2 --`）。
+pub fn compact_notice_title(count: usize) -> String {
+    if count > 1 {
+        format!("-- Context compacted x{count} --")
+    } else {
+        LX_COMPACT_NOTICE_TITLE.to_string()
+    }
+}
+
+/// 检查点条目描述：`模型：gpt-5 · 10:42`（时间只到分钟，由状态层传入已格式化值）。
+pub fn compact_notice(model: &str, time: &str) -> String {
+    format!("model: {model} · {time}")
+}
 /// `/resume` 命令描述。
 pub const LX_RESUME_COMMAND_DESC: &str = "Resume a previous session in this workspace";
 /// `/resume` 历史面板标题与空态。

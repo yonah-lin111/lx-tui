@@ -20,6 +20,7 @@ fn read_text_states_range_and_next_offset() {
         next_offset: Some(3),
         truncated: true,
         total_lines: 9,
+        version: None,
     };
     let text = format_for_model(&result);
     assert!(text.contains("lines 1-2 of 9 total lines"), "text: {text}");
@@ -40,6 +41,7 @@ fn read_text_distinguishes_empty_file_and_directory() {
         next_offset: None,
         truncated: false,
         total_lines: 0,
+        version: None,
     };
     assert!(format_for_model(&empty).contains("empty file"));
 
@@ -52,6 +54,7 @@ fn read_text_distinguishes_empty_file_and_directory() {
         next_offset: None,
         truncated: false,
         total_lines: 1,
+        version: None,
     };
     let text = format_for_model(&dir);
     assert!(text.contains("Listed 1 entries"));
@@ -243,6 +246,7 @@ fn result_json_covers_every_variant() {
         next_offset: None,
         truncated: false,
         total_lines: 1,
+        version: None,
     };
     let value: serde_json::Value =
         serde_json::from_str(&to_result_json(&read).expect("json")).expect("parse");
@@ -308,6 +312,7 @@ fn oversized_result_json_is_truncated_with_flag() {
         next_offset: Some(2),
         truncated: true,
         total_lines: 10,
+        version: None,
     };
     let json = to_result_json(&result).expect("json");
     assert!(json.len() <= super::MAX_TOOL_RESULT_BYTES);
@@ -409,6 +414,7 @@ fn to_result_json_round_trips_into_summary() {
                 next_offset: Some(41),
                 truncated: true,
                 total_lines: 1000,
+                version: None,
             },
         },
         RoundTripCase {
@@ -423,6 +429,7 @@ fn to_result_json_round_trips_into_summary() {
                 next_offset: None,
                 truncated: false,
                 total_lines: 40,
+                version: None,
             },
         },
         RoundTripCase {
@@ -437,6 +444,7 @@ fn to_result_json_round_trips_into_summary() {
                 next_offset: None,
                 truncated: false,
                 total_lines: 2,
+                version: None,
             },
         },
         RoundTripCase {
@@ -451,6 +459,7 @@ fn to_result_json_round_trips_into_summary() {
                 next_offset: None,
                 truncated: false,
                 total_lines: 0,
+                version: None,
             },
         },
         RoundTripCase {

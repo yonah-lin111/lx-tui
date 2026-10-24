@@ -16,6 +16,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
+pub mod compact;
 mod process;
 pub mod rewind;
 mod session;
@@ -23,6 +24,11 @@ pub mod user_shell;
 mod view;
 mod viewport;
 
+pub use compact::{
+    compact_command, on_compact_empty, on_compact_failed, on_compact_finished, on_compact_reverted,
+    revert_request as compact_revert_request, set_checkpoints as set_compact_checkpoints,
+    toggle_checkpoint,
+};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
     apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,
@@ -77,7 +83,8 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         }
         let entry = target.lx.entry;
         let draft = target.lx.input.trim().to_string();
-        let busy = !target.lx.chat.request.can_send();
+        // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
+        let busy = !target.lx.chat.request.can_send() || target.lx.compact.is_running();
         let selection = target.lx.chat.effective_selection(&state.models);
         let session_id = target.lx.chat.session_id.clone();
         let generation = next_generation(state, pane);

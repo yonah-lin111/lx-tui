@@ -207,6 +207,9 @@ fn target_of(kind: &history::CardKind) -> CardTarget {
             message_id: message_id.clone(),
             section: *section,
         },
+        history::CardKind::Compact { checkpoint_id, .. } => CardTarget::Compact {
+            checkpoint_id: checkpoint_id.clone(),
+        },
     }
 }
 

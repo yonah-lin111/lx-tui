@@ -62,6 +62,7 @@ fn prepare_failure_leaves_target_untouched() {
         target: path.clone(),
         before,
         planned_after: RawImage::regular(b"after".to_vec(), None),
+        expected_version: None,
     };
     let result = capture(Some(&recorder), vec![change], || {
         std::fs::write(&path, b"after")
@@ -82,6 +83,7 @@ fn commit_observes_actual_bytes_even_on_writer_error() {
         target: path.clone(),
         before,
         planned_after: RawImage::regular(b"after".to_vec(), None),
+        expected_version: None,
     };
     let result = capture(Some(&recorder), vec![change], || {
         std::fs::write(&path, b"partially")?;

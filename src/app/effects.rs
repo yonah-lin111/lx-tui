@@ -210,6 +210,13 @@ pub enum Effect {
     },
     /// 执行一次最新轮次撤销（唯一 operation id；事件层后台执行）。
     ExecuteRewind(RewindRequest),
+    /// 执行一次上下文压缩：独立摘要请求 → 事务写检查点 → 重载视图。
+    ///
+    /// 事件层负责整条链路（网络请求不经过持久化泵），成功/失败都回投
+    /// `AppEvent::CompactFinished`。
+    ExecuteCompact(CompactRequest),
+    /// 撤销一次 compact 检查点（只切状态与指针，不触碰文件）。
+    RevertCompact(CompactRevertRequest),
     /// 提交一条本地命令：事件层先落库预登记，成功后才 spawn。
     ///
     /// 不占用模型 `RequestState`；`workspace` 是会话 DB 键，`cwd` 是冻结的执行目录。
@@ -242,5 +249,43 @@ pub struct RewindRequest {
     pub workspace: PathBuf,
     pub input_at_open: String,
     pub user_text: String,
+    pub operation_id: String,
+}
+
+/// 一次压缩请求：会话、冻结的 revision 与当前模型全部在发起时确定。
+///
+/// 摘要请求是**独立请求**（不带工具、不落普通消息）；事件层用它装配请求并执行。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactRequest {
+    pub pane: crate::layout::PaneId,
+    /// 会话所属工作区键（DB 归属校验）。
+    pub workspace: PathBuf,
+    pub session_id: String,
+    /// 发起时冻结的会话 revision（成功后提交时核对）。
+    pub expected_revision: u64,
+    /// 上一个生效检查点（增量范围起点）。
+    pub base_checkpoint_id: Option<String>,
+    /// 本次使用的模型快照（摘要请求与展示标签同源）。
+    pub model: crate::db::chat::ModelSnapshot,
+    /// 模型显示名（写入检查点的 `model_label`，UI 原样展示）。
+    pub model_label: String,
+    pub transport: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub variant_params: Option<serde_json::Value>,
+    pub idle_timeout_ms: u64,
+    /// 幂等键（同一次压缩的重复回执只写一次）。
+    pub operation_id: String,
+}
+
+/// 一次 compact 撤销请求。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactRevertRequest {
+    pub pane: crate::layout::PaneId,
+    pub workspace: PathBuf,
+    pub session_id: String,
+    pub checkpoint_id: String,
+    /// 发起时冻结的会话 revision。
+    pub expected_revision: u64,
     pub operation_id: String,
 }

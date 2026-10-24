@@ -311,6 +311,8 @@ pub enum CardTarget {
         message_id: String,
         section: CardSection,
     },
+    /// compact 检查点条目（按检查点 ID 定位；默认折叠）。
+    Compact { checkpoint_id: String },
 }
 
 /// 卡片内可独立折叠的区域。

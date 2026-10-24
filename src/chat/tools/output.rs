@@ -27,6 +27,7 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
             next_offset,
             truncated,
             total_lines,
+            version,
         } => format_read(
             path,
             *kind,
@@ -36,6 +37,7 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
             *next_offset,
             *truncated,
             *total_lines,
+            version.as_deref(),
         ),
         ToolExecutionResult::Search {
             matches,
@@ -182,6 +184,9 @@ fn format_plan(snapshot: &crate::chat::plan::PlanSnapshot) -> String {
 }
 
 /// `read` 的文本表示：首行给出范围与文件总行数，末行给出截断续读信息。
+///
+/// 文件读取额外给出 `file_version`：修改该文件时必须把它作为 `read_version`
+/// 参数交给 `edit`/`write`，否则写入会被拒绝。
 #[allow(clippy::too_many_arguments)]
 fn format_read(
     path: &std::path::Path,
@@ -192,6 +197,7 @@ fn format_read(
     next_offset: Option<usize>,
     truncated: bool,
     total_lines: usize,
+    version: Option<&str>,
 ) -> String {
     let mut text = String::new();
     match kind {
@@ -208,6 +214,9 @@ fn format_read(
         ReadKind::File => {
             if start_line == 0 {
                 text.push_str(&format!("Read {} (empty file)\n", path.display()));
+                if let Some(version) = version {
+                    text.push_str(&format!("file_version: {version}\n"));
+                }
                 return text;
             }
             text.push_str(&format!(
@@ -217,6 +226,11 @@ fn format_read(
                 end_line,
                 total_lines
             ));
+            if let Some(version) = version {
+                text.push_str(&format!(
+                    "file_version: {version} (pass this as read_version when editing this file)\n"
+                ));
+            }
             if truncated {
                 text.push_str("truncated: true (long lines and/or output size were cut)\n");
             }
@@ -443,6 +457,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             next_offset,
             truncated,
             total_lines,
+            version,
         } => json!({
             "tool": "read",
             "path": path.display().to_string(),
@@ -456,6 +471,7 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
             "next_offset": next_offset,
             "truncated": truncated,
             "total_lines": total_lines,
+            "file_version": version,
         }),
         ToolExecutionResult::Search {
             matches,

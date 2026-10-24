@@ -11,6 +11,7 @@
 //!   `FinishTool` 必须先原子写真实结果、再更新状态、最后回执。
 //! - delta 与整轮终态仍按 `(pane, session, generation)` 过滤，旧 generation 事件一律丢弃。
 
+pub mod compact;
 mod file_snapshots;
 mod host;
 mod process_events;
@@ -59,6 +60,7 @@ pub fn stop_turn_processes(streams: &mut ChatStreams, key: &RequestKey) {
 #[cfg(test)]
 mod tests;
 
+pub use compact::{apply_compact_effects, handle_compact_finished, handle_compact_reverted};
 pub use host::{
     AgentHostEvent, BEGIN_TOOL_FAILED_CODE, FINISH_TOOL_FAILED_CODE, RUNNING_TOOL_FAILED_CODE,
 };
@@ -777,6 +779,8 @@ pub(crate) fn active_assistant_id(state: &AppState, key: &RequestKey) -> Option<
 pub(crate) fn assemble_turn_request(
     messages: &[crate::app::state::ChatMessageView],
     frozen: &crate::app::state::FrozenModel,
+    compact: Option<&context::CompactContext>,
+    environment: Option<&str>,
 ) -> AssembledTurn {
     let draft = latest_user_draft(messages);
     let db_messages = chat_part_views_to_db(messages);
@@ -792,6 +796,8 @@ pub(crate) fn assemble_turn_request(
         context_limit: frozen.context_limit,
         output_limit: frozen.output_limit,
         variant_params: frozen.variant_params.clone(),
+        compact,
+        environment,
     });
     AssembledTurn {
         request: ChatRequest {
@@ -799,6 +805,9 @@ pub(crate) fn assemble_turn_request(
             items: assembly.request.items,
             model,
             variant_params: frozen.variant_params.clone(),
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            // 装配出的系统提示已包含冻结环境与 compact 摘要：请求不再现场采集。
+            system_prompt: Some(assembly.system_prompt),
         },
         omitted_turns: assembly.omitted_turns,
         draft_exceeds: assembly.draft_exceeds,
@@ -849,7 +858,30 @@ fn start_stream(
             return true;
         };
         // 上下文：从窗格内存中的完整轮次装配（DB 历史与内存一致；partial 排除）。
-        let assembled = assemble_turn_request(&pane.lx.chat.messages, &frozen);
+        // 本轮的 compact 摘要与环境快照在这里冻结：本轮所有采样复用同一份。
+        let compact = pane
+            .lx
+            .compact
+            .active()
+            .map(|checkpoint| context::CompactContext {
+                end_sequence: checkpoint.end_sequence,
+                summary: checkpoint.summary.clone(),
+                model_label: checkpoint.model_label.clone(),
+            });
+        // 环境快照：工作区根 + 冻结 cwd + 受管后台任务摘要（不含任何凭据/环境变量值）。
+        let workspace_root = state.workspace_cwd_for_pane(key.pane);
+        let environment = crate::chat::prompt::environment_snapshot(
+            &crate::platform::EnvironmentFacts::capture(),
+            workspace_root.as_deref(),
+            workspace_root.as_deref(),
+            &background_tasks(pane.lx.chat.session_id.as_deref(), streams),
+        );
+        let assembled = assemble_turn_request(
+            &pane.lx.chat.messages,
+            &frozen,
+            compact.as_ref(),
+            Some(&environment),
+        );
         // 计划快照先克隆：运行上下文摘要要在后面的可变借用窗外拼装。
         let current_plan = pane.lx.chat.plan.clone();
         (frozen, assembled, current_plan)
@@ -931,8 +963,11 @@ fn start_stream(
         key.session.clone(),
         user_message_id,
     );
-    let executor =
-        AgentTools::new(runtime.manager.clone(), turn).with_recorder(std::sync::Arc::new(recorder));
+    // 读后版本保护：登记表按会话隔离，跨轮保留（读过的文件在后续轮次仍可用同一 token）。
+    let reads = crate::chat::tools::read_registry(&key.session);
+    let executor = AgentTools::new(runtime.manager.clone(), turn)
+        .with_recorder(std::sync::Arc::new(recorder))
+        .with_reads(reads);
     // 本地运行上下文：存活进程清单 + 当前计划（有界，避免历史裁剪后模型忘记 session_id）。
     let summary = runtime_context_summary(runtime.manager.as_ref(), &current_plan);
     prepared.context = prepared.context.with_runtime_summary(summary);
@@ -982,6 +1017,40 @@ fn start_stream(
         report_turn(net_sender, stream_key, summary);
     });
     true
+}
+
+/// 受管后台任务摘要（环境快照用）：只含 session id、状态、cwd 与命令首行。
+///
+/// 不包含完整命令行、输出或环境变量：环境快照写入模型上下文，必须最小化。
+fn background_tasks(
+    session_id: Option<&str>,
+    streams: &ChatStreams,
+) -> Vec<crate::chat::prompt::BackgroundTask> {
+    let Some(session_id) = session_id else {
+        return Vec::new();
+    };
+    let Some(runtime) = streams.runtimes.get(session_id) else {
+        return Vec::new();
+    };
+    runtime
+        .manager()
+        .snapshots()
+        .into_iter()
+        .filter(|snapshot| !snapshot.state.is_terminal() || snapshot.background_alive)
+        .map(|snapshot| crate::chat::prompt::BackgroundTask {
+            session_id: snapshot.session_id,
+            state: snapshot.state.as_str().to_string(),
+            cwd: snapshot.cwd,
+            command: snapshot
+                .command
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect(),
+        })
+        .collect()
 }
 
 /// 本轮运行上下文摘要：存活进程（有界）与当前计划（有界）。

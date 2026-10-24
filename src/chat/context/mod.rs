@@ -52,6 +52,55 @@ pub struct AssemblyInput<'a> {
     pub output_limit: Option<u64>,
     /// 思考等级参数（来自 variants）；None 时不发送推理等级字段。
     pub variant_params: Option<serde_json::Value>,
+    /// 当前生效的 compact 检查点（None 表示没有压缩过）。
+    ///
+    /// 有值时只回放 `end_sequence` 之后的消息，并把摘要作为**独立的前置上下文**
+    /// 注入（不是 user/assistant 消息，也不进入复制选区）。
+    pub compact: Option<&'a CompactContext>,
+    /// 本 turn 冻结的环境快照文本；None 时由 transport 现场采集（旧路径/测试）。
+    ///
+    /// 生产路径由事件层在 turn 创建时冻结一次，本轮所有采样复用同一份。
+    pub environment: Option<&'a str>,
+}
+
+/// 装配用的 compact 摘要（从持久化检查点投影而来）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactContext {
+    /// 摘要覆盖到的最后一个原始消息 sequence。
+    pub end_sequence: i64,
+    /// 摘要正文。
+    pub summary: String,
+    /// 实际摘要模型显示名（只用于诊断与日志，不注入正文）。
+    pub model_label: String,
+}
+
+impl CompactContext {
+    /// 注入模型上下文的结构化文本。
+    ///
+    /// 包在 `<compact_summary>` 里并显式声明它不是新指令：模型必须把它当作既有事实，
+    /// 不得把摘要当成用户刚刚提出的新要求。
+    pub fn as_prompt(&self) -> String {
+        format!(
+            "<compact_summary model=\"{}\">\nThis is a summary of earlier conversation that was compacted. \
+             Treat it as established context and do not answer it as a new request.\n\n{}\n</compact_summary>",
+            escape_summary_attr(&self.model_label),
+            self.summary
+        )
+    }
+}
+
+/// 摘要属性值转义：不得从摘要结构里伪造字段。
+fn escape_summary_attr(text: &str) -> String {
+    text.chars()
+        .map(|ch| match ch {
+            '<' => '\u{2039}',
+            '>' => '\u{203A}',
+            '"' => '\'',
+            '&' => '\u{FF06}',
+            ch if ch.is_control() => ' ',
+            ch => ch,
+        })
+        .collect()
 }
 
 /// 装配结果。
@@ -67,6 +116,11 @@ pub struct Assembly {
     /// `shrink_once` 按它整组删除，不能再用「每轮固定两条 turn / 遇到第二个 UserText」
     /// 推断边界——命令组只有一条 user、没有 assistant。
     groups: Vec<ContextGroup>,
+    /// 本 turn 的系统提示（稳定提示 + 冻结环境快照 +（可选）compact 摘要）。
+    ///
+    /// 摘要放在系统段而非伪造 user/assistant 消息：design §3.3 的上下文顺序就是
+    /// system → environment → compact summary → 检查点之后的消息。
+    pub system_prompt: String,
 }
 
 /// 一个可回放组在两条视图中的区间（`end` 不含）。
@@ -111,7 +165,18 @@ struct PlannedTurn {
 /// - 估算超过 `context - output_reserve - envelope_reserve` 时停止纳入更老轮。
 /// - 单条当前消息超限时 `draft_exceeds` 为真（调用方报错，不截断）。
 pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
-    let planned = plan_turns(input.messages);
+    // compact 生效时只回放检查点之后的消息：更早的原文已由摘要表达。
+    let start_after = input
+        .compact
+        .map(|compact| compact.end_sequence)
+        .unwrap_or(i64::MIN);
+    let retained: Vec<ChatMessage> = input
+        .messages
+        .iter()
+        .filter(|message| message.sequence > start_after)
+        .cloned()
+        .collect();
+    let planned = plan_turns(&retained);
     let draft_tokens = estimate_tokens(input.draft);
     let output_reserve = input.output_limit.unwrap_or(0).min(8192);
     let budget = input.context_limit.map(|context| {
@@ -172,16 +237,24 @@ pub fn assemble(input: &AssemblyInput<'_>) -> Assembly {
         reasoning_metadata: None,
     });
     items.push(ModelItem::UserText(input.draft.to_string()));
+    let system_prompt = crate::chat::prompt::compose_system_prompt(
+        input.environment,
+        input.compact.map(CompactContext::as_prompt).as_deref(),
+    );
     Assembly {
         request: ChatRequest {
             turns,
             items,
             model: input.model.clone(),
             variant_params: input.variant_params.clone(),
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            // 冻结的系统提示随请求走：四类 transport 都编码它，不再各自现场采集环境。
+            system_prompt: Some(system_prompt.clone()),
         },
         omitted_turns,
         draft_exceeds,
         groups,
+        system_prompt,
     }
 }
 
@@ -208,6 +281,9 @@ pub fn shrink_once(assembly: &Assembly) -> Option<ChatRequest> {
         items,
         model: request.model.clone(),
         variant_params: request.variant_params.clone(),
+        purpose: request.purpose,
+        // 收缩只丢旧轮次：冻结的系统提示（含环境快照与 compact 摘要）必须原样保留。
+        system_prompt: request.system_prompt.clone(),
     })
 }
 

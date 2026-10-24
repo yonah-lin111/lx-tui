@@ -22,7 +22,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, params};
 
 /// 当前 Schema 版本；版本号保留自管理截图资产的开发期结构，避免旧库被判为过新。
-const SCHEMA_VERSION: i64 = 13;
+const SCHEMA_VERSION: i64 = 14;
 
 /// 当前 Schema 版本（测试断言用；不暴露可变入口）。
 #[cfg(test)]
@@ -92,6 +92,8 @@ pub enum DbError {
     OperationMissing,
     /// 撤销存在冲突（文件被其他进程/轮次修改）。
     RewindConflict,
+    /// 读后版本保护拒绝：修改已有文件缺 token，或 token 与快照内容不一致。
+    StaleRead,
 }
 
 impl fmt::Display for DbError {
@@ -133,6 +135,7 @@ impl fmt::Display for DbError {
             Self::MutationConflict => write!(formatter, "file mutation record conflict"),
             Self::OperationMissing => write!(formatter, "rewind operation missing"),
             Self::RewindConflict => write!(formatter, "rewind conflict"),
+            Self::StaleRead => write!(formatter, "stale file version"),
         }
     }
 }
@@ -172,6 +175,7 @@ impl DbError {
             Self::MutationConflict => "mutation conflict",
             Self::OperationMissing => "operation missing",
             Self::RewindConflict => "rewind conflict",
+            Self::StaleRead => "stale read",
         }
     }
 }
@@ -827,6 +831,15 @@ pub(crate) fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// 测试辅助：执行一条返回单个整数的查询（只在测试里用；生产读写都有具名入口）。
+#[cfg(test)]
+impl Database {
+    /// 执行 `sql`（必须是单行单列整数查询）。
+    pub(crate) fn query_count(&self, sql: &str) -> Result<i64> {
+        Ok(self.conn.query_row(sql, [], |row| row.get(0))?)
+    }
 }
 
 #[cfg(test)]

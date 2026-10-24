@@ -12,13 +12,18 @@ use super::slash::PanelWindow;
 /// 双 Esc 待命窗口：3 秒内没有第二次 Esc 即取消等待。
 pub const REWIND_ARM_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
 
-/// 四项动作（面板顺序即 `ALL` 下标）。
+/// 撤销动作（普通轮次四项，compact 检查点另有一项）。
+///
+/// compact 撤销**只恢复上下文指针**：不碰文件、不删消息，因此动作集与普通轮次不同
+/// （面板按目标类型取 `actions`，不使用固定的 `ALL` 下标）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RewindAction {
     RevertAndDelete,
     DeleteOnly,
     RevertOnly,
     Cancel,
+    /// 恢复到此 compact 检查点之前（上下文指针回退，消息与文件保持原样）。
+    RestoreCompact,
 }
 
 impl RewindAction {
@@ -37,6 +42,7 @@ impl RewindAction {
             Self::DeleteOnly => "delete_only",
             Self::RevertOnly => "revert_only",
             Self::Cancel => "cancel",
+            Self::RestoreCompact => "restore_compact",
         }
     }
 
@@ -54,19 +60,37 @@ impl RewindAction {
     pub fn fills_draft(self) -> bool {
         self.deletes_conversation()
     }
+
+    /// 是否撤销 compact 检查点。
+    pub fn restores_compact(self) -> bool {
+        matches!(self, Self::RestoreCompact)
+    }
 }
 
-/// 冻结的撤销目标：稳定 user message ID + 会话 revision + 发起窗格上下文。
+/// 撤销目标的种类：普通对话轮次或 compact 检查点。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RewindTargetKind {
+    /// 最新用户轮次（文件 scope + 对话）。
+    #[default]
+    Turn,
+    /// compact 检查点（只回退上下文指针）。
+    Compact,
+}
+
+/// 冻结的撤销目标：稳定 user message ID（compact 时为检查点 ID）+ 会话 revision。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewindTarget {
     pub session_id: String,
+    /// 普通轮次为用户消息 ID；compact 为检查点 ID。
     pub user_message_id: String,
     pub expected_revision: u64,
     pub pane: PaneId,
     /// 发起时输入框内容：成功后只在与该值仍相同时回填。
     pub input_at_open: String,
-    /// 用户原文（来自持久化 user message）。
+    /// 用户原文（来自持久化 user message；compact 为空）。
     pub user_text: String,
+    /// 目标种类（决定面板动作集与执行路径）。
+    pub kind: RewindTargetKind,
 }
 
 /// 文件快照可用性（面板据此禁用含文件动作）。
@@ -118,31 +142,53 @@ impl SnapshotState {
     }
 }
 
-/// 四项动作面板状态。
+/// 撤销动作面板状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RewindPanel {
     pub window: PanelWindow,
     pub snapshot: SnapshotState,
+    /// 本面板的动作集（普通轮次四项；compact 只有恢复与取消）。
+    pub actions: Vec<RewindAction>,
 }
 
 impl RewindPanel {
-    /// 以默认第一项打开。
+    /// 普通轮次的四项动作面板（默认第一项）。
     pub fn new(snapshot: SnapshotState) -> Self {
         Self {
             window: PanelWindow::new(0),
             snapshot,
+            actions: RewindAction::ALL.to_vec(),
+        }
+    }
+
+    /// compact 检查点的面板：只有「恢复上下文」与「取消」。
+    pub fn for_compact() -> Self {
+        Self {
+            window: PanelWindow::new(0),
+            snapshot: SnapshotState::KnownEmpty,
+            actions: vec![RewindAction::RestoreCompact, RewindAction::Cancel],
         }
     }
 
     /// 高亮动作。
     pub fn active_action(&self) -> RewindAction {
-        RewindAction::ALL
+        self.actions
             .get(self.window.active)
             .copied()
             .unwrap_or(RewindAction::Cancel)
     }
 
-    /// 该动作当前是否可选（含文件动作要求快照可用）。
+    /// 动作数量（渲染与导航共用）。
+    pub fn len(&self) -> usize {
+        self.actions.len()
+    }
+
+    /// 动作集是否为空（只为对称 `len`；正常构造下恒为 false）。
+    pub fn is_empty(&self) -> bool {
+        self.actions.is_empty()
+    }
+
+    /// 该动作当前是否可选（含文件动作要求快照可用；compact 恢复恒可用）。
     pub fn enabled(&self, action: RewindAction) -> bool {
         !action.reverts_files() || self.snapshot.files_available()
     }

@@ -311,8 +311,15 @@ fn read_rejects_file_larger_than_input_cap() {
     let len = std::fs::metadata(fixture.join("small.txt"))
         .expect("stat")
         .len();
-    let accepted = super::read_file(&fixture.join("small.txt"), len, 1, 10, &caps)
-        .expect("3-byte file is at the cap, not over it");
+    let accepted = super::read_file(
+        &fixture.ctx(),
+        &fixture.join("small.txt"),
+        len,
+        1,
+        10,
+        &caps,
+    )
+    .expect("3-byte file is at the cap, not over it");
     assert_eq!(expect_read(&accepted).0, "1: ok\n");
 }
 
