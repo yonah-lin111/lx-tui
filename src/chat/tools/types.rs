@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 /// 稳定工具名清单（错误消息、系统提示与测试共用一份，不各写一遍）。
-pub const TOOL_NAMES: [&str; 7] = [
+pub const TOOL_NAMES: [&str; 8] = [
     "read",
     "search",
     "edit",
@@ -15,6 +15,7 @@ pub const TOOL_NAMES: [&str; 7] = [
     "exec_command",
     "write_stdin",
     "update_plan",
+    "ask",
 ];
 
 /// 工具执行上下文：相对路径的基准目录是**发送时冻结**的工作区 cwd。
@@ -250,6 +251,14 @@ pub enum ToolExecutionResult {
     Process(Box<super::super::process::ProcessResult>),
     /// 计划更新成功；携带完整规范化快照（已分配修订号）。
     Plan(super::super::plan::PlanSnapshot),
+    /// 提问已作答；`questions` 按提问顺序携带题目与答案（`header`/`question` 自包含）。
+    ///
+    /// 没有用户作答就没有这个变体：取消 / 失败走 [`Self::Failed`] 或直接不执行，
+    /// 绝不用空答案冒充「用户全不选」。
+    Ask {
+        /// 按题目顺序的作答记录。
+        questions: Vec<super::ask::AnsweredQuestion>,
+    },
     /// 失败；`changes` 保留多文件补丁中**已经提交**的变更，绝不谎报整体回滚。
     Failed {
         code: ToolErrorCode,
@@ -332,7 +341,7 @@ pub type ToolResultPublic<T> = Result<T, ToolFailure>;
 #[derive(Debug, Clone, Copy)]
 pub struct ToolSpec {
     /// 稳定工具名（`read` / `search` / `edit` / `write` / `exec_command` / `write_stdin` /
-    /// `update_plan`）。
+    /// `update_plan` / `ask`）。
     pub name: &'static str,
     /// 英文描述（同时作为模型可见文档）。
     pub description: &'static str,

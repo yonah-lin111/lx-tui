@@ -139,6 +139,15 @@ pub enum Effect {
     CancelChatStream {
         key: crate::app::state::lx::RequestKey,
     },
+    /// 提交一次 `ask` 作答；事件层据此唤醒 agent loop。
+    ///
+    /// `call_id` 是防串台的唯一凭据：UI 面板可能已被新提问替换，旧面板的迟到提交
+    /// 必须与当前挂起项比对后丢弃。
+    AnswerAsk {
+        key: crate::app::state::lx::RequestKey,
+        call_id: String,
+        answers: crate::chat::tools::AskAnswers,
+    },
     /// Committing 阶段取消：等 DB ack 后直接落 interrupted、不发 HTTP。
     CancelChatCommit {
         pane: crate::layout::PaneId,

@@ -60,6 +60,7 @@ pub fn format_for_model(result: &ToolExecutionResult) -> String {
         }
         ToolExecutionResult::Process(result) => format_process(result),
         ToolExecutionResult::Plan(snapshot) => format_plan(snapshot),
+        ToolExecutionResult::Ask { questions } => format_ask(questions),
         ToolExecutionResult::Failed {
             code,
             message,
@@ -181,6 +182,17 @@ fn format_plan(snapshot: &crate::chat::plan::PlanSnapshot) -> String {
         text.push_str(&format!("note: {explanation}\n"));
     }
     text
+}
+
+/// `ask` 的文本表示：与 codex 同构的 `{"answers":{"<id>":{"answers":[...]}}}`。
+///
+/// 只回答案、不回题干：题干在模型的调用参数里，答案才是这次调用的新鲜信息。
+fn format_ask(questions: &[crate::chat::tools::AnsweredQuestion]) -> String {
+    let answers = questions
+        .iter()
+        .map(|question| (question.id.clone(), json!({ "answers": question.answers })))
+        .collect::<serde_json::Map<_, _>>();
+    json!({ "answers": answers }).to_string()
 }
 
 /// `read` 的文本表示：首行给出范围与文件总行数，末行给出截断续读信息。
@@ -418,7 +430,9 @@ pub fn to_summary(result: &ToolExecutionResult) -> ToolSummary {
         }
         // 进程工具与计划工具的展示数据走各自的类型化视图（`ProcessView` / `PlanSnapshotView`），
         // 不塞进文件摘要里：摘要只描述“哪个文件、多少行”，进程/计划没有这个形状。
-        ToolExecutionResult::Process(_) | ToolExecutionResult::Plan(_) => ToolSummary::default(),
+        ToolExecutionResult::Process(_)
+        | ToolExecutionResult::Plan(_)
+        | ToolExecutionResult::Ask { .. } => ToolSummary::default(),
     }
 }
 
@@ -506,6 +520,18 @@ pub fn to_result_json(result: &ToolExecutionResult) -> Option<String> {
         } => file::failure_json(*code, message, changes),
         ToolExecutionResult::Process(result) => result.to_json(),
         ToolExecutionResult::Plan(snapshot) => snapshot.to_json(),
+        ToolExecutionResult::Ask { questions } => json!({
+            "tool": "ask",
+            "questions": questions
+                .iter()
+                .map(|question| json!({
+                    "id": question.id,
+                    "header": question.header,
+                    "question": question.question,
+                    "answers": question.answers,
+                }))
+                .collect::<Vec<_>>(),
+        }),
     };
     let text = serde_json::to_string(&value).ok()?;
     if text.len() <= MAX_TOOL_RESULT_BYTES {

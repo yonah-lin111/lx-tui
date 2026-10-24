@@ -16,6 +16,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
+pub mod ask;
 pub mod compact;
 mod process;
 pub mod rewind;
@@ -24,6 +25,10 @@ pub mod user_shell;
 mod view;
 mod viewport;
 
+pub use ask::{
+    apply_ask_click, apply_ask_paste, apply_ask_wheel, apply_input as apply_ask_input,
+    submit_current,
+};
 pub use compact::{
     compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
     on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,

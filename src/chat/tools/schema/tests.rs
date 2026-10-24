@@ -1,4 +1,4 @@
-//! Schema 测试：七工具名、严格对象与字段白名单。
+//! Schema 测试：八工具名、严格对象与字段白名单。
 
 use super::*;
 
@@ -14,7 +14,8 @@ fn tool_order_and_names_are_fixed() {
             "write",
             "exec_command",
             "write_stdin",
-            "update_plan"
+            "update_plan",
+            "ask"
         ]
     );
 }
@@ -147,5 +148,49 @@ fn write_schema_requires_path_and_content() {
     assert_eq!(
         parameters["required"],
         serde_json::json!(["path", "content"])
+    );
+}
+
+/// `ask` 的严格形状：必填 `questions`、题/选项都不接受额外字段、数字来自常量。
+#[test]
+fn ask_schema_is_strict_and_documents_limits() {
+    let spec = available_tools()
+        .iter()
+        .find(|spec| spec.name == "ask")
+        .expect("ask spec");
+    assert!(!spec.description.is_empty(), "ask 必须有描述");
+    assert!(spec.description.contains("1-3"), "{}", spec.description);
+    let parameters = spec.parameters();
+    assert_eq!(parameters["required"], serde_json::json!(["questions"]));
+    assert_eq!(parameters["additionalProperties"], false);
+    let questions = &parameters["properties"]["questions"];
+    assert_eq!(questions["minItems"], 1);
+    assert_eq!(
+        questions["maxItems"],
+        crate::chat::tools::ask::MAX_ASK_QUESTIONS
+    );
+    let question = &questions["items"];
+    assert_eq!(
+        question["required"],
+        serde_json::json!(["id", "header", "question"])
+    );
+    assert_eq!(question["additionalProperties"], false);
+    let options = &question["properties"]["options"];
+    assert_eq!(
+        options["maxItems"],
+        crate::chat::tools::ask::MAX_ASK_OPTIONS
+    );
+    let option = &options["items"];
+    assert_eq!(
+        option["required"],
+        serde_json::json!(["label", "description"])
+    );
+    assert_eq!(option["additionalProperties"], false);
+    // 所有上限文案都由常量生成，不手写第二份数字。
+    assert!(
+        question["properties"]["header"]["description"]
+            .as_str()
+            .expect("description")
+            .contains(&crate::chat::tools::ask::MAX_ASK_HEADER_CHARS.to_string())
     );
 }

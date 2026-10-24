@@ -16,9 +16,11 @@ use crate::ui::widgets::command_panel::{self, CommandItem, CommandPanelView};
 use crate::ui::widgets::scrollbar;
 use crate::ui::{style, text};
 
+mod ask;
 mod input;
 mod mention;
 
+pub(crate) use ask::rect as ask_rect;
 pub(crate) use mention::{item_at as mention_item_at, layout as mention_layout};
 
 pub(crate) mod brand;
@@ -206,6 +208,26 @@ pub(crate) fn input_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     layout(area, lx).input
 }
 
+/// `ask` 面板命中：选项行 / Other / Submit / 题目标签；面板未激活为 None。
+pub(crate) fn ask_hit(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<crate::app::state::AskHit> {
+    ask::hit(area, lx, column, row)
+}
+
+/// `ask` 面板滚轮分区；指针在面板外为 None（事件层据此决定是否吞掉）。
+pub(crate) fn ask_wheel_zone(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+) -> Option<crate::app::state::AskWheelZone> {
+    ask::wheel_zone(area, lx, column, row)
+}
+
 /// lx 输入框文本区几何；`area` 为窗格内容区。
 pub(crate) fn input_geom(area: Rect, lx: &Lx) -> Option<InputGeom> {
     let lay = layout(area, lx);
@@ -358,6 +380,8 @@ struct TextRect {
 /// lx 页布局：所有组件矩形（绝对屏幕坐标）。
 struct Layout {
     input: Option<Rect>,
+    /// `ask` 面板外框（激活时替换输入框；`input` 同时为 None）。
+    ask: Option<Rect>,
     /// 输入框可见内容行的滚动起点（逻辑行索引）。
     input_scroll: usize,
     /// 输入框可见内容行数。
@@ -381,6 +405,7 @@ impl Layout {
     fn empty(fallback: bool) -> Self {
         Self {
             input: None,
+            ask: None,
             input_scroll: 0,
             input_visible: 0,
             chat_bar: None,
@@ -436,8 +461,12 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     // 历史区，这样退出面板后消息列表与草稿都还是离开时的样子。
     // 面板打开时这一块改由 item 列表占用：高度固定（顶边框 + tab 行 + LIST_MAX），
     // 不随草稿行数变化——否则开关面板会让上方输出容器跳动。
+    // `ask` 面板占用输入框的位置并替换它（design §8.1）；后台任务页优先级更高。
+    let ask_active = lx.ask.is_some();
     let (box_h, visible, scroll) = if lx.task.is_some() {
         (task::list_height(), 0, 0)
+    } else if ask_active {
+        (ask::height(area.height, content_w, lx), 0, 0)
     } else {
         let rows = lx.visual_rows();
         let total = rows.len().max(1);
@@ -456,9 +485,13 @@ fn layout(area: Rect, lx: &Lx) -> Layout {
     );
 
     let mut out = Layout::empty(false);
-    out.input = Some(input);
-    out.input_scroll = scroll;
-    out.input_visible = visible;
+    if ask_active {
+        out.ask = Some(input);
+    } else {
+        out.input = Some(input);
+        out.input_scroll = scroll;
+        out.input_visible = visible;
+    }
 
     // 输入框上方一行的聊天栏：流中显示 loading 转轮，或上滚未跟随底部时显示回到底部按钮。
     if chat_bar::visible(lx) {
@@ -664,6 +697,9 @@ fn build(
         if let Some(rect) = lay.task_list {
             task::draw_list(&mut grid, rect, page);
         }
+    } else if let Some(rect) = lay.ask {
+        cursor = ask::draw(&mut grid, rect, lx, focused)
+            .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     } else if let Some(input) = lay.input {
         cursor = input::draw(
             &mut grid,
@@ -689,9 +725,11 @@ fn build_chat(
     lay: &Layout,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let mut grid = Grid::new(area);
-    let history_bottom = if lay.input.is_some() {
+    // 输入框与 ask 面板占据同一矩形：历史区上沿与宽度都跟它走。
+    let bottom_box = lay.input.or(lay.ask);
+    let history_bottom = if bottom_box.is_some() {
         lay.chat_bar.map_or_else(
-            || lay.input.map(|input| input.y).unwrap_or(area.bottom()),
+            || bottom_box.map(|input| input.y).unwrap_or(area.bottom()),
             |bar| bar.y,
         )
     } else {
@@ -699,9 +737,9 @@ fn build_chat(
     };
     // 历史区与输入框同宽对齐（列 = 输入框列），高度到输入框（或聊天栏）上沿。
     let history_rect = Rect::new(
-        lay.input.map(|input| input.x).unwrap_or(area.x),
+        bottom_box.map(|input| input.x).unwrap_or(area.x),
         area.y,
-        lay.input.map(|input| input.width).unwrap_or(area.width),
+        bottom_box.map(|input| input.width).unwrap_or(area.width),
         history_bottom.saturating_sub(area.y),
     );
     // 历史视图：滚动偏移 / body（置顶行让位）/ 置顶行结论，统一由纯函数给出。
@@ -735,6 +773,9 @@ fn build_chat(
         if let Some(rect) = lay.task_list {
             task::draw_list(&mut grid, rect, page);
         }
+    } else if let Some(rect) = lay.ask {
+        cursor = ask::draw(&mut grid, rect, lx, focused)
+            .map(|(row, col)| (row.saturating_sub(area.y), col.saturating_sub(area.x)));
     } else if let Some(input) = lay.input
         && lay.input_visible > 0
     {
@@ -762,9 +803,10 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     let lay = layout(area, lx);
+    let bottom_box = lay.input.or(lay.ask);
     // 历史区上沿到输入框（有聊天栏时为其上沿）。
     let bottom = lay.chat_bar.map_or_else(
-        || lay.input.map(|input| input.y).unwrap_or(area.bottom()),
+        || bottom_box.map(|input| input.y).unwrap_or(area.bottom()),
         |bar| bar.y,
     );
     let height = bottom.saturating_sub(area.y);
@@ -772,7 +814,7 @@ pub fn history_rect(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     // 与输入框同宽对齐：x/width 取输入框列（扣掉两端外边距），右侧含滚动条预留列。
-    let (x, width) = match lay.input {
+    let (x, width) = match bottom_box {
         Some(input) => (input.x, input.width),
         None => (area.x, area.width),
     };
@@ -788,11 +830,12 @@ pub fn history_wheel_region(area: Rect, lx: &Lx) -> Option<Rect> {
         return None;
     }
     let lay = layout(area, lx);
-    let (x, width) = match lay.input {
+    let bottom_box = lay.input.or(lay.ask);
+    let (x, width) = match bottom_box {
         Some(input) => (input.x, input.width),
         None => (area.x, area.width),
     };
-    let bottom = lay.input.map(|input| input.y).unwrap_or(area.bottom());
+    let bottom = bottom_box.map(|input| input.y).unwrap_or(area.bottom());
     let height = bottom.saturating_sub(area.y);
     (height > 0).then(|| Rect::new(x, area.y, width, height))
 }

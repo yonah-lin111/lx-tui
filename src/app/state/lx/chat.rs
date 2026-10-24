@@ -19,8 +19,8 @@ pub use steps::{
     AssistantStepView, ChatMessageView, ChatPartView, ToolCallView, ToolStatus, ToolSummary,
 };
 pub use tool_view::{
-    CommandView, InteractionAction, PlanSnapshotView, PlanStepView, ProcessInteractionView,
-    ProcessStateView, ToolDetailView,
+    AskAnsweredView, AskDetailView, CommandView, InteractionAction, PlanSnapshotView, PlanStepView,
+    ProcessInteractionView, ProcessStateView, ToolDetailView,
 };
 
 /// 模型配置快照：设置页保存后由事件层更新；发送时冻结成 `FrozenModel`。

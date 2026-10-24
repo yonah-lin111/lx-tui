@@ -1,0 +1,556 @@
+//! `ask` 面板的输入与提交：键位表、鼠标语义、`Esc` 双击与草稿不变量。
+//!
+//! 全部走 `apply_lx_input`（生产路由），不直接调内部函数：这里要锁住的正是
+//! 「ask 分支排在后台任务页之后、rewind 之前」这条路由。
+
+use super::*;
+use crate::app::actions::LxInput;
+use crate::app::state::{AskHit, AskState, AskWheelZone};
+use crate::chat::tools::ask::{AskOption, AskQuestion};
+
+fn question(id: &str, multi_select: bool, labels: &[&str]) -> AskQuestion {
+    AskQuestion {
+        id: id.into(),
+        header: id.into(),
+        question: format!("{id}?"),
+        multi_select,
+        options: labels
+            .iter()
+            .map(|label| AskOption {
+                label: (*label).into(),
+                description: format!("{label} 的说明"),
+                preview: None,
+            })
+            .collect(),
+    }
+}
+
+fn key_for(pane: PaneId) -> RequestKey {
+    RequestKey {
+        pane,
+        session: "sess-ask".into(),
+        generation: 1,
+    }
+}
+
+/// 流中窗格 + 挂起面板；返回（状态，窗格，key）。
+fn asking(questions: Vec<AskQuestion>) -> (AppState, PaneId, RequestKey) {
+    let mut state = ready_state("草稿 abc");
+    let pane = focus_pane(&state);
+    let key = key_for(pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some(key.session.clone());
+        target.lx.chat.request = RequestState::Streaming {
+            key: key.clone(),
+            assistant_id: "a1".into(),
+        };
+        target.lx.ask = Some(AskState::new(key.clone(), "call-1".into(), questions));
+        target.lx.cursor = target.lx.input.len();
+    }
+    (state, pane, key)
+}
+
+fn panel(state: &AppState, pane: PaneId) -> &AskState {
+    state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.ask.as_ref())
+        .expect("面板挂起")
+}
+
+/// 一次性按下若干键（走真实路由）。
+fn press(state: &mut AppState, command: LxInput) -> bool {
+    let before = state.pane_anywhere(focus_pane(state)).is_some();
+    assert!(before, "窗格存在");
+    let pane = focus_pane(state);
+    let previous = snapshot(state, pane);
+    crate::app::update::apply_lx_input(state, command);
+    snapshot(state, pane) != previous
+}
+
+/// 面板 + 草稿的可比较快照。
+fn snapshot(state: &AppState, pane: PaneId) -> String {
+    let target = state.pane_anywhere(pane).expect("pane");
+    let ask = target.lx.ask.as_ref();
+    format!(
+        "input={:?} cursor={} rev={} ask={:?} editing={:?} current={:?} selected={:?} custom_on={:?} hint={:?}",
+        target.lx.input,
+        target.lx.cursor,
+        target.lx.revision(),
+        ask.map(|ask| ask.call_id.clone()),
+        ask.map(|ask| ask.editing),
+        ask.map(|ask| ask.current),
+        ask.map(|ask| ask.selected.clone()),
+        ask.map(|ask| ask.custom_on.clone()),
+        ask.map(|ask| ask.hint.clone()),
+    )
+}
+
+// ===== 列表态键位（design §7.1，逐行）=====
+
+#[test]
+fn list_keys_move_highlight_with_arrows_and_jk() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    press(&mut state, LxInput::Down);
+    assert_eq!(panel(&state, pane).highlight[0], 1);
+    press(&mut state, LxInput::Char('j'));
+    assert_eq!(panel(&state, pane).highlight[0], 2, "j 移动到「其他」行");
+    press(&mut state, LxInput::Up);
+    assert_eq!(panel(&state, pane).highlight[0], 1);
+    press(&mut state, LxInput::Char('k'));
+    assert_eq!(panel(&state, pane).highlight[0], 0);
+    // 顶部再按 ↑ 不变化，也不会漏进草稿。
+    press(&mut state, LxInput::Up);
+    assert_eq!(panel(&state, pane).highlight[0], 0);
+}
+
+#[test]
+fn space_selects_highlighted_row_and_other_enters_edit() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    press(&mut state, LxInput::Char(' '));
+    assert_eq!(panel(&state, pane).selected[0], vec![0]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    assert_eq!(panel(&state, pane).selected[0], vec![1], "单选只保留一个");
+    // 「其他」行：Space 进入编辑态。
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    assert!(panel(&state, pane).editing);
+}
+
+#[test]
+fn digits_select_by_index_and_toggle_in_multi_select() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A", "B", "C"])]);
+    press(&mut state, LxInput::Char('2'));
+    assert_eq!(panel(&state, pane).selected[0], vec![1]);
+    press(&mut state, LxInput::Char('1'));
+    assert_eq!(panel(&state, pane).selected[0], vec![1, 0], "按勾选顺序");
+    press(&mut state, LxInput::Char('2'));
+    assert_eq!(panel(&state, pane).selected[0], vec![0], "再按同一数字取消");
+    // 越界数字吞掉，不改状态、不进草稿。
+    press(&mut state, LxInput::Char('9'));
+    assert_eq!(panel(&state, pane).selected[0], vec![0]);
+}
+
+#[test]
+fn enter_submits_and_tab_arrows_switch_questions() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", false, &["B"]),
+    ]);
+    press(&mut state, LxInput::Char(' '));
+    press(&mut state, LxInput::Enter);
+    assert_eq!(panel(&state, pane).current, 1, "非末题 Enter 前进");
+    press(&mut state, LxInput::Left);
+    assert_eq!(panel(&state, pane).current, 0, "← 上一题");
+    press(&mut state, LxInput::Right);
+    assert_eq!(panel(&state, pane).current, 1, "→ 下一题");
+    press(&mut state, LxInput::Tab);
+    assert_eq!(panel(&state, pane).current, 1, "末题 Tab 不越界");
+    assert_eq!(
+        panel(&state, pane).collected[0],
+        vec!["A".to_string()],
+        "切题保留已提交答案"
+    );
+}
+
+#[test]
+fn enter_on_other_row_enters_edit_instead_of_submitting() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    assert!(panel(&state, pane).editing);
+    assert!(
+        panel(&state, pane).collected[0].is_empty(),
+        "进入编辑不等于提交"
+    );
+}
+
+#[test]
+fn page_keys_scroll_preview_only() {
+    let mut q = question("q", false, &["A", "B"]);
+    q.options[0].preview = Some("1\n2\n3\n4\n5\n6".into());
+    let (mut state, pane, _key) = asking(vec![q]);
+    assert_eq!(panel(&state, pane).highlight[0], 0);
+    press(&mut state, LxInput::PageDown);
+    assert_eq!(panel(&state, pane).preview_scroll[0], 3);
+    press(&mut state, LxInput::PageUp);
+    assert_eq!(panel(&state, pane).preview_scroll[0], 0);
+    assert_eq!(panel(&state, pane).highlight[0], 0, "翻页不动高亮");
+}
+
+// ===== 编辑态（design §7.2）=====
+
+#[test]
+fn edit_mode_enter_commits_text_and_escape_only_leaves_edit() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    for ch in "自己写".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
+    press(&mut state, LxInput::Enter);
+    let current = panel(&state, pane);
+    assert!(!current.editing, "Enter 提交文本并退出编辑");
+    assert_eq!(current.current_answers(), vec!["自己写".to_string()]);
+    assert_eq!(current.current, 0, "提交文本不提交整题");
+
+    // 再进编辑：Esc 只退出，文本保留，整轮不取消。
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Char('x'));
+    press(&mut state, LxInput::Escape);
+    let panel = panel(&state, pane);
+    assert!(!panel.editing);
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_some());
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .stop_armed_at
+            .is_none(),
+        "编辑态 Esc 不得进入停止待命"
+    );
+}
+
+#[test]
+fn edit_mode_swallows_tab_and_keeps_question() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", false, &["B"]),
+    ]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Tab);
+    assert_eq!(panel(&state, pane).current, 0, "编辑态 Tab 不切题");
+    assert!(panel(&state, pane).editing);
+}
+
+#[test]
+fn shift_enter_newline_in_edit_mode() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A"])]);
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    for ch in "ab".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
+    press(&mut state, LxInput::EnterFolder);
+    press(&mut state, LxInput::Char('c'));
+    assert_eq!(
+        panel(&state, pane).custom[0].text(),
+        "ab\nc",
+        "Shift+Enter 换行"
+    );
+}
+
+// ===== 提交（design §6.3）=====
+
+#[test]
+fn empty_answer_sets_hint_and_does_not_submit() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A"])]);
+    press(&mut state, LxInput::Enter);
+    let current = panel(&state, pane);
+    assert_eq!(
+        current.hint.as_deref(),
+        Some(crate::app::update::chat::ask::ASK_HINT_EMPTY)
+    );
+    assert!(current.collected[0].is_empty());
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::AnswerAsk { .. }))
+    );
+}
+
+#[test]
+fn last_question_submit_pushes_answer_effect_and_clears_panel() {
+    let (mut state, pane, key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", true, &["B1", "B2"]),
+    ]);
+    press(&mut state, LxInput::Char(' '));
+    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Char(' '));
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Char(' '));
+    press(&mut state, LxInput::Enter);
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.ask.is_none(),
+        "末题提交后清面板"
+    );
+    let effect = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::AnswerAsk {
+                key: effect_key,
+                call_id,
+                answers,
+            } => Some((effect_key.clone(), call_id.clone(), answers.clone())),
+            _ => None,
+        })
+        .expect("必须推 AnswerAsk");
+    assert_eq!(effect.0, key);
+    assert_eq!(effect.1, "call-1", "效应必须带 call_id 防串台");
+    assert_eq!(effect.2.get("a"), Some(&vec!["A".to_string()]));
+    assert_eq!(
+        effect.2.get("b"),
+        Some(&vec!["B1".to_string(), "B2".to_string()])
+    );
+}
+
+#[test]
+fn resubmitting_after_going_back_updates_collected() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", true, &["A1", "A2"]),
+        question("b", false, &["B"]),
+    ]);
+    press(&mut state, LxInput::Char('1'));
+    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Left);
+    // 多选：先取消 A1 再选 A2，答案才是 A2。
+    press(&mut state, LxInput::Char('1'));
+    press(&mut state, LxInput::Char('2'));
+    press(&mut state, LxInput::Enter);
+    assert_eq!(
+        panel(&state, pane).collected[0],
+        vec!["A2".to_string()],
+        "回看修改后重提交覆盖 collected"
+    );
+}
+
+#[test]
+fn submit_never_touches_the_draft() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A"])]);
+    let before = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        (
+            target.lx.input.clone(),
+            target.lx.cursor,
+            target.lx.revision(),
+        )
+    };
+    // 全程在面板里操作（含编辑态输入）。
+    press(&mut state, LxInput::Char('1'));
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    for ch in "手写".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
+    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Up);
+    press(&mut state, LxInput::Enter);
+    let after = {
+        let target = state.pane_anywhere(pane).expect("pane");
+        (
+            target.lx.input.clone(),
+            target.lx.cursor,
+            target.lx.revision(),
+        )
+    };
+    assert_eq!(before, after, "作答全程草稿/光标/修订号不变");
+    assert!(before.0.contains("草稿"));
+}
+
+#[test]
+fn undo_after_submit_restores_the_draft_history_not_ask_text() {
+    let mut state = ready_state("");
+    let pane = focus_pane(&state);
+    // 草稿自身产生一次撤销点：输入 "ab" 后撤销应回到 "a"。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('a'));
+    crate::app::update::apply_lx_input(&mut state, LxInput::Char('b'));
+    let key = key_for(pane);
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.chat.session_id = Some(key.session.clone());
+        target.lx.chat.request = RequestState::Streaming {
+            key: key.clone(),
+            assistant_id: "a1".into(),
+        };
+        target.lx.ask = Some(AskState::new(
+            key,
+            "call-1".into(),
+            vec![question("q", false, &["A"])],
+        ));
+    }
+    // 面板里敲一堆字并提交。
+    press(&mut state, LxInput::Down);
+    press(&mut state, LxInput::Enter);
+    for ch in "ask 文本".chars() {
+        press(&mut state, LxInput::Char(ch));
+    }
+    press(&mut state, LxInput::Enter);
+    press(&mut state, LxInput::Up);
+    press(&mut state, LxInput::Enter);
+    // 草稿的撤销栈必须仍是它自己的：撤销一次回到 "a"。
+    crate::app::update::apply_lx_input(&mut state, LxInput::Undo);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "a", "ask 编辑绝不能污染草稿的撤销栈");
+    assert_eq!(target.lx.cursor, 1);
+}
+
+// ===== Esc 双击（design §7.1）=====
+
+#[test]
+fn escape_arms_then_cancels_on_second_press() {
+    let (mut state, pane, key) = asking(vec![question("q", false, &["A"])]);
+    press(&mut state, LxInput::Escape);
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .stop_armed_at
+            .is_some(),
+        "第一次 Esc 只待命"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.ask.is_some(),
+        "待命不清面板"
+    );
+    press(&mut state, LxInput::Escape);
+    assert!(
+        state.effects.iter().any(|effect| matches!(
+            effect,
+            crate::app::effects::Effect::CancelChatStream { key: effect_key } if *effect_key == key
+        )),
+        "第二次 Esc 推 CancelChatStream"
+    );
+}
+
+// ===== 鼠标（design §7.3）=====
+
+#[test]
+fn click_single_select_highlights_and_selects_without_submitting() {
+    let mut first = question("q", false, &["A", "B"]);
+    first.options[0].preview = Some("left".into());
+    first.options[1].preview = Some("right".into());
+    let (mut state, pane, _key) = asking(vec![first]);
+    assert!(crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Option(1)
+    ));
+    let current = panel(&state, pane);
+    assert_eq!(current.highlight[0], 1, "单击切换预览");
+    assert_eq!(current.preview(), Some("right"));
+    assert_eq!(
+        current.selected[0],
+        vec![1],
+        "单选单击是独占选择（否则纯鼠标用户交不出答案）"
+    );
+    assert!(
+        state.pane_anywhere(pane).expect("pane").lx.ask.is_some(),
+        "单击绝不提交"
+    );
+}
+
+#[test]
+fn click_multi_select_toggles_immediately() {
+    let (mut state, pane, _key) = asking(vec![question("q", true, &["A", "B"])]);
+    assert!(crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Option(1)
+    ));
+    assert_eq!(panel(&state, pane).selected[0], vec![1]);
+    assert!(crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Option(1)
+    ));
+    assert!(panel(&state, pane).selected[0].is_empty(), "再点取消");
+}
+
+#[test]
+fn click_other_enters_edit_and_click_tab_switches_question() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", false, &["B"]),
+    ]);
+    assert!(crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Other
+    ));
+    assert!(panel(&state, pane).editing);
+    assert!(crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Tab(1)
+    ));
+    assert_eq!(panel(&state, pane).current, 1);
+    assert!(!panel(&state, pane).editing, "切题退出编辑态");
+    // 越界题号吞掉。
+    assert!(!crate::app::update::apply_ask_click(
+        &mut state,
+        pane,
+        AskHit::Tab(9)
+    ));
+}
+
+#[test]
+fn click_submit_enters_question_and_final_click_submits() {
+    let (mut state, pane, _key) = asking(vec![
+        question("a", false, &["A"]),
+        question("b", false, &["B"]),
+    ]);
+    // 高亮「其他」时点 Submit = 进编辑（与 Enter 等价）。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Other);
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
+    assert!(panel(&state, pane).editing);
+    // 退出编辑，选第 0 行后点 Submit 提交本题。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
+    assert_eq!(panel(&state, pane).current, 1);
+    // 末题：再选再 Submit → 面板清空 + 推效应。
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Option(0));
+    crate::app::update::apply_ask_click(&mut state, pane, AskHit::Submit);
+    assert!(state.pane_anywhere(pane).expect("pane").lx.ask.is_none());
+    assert!(state.effects.iter().any(|effect| matches!(
+        effect,
+        crate::app::effects::Effect::AnswerAsk { call_id, .. } if call_id == "call-1"
+    )));
+}
+
+#[test]
+fn wheel_preview_scrolls_and_options_move_highlight() {
+    let mut q = question("q", false, &["A", "B"]);
+    q.options[0].preview = Some("1\n2\n3\n4\n5\n6\n7\n8".into());
+    let (mut state, pane, _key) = asking(vec![q]);
+    assert!(crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Preview,
+        1
+    ));
+    assert_eq!(panel(&state, pane).preview_scroll[0], 3);
+    assert_eq!(panel(&state, pane).highlight[0], 0, "预览滚轮不改高亮");
+    assert!(crate::app::update::apply_ask_wheel(
+        &mut state,
+        pane,
+        AskWheelZone::Options,
+        1
+    ));
+    assert_eq!(panel(&state, pane).highlight[0], 1);
+    assert_eq!(panel(&state, pane).preview_scroll[0], 3, "选项滚轮不改预览");
+}
+
+// ===== 与其它面板/路由的关系 =====
+
+#[test]
+fn ask_branch_precedes_history_browsing() {
+    let (mut state, pane, _key) = asking(vec![question("q", false, &["A", "B"])]);
+    // 草稿有内容、光标在末尾：无 ask 时 ↑ 会被历史接管；有 ask 时必须归面板。
+    press(&mut state, LxInput::Up);
+    assert_eq!(panel(&state, pane).highlight[0], 0, "↑ 归面板");
+    press(&mut state, LxInput::Down);
+    assert_eq!(panel(&state, pane).highlight[0], 1);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.input, "草稿 abc", "面板接管期间草稿不变");
+    assert_eq!(target.lx.cursor, "草稿 abc".len());
+}

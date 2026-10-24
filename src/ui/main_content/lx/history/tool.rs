@@ -41,6 +41,7 @@ use super::{StepKind, StepMark, truncate_with_ellipsis, visible_row};
 
 use file_summary::{DETAIL_MAX_ROWS, DETAIL_PREVIEW_ROWS};
 
+mod ask;
 mod command;
 mod file_diff;
 mod file_summary;
@@ -109,6 +110,7 @@ pub(super) fn rows(call: &ToolCallView, width: u16, folds: Folds) -> usize {
             command::rows(call, width, folds)
         }
         Some(crate::app::state::ToolDetailView::Plan(_)) => plan::rows(call, width, folds.body),
+        Some(crate::app::state::ToolDetailView::Ask(_)) => ask::rows(call, width, folds.body),
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::rows(&[call], width, &[folds.body])
         }
@@ -207,6 +209,19 @@ pub(super) fn draw_animated(
             );
             return;
         }
+        Some(crate::app::state::ToolDetailView::Ask(_)) => {
+            ask::draw(
+                grid,
+                rect,
+                scroll,
+                row_index,
+                call,
+                loading_frame,
+                animating,
+                folds.body,
+            );
+            return;
+        }
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::draw(
                 grid,
@@ -302,7 +317,8 @@ pub(super) fn fold_region(call: &ToolCallView, width: u16) -> FoldRegion {
     match call.detail.as_deref() {
         Some(crate::app::state::ToolDetailView::Command(_))
         | Some(crate::app::state::ToolDetailView::Interaction(_)) => FoldRegion::NONE,
-        Some(crate::app::state::ToolDetailView::Plan(_)) => FoldRegion::NONE,
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => FoldRegion::NONE,
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             // 命中整块折叠内容：用户是「hover diff 块」，不是精准停在提示行上。
             // 提亮仍然只发生在提示行（见 `file_diff::layout`）。
@@ -434,7 +450,8 @@ pub(super) fn has_expandable_content(call: &ToolCallView, width: u16) -> bool {
         Some(crate::app::state::ToolDetailView::Interaction(_)) => {
             command::params_expandable(call, width)
         }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => false,
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => false,
         Some(crate::app::state::ToolDetailView::File(_)) if file_diff::is_card(call) => {
             file_diff::has_more_content(call, width)
         }
@@ -523,7 +540,8 @@ pub(super) fn card_regions(
                 clickable: command::params_expandable(call, width),
             }]
         }
-        Some(crate::app::state::ToolDetailView::Plan(_)) => Vec::new(),
+        Some(crate::app::state::ToolDetailView::Plan(_))
+        | Some(crate::app::state::ToolDetailView::Ask(_)) => Vec::new(),
         Some(crate::app::state::ToolDetailView::File(_)) | None => {
             // 展开前后行数不变就不登记：文件工具没有「分块 hover」可提亮，
             // 留下一个点了没反应的点击面只会误导。

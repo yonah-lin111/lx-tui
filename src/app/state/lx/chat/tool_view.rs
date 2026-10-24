@@ -237,7 +237,70 @@ impl PlanSnapshotView {
     }
 }
 
-/// 工具详情视图：进程/计划走各自快照，文件工具走**已解码的差异**。
+/// 一道题的作答展示数据（`ask` 卡片；不含选项与 preview）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskAnsweredView {
+    /// 题目标签（短标题）。
+    pub header: String,
+    /// 完整题干。
+    pub question: String,
+    /// 勾选项在前、手写文本在最后（已去重）。
+    pub answers: Vec<String>,
+}
+
+/// `ask` 的展示视图：该次提问的题面与答案（自包含，卡片不需要再读参数）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AskDetailView {
+    /// 按提问顺序的作答记录。
+    pub questions: Vec<AskAnsweredView>,
+}
+
+impl AskDetailView {
+    /// 由工具的作答结果构造（实时结算路径）。
+    pub fn from_answered(questions: &[crate::chat::tools::AnsweredQuestion]) -> Self {
+        Self {
+            questions: questions
+                .iter()
+                .map(|question| AskAnsweredView {
+                    header: question.header.clone(),
+                    question: question.question.clone(),
+                    answers: question.answers.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// 由落库结果 JSON 还原；非 `ask` 结果或字段缺失返回 None（沿用旧记录兜底策略）。
+    pub fn from_result_json(result_json: Option<&str>) -> Option<Self> {
+        let value: Value = serde_json::from_str(result_json?).ok()?;
+        Self::from_value(&value)
+    }
+
+    /// 由已解析的结果 JSON 构造（`ToolDetailView::from_result_json` 共用）。
+    fn from_value(value: &Value) -> Option<Self> {
+        if value.get("tool").and_then(Value::as_str)? != "ask" {
+            return None;
+        }
+        let entries = value.get("questions")?.as_array()?;
+        let mut questions = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let answers = entry
+                .get("answers")?
+                .as_array()?
+                .iter()
+                .map(|answer| answer.as_str().map(str::to_string))
+                .collect::<Option<Vec<_>>>()?;
+            questions.push(AskAnsweredView {
+                header: entry.get("header")?.as_str()?.to_string(),
+                question: entry.get("question")?.as_str()?.to_string(),
+                answers,
+            });
+        }
+        Some(Self { questions })
+    }
+}
+
+/// 工具详情视图：进程/计划/提问走各自快照，文件工具走**已解码的差异**。
 ///
 /// 文件分支与摘要并存：摘要回答"哪个文件、多少行"，详情回答"哪几行变成什么"。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -246,6 +309,7 @@ pub enum ToolDetailView {
     Interaction(ProcessInteractionView),
     Plan(PlanSnapshotView),
     File(super::file_diff::FileDiffDetailView),
+    Ask(AskDetailView),
 }
 
 impl ToolDetailView {
@@ -372,6 +436,7 @@ impl ToolDetailView {
                 let snapshot = PlanSnapshot::from_json(&value)?;
                 Some(Self::Plan(PlanSnapshotView::from_snapshot(&snapshot)))
             }
+            "ask" => Some(Self::Ask(AskDetailView::from_value(&value)?)),
             _ => None,
         }
     }

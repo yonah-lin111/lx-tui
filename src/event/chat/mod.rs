@@ -11,6 +11,7 @@
 //!   `FinishTool` 必须先原子写真实结果、再更新状态、最后回执。
 //! - delta 与整轮终态仍按 `(pane, session, generation)` 过滤，旧 generation 事件一律丢弃。
 
+pub mod ask;
 pub mod compact;
 mod file_snapshots;
 mod host;
@@ -124,6 +125,15 @@ pub struct ChatStreams {
     pub(crate) user_shell: user_shell::UserShellJobs,
     /// 每轮模型请求的命令注入记忆（按 RequestKey）。
     pub(crate) user_shell_injected: HashMap<RequestKey, user_shell::ShellInjectionState>,
+    /// 每轮最多一个挂起的 `ask` 提问（loop 串行）；回执通道的唯一持有者。
+    pub(crate) asks: HashMap<RequestKey, PendingAsk>,
+}
+
+/// 一次等待作答的提问：回执通道 + 归属用的 `call_id`。
+pub(crate) struct PendingAsk {
+    pub call_id: String,
+    /// `None` 表示回执已丢失（窗格关闭等），作答时静默丢弃。
+    pub reply: Option<oneshot::Sender<Result<crate::chat::tools::AskAnswers, HostError>>>,
 }
 
 /// 一次待回执的 BeginTool：DB pending 已提交，UI 已转 Pending。
@@ -188,16 +198,27 @@ impl ChatStreams {
     ///
     /// 只发出取消信号：已提交 pending、尚未执行的调用由 loop 在下一检查点结算为
     /// `cancelled`（**不执行**文件 IO），回执通道保持可用以便它完成该结算。
+    /// 挂起的 `ask` 在这里被唤醒为 `Err(Cancelled)`，否则 loop 会永久阻塞在作答上。
     fn cancel(&mut self, key: &RequestKey) -> bool {
+        // 挂起提问先唤醒：它没有「下一检查点」，不唤醒就永远等不到。
+        let woke = match self.asks.remove(key) {
+            Some(pending) => {
+                if let Some(reply) = pending.reply {
+                    let _ = reply.send(Err(HostError::Cancelled));
+                }
+                true
+            }
+            None => false,
+        };
         let Some(cancel) = self.cancels.get(key) else {
-            return false;
+            return woke;
         };
         // `watch::Sender::send` 在没有接收者时**不写入值**却仍返回 `Err`。早先
         // `let _ =` 吞掉它后依然 `return true`，调用方会误以为取消已生效，
         // 而 loop 其实早就不在了（任务 panic 等），界面就永久卡在 streaming。
         if cancel.send(true).is_err() {
             self.cancels.remove(key);
-            return false;
+            return woke;
         }
         true
     }
@@ -276,7 +297,9 @@ pub fn pump_chat_streams(
         .filter(|effect| {
             matches!(
                 effect,
-                Effect::StartChatStream { .. } | Effect::CancelChatStream { .. }
+                Effect::StartChatStream { .. }
+                    | Effect::CancelChatStream { .. }
+                    | Effect::AnswerAsk { .. }
             )
         })
         .cloned()
@@ -288,7 +311,9 @@ pub fn pump_chat_streams(
     state.effects.retain(|effect| {
         !matches!(
             effect,
-            Effect::StartChatStream { .. } | Effect::CancelChatStream { .. }
+            Effect::StartChatStream { .. }
+                | Effect::CancelChatStream { .. }
+                | Effect::AnswerAsk { .. }
         )
     });
     for effect in effects {
@@ -299,9 +324,17 @@ pub fn pump_chat_streams(
             Effect::CancelChatStream { key } => {
                 // loop 在下一个检查点停止未开始的工具与后续采样。
                 changed |= streams.cancel(&key);
+                changed |= ask::cancel(state, streams, &key);
                 // D9：同时停止本轮新建的进程与当前正在等待/交互的进程
                 // （此前启动、本轮未操作的旧服务保持运行）。
                 stop_turn_processes(streams, &key);
+            }
+            Effect::AnswerAsk {
+                key,
+                call_id,
+                answers,
+            } => {
+                changed |= ask::answer(state, streams, &key, &call_id, answers);
             }
             _ => {}
         }
@@ -417,7 +450,10 @@ fn reap_stale_streams(
         .collect();
     let mut changed = false;
     for key in stale {
+        // 取消通道与挂起提问一并唤醒（`cancel` 内部会取走 `asks` 并回 Cancelled）。
         streams.cancel(&key);
+        // 归属已失效：面板也必须跟着消失，否则用户会对一个已无人接收的提问作答。
+        changed |= ask::clear(state, &key);
         // 已提交 pending 的调用必须落成 cancelled，否则库里永久停在 `pending`。
         for pending in streams.take_pending(&key) {
             changed |= tool_calls::settle_begin(state, streams, persistence, pending);
@@ -425,7 +461,7 @@ fn reap_stale_streams(
         // 窗格关闭/会话切换：取消已不足以表达“清理进程”，这里按本轮范围停止。
         stop_turn_processes(streams, &key);
     }
-    changed
+    changed | ask::sweep_orphans(state, streams)
 }
 
 /// 执行进程类效应（后台任务页的列表与停止）。
@@ -1170,7 +1206,10 @@ pub fn handle_net_event(
         ChatNetEvent::Finished { key, reason, usage } => {
             // 清除在途取消句柄、checkpoint 与冻结工作区。
             streams.finish(&key);
-            update::on_stream_finished(state, &key, &reason, usage)
+            // 防御 sweep：流程走完时不应还剩面板；留下就是悬挂 sender。
+            let cleared = ask::cancel(state, streams, &key);
+            let settled = update::on_stream_finished(state, &key, &reason, usage);
+            settled | cleared
         }
     }
 }
@@ -1200,6 +1239,12 @@ pub fn handle_agent_host_event(
             reply,
         } => finish_tool(state, streams, persistence, key, &ticket, outcome, reply),
         AgentHostEvent::Mutation(event) => file_snapshots::handle_mutation(persistence, event),
+        AgentHostEvent::AskUser {
+            key,
+            call_id,
+            questions,
+            reply,
+        } => ask::request(state, streams, key, call_id, questions, reply),
         AgentHostEvent::UserShellUpdates { key, reply } => {
             // 只读握手：命令结果仍以数据库为事实来源。
             let updates = user_shell::poll_updates(state, streams, persistence, &key);

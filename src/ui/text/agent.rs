@@ -344,3 +344,44 @@ pub fn plan_marker(status: crate::app::state::PlanStepView) -> &'static str {
 pub fn cwd_label(cwd: &str) -> String {
     format!("{CWD_PREFIX} {cwd}")
 }
+
+// ===== `ask` 面板 / 卡片文案（`main_content/lx/ask.rs` 与 `history/tool/ask.rs` 共用）=====
+
+/// `ask` 卡片动词。
+pub const VERB_TOOL_ASK: &str = "Ask";
+/// 面板标题：`ASK 1/2 · 布局`。
+pub const ASK_TITLE: &str = "ASK";
+pub const ASK_TITLE_SEP: &str = " · ";
+/// 选项标记：单选圆点、多选方框、高亮前缀。
+pub const ASK_SINGLE_ON: &str = "(•)";
+pub const ASK_SINGLE_OFF: &str = "( )";
+pub const ASK_MULTI_ON: &str = "[x]";
+pub const ASK_MULTI_OFF: &str = "[ ]";
+pub const ASK_CURSOR: &str = "❯";
+/// 固定最后一行的「其他」与唯一提交入口。
+pub const ASK_OTHER: &str = "Other...";
+pub const ASK_OTHER_PREFIX: &str = "Other: ";
+pub const ASK_SUBMIT: &str = "[ Submit ]";
+/// 预览区占位与降级提示。
+pub const ASK_NO_PREVIEW: &str = "(no preview)";
+pub const ASK_PREVIEW_HIDDEN: &str = "preview hidden (small pane)";
+/// 空答案内联提示；底栏键位提示与双击 Esc 两态。
+pub const ASK_EMPTY_HINT: &str = "select at least one option";
+pub const ASK_FOOTER_KEYS: &str = "up/down move · space select · enter submit · tab next";
+pub const ASK_FOOTER_CANCEL: &str = "esc cancel";
+pub const ASK_FOOTER_CANCEL_ARMED: &str = "esc again to cancel";
+/// 卡片状态文字：等待作答（运行中）。
+pub const ASK_WAITING: &str = "waiting for you";
+/// 历史里的空答案（异常数据兜底，不画成空行）。
+pub const ASK_NO_ANSWER: &str = "(no answer)";
+
+/// 卡片标题的题数：`2 questions` / `1 question`。
+pub fn ask_question_count(count: usize) -> String {
+    let suffix = if count == 1 { "question" } else { "questions" };
+    format!("{count} {suffix}")
+}
+
+/// 面板标题位置：`1/2`。
+pub fn ask_position(current: usize, total: usize) -> String {
+    format!("{}/{total}", current + 1)
+}

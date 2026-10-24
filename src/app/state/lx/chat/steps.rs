@@ -566,7 +566,8 @@ impl ToolCallView {
             super::tool_view::ToolDetailView::Command(view) => view.process_session_id,
             super::tool_view::ToolDetailView::Interaction(view) => Some(view.process_session_id),
             super::tool_view::ToolDetailView::Plan(_)
-            | super::tool_view::ToolDetailView::File(_) => None,
+            | super::tool_view::ToolDetailView::File(_)
+            | super::tool_view::ToolDetailView::Ask(_) => None,
         }
     }
 

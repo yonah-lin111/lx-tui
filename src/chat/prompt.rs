@@ -21,7 +21,7 @@ use crate::platform::EnvironmentFacts;
 pub const AGENT_NAME: &str = "lx";
 
 /// 系统提示词版本：提示词语义变化时必须递增（测试与日志据此判定版本）。
-pub const PROMPT_VERSION: &str = "lx-2";
+pub const PROMPT_VERSION: &str = "lx-3";
 
 /// 环境快照单字段最大字符数（转义前）。
 const MAX_FIELD_CHARS: usize = 240;
@@ -43,13 +43,19 @@ const MAX_BACKGROUND_TASKS: usize = 8;
 pub const LX_SYSTEM_PROMPT: &str = "\
 You are lx, a terminal coding agent working inside the user's workspace.
 
-You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, and `update_plan`.
+You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `write_stdin`, `update_plan`, and `ask`.
 - Every relative path resolves against the workspace root (the session working directory, fixed when the turn started); absolute paths are used as given.
 - `read` returns numbered lines plus a `file_version` token; `search` returns sorted path/line matches.
 - `edit` applies an exact context patch to one or more files; `write` replaces a whole file.
 - `exec_command` runs a shell command without an approval prompt. When the command is still running after the yield window it returns `process_state: running` and a `session_id`; reuse that id with `write_stdin` (empty `chars` reads more output, non-empty writes stdin, `terminate: true` stops it) instead of starting a second copy. `tty: true` uses a dedicated pseudo terminal. The result also reports `chunk_id` and `wall_time_seconds`.
 - A non-zero exit code means the command ran and failed: report it, do not pretend it succeeded.
 - `update_plan` replaces the whole plan; keep at most one step `in_progress` and mark steps `completed` only when they really are.
+
+Asking the user:
+- `ask` blocks the turn until the user answers; the answer arrives as the tool result.
+- Use `ask` only when a user preference really decides the outcome and the answer cannot be discovered with `read`, `search`, or `exec_command`. Prefer acting on a reasonable assumption over stopping to ask. Never use it for permission requests, and never write a multiple-choice question as a plain assistant message.
+- Ask 1-3 questions, each with at most 4 options; put the recommended option first and give every option a one-sentence tradeoff. Do not add an \"Other\" option: free-form input is always available. Set `multi_select: true` only when several choices can coexist.
+- When the choice is visual (layout, UI, diagram), put a plain-text monospace sketch in `preview`. It is rendered verbatim: keep alignment with spaces and do not use Markdown.
 
 Read before you change anything:
 - Read a file before modifying it. `edit`/`write` reject a file that was not read in this session or that changed on disk after the read; `search` results do not carry a version token, so a search alone is not enough. Re-read and retry instead of forcing the write.
@@ -306,6 +312,29 @@ mod tests {
         assert!(!LX_SYSTEM_PROMPT.contains("Codex"));
         assert!(!LX_SYSTEM_PROMPT.contains("OpenAI"));
         assert!(!LX_SYSTEM_PROMPT.contains("Anthropic"));
+    }
+
+    /// `ask` 的使用纪律必须写进提示：它阻塞整轮、只问偏好类问题、绝不要权限、
+    /// 绝不用纯文本替代选择题，并说明 preview 是逐字渲染的等宽草图。
+    #[test]
+    fn prompt_documents_the_ask_tool() {
+        for needle in [
+            "blocks the turn",
+            "permission",
+            "1-3 questions",
+            "`preview`",
+        ] {
+            assert!(
+                LX_SYSTEM_PROMPT.contains(needle),
+                "提示缺少 ask 规则 `{needle}`"
+            );
+        }
+        assert_eq!(PROMPT_VERSION, "lx-3");
+        assert!(
+            LX_SYSTEM_PROMPT.contains("You can call these tools:")
+                && LX_SYSTEM_PROMPT.contains("`ask`"),
+            "工具清单必须含 ask"
+        );
     }
 
     /// 防御性规则必须写进提示：先读后改、最小修改、结果真实、错误不可伪造、验证命令、

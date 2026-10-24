@@ -5,7 +5,7 @@ use std::path::Path;
 use ratatui::layout::Rect;
 
 use crate::app::actions::LxInput;
-use crate::app::state::{AppState, PaneKind, PaneView};
+use crate::app::state::{AppState, Lx, PaneKind, PaneView};
 use crate::detect::PaneAgentSnapshot;
 use crate::layout::{self, PaneId};
 
@@ -85,6 +85,14 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         .is_some_and(|pane| pane.lx.task.is_some())
     {
         apply_task_page_input(state, pane_id, command);
+        return;
+    }
+    // 挂起的 ask 面板：整块接管按键（不回落到输入框，也不改草稿）。
+    if state
+        .pane_anywhere(pane_id)
+        .is_some_and(|pane| pane.lx.ask.is_some())
+    {
+        super::chat::apply_ask_input(state, pane_id, command);
         return;
     }
     // 最新轮次撤销：执行中吞键；选中态接管 Enter/Esc/方向键；空闲空输入的双 Esc
@@ -283,64 +291,19 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
             lx.panel_accept();
         }
         LxInput::Escape if panel_open => lx.panel_close(),
-        LxInput::Char(ch) => {
-            lx.insert_char(ch);
-            refresh_slash_panel(state, pane_id);
-        }
-        // 提及面板未打开时 Shift+Enter 回落为换行。
-        LxInput::Newline | LxInput::EnterFolder => lx.newline(),
-        LxInput::Backspace => {
-            lx.backspace();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::Delete => {
-            lx.delete();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::Left => lx.move_left(),
-        LxInput::Right => lx.move_right(),
-        LxInput::Up => lx.move_up(),
         // ↓ 落空：历史不接管、草稿为空、光标在末尾时进入后台任务页（对齐 opencode 的
         // `run() == false` 向下层派发）。有草稿时 ↓ 仍是光标/历史移动，不会突然换页。
         LxInput::Down if lx.input.trim().is_empty() && lx.cursor == lx.input.len() => {
             super::chat::open_task_page(state, pane_id);
         }
         LxInput::Down => lx.move_down(),
-        LxInput::Home | LxInput::LineStart => lx.home(),
-        LxInput::End | LxInput::LineEnd => lx.end(),
-        LxInput::WordLeft => lx.word_left(),
-        LxInput::WordRight => lx.word_right(),
         // 翻页只在后台任务面板里有对象；聊天页不消费。
         LxInput::PageUp | LxInput::PageDown => {}
         // 停止进程只在后台任务面板里有对象；聊天页不消费（Ctrl+D 原本也无动作）。
         LxInput::StopProcess => {}
-        LxInput::DeleteToLineStart => {
-            lx.delete_to_line_start();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::DeleteToLineEnd => {
-            lx.delete_to_line_end();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::DeleteWordBackward => {
-            lx.delete_word_backward();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::DeleteWordForward => {
-            lx.delete_word_forward();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::Undo => {
-            lx.undo();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::Redo => {
-            lx.redo();
-            refresh_slash_panel(state, pane_id);
-        }
-        LxInput::Clear => {
-            lx.clear();
-            refresh_slash_panel(state, pane_id);
+        // 纯文本编辑（ask 面板的编辑态复用同一套逻辑）；未改写的命令落到下面专用分支。
+        _ if apply_editor_edit(lx, command) => {
+            after_editor_edit(state, pane_id, command);
         }
         // 无面板且 Native 空闲时 Enter 发送；流中不重复发送。
         LxInput::Enter => {
@@ -382,7 +345,189 @@ pub fn apply_lx_input(state: &mut AppState, command: LxInput) {
         LxInput::Tab => {
             super::chat::queue_shell(state, pane_id);
         }
+        // 上面带守卫的编辑分支已覆盖全部编辑命令；这里只兜住剩余无动作的键。
+        _ => {}
     }
+}
+
+/// 编辑后的副作用：改写草稿时重算 `/` 命令候选面板。
+///
+/// 纯导航（`Left`/`Right`/`Home`/`End`/词移动）与换行都不触发——现行为如此。
+fn after_editor_edit(state: &mut AppState, pane_id: PaneId, command: LxInput) {
+    let rewrote =
+        edits_text(command) && !matches!(command, LxInput::Newline | LxInput::EnterFolder);
+    if rewrote {
+        refresh_slash_panel(state, pane_id);
+    }
+}
+
+/// 纯文本编辑命令的接收者：lx 输入框与 ask 手写缓冲共用**同一份**编辑映射。
+///
+/// 抽成 trait 而不是给 `AskEditor` 加 `DerefMut`：手写缓冲只允许编辑，不允许外面
+/// 顺手写 `chat`/`rewind` 等字段（design §4.5）。
+pub(crate) trait TextEdit {
+    fn insert_char(&mut self, ch: char);
+    fn newline(&mut self);
+    fn backspace(&mut self);
+    fn delete(&mut self);
+    fn move_left(&mut self);
+    fn move_right(&mut self);
+    fn move_up(&mut self);
+    fn home(&mut self);
+    fn end(&mut self);
+    fn word_left(&mut self);
+    fn word_right(&mut self);
+    fn delete_to_line_start(&mut self);
+    fn delete_to_line_end(&mut self);
+    fn delete_word_backward(&mut self);
+    fn delete_word_forward(&mut self);
+    fn undo(&mut self);
+    fn redo(&mut self);
+    fn clear(&mut self);
+}
+
+impl TextEdit for Lx {
+    fn insert_char(&mut self, ch: char) {
+        Lx::insert_char(self, ch);
+    }
+    fn newline(&mut self) {
+        Lx::newline(self);
+    }
+    fn backspace(&mut self) {
+        Lx::backspace(self);
+    }
+    fn delete(&mut self) {
+        Lx::delete(self);
+    }
+    fn move_left(&mut self) {
+        Lx::move_left(self);
+    }
+    fn move_right(&mut self) {
+        Lx::move_right(self);
+    }
+    fn move_up(&mut self) {
+        Lx::move_up(self);
+    }
+    fn home(&mut self) {
+        Lx::home(self);
+    }
+    fn end(&mut self) {
+        Lx::end(self);
+    }
+    fn word_left(&mut self) {
+        Lx::word_left(self);
+    }
+    fn word_right(&mut self) {
+        Lx::word_right(self);
+    }
+    fn delete_to_line_start(&mut self) {
+        Lx::delete_to_line_start(self);
+    }
+    fn delete_to_line_end(&mut self) {
+        Lx::delete_to_line_end(self);
+    }
+    fn delete_word_backward(&mut self) {
+        Lx::delete_word_backward(self);
+    }
+    fn delete_word_forward(&mut self) {
+        Lx::delete_word_forward(self);
+    }
+    fn undo(&mut self) {
+        Lx::undo(self);
+    }
+    fn redo(&mut self) {
+        Lx::redo(self);
+    }
+    fn clear(&mut self) {
+        Lx::clear(self);
+    }
+}
+
+impl TextEdit for crate::app::state::AskEditor {
+    fn insert_char(&mut self, ch: char) {
+        crate::app::state::AskEditor::insert_char(self, ch);
+    }
+    fn newline(&mut self) {
+        crate::app::state::AskEditor::newline(self);
+    }
+    fn backspace(&mut self) {
+        crate::app::state::AskEditor::backspace(self);
+    }
+    fn delete(&mut self) {
+        crate::app::state::AskEditor::delete(self);
+    }
+    fn move_left(&mut self) {
+        crate::app::state::AskEditor::move_left(self);
+    }
+    fn move_right(&mut self) {
+        crate::app::state::AskEditor::move_right(self);
+    }
+    fn move_up(&mut self) {
+        crate::app::state::AskEditor::move_up(self);
+    }
+    fn home(&mut self) {
+        crate::app::state::AskEditor::home(self);
+    }
+    fn end(&mut self) {
+        crate::app::state::AskEditor::end(self);
+    }
+    fn word_left(&mut self) {
+        crate::app::state::AskEditor::word_left(self);
+    }
+    fn word_right(&mut self) {
+        crate::app::state::AskEditor::word_right(self);
+    }
+    fn delete_to_line_start(&mut self) {
+        crate::app::state::AskEditor::delete_to_line_start(self);
+    }
+    fn delete_to_line_end(&mut self) {
+        crate::app::state::AskEditor::delete_to_line_end(self);
+    }
+    fn delete_word_backward(&mut self) {
+        crate::app::state::AskEditor::delete_word_backward(self);
+    }
+    fn delete_word_forward(&mut self) {
+        crate::app::state::AskEditor::delete_word_forward(self);
+    }
+    fn undo(&mut self) {
+        crate::app::state::AskEditor::undo(self);
+    }
+    fn redo(&mut self) {
+        crate::app::state::AskEditor::redo(self);
+    }
+    fn clear(&mut self) {
+        crate::app::state::AskEditor::clear(self);
+    }
+}
+
+/// 纯文本编辑分派（不含面板/发送/停止语义）；返回是否改写了文本。
+///
+/// `Down` 特意不在此列：无面板且草稿为空时它要落到「打开后台任务页」，
+/// 有草稿时才下调光标——那段路由留在调用点。
+pub(crate) fn apply_editor_edit<T: TextEdit>(target: &mut T, command: LxInput) -> bool {
+    match command {
+        LxInput::Char(ch) => target.insert_char(ch),
+        // 提及面板未打开时 Shift+Enter 回落为换行。
+        LxInput::Newline | LxInput::EnterFolder => target.newline(),
+        LxInput::Backspace => target.backspace(),
+        LxInput::Delete => target.delete(),
+        LxInput::Left => target.move_left(),
+        LxInput::Right => target.move_right(),
+        LxInput::Up => target.move_up(),
+        LxInput::Home | LxInput::LineStart => target.home(),
+        LxInput::End | LxInput::LineEnd => target.end(),
+        LxInput::WordLeft => target.word_left(),
+        LxInput::WordRight => target.word_right(),
+        LxInput::DeleteToLineStart => target.delete_to_line_start(),
+        LxInput::DeleteToLineEnd => target.delete_to_line_end(),
+        LxInput::DeleteWordBackward => target.delete_word_backward(),
+        LxInput::DeleteWordForward => target.delete_word_forward(),
+        LxInput::Undo => target.undo(),
+        LxInput::Redo => target.redo(),
+        LxInput::Clear => target.clear(),
+        _ => return false,
+    }
+    true
 }
 
 /// 历史 prompt 与当前按键的路由结果。
@@ -760,6 +905,10 @@ pub fn resize_panes(state: &mut AppState, pane_rects: &[(PaneId, Rect)]) {
             pane.terminal.resize(cols, rows);
             let (lx_cols, lx_rows) = layout::lx_input_size(*rect);
             pane.lx.resize(lx_cols, lx_rows);
+            if let Some(ask) = pane.lx.ask.as_mut() {
+                let (width, rows) = layout::lx_ask_editor_size(*rect);
+                ask.resize_editor(width, rows);
+            }
         }
     }
 }

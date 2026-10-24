@@ -18,12 +18,14 @@ use crate::chat::tools::ToolErrorCode;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum HostTrace {
     Begin(String),
+    /// 向 UI 提问（call ID + 题数）。
+    Ask(String, usize),
     /// call ID + 是否为「未执行就取消」结算。
     Finish(String, bool),
 }
 
 /// 可控 host：记录每次请求，并按脚本注入失败。
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct RecordingHost {
     trace: Arc<Mutex<Vec<HostTrace>>>,
     /// 依次消费的 begin 注入结果；用尽后一律成功。
@@ -32,11 +34,39 @@ struct RecordingHost {
     finish_failures: Arc<Mutex<Vec<HostError>>>,
     /// 已发放的 ticket（验证 begin 的 ticket 被原样交给 finish）。
     issued: Arc<Mutex<Vec<ToolCallTicket>>>,
+    /// 提问回执脚本（默认空答案）。`HostError` 可 Clone，可重复消费。
+    ask_result: Arc<Mutex<Result<AskAnswers, HostError>>>,
+}
+
+impl Default for RecordingHost {
+    fn default() -> Self {
+        Self {
+            trace: Arc::new(Mutex::new(Vec::new())),
+            begin_failures: Arc::new(Mutex::new(Vec::new())),
+            finish_failures: Arc::new(Mutex::new(Vec::new())),
+            issued: Arc::new(Mutex::new(Vec::new())),
+            ask_result: Arc::new(Mutex::new(Ok(AskAnswers::new()))),
+        }
+    }
 }
 
 impl RecordingHost {
     fn new() -> Self {
         Self::default()
+    }
+
+    /// 提问时回这些答案（按题目 id 映射）。
+    fn answering(answers: AskAnswers) -> Self {
+        let host = Self::new();
+        *host.ask_result.lock().expect("lock") = Ok(answers);
+        host
+    }
+
+    /// 提问时注入错误（模拟取消 / 事件层失败）。
+    fn ask_failing(error: HostError) -> Self {
+        let host = Self::new();
+        *host.ask_result.lock().expect("lock") = Err(error);
+        host
     }
 
     fn with_begin_failure(error: HostError) -> Self {
@@ -61,6 +91,18 @@ impl AgentHost for RecordingHost {
         match request {
             AgentHostRequest::UserShellUpdates { reply } => {
                 let _ = reply.send(Vec::new());
+            }
+            AgentHostRequest::AskUser {
+                call_id,
+                questions,
+                reply,
+            } => {
+                self.trace
+                    .lock()
+                    .expect("lock")
+                    .push(HostTrace::Ask(call_id, questions.len()));
+                let result = self.ask_result.lock().expect("lock").clone();
+                let _ = reply.send(result);
             }
             AgentHostRequest::BeginTool { call, reply } => {
                 self.trace
@@ -597,5 +639,6 @@ async fn unclosed_tool_input_fails_without_execution() {
     assert!(host.trace().is_empty());
 }
 
+mod ask_turn;
 mod context;
 mod limits;

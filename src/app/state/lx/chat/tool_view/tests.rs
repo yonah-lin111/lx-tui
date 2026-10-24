@@ -184,3 +184,56 @@ fn empty_plan_view_is_clear_marker() {
     assert!(view.is_empty());
     assert_eq!(view.completed(), 0);
 }
+
+/// `ask` 的实时视图与历史重载逐字段相等（沿用 roundtrip 风格）。
+#[test]
+fn ask_result_json_round_trip_matches_the_live_view() {
+    let questions = vec![crate::chat::tools::AnsweredQuestion {
+        id: "layout".into(),
+        header: "布局".into(),
+        question: "侧栏用哪种布局？".into(),
+        answers: vec!["双栏".into(), "自己画一版".into()],
+    }];
+    let result = crate::chat::tools::ToolExecutionResult::Ask {
+        questions: questions.clone(),
+    };
+    let json = crate::chat::tools::to_result_json(&result).expect("json");
+    let live = ToolDetailView::Ask(AskDetailView::from_answered(&questions));
+    assert_eq!(
+        ToolDetailView::from_result_json(Some(&json)).expect("reload"),
+        live
+    );
+}
+
+/// `ask` 结果缺字段或不是 ask 时不给视图（旧记录兜底）。
+#[test]
+fn ask_result_json_with_missing_fields_yields_no_view() {
+    assert!(ToolDetailView::from_result_json(Some(r#"{"tool":"ask"}"#)).is_none());
+    assert!(
+        ToolDetailView::from_result_json(Some(
+            r#"{"tool":"ask","questions":[{"id":"q","answers":[]}]}"#
+        ))
+        .is_none(),
+        "缺 header/question 必须降级，而不是伪造空题干"
+    );
+    assert!(
+        ToolDetailView::from_result_json(Some(
+            r#"{"tool":"ask","questions":[{"id":"q","header":"h","question":"q","answers":[1]}]}"#
+        ))
+        .is_none(),
+        "answer 非字符串必须降级"
+    );
+}
+
+/// 空答案（异常数据）仍能解码，交由渲染层容错。
+#[test]
+fn ask_view_keeps_empty_answers() {
+    let json =
+        r#"{"tool":"ask","questions":[{"id":"q","header":"h","question":"q?","answers":[]}]}"#;
+    let Some(ToolDetailView::Ask(view)) = ToolDetailView::from_result_json(Some(json)) else {
+        panic!("expected ask view");
+    };
+    assert_eq!(view.questions.len(), 1);
+    assert!(view.questions[0].answers.is_empty());
+    assert_eq!(view.questions[0].header, "h");
+}
