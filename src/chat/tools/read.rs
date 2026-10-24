@@ -109,14 +109,17 @@ fn read_file(
         std::fs::read(target).map_err(|error| path::map_io_error(&error, "read", target))?;
     let source = SourceText::parse(&bytes)?;
     let total_lines = source.lines.len();
-    // 读后版本 token：与本轮内容同一份镜像口径（跟随符号链接到物理文件）。
-    let image = crate::platform::read_raw(target, true)
+    // 读后版本 token：同时登记跟随链接后的内容（写入对象）与目录项自身（删除/移动对象）。
+    let followed = crate::platform::read_raw(target, true)
+        .map_err(|error| path::map_io_error(&error, "read", target))?;
+    let entry = crate::platform::read_raw(target, false)
         .map_err(|error| path::map_io_error(&error, "read", target))?;
     let version = ctx.reads.as_ref().map(|reads| {
         reads.record(
             &super::read_version::canonical_key(target),
             &path::display(target),
-            &image,
+            &followed,
+            &entry,
         )
     });
     if total_lines == 0 {

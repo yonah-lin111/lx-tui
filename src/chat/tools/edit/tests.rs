@@ -787,3 +787,67 @@ fn update_with_move_records_one_mutation_per_path() {
         "before 必须是写前内容"
     );
 }
+
+/// 移动符号链接：`MoveSource` 按目录项重算 token（不追随目标），
+/// 否则持久层的 before 重算会误判为读取后外部修改。
+#[cfg(unix)]
+#[test]
+fn move_symlink_uses_entry_version_for_move_source() {
+    use crate::chat::tools::mutation::{
+        MutationError, MutationRecorder, MutationTicket, ObservedMutation, PreparedMutation,
+    };
+    use std::sync::{Arc, Mutex};
+
+    /// 只记录 prepare 请求、永远成功的内存 recorder。
+    struct Recording {
+        prepared: Arc<Mutex<Vec<PreparedMutation>>>,
+    }
+    impl MutationRecorder for Recording {
+        fn prepare(&self, mutation: &PreparedMutation) -> Result<MutationTicket, MutationError> {
+            self.prepared.lock().expect("lock").push(mutation.clone());
+            Ok(MutationTicket {
+                ids: vec![1; mutation.paths.len()],
+            })
+        }
+        fn commit(
+            &self,
+            _ticket: MutationTicket,
+            _observed: &ObservedMutation,
+        ) -> Result<(), MutationError> {
+            Ok(())
+        }
+    }
+
+    let fixture = Fixture::new("edit-move-symlink");
+    let real = fixture.write("real.txt", "one\n");
+    let link = fixture.join("link.txt");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let prepared = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Recording {
+        prepared: prepared.clone(),
+    };
+    let patch = wrapped("*** Update File: link.txt\n*** Move to: moved.txt\n@@\n-one\n+two");
+    let result =
+        super::super::execute_with(&fixture.ctx(), "edit", &edit_args(&patch), Some(&recorder));
+    assert!(!result.is_failure(), "移动符号链接必须成功：{result:?}");
+    let recorded = prepared.lock().expect("lock");
+    let mutation = recorded.first().expect("prepare recorded");
+    let source = mutation
+        .paths
+        .iter()
+        .find(|path| path.operation.as_str() == "move_src")
+        .expect("move_src recorded");
+    let expected = source.expected_version.as_deref().expect("token");
+    // token 必须与 MoveSource 的 before（目录项）一致，而不是跟随目标的版本。
+    assert_eq!(
+        expected,
+        crate::platform::version_token_of(&source.before),
+        "move_src 的期望版本必须按目录项重算"
+    );
+    let resolved = crate::platform::read_raw(&real, true).expect("read target");
+    assert_ne!(
+        expected,
+        crate::platform::version_token_of(&resolved),
+        "目录项版本不得等于跟随后的内容版本（符号链接场景）"
+    );
+}

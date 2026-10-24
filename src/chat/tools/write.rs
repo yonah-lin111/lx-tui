@@ -108,21 +108,11 @@ fn run_locked(
                 ),
             )
         })?;
-        let required = read_version::require_read_version(
-            registered,
-            &read_version::canonical_key(resolved),
-            &path::display(target),
-            &before,
-        )?;
-        if required != declared {
-            return Err(ToolFailure::new(
-                ToolErrorCode::StaleRead,
-                format!(
-                    "{} was changed after it was read; read it again and use the new file_version",
-                    path::display(target)
-                ),
-            ));
-        }
+        let key = read_version::canonical_key(resolved);
+        // 先核对模型声明的 token 确实来自本会话，再核对磁盘仍是读取时的版本。
+        read_version::require_declared(registered, &key, &path::display(target), declared)?;
+        let required =
+            read_version::require_read_version(registered, &key, &path::display(target), &before)?;
         Some(required)
     } else {
         None

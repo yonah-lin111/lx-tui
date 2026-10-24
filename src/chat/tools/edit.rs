@@ -295,14 +295,10 @@ fn precheck_versions(
         {
             return Some(failure);
         }
-        if registry.token_for(&key).as_deref() != Some(declared_token.as_str()) {
-            return Some(ToolFailure::new(
-                ToolErrorCode::StaleRead,
-                format!(
-                    "{} was changed after it was read; read it again and use the new file_version",
-                    path::display(target)
-                ),
-            ));
+        if let Err(failure) =
+            read_version::require_declared(registry, &key, &path::display(target), declared_token)
+        {
+            return Some(failure);
         }
     }
     None
@@ -399,23 +395,22 @@ fn commit_one(
                 // 锁内复核读版本：目录项内容/身份必须与读取时一致。
                 let token = match ctx.reads.as_ref() {
                     Some(registry) => {
-                        let token = read_version::require_read_version(
+                        let key = read_version::canonical_key(target);
+                        if let Some(declared) = expected {
+                            read_version::require_declared(
+                                registry,
+                                &key,
+                                &path::display(target),
+                                declared,
+                            )?;
+                        }
+                        // 返回的是与当前目录项一致的视图 token（持久层据此重算核对）。
+                        Some(read_version::require_read_version(
                             registry,
-                            &read_version::canonical_key(target),
+                            &key,
                             &path::display(target),
                             &before,
-                        )?;
-                        if Some(token.as_str()) != expected {
-                            return Err(ToolFailure::new(
-                                ToolErrorCode::StaleRead,
-                                format!(
-                                    "{} was changed after it was read; read it again before deleting",
-                                    path::display(target)
-                                ),
-                            )
-                            .into());
-                        }
-                        Some(token)
+                        )?)
                     }
                     None => None,
                 };
@@ -463,23 +458,22 @@ fn commit_one(
                 // 锁内复核读版本：内容必须与模型读到时一致（外部修改即零写入）。
                 let token = match ctx.reads.as_ref() {
                     Some(registry) => {
-                        let token = read_version::require_read_version(
+                        let key = read_version::canonical_key(&resolved);
+                        if let Some(declared) = expected {
+                            read_version::require_declared(
+                                registry,
+                                &key,
+                                &path::display(target),
+                                declared,
+                            )?;
+                        }
+                        // 返回的是与当前内容一致的视图 token（持久层据此重算核对）。
+                        Some(read_version::require_read_version(
                             registry,
-                            &read_version::canonical_key(&resolved),
+                            &key,
                             &path::display(target),
                             &before_image,
-                        )?;
-                        if Some(token.as_str()) != expected {
-                            return Err(ToolFailure::new(
-                                ToolErrorCode::StaleRead,
-                                format!(
-                                    "{} was changed after it was read; read it again and use the new file_version",
-                                    path::display(target)
-                                ),
-                            )
-                            .into());
-                        }
-                        Some(token)
+                        )?)
                     }
                     None => None,
                 };
@@ -552,13 +546,17 @@ fn commit_one(
                             .map_err(|error| path::map_io_error(&error, "stat", target))?;
                         let destination_before = mutation::read_entry(destination)
                             .map_err(|error| path::map_io_error(&error, "stat", destination))?;
+                        // `MoveSource` 移动的是**目录项**而非跟随后的内容：期望版本必须按
+                        // 目录项自身重算（符号链接源与读取时跟随目标的 token 天然不同），
+                        // 否则持久层的 before 重算会误判成「读取后被外部修改」。
+                        let entry_version = crate::platform::version_token_of(&entry_before);
                         changes.push(PathMutation {
                             operation: MutationOperation::MoveSource,
                             path: target.clone(),
                             target: target.clone(),
                             before: entry_before,
                             planned_after: crate::platform::RawImage::missing(),
-                            expected_version: token.clone(),
+                            expected_version: Some(entry_version),
                         });
                         changes.push(PathMutation {
                             operation: MutationOperation::MoveDestination,

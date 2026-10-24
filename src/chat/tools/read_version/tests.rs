@@ -57,9 +57,12 @@ fn registries_are_per_session() {
     let a = registry("sess-a");
     let b = registry("sess-b");
     let image = RawImage::regular(b"x".to_vec(), None);
-    let token = a.record("key", "a.txt", &image);
-    assert_eq!(a.token_for("key").as_deref(), Some(token.as_str()));
-    assert_eq!(b.token_for("key"), None);
+    let token = a.record("key", "a.txt", &image, &image);
+    assert_eq!(
+        a.views_for("key").map(|(followed, _)| followed),
+        Some(token)
+    );
+    assert_eq!(b.views_for("key"), None);
     drop_registry("sess-a");
     drop_registry("sess-b");
 }
@@ -198,6 +201,31 @@ fn path_aliases_share_one_version() {
         "同一文件的两个写法必须共享版本：{result:?}"
     );
     assert_eq!(fixture.read("a.txt"), "two\n");
+}
+
+/// 符号链接：`read` 同时登记“跟随后的内容”与“目录项本身”，
+/// 因此 `delete`（目录项语义）不会被误判为读取后外部修改。
+#[cfg(unix)]
+#[test]
+fn symlink_read_records_both_views_for_delete() {
+    let fixture = Fixture::new("rv-symlink-delete");
+    let real = fixture.write("real.txt", "one\n");
+    let link = fixture.join("link.txt");
+    std::os::unix::fs::symlink(&real, &link).expect("symlink");
+    let ctx = fixture.ctx().with_reads(Arc::new(ReadRegistry::default()));
+    let read = execute(&ctx, "read", r#"{"path":"link.txt"}"#);
+    let token = read_token(&read);
+    // 用返回的 token 删除链接本身：目录项视图必须被接受。
+    let patch = "*** Begin Patch\n*** Delete File: link.txt\n*** End Patch\n";
+    let arguments = serde_json::json!({
+        "patch": patch,
+        "read_versions": { "link.txt": token },
+    })
+    .to_string();
+    let result = execute(&ctx, "edit", &arguments);
+    assert!(!result.is_failure(), "删除符号链接必须被允许：{result:?}");
+    assert!(!fixture.exists("link.txt"), "链接本身必须被删除");
+    assert_eq!(fixture.read("real.txt"), "one\n", "目标内容不得被删除");
 }
 
 /// 取出 `read` 结果的版本 token（测试辅助）。
