@@ -234,12 +234,30 @@
 - [x] 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`
       = 3188 passed (lib) + 全部集成测试通过。
 
+## L. 评审与修复
+
+- [x] 全量评审 `dev..feat/lx-agent-harness`，结果与逐项错误原因见 [review.md](review.md)。
+- [x] 修复两个会直接让功能失效的缺陷：
+  - `ModelContext::next_request` 曾把 `system_prompt` 置 `None`，冻结环境快照与 compact
+    摘要从未进入模型；改为原样复用，并补“每次采样拿到同一份提示”的回归测试。
+  - `edit` 的 `move_dst` 被持久层按“缺 token”拒绝，`*** Move to:` 生产路径完全不可用；
+    改为与 `create` 同档，并在路径锁内复核目标不存在。
+- [x] 修复回执与多窗格缺口：回执携带 `operation_id` 与冻结 `workspace`，迟到回执丢弃；
+  回填读失败不再覆盖检查点与 revision；`/compact` 与发送按会话检查忙碌；
+  `^o` 优先切换 Alt+↑/↓ 选中的检查点；撤销失败使用独立文案。
+- [x] 修复 UI/平台细节：lx toast 宽高与折行统一并补省略号；环境快照按行截断；
+  网络探测移出事件循环（缓存只读 + 后台补测）。
+- [x] `history.rs` 时间线拆分到 `history/timeline.rs`（回到 1000 行内）；删除死代码，
+  修正 `search`/`read` 的提示口径。
+- [x] 验证：`cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、
+  `cargo test` = 3199 passed (lib) + 全部集成测试通过。
+
 ## 未验证风险
 
 1. **真实 provider 的摘要请求**：单测覆盖请求形状（无工具、系统提示覆写、失败分支），
    但没有对真实端点跑过 `/compact`；流式响应若带 reasoning part 会被忽略（只取 text）。
-2. **长会话的摘要质量**：`MAX_TRANSCRIPT_CHARS` 超限时从最老轮次丢弃并显式标注，
-   模型是否据此保留足够信息未做人工评估。
+2. **长会话的摘要质量**：`MAX_TRANSCRIPT_CHARS` 超限时从最老轮次丢弃并显式标注；
+   被丢轮次不会进入后续上下文（review.md m8），模型是否据此保留足够信息未做人工评估。
 3. **读后版本保护的模型遵从度**：系统提示与工具描述都要求携带 `read_version`，
    但模型可能反复忘记；此时写工具返回 `stale_read` 而非自动放行（安全但可能多一轮往返）。
 4. **`^o` 的语义扩展**：无工具卡片时改为切换最近 compact 检查点；如果用户习惯
