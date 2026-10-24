@@ -681,3 +681,36 @@ cargo test --release -- --ignored perf_lx_history
 | `src/app/update/chat/viewport.rs:107-205` | 两个 resolve 合并 |
 | `src/event/mouse/{hover,wheel,press,drag,hit}.rs` | 传入 `RenderCache` |
 | `src/ui/{mod,panes,main_content}.rs` | `render` 逐层透传缓存 |
+
+## 13. 实现偏差与实测（2026-10-25 回写）
+
+### 13.1 与设计的差异
+
+| 项 | 设计 | 实现 | 原因 |
+|----|------|------|------|
+| `ui::render` 签名 | 直接加 `cache` 参数 | 保留三参 `render`（内部建临时缓存）+ 新增 `render_cached` | `tests/` 下 8 个集成测试文件依赖三参签名，改签名要污染全部集成测试 |
+| 文件拆分 | `history.rs` → `cache/snapshot/layout/render` | 额外拆出 `paint.rs`（绘制数据与绘制函数），`body.rs` 并入 | 绘制数据与绘制逻辑放一处，`rows()` 与 `draw()` 同源 |
+| 二级缓存覆盖 | C1~C8 全部块 | 只覆盖用户正文、markdown、thinking、统计行；工具卡片走 `BlockPaint::Legacy` | 命令/文件摘要展开上限 24 行；唯一无上限的展开差异实测 P95 6.04ms，未超预算 |
+| LRU 使用标记 | 「本帧使用」在取块时刷新 | 取块**不**刷新，只有绘制路径 `mark_used` 刷新 | 快照重建会遍历全部块，取块即刷新会让一次流式追加把全部缓存钉住，LRU 失效 |
+
+### 13.2 实测（release，200×50 视口）
+
+构建 1400 条消息、100,800 渲染行：
+
+| 场景 | 结果 |
+|------|------|
+| 冷启动建快照 | 53.2ms（一次性） |
+| 热缓存滚动 P95（120 帧） | 1.05ms |
+| 流式追加 P95（120 帧） | 1.54ms |
+| 展开 2000 行差异滚动 P95（Legacy） | 6.04ms |
+| 二级缓存占用 | 13.58MB / 32MB |
+
+优化前：鼠标移动一帧最多 7 次全量 `layout`（每次都要解析全部历史正文），滚轮事件每次先全量算一遍。
+优化后：一帧只建一次快照（指纹不变则零次），绘制只碰视口内的块与行。
+
+### 13.3 已知边界
+
+- 多个「展开的大文件差异」同屏时，每个约 6ms，两个以上会逼近 16ms 预算；届时给
+  `file_diff` 接 `BlockPaint` 即可，接口已就绪（`SnapBlock.paint` = `Legacy` 换成实际变体）。
+- 指纹对文件差异只覆盖 hunk 数与每 hunk 行数；等长改写且首尾 64 字节完全相同会漏判。
+  当前没有任何生产路径以这种方式写差异正文。
