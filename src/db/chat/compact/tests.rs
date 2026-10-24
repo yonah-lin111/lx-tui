@@ -353,6 +353,49 @@ fn revert_rejects_stale_revision_and_out_of_order_targets() {
     );
 }
 
+/// compact 撤销复用既有 operation 表（不建平行撤销记录）。
+#[test]
+fn revert_records_a_shared_operation_row() {
+    let (database, workspace) = temp("revert-operation");
+    let first = turn(&database, &workspace, None, "q1", "a1");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    let one = database
+        .commit_compact(
+            &workspace,
+            &commit_of(&first.session_id, revision, 0, 1, "op-1"),
+        )
+        .expect("first");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    database
+        .revert_compact(
+            &workspace,
+            &CompactRevert {
+                operation_id: "rewind-compact".into(),
+                session_id: first.session_id.clone(),
+                checkpoint_id: one.checkpoint.id.clone(),
+                expected_revision: revision,
+            },
+        )
+        .expect("revert");
+    let operation = database
+        .operation("rewind-compact")
+        .expect("operation lookup")
+        .expect("recorded");
+    assert_eq!(operation.phase, crate::db::chat::rewind::OP_COMMITTED);
+    assert_eq!(operation.target_user_message_id, one.checkpoint.id);
+    // 已完成的 compact 撤销不算“未完成操作”，不阻塞后续轮次。
+    assert!(
+        database
+            .unfinished_operation(&first.session_id)
+            .expect("unfinished")
+            .is_none()
+    );
+}
+
 #[test]
 fn revert_is_idempotent_for_the_same_checkpoint() {
     let (database, workspace) = temp("revert-idem");

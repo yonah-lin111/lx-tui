@@ -226,6 +226,8 @@ impl Database {
 
     /// 撤销一次 compact：只切检查点状态与 revision，**不触碰任何消息或文件**。
     ///
+    /// 撤销记录复用既有 `agent_rewind_operation`（`action = 'restore_compact'`），
+    /// 不建立平行撤销系统：本函数在同一事务内写 operation 行并直接推进到 committed。
     /// 幂等：同 `operation_id` 已把目标检查点标成 reverted 时返回原结果。
     pub fn revert_compact(
         &self,
@@ -292,6 +294,23 @@ impl Database {
             return Err(DbError::RewindTargetChanged);
         }
         let now = now_ms();
+        // 撤销审计写入既有 operation 表（与普通轮次同一套 kind/phase 约束）。
+        transaction.execute(
+            r#"INSERT INTO agent_rewind_operation
+                   (external_id, operation_id, session_id, action, target_user_message_id,
+                    expected_revision, phase, user_text, created_at_ms, updated_at_ms)
+               VALUES (?1, ?2, ?3, 'restore_compact', ?4, ?5, 'committed', '', ?6, ?6)
+               ON CONFLICT(operation_id) DO UPDATE SET
+                   phase = 'committed', updated_at_ms = excluded.updated_at_ms"#,
+            params![
+                new_external_id("op"),
+                revert.operation_id,
+                revert.session_id,
+                id,
+                revert.expected_revision,
+                now,
+            ],
+        )?;
         transaction.execute(
             r#"UPDATE agent_compact_checkpoint
                SET state = 'reverted', reverted_by_operation_id = ?1
