@@ -397,12 +397,7 @@ fn error_segment(call: &ToolCallView) -> Option<Segment> {
 ///   且不再有剩余行数行；`└─` 行是工具参数本身，不铺展开灰底。
 ///
 /// `rows` 与 `draw` 共用本函数，行数口径只有一份。
-pub(super) fn detail(
-    call: &ToolCallView,
-    width: u16,
-    expanded: bool,
-    hovered: bool,
-) -> Vec<Vec<Segment>> {
+pub(super) fn detail(call: &ToolCallView, width: u16, expanded: bool) -> Vec<Vec<Segment>> {
     let limit = usize::from(width);
     if limit == 0 {
         return Vec::new();
@@ -485,13 +480,11 @@ pub(super) fn detail(
         let indent = " ".repeat(head_cols);
         let room = limit.saturating_sub(head_cols);
         if hint.width() <= room {
-            // 悬停时与折叠内容一起提亮：提示行就是这块可点性的唯一文案。
-            let hint_style = if hovered {
-                style::text()
-            } else {
-                style::agent_step_detail()
-            };
-            rows.push(vec![Segment::new(format!("{indent}{hint}"), hint_style)]);
+            // 提示行恒为 dim：折叠内容不再随鼠标悬停提亮。
+            rows.push(vec![Segment::new(
+                format!("{indent}{hint}"),
+                style::agent_step_detail(),
+            )]);
         }
     }
     rows
@@ -499,16 +492,12 @@ pub(super) fn detail(
 
 /// 详情行的物理行数（`layout` 用；与 [`detail`] 同一份换行口径，含「剩余行数」提示行）。
 pub(super) fn detail_rows(call: &ToolCallView, width: u16, expanded: bool) -> usize {
-    detail(call, width, expanded, false).len()
+    detail(call, width, expanded).len()
 }
 
-/// 折叠态可提亮的详情行数：**含末尾的「剩余行数」提示行**。
-///
-/// 提示行也是折叠内容的一部分（用户要求「hover 折叠块时 `… 1 more line` 要显示
-/// 高亮」）：它就在折叠区最后一行，把命中区截断在提示行之前会让指针落在最该提亮的
-/// 那行时反而没有任何反应。
+/// 折叠态的详情行数（**含**末尾的「剩余行数」提示行）；供折叠区几何用。
 pub(super) fn foldable_rows(call: &ToolCallView, width: u16) -> usize {
-    detail(call, width, false, false).len()
+    detail(call, width, false).len()
 }
 
 /// 详情**内容**行数（不含「剩余行数」提示行）；供「能否展开」判定用。

@@ -317,7 +317,7 @@ pub enum CardTarget {
 
 /// 卡片内可独立折叠的区域。
 ///
-/// 命令卡片把「命令参数」与「命令输出」拆成两块：各自的点击面与 hover 面互不影响，
+/// 命令卡片把「命令参数」与「命令输出」拆成两块：各自的点击面与折叠状态互不影响，
 /// 点其中一块不会连带另一块。其余卡片只有一个整体（[`Self::Body`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CardSection {
@@ -375,8 +375,8 @@ pub struct LxChat {
     pub loading_frame: usize,
     /// 鼠标悬停的可折叠块；None 表示不在任何卡片上。
     ///
-    /// 渲染层只读：工具卡片用它把折叠内容从 dim 提亮为默认前景，思考块用它
-    /// 从压暗恢复品红。
+    /// 渲染层只读：只有思考块用它把压暗的头部恢复品红（工具卡片与本地命令卡片的
+    /// 折叠内容不随悬停变色）。
     pub hover: Option<CardTarget>,
     /// 本轮已耗时（毫秒），由事件循环在流中每帧刷新。
     ///
@@ -555,34 +555,6 @@ impl LxChat {
     /// 切换卡片主体的展开状态，返回新状态。
     pub fn toggle_detail(&mut self, message_id: &str, slot: &str) -> bool {
         self.toggle_section(message_id, slot, CardSection::Body)
-    }
-
-    /// 该工具卡片当前被悬停的区域（`None` = 未悬停）。
-    pub fn tool_hovered_section(&self, message_id: &str, call_id: &str) -> Option<CardSection> {
-        match &self.hover {
-            Some(CardTarget::Tool {
-                message_id: hovered_message,
-                call_id: hovered_call,
-                section,
-            }) if hovered_message == message_id && hovered_call == call_id => Some(*section),
-            _ => None,
-        }
-    }
-
-    /// 该工具卡片是否被鼠标悬停（折叠内容提亮判据）。
-    pub fn tool_is_hovered(&self, message_id: &str, call_id: &str) -> bool {
-        self.tool_hovered_section(message_id, call_id).is_some()
-    }
-
-    /// 该本地命令卡片当前被悬停的区域（`None` = 未悬停）。
-    pub fn shell_hovered_section(&self, message_id: &str) -> Option<CardSection> {
-        match &self.hover {
-            Some(CardTarget::Shell {
-                message_id: hovered,
-                section,
-            }) if hovered == message_id => Some(*section),
-            _ => None,
-        }
     }
 
     /// 该思考块是否被鼠标悬停（压暗 → 恢复品红的判据）。

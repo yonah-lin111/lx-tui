@@ -7,9 +7,9 @@
 //!   └─ … 18 more lines              ← 输出区自己的省略提示
 //! ```
 //!
-//! - **两个可独立折叠的区域**：命令参数与命令输出各自有展开状态和 hover 面，
-//!   点其中一块不会连带另一块；折叠态一律 dim，**悬停或展开升为终端默认前景**，
-//!   两块同一口径（没有整行灰底）；
+//! - **两个可独立折叠的区域**：命令参数与命令输出各自有展开状态，
+//!   点其中一块不会连带另一块；折叠态一律 dim，**展开升为终端默认前景**，
+//!   两块同一口径（没有整行灰底，也不随鼠标悬停变色）；
 //! - **长任务（进程仍存活）只给一行引导**：命令 + `  └─ open task panel · live output`，
 //!   消息列表不铺任何输出——完整实时输出在后台任务面板里。整卡点击打开面板并定位
 //!   该进程；
@@ -74,7 +74,7 @@ pub(super) fn blocks(call: &ToolCallView, width: u16, folds: Folds) -> Blocks {
                 // 长任务：只有一行「open task panel · live output」。
                 1
             } else {
-                finished_output(view, width, folds.output, false).len()
+                finished_output(view, width, folds.output).len()
             },
         },
         Some(ToolDetailView::Interaction(view)) => Blocks {
@@ -109,31 +109,20 @@ pub(super) fn output_expandable(call: &ToolCallView, width: u16) -> bool {
     if view.state.is_running() {
         return false;
     }
-    finished_output(view, width, true, false).len()
-        > finished_output(view, width, false, false).len()
+    finished_output(view, width, true).len() > finished_output(view, width, false).len()
 }
 
 /// 整张卡片的树体（未加连接符）：命令参数、输出（或运行中的引导行）。
 ///
 /// 与 [`draw`]、[`rows`]、[`blocks`] 共用同一份构造：行数口径只有一个来源。
-fn body_rows(
-    call: &ToolCallView,
-    width: u16,
-    folds: Folds,
-    hovered: Option<CardSection>,
-) -> Vec<BodyRow> {
+fn body_rows(call: &ToolCallView, width: u16, folds: Folds) -> Vec<BodyRow> {
     match call.detail.as_deref() {
         Some(ToolDetailView::Command(view)) => {
             let mut out = command_body(&view.command, width, folds.body);
             if view.state.is_running() {
-                out.push(guide_row(hovered == Some(CardSection::Output)));
+                out.push(guide_row());
             } else {
-                out.extend(finished_output(
-                    view,
-                    width,
-                    folds.output,
-                    hovered == Some(CardSection::Output),
-                ));
+                out.extend(finished_output(view, width, folds.output));
             }
             out
         }
@@ -163,12 +152,12 @@ fn command_body(command: &str, width: u16, expanded: bool) -> Vec<BodyRow> {
 
 /// 终态输出：折叠态首 [`OUTPUT_PREVIEW_HEAD`] + 尾 [`OUTPUT_PREVIEW_TAIL`] 行 + 省略行；
 /// 展开态铺开已保存输出（上限 [`DETAIL_MAX_ROWS`]）。
-fn finished_output(view: &CommandView, width: u16, expanded: bool, hovered: bool) -> Vec<BodyRow> {
+fn finished_output(view: &CommandView, width: u16, expanded: bool) -> Vec<BodyRow> {
     let rows = output_lines(&view.output_tail, output_width(width));
     if rows.is_empty() {
         return Vec::new();
     }
-    let style = output_style(expanded, hovered);
+    let style = output_style(expanded);
     let visible = if expanded {
         rows.len().min(DETAIL_MAX_ROWS)
     } else if rows.len() <= OUTPUT_PREVIEW_HEAD + OUTPUT_PREVIEW_TAIL {
@@ -191,12 +180,12 @@ fn finished_output(view: &CommandView, width: u16, expanded: bool, hovered: bool
             section: CardSection::Output,
         });
     }
-    // 折叠态末尾写省略行数：它是「还能展开」的唯一文案，跟随输出区的 hover 档。
+    // 折叠态末尾写省略行数：它是「还能展开」的唯一文案，与折叠输出同档。
     let shown = if expanded { rows.len() } else { visible };
     if !expanded && rows.len() > shown {
         out.push(BodyRow {
             text: text::agent::file_diff_more_lines(rows.len() - shown),
-            style: output_style(false, hovered),
+            style: output_style(false),
             sample: SAMPLE_CHARS,
             section: CardSection::Output,
         });
@@ -205,10 +194,10 @@ fn finished_output(view: &CommandView, width: u16, expanded: bool, hovered: bool
 }
 
 /// 运行中的引导行：长任务只留这一行，点卡片打开后台任务面板看完整实时输出。
-fn guide_row(hovered: bool) -> BodyRow {
+fn guide_row() -> BodyRow {
     BodyRow {
         text: text::agent::TASK_OPEN_GUIDE.to_string(),
-        style: output_style(false, hovered),
+        style: output_style(false),
         sample: SAMPLE_CHARS,
         section: CardSection::Output,
     }
@@ -266,7 +255,6 @@ pub(super) fn draw(
     loading_frame: usize,
     folds: Folds,
     animating: bool,
-    hovered: Option<CardSection>,
 ) {
     if rect.width == 0 {
         // 宽度 0：与 [`rows`] 一致地不占行（外层布局已跳过该块）。
@@ -327,7 +315,7 @@ pub(super) fn draw(
         rect,
         scroll,
         row_index,
-        &body_rows(call, rect.width, folds, hovered),
+        &body_rows(call, rect.width, folds),
     );
 }
 

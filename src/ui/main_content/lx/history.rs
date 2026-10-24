@@ -373,16 +373,12 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                         width,
                         rows_to_u16(region.rows),
                     ),
-                    // 参数区恒为浅黄、不提亮，只有输出区/引导行响应 hover。
+                    // 折叠内容几何（不再驱动悬停提亮）。
                     fold: Rect::new(
                         area.x,
                         block_y(region.offset),
                         width,
-                        if region.hoverable {
-                            rows_to_u16(region.rows)
-                        } else {
-                            0
-                        },
+                        rows_to_u16(region.rows),
                     ),
                     clickable: region.clickable,
                 });
@@ -436,8 +432,8 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
                                         rows_to_u16(block.len),
                                     ),
                                     clickable: true,
-                                    // 逐块自己的 hover 区：diff 卡只有提示行，其它卡片是
-                                    // 整段折叠内容。展开后没有折叠内容，不再提亮。
+                                    // 逐块折叠内容几何（不再驱动悬停提亮）；
+                                    // 展开后没有折叠内容。
                                     fold: if expanded[index] {
                                         Rect::new(area.x, block_y(block.start), width, 0)
                                     } else {
@@ -490,8 +486,8 @@ pub(crate) fn layout(area: Rect, lx: &Lx) -> HistoryLayout {
             };
             if let AssistantStepView::Tool { call, .. } = step {
                 let folds = folds_of(lx, &message.id, call);
-                // 命令卡片登记两条：参数区与输出区各自点击/悬停，点其中一块只切那一块。
-                // 文件工具仍是一条整卡点击面；展开前后行数不变的区域只响应 hover。
+                // 命令卡片登记两条：参数区与输出区各自点击，点其中一块只切那一块。
+                // 文件工具是一条整卡点击面。
                 for region in tool::card_regions(call, width, folds, step_rows) {
                     let card_rows = region
                         .card
@@ -711,7 +707,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                 lx.chat.loading_frame,
                 lx.chat.status.streaming || shell.is_running(),
                 shell_folds(lx, &message.id),
-                lx.chat.shell_hovered_section(&message.id),
             );
             row_index += 1; // 消息间空行。
             continue;
@@ -735,9 +730,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             row_index += 1;
                         }
                         has_previous = true;
-                        let hovered = group
-                            .iter()
-                            .position(|call| lx.chat.tool_is_hovered(&message.id, &call.call_id));
                         tool::group_draw_animated(
                             grid,
                             content,
@@ -747,7 +739,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                             lx.chat.loading_frame,
                             &expanded,
                             lx.chat.status.streaming,
-                            hovered,
                         );
                     }
                     step_index += group.len();
@@ -795,7 +786,6 @@ pub(super) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                         lx.chat.loading_frame,
                         folds_of(lx, &message.id, call),
                         lx.chat.status.streaming,
-                        lx.chat.tool_hovered_section(&message.id, &call.call_id),
                     );
                 }
                 step_index += 1;
