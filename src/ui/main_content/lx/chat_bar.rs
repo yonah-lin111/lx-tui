@@ -39,19 +39,29 @@ const SCAN_WINDOW: usize = 3;
 /// loading 文案与括号统计之间的空档（列）。
 const STATS_GAP: u16 = 1;
 
-/// 是否显示聊天栏：有临时提示、流中（loading）或上滚未跟随底部（回到底部控件）。
+/// 是否显示聊天栏：流中/压缩中（loading）或上滚未跟随底部（回到底部控件）。
 ///
 /// **后台任务面板打开时不显示**：这一行属于聊天历史区（loading / 回到底部都是
 /// 针对消息列表的），而面板已经把历史区换成输出容器——此时漂一个
 /// `↓ jump to bottom` 出来既是错位信息，点了也只会滚动看不见的历史。
 pub(super) fn visible(lx: &Lx) -> bool {
-    if lx.task.is_some() {
+    if lx.task.is_some() || !super::history::has_history(lx) {
         return false;
     }
-    if !super::history::has_history(lx) {
-        return false;
-    }
-    lx.chat.status.streaming || !lx.chat.follow_bottom
+    loading_visible(lx) || !lx.chat.follow_bottom
+}
+
+/// 是否需要画 loading 段：流中（含本地命令之外的模型轮次）或 `/compact` 正在执行。
+///
+/// 压缩期间聊天请求是空闲的（没有 assistant 流），但它同样是一个要等几秒以上的
+/// 后台动作；用户要求这一行必须给出可见反馈，因此与流中同档显示。
+fn loading_visible(lx: &Lx) -> bool {
+    lx.chat.status.streaming || lx.compact.is_running()
+}
+
+/// 是否需要画「回到底部」控件（上滚未跟随底部、有历史、面板未打开）。
+fn jump_visible(lx: &Lx) -> bool {
+    lx.task.is_none() && super::history::has_history(lx) && !lx.chat.follow_bottom
 }
 
 /// 由输入框矩形推导聊天栏矩形（贴其上沿）；上方空间不足时 None。
@@ -64,7 +74,7 @@ pub(super) fn rect(area: Rect, input: Rect) -> Option<Rect> {
 pub(crate) fn jump_bottom_rect(area: Rect, lx: &Lx) -> Option<Rect> {
     // 面板打开时聊天栏整体不画（见 [`visible`]），命中区也必须一起消失，
     // 否则会出现"看不见却能点"的穿透。
-    if lx.task.is_some() || lx.chat.follow_bottom || !super::history::has_history(lx) {
+    if !jump_visible(lx) {
         return None;
     }
     let input = super::input_rect(area, lx)?;
@@ -92,6 +102,8 @@ fn jump_rect(bar: Rect) -> Option<Rect> {
 /// 输入框上方那一行的展示文案（只读派生，不缓存）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ActivityLabel<'a> {
+    /// `/compact` 正在执行：摘要请求没有流式输出，优先级最高（此时聊天必然空闲）。
+    Compacting,
     /// 当前计划里第一个 `in_progress` 步骤的（已净化的）原文。
     Todo(&'a str),
     /// 当前 assistant 最后一步是开放思考块。
@@ -106,6 +118,7 @@ impl ActivityLabel<'_> {
     /// 实际显示的文字；英文短语来自 `ui::text::chat`，不在此硬编码。
     fn text(&self) -> &str {
         match self {
+            Self::Compacting => text::chat::COMPACTING_LABEL,
             Self::Todo(todo) => todo,
             Self::Thinking => text::chat::THINKING_LABEL,
             Self::RunningTools => text::chat::RUNNING_TOOLS_LABEL,
@@ -116,12 +129,15 @@ impl ActivityLabel<'_> {
 
 /// 只读派生当前要显示的任务/阶段文案。
 ///
-/// 优先级：会话计划里的 `in_progress` 步骤 > 当前 assistant 的 Pending/Running 工具 >
-/// 当前 assistant 最后一步的开放思考块 > `Working...`。当前 assistant 严格按
-/// [`RequestState::Streaming`] 的 `assistant_id` 定位——本地命令记录会追加在流式
-/// assistant 之后，不能用 `messages.last()`。`Committing`/`Finishing` 没有当前消息，
-/// 因此不会读出上一轮的思考或工具阶段。
+/// 优先级：`/compact` 执行中 > 会话计划里的 `in_progress` 步骤 > 当前 assistant 的
+/// Pending/Running 工具 > 当前 assistant 最后一步的开放思考块 > `Working...`。
+/// 当前 assistant 严格按 [`RequestState::Streaming`] 的 `assistant_id` 定位——本地命令
+/// 记录会追加在流式 assistant 之后，不能用 `messages.last()`。`Committing`/`Finishing`
+/// 没有当前消息，因此不会读出上一轮的思考或工具阶段。
 fn activity_label<'a>(lx: &'a Lx, plan_text: Option<&'a str>) -> ActivityLabel<'a> {
+    if lx.compact.is_running() {
+        return ActivityLabel::Compacting;
+    }
     if let Some(todo) = plan_text {
         return ActivityLabel::Todo(todo);
     }
@@ -195,7 +211,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
         return;
     }
     // 回到底部控件（仅未跟随底部时）。
-    if !lx.chat.follow_bottom
+    if jump_visible(lx)
         && let Some(button) = jump_rect(bar)
     {
         let jump_style = style::chat_jump_bottom(lx.chat.jump_bottom_hover);
@@ -219,7 +235,7 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
             );
         }
     }
-    if !lx.chat.status.streaming {
+    if !loading_visible(lx) {
         return;
     }
     // 计划原文先净化成单行副本（模型给的换行/Tab/控制字符不能进终端）。
@@ -228,13 +244,21 @@ pub(super) fn draw(grid: &mut Grid, bar: Option<Rect>, lx: &Lx) {
     // 统计静态 dim、不参与扫描：它回答「这轮跑了多久、大概用了多少 token」，
     // 与左侧的进行中动画是两种信息，不能一起闪。Esc 待命时同样保留（空间够时），
     // 极窄才让停止反馈优先。
-    let stats =
-        text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens());
+    //
+    // 压缩期间统计换成**本次压缩耗时**：此时聊天请求空闲，`turn_elapsed_ms` 与
+    // 输出 token 都是上一轮的陈旧值，必须整段不显示（`None`）。
+    let stats = if lx.compact.is_running() {
+        text::chat::stream_stats_label(lx.compact.elapsed_ms, None)
+    } else {
+        text::chat::stream_stats_label(lx.chat.turn_elapsed_ms, lx.chat.stream_output_tokens())
+    };
+    // 压缩不能被 Esc 打断（关掉当前轮次也一样）：待命提示只在真正的流中出现。
+    let stop_armed = !lx.compact.is_running() && lx.chat.stop_armed_at.is_some();
     draw_loading(
         grid,
         bar,
         lx.chat.loading_frame,
-        lx.chat.stop_armed_at.is_some(),
+        stop_armed,
         label.text(),
         stats.as_deref(),
     );

@@ -825,14 +825,35 @@ pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 推进流中窗格的 loading 转轮帧；返回是否需要重绘（仅在有流中的 lx 窗格时）。
+/// 推进流中窗格的 loading 转轮帧、刷新压缩耗时；返回是否需要重绘。
+///
+/// 两个来源共用同一个 100ms 心跳：
+/// - 流中（`chat.status.streaming`）或本地命令在跑：推进扫描帧与本轮耗时；
+/// - `/compact` 正在执行：摘要请求没有流式输出，但输入框上方那一行要显示
+///   「压缩中 + 已耗时」，因此同样需要按帧刷新 `elapsed_ms` 并推进扫描帧。
 pub fn advance_lx_loading(state: &mut AppState) -> bool {
     let mut changed = false;
     for pane in state.all_pane_ids() {
-        if let Some(target) = state.pane_mut_anywhere(pane)
-            && target.view == crate::app::state::PaneView::Lx
-            && (target.lx.chat.status.streaming || target.lx.chat.has_running_shell())
-        {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        if target.view != crate::app::state::PaneView::Lx {
+            continue;
+        }
+        let streaming = target.lx.chat.status.streaming || target.lx.chat.has_running_shell();
+        let compacting = target.lx.compact.is_running();
+        if !streaming && !compacting {
+            continue;
+        }
+        // 压缩耗时：摘要请求没有任何流式输出，这一行只有计时能证明它还在跑。
+        if compacting {
+            target.lx.compact.elapsed_ms = target
+                .lx
+                .compact
+                .started_at_ms
+                .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+        }
+        if streaming {
             // 待命超时：提示消失（重新回到普通 `Working`）。
             if target
                 .lx
@@ -842,15 +863,16 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
             {
                 target.lx.chat.stop_armed_at = None;
             }
-            target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
             // 本轮耗时：时钟只在这里读（渲染层纯只读），随同一帧刷新。
             target.lx.chat.turn_elapsed_ms = target
                 .lx
                 .chat
                 .turn_started_at_ms
                 .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
-            changed = true;
         }
+        // 扫描帧两种场景共用：压缩中的文案同样有扫描高亮。
+        target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
+        changed = true;
     }
     changed
 }

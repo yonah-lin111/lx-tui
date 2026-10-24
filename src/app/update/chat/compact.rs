@@ -58,10 +58,12 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
     let base_checkpoint_id = target.lx.compact.active().map(|item| item.id.clone());
     let expected_revision = target.lx.chat.revision;
     let operation_id = crate::db::new_external_id("compact-op");
+    // 计时起点与幂等键一起冻结：输入框上方那一行据此显示「压缩中 + 已耗时」。
+    let started_at_ms = crate::db::now_ms();
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.compact.running = Some(operation_id.clone());
+    target.lx.compact.start(operation_id.clone(), started_at_ms);
     state.effects.push(Effect::ExecuteCompact(CompactRequest {
         pane,
         workspace,
@@ -103,7 +105,7 @@ pub fn on_compact_finished(
         .map(CompactNoticeView::from_record)
         .collect();
     target.lx.compact.replace(views);
-    target.lx.compact.running = None;
+    target.lx.compact.finish();
     let active = target.lx.compact.active().cloned();
     // 新检查点写入后 revision 前进：旧选中目标/撤销面板全部作废。
     target.lx.clear_rewind();
@@ -139,7 +141,7 @@ pub fn on_compact_empty(state: &mut AppState, pane: PaneId, session_id: &str) ->
     if target.lx.chat.session_id.as_deref() != Some(session_id) {
         return false;
     }
-    target.lx.compact.running = None;
+    target.lx.compact.finish();
     show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_COMPACT_EMPTY);
     true
 }
@@ -149,7 +151,7 @@ pub fn on_compact_failed(state: &mut AppState, pane: PaneId, message: &str) -> b
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    target.lx.compact.running = None;
+    target.lx.compact.finish();
     show_lx_hint(
         state,
         pane,

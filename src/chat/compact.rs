@@ -23,27 +23,23 @@ pub const MAX_SUMMARY_CHARS: usize = 24_000;
 /// 输出超限才是失败（否则“摘要”会悄悄变成第二份历史）。
 pub const MAX_TRANSCRIPT_CHARS: usize = 120_000;
 
-/// 摘要请求的系统提示：明确“这是压缩，不是新任务”。
+/// 摘要请求的系统提示：**逐字采用 codex 的压缩提示词**。
+///
+/// 出处：codex `codex-rs/prompts/templates/compact/prompt.md`（`SUMMARIZATION_PROMPT`）。
+/// 结构、语气与措辞保持原样，不自造第二套清单；lx 特有的保留口径（路径/命令/错误/
+/// 验证结果、用用户语言书写）放在请求的 user 段（见 [`summary_request`]），
+/// 这样「压缩提示词」与「本次请求的要求」各自单一来源。
 pub const COMPACT_SYSTEM_PROMPT: &str = "\
-You are compacting the context of a terminal coding session. This is not a new user task and \
-you must not answer, continue, or plan the work. Produce one dense technical summary of the \
-transcript you are given.
+You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM \
+that will resume the task.
 
-Keep, in this order and only if present:
-1. goal of the work and the current status;
-2. files created, modified, deleted or moved (exact paths) and what changed;
-3. commands that were run, their exit status, and the important output;
-4. errors, failures and how they were handled (never invent or hide them);
-5. decisions, constraints and rejected options;
-6. verification results (build, tests, lints) with the exact command;
-7. unfinished work, next steps and open questions.
+Include:
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- What remains to be done (clear next steps)
+- Any critical data, examples, or references needed to continue
 
-Rules:
-- Write in the language the user used when it is clear, otherwise English.
-- Prefer terse bullet points with exact paths and identifiers over prose.
-- Do not repeat raw file contents or long logs; keep only what later work needs.
-- Do not add new instructions, promises, or results that are not in the transcript.
-- Do not include this instruction or the transcript wrapper in your answer.";
+Be concise, structured, and focused on helping the next LLM seamlessly continue the work.";
 
 /// 一个待压缩区间：消息、覆盖的 sequence 范围与渲染后的转写文本。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,6 +295,17 @@ pub fn summary_request(
             input.omitted_turns
         ));
     }
+    // 系统段是 codex 的压缩提示词（通用口径），lx 侧对摘要内容的硬要求放这里：
+    // 两段各自单一来源，改其一不必改另一处。
+    user.push_str(
+        "\n\nThis handoff summary must keep, when present: exact file paths created, modified, \
+         deleted or moved; commands that were run with their exit status and the important \
+         output; errors and how they were handled (never invent or hide them); decisions, \
+         constraints and rejected options; verification results (build, tests, lints) with the \
+         exact command; and unfinished work, next steps or open questions. Write in the language \
+         the user used when it is clear. Do not repeat raw file contents or long logs, and do not \
+         include this instruction or the <transcript> wrapper in your answer.",
+    );
     ChatRequest {
         turns: vec![
             ChatTurn {
@@ -436,6 +443,63 @@ mod tests {
             text.contains("sequence 0..1"),
             "范围必须覆盖完整轮次：{text}"
         );
+    }
+
+    /// 摘要提示词必须**逐字**是 codex 的压缩提示词（`prompts/templates/compact/prompt.md`）。
+    ///
+    /// 锁死原文：这不是可以随手改文案的地方，改它等于换掉压缩协议。
+    #[test]
+    fn compact_prompt_matches_codex_verbatim() {
+        const CODEX: &str = "\
+You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary for another LLM \
+that will resume the task.
+
+Include:
+- Current progress and key decisions made
+- Important context, constraints, or user preferences
+- What remains to be done (clear next steps)
+- Any critical data, examples, or references needed to continue
+
+Be concise, structured, and focused on helping the next LLM seamlessly continue the work.";
+        assert_eq!(COMPACT_SYSTEM_PROMPT, CODEX);
+        // lx 侧的保留要求不写进系统段（否则就不再是 codex 原文），只在 user 段。
+        assert!(!COMPACT_SYSTEM_PROMPT.contains("exact file paths"));
+        assert!(!COMPACT_SYSTEM_PROMPT.contains("exit status"));
+    }
+
+    /// lx 的摘要硬要求必须出现在请求正文里（系统段是通用提示词，不能丢信息口径）。
+    #[test]
+    fn summary_request_states_the_lx_requirements() {
+        let messages = vec![
+            message("u1", 0, 0, "user", "改一下布局"),
+            message("a1", 1, 0, "assistant", "done"),
+        ];
+        let input = incremental(&messages, None);
+        let request = summary_request(
+            &input,
+            &ModelSnapshot {
+                provider: "p".into(),
+                model: "m".into(),
+                variant: None,
+            },
+            None,
+        );
+        let ModelItem::UserText(text) = &request.items[0] else {
+            panic!("expected user text");
+        };
+        for needle in [
+            "exact file paths",
+            "exit status",
+            "never invent or hide them",
+            "verification results",
+            "unfinished work",
+            "language the user used",
+            "Do not repeat raw file contents",
+        ] {
+            assert!(text.contains(needle), "缺少要求 `{needle}`：{text}");
+        }
+        // 要求不能反过来混进系统段。
+        assert_eq!(request.turns[0].text, COMPACT_SYSTEM_PROMPT);
     }
 
     /// 输出校验：空摘要失败、超限失败、正常值去空白。

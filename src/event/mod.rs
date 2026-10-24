@@ -360,7 +360,8 @@ async fn run_loop(
         if update::tick(state, Instant::now()) {
             dirty = true;
         }
-        // lx loading 转轮：流中每 `LX_LOADING_FRAME_MS` 推进一帧（无流时不计时）。
+        // lx loading 转轮：流中/压缩中每 `LX_LOADING_FRAME_MS` 推进一帧
+        // （前者推扫描帧，后者还刷新本次压缩耗时；无流、无压缩时不计时）。
         let streaming = state.has_streaming_lx();
         if streaming {
             let at = spinner_at.get_or_insert_with(|| Instant::now() + LOADING_FRAME_INTERVAL);

@@ -13,6 +13,8 @@ pub const LOADING_LABEL: &str = "Working...";
 pub const THINKING_LABEL: &str = "Thinking...";
 /// 当前 assistant 有已进入调度/执行中的工具时的阶段文案。
 pub const RUNNING_TOOLS_LABEL: &str = "Running tools...";
+/// `/compact` 正在执行时的阶段文案（摘要请求没有流式输出，需要自带进度反馈）。
+pub const COMPACTING_LABEL: &str = "Compacting context...";
 
 /// 计划步骤原文 → 状态栏**单行**文案。
 ///

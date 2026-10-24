@@ -59,6 +59,13 @@ pub struct LxCompact {
     pub expanded: Vec<String>,
     /// 正在执行的压缩（幂等键）：Some 时拒绝新的 `/compact`。
     pub running: Option<String>,
+    /// 压缩开始时刻（UTC 毫秒；`running` 为 Some 时有效）。
+    ///
+    /// 摘要请求要跑几秒到几十秒，输入框上方那一行必须给出「正在压缩」的可见反馈：
+    /// 开始时刻随 `running` 一起写入，结束后一起清除。
+    pub started_at_ms: Option<i64>,
+    /// 本次压缩已耗时（毫秒），由事件循环每帧刷新（渲染层不取时钟）；空闲为 None。
+    pub elapsed_ms: Option<i64>,
 }
 
 impl LxCompact {
@@ -70,6 +77,20 @@ impl LxCompact {
     /// 是否正在压缩。
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// 开始一次压缩：记下幂等键与开始时刻（耗时由 tick 刷新，这里先清空）。
+    pub fn start(&mut self, operation_id: String, started_at_ms: i64) {
+        self.running = Some(operation_id);
+        self.started_at_ms = Some(started_at_ms);
+        self.elapsed_ms = None;
+    }
+
+    /// 结束一次压缩（成功/空增量/失败共用）：执行态与计时一起清除。
+    pub fn finish(&mut self) {
+        self.running = None;
+        self.started_at_ms = None;
+        self.elapsed_ms = None;
     }
 
     /// 该检查点是否展开（默认折叠）。
@@ -99,7 +120,7 @@ impl LxCompact {
     pub fn reset(&mut self) {
         self.checkpoints.clear();
         self.expanded.clear();
-        self.running = None;
+        self.finish();
     }
 
     /// 最新仍生效的检查点（上下文起点）。

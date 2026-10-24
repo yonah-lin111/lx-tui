@@ -212,6 +212,28 @@
       `event::tests::lx_toast`（8 条端到端：只写窗格槽、窄窗格内折行、整帧绘制位置、
       点击关闭、hover 冻结、多窗格互不覆盖、compact 失败/空增量落位）。
 
+## K. 调整：压缩提示词改用 codex 原文 + 压缩中显示 loading
+
+- [x] 摘要系统提示词改为**逐字采用 codex 的压缩提示词**
+      （`codex-rs/prompts/templates/compact/prompt.md`，`CONTEXT CHECKPOINT COMPACTION` 那段），
+      不再自造第二套清单；`compact_prompt_matches_codex_verbatim` 锁死原文。
+- [x] lx 侧的保留要求（精确路径、命令与退出码、错误不可隐瞒、验证命令、未完成事项、
+      跟随用户语言、不复述原始文件内容）移到摘要请求的 **user 段**，
+      `summary_request_states_the_lx_requirements` 锁定这些要点不得丢。
+- [x] 压缩期间输入框上方那一行显示 loading：`LxCompact.running` 期间固定显示
+      `Compacting context...`（扫描高亮），统计段换成**本次压缩耗时**（`started_at_ms` +
+      `elapsed_ms`，由 100ms 心跳刷新），不显示上一轮的耗时/token，也不显示 Esc 停止提示。
+- [x] `has_streaming_lx` 与 `advance_lx_loading` 纳入压缩状态：压缩期间同样按帧推进、
+      写脏并刷新计时；`start`/`finish` 成对管理幂等键与计时，会话重置一并清除。
+- [x] 测试：`ui::main_content::lx::chat_bar::tests::compacting`（6 条：可见性、扫描高亮、
+      本次耗时、无耗时、不出现停止提示、与回到底部共存、结束后消失）、
+      `main_content::lx::tests::compacting_shows_loading_bar_above_input`、
+      `advance_lx_loading_drives_the_compact_timer`、`start_and_finish_carry_the_timer`、
+      `restart_resets_the_timer`，以及 `/compact` 状态测试中的计时断言。
+- [x] 口径同步：`docs/standards/tui-design-requirements.md` 第 117 行 loading 条目。
+- [x] 验证：`cargo fmt`、`cargo clippy --all-targets -- -D warnings`、`cargo test`
+      = 3188 passed (lib) + 全部集成测试通过。
+
 ## 未验证风险
 
 1. **真实 provider 的摘要请求**：单测覆盖请求形状（无工具、系统提示覆写、失败分支），

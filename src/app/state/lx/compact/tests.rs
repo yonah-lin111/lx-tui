@@ -95,3 +95,30 @@ fn reset_clears_running_and_entries() {
     assert!(!compact.is_running());
     assert!(compact.is_empty());
 }
+
+/// 开始/结束压缩：幂等键、开始时刻与已耗时一起写入、一起清除。
+#[test]
+fn start_and_finish_carry_the_timer() {
+    let mut compact = LxCompact::default();
+    compact.start("op-1".into(), 1_700_000_000_000);
+    assert_eq!(compact.running.as_deref(), Some("op-1"));
+    assert_eq!(compact.started_at_ms, Some(1_700_000_000_000));
+    assert_eq!(compact.elapsed_ms, None, "刚开始还没有耗时");
+    compact.elapsed_ms = Some(3_000);
+    compact.finish();
+    assert!(!compact.is_running());
+    assert_eq!(compact.started_at_ms, None, "结束后不得残留开始时刻");
+    assert_eq!(compact.elapsed_ms, None, "结束后不得残留耗时");
+}
+
+/// 重新开始压缩会重置计时，不能沿用上一次的耗时。
+#[test]
+fn restart_resets_the_timer() {
+    let mut compact = LxCompact::default();
+    compact.start("op-1".into(), 1_000);
+    compact.elapsed_ms = Some(5_000);
+    compact.start("op-2".into(), 9_000);
+    assert_eq!(compact.running.as_deref(), Some("op-2"));
+    assert_eq!(compact.started_at_ms, Some(9_000));
+    assert_eq!(compact.elapsed_ms, None);
+}

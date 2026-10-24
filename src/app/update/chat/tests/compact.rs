@@ -74,6 +74,10 @@ fn compact_freezes_request_when_idle() {
             .is_running(),
         "执行期间必须标记为压缩中"
     );
+    // 计时起点与幂等键一起冻结：输入框上方那一行据此显示「压缩中 + 已耗时」。
+    let compact = &state.pane_anywhere(pane).expect("pane").lx.compact;
+    assert!(compact.started_at_ms.is_some(), "压缩开始必须记下时刻");
+    assert_eq!(compact.elapsed_ms, None, "刚开始还没有耗时");
 }
 
 /// 流式回复中拒绝，且不入队任何压缩请求。
@@ -159,6 +163,9 @@ fn success_backfills_checkpoints_and_model_label() {
         "必须展示实际摘要模型"
     );
     assert!(!target.lx.compact.is_running());
+    // 结束即清计时：loading 行上的「压缩中」必须随之消失，不留残影。
+    assert_eq!(target.lx.compact.started_at_ms, None);
+    assert_eq!(target.lx.compact.elapsed_ms, None);
     assert!(target.lx.chat.follow_bottom);
     // 默认折叠。
     assert!(!target.lx.compact.is_expanded("c1"));
@@ -184,6 +191,7 @@ fn failure_keeps_all_state() {
     assert_eq!(target.lx.compact.checkpoints.len(), 1);
     assert!(target.lx.compact.is_expanded("c1"), "失败不得改变折叠状态");
     assert!(!target.lx.compact.is_running());
+    assert_eq!(target.lx.compact.elapsed_ms, None, "失败也要清掉计时");
 }
 
 /// 迟到回执：窗格已切到别的会话时不覆盖。
