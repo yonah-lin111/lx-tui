@@ -23,6 +23,36 @@ pub struct StreamOutcome {
     pub stop: StopReason,
 }
 
+/// 等待「取消」信号；**发送端全部被丢弃不算取消**。
+///
+/// `watch::Receiver::changed()` 在发送端被丢弃时返回 `Err`。取消是「有人明确要求停止」，
+/// 不是「没人再持有取消柄」——把 `Err` 当取消会让一个根本没人取消的请求自己中止
+/// （`/compact` 摘要请求曾因此必然失败并报 `summary request failed: cancelled`）。
+/// 这里只在**收到 `true`** 时返回；发送端消失后永久等待（请求按自身超时/EOF 收尾）。
+async fn wait_cancel(cancel: &mut watch::Receiver<bool>) {
+    loop {
+        match cancel.changed().await {
+            Ok(()) => {
+                if *cancel.borrow_and_update() {
+                    return;
+                }
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    }
+}
+
+/// 不可取消请求的取消通道。
+///
+/// **两个返回值必须一起活到请求结束**：`watch::Sender` 一旦被丢弃，
+/// `watch::Receiver::changed()` 会立刻返回 `Err`，而 [`run_stream`] 的 `select!` 把它
+/// 当成用户取消——`/compact` 的摘要请求曾因此必然失败并报
+/// `summary request failed: cancelled`。这里把「需要同时持有」写进签名与命名，
+/// 避免调用方写成 `watch::channel(false).1`。
+pub fn uncancellable() -> (watch::Sender<bool>, watch::Receiver<bool>) {
+    watch::channel(false)
+}
+
 /// 连接超时。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// 首字节超时（TTFB）。
@@ -35,7 +65,8 @@ const RETRY_MAX_DELAY: Duration = Duration::from_secs(10);
 
 /// 执行一次流式请求。
 ///
-/// `cancel` 关闭时请求立即中止，已收 partial 保留在返回值中。
+/// `cancel` 收到 `true`（或以 `true` 创建）时请求立即中止，已收 partial 保留在返回值中。
+/// **发送端全部被丢弃不算取消**：那种情况按请求自身超时/EOF 收尾（见 [`wait_cancel`]）。
 /// 事件层按 request key 过滤过期结果；本函数不触碰应用状态。
 /// 每个新产出的增量批经 `on_delta` 即时回调（打字机效果：内容随网络分块实时到达），
 /// 同时仍完整累计在返回值里供终态/usage 使用。
@@ -89,7 +120,7 @@ pub async fn run_stream(
             .min(RETRY_MAX_DELAY);
         tokio::select! {
             _ = tokio::time::sleep(backoff) => {}
-            _ = cancel.changed() => break StopReason::Cancelled,
+            _ = wait_cancel(&mut cancel) => break StopReason::Cancelled,
         }
     };
     // 保证 deltas 恰好含一个终态（stream_once 中途路径可能尚未追加）。
@@ -225,7 +256,7 @@ async fn stream_once(
                 Ok(response) => response,
                 Err(error) => return StopReason::Failed { code: request_error_code(&error) },
             },
-        _ = cancel.changed() => return StopReason::Cancelled,
+        _ = wait_cancel(cancel) => return StopReason::Cancelled,
     };
     let status = response.status();
     if !status.is_success() {
@@ -265,7 +296,7 @@ async fn stream_once(
                 }
                 None => break,
             },
-            _ = cancel.changed() => {
+            _ = wait_cancel(cancel) => {
                 return finalize_partial(
                     decoder.as_mut(),
                     deltas,

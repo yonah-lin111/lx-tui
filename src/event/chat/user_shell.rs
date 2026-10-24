@@ -413,8 +413,10 @@ pub fn handle_process_event(
         if let Err(error) = persistence.update_user_shell(&db_workspace, origin_call_id, &record) {
             saved = false;
             tracing::warn!(target: "lx::shell", code = error.code(), "user shell snapshot write failed");
-            crate::app::update::show_toast(
+            // lx 页的反馈落在该窗格自己的槽里，不占用全局覆盖层。
+            crate::app::update::show_lx_toast(
                 state,
+                pane,
                 crate::app::toast::Toast::new(
                     crate::app::toast::ToastKind::Danger,
                     crate::ui::text::LX_CHAT_SAVE_FAILED,

@@ -623,13 +623,17 @@ async fn stopping_a_missing_runtime_reports_via_toast() {
         &mut state,
         &mut streams
     ));
-    let toast = state.toast.as_ref().expect("停止失败应弹出 toast");
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("停止失败应弹出 toast");
     assert!(
         toast.message.contains("Failed to stop"),
         "toast 文案：{:?}",
         toast.message
     );
     assert_eq!(toast.anchor, Some(pane), "toast 锚定在该窗格");
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
 }
 
 // ===== 后台任务面板的运行时长必须定时刷新 =====

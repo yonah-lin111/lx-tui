@@ -167,7 +167,7 @@
   ```bash
   cargo fmt
   cargo clippy --all-targets -- -D warnings
-  cargo test          # 3149 passed (lib) + 全部集成测试通过
+  cargo test          # 3174 passed (lib) + 全部集成测试通过
   ```
 - [ ] 检查 TUI 交互需用户手动 `cargo run` 验证：slash 帮助、compact、折叠/展开、rewind 顺序和窄屏布局。
   - **未验证（需用户）**：本次实现未连接真实 provider 跑过 `/compact` 端到端，也没有人工
@@ -176,6 +176,41 @@
   - 备份：`~/.lx-t-dev/db/lx.db.v12.bak`（既有）；本次在副本
     `/tmp/lx-migtest/lx.db` 上验证：`13 → 14`、`agent_message` 351 行、integrity ok。
 - [x] 更新本任务文档的完成状态、验证命令和未验证风险。
+
+## I. 修复：`/compact` 必然失败（`summary request failed: cancelled`）
+
+- [x] 定位根因：`event/chat/compact.rs::run_compact` 写 `let cancel = watch::channel(false).1`，
+      `watch::Sender` 当场被丢弃 → `run_stream` 内 `cancel.changed()` 立刻返回 `Err`，
+      `select!` 把它当成用户取消，摘要请求**在发出前**就被判为 `Cancelled`。
+- [x] 修复：`client::uncancellable()` 返回 `(Sender, Receiver)` 并要求调用方把 sender 一起活到请求结束；
+      新增 `wait_cancel` 只在**收到 `true`** 时算取消，sender 全丢不算（改按请求自身超时/EOF 收尾）。
+- [x] 回归测试（真实 mock SSE + 真实 DB）：
+  - `chat::client::tests::dropped_cancel_sender_is_not_a_cancellation`
+  - `chat::client::tests::explicit_cancel_signal_still_cancels`
+  - `event::chat::tests::compact::{compact_commits_a_checkpoint, failed_summary_writes_nothing,
+    empty_summary_is_rejected, summary_with_tool_calls_is_rejected,
+    repeated_commit_with_same_operation_is_idempotent}`
+  - 验证方式：把修复临时回退回原写法后，上述 compact 测试精确复现
+    `Failed { message: "summary request failed: cancelled" }`。
+
+## J. 修复：lx 页 toast 必须显示在 lx 内（不用全局 toast）
+
+- [x] `AGENTS.md` 增加硬约束（见「Agent 执行规则」中的 lx toast 条目）并同步
+      `docs/standards/tui-design-requirements.md` 第 117 行口径。
+- [x] `Lx.toast: Option<Toast>`：每个 lx 窗格各一条，状态/到期/hover 语义复用 `app::toast::Toast`。
+- [x] `ui/main_content/lx/toast.rs`：盒矩形**夹在窗格内容区内**（含左右 1 列留白）、长文案折行、
+      正文行数上限 4、三档边框/标题色与全局 toast 同源、`[✕]` 可点关闭、整块铺 `overlay_panel` 不透明。
+- [x] 写入口统一：`update::show_lx_toast` / `show_toast_at`（按锚点窗格视图分派）/
+      `show_lx_toast_for_session`（会话级效应投给所有绑定该会话的 lx 窗格）。
+- [x] 交互：`tick` 过期清理、`next_deadline` 纳入唤醒、hover 冻结、点 `[✕]`/点盒外关闭
+      （盒外点击不吞掉本次点击）、命中与绘制共用同一份几何。
+- [x] 改写的调用点：`show_lx_hint`、compact 成功/失败/空增量、rewind 提示、会话 guard 阻塞、
+      工具结果落库失败、后台任务停止反馈与 user shell 快照保存失败、lx 历史/输入框复制反馈、
+      `/resume` 复制会话 id（`Effect::CopyToClipboard` 的锚点在 lx 窗格时）、`LoadChatSession`/
+      `DeleteChatSession` 失败。
+- [x] 测试：`ui::main_content::lx::toast::tests`（9 条纯几何/绘制）、
+      `event::tests::lx_toast`（8 条端到端：只写窗格槽、窄窗格内折行、整帧绘制位置、
+      点击关闭、hover 冻结、多窗格互不覆盖、compact 失败/空增量落位）。
 
 ## 未验证风险
 

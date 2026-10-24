@@ -363,12 +363,14 @@ pub fn guard_begin_turns(
             )
         });
         update::on_turn_failed(state, pane, generation);
-        update::show_toast(
+        // lx 页的反馈落在该窗格自己的 toast 槽（不占用全局覆盖层）。
+        update::show_lx_toast(
             state,
+            pane,
             Toast::new(
                 ToastKind::Danger,
                 reason.unwrap_or_default(),
-                None,
+                Some(pane),
                 Instant::now(),
             ),
         );
@@ -655,10 +657,11 @@ fn stop_session_process(
         // 会话运行实例已经不在（刚切会话/刚退出）：页面上还挂着这一行，
         // 不能静默失败，否则用户会以为按了没生效。
         //
-        // 用 toast 而不是输入框上方的 hint：这一页已经把输入框换成了控制面板，
-        // hint 的锚点是输入框，面板打开时会飘在错误的位置。
-        update::show_toast(
+        // 用 toast 而不是 hint 行：这一页已经把输入框换成了控制面板。
+        // 反馈落在该窗格自己的 toast 槽里（lx 页内），不占用全局覆盖层。
+        update::show_lx_toast(
             state,
+            pane,
             crate::app::toast::Toast::new(
                 crate::app::toast::ToastKind::Danger,
                 crate::ui::text::LX_TASK_STOP_FAILED,
@@ -685,8 +688,9 @@ fn stop_session_process(
     //
     // 这里只确认"已发出停止请求"；真正的结果由进程终态事件驱动列表刷新。
     // 用 Info 而不是 Error：这是用户主动要求的动作，不是出错。
-    update::show_toast(
+    update::show_lx_toast(
         state,
+        pane,
         crate::app::toast::Toast::new(
             crate::app::toast::ToastKind::Default,
             crate::ui::text::LX_TASK_STOPPED,

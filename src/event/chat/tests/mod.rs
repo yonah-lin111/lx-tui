@@ -684,6 +684,7 @@ fn view_summary_maps_every_field() {
 }
 
 mod ack;
+mod compact;
 mod flow;
 mod guard;
 mod limits;

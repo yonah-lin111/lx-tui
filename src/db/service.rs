@@ -736,8 +736,10 @@ impl Persistence {
                     tracing::warn!("clipboard write failed");
                     (ToastKind::Danger, text::TOAST_COPY_FAILED)
                 };
-                update::show_toast(
+                // 锚在 lx 窗格时落该窗格自己的槽（不占用全局覆盖层）。
+                update::show_toast_at(
                     state,
+                    anchor,
                     Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
                 );
                 true
@@ -758,12 +760,14 @@ impl Persistence {
                         self.with_db(|db| db.unfinished_operation(session))
                 {
                     update::on_turn_failed(state, pane, generation);
-                    update::show_toast(
+                    // 反馈落在发起本轮的那个 lx 窗格自己的槽里。
+                    update::show_lx_toast(
                         state,
+                        pane,
                         Toast::new(
                             ToastKind::Danger,
                             format!("{} ({})", text::LX_REWIND_RECOVERY_BLOCKED, operation.phase),
-                            None,
+                            Some(pane),
                             Instant::now(),
                         ),
                     );
@@ -857,12 +861,14 @@ impl Persistence {
                 let Some((Some(messages), model, processes, notices, checkpoints, revision)) =
                     loaded
                 else {
-                    update::show_toast(
+                    // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
+                    update::show_lx_toast(
                         state,
+                        pane,
                         Toast::new(
                             ToastKind::Danger,
                             text::LX_CHAT_SESSION_BUSY,
-                            None,
+                            Some(pane),
                             Instant::now(),
                         ),
                     );
@@ -919,28 +925,12 @@ impl Persistence {
                 let guard = match crate::platform::try_lock_session(&session_id) {
                     Ok(Some(guard)) => guard,
                     Ok(None) => {
-                        update::show_toast(
-                            state,
-                            Toast::new(
-                                ToastKind::Danger,
-                                text::LX_CHAT_SESSION_BUSY,
-                                None,
-                                Instant::now(),
-                            ),
-                        );
+                        session_busy_feedback(state, &session_id);
                         return true;
                     }
                     Err(error) => {
                         tracing::warn!(%error, "session guard unavailable");
-                        update::show_toast(
-                            state,
-                            Toast::new(
-                                ToastKind::Danger,
-                                text::LX_CHAT_SESSION_BUSY,
-                                None,
-                                Instant::now(),
-                            ),
-                        );
+                        session_busy_feedback(state, &session_id);
                         return true;
                     }
                 };
@@ -1206,6 +1196,22 @@ fn prompt_key_for(state: &AppState, workspace: &Path) -> PathBuf {
 /// 规范化路径；失败时保留原路径（路径可能刚被删除）。
 fn canonical_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// 会话被占用/不可删除的反馈：优先落到绑定该会话的 lx 窗格自己的 toast 槽。
+///
+/// 会话级效应没有单一窗格可比锚定——同一会话可能被多个窗格共享，也可能一个都
+/// 没绑定（此时只能退化为全局 toast，否则用户看不到任何反馈）。
+fn session_busy_feedback(state: &mut AppState, session_id: &str) {
+    let toast = Toast::new(
+        ToastKind::Danger,
+        text::LX_CHAT_SESSION_BUSY,
+        None,
+        Instant::now(),
+    );
+    if !update::show_lx_toast_for_session(state, session_id, toast.clone()) {
+        update::show_toast(state, toast);
+    }
 }
 
 #[cfg(test)]

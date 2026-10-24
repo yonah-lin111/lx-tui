@@ -130,7 +130,12 @@ async fn run_compact(
     chat_request: crate::chat::events::ChatRequest,
 ) -> CompactOutcome {
     // 摘要请求必须完整成功：任何增量丢弃、工具调用或非 Complete 都是失败。
-    let cancel = tokio::sync::watch::channel(false).1;
+    //
+    // 这里没有 Esc 取消入口（`/compact` 只在空闲时发起、整段摘要是一锤子请求），
+    // 因此用「不可取消」通道。**必须同时持有 sender**：只留 receiver 会让
+    // `watch::Receiver::changed()` 立刻返回，请求在发出前就被当成用户取消
+    // （历史 bug：`summary request failed: cancelled`）。
+    let (_cancel_sender, cancel) = crate::chat::client::uncancellable();
     let outcome = crate::chat::client::run_stream(
         &request.transport,
         &request.base_url,

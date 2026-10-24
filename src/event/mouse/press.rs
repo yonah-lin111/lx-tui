@@ -19,12 +19,13 @@ use super::super::overlay::{handle_overlay_click, open_right_click_menu};
 use super::super::paste;
 use super::super::session::{Geometry, ensure_workspace_visible, reveal_active_tab, write_to_pane};
 use super::hit::{
-    apply_block_button, apply_template_button, block_button_at, handle_agent_scrollbar_press,
-    handle_lx_history_scrollbar_press, handle_lx_input_scrollbar_press,
-    handle_prompt_scrollbar_press, handle_terminal_scrollbar_press,
-    handle_workspace_scrollbar_press, mention_item_at, pane_at, pane_boundary_draggable,
-    pane_content_inner, pane_toggle_button_at, panel_item_at, prompt_border_at,
-    prompt_boundary_hit, prompt_header_at, slash_item_at, template_button_at,
+    apply_block_button, apply_template_button, block_button_at, dismiss_lx_toast_outside,
+    handle_agent_scrollbar_press, handle_lx_history_scrollbar_press,
+    handle_lx_input_scrollbar_press, handle_prompt_scrollbar_press,
+    handle_terminal_scrollbar_press, handle_workspace_scrollbar_press, lx_toast_at,
+    mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner, pane_toggle_button_at,
+    panel_item_at, prompt_border_at, prompt_boundary_hit, prompt_header_at, slash_item_at,
+    template_button_at,
 };
 use super::hover::reset_pointer_shape;
 use super::wheel::forward_pane_mouse_event;
@@ -114,6 +115,19 @@ pub(crate) fn handle_mouse_down_left(
         }
         // 点击 toast 之外：关闭 toast 后继续处理本次点击。
         update::dismiss_toast(state);
+        *dirty = true;
+    }
+    // lx 页自己的 toast 盒：与全局 toast 同样的点击语义（点内部不关、点 [✕] 关、
+    // 点外部关闭后继续处理本次点击），但它只画在窗格内容区里，命中区也只在窗格内。
+    if let Some((pane, toast)) = lx_toast_at(rects, state, mouse.column, mouse.row) {
+        if ui::main_content::lx::toast::close_button_at(toast, mouse.column, mouse.row) {
+            update::dismiss_lx_toast(state, pane);
+            *dirty = true;
+            return;
+        }
+        return;
+    }
+    if dismiss_lx_toast_outside(rects, state, mouse.column, mouse.row) {
         *dirty = true;
     }
     if ui::exit_button_at(view, mouse.column, mouse.row) {

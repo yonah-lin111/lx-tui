@@ -661,14 +661,13 @@ pub(super) fn next_generation(state: &AppState, pane: PaneId) -> u64 {
         .max(1)
 }
 
-/// 在**指定窗格**的输入框上方显示一条临时提示（错误红 / 默认黄）。
+/// 在**指定窗格**内展示一条 lx 反馈（错误红 / 警告黄）。
 ///
-/// lx 页的所有反馈都走这里而不是 toast：位置贴着用户刚敲字的输入框，2 秒后自动消失。
-/// 展示一条 lx 反馈 toast，锚定在触发动作的窗格（`Some(pane)`）。
+/// lx 页的所有反馈都走这里，落在**该窗格自己的 toast 槽**里，2 秒后自动消失。
 ///
-/// 用户要求「移除 lx 输入框上方的通知显示，全部改为 main content 的 toast」：
-/// 提示原先贴在输入框上沿，会和 loading / 回到底部抢同一行；toast 覆盖在窗格内，
-/// 只挡一小块、自动消失，且能携带三档语义色（default / warning / danger）。
+/// 用户要求「lx 页的 toast 都要在 lx 中显示，不要用全局的」：全局 toast 只有一个槽，
+/// 锚点容器放不下时还会降级到屏幕顶部居中、横跨整个窗口；lx 的反馈只属于某个 lx 窗格，
+/// 越界就失去指代（也会被别的页的提示互相覆盖）。
 pub(crate) fn show_lx_hint(
     state: &mut AppState,
     pane: PaneId,
@@ -680,7 +679,7 @@ pub(crate) fn show_lx_hint(
         InputHintLevel::Warning => ToastKind::Warning,
     };
     let toast = Toast::new(kind, message, Some(pane), Instant::now());
-    crate::app::update::show_toast(state, toast);
+    crate::app::update::show_lx_toast(state, pane, toast);
 }
 
 /// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。

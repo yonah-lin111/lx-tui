@@ -8,6 +8,8 @@ use crate::layout;
 
 use super::*;
 
+mod lx_toast;
+
 fn geometry(state: &AppState, config: &Config, screen: Rect) -> Geometry {
     let view = ui::layout::compute(
         screen,

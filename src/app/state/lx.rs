@@ -85,6 +85,13 @@ pub struct Lx {
     pub rewind: LxRewind,
     /// 上下文压缩：检查点、展开状态与执行中标记（只读视图，IO 在事件层）。
     pub compact: LxCompact,
+    /// 本页自己的 toast 槽；`Some` 时覆盖绘制在**窗格内容区内部**。
+    ///
+    /// lx 页的反馈一律落在本页里，不占用全局 `AppState.toast`：全局 toast 锚点
+    /// 容器放不下时会降级到屏幕顶部居中，横跨整个窗口（用户报的真实观感问题）。
+    /// 这里存 2 秒到期的普通 [`Toast`]，计时/悬停语义与全局完全一致，
+    /// 区别只在锚定与绘制范围（见 `ui::main_content::lx::toast`）。
+    pub toast: Option<crate::app::toast::Toast>,
     /// 后台任务页面；`Some` 表示当前窗格正停在该页（整页替换 lx 页的绘制，
     /// 但 `Lx` 其余字段——会话、消息、草稿、滚动——全部原样保留，退出页面即复原）。
     pub task: Option<TaskPage>,
@@ -152,6 +159,7 @@ impl Lx {
             chat: LxChat::new(),
             rewind: LxRewind::default(),
             compact: LxCompact::default(),
+            toast: None,
             task: None,
             background_tasks: 0,
             undo: Vec::new(),

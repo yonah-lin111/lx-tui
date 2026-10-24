@@ -112,7 +112,7 @@ pub fn close_button_at(area: Rect, column: u16, row: u16) -> bool {
 }
 
 /// 边框语义色：默认强调色、警告黄、危险红。
-fn border_style(kind: ToastKind) -> Style {
+pub(crate) fn border_style(kind: ToastKind) -> Style {
     match kind {
         ToastKind::Default => style::accent(),
         ToastKind::Warning => Style::default().fg(Color::Yellow),
@@ -122,7 +122,7 @@ fn border_style(kind: ToastKind) -> Style {
 
 /// 标题语义色：与边框同色（用户要求「warning/danger 的**边框和 title** 分别改黄/红」），
 /// 默认档仍用边框标题的青色灰字。
-fn title_style(kind: ToastKind) -> Style {
+pub(crate) fn title_style(kind: ToastKind) -> Style {
     match kind {
         ToastKind::Default => style::border_title(),
         ToastKind::Warning => Style::default().fg(Color::Yellow),

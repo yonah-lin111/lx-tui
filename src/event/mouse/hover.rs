@@ -18,8 +18,8 @@ use crate::ui;
 use super::super::paste;
 use super::super::session::Geometry;
 use super::hit::{
-    lx_slash_item_at, mention_item_at, pane_at, pane_boundary_draggable, pane_content_inner,
-    panel_item_at, prompt_boundary_hit, slash_item_at,
+    lx_slash_item_at, lx_toast_at, mention_item_at, pane_at, pane_boundary_draggable,
+    pane_content_inner, panel_item_at, prompt_boundary_hit, slash_item_at,
 };
 use super::wheel::forward_pane_mouse_event;
 
@@ -182,6 +182,18 @@ pub(crate) fn handle_mouse_moved(
     if update::set_toast_hover(state, hovering_toast) {
         *dirty = true;
     }
+    // lx 窗格自己的 toast：悬停同样冻结消失计时（与全局 toast 同一语义）。
+    // 命中的是「指针下那个窗格的盒」，不放宽到其它窗格。
+    let hovering_lx_toast = lx_toast_at(rects, state, mouse.column, mouse.row);
+    let lx_toast_panes = state.all_pane_ids();
+    for pane in lx_toast_panes {
+        let hovered = hovering_lx_toast.is_some_and(|(id, _)| id == pane);
+        if update::set_lx_toast_hover(state, pane, hovered) {
+            *dirty = true;
+        }
+    }
+    // 指针停在任意一条 lx 提示上时，都不触发它下面那些控件的悬停反馈。
+    let hovering_toast = hovering_toast || hovering_lx_toast.is_some();
     // lx 输入框上方「回到底部」按钮悬停高亮：不在按钮上即清空（含离开窗格）。
     let jump_hover = if hovering_toast {
         None
