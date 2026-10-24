@@ -1295,3 +1295,39 @@ fn reverted_checkpoint_is_marked() {
         .join("\n");
     assert!(text.contains("reverted"), "{text}");
 }
+
+/// 窄屏：compact 条目按内容宽度换行，布局与渲染行数仍必须一致。
+#[test]
+fn compact_entry_wraps_on_narrow_width() {
+    let mut lx = Lx::new();
+    let mut notice = checkpoint(4, true);
+    notice.summary =
+        "a long summary line that will certainly need to wrap on narrow screens".into();
+    lx.compact.replace(vec![notice]);
+    lx.compact.toggle("compact-4");
+    for width in [16u16, 24, 40, 80] {
+        let area = Rect::new(0, 0, width, 30);
+        let layout = layout(area, &lx);
+        let mut grid = Grid::new(area);
+        let drawn = render(&mut grid, area, &lx, 0);
+        assert_eq!(
+            drawn, layout.total_rows,
+            "宽度 {width} 下行数必须一致（换行不得导致滚动漂移）"
+        );
+        assert!(layout.total_rows > 3, "宽度 {width} 下展开条目应有内容");
+    }
+}
+
+/// 折叠/展开切换后布局行数随之变化，且锚点由 `pin_lx_viewport` 之外的层处理。
+#[test]
+fn compact_fold_toggle_changes_row_count_consistently() {
+    let mut lx = Lx::new();
+    lx.compact.replace(vec![checkpoint(4, true)]);
+    let area = Rect::new(0, 0, 50, 20);
+    let folded = layout(area, &lx).total_rows;
+    lx.compact.toggle("compact-4");
+    let expanded = layout(area, &lx).total_rows;
+    assert!(expanded > folded, "展开必须增加行数");
+    let mut grid = Grid::new(area);
+    assert_eq!(render(&mut grid, area, &lx, 0), expanded);
+}

@@ -515,6 +515,7 @@ pub fn on_session_reloaded(
     target.lx.chat.thinking_toggled.clear();
     target.lx.chat.detail_expanded.clear();
     target.lx.chat.selected_tool = None;
+    target.lx.chat.selected_compact = None;
     target.lx.chat.hover = None;
     target.lx.chat.plan = None;
     target.lx.chat.follow_bottom = true;

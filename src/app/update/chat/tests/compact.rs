@@ -636,3 +636,82 @@ fn assistant_message_with_sequence(id: &str, sequence: i64) -> crate::app::state
         duration_ms: None,
     }
 }
+
+/// `^o` 在没有可展开工具卡片时切换最近的 compact 检查点。
+#[test]
+fn ctrl_o_toggles_the_latest_checkpoint_without_tool_cards() {
+    let (mut state, pane) = ready_compact_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .compact
+        .replace(vec![
+            crate::app::state::CompactNoticeView::from_record(&checkpoint("c1", 2, COMPACT_ACTIVE)),
+            crate::app::state::CompactNoticeView::from_record(&checkpoint("c2", 6, COMPACT_ACTIVE)),
+        ]);
+    apply_lx_input(&mut state, LxInput::ToggleToolDetail);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(
+        target.lx.compact.is_expanded("c2"),
+        "`^o` 应展开最近（最后一条）检查点"
+    );
+    assert!(!target.lx.compact.is_expanded("c1"));
+    apply_lx_input(&mut state, LxInput::ToggleToolDetail);
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .compact
+            .is_expanded("c2"),
+        "再按一次折叠"
+    );
+}
+
+/// Alt+↑/↓ 在检查点之间切换；不改变展开状态。
+#[test]
+fn alt_arrows_select_between_checkpoints() {
+    let (mut state, pane) = ready_compact_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .compact
+        .replace(vec![
+            crate::app::state::CompactNoticeView::from_record(&checkpoint("c1", 2, COMPACT_ACTIVE)),
+            crate::app::state::CompactNoticeView::from_record(&checkpoint("c2", 6, COMPACT_ACTIVE)),
+        ]);
+    apply_lx_input(&mut state, LxInput::SelectPrevTool);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .selected_compact
+            .as_deref(),
+        Some("c2"),
+        "向上从头开始选中最后一条"
+    );
+    apply_lx_input(&mut state, LxInput::SelectPrevTool);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .selected_compact
+            .as_deref(),
+        Some("c1")
+    );
+    assert!(
+        !state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .compact
+            .is_expanded("c1"),
+        "选择不等于展开"
+    );
+}

@@ -401,6 +401,8 @@ pub struct LxChat {
     pub detail_expanded: Vec<(String, String, CardSection, bool)>,
     /// 键盘选中的可展开工具卡片：(message_id, call_id)；None 表示未选中。
     pub selected_tool: Option<(String, String)>,
+    /// 键盘选中的 compact 检查点（没有工具卡片时 Alt+↑/↓ 的切换目标）。
+    pub selected_compact: Option<String>,
     /// 当前计划快照（最近一次**成功提交**的 update_plan）；失败/中断不覆盖。
     pub plan: Option<PlanSnapshotView>,
     /// 已提交、尚未收到 spawn 回执的本地命令（按提交顺序）。
@@ -442,6 +444,7 @@ impl LxChat {
             suppressed_prompt_header: None,
             detail_expanded: Vec::new(),
             selected_tool: None,
+            selected_compact: None,
             plan: None,
             pending_shells: Vec::new(),
             queue: Vec::new(),
@@ -468,6 +471,7 @@ impl LxChat {
         self.detail_expanded.clear();
         self.hover = None;
         self.selected_tool = None;
+        self.selected_compact = None;
         self.plan = None;
         // 会话解绑：未执行的命令与排队项不得漂移到新会话执行。
         self.pending_shells.clear();

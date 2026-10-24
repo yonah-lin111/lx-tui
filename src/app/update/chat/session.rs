@@ -410,6 +410,7 @@ pub fn on_session_loaded_full(
     // 展开状态与键盘选择按稳定 ID 定位；切会话后默认折叠、不选中任何卡片。
     target.lx.chat.detail_expanded.clear();
     target.lx.chat.selected_tool = None;
+    target.lx.chat.selected_compact = None;
     target.lx.chat.plan = None;
     // 计划：从本会话最后一条**成功**的 update_plan 结果恢复（失败/中断不覆盖）。
     // 先克隆视图，避免在可变借用期间再借 `state`。
