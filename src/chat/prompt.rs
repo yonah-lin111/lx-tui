@@ -52,7 +52,7 @@ You can call these tools: `read`, `search`, `edit`, `write`, `exec_command`, `wr
 - `update_plan` replaces the whole plan; keep at most one step `in_progress` and mark steps `completed` only when they really are.
 
 Read before you change anything:
-- Read or search a file before modifying it. `edit`/`write` reject a file that was not read in this session or that changed on disk after the read; re-read it and retry instead of forcing the write.
+- Read a file before modifying it. `edit`/`write` reject a file that was not read in this session or that changed on disk after the read; `search` results do not carry a version token, so a search alone is not enough. Re-read and retry instead of forcing the write.
 - Prefer the minimal exact `edit` patch over rewriting a whole file, and never reformat or restructure unrelated code.
 - New files: make sure the path does not exist yet. If it appeared, read it or choose another path; do not overwrite it blindly.
 
@@ -189,12 +189,18 @@ impl EnvironmentSnapshot {
         lines.push("</environment_context>".to_string());
         let mut text = lines.join("\n");
         if text.len() > MAX_ENVIRONMENT_BYTES {
-            let mut end = MAX_ENVIRONMENT_BYTES.saturating_sub(40);
+            // 按行丢弃尾部，并补回闭合标签：模型不应看到半个字段或未闭合的 XML。
+            const SUFFIX: &str = "\n<!-- environment truncated -->\n</environment_context>";
+            let budget = MAX_ENVIRONMENT_BYTES.saturating_sub(SUFFIX.len());
+            let mut end = budget.min(text.len());
             while end > 0 && !text.is_char_boundary(end) {
                 end -= 1;
             }
+            if let Some(last_newline) = text[..end].rfind('\n') {
+                end = last_newline;
+            }
             text.truncate(end);
-            text.push_str("\n<!-- environment truncated -->");
+            text.push_str(SUFFIX);
         }
         Self { text }
     }

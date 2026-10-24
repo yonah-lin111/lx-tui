@@ -520,6 +520,9 @@ fn commit_one(
                         }))
                     }
                     Some(destination) => {
+                        // 锁内复核：目标在解析之后被谁创建了也不能覆盖（与 Add 同口径）。
+                        // 解析阶段只查过一次 `exists()`，那是锁外判断。
+                        read_version::require_missing(destination)?;
                         // 纯移动不重写源文件；只有内容变化时才写。
                         let mut changes: Vec<PathMutation> = Vec::new();
                         if !same_content {

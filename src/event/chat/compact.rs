@@ -103,6 +103,7 @@ fn execute_compact(
             pane: request.pane,
             session_id: request.session_id.clone(),
             workspace: request.workspace.clone(),
+            operation_id: request.operation_id.clone(),
             outcome: CompactOutcome::Empty,
         });
         return;
@@ -117,6 +118,7 @@ fn execute_compact(
             pane: request.pane,
             session_id: request.session_id.clone(),
             workspace: request.workspace.clone(),
+            operation_id: request.operation_id.clone(),
             outcome,
         });
     });
@@ -221,6 +223,8 @@ fn execute_revert(
         let _ = sender.send(AppEvent::CompactReverted {
             pane: request.pane,
             session_id: request.session_id.clone(),
+            workspace: request.workspace.clone(),
+            operation_id: request.operation_id.clone(),
             outcome: Err("compact rewind requires persistent storage".to_string()),
         });
         return;
@@ -233,6 +237,7 @@ fn execute_revert(
         expected_revision: i64::try_from(request.expected_revision).unwrap_or(-1),
     };
     let workspace = request.workspace.clone();
+    let operation_id = request.operation_id.clone();
     let pane = request.pane;
     let session_id = request.session_id.clone();
     tokio::task::spawn_blocking(move || {
@@ -246,6 +251,8 @@ fn execute_revert(
         let _ = sender.send(AppEvent::CompactReverted {
             pane,
             session_id,
+            workspace,
+            operation_id,
             outcome,
         });
     });
@@ -257,6 +264,7 @@ fn reply_failed(sender: &mpsc::UnboundedSender<AppEvent>, request: &CompactReque
         pane: request.pane,
         session_id: request.session_id.clone(),
         workspace: request.workspace.clone(),
+        operation_id: request.operation_id.clone(),
         outcome: CompactOutcome::Failed {
             message: message.to_string(),
         },
@@ -264,40 +272,62 @@ fn reply_failed(sender: &mpsc::UnboundedSender<AppEvent>, request: &CompactReque
 }
 
 /// 压缩完成回执：按结果回填或提示。
+///
+/// 迟到回执（`operation_id` 对不上当前执行，或窗格已切走）一律不落地。
 pub fn handle_compact_finished(
     state: &mut AppState,
     persistence: &Persistence,
     pane: PaneId,
     session_id: &str,
     workspace: &std::path::Path,
+    operation_id: &str,
     outcome: CompactOutcome,
 ) -> bool {
+    let running = state.pane_anywhere(pane).is_some_and(|target| {
+        target.lx.chat.session_id.as_deref() == Some(session_id)
+            && target.lx.compact.running.as_deref() == Some(operation_id)
+    });
     match outcome {
         CompactOutcome::Failed { message } => {
+            if !running {
+                return false;
+            }
             crate::app::update::on_compact_failed(state, pane, &message)
         }
-        CompactOutcome::Empty => crate::app::update::on_compact_empty(state, pane, session_id),
-        CompactOutcome::Committed => {
-            let checkpoints = persistence
-                .database()
-                .and_then(|db| db.compact_checkpoints(workspace, session_id).ok())
-                .unwrap_or_default();
-            let revision = persistence
-                .database()
-                .and_then(|db| db.session_revision(session_id).ok())
-                .unwrap_or(0);
-            let changed = crate::app::update::on_compact_finished(
-                state,
-                pane,
-                session_id,
-                checkpoints.clone(),
-            );
-            // revision 前进：同步窗格冻结值，避免下一次撤销用旧值。
-            if let Some(target) = state.pane_mut_anywhere(pane)
-                && target.lx.chat.session_id.as_deref() == Some(session_id)
-            {
-                target.lx.chat.revision = u64::try_from(revision).unwrap_or(0);
+        CompactOutcome::Empty => {
+            if !running {
+                return false;
             }
+            crate::app::update::on_compact_empty(state, pane, session_id)
+        }
+        CompactOutcome::Committed => {
+            // 提交已成功；回填读失败时保留现有视图与 revision，绝不用空列表/0 覆盖。
+            let readback = persistence.database().and_then(|db| {
+                let checkpoints = db.compact_checkpoints(workspace, session_id).ok()?;
+                let revision = db.session_revision(session_id).ok()?;
+                Some((checkpoints, revision))
+            });
+            let Some((checkpoints, revision)) = readback else {
+                return running
+                    && crate::app::update::on_compact_finished(state, pane, session_id, None);
+            };
+            let changed = if running {
+                crate::app::update::on_compact_finished(
+                    state,
+                    pane,
+                    session_id,
+                    Some(checkpoints.clone()),
+                )
+            } else if state
+                .pane_anywhere(pane)
+                .is_some_and(|target| target.lx.chat.session_id.as_deref() == Some(session_id))
+            {
+                // 窗格已切回同一会话但没在跑这一次压缩：只刷新列表与 revision。
+                crate::app::update::set_compact_checkpoints(state, pane, &checkpoints)
+            } else {
+                false
+            };
+            sync_revision(state, pane, session_id, revision);
             // 其他绑定同一会话的窗格同样需要刷新（多窗格共享会话）。
             let panes = state.all_pane_ids();
             for other in panes {
@@ -307,9 +337,7 @@ pub fn handle_compact_finished(
                     })
                 {
                     crate::app::update::set_compact_checkpoints(state, other, &checkpoints);
-                    if let Some(target) = state.pane_mut_anywhere(other) {
-                        target.lx.chat.revision = u64::try_from(revision).unwrap_or(0);
-                    }
+                    sync_revision(state, other, session_id, revision);
                 }
             }
             changed
@@ -318,37 +346,66 @@ pub fn handle_compact_finished(
 }
 
 /// compact 撤销回执：成功回填检查点与 revision，失败保留原状并提示。
+///
+/// 回执只认发起时冻结的 `workspace` 与 `operation_id`：切工作区/重复执行都不会串。
 pub fn handle_compact_reverted(
     state: &mut AppState,
     persistence: &Persistence,
     pane: PaneId,
     session_id: &str,
+    workspace: &std::path::Path,
+    operation_id: &str,
     outcome: Result<(), String>,
 ) -> bool {
+    // 迟到回执：窗格的执行中操作已换人或已清空时丢弃。
+    let current = state.pane_anywhere(pane).and_then(|target| {
+        target
+            .lx
+            .rewind
+            .executing
+            .as_ref()
+            .map(|execution| execution.operation_id.clone())
+    });
+    if current.as_deref() != Some(operation_id) {
+        return false;
+    }
     match outcome {
         Ok(()) => {
-            let checkpoints = persistence
-                .database()
-                .and_then(|db| {
-                    let workspace = state.chat_session_key_for_pane(pane)?;
-                    db.compact_checkpoints(&workspace, session_id).ok()
-                })
-                .unwrap_or_default();
-            let revision = persistence
-                .database()
-                .and_then(|db| db.session_revision(session_id).ok())
-                .unwrap_or(0);
+            let readback = persistence.database().and_then(|db| {
+                let checkpoints = db.compact_checkpoints(workspace, session_id).ok()?;
+                let revision = db.session_revision(session_id).ok()?;
+                Some((checkpoints, revision))
+            });
+            let Some((checkpoints, revision)) = readback else {
+                // 撤销已提交但回填失败：本地把目标标成已撤销，上下文指针立刻回退；
+                // revision 保持不变，下一次重载以 DB 为准。
+                let checkpoint_id = state
+                    .pane_anywhere(pane)
+                    .and_then(|target| {
+                        target
+                            .lx
+                            .rewind
+                            .executing
+                            .as_ref()
+                            .map(|execution| execution.target.user_message_id.clone())
+                    })
+                    .unwrap_or_default();
+                return crate::app::update::on_compact_reverted(
+                    state,
+                    pane,
+                    session_id,
+                    Some(&checkpoint_id),
+                    None,
+                );
+            };
             let changed = crate::app::update::on_compact_reverted(
                 state,
                 pane,
                 session_id,
-                checkpoints.clone(),
+                None,
+                Some(checkpoints.clone()),
             );
-            if let Some(target) = state.pane_mut_anywhere(pane)
-                && target.lx.chat.session_id.as_deref() == Some(session_id)
-            {
-                target.lx.chat.revision = u64::try_from(revision).unwrap_or(0);
-            }
+            sync_revision(state, pane, session_id, revision);
             let panes = state.all_pane_ids();
             for other in panes {
                 if other != pane
@@ -357,26 +414,26 @@ pub fn handle_compact_reverted(
                     })
                 {
                     crate::app::update::set_compact_checkpoints(state, other, &checkpoints);
-                    if let Some(target) = state.pane_mut_anywhere(other) {
-                        target.lx.chat.revision = u64::try_from(revision).unwrap_or(0);
-                    }
+                    sync_revision(state, other, session_id, revision);
                 }
             }
             changed
         }
         Err(code) => {
-            // 失败：保留会话与检查点原状，清掉执行态并明确提示。
-            if let Some(target) = state.pane_mut_anywhere(pane) {
-                target.lx.rewind.clear();
-                if matches!(
-                    target.lx.slash,
-                    Some(crate::app::state::SlashPanel::Rewind(_))
-                ) {
-                    target.lx.slash = None;
-                }
-            }
-            crate::app::update::on_compact_failed(state, pane, &code);
-            true
+            // 失败：保留会话与检查点原状，清掉执行态并提示“撤销失败”。
+            crate::app::update::on_compact_revert_failed(state, pane, &code)
         }
+    }
+}
+
+/// 只在该窗格仍绑定同一会话时同步 revision，且绝不把 revision 降回去。
+fn sync_revision(state: &mut AppState, pane: PaneId, session_id: &str, revision: i64) {
+    let Ok(revision) = u64::try_from(revision) else {
+        return;
+    };
+    if let Some(target) = state.pane_mut_anywhere(pane)
+        && target.lx.chat.session_id.as_deref() == Some(session_id)
+    {
+        target.lx.chat.revision = target.lx.chat.revision.max(revision);
     }
 }

@@ -113,12 +113,18 @@ pub enum AppEvent {
         session_id: String,
         /// 会话 DB 工作区键（回执重载只认它）。
         workspace: PathBuf,
+        /// 发起时的 operation id：迟到回执不得覆盖更新的一次执行。
+        operation_id: String,
         outcome: chat::compact::CompactOutcome,
     },
     /// compact 撤销的后台执行结果（只切检查点状态与指针）。
     CompactReverted {
         pane: PaneId,
         session_id: String,
+        /// 发起时冻结的会话 DB 工作区键；回执不得按当前窗格重新解析。
+        workspace: PathBuf,
+        /// 发起时的 operation id：迟到回执不得覆盖更新的一次执行。
+        operation_id: String,
         outcome: Result<(), String>,
     },
     /// 最新轮次撤销的后台执行结果（文件恢复 + 最终事务）。
@@ -633,6 +639,7 @@ fn handle_app_event(
             pane,
             session_id,
             workspace,
+            operation_id,
             outcome,
         } => {
             chat::handle_compact_finished(
@@ -641,15 +648,26 @@ fn handle_app_event(
                 pane,
                 &session_id,
                 &workspace,
+                &operation_id,
                 outcome,
             );
         }
         AppEvent::CompactReverted {
             pane,
             session_id,
+            workspace,
+            operation_id,
             outcome,
         } => {
-            chat::handle_compact_reverted(state, persistence, pane, &session_id, outcome);
+            chat::handle_compact_reverted(
+                state,
+                persistence,
+                pane,
+                &session_id,
+                &workspace,
+                &operation_id,
+                outcome,
+            );
         }
         AppEvent::RewindFinished {
             pane,

@@ -355,7 +355,10 @@ impl ModelContext {
             model: self.request.model.clone(),
             variant_params: self.request.variant_params.clone(),
             purpose: crate::chat::events::RequestPurpose::Chat,
-            system_prompt: None,
+            // 系统提示在 turn 创建时冻结（稳定提示 + 环境快照 + compact 摘要）。
+            // 每次采样都必须原样复用：写成 None 会让 transport 现场重采集，
+            // 丢摘要且同一轮看到不同环境。
+            system_prompt: self.request.system_prompt.clone(),
         }
     }
 

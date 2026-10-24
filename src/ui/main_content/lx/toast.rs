@@ -21,8 +21,10 @@ use crate::ui::{style, text};
 
 /// toast 盒与窗格内容区左右边缘之间的留白（列）。
 const MARGIN: u16 = 1;
-/// 盒内正文左右各留的空白（列，含边框）。
-const PADDING: u16 = 2;
+/// 盒内正文左侧额外留白（列）。
+const PADDING: u16 = 1;
+/// 盒宽相对正文的固定开销：左右边框 2 列 + 左右内边距 2 列。
+const FRAME: u16 = 4;
 /// 盒的最小宽度（含边框）：再窄连一个字符都放不下有意义的内容。
 const MIN_WIDTH: u16 = 8;
 /// 正文最多占用的行数：超出的部分截断并加省略号，避免长错误信息吃掉整屏历史。
@@ -51,18 +53,25 @@ pub(crate) fn rect(area: Rect, toast: &Toast) -> Option<Rect> {
         .map(|line| u16::try_from(line.width()).unwrap_or(u16::MAX))
         .max()
         .unwrap_or_default()
-        .saturating_add(PADDING);
+        .saturating_add(FRAME);
     let width = wanted.clamp(MIN_WIDTH, max_width);
-    let body_width = usize::from(width.saturating_sub(PADDING)).max(1);
+    // 正文宽度必须与 `draw` 完全一致：盒内去掉左右边框与内边距。
+    let body_width = usize::from(width.saturating_sub(FRAME)).max(1);
     let rows = text::wrap(&toast.message, body_width).len();
     let rows = u16::try_from(rows).unwrap_or(u16::MAX).min(MAX_BODY_ROWS);
     let height = rows.saturating_add(2).min(area.height);
     if height < MIN_HEIGHT {
         return None;
     }
+    // 贴顶边下方一行；空间不足时向上夹到内容区底边之内，绝不压窗格边框。
+    let y = area
+        .y
+        .saturating_add(1)
+        .min(area.bottom().saturating_sub(height))
+        .max(area.y);
     Some(Rect::new(
         area.x + (area.width - width) / 2,
-        area.y + 1,
+        y,
         width,
         height,
     ))
@@ -107,11 +116,23 @@ pub(crate) fn draw(buf: &mut Buffer, area: Rect, toast: &Toast) -> Option<Rect> 
     if body_area.width == 0 || body_area.height == 0 {
         return Some(box_area);
     }
-    let text_x = body_area.x.saturating_add(1);
-    let text_width = usize::from(body_area.width.saturating_sub(2)).max(1);
+    let text_x = body_area.x.saturating_add(PADDING);
+    let text_width = usize::from(body_area.width.saturating_sub(PADDING.saturating_mul(2))).max(1);
     let lines = text::wrap(&toast.message, text_width);
-    for (offset, line) in lines.iter().take(usize::from(body_area.height)).enumerate() {
+    let visible = usize::from(body_area.height);
+    // 超出正文行数上限：最后一行加省略号，明确告知还有内容，而不是静默切掉。
+    let overflow = lines.len() > visible;
+    for (offset, line) in lines.iter().take(visible).enumerate() {
         let y = body_area.y + u16::try_from(offset).unwrap_or(u16::MAX);
+        let line = if overflow && offset + 1 == visible {
+            // 折行后的单行通常正好占满宽度，`ellipsize` 不会加省略号；
+            // 这里强制留一列给 `…`。
+            let mut truncated: String = line.chars().take(text_width.saturating_sub(1)).collect();
+            truncated.push('…');
+            truncated
+        } else {
+            line.clone()
+        };
         for (index, ch) in line.chars().enumerate() {
             let x = text_x.saturating_add(u16::try_from(index).unwrap_or(u16::MAX));
             if x >= body_area.right() {

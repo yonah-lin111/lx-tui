@@ -367,3 +367,36 @@ fn repeated_commit_with_same_operation_is_idempotent() {
         "revision 只推进一次"
     );
 }
+
+/// 迟到回执：同一会话上已经开始了新一次压缩时，旧 `operation_id` 的失败不得清执行态。
+#[test]
+fn late_compact_failure_for_another_operation_is_ignored() {
+    let fixture = Fixture::new("compact-late-failure");
+    let persistence = Persistence::with_database(fixture.database());
+    let mut state = AppState::demo();
+    let pane = *state.all_pane_ids().first().expect("pane");
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = crate::app::state::PaneView::Lx;
+        target.lx.chat.session_id = Some("s-late".into());
+        target.lx.compact.running = Some("op-b".into());
+    }
+    let handled = handle_compact_finished(
+        &mut state,
+        &persistence,
+        pane,
+        "s-late",
+        fixture.workspace(),
+        "op-a",
+        CompactOutcome::Failed {
+            message: "old failure".into(),
+        },
+    );
+    assert!(!handled, "旧 operation 的回执必须被丢弃");
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(
+        target.lx.compact.running.as_deref(),
+        Some("op-b"),
+        "不得清掉正在执行的新一次压缩"
+    );
+}

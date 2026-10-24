@@ -127,6 +127,20 @@ impl LxCompact {
     pub fn active(&self) -> Option<&CompactNoticeView> {
         self.checkpoints.iter().rev().find(|item| item.active)
     }
+
+    /// 回执读库失败时的本地兜底：把目标检查点标成已撤销。
+    ///
+    /// 撤销事务已经提交，上下文指针必须立刻回退；继续用旧摘要会让下一轮拿到
+    /// 已撤销的检查点。列表内容不变，下一次会话重载会以 DB 为准补齐。
+    pub fn mark_reverted(&mut self, checkpoint_id: &str) {
+        if let Some(item) = self
+            .checkpoints
+            .iter_mut()
+            .find(|item| item.id == checkpoint_id)
+        {
+            item.active = false;
+        }
+    }
 }
 
 #[cfg(test)]

@@ -63,6 +63,15 @@ fn capture_reports_core_facts() {
 
 /// 网络探测必须返回确定结论（有界），不阻塞超过探测上限太多。
 #[test]
+fn cached_network_reads_the_warmed_cache_without_probing() {
+    let _ = network_available(); // 预热缓存
+    assert!(
+        network_status_cached().is_some(),
+        "缓存新鲜时必须直接给出结论"
+    );
+}
+
+#[test]
 fn network_probe_is_bounded() {
     let started = Instant::now();
     let available = network_available();

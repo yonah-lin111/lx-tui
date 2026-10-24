@@ -507,9 +507,16 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
     let selected = target.lx.chat.selected_tool.clone();
     let target_key = selected.or_else(|| latest_expandable(&target.lx.chat));
     let Some((message_id, call_id)) = target_key else {
-        // 没有可展开的工具卡片：`^o` 改为切换最近的 compact 检查点（同一语义：
-        // “当前或最近一张可展开卡片”）。都没有才退化为打开后台任务页。
-        if let Some(checkpoint_id) = latest_compact_checkpoint(&target.lx) {
+        // 没有可展开的工具卡片：`^o` 改为切换 compact 检查点（同一语义：
+        // “当前或最近一张可展开卡片”）。Alt+↑/↓ 选中过就用选中值，否则用最近一条；
+        // 两者都没有才退化为打开后台任务页。
+        let checkpoint_id = target
+            .lx
+            .chat
+            .selected_compact
+            .clone()
+            .or_else(|| latest_compact_checkpoint(&target.lx));
+        if let Some(checkpoint_id) = checkpoint_id {
             return super::compact::toggle_checkpoint(state, pane, &checkpoint_id);
         }
         return super::open_task_page_at(state, pane, None);

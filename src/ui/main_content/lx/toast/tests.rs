@@ -153,6 +153,49 @@ fn titled_toast_keeps_the_close_button_visible() {
     assert_eq!(label, text::MODAL_CLOSE, "标题不得侵占 [✕]");
 }
 
+/// 盒宽按“正文 + 左右边框 + 左右内边距”计算，不把正文挤成提前折行。
+#[test]
+fn box_width_reserves_borders_and_padding() {
+    let area = area(40, 12);
+    let toast = toast(ToastKind::Default, "0123456789");
+    let rect = rect(area, &toast).expect("fits");
+    assert_eq!(rect.width, 10 + FRAME, "正文 10 列 + 边框/内边距 4 列");
+}
+
+/// 超出行数上限时最后一行必须带省略号（不能静默切掉）。
+#[test]
+fn overflowing_body_is_ellipsized() {
+    let area = area(20, 10);
+    let toast = toast(ToastKind::Danger, &"x".repeat(200));
+    let box_area = rect(area, &toast).expect("fits");
+    assert_eq!(box_area.height, MAX_BODY_ROWS + 2, "正文行数有上限");
+    let mut terminal = Terminal::new(TestBackend::new(30, 16)).expect("backend");
+    terminal
+        .draw(|frame| {
+            draw(frame.buffer_mut(), area, &toast);
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer().clone();
+    let last_y = box_area.bottom() - 2;
+    let row: String = (box_area.x + 1..box_area.right() - 1)
+        .map(|x| buffer[(x, last_y)].symbol())
+        .collect();
+    assert!(
+        row.trim_end().ends_with('…'),
+        "最后一行必须显式省略：{row:?}"
+    );
+}
+
+/// 极矮内容区：盒高被夹在内容区内，底边不得压到窗格边框。
+#[test]
+fn short_pane_keeps_the_box_inside() {
+    let area = area(40, MIN_HEIGHT);
+    let toast = toast(ToastKind::Warning, "watch out");
+    let rect = rect(area, &toast).expect("恰好放得下");
+    assert_eq!(rect.bottom(), area.bottom());
+    assert!(rect.top() >= area.top());
+}
+
 /// 到期语义与全局 toast 共用 `Toast`：hover 期间不过期。
 #[test]
 fn hovering_freezes_expiry() {

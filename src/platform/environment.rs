@@ -65,7 +65,8 @@ impl EnvironmentFacts {
             date,
             time,
             timezone: timezone_name(),
-            network: network_available(),
+            // 不阻塞事件循环：缓存过期时返回 unknown，并让后台探测补齐下一轮。
+            network: network_status_cached(),
         }
     }
 }
@@ -182,24 +183,49 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
-/// 网络是否可用：有界 TCP 探测 + TTL 缓存；无法判定返回 None。
 /// 网络探测缓存条目：测量时刻 + 结论。
 type NetworkCache = Option<(Instant, Option<bool>)>;
 
-pub fn network_available() -> Option<bool> {
+fn network_cache() -> &'static Mutex<NetworkCache> {
     static CACHE: OnceLock<Mutex<NetworkCache>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
-    if let Ok(guard) = cache.lock()
-        && let Some((at, value)) = *guard
-        && at.elapsed() < NETWORK_CACHE_TTL
-    {
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn fresh_network() -> Option<Option<bool>> {
+    let guard = network_cache().lock().ok()?;
+    let (at, value) = (*guard)?;
+    (at.elapsed() < NETWORK_CACHE_TTL).then_some(value)
+}
+
+/// 网络是否可用：有界 TCP 探测 + TTL 缓存；无法判定返回 None。
+///
+/// **会阻塞**（最坏约两个地址 × 80 ms），只允许在后台线程/测试里直接调用。
+pub fn network_available() -> Option<bool> {
+    if let Some(value) = fresh_network() {
         return value;
     }
     let measured = probe_network();
-    if let Ok(mut guard) = cache.lock() {
+    if let Ok(mut guard) = network_cache().lock() {
         *guard = Some((Instant::now(), measured));
     }
     measured
+}
+
+/// 只读缓存版：缓存新鲜时返回结论；过期/未测量时**立即返回 None** 并触发一次后台探测。
+///
+/// 环境快照在事件循环里生成，不能为了一个可选字段阻塞输入。
+pub fn network_status_cached() -> Option<bool> {
+    if let Some(value) = fresh_network() {
+        return value;
+    }
+    static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !PROBING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        std::thread::spawn(|| {
+            network_available();
+            PROBING.store(false, std::sync::atomic::Ordering::Release);
+        });
+    }
+    None
 }
 
 /// 一次有界 TCP 探测；解析失败或超时返回 Some(false)（确定性失败）。

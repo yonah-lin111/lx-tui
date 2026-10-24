@@ -261,7 +261,10 @@ impl Database {
             return Err(DbError::RewindTargetChanged);
         };
         if state == COMPACT_REVERTED {
-            // 幂等重放：同一次操作已撤销，原样返回。
+            // 幂等重放只认同一次操作：换一个 operation 再来是过期目标，不是成功。
+            if reverted_by.as_deref() != Some(revert.operation_id.as_str()) {
+                return Err(DbError::RewindTargetChanged);
+            }
             let checkpoint =
                 checkpoint_by_id(&transaction, &id)?.ok_or(DbError::RewindTargetChanged)?;
             transaction.commit()?;
@@ -325,17 +328,6 @@ impl Database {
             checkpoint_by_id(&transaction, &id)?.ok_or(DbError::RewindTargetChanged)?;
         transaction.commit()?;
         Ok(checkpoint)
-    }
-
-    /// 最新可撤销的 compact 检查点（`/rewind` 顺序判定用）。
-    ///
-    /// 只返回 active 的最新一条；已撤销的检查点不可再撤销（防重复）。
-    pub fn latest_active_checkpoint(
-        &self,
-        workspace: &Path,
-        session_id: &str,
-    ) -> Result<Option<CompactCheckpoint>> {
-        self.active_checkpoint(workspace, session_id)
     }
 
     /// 会话归属校验：返回 internal id 或 None。

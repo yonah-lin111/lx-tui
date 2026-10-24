@@ -21,10 +21,7 @@ pub(super) fn rows(notice: &CompactNoticeView, count: usize, width: u16, expande
     total += super::wrap(&description(notice), width).len();
     if expanded {
         total += super::wrap(&range_line(notice), width).len();
-        for line in super::wrap(&notice.summary, width) {
-            let _ = line;
-            total += 1;
-        }
+        total += super::wrap(&notice.summary, width).len();
     }
     total
 }

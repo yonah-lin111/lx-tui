@@ -404,7 +404,12 @@ impl Database {
             }
             // 读后版本保护（第二道，事务内）：修改已有文件必须带 token，且 token 必须
             // 与 before 镜像重算结果一致。任一不符整批零写入（事务尚未提交）。
-            if change.operation != "create" && change.expected_version.is_none() {
+            //
+            // `create` 与 `move_dst` 的前置条件都是“目标不存在”，没有可读版本；
+            // 目标是否真的不存在由工具在路径锁内复核（见 `edit::commit_one`）。
+            if !matches!(change.operation.as_str(), "create" | "move_dst")
+                && change.expected_version.is_none()
+            {
                 return Err(DbError::StaleRead);
             }
             if let Some(expected) = change.expected_version.as_deref() {

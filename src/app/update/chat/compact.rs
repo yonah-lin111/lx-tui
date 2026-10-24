@@ -5,7 +5,7 @@
 //! - 成功后回填检查点列表与模型名；失败**不改**任何持久化状态与折叠状态；
 //! - `/rewind` 对 compact 只切上下文指针，不触碰文件 scope。
 
-use crate::app::effects::{CompactRequest, CompactRevertRequest, Effect};
+use crate::app::effects::{CompactRequest, Effect};
 use crate::app::state::{AppState, CompactNoticeView, InputHintLevel, RequestState};
 use crate::db::chat::CompactCheckpoint;
 use crate::layout::PaneId;
@@ -34,6 +34,18 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
         );
         return true;
     };
+    // 会话级忙碌检查：同一会话可能被多个 pane 共享，别的 pane 在跑轮次/压缩时
+    // 提交会推进 revision，让本次压缩在 commit 阶段失败。
+    let session_busy = state.all_pane_ids().into_iter().any(|other| {
+        state.pane_anywhere(other).is_some_and(|pane_state| {
+            pane_state.lx.chat.session_id.as_deref() == Some(session_id.as_str())
+                && (pane_state.lx.chat.request.is_busy() || pane_state.lx.compact.is_running())
+        })
+    });
+    if session_busy {
+        show_lx_hint(state, pane, InputHintLevel::Warning, text::LX_COMPACT_BUSY);
+        return true;
+    }
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         show_lx_hint(
             state,
@@ -87,11 +99,14 @@ pub fn compact_command(state: &mut AppState, pane: PaneId) -> bool {
 }
 
 /// 压缩成功：回填检查点列表并展示实际模型名。
+///
+/// `checkpoints` 为 `None` 表示事务已提交但回填读库失败：只结束执行态并提示，
+/// **不**用空列表覆盖现有视图（下一次会话重载会补齐）。
 pub fn on_compact_finished(
     state: &mut AppState,
     pane: PaneId,
     session_id: &str,
-    checkpoints: Vec<CompactCheckpoint>,
+    checkpoints: Option<Vec<CompactCheckpoint>>,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -100,11 +115,13 @@ pub fn on_compact_finished(
     if target.lx.chat.session_id.as_deref() != Some(session_id) {
         return false;
     }
-    let views: Vec<CompactNoticeView> = checkpoints
-        .iter()
-        .map(CompactNoticeView::from_record)
-        .collect();
-    target.lx.compact.replace(views);
+    if let Some(checkpoints) = checkpoints {
+        let views: Vec<CompactNoticeView> = checkpoints
+            .iter()
+            .map(CompactNoticeView::from_record)
+            .collect();
+        target.lx.compact.replace(views);
+    }
     target.lx.compact.finish();
     let active = target.lx.compact.active().cloned();
     // 新检查点写入后 revision 前进：旧选中目标/撤销面板全部作废。
@@ -161,50 +178,38 @@ pub fn on_compact_failed(state: &mut AppState, pane: PaneId, message: &str) -> b
     true
 }
 
-/// `/rewind` 选择到 compact 时构造撤销请求（冻结 revision 与检查点 id）。
-///
-/// 只切上下文指针：不建文件 scope、不读文件、不请求快照预检。
-pub fn revert_request(
-    state: &AppState,
-    pane: PaneId,
-) -> Option<(Effect, crate::app::state::RewindTarget)> {
-    let target = state.pane_anywhere(pane)?;
-    if !matches!(target.lx.chat.request, RequestState::Idle) {
-        return None;
+/// compact 撤销失败：清执行态与面板，保留检查点与消息，提示撤销失败（不是压缩失败）。
+pub fn on_compact_revert_failed(state: &mut AppState, pane: PaneId, message: &str) -> bool {
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.rewind.clear();
+    if matches!(
+        target.lx.slash,
+        Some(crate::app::state::SlashPanel::Rewind(_))
+    ) {
+        target.lx.slash = None;
     }
-    let checkpoint = target.lx.compact.active()?.clone();
-    let session_id = target.lx.chat.session_id.clone()?;
-    let workspace = state.chat_session_key_for_pane(pane)?;
-    let revision = target.lx.chat.revision;
-    let operation_id = crate::db::new_external_id("compact-rewind-op");
-    let effect = Effect::RevertCompact(CompactRevertRequest {
+    show_lx_hint(
+        state,
         pane,
-        workspace,
-        session_id: session_id.clone(),
-        checkpoint_id: checkpoint.id.clone(),
-        expected_revision: revision,
-        operation_id,
-    });
-    Some((
-        effect,
-        crate::app::state::RewindTarget {
-            session_id,
-            user_message_id: checkpoint.id.clone(),
-            expected_revision: revision,
-            pane,
-            input_at_open: target.lx.input.clone(),
-            user_text: String::new(),
-            kind: crate::app::state::RewindTargetKind::Compact,
-        },
-    ))
+        InputHintLevel::Error,
+        format!("{} ({message})", text::LX_COMPACT_REWIND_FAILED),
+    );
+    refresh_lx_status(state, pane);
+    true
 }
 
 /// compact 撤销成功：回填检查点列表并提示（不改草稿：没有可回填的用户原文）。
+///
+/// `checkpoints` 为 `None` 表示撤销已提交但回填读库失败：本地把目标检查点标成
+/// 已撤销（上下文指针必须立刻回退，不能继续使用已撤销的摘要），下一次重载补齐列表。
 pub fn on_compact_reverted(
     state: &mut AppState,
     pane: PaneId,
     session_id: &str,
-    checkpoints: Vec<CompactCheckpoint>,
+    reverted_checkpoint: Option<&str>,
+    checkpoints: Option<Vec<CompactCheckpoint>>,
 ) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
@@ -212,11 +217,20 @@ pub fn on_compact_reverted(
     if target.lx.chat.session_id.as_deref() != Some(session_id) {
         return false;
     }
-    let views: Vec<CompactNoticeView> = checkpoints
-        .iter()
-        .map(CompactNoticeView::from_record)
-        .collect();
-    target.lx.compact.replace(views);
+    match checkpoints {
+        Some(checkpoints) => {
+            let views: Vec<CompactNoticeView> = checkpoints
+                .iter()
+                .map(CompactNoticeView::from_record)
+                .collect();
+            target.lx.compact.replace(views);
+        }
+        None => {
+            if let Some(checkpoint_id) = reverted_checkpoint {
+                target.lx.compact.mark_reverted(checkpoint_id);
+            }
+        }
+    }
     target.lx.rewind.clear();
     if matches!(
         target.lx.slash,

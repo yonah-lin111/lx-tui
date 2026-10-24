@@ -34,9 +34,12 @@ mod rewind;
 mod rows;
 mod stats;
 mod sticky;
+mod timeline;
 pub(crate) mod tool;
 pub(crate) mod user_shell;
 
+pub use timeline::has_history;
+use timeline::{TimelineEntry, timeline};
 use tool::Folds;
 
 pub(crate) use rows::{content_rect, rows_to_u16, text_rows, tool_rows, visible_row, wrap};
@@ -217,94 +220,6 @@ pub struct HistoryLayout {
 pub use sticky::StickyRow;
 use sticky::sticky_candidate;
 
-/// 历史时间线条目：真实消息、独立撤销提示与 compact 检查点按 DB sequence 合并。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TimelineEntry {
-    Message(usize),
-    /// 连续撤销提示合并为一条；`last` 是最后一条（描述取它），`count` 用于 `xN`。
-    Notices {
-        last: usize,
-        count: usize,
-    },
-    /// compact 检查点（独立条目；不合并，每条各自可折叠）。
-    Compact(usize),
-}
-
-/// 是否有可绘制的历史（消息为空但提示/检查点非空时仍显示历史，不退回欢迎页）。
-pub fn has_history(lx: &Lx) -> bool {
-    !lx.chat.messages.is_empty() || !lx.chat.notices.is_empty() || !lx.compact.is_empty()
-}
-
-/// 按 sequence 合并消息、撤销提示与 compact 检查点。
-///
-/// 三者共用同一编号空间（DB 唯一分配），因此按 sequence 升序交叉合并即可；
-/// 同序号不可能出现，保险起见消息在前。连续撤销提示仍合并成一条 `xN`，
-/// 而 compact 检查点**不合并**：每条摘要都需要独立展开。
-fn timeline(lx: &Lx) -> Vec<TimelineEntry> {
-    let mut out = Vec::with_capacity(
-        lx.chat.messages.len() + lx.chat.notices.len() + lx.compact.checkpoints.len(),
-    );
-    let mut message = 0usize;
-    let mut notice = 0usize;
-    let mut checkpoint = 0usize;
-    while message < lx.chat.messages.len()
-        || notice < lx.chat.notices.len()
-        || checkpoint < lx.compact.checkpoints.len()
-    {
-        let next_message = lx.chat.messages.get(message).map(|item| item.sequence);
-        let next_notice = lx.chat.notices.get(notice).map(|item| item.sequence);
-        let next_checkpoint = lx
-            .compact
-            .checkpoints
-            .get(checkpoint)
-            .map(|item| item.sequence);
-        // 取三者中最小 sequence 的条目（相等时消息优先，其次提示，最后检查点）。
-        let take_message = match (next_message, next_notice, next_checkpoint) {
-            (None, None, None) => break,
-            (Some(sequence), notice, checkpoint) => {
-                let mut smallest = sequence;
-                for other in [notice, checkpoint].into_iter().flatten() {
-                    smallest = smallest.min(other);
-                }
-                sequence == smallest
-            }
-            _ => false,
-        };
-        if take_message {
-            out.push(TimelineEntry::Message(message));
-            message += 1;
-            continue;
-        }
-        let take_notice = match (next_notice, next_checkpoint) {
-            (Some(sequence), Some(other)) => sequence <= other,
-            (Some(_), None) => true,
-            (None, _) => false,
-        };
-        if take_notice {
-            // 连续提示合并：吸收下一条条目前的所有提示（它们按 sequence 相邻）。
-            notice += 1;
-            let mut count = 1;
-            while notice < lx.chat.notices.len() {
-                let next = lx.chat.notices[notice].sequence;
-                let blocked = next_message.is_some_and(|sequence| sequence <= next)
-                    || next_checkpoint.is_some_and(|sequence| sequence <= next);
-                if blocked {
-                    break;
-                }
-                count += 1;
-                notice += 1;
-            }
-            out.push(TimelineEntry::Notices {
-                last: notice - 1,
-                count,
-            });
-            continue;
-        }
-        out.push(TimelineEntry::Compact(checkpoint));
-        checkpoint += 1;
-    }
-    out
-}
 pub(crate) use sticky::{render_sticky_prompt, sticky_rect, truncate_with_ellipsis};
 
 pub use cards::{CardHit, CardKind};

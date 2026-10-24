@@ -102,6 +102,58 @@ async fn current_turn_keeps_history_pairs_and_appends_new_ones() {
     assert!(matches!(&items[5], ModelItem::UserText(text) if text == "本轮问"));
 }
 
+/// 冻结的系统提示（环境快照 + compact 摘要）必须原样进入**每一次**采样。
+///
+/// 回归：`next_request` 曾把 `system_prompt` 写成 `None`，transport 于是现场重采集，
+/// compact 摘要与冻结环境全部丢失。
+#[tokio::test]
+async fn frozen_system_prompt_is_reused_by_every_sampling() {
+    let fixture = Fixture::new("context-frozen-prompt");
+    let mut request = ChatRequest {
+        turns: Vec::new(),
+        items: vec![ModelItem::UserText("do it".into())],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "example".into(),
+            model: "example".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::Chat,
+        system_prompt: Some("FROZEN PROMPT WITH COMPACT SUMMARY".into()),
+    };
+    request.turns.push(crate::chat::events::ChatTurn {
+        role: "user".into(),
+        text: "do it".into(),
+        reasoning_metadata: None,
+    });
+    let write_args = r#"{"path":"fresh.txt","content":"v"}"#.to_string();
+    let script = Script::new(
+        vec![
+            tool_calls(&[("call_now", "write", &write_args, 0)], None),
+            final_response("done", None),
+        ],
+        StopReason::Complete,
+    );
+    let summary = run_agent_turn(
+        ModelContext::new(request, fixture.path()),
+        RecordingHost::new(),
+        RecordingExecutor::new(),
+        script.stream_one(),
+        no_cancel(),
+    )
+    .await;
+    assert_eq!(summary.outcome, TurnOutcome::Complete);
+    assert_eq!(script.request_count(), 2, "一次工具轮 + 一次收尾采样");
+    assert_eq!(
+        script.system_prompts(),
+        vec![
+            Some("FROZEN PROMPT WITH COMPACT SUMMARY".into()),
+            Some("FROZEN PROMPT WITH COMPACT SUMMARY".into()),
+        ],
+        "每一次采样都必须复用 turn 创建时冻结的系统提示"
+    );
+}
+
 /// 本轮单条工具结果超 64 KiB：进入下一次采样时截断并显式标记。
 #[tokio::test]
 async fn current_turn_truncates_oversized_tool_result() {

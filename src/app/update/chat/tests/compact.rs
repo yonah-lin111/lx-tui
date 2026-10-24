@@ -149,7 +149,7 @@ fn success_backfills_checkpoints_and_model_label() {
         &mut state,
         pane,
         "sess-compact",
-        checkpoints
+        Some(checkpoints)
     ));
     let target = state.pane_anywhere(pane).expect("pane");
     assert_eq!(target.lx.compact.checkpoints.len(), 2);
@@ -208,7 +208,7 @@ fn late_receipt_for_another_session_is_ignored() {
         &mut state,
         pane,
         "other-session",
-        vec![checkpoint("c1", 4, COMPACT_ACTIVE)]
+        Some(vec![checkpoint("c1", 4, COMPACT_ACTIVE)])
     ));
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.compact.checkpoints.is_empty());
@@ -294,9 +294,9 @@ fn toggle_expands_a_checkpoint() {
     );
 }
 
-/// compact 撤销请求冻结检查点 id 与 revision，且不创建文件恢复请求。
+/// compact 撤销走真实选择路径：冻结检查点 id 与 revision，且不创建文件恢复请求。
 #[test]
-fn revert_request_is_context_only() {
+fn compact_revert_is_context_only() {
     let (mut state, pane) = ready_compact_state();
     state
         .pane_mut_anywhere(pane)
@@ -306,15 +306,32 @@ fn revert_request_is_context_only() {
         .replace(vec![crate::app::state::CompactNoticeView::from_record(
             &checkpoint("c1", 4, COMPACT_ACTIVE),
         )]);
-    let (effect, target) = compact_revert_request(&state, pane).expect("request");
-    match effect {
-        crate::app::effects::Effect::RevertCompact(request) => {
-            assert_eq!(request.checkpoint_id, "c1");
-            assert_eq!(request.expected_revision, 7);
-        }
-        other => panic!("expected compact revert, got {other:?}"),
-    }
-    assert_eq!(target.kind, crate::app::state::RewindTargetKind::Compact);
+    crate::app::update::chat::rewind::select_latest(&mut state, pane).expect("selection");
+    apply_lx_input(&mut state, LxInput::Enter); // 选中态 → 动作面板
+    apply_lx_input(&mut state, LxInput::Enter); // 执行 RestoreCompact
+    let request = state
+        .effects
+        .iter()
+        .find_map(|effect| match effect {
+            crate::app::effects::Effect::RevertCompact(request) => Some(request),
+            _ => None,
+        })
+        .expect("compact revert effect");
+    assert_eq!(request.checkpoint_id, "c1");
+    assert_eq!(request.expected_revision, 7);
+    assert_eq!(request.session_id, "sess-compact");
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .rewind
+            .selected
+            .as_ref()
+            .expect("selected")
+            .kind,
+        crate::app::state::RewindTargetKind::Compact
+    );
     assert!(
         !state
             .effects
@@ -324,11 +341,14 @@ fn revert_request_is_context_only() {
     );
 }
 
-/// 没有任何 active 检查点时不能发 compact 撤销。
+/// 没有任何 active 检查点时不能选中 compact 撤销目标。
 #[test]
-fn revert_request_requires_active_checkpoint() {
-    let (state, pane) = ready_compact_state();
-    assert!(compact_revert_request(&state, pane).is_none());
+fn compact_revert_requires_active_checkpoint() {
+    let (mut state, pane) = ready_compact_state();
+    assert!(
+        crate::app::update::chat::rewind::select_latest(&mut state, pane).is_none(),
+        "无消息、无检查点时不应产生撤销目标"
+    );
 }
 
 /// 撤销成功：回填状态、提示并清掉撤销面板。
@@ -357,7 +377,8 @@ fn revert_success_backfills_state() {
         &mut state,
         pane,
         "sess-compact",
-        vec![checkpoint("c1", 4, COMPACT_REVERTED)]
+        None,
+        Some(vec![checkpoint("c1", 4, COMPACT_REVERTED)])
     ));
     let target = state.pane_anywhere(pane).expect("pane");
     assert!(target.lx.rewind.selected.is_none());
@@ -518,10 +539,11 @@ fn consecutive_compact_rewinds_step_back_one_checkpoint() {
         &mut state,
         pane,
         "sess-compact",
-        vec![
+        None,
+        Some(vec![
             checkpoint("c1", 2, COMPACT_ACTIVE),
             checkpoint("c2", 6, COMPACT_REVERTED),
-        ]
+        ])
     ));
     assert_eq!(
         state
@@ -539,10 +561,11 @@ fn consecutive_compact_rewinds_step_back_one_checkpoint() {
         &mut state,
         pane,
         "sess-compact",
-        vec![
+        None,
+        Some(vec![
             checkpoint("c1", 2, COMPACT_REVERTED),
             checkpoint("c2", 6, COMPACT_REVERTED),
-        ]
+        ])
     ));
     assert!(
         state
@@ -721,5 +744,90 @@ fn alt_arrows_select_between_checkpoints() {
             .compact
             .is_expanded("c1"),
         "选择不等于展开"
+    );
+}
+
+/// `^o` 优先切换 Alt+↑/↓ 选中的检查点，而不是永远取最后一条。
+#[test]
+fn ctrl_o_toggles_the_selected_checkpoint() {
+    let (mut state, pane) = ready_compact_state();
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .compact
+        .replace(vec![
+            crate::app::state::CompactNoticeView::from_record(&checkpoint("c1", 2, COMPACT_ACTIVE)),
+            crate::app::state::CompactNoticeView::from_record(&checkpoint("c2", 6, COMPACT_ACTIVE)),
+        ]);
+    apply_lx_input(&mut state, LxInput::SelectPrevTool);
+    apply_lx_input(&mut state, LxInput::SelectPrevTool);
+    assert_eq!(
+        state
+            .pane_anywhere(pane)
+            .expect("pane")
+            .lx
+            .chat
+            .selected_compact
+            .as_deref(),
+        Some("c1")
+    );
+    apply_lx_input(&mut state, LxInput::ToggleToolDetail);
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert!(target.lx.compact.is_expanded("c1"), "应展开选中的 c1");
+    assert!(!target.lx.compact.is_expanded("c2"), "不得切换未选中的 c2");
+}
+
+/// 同一会话的另一个窗格忙碌时，`/compact` 必须拒绝（否则 revision 会在提交前被推进）。
+#[test]
+fn compact_is_rejected_while_another_pane_on_the_same_session_is_busy() {
+    let (mut state, pane) = ready_compact_state();
+    let other = state
+        .active_tab_mut()
+        .split_pane(pane, ratatui::layout::Direction::Vertical)
+        .expect("split");
+    {
+        let target = state.pane_mut_anywhere(other).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.chat.session_id = Some("sess-compact".into());
+        target.lx.chat.request = RequestState::Committing {
+            generation: 1,
+            draft: String::new(),
+        };
+    }
+    assert!(compact_command(&mut state, pane));
+    assert!(
+        compact_effects(&state).is_empty(),
+        "同会话其它窗格忙碌时不得发起压缩"
+    );
+}
+
+/// 同一会话的另一个窗格压缩中，本窗格发送必须被拒绝。
+#[test]
+fn sending_is_rejected_while_another_pane_compacts_the_same_session() {
+    let mut state = ready_state("B");
+    let pane_b = focus_pane(&state);
+    let pane_a = state
+        .active_tab_mut()
+        .split_pane(pane_b, ratatui::layout::Direction::Vertical)
+        .expect("split");
+    for pane in [pane_a, pane_b] {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.view = PaneView::Lx;
+        target.lx.chat.session_id = Some("shared-session".into());
+    }
+    state
+        .pane_mut_anywhere(pane_a)
+        .expect("pane")
+        .lx
+        .compact
+        .start("op".into(), crate::db::now_ms());
+    assert!(!try_send(&mut state, pane_b), "同会话压缩期间不得发送");
+    assert!(
+        !state
+            .effects
+            .iter()
+            .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. })),
+        "拒绝发送时不得产生轮次效应"
     );
 }

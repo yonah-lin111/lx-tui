@@ -681,3 +681,44 @@ fn prepare_allows_create_without_version() {
         "新建文件无需 token"
     );
 }
+
+/// `move_dst` 与 create 同类：目标原本不存在，没有可读版本，不得按“缺 token”拒绝。
+#[test]
+fn prepare_allows_move_destination_without_version() {
+    let (database, workspace) = temp("move-dst-version");
+    let committed = started(&database, &workspace);
+    let missing_image = || crate::db::chat::ImageWrite {
+        kind: "missing".into(),
+        bytes: None,
+        mode: None,
+        link_target: None,
+        git_oid: None,
+        worktree_root: None,
+        git_dir: None,
+        head_ref: None,
+        head_oid: None,
+    };
+    let mut source = change("old.txt", b"old", b"");
+    source.operation = "move_src".into();
+    source.planned_after = missing_image();
+    let destination = PathMutationWrite {
+        operation: "move_dst".into(),
+        path: "old.txt".into(),
+        target_path: "new.txt".into(),
+        anchor_path: None,
+        anchor_canonical: None,
+        before: missing_image(),
+        planned_after: regular(b"old"),
+        expected_version: None,
+    };
+    let ticket = database
+        .prepare_mutations(
+            &workspace,
+            &committed.session_id,
+            &committed.user_message_id,
+            "call-move",
+            &[source, destination],
+        )
+        .expect("移动目标不需要读版本");
+    assert_eq!(ticket.ids.len(), 2);
+}

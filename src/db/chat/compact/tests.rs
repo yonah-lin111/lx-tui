@@ -426,6 +426,37 @@ fn revert_is_idempotent_for_the_same_checkpoint() {
     assert_eq!(twice.state, COMPACT_REVERTED);
 }
 
+/// 已撤销的检查点只对“同一次操作”幂等；另一个 operation 重放必须报目标已变。
+#[test]
+fn revert_idempotency_requires_the_same_operation() {
+    let (database, workspace) = temp("revert-idem-op");
+    let first = turn(&database, &workspace, None, "q1", "a1");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    let one = database
+        .commit_compact(
+            &workspace,
+            &commit_of(&first.session_id, revision, 0, 1, "op-1"),
+        )
+        .expect("first");
+    let revision = database
+        .session_revision(&first.session_id)
+        .expect("revision");
+    let mut revert = CompactRevert {
+        operation_id: "rewind-op-a".into(),
+        session_id: first.session_id.clone(),
+        checkpoint_id: one.checkpoint.id.clone(),
+        expected_revision: revision,
+    };
+    database.revert_compact(&workspace, &revert).expect("first");
+    revert.operation_id = "rewind-op-b".into();
+    assert!(matches!(
+        database.revert_compact(&workspace, &revert),
+        Err(crate::db::DbError::RewindTargetChanged)
+    ));
+}
+
 #[test]
 fn deleting_the_session_removes_checkpoints() {
     let (database, workspace) = temp("cascade");

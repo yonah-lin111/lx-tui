@@ -713,16 +713,15 @@ pub const LX_COMPACT_BUSY: &str = "Finish the current response before compacting
 pub const LX_COMPACT_NO_SESSION: &str = "Send a message first; there is no context to compact.";
 /// 失败（网络/超限/取消）：**不写检查点**，原始消息保持不变。
 pub const LX_COMPACT_FAILED: &str = "Compact failed; conversation was left unchanged.";
-/// 摘要输出超限。
-pub const LX_COMPACT_TOO_LARGE: &str = "Compact summary exceeded the size limit; nothing changed.";
+/// 撤销 compact 失败：检查点与消息保持不变。
+pub const LX_COMPACT_REWIND_FAILED: &str =
+    "Restore failed; conversation and checkpoints were left unchanged.";
 /// 撤销 compact 的提示（`/rewind` 成功后）。
 pub const LX_COMPACT_REWOUND: &str = "Context restored to the previous checkpoint.";
 /// compact 撤销面板的唯一动作文案。
 pub const LX_COMPACT_ACTION_RESTORE: &str = "Restore the context before this checkpoint";
 /// 检查点条目标题（独立时间线条目）。
 pub const LX_COMPACT_NOTICE_TITLE: &str = "-- Context compacted --";
-/// 折叠态的提示摘要（模型名与时间）。
-pub const LX_COMPACT_COLLAPSED_HINT: &str = "select ↵ to expand";
 /// 展开态的范围标签。
 pub const LX_COMPACT_RANGE_LABEL: &str = "covered";
 

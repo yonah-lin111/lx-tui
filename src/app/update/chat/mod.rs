@@ -25,8 +25,8 @@ mod view;
 mod viewport;
 
 pub use compact::{
-    compact_command, on_compact_empty, on_compact_failed, on_compact_finished, on_compact_reverted,
-    revert_request as compact_revert_request, set_checkpoints as set_compact_checkpoints,
+    compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
+    on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
     toggle_checkpoint,
 };
 pub use process::{
@@ -84,7 +84,20 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         let entry = target.lx.entry;
         let draft = target.lx.input.trim().to_string();
         // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
-        let busy = !target.lx.chat.request.can_send() || target.lx.compact.is_running();
+        // 会话级：同一会话的其它 pane 在压缩/跑轮次时，本 pane 的发送会推进 revision，
+        // 让那次压缩在 commit 阶段失败。
+        let session_busy = target.lx.chat.session_id.as_deref().is_some_and(|session| {
+            state.all_pane_ids().into_iter().any(|other| {
+                other != pane
+                    && state.pane_anywhere(other).is_some_and(|pane_state| {
+                        pane_state.lx.chat.session_id.as_deref() == Some(session)
+                            && (pane_state.lx.compact.is_running()
+                                || pane_state.lx.chat.request.is_busy())
+                    })
+            })
+        });
+        let busy =
+            !target.lx.chat.request.can_send() || target.lx.compact.is_running() || session_busy;
         let selection = target.lx.chat.effective_selection(&state.models);
         let session_id = target.lx.chat.session_id.clone();
         let generation = next_generation(state, pane);
