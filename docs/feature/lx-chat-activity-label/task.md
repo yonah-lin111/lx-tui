@@ -1,6 +1,6 @@
 # lx 输入框动态任务文案：任务清单
 
-> 状态：已实现并完成自动验证（人工终端验收待用户执行）。
+> 状态：**已实现并合并到 dev**（2026-10-24，合并提交 `3fa9e97`）；自动验证通过，人工终端验收待用户执行。
 > 日期：2026-10-23。
 > 设计依据：[design.md](./design.md)。
 > 门槛：用户已批准（见 §3 批准记录），T1 及后续代码修改已执行。
@@ -279,3 +279,23 @@ rtk cargo clippy --locked --lib --tests -- -D warnings
 - 真实终端观感验收（T8）：需用户运行 `cargo run`。
 - 未新增 todo 点击/hover/弹窗/键盘入口、未新增设置项或随机文案词库、未改后端事件/DB/runtime 缓存。
 - 未执行合并、推送或主 checkout 的 Git 状态变更。
+
+## 15. 合并回写（2026-10-24）
+
+### 15.1 合并方式
+
+- 以 `git merge --no-ff feature/lx-chat-activity-label` 合入 `dev`，合并提交 `3fa9e97`（父提交 `5e12782` 与 `4f0056c`），与仓库既有 merge 记录风格一致。
+- 合并前确认：本分支**未改动** `src/db` 与迁移文件，`SCHEMA_VERSION` 保持 13，无需按 AGENTS.md 顺延版本号；主 checkout 无残留 lx 进程占用该 worktree。
+- 主 checkout 曾有一份**未跟踪**的本任务文档副本（设计阶段产物，内容停留在「待审核」）。已备份到 `/tmp/lx-chat-activity-label-maincopy` 后删除，改由合并提交带入的已跟踪版本取代，避免同路径未跟踪文件阻塞合并。
+- 合并后在主 checkout 验证：`cargo test --locked --lib` 3067 passed、`cargo test --locked` 全绿、`cargo clippy --lib --tests -- -D warnings` 无警告、两个改动生产文件 `rustfmt --check` 通过。
+
+### 15.2 工作区与分支清理
+
+- 删除 worktree `.worktrees/lx-chat-activity-label` 与本地分支 `feature/lx-chat-activity-label`（内容已全部并入 `dev`，删除不丢提交）。
+- 同步删除该 worktree 的隔离开发库 `~/.lx-t-dev/db/worktrees/lx-chat-activity-label-*/`（AGENTS.md 要求：旧隔离库留着会在重建同名 worktree 时被误用）。
+- 本分支从未配置 upstream、未推送远端。
+
+### 15.3 已知后续项（未纳入本次合并）
+
+- **人工终端验收（T8）仍未执行**：需用户 `cargo run` 确认动态文案、统计优先布局、极窄降级与 Esc 待命观感。
+- **点击折叠内容无法展开的 bug 修复已被用户要求撤销**，未进入 `dev`。撤销原因与根因分析未保留在仓库文档中（对应提交 `532a811` / `a759857` 已 reset 掉）；若后续重开，需重新定位：旧实现用「选区是否为空」区分点击与拖选，1 格抖动即被判成拖选复制，导致折叠卡片展不开。
