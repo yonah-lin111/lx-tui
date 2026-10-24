@@ -211,6 +211,8 @@ async fn run_loop(
     // lx loading 转轮的下一帧时刻；无流中窗格时为 None（空闲不轮询）。
     let mut spinner_at: Option<Instant> = None;
     let mut last_rects: Vec<(PaneId, Rect)> = Vec::new();
+    // UI 渲染缓存：跨帧复用历史几何快照；按窗格隔离，窗格集合变化时清理。
+    let mut ui_cache = ui::RenderCache::default();
     // PTY 输出后的 cwd 去抖检查时刻；空闲时不设置、不轮询。
     let mut cwd_check: Option<Instant> = None;
     // PTY 输出后的 Agent 去抖扫描时刻；与 cwd 检查同窗口合并。
@@ -351,6 +353,9 @@ async fn run_loop(
         }
         if geometry.rects != last_rects {
             update::resize_panes(state, &geometry.rects);
+            // 窗格集合变化：清掉已关闭窗格的历史缓存，避免泄漏。
+            let alive: Vec<PaneId> = geometry.rects.iter().map(|(id, _)| *id).collect();
+            ui_cache.retain_panes(&alive);
             // 几何变化使自动滚动登记的坐标失效，停止拖拽滚动。
             update::stop_selection_autoscroll(state);
             session::resize_sessions(&mut sessions, &geometry.rects);
@@ -384,14 +389,13 @@ async fn run_loop(
         if dirty && last_draw.elapsed() >= FRAME_INTERVAL {
             // 双击 Esc 选中的最新用户消息：先按几何滚到视口居中，再算置顶/顶部行。
             // 本帧紧接着绘制，无需再次置脏。
-            update::resolve_lx_rewind_center(state, &geometry.rects);
-            // 置顶用户消息行结论：渲染前落状态（渲染层只读，不写状态）。
-            update::resolve_lx_sticky_prompt(state, &geometry.rects);
-            // 当前视口顶部行：同上，供点击展开时原地锚定。
-            update::resolve_lx_viewport_top(state, &geometry.rects);
+            update::resolve_lx_rewind_center(state, &geometry.rects, &mut ui_cache);
+            // 视口顶部行与置顶抑制记忆：一次几何计算同时落两处状态（渲染层只读）。
+            update::resolve_lx_history(state, &geometry.rects, &mut ui_cache);
             // 后台任务面板的输出可见行数：同上，供翻页与滚动条几何钳制。
             update::resolve_task_output_visible(state, &geometry.rects);
-            tui.draw(|frame| ui::render(frame, state, &config))?;
+            ui_cache.begin_frame();
+            tui.draw(|frame| ui::render_cached(frame, state, &config, &mut ui_cache))?;
             dirty = false;
             last_draw = Instant::now();
             // 工具调用 loading 已绘制：推进 pending → running 并回执 ticket，
@@ -423,7 +427,15 @@ async fn run_loop(
         tokio::select! {
             event = events.next() => match event {
                 Some(Ok(event)) => {
-                    handle_terminal_event(event, state, &mut sessions, &geometry, &config, &mut dirty);
+                    handle_terminal_event(
+                        event,
+                        state,
+                        &mut sessions,
+                        &geometry,
+                        &config,
+                        &mut ui_cache,
+                        &mut dirty,
+                    );
                     pump_mention_scan(state, &sender);
                     pump_lx_mention_scan(state, &sender);
                     pump_prompt_worktree(state, &sender, &mut git_inflight);
@@ -548,6 +560,7 @@ fn handle_terminal_event(
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &session::Geometry,
     config: &Config,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     match event {
@@ -558,7 +571,7 @@ fn handle_terminal_event(
             input::handle_paste_event(text, state, sessions, dirty);
         }
         TerminalEvent::Mouse(mouse) => {
-            mouse::handle_mouse_event(mouse, state, sessions, geometry, config, dirty);
+            mouse::handle_mouse_event(mouse, state, sessions, geometry, config, cache, dirty);
         }
         TerminalEvent::FocusGained | TerminalEvent::FocusLost | TerminalEvent::Resize(..) => {}
     }

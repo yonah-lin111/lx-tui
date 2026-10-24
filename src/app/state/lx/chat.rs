@@ -389,7 +389,7 @@ pub struct LxChat {
     /// （对齐 opencode 的双击停止）；超时或流结束清除。
     pub stop_armed_at: Option<std::time::Instant>,
     /// 置顶行抑制记忆（跨帧状态，唯一必须落库到 app 侧的部分）；见 [`StickySuppression`]。
-    /// 由事件循环每轮 `resolve_lx_sticky_prompt` 写入，渲染层只读（渲染不改状态）；
+    /// 由事件循环每轮 `resolve_lx_history` 写入，渲染层只读（渲染不改状态）；
     /// "要钉哪条消息"本身是纯函数结果，渲染/命中各自现算，不存第二份真相。
     pub suppressed_prompt_header: Option<StickySuppression>,
     /// 卡片展开状态：(message_id, slot, 区域, 是否展开)。

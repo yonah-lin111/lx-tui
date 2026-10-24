@@ -89,6 +89,7 @@ fn mouse_drag_resizes_sidebar() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_sidebar, "press on boundary starts resize");
@@ -99,6 +100,7 @@ fn mouse_drag_resizes_sidebar() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.sidebar_width, boundary + 9);
@@ -109,6 +111,7 @@ fn mouse_drag_resizes_sidebar() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!state.resizing_sidebar);
@@ -129,6 +132,7 @@ fn mouse_drag_resizes_prompt() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_prompt, "press on boundary starts resize");
@@ -139,6 +143,7 @@ fn mouse_drag_resizes_prompt() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
@@ -162,6 +167,7 @@ fn mouse_down_on_swap_button_swaps_sides_without_resize() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt_left);
@@ -198,6 +204,7 @@ fn mouse_down_on_panes_collapse_button_collapses_panes() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.panes_collapsed);
@@ -235,6 +242,7 @@ fn swapped_divider_drag_resizes_prompt_from_left() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_prompt, "press on left divider starts resize");
@@ -245,6 +253,7 @@ fn swapped_divider_drag_resizes_prompt_from_left() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_width, geo.view.prompt.width + 5);
@@ -265,6 +274,7 @@ fn mouse_move_over_swap_button_is_not_divider_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -278,6 +288,7 @@ fn mouse_move_over_swap_button_is_not_divider_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt_hover, "divider rows still highlight on hover");
@@ -307,6 +318,7 @@ fn mouse_drag_reorders_workspaces() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.workspace_drag, Some(0));
@@ -317,6 +329,7 @@ fn mouse_drag_reorders_workspaces() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.workspace_drag, Some(2));
@@ -327,6 +340,7 @@ fn mouse_drag_reorders_workspaces() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.workspace_drag.is_none());
@@ -374,6 +388,7 @@ fn mouse_wheel_over_short_prompt_does_not_scroll_without_scrollbar() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.scroll(), 0, "没有滚动条时滚轮不移动视口");
@@ -400,6 +415,7 @@ fn mouse_track_click_prompt_scrollbar_scrolls_without_focus() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt.scroll() > 0, "track click jumps down");
@@ -441,6 +457,7 @@ fn mouse_track_click_prompt_tree_scrollbar_scrolls_list() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.workspaces[0].prompt_panel.scroll > 0, "轨道点击跳转");
@@ -471,6 +488,7 @@ fn mouse_drag_prompt_scrollbar_thumb() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_scroll_drag, Some(0));
@@ -485,6 +503,7 @@ fn mouse_drag_prompt_scrollbar_thumb() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.scroll(), max);
@@ -499,6 +518,7 @@ fn mouse_drag_prompt_scrollbar_thumb() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt_scroll_drag.is_none());
@@ -521,6 +541,7 @@ fn mouse_click_switches_tab_and_add_creates_one() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.active_workspace().active_tab, 0);
@@ -534,6 +555,7 @@ fn mouse_click_switches_tab_and_add_creates_one() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.active_workspace().tabs.len(), 3);
@@ -557,6 +579,7 @@ fn mouse_right_click_tab_opens_tab_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
@@ -589,6 +612,7 @@ fn mouse_right_click_workspace_item_opens_workspace_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -620,6 +644,7 @@ fn mouse_right_click_workspace_list_blank_opens_new_workspace_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -658,6 +683,7 @@ fn mouse_right_click_workspace_blank_retargets_open_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.overlay.is_some(), "窗格菜单先打开");
@@ -671,6 +697,7 @@ fn mouse_right_click_workspace_blank_retargets_open_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -702,6 +729,7 @@ fn mouse_right_click_agents_blank_does_not_open_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -726,6 +754,7 @@ fn mouse_right_click_pane_opens_pane_menu_at_pointer() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -763,6 +792,7 @@ fn mouse_right_click_prompt_does_not_open_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -795,6 +825,7 @@ fn mouse_right_click_other_pane_retargets_open_menu() {
             &mut sessions,
             &geo,
             &config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
         let Some(Overlay::Menu(menu)) = state.overlay.as_ref() else {
@@ -831,6 +862,7 @@ fn mouse_right_click_prompt_closes_open_pane_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.overlay.is_some());
@@ -846,6 +878,7 @@ fn mouse_right_click_prompt_closes_open_pane_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -872,6 +905,7 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -886,6 +920,7 @@ fn mouse_click_pane_menu_split_item_creates_pane() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -966,6 +1001,7 @@ fn mouse_click_confirm_switch_cwd_closes_overlay() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -1010,6 +1046,7 @@ fn mouse_wheel_over_terminal_pane_scrolls_backlog() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1023,6 +1060,7 @@ fn mouse_wheel_over_terminal_pane_scrolls_backlog() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1054,6 +1092,7 @@ fn mouse_wheel_extends_in_progress_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.terminal_selection, Some(pane));
@@ -1064,6 +1103,7 @@ fn mouse_wheel_extends_in_progress_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -1105,6 +1145,7 @@ fn mouse_drag_to_pane_edge_arms_autoscroll() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     handle_terminal_event(
@@ -1117,6 +1158,7 @@ fn mouse_drag_to_pane_edge_arms_autoscroll() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -1161,6 +1203,7 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     handle_terminal_event(
@@ -1173,6 +1216,7 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -1187,6 +1231,7 @@ fn mouse_wheel_during_prompt_selection_scrolls_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt.scroll() > 0, "wheel scrolls prompt viewport");
@@ -1221,6 +1266,7 @@ fn mouse_wheel_in_mouse_report_mode_leaves_local_view_at_bottom() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1258,6 +1304,7 @@ fn terminal_scrollbar_thumb_drag_moves_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.terminal_scroll_drag.is_some());
@@ -1274,6 +1321,7 @@ fn terminal_scrollbar_thumb_drag_moves_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1289,6 +1337,7 @@ fn terminal_scrollbar_thumb_drag_moves_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.terminal_scroll_drag.is_none());
@@ -1321,6 +1370,7 @@ fn mouse_drag_on_mouse_report_pane_skips_local_selection() {
             &mut sessions,
             &geo,
             &config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
     }
@@ -1352,6 +1402,7 @@ fn mouse_down_on_plain_pane_starts_local_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -1377,6 +1428,7 @@ fn mouse_wheel_on_alternate_screen_consumes_without_local_scroll() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1400,6 +1452,7 @@ fn key_and_paste_snap_scrolled_pane_back_to_bottom() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1416,6 +1469,7 @@ fn key_and_paste_snap_scrolled_pane_back_to_bottom() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("terminal pane");
@@ -1447,6 +1501,7 @@ fn mouse_click_scroll_buttons_scrolls_tab_bar() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tab_scroll > 0);
@@ -1459,6 +1514,7 @@ fn mouse_click_scroll_buttons_scrolls_tab_bar() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.tab_scroll, 0);
@@ -1491,6 +1547,7 @@ fn toggle_button_click_flips_view_without_stealing_focus() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty);
@@ -1503,6 +1560,7 @@ fn toggle_button_click_flips_view_without_stealing_focus() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(view_of(&state, pane), PaneView::Lx);
@@ -1524,6 +1582,7 @@ fn lx_view_edits_input_and_pastes_text() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty, "lx 输入产生重绘");
@@ -1550,6 +1609,7 @@ fn lx_view_edits_input_and_pastes_text() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty, "lx 视图粘贴产生重绘");
@@ -1575,6 +1635,7 @@ fn lx_view_edits_input_and_pastes_text() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.should_quit);
@@ -1596,6 +1657,7 @@ fn lx_view_path_paste_opens_reference_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty, "路径粘贴产生重绘");
@@ -1610,6 +1672,7 @@ fn lx_view_path_paste_opens_reference_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
@@ -1634,6 +1697,7 @@ fn lx_view_content_click_focuses_and_starts_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!state.prompt_focused);
@@ -1673,6 +1737,7 @@ fn lx_input_click_places_cursor_and_starts_text_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let lx = &state.pane_anywhere(pane).expect("pane").lx;
@@ -1711,6 +1776,7 @@ fn lx_view_ignores_wheel_and_mouse_report() {
             &mut sessions,
             &geo,
             &config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
     }
@@ -1770,6 +1836,7 @@ fn mouse_drag_resizes_pane_boundary() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -1787,6 +1854,7 @@ fn mouse_drag_resizes_pane_boundary() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let after = pane_rects_of(&state, &geo, &config);
@@ -1798,6 +1866,7 @@ fn mouse_drag_resizes_pane_boundary() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_pane.is_none());
@@ -1827,6 +1896,7 @@ fn mouse_drag_resizes_vertical_pane_boundary() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -1848,6 +1918,7 @@ fn mouse_drag_resizes_vertical_pane_boundary() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let after = pane_rects_of(&state, &geo, &config);
@@ -1859,6 +1930,7 @@ fn mouse_drag_resizes_vertical_pane_boundary() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_pane.is_none());
@@ -1888,6 +1960,7 @@ fn mouse_down_on_collapsed_pane_boundary_does_not_start_resize() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_pane.is_none());
@@ -1922,6 +1995,7 @@ fn mouse_reporting_pane_does_not_steal_boundary_drag() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.resizing_pane.is_some());
@@ -1951,6 +2025,7 @@ fn mouse_motion_tracks_prompt_tree_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_tree_hover, Some(hovered));
@@ -1964,6 +2039,7 @@ fn mouse_motion_tracks_prompt_tree_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_tree_hover, None);
@@ -1980,6 +2056,7 @@ fn mouse_motion_tracks_prompt_tree_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_tree_hover, None);
@@ -1996,6 +2073,7 @@ fn mouse_motion_tracks_prompt_tree_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_tree_hover, None);
@@ -2023,6 +2101,7 @@ fn mouse_leaving_overlay_menu_clears_hover_feedback() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.menu_hover);
@@ -2046,6 +2125,7 @@ fn mouse_leaving_overlay_menu_clears_hover_feedback() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!state.menu_hover, "离开容器移除悬停效果");
@@ -2077,6 +2157,7 @@ fn mouse_leaving_page_menu_clears_hover_feedback() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!state.menu_hover, "离开容器移除悬停效果");
@@ -2096,6 +2177,7 @@ fn mouse_leaving_page_menu_clears_hover_feedback() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.menu_hover);
@@ -2130,6 +2212,7 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.workspace_hover, Some(0));
@@ -2144,6 +2227,7 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.tab_hover, Some(index));
@@ -2160,6 +2244,7 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.workspace_hover, None);
@@ -2178,6 +2263,7 @@ fn mouse_motion_tracks_workspace_and_tab_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.workspace_hover, None, "拖动反显优先于 hover");
@@ -2207,6 +2293,7 @@ fn wheel_over_workspace_list_rescrolls_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.workspace_scroll, 1);
@@ -2237,6 +2324,7 @@ fn mouse_interacts_with_block_command_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -2256,6 +2344,7 @@ fn mouse_interacts_with_block_command_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.panel().map(|panel| panel.active()), Some(3));
@@ -2271,6 +2360,7 @@ fn mouse_interacts_with_block_command_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "## ");
@@ -2316,6 +2406,7 @@ fn mouse_wheel_over_mention_panel_scrolls_viewport_only() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -2359,6 +2450,7 @@ fn mouse_click_folders_button_opens_referenced_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(matches!(
@@ -2392,6 +2484,7 @@ fn folders_button_no_op_without_project_key() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.overlay.is_none(), "无项目键不打开菜单");
@@ -2438,6 +2531,7 @@ fn referenced_search_ctrl_or_cmd_z_returns_to_parent_scope() {
             &mut sessions,
             &geo,
             &config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
         let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
@@ -2469,6 +2563,7 @@ fn referenced_search_ctrl_z_at_root_is_noop() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
@@ -2532,6 +2627,7 @@ fn mouse_click_referenced_menu_row_selects_then_double_click_opens_search() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     // 单击只选中（与 prompt 列表一致）。
@@ -2550,6 +2646,7 @@ fn mouse_click_referenced_menu_row_selects_then_double_click_opens_search() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderSearch(search)) = state.overlay.as_ref() else {
@@ -2574,6 +2671,7 @@ fn mouse_click_referenced_menu_add_row_opens_input() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -2598,6 +2696,7 @@ fn mouse_click_referenced_menu_blank_keeps_open_and_outside_closes() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -2610,6 +2709,7 @@ fn mouse_click_referenced_menu_blank_keeps_open_and_outside_closes() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.overlay.is_none(), "弹窗之外关闭");
@@ -2628,6 +2728,7 @@ fn referenced_menu_ctrl_c_copies_and_ctrl_d_or_del_removes() {
             &mut sessions,
             &geo,
             &config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
         assert!(
@@ -2645,6 +2746,7 @@ fn referenced_menu_ctrl_c_copies_and_ctrl_d_or_del_removes() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -2697,6 +2799,7 @@ fn mouse_hover_over_referenced_menu_backgrounds_row_without_moving_highlight() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
@@ -2726,6 +2829,7 @@ fn mouse_hover_over_referenced_menu_after_wheel_keeps_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     // 再悬停窗口内某行：只记录悬停行，显式视口保持不变（窗口不跳）。
@@ -2738,6 +2842,7 @@ fn mouse_hover_over_referenced_menu_after_wheel_keeps_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
@@ -2762,6 +2867,7 @@ fn mouse_hover_over_referenced_menu_paints_background_without_marker() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
@@ -2825,6 +2931,7 @@ fn mouse_hover_after_opening_referenced_menu_backgrounds_row_without_marker() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     if let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_mut() {
@@ -2847,6 +2954,7 @@ fn mouse_hover_after_opening_referenced_menu_backgrounds_row_without_marker() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
@@ -2903,6 +3011,7 @@ fn mouse_wheel_over_referenced_menu_scrolls_viewport_not_highlight() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
@@ -2937,6 +3046,7 @@ fn mouse_click_referenced_menu_scrollbar_track_jumps_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
@@ -2973,6 +3083,7 @@ fn mouse_drag_referenced_menu_scrollbar_thumb_scrolls_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -2992,6 +3103,7 @@ fn mouse_drag_referenced_menu_scrollbar_thumb_scrolls_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let Some(Overlay::ReferencedFolderMenu(menu)) = state.overlay.as_ref() else {
@@ -3010,6 +3122,7 @@ fn mouse_drag_referenced_menu_scrollbar_thumb_scrolls_viewport() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.referenced_menu_scroll_drag.is_none(), "松开清除拖拽");
@@ -3034,6 +3147,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_pinned, Some(state.active_workspace));
@@ -3052,6 +3166,7 @@ fn mouse_click_prompt_pin_toggles_pin() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt_pinned, None);
@@ -3085,6 +3200,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "");
@@ -3099,6 +3215,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "hello");
@@ -3111,6 +3228,7 @@ fn mouse_click_prompt_toolbar_undo_redo_and_save() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -3152,6 +3270,7 @@ fn ctrl_s_saves_prompt_from_editor() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty);
@@ -3197,6 +3316,7 @@ fn ctrl_s_saves_open_item_immediately() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt.is_saved(), "Ctrl+S 立即复位保存点");
@@ -3225,6 +3345,7 @@ fn ctrl_s_ignores_empty_prompt_content() {
                 sessions,
                 &geo,
                 &config,
+                &mut ui::RenderCache::default(),
                 dirty,
             );
         };
@@ -3270,6 +3391,7 @@ fn mouse_click_prompt_toolbar_select_all_then_typing_replaces_text() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -3306,6 +3428,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     handle_terminal_event(
@@ -3314,6 +3437,7 @@ fn mouse_click_prompt_header_swallows_without_focus_or_cursor() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -3342,6 +3466,7 @@ fn mouse_click_prompt_text_row_places_cursor_below_header() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt_focused);
@@ -3389,6 +3514,7 @@ fn prompt_tree_double_click(
             &mut sessions,
             geo,
             config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
     }
@@ -3465,6 +3591,7 @@ fn mouse_right_click_prompt_item_keeps_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -3555,6 +3682,7 @@ fn mouse_interacts_with_slash_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -3573,6 +3701,7 @@ fn mouse_interacts_with_slash_panel() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt.text().starts_with("&&& addTemplate --start"));
@@ -3625,6 +3754,7 @@ fn mouse_template_buttons_clean_status_and_delete() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -3646,6 +3776,7 @@ fn mouse_template_buttons_clean_status_and_delete() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!state.prompt.text().contains("- Reference: "));
@@ -3673,6 +3804,7 @@ fn mouse_template_buttons_clean_status_and_delete() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "");
@@ -3711,6 +3843,7 @@ fn mouse_supple_copy_button_writes_clipboard_toast() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty);
@@ -3759,6 +3892,7 @@ fn mouse_supple_fold_button_toggles_without_editing_text() {
             &mut sessions,
             &geo,
             &config,
+            &mut ui::RenderCache::default(),
             &mut dirty,
         );
         assert_eq!(state.prompt.supple_folded_at(1), folded);
@@ -3826,6 +3960,7 @@ fn mouse_click_agent_item_switches_tab_and_terminal_view() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
 
@@ -3859,6 +3994,7 @@ fn mouse_hover_agent_item_tracks_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.agent_hover, Some(0));
@@ -3873,6 +4009,7 @@ fn mouse_hover_agent_item_tracks_hover() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.agent_hover, None);
@@ -3900,6 +4037,7 @@ fn wheel_over_agents_section_scrolls_list() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.agent_scroll, 1);
@@ -3927,6 +4065,7 @@ fn mouse_drag_agent_scrollbar_thumb_scrolls_list() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.agent_scroll_drag, Some(0));
@@ -3941,6 +4080,7 @@ fn mouse_drag_agent_scrollbar_thumb_scrolls_list() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.agent_scroll > 0, "dragging thumb scrolls the list");
@@ -3955,6 +4095,7 @@ fn mouse_drag_agent_scrollbar_thumb_scrolls_list() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.agent_scroll_drag, None);
@@ -3997,6 +4138,7 @@ fn mouse_motion_over_button_arms_tooltip_and_leaving_clears() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let tooltip = state.tooltip.as_ref().expect("tooltip armed");
@@ -4015,6 +4157,7 @@ fn mouse_motion_over_button_arms_tooltip_and_leaving_clears() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tooltip.is_none(), "离开按钮立即清除");
@@ -4036,6 +4179,7 @@ fn mouse_down_clears_tooltip() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tooltip.is_some());
@@ -4050,6 +4194,7 @@ fn mouse_down_clears_tooltip() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tooltip.is_none(), "左键按下清空提示");
@@ -4072,6 +4217,7 @@ fn mouse_motion_during_workspace_drag_does_not_arm_tooltip() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tooltip.is_none(), "拖动排序期间不弹提示");
@@ -4092,6 +4238,7 @@ fn mouse_motion_with_overlay_open_keeps_tooltip_clear() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tooltip.is_some());
@@ -4103,6 +4250,7 @@ fn mouse_motion_with_overlay_open_keeps_tooltip_clear() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.tooltip.is_none(), "浮层打开时清除且不重新触发");
@@ -4126,6 +4274,7 @@ fn mouse_motion_over_template_button_arms_tooltip() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let tooltip = state.tooltip.as_ref().expect("template tooltip armed");
@@ -4216,6 +4365,7 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.toast.is_some(), "点击 toast 内容不关闭");
@@ -4228,6 +4378,7 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.toast.is_none(), "[✕] 关闭 toast");
@@ -4240,6 +4391,7 @@ fn toast_inside_click_keeps_close_button_and_outside_dismiss() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.toast.is_none(), "点击 toast 之外关闭");
@@ -4386,6 +4538,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "alpha", "边界箭头不动作");
@@ -4401,6 +4554,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(state.prompt.text(), "beta");
@@ -4417,6 +4571,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(matches!(state.overlay, Some(Overlay::PageMenu(_))));
@@ -4427,6 +4582,7 @@ fn mouse_click_prompt_page_arrows_switch_and_counter_opens_menu() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.overlay.is_none());
@@ -4449,6 +4605,7 @@ fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -4462,6 +4619,7 @@ fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -4480,6 +4638,7 @@ fn mouse_click_prompt_page_name_starts_rename_and_keys_commit() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!crate::app::update::page_rename_active(&state));
@@ -4509,6 +4668,7 @@ fn mouse_click_prompt_padding_only_focuses_without_moving_cursor() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(state.prompt_focused, "点击留白聚焦编辑器");
@@ -4547,6 +4707,7 @@ fn lx_entry_click_switches_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -4576,6 +4737,7 @@ fn event_input_paste_overlay_and_prompt_routing() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(!dirty, "浮层激活时粘贴被吞掉");
@@ -4590,6 +4752,7 @@ fn event_input_paste_overlay_and_prompt_routing() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(dirty, "prompt 聚焦时粘贴使画面变脏");
@@ -4651,6 +4814,7 @@ fn lx_mention_panel_click_accepts_candidate_before_page_selection() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert_eq!(
@@ -4692,6 +4856,7 @@ fn lx_mention_wheel_scrolls_panel_not_input() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     let target = state.pane_anywhere(pane).expect("pane").lx.mention();
@@ -4763,12 +4928,17 @@ fn lx_card_click_toggles_expansion_on_release() {
     let inner = pane_inner(&geo, pane);
     let card = {
         let target = state.pane_anywhere(pane).expect("pane");
-        crate::ui::main_content::lx::history_view(inner, &target.lx)
+        let mut cache = crate::ui::RenderCache::default();
+        crate::ui::main_content::lx::history_view(inner, &target.lx, cache.pane(pane))
             .and_then(|view| {
-                crate::ui::main_content::lx::history::layout(view.body, &target.lx)
-                    .cards
-                    .into_iter()
-                    .next()
+                crate::ui::main_content::lx::history::layout(
+                    view.body,
+                    &target.lx,
+                    cache.pane(pane),
+                )
+                .cards
+                .into_iter()
+                .next()
             })
             .expect("可展开卡片")
     };
@@ -4790,6 +4960,7 @@ fn lx_card_click_toggles_expansion_on_release() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -4802,6 +4973,7 @@ fn lx_card_click_toggles_expansion_on_release() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(

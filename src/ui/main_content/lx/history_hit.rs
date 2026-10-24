@@ -12,6 +12,7 @@ use crate::ui::widgets::scrollbar;
 use super::chat_bar;
 use super::history;
 use super::history_rect;
+use crate::ui::PaneCache;
 
 /// lx 页聊天命中结果。
 ///
@@ -27,9 +28,13 @@ pub enum LxChatHit {
 /// 聊天历史视图（滚动偏移 / body / 置顶行结论）；无历史区时为 None。
 ///
 /// 渲染、滚轮钳制、滚动条与命中**统一**走它，保证"可见行数"只有一个口径。
-pub(crate) fn history_view(area: Rect, lx: &Lx) -> Option<history::HistoryView> {
+pub(crate) fn history_view(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+) -> Option<history::HistoryView> {
     let history_rect = history_rect(area, lx)?;
-    Some(history::view(history_rect, lx))
+    Some(history::view(history_rect, lx, cache))
 }
 
 /// 把指定消息滚到视口居中所需的顶部行与可滚动上限；内容不足一屏时返回 None。
@@ -40,9 +45,10 @@ pub(crate) fn history_center_target(
     area: Rect,
     lx: &Lx,
     message_id: &str,
+    cache: &mut PaneCache,
 ) -> Option<(usize, usize)> {
     let rect = history_rect(area, lx)?;
-    let layout = history::layout(rect, lx);
+    let layout = history::layout(rect, lx, cache);
     let index = lx
         .chat
         .messages
@@ -63,11 +69,15 @@ pub(crate) fn history_center_target(
 }
 
 /// 聊天历史滚动条几何（贴右缘一列；无消息或内容未溢出时为 None）。
-pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayout> {
+pub fn history_scrollbar(
+    area: Rect,
+    lx: &Lx,
+    cache: &mut PaneCache,
+) -> Option<scrollbar::ScrollbarLayout> {
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx)?;
+    let view = history_view(area, lx, cache)?;
     history::scrollbar(
         view.body,
         view.total_rows,
@@ -79,17 +89,17 @@ pub fn history_scrollbar(area: Rect, lx: &Lx) -> Option<scrollbar::ScrollbarLayo
 /// 聊天历史的（渲染行数, 视口行数）；无消息时为 None。滚轮滚动按此钳制。
 ///
 /// 视口行数取 **body**（置顶行让位后），与渲染同口径——否则滚不到最后一行。
-pub fn history_rows(area: Rect, lx: &Lx) -> Option<(usize, usize)> {
-    let view = history_view(area, lx)?;
+pub fn history_rows(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<(usize, usize)> {
+    let view = history_view(area, lx, cache)?;
     Some((view.total_rows, usize::from(view.body.height)))
 }
 
 /// 置顶用户消息行的"跳转目标"：该消息起始行（钳到 body 的滚动上限）；无置顶行返回 None。
-pub fn sticky_prompt_jump(area: Rect, lx: &Lx) -> Option<usize> {
+pub fn sticky_prompt_jump(area: Rect, lx: &Lx, cache: &mut PaneCache) -> Option<usize> {
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx)?;
+    let view = history_view(area, lx, cache)?;
     let message = view.sticky?;
     let start = view.messages.get(message)?.start;
     // 跳过去后置顶行会让位，按整块 body 钳制。
@@ -110,7 +120,13 @@ pub(super) fn chat_geometry_is_live(lx: &Lx) -> bool {
     lx.task.is_none() && super::history::has_history(lx)
 }
 
-pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit> {
+pub fn chat_hit(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<LxChatHit> {
     if !chat_geometry_is_live(lx) {
         return None;
     }
@@ -120,7 +136,7 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
     {
         return Some(LxChatHit::JumpBottom);
     }
-    let view = history_view(area, lx)?;
+    let view = history_view(area, lx, cache)?;
     // 置顶行（表现层，整区第 0 行整宽）：点击跳回该 prompt。
     if let Some(sticky) = history::sticky_rect(&view)
         && sticky.rect.contains((column, row).into())
@@ -137,23 +153,49 @@ pub fn chat_hit(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<LxChatHit>
 
 /// 鼠标下的可交互块（工具卡片 / 思考块）的整块屏幕矩形。
 ///
-/// 点击展开与思考块的悬停高亮都从这一个入口取几何：命中区与渲染共用
-/// [`history::layout`]，滚动一变两边一起变。
-pub fn card_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<history::CardHit> {
+/// 点击展开与思考块的悬停高亮都从这一个入口取几何：命中区与渲染共用同一份
+/// 几何快照（[`PaneCache`]），滚动一变两边一起变。
+pub fn card_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<history::CardHit> {
     if !chat_geometry_is_live(lx) {
         return None;
     }
-    let view = history_view(area, lx)?;
+    let view = history_view(area, lx, cache)?;
     if !view.body.contains((column, row).into()) {
         return None;
     }
-    history::layout(view.body, lx)
-        .cards
-        .into_iter()
-        .find_map(|hit| {
-            let card = screen_rect(&view, hit.card)?;
-            card.contains((column, row).into()).then_some(hit)
-        })
+    let width = history::content_rect(view.body).width;
+    let snapshot = cache.snapshot(width, lx);
+    let content_row = view
+        .scroll
+        .saturating_add(usize::from(row.saturating_sub(view.body.y)));
+    let region = snapshot.cards.iter().find(|region| {
+        content_row >= region.card_start
+            && content_row < region.card_start.saturating_add(region.card_rows)
+    })?;
+    // 与 `layout(view.body, ...)` 同一套矩形口径：内容行 0 落在 body 顶，滚动由
+    // `screen_rect` 统一裁剪。
+    let rect_at = |start: usize, rows: usize| -> Rect {
+        Rect::new(
+            view.body.x,
+            view.body.y.saturating_add(history::rows_to_u16(start)),
+            width,
+            history::rows_to_u16(rows),
+        )
+    };
+    let hit = history::CardHit {
+        kind: region.kind.clone(),
+        card: rect_at(region.card_start, region.card_rows),
+        fold: rect_at(region.fold_start, region.fold_rows),
+        clickable: region.clickable,
+    };
+    let card = screen_rect(&view, hit.card)?;
+    card.contains((column, row).into()).then_some(hit)
 }
 
 /// 指针下的**可折叠内容**：按下时记录目标，松开未拖动即切换折叠。
@@ -161,8 +203,14 @@ pub fn card_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<history::Ca
 /// 命令卡片的参数区与输出区各自是一块点击面（点一块不连带另一块）；文件工具与
 /// 思考块仍是整块点击（折叠态没有正文行，只认正文区就永远点不开）。
 /// 展开前后内容不变的区域不登记点击面：点了没反应比不登记更糟。
-pub fn card_target_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<CardTarget> {
-    let hit = card_at(area, lx, column, row)?;
+pub fn card_target_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<CardTarget> {
+    let hit = card_at(area, lx, column, row, cache)?;
     hit.clickable.then(|| target_of(&hit.kind))
 }
 
@@ -170,8 +218,14 @@ pub fn card_target_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<Card
 ///
 /// 工具卡片与本地命令卡片的折叠内容不再随鼠标提亮，因此这里只认
 /// [`history::CardKind::Thinking`]；点击展开仍走 [`card_target_at`]，与 hover 无关。
-pub fn fold_target_at(area: Rect, lx: &Lx, column: u16, row: u16) -> Option<CardTarget> {
-    let hit = card_at(area, lx, column, row)?;
+pub fn fold_target_at(
+    area: Rect,
+    lx: &Lx,
+    column: u16,
+    row: u16,
+    cache: &mut PaneCache,
+) -> Option<CardTarget> {
+    let hit = card_at(area, lx, column, row, cache)?;
     matches!(hit.kind, history::CardKind::Thinking { .. }).then(|| target_of(&hit.kind))
 }
 

@@ -32,6 +32,7 @@ pub(crate) mod status;
 pub(crate) mod task;
 pub(crate) mod toast;
 
+pub(crate) use history::{PaneCache, RenderCache};
 use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
     LxChatHit, card_target_at, chat_hit, fold_target_at, history_center_target, history_rows,
@@ -72,11 +73,12 @@ pub fn render(
     lx: &Lx,
     focused: bool,
     selection: Option<&Selection>,
+    cache: &mut PaneCache,
 ) -> Option<(u16, u16)> {
     if area.width == 0 || area.height == 0 {
         return None;
     }
-    let (grid, cursor, sticky) = build(area, lx, focused);
+    let (grid, cursor, sticky) = build(area, lx, focused, cache);
     for dy in 0..area.height {
         for dx in 0..area.width {
             let glyph = grid.cell(area.x + dx, area.y + dy);
@@ -303,7 +305,8 @@ fn render_paste_panel(area: Rect, buf: &mut Buffer, lx: &Lx) {
 
 /// 提取选区文本（内容行、列相对内容区左上角）；空选区返回空串。
 pub fn copy_text(area: Rect, lx: &Lx, range: ((i32, u16), (i32, u16))) -> String {
-    let (grid, _, _) = build(area, lx, false);
+    let mut cache = PaneCache::default();
+    let (grid, _, _) = build(area, lx, false, &mut cache);
     let ((start_row, start_col), (end_row, end_col)) = range;
     let mut lines: Vec<String> = Vec::new();
     for row in start_row.max(0)..=end_row.max(0) {
@@ -627,10 +630,11 @@ fn build(
     area: Rect,
     lx: &Lx,
     focused: bool,
+    cache: &mut PaneCache,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let lay = layout(area, lx);
     if history::has_history(lx) {
-        return build_chat(area, lx, focused, &lay);
+        return build_chat(area, lx, focused, &lay, cache);
     }
     let mut grid = Grid::new(area);
     if lay.fallback {
@@ -687,6 +691,7 @@ fn build_chat(
     lx: &Lx,
     focused: bool,
     lay: &Layout,
+    cache: &mut PaneCache,
 ) -> (Grid, Option<(u16, u16)>, Option<history::StickyRow>) {
     let mut grid = Grid::new(area);
     let history_bottom = if lay.input.is_some() {
@@ -711,8 +716,8 @@ fn build_chat(
     let sticky = if lay.task_output.is_some() {
         None
     } else {
-        let history_view = history::view(history_rect, lx);
-        history::render(&mut grid, history_view.body, lx, history_view.scroll);
+        let history_view = history::view(history_rect, lx, cache);
+        history::render(&mut grid, history_view.body, lx, history_view.scroll, cache);
         // 历史滚动条贴右缘一列（内容溢出时；轨道只覆盖 body）。
         if let Some(bar) = history::scrollbar(
             history_view.body,
@@ -854,8 +859,9 @@ fn draw_box(grid: &mut Grid, rect: Rect, border: Style) {
 /// 测试辅助：仅构建聊天历史网格并 blit（不含输入框与面板）。
 #[cfg(test)]
 pub(crate) fn render_history_for_test(area: Rect, buf: &mut Buffer, lx: &Lx, scroll: usize) {
+    let mut cache = PaneCache::default();
     let mut grid = Grid::new(area);
-    history::render(&mut grid, area, lx, scroll);
+    history::render(&mut grid, area, lx, scroll, &mut cache);
     for dy in 0..area.height {
         for dx in 0..area.width {
             let glyph = grid.cell(area.x + dx, area.y + dy);

@@ -150,11 +150,11 @@ pub(crate) fn handle_lx_history_scrollbar_press(
     inner: Rect,
     column: u16,
     row: u16,
+    cache: &mut ui::RenderCache,
 ) -> bool {
-    let Some(bar) = state
-        .pane_anywhere(pane)
-        .and_then(|target| ui::main_content::lx::history_scrollbar(inner, &target.lx))
-    else {
+    let Some(bar) = state.pane_anywhere(pane).and_then(|target| {
+        ui::main_content::lx::history_scrollbar(inner, &target.lx, cache.pane(pane))
+    }) else {
         return false;
     };
     if !bar.track.contains((column, row).into()) {

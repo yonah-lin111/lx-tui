@@ -9,7 +9,8 @@ use crate::app::state::{AssistantStepView, Lx};
 use crate::ui::style;
 use crate::ui::text;
 
-use super::timeline::{TimelineEntry, timeline};
+use super::cache::PaneCache;
+use super::snapshot::SnapEntryKind;
 use super::{
     Grid, STEP_GUTTER, StepKind, StepMark, THINKING_DURATION_SEP, USER_INDENT, USER_PREFIX, body,
     compact, content_rect, folds_of, format_duration, needs_spacer, notice, rewind, shell_folds,
@@ -19,27 +20,46 @@ use super::{
 /// 渲染历史内容；`scroll` 为顶部行偏移（0 表示从最早开始）。`rect` 为内容区
 /// （body，不含置顶行；含右侧滚动条列）。
 ///
-/// 返回本次推进的内容行数：与 [`super::layout`] 的 `total_rows` **必须相等**
-/// （两者共用同一份步骤行数口径；测试逐一比对，防几何漂移）。
-pub(crate) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usize {
+/// 整条在视口外的条目直接跳过：不排版、不绘制，只把绝对行号推进到它的结束位置。
+/// 返回值仍是本次推进的内容行数，与 [`super::layout`] 的 `total_rows` **必须相等**。
+pub(crate) fn render(
+    grid: &mut Grid,
+    rect: Rect,
+    lx: &Lx,
+    scroll: usize,
+    cache: &mut PaneCache,
+) -> usize {
     if rect.width == 0 || rect.height == 0 {
         return 0;
     }
     let content = content_rect(rect);
+    let snapshot = cache.snapshot(content.width, lx);
+    let viewport_end = scroll.saturating_add(usize::from(rect.height));
     let mut row_index = 0usize;
     let selected_user = lx
         .rewind
         .selected
         .as_ref()
         .map(|target| target.user_message_id.as_str());
-    for entry in &timeline(lx) {
-        let message_index = match entry {
-            TimelineEntry::Message(index) => *index,
-            TimelineEntry::Notices { last, count } => {
+    for (index, entry) in snapshot.entries.iter().enumerate() {
+        // 整条在视口外：跳过排版与绘制，但绝对行号必须推进到正确位置。
+        // 条目末尾的空行归后一条（`layout` 的 leading spacer 口径），最后一条
+        // 则是末尾呼吸行，故推进目标是「下一条的起点」或「总行数」。
+        if entry.end <= scroll || entry.start >= viewport_end {
+            row_index = snapshot
+                .entries
+                .get(index + 1)
+                .map_or(snapshot.total_rows, |next| next.start);
+            continue;
+        }
+        row_index = entry.start;
+        let message_index = match entry.kind {
+            SnapEntryKind::Message(index) => index,
+            SnapEntryKind::Notices { last, count } => {
                 rewind::draw(
                     grid,
-                    &lx.chat.notices[*last],
-                    *count,
+                    &lx.chat.notices[last],
+                    count,
                     content,
                     scroll,
                     &mut row_index,
@@ -47,8 +67,8 @@ pub(crate) fn render(grid: &mut Grid, rect: Rect, lx: &Lx, scroll: usize) -> usi
                 row_index += 1;
                 continue;
             }
-            TimelineEntry::Compact(index) => {
-                let notice = &lx.compact.checkpoints[*index];
+            SnapEntryKind::Compact(index) => {
+                let notice = &lx.compact.checkpoints[index];
                 let expanded = compact::is_expanded(lx, &notice.id);
                 compact::draw(grid, notice, 1, expanded, content, scroll, &mut row_index);
                 row_index += 1;

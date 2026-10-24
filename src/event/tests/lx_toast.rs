@@ -207,6 +207,7 @@ fn lx_toast_click_closes_it() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -225,6 +226,7 @@ fn lx_toast_click_closes_it() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -251,6 +253,7 @@ fn lx_toast_click_closes_it() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(
@@ -288,6 +291,7 @@ fn hovering_the_lx_toast_freezes_its_expiry() {
         &mut sessions,
         &geo,
         &config,
+        &mut ui::RenderCache::default(),
         &mut dirty,
     );
     assert!(

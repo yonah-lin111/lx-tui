@@ -150,8 +150,10 @@ fn card_content_is_the_toggle_target() {
     let mut lx = Lx::new();
     lx.chat.messages = vec![file_message("call-edit")];
     lx.chat.follow_bottom = true;
-    let view = history_view(area, &lx).expect("历史区");
-    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
+    let cards =
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
+            .cards;
     assert_eq!(cards.len(), 1, "一张卡片");
     let card = &cards[0];
     // 整块可点：折叠态点预览行就能展开。
@@ -163,7 +165,7 @@ fn card_content_is_the_toggle_target() {
         .saturating_add(view.body.y);
     for row in [top_y, top_y + 1, top_y + 2] {
         assert_eq!(
-            card_target_at(area, &lx, area.x + 6, row),
+            card_target_at(area, &lx, area.x + 6, row, &mut PaneCache::default()),
             Some(crate::app::state::CardTarget::Tool {
                 message_id: "msg-call-edit".into(),
                 call_id: "call-edit".into(),
@@ -182,8 +184,10 @@ fn expanded_card_body_is_the_click_to_collapse_target() {
     lx.chat.messages = vec![file_message("call-edit")];
     lx.chat.follow_bottom = true;
     lx.chat.toggle_detail("msg-call-edit", "call-edit");
-    let view = history_view(area, &lx).expect("历史区");
-    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
+    let cards =
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
+            .cards;
     let card = cards.first().expect("文件卡片整块命中");
     assert!(
         matches!(
@@ -200,7 +204,7 @@ fn expanded_card_body_is_the_click_to_collapse_target() {
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
     assert_eq!(
-        card_target_at(area, &lx, area.x + 6, top_y + 2),
+        card_target_at(area, &lx, area.x + 6, top_y + 2, &mut PaneCache::default()),
         Some(crate::app::state::CardTarget::Tool {
             message_id: "msg-call-edit".into(),
             call_id: "call-edit".into(),
@@ -221,9 +225,9 @@ fn file_tool_without_diff_has_no_toggle_hit() {
         )));
     }
     let area = Rect::new(0, 0, 60, 20);
-    let view = history_view(area, &lx).expect("历史区");
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
     assert!(
-        crate::ui::main_content::lx::history::layout(view.body, &lx)
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default(),)
             .cards
             .is_empty(),
         "无差异正文、展开也不多行时不登记点击面"
@@ -236,8 +240,10 @@ fn running_process_card_is_clickable_without_an_open_row() {
     // 只有末行的引导文字。
     let area = Rect::new(0, 0, 60, 20);
     let lx = lx_with_command("call-1", 42);
-    let view = history_view(area, &lx).expect("历史区");
-    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
+    let cards =
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
+            .cards;
     // 参数区与引导行各自可点，行为都是打开后台任务面板。
     assert_eq!(cards.len(), 2, "运行中的卡片必须可点");
     let mut buf = Buffer::empty(area);
@@ -265,8 +271,10 @@ fn long_process_command_wraps_and_is_clickable() {
         view.command = r#"$ { echo "==== 项目概览 ====" && echo "Rust 版本: $(rustc --version)" && echo "文件数: $(find . -type f | wc -l)" && echo "目录结构" && ls -R && echo "依赖" && cat Cargo.toml && echo "完成" }"#
             .into();
     }
-    let view = history_view(area, &lx).expect("历史区");
-    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
+    let cards =
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
+            .cards;
     let card = cards.first().expect("折行命令可展开，应有卡片");
     let top_y = card
         .card
@@ -275,7 +283,7 @@ fn long_process_command_wraps_and_is_clickable() {
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
     assert_eq!(
-        card_target_at(area, &lx, area.x + 6, top_y + 1),
+        card_target_at(area, &lx, area.x + 6, top_y + 1, &mut PaneCache::default()),
         Some(crate::app::state::CardTarget::Tool {
             message_id: "msg-call-1".into(),
             call_id: "call-1".into(),
@@ -318,12 +326,13 @@ fn folded_thinking_and_long_param_are_clickable() {
         duration_ms: None,
     }];
     lx.chat.follow_bottom = true;
-    let view = history_view(area, &lx).expect("历史区");
-    let card = crate::ui::main_content::lx::history::layout(view.body, &lx)
-        .cards
-        .into_iter()
-        .next()
-        .expect("思考块卡片");
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
+    let card =
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
+            .cards
+            .into_iter()
+            .next()
+            .expect("思考块卡片");
     let header_y = card
         .card
         .y
@@ -331,7 +340,7 @@ fn folded_thinking_and_long_param_are_clickable() {
         .saturating_sub(u16::try_from(view.scroll).unwrap_or(0))
         .saturating_add(view.body.y);
     assert_eq!(
-        card_target_at(area, &lx, area.x + 6, header_y),
+        card_target_at(area, &lx, area.x + 6, header_y, &mut PaneCache::default()),
         Some(crate::app::state::CardTarget::Thinking {
             message_index: 0,
             step_index: 0,
@@ -376,8 +385,10 @@ fn folded_thinking_and_long_param_are_clickable() {
         duration_ms: None,
     }];
     lx.chat.follow_bottom = true;
-    let view = history_view(area, &lx).expect("历史区");
-    let cards = crate::ui::main_content::lx::history::layout(view.body, &lx).cards;
+    let view = history_view(area, &lx, &mut PaneCache::default()).expect("历史区");
+    let cards =
+        crate::ui::main_content::lx::history::layout(view.body, &lx, &mut PaneCache::default())
+            .cards;
     let card = cards.first().expect("长参数可展开，必须有卡片");
     assert!(card.card.height > 1, "长参数卡片含详情行：{card:?}");
     let detail_y = card
@@ -388,7 +399,7 @@ fn folded_thinking_and_long_param_are_clickable() {
         .saturating_add(view.body.y)
         .saturating_add(1);
     assert_eq!(
-        card_target_at(area, &lx, area.x + 6, detail_y),
+        card_target_at(area, &lx, area.x + 6, detail_y, &mut PaneCache::default()),
         Some(crate::app::state::CardTarget::Tool {
             message_id: "m-param".into(),
             call_id: "call-param".into(),

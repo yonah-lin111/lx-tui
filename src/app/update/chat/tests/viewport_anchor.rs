@@ -95,6 +95,7 @@ fn remember_viewport(state: &mut AppState, pane: PaneId, area: Rect) {
     let scroll = crate::ui::main_content::lx::history_view(
         area,
         &state.pane_anywhere(pane).expect("pane").lx,
+        crate::ui::RenderCache::default().pane(pane),
     )
     .expect("view")
     .scroll;
@@ -133,12 +134,18 @@ fn toggling_thinking_while_following_keeps_the_viewport() {
     let before = crate::ui::main_content::lx::history_view(
         area,
         &state.pane_anywhere(pane).expect("pane").lx,
+        crate::ui::RenderCache::default().pane(pane),
     )
     .expect("view");
 
     // 点最后一块思考的头部（它就在视口里）。
     let target = state.pane_anywhere(pane).expect("pane");
-    let thinking = crate::ui::main_content::lx::history::layout(before.body, &target.lx).thinking;
+    let thinking = crate::ui::main_content::lx::history::layout(
+        before.body,
+        &target.lx,
+        crate::ui::RenderCache::default().pane(pane),
+    )
+    .thinking;
     let (message_index, step_index, _) = *thinking.last().expect("thinking 头部");
     assert!(toggle_thinking_at(
         &mut state,
@@ -150,6 +157,7 @@ fn toggling_thinking_while_following_keeps_the_viewport() {
     let after = crate::ui::main_content::lx::history_view(
         area,
         &state.pane_anywhere(pane).expect("pane").lx,
+        crate::ui::RenderCache::default().pane(pane),
     )
     .expect("view");
     assert_eq!(after.scroll, before.scroll, "展开后顶部行不变");
@@ -202,6 +210,7 @@ fn toggling_tool_detail_while_following_keeps_the_viewport() {
     let before = crate::ui::main_content::lx::history_view(
         area,
         &state.pane_anywhere(pane).expect("pane").lx,
+        crate::ui::RenderCache::default().pane(pane),
     )
     .expect("view");
     assert!(toggle_tool_detail(
@@ -214,6 +223,7 @@ fn toggling_tool_detail_while_following_keeps_the_viewport() {
     let after = crate::ui::main_content::lx::history_view(
         area,
         &state.pane_anywhere(pane).expect("pane").lx,
+        crate::ui::RenderCache::default().pane(pane),
     )
     .expect("view");
     assert_eq!(after.scroll, before.scroll, "展开卡片后顶部行不变");
@@ -328,6 +338,7 @@ fn toggling_file_diff_card_while_following_keeps_the_viewport() {
         let view = crate::ui::main_content::lx::history_view(
             area,
             &state.pane_anywhere(pane).expect("pane").lx,
+            crate::ui::RenderCache::default().pane(pane),
         )
         .expect("view");
         (view.scroll, view.total_rows)
@@ -342,6 +353,7 @@ fn toggling_file_diff_card_while_following_keeps_the_viewport() {
     let view = crate::ui::main_content::lx::history_view(
         area,
         &state.pane_anywhere(pane).expect("pane").lx,
+        crate::ui::RenderCache::default().pane(pane),
     )
     .expect("view");
     assert!(

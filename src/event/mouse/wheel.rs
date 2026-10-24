@@ -165,6 +165,7 @@ pub(crate) fn handle_mouse_wheel(
     state: &mut AppState,
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
@@ -322,9 +323,9 @@ pub(crate) fn handle_mouse_wheel(
                     ui::main_content::lx::history_wheel_region(inner, &target.lx)
                 })
                 && history_rect.contains((mouse.column, mouse.row).into())
-                && let Some((total, visible)) = state
-                    .pane_anywhere(pane)
-                    .and_then(|target| ui::main_content::lx::history_rows(inner, &target.lx))
+                && let Some((total, visible)) = state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::history_rows(inner, &target.lx, cache.pane(pane))
+                })
                 && update::scroll_lx_history(state, pane, direction, total, visible)
             {
                 *dirty = true;

@@ -6,6 +6,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 
 use super::*;
+
+/// 测试用缓存：每次调用独立，避免测试之间共享几何快照。
+fn cache() -> PaneCache {
+    PaneCache::default()
+}
 use crate::app::state::{AssistantStepView, ChatMessageView, ChatPartView, Lx, LxChat};
 use crate::chat::events::PartKind;
 use crate::ui::main_content::lx::{history_center_target, history_rect};
@@ -97,7 +102,7 @@ fn thinking_collapsed_after_completion_one_row_each() {
         vec![reasoning_part("长思考\n两行"), text_part("正文")],
     )]);
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 完成态默认折叠：折叠头 1 + 块间空行 1 + 正文 1 + 消息间空行 1 = 4
     //（无用量数据不出统计行）。
     assert_eq!(layout.total_rows, 4);
@@ -115,7 +120,7 @@ fn thinking_collapsed_by_default_while_streaming() {
         vec![reasoning_part("l1\nl2"), text_part("")],
     )]);
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     assert!(!lx.chat.reasoning_expanded(0, 0), "生成中保持折叠");
     assert!(lx.chat.reasoning_streaming(0, 0), "仍在生成");
     // 折叠头 1 + 消息间空行 1 = 2（空的正文块不占行、也不引入空行）。
@@ -148,7 +153,7 @@ fn expanded_thinking_counts_content_rows() {
     )]);
     lx.chat.toggle_reasoning(0, 0);
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 展开头 1 + 3 内容行 + 块间空行 1 + 正文 1 + 消息间空行 1 = 7。
     assert_eq!(layout.total_rows, 7);
 }
@@ -345,7 +350,7 @@ fn wrap_preserves_explicit_newlines() {
 #[test]
 fn layout_handles_zero_area() {
     let lx = lx_with(vec![message("user", "complete", vec![text_part("x")])]);
-    let layout = layout(Rect::new(0, 0, 0, 0), &lx);
+    let layout = layout(Rect::new(0, 0, 0, 0), &lx, &mut cache());
     assert_eq!(layout.total_rows, 0);
     assert!(layout.thinking.is_empty());
 }
@@ -357,7 +362,7 @@ fn thinking_header_rect_tracks_row_position() {
         message("assistant", "complete", vec![reasoning_part("思考")]),
     ]);
     let area = Rect::new(3, 5, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 第一条：正文(5，用户前缀在首行) + 空行(6)；第二条 thinking 头(7)。
     assert_eq!(layout.thinking.len(), 1);
     let (_, _, header) = layout.thinking[0];
@@ -423,7 +428,7 @@ fn history_layout_reserves_scrollbar_column() {
         vec![text_part("你好世界你好世界")],
     )]);
     let area = Rect::new(0, 0, 20, 10);
-    let _layout = layout(area, &lx);
+    let _layout = layout(area, &lx, &mut cache());
     // thinking 头宽度应扣除滚动条预留列。
     assert_eq!(super::content_rect(area).width, 20 - SCROLLBAR_COLUMNS);
 }
@@ -457,7 +462,7 @@ fn stats_line_row_is_counted_in_layout() {
     let lx = lx_with(vec![completed]);
     // 统计行单行放得下（60 列）。
     let area = Rect::new(0, 0, 60, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 正文 1 + 块间空行 1 + 统计行 1 + 消息间空行 1 = 4。
     assert_eq!(layout.total_rows, 4);
 }
@@ -682,11 +687,11 @@ fn sticky_area() -> Rect {
 fn sticky_prompt_pins_the_turn_prompt_when_top_row_is_answer() {
     let mut lx = sticky_lx();
     let area = sticky_area();
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 顶行落在第一轮回复里。
     let scroll = layout.messages[1].start;
     lx.chat.history_scroll = scroll;
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     assert_eq!(computed.sticky, Some(0), "钉第一轮的 prompt");
     assert_eq!(computed.body.y, area.y + 1, "让位一行");
     assert_eq!(computed.body.height, area.height - 1);
@@ -697,16 +702,16 @@ fn sticky_prompt_pins_the_turn_prompt_when_top_row_is_answer() {
 fn sticky_prompt_yields_when_top_row_is_the_prompt() {
     let mut lx = sticky_lx();
     let area = sticky_area();
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 顶行就是第二条用户消息自己的行（含它前面的空行）→ 不钉。
     lx.chat.history_scroll = layout.messages[2].start;
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     assert_eq!(computed.sticky, None, "用户消息自带上下文");
     assert_eq!(computed.body, area, "不占行");
 
     // 轮边界空行（归后一条消息）同样按用户消息自己的行处理。
     lx.chat.history_scroll = layout.messages[2].start.saturating_sub(1);
-    let at_blank = view(area, &lx);
+    let at_blank = view(area, &lx, &mut cache());
     assert_eq!(at_blank.sticky, None, "空行归后一条：仍算用户消息的行");
 }
 
@@ -714,12 +719,12 @@ fn sticky_prompt_yields_when_top_row_is_the_prompt() {
 fn sticky_prompt_revert_records_suppression_memory() {
     let mut lx = sticky_lx();
     let area = sticky_area();
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 整块 body 下顶行 = 第一轮回复最后一行 → 需要钉；让位一行后顶行变成
     // 第二条用户消息的边界空行 → 不再需要 → 撤销让位并记记忆。
     let scroll = layout.messages[2].start.saturating_sub(1);
     lx.chat.history_scroll = scroll;
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     assert_eq!(computed.sticky, None, "让位后不再需要 → 撤销");
     assert_eq!(computed.body, area, "撤销让位");
     let memory = computed.suppressed.expect("写入抑制记忆");
@@ -731,7 +736,7 @@ fn sticky_prompt_revert_records_suppression_memory() {
 fn sticky_prompt_respects_suppression_memory_while_reading() {
     let mut lx = sticky_lx();
     let area = sticky_area();
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     // 顶行在第一轮回复里：本会钉，但记忆一致 → 跳过重判、沿用抑制。
     lx.chat.history_scroll = layout.messages[1].start;
     let top = sticky::message_at(&layout.messages, layout.messages[1].start).expect("顶行");
@@ -740,7 +745,7 @@ fn sticky_prompt_respects_suppression_memory_while_reading() {
         message: top.0,
         row: top.1,
     });
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     assert_eq!(computed.sticky, None, "阅读态沿用抑制");
     assert_eq!(computed.body, area);
     assert_eq!(
@@ -753,21 +758,21 @@ fn sticky_prompt_respects_suppression_memory_while_reading() {
         viewport: Rect::new(0, 0, 23, 8),
         ..computed.suppressed.expect("记忆")
     });
-    let resized = view(area, &lx);
+    let resized = view(area, &lx, &mut cache());
     assert_eq!(resized.sticky, Some(0), "视口变化使记忆失效");
 }
 
 #[test]
 fn sticky_prompt_thresholds_hide_the_row() {
     let mut lx = sticky_lx();
-    let layout = layout(sticky_area(), &lx);
+    let layout = layout(sticky_area(), &lx, &mut cache());
     lx.chat.history_scroll = layout.messages[1].start;
     // 太矮：不显示（也不写记忆）。
-    let short = view(Rect::new(0, 0, 24, 3), &lx);
+    let short = view(Rect::new(0, 0, 24, 3), &lx, &mut cache());
     assert_eq!(short.sticky, None, "高度不足不显示");
     assert_eq!(short.suppressed, None);
     // 太窄：不显示。
-    let narrow = view(Rect::new(0, 0, 15, 8), &lx);
+    let narrow = view(Rect::new(0, 0, 15, 8), &lx, &mut cache());
     assert_eq!(narrow.sticky, None, "宽度不足不显示");
 }
 
@@ -795,9 +800,9 @@ fn sticky_text_collapses_sanitizes_and_marks_empty() {
 fn sticky_row_is_painted_outside_the_grid() {
     let mut lx = sticky_lx();
     let area = sticky_area();
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     lx.chat.history_scroll = layout.messages[1].start;
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     let row = sticky_rect(&computed).expect("置顶行");
     assert_eq!(row.rect, Rect::new(area.x, area.y, area.width, 1));
 
@@ -813,7 +818,7 @@ fn sticky_row_is_painted_outside_the_grid() {
     );
 
     let mut grid = Grid::new(area);
-    render(&mut grid, computed.body, &lx, computed.scroll);
+    render(&mut grid, computed.body, &lx, computed.scroll, &mut cache());
     let mut grid_row = String::new();
     for x in area.x..area.right() {
         grid_row.push(grid.cell(x, area.y).ch);
@@ -832,9 +837,9 @@ fn sticky_text_is_truncated_with_ellipsis_to_width() {
         vec![text_part("很长很长很长很长很长很长很长的问题")],
     );
     let area = sticky_area();
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     lx.chat.history_scroll = layout.messages[1].start;
-    let computed = view(area, &lx);
+    let computed = view(area, &lx, &mut cache());
     let row = sticky_rect(&computed).expect("置顶行");
     let message = lx.chat.messages[row.message].clone();
     let mut buf = Buffer::empty(area);
@@ -882,12 +887,12 @@ fn tool_step_occupies_two_rows_and_renders_summary() {
     message.steps.push(tool_step(1));
     let lx = lx_with(vec![message]);
     let area = Rect::new(0, 0, 60, 20);
-    let computed = layout(area, &lx);
+    let computed = layout(area, &lx, &mut cache());
     // 正文 1 + 块间空行 1 + 工具 2 行 + 消息间空行 1 = 5。
     assert_eq!(computed.total_rows, 5);
 
     let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
+    render(&mut grid, area, &lx, 0, &mut cache());
     let mut rows: Vec<String> = Vec::new();
     for y in 0..7u16 {
         let mut row = String::new();
@@ -941,7 +946,7 @@ fn tool_only_message_still_occupies_rows() {
     let mut message = message("assistant", "complete", Vec::new());
     message.steps.push(tool_step(0));
     let lx = lx_with(vec![message]);
-    let computed = layout(Rect::new(0, 0, 40, 10), &lx);
+    let computed = layout(Rect::new(0, 0, 40, 10), &lx, &mut cache());
     // 工具 2 行 + 消息间空行/呼吸行 1 = 3。
     assert_eq!(computed.total_rows, 3);
 }
@@ -1009,7 +1014,7 @@ fn tip_only_history_stays_on_history_view() {
     lx.chat.notices = vec![rewind_notice(0)];
     assert!(has_history(&lx), "messages 为空但提示非空仍是历史");
     let area = Rect::new(0, 0, 40, 10);
-    let view = view(area, &lx);
+    let view = view(area, &lx, &mut cache());
     assert!(view.total_rows > 0);
 }
 
@@ -1023,9 +1028,9 @@ fn notices_and_messages_share_one_row_budget() {
     lx.chat.messages[1].sequence = 2;
     lx.chat.notices = vec![rewind_notice(1)];
     let area = Rect::new(0, 0, 40, 20);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
     assert!(layout.total_rows > 4, "提示占两行，不能与消息共享同一行");
 }
@@ -1043,9 +1048,9 @@ fn selected_latest_user_message_uses_distinct_background() {
         kind: crate::app::state::RewindTargetKind::Turn,
     });
     let area = Rect::new(0, 0, 40, 10);
-    let view = view(area, &lx);
+    let view = view(area, &lx, &mut cache());
     let mut grid = Grid::new(area);
-    render(&mut grid, view.body, &lx, view.scroll);
+    render(&mut grid, view.body, &lx, view.scroll, &mut cache());
     let highlighted = (view.body.y..view.body.bottom()).any(|y| {
         (view.body.x..view.body.right())
             .any(|x| grid.cell(x, y).style.bg == Some(ratatui::style::Color::Indexed(24)))
@@ -1058,9 +1063,9 @@ fn consecutive_rewind_notices_merge_with_count() {
     let mut lx = Lx::new();
     lx.chat.notices = vec![rewind_notice(0), rewind_notice(1), rewind_notice(2)];
     let area = Rect::new(0, 0, 60, 10);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows);
     let text: String = (area.y..area.bottom())
         .map(|y| {
@@ -1093,7 +1098,7 @@ fn notices_separated_by_messages_are_not_merged() {
     lx.chat.notices = vec![rewind_notice(0), rewind_notice(2)];
     let area = Rect::new(0, 0, 60, 12);
     let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
+    render(&mut grid, area, &lx, 0, &mut cache());
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -1121,10 +1126,10 @@ fn center_target_puts_user_message_middle_of_viewport() {
     }
     let lx = lx_with(messages);
     let area = Rect::new(0, 0, 40, 14);
-    let (top, max_top) = history_center_target(area, &lx, "m10").expect("scrollable");
+    let (top, max_top) = history_center_target(area, &lx, "m10", &mut cache()).expect("scrollable");
     assert!(top > 0 && top < max_top, "目标应有上下可滚动空间");
     let rect = history_rect(area, &lx).expect("history");
-    let layout = layout(rect, &lx);
+    let layout = layout(rect, &lx, &mut cache());
     let rows = layout.messages[10];
     let height = usize::from(rect.height);
     assert!(
@@ -1141,7 +1146,7 @@ fn center_target_puts_user_message_middle_of_viewport() {
 fn center_target_is_none_when_content_fits() {
     let lx = lx_with(vec![message("user", "complete", vec![text_part("short")])]);
     assert_eq!(
-        history_center_target(Rect::new(0, 0, 40, 20), &lx, "user-1"),
+        history_center_target(Rect::new(0, 0, 40, 20), &lx, "user-1", &mut cache()),
         None
     );
 }
@@ -1168,7 +1173,7 @@ fn compact_only_history_stays_on_history_view() {
     lx.compact.replace(vec![checkpoint(1, true)]);
     assert!(has_history(&lx));
     let area = Rect::new(0, 0, 60, 10);
-    let view = view(area, &lx);
+    let view = view(area, &lx, &mut cache());
     assert!(view.total_rows > 0);
 }
 
@@ -1178,9 +1183,9 @@ fn compact_entry_folds_to_header_rows() {
     let mut lx = Lx::new();
     lx.compact.replace(vec![checkpoint(1, true)]);
     let area = Rect::new(0, 0, 60, 10);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows, "布局与渲染行数必须一致");
     // 标题 + 描述 + 末尾呼吸行（与其它历史条目同一口径）。
     assert_eq!(layout.total_rows, 3, "折叠态只占标题+描述+呼吸行");
@@ -1207,9 +1212,9 @@ fn compact_entry_expands_to_summary() {
     lx.compact.replace(vec![checkpoint(4, true)]);
     lx.compact.toggle("compact-4");
     let area = Rect::new(0, 0, 60, 14);
-    let layout = layout(area, &lx);
+    let layout = layout(area, &lx, &mut cache());
     let mut grid = Grid::new(area);
-    let drawn = render(&mut grid, area, &lx, 0);
+    let drawn = render(&mut grid, area, &lx, 0, &mut cache());
     assert_eq!(drawn, layout.total_rows, "展开后仍必须一致");
     assert!(layout.total_rows > 2, "展开必须有更多行");
     let text: String = (area.y..area.bottom())
@@ -1236,7 +1241,7 @@ fn compact_entry_is_interleaved_by_sequence() {
     lx.compact.replace(vec![checkpoint(2, true)]);
     let area = Rect::new(0, 0, 60, 16);
     let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
+    render(&mut grid, area, &lx, 0, &mut cache());
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -1261,7 +1266,7 @@ fn consecutive_compacts_are_not_merged() {
         .replace(vec![checkpoint(1, true), checkpoint(2, true)]);
     let area = Rect::new(0, 0, 60, 12);
     let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
+    render(&mut grid, area, &lx, 0, &mut cache());
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -1284,7 +1289,7 @@ fn reverted_checkpoint_is_marked() {
     lx.compact.replace(vec![checkpoint(3, false)]);
     let area = Rect::new(0, 0, 60, 10);
     let mut grid = Grid::new(area);
-    render(&mut grid, area, &lx, 0);
+    render(&mut grid, area, &lx, 0, &mut cache());
     let text: String = (area.y..area.bottom())
         .map(|y| {
             (area.x..area.right())
@@ -1307,9 +1312,9 @@ fn compact_entry_wraps_on_narrow_width() {
     lx.compact.toggle("compact-4");
     for width in [16u16, 24, 40, 80] {
         let area = Rect::new(0, 0, width, 30);
-        let layout = layout(area, &lx);
+        let layout = layout(area, &lx, &mut cache());
         let mut grid = Grid::new(area);
-        let drawn = render(&mut grid, area, &lx, 0);
+        let drawn = render(&mut grid, area, &lx, 0, &mut cache());
         assert_eq!(
             drawn, layout.total_rows,
             "宽度 {width} 下行数必须一致（换行不得导致滚动漂移）"
@@ -1324,10 +1329,10 @@ fn compact_fold_toggle_changes_row_count_consistently() {
     let mut lx = Lx::new();
     lx.compact.replace(vec![checkpoint(4, true)]);
     let area = Rect::new(0, 0, 50, 20);
-    let folded = layout(area, &lx).total_rows;
+    let folded = layout(area, &lx, &mut cache()).total_rows;
     lx.compact.toggle("compact-4");
-    let expanded = layout(area, &lx).total_rows;
+    let expanded = layout(area, &lx, &mut cache()).total_rows;
     assert!(expanded > folded, "展开必须增加行数");
     let mut grid = Grid::new(area);
-    assert_eq!(render(&mut grid, area, &lx, 0), expanded);
+    assert_eq!(render(&mut grid, area, &lx, 0, &mut cache()), expanded);
 }

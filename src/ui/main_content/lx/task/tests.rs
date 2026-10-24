@@ -69,7 +69,14 @@ fn page_with(entries: Vec<ProcessEntry>, now_ms: i64) -> TaskPage {
 fn render_lines(lx: &Lx, width: u16, height: u16) -> Vec<String> {
     let area = Rect::new(0, 0, width, height);
     let mut buf = Buffer::empty(Rect::new(0, 0, width, height + 1));
-    super::super::render(area, &mut buf, lx, true, None);
+    super::super::render(
+        area,
+        &mut buf,
+        lx,
+        true,
+        None,
+        &mut super::super::history::PaneCache::default(),
+    );
     (0..=height)
         .map(|y| {
             (0..width)
@@ -425,7 +432,14 @@ fn active_tab_uses_the_header_tab_bar_style() {
     lx.task = Some(page_with(vec![entry(1, "npm run dev", "/w")], 0));
     let area = Rect::new(0, 0, 70, 20);
     let mut buf = Buffer::empty(Rect::new(0, 0, 70, 21));
-    super::super::render(area, &mut buf, &lx, true, None);
+    super::super::render(
+        area,
+        &mut buf,
+        &lx,
+        true,
+        None,
+        &mut super::super::history::PaneCache::default(),
+    );
     let mut found = None;
     for y in 0..21u16 {
         for x in 0..70u16 {

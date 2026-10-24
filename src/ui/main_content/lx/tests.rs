@@ -111,7 +111,14 @@ fn tiny_page_falls_back_to_wordmark() {
     let area = Rect::new(0, 0, 6, 5);
     assert!(layout(area, &Lx::new()).fallback);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &Lx::new(), false, None);
+    let _ = render(
+        area,
+        &mut buf,
+        &Lx::new(),
+        false,
+        None,
+        &mut PaneCache::default(),
+    );
     assert!(buffer_text(&buf).contains("lx"));
 }
 
@@ -153,7 +160,14 @@ fn entry_hit_matches_labels_and_ignores_blank() {
 fn wide_page_renders_brand_entries_and_input() {
     let area = Rect::new(0, 0, 100, 20);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &Lx::new(), true, None);
+    let _ = render(
+        area,
+        &mut buf,
+        &Lx::new(),
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
     let text = buffer_text(&buf);
     assert!(text.contains("Native Agent"), "{text}");
     assert!(text.contains("Hybrid Agent"), "{text}");
@@ -257,7 +271,7 @@ fn selected_entry_switches_text() {
     let mut buf = Buffer::empty(area);
     let mut lx = Lx::new();
     lx.entry = LxEntry::Hybrid;
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     assert!(buffer_text(&buf).contains("mixes native and external agents"));
 }
 
@@ -265,7 +279,14 @@ fn selected_entry_switches_text() {
 fn selected_entry_has_underline_below() {
     let area = Rect::new(0, 0, 100, 60);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &Lx::new(), true, None);
+    let _ = render(
+        area,
+        &mut buf,
+        &Lx::new(),
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
     let lay = layout(area, &Lx::new());
     let find = |entry| {
         lay.entries
@@ -295,7 +316,7 @@ fn typing_hash_opens_markdown_panel() {
     lx.insert_char('#');
     assert!(lx.panel.is_some(), "行尾 # 触发 md 面板");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("Markdown"), "面板标题: {text}");
     assert!(text.contains("Heading 1"), "候选可见: {text}");
@@ -309,7 +330,7 @@ fn markdown_line_is_styled() {
         lx.insert_char(ch);
     }
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
     // 输入框走**编辑器**高亮色板（`markdown_*`，独立于阅读渲染的 `md_read_*`）：
@@ -330,7 +351,8 @@ fn cursor_is_relative_to_content_area() {
     lx.insert_char('h');
     lx.insert_char('i');
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
+    let cursor =
+        render(area, &mut buf, &lx, true, None, &mut PaneCache::default()).expect("cursor");
     assert!(buffer_text(&buf).contains("hi"));
     // 行相对内容区：输入框下沿贴底，内容行即倒数第 2 行（底边框为最后一行）。
     assert_eq!(cursor.0, area.height - 2);
@@ -345,7 +367,8 @@ fn cursor_follows_the_active_line() {
     lx.newline();
     lx.insert_char('b');
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
+    let cursor =
+        render(area, &mut buf, &lx, true, None, &mut PaneCache::default()).expect("cursor");
     // 行相对内容区：输入框高 4，末行内容在倒数第 2 行（最后一行是底边框）。
     assert_eq!(cursor.0, area.height - 2);
     assert_eq!(cursor.1, MARGIN + 2 + 1);
@@ -359,7 +382,8 @@ fn cursor_aligns_after_wide_chars() {
         lx.insert_char(ch);
     }
     let mut buf = Buffer::empty(area);
-    let cursor = render(area, &mut buf, &lx, true, None).expect("cursor");
+    let cursor =
+        render(area, &mut buf, &lx, true, None, &mut PaneCache::default()).expect("cursor");
     let row = area.bottom() - 2;
     let content_x = area.x + MARGIN + 2;
     assert_eq!(buf[(content_x, row)].symbol(), "你");
@@ -424,7 +448,7 @@ fn path_paste_panel_renders_above_input() {
         PasteCandidateKind::Folder,
     )]));
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("Paste"), "参照面板标题: {text}");
     assert!(text.contains("Insert reference"), "引用项: {text}");
@@ -455,7 +479,7 @@ fn long_line_wraps_into_visible_rows() {
     lx.insert_str(&"a".repeat(usize::from(width)));
     lx.insert_str("ZZ");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("ZZ"), "折行后的第二视觉行可见: {text}");
 }
@@ -471,7 +495,7 @@ fn wrapped_input_caps_height_and_shows_scrollbar() {
     assert!(lx.visual_rows().len() > cap, "视觉行超过可视上限");
     assert_eq!(layout(area, &lx).input_visible, cap, "输入框高度封顶");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     // 轨道不画符号，只看 thumb：滚动条列只剩 `▐`。
     assert!(text.contains('▐'), "溢出时滚动条可见: {text}");
@@ -593,7 +617,7 @@ fn mention_panel_renders_title_and_directory_rows() {
     ];
     let lx = mention_lx(entries);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("@Command"), "面板标题可见: {text}");
     assert!(text.contains("src/"), "目录以 / 结尾展示: {text}");
@@ -609,14 +633,21 @@ fn mention_status_row_renders_when_scanning_and_empty() {
     lx.insert_char('@');
     assert!(mention::layout(area, &lx).is_some(), "扫描中也显示状态面板");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("scanning"), "扫描中状态行: {text}");
 
     // 空结果：状态行而非隐藏。
     let empty = mention_lx(Vec::new());
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &empty, true, None);
+    let _ = render(
+        area,
+        &mut buf,
+        &empty,
+        true,
+        None,
+        &mut PaneCache::default(),
+    );
     let text = buffer_text(&buf);
     assert!(text.contains("no matches"), "空结果状态行: {text}");
 }
@@ -646,7 +677,7 @@ fn mention_panel_renders_cjk_candidate_without_overflow() {
         is_directory: false,
     }]);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
     let panel = mention::layout(area, &lx).expect("panel");
     // 面板右边界不超过输入框右边界。
     let input = layout(area, &lx).input.expect("input");
@@ -859,7 +890,7 @@ fn slash_panel_renders_ascii_only() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = slash_commands_lx(0);
     let mut buf = Buffer::empty(area);
-    let (built, _cursor, _sticky) = build(area, &lx, true);
+    let (built, _cursor, _sticky) = build(area, &lx, true, &mut PaneCache::default());
     blit_grid(area, &mut buf, &built);
     for y in 0..area.height {
         for x in 0..area.width {
@@ -920,7 +951,7 @@ fn initial_page_shows_status_on_pane_bottom_border() {
             cell.set_char('─');
         }
     }
-    render(inner, &mut buf, &lx, false, None);
+    render(inner, &mut buf, &lx, false, None, &mut PaneCache::default());
     let border: String = (rect.x..rect.right())
         .map(|x| buf.cell((x, row)).map(|c| c.symbol()).unwrap_or(" "))
         .collect();
@@ -970,7 +1001,7 @@ fn chat_history_scrollbar_geometry_appears_when_overflowing() {
         });
     }
     lx.chat = chat;
-    let bar = history_scrollbar(area, &lx).expect("溢出时有滚动条几何");
+    let bar = history_scrollbar(area, &lx, &mut PaneCache::default()).expect("溢出时有滚动条几何");
     // 滚动条贴历史区（与输入框同宽）右缘一列。
     let input = layout(area, &lx).input.expect("input");
     assert_eq!(bar.track.x, input.right() - 1, "滚动条在输入框右缘内一列");
@@ -1013,7 +1044,7 @@ fn overflowing_history_draws_scrollbar_glyphs() {
     }
     lx.chat = chat;
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     // 历史滚动条与公共组件同口径：只有 thumb，没有轨道竖线。
     assert!(text.contains('▐'), "溢出时历史滚动条可见：{text}");
@@ -1025,7 +1056,7 @@ fn model_panel_shows_provider_and_model_names_not_ids() {
     let area = Rect::new(0, 0, 80, 24);
     let lx = slash_model_lx();
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("deepseek-v4.1-flash"), "显示模型名：{text}");
     assert!(text.contains("9router-lx-t"), "显示供应商名：{text}");
@@ -1088,7 +1119,7 @@ fn streaming_shows_loading_bar_above_input() {
     assert_eq!(bar.bottom(), input.y, "聊天栏紧贴输入框上沿");
     assert_eq!(bar.height, 1);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(
         text.contains(text::chat::LOADING_LABEL),
@@ -1129,7 +1160,7 @@ fn compacting_shows_loading_bar_above_input() {
     let bar = lay.chat_bar.expect("压缩中显示聊天栏");
     assert_eq!(bar.bottom(), input.y, "聊天栏紧贴输入框上沿");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(
         text.contains(text::chat::COMPACTING_LABEL),
@@ -1153,7 +1184,7 @@ fn scrolled_up_shows_jump_bottom_button() {
     let bar = layout(area, &lx).chat_bar.expect("chat bar");
     assert_eq!(rect.right(), bar.right() - 1, "控件贴聊天栏右端（留 1 列）");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains(text::LX_JUMP_BOTTOM), "显示 ↓ 箭头：{text}");
     assert!(
@@ -1195,7 +1226,7 @@ fn esc_armed_replaces_loading_label_with_stop_hint() {
     let mut lx = streaming_lx(true, true);
     lx.chat.stop_armed_at = Some(std::time::Instant::now());
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("Press esc again to stop"), "待命提示：{text}");
     assert!(
@@ -1205,7 +1236,7 @@ fn esc_armed_replaces_loading_label_with_stop_hint() {
     // 未待命（超时/未按 Esc）时仍是普通 loading 文案。
     lx.chat.stop_armed_at = None;
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     assert!(buffer_text(&buf).contains(text::chat::LOADING_LABEL));
 }
 
@@ -1217,7 +1248,7 @@ fn esc_hint_shortens_on_narrow_bar() {
     let mut lx = streaming_lx(true, true);
     lx.chat.stop_armed_at = Some(std::time::Instant::now());
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(
         text.contains(text::LX_CHAT_STOP_PHRASES[1])
@@ -1284,7 +1315,7 @@ fn sticky_prompt_row_is_clickable_and_jumps_to_the_prompt() {
     let mut found = None;
     for scroll in 0..32 {
         lx.chat.history_scroll = scroll;
-        if let Some(view) = history_view(area, &lx)
+        if let Some(view) = history_view(area, &lx, &mut PaneCache::default())
             && let Some(message) = view.sticky
         {
             found = Some((message, view.area.y, view.messages[message].start));
@@ -1294,17 +1325,20 @@ fn sticky_prompt_row_is_clickable_and_jumps_to_the_prompt() {
     let (message, row_y, start) = found.expect("存在置顶行");
     assert_eq!(message, 0, "钉第一轮 prompt（顶行在第一轮回复里）");
     assert_eq!(
-        chat_hit(area, &lx, area.x + 4, row_y),
+        chat_hit(area, &lx, area.x + 4, row_y, &mut PaneCache::default()),
         Some(LxChatHit::PromptHeader),
         "置顶行整宽可点"
     );
     assert_eq!(
-        sticky_prompt_jump(area, &lx),
+        sticky_prompt_jump(area, &lx, &mut PaneCache::default()),
         Some(start),
         "跳转目标 = 该消息起始行"
     );
     // 非置顶行不命中（body 第一行是正文）。
-    assert_eq!(chat_hit(area, &lx, area.x + 4, row_y + 1), None);
+    assert_eq!(
+        chat_hit(area, &lx, area.x + 4, row_y + 1, &mut PaneCache::default()),
+        None
+    );
 }
 
 #[test]
@@ -1315,7 +1349,7 @@ fn history_rows_uses_body_height_while_sticky_is_shown() {
     let mut with_sticky = None;
     for scroll in 0..32 {
         lx.chat.history_scroll = scroll;
-        if let Some(view) = history_view(area, &lx)
+        if let Some(view) = history_view(area, &lx, &mut PaneCache::default())
             && view.sticky.is_some()
         {
             with_sticky = Some((view.body.height, view.total_rows));
@@ -1324,7 +1358,7 @@ fn history_rows_uses_body_height_while_sticky_is_shown() {
     }
     let (body_height, total) = with_sticky.expect("存在置顶行");
     assert_eq!(
-        history_rows(area, &lx),
+        history_rows(area, &lx, &mut PaneCache::default()),
         Some((total, usize::from(body_height))),
         "滚轮钳制用 body 高度（否则滚不到最后一行）"
     );
@@ -1337,7 +1371,7 @@ fn chat_bar_cells(area: Rect, lx: &Lx) -> (String, Vec<ratatui::style::Style>) {
     let lay = layout(area, lx);
     let bar = lay.chat_bar.expect("聊天栏可见");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, lx, false, None);
+    let _ = render(area, &mut buf, lx, false, None, &mut PaneCache::default());
     let text: String = (bar.x..bar.right())
         .map(|x| buf[(x, bar.y)].symbol())
         .collect();
@@ -1381,7 +1415,7 @@ fn working_label_scans_left_to_right() {
         let lay = layout(area, &lx);
         let bar = lay.chat_bar.expect("流中显示聊天栏");
         let mut buf = Buffer::empty(area);
-        let _ = render(area, &mut buf, &lx, false, None);
+        let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
         let cells: Vec<&ratatui::buffer::Cell> =
             (bar.x + 1..bar.right()).map(|x| &buf[(x, bar.y)]).collect();
         let hits: Vec<usize> = cells
@@ -1428,7 +1462,7 @@ fn scan_advances_one_char_per_frame_and_wraps() {
         let lay = layout(area, &lx);
         let bar = lay.chat_bar.expect("bar");
         let mut buf = Buffer::empty(area);
-        let _ = render(area, &mut buf, &lx, false, None);
+        let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
         let head = (bar.x + 1..bar.right())
             .rfind(|x| {
                 buf[(*x, bar.y)]
@@ -1452,7 +1486,7 @@ fn idle_chat_bar_has_no_loading_mark() {
     let area = Rect::new(0, 0, 60, 16);
     let lx = streaming_lx(false, true);
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(!text.contains(text::chat::LOADING_LABEL), "{text}");
 }
@@ -1467,7 +1501,7 @@ fn lx_input_highlights_inline_code_and_list_markers() {
     let mut lx = Lx::new();
     lx.insert_str("use `cargo test`\n- bullet item\n1. ordered item");
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, true, None);
+    let _ = render(area, &mut buf, &lx, true, None, &mut PaneCache::default());
 
     // 行内代码内容格带前景色（不铺背景）。
     let mut code_colored = false;
@@ -1530,7 +1564,7 @@ fn code_block_renders_body_without_header_or_rules() {
     lx.chat = chat;
 
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("const a = 1;"), "代码正文保留：{text}");
     assert!(text.contains("const b = 2;"), "空行后的正文保留：{text}");
@@ -1551,7 +1585,7 @@ fn streaming_loading_shows_estimated_output_tokens() {
         part.content = "a".repeat(4_800);
     }
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let text = buffer_text(&buf);
     assert!(text.contains("↓1.2k tok"), "显示 token 估算：{text}");
     assert!(text.contains(text::chat::LOADING_LABEL), "loading 文案仍在");
@@ -1562,7 +1596,7 @@ fn streaming_loading_shows_estimated_output_tokens() {
         message.status = "complete".into();
     }
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     assert!(
         !buffer_text(&buf).contains(" tok"),
         "非流中不显示 token 估算"
@@ -1609,7 +1643,7 @@ fn loading_stats_follow_the_label_with_seconds_and_output_tokens() {
         part.content = "a".repeat(4_800);
     }
     let mut buf = Buffer::empty(area);
-    let _ = render(area, &mut buf, &lx, false, None);
+    let _ = render(area, &mut buf, &lx, false, None, &mut PaneCache::default());
     let row = buffer_text(&buf)
         .lines()
         .find(|line| line.contains(text::chat::LOADING_LABEL))

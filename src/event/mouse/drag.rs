@@ -26,6 +26,7 @@ pub(crate) fn handle_mouse_drag(
     sessions: &mut HashMap<PaneId, PtySession>,
     geometry: &Geometry,
     config: &Config,
+    cache: &mut ui::RenderCache,
     dirty: &mut bool,
 ) {
     let Geometry { rects, view, .. } = geometry;
@@ -147,9 +148,9 @@ pub(crate) fn handle_mouse_drag(
             .find(|(id, _)| *id == pane)
             .and_then(|(_, rect)| {
                 let inner = layout::pane_inner_rect(*rect);
-                state
-                    .pane_anywhere(pane)
-                    .and_then(|target| ui::main_content::lx::history_scrollbar(inner, &target.lx))
+                state.pane_anywhere(pane).and_then(|target| {
+                    ui::main_content::lx::history_scrollbar(inner, &target.lx, cache.pane(pane))
+                })
             });
         let Some(bar) = bar else {
             return;

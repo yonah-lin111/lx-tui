@@ -28,20 +28,23 @@ use super::Grid;
 use super::notice;
 
 mod body;
+mod cache;
 mod cards;
 mod compact;
 mod layout;
 mod render;
 mod rewind;
 mod rows;
+mod snapshot;
 mod stats;
 mod sticky;
 mod timeline;
 pub(crate) mod tool;
 pub(crate) mod user_shell;
 
+pub(crate) use cache::{PaneCache, RenderCache};
 pub(crate) use layout::layout;
-pub(super) use render::render;
+pub(crate) use render::render;
 
 pub use timeline::has_history;
 use tool::Folds;
@@ -285,8 +288,8 @@ fn folds_of(lx: &Lx, message_id: &str, call: &crate::app::state::ToolCallView) -
 /// 2. 需要钉才让位一行（body 高度 -1）并在让位后的 scroll 上**重判**；重判不再需要
 ///    → 撤销让位、不画置顶行，并把"整块视口 + 顶行位置"记入记忆；
 /// 3. 非跟随时，若记忆与当前位置一致 → 直接跳过重判（沿用抑制，防让位/撤销抖动）。
-pub(super) fn view(area: Rect, lx: &Lx) -> HistoryView {
-    let layout = layout(area, lx);
+pub(super) fn view(area: Rect, lx: &Lx, cache: &mut PaneCache) -> HistoryView {
+    let layout = layout(area, lx, cache);
     let total = layout.total_rows;
     let full_height = area.height;
     let scroll_for = |height: u16| -> usize {
