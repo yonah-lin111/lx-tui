@@ -20,16 +20,39 @@ pub const TOOL_NAMES: [&str; 7] = [
 /// 工具执行上下文：相对路径的基准目录是**发送时冻结**的工作区 cwd。
 ///
 /// 执行层从不读取进程 cwd，也不因后续 `cd`/切换窗格改变基准；绝对路径原样使用。
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `reads` 是本会话的读版本登记表（读后版本保护）。生产入口必须注入；没有登记表时
+/// 写工具一律拒绝修改已有文件（宁可要求重读，也不放行无版本写入）。
+#[derive(Debug, Clone, Default)]
 pub struct ToolContext {
     /// 工作区根（冻结快照）。
     pub cwd: PathBuf,
+    /// 会话级读版本登记表。
+    pub reads: Option<std::sync::Arc<super::read_version::ReadRegistry>>,
 }
 
+impl PartialEq for ToolContext {
+    /// 只比较路径基准：登记表是共享句柄，不是值语义的一部分。
+    fn eq(&self, other: &Self) -> bool {
+        self.cwd == other.cwd
+    }
+}
+
+impl Eq for ToolContext {}
+
 impl ToolContext {
-    /// 以工作区根构造上下文。
+    /// 以工作区根构造上下文（不带读版本登记表）。
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
-        Self { cwd: cwd.into() }
+        Self {
+            cwd: cwd.into(),
+            reads: None,
+        }
+    }
+
+    /// 注入会话级读版本登记表（生产执行器必须调用）。
+    pub fn with_reads(mut self, reads: std::sync::Arc<super::read_version::ReadRegistry>) -> Self {
+        self.reads = Some(reads);
+        self
     }
 }
 
@@ -91,6 +114,8 @@ pub enum ToolErrorCode {
     StdinFailed,
     /// 计划校验失败（超限、非法状态、多个进行中）。
     PlanInvalid,
+    /// 读后版本保护拒绝：没读过、读取后文件变化、或新文件目标已存在。
+    StaleRead,
 }
 
 impl ToolErrorCode {
@@ -120,6 +145,7 @@ impl ToolErrorCode {
             Self::ProcessFailed => "process_failed",
             Self::StdinFailed => "stdin_failed",
             Self::PlanInvalid => "plan_invalid",
+            Self::StaleRead => "stale_read",
         }
     }
 }
@@ -193,6 +219,8 @@ pub enum ToolExecutionResult {
         truncated: bool,
         /// 文件总行数（目录列表为条目数）。
         total_lines: usize,
+        /// 读后版本 token（仅普通文件；目录为 None）。写工具要求携带它。
+        version: Option<String>,
     },
     /// 搜索成功。
     Search {

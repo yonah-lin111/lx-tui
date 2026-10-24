@@ -10,11 +10,17 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 mod atomic_write;
 pub use atomic_write::{rename_over, write_file_atomic};
 
+mod environment;
+pub use environment::{
+    EnvironmentFacts, local_datetime, local_time_label, network_available, os_name, timezone_name,
+};
+
 mod lock;
 pub use lock::{FileGuard, PathGuards, lock_paths, try_lock_named, try_lock_session};
 mod raw_image;
 pub use raw_image::{
-    RawImage, RawKind, exists as raw_exists, hard_link_count, read as read_raw, remove_entry,
+    RawImage, RawKind, VERSION_PREFIX, exists as entry_exists, hard_link_count, read as read_raw,
+    remove_entry, version_token, version_token_from_parts, version_token_of,
     write_regular as write_raw_regular, write_symlink as write_raw_symlink,
 };
 
@@ -227,15 +233,7 @@ pub fn shell_quote_path(path: &Path) -> String {
 /// 声明了就会被模型当成保证，而 `command -v` 才是唯一可信的探针。
 pub fn environment_summary() -> String {
     let shell = default_shell();
-    #[cfg(target_os = "macos")]
-    let os = "macOS";
-    #[cfg(target_os = "linux")]
-    let os = "Linux";
-    #[cfg(target_os = "windows")]
-    let os = "Windows";
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    let os = "an unknown OS";
-    format!("{os}, default shell `{shell}`")
+    format!("{}, default shell `{shell}`", os_name())
 }
 
 /// 路径稳定比较键：Windows 大小写不敏感，其余平台取原文本。

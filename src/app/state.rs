@@ -24,13 +24,14 @@ pub mod workspace;
 pub use lx::LxInputMode;
 pub use lx::{
     AssistantStepView, CardSection, CardTarget, ChatMessageView, ChatPartView, CommandView,
-    DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView, FileDiffView, FrozenModel,
-    HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx, LxChat, LxEntry,
-    ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot, PanelWindow, PendingShell,
-    PlanSnapshotView, PlanStepView, ProcessEntry, ProcessInteractionView, ProcessStateView,
-    QueuedSubmission, RequestKey, RequestState, RewindAction, RewindExecution, RewindNoticeView,
-    RewindPanel, RewindTarget, SHELL_SLOT, SlashCommand, SlashPanel, SnapshotState, TaskPage,
-    TaskTab, ToolCallView, ToolDetailView, ToolStatus, ToolSummary, UserShellView,
+    CompactNoticeView, DiffHunkView, DiffLineView, FileChangeView, FileDiffDetailView,
+    FileDiffView, FrozenModel, HistoryEntry, HistoryPanel, InputHintLevel, InteractionAction, Lx,
+    LxChat, LxCompact, LxEntry, ModelCandidate, ModelPicker, ModelPickerStage, ModelsSnapshot,
+    PanelWindow, PendingShell, PlanSnapshotView, PlanStepView, ProcessEntry,
+    ProcessInteractionView, ProcessStateView, QueuedSubmission, RequestKey, RequestState,
+    RewindAction, RewindExecution, RewindNoticeView, RewindPanel, RewindTarget, RewindTargetKind,
+    SHELL_SLOT, SlashCommand, SlashPanel, SnapshotState, TaskPage, TaskTab, ToolCallView,
+    ToolDetailView, ToolStatus, ToolSummary, UserShellView,
 };
 pub use pane::{Direction, Pane, PaneKind, PaneView, Tab};
 pub use prompt_history::{PROMPT_HISTORY_LIMIT, PROMPT_HISTORY_MAX_BYTES, PromptHistory};
@@ -399,11 +400,14 @@ impl AppState {
             .collect()
     }
 
-    /// 是否存在正在生成（流中）的 lx 窗格；驱动 loading 转轮。
+    /// 是否存在需要 loading 心跳的 lx 窗格：生成中、本地命令在跑，或 `/compact`
+    /// 正在执行（摘要请求没有流式输出，但输入框上方那一行要显示压缩进度）。
     pub fn has_streaming_lx(&self) -> bool {
         self.all_pane_ids().into_iter().any(|pane| {
             self.pane_anywhere(pane).is_some_and(|target| {
-                target.lx.chat.status.streaming || target.lx.chat.has_running_shell()
+                target.lx.chat.status.streaming
+                    || target.lx.chat.has_running_shell()
+                    || target.lx.compact.is_running()
             })
         })
     }

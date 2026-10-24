@@ -100,7 +100,8 @@ pub(super) fn items<'a>(
                 })
                 .collect()
         }
-        SlashPanel::Rewind(panel) => crate::app::state::RewindAction::ALL
+        SlashPanel::Rewind(panel) => panel
+            .actions
             .iter()
             .map(|action| {
                 let reason = if !panel.enabled(*action) {
@@ -133,6 +134,7 @@ fn action_label(action: crate::app::state::RewindAction) -> &'static str {
         RewindAction::DeleteOnly => text::LX_REWIND_ACTION_DELETE_ONLY,
         RewindAction::RevertOnly => text::LX_REWIND_ACTION_REVERT_ONLY,
         RewindAction::Cancel => text::LX_REWIND_ACTION_CANCEL,
+        RewindAction::RestoreCompact => text::LX_COMPACT_ACTION_RESTORE,
     }
 }
 

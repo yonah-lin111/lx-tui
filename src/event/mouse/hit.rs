@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use ratatui::layout::Rect;
 
-use crate::app::state::{AppState, PaneKind};
+use crate::app::state::{AppState, PaneKind, PaneView};
 use crate::app::toast::{Toast, ToastKind};
 use crate::app::update;
 use crate::layout::{self, BoundaryHit, PaneId};
@@ -331,6 +331,56 @@ pub(crate) fn apply_block_button(state: &mut AppState, hit: ui::prompt::BlockBut
     }
 }
 
+/// 命中某个 lx 窗格的 toast 盒：返回（窗格，盒矩形）。
+///
+/// 每个 lx 窗格至多一条 toast；命中区与绘制共用 `ui::main_content::lx::toast_rect`。
+pub(crate) fn lx_toast_at(
+    rects: &[(PaneId, Rect)],
+    state: &AppState,
+    column: u16,
+    row: u16,
+) -> Option<(PaneId, Rect)> {
+    rects.iter().find_map(|(pane, rect)| {
+        let target = state.pane_anywhere(*pane)?;
+        if target.view != PaneView::Lx || target.lx.toast.is_none() {
+            return None;
+        }
+        let area = layout::pane_inner_rect(*rect);
+        let toast = ui::main_content::lx::toast_rect(area, &target.lx)?;
+        toast
+            .contains((column, row).into())
+            .then_some((*pane, toast))
+    })
+}
+
+/// 点击落在**指针所在 lx 窗格**的 toast 盒之外时关闭那条提示；返回是否关闭。
+///
+/// 与全局 toast 同一套「点外部关闭」语义，但作用域收在本窗格：在别的窗格里点击
+/// 不会顺手清掉这一页正在显示的反馈（全局槽只有一个，所以那边不存在这个歧义）。
+/// 不吞掉点击——调用方关闭后继续按原逻辑处理。
+pub(crate) fn dismiss_lx_toast_outside(
+    rects: &[(PaneId, Rect)],
+    state: &mut AppState,
+    column: u16,
+    row: u16,
+) -> bool {
+    let Some((pane, rect)) = pane_at(rects, column, row) else {
+        return false;
+    };
+    let Some(target) = state.pane_anywhere(pane) else {
+        return false;
+    };
+    if target.view != PaneView::Lx || target.lx.toast.is_none() {
+        return false;
+    }
+    let inside = ui::main_content::lx::toast_rect(rect, &target.lx)
+        .is_some_and(|toast| toast.contains((column, row).into()));
+    if inside {
+        return false;
+    }
+    crate::app::update::dismiss_lx_toast(state, pane)
+}
+
 /// 写系统剪贴板并在 prompt 锚点弹出成功/失败 toast。
 pub(crate) fn copy_with_toast(state: &mut AppState, text: &str) {
     let anchor = Some(state.prompt.id());
@@ -349,8 +399,9 @@ pub(crate) fn copy_with_toast_at(state: &mut AppState, text: &str, anchor: Optio
         tracing::warn!("clipboard write failed");
         (ToastKind::Danger, ui::text::TOAST_COPY_FAILED)
     };
-    update::show_toast(
+    update::show_toast_at(
         state,
+        anchor,
         Toast::new(kind, message, anchor, now).with_title(ui::text::TOAST_CLIPBOARD_TITLE),
     );
 }

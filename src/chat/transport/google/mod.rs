@@ -25,7 +25,6 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, Role, ToolCallBuffer, arguments_string, google_tools, history_blocks,
     protocol_error,
@@ -63,10 +62,13 @@ pub fn build(
     let contents = contents_of(request)?;
     let mut body = json!({
         "contents": contents,
-        "tools": google_tools(),
         // 系统指令：Gemini 用 systemInstruction.parts[0].text。
-        "systemInstruction": {"parts": [{"text": system_prompt()}]},
+        "systemInstruction": {"parts": [{"text": request.resolve_system_prompt()}]},
     });
+    // 摘要请求不声明工具（无工具就无从发起调用）。
+    if request.includes_tools() {
+        body["tools"] = google_tools();
+    }
     let mut generation_config = serde_json::Map::new();
     if let Some(params) = &request.variant_params {
         if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
@@ -83,7 +85,7 @@ pub fn build(
         url,
         headers: Vec::new(),
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
-        tools_requested: true,
+        tools_requested: request.includes_tools(),
     })
 }
 

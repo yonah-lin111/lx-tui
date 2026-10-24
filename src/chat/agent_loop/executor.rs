@@ -91,6 +91,8 @@ pub struct AgentTools {
     plan_revision: Arc<std::sync::atomic::AtomicU64>,
     /// 文件 mutation recorder 工厂；生产入口必注入，测试可留空。
     recorder: Option<Arc<dyn MutationRecorderFactory>>,
+    /// 会话级读版本登记表（读后版本保护）；生产入口必注入。
+    reads: Option<Arc<crate::chat::tools::ReadRegistry>>,
     /// rtk 后端（外部优先，缺失时内置过滤）；随执行器复用检测结果。
     rtk: Rtk,
 }
@@ -112,6 +114,7 @@ impl AgentTools {
             turn,
             plan_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             recorder: None,
+            reads: None,
             rtk: Rtk::detect(),
         }
     }
@@ -122,6 +125,12 @@ impl AgentTools {
         self
     }
 
+    /// 注入会话级读版本登记表（生产路径必须调用；`read` 据此登记、写工具据此核对）。
+    pub fn with_reads(mut self, reads: Arc<crate::chat::tools::ReadRegistry>) -> Self {
+        self.reads = Some(reads);
+        self
+    }
+
     /// 文件工具：在阻塞线程池执行，并注入本次调用的 recorder。
     async fn execute_file(
         &self,
@@ -129,7 +138,10 @@ impl AgentTools {
         call: &ReadyToolCall,
         ticket: &ToolCallTicket,
     ) -> ToolExecutionResult {
-        let context = crate::chat::tools::ToolContext::new(cwd.to_path_buf());
+        let mut context = crate::chat::tools::ToolContext::new(cwd.to_path_buf());
+        if let Some(reads) = self.reads.as_ref() {
+            context = context.with_reads(Arc::clone(reads));
+        }
         let name = call.name.clone();
         let arguments_json = call.arguments_json.clone();
         let call_id = call.call_id.clone();

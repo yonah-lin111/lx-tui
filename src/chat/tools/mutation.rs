@@ -46,6 +46,10 @@ pub struct PathMutation {
     pub target: PathBuf,
     pub before: RawImage,
     pub planned_after: RawImage,
+    /// 读后版本保护的期望 token（修改已有文件时必填；新建时为空）。
+    ///
+    /// 持久层会在同一事务内用 `before` 重算 token 并核对，不一致即整批零写入。
+    pub expected_version: Option<String>,
 }
 
 /// 一次工具调用产生的全部路径变更。
@@ -167,12 +171,13 @@ fn io_failure(error: std::io::Error) -> ToolFailure {
     ToolFailure::new(code, format!("file mutation failed: {error}"))
 }
 
-/// recorder 错误 → 工具错误（超限用 `TooLarge`，其余按 IO 能力拒绝）。
+/// recorder 错误 → 工具错误（超限用 `TooLarge`，版本拒绝用 `StaleRead`，其余按 IO 能力拒绝）。
 fn map_mutation_error(error: MutationError) -> ToolFailure {
-    let code = if error.code == "limit" {
-        ToolErrorCode::TooLarge
-    } else {
-        ToolErrorCode::Io
+    let code = match error.code {
+        "limit" => ToolErrorCode::TooLarge,
+        // 持久层版本核对拒绝：与执行层同一错误码，模型读到的是“重新读取后重试”。
+        "stale_read" => ToolErrorCode::StaleRead,
+        _ => ToolErrorCode::Io,
     };
     ToolFailure::new(code, error.message)
 }

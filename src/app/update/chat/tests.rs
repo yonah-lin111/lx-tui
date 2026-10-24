@@ -1,6 +1,7 @@
 //! lx 聊天状态机纯状态测试：首轮/续轮、重复 Enter、并发窗格、模型切换、
 //! 流终态、命令面板与过期结果过滤。
 
+mod compact;
 mod history;
 mod process_cards;
 mod prompt_history;
@@ -327,9 +328,13 @@ fn finish_ack_failure_keeps_partial_and_shows_error() {
         state.pane_anywhere(pane).unwrap().lx.chat.messages[1].status,
         "failed"
     );
-    // 错误提示可见（main content 的 danger toast）。
-    let toast = state.toast.as_ref().expect("错误提示可见");
+    // 错误提示可见——落在该窗格自己的 lx toast 槽里（不是全局覆盖层）。
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("错误提示可见");
     assert_eq!(toast.kind, crate::app::toast::ToastKind::Danger);
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
 }
 
 #[test]
@@ -366,7 +371,13 @@ fn non_native_entry_rejects_send_with_feedback() {
     let pane = focus_pane(&state);
     state.pane_mut_anywhere(pane).unwrap().lx.entry = crate::app::state::LxEntry::Hybrid;
     assert!(try_send(&mut state, pane), "有反馈");
-    assert!(state.toast.is_some(), "显示不可用提示");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.toast.is_some()),
+        "显示不可用提示（lx 窗格内）"
+    );
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
     assert!(
         state
             .effects
@@ -578,7 +589,13 @@ fn resume_blocked_when_session_busy_in_other_pane() {
     on_turn_committed(&mut state, pane_a, generation, &committed("sess-1"));
     // B 尝试恢复同一 session：占用提示。
     assert!(resume_session(&mut state, pane_b, "sess-1"));
-    assert!(state.toast.is_some(), "占用提示");
+    assert!(
+        state
+            .pane_anywhere(pane_b)
+            .is_some_and(|target| target.lx.toast.is_some()),
+        "占用提示落在发起恢复的窗格内"
+    );
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
     // 未入队 Load 效应。
     assert!(
         !state
@@ -1031,14 +1048,18 @@ fn assert_blocked_as_unknown_command(draft: &str, expected_echo: &str) {
         draft,
         "草稿必须保留"
     );
-    // 提示改走 main content 的 toast（warning 档，黄）。
-    let toast = state.toast.as_ref().expect("应有提示");
+    // 提示落在**该窗格自己的** lx toast 槽（warning 档，黄），不占用全局覆盖层。
+    let toast = state
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
+        .expect("应有提示");
     assert_eq!(
         toast.kind,
         crate::app::toast::ToastKind::Warning,
         "未知命令属于「要留意」→ warning"
     );
     assert_eq!(toast.anchor, Some(pane), "toast 锚在触发它的窗格");
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
     assert!(
         toast.message.contains(expected_echo),
         "回显命令 {expected_echo:?}：{}",
@@ -1075,7 +1096,13 @@ fn slash_with_spaces_is_sent_as_plain_text() {
             .iter()
             .any(|effect| matches!(effect, crate::app::effects::Effect::BeginChatTurn { .. }));
         assert!(sent, "{draft:?} 应作为普通内容发送");
-        assert!(state.toast.is_none(), "{draft:?} 不该有提示");
+        assert!(state.toast.is_none(), "{draft:?} 不该有全局提示");
+        assert!(
+            state
+                .pane_anywhere(pane)
+                .is_some_and(|target| target.lx.toast.is_none()),
+            "{draft:?} 不该有窗格内提示"
+        );
     }
 }
 
@@ -1085,8 +1112,8 @@ fn unknown_command_toast_expires_after_its_duration() {
     let pane = focus_pane(&state);
     try_send(&mut state, pane);
     let deadline = state
-        .toast
-        .as_ref()
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
         .expect("有提示")
         .next_deadline()
         .expect("未悬停时有到期时刻");
@@ -1095,7 +1122,12 @@ fn unknown_command_toast_expires_after_its_duration() {
         "未到期不清除"
     );
     assert!(super::super::tick(&mut state, deadline), "到期应清除");
-    assert!(state.toast.is_none(), "到点后提示消失");
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.toast.is_none()),
+        "到点后提示消失"
+    );
     assert!(!super::super::tick(&mut state, deadline), "已清过不再变化");
 }
 
@@ -1105,8 +1137,8 @@ fn unknown_command_toast_sets_a_wakeup_deadline() {
     let pane = focus_pane(&state);
     try_send(&mut state, pane);
     let deadline = state
-        .toast
-        .as_ref()
+        .pane_anywhere(pane)
+        .and_then(|target| target.lx.toast.as_ref())
         .expect("有提示")
         .next_deadline()
         .expect("未悬停时有到期时刻");

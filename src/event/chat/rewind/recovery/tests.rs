@@ -44,6 +44,12 @@ fn image(bytes: &[u8]) -> ImageWrite {
     }
 }
 
+/// 读后版本 token：与执行层同一口径（`before` 镜像重算）。
+fn token(before: &[u8]) -> String {
+    crate::platform::version_token_from_parts("regular", Some(before), Some(0o644), None)
+        .expect("token")
+}
+
 fn change(path: &Path, before: &[u8], after: &[u8]) -> PathMutationWrite {
     PathMutationWrite {
         operation: "update".into(),
@@ -53,6 +59,7 @@ fn change(path: &Path, before: &[u8], after: &[u8]) -> PathMutationWrite {
         anchor_canonical: None,
         before: image(before),
         planned_after: image(after),
+        expected_version: Some(token(before)),
     }
 }
 

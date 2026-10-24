@@ -22,14 +22,19 @@ use super::lock;
 use super::mutation::{self, MutationOperation, MutationRecorder, PathMutation};
 use super::patch::{self, Block, BodyLineKind, Hunk};
 use super::path;
+use super::read_version;
 use super::text::{Newline, SourceText};
 use super::types::{
     FileChange, FileChangeKind, ToolContext, ToolErrorCode, ToolExecutionResult, ToolFailure,
     ToolResult,
 };
 
-/// `edit` 只允许一个字段：完整补丁文本。
-const ALLOWED: [&str; 1] = ["patch"];
+/// `edit` 允许的字段：完整补丁文本 + 逐路径的读后版本 token。
+///
+/// `read_versions` 是 `{路径: read 返回的 file_version}`；路径可以用补丁里写的那一段
+/// 文本（相对/绝对均可），执行层按规范化路径换算。补丁里出现的每个**已存在**文件
+/// （Update/Delete/移动源）都必须在表里有条目，否则整批拒绝。
+const ALLOWED: [&str; 2] = ["patch", "read_versions"];
 
 /// 已解析路径的 hunk（路径校验完成，尚未读写内容）。
 enum Resolved<'a> {
@@ -61,6 +66,10 @@ pub(crate) fn run_with(
         Ok(text) => text,
         Err(failure) => return failure.into_result(Vec::new()),
     };
+    let read_versions = match args.optional_string_map("read_versions") {
+        Ok(versions) => versions.unwrap_or_default(),
+        Err(failure) => return failure.into_result(Vec::new()),
+    };
     let hunks = match patch::parse(patch_text) {
         Ok(hunks) => hunks,
         Err(failure) => return failure.into_result(Vec::new()),
@@ -69,7 +78,7 @@ pub(crate) fn run_with(
         Ok(resolved) => resolved,
         Err(failure) => return failure.into_result(Vec::new()),
     };
-    commit(&resolved, recorder)
+    commit(ctx, &resolved, &read_versions, recorder)
 }
 
 /// 解析全部路径并做路径级检查（是否存在、是否普通文件、移动目标是否目录或已存在）。
@@ -166,13 +175,26 @@ fn require_regular_file(target: &Path, marker: &str) -> ToolResult<()> {
 
 /// 提交阶段：逐个 hunk 落盘，累计已提交变更。
 fn commit(
+    ctx: &ToolContext,
     resolved: &[Resolved<'_>],
+    read_versions: &std::collections::HashMap<String, String>,
     recorder: Option<&dyn MutationRecorder>,
 ) -> ToolExecutionResult {
+    // 先把模型声明的路径 token 换算成规范化键，供各 hunk 查表。
+    let declared = match declared_versions(ctx, read_versions) {
+        Ok(declared) => declared,
+        Err(failure) => return failure.into_result(Vec::new()),
+    };
+    // 全量预检：补丁里每个会修改**已存在文件**的路径都必须带回读版本。
+    // 任一缺失即整批零写入（多文件补丁不能“改一半再报没读过”）。
+    if let Some(failure) = precheck_versions(ctx, resolved, &declared) {
+        return failure.into_result(Vec::new());
+    }
     let mut changes: Vec<FileChange> = Vec::new();
     let mut partial = false;
     for plan in resolved {
-        match commit_one(plan, recorder) {
+        let expected = expected_for(plan, &declared);
+        match commit_one(ctx, plan, expected.as_deref(), recorder) {
             Ok(Some(change)) => changes.push(change),
             // 无实际变更：不写盘，但如实标记 partial。
             Ok(None) => partial = true,
@@ -196,6 +218,92 @@ fn commit(
     ToolExecutionResult::Edit { changes, partial }
 }
 
+/// 模型声明的 `read_versions`：路径文本 → 规范化键 → token。
+fn declared_versions(
+    ctx: &ToolContext,
+    read_versions: &std::collections::HashMap<String, String>,
+) -> ToolResult<std::collections::HashMap<String, String>> {
+    let mut declared = std::collections::HashMap::with_capacity(read_versions.len());
+    for (raw, token) in read_versions {
+        let Ok(target) = path::resolve(ctx, raw) else {
+            // 声明了无法解析的路径：不静默忽略，直接判为非法参数。
+            return Err(ToolFailure::invalid(format!(
+                "read_versions entry '{raw}' cannot be resolved against the workspace"
+            )));
+        };
+        declared.insert(read_version::canonical_key(&target), token.clone());
+    }
+    Ok(declared)
+}
+
+/// 某个 hunk 的期望 token：Update/Delete 取源路径，Add 没有（新文件）。
+fn expected_for(
+    plan: &Resolved<'_>,
+    declared: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    match plan {
+        Resolved::Add { .. } => None,
+        Resolved::Delete { target } | Resolved::Update { target, .. } => {
+            Some(read_version::canonical_key(target)).and_then(|key| declared.get(&key).cloned())
+        }
+    }
+}
+
+/// 全量预检：会修改已存在文件的 hunk 必须带回读版本，且当前磁盘内容与之相符。
+///
+/// 只做**路径级 + 只读元数据**检查；真正的写前复核在 [`commit_one`] 的路径锁内。
+/// 目录项/文件身份的任何变化都要求模型重新读取。
+fn precheck_versions(
+    ctx: &ToolContext,
+    resolved: &[Resolved<'_>],
+    declared: &std::collections::HashMap<String, String>,
+) -> Option<ToolFailure> {
+    for plan in resolved {
+        let target = match plan {
+            Resolved::Add { target, .. } => {
+                if let Err(failure) = read_version::require_missing(target) {
+                    return Some(failure);
+                }
+                continue;
+            }
+            Resolved::Delete { target } => target,
+            Resolved::Update { target, .. } => target,
+        };
+        // 没有登记表（只读调用/单元测试）时不做 token 核对；生产执行器一律注入。
+        let Some(registry) = ctx.reads.as_ref() else {
+            continue;
+        };
+        let key = read_version::canonical_key(target);
+        let Some(declared_token) = declared.get(&key) else {
+            return Some(ToolFailure::new(
+                ToolErrorCode::StaleRead,
+                format!(
+                    "{} requires its read version: read it and pass the returned file_version \
+                     in read_versions",
+                    path::display(target)
+                ),
+            ));
+        };
+        // 提交前复核：读到的版本必须仍是当前磁盘版本。
+        let resolved_target = path::write_target(target);
+        let current = match mutation::read_write_target(&resolved_target) {
+            Ok(image) => image,
+            Err(error) => return Some(path::map_io_error(&error, "read", target)),
+        };
+        if let Err(failure) =
+            read_version::require_read_version(registry, &key, &path::display(target), &current)
+        {
+            return Some(failure);
+        }
+        if let Err(failure) =
+            read_version::require_declared(registry, &key, &path::display(target), declared_token)
+        {
+            return Some(failure);
+        }
+    }
+    None
+}
+
 /// 提交阶段失败：普通错误，或「源文件已写入、后续移动失败」时附带的已提交变更。
 struct CommitFailure {
     cause: ToolFailure,
@@ -217,7 +325,9 @@ impl From<ToolFailure> for CommitFailure {
 ///
 /// 捕获与写入同处一个临界区：before / planned-after 持久化 ACK 之后才发生任何 IO。
 fn commit_one(
+    ctx: &ToolContext,
     plan: &Resolved<'_>,
+    expected: Option<&str>,
     recorder: Option<&dyn MutationRecorder>,
 ) -> Result<Option<FileChange>, CommitFailure> {
     match plan {
@@ -241,6 +351,8 @@ fn commit_one(
             lock::with_path_locks(&paths, || {
                 let before = mutation::read_entry(target)
                     .map_err(|error| path::map_io_error(&error, "stat", target))?;
+                // 锁内复核：目录项必须仍不存在（防止“新建”覆盖别人刚建的文件）。
+                read_version::require_missing(target)?;
                 let planned = mutation::planned_regular(&before, bytes.clone());
                 let change = PathMutation {
                     operation: MutationOperation::Create,
@@ -248,6 +360,7 @@ fn commit_one(
                     target: target.clone(),
                     before,
                     planned_after: planned,
+                    expected_version: None,
                 };
                 mutation::capture(recorder, vec![change], || write_bytes(target, &bytes))?;
                 Ok(Some(FileChange {
@@ -279,12 +392,35 @@ fn commit_one(
                 mutation::ensure_single_link(target)?;
                 let before = mutation::read_entry(target)
                     .map_err(|error| path::map_io_error(&error, "stat", target))?;
+                // 锁内复核读版本：目录项内容/身份必须与读取时一致。
+                let token = match ctx.reads.as_ref() {
+                    Some(registry) => {
+                        let key = read_version::canonical_key(target);
+                        if let Some(declared) = expected {
+                            read_version::require_declared(
+                                registry,
+                                &key,
+                                &path::display(target),
+                                declared,
+                            )?;
+                        }
+                        // 返回的是与当前目录项一致的视图 token（持久层据此重算核对）。
+                        Some(read_version::require_read_version(
+                            registry,
+                            &key,
+                            &path::display(target),
+                            &before,
+                        )?)
+                    }
+                    None => None,
+                };
                 let change = PathMutation {
                     operation: MutationOperation::Delete,
                     path: target.clone(),
                     target: target.clone(),
                     before,
                     planned_after: crate::platform::RawImage::missing(),
+                    expected_version: token.clone(),
                 };
                 mutation::capture(recorder, vec![change], || {
                     crate::platform::remove_entry(target)
@@ -319,6 +455,28 @@ fn commit_one(
             lock::with_path_locks(&paths, || {
                 let before_image = mutation::read_write_target(&resolved)
                     .map_err(|error| path::map_io_error(&error, "read", target))?;
+                // 锁内复核读版本：内容必须与模型读到时一致（外部修改即零写入）。
+                let token = match ctx.reads.as_ref() {
+                    Some(registry) => {
+                        let key = read_version::canonical_key(&resolved);
+                        if let Some(declared) = expected {
+                            read_version::require_declared(
+                                registry,
+                                &key,
+                                &path::display(target),
+                                declared,
+                            )?;
+                        }
+                        // 返回的是与当前内容一致的视图 token（持久层据此重算核对）。
+                        Some(read_version::require_read_version(
+                            registry,
+                            &key,
+                            &path::display(target),
+                            &before_image,
+                        )?)
+                    }
+                    None => None,
+                };
                 let bytes = before_image.bytes.clone();
                 let source = SourceText::parse(&bytes)?;
                 let before = source.lines.clone();
@@ -348,6 +506,7 @@ fn commit_one(
                             target: resolved.clone(),
                             before: before_image,
                             planned_after: planned,
+                            expected_version: token.clone(),
                         };
                         mutation::capture(recorder, vec![change], || {
                             write_bytes(&resolved, &encoded)
@@ -361,6 +520,9 @@ fn commit_one(
                         }))
                     }
                     Some(destination) => {
+                        // 锁内复核：目标在解析之后被谁创建了也不能覆盖（与 Add 同口径）。
+                        // 解析阶段只查过一次 `exists()`，那是锁外判断。
+                        read_version::require_missing(destination)?;
                         // 纯移动不重写源文件；只有内容变化时才写。
                         let mut changes: Vec<PathMutation> = Vec::new();
                         if !same_content {
@@ -379,6 +541,7 @@ fn commit_one(
                                         &before_image,
                                         encoded.clone(),
                                     ),
+                                    expected_version: token.clone(),
                                 });
                             }
                         }
@@ -386,12 +549,17 @@ fn commit_one(
                             .map_err(|error| path::map_io_error(&error, "stat", target))?;
                         let destination_before = mutation::read_entry(destination)
                             .map_err(|error| path::map_io_error(&error, "stat", destination))?;
+                        // `MoveSource` 移动的是**目录项**而非跟随后的内容：期望版本必须按
+                        // 目录项自身重算（符号链接源与读取时跟随目标的 token 天然不同），
+                        // 否则持久层的 before 重算会误判成「读取后被外部修改」。
+                        let entry_version = crate::platform::version_token_of(&entry_before);
                         changes.push(PathMutation {
                             operation: MutationOperation::MoveSource,
                             path: target.clone(),
                             target: target.clone(),
                             before: entry_before,
                             planned_after: crate::platform::RawImage::missing(),
+                            expected_version: Some(entry_version),
                         });
                         changes.push(PathMutation {
                             operation: MutationOperation::MoveDestination,
@@ -402,6 +570,7 @@ fn commit_one(
                                 &before_image,
                                 encoded.clone(),
                             ),
+                            expected_version: None,
                         });
                         let committed = FileChange {
                             path: target.clone(),

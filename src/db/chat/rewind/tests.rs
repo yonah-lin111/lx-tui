@@ -40,6 +40,12 @@ fn regular(bytes: &[u8]) -> ImageWrite {
     }
 }
 
+/// 读后版本 token：与执行层同一口径（`before` 镜像重算）。
+fn token(before: &[u8]) -> String {
+    crate::platform::version_token_from_parts("regular", Some(before), Some(0o644), None)
+        .expect("token")
+}
+
 fn change(path: &str, before: &[u8], after: &[u8]) -> PathMutationWrite {
     PathMutationWrite {
         operation: "update".into(),
@@ -49,6 +55,7 @@ fn change(path: &str, before: &[u8], after: &[u8]) -> PathMutationWrite {
         anchor_canonical: None,
         before: regular(before),
         planned_after: regular(after),
+        expected_version: Some(token(before)),
     }
 }
 
@@ -593,4 +600,125 @@ fn shell_sequence_is_after_persisted_notice() {
         last > notice_sequence,
         "命令序号必须在提示之后：{last} vs {notice_sequence}"
     );
+}
+
+/// 读后版本保护（持久层）：缺 token 或 token 与 before 不符时整批零写入。
+#[test]
+fn prepare_rejects_missing_or_stale_versions_without_rows() {
+    let (database, workspace) = temp("stale-read");
+    // 仍处于 capturing：prepare 的读版本校验发生在写入前，与 scope 封口无关。
+    let committed = started(&database, &workspace);
+
+    // 缺 token：非 create 一律拒绝。
+    let mut missing = change("a.txt", b"before", b"after");
+    missing.expected_version = None;
+    assert!(matches!(
+        database.prepare_mutations(
+            &workspace,
+            &committed.session_id,
+            &committed.user_message_id,
+            "call-1",
+            &[missing],
+        ),
+        Err(DbError::StaleRead)
+    ));
+    // token 与 before 不符：同样拒绝。
+    let mut stale = change("a.txt", b"before", b"after");
+    stale.expected_version = Some(token(b"different"));
+    assert!(matches!(
+        database.prepare_mutations(
+            &workspace,
+            &committed.session_id,
+            &committed.user_message_id,
+            "call-2",
+            &[stale],
+        ),
+        Err(DbError::StaleRead)
+    ));
+    // 两次拒绝都零写入：没有 mutation 行、scope 用量未增加。
+    let mutations: i64 = database
+        .query_count("SELECT COUNT(*) FROM agent_file_mutation")
+        .expect("count");
+    assert_eq!(mutations, 0, "拒绝必须零写入");
+    let bytes: i64 = database
+        .query_count(&format!(
+            "SELECT snapshot_bytes FROM agent_turn_file_scope WHERE user_message_id = '{}'",
+            committed.user_message_id
+        ))
+        .expect("scope");
+    assert_eq!(bytes, 0, "拒绝不得计入快照用量");
+}
+
+/// create 不要求 token（前置条件是目标不存在），其余操作必须携带。
+#[test]
+fn prepare_allows_create_without_version() {
+    let (database, workspace) = temp("create-version");
+    let committed = started(&database, &workspace);
+    let mut created = change("new.txt", b"", b"content");
+    created.operation = "create".into();
+    created.before = crate::db::chat::ImageWrite {
+        kind: "missing".into(),
+        bytes: None,
+        mode: None,
+        link_target: None,
+        git_oid: None,
+        worktree_root: None,
+        git_dir: None,
+        head_ref: None,
+        head_oid: None,
+    };
+    created.expected_version = None;
+    assert!(
+        database
+            .prepare_mutations(
+                &workspace,
+                &committed.session_id,
+                &committed.user_message_id,
+                "call-create",
+                &[created],
+            )
+            .is_ok(),
+        "新建文件无需 token"
+    );
+}
+
+/// `move_dst` 与 create 同类：目标原本不存在，没有可读版本，不得按“缺 token”拒绝。
+#[test]
+fn prepare_allows_move_destination_without_version() {
+    let (database, workspace) = temp("move-dst-version");
+    let committed = started(&database, &workspace);
+    let missing_image = || crate::db::chat::ImageWrite {
+        kind: "missing".into(),
+        bytes: None,
+        mode: None,
+        link_target: None,
+        git_oid: None,
+        worktree_root: None,
+        git_dir: None,
+        head_ref: None,
+        head_oid: None,
+    };
+    let mut source = change("old.txt", b"old", b"");
+    source.operation = "move_src".into();
+    source.planned_after = missing_image();
+    let destination = PathMutationWrite {
+        operation: "move_dst".into(),
+        path: "old.txt".into(),
+        target_path: "new.txt".into(),
+        anchor_path: None,
+        anchor_canonical: None,
+        before: missing_image(),
+        planned_after: regular(b"old"),
+        expected_version: None,
+    };
+    let ticket = database
+        .prepare_mutations(
+            &workspace,
+            &committed.session_id,
+            &committed.user_message_id,
+            "call-move",
+            &[source, destination],
+        )
+        .expect("移动目标不需要读版本");
+    assert_eq!(ticket.ids.len(), 2);
 }

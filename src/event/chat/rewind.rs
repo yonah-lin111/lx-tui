@@ -209,14 +209,25 @@ pub fn handle_rewind_finished(
             // workspace 必须用请求里的冻结值：执行期间切换工作区不能让已成功的撤销误报失败。
             let loaded = persistence.load_rewind_view(workspace, session_id);
             match loaded {
-                Ok((messages, notices, revision)) => {
+                Ok(view) => {
                     let panes = state.all_pane_ids();
                     for other in panes {
                         if state.pane_anywhere(other).is_some_and(|target| {
                             target.lx.chat.session_id.as_deref() == Some(session_id)
                         }) {
                             crate::app::update::on_rewind_session_reloaded(
-                                state, other, session_id, &messages, &notices, revision,
+                                state,
+                                other,
+                                session_id,
+                                &view.messages,
+                                &view.notices,
+                                view.revision,
+                            );
+                            // 撤销普通轮次不会改检查点，但重载时一并回填更省一次查询。
+                            crate::app::update::set_compact_checkpoints(
+                                state,
+                                other,
+                                &view.checkpoints,
                             );
                         }
                     }

@@ -21,7 +21,10 @@ pub enum ToastKind {
 }
 
 /// 单条 toast；新消息整体替换旧消息并重置倒计时。
-#[derive(Debug)]
+///
+/// `Clone` 用于把同一条反馈投给**多个**持有同一会话的窗格（会话级效应没有单一锚点）；
+/// `deadline` 是绝对时刻，克隆出的每一份到期时间一致。
+#[derive(Debug, Clone)]
 pub struct Toast {
     pub kind: ToastKind,
     pub title: Option<String>,

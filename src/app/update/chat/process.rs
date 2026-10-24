@@ -507,6 +507,18 @@ pub fn open_task_for_selected_tool(state: &mut AppState, pane: PaneId) -> bool {
     let selected = target.lx.chat.selected_tool.clone();
     let target_key = selected.or_else(|| latest_expandable(&target.lx.chat));
     let Some((message_id, call_id)) = target_key else {
+        // 没有可展开的工具卡片：`^o` 改为切换 compact 检查点（同一语义：
+        // “当前或最近一张可展开卡片”）。Alt+↑/↓ 选中过就用选中值，否则用最近一条；
+        // 两者都没有才退化为打开后台任务页。
+        let checkpoint_id = target
+            .lx
+            .chat
+            .selected_compact
+            .clone()
+            .or_else(|| latest_compact_checkpoint(&target.lx));
+        if let Some(checkpoint_id) = checkpoint_id {
+            return super::compact::toggle_checkpoint(state, pane, &checkpoint_id);
+        }
         return super::open_task_page_at(state, pane, None);
     };
     let call = target
@@ -541,7 +553,32 @@ pub fn select_adjacent_tool(state: &mut AppState, pane: PaneId, forward: bool) -
     };
     let cards = expandable_cards(&target.lx.chat);
     if cards.is_empty() {
-        return false;
+        // 没有工具卡片：在 compact 检查点之间切换（同样按时间线顺序）。
+        let checkpoints: Vec<String> = target
+            .lx
+            .compact
+            .checkpoints
+            .iter()
+            .map(|checkpoint| checkpoint.id.clone())
+            .collect();
+        if checkpoints.is_empty() {
+            return false;
+        }
+        let current = target.lx.chat.selected_compact.clone();
+        let index = current
+            .as_ref()
+            .and_then(|selected| checkpoints.iter().position(|id| id == selected));
+        let next = match (index, forward) {
+            (Some(index), true) => (index + 1).min(checkpoints.len() - 1),
+            (Some(index), false) => index.saturating_sub(1),
+            (None, true) => 0,
+            (None, false) => checkpoints.len() - 1,
+        };
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            return false;
+        };
+        target.lx.chat.selected_compact = Some(checkpoints[next].clone());
+        return true;
     }
     let current = target.lx.chat.selected_tool.clone();
     let index = current
@@ -557,7 +594,16 @@ pub fn select_adjacent_tool(state: &mut AppState, pane: PaneId, forward: bool) -
         return false;
     };
     target.lx.chat.selected_tool = Some(cards[next].clone());
+    target.lx.chat.selected_compact = None;
     true
+}
+
+/// 最近的 compact 检查点 ID（`^o` 在没有工具卡片时的回退目标）。
+fn latest_compact_checkpoint(lx: &crate::app::state::Lx) -> Option<String> {
+    lx.compact
+        .checkpoints
+        .last()
+        .map(|checkpoint| checkpoint.id.clone())
 }
 
 /// 全部可展开的工具卡片（按时间线顺序）。

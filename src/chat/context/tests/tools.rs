@@ -453,6 +453,8 @@ fn cross_provider_history_replays_normalized_fields_only() {
         context_limit: None,
         output_limit: None,
         variant_params: None,
+        compact: None,
+        environment: None,
     });
     assert_eq!(
         item_views(&assembly.request.items),

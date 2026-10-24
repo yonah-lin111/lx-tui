@@ -212,6 +212,15 @@ impl Script {
             .map(|request| request.items.clone())
             .unwrap_or_default()
     }
+
+    fn system_prompts(&self) -> Vec<Option<String>> {
+        self.requests
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|request| request.system_prompt.clone())
+            .collect()
+    }
 }
 
 /// 一次工具调用的 delta 序列（Started + Ended + 可选 usage + ResponseFinished）。
@@ -313,6 +322,8 @@ fn context(cwd: &Path) -> ModelContext {
                 variant: None,
             },
             variant_params: None,
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            system_prompt: None,
         },
         cwd.to_path_buf(),
     )

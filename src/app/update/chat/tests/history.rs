@@ -229,6 +229,41 @@ fn advance_lx_loading_only_when_streaming() {
     );
 }
 
+/// 压缩中也要有心跳：推进扫描帧并刷新本次压缩耗时（否则输入框上方那一行是静止的）。
+#[test]
+fn advance_lx_loading_drives_the_compact_timer() {
+    let mut state = AppState::demo();
+    lx_with_messages(&mut state, 1);
+    let pane = state.active_tab().layout.focus();
+    // 压缩开始于 5 秒前。
+    let started = crate::db::now_ms() - 5_000;
+    {
+        let target = state.pane_mut_anywhere(pane).expect("pane");
+        target.lx.compact.start("op".into(), started);
+    }
+    assert!(state.has_streaming_lx(), "压缩中必须有心跳");
+    assert!(advance_lx_loading(&mut state), "压缩中推进帧");
+    let target = state.pane_anywhere(pane).expect("pane");
+    assert_eq!(target.lx.chat.loading_frame, 1);
+    let elapsed = target.lx.compact.elapsed_ms.expect("刷新压缩耗时");
+    assert!(
+        (5_000..6_000).contains(&elapsed),
+        "耗时按开始时刻计算：{elapsed}"
+    );
+    // 帧推进本身不推进聊天轮次帧（压缩没有聊天轮次）。
+    assert_eq!(target.lx.chat.turn_elapsed_ms, None);
+
+    // 压缩结束：心跳停止。
+    state
+        .pane_mut_anywhere(pane)
+        .expect("pane")
+        .lx
+        .compact
+        .finish();
+    assert!(!state.has_streaming_lx());
+    assert!(!advance_lx_loading(&mut state));
+}
+
 /// 造一条展示用消息（置顶行测试）。
 fn lx_view_message(role: &str, text: &str, index: usize) -> ChatMessageView {
     ChatMessageView {

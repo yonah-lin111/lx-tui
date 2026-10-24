@@ -17,7 +17,6 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, ToolCallBuffer, arguments_string, history_blocks, openai_chat_tools,
     protocol_error,
@@ -55,12 +54,14 @@ pub fn build(
     let mut body = json!({
         "model": request.model.model,
         "messages": messages,
-        // 四条稳定工具定义（系统指令在首条 system 消息里）。
-        "tools": openai_chat_tools(),
         "stream": true,
         // 请求末帧携带 usage。
         "stream_options": {"include_usage": true},
     });
+    // 摘要请求不声明工具：模型无从发起调用，也不会把压缩结果写成工具调用。
+    if request.includes_tools() {
+        body["tools"] = openai_chat_tools();
+    }
     if let Some(params) = &request.variant_params {
         // 已知 variant 字段（reasoningEffort 等）映射为协议字段；不伪造等级。
         if let Some(effort) = params.get("reasoningEffort").and_then(Value::as_str) {
@@ -77,7 +78,7 @@ pub fn build(
         url,
         headers: vec![("Authorization".into(), format!("Bearer {key}"))],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
-        tools_requested: true,
+        tools_requested: request.includes_tools(),
     })
 }
 
@@ -85,7 +86,7 @@ pub fn build(
 fn messages_of(request: &ChatRequest) -> Result<Vec<Value>, String> {
     let mut messages: Vec<Value> = vec![json!({
         "role": "system",
-        "content": system_prompt(),
+        "content": request.resolve_system_prompt(),
     })];
     if request.items.is_empty() {
         messages.extend(

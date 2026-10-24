@@ -337,6 +337,8 @@ where
                 variant: None,
             },
             variant_params: None,
+            purpose: crate::chat::events::RequestPurpose::Chat,
+            system_prompt: None,
         },
     )
     .await
@@ -682,6 +684,7 @@ fn view_summary_maps_every_field() {
 }
 
 mod ack;
+mod compact;
 mod flow;
 mod guard;
 mod limits;

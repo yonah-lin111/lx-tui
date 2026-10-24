@@ -16,6 +16,7 @@ use crate::db::chat::{ModelSnapshot, TurnOutcome, Usage};
 use crate::layout::PaneId;
 use crate::ui::text;
 
+pub mod compact;
 mod process;
 pub mod rewind;
 mod session;
@@ -23,6 +24,11 @@ pub mod user_shell;
 mod view;
 mod viewport;
 
+pub use compact::{
+    compact_command, on_compact_empty, on_compact_failed, on_compact_finished,
+    on_compact_revert_failed, on_compact_reverted, set_checkpoints as set_compact_checkpoints,
+    toggle_checkpoint,
+};
 pub use process::{
     activate_tool_card, apply_interaction_exit, apply_process_exit, apply_process_output,
     apply_process_snapshot, commit_plan, open_task_for_selected_tool, reconcile_process_records,
@@ -77,7 +83,21 @@ pub fn try_send(state: &mut AppState, pane: PaneId) -> bool {
         }
         let entry = target.lx.entry;
         let draft = target.lx.input.trim().to_string();
-        let busy = !target.lx.chat.request.can_send();
+        // 压缩进行中同样不能发送：检查点提交会整体替换上下文指针。
+        // 会话级：同一会话的其它 pane 在压缩/跑轮次时，本 pane 的发送会推进 revision，
+        // 让那次压缩在 commit 阶段失败。
+        let session_busy = target.lx.chat.session_id.as_deref().is_some_and(|session| {
+            state.all_pane_ids().into_iter().any(|other| {
+                other != pane
+                    && state.pane_anywhere(other).is_some_and(|pane_state| {
+                        pane_state.lx.chat.session_id.as_deref() == Some(session)
+                            && (pane_state.lx.compact.is_running()
+                                || pane_state.lx.chat.request.is_busy())
+                    })
+            })
+        });
+        let busy =
+            !target.lx.chat.request.can_send() || target.lx.compact.is_running() || session_busy;
         let selection = target.lx.chat.effective_selection(&state.models);
         let session_id = target.lx.chat.session_id.clone();
         let generation = next_generation(state, pane);
@@ -654,14 +674,13 @@ pub(super) fn next_generation(state: &AppState, pane: PaneId) -> u64 {
         .max(1)
 }
 
-/// 在**指定窗格**的输入框上方显示一条临时提示（错误红 / 默认黄）。
+/// 在**指定窗格**内展示一条 lx 反馈（错误红 / 警告黄）。
 ///
-/// lx 页的所有反馈都走这里而不是 toast：位置贴着用户刚敲字的输入框，2 秒后自动消失。
-/// 展示一条 lx 反馈 toast，锚定在触发动作的窗格（`Some(pane)`）。
+/// lx 页的所有反馈都走这里，落在**该窗格自己的 toast 槽**里，2 秒后自动消失。
 ///
-/// 用户要求「移除 lx 输入框上方的通知显示，全部改为 main content 的 toast」：
-/// 提示原先贴在输入框上沿，会和 loading / 回到底部抢同一行；toast 覆盖在窗格内，
-/// 只挡一小块、自动消失，且能携带三档语义色（default / warning / danger）。
+/// 用户要求「lx 页的 toast 都要在 lx 中显示，不要用全局的」：全局 toast 只有一个槽，
+/// 锚点容器放不下时还会降级到屏幕顶部居中、横跨整个窗口；lx 的反馈只属于某个 lx 窗格，
+/// 越界就失去指代（也会被别的页的提示互相覆盖）。
 pub(crate) fn show_lx_hint(
     state: &mut AppState,
     pane: PaneId,
@@ -673,7 +692,7 @@ pub(crate) fn show_lx_hint(
         InputHintLevel::Warning => ToastKind::Warning,
     };
     let toast = Toast::new(kind, message, Some(pane), Instant::now());
-    crate::app::update::show_toast(state, toast);
+    crate::app::update::show_lx_toast(state, pane, toast);
 }
 
 /// 草稿是「行首 `/` 开头的一行命令」但**不是**任何内置命令时，返回那段命令文本。
@@ -819,14 +838,35 @@ pub fn toggle_latest_thinking(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
-/// 推进流中窗格的 loading 转轮帧；返回是否需要重绘（仅在有流中的 lx 窗格时）。
+/// 推进流中窗格的 loading 转轮帧、刷新压缩耗时；返回是否需要重绘。
+///
+/// 两个来源共用同一个 100ms 心跳：
+/// - 流中（`chat.status.streaming`）或本地命令在跑：推进扫描帧与本轮耗时；
+/// - `/compact` 正在执行：摘要请求没有流式输出，但输入框上方那一行要显示
+///   「压缩中 + 已耗时」，因此同样需要按帧刷新 `elapsed_ms` 并推进扫描帧。
 pub fn advance_lx_loading(state: &mut AppState) -> bool {
     let mut changed = false;
     for pane in state.all_pane_ids() {
-        if let Some(target) = state.pane_mut_anywhere(pane)
-            && target.view == crate::app::state::PaneView::Lx
-            && (target.lx.chat.status.streaming || target.lx.chat.has_running_shell())
-        {
+        let Some(target) = state.pane_mut_anywhere(pane) else {
+            continue;
+        };
+        if target.view != crate::app::state::PaneView::Lx {
+            continue;
+        }
+        let streaming = target.lx.chat.status.streaming || target.lx.chat.has_running_shell();
+        let compacting = target.lx.compact.is_running();
+        if !streaming && !compacting {
+            continue;
+        }
+        // 压缩耗时：摘要请求没有任何流式输出，这一行只有计时能证明它还在跑。
+        if compacting {
+            target.lx.compact.elapsed_ms = target
+                .lx
+                .compact
+                .started_at_ms
+                .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
+        }
+        if streaming {
             // 待命超时：提示消失（重新回到普通 `Working`）。
             if target
                 .lx
@@ -836,15 +876,16 @@ pub fn advance_lx_loading(state: &mut AppState) -> bool {
             {
                 target.lx.chat.stop_armed_at = None;
             }
-            target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
             // 本轮耗时：时钟只在这里读（渲染层纯只读），随同一帧刷新。
             target.lx.chat.turn_elapsed_ms = target
                 .lx
                 .chat
                 .turn_started_at_ms
                 .map(|started| crate::db::now_ms().saturating_sub(started).max(0));
-            changed = true;
         }
+        // 扫描帧两种场景共用：压缩中的文案同样有扫描高亮。
+        target.lx.chat.loading_frame = target.lx.chat.loading_frame.wrapping_add(1);
+        changed = true;
     }
     changed
 }

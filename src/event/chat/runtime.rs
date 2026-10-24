@@ -121,8 +121,15 @@ impl ProcessRuntimes {
     }
 
     /// 移除并返回会话运行实例（调用方负责停止其全部进程）。
+    ///
+    /// 同时丢弃该会话的读版本登记表：会话实例回收意味着“这轮上下文结束了”，
+    /// 继续留着旧 token 只会在同名会话被重建时误放行（CAS 仍会拦，但语义已过期）。
     pub fn take(&mut self, session_id: &str) -> Option<SessionRuntime> {
-        self.runtimes.remove(session_id)
+        let removed = self.runtimes.remove(session_id);
+        if removed.is_some() {
+            crate::chat::tools::drop_reads(session_id);
+        }
+        removed
     }
 
     /// 当前持有的会话 ID 列表（清理孤儿实例用）。

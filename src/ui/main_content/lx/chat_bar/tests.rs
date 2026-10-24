@@ -189,6 +189,7 @@ fn char_before(row: &str, needle: &str) -> Option<char> {
 }
 
 mod animation;
+mod compacting;
 mod label;
 mod layout;
 mod stop_and_lifecycle;

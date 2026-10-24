@@ -36,6 +36,8 @@ fn request() -> ChatRequest {
             variant: None,
         },
         variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::Chat,
+        system_prompt: None,
     }
 }
 
@@ -950,4 +952,36 @@ fn missing_wire_id_is_a_protocol_error_not_a_synthesized_id() {
         .decode_frame(r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#)
         .expect_err("closing without id is a protocol error");
     assert!(error.contains(TOOL_PROTOCOL_ERROR_CODE), "{error}");
+}
+
+/// 摘要请求（`CompactSummary`）：不声明工具、系统提示用请求覆写值。
+#[test]
+fn compact_request_omits_tools_and_overrides_the_system_prompt() {
+    let request = crate::chat::events::ChatRequest {
+        turns: vec![crate::chat::events::ChatTurn {
+            role: "user".into(),
+            text: "compress the transcript".into(),
+            reasoning_metadata: None,
+        }],
+        items: vec![crate::chat::events::ModelItem::UserText(
+            "compress the transcript".into(),
+        )],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::CompactSummary,
+        system_prompt: Some("COMPACT INSTRUCTIONS".into()),
+    };
+    let built =
+        super::build("https://api.example.invalid", Some("key"), &request, true).expect("build");
+    let body: serde_json::Value = serde_json::from_str(&built.body).expect("json");
+    assert!(
+        body.get("tools").is_none(),
+        "摘要请求不得携带工具定义：{body}"
+    );
+    assert_eq!(body["messages"][0]["content"], "COMPACT INSTRUCTIONS");
+    assert!(!built.tools_requested);
 }

@@ -161,6 +161,26 @@ pub enum ModelItem {
     },
 }
 
+/// 一次请求的用途：决定系统提示与是否声明工具。
+///
+/// `/compact` 的摘要请求**不是**普通聊天轮次（不追加 user/assistant 消息、不携带工具、
+/// 也不允许工具调用）；用显式用途区分，避免调用方靠“有没有 tools”来猜。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RequestPurpose {
+    /// 普通对话轮次（四工具 + 稳定系统提示）。
+    #[default]
+    Chat,
+    /// 上下文压缩的摘要请求（专用系统提示、无工具）。
+    CompactSummary,
+}
+
+impl RequestPurpose {
+    /// 该用途的请求是否声明工具。
+    pub fn includes_tools(self) -> bool {
+        matches!(self, Self::Chat)
+    }
+}
+
 /// 一次流式请求的输入快照。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatRequest {
@@ -174,6 +194,27 @@ pub struct ChatRequest {
     pub model: crate::db::chat::ModelSnapshot,
     /// 思考等级参数对象（来自模型 variants）；None 时不发送伪参数。
     pub variant_params: Option<serde_json::Value>,
+    /// 请求用途（默认普通对话）。
+    pub purpose: RequestPurpose,
+    /// 覆写的系统提示；None 时各 transport 使用 [`crate::chat::prompt::system_prompt`]。
+    ///
+    /// 摘要请求用它携带压缩专用提示，并且**不再**叠加 turn 环境快照（摘要不需要）。
+    pub system_prompt: Option<String>,
+}
+
+impl ChatRequest {
+    /// 是否声明工具（摘要请求为 false）。
+    pub fn includes_tools(&self) -> bool {
+        self.purpose.includes_tools()
+    }
+
+    /// 本次请求要发送的系统提示文本：请求覆写优先，否则用稳定提示。
+    pub fn resolve_system_prompt(&self) -> String {
+        match &self.system_prompt {
+            Some(prompt) => prompt.clone(),
+            None => crate::chat::prompt::system_prompt(),
+        }
+    }
 }
 
 /// 单帧字节上限（64 KiB）：超限按协议错误失败。

@@ -107,6 +107,26 @@ pub enum AppEvent {
         epoch: String,
         snapshots: Vec<crate::chat::process::ProcessSnapshot>,
     },
+    /// `/compact` 的后台执行结果（摘要请求 + 检查点事务）。
+    CompactFinished {
+        pane: PaneId,
+        session_id: String,
+        /// 会话 DB 工作区键（回执重载只认它）。
+        workspace: PathBuf,
+        /// 发起时的 operation id：迟到回执不得覆盖更新的一次执行。
+        operation_id: String,
+        outcome: chat::compact::CompactOutcome,
+    },
+    /// compact 撤销的后台执行结果（只切检查点状态与指针）。
+    CompactReverted {
+        pane: PaneId,
+        session_id: String,
+        /// 发起时冻结的会话 DB 工作区键；回执不得按当前窗格重新解析。
+        workspace: PathBuf,
+        /// 发起时的 operation id：迟到回执不得覆盖更新的一次执行。
+        operation_id: String,
+        outcome: Result<(), String>,
+    },
     /// 最新轮次撤销的后台执行结果（文件恢复 + 最终事务）。
     RewindFinished {
         pane: PaneId,
@@ -256,6 +276,10 @@ async fn run_loop(
         if chat::apply_rewind_effects(state, &sender, persistence) {
             dirty = true;
         }
+        // 压缩效应：摘要请求转后台、检查点事务在独立连接执行。
+        if chat::apply_compact_effects(state, &sender, persistence) {
+            dirty = true;
+        }
         // 续轮的 session guard 必须在 BeginChatTurn 事务之前取得。
         if chat::guard_begin_turns(state, &mut chat_streams, persistence) {
             dirty = true;
@@ -342,7 +366,8 @@ async fn run_loop(
         if update::tick(state, Instant::now()) {
             dirty = true;
         }
-        // lx loading 转轮：流中每 `LX_LOADING_FRAME_MS` 推进一帧（无流时不计时）。
+        // lx loading 转轮：流中/压缩中每 `LX_LOADING_FRAME_MS` 推进一帧
+        // （前者推扫描帧，后者还刷新本次压缩耗时；无流、无压缩时不计时）。
         let streaming = state.has_streaming_lx();
         if streaming {
             let at = spinner_at.get_or_insert_with(|| Instant::now() + LOADING_FRAME_INTERVAL);
@@ -609,6 +634,40 @@ fn handle_app_event(
         AppEvent::AgentHost(event) => {
             // 工具调用握手：DB 落库门槛 → 状态 → 回执 ticket（顺序不可交换）。
             chat::handle_agent_host_event(state, chat_streams, persistence, event);
+        }
+        AppEvent::CompactFinished {
+            pane,
+            session_id,
+            workspace,
+            operation_id,
+            outcome,
+        } => {
+            chat::handle_compact_finished(
+                state,
+                persistence,
+                pane,
+                &session_id,
+                &workspace,
+                &operation_id,
+                outcome,
+            );
+        }
+        AppEvent::CompactReverted {
+            pane,
+            session_id,
+            workspace,
+            operation_id,
+            outcome,
+        } => {
+            chat::handle_compact_reverted(
+                state,
+                persistence,
+                pane,
+                &session_id,
+                &workspace,
+                &operation_id,
+                outcome,
+            );
         }
         AppEvent::RewindFinished {
             pane,

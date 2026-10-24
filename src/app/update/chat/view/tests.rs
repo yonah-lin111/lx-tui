@@ -334,6 +334,7 @@ fn file_read_result(
         next_offset: (end_line < total_lines).then_some(end_line + 1),
         truncated: end_line < total_lines,
         total_lines,
+        version: None,
     }
 }
 
@@ -348,6 +349,7 @@ fn directory_read_result(path: &str, entries: usize) -> crate::chat::tools::Tool
         next_offset: None,
         truncated: false,
         total_lines: entries,
+        version: None,
     }
 }
 

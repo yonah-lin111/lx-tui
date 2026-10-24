@@ -26,6 +26,11 @@ pub enum CardKind {
         section: CardSection,
         expanded: bool,
     },
+    /// compact 检查点条目：整块可点击展开/折叠摘要。
+    Compact {
+        checkpoint_id: String,
+        expanded: bool,
+    },
 }
 
 /// 一个可折叠块的矩形。

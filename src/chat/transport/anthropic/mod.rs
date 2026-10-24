@@ -20,7 +20,6 @@
 
 use serde_json::{Value, json};
 
-use super::super::prompt::system_prompt;
 use super::super::transport::tools::{
     HistoryBlock, ToolCallBuffer, anthropic_tools, arguments_string, history_blocks, protocol_error,
 };
@@ -58,12 +57,15 @@ pub fn build(
     let mut body = json!({
         "model": request.model.model,
         // 系统指令：Anthropic 用顶层 system，不进 messages。
-        "system": system_prompt(),
+        "system": request.resolve_system_prompt(),
         "messages": messages,
-        "tools": anthropic_tools(),
         "max_tokens": DEFAULT_MAX_TOKENS,
         "stream": true,
     });
+    // 摘要请求不声明工具（无工具就无从发起调用）。
+    if request.includes_tools() {
+        body["tools"] = anthropic_tools();
+    }
     if let Some(params) = &request.variant_params {
         // thinking 预算：thinkingBudget（token 数）映射为协议 thinking 结构。
         if let Some(budget) = params.get("thinkingBudget").and_then(Value::as_i64) {
@@ -84,7 +86,7 @@ pub fn build(
             ("anthropic-version".into(), API_VERSION.into()),
         ],
         body: serde_json::to_string(&body).map_err(|error| format!("encode body: {error}"))?,
-        tools_requested: true,
+        tools_requested: request.includes_tools(),
     })
 }
 

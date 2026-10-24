@@ -139,6 +139,11 @@ pub struct PathMutationWrite {
     pub anchor_canonical: Option<String>,
     pub before: ImageWrite,
     pub planned_after: ImageWrite,
+    /// 读后版本 token：`prepare` 在事务内用 `before` 重算并核对，不一致整批零写入。
+    ///
+    /// `create` 允许为 None（前置条件是“目标不存在”）；修改已有文件的 `update` /
+    /// `delete` / `move_src` 必须携带，缺失即拒绝。
+    pub expected_version: Option<String>,
 }
 
 /// 一个路径的恢复计划。
@@ -396,6 +401,27 @@ impl Database {
                 || change.planned_after.size() > MAX_IMAGE_BYTES
             {
                 return Err(DbError::RewindLimit);
+            }
+            // 读后版本保护（第二道，事务内）：修改已有文件必须带 token，且 token 必须
+            // 与 before 镜像重算结果一致。任一不符整批零写入（事务尚未提交）。
+            //
+            // `create` 与 `move_dst` 的前置条件都是“目标不存在”，没有可读版本；
+            // 目标是否真的不存在由工具在路径锁内复核（见 `edit::commit_one`）。
+            if !matches!(change.operation.as_str(), "create" | "move_dst")
+                && change.expected_version.is_none()
+            {
+                return Err(DbError::StaleRead);
+            }
+            if let Some(expected) = change.expected_version.as_deref() {
+                let actual = crate::platform::version_token_from_parts(
+                    &change.before.kind,
+                    change.before.bytes.as_deref(),
+                    change.before.mode,
+                    change.before.link_target.as_deref(),
+                );
+                if actual.as_deref() != Some(expected) {
+                    return Err(DbError::StaleRead);
+                }
             }
             added = added.saturating_add(change.before.size());
             added = added.saturating_add(change.planned_after.size());

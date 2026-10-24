@@ -114,6 +114,8 @@ fn request() -> ChatRequest {
             variant: None,
         },
         variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::Chat,
+        system_prompt: None,
     }
 }
 
@@ -381,9 +383,10 @@ async fn responses_stream_decodes_summary_and_raw_reasoning() {
         "URL: {}",
         recorded.target
     );
-    // body 用 input 而非 messages。
-    assert!(recorded.body.contains("input"));
-    assert!(!recorded.body.contains("messages"));
+    // body 用 input 而非 messages（按字段名精确断言：系统提示正文里也可能出现
+    // “messages” 这个词，不能把提示文本当成协议字段）。
+    assert!(recorded.body.contains("\"input\""));
+    assert!(!recorded.body.contains("\"messages\""));
     // summary/raw reasoning 均为独立 part 且带来源元数据。
     let summary = outcome.deltas.iter().find_map(|delta| match delta {
         ChatDelta::Part(part) if part.text == "摘要思考" => part.metadata.clone(),
@@ -512,6 +515,59 @@ async fn build_failure_yields_failed_without_network() {
             reason: StopReason::Failed { .. }
         })
     ));
+}
+
+#[tokio::test]
+async fn dropped_cancel_sender_is_not_a_cancellation() {
+    // 回归：`watch::channel(false).1` 只留 receiver 时 sender 当场被丢弃，
+    // `changed()` 立刻返回，请求会被误判成用户取消。取消必须来自**显式信号**。
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let (base, _server) = spawn_mock("200 OK", body).await;
+    let (_sender, cancel) = uncancellable();
+    // 丢掉 sender：模拟调用方只保留 receiver 的写法。
+    drop(_sender);
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        run_stream(
+            "openai-compatible",
+            &format!("{base}/v1"),
+            Some("test-key"),
+            Duration::from_secs(5),
+            request(),
+            cancel,
+            |_| {},
+        ),
+    )
+    .await
+    .expect("没有取消信号时请求必须自行跑完");
+    assert_eq!(
+        outcome.stop,
+        StopReason::Complete,
+        "sender 被丢弃不等于取消：{:?}",
+        outcome.stop
+    );
+}
+
+#[tokio::test]
+async fn explicit_cancel_signal_still_cancels() {
+    // 反向保证：显式 `true` 仍然取消（`wait_cancel` 不吞真信号）。
+    let (sender, cancel) = uncancellable();
+    sender.send(true).expect("cancel");
+    let outcome = run_stream(
+        "openai-compatible",
+        "http://127.0.0.1:1/v1",
+        Some("test-key"),
+        Duration::from_secs(5),
+        request(),
+        cancel,
+        |_| {},
+    )
+    .await;
+    assert_eq!(outcome.stop, StopReason::Cancelled);
 }
 
 #[tokio::test]

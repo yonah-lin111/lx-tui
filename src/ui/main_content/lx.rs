@@ -30,6 +30,7 @@ pub(crate) mod notice;
 pub(crate) mod slash;
 pub(crate) mod status;
 pub(crate) mod task;
+pub(crate) mod toast;
 
 use history_hit::chat_geometry_is_live;
 pub(crate) use history_hit::{
@@ -112,7 +113,20 @@ pub fn render(
     mention::render(area, buf, lx);
     render_paste_panel(area, buf, lx);
     render_slash_panel(area, buf, lx);
+    // 本页 toast 最后画：盖住历史、输入框与上述所有浮层，但**只在窗格内容区内**。
+    // 全局 toast 覆盖层不再承载 lx 反馈（见 `app::state::Lx::toast`）。
+    if let Some(toast) = lx.toast.as_ref() {
+        toast::draw(buf, area, toast);
+    }
     cursor
+}
+
+/// 本页 toast 盒矩形（绝对屏幕坐标）；无 toast 或空间不足返回 None。
+///
+/// 绘制（[`render`] 内的 `toast::draw`）与命中（点击关闭 / hover 冻结计时）共用它，
+/// 保证所见即所点。
+pub(crate) fn toast_rect(area: Rect, lx: &Lx) -> Option<Rect> {
+    toast::rect(area, lx.toast.as_ref()?)
 }
 
 /// 绘制 `/` 命令面板（几何/条目见 `slash` 子模块）。

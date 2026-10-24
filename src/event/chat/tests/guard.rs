@@ -93,7 +93,14 @@ fn busy_session_is_refused_before_begin_turn() {
         state.pane_anywhere(pane).expect("pane").lx.chat.request,
         RequestState::Idle
     ));
-    assert!(state.toast.is_some(), "必须给用户可见原因");
+    // 反馈落在发起发送的那个 lx 窗格自己的槽里（不占用全局覆盖层）。
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.toast.is_some()),
+        "必须给用户可见原因"
+    );
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
     drop(held);
 }
 
@@ -155,5 +162,11 @@ fn unfinished_rewind_blocks_sending() {
         state.pane_anywhere(pane).expect("pane").lx.chat.request,
         RequestState::Idle
     ));
-    assert!(state.toast.is_some());
+    assert!(
+        state
+            .pane_anywhere(pane)
+            .is_some_and(|target| target.lx.toast.is_some()),
+        "未完成撤销必须给出可见原因"
+    );
+    assert!(state.toast.is_none(), "lx 反馈不得占用全局 toast");
 }

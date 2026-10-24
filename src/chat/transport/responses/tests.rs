@@ -30,6 +30,8 @@ fn request() -> ChatRequest {
             variant: Some("high".into()),
         },
         variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::Chat,
+        system_prompt: None,
     }
 }
 
@@ -629,4 +631,36 @@ fn call_ids_come_from_item_call_id_not_from_the_decoder() {
     assert_eq!(ids_of(frames), vec!["call_srv_1".to_string()]);
     // 同一份 wire 帧进两个解码器 → 同一个供应商 ID（解码器不参与生成）。
     assert_eq!(ids_of(frames), ids_of(frames));
+}
+
+/// 摘要请求：不声明工具，系统提示使用请求覆写值（四协议同口径）。
+#[test]
+fn compact_request_omits_tools_and_overrides_the_system_prompt() {
+    let request = crate::chat::events::ChatRequest {
+        turns: vec![crate::chat::events::ChatTurn {
+            role: "user".into(),
+            text: "compress the transcript".into(),
+            reasoning_metadata: None,
+        }],
+        items: vec![crate::chat::events::ModelItem::UserText(
+            "compress the transcript".into(),
+        )],
+        model: crate::db::chat::ModelSnapshot {
+            provider: "p".into(),
+            model: "m".into(),
+            variant: None,
+        },
+        variant_params: None,
+        purpose: crate::chat::events::RequestPurpose::CompactSummary,
+        system_prompt: Some("COMPACT INSTRUCTIONS".into()),
+    };
+    let built = super::build("https://api.example.invalid", Some("key"), &request).expect("build");
+    let body: serde_json::Value = serde_json::from_str(&built.body).expect("json");
+    assert!(!built.tools_requested, "摘要请求不得声明工具能力");
+    assert!(
+        !built.body.contains("\"tools\""),
+        "body 不得含 tools：{body}"
+    );
+    let prompt = serde_json::to_string(&body).expect("json");
+    assert!(prompt.contains("COMPACT INSTRUCTIONS"), "系统提示被覆写");
 }

@@ -150,7 +150,11 @@ fn arm(state: &mut AppState, pane: PaneId) -> Option<()> {
     Some(())
 }
 
-/// 选中当前会话最新一条**聊天**用户消息（只允许最新轮次）。
+/// 选中最新**可撤销操作**：普通对话轮次或 compact 检查点，按时间线取更晚者。
+///
+/// 顺序与 design §2.4 一致：先撤销 compact 之后产生的最新普通轮次；没有更晚轮次后，
+/// 再撤销最近的 compact 检查点。两者都用同一 `sequence` 编号空间比较，
+/// 因此不需要额外的“操作类型优先级”规则。
 pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
     let target = state.pane_anywhere(pane)?;
     // 本地命令在途时拒绝：截断会删掉正在运行命令的记录，而进程仍在写文件。
@@ -168,7 +172,21 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         .messages
         .iter()
         .rev()
-        .find(|message| message.role == "user" && !message.is_user_shell())?;
+        .find(|message| message.role == "user" && !message.is_user_shell());
+    let checkpoint = target.lx.compact.active().cloned();
+    // 最新的可撤销操作：sequence 更大者。两者都没有时无目标。
+    let latest_turn_sequence = message.map(|message| message.sequence).unwrap_or(i64::MIN);
+    let latest_checkpoint_sequence = checkpoint
+        .as_ref()
+        .map(|item| item.sequence)
+        .unwrap_or(i64::MIN);
+    if latest_checkpoint_sequence > latest_turn_sequence {
+        return select_compact(state, pane, &session_id);
+    }
+    let Some(message) = message else {
+        // 只有检查点可撤销：即便轮次已被压缩，仍允许撤销 compact。
+        return checkpoint.and_then(|_| select_compact(state, pane, &session_id));
+    };
     let user_text = message
         .text_parts()
         .map(|part| part.content.as_str())
@@ -186,6 +204,7 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
         pane,
         input_at_open,
         user_text,
+        kind: crate::app::state::RewindTargetKind::Turn,
     });
     target.lx.rewind.panel = None;
     // 最新轮次在列表底部；先跟随底部，取得几何后再把目标滚到视口居中。
@@ -199,6 +218,31 @@ pub fn select_latest(state: &mut AppState, pane: PaneId) -> Option<()> {
     Some(())
 }
 
+/// 选中最近的 active compact 检查点：只冻结检查点 id 与 revision，不请求文件预检。
+fn select_compact(state: &mut AppState, pane: PaneId, session_id: &str) -> Option<()> {
+    let target = state.pane_anywhere(pane)?;
+    let checkpoint = target.lx.compact.active()?.clone();
+    let revision = target.lx.chat.revision;
+    let input_at_open = target.lx.input.clone();
+    let target = state.pane_mut_anywhere(pane)?;
+    target.lx.rewind.armed_at = None;
+    // compact 撤销不涉及文件：快照状态固定为“无文件动作可用”的已知空。
+    target.lx.rewind.snapshot = SnapshotState::KnownEmpty;
+    target.lx.rewind.selected = Some(RewindTarget {
+        session_id: session_id.to_string(),
+        user_message_id: checkpoint.id.clone(),
+        expected_revision: revision,
+        pane,
+        input_at_open,
+        user_text: String::new(),
+        kind: crate::app::state::RewindTargetKind::Compact,
+    });
+    target.lx.rewind.panel = None;
+    target.lx.chat.follow_bottom = true;
+    target.lx.rewind.center_target = None;
+    Some(())
+}
+
 /// `/rewind` 命令采纳：选中最新轮次并直接打开动作面板（采纳 Enter 不执行）。
 pub fn open_from_command(state: &mut AppState, pane: PaneId) -> bool {
     if select_latest(state, pane).is_none() {
@@ -208,15 +252,19 @@ pub fn open_from_command(state: &mut AppState, pane: PaneId) -> bool {
     open_panel(state, pane)
 }
 
-/// 选中态 Enter：打开四项面板（默认第一项）。
+/// 选中态 Enter：打开动作面板（普通轮次四项；compact 只有恢复与取消）。
 fn open_panel(state: &mut AppState, pane: PaneId) -> bool {
     let Some(target) = state.pane_mut_anywhere(pane) else {
         return false;
     };
-    if target.lx.rewind.selected.is_none() {
+    let Some(selected) = target.lx.rewind.selected.as_ref() else {
         return false;
-    }
-    let panel = RewindPanel::new(target.lx.rewind.snapshot);
+    };
+    let panel = if selected.kind == crate::app::state::RewindTargetKind::Compact {
+        RewindPanel::for_compact()
+    } else {
+        RewindPanel::new(target.lx.rewind.snapshot)
+    };
     target.lx.rewind.panel = Some(panel.clone());
     target.lx.slash = Some(SlashPanel::Rewind(Box::new(panel)));
     true
@@ -310,6 +358,10 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
         show_lx_hint(state, pane, InputHintLevel::Warning, reason);
         return true;
     }
+    // compact 撤销只回退上下文指针：不建文件操作、不碰消息。
+    if selected.kind == crate::app::state::RewindTargetKind::Compact {
+        return apply_compact_enter(state, pane, &selected);
+    }
     let operation_id = crate::db::new_external_id("rewind-op");
     let Some(workspace) = state.chat_session_key_for_pane(pane) else {
         show_lx_hint(
@@ -344,6 +396,41 @@ pub fn apply_enter(state: &mut AppState, pane: PaneId) -> bool {
     true
 }
 
+/// compact 撤销执行：冻结检查点 id 与 revision，入队 `RevertCompact`。
+fn apply_compact_enter(state: &mut AppState, pane: PaneId, selected: &RewindTarget) -> bool {
+    let Some(workspace) = state.chat_session_key_for_pane(pane) else {
+        show_lx_hint(
+            state,
+            pane,
+            InputHintLevel::Error,
+            text::LX_CHAT_NO_WORKSPACE,
+        );
+        return true;
+    };
+    let operation_id = crate::db::new_external_id("compact-rewind-op");
+    let Some(target) = state.pane_mut_anywhere(pane) else {
+        return false;
+    };
+    target.lx.rewind.executing = Some(RewindExecution {
+        operation_id: operation_id.clone(),
+        action: RewindAction::RestoreCompact,
+        target: selected.clone(),
+    });
+    target.lx.rewind.panel = None;
+    target.lx.slash = None;
+    state.effects.push(Effect::RevertCompact(
+        crate::app::effects::CompactRevertRequest {
+            pane,
+            workspace,
+            session_id: selected.session_id.clone(),
+            checkpoint_id: selected.user_message_id.clone(),
+            expected_revision: selected.expected_revision,
+            operation_id,
+        },
+    ));
+    true
+}
+
 /// 执行前的本地预检：本会话无在途请求、无存活后台任务、其他窗格不忙。
 fn execute_blocker(
     state: &AppState,
@@ -354,14 +441,15 @@ fn execute_blocker(
     if target.lx.background_tasks > 0 {
         return Some(text::LX_REWIND_BUSY);
     }
-    if !matches!(target.lx.chat.request, RequestState::Idle) {
+    // 压缩进行中同样不能撤销：检查点集合会在回执到达时整体替换。
+    if !matches!(target.lx.chat.request, RequestState::Idle) || target.lx.compact.is_running() {
         return Some(text::LX_REWIND_SESSION_BUSY);
     }
     let other_busy = state.all_pane_ids().into_iter().any(|other| {
         other != pane
             && state.pane_anywhere(other).is_some_and(|other_pane| {
                 other_pane.lx.chat.session_id.as_deref() == Some(selected.session_id.as_str())
-                    && other_pane.lx.chat.request.is_busy()
+                    && (other_pane.lx.chat.request.is_busy() || other_pane.lx.compact.is_running())
             })
     });
     other_busy.then_some(text::LX_REWIND_SESSION_BUSY)
@@ -427,6 +515,7 @@ pub fn on_session_reloaded(
     target.lx.chat.thinking_toggled.clear();
     target.lx.chat.detail_expanded.clear();
     target.lx.chat.selected_tool = None;
+    target.lx.chat.selected_compact = None;
     target.lx.chat.hover = None;
     target.lx.chat.plan = None;
     target.lx.chat.follow_bottom = true;
@@ -519,7 +608,7 @@ pub fn move_active(state: &mut AppState, pane: PaneId, delta: isize) -> bool {
     let Some(SlashPanel::Rewind(panel)) = target.lx.slash.as_mut() else {
         return false;
     };
-    let len = RewindAction::ALL.len();
+    let len = panel.len();
     panel.window.move_active(delta, len);
     let window = panel.window;
     if let Some(stored) = target.lx.rewind.panel.as_mut() {
@@ -536,7 +625,7 @@ pub fn set_active(state: &mut AppState, pane: PaneId, index: usize) -> bool {
     let Some(SlashPanel::Rewind(panel)) = target.lx.slash.as_mut() else {
         return false;
     };
-    let len = RewindAction::ALL.len();
+    let len = panel.len();
     if index >= len || panel.window.active == index {
         return false;
     }

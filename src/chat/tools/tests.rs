@@ -55,7 +55,7 @@ fn schemas_are_strict_objects() {
         .keys()
         .map(String::as_str)
         .collect();
-    assert_eq!(keys, vec!["patch"]);
+    assert_eq!(keys, vec!["patch", "read_versions"]);
     // read 的 offset 必须写明 1-based。
     let read = available_tools()
         .iter()

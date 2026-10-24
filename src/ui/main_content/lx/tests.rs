@@ -1116,6 +1116,35 @@ fn idle_following_hides_chat_bar() {
     );
 }
 
+/// `/compact` 期间：输入框上方那一行出现「压缩中」并带本次压缩耗时。
+#[test]
+fn compacting_shows_loading_bar_above_input() {
+    let area = Rect::new(0, 0, 60, 16);
+    let mut lx = streaming_lx(false, true);
+    lx.chat.turn_elapsed_ms = Some(9_000);
+    lx.compact.start("op".into(), 0);
+    lx.compact.elapsed_ms = Some(4_100);
+    let lay = layout(area, &lx);
+    let input = lay.input.expect("input");
+    let bar = lay.chat_bar.expect("压缩中显示聊天栏");
+    assert_eq!(bar.bottom(), input.y, "聊天栏紧贴输入框上沿");
+    let mut buf = Buffer::empty(area);
+    let _ = render(area, &mut buf, &lx, false, None);
+    let text = buffer_text(&buf);
+    assert!(
+        text.contains(text::chat::COMPACTING_LABEL),
+        "显示压缩中文案：{text}"
+    );
+    assert!(text.contains("(4s)"), "显示本次压缩耗时：{text}");
+    assert!(!text.contains("9s"), "不得显示上一轮聊天耗时：{text}");
+    // 压缩结束后整行消失。
+    lx.compact.finish();
+    assert!(
+        layout(area, &lx).chat_bar.is_none(),
+        "压缩结束且空闲：无聊天栏"
+    );
+}
+
 #[test]
 fn scrolled_up_shows_jump_bottom_button() {
     let area = Rect::new(0, 0, 60, 16);

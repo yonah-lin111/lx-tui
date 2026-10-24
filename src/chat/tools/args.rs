@@ -80,6 +80,33 @@ impl Args {
         }
     }
 
+    /// 可选字符串映射（值必须是字符串）；用于 `read_versions` 这类路径 → token 表。
+    ///
+    /// 键与值都只做类型校验，语义由调用方解释；空对象等价于未提供。
+    pub(crate) fn optional_string_map(
+        &self,
+        key: &str,
+    ) -> ToolResult<Option<std::collections::HashMap<String, String>>> {
+        match self.object.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(Value::Object(map)) => {
+                let mut out = std::collections::HashMap::with_capacity(map.len());
+                for (entry_key, value) in map {
+                    let Some(text) = value.as_str() else {
+                        return Err(ToolFailure::invalid(format!(
+                            "'{key}.{entry_key}' must be a string"
+                        )));
+                    };
+                    out.insert(entry_key.clone(), text.to_string());
+                }
+                Ok((!out.is_empty()).then_some(out))
+            }
+            Some(_) => Err(ToolFailure::invalid(format!(
+                "'{key}' must be an object of string values"
+            ))),
+        }
+    }
+
     /// 可选正整数（≥1）字段；0、负数、浮点与小数字符串一律拒绝。
     pub(crate) fn optional_positive(&self, key: &str) -> ToolResult<Option<usize>> {
         match self.object.get(key) {

@@ -478,6 +478,38 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_workspace_recent
     ON agent_session(workspace_id, archived, updated_at_ms DESC, id DESC);
 "#;
 
+/// v14：上下文压缩检查点（`/compact`）与撤销关联。
+///
+/// 独立表而不是复用 `agent_session_notice`：notice 是“撤销提示”（kind 与文件计数语义），
+/// 检查点需要保存摘要正文、模型标签、覆盖范围与生效状态，且可被撤销/恢复多次。
+/// `sequence` 与消息、撤销提示共用同一编号空间（时间线合并的前提）；`operation_id`
+/// 只与 `agent_rewind_operation` 关联，不建立平行的撤销系统。
+const SCHEMA_V14: &str = r#"
+CREATE TABLE IF NOT EXISTS agent_compact_checkpoint (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    external_id TEXT NOT NULL UNIQUE,
+    session_id TEXT NOT NULL REFERENCES agent_session(external_id) ON DELETE CASCADE,
+    sequence INTEGER NOT NULL CHECK (sequence >= 0),
+    operation_id TEXT NOT NULL UNIQUE,
+    base_checkpoint_id TEXT,
+    start_sequence INTEGER NOT NULL CHECK (start_sequence >= 0),
+    end_sequence INTEGER NOT NULL CHECK (end_sequence >= 0),
+    summary_text TEXT NOT NULL,
+    model_label TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('active', 'reverted')),
+    reverted_by_operation_id TEXT,
+    created_at_ms INTEGER NOT NULL,
+    UNIQUE(session_id, sequence),
+    CHECK (end_sequence >= start_sequence)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_compact_checkpoint_session
+    ON agent_compact_checkpoint(session_id, sequence);
+
+CREATE INDEX IF NOT EXISTS idx_agent_compact_checkpoint_state
+    ON agent_compact_checkpoint(session_id, state, id);
+"#;
+
 impl Database {
     /// 迁移到当前 Schema：建表与版本推进在同一事务中完成，幂等。
     ///
@@ -587,6 +619,14 @@ impl Database {
         }
         if version < 13 {
             self.migrate_v13()?;
+        }
+        if version < 14 {
+            // 只增表：不触碰既有数据，失败整体回滚（版本不推进）。
+            let transaction = self.conn.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V14)?;
+            ensure_no_foreign_key_violation(&transaction)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.commit()?;
         }
         Ok(())
     }

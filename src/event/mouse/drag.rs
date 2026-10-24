@@ -385,15 +385,17 @@ pub(crate) fn handle_mouse_up_left(
         if !text.trim().is_empty() {
             let now = Instant::now();
             if crate::platform::write_clipboard(&text) {
-                update::show_toast(
+                update::show_lx_toast(
                     state,
+                    pane,
                     Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
                         .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                 );
             } else {
                 tracing::warn!("clipboard write failed");
-                update::show_toast(
+                update::show_lx_toast(
                     state,
+                    pane,
                     Toast::new(
                         ToastKind::Danger,
                         ui::text::TOAST_COPY_FAILED,
@@ -425,15 +427,17 @@ pub(crate) fn handle_mouse_up_left(
             if !text.trim().is_empty() {
                 let now = Instant::now();
                 if crate::platform::write_clipboard(&text) {
-                    update::show_toast(
+                    update::show_lx_toast(
                         state,
+                        pane,
                         Toast::new(ToastKind::Default, ui::text::TOAST_COPIED, Some(pane), now)
                             .with_title(ui::text::TOAST_CLIPBOARD_TITLE),
                     );
                 } else {
                     tracing::warn!("clipboard write failed");
-                    update::show_toast(
+                    update::show_lx_toast(
                         state,
+                        pane,
                         Toast::new(
                             ToastKind::Danger,
                             ui::text::TOAST_COPY_FAILED,

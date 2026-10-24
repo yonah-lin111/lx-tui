@@ -20,7 +20,10 @@ static TOOLS: [ToolSpec; 7] = [
     ToolSpec::new(
         "read",
         "Read a UTF-8 text file, or list a directory. \
-         Returns numbered lines as `{line}: {text}` with 1-based line numbers. \
+         Returns numbered lines as `{line}: {text}` with 1-based line numbers plus a \
+         `file_version` token; pass that token as `read_version` (write) or in \
+         `read_versions` (edit) when you modify the file — writes to files you have not \
+         read in this session, or that changed since the read, are rejected. \
          `offset` is a 1-based first line (omitted = start at line 1) and `limit` caps \
          the number of returned lines. Long output is truncated explicitly and reports \
          `next_offset` so you can continue reading. A single file larger than 16 MiB is \
@@ -50,15 +53,20 @@ static TOOLS: [ToolSpec; 7] = [
          A block with only `+` lines inserts right after its `@@ <context>` line, or at \
          the end of the file when there is no context line. `*** Move to:` refuses an \
          existing destination. Multiple files may be partially applied; the result lists \
-         every file that was actually changed.",
+         every file that was actually changed. `read_versions` maps each existing file \
+         in the patch (Update/Delete/Move source) to the `file_version` returned by `read`; \
+         missing or stale entries reject the whole patch without writing anything.",
         edit_parameters,
     ),
     ToolSpec::new(
         "write",
         "Create a file or replace its entire UTF-8 text content. `content` is the \
          complete new file body (an empty string clears the file); this never appends. \
-         Missing parent directories are created. Returns whether the file was created \
-         and how many lines were added or removed.",
+         Missing parent directories are created. Overwriting an existing file requires \
+         `read_version` — the `file_version` token from `read` — and is rejected when the \
+         file changed after it was read. Creating a file is rejected when the path already \
+         exists (read it instead). Returns whether the file was created and how many lines \
+         were added or removed.",
         write_parameters,
     ),
     ToolSpec::new(
@@ -172,6 +180,13 @@ fn edit_parameters() -> Value {
             "patch": {
                 "type": "string",
                 "description": "Complete patch text from '*** Begin Patch' to '*** End Patch'."
+            },
+            "read_versions": {
+                "type": "object",
+                "description": "Map of path (as written in the patch) to the `file_version` \
+                              returned by `read`. Required for every existing file the patch \
+                              updates, deletes or moves.",
+                "additionalProperties": { "type": "string" }
             }
         },
         "required": ["patch"],
@@ -191,6 +206,12 @@ fn write_parameters() -> Value {
             "content": {
                 "type": "string",
                 "description": "Complete new file content (empty string clears the file)."
+            },
+            "read_version": {
+                "type": "string",
+                "description": "The `file_version` token from `read` for the file being \
+                              overwritten. Required when the file already exists; ignored for \
+                              new files (which must not exist)."
             }
         },
         "required": ["path", "content"],

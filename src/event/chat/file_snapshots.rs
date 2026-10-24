@@ -174,12 +174,15 @@ pub(crate) fn handle_mutation(persistence: &Persistence, event: MutationHostEven
                 )
                 .map(|ticket| MutationTicket { ids: ticket.ids })
                 .map_err(|error| {
+                    // 版本核对失败必须回给模型一个可重试的语义（`stale_read`），
+                    // 而不是笼统的持久化错误：模型据此重新读取后重试。
+                    let code = match error {
+                        crate::db::DbError::RewindLimit => "limit",
+                        crate::db::DbError::StaleRead => "stale_read",
+                        _ => "persist",
+                    };
                     MutationError::new(
-                        if matches!(error, crate::db::DbError::RewindLimit) {
-                            "limit"
-                        } else {
-                            "persist"
-                        },
+                        code,
                         format!("failed to persist file snapshot: {}", error.code()),
                     )
                 });
@@ -227,6 +230,7 @@ fn change_write(change: &PathMutation) -> PathMutationWrite {
             .map(|(_, canonical)| crate::platform::encode_path(canonical)),
         before: image_write(&change.before, identity.as_ref(), true),
         planned_after: image_write(&change.planned_after, identity.as_ref(), true),
+        expected_version: change.expected_version.clone(),
     }
 }
 

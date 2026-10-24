@@ -28,8 +28,17 @@ type LoadedSession = (
     Option<crate::db::chat::ModelSnapshot>,
     Vec<crate::db::chat::ProcessRecord>,
     Vec<crate::db::chat::NoticeRecord>,
+    Vec<crate::db::chat::CompactCheckpoint>,
     i64,
 );
+
+/// 撤销成功后的视图重载结果：消息、独立提示、compact 检查点与会话 revision。
+pub struct RewindView {
+    pub messages: Vec<crate::db::chat::ChatMessage>,
+    pub notices: Vec<crate::db::chat::NoticeRecord>,
+    pub checkpoints: Vec<crate::db::chat::CompactCheckpoint>,
+    pub revision: i64,
+}
 
 /// 持久化服务实例：数据库句柄可为 None（库不可用时降级为无持久化）。
 pub struct Persistence {
@@ -244,23 +253,25 @@ impl Persistence {
         db.prune_orphan_images(session_id)
     }
 
-    /// 撤销成功后的视图重载：消息、独立提示与会话 revision。
+    /// 撤销成功后的视图重载：消息、独立提示、compact 检查点与会话 revision。
     pub fn load_rewind_view(
         &self,
         workspace: &Path,
         session_id: &str,
-    ) -> super::Result<(
-        Vec<super::chat::ChatMessage>,
-        Vec<super::chat::NoticeRecord>,
-        i64,
-    )> {
+    ) -> super::Result<RewindView> {
         let db = self.db.as_ref().ok_or(super::DbError::Unavailable)?;
         let messages = db
             .load_chat_session(workspace, session_id)?
             .ok_or(super::DbError::SessionMissing)?;
         let notices = db.load_notices(workspace, session_id)?;
+        let checkpoints = db.compact_checkpoints(workspace, session_id)?;
         let revision = db.session_revision(session_id)?;
-        Ok((messages, notices, revision))
+        Ok(RewindView {
+            messages,
+            notices,
+            checkpoints,
+            revision,
+        })
     }
 
     /// 记录一次工具调用的 pending 行并返回执行票据（事务提交后才返回）。
@@ -725,8 +736,10 @@ impl Persistence {
                     tracing::warn!("clipboard write failed");
                     (ToastKind::Danger, text::TOAST_COPY_FAILED)
                 };
-                update::show_toast(
+                // 锚在 lx 窗格时落该窗格自己的槽（不占用全局覆盖层）。
+                update::show_toast_at(
                     state,
+                    anchor,
                     Toast::new(kind, message, anchor, now).with_title(text::TOAST_CLIPBOARD_TITLE),
                 );
                 true
@@ -747,12 +760,14 @@ impl Persistence {
                         self.with_db(|db| db.unfinished_operation(session))
                 {
                     update::on_turn_failed(state, pane, generation);
-                    update::show_toast(
+                    // 反馈落在发起本轮的那个 lx 窗格自己的槽里。
+                    update::show_lx_toast(
                         state,
+                        pane,
                         Toast::new(
                             ToastKind::Danger,
                             format!("{} ({})", text::LX_REWIND_RECOVERY_BLOCKED, operation.phase),
-                            None,
+                            Some(pane),
                             Instant::now(),
                         ),
                     );
@@ -834,18 +849,26 @@ impl Persistence {
                     let processes = db
                         .load_processes_for_session(&workspace, &session_id)
                         .unwrap_or_default();
-                    // 独立撤销提示与 revision：提示不进入 messages，也不进模型上下文。
+                    // 独立撤销提示、compact 检查点与 revision：三者都不进入 messages，
+                    // 也不作为普通消息进模型上下文（检查点只投影为摘要前缀）。
                     let notices = db.load_notices(&workspace, &session_id).unwrap_or_default();
+                    let checkpoints = db
+                        .compact_checkpoints(&workspace, &session_id)
+                        .unwrap_or_default();
                     let revision = db.session_revision(&session_id).unwrap_or(0);
-                    Ok((messages, model, processes, notices, revision))
+                    Ok((messages, model, processes, notices, checkpoints, revision))
                 });
-                let Some((Some(messages), model, processes, notices, revision)) = loaded else {
-                    update::show_toast(
+                let Some((Some(messages), model, processes, notices, checkpoints, revision)) =
+                    loaded
+                else {
+                    // 加载失败发生在 lx 页：反馈落该窗格自己的槽（不占用全局覆盖层）。
+                    update::show_lx_toast(
                         state,
+                        pane,
                         Toast::new(
                             ToastKind::Danger,
                             text::LX_CHAT_SESSION_BUSY,
-                            None,
+                            Some(pane),
                             Instant::now(),
                         ),
                     );
@@ -866,8 +889,13 @@ impl Persistence {
                     revision,
                     selection,
                 );
+                // 检查点列表随会话一起回填（渲染与撤销都依赖它）。
+                let checkpoints_changed =
+                    update::set_compact_checkpoints(state, pane, &checkpoints);
                 // 会话视图建好之后再按进程记录校正（需要卡片已存在）。
-                update::reconcile_process_records(state, pane, &processes) | changed
+                update::reconcile_process_records(state, pane, &processes)
+                    | changed
+                    | checkpoints_changed
             }
             Effect::RenameChatSession {
                 workspace,
@@ -897,28 +925,12 @@ impl Persistence {
                 let guard = match crate::platform::try_lock_session(&session_id) {
                     Ok(Some(guard)) => guard,
                     Ok(None) => {
-                        update::show_toast(
-                            state,
-                            Toast::new(
-                                ToastKind::Danger,
-                                text::LX_CHAT_SESSION_BUSY,
-                                None,
-                                Instant::now(),
-                            ),
-                        );
+                        session_busy_feedback(state, &session_id);
                         return true;
                     }
                     Err(error) => {
                         tracing::warn!(%error, "session guard unavailable");
-                        update::show_toast(
-                            state,
-                            Toast::new(
-                                ToastKind::Danger,
-                                text::LX_CHAT_SESSION_BUSY,
-                                None,
-                                Instant::now(),
-                            ),
-                        );
+                        session_busy_feedback(state, &session_id);
                         return true;
                     }
                 };
@@ -991,9 +1003,12 @@ impl Persistence {
                 tracing::warn!("process effect reached persistence pump");
                 false
             }
-            // 撤销效应由事件层 `apply_rewind_effects` 取走；此处只兜底忽略。
-            Effect::PrepareRewind { .. } | Effect::ExecuteRewind(_) => {
-                tracing::warn!("rewind effect reached persistence pump");
+            // 撤销/压缩效应由事件层取走；此处只兜底忽略。
+            Effect::PrepareRewind { .. }
+            | Effect::ExecuteRewind(_)
+            | Effect::ExecuteCompact(_)
+            | Effect::RevertCompact(_) => {
+                tracing::warn!("rewind/compact effect reached persistence pump");
                 false
             }
             Effect::BeginUserShell { .. } | Effect::CancelUserShells { .. } => {
@@ -1138,6 +1153,8 @@ fn is_network_effect(effect: &Effect) -> bool {
             | Effect::StopSessionProcess { .. }
             | Effect::PrepareRewind { .. }
             | Effect::ExecuteRewind(_)
+            | Effect::ExecuteCompact(_)
+            | Effect::RevertCompact(_)
             | Effect::BeginUserShell { .. }
             | Effect::CancelUserShells { .. }
     )
@@ -1179,6 +1196,22 @@ fn prompt_key_for(state: &AppState, workspace: &Path) -> PathBuf {
 /// 规范化路径；失败时保留原路径（路径可能刚被删除）。
 fn canonical_path(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// 会话被占用/不可删除的反馈：优先落到绑定该会话的 lx 窗格自己的 toast 槽。
+///
+/// 会话级效应没有单一窗格可比锚定——同一会话可能被多个窗格共享，也可能一个都
+/// 没绑定（此时只能退化为全局 toast，否则用户看不到任何反馈）。
+fn session_busy_feedback(state: &mut AppState, session_id: &str) {
+    let toast = Toast::new(
+        ToastKind::Danger,
+        text::LX_CHAT_SESSION_BUSY,
+        None,
+        Instant::now(),
+    );
+    if !update::show_lx_toast_for_session(state, session_id, toast.clone()) {
+        update::show_toast(state, toast);
+    }
 }
 
 #[cfg(test)]
